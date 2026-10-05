@@ -1,7 +1,9 @@
-// 测试构建的自动保存控制（M3-P4 设计 §3.14）：打开时是否暂停按 sessionStorage；hold、release、setLimits 通知调度；flush 调当前的调度；日志
+// 测试构建的自动保存控制（M3-P4 设计 §3.14）：打开时是否暂停按 sessionStorage；hold、release、setLimits 通知调度；flush 调当前的调度；
+// 日志与同步的订阅（S7 的页面自检用）
 import type { AutosaveControl, AutosaveControlLimits, AutosaveLogEntry } from './autosave-control.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AUTOSAVE_CONTROL_GLOBAL, AUTOSAVE_HELD, AUTOSAVE_HOLD_STORAGE_KEY, installAutosaveControl } from './autosave-control.ts'
+import { SELFTEST_AUTOSAVE_HOLD } from './selftest-report.ts'
 
 const DEFAULTS: AutosaveControlLimits = { captureQuietMs: 1000, captureMaxMs: 3000, captureSpacingFactor: 10, uploadQuietMs: 2000, uploadMaxMs: 15_000, retryInitialMs: 2000, retryMaxMs: 60_000 }
 
@@ -23,6 +25,12 @@ describe('测试构建的自动保存控制（M3-P4 设计 §3.14）', () => {
     const installed = installAutosaveControl(window, DEFAULTS)
     expect(installed.tuning.held()).toBe(true)
     expect(onWindow()).toBe(installed.control)
+  })
+
+  it('页面自检的入口页写的（selftest-report.ts 另写的一份 SELFTEST_AUTOSAVE_HOLD）与这里认的是同一个键与值：打开即暂停', () => {
+    expect(SELFTEST_AUTOSAVE_HOLD).toEqual({ key: AUTOSAVE_HOLD_STORAGE_KEY, value: AUTOSAVE_HELD })
+    sessionStorage.setItem(SELFTEST_AUTOSAVE_HOLD.key, SELFTEST_AUTOSAVE_HOLD.value)
+    expect(installAutosaveControl(window, DEFAULTS).tuning.held()).toBe(true)
   })
 
   it('sessionStorage 读不了（隐私模式等）：不暂停', () => {
@@ -81,5 +89,19 @@ describe('测试构建的自动保存控制（M3-P4 设计 §3.14）', () => {
     const kept = control.log()
     expect(kept).toHaveLength(2000)
     expect(kept[0]).toMatchObject({ at: 5 })
+  })
+
+  it('subscribe：每记下一条就同步交给订阅者（先进日志、再通知；交出的是拷贝），退订之后不再收到', () => {
+    const installed = installAutosaveControl(window, DEFAULTS)
+    const control = onWindow()
+    const capture: AutosaveLogEntry = { kind: 'capture', trigger: 'quiet', at: 10, seq: 1, formulasPending: false, bytes: 20, durationMs: 1 }
+    const seen: { entry: AutosaveLogEntry, logged: number }[] = []
+    const unsubscribe = control.subscribe(entry => seen.push({ entry, logged: control.log().length }))
+    installed.observe(capture)
+    expect(seen).toEqual([{ entry: capture, logged: 1 }])
+    expect(seen[0]?.entry).not.toBe(capture)
+    unsubscribe()
+    installed.observe({ kind: 'capture-failed', trigger: 'cap', at: 11 })
+    expect(seen).toHaveLength(1)
   })
 })

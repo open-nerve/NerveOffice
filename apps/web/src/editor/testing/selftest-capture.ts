@@ -1,35 +1,36 @@
-import type { ProbeCommand } from './e2e-probe.ts'
 // 捕获时机的页面自检（M3-P4 设计 §3.15，DEF-003 的其余部分：变更检测、空闲任务的时序与捕获时机）：在真实 Safari 上复核 P4 的自动保存
-// 要依赖的浏览器行为。捕获的规则（设计 §3.2）在实现之前用参考实现（./capture-reference.ts），S3 之后换成正式的 capture-policy.ts。
-// 都在编辑时跑（挂接先进入编辑，features/sheet-editor/selftest-hook.ts）；样本见 ./capture-samples.ts（E2E 的生成器写库）：
+// 与它依赖的浏览器行为。S1 在自动保存实现之前用捕获规则的参考实现另做捕获；S7 起看编辑器页里真实的自动保存（./selftest-autosave.ts：
+// 测试构建的控制露出的日志、同步的订阅、页面发出的保存请求与服务器上存下的内容）。
+// 都在编辑时跑（挂接先进入编辑，features/sheet-editor/selftest-hook.ts），每个场景开始时定下自动保存照常还是暂停定时的上传；
+// 样本见 ./capture-samples.ts（E2E 的生成器写库）：
 // - environment：requestIdleCallback 是不是原生的（WebKit 26.6 没有，SDK 用 1 ms 的 setTimeout 垫片）、CompressionStream、crypto.subtle、
 //   计时的精度与几种计时器实际的延迟；
-// - change-detection（只读样本）：打开静默（到编辑的 steady 之后再 5 秒，本地修改序号仍是 0）；只改视图的动作不算修改；M0 动作矩阵里
-//   能经 Facade 执行的改内容的动作逐个被检测到（内容确实变了，命令日志与变更检测一致）；最后按规则捕获、再看 5 秒，没有迟到而没被检测的变化；
-// - formula-timing（公式样本，× Worker/主线程：地址参数选，./formula-mode.ts）：打开时算全部公式；五类（依赖链、聚合、跨表、SUMPRODUCT、
-//   易变函数）各改输入、"静默窗口内再改一次"、"计算进行中再改一次"（M0 的情形 A、C：同一范围走 stop、别的范围排队）、"超过上限"
-//   （上限调到 50 毫秒，带标记捕获、收齐之后补捕获）——按规则捕获，捕获里的公式值与按定义算出的一致；每次交回时间线；
-// - auto-height（大表）：5 万行改字号，行高在空闲任务里迟到；按规则捕获、再看 5 秒，捕获里的行高是最终的；
-// - large-copy（大表）：复制 5 万格的工作表，立即捕获（不等）复制品完整（大表操作的拆分已关），没有懒执行；
-// - composition：批注输入框组字（合成的事件）时 SDK 写不写模型（300 ms 防抖）；按规则捕获时组字中不捕获、组合结束 1 秒之后捕获到最终的文字；
-// - hidden-save：保存一次之后等页面真的变成隐藏（驱动脚本另开一个标签页；校准用例模拟），隐藏的那一刻改一格并保存（自动保存实现之前
-//   用显式保存模拟"切到后台立即上传"），等保存完成；驱动脚本按库里的证据判定。
-// 每项等确定的信号（命令执行完、公式收齐、捕获、保存状态变化）、有时限；时间线随结果交回（timings，相对第一次修改的毫秒数）。
-// 共用的部分（Facade 的声明、编辑时才跑的前提、组合输入的跟踪、按规则捕获的循环）在 ./selftest-capture-rule.ts，公式时序在 ./selftest-formulas.ts。
-import type { CaptureImage, CaptureRun } from './selftest-capture-rule.ts'
+// - change-detection（只读样本：图片是 data: 地址，M3-P3 起服务端不收，所以暂停定时的上传、只看捕获）：打开静默（到编辑的 steady 之后
+//   再 5 秒，本地修改序号仍是 0，自动保存没有捕获）；只改视图的动作不算修改、不捕获；M0 动作矩阵里能经 Facade 执行的改内容的动作逐个
+//   被检测到（内容确实变了，命令日志与变更检测一致）；自动保存跟上之后再看 5 秒，没有迟到而没被检测的变化（最后一次捕获的内容经同步的订阅取）；
+// - formula-timing（公式样本，× Worker/主线程：地址参数选，./formula-mode.ts）：见 ./selftest-formulas.ts（自动保存照常，核对服务器上的公式值）；
+// - auto-height（大表，自动保存照常）：5 万行改字号，行高在空闲任务里迟到；自动保存跟上、再看 5 秒，服务器上的就是最终的行高；
+// - large-copy（大表，自动保存照常）：复制 5 万格的工作表，立即另取的快照里复制品完整（大表操作的拆分已关），没有懒执行；
+//   自动保存存下之后服务器上的复制品同样完整；
+// - composition（自动保存照常）：批注输入框组字（合成的事件）时 SDK 写不写模型（300 ms 防抖）；自动保存组字中不捕获、组合结束 1 秒之后
+//   捕获，服务器上是最终的文字；
+// - hidden-save：经测试构建的控制立即上传第一格，上传的同时写第二格（定时的上传暂停、捕获的静默与上限调到一小时，第二格留着），等页面真的
+//   变成隐藏（驱动脚本另开一个标签页；校准用例模拟）——自动保存在隐藏的那一刻自己捕获、上传第二格；驱动脚本按库里的证据判定。
+// 每项等确定的信号（命令执行完、公式收齐、捕获、上传、保存状态变化）、有时限；时间线随结果交回（timings，相对第一次修改的毫秒数）。
+// 共用的部分（Facade 的声明、编辑时才跑的前提）在 ./selftest-capture-common.ts，观察自动保存的在 ./selftest-autosave.ts，公式时序在 ./selftest-formulas.ts。
+import type { ProbeCommand } from './e2e-probe.ts'
+import type { CaptureImage } from './selftest-capture-common.ts'
 import type { CaptureScenario } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'
-import type { SwitchMark } from './switch-timing.ts'
 import { FORMULA_PROTOCOL, NOTE_TEXTAREA_SELECTOR } from '../internal-api/index.ts'
-import { CAPTURE_LIMITS } from './capture-reference.ts'
 import { BIG_SHEET, cellCount } from './capture-samples.ts'
 import { sameContent } from './content-compare.ts'
-import { CAPTURE_REASON_TEXT, captureByRule, changesAfter, checkEditing, facade, lastCapture, round, sheetNamed, sleep, watchComposition } from './selftest-capture-rule.ts'
+import { autosaveControl, autosaveTimeline, capturesIn, captureTimingProblems, confirmed, describeAutosave, detectedChanges, requestOf, triggerText, untilCaughtUp, untilUploaded, uploadsIn, watchCaptures } from './selftest-autosave.ts'
+import { changesAfter, checkEditing, facade, round, sheetNamed, sleep } from './selftest-capture-common.ts'
 import { isVisible, nextFrames, waitFor } from './selftest-dom.ts'
 import { formulaTimingScenario } from './selftest-formulas.ts'
-import { HIDDEN_SAVE_EDITS } from './selftest-report.ts'
-import { check, CHECK_TIMEOUT_MS, chromeButton, describe, differences, fail, lastSeq, seenSince, SIGNAL_TIMEOUT_MS } from './selftest-session.ts'
-import { installSwitchTiming, SWITCH_TIMING_OPTIONS } from './switch-timing.ts'
+import { COMPOSITION_NOTE, HIDDEN_SAVE_EDITS } from './selftest-report.ts'
+import { check, CHECK_TIMEOUT_MS, describe, differences, fail, fetchServerContent, lastSeq, seenSince, SIGNAL_TIMEOUT_MS } from './selftest-session.ts'
 
 // ---- environment ----
 
@@ -63,7 +64,7 @@ async function measureTimer(schedule: (done: () => void) => void, count: number)
 }
 
 async function environmentScenario(session: Session): Promise<void> {
-  await checkEditing(session)
+  await checkEditing(session, { mode: 'running' })
   await check(session, 'env.idle-callback', async () => {
     const kind = idleCallbackKind()
     const delay = kind === 'missing' ? Number.NaN : await measureTimer(done => requestIdleCallback(() => done()), 10)
@@ -246,78 +247,106 @@ function mutationIds(commands: readonly ProbeCommand[]): string {
 }
 
 async function changeDetectionScenario(session: Session): Promise<void> {
-  if (!await checkEditing(session))
+  // 只读样本有两张 data: 地址的图片（浮动图片与单元格里的图片，M3-P3 起服务端按 image-source 一律拒收；改内容的动作只删掉浮动的那张）：
+  // 暂停定时的上传，只看自动保存的捕获——捕获的内容经同步的订阅另取。整页跳走交回结果时页面变成隐藏、切到后台的上传照常发起，服务端拒收
+  // （422），服务器上仍是修订号 1
+  if (!await checkEditing(session, { mode: 'held' }))
     return
   const { probe } = session
-  await check(session, 'change.open-quiet', async () => {
-    await sleep(OPEN_QUIET_MS)
-    if (probe.changeSeq() !== 0)
-      fail(`打开之后本地修改序号是 ${probe.changeSeq()}（应当是 0：打开不算修改）；命令日志里的修改：${mutationIds(changesAfter(session, 0))}`)
-    const changes = changesAfter(session, 0)
-    if (changes.length > 0)
-      fail(`就绪之后命令日志里有改文档的 mutation：${mutationIds(changes)}`)
-    if (!sameContent(session.opened, probe.snapshot()))
-      fail(`内存里的内容与开始时不同：${differences(session.opened, probe.snapshot())}`)
-    return `到编辑的 steady 之后再 ${OPEN_QUIET_MS / 1000} 秒：本地修改序号 0，就绪之后 ${probe.commands().length} 条命令里没有改文档的 mutation，内容不变`
-  }, OPEN_QUIET_MS + CHECK_TIMEOUT_MS)
+  const control = autosaveControl()
+  const watch = watchCaptures(session)
+  try {
+    await check(session, 'change.open-quiet', async () => {
+      await sleep(OPEN_QUIET_MS)
+      if (probe.changeSeq() !== 0)
+        fail(`打开之后本地修改序号是 ${probe.changeSeq()}（应当是 0：打开不算修改）；命令日志里的修改：${mutationIds(changesAfter(session, 0))}`)
+      const changes = changesAfter(session, 0)
+      if (changes.length > 0)
+        fail(`就绪之后命令日志里有改文档的 mutation：${mutationIds(changes)}`)
+      if (!sameContent(session.opened, probe.snapshot()))
+        fail(`内存里的内容与开始时不同：${differences(session.opened, probe.snapshot())}`)
+      if (control.log().length > 0)
+        fail(`打开之后 ${OPEN_QUIET_MS / 1000} 秒里自动保存有了记录：${describeAutosave(session)}`)
+      return `到编辑的 steady 之后再 ${OPEN_QUIET_MS / 1000} 秒：本地修改序号 0，就绪之后 ${probe.commands().length} 条命令里没有改文档的 mutation，内容不变，自动保存没有捕获`
+    }, OPEN_QUIET_MS + CHECK_TIMEOUT_MS)
 
-  for (const action of VIEW_ACTIONS) {
-    await check(session, `view.${action.name}`, async () => {
-      const before = probe.snapshot()
-      const seq = probe.changeSeq()
-      const mark = lastSeq(probe)
-      await action.run(session)
-      if (!await nextFrames())
-        fail('等不到动画帧（页面隐藏？）')
-      await sleep(VIEW_SETTLE_MS)
-      const changes = changesAfter(session, mark)
-      if (probe.changeSeq() !== seq || changes.length > 0)
-        fail(`误报：本地修改序号 ${seq} → ${probe.changeSeq()}，改文档的 mutation：${mutationIds(changes)}`)
-      if (!sameContent(before, probe.snapshot()))
-        fail(`内容变了：${differences(before, probe.snapshot())}`)
-      return `不算修改（本地修改序号仍是 ${seq}），内容不变；之后 ${probe.commands(mark).length} 条命令`
-    })
-  }
-
-  const contentMark = lastSeq(probe)
-  const contentSeq = probe.changeSeq()
-  for (const action of CONTENT_ACTIONS) {
-    await check(session, `change.${action.name}`, async () => {
-      const before = probe.snapshot()
-      const seq = probe.changeSeq()
-      const mark = lastSeq(probe)
-      let callError: string | undefined
-      try {
+    for (const action of VIEW_ACTIONS) {
+      await check(session, `view.${action.name}`, async () => {
+        const before = probe.snapshot()
+        const seq = probe.changeSeq()
+        const mark = lastSeq(probe)
+        const logged = control.log().length
         await action.run(session)
-      }
-      catch (error) {
-        callError = describe(error)
-      }
-      if (!await waitFor(() => changesAfter(session, mark).length > 0, SIGNAL_TIMEOUT_MS))
-        fail(`没有执行改文档的 mutation${callError === undefined ? '' : `（调用抛出 ${callError}）`}；${seenSince(probe, mark)}`)
-      // 同一个同步段里读：命令日志里的修改与变更检测的序号
-      const changes = changesAfter(session, mark)
-      const delta = probe.changeSeq() - seq
-      if (delta === 0)
-        fail(`漏报：执行了 ${mutationIds(changes)}，本地修改序号没有变`)
-      if (delta !== changes.length)
-        fail(`变更检测加了 ${delta}，命令日志里改文档的 mutation 有 ${changes.length} 条（${mutationIds(changes)}）：两边的判定不一致`)
-      const after = probe.snapshot()
-      if (sameContent(before, after))
-        fail(`认作修改（${mutationIds(changes)}），内容却没有变`)
-      return `检测到 ${delta} 处（${mutationIds(changes)}），内容变了：${differences(before, after)}${callError === undefined ? '' : `；调用抛出 ${callError}`}`
-    })
-  }
+        if (!await nextFrames())
+          fail('等不到动画帧（页面隐藏？）')
+        await sleep(VIEW_SETTLE_MS)
+        const changes = changesAfter(session, mark)
+        if (probe.changeSeq() !== seq || changes.length > 0)
+          fail(`误报：本地修改序号 ${seq} → ${probe.changeSeq()}，改文档的 mutation：${mutationIds(changes)}`)
+        if (!sameContent(before, probe.snapshot()))
+          fail(`内容变了：${differences(before, probe.snapshot())}`)
+        if (control.log().length !== logged)
+          fail(`只改视图，自动保存却有了记录：${describeAutosave(session)}`)
+        return `不算修改（本地修改序号仍是 ${seq}），内容不变，自动保存没有捕获；之后 ${probe.commands(mark).length} 条命令`
+      })
+    }
 
-  await check(session, 'change.late', async () => {
-    const run = await captureByRule(session, { mark: contentMark, baseSeq: contentSeq, monitorMs: LATE_WINDOW_MS, timeoutMs: 30_000 })
-    const final = lastCapture(run)
-    const current = probe.snapshot()
-    if (probe.changeSeq() !== final.seq || !sameContent(final.snapshot, current))
-      fail(`最后一次捕获之后内容变了、没有被检测到：${differences(final.snapshot, current)}`)
-    const first = run.captures[0]
-    return `改内容的 ${CONTENT_ACTIONS.length} 个动作之后按规则捕获 ${run.captures.length} 次（第一次${first === undefined ? '—' : `因${CAPTURE_REASON_TEXT[first.reason]}`}），再看 ${LATE_WINDOW_MS / 1000} 秒：没有迟到而没被检测的变化，最后一次捕获与内存里的内容相同`
-  }, LATE_WINDOW_MS + 45_000)
+    const contentMark = lastSeq(probe)
+    const contentSeq = probe.changeSeq()
+    for (const action of CONTENT_ACTIONS) {
+      await check(session, `change.${action.name}`, async () => {
+        const before = probe.snapshot()
+        const seq = probe.changeSeq()
+        const mark = lastSeq(probe)
+        let callError: string | undefined
+        try {
+          await action.run(session)
+        }
+        catch (error) {
+          callError = describe(error)
+        }
+        if (!await waitFor(() => changesAfter(session, mark).length > 0, SIGNAL_TIMEOUT_MS))
+          fail(`没有执行改文档的 mutation${callError === undefined ? '' : `（调用抛出 ${callError}）`}；${seenSince(probe, mark)}`)
+        // 同一个同步段里读：命令日志里的修改与变更检测的序号
+        const changes = changesAfter(session, mark)
+        const delta = probe.changeSeq() - seq
+        if (delta === 0)
+          fail(`漏报：执行了 ${mutationIds(changes)}，本地修改序号没有变`)
+        if (delta !== changes.length)
+          fail(`变更检测加了 ${delta}，命令日志里改文档的 mutation 有 ${changes.length} 条（${mutationIds(changes)}）：两边的判定不一致`)
+        const after = probe.snapshot()
+        if (sameContent(before, after))
+          fail(`认作修改（${mutationIds(changes)}），内容却没有变`)
+        return `检测到 ${delta} 处（${mutationIds(changes)}），内容变了：${differences(before, after)}${callError === undefined ? '' : `；调用抛出 ${callError}`}`
+      })
+    }
+
+    await check(session, 'change.late', async () => {
+      // 自动保存跟上全部修改（最后一次捕获的序号等于本地修改序号），之后 5 秒序号与日志都不变；最后一次捕获的内容（同步的订阅另取的）
+      // 与此刻内存里的相同：没有迟到而没被检测的变化
+      await untilCaughtUp(session, { uploads: false, monitorMs: LATE_WINDOW_MS, timeoutMs: 30_000 })
+      const final = watch.captures().at(-1)
+      if (final === undefined)
+        fail(`自动保存一次也没有捕获：${describeAutosave(session)}`)
+      if (watch.mismatches().length > 0)
+        fail(`另取的内容与调度捕获的对不上：${watch.mismatches().join('；')}`)
+      const current = probe.snapshot()
+      if (probe.changeSeq() !== final.entry.seq || !sameContent(final.snapshot, current))
+        fail(`最后一次捕获之后内容变了、没有被检测到：${differences(final.snapshot, current)}`)
+      const log = control.log()
+      const changes = detectedChanges(session, contentMark, contentSeq)
+      const timing = captureTimingProblems(capturesIn(log), changes, control.limits(), contentSeq)
+      if (timing.length > 0)
+        fail(`捕获早于规则：${timing.join('；')}`)
+      if (uploadsIn(log).length > 0)
+        fail(`暂停了定时的上传，自动保存却上传了：${describeAutosave(session)}`)
+      const origin = changes[0]?.at ?? 0
+      return `改内容的 ${CONTENT_ACTIONS.length} 个动作之后自动保存捕获 ${capturesIn(log).length} 次（相对第一处修改：${autosaveTimeline(log, origin)}），捕获的时刻都不早于规则的下限；再看 ${LATE_WINDOW_MS / 1000} 秒：没有迟到而没被检测的变化，最后一次捕获与内存里的内容相同；定时的上传暂停时没有上传`
+    }, LATE_WINDOW_MS + 45_000)
+  }
+  finally {
+    watch.dispose()
+  }
 }
 
 // ---- auto-height ----
@@ -325,25 +354,35 @@ async function changeDetectionScenario(session: Session): Promise<void> {
 const AUTO_HEIGHT_MUTATION = 'sheet.mutation.set-worksheet-row-auto-height'
 
 async function autoHeightScenario(session: Session): Promise<void> {
-  if (!await checkEditing(session))
+  if (!await checkEditing(session, { mode: 'running' }))
     return
   const { probe } = session
+  const control = autosaveControl()
   await check(session, 'auto-height.font-size', async () => {
     const mark = lastSeq(probe)
     const baseSeq = probe.changeSeq()
     const origin = performance.now()
     sheetNamed(session, BIG_SHEET.name).getRange(`A1:A${BIG_SHEET.rows}`).setFontSize(28)
     const commandDone = performance.now()
-    const run = await captureByRule(session, { mark, baseSeq, monitorMs: LATE_WINDOW_MS, timeoutMs: 60_000 })
+    // 自动保存跟上全部修改（迟到的行高被检测到、再捕获与上传），之后 5 秒序号与日志都不变
+    await untilCaughtUp(session, { uploads: true, monitorMs: LATE_WINDOW_MS, timeoutMs: 60_000 })
     const heights = probe.commands(mark).filter(command => command.phase === 'executed' && command.id === AUTO_HEIGHT_MUTATION)
     if (heights.length === 0)
       fail(`没有行高的 mutation（${AUTO_HEIGHT_MUTATION}）：样本或 SDK 变了`)
     const detected = heights.filter(command => !command.flags.includes('onlyLocal'))
-    const first = run.captures[0]
-    const final = lastCapture(run)
+    const log = control.log()
+    const captures = capturesIn(log)
+    const uploads = uploadsIn(log).filter(confirmed)
+    const first = captures[0]
+    const last = captures.at(-1)
+    // 服务器上的就是最后一次上传的那一份（服务端原样存下）：与此刻内存里的相同——迟到的行高也存上了
+    const stored = await fetchServerContent(session.host.documentId)
     const current = probe.snapshot()
-    if (probe.changeSeq() !== final.seq || !sameContent(final.snapshot, current))
-      fail(`最后一次捕获之后内容变了、没有被检测到：${differences(final.snapshot, current)}`)
+    if (!sameContent(stored, current))
+      fail(`服务器上的内容与内存里的不同（最后一次上传之后的修改没有存上）：${differences(stored, current)}`)
+    const timing = captureTimingProblems(captures, detectedChanges(session, mark, baseSeq), control.limits(), baseSeq)
+    if (timing.length > 0)
+      fail(`捕获早于规则：${timing.join('；')}`)
     const idle = heights.filter(command => command.at > commandDone)
     const late = first === undefined ? [] : heights.filter(command => command.at > first.at)
     session.timings.push({
@@ -353,28 +392,31 @@ async function autoHeightScenario(session: Session): Promise<void> {
         firstHeight: round((heights[0]?.at ?? origin) - origin),
         lastHeight: round((heights.at(-1)?.at ?? origin) - origin),
         firstCapture: first === undefined ? null : round(first.at - origin),
-        lastCapture: round(final.at - origin),
+        lastCapture: last === undefined ? null : round(last.at - origin),
+        firstUpload: uploads[0] === undefined ? null : round(uploads[0].startedAt - origin),
+        lastUploaded: uploads.at(-1) === undefined ? null : round((uploads.at(-1)?.at ?? origin) - origin),
       },
     })
-    const reasons = run.captures.map(capture => `${CAPTURE_REASON_TEXT[capture.reason]} +${round(capture.at - origin)} ms`).join('、')
-    return `改字号的命令 ${round(commandDone - origin)} ms；行高的 mutation ${heights.length} 条（${detected.length} 条算修改；命令返回之后在空闲任务里到的 ${idle.length} 条，最后一条 +${round((heights.at(-1)?.at ?? origin) - origin)} ms）；按规则捕获 ${run.captures.length} 次（${reasons}），第一次捕获之后迟到的 ${late.length} 条都被检测到、再捕获；再看 ${LATE_WINDOW_MS / 1000} 秒，最后一次捕获里的行高就是最终的；requestIdleCallback ${IDLE_CALLBACK_TEXT[idleCallbackKind()]}`
+    return `改字号的命令 ${round(commandDone - origin)} ms；行高的 mutation ${heights.length} 条（${detected.length} 条算修改；命令返回之后在空闲任务里到的 ${idle.length} 条，最后一条 +${round((heights.at(-1)?.at ?? origin) - origin)} ms）；自动保存 ${autosaveTimeline(log, origin)}，第一次捕获之后迟到的 ${late.length} 条都被检测到、再捕获与上传；再看 ${LATE_WINDOW_MS / 1000} 秒没有新的变化，服务器上的内容与内存里的相同（最终的行高）；requestIdleCallback ${IDLE_CALLBACK_TEXT[idleCallbackKind()]}`
   }, 90_000)
 }
 
 // ---- large-copy ----
 
 async function largeCopyScenario(session: Session): Promise<void> {
-  if (!await checkEditing(session))
+  if (!await checkEditing(session, { mode: 'running' }))
     return
   const { probe } = session
+  const control = autosaveControl()
+  let copied: { readonly id: string, readonly cells: number, readonly origin: number } | undefined
   await check(session, 'large-copy.duplicate', async () => {
     const before = (JSON.parse(probe.snapshot()) as { readonly sheetOrder: readonly string[] }).sheetOrder
     const mark = lastSeq(probe)
     const baseSeq = probe.changeSeq()
     const origin = performance.now()
     facade(session).getActiveWorkbook().duplicateSheet(sheetNamed(session, BIG_SHEET.name))
-    const copied = performance.now()
-    // 立即捕获（不等）：复制品要完整（关掉了大表操作的拆分，插件档案 v1 §1，M0-P3 报告 §2.2）
+    const copiedAt = performance.now()
+    // 立即另取（不等）：复制品要完整（关掉了大表操作的拆分，插件档案 v1 §1，M0-P3 报告 §2.2）——自动保存在这之后任何时刻捕获都是完整的
     const immediate = probe.snapshot()
     const captured = performance.now()
     const seq = probe.changeSeq()
@@ -387,7 +429,7 @@ async function largeCopyScenario(session: Session): Promise<void> {
     if (original !== BIG_SHEET.rows)
       fail(`原表有 ${original} 格（样本是 ${BIG_SHEET.rows} 格）`)
     if (copy !== original)
-      fail(`立即捕获里复制品只有 ${copy} 格（原表 ${original} 格）：大表操作被拆分了，余下的在空闲时以 onlyLocal 补上`)
+      fail(`立即另取的快照里复制品只有 ${copy} 格（原表 ${original} 格）：大表操作被拆分了，余下的在空闲时以 onlyLocal 补上`)
     if (seq === baseSeq)
       fail('复制没有被检测为修改')
     await sleep(3_000)
@@ -396,16 +438,29 @@ async function largeCopyScenario(session: Session): Promise<void> {
       fail(`复制之后有 ${lazy.length} 条带 onlyLocal 的写值（懒执行）`)
     if (cellCount(probe.snapshot(), copyId) !== original)
       fail('3 秒之后复制品的格数变了')
-    session.timings.push({ id: 'large-copy.duplicate', ms: { copy: round(copied - origin), capture: round(captured - copied) } })
-    return `复制 ${original} 格的工作表 ${round(copied - origin)} ms（同步），立即捕获（${round(captured - copied)} ms）里复制品 ${copy} 格、与原表相同；检测到修改（序号 ${baseSeq} → ${seq}）；3 秒之内没有懒执行的写值`
+    copied = { id: copyId, cells: original, origin }
+    session.timings.push({ id: 'large-copy.duplicate', ms: { copy: round(copiedAt - origin), capture: round(captured - copiedAt) } })
+    return `复制 ${original} 格的工作表 ${round(copiedAt - origin)} ms（同步），立即另取的快照（${round(captured - copiedAt)} ms）里复制品 ${copy} 格、与原表相同；检测到修改（序号 ${baseSeq} → ${seq}）；3 秒之内没有懒执行的写值`
   }, 30_000)
+  await check(session, 'large-copy.uploaded', async () => {
+    if (copied === undefined)
+      fail('上一项没有做完')
+    const { upload } = await untilUploaded(session, probe.changeSeq(), { timeoutMs: 30_000 })
+    const stored = await fetchServerContent(session.host.documentId)
+    const cells = cellCount(stored, copied.id)
+    if (cells !== copied.cells || cellCount(stored, BIG_SHEET.id) !== copied.cells)
+      fail(`服务器上的复制品 ${cells} 格、原表 ${cellCount(stored, BIG_SHEET.id)} 格（应当都是 ${copied.cells} 格）`)
+    if (!sameContent(stored, probe.snapshot()))
+      fail(`服务器上的内容与内存里的不同：${differences(stored, probe.snapshot())}`)
+    session.timings.push({ id: 'large-copy.uploaded', ms: { uploadStart: round(upload.startedAt - copied.origin), uploaded: round(upload.at - copied.origin) } })
+    return `自动保存 ${autosaveTimeline(control.log(), copied.origin)}；服务器上的复制品 ${cells} 格、与原表相同，与内存里的内容相同`
+  }, 45_000)
 }
 
 // ---- composition ----
 
 /** 批注里组字：拼音逐步变长（合成的 input），最后选定的文字 */
 const COMPOSITION_STEPS = ['n', 'ni', 'nih', 'niha', 'nihao']
-const COMPOSED_TEXT = '你好'
 const COMPOSITION_STEP_MS = 80
 
 /** SDK 的批注输入框按 300 ms 防抖写批注（sheets-note-ui 的 views/Note.tsx:110-143），组字中停住比它长一点 */
@@ -413,9 +468,12 @@ const NOTE_DEBOUNCE_WAIT_MS = 400
 
 /**
  * 拼音写进批注之后再组字多久才选定：比捕获的静默（1 秒）长，不认组字的规则这时就会在组字中捕获（变异验证）；
- * 整段组字仍在上限（从第一处修改算起 3 秒）之内
+ * 整段组字仍在捕获的上限（从第一处没捕获的修改算起 3 秒）之内
  */
-const COMPOSITION_HOLD_MS = CAPTURE_LIMITS.quietMs + 300
+const COMPOSITION_HOLD_EXTRA_MS = 300
+
+/** 命令日志记下修改的时刻、这里记下组合结束的时刻，与调度记下的差一点（同一个同步段的前后）：比较时留出的余量 */
+const COMPOSITION_TOLERANCE_MS = 20
 
 /**
  * 改受控的 textarea 的值并派发 input：经原型上的 setter 改（Reflect.set 以 textarea 为接收者调用原型的 setter，绕过 React 装在元素上的
@@ -440,26 +498,26 @@ function noteTextarea(): HTMLTextAreaElement | undefined {
 }
 
 interface CompositionOutcome {
+  readonly mark: number
   readonly startAt: number
   readonly endAt: number
-  readonly writesWhileComposing: readonly ProbeCommand[]
-  readonly seqWhileComposing: number
-  readonly run: CaptureRun
-  readonly finalNote: string | undefined
+  readonly quietMs: number
 }
 
 async function compositionScenario(session: Session): Promise<void> {
-  if (!await checkEditing(session))
+  if (!await checkEditing(session, { mode: 'running' }))
     return
   const { probe } = session
-  const target = { row: 1, column: 1 }
+  const control = autosaveControl()
+  const target = COMPOSITION_NOTE
   let textarea: HTMLTextAreaElement | undefined
-  let sheetId = ''
   const opened = await check(session, 'composition.open-note', async () => {
     const sheet = facade(session).getActiveWorkbook().getActiveSheet()
-    sheetId = sheet.getSheetId()
-    sheet.getRange('B2').activate()
+    if (sheet.getSheetId() !== target.sheetId)
+      fail(`当前工作表是 ${sheet.getSheetId()}（应当是模板的 ${target.sheetId}）`)
+    sheet.getRange(target.cell).activate()
     const mark = lastSeq(probe)
+    const openedAt = performance.now()
     await facade(session).executeCommand('sheet.operation.add-note-popup')
     if (!await waitFor(() => noteTextarea() !== undefined, SIGNAL_TIMEOUT_MS))
       fail(`批注的输入框没有出现；${seenSince(probe, mark)}`)
@@ -468,148 +526,152 @@ async function compositionScenario(session: Session): Promise<void> {
     const focused = await waitFor(() => document.activeElement === textarea, 1_000)
     if (!focused)
       textarea?.focus()
-    // 打开时浮层按输入框的尺寸写回批注（Note.tsx 的 handleResize），等它过去
+    // 打开时浮层按输入框的尺寸写回批注（Note.tsx 的 handleResize），等它过去；自动保存照常把它存上——组字从没有未存的修改开始
     await sleep(NOTE_DEBOUNCE_WAIT_MS + 200)
     const writes = probe.commands(mark).filter(command => command.phase === 'executed' && command.id === 'sheet.mutation.update-note')
-    return `批注的输入框出现${focused ? '并聚焦' : '（没有自己聚焦，自检聚焦它）'}；打开时写了 ${writes.length} 次批注`
-  })
+    await untilCaughtUp(session, { uploads: true, monitorMs: 0, timeoutMs: 20_000 })
+    return `批注的输入框出现${focused ? '并聚焦' : '（没有自己聚焦，自检聚焦它）'}；打开时写了 ${writes.length} 次批注${writes.length === 0 ? '' : `，自动保存存上（${autosaveTimeline(control.log(), openedAt)}）`}`
+  }, 30_000)
   if (!opened || textarea === undefined)
     return
   const input = textarea
-  const watch = watchComposition(session.host.chrome)
   let outcome: CompositionOutcome | undefined
-  try {
-    await check(session, 'composition.note-while-composing', async () => {
-      const mark = lastSeq(probe)
-      const baseSeq = probe.changeSeq()
-      let finished = false
-      const loop = captureByRule(session, { mark, baseSeq, composition: watch, keepAlive: () => !finished, timeoutMs: 20_000 })
-      const startAt = performance.now()
-      input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, composed: true, data: '' }))
-      for (const step of COMPOSITION_STEPS) {
-        input.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, composed: true, data: step }))
-        typeInto(input, step, true)
-        await sleep(COMPOSITION_STEP_MS)
-      }
-      await sleep(NOTE_DEBOUNCE_WAIT_MS)
-      const writesWhileComposing = probe.commands(mark).filter(command => command.phase === 'executed' && command.id === 'sheet.mutation.update-note')
-      const seqWhileComposing = probe.changeSeq() - baseSeq
-      await sleep(COMPOSITION_HOLD_MS)
-      input.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, composed: true, data: COMPOSED_TEXT }))
-      typeInto(input, COMPOSED_TEXT, true)
-      input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data: COMPOSED_TEXT }))
-      const endAt = performance.now()
-      finished = true
-      const run = await loop
-      outcome = { startAt, endAt, writesWhileComposing, seqWhileComposing, run, finalNote: noteText(lastCapture(run).snapshot, sheetId, target.row, target.column) }
-      if (writesWhileComposing.length === 0)
-        fail(`组字中停了 ${NOTE_DEBOUNCE_WAIT_MS} ms，SDK 没有把拼音写进批注（预期按 300 ms 防抖写进去）：组字中批注不写模型，设计 §3.6 的前提要重新看`)
-      if (seqWhileComposing === 0)
-        fail('组字中写了批注，变更检测没有认出')
-      return `组字中 SDK 把拼音写进了批注：${writesWhileComposing.length} 次 update-note（第一次在组字开始之后 +${round((writesWhileComposing[0]?.at ?? startAt) - startAt)} ms），变更检测认出 ${seqWhileComposing} 处修改`
-    }, 30_000)
-    await check(session, 'composition.capture-after-end', async () => {
-      if (outcome === undefined)
-        fail('上一项没有做完')
-      const { startAt, endAt, run, finalNote } = outcome
-      const during = run.captures.filter(capture => capture.at < endAt)
-      if (during.length > 0)
-        fail(`组字中捕获了 ${during.length} 次（第一次 +${round((during[0]?.at ?? startAt) - startAt)} ms）：组字中不应捕获`)
-      const first = run.captures[0]
-      if (first === undefined)
-        fail('组合结束之后没有捕获')
-      if (first.at < endAt + CAPTURE_LIMITS.quietMs)
-        fail(`组合结束之后 ${round(first.at - endAt)} ms 就捕获了（应当至少 ${CAPTURE_LIMITS.quietMs} ms）`)
-      if (finalNote !== COMPOSED_TEXT)
-        fail(`捕获里的批注是 ${JSON.stringify(finalNote)}（应当是选定的"${COMPOSED_TEXT}"）`)
-      session.timings.push({ id: 'composition', ms: { compositionEnd: round(endAt - startAt), firstCapture: round(first.at - startAt) } })
-      return `组字中没有捕获；组合结束之后 +${round(first.at - endAt)} ms 捕获（${CAPTURE_REASON_TEXT[first.reason]}），捕获里的批注是选定的"${COMPOSED_TEXT}"（共 ${run.captures.length} 次捕获）`
-    })
-  }
-  finally {
-    watch.dispose()
-  }
+  await check(session, 'composition.note-while-composing', async () => {
+    control.clearLog()
+    const mark = lastSeq(probe)
+    const baseSeq = probe.changeSeq()
+    const quietMs = control.limits().captureQuietMs
+    const startAt = performance.now()
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, composed: true, data: '' }))
+    for (const step of COMPOSITION_STEPS) {
+      input.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, composed: true, data: step }))
+      typeInto(input, step, true)
+      await sleep(COMPOSITION_STEP_MS)
+    }
+    await sleep(NOTE_DEBOUNCE_WAIT_MS)
+    const writesWhileComposing = probe.commands(mark).filter(command => command.phase === 'executed' && command.id === 'sheet.mutation.update-note')
+    const seqWhileComposing = probe.changeSeq() - baseSeq
+    await sleep(quietMs + COMPOSITION_HOLD_EXTRA_MS)
+    input.dispatchEvent(new CompositionEvent('compositionupdate', { bubbles: true, composed: true, data: target.text }))
+    typeInto(input, target.text, true)
+    input.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, composed: true, data: target.text }))
+    const endAt = performance.now()
+    outcome = { mark, startAt, endAt, quietMs }
+    if (writesWhileComposing.length === 0)
+      fail(`组字中停了 ${NOTE_DEBOUNCE_WAIT_MS} ms，SDK 没有把拼音写进批注（预期按 300 ms 防抖写进去）：组字中批注不写模型，设计 §3.6 的前提要重新看`)
+    if (seqWhileComposing === 0)
+      fail('组字中写了批注，变更检测没有认出')
+    return `组字中 SDK 把拼音写进了批注：${writesWhileComposing.length} 次 update-note（第一次在组字开始之后 +${round((writesWhileComposing[0]?.at ?? startAt) - startAt)} ms），变更检测认出 ${seqWhileComposing} 处修改；组字 ${round(endAt - startAt)} ms`
+  }, 30_000)
+  await check(session, 'composition.capture-after-end', async () => {
+    if (outcome === undefined)
+      fail('上一项没有做完')
+    const { mark, startAt, endAt, quietMs } = outcome
+    // 组合结束之后 SDK 按 300 ms 防抖把选定的文字写进批注：等这一处修改，再等自动保存把它上传
+    const written = (): boolean => probe.commands(mark).some(command => command.phase === 'executed' && command.id === 'sheet.mutation.update-note' && command.at > endAt)
+    if (!await waitFor(written, SIGNAL_TIMEOUT_MS))
+      fail(`组合结束之后 SDK 没有把选定的文字写进批注；${seenSince(probe, mark)}`)
+    const { upload } = await untilUploaded(session, probe.changeSeq(), { timeoutMs: 20_000 })
+    const log = control.log()
+    const captures = capturesIn(log)
+    const during = captures.filter(capture => capture.at >= startAt && capture.at < endAt)
+    if (during.length > 0)
+      fail(`组字中捕获了 ${during.length} 次（第一次 +${round((during[0]?.at ?? startAt) - startAt)} ms，${triggerText(during[0]?.trigger ?? '?')}）：组字中不应捕获`)
+    const first = captures.find(capture => capture.at >= endAt)
+    if (first === undefined)
+      fail('组合结束之后没有捕获')
+    if (first.at < endAt + quietMs - COMPOSITION_TOLERANCE_MS)
+      fail(`组合结束之后 ${round(first.at - endAt)} ms 就捕获了（应当至少 ${quietMs} ms）`)
+    const stored = await fetchServerContent(session.host.documentId)
+    const note = noteText(stored, target.sheetId, target.row, target.column)
+    if (note !== target.text)
+      fail(`服务器上的批注是 ${JSON.stringify(note)}（应当是选定的"${target.text}"）`)
+    session.timings.push({ id: 'composition', ms: { compositionEnd: round(endAt - startAt), firstCapture: round(first.at - startAt), uploaded: round(upload.at - startAt) } })
+    return `组字中没有捕获；组合结束之后 +${round(first.at - endAt)} ms 捕获（${triggerText(first.trigger)}）、+${round(upload.at - endAt)} ms 上传存上（${triggerText(upload.trigger)}），服务器上的批注是选定的"${target.text}"（共 ${captures.length} 次捕获）`
+  })
 }
 
 // ---- hidden-save ----
 
-/** 等页面变成隐藏最多等多久：驱动脚本在库里看到第一次保存之后才另开标签页 */
+/** 等页面变成隐藏最多等多久：驱动脚本在库里看到第一次上传之后才另开标签页 */
 const HIDDEN_WAIT_MS = 120_000
 
-/** 保存最多等多久（隐藏之后 Safari 约 6 秒停计时器，等的循环也随之停住；回到前台之后才继续） */
+/** 上传最多等多久（隐藏之后 Safari 约 6 秒停计时器，等的循环也随之停住；回到前台之后才继续） */
 const SAVE_WAIT_MS = 20_000
 
-/** 保存的请求：PUT /api/documents/<id>/content（切换计时记下的请求与回应，switch-timing.ts） */
-function saveRequests(marks: readonly SwitchMark[]): { readonly request: SwitchMark, readonly response: SwitchMark | undefined }[] {
-  return marks
-    .filter(mark => mark.kind === 'request' && /^PUT \/api\/documents\/[^/]+\/content$/.test(mark.detail))
-    .map(request => ({ request, response: marks.find(mark => mark.kind === 'response' && mark.id === request.id) }))
-}
+/**
+ * 隐藏之前不让自动保存按时捕获：捕获的静默与上限调到一小时。第二格在隐藏的那一刻才由自动保存捕获（与上传一起）——切到后台时有没捕获的修改，
+ * 是最吃紧的情形（同步捕获、压缩、发出请求都要赶在 Safari 停计时器之前）
+ */
+const NO_TIMED_CAPTURE_MS = 3_600_000
 
 async function hiddenSaveScenario(session: Session): Promise<void> {
-  if (!await checkEditing(session))
+  if (!await checkEditing(session, { mode: 'held', limits: { captureQuietMs: NO_TIMED_CAPTURE_MS, captureMaxMs: NO_TIMED_CAPTURE_MS } }))
     return
+  const control = autosaveControl()
   const [first, second] = HIDDEN_SAVE_EDITS
-  // 保存的请求经切换计时记下（它包一层 window.fetch，记下请求与回应的时刻；同一页只装一次）
-  const timing = installSwitchTiming(SWITCH_TIMING_OPTIONS)
   const sheet = facade(session).getActiveWorkbook().getActiveSheet()
-  const state: { hiddenAt?: number, clickedAt?: number, saveButton?: boolean } = {}
-  const saveStatus = (): string | undefined => session.host.view().save
-  // 隐藏的那一刻（visibilitychange 的处理里，同步地）：改第二格、按保存——不靠计时器
+  const state: { hiddenAt?: number } = {}
+  // 隐藏的那一刻：在 window 上的捕获阶段记下，先于编辑器页挂在 document 上的处理（自动保存在那里同步捕获、发起上传）
   const onVisibility = (): void => {
-    if (document.visibilityState !== 'hidden' || state.hiddenAt !== undefined)
-      return
-    state.hiddenAt = performance.now()
-    sheet.getRange(second.cell).setValue(second.value)
-    const button = chromeButton(session, '保存')
-    state.saveButton = button !== undefined
-    button?.click()
-    state.clickedAt = performance.now()
+    if (document.visibilityState === 'hidden')
+      state.hiddenAt ??= performance.now()
   }
-  document.addEventListener('visibilitychange', onVisibility)
+  window.addEventListener('visibilitychange', onVisibility, true)
   try {
     const firstSaved = await check(session, 'hidden.first-save', async () => {
       if (sheet.getSheetId() !== first.sheetId)
         fail(`当前工作表是 ${sheet.getSheetId()}（应当是模板的 ${first.sheetId}）`)
-      const before = saveRequests(timing.marks()).length
       sheet.getRange(first.cell).setValue(first.value)
-      if (saveStatus() !== 'dirty')
-        fail(`改了一格，保存状态是 ${saveStatus() ?? '没有'}（应当是 dirty）`)
-      const button = chromeButton(session, '保存')
-      if (button === undefined)
-        fail('页头没有保存按钮')
-      const clicked = performance.now()
-      button.click()
-      if (!await waitFor(() => saveStatus() === 'clean', SAVE_WAIT_MS, 50))
-        fail(`${SAVE_WAIT_MS / 1000} 秒内没有保存完（保存状态 ${saveStatus() ?? '没有'}）`)
-      const saves = saveRequests(timing.marks()).slice(before)
-      if (saves.length !== 1 || saves[0]?.response?.detail !== '200')
-        fail(`保存的请求：${saves.map(save => `${save.request.detail} → ${save.response?.detail ?? '没有回应'}`).join('、') || '没有'}`)
-      return `第一格（${first.cell}）保存完：${round(performance.now() - clicked)} ms；之后等页面变成隐藏（驱动脚本另开标签页）`
+      const firstSeq = session.probe.changeSeq()
+      if (session.host.view().save !== 'dirty')
+        fail(`改了一格，保存状态是 ${session.host.view().save ?? '没有'}（应当是 dirty）`)
+      // 控制的 flush：同步捕获（第一格）、发起上传；随即写第二格——它不在这一次上传里，留到隐藏的那一刻
+      const started = performance.now()
+      const flushing = control.flush()
+      sheet.getRange(second.cell).setValue(second.value)
+      const secondSeq = session.probe.changeSeq()
+      const result = await flushing
+      if (result?.outcome?.kind !== 'saved')
+        fail(`控制的 flush 没有存上：${JSON.stringify(result) ?? '没有当前的调度'}；${describeAutosave(session)}`)
+      const log = control.log()
+      const captures = capturesIn(log)
+      const uploads = uploadsIn(log)
+      if (captures.length !== 1 || captures[0]?.trigger !== 'control' || captures[0].seq !== firstSeq)
+        fail(`捕获应当只有控制的那一次（序号 ${firstSeq}）：${autosaveTimeline(log, started)}`)
+      if (uploads.length !== 1 || uploads[0]?.seq !== firstSeq)
+        fail(`上传应当只有控制的那一次（序号 ${firstSeq}）：${autosaveTimeline(log, started)}`)
+      const request = requestOf(result.outcome.requestId)
+      if (request?.status !== 200 || request.localSeq !== String(firstSeq))
+        fail(`第一格的保存请求：状态 ${String(request?.status)}、修改序号 ${String(request?.localSeq)}（应当是 200、${firstSeq}）`)
+      if (secondSeq <= firstSeq)
+        fail('写第二格没有被检测为修改')
+      if (session.host.view().save !== 'dirty')
+        fail(`第一格存上之后保存状态是 ${session.host.view().save ?? '没有'}（应当是 dirty：第二格还没上传）`)
+      return `第一格（${first.cell}）经控制的 flush 捕获、上传、存上（${round(performance.now() - started)} ms）；第二格（${second.cell}）在它上传时写下，留着没捕获（捕获的静默与上限是一小时）、没上传（定时的上传暂停）；之后等页面变成隐藏（驱动脚本另开标签页）`
     })
     if (!firstSaved)
       return
-    await check(session, 'hidden.save-while-hidden', async () => {
-      const before = saveRequests(timing.marks()).length
+    await check(session, 'hidden.upload-while-hidden', async () => {
       if (!await waitFor(() => state.hiddenAt !== undefined, HIDDEN_WAIT_MS, 100))
         fail(`${HIDDEN_WAIT_MS / 1000} 秒内页面没有变成隐藏`)
-      if (state.saveButton !== true)
-        fail('隐藏的那一刻页头没有保存按钮')
       const hiddenAt = state.hiddenAt ?? 0
-      const answered = (): boolean => saveRequests(timing.marks()).slice(before).some(save => save.response !== undefined)
-      if (!await waitFor(answered, SAVE_WAIT_MS, 50))
-        fail(`隐藏之后 ${SAVE_WAIT_MS / 1000} 秒内保存的请求没有回应（保存状态 ${saveStatus() ?? '没有'}，可见性 ${document.visibilityState}）`)
-      const save = saveRequests(timing.marks()).slice(before)[0]
-      if (save?.response?.detail !== '200')
-        fail(`隐藏之后的保存：${save?.request.detail ?? '没有请求'} → ${save?.response?.detail ?? '没有回应'}`)
-      const sent = round(save.request.at - hiddenAt)
-      const done = round((save.response?.at ?? hiddenAt) - hiddenAt)
-      session.timings.push({ id: 'hidden.save', ms: { click: round((state.clickedAt ?? hiddenAt) - hiddenAt), request: sent, response: done } })
-      return `隐藏的那一刻改第二格（${second.cell}）并按保存；隐藏之后 +${sent} ms 发出保存的请求，+${done} ms 收到 200（页面看到的；驱动脚本以库里的为准）`
+      const seq = session.probe.changeSeq()
+      const { upload, request } = await untilUploaded(session, seq, { timeoutMs: SAVE_WAIT_MS })
+      const capture = capturesIn(control.log()).find(item => item.trigger === 'hidden')
+      if (capture?.seq !== seq)
+        fail(`隐藏的那一刻自动保存没有捕获第二格：${describeAutosave(session)}`)
+      if (upload.trigger !== 'hidden')
+        fail(`上传第二格的不是切到后台（${triggerText(upload.trigger)}）：${describeAutosave(session)}`)
+      if (request?.status !== 200 || request.answeredAt === undefined)
+        fail(`隐藏之后的保存请求：状态 ${String(request?.status)}`)
+      const ms = { capture: round(capture.at - hiddenAt), request: round(request.at - hiddenAt), response: round(request.answeredAt - hiddenAt), uploaded: round(upload.at - hiddenAt) }
+      session.timings.push({ id: 'hidden.upload', ms })
+      return `隐藏之后 +${ms.capture} ms 自动保存捕获第二格（切到后台）、+${ms.request} ms 发出保存请求、+${ms.response} ms 收到 200，+${ms.uploaded} ms 调度记下存上（页面看到的；驱动脚本以库里的为准）`
     }, HIDDEN_WAIT_MS + SAVE_WAIT_MS + CHECK_TIMEOUT_MS)
   }
   finally {
-    document.removeEventListener('visibilitychange', onVisibility)
+    window.removeEventListener('visibilitychange', onVisibility, true)
   }
 }
 

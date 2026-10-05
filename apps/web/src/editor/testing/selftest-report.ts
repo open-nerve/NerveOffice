@@ -27,6 +27,14 @@ export const FORMULA_MODE_PARAM = 'formula'
 /** 两种公式模式在地址里的写法（键与编辑器的 FormulaMode 相同） */
 export const FORMULA_MODE_VALUES = { 'worker': 'worker', 'main-thread': 'main' } as const
 
+/**
+ * 打开编辑器页时暂停定时的自动保存（M3-P4 S7，审查 B1）：入口页登录之后、跳到编辑器页之前在 sessionStorage 里写下它（同一个标签页里跳转，
+ * sessionStorage 跟着走），测试构建的自动保存控制（./autosave-control.ts 的 AUTOSAVE_HOLD_STORAGE_KEY、AUTOSAVE_HELD）据此打开即暂停——
+ * 真实 Safari 与 Playwright 的夹具（默认暂停）从打开起是同一个状态。自检开始时还会再暂停一次、各场景按需要放开（selftest-autosave.ts），
+ * 结果不依赖打开时的状态。这个文件不引用任何模块，在这里另写一份，单元测试核对两边一致
+ */
+export const SELFTEST_AUTOSAVE_HOLD = { key: 'nerve-office.autosave-hold', value: 'held' } as const
+
 /** 公式在哪里计算（与编辑器的 FormulaMode 相同；这个文件不引用任何模块，在这里另写一份，单元测试核对两边一致） */
 export type SelftestFormulaMode = keyof typeof FORMULA_MODE_VALUES
 
@@ -58,13 +66,20 @@ export function isSelftestScenario(value: string): value is SelftestScenario {
 export const ENTER_EXIT_EDIT = { sheetName: '数据', sheetId: 'sheet-1', cell: 'K45', row: 44, column: 10, value: '进入、退出编辑的自检' } as const
 
 /**
- * hidden-save（M3-P4 S1）在编辑时写的两格（模板的第一张表 sheet-1）：先写第一格并保存，页面变成隐藏的那一刻写第二格并保存。
- * 驱动脚本与 E2E 核对服务器上的那份文档：第一次保存之后修订号 2、内容里有第一格；隐藏之后修订号 3、内容里有第二格
+ * hidden-save（M3-P4 S1；S7 起由自动保存上传）在编辑时写的两格（模板的第一张表 sheet-1）：写第一格，经测试构建的控制立即上传它，
+ * 上传的同时写第二格——第二格留着没捕获、没上传（定时的上传暂停、捕获的静默与上限调到一小时），页面变成隐藏的那一刻由自动保存自己捕获、上传。
+ * 驱动脚本与 E2E 核对服务器上的那份文档：第一次上传之后修订号 2；隐藏之后修订号 3、内容里有两格
  */
 export const HIDDEN_SAVE_EDITS = [
   { sheetId: 'sheet-1', cell: 'A1', row: 0, column: 0, value: '隐藏之前保存的' },
   { sheetId: 'sheet-1', cell: 'A2', row: 1, column: 0, value: '隐藏的那一刻保存的' },
 ] as const
+
+/**
+ * composition（M3-P4 S1）组字写进的批注：模板的第一张表 sheet-1 的 B2，选定的文字。S7 起驱动脚本与 E2E 另核对服务器上的那份文档里
+ * 有它（自动保存在组合结束之后存下）
+ */
+export const COMPOSITION_NOTE = { sheetId: 'sheet-1', cell: 'B2', row: 1, column: 1, text: '你好' } as const
 
 /** 一项计时（例如 switch.enter：一次切换的各段耗时，毫秒；缺的是 null）。各段的含义见 ./switch-timing.ts 的 switchDurations */
 export interface SelftestTiming {

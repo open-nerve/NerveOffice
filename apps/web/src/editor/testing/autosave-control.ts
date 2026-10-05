@@ -4,7 +4,8 @@
 //   切到后台）照常，捕获照常。打开时是否暂停由 sessionStorage 选（E2E 经 page.addInitScript 写 AUTOSAVE_HOLD_STORAGE_KEY；默认不暂停）；
 // - setLimits / resetLimits：换节奏（例如把捕获的上限调到 50 ms 测"超过上限"，M0 的做法）；
 // - flush：让当前的调度立即上传一次（autosave.ts 的 flush('control')：不提交单元格、不等公式、去重，会话与联网照样挡）；
-// - log / clearLog：每次捕获与上传的原因、序号、时刻（调度的时钟，performance.now）与结果（requestId）。
+// - log / clearLog：每次捕获与上传的原因、序号、时刻（调度的时钟，performance.now）与结果（requestId）；
+// - subscribe：每记下一条就同步告诉订阅者（M3-P4 S7 的页面自检用：捕获的那一刻在同一个同步段里取一份内存快照，与调度捕获的那一份相同）。
 // 整页共用一份：编辑模式每建一个调度就交给这里（attach），去掉时交回 undefined；节奏与暂停对之后建的调度同样有效。
 // 只在测试构建里：编辑器页的组装处（features/sheet-editor/start.tsx）在 import.meta.env.MODE === 'e2e' 的分支里动态引入它；
 // 生产构建里没有它（门禁 artifacts 按来源认出 editor/testing/，挂在 window 上的名字另由禁用关键字核对）。
@@ -64,6 +65,12 @@ export interface AutosaveControl {
   readonly attached: () => boolean
   readonly log: () => AutosaveLogEntry[]
   readonly clearLog: () => void
+  /**
+   * 每记下一条（捕获、捕获出错、上传结束）就同步调用 listener，交回日志里的那一条（拷贝）；返回退订的函数。
+   * 捕获的那一条在调度捕获之后、同一个同步段里送到（autosave.ts 的 captureNow：取快照、交给保存的状态机、记日志，中间没有别的命令），
+   * 页面自检据此在同一时刻另取一份内存快照，得到调度捕获的那一份内容。listener 抛出的错误交给调度上报（页面错误），不影响保存
+   */
+  readonly subscribe: (listener: (entry: AutosaveLogEntry) => void) => () => void
 }
 
 /** 控制能调用的调度（autosave.ts 的 Autosave 的子集） */
@@ -105,6 +112,7 @@ function copyOf(event: AutosaveLogEntry): AutosaveLogEntry {
 /** 装上控制：挂到 window 上，交回给编辑器页的那一面。defaults 是生产的节奏（contracts 的 AUTOSAVE_*） */
 export function installAutosaveControl(target: Window, defaults: AutosaveControlLimits): InstalledAutosaveControl {
   const listeners = new Set<() => void>()
+  const subscribers = new Set<(entry: AutosaveLogEntry) => void>()
   let held = initiallyHeld(target)
   let limits: AutosaveControlLimits = { ...defaults }
   let current: AutosaveControlTarget | undefined
@@ -140,6 +148,12 @@ export function installAutosaveControl(target: Window, defaults: AutosaveControl
     clearLog: () => {
       entries.length = 0
     },
+    subscribe: (listener) => {
+      subscribers.add(listener)
+      return () => {
+        subscribers.delete(listener)
+      }
+    },
   }
   ;(target as unknown as Record<string, unknown>)[AUTOSAVE_CONTROL_GLOBAL] = control
 
@@ -153,9 +167,12 @@ export function installAutosaveControl(target: Window, defaults: AutosaveControl
       },
     },
     observe: (event) => {
-      entries.push(copyOf(event))
+      const entry = copyOf(event)
+      entries.push(entry)
       if (entries.length > LOG_LIMIT)
         entries.splice(0, entries.length - LOG_LIMIT)
+      for (const subscriber of [...subscribers])
+        subscriber(copyOf(entry))
     },
     attach: (next) => {
       current = next

@@ -9,7 +9,8 @@
 // - edit-chrome：能编辑时同样的界面检查都看得到（工具栏、底栏、右键菜单），合成的右键与按键确实有效——只读时"没有"的对照；
 // - enter-exit（M3-P2 S5）：作者阅读 → 点页头真实的"编辑"（合成的点击）→ 经 Facade 改一格 → 点"退出编辑"（先保存）→ 回到阅读之后
 //   再试 Facade 的只读入口（样本去掉了图片，操作图片的几项不试，M3-P3）、撤销与重做与界面；两次切换的耗时按 ./switch-timing.ts 记下，随结果交回；
-// - 捕获时机的复核（M3-P4 S1：环境、变更检测、公式时序 × 两种模式、自动行高、大表复制、组合输入、隐藏时保存）在 ./selftest-capture.ts。
+// - 捕获时机的复核（M3-P4 S1：环境、变更检测、公式时序 × 两种模式、自动行高、大表复制、组合输入、隐藏时保存；S7 起观察真实的自动保存）
+//   在 ./selftest-capture.ts。
 // 一次运行的共用部分（编辑器页交给自检的、一项检查怎么记、命令日志的查询）在 ./selftest-session.ts。
 // 只读的入口里能用 Facade 与合成事件执行的部分才在这里；可信的键盘输入、输入法与鼠标的拖动由 Playwright 的 WebKit 覆盖
 // （read-only.spec.ts、read-only-shortcuts.spec.ts），Worker 作用域里的错误这里看不到（设计 §3.5 第 4 条）。
@@ -23,10 +24,11 @@ import type { SelftestApi, SelftestHost, Session } from './selftest-session.ts'
 import type { SwitchDirection, SwitchTimingRecorder } from './switch-timing.ts'
 import { canonicalJson, documentChangeAttemptsIn, documentChangesIn, sameContent } from './content-compare.ts'
 import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
+import { holdTimedAutosave } from './selftest-autosave.ts'
 import { CAPTURE_SCENARIO_RUNNERS, EXPECTS_HIDDEN } from './selftest-capture.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
 import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
-import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
+import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, fetchServerContent, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
 export type { SelftestHost, SelftestPageView } from './selftest-session.ts'
@@ -294,14 +296,6 @@ async function checkContextMenus(session: Session, present: boolean): Promise<vo
       fail('点"数据"之后它没有被选中')
     return seen
   })
-}
-
-/** 自检开始时（steady 之后）的内容与命令日志：之后的每一项都与它比较 */
-async function fetchServerContent(documentId: string): Promise<string> {
-  const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}/content`, { cache: 'no-store', credentials: 'same-origin' })
-  if (!response.ok)
-    fail(`读服务器上的内容：${response.status}`)
-  return response.text()
 }
 
 /** 快照里一项资源的数据（JSON 解析之后；空串是 undefined） */
@@ -671,6 +665,8 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     }
     onVisibility()
     document.addEventListener('visibilitychange', onVisibility)
+    // 定时的自动保存先一律暂停（不依赖打开时的状态，审查 B1）；捕获时机的场景按需要放开（./selftest-autosave.ts）
+    holdTimedAutosave()
     try {
       await SCENARIOS[scenario](session)
     }

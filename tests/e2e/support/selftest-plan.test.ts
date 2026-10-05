@@ -1,10 +1,14 @@
 // 页面自检怎么跑（selftest-plan.ts）：入口页的地址（账户放在 # 片段里，不发给服务器）、各场景的步骤、结果有什么问题。
-import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { TestUser } from './database.ts'
+import type { SelftestStep, StoredDocument } from './selftest-plan.ts'
+import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { CAPTURE_SCENARIOS, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { BIG_SHEET } from '../../../apps/web/src/editor/testing/capture-samples.ts'
+import { CAPTURE_SCENARIOS, COMPOSITION_NOTE, ENTER_EXIT_EDIT, HIDDEN_SAVE_EDITS, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { bigSheetFor, formulaSampleFor } from './capture-samples.ts'
 import { SAMPLE_FORMULAS } from './read-only-sample.ts'
-import { problemsOf, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, stepsOf } from './selftest-plan.ts'
+import { problemsOf, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, stepsOf, storedProblems } from './selftest-plan.ts'
 
 function user(username: string): TestUser {
   return { id: `${username}-id`, username, displayName: username, password: `${username} 的密码 &=#`, personalSpaceId: 'space' }
@@ -114,6 +118,70 @@ describe('页面自检的结果有什么问题', () => {
     expect(problemsOf(report({ scenario: 'enter-exit' }))).toEqual(['没有交回 switch.enter 的耗时', '没有交回 switch.exit 的耗时'])
     // 没跑完时只说没跑完的原因
     expect(problemsOf(report({ scenario: 'enter-exit', failure: '自检中途出错' }))).toEqual(['没能跑完：自检中途出错'])
+  })
+})
+
+describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的几步看真实的自动保存）', () => {
+  function stored(overrides: Partial<StoredDocument> = {}): StoredDocument {
+    return { revision: 1, revisions: 1, formulasPending: false, snapshot: sheetSnapshotFor('unit-1'), ...overrides }
+  }
+  const step = (scenario: SelftestScenario): Pick<SelftestStep, 'scenario' | 'documentId'> => ({ scenario, documentId: `${scenario}-doc` })
+  /** 模板的 sheet-1 里写上几格的值 */
+  function templateWith(cells: readonly { readonly row: number, readonly column: number, readonly value: string }[], resources: readonly { readonly name: string, readonly data: string }[] = []): string {
+    const workbook = JSON.parse(sheetSnapshotFor('unit-1')) as { sheets: Record<string, { cellData: Record<number, Record<number, { v: string }>> }>, resources: { name: string, data: string }[] }
+    const sheet = workbook.sheets['sheet-1']
+    if (sheet === undefined)
+      throw new Error('模板里没有 sheet-1')
+    for (const cell of cells)
+      sheet.cellData = { ...sheet.cellData, [cell.row]: { ...sheet.cellData[cell.row], [cell.column]: { v: cell.value } } }
+    workbook.resources = [...workbook.resources.filter(resource => !resources.some(item => item.name === resource.name)), ...resources]
+    return JSON.stringify(workbook)
+  }
+
+  it('没有这份文档：一条问题', () => {
+    expect(storedProblems(step('read-only'), undefined)).toEqual(['服务器上没有文档 read-only-doc'])
+  })
+
+  it('只看不改的几步与 change-detection（暂停了定时的上传，内容带着样本的 data: 图片、服务端拒收）：修订号恰好 1', () => {
+    for (const scenario of ['read-only', 'read-only-formulas', 'edit-chrome', 'environment', 'change-detection'] as const) {
+      expect(storedProblems(step(scenario), stored())).toEqual([])
+      expect(storedProblems(step(scenario), stored({ revision: 2, revisions: 2 }))).toEqual([`文档 ${scenario}-doc 的修订号是 2、修订记录 2 条（应当都是 1：没有保存过）`])
+    }
+  })
+
+  it('enter-exit：恰好 2，内容里有改的那一格；hidden-save：恰好 3，内容里有两格', () => {
+    const edited = templateWith([ENTER_EXIT_EDIT])
+    expect(storedProblems(step('enter-exit'), stored({ revision: 2, revisions: 2, snapshot: edited }))).toEqual([])
+    expect(storedProblems(step('enter-exit'), stored({ revision: 3, revisions: 3, snapshot: edited }))).toEqual(['文档 enter-exit-doc 的修订号是 3、修订记录 3 条（应当都是 2：退出编辑时保存了一次）'])
+    const hidden = templateWith(HIDDEN_SAVE_EDITS)
+    expect(storedProblems(step('hidden-save'), stored({ revision: 3, revisions: 3, snapshot: hidden }))).toEqual([])
+    expect(storedProblems(step('hidden-save'), stored({ revision: 3, revisions: 3, snapshot: templateWith([HIDDEN_SAVE_EDITS[0]]) }))).toEqual([`服务器上 A2 是 空（应当是 "${HIDDEN_SAVE_EDITS[1].value}"）`])
+    expect(storedProblems(step('hidden-save'), stored({ revision: 2, revisions: 2, snapshot: hidden }))[0]).toMatch(/修订号是 2.*应当都是 3/)
+  })
+
+  it('自动保存照常的几步：至少 2、修订记录条数与修订号相同，存下的内容另核对（这里是组合输入的批注）', () => {
+    const note = { name: 'SHEET_NOTE_PLUGIN', data: JSON.stringify({ [COMPOSITION_NOTE.sheetId]: { [COMPOSITION_NOTE.row]: { [COMPOSITION_NOTE.column]: { note: COMPOSITION_NOTE.text } } } }) }
+    const composed = templateWith([], [note])
+    expect(storedProblems(step('composition'), stored({ revision: 2, revisions: 2, snapshot: composed }))).toEqual([])
+    expect(storedProblems(step('composition'), stored({ revision: 5, revisions: 5, snapshot: composed }))).toEqual([])
+    expect(storedProblems(step('composition'), stored({ snapshot: composed }))).toEqual(['文档 composition-doc 的修订号是 1、修订记录 1 条（应当至少 2、两者相同：自动保存在组合结束之后上传）'])
+    expect(storedProblems(step('composition'), stored({ revision: 3, revisions: 2, snapshot: composed }))).toHaveLength(1)
+    expect(storedProblems(step('composition'), stored({ revision: 2, revisions: 2 }))).toEqual([`服务器上存下的内容：${COMPOSITION_NOTE.cell} 的批注是 空（应当是选定的"${COMPOSITION_NOTE.text}"）`])
+  })
+
+  it('公式时序：存下的公式按定义核对（没有结果的样本一律不对）；大表的两步按格数、字号与自动行高核对', () => {
+    const [formulaProblem] = storedProblems(step('formula-timing'), stored({ revision: 4, revisions: 4, snapshot: formulaSampleFor('unit-1') }))
+    expect(formulaProblem).toMatch(/^服务器上存下的内容：\d+\/\d+ 个公式与按定义算出的不同/)
+    const big = bigSheetFor('unit-1')
+    expect(storedProblems(step('large-copy'), stored({ revision: 2, revisions: 2, snapshot: big }))).toEqual([`服务器上存下的内容：工作表 ${BIG_SHEET.id} 各有 ${BIG_SHEET.rows} 格（应当是原表与复制品两张、各 ${BIG_SHEET.rows} 格）`])
+    expect(storedProblems(step('auto-height'), stored({ revision: 2, revisions: 2, snapshot: big }))).toEqual([
+      `服务器上存下的内容：大表 ${BIG_SHEET.rows} 行里字号是 28 的 0 行`,
+      `服务器上存下的内容：大表 ${BIG_SHEET.rows} 行里有自动行高（ah）的 0 行（迟到的行高没有存上？）`,
+    ])
+  })
+
+  it('"公式待更新"还在：算问题', () => {
+    expect(storedProblems(step('read-only'), stored({ formulasPending: true }))).toEqual(['服务器上的文档是"公式待更新"'])
   })
 })
 

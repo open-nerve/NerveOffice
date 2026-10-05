@@ -182,6 +182,27 @@ export function has(probe: EditorProbe, mark: number, phase: ProbeCommand['phase
   return probe.commands(mark).some(command => command.phase === phase && command.id === id && (canceled === undefined || command.canceled === canceled))
 }
 
+// ---- 服务器上的文档（同源的接口：页面的 CSP 只许同源连接） ----
+
+/** 服务器上这份文档的内容（快照的原文：服务端原样存下上传的 gzip 字节，读回来就是上传的那一份） */
+export async function fetchServerContent(documentId: string): Promise<string> {
+  const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}/content`, { cache: 'no-store', credentials: 'same-origin' })
+  if (!response.ok)
+    fail(`读服务器上的内容：${response.status}`)
+  return response.text()
+}
+
+/** 服务器上这份文档的修订号与"公式待更新"（GET /api/documents/<id> 的元数据里的两项） */
+export async function fetchServerDocument(documentId: string): Promise<{ readonly revision: number, readonly formulasPending: boolean }> {
+  const response = await fetch(`/api/documents/${encodeURIComponent(documentId)}`, { cache: 'no-store', credentials: 'same-origin', headers: { accept: 'application/json' } })
+  if (!response.ok)
+    fail(`读服务器上的文档：${response.status}`)
+  const detail = await response.json() as { readonly revision?: unknown, readonly formulasPending?: unknown }
+  if (typeof detail.revision !== 'number' || typeof detail.formulasPending !== 'boolean')
+    fail('服务器上的文档没有修订号或"公式待更新"')
+  return { revision: detail.revision, formulasPending: detail.formulasPending }
+}
+
 // ---- 内容与页头 ----
 
 /** 内容与 baseline 不同的部分（给不通过时的说明）：顶层的键，工作表按 id */
