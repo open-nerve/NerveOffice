@@ -4,7 +4,7 @@
 // 组名是档案里的（profile/sheet-profile.ts 的 SHEET_PLUGIN_GROUPS）；认不出的组名直接报错，写错了的用例不会悄悄地什么也不缺
 import type { PluginEntry } from '../profile/plugin-entry.ts'
 import type { SheetProfileContext } from '../profile/sheet-profile.ts'
-import { SHEET_PLUGIN_GROUPS } from '../profile/sheet-profile.ts'
+import { SHEET_PLUGIN_GROUPS, sheetPluginEntries } from '../profile/sheet-profile.ts'
 
 /** 地址里的参数名 */
 export const PROFILE_FAULT_PARAM = 'profileFault'
@@ -19,8 +19,10 @@ export function faultyGroups(search: string): ReadonlySet<string> {
   return new Set(requested)
 }
 
-/** 按档案注册插件，只是跳过地址里点名的组（顺序与档案相同；没有点名时就是 sheetPluginEntries） */
+/** 按档案注册插件，只是跳过地址里点名的组（顺序与档案相同；没有点名时交回 sheetPluginEntries 本身） */
 export function sheetPluginEntriesUnderFault(search: string): (context: SheetProfileContext) => PluginEntry[] {
   const skipped = faultyGroups(search)
+  if (skipped.size === 0)
+    return sheetPluginEntries
   return context => SHEET_PLUGIN_GROUPS.filter(group => !skipped.has(group.id)).flatMap(group => group.plugins(context))
 }

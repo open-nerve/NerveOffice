@@ -508,8 +508,9 @@ export function classifyArtifact(path: string): ArtifactKind {
 /**
  * 只属于测试构建的源码（vite build --mode e2e；路径相对 web 应用目录，以 / 结尾的是目录），不能出现在生产构建里：
  * - CSP 阳性对照的页面、脚本与 Worker（P3 设计 §3.9）：它们故意尝试 eval 与跨源请求；
- * - 编辑器的 testing/（M2-P3 设计 §3.7、M3-P2 设计 §3.5）：E2E 探针（把 Facade 挂在 window 上）与它补上的插件 Facade、页面自检与它
- *   和 E2E 共用的文件（入口清单、比较口径、结果的格式、切换的计时：switch-timing.ts 装上时替换 window.fetch）；
+ * - 编辑器的 testing/（M2-P3 设计 §3.7、M3-P2 设计 §3.5、M3-P4 设计 §3.14）：E2E 探针（把 Facade 挂在 window 上）与它补上的插件 Facade、
+ *   页面自检与它和 E2E 共用的文件（入口清单、比较口径、结果的格式、切换的计时：switch-timing.ts 装上时替换 window.fetch；捕获时机复核的
+ *   样本与捕获规则的参考实现）、公式模式的开关（formula-mode.ts：地址参数选主线程模式，生产构建里只有 Worker 模式）；
  * - 页面自检的入口页与编辑器页的挂接（features/sheet-editor/selftest-hook.ts，start.tsx 只在测试构建里动态引入）。
  * 按模块的来源认（web 构建写出的模块来源清单，M3-P2 复核 B2）：分块改了名、被并进别的分块、被生产代码直接动态引入成了自己的分块，
  * 都认得出。分块名（TEST_ONLY_ARTIFACTS）与禁用关键字（policy.ts）照旧作兜底
@@ -554,12 +555,15 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  * 只属于测试构建的文件，按名字认（兜底，主要的核对按来源，见 TEST_ONLY_SOURCES）：
  * - CSP 阳性对照的页面与 Worker（P3 设计 §3.9）；
  * - 编辑器的 E2E 探针（M2-P3 设计 §3.7）与它补上的插件 Facade（M2-P6 第 4 片复核 F5）：探针挂在 window 上的名字另由禁用关键字核对；
- * - 页面自检（M3-P2 设计 §3.5）：入口页 selftest.html 与它的脚本、编辑器页的挂接（selftest-hook）、自检模块（selftest）与结果的格式
- *   （selftest-report），分块名都以 selftest- 开头；与 E2E 共用的入口清单（read-only-entries）、比较口径（content-compare）与
- *   切换的计时（switch-timing）被单独动态引入时也自成分块（M3-P2 复核 B2）。自检结果的格式标识与计时挂在 window 上的名字另由禁用关键字核对；
- * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块
+ * - 页面自检（M3-P2 设计 §3.5）：入口页 selftest.html 与它的脚本、编辑器页的挂接（selftest-hook）、自检模块（selftest，M3-P4 拆出的
+ *   selftest-session、selftest-capture）与结果的格式（selftest-report），分块名都以 selftest- 开头；与 E2E 共用的入口清单（read-only-entries）、
+ *   比较口径（content-compare）、切换的计时（switch-timing）与捕获时机复核的样本（capture-samples）、捕获规则的参考实现（capture-reference）
+ *   被单独动态引入时也自成分块（M3-P2 复核 B2）；
+ * - 公式模式的开关（formula-mode，M3-P4 设计 §3.14）：createSheetEditor 在测试构建的分支里动态引入它，自成分块；
+ * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块。
+ * 自检结果的格式标识与计时挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|profile-fault)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|capture-reference|formula-mode|profile-fault)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

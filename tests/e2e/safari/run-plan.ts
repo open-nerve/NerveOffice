@@ -2,17 +2,21 @@
 // - 一串步骤怎么接起来（chainOf、nextAfter）：每一步的入口页把结果交回收集端的 /report?step=<序号>，收集端再把页面带到下一步，
 //   最后停在结束页；
 // - 收集端收到的请求（parseReportRequest）；
-// - 每一步的结论与退出码（outcomeOf、exitCodeOf）；结果文件的名字（resultFileName）；切换耗时的说明（timingLines）。
+// - 每一步的结论与退出码（outcomeOf、exitCodeOf；hidden-save 按库里的证据判定，serverJudgedOutcome）；结果文件的名字（resultFileName）；
+//   计时的说明（timingLines：切换的耗时，与捕获时机的时间线）。
 import type { SelftestReport, SelftestTiming } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SelftestStep } from '../support/selftest-plan.ts'
 import { RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import { problemsOf, selftestPageUrl } from '../support/selftest-plan.ts'
+import { problemsOf, selftestPageUrl, splitKnown } from '../support/selftest-plan.ts'
 
 /** 收集端收结果的路径 */
 export const REPORT_PATH = '/report'
 
 /** 全部步骤做完之后停在这里 */
 export const DONE_PATH = '/done'
+
+/** hidden-save：驱动脚本在 Safari 里另开这一页（收集端的空白页），让编辑器页真的变成隐藏 */
+export const HIDE_PATH = '/hide'
 
 /** 一步与它的入口地址 */
 export interface ChainLink {
@@ -65,6 +69,10 @@ export interface StepOutcome {
   readonly status: StepStatus
   readonly problems: readonly string[]
   readonly report?: SelftestReport | undefined
+  /** 已知的问题（selftest-plan.ts 的 KNOWN_PROBLEMS）：单独列出，不算这一步不通过 */
+  readonly known?: readonly string[] | undefined
+  /** 按库里的证据判定的一步（hidden-save）：证据的说明 */
+  readonly evidence?: string | undefined
 }
 
 /** 收集端收到的一步：解开的结果，或者解不开的原因 */
@@ -79,8 +87,19 @@ export function outcomeOf(step: SelftestStep, received: Received | undefined): S
     return { ...base, status: 'failed', problems: [`交回的结果解不开：${received.undecodable}`] }
   if (received.scenario !== step.scenario || received.documentId !== step.documentId)
     return { ...base, status: 'failed', problems: [`交回的是别的一步（${received.scenario}，文档 ${received.documentId}）`], report: received }
-  const problems = problemsOf(received)
-  return { ...base, status: problems.length === 0 ? 'passed' : 'failed', problems, report: received }
+  const { problems, known } = splitKnown(step.id, problemsOf(received))
+  return { ...base, status: problems.length === 0 ? 'passed' : 'failed', problems, report: received, ...(known.length === 0 ? {} : { known }) }
+}
+
+/**
+ * 按库里的证据判定的一步（hidden-save）：页面在后台，结果不一定交得回来（Safari 约 6 秒之后停计时器）。库里的两次保存都对（serverProblems
+ * 为空）就算通过；交回了结果时，结果里的问题照样算不通过；没交回只在说明里写明
+ */
+export function serverJudgedOutcome(step: SelftestStep, received: Received | undefined, serverProblems: readonly string[], evidence: string): StepOutcome {
+  const base = { id: step.id, scenario: step.scenario, documentId: step.documentId, evidence }
+  const page = received === undefined ? undefined : outcomeOf(step, received)
+  const problems = [...serverProblems, ...(page?.problems ?? [])]
+  return { ...base, status: problems.length === 0 ? 'passed' : 'failed', problems, report: page?.report }
 }
 
 /** 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 有的步没有交回结果（超时） */
@@ -102,9 +121,11 @@ function milliseconds(value: number | null | undefined): string {
 }
 
 /**
- * 切换耗时的说明（enter-exit 交回的 timings，各段见 switch-timing.ts 的 switchDurations），每次切换一行：
- * 点击到可以操作、到 steady，其中页头、网络与重建各多久
+ * 计时的说明，每项一行：切换（enter-exit 交回的 switch.*，各段见 switch-timing.ts 的 switchDurations）写成点击到可以操作、到 steady，
+ * 其中页头、网络与重建各多久；别的（捕获时机的时间线）逐段列出
  */
 export function timingLines(timings: readonly SelftestTiming[]): string[] {
-  return timings.map(({ id, ms }) => `${id}：点击到可以操作 ${milliseconds(ms.ready)}、到 steady ${milliseconds(ms.steady)}（页头 ${milliseconds(ms.header)}，网络 ${milliseconds(ms.network)}，重建 ${milliseconds(ms.rebuild)}）`)
+  return timings.map(({ id, ms }) => id.startsWith('switch.')
+    ? `${id}：点击到可以操作 ${milliseconds(ms.ready)}、到 steady ${milliseconds(ms.steady)}（页头 ${milliseconds(ms.header)}，网络 ${milliseconds(ms.network)}，重建 ${milliseconds(ms.rebuild)}）`
+    : `${id}：${Object.entries(ms).map(([key, value]) => `${key} ${milliseconds(value)}`).join('、')}`)
 }
