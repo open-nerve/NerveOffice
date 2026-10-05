@@ -1,6 +1,7 @@
 // 规范化内容的测试向量（M3-P3 设计 §3.2，规格写进 ADR-011）：客户端在 M4 要逐字节复现，这里的规范文字与 SHA-256 一改就失败。
 // M0 的样本（testdata/，出自 spikes/m0）：sheet-all 的原文（S0，fixtures/sheet/sheet-all.json）与它在浏览器里打开再保存的结果
-// （S1，e2e/results/v03/s1/chromium-sheet-sheet-all.json，三个浏览器逐字节相同）——差别全是空值等价与资源 data 里的键序（M0-P2 报告 §2.3）
+// （S1，e2e/results/v03/s1/chromium-sheet-sheet-all.json，三个浏览器逐字节相同）——差别全是空值等价与资源 data 里的键序（M0-P2 报告 §2.3）；
+// 空值的差别只在资源 data 的第一层（数据验证给每张表补上的 { "<表>": [] }），去空因此只做到这一层（审查 A5）
 import { describe, expect, it } from 'vitest'
 import { canonicalContentText, canonicalContentTextOf, contentHashInput, SHEET_VIEW_STATE_FIELDS } from './content-canonical.ts'
 import { sheetSnapshotFor } from './sheet-template.ts'
@@ -34,7 +35,8 @@ function pruneEmpty(value: unknown): unknown {
 /**
  * M0 原型的写法（spikes/m0/src/harness/content-compare.ts，空资源按 editor/testing/content-compare.ts 去掉）：递归地去掉空键，
  * 键用 Object.keys().sort() 排序之后经 Object.fromEntries 重建、JSON.stringify。重建的对象按 JS 的属性顺序写出，
- * 实际得到的就是"数组下标形式的键按数值升序在前，其余按 UTF-16 码元的字典序"
+ * 实际得到的就是"数组下标形式的键按数值升序在前，其余按 UTF-16 码元的字典序"。
+ * 去空比规格多（每一层都去，规格只去资源 data 的第一层，审查 A5）：只拿它核对键序与 M0 的样本——这些输入在资源 data 的更深层里没有空值
  */
 function m0Canonical(text: string): string {
   const snapshot = JSON.parse(text) as { sheets?: Record<string, Record<string, unknown>>, resources?: { name: string, data: string }[] }
@@ -116,16 +118,42 @@ describe('资源', () => {
     expect(canonicalContentText(workbook({ resources: null }))).toBe(canonicalContentText(workbook()))
   })
 
-  it('非空的：data 解析一次（里面的字符串不再解析），每一层的对象去掉取值深层为空的键，数组的项一个不少；写成 { data, name }，按名称排序', () => {
+  it('非空的：data 解析一次（里面的字符串不再解析），只在第一层（每张表一个键）去掉取值深层为空的键，更深的层级原样保留；写成 { data, name }，按名称排序', () => {
     const resources = [
       { name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0},"cachedFilteredOut":[],"filterColumns":[{"colId":1,"extra":{}}]},"s2":{}}' },
-      { name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s2":[],"s1":[{"uid":"r1","formula1":"[]","ranges":[{},{"startRow":1}]}]}' },
+      { name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s2":[],"s1":[{"uid":"r1","formula1":"[]","ranges":[{},{"startRow":1}]}],"s3":[{},[null,""]]}' },
     ]
     expect(canonicalContentText(workbook({ resources }))).toBe(
       '{"id":"u","resources":[{"data":{"s1":[{"formula1":"[]","ranges":[{},{"startRow":1}],"uid":"r1"}]},"name":"SHEET_DATA_VALIDATION_PLUGIN"},'
-      + '{"data":{"s1":{"filterColumns":[{"colId":1}],"ref":{"startRow":0}}},"name":"SHEET_FILTER_PLUGIN"}],'
+      + '{"data":{"s1":{"cachedFilteredOut":[],"filterColumns":[{"colId":1,"extra":{}}],"ref":{"startRow":0}}},"name":"SHEET_FILTER_PLUGIN"}],'
       + '"sheetOrder":["s1"],"sheets":{"s1":{"cellData":{"0":{"0":{"v":1}}},"id":"s1"}}}',
     )
+  })
+
+  it('第一层以下的空值都算内容（审查 A5）：筛选的"为空"条件、"按值筛选一个也没选"、"没有条件"在 Univer 里语义不同，三个不同的哈希', async () => {
+    const filtered = (column: Record<string, unknown>) => workbook({ resources: [{ name: 'SHEET_FILTER_PLUGIN', data: JSON.stringify({ s1: { ref: { startRow: 0, endRow: 9, startColumn: 0, endColumn: 0 }, filterColumns: [column], cachedFilteredOut: [] } }) }] })
+    const states = [
+      filtered({ colId: 0, customFilters: { customFilters: [{ val: '' }] } }),
+      filtered({ colId: 0, filters: {} }),
+      filtered({ colId: 0 }),
+    ]
+    const hashes = await Promise.all(states.map(async state => sha256(contentHashInput(canonicalContentText(state)))))
+    expect(new Set(hashes).size).toBe(3)
+    expect(canonicalContentText(states[0] ?? '')).toContain('"filterColumns":[{"colId":0,"customFilters":{"customFilters":[{"val":""}]}}]')
+    expect(canonicalContentText(states[1] ?? '')).toContain('"filterColumns":[{"colId":0,"filters":{}}]')
+  })
+
+  it('data 不是对象（数组、字符串、数字）时原样保留：数组里的空项与空值都在', () => {
+    const resources = [{ name: 'SHEET_DRAWING_PLUGIN', data: '[{},{"a":""},null,{"b":1}]' }, { name: 'n', data: '"x"' }]
+    expect(canonicalContentText(workbook({ resources }))).toContain('"resources":[{"data":[{},{"a":""},null,{"b":1}],"name":"SHEET_DRAWING_PLUGIN"},{"data":"x","name":"n"}]')
+  })
+
+  it('与递归去空的写法（M0 原型）只在资源 data 的更深层不同：第一层的空规则表两边都去掉，更深的空值只有规格保留', () => {
+    const shallow = workbook({ resources: [{ name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s2":[],"s1":[{"uid":"r1"}]}' }] })
+    expect(canonicalContentText(shallow)).toBe(m0Canonical(shallow))
+    const deep = workbook({ resources: [{ name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s1":[{"uid":"r1","formula1":""}]}' }] })
+    expect(canonicalContentText(deep)).not.toBe(m0Canonical(deep))
+    expect(canonicalContentText(deep)).toContain('"formula1":""')
   })
 
   it('名称按 UTF-16 码元排序（不按语言环境）；名称相同的保持原来的先后', () => {

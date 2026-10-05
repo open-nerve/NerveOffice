@@ -35,6 +35,13 @@ function command(overrides: Partial<LoggedCommand> = {}): LoggedCommand {
 }
 
 describe('快照的内容（比较的口径）', () => {
+  it('资源 data 只在第一层（每张表一个键）去掉空值，更深的层级原样保留（与服务端的规范化内容同一个口径，审查 A5）', () => {
+    const resources = [{ name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0},"cachedFilteredOut":[],"filterColumns":[{"colId":0,"filters":{}}]},"s2":{}}' }]
+    expect((contentOf(snapshot({ resources })) as { resources: unknown }).resources).toEqual([
+      { name: 'SHEET_FILTER_PLUGIN', data: { s1: { ref: { startRow: 0 }, cachedFilteredOut: [], filterColumns: [{ colId: 0, filters: {} }] } } },
+    ])
+  })
+
   it('去掉工作表的视图状态、取值为空的资源，资源按名称排序', () => {
     expect(contentOf(snapshot())).toEqual({
       id: UNIT,
@@ -60,10 +67,17 @@ describe('快照的内容（比较的口径）', () => {
   })
 
   it('与服务端的规范化内容（contracts 的 canonicalContentText）判断一致：一样的算相同，不一样的算不同', () => {
+    const filtered = (column: string) => ({ name: 'SHEET_FILTER_PLUGIN', data: `{"s1":{"ref":{"startRow":0},"filterColumns":[${column}]}}` })
     const variants = [
       snapshot(),
       snapshot({ sheets: { s1: { cellData: { 0: { 0: { v: 1 } } }, name: '数据', zoomRatio: 2, scrollTop: 300, scrollLeft: 10 } } }),
+      // 资源 data 的第一层：补上的空规则表与"不在"等价
+      snapshot({ resources: [{ name: 'SHEET_RANGE_PROTECTION_PLUGIN', data: '{"s1":[]}' }, { name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0}},"s2":{}}' }, { name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s1":[],"s2":[]}' }] }),
+      // 更深的层级：空值是内容（审查 A5）
       snapshot({ resources: [{ name: 'SHEET_RANGE_PROTECTION_PLUGIN', data: '{"s1":[]}' }, { name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0},"filterColumns":[]}}' }] }),
+      snapshot({ resources: [filtered('{"colId":0,"customFilters":{"customFilters":[{"val":""}]}}')] }),
+      snapshot({ resources: [filtered('{"colId":0,"filters":{}}')] }),
+      snapshot({ resources: [filtered('{"colId":0}')] }),
       snapshot({ resources: [{ name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":1}}}' }] }),
       snapshot({ sheets: { s1: { name: '数据', cellData: { 0: { 0: { v: 2 } } } } } }),
       snapshot({ sheets: { s1: { name: '数据', cellData: { 0: { 0: { v: 1, m: '' } } } } } }),

@@ -4,12 +4,15 @@
 //   （change-tracking/change-classifier.ts 的排除标记、档案的排除名单，单元测试核对两边一致）。
 // 这个文件不引用任何模块：E2E 经模块边界的例外引用它（eslint.config.ts），Playwright 的进程里不能带进 Univer 与 web 的其他代码。
 // 所以服务端"内容相同不递增"的规范化内容（contracts 的 documents/content-canonical.ts，M3-P3）它也引用不了：
-// 口径相同（视图状态、空资源与"不在"等价、资源里去掉空键、不看键序），单元测试核对两边对"内容相同"的判断一致。
+// 口径相同（视图状态、空资源与"不在"等价、资源 data 只在第一层去掉空键、不看键序），单元测试核对两边对"内容相同"的判断一致。
+// 两边一起收窄（M3-P3 审查 A5）：原来每一层都去空，把更深处语义不同的空值（例如筛选的"为空"条件 {val:""}）判成相同；
+// 现在 E2E 的"改动被拦住"与服务端用同一个口径，SDK 在更深的层级上不改内容地来回变化，E2E 先失败
 
 /**
- * 快照的内容（比较用，M0-P3 报告 §3.4 的口径，spikes/m0/src/harness/content-compare.ts）：
- * - 资源的 data 解析成对象，去掉取值为空的键（空数组、空对象、null、空串）：SDK 的读取会给模型补上空的规则表
- *   （观察者效应，M0-P3 报告 §2.3 第 4 条），复制单元格、删除工作表的命令即使被取消也会读一次数据验证的规则表，这类差别不是改动；
+ * 快照的内容（比较用，M0-P3 报告 §3.4 的口径，spikes/m0/src/harness/content-compare.ts；去空收窄到资源 data 的第一层，审查 A5）：
+ * - 资源的 data 解析成对象，整项为空的资源去掉；data 是对象时只在第一层（每张表一个键）去掉取值为空的键（空数组、空对象、null、空串）：
+ *   SDK 的读取会给模型补上空的规则表（{ "<表>": [] }，观察者效应，M0-P3 报告 §2.3 第 4 条），复制单元格、删除工作表的命令即使被取消
+ *   也会读一次数据验证的规则表，这类差别不是改动；更深的层级原样比较（那里的空值是内容）；
  * - 去掉工作表的视图状态 zoomRatio、scrollTop、scrollLeft：缩放与滚动不产生 mutation，只读时照常可用（M0-P3 报告 §2.3 第 6 条）；
  * - 资源按名称排序；对象键的顺序不影响比较（sameContent 按排好键的写法比较，E2E 的 toEqual 本来就不看键的顺序）。
  * 单元格、样式、工作表的结构与顺序原样比较
@@ -22,8 +25,9 @@ export function contentOf(snapshotText: string): unknown {
     delete sheet.scrollLeft
   }
   const resources = [...snapshot.resources ?? []]
-    .map(resource => ({ name: resource.name, data: pruneEmpty(resource.data === '' ? null : JSON.parse(resource.data) as unknown) }))
+    .map(resource => ({ name: resource.name, data: resource.data === '' ? null : JSON.parse(resource.data) as unknown }))
     .filter(resource => !isEmptyValue(resource.data))
+    .map(resource => ({ name: resource.name, data: withoutEmptyEntries(resource.data) }))
     .sort((a, b) => a.name.localeCompare(b.name))
   return { ...snapshot, resources }
 }
@@ -39,13 +43,11 @@ function isEmptyValue(value: unknown): boolean {
   return false
 }
 
-/** 去掉取值为空的键（例如某张工作表对应的空规则表），它们与"没有这个键"在内容上等价 */
-function pruneEmpty(value: unknown): unknown {
-  if (Array.isArray(value))
-    return value.map(pruneEmpty)
-  if (value !== null && typeof value === 'object')
-    return Object.fromEntries(Object.entries(value).filter(([, item]) => !isEmptyValue(item)).map(([key, item]) => [key, pruneEmpty(item)]))
-  return value
+/** data 是对象时去掉第一层取值为空的键（例如某张工作表对应的空规则表），它们与"没有这个键"在内容上等价；更深的层级与别的值原样保留 */
+function withoutEmptyEntries(value: unknown): unknown {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    return value
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => !isEmptyValue(item)))
 }
 
 /** JSON 的值排好对象的键之后的写法：两个值的写法相同，内容就相同（不看键的顺序） */
