@@ -426,15 +426,21 @@ describe('US-M3-04 同一时刻只有一个标签页能编辑', () => {
     expect((await renew(sessionOf(amy), personal.id, owned.token)).status).toBe(200)
   })
 
-  it('M3-P5 S1 的过渡：接管方式（takeover）服务端还不认（S3 接上），与以前一样按严格结构 400，什么也不写', async () => {
+  it('M3-P5 申请的接管方式按契约校验：self、force 照常收下（没人在编辑时就是普通的申请，接管本身见 lease-takeover.test.ts）；别的取值——库里的写法 forced、别的字符串、空串、布尔值、null——400，什么也不写', async () => {
     const other = await freshDocument()
     const before = await documentOf(other.id)
-    for (const takeover of ['self', 'force']) {
+    for (const takeover of ['forced', 'steal', '', true, null]) {
       const response = await asUser(app.baseUrl, sessionOf(amy), leasePath(other.id), { method: 'POST', body: { ...acquireBody(randomUUID()), takeover } })
-      expect(await errorOf(response), takeover).toMatchObject({ status: 400, code: 'REQUEST_INVALID' })
+      expect(await errorOf(response), String(takeover)).toMatchObject({ status: 400, code: 'REQUEST_INVALID' })
     }
     expect(await leaseOf(other.id)).toBeUndefined()
     expect(await documentOf(other.id)).toEqual(before)
+    for (const takeover of ['self', 'force']) {
+      const document = await freshDocument()
+      const response = await asUser(app.baseUrl, sessionOf(amy), leasePath(document.id), { method: 'POST', body: { ...acquireBody(randomUUID()), takeover } })
+      expect(response.status, takeover).toBe(201)
+      expect(await leaseOf(document.id), takeover).toMatchObject({ holder_id: amy.id, ended_at: null })
+    }
   })
 
   it('US-M3-04 两个人同时申请（确定交错）：测试持住文档行，艾米、本依次停在这把锁上；放开之后艾米取得，本在锁下看到她的租约，409', async () => {
