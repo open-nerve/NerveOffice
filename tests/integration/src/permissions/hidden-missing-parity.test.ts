@@ -197,6 +197,11 @@ async function call(session: LoggedIn, path: string, method = 'GET', body?: unkn
   return recorded(method, path) ?? asUser(app.baseUrl, session, path, { method, ...(body === undefined ? {} : { body }), ...(headers === undefined ? {} : { headers }) })
 }
 
+/** 带接管方式的申请（M3-P5）：本人接管、强制接管的请求体，标签页每次一个新的 */
+function takeoverBody(takeover: 'self' | 'force'): Record<string, unknown> {
+  return { ...acquireBody(randomUUID()), takeover }
+}
+
 /** 编辑权的心跳与释放带的令牌（M3-P1）：格式合法的一个，判断访问在租约之前，带不带、对不对都一样 404 */
 const LEASE_TOKEN = { [EDIT_LEASE_HEADER]: `${'a'.repeat(41)}-_` }
 
@@ -366,6 +371,17 @@ const PROBES: readonly Probe[] = [
   { name: '只有编辑授权 POST 申请没分享的文档的编辑权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', acquireBody(randomUUID())) },
   { name: '只有编辑授权 DELETE 释放没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'DELETE', undefined, LEASE_TOKEN) },
   { name: '只有查看授权 GET 没分享的文档的编辑状态', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`) },
+  // ---- 本人接管与强制接管（M3-P5 设计 §3.13）：申请带上接管方式，强制接管另要能强制接管——都在判断访问之后，看不到的与不存在的一样 ----
+  { name: 'POST 本人接管', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', takeoverBody('self')) },
+  { name: 'POST 强制接管', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: 'POST 强制接管个人空间的文档', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: 'POST 本人接管回收站里的文档（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', takeoverBody('self')) },
+  { name: 'POST 强制接管回收站里的文档（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '系统管理员 POST 强制接管团队空间的文档', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '只有编辑授权 POST 本人接管没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', takeoverBody('self')) },
+  { name: '只有编辑授权 POST 强制接管没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '只有编辑授权 POST 强制接管回收站里有授权的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '只有查看授权 POST 强制接管取消了分享的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.revokedDocument)}/edit-lease`, 'POST', takeoverBody('force')) },
   // ---- 另存为副本与读取的条件请求（M3-P2 设计 §3.2、§3.6）：只要求能读原文档，读不到的与不存在的一样；304 之前照样判断权限 ----
   { name: 'POST 另存为副本', actor: 'outsider', request: async (s, h) => conflictCopy(s, pick(h, w.teamDocument.id), h ? w.teamDocument.unitId : randomUUID()) },
   { name: 'POST 另存为副本（个人空间的文档）', actor: 'outsider', request: async (s, h) => conflictCopy(s, pick(h, w.personalDocument.id), h ? w.personalDocument.unitId : randomUUID()) },

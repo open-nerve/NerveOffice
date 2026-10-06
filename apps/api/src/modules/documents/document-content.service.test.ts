@@ -493,6 +493,27 @@ describe('DocumentContentService.save：保存要求编辑租约（M3-P1 设计 
     expect(await lostReason(replaced, replaced.service.save(saver(ALICE, { token: TOKENS[BOB] }), replaced.document.id, query(), upload(replaced.document.unitId), HTTP_ORIGIN))).toBe('replaced')
   })
 
+  it('M3-P5 令牌是被接管的那一代的（本人在别处接手、空间管理员强制接管）：EDIT_LEASE_LOST 的详情是 taken_over 与方式，页面据此不续上、给副本；什么也没写', async () => {
+    for (const [takeover, forced] of [['self', false], ['forced', true]] as const) {
+      const setupResult = setup()
+      const { store, document } = setupResult
+      // 艾米这一代被接管：租约行换成新的一代（本人接管是艾米自己的另一个设备，强制接管是本），接管标记记着艾米手里的令牌
+      const taker = takeover === 'self' ? ALICE : BOB
+      holding(store, document.id, BOB, OTHER_CLIENT)
+      const row = store.leaseRecords.get(document.id)
+      if (row === undefined)
+        throw new Error('没有摆好租约')
+      store.leaseRecords.set(document.id, { ...row, holderId: taker, takenOverTokenDigest: editLeaseTokenDigest(TOKENS[ALICE] ?? ''), takeover })
+      const error = await rejection(setupResult.service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN))
+      expect([error.code, error.status, error.details], takeover).toEqual(['EDIT_LEASE_LOST', 409, { reason: 'taken_over', forced }])
+      expect(store.documents.get(document.id)?.revision, takeover).toBe(1)
+      expect(store.audits, takeover).toEqual([])
+      // 别的旧令牌（不是被接管的那一代的）：replaced，详情只有原因、不带方式
+      const other = await rejection(setupResult.service.save(saver(ALICE, { token: `${'c'.repeat(41)}-_` }), document.id, query(), upload(document.unitId), HTTP_ORIGIN))
+      expect([other.code, other.details], takeover).toEqual(['EDIT_LEASE_LOST', { reason: 'replaced' }])
+    }
+  })
+
   it('代次：查询参数的 writeEpoch 不是租约的那一代、租约的那一代不是文档当前的（删除、移动、收回写入权之后）：stale', async () => {
     // 租约与文档都是第 0 代，页面带的却是别的一代
     const asked = setup()

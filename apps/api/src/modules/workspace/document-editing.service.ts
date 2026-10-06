@@ -1,4 +1,5 @@
 import type { AcquiredEditLease, DocumentEditor, EditInterruption, EditLeaseHeldDetails, EditStatus, RenewedEditLease } from '@nerve-office/contracts'
+import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { EditingActor, LeaseEditor, LeaseInterruption, LeaseRequest, RenewalRequest } from '../documents/index.ts'
 import type { User } from '../users/index.ts'
@@ -50,11 +51,12 @@ export class DocumentEditingService {
   /**
    * 申请（201）：取得新的一代时给出令牌、代次、修订号与它的来源、到期时间、上一个租约异常结束的提醒（补上一位持有者的人名）
    * 与文档的"公式待更新"；有效的租约在别人手里时 409 EDIT_LEASE_HELD，details 带正在编辑的人（人名、最后活动时间、是不是自己、
-   * 是不是这次登录）与调用者能不能强制接管。页面过旧时 409 CLIENT_OUTDATED、文档比服务端新时 409 DOCUMENT_TOO_NEW（documents 抛出，M3-P3 设计 §3.5）
+   * 是不是这次登录）与调用者能不能强制接管。页面过旧时 409 CLIENT_OUTDATED、文档比服务端新时 409 DOCUMENT_TOO_NEW（documents 抛出，M3-P3 设计 §3.5）。
+   * 本人接管、强制接管（M3-P5 设计 §3.7、§3.8）同样经这里：强制接管的审计由 documents 在同一个事务里写，来源（请求标识与客户端地址）由控制器取得
    */
-  async acquire(actor: EditingActor, documentId: string, request: LeaseRequest): Promise<AcquiredEditLease> {
+  async acquire(actor: EditingActor, documentId: string, request: LeaseRequest, origin: AuditOrigin): Promise<AcquiredEditLease> {
     return this.transactions.run(async (transaction) => {
-      const outcome = await this.leases.acquire(actor, documentId, request, transaction)
+      const outcome = await this.leases.acquire(actor, documentId, request, origin, transaction)
       if (outcome.kind === 'held') {
         const accounts = await this.users.findByIds([outcome.holderId], transaction)
         const details: EditLeaseHeldDetails = { ...documentEditorOf(outcome, accounts), canTakeOver: outcome.canTakeOver, request: null }
