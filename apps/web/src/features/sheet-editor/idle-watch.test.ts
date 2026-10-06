@@ -70,6 +70,10 @@ describe('空闲释放的计时（M3-P5 设计 §3.9）', () => {
     await context.time.advance(THRESHOLD * 3)
     expect(context.onIdle).toHaveBeenCalledOnce()
     expect(context.time.pending()).toBe(0)
+    // 回到前台也不再判断（调用方处理完之前不会再交出一次）
+    context.page.set(true)
+    context.page.set(false)
+    expect(context.onIdle).toHaveBeenCalledOnce()
   })
 
   it('其间有操作：按新的截止时刻（最后一次操作加阈值）重排，到点再判断', async () => {

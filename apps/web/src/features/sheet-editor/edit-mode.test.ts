@@ -2676,6 +2676,39 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     expect(context.editLease.acquire).toHaveBeenCalledOnce()
   })
 
+  it('已经放下的锁后来才说被抢（上一次编辑的那一把）：不算，这一次的编辑照常', async () => {
+    const handles: { readonly release: ReturnType<typeof vi.fn>, steal: () => void }[] = []
+    const sameBrowser: SameBrowser = {
+      tryHold: async () => {
+        let steal: () => void = () => {}
+        const stolen = new Promise<void>((resolve) => {
+          steal = resolve
+        })
+        const handle = { release: vi.fn(), steal, stolen }
+        handles.push(handle)
+        return handle
+      },
+      steal: async () => ({ release: vi.fn(), stolen: new Promise<void>(() => {}) }),
+      heldHere: async () => false,
+      post: () => {},
+      subscribe: () => () => {},
+      close: () => {},
+    }
+    const context = setup({ sameBrowser })
+    await editing(context)
+    await context.mode.exit()
+    expect(handles[0]?.release).toHaveBeenCalledOnce()
+    await context.mode.enter()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    handles[0]?.steal()
+    await settle()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    // 这一次的那一把被抢才算
+    handles[1]?.steal()
+    await settle()
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
+  })
+
   it('离开编辑之后被抢不算（锁已经放下）', async () => {
     const context = setup()
     await editing(context)
@@ -2840,6 +2873,7 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     await settle()
     expect(context.api.save).toHaveBeenCalledOnce()
     expect(context.api.save.mock.calls[0]?.[1]).toMatchObject({ formulasPending: true })
+    expect(modeOf(context.mode).kind).toBe('reading')
     expect(readingOf(context.mode)).toMatchObject({ notice: { kind: 'idle-released' }, formulasPending: true })
   })
 
@@ -2872,7 +2906,13 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     await settle()
     expect(context.mode.view().save?.status).toBe('conflict')
     expect(context.api.save).toHaveBeenCalledOnce()
+    // 之后不再开始新的一轮（版本冲突之后保存的状态机不再发请求，看不到上传：看有没有再离开编辑、再等面板）
+    const modes: string[] = []
+    context.mode.subscribe(() => modes.push(modeOf(context.mode).kind))
+    const settles = vi.mocked(context.factory.last().editor.settlePanels).mock.calls.length
     await context.time.advance(IDLE_RECHECK_MS * 6)
+    expect(modes).not.toContain('exiting')
+    expect(vi.mocked(context.factory.last().editor.settlePanels).mock.calls.length).toBe(settles)
     expect(modeOf(context.mode).kind).toBe('editing')
     expect(context.editLease.release).not.toHaveBeenCalled()
   })
@@ -2897,6 +2937,25 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     await settle()
     expect(context.api.save).toHaveBeenCalledOnce()
     expect(readingOf(context.mode).notice).toEqual({ kind: 'idle-released' })
+  })
+
+  it('开始之后、上传之前会话变差（等面板的时候）：flush 按"不必先确认就能写"不上传、也不向服务端确认，这一轮不释放', async () => {
+    const context = setup({ activity: 'manual' })
+    await editing(context)
+    context.factory.last().edit('甲')
+    const gate = deferred<undefined>()
+    vi.mocked(context.factory.last().editor.settlePanels).mockImplementationOnce(async () => gate.promise)
+    await context.time.advance(IDLE_MS)
+    await settle()
+    expect(modeOf(context.mode)).toEqual({ kind: 'exiting', cause: 'idle' })
+    context.autosave.setPage({ writable: false })
+    gate.resolve(undefined)
+    await settle()
+    await settle()
+    expect(context.api.save).not.toHaveBeenCalled()
+    expect(context.hooks.writeProblem).not.toHaveBeenCalled()
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(context.editLease.release).not.toHaveBeenCalled()
   })
 
   it('轮到上传时会话已经变差（skipped 的 session，M3-P4 交接单）：算没存上，留在编辑——修改本来都已存上、只差公式也一样', async () => {
