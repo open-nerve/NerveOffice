@@ -1,8 +1,11 @@
 import type { AutosaveControlHooks, EditIntent, PageActivity, PageNetwork } from './editor-page.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
+// 浏览器的实现都在这里给出（M3-P5）：本页的键盘、鼠标操作（窗口的捕获阶段）、同一个浏览器里的锁与交接频道（navigator.locks、
+// BroadcastChannel；浏览器没有时退化，same-browser.ts）、刷新时在途的保存的记号（localStorage 与墙上时间）。
 // 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）再组装：
 // 第一个调度建起来之前它就在（?edit=new 直接进入编辑也一样）；生产构建里这个分支与控制的分块都被去掉（门禁 artifacts 核对）。
 import type { PageVisibility } from './reading-checks.ts'
+import type { SameBrowserApis } from './same-browser.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -17,6 +20,8 @@ import { acquireEditLease, fetchContent, fetchContentIfChanged, fetchDocument, f
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { installPageGuards, isApplePlatform } from './page-guards.ts'
+import { pendingSaveMarker } from './pending-save-marker.ts'
+import { sameBrowserFor } from './same-browser.ts'
 
 export interface SheetEditorPageElements {
   /** 页头与提示（React） */
@@ -50,6 +55,15 @@ const browserNetwork: PageNetwork = {
 /** 本页的键盘、鼠标操作：窗口的捕获阶段（交互屏障挂在它之后），只认可信事件、零位移的移动不算（edit-lease.ts 的 trackActivity） */
 const browserActivity: PageActivity = {
   subscribe: listener => trackActivity(window, listener),
+}
+
+/**
+ * 同一个浏览器里的锁与交接频道用到的浏览器 API（M3-P5 设计 §3.1、§3.7）：Web Locks 只在安全上下文里有（HTTPS 与本机地址），
+ * 没有时（以及没有 BroadcastChannel 时）same-browser.ts 退化
+ */
+const browserSameBrowserApis: SameBrowserApis = {
+  locks: 'locks' in navigator ? navigator.locks : undefined,
+  openChannel: typeof BroadcastChannel === 'undefined' ? undefined : name => new BroadcastChannel(name),
 }
 
 /** ?edit=new（shared/lib/edit-intent.ts）：进入编辑之后用 history.replaceState 去掉它（不留历史记录、不重新加载），刷新不再自动进入 */
@@ -104,6 +118,9 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
     visibility: browserVisibility,
     network: browserNetwork,
     activity: browserActivity,
+    sameBrowser: documentId => sameBrowserFor(documentId, browserSameBrowserApis),
+    // 访问 localStorage 本身就可能抛出（被禁用、沙箱）：每次用时再取，记号自己接住
+    pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
     digest: async snapshot => snapshotDigest(snapshot),
     autosaveControl,
     editIntent: editIntentOf(window.location),

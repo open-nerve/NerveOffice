@@ -430,7 +430,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     const fake = renderChrome({ mode: { kind: 'entering' }, save: undefined })
     expect(headerStatus()).toHaveTextContent('正在进入编辑…')
     expect(buttons()).toEqual([['正在进入编辑…', 'true']])
-    fake.set({ mode: { kind: 'exiting' }, save: CLEAN })
+    fake.set({ mode: { kind: 'exiting', cause: 'exit' }, save: CLEAN })
     expect(headerStatus()).toHaveTextContent('正在退出编辑…')
     expect(buttons()).toEqual([['保存', 'true'], ['正在退出编辑…', 'true']])
     fake.set({ mode: { kind: 'losing', loss: { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', 'x') } }, save: undefined })
@@ -772,6 +772,8 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑）。'],
     ['续上时被占用、详情认不出', { kind: 'held', holder: undefined }, '编辑权已失效：这份文档正在别处编辑。'],
     ['续上时别处保存过更新的版本', { kind: 'newer' }, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。'],
+    ['本人在本浏览器的另一个标签页接手了编辑（本机锁被抢，M3-P5）', { kind: 'taken-over', where: 'this-browser' }, '编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
+    ['本人在另一台设备或浏览器上接手了编辑（M3-P5，S6 接上）', { kind: 'taken-over', where: 'elsewhere' }, '编辑权已失效：你在另一台设备或浏览器上接手了编辑。'],
   ]
 
   it.each(LOSSES)('原因：%s', (_case, loss, text) => {
@@ -818,7 +820,7 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
     const fake = renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true } })
     const exit = screen.getByRole('button', { name: '退出编辑' })
     exit.focus()
-    fake.set({ mode: { kind: 'exiting' }, save: { ...CLEAN, status: 'saving', canSave: false, unsaved: true } })
+    fake.set({ mode: { kind: 'exiting', cause: 'exit' }, save: { ...CLEAN, status: 'saving', canSave: false, unsaved: true } })
     expect(screen.getByRole('button', { name: '正在退出编辑…' })).toBe(exit)
     expect(exit).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
@@ -1230,5 +1232,55 @@ describe('打开自检失败的阅读（M3-P4 设计 §3.12，US-M3-15）', () =
     fake.set({ mode: { ...READING, damaged: FILTER_DAMAGED } })
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(backLink()))
+  })
+})
+
+describe('离开编辑与空闲释放（M3-P5 设计 §3.10、§3.11）', () => {
+  /** 页头里的按钮：文字、是否可用、是否进行中 */
+  function headerButtons(): (string | null)[][] {
+    return within(screen.getByRole('banner')).queryAllByRole('button').map(button => [button.textContent, button.getAttribute('aria-disabled'), button.getAttribute('aria-busy')])
+  }
+
+  it('空闲释放的过程中：页头说 10 分钟没有操作、正在保存并释放编辑权；两个按钮留着、都不可用，"退出编辑"不说正在退出（不是按了它）', () => {
+    renderChrome({ mode: { kind: 'exiting', cause: 'idle' }, save: CLEAN })
+    expect(headerStatus()).toHaveTextContent('10 分钟没有操作，正在保存并释放编辑权…')
+    expect(headerButtons()).toEqual([['保存', 'true', 'false'], ['退出编辑', 'true', 'false']])
+    expect(announcement()).toHaveTextContent('10 分钟没有操作，正在保存并释放编辑权…')
+  })
+
+  it('退出编辑的过程中："退出编辑"说正在退出、标为进行中（对照）', () => {
+    renderChrome({ mode: { kind: 'exiting', cause: 'exit' }, save: CLEAN })
+    expect(headerStatus()).toHaveTextContent('正在退出编辑…')
+    expect(headerButtons()).toEqual([['保存', 'true', 'false'], ['正在退出编辑…', 'true', 'true']])
+  })
+
+  it.each(['handover-request', 'handover-tab'] as const)('交出的过程中（%s，S6、S7 接上）：页头说正在保存并交出编辑权', (cause) => {
+    renderChrome({ mode: { kind: 'exiting', cause }, save: CLEAN })
+    expect(headerStatus()).toHaveTextContent('正在保存并交出编辑权…')
+    expect(headerButtons()).toEqual([['保存', 'true', 'false'], ['退出编辑', 'true', 'false']])
+  })
+
+  it('空闲释放之后：说明放进一直在的读屏状态区（不新插入 role="status"，不是提示条），放在最前面；之后的检查读到有人在编辑时一起说', () => {
+    const fake = renderChrome({ mode: { kind: 'editing' }, save: CLEAN })
+    const region = infoRegion()
+    const statusCount = screen.getAllByRole('status').length
+    fake.set({ mode: { ...READING, notice: { kind: 'idle-released' } }, save: undefined })
+    expect(infoRegion()).toBe(region)
+    expect(region.textContent).toBe('10 分钟没有操作，已保存并释放编辑权')
+    expect(screen.getAllByRole('status')).toHaveLength(statusCount)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
+    fake.set({ mode: { ...READING, notice: { kind: 'idle-released' }, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 }, formulasPending: true } })
+    expect(region.textContent).toBe('10 分钟没有操作，已保存并释放编辑权 @amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前），你现在只能阅读 这份表格的公式结果可能还没更新（上次保存时公式还没算完），进入编辑之后会自动重算并保存')
+  })
+
+  it('空闲释放的过程中有焦点的"退出编辑"随回到阅读消失：焦点交给返回链接，不落到 body', async () => {
+    const fake = renderChrome({ mode: { kind: 'editing' }, save: CLEAN })
+    const exit = screen.getByRole('button', { name: '退出编辑' })
+    exit.focus()
+    fake.set({ mode: { kind: 'exiting', cause: 'idle' }, save: CLEAN })
+    expect(document.activeElement).toBe(exit)
+    fake.set({ mode: { ...READING, notice: { kind: 'idle-released' } }, save: undefined })
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: '我的空间' })))
   })
 })

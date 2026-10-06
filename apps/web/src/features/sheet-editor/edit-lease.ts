@@ -115,7 +115,9 @@ export interface LeaseHolder {
  * - not-found：读不到这份文档了（404：删除、移走、被移出空间或取消分享，与不存在一致）；
  * - denied：读得到却不能编辑了（403，例如被降为查看者、空间被归档），原因的说明由服务端给出；
  * - held：续上时别人（或者自己在别的标签页、设备上）正在编辑；
- * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它
+ * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它；
+ * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，不再问服务端）；
+ *   elsewhere 是另一台设备或浏览器（服务端的 taken_over，S6 接上）
  */
 export type LeaseLoss
   = | { readonly kind: 'lease', readonly reason: EditLeaseLostReason | undefined }
@@ -123,6 +125,7 @@ export type LeaseLoss
     | { readonly kind: 'denied', readonly error: ApiError }
     | { readonly kind: 'held', readonly holder: LeaseHolder | undefined }
     | { readonly kind: 'newer' }
+    | { readonly kind: 'taken-over', readonly where: 'this-browser' | 'elsewhere' }
 
 /** 请求的失败说明编辑权已经失效（EDIT_LEASE_LOST、404、403）时给出来源；别的失败为 undefined */
 export function leaseLossOf(error: unknown): LeaseLoss | undefined {
