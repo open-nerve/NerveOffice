@@ -22,7 +22,7 @@ export { DocumentsRepository } from './documents.repository.ts'
 export { EditLeaseToken } from './edit-lease-header.ts'
 export type { LeaseInterruption } from './edit-lease-rules.ts'
 export { editingActorOf, EditLeaseService } from './edit-lease.service.ts'
-export type { EditingActor, LeaseAcquisition, LeaseRequest, LeaseStatus, RenewalRequest } from './edit-lease.service.ts'
+export type { EditingActor, LeaseAcquisition, LeaseEditor, LeaseRequest, LeaseStatus, RenewalRequest } from './edit-lease.service.ts'
 export { FoldersService } from './folders.service.ts'
 export type { CreateFolderCommand, MoveFolderCommand, UpdateFolderCommand } from './folders.service.ts'
 // 修订记录与回执的保留期清理（M3-P3 设计 §3.9）：只给 jobs，别处经这里引用由 eslint 拦下

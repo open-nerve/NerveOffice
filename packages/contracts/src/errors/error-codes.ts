@@ -37,14 +37,24 @@ export const ERROR_CODES = {
   DOCUMENT_REVISION_CONFLICT: { status: 409, message: '别处保存了更新的版本，本次保存没有写入' },
   /**
    * 申请编辑权时，有效的编辑租约在别人手里（M3-P1 设计 §3.2）：同一个人在另一个标签页或设备上编辑也算。
-   * details 带正在编辑的人、他的最后活动时间与是不是调用者自己（editLeaseHeldDetailsSchema）
+   * details 带正在编辑的人、他的最后活动时间、是不是调用者自己与是不是调用者这次登录，调用者能不能强制接管，
+   * 以及有没有人在请求编辑（editLeaseHeldDetailsSchema，M3-P5 起后几项）
    */
   EDIT_LEASE_HELD: { status: 409, message: '别人正在编辑这份文档' },
   /**
-   * 心跳或保存带的编辑租约已经不再有效（M3-P1 设计 §3.2），这次操作没有生效。details 带原因（editLeaseLostDetailsSchema），
+   * 心跳或保存带的编辑租约已经不再有效（M3-P1 设计 §3.2），这次操作没有生效。details 带原因（editLeaseLostDetailsSchema；被接管时另带 forced），
    * 不认识的原因按通用的"编辑权已失效"处理。读不到（NOT_FOUND）与不能编辑（PERMISSION_DENIED）先于它判断
    */
   EDIT_LEASE_LOST: { status: 409, message: '编辑权已失效，本次操作没有生效' },
+  /**
+   * 申请编辑权时，编辑权刚交给了请求编辑的人、还在保留期内（M3-P5 设计 §3.6，EDIT_HANDOVER_RESERVE_SECONDS）：除了留给的那个人，
+   * 别人（含强制接管）都申请不了，什么也没写。details 带留给谁、留到何时（editLeaseReservedDetailsSchema）
+   */
+  EDIT_LEASE_RESERVED: { status: 409, message: '编辑权刚交给了别人，请稍后再试' },
+  /**
+   * 交出编辑权时，要交给的那个请求已经不在了（请求方取消、请求失效、换了一代，M3-P5 设计 §3.6）：没有交出，租约不动，持有者照常编辑
+   */
+  EDIT_REQUEST_GONE: { status: 409, message: '请求编辑已取消或失效，编辑权没有交出' },
   /** 同一个 requestId 已经用于另一个请求（负载不同，或者是别的操作） */
   REQUEST_ID_CONFLICT: { status: 409, message: '请求标识已被另一个请求使用' },
   /**

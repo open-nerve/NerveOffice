@@ -28,7 +28,7 @@ const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f
 /** 申请到的编辑租约：修订号与载入的内容相同（3） */
 const TOKEN = 'L'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-09-27T03:01:30.000Z', interruption: null, formulasPending: false }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z' }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z', request: null }
 /** 保存带上的编辑租约 */
 const CREDENTIALS = { token: TOKEN, writeEpoch: 7 }
 /** 续上时申请到的下一代（修订号没变：期间没人保存过） */
@@ -203,7 +203,7 @@ function setup(options: Setup = {}) {
     document: vi.fn(overrides.document ?? (async () => DETAIL)),
     content: vi.fn(overrides.content ?? (async (): Promise<LoadedContent> => ({ snapshot: '{"id":"unit-1"}', revision: 3 }))),
     contentIfChanged: vi.fn(overrides.contentIfChanged ?? (async (): Promise<LoadedContent | typeof CONTENT_UNCHANGED> => CONTENT_UNCHANGED)),
-    editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true, formulasPending: false }, serverTime: undefined }))),
+    editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }))),
     compress: vi.fn(overrides.compress ?? (async (snapshot: string) => new TextEncoder().encode(snapshot))),
     save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }))),
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...DETAIL, id: COPY_ID, title: '周报（冲突副本 2026-10-04 15:30）', revision: 1, replayed: false }))),
@@ -245,7 +245,7 @@ function setup(options: Setup = {}) {
 
 /** 查看者读到的编辑状态：不能编辑 */
 async function VIEWER_STATUS(): Promise<FetchedEditStatus> {
-  return { status: { revision: 3, editor: null, canEdit: false, formulasPending: false }, serverTime: undefined }
+  return { status: { revision: 3, editor: null, canEdit: false, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }
 }
 
 /** 阅读与编辑的状态 */
@@ -1178,7 +1178,7 @@ const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-00000000000c', username: 'amy', displ
 /** 申请被占用：持有者是别人（艾米）或者自己；serverTime 是服务端回答的时刻（响应头 Date） */
 function heldBy(sameUser: boolean, serverTime?: number): ApiError {
   const holder = sameUser ? { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName } : AMY
-  return new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑这份文档', { details: { holder, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser }, serverTime })
+  return new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑这份文档', { details: { holder, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser, sameSession: false, canTakeOver: false, request: null }, serverTime })
 }
 
 function leaseLost(reason: string): ApiError {
@@ -1241,7 +1241,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('别人正在编辑：按只读创建，页头说明持有者与最后活动几分钟之前（按服务端的时间算）；没有保存，不续租；地址里的标记留着', async () => {
     const serverTime = Date.UTC(2026, 8, 27, 3, 2, 30)
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: AMY, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: false }, canEdit: true, formulasPending: false }, serverTime })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: AMY, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: false, sameSession: false }, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime })
     const { editorPage, editLease, createEditor, surface, time, editIntent, chrome } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(heldBy(false, serverTime))) } })
     await editorPage.load()
     await settle()
@@ -1274,7 +1274,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('自己在别处正在编辑、再试几次仍被占用：按只读，说明是自己', async () => {
     const acquire = vi.fn(async () => Promise.reject(heldBy(true)))
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName }, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: true }, canEdit: true, formulasPending: false }, serverTime: undefined })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName }, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: true, sameSession: false }, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined })
     const { editorPage, createEditor, time } = setup({ editLease: { acquire }, api: { editStatus } })
     const loading = editorPage.load()
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
@@ -1286,7 +1286,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   })
 
   it('申请时刚失去编辑权（403）：按只读打开，不说明谁在编辑，没有"编辑"', async () => {
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: false, formulasPending: false }, serverTime: undefined })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: false, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined })
     const { editorPage, createEditor } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能保存'))) } })
     await editorPage.load()
     expect(createEditor).toHaveBeenCalledWith(expect.objectContaining({ access: 'read' }))
@@ -2046,7 +2046,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
 
   it('有更新，点击刷新：交给阅读与编辑的状态机（条件读取、重建为阅读）', async () => {
     const { editorPage, api, createEditor } = setup({ editIntent: false, api: {
-      editStatus: async () => ({ status: { revision: 5, editor: null, canEdit: true, formulasPending: false }, serverTime: undefined }),
+      editStatus: async () => ({ status: { revision: 5, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }),
       contentIfChanged: async () => ({ snapshot: '{"id":"unit-1","v":5}', revision: 5 }),
     } })
     await editorPage.load()
@@ -2149,7 +2149,7 @@ describe('自动保存要的页面信号（M3-P4 设计 §3.10）', () => {
 
 describe('阅读页的"公式待更新"与详情的刷新（M3-P4 设计 §3.5 第 4 条，DEF-045）', () => {
   it('载入时详情带着标记、与载入的内容是同一版：阅读里带着它', async () => {
-    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, formulasPending: true }), editStatus: async () => ({ status: { revision: 3, editor: null, canEdit: true, formulasPending: true }, serverTime: undefined }) } })
+    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, formulasPending: true }), editStatus: async () => ({ status: { revision: 3, editor: null, canEdit: true, canTakeOver: false, formulasPending: true, request: null, reservation: null, interruption: null }, serverTime: undefined }) } })
     await editorPage.load()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', formulasPending: true })
   })

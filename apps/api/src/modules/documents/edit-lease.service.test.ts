@@ -148,24 +148,39 @@ describe('EditLeaseService.acquire', () => {
     expect(store.documents.get(document.id)?.writeEpoch).toBe(0)
   })
 
-  it('有效的租约在别人手里：被占用（持有者、最后活动时间、不是自己），什么也不写', async () => {
+  it('有效的租约在别人手里：被占用（持有者、最后活动时间、不是自己、不是这次登录、能不能强制接管），什么也不写', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
     await acquired(setupResult)
     const before = store.leaseRecords.get(document.id)
     later(store, 5 * SECOND)
-    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toEqual({ kind: 'held', holderId: ALICE, lastActiveAt: before?.lastActiveAt, sameUser: false })
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toEqual({ kind: 'held', holderId: ALICE, lastActiveAt: before?.lastActiveAt, sameUser: false, sameSession: false, canTakeOver: false })
     expect(store.leaseRecords.get(document.id)).toEqual(before)
     expect(store.repositories.documents.advanceWriteEpoch).toHaveBeenCalledTimes(1)
     expect(store.documents.get(document.id)?.writeEpoch).toBe(1)
   })
 
-  it('同一个人在另一个标签页、另一个登录（别的设备）：同样被占用，sameUser 为真', async () => {
+  it('同一个人在另一个标签页、另一个登录（别的设备）：同样被占用，sameUser 为真；sameSession 只在同一个登录（同一个浏览器）时为真（M3-P5）', async () => {
     const setupResult = setup()
     const { service, document } = setupResult
     await acquired(setupResult)
-    for (const [actor, tab] of [[AMY, OTHER_TAB], [{ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, TAB]] as const)
-      expect(await service.acquire(actor, document.id, leaseRequest(tab), TRANSACTION)).toMatchObject({ kind: 'held', holderId: ALICE, sameUser: true })
+    for (const [actor, tab, sameSession] of [[AMY, OTHER_TAB, true], [{ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, TAB, false], [{ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, OTHER_TAB, false]] as const)
+      expect(await service.acquire(actor, document.id, leaseRequest(tab), TRANSACTION), `${actor.sessionId} ${tab}`).toMatchObject({ kind: 'held', holderId: ALICE, sameUser: true, sameSession })
+  })
+
+  it('M3-P5 被占用时带上调用者能不能强制接管：锁下判断权限时算出的那一位——空间管理员能，编辑者不能', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'held', canTakeOver: false })
+    store.setMember(TEAM_SPACE, BOB, 'admin')
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'held', canTakeOver: true })
+    // 不加锁时还是空间管理员、拿到文档行的锁时已被降为编辑者：按锁下的那一次
+    store.repositories.documents.lockById.mockImplementationOnce(async (id: string) => {
+      store.setMember(TEAM_SPACE, BOB, 'editor')
+      return store.documents.get(id)
+    })
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'held', canTakeOver: false })
   })
 
   it('同一个登录、同一个标签页的有效租约：这个页面的重试（上次的回包丢了），发新的一代——代次再加一、换新的令牌，没有提醒', async () => {
@@ -210,7 +225,16 @@ describe('EditLeaseService.acquire', () => {
     await acquired(setupResult)
     const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
     later(store, 20 * 60 * SECOND)
-    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt } })
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false } }))
+  })
+
+  it('M3-P5 提醒带上上一位持有者是不是申请的人自己：自己的租约到期之后再申请，sameUser 为真', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
+    later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
+    expect(await service.acquire({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: true } }))
   })
 
   it('不给提醒：明确释放的、没了编辑权的、超过 30 分钟的', async () => {
@@ -430,21 +454,23 @@ describe('EditLeaseService.release', () => {
 })
 
 describe('EditLeaseService.status', () => {
-  it('有效的租约：修订号与持有者、最后活动时间、是不是调用者自己；能读就能看（查看者也看得到）', async () => {
+  it('有效的租约：修订号与持有者、最后活动时间、是不是调用者自己、是不是调用者这次登录；能读就能看（查看者也看得到）', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
     await acquired(setupResult)
     const lastActiveAt = store.leaseRecords.get(document.id)?.lastActiveAt
     store.setMember(TEAM_SPACE, BOB, 'viewer')
-    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: false }, canEdit: false, formulasPending: false })
-    expect(await service.status(AMY, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: true }, canEdit: true, formulasPending: false })
+    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: false, sameSession: false }, canEdit: false, canTakeOver: false, formulasPending: false })
+    expect(await service.status(AMY, document.id, TRANSACTION)).toEqual({ revision: 3, editor: { holderId: ALICE, lastActiveAt, sameUser: true, sameSession: true }, canEdit: true, canTakeOver: false, formulasPending: false })
+    // 同一个人的另一个登录（别的设备）：是本人，不是这次登录
+    expect((await service.status({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, TRANSACTION)).editor).toEqual({ holderId: ALICE, lastActiveAt, sameUser: true, sameSession: false })
     expect(store.leases.findByDocument).toHaveBeenCalledWith(document.id, TRANSACTION)
     expect(store.leases.lockByDocument).toHaveBeenCalledTimes(1)
   })
 
   it('没有租约、租约无效（到期、登录失效、没了编辑权）：editor 为空', async () => {
     const { service, document } = setup()
-    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, formulasPending: false })
+    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false })
     for (const invalidate of [
       ({ store }: Setup) => later(store, EDIT_LEASE_TTL_SECONDS * SECOND),
       ({ store }: Setup) => void store.activeSessions.delete(ALICE_SESSION),
@@ -453,7 +479,7 @@ describe('EditLeaseService.status', () => {
       const setupResult = setup()
       await acquired(setupResult)
       invalidate(setupResult)
-      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, formulasPending: false })
+      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false })
     }
   })
 
@@ -474,6 +500,23 @@ describe('EditLeaseService.status', () => {
     expect((await service.status(AMY, document.id, TRANSACTION)).canEdit).toBe(false)
     expect((await service.status(BEN, document.id, TRANSACTION)).canEdit).toBe(false)
     // 与判断能读的那一次用同一份事实：空间事实与授权各查一次，没有另外的查询
+    store.spaces.accessFactsOf.mockClear()
+    store.grants.roleOf.mockClear()
+    await service.status(BEN, document.id, TRANSACTION)
+    expect([store.spaces.accessFactsOf.mock.calls.length, store.grants.roleOf.mock.calls.length]).toEqual([1, 1])
+  })
+
+  it('M3-P5 调用者能不能强制接管：与详情的 permissions.canTakeOver 同一个规则——空间管理员能，编辑者、只凭授权的编辑者、归档空间里的空间管理员不能；不多查询', async () => {
+    const { store, service, document } = setup()
+    expect((await service.status(BEN, document.id, TRANSACTION)).canTakeOver).toBe(false)
+    store.setMember(TEAM_SPACE, BOB, 'admin')
+    expect((await service.status(BEN, document.id, TRANSACTION)).canTakeOver).toBe(true)
+    store.setMember(TEAM_SPACE, BOB, undefined)
+    store.setGrant(document.id, BOB, 'editor')
+    expect(await service.status(BEN, document.id, TRANSACTION)).toMatchObject({ canEdit: true, canTakeOver: false })
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect((await service.status(AMY, document.id, TRANSACTION)).canTakeOver).toBe(false)
     store.spaces.accessFactsOf.mockClear()
     store.grants.roleOf.mockClear()
     await service.status(BEN, document.id, TRANSACTION)

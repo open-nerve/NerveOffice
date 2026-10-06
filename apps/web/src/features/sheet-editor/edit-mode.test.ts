@@ -26,7 +26,7 @@ function snapshotOf(value: string): string {
 const LOADED = { snapshot: snapshotOf('载入的'), revision: 3 }
 const TOKEN = 'L'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z' }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null }
 const SAVED: SaveContentResponse = { revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }
 const DENIED = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
 const GONE = new ApiError(404, 'NOT_FOUND', '不存在')
@@ -208,17 +208,17 @@ const COPY = {
 const ANSWERED_AT = '2026-10-04T03:03:10.000Z'
 
 function status(revision: number, editor: DocumentEditor | null = null, canEdit = true): FetchedEditStatus {
-  return { status: { revision, editor, canEdit, formulasPending: false }, serverTime: Date.parse(ANSWERED_AT) }
+  return { status: { revision, editor, canEdit, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: Date.parse(ANSWERED_AT) }
 }
 
 /** 艾米在编辑（最后活动 3 分钟前） */
-const AMY_EDITING: DocumentEditor = { holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }
+const AMY_EDITING: DocumentEditor = { holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false, sameSession: false }
 
 /** 自己在编辑（编辑状态里是同一个人：另一个标签页，或者本页没能确认放掉的那一代） */
-const SELF_EDITING: DocumentEditor = { holder: AMY, lastActiveAt: '2026-10-04T03:03:00.000Z', sameUser: true }
+const SELF_EDITING: DocumentEditor = { holder: AMY, lastActiveAt: '2026-10-04T03:03:00.000Z', sameUser: true, sameSession: false }
 
 /** 申请时被艾米占用 */
-const HELD_BY_AMY = new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑', { details: AMY_EDITING, serverTime: Date.parse(ANSWERED_AT) })
+const HELD_BY_AMY = new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑', { details: { ...AMY_EDITING, canTakeOver: false, request: null }, serverTime: Date.parse(ANSWERED_AT) })
 
 function fakeVisibility() {
   let hidden = false
@@ -796,7 +796,7 @@ describe('退出编辑（M3-P2 设计 §3.4）', () => {
     context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
     await context.mode.exit()
     await settle()
-    context.editLease.acquire.mockRejectedValue(new ApiError(409, 'EDIT_LEASE_HELD', '自己在别处编辑', { details: SELF_EDITING, serverTime: Date.parse(ANSWERED_AT) }))
+    context.editLease.acquire.mockRejectedValue(new ApiError(409, 'EDIT_LEASE_HELD', '自己在别处编辑', { details: { ...SELF_EDITING, canTakeOver: false, request: null }, serverTime: Date.parse(ANSWERED_AT) }))
     const entering = context.mode.enter()
     await context.time.advance(5_000)
     await entering
@@ -2214,7 +2214,7 @@ describe('页面关闭时的编辑权（M3-P4 设计 §3.4）', () => {
 
 describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () => {
   function flagged(revision: number, formulasPending: boolean): FetchedEditStatus {
-    return { status: { revision, editor: null, canEdit: true, formulasPending }, serverTime: Date.parse(ANSWERED_AT) }
+    return { status: { revision, editor: null, canEdit: true, canTakeOver: false, formulasPending, request: null, reservation: null, interruption: null }, serverTime: Date.parse(ANSWERED_AT) }
   }
 
   it('载入时详情带着标记：阅读里说明；之后的检查读到本页这一版的标记随之更新', async () => {

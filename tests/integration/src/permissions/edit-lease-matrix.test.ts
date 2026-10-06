@@ -74,6 +74,20 @@ const MATRIX: MatrixTable<Operation> = {
   releaseLease: readers(204),
 }
 
+/**
+ * 能不能强制接管（M3-P5 设计 §3.8，编辑状态的 canTakeOver）：空间管理员——个人空间是所有者，三个团队空间里的 spaceAdmin；
+ * 归档的空间里没有人能（所有人至多是查看者），只凭授权的人、编辑者、查看者、外人、没加入的系统管理员都不能。逐格手写，顺序同 ACTORS；
+ * 看不到的格子（404）不核对
+ */
+const TAKE_OVER: Readonly<Record<TargetName, readonly boolean[]>> = {
+  personal: [true, false, false, false, false, false, false, false],
+  team: [false, true, false, false, false, false, false, false],
+  visible: [false, true, false, false, false, false, false, false],
+  archived: [false, false, false, false, false, false, false, false],
+  archivedVisible: [false, false, false, false, false, false, false, false],
+  missing: [false, false, false, false, false, false, false, false],
+}
+
 /** 格式合法、谁的也不是的令牌 */
 const STRAY_TOKEN = `${'s'.repeat(41)}-_`
 
@@ -128,10 +142,12 @@ function written(): { readonly documentId: string, readonly token: string | unde
 /** 成功的格子另外核对内容 */
 const VERIFY: Readonly<Record<Operation, CellOptions['verify']>> = {
   // 固定的文档上没有人在编辑（写的格子都用新文档）：修订号 1、没有正在编辑的人；能不能编辑（M3-P2）与这个人能不能申请同一格——
-  // 取表里申请那一行的预期（MATRIX.acquireLease，逐格手写），不调用生产代码的规则
+  // 取表里申请那一行的预期（MATRIX.acquireLease，逐格手写），不调用生产代码的规则；能不能强制接管取 TAKE_OVER（M3-P5）。
+  // 请求编辑、保留与提醒在 S1 还没有接上，都是 null
   editStatus: async (response, target, actor) => {
     const canEdit = MATRIX.acquireLease[target][columnOf(actor)] === 201
-    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null, canEdit, formulasPending: false })
+    const canTakeOver = TAKE_OVER[target][columnOf(actor)]
+    expect(parseExact(editStatusSchema, await response.json())).toEqual({ revision: 1, editor: null, canEdit, canTakeOver, formulasPending: false, request: null, reservation: null, interruption: null })
   },
   // 申请：第一代（新文档的代次是 0），租约在这个人手里
   acquireLease: async (response, _target, actor) => {
