@@ -1,16 +1,19 @@
-// 编辑租约的有效条件（M3-P1 设计 §3.4.1）与异常结束（§3.4.5）：只按事实判断，自己不查询。按下面的顺序判断，
-// 第一条不满足的就是失效的原因（contracts 的 EDIT_LEASE_LOST_REASONS）：
-//   1 有这一行（none）→ 2 没有明确结束（released、revoked）→ 3 代次等于文档当前的代次（stale）→ 4 没有到期（expired）
+// 编辑租约的有效条件（M3-P1 设计 §3.4.1）、异常结束（§3.4.5，M3-P5 设计 §3.5 改为按事实判断）、从调用者看谁占着这份文档
+// （M3-P5 设计 §3.5 的 R2）、被接管的那一代（§3.7、§3.8）与交出之后的保留（§3.6）：只按事实判断，自己不查询。
+// 有效条件按下面的顺序判断，第一条不满足的就是失效的原因（contracts 的 EDIT_LEASE_LOST_REASONS）：
+//   1 有这一行（none）→ 2 没有明确结束（released、revoked、handed_over）→ 3 代次等于文档当前的代次（stale）→ 4 没有到期（expired）
 //   → 5 没有空闲超时（idle）→ 6 绑定的登录仍然有效（session）→ 7 持有者对文档仍有编辑权（revoked）。
 // 时间一律是数据库的：租约行上的时间与读它的那条语句里的 now()（仓储读出的 ObservedEditLease），不用应用主机的时钟（规范 §5）。
-// 两个入口：
-// - 当前的租约（currentLeaseLoss，申请与编辑状态）：从旁判断这一行。第 6、7 条要查数据库（各一两条语句），事实由调用方
-//   以函数的形式给出，规则决定问不问、先问哪个：前五条都满足才问，先问登录，登录不在了就不再问编辑权；
+// 入口：
+// - 谁占着这份文档（occupancyOf，申请与编辑状态，M3-P5 的请求编辑同样用它）：从旁判断这一行，没人占着时连同上一个租约异常结束的提醒。
+//   第 6、7 条要查数据库（各一两条语句），事实由调用方以函数的形式给出，规则决定问不问、先问哪个，同一项事实至多问一次；
+// - 当前的租约失效的原因（currentLeaseLoss）：七条有效条件本身；
 // - 请求带的租约（requestLeaseLoss，心跳与保存）：持有者自己的请求。先要令牌对得上，第 6 条换成"请求的登录、标签页就是
 //   租约绑定的那一个"——换过令牌的页面拿的是新的登录，按 session 失效。"这次登录现在仍然有效"不在这里判断：调用方在事务里、
 //   锁下另查一次（edit-lease.service.ts 的 requireActiveLogin，M3-P1 审查 A1），失效时回 SESSION_EXPIRED。
+//   令牌对不上时是被接管还是被换掉（supersededLoss，M3-P5 S3 接进心跳、保存，S4 接进交出、谢绝）；
 // 另有申请时的重试（isSamePage：同一个登录、同一个标签页）、释放（releasableBy：令牌对得上、没有明确结束、调用者是持有者本人——
-// 不要求同一个登录，也不核对登录）与异常结束的提醒（interruptionOf）。
+// 不要求同一个登录，也不核对登录）与交出之后的保留（reservedFor，S4 的申请与请求编辑用它）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { EDIT_INTERRUPTION_NOTICE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
@@ -37,7 +40,7 @@ export interface LeaseRequest {
 }
 
 /**
- * 上一个租约异常结束的事实（P5 据此提醒，US-M3-10）：持有者、结束的时间——他最近一次续租的时间，以及他是不是这次申请的人自己
+ * 上一个租约异常结束的事实（US-M3-10）：持有者、结束的时间——他最近一次续租的时间，以及他是不是调用者自己
  * （M3-P5 设计 §3.5：页面按它分别说"上一位编辑者……"与"你上一次的编辑……"）
  */
 export interface LeaseInterruption {
@@ -46,14 +49,48 @@ export interface LeaseInterruption {
   readonly sameUser: boolean
 }
 
+/** 请求的那一代失效的原因与详情（EDIT_LEASE_LOST 的 details，contracts 的 editLeaseLostDetailsSchema） */
+export interface LeaseLoss {
+  readonly reason: EditLeaseLostReason
+  /** 只在 taken_over 时有：空间管理员强制接管为真，本人在别处接手为假 */
+  readonly forced?: boolean
+}
+
+/**
+ * 从调用者看，谁占着这份文档（M3-P5 设计 §3.5）；lease 是判断的那一行（没有这一行时为 undefined）：
+ * - occupied：有效的租约在持有者手里（七条都满足；持有者是谁都算，包括调用者自己在别的标签页、设备上），stale 为假；
+ *   或者代次过时、而按时间、登录、编辑权都还活着，持有者又不是调用者（R2，stale 为真）：跨空间移动、转移之后持有者的页面
+ *   正在续上（一个心跳周期之内），只让他本人续上——等待中的请求方会自动申请，不能抢在他前面；
+ * - vacant：没人占着。loss 是它失效的原因（没有这一行时是 none）；interruption 是上一个租约异常结束、在 30 分钟以内时的提醒
+ */
+export type LeaseOccupancy
+  = | { readonly kind: 'occupied', readonly lease: ObservedEditLease, readonly stale: boolean }
+    | { readonly kind: 'vacant', readonly lease: ObservedEditLease | undefined, readonly loss: EditLeaseLostReason, readonly interruption: LeaseInterruption | undefined }
+
 const IDLE_RECLAIM_MS = EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000
 const INTERRUPTION_NOTICE_MS = EDIT_INTERRUPTION_NOTICE_SECONDS * 1000
 
+/** 同一项事实至多问一次：同一个请求里几条规则（有效条件、R2、异常结束）都可能要用到持有者的登录与编辑权，数据库只查一次 */
+function askedOnce(facts: HolderFacts): HolderFacts {
+  let session: Promise<boolean> | undefined
+  let edit: Promise<boolean> | undefined
+  return {
+    sessionActive: async () => session ??= facts.sessionActive(),
+    holderCanEdit: async () => edit ??= facts.holderCanEdit(),
+  }
+}
+
 /**
- * 异常结束的原因（P1 设计 §3.4.5）：到期、空闲回收、登录失效——持有者的页面可能还有没保存的修改。
- * 明确结束（释放、收回）不算；代次过时也不算：那是删除、移动、撤权或者新的申请造成的，各有各的说法
+ * 第 4、5 条（按时间）：只看这一行与读它时数据库的 now()。有效要求到期的时刻晚于 now——恰好到期算到期；
+ * 空闲满 12 分钟算超时——恰好 12 分钟就回收。收回写入权找"按时间还活着"的租约用的是同样的边界（仓储的 ALIVE_BY_TIME）
  */
-const ABNORMAL_ENDINGS: ReadonlySet<EditLeaseLostReason> = new Set<EditLeaseLostReason>(['expired', 'idle', 'session'])
+function timeLoss(lease: ObservedEditLease): 'expired' | 'idle' | undefined {
+  if (lease.expiresAt.getTime() <= lease.now.getTime())
+    return 'expired'
+  if (lease.now.getTime() - lease.lastActiveAt.getTime() >= IDLE_RECLAIM_MS)
+    return 'idle'
+  return undefined
+}
 
 /**
  * 第 2–5 条：只看这一行与读它时数据库的 now()。requestEpoch 是请求带的代次（保存），它也要是这一代——
@@ -65,17 +102,11 @@ function rowLoss(lease: ObservedEditLease, documentEpoch: number, requestEpoch?:
     return lease.endReason
   if (lease.writeEpoch !== documentEpoch || (requestEpoch !== undefined && requestEpoch !== lease.writeEpoch))
     return 'stale'
-  // 有效要求到期的时刻晚于 now：恰好到期算到期
-  if (lease.expiresAt.getTime() <= lease.now.getTime())
-    return 'expired'
-  // 空闲满 12 分钟算超时：恰好 12 分钟就回收
-  if (lease.now.getTime() - lease.lastActiveAt.getTime() >= IDLE_RECLAIM_MS)
-    return 'idle'
-  return undefined
+  return timeLoss(lease)
 }
 
 /**
- * 当前的租约失效的原因（申请、编辑状态：从旁判断这一行，P1 设计 §3.4.1）；有效时为 undefined。
+ * 当前的租约失效的原因（P1 设计 §3.4.1）；有效时为 undefined。
  * 两项要查数据库的事实按需取：前五条有一条不满足就一个也不问；登录已经失效就不再问编辑权
  */
 export async function currentLeaseLoss(lease: ObservedEditLease | undefined, documentEpoch: number, facts: HolderFacts): Promise<EditLeaseLostReason | undefined> {
@@ -92,9 +123,57 @@ export async function currentLeaseLoss(lease: ObservedEditLease | undefined, doc
 }
 
 /**
+ * 这一行是不是异常结束（M3-P5 设计 §3.5，US-M3-10）：按事实判断——没有明确结束（释放、收回、交出；接管时旧的一代被整行改写，
+ * 留下的是有效的新一代），并且已到期、空闲满 12 分钟、或者绑定的登录已失效。持有者的页面可能还有没保存的修改。
+ * 代次过时不遮住它（P1 审查 A6 第 1 处：先到期、后被跨空间移动或转移，原来取"第一条失效原因"得到 stale，提醒就丢了）；
+ * 代次过时而按时间、登录都还活着的（刚被移走、持有者的页面正在续上）不算。持有者没了编辑权也不算：那是收回，不是中断。
+ * 登录要查数据库，只在按时间还活着时才问
+ */
+export async function endedAbnormally(lease: ObservedEditLease, sessionActive: () => Promise<boolean>): Promise<boolean> {
+  if (lease.endReason !== null)
+    return false
+  if (timeLoss(lease) !== undefined)
+    return true
+  return !await sessionActive()
+}
+
+/**
+ * 上一个租约异常结束的提醒（P1 设计 §3.4.5，M3-P5 设计 §3.5）：按事实异常结束（endedAbnormally），而且结束在 30 分钟以内——
+ * 结束的时间取它最近一次续租的时间（之后就没有它还在的消息了），恰好 30 分钟仍然提醒。callerId 是调用者（申请的人、看编辑状态的人）：
+ * 提醒带上上一位持有者是不是他自己（sameUser，只按人比较，与登录、标签页无关）
+ */
+async function interruptionOf(lease: ObservedEditLease, callerId: string, sessionActive: () => Promise<boolean>): Promise<LeaseInterruption | undefined> {
+  if (lease.now.getTime() - lease.renewedAt.getTime() > INTERRUPTION_NOTICE_MS)
+    return undefined
+  if (!await endedAbnormally(lease, sessionActive))
+    return undefined
+  return { holderId: lease.holderId, endedAt: lease.renewedAt, sameUser: lease.holderId === callerId }
+}
+
+/**
+ * 从调用者（callerId）看，谁占着这份文档（申请、编辑状态；M3-P5 的请求编辑同样用它）。见 LeaseOccupancy：
+ * 有效的租约占着；代次过时、按时间、登录、编辑权都还活着、持有者不是调用者（R2）同样占着——申请得到"被占用"，编辑状态里有人在编辑；
+ * 持有者本人看这样的一行是空着的（他的续上就是一次普通的申请）。其余空着，带上异常结束的提醒（30 分钟以内）。
+ * 持有者的登录与编辑权按需问，同一项至多问一次：只有代次过时、按时间还活着的那一行比有效条件本身多问（R2 与异常结束）
+ */
+export async function occupancyOf(lease: ObservedEditLease | undefined, documentEpoch: number, callerId: string, facts: HolderFacts): Promise<LeaseOccupancy> {
+  if (lease === undefined)
+    return { kind: 'vacant', lease, loss: 'none', interruption: undefined }
+  const holder = askedOnce(facts)
+  const loss = await currentLeaseLoss(lease, documentEpoch, holder)
+  if (loss === undefined)
+    return { kind: 'occupied', lease, stale: false }
+  // stale 意味着没有明确结束（第 2 条在第 3 条之前）
+  if (loss === 'stale' && lease.holderId !== callerId && timeLoss(lease) === undefined && await holder.sessionActive() && await holder.holderCanEdit())
+    return { kind: 'occupied', lease, stale: true }
+  return { kind: 'vacant', lease, loss, interruption: await interruptionOf(lease, callerId, holder.sessionActive) }
+}
+
+/**
  * 请求带的租约失效的原因（心跳、保存：持有者自己的请求，P1 设计 §3.4.1、§3.4.4）；有效时为 undefined。
  * - 没带令牌、没有这一行：none。令牌对不上：replaced——请求的那一代已经被新的一代改写了（别人或自己在别处申请过），
- *   不论新的一代现在是否有效，请求的那一代都回不来了；令牌只按恒定时间比较（edit-lease-token.ts）；
+ *   不论新的一代现在是否有效，请求的那一代都回不来了；令牌只按恒定时间比较（edit-lease-token.ts）。被接管时的 taken_over
+ *   见 supersededLoss（M3-P5 S3 接进来）；
  * - 第 2–5 条同上，保存带的代次也要是这一代；
  * - 第 6 条：请求的登录就是租约绑定的那一个；请求带了标签页（保存）时，也要是绑定的那一个，否则 session；
  * - 第 7 条不在这里判断：失去访问（404）与失去编辑权（403）先于租约判断（P1 设计 §3.2），调用方已经确认请求者能编辑，
@@ -111,6 +190,18 @@ export function requestLeaseLoss(lease: ObservedEditLease | undefined, documentE
   if (request.sessionId !== lease.sessionId || (request.clientInstanceId !== undefined && request.clientInstanceId !== lease.clientInstanceId))
     return 'session'
   return undefined
+}
+
+/**
+ * 请求带的令牌对不上这一行时，请求的那一代是怎样没的（M3-P5 设计 §3.7、§3.8；S3 接进心跳、保存，S4 接进交出、谢绝）：
+ * 这一行记着它接管的那一代的令牌摘要（接管标记）、对得上 → taken_over，带方式（forced：空间管理员强制接管为真，本人在别处接手为假），
+ * 页面不再续上；对不上 → replaced：新的申请改写了它（它失效之后别人或自己申请过），或者接管它的那一代之后又换过一代——接管标记只记一层
+ * （设计 §7）。摘要按恒定时间比较。调用方已经确认令牌对不上这一行自己的令牌
+ */
+export function supersededLoss(lease: ObservedEditLease, token: string): LeaseLoss {
+  if (lease.takenOverTokenDigest !== null && lease.takeover !== null && editLeaseTokenMatches(token, lease.takenOverTokenDigest))
+    return { reason: 'taken_over', forced: lease.takeover === 'forced' }
+  return { reason: 'replaced' }
 }
 
 /**
@@ -133,14 +224,12 @@ export function releasableBy(lease: ObservedEditLease | undefined, token: string
 }
 
 /**
- * 当前的租约是不是异常结束、而且结束在 30 分钟以内（P1 设计 §3.4.2 第 6 步、§3.4.5）：申请改写这一行之前，按 currentLeaseLoss
- * 给出的原因判断。结束的时间取它最近一次续租的时间（之后就没有它还在的消息了）；恰好 30 分钟仍然提醒。
- * callerId 是这次申请的人：提醒带上上一位持有者是不是他自己（sameUser）
+ * 交出之后的保留还算不算数、留给了谁（M3-P5 设计 §3.6；S4 的申请与请求编辑据此回答）：有保留、没过期（恰好到期算过期，
+ * 与租约的到期同一个边界）、被保留的人仍能编辑——不算数时为 undefined。被保留的人能不能编辑要查数据库，只在前两条都满足时才问。
+ * 保留按人、不按页面：被保留的人用哪个标签页、哪次登录都行，所以不看登录
  */
-export function interruptionOf(lease: ObservedEditLease | undefined, loss: EditLeaseLostReason | undefined, callerId: string): LeaseInterruption | undefined {
-  if (lease === undefined || loss === undefined || !ABNORMAL_ENDINGS.has(loss))
+export async function reservedFor(lease: ObservedEditLease | undefined, canEdit: (userId: string) => Promise<boolean>): Promise<string | undefined> {
+  if (lease === undefined || lease.reservedFor === null || lease.reservedUntil === null || lease.reservedUntil.getTime() <= lease.now.getTime())
     return undefined
-  if (lease.now.getTime() - lease.renewedAt.getTime() > INTERRUPTION_NOTICE_MS)
-    return undefined
-  return { holderId: lease.holderId, endedAt: lease.renewedAt, sameUser: lease.holderId === callerId }
+  return await canEdit(lease.reservedFor) ? lease.reservedFor : undefined
 }

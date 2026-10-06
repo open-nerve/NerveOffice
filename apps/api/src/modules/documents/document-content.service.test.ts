@@ -8,7 +8,7 @@ import { canonicalContentText, contentHashInput, EDIT_LEASE_TTL_SECONDS, UNIVER_
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DocumentContentService } from './document-content.service.ts'
-import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
+import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, NO_HANDOVER, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 
@@ -42,6 +42,7 @@ function holding(store: FakeStore, documentId: string, userId: string, clientIns
     expiresAt: new Date(now.getTime() + EDIT_LEASE_TTL_SECONDS * 1000),
     endedAt: null,
     endReason: null,
+    ...NO_HANDOVER,
   })
 }
 

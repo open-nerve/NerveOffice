@@ -1,6 +1,6 @@
 // 编辑权的接口编排（M3-P1 设计 §3.1、§3.2）：写的三个各一个业务事务、编辑状态一个只读快照；持有者的人名在同一个事务里补上；
 // "被占用"转成 EDIT_LEASE_HELD（details 带人名、最后活动时间、是不是自己、是不是这次登录与能不能强制接管）。
-// 租约的规则与数据在 documents（edit-lease.service.test.ts）。M3-P5 S1：请求编辑、保留与编辑状态里的提醒还没有接上，一律 null。
+// 租约的规则与数据在 documents（edit-lease.service.test.ts）。编辑状态里的异常中断提醒（M3-P5 S2）补上人名；请求编辑与保留还没有接上（S4），一律 null。
 import type { EditingActor, LeaseAcquisition, LeaseStatus } from '../documents/index.ts'
 import type { User } from '../users/index.ts'
 import { acquiredEditLeaseSchema, editLeaseHeldDetailsSchema, editStatusSchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
@@ -18,14 +18,14 @@ const ACTIVE = new Date('2026-10-04T08:00:00.000Z')
 const EXPIRES = new Date('2026-10-04T08:01:30.000Z')
 /** 页面上报的构建与数据格式（M3-P3）：编排原样交给 documents 核对 */
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '1.0.1', profile: 'sheet@1', formatVersion: 1 }
-const LEASE_REQUEST = { clientInstanceId: TAB, format: FORMAT }
+const LEASE_REQUEST = { clientInstanceId: TAB, idleSeconds: 0, format: FORMAT }
 
 function user(id: string): User {
   return { id, username: id === AMY ? 'amy' : 'ben', displayName: id === AMY ? '艾米' : '本', systemRole: 'member', status: 'active' }
 }
 
 /** 每一步记进 calls，核对顺序与"都在事务里" */
-function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false }) {
+function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, interruption: undefined }) {
   const calls: string[] = []
   const transaction = { transaction: true }
   const leases = {
@@ -80,7 +80,7 @@ const ACQUIRED: LeaseAcquisition = { kind: 'acquired', token: TOKEN, writeEpoch:
 const AMY_EDITING = { holderId: AMY, lastActiveAt: ACTIVE, sameUser: false, sameSession: false }
 /** 补上人名之后 */
 const AMY_EDITOR = { holder: { id: AMY, username: 'amy', displayName: '艾米' }, lastActiveAt: ACTIVE.toISOString(), sameUser: false, sameSession: false }
-/** M3-P5 S1：还没有接上的三项 */
+/** M3-P5：还没有接上的两项（S4），与没有异常中断的提醒 */
 const NOT_YET = { request: null, reservation: null, interruption: null }
 
 async function rejection(promise: Promise<unknown>): Promise<AppError> {
@@ -156,8 +156,8 @@ describe('DocumentEditingService 的心跳、释放与编辑状态', () => {
     expect(calls).toEqual(['begin', 'release', 'commit'])
   })
 
-  it('编辑状态：一个只读快照里判断、读租约、补人名；没有有效的租约时 editor 为 null、不查人名；请求编辑、保留与提醒还没有接上（M3-P5 S1：null）', async () => {
-    const held = setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: true, canTakeOver: false, formulasPending: false })
+  it('编辑状态：一个只读快照里判断、读租约、补人名；没人在编辑、也没有提醒时 editor 为 null、不查人名；请求编辑与保留还没有接上（M3-P5 S4：null）', async () => {
+    const held = setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: true, canTakeOver: false, formulasPending: false, interruption: undefined })
     const status = await held.service.status(ACTOR, DOCUMENT)
     expect(status).toEqual({ revision: 7, editor: AMY_EDITOR, canEdit: true, canTakeOver: false, formulasPending: false, ...NOT_YET })
     expect(editStatusSchema.parse(status)).toEqual(status)
@@ -167,24 +167,41 @@ describe('DocumentEditingService 的心跳、释放与编辑状态', () => {
     expect(free.calls).toEqual(['snapshot', 'status', 'end snapshot'])
   })
 
+  it('US-M3-10 没人在编辑时的异常中断提醒（M3-P5 设计 §3.5）：补上上一位持有者的人名（同一个快照里），原样带上是不是自己', async () => {
+    for (const sameUser of [false, true]) {
+      const { service, calls } = setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser } })
+      const status = await service.status(ACTOR, DOCUMENT)
+      expect(status, String(sameUser)).toEqual({ revision: 7, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: { holder: { id: AMY, username: 'amy', displayName: '艾米' }, endedAt: ACTIVE.toISOString(), sameUser } })
+      expect(editStatusSchema.parse(status)).toEqual(status)
+      expect(calls).toEqual(['snapshot', 'status', 'names', 'end snapshot'])
+    }
+  })
+
+  it('M3-P5 有人在编辑时提醒一律为 null（正在编辑的人与提醒至多有一个），人名只查正在编辑的人', async () => {
+    const { service, calls, users } = setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: true, canTakeOver: false, formulasPending: false, interruption: { holderId: BEN, endedAt: ACTIVE, sameUser: true } })
+    expect(await service.status(ACTOR, DOCUMENT)).toEqual({ revision: 7, editor: AMY_EDITOR, canEdit: true, canTakeOver: false, formulasPending: false, ...NOT_YET })
+    expect(users.findByIds.mock.calls).toEqual([[[AMY], { transaction: true }]])
+    expect(calls).toEqual(['snapshot', 'status', 'names', 'end snapshot'])
+  })
+
   it('M3-P5 正在编辑的人原样带上是不是自己、是不是这次登录（documents 算出的两位，各自独立）', async () => {
     for (const [sameUser, sameSession] of [[true, true], [true, false]] as const) {
-      const { service } = setup(ACQUIRED, { revision: 7, editor: { ...AMY_EDITING, sameUser, sameSession }, canEdit: true, canTakeOver: false, formulasPending: false })
+      const { service } = setup(ACQUIRED, { revision: 7, editor: { ...AMY_EDITING, sameUser, sameSession }, canEdit: true, canTakeOver: false, formulasPending: false, interruption: undefined })
       expect((await service.status(ACTOR, DOCUMENT)).editor, `${sameUser} ${sameSession}`).toEqual({ ...AMY_EDITOR, sameUser, sameSession })
     }
   })
 
   it('US-M3-05 编辑状态带上能不能编辑（M3-P2 设计 §3.2）、能不能强制接管（M3-P5）：原样取 documents 在同一个快照里算出的那两位，有人在编辑、没人在编辑都一样', async () => {
-    const viewer = setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: false, canTakeOver: false, formulasPending: false })
+    const viewer = setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: false, canTakeOver: false, formulasPending: false, interruption: undefined })
     expect((await viewer.service.status(ACTOR, DOCUMENT)).canEdit).toBe(false)
-    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: false, canTakeOver: false, formulasPending: false }).service.status(ACTOR, DOCUMENT)).canEdit).toBe(false)
-    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false }).service.status(ACTOR, DOCUMENT)).canEdit).toBe(true)
+    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: false, canTakeOver: false, formulasPending: false, interruption: undefined }).service.status(ACTOR, DOCUMENT)).canEdit).toBe(false)
+    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, interruption: undefined }).service.status(ACTOR, DOCUMENT)).canEdit).toBe(true)
     for (const editor of [AMY_EDITING, undefined])
-      expect((await setup(ACQUIRED, { revision: 7, editor, canEdit: true, canTakeOver: true, formulasPending: false }).service.status(ACTOR, DOCUMENT)).canTakeOver, String(editor)).toBe(true)
+      expect((await setup(ACQUIRED, { revision: 7, editor, canEdit: true, canTakeOver: true, formulasPending: false, interruption: undefined }).service.status(ACTOR, DOCUMENT)).canTakeOver, String(editor)).toBe(true)
   })
 
   it('编辑状态带上"公式待更新"（M3-P3 设计 §3.8）：原样取 documents 在同一个快照里读到的标记', async () => {
-    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: true }).service.status(ACTOR, DOCUMENT)).formulasPending).toBe(true)
-    expect((await setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: true, canTakeOver: false, formulasPending: true }).service.status(ACTOR, DOCUMENT)).formulasPending).toBe(true)
+    expect((await setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: true, interruption: undefined }).service.status(ACTOR, DOCUMENT)).formulasPending).toBe(true)
+    expect((await setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: true, canTakeOver: false, formulasPending: true, interruption: undefined }).service.status(ACTOR, DOCUMENT)).formulasPending).toBe(true)
   })
 })

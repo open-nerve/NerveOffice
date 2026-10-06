@@ -1,19 +1,20 @@
 import type { DocumentStatus } from '@nerve-office/contracts'
 import type { SQL } from 'drizzle-orm'
+import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import type { Buffer } from 'node:buffer'
-import type { EditLeaseEndReason } from '../../db/schema/documents/index.ts'
+import type { EditLeaseEndReason, EditLeaseTakeover } from '../../db/schema/documents/index.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import type { WriteAccessScope } from './write-access.ts'
-import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, asc, eq, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, isNull, sql } from 'drizzle-orm'
 import { documentEditLeases, documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, inIdArray } from '../database/index.ts'
 
 const l = documentEditLeases
 const d = documents
 
-/** 一条编辑租约（M3-P1 设计 §3.3）：每份文档至多一行，时间都是数据库写下的 */
+/** 一条编辑租约（M3-P1 设计 §3.3；M3-P5 设计 §3.2 的请求、保留与接管标记）：每份文档至多一行，时间都是数据库写下的 */
 export interface EditLeaseRow {
   readonly documentId: string
   readonly holderId: string
@@ -29,10 +30,27 @@ export interface EditLeaseRow {
   /** 最近一次续租的时间（申请时等于 acquiredAt） */
   readonly renewedAt: Date
   readonly expiresAt: Date
+  /** 最后一次操作的时间：申请时是 now() 减去续上的页面带来的空闲，之后由心跳只往前推（M3-P5 设计 §3.5） */
   readonly lastActiveAt: Date
-  /** 明确结束（释放、收回写入权）的时间与原因：两者同时为空或同时有值 */
+  /** 明确结束（释放、收回写入权、交出）的时间与原因：两者同时为空或同时有值 */
   readonly endedAt: Date | null
   readonly endReason: EditLeaseEndReason | null
+  /**
+   * 请求编辑（M3-P5 设计 §3.6，单槽）：请求的标识、请求方、请求方的登录、发出的时刻与有效期（请求方续期时往后推）同时为空或同时有值；
+   * 持有者谢绝的时刻只在有请求时有值
+   */
+  readonly requestId: string | null
+  readonly requestedBy: string | null
+  readonly requestSessionId: string | null
+  readonly requestedAt: Date | null
+  readonly requestExpiresAt: Date | null
+  readonly requestDeclinedAt: Date | null
+  /** 交出之后的保留（只在明确结束的原因是 handed_over 时有）：留给谁、留到何时 */
+  readonly reservedFor: string | null
+  readonly reservedUntil: Date | null
+  /** 接管标记：这一代接管的那一代的令牌摘要与方式（本人 self、强制 forced），旧令牌据此得到 taken_over */
+  readonly takenOverTokenDigest: Buffer | null
+  readonly takeover: EditLeaseTakeover | null
 }
 
 /**
@@ -43,7 +61,10 @@ export interface ObservedEditLease extends EditLeaseRow {
   readonly now: Date
 }
 
-/** 改写为新的一代要写的东西：时间由数据库给出（申请、续租与最后活动是 now()，到期是 now() 加有效期） */
+/**
+ * 改写为新的一代要写的东西：时间由数据库给出（申请与续租是 now()，到期是 now() 加有效期）；最后活动是 now() 减去 idleSeconds——
+ * 续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5，复验 P1-C5：服务端的空闲兜底不因续上而重新计时），别的申请是 0
+ */
 export interface NewEditLease {
   readonly documentId: string
   readonly holderId: string
@@ -51,6 +72,7 @@ export interface NewEditLease {
   readonly clientInstanceId: string
   readonly tokenDigest: Buffer
   readonly writeEpoch: number
+  readonly idleSeconds: number
 }
 
 /**
@@ -77,12 +99,36 @@ const COLUMNS = {
   lastActiveAt: l.lastActiveAt,
   endedAt: l.endedAt,
   endReason: l.endReason,
+  requestId: l.requestId,
+  requestedBy: l.requestedBy,
+  requestSessionId: l.requestSessionId,
+  requestedAt: l.requestedAt,
+  requestExpiresAt: l.requestExpiresAt,
+  requestDeclinedAt: l.requestDeclinedAt,
+  reservedFor: l.reservedFor,
+  reservedUntil: l.reservedUntil,
+  takenOverTokenDigest: l.takenOverTokenDigest,
+  takeover: l.takeover,
   // 与行出自同一条语句；按时间列的写法换成 Date（驱动把 timestamptz 原样当文本交回）
   now: sql<Date>`now()`.mapWith(l.acquiredAt),
 }
 
 /** 到期的时刻：数据库的 now() 加上有效期（申请与每次续租） */
 const EXPIRES_AT = sql`now() + make_interval(secs => ${EDIT_LEASE_TTL_SECONDS})`
+
+/**
+ * 按时间还活着（M3-P5 设计 §3.5，DEF-044）：没到期、空闲不满 12 分钟——与有效条件的第 4、5 条（edit-lease-rules.ts）边界逐一相同，
+ * 恰好到期、恰好空闲 12 分钟都算已经死了
+ */
+const ALIVE_BY_TIME = and(
+  gt(l.expiresAt, sql`now()`),
+  gt(l.lastActiveAt, sql`now() - make_interval(secs => ${EDIT_LEASE_IDLE_RECLAIM_SECONDS})`),
+)
+
+/** 改写为新的一代时旧行的这一列：条件成立就沿用，否则清空（条件与列都按旧行算：ON CONFLICT DO UPDATE 里表名指的是已有的那一行） */
+function keptWhen(condition: SQL, column: AnyPgColumn): SQL {
+  return sql`case when ${condition} then ${column} end`
+}
 
 /**
  * 收回写入权的范围涉及哪些租约：租约与文档连查的条件，与 write-access.ts 的 coversWriter 逐种同义。
@@ -142,8 +188,15 @@ export class EditLeasesRepository {
 
   /**
    * 改写为新的一代（调用方已锁住文档行并给文档的代次加了一，lease.writeEpoch 是加一之后的值）：没有这一行就插入，有就整行改写——
-   * 持有者、登录、标签页、令牌摘要与代次换成新的，申请、续租与最后活动的时间是 now()，到期是 now() 加有效期，清掉明确结束的两列。
-   * 返回写下的这一行
+   * 持有者、登录、标签页、令牌摘要与代次换成新的，申请与续租的时间是 now()，最后活动是 now() 减去续上的页面带来的空闲秒数
+   * （M3-P5 设计 §3.5），到期是 now() 加有效期，清掉明确结束的两列。M3-P5 的三组列（设计 §3.6、§3.7，探索报告 §3.4）：
+   * - 请求编辑：新的持有者还是旧行的持有者（他自己的重试、续上、本人接管）就原样沿用，包括已谢绝的状态——否则持有者续上一次
+   *   就把别人的请求悄悄弄丢了；换了别人就清掉（请求方续期得知请求已不在）。新的持有者就是请求方时，他不是旧行的持有者（表上的约束），
+   *   同样清掉：请求已经实现，"请求方不是持有者"的约束要求在这同一条语句里清；
+   * - 交出之后的保留：一律清掉。它只在明确结束的原因是 handed_over 时有（表上的约束），而这条语句清掉了明确结束，必须在同一条语句里清；
+   * - 接管标记：只在同一个页面（同一个登录、同一个标签页）重试时沿用上一代的——否则一次重试就把"被接管"变回了笼统的 replaced；
+   *   别的申请清掉。写下接管标记（本人接管、强制接管）在 S3 接上。
+   * 沿用与否按旧行判断，写在这条语句里：改写之前的那一行在文档行的锁下，就是调用方判断时读到的那一行。返回写下的这一行
    */
   async replace(lease: NewEditLease, transaction: Transaction): Promise<ObservedEditLease> {
     const generation = {
@@ -155,14 +208,31 @@ export class EditLeasesRepository {
       acquiredAt: sql`now()`,
       renewedAt: sql`now()`,
       expiresAt: EXPIRES_AT,
-      lastActiveAt: sql`now()`,
+      lastActiveAt: sql`now() - make_interval(secs => ${lease.idleSeconds})`,
       endedAt: null,
       endReason: null,
     }
+    const sameHolder = sql`${l.holderId} = ${lease.holderId}`
+    const samePage = sql`${l.sessionId} = ${lease.sessionId} and ${l.clientInstanceId} = ${lease.clientInstanceId}`
     const [row] = await executorOf(this.db, transaction)
       .insert(l)
       .values({ documentId: lease.documentId, ...generation })
-      .onConflictDoUpdate({ target: l.documentId, set: generation })
+      .onConflictDoUpdate({
+        target: l.documentId,
+        set: {
+          ...generation,
+          requestId: keptWhen(sameHolder, l.requestId),
+          requestedBy: keptWhen(sameHolder, l.requestedBy),
+          requestSessionId: keptWhen(sameHolder, l.requestSessionId),
+          requestedAt: keptWhen(sameHolder, l.requestedAt),
+          requestExpiresAt: keptWhen(sameHolder, l.requestExpiresAt),
+          requestDeclinedAt: keptWhen(sameHolder, l.requestDeclinedAt),
+          reservedFor: null,
+          reservedUntil: null,
+          takenOverTokenDigest: keptWhen(samePage, l.takenOverTokenDigest),
+          takeover: keptWhen(samePage, l.takeover),
+        },
+      })
       .returning(COLUMNS)
     if (row === undefined)
       throw new Error(`改写租约没有返回记录：${lease.documentId}`)
@@ -171,8 +241,8 @@ export class EditLeasesRepository {
 
   /**
    * 续租（调用方已锁住租约行，并判断过它仍然有效）：续租的时间是 now()，到期是 now() 加有效期；最后活动的时间是 now() 减去
-   * 页面上报的空闲秒数，不早于申请的时间、不晚于 now()（P1 设计 §3.3）。夹取写在这条语句里，按数据库的时间算到微秒——
-   * 在应用里用 Date 算会截到毫秒，最后活动可能比申请还早一点。返回续租之后的这一行
+   * 页面上报的空闲秒数，只前进不后退（不早于这一行原来的最后活动，M3-P5 设计 §3.5：续上的那一代带着页面的空闲，下一次心跳
+   * 不能把它抹掉）、不晚于 now()。夹取写在这条语句里，按数据库的时间算到微秒——在应用里用 Date 算会截到毫秒。返回续租之后的这一行
    */
   async renew(documentId: string, idleSeconds: number, transaction: Transaction): Promise<ObservedEditLease> {
     const [row] = await executorOf(this.db, transaction)
@@ -180,7 +250,7 @@ export class EditLeasesRepository {
       .set({
         renewedAt: sql`now()`,
         expiresAt: EXPIRES_AT,
-        lastActiveAt: sql`least(greatest(now() - make_interval(secs => ${idleSeconds}), ${l.acquiredAt}), now())`,
+        lastActiveAt: sql`least(greatest(now() - make_interval(secs => ${idleSeconds}), ${l.lastActiveAt}), now())`,
       })
       .where(eq(l.documentId, documentId))
       .returning(COLUMNS)
@@ -216,20 +286,24 @@ export class EditLeasesRepository {
   }
 
   /**
-   * 收回写入权（P1 设计 §3.4.6 第 1 步）：找出这次范围涉及的、没有明确结束的租约（范围的条件见 writersIn，与 coversWriter 同义），
-   * 先按文档 id 的顺序锁住它们的文档行，再按同样的顺序锁住这些租约行，返回锁住的租约（带文档所在的空间、创建人与状态：
-   * 收回写入权按它们判断持有者还能不能编辑，见 RevocableEditLease）。
+   * 收回写入权（P1 设计 §3.4.6 第 1 步）：找出这次范围涉及的、没有明确结束而且按时间还活着的租约（范围的条件见 writersIn，
+   * 与 coversWriter 同义；时间条件见 ALIVE_BY_TIME），先按文档 id 的顺序锁住它们的文档行，再按同样的顺序锁住这些租约行，
+   * 返回锁住的租约（带文档所在的空间、创建人与状态：收回写入权按它们判断持有者还能不能编辑，见 RevocableEditLease）。
    * 调用方在改动权限的事务里调用，之前已经持有账户行、空间行、成员行或这些文档行（ADR-014 的锁顺序，文档行之后才是租约行）。
    * 第二步把条件再核对一次：第一步等文档行的锁时，别的申请可能已经提交、改写了租约（换了持有者），那条语句是按旧的租约行判断的范围；
    * 现在持着文档行的锁，租约不会再被改写（申请要先拿文档行的锁），读到的就是最终的。
    * 申请在撤权提交之前判断了权限、在它之后才提交时，租约行不在这里找得到的范围里，由有效条件的第 7 条在每次使用时让它失效（§3.4.6）。
+   * 按时间已经死了的租约（到期、空闲满 12 分钟）不找（M3-P5 设计 §3.5，DEF-044）：它不可能再被续租或用来保存（心跳与保存都先判到期、
+   * 空闲，续租要求有效），不必记 revoked、不必给代次加一——它照样按事实算异常结束，提醒得以保留；撤权也不再锁这批文档行。
+   * 异常结束的租约里仍会被记 revoked 的只剩"登录已失效、还没到期"的（最长一个有效期）。时间按这个事务的 now() 判断：在它之前判断有效、在它之后
+   * 才提交的心跳（租约恰好在两者之间到期）续上的租约不在这里，与申请交错的那一种同样由第 7 条（停用另由第 6 条）在每次使用时让它失效。
    * 文档的状态不过滤：删除的调用方先把文档放进回收站，它们上面的租约同样要结束
    */
   async lockInScope(scope: WriteAccessScope, transaction: Transaction): Promise<RevocableEditLease[]> {
     if ((scope.kind === 'documents' || scope.kind === 'userDocuments') && scope.documentIds.length === 0)
       return []
     const executor = executorOf(this.db, transaction)
-    const open = and(isNull(l.endedAt), writersIn(scope))
+    const open = and(isNull(l.endedAt), ALIVE_BY_TIME, writersIn(scope))
     const locked = await executor
       .select({ id: d.id })
       .from(d)

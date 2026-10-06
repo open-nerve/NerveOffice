@@ -13,7 +13,7 @@ import { ClientFormatGate, requireWritableDocument } from './client-format-gate.
 import { canEditDocument, DocumentAccessPolicy, requireAccess, requireDocumentContent } from './document-access-policy.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
-import { currentLeaseLoss, interruptionOf, isSamePage, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
+import { isSamePage, occupancyOf, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest, generateEditLeaseToken } from './edit-lease-token.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { revisionSourceFor } from './revision-source.ts'
@@ -40,9 +40,13 @@ export async function requireActiveLogin(sessions: SessionService, actor: Editin
     throw new AppError('SESSION_EXPIRED')
 }
 
-/** 申请编辑权的请求（P1 设计 §3.4.2）：标签页，与页面上报的构建与数据格式（M3-P3 设计 §3.5） */
+/**
+ * 申请编辑权的请求（P1 设计 §3.4.2）：标签页，续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5：新的一代的最后活动按它往前推，
+ * 服务端的空闲兜底不因续上而重新计时；别的申请是 0），与页面上报的构建与数据格式（M3-P3 设计 §3.5）
+ */
 export interface LeaseRequest {
   readonly clientInstanceId: string
+  readonly idleSeconds: number
   readonly format: ClientFormat
 }
 
@@ -67,8 +71,9 @@ export interface LeaseEditor {
  * 申请的结果（P1 设计 §3.4.2）：
  * - acquired：取得了新的一代——令牌（只在这里出现一次）、这一代的代次、文档当前的修订号与它的来源（新建、复制出来的为 null）、
  *   到期时间，上一个租约异常结束的提醒，与文档的"公式待更新"（M3-P3 设计 §3.8：P4 据此在进入编辑时先全量重算）；
- * - held：有效的租约在别人手里（同一个人在别的标签页或设备上也算），什么也没写；正在编辑的人与调用者能不能强制接管（M3-P5，
- *   锁下判断权限时算出的那一位）。workspace 补上人名，回 EDIT_LEASE_HELD
+ * - held：有效的租约在别人手里（同一个人在别的标签页或设备上也算），或者代次过时、其余都还活着的租约在别人手里（M3-P5 设计 §3.5
+ *   的 R2：只让持有者本人续上），什么也没写；正在编辑的人与调用者能不能强制接管（M3-P5，锁下判断权限时算出的那一位）。
+ *   workspace 补上人名，回 EDIT_LEASE_HELD
  */
 export type LeaseAcquisition
   = | {
@@ -84,9 +89,10 @@ export type LeaseAcquisition
   | ({ readonly kind: 'held', readonly canTakeOver: boolean } & LeaseEditor)
 
 /**
- * 编辑状态（P1 设计 §3.4.3）：文档当前的修订号，有效的租约在谁手里（没有时为 undefined），
+ * 编辑状态（P1 设计 §3.4.3）：文档当前的修订号，谁在编辑（从调用者看占着这份文档的人，没有时为 undefined），
  * 调用者现在能不能编辑、能不能强制接管这份文档（M3-P2 设计 §3.2：阅读页据此显示或隐藏"编辑"；M3-P5 设计 §3.8），
- * 以及文档的"公式待更新"（M3-P3 设计 §3.8）
+ * 文档的"公式待更新"（M3-P3 设计 §3.8），以及没人在编辑时上一个租约异常结束的提醒（M3-P5 设计 §3.5：阅读页不必等点"编辑"；
+ * 有人在编辑、没有异常结束或已经超过 30 分钟时为 undefined）
  */
 export interface LeaseStatus {
   readonly revision: number
@@ -94,9 +100,10 @@ export interface LeaseStatus {
   readonly canEdit: boolean
   readonly canTakeOver: boolean
   readonly formulasPending: boolean
+  readonly interruption: LeaseInterruption | undefined
 }
 
-/** 有效的租约在谁手里，从调用者看（LeaseEditor）：是不是本人按账户比，是不是这次登录按租约绑定的登录比 */
+/** 占着这份文档的租约在谁手里，从调用者看（LeaseEditor）：是不是本人按账户比，是不是这次登录按租约绑定的登录比 */
 function editorOf(lease: ObservedEditLease, actor: EditingActor): LeaseEditor {
   return { holderId: lease.holderId, lastActiveAt: lease.lastActiveAt, sameUser: lease.holderId === actor.userId, sameSession: lease.sessionId === actor.sessionId }
 }
@@ -133,15 +140,16 @@ export class EditLeaseService {
   /**
    * 申请（P1 设计 §3.4.2）：页面的构建与数据格式（CLIENT_OUTDATED，M3-P3）→ 不加锁判断能编辑（404 / 403）→ 锁文档行、锁下再判断 →
    * 锁租约行 → 这次登录仍然有效（否则 401，requireActiveLogin：撤销登录之后才到这一步的在途申请不写下绑定失效登录的租约）→
-   * 文档的格式（比服务端新：DOCUMENT_TOO_NEW，M3-P3，锁下读到的文档行）→ 按有效条件判断当前的租约 →
-   * 有效时：同一个登录、同一个标签页的是这个页面的重试（例如上次申请的回包丢了），照样发新的一代；别人的（含自己在别处的）就是被占用，
-   * 什么也不写 → 文档的代次加一、生成令牌、改写租约行 → 上一个租约异常结束、而且在 30 分钟以内时给出提醒。
+   * 文档的格式（比服务端新：DOCUMENT_TOO_NEW，M3-P3，锁下读到的文档行）→ 从申请的人看谁占着这份文档（occupancyOf）→
+   * 有效的租约：同一个登录、同一个标签页的是这个页面的重试（例如上次申请的回包丢了），照样发新的一代；别人的（含自己在别处的）就是被占用，
+   * 什么也不写；代次过时、其余都还活着、持有者不是申请的人（M3-P5 设计 §3.5 的 R2）同样是被占用 →
+   * 文档的代次加一、生成令牌、改写租约行（最后活动按续上的页面带来的空闲往前推）→ 上一个租约按事实异常结束、而且在 30 分钟以内时给出提醒。
    * 修订号取锁下的文档行：页面拿它与自己载入的比较。连同这一版的来源（这一条修订记录的标签页与本地序号，与修订号冲突的详情
    * 同一个取法，只给保存这一版的人本人，见 revisionSourceFor）：续上时页面据此认出期间的那一版是不是本页自己一次结果未知的保存
    * （00 号计划书 §7.5）
    */
   async acquire(actor: EditingActor, documentId: string, request: LeaseRequest, transaction: Transaction): Promise<LeaseAcquisition> {
-    const { clientInstanceId } = request
+    const { clientInstanceId, idleSeconds } = request
     this.clients.require(request.format)
     await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), ['edit'], transaction)
     const { document, permissions } = await requireDocumentContent(this.policy, actor.userId, await this.documents.lockById(documentId, transaction), ['edit'], transaction)
@@ -149,10 +157,10 @@ export class EditLeaseService {
     // 两把锁都在手里之后才查：之后到提交只剩判断与两条写，窗口最短
     await requireActiveLogin(this.sessions, actor, transaction)
     requireWritableDocument(document)
-    const loss = await currentLeaseLoss(current, document.writeEpoch, this.holderFacts(current, document, transaction))
-    if (loss === undefined && current !== undefined && !isSamePage(current, actor.sessionId, clientInstanceId)) {
-      const editor = editorOf(current, actor)
-      this.#logger.debug('申请编辑权：有效的租约在别人手里', { documentId, sameUser: editor.sameUser, sameSession: editor.sameSession })
+    const occupancy = await occupancyOf(current, document.writeEpoch, actor.userId, this.holderFacts(current, document, transaction))
+    if (occupancy.kind === 'occupied' && !isSamePage(occupancy.lease, actor.sessionId, clientInstanceId)) {
+      const editor = editorOf(occupancy.lease, actor)
+      this.#logger.debug('申请编辑权：有效的租约在别人手里', { documentId, sameUser: editor.sameUser, sameSession: editor.sameSession, stale: occupancy.stale })
       return { kind: 'held', ...editor, canTakeOver: permissions.canTakeOver }
     }
     const writeEpoch = await this.documents.advanceWriteEpoch(documentId, transaction)
@@ -164,11 +172,12 @@ export class EditLeaseService {
       clientInstanceId,
       tokenDigest: editLeaseTokenDigest(token),
       writeEpoch,
+      idleSeconds,
     }, transaction)
     // 文档行在锁下：这一版不会再变
     const revision = await this.revisions.findByRevision(documentId, document.revision, transaction)
     // 上一个租约的情形只记原因（none、到期、空闲……，同一个页面的重试记 retry），不记令牌
-    this.#logger.debug('申请编辑权：取得新的一代', { documentId, writeEpoch, previous: loss ?? 'retry' })
+    this.#logger.debug('申请编辑权：取得新的一代', { documentId, writeEpoch, previous: occupancy.kind === 'vacant' ? occupancy.loss : 'retry' })
     return {
       kind: 'acquired',
       token,
@@ -176,7 +185,7 @@ export class EditLeaseService {
       revision: document.revision,
       source: revisionSourceFor(revision, actor.userId),
       expiresAt: lease.expiresAt,
-      interruption: interruptionOf(current, loss, actor.userId),
+      interruption: occupancy.kind === 'vacant' ? occupancy.interruption : undefined,
       // 文档行在锁下：这个标记直到本页保存之前不会再变（改它的只有持有者的保存）
       formulasPending: document.formulasPending,
     }
@@ -223,26 +232,28 @@ export class EditLeaseService {
   }
 
   /**
-   * 编辑状态（P1 设计 §3.4.3）：在调用方开的只读快照里（ADR-017），能读就能看（读不到 404）→ 读租约行 → 按有效条件判断
-   * （第 6、7 条查持有者的登录与编辑权，同一个快照）→ 修订号，以及有效时正在编辑的人（持有者、最后活动时间、是不是调用者自己、
-   * 是不是调用者这次登录）。调用者能不能编辑（M3-P2 设计 §3.2）、能不能强制接管（M3-P5 设计 §3.8）：就是判断能读时算出的权限位
-   * （requireDocumentContent，与详情的 permissions、保存与申请看的同一套），不另查询
+   * 编辑状态（P1 设计 §3.4.3）：在调用方开的只读快照里（ADR-017），能读就能看（读不到 404）→ 读租约行 → 从调用者看谁占着这份文档
+   * （occupancyOf：第 6、7 条查持有者的登录与编辑权，同一个快照；与申请同一个判断，阅读页显示有人在编辑时点"编辑"得到的就是被占用）→
+   * 修订号，有人在编辑时是他（持有者、最后活动时间、是不是调用者自己、是不是调用者这次登录），没人在编辑时是上一个租约异常结束的提醒
+   * （M3-P5 设计 §3.5，与申请同一个算法）。调用者能不能编辑（M3-P2 设计 §3.2）、能不能强制接管（M3-P5 设计 §3.8）：就是判断能读时
+   * 算出的权限位（requireDocumentContent，与详情的 permissions、保存与申请看的同一套），不另查询
    */
   async status(actor: EditingActor, documentId: string, transaction: Transaction): Promise<LeaseStatus> {
     const { document, permissions } = await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), [], transaction)
     const lease = await this.leases.findByDocument(documentId, transaction)
-    const loss = await currentLeaseLoss(lease, document.writeEpoch, this.holderFacts(lease, document, transaction))
+    const occupancy = await occupancyOf(lease, document.writeEpoch, actor.userId, this.holderFacts(lease, document, transaction))
     return {
       revision: document.revision,
-      editor: lease === undefined || loss !== undefined ? undefined : editorOf(lease, actor),
+      editor: occupancy.kind === 'occupied' ? editorOf(occupancy.lease, actor) : undefined,
       canEdit: permissions.canEdit,
       canTakeOver: permissions.canTakeOver,
       formulasPending: document.formulasPending,
+      interruption: occupancy.kind === 'vacant' ? occupancy.interruption : undefined,
     }
   }
 
   /**
-   * 第 6、7 条的事实（规则只在前五条都满足时才问）：持有者绑定的登录仍然有效（auth）；持有者对这份文档仍有编辑权
+   * 第 6、7 条的事实（规则按需问，同一项至多一次）：持有者绑定的登录仍然有效（auth）；持有者对这份文档仍有编辑权
    * （访问策略在同一个事务里查，看得到同一个事务里刚做的改动）。没有租约时规则不会问
    */
   private holderFacts(lease: ObservedEditLease | undefined, document: AccessTarget, transaction: Transaction): HolderFacts {
