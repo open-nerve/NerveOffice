@@ -59,7 +59,7 @@ function detail(changes: Partial<DocumentDetail> = {}): DocumentDetail {
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: false },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
     ...changes,
   }
 }
@@ -447,7 +447,7 @@ describe('DEF-040 行内操作展开时取的文档权限', () => {
     expect(precedes(cancel, alert)).toBe(true)
 
     // 重新取到的权限：只能复制了（例如刚被降为查看者）
-    api.on(DETAIL_KEY, () => json(200, detail({ permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false } })))
+    api.on(DETAIL_KEY, () => json(200, detail({ permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false } })))
     retry(alert)
     await waitFor(() => expect(screen.queryByRole('button', { name: '改名' })).toBeNull())
     expect(screen.getByRole('button', { name: '复制' })).toBeInTheDocument()

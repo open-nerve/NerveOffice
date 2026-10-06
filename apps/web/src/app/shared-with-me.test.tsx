@@ -123,7 +123,7 @@ function grantDetail(document: SharedDocument, role: 'viewer' | 'editor', change
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: editor, canRename: editor, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false },
+    permissions: { canEdit: editor, canRename: editor, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false },
     ...changes,
   }
 }
@@ -220,7 +220,7 @@ describe('US-M2-08 "与我共享"的行内操作（Codex 对抗评审 CX3）', (
         space: { id: SESSION.personalSpace.id, type: 'personal' },
         accessVia: 'space',
         revision: 1,
-        permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+        permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
         replayed: false,
       }),
     })

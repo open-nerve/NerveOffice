@@ -30,7 +30,7 @@ function detail(document: DocumentSummary, canShare: boolean): DocumentDetail {
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare, canTakeOver: canShare },
   }
 }
 

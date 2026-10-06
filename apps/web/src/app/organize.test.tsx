@@ -54,7 +54,7 @@ function detail(changes: Partial<DocumentDetail> = {}): DocumentDetail {
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
     ...changes,
   }
 }
@@ -238,7 +238,7 @@ describe('US-M2-07 行内的整理操作', () => {
   it('文档的操作面板按服务端给的权限显示：查看者只有复制，没有改名、移动、删除', async () => {
     loggedIn({
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail({
-        permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false },
+        permissions: { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false },
       })),
     })
     renderApp('/')

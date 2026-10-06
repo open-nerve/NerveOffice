@@ -135,7 +135,7 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
       formatVersion: 1,
       sdkVersion: '1.0.1',
       formulasPending: false,
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
       replayed: false,
     }
     const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: created.title, formulasPending: true }

@@ -65,7 +65,7 @@ describe('toDetail：只凭授权时不给所在的文件夹', () => {
       formatVersion: 1,
       sdkVersion: '1.0.0',
       formulasPending: true,
-      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false },
+      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false },
     })
   })
 

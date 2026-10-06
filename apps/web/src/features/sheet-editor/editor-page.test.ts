@@ -57,7 +57,7 @@ const DETAIL: DocumentDetail = {
   formatVersion: 1,
   sdkVersion: '1.0.1',
   formulasPending: false,
-  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false },
+  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
 }
 
 /** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现；记下谁在订阅修改（每次新建都是新的一个，第一个由用例先拿到） */

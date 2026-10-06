@@ -201,7 +201,7 @@ const COPY = {
   formatVersion: 1,
   sdkVersion: '1.0.1',
   formulasPending: false,
-  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
 } as const
 
 /** 服务端回答编辑状态的时刻：与申请被占用时的回答同一个时刻，最后活动几分钟之前两边算出来一样 */

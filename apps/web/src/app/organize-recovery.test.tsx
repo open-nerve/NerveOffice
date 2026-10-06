@@ -48,7 +48,7 @@ function detail(changes: Partial<DocumentDetail> = {}): DocumentDetail {
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
     ...changes,
   }
 }
@@ -583,7 +583,7 @@ describe('M2-P6 复核 S1–S3：结果未知与被拒绝之后', () => {
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail({ permissions })),
       'POST /api/documents': () => {
         // 自己刚被降为查看者：只能看、能复制
-        permissions = { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false }
+        permissions = { canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false }
         space = { ...space, permissions: { ...space.permissions, canCreateDocuments: false, canCreateFolders: false } }
         return apiError(403, 'PERMISSION_DENIED', '你已经不能在这里新建了')
       },

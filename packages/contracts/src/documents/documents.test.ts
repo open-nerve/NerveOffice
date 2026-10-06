@@ -127,7 +127,7 @@ describe('文档的元数据', () => {
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false },
+    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
   }
 
   it('档案、格式版本与 SDK 版本不按已知的取值校验：客户端自己核对，不认识的显示格式不受支持', () => {
@@ -164,8 +164,8 @@ describe('文档的元数据', () => {
     expect(documentDetailSchema.safeParse({ ...detail, folderId: undefined }).success).toBe(false)
   })
 
-  it('权限的每一位都要给全：界面据此显示能做的操作（M2-P5 加上分享）', () => {
-    expect(Object.keys(detail.permissions)).toContain('canShare')
+  it('权限的每一位都要给全：界面据此显示能做的操作（M2-P5 加上分享，M3-P5 加上强制接管）', () => {
+    expect(Object.keys(detail.permissions)).toEqual(expect.arrayContaining(['canShare', 'canTakeOver']))
     for (const permission of Object.keys(detail.permissions))
       expect(documentDetailSchema.safeParse({ ...detail, permissions: { ...detail.permissions, [permission]: undefined } }).success, permission).toBe(false)
   })
