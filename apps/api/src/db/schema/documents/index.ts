@@ -289,7 +289,8 @@ export type EditLeaseTakeover = (typeof EDIT_LEASE_TAKEOVERS)[number]
  *   交出之后请求方取消时只清保留，handed_over 留着；
  * - 接管标记：这一代接管的那一代的令牌摘要（taken_over_token_digest，32 字节）与方式（takeover：self、forced），两列同时为空或同时有值，
  *   旧令牌据此得到 taken_over。
- *   "同时为空或同时有值"与取值的组合由 CHECK 兜底；"到期晚于发出"比较的两个时刻都由数据库写（续期往后推，留着十分钟的余量）。
+ *   "同时为空或同时有值"与取值的组合由 CHECK 兜底。"到期晚于发出"在续期时比较的是两个事务的 now()（发出时写下发出的时刻，
+ *   续期时把到期推到 now() 加有效期）：中间隔着十分钟的有效期，只有数据库的时钟往回调超过十分钟时才可能不成立，按设计写成约束。
  *   这几组列都按主键找，不另建索引；存量都是空的。
  * 有效条件与它们的顺序在 documents 模块的 edit-lease-rules.ts；锁的顺序是文档行（FOR UPDATE，代次在那里）→ 租约行（ADR-014）
  */
