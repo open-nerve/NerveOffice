@@ -440,6 +440,9 @@ function lostCause(loss: LeaseLoss): PhraseParts<ReactNode> | undefined {
       return [editorMessages.editing.lostNewer]
     case 'taken-over':
       return [loss.where === 'this-browser' ? editorMessages.editing.lostTakenOverHere : editorMessages.editing.lostTakenOverElsewhere]
+    // 强制接管（M3-P5 设计 §3.8）：先用通用的说法（编辑权已失效），接管人与"空间管理员强制接管了编辑"在 S8 补上
+    case 'forced':
+      return undefined
   }
 }
 

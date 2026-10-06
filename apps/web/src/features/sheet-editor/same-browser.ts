@@ -4,7 +4,9 @@
 //   设计 §3.1 第 2 条）。tryHold 锁空着才拿（ifAvailable）；steal 抢——原来的持有者的请求以 AbortError 结束，它的句柄的 stolen 随之兑现；
 //   heldHere 看本浏览器里有没有标签页持有它（query：别的浏览器、配置文件、无痕窗口与设备都看不到）。拿到之后锁的回调一直挂着，
 //   直到 release；页面关闭、刷新、导航离开、崩溃时浏览器自己放开（探索 §3.2：1–13 ms）；
-// - 交接频道 nerve-office:doc:<documentId>（BroadcastChannel）：同一个浏览器里本人接管时的请求与回应（协议在 S6，设计 §3.7）。
+//   untilFree 等它空着（排队、轮到即放开，只当信号）：同一个浏览器里的交接以它为"那边做完了"的信号；
+// - 交接频道 nerve-office:doc:<documentId>（BroadcastChannel）：同一个浏览器里本人接管时的请求与回应（设计 §3.7；请求方一侧在 self-takeover.ts，
+//   回应的一侧在 edit-mode.ts）。
 //   消息带版本（v）：两个标签页可能载入了不同版本的页面，版本不同的、解析不出的、请求里的文档不是这一份的一律忽略（对方按没有回应处理）。
 //   只带文档、请求、标签页与用户的标识，不带令牌（设计 §3.13）；回应按 requestId 配对（onReply）。用 addEventListener('message')：
 //   E2E 的"吞消息"注入按它写（设计 §4）。频道在第一次收发时才打开；
@@ -32,7 +34,7 @@ export const HANDOVER_FAILURES = ['not-saved', 'conflict', 'session'] as const
 export type HandoverFailure = (typeof HANDOVER_FAILURES)[number]
 
 /**
- * 交接频道上的消息（设计 §3.7；协议在 S6）。from 是发出的标签页（本页的 clientInstanceId）：
+ * 交接频道上的消息（设计 §3.7）。from 是发出的标签页（本页的 clientInstanceId）：
  * - handover-request：新标签页请正在编辑的标签页先保存再交出（带请求方的用户 id：只理会同一个人的）；
  * - handover-ack：收到了，开始交出（或者正在退出编辑）；handover-busy：正在进入编辑，稍后再请求；
  * - handover-done：存上了、已经释放并放锁；handover-failed：没能交出（原因），留在编辑
@@ -80,6 +82,12 @@ export interface SameBrowser {
   readonly steal: () => Promise<HeldLock>
   /** 本浏览器里有没有标签页持有这把锁（本页持有的也算）。查不出时为 false */
   readonly heldHere: () => Promise<boolean>
+  /**
+   * 等锁直到空着（M3-P5 设计 §3.7：同一个浏览器里的交接以它为信号——正在编辑的标签页存上、释放之后才放锁，关闭、刷新、崩溃时浏览器替它放）：
+   * 排队请求一次，轮到时立即放开（只当信号，不持有：拿锁一律在服务端批准之后，设计 §3.1 第 2 条），交回 true；signal 撤销时（时限到了、
+   * 不再等）从队里撤下，交回 false。浏览器没有锁、请求出错时立即交回 false。从不失败
+   */
+  readonly untilFree: (signal: AbortSignal) => Promise<boolean>
   /** 发给本浏览器里别的标签页（本页自己收不到，BroadcastChannel 的约定）。频道不通时什么也不做 */
   readonly post: (message: HandoverMessage) => void
   /** 收别的标签页发来的、认得出的消息（parseHandoverMessage）；返回退订的函数 */
@@ -88,7 +96,7 @@ export interface SameBrowser {
   readonly close: () => void
 }
 
-/** 锁的请求的选项（Web Locks 的 LockOptions 里用到的部分；signal 给等锁的请求撤销用，S6 的交接以等锁为信号） */
+/** 锁的请求的选项（Web Locks 的 LockOptions 里用到的部分；signal 给等锁的请求撤销用：交接以等锁为信号，untilFree） */
 export interface LockRequestOptions {
   readonly ifAvailable?: boolean
   readonly steal?: boolean
@@ -247,6 +255,19 @@ export function sameBrowserFor(documentId: string, apis: SameBrowserApis): SameB
         return (snapshot.held ?? []).some(lock => lock.name === name)
       }
       catch {
+        return false
+      }
+    },
+    untilFree: async (signal) => {
+      if (locks === undefined || signal.aborted)
+        return false
+      try {
+        // 轮到时回调立即结束：锁随之放开，不占着它
+        await locks.request(name, { signal }, async () => {})
+        return true
+      }
+      catch {
+        // 撤销（AbortError、TimeoutError）或请求出错
         return false
       }
     },
