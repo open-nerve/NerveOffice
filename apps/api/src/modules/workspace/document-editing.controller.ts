@@ -10,7 +10,7 @@ import { DocumentEditingService } from './document-editing.service.ts'
 /**
  * 申请的请求体（M3-P5 S1）：契约里已经有本人接管与强制接管（takeover，M3-P5 设计 §3.7、§3.8），服务端到 S3 才接上；在那之前照旧不认这一项——
  * 按严格结构回 400，与契约加上它之前一样，而不是当成普通的申请悄悄放过（本人接管会变成被占用、强制接管在没人编辑时会变成普通的申请）。
- * 续上时带的 idleSeconds 收下、暂不使用（S2 接上）：最后活动照旧记成申请的时刻，与它出现之前一样
+ * 续上时带的 idleSeconds（M3-P5 设计 §3.5）：新的一代的最后活动按它往前推，没带是 0
  */
 const acquireRequestSchema = acquireEditLeaseRequestSchema.omit({ takeover: true })
 
@@ -43,9 +43,8 @@ export class DocumentEditingController {
     @Param('id', { schema: documentIdSchema }) id: string,
     @Body({ schema: acquireRequestSchema }) body: Omit<AcquireEditLeaseRequest, 'takeover'>,
   ): Promise<AcquiredEditLease> {
-    // idleSeconds 收下、暂不使用（见 acquireRequestSchema）
-    const { clientInstanceId, idleSeconds: _idleSeconds, ...format } = body
-    return this.editing.acquire(editingActorOf(principal), id, { clientInstanceId, format })
+    const { clientInstanceId, idleSeconds, ...format } = body
+    return this.editing.acquire(editingActorOf(principal), id, { clientInstanceId, idleSeconds: idleSeconds ?? 0, format })
   }
 
   /** 心跳续租：200；租约不再有效时 409 EDIT_LEASE_LOST，页面过旧 409 CLIENT_OUTDATED。每 10 秒一次，不顺延登录（编辑中的保存照常顺延） */

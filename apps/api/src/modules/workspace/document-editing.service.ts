@@ -19,8 +19,7 @@ function documentEditorOf(editor: LeaseEditor, accounts: ReadonlyMap<string, Use
  * 这里开事务、经 users 补持有者的人名（documents 不依赖 users，与分享同一个做法）、拼好响应。
  * 写的三个各是一个业务事务，补人名也在同一个事务里，提交之后不再访问数据库；编辑状态在一个只读快照里（ADR-017）。
  * "被占用"在这里转成 EDIT_LEASE_HELD：事务随之回滚，而申请在判断出被占用之前什么也没写。
- * M3-P5 的请求编辑、交出之后的保留与编辑状态里的异常中断提醒还没有接上（S2、S4）：编辑状态的 request、reservation、interruption，
- * 被占用时的 request 与心跳的 request 一律给 null
+ * M3-P5 的请求编辑与交出之后的保留还没有接上（S4）：编辑状态的 request、reservation，被占用时的 request 与心跳的 request 一律给 null
  */
 @Injectable()
 export class DocumentEditingService {
@@ -31,18 +30,20 @@ export class DocumentEditingService {
   ) {}
 
   /**
-   * 编辑状态：能读就能看；正在编辑的人连同人名、最后活动时间、是不是调用者自己与是不是调用者这次登录，没有有效的租约时为 null；
+   * 编辑状态：能读就能看；正在编辑的人连同人名、最后活动时间、是不是调用者自己与是不是调用者这次登录，没人在编辑时为 null；
    * 调用者现在能不能编辑、能不能强制接管（M3-P2 设计 §3.2，阅读页每 30 秒读一次，据此显示或隐藏"编辑"；M3-P5 设计 §3.8）；
-   * 文档的"公式待更新"（M3-P3 设计 §3.8）
+   * 文档的"公式待更新"（M3-P3 设计 §3.8）；没人在编辑时上一个租约异常结束的提醒，补上上一位持有者的人名（M3-P5 设计 §3.5，
+   * 没有时为 null）。正在编辑的人与提醒至多有一个，人名至多查一次
    */
   async status(actor: EditingActor, documentId: string): Promise<EditStatus> {
     return this.transactions.readSnapshot(async (transaction) => {
-      const { revision, editor, canEdit, canTakeOver, formulasPending } = await this.leases.status(actor, documentId, transaction)
-      const common = { revision, canEdit, canTakeOver, formulasPending, request: null, reservation: null, interruption: null }
-      if (editor === undefined)
-        return { ...common, editor: null }
-      const accounts = await this.users.findByIds([editor.holderId], transaction)
-      return { ...common, editor: documentEditorOf(editor, accounts) }
+      const { revision, editor, canEdit, canTakeOver, formulasPending, interruption } = await this.leases.status(actor, documentId, transaction)
+      const common = { revision, canEdit, canTakeOver, formulasPending, request: null, reservation: null }
+      if (editor !== undefined) {
+        const accounts = await this.users.findByIds([editor.holderId], transaction)
+        return { ...common, editor: documentEditorOf(editor, accounts), interruption: null }
+      }
+      return { ...common, editor: null, interruption: interruption === undefined ? null : await this.withHolder(interruption, transaction) }
     })
   }
 

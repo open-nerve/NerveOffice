@@ -161,6 +161,18 @@ export async function passLeaseTime(database: TestDatabase, documentId: string, 
   ))
 }
 
+/**
+ * 最后一次操作之后又过了 seconds 秒、心跳照常（M3-P5）：最后活动与申请的时间往前挪，续租的时间、到期不动——
+ * 与 idleLeaseFor（直接定成"seconds 秒之前"）不同，它保留这一行原来的空闲（例如续上时带来的），在它之上再加
+ */
+export async function passIdleTime(database: TestDatabase, documentId: string, seconds: number): Promise<void> {
+  await database.query(async client => client.query(
+    `UPDATE document_edit_leases SET last_active_at = last_active_at - make_interval(secs => $2), acquired_at = acquired_at - make_interval(secs => $2)
+     WHERE document_id = $1`,
+    [documentId, seconds],
+  ))
+}
+
 /** 最后一次操作在 seconds 秒之前（心跳还在：续租的时间、到期不动；申请的时间不晚于它） */
 export async function idleLeaseFor(database: TestDatabase, documentId: string, seconds: number): Promise<void> {
   await database.query(async client => client.query(

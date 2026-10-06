@@ -140,7 +140,7 @@ export type AcquiredEditLease = z.infer<typeof acquiredEditLeaseSchema>
 
 /**
  * 心跳续租（PUT /api/documents/{id}/edit-lease，要能编辑，带令牌）：idleSeconds 是距离本页最后一次键盘、鼠标操作的秒数，
- * 服务端据此算出最后活动时间（不早于申请的时间、不晚于数据库的 now()），空闲满 12 分钟就回收。
+ * 服务端据此算出最后活动时间（只前进不后退、不晚于数据库的 now()：续上时带来的空闲不被抹掉，M3-P5 设计 §3.5），空闲满 12 分钟就回收。
  * 客户端的构建与数据格式与申请相同、可选（M3-P3 设计 §3.5）：服务端升级之后，正在编辑的页面在一次心跳之内就知道需要刷新
  */
 export const renewEditLeaseRequestSchema = z.strictObject({

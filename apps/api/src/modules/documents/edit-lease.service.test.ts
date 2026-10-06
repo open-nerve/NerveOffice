@@ -39,9 +39,9 @@ function setup() {
 
 type Setup = ReturnType<typeof setup>
 
-/** 申请的请求：这个标签页，页面上报的是现在的构建与数据格式（M3-P3） */
-function leaseRequest(clientInstanceId: string, format: ClientFormat = CURRENT_CLIENT) {
-  return { clientInstanceId, format }
+/** 申请的请求：这个标签页，页面上报的是现在的构建与数据格式（M3-P3）；不是续上的申请不带空闲（0，M3-P5） */
+function leaseRequest(clientInstanceId: string, format: ClientFormat = CURRENT_CLIENT, idleSeconds = 0) {
+  return { clientInstanceId, idleSeconds, format }
 }
 
 /** 心跳的请求：多久没有操作，页面上报的是现在的构建与数据格式 */
@@ -52,6 +52,14 @@ function renewal(idleSeconds: number, format: ClientFormat = CURRENT_CLIENT) {
 /** 让"数据库时间"往后走 */
 function later(store: FakeStore, milliseconds: number): void {
   store.databaseNow = new Date(store.databaseNow.getTime() + milliseconds)
+}
+
+/** 这份文档的租约最后一次操作在 seconds 秒之前（心跳还在：续租与到期不动） */
+function idleFor(store: FakeStore, documentId: string, seconds: number): void {
+  const row = store.leaseRecords.get(documentId)
+  if (row === undefined)
+    throw new Error(`${documentId} 没有租约`)
+  store.leaseRecords.set(documentId, { ...row, lastActiveAt: new Date(store.databaseNow.getTime() - seconds * SECOND) })
 }
 
 /** 取得一代，返回令牌 */
@@ -195,18 +203,17 @@ describe('EditLeaseService.acquire', () => {
     expect(store.leaseRecords.get(document.id)?.tokenDigest.equals(editLeaseTokenDigest(retried.token))).toBe(true)
   })
 
-  it('当前的租约无效（到期、空闲、登录失效、没了编辑权、已释放、代次过时）：都照样发新的一代', async () => {
+  it('当前的租约无效（到期、空闲、登录失效、没了编辑权、已释放、代次过时而按时间已死）：都照样发新的一代', async () => {
     const cases: readonly (readonly [string, (s: Setup) => void | Promise<void>])[] = [
       ['到期', ({ store }) => later(store, EDIT_LEASE_TTL_SECONDS * SECOND)],
-      ['空闲', ({ store, document }) => {
-        const row = store.leaseRecords.get(document.id)
-        if (row !== undefined)
-          store.leaseRecords.set(document.id, { ...row, lastActiveAt: new Date(store.databaseNow.getTime() - EDIT_LEASE_IDLE_RECLAIM_SECONDS * SECOND) })
-      }],
+      ['空闲', ({ store, document }) => idleFor(store, document.id, EDIT_LEASE_IDLE_RECLAIM_SECONDS)],
       ['登录失效', ({ store }) => void store.activeSessions.delete(ALICE_SESSION)],
       ['没了编辑权', ({ store }) => store.setMember(TEAM_SPACE, ALICE, 'viewer')],
       ['已释放', async ({ store, document }) => void await store.leases.end(document.id, 'released')],
-      ['代次过时', ({ store, document }) => void store.repositories.documents.advanceWriteEpoch(document.id)],
+      ['代次过时、而且到期了', async ({ store, document }) => {
+        await store.repositories.documents.advanceWriteEpoch(document.id)
+        later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
+      }],
     ]
     for (const [name, invalidate] of cases) {
       const setupResult = setup()
@@ -217,6 +224,55 @@ describe('EditLeaseService.acquire', () => {
       expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION), name).toMatchObject({ kind: 'acquired', writeEpoch: epoch + 1 })
       expect(store.leaseRecords.get(document.id), name).toMatchObject({ holderId: BOB, sessionId: BOB_SESSION, clientInstanceId: OTHER_TAB, endedAt: null, endReason: null })
     }
+  })
+
+  it('M3-P5 R2（设计 §3.5）：代次过时（跨空间移动、转移之后）、而按时间、登录、编辑权都还活着——别人申请是被占用，什么也不写；持有者本人照样取得新的一代（续上），没有提醒', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    await store.repositories.documents.advanceWriteEpoch(document.id)
+    const before = store.leaseRecords.get(document.id)
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toEqual({ kind: 'held', holderId: ALICE, lastActiveAt: before?.lastActiveAt, sameUser: false, sameSession: false, canTakeOver: false })
+    expect(store.leaseRecords.get(document.id)).toEqual(before)
+    expect(store.documents.get(document.id)?.writeEpoch).toBe(2)
+    // 持有者本人（同一个页面续上，或者他在别的标签页、设备上）：普通的申请
+    expect(await service.acquire({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', writeEpoch: 3, interruption: undefined })
+    expect(store.leaseRecords.get(document.id)).toMatchObject({ holderId: ALICE, sessionId: ALICE_OTHER_SESSION, writeEpoch: 3 })
+  })
+
+  it('M3-P5 R2 要"都还活着"：代次过时、持有者的登录已失效（有提醒）或已没了编辑权（没有提醒）——别人照样取得新的一代', async () => {
+    for (const [name, invalidate, notice] of [
+      ['登录失效', (store: FakeStore) => void store.activeSessions.delete(ALICE_SESSION), true],
+      ['没了编辑权', (store: FakeStore) => store.setMember(TEAM_SPACE, ALICE, 'viewer'), false],
+    ] as const) {
+      const setupResult = setup()
+      const { store, service, document } = setupResult
+      await acquired(setupResult)
+      const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
+      await store.repositories.documents.advanceWriteEpoch(document.id)
+      invalidate(store)
+      expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION), name).toMatchObject({ kind: 'acquired', interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false } : undefined })
+    }
+  })
+
+  it('M3-P5 续上的页面带来的空闲（idleSeconds）交给仓储：新的一代的最后活动是 now 减去它（设计 §3.5，复验 P1-C5）', async () => {
+    const { store, service, document } = setup()
+    await service.acquire(AMY, document.id, leaseRequest(TAB, CURRENT_CLIENT, 300), TRANSACTION)
+    expect(store.leases.replace).toHaveBeenCalledWith(expect.objectContaining({ documentId: document.id, idleSeconds: 300 }), TRANSACTION)
+    expect(store.leaseRecords.get(document.id)).toMatchObject({ acquiredAt: store.databaseNow, lastActiveAt: new Date(store.databaseNow.getTime() - 300 * SECOND) })
+  })
+
+  it('M3-P5 持有者的登录与编辑权在一次申请里至多各查一次（有效条件、R2、异常结束共用）', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    await store.repositories.documents.advanceWriteEpoch(document.id)
+    store.sessions.isActive.mockClear()
+    store.spaces.accessFactsOf.mockClear()
+    await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)
+    // 申请的人自己的登录（锁下核对）一次、持有者的登录一次
+    expect(store.sessions.isActive.mock.calls.map(([sessionId]) => sessionId)).toEqual([BOB_SESSION, ALICE_SESSION])
+    expect(store.spaces.accessFactsOf.mock.calls.map(([userId]) => userId)).toEqual([BOB, BOB, ALICE])
   })
 
   it('上一个租约异常结束（到期、空闲、登录失效）、在 30 分钟以内：给出提醒——上一位持有者与他最近一次续租的时间', async () => {
@@ -235,6 +291,16 @@ describe('EditLeaseService.acquire', () => {
     const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
     later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
     expect(await service.acquire({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: true } }))
+  })
+
+  it('M3-P5 先到期、后代次过时（跨空间移动、转移）：按事实仍是异常结束，照样提醒（设计 §3.5，P1 审查 A6 第 1 处）', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
+    later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
+    await store.repositories.documents.advanceWriteEpoch(document.id)
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false } })
   })
 
   it('不给提醒：明确释放的、没了编辑权的、超过 30 分钟的', async () => {
@@ -468,19 +534,52 @@ describe('EditLeaseService.status', () => {
     expect(store.leases.lockByDocument).toHaveBeenCalledTimes(1)
   })
 
-  it('没有租约、租约无效（到期、登录失效、没了编辑权）：editor 为空', async () => {
+  it('没有租约、租约无效（到期、登录失效、没了编辑权）：editor 为空；异常结束的（到期、登录失效）带上提醒（M3-P5），没了编辑权的不带', async () => {
     const { service, document } = setup()
-    expect(await service.status(BEN, document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false })
-    for (const invalidate of [
-      ({ store }: Setup) => later(store, EDIT_LEASE_TTL_SECONDS * SECOND),
-      ({ store }: Setup) => void store.activeSessions.delete(ALICE_SESSION),
-      ({ store }: Setup) => store.setMember(TEAM_SPACE, ALICE, 'viewer'),
-    ]) {
+    expect(await service.status(BEN, document.id, TRANSACTION)).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, interruption: undefined })
+    for (const [name, invalidate, notice] of [
+      ['到期', ({ store }: Setup) => later(store, EDIT_LEASE_TTL_SECONDS * SECOND), true],
+      ['登录失效', ({ store }: Setup) => void store.activeSessions.delete(ALICE_SESSION), true],
+      ['没了编辑权', ({ store }: Setup) => store.setMember(TEAM_SPACE, ALICE, 'viewer'), false],
+    ] as const) {
       const setupResult = setup()
       await acquired(setupResult)
+      const renewedAt = setupResult.store.leaseRecords.get(setupResult.document.id)?.renewedAt
       invalidate(setupResult)
-      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION)).toEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false })
+      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION), name).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false } : undefined })
     }
+  })
+
+  it('US-M3-10 编辑状态里的提醒与申请同一个算法（M3-P5 设计 §3.5）：有人在编辑时没有；没人在编辑、异常结束在 30 分钟以内时有，带上是不是调用者自己；超过 30 分钟、明确释放的没有', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
+    expect((await service.status(BEN, document.id, TRANSACTION)).interruption).toBeUndefined()
+    later(store, 30 * 60 * SECOND)
+    expect((await service.status(BEN, document.id, TRANSACTION)).interruption).toEqual({ holderId: ALICE, endedAt: renewedAt, sameUser: false })
+    expect((await service.status(AMY, document.id, TRANSACTION)).interruption).toEqual({ holderId: ALICE, endedAt: renewedAt, sameUser: true })
+    later(store, 1)
+    expect((await service.status(BEN, document.id, TRANSACTION)).interruption).toBeUndefined()
+
+    const released = setup()
+    const releasedToken = await acquired(released)
+    await released.service.release(AMY, released.document.id, releasedToken, TRANSACTION)
+    later(released.store, EDIT_LEASE_TTL_SECONDS * SECOND)
+    expect((await released.service.status(BEN, released.document.id, TRANSACTION)).interruption).toBeUndefined()
+  })
+
+  it('M3-P5 R2：代次过时、而按时间、登录、编辑权都还活着——别人看到有人在编辑（与申请得到的被占用一致），持有者本人看是空着的；都没有提醒', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    const lastActiveAt = store.leaseRecords.get(document.id)?.lastActiveAt
+    await store.repositories.documents.advanceWriteEpoch(document.id)
+    expect(await service.status(BEN, document.id, TRANSACTION)).toMatchObject({ editor: { holderId: ALICE, lastActiveAt, sameUser: false, sameSession: false }, interruption: undefined })
+    expect(await service.status(AMY, document.id, TRANSACTION)).toMatchObject({ editor: undefined, interruption: undefined })
+    // 到期之后谁看都是空着的，提醒照样给（代次过时不遮住异常结束）
+    later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
+    expect(await service.status(BEN, document.id, TRANSACTION)).toMatchObject({ editor: undefined, interruption: { holderId: ALICE, sameUser: false } })
   })
 
   it('US-M3-05 调用者能不能编辑（M3-P2 设计 §3.2）：与详情的 permissions.canEdit 同一个规则——编辑者能，查看者、归档空间里的空间管理员、只有查看授权的人不能，只有编辑授权的人能；不多查询', async () => {
