@@ -1,7 +1,7 @@
 // 迁移（P2 设计 §3.7，ADR-005）：从零执行、重复执行、并发执行、等锁超时、库里不一致时拒绝；个别迁移在旧库上的效果。
 // 迁移建出的库与表定义逐项一致见 schema-parity.test.ts，从各阶段有数据的库一路迁移到最新见 migrations-with-data.test.ts
-import type { Buffer } from 'node:buffer'
 import type { TestDatabase } from '../support/database.ts'
+import { Buffer } from 'node:buffer'
 import { MigrationError, readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
@@ -512,5 +512,129 @@ describe('0019_m2_p6_write_epoch_monotonic（M2-P6 复核 B 的 G5）', () => {
     expect(await violation('UPDATE documents SET write_epoch = write_epoch WHERE id = $1', [moved])).toBeUndefined()
     expect(await violation('UPDATE documents SET write_epoch = write_epoch + 1')).toBeUndefined()
     expect(await epochs()).toEqual({ [moved]: 4, [fresh]: 1 })
+  })
+})
+
+describe('0025_m3_p5_handover（M3-P5 设计 §3.2）', () => {
+  /** 0025 加的列：请求编辑、交出之后的保留、接管标记 */
+  const NEW_COLUMNS = ['request_id', 'requested_by', 'request_session_id', 'requested_at', 'request_expires_at', 'request_declined_at', 'reserved_for', 'reserved_until', 'taken_over_token_digest', 'takeover']
+
+  it('0024 的库上已有编辑租约（有效的、已释放的、已收回的）与审计：执行之后原样保留、新列都是空的', async () => {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0024_m3_p3_save_protocol') })
+    const { userId, spaceId } = await seedOwner(database)
+    const leases = 'SELECT * FROM document_edit_leases ORDER BY end_reason NULLS FIRST'
+    const before = await database.query(async (client) => {
+      for (const [title, digest, ended] of [['有效的', 'live', null], ['释放过的', 'released', 'released'], ['收回过的', 'revoked', 'revoked']] as const) {
+        const documentId = (await client.query<{ id: string }>(
+          'INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version, write_epoch) VALUES ($1, \'sheet\', $3, $2, \'unit\', \'sheet@1\', 1, \'1.0.1\', 1) RETURNING id',
+          [spaceId, userId, title],
+        )).rows[0]?.id
+        await client.query(
+          `INSERT INTO document_edit_leases (document_id, holder_id, session_id, client_instance_id, token_digest, write_epoch, acquired_at, renewed_at, expires_at, last_active_at, ended_at, end_reason)
+           VALUES ($1, $2, gen_random_uuid(), gen_random_uuid(), sha256($3::bytea), 1, now() - interval '1 minute', now(), now() + interval '90 seconds', now(),
+                   CASE WHEN $4::text IS NULL THEN NULL ELSE now() END, $4::text)`,
+          [documentId, userId, Buffer.from(digest), ended],
+        )
+      }
+      await client.query('INSERT INTO audit_events (action, actor_type, actor_id, source, target_type, target_id, details) VALUES (\'documents.conflict_copied\', \'user\', $1, \'cli\', \'document\', $1, $2)', [userId, { note: 'old' }])
+      return (await client.query<Record<string, unknown>>(leases)).rows
+    })
+    expect(before.map(row => row.end_reason)).toEqual([null, 'released', 'revoked'])
+
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const after = await database.query(async client => ({
+      leases: (await client.query<Record<string, unknown>>(leases)).rows,
+      audits: (await client.query<{ action: string }>('SELECT action FROM audit_events')).rows,
+    }))
+    expect(after.leases).toEqual(before.map(row => ({ ...row, ...Object.fromEntries(NEW_COLUMNS.map(column => [column, null])) })))
+    expect(after.audits).toEqual([{ action: 'documents.conflict_copied' }])
+  })
+
+  it('新列的约束：请求五列同时为空或同时有值、谢绝只在有请求时、请求到期晚于发出、请求方不是持有者；保留两列同空同有、只在交出之后；接管标记两列同空同有、摘要 32 字节、方式只有 self 与 forced；结束原因加上 handed_over；强制接管的审计动作能写', async () => {
+    const database = await emptyDatabase()
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const { userId: holder, spaceId } = await seedOwner(database)
+    const { requester, documentId } = await database.query(async (client) => {
+      const requester = (await client.query<{ id: string }>('INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'ben\', \'ben\', \'$argon2id$x\', \'member\') RETURNING id')).rows[0]?.id ?? ''
+      const documentId = (await client.query<{ id: string }>(
+        'INSERT INTO documents (space_id, type, title, created_by, unit_id, profile, format_version, sdk_version, write_epoch) VALUES ($1, \'sheet\', \'文档\', $2, \'unit\', \'sheet@1\', 1, \'1.0.1\', 1) RETURNING id',
+        [spaceId, holder],
+      )).rows[0]?.id ?? ''
+      await client.query(
+        `INSERT INTO document_edit_leases (document_id, holder_id, session_id, client_instance_id, token_digest, write_epoch, acquired_at, renewed_at, expires_at, last_active_at)
+         VALUES ($1, $2, gen_random_uuid(), gen_random_uuid(), sha256('live'::bytea), 1, now(), now(), now() + interval '90 seconds', now())`,
+        [documentId, holder],
+      )
+      return { requester, documentId }
+    })
+    /** 在一个事务里改这一行，看结果（违反约束时是那个错误）；改完一律回滚，每一次都从同一行有效的租约开始 */
+    const attempt = async (assignments: string, values: readonly unknown[] = []): Promise<unknown> => database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        await client.query(`UPDATE document_edit_leases SET ${assignments} WHERE document_id = $1`, [documentId, ...values])
+        return undefined
+      }
+      catch (error) {
+        return error
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    const check = (constraint: string) => ({ code: '23514', constraint })
+
+    // 请求编辑：五列一起写；少写任何一列都不行
+    const request = { request_id: 'gen_random_uuid()', requested_by: '$2::uuid', request_session_id: 'gen_random_uuid()', requested_at: 'now()', request_expires_at: 'now() + interval \'10 minutes\'' }
+    const assign = (columns: Readonly<Record<string, string>>): string => Object.entries(columns).map(([column, value]) => `${column} = ${value}`).join(', ')
+    expect(await attempt(assign(request), [requester])).toBeUndefined()
+    for (const omitted of Object.keys(request)) {
+      const partial = Object.fromEntries(Object.entries(request).filter(([column]) => column !== omitted))
+      const values = omitted === 'requested_by' ? [] : [requester]
+      expect(await attempt(assign(partial), values), omitted).toMatchObject(check('document_edit_leases_request_check'))
+    }
+    // 谢绝只在有请求时有值；有请求时可以有
+    expect(await attempt('request_declined_at = now()')).toMatchObject(check('document_edit_leases_request_declined_check'))
+    expect(await attempt(`${assign(request)}, request_declined_at = now()`, [requester])).toBeUndefined()
+    // 请求的有效期要晚于发出：相同、更早都不行
+    for (const expiry of ['now()', 'now() - interval \'1 second\''])
+      expect(await attempt(assign({ ...request, request_expires_at: expiry }), [requester]), expiry).toMatchObject(check('document_edit_leases_request_expiry_check'))
+    // 请求方不是持有者自己
+    expect(await attempt(assign(request), [holder])).toMatchObject(check('document_edit_leases_requester_check'))
+    // 请求方是账户（外键 restrict）
+    expect(await attempt(assign(request), ['0199a2c4-0000-7000-8000-0000000000ff'])).toMatchObject({ code: '23503', constraint: 'document_edit_leases_requested_by_users_id_fk' })
+
+    // 交出之后的保留：两列一起写，只在结束原因是 handed_over 时有；交出之后请求方取消，只清保留、handed_over 留着
+    const handedOver = 'ended_at = now(), end_reason = \'handed_over\''
+    const reserved = 'reserved_for = $2::uuid, reserved_until = now() + interval \'2 minutes\''
+    expect(await attempt(`${handedOver}, ${reserved}`, [requester])).toBeUndefined()
+    expect(await attempt(handedOver)).toBeUndefined()
+    expect(await attempt(`${handedOver}, reserved_for = $2::uuid`, [requester])).toMatchObject(check('document_edit_leases_reservation_check'))
+    expect(await attempt(`${handedOver}, reserved_until = now() + interval '2 minutes'`)).toMatchObject(check('document_edit_leases_reservation_check'))
+    expect(await attempt(reserved, [requester])).toMatchObject(check('document_edit_leases_reservation_end_check'))
+    for (const reason of ['released', 'revoked'])
+      expect(await attempt(`ended_at = now(), end_reason = '${reason}', ${reserved}`, [requester]), reason).toMatchObject(check('document_edit_leases_reservation_end_check'))
+    expect(await attempt(`${handedOver}, reserved_for = $2::uuid, reserved_until = now()`, ['0199a2c4-0000-7000-8000-0000000000ff'])).toMatchObject({ code: '23503', constraint: 'document_edit_leases_reserved_for_users_id_fk' })
+    // 结束原因：handed_over 是新加的；失效原因里别的（到期、被接管）不是明确结束，不能写
+    for (const reason of ['expired', 'taken_over', 'stale'])
+      expect(await attempt(`ended_at = now(), end_reason = '${reason}'`), reason).toMatchObject(check('document_edit_leases_end_reason_check'))
+
+    // 接管标记：摘要与方式一起写；摘要 32 字节；方式是库里的写法 self、forced（不是申请时的 force）
+    for (const takeover of ['self', 'forced'])
+      expect(await attempt(`taken_over_token_digest = sha256('old'::bytea), takeover = '${takeover}'`), takeover).toBeUndefined()
+    expect(await attempt('taken_over_token_digest = sha256(\'old\'::bytea)')).toMatchObject(check('document_edit_leases_taken_over_check'))
+    expect(await attempt('takeover = \'self\'')).toMatchObject(check('document_edit_leases_taken_over_check'))
+    expect(await attempt('taken_over_token_digest = substring(sha256(\'old\'::bytea) from 2), takeover = \'self\'')).toMatchObject(check('document_edit_leases_taken_over_token_digest_check'))
+    for (const takeover of ['force', 'SELF', 'handed_over'])
+      expect(await attempt(`taken_over_token_digest = sha256('old'::bytea), takeover = '${takeover}'`), takeover).toMatchObject(check('document_edit_leases_takeover_check'))
+
+    // 三组列可以同时有值：交出了的一代，带着被谢绝过的请求与它接管上一代的标记
+    expect(await attempt(`${assign(request)}, request_declined_at = now(), ${handedOver}, reserved_for = $2::uuid, reserved_until = now() + interval '2 minutes', taken_over_token_digest = sha256('old'::bytea), takeover = 'forced'`, [requester])).toBeUndefined()
+
+    // 审计：强制接管的动作能写，不认识的动作照样被拒
+    const audit = 'INSERT INTO audit_events (action, actor_type, actor_id, source, target_type, target_id, details) VALUES ($1, \'user\', $2, \'cli\', \'document\', $3, $4)'
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    expect(await violation(audit, ['documents.edit_taken_over', holder, documentId, { holderId: requester }])).toBeUndefined()
+    expect(await violation(audit, ['documents.edit_handed_over', holder, documentId, {}])).toMatchObject(check('audit_events_action_check'))
   })
 })

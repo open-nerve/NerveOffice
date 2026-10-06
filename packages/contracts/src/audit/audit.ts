@@ -66,6 +66,8 @@ export const AUDIT_ACTIONS = [
   'documents.share_revoked',
   // M3-P2：另存为副本（失去编辑权时把本页的内容存成一份新文档）。对象是副本，details 带原文档与副本所在的空间，不记标题
   'documents.conflict_copied',
+  // M3-P5：空间管理员（个人空间的所有者）强制接管别人的编辑。对象是文档，details 带被接管的人，不记标题；本人接管、交出不记
+  'documents.edit_taken_over',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

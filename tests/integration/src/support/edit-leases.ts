@@ -150,12 +150,13 @@ export async function saveContent(baseUrl: string, user: LoggedIn, documentId: s
 
 /**
  * 时间过去了 seconds 秒：这份文档的租约行上的时间一起往前挪（表上的约束照样成立），不等真实的时间。
- * 到期、空闲与提醒都按数据库的 now() 与租约行上的时间判断（P1 设计 §3.4.1），挪租约行就是让时间过去
+ * 到期、空闲与提醒都按数据库的 now() 与租约行上的时间判断（P1 设计 §3.4.1），挪租约行就是让时间过去。
+ * 明确结束的时刻与 M3-P5 的请求编辑（发出、有效期、谢绝）、交出之后的保留也按同样的规则判断，一起挪；空的列挪了还是空的
  */
 export async function passLeaseTime(database: TestDatabase, documentId: string, seconds: number): Promise<void> {
+  const columns = ['acquired_at', 'renewed_at', 'expires_at', 'last_active_at', 'ended_at', 'requested_at', 'request_expires_at', 'request_declined_at', 'reserved_until']
   await database.query(async client => client.query(
-    `UPDATE document_edit_leases SET acquired_at = acquired_at - make_interval(secs => $2), renewed_at = renewed_at - make_interval(secs => $2),
-       expires_at = expires_at - make_interval(secs => $2), last_active_at = last_active_at - make_interval(secs => $2) WHERE document_id = $1`,
+    `UPDATE document_edit_leases SET ${columns.map(column => `${column} = ${column} - make_interval(secs => $2)`).join(', ')} WHERE document_id = $1`,
     [documentId, seconds],
   ))
 }

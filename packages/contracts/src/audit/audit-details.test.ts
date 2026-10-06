@@ -104,6 +104,16 @@ describe('审计明细的结构', () => {
     expect(accepts('documents.conflict_copied', { sourceId: ID, spaceId: OTHER, folderId: null })).toBe(false)
   })
 
+  it('US-M3-09 强制接管（M3-P5 设计 §3.8）：只有被接管的人；不收标题、令牌、接管方式与别的字段', () => {
+    expect(accepts('documents.edit_taken_over', { holderId: ID })).toBe(true)
+    expect(accepts('documents.edit_taken_over', {})).toBe(false)
+    expect(accepts('documents.edit_taken_over', { holderId: 'amy' })).toBe(false)
+    expect(accepts('documents.edit_taken_over', { holderId: ID, title: '周报' })).toBe(false)
+    expect(accepts('documents.edit_taken_over', { holderId: ID, token: 'x'.repeat(43) })).toBe(false)
+    expect(accepts('documents.edit_taken_over', { holderId: ID, takeover: 'forced' })).toBe(false)
+    expect(accepts('documents.edit_taken_over', { holderId: ID, spaceId: OTHER })).toBe(false)
+  })
+
   it('类型不对拒绝：id 不是 UUID、份数是负数或小数、原因不在列表里', () => {
     expect(accepts('documents.deleted', { spaceId: 'x', folderId: null, trashEntryId: OTHER })).toBe(false)
     expect(accepts('folders.deleted', { spaceId: ID, parentId: null, trashEntryId: OTHER, folders: -1, documents: 0 })).toBe(false)

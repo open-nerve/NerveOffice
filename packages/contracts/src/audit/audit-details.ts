@@ -135,6 +135,8 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   entry('documents.share_revoked', z.strictObject({ userId: id, role: grantRole })),
   // M3-P2：另存为副本，对象是副本（M3-P2 设计 §3.2）。原文档与副本所在的空间（原文档所在的空间，或者本人的个人空间），不记标题
   entry('documents.conflict_copied', z.strictObject({ sourceId: id, spaceId: id })),
+  // M3-P5：强制接管，对象是文档、操作者是接管的人（M3-P5 设计 §3.8）。被接管的人（那一代的持有者），不记标题与令牌
+  entry('documents.edit_taken_over', z.strictObject({ holderId: id })),
 ])
 
 /** 一个动作与它的明细（解析之后） */

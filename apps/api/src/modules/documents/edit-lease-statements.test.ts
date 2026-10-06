@@ -64,7 +64,10 @@ describe('改写为新的一代', () => {
 
   it('没有就插入、有就整行改写：持有者、登录、标签页、令牌摘要与代次换成新的；申请、续租与最后活动是 now()，到期是 now() 加有效期；明确结束的两列清空', async () => {
     const statement = await onlyStatementOf(async (leases, transaction) => leases.replace(lease, transaction))
-    const columns = /^insert into "document_edit_leases" \("document_id", "holder_id", "session_id", "client_instance_id", "token_digest", "write_epoch", "acquired_at", "renewed_at", "expires_at", "last_active_at", "ended_at", "end_reason"\) values \(\$(\d+), \$(\d+), \$(\d+), \$(\d+), \$(\d+), \$(\d+), now\(\), now\(\), now\(\) \+ make_interval\(secs => \$(\d+)\), now\(\), \$(\d+), \$(\d+)\) on conflict \("document_id"\) do update set /.exec(statement.text)
+    // M3-P5 的请求编辑、交出之后的保留与接管标记（迁移 0025）：插入时取默认（空），改写时这里不动它们——S1 里没有写它们的路，
+    // 沿用与清空在 S2 接上（M3-P5 设计 §3.6、§3.7）
+    const handover = ['request_id', 'requested_by', 'request_session_id', 'requested_at', 'request_expires_at', 'request_declined_at', 'reserved_for', 'reserved_until', 'taken_over_token_digest', 'takeover']
+    const columns = new RegExp(`^insert into "document_edit_leases" \\("document_id", "holder_id", "session_id", "client_instance_id", "token_digest", "write_epoch", "acquired_at", "renewed_at", "expires_at", "last_active_at", "ended_at", "end_reason", ${handover.map(column => `"${column}"`).join(', ')}\\) values \\(\\$(\\d+), \\$(\\d+), \\$(\\d+), \\$(\\d+), \\$(\\d+), \\$(\\d+), now\\(\\), now\\(\\), now\\(\\) \\+ make_interval\\(secs => \\$(\\d+)\\), now\\(\\), \\$(\\d+), \\$(\\d+), ${handover.map(() => 'default').join(', ')}\\) on conflict \\("document_id"\\) do update set `).exec(statement.text)
     expect(columns).not.toBeNull()
     expect(columns?.slice(1).map(placeholder => parameter(statement, placeholder))).toEqual([DOCUMENT, AMY, SESSION, TAB, DIGEST, 5, EDIT_LEASE_TTL_SECONDS, null, null])
     const set = /do update set "holder_id" = \$(\d+), "session_id" = \$(\d+), "client_instance_id" = \$(\d+), "token_digest" = \$(\d+), "write_epoch" = \$(\d+), "acquired_at" = now\(\), "renewed_at" = now\(\), "expires_at" = now\(\) \+ make_interval\(secs => \$(\d+)\), "last_active_at" = now\(\), "ended_at" = \$(\d+), "end_reason" = \$(\d+) returning .*now\(\)$/.exec(statement.text)
