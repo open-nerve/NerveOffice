@@ -275,6 +275,23 @@ export async function expireEditLease(documentId: string): Promise<void> {
   })
 }
 
+/**
+ * 让这份文档的编辑租约空闲满服务端的回收阈值（M3-P5：服务端 12 分钟兜底，US-M3-07）：最后活动挪到 13 分钟之前，申请的时间也挪到它之前；
+ * 续租与到期不动（还没到期）——下一次心跳或保存按空闲（idle）失效。页面的时钟拨不动数据库的 now()，心跳上报的空闲也不早于申请的时间，
+ * 所以改库。表上的 CHECK 照样成立（最后活动不晚于续租）。前提同 expireEditLease
+ */
+export async function idleEditLease(documentId: string): Promise<void> {
+  await withDatabase(async (client) => {
+    const result = await client.query(
+      `UPDATE document_edit_leases SET last_active_at = now() - interval '13 minutes', acquired_at = least(acquired_at, now() - interval '13 minutes')
+       WHERE document_id = $1 AND ended_at IS NULL`,
+      [documentId],
+    )
+    if (result.rowCount !== 1)
+      throw new Error(`文档 ${documentId} 没有正在进行的编辑租约`)
+  })
+}
+
 /** 这份文档的编辑租约明确结束的原因（released、revoked）；还没有结束时为 null，从没有过租约时为 undefined */
 export async function editLeaseEndReason(documentId: string): Promise<string | null | undefined> {
   return withDatabase(async client => (await client.query<{ end_reason: string | null }>('SELECT end_reason FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.end_reason)

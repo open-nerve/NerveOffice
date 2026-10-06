@@ -5,6 +5,8 @@
 // 不拦保存的话生产构建里停 2 秒就存上了（测试构建的夹具暂停了定时的上传，生产镜像里没有），在修改之前断开，两种构建里修改都没存上。
 // 恢复之后先发出的可能是自动保存的重试，按保存用快捷键（编辑权随之失效、没有保存按钮时它什么也不做）。
 // M3-P2 起打开即阅读、点"编辑"才申请编辑权；失去编辑权之后本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"。
+// M3-P5（设计 §3.1）：同一个浏览器里正在编辑的标签页持有本机锁，后一个取得编辑权时抢走它，前一个随即失去编辑权（说明是本人在本浏览器的
+// 另一个标签页接手了编辑），不再等它恢复之后由保存、心跳得知；前一个之后的保存照样不发（本页已经只读）。
 // 两个人（US-M3-11）：甲断网、编辑权到期，乙接手并保存；甲回来之后的保存一定被拒，甲的内容另存为副本（服务端按快照新建，
 // 放在哪里按甲在原文档所在空间的新建权限，标题带上失效时的时间）。期间没人保存过时自动续上的情形在 lease-recovery.spec.ts
 import { createDocumentIn, createFolderIn, createTeamSpace, createUser, expireEditLease, withDatabase } from '../../support/database.ts'
@@ -58,13 +60,13 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await typeInCell(other, 'A1', 'from B')
     await saveAndWait(other)
 
-    // A 回来再保存：被拒（编辑权已经在 B 手里；A 的心跳也可能先一步得知），自动续上时被 B 占着：
-    // 页头说明编辑权已失效、是自己在另一个标签页上编辑、本页的修改没有保存，可以另存为副本或者放弃；本页换成只读，没有保存按钮
+    // A 回来再保存：B 取得编辑权的那一刻 A 就失去了编辑权（本机锁被抢，M3-P5），这次保存不发：
+    // 页头说明编辑权已失效、是本人在本浏览器的另一个标签页接手了编辑、本页的修改没有保存，可以另存为副本或者放弃；本页换成只读，没有保存按钮
     await asleep.reconnect()
     await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await expect(lost.getByRole('button', { name: '另存为副本', exact: true })).toBeVisible()
     await expect(lost.getByRole('button', { name: '放弃本页的修改', exact: true })).toBeVisible()
     await waitForEditorAccess(page, 'read', 'steady')
@@ -146,12 +148,13 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await leaveEditor(other, documentId)
     await other.close()
 
-    // 这一页回来再保存被拒：自动续上时发现别处保存过更新的版本，不覆盖，说明之后给"另存为副本"与"放弃本页的修改"。
+    // 这一页回来再保存：另一个标签页取得编辑权的那一刻它就失去了编辑权（本机锁被抢，M3-P5），不覆盖别处保存的版本，
+    // 说明之后给"另存为副本"与"放弃本页的修改"。
     // 放弃（先确认）：按服务器上的最新版本重建为阅读，不重新加载整页（不出现离开的提示）；之后点"编辑"照常编辑、保存
     await asleep.reconnect()
     await page.keyboard.press('ControlOrMeta+s')
     const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     const dialogs: string[] = []
     page.on('dialog', (dialog) => {
       dialogs.push(dialog.type())

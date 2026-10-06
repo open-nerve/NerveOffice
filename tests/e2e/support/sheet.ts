@@ -336,6 +336,17 @@ export async function blockLeaseRenewals(page: Page): Promise<{ readonly unblock
 }
 
 /**
+ * 拦下这个页面的保存（PUT …/content）：一律按断网失败，心跳、申请、释放与读取照常；unblock 之后照常（M3-P5：空闲释放时保存失败、留在编辑）。
+ * 生产构建里自动保存照常重试，同样被拦下
+ */
+export async function blockSaves(page: Page): Promise<{ readonly unblock: () => Promise<void> }> {
+  const pattern = '**/api/documents/*/content?*'
+  const handler = async (route: Route): Promise<void> => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue()
+  await page.route(pattern, handler)
+  return { unblock: async () => page.unroute(pattern, handler) }
+}
+
+/**
  * 这一个标签页"断网、休眠"（同一个浏览器上下文里的别的页面照常）：保存（PUT …/content）与心跳续租（PUT …/edit-lease）一律按断网失败，
  * 申请、释放与读取照常；reconnect 之后照常。M3-P4 起修改自动保存：生产构建里停 2 秒就上传、失败了自动重试（测试构建的夹具暂停了定时的上传，
  * 生产镜像里没有这个控制）。要"本页的修改在编辑权中断时还没存上"的用例，在修改之前用它断开这一页——两种构建里修改都到不了服务端，
