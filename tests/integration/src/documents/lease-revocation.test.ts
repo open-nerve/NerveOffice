@@ -2,7 +2,8 @@
 // 停用（user）、移出空间与降为查看者（membership）、归档（space）、删除、跨空间移动与转移（documents）、取消与降低单独授权（userDocuments）。
 // 每种核对：失去编辑权的持有者的租约记 revoked、文档的代次加一；他之后的心跳与保存先被访问与编辑权拒绝（401、403、404）；
 // 别人（还能编辑的）能申请，收回是明确结束，没有异常中断的提醒。变化之后仍能编辑的持有者租约不动，被移到别的空间时按 stale 失效、续上。
-// 进行中的保存、申请与撤权的确定交错，以及锁的顺序，在 lease-revocation-locks.test.ts。
+// M3-P5（设计 §3.5，DEF-044）：按时间已死的租约（到期、空闲满 12 分钟）不在范围里——不记 revoked、代次不加，异常中断的提醒保留（US-M3-10）。
+// 进行中的保存、申请与撤权的确定交错，以及锁的顺序（含"死租约的文档行不被锁"），在 lease-revocation-locks.test.ts。
 import type { SpaceRole } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -13,7 +14,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, createdFolderSchema, SHEET_TEMPLATE, trashListResponseSchema } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, createdFolderSchema, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editStatusSchema, SHEET_TEMPLATE, trashListResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -21,7 +22,7 @@ import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { acquireLease, leaseStateOf, outcomeOf, renewLease, saveContent } from '../support/edit-leases.ts'
+import { acquireLease, idleLeaseFor, leaseStateOf, outcomeOf, passLeaseTime, renewLease, saveContent } from '../support/edit-leases.ts'
 import { setGrant } from '../support/grants.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -320,5 +321,99 @@ describe('US-M3-12 收回写入权的五种范围：失去编辑权的持有者�
     expect(await holderOutcomes(grantee.session, document, lease)).toEqual(['403 PERMISSION_DENIED', '403 PERMISSION_DENIED'])
     expect(await leaseStateOf(database, membersDocument.id)).toEqual(untouched(member.account, memberLease))
     expect(await holderOutcomes(member.session, membersDocument, memberLease)).toEqual(['200', '200'])
+  })
+})
+
+/** 这个人看这份文档的编辑状态：正在编辑的人与异常中断的提醒里各是谁（没有为 null） */
+async function statusFor(user: LoggedIn, documentId: string): Promise<{ readonly editor: string | null, readonly interruption: string | null }> {
+  const response = await asUser(app.baseUrl, user, `/api/documents/${documentId}/edit-lease`)
+  expect(response.status, await response.clone().text()).toBe(200)
+  const status = parseExact(editStatusSchema, await response.json())
+  return { editor: status.editor?.holder.id ?? null, interruption: status.interruption?.holder.id ?? null }
+}
+
+describe('US-M3-10 先到期、后被收回：按时间已死的租约不在收回写入权的范围里——不记 revoked、代次不加，异常中断的提醒保留（M3-P5 设计 §3.5，DEF-044）', () => {
+  it('US-M3-10 先到期、后被降为查看者：租约没被结束、代次没加；别人的编辑状态与申请都有关于他的提醒', async () => {
+    const holder = await person()
+    const space = await teamSpace({ [holder.account.id]: 'editor' })
+    const document = await documentIn(space)
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
+    expect((await asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${holder.account.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
+    expect(await leaseStateOf(database, document.id)).toEqual(untouched(holder.account, lease))
+    expect(await statusFor(catSession, document.id)).toEqual({ editor: null, interruption: holder.account.id })
+    expect(await acquisitionBy(catSession, document.id)).toEqual({ status: 201, interruption: holder.account.id })
+  })
+
+  it('US-M3-10 先到期、后被移出空间：租约没被结束、代次没加；别人申请有关于他的提醒', async () => {
+    const holder = await person()
+    const space = await teamSpace({ [holder.account.id]: 'editor' })
+    const document = await documentIn(space)
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
+    expect((await asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${holder.account.id}`, { method: 'DELETE' })).status).toBe(204)
+    expect(await leaseStateOf(database, document.id)).toEqual(untouched(holder.account, lease))
+    expect(await acquisitionBy(catSession, document.id)).toEqual({ status: 201, interruption: holder.account.id })
+  })
+
+  it('US-M3-10 先到期（或空闲满 12 分钟）、后空间被归档：租约都没被结束、代次没加；归档期间查看者的编辑状态里就有提醒，恢复之后别人申请照样有', async () => {
+    const holder = await person()
+    const space = await teamSpace({ [holder.account.id]: 'editor' })
+    const expired = await documentIn(space)
+    const idle = await documentIn(space)
+    const expiredLease = await acquireLease(app.baseUrl, holder.session, expired.id)
+    const idleLease = await acquireLease(app.baseUrl, catSession, idle.id)
+    await passLeaseTime(database, expired.id, EDIT_LEASE_TTL_SECONDS)
+    await idleLeaseFor(database, idle.id, EDIT_LEASE_IDLE_RECLAIM_SECONDS)
+    expect((await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space}/archive`, { method: 'POST' })).status).toBe(200)
+    expect(await leaseStateOf(database, expired.id)).toEqual(untouched(holder.account, expiredLease))
+    expect(await leaseStateOf(database, idle.id)).toEqual(untouched(cat, idleLease))
+    expect(await statusFor(amySession, expired.id)).toEqual({ editor: null, interruption: holder.account.id })
+    expect(await statusFor(amySession, idle.id)).toEqual({ editor: null, interruption: cat.id })
+
+    expect((await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space}/restore`, { method: 'POST' })).status).toBe(200)
+    expect(await acquisitionBy(catSession, expired.id)).toEqual({ status: 201, interruption: holder.account.id })
+    expect(await acquisitionBy(amySession, idle.id)).toEqual({ status: 201, interruption: cat.id })
+  })
+
+  it('US-M3-10 先到期、后跨空间移动：移到他仍能编辑的、不能编辑的空间都一样——只有移动本身加的一，租约没被结束；代次过时不遮住异常结束，那边的人申请有提醒', async () => {
+    const holder = await person()
+    const source = await teamSpace({ [holder.account.id]: 'editor' })
+    const editable = await teamSpace({ [holder.account.id]: 'editor' })
+    const closed = await teamSpace()
+    const staying = await documentIn(source)
+    const leaving = await documentIn(source)
+    const stayingLease = await acquireLease(app.baseUrl, holder.session, staying.id)
+    const leavingLease = await acquireLease(app.baseUrl, holder.session, leaving.id)
+    await passLeaseTime(database, staying.id, EDIT_LEASE_TTL_SECONDS)
+    await passLeaseTime(database, leaving.id, EDIT_LEASE_TTL_SECONDS)
+
+    expect((await asUser(app.baseUrl, amySession, `/api/documents/${staying.id}/move`, { method: 'POST', body: { spaceId: editable } })).status).toBe(200)
+    expect((await asUser(app.baseUrl, amySession, `/api/documents/${leaving.id}/move`, { method: 'POST', body: { spaceId: closed } })).status).toBe(200)
+    expect(await leaseStateOf(database, staying.id)).toEqual(untouched(holder.account, stayingLease, 1))
+    expect(await leaseStateOf(database, leaving.id)).toEqual(untouched(holder.account, leavingLease, 1))
+    expect(await acquisitionBy(catSession, staying.id)).toEqual({ status: 201, interruption: holder.account.id })
+    expect(await acquisitionBy(catSession, leaving.id)).toEqual({ status: 201, interruption: holder.account.id })
+  })
+
+  it('US-M3-10 有效时被收回（降为查看者；归档之后恢复）：记 revoked、代次加一，是明确结束——编辑状态与申请都没有提醒，到期之后也一样', async () => {
+    const holder = await person()
+    const space = await teamSpace({ [holder.account.id]: 'editor' })
+    const demoted = await documentIn(space)
+    const lease = await acquireLease(app.baseUrl, holder.session, demoted.id)
+    expect((await asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${holder.account.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
+    expect(await leaseStateOf(database, demoted.id)).toEqual(revoked(holder.account, lease))
+    await passLeaseTime(database, demoted.id, EDIT_LEASE_TTL_SECONDS)
+    expect(await statusFor(catSession, demoted.id)).toEqual({ editor: null, interruption: null })
+    expect(await acquisitionBy(catSession, demoted.id)).toEqual(NO_NOTICE)
+
+    const archived = await teamSpace()
+    const document = await documentIn(archived)
+    const catLease = await acquireLease(app.baseUrl, catSession, document.id)
+    expect((await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${archived}/archive`, { method: 'POST' })).status).toBe(200)
+    expect(await leaseStateOf(database, document.id)).toEqual(revoked(cat, catLease))
+    expect(await statusFor(amySession, document.id)).toEqual({ editor: null, interruption: null })
+    expect((await asUser(app.baseUrl, rootSession, `/api/admin/spaces/${archived}/restore`, { method: 'POST' })).status).toBe(200)
+    expect(await acquisitionBy(amySession, document.id)).toEqual(NO_NOTICE)
   })
 })

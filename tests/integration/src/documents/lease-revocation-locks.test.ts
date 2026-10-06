@@ -6,7 +6,7 @@
 //    分享的写入本身锁文档行，与申请互斥，没有这个窗口；停用撤销了全部登录，申请在锁下核对登录时就被拒绝（lease-session.test.ts）。
 // 撤权先取完锁时在途的心跳先回答失去访问或编辑权（M3-P1 审查 A2）；跨空间移动、转移之后仍能编辑的持有者，在途的保存与心跳按锁下读到的
 // 新代次判断（stale，M3-P1 审查 A3）。
-// 另有锁的顺序（文档行 → 租约行）、锁下再核对一次范围、范围只锁涉及的文档。
+// 另有锁的顺序（文档行 → 租约行）、锁下再核对一次范围、范围只锁涉及的文档，以及按时间已死的租约的文档行不锁（M3-P5 设计 §3.5，DEF-044）。
 // 做法同 sharing-locks.test.ts："先取完锁的操作"停在写审计之前——给 audit_events 装 BEFORE INSERT 的触发器，按"动作 + 操作者"
 // 取 advisory 共享锁（闸门），测试的连接持有同一个键的排他锁。持锁构造的前提由 held-lock.ts 自己核对。
 import type { SpaceRole } from '@nerve-office/contracts'
@@ -20,7 +20,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, EDIT_LEASE_TTL_SECONDS, editStatusSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editStatusSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -28,7 +28,7 @@ import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { acquireLease, leaseStateOf, outcomeOf, passLeaseTime, releaseLease, renewLease, saveContent } from '../support/edit-leases.ts'
+import { acquireLease, idleLeaseFor, leaseStateOf, outcomeOf, passLeaseTime, releaseLease, renewLease, saveContent } from '../support/edit-leases.ts'
 import { setGrant } from '../support/grants.ts'
 import { completesWithoutWaiting, raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
@@ -505,11 +505,12 @@ describe('US-M3-12 收回写入权的锁（P1 设计 §3.4.6、ADR-014 的锁顺
     expect(await leaseStateOf(database, document.id)).toEqual(revoked(holder, lease))
   })
 
-  it('US-M3-12 锁下再核对一次范围：停用等文档行的锁期间，别人申请到了新的一代（上一位的租约已到期）——这一行已经不是他的，新持有者的租约不动', async () => {
+  it('US-M3-12 锁下再核对一次范围：停用等文档行的锁期间，别人申请到了新的一代（上一位退出了登录，租约按登录失效、还没到期）——这一行已经不是他的，新持有者的租约不动', async () => {
     const prepared = await prepare('member')
     const { holder, document } = prepared
     await acquireLease(app.baseUrl, holder.session, document.id)
-    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
+    // 登录失效、还没到期（M3-P5 设计 §3.5）：按时间还活着，停用照样找它；已到期的租约不在撤权的范围里，造不出这个交错
+    expect((await asUser(app.baseUrl, holder.session, '/api/auth/logout', { method: 'POST' })).status).toBe(204)
     const [taken, disabled] = await raceAgainstHeldLock(database, {
       // 持住租约行：卡特的申请锁住文档行之后停在这里；停用随后找到"他没结束的租约"，在文档行上等卡特的申请
       hold: holdLeaseRow(document.id),
@@ -547,6 +548,43 @@ describe('US-M3-12 收回写入权的锁（P1 设计 §3.4.6、ADR-014 的锁顺
     expect(await leaseStateOf(database, document.id)).toEqual(revoked(holder, lease))
     expect(await leaseStateOf(database, other.id)).toMatchObject({ endReason: null, documentEpoch: otherLease.writeEpoch })
     expect(await leaseStateOf(database, cats.id)).toMatchObject({ endReason: null, documentEpoch: catLease.writeEpoch })
+  })
+
+  it('US-M3-10 按时间已死的租约（到期、空闲满 12 分钟）不在撤权的范围里（M3-P5 设计 §3.5，DEF-044）：测试持住它们的文档行，归档与移出照常完成、不等；租约不记 revoked、代次不加', async () => {
+    const prepared = await prepare('member')
+    const { holder, document, space } = prepared
+    const idle = await seedDocument(database, { spaceId: space, createdBy: amy.id, title: '空闲满 12 分钟' })
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const idleLease = await acquireLease(app.baseUrl, catSession, idle.id)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
+    await idleLeaseFor(database, idle.id, EDIT_LEASE_IDLE_RECLAIM_SECONDS)
+    const removed = await whileHolding(database, holdDocuments(document.id, idle.id), async () => {
+      const removing = asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${holder.account.id}`, { method: 'DELETE' })
+      expect(await completesWithoutWaiting(database, removing, 1)).toBe(true)
+      return removing
+    })
+    expect(removed.status).toBe(204)
+    const archived = await whileHolding(database, holdDocuments(document.id, idle.id), async () => {
+      const archiving = asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space}/archive`, { method: 'POST' })
+      expect(await completesWithoutWaiting(database, archiving, 1)).toBe(true)
+      return archiving
+    })
+    expect(archived.status).toBe(200)
+    expect(await leaseStateOf(database, document.id)).toEqual({ holderId: holder.account.id, endReason: null, leaseEpoch: lease.writeEpoch, documentEpoch: lease.writeEpoch })
+    expect(await leaseStateOf(database, idle.id)).toEqual({ holderId: cat.id, endReason: null, leaseEpoch: idleLease.writeEpoch, documentEpoch: idleLease.writeEpoch })
+  })
+
+  it('US-M3-12 对照：还活着的租约的文档行被持住时，归档等它（不是因为"不等"才通过上一条）', async () => {
+    const prepared = await prepare('member')
+    const { holder, document, space } = prepared
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const archived = await raceAgainstHeldLock(database, {
+      hold: holdDocuments(document.id),
+      request: async () => asUser(app.baseUrl, rootSession, `/api/admin/spaces/${space}/archive`, { method: 'POST' }),
+      change: async () => undefined,
+    })
+    expect(archived.status).toBe(200)
+    expect(await leaseStateOf(database, document.id)).toEqual(revoked(holder, lease))
   })
 
   it('US-M3-12 范围只锁涉及的租约：取消一个人的授权、还没提交时，同一份文档上正在编辑的别人照常心跳，不等它（他的租约行不在范围里）', async () => {
