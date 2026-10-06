@@ -276,9 +276,10 @@ export type EditLeaseTakeover = (typeof EDIT_LEASE_TAKEOVERS)[number]
  * - session_id 不做外键：会话行过期之后会被清理，绑定的登录还在不在经 auth 判断（SessionService.isActive）；
  * - client_instance_id：编辑器页每次加载生成的标识（保存一直带着它），租约绑定这个标签页；
  * - write_epoch：这一代的代次，申请时文档的写入代次（documents.write_epoch）加一之后的值，所以至少是 1；
- * - 时间：申请时 acquired_at、renewed_at、last_active_at 都是 now()，expires_at 是 now() 加有效期；续租时 renewed_at 与
- *   expires_at 一起前进，last_active_at 是 now() 减去页面上报的空闲时长，不早于 acquired_at、不晚于 now()。
- *   表上兜底同一条语句里写下的两个不等式：到期晚于续租、最后活动不晚于续租。"不早于申请"比较的是两个事务的 now()，
+ * - 时间：申请时 acquired_at、renewed_at 是 now()，last_active_at 是 now() 减去续上的页面带来的空闲时长（别的申请是 now()，
+ *   M3-P5 设计 §3.5），expires_at 是 now() 加有效期；续租时 renewed_at 与 expires_at 一起前进，last_active_at 是 now() 减去页面上报的
+ *   空闲时长，只前进不后退（不早于原来的值）、不晚于 now()。
+ *   表上兜底同一条语句里写下的两个不等式：到期晚于续租、最后活动不晚于续租。"只前进"比较的是两个事务的 now()，
  *   数据库的时钟往回调时可能不成立，不写成拒绝写入的约束；
  * - 明确结束（释放、收回、交出）记下 ended_at 与 end_reason，两列同时为空或同时有值；到期、空闲、登录失效、代次过时不写，
  *   按有效条件算出来；
