@@ -17,6 +17,9 @@
 // M3-P4（设计 §3.12，US-M3-15）：打开自检失败的阅读（damaged）不给"编辑"、页头只能查看，说明按原因与能不能编辑分：编辑器没有完整载入
 // （档案不全）时请重新加载页面、给"重新加载"；这份文档的数据没能完整载入时，能编辑的人说已阻止编辑与哪些部分没能载入（提示条，
 // role="alert"），查看者只说显示的内容可能不完整（读屏状态区）。随之消失的"编辑"上的焦点交给返回链接（与权限消失同一个做法）。
+// M3-P5（设计 §3.10、§3.11）：离开编辑的过程中页头按原因说（退出编辑、10 分钟没有操作正在保存并释放、交出）；只有"退出编辑"的那一种
+// 由它的按钮说正在退出（别的不是按了它）。空闲释放之后的说明放进一直在的读屏状态区（不新插入 role="status"）；本人在本浏览器的另一个
+// 标签页接手了编辑时，失效的说明照实说。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
@@ -24,7 +27,7 @@ import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
-import type { CopyState, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice } from './edit-mode.ts'
+import type { CopyState, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
@@ -132,6 +135,19 @@ function saveStateText(view: EditorPageView, save: SaveView): string {
   }
 }
 
+/** 离开编辑的过程中页头的说法（M3-P5 设计 §3.11）：按原因 */
+function leavingText(cause: LeaveCause): string {
+  switch (cause) {
+    case 'exit':
+      return editorMessages.mode.exiting
+    case 'idle':
+      return editorMessages.mode.idleReleasing
+    case 'handover-request':
+    case 'handover-tab':
+      return editorMessages.mode.handingOver
+  }
+}
+
 /**
  * 页头看得见的状态：模式（打开中、只能查看、进入与退出编辑、编辑权已失效……）与编辑时的保存状态。它本身不是读屏的播报区：
  * 读屏播的是 SaveAnnouncer 的那一句（只播有意义的变化）
@@ -158,7 +174,7 @@ function headerStatus(view: EditorPageView): string {
         return messages.auth.checkingSession
       return save === undefined ? '' : saveStateText(view, save)
     case 'exiting':
-      return editorMessages.mode.exiting
+      return leavingText(mode.cause)
     case 'losing':
       return editorMessages.mode.losing
     case 'lost':
@@ -218,16 +234,18 @@ function SaveAnnouncer({ view }: { view: EditorPageView }) {
 }
 
 /**
- * 编辑时（与退出编辑的过程中）页头里能做的事。不可用一律用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13），重复点击由
- * 保存的状态机、页面挡住。"保存"不随保存中变灰：在途时按下排一次（M3-P4 设计 §3.9）。退出中两个按钮都留着（"退出编辑"说正在退出）：
- * 没有退出成功（保存失败、公式没收齐）时焦点还在它上面（审查 A2）
+ * 编辑时（与离开编辑的过程中）页头里能做的事。不可用一律用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13），重复点击由
+ * 保存的状态机、页面挡住。"保存"不随保存中变灰：在途时按下排一次（M3-P4 设计 §3.9）。离开中两个按钮都留着、都不可用：
+ * 没有离开成功（保存失败、公式没收齐）时焦点还在原来的按钮上（审查 A2）。leaving 是离开的原因（不在离开时为 undefined）：
+ * 只有"退出编辑"的那一种由它说正在退出、标为进行中（空闲释放、交出不是按了它，页头的状态说明在做什么，M3-P5 设计 §3.11）
  */
-function SaveControls({ page, save, confirming, exiting, apple }: { page: EditorPage, save: SaveView, confirming: boolean, exiting: boolean, apple: boolean }) {
+function SaveControls({ page, save, confirming, leaving, apple }: { page: EditorPage, save: SaveView, confirming: boolean, leaving: LeaveCause | undefined, apple: boolean }) {
+  const exiting = leaving === 'exit'
   return (
     <>
       <Button
         size="sm"
-        aria-disabled={!save.canSave || confirming || exiting}
+        aria-disabled={!save.canSave || confirming || leaving !== undefined}
         aria-busy={confirming}
         aria-keyshortcuts={apple ? 'Meta+S' : 'Control+S'}
         title={editorMessages.saveShortcut(apple ? '⌘S' : 'Ctrl+S')}
@@ -236,7 +254,7 @@ function SaveControls({ page, save, confirming, exiting, apple }: { page: Editor
         {editorMessages.save}
       </Button>
       {/* 退出编辑：先保存（没存上就留在编辑，说明由保存的状态给出），释放编辑权，回到阅读 */}
-      <Button size="sm" variant="outline" aria-disabled={confirming || exiting} aria-busy={exiting} onClick={() => void page.exitEditing()}>
+      <Button size="sm" variant="outline" aria-disabled={confirming || leaving !== undefined} aria-busy={exiting} onClick={() => void page.exitEditing()}>
         {exiting ? editorMessages.mode.exiting : editorMessages.mode.exit}
       </Button>
     </>
@@ -420,6 +438,8 @@ function lostCause(loss: LeaseLoss): PhraseParts<ReactNode> | undefined {
       return heldCause(loss.holder)
     case 'newer':
       return [editorMessages.editing.lostNewer]
+    case 'taken-over':
+      return [loss.where === 'this-browser' ? editorMessages.editing.lostTakenOverHere : editorMessages.editing.lostTakenOverElsewhere]
   }
 }
 
@@ -518,8 +538,9 @@ function readingFailure(notice: ReadingNotice | undefined): ReactNode {
       return editorMessages.mode.editorFailed
     case 'refresh-failed':
       return editorMessages.mode.refreshFailed(describeError(notice.error).message)
-    // 另存为副本成功的说明在读屏状态区里（readingInfo）
+    // 另存为副本成功、空闲释放之后的说明在读屏状态区里（readingInfo）
     case 'copied':
+    case 'idle-released':
     case undefined:
       return undefined
   }
@@ -545,12 +566,16 @@ function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean, rele
  * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：查看者看到的这一版数据不完整（M3-P4 设计 §3.12：能编辑的人与编辑器没有完整载入的
  * 说明在提示条里，DamagedNotice）、谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
  * P2 的定期检查会让它变化）、文档读不到了、有更新与正在载入（页头的按钮之外读屏也听得到，审查 A6）、另存为副本成功、
- * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能进入编辑的人另说进入编辑之后会重算并保存）
+ * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能进入编辑的人另说进入编辑之后会重算并保存）、空闲释放之后为什么回到了阅读
+ * （M3-P5 设计 §3.9、§3.11：不新插入 role="status"）
  */
 function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading === undefined)
     return undefined
   const lines: ReactNode[] = []
+  // 空闲释放之后（US-M3-07）：为什么回到了阅读，放在最前面
+  if (reading.notice?.kind === 'idle-released')
+    lines.push(<span key="idle">{editorMessages.mode.idleReleased}</span>)
   if (reading.damaged !== undefined && !reading.canEdit && damageOf(reading.damaged) === 'data')
     lines.push(<span key="damaged">{editorMessages.damaged.viewer}</span>)
   if (reading.gone)
@@ -697,7 +722,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
             <SaveAnnouncer view={view} />
             {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} />}
-            {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} exiting={mode?.kind === 'exiting'} apple={apple} />}
+            {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
           </div>
         </header>
         {/* 一直在的读屏状态区：阅读时谁在编辑、有更新等；编辑时快照接近容量上限的说明（不打断，M3-P3） */}

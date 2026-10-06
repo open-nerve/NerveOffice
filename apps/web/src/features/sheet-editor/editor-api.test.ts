@@ -26,6 +26,15 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
     await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID)).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD' })
   })
 
+  it('申请：续上时另带本页的空闲秒数（M3-P5 设计 §3.5）；用户发起的申请不带', async () => {
+    const api = installFakeApi({ [`POST ${LEASE}`]: () => json(201, ACQUIRED) })
+    setCsrfToken('csrf-1')
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, 37)
+    expect(api.requests[0]?.body).toEqual({ clientInstanceId: PAGE_ID, idleSeconds: 37, ...PAGE_CLIENT_FORMAT })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID)
+    expect(api.requests[1]?.body).toEqual({ clientInstanceId: PAGE_ID, ...PAGE_CLIENT_FORMAT })
+  })
+
   it('续租：PUT 空闲的秒数与本页的构建与数据格式（M3-P3），令牌只在请求头里（不进地址）', async () => {
     const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z', request: null }) })
     setCsrfToken('csrf-1')

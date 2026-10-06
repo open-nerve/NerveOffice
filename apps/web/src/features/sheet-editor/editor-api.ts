@@ -132,10 +132,12 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
 
 /**
  * 申请编辑权（201）：clientInstanceId 是本页这次加载的标识，租约绑定它与这次登录；带上本页的构建与数据格式（M3-P3）。
+ * 续上时另带本页的空闲秒数（idleSeconds，M3-P5 设计 §3.5：新的一代的最后活动按它往前推）；用户发起的申请不带。
  * 被占用时抛出 EDIT_LEASE_HELD，本页过旧时 CLIENT_OUTDATED，文档比服务端新时 DOCUMENT_TOO_NEW（ApiError）
  */
-export async function acquireEditLease(documentId: string, clientInstanceId: string): Promise<AcquiredEditLease> {
-  return apiRequest(leasePath(documentId), { method: 'POST', body: { clientInstanceId, ...PAGE_CLIENT_FORMAT }, schema: acquiredEditLeaseSchema })
+export async function acquireEditLease(documentId: string, clientInstanceId: string, idleSeconds?: number): Promise<AcquiredEditLease> {
+  const body = { clientInstanceId, ...(idleSeconds === undefined ? {} : { idleSeconds }), ...PAGE_CLIENT_FORMAT }
+  return apiRequest(leasePath(documentId), { method: 'POST', body, schema: acquiredEditLeaseSchema })
 }
 
 /**

@@ -19,8 +19,9 @@
 //   （页面隐藏、会话不是本人时暂停，回到前台、回到本人时立即读一次）；
 // - entering：申请编辑权、按需要取最新的内容、重建为可编辑（交互屏障挡住期间的输入）；
 // - editing：可编辑的编辑器与保存的状态机；
-// - exiting：先保存（保存失败就留在编辑），捕获，释放编辑权（等它的结果，至多 EXIT_RELEASE_WAIT_MS；结果未知、到了时限也照样退出），
-//   重建为只读；
+// - exiting：离开编辑（leaveEditing，带原因，M3-P5 设计 §3.10）——先保存（保存失败就留在编辑），捕获，释放编辑权（等它的结果，
+//   至多 EXIT_RELEASE_WAIT_MS；结果未知、到了时限也照样退出），重建为只读。原因：exit 是"退出编辑"（公式没收齐也留在编辑）；
+//   idle 是空闲释放（US-M3-07，公式没收齐也释放、带"公式待更新"）；交出的两种（handover-request、handover-tab）在 S6、S7 接上；
 // - losing / lost：失去编辑权（续租或保存得知，续上没有成功；P1 的续上规则不变）：停止保存，提交正在编辑的单元格、捕获本页的内容，
 //   重建为只读、显示本页的内容（重建失败时留在 lost，说明编辑器没能重新打开，副本照常给，审查 A3）。还读得到（不是 404）而且有没保存的
 //   修改：给"另存为副本"与"放弃本页的修改"；有一次结果未知的保存时，给副本之前先原样重发它（重放先于登录与租约，P1）——拿到原来的
@@ -37,6 +38,19 @@
 // formulasPending：载入时详情的、之后每 30 秒的编辑状态里的，只认本页显示的那一版的）。页面关闭（pagehide）时有保存在途就不释放编辑权，
 // 让它到期——否则释放多半先提交、那次保存被拒（releaseOnHide）。
 //
+// 交接规则（M3-P5 设计 §3.1、§3.9）：
+// - 先服务端、后本机锁：服务端批准之后（进入编辑、?edit=new 直接进入）拿这份文档的本机锁（same-browser.ts）——锁空着就拿，被本浏览器的
+//   别的标签页占着就抢（服务端批给了本页，那一页的租约必然已经失效）；离开编辑（退出、空闲释放、失去编辑权、没能进入、卸载、页面关闭）
+//   一律放锁。锁被抢的一方不再问服务端、不续上（租约 abandon），立即转为失去编辑权（taken-over、this-browser），有没保存的修改照旧
+//   给副本与放弃；
+// - 离开编辑一律先挡住输入再保存：begin(exiting) 的那一刻页面挂上交互屏障，然后挂起调度、等面板、flush（P4：提交哪一次单元格编辑
+//   在调用的那一刻定）；
+// - 空闲释放（idle-watch.ts）：编辑时 max(最后一次操作, 进入编辑的时刻) 起 10 分钟没有操作——会话可写、联网时（不主动向服务端确认会话）
+//   先保存再释放、以只读重建，阅读里说明；没存上就留在编辑，过一个心跳周期再看（再也存不上的不再试，服务端 12 分钟兜底）。
+//   释放开始的那一刻就停止续上（租约 holdRecovery），没释放成再恢复；
+// - 页面关闭（pagehide）时保存忙：不释放（P4），另在 localStorage 记下这份文档有一次保存可能还在服务端处理（pending-save-marker.ts，
+//   新的标签页本人接管之前等它，S6）。
+//
 // 与服务端不兼容（M3-P3 设计 §3.5、§3.10）：
 // - 编辑时保存或续租得到 CLIENT_OUTDATED（本页过旧）、DOCUMENT_TOO_NEW（文档比服务端新）：保存的状态机转入终态（需要刷新、不能保存），
 //   编辑租约停止续租、放掉手里那一代；编辑器留着（本页的修改还能复制出来），页头说明并给"重新加载"（过旧时）；
@@ -50,22 +64,26 @@
 // 选内容，所以是"先取后放"）。失去编辑权之后的重建失败只上报，不改失去编辑权之后的选项（副本是本页的内容，服务端照常检查）。
 import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, OpenCheckReport, SaveContentResponse } from '@nerve-office/contracts'
 import type { OpenCheck, SheetEditor } from '../../editor/index.ts'
-import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView } from './autosave.ts'
+import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
+import type { IdleWatch } from './idle-watch.ts'
 import type { LostCopy } from './lost-copy.ts'
 import type { OpenCheckContext } from './open-check-report.ts'
+import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
+import type { HeldLock, SameBrowser } from './same-browser.ts'
 import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
-import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
 import { incompatibilityOf } from './client-format.ts'
 import { acquireEditLease, leaseHolderOf, leaseLossOf } from './edit-lease.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
+import { createIdleWatch } from './idle-watch.ts'
 import { createLostCopy } from './lost-copy.ts'
 import { openCheckReportOf } from './open-check-report.ts'
 import { createReadingChecks } from './reading-checks.ts'
@@ -78,6 +96,12 @@ import { createSaveCoordinator } from './save-coordinator.ts'
  * 到了时限照样退出，阅读页如实说明那一代可能还在（releaseUnconfirmed）
  */
 export const EXIT_RELEASE_WAIT_MS = 5_000
+
+/** 空闲释放的阈值（US-M3-07）：10 分钟没有键盘、鼠标操作 */
+const IDLE_RELEASE_MS = EDIT_IDLE_RELEASE_SECONDS * 1000
+
+/** 空闲释放这一轮没成（没存上、会话不对、没联网）之后，隔多久再看：一个心跳周期（M3-P5 设计 §3.9） */
+export const IDLE_RECHECK_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 
 /** 本页显示的内容：快照的原文与它的修订号（阅读时是服务端那一版；退出编辑之后是保存确认过的那一版） */
 interface ShownContent {
@@ -111,6 +135,8 @@ export type ReadingNotice
     | { readonly kind: 'refresh-failed', readonly error: unknown }
   /** 另存为副本成功：新文档（在新标签页打开）；本页已按服务端的最新内容重建为阅读 */
     | { readonly kind: 'copied', readonly document: DocumentDetail }
+  /** 空闲释放（US-M3-07）：10 分钟没有操作，已保存并释放编辑权 */
+    | { readonly kind: 'idle-released' }
 
 export interface ReadingMode {
   readonly kind: 'reading'
@@ -197,12 +223,21 @@ export interface LostMode {
   readonly reload: ReloadState
 }
 
+/**
+ * 离开编辑的原因（M3-P5 设计 §3.10，页头按它说）：exit 是"退出编辑"；idle 是空闲释放（US-M3-07）；handover-request 是交给请求编辑的人
+ * （S7）；handover-tab 是交给本浏览器的另一个标签页（S6）。退出要求公式收齐，其余可以带"公式待更新"离开
+ */
+export type LeaveCause = 'exit' | 'idle' | 'handover-request' | 'handover-tab'
+
+/** 本 Step 接上的两种（交出的两种在 S6、S7 接上：交出编辑权的那一步与回到阅读时的说明各不相同） */
+type ImplementedLeaveCause = Extract<LeaveCause, 'exit' | 'idle'>
+
 export type EditModeState
   = | { readonly kind: 'opening' }
     | ReadingMode
     | { readonly kind: 'entering' }
     | { readonly kind: 'editing' }
-    | { readonly kind: 'exiting' }
+    | { readonly kind: 'exiting', readonly cause: LeaveCause }
     | { readonly kind: 'losing', readonly loss: LeaseLoss }
     | LostMode
     | { readonly kind: 'failed', readonly error: unknown }
@@ -263,8 +298,15 @@ export interface EditModeOptions {
   /** 原文档现在的标题：另存为副本的标题以它开头 */
   readonly title: () => string
   readonly session: EditModeSessionHooks
-  /** 自动保存（M3-P4）：页面的信号、快照的摘要与测试构建的控制 */
+  /**
+   * 自动保存（M3-P4）：页面的信号、快照的摘要与测试构建的控制。页面的信号里的"会话可写"（confirmedForWrite 的口径）与联网
+   * 也是空闲释放的门槛：不由用户发起的写，不主动向服务端确认会话（M3-P5 设计 §3.9）
+   */
   readonly autosave: EditModeAutosave
+  /** 同一个浏览器里的标签页（same-browser.ts）：这份文档的本机锁（编辑时持有，M3-P5 设计 §3.1） */
+  readonly sameBrowser: SameBrowser
+  /** 刷新时在途的保存的记号（pending-save-marker.ts）：页面关闭时保存忙就记下（M3-P5 设计 §3.7 的 R1） */
+  readonly pendingSave: PendingSaveMarker
   /** 意外的错误：上报（浏览器的 reportError） */
   readonly reportError: (error: unknown) => void
 }
@@ -304,7 +346,7 @@ export interface EditMode {
   readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean, readonly formulasPending?: boolean }, options: { readonly enterEdit: boolean, readonly blocked?: Incompatibility | undefined }) => Promise<OpenOutcome>
   /** 进入编辑（阅读、能编辑、没有在按新的版本重建时；"编辑"按钮，会话由页面先确认） */
   readonly enter: () => Promise<void>
-  /** 退出编辑（"退出编辑"按钮，会话由页面先确认） */
+  /** 退出编辑（"退出编辑"按钮，会话由页面先确认）：离开编辑的 exit（公式没收齐就留在编辑） */
   readonly exit: () => Promise<void>
   /**
    * 立即保存一次（编辑时；按钮与快捷键）：自动保存的立即上传，不去重，在途时排一次。按下的这一刻就提交这一刻开着的单元格编辑、开始等面板
@@ -331,8 +373,9 @@ export interface EditMode {
   /** 本页有键盘、鼠标操作 */
   readonly noteActivity: () => void
   /**
-   * 页面关闭（pagehide）：尽力释放编辑权（不等结果）。有保存在途（含终态之后核对的原样重发）时不释放，让租约到期（M3-P4 设计 §3.4）：
-   * 服务端处理保存先在子进程里检查快照、再进事务读租约，晚几毫秒发出的释放多半先提交，那次保存就被拒（released）
+   * 页面关闭（pagehide）：放下本机锁，尽力释放编辑权（不等结果）。有保存在途（含终态之后核对的原样重发）时不释放，让租约到期（M3-P4 设计 §3.4）：
+   * 服务端处理保存先在子进程里检查快照、再进事务读租约，晚几毫秒发出的释放多半先提交，那次保存就被拒（released）——这时另在 localStorage
+   * 记下这份文档有一次保存可能还在处理（M3-P5 设计 §3.7 的 R1）
    */
   readonly releaseOnHide: () => void
   /** 停止计时器，尽力释放编辑权，销毁保存的状态机与编辑器 */
@@ -362,6 +405,20 @@ function blockedBy(status: SaveStatus | undefined): Incompatibility | undefined 
   if (status === 'outdated')
     return 'client-outdated'
   return status === 'too-new' ? 'document-too-new' : undefined
+}
+
+/** 保存的状态机在终态（版本冲突、与服务端不兼容）：再也存不上，空闲释放不再试（服务端 12 分钟兜底，M3-P5 设计 §3.9） */
+function saveEnded(status: SaveStatus): boolean {
+  return status === 'conflict' || blockedBy(status) !== undefined
+}
+
+/**
+ * 空闲释放能不能放下编辑权（M3-P5 设计 §3.9）：本页的修改都已由服务端确认（公式没收齐也可以）；立即上传轮到时会话已经变差、
+ * 没有发（skipped 的 session，M3-P4 交接单）算没存上
+ */
+function storedForRelease(saver: SaveCoordinator, flushed: FlushResult | undefined): boolean {
+  const skipped = flushed?.outcome?.kind === 'skipped' && flushed.outcome.reason === 'session'
+  return !saver.view().unsavedEdits && !skipped
 }
 
 const UTF8 = new TextEncoder()
@@ -394,6 +451,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let unconfirmedExpired = false
   /** 取消那一代到期的计时 */
   let cancelUnconfirmedExpiry: (() => void) | undefined
+  /** 本机锁（M3-P5 设计 §3.1）：服务端批准之后直到离开编辑持有，和 lease 一起拿、一起放 */
+  let lock: HeldLock | undefined
+  /** 空闲释放的计时（编辑时才有） */
+  let idle: IdleWatch | undefined
   let generation = 0
   let session: 'active' | 'signed-out' | 'other-user' = 'active'
   let disposed = false
@@ -603,10 +664,176 @@ export function createEditMode(options: EditModeOptions): EditMode {
       coordinator.block(kind)
   }
 
-  /** 编辑权没用上（进入编辑没有成功）：尽力释放，不等 */
+  /** 编辑权没用上（进入编辑没有成功）：尽力释放，不等；放下本机锁 */
   function dropLease(): void {
     void lease?.release()
     lease = undefined
+    dropLock()
+  }
+
+  // ---- 本机锁与空闲释放（M3-P5 设计 §3.1、§3.9） ----
+
+  /** 放下本机锁（离开编辑：退出、空闲释放、失去编辑权、没能进入、卸载、页面关闭）：之后被抢不再算 */
+  function dropLock(): void {
+    const held = lock
+    lock = undefined
+    held?.release()
+  }
+
+  /**
+   * 服务端批准之后拿本机锁（先服务端、后本机锁）：锁空着就拿；被本浏览器的别的标签页占着就抢——服务端批给了本页，那一页的租约必然已经
+   * 失效（到期、释放），抢它只是让它立即得知。拿到时这一代已经不用了（期间失效、卸载）就随即放掉
+   */
+  async function holdLock(held: EditLease): Promise<void> {
+    const taken = (await options.sameBrowser.tryHold()) ?? (await options.sameBrowser.steal())
+    if (disposed || lease !== held) {
+      taken.release()
+      return
+    }
+    lock = taken
+    void taken.stolen.then(() => lockStolen(taken))
+  }
+
+  /**
+   * 本机锁被本浏览器的另一个标签页抢走（M3-P5 设计 §3.1 第 2 条、§3.7 第 4 步）：那边取得了服务端批准的新的一代，本页这一代必然已经失效——
+   * 不再问服务端、不续上（abandon），直接按失效处理（taken-over、this-browser：编辑、退出编辑时转入失去编辑权，有没保存的修改照旧给副本与
+   * 放弃；进入编辑的途中放弃进入）。已经放下的锁被抢不算
+   */
+  function lockStolen(taken: HeldLock): void {
+    if (disposed || lock !== taken)
+      return
+    lock = undefined
+    lease?.abandon()
+    lost({ kind: 'taken-over', where: 'this-browser' })
+  }
+
+  /** 不由用户发起的写的门槛（空闲释放）：会话可写（confirmedForWrite 的口径，不主动向服务端确认）、联网 */
+  function writableUnprompted(): boolean {
+    return options.autosave.page.sessionWritable() && options.autosave.page.online()
+  }
+
+  /** 开始空闲释放的计时（进入编辑的那一刻起算） */
+  function watchIdle(): void {
+    idle?.dispose()
+    idle = createIdleWatch({
+      clock,
+      visibility: options.visibility,
+      lastActivity: options.lastActivity,
+      since: clock.now(),
+      thresholdMs: IDLE_RELEASE_MS,
+      onIdle: () => void releaseIdle(),
+    })
+  }
+
+  function stopWatchingIdle(): void {
+    idle?.dispose()
+    idle = undefined
+  }
+
+  /**
+   * 空闲满了 10 分钟（US-M3-07）：先保存再释放、回到阅读（leaveEditing('idle')）。会话不对、没联网时这一轮不释放（释放与保存都要它们；
+   * 不主动向服务端确认会话），过一个心跳周期再看；一直不行由服务端 12 分钟兜底
+   */
+  async function releaseIdle(): Promise<void> {
+    if (mode.kind !== 'editing')
+      return
+    if (!writableUnprompted()) {
+      idle?.resume(IDLE_RECHECK_MS)
+      return
+    }
+    await leaveEditing('idle')
+  }
+
+  /**
+   * 离开编辑（M3-P5 设计 §3.1 第 3 条、§3.10）：begin(exiting) 的那一刻页面挂上交互屏障（先挡住输入）→ 挂起自动保存的调度（定时的捕获与上传、
+   * 切到后台的上传，M3-P4 设计 §3.4）→ 等面板 → 有没存的就立即上传一次（flush：提交单元格、等公式；内容与确认过的相同时不发）→ 等在途 →
+   * 看存上了没有 → 捕获 → 释放（≤ EXIT_RELEASE_WAIT_MS）→ 放锁 → 以只读重建 → 阅读。
+   * - exit："退出编辑"（会话由页面先确认）：没有全部存上（保存失败、版本冲突、提交不了正在编辑的单元格、公式结果还没收齐）就留在编辑；
+   * - idle：空闲释放：flush 时不主动向服务端确认会话（ready 用 writableUnprompted）；修改都存上了就释放，公式没收齐也释放（带"公式待更新"，
+   *   下一个进入编辑的人强制重算，M3-P4 设计 §3.4）；没存上（含轮到时会话变差、没有发的 skipped(session)）、会话不对就留在编辑，
+   *   过一个心跳周期再看——再也存不上的（版本冲突、与服务端不兼容）不再试，服务端 12 分钟兜底。释放开始的那一刻就停止续上
+   *   （holdRecovery），没释放成时恢复；阅读里说明"10 分钟没有操作，已保存并释放编辑权"。
+   * 留在编辑：恢复调度（立即再看），说明由保存的状态给出
+   */
+  async function leaveEditing(cause: ImplementedLeaveCause): Promise<void> {
+    const saver = coordinator
+    const scheduler = autosave
+    const held = lease
+    const page = slot.editor()
+    if (mode.kind !== 'editing' || saver === undefined || scheduler === undefined || held === undefined || page === undefined)
+      return
+    const token = begin({ kind: 'exiting', cause })
+    const idleRelease = cause === 'idle'
+    idle?.stop()
+    if (idleRelease)
+      held.holdRecovery()
+    scheduler.suspend()
+    const stay = (): void => {
+      scheduler.resume()
+      if (idleRelease)
+        held.allowRecovery()
+      begin({ kind: 'editing' })
+      if (!idleRelease)
+        idle?.resume()
+      else if (!saveEnded(saver.view().status))
+        idle?.resume(IDLE_RECHECK_MS)
+    }
+    // 面板里防抖中的改动先写进模型（批注浮层、数据验证面板，M3-P4 设计 §3.4）：之前没有别的修改时，它们是"有没有没存的"的全部
+    await page.settlePanels()
+    if (!still(token))
+      return
+    let flushed: FlushResult | undefined
+    if (saver.hasUnsavedWork()) {
+      flushed = await (idleRelease ? scheduler.flush('idle-release', { ready: async () => writableUnprompted() }) : scheduler.flush('exit'))
+      if (!still(token))
+        return
+    }
+    await saver.settled()
+    if (!still(token))
+      return
+    if (idleRelease ? !storedForRelease(saver, flushed) : saver.hasUnsavedWork()) {
+      stay()
+      return
+    }
+    let snapshot: string
+    try {
+      snapshot = page.capture()
+    }
+    catch (error) {
+      options.reportError(error)
+      if (still(token))
+        stay()
+      return
+    }
+    // 释放：等它的结果，至多 EXIT_RELEASE_WAIT_MS（结果未知、到了时限也照样离开：那一代至多 90 秒内自行到期）；之后放下本机锁
+    const released = await releaseWithin(held)
+    if (!still(token))
+      return
+    lease = undefined
+    dropLock()
+    stopWatchingIdle()
+    watchUnconfirmedRelease(released)
+    const revision = saver.baseRevision()
+    // 与服务端不兼容之后（M3-P3）离开：之后的阅读照样不给"编辑"、照样说明
+    const blocked = blockedBy(saver.view().status)
+    // 空闲释放可以带着"公式待更新"离开：这一版的标记就是本页最后一次存上的（服务端记在文档上）
+    const formulasLeft = idleRelease && saver.view().formulasPending
+    const created = await slot.replace('read', snapshot)
+    if (!still(token))
+      return
+    // 保存的状态机留到换好编辑器才去掉：离开的整个过程页头的"保存""正在退出编辑…"都在（审查 A2），这时它说的是已保存
+    disposeCoordinator()
+    if (created === undefined) {
+      fail(new Error(idleRelease ? '空闲释放时以只读重建编辑器失败' : '退出编辑时以只读重建编辑器失败'))
+      return
+    }
+    // 退出时都已存上（含公式的结果）：这一版不带"公式待更新"——补存的内容与上一版相同时修订号不变（服务端只清标记），
+    // 之前记下的这一版的标记随之作废。空闲释放按本页最后一次存上的
+    latestFlag = { revision, formulasPending: formulasLeft }
+    // 刚存下的内容自己读不回来（打开自检失败）：照样以 damaged 阅读、上报
+    const damaged = openCheckOf(created, { access: 'read', trigger: 'exit', revision })
+    const notice: ReadingNotice | undefined = idleRelease ? { kind: 'idle-released' } : undefined
+    enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice, releaseUnconfirmed: !released, blocked, formulasPending: formulasPendingOf(revision), damaged })
   }
 
   /**
@@ -654,6 +881,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
     else if (mode.kind === 'entering' && slot.editor() !== undefined) {
       lease = undefined
+      dropLock()
       begin({ ...readingBefore, notice: { kind: 'enter-lost', loss } })
     }
     else if (mode.kind === 'entering' || mode.kind === 'opening') {
@@ -712,6 +940,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
     latestFlag = { revision, formulasPending }
     if (session !== 'active')
       held.pause()
+    // 先服务端、后本机锁（M3-P5 设计 §3.1）：被本浏览器的别的标签页占着就抢，那边随即转为失去编辑权
+    await holdLock(held)
+    if (!still(token))
+      return 'not-entered'
     let content: ShownContent = shown
     if (revision !== shown.revision) {
       let fetched: LoadedContent | typeof CONTENT_UNCHANGED
@@ -781,6 +1013,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     options.autosave.attach?.(scheduler)
     slot.attach(created)
     setMode({ kind: 'editing' })
+    // 空闲从进入编辑的这一刻（与之后的最后一次操作中较晚的那个）算起（M3-P5 设计 §3.9）
+    watchIdle()
     syncSaving()
     const loss = pendingLoss
     pendingLoss = undefined
@@ -841,6 +1075,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
   async function lose(loss: LeaseLoss): Promise<void> {
     const token = begin({ kind: 'losing', loss })
     lease = undefined
+    dropLock()
+    stopWatchingIdle()
     // 自动保存立即停下（在途的那一次由保存的状态机收尾）：捕获本页的内容时不再起一次上传
     disposeAutosave()
     // 副本的标题里的时间是失去编辑权的这一刻，不是点"另存为副本"的那一刻
@@ -1011,74 +1247,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         begin(readingAfterFailure(started.error))
     },
 
-    exit: async () => {
-      const saver = coordinator
-      const scheduler = autosave
-      const held = lease
-      const page = slot.editor()
-      if (mode.kind !== 'editing' || saver === undefined || scheduler === undefined || held === undefined || page === undefined)
-        return
-      const token = begin({ kind: 'exiting' })
-      // 开始退出就挂起自动保存的调度（定时的捕获与上传、切到后台的上传，M3-P4 设计 §3.4）：退出用的那一次是立即上传
-      scheduler.suspend()
-      /** 留在编辑：恢复调度（立即再看），说明由保存的状态给出 */
-      const stay = (): void => {
-        scheduler.resume()
-        begin({ kind: 'editing' })
-      }
-      // 面板里防抖中的改动先写进模型（批注浮层、数据验证面板，M3-P4 设计 §3.4）：之前没有别的修改时，它们是"有没有没存的"的全部
-      await page.settlePanels()
-      if (!still(token))
-        return
-      // 有没存的就立即上传一次（提交单元格、等公式；内容与确认过的相同时不发），在途的那一次先有结果
-      if (saver.hasUnsavedWork()) {
-        await scheduler.flush('exit')
-        if (!still(token))
-          return
-      }
-      await saver.settled()
-      if (!still(token))
-        return
-      // 没有全部存上（保存失败、版本冲突、提交不了正在编辑的单元格、公式结果还没收齐）就留在编辑
-      if (saver.hasUnsavedWork()) {
-        stay()
-        return
-      }
-      let snapshot: string
-      try {
-        snapshot = page.capture()
-      }
-      catch (error) {
-        options.reportError(error)
-        if (still(token))
-          stay()
-        return
-      }
-      // 释放：等它的结果，至多 EXIT_RELEASE_WAIT_MS（结果未知、到了时限也照样退出：那一代至多 90 秒内自行到期）
-      const released = await releaseWithin(held)
-      if (!still(token))
-        return
-      lease = undefined
-      watchUnconfirmedRelease(released)
-      const revision = saver.baseRevision()
-      // 与服务端不兼容之后（M3-P3）退出：之后的阅读照样不给"编辑"、照样说明
-      const blocked = blockedBy(saver.view().status)
-      const created = await slot.replace('read', snapshot)
-      if (!still(token))
-        return
-      // 保存的状态机留到换好编辑器才去掉：退出的整个过程页头的"保存""正在退出编辑…"都在（审查 A2），这时它说的是已保存
-      disposeCoordinator()
-      if (created === undefined) {
-        fail(new Error('退出编辑时以只读重建编辑器失败'))
-        return
-      }
-      // 退出时都已存上（含公式的结果）：这一版不带"公式待更新"——补存的内容与上一版相同时修订号不变（服务端只清标记），
-      // 之前记下的这一版的标记随之作废
-      latestFlag = { revision, formulasPending: false }
-      // 刚存下的内容自己读不回来（打开自检失败）：照样以 damaged 阅读、上报
-      const damaged = openCheckOf(created, { access: 'read', trigger: 'exit', revision })
-      enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: !released, blocked, formulasPending: formulasPendingOf(revision), damaged })
-    },
+    exit: async () => leaveEditing('exit'),
 
     save: async (ready) => {
       if (mode.kind !== 'editing' || autosave === undefined)
@@ -1211,8 +1380,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
     noteActivity: () => lease?.noteActivity(),
 
     releaseOnHide: () => {
-      if (coordinator?.busy() === true)
+      // 离开页面一律放下本机锁（M3-P5 设计 §3.1）：进往返缓存时浏览器不替页面放（编辑器页恢复时反正整页重新加载）
+      dropLock()
+      if (coordinator?.busy() === true) {
+        // 保存在途：不释放（M3-P4 设计 §3.4），记下这份文档有一次保存可能还在服务端处理，它的基准是本页确认过的最新修订（M3-P5 设计 §3.7 的 R1）
+        options.pendingSave.write(coordinator.baseRevision())
         return
+      }
       void lease?.release()
     },
 
@@ -1224,8 +1398,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
       checks.dispose()
       cancelUnconfirmedExpiry?.()
       cancelUnconfirmedExpiry = undefined
+      stopWatchingIdle()
       void lease?.release()
       lease = undefined
+      dropLock()
       disposeCoordinator()
       listeners.clear()
       slot.clear()

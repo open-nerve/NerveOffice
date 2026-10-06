@@ -17,8 +17,10 @@
 //   用户不受打扰；修订号变了：当前修订的来源是本页一次结果未知的保存（其实已经提交，回包丢了）时以它为基准接着编辑，
 //   与冲突时认出"自己追自己"同一条规则（审查 B1，00 号计划书 §7.5），否则是别处保存过——放掉刚申请到的，按失效处理
 //   （不覆盖，另存为副本在 P2）；被占用、403、404 按失效处理；
-//   网络错误、5xx 保持现状，下一次心跳或保存时再判断；未登录、令牌失效交给页面确认会话。
-//   每一代至多续上一次有结果（成了是新的一代，不成就是失效，不来回申请）；会话不是本人时不续。
+//   网络错误、5xx 保持现状，下一次心跳或保存时再判断；未登录、令牌失效交给页面确认会话。续上的申请带本页的空闲秒数（M3-P5 设计 §3.5：
+//   服务端把新的一代的最后活动按它往前推，空闲的兜底计时准确）。
+//   每一代至多续上一次有结果（成了是新的一代，不成就是失效，不来回申请）；会话不是本人时不续；空闲释放的过程中不续（M3-P5 设计 §3.9：
+//   释放开始的那一刻就停止续上，免得回来时的第一下操作把 dormant 叫醒、申请新的一代——holdRecovery，没释放成时 allowRecovery）。
 //   人不在时不续（本页空闲已经到了服务端的回收阈值 EDIT_LEASE_IDLE_RECLAIM_SECONDS），等本页再有操作：人走开之后断网、休眠回来，
 //   服务端给的原因是到期而不是空闲，这时续上会让服务端的空闲回收重新计时，别人要多等一轮（审查 B8）；
 // - 暂停与恢复：页面的会话不是本人时暂停（不带着别人的登录发续租）；回到本人时恢复并立即续租一次——租约绑定登录，
@@ -28,7 +30,9 @@
 // - 释放：页面隐藏、关闭时用 keepalive，结果不管（没送到时服务端按到期回收）；退出编辑时等它有了结果（结果未知也算结束，M3-P2 设计 §3.4；
 //   等多久由 edit-mode.ts 设上限），结果交回服务端确认了没有（没确认时那一代可能还在，阅读页如实说明，审查 A13）。
 // - 与服务端不兼容（M3-P3 设计 §3.5）：续租或续上的申请得到 CLIENT_OUTDATED（本页过旧）或 DOCUMENT_TOO_NEW（文档比服务端新）——
-//   本页写不进去了：停止续租、尽力放掉手里那一代（别人与重新加载之后的本页立即能申请，不用等它到期），经 onIncompatible 通知页面。终态
+//   本页写不进去了：停止续租、尽力放掉手里那一代（别人与重新加载之后的本页立即能申请，不用等它到期），经 onIncompatible 通知页面。终态；
+// - 被本浏览器的另一个标签页取代（M3-P5 设计 §3.1：本机锁被抢）：服务端批给了那边，本页这一代必然已经失效——abandon 停止续租与续上，
+//   不发释放（令牌已经对不上），也不通知（页面自己转为失去编辑权）。终态
 import type { AcquiredEditLease, DocumentEditor, EditLeaseLostReason, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseCredentials } from './editor-api.ts'
@@ -83,7 +87,8 @@ export const browserLeaseClock: LeaseClock = {
 
 /** 编辑权的接口（editor-api.ts）：失败时抛出请求层的错误 */
 export interface EditLeaseApi {
-  readonly acquire: (documentId: string, clientInstanceId: string) => Promise<AcquiredEditLease>
+  /** 申请：续上时 options.idleSeconds 是本页的空闲秒数（M3-P5 设计 §3.5）；用户发起的申请不带 */
+  readonly acquire: (documentId: string, clientInstanceId: string, options?: { readonly idleSeconds?: number }) => Promise<AcquiredEditLease>
   readonly renew: (documentId: string, token: string, idleSeconds: number) => Promise<RenewedEditLease>
   /**
    * 尽力释放（keepalive）：失败时抛出请求层的错误。页面隐藏、关闭时不等它、不看结果；续上时等它——放掉之后再申请，
@@ -110,7 +115,9 @@ export interface LeaseHolder {
  * - not-found：读不到这份文档了（404：删除、移走、被移出空间或取消分享，与不存在一致）；
  * - denied：读得到却不能编辑了（403，例如被降为查看者、空间被归档），原因的说明由服务端给出；
  * - held：续上时别人（或者自己在别的标签页、设备上）正在编辑；
- * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它
+ * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它；
+ * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，不再问服务端）；
+ *   elsewhere 是另一台设备或浏览器（服务端的 taken_over，S6 接上）
  */
 export type LeaseLoss
   = | { readonly kind: 'lease', readonly reason: EditLeaseLostReason | undefined }
@@ -118,6 +125,7 @@ export type LeaseLoss
     | { readonly kind: 'denied', readonly error: ApiError }
     | { readonly kind: 'held', readonly holder: LeaseHolder | undefined }
     | { readonly kind: 'newer' }
+    | { readonly kind: 'taken-over', readonly where: 'this-browser' | 'elsewhere' }
 
 /** 请求的失败说明编辑权已经失效（EDIT_LEASE_LOST、404、403）时给出来源；别的失败为 undefined */
 export function leaseLossOf(error: unknown): LeaseLoss | undefined {
@@ -167,8 +175,20 @@ export interface EditLease {
   readonly resume: () => Promise<void>
   /** 别的请求（保存）得知编辑权已经失效，used 是那个请求带的编辑权：与续租失效同一个处理 */
   readonly lose: (loss: LeaseLoss, used: LeaseCredentials) => Promise<LeaseOutcome>
-  /** 本页有键盘、鼠标操作：因为空闲被服务端回收的编辑权，在这时续上 */
+  /** 本页有键盘、鼠标操作：因为空闲被服务端回收的编辑权，在这时续上（停止续上期间不续） */
   readonly noteActivity: () => void
+  /**
+   * 停止续上（空闲释放开始时，M3-P5 设计 §3.9）：之后得知的可以续上的失效不续上——交回"说不准"、保持现状（心跳照常，到时再得知），
+   * 人不在时的 dormant 也不被操作叫醒。进行中的续上照常结束
+   */
+  readonly holdRecovery: () => void
+  /** 恢复续上（空闲释放没成、留在编辑）：停止期间人回来过（dormant 而人在）就随即续上 */
+  readonly allowRecovery: () => void
+  /**
+   * 放弃这一代（M3-P5 设计 §3.1 第 2 条：本机锁被本浏览器的另一个标签页抢走——服务端批给了那边，本页这一代必然已经失效）：
+   * 停止续租与续上，不发释放（令牌已经对不上），不通知页面。终态；进行中的续上回来时新的一代随即放掉
+   */
+  readonly abandon: () => void
   /**
    * 释放并停止续租（退出编辑、页面隐藏、关闭、卸载）：立即停止续租（之后的失效不再通知），释放的请求有了结果（成功或失败都算，
    * 结果未知时服务端按到期回收）之后兑现，从不失败。页面隐藏、关闭时不等它；退出编辑时等它（M3-P2 设计 §3.4）。
@@ -303,6 +323,8 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   let recovery: Promise<LeaseOutcome> | undefined
   /** 释放的那一次：服务端确认了没有（再调用 release 时交回它） */
   let releasing: Promise<boolean> | undefined
+  /** 停止续上（空闲释放的过程中，holdRecovery）：得知的可以续上的失效先不续 */
+  let recoveryHeld = false
 
   function stopTimer(): void {
     cancelTimer?.()
@@ -380,7 +402,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       return LOST
     let next: AcquiredEditLease
     try {
-      next = await api.acquire(documentId, options.clientInstanceId)
+      next = await api.acquire(documentId, options.clientInstanceId, { idleSeconds: idleSeconds() })
     }
     catch (error) {
       if (ended())
@@ -444,7 +466,8 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   /**
    * 得知失效（续租或保存），usedToken 是那个请求带的令牌：
    * 那个请求带的是已被续上取代的上一代 → 现在的仍然有效；失去访问或编辑权、不认识的原因 → 失效；
-   * 会话不是本人 → 不续（回到本人时恢复续租会再次得知）；人不在 → 等本页再有操作；其余续上一次
+   * 会话不是本人 → 不续（回到本人时恢复续租会再次得知）；停止续上（空闲释放的过程中）→ 先不续（心跳照常，之后再得知）；
+   * 人不在 → 等本页再有操作；其余续上一次
    */
   async function handleLoss(loss: LeaseLoss, usedToken: string): Promise<LeaseOutcome> {
     if (ended())
@@ -459,6 +482,12 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       return recovery
     if (state === 'paused')
       return { kind: 'unknown', error: undefined }
+    if (recoveryHeld) {
+      // 心跳照常（得知失效的那一次续租不再自己排下一次）：恢复续上之后，下一次心跳再得知时续上
+      if (state === 'holding')
+        scheduleRenewal(HEARTBEAT_MS)
+      return { kind: 'unknown', error: undefined }
+    }
     if (!present()) {
       state = 'dormant'
       stopTimer()
@@ -561,10 +590,26 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     },
     lose: async (loss, used) => handleLoss(loss, used.token),
     noteActivity: () => {
-      if (state === 'dormant') {
+      if (state === 'dormant' && !recoveryHeld) {
         state = 'holding'
         void startRecovery()
       }
+    },
+    holdRecovery: () => {
+      recoveryHeld = true
+    },
+    allowRecovery: () => {
+      recoveryHeld = false
+      if (state === 'dormant' && present()) {
+        state = 'holding'
+        void startRecovery()
+      }
+    },
+    abandon: () => {
+      if (ended())
+        return
+      state = 'lost'
+      stopTimer()
     },
     release: async () => {
       if (releasing !== undefined)
@@ -584,12 +629,34 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
 /** 算作"有操作"的输入：键盘、指针（鼠标、触摸、笔，含移动）与滚轮 */
 const ACTIVITY_EVENTS = ['keydown', 'pointerdown', 'pointermove', 'wheel'] as const
 
+/** 指针事件的指针与坐标（clientX、clientY）；不是指针事件（或者缺了哪一项）时为 undefined */
+function pointerOf(event: Event): { readonly id: number, readonly x: number, readonly y: number } | undefined {
+  const { pointerId, clientX, clientY } = event as Partial<PointerEvent>
+  return typeof pointerId === 'number' && typeof clientX === 'number' && typeof clientY === 'number' ? { id: pointerId, x: clientX, y: clientY } : undefined
+}
+
 /**
  * 在捕获阶段记下本页的键盘、鼠标操作（P1 设计 §3.4.7）：焦点在 Univer 的输入框、浮层或页头里都收得到，
- * 也不受别的监听阻止传递的影响（交互屏障挂在它之后）。只记时刻，不改动事件（passive）。返回撤销监听的函数
+ * 也不受别的监听阻止传递的影响（交互屏障挂在它之后）。只记时刻，不改动事件（passive）。返回撤销监听的函数。
+ * 两条过滤（M3-P5 设计 §3.9，空闲释放靠它判断"10 分钟没有操作"）：
+ * - 只认可信事件（isTrusted：浏览器派发的用户输入）：页面、SDK 或扩展自己派发的合成事件不是人在操作；
+ * - 指针没有挪动的 pointermove 不算（零位移：与上一次指针事件是同一个指针、坐标相同）——WebKit 在鼠标停着、页面被程序滚动时派发这种
+ *   可信事件（探索 §3.2：5 次滚动 5 次），不滤的话页面里任何程序滚动都会把"没有操作"推后。只记最近的一个指针，不随触摸的次数增长
  */
 export function trackActivity(target: Pick<Window, 'addEventListener' | 'removeEventListener'>, onActivity: () => void): () => void {
-  const listener = (): void => onActivity()
+  let lastPointer: { readonly id: number, readonly x: number, readonly y: number } | undefined
+  const listener = (event: Event): void => {
+    if (!event.isTrusted)
+      return
+    const pointer = pointerOf(event)
+    if (pointer !== undefined) {
+      const previous = lastPointer
+      lastPointer = pointer
+      if (event.type === 'pointermove' && previous !== undefined && previous.id === pointer.id && previous.x === pointer.x && previous.y === pointer.y)
+        return
+    }
+    onActivity()
+  }
   for (const type of ACTIVITY_EVENTS)
     target.addEventListener(type, listener, { capture: true, passive: true })
   return () => {
