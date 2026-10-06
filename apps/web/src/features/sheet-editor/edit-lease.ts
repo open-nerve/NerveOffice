@@ -584,12 +584,34 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
 /** 算作"有操作"的输入：键盘、指针（鼠标、触摸、笔，含移动）与滚轮 */
 const ACTIVITY_EVENTS = ['keydown', 'pointerdown', 'pointermove', 'wheel'] as const
 
+/** 指针事件的指针与坐标（clientX、clientY）；不是指针事件（或者缺了哪一项）时为 undefined */
+function pointerOf(event: Event): { readonly id: number, readonly x: number, readonly y: number } | undefined {
+  const { pointerId, clientX, clientY } = event as Partial<PointerEvent>
+  return typeof pointerId === 'number' && typeof clientX === 'number' && typeof clientY === 'number' ? { id: pointerId, x: clientX, y: clientY } : undefined
+}
+
 /**
  * 在捕获阶段记下本页的键盘、鼠标操作（P1 设计 §3.4.7）：焦点在 Univer 的输入框、浮层或页头里都收得到，
- * 也不受别的监听阻止传递的影响（交互屏障挂在它之后）。只记时刻，不改动事件（passive）。返回撤销监听的函数
+ * 也不受别的监听阻止传递的影响（交互屏障挂在它之后）。只记时刻，不改动事件（passive）。返回撤销监听的函数。
+ * 两条过滤（M3-P5 设计 §3.9，空闲释放靠它判断"10 分钟没有操作"）：
+ * - 只认可信事件（isTrusted：浏览器派发的用户输入）：页面、SDK 或扩展自己派发的合成事件不是人在操作；
+ * - 指针没有挪动的 pointermove 不算（零位移：与上一次指针事件是同一个指针、坐标相同）——WebKit 在鼠标停着、页面被程序滚动时派发这种
+ *   可信事件（探索 §3.2：5 次滚动 5 次），不滤的话页面里任何程序滚动都会把"没有操作"推后。只记最近的一个指针，不随触摸的次数增长
  */
 export function trackActivity(target: Pick<Window, 'addEventListener' | 'removeEventListener'>, onActivity: () => void): () => void {
-  const listener = (): void => onActivity()
+  let lastPointer: { readonly id: number, readonly x: number, readonly y: number } | undefined
+  const listener = (event: Event): void => {
+    if (!event.isTrusted)
+      return
+    const pointer = pointerOf(event)
+    if (pointer !== undefined) {
+      const previous = lastPointer
+      lastPointer = pointer
+      if (event.type === 'pointermove' && previous !== undefined && previous.id === pointer.id && previous.x === pointer.x && previous.y === pointer.y)
+        return
+    }
+    onActivity()
+  }
   for (const type of ACTIVITY_EVENTS)
     target.addEventListener(type, listener, { capture: true, passive: true })
   return () => {

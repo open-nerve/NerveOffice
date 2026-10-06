@@ -946,23 +946,99 @@ describe('trackActivity：在捕获阶段记下键盘、鼠标操作', () => {
     document.body.replaceChildren()
   })
 
-  it('键盘、指针（含移动）与滚轮都记下；后挂的监听阻止传递也照样记下；撤销之后不再记', () => {
+  /** 交给监听的事件：类型、可信与否、指针与坐标（jsdom 派发的事件 isTrusted 一律为假，可信的输入只能这样交给监听） */
+  interface FakeInput {
+    readonly type: string
+    readonly isTrusted?: boolean
+    readonly pointerId?: number
+    readonly clientX?: number
+    readonly clientY?: number
+  }
+
+  /** 记下挂上的监听的假窗口：fire 把事件直接交给某一类的监听 */
+  function fakeWindow() {
+    const listeners = new Map<string, (event: Event) => void>()
+    const added: [string, unknown][] = []
+    const removed: [string, unknown][] = []
+    const target = {
+      addEventListener: (type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+        added.push([type, options])
+        listeners.set(type, listener as (event: Event) => void)
+      },
+      removeEventListener: (type: string, _listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
+        removed.push([type, options])
+        listeners.delete(type)
+      },
+    }
+    return {
+      target,
+      added,
+      removed,
+      fire: (input: FakeInput) => listeners.get(input.type)?.({ isTrusted: true, ...input } as unknown as Event),
+    }
+  }
+
+  it('键盘、指针（含移动）与滚轮都在窗口的捕获阶段挂上（passive，交互屏障挂在它之后、拦不住它）；撤销时按捕获阶段去掉', () => {
+    const page = fakeWindow()
+    const stop = trackActivity(page.target, vi.fn())
+    expect(page.added).toEqual(['keydown', 'pointerdown', 'pointermove', 'wheel'].map(type => [type, { capture: true, passive: true }]))
+    stop()
+    expect(page.removed).toEqual(['keydown', 'pointerdown', 'pointermove', 'wheel'].map(type => [type, { capture: true }]))
+  })
+
+  it('可信的键盘、指针按下、滚轮与挪动了的指针移动都算有操作', () => {
+    const page = fakeWindow()
+    const onActivity = vi.fn()
+    trackActivity(page.target, onActivity)
+    page.fire({ type: 'keydown' })
+    page.fire({ type: 'pointerdown', pointerId: 1, clientX: 10, clientY: 10 })
+    page.fire({ type: 'wheel' })
+    page.fire({ type: 'pointermove', pointerId: 1, clientX: 11, clientY: 10 })
+    page.fire({ type: 'pointermove', pointerId: 1, clientX: 11, clientY: 12 })
+    expect(onActivity).toHaveBeenCalledTimes(5)
+  })
+
+  it('只认可信事件（M3-P5 设计 §3.9）：页面、SDK 自己派发的合成事件不是人在操作', () => {
+    const page = fakeWindow()
+    const onActivity = vi.fn()
+    trackActivity(page.target, onActivity)
+    for (const type of ['keydown', 'pointerdown', 'pointermove', 'wheel'])
+      page.fire({ type, isTrusted: false, pointerId: 1, clientX: 5, clientY: 5 })
+    expect(onActivity).not.toHaveBeenCalled()
+  })
+
+  it('零位移的 pointermove 不算（WebKit 在鼠标停着、页面被程序滚动时派发它，探索 §3.2）：与上一次指针事件是同一个指针、坐标相同', () => {
+    const page = fakeWindow()
+    const onActivity = vi.fn()
+    trackActivity(page.target, onActivity)
+    // 第一次移动没有可比的：算
+    page.fire({ type: 'pointermove', pointerId: 1, clientX: 200, clientY: 200 })
+    expect(onActivity).toHaveBeenCalledTimes(1)
+    // 鼠标停着、页面被程序滚动了五次
+    for (let index = 0; index < 5; index += 1)
+      page.fire({ type: 'pointermove', pointerId: 1, clientX: 200, clientY: 200 })
+    expect(onActivity).toHaveBeenCalledTimes(1)
+    // 按下（不论坐标）照样算，之后在原地的移动不算
+    page.fire({ type: 'pointerdown', pointerId: 1, clientX: 200, clientY: 200 })
+    page.fire({ type: 'pointermove', pointerId: 1, clientX: 200, clientY: 200 })
+    expect(onActivity).toHaveBeenCalledTimes(2)
+    // 另一个指针（触摸、笔）在同样的坐标：不是同一个指针，算
+    page.fire({ type: 'pointermove', pointerId: 2, clientX: 200, clientY: 200 })
+    expect(onActivity).toHaveBeenCalledTimes(3)
+    // 挪动了：算
+    page.fire({ type: 'pointermove', pointerId: 2, clientX: 201, clientY: 200 })
+    expect(onActivity).toHaveBeenCalledTimes(4)
+  })
+
+  it('真实的窗口：页面里派发的事件（不可信）一律不算；撤销之后不再记', () => {
     const onActivity = vi.fn()
     const stop = trackActivity(window, onActivity)
-    // 交互屏障一类后挂在窗口捕获阶段、阻止传递的监听
-    const block = (event: Event): void => event.stopImmediatePropagation()
-    window.addEventListener('keydown', block, { capture: true })
     const inner = document.createElement('div')
     document.body.append(inner)
     for (const type of ['keydown', 'pointerdown', 'pointermove', 'wheel'])
       inner.dispatchEvent(new Event(type, { bubbles: true }))
-    expect(onActivity).toHaveBeenCalledTimes(4)
-    inner.dispatchEvent(new Event('focus'))
-    expect(onActivity).toHaveBeenCalledTimes(4)
+    expect(onActivity).not.toHaveBeenCalled()
     stop()
-    inner.dispatchEvent(new Event('keydown', { bubbles: true }))
-    expect(onActivity).toHaveBeenCalledTimes(4)
-    window.removeEventListener('keydown', block, { capture: true })
   })
 })
 

@@ -1,4 +1,4 @@
-import type { AutosaveControlHooks, EditIntent, PageNetwork } from './editor-page.ts'
+import type { AutosaveControlHooks, EditIntent, PageActivity, PageNetwork } from './editor-page.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
 // 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）再组装：
 // 第一个调度建起来之前它就在（?edit=new 直接进入编辑也一样）；生产构建里这个分支与控制的分块都被去掉（门禁 artifacts 核对）。
@@ -12,7 +12,7 @@ import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.t
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
-import { browserLeaseClock } from './edit-lease.ts'
+import { browserLeaseClock, trackActivity } from './edit-lease.ts'
 import { acquireEditLease, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, releaseEditLease, renewEditLease, reportOpenCheckFailures, saveConflictCopy, saveContent, snapshotDigest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
@@ -45,6 +45,11 @@ const browserNetwork: PageNetwork = {
       window.removeEventListener('offline', listener)
     }
   },
+}
+
+/** 本页的键盘、鼠标操作：窗口的捕获阶段（交互屏障挂在它之后），只认可信事件、零位移的移动不算（edit-lease.ts 的 trackActivity） */
+const browserActivity: PageActivity = {
+  subscribe: listener => trackActivity(window, listener),
 }
 
 /** ?edit=new（shared/lib/edit-intent.ts）：进入编辑之后用 history.replaceState 去掉它（不留历史记录、不重新加载），刷新不再自动进入 */
@@ -98,6 +103,7 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
     clock: browserLeaseClock,
     visibility: browserVisibility,
     network: browserNetwork,
+    activity: browserActivity,
     digest: async snapshot => snapshotDigest(snapshot),
     autosaveControl,
     editIntent: editIntentOf(window.location),

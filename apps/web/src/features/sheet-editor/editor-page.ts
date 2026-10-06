@@ -9,6 +9,7 @@
 // 自动保存却一直暂停）；页面关闭（pagehide）时有保存在途不释放编辑权（edit-mode.ts 的 releaseOnHide）；按保存在保存中照样做
 // （在途时排一次），按下的这一刻就提交开着的单元格编辑，会话确认之后才上传（审查 A1）。阅读页的"公式待更新"取载入时的详情（与内容是同一版时）。
 // 页头的文档详情正在重新取时给出进行中（DEF-045）。
+// 本页的键盘、鼠标操作由组装处给出（M3-P5：edit-lease.ts 的 trackActivity，只认可信事件、零位移的移动不算——心跳的空闲按它）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -25,7 +26,6 @@ import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../sh
 import { loginPath } from '../../shared/lib/login-path.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
 import { documentIsNewer } from './client-format.ts'
-import { trackActivity } from './edit-lease.ts'
 import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 
@@ -104,6 +104,14 @@ export interface PageNetwork {
   readonly onChange: (listener: () => void) => () => void
 }
 
+/**
+ * 本页的键盘、鼠标操作（组装处给出 edit-lease.ts 的 trackActivity：窗口的捕获阶段，只认可信事件、零位移的移动不算，M3-P5 设计 §3.9）：
+ * 有操作时调用 listener；返回退订的函数。订阅要在交互屏障之前挂上（载入期间被拦下的输入也算有操作）
+ */
+export interface PageActivity {
+  readonly subscribe: (listener: () => void) => () => void
+}
+
 /** 测试构建的自动保存控制（M3-P4 设计 §3.14）交给编辑模式的部分：节奏与暂停、日志、当前的调度 */
 export type AutosaveControlHooks = Pick<EditModeAutosave, 'tuning' | 'observe' | 'attach'>
 
@@ -134,6 +142,8 @@ export interface EditorPageOptions {
   readonly visibility: PageVisibility
   /** 联网与否（自动保存） */
   readonly network: PageNetwork
+  /** 本页的键盘、鼠标操作（心跳上报的空闲） */
+  readonly activity: PageActivity
   /** 快照 UTF-8 字节的摘要（自动保存的会话内去重，editor-api.ts 的 snapshotDigest） */
   readonly digest: (snapshot: string) => Promise<string>
   /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
@@ -578,7 +588,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 本页的键盘、鼠标操作（捕获阶段）：心跳据此上报多久没有操作。挂在交互屏障之前，载入期间被拦下的输入也算有操作。
       // 页面隐藏、关闭时尽力释放编辑权（keepalive，结果不管）
       const pageWindow = options.chrome.ownerDocument.defaultView ?? window
-      cleanups.push(trackActivity(pageWindow, () => {
+      cleanups.push(options.activity.subscribe(() => {
         lastActivity = clock.now()
         mode?.noteActivity()
       }))

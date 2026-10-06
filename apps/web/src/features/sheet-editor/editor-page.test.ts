@@ -116,6 +116,27 @@ function fakeChannel() {
   return { channel, fromOtherTab: () => listeners.forEach(listener => listener()), listeners }
 }
 
+/**
+ * 本页的键盘、鼠标操作（组装处给出 trackActivity：只认可信事件，测试里派发的 DOM 事件一律不可信）：fire 模拟一次操作；
+ * subscribedAt 记下订阅那一刻容器的状态（订阅要在交互屏障之前，那时容器还没有状态）
+ */
+function fakeActivity(surface: HTMLElement) {
+  const listeners = new Set<() => void>()
+  const record: { subscribedAt: string | undefined | null } = { subscribedAt: null }
+  return {
+    activity: {
+      subscribe: (listener: () => void) => {
+        record.subscribedAt = surface.dataset.editorState
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    },
+    fire: () => listeners.forEach(listener => listener()),
+    listeners,
+    record,
+  }
+}
+
 /** 可以设的开关（页面的可见性、联网）：变了时同步通知 */
 function fakeSwitch(initial: boolean) {
   let value = initial
@@ -219,6 +240,7 @@ function setup(options: Setup = {}) {
   const hidden = fakeSwitch(false)
   const online = fakeSwitch(true)
   const autosave = fakeAutosaveControl()
+  const activity = fakeActivity(surface)
   let id = 0
   const editorPage = createEditorPage({
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
@@ -231,6 +253,7 @@ function setup(options: Setup = {}) {
     clock: time.clock,
     visibility: { hidden: hidden.get, onChange: hidden.onChange },
     network: { online: online.get, onChange: online.onChange },
+    activity: activity.activity,
     digest: async snapshot => `sha:${snapshot}`,
     autosaveControl: autosave.hooks,
     editIntent,
@@ -240,7 +263,7 @@ function setup(options: Setup = {}) {
     reportError: vi.fn(),
   })
   pages.push(editorPage)
-  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave }
+  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave, activity }
 }
 
 /** 查看者读到的编辑状态：不能编辑 */
@@ -1201,16 +1224,22 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editLease.renew).toHaveBeenCalledTimes(2)
   })
 
-  it('续租上报距离本页最后一次键盘、鼠标操作的秒数：操作在窗口的捕获阶段记下', async () => {
-    const { editorPage, editLease, time } = setup()
+  it('续租上报距离本页最后一次键盘、鼠标操作的秒数：操作由组装处给出的来源记下（trackActivity：窗口的捕获阶段、只认可信事件）；订阅挂在交互屏障之前', async () => {
+    const { editorPage, editLease, time, activity } = setup()
     await editorPage.load()
+    // 订阅时容器还没有状态：交互屏障（setSurface('loading')）在它之后才挂上，载入期间被拦下的输入也算有操作
+    expect(activity.record.subscribedAt).toBeUndefined()
     await time.advance(4_000)
-    window.dispatchEvent(new Event('keydown'))
+    activity.fire()
     await time.advance(6_000)
     expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 6)
-    window.dispatchEvent(new Event('pointerdown'))
+    activity.fire()
     await time.advance(10_000)
     expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 10)
+    // 页面里派发的事件（不可信）不经这个来源：不算有操作，空闲照样往上加
+    window.dispatchEvent(new Event('keydown'))
+    await time.advance(10_000)
+    expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 20)
   })
 
   it('申请得到的修订号比载入的内容新（这期间有人保存过）：按条件读取（本页的修订号）取服务端的内容，按它创建，以它的修订号作保存的基准', async () => {
@@ -1590,7 +1619,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   it.each(['idle', 'expired'])('人走开 12 分钟之后续租得知中断（%s；休眠、断网回来时服务端给的是到期）：不续上；本页再有键盘、鼠标操作时续上（审查 B8）', async (reason) => {
     // 服务端的说法：上报的空闲到了回收阈值就算中断
     const renew = vi.fn<EditLeaseApi['renew']>(async (_documentId, _token, idleSeconds) => idleSeconds >= EDIT_LEASE_IDLE_RECLAIM_SECONDS ? Promise.reject(leaseLost(reason)) : RENEWED)
-    const { editorPage, editLease, time } = setup({ editLease: { renew } })
+    const { editorPage, editLease, time, activity } = setup({ editLease: { renew } })
     await editorPage.load()
     await time.advance(EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000)
     await time.advance(300_000)
@@ -1599,7 +1628,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
     const renewals = renew.mock.calls.length
     editLease.acquire.mockResolvedValueOnce(NEXT_LEASE)
-    window.dispatchEvent(new Event('pointermove'))
+    activity.fire()
     await vi.waitFor(() => expect(editLease.acquire).toHaveBeenCalledTimes(2))
     await time.advance(10_000)
     expect(renew).toHaveBeenCalledTimes(renewals + 1)
