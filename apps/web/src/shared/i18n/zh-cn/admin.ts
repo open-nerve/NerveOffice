@@ -45,6 +45,7 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'documents.share_changed': '调整分享',
   'documents.share_revoked': '取消分享',
   'documents.conflict_copied': '另存为副本',
+  'documents.edit_taken_over': '强制接管编辑',
   'folders.created': '新建文件夹',
   'folders.renamed': '文件夹改名',
   'folders.moved': '移动文件夹',

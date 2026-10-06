@@ -80,7 +80,7 @@ describe('DocumentCopyService.copy', () => {
     const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const copy = await service.copy(member(ALICE), document.id, { spaceId: TEAM_SPACE, folderId: folder.id, title: '周报（存档）', requestId: nextRequestId() }, HTTP_ORIGIN)
     expect(copy).toMatchObject({ title: '周报（存档）', spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' }, accessVia: 'space' })
-    expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false })
+    expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false })
   })
 
   it('只凭授权的人（M2-P5）：查看授权就能复制到自己有新建权限的空间；副本是新文档，不带原文档的授权，响应照常带文件夹', async () => {

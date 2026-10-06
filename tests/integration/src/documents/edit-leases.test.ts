@@ -19,6 +19,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { idleLeaseFor, passLeaseTime, saveContent } from '../support/edit-leases.ts'
+import { setGrant } from '../support/grants.ts'
 import { raceAgainstHeldLock } from '../support/held-lock.ts'
 import { asUser, cookieValue, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 import { createTeamSpace, setMember, setSpaceState } from '../support/spaces.ts'
@@ -67,6 +68,11 @@ function sessionOf(account: TestAccount): LoggedIn {
   if (session === undefined)
     throw new Error(`${account.username} 没有登录`)
   return session
+}
+
+/** 把一份文档单独授权给这个人当编辑者（M2-P5），分享的人是艾米 */
+async function grantEditor(documentId: string, userId: string): Promise<void> {
+  await setGrant(database, { documentId, userId, role: 'editor', grantedBy: amy.id })
 }
 
 /** 团队空间里的一份新文档（各个用例各用各的，租约互不影响） */
@@ -254,15 +260,21 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
     expect(await errorOf(own)).toMatchObject({ status: 409, code: 'DOCUMENT_REVISION_CONFLICT', details: { currentRevision: 2, source: { clientInstanceId: amyTab, localSeq: 5 } } })
   })
 
-  it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间与是不是调用者自己；没有时为 null', async () => {
+  it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间、是不是调用者自己与是不是调用者这次登录（M3-P5）；没有时为 null', async () => {
     const document = await freshDocument()
-    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null, canEdit: false, formulasPending: false })
+    // M3-P5 S1：请求编辑、保留与编辑状态里的提醒还没有接上（S2、S4），一律 null
+    const notYet = { request: null, reservation: null, interruption: null }
+    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null, canEdit: false, canTakeOver: false, formulasPending: false, ...notYet })
     await acquired(sessionOf(amy), document.id)
     const row = await leaseOf(document.id)
     const editor = { holder: summaryOf(amy), lastActiveAt: row?.last_active_at.toISOString() }
-    expect(await status(sessionOf(ben), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: true, formulasPending: false })
-    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false }, canEdit: false, formulasPending: false })
-    expect(await status(sessionOf(amy), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: true }, canEdit: true, formulasPending: false })
+    // 艾米是团队空间的空间管理员（能强制接管），本是编辑者，维克是查看者
+    expect(await status(sessionOf(ben), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false, sameSession: false }, canEdit: true, canTakeOver: false, formulasPending: false, ...notYet })
+    expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: false, sameSession: false }, canEdit: false, canTakeOver: false, formulasPending: false, ...notYet })
+    expect(await status(sessionOf(amy), document.id)).toEqual({ revision: 1, editor: { ...editor, sameUser: true, sameSession: true }, canEdit: true, canTakeOver: true, formulasPending: false, ...notYet })
+    // 同一个人在另一个设备上（另一条登录）：是本人，不是这次登录
+    const otherDevice = await login(app.baseUrl, amy.username, amy.password)
+    expect((await status(otherDevice, document.id)).editor).toEqual({ ...editor, sameUser: true, sameSession: false })
   })
 
   it('US-M3-05 编辑状态带上调用者现在能不能编辑（M3-P2 设计 §3.2）：与详情的 permissions.canEdit 一致；阅读期间被降级、空间被归档、被升为编辑者，下一次读就跟着变', async () => {
@@ -388,12 +400,45 @@ describe('US-M3-04 同一时刻只有一个标签页能编辑', () => {
     await acquired(sessionOf(amy), document.id)
     const before = { lease: await leaseOf(document.id), document: await documentOf(document.id) }
     const lastActiveAt = before.lease?.last_active_at.toISOString()
-    expect(await heldBy(await acquire(sessionOf(ben), document.id))).toEqual({ holder: summaryOf(amy), lastActiveAt, sameUser: false })
-    expect(await heldBy(await acquire(sessionOf(amy), document.id))).toEqual({ holder: summaryOf(amy), lastActiveAt, sameUser: true })
-    // 同一个人在另一个设备上（另一条登录）也一样
+    // M3-P5：另带是不是调用者这次登录、调用者能不能强制接管（本是编辑者，不能）与待回应的请求（S1 还没有接上，null）
+    expect(await heldBy(await acquire(sessionOf(ben), document.id))).toEqual({ holder: summaryOf(amy), lastActiveAt, sameUser: false, sameSession: false, canTakeOver: false, request: null })
+    expect(await heldBy(await acquire(sessionOf(amy), document.id))).toEqual({ holder: summaryOf(amy), lastActiveAt, sameUser: true, sameSession: true, canTakeOver: true, request: null })
+    // 同一个人在另一个设备上（另一条登录）也一样，只是不是这次登录
     const otherDevice = await login(app.baseUrl, amy.username, amy.password)
-    expect((await heldBy(await acquire(otherDevice, document.id))).sameUser).toBe(true)
+    expect(await heldBy(await acquire(otherDevice, document.id))).toMatchObject({ sameUser: true, sameSession: false })
     expect({ lease: await leaseOf(document.id), document: await documentOf(document.id) }).toEqual(before)
+  })
+
+  it('M3-P5 被占用的详情里能不能强制接管按申请的人：团队空间的空间管理员能（持有者是编辑者），个人空间的所有者能（持有者是被授权的编辑者），被授权的编辑者不能', async () => {
+    const team = await freshDocument()
+    await acquired(sessionOf(ben), team.id)
+    expect(await heldBy(await acquire(sessionOf(amy), team.id))).toMatchObject({ holder: summaryOf(ben), sameUser: false, canTakeOver: true })
+
+    const personal = await seedDocument(database, { spaceId: amy.personalSpaceId, createdBy: amy.id, title: '租约：个人空间' })
+    await grantEditor(personal.id, ben.id)
+    const granted = await acquired(sessionOf(ben), personal.id)
+    expect(await heldBy(await acquire(sessionOf(amy), personal.id))).toMatchObject({ holder: summaryOf(ben), canTakeOver: true })
+    expect((await release(sessionOf(ben), personal.id, granted.token)).status).toBe(204)
+    const owned = await acquired(sessionOf(amy), personal.id)
+    expect(await heldBy(await acquire(sessionOf(ben), personal.id))).toMatchObject({ holder: summaryOf(amy), canTakeOver: false })
+    expect((await renew(sessionOf(amy), personal.id, owned.token)).status).toBe(200)
+  })
+
+  it('M3-P5 S1：申请的请求体收下续上时带的空闲秒数、暂不使用（最后活动照旧是申请的时刻）；接管方式（takeover）服务端还不认，与以前一样按严格结构 400，什么也不写', async () => {
+    const document = await freshDocument()
+    const idle = await asUser(app.baseUrl, sessionOf(amy), leasePath(document.id), { method: 'POST', body: { ...acquireBody(randomUUID()), idleSeconds: 300 } })
+    expect(idle.status, await idle.clone().text()).toBe(201)
+    const row = await leaseOf(document.id)
+    expect(row?.last_active_at).toEqual(row?.acquired_at)
+
+    const other = await freshDocument()
+    const before = await documentOf(other.id)
+    for (const takeover of ['self', 'force']) {
+      const response = await asUser(app.baseUrl, sessionOf(amy), leasePath(other.id), { method: 'POST', body: { ...acquireBody(randomUUID()), takeover } })
+      expect(await errorOf(response), takeover).toMatchObject({ status: 400, code: 'REQUEST_INVALID' })
+    }
+    expect(await leaseOf(other.id)).toBeUndefined()
+    expect(await documentOf(other.id)).toEqual(before)
   })
 
   it('US-M3-04 两个人同时申请（确定交错）：测试持住文档行，艾米、本依次停在这把锁上；放开之后艾米取得，本在锁下看到她的租约，409', async () => {
@@ -452,8 +497,17 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
     expect((await status(sessionOf(ben), document.id)).editor).toBeNull()
     const taken = await acquired(sessionOf(ben), document.id)
     expect(taken.writeEpoch).toBe(lease.writeEpoch + 1)
-    expect(taken.interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt })
+    expect(taken.interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: false })
     expect(await lostReason(await renew(sessionOf(amy), document.id, lease.token))).toBe('replaced')
+  })
+
+  it('M3-P5 提醒带上是不是自己：自己的租约到期之后自己再申请（另一个设备），提醒是关于自己的，sameUser 为真', async () => {
+    const document = await freshDocument()
+    await acquired(sessionOf(amy), document.id)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
+    const renewedAt = (await leaseOf(document.id))?.renewed_at.toISOString()
+    const otherDevice = await login(app.baseUrl, amy.username, amy.password)
+    expect((await acquired(otherDevice, document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: true })
   })
 
   it('US-M3-11 到期之后没人接手：持有者心跳得到 expired；离到期还有 10 秒时照常续租，别人申请被占用', async () => {

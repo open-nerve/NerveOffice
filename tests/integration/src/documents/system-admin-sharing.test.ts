@@ -142,7 +142,7 @@ describe('US-M2-10 系统管理员被单独分享（需求方 2026-10-02 的决�
       folderId: null,
       accessVia: 'grant',
       space: { id: world.teamSpace, type: 'team' },
-      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false },
+      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false },
     })
     // 个人空间：只给 id 与类型，不给存的名称（规范 §2.4）
     expect((await detailOf(adminSession, world.personalShared.id)).space).toEqual({ id: amy.personalSpaceId, type: 'personal' })
@@ -167,7 +167,7 @@ describe('US-M2-10 系统管理员被单独分享（需求方 2026-10-02 的决�
   it('查看授权只能读：保存 403；系统角色不把它抬成编辑者', async () => {
     const world = await newWorld()
     await shareWithAdmin(world.personalShared, 'viewer')
-    expect(await detailOf(adminSession, world.personalShared.id)).toMatchObject({ accessVia: 'grant', permissions: { canEdit: false, canShare: false } })
+    expect(await detailOf(adminSession, world.personalShared.id)).toMatchObject({ accessVia: 'grant', permissions: { canEdit: false, canShare: false, canTakeOver: false } })
     expect(await errorOf(await save(adminSession, world.personalShared, 1))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
   })
 

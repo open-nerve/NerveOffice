@@ -2,12 +2,13 @@
 // 这里按当时的结构写入有代表性的数据——每个审计动作、目标类型与来源各一条，会话的每个撤销原因，邀请、重置与限流的行，
 // 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"，
 // 单独授权（M2-P5 起），编辑租约（M3-P1 起：一个有效的、一个明确结束的），保存协议的信封与回执（M3-P3 起：内容哈希、资源名、
-// 客户端构建、"公式待更新"、一条回执）——迁移到最新之后核对：每张表的行数不变、约束全部已验证、
+// 客户端构建、"公式待更新"、一条回执），交接规则的列（M3-P5 起：待回应与被谢绝的请求、交出之后的保留、本人与强制接管的标记）——
+// 迁移到最新之后核对：每张表的行数不变、约束全部已验证、
 // 只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除，迁移之前建的文件夹原样重发当初的新建请求是重放
 // （0021 在 SQL 里回填的请求摘要与服务算的一致，M2 Codex 评审 CX6），迁移之前的文档能经接口保存（M3-P3：存量没有内容哈希与资源名，
 // 第一次保存照常加一个修订、补上它们，之后内容相同的保存不加修订号）。
 //
-// 基准是每个阶段结束时的最后一个迁移（11 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是每个阶段结束时的最后一个迁移（13 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -44,8 +45,10 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M3-P1 结束', '0022_m3_p1_document_edit_leases'],
   // 审计里有另存为副本的动作的库迁到 0024（M3-P3：文档、内容与修订记录的表加信封的列，新的回执表）及以后
   ['M3-P2 结束', '0023_m3_p2_conflict_copy_audit'],
-  // 有内容哈希、资源名、客户端构建、"公式待更新"与回执的库迁到以后的
+  // 有内容哈希、资源名、客户端构建、"公式待更新"与回执的库迁到 0025（M3-P5：租约行加请求编辑、保留与接管标记的列，审计加强制接管的动作）及以后
   ['M3-P3 结束', '0024_m3_p3_save_protocol'],
+  // 租约行上有待回应与被谢绝的请求、交出之后的保留与接管标记，审计里有强制接管的库迁到以后的（M3-P4 没有迁移）
+  ['M3-P5 结束', '0025_m3_p5_handover'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
@@ -221,6 +224,23 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
        VALUES ($1, $2, $3, $4, sha256('lease-live'), 3, now() - interval '1 minute', now(), now() + interval '90 seconds', now(), NULL, NULL),
               ($5, $2, $6, $7, sha256('lease-released'), 1, now() - interval '2 hours', now() - interval '1 hour', now() - interval '58 minutes', now() - interval '1 hour', now() - interval '1 hour', 'released')`,
       [teamDocument.id, amy, randomUUID(), randomUUID(), archivedDocument.id, randomUUID(), randomUUID()],
+    )
+  }
+
+  // 交接规则（M3-P5）：有效的那一代是本人接管来的、有一个根账户发出的待回应的请求；已释放的那一代上留着一个被谢绝的请求；
+  // 另一份文档上的一代是强制接管来的，已经交出、留给根账户（请求已经转成保留）
+  if (at('0025_m3_p5_handover')) {
+    const request = `request_id = gen_random_uuid(), requested_by = $2, request_session_id = gen_random_uuid(), requested_at = now() - interval '30 seconds',
+                     request_expires_at = now() + interval '9 minutes'`
+    await client.query(`UPDATE document_edit_leases SET ${request}, taken_over_token_digest = sha256('lease-before-takeover'), takeover = 'self' WHERE document_id = $1`, [teamDocument.id, root])
+    await client.query(`UPDATE document_edit_leases SET ${request}, request_declined_at = now() - interval '20 seconds' WHERE document_id = $1`, [archivedDocument.id, root])
+    const handedDocument = await insertDocument(team.id, '交出了的文档', { epoch: 2 })
+    await client.query(
+      `INSERT INTO document_edit_leases (document_id, holder_id, session_id, client_instance_id, token_digest, write_epoch, acquired_at, renewed_at, expires_at, last_active_at, ended_at, end_reason,
+                                         reserved_for, reserved_until, taken_over_token_digest, takeover)
+       VALUES ($1, $2, $3, $4, sha256('lease-handed-over'), 2, now() - interval '5 minutes', now() - interval '10 seconds', now() + interval '80 seconds', now() - interval '3 minutes',
+               now(), 'handed_over', $5, now() + interval '2 minutes', sha256('lease-forced-away'), 'forced')`,
+      [handedDocument.id, amy, randomUUID(), randomUUID(), root],
     )
   }
 

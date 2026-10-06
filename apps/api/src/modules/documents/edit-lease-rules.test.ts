@@ -212,23 +212,30 @@ describe('异常结束（申请改写这一行之前算，P1 设计 §3.4.5）',
     ] as const) {
       const loss = await currentLeaseLoss(row, EPOCH, holder)
       expect(loss).toBe(expected)
-      expect(interruptionOf(row, loss), loss).toEqual({ holderId: AMY, endedAt: row.renewedAt })
+      expect(interruptionOf(row, loss, BEN), loss).toEqual({ holderId: AMY, endedAt: row.renewedAt, sameUser: false })
     }
   })
 
   it('明确结束（释放、收回）、代次过时、持有者没了编辑权、没有上一个租约、上一个仍然有效：都不算', async () => {
     for (const row of [lease({ endedAt: at(-SECOND), endReason: 'released' }), lease({ endedAt: at(-SECOND), endReason: 'revoked' }), lease({ writeEpoch: EPOCH - 1, expiresAt: at(-SECOND) })])
-      expect(interruptionOf(row, await currentLeaseLoss(row, EPOCH, facts()))).toBeUndefined()
-    expect(interruptionOf(lease(), await currentLeaseLoss(lease(), EPOCH, facts(true, false)))).toBeUndefined()
-    expect(interruptionOf(undefined, 'none')).toBeUndefined()
-    expect(interruptionOf(lease(), undefined)).toBeUndefined()
+      expect(interruptionOf(row, await currentLeaseLoss(row, EPOCH, facts()), BEN)).toBeUndefined()
+    expect(interruptionOf(lease(), await currentLeaseLoss(lease(), EPOCH, facts(true, false)), BEN)).toBeUndefined()
+    expect(interruptionOf(undefined, 'none', BEN)).toBeUndefined()
+    expect(interruptionOf(lease(), undefined, BEN)).toBeUndefined()
+  })
+
+  it('M3-P5：提醒带上上一位持有者是不是这次申请的人自己（sameUser）——只按人比较，与登录、标签页无关', async () => {
+    const row = lease({ lastActiveAt: at(-IDLE) })
+    const loss = await currentLeaseLoss(row, EPOCH, facts())
+    expect(interruptionOf(row, loss, AMY)).toEqual({ holderId: AMY, endedAt: row.renewedAt, sameUser: true })
+    expect(interruptionOf(row, loss, BEN)).toEqual({ holderId: AMY, endedAt: row.renewedAt, sameUser: false })
   })
 
   it('结束在 30 分钟以内才给：恰好 30 分钟仍然给，再晚 1 毫秒就不给', () => {
     const ended = (milliseconds: number) => lease({ renewedAt: at(-milliseconds), expiresAt: at(-milliseconds + EDIT_LEASE_TTL_SECONDS * SECOND), lastActiveAt: at(-milliseconds) })
-    expect(interruptionOf(ended(NOTICE), 'expired')).toEqual({ holderId: AMY, endedAt: at(-NOTICE) })
-    expect(interruptionOf(ended(NOTICE + 1), 'expired')).toBeUndefined()
-    expect(interruptionOf(ended(NOTICE + 1), 'idle')).toBeUndefined()
+    expect(interruptionOf(ended(NOTICE), 'expired', BEN)).toEqual({ holderId: AMY, endedAt: at(-NOTICE), sameUser: false })
+    expect(interruptionOf(ended(NOTICE + 1), 'expired', BEN)).toBeUndefined()
+    expect(interruptionOf(ended(NOTICE + 1), 'idle', BEN)).toBeUndefined()
   })
 })
 

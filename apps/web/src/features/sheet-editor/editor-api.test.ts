@@ -27,9 +27,9 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
   })
 
   it('续租：PUT 空闲的秒数与本页的构建与数据格式（M3-P3），令牌只在请求头里（不进地址）', async () => {
-    const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z' }) })
+    const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z', request: null }) })
     setCsrfToken('csrf-1')
-    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z' })
+    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z', request: null })
     expect(api.requests[0]).toMatchObject({ key: `PUT ${LEASE}`, body: { idleSeconds: 12, ...PAGE_CLIENT_FORMAT }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-1' } })
   })
 
@@ -105,7 +105,7 @@ describe('内容的读取（P4 设计 §3.3；M3-P2 设计 §3.2 的条件读取
 })
 
 describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
-  const STATUS = { revision: 3, editor: { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }, canEdit: true, formulasPending: false }
+  const STATUS = { revision: 3, editor: { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false, sameSession: false }, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }
 
   it('编辑状态：GET edit-lease，读出修订号、正在编辑的人与能不能编辑，连同服务端回答的时刻（响应头 Date）', async () => {
     const api = installFakeApi({ [`GET ${LEASE}`]: () => json(200, STATUS, { date: 'Sun, 04 Oct 2026 03:03:10 GMT' }) })
@@ -135,7 +135,7 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
       formatVersion: 1,
       sdkVersion: '1.0.1',
       formulasPending: false,
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
       replayed: false,
     }
     const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: created.title, formulasPending: true }

@@ -14,7 +14,7 @@ const TOKEN = 'T'.repeat(43)
 const NEXT_TOKEN = 'N'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 3, revision: 5, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
 const NEXT: AcquiredEditLease = { ...ACQUIRED, token: NEXT_TOKEN, writeEpoch: 4 }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z' }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null }
 const AMY: UserSummary = { id: '0199a2c4-1f2e-7a3b-8c4d-00000000000a', username: 'amy', displayName: '艾米' }
 
 /** 申请被占用：details 是持有者的详情，serverTime 是响应头 Date 的时刻 */
@@ -27,9 +27,9 @@ function lostError(reason?: string): ApiError {
 }
 
 /** 自己在另一个标签页上持有 */
-const SELF_HELD = { holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: true }
+const SELF_HELD = { holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: true, sameSession: false, canTakeOver: false, request: null }
 /** 别人（艾米）持有 */
-const AMY_HELD = { holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }
+const AMY_HELD = { holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false, sameSession: false, canTakeOver: false, request: null }
 /** 服务端回收空闲编辑权的阈值（毫秒）：本页的空闲到了它就算人不在 */
 const RECLAIM_MS = EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000
 /** 可以自动续上的失效原因 */
@@ -137,7 +137,7 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
 
   it('被占用（别人）：给出持有者、不是自己，以及按服务端的时间算的最后活动几分钟之前（向下取整）；不再试', async () => {
     const serverTime = Date.UTC(2026, 9, 4, 3, 10, 0)
-    const context = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:06:30.000Z', sameUser: false }, serverTime))) })
+    const context = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:06:30.000Z', sameUser: false, sameSession: false, canTakeOver: false, request: null }, serverTime))) })
     expect(await acquireEditLease(context.options)).toEqual({ kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } })
     expect(context.api.acquire).toHaveBeenCalledOnce()
     expect(context.time.pending()).toBe(0)
@@ -145,9 +145,9 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
 
   it('最后活动时间晚于服务端回答的时刻（Date 只精确到秒）：算作 0 分钟；服务端没给回答的时刻：不算几分钟之前', async () => {
     const serverTime = Date.UTC(2026, 9, 4, 3, 0, 0)
-    const later = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:00:00.800Z', sameUser: false }, serverTime))) })
+    const later = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:00:00.800Z', sameUser: false, sameSession: false, canTakeOver: false, request: null }, serverTime))) })
     expect(await acquireEditLease(later.options)).toMatchObject({ kind: 'held', holder: { lastActiveMinutes: 0 } })
-    const undated = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }))) })
+    const undated = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false, sameSession: false, canTakeOver: false, request: null }))) })
     expect(await acquireEditLease(undated.options)).toMatchObject({ kind: 'held', holder: { lastActiveMinutes: undefined } })
   })
 

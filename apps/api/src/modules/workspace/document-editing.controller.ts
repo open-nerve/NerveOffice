@@ -8,6 +8,13 @@ import { editingActorOf, EditLeaseToken } from '../documents/index.ts'
 import { DocumentEditingService } from './document-editing.service.ts'
 
 /**
+ * 申请的请求体（M3-P5 S1）：契约里已经有本人接管与强制接管（takeover，M3-P5 设计 §3.7、§3.8），服务端到 S3 才接上；在那之前照旧不认这一项——
+ * 按严格结构回 400，与契约加上它之前一样，而不是当成普通的申请悄悄放过（本人接管会变成被占用、强制接管在没人编辑时会变成普通的申请）。
+ * 续上时带的 idleSeconds 收下、暂不使用（S2 接上）：最后活动照旧记成申请的时刻，与它出现之前一样
+ */
+const acquireRequestSchema = acquireEditLeaseRequestSchema.omit({ takeover: true })
+
+/**
  * 编辑权（M3-P1 设计 §3.2）：一份文档的编辑租约。编辑状态能读就能看；申请与续租要能编辑；释放能读就行。
  * 令牌经请求头 x-edit-lease 传递（@EditLeaseToken()，格式不对 400，没带按没有租约处理），不进地址与日志。
  * 申请的响应带着令牌，不缓存：安全响应头已经给所有响应下发 Cache-Control: no-store（security 模块），这里不另加。
@@ -34,9 +41,10 @@ export class DocumentEditingController {
   async acquire(
     @CurrentPrincipal() principal: Principal,
     @Param('id', { schema: documentIdSchema }) id: string,
-    @Body({ schema: acquireEditLeaseRequestSchema }) body: AcquireEditLeaseRequest,
+    @Body({ schema: acquireRequestSchema }) body: Omit<AcquireEditLeaseRequest, 'takeover'>,
   ): Promise<AcquiredEditLease> {
-    const { clientInstanceId, ...format } = body
+    // idleSeconds 收下、暂不使用（见 acquireRequestSchema）
+    const { clientInstanceId, idleSeconds: _idleSeconds, ...format } = body
     return this.editing.acquire(editingActorOf(principal), id, { clientInstanceId, format })
   }
 

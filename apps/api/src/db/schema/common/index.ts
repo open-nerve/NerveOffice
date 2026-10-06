@@ -24,6 +24,14 @@ export function oneOf(column: AnyPgColumn, values: readonly string[]): SQL {
   return sql`${column} IN (${sql.join(values.map(stringLiteral), sql`, `)})`
 }
 
+/**
+ * 这几列同时为空或同时有值（一组一起写、一起清的列）：第一列与其余每一列"是不是空"相同。
+ * 两列时就是 (a IS NULL) = (b IS NULL)，与各表手写的那种写法一样
+ */
+export function allOrNone(first: AnyPgColumn, ...rest: readonly AnyPgColumn[]): SQL {
+  return sql.join(rest.map(column => sql`(${first} IS NULL) = (${column} IS NULL)`), sql` AND `)
+}
+
 /** 按码点计的长度范围（PostgreSQL 的 char_length），与 contracts 的规则一致。 */
 export function lengthBetween(column: AnyPgColumn, min: number, max: number): SQL {
   return sql`char_length(${column}) BETWEEN ${sql.raw(String(min))} AND ${sql.raw(String(max))}`

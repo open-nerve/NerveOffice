@@ -36,10 +36,14 @@ export interface LeaseRequest {
   readonly writeEpoch?: number | undefined
 }
 
-/** 上一个租约异常结束的事实（P5 据此提醒，US-M3-10）：持有者与结束的时间——他最近一次续租的时间 */
+/**
+ * 上一个租约异常结束的事实（P5 据此提醒，US-M3-10）：持有者、结束的时间——他最近一次续租的时间，以及他是不是这次申请的人自己
+ * （M3-P5 设计 §3.5：页面按它分别说"上一位编辑者……"与"你上一次的编辑……"）
+ */
 export interface LeaseInterruption {
   readonly holderId: string
   readonly endedAt: Date
+  readonly sameUser: boolean
 }
 
 const IDLE_RECLAIM_MS = EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000
@@ -130,12 +134,13 @@ export function releasableBy(lease: ObservedEditLease | undefined, token: string
 
 /**
  * 当前的租约是不是异常结束、而且结束在 30 分钟以内（P1 设计 §3.4.2 第 6 步、§3.4.5）：申请改写这一行之前，按 currentLeaseLoss
- * 给出的原因判断。结束的时间取它最近一次续租的时间（之后就没有它还在的消息了）；恰好 30 分钟仍然提醒
+ * 给出的原因判断。结束的时间取它最近一次续租的时间（之后就没有它还在的消息了）；恰好 30 分钟仍然提醒。
+ * callerId 是这次申请的人：提醒带上上一位持有者是不是他自己（sameUser）
  */
-export function interruptionOf(lease: ObservedEditLease | undefined, loss: EditLeaseLostReason | undefined): LeaseInterruption | undefined {
+export function interruptionOf(lease: ObservedEditLease | undefined, loss: EditLeaseLostReason | undefined, callerId: string): LeaseInterruption | undefined {
   if (lease === undefined || loss === undefined || !ABNORMAL_ENDINGS.has(loss))
     return undefined
   if (lease.now.getTime() - lease.renewedAt.getTime() > INTERRUPTION_NOTICE_MS)
     return undefined
-  return { holderId: lease.holderId, endedAt: lease.renewedAt }
+  return { holderId: lease.holderId, endedAt: lease.renewedAt, sameUser: lease.holderId === callerId }
 }

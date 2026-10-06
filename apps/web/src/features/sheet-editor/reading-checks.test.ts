@@ -7,7 +7,7 @@ import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { createReadingChecks, READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
 
 function status(revision: number): FetchedEditStatus {
-  return { status: { revision, editor: null, canEdit: true, formulasPending: false }, serverTime: undefined }
+  return { status: { revision, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }
 }
 
 /** 由测试决定何时回来的一次读取 */
