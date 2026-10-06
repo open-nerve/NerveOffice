@@ -1512,7 +1512,8 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     editLease.acquire.mockResolvedValueOnce(NEXT_LEASE)
     await time.advance(10_000)
     expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
-    expect(editLease.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, 'id-1')
+    // 续上的申请带本页的空闲秒数（M3-P5 设计 §3.5）
+    expect(editLease.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, 'id-1', { idleSeconds: 10 })
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { canSave: true } })
     await editorPage.save()
     expect(api.save).toHaveBeenLastCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), NEXT_CREDENTIALS)

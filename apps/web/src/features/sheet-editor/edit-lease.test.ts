@@ -359,7 +359,8 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
     })
     await context.time.advance(10_000)
     expect(context.calls).toEqual(['release T', 'acquire'])
-    expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID)
+    // 续上的申请带本页的空闲秒数（M3-P5 设计 §3.5：服务端把新的一代的最后活动按它往前推）
+    expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, { idleSeconds: 10 })
     expect(lease.credentials()).toEqual({ token: NEXT_TOKEN, writeEpoch: 4 })
     expect(context.onLost).not.toHaveBeenCalled()
     // 修订号没变：不用问页面期间的那一版是谁的
@@ -1106,5 +1107,133 @@ describe('与服务端不兼容（M3-P3 设计 §3.5）：本页过旧、文档�
       await expect(acquireEditLease(context.options)).rejects.toBe(error)
       expect(context.api.acquire).toHaveBeenCalledOnce()
     }
+  })
+})
+
+describe('续上的申请带本页的空闲秒数（M3-P5 设计 §3.5）', () => {
+  it('续上时带的是这一刻本页距离最后一次操作的整秒数；第一次（用户发起的）申请不带', async () => {
+    const context = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('expired')).mockResolvedValue(RENEWED) })
+    await held(context)
+    expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID)
+    context.interact(context.time.now() + 2_500)
+    await context.time.advance(10_000)
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, { idleSeconds: 7 })
+  })
+})
+
+describe('停止续上（M3-P5 设计 §3.9：空闲释放开始的那一刻起，没释放成时恢复）', () => {
+  it('停止期间续租得知可以续上的失效：不放、不申请，交回说不准；心跳照常排下一次；恢复之后下一次得知时续上', async () => {
+    const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('expired')).mockRejectedValueOnce(lostError('expired')).mockResolvedValue(RENEWED)
+    const context = setup({ renew })
+    const lease = await held(context)
+    lease.holdRecovery()
+    await context.time.advance(10_000)
+    expect(renew).toHaveBeenCalledOnce()
+    expect(context.api.release).not.toHaveBeenCalled()
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    expect(context.onLost).not.toHaveBeenCalled()
+    expect(lease.credentials().token).toBe(TOKEN)
+    lease.allowRecovery()
+    await settle()
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    context.interact()
+    await context.time.advance(10_000)
+    expect(renew).toHaveBeenCalledTimes(2)
+    expect(context.calls).toEqual(['release T'])
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    expect(lease.credentials().token).toBe(NEXT_TOKEN)
+  })
+
+  it('停止期间保存得知可以续上的失效：交回说不准、不带错误（保存按原来的失败说明），不申请', async () => {
+    const context = setup()
+    const lease = await held(context)
+    lease.holdRecovery()
+    expect(await lease.lose({ kind: 'lease', reason: 'expired' }, lease.credentials())).toEqual({ kind: 'unknown', error: undefined })
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    expect(context.api.release).not.toHaveBeenCalled()
+  })
+
+  it('停止续上不挡失去访问、编辑权（不可续上的照样失效、通知页面）', async () => {
+    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('revoked'))) })
+    const lease = await held(context)
+    lease.holdRecovery()
+    await context.time.advance(10_000)
+    expect(context.onLost).toHaveBeenCalledExactlyOnceWith({ kind: 'lease', reason: 'revoked' })
+  })
+
+  it('人不在（dormant）时停止续上：之后的操作不把它叫醒；恢复时人已经回来了就随即续上，人还不在就照旧等操作', async () => {
+    const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('idle')).mockResolvedValue(RENEWED)
+    const context = setup({ renew })
+    const lease = await held(context)
+    context.interact(context.time.now() - RECLAIM_MS)
+    await context.time.advance(10_000)
+    expect(context.time.pending()).toBe(0)
+    lease.holdRecovery()
+    context.interact()
+    lease.noteActivity()
+    await settle()
+    expect(context.api.release).not.toHaveBeenCalled()
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    // 恢复时人在（刚有过操作）：随即续上
+    lease.allowRecovery()
+    await settle()
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    expect(lease.credentials().token).toBe(NEXT_TOKEN)
+
+    const away = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('idle')).mockResolvedValue(RENEWED) })
+    const dormant = await held(away)
+    away.interact(away.time.now() - RECLAIM_MS)
+    await away.time.advance(10_000)
+    dormant.holdRecovery()
+    dormant.allowRecovery()
+    await settle()
+    expect(away.api.acquire).toHaveBeenCalledOnce()
+    // 之后有操作时照常续上
+    away.interact()
+    dormant.noteActivity()
+    await settle()
+    expect(away.api.acquire).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('放弃这一代（M3-P5 设计 §3.1：本机锁被本浏览器的另一个标签页抢走）', () => {
+  it('停止续租、不发释放、不通知页面；之后得知的失效一律交回已失效，不续上', async () => {
+    const context = setup()
+    const lease = await held(context)
+    lease.abandon()
+    await context.time.advance(60_000)
+    expect(context.api.renew).not.toHaveBeenCalled()
+    expect(context.api.release).not.toHaveBeenCalled()
+    expect(context.onLost).not.toHaveBeenCalled()
+    expect(await lease.lose({ kind: 'lease', reason: 'replaced' }, lease.credentials())).toEqual({ kind: 'lost' })
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    // 已经失效：释放什么也不发，交回"本页没有还在的那一代"
+    await expect(lease.release()).resolves.toBe(true)
+    expect(context.api.release).not.toHaveBeenCalled()
+  })
+
+  it('续上进行中被放弃：申请回来时新的一代随即放掉，不通知页面', async () => {
+    const reply = deferred<AcquiredEditLease>()
+    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('expired'))) })
+    const lease = await held(context)
+    context.api.acquire.mockReturnValueOnce(reply.promise)
+    await context.time.advance(10_000)
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    lease.abandon()
+    reply.resolve(NEXT)
+    await settle()
+    expect(context.calls).toEqual(['release T', 'release N'])
+    expect(context.onLost).not.toHaveBeenCalled()
+    expect(lease.credentials().token).toBe(TOKEN)
+  })
+
+  it('已经失效、释放过之后再放弃：什么也不做', async () => {
+    const context = setup()
+    const lease = await held(context)
+    await lease.release()
+    lease.abandon()
+    expect(context.api.release).toHaveBeenCalledOnce()
+    await expect(lease.release()).resolves.toBe(true)
   })
 })
