@@ -24,7 +24,7 @@ import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentSaveReceiptsRepository } from './document-save-receipts.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { requestLeaseLoss } from './edit-lease-rules.ts'
-import { requireActiveLogin } from './edit-lease.service.ts'
+import { editLeaseLost, requireActiveLogin } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { matchesNoneMatch } from './if-none-match.ts'
 import { legacyNonEmptyResources } from './legacy-resources.ts'
@@ -287,15 +287,16 @@ export class DocumentContentService {
 
   /**
    * 保存要求编辑租约（M3-P1 设计 §3.4.4）：令牌是当前这一行的、按有效条件有效（edit-lease-rules.ts 的 requestLeaseLoss）、
-   * 代次等于查询参数的 writeEpoch、这次登录与查询参数的标签页都是租约绑定的，否则 EDIT_LEASE_LOST（details 带原因）。
-   * 文档行已经锁住（能编辑的请求才走到这里），代次是锁下读到的；租约行不加锁读：能改写它的申请与收回写入权都要先拿文档行的锁。
-   * 保存不续租（续租靠心跳）
+   * 代次等于查询参数的 writeEpoch、这次登录与查询参数的标签页都是租约绑定的，否则 EDIT_LEASE_LOST（details 带原因；被接管时是
+   * taken_over 与 forced，M3-P5 设计 §3.7、§3.8：页面据此不续上，给副本）。
+   * 文档行已经锁住（能编辑的请求才走到这里），代次是锁下读到的；租约行不加锁读：能改写它的申请（含本人接管、强制接管）与收回写入权
+   * 都要先拿文档行的锁。保存不续租（续租靠心跳）
    */
   private async requireLease(saver: ContentSaver, document: DocumentRow, query: SaveContentQuery, transaction: Transaction): Promise<void> {
     const lease = await this.leases.findByDocument(document.id, transaction)
     const loss = requestLeaseLoss(lease, document.writeEpoch, { token: saver.token, sessionId: saver.sessionId, clientInstanceId: query.clientInstanceId, writeEpoch: query.writeEpoch })
     if (loss !== undefined)
-      throw new AppError('EDIT_LEASE_LOST', undefined, { details: { reason: loss } })
+      throw editLeaseLost(loss)
   }
 
   /**

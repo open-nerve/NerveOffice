@@ -1,14 +1,15 @@
 // 编辑租约的规则（M3-P1 设计 §3.4.1、§3.4.5；M3-P5 设计 §3.5–§3.8）：有效条件的每个原因、判断的顺序、时间的边界，
-// 以及"前五条不满足时不查第 6、7 条的事实"；M3-P5：异常结束按事实判断、从调用者看谁占着这份文档（R2）、被接管的那一代、
-// 交出之后的保留，每个边界（恰好到期、恰好 12 分钟、恰好 30 分钟、恰好保留到期）。
+// 以及"前五条不满足时不查第 6、7 条的事实"；M3-P5：异常结束按事实判断、从调用者看谁占着这份文档（R2）、申请怎样对待占着的那一代
+// （本人接管、强制接管、重试、被占用）、被接管的那一代（心跳、保存得到 taken_over）、交出之后的保留，每个边界（恰好到期、恰好 12 分钟、
+// 恰好 30 分钟、恰好保留到期）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
-import type { HolderFacts, LeaseRequest } from './edit-lease-rules.ts'
+import type { Claimant, HolderFacts, LeaseOccupancy, LeaseRequest } from './edit-lease-rules.ts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { Buffer } from 'node:buffer'
 import { EDIT_HANDOVER_RESERVE_SECONDS, EDIT_INTERRUPTION_NOTICE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { NO_HANDOVER } from './documents.test-support.ts'
-import { currentLeaseLoss, endedAbnormally, isSamePage, occupancyOf, releasableBy, requestLeaseLoss, reservedFor, supersededLoss } from './edit-lease-rules.ts'
+import { claimOf, currentLeaseLoss, endedAbnormally, isSamePage, occupancyOf, releasableBy, requestLeaseLoss, reservedFor, supersededLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 
 const DOCUMENT = '0199a2c4-0000-7000-8000-0000000000d1'
@@ -172,30 +173,30 @@ describe('请求带的租约（心跳、保存：持有者自己的请求）', (
   })
 
   it('没有这一行、没带令牌：none（没带令牌时这一行再有效也一样）', () => {
-    expect(requestLeaseLoss(undefined, EPOCH, own())).toBe('none')
-    expect(requestLeaseLoss(lease(), EPOCH, own({ token: undefined }))).toBe('none')
+    expect(requestLeaseLoss(undefined, EPOCH, own())).toEqual({ reason: 'none' })
+    expect(requestLeaseLoss(lease(), EPOCH, own({ token: undefined }))).toEqual({ reason: 'none' })
   })
 
-  it('令牌对不上：replaced——这一行是新的一代，不论它现在有没有效', () => {
-    expect(requestLeaseLoss(lease(), EPOCH, own({ token: OTHER_TOKEN }))).toBe('replaced')
+  it('令牌对不上：replaced——这一行是新的一代，不论它现在有没有效；不带 forced（只有被接管时带）', () => {
+    expect(requestLeaseLoss(lease(), EPOCH, own({ token: OTHER_TOKEN }))).toEqual({ reason: 'replaced' })
     for (const [reason, overrides] of ROW_FAILURES)
-      expect(requestLeaseLoss(lease(overrides), EPOCH, own({ token: OTHER_TOKEN })), reason).toBe('replaced')
+      expect(requestLeaseLoss(lease(overrides), EPOCH, own({ token: OTHER_TOKEN })), reason).toEqual({ reason: 'replaced' })
   })
 
   it.each(ROW_FAILURES)('令牌对得上，第 2–5 条不满足：%s', (reason, overrides) => {
-    expect(requestLeaseLoss(lease(overrides), EPOCH, own())).toBe(reason)
+    expect(requestLeaseLoss(lease(overrides), EPOCH, own())).toEqual({ reason })
   })
 
   it('保存带的代次不是租约的这一代：stale（与租约的代次过时同一条，排在到期之前）', () => {
-    expect(requestLeaseLoss(lease(), EPOCH, own({ writeEpoch: EPOCH - 1 }))).toBe('stale')
-    expect(requestLeaseLoss(lease(), EPOCH, own({ writeEpoch: EPOCH + 1 }))).toBe('stale')
-    expect(requestLeaseLoss(lease({ expiresAt: at(-SECOND) }), EPOCH, own({ writeEpoch: EPOCH - 1 }))).toBe('stale')
-    expect(requestLeaseLoss(lease({ endedAt: at(-SECOND), endReason: 'revoked' }), EPOCH, own({ writeEpoch: EPOCH - 1 }))).toBe('revoked')
+    expect(requestLeaseLoss(lease(), EPOCH, own({ writeEpoch: EPOCH - 1 }))).toEqual({ reason: 'stale' })
+    expect(requestLeaseLoss(lease(), EPOCH, own({ writeEpoch: EPOCH + 1 }))).toEqual({ reason: 'stale' })
+    expect(requestLeaseLoss(lease({ expiresAt: at(-SECOND) }), EPOCH, own({ writeEpoch: EPOCH - 1 }))).toEqual({ reason: 'stale' })
+    expect(requestLeaseLoss(lease({ endedAt: at(-SECOND), endReason: 'revoked' }), EPOCH, own({ writeEpoch: EPOCH - 1 }))).toEqual({ reason: 'revoked' })
   })
 
   it('第 6 条换成"请求的登录、标签页就是租约绑定的那一个"：登录换了（换过令牌）、保存的标签页不是这一个，都是 session', () => {
-    expect(requestLeaseLoss(lease(), EPOCH, own({ sessionId: OTHER_SESSION }))).toBe('session')
-    expect(requestLeaseLoss(lease(), EPOCH, own({ clientInstanceId: OTHER_TAB }))).toBe('session')
+    expect(requestLeaseLoss(lease(), EPOCH, own({ sessionId: OTHER_SESSION }))).toEqual({ reason: 'session' })
+    expect(requestLeaseLoss(lease(), EPOCH, own({ clientInstanceId: OTHER_TAB }))).toEqual({ reason: 'session' })
   })
 
   it('心跳不带标签页：只凭令牌（令牌只发给了申请的那一个标签页）', () => {
@@ -203,14 +204,14 @@ describe('请求带的租约（心跳、保存：持有者自己的请求）', (
   })
 
   it('按顺序判断：令牌在第 2 条之前；登录与标签页在到期、空闲之后', () => {
-    expect(requestLeaseLoss(lease({ endedAt: at(-SECOND), endReason: 'released' }), EPOCH, own({ token: OTHER_TOKEN }))).toBe('replaced')
-    expect(requestLeaseLoss(lease({ expiresAt: at(-SECOND) }), EPOCH, own({ sessionId: OTHER_SESSION }))).toBe('expired')
-    expect(requestLeaseLoss(lease({ lastActiveAt: at(-IDLE) }), EPOCH, own({ clientInstanceId: OTHER_TAB }))).toBe('idle')
+    expect(requestLeaseLoss(lease({ endedAt: at(-SECOND), endReason: 'released' }), EPOCH, own({ token: OTHER_TOKEN }))).toEqual({ reason: 'replaced' })
+    expect(requestLeaseLoss(lease({ expiresAt: at(-SECOND) }), EPOCH, own({ sessionId: OTHER_SESSION }))).toEqual({ reason: 'expired' })
+    expect(requestLeaseLoss(lease({ lastActiveAt: at(-IDLE) }), EPOCH, own({ clientInstanceId: OTHER_TAB }))).toEqual({ reason: 'idle' })
   })
 
   it('边界与当前的租约相同：恰好到期、恰好 12 分钟都算失效', () => {
-    expect(requestLeaseLoss(lease({ expiresAt: NOW }), EPOCH, own())).toBe('expired')
-    expect(requestLeaseLoss(lease({ lastActiveAt: at(-IDLE) }), EPOCH, own())).toBe('idle')
+    expect(requestLeaseLoss(lease({ expiresAt: NOW }), EPOCH, own())).toEqual({ reason: 'expired' })
+    expect(requestLeaseLoss(lease({ lastActiveAt: at(-IDLE) }), EPOCH, own())).toEqual({ reason: 'idle' })
     expect(requestLeaseLoss(lease({ expiresAt: at(1), lastActiveAt: at(-IDLE + 1) }), EPOCH, own())).toBeUndefined()
   })
 })
@@ -236,6 +237,72 @@ describe('M3-P5 被接管的那一代：令牌对不上时，对得上接管标�
 
   it('比的是摘要：标记里存的是令牌的 SHA-256 摘要，把令牌原文的字节当摘要存进去对不上', () => {
     expect(supersededLoss(lease({ takenOverTokenDigest: Buffer.from(TAKEN_TOKEN.slice(0, 32), 'utf8'), takeover: 'self' }), TAKEN_TOKEN)).toEqual({ reason: 'replaced' })
+  })
+
+  it('心跳、保存（requestLeaseLoss）：令牌是被接管的那一代的——taken_over 带方式，排在别的原因之前（这一行之后到期、过时、结束了也一样）；别的旧令牌照旧 replaced；这一行自己的令牌照常', () => {
+    for (const takeover of ['self', 'forced'] as const) {
+      const forced = takeover === 'forced'
+      expect(requestLeaseLoss(takenOver(takeover), EPOCH, own({ token: TAKEN_TOKEN })), takeover).toEqual({ reason: 'taken_over', forced })
+      for (const [reason, overrides] of ROW_FAILURES)
+        expect(requestLeaseLoss(lease({ ...overrides, takenOverTokenDigest: editLeaseTokenDigest(TAKEN_TOKEN), takeover }), EPOCH, own({ token: TAKEN_TOKEN })), `${takeover} ${reason}`).toEqual({ reason: 'taken_over', forced })
+      expect(requestLeaseLoss(takenOver(takeover), EPOCH, own({ token: OTHER_TOKEN })), takeover).toEqual({ reason: 'replaced' })
+      expect(requestLeaseLoss(takenOver(takeover), EPOCH, own()), takeover).toBeUndefined()
+    }
+  })
+})
+
+describe('M3-P5 申请怎样对待占着的那一代：普通的申请、页面自己的重试、本人接管、强制接管、被占用（设计 §3.4、§3.7、§3.8）', () => {
+  /** 申请的人：本（别人）；艾米在同一次登录的别的标签页、在别的设备；艾米就是持有这一代的那个页面 */
+  const BEN_PAGE: Claimant = { userId: BEN, sessionId: OTHER_SESSION, clientInstanceId: OTHER_TAB }
+  const AMY_OTHER_TAB: Claimant = { userId: AMY, sessionId: SESSION, clientInstanceId: OTHER_TAB }
+  const AMY_OTHER_DEVICE: Claimant = { userId: AMY, sessionId: OTHER_SESSION, clientInstanceId: TAB }
+  const AMY_SAME_PAGE: Claimant = { userId: AMY, sessionId: SESSION, clientInstanceId: TAB }
+  /** 申请带的接管方式：普通的申请、本人接管、强制接管 */
+  const MODES = [undefined, 'self', 'force'] as const
+  type Occupied = Extract<LeaseOccupancy, { kind: 'occupied' }>
+  const valid: Occupied = { kind: 'occupied', lease: lease(), stale: false }
+  /** R2：代次过时、而持有者按时间、登录、编辑权都还活着（只对别人是占着的） */
+  const stale: Occupied = { kind: 'occupied', lease: lease({ writeEpoch: EPOCH - 1 }), stale: true }
+
+  it('没人占着（没有这一行、上一代失效了）：一律是普通的申请，带不带接管方式都一样——没有可接管的，不写接管标记，强制接管也不写审计', () => {
+    const vacancies: readonly Extract<LeaseOccupancy, { kind: 'vacant' }>[] = [
+      { kind: 'vacant', lease: undefined, loss: 'none', interruption: undefined },
+      { kind: 'vacant', lease: lease(EXPIRED), loss: 'expired', interruption: noticeOf(lease(EXPIRED)) },
+      { kind: 'vacant', lease: lease({ endedAt: at(-SECOND), endReason: 'released' }), loss: 'released', interruption: undefined },
+    ]
+    for (const vacancy of vacancies) {
+      for (const claimant of [BEN_PAGE, AMY_OTHER_TAB, AMY_SAME_PAGE]) {
+        for (const mode of MODES)
+          expect(claimOf(vacancy, claimant, mode), `${vacancy.loss} ${claimant.userId} ${String(mode)}`).toEqual({ kind: 'fresh' })
+      }
+    }
+  })
+
+  it('占着的就是这个页面自己的那一代（同一个登录、同一个标签页，例如上次的回包丢了）：重试——带不带接管方式都一样，不当成一次接管（标记由仓储沿用，不另写审计）', () => {
+    for (const mode of MODES)
+      expect(claimOf(valid, AMY_SAME_PAGE, mode), String(mode)).toEqual({ kind: 'retry' })
+  })
+
+  it('本人接管：占着的是自己在别的标签页、别的设备上的有效租约——接管它（self）；强制接管遇到自己的同样是本人接管（不写审计）；没带接管方式是被占用', () => {
+    for (const claimant of [AMY_OTHER_TAB, AMY_OTHER_DEVICE]) {
+      expect(claimOf(valid, claimant, 'self'), claimant.sessionId).toEqual({ kind: 'takeOver', takeover: 'self', lease: valid.lease })
+      expect(claimOf(valid, claimant, 'force'), claimant.sessionId).toEqual({ kind: 'takeOver', takeover: 'self', lease: valid.lease })
+      expect(claimOf(valid, claimant, undefined), claimant.sessionId).toEqual({ kind: 'held', lease: valid.lease })
+    }
+  })
+
+  it('占着的是别人（有效的租约，或 R2 的）：强制接管接管它（forced）；本人接管不起作用、普通的申请——都是被占用', () => {
+    for (const occupancy of [valid, stale]) {
+      const name = occupancy.stale ? 'R2' : '有效'
+      expect(claimOf(occupancy, BEN_PAGE, 'force'), name).toEqual({ kind: 'takeOver', takeover: 'forced', lease: occupancy.lease })
+      expect(claimOf(occupancy, BEN_PAGE, 'self'), name).toEqual({ kind: 'held', lease: occupancy.lease })
+      expect(claimOf(occupancy, BEN_PAGE, undefined), name).toEqual({ kind: 'held', lease: occupancy.lease })
+    }
+  })
+
+  it('重试按登录与标签页一起认：别人报了与持有者相同的标签页标识（标签页标识是页面自报的）也不是重试——强制接管照样是接管别人', () => {
+    expect(claimOf(valid, { userId: BEN, sessionId: OTHER_SESSION, clientInstanceId: TAB }, 'force')).toEqual({ kind: 'takeOver', takeover: 'forced', lease: valid.lease })
+    expect(claimOf(valid, { userId: BEN, sessionId: OTHER_SESSION, clientInstanceId: TAB }, undefined)).toEqual({ kind: 'held', lease: valid.lease })
   })
 })
 

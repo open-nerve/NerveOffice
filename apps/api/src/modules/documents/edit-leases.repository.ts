@@ -61,9 +61,16 @@ export interface ObservedEditLease extends EditLeaseRow {
   readonly now: Date
 }
 
+/** 接管标记（M3-P5 设计 §3.7、§3.8）：这一代接管的那一代的令牌摘要（不存令牌本身）与方式 */
+export interface TakeoverMarker {
+  readonly tokenDigest: Buffer
+  readonly takeover: EditLeaseTakeover
+}
+
 /**
  * 改写为新的一代要写的东西：时间由数据库给出（申请与续租是 now()，到期是 now() 加有效期）；最后活动是 now() 减去 idleSeconds——
- * 续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5，复验 P1-C5：服务端的空闲兜底不因续上而重新计时），别的申请是 0
+ * 续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5，复验 P1-C5：服务端的空闲兜底不因续上而重新计时），别的申请是 0。
+ * takenOver：这一代接管了占着的那一代（本人接管、强制接管）时写下的接管标记；不是接管时为 undefined，接管标记只在同一个页面重试时沿用
  */
 export interface NewEditLease {
   readonly documentId: string
@@ -73,6 +80,7 @@ export interface NewEditLease {
   readonly tokenDigest: Buffer
   readonly writeEpoch: number
   readonly idleSeconds: number
+  readonly takenOver: TakeoverMarker | undefined
 }
 
 /**
@@ -194,8 +202,9 @@ export class EditLeasesRepository {
    *   就把别人的请求悄悄弄丢了；换了别人就清掉（请求方续期得知请求已不在）。新的持有者就是请求方时，他不是旧行的持有者（表上的约束），
    *   同样清掉：请求已经实现，"请求方不是持有者"的约束要求在这同一条语句里清；
    * - 交出之后的保留：一律清掉。它只在明确结束的原因是 handed_over 时有（表上的约束），而这条语句清掉了明确结束，必须在同一条语句里清；
-   * - 接管标记：只在同一个页面（同一个登录、同一个标签页）重试时沿用上一代的——否则一次重试就把"被接管"变回了笼统的 replaced；
-   *   别的申请清掉。写下接管标记（本人接管、强制接管）在 S3 接上。
+   * - 接管标记：这一代接管了占着的那一代（lease.takenOver：本人接管、强制接管）就写下它；不是接管时只在同一个页面（同一个登录、
+   *   同一个标签页）重试时沿用上一代的——否则一次重试（包括一次接管的重试）就把"被接管"变回了笼统的 replaced；别的申请清掉。
+   *   插入那一半同样写下给出的标记：接管时这一行一定在，写上只是让"给了就写下"不依赖这一点。
    * 沿用与否按旧行判断，写在这条语句里：改写之前的那一行在文档行的锁下，就是调用方判断时读到的那一行。返回写下的这一行
    */
   async replace(lease: NewEditLease, transaction: Transaction): Promise<ObservedEditLease> {
@@ -214,9 +223,10 @@ export class EditLeasesRepository {
     }
     const sameHolder = sql`${l.holderId} = ${lease.holderId}`
     const samePage = sql`${l.sessionId} = ${lease.sessionId} and ${l.clientInstanceId} = ${lease.clientInstanceId}`
+    const written = lease.takenOver === undefined ? undefined : { takenOverTokenDigest: lease.takenOver.tokenDigest, takeover: lease.takenOver.takeover }
     const [row] = await executorOf(this.db, transaction)
       .insert(l)
-      .values({ documentId: lease.documentId, ...generation })
+      .values({ documentId: lease.documentId, ...generation, ...written })
       .onConflictDoUpdate({
         target: l.documentId,
         set: {
@@ -229,8 +239,7 @@ export class EditLeasesRepository {
           requestDeclinedAt: keptWhen(sameHolder, l.requestDeclinedAt),
           reservedFor: null,
           reservedUntil: null,
-          takenOverTokenDigest: keptWhen(samePage, l.takenOverTokenDigest),
-          takeover: keptWhen(samePage, l.takeover),
+          ...written ?? { takenOverTokenDigest: keptWhen(samePage, l.takenOverTokenDigest), takeover: keptWhen(samePage, l.takeover) },
         },
       })
       .returning(COLUMNS)

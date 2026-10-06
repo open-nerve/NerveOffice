@@ -1,9 +1,10 @@
 // 编辑租约的仓储发出的语句（M3-P1 设计 §3.3、§3.4.6）：不连数据库（recorded-statements.test-support.ts），核对语句的形状——
 // 时间都取数据库的 now()，读出的行带着同一条语句里的 now()，加锁的对象与顺序，收回写入权的范围条件与 coversWriter 逐种同义、
 // 只找按时间还活着的（M3-P5 设计 §3.5，边界与有效条件逐一相同）；改写为新的一代时请求、保留与接管标记的沿用与清空（§3.6、§3.7），
-// 最后活动按带来的空闲往前推、续租时只前进。这些语句在真实数据库上的行为（并发与交错、时间、约束）由集成测试覆盖
-// （tests/integration 的 documents/edit-leases.test.ts、lease-revocation.test.ts、lease-revocation-locks.test.ts）。
+// 接管时直接写下接管标记（§3.7、§3.8），最后活动按带来的空闲往前推、续租时只前进。这些语句在真实数据库上的行为（并发与交错、时间、约束）
+// 由集成测试覆盖（tests/integration 的 documents/edit-leases.test.ts、lease-takeover.test.ts、lease-revocation.test.ts、lease-revocation-locks.test.ts）。
 import type { Transaction } from '../database/index.ts'
+import type { NewEditLease } from './edit-leases.repository.ts'
 import type { RecordedStatement } from './recorded-statements.test-support.ts'
 import type { DocumentWriter, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
@@ -23,6 +24,8 @@ const OTHER_SPACE = '0199a2c4-0000-7000-8000-0000000000c2'
 const SESSION = '0199a2c4-0000-7000-8000-0000000000e1'
 const TAB = '0199a2c4-0000-7000-8000-0000000000f1'
 const DIGEST = Buffer.alloc(32, 7)
+/** 被接管的那一代的令牌摘要（接管标记） */
+const TAKEN_DIGEST = Buffer.alloc(32, 9)
 
 /** M3-P5 的三组列（迁移 0025）：请求编辑、交出之后的保留、接管标记，按表定义的顺序 */
 const REQUEST_COLUMNS = ['request_id', 'requested_by', 'request_session_id', 'requested_at', 'request_expires_at', 'request_declined_at']
@@ -74,11 +77,11 @@ describe('读与锁：读出的行带着同一条语句里数据库的 now()', (
 })
 
 describe('改写为新的一代', () => {
-  /** 续上的页面带来 37 秒的空闲 */
-  const lease = { documentId: DOCUMENT, holderId: AMY, sessionId: SESSION, clientInstanceId: TAB, tokenDigest: DIGEST, writeEpoch: 5, idleSeconds: 37 }
+  /** 续上的页面带来 37 秒的空闲；不是接管 */
+  const lease = { documentId: DOCUMENT, holderId: AMY, sessionId: SESSION, clientInstanceId: TAB, tokenDigest: DIGEST, writeEpoch: 5, idleSeconds: 37, takenOver: undefined }
 
-  async function replaced(): Promise<RecordedStatement> {
-    return onlyStatementOf(async (leases, transaction) => leases.replace(lease, transaction))
+  async function replaced(takenOver: NewEditLease['takenOver'] = undefined): Promise<RecordedStatement> {
+    return onlyStatementOf(async (leases, transaction) => leases.replace({ ...lease, takenOver }, transaction))
   }
 
   /** 改写那一半（ON CONFLICT DO UPDATE SET）里这一列的赋值：去掉前面的"列 = "，到下一列（或 returning）之前 */
@@ -127,13 +130,33 @@ describe('改写为新的一代', () => {
     }
   })
 
-  it('M3-P5 接管标记：同一个页面（旧行的登录与标签页都是这一次的）重试才沿用上一代的，否则清空', async () => {
+  it('M3-P5 接管标记：不是接管时，同一个页面（旧行的登录与标签页都是这一次的）重试才沿用上一代的，否则清空', async () => {
     const statement = await replaced()
     for (const column of TAKEOVER_COLUMNS) {
       const kept = new RegExp(`^case when "document_edit_leases"\\."session_id" = \\$(\\d+) and "document_edit_leases"\\."client_instance_id" = \\$(\\d+) then "document_edit_leases"\\."${column}" end$`).exec(assignmentOf(statement.text, column))
       expect(kept, column).not.toBeNull()
       expect([parameter(statement, kept?.[1]), parameter(statement, kept?.[2])], column).toEqual([SESSION, TAB])
     }
+  })
+
+  it.each(['self', 'forced'] as const)('M3-P5 接管（%s）：插入与改写两半都直接写下给出的接管标记——被接管那一代的令牌摘要与方式，不按旧行判断；别的列与不是接管时相同', async (takeover) => {
+    const statement = await replaced({ tokenDigest: TAKEN_DIGEST, takeover })
+    const plain = await replaced()
+    // 插入那一半：最后两列是给出的标记（不是接管时是 default）
+    const insert = new RegExp(`^insert into "document_edit_leases" \\(.*${quoted(TAKEOVER_COLUMNS)}\\) values \\(.*, \\$(\\d+), \\$(\\d+)\\) on conflict `).exec(statement.text)
+    expect(insert).not.toBeNull()
+    expect(insert?.slice(1).map(placeholder => parameter(statement, placeholder))).toEqual([TAKEN_DIGEST, takeover])
+    expect(plain.text).toContain(`${HANDOVER_COLUMNS.map(() => 'default').join(', ')}) on conflict`)
+    // 改写那一半：标记两列是参数，不是 CASE
+    const assigned = TAKEOVER_COLUMNS.map((column) => {
+      const value = /^\$(\d+)$/.exec(assignmentOf(statement.text, column))
+      expect(value, column).not.toBeNull()
+      return parameter(statement, value?.[1])
+    })
+    expect(assigned).toEqual([TAKEN_DIGEST, takeover])
+    // 其余各列的赋值与不是接管时逐列相同（请求按同一个持有者沿用、保留清空）
+    for (const column of [...REQUEST_COLUMNS, ...RESERVATION_COLUMNS])
+      expect(assignmentOf(statement.text, column).replaceAll(/\$\d+/g, '$'), column).toBe(assignmentOf(plain.text, column).replaceAll(/\$\d+/g, '$'))
   })
 })
 

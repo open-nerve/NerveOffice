@@ -1,6 +1,7 @@
 // 编辑权的接口编排（M3-P1 设计 §3.1、§3.2）：写的三个各一个业务事务、编辑状态一个只读快照；持有者的人名在同一个事务里补上；
 // "被占用"转成 EDIT_LEASE_HELD（details 带人名、最后活动时间、是不是自己、是不是这次登录与能不能强制接管）。
 // 租约的规则与数据在 documents（edit-lease.service.test.ts）。编辑状态里的异常中断提醒（M3-P5 S2）补上人名；请求编辑与保留还没有接上（S4），一律 null。
+// 本人接管与强制接管（M3-P5 S3）的判断与审计都在 documents，这里只把接管方式与请求的来源原样交过去。
 import type { EditingActor, LeaseAcquisition, LeaseStatus } from '../documents/index.ts'
 import type { User } from '../users/index.ts'
 import { acquiredEditLeaseSchema, editLeaseHeldDetailsSchema, editStatusSchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
@@ -18,7 +19,9 @@ const ACTIVE = new Date('2026-10-04T08:00:00.000Z')
 const EXPIRES = new Date('2026-10-04T08:01:30.000Z')
 /** 页面上报的构建与数据格式（M3-P3）：编排原样交给 documents 核对 */
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '1.0.1', profile: 'sheet@1', formatVersion: 1 }
-const LEASE_REQUEST = { clientInstanceId: TAB, idleSeconds: 0, format: FORMAT }
+const LEASE_REQUEST = { clientInstanceId: TAB, takeover: undefined, idleSeconds: 0, format: FORMAT }
+/** 请求的来源（M3-P5：强制接管的审计由 documents 写，编排原样交过去） */
+const ORIGIN = { source: 'http', requestId: 'req-1', clientIp: '127.0.0.1' } as const
 
 function user(id: string): User {
   return { id, username: id === AMY ? 'amy' : 'ben', displayName: id === AMY ? '艾米' : '本', systemRole: 'member', status: 'active' }
@@ -91,22 +94,25 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('DocumentEditingService.acquire', () => {
-  it('取得新的一代：一个业务事务里申请，响应是令牌、代次、修订号与它的来源、到期时间（ISO），没有异常结束时提醒为 null', async () => {
+  it('取得新的一代：一个业务事务里申请，响应是令牌、代次、修订号与它的来源、到期时间（ISO），没有异常结束时提醒为 null；请求（含接管方式）与请求的来源原样交给 documents（M3-P5：强制接管的审计用它）', async () => {
     const { service, calls, leases, transaction } = setup(ACQUIRED)
-    expect(await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST)).toEqual({ token: TOKEN, writeEpoch: 4, revision: 3, source: null, expiresAt: EXPIRES.toISOString(), interruption: null, formulasPending: false })
+    expect(await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN)).toEqual({ token: TOKEN, writeEpoch: 4, revision: 3, source: null, expiresAt: EXPIRES.toISOString(), interruption: null, formulasPending: false })
     expect(calls).toEqual(['begin', 'acquire', 'commit'])
-    expect(leases.acquire).toHaveBeenCalledWith(ACTOR, DOCUMENT, LEASE_REQUEST, transaction)
+    expect(leases.acquire).toHaveBeenCalledWith(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN, transaction)
+    const forcing = { ...LEASE_REQUEST, takeover: 'force' } as const
+    await service.acquire(ACTOR, DOCUMENT, forcing, ORIGIN)
+    expect(leases.acquire).toHaveBeenLastCalledWith(ACTOR, DOCUMENT, forcing, ORIGIN, transaction)
   })
 
   it('"公式待更新"（M3-P3 设计 §3.8）：原样取 documents 读到的文档行上的标记', async () => {
     const { service } = setup({ ...ACQUIRED, formulasPending: true })
-    expect((await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST)).formulasPending).toBe(true)
+    expect((await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN)).formulasPending).toBe(true)
   })
 
   it('当前修订有来源（保存产生的）：原样放进响应，结构与修订号冲突的详情相同', async () => {
     const source = { clientInstanceId: TAB, localSeq: 9 }
     const { service } = setup({ ...ACQUIRED, source })
-    const acquired = await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST)
+    const acquired = await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN)
     expect(acquired.source).toEqual(source)
     expect(acquiredEditLeaseSchema.parse(acquired)).toEqual(acquired)
   })
@@ -114,7 +120,7 @@ describe('DocumentEditingService.acquire', () => {
   it('上一个租约异常结束：提醒里补上上一位持有者的人名（同一个事务里），原样带上是不是自己（M3-P5）', async () => {
     for (const sameUser of [false, true]) {
       const { service, calls } = setup({ ...ACQUIRED, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser } })
-      const acquired = await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST)
+      const acquired = await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN)
       expect(acquired.interruption, String(sameUser)).toEqual({ holder: { id: AMY, username: 'amy', displayName: '艾米' }, endedAt: ACTIVE.toISOString(), sameUser })
       expect(acquiredEditLeaseSchema.parse(acquired)).toEqual(acquired)
       expect(calls).toEqual(['begin', 'acquire', 'names', 'commit'])
@@ -123,7 +129,7 @@ describe('DocumentEditingService.acquire', () => {
 
   it('被占用：409 EDIT_LEASE_HELD，details 带持有者的人名、最后活动时间、是不是自己、是不是这次登录与能不能强制接管（M3-P5），请求编辑还没有接上（null）；人名在事务里补，事务回滚', async () => {
     const { service, calls } = setup({ kind: 'held', ...AMY_EDITING, canTakeOver: false })
-    const error = await rejection(service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST))
+    const error = await rejection(service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN))
     expect([error.code, error.status, error.message]).toEqual(['EDIT_LEASE_HELD', 409, '别人正在编辑这份文档'])
     expect(editLeaseHeldDetailsSchema.parse(error.details)).toEqual({ ...AMY_EDITOR, canTakeOver: false, request: null })
     expect(error.details).toEqual(editLeaseHeldDetailsSchema.parse(error.details))
@@ -133,7 +139,7 @@ describe('DocumentEditingService.acquire', () => {
   it('M3-P5 被占用的详情原样取 documents 给出的 sameUser、sameSession 与 canTakeOver（各自独立，不互相推出）', async () => {
     for (const [sameUser, sameSession, canTakeOver] of [[true, true, false], [true, false, true], [false, false, true]] as const) {
       const { service } = setup({ kind: 'held', ...AMY_EDITING, sameUser, sameSession, canTakeOver })
-      const error = await rejection(service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST))
+      const error = await rejection(service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN))
       expect(error.details, `${sameUser} ${sameSession} ${canTakeOver}`).toMatchObject({ sameUser, sameSession, canTakeOver, request: null })
     }
   })

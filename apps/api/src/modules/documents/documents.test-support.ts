@@ -670,15 +670,16 @@ export class FakeStore {
 
   /**
    * 编辑租约的仓储（M3-P1）：与真实仓储同样的语义——每份文档至多一行，改写为新的一代时清掉明确结束与保留，
-   * 同一个持有者沿用请求、同一个页面沿用接管标记（M3-P5），最后活动按带来的空闲往前推；续租时最后活动只前进不后退、不晚于 now，
-   * 明确结束不覆盖先记下的原因；收回写入权只找按时间还活着的。SQL 本身由语句的核对（edit-lease-statements.test.ts）与集成测试覆盖
+   * 同一个持有者沿用请求；接管时写下给出的接管标记，不是接管时同一个页面沿用上一代的（M3-P5），最后活动按带来的空闲往前推；
+   * 续租时最后活动只前进不后退、不晚于 now，明确结束不覆盖先记下的原因；收回写入权只找按时间还活着的。
+   * SQL 本身由语句的核对（edit-lease-statements.test.ts）与集成测试覆盖
    */
   readonly leases = {
     findByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
     lockByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
     replace: vi.fn(async (lease: NewEditLease): Promise<ObservedEditLease> => {
       const now = this.databaseNow
-      const { idleSeconds, ...generation } = lease
+      const { idleSeconds, takenOver, ...generation } = lease
       const old = this.leaseRecords.get(lease.documentId)
       const sameHolder = old?.holderId === lease.holderId
       const samePage = old?.sessionId === lease.sessionId && old.clientInstanceId === lease.clientInstanceId
@@ -694,7 +695,9 @@ export class FakeStore {
         ...(old !== undefined && sameHolder
           ? { requestId: old.requestId, requestedBy: old.requestedBy, requestSessionId: old.requestSessionId, requestedAt: old.requestedAt, requestExpiresAt: old.requestExpiresAt, requestDeclinedAt: old.requestDeclinedAt }
           : {}),
-        ...(old !== undefined && samePage ? { takenOverTokenDigest: old.takenOverTokenDigest, takeover: old.takeover } : {}),
+        ...(takenOver === undefined
+          ? (old !== undefined && samePage ? { takenOverTokenDigest: old.takenOverTokenDigest, takeover: old.takeover } : {})
+          : { takenOverTokenDigest: takenOver.tokenDigest, takeover: takenOver.takeover }),
       }
       this.leaseRecords.set(lease.documentId, row)
       return { ...row, now }

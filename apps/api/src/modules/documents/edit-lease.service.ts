@@ -1,19 +1,21 @@
-import type { ClientFormat, EditLeaseLostReason } from '@nerve-office/contracts'
+import type { ClientFormat, EditLeaseLostDetails, EditTakeoverMode } from '@nerve-office/contracts'
+import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
-import type { AccessTarget } from './document-access-policy.ts'
+import type { AccessTarget, DocumentOperation } from './document-access-policy.ts'
 import type { RevisionSource } from './document-revisions.repository.ts'
-import type { HolderFacts, LeaseInterruption } from './edit-lease-rules.ts'
+import type { HolderFacts, LeaseClaim, LeaseInterruption, LeaseLoss, LeaseOccupancy } from './edit-lease-rules.ts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { AuditService } from '../audit/index.ts'
 import { SessionService } from '../auth/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { ClientFormatGate, requireWritableDocument } from './client-format-gate.ts'
 import { canEditDocument, DocumentAccessPolicy, requireAccess, requireDocumentContent } from './document-access-policy.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
-import { isSamePage, occupancyOf, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
+import { claimOf, occupancyOf, releasableBy, requestLeaseLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest, generateEditLeaseToken } from './edit-lease-token.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { revisionSourceFor } from './revision-source.ts'
@@ -41,11 +43,22 @@ export async function requireActiveLogin(sessions: SessionService, actor: Editin
 }
 
 /**
- * 申请编辑权的请求（P1 设计 §3.4.2）：标签页，续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5：新的一代的最后活动按它往前推，
- * 服务端的空闲兜底不因续上而重新计时；别的申请是 0），与页面上报的构建与数据格式（M3-P3 设计 §3.5）
+ * 持有者自己的请求（心跳、保存；M3-P5 S4 的交出、谢绝同样）发现请求的那一代已经失效：409 EDIT_LEASE_LOST，details 就是失效的原因与详情
+ * （requestLeaseLoss 给出的，被接管时另带 forced），结构是 contracts 的 editLeaseLostDetailsSchema。几处共用这一个写法，免得哪一处漏了 forced
+ */
+export function editLeaseLost(loss: LeaseLoss): AppError {
+  const details: EditLeaseLostDetails = loss
+  return new AppError('EDIT_LEASE_LOST', undefined, { details })
+}
+
+/**
+ * 申请编辑权的请求（P1 设计 §3.4.2）：标签页，接管方式（M3-P5 设计 §3.7、§3.8：本人接管 self、强制接管 force，普通的申请没有），
+ * 续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5：新的一代的最后活动按它往前推，服务端的空闲兜底不因续上而重新计时；别的申请是 0），
+ * 与页面上报的构建与数据格式（M3-P3 设计 §3.5）
  */
 export interface LeaseRequest {
   readonly clientInstanceId: string
+  readonly takeover: EditTakeoverMode | undefined
   readonly idleSeconds: number
   readonly format: ClientFormat
 }
@@ -69,11 +82,12 @@ export interface LeaseEditor {
 
 /**
  * 申请的结果（P1 设计 §3.4.2）：
- * - acquired：取得了新的一代——令牌（只在这里出现一次）、这一代的代次、文档当前的修订号与它的来源（新建、复制出来的为 null）、
- *   到期时间，上一个租约异常结束的提醒，与文档的"公式待更新"（M3-P3 设计 §3.8：P4 据此在进入编辑时先全量重算）；
+ * - acquired：取得了新的一代（普通的申请、页面自己的重试、本人接管或强制接管，M3-P5 设计 §3.7、§3.8）——令牌（只在这里出现一次）、
+ *   这一代的代次、文档当前的修订号与它的来源（新建、复制出来的为 null）、到期时间，上一个租约异常结束的提醒（接管时没有：占着的那一代
+ *   是有效的），与文档的"公式待更新"（M3-P3 设计 §3.8：P4 据此在进入编辑时先全量重算）；
  * - held：有效的租约在别人手里（同一个人在别的标签页或设备上也算），或者代次过时、其余都还活着的租约在别人手里（M3-P5 设计 §3.5
- *   的 R2：只让持有者本人续上），什么也没写；正在编辑的人与调用者能不能强制接管（M3-P5，锁下判断权限时算出的那一位）。
- *   workspace 补上人名，回 EDIT_LEASE_HELD
+ *   的 R2：只让持有者本人续上），申请又没有能起作用的接管方式（见 claimOf），什么也没写；正在编辑的人与调用者能不能强制接管
+ *   （M3-P5，锁下判断权限时算出的那一位）。workspace 补上人名，回 EDIT_LEASE_HELD
  */
 export type LeaseAcquisition
   = | {
@@ -109,6 +123,16 @@ function editorOf(lease: ObservedEditLease, actor: EditingActor): LeaseEditor {
 }
 
 /**
+ * 取得新的一代时日志里上一代的情形（不记令牌）：没人占着时是它失效的原因（none、到期、空闲……），页面自己的重试记 retry，
+ * 接管记 taken_over 与方式（self、forced）
+ */
+function previousOf(claim: LeaseClaim, occupancy: LeaseOccupancy): Readonly<Record<string, string>> {
+  if (claim.kind === 'takeOver')
+    return { previous: 'taken_over', takeover: claim.takeover }
+  return { previous: occupancy.kind === 'vacant' ? occupancy.loss : 'retry' }
+}
+
+/**
  * 编辑租约（M3-P1 设计 §3.4.2、§3.4.3）：申请、心跳续租、释放与编辑状态的规则与数据。事务由调用方（workspace 的
  * DocumentEditingService）开：写的三个在一个业务事务里，编辑状态在只读快照里；人名由 workspace 经 users 补上（documents 不依赖 users）。
  * 有效条件在 edit-lease-rules.ts，这里按步骤取事实、加锁：
@@ -119,7 +143,8 @@ function editorOf(lease: ObservedEditLease, actor: EditingActor): LeaseEditor {
  * - 时间一律取数据库的 now()：租约行与同一条语句里的 now() 一起读出来（ObservedEditLease）；
  * - 页面的构建与数据格式（M3-P3 设计 §3.5）：申请与心跳先核对它（与文档无关，在任何查询之前：看不到与不存在的文档得到同样的回答），
  *   过旧时 CLIENT_OUTDATED；文档由比服务端新的版本写过（回滚之后）时 DOCUMENT_TOO_NEW，在判断访问与编辑权之后。
- * 申请、续租、释放都不写审计（太频繁，结束的原因留在租约行上，设计 §3.5）；令牌不进日志
+ * 申请、续租、释放都不写审计（太频繁，结束的原因留在租约行上，设计 §3.5）；只有强制接管写（M3-P5 设计 §3.8、§3.13：结束的是别人的编辑权），
+ * 与租约行在同一个事务里、排在它之后（锁的顺序：文档行 → 租约行 → 审计）。令牌不进日志
  */
 @Injectable()
 export class EditLeaseService {
@@ -132,35 +157,43 @@ export class EditLeaseService {
     private readonly policy: DocumentAccessPolicy,
     private readonly sessions: SessionService,
     private readonly clients: ClientFormatGate,
+    private readonly audit: AuditService,
     logger: AppLogger,
   ) {
     this.#logger = logger.with({ module: 'documents' })
   }
 
   /**
-   * 申请（P1 设计 §3.4.2）：页面的构建与数据格式（CLIENT_OUTDATED，M3-P3）→ 不加锁判断能编辑（404 / 403）→ 锁文档行、锁下再判断 →
-   * 锁租约行 → 这次登录仍然有效（否则 401，requireActiveLogin：撤销登录之后才到这一步的在途申请不写下绑定失效登录的租约）→
-   * 文档的格式（比服务端新：DOCUMENT_TOO_NEW，M3-P3，锁下读到的文档行）→ 从申请的人看谁占着这份文档（occupancyOf）→
-   * 有效的租约：同一个登录、同一个标签页的是这个页面的重试（例如上次申请的回包丢了），照样发新的一代；别人的（含自己在别处的）就是被占用，
-   * 什么也不写；代次过时、其余都还活着、持有者不是申请的人（M3-P5 设计 §3.5 的 R2）同样是被占用 →
-   * 文档的代次加一、生成令牌、改写租约行（最后活动按续上的页面带来的空闲往前推）→ 上一个租约按事实异常结束、而且在 30 分钟以内时给出提醒。
-   * 修订号取锁下的文档行：页面拿它与自己载入的比较。连同这一版的来源（这一条修订记录的标签页与本地序号，与修订号冲突的详情
-   * 同一个取法，只给保存这一版的人本人，见 revisionSourceFor）：续上时页面据此认出期间的那一版是不是本页自己一次结果未知的保存
-   * （00 号计划书 §7.5）
+   * 申请（P1 设计 §3.4.2）：页面的构建与数据格式（CLIENT_OUTDATED，M3-P3）→ 不加锁判断能编辑（404 / 403；强制接管另要能强制接管，
+   * M3-P5 设计 §3.8）→ 锁文档行、锁下再判断同样几项 → 锁租约行 → 这次登录仍然有效（否则 401，requireActiveLogin：撤销登录之后才到这一步的
+   * 在途申请不写下绑定失效登录的租约）→ 文档的格式（比服务端新：DOCUMENT_TOO_NEW，M3-P3，锁下读到的文档行）→ 从申请的人看谁占着
+   * 这份文档（occupancyOf）→ 申请怎样对待占着的那一代（claimOf）：
+   * - 没人占着：普通的申请（带了接管方式也一样，不写接管标记、不写审计）；
+   * - 占着的是这个页面自己的那一代（同一个登录、同一个标签页，例如上次申请的回包丢了）：重试，照样发新的一代，接管标记由仓储沿用；
+   * - 本人接管（M3-P5 设计 §3.7：占着的是自己在别的标签页、设备上的有效租约）、强制接管（§3.8：占着的是别人，有效的或 R2 的）：
+   *   发新的一代并记下接管标记（被接管那一代的令牌摘要与方式），旧令牌之后得到 taken_over；强制接管另写一条审计 documents.edit_taken_over
+   *   （操作者、文档、被接管的人、来源），在租约行之后；
+   * - 其余是被占用（别人的有效租约或 R2；自己在别处的有效租约而没带接管方式；本人接管遇到别人），什么也不写。
+   * 发新的一代：文档的代次加一、生成令牌、改写租约行（最后活动按续上的页面带来的空闲往前推）→ 上一个租约按事实异常结束、
+   * 而且在 30 分钟以内时给出提醒。修订号取锁下的文档行：页面拿它与自己载入的比较。连同这一版的来源（这一条修订记录的标签页与本地序号，
+   * 与修订号冲突的详情同一个取法，只给保存这一版的人本人，见 revisionSourceFor）：续上时页面据此认出期间的那一版是不是本页自己
+   * 一次结果未知的保存（00 号计划书 §7.5）
    */
-  async acquire(actor: EditingActor, documentId: string, request: LeaseRequest, transaction: Transaction): Promise<LeaseAcquisition> {
-    const { clientInstanceId, idleSeconds } = request
+  async acquire(actor: EditingActor, documentId: string, request: LeaseRequest, origin: AuditOrigin, transaction: Transaction): Promise<LeaseAcquisition> {
+    const { clientInstanceId, takeover, idleSeconds } = request
     this.clients.require(request.format)
-    await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), ['edit'], transaction)
-    const { document, permissions } = await requireDocumentContent(this.policy, actor.userId, await this.documents.lockById(documentId, transaction), ['edit'], transaction)
+    const operations: readonly DocumentOperation[] = takeover === 'force' ? ['edit', 'takeOver'] : ['edit']
+    await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), operations, transaction)
+    const { document, permissions } = await requireDocumentContent(this.policy, actor.userId, await this.documents.lockById(documentId, transaction), operations, transaction)
     const current = await this.leases.lockByDocument(documentId, transaction)
-    // 两把锁都在手里之后才查：之后到提交只剩判断与两条写，窗口最短
+    // 两把锁都在手里之后才查：之后到提交只剩判断与几条写，窗口最短
     await requireActiveLogin(this.sessions, actor, transaction)
     requireWritableDocument(document)
     const occupancy = await occupancyOf(current, document.writeEpoch, actor.userId, this.holderFacts(current, document, transaction))
-    if (occupancy.kind === 'occupied' && !isSamePage(occupancy.lease, actor.sessionId, clientInstanceId)) {
-      const editor = editorOf(occupancy.lease, actor)
-      this.#logger.debug('申请编辑权：有效的租约在别人手里', { documentId, sameUser: editor.sameUser, sameSession: editor.sameSession, stale: occupancy.stale })
+    const claim = claimOf(occupancy, { ...actor, clientInstanceId }, takeover)
+    if (claim.kind === 'held') {
+      const editor = editorOf(claim.lease, actor)
+      this.#logger.debug('申请编辑权：有效的租约在别人手里', { documentId, sameUser: editor.sameUser, sameSession: editor.sameSession, stale: occupancy.kind === 'occupied' && occupancy.stale })
       return { kind: 'held', ...editor, canTakeOver: permissions.canTakeOver }
     }
     const writeEpoch = await this.documents.advanceWriteEpoch(documentId, transaction)
@@ -173,11 +206,21 @@ export class EditLeaseService {
       tokenDigest: editLeaseTokenDigest(token),
       writeEpoch,
       idleSeconds,
+      takenOver: claim.kind === 'takeOver' ? { tokenDigest: claim.lease.tokenDigest, takeover: claim.takeover } : undefined,
     }, transaction)
+    if (claim.kind === 'takeOver' && claim.takeover === 'forced') {
+      await this.audit.record({
+        action: 'documents.edit_taken_over',
+        actor: { type: 'user', id: actor.userId },
+        target: { type: 'document', id: documentId },
+        origin,
+        details: { holderId: claim.lease.holderId },
+      }, { transaction })
+    }
     // 文档行在锁下：这一版不会再变
     const revision = await this.revisions.findByRevision(documentId, document.revision, transaction)
-    // 上一个租约的情形只记原因（none、到期、空闲……，同一个页面的重试记 retry），不记令牌
-    this.#logger.debug('申请编辑权：取得新的一代', { documentId, writeEpoch, previous: occupancy.kind === 'vacant' ? occupancy.loss : 'retry' })
+    // 上一个租约的情形只记原因（none、到期、空闲……，同一个页面的重试记 retry，接管记 taken_over 与方式），不记令牌
+    this.#logger.debug('申请编辑权：取得新的一代', { documentId, writeEpoch, ...previousOf(claim, occupancy) })
     return {
       kind: 'acquired',
       token,
@@ -195,8 +238,8 @@ export class EditLeaseService {
    * 心跳续租（P1 设计 §3.4.3）：页面的构建与数据格式（CLIENT_OUTDATED，M3-P3：服务端升级、运维开关调高之后，正在编辑的页面一次心跳之内就停下）→
    * 不加锁判断能编辑（404 / 403）→ 锁租约行 → 这次登录仍然有效（否则 401，requireActiveLogin）→
    * 再读文档当前的代次 → 文档的格式（DOCUMENT_TOO_NEW，M3-P3）→ 按有效条件判断（持有者自己的请求）→ 有效就续租，否则先再判断一次能编辑（见下）、再回 EDIT_LEASE_LOST
-   * （details 带原因）。代次在锁住租约行之后才读：收回写入权与新的申请都先锁文档行、再锁租约行，改代次在前；锁住租约行之后再读，
-   * 它们要么已经提交（读到新的代次与改写过的租约），要么还在等这把锁。
+   * （details 带原因；被接管时是 taken_over 与 forced，M3-P5 设计 §3.7、§3.8，页面据此不续上）。代次在锁住租约行之后才读：收回写入权与新的申请
+   * （含接管）都先锁文档行、再锁租约行，改代次在前；锁住租约行之后再读，它们要么已经提交（读到新的代次与改写过的租约），要么还在等这把锁。
    * 失效时先再判断一次能编辑（M3-P1 审查 A2）：等租约行的锁期间权限可能刚被收回——撤权先锁文档行、再锁租约行、结束租约之后提交，这时读到的是
    * 结束了的租约（revoked），而失去访问与失去编辑权要先于租约回答（§3.2：404 / 403），页面据此区分"还读得到就给副本"与"读不到就丢弃"。
    * 别的原因同样先判断：权限的变化与哪种失效都可能同时发生；只在失败的路上多两条语句。
@@ -263,9 +306,9 @@ export class EditLeaseService {
     }
   }
 
-  /** 编辑权已失效：记一条日志（文档与原因，不记令牌），details 带原因（contracts 的 editLeaseLostDetailsSchema） */
-  private lost(documentId: string, reason: EditLeaseLostReason): AppError {
-    this.#logger.debug('续租失败：编辑权已失效', { documentId, reason })
-    return new AppError('EDIT_LEASE_LOST', undefined, { details: { reason } })
+  /** 编辑权已失效：记一条日志（文档、原因与被接管的方式，不记令牌），details 带原因与被接管的方式（editLeaseLost） */
+  private lost(documentId: string, loss: LeaseLoss): AppError {
+    this.#logger.debug('续租失败：编辑权已失效', { documentId, reason: loss.reason, forced: loss.forced })
+    return editLeaseLost(loss)
   }
 }
