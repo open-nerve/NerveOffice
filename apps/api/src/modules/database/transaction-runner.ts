@@ -4,12 +4,44 @@ import { Inject, Injectable } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import pg from 'pg'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { databaseBusyReasonOf } from './busy-errors.ts'
 import { CommitLedger } from './commit-ledger.ts'
 import { createDatabase, PG_POOL } from './database.ts'
 import { SnapshotScope } from './snapshot-scope.ts'
 
 /** work 吞掉了失败的语句却正常返回时的说明。 */
 export const TRANSACTION_ABORTED_MESSAGE = '事务里有语句失败，事务已中止，不能当作成功提交：预期会失败的语句由仓储放进保存点（transaction()），或者改用 ON CONFLICT'
+
+/**
+ * 一个写事务的选项（run）。timeoutMs：整个事务的时限（毫秒，正整数），由数据库保证（M3-P5 复验 C1）——事务的第一条语句设下
+ * transaction_timeout（PostgreSQL 17 起；写成 set_config 的第三个参数为真，与 SET LOCAL 相同，只管这个事务，又是参数化的，规范 §5）。
+ * PostgreSQL 18 上实测：
+ * - 从设下的那一刻起算（会话里没有正在走的事务计时器时当场开始计时）；会话的默认值不是 0 时计时器在 BEGIN 就开始了，事务里再设一个
+ *   更短的也缩不短它——所以连接池把会话的默认值定为 0（pool.ts），要限时的事务自己设；
+ * - 到点时数据库结束整个会话（FATAL，SQLSTATE 25P04 transaction_timeout），事务随之回滚、什么也不生效，连接已断开：这里交出 25P04
+ *   （见 failureToThrow），丢弃这个连接，异常过滤器按数据库繁忙回 503（busy-errors.ts）；
+ * - 提交、回滚之后连接上恢复为 0，之后借到它的事务不受影响；
+ * - statement_timeout、lock_timeout 照常起作用（各自更短时先到点，按原来的数据库繁忙回答）。
+ */
+export interface TransactionOptions {
+  readonly timeoutMs?: number
+}
+
+/** 设下这个事务的时限（见 TransactionOptions）：事务的第一条语句 */
+async function limitTransaction(tx: DbTransaction, timeoutMs: number): Promise<void> {
+  await tx.execute(sql`SELECT set_config('transaction_timeout', ${String(timeoutMs)}, true)`)
+}
+
+/**
+ * 事务失败时交出哪个错误。drizzle 在回滚也失败时交出回滚的错误、丢掉 work 的（drizzle-orm/node-postgres 的 session.js，transaction()）。
+ * work 的错误是数据库繁忙（等锁超时、语句超时、超过事务的时限，busy-errors.ts）时照样交出它：事务确定没有生效，回滚失败（连接断了，
+ * 数据库随之回滚）不改变这一点。超过事务的时限时数据库结束了整个会话，回滚必然失败——不这样的话客户端得到的是"结果未知"的 500，
+ * 而不是"没有生效、稍后重试"的 503（M3-P5 复验 C1）。其余照旧：回滚成功时本来就是 work 的错误；业务错误之后回滚失败时是回滚的错误
+ * （意外错误）。连接是否丢弃仍按 drizzle 交出的那个错误算：回滚失败时一律丢弃
+ */
+function failureToThrow(thrown: unknown, failure: { readonly error: unknown } | undefined): unknown {
+  return failure !== undefined && failure.error !== thrown && databaseBusyReasonOf(failure.error) !== undefined ? failure.error : thrown
+}
 
 /**
  * 只读快照的开场核对（M2 Codex 评审 CX1）：快照里的第一条语句，同时确定快照的时刻（REPEATABLE READ 的快照取在第一条语句上）。
@@ -62,6 +94,8 @@ async function assertTransactionUsable(tx: DbTransaction): Promise<void> {
  * 归还的规则：事务以业务错误（AppError）结束时，回滚已经成功（drizzle 只在回滚成功时抛出 work 原来的错误），连接照常放回；
  * 其他失败一律丢弃这个连接，与连接池自己的 query() 一致；连接不是空闲状态（还在事务里、状态未知）时同样丢弃。
  *
+ * 要限时的事务带上 timeoutMs（TransactionOptions，M3-P5 复验 C1：保存的事务）：超过时数据库结束会话、事务回滚，按数据库繁忙交出。
+ *
  * COMMIT 成功之后在这个请求的记录上记一笔（CommitLedger，M2-P6 第 3 片复验）：之后这个请求再遇到数据库繁忙，
  * 写入已经生效，异常过滤器不再回答"确定没有生效"的 503。回滚、COMMIT 本身失败都不记
  */
@@ -81,16 +115,29 @@ export class TransactionRunner {
     private readonly snapshots: SnapshotScope,
   ) {}
 
-  async run<T>(work: (transaction: Transaction) => Promise<T>): Promise<T> {
+  async run<T>(work: (transaction: Transaction) => Promise<T>, options: TransactionOptions = {}): Promise<T> {
     this.#refuseInsideSnapshot()
+    const { timeoutMs } = options
+    if (timeoutMs !== undefined && !(Number.isSafeInteger(timeoutMs) && timeoutMs > 0))
+      throw new Error(`事务的时限要是正整数毫秒：${timeoutMs}`)
     const client = await this.pool.connect()
     let discard = false
+    /** 事务里（设时限、work、确认事务可用）抛出的错误：回滚也失败时据此决定交出哪个（failureToThrow） */
+    let failure: { readonly error: unknown } | undefined
     try {
       const result = await createDatabase(client).transaction(async (tx) => {
-        const value = await work(tx as unknown as Transaction)
-        // 抛出之后 drizzle 回滚（P2 复验 G3）
-        await assertTransactionUsable(tx)
-        return value
+        try {
+          if (timeoutMs !== undefined)
+            await limitTransaction(tx, timeoutMs)
+          const value = await work(tx as unknown as Transaction)
+          // 抛出之后 drizzle 回滚（P2 复验 G3）
+          await assertTransactionUsable(tx)
+          return value
+        }
+        catch (error) {
+          failure = { error }
+          throw error
+        }
       })
       // drizzle 在 COMMIT 返回之后才交回结果：走到这里就是已经提交
       this.commits.recordCommit()
@@ -98,7 +145,7 @@ export class TransactionRunner {
     }
     catch (error) {
       discard = !(error instanceof AppError)
-      throw error
+      throw failureToThrow(error, failure)
     }
     finally {
       // 只有空闲的连接放回池里：不依赖 drizzle 在各种失败下是否发出了 ROLLBACK。

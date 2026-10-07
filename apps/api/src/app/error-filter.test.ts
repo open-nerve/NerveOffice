@@ -37,10 +37,11 @@ describe('mapException', () => {
     expect(mapException(new ForbiddenException())).toMatchObject({ status: 500, code: 'INTERNAL_ERROR', unexpected: true })
   })
 
-  it('数据库繁忙（等锁超时、语句超时、取不到连接）→ 503 SERVICE_UNAVAILABLE 带 Retry-After，只回通用说明，不算意外错误（M2-P6 复核 A 的 G-2）', () => {
+  it('数据库繁忙（等锁超时、语句超时、超过事务的时限、取不到连接）→ 503 SERVICE_UNAVAILABLE 带 Retry-After，只回通用说明，不算意外错误（M2-P6 复核 A 的 G-2；事务的时限是 M3-P5 复验 C1）', () => {
     const busy = { status: 503, code: 'SERVICE_UNAVAILABLE', message: '服务暂时不可用，请稍后重试', unexpected: false, headers: { 'Retry-After': String(DATABASE_BUSY_RETRY_AFTER_SECONDS) } }
     expect(mapException(databaseError('55P03'))).toEqual({ ...busy, busy: 'lock_timeout' })
     expect(mapException(databaseError('57014'))).toEqual({ ...busy, busy: 'statement_timeout' })
+    expect(mapException(databaseError('25P04'))).toEqual({ ...busy, busy: 'transaction_timeout' })
     expect(mapException(new Error(POOL_TIMEOUT_MESSAGE))).toEqual({ ...busy, busy: 'pool_timeout' })
     expect(DATABASE_BUSY_RETRY_AFTER_SECONDS).toBe(5)
     // 别的数据库错误（死锁、违反约束）仍是意外错误
