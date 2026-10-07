@@ -1,9 +1,10 @@
-import type { AcquiredEditLease, CreatedDocument, DocumentEditor, EditRequestOutcome, HandedOverEditLease, OpenCheckFailure, PendingEditRequest, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { AcquiredEditLease, CreatedDocument, DocumentEditor, EditInterruption, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckFailure, PendingEditRequest, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
+import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
@@ -323,6 +324,8 @@ interface Setup {
   readonly userId?: string
   /** 本页在同一个浏览器里叫什么（fakeBrowser 的标签页名，默认 this） */
   readonly tab?: string
+  /** 测试构建的观察钩子（M3-P5 S8）：默认不给 */
+  readonly trace?: HandoverTrace
 }
 
 const modes: EditMode[] = []
@@ -378,6 +381,7 @@ function setup(options: Setup = {}) {
     sameBrowser: options.sameBrowser ?? sameBrowserFor(DOCUMENT_ID, browser.tab(options.tab ?? 'this')),
     pendingSave: marker,
     reportError,
+    ...(options.trace === undefined ? {} : { trace: options.trace }),
   }
   const mode = createEditMode(modeOptions)
   modes.push(mode)
@@ -4384,5 +4388,504 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       await settle()
       expect(readingOf(context.mode).canTakeOver).toBe(false)
     })
+  })
+})
+
+/** 能强制接管的人看到的编辑状态（M3-P5 S8）：canTakeOver 为真 */
+function adminStatus(revision: number, editor: DocumentEditor | null = null, patch: Partial<EditStatus> = {}): FetchedEditStatus {
+  const plain = status(revision, editor)
+  return { ...plain, status: { ...plain.status, canTakeOver: true, ...patch } }
+}
+
+/** 能强制接管的人打开、在阅读（默认艾米在编辑） */
+async function adminReading(options: Setup = {}, editor: DocumentEditor | null = AMY_EDITING): Promise<ReturnType<typeof setup>> {
+  const context = setup({ ...options, api: { editStatus: async () => adminStatus(3, editor), ...options.api } })
+  await context.mode.open({ ...LOADED, canEdit: true, canTakeOver: true }, { enterEdit: false })
+  await settle()
+  return context
+}
+
+/** 本在请求编辑（心跳带来的待回应的请求） */
+const BEN_REQUEST: PendingEditRequest = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requester: BEN, requestedAt: '2026-10-04T03:01:00.000Z' }
+
+describe('强制接管（M3-P5 设计 §3.8，US-M3-09）', () => {
+  const RESERVED = new ApiError(409, 'EDIT_LEASE_RESERVED', '编辑权刚交给了别人', { details: { reservedFor: BEN, reservedUntil: RESERVED_UNTIL } })
+  const TAKEOVER_DENIED = new ApiError(403, 'PERMISSION_DENIED', '只有空间管理员能强制接管这份文档的编辑')
+
+  it('能强制接管、别人在编辑：以 takeover: \'force\' 申请（只申请一次），进入编辑的过程中状态带 forced（页头的"强制接管"留着），取得了就拿锁、以可编辑重建，进入编辑', async () => {
+    const answer = deferred<AcquiredEditLease>()
+    const context = await adminReading({ editLease: { acquire: async () => answer.promise } })
+    expect(readingOf(context.mode)).toMatchObject({ canTakeOver: true, holder: { holder: AMY, sameUser: false } })
+    const taking = context.mode.forceTakeOver()
+    expect(modeOf(context.mode)).toEqual({ kind: 'entering', forced: true })
+    answer.resolve(ACQUIRED)
+    await taking
+    expect(context.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, PAGE_ID, { takeover: 'force' })
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(context.factory.last().access).toBe('edit')
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+  })
+
+  it('"编辑"进入编辑的过程中状态不带 forced', async () => {
+    const answer = deferred<AcquiredEditLease>()
+    const context = await adminReading({ editLease: { acquire: async () => answer.promise } }, null)
+    const entering = context.mode.enter()
+    expect(modeOf(context.mode)).toEqual({ kind: 'entering' })
+    answer.resolve(ACQUIRED)
+    await entering
+  })
+
+  it.each([
+    ['不能强制接管（编辑者）', { canTakeOver: false }, AMY_EDITING],
+    ['正在编辑的是自己（走"在此编辑"：同一个浏览器里先请那边交出）', {}, SELF_EDITING],
+    ['不能编辑了', { canEdit: false }, AMY_EDITING],
+  ] as const)('%s：不申请', async (_case, patch, editor) => {
+    const context = setup({ api: { editStatus: async () => adminStatus(3, editor, patch) } })
+    await context.mode.open({ ...LOADED, canEdit: true, canTakeOver: true }, { enterEdit: false })
+    await settle()
+    await context.mode.forceTakeOver()
+    expect(context.editLease.acquire).not.toHaveBeenCalled()
+    expect(modeOf(context.mode).kind).toBe('reading')
+  })
+
+  it('请求编辑在等（与请求编辑互斥）、正在按新的版本重建时：不申请', async () => {
+    const context = await adminReading()
+    await context.mode.requestEdit()
+    expect(readingOf(context.mode).request?.kind).toBe('waiting')
+    await context.mode.forceTakeOver()
+    expect(context.editLease.acquire).not.toHaveBeenCalled()
+    await context.mode.cancelRequest()
+    const content = deferred<LoadedContent>()
+    context.api.editStatus.mockResolvedValue(adminStatus(5, AMY_EDITING))
+    context.api.contentIfChanged.mockImplementation(async () => content.promise)
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    const refreshing = context.mode.refresh()
+    expect(readingOf(context.mode).update).toBe('loading')
+    await context.mode.forceTakeOver()
+    expect(context.editLease.acquire).not.toHaveBeenCalled()
+    content.resolve({ snapshot: snapshotOf('服务端的'), revision: 5 })
+    await refreshing
+  })
+
+  it('"在此编辑"进行中（与本人接管互斥）：不申请', async () => {
+    const context = await adminReading()
+    // 记号说刷新之前有一次保存在途（30 秒之内）："在此编辑"先等它
+    context.marker.read.mockReturnValue({ at: new Date(2026, 9, 4, 15, 30, 11).getTime(), revision: 3 })
+    const taking = context.mode.takeOver()
+    await settle()
+    expect(readingOf(context.mode).takeover).toEqual({ kind: 'waiting-save' })
+    await context.mode.forceTakeOver()
+    expect(context.editLease.acquire).not.toHaveBeenCalled()
+    context.mode.cancelTakeOver()
+    await taking
+  })
+
+  it('不能强制接管了（403：例如刚被降为编辑者）：回到阅读，说明没能强制接管与服务端的原因，不再给"强制接管"（canTakeOver 为假），能不能编辑照旧、由随后的检查更新；之后的检查读到又能强制接管时说明随之去掉', async () => {
+    const context = await adminReading({ editLease: { acquire: async () => Promise.reject(TAKEOVER_DENIED) } })
+    context.api.editStatus.mockResolvedValue(adminStatus(3, AMY_EDITING, { canTakeOver: false }))
+    await context.mode.forceTakeOver()
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, canTakeOver: false, holder: { holder: AMY }, notice: { kind: 'force-denied', error: TAKEOVER_DENIED } })
+    // 回到阅读时立即检查一次：仍不能强制接管，说明留着
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ canTakeOver: false, notice: { kind: 'force-denied' } })
+    context.api.editStatus.mockResolvedValue(adminStatus(3, AMY_EDITING))
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode)).toMatchObject({ canTakeOver: true, notice: undefined })
+  })
+
+  it('"编辑"得到 403 仍是原来的说法（不能编辑了），不是强制接管的', async () => {
+    const context = await adminReading({ editLease: { acquire: async () => Promise.reject(DENIED) } }, null)
+    context.api.editStatus.mockResolvedValue(adminStatus(3, null, { canEdit: false, canTakeOver: false }))
+    await context.mode.enter()
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: false, notice: { kind: 'denied', error: DENIED } })
+  })
+
+  it('编辑权刚交给了别人、还在保留期内（EDIT_LEASE_RESERVED，保留期内强制接管同样被挡）：回到阅读，说明留给了谁、留到何时、是强制接管时得到的（没人占着）', async () => {
+    const context = await adminReading({ editLease: { acquire: async () => Promise.reject(RESERVED) } })
+    // 回到阅读时的检查读到的是那时的样子：没人在编辑（编辑权留给了本）
+    context.api.editStatus.mockResolvedValue(adminStatus(3, null))
+    await context.mode.forceTakeOver()
+    expect(readingOf(context.mode)).toMatchObject({ holder: undefined, canTakeOver: true, notice: { kind: 'reserved', reservedFor: BEN, reservedUntil: RESERVED_UNTIL, forced: true } })
+    // "编辑"得到的同一个回答不带 forced
+    const plain = await adminReading({ editLease: { acquire: async () => Promise.reject(RESERVED) } }, null)
+    await plain.mode.enter()
+    expect(readingOf(plain.mode).notice).toEqual({ kind: 'reserved', reservedFor: BEN, reservedUntil: RESERVED_UNTIL })
+  })
+
+  it('没有成功（网络，再试一次之后仍然未知）：回到阅读，说明没能强制接管（可以再试），"强制接管"照旧；再按就进入编辑', async () => {
+    const failure = new NetworkError('断网')
+    const context = await adminReading({ editLease: { acquire: async () => Promise.reject(failure) } })
+    const taking = context.mode.forceTakeOver()
+    await context.time.advance(1_000)
+    await taking
+    expect(readingOf(context.mode)).toMatchObject({ canTakeOver: true, holder: { holder: AMY }, notice: { kind: 'force-failed', error: failure } })
+    context.editLease.acquire.mockResolvedValueOnce(ACQUIRED)
+    await context.mode.forceTakeOver()
+    expect(modeOf(context.mode).kind).toBe('editing')
+  })
+
+  it('未登录或令牌失效：交给页面确认会话，说明没能强制接管', async () => {
+    const error = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    const context = await adminReading({ editLease: { acquire: async () => Promise.reject(error) } })
+    await context.mode.forceTakeOver()
+    expect(context.hooks.writeProblem).toHaveBeenCalledExactlyOnceWith(error)
+    expect(readingOf(context.mode).notice).toEqual({ kind: 'force-failed', error })
+  })
+
+  it('被占用（详情说是别人）：回到阅读、说明谁在编辑（没有别的说明）', async () => {
+    const context = await adminReading({ editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
+    await context.mode.forceTakeOver()
+    expect(readingOf(context.mode)).toMatchObject({ holder: { holder: AMY, sameUser: false }, notice: undefined })
+  })
+})
+
+describe('被强制接管与已经交出（M3-P5 设计 §3.6、§3.8）', () => {
+  const FORCED = new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'taken_over', forced: true } })
+  /** 接管的人：组长 */
+  const LEAD = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e3', username: 'lead', displayName: '组长' }
+  const LEAD_EDITING: DocumentEditor = { holder: LEAD, lastActiveAt: '2026-10-04T03:03:00.000Z', sameUser: false, sameSession: false }
+
+  it('心跳得到 taken_over、forced 为真：不续上（不释放、不再申请），失去编辑权（forced）；读一次编辑状态，正在编辑的是别人就是接管的人；本页的修改给副本', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('甲')
+    const reads = context.api.editStatus.mock.calls.length
+    context.api.editStatus.mockResolvedValue(status(3, LEAD_EDITING))
+    loseOnNextHeartbeat(context, FORCED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'forced', by: LEAD }, unsaved: true, readable: true })
+    expect(context.api.editStatus.mock.calls.length).toBe(reads + 1)
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+  })
+
+  it('接管的人在失去编辑权的说明出来之后才读到：随即补上，另存为副本的进展照旧', async () => {
+    const answer = deferred<FetchedEditStatus>()
+    const copy = deferred<CreatedDocument>()
+    const context = setup({ api: { conflictCopy: async () => copy.promise } })
+    await editing(context)
+    context.factory.last().edit('甲')
+    context.api.editStatus.mockImplementation(async () => answer.promise)
+    loseOnNextHeartbeat(context, FORCED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'forced' })
+    const saving = context.mode.saveCopy()
+    await settle()
+    expect(lostOf(context.mode).copy).toEqual({ kind: 'saving' })
+    answer.resolve(status(3, LEAD_EDITING))
+    await settle()
+    expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'forced', by: LEAD }, copy: { kind: 'saving' } })
+    copy.resolve({ ...COPY, replayed: false })
+    await saving
+  })
+
+  it.each([
+    ['读不到编辑状态', async (): Promise<FetchedEditStatus> => Promise.reject(new NetworkError('断网'))],
+    ['没人在编辑', async (): Promise<FetchedEditStatus> => status(3)],
+    ['正在编辑的是自己（不会是接管的人）', async (): Promise<FetchedEditStatus> => status(3, SELF_EDITING)],
+  ])('%s：不补接管的人（只说空间管理员强制接管了编辑）', async (_case, read) => {
+    const context = setup()
+    await editing(context)
+    context.api.editStatus.mockImplementation(read)
+    loseOnNextHeartbeat(context, FORCED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    await settle()
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'forced' })
+  })
+
+  it('别的失效不读编辑状态', async () => {
+    const context = setup()
+    await editing(context)
+    const reads = context.api.editStatus.mock.calls.length
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'denied', error: DENIED })
+    expect(context.api.editStatus.mock.calls.length).toBe(reads)
+  })
+
+  it('交出的回答没收到、留在编辑，下一次心跳才得知已经交出（handed_over）：不续上，失去编辑权，交给的是还在等的那个请求的人；本页的修改都已存上', async () => {
+    const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(new NetworkError('断网')) } })
+    await editing(context)
+    context.factory.last().edit('甲')
+    context.editLease.renew.mockResolvedValue({ ...RENEWED, request: BEN_REQUEST })
+    context.act()
+    await context.time.advance(HEARTBEAT_MS)
+    await context.mode.handOver()
+    await settle()
+    expect(modeOf(context.mode)).toMatchObject({ kind: 'editing', request: { id: BEN_REQUEST.id, failure: { action: 'handover' } } })
+    loseOnNextHeartbeat(context, leaseLost('handed_over'))
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'handed-over', to: BEN }, unsaved: false })
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('已经交出、不知道交给了谁（没有在等的请求）：照样不续上，说法里不带人', async () => {
+    const context = setup()
+    await editing(context)
+    loseOnNextHeartbeat(context, leaseLost('handed_over'))
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'handed-over' })
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+  })
+})
+
+describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', () => {
+  /** 别人（本）的那一代异常中断 */
+  const OTHERS: EditInterruption = { holder: BEN, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false }
+  /** 自己（艾米）的那一代异常中断 */
+  const OWN: EditInterruption = { holder: AMY, endedAt: '2026-10-04T02:55:00.000Z', sameUser: true }
+
+  function editingInterruption(mode: EditMode): EditInterruption | undefined {
+    const current = modeOf(mode)
+    if (current.kind !== 'editing' && current.kind !== 'exiting')
+      throw new Error(`现在不是编辑：${current.kind}`)
+    return current.interruption
+  }
+
+  it('点"编辑"的申请带回提醒：进入编辑之后编辑的状态带着它（别人的、自己的都是）；"知道了"之后去掉', async () => {
+    for (const interruption of [OTHERS, OWN]) {
+      const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption }) } })
+      await editing(context)
+      expect(editingInterruption(context.mode)).toEqual(interruption)
+      context.mode.dismissInterruption()
+      expect(modeOf(context.mode)).toEqual({ kind: 'editing', request: undefined, notice: undefined, interruption: undefined })
+    }
+  })
+
+  it('申请没带提醒：没有', async () => {
+    const context = setup()
+    await editing(context)
+    expect(editingInterruption(context.mode)).toBeUndefined()
+  })
+
+  it('离开编辑的过程中留着（"知道了"照样能按）；回到阅读之后没有，再进入编辑时按那一次申请的', async () => {
+    const release = deferred<undefined>()
+    const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OTHERS }), release: async () => release.promise } })
+    await editing(context)
+    const exiting = context.mode.exit()
+    await settle()
+    expect(modeOf(context.mode)).toMatchObject({ kind: 'exiting', cause: 'exit', interruption: OTHERS })
+    context.mode.dismissInterruption()
+    expect(modeOf(context.mode)).toMatchObject({ kind: 'exiting', interruption: undefined })
+    release.resolve(undefined)
+    await exiting
+    expect(modeOf(context.mode).kind).toBe('reading')
+    context.editLease.acquire.mockResolvedValueOnce(ACQUIRED)
+    await context.mode.enter()
+    expect(editingInterruption(context.mode)).toBeUndefined()
+  })
+
+  it('没离开成（保存失败，留在编辑）：提醒还在', async () => {
+    const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OTHERS }) }, api: { save: async () => Promise.reject(new ApiError(422, 'SNAPSHOT_INVALID', 'x')) } })
+    await editing(context)
+    context.factory.last().edit('甲')
+    await context.mode.exit()
+    await settle()
+    expect(editingInterruption(context.mode)).toEqual(OTHERS)
+  })
+
+  it('失去编辑权时去掉', async () => {
+    const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OTHERS }) } })
+    await editing(context)
+    loseOnNextHeartbeat(context, DENIED)
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode).kind).toBe('lost')
+    context.mode.dismissInterruption()
+    expect(lostOf(context.mode).kind).toBe('lost')
+  })
+
+  it('续上的申请带回提醒（编辑权中断之后，上一代就是本页自己）：不显示——续上不经用户发起的申请', async () => {
+    const context = setup()
+    await editing(context)
+    context.editLease.acquire.mockResolvedValueOnce({ ...ACQUIRED, token: 'M'.repeat(43), writeEpoch: 8, interruption: OWN })
+    loseOnNextHeartbeat(context, leaseLost('expired'))
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(context.editLease.acquire).toHaveBeenCalledTimes(2)
+    expect(context.editLease.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, expect.objectContaining({ idleSeconds: expect.any(Number) as number }))
+    expect(modeOf(context.mode)).toMatchObject({ kind: 'editing' })
+    expect(editingInterruption(context.mode)).toBeUndefined()
+  })
+
+  it('"在此编辑"、请求被批准之后的自动进入、?edit=new、强制接管的申请带回的同样显示（都是用户发起的申请）', async () => {
+    const self = setup({ api: { editStatus: async () => status(3, SELF_EDITING) }, editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OWN }) } })
+    await opened(self)
+    await self.mode.takeOver()
+    expect(editingInterruption(self.mode)).toEqual(OWN)
+
+    const granted = setup({ api: { editStatus: async () => status(3, AMY_EDITING) }, editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OTHERS }) } })
+    granted.api.editRequest.send.mockResolvedValue({ kind: 'free' })
+    await opened(granted)
+    await granted.mode.requestEdit()
+    await settle()
+    expect(editingInterruption(granted.mode)).toEqual(OTHERS)
+
+    const created = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OTHERS }) } })
+    await created.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })
+    expect(editingInterruption(created.mode)).toEqual(OTHERS)
+
+    const forced = await adminReading({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OTHERS }) } })
+    await forced.mode.forceTakeOver()
+    expect(editingInterruption(forced.mode)).toEqual(OTHERS)
+  })
+
+  it('以可编辑重建失败、回到阅读：提醒不留到下一次', async () => {
+    const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption: OTHERS }) } })
+    await opened(context)
+    context.factory.failNext()
+    await context.mode.enter()
+    expect(readingOf(context.mode).notice).toEqual({ kind: 'editor-failed' })
+    context.editLease.acquire.mockResolvedValueOnce(ACQUIRED)
+    await context.mode.enter()
+    expect(editingInterruption(context.mode)).toBeUndefined()
+  })
+
+  it('阅读时带着别人的那一代的提醒、点"编辑"却被占用（期间别人进入了编辑）：回到阅读时提醒随之去掉（有人在编辑了），说谁在编辑', async () => {
+    const context = setup({ api: { editStatus: async () => ({ ...status(3), status: { ...status(3).status, interruption: OTHERS } }) }, editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
+    await opened(context)
+    expect(readingOf(context.mode).interruption).toEqual(OTHERS)
+    context.api.editStatus.mockImplementation(async () => deferred<FetchedEditStatus>().promise)
+    await context.mode.enter()
+    expect(readingOf(context.mode)).toMatchObject({ holder: { holder: AMY }, interruption: undefined })
+  })
+
+  it('阅读时编辑状态里有别人的那一代异常中断的提醒（没人在编辑）：阅读的状态带着它；是自己的那一代时不带；之后读到没有了随之去掉；读不到了时没有', async () => {
+    const context = setup({ api: { editStatus: async () => ({ ...status(3), status: { ...status(3).status, interruption: OTHERS } }) } })
+    await opened(context)
+    expect(readingOf(context.mode).interruption).toEqual(OTHERS)
+    context.api.editStatus.mockResolvedValue({ ...status(3), status: { ...status(3).status, interruption: OWN } })
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode).interruption).toBeUndefined()
+    context.api.editStatus.mockResolvedValue({ ...status(3), status: { ...status(3).status, interruption: OTHERS } })
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode).interruption).toEqual(OTHERS)
+    context.api.editStatus.mockResolvedValue(status(3))
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode).interruption).toBeUndefined()
+    context.api.editStatus.mockResolvedValue({ ...status(3), status: { ...status(3).status, interruption: OTHERS } })
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    context.api.editStatus.mockRejectedValue(GONE)
+    await context.time.advance(READING_CHECK_INTERVAL_MS)
+    expect(readingOf(context.mode)).toMatchObject({ gone: true, interruption: undefined })
+  })
+})
+
+describe('测试构建的观察钩子（M3-P5 设计 §3.13）', () => {
+  /** 记下报来的事件（只留种类与几样要核对的字段） */
+  function recorder() {
+    const events: HandoverTraceEvent[] = []
+    return { events, trace: vi.fn<HandoverTrace>(event => events.push(event)), kinds: () => events.map(event => event.kind) }
+  }
+
+  it('"编辑"、离开编辑：申请（触发的操作、接管方式）、结果（带没带提醒）、进入编辑、开始离开、离开的结果，时刻按单调的时钟', async () => {
+    const { events, trace, kinds } = recorder()
+    const context = setup({ trace, editLease: { acquire: async () => ({ ...ACQUIRED, interruption: { holder: BEN, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false } }) } })
+    await editing(context)
+    await context.mode.exit()
+    expect(kinds()).toEqual(['acquire', 'acquire-result', 'entered', 'leave', 'left'])
+    expect(events[0]).toEqual({ kind: 'acquire', at: context.time.now(), trigger: 'enter', takeover: null })
+    expect(events[1]).toEqual({ kind: 'acquire-result', at: context.time.now(), result: 'acquired', interruption: true, code: null })
+    expect(events[3]).toEqual({ kind: 'leave', at: context.time.now(), cause: 'exit' })
+    expect(events[4]).toEqual({ kind: 'left', at: context.time.now(), cause: 'exit', outcome: 'reading' })
+  })
+
+  it('申请失败带错误码；强制接管带 force；没离开成是 stayed', async () => {
+    const { events, trace } = recorder()
+    const context = await adminReading({ trace, editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
+    await context.mode.forceTakeOver()
+    expect(events).toEqual([
+      { kind: 'acquire', at: expect.any(Number) as number, trigger: 'force', takeover: 'force' },
+      { kind: 'acquire-result', at: expect.any(Number) as number, result: 'held', interruption: false, code: null },
+    ])
+    events.length = 0
+    context.editLease.acquire.mockRejectedValueOnce(DENIED)
+    await context.mode.forceTakeOver()
+    expect(events.at(-1)).toEqual({ kind: 'acquire-result', at: expect.any(Number) as number, result: 'failed', interruption: false, code: 'PERMISSION_DENIED' })
+
+    const stayed = recorder()
+    const editingContext = setup({ trace: stayed.trace, api: { save: async () => Promise.reject(new ApiError(422, 'SNAPSHOT_INVALID', 'x')) } })
+    await editing(editingContext)
+    editingContext.factory.last().edit('甲')
+    await editingContext.mode.exit()
+    await settle()
+    expect(stayed.events.at(-1)).toEqual({ kind: 'left', at: expect.any(Number) as number, cause: 'exit', outcome: 'stayed' })
+  })
+
+  it('锁被本浏览器的另一个标签页抢走：lock-stolen', async () => {
+    const { kinds, trace } = recorder()
+    const context = setup({ trace })
+    await editing(context)
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).steal()
+    await settle()
+    expect(kinds()).toContain('lock-stolen')
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
+  })
+
+  it('同一个浏览器的交接：请求方报"在此编辑"开始、锁在本浏览器、发出请求、收到 ack、锁空了（或 done）、申请与进入；回应方报回应、开始离开、告诉它做完了、离开的结果', async () => {
+    const browser = fakeBrowser()
+    const a = recorder()
+    const b = recorder()
+    const tabA = setup({ browser, tab: 'A', trace: a.trace })
+    await editing(tabA)
+    const tabB = setup({ browser, tab: 'B', clientInstanceId: '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb', trace: b.trace, api: { editStatus: async () => status(3, SELF_EDITING) } })
+    await opened(tabB)
+    await settle()
+    a.events.length = 0
+    await tabB.mode.takeOver()
+    await settle()
+    expect(modeOf(tabB.mode).kind).toBe('editing')
+    // 回应（ack、done）与锁空了谁先到不定（假的频道在下一个宏任务里送到，那边存上、放锁更快时请求方先看到锁空了、不再收回应）：
+    // 收到回应的写法另由 self-takeover 的单元测试核对
+    const bKinds = b.kinds()
+    expect(bKinds.slice(0, 3)).toEqual(['takeover-start', 'takeover-locate', 'handover-request'])
+    expect(bKinds.slice(-3)).toEqual(['acquire', 'acquire-result', 'entered'])
+    expect(bKinds.some(kind => kind === 'handover-lock-free' || kind === 'handover-reply')).toBe(true)
+    expect(b.events.find(event => event.kind === 'takeover-locate')).toMatchObject({ here: true })
+    expect(b.events.find(event => event.kind === 'acquire')).toMatchObject({ trigger: 'take-over', takeover: null })
+    expect(a.kinds()).toEqual(['handover-answer', 'leave', 'handover-finish', 'left'])
+    expect(a.events[0]).toMatchObject({ answer: 'ack', state: 'editing' })
+    expect(a.events[2]).toMatchObject({ outcome: 'done', reason: null })
+  })
+
+  it('请求编辑：发出的结果、续期的结果、编辑权交给了本页（页面看不看得见）、开始进入', async () => {
+    const { events, trace, kinds } = recorder()
+    const context = setup({ trace, api: { editStatus: async () => status(3, AMY_EDITING) } })
+    await opened(context)
+    await context.mode.requestEdit()
+    context.api.editRequest.renew.mockResolvedValueOnce(REQUEST_PENDING).mockResolvedValueOnce({ kind: 'reserved', reservedUntil: RESERVED_UNTIL })
+    await context.time.advance(EDIT_REQUEST_RENEW_SECONDS * 1000)
+    await context.time.advance(EDIT_REQUEST_RENEW_SECONDS * 1000)
+    await settle()
+    expect(kinds()).toEqual(expect.arrayContaining(['request-sent', 'request-renewed', 'request-granted', 'request-enter', 'acquire', 'entered']))
+    expect(events.find(event => event.kind === 'request-sent')).toMatchObject({ outcome: 'pending' })
+    expect(events.filter(event => event.kind === 'request-renewed').map(event => event.kind === 'request-renewed' ? event.outcome : '')).toEqual(['pending', 'reserved'])
+    expect(events.find(event => event.kind === 'request-granted')).toMatchObject({ visible: true })
+    expect(events.find(event => event.kind === 'acquire')).toMatchObject({ trigger: 'granted', takeover: null })
+  })
+
+  it('观察者出错：交给 reportError，交接照常', async () => {
+    const failure = new Error('观察者出错')
+    const context = setup({ trace: () => {
+      throw failure
+    } })
+    await editing(context)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(context.reportError).toHaveBeenCalledWith(failure)
+  })
+
+  it('不给观察者（生产）：什么也不记，照常', async () => {
+    const context = setup()
+    await editing(context)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(context.reportError).not.toHaveBeenCalled()
   })
 })

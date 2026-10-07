@@ -292,6 +292,31 @@ export async function idleEditLease(documentId: string): Promise<void> {
   })
 }
 
+/**
+ * 让这份文档的编辑租约在 minutes 分钟之前就到期了（M3-P5，US-M3-10：异常中断的提醒只在结束之后 30 分钟以内给出，结束的时刻是最后一次续租）：
+ * 最后一次续租与最后活动挪到 minutes 分钟之前，到期在那之后 90 秒（一个有效期），申请的时间也挪到它之前。改库是因为页面的时钟拨不动数据库的
+ * now()。表上的 CHECK 照样成立（到期晚于续租、最后活动不晚于续租）。前提同 expireEditLease：有一份没有明确结束的租约
+ */
+export async function expireEditLeaseAgo(documentId: string, minutes: number): Promise<void> {
+  await withDatabase(async (client) => {
+    const result = await client.query(
+      `UPDATE document_edit_leases SET renewed_at = now() - make_interval(mins => $2), last_active_at = now() - make_interval(mins => $2),
+         acquired_at = least(acquired_at, now() - make_interval(mins => $2)), expires_at = now() - make_interval(mins => $2) + interval '90 seconds'
+       WHERE document_id = $1 AND ended_at IS NULL`,
+      [documentId, minutes],
+    )
+    if (result.rowCount !== 1)
+      throw new Error(`文档 ${documentId} 没有正在进行的编辑租约`)
+  })
+}
+
+/**
+ * 这份文档的编辑租约最后一次续租的时刻（M3-P5，US-M3-10：异常中断的提醒里"在 HH:mm 异常中断"就是它）；从没有过租约时为 undefined
+ */
+export async function editLeaseRenewedAt(documentId: string): Promise<Date | undefined> {
+  return withDatabase(async client => (await client.query<{ renewed_at: Date }>('SELECT renewed_at FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.renewed_at)
+}
+
 /** 这份文档的编辑租约明确结束的原因（released、revoked）；还没有结束时为 null，从没有过租约时为 undefined */
 export async function editLeaseEndReason(documentId: string): Promise<string | null | undefined> {
   return withDatabase(async client => (await client.query<{ end_reason: string | null }>('SELECT end_reason FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.end_reason)

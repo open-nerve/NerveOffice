@@ -1,3 +1,4 @@
+import type { EditInterruption } from '@nerve-office/contracts'
 import type { AutosaveView } from './autosave.ts'
 import type { LeaseLoss } from './edit-lease.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
@@ -22,7 +23,7 @@ const READY: EditorPageReady = {
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
-const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, canTakeOver: false, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
 const COPY = {
   id: '0199a2c4-0000-7000-8000-0000000000c9',
@@ -62,6 +63,8 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
     enterEditing: vi.fn(async () => {}),
     takeOverHere: vi.fn(async () => {}),
     cancelTakeOver: vi.fn(),
+    forceTakeOver: vi.fn(async () => {}),
+    dismissInterruption: vi.fn(),
     requestEditing: vi.fn(async () => {}),
     cancelRequest: vi.fn(async () => {}),
     handOver: vi.fn(async () => {}),
@@ -806,7 +809,10 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     ['续上时别处保存过更新的版本', { kind: 'newer' }, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。'],
     ['本人在本浏览器的另一个标签页接手了编辑（本机锁被抢，M3-P5）', { kind: 'taken-over', where: 'this-browser' }, '编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
     ['本人在另一台设备或浏览器上接手了编辑（M3-P5：taken_over、forced 为假）', { kind: 'taken-over', where: 'elsewhere' }, '编辑权已失效：你在另一台设备或浏览器上接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
-    ['空间管理员强制接管（M3-P5：taken_over、forced 为真；S8 之前用通用的说法）', { kind: 'forced' }, '编辑权已失效。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
+    ['强制接管、还没读到接管的人（M3-P5 S8：taken_over、forced 为真；个人空间里是文档的所有者）', { kind: 'forced' }, '编辑权已失效：文档的所有者强制接管了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
+    ['强制接管、读到了接管的人（M3-P5 S8）', { kind: 'forced', by: AMY }, '编辑权已失效：文档的所有者 @amy 艾米 强制接管了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
+    ['已经交给了请求编辑的人、不知道是谁（M3-P5 S8：交出的回答没收到，之后才得知）', { kind: 'handed-over' }, '编辑权已失效：已交给请求编辑的人。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
+    ['已经交给了请求编辑的人（M3-P5 S8）', { kind: 'handed-over', to: AMY }, '编辑权已失效：已交给请求编辑的 @amy 艾米。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
   ]
 
   it.each(LOSSES)('原因：%s', (_case, loss, text) => {
@@ -1481,7 +1487,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
     })
 
     it.each([
-      ['持有者谢绝了（不能强制接管的人另说可以请空间管理员）', { kind: 'request-declined', holder: AMY }, false, '@amy 艾米 选择继续编辑，你的请求已取消。着急时可以请空间管理员强制接管'],
+      ['持有者谢绝了（不能强制接管的人另说可以请文档的所有者：个人空间里的文档，M3-P5 S8）', { kind: 'request-declined', holder: AMY }, false, '@amy 艾米 选择继续编辑，你的请求已取消。着急时可以请文档的所有者强制接管'],
       ['持有者谢绝了（能强制接管的人不另说）', { kind: 'request-declined', holder: AMY }, true, '@amy 艾米 选择继续编辑，你的请求已取消'],
       ['别人先请求了', { kind: 'request-occupied', requester: BEN }, false, '@ben 本 已在请求编辑这份文档，你的请求没有发出'],
       ['编辑权刚交给了别人（留到何时：服务端的时刻按页面的时区写成 HH:mm）', { kind: 'reserved', reservedFor: BEN, reservedUntil: new Date(2026, 9, 7, 15, 3, 20).toISOString() }, false, '编辑权刚交给了 @ben 本，留到 15:03'],
@@ -1586,5 +1592,243 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(infoRegion().textContent).toBe('@ben 本 已取消请求')
       expect(infoRegion()).not.toHaveClass('sr-only')
     })
+  })
+})
+
+describe('强制接管（M3-P5 设计 §3.8、§3.11，US-M3-09）', () => {
+  const BEN = { id: '0199a2c4-0000-7000-8000-0000000000e2', username: 'ben', displayName: '本' }
+  /** 艾米在编辑（最后活动 3 分钟前） */
+  const AMY_HOLDS = { holder: AMY, sameUser: false, lastActiveMinutes: 3 }
+  /** 能强制接管的人在阅读，艾米在编辑 */
+  const ADMIN: ReadingMode = { ...READING, canTakeOver: true, holder: AMY_HOLDS }
+  /** 团队空间里的文档（能强制接管的是空间管理员） */
+  const TEAM: EditorPageReady = { ...READY, space: { id: '0199a2c4-0000-7000-8000-0000000000c1', type: 'team', name: '市场部' } }
+  const DAMAGED: OpenCheckFailures = [{ kind: 'resource-missing', resource: 'SHEET_FILTER_PLUGIN' }]
+
+  function forceButton(): HTMLElement {
+    return screen.getByRole('button', { name: '强制接管' })
+  }
+
+  async function confirmDialog(): Promise<HTMLElement> {
+    return screen.findByRole('dialog', { name: '强制接管编辑？' })
+  }
+
+  it('能强制接管、别人在编辑："请求编辑"旁边有"强制接管"（outline）；不能强制接管、正在编辑的是自己、没人在编辑、请求编辑或"在此编辑"进行中、不能编辑、读不到了、不兼容、数据不完整时没有', () => {
+    const fake = renderChrome({ mode: ADMIN, save: undefined })
+    expect(within(screen.getByRole('banner')).getAllByRole('button').map(button => button.textContent)).toEqual(['请求编辑', '强制接管'])
+    expect(forceButton()).toHaveAttribute('data-variant', 'outline')
+    const without: readonly ReadingMode[] = [
+      { ...ADMIN, canTakeOver: false },
+      { ...ADMIN, holder: { ...AMY_HOLDS, sameUser: true } },
+      { ...ADMIN, holder: undefined },
+      { ...ADMIN, request: { kind: 'waiting', holder: AMY, cancelFailure: undefined } },
+      { ...ADMIN, request: { kind: 'sending' } },
+      { ...ADMIN, takeover: { kind: 'asking' } },
+      { ...ADMIN, canEdit: false },
+      { ...ADMIN, gone: true },
+      { ...ADMIN, blocked: 'client-outdated' },
+      { ...ADMIN, damaged: DAMAGED },
+    ]
+    for (const mode of without) {
+      fake.set({ mode })
+      expect(screen.queryByRole('button', { name: '强制接管' }), JSON.stringify(mode)).toBeNull()
+    }
+    fake.set({ mode: ADMIN })
+    expect(forceButton()).toBeVisible()
+  })
+
+  it('正在载入最新的版本、正在确认会话、会话不是本人时：不可用，点了不打开确认框', () => {
+    const fake = renderChrome({ mode: { ...ADMIN, update: 'loading' }, save: undefined })
+    for (const next of [{}, { mode: ADMIN, confirmingSession: true }, { confirmingSession: false, session: 'signed-out' as const }]) {
+      fake.set(next)
+      expect(forceButton()).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(forceButton())
+      expect(screen.queryByRole('dialog')).toBeNull()
+    }
+    expect(fake.page.forceTakeOver).not.toHaveBeenCalled()
+  })
+
+  it('点了先确认：标题、说明（他是谁、最后活动多久之前，强制接管会结束他的编辑权、他没保存的修改不会写进来、可以另存为副本、记入审计）、醒目的确认；取消就不接管，焦点回到"强制接管"', async () => {
+    const { page } = renderChrome({ mode: ADMIN, save: undefined })
+    const force = forceButton()
+    force.focus()
+    fireEvent.click(force)
+    const dialog = await confirmDialog()
+    expect(dialog).toHaveTextContent('@amy \u2068艾米\u2069 正在编辑（最后活动 3 分钟前）。强制接管会立即结束对方的编辑权：对方还没保存的修改不会写进这份文档，可以在自己的页面上另存为副本。这次操作会记入审计。')
+    expect(within(dialog).getByRole('button', { name: '强制接管' })).toHaveAttribute('data-variant', 'destructive')
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(page.forceTakeOver).not.toHaveBeenCalled()
+    await waitFor(() => expect(document.activeElement).toBe(force))
+  })
+
+  it('最后活动多久不知道（服务端没给回答的时刻）：说明里不说', async () => {
+    renderChrome({ mode: { ...ADMIN, holder: { ...AMY_HOLDS, lastActiveMinutes: undefined } }, save: undefined })
+    fireEvent.click(forceButton())
+    expect((await confirmDialog()).textContent).toContain('@amy \u2068艾米\u2069 正在编辑。强制接管会')
+  })
+
+  it('确认：确认框关掉、aria-hidden 解除、焦点交还给"强制接管"之后才交给页面——进入编辑与没成功时的说明都写在那之后（规范 §2.4）', async () => {
+    const fake = renderChrome({ mode: ADMIN, save: undefined })
+    const force = forceButton()
+    const seen: { readonly dialog: boolean, readonly hidden: boolean, readonly focused: boolean }[] = []
+    vi.mocked(fake.page.forceTakeOver).mockImplementation(async () => {
+      seen.push({ dialog: screen.queryByRole('dialog') !== null, hidden: force.closest('[aria-hidden="true"]') !== null, focused: document.activeElement === force })
+    })
+    force.focus()
+    fireEvent.click(force)
+    fireEvent.click(within(await confirmDialog()).getByRole('button', { name: '强制接管' }))
+    await waitFor(() => expect(fake.page.forceTakeOver).toHaveBeenCalledOnce())
+    expect(seen).toEqual([{ dialog: false, hidden: false, focused: true }])
+  })
+
+  it('点按钮时焦点不在按钮上（WebKit 点按钮不给焦点，打开时焦点在 body）：关掉之后焦点交给"强制接管"，不留在 body', async () => {
+    const fake = renderChrome({ mode: ADMIN, save: undefined })
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    fireEvent.click(forceButton())
+    fireEvent.click(within(await confirmDialog()).getByRole('button', { name: '强制接管' }))
+    await waitFor(() => expect(fake.page.forceTakeOver).toHaveBeenCalledOnce())
+    expect(document.activeElement).toBe(forceButton())
+  })
+
+  it('"强制接管"在确认框开着时随检查消失了（例如他刚退出编辑）：确认之后焦点交给返回链接（不落到 body），照样交给页面', async () => {
+    const fake = renderChrome({ mode: ADMIN, save: undefined })
+    const force = forceButton()
+    force.focus()
+    fireEvent.click(force)
+    const dialog = await confirmDialog()
+    fake.set({ mode: { ...ADMIN, holder: undefined } })
+    fireEvent.click(within(dialog).getByRole('button', { name: '强制接管' }))
+    await waitFor(() => expect(fake.page.forceTakeOver).toHaveBeenCalledOnce())
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: '我的空间' }))
+  })
+
+  it('强制接管的进入编辑中：只留"强制接管"、说正在接管（同一个按钮，不可用、进行中），焦点还在它上面；没成功、它还在时焦点还在它上面；它随权限消失时交给返回链接', async () => {
+    const fake = renderChrome({ mode: ADMIN, save: undefined })
+    const force = forceButton()
+    force.focus()
+    fake.set({ mode: { kind: 'entering', forced: true } })
+    expect(screen.getByRole('button', { name: '正在接管…' })).toBe(force)
+    expect(force).toHaveAttribute('aria-disabled', 'true')
+    expect(force).toHaveAttribute('aria-busy', 'true')
+    expect(within(screen.getByRole('banner')).getAllByRole('button').map(button => button.textContent)).toEqual(['正在接管…'])
+    expect(headerStatus()).toHaveTextContent('正在进入编辑…')
+    expect(document.activeElement).toBe(force)
+    fireEvent.click(force)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fake.set({ mode: { ...ADMIN, notice: { kind: 'force-failed', error: new NetworkError('断网') } } })
+    expect(forceButton()).toBe(force)
+    expect(document.activeElement).toBe(force)
+    expect(screen.getByRole('alert')).toHaveTextContent('没能强制接管：网络连接失败，请检查网络后重试')
+    fake.set({ mode: { kind: 'entering', forced: true } })
+    fake.set({ mode: { ...ADMIN, canTakeOver: false, notice: { kind: 'force-denied', error: new ApiError(403, 'PERMISSION_DENIED', '只有空间管理员能强制接管这份文档的编辑') } } })
+    expect(screen.queryByRole('button', { name: '强制接管' })).toBeNull()
+    expect(screen.getByRole('alert')).toHaveTextContent('没能强制接管：只有空间管理员能强制接管这份文档的编辑')
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: '我的空间' })))
+  })
+
+  it('普通的进入编辑中没有"强制接管"', () => {
+    renderChrome({ mode: { kind: 'entering' }, save: undefined })
+    expect(screen.queryByRole('button', { name: /接管/ })).toBeNull()
+    expect(screen.getByRole('button', { name: '正在进入编辑…' })).toBeVisible()
+  })
+
+  it('保留期内强制接管被挡：读屏状态区说编辑权刚交给了谁、留到几点（服务端的时刻按页面的时区）、这期间不能强制接管', () => {
+    renderChrome({ mode: { ...READING, canTakeOver: true, notice: { kind: 'reserved', reservedFor: BEN, reservedUntil: new Date(2026, 9, 7, 15, 3, 20).toISOString(), forced: true } }, save: undefined })
+    expect(infoRegion().textContent).toBe('编辑权刚交给了 @ben 本，留到 15:03，这期间不能强制接管')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('被强制接管：团队空间说空间管理员（读到了接管的人就带上，人名经人名组件），个人空间说文档的所有者', () => {
+    const fake = renderChrome({ load: TEAM, mode: lost({ kind: 'forced', by: BEN }), save: undefined })
+    expect(screen.getByRole('alert').textContent).toContain('编辑权已失效：空间管理员 @ben 本 强制接管了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    expect(within(screen.getByRole('alert')).getByText('@ben')).toHaveAttribute('data-slot', 'person-username')
+    fake.set({ mode: lost({ kind: 'forced' }) })
+    expect(screen.getByRole('alert').textContent).toContain('编辑权已失效：空间管理员强制接管了编辑。')
+    fake.set({ load: READY })
+    expect(screen.getByRole('alert').textContent).toContain('编辑权已失效：文档的所有者强制接管了编辑。')
+  })
+
+  it('团队空间里谢绝了：不能强制接管的人另说可以请空间管理员强制接管', () => {
+    renderChrome({ load: TEAM, mode: { ...READING, notice: { kind: 'request-declined', holder: AMY } }, save: undefined })
+    expect(infoRegion().textContent).toBe('@amy 艾米 选择继续编辑，你的请求已取消。着急时可以请空间管理员强制接管')
+  })
+})
+
+describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', () => {
+  const BEN = { id: '0199a2c4-0000-7000-8000-0000000000e2', username: 'ben', displayName: '本' }
+  /** 别人（本）的那一代在今天 14:32 异常中断（按页面的时区） */
+  const OTHERS: EditInterruption = { holder: BEN, endedAt: new Date(2026, 9, 7, 14, 32, 10).toISOString(), sameUser: false }
+  /** 自己的那一代在 09:05 异常中断 */
+  const OWN: EditInterruption = { holder: AMY, endedAt: new Date(2026, 9, 7, 9, 5).toISOString(), sameUser: true }
+  const OTHERS_TEXT = '上一位编辑者 @ben 本 的会话在 14:32 异常中断，可能还有未同步的修改'
+  const OWN_TEXT = '你上一次的编辑在 09:05 异常中断（例如页面被关闭、断网或电脑休眠），那时还没保存的修改可能没有存上'
+  const INCOMING: IncomingRequest = { id: '0199a2c4-0000-7000-8000-0000000000f1', requester: BEN, declining: false, failure: undefined }
+
+  function notice(): HTMLElement {
+    const element = document.querySelector<HTMLElement>('[data-slot="interruption-notice"]')
+    if (element === null)
+      throw new Error('没有异常中断的说明')
+    return element
+  }
+
+  it('进入编辑时带着提醒：页头下面一条不打断的说明（不是 alert、不是新插入的 status）与"知道了"；出现时焦点不动；同一句话在一直在的读屏状态区里（只有它时视觉隐藏）', () => {
+    const fake = renderChrome()
+    const region = infoRegion()
+    const save = screen.getByRole('button', { name: '保存' })
+    save.focus()
+    fake.set({ mode: { kind: 'editing', interruption: OTHERS } })
+    expect(notice()).toHaveTextContent(OTHERS_TEXT)
+    expect(within(notice()).getByText('@ben')).toHaveAttribute('data-slot', 'person-username')
+    expect(within(notice()).getByRole('button', { name: '知道了' })).toBeVisible()
+    expect(notice().closest('[role]')).toBeNull()
+    expect(notice().querySelector('[role="status"], [role="alert"]')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.activeElement).toBe(save)
+    expect(infoRegion()).toBe(region)
+    expect(region.textContent).toBe(OTHERS_TEXT)
+    expect(region).toHaveClass('sr-only')
+  })
+
+  it('"知道了"交给页面；说明消失之后焦点交给返回链接（不落到 body），读屏状态区随之清空', async () => {
+    const fake = renderChrome({ mode: { kind: 'editing', interruption: OTHERS } })
+    const dismiss = within(notice()).getByRole('button', { name: '知道了' })
+    dismiss.focus()
+    fireEvent.click(dismiss)
+    expect(fake.page.dismissInterruption).toHaveBeenCalledOnce()
+    fake.set({ mode: { kind: 'editing', interruption: undefined } })
+    expect(document.querySelector('[data-slot="interruption-notice"]')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: '我的空间' })))
+    expect(infoRegion().textContent).toBe('')
+  })
+
+  it('自己的那一代：说你上一次的编辑异常中断；与请求的那一句都在时读屏状态区同样视觉隐藏，有别的说明（容量）时照常显示', () => {
+    const fake = renderChrome({ mode: { kind: 'editing', interruption: OWN } })
+    expect(notice()).toHaveTextContent(OWN_TEXT)
+    fake.set({ mode: { kind: 'editing', interruption: OWN, request: INCOMING } })
+    expect(infoRegion().textContent).toBe(`${OWN_TEXT} @ben 本 请求编辑这份文档，可以在页头下方选择"交出"或"继续编辑"`)
+    expect(infoRegion()).toHaveClass('sr-only')
+    fake.set({ save: { ...CLEAN, snapshotBytes: 4_400_000 } })
+    expect(infoRegion()).not.toHaveClass('sr-only')
+    expect(infoRegion().textContent).toMatch(/^你上一次的编辑在 09:05 异常中断/)
+  })
+
+  it('离开编辑的过程中说明留着；回到阅读之后消失', () => {
+    const fake = renderChrome({ mode: { kind: 'exiting', cause: 'exit', interruption: OTHERS } })
+    expect(notice()).toHaveTextContent(OTHERS_TEXT)
+    fake.set({ mode: READING, save: undefined })
+    expect(document.querySelector('[data-slot="interruption-notice"]')).toBeNull()
+  })
+
+  it('异常中断的时刻离午夜不到 30 分钟（这时"现在"可能已经是第二天）：带日期', () => {
+    renderChrome({ mode: { kind: 'editing', interruption: { ...OTHERS, endedAt: new Date(2026, 9, 6, 23, 50).toISOString() } } })
+    expect(notice()).toHaveTextContent('上一位编辑者 @ben 本 的会话在 10月6日 23:50 异常中断，可能还有未同步的修改')
+  })
+
+  it('阅读时（没人在编辑）：别人的那一代异常中断的说明在读屏状态区里（照常显示），没有页头下面的说明', () => {
+    renderChrome({ mode: { ...READING, interruption: OTHERS }, save: undefined })
+    expect(infoRegion().textContent).toBe(OTHERS_TEXT)
+    expect(infoRegion()).not.toHaveClass('sr-only')
+    expect(document.querySelector('[data-slot="interruption-notice"]')).toBeNull()
   })
 })

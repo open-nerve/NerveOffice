@@ -1,9 +1,11 @@
 import type { AutosaveControlHooks, EditIntent, PageActivity, PageNetwork } from './editor-page.ts'
+import type { HandoverTrace } from './handover-trace.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
 // 浏览器的实现都在这里给出（M3-P5）：本页的键盘、鼠标操作（窗口的捕获阶段）、同一个浏览器里的锁与交接频道（navigator.locks、
 // BroadcastChannel；浏览器没有时退化，same-browser.ts）、刷新时在途的保存的记号（localStorage 与墙上时间）。
-// 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）再组装：
-// 第一个调度建起来之前它就在（?edit=new 直接进入编辑也一样）；生产构建里这个分支与控制的分块都被去掉（门禁 artifacts 核对）。
+// 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）与交接日志
+// （editor/testing/handover-log.ts，M3-P5 设计 §3.13 的观察钩子）再组装：第一个调度建起来、第一次申请之前它们就在（?edit=new 直接进入编辑也一样）；
+// 两个各自引入，一个没引入成不影响另一个；生产构建里这个分支与它们的分块都被去掉（门禁 artifacts 核对）。
 import type { PageVisibility } from './reading-checks.ts'
 import type { SameBrowserApis } from './same-browser.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
@@ -76,20 +78,24 @@ function editIntentOf(location: Location): EditIntent {
 
 export function startSheetEditorPage(elements: SheetEditorPageElements): void {
   if (import.meta.env.MODE === 'e2e') {
-    // 引入失败（分块下载失败）：照常组装，没有控制（用到它的 E2E 随之失败），错误交给浏览器的错误报告
-    void import('../../editor/testing/autosave-control.ts').then(
-      ({ installAutosaveControl }) => assemble(elements, installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS)),
-      (error: unknown) => {
-        reportError(error)
-        assemble(elements, undefined)
-      },
-    )
+    // 引入失败（分块下载失败）：照常组装，没有那一样（用到它的 E2E 随之失败），错误交给浏览器的错误报告
+    void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts')]).then(([control, log]) => {
+      if (control.status === 'rejected')
+        reportError(control.reason)
+      if (log.status === 'rejected')
+        reportError(log.reason)
+      assemble(
+        elements,
+        control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
+        log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
+      )
+    })
     return
   }
-  assemble(elements, undefined)
+  assemble(elements, undefined, undefined)
 }
 
-function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveControlHooks | undefined): void {
+function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined): void {
   const page = createEditorPage({
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
@@ -130,6 +136,7 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
     digest: async snapshot => snapshotDigest(snapshot),
     autosaveControl,
+    handoverTrace,
     editIntent: editIntentOf(window.location),
     currentPath: () => `${window.location.pathname}${window.location.search}`,
     newId: () => crypto.randomUUID(),

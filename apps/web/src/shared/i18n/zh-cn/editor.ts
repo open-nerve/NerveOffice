@@ -7,6 +7,17 @@ import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_S
 /** 本人接管的按钮（M3-P5 设计 §3.7）：说明里提到它时用同一个名字 */
 const TAKE_OVER_HERE = '在此编辑'
 
+/** 强制接管的按钮（M3-P5 设计 §3.8） */
+const FORCE_TAKE_OVER = '强制接管'
+
+/**
+ * 能强制接管的人怎样称呼（M3-P5 设计 §3.8）：团队空间是空间管理员；个人空间里是文档的所有者（个人空间的所有者，有效角色也是空间管理员，
+ * 但界面上不这样叫）
+ */
+function takeoverRole(personal: boolean): string {
+  return personal ? '文档的所有者' : '空间管理员'
+}
+
 /**
  * 本浏览器的另一个标签页没能交出（交接频道的 handover-failed，M3-P5 设计 §3.7）：按原因说那边为什么没交出
  */
@@ -253,6 +264,25 @@ export const editorMessages = {
     /** 本人在另一台设备或浏览器上接手了编辑（M3-P5：续租或保存得到 taken_over、forced 为假） */
     lostTakenOverElsewhere: '你在另一台设备或浏览器上接手了编辑',
     /**
+     * 强制接管了编辑（M3-P5 设计 §3.8：续租或保存得到 taken_over、forced 为真）：by 是接管的人（失去编辑权时读到的编辑状态里正在编辑的人，
+     * 经人名组件呈现），没读到时为 undefined；personal 是文档在个人空间里（接管的是所有者）
+     */
+    lostForced: <T>(by: T | undefined, personal: boolean): Phrase<T> => by === undefined ? [`${takeoverRole(personal)}强制接管了编辑`] : [`${takeoverRole(personal)} `, by, ' 强制接管了编辑'],
+    /**
+     * 本页这一代已经交给了请求编辑的人（M3-P5 设计 §3.6：交出的回答没收到、留在了编辑，下一次心跳或保存才得知）：to 是交给了谁（经人名组件呈现），
+     * 不知道时为 undefined
+     */
+    lostHandedOver: <T>(to: T | undefined): Phrase<T> => to === undefined ? ['已交给请求编辑的人'] : ['已交给请求编辑的 ', to],
+    /**
+     * 上一位编辑者异常中断（M3-P5 设计 §3.5、§3.11，US-M3-10）：别人的那一代（经人名组件呈现）；at 是结束的时刻（服务端的，按页面的时区写成
+     * HH:mm，可能已经不是今天时带日期）。进入编辑之后页头下面的说明与读屏状态区，阅读时也说
+     */
+    interruptedBy: <T>(holder: T, at: string): Phrase<T> => ['上一位编辑者 ', holder, ` 的会话在 ${at} 异常中断，可能还有未同步的修改`],
+    /** 同上，是自己的那一代（只在进入编辑之后说） */
+    interruptedSelf: (at: string) => `你上一次的编辑在 ${at} 异常中断（例如页面被关闭、断网或电脑休眠），那时还没保存的修改可能没有存上`,
+    /** 异常中断的说明里的按钮：说明消失 */
+    dismissInterruption: '知道了',
+    /**
      * 有人请求编辑时页头下面的提示（M3-P5 设计 §3.6，US-M3-06）：分组的标题（请求方经人名组件呈现）、两个按钮与一行静态说明（不倒计时）。
      * 提示出现时不移动焦点，读屏在一直在的状态区里播 requestAnnouncement 一次
      */
@@ -307,10 +337,29 @@ export const editorMessages = {
     cancelRequestFailed: (reason: string) => `没能取消请求：${reason}。请求还在，可以再点"${CANCEL_REQUEST}"`,
     /** 交给了请求编辑的人（持有者这一侧回到阅读之后）：auto 是空闲满 2 分钟自动交出的 */
     handedOver: <T>(to: T, auto: boolean): Phrase<T> => [auto ? `你 ${HANDOVER_IDLE_MINUTES} 分钟没有操作，已保存并把编辑权交给了 ` : '已保存并把编辑权交给了 ', to],
-    /** 编辑权刚交给了别人、还在保留期内（申请得到 EDIT_LEASE_RESERVED、请求得到 reservedForOther）：until 是服务端的时刻按页面的时区写成的 HH:mm */
-    reservedFor: <T>(person: T, until: string): Phrase<T> => ['编辑权刚交给了 ', person, `，留到 ${until}`],
-    /** 持有者选了"继续编辑"：不能强制接管的人另说可以请空间管理员强制接管 */
-    requestDeclined: <T>(holder: T, canTakeOver: boolean): Phrase<T> => [holder, ` 选择继续编辑，你的请求已取消${canTakeOver ? '' : '。着急时可以请空间管理员强制接管'}`],
+    /**
+     * 编辑权刚交给了别人、还在保留期内（申请得到 EDIT_LEASE_RESERVED、请求得到 reservedForOther）：until 是服务端的时刻按页面的时区写成的 HH:mm；
+     * forced 是强制接管时得到的（保留期内强制接管同样被挡，M3-P5 设计 §3.8）
+     */
+    reservedFor: <T>(person: T, until: string, forced = false): Phrase<T> => ['编辑权刚交给了 ', person, `，留到 ${until}${forced ? `，这期间不能${FORCE_TAKE_OVER}` : ''}`],
+    /**
+     * 持有者选了"继续编辑"：不能强制接管的人另说可以请空间管理员（个人空间里是文档的所有者）强制接管
+     */
+    requestDeclined: <T>(holder: T, canTakeOver: boolean, personal = false): Phrase<T> => [holder, ` 选择继续编辑，你的请求已取消${canTakeOver ? '' : `。着急时可以请${takeoverRole(personal)}${FORCE_TAKE_OVER}`}`],
+    /** 强制接管（M3-P5 设计 §3.8，US-M3-09）：阅读时、别人在编辑时"请求编辑"旁边的按钮；进入编辑的过程中同一个按钮说正在接管 */
+    forceTakeOver: FORCE_TAKE_OVER,
+    forcingTakeover: '正在接管…',
+    /** 强制接管之前的确认框 */
+    forceTitle: '强制接管编辑？',
+    /**
+     * 确认框的说明：holder 是正在编辑的人（纯文字的写法，messages.people.text），lastActive 是"最后活动……"（服务端没给出时为 undefined）
+     */
+    forceDescription: (holder: string, lastActive: string | undefined) => `${holder} 正在编辑${lastActive === undefined ? '' : `（${lastActive}）`}。强制接管会立即结束对方的编辑权：对方还没保存的修改不会写进这份文档，可以在自己的页面上另存为副本。这次操作会记入审计。`,
+    forceConfirm: FORCE_TAKE_OVER,
+    /** 强制接管时不能了（403）：reason 是服务端这次给的原因（例如"只有空间管理员能强制接管这份文档的编辑"） */
+    forceDenied: (reason: string) => `没能${FORCE_TAKE_OVER}：${reason}`,
+    /** 强制接管没有成功（网络、服务端出错等）：可以再试 */
+    forceFailed: (reason: string) => `没能${FORCE_TAKE_OVER}：${reason}`,
     /** 别人先请求了（单槽、先到先得）：本页的请求没有发出 */
     requestOccupied: <T>(requester: T): Phrase<T> => [requester, ' 已在请求编辑这份文档，你的请求没有发出'],
     /** 请求已经不在了（换了一代、过期、被别人的新请求替换） */

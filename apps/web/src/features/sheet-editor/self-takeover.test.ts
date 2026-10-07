@@ -1,3 +1,4 @@
+import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { PendingSave } from './pending-save-marker.ts'
 import type { HandoverMessage, SameBrowser } from './same-browser.ts'
 import type { TabHandoverOutcome } from './self-takeover.ts'
@@ -20,7 +21,7 @@ type HandoverRequest = Extract<HandoverMessage, { readonly type: 'handover-reque
  * 同一个浏览器里的两个标签页：A 正在编辑（持有本机锁，收得到请求，回应由用例决定），B 请 A 交出（被测的一侧）。
  * 时间是假的：时限只在 advance 时到点
  */
-async function twoTabs() {
+async function twoTabs(trace?: HandoverTrace) {
   const browser = fakeBrowser()
   const time = fakeLeaseClock()
   const a = sameBrowserFor(DOCUMENT_ID, browser.tab('A'))
@@ -33,7 +34,7 @@ async function twoTabs() {
   let id = 0
   const abort = new AbortController()
   let outcome: TabHandoverOutcome | undefined
-  const asked = askTabToHandOver({ browser: b, clock: time.clock, documentId: DOCUMENT_ID, from: TAB_B, userId: USER_ID, newId: () => `0199a2c4-1f2e-4a3b-8c4d-${String(++id).padStart(12, '0')}`, signal: abort.signal })
+  const asked = askTabToHandOver({ browser: b, clock: time.clock, documentId: DOCUMENT_ID, from: TAB_B, userId: USER_ID, newId: () => `0199a2c4-1f2e-4a3b-8c4d-${String(++id).padStart(12, '0')}`, signal: abort.signal, trace })
   void asked.then((result) => {
     outcome = result
   })
@@ -301,5 +302,78 @@ describe('刷新时在途的保存（M3-P5 设计 §3.7 的 R1）：本人接管
     expect(await wait.waited).toBe('aborted')
     await wait.time.advance(EDIT_PENDING_SAVE_WAIT_MS)
     expect(wait.revision).toHaveBeenCalledOnce()
+  })
+})
+
+describe('测试构建的观察钩子（M3-P5 设计 §3.13）：请求方一侧的交接各步', () => {
+  const REQUEST_1 = '0199a2c4-1f2e-4a3b-8c4d-000000000001'
+  const REQUEST_2 = '0199a2c4-1f2e-4a3b-8c4d-000000000002'
+
+  /** 记下报来的事件 */
+  function recorder() {
+    const events: HandoverTraceEvent[] = []
+    return { events, trace: (event: HandoverTraceEvent) => events.push(event) }
+  }
+
+  it('发出请求、收到 ack（带那边在做什么）、锁空了：按先后各一条，时刻按注入的时钟', async () => {
+    const { events, trace } = recorder()
+    const tabs = await twoTabs(trace)
+    await tabs.time.advance(100)
+    tabs.reply({ type: 'handover-ack', state: 'editing' })
+    await settle()
+    tabs.lock.release()
+    await settle()
+    expect(tabs.outcome()).toEqual({ kind: 'finished' })
+    // 假时钟从 1000 起
+    expect(events).toEqual([
+      { kind: 'handover-request', at: 1_000, requestId: REQUEST_1 },
+      { kind: 'handover-reply', at: 1_100, requestId: REQUEST_1, reply: 'ack', detail: 'editing' },
+      { kind: 'handover-lock-free', at: 1_100 },
+    ])
+  })
+
+  it('那边没能保存：failed 带原因；之后锁空了不再报', async () => {
+    const { events, trace } = recorder()
+    const tabs = await twoTabs(trace)
+    tabs.reply({ type: 'handover-ack', state: 'exiting' })
+    tabs.reply({ type: 'handover-failed', reason: 'session' })
+    await settle()
+    tabs.lock.release()
+    await settle()
+    expect(events.map(event => [event.kind, 'reply' in event ? event.reply : undefined, 'detail' in event ? event.detail : undefined])).toEqual([
+      ['handover-request', undefined, undefined],
+      ['handover-reply', 'ack', 'exiting'],
+      ['handover-reply', 'failed', 'session'],
+    ])
+  })
+
+  it('done：只报回应，不另报锁空了', async () => {
+    const { events, trace } = recorder()
+    const tabs = await twoTabs(trace)
+    tabs.reply({ type: 'handover-ack', state: 'editing' })
+    tabs.reply({ type: 'handover-done' })
+    await settle()
+    expect(events.map(event => event.kind === 'handover-reply' ? `${event.kind}:${event.reply}` : event.kind)).toEqual(['handover-request', 'handover-reply:ack', 'handover-reply:done'])
+  })
+
+  it('3 秒没有回应：handover-silent；回应了 busy 之后换一个请求再问，每一次请求各报一条', async () => {
+    const silent = recorder()
+    const quiet = await twoTabs(silent.trace)
+    await quiet.time.advance(EDIT_TAB_HANDOVER_ACK_MS)
+    expect(await quiet.asked).toEqual({ kind: 'silent' })
+    expect(silent.events).toEqual([{ kind: 'handover-request', at: 1_000, requestId: REQUEST_1 }, { kind: 'handover-silent', at: 1_000 + EDIT_TAB_HANDOVER_ACK_MS }])
+
+    const busy = recorder()
+    const tabs = await twoTabs(busy.trace)
+    tabs.reply({ type: 'handover-busy' })
+    await settle()
+    await tabs.time.advance(TAB_HANDOVER_BUSY_RETRY_MS)
+    expect(busy.events.map(event => [event.kind, 'requestId' in event ? event.requestId : undefined])).toEqual([
+      ['handover-request', REQUEST_1],
+      ['handover-reply', REQUEST_1],
+      ['handover-request', REQUEST_2],
+    ])
+    tabs.abort.abort()
+    await tabs.asked
   })
 })

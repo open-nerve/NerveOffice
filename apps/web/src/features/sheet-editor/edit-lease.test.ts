@@ -132,6 +132,15 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
     expect(await acquireEditLease(context.options)).toMatchObject({ kind: 'acquired', revision: 5, formulasPending: true })
   })
 
+  it('申请的响应带着上一位编辑者异常中断的提醒（M3-P5 设计 §3.5）：申请的结果交回它（用户发起的申请才经这里）；没有（null）时为 undefined', async () => {
+    const interruption = { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e2', username: 'ben', displayName: '本' }, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false }
+    const context = setup({ acquire: async () => ({ ...ACQUIRED, interruption }) })
+    expect(await acquireEditLease(context.options)).toMatchObject({ kind: 'acquired', interruption })
+    const plain = setup()
+    const result = await acquireEditLease(plain.options)
+    expect(result.kind === 'acquired' ? result.interruption : 'held').toBeUndefined()
+  })
+
   it('持有：给出令牌、代次、文档当前的修订号与"公式待更新"（M3-P4），以本页这次加载的标识申请；10 秒之后第一次续租', async () => {
     const context = setup()
     const result = await acquireEditLease(context.options)
@@ -339,7 +348,7 @@ describe('失效：失去访问或编辑权，或者不认识的原因', () => {
     ['EDIT_LEASE_LOST（本人在另一台设备或浏览器上接手：taken_over、forced 为假，M3-P5）', takenOverError(false), { kind: 'taken-over', where: 'elsewhere' }],
     ['EDIT_LEASE_LOST（空间管理员强制接管：taken_over、forced 为真）', takenOverError(true), { kind: 'forced' }],
     ['EDIT_LEASE_LOST（taken_over、forced 认不出：不猜，只说编辑权已失效）', takenOverError('yes'), { kind: 'lease', reason: 'taken_over' }],
-    ['EDIT_LEASE_LOST（已经交给了请求编辑的人：handed_over）', lostError('handed_over'), { kind: 'lease', reason: 'handed_over' }],
+    ['EDIT_LEASE_LOST（已经交给了请求编辑的人：handed_over，M3-P5 S8 单独给出）', lostError('handed_over'), { kind: 'handed-over' }],
     ['403（能读不能编辑了）', denied, { kind: 'denied', error: denied }],
     ['404（读不到了）', gone, { kind: 'not-found', error: gone }],
   ])('续租得到%s：不续上，通知页面一次，停止续租', async (_case, error, loss) => {

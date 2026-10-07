@@ -1,5 +1,6 @@
 import type { DocumentEditor, EditRequestOutcome, UserSummary } from '@nerve-office/contracts'
 import type { EditRequestApi, EditRequestEnd, EditRequestProgress, EditRequestsOptions } from './edit-request.ts'
+import type { HandoverTraceEvent } from './handover-trace.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createEditRequests, REQUEST_IDLE_MS, REQUEST_RENEW_MS } from './edit-request.ts'
@@ -61,6 +62,8 @@ interface Setup {
   readonly cancel?: EditRequestApi['cancel']
   /** 状态机能不能进入编辑（默认能） */
   readonly enter?: () => boolean
+  /** 测试构建的观察钩子（M3-P5 S8）：默认不给 */
+  readonly trace?: EditRequestsOptions['trace']
 }
 
 /** 请求方的环境：假的接口、时钟与可见性；最后一次操作停在开始的那一刻，act 记下一次操作；进展与结束按先后记下 */
@@ -87,6 +90,7 @@ function setup(options: Setup = {}) {
     onProgress: next => progress.push(next),
     enter,
     onEnd: end => ends.push(end),
+    trace: options.trace,
   })
   disposers.push(requests.dispose)
   return {
@@ -589,5 +593,42 @@ describe('恢复、撤回与停下', () => {
     expect(context.requests.version()).toBe(start + 2)
     await context.requests.cancel()
     expect(context.requests.version()).toBe(start + 4)
+  })
+})
+
+describe('测试构建的观察钩子（M3-P5 设计 §3.13）：请求方的发出、续期、交给了本页与开始进入', () => {
+  it('发出与每次续期的结果（结果的 kind）；交给了本页时页面看不看得见；看得见、进得去时开始进入，时刻按注入的时钟', async () => {
+    const events: HandoverTraceEvent[] = []
+    const context = setup({ trace: event => events.push(event) })
+    await waiting(context)
+    context.api.renew.mockResolvedValueOnce(PENDING).mockResolvedValueOnce(RESERVED)
+    await context.time.advance(REQUEST_RENEW_MS)
+    // 回到前台之前编辑权交给了本页：先记下看不见，回到前台才开始进入
+    context.page.set(true)
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.page.set(false)
+    await settle()
+    expect(events).toEqual([
+      { kind: 'request-sent', at: 1_000, outcome: 'pending' },
+      { kind: 'request-renewed', at: 1_000 + REQUEST_RENEW_MS, outcome: 'pending' },
+      { kind: 'request-renewed', at: 1_000 + REQUEST_RENEW_MS * 2, outcome: 'reserved' },
+      { kind: 'request-granted', at: 1_000 + REQUEST_RENEW_MS * 2, visible: false },
+      { kind: 'request-enter', at: 1_000 + REQUEST_RENEW_MS * 2 },
+    ])
+  })
+
+  it('发出、续期失败：带错误码（网络等没有错误码时只写 error）', async () => {
+    const events: HandoverTraceEvent[] = []
+    const failed = setup({ trace: event => events.push(event), send: async () => Promise.reject(new ApiError(409, 'CLIENT_OUTDATED', '页面过旧')) })
+    await failed.requests.send()
+    const context = setup({ trace: event => events.push(event) })
+    await waiting(context)
+    context.api.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    await context.time.advance(REQUEST_RENEW_MS)
+    expect(events.map(event => event.kind === 'request-sent' || event.kind === 'request-renewed' ? `${event.kind}:${event.outcome}` : event.kind)).toEqual([
+      'request-sent:error:CLIENT_OUTDATED',
+      'request-sent:pending',
+      'request-renewed:error',
+    ])
   })
 })
