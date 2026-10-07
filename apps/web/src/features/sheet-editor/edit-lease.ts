@@ -113,6 +113,23 @@ export const browserLeaseClock: LeaseClock = {
   },
 }
 
+/**
+ * promise 至多等到 until（clock 的时间轴上）：到了时限交回 fallback（promise 照样跑完，结果不看）。离开编辑时等释放、交出的结果用它
+ * （edit-mode.ts、holder-requests.ts：共用 EXIT_RELEASE_WAIT_MS 的时限）——按注入的时钟排，E2E 的 page.clock 拨得动
+ */
+export async function within<T>(clock: LeaseClock, promise: Promise<T>, until: number, fallback: T): Promise<T> {
+  let cancel: (() => void) | undefined
+  const deadline = new Promise<T>((resolve) => {
+    cancel = clock.schedule(() => resolve(fallback), Math.max(0, until - clock.now()))
+  })
+  try {
+    return await Promise.race([promise, deadline])
+  }
+  finally {
+    cancel?.()
+  }
+}
+
 /** 申请时另带的（M3-P5）：续上时 idleSeconds 是本页的空闲秒数（设计 §3.5）；takeover 是接管方式（设计 §3.7，只给用户发起的申请） */
 export interface AcquireOptions {
   readonly idleSeconds?: number
