@@ -203,7 +203,7 @@ apps/web/src/
                       编辑租约的管理（`edit-lease.ts`，M3-P1：申请、心跳、失效、续上与释放，不依赖 Univer 与界面）；
                       阅读与编辑的状态机（`edit-mode.ts`，M3-P2：持有租约与保存的状态机，模式切换一律重建，不依赖 Univer 与界面；当前的编辑器在
                       `editor-slot.ts`（单飞重建）、阅读时的检查在 `reading-checks.ts`、失去编辑权之后的那一份在 `lost-copy.ts`）；
-                      交接规则（M3-P5）：同一个浏览器里的锁与交接频道 `same-browser.ts`（先服务端、后本机锁）、空闲计时 `idle-watch.ts`、刷新时在途保存的记号 `pending-save-marker.ts`、本人接管的请求方一侧 `self-takeover.ts`、请求方的请求 `edit-request.ts`；`edit-mode.ts` 的离开编辑 `leaveEditing(cause)`（退出、空闲释放、交给请求方、交给本浏览器的另一个标签页）与持有者一侧的提示、交出与谢绝
+                      交接规则（M3-P5）：同一个浏览器里的锁与交接频道 `same-browser.ts`（先服务端、后本机锁）、空闲计时 `idle-watch.ts`、刷新时在途保存的记号 `pending-save-marker.ts`、本人接管的请求方一侧 `self-takeover.ts`、请求方的请求 `edit-request.ts`、交接的观察事件 `handover-trace.ts`（测试构建的记录器在 `editor/testing/handover-log.ts`）；`edit-mode.ts` 的离开编辑 `leaveEditing(cause)`（退出、空闲释放、交给请求方、交给本浏览器的另一个标签页）与持有者一侧的提示、交出与谢绝
                       自动保存（M3-P4，不依赖 Univer 与界面，时钟注入）：调度 `autosave.ts`（两级的节奏、立即上传、去重、退避、离线与会话、连按保存的合并）、捕获的规则 `capture-policy.ts`、捕获 `snapshot-capture.ts`（同步取快照；立即上传按下时提交单元格、轮到时等公式）、页头保存状态的全集 `save-indicator.ts`；保存的状态机 `save-coordinator.ts` 向来源取捕获；打开自检失败的上报 `open-check-report.ts`
   editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/；
                       只读守卫 read-only/（M2-P3，ADR-015）；视图状态 view-state.ts（M3-P2）；testing/ 是 E2E 的探针与真实 Safari 的页面自检（M3-P2；M3-P4 加自动保存的控制、捕获时机与自动保存的自检、主线程公式模式与档案故障的开关），只在测试构建里（只能动态引入，lint，M2-P6）
