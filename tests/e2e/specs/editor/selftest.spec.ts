@@ -15,9 +15,9 @@
 // 用被测站点自己的源加一个没有的路径，这里拦下那次导航、读出结果。
 // 交接的复核（M3-P5 S8，设计 §3.14）照驱动脚本的编排（support/selftest-handover.ts，共用）：
 // - takeover：A 存上第一格之后模拟它隐藏（真实 Safari 里是另开的 B 遮住它），同一个上下文里另开 B（直接打开编辑器页）；B 交回之后模拟 A 回到
-//   前台。Playwright 模拟不了真正的隐藏与冻结，A 照常回应：A 先保存再交出（B answered，A handed-over）——与真实 Safari 上 A 被暂停时的预期
-//   不同；另一条只给 A 在载入之前吞掉交接频道的消息（support/sheet.ts 的 deafenHandover，S6 的 E2E 同一个办法），模拟 A 没有回应：B 3 秒之后
-//   本人接管并抢锁（silent），A 失去编辑权、另存为副本（lost）。两条都按库里的时间线核对租约的变化；
+//   前台。A 照常回应：先保存再交出（B answered，A handed-over）——真实 Safari 27 上实测也是这样（隐藏 8 秒的 A 没有被暂停）；另一对的 A 收不到
+//   交接频道的消息（takeover-holder-deaf：编辑器页的挂接装上吞消息的频道，与 S6 的 E2E 的 deafenHandover 同一个办法），模拟被暂停、冻结的 A：
+//   B 3 秒之后本人接管并抢锁（silent），A 失去编辑权、另存为副本（lost）。两条都按库里的时间线与后端日志核对租约的变化；
 // - refresh-save：先让这份文档的保存在服务端停 10 秒（support/selftest-handover.ts 的 slowDownSave：改写内容行时 pg_sleep）再打开，页面自己刷新、
 //   接手。location.reload 时三个浏览器都先取消在途的请求、再派发 pagehide（结果未知；S6 用 Playwright 的 page.reload 时 Chromium 系 pagehide 时
 //   还在途）——两种都不释放、留下记号（7a759da），页面交回的时间线里看得出是哪一种
@@ -33,7 +33,7 @@ import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../../support/selftest-handover.ts'
 import { problemsOf, SELFTEST_STEPS, selftestPageUrl, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
-import { deafenHandover, EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -111,9 +111,16 @@ function definitionOf(id: string): SelftestStepDefinition {
   return definition
 }
 
-/** takeover 的两步（A 与 B，同一份文档） */
-async function takeoverSteps(prefix: string): Promise<{ readonly holder: SelftestStep, readonly taker: SelftestStep }> {
-  const [holder, taker] = (await selftestScene(prefix, [definitionOf('takeover-holder'), definitionOf('takeover-taker')])).steps
+/** takeover 的一对（A 与 B，同一份文档）：holderId 是 A 那一步，B 是共用它的文档的那一步 */
+async function takeoverSteps(prefix: string, holderId: string): Promise<{ readonly holder: SelftestStep, readonly taker: SelftestStep }> {
+  const taker = SELFTEST_STEPS.find(item => item.sharesDocumentOf === holderId)
+  if (taker === undefined)
+    throw new Error(`没有与 ${holderId} 共用文档的那一步`)
+  const [holder, other] = (await selftestScene(prefix, [definitionOf(holderId), taker])).steps
+  return pairOf(holder, other)
+}
+
+function pairOf(holder: SelftestStep | undefined, taker: SelftestStep | undefined): { readonly holder: SelftestStep, readonly taker: SelftestStep } {
   if (holder === undefined || taker === undefined || holder.documentId !== taker.documentId)
     throw new Error('takeover 的两步不全，或者不是同一份文档')
   return { holder, taker }
@@ -229,7 +236,7 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
   }
 
   test('步骤 takeover（M3-P5 设计 §3.14）：A 编辑、存上第一格、隐藏（这里模拟）时上传第二格、之后写第三格；B 等 8 秒点"在此编辑"——Playwright 里 A 照常回应：先保存（第三格也存上）再交出（B answered、A handed-over），库里 A 那一代先释放、B 普通申请', async ({ page, context }, testInfo) => {
-    const steps = await takeoverSteps('st-takeover')
+    const steps = await takeoverSteps('st-takeover', 'takeover-holder')
     const { holder, taker, judgement } = await runTakeover(page, await context.newPage(), steps)
     await testInfo.attach('selftest-report-holder', { body: JSON.stringify(holder, null, 2), contentType: 'application/json' })
     await testInfo.attach('selftest-report-taker', { body: JSON.stringify(taker, null, 2), contentType: 'application/json' })
@@ -239,9 +246,8 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
     expect(judgement.problems).toEqual([])
   })
 
-  test('步骤 takeover：A 不回应（只给 A 在载入之前吞掉交接频道的消息，模拟真实 Safari 暂停了后台的 A）——B 3 秒之后本人接管并抢锁（silent），A 失去编辑权（本浏览器的另一个标签页接手了），第三格没存上、另存为副本；库里 A 那一代没有释放、B 的一代记着本人接管', async ({ page, context }, testInfo) => {
-    const steps = await takeoverSteps('st-takeover-deaf')
-    await deafenHandover(page)
+  test('步骤 takeover-deaf：A 不回应（takeover-holder-deaf：编辑器页的挂接让 A 收不到交接频道的消息，模拟被暂停、冻结的 A）——B 3 秒之后本人接管并抢锁（silent），A 失去编辑权（本浏览器的另一个标签页接手了），第三格没存上、另存为副本；库里 A 那一代没有释放、B 的一代记着本人接管', async ({ page, context }, testInfo) => {
+    const steps = await takeoverSteps('st-takeover-deaf', 'takeover-deaf-holder')
     const { holder, taker, judgement } = await runTakeover(page, await context.newPage(), steps)
     await testInfo.attach('selftest-report-holder', { body: JSON.stringify(holder, null, 2), contentType: 'application/json' })
     await testInfo.attach('selftest-report-taker', { body: JSON.stringify(taker, null, 2), contentType: 'application/json' })

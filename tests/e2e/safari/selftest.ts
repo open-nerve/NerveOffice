@@ -14,7 +14,7 @@
 //    另开收集端的空白页（HIDE_PATH），编辑器页随之真的变成隐藏，自动保存在隐藏的那一刻捕获、上传留着的第二格；按库里的证据判定（修订号 3、
 //    内容里有两格）与用时，页面在后台交不回结果也不算超时；
 //    之后是交接的复核（M3-P5 S8，设计 §3.14），各另开一个标签页（support/selftest-handover.ts 的编排，与 Playwright 的校准共用）：
-//    · takeover：另开 A（作者，进入编辑）；库里有了 A 的第一格（修订号 2）就另开 B（同一个会话，直接打开编辑器页），A 随之隐藏、自动保存
+//    · takeover（两对：A 照常；A 收不到交接频道的消息，模拟被暂停的标签页）：另开 A（作者，进入编辑）；库里有了 A 的第一格（修订号 2）就另开 B（同一个会话，直接打开编辑器页），A 随之隐藏、自动保存
 //      上传第二格；B 等 8 秒点"在此编辑"、进入编辑、交回之后去关掉自己的页（CLOSE_PATH），Safari 回到 A，A 交回（交不回只记下）。
 //      期间每 100 毫秒记下库里的修订号与编辑租约；按 B 走的路判定服务器上的内容与租约的变化（support/selftest-handover.ts 的 takeoverJudgement）；
 //    · refresh-save：先让这份文档的保存在服务端停 10 秒（support/selftest-handover.ts 的 slowDownSave：改写内容行之前 pg_sleep），再另开它；
@@ -263,6 +263,19 @@ interface HandoverRun {
   readonly notes: readonly string[]
 }
 
+/** 本人接管的一对：A（takeover-holder 或 takeover-holder-deaf）与共用它的文档的 B 在步骤里的序号 */
+interface TakeoverPair {
+  readonly holder: number
+  readonly taker: number
+}
+
+function takeoverPairsOf(steps: readonly SelftestStep[]): TakeoverPair[] {
+  return steps.flatMap((step, holder) => {
+    const taker = steps.findIndex(item => item.scenario === 'takeover-taker' && item.sharesDocumentOf === step.id)
+    return taker >= 0 ? [{ holder, taker }] : []
+  })
+}
+
 /** takeover：A 存上第一格最多等多久（登录、打开、进入编辑、写第一格） */
 const TAKEOVER_FIRST_SAVE_TIMEOUT_MS = 120_000
 
@@ -290,7 +303,7 @@ async function driveTakeover(collector: Collector, holderIndex: number, takerInd
   const watch = await watchDocument(documentId)
   let openedTakerAt: number | undefined
   try {
-    say('takeover：另开标签页打开 A（作者，进入编辑）')
+    say(`takeover（${holder.step.id}）：另开标签页打开 A（作者，进入编辑${holder.step.scenario === 'takeover-holder-deaf' ? '；收不到交接频道的消息' : ''}）`)
     openInSafari(holder.url)
     const first = await waitForRevision(documentId, 2, Math.min(deadline, Date.now() + TAKEOVER_FIRST_SAVE_TIMEOUT_MS))
     if (first === undefined) {
@@ -298,13 +311,13 @@ async function driveTakeover(collector: Collector, holderIndex: number, takerInd
       await waitForResult(collector, holderIndex, Math.min(deadline, Date.now() + 5_000))
     }
     else {
-      say('takeover：库里有了 A 的第一格，另开 B（同一个会话，直接打开编辑器页），A 随之隐藏')
+      say(`takeover（${holder.step.id}）：库里有了 A 的第一格，另开 B（同一个会话，直接打开编辑器页），A 随之隐藏`)
       openedTakerAt = Date.now()
       openInSafari(taker.url)
       const second = await waitForRevision(documentId, 3, Math.min(deadline, openedTakerAt + TAKEOVER_HIDDEN_SAVE_TIMEOUT_MS))
       notes.push(second === undefined ? `另开 B 之后 ${TAKEOVER_HIDDEN_SAVE_TIMEOUT_MS / 1000} 秒内库里没有 A 隐藏时上传的第二格（修订号 3）` : `另开 B 之后 ${second - openedTakerAt} ms 库里有了 A 隐藏时上传的第二格（每 100 毫秒查一次库）`)
       await waitForResult(collector, takerIndex, Math.min(deadline, openedTakerAt + TAKEOVER_TAKER_TIMEOUT_MS))
-      say(`takeover：B ${collector.received.has(takerIndex) ? '交回了' : '没有交回'}，等 A 回到前台、交回`)
+      say(`takeover（${holder.step.id}）：B ${collector.received.has(takerIndex) ? '交回了' : '没有交回'}，等 A 回到前台、交回`)
       await waitForResult(collector, holderIndex, Math.min(deadline, Date.now() + TAKEOVER_HOLDER_GRACE_MS))
       if (!collector.received.has(holderIndex))
         notes.push(`B 交回之后 ${TAKEOVER_HOLDER_GRACE_MS / 1000} 秒内 A 没有交回结果（还在后台？）`)
@@ -451,21 +464,27 @@ async function main(): Promise<number> {
     await waitForResults(collector, hiddenIndex >= 0 ? hiddenIndex : chained, deadline)
     const hiddenStep = steps[hiddenIndex]
     const evidence = hiddenStep === undefined ? undefined : await driveHiddenSave(collector, hiddenStep, hiddenIndex, deadline)
-    const holderIndex = steps.findIndex(step => step.scenario === 'takeover-holder')
-    const takerIndex = steps.findIndex(step => step.scenario === 'takeover-taker')
-    const takeover = holderIndex >= 0 && takerIndex >= 0 ? await driveTakeover(collector, holderIndex, takerIndex, deadline) : undefined
+    // 本人接管的每一对（A 与共用它的文档的 B）依次编排
+    const pairs = takeoverPairsOf(steps)
+    const takeovers = new Map<number, HandoverRun>()
+    for (const pair of pairs)
+      takeovers.set(pair.holder, await driveTakeover(collector, pair.holder, pair.taker, deadline))
     const refreshIndex = steps.findIndex(step => step.scenario === 'refresh-save')
     const refresh = refreshIndex >= 0 ? await driveRefreshSave(collector, refreshIndex, deadline) : undefined
     const active = collector
     const { received } = active
     // 交接的几步在服务器上该是什么样子随走的路：A 的文档按 B 走的路，refresh-save 按它自己交回的
-    const pathOf = (step: SelftestStep): string | undefined => step.scenario === 'takeover-holder' ? reportAt(active, takerIndex)?.path : reportAt(active, steps.indexOf(step))?.path
+    const pathOf = (step: SelftestStep): string | undefined => {
+      const pair = pairs.find(item => item.holder === steps.indexOf(step))
+      return reportAt(active, pair === undefined ? steps.indexOf(step) : pair.taker)?.path
+    }
     const stored = await checkServer(steps, pathOf)
     const storedOf = (step: SelftestStep): string[] => stored.problems.filter(problem => problem.startsWith(`${step.id}：`))
     const outcomes = steps.map((step, index) => {
       if (index === hiddenIndex)
         return serverJudgedOutcome(step, received.get(index), storedOf(step), evidence ?? '')
-      if (index === holderIndex && takeover !== undefined)
+      const takeover = takeovers.get(index)
+      if (takeover !== undefined)
         return serverJudgedOutcome(step, received.get(index), [...storedOf(step), ...takeover.judgement.problems], takeover.judgement.evidence)
       if (index === refreshIndex && refresh !== undefined)
         return serverJudgedOutcome(step, received.get(index), [...storedOf(step), ...refresh.judgement.problems], refresh.judgement.evidence)
@@ -486,7 +505,7 @@ async function main(): Promise<number> {
       steps: outcomes,
       // 交接的复核：库里的时间线（修订号与编辑租约每次变化的时刻）与 refresh-save 这份文档在后端日志里的请求
       handover: {
-        takeover: takeover === undefined ? undefined : { states: takeover.states, requests: takeover.requests },
+        takeover: Object.fromEntries([...takeovers].map(([index, run]) => [steps[index]?.id ?? String(index), { states: run.states, requests: run.requests }])),
         refresh: refresh === undefined ? undefined : { states: refresh.states, requests: refresh.requests },
       },
     }, null, 2)}\n`)

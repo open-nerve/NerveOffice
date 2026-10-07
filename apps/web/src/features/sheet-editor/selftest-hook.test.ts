@@ -4,7 +4,7 @@ import type { SelftestHost } from '../../editor/testing/selftest.ts'
 import type { EditModeState } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { handoverViewOf, watchForSelftest } from './selftest-hook.ts'
+import { deafenHandoverChannel, handoverViewOf, watchForSelftest } from './selftest-hook.ts'
 
 const run = vi.hoisted(() => vi.fn(async (_host: SelftestHost) => undefined))
 vi.mock('../../editor/testing/selftest.ts', () => ({ runSelftestAndReport: run }))
@@ -128,12 +128,14 @@ describe('页面自检的挂接', () => {
     expect(host.view()).toEqual({ mode: 'editing', surface: 'ready' })
   })
 
-  it('交接的复核（M3-P5）：正在编辑的 A（takeover-holder）先进入编辑；另开的 B（takeover-taker）与刷新的那一步（refresh-save）在阅读时开始', async () => {
-    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=takeover-holder`)
-    const holder = fakePage()
-    watchForSelftest(holder.page, elements)
-    holder.set(ready('steady'))
-    expect(holder.enterEditing).toHaveBeenCalledOnce()
+  it('交接的复核（M3-P5）：正在编辑的 A（takeover-holder、takeover-holder-deaf）先进入编辑；另开的 B（takeover-taker）与刷新的那一步（refresh-save）在阅读时开始', async () => {
+    for (const scenario of ['takeover-holder', 'takeover-holder-deaf']) {
+      window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
+      const holder = fakePage()
+      watchForSelftest(holder.page, elements)
+      holder.set(ready('steady'))
+      expect(holder.enterEditing).toHaveBeenCalledOnce()
+    }
     for (const scenario of ['takeover-taker', 'refresh-save']) {
       window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
       const other = fakePage()
@@ -162,6 +164,29 @@ describe('页面自检的挂接', () => {
     set({ mode: { kind: 'editing' } })
     expect(host.view()).toEqual({ mode: 'editing', surface: 'steady' })
     expect(handoverViewOf(undefined)).toEqual({})
+  })
+
+  it('收不到交接频道消息的 A（takeover-holder-deaf）：交接频道（nerve-office:doc:*）的 message 监听挂不上，别的频道与别的事件照常', () => {
+    // jsdom 的环境里 BroadcastChannel 是 Node 的（它的事件与 jsdom 的不通用）：换成按名字建、能派发事件的假频道
+    class FakeChannel extends EventTarget {
+      readonly name: string
+      constructor(name: string) {
+        super()
+        this.name = name
+      }
+    }
+    const scope = { BroadcastChannel: FakeChannel as unknown as typeof BroadcastChannel }
+    deafenHandoverChannel(scope)
+    const handover = new scope.BroadcastChannel(`nerve-office:doc:${DOCUMENT_ID}`)
+    const other = new scope.BroadcastChannel('nerve-office:session')
+    const heard: string[] = []
+    handover.addEventListener('message', () => heard.push('handover'))
+    handover.addEventListener('messageerror', () => heard.push('handover-error'))
+    other.addEventListener('message', () => heard.push('other'))
+    handover.dispatchEvent(new Event('message'))
+    handover.dispatchEvent(new Event('messageerror'))
+    other.dispatchEvent(new Event('message'))
+    expect(heard).toEqual(['handover-error', 'other'])
   })
 
   it('载入失败时同样交给自检，说明失败的原因', async () => {

@@ -58,7 +58,8 @@ export interface SelftestStepDefinition {
  * - M3-P2：查看者的只读入口与公式，作者的界面对照（能编辑时界面都在），作者进入、退出编辑（保存一次）；
  * - M3-P4 S1（捕获时机的复核，都在编辑时）：环境、变更检测（只读样本）、公式时序（Worker 与主线程各一步）、自动行高与大表复制（大表）、
  *   组合输入；hidden-save（驱动脚本在它第一次保存之后另开标签页让它隐藏，按库里的证据判定）是由上一步带过去的最后一步；
- * - M3-P5 S8（交接的复核，驱动脚本各开一个新的标签页）：两个标签页的本人接管（A 与 B，同一份文档）、刷新时在途的保存
+ * - M3-P5 S8（交接的复核，驱动脚本各开一个新的标签页）：两个标签页的本人接管（A 与 B，同一份文档；再一对里的 A 收不到交接频道的消息）、
+ *   刷新时在途的保存
  */
 export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'read-only', scenario: 'read-only', role: 'viewer', sample: 'read-only' },
@@ -75,6 +76,8 @@ export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'hidden-save', scenario: 'hidden-save', role: 'author', sample: 'template' },
   { id: 'takeover-holder', scenario: 'takeover-holder', role: 'author', sample: 'template' },
   { id: 'takeover-taker', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'takeover-holder', opens: 'editor' },
+  { id: 'takeover-deaf-holder', scenario: 'takeover-holder-deaf', role: 'author', sample: 'template' },
+  { id: 'takeover-deaf-taker', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'takeover-deaf-holder', opens: 'editor' },
   { id: 'refresh-save', scenario: 'refresh-save', role: 'author', sample: 'template' },
 ]
 
@@ -161,6 +164,8 @@ const SWITCH_TIMINGS = ['switch.enter', 'switch.exit'] as const
 /** 交接的场景（M3-P5）交回的路：每个场景认得的几种（selftest-report.ts 的 path） */
 export const HANDOVER_PATHS: Readonly<Partial<Record<SelftestScenario, readonly string[]>>> = {
   'takeover-holder': ['handed-over', 'lost'],
+  // 收不到交接频道的消息：只会失去编辑权
+  'takeover-holder-deaf': ['lost'],
   'takeover-taker': ['answered', 'silent'],
   'refresh-save': ['committed', 'expired'],
 }
@@ -311,8 +316,8 @@ interface ServerExpectation {
 
 /**
  * 交接的复核（M3-P5）在服务器上该有的样子，随走的路而定（path 是 B 的 answered、silent，refresh-save 的 committed、expired）：
- * - takeover-holder（A 的文档）：A 回应了（answered）——第一格、隐藏时上传的第二格、交出之前存上的第三格，修订号 4；没有回应（silent）——前两格，
- *   修订号 3，第三格不在（只在 A 另存的副本里）；
+ * - takeover-holder 与 takeover-holder-deaf（A 的文档）：A 回应了（answered）——第一格、隐藏时上传的第二格、交出之前存上的第三格，修订号 4；
+ *   没有回应（silent）——前两格，修订号 3，第三格不在（只在 A 另存的副本里）；
  * - takeover-taker：与 A 同一份文档，随 A 那一步核对（这里没有要求）；
  * - refresh-save：刷新时停在服务端的那一次保存提交了，修订号 2、内容里有那一格（committed）；等满 30 秒（expired）说明那次保存没有提交，算问题。
  * 认不出路的交回 undefined（算问题：不知道该是什么样子）
@@ -320,6 +325,7 @@ interface ServerExpectation {
 function handoverExpectation(scenario: HandoverScenario, path: string | undefined): ServerExpectation | 'none' | undefined {
   switch (scenario) {
     case 'takeover-holder':
+    case 'takeover-holder-deaf':
       if (path === 'answered')
         return { revision: 4, why: 'A 回应了：控制的 flush、隐藏的那一刻、交出之前各上传一次', cells: TAKEOVER_EDITS }
       if (path === 'silent')
@@ -335,6 +341,7 @@ function handoverExpectation(scenario: HandoverScenario, path: string | undefine
 function serverExpectation(scenario: SelftestScenario, path: string | undefined): ServerExpectation | 'none' | undefined {
   switch (scenario) {
     case 'takeover-holder':
+    case 'takeover-holder-deaf':
     case 'takeover-taker':
     case 'refresh-save':
       return handoverExpectation(scenario, path)

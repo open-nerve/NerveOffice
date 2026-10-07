@@ -2,7 +2,7 @@
 // 在途的保存（设计 §3.7 的 R1、风险表里"WebKit 在刷新一开始就取消在途的保存"那一条，7a759da）。驱动脚本（tests/e2e/safari/selftest.ts）编排：
 // 另开标签页、锁住服务器上的内容行让保存停在服务端、按库里的证据判定；Playwright 的校准（specs/editor/selftest.spec.ts）照同样的编排、模拟隐藏。
 // 各步的先后看测试构建的交接日志（./handover-log.ts，window.__nerveHandoverLog）与这里自己的观察，随结果交回（timeline，墙上时间）：
-// - takeover-holder（A，作者，编辑时）：第一格经控制的 flush 存上（驱动脚本看到这一版才另开 B），同时写第二格（留着）；等 A 变成隐藏（B 一打开
+// - takeover-holder（A，作者，编辑时；takeover-holder-deaf 是同样的步骤，只是挂接让这一页收不到交接频道的消息）：第一格经控制的 flush 存上（驱动脚本看到这一版才另开 B），同时写第二格（留着）；等 A 变成隐藏（B 一打开
 //   A 就隐藏了）——自动保存在隐藏的那一刻上传第二格（P4）；隐藏之后再写第三格（捕获的静默与上限调到一小时，留着）；然后等结果：
 //   · handed-over：A 回应了 B 的交接请求，先保存（第三格也存上）再交出、回到阅读，说明"已在本浏览器的另一个标签页接着编辑"；
 //   · lost：A 没有回应（被 Safari 暂停、冻结），B 3 秒之后本人接管并抢锁，A 得知锁被抢（回到前台时）——失去编辑权，说法是"你在本浏览器的
@@ -17,7 +17,7 @@
 //   刷新过的页面）"；记号在；点"在此编辑"先等（waiting-save，"上一个页面的保存还在进行，稍后接手…"），那次保存提交了（在服务端停完）才以
 //   本人接管申请、进入编辑（committed），或者等满 30 秒（expired，从记号的时刻算）；服务器上有那次保存，记号清掉。
 import type { HandoverLog, HandoverLogEntry } from './handover-log.ts'
-import type { SelftestCheck, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
+import type { HandoverScenario, SelftestCheck, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'
 import { HANDOVER_LOG_GLOBAL } from './handover-log.ts'
 import { autosaveControl, capturesIn, describeAutosave, prepareAutosave, requestOf, saveRequests, triggerText, untilUploaded } from './selftest-autosave.ts'
@@ -759,9 +759,11 @@ async function refreshSteps(session: Session, carry: RefreshCarry, observations:
 /** 交接的各场景（场景名在 ./selftest-report.ts 的 HANDOVER_SCENARIOS） */
 export const HANDOVER_SCENARIO_RUNNERS = {
   'takeover-holder': takeoverHolderScenario,
+  // 收不到交接频道消息的 A：同样的步骤，挂接已经让这一页收不到 B 的交接请求（结果是失去编辑权、另存为副本）
+  'takeover-holder-deaf': takeoverHolderScenario,
   'takeover-taker': takeoverTakerScenario,
   'refresh-save': refreshSaveScenario,
-} as const satisfies Readonly<Record<string, (session: Session) => Promise<void>>>
+} as const satisfies Readonly<Record<HandoverScenario, (session: Session) => Promise<void>>>
 
 /** 这些场景要求页面在中途变成隐藏：A 被另开的 B 遮住 */
-export const HANDOVER_EXPECTS_HIDDEN: ReadonlySet<string> = new Set(['takeover-holder'])
+export const HANDOVER_EXPECTS_HIDDEN: ReadonlySet<string> = new Set<HandoverScenario>(['takeover-holder', 'takeover-holder-deaf'])

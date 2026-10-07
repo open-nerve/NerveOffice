@@ -54,12 +54,14 @@ describe('一串步骤怎么接起来', () => {
       ['hidden-save', false, 'done'],
       ['takeover-holder', true, 'done'],
       ['takeover-taker', true, 'close'],
+      ['takeover-deaf-holder', true, 'done'],
+      ['takeover-deaf-taker', true, 'close'],
       ['refresh-save', true, 'done'],
     ])
     expect(chain.slice(0, hidden).every(link => !link.opened && link.after === 'next')).toBe(true)
     expect(nextAfter(chain, hidden - 1, COLLECTOR)).toBe(chain[hidden]?.url)
     expect(nextAfter(chain, hidden, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
-    expect([nextAfter(chain, hidden + 1, COLLECTOR), nextAfter(chain, hidden + 2, COLLECTOR), nextAfter(chain, hidden + 3, COLLECTOR)]).toEqual([`${COLLECTOR}${DONE_PATH}`, `${COLLECTOR}${CLOSE_PATH}`, `${COLLECTOR}${DONE_PATH}`])
+    expect([1, 2, 3, 4, 5].map(offset => nextAfter(chain, hidden + offset, COLLECTOR))).toEqual([DONE_PATH, CLOSE_PATH, DONE_PATH, CLOSE_PATH, DONE_PATH].map(path => `${COLLECTOR}${path}`))
   })
 
   it('B（takeover-taker）直接打开编辑器页（同一个会话，不带账户），A 正在编辑的那一份文档；别的步骤经入口页', () => {
@@ -84,10 +86,10 @@ describe('只跑其中几步（--steps）', () => {
   })
 
   it('只选了交接的几步：都由驱动脚本另开，没有由上一步带过去的', () => {
-    const picked = selectSteps(SELFTEST_STEPS, 'takeover-holder,takeover-taker,refresh-save')
+    const picked = selectSteps(SELFTEST_STEPS, 'takeover-holder,takeover-taker,takeover-deaf-holder,takeover-deaf-taker,refresh-save')
     const definitions = 'definitions' in picked ? picked.definitions : []
     const chain = chainOf(stepsOf(definitions, { author: user('author'), viewer: user('viewer') }, definitions.map(definition => `${definition.id}-doc`)), ORIGIN, COLLECTOR)
-    expect(chain.map(link => [link.opened, link.after])).toEqual([[true, 'done'], [true, 'close'], [true, 'done']])
+    expect(chain.map(link => [link.opened, link.after])).toEqual([[true, 'done'], [true, 'close'], [true, 'done'], [true, 'close'], [true, 'done']])
   })
 })
 

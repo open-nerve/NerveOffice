@@ -55,9 +55,13 @@ export type CaptureScenario = (typeof CAPTURE_SCENARIOS)[number]
 /**
  * 交接的复核（M3-P5 设计 §3.14 与 §3.7 的 R1）：takeover-holder 是正在编辑的标签页 A，takeover-taker 是同一个浏览器、同一次登录里另开的
  * 标签页 B（直接打开编辑器页，不经入口页再登录一次：再登录会换掉浏览器里的会话 Cookie，A 的编辑权绑定的那次登录随之对不上）；
- * refresh-save 是刷新时有一次保存停在服务端（驱动脚本锁住服务器上的内容行）
+ * takeover-holder-deaf 是收不到交接频道消息的 A（编辑器页的挂接在这一页装上，模拟被暂停、冻结、卡住的标签页：B 3 秒之后本人接管并抢锁）；
+ * refresh-save 是刷新时有一次保存停在服务端（驱动脚本让它在服务端停一会儿）
  */
-export const HANDOVER_SCENARIOS = ['takeover-holder', 'takeover-taker', 'refresh-save'] as const
+export const HANDOVER_SCENARIOS = ['takeover-holder', 'takeover-holder-deaf', 'takeover-taker', 'refresh-save'] as const
+
+/** 收不到交接频道消息的 A（编辑器页的挂接据它装上吞掉消息的频道） */
+export const DEAF_HOLDER_SCENARIO = 'takeover-holder-deaf'
 
 export type HandoverScenario = (typeof HANDOVER_SCENARIOS)[number]
 

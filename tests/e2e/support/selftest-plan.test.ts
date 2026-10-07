@@ -54,16 +54,19 @@ describe('页面自检的步骤', () => {
       ['hidden-save', 'hidden-save', 'author', '—'],
       ['takeover-holder', 'takeover-holder', 'author', '—'],
       ['takeover-taker', 'takeover-taker', 'author', '—'],
+      ['takeover-deaf-holder', 'takeover-holder-deaf', 'author', '—'],
+      ['takeover-deaf-taker', 'takeover-taker', 'author', '—'],
       ['refresh-save', 'refresh-save', 'author', '—'],
     ])
   })
 
-  it('每一步自己一份文档（有的步骤会保存），只有另开的 B 与 A 共用（A 正在编辑的那一份）；每个场景至少一步，公式时序两种模式各一步', () => {
+  it('每一步自己一份文档（有的步骤会保存），只有另开的 B 与它的 A 共用（A 正在编辑的那一份）；每个场景至少一步，公式时序两种模式各一步', () => {
     const shared = STEPS.filter(step => step.sharesDocumentOf !== undefined)
-    expect(shared.map(step => [step.id, step.sharesDocumentOf, step.opens])).toEqual([['takeover-taker', 'takeover-holder', 'editor']])
+    expect(shared.map(step => [step.id, step.sharesDocumentOf, step.opens])).toEqual([['takeover-taker', 'takeover-holder', 'editor'], ['takeover-deaf-taker', 'takeover-deaf-holder', 'editor']])
     expect(STEPS.find(step => step.id === 'takeover-taker')?.documentId).toBe('takeover-holder-doc')
-    expect(new Set(STEPS.map(step => step.documentId)).size).toBe(STEPS.length - 1)
-    expect(STEPS.filter(step => step.id !== 'takeover-taker').every(step => step.opens === 'entry')).toBe(true)
+    expect(STEPS.find(step => step.id === 'takeover-deaf-taker')?.documentId).toBe('takeover-deaf-holder-doc')
+    expect(new Set(STEPS.map(step => step.documentId)).size).toBe(STEPS.length - 2)
+    expect(STEPS.filter(step => step.sharesDocumentOf === undefined).every(step => step.opens === 'entry')).toBe(true)
     expect(new Set(STEPS.map(step => step.id)).size).toBe(STEPS.length)
     expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual([...SELFTEST_SCENARIOS].sort())
     expect(CAPTURE_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
@@ -135,6 +138,9 @@ describe('页面自检的结果有什么问题', () => {
     expect(problemsOf(report({ ...base, scenario: 'refresh-save', path: 'committed' }))).toEqual([])
     expect(problemsOf(report({ ...base, scenario: 'takeover-taker' }))).toEqual(['交回的路是 没有（应当是 answered、silent 之一）'])
     expect(problemsOf(report({ ...base, scenario: 'takeover-holder', path: 'silent' }))).toEqual(['交回的路是 silent（应当是 handed-over、lost 之一）'])
+    // 收不到交接频道消息的 A 只会失去编辑权
+    expect(problemsOf(report({ ...base, scenario: 'takeover-holder-deaf', path: 'lost' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'takeover-holder-deaf', path: 'handed-over' }))).toEqual(['交回的路是 handed-over（应当是 lost 之一）'])
     // 没跑完时只说没跑完的原因
     expect(problemsOf(report({ ...base, scenario: 'refresh-save', failure: '自检中途出错' }))).toEqual(['没能跑完：自检中途出错'])
   })
@@ -222,6 +228,7 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
     expect(storedProblems(step('takeover-holder'), stored({ revision: 3, revisions: 3, snapshot: two }), 'answered')[0]).toMatch(/修订号是 3.*应当都是 4/)
     expect(storedProblems(step('takeover-holder'), stored({ revision: 3, revisions: 3, snapshot: two }))).toEqual(['文档 takeover-holder-doc：不知道走了哪条路（没有交回），说不出服务器上该是什么样子（修订号 3）'])
     expect(storedProblems(step('takeover-taker'), undefined, 'silent')).toEqual([])
+    expect(storedProblems(step('takeover-holder-deaf'), stored({ revision: 3, revisions: 3, snapshot: two }), 'silent')).toEqual([])
     expect(storedProblems(step('refresh-save'), stored({ revision: 2, revisions: 2, snapshot: templateWith([REFRESH_SAVE_EDIT]) }), 'committed')).toEqual([])
     expect(storedProblems(step('refresh-save'), stored(), 'committed')).toHaveLength(2)
     expect(storedProblems(step('refresh-save'), stored(), 'expired')).toHaveLength(1)
