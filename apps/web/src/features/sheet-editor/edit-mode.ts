@@ -121,14 +121,14 @@ const IDLE_RELEASE_MS = EDIT_IDLE_RELEASE_SECONDS * 1000
 export const IDLE_RECHECK_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 
 /** 离开编辑的各种原因的名字（以只读重建失败时的错误说明里用） */
-const LEAVE_LABELS: Readonly<Record<'exit' | 'idle' | 'handover-tab', string>> = {
+const LEAVE_LABELS: Readonly<Record<ImplementedLeaveCause, string>> = {
   'exit': '退出编辑',
   'idle': '空闲释放',
   'handover-tab': '交给本浏览器的另一个标签页',
 }
 
 /** 离开编辑之后阅读里的说明：退出没有（人自己按的），空闲释放与交给本浏览器的另一个标签页说明为什么回到了阅读 */
-const LEAVE_NOTICES: Readonly<Record<'exit' | 'idle' | 'handover-tab', ReadingNotice | undefined>> = {
+const LEAVE_NOTICES: Readonly<Record<ImplementedLeaveCause, ReadingNotice | undefined>> = {
   'exit': undefined,
   'idle': { kind: 'idle-released' },
   'handover-tab': { kind: 'handed-over-tab' },
