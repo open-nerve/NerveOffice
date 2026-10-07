@@ -2,8 +2,9 @@
 // 停用（user）、移出空间与降为查看者（membership）、归档（space）、删除、跨空间移动与转移（documents）、取消与降低单独授权（userDocuments）。
 // 每种核对：失去编辑权的持有者的租约记 revoked、文档的代次加一；他之后的心跳与保存先被访问与编辑权拒绝（401、403、404）；
 // 别人（还能编辑的）能申请，收回是明确结束，没有异常中断的提醒。变化之后仍能编辑的持有者租约不动，被移到别的空间时按 stale 失效、续上。
-// M3-P5（设计 §3.5，DEF-044）：按时间已死的租约（到期、空闲满 12 分钟）不在范围里——不记 revoked、代次不加，异常中断的提醒保留（US-M3-10）。
-// 进行中的保存、申请与撤权的确定交错，以及锁的顺序（含"死租约的文档行不被锁"），在 lease-revocation-locks.test.ts。
+// M3-P5（设计 §3.5，DEF-044）：按时间已死的租约（到期、空闲满 12 分钟）不收回——不记 revoked、代次不加，异常中断的提醒保留（US-M3-10）。
+// 进行中的保存、申请与撤权的确定交错，以及锁的顺序（含"刚死不久的文档行锁住、等在途的保存"与"死了超过一个有效期的不锁"，审查 A1），
+// 在 lease-revocation-locks.test.ts。
 import type { SpaceRole } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -332,7 +333,7 @@ async function statusFor(user: LoggedIn, documentId: string): Promise<{ readonly
   return { editor: status.editor?.holder.id ?? null, interruption: status.interruption?.holder.id ?? null }
 }
 
-describe('US-M3-10 先到期、后被收回：按时间已死的租约不在收回写入权的范围里——不记 revoked、代次不加，异常中断的提醒保留（M3-P5 设计 §3.5，DEF-044）', () => {
+describe('US-M3-10 先到期、后被收回：按时间已死的租约不收回——不记 revoked、代次不加，异常中断的提醒保留（M3-P5 设计 §3.5，DEF-044）', () => {
   it('US-M3-10 先到期、后被降为查看者：租约没被结束、代次没加；别人的编辑状态与申请都有关于他的提醒', async () => {
     const holder = await person()
     const space = await teamSpace({ [holder.account.id]: 'editor' })

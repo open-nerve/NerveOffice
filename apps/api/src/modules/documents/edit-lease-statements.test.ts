@@ -272,7 +272,7 @@ describe('文档的写入代次加一（申请编辑权、收回写入权，docu
   })
 })
 
-describe('收回写入权：范围的条件与 coversWriter 逐种同义，只找按时间还活着的，先按文档 id 的顺序锁文档行，再按同样的顺序锁租约行', () => {
+describe('收回写入权：范围的条件与 coversWriter 逐种同义，先按文档 id 的顺序锁文档行（连同按时间刚死不久的），再按同样的顺序锁租约行（只交出按时间还活着的）', () => {
   const SCOPES: readonly WriteAccessScope[] = [
     { kind: 'user', userId: AMY },
     { kind: 'membership', userId: AMY, spaceId: SPACE },

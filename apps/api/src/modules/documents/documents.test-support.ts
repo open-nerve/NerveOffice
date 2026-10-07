@@ -673,7 +673,7 @@ export class FakeStore {
   /**
    * 编辑租约的仓储（M3-P1）：与真实仓储同样的语义——每份文档至多一行，改写为新的一代时清掉明确结束与保留，
    * 同一个持有者沿用请求；接管时写下给出的接管标记，不是接管时同一个页面沿用上一代的（M3-P5），最后活动按带来的空闲往前推；
-   * 续租时最后活动只前进不后退、不晚于 now，明确结束不覆盖先记下的原因；收回写入权只找按时间还活着的。
+   * 续租时最后活动只前进不后退、不晚于 now，明确结束不覆盖先记下的原因；收回写入权只交出按时间还活着的（不模拟锁）。
    * SQL 本身由语句的核对（edit-lease-statements.test.ts）与集成测试覆盖
    */
   readonly leases = {
@@ -758,8 +758,8 @@ export class FakeStore {
     }),
     /**
      * 收回写入权的范围涉及的、没有明确结束而且按时间还活着（没到期、空闲不满 12 分钟，M3-P5）的租约（按文档 id 排序），带文档现在的
-     * 空间、创建人与状态：范围的含义就是 coversWriter，真实仓储的 SQL 与它逐种同义（edit-lease-statements.test.ts）；加锁与锁下的再核对
-     * 由集成测试覆盖
+     * 空间、创建人与状态：范围的含义就是 coversWriter，真实仓储的 SQL 与它逐种同义（edit-lease-statements.test.ts）；加锁（连同刚死不久的
+     * 文档行，M3-P5 审查 A1）与锁下的再核对由集成测试覆盖
      */
     lockInScope: vi.fn(async (scope: WriteAccessScope): Promise<RevocableEditLease[]> =>
       [...this.leaseRecords.values()]

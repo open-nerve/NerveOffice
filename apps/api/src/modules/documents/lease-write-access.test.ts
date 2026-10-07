@@ -199,7 +199,7 @@ describe('LeaseWriteAccessRevocation：步骤与写了什么', () => {
     expect(stateOf(store, [released])).toEqual([['released', 0]])
   })
 
-  it('M3-P5（DEF-044）按时间已死的租约（到期、空闲满 12 分钟）不在范围里：不记 revoked、不加代次——它不可能再被续租或用来保存，异常中断的提醒得以保留；还活着的照常结束', async () => {
+  it('M3-P5（DEF-044）按时间已死的租约（到期、空闲满 12 分钟）不收回：不记 revoked、不加代次——它不能再续租，撤权之后才拿到文档行的保存在锁下按新的权限被拒，异常中断的提醒得以保留；还活着的照常结束（刚死不久的文档行由仓储另锁、等在途的保存，审查 A1，见集成测试）', async () => {
     const { store, revocation } = setup()
     const expired = store.addDocument({ spaceId: TEAM_SPACE })
     const idle = store.addDocument({ spaceId: TEAM_SPACE })
