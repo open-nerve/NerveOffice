@@ -384,6 +384,109 @@ describe('等待：续期', () => {
   })
 })
 
+describe('连着的会话类失败（审查 B1：与续租的 M3-P4 复验 C1 同一个口径）', () => {
+  const CSRF = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+
+  /** 页面的样子：每次得知会话问题都向服务端确认（一个来回，50 毫秒），确认是本人之后告诉请求方一侧（setActive(true)，旧写法每次都这样） */
+  function confirmEachTime(context: ReturnType<typeof setup>): void {
+    context.onSessionProblem.mockImplementation(() => {
+      context.time.clock.schedule(() => context.requests.setActive(true), 50)
+    })
+  }
+
+  /** 续期的时刻（相对开始等待），续期按 outcomes 依次回答（之后都是 PENDING） */
+  async function renewalsAnswering(outcomes: readonly (EditRequestOutcome | ApiError)[]) {
+    const renewedAt: number[] = []
+    const context = setup({ renew: async () => {
+      renewedAt.push(context.time.now())
+      const outcome = outcomes[renewedAt.length - 1] ?? PENDING
+      if (outcome instanceof ApiError)
+        throw outcome
+      return outcome
+    } })
+    await waiting(context)
+    const start = context.time.now()
+    return { context, renewedAt: () => renewedAt.map(at => at - start) }
+  }
+
+  it('续期一直得到令牌失效（例如网关剥掉了 CSRF 的请求头）、页面每次确认都是本人：只有连着的第一次之后立即续期，之后按续期的节奏——不按网络往返的速度连着发', async () => {
+    const { context, renewedAt } = await renewalsAnswering(Array.from<ApiError>({ length: 10 }).fill(CSRF))
+    confirmEachTime(context)
+    await context.time.advance(REQUEST_RENEW_MS * 4)
+    // 5 秒的续期被拒、确认之后立即再续一次（5.05 秒）仍被拒；之后每次确认之后按续期的节奏：10.1、15.15 秒
+    expect(renewedAt()).toEqual([5_000, 5_050, 10_100, 15_150])
+    expect(context.onSessionProblem).toHaveBeenCalledTimes(4)
+    expect(context.requests.progress()?.kind).toBe('waiting')
+  })
+
+  it('续期成功之后清零：之后再遇到，确认之后照样立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF, PENDING, CSRF])
+    confirmEachTime(context)
+    await context.time.advance(REQUEST_RENEW_MS * 3 + 200)
+    // 第 2 次（5.05 秒）是连着的第二次，之后按节奏（10.1 秒成功，清零）；15.1 秒被拒是新的第一次，确认之后立即续期（15.15 秒）
+    expect(renewedAt()).toEqual([5_000, 5_050, 10_100, 15_100, 15_150])
+  })
+
+  it('连着两次之后页面确认会话不是本人（setActive(false)：真的登出了）：清零——回到本人时立即续期（复核 D1）', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF])
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000])
+    context.requests.setActive(false)
+    await context.time.advance(60_000)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000, 65_000])
+  })
+
+  it('取消得到令牌失效同样算连着的一次：之后续期又被拒，确认之后不立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering(Array.from<ApiError>({ length: 10 }).fill(CSRF))
+    context.api.cancel.mockRejectedValue(CSRF)
+    // 取消被拒（第一次）：回到等待、照常立即续期一次——又被拒（第二次）
+    await context.requests.cancel()
+    await settle()
+    expect(renewedAt()).toEqual([0])
+    expect(context.onSessionProblem).toHaveBeenCalledTimes(2)
+    // 页面确认之后：不立即续期，按续期的节奏
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([0])
+    await context.time.advance(REQUEST_RENEW_MS)
+    expect(renewedAt()).toEqual([0, REQUEST_RENEW_MS])
+  })
+
+  it('取消成功了同样清零：之后（恢复等待）再遇到会话类失败，确认之后照样立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF, CSRF])
+    // 连着两次被拒（5 秒、确认之后立即再续的那一次）
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000])
+    // 取消成功（会话没问题）：结束；之后恢复等待（不另发出），立即续期一次又被拒——新的第一次：确认之后立即续期
+    await context.requests.cancel()
+    expect(context.ends).toEqual([{ kind: 'cancelled' }])
+    context.requests.resume(AMY)
+    await settle()
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000, 5_000, 5_000])
+  })
+
+  it('发出成功了同样清零：撤回（不清零）之后再发出、再遇到会话类失败，确认之后照样立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF, CSRF])
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    context.requests.withdraw()
+    await waiting(context)
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000, 10_000, 10_000])
+  })
+})
+
 describe('空闲：等待中的页面空闲满 10 分钟就取消请求', () => {
   it('每次续期之前看空闲：满 10 分钟（起点是开始等待的那一刻）就取消（DELETE），结束并说明；不再续期', async () => {
     const context = setup()

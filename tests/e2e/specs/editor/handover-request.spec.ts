@@ -344,4 +344,39 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     await requesterEnters(anotherDevice, acquisitions)
     expect((await savedCells(anotherDevice, documentId))[0]).toBe('from holder')
   })
+
+  test('US-M3-06 请求方的续期一直得到 CSRF_TOKEN_INVALID（例如网关剥掉了请求头）、确认会话照常是本人：续期与确认会话按续期的节奏，不按网络往返的速度连着发（审查 B1）', async ({ page, anotherDevice }) => {
+    const { holder, requester, documentId } = await sharedDocument('rq-csrf')
+    await holderEditing(page, holder, documentId)
+    await requesterWaiting(anotherDevice, requester, holder, documentId)
+
+    const requestPath = `/api/documents/${documentId}/edit-lease/request`
+    await anotherDevice.route(`**${requestPath}`, async route => route.request().method() === 'PUT'
+      ? route.fulfill({ status: 403, contentType: 'application/json', json: { error: { code: 'CSRF_TOKEN_INVALID', message: '请求已失效，请刷新页面', requestId: 'b1' } } })
+      : route.continue())
+    const counts = { renewals: 0, sessions: 0 }
+    anotherDevice.on('request', (request) => {
+      const path = new URL(request.url()).pathname
+      if (request.method() === 'PUT' && path === requestPath)
+        counts.renewals += 1
+      if (request.method() === 'GET' && path === '/api/auth/session')
+        counts.sessions += 1
+    })
+    // 下一次续期被拒，页面向服务端确认会话（照常是本人）
+    const confirmed = anotherDevice.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/auth/session')
+    await nextRenewal(anotherDevice)
+    expect((await confirmed).status()).toBe(200)
+    const start = { ...counts }
+    // 再走十个网络往返（不按固定时长等）：修之前确认之后立即再续期、再被拒、再确认，按网络往返的速度连着发（3 秒里各约 300–450 次），这段时间里
+    // 就有好几次；修之后下一次续期照续期的节奏，在 5 秒之后
+    for (let round = 0; round < 10; round += 1)
+      expect(await anotherDevice.evaluate(async () => (await fetch('/api/health/live')).status)).toBe(200)
+    expect(counts.renewals - start.renewals).toBe(0)
+    expect(counts.sessions - start.sessions).toBe(0)
+    // 页面照旧在等（会话没问题，说明不变）；拨过一个续期间隔才再续一次
+    await expect(cancelRequestButton(anotherDevice)).toBeVisible()
+    await expect(statusRegion(anotherDevice)).toHaveText(waitingFor(holder))
+    await nextRenewal(anotherDevice)
+    await expect.poll(() => counts.renewals - start.renewals).toBe(1)
+  })
 })

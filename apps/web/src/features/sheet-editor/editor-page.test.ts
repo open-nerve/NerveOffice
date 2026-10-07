@@ -2492,6 +2492,45 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
     expect(api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
   })
 
+  it('续期一直得到令牌失效（网关剥掉了 CSRF 的请求头）、确认会话照常是本人（审查 B1）：确认之后不立即再续期——续期与确认会话不按网络往返的速度连着发，下一次按续期的节奏', async () => {
+    const CSRF = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    /** 一次网络往返：下一个宏任务才回来（假接口不让出宏任务时，连着发就是同步的死循环） */
+    const roundTrip = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+    const { editorPage, api, time } = setup({
+      editIntent: false,
+      api: {
+        editStatus: BOB_STATUS,
+        session: async () => {
+          await roundTrip()
+          return ALICE
+        },
+        editRequest: {
+          send: async () => REQUEST_PENDING,
+          renew: async () => {
+            await roundTrip()
+            throw CSRF
+          },
+          cancel: async () => {},
+        },
+      },
+    })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { holder: { username: 'bob' } } }))
+    await editorPage.requestEditing()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    const sessionsBefore = vi.mocked(api.session).mock.calls.length
+    // 到第一次续期（5 秒）：之后时钟不动，只让往返一个个回来
+    await time.advance(5_000)
+    for (let i = 0; i < 50; i += 1)
+      await settle()
+    expect(vi.mocked(api.editRequest.renew).mock.calls.length).toBe(1)
+    expect(vi.mocked(api.session).mock.calls.length - sessionsBefore).toBe(1)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    // 下一次照续期的节奏（5 秒）
+    await time.advance(5_000)
+    await vi.waitFor(() => expect(vi.mocked(api.editRequest.renew).mock.calls.length).toBe(2))
+  })
+
   it('载入时详情里的"能不能强制接管"交给阅读（之后随编辑状态更新）', async () => {
     const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canTakeOver: true } }), editStatus: async () => new Promise<FetchedEditStatus>(() => {}) } })
     await editorPage.load()

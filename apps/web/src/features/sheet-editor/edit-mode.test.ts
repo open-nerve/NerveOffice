@@ -4349,6 +4349,18 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
     })
 
+    it('页面确认会话照常是本人（一直是本人，例如续期得到令牌失效之后的确认）：不让请求方立即续期，续期照它自己的节奏（审查 B1）', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.mode.setSession('active')
+      context.mode.setSession('active')
+      await settle()
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+      await context.time.advance(REQUEST_RENEW_MS)
+      expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
+    })
+
     it('刷新之后恢复等待：编辑状态里有本人的请求而本页没在等——不另发出，直接等待、立即续期', async () => {
       const context = setup({ api: { editStatus: async () => statusWithMyRequest() } })
       await opened(context)

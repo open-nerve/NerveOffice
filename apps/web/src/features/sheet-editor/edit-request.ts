@@ -14,8 +14,12 @@
 // - 取消（"取消请求"）：DELETE（同时清掉留给本人的保留）。没取消成就回到等待、说明原因（可以再按），照常续期——请求还在服务端；
 // - 撤回（withdraw：页面关闭、编辑器建不起来）：尽力 DELETE（keepalive，不等结果），不说明；
 // - 恢复（resume：刷新之后，或者本人在别的标签页、设备上发出的请求——编辑状态里有本人的请求时）：不另发出，直接等待、立即续期一次；
-// - 会话不是本人时不续期（不带着别人的登录发），回到本人时立即续期一次；续期、取消遇到会话类失败（未登录、令牌失效）交给页面确认会话、照常等；
-//   续期得到不能编辑了（403）、读不到了（404）就结束（状态机按原因说明），别的失败（网络、5xx、回包读不出来）下一次照常再试。
+// - 会话不是本人时不续期（不带着别人的登录发），回到本人时立即续期一次；续期、取消遇到会话类失败（未登录、令牌失效）交给页面确认会话、照常等。
+//   连着的会话类失败（续期、取消得到未登录或令牌失效，中间没有成功过）只有第一次之后回到本人时立即续期，之后按续期的节奏（5 秒）再续——服务端
+//   一直拒绝（例如网关剥掉了 CSRF 的请求头）而页面的确认照常是本人时，立即续期只会再被拒、再要页面确认一次，续期与确认会话就按网络往返的速度
+//   连着发（M3-P5 审查 B1，与续租的 M3-P4 复验 C1 同一个口径）。发出、续期、取消成功了才清零（别的失败说明不了会话）；会话不是本人时
+//   （setActive(false)）也清零——会话问题是真的，回到本人时立即续期（复核 D1）；
+// - 续期得到不能编辑了（403）、读不到了（404）就结束（状态机按原因说明），别的失败（网络、5xx、回包读不出来）下一次照常再试。
 import type { EditRequestOutcome, UserSummary } from '@nerve-office/contracts'
 import type { LeaseClock } from './edit-lease.ts'
 import type { HandoverTrace } from './handover-trace.ts'
@@ -110,7 +114,9 @@ export interface EditRequests {
   readonly cancel: () => Promise<void>
   /** 状态机现在能进入编辑了（重建完了）：granted、看得见时进入 */
   readonly retry: () => void
-  /** 会话是不是本人：不是时停止续期，回到本人时立即续期一次（granted 时进入） */
+  /**
+   * 会话是不是本人：不是时停止续期，回到本人时立即续期一次（granted 时进入）——连着的会话类失败的第二次起不立即续期，按续期的节奏再续（见文件头）
+   */
   readonly setActive: (active: boolean) => void
   /** 撤回（页面关闭、编辑器建不起来）：有请求就尽力取消（不等结果），停下，不说明 */
   readonly withdraw: () => void
@@ -129,6 +135,11 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
   let cancelTimer: (() => void) | undefined
   /** 在途的续期属于哪一轮：同一轮里同时只有一个；之前的轮次在途的那一个回来时作废，不挡住新的一轮 */
   let renewingRound: number | undefined
+  /**
+   * 连着的会话类失败（续期、取消得到未登录或令牌失效）：发出、续期、取消成功了才清零——别的失败（网络、5xx）说明不了会话，不清零；会话不是本人时
+   * （setActive(false)）清零。第二次起回到本人时不立即续期（见文件头）
+   */
+  let sessionFailures = 0
   let active = true
   let disposed = false
 
@@ -171,6 +182,12 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
       cancelTimer = undefined
       void renew()
     }, delayMs)
+  }
+
+  /** 续期、取消得到未登录或令牌失效：记下连着的一次，交给页面确认会话（照常等） */
+  function sessionProblem(error: ApiError): void {
+    sessionFailures += 1
+    options.onSessionProblem(error)
   }
 
   /** 编辑权交给了本页（或者空着）：不再续期；看得见、会话是本人时进入编辑 */
@@ -243,6 +260,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     let outcome: EditRequestOutcome
     try {
       outcome = await api.renew(documentId)
+      sessionFailures = 0
     }
     catch (error) {
       if (round !== rounds || disposed)
@@ -253,7 +271,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
         return
       }
       if (isAuthenticationError(error) || isCsrfTokenError(error))
-        options.onSessionProblem(error)
+        sessionProblem(error)
       schedule(Math.max(0, sentAt + REQUEST_RENEW_MS - clock.now()))
       return
     }
@@ -296,6 +314,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
       let outcome: EditRequestOutcome
       try {
         outcome = await api.send(documentId)
+        sessionFailures = 0
       }
       catch (error) {
         if (round === rounds && !disposed) {
@@ -334,12 +353,13 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
       set({ kind: 'cancelling', holder })
       try {
         await api.cancel(documentId)
+        sessionFailures = 0
       }
       catch (error) {
         if (round !== rounds || disposed)
           return
         if (isAuthenticationError(error) || isCsrfTokenError(error))
-          options.onSessionProblem(error)
+          sessionProblem(error)
         // 没取消成：请求还在（结果未知时下一次续期见分晓），回到等待、说明原因，接着续期
         set({ kind: 'waiting', holder, cancelFailure: error })
         void renew()
@@ -354,13 +374,21 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     setActive: (next) => {
       active = next
       if (!next) {
+        // 会话不是本人：之前的会话类失败有了真正的原因（不是"服务端一直拒绝"）——清零，回到本人时立即续期（复核 D1）
+        sessionFailures = 0
         stopTimer()
         return
       }
-      if (progress?.kind === 'granted')
+      if (progress?.kind === 'granted') {
         tryEnter()
-      else
-        void renew()
+        return
+      }
+      // 连着的会话类失败的第二次起：服务端一直拒绝而确认照常是本人，立即续期只会再被拒——按续期的节奏再续（见文件头，审查 B1）
+      if (sessionFailures > 1) {
+        schedule(REQUEST_RENEW_MS)
+        return
+      }
+      void renew()
     },
 
     withdraw: () => {

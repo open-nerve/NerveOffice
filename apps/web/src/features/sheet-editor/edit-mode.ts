@@ -2013,15 +2013,18 @@ export function createEditMode(options: EditModeOptions): EditMode {
       const previous = session
       session = next
       syncSaving()
-      // 请求方这一侧：会话不是本人时不续期，回到本人时立即续期一次（M3-P5）
-      requests.setActive(next === 'active')
       if (next !== 'active') {
+        // 请求方这一侧：会话不是本人时不续期（M3-P5）
+        requests.setActive(false)
         lease?.pause()
         checks.stop()
         return
       }
-      // 从未登录或换了人回到本人：之前"登录已过期""请求已失效"这类保存失败的说明不再成立（复验 RB2）
       if (previous !== 'active') {
+        // 请求方这一侧：真的从不是本人回到本人时立即续期一次（M3-P5）。页面确认会话照常是本人（一直是本人：续期得到会话类失败之后的确认）时
+        // 不让它立即续期——服务端一直拒绝时那只会再被拒、再要确认一次，续期照它自己的节奏（审查 B1，edit-request.ts）
+        requests.setActive(true)
+        // 从未登录或换了人回到本人：之前"登录已过期""请求已失效"这类保存失败的说明不再成立（复验 RB2）
         coordinator?.dismissSessionProblem()
         if (mode.kind === 'reading')
           checks.checkNow()
