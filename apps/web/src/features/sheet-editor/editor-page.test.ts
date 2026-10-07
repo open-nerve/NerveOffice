@@ -1,4 +1,4 @@
-import type { AcquiredEditLease, CreatedDocument, DocumentDetail, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, HandedOverEditLease, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
@@ -43,6 +43,11 @@ const NEXT_CREDENTIALS = { token: NEXT_TOKEN, writeEpoch: 8 }
 
 /** 另存为副本得到的新文档 */
 const COPY_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000c1'
+
+/** 请求编辑与交出（M3-P5）：别人（鲍勃）在编辑，请求在等；交出之后留给请求方 */
+const BOB_EDITING = { holder: { id: BOB.user.id, username: 'bob', displayName: '鲍勃' }, lastActiveAt: '2026-09-27T03:00:00.000Z', sameUser: false, sameSession: false }
+const REQUEST_PENDING: EditRequestOutcome = { kind: 'pending', id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requestedAt: '2026-09-27T03:01:00.000Z', expiresAt: '2026-09-27T03:11:00.000Z', holder: BOB_EDITING }
+const HANDED_OVER: HandedOverEditLease = { reservedFor: BOB_EDITING.holder, reservedUntil: '2026-09-27T03:03:00.000Z' }
 
 /** 打开自检失败（M3-P4）：编辑器没有完整载入（批注的插件没有注册） */
 const NOTE_MISSING = { ok: false, failures: [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }] } as const satisfies OpenCheck
@@ -237,6 +242,8 @@ function setup(options: Setup = {}) {
     acquire: vi.fn(options.editLease?.acquire ?? (async (): Promise<AcquiredEditLease> => ACQUIRED)),
     renew: vi.fn(options.editLease?.renew ?? (async (): Promise<RenewedEditLease> => RENEWED)),
     release: vi.fn(options.editLease?.release ?? (async (): Promise<void> => {})),
+    handOver: vi.fn(options.editLease?.handOver ?? (async (): Promise<HandedOverEditLease> => HANDED_OVER)),
+    decline: vi.fn(options.editLease?.decline ?? (async (): Promise<void> => {})),
   }
   const overrides = options.api ?? {}
   const api = {
@@ -250,6 +257,11 @@ function setup(options: Setup = {}) {
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...DETAIL, id: COPY_ID, title: '周报（冲突副本 2026-10-04 15:30）', revision: 1, replayed: false }))),
     reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
     editLease,
+    editRequest: {
+      send: vi.fn(overrides.editRequest?.send ?? (async (): Promise<EditRequestOutcome> => REQUEST_PENDING)),
+      renew: vi.fn(overrides.editRequest?.renew ?? (async (): Promise<EditRequestOutcome> => REQUEST_PENDING)),
+      cancel: vi.fn(overrides.editRequest?.cancel ?? (async (): Promise<void> => {})),
+    },
   } satisfies EditorPageApi
   const createEditor = vi.fn(options.createEditor ?? (async () => {
     const next = fakes.length === 0 ? fake : fakeEditor()
@@ -2384,5 +2396,94 @@ describe('交接规则的页面接线（M3-P5 设计 §3.1、§3.7、§3.9）', 
     window.dispatchEvent(new Event('pagehide'))
     expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
     expect(storage.items.size).toBe(0)
+  })
+})
+
+describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
+  /** 鲍勃在编辑（爱丽丝能编辑） */
+  async function BOB_STATUS(): Promise<FetchedEditStatus> {
+    return { status: { revision: 3, editor: BOB_EDITING, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }
+  }
+  /** 心跳带来的请求：鲍勃在请求编辑 */
+  const INCOMING = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requester: BOB_EDITING.holder, requestedAt: '2026-09-27T03:01:00.000Z' }
+
+  it('"请求编辑""取消请求"：与"编辑"同一个会话确认——会话不是本人时先向服务端确认，还是别人就不发；确认是本人之后发出、等待，取消', async () => {
+    const { editorPage, api, fromOtherTab } = setup({ editIntent: false, api: { editStatus: BOB_STATUS } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { holder: { username: 'bob' } } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.requestEditing()
+    expect(api.editRequest.send).not.toHaveBeenCalled()
+    await editorPage.requestEditing()
+    expect(api.editRequest.send).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.cancelRequest()
+    expect(api.editRequest.cancel).not.toHaveBeenCalled()
+    await editorPage.cancelRequest()
+    expect(api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: undefined })
+  })
+
+  it('持有者提示里的"交出"：先确认会话（同退出编辑），先保存再交出，回到阅读并说明交给了谁', async () => {
+    const { editorPage, editLease, time, activity } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+    await editorPage.load()
+    activity.fire()
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: { id: INCOMING.id } }))
+    await editorPage.handOver()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'handed-over', auto: false } }))
+    expect(editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, INCOMING.id)
+    expect(editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('持有者提示里的"继续编辑"：会话不是本人时不谢绝；确认是本人之后谢绝，提示消失', async () => {
+    const { editorPage, editLease, time, activity, api, fromOtherTab } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+    await editorPage.load()
+    activity.fire()
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: { id: INCOMING.id } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.keepEditing()
+    expect(editLease.decline).not.toHaveBeenCalled()
+    await editorPage.keepEditing()
+    expect(editLease.decline).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, INCOMING.id)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: undefined })
+  })
+
+  it('页面关闭（pagehide）时有请求在等、保存不忙：用交出代替释放（keepalive，不看结果）', async () => {
+    const { editorPage, editLease, time, activity } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+    await editorPage.load()
+    activity.fire()
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: { id: INCOMING.id } }))
+    window.dispatchEvent(new Event('pagehide'))
+    await settle()
+    expect(editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, INCOMING.id)
+    expect(editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('页面关闭时本页在请求编辑：尽力取消请求', async () => {
+    const { editorPage, api } = setup({ editIntent: false, api: { editStatus: BOB_STATUS } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { holder: { username: 'bob' } } }))
+    await editorPage.requestEditing()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+  })
+
+  it('载入时详情里的"能不能强制接管"交给阅读（之后随编辑状态更新）', async () => {
+    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canTakeOver: true } }), editStatus: async () => new Promise<FetchedEditStatus>(() => {}) } })
+    await editorPage.load()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', canTakeOver: true })
   })
 })

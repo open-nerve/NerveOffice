@@ -36,8 +36,10 @@
 // - 被接管（M3-P5 设计 §3.7、§3.8：续租或保存得到 taken_over）：不续上（编辑权是有意交给别处的，续上就是抢回来）——本人在另一台设备或浏览器上
 //   接手（forced 为假）与空间管理员强制接管（forced 为真）分开交给页面；
 // - 本人接管（M3-P5 设计 §3.7，"在此编辑"）：申请带 takeover: 'self'（只给用户发起的那一次，续上从不带）；被自己占着时要不要隔一会儿再试
-//   由页面判断（本浏览器里有标签页持有本机锁时不必再试：那不是刷新时晚到的释放）
-import type { AcquiredEditLease, DocumentEditor, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
+//   由页面判断（本浏览器里有标签页持有本机锁时不必再试：那不是刷新时晚到的释放）；
+// - 请求编辑（M3-P5 设计 §3.6）：心跳的响应带着待回应的请求（没有时为 null），每次续租成功都交给页面（onRequest）；交出与谢绝由页面带着
+//   现在的令牌直接发（edit-mode.ts），交出之后服务端已经结束这一代，页面 abandon（不再续租、不发释放）
+import type { AcquiredEditLease, DocumentEditor, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, HandedOverEditLease, PendingEditRequest, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
@@ -105,6 +107,13 @@ export interface EditLeaseApi {
    * 两个请求不能交错，结果未知时不申请
    */
   readonly release: (documentId: string, token: string) => Promise<void>
+  /**
+   * 交出（M3-P5 设计 §3.6，keepalive）：把编辑权交给心跳带来的那个请求（requestId），交回留给了谁、留到何时。请求已不在时抛出
+   * EDIT_REQUEST_GONE（租约不动），这一代已失效时 EDIT_LEASE_LOST
+   */
+  readonly handOver: (documentId: string, token: string, requestId: string) => Promise<HandedOverEditLease>
+  /** 谢绝（持有者选了"继续编辑"）：标识对不上时服务端同样什么也不做；这一代已失效时抛出 EDIT_LEASE_LOST */
+  readonly decline: (documentId: string, token: string, requestId: string) => Promise<void>
 }
 
 /** 正在编辑的人（申请被占用时服务端给出） */
@@ -203,8 +212,9 @@ export interface EditLease {
   /** 恢复续上（空闲释放没成、留在编辑）：停止期间人回来过（dormant 而人在）就随即续上 */
   readonly allowRecovery: () => void
   /**
-   * 放弃这一代（M3-P5 设计 §3.1 第 2 条：本机锁被本浏览器的另一个标签页抢走——服务端批给了那边，本页这一代必然已经失效）：
-   * 停止续租与续上，不发释放（令牌已经对不上），不通知页面。终态；进行中的续上回来时新的一代随即放掉
+   * 放弃这一代：停止续租与续上，不发释放，不通知页面。终态；进行中的续上回来时新的一代随即放掉。用在服务端已经不认这一代的时候——
+   * 本机锁被本浏览器的另一个标签页抢走（M3-P5 设计 §3.1 第 2 条：服务端批给了那边，本页这一代必然已经失效，令牌已经对不上）；
+   * 交出之后（M3-P5 设计 §3.6：服务端已经结束这一代、留给请求方；页面关闭时发了交出的也是）
    */
   readonly abandon: () => void
   /**
@@ -241,6 +251,11 @@ export interface EditLeaseOptions {
    * 每份租约至多一次
    */
   readonly onIncompatible: (kind: Incompatibility) => void
+  /**
+   * 每次续租成功（这一代还在用时）：心跳的响应带来的待回应的请求编辑（M3-P5 设计 §3.6），没有时为 null——请求方取消了、过期了、
+   * 被谢绝了都是 null。不需要时不给
+   */
+  readonly onRequest?: ((request: PendingEditRequest | null) => void) | undefined
 }
 
 /**
@@ -537,8 +552,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     const sentAt = clock.now()
     const round = resumes
     const used = credentials.token
+    let renewed: RenewedEditLease | undefined
     try {
-      await api.renew(documentId, used, idleSeconds())
+      renewed = await api.renew(documentId, used, idleSeconds())
       sessionFailures = 0
     }
     catch (error) {
@@ -566,6 +582,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       }
       // 网络、5xx、回包读不出来：结果未知，下一次照常重试，到期由服务端判断
     }
+    // 这一代还在用（没有释放、失效、放弃）：心跳带来的请求交给页面（在 try 之外：页面那边出错不当作续租失败）
+    if (renewed !== undefined && !ended())
+      options.onRequest?.(renewed.request)
     if (state === 'holding' && !renewAgain && recovery === undefined)
       scheduleRenewal(Math.max(0, sentAt + HEARTBEAT_MS - clock.now()))
   }

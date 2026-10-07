@@ -2,7 +2,7 @@
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
 import type { ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
-import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 
 /** 本人接管的按钮（M3-P5 设计 §3.7）：说明里提到它时用同一个名字 */
 const TAKE_OVER_HERE = '在此编辑'
@@ -18,6 +18,15 @@ const TAKEOVER_FAILURES: Readonly<Record<'not-saved' | 'conflict' | 'session', s
 
 /** 空闲释放的阈值（分钟，US-M3-07）：时长取自契约，阈值改了说法跟着改 */
 const IDLE_RELEASE_MINUTES = EDIT_IDLE_RELEASE_SECONDS / 60
+
+/** 有人请求编辑时自动交出的空闲阈值（分钟，US-M3-06）：同上 */
+const HANDOVER_IDLE_MINUTES = EDIT_HANDOVER_IDLE_SECONDS / 60
+
+/** 请求编辑的按钮（M3-P5 设计 §3.6）：说明里提到它时用同一个名字 */
+const REQUEST_EDIT = '请求编辑'
+const CANCEL_REQUEST = '取消请求'
+const HAND_OVER = '交出'
+const KEEP_EDITING = '继续编辑'
 
 /**
  * 快照被服务端拒绝时按违反的规则给的说法（SNAPSHOT_INVALID 的 details.rule，M3-P3 设计 §3.10）：链接、图片、资源各一类，
@@ -243,6 +252,24 @@ export const editorMessages = {
     lostTakenOverHere: '你在本浏览器的另一个标签页接手了编辑',
     /** 本人在另一台设备或浏览器上接手了编辑（M3-P5：续租或保存得到 taken_over、forced 为假） */
     lostTakenOverElsewhere: '你在另一台设备或浏览器上接手了编辑',
+    /**
+     * 有人请求编辑时页头下面的提示（M3-P5 设计 §3.6，US-M3-06）：分组的标题（请求方经人名组件呈现）、两个按钮与一行静态说明（不倒计时）。
+     * 提示出现时不移动焦点，读屏在一直在的状态区里播 requestAnnouncement 一次
+     */
+    requestTitle: <T>(requester: T): Phrase<T> => [requester, ' 请求编辑这份文档'],
+    requestNote: `你停下操作 ${HANDOVER_IDLE_MINUTES} 分钟后会自动保存并交给对方`,
+    handOver: HAND_OVER,
+    /** "交出"之后、保存并交出的过程中：按钮留着、不可用 */
+    handingOver: '正在交出…',
+    keepEditing: KEEP_EDITING,
+    /** 提示出现时读屏状态区里的那一句 */
+    requestAnnouncement: <T>(requester: T): Phrase<T> => [requester, ` 请求编辑这份文档，可以在页头下方选择"${HAND_OVER}"或"${KEEP_EDITING}"`],
+    /** 请求方取消了请求（提示随之消失） */
+    requestWithdrawn: <T>(requester: T): Phrase<T> => [requester, ' 已取消请求'],
+    /** 交出没有成功（没有结果、会话的问题；没存上的由保存的状态说明）：请求还在 */
+    handOverFailed: (reason: string) => `没能交出编辑权：${reason}。请求还在，可以再点"${HAND_OVER}"`,
+    /** 谢绝没有成功 */
+    declineFailed: (reason: string) => `没能回复请求：${reason}。可以再点"${KEEP_EDITING}"`,
   },
   /** 阅读与编辑（M3-P2 设计 §3.4）：打开即阅读，点"编辑"进入编辑，"退出编辑"回到阅读；模式切换一律重建编辑器 */
   mode: {
@@ -263,6 +290,37 @@ export const editorMessages = {
     takeoverFailed: (reason: 'not-saved' | 'conflict' | 'session') => `${TAKEOVER_FAILURES[reason]}。点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`,
     /** 本页交给了本浏览器的另一个标签页（US-M3-08）：阅读时读屏状态区里的说明 */
     handedOverTab: '已在本浏览器的另一个标签页接着编辑',
+    /** 请求编辑（M3-P5 设计 §3.6，US-M3-06）：持有者是别人、自己能编辑时换掉"编辑"；同一个按钮之后说正在请求、取消请求、正在取消 */
+    requestEdit: REQUEST_EDIT,
+    requesting: '正在请求…',
+    cancelRequest: CANCEL_REQUEST,
+    cancellingRequest: '正在取消…',
+    /**
+     * 等待中读屏状态区里的说明（不倒计时）：在等谁（经人名组件呈现，没人在编辑时不说是谁），他停下操作 2 分钟后会自动交过来，可以取消
+     */
+    requestWaiting: <T>(holder: T | undefined): Phrase<T> => holder === undefined
+      ? [`已请求编辑，等待正在编辑的人回应；你也可以${CANCEL_REQUEST}`]
+      : ['已请求编辑，等待 ', holder, ' 回应。', holder, ` 停下操作 ${HANDOVER_IDLE_MINUTES} 分钟后会自动保存并交给你；你也可以${CANCEL_REQUEST}`],
+    /** 编辑权交给了本页（或者空着），页面在后台：回到这一页时进入编辑 */
+    requestGranted: '可以进入编辑了：回到这一页时自动进入编辑',
+    /** 没取消成：请求还在 */
+    cancelRequestFailed: (reason: string) => `没能取消请求：${reason}。请求还在，可以再点"${CANCEL_REQUEST}"`,
+    /** 交给了请求编辑的人（持有者这一侧回到阅读之后）：auto 是空闲满 2 分钟自动交出的 */
+    handedOver: <T>(to: T, auto: boolean): Phrase<T> => [auto ? `你 ${HANDOVER_IDLE_MINUTES} 分钟没有操作，已保存并把编辑权交给了 ` : '已保存并把编辑权交给了 ', to],
+    /** 编辑权刚交给了别人、还在保留期内（申请得到 EDIT_LEASE_RESERVED、请求得到 reservedForOther）：until 是服务端的时刻按页面的时区写成的 HH:mm */
+    reservedFor: <T>(person: T, until: string): Phrase<T> => ['编辑权刚交给了 ', person, `，留到 ${until}`],
+    /** 持有者选了"继续编辑"：不能强制接管的人另说可以请空间管理员强制接管 */
+    requestDeclined: <T>(holder: T, canTakeOver: boolean): Phrase<T> => [holder, ` 选择继续编辑，你的请求已取消${canTakeOver ? '' : '。着急时可以请空间管理员强制接管'}`],
+    /** 别人先请求了（单槽、先到先得）：本页的请求没有发出 */
+    requestOccupied: <T>(requester: T): Phrase<T> => [requester, ' 已在请求编辑这份文档，你的请求没有发出'],
+    /** 请求已经不在了（换了一代、过期、被别人的新请求替换） */
+    requestGone: `你的编辑请求已经失效（例如正在编辑的人换了），可以重新${REQUEST_EDIT}`,
+    /** 等待中本页空闲满 10 分钟，取消了 */
+    requestIdle: `你 ${IDLE_RELEASE_MINUTES} 分钟没有操作，已取消编辑请求`,
+    /** 发出请求时不能编辑了（403）：reason 是服务端这次给的原因 */
+    requestDenied: (reason: string) => `没能请求编辑：你已没有编辑这份文档的权限（${reason}）`,
+    /** 没能请求编辑（网络、服务端出错等）：可以再试 */
+    requestFailed: (reason: string) => `没能请求编辑：${reason}`,
     exit: '退出编辑',
     exiting: '正在退出编辑…',
     /** 空闲释放的过程中（US-M3-07）：先保存、再释放编辑权、回到阅读 */

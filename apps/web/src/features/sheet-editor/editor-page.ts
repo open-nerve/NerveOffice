@@ -12,7 +12,8 @@
 // 交接规则（M3-P5）：本页的键盘、鼠标操作由组装处给出（edit-lease.ts 的 trackActivity：只认可信事件、零位移的移动不算——心跳的空闲与
 // 空闲释放都按它）；这份文档在同一个浏览器里的锁与交接频道（same-browser.ts）、刷新时在途的保存的记号（pending-save-marker.ts）按文档
 // 交给编辑模式，频道随页面卸载关掉。"在此编辑"（本人接管，设计 §3.7）与"编辑"一样先确认会话；交接频道上只理会同一个人的请求，本页的用户
-// 取自载入时确认的会话。
+// 取自载入时确认的会话。请求编辑（设计 §3.6）："请求编辑""取消请求"与持有者提示里的"交出""继续编辑"都是写的操作，与"编辑"一样先确认会话；
+// 能不能强制接管取自载入时的详情（之后随编辑状态更新）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -181,6 +182,14 @@ export interface EditorPage {
   readonly takeOverHere: () => Promise<void>
   /** "在此编辑"那边没能交出之后选"取消" */
   readonly cancelTakeOver: () => void
+  /** "请求编辑"（M3-P5 设计 §3.6）：会话是本人时发出，之后等待、编辑权交给本页时自动进入编辑 */
+  readonly requestEditing: () => Promise<void>
+  /** "取消请求"：会话是本人时取消 */
+  readonly cancelRequest: () => Promise<void>
+  /** 持有者提示里的"交出"：会话是本人时先保存再交出，回到阅读 */
+  readonly handOver: () => Promise<void>
+  /** 持有者提示里的"继续编辑"：会话是本人时谢绝这个请求，提示消失 */
+  readonly keepEditing: () => Promise<void>
   /** "退出编辑"：先保存，释放编辑权，重建为只读 */
   readonly exitEditing: () => Promise<void>
   /** "有更新，点击刷新" */
@@ -659,7 +668,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
       // 阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）：详情说的是它那一版的，与载入的内容是同一版时才用（并行读取之间有人保存过时下一次检查补上）
       const formulasPending = document.formulasPending && document.revision === content.revision
-      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending }, { enterEdit: options.editIntent.requested && canEdit, blocked })
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: options.editIntent.requested && canEdit, blocked })
       if (disposed)
         return
       if (outcome.kind === 'load-failed') {
@@ -703,6 +712,34 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.takeOver()
     },
     cancelTakeOver: () => mode?.cancelTakeOver(),
+    requestEditing: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      // 发出请求是写的操作：与"编辑"同一个会话确认
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.requestEdit()
+    },
+    cancelRequest: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.cancelRequest()
+    },
+    handOver: async () => {
+      if (mode?.view().mode.kind !== 'editing')
+        return
+      // 交出要先保存、带着令牌交出：与退出编辑同一个会话确认（换了人、令牌已知失效时不发，留在编辑）
+      if (await readyToWrite())
+        await mode.handOver()
+    },
+    keepEditing: async () => {
+      if (mode?.view().mode.kind !== 'editing')
+        return
+      if (await readyToWrite())
+        await mode.decline()
+    },
     exitEditing: async () => {
       if (mode?.view().mode.kind !== 'editing')
         return

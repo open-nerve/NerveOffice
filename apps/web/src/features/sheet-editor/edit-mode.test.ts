@@ -1,4 +1,4 @@
-import type { AcquiredEditLease, CreatedDocument, DocumentEditor, OpenCheckFailure, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { AcquiredEditLease, CreatedDocument, DocumentEditor, EditRequestOutcome, HandedOverEditLease, OpenCheckFailure, PendingEditRequest, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
@@ -7,7 +7,7 @@ import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
-import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
@@ -24,6 +24,10 @@ import { PENDING_SAVE_POLL_MS, TAB_HANDOVER_BUSY_RETRY_MS } from './self-takeove
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-7a3b-8c4d-00000000aaaa'
 const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }
+/** 请求编辑的人（M3-P5） */
+const BEN = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e2', username: 'ben', displayName: '本' }
+/** 交出之后留给请求方到这个时刻（服务端的） */
+const RESERVED_UNTIL = '2026-10-04T03:05:00.000Z'
 
 /** 快照：本页的内容就是 v 这一项（假的编辑器按它捕获） */
 function snapshotOf(value: string): string {
@@ -224,6 +228,9 @@ const AMY_EDITING: DocumentEditor = { holder: AMY, lastActiveAt: '2026-10-04T03:
 /** 自己在编辑（编辑状态里是同一个人：另一个标签页，或者本页没能确认放掉的那一代） */
 const SELF_EDITING: DocumentEditor = { holder: AMY, lastActiveAt: '2026-10-04T03:03:00.000Z', sameUser: true, sameSession: false }
 
+/** 请求编辑在等艾米回应（M3-P5） */
+const REQUEST_PENDING: EditRequestOutcome = { kind: 'pending', id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requestedAt: '2026-10-04T03:01:00.000Z', expiresAt: '2026-10-04T03:11:00.000Z', holder: AMY_EDITING }
+
 /** 申请时被艾米占用 */
 const HELD_BY_AMY = new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑', { details: { ...AMY_EDITING, canTakeOver: false, request: null }, serverTime: Date.parse(ANSWERED_AT) })
 
@@ -329,6 +336,8 @@ function setup(options: Setup = {}) {
     acquire: vi.fn(options.editLease?.acquire ?? (async (): Promise<AcquiredEditLease> => ACQUIRED)),
     renew: vi.fn(options.editLease?.renew ?? (async (): Promise<RenewedEditLease> => RENEWED)),
     release: vi.fn(options.editLease?.release ?? (async (): Promise<void> => {})),
+    handOver: vi.fn(options.editLease?.handOver ?? (async (): Promise<HandedOverEditLease> => ({ reservedFor: BEN, reservedUntil: RESERVED_UNTIL }))),
+    decline: vi.fn(options.editLease?.decline ?? (async (): Promise<void> => {})),
   }
   const overrides = options.api ?? {}
   const api = {
@@ -340,6 +349,11 @@ function setup(options: Setup = {}) {
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...COPY, replayed: false }))),
     reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
     editLease,
+    editRequest: {
+      send: vi.fn(overrides.editRequest?.send ?? (async (): Promise<EditRequestOutcome> => REQUEST_PENDING)),
+      renew: vi.fn(overrides.editRequest?.renew ?? (async (): Promise<EditRequestOutcome> => REQUEST_PENDING)),
+      cancel: vi.fn(overrides.editRequest?.cancel ?? (async (): Promise<void> => {})),
+    },
   } satisfies EditModeApi
   const hooks = { saveUnauthenticated: vi.fn(), saveStale: vi.fn(), writeProblem: vi.fn(), readProblem: vi.fn() }
   const reportError = vi.fn()
@@ -432,7 +446,7 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })
     expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: false })
     expect(context.factory.created.map(fake => [fake.access, fake.snapshot, fake.viewState])).toEqual([['read', LOADED.snapshot, undefined]])
-    expect(readingOf(context.mode)).toEqual({ kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, formulasPending: false })
+    expect(readingOf(context.mode)).toEqual({ kind: 'reading', canEdit: true, canTakeOver: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, formulasPending: false })
     expect(context.mode.view()).toMatchObject({ surface: 'rendered', save: undefined })
     expect(context.editLease.acquire).not.toHaveBeenCalled()
     await settle()
@@ -3625,6 +3639,732 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(lostOf(context.mode).loss).toEqual({ kind: 'forced' })
       expect(context.api.save).toHaveBeenCalledOnce()
       expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    })
+  })
+})
+
+describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
+  const HANDOVER_MS = EDIT_HANDOVER_IDLE_SECONDS * 1000
+  const REQUEST_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000f1'
+  const OTHER_REQUEST_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000f2'
+  /** 心跳带来的请求：本在请求编辑 */
+  const INCOMING: PendingEditRequest = { id: REQUEST_ID, requester: BEN, requestedAt: '2026-10-04T03:01:00.000Z' }
+  /** 编辑时状态里的这个请求（没在谢绝、没有失败） */
+  const SHOWN = { id: REQUEST_ID, requester: BEN, declining: false, failure: undefined }
+
+  /** 之后的心跳都带来这个请求（null：没有请求） */
+  function heartbeatsCarry(context: ReturnType<typeof setup>, request: PendingEditRequest | null): void {
+    context.editLease.renew.mockResolvedValue({ ...RENEWED, request })
+  }
+
+  /** 编辑时的状态（不是编辑时抛错） */
+  function editingOf(mode: EditMode): Extract<EditModeState, { kind: 'editing' }> {
+    const current = modeOf(mode)
+    if (current.kind !== 'editing')
+      throw new Error(`现在不是编辑：${current.kind}`)
+    return current
+  }
+
+  /** 按先后记下每次状态变化时的状态 */
+  function recordModes(context: ReturnType<typeof setup>): EditModeState[] {
+    const seen: EditModeState[] = []
+    context.mode.subscribe(() => seen.push(modeOf(context.mode)))
+    return seen
+  }
+
+  /** 编辑、人有操作（不满 2 分钟），之后的心跳带来请求：提示出现 */
+  async function prompted(context: ReturnType<typeof setup>): Promise<void> {
+    await editing(context)
+    heartbeatsCarry(context, INCOMING)
+    context.act()
+    await context.time.advance(HEARTBEAT_MS)
+    expect(editingOf(context.mode).request).toEqual(SHOWN)
+  }
+
+  describe('持有者：心跳带来的请求', () => {
+    it('本页有操作（不满 2 分钟）：记下请求、显示提示（编辑的状态带着它）——不交出、不挂屏障（还是编辑，编辑器不换）', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      expect(modeOf(context.mode)).toEqual({ kind: 'editing', request: SHOWN, notice: undefined })
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      expect(context.factory.created).toHaveLength(2)
+      expect(context.factory.last().access).toBe('edit')
+      // 下一次心跳带来同一个请求：不重复处理
+      const before = context.mode.view().mode
+      await context.time.advance(HEARTBEAT_MS)
+      expect(context.mode.view().mode).toBe(before)
+    })
+
+    it('本页已空闲满 2 分钟时心跳带来请求：随即交出——同一步里挂上屏障（不显示提示）；先保存再交出（带令牌与请求的标识），停止续租（不发释放）、放锁，以只读重建，阅读里说明交给了谁（2 分钟没有操作）', async () => {
+      const context = setup({ activity: 'manual' })
+      await editing(context)
+      context.factory.last().edit('甲')
+      await context.time.advance(HANDOVER_MS)
+      const seen = recordModes(context)
+      heartbeatsCarry(context, INCOMING)
+      await context.time.advance(HEARTBEAT_MS)
+      await settle()
+      expect(seen.some(state => state.kind === 'editing' && state.request !== undefined)).toBe(false)
+      expect(seen[0]).toMatchObject({ kind: 'exiting', cause: 'handover-request' })
+      expect(context.api.save).toHaveBeenCalledOnce()
+      expect(context.editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, REQUEST_ID)
+      expect(context.api.save.mock.invocationCallOrder[0]).toBeLessThan(context.editLease.handOver.mock.invocationCallOrder[0] ?? 0)
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      expect(readingOf(context.mode)).toMatchObject({ notice: { kind: 'handed-over', to: BEN, auto: true }, request: undefined, releaseUnconfirmed: false })
+      expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('甲') })
+      expect(context.browser.holderOf(LOCK)).toBeUndefined()
+      // 这一代已经结束：不再续租
+      const renewals = context.editLease.renew.mock.calls.length
+      await context.time.advance(HEARTBEAT_MS * 3)
+      expect(context.editLease.renew).toHaveBeenCalledTimes(renewals)
+    })
+
+    it('空闲的起点取进入编辑的时刻：打开很久之后才进入编辑、请求随即到了也不交出（显示提示）；从进入的那一刻起满 2 分钟才交出', async () => {
+      const context = setup({ activity: 'manual' })
+      await opened(context)
+      await context.time.advance(HANDOVER_MS * 3)
+      await context.mode.enter()
+      heartbeatsCarry(context, INCOMING)
+      await context.time.advance(HEARTBEAT_MS)
+      expect(editingOf(context.mode).request).toEqual(SHOWN)
+      await context.time.advance(HANDOVER_MS - HEARTBEAT_MS - 1)
+      expect(modeOf(context.mode).kind).toBe('editing')
+      await context.time.advance(1)
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
+    it('提示在的时候：其间有操作就从最后一次操作重新算；一旦空闲满 2 分钟同样先保存再交出', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      await context.time.advance(60_000)
+      context.act()
+      await context.time.advance(HANDOVER_MS - 1)
+      expect(modeOf(context.mode).kind).toBe('editing')
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      await context.time.advance(1)
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
+    it('回到前台时（Safari 隐藏之后计时器停止）按隐藏之前的操作算：满 2 分钟就在可见性的通知里开始交出', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      context.page.set(true)
+      context.time.elapse(HANDOVER_MS)
+      context.page.set(false)
+      expect(modeOf(context.mode)).toMatchObject({ kind: 'exiting', cause: 'handover-request' })
+      await settle()
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
+    it('"交出"（人按的）：先挂屏障（exiting、handover-request，提示留着）再等面板、上传；存上了交出，阅读里说明交给了谁（不说没有操作）；公式没收齐也交出（带"公式待更新"）', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      const writer = context.factory.last()
+      writer.formulasSettled = false
+      writer.edit('甲')
+      const seenAtSettle: EditModeState[] = []
+      vi.mocked(writer.editor.settlePanels).mockImplementation(async () => {
+        seenAtSettle.push(modeOf(context.mode))
+      })
+      const handing = context.mode.handOver()
+      expect(modeOf(context.mode)).toEqual({ kind: 'exiting', cause: 'handover-request', request: SHOWN })
+      await handing
+      await settle()
+      expect(seenAtSettle[0]).toMatchObject({ kind: 'exiting', cause: 'handover-request' })
+      expect(context.api.save.mock.calls[0]?.[1]).toMatchObject({ formulasPending: true })
+      expect(context.editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, REQUEST_ID)
+      expect(readingOf(context.mode)).toMatchObject({ notice: { kind: 'handed-over', to: BEN, auto: false }, formulasPending: true })
+    })
+
+    it('交出时请求已经不在（EDIT_REQUEST_GONE）：留在编辑（不释放、锁留着、照常续租），提示消失，说明请求方取消了；之后不再自动交出', async () => {
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(new ApiError(409, 'EDIT_REQUEST_GONE', '请求已不在')) } })
+      await prompted(context)
+      heartbeatsCarry(context, null)
+      await context.mode.handOver()
+      await settle()
+      expect(modeOf(context.mode)).toEqual({ kind: 'editing', request: undefined, notice: { kind: 'request-withdrawn', requester: BEN } })
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      expect(context.browser.holderOf(LOCK)).toBe('this')
+      expect(context.factory.last().access).toBe('edit')
+      const renewals = context.editLease.renew.mock.calls.length
+      await context.time.advance(HANDOVER_MS * 2)
+      expect(context.editLease.renew.mock.calls.length).toBeGreaterThan(renewals)
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(modeOf(context.mode).kind).toBe('editing')
+    })
+
+    it.each(['handed_over', 'replaced'])('交出得到 EDIT_LEASE_LOST（%s：回包丢了之后的重试、请求方已经接手）：当作交出完成', async (reason) => {
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(leaseLost(reason)) } })
+      await prompted(context)
+      await context.mode.handOver()
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: false })
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    })
+
+    it('交出得到别的失效（被本人在别处接手）：按失去编辑权处理，不续上；本页的修改都已存上（不给副本）', async () => {
+      const takenOver = new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'taken_over', forced: false } })
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(takenOver) } })
+      await prompted(context)
+      context.factory.last().edit('甲')
+      await context.mode.handOver()
+      await settle()
+      await settle()
+      expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'taken-over', where: 'elsewhere' }, unsaved: false })
+      expect(context.api.save).toHaveBeenCalledOnce()
+      expect(context.editLease.acquire).toHaveBeenCalledOnce()
+      expect(context.editLease.release).not.toHaveBeenCalled()
+    })
+
+    it('交出没有结果（网络）：留在编辑，提示里说明原因、请求照旧在；自动交出的过一个心跳周期再试', async () => {
+      const failure = new NetworkError('断网')
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(failure) } })
+      await prompted(context)
+      // 提示出现在最后一次操作之后 10 秒：再过 1 分 50 秒空闲满 2 分钟
+      await context.time.advance(HANDOVER_MS - HEARTBEAT_MS)
+      await settle()
+      expect(editingOf(context.mode).request).toEqual({ ...SHOWN, failure: { action: 'handover', error: failure } })
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      await context.time.advance(IDLE_RECHECK_MS - 1)
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      context.editLease.handOver.mockResolvedValue({ reservedFor: BEN, reservedUntil: RESERVED_UNTIL })
+      await context.time.advance(1)
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledTimes(2)
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
+    it('交出迟迟没有回答：至多等 EXIT_RELEASE_WAIT_MS，留在编辑、说明原因（没有在时限之内得到回答）', async () => {
+      const answer = deferred<HandedOverEditLease>()
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => answer.promise } })
+      await prompted(context)
+      const handing = context.mode.handOver()
+      await settle()
+      await context.time.advance(EXIT_RELEASE_WAIT_MS - 1)
+      expect(modeOf(context.mode).kind).toBe('exiting')
+      await context.time.advance(1)
+      await handing
+      const failure = editingOf(context.mode).request?.failure
+      expect(failure?.action).toBe('handover')
+      expect(failure?.error).toBeInstanceOf(NetworkError)
+    })
+
+    it('交出得到会话类失败（令牌失效）：交给页面确认会话，留在编辑、说明原因', async () => {
+      const stale = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(stale) } })
+      await prompted(context)
+      await context.mode.handOver()
+      await settle()
+      expect(context.hooks.writeProblem).toHaveBeenCalledExactlyOnceWith(stale)
+      expect(editingOf(context.mode).request?.failure).toEqual({ action: 'handover', error: stale })
+    })
+
+    it('没存上（保存失败）：留在编辑、不交出（说明由保存的状态给出），请求照旧在；自动交出的过一个心跳周期再试，存得上之后交出', async () => {
+      const context = setup({ activity: 'manual', api: { save: async () => Promise.reject(new NetworkError('断网')) } })
+      await prompted(context)
+      context.factory.last().edit('甲')
+      await context.time.advance(HANDOVER_MS)
+      await settle()
+      expect(editingOf(context.mode).request).toEqual(SHOWN)
+      expect(context.mode.view().save?.status).toBe('failed')
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      context.api.save.mockResolvedValue(SAVED)
+      await context.time.advance(IDLE_RECHECK_MS)
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
+    it('再也存不上（版本冲突）：留在编辑，不再自动试（提示留着）', async () => {
+      const context = setup({ activity: 'manual', api: { save: async () => Promise.reject(new ApiError(409, 'DOCUMENT_REVISION_CONFLICT', '别处保存了更新的版本', { details: { currentRevision: 9, source: null } })) } })
+      await prompted(context)
+      context.factory.last().edit('甲')
+      await context.time.advance(HANDOVER_MS)
+      await settle()
+      expect(context.mode.view().save?.status).toBe('conflict')
+      const saves = context.api.save.mock.calls.length
+      const seen = recordModes(context)
+      await context.time.advance(IDLE_RECHECK_MS * 3)
+      expect(seen.filter(state => state.kind === 'exiting')).toEqual([])
+      expect(context.api.save).toHaveBeenCalledTimes(saves)
+      expect(editingOf(context.mode).request).toEqual(SHOWN)
+    })
+
+    it.each([
+      ['会话不可写', { writable: false }],
+      ['没联网', { online: false }],
+    ] as const)('%s时自动交出不开始（不挂屏障、不上传），一个心跳周期之后再看', async (_case, patch) => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      context.factory.last().edit('甲')
+      context.autosave.setPage(patch)
+      const seen = recordModes(context)
+      await context.time.advance(HANDOVER_MS)
+      await settle()
+      expect(seen.filter(state => state.kind === 'exiting')).toEqual([])
+      expect(context.api.save).not.toHaveBeenCalled()
+      context.autosave.setPage({ writable: true, online: true })
+      await context.time.advance(IDLE_RECHECK_MS)
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
+    it('"继续编辑"：谢绝（带令牌与请求的标识），进行中按钮不可用（declining）；成了提示消失，之后迟到的心跳带回同一个请求也不再显示，不再自动交出', async () => {
+      const answer = deferred<void>()
+      const context = setup({ activity: 'manual', editLease: { decline: async () => answer.promise } })
+      await prompted(context)
+      const declining = context.mode.decline()
+      expect(editingOf(context.mode).request).toEqual({ ...SHOWN, declining: true })
+      answer.resolve()
+      await declining
+      expect(context.editLease.decline).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, REQUEST_ID)
+      expect(editingOf(context.mode)).toMatchObject({ request: undefined, notice: undefined })
+      // 谢绝之前发出的心跳迟到，还带着它：不再显示
+      await context.time.advance(HEARTBEAT_MS)
+      expect(editingOf(context.mode).request).toBeUndefined()
+      await context.time.advance(HANDOVER_MS * 2)
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      expect(modeOf(context.mode).kind).toBe('editing')
+    })
+
+    it('谢绝期间心跳说请求不在了（谢绝已经提交）：不说"已取消请求"，等谢绝的结果', async () => {
+      const answer = deferred<void>()
+      const context = setup({ activity: 'manual', editLease: { decline: async () => answer.promise } })
+      await prompted(context)
+      const declining = context.mode.decline()
+      heartbeatsCarry(context, null)
+      await context.time.advance(HEARTBEAT_MS)
+      expect(editingOf(context.mode)).toMatchObject({ request: { declining: true }, notice: undefined })
+      answer.resolve()
+      await declining
+      expect(editingOf(context.mode)).toMatchObject({ request: undefined, notice: undefined })
+    })
+
+    it('谢绝没成（网络）：提示留着、说明原因，可以再按；会话类失败交给页面确认会话', async () => {
+      const failure = new NetworkError('断网')
+      const context = setup({ activity: 'manual', editLease: { decline: async () => Promise.reject(failure) } })
+      await prompted(context)
+      await context.mode.decline()
+      expect(editingOf(context.mode).request).toEqual({ ...SHOWN, failure: { action: 'decline', error: failure } })
+      const stale = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+      context.editLease.decline.mockRejectedValueOnce(stale)
+      await context.mode.decline()
+      expect(context.hooks.writeProblem).toHaveBeenCalledExactlyOnceWith(stale)
+      context.editLease.decline.mockResolvedValueOnce(undefined)
+      await context.mode.decline()
+      expect(editingOf(context.mode).request).toBeUndefined()
+    })
+
+    it('谢绝时得知这一代失效、续上了：用现在的编辑权再谢绝一次', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      context.editLease.decline.mockRejectedValueOnce(leaseLost('expired'))
+      context.editLease.acquire.mockResolvedValueOnce({ ...ACQUIRED, token: 'M'.repeat(43), writeEpoch: 8 })
+      await context.mode.decline()
+      expect(context.editLease.decline.mock.calls.map(call => call[1])).toEqual([TOKEN, 'M'.repeat(43)])
+      expect(editingOf(context.mode).request).toBeUndefined()
+    })
+
+    it('请求方取消了（心跳不再带来它）：提示消失，说明一句；之后不再自动交出。之后又来了新的请求：说明消失、提示换成新的', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      heartbeatsCarry(context, null)
+      await context.time.advance(HEARTBEAT_MS)
+      expect(editingOf(context.mode)).toEqual({ kind: 'editing', request: undefined, notice: { kind: 'request-withdrawn', requester: BEN } })
+      await context.time.advance(HANDOVER_MS * 2)
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      context.act()
+      heartbeatsCarry(context, { ...INCOMING, id: OTHER_REQUEST_ID, requester: AMY })
+      await context.time.advance(HEARTBEAT_MS)
+      expect(editingOf(context.mode)).toEqual({ kind: 'editing', request: { ...SHOWN, id: OTHER_REQUEST_ID, requester: AMY }, notice: undefined })
+    })
+
+    it('进入编辑的过程中心跳就带来了请求：进入之后按编辑时的规则处理（显示提示）', async () => {
+      const context = setup({ activity: 'manual', editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+      await opened(context)
+      context.act()
+      const hold = context.factory.holdNext()
+      const entering = context.mode.enter()
+      await settle()
+      await context.time.advance(HEARTBEAT_MS)
+      expect(modeOf(context.mode).kind).toBe('entering')
+      context.act()
+      hold.release()
+      await entering
+      expect(editingOf(context.mode).request).toEqual(SHOWN)
+    })
+
+    it('新的一代：之前那一代（没能进入编辑时）记下的请求不再算，之后的心跳带来的才算', async () => {
+      const content = deferred<LoadedContent>()
+      const context = setup({ activity: 'manual', api: { contentIfChanged: async () => content.promise }, editLease: { acquire: async () => ({ ...ACQUIRED, revision: 4 }), renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+      await opened(context)
+      context.act()
+      // 申请得到更新的修订号、取内容的时候心跳带来了请求，之后取内容失败：没能进入编辑
+      const entering = context.mode.enter()
+      await settle()
+      await context.time.advance(HEARTBEAT_MS)
+      content.reject(new NetworkError('断网'))
+      await entering
+      expect(readingOf(context.mode).notice?.kind).toBe('enter-failed')
+      // 再进入（新的一代）：还没有心跳带来请求，不显示提示
+      context.api.contentIfChanged.mockResolvedValue({ snapshot: snapshotOf('服务端的'), revision: 4 })
+      heartbeatsCarry(context, null)
+      context.act()
+      await context.mode.enter()
+      expect(editingOf(context.mode)).toMatchObject({ request: undefined, notice: undefined })
+    })
+  })
+
+  describe('退出、空闲释放与页面关闭时有请求在等：用交出代替释放', () => {
+    it('退出编辑：存上了就交出（不释放），阅读里说明交给了谁', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      context.factory.last().edit('甲')
+      await context.mode.exit()
+      expect(context.api.save).toHaveBeenCalledOnce()
+      expect(context.editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, REQUEST_ID)
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      expect(readingOf(context.mode)).toMatchObject({ notice: { kind: 'handed-over', to: BEN, auto: false }, releaseUnconfirmed: false })
+      expect(context.browser.holderOf(LOCK)).toBeUndefined()
+    })
+
+    it.each([
+      ['请求刚取消（EDIT_REQUEST_GONE）', new ApiError(409, 'EDIT_REQUEST_GONE', '请求已不在')],
+      ['交出没有结果（网络）', new NetworkError('断网')],
+    ])('退出编辑时%s：照常释放，回到阅读不另说明', async (_case, error) => {
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(error) } })
+      await prompted(context)
+      await context.mode.exit()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+      expect(readingOf(context.mode)).toMatchObject({ notice: undefined, releaseUnconfirmed: false })
+    })
+
+    it('正在谢绝时退出：不交出（人刚选了继续编辑），照常释放', async () => {
+      const answer = deferred<void>()
+      const context = setup({ activity: 'manual', editLease: { decline: async () => answer.promise } })
+      await prompted(context)
+      void context.mode.decline()
+      await context.mode.exit()
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      expect(context.editLease.release).toHaveBeenCalledOnce()
+      answer.resolve()
+    })
+
+    it('页面关闭：保存不忙时用 keepalive 的交出代替释放（不看结果），这一代随即停止续租', async () => {
+      const context = setup({ activity: 'manual' })
+      await prompted(context)
+      context.mode.releaseOnHide()
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, REQUEST_ID)
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      expect(context.browser.holderOf(LOCK)).toBeUndefined()
+      const renewals = context.editLease.renew.mock.calls.length
+      await context.time.advance(HEARTBEAT_MS * 3)
+      expect(context.editLease.renew).toHaveBeenCalledTimes(renewals)
+    })
+
+    it('页面关闭时交出失败也不抛出（不留下没处理的拒绝）', async () => {
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(new NetworkError('断网')) } })
+      await prompted(context)
+      context.mode.releaseOnHide()
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+    })
+
+    it('页面关闭时保存在途（或者结果未知）：不释放、也不交出，记下记号（P4、R1 照旧）', async () => {
+      const reply = deferred<SaveContentResponse>()
+      const context = setup({ activity: 'manual', api: { save: async () => reply.promise } })
+      await prompted(context)
+      context.factory.last().edit('甲')
+      const saving = context.mode.save()
+      await settle()
+      context.mode.releaseOnHide()
+      await settle()
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      expect(context.editLease.release).not.toHaveBeenCalled()
+      expect(context.marker.write).toHaveBeenCalledOnce()
+      reply.resolve(SAVED)
+      await saving
+    })
+
+    it('交给本浏览器的另一个标签页时有请求在等：照常释放、不交出（那边是同一个人，请求随新的一代沿用）', async () => {
+      const browser = fakeBrowser()
+      const context = setup({ activity: 'manual', browser, tab: 'A' })
+      await prompted(context)
+      const tab = sameBrowserFor(DOCUMENT_ID, browser.tab('B'))
+      tab.post({ type: 'handover-request', requestId: OTHER_REQUEST_ID, documentId: DOCUMENT_ID, from: '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb', userId: AMY.id })
+      await settle()
+      await settle()
+      await settle()
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      expect(context.editLease.release).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over-tab' })
+    })
+  })
+
+  describe('请求方：请求编辑', () => {
+    const REQUEST_RENEW_MS = EDIT_REQUEST_RENEW_SECONDS * 1000
+    /** 艾米在编辑时打开、读到她在编辑（能编辑） */
+    async function readingWhileAmyEdits(context: ReturnType<typeof setup>): Promise<void> {
+      await opened(context)
+      expect(readingOf(context.mode).holder?.holder).toEqual(AMY)
+    }
+    const amyEdits = { editStatus: async () => status(3, AMY_EDITING) }
+    /** 编辑状态里有本人的请求（刷新之前发出的） */
+    function statusWithMyRequest(): FetchedEditStatus {
+      const fetched = status(3, AMY_EDITING)
+      return { ...fetched, status: { ...fetched.status, request: { requester: AMY, requestedAt: '2026-10-04T03:01:00.000Z', mine: true } } }
+    }
+
+    it('发出：阅读里先是正在请求、再是等待（等艾米）；之后每 5 秒续期（后台请求），不另发出', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      const sending = context.mode.requestEdit()
+      expect(readingOf(context.mode).request).toEqual({ kind: 'sending' })
+      await sending
+      expect(readingOf(context.mode).request).toEqual({ kind: 'waiting', holder: AMY, cancelFailure: undefined })
+      expect(context.api.editRequest.send).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+      await context.time.advance(REQUEST_RENEW_MS)
+      expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
+      expect(context.editLease.acquire).not.toHaveBeenCalled()
+    })
+
+    it('交给了本页（reserved）、页面看得见：以普通申请（不带接管方式）进入编辑；空闲释放从进入的那一刻重新算', async () => {
+      const context = setup({ api: amyEdits, activity: 'manual' })
+      await readingWhileAmyEdits(context)
+      await context.time.advance(EDIT_IDLE_RELEASE_SECONDS * 1000 - 60_000)
+      context.act()
+      await context.mode.requestEdit()
+      context.api.editRequest.renew.mockResolvedValue({ kind: 'reserved', reservedUntil: RESERVED_UNTIL })
+      await context.time.advance(REQUEST_RENEW_MS)
+      await settle()
+      expect(context.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, PAGE_ID)
+      expect(modeOf(context.mode).kind).toBe('editing')
+      // 10 分钟从进入编辑算起
+      await context.time.advance(EDIT_IDLE_RELEASE_SECONDS * 1000 - 1)
+      expect(modeOf(context.mode).kind).toBe('editing')
+    })
+
+    it('交给了本页、页面在后台：不进入（阅读里是 granted），回到前台才进入', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.page.set(true)
+      context.api.editRequest.renew.mockResolvedValue({ kind: 'free' })
+      await context.time.advance(REQUEST_RENEW_MS)
+      expect(readingOf(context.mode).request).toEqual({ kind: 'granted' })
+      expect(context.editLease.acquire).not.toHaveBeenCalled()
+      context.page.set(false)
+      await settle()
+      expect(context.editLease.acquire).toHaveBeenCalledOnce()
+      expect(modeOf(context.mode).kind).toBe('editing')
+    })
+
+    it('交给了本页时正在按新的版本重建（"有更新"）：重建完了再进入', async () => {
+      const content = deferred<LoadedContent>()
+      const context = setup({ api: { editStatus: async () => status(5, AMY_EDITING), contentIfChanged: async () => content.promise } })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      const refreshing = context.mode.refresh()
+      expect(readingOf(context.mode).update).toBe('loading')
+      context.api.editRequest.renew.mockResolvedValue({ kind: 'reserved', reservedUntil: RESERVED_UNTIL })
+      await context.time.advance(REQUEST_RENEW_MS)
+      expect(context.editLease.acquire).not.toHaveBeenCalled()
+      expect(readingOf(context.mode).request).toEqual({ kind: 'granted' })
+      content.resolve({ snapshot: snapshotOf('服务端的'), revision: 5 })
+      await refreshing
+      await settle()
+      expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    })
+
+    it('交给了本页、申请时被别人抢先（保留期过了别人先申请）：回到阅读，说明谁在编辑，请求结束', async () => {
+      const context = setup({ api: amyEdits, editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.api.editRequest.renew.mockResolvedValue({ kind: 'free' })
+      await context.time.advance(REQUEST_RENEW_MS)
+      await settle()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, holder: { holder: AMY } })
+      await context.time.advance(REQUEST_RENEW_MS * 2)
+      expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
+    })
+
+    it('持有者谢绝了：结束，阅读里说明谁谢绝了；能不能强制接管随阅读的状态（页面据此另说可以请空间管理员）', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.api.editRequest.renew.mockResolvedValue({ kind: 'declined', id: REQUEST_ID, holder: AMY_EDITING })
+      await context.time.advance(REQUEST_RENEW_MS)
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, notice: { kind: 'request-declined', holder: AMY }, canTakeOver: false })
+    })
+
+    it('正在编辑的是自己（self）：改走"在此编辑"（本人接管的流程开始）', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      context.api.editRequest.send.mockResolvedValueOnce({ kind: 'self', holder: SELF_EDITING })
+      await context.mode.requestEdit()
+      await vi.waitFor(() => expect(context.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, PAGE_ID, { takeover: 'self' }))
+    })
+
+    it('别人先请求了（occupied）、编辑权刚交给了别人（reservedForOther）、请求不在了（gone）：结束并说明', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      context.api.editRequest.send.mockResolvedValueOnce({ kind: 'occupied', requester: BEN, requestedAt: '2026-10-04T03:00:00.000Z' })
+      await context.mode.requestEdit()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, notice: { kind: 'request-occupied', requester: BEN } })
+      context.api.editRequest.send.mockResolvedValueOnce({ kind: 'reservedForOther', reservedFor: BEN, reservedUntil: RESERVED_UNTIL })
+      await context.mode.requestEdit()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, holder: undefined, notice: { kind: 'reserved', reservedFor: BEN, reservedUntil: RESERVED_UNTIL } })
+      await context.mode.requestEdit()
+      context.api.editRequest.renew.mockResolvedValueOnce({ kind: 'gone', holder: null })
+      await context.time.advance(REQUEST_RENEW_MS)
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, notice: { kind: 'request-gone' } })
+    })
+
+    it.each([
+      ['不能编辑了（403）', DENIED, { canEdit: false, notice: { kind: 'request-denied', error: DENIED } }],
+      ['网络', new NetworkError('断网'), { canEdit: true, notice: { kind: 'request-failed' } }],
+      ['本页过旧', new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧'), { blocked: 'client-outdated', notice: undefined }],
+      ['读不到了（404）', GONE, { gone: true, canEdit: false }],
+    ] as const)('发出失败（%s）：与申请编辑权的失败同一个口径', async (_case, error, expected) => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      context.api.editRequest.send.mockRejectedValueOnce(error)
+      await context.mode.requestEdit()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, ...expected })
+    })
+
+    it('发出得到会话类失败：交给页面确认会话，说明没能请求编辑', async () => {
+      const stale = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      context.api.editRequest.send.mockRejectedValueOnce(stale)
+      await context.mode.requestEdit()
+      expect(context.hooks.writeProblem).toHaveBeenCalledExactlyOnceWith(stale)
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'request-failed', error: stale })
+    })
+
+    it('与"在此编辑"互斥：请求进行中"编辑""在此编辑"不做事；接手进行中不发出请求', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      await context.mode.enter()
+      await context.mode.takeOver()
+      expect(context.editLease.acquire).not.toHaveBeenCalled()
+      expect(readingOf(context.mode).takeover).toBeUndefined()
+      await context.mode.cancelRequest()
+      // 接手进行中（"在此编辑"刚开始，还在看锁）：不发出请求
+      const other = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+      await opened(other)
+      const taking = other.mode.takeOver()
+      expect(readingOf(other.mode).takeover).toEqual({ kind: 'preparing' })
+      await other.mode.requestEdit()
+      expect(other.api.editRequest.send).not.toHaveBeenCalled()
+      other.mode.cancelTakeOver()
+      await taking
+    })
+
+    it('取消请求：阅读里先是正在取消、再是没有请求（不另说明）；不再续期', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      const cancelling = context.mode.cancelRequest()
+      expect(readingOf(context.mode).request).toEqual({ kind: 'cancelling', holder: AMY })
+      await cancelling
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, notice: undefined })
+      expect(context.api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+      await context.time.advance(REQUEST_RENEW_MS * 2)
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+    })
+
+    it('等待中空闲满 10 分钟：取消请求，阅读里说明', async () => {
+      const context = setup({ api: amyEdits, activity: 'manual' })
+      await readingWhileAmyEdits(context)
+      context.act()
+      await context.mode.requestEdit()
+      await context.time.advance(EDIT_IDLE_RELEASE_SECONDS * 1000)
+      expect(context.api.editRequest.cancel).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, notice: { kind: 'request-idle' } })
+    })
+
+    it('页面关闭：等待中的请求尽力取消（DELETE）', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.mode.releaseOnHide()
+      expect(context.api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+      await context.time.advance(REQUEST_RENEW_MS * 2)
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+    })
+
+    it('会话不是本人：不续期；回到本人时立即续期一次', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.mode.setSession('other-user')
+      await context.time.advance(REQUEST_RENEW_MS * 3)
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+      context.mode.setSession('active')
+      await settle()
+      expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
+    })
+
+    it('刷新之后恢复等待：编辑状态里有本人的请求而本页没在等——不另发出，直接等待、立即续期', async () => {
+      const context = setup({ api: { editStatus: async () => statusWithMyRequest() } })
+      await opened(context)
+      await settle()
+      expect(readingOf(context.mode).request).toEqual({ kind: 'waiting', holder: AMY, cancelFailure: undefined })
+      expect(context.api.editRequest.send).not.toHaveBeenCalled()
+      expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
+    })
+
+    it('不恢复的：检查发出之后请求的进展变过（刚取消，那次检查读到的已经过时）；不能编辑的阅读', async () => {
+      const answer = deferred<FetchedEditStatus>()
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.api.editStatus.mockReturnValueOnce(answer.promise)
+      await context.time.advance(READING_CHECK_INTERVAL_MS)
+      await context.mode.cancelRequest()
+      answer.resolve(statusWithMyRequest())
+      await settle()
+      expect(readingOf(context.mode).request).toBeUndefined()
+      const viewer = setup({ api: { editStatus: async () => ({ ...statusWithMyRequest(), status: { ...statusWithMyRequest().status, canEdit: false } }) } })
+      await opened(viewer, false)
+      await settle()
+      expect(readingOf(viewer.mode).request).toBeUndefined()
+    })
+
+    it('"编辑"时编辑权刚交给了别人（EDIT_LEASE_RESERVED）：留在阅读，说明交给了谁、留到何时（没人占着）', async () => {
+      const reserved = new ApiError(409, 'EDIT_LEASE_RESERVED', '编辑权刚交给了别人', { details: { reservedFor: BEN, reservedUntil: RESERVED_UNTIL } })
+      const context = setup({ editLease: { acquire: async () => Promise.reject(reserved) } })
+      await opened(context)
+      await context.mode.enter()
+      expect(readingOf(context.mode)).toMatchObject({ holder: undefined, notice: { kind: 'reserved', reservedFor: BEN, reservedUntil: RESERVED_UNTIL } })
+    })
+
+    it('EDIT_LEASE_RESERVED 的详情认不出：照没能进入编辑说明', async () => {
+      const reserved = new ApiError(409, 'EDIT_LEASE_RESERVED', '编辑权刚交给了别人', { details: { reservedFor: 'x' } })
+      const context = setup({ editLease: { acquire: async () => Promise.reject(reserved) } })
+      await opened(context)
+      await context.mode.enter()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'enter-failed', error: reserved })
+    })
+
+    it('打开时取详情里的"能不能强制接管"，之后随编辑状态更新', async () => {
+      const context = setup()
+      await context.mode.open({ ...LOADED, canEdit: true, canTakeOver: true }, { enterEdit: false })
+      expect(readingOf(context.mode).canTakeOver).toBe(true)
+      await settle()
+      expect(readingOf(context.mode).canTakeOver).toBe(false)
     })
   })
 })
