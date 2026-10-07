@@ -4185,6 +4185,20 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.editLease.acquire).toHaveBeenCalledOnce()
     })
 
+    it('交给了本页时这一页已经不能进入编辑（检查读到不能编辑了）：不申请，请求作罢、尽力取消（清掉留给本页的保留）', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      context.api.editStatus.mockResolvedValue(status(3, AMY_EDITING, false))
+      await context.time.advance(READING_CHECK_INTERVAL_MS)
+      expect(readingOf(context.mode).canEdit).toBe(false)
+      context.api.editRequest.renew.mockResolvedValue({ kind: 'reserved', reservedUntil: RESERVED_UNTIL })
+      await context.time.advance(REQUEST_RENEW_MS)
+      expect(context.editLease.acquire).not.toHaveBeenCalled()
+      expect(context.api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+      expect(readingOf(context.mode).request).toBeUndefined()
+    })
+
     it('交给了本页、申请时被别人抢先（保留期过了别人先申请）：回到阅读，说明谁在编辑，请求结束', async () => {
       const context = setup({ api: amyEdits, editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
       await readingWhileAmyEdits(context)

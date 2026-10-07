@@ -1173,12 +1173,14 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /**
    * 编辑权交给了本页（或者空着），页面看得见、会话是本人：以普通申请进入编辑（与"编辑"同一个入口）。正在按新的版本重建、"在此编辑"进行中、
-   * 编辑器在换时这一刻进不了（交回 false，重建完了 retry）；不能进入编辑的阅读（不能编辑了、读不到了、与服务端不兼容、数据不完整）请求随之作罢
+   * 编辑器在换时这一刻进不了（交回 false，重建完了 retry）；不能进入编辑的阅读（不能编辑了、读不到了、与服务端不兼容、数据不完整）请求随之作罢——
+   * 尽力取消（清掉留给本页的保留，别人不必等它过期）
    */
   function enterGranted(): boolean {
     if (disposed || mode.kind !== 'reading' || session !== 'active' || mode.update === 'loading' || mode.takeover !== undefined || slot.editor() === undefined)
       return false
     if (!mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined) {
+      void api.editRequest.cancel(documentId).catch(() => undefined)
       setMode({ ...mode, request: undefined })
       return true
     }
