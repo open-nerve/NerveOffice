@@ -113,6 +113,33 @@ export function cancelRequestButton(page: Page): Locator {
 }
 
 /**
+ * 页头里的"强制接管"（M3-P5 设计 §3.8：阅读时、别人在编辑时、能强制接管时在"请求编辑"旁边）；强制接管的进入编辑中同一个按钮说"正在接管…"
+ */
+export function forceTakeOverButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '强制接管', exact: true })
+}
+
+/** 进入编辑之后页头下面异常中断的说明（M3-P5 设计 §3.11：不打断的说明与"知道了"，不是 alert） */
+export function interruptionNotice(page: Page): Locator {
+  return chrome(page).locator('[data-slot="interruption-notice"]')
+}
+
+/** 页头里返回所在空间的链接（一直在：随状态消失的按钮上的焦点交给它） */
+export function backLink(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('link').first()
+}
+
+/** 焦点在哪里：body、页头与说明（#editor-chrome）里，或者别处（编辑器的输入框） */
+export async function focusPlace(page: Page): Promise<'body' | 'chrome' | 'editor'> {
+  return page.evaluate(() => {
+    const active = document.activeElement
+    if (active === null || active === document.body)
+      return 'body'
+    return document.querySelector('#editor-chrome')?.contains(active) === true ? 'chrome' : 'editor'
+  })
+}
+
+/**
  * 持有者页头下面有人请求编辑时的提示（M3-P5 设计 §3.6）：带标题的分组（role="group"，名字是"[人名] 请求编辑这份文档"），里面"交出""继续编辑"
  * 与一行静态说明
  */
