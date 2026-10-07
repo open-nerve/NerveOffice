@@ -8,7 +8,7 @@
 // 新代次判断（stale，M3-P1 审查 A3）。
 // 4. 保存按它的事务开始时的 now() 判断租约：在途的保存跨过了租约的到期（或空闲满 12 分钟）时，撤权照样等它提交（M3-P5 审查 A1，
 //    由审查者的探针改成）——撤权连按时间刚死不久（一个有效期之内）的租约的文档行也锁，只是不收回它（不记 revoked、不加代次，DEF-044）。
-//    死了约 60 秒（保存的事务的时限，复验 C1）的照样等：按行为钉住窗口的大小（复验 C5）。
+//    死了约 70 秒（保存的事务从 BEGIN 到提交的上界，复验 C1、再复核 D1）的照样等：按行为钉住窗口的大小（复验 C5、再复核 D8）。
 // 另有锁的顺序（文档行 → 租约行）、锁下再核对一次范围、范围只锁涉及的文档，以及死了超过一个有效期的租约的文档行不锁（M3-P5 设计 §3.5，
 // DEF-044）、刚死不久的锁住而不收回。
 // 做法同 sharing-locks.test.ts："先取完锁的操作"停在写审计之前——给 audit_events 装 BEFORE INSERT 的触发器，按"动作 + 操作者"
@@ -317,10 +317,11 @@ const DEATHS = [
 ] as const
 
 /**
- * 死了约 60 秒（M3-P5 复验 C5）：仍在撤权等在途保存的窗口（一个有效期）里，而且正是保存的事务的时限（60 秒，复验 C1）——窗口至少要盖住它。
- * 按行为钉住窗口的大小：窗口缩到 60 秒以下（例如 30 秒）时撤权不再等在途的保存。另一端（死了一个有效期又 1 秒的不锁）见"收回写入权的锁"
+ * 死了约 70 秒（M3-P5 复验 C5、再复核 D8）：仍在撤权等在途保存的窗口（一个有效期）里，而且正是保存的事务从 BEGIN 到提交的上界（开始
+ * 至多 10 秒加时限 60 秒，复验 C1、再复核 D1）——窗口至少要盖住它。按行为钉住窗口的大小：窗口缩到 70 秒以下（例如 65 秒）时撤权
+ * 不再等在途的保存。另一端（死了一个有效期又 1 秒的不锁）见"收回写入权的锁"
  */
-const DEAD_FOR_SECONDS = 60
+const DEAD_FOR_SECONDS = 70
 const DEATHS_WITHIN_WINDOW = [
   [`到期约 ${DEAD_FOR_SECONDS} 秒`, async (documentId: string) => passLeaseTime(database, documentId, EDIT_LEASE_TTL_SECONDS + DEAD_FOR_SECONDS)],
   [`空闲满 12 分钟之后又约 ${DEAD_FOR_SECONDS} 秒`, async (documentId: string) => idleLeaseFor(database, documentId, EDIT_LEASE_IDLE_RECLAIM_SECONDS + DEAD_FOR_SECONDS)],
@@ -369,7 +370,7 @@ describe('US-M3-12 在途的保存跨过了租约按时间的死亡（M3-P5 审�
     const result = await interleave(
       { action: 'documents.content_saved', actorId: holder.account.id, run: async () => save(holder.session, document, lease) },
       async () => {
-        // 保存已经过了租约检查、持着文档行：这时租约已经死了约 60 秒，再发撤权
+        // 保存已经过了租约检查、持着文档行：这时租约已经死了约 70 秒，再发撤权
         await die(document.id)
         return asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${holder.account.id}`, { method: 'DELETE' })
       },

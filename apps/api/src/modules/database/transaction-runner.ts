@@ -23,8 +23,10 @@ export const TRANSACTION_ABORTED_MESSAGE = '事务里有语句失败，事务已
  *    同样按超过事务的时限回答），回滚，什么也没写——BEGIN 之后应用停住了（事件循环卡死、进程被暂停），这一段原来只受
  *    idle_in_transaction_session_timeout 约束，而它可以配到 600 秒。
  * 三步写在同一条语句里，先后由数据依赖强制：内层的 set_config 是外层的参数，读时刻在外层 CASE 的条件成立之后才算（CASE 按顺序求值，
- * PostgreSQL 文档 §4.2.14 给的强制先后的写法），不靠目标列表各列的求值顺序。也不能拆成两条：两条之间没有计时器，那一段又只受
- * idle_in_transaction_session_timeout 约束（PostgreSQL 18 实测）。
+ * PostgreSQL 文档 §4.2.14 给的强制先后的写法），不靠目标列表各列的求值顺序。真正要守住的是"读时刻不早于设下时限"：读到的时长从 BEGIN
+ * 算起，设下时限之前的停顿（哪怕拆成两条、两条之间没有计时器）都算进去、被 startWithinMs 兜住；写成一条少一次往返，先后也一目了然
+ * （M3-P5 再复核 D6）。BEGIN 到这条语句之间仍按会话的默认值计时：默认值比那段停顿还短时在这条语句之前就到点，回滚失败、按意外错误
+ * 回答（500），什么也没写（再复核 D7，接受）。
  * 于是提交了的事务：C − S ≤（设下时限的时刻 − S）+ timeoutMs ≤ startWithinMs + timeoutMs（S 是 BEGIN，即事务里 now() 的值；
  * 设下时限的时刻不晚于读时刻）。
  * set_config 的第三个参数为真，与 SET LOCAL 相同：只管这个事务，提交、回滚之后回到会话的值，别的事务照旧（不改会话、不改连接）；
