@@ -2431,12 +2431,19 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: undefined })
   })
 
-  it('持有者提示里的"交出"：先确认会话（同退出编辑），先保存再交出，回到阅读并说明交给了谁', async () => {
-    const { editorPage, editLease, time, activity } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+  it('持有者提示里的"交出"：先确认会话（同退出编辑）——会话不是本人时不交出；确认是本人之后先保存再交出，回到阅读并说明交给了谁', async () => {
+    const { editorPage, editLease, time, activity, api, fromOtherTab } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
     await editorPage.load()
     activity.fire()
     await time.advance(10_000)
     await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: { id: INCOMING.id } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.handOver()
+    expect(editLease.handOver).not.toHaveBeenCalled()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
     await editorPage.handOver()
     await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'handed-over', auto: false } }))
     expect(editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, INCOMING.id)

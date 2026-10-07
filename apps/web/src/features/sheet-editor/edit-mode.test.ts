@@ -3999,6 +3999,10 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       hold.release()
       await entering
       expect(editingOf(context.mode).request).toEqual(SHOWN)
+      // 计时照常：从进入编辑（与最后一次操作中较晚的那个）起空闲满 2 分钟就交出
+      await context.time.advance(HANDOVER_MS)
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
     })
 
     it('新的一代：之前那一代（没能进入编辑时）记下的请求不再算，之后的心跳带来的才算', async () => {
