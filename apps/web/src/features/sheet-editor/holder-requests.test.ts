@@ -349,6 +349,29 @@ describe('离开编辑时', () => {
     expect(ended.handOver).toHaveBeenCalledOnce()
   })
 
+  it('离开的过程中才到的请求（只记下、没有计时），留在编辑时按请求刚到处理（审查 B3）：显示提示、开始计时，满 2 分钟交出；那一刻已空闲满 2 分钟就随即交出', async () => {
+    const context = setup()
+    context.state.editing = false
+    context.holder.leaving()
+    context.holder.arrive(REQUEST)
+    expect(context.onChange).not.toHaveBeenCalled()
+    context.state.editing = true
+    context.holder.stayed({ automatic: false, ended: false })
+    expect(context.onChange).toHaveBeenCalledOnce()
+    expect(context.handOver).not.toHaveBeenCalled()
+    await context.time.advance(HANDOVER_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+
+    const idle = setup()
+    await idle.time.advance(HANDOVER_MS)
+    idle.state.editing = false
+    idle.holder.leaving()
+    idle.holder.arrive(REQUEST)
+    idle.state.editing = true
+    idle.holder.stayed({ automatic: false, ended: false })
+    expect(idle.handOver).toHaveBeenCalledOnce()
+  })
+
   it('离开了、失去编辑权（clear）：请求、说明与计时都清掉；卸载之后（dispose）不再回调', async () => {
     const context = setup()
     context.holder.arrive(REQUEST)

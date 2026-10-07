@@ -4015,6 +4015,56 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
     })
 
+    it('退出编辑的过程中心跳带来请求、退出没成（公式没收齐）留在编辑（审查 B3，探针 B-P1）：按请求刚到处理——显示提示、开始 2 分钟的计时，一直没有操作就自动交出', async () => {
+      const gate = deferred<SaveContentResponse>()
+      const context = setup({ activity: 'manual', api: { save: async () => gate.promise } })
+      await editing(context)
+      const writer = context.factory.last()
+      writer.formulasSettled = false
+      writer.edit('甲')
+      context.act()
+      const exiting = context.mode.exit()
+      await settle()
+      expect(modeOf(context.mode)).toMatchObject({ kind: 'exiting', cause: 'exit' })
+      // 退出的保存还在途：这期间的心跳带来请求（只记下）
+      heartbeatsCarry(context, INCOMING)
+      await context.time.advance(HEARTBEAT_MS)
+      gate.resolve(SAVED)
+      await exiting
+      await settle()
+      expect(editingOf(context.mode).request).toEqual(SHOWN)
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      // 人一直没有操作：从最后一次操作起满 2 分钟就自动交出（之前没有计时，要等到 10 分钟的空闲释放）
+      await context.time.advance(HANDOVER_MS)
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
+    it('同上，留在编辑的那一刻本页已空闲满 2 分钟、会话可写：随即自动交出（同一步里开始离开，不等计时）', async () => {
+      const gate = deferred<SaveContentResponse>()
+      const context = setup({ activity: 'manual', api: { save: async () => gate.promise } })
+      await editing(context)
+      const writer = context.factory.last()
+      writer.formulasSettled = false
+      writer.edit('甲')
+      await context.time.advance(HANDOVER_MS)
+      const exiting = context.mode.exit()
+      await settle()
+      heartbeatsCarry(context, INCOMING)
+      await context.time.advance(HEARTBEAT_MS)
+      const seen = recordModes(context)
+      gate.resolve(SAVED)
+      await exiting
+      // 留在编辑的那一步里就开始交出（时间没有再走）：退出 → 留在编辑 → 交出
+      const kinds = seen.map(state => state.kind === 'exiting' ? `exiting:${state.cause}` : state.kind)
+      expect(kinds.filter((kind, index) => kind !== kinds[index - 1])).toEqual(['exiting:exit', 'editing', 'exiting:handover-request'])
+      await settle()
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
     it('新的一代：之前那一代（没能进入编辑时）记下的请求不再算，之后的心跳带来的才算', async () => {
       const content = deferred<LoadedContent>()
       const context = setup({ activity: 'manual', api: { contentIfChanged: async () => content.promise }, editLease: { acquire: async () => ({ ...ACQUIRED, revision: 4 }), renew: async () => ({ ...RENEWED, request: INCOMING }) } })
