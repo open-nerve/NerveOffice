@@ -1476,11 +1476,17 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
     })
 
     it('交给了本页、页面在后台（granted）：说明回到这一页时进入编辑，按钮是"取消请求"、点了就取消（审查 B7 的 C03）', () => {
-      const fake = renderChrome({ mode: { ...OTHERS, request: { kind: 'granted' } }, save: undefined })
+      const fake = renderChrome({ mode: { ...OTHERS, request: { kind: 'granted', until: 'visible' } }, save: undefined })
       expect(infoRegion().textContent).toBe('可以进入编辑了：回到这一页时自动进入编辑')
       fireEvent.click(screen.getByRole('button', { name: '取消请求' }))
       expect(fake.page.cancelRequest).toHaveBeenCalledOnce()
       expect(fake.page.requestEditing).not.toHaveBeenCalled()
+    })
+
+    it('交给了本页、页面看得见、这一刻进入不了（会话不是本人、正在载入新的版本）：不说"回到这一页时"，说稍后自动进入（审查 B11）', () => {
+      renderChrome({ mode: { ...OTHERS, request: { kind: 'granted', until: 'ready' } }, save: undefined })
+      expect(infoRegion().textContent).toBe('可以进入编辑了：稍后自动进入编辑')
+      expect(screen.getByRole('button', { name: '取消请求' })).toBeInTheDocument()
     })
 
     it('本人在别的页面、设备上发出、正在等的请求（审查 B2）：读屏状态区在谁在编辑之后说一句，按钮照旧是"请求编辑"（再点就成为发出过的页面）；本页有请求时不说', () => {

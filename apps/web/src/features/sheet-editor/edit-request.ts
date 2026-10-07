@@ -7,8 +7,9 @@
 //   页面隐藏时照常排（浏览器自己降频，Safari 隐藏几秒之后整页暂停），回到前台立即续期一次。谢绝（declined）→ 结束、说明谁谢绝了；
 //   请求不在了（gone：换了一代、过期、被别人的新请求替换）→ 结束、说明，可以重新请求；
 // - 进入编辑：reserved、free 时只在页面看得见、会话是本人时进入（enter：普通申请）——Safari 会暂停后台页面，在后台抢到的编辑权会因为心跳停了
-//   而到期；看不见时记下（granted），不再续期（请求已经转成保留，或者没人在编辑），回到前台时进入，保留期过了而编辑权空着时照样进入
-//   （请求的意图还在）。状态机这一刻进入不了（正在按新的版本重建）时留在 granted，等它 retry；
+//   而到期；看不见时记下（granted，until 为 visible），不再续期（请求已经转成保留，或者没人在编辑），回到前台时进入，保留期过了而编辑权空着时
+//   照样进入（请求的意图还在）。看得见、这一刻却进入不了（会话不是本人、状态机正在按新的版本重建）时同样留在 granted（until 为 ready：一能进入
+//   就进入，不说"回到这一页时"，审查 B11），等回到本人、状态机 retry；
 // - 空闲：等待中（含 granted）本页空闲满 10 分钟（与空闲释放同一个口径，起点是最后一次操作与开始等待中较晚的那个）就取消请求——人走了，
 //   免得编辑权交给他之后空占。每次续期之前判断；回到前台时（可见性的通知里，同步）按隐藏之前的操作判断（Safari 隐藏时计时器停了）；
 // - 取消（"取消请求"）：DELETE（同时清掉留给本人的保留）。没取消成就回到等待、说明原因（可以再按），照常续期——请求还在服务端；
@@ -54,13 +55,19 @@ export interface EditRequestApi {
  * - sending：正在发出（"请求编辑"留着，不可用、说正在请求）；
  * - waiting：在等持有者（holder，没人在编辑时为 undefined）回应，按钮是"取消请求"；cancelFailure 是上一次没取消成的原因（没有时 undefined）；
  * - cancelling：正在取消；
- * - granted：编辑权交给了本页（或者空着），页面看不见（或者这一刻进入不了），回到前台时进入编辑
+ * - granted：编辑权交给了本页（或者空着），页面看不见（回到前台时进入编辑）或者这一刻进入不了（一能进入就进入，见 GrantedUntil）
  */
 export type EditRequestProgress
   = | { readonly kind: 'sending' }
     | { readonly kind: 'waiting', readonly holder: UserSummary | undefined, readonly cancelFailure: unknown }
     | { readonly kind: 'cancelling', readonly holder: UserSummary | undefined }
-    | { readonly kind: 'granted' }
+    | { readonly kind: 'granted', readonly until: GrantedUntil }
+
+/**
+ * 编辑权交给了本页（或者空着）而这一刻还没进入编辑（granted）在等什么：visible 是页面在后台，回到这一页时进入；ready 是页面看得见、这一刻进入不了
+ * （会话不是本人、正在载入新的版本等），一能进入就进入
+ */
+export type GrantedUntil = 'visible' | 'ready'
 
 /**
  * 请求为什么结束了（进入编辑不算：那时状态机已经在进入编辑）：本人取消（不另说明）；空闲满 10 分钟取消了；持有者谢绝（谁）；别人先请求了
@@ -214,16 +221,25 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
   function grant(): void {
     stopTimer()
     options.trace?.({ kind: 'request-granted', at: clock.now(), visible: !options.visibility.hidden() })
-    if (progress?.kind !== 'granted')
-      set({ kind: 'granted' })
+    markGranted()
     tryEnter()
   }
 
+  /** granted 在等什么按现在的样子（页面在后台：回到前台；看得见：一能进入就进入），变了才换进展 */
+  function markGranted(): void {
+    const until: GrantedUntil = options.visibility.hidden() ? 'visible' : 'ready'
+    if (progress?.kind !== 'granted' || progress.until !== until)
+      set({ kind: 'granted', until })
+  }
+
   function tryEnter(): void {
-    if (disposed || progress?.kind !== 'granted' || !active || options.visibility.hidden())
+    if (disposed || progress?.kind !== 'granted')
       return
-    if (!options.enter())
+    // 这一刻进入不了（会话不是本人、页面在后台、状态机正在重建）：留在 granted，说法随在等什么换
+    if (!active || options.visibility.hidden() || !options.enter()) {
+      markGranted()
       return
+    }
     options.trace?.({ kind: 'request-enter', at: clock.now() })
     // 状态机已经在进入编辑：请求随之完成（取得编辑权之后服务端清掉它与保留），这里静静地回到没有请求、清掉记号
     rounds += 1
@@ -307,10 +323,15 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     schedule(Math.max(0, sentAt + REQUEST_RENEW_MS - clock.now()))
   }
 
-  // 回到前台：先按隐藏之前的操作看空闲（同步，回来时的第一下鼠标移动还没到），再进入编辑或者立即续期
+  // 回到前台：先按隐藏之前的操作看空闲（同步，回来时的第一下鼠标移动还没到），再进入编辑或者立即续期。切到后台时 granted 改说回到这一页时进入
   const stopWatchingVisibility = options.visibility.onChange(() => {
-    if (disposed || options.visibility.hidden())
+    if (disposed)
       return
+    if (options.visibility.hidden()) {
+      if (progress?.kind === 'granted')
+        markGranted()
+      return
+    }
     if ((progress?.kind === 'waiting' || progress?.kind === 'granted') && idleNow()) {
       quitForIdle()
       return

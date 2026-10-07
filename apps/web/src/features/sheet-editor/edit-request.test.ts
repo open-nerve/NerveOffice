@@ -282,7 +282,7 @@ describe('等待：续期', () => {
     context.page.set(true)
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     expect(context.enter).not.toHaveBeenCalled()
     // 保留只有 2 分钟：之后不再续期（没有续期会把 granted 改回去）
     context.act()
@@ -300,9 +300,28 @@ describe('等待：续期', () => {
     context.page.set(true)
     context.api.renew.mockResolvedValue(FREE)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     context.page.set(false)
     expect(context.enter).toHaveBeenCalledOnce()
+  })
+
+  it('granted 在等什么随情形换（审查 B11）：页面在后台是 visible（回到这一页时进入）；回到前台而这一刻进入不了（状态机正在重建）是 ready（稍后进入）；再切到后台又是 visible', async () => {
+    let ready = false
+    const context = setup({ enter: () => ready })
+    await waiting(context)
+    context.page.set(true)
+    context.api.renew.mockResolvedValue(RESERVED)
+    await context.time.advance(REQUEST_RENEW_MS)
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
+    context.act()
+    context.page.set(false)
+    expect(context.enter).toHaveBeenCalledOnce()
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'ready' })
+    context.page.set(true)
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
+    ready = true
+    context.page.set(false)
+    expect(context.requests.progress()).toBeUndefined()
   })
 
   it('状态机这一刻进入不了（例如正在按新的版本重建）：留在 granted，retry 时进入', async () => {
@@ -312,7 +331,7 @@ describe('等待：续期', () => {
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
     expect(context.enter).toHaveBeenCalledOnce()
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'ready' })
     ready = true
     context.requests.retry()
     expect(context.enter).toHaveBeenCalledTimes(2)
@@ -379,7 +398,7 @@ describe('等待：续期', () => {
     context.requests.setActive(true)
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     context.requests.setActive(false)
     context.page.set(false)
     expect(context.enter).not.toHaveBeenCalled()
@@ -545,7 +564,7 @@ describe('空闲：等待中的页面空闲满 10 分钟就取消请求', () => 
     context.page.set(true)
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     context.time.elapse(REQUEST_IDLE_MS)
     context.page.set(false)
     expect(context.enter).not.toHaveBeenCalled()
@@ -669,7 +688,7 @@ describe('这一页发出过的请求（审查 B2，issued-request.ts）', () =>
     const hidden = setup({ send: async () => FREE })
     hidden.page.set(true)
     await hidden.requests.send()
-    expect(hidden.requests.progress()).toEqual({ kind: 'granted' })
+    expect(hidden.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     expect(hidden.issued.read()).toEqual({ requestedAt: undefined })
   })
 

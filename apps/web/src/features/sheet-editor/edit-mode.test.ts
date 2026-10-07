@@ -4329,7 +4329,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       context.page.set(true)
       context.api.editRequest.renew.mockResolvedValue({ kind: 'free' })
       await context.time.advance(REQUEST_RENEW_MS)
-      expect(readingOf(context.mode).request).toEqual({ kind: 'granted' })
+      expect(readingOf(context.mode).request).toEqual({ kind: 'granted', until: 'visible' })
       expect(context.editLease.acquire).not.toHaveBeenCalled()
       context.page.set(false)
       await settle()
@@ -4347,7 +4347,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       context.api.editRequest.renew.mockResolvedValue({ kind: 'reserved', reservedUntil: RESERVED_UNTIL })
       await context.time.advance(REQUEST_RENEW_MS)
       expect(context.editLease.acquire).not.toHaveBeenCalled()
-      expect(readingOf(context.mode).request).toEqual({ kind: 'granted' })
+      expect(readingOf(context.mode).request).toEqual({ kind: 'granted', until: 'ready' })
       content.resolve({ snapshot: snapshotOf('服务端的'), revision: 5 })
       await refreshing
       await settle()

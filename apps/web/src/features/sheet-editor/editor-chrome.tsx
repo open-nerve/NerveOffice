@@ -725,7 +725,8 @@ function takeoverNotice(takeover: TakeoverProgress | undefined): string | undefi
 
 /**
  * 请求编辑的进展的说明（M3-P5 设计 §3.6）：等待中（取消中也是）说在等谁、他停下 2 分钟会自动交过来、可以取消（不倒计时），没取消成时另说原因；
- * 编辑权已经可以交给本页而页面在后台时说回来就进入。正在发出时没有（照旧说谁在编辑）
+ * 编辑权已经可以交给本页而还没进入时：页面在后台说回来就进入，看得见、这一刻进不了（会话不是本人、正在载入新的版本）说稍后进入（审查 B11）。
+ * 正在发出时没有（照旧说谁在编辑）
  */
 function requestNotice(progress: EditRequestProgress | undefined): ReactNode {
   switch (progress?.kind) {
@@ -741,7 +742,7 @@ function requestNotice(progress: EditRequestProgress | undefined): ReactNode {
       )
     }
     case 'granted':
-      return editorMessages.mode.requestGranted
+      return progress.until === 'visible' ? editorMessages.mode.requestGranted : editorMessages.mode.requestGrantedSoon
     case 'sending':
     case undefined:
       return undefined

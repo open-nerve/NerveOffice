@@ -341,6 +341,8 @@ export const editorMessages = {
       : ['已请求编辑，等待 ', holder, ' 回应。', holder, ` 停下操作 ${HANDOVER_IDLE_MINUTES} 分钟后会自动保存并交给你；你也可以${CANCEL_REQUEST}`],
     /** 编辑权交给了本页（或者空着），页面在后台：回到这一页时进入编辑 */
     requestGranted: '可以进入编辑了：回到这一页时自动进入编辑',
+    /** 同上，页面看得见、这一刻进入不了（会话不是本人、正在载入新的版本等，审查 B11）：一能进入就进入 */
+    requestGrantedSoon: '可以进入编辑了：稍后自动进入编辑',
     /** 没取消成：请求还在 */
     cancelRequestFailed: (reason: string) => `没能取消请求：${reason}。请求还在，可以再点"${CANCEL_REQUEST}"`,
     /** 交给了请求编辑的人（持有者这一侧回到阅读之后）：auto 是空闲满 2 分钟自动交出的 */
