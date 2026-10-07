@@ -1,7 +1,7 @@
 // 编辑租约的仓储发出的语句（M3-P1 设计 §3.3、§3.4.6）：不连数据库（recorded-statements.test-support.ts），核对语句的形状——
 // 时间都取数据库的 now()，读出的行带着同一条语句里的 now()，加锁的对象与顺序，收回写入权的范围条件与 coversWriter 逐种同义、
-// 只找按时间还活着的（M3-P5 设计 §3.5，边界与有效条件逐一相同）；改写为新的一代时请求、保留与接管标记的沿用与清空（§3.6、§3.7），
-// 接管时直接写下接管标记（§3.7、§3.8），最后活动按带来的空闲往前推、续租时只前进；请求编辑的发出、续期、取消、谢绝与交出（§3.6）只改
+// 第一条连按时间刚死不久的也锁、第二条只交出按时间还活着的（M3-P5 设计 §3.5、审查 A1，边界与有效条件逐一相同）；
+// 改写为新的一代时请求、保留与接管标记的沿用与清空（§3.6、§3.7），接管时直接写下接管标记（§3.7、§3.8），最后活动按带来的空闲往前推、续租时只前进；请求编辑的发出、续期、取消、谢绝与交出（§3.6）只改
 // 请求、保留与"结束"几列（§3.12：保存不加锁读租约行的论证靠它）。这些语句在真实数据库上的行为（并发与交错、时间、约束）由集成测试覆盖
 // （tests/integration 的 documents/edit-leases.test.ts、lease-takeover.test.ts、lease-requests.test.ts、lease-revocation.test.ts 与几个 *-locks.test.ts）。
 import type { Transaction } from '../database/index.ts'
@@ -294,8 +294,15 @@ describe('收回写入权：范围的条件与 coversWriter 逐种同义，只�
     ].sort()
   }
 
-  /** 认得的条件：按持有者、文档所在的空间、文档筛（值是参数） */
+  /**
+   * 认得的条件（值是参数）：按持有者、文档所在的空间、文档筛，与两种时间条件。按顺序认，认出的从条件里去掉再认下一个——
+   * "一个有效期之前"的两条写在前面，免得"空闲不满"认出它的开头
+   */
   const FILTERS: readonly (readonly [RegExp, string])[] = [
+    // 一个有效期之前那一刻按时间还活着（M3-P5 审查 A1：第一条连刚死不久的也锁）：到期晚于 now() 减有效期，最后活动晚于那一刻再减 12 分钟——
+    // 都是严格大于，边界与有效条件第 4、5 条相同，只是按那一刻算
+    [/"document_edit_leases"\."expires_at" > now\(\) - make_interval\(secs => \$(\d+)\)/g, '一个有效期之前没到期'],
+    [/"document_edit_leases"\."last_active_at" > now\(\) - make_interval\(secs => \$(\d+)\) - make_interval\(secs => \$(\d+)\)/g, '一个有效期之前空闲不满'],
     [/"document_edit_leases"\."holder_id" = \$(\d+)/g, '持有者'],
     [/"documents"\."space_id" = \$(\d+)/g, '空间'],
     [/"document_edit_leases"\."document_id" = ANY\(\$(\d+)::uuid\[\]\)/g, '文档'],
@@ -303,7 +310,7 @@ describe('收回写入权：范围的条件与 coversWriter 逐种同义，只�
     [/"document_edit_leases"\."last_active_at" > now\(\) - make_interval\(secs => \$(\d+)\)/g, '空闲不满'],
   ]
   const OPEN = '"document_edit_leases"."ended_at" is null'
-  /** 按时间还活着：没到期——严格大于，恰好到期算死（与有效条件第 4 条的边界相同） */
+  /** 按时间还活着：没到期——严格大于，恰好到期算死（与有效条件第 4 条的边界相同）。在认过"一个有效期之前没到期"之后才认 */
   const NOT_EXPIRED = '"document_edit_leases"."expires_at" > now()'
 
   /**
@@ -311,27 +318,35 @@ describe('收回写入权：范围的条件与 coversWriter 逐种同义，只�
    * 原样列出来：多筛一项（例如按文档的创建人）与少筛一项同样是与 coversWriter 不一致；时间条件写成 >= 也认不出
    */
   function filtersOf(statement: RecordedStatement): string[] {
-    const where = whereOf(statement.text)
-    const filters = FILTERS.flatMap(([pattern, label]) => [...where.matchAll(pattern)].map(match => `${label}=${String(parameter(statement, match[1]))}`))
-    for (const [text, label] of [[OPEN, '没有明确结束'], [NOT_EXPIRED, '没到期']] as const) {
-      if (where.includes(text))
-        filters.push(label)
+    let rest = whereOf(statement.text)
+    const filters: string[] = []
+    for (const [pattern, label] of FILTERS) {
+      for (const match of rest.matchAll(pattern))
+        filters.push(`${label}=${match.slice(1).map(placeholder => String(parameter(statement, placeholder))).join('+')}`)
+      rest = rest.replaceAll(pattern, '')
     }
-    const rest = FILTERS.reduce((text, [pattern]) => text.replaceAll(pattern, ''), where.replaceAll(OPEN, '').replaceAll(NOT_EXPIRED, '')).replaceAll(/[()]|\band\b/g, '').trim()
+    for (const [text, label] of [[OPEN, '没有明确结束'], [NOT_EXPIRED, '没到期']] as const) {
+      if (rest.includes(text))
+        filters.push(label)
+      rest = rest.replaceAll(text, '')
+    }
+    rest = rest.replaceAll(/[()]|\band\b/g, '').trim()
     return (rest === '' ? filters : [...filters, `认不出的条件：${rest}`]).sort()
   }
 
-  /** 两条语句都要的：没有明确结束、按时间还活着（没到期、空闲不满 12 分钟） */
+  /** 第一条（锁文档行）要的：没有明确结束、一个有效期之前那一刻按时间还活着（刚死不久的也锁，等在途的保存，M3-P5 审查 A1） */
+  const ALIVE_A_TTL_AGO = ['没有明确结束', `一个有效期之前没到期=${EDIT_LEASE_TTL_SECONDS}`, `一个有效期之前空闲不满=${EDIT_LEASE_TTL_SECONDS}+${EDIT_LEASE_IDLE_RECLAIM_SECONDS}`]
+  /** 第二条（锁租约行、交给收回写入权）要的：没有明确结束、按时间还活着（没到期、空闲不满 12 分钟） */
   const LIVE = ['没有明确结束', '没到期', `空闲不满=${EDIT_LEASE_IDLE_RECLAIM_SECONDS}`]
 
   /** 锁文档行的那条语句锁住了 DOCUMENT */
   const lockedDocument = (text: string): unknown[] => text.includes('for update of "documents"') ? [[DOCUMENT]] : []
 
-  it.each(SCOPES.map(scope => [scope.kind, scope] as const))('%s：两条语句的条件都与 coversWriter 判断的同样几项、同样的值，并且只找没有明确结束、按时间还活着的租约（M3-P5，DEF-044）', async (_kind, scope) => {
+  it.each(SCOPES.map(scope => [scope.kind, scope] as const))('%s：两条语句的条件都与 coversWriter 判断的同样几项、同样的值；第一条锁没有明确结束、按时间刚死不久或还活着的租约的文档行（M3-P5 审查 A1），第二条只交出按时间还活着的（DEF-044）', async (_kind, scope) => {
     const [documents, leases, ...rest] = await statementsOf(async (repository, transaction) => repository.lockInScope(scope, transaction), lockedDocument)
     expect(rest).toEqual([])
-    expect(documents && filtersOf(documents)).toEqual([...coveredBy(scope), ...LIVE].sort())
-    // 第二条另加"是锁住的那些文档"，范围再核对一次（等文档行的锁时租约可能被改写过）
+    expect(documents && filtersOf(documents)).toEqual([...coveredBy(scope), ...ALIVE_A_TTL_AGO].sort())
+    // 第二条另加"是锁住的那些文档"，范围再核对一次（等文档行的锁时租约可能被改写过），时间条件按 now() 那一刻
     expect(leases && filtersOf(leases)).toEqual([...coveredBy(scope), ...LIVE, `文档=${DOCUMENT}`].sort())
   })
 
