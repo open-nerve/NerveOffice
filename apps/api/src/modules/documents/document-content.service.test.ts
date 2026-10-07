@@ -7,7 +7,7 @@ import zlib from 'node:zlib'
 import { canonicalContentText, contentHashInput, EDIT_LEASE_TTL_SECONDS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { DocumentContentService } from './document-content.service.ts'
+import { DocumentContentService, SAVE_TRANSACTION_TIMEOUT_MS } from './document-content.service.ts'
 import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, NO_HANDOVER, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
@@ -171,6 +171,14 @@ describe('DocumentContentService.save', () => {
     expect(store.revisions.at(-1)?.payloadDigest).toEqual(savedPayloadDigest(1, body.decompressed))
     expect(store.audits).toEqual([{ action: 'documents.content_saved', actor: { type: 'user', id: ALICE }, target: { type: 'document', id: document.id }, origin: HTTP_ORIGIN, details: { revision: 2 } }])
     expect(store.receipts).toEqual([])
+  })
+
+  it('US-M3-12 保存的事务限时（M3-P5 复验 C1）：事务带着 SAVE_TRANSACTION_TIMEOUT_MS 开启（由数据库保证：第一条语句设下 transaction_timeout，到点回滚）；它比一个有效期短 30 秒以上——撤权的"刚死不久"窗口（一个有效期）靠"保存从开始到提交短于一个有效期"成立，30 秒留给 BEGIN 与设下时限之间', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    expect(store.transactions.run).toHaveBeenCalledExactlyOnceWith(expect.any(Function), { timeoutMs: SAVE_TRANSACTION_TIMEOUT_MS })
+    expect(SAVE_TRANSACTION_TIMEOUT_MS).toBeLessThan(EDIT_LEASE_TTL_SECONDS * 1000)
+    expect(EDIT_LEASE_TTL_SECONDS * 1000 - SAVE_TRANSACTION_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000)
   })
 
   it('快照不合格：SNAPSHOT_INVALID（details 是违反的规则），不开事务（与文档无关，别人的与不存在的结果相同）；记一条 warn（规则与文档 id），不记内容', async () => {

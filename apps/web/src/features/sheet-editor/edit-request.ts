@@ -15,10 +15,14 @@
 // - 取消（"取消请求"）：DELETE（同时清掉留给本人的保留）。没取消成就回到等待、说明原因（可以再按），照常续期——请求还在服务端；
 // - 撤回（withdraw：页面关闭、编辑器建不起来）：尽力 DELETE（keepalive，不等结果），不说明；
 // - 这一页发出过的请求（M3-P5 审查 B2，issued-request.ts）：发出之后（在等待，或者编辑权交给了本页）在这一页记下它（服务端给的发出时刻），请求结束、
-//   进入编辑时清掉——撤回时不清：刷新时撤回没送到的话，刷新之后照记号恢复；
-// - 恢复（resume）：编辑状态里有本人的请求而本页没有请求时，状态机先问 whose——只有这一页发出过它（记号对得上）才恢复：不另发出，直接等待、
-//   立即续期一次。本人在别的页面、设备上发出的不恢复（不续期、不撤回、不空闲取消、不自动进入：不然这一页关掉、空闲就把那边正在等的请求撤掉，
-//   服务端的取消按人清），状态机在阅读里说一句；这一页再点"请求编辑"照常发出（服务端只续期），随之成为发出过的页面；
+//   进入编辑时清掉——撤回时不清：刷新时撤回没送到的话，刷新之后照记号恢复。记下的同时以共享方式持有"发出过请求"的本机锁（issuerLock，
+//   same-browser.ts 的 holdIssuedRequest；M3-P5 复验 C2），请求结束、进入编辑、撤回、停下时放开（页面卸载时浏览器替它放开）；
+// - 恢复（resume）：编辑状态里有本人的请求而本页没有请求时，状态机先问 whose——只有这一页发出过它（记号对得上）、而且本浏览器里没有页面持有
+//   "发出过请求"的锁时才恢复：不另发出，直接等待（持有锁）、立即续期一次。锁有人持有说明发出它的那一页还在，这一页是"复制标签页"复制出来的
+//   （sessionStorage 连同记号一起复制，复验 C2），与本人在别的页面、设备上发出的一样不恢复（不续期、不撤回、不空闲取消、不自动进入：不然这一页
+//   关掉、空闲就把那边正在等的请求撤掉，服务端的取消按人清），清掉记号，状态机在阅读里说一句。刷新时原来那一页的锁随页面卸载放开，新页面检查时
+//   通常已经放开；还没放开就按别处处理（宁可不恢复，用户再点"请求编辑"即可）。这一页再点"请求编辑"照常发出（服务端只续期），随之成为发出过的
+//   页面、也持有锁——锁是共享的，同一个人在两页都点了"请求编辑"时两页都等；没有 Web Locks 的浏览器退回只看记号；
 // - 会话不是本人时不续期（不带着别人的登录发），回到本人时立即续期一次；续期、取消遇到会话类失败（未登录、令牌失效）交给页面确认会话、照常等。
 //   连着的会话类失败（续期、取消得到未登录或令牌失效，中间没有成功过）只有第一次之后回到本人时立即续期，之后按续期的节奏（5 秒）再续——服务端
 //   一直拒绝（例如网关剥掉了 CSRF 的请求头）而页面的确认照常是本人时，立即续期只会再被拒、再要页面确认一次，续期与确认会话就按网络往返的速度
@@ -30,6 +34,7 @@ import type { LeaseClock } from './edit-lease.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { IssuedRequestMarker, MineRequest } from './issued-request.ts'
 import type { PageVisibility } from './reading-checks.ts'
+import type { HeldLock } from './same-browser.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_REQUEST_RENEW_SECONDS } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { issuedHere } from './issued-request.ts'
@@ -105,13 +110,19 @@ export interface EditRequestsOptions {
   readonly onEnd: (end: EditRequestEnd) => void
   /** 这一页发出过的请求的记号（issued-request.ts，按标签页、刷新之后还在）：只有发出过它的那一页恢复等待（审查 B2） */
   readonly issued: IssuedRequestMarker
+  /**
+   * 以共享方式拿"发出过请求"的本机锁（same-browser.ts 的 holdIssuedRequest，复验 C2）：这一页成了发出过请求的页面（记下记号、恢复等待）时拿，
+   * 请求结束、进入编辑、撤回、停下时放开。从不失败
+   */
+  readonly issuerLock: () => Promise<HeldLock>
   /** 测试构建的观察钩子（handover-trace.ts）：发出与续期的结果、编辑权交给了本页、开始进入；生产不给 */
   readonly trace?: HandoverTrace | undefined
 }
 
 /**
- * 编辑状态里本人的请求是谁发出的（whose）：here——这一页（记号对得上），调用方恢复等待；elsewhere——本人在别的页面、设备上发出的、正在等回应
- * （阅读里说一句，不恢复）；none——没有本人的请求（或者只有留给本人的保留、不是这一页发出的：那就是一次普通的"编辑"）
+ * 编辑状态里本人的请求是谁发出的（whose）：here——这一页（记号对得上，而且发出它的那一页不在本浏览器里了），调用方恢复等待；elsewhere——本人在
+ * 别的页面、设备上发出的、正在等回应（含复制出来的标签页：原来那页还持有锁，复验 C2；阅读里说一句，不恢复）；none——没有本人的请求（或者只有
+ * 留给本人的保留、不是这一页发出的：那就是一次普通的"编辑"）
  */
 export type RequestOwner = 'here' | 'elsewhere' | 'none'
 
@@ -130,10 +141,11 @@ export interface EditRequests {
   /** "请求编辑"：发出（已经有请求时什么也不做） */
   readonly send: () => Promise<void>
   /**
-   * 编辑状态里本人的请求（本页没有请求时，阅读时的检查读到的）是谁发出的（见 RequestOwner、issued-request.ts）。不是这一页的（记号对不上：这一页
-   * 发出的那一次已经不在了）、没有本人的请求时清掉记号
+   * 编辑状态里本人的请求（本页没有请求时，阅读时的检查读到的）是谁发出的（见 RequestOwner、issued-request.ts）。issuerHeld：同一次检查里看到的
+   * 本浏览器里有没有页面持有"发出过请求"的锁（same-browser.ts 的 issuedRequestHeld；本页这时没有请求，不持有它）——有就是原来那页还在，这一页是
+   * 复制出来的（复验 C2）。不是这一页的（记号对不上：这一页发出的那一次已经不在了；或者是复制出来的）、没有本人的请求时清掉记号
    */
-  readonly whose: (mine: MineRequest) => RequestOwner
+  readonly whose: (mine: MineRequest, issuerHeld: boolean) => RequestOwner
   /** 恢复（编辑状态里有这一页发出过的请求：刷新之后）：不另发出，开始等待、立即续期一次（已经有请求时什么也不做） */
   readonly resume: (holder: UserSummary | undefined) => void
   /** "取消请求"（等待中、granted 时） */
@@ -168,10 +180,37 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
   let sessionFailures = 0
   let active = true
   let disposed = false
+  /** 这一页持有的"发出过请求"的锁（复验 C2）：发出过请求、还在等（含 granted）时有；正在拿时 holdingIssuer 为真 */
+  let issuer: HeldLock | undefined
+  let holdingIssuer = false
+  /** 拿锁的轮次：放开（releaseIssuer）之后才到的锁不再算，随即放开 */
+  let issuerTurn = 0
 
   function stopTimer(): void {
     cancelTimer?.()
     cancelTimer = undefined
+  }
+
+  /** 这一页成了发出过请求的页面（记下记号、恢复等待）：拿"发出过请求"的锁（共享；已经持有、正在拿时不再拿） */
+  function holdIssuer(): void {
+    if (disposed || holdingIssuer)
+      return
+    holdingIssuer = true
+    const turn = issuerTurn
+    void options.issuerLock().then((held) => {
+      if (turn !== issuerTurn || disposed)
+        held.release()
+      else
+        issuer = held
+    }, () => undefined)
+  }
+
+  /** 不再是在等的那一页（请求结束、进入编辑、撤回、停下）：放开"发出过请求"的锁；还在拿的到了随即放开 */
+  function releaseIssuer(): void {
+    issuerTurn += 1
+    holdingIssuer = false
+    issuer?.release()
+    issuer = undefined
   }
 
   function set(next: EditRequestProgress | undefined): void {
@@ -180,13 +219,14 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     options.onProgress(next)
   }
 
-  /** 结束（不是进入编辑）：不再续期，清掉这一页发出过的记号，说明交给状态机 */
+  /** 结束（不是进入编辑）：不再续期，清掉这一页发出过的记号、放开它的锁，说明交给状态机 */
   function finish(end: EditRequestEnd): void {
     rounds += 1
     stopTimer()
     progress = undefined
     version += 1
     options.issued.clear()
+    releaseIssuer()
     options.onEnd(end)
   }
 
@@ -241,11 +281,12 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
       return
     }
     options.trace?.({ kind: 'request-enter', at: clock.now() })
-    // 状态机已经在进入编辑：请求随之完成（取得编辑权之后服务端清掉它与保留），这里静静地回到没有请求、清掉记号
+    // 状态机已经在进入编辑：请求随之完成（取得编辑权之后服务端清掉它与保留），这里静静地回到没有请求、清掉记号、放开锁
     rounds += 1
     progress = undefined
     version += 1
     options.issued.clear()
+    releaseIssuer()
   }
 
   /** 发出或续期的回答（source：续期时请求还在槽里，见 reservedForOther） */
@@ -369,20 +410,26 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
         return
       options.trace?.({ kind: 'request-sent', at: clock.now(), outcome: outcome.kind })
       // 这一页发出过它（审查 B2）：在等待就记下服务端给的发出时刻（同一个人在别的页面先发出过时只是续期，时刻是那一次的）；编辑权交给了本页
-      // （reserved、free）就记下没有时刻的（进入不了、留在 granted 时刷新之后照记号恢复）
+      // （reserved、free）就记下没有时刻的（进入不了、留在 granted 时刷新之后照记号恢复）。记下的同时持有"发出过请求"的锁（复验 C2）：
+      // 随即进入了编辑的，进入时放开
       if (outcome.kind === 'pending') {
         options.issued.write(outcome.requestedAt)
+        holdIssuer()
         set({ kind: 'waiting', holder: outcome.holder.holder, cancelFailure: undefined })
         schedule(REQUEST_RENEW_MS)
         return
       }
-      if (outcome.kind === 'reserved' || outcome.kind === 'free')
+      if (outcome.kind === 'reserved' || outcome.kind === 'free') {
         options.issued.write(undefined)
+        holdIssuer()
+      }
       apply(outcome, 'send')
     },
 
-    whose: (mine) => {
-      if (issuedHere(options.issued.read(), mine))
+    whose: (mine, issuerHeld) => {
+      // 记号对得上、而且本浏览器里没有页面持有"发出过请求"的锁（原来那页已经刷新或关掉）才是这一页的；锁有人持有，这一页就是复制出来的标签页
+      // （复验 C2）：与别处发出的一样，清掉复制来的记号
+      if (!issuerHeld && issuedHere(options.issued.read(), mine))
         return 'here'
       options.issued.clear()
       return mine.requestedAt === undefined ? 'none' : 'elsewhere'
@@ -393,6 +440,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
         return
       rounds += 1
       since = clock.now()
+      holdIssuer()
       set({ kind: 'waiting', holder, cancelFailure: undefined })
       void renew()
     },
@@ -448,10 +496,12 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     withdraw: () => {
       if (disposed || progress === undefined)
         return
-      // 记号不清：刷新时这一次撤回没送到的话，刷新之后照记号恢复等待（送到了就读不到本人的请求，到时清掉）
+      // 记号不清：刷新时这一次撤回没送到的话，刷新之后照记号恢复等待（送到了就读不到本人的请求，到时清掉）。锁放开：这一页不再等了
+      // （编辑器建不起来时页面还在；关页时浏览器本来也会放开）
       void api.cancel(documentId).catch(() => undefined)
       rounds += 1
       stopTimer()
+      releaseIssuer()
       set(undefined)
     },
 
@@ -461,6 +511,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
       disposed = true
       rounds += 1
       stopTimer()
+      releaseIssuer()
       stopWatchingVisibility()
     },
   }

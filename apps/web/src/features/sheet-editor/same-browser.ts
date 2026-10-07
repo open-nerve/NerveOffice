@@ -5,13 +5,17 @@
 //   heldHere 看本浏览器里有没有标签页持有它（query：别的浏览器、配置文件、无痕窗口与设备都看不到）。拿到之后锁的回调一直挂着，
 //   直到 release；页面关闭、刷新、导航离开、崩溃时浏览器自己放开（探索 §3.2：1–13 ms）；
 //   untilFree 等它空着（排队、轮到即放开，只当信号）：同一个浏览器里的交接以它为"那边做完了"的信号；
+// - 锁 nerve-office:edit-request:<documentId>（M3-P5 复验 C2）：发出过请求编辑的标签页在等待（含编辑权交给了本页、还没进入的 granted）期间
+//   以共享方式持有它（holdIssuedRequest；同一个人在两页都点了"请求编辑"时两页都持有）。issuedRequestHeld 看本浏览器里有没有标签页持有它：
+//   "复制标签页"会连同 sessionStorage 里"发出过请求"的记号（issued-request.ts）一起复制，记号对得上而这把锁有人持有，说明原来那页还在、
+//   自己是复制出来的；没人持有说明原来那页已经刷新或关掉（浏览器在页面卸载时替它放开）；
 // - 交接频道 nerve-office:doc:<documentId>（BroadcastChannel）：同一个浏览器里本人接管时的请求与回应（设计 §3.7；请求方一侧在 self-takeover.ts，
 //   回应的一侧在 tab-handover.ts）。
 //   消息带版本（v）：两个标签页可能载入了不同版本的页面，版本不同的、解析不出的、请求里的文档不是这一份的一律忽略（对方按没有回应处理）。
 //   只带文档、请求、标签页与用户的标识，不带令牌（设计 §3.13）；回应按 requestId 配对（onReply）。用 addEventListener('message')：
 //   E2E 的"吞消息"注入按它写（设计 §4）。频道在第一次收发时才打开；
 // - 浏览器没有这两样时（不支持、不在安全上下文里，或者锁的请求出错）退化：拿到的句柄从不被抢、本浏览器里看不到别人，频道不通——
-//   这一页照常编辑，同一个浏览器里的交接退回跨设备的做法（服务端照样是唯一的权威）。
+//   这一页照常编辑，同一个浏览器里的交接退回跨设备的做法（服务端照样是唯一的权威）；请求编辑的恢复退回只看记号。
 import { z } from 'zod'
 
 /** 本页持有的锁（正在编辑：服务端批准之后直到离开编辑） */
@@ -91,6 +95,13 @@ export interface SameBrowser {
    * 不再等）从队里撤下，交回 false。浏览器没有锁、请求出错时立即交回 false。从不失败
    */
   readonly untilFree: (signal: AbortSignal) => Promise<boolean>
+  /**
+   * 以共享方式拿"发出过请求编辑"的锁（M3-P5 复验 C2，见文件头）：发出过请求的这一页在等待（含 granted）期间持有，请求结束、进入编辑、撤回时
+   * release。别的标签页同样共享地拿得到（同一个人在两页都点了"请求编辑"）。浏览器没有锁、请求出错时交回从不被抢的句柄。从不失败
+   */
+  readonly holdIssuedRequest: () => Promise<HeldLock>
+  /** 本浏览器里有没有标签页持有"发出过请求编辑"的锁（本页持有的也算）。查不出时为 false（退回只看记号） */
+  readonly issuedRequestHeld: () => Promise<boolean>
   /** 发给本浏览器里别的标签页（本页自己收不到，BroadcastChannel 的约定）。频道不通时什么也不做 */
   readonly post: (message: HandoverMessage) => void
   /** 收别的标签页发来的、认得出的消息（parseHandoverMessage）；返回退订的函数 */
@@ -99,8 +110,12 @@ export interface SameBrowser {
   readonly close: () => void
 }
 
-/** 锁的请求的选项（Web Locks 的 LockOptions 里用到的部分；signal 给等锁的请求撤销用：交接以等锁为信号，untilFree） */
+/**
+ * 锁的请求的选项（Web Locks 的 LockOptions 里用到的部分；signal 给等锁的请求撤销用：交接以等锁为信号，untilFree；mode 不给时是 exclusive，
+ * 只有"发出过请求编辑"的锁用 shared）
+ */
 export interface LockRequestOptions {
+  readonly mode?: 'exclusive' | 'shared'
   readonly ifAvailable?: boolean
   readonly steal?: boolean
   readonly signal?: AbortSignal
@@ -141,6 +156,11 @@ export function lockNameOf(documentId: string): string {
 /** 这份文档的交接频道名（设计 §3.7） */
 export function channelNameOf(documentId: string): string {
   return `nerve-office:doc:${documentId}`
+}
+
+/** 这份文档"发出过请求编辑"的锁名（M3-P5 复验 C2）：与 sessionStorage 里那个记号的键同名（锁与存储是两个名字空间） */
+export function issuedRequestLockNameOf(documentId: string): string {
+  return `nerve-office:edit-request:${documentId}`
 }
 
 /** 浏览器拒绝请求的原因是不是"被抢"（AbortError：各家的说明不同，只认名字，探索 §3.2） */
@@ -203,11 +223,25 @@ async function request(locks: LockApi, name: string, options: LockRequestOptions
   return outcome
 }
 
+/** 本浏览器里有没有标签页持有这把锁（query：别的浏览器、配置文件、无痕窗口与设备都看不到）。浏览器没有锁、查不出时为 false */
+async function heldInBrowser(locks: LockApi | undefined, name: string): Promise<boolean> {
+  if (locks === undefined)
+    return false
+  try {
+    const snapshot = await locks.query()
+    return (snapshot.held ?? []).some(lock => lock.name === name)
+  }
+  catch {
+    return false
+  }
+}
+
 /**
  * 这份文档的锁与交接频道（见文件头）。apis 由组装处给出：浏览器没有的那一样为 undefined，对应的部分退化
  */
 export function sameBrowserFor(documentId: string, apis: SameBrowserApis): SameBrowser {
   const name = lockNameOf(documentId)
+  const issuedName = issuedRequestLockNameOf(documentId)
   const { locks, openChannel } = apis
   let channel: ChannelApi | undefined
   let closed = false
@@ -250,17 +284,7 @@ export function sameBrowserFor(documentId: string, apis: SameBrowserApis): SameB
       const outcome = await request(locks, name, { steal: true })
       return typeof outcome === 'string' ? UNTRACKED : outcome
     },
-    heldHere: async () => {
-      if (locks === undefined)
-        return false
-      try {
-        const snapshot = await locks.query()
-        return (snapshot.held ?? []).some(lock => lock.name === name)
-      }
-      catch {
-        return false
-      }
-    },
+    heldHere: async () => heldInBrowser(locks, name),
     untilFree: async (signal) => {
       if (locks === undefined || signal.aborted)
         return false
@@ -274,6 +298,14 @@ export function sameBrowserFor(documentId: string, apis: SameBrowserApis): SameB
         return false
       }
     },
+    holdIssuedRequest: async () => {
+      if (locks === undefined)
+        return UNTRACKED
+      // 共享：别的标签页也只共享地拿它，ifAvailable 实际上总能拿到；万一拿不到（被独占着）、请求出错，退回从不被抢的句柄
+      const outcome = await request(locks, issuedName, { mode: 'shared', ifAvailable: true })
+      return typeof outcome === 'string' ? UNTRACKED : outcome
+    },
+    issuedRequestHeld: async () => heldInBrowser(locks, issuedName),
     post: (message) => {
       const open = channelNow()
       try {

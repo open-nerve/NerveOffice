@@ -1,10 +1,10 @@
 import type { AcquiredEditLease, RenewedEditLease, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
-import { EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
+import { EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
-import { acquireEditLease, browserLeaseClock, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
+import { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
@@ -284,6 +284,11 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
 })
 
 describe('心跳续租', () => {
+  it('一个心跳周期是契约的 EDIT_LEASE_HEARTBEAT_SECONDS（10 秒）：HEARTBEAT_MS 是空闲释放、自动交出没成之后"过一个心跳周期再看"共用的那一个（M3-P5 复验 C4）', () => {
+    expect(HEARTBEAT_MS).toBe(EDIT_LEASE_HEARTBEAT_SECONDS * 1000)
+    expect(HEARTBEAT_MS).toBe(10_000)
+  })
+
   it('每 10 秒一次，带上距离最后一次键盘、鼠标操作的整秒数（单调的时钟，向下取整）', async () => {
     const context = setup()
     await held(context)

@@ -423,6 +423,88 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     await expect(requestPrompt(page)).toBeVisible()
   })
 
+  test('US-M3-06 复制标签页不接手正在等的请求（复验 C2）：乙在 R1 请求编辑、在等；复制 R1 得到的 R2 带着同样的"发出过请求"的记号（sessionStorage 随之复制），而 R1 还持有"发出过请求"的锁——R2 只说"你已在别处请求编辑这份文档"，不进入等待，清掉复制来的记号；R2 关掉不撤回请求——R1 照旧在等，甲的提示照旧', async ({ page, anotherDevice }) => {
+    const { holder, requester, documentId } = await sharedDocument('rq-dup')
+    await holderEditing(page, holder, documentId)
+    await requesterWaiting(anotherDevice, requester, holder, documentId)
+    await prompted(page, requester, documentId)
+
+    // 复制标签页（Playwright 没有这个操作）：同一个浏览器上下文里新开一页，载入之前把 R1 的记号原样放进它的 sessionStorage
+    const key = `nerve-office:edit-request:${documentId}`
+    const marker = await anotherDevice.evaluate(name => sessionStorage.getItem(name), key)
+    expect(marker).not.toBeNull()
+    const second = await anotherDevice.context().newPage()
+    await second.addInitScript(([name, value]) => {
+      if (sessionStorage.getItem(name) === null)
+        sessionStorage.setItem(name, value)
+    }, [key, marker ?? ''] as const)
+    const requestPath = `/api/documents/${documentId}/edit-lease/request`
+    const fromSecond: string[] = []
+    second.on('request', (request) => {
+      if (new URL(request.url()).pathname === requestPath)
+        fromSecond.push(request.method())
+    })
+    await openReader(second, documentId)
+    await expect(statusRegion(second)).toContainText('你已在别处请求编辑这份文档')
+    await expect(requestEditButton(second)).toBeVisible()
+    await expect(cancelRequestButton(second)).toHaveCount(0)
+    expect(await second.evaluate(name => sessionStorage.getItem(name), key)).toBeNull()
+
+    // R2 关掉（页面还在时派发 pagehide）：不撤回（DELETE），之前也没续期（PUT）
+    await second.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+    expect(await second.evaluate(async () => (await fetch('/api/health/live')).status)).toBe(200)
+    expect(fromSecond).toEqual([])
+    await second.close()
+
+    // R1 的下一次续期：请求还在（pending），照旧在等；甲的下一次心跳：提示照旧
+    const renewed = anotherDevice.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === requestPath)
+    await nextRenewal(anotherDevice)
+    expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
+    await expect(statusRegion(anotherDevice)).toHaveText(waitingFor(holder))
+    await nextHeartbeat(page, documentId)
+    await expect(requestPrompt(page)).toBeVisible()
+  })
+
+  test('US-M3-06 发出过请求的那一页已经不在（关掉时撤回没送到，"发出过请求"的锁随页面放开）：带着它的记号的页面恢复等待（审查 B2、复验 C2）——不另发出，照常续期', async ({ page, anotherDevice }) => {
+    const { holder, requester, documentId } = await sharedDocument('rq-gone')
+    await holderEditing(page, holder, documentId)
+    await requesterWaiting(anotherDevice, requester, holder, documentId)
+    const key = `nerve-office:edit-request:${documentId}`
+    const marker = await anotherDevice.evaluate(name => sessionStorage.getItem(name), key)
+    expect(marker).not.toBeNull()
+
+    // R1 离开：撤回送不到服务端（拦下），请求还在；页面随即关掉（与"旧页已关、它的释放没送到"同一个做法：关页时的 keepalive 拦不住）
+    const requestPath = `/api/documents/${documentId}/edit-lease/request`
+    await anotherDevice.route(`**${requestPath}`, async route => route.request().method() === 'DELETE' ? route.abort('internetdisconnected') : route.continue())
+    const withdrawn = anotherDevice.waitForRequest(request => request.method() === 'DELETE' && new URL(request.url()).pathname === requestPath)
+    await anotherDevice.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+    await withdrawn
+    const context = anotherDevice.context()
+    await anotherDevice.close()
+
+    // 同一个标签页刷新之后（sessionStorage 还在）：载入之前把记号放回去
+    const reopened = await context.newPage()
+    await reopened.addInitScript(([name, value]) => {
+      if (sessionStorage.getItem(name) === null)
+        sessionStorage.setItem(name, value)
+    }, [key, marker ?? ''] as const)
+    const sent: string[] = []
+    reopened.on('request', (request) => {
+      if (new URL(request.url()).pathname === requestPath)
+        sent.push(request.method())
+    })
+    const renewed = reopened.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === requestPath)
+    // 打开即恢复等待：页头是"取消请求"（不是 openReader 等的"请求编辑"）
+    await reopened.goto(`/documents/${documentId}`)
+    await waitForEditorAccess(reopened, 'read')
+    await expect(cancelRequestButton(reopened)).toBeVisible()
+    // 只看在等谁：持有者的修改由定时的自动保存存上（容器 E2E 与 E2E_AUTOSAVE=running），晚于这一页载入时状态区另有"有更新"的一句
+    await expect(statusRegion(reopened)).toContainText(waitingFor(holder))
+    await expect(statusRegion(reopened)).not.toContainText('你已在别处请求编辑这份文档')
+    expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
+    expect(sent).not.toContain('POST')
+  })
+
   test('US-M3-06 请求方的续期一直得到 CSRF_TOKEN_INVALID（例如网关剥掉了请求头）、确认会话照常是本人：续期与确认会话按续期的节奏，不按网络往返的速度连着发（审查 B1）', async ({ page, anotherDevice }) => {
     const { holder, requester, documentId } = await sharedDocument('rq-csrf')
     await holderEditing(page, holder, documentId)

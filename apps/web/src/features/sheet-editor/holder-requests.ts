@@ -13,21 +13,19 @@
 //   状态机给的时限）的结果——交出了（回包丢了的重试得到 handed_over、请求方已经接手得到 replaced 都算）、请求已经不在（EDIT_REQUEST_GONE，
 //   租约不动：withdrawn，说明一句）、这一代已经因为别的原因失效、没有结果（网络、服务端出错、会话的问题、到了时限：failed，提示里说明原因，
 //   请求照旧在）；留在编辑时（stayed）接着计时：自动交出没成的过一个心跳周期再看（再也存不上的不再试），别的照截止时刻；离开的过程中才到的
-//   请求（那时只记下、没有计时）按请求刚到处理（审查 B3）；离开了、失去编辑权时清掉（clear），换了一代（进入编辑）时重新开始（reset）。
+//   请求（那时只记下、没有计时）按请求刚到处理（审查 B3），离开的过程中换了一个请求的同样（原来的计时属于前一个请求，丢弃，复验 C3）；
+//   离开了、失去编辑权时清掉（clear），换了一代（进入编辑）时重新开始（reset）。
 import type { PendingEditRequest, UserSummary } from '@nerve-office/contracts'
 import type { EditLease, EditLeaseApi, LeaseClock, LeaseLoss } from './edit-lease.ts'
 import type { IdleWatch } from './idle-watch.ts'
 import type { PageVisibility } from './reading-checks.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, NetworkError } from '../../shared/api/index.ts'
-import { leaseLossOf, within } from './edit-lease.ts'
+import { HEARTBEAT_MS, leaseLossOf, within } from './edit-lease.ts'
 import { createIdleWatch } from './idle-watch.ts'
 
 /** 有人请求编辑时，本页空闲满它就先保存再自动交出（US-M3-06）：2 分钟 */
 const HANDOVER_IDLE_MS = EDIT_HANDOVER_IDLE_SECONDS * 1000
-
-/** 自动交出这一轮没成（会话不对、没联网、没存上）之后，隔多久再看：一个心跳周期（M3-P5 设计 §3.6） */
-const HANDOVER_RECHECK_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 
 /**
  * 持有者这一侧收到的请求编辑（M3-P5 设计 §3.6：心跳带来的待回应的请求）：标识（交出、谢绝时带上）与请求方；declining 是"继续编辑"正在谢绝；
@@ -110,9 +108,9 @@ export interface HolderRequests {
   readonly stayed: (retry: { readonly automatic: boolean, readonly ended: boolean }) => void
   /** 离开了编辑、失去编辑权：请求、说明与计时都清掉 */
   readonly clear: () => void
-  /** 换了一代（进入编辑）：之前的请求、说明与刚谢绝的那个不再算（之后的心跳带来的才算） */
+  /** 换了一代（进入编辑）：之前的请求、说明、刚谢绝的那个与计时都不再算（之后的心跳带来的才算） */
   readonly reset: () => void
-  /** 停下（卸载）：不再计时、不再回调 */
+  /** 停下（卸载）：不再计时、不再回调；之后的 arrive、entered、stayed、leaving、clear 一律什么也不做 */
   readonly dispose: () => void
 }
 
@@ -164,12 +162,15 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
     options.onChange()
   }
 
-  /** 有请求在等、空闲满了 2 分钟：自动交出。会话不对、没联网时这一轮不交出（交出与保存都要它们；不主动向服务端确认会话），过一个心跳周期再看 */
+  /**
+   * 有请求在等、空闲满了 2 分钟：自动交出。会话不对、没联网时这一轮不交出（交出与保存都要它们；不主动向服务端确认会话），过一个心跳周期再看
+   * （HEARTBEAT_MS：与空闲释放没成之后同一个间隔，edit-mode.ts；M3-P5 设计 §3.6、§3.9）
+   */
   function idleReached(): void {
     if (!options.editing() || incoming === undefined || incoming.declining)
       return
     if (!options.writable()) {
-      watch?.resume(HANDOVER_RECHECK_MS)
+      watch?.resume(HEARTBEAT_MS)
       return
     }
     options.handOver()
@@ -246,12 +247,18 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
         return
       incoming = { id: request.id, requester: request.requester, declining: false, failure: undefined }
       notice = undefined
-      if (options.editing())
+      if (options.editing()) {
         respond()
+        return
+      }
+      // 不在编辑（进入、离开编辑的过程中）只记下。离开的过程中换了一个请求（原来的请求方取消了，另一个人请求了）：原来的计时属于前一个请求，
+      // 停掉并丢弃——留在编辑之后按请求刚到处理（空闲已满 2 分钟、可写、联网时同一步交出），不沿用前一个请求"自动交出没成、过一个心跳周期
+      // 再看"的那一次（M3-P5 复验 C3）
+      stopWatching()
     },
 
     entered: () => {
-      if (incoming !== undefined)
+      if (!disposed && incoming !== undefined)
         respond()
     },
 
@@ -282,6 +289,8 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
     },
 
     leaving: () => {
+      if (disposed)
+        return
       watch?.stop()
     },
 
@@ -290,10 +299,10 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
     failed: (request, error) => noteFailure(request, 'handover', error),
 
     stayed: ({ automatic, ended }) => {
-      if (incoming === undefined)
+      if (disposed || incoming === undefined)
         return
-      // 离开的过程中才到的请求（离开时只记下、没有计时，审查 B3）：按"请求刚到"处理——空闲已满 2 分钟、会话可写、联网时随即自动交出，
-      // 否则显示提示、开始计时
+      // 离开的过程中才到的请求（离开时只记下、没有计时，审查 B3；换了一个请求的，原来的计时已经丢弃，复验 C3）：按"请求刚到"处理——
+      // 空闲已满 2 分钟、会话可写、联网时随即自动交出，否则显示提示、开始计时
       if (watch === undefined) {
         respond()
         return
@@ -301,16 +310,20 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
       if (!automatic)
         watch.resume()
       else if (!ended)
-        watch.resume(HANDOVER_RECHECK_MS)
+        watch.resume(HEARTBEAT_MS)
     },
 
     clear: () => {
+      if (disposed)
+        return
       stopWatching()
       incoming = undefined
       notice = undefined
     },
 
     reset: () => {
+      // 计时一并停下（复验 C4）：它属于之前的请求；新的一代里请求到了（arrive、entered）再重新开始
+      stopWatching()
       incoming = undefined
       notice = undefined
       declinedId = undefined

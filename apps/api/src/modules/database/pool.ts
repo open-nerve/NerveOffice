@@ -15,7 +15,15 @@ const QUERY_TIMEOUT_MARGIN_MS = 5_000
 export const KEEP_ALIVE_INITIAL_DELAY_MS = 10_000
 
 /**
- * 连接池与超时（P2 设计 §3.7）：处理时间的上限由语句超时、等锁超时与取连接的超时保证。
+ * 连接的启动参数：会话的 transaction_timeout 定为 0（不限，PostgreSQL 的默认值）。库、角色或服务器上设了别的默认值时，
+ * 每个事务在 BEGIN 就带着那个计时器，事务里再设一个更短的也缩不短它（PostgreSQL 18 实测）——要限时的事务（保存，M3-P5 复验 C1）
+ * 由 TransactionRunner 在事务里自己设，靠的就是这里的 0。与下面的三个超时一样，应用连接的超时由应用定，不取库上的默认值
+ */
+export const SESSION_OPTIONS = '-c transaction_timeout=0'
+
+/**
+ * 连接池与超时（P2 设计 §3.7）：处理时间的上限由语句超时、等锁超时与取连接的超时保证；要整个事务限时的由事务自己设
+ * （TransactionRunner 的 timeoutMs，会话的默认值见 SESSION_OPTIONS）。
  * 只读快照进行中，连接池上的查询与借连接一律报错（refuseInsideSnapshot）
  */
 export function createPool(settings: AppConfig['database'], logger: AppLogger, snapshots: SnapshotScope): pg.Pool {
@@ -28,6 +36,7 @@ export function createPool(settings: AppConfig['database'], logger: AppLogger, s
     statement_timeout: settings.statementTimeoutMs,
     lock_timeout: settings.lockTimeoutMs,
     idle_in_transaction_session_timeout: settings.idleInTransactionTimeoutMs,
+    options: SESSION_OPTIONS,
     // 连接静默断开（主机宕机、NAT 丢弃连接）时，TCP keepalive 让它尽快失败，查询不会无限等待（审查 A8）
     keepAlive: true,
     keepAliveInitialDelayMillis: KEEP_ALIVE_INITIAL_DELAY_MS,

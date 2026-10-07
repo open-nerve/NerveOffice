@@ -87,8 +87,9 @@
 // - 请求方（阅读时，持有者是别人）：请求的发出、等待、续期、取消与空闲取消在 edit-request.ts，进展放进阅读的状态（request）；编辑权交给了本页
 //   （或者空着）、页面看得见时以普通申请进入编辑（与"编辑"同一个入口，空闲释放从进入的那一刻重新算）；正在编辑的是自己时改走"在此编辑"；
 //   别的结束（谢绝、别人先请求了、编辑权刚交给了别人、请求不在了、空闲取消、没能请求）放进阅读的说明。与"在此编辑"互斥：一个在进行时另一个不开始。
-//   编辑状态里有本人的请求而本页没在等时：这一页发出过它（刷新之前发出、刷新时撤回没送到）就恢复等待；本人在别的页面、设备上发出的不恢复，阅读里
-//   说一句（审查 B2：不然这一页关掉、空闲就把那边正在等的请求撤掉）。申请得到 EDIT_LEASE_RESERVED（编辑权刚交给了别人）时说明交给了谁、留到何时；
+//   编辑状态里有本人的请求而本页没在等时：这一页发出过它（刷新之前发出、刷新时撤回没送到）、发出它的那一页又不在本浏览器里了（"发出过请求"
+//   的锁没人持有，复验 C2：复制出来的标签页带着同样的记号）就恢复等待；本人在别的页面、设备上发出的不恢复，阅读里说一句（审查 B2：不然这一页
+//   关掉、空闲就把那边正在等的请求撤掉）。申请得到 EDIT_LEASE_RESERVED（编辑权刚交给了别人）时说明交给了谁、留到何时；
 // - 持有者（编辑时）：心跳带来的待回应的请求、2 分钟的计时、谢绝与交出的结果在 holder-requests.ts，在等的请求与说明放进编辑与离开编辑的状态
 //   （页头下面的提示）。本页空闲满 2 分钟（请求到达时已经满了，或者提示在的时候到了）就自动交出（会话可写、联网时）。"交出"与自动交出是
 //   leaveEditing('handover-request')：屏障 → 挂起 → 等面板 → flush('handover') → 存上了（公式没收齐也可以）就交出（POST …/handover，至多
@@ -128,11 +129,11 @@ import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { HandoverFailure, HeldLock, SameBrowser } from './same-browser.ts'
 import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
-import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
+import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
 import { incompatibilityOf } from './client-format.ts'
-import { acquireEditLease, leaseHolderOf, leaseLossOf, within } from './edit-lease.ts'
+import { acquireEditLease, HEARTBEAT_MS, leaseHolderOf, leaseLossOf, within } from './edit-lease.ts'
 import { createEditRequests } from './edit-request.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
@@ -155,11 +156,11 @@ export type { EditingNotice, IncomingRequest, TakeoverProgress }
  */
 export const EXIT_RELEASE_WAIT_MS = 5_000
 
-/** 空闲释放的阈值（US-M3-07）：10 分钟没有键盘、鼠标操作 */
+/**
+ * 空闲释放的阈值（US-M3-07）：10 分钟没有键盘、鼠标操作。这一轮没成（没存上、会话不对、没联网）之后过一个心跳周期再看（M3-P5 设计 §3.9）：
+ * edit-lease.ts 的 HEARTBEAT_MS，自动交出没成时同样用它（holder-requests.ts，复验 C4）
+ */
 const IDLE_RELEASE_MS = EDIT_IDLE_RELEASE_SECONDS * 1000
-
-/** 空闲释放这一轮没成（没存上、会话不对、没联网）之后，隔多久再看：一个心跳周期（M3-P5 设计 §3.9）。自动交出没成时同样（holder-requests.ts） */
-export const IDLE_RECHECK_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 
 /** 离开编辑的各种原因的名字（以只读重建失败时的错误说明里用） */
 const LEAVE_LABELS: Readonly<Record<LeaveCause, string>> = {
@@ -193,12 +194,14 @@ interface FormulasFlag {
 }
 
 /**
- * 阅读时的一次检查读到的：编辑状态，以及持有者是自己时那个页面在不在本浏览器（M3-P5 设计 §3.7）；发出时请求编辑的进展的版本（M3-P5 设计 §3.6：
- * 变过了的话，读到的"有本人的请求"可能已经过时）
+ * 阅读时的一次检查读到的：编辑状态，以及持有者是自己时那个页面在不在本浏览器（M3-P5 设计 §3.7）；有本人的请求时本浏览器里有没有页面持有
+ * "发出过请求"的锁（issuerHeld，M3-P5 复验 C2：有就是发出它的那一页还在）；发出时请求编辑的进展的版本（M3-P5 设计 §3.6：变过了的话，
+ * 读到的"有本人的请求"可能已经过时）
  */
 interface CheckedStatus {
   readonly fetched: FetchedEditStatus
   readonly selfHolder: SelfHolder | undefined
+  readonly issuerHeld: boolean
   readonly requestVersion: number
 }
 
@@ -725,17 +728,26 @@ export function createEditMode(options: EditModeOptions): EditMode {
     enter: enterGranted,
     onEnd: requestEnded,
     issued: options.issuedRequest,
+    issuerLock: options.sameBrowser.holdIssuedRequest,
     trace: traced,
   })
   const checks = createReadingChecks<CheckedStatus>({
     clock,
     visibility: options.visibility,
-    // 持有者是自己时同一次检查里看本机锁在不在本浏览器（M3-P5 设计 §3.7）：读屏状态区的说法随结果一次换好。记下发出时请求的进展的版本：
+    // 持有者是自己时同一次检查里看本机锁在不在本浏览器（M3-P5 设计 §3.7）：读屏状态区的说法随结果一次换好。有本人的请求（待回应的、留给本人的
+    // 保留）时同样看"发出过请求"的锁在不在本浏览器（复验 C2：在就是发出它的那一页还在，这一页可能是复制出来的）。记下发出时请求的进展的版本：
     // 回来时变过了就不按它恢复等待（M3-P5 设计 §3.6）
     fetch: async () => {
       const requestVersion = requests.version()
       const fetched = await api.editStatus(documentId)
-      return { fetched, selfHolder: fetched.status.editor?.sameUser === true ? await locate() : undefined, requestVersion }
+      const { status } = fetched
+      const mine = status.request?.mine === true || status.reservation?.mine === true
+      return {
+        fetched,
+        selfHolder: status.editor?.sameUser === true ? await locate() : undefined,
+        issuerHeld: mine && await options.sameBrowser.issuedRequestHeld(),
+        requestVersion,
+      }
     },
     allowed: () => !disposed && mode.kind === 'reading' && session === 'active',
     onResult: applyCheck,
@@ -836,14 +848,14 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 正在按新的版本重建时不动 update（重建完了以新的修订号为准，审查 A1）
     const loading = reading.update === 'loading'
     if (result.kind === 'status') {
-      const { fetched: { status, serverTime }, selfHolder, requestVersion } = result.fetched
+      const { fetched: { status, serverTime }, selfHolder, issuerHeld, requestVersion } = result.fetched
       const holder = status.editor === null ? undefined : leaseHolderOf(status.editor, serverTime)
       latestFlag = { revision: status.revision, formulasPending: status.formulasPending }
       canTakeOver = status.canTakeOver
       // 编辑状态里本人的请求（待回应的，或者已经交给了本人的保留）是谁发出的（M3-P5 审查 B2）：只在本页没有请求、检查发出之后请求的进展没变过
-      // （例如刚取消）时认——本页有请求时就是它自己的
+      // （例如刚取消）时认——本页有请求时就是它自己的。本页没有请求时也不持有"发出过请求"的锁，检查看到的锁是别的页面的（复验 C2）
       const owner = requestVersion === requests.version() && requests.progress() === undefined
-        ? requests.whose({ requestedAt: status.request?.mine === true ? status.request.requestedAt : undefined, reserved: status.reservation?.mine === true })
+        ? requests.whose({ requestedAt: status.request?.mine === true ? status.request.requestedAt : undefined, reserved: status.reservation?.mine === true }, issuerHeld)
         : 'none'
       setMode({
         ...reading,
@@ -1047,7 +1059,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     if (mode.kind !== 'editing')
       return
     if (!writableUnprompted()) {
-      idle?.resume(IDLE_RECHECK_MS)
+      idle?.resume(HEARTBEAT_MS)
       return
     }
     await leaveEditing('idle')
@@ -1205,7 +1217,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       if (!idleRelease)
         idle?.resume()
       else if (!ended)
-        idle?.resume(IDLE_RECHECK_MS)
+        idle?.resume(HEARTBEAT_MS)
       holder.stayed({ automatic: cause === 'handover-request' && auto, ended })
     }
     // 面板里防抖中的改动先写进模型（批注浮层、数据验证面板，M3-P4 设计 §3.4）：之前没有别的修改时，它们是"有没有没存的"的全部

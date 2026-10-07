@@ -1,13 +1,18 @@
 import type { DocumentEditor, EditRequestOutcome, UserSummary } from '@nerve-office/contracts'
 import type { EditRequestApi, EditRequestEnd, EditRequestProgress, EditRequestsOptions } from './edit-request.ts'
 import type { HandoverTraceEvent } from './handover-trace.ts'
+import type { HeldLock } from './same-browser.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createEditRequests, REQUEST_IDLE_MS, REQUEST_RENEW_MS } from './edit-request.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
+import { fakeBrowser } from './same-browser.test-support.ts'
+import { issuedRequestLockNameOf, sameBrowserFor } from './same-browser.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
+/** "发出过请求"的锁（复验 C2） */
+const ISSUED_LOCK = issuedRequestLockNameOf(DOCUMENT_ID)
 const REQUEST_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000f1'
 const AMY: UserSummary = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }
 const BEN: UserSummary = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e2', username: 'ben', displayName: '本' }
@@ -65,6 +70,8 @@ interface Setup {
   readonly enter?: () => boolean
   /** 测试构建的观察钩子（M3-P5 S8）：默认不给 */
   readonly trace?: EditRequestsOptions['trace']
+  /** 换掉"发出过请求"的锁（要控制拿到的时机时）；默认是假浏览器里的 */
+  readonly issuerLock?: EditRequestsOptions['issuerLock']
 }
 
 /** 请求方的环境：假的接口、时钟与可见性；最后一次操作停在开始的那一刻，act 记下一次操作；进展与结束按先后记下 */
@@ -82,6 +89,8 @@ function setup(options: Setup = {}) {
   const enter = vi.fn(options.enter ?? (() => true))
   const onSessionProblem = vi.fn<EditRequestsOptions['onSessionProblem']>()
   const issued = memoryIssuedRequest(DOCUMENT_ID)
+  /** 同一个浏览器（"发出过请求"的锁，复验 C2）：本页在里面叫 this */
+  const browser = fakeBrowser()
   const requests = createEditRequests({
     documentId: DOCUMENT_ID,
     api,
@@ -93,6 +102,7 @@ function setup(options: Setup = {}) {
     enter,
     onEnd: end => ends.push(end),
     issued: issued.marker,
+    issuerLock: options.issuerLock ?? sameBrowserFor(DOCUMENT_ID, browser.tab('this')).holdIssuedRequest,
     trace: options.trace,
   })
   disposers.push(requests.dispose)
@@ -106,6 +116,9 @@ function setup(options: Setup = {}) {
     enter,
     onSessionProblem,
     issued: issued.marker,
+    browser,
+    /** 现在共享地持有"发出过请求"的锁的标签页 */
+    issuers: () => browser.sharedHoldersOf(ISSUED_LOCK),
     act: () => {
       lastActive = time.now()
     },
@@ -702,18 +715,143 @@ describe('这一页发出过的请求（审查 B2，issued-request.ts）', () =>
   it('whose：记号对得上（发出时刻相同）是这一页的；本人别的请求是别处的（清掉对不上的记号）；没有本人的请求时清掉记号；保留只认有记号的', async () => {
     const context = setup()
     const requestedAt = PENDING.kind === 'pending' ? PENDING.requestedAt : ''
-    expect(context.requests.whose({ requestedAt, reserved: false })).toBe('elsewhere')
-    expect(context.requests.whose({ requestedAt: undefined, reserved: true })).toBe('none')
-    expect(context.requests.whose({ requestedAt: undefined, reserved: false })).toBe('none')
+    expect(context.requests.whose({ requestedAt, reserved: false }, false)).toBe('elsewhere')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: true }, false)).toBe('none')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: false }, false)).toBe('none')
     context.issued.write(requestedAt)
-    expect(context.requests.whose({ requestedAt, reserved: false })).toBe('here')
-    expect(context.requests.whose({ requestedAt: undefined, reserved: true })).toBe('here')
+    expect(context.requests.whose({ requestedAt, reserved: false }, false)).toBe('here')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: true }, false)).toBe('here')
     expect(context.issued.read()).toBeDefined()
-    expect(context.requests.whose({ requestedAt: '2026-10-07T03:09:00.000Z', reserved: false })).toBe('elsewhere')
+    expect(context.requests.whose({ requestedAt: '2026-10-07T03:09:00.000Z', reserved: false }, false)).toBe('elsewhere')
     expect(context.issued.read()).toBeUndefined()
     context.issued.write(requestedAt)
-    expect(context.requests.whose({ requestedAt: undefined, reserved: false })).toBe('none')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: false }, false)).toBe('none')
     expect(context.issued.read()).toBeUndefined()
+  })
+
+  it('whose（复验 C2）：记号对得上、而本浏览器里有页面持有"发出过请求"的锁——发出它的那一页还在，这一页是复制出来的标签页：按别处发出的回答（保留时是 none），清掉复制来的记号', async () => {
+    const context = setup()
+    const requestedAt = PENDING.kind === 'pending' ? PENDING.requestedAt : ''
+    context.issued.write(requestedAt)
+    expect(context.requests.whose({ requestedAt, reserved: false }, true)).toBe('elsewhere')
+    expect(context.issued.read()).toBeUndefined()
+    context.issued.write(undefined)
+    expect(context.requests.whose({ requestedAt: undefined, reserved: true }, true)).toBe('none')
+    expect(context.issued.read()).toBeUndefined()
+  })
+})
+
+describe('"发出过请求"的锁（复验 C2：复制标签页连同记号一起复制，副本据锁认出原来那页还在）', () => {
+  it('发出之后在等待：共享地持有它；请求结束（谢绝、请求不在、取消、空闲取消……）时放开', async () => {
+    const context = setup()
+    await waiting(context)
+    await settle()
+    expect(context.issuers()).toEqual(['this'])
+    context.api.renew.mockResolvedValueOnce(DECLINED)
+    await context.time.advance(REQUEST_RENEW_MS)
+    await settle()
+    expect(context.issuers()).toEqual([])
+
+    const cancelled = setup()
+    await waiting(cancelled)
+    await cancelled.requests.cancel()
+    await settle()
+    expect(cancelled.issuers()).toEqual([])
+
+    const idle = setup()
+    await waiting(idle)
+    await idle.time.advance(REQUEST_IDLE_MS)
+    await settle()
+    expect(idle.ends).toEqual([{ kind: 'idle' }])
+    expect(idle.issuers()).toEqual([])
+  })
+
+  it('取消没成、回到等待时照旧持有；进入编辑（编辑权交给了本页、看得见）时放开', async () => {
+    const context = setup({ cancel: async () => Promise.reject(new NetworkError('断网')) })
+    await waiting(context)
+    await context.requests.cancel()
+    await settle()
+    expect(context.requests.progress()).toMatchObject({ kind: 'waiting' })
+    expect(context.issuers()).toEqual(['this'])
+    context.api.renew.mockResolvedValueOnce(RESERVED)
+    await context.time.advance(REQUEST_RENEW_MS)
+    await settle()
+    expect(context.enter).toHaveBeenCalledOnce()
+    expect(context.issuers()).toEqual([])
+  })
+
+  it('发出时编辑权就交给了本页：看得见、随即进入的不留着锁（拿到时已经放开）；在后台、留在 granted 的持有它，回到前台进入时放开', async () => {
+    const visible = setup({ send: async () => RESERVED })
+    await visible.requests.send()
+    await settle()
+    expect(visible.enter).toHaveBeenCalledOnce()
+    expect(visible.issuers()).toEqual([])
+
+    const hidden = setup({ send: async () => FREE })
+    hidden.page.set(true)
+    await hidden.requests.send()
+    await settle()
+    expect(hidden.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
+    expect(hidden.issuers()).toEqual(['this'])
+    hidden.page.set(false)
+    await settle()
+    expect(hidden.enter).toHaveBeenCalledOnce()
+    expect(hidden.issuers()).toEqual([])
+  })
+
+  it('恢复等待时持有它；撤回（页面关闭、编辑器建不起来）、停下（卸载）时放开——记号照旧留着（刷新之后照它恢复，原来那页的锁那时已经放开）', async () => {
+    const context = setup()
+    context.issued.write(PENDING.kind === 'pending' ? PENDING.requestedAt : '')
+    context.requests.resume(AMY)
+    await settle()
+    expect(context.issuers()).toEqual(['this'])
+    context.requests.withdraw()
+    await settle()
+    expect(context.issuers()).toEqual([])
+    expect(context.issued.read()).toBeDefined()
+
+    const disposed = setup()
+    await waiting(disposed)
+    await settle()
+    disposed.requests.dispose()
+    await settle()
+    expect(disposed.issuers()).toEqual([])
+  })
+
+  it('拿锁还没回来时请求就结束了（或者停下了）：之后才拿到的锁随即放开，不留着', async () => {
+    const granted = deferred<HeldLock>()
+    const release = vi.fn()
+    const context = setup({ issuerLock: async () => granted.promise })
+    await waiting(context)
+    await context.requests.cancel()
+    expect(context.ends).toEqual([{ kind: 'cancelled' }])
+    granted.resolve({ release, stolen: new Promise<void>(() => {}) })
+    await settle()
+    expect(release).toHaveBeenCalledOnce()
+
+    const late = deferred<HeldLock>()
+    const releaseLate = vi.fn()
+    const disposed = setup({ issuerLock: async () => late.promise })
+    await waiting(disposed)
+    disposed.requests.dispose()
+    late.resolve({ release: releaseLate, stolen: new Promise<void>(() => {}) })
+    await settle()
+    expect(releaseLate).toHaveBeenCalledOnce()
+  })
+
+  it('锁是共享的：同一个浏览器里另一个标签页也发出过（两页都点了"请求编辑"）时两页同时持有；一页结束不影响另一页', async () => {
+    const context = setup()
+    const other = sameBrowserFor(DOCUMENT_ID, context.browser.tab('other'))
+    const held = await other.holdIssuedRequest()
+    await waiting(context)
+    await settle()
+    expect(context.issuers()).toEqual(['other', 'this'])
+    await context.requests.cancel()
+    await settle()
+    expect(context.issuers()).toEqual(['other'])
+    held.release()
+    await settle()
+    expect(context.issuers()).toEqual([])
   })
 })
 

@@ -19,7 +19,7 @@ export interface MappedError {
   /** 随错误响应下发的详情（AppError 带的，例如修订号冲突的当前修订号） */
   readonly details?: ErrorDetails
   /**
-   * 数据库繁忙（等锁超时、语句超时、取不到连接）的原因。这个请求里还没有事务提交过时回 503，记一条 warn，不当作意外错误；
+   * 数据库繁忙（等锁超时、语句超时、超过事务的时限、取不到连接）的原因。这个请求里还没有事务提交过时回 503，记一条 warn，不当作意外错误；
    * 已经有事务提交过时 unexpected 为真：按意外错误回 500（结果未知），另记一条 warn 写明原因，error 与其他意外错误一样只由请求日志记一条
    */
   readonly busy?: DatabaseBusyReason

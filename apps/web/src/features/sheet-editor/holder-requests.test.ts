@@ -1,9 +1,10 @@
 import type { HandedOverEditLease, PendingEditRequest, UserSummary } from '@nerve-office/contracts'
 import type { EditLease, EditLeaseApi, LeaseOutcome } from './edit-lease.ts'
 import type { HolderRequestsOptions } from './holder-requests.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { HEARTBEAT_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { createHolderRequests } from './holder-requests.ts'
 
@@ -14,7 +15,6 @@ const REQUEST: PendingEditRequest = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1'
 const OTHER: PendingEditRequest = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f2', requester: CAT, requestedAt: '2026-10-07T03:02:00.000Z' }
 const SHOWN = { id: REQUEST.id, requester: BEN, declining: false, failure: undefined }
 const HANDOVER_MS = EDIT_HANDOVER_IDLE_SECONDS * 1000
-const HEARTBEAT_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 const TOKEN = 'L'.repeat(43)
 const NEXT_TOKEN = 'M'.repeat(43)
 const HANDED_OVER: HandedOverEditLease = { reservedFor: BEN, reservedUntil: '2026-10-07T03:05:00.000Z' }
@@ -114,6 +114,8 @@ function setup(options: Setup = {}) {
       hidden = next
       visibilityListeners.forEach(listener => listener())
     },
+    /** 2 分钟的计时还挂着的部分：排着的计时器与可见性的订阅（计时停下、丢弃之后都是 0） */
+    watching: () => ({ timers: time.pending(), visibility: visibilityListeners.size }),
   }
 }
 
@@ -370,6 +372,94 @@ describe('离开编辑时', () => {
     idle.state.editing = true
     idle.holder.stayed({ automatic: false, ended: false })
     expect(idle.handOver).toHaveBeenCalledOnce()
+  })
+
+  it('自动交出给 X 的离开途中换了请求方（X 取消、Y 到来），交出 X 得到"已不在"、留在编辑（复验 C3，fork 的探针）：Y 按请求刚到处理——本页早已空闲满 2 分钟，同一步里交出，不沿用 X 那一次"过一个心跳周期再看"', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    await context.time.advance(HANDOVER_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    // 状态机开始离开（自动交出给 X）；离开途中心跳带来 Y
+    context.state.editing = false
+    context.holder.leaving()
+    context.holder.arrive(OTHER)
+    expect(context.holder.incoming()).toEqual({ id: OTHER.id, requester: CAT, declining: false, failure: undefined })
+    // 交出给 X：EDIT_REQUEST_GONE → 留在编辑
+    context.holder.withdrawn(SHOWN)
+    context.state.editing = true
+    context.holder.stayed({ automatic: true, ended: false })
+    expect(context.handOver).toHaveBeenCalledTimes(2)
+  })
+
+  it('同上，本页那时并不空闲（有操作）：Y 显示提示、从现在起重新计 2 分钟（不按 X 的截止时刻、也不按心跳周期）', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    await context.time.advance(HANDOVER_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    context.state.editing = false
+    context.holder.leaving()
+    context.holder.arrive(OTHER)
+    context.holder.withdrawn(SHOWN)
+    context.state.editing = true
+    // 留在编辑之前人动了一下
+    context.act()
+    const changes = context.onChange.mock.calls.length
+    context.holder.stayed({ automatic: true, ended: false })
+    expect(context.onChange).toHaveBeenCalledTimes(changes + 1)
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    await context.time.advance(HANDOVER_MS - HEARTBEAT_MS - 1)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    await context.time.advance(1)
+    expect(context.handOver).toHaveBeenCalledTimes(2)
+  })
+
+  it('离开途中同一个请求再到：不算换了请求，计时照旧（留在编辑时按自动交出没成，过一个心跳周期再看）', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    await context.time.advance(HANDOVER_MS)
+    context.state.editing = false
+    context.holder.leaving()
+    context.holder.arrive(REQUEST)
+    context.state.editing = true
+    context.holder.stayed({ automatic: true, ended: false })
+    expect(context.handOver).toHaveBeenCalledOnce()
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.handOver).toHaveBeenCalledTimes(2)
+  })
+
+  it('换了一代（reset）：计时一并停下、丢弃（复验 C4）——不再排计时器、不再订阅可见性；新的一代里请求到了再重新开始', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    expect(context.watching()).toEqual({ timers: 1, visibility: 1 })
+    context.holder.reset()
+    expect(context.watching()).toEqual({ timers: 0, visibility: 0 })
+    expect(context.holder.incoming()).toBeUndefined()
+    await context.time.advance(HANDOVER_MS * 2)
+    expect(context.handOver).not.toHaveBeenCalled()
+    context.act()
+    context.holder.arrive(REQUEST)
+    expect(context.watching()).toEqual({ timers: 1, visibility: 1 })
+    await context.time.advance(HANDOVER_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+  })
+
+  it('卸载之后（dispose）：entered、stayed、leaving、clear 一律什么也不做（复验 C4）——不重新计时、不回调、不改请求', async () => {
+    const context = setup()
+    context.state.editing = false
+    context.holder.arrive(REQUEST)
+    context.holder.dispose()
+    context.state.editing = true
+    context.holder.entered()
+    context.holder.stayed({ automatic: false, ended: false })
+    context.holder.stayed({ automatic: true, ended: false })
+    context.holder.leaving()
+    context.holder.clear()
+    expect(context.watching()).toEqual({ timers: 0, visibility: 0 })
+    expect(context.onChange).not.toHaveBeenCalled()
+    expect(context.holder.incoming()).toEqual(SHOWN)
+    await context.time.advance(HANDOVER_MS * 2)
+    expect(context.handOver).not.toHaveBeenCalled()
   })
 
   it('离开了、失去编辑权（clear）：请求、说明与计时都清掉；卸载之后（dispose）不再回调', async () => {

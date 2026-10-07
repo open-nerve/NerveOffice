@@ -60,7 +60,11 @@ export const UNKNOWN_OUTCOME_RETRIES = 1
 /** 结果未知之后再试之前等多久（毫秒）：网络抖动、服务繁忙多在这一会儿里过去 */
 export const UNKNOWN_OUTCOME_RETRY_DELAY_MS = 500
 
-const HEARTBEAT_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
+/**
+ * 一个心跳周期（毫秒）。不是人按的离开这一轮没成（会话不对、没联网、没存上）之后也隔它再看：空闲释放（edit-mode.ts）与请求编辑的自动交出
+ * （holder-requests.ts）共用这一个（M3-P5 设计 §3.6、§3.9，复验 C4）——下一次心跳会带来会话、编辑权与请求的新情况
+ */
+export const HEARTBEAT_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 const MINUTE_MS = 60_000
 /** 本页的空闲短于它才算人在（续上的条件）：服务端回收空闲编辑权的阈值 */
 const PRESENCE_MS = EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000
