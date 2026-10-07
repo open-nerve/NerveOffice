@@ -549,7 +549,8 @@ export interface EditMode {
   /**
    * 页面关闭（pagehide）：放下本机锁，尽力释放编辑权（不等结果）。有保存在途（含终态之后核对的原样重发）时不释放，让租约到期（M3-P4 设计 §3.4）：
    * 服务端处理保存先在子进程里检查快照、再进事务读租约，晚几毫秒发出的释放多半先提交，那次保存就被拒（released）——这时另在 localStorage
-   * 记下这份文档有一次保存可能还在处理（M3-P5 设计 §3.7 的 R1）。有待回应的请求编辑时用交出代替释放；本页在请求编辑时尽力取消请求（M3-P5 设计 §3.6）
+   * 记下这份文档有一次保存可能还在处理（M3-P5 设计 §3.7 的 R1；已经失去编辑权时不记：那次保存不可能再提交，审查 B12）。有待回应的请求编辑时
+   * 用交出代替释放；本页在请求编辑时尽力取消请求（M3-P5 设计 §3.6）
    */
   readonly releaseOnHide: () => void
   /** 停止计时器，尽力释放编辑权，销毁保存的状态机与编辑器 */
@@ -2067,10 +2068,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
       // 保存在途或者结果未知：不释放（M3-P4 设计 §3.4），记下这份文档有一次保存可能还在服务端处理，它的基准是本页确认过的最新修订
       // （M3-P5 设计 §3.7 的 R1）。结果未知也算：WebKit 在导航（刷新、离开）一开始就取消在途的请求、之后才派发 pagehide——那时它已经不在途，
       // 而那次保存可能已经送到服务端、还在处理，释放先提交就把它挡掉（S6 实测，S8 真实 Safari 复核确认）。有请求在等时同样不交出
-      // （交出同样会挡掉那次保存）。测试构建的观察钩子记下走了哪一支与那一刻保存的样子（page-hide）
+      // （交出同样会挡掉那次保存）。已经失去编辑权（losing、lost）时不记：这一代服务端已经不认，那次保存不可能再提交（结果未知的那一次重发也只是
+      // 重放原来的结果），记下只会让新页面白等（审查 B12）。测试构建的观察钩子记下走了哪一支与那一刻保存的样子（page-hide）
       const busy = coordinator?.busy() === true
       const unknown = coordinator?.hasUnknownOutcome() === true
-      if (coordinator !== undefined && (busy || unknown)) {
+      const lostRights = mode.kind === 'losing' || mode.kind === 'lost'
+      if (coordinator !== undefined && !lostRights && (busy || unknown)) {
         options.pendingSave.write(coordinator.baseRevision())
         trace({ kind: 'page-hide', at: clock.now(), action: 'kept', busy, unknown })
         return

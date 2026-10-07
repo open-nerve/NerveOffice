@@ -2841,6 +2841,27 @@ describe('页面关闭（pagehide）时的本机锁与记号（M3-P5 设计 §3.
     expect(context.marker.write).not.toHaveBeenCalled()
   })
 
+  it('已经失去编辑权（lost）而保存的结果还未知、重发还在途：不记记号——这一代服务端已经不认，那次保存不可能再提交，新页面不必白等（审查 B12）', async () => {
+    const context = setup()
+    await editing(context)
+    context.api.save.mockRejectedValueOnce(new NetworkError('请求被取消'))
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    await settle()
+    // 编辑权失效（下一次心跳得知被收回）：转为失去编辑权，先原样重发结果未知的那一次（停住）
+    const replay = deferred<SaveContentResponse>()
+    context.api.save.mockImplementationOnce(async () => replay.promise)
+    context.editLease.renew.mockRejectedValue(new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'revoked' } }))
+    await context.time.advance(HEARTBEAT_MS)
+    await settle()
+    expect(lostOf(context.mode).checking).toBe(true)
+    context.mode.releaseOnHide()
+    await settle()
+    expect(context.marker.write).not.toHaveBeenCalled()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    replay.resolve(SAVED)
+  })
+
   it('保存的结果未知（WebKit 在刷新、离开一开始就取消在途的请求，之后才派发 pagehide）：同样不释放、记下记号——那次保存可能已经送到服务端', async () => {
     const context = setup()
     await editing(context)
