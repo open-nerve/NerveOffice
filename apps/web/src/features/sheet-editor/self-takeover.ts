@@ -13,6 +13,7 @@
 //   那次保存还在服务端检查快照、等锁的话会被挡掉，所以先等它：立即、之后每 PENDING_SAVE_POLL_MS（2 秒）读一次编辑状态，修订号比记号里的新
 //   （那次保存提交了）就不再等；到了 30 秒（从记号的时刻算）也不再等。读失败的那一次不算，接着等。
 import type { LeaseClock } from './edit-lease.ts'
+import type { HandoverTrace } from './handover-trace.ts'
 import type { PendingSave } from './pending-save-marker.ts'
 import type { HandoverFailure, HandoverReply, SameBrowser } from './same-browser.ts'
 import { EDIT_PENDING_SAVE_WAIT_MS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
@@ -52,6 +53,8 @@ export interface TabHandoverOptions {
   readonly newId: () => string
   /** 本页不再等时撤销 */
   readonly signal: AbortSignal
+  /** 测试构建的观察钩子（handover-trace.ts）：发出请求、收到回应、锁空了、到了时限；生产不给 */
+  readonly trace?: HandoverTrace | undefined
 }
 
 /** 请本浏览器里正在编辑这份文档的标签页先保存再交出（见文件头）。从不失败 */
@@ -95,20 +98,28 @@ export async function askTabToHandOver(options: TabHandoverOptions): Promise<Tab
       const requestId = options.newId()
       stopListening = onReply(browser, requestId, answered)
       browser.post({ type: 'handover-request', requestId, documentId: options.documentId, from: options.from, userId: options.userId })
-      within(EDIT_TAB_HANDOVER_ACK_MS, () => finish(SILENT))
+      options.trace?.({ kind: 'handover-request', at: clock.now(), requestId })
+      within(EDIT_TAB_HANDOVER_ACK_MS, silent)
+    }
+
+    /** 到了时限：没有回应，或者回应了、没做完 */
+    function silent(): void {
+      options.trace?.({ kind: 'handover-silent', at: clock.now() })
+      finish(SILENT)
     }
 
     function answered(reply: HandoverReply): void {
+      options.trace?.({ kind: 'handover-reply', at: clock.now(), requestId: reply.requestId, reply: replyKindOf(reply), detail: reply.type === 'handover-ack' ? reply.state : (reply.type === 'handover-failed' ? reply.reason : null) })
       switch (reply.type) {
         case 'handover-ack':
           // 回应了：等它做完（锁空了、done、failed），到时限没做完按没有回应处理
-          within(EDIT_TAB_HANDOVER_DONE_MS, () => finish(SILENT))
+          within(EDIT_TAB_HANDOVER_DONE_MS, silent)
           return
         case 'handover-busy': {
           busySince ??= clock.now()
           const left = busySince + EDIT_TAB_HANDOVER_DONE_MS - clock.now()
           if (left <= 0) {
-            finish(SILENT)
+            silent()
             return
           }
           // 不再收这一次的回应：隔一会儿换一个请求再问
@@ -128,11 +139,27 @@ export async function askTabToHandOver(options: TabHandoverOptions): Promise<Tab
     signal.addEventListener('abort', onAbort)
     // 锁空了就是做完了（任何阶段：回应之前那边就已经关了、刷新了、失去了编辑权，也是）
     void browser.untilFree(waiting.signal).then((free) => {
-      if (free)
-        finish(FINISHED)
+      if (!free || settled)
+        return
+      options.trace?.({ kind: 'handover-lock-free', at: clock.now() })
+      finish(FINISHED)
     })
     ask()
   })
+}
+
+/** 回应的种类（观察钩子里的写法） */
+function replyKindOf(reply: HandoverReply): 'ack' | 'busy' | 'done' | 'failed' {
+  switch (reply.type) {
+    case 'handover-ack':
+      return 'ack'
+    case 'handover-busy':
+      return 'busy'
+    case 'handover-done':
+      return 'done'
+    case 'handover-failed':
+      return 'failed'
+  }
 }
 
 /** 等刷新之前那次保存的结果 */

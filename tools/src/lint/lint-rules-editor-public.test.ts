@@ -197,7 +197,7 @@ describe('US-M1-11 lint 规则的自测：编辑器的 E2E 探针（editor/testi
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：页面自检与 E2E 共用的文件不引用任何模块（M3-P2 设计 §3.5，nerve/editor-testing-shared）', () => {
-  const SHARED_FILES = ['read-only-entries.ts', 'content-compare.ts', 'selftest-report.ts', 'switch-timing.ts'].map(file => `apps/web/src/editor/testing/${file}`)
+  const SHARED_FILES = ['read-only-entries.ts', 'content-compare.ts', 'selftest-report.ts', 'switch-timing.ts', 'autosave-control.ts', 'handover-log.ts'].map(file => `apps/web/src/editor/testing/${file}`)
   const REPORT_FILE = 'apps/web/src/editor/testing/selftest-report.ts'
 
   it('静态导入、import type、再导出都报错：同目录的文件、编辑器的公开入口、别的包都算', async () => {

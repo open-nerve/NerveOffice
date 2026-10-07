@@ -34,12 +34,15 @@
 // - 被本浏览器的另一个标签页取代（M3-P5 设计 §3.1：本机锁被抢）：服务端批给了那边，本页这一代必然已经失效——abandon 停止续租与续上，
 //   不发释放（令牌已经对不上），也不通知（页面自己转为失去编辑权）。终态；
 // - 被接管（M3-P5 设计 §3.7、§3.8：续租或保存得到 taken_over）：不续上（编辑权是有意交给别处的，续上就是抢回来）——本人在另一台设备或浏览器上
-//   接手（forced 为假）与空间管理员强制接管（forced 为真）分开交给页面；
+//   接手（forced 为假）与空间管理员强制接管（forced 为真）分开交给页面；已经交出（handed_over：交出的回答没收到、下一次心跳才得知）同样不续上，
+//   单独交给页面（说明交给了请求编辑的人）；
+// - 异常中断的提醒（M3-P5 设计 §3.5，US-M3-10）：用户发起的申请（这里的 acquireEditLease）把申请响应里的提醒交回页面；续上（recover）的申请
+//   不交回——编辑权中断之后续上，上一代异常结束的就是本页自己，说了只会让人以为出了事；
 // - 本人接管（M3-P5 设计 §3.7，"在此编辑"）：申请带 takeover: 'self'（只给用户发起的那一次，续上从不带）；被自己占着时要不要隔一会儿再试
 //   由页面判断（本浏览器里有标签页持有本机锁时不必再试：那不是刷新时晚到的释放）；
 // - 请求编辑（M3-P5 设计 §3.6）：心跳的响应带着待回应的请求（没有时为 null），每次续租成功都交给页面（onRequest）；交出与谢绝由页面带着
 //   现在的令牌直接发（edit-mode.ts），交出之后服务端已经结束这一代，页面 abandon（不再续租、不发释放）
-import type { AcquiredEditLease, DocumentEditor, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, HandedOverEditLease, PendingEditRequest, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
+import type { AcquiredEditLease, DocumentEditor, EditInterruption, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, HandedOverEditLease, PendingEditRequest, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
@@ -137,7 +140,10 @@ export interface LeaseHolder {
  * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它；
  * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，不再问服务端）；
  *   elsewhere 是另一台设备或浏览器（续租或保存得到 taken_over、forced 为假：那边以本人接管申请，服务端结束了这一代）；
- * - forced：空间管理员强制接管了编辑（M3-P5 设计 §3.8：taken_over、forced 为真；接管人由转为阅读之后读到的编辑状态给出，S8）
+ * - forced：空间管理员（个人空间是所有者）强制接管了编辑（M3-P5 设计 §3.8：taken_over、forced 为真）。by 是接管的人：转为阅读之后读一次
+ *   编辑状态，正在编辑的是别人就是他（edit-mode.ts 补上；没读到时为 undefined，只说空间管理员强制接管了编辑）；
+ * - handed-over：本页这一代已经交给了请求编辑的人（handed_over：交出的回答没有在时限之内收到、留在了编辑，下一次心跳或保存才得知；
+ *   M3-P5 设计 §3.6）。to 是交给了谁（编辑模式按还在等的那个请求补上，不知道时为 undefined）
  */
 export type LeaseLoss
   = | { readonly kind: 'lease', readonly reason: EditLeaseLostReason | undefined }
@@ -146,11 +152,12 @@ export type LeaseLoss
     | { readonly kind: 'held', readonly holder: LeaseHolder | undefined }
     | { readonly kind: 'newer' }
     | { readonly kind: 'taken-over', readonly where: 'this-browser' | 'elsewhere' }
-    | { readonly kind: 'forced' }
+    | { readonly kind: 'forced', readonly by?: UserSummary | undefined }
+    | { readonly kind: 'handed-over', readonly to?: UserSummary | undefined }
 
 /**
  * 请求的失败说明编辑权已经失效（EDIT_LEASE_LOST、404、403）时给出来源；别的失败为 undefined。被接管（taken_over）按 forced 分成本人在别处接手与
- * 强制接管；forced 认不出（宽松解析之后没有）时不猜，照不认识的原因只说编辑权已失效（同样不续上）
+ * 强制接管；forced 认不出（宽松解析之后没有）时不猜，照不认识的原因只说编辑权已失效（同样不续上）。已经交出（handed_over）单独给出（不续上）
  */
 export function leaseLossOf(error: unknown): LeaseLoss | undefined {
   if (!(error instanceof ApiError))
@@ -160,6 +167,8 @@ export function leaseLossOf(error: unknown): LeaseLoss | undefined {
     const details: EditLeaseLostDetails = parsed.success ? parsed.data : {}
     if (details.reason === 'taken_over' && details.forced !== undefined)
       return details.forced ? { kind: 'forced' } : { kind: 'taken-over', where: 'elsewhere' }
+    if (details.reason === 'handed_over')
+      return { kind: 'handed-over' }
     return { kind: 'lease', reason: details.reason }
   }
   if (isNotFoundError(error))
@@ -260,10 +269,11 @@ export interface EditLeaseOptions {
 
 /**
  * 申请的结果：持有（租约已经开始心跳；修订号是文档当前的；formulasPending 是文档当前的"公式待更新"，M3-P4 设计 §3.5——带标记时
- * 进入编辑以强制全量重算创建、收齐之后补存）或被占用（认不出服务端给的详情时 holder 为 undefined）
+ * 进入编辑以强制全量重算创建、收齐之后补存；interruption 是上一位编辑者异常中断的提醒，M3-P5 设计 §3.5，没有时为 undefined）
+ * 或被占用（认不出服务端给的详情时 holder 为 undefined）
  */
 export type LeaseAcquisition
-  = | { readonly kind: 'acquired', readonly lease: EditLease, readonly revision: number, readonly formulasPending: boolean }
+  = | { readonly kind: 'acquired', readonly lease: EditLease, readonly revision: number, readonly formulasPending: boolean, readonly interruption: EditInterruption | undefined }
     | { readonly kind: 'held', readonly holder: LeaseHolder | undefined }
 
 /** 服务端的两个时刻相隔几分钟（向下取整，不小于 0）；缺一个时为 undefined */
@@ -338,7 +348,7 @@ export async function acquireEditLease(options: EditLeaseOptions, intent: Acquir
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)
       continue
     }
-    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending }
+    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: acquired.interruption ?? undefined }
   }
 }
 

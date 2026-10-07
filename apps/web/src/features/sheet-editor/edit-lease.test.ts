@@ -339,7 +339,7 @@ describe('失效：失去访问或编辑权，或者不认识的原因', () => {
     ['EDIT_LEASE_LOST（本人在另一台设备或浏览器上接手：taken_over、forced 为假，M3-P5）', takenOverError(false), { kind: 'taken-over', where: 'elsewhere' }],
     ['EDIT_LEASE_LOST（空间管理员强制接管：taken_over、forced 为真）', takenOverError(true), { kind: 'forced' }],
     ['EDIT_LEASE_LOST（taken_over、forced 认不出：不猜，只说编辑权已失效）', takenOverError('yes'), { kind: 'lease', reason: 'taken_over' }],
-    ['EDIT_LEASE_LOST（已经交给了请求编辑的人：handed_over）', lostError('handed_over'), { kind: 'lease', reason: 'handed_over' }],
+    ['EDIT_LEASE_LOST（已经交给了请求编辑的人：handed_over，M3-P5 S8 单独给出）', lostError('handed_over'), { kind: 'handed-over' }],
     ['403（能读不能编辑了）', denied, { kind: 'denied', error: denied }],
     ['404（读不到了）', gone, { kind: 'not-found', error: gone }],
   ])('续租得到%s：不续上，通知页面一次，停止续租', async (_case, error, loss) => {

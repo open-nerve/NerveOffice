@@ -13,7 +13,8 @@
 // 空闲释放都按它）；这份文档在同一个浏览器里的锁与交接频道（same-browser.ts）、刷新时在途的保存的记号（pending-save-marker.ts）按文档
 // 交给编辑模式，频道随页面卸载关掉。"在此编辑"（本人接管，设计 §3.7）与"编辑"一样先确认会话；交接频道上只理会同一个人的请求，本页的用户
 // 取自载入时确认的会话。请求编辑（设计 §3.6）："请求编辑""取消请求"与持有者提示里的"交出""继续编辑"都是写的操作，与"编辑"一样先确认会话；
-// 能不能强制接管取自载入时的详情（之后随编辑状态更新）。
+// 能不能强制接管取自载入时的详情（之后随编辑状态更新）。"强制接管"（设计 §3.8）是写的操作：页头先确认（确认框关掉之后才交到这里），这里与"编辑"
+// 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -23,6 +24,7 @@ import type { LeaseClock } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
+import type { HandoverTrace } from './handover-trace.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility } from './reading-checks.ts'
 import type { SameBrowser } from './same-browser.ts'
@@ -158,6 +160,8 @@ export interface EditorPageOptions {
   readonly digest: (snapshot: string) => Promise<string>
   /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
   readonly autosaveControl?: AutosaveControlHooks | undefined
+  /** 测试构建的交接观察钩子（M3-P5 设计 §3.13，start.tsx 只在测试构建里给出）；生产为 undefined */
+  readonly handoverTrace?: HandoverTrace | undefined
   readonly editIntent: EditIntent
   /** 当前的地址（路径与查询）：转到登录页时带上，登录之后回到这里 */
   readonly currentPath: () => string
@@ -182,6 +186,10 @@ export interface EditorPage {
   readonly takeOverHere: () => Promise<void>
   /** "在此编辑"那边没能交出之后选"取消" */
   readonly cancelTakeOver: () => void
+  /** "强制接管"（M3-P5 设计 §3.8；页头已经确认过）：会话是本人时以强制接管申请编辑权，重建为可编辑 */
+  readonly forceTakeOver: () => Promise<void>
+  /** 异常中断的说明里的"知道了"（M3-P5 设计 §3.11）：说明消失 */
+  readonly dismissInterruption: () => void
   /** "请求编辑"（M3-P5 设计 §3.6）：会话是本人时发出，之后等待、编辑权交给本页时自动进入编辑 */
   readonly requestEditing: () => Promise<void>
   /** "取消请求"：会话是本人时取消 */
@@ -599,6 +607,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       sameBrowser,
       pendingSave: options.pendingSave(id),
       reportError: options.reportError,
+      trace: options.handoverTrace,
     })
     cleanups.push(created.subscribe(modeChanged))
     return created
@@ -712,6 +721,15 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.takeOver()
     },
     cancelTakeOver: () => mode?.cancelTakeOver(),
+    forceTakeOver: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      // 强制接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.forceTakeOver()
+    },
+    dismissInterruption: () => mode?.dismissInterruption(),
     requestEditing: async () => {
       if (mode?.view().mode.kind !== 'reading')
         return

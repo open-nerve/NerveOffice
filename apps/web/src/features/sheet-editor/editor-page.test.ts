@@ -7,6 +7,7 @@ import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditModeState } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { EditorPage, EditorPageApi } from './editor-page.ts'
+import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { MarkerStorage } from './pending-save-marker.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveRequest } from './save-coordinator.ts'
@@ -224,6 +225,8 @@ interface Setup {
    * 会话、保存与编辑权的用例都在编辑时进行；打开即阅读的用例传 false
    */
   readonly editIntent?: boolean
+  /** 测试构建的交接观察钩子（M3-P5 S8）：默认不给 */
+  readonly handoverTrace?: HandoverTrace
 }
 
 /** 这个用例建过的页面：用例结束时卸载，留下的交互屏障与窗口上的监听不影响下一个用例 */
@@ -300,6 +303,7 @@ function setup(options: Setup = {}) {
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => storage, now: () => Date.UTC(2026, 9, 7, 3, 0, 0) }),
     digest: async snapshot => `sha:${snapshot}`,
     autosaveControl: autosave.hooks,
+    ...(options.handoverTrace === undefined ? {} : { handoverTrace: options.handoverTrace }),
     editIntent,
     currentPath: () => `/documents/${DOCUMENT_ID}`,
     newId: options.newId ?? (() => `id-${++id}`),
@@ -2492,5 +2496,52 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
     const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canTakeOver: true } }), editStatus: async () => new Promise<FetchedEditStatus>(() => {}) } })
     await editorPage.load()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', canTakeOver: true })
+  })
+})
+
+describe('强制接管、异常中断的提醒与观察钩子（M3-P5 设计 §3.5、§3.8、§3.13）', () => {
+  /** 鲍勃在编辑，爱丽丝能强制接管 */
+  async function ADMIN_STATUS(): Promise<FetchedEditStatus> {
+    return { status: { revision: 3, editor: BOB_EDITING, canEdit: true, canTakeOver: true, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }
+  }
+
+  it('"强制接管"（页头已经确认过）：与"编辑"同一个会话确认——会话不是本人时先向服务端确认，还是别人就不申请；确认是本人之后以强制接管申请、进入编辑', async () => {
+    const { editorPage, api, editLease, fromOtherTab } = setup({ editIntent: false, api: { editStatus: ADMIN_STATUS } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', canTakeOver: true, holder: { holder: { username: 'bob' } } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.forceTakeOver()
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    await editorPage.forceTakeOver()
+    expect(editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 'id-1', { takeover: 'force' })
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+  })
+
+  it('编辑时、不在阅读时"强制接管"什么也不做', async () => {
+    const { editorPage, editLease } = setup()
+    await editorPage.load()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    await editorPage.forceTakeOver()
+    expect(editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('申请带回异常中断的提醒：进入编辑之后编辑的状态带着它；"知道了"交给编辑模式，提醒去掉', async () => {
+    const interruption = { holder: BOB_EDITING.holder, endedAt: '2026-09-27T02:58:00.000Z', sameUser: false }
+    const { editorPage } = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption }) } })
+    await editorPage.load()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', interruption })
+    editorPage.dismissInterruption()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', interruption: undefined })
+  })
+
+  it('测试构建的交接观察钩子交给编辑模式：申请、结果、进入编辑各报一条', async () => {
+    const events: HandoverTraceEvent[] = []
+    const { editorPage } = setup({ handoverTrace: event => events.push(event) })
+    await editorPage.load()
+    expect(events.map(event => event.kind)).toEqual(['acquire', 'acquire-result', 'entered'])
+    expect(events[0]).toMatchObject({ trigger: 'open', takeover: null })
   })
 })

@@ -17,11 +17,11 @@
 // - 会话不是本人时不续期（不带着别人的登录发），回到本人时立即续期一次；续期、取消遇到会话类失败（未登录、令牌失效）交给页面确认会话、照常等；
 //   续期得到不能编辑了（403）、读不到了（404）就结束（状态机按原因说明），别的失败（网络、5xx、回包读不出来）下一次照常再试。
 import type { EditRequestOutcome, UserSummary } from '@nerve-office/contracts'
-import type { ApiError } from '../../shared/api/index.ts'
 import type { LeaseClock } from './edit-lease.ts'
+import type { HandoverTrace } from './handover-trace.ts'
 import type { PageVisibility } from './reading-checks.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_REQUEST_RENEW_SECONDS } from '@nerve-office/contracts'
-import { isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
+import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 
 /** 等待中续期的间隔 */
 export const REQUEST_RENEW_MS = EDIT_REQUEST_RENEW_SECONDS * 1000
@@ -86,6 +86,13 @@ export interface EditRequestsOptions {
   readonly enter: () => boolean
   /** 请求结束了（见 EditRequestEnd） */
   readonly onEnd: (end: EditRequestEnd) => void
+  /** 测试构建的观察钩子（handover-trace.ts）：发出与续期的结果、编辑权交给了本页、开始进入；生产不给 */
+  readonly trace?: HandoverTrace | undefined
+}
+
+/** 失败在观察钩子里的写法：error 与错误码（网络等没有错误码时只写 error） */
+function failureOf(error: unknown): string {
+  return error instanceof ApiError ? `error:${error.code}` : 'error'
 }
 
 export interface EditRequests {
@@ -169,6 +176,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
   /** 编辑权交给了本页（或者空着）：不再续期；看得见、会话是本人时进入编辑 */
   function grant(): void {
     stopTimer()
+    options.trace?.({ kind: 'request-granted', at: clock.now(), visible: !options.visibility.hidden() })
     if (progress?.kind !== 'granted')
       set({ kind: 'granted' })
     tryEnter()
@@ -179,6 +187,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
       return
     if (!options.enter())
       return
+    options.trace?.({ kind: 'request-enter', at: clock.now() })
     // 状态机已经在进入编辑：请求随之完成（取得编辑权之后服务端清掉它与保留），这里静静地回到没有请求
     rounds += 1
     progress = undefined
@@ -237,6 +246,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     catch (error) {
       if (round !== rounds || disposed)
         return
+      options.trace?.({ kind: 'request-renewed', at: clock.now(), outcome: failureOf(error) })
       if (isPermissionDeniedError(error) || isNotFoundError(error)) {
         finish({ kind: 'failed', error })
         return
@@ -252,6 +262,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     }
     if (round !== rounds || disposed || progress?.kind !== 'waiting')
       return
+    options.trace?.({ kind: 'request-renewed', at: clock.now(), outcome: outcome.kind })
     apply(outcome, 'renew')
     schedule(Math.max(0, sentAt + REQUEST_RENEW_MS - clock.now()))
   }
@@ -286,12 +297,15 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
         outcome = await api.send(documentId)
       }
       catch (error) {
-        if (round === rounds && !disposed)
+        if (round === rounds && !disposed) {
+          options.trace?.({ kind: 'request-sent', at: clock.now(), outcome: failureOf(error) })
           finish({ kind: 'failed', error })
+        }
         return
       }
       if (round !== rounds || disposed)
         return
+      options.trace?.({ kind: 'request-sent', at: clock.now(), outcome: outcome.kind })
       if (outcome.kind === 'pending') {
         set({ kind: 'waiting', holder: outcome.holder.holder, cancelFailure: undefined })
         schedule(REQUEST_RENEW_MS)
