@@ -1766,10 +1766,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return false
     }
     if (acquisition.kind === 'held') {
-      // 被占用：占着的不是本页（本页那一代还在时同一个 clientInstanceId 照样取得）
+      // 被占用：占着的不是本页（本页那一代还在时同一个 clientInstanceId 照样取得）。有人在编辑，之前读到的异常中断的提醒不再成立
       const selfHolder = await selfHolderOf(acquisition.holder)
       if (still(token))
-        begin({ ...readingBefore, holder: acquisition.holder, selfHolder, releaseUnconfirmed: false })
+        begin({ ...readingBefore, holder: acquisition.holder, selfHolder, interruption: undefined, releaseUnconfirmed: false })
       return false
     }
     const started = await startEditing(token, acquisition.lease, acquisition)

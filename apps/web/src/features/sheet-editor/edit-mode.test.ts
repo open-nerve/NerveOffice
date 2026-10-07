@@ -4749,6 +4749,15 @@ describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', ()
     expect(editingInterruption(context.mode)).toBeUndefined()
   })
 
+  it('阅读时带着别人的那一代的提醒、点"编辑"却被占用（期间别人进入了编辑）：回到阅读时提醒随之去掉（有人在编辑了），说谁在编辑', async () => {
+    const context = setup({ api: { editStatus: async () => ({ ...status(3), status: { ...status(3).status, interruption: OTHERS } }) }, editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
+    await opened(context)
+    expect(readingOf(context.mode).interruption).toEqual(OTHERS)
+    context.api.editStatus.mockImplementation(async () => deferred<FetchedEditStatus>().promise)
+    await context.mode.enter()
+    expect(readingOf(context.mode)).toMatchObject({ holder: { holder: AMY }, interruption: undefined })
+  })
+
   it('阅读时编辑状态里有别人的那一代异常中断的提醒（没人在编辑）：阅读的状态带着它；是自己的那一代时不带；之后读到没有了随之去掉；读不到了时没有', async () => {
     const context = setup({ api: { editStatus: async () => ({ ...status(3), status: { ...status(3).status, interruption: OTHERS } }) } })
     await opened(context)
