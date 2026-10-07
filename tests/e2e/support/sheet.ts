@@ -92,6 +92,19 @@ export function enterEditButton(page: Page): Locator {
   return chrome(page).getByRole('banner').getByRole('button', { name: '编辑', exact: true })
 }
 
+/**
+ * 页头里的"在此编辑"（M3-P5 设计 §3.7：持有者是自己——本浏览器的另一个标签页、另一台设备或浏览器——时换掉"编辑"，本人接管）；
+ * 接手进行中同一个按钮说"正在接手…"，那边没能交出时说"仍在此编辑"
+ */
+export function takeOverHereButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '在此编辑', exact: true })
+}
+
+/** 页头之外一直在的读屏状态区（M3-P2 起阅读时的说明都在这里：谁在编辑、空闲释放与交出之后、"在此编辑"的进展） */
+export function statusRegion(page: Page): Locator {
+  return chrome(page).locator('[data-slot="status-region"]')
+}
+
 /** 页头里的"退出编辑"（编辑时，M3-P2） */
 export function exitEditButton(page: Page): Locator {
   return chrome(page).getByRole('banner').getByRole('button', { name: '退出编辑', exact: true })
@@ -127,10 +140,13 @@ export async function openReader(page: Page, documentId: string, stage: 'ready' 
   await whenReading(page, stage)
 }
 
-/** 打开或刷新之后：以只读创建的编辑器就绪，页头有了阅读时的样子（载入的结果在编辑器就绪之后一刻才交给页头） */
+/**
+ * 打开或刷新之后：以只读创建的编辑器就绪，页头有了阅读时的样子（载入的结果在编辑器就绪之后一刻才交给页头）——能编辑时"编辑"，持有者是自己时
+ * "在此编辑"（M3-P5），不能编辑时"只能查看"
+ */
 async function whenReading(page: Page, stage: 'ready' | 'steady'): Promise<void> {
   await waitForEditorAccess(page, 'read', stage)
-  await expect(enterEditButton(page).or(saveStatus(page).filter({ hasText: /^只能查看$/ }))).toBeVisible()
+  await expect(enterEditButton(page).or(takeOverHereButton(page)).or(saveStatus(page).filter({ hasText: /^只能查看$/ }))).toBeVisible()
 }
 
 /** 打开并进入编辑（M3-P2：打开即阅读，点"编辑"才进入编辑）：要在编辑器里改内容、保存的用例用它 */
@@ -344,6 +360,24 @@ export async function blockSaves(page: Page): Promise<{ readonly unblock: () => 
   const handler = async (route: Route): Promise<void> => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue()
   await page.route(pattern, handler)
   return { unblock: async () => page.unroute(pattern, handler) }
+}
+
+/**
+ * 只给这一个页面装（载入之前）：吞掉交接频道（nerve-office:doc:<documentId>，BroadcastChannel）的消息——"旧标签页不响应"（冻结、Safari 暂停了
+ * 后台页面、页面卡住；Playwright 模拟不了真正的冻结，M3-P5 探索 §3.3 第 8 条）。页面用 addEventListener('message') 收（same-browser.ts），
+ * 这里不让它挂上；别的频道（会话的）照常。只改浏览器的 BroadcastChannel，生产构建里同样成立
+ */
+export async function deafenHandover(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const Original = BroadcastChannel
+    window.BroadcastChannel = class extends Original {
+      override addEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): void {
+        if (type === 'message' && this.name.startsWith('nerve-office:doc:'))
+          return
+        super.addEventListener(type, listener, options)
+      }
+    }
+  })
 }
 
 /**

@@ -22,7 +22,7 @@ const READY: EditorPageReady = {
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
-const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
 const COPY = {
   id: '0199a2c4-0000-7000-8000-0000000000c9',
@@ -60,6 +60,8 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
     load: async () => {},
     save: vi.fn(async () => {}),
     enterEditing: vi.fn(async () => {}),
+    takeOverHere: vi.fn(async () => {}),
+    cancelTakeOver: vi.fn(),
     exitEditing: vi.fn(async () => {}),
     refreshUpdate: vi.fn(async () => {}),
     saveCopy: vi.fn(async () => {}),
@@ -488,20 +490,24 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(region).toBeEmptyDOMElement()
   })
 
-  it('本页刚退出编辑、没能确认放掉编辑权时读到"自己在别处编辑"：如实说是本页刚退出（审查 A13），不说成另一个标签页或设备', () => {
-    const fake = renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, releaseUnconfirmed: true }, save: undefined })
-    expect(infoRegion().textContent).toBe('本页刚退出编辑，编辑权还没能确认放掉：最多 90 秒后自动结束，这期间别人还不能编辑；这一页可以直接再点"编辑"')
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, releaseUnconfirmed: false } })
-    expect(infoRegion()).toHaveTextContent('你在另一个标签页或设备上正在编辑这份文档')
+  it('本页刚退出编辑、没能确认放掉编辑权时读到"自己在别处编辑"：如实说是本页刚退出（审查 A13），不说成另一个标签页或设备；这一页可以直接"在此编辑"', () => {
+    const fake = renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
+    expect(infoRegion().textContent).toBe('本页刚退出编辑，编辑权还没能确认放掉：最多 90 秒后自动结束，这期间别人还不能编辑；这一页可以直接点"在此编辑"')
+    expect(screen.getByRole('button', { name: '在此编辑' })).toBeInTheDocument()
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: false } })
+    expect(infoRegion()).toHaveTextContent('你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）')
   })
 
-  it('与服务端不兼容的阅读（没有"编辑"）读到"自己在别处编辑"：照样说是本页刚退出或在别处，不提"再点编辑"（M3-P3 审查 B8：停住续租之后的那次释放没送到）', () => {
+  it('与服务端不兼容的阅读（没有"编辑"）读到"自己在别处编辑"：照样说是本页刚退出或在别处，不提"在此编辑"（M3-P3 审查 B8：停住续租之后的那次释放没送到）', () => {
     const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
-    const fake = renderChrome({ mode: { ...READING, blocked: 'client-outdated', holder: self, releaseUnconfirmed: true }, save: undefined })
+    const fake = renderChrome({ mode: { ...READING, blocked: 'client-outdated', holder: self, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '在此编辑' })).toBeNull()
     expect(infoRegion().textContent).toBe('本页刚退出编辑，编辑权还没能确认放掉：最多 90 秒后自动结束，这期间别人还不能编辑')
-    fake.set({ mode: { ...READING, blocked: 'client-outdated', holder: self, releaseUnconfirmed: false } })
-    expect(infoRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读')
+    fake.set({ mode: { ...READING, blocked: 'client-outdated', holder: self, selfHolder: 'elsewhere', releaseUnconfirmed: false } })
+    expect(infoRegion().textContent).toBe('你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面），这里只能阅读')
+    fake.set({ mode: { ...READING, blocked: 'client-outdated', holder: self, selfHolder: 'this-browser', releaseUnconfirmed: false } })
+    expect(infoRegion().textContent).toBe('你在本浏览器的另一个标签页里正在编辑这份文档，这里只能阅读')
   })
 
   it('别人正在编辑：读屏状态区说明谁（人名组件，登录名在前）、最后活动几分钟之前；状态区一直在，内容变化时往里填（规范 §2.4）', () => {
@@ -525,9 +531,28 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(infoRegion()).toHaveTextContent(text)
   })
 
-  it('是自己（在另一个标签页或设备上）：说明在别处正在编辑；刚关闭或刷新过那个页面时，那边的编辑权最多 90 秒后自动结束（审查 B7）', () => {
-    renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, save: undefined })
-    expect(infoRegion().textContent).toBe('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑')
+  it('是自己（M3-P5 设计 §3.7）：本机锁在本浏览器里有人持有时说在本浏览器的另一个标签页里、点"在此编辑"那边先保存再交出；不在本浏览器时说在另一台设备或浏览器上（也可能是刚关闭、刷新过的页面）、点了那边失去编辑权——不再建议"等 90 秒再点编辑"', () => {
+    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const fake = renderChrome({ mode: { ...READING, holder: self, selfHolder: 'this-browser' }, save: undefined })
+    expect(infoRegion().textContent).toBe('你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
+    fake.set({ mode: { ...READING, holder: self, selfHolder: 'elsewhere' } })
+    expect(infoRegion().textContent).toBe('你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）。点"在此编辑"在这里接着编辑，那边会失去编辑权，没保存的修改可以在那边另存为副本')
+    expect(infoRegion()).not.toHaveTextContent('90 秒')
+  })
+
+  it('是自己：按钮一律换成"在此编辑"（同一个按钮，不是另加一个），点了交给页面的本人接管，不是"编辑"', () => {
+    const fake = renderChrome({ mode: READING, save: undefined })
+    const enter = screen.getByRole('button', { name: '编辑' })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'this-browser' } })
+    expect(screen.getByRole('button', { name: '在此编辑' })).toBe(enter)
+    expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
+    expect(enter).toHaveAttribute('aria-disabled', 'false')
+    fireEvent.click(enter)
+    expect(fake.page.takeOverHere).toHaveBeenCalledOnce()
+    expect(fake.page.enterEditing).not.toHaveBeenCalled()
+    // 持有者是别人：照旧是"编辑"
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 } } })
+    expect(screen.getByRole('button', { name: '编辑' })).toBe(enter)
   })
 
   it('没有人在编辑：读屏状态区是空的', () => {
@@ -769,11 +794,12 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     ['不认识的原因', { kind: 'lease', reason: undefined }, '编辑权已失效。'],
     ['不能编辑了（403，原因由服务端给出）', { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能编辑') }, '编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。'],
     ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } }, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。'],
-    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑）。'],
+    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档。'],
     ['续上时被占用、详情认不出', { kind: 'held', holder: undefined }, '编辑权已失效：这份文档正在别处编辑。'],
     ['续上时别处保存过更新的版本', { kind: 'newer' }, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。'],
     ['本人在本浏览器的另一个标签页接手了编辑（本机锁被抢，M3-P5）', { kind: 'taken-over', where: 'this-browser' }, '编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
-    ['本人在另一台设备或浏览器上接手了编辑（M3-P5，S6 接上）', { kind: 'taken-over', where: 'elsewhere' }, '编辑权已失效：你在另一台设备或浏览器上接手了编辑。'],
+    ['本人在另一台设备或浏览器上接手了编辑（M3-P5：taken_over、forced 为假）', { kind: 'taken-over', where: 'elsewhere' }, '编辑权已失效：你在另一台设备或浏览器上接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
+    ['空间管理员强制接管（M3-P5：taken_over、forced 为真；S8 之前用通用的说法）', { kind: 'forced' }, '编辑权已失效。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
   ]
 
   it.each(LOSSES)('原因：%s', (_case, loss, text) => {
@@ -1232,6 +1258,90 @@ describe('打开自检失败的阅读（M3-P4 设计 §3.12，US-M3-15）', () =
     fake.set({ mode: { ...READING, damaged: FILTER_DAMAGED } })
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(backLink()))
+  })
+})
+
+describe('本人接管："在此编辑"（M3-P5 设计 §3.7、§3.11，US-M3-08）', () => {
+  const SELF = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+  const HERE: ReadingMode = { ...READING, holder: SELF, selfHolder: 'this-browser' }
+
+  /** 页头里的按钮：文字、是否可用、是否进行中 */
+  function headerButtons(): (string | null)[][] {
+    return within(screen.getByRole('banner')).queryAllByRole('button').map(button => [button.textContent, button.getAttribute('aria-disabled'), button.getAttribute('aria-busy')])
+  }
+
+  it('接手进行中：同一个按钮说"正在接手…"、不可用、标为进行中（不卸载，焦点还在它上面）；进展放进一直在的读屏状态区（不新插入 role="status"），刚开始时照旧说谁在编辑', () => {
+    const fake = renderChrome({ mode: HERE, save: undefined })
+    const button = screen.getByRole('button', { name: '在此编辑' })
+    button.focus()
+    const region = infoRegion()
+    const statusCount = screen.getAllByRole('status').length
+    fake.set({ mode: { ...HERE, takeover: { kind: 'preparing' } } })
+    expect(screen.getByRole('button', { name: '正在接手…' })).toBe(button)
+    expect(headerButtons()).toEqual([['正在接手…', 'true', 'true']])
+    expect(region).toHaveTextContent('你在本浏览器的另一个标签页里正在编辑这份文档')
+    fake.set({ mode: { ...HERE, takeover: { kind: 'asking' } } })
+    expect(infoRegion()).toBe(region)
+    expect(region.textContent).toBe('正在请本浏览器的另一个标签页保存并交出编辑权…')
+    fake.set({ mode: { ...HERE, selfHolder: 'elsewhere', takeover: { kind: 'waiting-save' } } })
+    expect(region.textContent).toBe('上一个页面的保存还在进行，稍后接手…')
+    expect(screen.getAllByRole('status')).toHaveLength(statusCount)
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.activeElement).toBe(button)
+    fireEvent.click(button)
+    // 进行中不可用：点了照样交给页面（页面挡住重复的），不改成"编辑"
+    expect(fake.page.takeOverHere).toHaveBeenCalledOnce()
+    // 申请之后进入编辑：同一个按钮说正在进入
+    fake.set({ mode: { kind: 'entering' } })
+    expect(screen.getByRole('button', { name: '正在进入编辑…' })).toBe(button)
+    expect(document.activeElement).toBe(button)
+  })
+
+  it('接手进行中"有更新"不可用（刷新会让接手作废）；等人选时可以', () => {
+    const fake = renderChrome({ mode: { ...HERE, update: 'available', takeover: { kind: 'asking' } }, save: undefined })
+    expect(screen.getByRole('button', { name: '有更新，点击刷新' })).toHaveAttribute('aria-disabled', 'true')
+    fake.set({ mode: { ...HERE, update: 'available', takeover: { kind: 'failed', reason: 'not-saved' } } })
+    expect(screen.getByRole('button', { name: '有更新，点击刷新' })).toHaveAttribute('aria-disabled', 'false')
+  })
+
+  it.each([
+    ['not-saved', '另一个标签页的修改没能保存，没有交出编辑权。'],
+    ['conflict', '另一个标签页的修改与别处保存的版本冲突、没能保存，没有交出编辑权。'],
+    ['session', '另一个标签页暂时无法确认登录状态、没能保存，没有交出编辑权。'],
+  ] as const)('那边没能交出（%s）：说明原因与两个选择——同一个按钮换成"仍在此编辑"（可用，点了交给页面的本人接管），旁边加"取消"', (reason, text) => {
+    const fake = renderChrome({ mode: { ...HERE, takeover: { kind: 'asking' } }, save: undefined })
+    const button = screen.getByRole('button', { name: '正在接手…' })
+    button.focus()
+    fake.set({ mode: { ...HERE, takeover: { kind: 'failed', reason } } })
+    expect(screen.getByRole('button', { name: '仍在此编辑' })).toBe(button)
+    expect(headerButtons()).toEqual([['仍在此编辑', 'false', 'false'], ['取消', null, null]])
+    expect(infoRegion().textContent).toBe(`${text}点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`)
+    expect(document.activeElement).toBe(button)
+    fireEvent.click(button)
+    expect(fake.page.takeOverHere).toHaveBeenCalledOnce()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(fake.page.cancelTakeOver).toHaveBeenCalledOnce()
+  })
+
+  it('选了"取消"："取消"随之消失、焦点在它上面时交给返回链接（不落到 body）；按钮回到"在此编辑"，说明回到谁在编辑', async () => {
+    const fake = renderChrome({ mode: { ...HERE, takeover: { kind: 'failed', reason: 'not-saved' } }, save: undefined })
+    screen.getByRole('button', { name: '取消' }).focus()
+    fake.set({ mode: HERE })
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('link', { name: '我的空间' })))
+    expect(screen.getByRole('button', { name: '在此编辑' })).toHaveAttribute('aria-disabled', 'false')
+    expect(infoRegion()).toHaveTextContent('你在本浏览器的另一个标签页里正在编辑这份文档')
+  })
+
+  it('本页交给了本浏览器的另一个标签页：说明放进一直在的读屏状态区（不是提示条），放在最前面；之后的检查读到自己在本浏览器的另一个标签页编辑时一起说', () => {
+    const fake = renderChrome({ mode: { kind: 'exiting', cause: 'handover-tab' }, save: CLEAN })
+    const region = infoRegion()
+    fake.set({ mode: { ...READING, notice: { kind: 'handed-over-tab' } }, save: undefined })
+    expect(infoRegion()).toBe(region)
+    expect(region.textContent).toBe('已在本浏览器的另一个标签页接着编辑')
+    expect(screen.queryByRole('alert')).toBeNull()
+    fake.set({ mode: { ...HERE, notice: { kind: 'handed-over-tab' } } })
+    expect(region.textContent).toBe('已在本浏览器的另一个标签页接着编辑 你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
   })
 })
 

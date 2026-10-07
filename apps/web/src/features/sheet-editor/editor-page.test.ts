@@ -2326,6 +2326,46 @@ describe('交接规则的页面接线（M3-P5 设计 §3.1、§3.7、§3.9）', 
     await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'idle-released' } }))
   })
 
+  /** 本页的标识与 requestId 按 UUID 的写法（交接频道的消息按契约解析） */
+  function uuids(): () => string {
+    let next = 0
+    return () => `0199a2c4-1f2e-7a3b-8c4d-${String(++next).padStart(12, '0')}`
+  }
+
+  it('"在此编辑"（M3-P5 设计 §3.7）：与"编辑"同一个会话确认——会话不是本人时先向服务端确认，还是别人就不申请；确认是本人之后以本人接管申请（锁空着：不发交接请求）', async () => {
+    const self = { holder: ALICE.user, lastActiveAt: '2026-09-27T03:00:00.000Z', sameUser: true, sameSession: false }
+    const { editorPage, api, editLease, fromOtherTab, browser } = setup({ editIntent: false, newId: uuids(), api: { editStatus: async () => ({ status: { revision: 3, editor: self, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }) } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { sameUser: true }, selfHolder: 'elsewhere' }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.takeOverHere()
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    await editorPage.takeOverHere()
+    expect(editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, '0199a2c4-1f2e-7a3b-8c4d-000000000001', { takeover: 'self' })
+    expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
+    expect(browser.posted(`nerve-office:doc:${DOCUMENT_ID}`)).toEqual([])
+  })
+
+  it('交接请求只理会载入时确认的用户的（同一个浏览器里本来就同一个人，另一个账户的不理）：本人的请求回 ack、先保存再交出、发 done，回到阅读并说明', async () => {
+    const { editorPage, browser } = setup({ newId: uuids() })
+    await editorPage.load()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    const other = sameBrowserFor(DOCUMENT_ID, browser.tab('other'))
+    const replies: string[] = []
+    other.subscribe(message => replies.push(message.type))
+    other.post({ type: 'handover-request', requestId: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', documentId: DOCUMENT_ID, from: '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb', userId: BOB.user.id })
+    await settle()
+    expect(replies).toEqual([])
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    other.post({ type: 'handover-request', requestId: '0199a2c4-1f2e-7a3b-8c4d-0000000000f2', documentId: DOCUMENT_ID, from: '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb', userId: ALICE.user.id })
+    await vi.waitFor(() => expect(replies).toEqual(['handover-ack', 'handover-done']))
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'handed-over-tab' } }))
+    expect(browser.holderOf(lockNameOf(DOCUMENT_ID))).toBeUndefined()
+  })
+
   it('页面关闭（pagehide）：放下本机锁；有保存在途时不释放编辑权、在 localStorage 记下记号，没有在途的不记', async () => {
     const pending = deferred<SaveContentResponse>()
     const save = vi.fn<EditorPageApi['save']>(async () => pending.promise)

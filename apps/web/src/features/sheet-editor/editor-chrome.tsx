@@ -18,8 +18,10 @@
 // （档案不全）时请重新加载页面、给"重新加载"；这份文档的数据没能完整载入时，能编辑的人说已阻止编辑与哪些部分没能载入（提示条，
 // role="alert"），查看者只说显示的内容可能不完整（读屏状态区）。随之消失的"编辑"上的焦点交给返回链接（与权限消失同一个做法）。
 // M3-P5（设计 §3.10、§3.11）：离开编辑的过程中页头按原因说（退出编辑、10 分钟没有操作正在保存并释放、交出）；只有"退出编辑"的那一种
-// 由它的按钮说正在退出（别的不是按了它）。空闲释放之后的说明放进一直在的读屏状态区（不新插入 role="status"）；本人在本浏览器的另一个
-// 标签页接手了编辑时，失效的说明照实说。
+// 由它的按钮说正在退出（别的不是按了它）。空闲释放、交给本浏览器的另一个标签页之后的说明放进一直在的读屏状态区（不新插入 role="status"）；
+// 本人在本浏览器的另一个标签页、另一台设备上接手了编辑时，失效的说明照实说。本人接管（设计 §3.7）：持有者是自己时"编辑"换成"在此编辑"
+// （同一个按钮），说明区分本浏览器的另一个标签页与别处；接手进行中按钮留着、说"正在接手…"（不可用、进行中），进展在读屏状态区里说；那边没能
+// 交出时同一个按钮换成"仍在此编辑"，旁边加"取消"（点了随之消失，焦点由 useFocusRescue 交给返回链接）。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
@@ -27,7 +29,7 @@ import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
-import type { CopyState, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice } from './edit-mode.ts'
+import type { CopyState, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
@@ -261,28 +263,48 @@ function SaveControls({ page, save, confirming, leaving, apple }: { page: Editor
   )
 }
 
+/** 阅读时进入编辑的那个按钮的说法：进入编辑中、那边没能交出（仍在此编辑）、接手中、持有者是自己（在此编辑）、别的（编辑） */
+function enterLabel(reading: ReadingMode | undefined): string {
+  if (reading === undefined)
+    return editorMessages.mode.entering
+  if (reading.takeover?.kind === 'failed')
+    return editorMessages.mode.takeOverAnyway
+  if (reading.takeover !== undefined)
+    return editorMessages.mode.takingOver
+  return reading.holder?.sameUser === true ? editorMessages.mode.takeOverHere : editorMessages.mode.enter
+}
+
 /**
  * 阅读时（与进入编辑的过程中）页头里能做的事："有更新，点击刷新"；"编辑"（能编辑、还读得到时）。reading 为 undefined 是进入编辑中：
  * "编辑"留着、说正在进入，没有进入成功（被占用、网络失败）时焦点还在它上面（审查 A2）。正在载入最新的版本时（审查 A1）、会话不是本人时
  * （审查 A10）"编辑"不可用；点了由页面挡住，或者先向服务端确认会话。确认会话期间（confirming）"编辑"不可用、标为进行中，文字不变，
- * 页头的状态说正在确认登录状态——与按保存时的确认同一个做法，确认之后进入编辑时才说正在进入（复验 C8）
+ * 页头的状态说正在确认登录状态——与按保存时的确认同一个做法，确认之后进入编辑时才说正在进入（复验 C8）。
+ * 持有者是自己（M3-P5 设计 §3.7）：同一个按钮换成"在此编辑"；接手进行中说"正在接手…"（不可用、进行中，"有更新"也不可用）；那边没能交出时
+ * 换成"仍在此编辑"，旁边加"取消"
  */
 function ReadingControls({ page, reading, session, confirming }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
   // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面。打开自检失败（M3-P4）时同样不给：数据不完整的不能编辑
   const offersEdit = reading === undefined || (reading.canEdit && !reading.gone && reading.blocked === undefined && reading.damaged === undefined)
+  const takeover = reading?.takeover
+  const taking = takeover !== undefined && takeover.kind !== 'failed'
+  // 持有者是自己、正在接手或等人选：本人接管（"在此编辑""仍在此编辑"）
+  const takesOver = reading !== undefined && (reading.holder?.sameUser === true || takeover !== undefined)
   return (
     <>
       {update !== 'none' && (
-        <Button size="sm" variant="outline" aria-disabled={update === 'loading'} onClick={() => void page.refreshUpdate()}>
+        <Button size="sm" variant="outline" aria-disabled={update === 'loading' || taking} onClick={() => void page.refreshUpdate()}>
           {update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.update}
         </Button>
       )}
       {offersEdit && (
-        <Button size="sm" aria-disabled={entering || confirming || update === 'loading' || session !== 'active'} aria-busy={entering || confirming} onClick={() => void page.enterEditing()}>
-          {entering ? editorMessages.mode.entering : editorMessages.mode.enter}
+        <Button size="sm" aria-disabled={entering || taking || confirming || update === 'loading' || session !== 'active'} aria-busy={entering || taking || confirming} onClick={() => void (takesOver ? page.takeOverHere() : page.enterEditing())}>
+          {enterLabel(reading)}
         </Button>
+      )}
+      {offersEdit && takeover?.kind === 'failed' && (
+        <Button size="sm" variant="outline" onClick={page.cancelTakeOver}>{editorMessages.mode.cancelTakeOver}</Button>
       )}
     </>
   )
@@ -440,6 +462,9 @@ function lostCause(loss: LeaseLoss): PhraseParts<ReactNode> | undefined {
       return [editorMessages.editing.lostNewer]
     case 'taken-over':
       return [loss.where === 'this-browser' ? editorMessages.editing.lostTakenOverHere : editorMessages.editing.lostTakenOverElsewhere]
+    // 强制接管（M3-P5 设计 §3.8）：先用通用的说法（编辑权已失效），接管人与"空间管理员强制接管了编辑"在 S8 补上
+    case 'forced':
+      return undefined
   }
 }
 
@@ -538,9 +563,10 @@ function readingFailure(notice: ReadingNotice | undefined): ReactNode {
       return editorMessages.mode.editorFailed
     case 'refresh-failed':
       return editorMessages.mode.refreshFailed(describeError(notice.error).message)
-    // 另存为副本成功、空闲释放之后的说明在读屏状态区里（readingInfo）
+    // 另存为副本成功、空闲释放、交给本浏览器的另一个标签页之后的说明在读屏状态区里（readingInfo）
     case 'copied':
     case 'idle-released':
+    case 'handed-over-tab':
     case undefined:
       return undefined
   }
@@ -548,40 +574,65 @@ function readingFailure(notice: ReadingNotice | undefined): ReactNode {
 
 /**
  * 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；能编辑的人另说现在只能阅读。
- * 是自己、而且现在能编辑时说在另一个标签页或设备上（到时再点"编辑"就能编辑）——本页刚退出编辑、没能确认放掉编辑权时多半就是本页那一代，
- * 照实说（releaseUnconfirmed，审查 A13）；不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到新的编辑状态，
- * 照别人一样说谁在编辑，不提"再点编辑"。与服务端不兼容的阅读（blocked）不给"编辑"，同样不提（M3-P3 审查 B8：停住续租之后退出编辑，
- * 那次释放没送到时这里也说本页刚退出）
+ * 是自己、而且现在能编辑时按那个页面在哪里说（M3-P5 设计 §3.7：本浏览器的另一个标签页，或者另一台设备、浏览器，也可能是刚关闭、刷新过的
+ * 页面），能"在此编辑"时说点了会怎样——本页刚退出编辑、没能确认放掉编辑权时多半就是本页那一代，照实说（releaseUnconfirmed，审查 A13）；
+ * 不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到新的编辑状态，照别人一样说谁在编辑，不提"在此编辑"。与服务端不兼容、数据
+ * 不完整的阅读不给"在此编辑"，同样不提（M3-P3 审查 B8：停住续租之后退出编辑，那次释放没送到时这里也说本页刚退出）
  */
-function elsewhereNotice(holder: LeaseHolder | undefined, canEdit: boolean, releaseUnconfirmed: boolean, blocked: boolean): ReactNode {
+function elsewhereNotice(reading: ReadingMode, holder: LeaseHolder | undefined): ReactNode {
   if (holder === undefined)
     return editorMessages.editing.elsewhereUnknown
-  if (holder.sameUser && canEdit)
-    return releaseUnconfirmed ? editorMessages.editing.elsewhereThisPage(!blocked) : editorMessages.editing.elsewhereBySelf(!blocked)
+  if (holder.sameUser && reading.canEdit) {
+    const reenter = reading.blocked === undefined && reading.damaged === undefined
+    if (reading.releaseUnconfirmed)
+      return editorMessages.editing.elsewhereThisPage(reenter)
+    return reading.selfHolder === 'this-browser' ? editorMessages.editing.elsewhereThisBrowser(reenter) : editorMessages.editing.elsewhereAway(reenter)
+  }
   const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
-  return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive, canEdit)} />
+  return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive, reading.canEdit)} />
+}
+
+/** "在此编辑"的进展的说明（M3-P5 设计 §3.7）：请那边交出、等刷新之前的保存、那边没能交出；刚开始时没有（照旧说谁在编辑） */
+function takeoverNotice(takeover: TakeoverProgress | undefined): string | undefined {
+  switch (takeover?.kind) {
+    case 'asking':
+      return editorMessages.mode.takeoverAsking
+    case 'waiting-save':
+      return editorMessages.mode.takeoverWaitingSave
+    case 'failed':
+      return editorMessages.mode.takeoverFailed(takeover.reason)
+    case 'preparing':
+    case undefined:
+      return undefined
+  }
 }
 
 /**
  * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：查看者看到的这一版数据不完整（M3-P4 设计 §3.12：能编辑的人与编辑器没有完整载入的
  * 说明在提示条里，DamagedNotice）、谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
  * P2 的定期检查会让它变化）、文档读不到了、有更新与正在载入（页头的按钮之外读屏也听得到，审查 A6）、另存为副本成功、
- * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能进入编辑的人另说进入编辑之后会重算并保存）、空闲释放之后为什么回到了阅读
- * （M3-P5 设计 §3.9、§3.11：不新插入 role="status"）
+ * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能进入编辑的人另说进入编辑之后会重算并保存）、空闲释放与交给本浏览器的另一个
+ * 标签页之后为什么回到了阅读、"在此编辑"的进展（M3-P5 设计 §3.7、§3.9、§3.11：不新插入 role="status"）
  */
 function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading === undefined)
     return undefined
   const lines: ReactNode[] = []
-  // 空闲释放之后（US-M3-07）：为什么回到了阅读，放在最前面
+  // 空闲释放、交给本浏览器的另一个标签页之后（US-M3-07、08）：为什么回到了阅读，放在最前面
   if (reading.notice?.kind === 'idle-released')
     lines.push(<span key="idle">{editorMessages.mode.idleReleased}</span>)
+  if (reading.notice?.kind === 'handed-over-tab')
+    lines.push(<span key="handed-over">{editorMessages.mode.handedOverTab}</span>)
   if (reading.damaged !== undefined && !reading.canEdit && damageOf(reading.damaged) === 'data')
     lines.push(<span key="damaged">{editorMessages.damaged.viewer}</span>)
+  // "在此编辑"进行中、那边没能交出（M3-P5 设计 §3.7）：说进展，代替谁在编辑的那一句（那一句说的是点了会怎样）
+  const takeover = takeoverNotice(reading.takeover)
   if (reading.gone)
     lines.push(<span key="gone">{editorMessages.mode.gone}</span>)
+  else if (takeover !== undefined)
+    lines.push(<span key="takeover">{takeover}</span>)
   else if (reading.holder !== undefined)
-    lines.push(<span key="holder">{elsewhereNotice(reading.holder, reading.canEdit, reading.releaseUnconfirmed, reading.blocked !== undefined)}</span>)
+    lines.push(<span key="holder">{elsewhereNotice(reading, reading.holder)}</span>)
   if (reading.update !== 'none')
     lines.push(<span key="update">{reading.update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.updateAvailable}</span>)
   if (reading.notice?.kind === 'copied')

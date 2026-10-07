@@ -26,6 +26,11 @@ function lostError(reason?: string): ApiError {
   return new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效，本次操作没有生效', { details: reason === undefined ? {} : { reason } })
 }
 
+/** 被接管（taken_over，M3-P5）：forced 区分本人在别处接手与强制接管；传入别的值时模拟认不出 */
+function takenOverError(forced: unknown): ApiError {
+  return new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效，本次操作没有生效', { details: { reason: 'taken_over', forced } })
+}
+
 /** 自己在另一个标签页上持有 */
 const SELF_HELD = { holder: AMY, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: true, sameSession: false, canTakeOver: false, request: null }
 /** 别人（艾米）持有 */
@@ -205,6 +210,44 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
     expect(acquire.mock.calls).toEqual([[DOCUMENT_ID, PAGE_ID], [DOCUMENT_ID, PAGE_ID]])
   })
 
+  it('本人接管（"在此编辑"，M3-P5 设计 §3.7）：申请带 takeover: self；结果未知时用同一个标识、同样的方式再试', async () => {
+    const acquire = vi.fn<EditLeaseApi['acquire']>().mockRejectedValueOnce(new NetworkError('断网')).mockResolvedValueOnce(ACQUIRED)
+    const context = setup({ acquire })
+    const acquiring = acquireEditLease(context.options, { takeover: 'self' })
+    await context.time.advance(UNKNOWN_OUTCOME_RETRY_DELAY_MS)
+    expect(await acquiring).toMatchObject({ kind: 'acquired', revision: 5 })
+    expect(acquire.mock.calls).toEqual([[DOCUMENT_ID, PAGE_ID, { takeover: 'self' }], [DOCUMENT_ID, PAGE_ID, { takeover: 'self' }]])
+  })
+
+  it('被自己占着、页面说不必再试（本浏览器里有标签页持有本机锁，M3-P5）：立即按被占用返回，只申请一次', async () => {
+    const acquire = vi.fn(async () => Promise.reject(heldError(SELF_HELD)))
+    const retrySameUser = vi.fn(async () => false)
+    const context = setup({ acquire })
+    expect(await acquireEditLease(context.options, { retrySameUser })).toMatchObject({ kind: 'held', holder: { sameUser: true } })
+    expect(acquire).toHaveBeenCalledOnce()
+    expect(retrySameUser).toHaveBeenCalledOnce()
+    expect(context.time.pending()).toBe(0)
+  })
+
+  it('被自己占着、页面说要再试（锁空着：刷新时晚到的释放）：照旧隔 500 毫秒再试，每次再试之前都问——中途说不必了就停', async () => {
+    const acquire = vi.fn(async () => Promise.reject(heldError(SELF_HELD)))
+    const answers = [true, false]
+    const retrySameUser = vi.fn(async () => answers.shift() ?? false)
+    const context = setup({ acquire })
+    const acquiring = acquireEditLease(context.options, { retrySameUser })
+    await context.time.advance(SAME_USER_RETRY_DELAY_MS * SAME_USER_RETRIES)
+    expect(await acquiring).toMatchObject({ kind: 'held', holder: { sameUser: true } })
+    expect(acquire).toHaveBeenCalledTimes(2)
+    expect(retrySameUser).toHaveBeenCalledTimes(2)
+  })
+
+  it('被别人占着：不问要不要再试（只有自己时才再试）', async () => {
+    const retrySameUser = vi.fn(async () => true)
+    const context = setup({ acquire: vi.fn(async () => Promise.reject(heldError(AMY_HELD))) })
+    expect(await acquireEditLease(context.options, { retrySameUser })).toMatchObject({ kind: 'held', holder: { sameUser: false } })
+    expect(retrySameUser).not.toHaveBeenCalled()
+  })
+
   it.each(UNKNOWN_OUTCOMES)('结果未知（%s）、再试仍然未知：只再试一次，抛出后一次的错误，由页面处理', async (_case, error) => {
     const again = new NetworkError('还是断网')
     const acquire = vi.fn<EditLeaseApi['acquire']>().mockRejectedValueOnce(error).mockRejectedValueOnce(again)
@@ -288,6 +331,10 @@ describe('失效：失去访问或编辑权，或者不认识的原因', () => {
     ['EDIT_LEASE_LOST（编辑权被收回）', lostError('revoked'), { kind: 'lease', reason: 'revoked' }],
     ['EDIT_LEASE_LOST（不认识的原因）', lostError('handed-over'), { kind: 'lease', reason: undefined }],
     ['EDIT_LEASE_LOST（没有原因）', lostError(), { kind: 'lease', reason: undefined }],
+    ['EDIT_LEASE_LOST（本人在另一台设备或浏览器上接手：taken_over、forced 为假，M3-P5）', takenOverError(false), { kind: 'taken-over', where: 'elsewhere' }],
+    ['EDIT_LEASE_LOST（空间管理员强制接管：taken_over、forced 为真）', takenOverError(true), { kind: 'forced' }],
+    ['EDIT_LEASE_LOST（taken_over、forced 认不出：不猜，只说编辑权已失效）', takenOverError('yes'), { kind: 'lease', reason: 'taken_over' }],
+    ['EDIT_LEASE_LOST（已经交给了请求编辑的人：handed_over）', lostError('handed_over'), { kind: 'lease', reason: 'handed_over' }],
     ['403（能读不能编辑了）', denied, { kind: 'denied', error: denied }],
     ['404（读不到了）', gone, { kind: 'not-found', error: gone }],
   ])('续租得到%s：不续上，通知页面一次，停止续租', async (_case, error, loss) => {
@@ -315,6 +362,18 @@ describe('失效：失去访问或编辑权，或者不认识的原因', () => {
     expect(context.api.release).not.toHaveBeenCalled()
   })
 
+  it('保存得知被接管（taken_over）：与续租同一个处理——不续上（不再申请），结果是失效，说明本人在别处接手', async () => {
+    const context = setup()
+    const lease = await held(context)
+    const loss = leaseLossOf(takenOverError(false))
+    expect(loss).toEqual({ kind: 'taken-over', where: 'elsewhere' })
+    expect(await lease.lose(loss ?? { kind: 'newer' }, lease.credentials())).toEqual({ kind: 'lost' })
+    expect(context.onLost).toHaveBeenCalledExactlyOnceWith({ kind: 'taken-over', where: 'elsewhere' })
+    await context.time.advance(60_000)
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    expect(context.api.release).not.toHaveBeenCalled()
+  })
+
   it('续租得到 400（请求不合法）：不算失效，不通知页面，下一次照常续租（审查 B5）', async () => {
     const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(new ApiError(400, 'REQUEST_INVALID', '请求的格式或参数不合法')).mockResolvedValue(RENEWED)
     const context = setup({ renew })
@@ -339,6 +398,11 @@ describe('失效：失去访问或编辑权，或者不认识的原因', () => {
 
   it('leaseLossOf：只认编辑权失效、404 与 403；别的失败（400 请求不合法、未登录、CSRF 失效的 403、修订号冲突、网络错误）不算（审查 B5）', () => {
     expect(leaseLossOf(lostError('idle'))).toEqual({ kind: 'lease', reason: 'idle' })
+    expect(leaseLossOf(takenOverError(false))).toEqual({ kind: 'taken-over', where: 'elsewhere' })
+    expect(leaseLossOf(takenOverError(true))).toEqual({ kind: 'forced' })
+    expect(leaseLossOf(takenOverError(undefined))).toEqual({ kind: 'lease', reason: 'taken_over' })
+    // forced 只跟着 taken_over 起作用
+    expect(leaseLossOf(new ApiError(409, 'EDIT_LEASE_LOST', 'x', { details: { reason: 'replaced', forced: true } }))).toEqual({ kind: 'lease', reason: 'replaced' })
     expect(leaseLossOf(new ApiError(400, 'REQUEST_INVALID', '请求的格式或参数不合法'))).toBeUndefined()
     expect(leaseLossOf(new ApiError(401, 'SESSION_EXPIRED', '已过期'))).toBeUndefined()
     expect(leaseLossOf(new ApiError(403, 'CSRF_TOKEN_INVALID', 'x'))).toBeUndefined()

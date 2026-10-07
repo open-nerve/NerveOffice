@@ -106,7 +106,7 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
       conflictCopy: async (documentId, query, body) => saveConflictCopy(documentId, query, body),
       reportOpenCheck: async (documentId, report) => reportOpenCheckFailures(documentId, report),
       editLease: {
-        acquire: async (documentId, clientInstanceId, options) => acquireEditLease(documentId, clientInstanceId, options?.idleSeconds),
+        acquire: async (documentId, clientInstanceId, options) => acquireEditLease(documentId, clientInstanceId, options),
         renew: async (documentId, token, idleSeconds) => renewEditLease(documentId, token, idleSeconds),
         release: async (documentId, token) => releaseEditLease(documentId, token),
       },

@@ -17,20 +17,22 @@ export interface PageVisibility {
   readonly onChange: (listener: () => void) => () => void
 }
 
-/** 一次检查的结果：读到的编辑状态，或者请求失败的原因 */
-export type ReadingCheckResult
-  = | { readonly kind: 'status', readonly fetched: FetchedEditStatus }
+/**
+ * 一次检查的结果：读到的东西（默认是编辑状态；编辑模式另带本机锁有没有人持有，M3-P5），或者失败的原因
+ */
+export type ReadingCheckResult<T = FetchedEditStatus>
+  = | { readonly kind: 'status', readonly fetched: T }
     | { readonly kind: 'failed', readonly error: unknown }
 
-export interface ReadingChecksOptions {
+export interface ReadingChecksOptions<T = FetchedEditStatus> {
   readonly clock: LeaseClock
   readonly visibility: PageVisibility
-  /** 读一次编辑状态 */
-  readonly fetch: () => Promise<FetchedEditStatus>
+  /** 读一次（编辑状态，以及同一次检查里要一起看的） */
+  readonly fetch: () => Promise<T>
   /** 现在可以检查：阅读中、会话是本人（页面的可见性由这里自己看） */
   readonly allowed: () => boolean
   /** 最新发出的那一次检查的结果（之后照常排下一次） */
-  readonly onResult: (result: ReadingCheckResult) => void
+  readonly onResult: (result: ReadingCheckResult<T>) => void
 }
 
 export interface ReadingChecks {
@@ -41,7 +43,7 @@ export interface ReadingChecks {
   readonly dispose: () => void
 }
 
-export function createReadingChecks(options: ReadingChecksOptions): ReadingChecks {
+export function createReadingChecks<T = FetchedEditStatus>(options: ReadingChecksOptions<T>): ReadingChecks {
   /** 轮次：checkNow、stop 各加一，发出时记下的轮次不是现在的就作废 */
   let round = 0
   let cancelTimer: (() => void) | undefined
@@ -72,7 +74,7 @@ export function createReadingChecks(options: ReadingChecksOptions): ReadingCheck
   }
 
   /** 一次检查回来了：之后又立即读过、停下过的，结果不再成立；否则交出结果，排下一次 */
-  function finish(issued: number, result: ReadingCheckResult): void {
+  function finish(issued: number, result: ReadingCheckResult<T>): void {
     if (issued !== round)
       return
     options.onResult(result)

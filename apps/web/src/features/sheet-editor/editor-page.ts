@@ -11,7 +11,8 @@
 // 页头的文档详情正在重新取时给出进行中（DEF-045）。
 // 交接规则（M3-P5）：本页的键盘、鼠标操作由组装处给出（edit-lease.ts 的 trackActivity：只认可信事件、零位移的移动不算——心跳的空闲与
 // 空闲释放都按它）；这份文档在同一个浏览器里的锁与交接频道（same-browser.ts）、刷新时在途的保存的记号（pending-save-marker.ts）按文档
-// 交给编辑模式，频道随页面卸载关掉。
+// 交给编辑模式，频道随页面卸载关掉。"在此编辑"（本人接管，设计 §3.7）与"编辑"一样先确认会话；交接频道上只理会同一个人的请求，本页的用户
+// 取自载入时确认的会话。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -173,6 +174,13 @@ export interface EditorPage {
   readonly save: () => Promise<void>
   /** "编辑"：会话是本人时申请编辑权，重建为可编辑 */
   readonly enterEditing: () => Promise<void>
+  /**
+   * "在此编辑"（M3-P5 设计 §3.7）：会话是本人时本人接管自己在别的标签页或设备上的编辑权（本浏览器的标签页先保存再交出）；那边没能交出之后再按
+   * 就是"仍在此编辑"
+   */
+  readonly takeOverHere: () => Promise<void>
+  /** "在此编辑"那边没能交出之后选"取消" */
+  readonly cancelTakeOver: () => void
   /** "退出编辑"：先保存，释放编辑权，重建为只读 */
   readonly exitEditing: () => Promise<void>
   /** "有更新，点击刷新" */
@@ -549,12 +557,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
   }
 
-  function createMode(id: string): EditMode {
+  function createMode(id: string, user: string): EditMode {
     const sameBrowser = options.sameBrowser(id)
     cleanups.push(() => sameBrowser.close())
     const created = createEditMode({
       documentId: id,
       clientInstanceId,
+      userId: user,
       api,
       createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
       clock,
@@ -641,7 +650,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         return
       }
       heading = headingOf(document, signedIn.user.id)
-      const opened = createMode(documentId)
+      const opened = createMode(documentId, signedIn.user.id)
       mode = opened
       // 载入期间别的标签页换了人或者退出了：按确认的结果开始（不是本人时不续租、不检查）
       opened.setSession(session)
@@ -685,6 +694,15 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         return
       await mode.enter()
     },
+    takeOverHere: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      // 本人接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.takeOver()
+    },
+    cancelTakeOver: () => mode?.cancelTakeOver(),
     exitEditing: async () => {
       if (mode?.view().mode.kind !== 'editing')
         return

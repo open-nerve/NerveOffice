@@ -32,8 +32,12 @@
 // - 与服务端不兼容（M3-P3 设计 §3.5）：续租或续上的申请得到 CLIENT_OUTDATED（本页过旧）或 DOCUMENT_TOO_NEW（文档比服务端新）——
 //   本页写不进去了：停止续租、尽力放掉手里那一代（别人与重新加载之后的本页立即能申请，不用等它到期），经 onIncompatible 通知页面。终态；
 // - 被本浏览器的另一个标签页取代（M3-P5 设计 §3.1：本机锁被抢）：服务端批给了那边，本页这一代必然已经失效——abandon 停止续租与续上，
-//   不发释放（令牌已经对不上），也不通知（页面自己转为失去编辑权）。终态
-import type { AcquiredEditLease, DocumentEditor, EditLeaseLostReason, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
+//   不发释放（令牌已经对不上），也不通知（页面自己转为失去编辑权）。终态；
+// - 被接管（M3-P5 设计 §3.7、§3.8：续租或保存得到 taken_over）：不续上（编辑权是有意交给别处的，续上就是抢回来）——本人在另一台设备或浏览器上
+//   接手（forced 为假）与空间管理员强制接管（forced 为真）分开交给页面；
+// - 本人接管（M3-P5 设计 §3.7，"在此编辑"）：申请带 takeover: 'self'（只给用户发起的那一次，续上从不带）；被自己占着时要不要隔一会儿再试
+//   由页面判断（本浏览器里有标签页持有本机锁时不必再试：那不是刷新时晚到的释放）
+import type { AcquiredEditLease, DocumentEditor, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
@@ -85,10 +89,16 @@ export const browserLeaseClock: LeaseClock = {
   },
 }
 
+/** 申请时另带的（M3-P5）：续上时 idleSeconds 是本页的空闲秒数（设计 §3.5）；takeover 是接管方式（设计 §3.7，只给用户发起的申请） */
+export interface AcquireOptions {
+  readonly idleSeconds?: number
+  readonly takeover?: EditTakeoverMode
+}
+
 /** 编辑权的接口（editor-api.ts）：失败时抛出请求层的错误 */
 export interface EditLeaseApi {
-  /** 申请：续上时 options.idleSeconds 是本页的空闲秒数（M3-P5 设计 §3.5）；用户发起的申请不带 */
-  readonly acquire: (documentId: string, clientInstanceId: string, options?: { readonly idleSeconds?: number }) => Promise<AcquiredEditLease>
+  /** 申请：用户发起的申请不带空闲秒数；没有要另带的时不给 options */
+  readonly acquire: (documentId: string, clientInstanceId: string, options?: AcquireOptions) => Promise<AcquiredEditLease>
   readonly renew: (documentId: string, token: string, idleSeconds: number) => Promise<RenewedEditLease>
   /**
    * 尽力释放（keepalive）：失败时抛出请求层的错误。页面隐藏、关闭时不等它、不看结果；续上时等它——放掉之后再申请，
@@ -117,7 +127,8 @@ export interface LeaseHolder {
  * - held：续上时别人（或者自己在别的标签页、设备上）正在编辑；
  * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它；
  * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，不再问服务端）；
- *   elsewhere 是另一台设备或浏览器（服务端的 taken_over，S6 接上）
+ *   elsewhere 是另一台设备或浏览器（续租或保存得到 taken_over、forced 为假：那边以本人接管申请，服务端结束了这一代）；
+ * - forced：空间管理员强制接管了编辑（M3-P5 设计 §3.8：taken_over、forced 为真；接管人由转为阅读之后读到的编辑状态给出，S8）
  */
 export type LeaseLoss
   = | { readonly kind: 'lease', readonly reason: EditLeaseLostReason | undefined }
@@ -126,14 +137,21 @@ export type LeaseLoss
     | { readonly kind: 'held', readonly holder: LeaseHolder | undefined }
     | { readonly kind: 'newer' }
     | { readonly kind: 'taken-over', readonly where: 'this-browser' | 'elsewhere' }
+    | { readonly kind: 'forced' }
 
-/** 请求的失败说明编辑权已经失效（EDIT_LEASE_LOST、404、403）时给出来源；别的失败为 undefined */
+/**
+ * 请求的失败说明编辑权已经失效（EDIT_LEASE_LOST、404、403）时给出来源；别的失败为 undefined。被接管（taken_over）按 forced 分成本人在别处接手与
+ * 强制接管；forced 认不出（宽松解析之后没有）时不猜，照不认识的原因只说编辑权已失效（同样不续上）
+ */
 export function leaseLossOf(error: unknown): LeaseLoss | undefined {
   if (!(error instanceof ApiError))
     return undefined
   if (error.code === 'EDIT_LEASE_LOST') {
-    const details = editLeaseLostDetailsSchema.safeParse(error.details ?? {})
-    return { kind: 'lease', reason: details.success ? details.data.reason : undefined }
+    const parsed = editLeaseLostDetailsSchema.safeParse(error.details ?? {})
+    const details: EditLeaseLostDetails = parsed.success ? parsed.data : {}
+    if (details.reason === 'taken_over' && details.forced !== undefined)
+      return details.forced ? { kind: 'forced' } : { kind: 'taken-over', where: 'elsewhere' }
+    return { kind: 'lease', reason: details.reason }
   }
   if (isNotFoundError(error))
     return { kind: 'not-found', error }
@@ -262,19 +280,33 @@ async function wait(clock: LeaseClock, delayMs: number): Promise<void> {
   })
 }
 
+/** 用户发起的那一次申请的意图（M3-P5；续上不经这里，从不带接管方式） */
+export interface AcquireIntent {
+  /** 接管方式（设计 §3.7："在此编辑"是 self）；普通的申请不给 */
+  readonly takeover?: EditTakeoverMode | undefined
+  /**
+   * 被自己（别的标签页或设备）占着时要不要隔一会儿再试（每次再试之前问一次）：那几次再试是给刷新时晚到的释放的——本浏览器里有标签页持有
+   * 本机锁时那是一个还在编辑的标签页，不必再试（设计 §3.7）。不给时一律再试
+   */
+  readonly retrySameUser?: (() => Promise<boolean>) | undefined
+}
+
 /**
- * 申请编辑权。被占用而且是自己时，隔 SAME_USER_RETRY_DELAY_MS 再试，最多 SAME_USER_RETRIES 次，仍被占用才按被占用返回。
- * 结果未知（网络错误、5xx、回包读不出来）时隔 UNKNOWN_OUTCOME_RETRY_DELAY_MS 用同一个标识再试 UNKNOWN_OUTCOME_RETRIES 次：
- * 服务端可能已经批给了本页，同一个页面再申请是重试，发新的一代（审查 B7）。别的失败（403、404、未登录等）、再试之后仍未知的，
- * 原样抛出，由页面处理
+ * 申请编辑权。被占用而且是自己时，隔 SAME_USER_RETRY_DELAY_MS 再试，最多 SAME_USER_RETRIES 次（intent.retrySameUser 说不必时不再试），
+ * 仍被占用才按被占用返回。结果未知（网络错误、5xx、回包读不出来）时隔 UNKNOWN_OUTCOME_RETRY_DELAY_MS 用同一个标识再试
+ * UNKNOWN_OUTCOME_RETRIES 次：服务端可能已经批给了本页，同一个页面再申请是重试，发新的一代（审查 B7；本人接管的重试沿用上一代的接管标记，
+ * 服务端不再写一次）。别的失败（403、404、未登录等）、再试之后仍未知的，原样抛出，由页面处理
  */
-export async function acquireEditLease(options: EditLeaseOptions): Promise<LeaseAcquisition> {
+export async function acquireEditLease(options: EditLeaseOptions, intent: AcquireIntent = {}): Promise<LeaseAcquisition> {
   let sameUserRetries = 0
   let unknownRetries = 0
+  const { takeover } = intent
   for (;;) {
     let acquired: AcquiredEditLease
     try {
-      acquired = await options.api.acquire(options.documentId, options.clientInstanceId)
+      acquired = await (takeover === undefined
+        ? options.api.acquire(options.documentId, options.clientInstanceId)
+        : options.api.acquire(options.documentId, options.clientInstanceId, { takeover }))
     }
     catch (error) {
       const held = heldOf(error)
@@ -285,7 +317,7 @@ export async function acquireEditLease(options: EditLeaseOptions): Promise<Lease
         await wait(options.clock, UNKNOWN_OUTCOME_RETRY_DELAY_MS)
         continue
       }
-      if (held.holder?.sameUser !== true || sameUserRetries >= SAME_USER_RETRIES)
+      if (held.holder?.sameUser !== true || sameUserRetries >= SAME_USER_RETRIES || (intent.retrySameUser !== undefined && !(await intent.retrySameUser())))
         return { kind: 'held', holder: held.holder }
       sameUserRetries += 1
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)

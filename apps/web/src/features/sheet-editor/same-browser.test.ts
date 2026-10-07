@@ -134,6 +134,63 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     expect(await refused.steal()).toBeDefined()
   })
 
+  it('等锁直到空着（untilFree，交接的信号）：占着时排队，持有者放开之后交回 true——轮到时立即放开，不占着（之后别的标签页照样拿得到）', async () => {
+    const browser = fakeBrowser()
+    const a = sameBrowserFor(DOCUMENT_ID, browser.tab('A'))
+    const b = sameBrowserFor(DOCUMENT_ID, browser.tab('B'))
+    const held = await a.tryHold()
+    const free = b.untilFree(new AbortController().signal)
+    expect(await settled(free)).toBe(false)
+    expect(browser.holderOf(LOCK)).toBe('A')
+    held?.release()
+    expect(await free).toBe(true)
+    await settle()
+    expect(browser.holderOf(LOCK)).toBeUndefined()
+    expect(await b.heldHere()).toBe(false)
+    expect(await sameBrowserFor(DOCUMENT_ID, browser.tab('C')).tryHold()).toBeDefined()
+  })
+
+  it('等锁：锁本来就空着时立即 true；持有者被抢走（锁换了人）不算空着，接着等新的持有者放开', async () => {
+    const browser = fakeBrowser()
+    const a = sameBrowserFor(DOCUMENT_ID, browser.tab('A'))
+    const b = sameBrowserFor(DOCUMENT_ID, browser.tab('B'))
+    expect(await a.untilFree(new AbortController().signal)).toBe(true)
+    await a.tryHold()
+    const free = b.untilFree(new AbortController().signal)
+    const taken = await sameBrowserFor(DOCUMENT_ID, browser.tab('C')).steal()
+    expect(await settled(free)).toBe(false)
+    expect(browser.holderOf(LOCK)).toBe('C')
+    taken.release()
+    expect(await free).toBe(true)
+  })
+
+  it('等锁撤销（时限到了、不再等）：交回 false，从队里撤下——之后持有者放开时它不会再拿到锁；撤销过的 signal 不排队', async () => {
+    const browser = fakeBrowser()
+    const a = sameBrowserFor(DOCUMENT_ID, browser.tab('A'))
+    const b = sameBrowserFor(DOCUMENT_ID, browser.tab('B'))
+    const held = await a.tryHold()
+    const waiting = new AbortController()
+    const free = b.untilFree(waiting.signal)
+    await settle()
+    waiting.abort()
+    expect(await free).toBe(false)
+    held?.release()
+    await settle()
+    expect(browser.holderOf(LOCK)).toBeUndefined()
+    expect(await b.untilFree(waiting.signal)).toBe(false)
+  })
+
+  it('等锁：浏览器没有 Web Locks、请求出错时立即 false，不抛出', async () => {
+    expect(await sameBrowserFor(DOCUMENT_ID, { locks: undefined, openChannel: undefined }).untilFree(new AbortController().signal)).toBe(false)
+    const throwing: LockApi = {
+      request: () => {
+        throw new DOMException('not allowed', 'SecurityError')
+      },
+      query: async () => ({ held: [] }),
+    }
+    expect(await sameBrowserFor(DOCUMENT_ID, { locks: throwing, openChannel: undefined }).untilFree(new AbortController().signal)).toBe(false)
+  })
+
   it('拿到之后请求以别的错误结束（不是 AbortError）：不算被抢', async () => {
     let fail: (error: unknown) => void = () => {}
     const locks: LockApi = {

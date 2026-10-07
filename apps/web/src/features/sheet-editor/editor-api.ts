@@ -4,6 +4,7 @@
 // 保存协议（M3-P3 设计 §3.5、§3.8）：保存、另存为副本、申请编辑权与心跳都带上本页的构建与数据格式（client-format.ts），
 // 保存与另存为副本另带"公式待更新"。打开自检（M3-P4 设计 §3.13）：失败的上报。
 import type { AcquiredEditLease, ConflictCopyQuery, CreatedDocument, DocumentDetail, EditStatus, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { AcquireOptions } from './edit-lease.ts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editStatusSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
@@ -133,10 +134,12 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
 /**
  * 申请编辑权（201）：clientInstanceId 是本页这次加载的标识，租约绑定它与这次登录；带上本页的构建与数据格式（M3-P3）。
  * 续上时另带本页的空闲秒数（idleSeconds，M3-P5 设计 §3.5：新的一代的最后活动按它往前推）；用户发起的申请不带。
+ * "在此编辑"另带接管方式（takeover: 'self'，M3-P5 设计 §3.7：当前有效的租约就在自己手里时原子地结束那一代、发新的一代）。
  * 被占用时抛出 EDIT_LEASE_HELD，本页过旧时 CLIENT_OUTDATED，文档比服务端新时 DOCUMENT_TOO_NEW（ApiError）
  */
-export async function acquireEditLease(documentId: string, clientInstanceId: string, idleSeconds?: number): Promise<AcquiredEditLease> {
-  const body = { clientInstanceId, ...(idleSeconds === undefined ? {} : { idleSeconds }), ...PAGE_CLIENT_FORMAT }
+export async function acquireEditLease(documentId: string, clientInstanceId: string, options: AcquireOptions = {}): Promise<AcquiredEditLease> {
+  const { idleSeconds, takeover } = options
+  const body = { clientInstanceId, ...(idleSeconds === undefined ? {} : { idleSeconds }), ...(takeover === undefined ? {} : { takeover }), ...PAGE_CLIENT_FORMAT }
   return apiRequest(leasePath(documentId), { method: 'POST', body, schema: acquiredEditLeaseSchema })
 }
 

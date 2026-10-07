@@ -10,16 +10,11 @@ import type { Page, Request } from '@playwright/test'
 import { createUser, editLeaseEndReason, editLeaseEpoch, idleEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { blockSaves, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, headerAnnouncement, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { blockSaves, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, headerAnnouncement, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, statusRegion, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
-
-/** 空闲释放之后阅读时的说明：一直在的读屏状态区（不是新插入的提示） */
-function statusRegion(page: Page) {
-  return page.locator('#editor-chrome [data-slot="status-region"]')
-}
 
 /** 申请编辑权（POST …/edit-lease）的请求 */
 function isLeaseAcquisition(request: Request, documentId: string): boolean {
