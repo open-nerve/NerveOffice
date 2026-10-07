@@ -1474,10 +1474,12 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(screen.getByRole('button', { name: '取消请求' })).toHaveAttribute('aria-disabled', 'false')
     })
 
-    it('交给了本页、页面在后台（granted）：说明回到这一页时进入编辑，按钮是"取消请求"', () => {
-      renderChrome({ mode: { ...OTHERS, request: { kind: 'granted' } }, save: undefined })
+    it('交给了本页、页面在后台（granted）：说明回到这一页时进入编辑，按钮是"取消请求"、点了就取消（审查 B7 的 C03）', () => {
+      const fake = renderChrome({ mode: { ...OTHERS, request: { kind: 'granted' } }, save: undefined })
       expect(infoRegion().textContent).toBe('可以进入编辑了：回到这一页时自动进入编辑')
-      expect(screen.getByRole('button', { name: '取消请求' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: '取消请求' }))
+      expect(fake.page.cancelRequest).toHaveBeenCalledOnce()
+      expect(fake.page.requestEditing).not.toHaveBeenCalled()
     })
 
     it('本人在别的页面、设备上发出、正在等的请求（审查 B2）：读屏状态区在谁在编辑之后说一句，按钮照旧是"请求编辑"（再点就成为发出过的页面）；本页有请求时不说', () => {
@@ -1568,6 +1570,17 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(keep).toHaveAttribute('aria-disabled', 'false')
       fake.set({ mode: { kind: 'editing', request: { ...INCOMING, failure: { action: 'handover', error: new NetworkError('断网') } } } })
       expect(prompt()).toHaveTextContent('没能交出编辑权：网络连接失败，请检查网络后重试。请求还在，可以再点"交出"')
+    })
+
+    it('正在确认会话（按了"交出"或"继续编辑"之后先确认）：两个按钮都不可用，确认完了恢复（审查 B7 的 C05）', () => {
+      const fake = renderChrome({ mode: { kind: 'editing', request: INCOMING }, confirmingSession: true })
+      const hand = within(prompt()).getByRole('button', { name: '交出' })
+      const keep = within(prompt()).getByRole('button', { name: '继续编辑' })
+      expect(hand).toHaveAttribute('aria-disabled', 'true')
+      expect(keep).toHaveAttribute('aria-disabled', 'true')
+      fake.set({ confirmingSession: false })
+      expect(hand).toHaveAttribute('aria-disabled', 'false')
+      expect(keep).toHaveAttribute('aria-disabled', 'false')
     })
 
     it('交出的过程中（exiting、handover-request）：提示留着、"交出"说正在交出（不可用、进行中），焦点还在它上面，页头说正在保存并交出；回到阅读之后提示消失、焦点交给返回链接，读屏状态区说交给了谁', async () => {

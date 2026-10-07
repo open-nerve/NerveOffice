@@ -2586,6 +2586,28 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     expect(await settledNow(elsewhere?.stolen ?? Promise.reject(new Error('没拿到')))).toBe(true)
   })
 
+  it('拿锁期间这一代已经失效（进入的途中续租得知编辑权被收回）：拿到的锁随即放掉——回到阅读的这一页不一直持有本机锁（审查 B7 的 M05）', async () => {
+    const browser = fakeBrowser()
+    const real = sameBrowserFor(DOCUMENT_ID, browser.tab('this'))
+    const gate = deferred<void>()
+    const context = setup({ browser, sameBrowser: { ...real, tryHold: async () => {
+      await gate.promise
+      return real.tryHold()
+    } }, editLease: { renew: async () => Promise.reject(new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'revoked' } })) } })
+    await opened(context)
+    const entering = context.mode.enter()
+    await settle()
+    expect(modeOf(context.mode).kind).toBe('entering')
+    // 拿锁还停着：这期间心跳得知编辑权被收回，放弃进入、回到阅读
+    await context.time.advance(HEARTBEAT_MS)
+    expect(readingOf(context.mode).notice).toEqual({ kind: 'enter-lost', loss: { kind: 'lease', reason: 'revoked' } })
+    gate.resolve()
+    await entering
+    await settle()
+    expect(browser.holderOf(LOCK)).toBeUndefined()
+    expect(modeOf(context.mode).kind).toBe('reading')
+  })
+
   it('退出编辑：服务端的释放有了结果之后才放锁（S6 的交接以等锁为信号）；回到阅读时锁空着', async () => {
     const answer = deferred<undefined>()
     const context = setup({ editLease: { release: async () => answer.promise } })
@@ -3750,6 +3772,28 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.editLease.renew).toHaveBeenCalledTimes(renewals)
     })
 
+    it('请求到达时本页已空闲满 2 分钟、会话却不可写（不主动向服务端确认）：不开始离开，只显示提示；会话恢复之后过一个心跳周期再看、交出（审查 B7 的 M18）', async () => {
+      const context = setup({ activity: 'manual' })
+      await editing(context)
+      context.factory.last().edit('甲')
+      await context.time.advance(HANDOVER_MS)
+      context.autosave.setPage({ writable: false })
+      const seen = recordModes(context)
+      heartbeatsCarry(context, INCOMING)
+      await context.time.advance(HEARTBEAT_MS)
+      await settle()
+      expect(editingOf(context.mode).request).toEqual(SHOWN)
+      // 不开始离开（不挂屏障、不上传）：只显示提示
+      expect(seen.some(state => state.kind === 'exiting')).toBe(false)
+      expect(context.editLease.handOver).not.toHaveBeenCalled()
+      expect(context.api.save).not.toHaveBeenCalled()
+      context.autosave.setPage({ writable: true })
+      await context.time.advance(IDLE_RECHECK_MS)
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+    })
+
     it('空闲的起点取进入编辑的时刻：打开很久之后才进入编辑、请求随即到了也不交出（显示提示）；从进入的那一刻起满 2 分钟才交出', async () => {
       const context = setup({ activity: 'manual' })
       await opened(context)
@@ -4410,6 +4454,20 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(readingOf(context.mode)).toMatchObject({ request: undefined, notice: { kind: 'request-idle' } })
     })
 
+    it('等待中编辑器建不起来（"有更新"重建失败）：撤回请求（DELETE），不再续期——交出之后保留期里谁都进不来的那种空等不会有（审查 B7 的 M51）', async () => {
+      const context = setup({ api: { editStatus: async () => status(5, AMY_EDITING) } })
+      await readingWhileAmyEdits(context)
+      expect(readingOf(context.mode).update).toBe('available')
+      await context.mode.requestEdit()
+      expect(readingOf(context.mode).request?.kind).toBe('waiting')
+      context.factory.failNext()
+      await context.mode.refresh()
+      expect(modeOf(context.mode).kind).toBe('failed')
+      expect(context.api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+      await context.time.advance(REQUEST_RENEW_MS * 3)
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+    })
+
     it('页面关闭：等待中的请求尽力取消（DELETE）', async () => {
       const context = setup({ api: amyEdits })
       await readingWhileAmyEdits(context)
@@ -4663,6 +4721,14 @@ describe('强制接管（M3-P5 设计 §3.8，US-M3-09）', () => {
     expect(context.editLease.acquire).not.toHaveBeenCalled()
     context.mode.cancelTakeOver()
     await taking
+  })
+
+  it('强制接管得到 403：这一页自己撤掉"强制接管"（canTakeOver 为假），不等随后的检查（检查迟迟不回来时也一样；审查 B7 的 M31）', async () => {
+    const context = await adminReading({ editLease: { acquire: async () => Promise.reject(TAKEOVER_DENIED) } })
+    context.api.editStatus.mockReturnValue(new Promise<FetchedEditStatus>(() => {}))
+    await context.mode.forceTakeOver()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ canTakeOver: false, notice: { kind: 'force-denied', error: TAKEOVER_DENIED } })
   })
 
   it('不能强制接管了（403：例如刚被降为编辑者）：回到阅读，说明没能强制接管与服务端的原因，不再给"强制接管"（canTakeOver 为假），能不能编辑照旧、由随后的检查更新；之后的检查读到又能强制接管时说明随之去掉', async () => {
