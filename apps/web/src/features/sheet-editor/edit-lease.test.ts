@@ -435,9 +435,28 @@ describe('失效：失去访问或编辑权，或者不认识的原因', () => {
 })
 
 describe('续上：编辑权中断而不是失去访问或编辑权，自动重新申请一次', () => {
-  it.each(['none', 'replaced', 'released', 'stale', 'expired', 'session'])('续租得到 %s：先放掉手里那一代，再申请；修订号就是本页保存的基准 → 换上新的一代接着心跳，不通知页面', async (reason) => {
+  it.each(['none', 'replaced', 'released', 'stale', 'expired', 'idle'])('续租得到 %s：不放手里那一代，直接申请（服务端看本人那一代是空着的；代次过时时先放会让等待中的请求方抢进"放"与"申请"之间，审查 A3）；修订号就是本页保存的基准 → 换上新的一代接着心跳，不通知页面', async (reason) => {
     const context = setup()
     const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError(reason)).mockResolvedValue(RENEWED)
+    Object.assign(context.api, { renew })
+    const lease = await held(context)
+    context.api.acquire.mockImplementationOnce(async () => {
+      context.calls.push('acquire')
+      return NEXT
+    })
+    await context.time.advance(10_000)
+    expect(context.calls).toEqual(['acquire'])
+    expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, { idleSeconds: 10 })
+    expect(lease.credentials()).toEqual({ token: NEXT_TOKEN, writeEpoch: 4 })
+    expect(context.onLost).not.toHaveBeenCalled()
+    expect(context.adopt).not.toHaveBeenCalled()
+    await context.time.advance(10_000)
+    expect(renew).toHaveBeenLastCalledWith(DOCUMENT_ID, NEXT_TOKEN, expect.any(Number))
+  })
+
+  it('续租得到 session（本页换过登录）：先放掉手里那一代，再申请（原来的登录还在时那一代仍然有效，不放就被自己占住，P1 审查 A4）；修订号就是本页保存的基准 → 换上新的一代接着心跳，不通知页面', async () => {
+    const context = setup()
+    const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('session')).mockResolvedValue(RENEWED)
     Object.assign(context.api, { renew })
     const lease = await held(context)
     context.api.acquire.mockImplementationOnce(async () => {
@@ -598,7 +617,7 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
     expect(context.onLost).not.toHaveBeenCalled()
   })
 
-  it.each(RECOVERABLE)('得到 %s、人不在（本页的空闲已经到了服务端回收空闲编辑权的阈值）：不续上，也不再续租；本页再有操作时续上（审查 B8）', async (reason) => {
+  it.each(RECOVERABLE)('得到 %s、人不在（本页的空闲已经到了服务端回收空闲编辑权的阈值）：不续上，也不再续租；本页再有操作时续上（审查 B8），要不要先放掉手里那一代按得知失效时的原因（只有 session 放，审查 A3）', async (reason) => {
     const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError(reason)).mockResolvedValue(RENEWED)
     const context = setup({ renew })
     const lease = await held(context)
@@ -607,11 +626,13 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
     await context.time.advance(10_000)
     await context.time.advance(600_000)
     expect(context.api.acquire).toHaveBeenCalledOnce()
+    expect(context.api.release).not.toHaveBeenCalled()
     expect(renew).toHaveBeenCalledOnce()
     expect(context.onLost).not.toHaveBeenCalled()
     context.interact()
     lease.noteActivity()
     await settle()
+    expect(context.calls).toEqual(reason === 'session' ? ['release T'] : [])
     expect(context.api.acquire).toHaveBeenCalledTimes(2)
     expect(lease.credentials().token).toBe(NEXT_TOKEN)
     await context.time.advance(10_000)
@@ -716,7 +737,7 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
   })
 
   it('续上时放掉手里那一代被拒（确定的回答，例如读不到了）：照常申请，由申请给出结果', async () => {
-    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('stale'))) })
+    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('session'))) })
     await held(context)
     const gone = new ApiError(404, 'NOT_FOUND', '不存在')
     context.api.release.mockRejectedValueOnce(gone)
@@ -728,7 +749,7 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
 
   it('放掉手里那一代期间页面释放了（关闭）：不再申请（审查 B7）', async () => {
     const releasing = deferred<void>()
-    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('expired'))) })
+    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('session'))) })
     const lease = await held(context)
     context.api.release.mockReturnValueOnce(releasing.promise)
     await context.time.advance(10_000)
@@ -741,7 +762,7 @@ describe('续上：编辑权中断而不是失去访问或编辑权，自动重�
 
   it('放掉手里那一代期间得知失去访问（保存得到 404）：失效，不再申请', async () => {
     const releasing = deferred<void>()
-    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('expired'))) })
+    const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('session'))) })
     const lease = await held(context)
     context.api.release.mockReturnValueOnce(releasing.promise)
     await context.time.advance(10_000)
@@ -1261,7 +1282,8 @@ describe('停止续上（M3-P5 设计 §3.9：空闲释放开始的那一刻起�
     context.interact()
     await context.time.advance(10_000)
     expect(renew).toHaveBeenCalledTimes(2)
-    expect(context.calls).toEqual(['release T'])
+    // 到期的那一代不先放（审查 A3），直接申请
+    expect(context.api.release).not.toHaveBeenCalled()
     expect(context.api.acquire).toHaveBeenCalledTimes(2)
     expect(lease.credentials().token).toBe(NEXT_TOKEN)
   })
@@ -1344,7 +1366,8 @@ describe('放弃这一代（M3-P5 设计 §3.1：本机锁被本浏览器的另�
     lease.abandon()
     reply.resolve(NEXT)
     await settle()
-    expect(context.calls).toEqual(['release T', 'release N'])
+    // 到期的那一代没先放（审查 A3）：只放刚申请到、用不上的那一代
+    expect(context.calls).toEqual(['release N'])
     expect(context.onLost).not.toHaveBeenCalled()
     expect(lease.credentials().token).toBe(TOKEN)
   })

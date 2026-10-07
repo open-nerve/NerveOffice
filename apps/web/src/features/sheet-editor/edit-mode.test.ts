@@ -1801,7 +1801,7 @@ describe('会话与编辑权', () => {
 })
 
 describe('编辑时的保存与编辑权（M3-P1 的接入，原在编辑器页）', () => {
-  it('保存得到可以续上的失效（到期）：放掉手里那一代、重新申请，续上之后用新的编辑权重发这一次（requestId 不变），保存成功', async () => {
+  it('保存得到可以续上的失效（到期）：重新申请（到期的那一代谁看都是空着的，不先放，M3-P5 审查 A3），续上之后用新的编辑权重发这一次（requestId 不变），保存成功', async () => {
     const next = { ...ACQUIRED, token: 'M'.repeat(43), writeEpoch: 8 }
     const context = setup()
     await editing(context)
@@ -1809,7 +1809,8 @@ describe('编辑时的保存与编辑权（M3-P1 的接入，原在编辑器页�
     context.api.save.mockRejectedValueOnce(new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'expired' } }))
     context.factory.last().edit('甲')
     await context.mode.save()
-    expect(context.editLease.release).toHaveBeenCalledWith(DOCUMENT_ID, TOKEN)
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    expect(context.editLease.acquire).toHaveBeenCalledTimes(2)
     const [first, second] = context.api.save.mock.calls
     expect(second?.[1].requestId).toBe(first?.[1].requestId)
     expect(second?.[3]).toEqual({ token: next.token, writeEpoch: 8 })
@@ -3062,13 +3063,13 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     context.act()
     await settle()
     expect(context.editLease.acquire).toHaveBeenCalledOnce()
-    // 这一轮没存上：留在编辑，人在——随即续上（先放掉手里那一代，再申请新的一代）
+    // 这一轮没存上：留在编辑，人在——随即续上（按空闲回收的那一代谁看都是空着的，不先放，直接申请新的一代，M3-P5 审查 A3）
     context.editLease.acquire.mockResolvedValueOnce({ ...ACQUIRED, token: 'M'.repeat(43), writeEpoch: 8 })
     reply.reject(new NetworkError('断网'))
     await settle()
     await settle()
     expect(modeOf(context.mode).kind).toBe('editing')
-    expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(context.editLease.release).not.toHaveBeenCalled()
     expect(context.editLease.acquire).toHaveBeenCalledTimes(2)
     expect(context.editLease.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, { idleSeconds: 0 })
     // 人在：之后不再空闲释放，修改存得上时照常保存

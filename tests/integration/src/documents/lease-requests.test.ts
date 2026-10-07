@@ -585,6 +585,29 @@ describe('US-M3-06 请求的失效与沿用（设计 §3.6）', () => {
     expect(await renewRequest(ben, document)).toMatchObject({ kind: 'declined', id: requestId })
   })
 
+  it('US-M3-06 R2 与等待中的请求（M3-P5 审查 A3，由审查者的探针改成）：代次过时之后持有者的页面不先释放、直接续上——取得新的一代，请求沿用，请求方续期仍在等；先释放的话，间隙里请求方续期得到 free、抢先取得，持有者的续上被占用（页面因此只在换过登录时先释放）', async () => {
+    const document = await freshDocument()
+    const tab = randomUUID()
+    await holding(sessionOf(amy), document, tab)
+    const requestId = await pendingRequestId(app.baseUrl, sessionOf(ben), document)
+    // 跨空间移动、转移之类让代次过时：持有者按时间、登录、编辑权都还活着（R2），对请求方仍是有人占着
+    await database.query(async client => client.query('UPDATE documents SET write_epoch = write_epoch + 1 WHERE id = $1', [document]))
+    expect(await renewRequest(ben, document)).toMatchObject({ kind: 'pending', id: requestId })
+    const resumed = await holding(sessionOf(amy), document, tab)
+    expect(await renewRequest(ben, document)).toMatchObject({ kind: 'pending', id: requestId })
+    expect((await heartbeatOk(sessionOf(amy), document, resumed)).request?.id).toBe(requestId)
+
+    // 对照：先释放、再申请
+    const released = await freshDocument()
+    const lease = await holding(sessionOf(amy), released, tab)
+    await pendingRequestId(app.baseUrl, sessionOf(ben), released)
+    await database.query(async client => client.query('UPDATE documents SET write_epoch = write_epoch + 1 WHERE id = $1', [released]))
+    expect((await asUser(app.baseUrl, sessionOf(amy), leasePath(released), { method: 'DELETE', headers: { [EDIT_LEASE_HEADER]: lease.token } })).status).toBe(204)
+    expect(await renewRequest(ben, released)).toEqual({ kind: 'free' })
+    expect((await acquire(sessionOf(ben), released)).status).toBe(201)
+    expect((await heldOf(await acquire(sessionOf(amy), released, { tab }))).holder).toEqual(summaryOf(ben))
+  })
+
   it('US-M3-06 换了别人的一代：请求清掉，请求方续期得到 gone（现在正在编辑的人）；请求方自己拿到编辑权：请求已经实现，清掉', async () => {
     const document = await freshDocument()
     await holding(sessionOf(amy), document)
