@@ -2,7 +2,8 @@ import type { AutosaveControlHooks, EditIntent, PageActivity, PageNetwork } from
 import type { HandoverTrace } from './handover-trace.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
 // 浏览器的实现都在这里给出（M3-P5）：本页的键盘、鼠标操作（窗口的捕获阶段）、同一个浏览器里的锁与交接频道（navigator.locks、
-// BroadcastChannel；浏览器没有时退化，same-browser.ts）、刷新时在途的保存的记号（localStorage 与墙上时间）。
+// BroadcastChannel；浏览器没有时退化，same-browser.ts）、刷新时在途的保存的记号（localStorage 与墙上时间）、这一页发出过的请求编辑的记号
+// （sessionStorage）。
 // 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）与交接日志
 // （editor/testing/handover-log.ts，M3-P5 设计 §3.13 的观察钩子）再组装：第一个调度建起来、第一次申请之前它们就在（?edit=new 直接进入编辑也一样）；
 // 两个各自引入，一个没引入成不影响另一个；生产构建里这个分支与它们的分块都被去掉（门禁 artifacts 核对）。
@@ -21,6 +22,7 @@ import { browserLeaseClock, trackActivity } from './edit-lease.ts'
 import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest, snapshotDigest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
+import { issuedRequestMarker } from './issued-request.ts'
 import { installPageGuards, isApplePlatform } from './page-guards.ts'
 import { pendingSaveMarker } from './pending-save-marker.ts'
 import { sameBrowserFor } from './same-browser.ts'
@@ -134,6 +136,8 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
     sameBrowser: documentId => sameBrowserFor(documentId, browserSameBrowserApis),
     // 访问 localStorage 本身就可能抛出（被禁用、沙箱）：每次用时再取，记号自己接住
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
+    // 这一页发出过的请求编辑（审查 B2）：按标签页、刷新之后还在，所以是 sessionStorage；同样每次用时再取
+    issuedRequest: documentId => issuedRequestMarker(documentId, { storage: () => window.sessionStorage }),
     digest: async snapshot => snapshotDigest(snapshot),
     autosaveControl,
     handoverTrace,
@@ -151,9 +155,16 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
       <EditorChrome page={page} apple={apple} />
     </StrictMode>,
   )
-  // 测试构建、地址带 selftest 时：页面自检（真实 Safari 的复核，M3-P2 设计 §3.5）。在开始载入之前引入挂接：它很小，
-  // 会话与内容的请求回来之前就挂上了页面错误的收集。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
-  if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest'))
-    void import('./selftest-hook.ts').then(({ watchForSelftest }) => watchForSelftest(page, elements))
+  // 测试构建、地址带 selftest 时：页面自检（真实 Safari 的复核，M3-P2 设计 §3.5）。先等挂接引入、挂上，再开始载入（M3-P5 审查 B8）：页面错误的收集
+  // 要在会话与内容的请求回来之前挂上，"收不到交接消息"的那一页（takeover-holder-deaf）要在编辑器页第一次打开交接频道之前换上吞消息的频道——
+  // 频道在建编辑模式时就打开（订阅交接请求），那时会话、详情与内容都已回来；原来先发起载入、再引入挂接，靠挂接的小分块先回来，不是保证的先后。
+  // 引入失败照常载入（自检随之没有结果，错误交给浏览器的错误报告）。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
+  if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
+    void import('./selftest-hook.ts').then(
+      ({ watchForSelftest }) => watchForSelftest(page, elements),
+      (error: unknown) => reportError(error),
+    ).then(async () => page.load())
+    return
+  }
   void page.load()
 }

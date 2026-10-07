@@ -19,29 +19,27 @@ const ASKED: readonly LogEntry[] = [
 ]
 
 describe('B 的交接日志判读成一条路（summarizeTaker）', () => {
-  it('answered：收到 ack、锁空了，之后普通申请、取得、进入编辑；各段相对开始或请求', () => {
+  it('answered：收到 ack、锁空了，之后以本人接管申请（A 不释放，审查 B4）、取得、进入编辑；各段相对开始或请求', () => {
     const summary = summarizeTaker([
       ...ASKED,
       entry('handover-reply', 120, { requestId: 'r1', reply: 'ack', detail: 'editing' }),
       entry('handover-lock-free', 400),
-      entry('acquire', 401, { trigger: 'take-over', takeover: null }),
+      entry('acquire', 401, { trigger: 'take-over', takeover: 'self' }),
       entry('acquire-result', 430, { result: 'acquired', interruption: false, code: null }),
       entry('entered', 900),
     ])
     expect(summary.path).toBe('answered')
     expect(summary.problems).toEqual([])
     expect(summary.ms).toEqual({ request: 3, reply: 17, finished: 297, silent: null, acquire: 301, entered: 800 })
-    expect(summary.text).toBe('点"在此编辑"之后 +3 ms 发出交接请求，+17 ms 收到回应（ack）、+297 ms 锁空了、普通申请，+800 ms 进入编辑')
+    expect(summary.text).toBe('点"在此编辑"之后 +3 ms 发出交接请求，+17 ms 收到回应（ack）、+297 ms 锁空了、以本人接管申请，+800 ms 进入编辑')
   })
 
-  it('answered：收到 done 也算做完；A 的释放没送到（被自己占着）时另以本人接管再申请一次，也合预期', () => {
+  it('answered：收到 done 也算做完', () => {
     const summary = summarizeTaker([
       ...ASKED,
       entry('handover-reply', 110, { requestId: 'r1', reply: 'ack', detail: 'editing' }),
       entry('handover-reply', 300, { requestId: 'r1', reply: 'done', detail: null }),
-      entry('acquire', 301, { trigger: 'take-over', takeover: null }),
-      entry('acquire-result', 320, { result: 'held', interruption: false, code: null }),
-      entry('acquire', 321, { trigger: 'take-over', takeover: 'self' }),
+      entry('acquire', 301, { trigger: 'take-over', takeover: 'self' }),
       entry('acquire-result', 340, { result: 'acquired', interruption: false, code: null }),
       entry('entered', 700),
     ])
@@ -63,11 +61,13 @@ describe('B 的交接日志判读成一条路（summarizeTaker）', () => {
     expect(summary.text).toBe('点"在此编辑"之后 +3 ms 发出交接请求，3000 ms 没有回应（一直没有回应）、以本人接管申请，+3500 ms 进入编辑')
   })
 
-  it('不合预期的都说出来：没有回应却普通申请、回应了却以本人接管申请、锁不在本浏览器、没有取得、没有进入', () => {
+  it('不合预期的都说出来：没有回应却普通申请、做完之后普通申请（审查 B4 之前的做法）或申请了两次、锁不在本浏览器、没有取得、没有进入', () => {
     expect(summarizeTaker([...ASKED, entry('handover-silent', 3_103), entry('acquire', 3_104, { takeover: null }), entry('acquire-result', 3_130, { result: 'acquired' }), entry('entered', 3_600)]).problems)
       .toEqual(['没有回应之后应当以本人接管申请，申请的接管方式是 null'])
-    expect(summarizeTaker([...ASKED, entry('handover-lock-free', 200), entry('acquire', 201, { takeover: 'self' }), entry('acquire-result', 230, { result: 'acquired' }), entry('entered', 600)]).problems)
-      .toEqual(['A 做完之后应当普通申请（被自己占着时另以本人接管再申请一次），申请的接管方式是 self'])
+    expect(summarizeTaker([...ASKED, entry('handover-lock-free', 200), entry('acquire', 201, { takeover: null }), entry('acquire-result', 230, { result: 'acquired' }), entry('entered', 600)]).problems)
+      .toEqual(['A 做完之后应当以本人接管申请一次（A 不释放，审查 B4），申请的接管方式是 null'])
+    expect(summarizeTaker([...ASKED, entry('handover-lock-free', 200), entry('acquire', 201, { takeover: null }), entry('acquire-result', 220, { result: 'held' }), entry('acquire', 221, { takeover: 'self' }), entry('acquire-result', 240, { result: 'acquired' }), entry('entered', 600)]).problems)
+      .toEqual(['A 做完之后应当以本人接管申请一次（A 不释放，审查 B4），申请的接管方式是 null、self'])
     const stray = summarizeTaker([entry('takeover-start', 100), entry('takeover-locate', 102, { here: false }), entry('acquire', 103, { takeover: 'self' }), entry('acquire-result', 130, { result: 'held' })])
     expect(stray.path).toBe('unknown')
     expect(stray.problems).toEqual([

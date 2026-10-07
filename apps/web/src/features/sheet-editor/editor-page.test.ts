@@ -18,6 +18,7 @@ import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { lockNameOf, sameBrowserFor } from './same-browser.ts'
@@ -278,6 +279,8 @@ function setup(options: Setup = {}) {
   const activity = fakeActivity(surface)
   const browser = fakeBrowser()
   const storage = memoryStorage()
+  /** 这一页发出过的请求编辑的记号（审查 B2，sessionStorage） */
+  const issued = memoryIssuedRequest(DOCUMENT_ID)
   /** 编辑器页按文档建的锁与频道（M3-P5）：卸载时关掉 */
   const sameBrowsers: SameBrowser[] = []
   let id = 0
@@ -301,6 +304,7 @@ function setup(options: Setup = {}) {
       return tracked
     },
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => storage, now: () => Date.UTC(2026, 9, 7, 3, 0, 0) }),
+    issuedRequest: () => issued.marker,
     digest: async snapshot => `sha:${snapshot}`,
     autosaveControl: autosave.hooks,
     ...(options.handoverTrace === undefined ? {} : { handoverTrace: options.handoverTrace }),
@@ -311,7 +315,7 @@ function setup(options: Setup = {}) {
     reportError: vi.fn(),
   })
   pages.push(editorPage)
-  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave, activity, browser, storage, sameBrowsers }
+  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave, activity, browser, storage, issued, sameBrowsers }
 }
 
 /** 查看者读到的编辑状态：不能编辑 */
@@ -2490,6 +2494,45 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
     await editorPage.requestEditing()
     window.dispatchEvent(new Event('pagehide'))
     expect(api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+  })
+
+  it('续期一直得到令牌失效（网关剥掉了 CSRF 的请求头）、确认会话照常是本人（审查 B1）：确认之后不立即再续期——续期与确认会话不按网络往返的速度连着发，下一次按续期的节奏', async () => {
+    const CSRF = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    /** 一次网络往返：下一个宏任务才回来（假接口不让出宏任务时，连着发就是同步的死循环） */
+    const roundTrip = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+    const { editorPage, api, time } = setup({
+      editIntent: false,
+      api: {
+        editStatus: BOB_STATUS,
+        session: async () => {
+          await roundTrip()
+          return ALICE
+        },
+        editRequest: {
+          send: async () => REQUEST_PENDING,
+          renew: async () => {
+            await roundTrip()
+            throw CSRF
+          },
+          cancel: async () => {},
+        },
+      },
+    })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { holder: { username: 'bob' } } }))
+    await editorPage.requestEditing()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    const sessionsBefore = vi.mocked(api.session).mock.calls.length
+    // 到第一次续期（5 秒）：之后时钟不动，只让往返一个个回来
+    await time.advance(5_000)
+    for (let i = 0; i < 50; i += 1)
+      await settle()
+    expect(vi.mocked(api.editRequest.renew).mock.calls.length).toBe(1)
+    expect(vi.mocked(api.session).mock.calls.length - sessionsBefore).toBe(1)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    // 下一次照续期的节奏（5 秒）
+    await time.advance(5_000)
+    await vi.waitFor(() => expect(vi.mocked(api.editRequest.renew).mock.calls.length).toBe(2))
   })
 
   it('载入时详情里的"能不能强制接管"交给阅读（之后随编辑状态更新）', async () => {

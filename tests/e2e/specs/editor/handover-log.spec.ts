@@ -27,7 +27,7 @@ function first(log: readonly HandoverLogEntry[], kind: string): HandoverLogEntry
 }
 
 test.describe('US-M3-08 测试构建的交接日志（观察钩子）', { tag: '@test-build' }, () => {
-  test('US-M3-08 同一个浏览器里"在此编辑"：B 记下开始、锁在本浏览器、发出请求、收到 ack（或锁空了）、申请（普通申请）与结果、进入编辑；A 记下回应 ack、开始离开（交给标签页）、告诉它做完了、回到阅读；跨标签页按墙上时间 A 的回应不早于 B 的请求、B 的申请不早于 A 的回应', async ({ page, context }) => {
+  test('US-M3-08 同一个浏览器里"在此编辑"：B 记下开始、锁在本浏览器、发出请求、收到 ack（或锁空了）、申请（本人接管：A 不释放，审查 B4）与结果、进入编辑；A 记下回应 ack、开始离开（交给标签页）、告诉它做完了、回到阅读；跨标签页按墙上时间 A 的回应不早于 B 的请求、B 的申请不早于 A 的回应', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('trace-tabs'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
@@ -47,12 +47,12 @@ test.describe('US-M3-08 测试构建的交接日志（观察钩子）', { tag: '
     expect(first(a, 'leave')).toMatchObject({ cause: 'handover-tab' })
     expect(first(a, 'handover-finish')).toMatchObject({ outcome: 'done', reason: null })
     expect(first(a, 'left')).toMatchObject({ cause: 'handover-tab', outcome: 'reading' })
-    // B：开始、锁在本浏览器、请求，之后收到回应或者锁空了，最后申请（"在此编辑"：那边做完了，普通申请）、结果、进入编辑
+    // B：开始、锁在本浏览器、请求，之后收到回应或者锁空了，最后申请（"在此编辑"：那边做完了、没有释放，以本人接管换代）、结果、进入编辑
     const kinds = b.map(entry => entry.kind)
     expect(kinds.slice(0, 3)).toEqual(['takeover-start', 'takeover-locate', 'handover-request'])
     expect(kinds.slice(-3)).toEqual(['acquire', 'acquire-result', 'entered'])
     expect(first(b, 'takeover-locate')).toMatchObject({ here: true })
-    expect(first(b, 'acquire')).toMatchObject({ trigger: 'take-over', takeover: null })
+    expect(first(b, 'acquire')).toMatchObject({ trigger: 'take-over', takeover: 'self' })
     expect(first(b, 'acquire-result')).toMatchObject({ result: 'acquired', interruption: false })
     // 回应与锁空了谁先到不定（A 存上、放锁很快时 B 先看到锁空了、不再收回应）：至少有一样；收到的回应都是这一次请求的 ack 或 done
     expect(kinds.some(kind => kind === 'handover-reply' || kind === 'handover-lock-free')).toBe(true)

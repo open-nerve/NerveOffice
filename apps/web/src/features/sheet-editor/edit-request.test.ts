@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createEditRequests, REQUEST_IDLE_MS, REQUEST_RENEW_MS } from './edit-request.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { memoryIssuedRequest } from './issued-request.test-support.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const REQUEST_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000f1'
@@ -80,6 +81,7 @@ function setup(options: Setup = {}) {
   const ends: EditRequestEnd[] = []
   const enter = vi.fn(options.enter ?? (() => true))
   const onSessionProblem = vi.fn<EditRequestsOptions['onSessionProblem']>()
+  const issued = memoryIssuedRequest(DOCUMENT_ID)
   const requests = createEditRequests({
     documentId: DOCUMENT_ID,
     api,
@@ -90,6 +92,7 @@ function setup(options: Setup = {}) {
     onProgress: next => progress.push(next),
     enter,
     onEnd: end => ends.push(end),
+    issued: issued.marker,
     trace: options.trace,
   })
   disposers.push(requests.dispose)
@@ -102,6 +105,7 @@ function setup(options: Setup = {}) {
     ends,
     enter,
     onSessionProblem,
+    issued: issued.marker,
     act: () => {
       lastActive = time.now()
     },
@@ -278,7 +282,7 @@ describe('等待：续期', () => {
     context.page.set(true)
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     expect(context.enter).not.toHaveBeenCalled()
     // 保留只有 2 分钟：之后不再续期（没有续期会把 granted 改回去）
     context.act()
@@ -296,9 +300,28 @@ describe('等待：续期', () => {
     context.page.set(true)
     context.api.renew.mockResolvedValue(FREE)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     context.page.set(false)
     expect(context.enter).toHaveBeenCalledOnce()
+  })
+
+  it('granted 在等什么随情形换（审查 B11）：页面在后台是 visible（回到这一页时进入）；回到前台而这一刻进入不了（状态机正在重建）是 ready（稍后进入）；再切到后台又是 visible', async () => {
+    let ready = false
+    const context = setup({ enter: () => ready })
+    await waiting(context)
+    context.page.set(true)
+    context.api.renew.mockResolvedValue(RESERVED)
+    await context.time.advance(REQUEST_RENEW_MS)
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
+    context.act()
+    context.page.set(false)
+    expect(context.enter).toHaveBeenCalledOnce()
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'ready' })
+    context.page.set(true)
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
+    ready = true
+    context.page.set(false)
+    expect(context.requests.progress()).toBeUndefined()
   })
 
   it('状态机这一刻进入不了（例如正在按新的版本重建）：留在 granted，retry 时进入', async () => {
@@ -308,7 +331,7 @@ describe('等待：续期', () => {
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
     expect(context.enter).toHaveBeenCalledOnce()
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'ready' })
     ready = true
     context.requests.retry()
     expect(context.enter).toHaveBeenCalledTimes(2)
@@ -375,12 +398,115 @@ describe('等待：续期', () => {
     context.requests.setActive(true)
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     context.requests.setActive(false)
     context.page.set(false)
     expect(context.enter).not.toHaveBeenCalled()
     context.requests.setActive(true)
     expect(context.enter).toHaveBeenCalledOnce()
+  })
+})
+
+describe('连着的会话类失败（审查 B1：与续租的 M3-P4 复验 C1 同一个口径）', () => {
+  const CSRF = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+
+  /** 页面的样子：每次得知会话问题都向服务端确认（一个来回，50 毫秒），确认是本人之后告诉请求方一侧（setActive(true)，旧写法每次都这样） */
+  function confirmEachTime(context: ReturnType<typeof setup>): void {
+    context.onSessionProblem.mockImplementation(() => {
+      context.time.clock.schedule(() => context.requests.setActive(true), 50)
+    })
+  }
+
+  /** 续期的时刻（相对开始等待），续期按 outcomes 依次回答（之后都是 PENDING） */
+  async function renewalsAnswering(outcomes: readonly (EditRequestOutcome | ApiError)[]) {
+    const renewedAt: number[] = []
+    const context = setup({ renew: async () => {
+      renewedAt.push(context.time.now())
+      const outcome = outcomes[renewedAt.length - 1] ?? PENDING
+      if (outcome instanceof ApiError)
+        throw outcome
+      return outcome
+    } })
+    await waiting(context)
+    const start = context.time.now()
+    return { context, renewedAt: () => renewedAt.map(at => at - start) }
+  }
+
+  it('续期一直得到令牌失效（例如网关剥掉了 CSRF 的请求头）、页面每次确认都是本人：只有连着的第一次之后立即续期，之后按续期的节奏——不按网络往返的速度连着发', async () => {
+    const { context, renewedAt } = await renewalsAnswering(Array.from<ApiError>({ length: 10 }).fill(CSRF))
+    confirmEachTime(context)
+    await context.time.advance(REQUEST_RENEW_MS * 4)
+    // 5 秒的续期被拒、确认之后立即再续一次（5.05 秒）仍被拒；之后每次确认之后按续期的节奏：10.1、15.15 秒
+    expect(renewedAt()).toEqual([5_000, 5_050, 10_100, 15_150])
+    expect(context.onSessionProblem).toHaveBeenCalledTimes(4)
+    expect(context.requests.progress()?.kind).toBe('waiting')
+  })
+
+  it('续期成功之后清零：之后再遇到，确认之后照样立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF, PENDING, CSRF])
+    confirmEachTime(context)
+    await context.time.advance(REQUEST_RENEW_MS * 3 + 200)
+    // 第 2 次（5.05 秒）是连着的第二次，之后按节奏（10.1 秒成功，清零）；15.1 秒被拒是新的第一次，确认之后立即续期（15.15 秒）
+    expect(renewedAt()).toEqual([5_000, 5_050, 10_100, 15_100, 15_150])
+  })
+
+  it('连着两次之后页面确认会话不是本人（setActive(false)：真的登出了）：清零——回到本人时立即续期（复核 D1）', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF])
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000])
+    context.requests.setActive(false)
+    await context.time.advance(60_000)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000, 65_000])
+  })
+
+  it('取消得到令牌失效同样算连着的一次：之后续期又被拒，确认之后不立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering(Array.from<ApiError>({ length: 10 }).fill(CSRF))
+    context.api.cancel.mockRejectedValue(CSRF)
+    // 取消被拒（第一次）：回到等待、照常立即续期一次——又被拒（第二次）
+    await context.requests.cancel()
+    await settle()
+    expect(renewedAt()).toEqual([0])
+    expect(context.onSessionProblem).toHaveBeenCalledTimes(2)
+    // 页面确认之后：不立即续期，按续期的节奏
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([0])
+    await context.time.advance(REQUEST_RENEW_MS)
+    expect(renewedAt()).toEqual([0, REQUEST_RENEW_MS])
+  })
+
+  it('取消成功了同样清零：之后（恢复等待）再遇到会话类失败，确认之后照样立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF, CSRF])
+    // 连着两次被拒（5 秒、确认之后立即再续的那一次）
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000])
+    // 取消成功（会话没问题）：结束；之后恢复等待（不另发出），立即续期一次又被拒——新的第一次：确认之后立即续期
+    await context.requests.cancel()
+    expect(context.ends).toEqual([{ kind: 'cancelled' }])
+    context.requests.resume(AMY)
+    await settle()
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000, 5_000, 5_000])
+  })
+
+  it('发出成功了同样清零：撤回（不清零）之后再发出、再遇到会话类失败，确认之后照样立即续期', async () => {
+    const { context, renewedAt } = await renewalsAnswering([CSRF, CSRF, CSRF])
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    context.requests.withdraw()
+    await waiting(context)
+    await context.time.advance(REQUEST_RENEW_MS)
+    context.requests.setActive(true)
+    await settle()
+    expect(renewedAt()).toEqual([5_000, 5_000, 10_000, 10_000])
   })
 })
 
@@ -438,7 +564,7 @@ describe('空闲：等待中的页面空闲满 10 分钟就取消请求', () => 
     context.page.set(true)
     context.api.renew.mockResolvedValue(RESERVED)
     await context.time.advance(REQUEST_RENEW_MS)
-    expect(context.requests.progress()).toEqual({ kind: 'granted' })
+    expect(context.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
     context.time.elapse(REQUEST_IDLE_MS)
     context.page.set(false)
     expect(context.enter).not.toHaveBeenCalled()
@@ -529,6 +655,65 @@ describe('取消（"取消请求"）', () => {
     expect(context.api.cancel).not.toHaveBeenCalled()
     answer.resolve(PENDING)
     await sending
+  })
+})
+
+describe('这一页发出过的请求（审查 B2，issued-request.ts）', () => {
+  it('发出之后在等待：记下服务端给的发出时刻；请求结束（谢绝、请求不在、取消……）时清掉', async () => {
+    const context = setup()
+    await waiting(context)
+    expect(context.issued.read()).toEqual({ requestedAt: PENDING.kind === 'pending' ? PENDING.requestedAt : undefined })
+    context.api.renew.mockResolvedValueOnce(DECLINED)
+    await context.time.advance(REQUEST_RENEW_MS)
+    expect(context.ends).toEqual([{ kind: 'declined', holder: AMY }])
+    expect(context.issued.read()).toBeUndefined()
+
+    const gone = setup({ renew: async () => GONE })
+    await waiting(gone)
+    await gone.time.advance(REQUEST_RENEW_MS)
+    expect(gone.issued.read()).toBeUndefined()
+
+    const cancelled = setup()
+    await waiting(cancelled)
+    await cancelled.requests.cancel()
+    expect(cancelled.issued.read()).toBeUndefined()
+  })
+
+  it('发出时编辑权就交给了本页（reserved、free）：页面看得见就进入（随之清掉）；在后台时留在 granted，记号在（不带时刻），刷新之后照它恢复', async () => {
+    const visible = setup({ send: async () => RESERVED })
+    await visible.requests.send()
+    expect(visible.enter).toHaveBeenCalledOnce()
+    expect(visible.issued.read()).toBeUndefined()
+
+    const hidden = setup({ send: async () => FREE })
+    hidden.page.set(true)
+    await hidden.requests.send()
+    expect(hidden.requests.progress()).toEqual({ kind: 'granted', until: 'visible' })
+    expect(hidden.issued.read()).toEqual({ requestedAt: undefined })
+  })
+
+  it('撤回（页面关闭）时不清：刷新时那次撤回没送到的话，刷新之后照记号恢复等待', async () => {
+    const context = setup()
+    await waiting(context)
+    context.requests.withdraw()
+    expect(context.issued.read()).toBeDefined()
+  })
+
+  it('whose：记号对得上（发出时刻相同）是这一页的；本人别的请求是别处的（清掉对不上的记号）；没有本人的请求时清掉记号；保留只认有记号的', async () => {
+    const context = setup()
+    const requestedAt = PENDING.kind === 'pending' ? PENDING.requestedAt : ''
+    expect(context.requests.whose({ requestedAt, reserved: false })).toBe('elsewhere')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: true })).toBe('none')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: false })).toBe('none')
+    context.issued.write(requestedAt)
+    expect(context.requests.whose({ requestedAt, reserved: false })).toBe('here')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: true })).toBe('here')
+    expect(context.issued.read()).toBeDefined()
+    expect(context.requests.whose({ requestedAt: '2026-10-07T03:09:00.000Z', reserved: false })).toBe('elsewhere')
+    expect(context.issued.read()).toBeUndefined()
+    context.issued.write(requestedAt)
+    expect(context.requests.whose({ requestedAt: undefined, reserved: false })).toBe('none')
+    expect(context.issued.read()).toBeUndefined()
   })
 })
 

@@ -324,7 +324,7 @@ export async function editLeaseEndReason(documentId: string): Promise<string | n
 
 /**
  * 这份文档现在的编辑租约是怎样接管上一代的（M3-P5：self 是本人接管，forced 是强制接管）；普通申请得到的一代为 null，从没有过租约时为 undefined。
- * 核对"在此编辑"走的是哪一条路（同一个浏览器里交接成功之后是普通申请，没有回应、锁空着时是本人接管）
+ * 核对"在此编辑"换代的方式（同一个浏览器里交接成功之后也是本人接管：那边存上之后不释放，审查 B4）
  */
 export async function editLeaseTakeover(documentId: string): Promise<string | null | undefined> {
   return withDatabase(async client => (await client.query<{ takeover: string | null }>('SELECT takeover FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.takeover)

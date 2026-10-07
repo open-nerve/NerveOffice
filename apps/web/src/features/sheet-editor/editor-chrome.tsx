@@ -24,7 +24,7 @@
 // 交出时同一个按钮换成"仍在此编辑"，旁边加"取消"（点了随之消失，焦点由 useFocusRescue 交给返回链接）。
 // 请求编辑（设计 §3.6，US-M3-06）：持有者是别人、自己能编辑时"编辑"换成"请求编辑"，之后同一个按钮说"正在请求…""取消请求""正在取消…"
 // （进行中不可用、标为进行中）；等待中、结束之后（谢绝、别人已在请求、编辑权刚交给了别人、失效、空闲取消、交给了请求方）的说明都在读屏状态区里，
-// 没能请求编辑在提示条里。持有者这一侧：有人请求时页头下面一个带标题的分组（role="group"），"交出""继续编辑"与一行静态说明——不是对话框、
+// 没能请求编辑在提示条里；本人在别的页面、设备上发出、正在等的请求（不是这一页发出的，审查 B2）同样在读屏状态区里说一句。持有者这一侧：有人请求时页头下面一个带标题的分组（role="group"），"交出""继续编辑"与一行静态说明——不是对话框、
 // 不是 alert，出现时不移动焦点；读屏的那一句放进一直在的读屏状态区（只有这一句时视觉隐藏：分组里已经写着），请求方取消之后那里说明一句。
 // 离开编辑的过程中分组留着、按钮不可用（焦点不丢），回到阅读之后随之消失（useFocusRescue 交给返回链接）。
 // 强制接管（设计 §3.8，US-M3-09）：阅读时、别人在编辑时、能强制接管时"请求编辑"旁边另有"强制接管"（与请求编辑、"在此编辑"互斥）；点了先确认
@@ -691,9 +691,10 @@ function readingFailure(notice: ReadingNotice | undefined, personal: boolean): R
 /**
  * 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；能编辑的人另说现在只能阅读。
  * 是自己、而且现在能编辑时按那个页面在哪里说（M3-P5 设计 §3.7：本浏览器的另一个标签页，或者另一台设备、浏览器，也可能是刚关闭、刷新过的
- * 页面），能"在此编辑"时说点了会怎样——本页刚退出编辑、没能确认放掉编辑权时多半就是本页那一代，照实说（releaseUnconfirmed，审查 A13）；
- * 不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到新的编辑状态，照别人一样说谁在编辑，不提"在此编辑"。与服务端不兼容、数据
- * 不完整的阅读不给"在此编辑"，同样不提（M3-P3 审查 B8：停住续租之后退出编辑，那次释放没送到时这里也说本页刚退出）
+ * 页面；刚关闭、刷新过的页面还有一次保存在进行时照实说，不提"那边"，审查 B §七），能"在此编辑"时说点了会怎样——本页刚退出编辑、没能确认
+ * 放掉编辑权时多半就是本页那一代，照实说（releaseUnconfirmed，审查 A13）；不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到
+ * 新的编辑状态，照别人一样说谁在编辑，不提"在此编辑"。与服务端不兼容、数据不完整的阅读不给"在此编辑"，同样不提（M3-P3 审查 B8：停住续租
+ * 之后退出编辑，那次释放没送到时这里也说本页刚退出）
  */
 function elsewhereNotice(reading: ReadingMode, holder: LeaseHolder | undefined): ReactNode {
   if (holder === undefined)
@@ -702,7 +703,16 @@ function elsewhereNotice(reading: ReadingMode, holder: LeaseHolder | undefined):
     const reenter = reading.blocked === undefined && reading.damaged === undefined
     if (reading.releaseUnconfirmed)
       return editorMessages.editing.elsewhereThisPage(reenter)
-    return reading.selfHolder === 'this-browser' ? editorMessages.editing.elsewhereThisBrowser(reenter) : editorMessages.editing.elsewhereAway(reenter)
+    switch (reading.selfHolder) {
+      case 'this-browser':
+        return editorMessages.editing.elsewhereThisBrowser(reenter)
+      // 刚关闭、刷新过的页面还有一次保存在进行（本浏览器里的记号）："那边"已经不在了，"在此编辑"会先等它
+      case 'just-closed':
+        return editorMessages.editing.elsewhereJustClosed(reenter)
+      case 'elsewhere':
+      case undefined:
+        return editorMessages.editing.elsewhereAway(reenter)
+    }
   }
   const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
   return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive, reading.canEdit)} />
@@ -725,7 +735,8 @@ function takeoverNotice(takeover: TakeoverProgress | undefined): string | undefi
 
 /**
  * 请求编辑的进展的说明（M3-P5 设计 §3.6）：等待中（取消中也是）说在等谁、他停下 2 分钟会自动交过来、可以取消（不倒计时），没取消成时另说原因；
- * 编辑权已经可以交给本页而页面在后台时说回来就进入。正在发出时没有（照旧说谁在编辑）
+ * 编辑权已经可以交给本页而还没进入时：页面在后台说回来就进入，看得见、这一刻进不了（会话不是本人、正在载入新的版本）说稍后进入（审查 B11）。
+ * 正在发出时没有（照旧说谁在编辑）
  */
 function requestNotice(progress: EditRequestProgress | undefined): ReactNode {
   switch (progress?.kind) {
@@ -741,7 +752,7 @@ function requestNotice(progress: EditRequestProgress | undefined): ReactNode {
       )
     }
     case 'granted':
-      return editorMessages.mode.requestGranted
+      return progress.until === 'visible' ? editorMessages.mode.requestGranted : editorMessages.mode.requestGrantedSoon
     case 'sending':
     case undefined:
       return undefined
@@ -840,6 +851,9 @@ function readingInfo(reading: ReadingMode | undefined, personal: boolean): React
     lines.push(<span key="request">{waiting}</span>)
   else if (reading.holder !== undefined)
     lines.push(<span key="holder">{elsewhereNotice(reading, reading.holder)}</span>)
+  // 本人在别的页面、设备上发出、正在等的请求（审查 B2）：这一页不续期、不撤回、不自动进入，说一句（本页有请求时就是它自己的，不说）
+  if (reading.requestedElsewhere && reading.request === undefined && !reading.gone)
+    lines.push(<span key="requested-elsewhere">{editorMessages.mode.requestedElsewhere}</span>)
   // 上一位编辑者（别人）异常中断（M3-P5 设计 §3.5：没人在编辑时编辑状态里才有，阅读页不必等点"编辑"）
   if (reading.interruption !== undefined && !reading.gone)
     lines.push(<span key="interruption">{interruptionText(reading.interruption)}</span>)

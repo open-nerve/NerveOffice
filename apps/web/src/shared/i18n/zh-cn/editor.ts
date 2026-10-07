@@ -2,7 +2,7 @@
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
 import type { ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS } from '@nerve-office/contracts'
 
 /** 本人接管的按钮（M3-P5 设计 §3.7）：说明里提到它时用同一个名字 */
 const TAKE_OVER_HERE = '在此编辑'
@@ -18,14 +18,22 @@ function takeoverRole(personal: boolean): string {
   return personal ? '文档的所有者' : '空间管理员'
 }
 
+/** 本浏览器的另一个标签页没能交出的原因（交接频道的 handover-failed，same-browser.ts 的 HANDOVER_FAILURES：这里不引用编辑器页的模块，另写一份） */
+type TakeoverFailure = 'not-saved' | 'conflict' | 'session' | 'not-handed-over'
+
 /**
  * 本浏览器的另一个标签页没能交出（交接频道的 handover-failed，M3-P5 设计 §3.7）：按原因说那边为什么没交出
  */
-const TAKEOVER_FAILURES: Readonly<Record<'not-saved' | 'conflict' | 'session', string>> = {
+const TAKEOVER_FAILURES: Readonly<Record<TakeoverFailure, string>> = {
   'not-saved': '另一个标签页的修改没能保存，没有交出编辑权',
   'conflict': '另一个标签页的修改与别处保存的版本冲突、没能保存，没有交出编辑权',
   'session': '另一个标签页暂时无法确认登录状态、没能保存，没有交出编辑权',
+  // 那边的修改都已存上，只是正在把编辑权交给请求编辑的人、没交出去（请求已经不在、没有结果），留在了编辑（审查 B11）
+  'not-handed-over': '另一个标签页的修改都已保存，但它在把编辑权交给请求编辑的人时没能交出去，还在编辑',
 }
+
+/** 刷新之前在途的保存最多等多久（秒，M3-P5 设计 §3.7 的 R1）：时长取自契约 */
+const PENDING_SAVE_WAIT_SECONDS = EDIT_PENDING_SAVE_WAIT_MS / 1000
 
 /** 空闲释放的阈值（分钟，US-M3-07）：时长取自契约，阈值改了说法跟着改 */
 const IDLE_RELEASE_MINUTES = EDIT_IDLE_RELEASE_SECONDS / 60
@@ -229,6 +237,11 @@ export const editorMessages = {
      */
     elsewhereAway: (reenter: boolean) => `你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）${reenter ? `。点"${TAKE_OVER_HERE}"在这里接着编辑，那边会失去编辑权，没保存的修改可以在那边另存为副本` : '，这里只能阅读'}`,
     /**
+     * 是自己、锁不在本浏览器，而本浏览器里有 30 秒以内的"刷新时在途的保存"的记号、那次保存还没提交（M3-P5 设计 §3.7 的 R1，审查 B 之后）：刚关闭、
+     * 刷新过的页面已经不在了，不说"那边会失去编辑权、另存为副本"；"在此编辑"会先等那次保存（至多 30 秒）。reenter 同上
+     */
+    elsewhereJustClosed: (reenter: boolean) => `你刚关闭或刷新的页面还有一次保存在进行${reenter ? `。点"${TAKE_OVER_HERE}"会先等它存完（至多 ${PENDING_SAVE_WAIT_SECONDS} 秒）再接着编辑` : '，这里只能阅读'}`,
+    /**
      * 编辑状态里是"自己在别处编辑"，而本页刚退出编辑、没能确认放掉编辑权（释放的结果未知或超过了等待的上限，审查 A13）：多半就是本页的那一代
      * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期。reenter 同上
      */
@@ -317,9 +330,12 @@ export const editorMessages = {
     takeoverAsking: '正在请本浏览器的另一个标签页保存并交出编辑权…',
     takeoverWaitingSave: '上一个页面的保存还在进行，稍后接手…',
     /** 那边没能交出：原因，与之后能做的 */
-    takeoverFailed: (reason: 'not-saved' | 'conflict' | 'session') => `${TAKEOVER_FAILURES[reason]}。点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`,
-    /** 本页交给了本浏览器的另一个标签页（US-M3-08）：阅读时读屏状态区里的说明 */
-    handedOverTab: '已在本浏览器的另一个标签页接着编辑',
+    takeoverFailed: (reason: TakeoverFailure) => `${TAKEOVER_FAILURES[reason]}。点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`,
+    /**
+     * 本页交给了本浏览器的另一个标签页（US-M3-08）：阅读时读屏状态区里的说明。不断言那边一定接着编辑了（审查 B4：本页存上之后只放弃这一代，
+     * 那边随即以本人接管申请；它没跟上时这一代到期）
+     */
+    handedOverTab: '已交给本浏览器的另一个标签页',
     /** 请求编辑（M3-P5 设计 §3.6，US-M3-06）：持有者是别人、自己能编辑时换掉"编辑"；同一个按钮之后说正在请求、取消请求、正在取消 */
     requestEdit: REQUEST_EDIT,
     requesting: '正在请求…',
@@ -333,6 +349,8 @@ export const editorMessages = {
       : ['已请求编辑，等待 ', holder, ' 回应。', holder, ` 停下操作 ${HANDOVER_IDLE_MINUTES} 分钟后会自动保存并交给你；你也可以${CANCEL_REQUEST}`],
     /** 编辑权交给了本页（或者空着），页面在后台：回到这一页时进入编辑 */
     requestGranted: '可以进入编辑了：回到这一页时自动进入编辑',
+    /** 同上，页面看得见、这一刻进入不了（会话不是本人、正在载入新的版本等，审查 B11）：一能进入就进入 */
+    requestGrantedSoon: '可以进入编辑了：稍后自动进入编辑',
     /** 没取消成：请求还在 */
     cancelRequestFailed: (reason: string) => `没能取消请求：${reason}。请求还在，可以再点"${CANCEL_REQUEST}"`,
     /** 交给了请求编辑的人（持有者这一侧回到阅读之后）：auto 是空闲满 2 分钟自动交出的 */
@@ -362,8 +380,13 @@ export const editorMessages = {
     forceFailed: (reason: string) => `没能${FORCE_TAKE_OVER}：${reason}`,
     /** 别人先请求了（单槽、先到先得）：本页的请求没有发出 */
     requestOccupied: <T>(requester: T): Phrase<T> => [requester, ' 已在请求编辑这份文档，你的请求没有发出'],
-    /** 请求已经不在了（换了一代、过期、被别人的新请求替换） */
-    requestGone: `你的编辑请求已经失效（例如正在编辑的人换了），可以重新${REQUEST_EDIT}`,
+    /** 请求已经不在了（在别的页面取消了、换了一代、过期、被别人的新请求替换） */
+    requestGone: `你的编辑请求已经失效（可能在别的页面取消了，或者正在编辑的人换了），可以重新${REQUEST_EDIT}`,
+    /**
+     * 本人在别的页面、设备上发出、正在等回应的请求，不是这一页发出的（M3-P5 审查 B2）：这一页不续期、不撤回、不自动进入；在这一页再点"请求编辑"
+     * 照常发出（服务端只续期）
+     */
+    requestedElsewhere: '你已在别处请求编辑这份文档',
     /** 等待中本页空闲满 10 分钟，取消了 */
     requestIdle: `你 ${IDLE_RELEASE_MINUTES} 分钟没有操作，已取消编辑请求`,
     /** 发出请求时不能编辑了（403）：reason 是服务端这次给的原因 */

@@ -43,8 +43,9 @@ const HANDOVER_CHANNEL_PREFIX = 'nerve-office:doc:'
 
 /**
  * 交接的复核里收不到交接频道消息的 A（takeover-holder-deaf，M3-P5）：这一页的 BroadcastChannel 换成不挂交接频道的 message 监听的子类（别的频道照常），
- * 模拟被暂停、冻结、卡住的标签页——与 E2E 的 support/sheet.ts 的 deafenHandover 同一个办法。挂接在页面开始载入时就装上：编辑器页进入编辑、
- * 拿到本机锁之后才第一次打开交接频道（same-browser.ts，组装处每次打开时才取全局的 BroadcastChannel）
+ * 模拟被暂停、冻结、卡住的标签页——与 E2E 的 support/sheet.ts 的 deafenHandover 同一个办法。要在编辑器页第一次打开交接频道之前装上：频道在建编辑模式时
+ * 就打开（tab-handover.ts 订阅交接请求；same-browser.ts 第一次收发时才打开，组装处每次打开时才取全局的 BroadcastChannel），那时载入的会话、详情与内容
+ * 都已回来——组装处在测试构建、地址带 selftest 时等这里挂上之后才开始载入（start.tsx，审查 B8），不靠分块与请求谁先回来
  */
 export function deafenHandoverChannel(scope: { BroadcastChannel: typeof BroadcastChannel } = globalThis): void {
   const Original = scope.BroadcastChannel

@@ -308,10 +308,10 @@ function isAcquire(request: ServerRequest): boolean {
 }
 
 /**
- * 两个标签页的本人接管（纯函数）：B 交回了一条路（answered：A 回应了、交出之后普通申请；silent：A 没有回应、本人接管并抢锁）；A 交回的路与它一致
- * （answered ⇔ handed-over，silent ⇔ lost），A 没交回只记下；库里 A 那一代之后是 B 的新一代——answered 时 B 的一代是普通申请（接管方式为空：
- * 那时 A 那一代已经不在了，不然普通申请会被自己占着），后端日志里另开 B 之后、B 取得之前有 A 的释放；silent 时 B 的一代记着本人接管（self），
- * A 那一代没有明确结束、那期间没有释放。A 那一代释放与 B 取得之间往往只有几毫秒，每 100 毫秒看一次库看不到"已释放"的那一刻，所以释放看后端日志
+ * 两个标签页的本人接管（纯函数）：B 交回了一条路（answered：A 回应了、先保存再交出，B 等它做完；silent：A 没有回应、本人接管并抢锁）；A 交回的路
+ * 与它一致（answered ⇔ handed-over，silent ⇔ lost），A 没交回只记下；库里 A 那一代之后是 B 的新一代，两条路都记着本人接管（self）、A 那一代没有
+ * 明确结束、另开 B 之后、B 取得之前后端没有收到释放——answered 时 A 存上之后不释放、只放弃那一代（审查 B4：先释放、再申请之间，等待中的请求方会
+ * 抢进来），B 的本人接管在同一个事务里换代。释放看后端日志（每 100 毫秒看一次库，看不到一闪而过的"已释放"）
  */
 export function takeoverJudgement(evidence: TakeoverEvidence): Judgement {
   const { taker, holder, states, requests } = evidence
@@ -335,11 +335,9 @@ export function takeoverJudgement(evidence: TakeoverEvidence): Judgement {
   else if (firstOfB === undefined) {
     problems.push(`库里没有看到 A 那一代（第 ${epochA} 代）之后的新一代`)
   }
-  else if (path === 'silent' && (firstOfB.takeover !== 'self' || releasedA !== undefined || releasesBetween.length > 0)) {
-    problems.push(`B 没有回应就接手：新一代应当记着本人接管、A 那一代不释放；库里新一代的接管方式是 ${firstOfB.takeover ?? '空'}，A 那一代${releasedA === undefined ? '没有明确结束' : `明确结束了（${releasedA.endReason ?? ''}）`}，另开 B 之后、B 取得之前的释放 ${releasesBetween.length} 个`)
-  }
-  else if (path === 'answered' && (firstOfB.takeover !== null || releasesBetween.length === 0)) {
-    problems.push(`A 交出之后 B 普通申请：A 那一代应当先释放、新一代不记接管；库里新一代的接管方式是 ${firstOfB.takeover ?? '空'}，另开 B 之后、B 取得之前的释放 ${releasesBetween.length} 个`)
+  else if ((path === 'silent' || path === 'answered') && (firstOfB.takeover !== 'self' || releasedA !== undefined || releasesBetween.length > 0)) {
+    const what = path === 'silent' ? 'B 没有回应就接手' : 'A 先保存再交出、B 等它做完再接手（审查 B4）'
+    problems.push(`${what}：新一代应当记着本人接管、A 那一代不释放；库里新一代的接管方式是 ${firstOfB.takeover ?? '空'}，A 那一代${releasedA === undefined ? '没有明确结束' : `明确结束了（${releasedA.endReason ?? ''}）`}，另开 B 之后、B 取得之前的释放 ${releasesBetween.length} 个`)
   }
   const lease = epochA === undefined
     ? '没有租约'

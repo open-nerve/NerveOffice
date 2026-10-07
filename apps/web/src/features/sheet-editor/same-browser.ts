@@ -6,7 +6,7 @@
 //   直到 release；页面关闭、刷新、导航离开、崩溃时浏览器自己放开（探索 §3.2：1–13 ms）；
 //   untilFree 等它空着（排队、轮到即放开，只当信号）：同一个浏览器里的交接以它为"那边做完了"的信号；
 // - 交接频道 nerve-office:doc:<documentId>（BroadcastChannel）：同一个浏览器里本人接管时的请求与回应（设计 §3.7；请求方一侧在 self-takeover.ts，
-//   回应的一侧在 edit-mode.ts）。
+//   回应的一侧在 tab-handover.ts）。
 //   消息带版本（v）：两个标签页可能载入了不同版本的页面，版本不同的、解析不出的、请求里的文档不是这一份的一律忽略（对方按没有回应处理）。
 //   只带文档、请求、标签页与用户的标识，不带令牌（设计 §3.13）；回应按 requestId 配对（onReply）。用 addEventListener('message')：
 //   E2E 的"吞消息"注入按它写（设计 §4）。频道在第一次收发时才打开；
@@ -29,8 +29,11 @@ export const HANDOVER_MESSAGE_VERSION = 1
 export const HANDOVER_ACK_STATES = ['editing', 'exiting'] as const
 export type HandoverAckState = (typeof HANDOVER_ACK_STATES)[number]
 
-/** 交出没能完成的原因（handover-failed）：本页的修改没存上（保存失败、单元格提交不了）、版本冲突、会话不对 */
-export const HANDOVER_FAILURES = ['not-saved', 'conflict', 'session'] as const
+/**
+ * 交出没能完成的原因（handover-failed）：本页的修改没存上（保存失败、单元格提交不了）、版本冲突、会话不对；not-handed-over 是修改都已存上，
+ * 但本页正在把编辑权交给请求编辑的人、没交出去（请求已经不在、没有结果），留在编辑（M3-P5 审查 B11）
+ */
+export const HANDOVER_FAILURES = ['not-saved', 'conflict', 'session', 'not-handed-over'] as const
 export type HandoverFailure = (typeof HANDOVER_FAILURES)[number]
 
 /**
@@ -83,7 +86,7 @@ export interface SameBrowser {
   /** 本浏览器里有没有标签页持有这把锁（本页持有的也算）。查不出时为 false */
   readonly heldHere: () => Promise<boolean>
   /**
-   * 等锁直到空着（M3-P5 设计 §3.7：同一个浏览器里的交接以它为信号——正在编辑的标签页存上、释放之后才放锁，关闭、刷新、崩溃时浏览器替它放）：
+   * 等锁直到空着（M3-P5 设计 §3.7：同一个浏览器里的交接以它为信号——正在编辑的标签页存上、放弃那一代之后才放锁，关闭、刷新、崩溃时浏览器替它放）：
    * 排队请求一次，轮到时立即放开（只当信号，不持有：拿锁一律在服务端批准之后，设计 §3.1 第 2 条），交回 true；signal 撤销时（时限到了、
    * 不再等）从队里撤下，交回 false。浏览器没有锁、请求出错时立即交回 false。从不失败
    */
