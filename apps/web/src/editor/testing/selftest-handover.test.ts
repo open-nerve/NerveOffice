@@ -113,39 +113,47 @@ function seen(kind: string, wall: number, fields: Readonly<Record<string, unknow
 const MARKER = '{"v":1,"at":1791355102563,"revision":1}'
 
 describe('刷新之前离开时的观察（leavingSummary）', () => {
-  it('导航一开始就取消在途的请求（S6 在 Playwright 的 WebKit 上看到的先后；location.reload 时 Chromium 系也是）：保存的请求先失败、之后才 pagehide；编辑器页处理之后有记号，没有释放与交出', () => {
+  /** 编辑器页报的页面关闭时的处理（交接日志的 page-hide） */
+  function pageHide(wall: number, fields: Readonly<Record<string, unknown>>): SelftestTimelineEntry {
+    return { kind: 'page-hide', wall, at: wall - 900, ...fields }
+  }
+
+  it('导航一开始就取消在途的请求（真实 Safari 与 WebKit）：编辑器页看到结果未知、不释放、记下记号；没有释放与交出', () => {
     const summary = leavingSummary([
       seen('reload', 1_000),
       seen('save-failed', 1_004, { error: 'TypeError: Load failed' }),
+      pageHide(1_020, { action: 'kept', busy: false, unknown: true }),
       seen('pagehide', 1_020, { save: 'failed', request: 'failed' }),
       seen('after-pagehide', 1_021, { marker: MARKER }),
     ])
     expect(summary.problems).toEqual([])
-    expect(summary.text).toBe(`保存的请求先失败（刷新之后 +4 ms，TypeError: Load failed），之后才派发 pagehide（+20 ms，保存的状态 failed）——导航一开始就取消了在途的请求；编辑器页处理之后 localStorage 里有记号 ${MARKER}；没有发释放与交出`)
+    expect(summary.text).toBe(`页面关闭时（刷新之后 +20 ms）编辑器页看到保存的结果未知（unknown：请求已被取消），处理是 kept；保存的请求在刷新之后 +4 ms 失败（TypeError: Load failed：在页面关闭之前——导航一开始就取消了在途的请求）；编辑器页处理之后 localStorage 里有记号 ${MARKER}；没有发释放与交出`)
   })
 
-  it('pagehide 时保存还在途（S6 在 Playwright 的 Chromium 系上刷新时看到的先后），之后请求失败', () => {
+  it('页面关闭时保存还在途（Chromium 系：编辑器页处理完了才轮到取消的回调）：同样不释放、记下记号', () => {
     const summary = leavingSummary([
       seen('reload', 1_000),
-      seen('pagehide', 1_010, { save: 'saving', request: 'pending' }),
+      pageHide(1_010, { action: 'kept', busy: true, unknown: false }),
+      seen('save-failed', 1_010, { error: 'TypeError: Failed to fetch' }),
+      seen('pagehide', 1_011, { save: 'failed', request: 'failed' }),
       seen('after-pagehide', 1_011, { marker: MARKER }),
-      seen('save-failed', 1_030, { error: 'TypeError: Failed to fetch' }),
     ])
     expect(summary.problems).toEqual([])
-    expect(summary.text).toContain('pagehide 时（刷新之后 +10 ms）保存还在途（保存的状态 saving，请求 pending），之后请求失败（+30 ms）')
+    expect(summary.text).toContain('编辑器页看到保存还在途（busy），处理是 kept；保存的请求在刷新之后 +10 ms 失败（TypeError: Failed to fetch：页面关闭时它还在途，之后才被取消）')
   })
 
-  it('发了释放或交出、没有记号、没有 pagehide：都算问题', () => {
-    const summary = leavingSummary([
+  it('释放了、发了释放、没有记号、编辑器页没报：都算问题', () => {
+    expect(leavingSummary([
       seen('reload', 1_000),
+      pageHide(1_012, { action: 'released', busy: false, unknown: false }),
       seen('release-sent', 1_012, { method: 'DELETE', path: '/api/documents/d/edit-lease' }),
       seen('after-pagehide', 1_013, { marker: null }),
-    ])
-    expect(summary.problems).toEqual([
-      '没有记下页面关闭（pagehide）',
+    ]).problems).toEqual([
+      '页面关闭时编辑器页的处理是 released（保存在途或者结果未知时应当不释放、记下记号）',
       '页面关闭时发了 DELETE /api/documents/d/edit-lease（保存在途或者结果未知时不应释放、交出）',
       '编辑器页处理 pagehide 之后 localStorage 里没有记号',
     ])
+    expect(leavingSummary([seen('reload', 1_000), seen('after-pagehide', 1_013, { marker: MARKER })]).problems).toEqual(['编辑器页没有报页面关闭（pagehide）时的处理'])
   })
 })
 

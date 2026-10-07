@@ -512,15 +512,20 @@ async function refreshSaveScenario(session: Session): Promise<void> {
 }
 
 /**
- * 离开时看到了什么，每一条随即（同步）写进 sessionStorage：保存的请求的结果（WebKit 在导航一开始就取消它）、释放与交出的请求（不该有）、
- * pagehide 时保存的状态（在 window 的捕获阶段听：先于编辑器页的处理）、编辑器页处理之后 localStorage 里的记号（之后挂上的冒泡阶段：
- * 排在编辑器页的那一个后面）、变成隐藏。包一层 fetch（在发出保存之前装上，那一次也经过它）
+ * 离开时看到了什么，每一条随即（同步）写进 sessionStorage：编辑器页自己报的页面关闭时的处理（交接日志的 page-hide：走了哪一支、那一刻保存在途
+ * 还是结果未知——订阅是同步的，它在 pagehide 的处理里报，写进去才跟着刷新留下来）、保存的请求的结果（WebKit 在导航一开始就取消它）、释放与交出
+ * 的请求（不该有）、自检自己的 pagehide 监听看到的（捕获阶段；Chromium 系把它排在编辑器页先挂上的那一个后面，先后以 page-hide 为准）、编辑器页
+ * 处理之后 localStorage 里的记号（之后挂上的冒泡阶段，排在编辑器页的那一个后面）、变成隐藏。包一层 fetch（在发出保存之前装上，那一次也经过它）
  */
 function watchLeaving(session: Session, carry: RefreshCarry): void {
   const note = (entry: SelftestTimelineEntry): void => {
     carry.timeline.push(entry)
     writeCarry(carry)
   }
+  handoverLog().subscribe((entry) => {
+    if (entry.kind === 'page-hide')
+      note({ ...entry, at: round(entry.at) })
+  })
   const originalFetch = window.fetch.bind(window)
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = input instanceof Request ? input : undefined
@@ -626,29 +631,35 @@ async function refreshAfterReload(session: Session, carry: RefreshCarry): Promis
   }
 }
 
-/** 离开时的观察判读成一句话：保存的请求与 pagehide 的先后、pagehide 时保存的状态、记号与释放 */
+/**
+ * 离开时的观察判读成一句话与问题：编辑器页报的页面关闭时的处理（page-hide）——应当是 kept（保存在途 busy 或者结果未知 unknown：不释放、记下记号）；
+ * 保存的请求什么时候失败（相对刷新、相对 page-hide）；编辑器页处理之后 localStorage 里的记号；有没有发释放与交出
+ */
 export function leavingSummary(timeline: readonly SelftestTimelineEntry[]): { readonly problems: readonly string[], readonly text: string } {
   const at = (kind: string): SelftestTimelineEntry | undefined => timeline.find(entry => entry.kind === `page:${kind}`)
   const reload = at('reload')
   const failed = at('save-failed')
   const answered = at('save-answered')
-  const hide = at('pagehide')
   const after = at('after-pagehide')
+  const pageHide = timeline.find(entry => entry.kind === 'page-hide')
   const sent = timeline.filter(entry => entry.kind === 'page:release-sent' || entry.kind === 'page:handover-sent')
   const problems: string[] = []
-  if (hide === undefined)
-    problems.push('没有记下页面关闭（pagehide）')
+  if (pageHide === undefined)
+    problems.push('编辑器页没有报页面关闭（pagehide）时的处理')
+  else if (pageHide.action !== 'kept')
+    problems.push(`页面关闭时编辑器页的处理是 ${String(pageHide.action)}（保存在途或者结果未知时应当不释放、记下记号）`)
   if (sent.length > 0)
     problems.push(`页面关闭时发了 ${sent.map(entry => `${String(entry.method)} ${String(entry.path)}`).join('、')}（保存在途或者结果未知时不应释放、交出）`)
   if (typeof after?.marker !== 'string' || after.marker === '')
     problems.push('编辑器页处理 pagehide 之后 localStorage 里没有记号')
   const relative = (entry: SelftestTimelineEntry | undefined): string => entry === undefined || reload === undefined ? '—' : `+${entry.wall - reload.wall} ms`
-  const order = failed !== undefined && hide !== undefined && failed.wall <= hide.wall
-    ? `保存的请求先失败（刷新之后 ${relative(failed)}，${String(failed.error)}），之后才派发 pagehide（${relative(hide)}，保存的状态 ${String(hide.save)}）——导航一开始就取消了在途的请求`
-    : hide === undefined
-      ? '没有 pagehide'
-      : `pagehide 时（刷新之后 ${relative(hide)}）保存还在途（保存的状态 ${String(hide.save)}，请求 ${String(hide.request)}）${failed === undefined ? '' : `，之后请求失败（${relative(failed)}）`}`
-  const text = `${order}；${answered === undefined ? '' : `保存的请求有了回应（${String(answered.status)}）；`}编辑器页处理之后 localStorage 里${typeof after?.marker === 'string' ? `有记号 ${after.marker}` : '没有记号'}；${sent.length === 0 ? '没有发释放与交出' : `发了 ${sent.length} 个释放或交出`}`
+  const state = pageHide === undefined
+    ? '编辑器页没有报页面关闭时的处理'
+    : `页面关闭时（刷新之后 ${relative(pageHide)}）编辑器页看到保存${pageHide.busy === true ? '还在途（busy）' : pageHide.unknown === true ? '的结果未知（unknown：请求已被取消）' : '既不在途、结果也不是未知'}，处理是 ${String(pageHide.action)}`
+  const request = failed === undefined
+    ? (answered === undefined ? '保存的请求没有结果（页面已经卸载）' : `保存的请求有了回应（${String(answered.status)}）`)
+    : `保存的请求在刷新之后 ${relative(failed)} 失败（${String(failed.error)}${pageHide?.unknown === true ? '：在页面关闭之前——导航一开始就取消了在途的请求' : pageHide?.busy === true ? '：页面关闭时它还在途，之后才被取消' : ''}）`
+  const text = `${state}；${request}；编辑器页处理之后 localStorage 里${typeof after?.marker === 'string' ? `有记号 ${after.marker}` : '没有记号'}；${sent.length === 0 ? '没有发释放与交出' : `发了 ${sent.length} 个释放或交出`}`
   return { problems, text }
 }
 

@@ -20,6 +20,12 @@ export type HandoverTraceEvent
     | { readonly kind: 'left', readonly at: number, readonly cause: string, readonly outcome: 'reading' | 'stayed' }
   /** 本机锁被本浏览器的另一个标签页抢走（转为失去编辑权） */
     | { readonly kind: 'lock-stolen', readonly at: number }
+  /**
+   * 页面关闭（pagehide）时怎样处理这一代（M3-P4 设计 §3.4、M3-P5 设计 §3.7 的 R1、7a759da）：kept 是保存在途（busy）或者结果未知（unknown）、
+   * 不释放、记下记号；handed-over 是有请求在等、用交出代替释放；released 是释放；idle 是不在编辑（没有这一代）。busy、unknown 是那一刻保存的
+   * 状态机的样子——真实 Safari 的复核据此说清刷新时走的是哪一支（WebKit 在导航一开始就取消在途的请求，到这里已经是结果未知）
+   */
+    | { readonly kind: 'page-hide', readonly at: number, readonly action: 'kept' | 'handed-over' | 'released' | 'idle', readonly busy: boolean, readonly unknown: boolean }
   /** "在此编辑"开始（anyway：那边没能交出之后的"仍在此编辑"）；锁在不在本浏览器里 */
     | { readonly kind: 'takeover-start', readonly at: number, readonly anyway: boolean }
     | { readonly kind: 'takeover-locate', readonly at: number, readonly here: boolean }

@@ -2312,9 +2312,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
       requests.withdraw()
       // 保存在途或者结果未知：不释放（M3-P4 设计 §3.4），记下这份文档有一次保存可能还在服务端处理，它的基准是本页确认过的最新修订
       // （M3-P5 设计 §3.7 的 R1）。结果未知也算：WebKit 在导航（刷新、离开）一开始就取消在途的请求、之后才派发 pagehide——那时它已经不在途，
-      // 而那次保存可能已经送到服务端、还在处理，释放先提交就把它挡掉（S6 实测）。有请求在等时同样不交出（交出同样会挡掉那次保存）
-      if (coordinator !== undefined && (coordinator.busy() || coordinator.hasUnknownOutcome())) {
+      // 而那次保存可能已经送到服务端、还在处理，释放先提交就把它挡掉（S6 实测，S8 真实 Safari 复核确认）。有请求在等时同样不交出
+      // （交出同样会挡掉那次保存）。测试构建的观察钩子记下走了哪一支与那一刻保存的样子（page-hide）
+      const busy = coordinator?.busy() === true
+      const unknown = coordinator?.hasUnknownOutcome() === true
+      if (coordinator !== undefined && (busy || unknown)) {
         options.pendingSave.write(coordinator.baseRevision())
+        trace({ kind: 'page-hide', at: clock.now(), action: 'kept', busy, unknown })
         return
       }
       // 有待回应的请求编辑：用交出代替释放（keepalive，不看结果；服务端随之结束这一代、留给请求方），这一代随即停止续租
@@ -2324,9 +2328,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
         const { token } = held.credentials()
         held.abandon()
         void api.editLease.handOver(documentId, token, offer.id).catch(() => undefined)
+        trace({ kind: 'page-hide', at: clock.now(), action: 'handed-over', busy, unknown })
         return
       }
-      void lease?.release()
+      trace({ kind: 'page-hide', at: clock.now(), action: held === undefined ? 'idle' : 'released', busy, unknown })
+      void held?.release()
     },
 
     dispose: () => {
