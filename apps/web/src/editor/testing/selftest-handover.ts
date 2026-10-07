@@ -4,12 +4,13 @@
 // 各步的先后看测试构建的交接日志（./handover-log.ts，window.__nerveHandoverLog）与这里自己的观察，随结果交回（timeline，墙上时间）：
 // - takeover-holder（A，作者，编辑时；takeover-holder-deaf 是同样的步骤，只是挂接让这一页收不到交接频道的消息）：第一格经控制的 flush 存上（驱动脚本看到这一版才另开 B），同时写第二格（留着）；等 A 变成隐藏（B 一打开
 //   A 就隐藏了）——自动保存在隐藏的那一刻上传第二格（P4）；隐藏之后再写第三格（捕获的静默与上限调到一小时，留着）；然后等结果：
-//   · handed-over：A 回应了 B 的交接请求，先保存（第三格也存上）再交出、回到阅读，说明"已在本浏览器的另一个标签页接着编辑"；
+//   · handed-over：A 回应了 B 的交接请求，先保存（第三格也存上）再交出（不释放、只放弃那一代，审查 B4）、回到阅读，说明"已交给本浏览器的另一个标签页"；
 //   · lost：A 没有回应（被 Safari 暂停、冻结），B 3 秒之后本人接管并抢锁，A 得知锁被抢（回到前台时）——失去编辑权，说法是"你在本浏览器的
 //     另一个标签页接手了编辑"，第三格没有存上，"另存为副本"：副本里有三格，原文档里只有前两格。
 //   Playwright 里 A 从不被暂停：照常回应（handed-over）；校准另有一条只给 A 吞掉交接频道的消息（与 S6 的 E2E 同一个办法），走 lost；
 // - takeover-taker（B，同一个会话直接打开编辑器页）：阅读时说明"你在本浏览器的另一个标签页里正在编辑"，从页面开始载入算 8 秒之后点"在此编辑"，
-//   等进入编辑；按交接日志判定走了哪条路（answered：3 秒内收到 ack、等 A 做完再普通申请；silent：3 秒没有回应、以本人接管申请并抢锁），
+//   等进入编辑；按交接日志判定走了哪条路（answered：3 秒内收到 ack、等 A 做完再以本人接管申请——A 不释放，审查 B4；silent：3 秒没有回应、以本人接管
+//   申请并抢锁），
 //   记下回应用了多久、多久进入编辑；核对服务器上 A 的修改（前两格一定在，第三格只在 answered 时在）；
 // - refresh-save（作者，阅读时开始，跨两次载入）：第一次——点"编辑"，写一格，经控制的 flush 发出保存（驱动脚本让这份文档的保存在服务端停
 //   10 秒），1.5 秒之后还在途就刷新（location.reload）；离开时看到了什么（保存的请求什么时候失败、pagehide 时保存的状态、页面的处理之后 localStorage
@@ -172,7 +173,8 @@ function since(entry: LogEntry | undefined, origin: LogEntry | undefined): numbe
 
 /**
  * B 的交接日志（"在此编辑"开始之后）判读成一条路（M3-P5 设计 §3.7）：
- * - answered：3 秒内收到 ack，之后锁空了或收到 done（A 存上、释放、放了锁），再普通申请（接管方式为空；A 的释放没送到、被自己占着时另以本人接管再申请一次）；
+ * - answered：3 秒内收到 ack，之后锁空了或收到 done（A 存上、放弃那一代、放了锁——不释放，审查 B4），再以本人接管申请（服务端在同一个事务里换代），
+ *   只申请一次；
  * - silent：3 秒没有回应（或者回应了、20 秒没做完），以本人接管申请；
  * - failed：A 回应没能保存（这里不该出现）；unknown：别的。
  * 都要求先看到锁在本浏览器、发出了请求，申请取得了编辑权、进入了编辑
@@ -203,8 +205,8 @@ export function summarizeTaker(log: readonly LogEntry[]): TakerSummary {
   const takeovers = acquires.map(entry => entry.takeover ?? null)
   if (path === 'silent' && takeovers[0] !== 'self')
     problems.push(`没有回应之后应当以本人接管申请，申请的接管方式是 ${takeovers.map(String).join('、') || '（没有申请）'}`)
-  if (path === 'answered' && !(takeovers[0] === null && (takeovers.length === 1 || (takeovers.length === 2 && takeovers[1] === 'self' && results[0]?.result === 'held'))))
-    problems.push(`A 做完之后应当普通申请（被自己占着时另以本人接管再申请一次），申请的接管方式是 ${takeovers.map(String).join('、') || '（没有申请）'}`)
+  if (path === 'answered' && !(takeovers.length === 1 && takeovers[0] === 'self'))
+    problems.push(`A 做完之后应当以本人接管申请一次（A 不释放，审查 B4），申请的接管方式是 ${takeovers.map(String).join('、') || '（没有申请）'}`)
   if (path === 'failed')
     problems.push(`A 回应没能交出（${String(failedReply?.detail)}）`)
   if (path === 'unknown')
@@ -223,7 +225,7 @@ export function summarizeTaker(log: readonly LogEntry[]): TakerSummary {
   }
   const replyText = path === 'silent'
     ? `${ms.silent ?? '—'} ms 没有回应（${ack === undefined ? '一直没有回应' : `+${since(ack, request)} ms 回应过 ack、没做完`}）、以本人接管申请`
-    : `+${ms.reply ?? '—'} ms 收到回应（${String(reply?.reply ?? '—')}）、+${ms.finished ?? '—'} ms ${lockFree !== undefined ? '锁空了' : '收到 done'}、普通申请`
+    : `+${ms.reply ?? '—'} ms 收到回应（${String(reply?.reply ?? '—')}）、+${ms.finished ?? '—'} ms ${lockFree !== undefined ? '锁空了' : '收到 done'}、以本人接管申请`
   return { path, ms, problems, text: `点"在此编辑"之后 +${ms.request ?? '—'} ms 发出交接请求，${replyText}，+${ms.entered ?? '—'} ms 进入编辑` }
 }
 
@@ -340,8 +342,8 @@ async function holderSteps(session: Session, visibility: VisibilityWatch, observ
       if (view.notice !== 'handed-over-tab')
         fail(`回到了阅读，说明是 ${view.notice ?? '没有'}（应当是交给了本浏览器的另一个标签页）；${holder.text}`)
       const said = statusRegionText(session)
-      if (!said.includes('已在本浏览器的另一个标签页接着编辑'))
-        fail(`读屏状态区说"${said}"（应当说已在本浏览器的另一个标签页接着编辑）`)
+      if (!said.includes('已交给本浏览器的另一个标签页'))
+        fail(`读屏状态区说"${said}"（应当说已交给本浏览器的另一个标签页）`)
       if (!holder.answered || holder.left !== 'reading')
         fail(`回到阅读却没有回应交接请求、离开编辑：${holder.text}`)
       return `A 回应了 B：${holder.text}；读屏状态区说"${said}"`

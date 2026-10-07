@@ -1352,10 +1352,10 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7、§3.11，US-M3-08
     const region = infoRegion()
     fake.set({ mode: { ...READING, notice: { kind: 'handed-over-tab' } }, save: undefined })
     expect(infoRegion()).toBe(region)
-    expect(region.textContent).toBe('已在本浏览器的另一个标签页接着编辑')
+    expect(region.textContent).toBe('已交给本浏览器的另一个标签页')
     expect(screen.queryByRole('alert')).toBeNull()
     fake.set({ mode: { ...HERE, notice: { kind: 'handed-over-tab' } } })
-    expect(region.textContent).toBe('已在本浏览器的另一个标签页接着编辑 你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
+    expect(region.textContent).toBe('已交给本浏览器的另一个标签页 你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
   })
 })
 

@@ -10,11 +10,11 @@
 import type { Page, Request } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
 import { setPageHidden } from '../../support/autosave.ts'
-import { createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, editLeaseEpoch, editLeaseReservation, expireEditLease } from '../../support/database.ts'
+import { createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, editLeaseEpoch, editLeaseReservation, editLeaseTakeover, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cancelRequestButton, cellOf, disconnectTab, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, exitEditButton, lostNotice, openAndEnterEditing, openReader, requestEditButton, requestPrompt, saveAndWait, saveButton, savedContent, selectCell, statusRegion, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cancelRequestButton, cellOf, disconnectTab, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, exitEditButton, lostNotice, openAndEnterEditing, openReader, requestEditButton, requestPrompt, saveAndWait, saveButton, savedContent, selectCell, statusRegion, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -343,6 +343,49 @@ test.describe('US-M3-06 请求编辑与交出', () => {
 
     await requesterEnters(anotherDevice, acquisitions)
     expect((await savedCells(anotherDevice, documentId))[0]).toBe('from holder')
+  })
+
+  test('US-M3-06 请求方在等时持有者换到同一个浏览器的另一个标签页"在此编辑"（审查 B4）：A 存上之后不释放，B 以本人接管换代——即使 B 的申请晚到，请求方的续期也只得到"在等"（槽从来不空，抢不进来）；B 进入编辑，请求随新的一代沿用，B 的心跳带来提示', async ({ page, context, anotherDevice }) => {
+    const { holder, requester, documentId } = await sharedDocument('rq-tab')
+    await holderEditing(page, holder, documentId)
+    const acquisitions = await requesterWaiting(anotherDevice, requester, holder, documentId)
+    await prompted(page, requester, documentId)
+
+    // 甲在同一个浏览器里另开 B（同一个上下文：时钟与本机锁共用），点"在此编辑"；B 的申请先拦住，造出"A 做完之后、B 申请之前"的那一段
+    const other = await context.newPage()
+    await openReader(other, documentId)
+    let releaseAcquire: () => void = () => {}
+    const acquireHeld = new Promise<void>((resolve) => {
+      releaseAcquire = resolve
+    })
+    await other.route(`**/api/documents/${documentId}/edit-lease`, async (route) => {
+      if (route.request().method() === 'POST')
+        await acquireHeld
+      await route.continue()
+    })
+    const takeovers = recordAcquisitions(other, documentId)
+    await takeOverHereButton(other).click()
+    // A 交给了标签页：回到阅读，说明已交给本浏览器的另一个标签页（不断言那边接着编辑了）；A 那一代没有释放
+    await waitForEditorAccess(page, 'read')
+    await expect(statusRegion(page)).toContainText('已交给本浏览器的另一个标签页')
+    expect(await editLeaseEndReason(documentId)).toBeNull()
+    // 乙的下一次续期：A 那一代还在——照旧在等，不进入编辑（修之前这里得到"没人在编辑"、抢先进入，B 随后被乙占用）
+    const requestPath = `/api/documents/${documentId}/edit-lease/request`
+    const renewed = anotherDevice.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === requestPath)
+    await nextRenewal(anotherDevice)
+    expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
+    await expect(statusRegion(anotherDevice)).toHaveText(waitingFor(holder))
+    expect(acquisitions).toEqual([])
+
+    // B 的申请这时才到：以本人接管换代，进入编辑
+    releaseAcquire()
+    await waitForEditorAccess(other, 'edit')
+    expect(takeovers).toEqual(['self'])
+    expect(await editLeaseTakeover(documentId)).toBe('self')
+    // 请求随新的一代沿用（同一个人）：B 的下一次心跳带来提示，乙照旧在等
+    await nextHeartbeat(other, documentId)
+    await expect(requestPrompt(other)).toBeVisible()
+    await expect(statusRegion(anotherDevice)).toHaveText(waitingFor(holder))
   })
 
   test('US-M3-06 同一个人的另一个页面不接手正在等的请求（审查 B2）：乙在 R1 请求编辑、在等；同一个浏览器里另开的 R2 只说"你已在别处请求编辑这份文档"，不进入等待；R2 关掉不撤回请求——R1 照旧在等，甲的提示照旧', async ({ page, anotherDevice }) => {

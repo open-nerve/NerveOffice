@@ -68,9 +68,9 @@ describe('两个标签页的本人接管（takeoverJudgement）', () => {
     expect(takeoverJudgement({ taker: report('takeover-taker', 'silent'), holder: undefined, states, requests, openedTakerAt: 1_000 }).problems).toEqual([])
   })
 
-  it('answered：B 的新一代是普通申请，后端日志里 B 取得之前有 A 的释放（库里不一定看得到"已释放"的那一刻）', () => {
-    const states = [...BEFORE, state(9_100, { revision: 4, epoch: 2 })]
-    expect(takeoverJudgement({ taker: report('takeover-taker', 'answered'), holder: report('takeover-holder', 'handed-over'), states, requests: [acquire(50), release(9_080), acquire(9_090)], openedTakerAt: 1_000 }).problems).toEqual([])
+  it('answered：A 存上之后不释放（审查 B4），B 的新一代记着本人接管，那期间后端没有释放', () => {
+    const states = [...BEFORE, state(9_100, { revision: 4, epoch: 2, takeover: 'self' })]
+    expect(takeoverJudgement({ taker: report('takeover-taker', 'answered'), holder: report('takeover-holder', 'handed-over'), states, requests: [acquire(50), acquire(9_090)], openedTakerAt: 1_000 }).problems).toEqual([])
   })
 
   it('不一致的都说出来：A 的路与 B 的对不上、接管方式与路对不上、释放与路对不上、没有新一代、B 没交回', () => {
@@ -79,9 +79,10 @@ describe('两个标签页的本人接管（takeoverJudgement）', () => {
       'A 交回的路是 handed-over（B 走的是 silent，A 应当是 lost）',
       'B 没有回应就接手：新一代应当记着本人接管、A 那一代不释放；库里新一代的接管方式是 self，A 那一代明确结束了（released），另开 B 之后、B 取得之前的释放 1 个',
     ])
-    const answeredButSelf = [...BEFORE, state(9_100, { revision: 4, epoch: 2, takeover: 'self' })]
-    expect(takeoverJudgement({ taker: report('takeover-taker', 'answered'), holder: undefined, states: answeredButSelf, requests: [acquire(9_100)], openedTakerAt: 1_000 }).problems).toEqual([
-      'A 交出之后 B 普通申请：A 那一代应当先释放、新一代不记接管；库里新一代的接管方式是 self，另开 B 之后、B 取得之前的释放 0 个',
+    // 审查 B4 之前的做法：A 先释放、B 再普通申请
+    const answeredButReleased = [...BEFORE, state(9_100, { revision: 4, epoch: 2 })]
+    expect(takeoverJudgement({ taker: report('takeover-taker', 'answered'), holder: undefined, states: answeredButReleased, requests: [release(9_080), acquire(9_100)], openedTakerAt: 1_000 }).problems).toEqual([
+      'A 先保存再交出、B 等它做完再接手（审查 B4）：新一代应当记着本人接管、A 那一代不释放；库里新一代的接管方式是 空，A 那一代没有明确结束，另开 B 之后、B 取得之前的释放 1 个',
     ])
     expect(takeoverJudgement({ taker: undefined, holder: undefined, states: BEFORE, requests: [], openedTakerAt: 1_000 }).problems).toEqual(['另开的 B 没有交回结果', '库里没有看到 A 那一代（第 1 代）之后的新一代'])
     expect(takeoverJudgement({ taker: undefined, holder: undefined, states: [state(0)], requests: [], openedTakerAt: undefined }).problems).toEqual(['另开的 B 没有交回结果', '库里没有看到 A 那一代的编辑租约'])

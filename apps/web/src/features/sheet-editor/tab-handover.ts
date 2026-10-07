@@ -1,18 +1,19 @@
-import type { FlushResult } from './autosave.ts'
 // 同一个浏览器里的交接（M3-P5 设计 §3.7，US-M3-08）的两头：正在编辑的标签页怎样回应交接请求，与新标签页"在此编辑"的编排。不依赖 Univer 与界面；
 // 锁与频道（same-browser.ts）、时钟、读编辑状态与刷新时在途的保存的记号都注入，用假的做单元测试（tab-handover.test.ts）。阅读与编辑的状态机
 // （edit-mode.ts）持有它们：离开编辑（先保存再交出）、开始一件事与它的作废、申请并进入编辑都在状态机里，这里经回调调用。
 // - 回应（answerTabs）：只理会同一个人的交接请求，而且本页确实还持有本机锁——被抢之后迟到的请求一律不理（页面卡住、冻结之后恢复时，排着的请求与
 //   锁被抢的通知一起到，先后不定，探索 §3.2）。编辑时在消息的处理里同步回 ack（那边 3 秒内收不到就当本页没有回应），然后请状态机离开编辑
-//   （handover-tab）；正在离开编辑时回 ack、照常离开；正在进入编辑时回 busy（那边稍后再请求）。离开有了结果时（finish）一一告诉回应过 ack 的请求：
-//   done（存上、放了锁）或 failed（原因：版本冲突、会话不对、别的都是没存上，handoverFailureOf）；离开的途中失去编辑权时（forget）不另外告诉它们——
-//   那边以锁空了为信号；
-// - "在此编辑"（takeOverHere）：锁在本浏览器里没人持有（跨设备、另一个浏览器或配置文件、刚关闭或刷新过的页面、孤儿租约）——先等刷新之前在途的保存
-//   （记号在 30 秒内时，self-takeover.ts），再以本人接管申请、拿锁；锁被本浏览器的标签页持有——请它先保存再交出（self-takeover.ts）：做完了（锁空了、
-//   done）普通申请（它的释放没送到、得到被自己占着时改以本人接管），没有回应（冻结、暂停、卡住）或者回应了、到时限没做完——本人接管，拿锁时抢
-//   （那边随即转为失去编辑权）；它没能保存（failed）就把原因交给阅读的进展，让人选"仍在此编辑"（anyway：本人接管并抢锁，不再请它交出）或"取消"。
-//   进入了就清掉刷新时在途的保存的记号（它只用来挡住过早的接手）。
-import type { AcquireIntent, LeaseClock } from './edit-lease.ts'
+//   （handover-tab：存上之后不释放、只放弃这一代，审查 B4）；正在离开编辑时回 ack、照常离开；正在进入编辑时回 busy（那边稍后再请求）。离开有了
+//   结果时（finish）一一告诉回应过 ack 的请求：done（存上、放了锁）或 failed（原因：版本冲突、会话不对、别的都是没存上，handoverFailureOf）；离开的
+//   途中失去编辑权时（forget）不另外告诉它们——那边以锁空了为信号；
+// - "在此编辑"（takeOverHere）一律以本人接管申请（服务端在同一个事务里换代：被自己占着就接管，空着就是普通的取得，被别人占着就是别人拿到了）：
+//   锁在本浏览器里没人持有（跨设备、另一个浏览器或配置文件、刚关闭或刷新过的页面、孤儿租约）——先等刷新之前在途的保存（记号在 30 秒内时，
+//   self-takeover.ts），再申请、拿锁；锁被本浏览器的标签页持有——请它先保存再交出（self-takeover.ts）：做完了（锁空了、done）同样先看记号再申请——
+//   那边存上之后不释放（审查 B4：先释放、再申请之间，等待中的请求方会抢进来），这里的本人接管结束它那一代，请求随新的一代沿用；没有回应（冻结、
+//   暂停、卡住）或者回应了、到时限没做完——申请、拿锁时抢（那边随即转为失去编辑权），不看记号（那边还活着）；它没能保存（failed）就把原因交给阅读的
+//   进展，让人选"仍在此编辑"（anyway：同样申请并抢锁，不再请它交出）或"取消"。进入了就清掉刷新时在途的保存的记号（它只用来挡住过早的接手）。
+import type { FlushResult } from './autosave.ts'
+import type { LeaseClock } from './edit-lease.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { HandoverFailure, HandoverMessage, SameBrowser } from './same-browser.ts'
@@ -165,25 +166,20 @@ export interface TakeOverHereOptions {
   readonly still: () => boolean
   /** "在此编辑"有了新的进展（状态机放进阅读的状态） */
   readonly progress: (progress: TakeoverProgress) => void
-  /**
-   * 申请并进入编辑（状态机）：intent 是接管方式与"被自己占着要不要再试"；selfAfterHeld：被自己占着时改以本人接管再申请一次（同一个浏览器的交接
-   * 做完了、那边的释放没送到）。交回进入了没有
-   */
-  readonly enter: (intent: AcquireIntent, selfAfterHeld: boolean) => Promise<boolean>
+  /** 以本人接管申请并进入编辑（状态机：申请、拿锁——被本浏览器的标签页占着就抢——以可编辑重建）。交回进入了没有 */
+  readonly enter: () => Promise<boolean>
   /** 测试构建的观察钩子（handover-trace.ts）：生产不给 */
   readonly trace?: HandoverTrace | undefined
 }
 
 /**
- * "在此编辑"（见文件头）：从看锁在哪里到申请并进入编辑。从不失败。怎样申请按走到的那条路定好，最后只申请一次（进入了就清掉记号）——
- * 状态机按它作废这一次接手的每一步之间都看一眼 still
+ * "在此编辑"（见文件头）：从看锁在哪里、请那边交出、等刷新之前的保存，到以本人接管申请并进入编辑。从不失败；状态机按它作废这一次接手，每一步
+ * 之间都看一眼 still
  */
 export async function takeOverHere(options: TakeOverHereOptions): Promise<void> {
   const { browser, clock, signal } = options
   options.trace?.({ kind: 'takeover-start', at: clock.now(), anyway: options.anyway })
-  // 本人接管、拿锁时抢：人选了"仍在此编辑"，或者那边没有回应（都不看记号：那边还活着）；本来就不在本浏览器时同样本人接管（看过记号之后）
-  let intent: AcquireIntent = { takeover: 'self' }
-  let selfAfterHeld = false
+  // 人选了"仍在此编辑"：申请、拿锁时抢，不再请它交出、不看记号（那边还活着）
   if (!options.anyway) {
     const here = await browser.heldHere()
     if (!options.still())
@@ -199,7 +195,7 @@ export async function takeOverHere(options: TakeOverHereOptions): Promise<void> 
         options.progress({ kind: 'failed', reason: outcome.reason })
         return
       }
-      // 没有回应（冻结、暂停、卡住），或者回应了、到时限没做完：本人接管，拿锁时抢（那边随即转为失去编辑权）
+      // 没有回应（冻结、暂停、卡住），或者回应了、到时限没做完：申请、拿锁时抢（那边随即转为失去编辑权），不看记号
       silent = outcome.kind === 'silent'
     }
     if (!silent) {
@@ -214,14 +210,9 @@ export async function takeOverHere(options: TakeOverHereOptions): Promise<void> 
       })
       if (waited === 'aborted' || !options.still())
         return
-      // 那边交出了：普通申请，不再试（它的释放没送到、被自己占着时改以本人接管）
-      if (here) {
-        intent = { retrySameUser: async () => false }
-        selfAfterHeld = true
-      }
     }
   }
-  // 接手：进入了就清掉刷新时在途的保存的记号（它只用来挡住过早的接手）
-  if (await options.enter(intent, selfAfterHeld))
+  // 接手（本人接管）：进入了就清掉刷新时在途的保存的记号（它只用来挡住过早的接手）
+  if (await options.enter())
     options.pendingSave.clear()
 }

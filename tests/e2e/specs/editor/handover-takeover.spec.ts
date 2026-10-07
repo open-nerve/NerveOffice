@@ -1,7 +1,8 @@
 // 本人接管："在此编辑"（US-M3-08；M3-P5 设计 §3.7）。编辑状态说正在编辑的是自己时，页头的按钮换成"在此编辑"，说明按这份文档的本机锁
 // （Web Locks）在本浏览器里有没有人持有分开说：
-// - 本浏览器的另一个标签页在编辑：请它先保存再交出（交接频道 BroadcastChannel）——它回应之后挡住输入、保存，存上了释放、放锁、回到阅读；
-//   这一页等它做完（锁空了）再申请。它不回应（冻结、Safari 暂停了后台页面、卡住）就 3 秒之后以本人接管申请、抢锁，它随即失去编辑权、给副本；
+// - 本浏览器的另一个标签页在编辑：请它先保存再交出（交接频道 BroadcastChannel）——它回应之后挡住输入、保存，存上了放弃那一代（不释放，审查 B4）、
+//   放锁、回到阅读；这一页等它做完（锁空了）再以本人接管申请（服务端换代，槽从来不空）。它不回应（冻结、Safari 暂停了后台页面、卡住）就 3 秒之后
+//   以本人接管申请、抢锁，它随即失去编辑权、给副本；
 // - 不在本浏览器（另一台设备或浏览器、刚关闭或刷新过的页面、载入途中离开留下的孤儿租约）：立即以本人接管申请。另一台设备上的旧页面下一次心跳
 //   得知被接管，失去编辑权、给副本；刷新时有保存在途的（旧页面留下记号），先等那次保存提交（至多 30 秒）再接手。
 // 两个标签页用同一个浏览器上下文（共用 Cookie、Web Locks、BroadcastChannel 与 Playwright 的时钟）；另一台设备用另一个上下文、同一个人登录。
@@ -52,7 +53,7 @@ async function copiedDocumentId(page: Page): Promise<string> {
 }
 
 test.describe('US-M3-08 本人接管："在此编辑"', () => {
-  test('US-M3-08 同一个浏览器的两个标签页：B 点"在此编辑"，A 先保存再交出、回到阅读并说明；B 等 A 做完才申请（普通申请），以服务器上包括 A 的修改的内容进入编辑——任何时候只有一个标签页在编辑', async ({ page, context }) => {
+  test('US-M3-08 同一个浏览器的两个标签页：B 点"在此编辑"，A 先保存再交出（不释放，审查 B4）、回到阅读并说明；B 等 A 做完才以本人接管申请，以服务器上包括 A 的修改的内容进入编辑——任何时候只有一个标签页在编辑', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('takeover-tabs'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
@@ -65,11 +66,13 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await expect(enterEditButton(other)).toHaveCount(0)
     await expect(saveButton(other)).toHaveCount(0)
 
-    // 两边的请求按先后记下：A 的保存在 B 的申请之前
+    // 两边的请求按先后记下：A 的保存在 B 的申请之前，A 不发释放
     const order: string[] = []
     context.on('request', (request) => {
       if (isSaveRequest(request) && request.frame().page() === page)
         order.push('A 保存')
+      if (request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease` && request.frame().page() === page)
+        order.push('A 释放')
       if (isLeaseAcquisition(request, documentId) && request.frame().page() === other)
         order.push('B 申请')
     })
@@ -78,16 +81,17 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await waitForEditorAccess(other, 'edit')
     await expect(saveButton(other)).toBeVisible()
 
-    // A：存上、释放、回到阅读，读屏状态区说明（之后的检查读到自己在本浏览器的另一个标签页编辑时一起说）
+    // A：存上、回到阅读，读屏状态区说明（之后的检查读到自己在本浏览器的另一个标签页编辑时一起说）
     await waitForEditorAccess(page, 'read')
-    await expect(statusRegion(page)).toContainText('已在本浏览器的另一个标签页接着编辑')
+    await expect(statusRegion(page)).toContainText('已交给本浏览器的另一个标签页')
     await expect(saveButton(page)).toHaveCount(0)
     await expect(lostNotice(page)).toHaveCount(0)
     // 生产构建里 A 的修改可能早已由自动保存存上（交出时没有要存的）；测试构建里是交出前的那一次保存
     expect(order.at(-1)).toBe('B 申请')
-    // A 交出之后才申请，不带接管：普通申请（A 的释放到了）
-    expect(takeovers).toEqual([null])
-    expect(await editLeaseTakeover(documentId)).toBeNull()
+    expect(order).not.toContain('A 释放')
+    // A 交出之后才申请，以本人接管换代（A 那一代没有释放：槽从来不空）
+    expect(takeovers).toEqual(['self'])
+    expect(await editLeaseTakeover(documentId)).toBe('self')
     expect(await editLeaseEpoch(documentId)).toBe(2)
 
     // B 的内容里有 A 的修改：B 接着改、保存，服务器上两处都在

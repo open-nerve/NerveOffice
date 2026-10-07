@@ -59,8 +59,8 @@
 // - "在此编辑"（takeOver，阅读里带进展 takeover）：编排在 tab-handover.ts（takeOverHere：看锁在哪里、请本浏览器的标签页先保存再交出、等刷新之前
 //   在途的保存，再决定怎样申请），这里开始这一件事（阅读里带上进展、作废之前的）、按进展更新阅读、申请并以可编辑重建；"取消"撤下还挂着的等待；
 // - 交接请求的回应在 tab-handover.ts（answerTabs）：编辑时它同步回 ack，再经回调让这里离开编辑（handover-tab：屏障 → 挂起 → 等面板 →
-//   flush('handover') → 存上就释放 → 放锁 → done → 以只读重建 → 阅读，说明已在本浏览器的另一个标签页接着编辑；没存上发 failed、留在编辑）；
-//   离开编辑有了结果时经它告诉回应过 ack 的请求；
+//   flush('handover') → 存上就放弃这一代（停心跳、不释放：那边以本人接管换代，槽从来不空，审查 B4）→ 放锁 → done → 以只读重建 → 阅读，
+//   说明已交给本浏览器的另一个标签页；没存上发 failed、留在编辑）；离开编辑有了结果时经它告诉回应过 ack 的请求；
 // - 跨设备被接管：续租或保存得到 taken_over（forced 为假）→ 不续上，失去编辑权（taken-over、elsewhere），副本照常。
 //
 // 强制接管（M3-P5 设计 §3.8，US-M3-09）：
@@ -1158,11 +1158,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
    *   writableUnprompted）；修改都存上了就离开，公式没收齐也离开（带"公式待更新"，下一个进入编辑的人强制重算，M3-P4 设计 §3.4）；没存上
    *   （含轮到时会话变差、没有发的 skipped(session)）就留在编辑。离开开始的那一刻就停止续上（holdRecovery），没离开成时恢复。
    *   空闲释放留在编辑之后过一个心跳周期再看——再也存不上的（版本冲突、与服务端不兼容）不再试，服务端 12 分钟兜底；阅读里说明
-   *   "10 分钟没有操作，已保存并释放编辑权"。交出给标签页的没存上就告诉它（failed，原因），存上了说明"已在本浏览器的另一个标签页接着编辑"。
+   *   "10 分钟没有操作，已保存并释放编辑权"。交出给标签页的没存上就告诉它（failed，原因）；存上了不释放、只放弃这一代（那边以本人接管换代，
+   *   审查 B4），说明"已交给本浏览器的另一个标签页"。
    * - handover-request（交给请求编辑的人，M3-P5 设计 §3.6；auto 是空闲满 2 分钟自动交出的）同样不是人按的"退出编辑"：存上了就交出开始时在等的
    *   那个请求（代替释放），交出了就停止续租（服务端已经结束这一代）、阅读里说明交给了谁；请求已经不在（请求方取消了）就留在编辑、说明一句；
    *   交不出（没有结果）就留在编辑、提示里说明原因，请求照旧在；这一代已经因为别的原因失效时按失去编辑权（本页的修改都已存上）。
-   * 退出、空闲释放时有待回应的请求：同样用交出代替释放，交不出就照常释放（交给本浏览器的另一个标签页时照常释放：那边是同一个人，请求随新的一代沿用）。
+   * 退出、空闲释放时有待回应的请求：同样用交出代替释放，交不出就照常释放（交给本浏览器的另一个标签页时不交给请求方：那边是同一个人，请求随新的一代沿用）。
    * 留在编辑：恢复调度（立即再看），说明由保存的状态给出；期间回应过 ack 的交接请求一律告诉它们没能交出（failed）；请求还在等的，自动交出没成的
    * 过一个心跳周期再看（再也存不上的不再试），别的照截止时刻
    */
@@ -1229,7 +1230,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return
     }
     // 交出或释放（共用 EXIT_RELEASE_WAIT_MS 的时限）：交给请求编辑的人；退出、空闲释放时有待回应的请求也交出（M3-P5 设计 §3.6）；
-    // 别的释放——等它的结果，结果未知、到了时限也照样离开（那一代至多 90 秒内自行到期）。之后放下本机锁
+    // 交给本浏览器的另一个标签页时不释放（见下）；别的释放——等它的结果，结果未知、到了时限也照样离开（那一代至多 90 秒内自行到期）。
+    // 之后放下本机锁
     const until = clock.now() + EXIT_RELEASE_WAIT_MS
     const offer = handingTo ?? offerOnLeaving(cause)
     const outcome = offer === undefined ? undefined : await holder.handOver(held, offer, until)
@@ -1255,6 +1257,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
       stay('not-saved')
       return
     }
+    else if (cause === 'handover-tab') {
+      // 交给本浏览器的另一个标签页（审查 B4）：不释放，只放弃这一代（停心跳、不发释放）——那边等锁空了（或收到 done）以本人接管申请，服务端在
+      // 同一个事务里换代，这一代与新的一代之间槽从来不空：等待中的请求方抢不进"先释放、再申请"之间，请求随新的一代沿用（同一个人）。代价：那边
+      // 没跟上（随即被关掉、崩溃）时这一代至多一个有效期（90 秒）后到期，别人看到"异常中断"的提醒
+      held.abandon()
+    }
     else {
       released = await releaseWithin(held, until)
       if (!still(token))
@@ -1262,14 +1270,14 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
     lease = undefined
     dropLock()
-    // 等着接手的标签页以锁空了为信号（self-takeover.ts），done 是给没有锁可等时的；它的释放没送到时那边改以本人接管申请
+    // 等着接手的标签页以锁空了为信号（tab-handover.ts、self-takeover.ts），done 是给没有锁可等时的；它随即以本人接管申请
     tabs.finish({ kind: 'done' })
     stopWatchingIdle()
     holder.clear()
     interruption = undefined
-    // 没能确认放掉：那一代可能还在（审查 A13）——交给本浏览器的另一个标签页时不算，那个标签页随即接手（释放没送到时以本人接管结束它），
+    // 没能确认放掉：那一代可能还在（审查 A13）。交给本浏览器的另一个标签页时本来就不释放（released 照旧为真）：那个标签页随即以本人接管结束它，
     // 之后读到的"自己在编辑"就是它，不说成本页刚退出
-    const unconfirmed = !released && cause !== 'handover-tab'
+    const unconfirmed = !released
     watchUnconfirmedRelease(!unconfirmed)
     const revision = saver.baseRevision()
     // 与服务端不兼容之后（M3-P3）离开：之后的阅读照样不给"编辑"、照样说明
@@ -1572,21 +1580,15 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /**
    * 申请并进入编辑（"编辑""在此编辑""强制接管"与请求被批准之后的自动进入共用，trigger 是哪一个；调用方先记下 readingBefore）：开始进入（页面挂上
    * 交互屏障；强制接管时进入的状态带 forced）→ 申请 → 取得了就拿锁、以可编辑重建；被占用回到阅读（持有者是自己时看那个页面在不在本浏览器）；
-   * 请求失败按原因回到阅读（强制接管另有说法）。selfAfterHeld：被自己占着时改以本人接管再申请一次（同一个浏览器的交接做完了、那边的释放没送到）。
-   * 交回进入了没有
+   * 请求失败按原因回到阅读（强制接管另有说法）。交回进入了没有
    */
-  async function acquireAndEnter(trigger: AcquireTrigger, intent: AcquireIntent, selfAfterHeld = false): Promise<boolean> {
+  async function acquireAndEnter(trigger: AcquireTrigger, intent: AcquireIntent): Promise<boolean> {
     const forced = intent.takeover === 'force'
     const token = begin(forced ? { kind: 'entering', forced } : { kind: 'entering' })
     let acquisition: LeaseAcquisition
     trace({ kind: 'acquire', at: clock.now(), trigger, takeover: intent.takeover ?? null })
     try {
       acquisition = await acquire(intent)
-      if (selfAfterHeld && still(token) && acquisition.kind === 'held' && acquisition.holder?.sameUser === true) {
-        traceAcquired(acquisition)
-        trace({ kind: 'acquire', at: clock.now(), trigger, takeover: 'self' })
-        acquisition = await acquire({ takeover: 'self' })
-      }
     }
     catch (error) {
       trace({ kind: 'acquire-result', at: clock.now(), result: 'failed', interruption: false, code: codeOf(error) })
@@ -1643,13 +1645,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
         signal: abort.signal,
         still: () => still(token),
         progress: progress => setTakeover(token, progress),
-        // 接手：这一次已经作废、不在阅读时不申请；接手期间的检查可能更新过阅读的样子（持有者、能不能编辑），没能进入时回到现在的
-        enter: async (intent, selfAfterHeld) => {
+        // 接手（本人接管）：这一次已经作废、不在阅读时不申请；接手期间的检查可能更新过阅读的样子（持有者、能不能编辑），没能进入时回到现在的
+        enter: async () => {
           if (!still(token) || mode.kind !== 'reading')
             return false
           if (mode.update !== 'loading')
             readingBefore = { ...mode, update: mode.update, notice: undefined, takeover: undefined }
-          return acquireAndEnter('take-over', intent, selfAfterHeld)
+          return acquireAndEnter('take-over', { takeover: 'self' })
         },
         trace: traced,
       })

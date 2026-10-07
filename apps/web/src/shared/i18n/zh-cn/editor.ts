@@ -318,8 +318,11 @@ export const editorMessages = {
     takeoverWaitingSave: '上一个页面的保存还在进行，稍后接手…',
     /** 那边没能交出：原因，与之后能做的 */
     takeoverFailed: (reason: 'not-saved' | 'conflict' | 'session') => `${TAKEOVER_FAILURES[reason]}。点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`,
-    /** 本页交给了本浏览器的另一个标签页（US-M3-08）：阅读时读屏状态区里的说明 */
-    handedOverTab: '已在本浏览器的另一个标签页接着编辑',
+    /**
+     * 本页交给了本浏览器的另一个标签页（US-M3-08）：阅读时读屏状态区里的说明。不断言那边一定接着编辑了（审查 B4：本页存上之后只放弃这一代，
+     * 那边随即以本人接管申请；它没跟上时这一代到期）
+     */
+    handedOverTab: '已交给本浏览器的另一个标签页',
     /** 请求编辑（M3-P5 设计 §3.6，US-M3-06）：持有者是别人、自己能编辑时换掉"编辑"；同一个按钮之后说正在请求、取消请求、正在取消 */
     requestEdit: REQUEST_EDIT,
     requesting: '正在请求…',

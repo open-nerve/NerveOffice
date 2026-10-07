@@ -1,4 +1,3 @@
-import type { AcquireIntent } from './edit-lease.ts'
 import type { HandoverTraceEvent } from './handover-trace.ts'
 import type { PendingSave, PendingSaveMarker } from './pending-save-marker.ts'
 import type { HandoverMessage } from './same-browser.ts'
@@ -137,7 +136,8 @@ function fakeMarker() {
 }
 
 /**
- * 接手的一侧：B（被测）与同一个浏览器里正在编辑的 A（持有锁与否可设；回应由用例给出）。enter 交回进入了没有（默认进入了），记下申请的方式
+ * 接手的一侧：B（被测）与同一个浏览器里正在编辑的 A（持有锁与否可设；回应由用例给出）。enter（以本人接管申请并进入）交回进入了没有（默认进入了），
+ * 记下申请了几次
  */
 async function takingOver(options: { readonly holdingA?: boolean, readonly anyway?: boolean, readonly entered?: boolean, readonly marker?: PendingSave } = {}) {
   const browser = fakeBrowser()
@@ -154,7 +154,7 @@ async function takingOver(options: { readonly holdingA?: boolean, readonly anywa
   const marker = fakeMarker()
   marker.read.mockReturnValue(options.marker)
   const progress: TakeoverProgress[] = []
-  const enters: { readonly intent: AcquireIntent, readonly selfAfterHeld: boolean }[] = []
+  let enters = 0
   const state = { still: true }
   const abort = new AbortController()
   let revision = 3
@@ -173,8 +173,8 @@ async function takingOver(options: { readonly holdingA?: boolean, readonly anywa
     signal: abort.signal,
     still: () => state.still,
     progress: next => progress.push(next),
-    enter: async (intent, selfAfterHeld) => {
-      enters.push({ intent, selfAfterHeld })
+    enter: async () => {
+      enters += 1
       return options.entered ?? true
     },
   })
@@ -191,7 +191,7 @@ async function takingOver(options: { readonly holdingA?: boolean, readonly anywa
     lock,
     marker,
     progress,
-    enters,
+    enters: () => enters,
     state,
     abort,
     requests,
@@ -212,7 +212,7 @@ describe('"在此编辑"的编排（takeOverHere）', () => {
     const context = await takingOver({ holdingA: false })
     await context.done
     expect(context.requests).toEqual([])
-    expect(context.enters).toEqual([{ intent: { takeover: 'self' }, selfAfterHeld: false }])
+    expect(context.enters()).toBe(1)
     expect(context.marker.read).toHaveBeenCalledOnce()
     expect(context.marker.clear).toHaveBeenCalledOnce()
   })
@@ -222,34 +222,32 @@ describe('"在此编辑"的编排（takeOverHere）', () => {
     await settle()
     expect(context.progress).toEqual([{ kind: 'waiting-save' }])
     await context.time.advance(PENDING_SAVE_POLL_MS * 2)
-    expect(context.enters).toEqual([])
+    expect(context.enters()).toBe(0)
     context.setRevision(4)
     await context.time.advance(PENDING_SAVE_POLL_MS)
     await context.done
-    expect(context.enters).toEqual([{ intent: { takeover: 'self' }, selfAfterHeld: false }])
+    expect(context.enters()).toBe(1)
     expect(context.marker.clear).not.toHaveBeenCalled()
 
     // 记号已经过了 30 秒：不等
     const stale = await takingOver({ holdingA: false, marker: { at: WALL - EDIT_PENDING_SAVE_WAIT_MS, revision: 3 } })
     await stale.done
     expect(stale.progress).toEqual([])
-    expect(stale.enters).toHaveLength(1)
+    expect(stale.enters()).toBe(1)
   })
 
-  it('锁被本浏览器的标签页持有：说正在请它交出；它回应、做完了（锁空了）——看过记号之后普通申请（不再试，被自己占着时改以本人接管）', async () => {
+  it('锁被本浏览器的标签页持有：说正在请它交出；它回应、做完了（锁空了）——看过记号之后以本人接管申请（它不释放，审查 B4），只申请一次', async () => {
     const context = await takingOver()
     await settle()
     expect(context.progress).toEqual([{ kind: 'asking' }])
     expect(context.requests).toHaveLength(1)
     context.reply({ type: 'handover-ack', state: 'editing' })
     await settle()
-    expect(context.enters).toEqual([])
+    expect(context.enters()).toBe(0)
     context.lock?.release()
     await context.done
-    expect(context.enters).toHaveLength(1)
-    expect(context.enters[0]?.selfAfterHeld).toBe(true)
-    expect(context.enters[0]?.intent.takeover).toBeUndefined()
-    expect(await context.enters[0]?.intent.retrySameUser?.()).toBe(false)
+    expect(context.enters()).toBe(1)
+    expect(context.marker.read).toHaveBeenCalledOnce()
     expect(context.marker.clear).toHaveBeenCalledOnce()
   })
 
@@ -258,7 +256,7 @@ describe('"在此编辑"的编排（takeOverHere）', () => {
     await settle()
     await context.time.advance(EDIT_TAB_HANDOVER_ACK_MS)
     await context.done
-    expect(context.enters).toEqual([{ intent: { takeover: 'self' }, selfAfterHeld: false }])
+    expect(context.enters()).toBe(1)
     expect(context.marker.read).not.toHaveBeenCalled()
   })
 
@@ -268,12 +266,13 @@ describe('"在此编辑"的编排（takeOverHere）', () => {
     context.reply({ type: 'handover-failed', reason: 'not-saved' })
     await context.done
     expect(context.progress).toEqual([{ kind: 'asking' }, { kind: 'failed', reason: 'not-saved' }])
-    expect(context.enters).toEqual([])
+    expect(context.enters()).toBe(0)
 
     const anyway = await takingOver({ anyway: true })
     await anyway.done
     expect(anyway.requests).toEqual([])
-    expect(anyway.enters).toEqual([{ intent: { takeover: 'self' }, selfAfterHeld: false }])
+    expect(anyway.enters()).toBe(1)
+    expect(anyway.marker.read).not.toHaveBeenCalled()
   })
 
   it('这一次接手作废了（状态机开始了别的事）、撤销（取消、卸载）：不再往下走、不申请', async () => {
@@ -282,13 +281,13 @@ describe('"在此编辑"的编排（takeOverHere）', () => {
     await settle()
     stale.reply({ type: 'handover-done' })
     await stale.done
-    expect(stale.enters).toEqual([])
+    expect(stale.enters()).toBe(0)
 
     const aborted = await takingOver()
     await settle()
     aborted.abort.abort()
     await aborted.done
-    expect(aborted.enters).toEqual([])
+    expect(aborted.enters()).toBe(0)
     expect(aborted.finished()).toBe(true)
   })
 })

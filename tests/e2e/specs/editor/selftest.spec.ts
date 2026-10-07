@@ -235,7 +235,7 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
     })
   }
 
-  test('步骤 takeover（M3-P5 设计 §3.14）：A 编辑、存上第一格、隐藏（这里模拟）时上传第二格、之后写第三格；B 等 8 秒点"在此编辑"——Playwright 里 A 照常回应：先保存（第三格也存上）再交出（B answered、A handed-over），库里 A 那一代先释放、B 普通申请', async ({ page, context }, testInfo) => {
+  test('步骤 takeover（M3-P5 设计 §3.14）：A 编辑、存上第一格、隐藏（这里模拟）时上传第二格、之后写第三格；B 等 8 秒点"在此编辑"——Playwright 里 A 照常回应：先保存（第三格也存上）再交出（B answered、A handed-over），库里 A 那一代不释放、B 以本人接管换代（审查 B4）', async ({ page, context }, testInfo) => {
     const steps = await takeoverSteps('st-takeover', 'takeover-holder')
     const { holder, taker, judgement } = await runTakeover(page, await context.newPage(), steps)
     await testInfo.attach('selftest-report-holder', { body: JSON.stringify(holder, null, 2), contentType: 'application/json' })

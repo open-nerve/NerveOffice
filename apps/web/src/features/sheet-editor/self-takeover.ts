@@ -1,8 +1,8 @@
 // 本人接管（"在此编辑"，M3-P5 设计 §3.7，US-M3-08）之前的两种等待。不依赖 Univer 与界面；锁与频道、时钟与读编辑状态都注入，用假的做单元测试
-// （self-takeover.test.ts）。接管本身（申请、拿锁、重建）在 edit-mode.ts。
-// - 同一个浏览器里请正在编辑的标签页先保存再交出（交接协议的请求方一侧，回应的一侧在 edit-mode.ts）：经交接频道发 handover-request，同时等
-//   这份文档的本机锁空着（same-browser.ts 的 untilFree）——那边存上、释放之后才放锁，关闭、刷新、崩溃时浏览器替它放，所以"锁空了"在任何阶段
-//   都算那边做完了（收到 done 也是）：
+// （self-takeover.test.ts）。编排在 tab-handover.ts，接管本身（申请、拿锁、重建）在 edit-mode.ts。
+// - 同一个浏览器里请正在编辑的标签页先保存再交出（交接协议的请求方一侧，回应的一侧在 tab-handover.ts）：经交接频道发 handover-request，同时等
+//   这份文档的本机锁空着（same-browser.ts 的 untilFree）——那边存上、放弃那一代（不释放，审查 B4）之后才放锁，关闭、刷新、崩溃时浏览器替它放，
+//   所以"锁空了"在任何阶段都算那边做完了（收到 done 也是）：
 //   · EDIT_TAB_HANDOVER_ACK_MS（3 秒）内回应 ack：等它做完，至多 EDIT_TAB_HANDOVER_DONE_MS（20 秒，从回应算）；
 //   · 回应 failed：那边没能保存、留在编辑（原因）——交给页面让人选"仍在此编辑"或"取消"；
 //   · 回应 busy（那边正在进入编辑）：隔 TAB_HANDOVER_BUSY_RETRY_MS 再请求一次，从第一次 busy 起至多 20 秒；
@@ -27,7 +27,10 @@ export const PENDING_SAVE_POLL_MS = 2_000
 
 /** 请正在编辑的标签页交出的结果 */
 export type TabHandoverOutcome
-  /** 那边做完了（锁空了、收到 done）：存上、释放、放了锁，或者关了、刷新了、已经不在编辑——页面普通申请（那边的释放没送到时改用本人接管） */
+  /**
+   * 那边做完了（锁空了、收到 done）：存上、放弃了那一代、放了锁（交给标签页时不释放，审查 B4），或者关了、刷新了、已经不在编辑——页面以本人接管申请
+   * （被自己占着就在同一个事务里换代，空着就是普通的取得）
+   */
   = | { readonly kind: 'finished' }
   /** 没有回应，或者回应了、到时限没做完：页面以本人接管申请、成功之后抢锁 */
     | { readonly kind: 'silent' }

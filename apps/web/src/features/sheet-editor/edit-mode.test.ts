@@ -3279,7 +3279,7 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
   })
 
   describe('锁被本浏览器的标签页持有：请它先保存再交出', () => {
-    it('B 发交接请求、说正在请它交出；A 同步回 ack，先挡住输入保存，存上了释放、放锁、发 done、回到阅读（已在本浏览器的另一个标签页接着编辑）；B 等那边做完才普通申请（不带接管），取最新的内容进入编辑', async () => {
+    it('B 发交接请求、说正在请它交出；A 同步回 ack，先挡住输入保存，存上了不释放（只放弃这一代，审查 B4）、放锁、发 done、回到阅读（已交给本浏览器的另一个标签页）；B 等那边做完才以本人接管申请（服务端换代，槽从来不空），取最新的内容进入编辑', async () => {
       const { browser, a, b } = await twoTabs({ b: { api: { contentIfChanged: async () => ({ snapshot: snapshotOf('A 的修改'), revision: 4 }) } } })
       const order: string[] = []
       const panels = deferred<void>()
@@ -3310,15 +3310,20 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       panels.resolve()
       await taking
       expect(atSettle[0]).toBe('exiting:handover-tab')
-      expect(order).toEqual(['A 保存', 'A 释放', 'B 申请'])
+      expect(order).toEqual(['A 保存', 'B 申请'])
+      expect(a.editLease.release).not.toHaveBeenCalled()
       expect(postedTypes(browser)).toEqual(['handover-request', 'handover-ack', 'handover-done'])
-      expect(b.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TAB_B)
+      expect(b.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TAB_B, { takeover: 'self' })
       expect(modeOf(b.mode).kind).toBe('editing')
       expect(b.factory.last()).toMatchObject({ access: 'edit', snapshot: snapshotOf('A 的修改') })
       expect(browser.holderOf(LOCK)).toBe('B')
       expect(readingOf(a.mode)).toMatchObject({ notice: { kind: 'handed-over-tab' }, releaseUnconfirmed: false })
       expect(a.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('A 的修改') })
       expect(b.marker.clear).toHaveBeenCalledOnce()
+      // A 那一代不再续租（放弃了：B 的本人接管结束它）
+      const renewals = a.editLease.renew.mock.calls.length
+      await a.time.advance(HEARTBEAT_MS * 3)
+      expect(a.editLease.renew).toHaveBeenCalledTimes(renewals)
     })
 
     it('A 公式没收齐也交出（带"公式待更新"上传）：与空闲释放同一规则（退出编辑这时会留在编辑）', async () => {
@@ -3330,17 +3335,32 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(modeOf(b.mode).kind).toBe('editing')
     })
 
-    it('A 的释放没送到（普通申请得到被自己占着）：立即改以本人接管申请（不按 500 毫秒再试）；A 不说"本页那一代可能还在"（B 随即接手）', async () => {
+    it('A 交给标签页时不发释放（审查 B4：先释放、再申请之间等待中的请求方会抢进来）：B 一次本人接管就换了代；A 不说"本页那一代可能还在"（B 随即接手）', async () => {
       const { a, b } = await twoTabs()
-      a.editLease.release.mockRejectedValue(new NetworkError('断网'))
       // 交出之后 A 读到的持有者是自己（B 接手的那一代）
       a.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
-      b.editLease.acquire.mockRejectedValueOnce(HELD_BY_SELF).mockResolvedValueOnce(ACQUIRED)
       await b.mode.takeOver()
-      expect(b.editLease.acquire.mock.calls).toEqual([[DOCUMENT_ID, TAB_B], [DOCUMENT_ID, TAB_B, { takeover: 'self' }]])
+      expect(a.editLease.release).not.toHaveBeenCalled()
+      expect(b.editLease.acquire.mock.calls).toEqual([[DOCUMENT_ID, TAB_B, { takeover: 'self' }]])
       expect(modeOf(b.mode).kind).toBe('editing')
       await settle()
       expect(readingOf(a.mode)).toMatchObject({ notice: { kind: 'handed-over-tab' }, releaseUnconfirmed: false, holder: { sameUser: true }, selfHolder: 'this-browser' })
+    })
+
+    it('A 那边有请求在等（乙在请求编辑）：交给标签页时不交给请求方、不释放；B 本人接管之后请求随新的一代沿用（下一次心跳带来它）', async () => {
+      const incoming: PendingEditRequest = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f9', requester: BEN, requestedAt: '2026-10-04T03:01:00.000Z' }
+      const { a, b } = await twoTabs({ b: { editLease: { renew: async () => ({ ...RENEWED, request: incoming }) } } })
+      a.editLease.renew.mockResolvedValue({ ...RENEWED, request: incoming })
+      a.act()
+      await a.time.advance(HEARTBEAT_MS)
+      expect(modeOf(a.mode)).toMatchObject({ kind: 'editing', request: { id: incoming.id } })
+      await b.mode.takeOver()
+      expect(a.editLease.handOver).not.toHaveBeenCalled()
+      expect(a.editLease.release).not.toHaveBeenCalled()
+      expect(b.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TAB_B, { takeover: 'self' })
+      b.act()
+      await b.time.advance(HEARTBEAT_MS)
+      expect(modeOf(b.mode)).toMatchObject({ kind: 'editing', request: { id: incoming.id, requester: BEN } })
     })
 
     it('A 做完之后、B 申请之前别人申请了：回到阅读，说明谁在编辑', async () => {
@@ -3455,7 +3475,7 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(readingOf(a.mode).notice).toEqual({ kind: 'handed-over-tab' })
     })
 
-    it('A 正在退出编辑：回 ack（exiting）、照常退出，退出完了发 done，B 随即普通申请', async () => {
+    it('A 正在退出编辑：回 ack（exiting）、照常退出（释放），退出完了发 done，B 随即以本人接管申请（A 那一代已经释放：服务端按普通的取得）', async () => {
       const reply = deferred<SaveContentResponse>()
       const { browser, a, b } = await twoTabs()
       a.api.save.mockImplementation(async () => reply.promise)
@@ -3469,7 +3489,8 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       await taking
       expect(postedTypes(browser)).toEqual(['handover-request', 'handover-ack', 'handover-done'])
       expect(readingOf(a.mode).notice).toBeUndefined()
-      expect(b.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TAB_B)
+      expect(a.editLease.release).toHaveBeenCalledOnce()
+      expect(b.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TAB_B, { takeover: 'self' })
       expect(modeOf(b.mode).kind).toBe('editing')
     })
 
@@ -4168,7 +4189,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       await saving
     })
 
-    it('交给本浏览器的另一个标签页时有请求在等：照常释放、不交出（那边是同一个人，请求随新的一代沿用）', async () => {
+    it('交给本浏览器的另一个标签页时有请求在等：不交出、也不释放（只放弃这一代，审查 B4：那边是同一个人，以本人接管换代，请求随新的一代沿用）', async () => {
       const browser = fakeBrowser()
       const context = setup({ activity: 'manual', browser, tab: 'A' })
       await prompted(context)
@@ -4178,7 +4199,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       await settle()
       await settle()
       expect(context.editLease.handOver).not.toHaveBeenCalled()
-      expect(context.editLease.release).toHaveBeenCalledOnce()
+      expect(context.editLease.release).not.toHaveBeenCalled()
       expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over-tab' })
     })
   })
@@ -5022,7 +5043,8 @@ describe('测试构建的观察钩子（M3-P5 设计 §3.13）', () => {
     expect(bKinds.slice(-3)).toEqual(['acquire', 'acquire-result', 'entered'])
     expect(bKinds.some(kind => kind === 'handover-lock-free' || kind === 'handover-reply')).toBe(true)
     expect(b.events.find(event => event.kind === 'takeover-locate')).toMatchObject({ here: true })
-    expect(b.events.find(event => event.kind === 'acquire')).toMatchObject({ trigger: 'take-over', takeover: null })
+    // 那边做完之后以本人接管申请（那边不释放，审查 B4）
+    expect(b.events.find(event => event.kind === 'acquire')).toMatchObject({ trigger: 'take-over', takeover: 'self' })
     expect(a.kinds()).toEqual(['handover-answer', 'leave', 'handover-finish', 'left'])
     expect(a.events[0]).toMatchObject({ answer: 'ack', state: 'editing' })
     expect(a.events[2]).toMatchObject({ outcome: 'done', reason: null })
