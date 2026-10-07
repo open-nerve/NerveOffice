@@ -4308,6 +4308,32 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
     })
 
+    it('自动交出给本的离开途中换了请求方（本取消了、艾米请求了），交出得到"请求已不在"、留在编辑（复验 C3）：艾米的请求按刚到处理——本页早已空闲满 2 分钟，同一步里交出给她，不多等一个心跳周期', async () => {
+      const gone = deferred<HandedOverEditLease>()
+      let handOvers = 0
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => (handOvers++ === 0 ? gone.promise : { reservedFor: AMY, reservedUntil: RESERVED_UNTIL }) } })
+      await prompted(context)
+      // 最后一次操作错开心跳的节拍：满 2 分钟自动交出的那一刻离下一次心跳 2 秒，在交出的时限（5 秒）之内
+      await context.time.advance(8_000)
+      context.act()
+      await context.time.advance(HANDOVER_MS)
+      await settle()
+      expect(modeOf(context.mode)).toMatchObject({ kind: 'exiting', cause: 'handover-request' })
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      // 交出还没有回答：这期间的心跳带来艾米的请求（本已经取消）
+      heartbeatsCarry(context, { ...INCOMING, id: OTHER_REQUEST_ID, requester: AMY })
+      await context.time.advance(2_000)
+      expect(context.editLease.renew.mock.calls.length).toBeGreaterThan(0)
+      // 交给本的回答：请求已经不在。时间不再走：留在编辑的那一步里就开始交给艾米
+      gone.reject(new ApiError(409, 'EDIT_REQUEST_GONE', '请求已不在'))
+      await settle()
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledTimes(2)
+      expect(context.editLease.handOver.mock.calls[1]?.[2]).toBe(OTHER_REQUEST_ID)
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: AMY, auto: true })
+    })
+
     it('新的一代：之前那一代（没能进入编辑时）记下的请求不再算，之后的心跳带来的才算', async () => {
       const content = deferred<LoadedContent>()
       const context = setup({ activity: 'manual', api: { contentIfChanged: async () => content.promise }, editLease: { acquire: async () => ({ ...ACQUIRED, revision: 4 }), renew: async () => ({ ...RENEWED, request: INCOMING }) } })

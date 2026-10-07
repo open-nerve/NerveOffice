@@ -372,6 +372,60 @@ describe('离开编辑时', () => {
     expect(idle.handOver).toHaveBeenCalledOnce()
   })
 
+  it('自动交出给 X 的离开途中换了请求方（X 取消、Y 到来），交出 X 得到"已不在"、留在编辑（复验 C3，fork 的探针）：Y 按请求刚到处理——本页早已空闲满 2 分钟，同一步里交出，不沿用 X 那一次"过一个心跳周期再看"', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    await context.time.advance(HANDOVER_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    // 状态机开始离开（自动交出给 X）；离开途中心跳带来 Y
+    context.state.editing = false
+    context.holder.leaving()
+    context.holder.arrive(OTHER)
+    expect(context.holder.incoming()).toEqual({ id: OTHER.id, requester: CAT, declining: false, failure: undefined })
+    // 交出给 X：EDIT_REQUEST_GONE → 留在编辑
+    context.holder.withdrawn(SHOWN)
+    context.state.editing = true
+    context.holder.stayed({ automatic: true, ended: false })
+    expect(context.handOver).toHaveBeenCalledTimes(2)
+  })
+
+  it('同上，本页那时并不空闲（有操作）：Y 显示提示、从现在起重新计 2 分钟（不按 X 的截止时刻、也不按心跳周期）', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    await context.time.advance(HANDOVER_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    context.state.editing = false
+    context.holder.leaving()
+    context.holder.arrive(OTHER)
+    context.holder.withdrawn(SHOWN)
+    context.state.editing = true
+    // 留在编辑之前人动了一下
+    context.act()
+    const changes = context.onChange.mock.calls.length
+    context.holder.stayed({ automatic: true, ended: false })
+    expect(context.onChange).toHaveBeenCalledTimes(changes + 1)
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    await context.time.advance(HANDOVER_MS - HEARTBEAT_MS - 1)
+    expect(context.handOver).toHaveBeenCalledOnce()
+    await context.time.advance(1)
+    expect(context.handOver).toHaveBeenCalledTimes(2)
+  })
+
+  it('离开途中同一个请求再到：不算换了请求，计时照旧（留在编辑时按自动交出没成，过一个心跳周期再看）', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    await context.time.advance(HANDOVER_MS)
+    context.state.editing = false
+    context.holder.leaving()
+    context.holder.arrive(REQUEST)
+    context.state.editing = true
+    context.holder.stayed({ automatic: true, ended: false })
+    expect(context.handOver).toHaveBeenCalledOnce()
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.handOver).toHaveBeenCalledTimes(2)
+  })
+
   it('离开了、失去编辑权（clear）：请求、说明与计时都清掉；卸载之后（dispose）不再回调', async () => {
     const context = setup()
     context.holder.arrive(REQUEST)

@@ -13,7 +13,8 @@
 //   状态机给的时限）的结果——交出了（回包丢了的重试得到 handed_over、请求方已经接手得到 replaced 都算）、请求已经不在（EDIT_REQUEST_GONE，
 //   租约不动：withdrawn，说明一句）、这一代已经因为别的原因失效、没有结果（网络、服务端出错、会话的问题、到了时限：failed，提示里说明原因，
 //   请求照旧在）；留在编辑时（stayed）接着计时：自动交出没成的过一个心跳周期再看（再也存不上的不再试），别的照截止时刻；离开的过程中才到的
-//   请求（那时只记下、没有计时）按请求刚到处理（审查 B3）；离开了、失去编辑权时清掉（clear），换了一代（进入编辑）时重新开始（reset）。
+//   请求（那时只记下、没有计时）按请求刚到处理（审查 B3），离开的过程中换了一个请求的同样（原来的计时属于前一个请求，丢弃，复验 C3）；
+//   离开了、失去编辑权时清掉（clear），换了一代（进入编辑）时重新开始（reset）。
 import type { PendingEditRequest, UserSummary } from '@nerve-office/contracts'
 import type { EditLease, EditLeaseApi, LeaseClock, LeaseLoss } from './edit-lease.ts'
 import type { IdleWatch } from './idle-watch.ts'
@@ -246,8 +247,14 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
         return
       incoming = { id: request.id, requester: request.requester, declining: false, failure: undefined }
       notice = undefined
-      if (options.editing())
+      if (options.editing()) {
         respond()
+        return
+      }
+      // 不在编辑（进入、离开编辑的过程中）只记下。离开的过程中换了一个请求（原来的请求方取消了，另一个人请求了）：原来的计时属于前一个请求，
+      // 停掉并丢弃——留在编辑之后按请求刚到处理（空闲已满 2 分钟、可写、联网时同一步交出），不沿用前一个请求"自动交出没成、过一个心跳周期
+      // 再看"的那一次（M3-P5 复验 C3）
+      stopWatching()
     },
 
     entered: () => {
