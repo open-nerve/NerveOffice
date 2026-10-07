@@ -12,7 +12,7 @@ import type { SameBrowserApis } from './same-browser.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { createSheetEditor } from '../../editor/index.ts'
+import { createSheetEditor, SheetEditorLoadError } from '../../editor/index.ts'
 import { requestSession } from '../../shared/api/index.ts'
 import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
@@ -78,14 +78,29 @@ function editIntentOf(location: Location): EditIntent {
   }
 }
 
+/** 加载失败等这么久、页面还在才报（reportUnlessLeaving） */
+const LOAD_FAILURE_REPORT_DELAY_MS = 3000
+
+/**
+ * 加载失败交给浏览器的错误报告，但页面正在离开时不报（M3-P5 收尾）：整页跳转会取消还在路上的加载，WebKit 还常常在 pagehide 之前就让
+ * 它们失败（同 S6 的在途保存）——动态引入的分块报"TypeError: Importing a module script failed."，公式 Worker 的脚本让编辑器以
+ * SheetEditorLoadError（worker-failed）失败。那不是错误，E2E 的页面错误夹具却会把它算成页面错误（specs/foundation/page-errors.spec.ts
+ * 打开编辑器页、不等加载完就跳走，WebKit 上本机二十次失败一到两次）。所以等一会儿再报，期间页面离开（pagehide）就作罢；页面还在时照样报出。
+ * 只用在加载失败上：页面对编辑器的加载失败另有可见的说明（"编辑器加载失败"），上报只用于诊断；别的意外错误照常立即上报
+ */
+function reportUnlessLeaving(error: unknown): void {
+  const timer = window.setTimeout(reportError, LOAD_FAILURE_REPORT_DELAY_MS, error)
+  window.addEventListener('pagehide', () => window.clearTimeout(timer), { once: true })
+}
+
 export function startSheetEditorPage(elements: SheetEditorPageElements): void {
   if (import.meta.env.MODE === 'e2e') {
-    // 引入失败（分块下载失败）：照常组装，没有那一样（用到它的 E2E 随之失败），错误交给浏览器的错误报告
+    // 引入失败（分块下载失败）：照常组装，没有那一样（用到它的 E2E 随之失败），错误交给浏览器的错误报告（页面正在离开时不报）
     void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts')]).then(([control, log]) => {
       if (control.status === 'rejected')
-        reportError(control.reason)
+        reportUnlessLeaving(control.reason)
       if (log.status === 'rejected')
-        reportError(log.reason)
+        reportUnlessLeaving(log.reason)
       assemble(
         elements,
         control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
@@ -145,7 +160,8 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
     currentPath: () => `${window.location.pathname}${window.location.search}`,
     newId: () => crypto.randomUUID(),
     now: () => new Date(),
-    reportError: error => reportError(error),
+    // 编辑器的加载失败可能是页面正在离开、加载被取消（reportUnlessLeaving）；别的意外错误立即上报
+    reportError: error => error instanceof SheetEditorLoadError ? reportUnlessLeaving(error) : reportError(error),
   })
   // navigator.platform 已不推荐使用，但各浏览器都还给出真实的平台；userAgentData 只有 Chromium 有
   const apple = isApplePlatform(navigator.platform)
@@ -162,7 +178,7 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
   if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
     void import('./selftest-hook.ts').then(
       ({ watchForSelftest }) => watchForSelftest(page, elements),
-      (error: unknown) => reportError(error),
+      (error: unknown) => reportUnlessLeaving(error),
     ).then(async () => page.load())
     return
   }
