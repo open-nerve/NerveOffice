@@ -2,7 +2,7 @@ import type { HandoverMessage, LockApi } from './same-browser.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { settle } from './fake-lease-clock.test-support.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
-import { channelNameOf, HANDOVER_MESSAGE_VERSION, lockNameOf, onReply, onRequest, parseHandoverMessage, sameBrowserFor } from './same-browser.ts'
+import { channelNameOf, HANDOVER_MESSAGE_VERSION, issuedRequestLockNameOf, lockNameOf, onReply, onRequest, parseHandoverMessage, sameBrowserFor } from './same-browser.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const OTHER_DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
@@ -203,6 +203,68 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     const held = await sameBrowserFor(DOCUMENT_ID, { locks, openChannel: undefined }).tryHold()
     fail(new TypeError('意外'))
     expect(await settled(held?.stolen ?? Promise.reject(new Error('没拿到')))).toBe(false)
+  })
+})
+
+describe('"发出过请求编辑"的锁（M3-P5 复验 C2：复制标签页连同记号一起复制，副本据它认出原来那页还在）', () => {
+  const ISSUED = issuedRequestLockNameOf(DOCUMENT_ID)
+
+  it('锁名按文档：nerve-office:edit-request:<id>；与编辑的锁、别的文档的互不相干', async () => {
+    expect(ISSUED).toBe(`nerve-office:edit-request:${DOCUMENT_ID}`)
+    const browser = fakeBrowser()
+    await sameBrowserFor(DOCUMENT_ID, browser.tab('A')).holdIssuedRequest()
+    expect(await sameBrowserFor(DOCUMENT_ID, browser.tab('B')).heldHere()).toBe(false)
+    expect(await sameBrowserFor(OTHER_DOCUMENT_ID, browser.tab('B')).issuedRequestHeld()).toBe(false)
+    expect(await sameBrowserFor(DOCUMENT_ID, browser.tab('B')).issuedRequestHeld()).toBe(true)
+  })
+
+  it('共享地持有：几个标签页同时拿得到（同一个人在两页都点了"请求编辑"）；本浏览器里看得到有人持有，全部放开之后没有', async () => {
+    const browser = fakeBrowser()
+    const a = sameBrowserFor(DOCUMENT_ID, browser.tab('A'))
+    const b = sameBrowserFor(DOCUMENT_ID, browser.tab('B'))
+    expect(await a.issuedRequestHeld()).toBe(false)
+    const heldByA = await a.holdIssuedRequest()
+    const heldByB = await b.holdIssuedRequest()
+    expect(browser.sharedHoldersOf(ISSUED)).toEqual(['A', 'B'])
+    expect(await sameBrowserFor(DOCUMENT_ID, browser.tab('C')).issuedRequestHeld()).toBe(true)
+    heldByA.release()
+    await settle()
+    expect(browser.sharedHoldersOf(ISSUED)).toEqual(['B'])
+    expect(await a.issuedRequestHeld()).toBe(true)
+    heldByB.release()
+    await settle()
+    expect(await a.issuedRequestHeld()).toBe(false)
+    // 重复放开无害
+    expect(() => heldByB.release()).not.toThrow()
+  })
+
+  it('浏览器没有 Web Locks、请求或查询出错：交回从不被抢的句柄、看不到别人（请求编辑的恢复退回只看记号），从不失败', async () => {
+    const none = sameBrowserFor(DOCUMENT_ID, { locks: undefined, openChannel: undefined })
+    const held = await none.holdIssuedRequest()
+    expect(() => held.release()).not.toThrow()
+    expect(await none.issuedRequestHeld()).toBe(false)
+    const throwing: LockApi = {
+      request: () => {
+        throw new DOMException('not allowed', 'SecurityError')
+      },
+      query: async () => Promise.reject(new DOMException('not allowed', 'SecurityError')),
+    }
+    const broken = sameBrowserFor(DOCUMENT_ID, { locks: throwing, openChannel: undefined })
+    expect(await broken.holdIssuedRequest()).toBeDefined()
+    expect(await broken.issuedRequestHeld()).toBe(false)
+  })
+
+  it('请求是共享的、ifAvailable（从不排队）：浏览器收到的选项', async () => {
+    const options: unknown[] = []
+    const locks: LockApi = {
+      request: async (name, requested, callback) => {
+        options.push({ name, ...requested })
+        return callback({ name })
+      },
+      query: async () => ({ held: [] }),
+    }
+    await sameBrowserFor(DOCUMENT_ID, { locks, openChannel: undefined }).holdIssuedRequest()
+    expect(options).toEqual([{ name: ISSUED, mode: 'shared', ifAvailable: true }])
   })
 })
 

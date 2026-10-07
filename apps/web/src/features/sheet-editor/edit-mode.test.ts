@@ -20,7 +20,7 @@ import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
-import { channelNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
+import { channelNameOf, issuedRequestLockNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
 import { PENDING_SAVE_POLL_MS, TAB_HANDOVER_BUSY_RETRY_MS } from './self-takeover.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
@@ -412,6 +412,8 @@ function setup(options: Setup = {}) {
 
 /** 这份文档的本机锁现在在哪个标签页手里 */
 const LOCK = lockNameOf(DOCUMENT_ID)
+/** "发出过请求编辑"的锁（M3-P5 复验 C2）：发出过请求、还在等的标签页共享地持有它 */
+const ISSUED_LOCK = issuedRequestLockNameOf(DOCUMENT_ID)
 
 afterEach(() => {
   for (const mode of modes.splice(0))
@@ -2680,6 +2682,8 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
       steal: async () => ({ release: vi.fn(), stolen: new Promise<void>(() => {}) }),
       heldHere: async () => false,
       untilFree: async () => false,
+      holdIssuedRequest: async () => ({ release: () => {}, stolen: new Promise<void>(() => {}) }),
+      issuedRequestHeld: async () => false,
       post: () => {},
       subscribe: () => () => {},
       close: () => {},
@@ -2753,6 +2757,8 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
       steal: async () => ({ release: vi.fn(), stolen: new Promise<void>(() => {}) }),
       heldHere: async () => false,
       untilFree: async () => false,
+      holdIssuedRequest: async () => ({ release: () => {}, stolen: new Promise<void>(() => {}) }),
+      issuedRequestHeld: async () => false,
       post: () => {},
       subscribe: () => () => {},
       close: () => {},
@@ -4722,6 +4728,85 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.api.editRequest.renew).not.toHaveBeenCalled()
       context.mode.releaseOnHide()
       expect(context.api.editRequest.cancel).not.toHaveBeenCalled()
+    })
+
+    it('复制出来的标签页（复验 C2，探针 C-dup）：记号原样复制过来、对得上，而发出它的那一页（本浏览器里的另一个标签页）还持有"发出过请求"的锁——这一页不恢复等待（不续期），阅读里说在别处请求了，清掉复制来的记号；它关掉（pagehide）不撤回那个请求', async () => {
+      const browser = fakeBrowser()
+      // 原来那一页 R1 在等：共享地持有"发出过请求"的锁
+      await sameBrowserFor(DOCUMENT_ID, browser.tab('R1')).holdIssuedRequest()
+      const copy = setup({ browser, tab: 'R2', api: { editStatus: async () => statusWithMyRequest() } })
+      copy.issued.marker.write(MY_REQUESTED_AT)
+      await opened(copy)
+      await settle()
+      expect(readingOf(copy.mode)).toMatchObject({ request: undefined, requestedElsewhere: true })
+      expect(copy.issued.marker.read()).toBeUndefined()
+      expect(copy.api.editRequest.renew).not.toHaveBeenCalled()
+      expect(browser.sharedHoldersOf(ISSUED_LOCK)).toEqual(['R1'])
+      copy.mode.releaseOnHide()
+      expect(copy.api.editRequest.cancel).not.toHaveBeenCalled()
+      // 之后的检查照旧不恢复（记号已经清掉），不空闲取消
+      await copy.time.advance(READING_CHECK_INTERVAL_MS)
+      await settle()
+      expect(readingOf(copy.mode)).toMatchObject({ request: undefined, requestedElsewhere: true })
+      expect(copy.api.editRequest.renew).not.toHaveBeenCalled()
+    })
+
+    it('复制出来的是留给本人的保留（复验 C2）：原来那一页还持有锁（在 granted、等回到前台进入）——这一页不进入编辑，也不说在别处请求（点"编辑"照常申请），清掉记号', async () => {
+      const browser = fakeBrowser()
+      await sameBrowserFor(DOCUMENT_ID, browser.tab('R1')).holdIssuedRequest()
+      const copy = setup({ browser, tab: 'R2', api: { editStatus: async () => statusWithMyReservation() } })
+      copy.issued.marker.write(undefined)
+      await opened(copy)
+      await settle()
+      expect(readingOf(copy.mode)).toMatchObject({ request: undefined, requestedElsewhere: false })
+      expect(copy.issued.marker.read()).toBeUndefined()
+      expect(copy.api.editRequest.renew).not.toHaveBeenCalled()
+      expect(copy.editLease.acquire).not.toHaveBeenCalled()
+    })
+
+    it('恢复等待的这一页随即持有"发出过请求"的锁（复验 C2）：之后从它复制出来的标签页认得出原来那页还在；它的请求结束时放开', async () => {
+      const browser = fakeBrowser()
+      const original = setup({ browser, tab: 'R1', api: { editStatus: async () => statusWithMyRequest() } })
+      original.issued.marker.write(MY_REQUESTED_AT)
+      await opened(original)
+      await settle()
+      expect(readingOf(original.mode).request).toMatchObject({ kind: 'waiting' })
+      expect(browser.sharedHoldersOf(ISSUED_LOCK)).toEqual(['R1'])
+
+      const copy = setup({ browser, tab: 'R2', api: { editStatus: async () => statusWithMyRequest() } })
+      copy.issued.marker.write(MY_REQUESTED_AT)
+      await opened(copy)
+      await settle()
+      expect(readingOf(copy.mode)).toMatchObject({ request: undefined, requestedElsewhere: true })
+
+      await original.mode.cancelRequest()
+      await settle()
+      expect(browser.sharedHoldersOf(ISSUED_LOCK)).toEqual([])
+    })
+
+    it('同一个人在两页都点了"请求编辑"（复验 C2）：锁是共享的，两页都在等、都持有它', async () => {
+      const browser = fakeBrowser()
+      const first = setup({ browser, tab: 'R1', api: amyEdits })
+      await readingWhileAmyEdits(first)
+      await first.mode.requestEdit()
+      const second = setup({ browser, tab: 'R2', api: { editStatus: async () => statusWithMyRequest() } })
+      await opened(second)
+      await settle()
+      expect(readingOf(second.mode)).toMatchObject({ requestedElsewhere: true })
+      await second.mode.requestEdit()
+      await settle()
+      expect(readingOf(first.mode).request).toMatchObject({ kind: 'waiting' })
+      expect(readingOf(second.mode)).toMatchObject({ request: { kind: 'waiting' }, requestedElsewhere: false })
+      expect(browser.sharedHoldersOf(ISSUED_LOCK)).toEqual(['R1', 'R2'])
+    })
+
+    it('浏览器没有 Web Locks（复验 C2）：退回只看记号——记号对得上就恢复等待', async () => {
+      const context = setup({ sameBrowser: sameBrowserFor(DOCUMENT_ID, { locks: undefined, openChannel: undefined }), api: { editStatus: async () => statusWithMyRequest() } })
+      context.issued.marker.write(MY_REQUESTED_AT)
+      await opened(context)
+      await settle()
+      expect(readingOf(context.mode).request).toEqual({ kind: 'waiting', holder: AMY, cancelFailure: undefined })
+      expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
     })
 
     it('同上（探针 B-P3b）：这一页只是开着、10 分钟没有操作，不空闲取消（不撤掉别处的请求），也不续期', async () => {
