@@ -523,6 +523,20 @@ describe('US-M3-06 请求的失效与沿用（设计 §3.6）', () => {
     expect(await rowOf(document)).toEqual(before)
   })
 
+  it('US-M3-06 续期时槽里已经是别人的请求（自己的过期了、被别人的新请求换掉）：gone，不续别人的请求——有效期不变，持有者照样收到那个人的（M3-P5 审查 A5）', async () => {
+    const document = await freshDocument()
+    const lease = await holding(sessionOf(amy), document)
+    await pendingRequestId(app.baseUrl, sessionOf(ben), document)
+    await passRequestTime(database, document, EDIT_REQUEST_TTL_SECONDS)
+    const caras = await send(cara, document)
+    if (caras.kind !== 'pending')
+      throw new Error(`期望卡拉的请求在等待，得到 ${caras.kind}`)
+    const before = await rowOf(document)
+    expect(await renewRequest(ben, document)).toMatchObject({ kind: 'gone', holder: { holder: summaryOf(amy) } })
+    expect(await rowOf(document)).toEqual(before)
+    expect((await heartbeatOk(sessionOf(amy), document, lease)).request).toEqual({ id: caras.id, requester: summaryOf(cara), requestedAt: caras.requestedAt })
+  })
+
   it('US-M3-06 请求方退出登录、被降级、被移出空间：请求作废——心跳不再带，交出得到 EDIT_REQUEST_GONE；请求方的续期 401 / 403 / 404', async () => {
     const cases = [
       ['退出登录', async (_account: TestAccount, session: LoggedIn) => expect((await asUser(app.baseUrl, session, '/api/auth/logout', { method: 'POST' })).status).toBe(204), 401],
