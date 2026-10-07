@@ -2,7 +2,9 @@
 // （生产构建里 MODE 是 production，那个分支与这个分块都被去掉，门禁 artifacts 核对）。
 // 页面开始载入时就挂上页面错误与可见性的收集，订阅页面的状态；到 steady（或载入失败、等不到就绪）之后，才动态引入编辑器的自检模块
 // （editor/testing/selftest.ts，模块边界只给这个文件开了这一个口子），由它跑完检查、把结果带到地址里的 next。
-import type { SelftestHost } from '../../editor/testing/selftest.ts'
+import type { SelftestHost, SelftestPageView } from '../../editor/testing/selftest.ts'
+import type { LeaseLoss } from './edit-lease.ts'
+import type { EditModeState } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad } from './editor-page.ts'
 import type { SheetEditorPageElements } from './start.tsx'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
@@ -26,9 +28,9 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
 /**
  * 要在编辑时跑的场景（地址里 selftest 的值）：M3-P2 起打开即阅读，到了阅读的 steady 之后先进入编辑（与页头的"编辑"同一个入口），
  * 到了编辑的 steady 再跑自检。enter-exit 在阅读时开始，场景里自己点页头的"编辑""退出编辑"（S5），按 host.view 等页面的状态变化。
- * 捕获时机的复核（M3-P4 S1）都在编辑时跑
+ * 捕获时机的复核（M3-P4 S1）都在编辑时跑；交接的复核（M3-P5）里正在编辑的 A（takeover-holder）在编辑时跑，另开的 B 与刷新的那一步在阅读时开始
  */
-const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save'])
+const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder'])
 
 function describe(value: unknown): string {
   if (value instanceof Error)
@@ -97,6 +99,35 @@ function failureOf(load: EditorPageLoad): string {
   return 'error' in load ? `${load.kind}：${describe(load.error)}` : load.kind
 }
 
+/** 失去编辑权的原因的写法（交给自检）：种类，被接管的另带在哪里（taken-over:this-browser、taken-over:elsewhere） */
+function lossOf(loss: LeaseLoss): string {
+  return loss.kind === 'taken-over' ? `${loss.kind}:${loss.where}` : loss.kind
+}
+
+/**
+ * 交接的复核（M3-P5，editor/testing/selftest-handover.ts）要看的那一部分状态：阅读时"在此编辑"的进展、持有者是自己时那个页面在哪里、
+ * 上一次操作留下的说明；失去编辑权时的原因、有没有没保存的修改、另存为副本的进展与建好的副本。别的状态没有这些
+ */
+export function handoverViewOf(mode: EditModeState | undefined): Partial<SelftestPageView> {
+  if (mode === undefined)
+    return {}
+  switch (mode.kind) {
+    case 'reading':
+      return { takeover: mode.takeover?.kind, selfHolder: mode.selfHolder, notice: mode.notice?.kind }
+    case 'losing':
+      return { loss: lossOf(mode.loss) }
+    case 'lost':
+      return { loss: lossOf(mode.loss), unsaved: mode.unsaved, copy: mode.copy.kind, copyDocumentId: mode.copy.kind === 'done' ? mode.copy.document.id : undefined }
+    case 'opening':
+    case 'entering':
+    case 'editing':
+    case 'exiting':
+    case 'failed':
+    case 'unavailable':
+      return {}
+  }
+}
+
 /** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
 export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements): void {
   const startedAt = new Date().toISOString()
@@ -122,7 +153,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       page: state,
       view: () => {
         const { mode, surface, save } = page.view()
-        return { mode: mode?.kind, surface, save: save?.status }
+        return { mode: mode?.kind, surface, save: save?.status, ...handoverViewOf(mode) }
       },
       visibility: () => log.visibility,
       allowLeave,

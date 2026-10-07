@@ -5,7 +5,7 @@ import type { SelftestStep, StoredDocument } from './selftest-plan.ts'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { BIG_SHEET } from '../../../apps/web/src/editor/testing/capture-samples.ts'
-import { CAPTURE_SCENARIOS, COMPOSITION_NOTE, ENTER_EXIT_EDIT, HIDDEN_SAVE_EDITS, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { CAPTURE_SCENARIOS, COMPOSITION_NOTE, ENTER_EXIT_EDIT, HANDOVER_SCENARIOS, HIDDEN_SAVE_EDITS, REFRESH_SAVE_EDIT, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { bigSheetFor, formulaSampleFor } from './capture-samples.ts'
 import { SAMPLE_FORMULAS } from './read-only-sample.ts'
 import { problemsOf, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, stepsOf, storedProblems } from './selftest-plan.ts'
@@ -38,7 +38,7 @@ function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
 const EXPECTED_FORMULAS = Object.fromEntries(SAMPLE_FORMULAS.map(formula => [`${formula.sheetId}!${formula.cell}`, formula.value]))
 
 describe('页面自检的步骤', () => {
-  it('M3-P2 的四步（查看者的只读入口与公式，作者的界面对照、进入与退出编辑）之后是 M3-P4 的捕获时机复核（作者、编辑时），hidden-save 在最后', () => {
+  it('M3-P2 的四步（查看者的只读入口与公式，作者的界面对照、进入与退出编辑）之后是 M3-P4 的捕获时机复核（作者、编辑时），hidden-save 之后是 M3-P5 的交接复核', () => {
     expect(STEPS.map(step => [step.id, step.scenario, step.account.username, step.formula ?? '—'])).toEqual([
       ['read-only', 'read-only', 'viewer', '—'],
       ['read-only-formulas', 'read-only-formulas', 'viewer', '—'],
@@ -52,16 +52,33 @@ describe('页面自检的步骤', () => {
       ['large-copy', 'large-copy', 'author', '—'],
       ['composition', 'composition', 'author', '—'],
       ['hidden-save', 'hidden-save', 'author', '—'],
+      ['takeover-holder', 'takeover-holder', 'author', '—'],
+      ['takeover-taker', 'takeover-taker', 'author', '—'],
+      ['refresh-save', 'refresh-save', 'author', '—'],
     ])
   })
 
-  it('每一步自己一份文档（有的步骤会保存）；每个场景至少一步，公式时序两种模式各一步', () => {
-    expect(new Set(STEPS.map(step => step.documentId)).size).toBe(STEPS.length)
+  it('每一步自己一份文档（有的步骤会保存），只有另开的 B 与 A 共用（A 正在编辑的那一份）；每个场景至少一步，公式时序两种模式各一步', () => {
+    const shared = STEPS.filter(step => step.sharesDocumentOf !== undefined)
+    expect(shared.map(step => [step.id, step.sharesDocumentOf, step.opens])).toEqual([['takeover-taker', 'takeover-holder', 'editor']])
+    expect(STEPS.find(step => step.id === 'takeover-taker')?.documentId).toBe('takeover-holder-doc')
+    expect(new Set(STEPS.map(step => step.documentId)).size).toBe(STEPS.length - 1)
+    expect(STEPS.filter(step => step.id !== 'takeover-taker').every(step => step.opens === 'entry')).toBe(true)
     expect(new Set(STEPS.map(step => step.id)).size).toBe(STEPS.length)
     expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual([...SELFTEST_SCENARIOS].sort())
     expect(CAPTURE_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
-    expect(SELFTEST_STEPS.at(-1)?.scenario).toBe('hidden-save')
+    expect(HANDOVER_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
     expect(() => stepsOf(SELFTEST_STEPS, PEOPLE, ['one'])).toThrow('步却有 1 份文档')
+    expect(() => stepsOf([{ id: 'b', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'a' }], PEOPLE, [''])).toThrow('b 共用的 a 不在步骤里')
+  })
+
+  it('直接打开编辑器页的那一步（B）：编辑器页的地址带着场景与 next，不带账户（同一个浏览器里已经登录）', () => {
+    const step = STEPS.find(item => item.id === 'takeover-taker')
+    if (step === undefined)
+      throw new Error('没有 takeover-taker 这一步')
+    const url = new URL(selftestPageUrl('http://127.0.0.1:4100', step, 'http://127.0.0.1:4200/report?step=13'))
+    expect([url.pathname, url.searchParams.get('selftest'), url.searchParams.get('next'), url.hash]).toEqual(['/documents/takeover-holder-doc', 'takeover-taker', 'http://127.0.0.1:4200/report?step=13', ''])
+    expect(url.href).not.toContain('author')
   })
 
   it('入口页的地址：被测站点上的自检页，账户、文档、场景与结果交回的地址都在 # 片段里（查询里没有）', () => {
@@ -109,6 +126,17 @@ describe('页面自检的结果有什么问题', () => {
 
   it('一项检查都没有：算不通过', () => {
     expect(problemsOf(report({ checks: [] }))).toEqual(['没有通过（没有检查）'])
+  })
+
+  it('交接的场景另核对交回了认得的路（M3-P5）：A handed-over 或 lost，B answered 或 silent，refresh-save committed 或 expired', () => {
+    const base = { page: { state: 'ready', readOnly: false } } as const
+    expect(problemsOf(report({ ...base, scenario: 'takeover-taker', path: 'silent' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'takeover-holder', path: 'lost' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'refresh-save', path: 'committed' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'takeover-taker' }))).toEqual(['交回的路是 没有（应当是 answered、silent 之一）'])
+    expect(problemsOf(report({ ...base, scenario: 'takeover-holder', path: 'silent' }))).toEqual(['交回的路是 silent（应当是 handed-over、lost 之一）'])
+    // 没跑完时只说没跑完的原因
+    expect(problemsOf(report({ ...base, scenario: 'refresh-save', failure: '自检中途出错' }))).toEqual(['没能跑完：自检中途出错'])
   })
 
   it('进入、退出编辑的场景另核对交回了两次切换的耗时（到 ready 与 steady 都有）', () => {
@@ -182,6 +210,21 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
 
   it('"公式待更新"还在：算问题', () => {
     expect(storedProblems(step('read-only'), stored({ formulasPending: true }))).toEqual(['服务器上的文档是"公式待更新"'])
+  })
+
+  it('交接（M3-P5）随走的路：A 回应了（answered）三格、修订号 4；没有回应（silent）前两格、修订号 3、第三格不在；B 随 A 那一步核对；refresh-save 提交了（committed）修订号 2、有那一格；认不出路算问题', () => {
+    const [first, second, third] = TAKEOVER_EDITS
+    const all = templateWith(TAKEOVER_EDITS)
+    const two = templateWith([first, second])
+    expect(storedProblems(step('takeover-holder'), stored({ revision: 4, revisions: 4, snapshot: all }), 'answered')).toEqual([])
+    expect(storedProblems(step('takeover-holder'), stored({ revision: 3, revisions: 3, snapshot: two }), 'silent')).toEqual([])
+    expect(storedProblems(step('takeover-holder'), stored({ revision: 3, revisions: 3, snapshot: all }), 'silent')).toEqual([`服务器上 ${third.cell} 是 ${JSON.stringify(third.value)}（应当是空的）`])
+    expect(storedProblems(step('takeover-holder'), stored({ revision: 3, revisions: 3, snapshot: two }), 'answered')[0]).toMatch(/修订号是 3.*应当都是 4/)
+    expect(storedProblems(step('takeover-holder'), stored({ revision: 3, revisions: 3, snapshot: two }))).toEqual(['文档 takeover-holder-doc：不知道走了哪条路（没有交回），说不出服务器上该是什么样子（修订号 3）'])
+    expect(storedProblems(step('takeover-taker'), undefined, 'silent')).toEqual([])
+    expect(storedProblems(step('refresh-save'), stored({ revision: 2, revisions: 2, snapshot: templateWith([REFRESH_SAVE_EDIT]) }), 'committed')).toEqual([])
+    expect(storedProblems(step('refresh-save'), stored(), 'committed')).toHaveLength(2)
+    expect(storedProblems(step('refresh-save'), stored(), 'expired')).toHaveLength(1)
   })
 })
 
