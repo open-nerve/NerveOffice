@@ -38,7 +38,8 @@ export class DocumentEditingController {
    * 申请：201；有效的租约在别人手里时 409 EDIT_LEASE_HELD；编辑权刚交给了别人、还在保留期内时 409 EDIT_LEASE_RESERVED（M3-P5）；
    * 页面过旧 409 CLIENT_OUTDATED，文档比服务端新 409 DOCUMENT_TOO_NEW。
    * 接管方式（takeover，M3-P5 设计 §3.7、§3.8）：本人接管 self 只在当前有效的租约在自己手里时起作用；强制接管 force 要能强制接管（否则 403），
-   * 接管别人时写审计，来源是这个请求（请求标识与客户端地址）。续上时带的 idleSeconds（M3-P5 设计 §3.5）：新的一代的最后活动按它往前推，没带是 0
+   * 接管别人时写审计，来源是这个请求（请求标识与客户端地址）。续上时带的 idleSeconds（M3-P5 设计 §3.5）：新的一代的最后活动按它往前推，没带是 0；
+   * 契约限它比回收阈值短（审查 A4：带到阈值的新一代一出生就按空闲失效），超出的 400
    */
   @Post()
   async acquire(

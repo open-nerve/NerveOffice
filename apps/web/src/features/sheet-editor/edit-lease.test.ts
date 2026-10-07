@@ -1,7 +1,7 @@
 import type { AcquiredEditLease, RenewedEditLease, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
-import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
+import { EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
 import { acquireEditLease, browserLeaseClock, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
@@ -1197,6 +1197,40 @@ describe('续上的申请带本页的空闲秒数（M3-P5 设计 §3.5）', () =
     await context.time.advance(10_000)
     expect(context.api.acquire).toHaveBeenCalledTimes(2)
     expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, { idleSeconds: 7 })
+  })
+
+  it('带的空闲不超过契约的上限（审查 A4：比回收阈值少一秒，带到阈值服务端 400）：人在以回收阈值为界，空闲差 1 毫秒到阈值时带的正是上限', async () => {
+    const context = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('expired')).mockResolvedValue(RENEWED) })
+    const lease = await held(context)
+    context.interact(context.time.now() + 10_000 - RECLAIM_MS + 1)
+    await context.time.advance(10_000)
+    expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, { idleSeconds: EDIT_ACQUIRE_IDLE_SECONDS_MAX })
+    expect(lease.credentials().token).toBe(NEXT_TOKEN)
+  })
+
+  it('得知失效时人在、续上之前的释放来回期间空闲满了回收阈值：不申请（不带超过上限的空闲，审查 A4），也不再续租；本页再有操作时续上，带的是那时的空闲', async () => {
+    const releasing = deferred<void>()
+    const renew = vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(lostError('session')).mockResolvedValue(RENEWED)
+    const context = setup({ renew })
+    const lease = await held(context)
+    context.api.release.mockReturnValueOnce(releasing.promise)
+    context.interact(context.time.now() + 10_000 - RECLAIM_MS + 1)
+    await context.time.advance(10_000)
+    expect(context.api.release).toHaveBeenCalledOnce()
+    // 释放还在路上：时间又过了 2 毫秒，本页的空闲到了回收阈值
+    context.time.elapse(2)
+    releasing.resolve()
+    await settle()
+    expect(context.api.acquire).toHaveBeenCalledOnce()
+    expect(lease.credentials().token).toBe(TOKEN)
+    await context.time.advance(60_000)
+    expect(renew).toHaveBeenCalledOnce()
+    expect(context.onLost).not.toHaveBeenCalled()
+    context.interact()
+    lease.noteActivity()
+    await settle()
+    expect(context.api.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, PAGE_ID, { idleSeconds: 0 })
+    expect(lease.credentials().token).toBe(NEXT_TOKEN)
   })
 })
 

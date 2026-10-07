@@ -29,6 +29,13 @@ export const EDIT_INTERRUPTION_NOTICE_SECONDS = 1800
 export const EDIT_IDLE_SECONDS_MAX = 86_400
 
 /**
+ * 申请（续上）带来的"多久没有操作"的上限（秒，M3-P5 审查 A4）：比服务端的回收阈值少一秒——新的一代的最后活动是申请的时刻减去它，
+ * 带到回收阈值（12 分钟）就是一出生就按空闲失效，白加一次代次，还给别人留下一条不实的异常中断提醒，所以超出的 400。
+ * 页面只在人在（本页空闲不到回收阈值）时续上，带的是同一刻的空闲，不会超过它
+ */
+export const EDIT_ACQUIRE_IDLE_SECONDS_MAX = EDIT_LEASE_IDLE_RECLAIM_SECONDS - 1
+
+/**
  * 页面的空闲释放（秒，US-M3-07，00 号计划书 §6.3）：10 分钟没有键盘、鼠标操作，页面先保存再释放编辑权、回到阅读；
  * 没存上就留在编辑，由服务端 12 分钟兜底（EDIT_LEASE_IDLE_RECLAIM_SECONDS）
  */
@@ -73,8 +80,11 @@ export const EDIT_LEASE_HEADER = 'x-edit-lease'
  */
 export const editLeaseTokenSchema = z.string().regex(/^[\w-]{43}$/)
 
-/** 本页"多久没有操作"（秒）：0 到一天之间的整数（心跳必带，申请时只在续上时带） */
+/** 本页"多久没有操作"（秒）：0 到一天之间的整数（心跳必带） */
 const idleSecondsSchema = z.number().int().min(0).max(EDIT_IDLE_SECONDS_MAX)
+
+/** 申请时（只在续上时带）本页"多久没有操作"（秒）：0 到 EDIT_ACQUIRE_IDLE_SECONDS_MAX 之间的整数，比回收阈值短（M3-P5 审查 A4） */
+const acquireIdleSecondsSchema = z.number().int().min(0).max(EDIT_ACQUIRE_IDLE_SECONDS_MAX)
 
 /**
  * 申请时的接管方式（M3-P5 设计 §3.7、§3.8）：
@@ -90,12 +100,12 @@ export type EditTakeoverMode = (typeof EDIT_TAKEOVER_MODES)[number]
  * （保存一直带着它），租约绑定它与这次登录。客户端的构建与数据格式（clientBuild、univerVersion、profile、formatVersion，
  * M3-P3 设计 §3.5）可选：过旧的页面不让进入编辑（CLIENT_OUTDATED），缺了由服务端按过旧处理。
  * M3-P5（设计 §3.3、§3.5）另有两项可选：takeover——接管方式（EDIT_TAKEOVER_MODES）；idleSeconds——只给续上用，
- * 本页已经空闲的秒数，新的一代的最后活动按它往前推（服务端的空闲兜底计时准确）
+ * 本页已经空闲的秒数，新的一代的最后活动按它往前推（服务端的空闲兜底计时准确），上限比回收阈值短（EDIT_ACQUIRE_IDLE_SECONDS_MAX）
  */
 export const acquireEditLeaseRequestSchema = z.strictObject({
   clientInstanceId: uuidSchema,
   takeover: z.enum(EDIT_TAKEOVER_MODES).optional(),
-  idleSeconds: idleSecondsSchema.optional(),
+  idleSeconds: acquireIdleSecondsSchema.optional(),
   ...clientFormatBodyShape,
 })
 

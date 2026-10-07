@@ -7,6 +7,7 @@ import {
   acquireEditLeaseRequestSchema,
   declineEditRequestSchema,
   documentEditorSchema,
+  EDIT_ACQUIRE_IDLE_SECONDS_MAX,
   EDIT_HANDOVER_IDLE_SECONDS,
   EDIT_HANDOVER_RESERVE_SECONDS,
   EDIT_IDLE_RELEASE_SECONDS,
@@ -121,10 +122,11 @@ describe('申请编辑权', () => {
       expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, takeover }).success, JSON.stringify(takeover)).toBe(false)
   })
 
-  it('M3-P5：续上时可带本页已经空闲的秒数，与心跳同一个范围（0 到一天的整数）；不带也行', () => {
-    for (const idleSeconds of [0, 1, EDIT_IDLE_RELEASE_SECONDS, EDIT_IDLE_SECONDS_MAX])
+  it('M3-P5：续上时可带本页已经空闲的秒数——0 到比回收阈值少一秒的整数（审查 A4：带到回收阈值的新一代一出生就按空闲失效）；不带也行', () => {
+    expect(EDIT_ACQUIRE_IDLE_SECONDS_MAX).toBe(EDIT_LEASE_IDLE_RECLAIM_SECONDS - 1)
+    for (const idleSeconds of [0, 1, EDIT_IDLE_RELEASE_SECONDS, EDIT_ACQUIRE_IDLE_SECONDS_MAX])
       expect(acquireEditLeaseRequestSchema.parse({ clientInstanceId: TAB, idleSeconds })).toEqual({ clientInstanceId: TAB, idleSeconds })
-    for (const idleSeconds of [-1, EDIT_IDLE_SECONDS_MAX + 1, 1.5, '5', null, Number.NaN])
+    for (const idleSeconds of [-1, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX + 1, 1.5, '5', null, Number.NaN])
       expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, idleSeconds }).success, String(idleSeconds)).toBe(false)
     // 时刻由数据库给出：浏览器的时间一律不收
     expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, idleSeconds: 3, lastActiveAt: AT }).success).toBe(false)

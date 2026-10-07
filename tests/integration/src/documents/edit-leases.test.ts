@@ -10,7 +10,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_LEASE_HEADER, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -740,13 +740,22 @@ describe('US-M3-07 空闲：服务端 12 分钟的兜底按页面的空闲计时
     expect((await renew(sessionOf(amy), fresh.id, plain.token, 120)).status).toBe(200)
   })
 
-  it('US-M3-07 申请的空闲秒数按契约校验：负数、超过一天、不是整数都是 400，什么也不写', async () => {
+  it('US-M3-07 申请的空闲秒数按契约校验：负数、不比回收阈值短（12 分钟、一天、超过一天）、不是整数都是 400，什么也不写（审查 A4：带到回收阈值的新一代一出生就按空闲失效）', async () => {
     const document = await freshDocument()
-    for (const idleSeconds of [-1, 86_401, 1.5, '30']) {
+    for (const idleSeconds of [-1, EDIT_LEASE_IDLE_RECLAIM_SECONDS, 86_400, 86_401, 1.5, '30']) {
       const response = await asUser(app.baseUrl, sessionOf(amy), leasePath(document.id), { method: 'POST', body: { ...acquireBody(randomUUID()), idleSeconds } })
       expect(await errorOf(response), String(idleSeconds)).toMatchObject({ status: 400, code: 'REQUEST_INVALID' })
     }
     expect(await leaseOf(document.id)).toBeUndefined()
+    expect((await documentOf(document.id)).write_epoch).toBe(0)
+  })
+
+  it('US-M3-07 申请带的空闲取到上限（比回收阈值少一秒，审查 A4）：照常取得，新的一代的最后活动是申请的时刻减去它——出生时按时间活着（离回收还差一秒；之后的时间各请求各有各的 now()，不在这里卡一秒的边界）', async () => {
+    const document = await freshDocument()
+    await acquiredIdle(sessionOf(amy), document.id, EDIT_ACQUIRE_IDLE_SECONDS_MAX)
+    const row = await leaseOf(document.id)
+    expect((row?.acquired_at.getTime() ?? 0) - (row?.last_active_at.getTime() ?? 0)).toBe(EDIT_ACQUIRE_IDLE_SECONDS_MAX * 1000)
+    expect(EDIT_ACQUIRE_IDLE_SECONDS_MAX).toBeLessThan(EDIT_LEASE_IDLE_RECLAIM_SECONDS)
   })
 })
 

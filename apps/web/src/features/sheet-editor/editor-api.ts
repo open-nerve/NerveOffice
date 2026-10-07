@@ -134,7 +134,8 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
 
 /**
  * 申请编辑权（201）：clientInstanceId 是本页这次加载的标识，租约绑定它与这次登录；带上本页的构建与数据格式（M3-P3）。
- * 续上时另带本页的空闲秒数（idleSeconds，M3-P5 设计 §3.5：新的一代的最后活动按它往前推）；用户发起的申请不带。
+ * 续上时另带本页的空闲秒数（idleSeconds，M3-P5 设计 §3.5：新的一代的最后活动按它往前推；契约限它比回收阈值短，续上只在人在时进行，
+ * 带的不会超，edit-lease.ts）；用户发起的申请不带。
  * "在此编辑"另带接管方式（takeover: 'self'，M3-P5 设计 §3.7：当前有效的租约就在自己手里时原子地结束那一代、发新的一代）。
  * 被占用时抛出 EDIT_LEASE_HELD，本页过旧时 CLIENT_OUTDATED，文档比服务端新时 DOCUMENT_TOO_NEW（ApiError）
  */

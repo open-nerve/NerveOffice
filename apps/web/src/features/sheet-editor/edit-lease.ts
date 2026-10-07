@@ -18,7 +18,7 @@
 //   与冲突时认出"自己追自己"同一条规则（审查 B1，00 号计划书 §7.5），否则是别处保存过——放掉刚申请到的，按失效处理
 //   （不覆盖，另存为副本在 P2）；被占用、403、404 按失效处理；
 //   网络错误、5xx 保持现状，下一次心跳或保存时再判断；未登录、令牌失效交给页面确认会话。续上的申请带本页的空闲秒数（M3-P5 设计 §3.5：
-//   服务端把新的一代的最后活动按它往前推，空闲的兜底计时准确）。
+//   服务端把新的一代的最后活动按它往前推，空闲的兜底计时准确）；人在才申请，带的空闲因此短于回收阈值、不超过契约的上限（审查 A4）。
 //   每一代至多续上一次有结果（成了是新的一代，不成就是失效，不来回申请）；会话不是本人时不续；空闲释放的过程中不续（M3-P5 设计 §3.9：
 //   释放开始的那一刻就停止续上，免得回来时的第一下操作把 dormant 叫醒、申请新的一代——holdRecovery，没释放成时 allowRecovery）。
 //   人不在时不续（本页空闲已经到了服务端的回收阈值 EDIT_LEASE_IDLE_RECLAIM_SECONDS），等本页再有操作：人走开之后断网、休眠回来，
@@ -407,6 +407,15 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   }
 
   /**
+   * 续上的申请带的本页空闲（整秒，M3-P5 设计 §3.5）：人在时是这一刻的空闲向下取整——人在与秒数出自同一次读时钟，空闲短于回收阈值，
+   * 取整之后不超过契约的上限 EDIT_ACQUIRE_IDLE_SECONDS_MAX（审查 A4：带到阈值的新一代一出生就按空闲失效，服务端 400）；人已经不在时为 undefined
+   */
+  function presentIdleSeconds(): number | undefined {
+    const idleMs = clock.now() - options.lastActivity()
+    return idleMs < PRESENCE_MS ? Math.max(0, Math.floor(idleMs / 1000)) : undefined
+  }
+
+  /**
    * 已经到了终态（失效或释放）。经函数读：续上的几步之间隔着请求，状态随时可能被页面（释放、暂停）或另一条路（失效）改掉，
    * 每次都要读现在的值
    */
@@ -457,9 +466,17 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     }
     if (ended())
       return LOST
+    // 得知失效时人在，释放的来回期间本页的空闲却可能刚好满了回收阈值：这时人已经不在了，与得知失效时人不在同一个处理——
+    // 不申请（也就不带超过契约上限的空闲，审查 A4），等本页再有操作
+    const idle = presentIdleSeconds()
+    if (idle === undefined) {
+      if (state === 'holding')
+        state = 'dormant'
+      return { kind: 'unknown', error: undefined }
+    }
     let next: AcquiredEditLease
     try {
-      next = await api.acquire(documentId, options.clientInstanceId, { idleSeconds: idleSeconds() })
+      next = await api.acquire(documentId, options.clientInstanceId, { idleSeconds: idle })
     }
     catch (error) {
       if (ended())
