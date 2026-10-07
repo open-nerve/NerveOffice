@@ -45,13 +45,27 @@ export type SelftestFormulaMode = keyof typeof FORMULA_MODE_VALUES
  * - edit-chrome：能编辑的人打开同一份样本，界面检查的对照（工具栏、右键菜单、底栏在能编辑时都在，合成的右键与按键确实有效）；
  * - enter-exit：作者打开自己的一份样本（M3-P2 S5）：阅读 → 点页头的"编辑"→ 经 Facade 改一格（ENTER_EXIT_EDIT）→ 点"退出编辑"
  *   （先保存）→ 回到阅读之后再试 Facade 的只读入口、撤销与重做（撤销栈已清空）与界面；两次切换的耗时记进 timings；
- * - 捕获时机的复核（CAPTURE_SCENARIOS，M3-P4 S1，DEF-003 的其余部分；都在编辑时跑，见 ./selftest-capture.ts）
+ * - 捕获时机的复核（CAPTURE_SCENARIOS，M3-P4 S1，DEF-003 的其余部分；都在编辑时跑，见 ./selftest-capture.ts）；
+ * - 交接的复核（HANDOVER_SCENARIOS，M3-P5 设计 §3.14；驱动脚本编排，见 ./selftest-handover.ts）
  */
 export const CAPTURE_SCENARIOS = ['environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save'] as const
 
 export type CaptureScenario = (typeof CAPTURE_SCENARIOS)[number]
 
-export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS] as const
+/**
+ * 交接的复核（M3-P5 设计 §3.14 与 §3.7 的 R1）：takeover-holder 是正在编辑的标签页 A，takeover-taker 是同一个浏览器、同一次登录里另开的
+ * 标签页 B（直接打开编辑器页，不经入口页再登录一次：再登录会换掉浏览器里的会话 Cookie，A 的编辑权绑定的那次登录随之对不上）；
+ * takeover-holder-deaf 是收不到交接频道消息的 A（编辑器页的挂接在这一页装上，模拟被暂停、冻结、卡住的标签页：B 3 秒之后本人接管并抢锁）；
+ * refresh-save 是刷新时有一次保存停在服务端（驱动脚本让它在服务端停一会儿）
+ */
+export const HANDOVER_SCENARIOS = ['takeover-holder', 'takeover-holder-deaf', 'takeover-taker', 'refresh-save'] as const
+
+/** 收不到交接频道消息的 A（编辑器页的挂接据它装上吞掉消息的频道） */
+export const DEAF_HOLDER_SCENARIO = 'takeover-holder-deaf'
+
+export type HandoverScenario = (typeof HANDOVER_SCENARIOS)[number]
+
+export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS] as const
 
 export type SelftestScenario = (typeof SELFTEST_SCENARIOS)[number]
 
@@ -80,6 +94,33 @@ export const HIDDEN_SAVE_EDITS = [
  * 有它（自动保存在组合结束之后存下）
  */
 export const COMPOSITION_NOTE = { sheetId: 'sheet-1', cell: 'B2', row: 1, column: 1, text: '你好' } as const
+
+/**
+ * takeover-holder（A）写的三格（模板的第一张表 sheet-1）：第一格经测试构建的控制立即存上（驱动脚本看到这一版才另开 B），上传的同时写第二格
+ * （留着，A 变成隐藏的那一刻由自动保存上传——P4 的"切到后台立即上传"）；隐藏之后再写第三格（模拟切走之前最后一刻没被捕获的修改：捕获的静默与
+ * 上限调到一小时，它只在 A 回应交接、先保存再交出时存上，否则留在 A 里——失去编辑权之后的"另存为副本"）
+ */
+export const TAKEOVER_EDITS = [
+  { sheetId: 'sheet-1', cell: 'A1', row: 0, column: 0, value: '隐藏之前存上的' },
+  { sheetId: 'sheet-1', cell: 'A2', row: 1, column: 0, value: '隐藏的那一刻上传的' },
+  { sheetId: 'sheet-1', cell: 'A3', row: 2, column: 0, value: '隐藏之后写的' },
+] as const
+
+/** takeover-taker（B）从页面开始载入算起等多久再点"在此编辑"（设计 §3.14：A 隐藏 8 秒之后；B 一打开 A 就隐藏了） */
+export const TAKEOVER_TAKER_DELAY_MS = 8_000
+
+/** refresh-save 进入编辑之后写的那一格：它的保存停在服务端（驱动脚本锁住了内容行）时页面刷新 */
+export const REFRESH_SAVE_EDIT = { sheetId: 'sheet-1', cell: 'A1', row: 0, column: 0, value: '刷新时在途的保存' } as const
+
+/**
+ * 交接的场景交回的时间线（M3-P5）：交接日志（./handover-log.ts）与场景自己的观察（隐藏、显示、页面关闭时的状态、请求的结果等），
+ * 每条有种类与墙上时间（毫秒，跨标签页、跨两次载入比先后用它），其余字段随种类
+ */
+export interface SelftestTimelineEntry {
+  readonly kind: string
+  readonly wall: number
+  readonly [field: string]: unknown
+}
 
 /** 一项计时（例如 switch.enter：一次切换的各段耗时，毫秒；缺的是 null）。各段的含义见 ./switch-timing.ts 的 switchDurations */
 export interface SelftestTiming {
@@ -129,6 +170,13 @@ export interface SelftestReport {
   readonly formulaValues?: Readonly<Record<string, unknown>> | undefined
   /** enter-exit：每次切换的各段耗时 */
   readonly timings?: readonly SelftestTiming[] | undefined
+  /**
+   * 交接的场景（M3-P5）走了哪条路：takeover-taker 是 answered（A 回应了、先保存再交出）或 silent（3 秒没有回应、本人接管并抢锁）；
+   * takeover-holder 是 handed-over（交出、回到阅读）或 lost（失去编辑权）；refresh-save 是 committed（那次保存提交了才接手）或 expired（等满 30 秒）
+   */
+  readonly path?: string | undefined
+  /** 交接的场景：时间线（交接日志与场景的观察） */
+  readonly timeline?: readonly SelftestTimelineEntry[] | undefined
   /** 自检本身没能跑完的原因（编辑器没就绪、自检抛错）；跑完时没有 */
   readonly failure?: string | undefined
 }
@@ -271,6 +319,10 @@ function isTiming(value: unknown): value is SelftestTiming {
     && Object.values(value.ms).every(item => item === null || (typeof item === 'number' && Number.isFinite(item)))
 }
 
+function isTimelineEntry(value: unknown): value is SelftestTimelineEntry {
+  return isObject(value) && typeof value.kind === 'string' && typeof value.wall === 'number' && Number.isFinite(value.wall)
+}
+
 function isPage(value: unknown): value is SelftestPage {
   return isObject(value) && (value.state === 'ready' || value.state === 'failed' || value.state === 'timeout' || value.state === 'hidden')
     && (value.readOnly === undefined || typeof value.readOnly === 'boolean')
@@ -300,6 +352,10 @@ export function parseSelftestReport(value: unknown): SelftestReport {
     throw new SelftestReportError('结果的 formulaValues 不对')
   if (value.timings !== undefined && (!Array.isArray(value.timings) || !value.timings.every(isTiming)))
     throw new SelftestReportError('结果的 timings 不对')
+  if (value.path !== undefined && typeof value.path !== 'string')
+    throw new SelftestReportError('结果的 path 不是字符串')
+  if (value.timeline !== undefined && (!Array.isArray(value.timeline) || !value.timeline.every(isTimelineEntry)))
+    throw new SelftestReportError('结果的 timeline 不对')
   if (value.failure !== undefined && typeof value.failure !== 'string')
     throw new SelftestReportError('结果的 failure 不是字符串')
   return value as unknown as SelftestReport

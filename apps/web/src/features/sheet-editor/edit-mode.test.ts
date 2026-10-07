@@ -4080,6 +4080,15 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.editLease.renew).toHaveBeenCalledTimes(renewals)
     })
 
+    it('页面关闭时用交出代替了释放：观察钩子记下 page-hide（handed-over）', async () => {
+      const events: HandoverTraceEvent[] = []
+      const context = setup({ activity: 'manual', trace: event => events.push(event) })
+      await prompted(context)
+      context.mode.releaseOnHide()
+      await settle()
+      expect(events.filter(event => event.kind === 'page-hide')).toEqual([{ kind: 'page-hide', at: context.time.now(), action: 'handed-over', busy: false, unknown: false }])
+    })
+
     it('页面关闭时交出失败也不抛出（不留下没处理的拒绝）', async () => {
       const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(new NetworkError('断网')) } })
       await prompted(context)
@@ -4879,6 +4888,45 @@ describe('测试构建的观察钩子（M3-P5 设计 §3.13）', () => {
     expect(events.filter(event => event.kind === 'request-renewed').map(event => event.kind === 'request-renewed' ? event.outcome : '')).toEqual(['pending', 'reserved'])
     expect(events.find(event => event.kind === 'request-granted')).toMatchObject({ visible: true })
     expect(events.find(event => event.kind === 'acquire')).toMatchObject({ trigger: 'granted', takeover: null })
+  })
+
+  it('页面关闭（pagehide）：记下走了哪一支与那一刻保存的样子——保存在途（kept、busy）、结果未知（kept、unknown：WebKit 刷新时先取消在途的请求）、释放（released）、不在编辑（idle）', async () => {
+    const pageHides = (events: readonly HandoverTraceEvent[]): HandoverTraceEvent[] => events.filter(event => event.kind === 'page-hide')
+    const inFlight = recorder()
+    const reply = deferred<SaveContentResponse>()
+    const busy = setup({ trace: inFlight.trace })
+    await editing(busy)
+    busy.api.save.mockImplementationOnce(async () => reply.promise)
+    busy.factory.last().edit('甲')
+    const saving = busy.mode.save()
+    await settle()
+    busy.mode.releaseOnHide()
+    expect(pageHides(inFlight.events)).toEqual([{ kind: 'page-hide', at: busy.time.now(), action: 'kept', busy: true, unknown: false }])
+    reply.resolve(SAVED)
+    await saving
+
+    const cancelled = recorder()
+    const unknown = setup({ trace: cancelled.trace })
+    await editing(unknown)
+    unknown.api.save.mockRejectedValueOnce(new NetworkError('请求被取消'))
+    unknown.factory.last().edit('甲')
+    await unknown.mode.save()
+    await settle()
+    unknown.mode.releaseOnHide()
+    expect(pageHides(cancelled.events)).toEqual([{ kind: 'page-hide', at: unknown.time.now(), action: 'kept', busy: false, unknown: true }])
+
+    const quiet = recorder()
+    const released = setup({ trace: quiet.trace })
+    await editing(released)
+    released.mode.releaseOnHide()
+    expect(pageHides(quiet.events)).toEqual([{ kind: 'page-hide', at: released.time.now(), action: 'released', busy: false, unknown: false }])
+
+    const idle = recorder()
+    const reading = setup({ trace: idle.trace })
+    await opened(reading)
+    reading.mode.releaseOnHide()
+    expect(pageHides(idle.events)).toEqual([{ kind: 'page-hide', at: reading.time.now(), action: 'idle', busy: false, unknown: false }])
+    expect(reading.editLease.release).not.toHaveBeenCalled()
   })
 
   it('观察者出错：交给 reportError，交接照常', async () => {

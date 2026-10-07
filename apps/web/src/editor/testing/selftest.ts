@@ -10,7 +10,8 @@
 // - enter-exit（M3-P2 S5）：作者阅读 → 点页头真实的"编辑"（合成的点击）→ 经 Facade 改一格 → 点"退出编辑"（先保存）→ 回到阅读之后
 //   再试 Facade 的只读入口（样本去掉了图片，操作图片的几项不试，M3-P3）、撤销与重做与界面；两次切换的耗时按 ./switch-timing.ts 记下，随结果交回；
 // - 捕获时机的复核（M3-P4 S1：环境、变更检测、公式时序 × 两种模式、自动行高、大表复制、组合输入、隐藏时保存；S7 起观察真实的自动保存）
-//   在 ./selftest-capture.ts。
+//   在 ./selftest-capture.ts；
+// - 交接的复核（M3-P5 设计 §3.14：同一个浏览器里两个标签页的本人接管、刷新时在途的保存）在 ./selftest-handover.ts。
 // 一次运行的共用部分（编辑器页交给自检的、一项检查怎么记、命令日志的查询）在 ./selftest-session.ts。
 // 只读的入口里能用 Facade 与合成事件执行的部分才在这里；可信的键盘输入、输入法与鼠标的拖动由 Playwright 的 WebKit 覆盖
 // （read-only.spec.ts、read-only-shortcuts.spec.ts），Worker 作用域里的错误这里看不到（设计 §3.5 第 4 条）。
@@ -19,14 +20,15 @@
 import type { EditorProbe } from './e2e-probe.ts'
 import type { EntryOutcome, EntryScope, FacadeEntry } from './read-only-entries.ts'
 import type { KeyCombo } from './selftest-dom.ts'
-import type { SelftestCheck, SelftestReport, SelftestScenario, SelftestTiming } from './selftest-report.ts'
+import type { SelftestCheck, SelftestReport, SelftestScenario, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import type { SelftestApi, SelftestHost, Session } from './selftest-session.ts'
 import type { SwitchDirection, SwitchTimingRecorder } from './switch-timing.ts'
 import { canonicalJson, documentChangeAttemptsIn, documentChangesIn, sameContent } from './content-compare.ts'
 import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
 import { holdTimedAutosave } from './selftest-autosave.ts'
-import { CAPTURE_SCENARIO_RUNNERS, EXPECTS_HIDDEN } from './selftest-capture.ts'
+import { EXPECTS_HIDDEN as CAPTURE_EXPECTS_HIDDEN, CAPTURE_SCENARIO_RUNNERS } from './selftest-capture.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
+import { HANDOVER_EXPECTS_HIDDEN, HANDOVER_SCENARIO_RUNNERS } from './selftest-handover.ts'
 import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, fetchServerContent, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
@@ -638,7 +640,11 @@ const SCENARIOS: Readonly<Record<SelftestScenario, (session: Session) => Promise
   'edit-chrome': editChromeScenario,
   'enter-exit': enterExitScenario,
   ...CAPTURE_SCENARIO_RUNNERS,
+  ...HANDOVER_SCENARIO_RUNNERS,
 }
+
+/** 这些场景要求页面在中途变成隐藏（不按"页面被隐藏，余下的检查不做"处理）：hidden-save，交接里被另开的标签页遮住的 A */
+const EXPECTS_HIDDEN: ReadonlySet<string> = new Set([...CAPTURE_EXPECTS_HIDDEN, ...HANDOVER_EXPECTS_HIDDEN])
 
 /** 跑一次自检，返回结果（不跳转） */
 export async function runEditorSelftest(host: SelftestHost, scenario: string): Promise<SelftestReport> {
@@ -646,6 +652,8 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
   const timings: SelftestTiming[] = []
   let failure: string | undefined
   let formulaValues: Record<string, unknown> | undefined
+  let path: string | undefined
+  let timeline: SelftestTimelineEntry[] | undefined
   const probe = window.__nerveEditorProbe
   if (!isSelftestScenario(scenario))
     failure = `不认识的场景 ${scenario}`
@@ -679,6 +687,8 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     if (failure === undefined && session.hiddenAt !== undefined)
       failure = `页面在 ${session.hiddenAt} 被隐藏，余下的检查没有做`
     formulaValues = session.formulaValues
+    path = session.path
+    timeline = session.timeline
   }
   return {
     format: SELFTEST_REPORT_FORMAT,
@@ -695,6 +705,8 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     ignoredNotices: host.ignoredNotices().map(text => truncate(text)),
     formulaValues,
     timings: timings.length === 0 ? undefined : timings,
+    path,
+    timeline,
     failure,
   }
 }

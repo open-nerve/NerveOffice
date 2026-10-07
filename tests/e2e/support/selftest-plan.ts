@@ -7,15 +7,16 @@
 // - 结果的核对（problemsOf）：页面上的检查之外，驱动脚本与用例另外核对的（公式算出的值与样本的预期相同；enter-exit 交回了两次切换的耗时）；
 // - 服务器上的核对（serverProblemsOf，直接查库；storedProblems 是纯函数）：只看不改的步骤与 change-detection 没有保存过；enter-exit 恰好
 //   多了一个修订、内容里有改的那一格；自动保存照常运行的几步（M3-P4 S7：formula-timing、auto-height、large-copy、composition）至少保存了
-//   一次，存下的内容另按定义核对（公式、字号与自动行高、复制品、批注）；hidden-save 恰好保存了两次、内容里有隐藏之前与隐藏的那一刻写的两格。
+//   一次，存下的内容另按定义核对（公式、字号与自动行高、复制品、批注）；hidden-save 恰好保存了两次、内容里有隐藏之前与隐藏的那一刻写的两格；
+//   交接的几步（M3-P5 S8）随走的路（A 回应了没有、刷新时停住的那次保存提交了没有）。交接的编排与库里的时间线在 ./selftest-handover.ts。
 // 这里只有纯函数与读写库的辅助，不起浏览器
-import type { SelftestFormulaMode, SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { HandoverScenario, SelftestFormulaMode, SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SnapshotFor, TestUser } from './database.ts'
 import { Buffer } from 'node:buffer'
 import zlib from 'node:zlib'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { BIG_SHEET, cellCount, verifyFormulaSnapshot } from '../../../apps/web/src/editor/testing/capture-samples.ts'
-import { COMPOSITION_NOTE, ENTER_EXIT_EDIT, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, HIDDEN_SAVE_EDITS, NEXT_PARAM, selftestPassed } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { COMPOSITION_NOTE, ENTER_EXIT_EDIT, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, HIDDEN_SAVE_EDITS, NEXT_PARAM, REFRESH_SAVE_EDIT, selftestEditorUrl, selftestPassed, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { bigSheetFor, formulaSampleFor } from './capture-samples.ts'
 import { createDocumentIn, createTeamSpace, createUser, withDatabase } from './database.ts'
 import { readOnlySampleFor, SAMPLE_FORMULAS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from './read-only-sample.ts'
@@ -36,20 +37,29 @@ const SAMPLES: Readonly<Record<SelftestSample, SnapshotFor>> = {
   'big-sheet': bigSheetFor,
 }
 
-/** 一步的定义：标识（结果交回时按它对上）、场景、谁（作者能编辑，查看者只能看）、样本，可选的公式模式（测试构建的开关） */
+/**
+ * 一步的定义：标识（结果交回时按它对上）、场景、谁（作者能编辑，查看者只能看）、样本，可选的公式模式（测试构建的开关）。
+ * 交接的复核（M3-P5）另有：sharesDocumentOf——与那一步用同一份文档（另开的 B 打开 A 正在编辑的那一份）；opens——怎样打开：entry 是自检的
+ * 入口页（登录之后跳到编辑器页，默认），editor 是直接打开编辑器页（同一个浏览器里已经登录：B 再登录一次会换掉会话的 Cookie，A 的编辑权
+ * 绑定的那次登录随之对不上）
+ */
 export interface SelftestStepDefinition {
   readonly id: string
   readonly scenario: SelftestScenario
   readonly role: 'author' | 'viewer'
   readonly sample: SelftestSample
   readonly formula?: SelftestFormulaMode
+  readonly sharesDocumentOf?: string
+  readonly opens?: 'entry' | 'editor'
 }
 
 /**
  * 全部步骤，按这个顺序跑：
  * - M3-P2：查看者的只读入口与公式，作者的界面对照（能编辑时界面都在），作者进入、退出编辑（保存一次）；
  * - M3-P4 S1（捕获时机的复核，都在编辑时）：环境、变更检测（只读样本）、公式时序（Worker 与主线程各一步）、自动行高与大表复制（大表）、
- *   组合输入；最后是 hidden-save（驱动脚本在它第一次保存之后另开标签页让它隐藏，按库里的证据判定，所以放在最后）
+ *   组合输入；hidden-save（驱动脚本在它第一次保存之后另开标签页让它隐藏，按库里的证据判定）是由上一步带过去的最后一步；
+ * - M3-P5 S8（交接的复核，驱动脚本各开一个新的标签页）：两个标签页的本人接管（A 与 B，同一份文档；再一对里的 A 收不到交接频道的消息）、
+ *   刷新时在途的保存
  */
 export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'read-only', scenario: 'read-only', role: 'viewer', sample: 'read-only' },
@@ -64,9 +74,14 @@ export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'large-copy', scenario: 'large-copy', role: 'author', sample: 'big-sheet' },
   { id: 'composition', scenario: 'composition', role: 'author', sample: 'template' },
   { id: 'hidden-save', scenario: 'hidden-save', role: 'author', sample: 'template' },
+  { id: 'takeover-holder', scenario: 'takeover-holder', role: 'author', sample: 'template' },
+  { id: 'takeover-taker', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'takeover-holder', opens: 'editor' },
+  { id: 'takeover-deaf-holder', scenario: 'takeover-holder-deaf', role: 'author', sample: 'template' },
+  { id: 'takeover-deaf-taker', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'takeover-deaf-holder', opens: 'editor' },
+  { id: 'refresh-save', scenario: 'refresh-save', role: 'author', sample: 'template' },
 ]
 
-/** 跑一步自检要的：用谁登录、打开哪份文档、跑哪个场景（与公式模式） */
+/** 跑一步自检要的：用谁登录、打开哪份文档、跑哪个场景（与公式模式）、怎样打开（入口页或者直接打开编辑器页） */
 export interface SelftestStep {
   /** 这一步的标识（结果交回时带着，按它对上） */
   readonly id: string
@@ -74,6 +89,10 @@ export interface SelftestStep {
   readonly account: { readonly username: string, readonly password: string }
   readonly documentId: string
   readonly formula?: SelftestFormulaMode | undefined
+  /** 怎样打开：没有时是入口页 */
+  readonly opens?: 'entry' | 'editor' | undefined
+  /** 与哪一步共用文档（那一步的 id）；没有时 undefined */
+  readonly sharesDocumentOf?: string | undefined
 }
 
 /** 自检的账户与步骤 */
@@ -83,20 +102,32 @@ export interface SelftestScene {
   readonly steps: readonly SelftestStep[]
 }
 
-/** 定义与造好的文档拼成步骤（documentIds 与 definitions 一一对应） */
+/**
+ * 定义与造好的文档拼成步骤（documentIds 与 definitions 一一对应；共用文档的那一步在 documentIds 里随便填，取它共用的那一步的文档）
+ */
 export function stepsOf(definitions: readonly SelftestStepDefinition[], people: { readonly author: TestUser, readonly viewer: TestUser }, documentIds: readonly string[]): SelftestStep[] {
   if (documentIds.length !== definitions.length)
     throw new Error(`${definitions.length} 步却有 ${documentIds.length} 份文档`)
+  const documentOf = (definition: SelftestStepDefinition, index: number): string => {
+    if (definition.sharesDocumentOf === undefined)
+      return documentIds[index] ?? ''
+    const shared = definitions.findIndex(item => item.id === definition.sharesDocumentOf)
+    if (shared < 0 || definitions[shared]?.sharesDocumentOf !== undefined)
+      throw new Error(`${definition.id} 共用的 ${definition.sharesDocumentOf} 不在步骤里（或者它自己也是共用的）`)
+    return documentIds[shared] ?? ''
+  }
   return definitions.map((definition, index) => ({
     id: definition.id,
     scenario: definition.scenario,
     account: definition.role === 'author' ? people.author : people.viewer,
-    documentId: documentIds[index] ?? '',
+    documentId: documentOf(definition, index),
+    opens: definition.opens ?? 'entry',
     ...(definition.formula === undefined ? {} : { formula: definition.formula }),
+    ...(definition.sharesDocumentOf === undefined ? {} : { sharesDocumentOf: definition.sharesDocumentOf }),
   }))
 }
 
-/** 写库造场景：团队空间与账户（与 support/read-only.ts 的 scene 相同的空间与角色），每一步一份文档（作者建的） */
+/** 写库造场景：团队空间与账户（与 support/read-only.ts 的 scene 相同的空间与角色），每一步一份文档（作者建的；共用文档的那一步不另建） */
 export async function selftestScene(prefix: string, definitions: readonly SelftestStepDefinition[] = SELFTEST_STEPS): Promise<SelftestScene> {
   const admin = await createUser(`${prefix}-admin`, '系统管理员', { systemRole: 'admin' })
   const author = await createUser(`${prefix}-author`, '作者')
@@ -104,15 +135,18 @@ export async function selftestScene(prefix: string, definitions: readonly Selfte
   const space = await createTeamSpace('页面自检', admin, [[author, 'admin'], [viewer, 'viewer']])
   const documentIds: string[] = []
   for (const definition of definitions)
-    documentIds.push(await createDocumentIn(space.id, author, `自检 ${definition.id}`, { snapshotFor: SAMPLES[definition.sample] }))
+    documentIds.push(definition.sharesDocumentOf === undefined ? await createDocumentIn(space.id, author, `自检 ${definition.id}`, { snapshotFor: SAMPLES[definition.sample] }) : '')
   return { author, viewer, steps: stepsOf(definitions, { author, viewer }, documentIds) }
 }
 
 /**
  * 一步自检的入口地址：origin 是被测站点的源，next 是结果交回的地址（收集端）。账户放在 # 片段里：片段不发给服务器，
- * 入口页读完马上从地址里去掉（apps/web/src/entries/selftest/sign-in.ts）
+ * 入口页读完马上从地址里去掉（apps/web/src/entries/selftest/sign-in.ts）。直接打开编辑器页的那一步（opens 是 editor：同一个浏览器里已经登录）
+ * 是编辑器页的地址，带着场景与 next（不带账户）
  */
 export function selftestPageUrl(origin: string, step: SelftestStep, next: string): string {
+  if (step.opens === 'editor')
+    return selftestEditorUrl(origin, step.documentId, step.scenario, next, step.formula)
   const fragment = new URLSearchParams({ user: step.account.username, password: step.account.password, document: step.documentId, scenario: step.scenario, [NEXT_PARAM]: next })
   if (step.formula !== undefined)
     fragment.set(FORMULA_MODE_PARAM, FORMULA_MODE_VALUES[step.formula])
@@ -127,9 +161,19 @@ function formulaKey(sheetId: string, cell: string): string {
 /** enter-exit 交回的两次切换的耗时（进入、退出），各自到 steady 的时刻都要有 */
 const SWITCH_TIMINGS = ['switch.enter', 'switch.exit'] as const
 
+/** 交接的场景（M3-P5）交回的路：每个场景认得的几种（selftest-report.ts 的 path） */
+export const HANDOVER_PATHS: Readonly<Partial<Record<SelftestScenario, readonly string[]>>> = {
+  'takeover-holder': ['handed-over', 'lost'],
+  // 收不到交接频道的消息：只会失去编辑权
+  'takeover-holder-deaf': ['lost'],
+  'takeover-taker': ['answered', 'silent'],
+  'refresh-save': ['committed', 'expired'],
+}
+
 /**
  * 一步的结果有什么问题（空数组就是通过）：页面上的检查（selftestPassed 的口径）之外，read-only-formulas 另核对样本里的几个公式
- * 算出了预期的值（与 read-only.spec.ts"公式在 Worker 里算出结果"同一组）；enter-exit 另核对交回了两次切换的耗时
+ * 算出了预期的值（与 read-only.spec.ts"公式在 Worker 里算出结果"同一组）；enter-exit 另核对交回了两次切换的耗时；交接的场景另核对交回了
+ * 认得的路（HANDOVER_PATHS）
  */
 export function problemsOf(report: SelftestReport): string[] {
   const problems: string[] = []
@@ -155,6 +199,9 @@ export function problemsOf(report: SelftestReport): string[] {
         problems.push(`没有交回 ${id} 的耗时`)
     }
   }
+  const paths = HANDOVER_PATHS[report.scenario as SelftestScenario]
+  if (paths !== undefined && report.failure === undefined && !paths.includes(report.path ?? ''))
+    problems.push(`交回的路是 ${report.path ?? '没有'}（应当是 ${paths.join('、')} 之一）`)
   if (problems.length === 0 && !selftestPassed(report))
     problems.push('没有通过（没有检查）')
   return problems
@@ -247,19 +294,57 @@ function compositionProblems(snapshot: string): string[] {
   return note === COMPOSITION_NOTE.text ? [] : [`${COMPOSITION_NOTE.cell} 的批注是 ${JSON.stringify(note) ?? '空'}（应当是选定的"${COMPOSITION_NOTE.text}"）`]
 }
 
+interface ExpectedCell {
+  readonly sheetId: string
+  readonly cell: string
+  readonly row: number
+  readonly column: number
+  readonly value: string
+}
+
 /**
- * 一步在服务器上该有的样子：修订号（恰好几，或者至少几：自动保存照常运行的场景上传几次随时序而定）与为什么、内容里该有的格、
+ * 一步在服务器上该有的样子：修订号（恰好几，或者至少几：自动保存照常运行的场景上传几次随时序而定）与为什么、内容里该有的格（与不该有的）、
  * 对存下的内容的另外的核对，以及"公式待更新"（都该是 false）
  */
 interface ServerExpectation {
   readonly revision: number | { readonly atLeast: number }
   readonly why: string
-  readonly cells: readonly { readonly sheetId: string, readonly cell: string, readonly row: number, readonly column: number, readonly value: string }[]
+  readonly cells: readonly ExpectedCell[]
+  readonly absent?: readonly ExpectedCell[]
   readonly content?: (snapshot: string) => string[]
 }
 
-function serverExpectation(scenario: SelftestScenario): ServerExpectation {
+/**
+ * 交接的复核（M3-P5）在服务器上该有的样子，随走的路而定（path 是 B 的 answered、silent，refresh-save 的 committed、expired）：
+ * - takeover-holder 与 takeover-holder-deaf（A 的文档）：A 回应了（answered）——第一格、隐藏时上传的第二格、交出之前存上的第三格，修订号 4；
+ *   没有回应（silent）——前两格，修订号 3，第三格不在（只在 A 另存的副本里）；
+ * - takeover-taker：与 A 同一份文档，随 A 那一步核对（这里没有要求）；
+ * - refresh-save：刷新时停在服务端的那一次保存提交了，修订号 2、内容里有那一格（committed）；等满 30 秒（expired）说明那次保存没有提交，算问题。
+ * 认不出路的交回 undefined（算问题：不知道该是什么样子）
+ */
+function handoverExpectation(scenario: HandoverScenario, path: string | undefined): ServerExpectation | 'none' | undefined {
   switch (scenario) {
+    case 'takeover-holder':
+    case 'takeover-holder-deaf':
+      if (path === 'answered')
+        return { revision: 4, why: 'A 回应了：控制的 flush、隐藏的那一刻、交出之前各上传一次', cells: TAKEOVER_EDITS }
+      if (path === 'silent')
+        return { revision: 3, why: 'A 没有回应：控制的 flush、隐藏的那一刻各上传一次，第三格没有存上', cells: TAKEOVER_EDITS.slice(0, 2), absent: TAKEOVER_EDITS.slice(2) }
+      return undefined
+    case 'takeover-taker':
+      return 'none'
+    case 'refresh-save':
+      return path === 'committed' ? { revision: 2, why: '刷新时停在服务端的那一次保存提交了', cells: [REFRESH_SAVE_EDIT] } : undefined
+  }
+}
+
+function serverExpectation(scenario: SelftestScenario, path: string | undefined): ServerExpectation | 'none' | undefined {
+  switch (scenario) {
+    case 'takeover-holder':
+    case 'takeover-holder-deaf':
+    case 'takeover-taker':
+    case 'refresh-save':
+      return handoverExpectation(scenario, path)
     case 'enter-exit':
       return { revision: 2, why: '退出编辑时保存了一次', cells: [ENTER_EXIT_EDIT] }
     case 'formula-timing':
@@ -286,13 +371,18 @@ function serverExpectation(scenario: SelftestScenario): ServerExpectation {
  * 一步在服务器上该有的样子（空数组就是对的，纯函数）：只看不改的几步与 change-detection（暂停定时的上传；内容带着样本的 data: 图片，
  * 服务端拒收）文档还是修订号 1；enter-exit 恰好保存了一次（修订号 2），内容里有它改的那一格（ENTER_EXIT_EDIT）；自动保存照常运行的几步（formula-timing、auto-height、
  * large-copy、composition）至少保存了一次，存下的内容另核对（全部公式按定义、大表每一行的字号与自动行高、复制品的格数、批注的文字）；
- * hidden-save 恰好两次（修订号 3），内容里有它写的两格（HIDDEN_SAVE_EDITS）。修订记录的条数都与修订号相同，"公式待更新"都不在
+ * hidden-save 恰好两次（修订号 3），内容里有它写的两格（HIDDEN_SAVE_EDITS）；交接的几步随走的路（path，handoverExpectation）。
+ * 修订记录的条数都与修订号相同，"公式待更新"都不在
  */
-export function storedProblems(step: Pick<SelftestStep, 'scenario' | 'documentId'>, stored: StoredDocument | undefined): string[] {
+export function storedProblems(step: Pick<SelftestStep, 'scenario' | 'documentId'>, stored: StoredDocument | undefined, path?: string): string[] {
+  const expected = serverExpectation(step.scenario, path)
+  if (expected === 'none')
+    return []
   if (stored === undefined)
     return [`服务器上没有文档 ${step.documentId}`]
+  if (expected === undefined)
+    return [`文档 ${step.documentId}：不知道走了哪条路（${path ?? '没有交回'}），说不出服务器上该是什么样子（修订号 ${stored.revision}）`]
   const problems: string[] = []
-  const expected = serverExpectation(step.scenario)
   const revisionOk = typeof expected.revision === 'number' ? stored.revision === expected.revision : stored.revision >= expected.revision.atLeast
   if (!revisionOk || stored.revisions !== stored.revision) {
     const wanted = typeof expected.revision === 'number' ? `应当都是 ${expected.revision}` : `应当至少 ${expected.revision.atLeast}、两者相同`
@@ -303,14 +393,19 @@ export function storedProblems(step: Pick<SelftestStep, 'scenario' | 'documentId
     if (value !== cell.value)
       problems.push(`服务器上 ${cell.cell} 是 ${JSON.stringify(value) ?? '空'}（应当是 ${JSON.stringify(cell.value)}）`)
   }
+  for (const cell of expected.absent ?? []) {
+    const value = cellValueOf(stored.snapshot, cell.sheetId, cell.row, cell.column)
+    if (value !== undefined)
+      problems.push(`服务器上 ${cell.cell} 是 ${JSON.stringify(value)}（应当是空的）`)
+  }
   problems.push(...(expected.content?.(stored.snapshot) ?? []).map(problem => `服务器上存下的内容：${problem}`))
   if (stored.formulasPending)
     problems.push('服务器上的文档是"公式待更新"')
   return problems
 }
 
-/** 服务器上这一步的文档的修订号与问题（storedProblems 的口径） */
-export async function serverProblemsOf(step: SelftestStep): Promise<{ readonly revision: number | undefined, readonly problems: string[] }> {
+/** 服务器上这一步的文档的修订号与问题（storedProblems 的口径；交接的几步带上走的路） */
+export async function serverProblemsOf(step: SelftestStep, path?: string): Promise<{ readonly revision: number | undefined, readonly problems: string[] }> {
   const stored = await storedDocument(step.documentId)
-  return { revision: stored?.revision, problems: storedProblems(step, stored) }
+  return { revision: stored?.revision, problems: storedProblems(step, stored, path) }
 }
