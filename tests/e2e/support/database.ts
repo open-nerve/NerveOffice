@@ -297,6 +297,14 @@ export async function editLeaseEndReason(documentId: string): Promise<string | n
   return withDatabase(async client => (await client.query<{ end_reason: string | null }>('SELECT end_reason FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.end_reason)
 }
 
+/**
+ * 这份文档现在的编辑租约是怎样接管上一代的（M3-P5：self 是本人接管，forced 是强制接管）；普通申请得到的一代为 null，从没有过租约时为 undefined。
+ * 核对"在此编辑"走的是哪一条路（同一个浏览器里交接成功之后是普通申请，没有回应、锁空着时是本人接管）
+ */
+export async function editLeaseTakeover(documentId: string): Promise<string | null | undefined> {
+  return withDatabase(async client => (await client.query<{ takeover: string | null }>('SELECT takeover FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.takeover)
+}
+
 /** 这份文档现在的编辑租约是第几代（每次申请加一）；从没有过租约时为 undefined。核对页面确实重新申请过（续上） */
 export async function editLeaseEpoch(documentId: string): Promise<number | undefined> {
   return withDatabase(async client => (await client.query<{ write_epoch: number }>('SELECT write_epoch FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.write_epoch)

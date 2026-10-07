@@ -3,7 +3,7 @@
 // 前一个随即得知（AbortError）——不再问服务端、不续上，立即失去编辑权，没保存的修改照旧给副本与放弃。
 // 两个标签页用同一个浏览器上下文（共用 Cookie、Web Locks 与 Playwright 的时钟）；前一个"断网、休眠"用拦下它的心跳与保存模拟
 // （support/sheet.ts 的 disconnectTab）：它从服务端什么也得知不了，立即失去编辑权只能是本机锁告诉它的。编辑权到期改写租约行。
-// "在此编辑"的三条路、同一浏览器的先保存再交出、旧页不响应之后接手、刷新时在途保存的等待在 S6（设计 §3.7）。
+// "在此编辑"的三条路、同一浏览器的先保存再交出、旧页不响应之后接手、刷新时在途保存的等待、跨设备在 handover-takeover.spec.ts（设计 §3.7）。
 // 容器 E2E 也跑：修改在断开之后才做，两种构建里都存不上；另存为副本不经保存的那条路（断开只拦保存与心跳）
 import type { Page } from '@playwright/test'
 import { createUser, editLeaseEpoch, expireEditLease } from '../../support/database.ts'

@@ -1,15 +1,17 @@
 // 同一时刻只有一个人、一个标签页能编辑（US-M3-04；P1 设计 §3.4.7、§7 第一条；M3-P2 设计 §3.4）。M3-P2 起打开即阅读，点"编辑"才申请：
 // - 两个人：一个在编辑时，其他人（编辑者与查看者）打开都是阅读，看到"谁正在编辑（最后活动 x 分钟前）"——编辑状态能读就能看；
 //   能编辑的人点"编辑"得到被占用，留在阅读；两人同时点"编辑"，最多一个成功（并发的申请与锁的交错由集成测试确定地覆盖）；
-// - 同一个人的多个标签页：一个在编辑时另一个点"编辑"也进不去；打开时申请，回包丢了也不留下没人用的一代——同一个页面用同一个标识
-//   再试一次，服务端当作重试、发新的一代（审查 B7）；刷新、关闭时经 keepalive 释放，之后刷新、重开出来的页面立即能编辑。
+// - 同一个人的多个标签页：一个在编辑时另一个点"编辑"也进不去（被自己的另一个标签页占着；M3-P5 起锁在本浏览器里有人持有时不再试，换成
+//   "在此编辑"——本人接管，前一个先保存再交出，handover-takeover.spec.ts 另有各条路），任何时候只有一个标签页在编辑；打开时申请，回包丢了
+//   也不留下没人用的一代——同一个页面用同一个标识再试一次，服务端当作重试、发新的一代（审查 B7）；刷新、关闭时经 keepalive 释放，之后刷新、
+//   重开出来的页面立即能编辑。
 // 这几条都不在导航离开之前装拦截：WebKit 装了 page.route 之后，导航离开、刷新时的 keepalive 请求送不到（support/sheet.ts 的 leaveEditor）
 import type { Page } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, editLeaseEpoch } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditing, openAndEnterEditing, openReader, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, exitEditing, openAndEnterEditing, openReader, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -116,35 +118,51 @@ test.describe('US-M3-04 同一时刻只有一个人能编辑：其他人打开�
 })
 
 test.describe('US-M3-04 同一个人在多个标签页：打开、刷新与关闭时的编辑权', () => {
-  test('US-M3-04 一个标签页在编辑时，另一个点"编辑"也进不去：说明在另一个标签页或设备上编辑，留在阅读；那边退出编辑之后，这里点"编辑"就能编辑', async ({ page, context }) => {
+  test('US-M3-04 一个标签页在编辑时，另一个点"编辑"也进不去：被自己的另一个标签页占着、锁在本浏览器里有人持有——不再试（只申请一次），留在阅读、换成"在此编辑"；"在此编辑"之后编辑权交到这一页、前一个先保存再回到阅读，那边退出编辑之后前一个又能编辑——任何时候只有一个标签页在编辑', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('two-tabs'))
     const documentId = await createSheetThroughApi(page)
-    await openAndEnterEditing(page, documentId)
+    // 后一个先打开（还没人在编辑：按钮是"编辑"）；之后拦下它读编辑状态的请求，它手里的编辑状态停在"没人在编辑"，点得到"编辑"
     const other = await context.newPage()
+    const checked = other.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/documents/${documentId}/edit-lease`)
     await openReader(other, documentId)
-    const elsewhere = '你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑'
-    await expect(editingNotice(other)).toHaveText(elsewhere)
+    await checked
+    await other.route('**/api/documents/*/edit-lease', async route => route.request().method() === 'GET' ? route.abort('internetdisconnected') : route.continue())
+    await openAndEnterEditing(page, documentId)
+    await expect(enterEditButton(other)).toBeVisible()
 
-    // 点"编辑"：被自己的另一个标签页占着（先隔一小会儿再试几次：刷新时旧页面的释放可能晚到），仍被占用就回到阅读
-    // （进入期间那个按钮说"正在进入编辑…"、不可用，名字不是"编辑"）
+    // 点"编辑"：被自己的另一个标签页占着，而锁在本浏览器里有人持有——不按"刷新时晚到的释放"隔一会儿再试，只申请一次（409）；
+    // 回到阅读（只读的编辑器不换），换成"在此编辑"，说明是本浏览器的另一个标签页
     const acquisitions = recordAcquisitions(other, documentId)
     await enterEditButton(other).click()
-    await expect.poll(() => acquisitions.length).toBeGreaterThan(0)
-    await expect(enterEditButton(other)).toBeVisible()
-    expect(acquisitions.every(status => status === 409)).toBe(true)
-    await expect(editingNotice(other)).toHaveText(elsewhere)
+    await expect(takeOverHereButton(other)).toBeVisible()
+    await expect(editingNotice(other)).toHaveText('你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
+    expect(acquisitions).toEqual([409])
     await expect(editorSurface(other)).toHaveAttribute('data-editor-access', 'read')
+    // 同一时刻只有一个标签页在编辑
+    await expect(saveButton(page)).toBeVisible()
     await expect(saveButton(other)).toHaveCount(0)
     expect(await editLeaseEpoch(documentId)).toBe(1)
-    await expect(saveButton(page)).toBeVisible()
 
-    // 第一个标签页退出编辑（放掉编辑权）：这里点"编辑"取得新的一代，能编辑、保存
-    await exitEditing(page)
-    await enterEditing(other)
+    // "在此编辑"：前一个先保存再交出、回到阅读，编辑权交到这一页（新的一代）；仍然只有一个标签页在编辑
+    await other.unroute('**/api/documents/*/edit-lease')
+    await typeInCell(page, 'A1', 'first tab')
+    await takeOverHereButton(other).click()
+    await waitForEditorAccess(other, 'edit')
+    await waitForEditorAccess(page, 'read')
+    await expect(saveButton(other)).toBeVisible()
+    await expect(saveButton(page)).toHaveCount(0)
     expect(await editLeaseEpoch(documentId)).toBe(2)
-    await typeInCell(other, 'A1', 'second tab')
+    await typeInCell(other, 'B1', 'second tab')
     await saveAndWait(other)
-    expect(cellOf((await savedContent(other, documentId)).snapshot, 'A1')?.v).toBe('second tab')
+    const saved = (await savedContent(other, documentId)).snapshot
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v]).toEqual(['first tab', 'second tab'])
+
+    // 这一页退出编辑（放掉编辑权）：前一个就能编辑（它读到的持有者可能还是这一页——"在此编辑"，锁空着立即接手；或者已经读到没人在编辑——"编辑"）
+    await exitEditing(other)
+    await enterEditButton(page).or(takeOverHereButton(page)).click()
+    await waitForEditorAccess(page, 'edit')
+    expect(await editLeaseEpoch(documentId)).toBe(3)
+    await expect(saveButton(other)).toHaveCount(0)
   })
 
   test('US-M3-04 申请的回包丢了（服务端其实已经批给了本页）：页面用同一个标识再试一次，照常编辑与保存，不留下占着编辑权、却没有页面在用的一代（审查 B7）', async ({ page }) => {
