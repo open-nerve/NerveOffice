@@ -3,7 +3,7 @@ import pg from 'pg'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../config/index.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
-import { APPLICATION_NAME, createPool, KEEP_ALIVE_INITIAL_DELAY_MS, POOL_IN_SNAPSHOT_MESSAGE, refuseInsideSnapshot, SESSION_OPTIONS } from './pool.ts'
+import { APPLICATION_NAME, createPool, KEEP_ALIVE_INITIAL_DELAY_MS, POOL_IN_SNAPSHOT_MESSAGE, refuseInsideSnapshot } from './pool.ts'
 import { SnapshotScope } from './snapshot-scope.ts'
 
 const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
@@ -33,14 +33,14 @@ describe('createPool', () => {
         statement_timeout: 3_000,
         lock_timeout: settings.lockTimeoutMs,
         idle_in_transaction_session_timeout: settings.idleInTransactionTimeoutMs,
-        options: SESSION_OPTIONS,
         keepAlive: true,
         keepAliveInitialDelayMillis: KEEP_ALIVE_INITIAL_DELAY_MS,
         query_timeout: 8_000,
       })
       expect(KEEP_ALIVE_INITIAL_DELAY_MS).toBe(10_000)
-      // 会话的事务时限定为 0：库上的默认值不作数，要限时的事务自己设（M3-P5 复验 C1，真实数据库上的效果见 tests/integration 的 database/pool.test.ts）
-      expect(SESSION_OPTIONS).toBe('-c transaction_timeout=0')
+      // 不带 options 启动参数：连接串里的 options、PGOPTIONS 照旧起作用；要限时的事务在事务里自己设，与会话的默认值无关
+      // （M3-P5 再复核 D2，真实数据库上的效果见 tests/integration 的 database/pool.test.ts）
+      expect(pool.options).not.toHaveProperty('options')
     }
     finally {
       await pool.end()

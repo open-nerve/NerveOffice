@@ -427,9 +427,10 @@ export class EditLeasesRepository {
    * 持着文档行往下写；租约在它提交之前按时间到期（或空闲满 12 分钟）时，这时开始的撤权看这一行已经死了——要是只锁还活着的，撤权就不等
    * 这次保存、先提交，保存随后提交，"进行中的保存与撤权互斥"（撤权提交之后的保存一定被拒绝）在这里出现缺口。锁住刚死不久的文档行之后，
    * 在途的保存先提交、撤权在它之后生效；之后才拿到文档行的保存在锁下看到新的权限（停用另有锁下对登录的再核对），被拒绝。
-   * 上界：保存的事务从开始（判断租约用的那个 now()）到提交短于一个有效期（90 秒），由数据库保证（M3-P5 复验 C1）——保存的事务限时 60 秒
-   * （document-content.service.ts 的 SAVE_TRANSACTION_TIMEOUT_MS，transaction_timeout 到点时数据库结束会话、事务回滚，推导写在那里）；
-   * lock_timeout、statement_timeout、idle_in_transaction_session_timeout 各管一次等锁、一条语句、一次空闲，不限整个事务。
+   * 上界：保存的事务从开始（判断租约用的那个 now()，即 BEGIN）到提交短于一个有效期（90 秒），由数据库与事务运行器保证（M3-P5 复验 C1、
+   * 再复核 D1、D2）——BEGIN 到设下时限至多 10 秒（超过就不开始），之后至多 60 秒（transaction_timeout，到点时数据库结束会话、事务回滚），
+   * 合起来至多 70 秒（document-content.service.ts 的 SAVE_TRANSACTION_TIMEOUT_MS，推导写在那里）；lock_timeout、statement_timeout、
+   * idle_in_transaction_session_timeout 各管一次等锁、一条语句、一次空闲，不限整个事务。
    * 窗口的大小（一个有效期）由 tests/integration 的 lease-revocation-locks.test.ts 按行为钉住（死了约 60 秒的仍锁、仍等在途的保存）。
    * 明确结束了的（释放、交出）不锁：页面先存上再释放、交出（P4 的 flush；关页时保存在途就不释放），在途的保存不会跨过它们。
    *
