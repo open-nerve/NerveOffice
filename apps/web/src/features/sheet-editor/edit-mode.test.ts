@@ -2794,6 +2794,20 @@ describe('页面关闭（pagehide）时的本机锁与记号（M3-P5 设计 §3.
     expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
     expect(context.marker.write).not.toHaveBeenCalled()
   })
+
+  it('保存的结果未知（WebKit 在刷新、离开一开始就取消在途的请求，之后才派发 pagehide）：同样不释放、记下记号——那次保存可能已经送到服务端', async () => {
+    const context = setup()
+    await editing(context)
+    context.api.save.mockRejectedValueOnce(new NetworkError('请求被取消'))
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    await settle()
+    context.mode.releaseOnHide()
+    await settle()
+    expect(context.browser.holderOf(LOCK)).toBeUndefined()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    expect(context.marker.write).toHaveBeenCalledExactlyOnceWith(3)
+  })
 })
 
 describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-07，M3-P5 设计 §3.9）', () => {

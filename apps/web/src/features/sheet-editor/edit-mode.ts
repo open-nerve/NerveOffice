@@ -49,8 +49,8 @@
 // - 空闲释放（idle-watch.ts）：编辑时 max(最后一次操作, 进入编辑的时刻) 起 10 分钟没有操作——会话可写、联网时（不主动向服务端确认会话）
 //   先保存再释放、以只读重建，阅读里说明；没存上就留在编辑，过一个心跳周期再看（再也存不上的不再试，服务端 12 分钟兜底）。
 //   释放开始的那一刻就停止续上（租约 holdRecovery），没释放成再恢复；
-// - 页面关闭（pagehide）时保存忙：不释放（P4），另在 localStorage 记下这份文档有一次保存可能还在服务端处理（pending-save-marker.ts，
-//   新的标签页本人接管之前等它）。
+// - 页面关闭（pagehide）时保存忙或者结果未知（WebKit 在导航一开始就取消在途的请求）：不释放（P4），另在 localStorage 记下这份文档有一次
+//   保存可能还在服务端处理（pending-save-marker.ts，新的标签页本人接管之前等它）。
 //
 // 本人接管（M3-P5 设计 §3.7，US-M3-08）：
 // - 阅读时持有者是自己（别的标签页或设备）：看这份文档的本机锁在本浏览器里有没有人持有（selfHolder：this-browser 是本浏览器的另一个
@@ -1658,8 +1658,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
     releaseOnHide: () => {
       // 离开页面一律放下本机锁（M3-P5 设计 §3.1）：进往返缓存时浏览器不替页面放（编辑器页恢复时反正整页重新加载）
       dropLock()
-      if (coordinator?.busy() === true) {
-        // 保存在途：不释放（M3-P4 设计 §3.4），记下这份文档有一次保存可能还在服务端处理，它的基准是本页确认过的最新修订（M3-P5 设计 §3.7 的 R1）
+      // 保存在途或者结果未知：不释放（M3-P4 设计 §3.4），记下这份文档有一次保存可能还在服务端处理，它的基准是本页确认过的最新修订
+      // （M3-P5 设计 §3.7 的 R1）。结果未知也算：WebKit 在导航（刷新、离开）一开始就取消在途的请求、之后才派发 pagehide——那时它已经不在途，
+      // 而那次保存可能已经送到服务端、还在处理，释放先提交就把它挡掉（S6 实测）
+      if (coordinator !== undefined && (coordinator.busy() || coordinator.hasUnknownOutcome())) {
         options.pendingSave.write(coordinator.baseRevision())
         return
       }
