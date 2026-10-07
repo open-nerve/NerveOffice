@@ -8,13 +8,13 @@ import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
-import { SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS } from './edit-lease.ts'
-import { createEditMode, EXIT_RELEASE_WAIT_MS, IDLE_RECHECK_MS } from './edit-mode.ts'
+import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS } from './edit-lease.ts'
+import { createEditMode, EXIT_RELEASE_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
@@ -43,7 +43,6 @@ const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', reque
 const SAVED: SaveContentResponse = { revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }
 const DENIED = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
 const GONE = new ApiError(404, 'NOT_FOUND', '不存在')
-const HEARTBEAT_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 
 /** 由测试决定何时完成的 Promise */
 function deferred<T>() {
@@ -2993,7 +2992,7 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     expect(context.editLease.release).not.toHaveBeenCalled()
     expect(context.factory.last().access).toBe('edit')
     expect(context.browser.holderOf(LOCK)).toBe('this')
-    await context.time.advance(IDLE_RECHECK_MS - 1)
+    await context.time.advance(HEARTBEAT_MS - 1)
     expect(context.api.save).toHaveBeenCalledOnce()
     context.api.save.mockResolvedValue(SAVED)
     await context.time.advance(1)
@@ -3014,7 +3013,7 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     const modes: string[] = []
     context.mode.subscribe(() => modes.push(modeOf(context.mode).kind))
     const settles = vi.mocked(context.factory.last().editor.settlePanels).mock.calls.length
-    await context.time.advance(IDLE_RECHECK_MS * 6)
+    await context.time.advance(HEARTBEAT_MS * 6)
     expect(modes).not.toContain('exiting')
     expect(vi.mocked(context.factory.last().editor.settlePanels).mock.calls.length).toBe(settles)
     expect(modeOf(context.mode).kind).toBe('editing')
@@ -3037,7 +3036,7 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     expect(context.api.save).not.toHaveBeenCalled()
     expect(context.editLease.release).not.toHaveBeenCalled()
     context.autosave.setPage(good)
-    await context.time.advance(IDLE_RECHECK_MS)
+    await context.time.advance(HEARTBEAT_MS)
     await settle()
     expect(context.api.save).toHaveBeenCalledOnce()
     expect(readingOf(context.mode).notice).toEqual({ kind: 'idle-released' })
@@ -3111,7 +3110,7 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     // 下一轮空闲释放停在上传上：这期间人回来了
     const reply = deferred<SaveContentResponse>()
     context.api.save.mockImplementationOnce(async () => reply.promise)
-    await context.time.advance(IDLE_RECHECK_MS)
+    await context.time.advance(HEARTBEAT_MS)
     await settle()
     expect(modeOf(context.mode)).toEqual({ kind: 'exiting', cause: 'idle' })
     context.act()
@@ -3130,7 +3129,7 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     context.api.save.mockResolvedValue(SAVED)
     await context.mode.save()
     expect(context.api.save).toHaveBeenLastCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), { token: 'M'.repeat(43), writeEpoch: 8 })
-    await context.time.advance(IDLE_RECHECK_MS * 3)
+    await context.time.advance(HEARTBEAT_MS * 3)
     expect(modeOf(context.mode).kind).toBe('editing')
   })
 
@@ -3966,7 +3965,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.editLease.handOver).not.toHaveBeenCalled()
       expect(context.api.save).not.toHaveBeenCalled()
       context.autosave.setPage({ writable: true })
-      await context.time.advance(IDLE_RECHECK_MS)
+      await context.time.advance(HEARTBEAT_MS)
       await settle()
       expect(context.editLease.handOver).toHaveBeenCalledOnce()
       expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
@@ -4084,7 +4083,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(editingOf(context.mode).request).toEqual({ ...SHOWN, failure: { action: 'handover', error: failure } })
       expect(context.editLease.handOver).toHaveBeenCalledOnce()
       expect(context.editLease.release).not.toHaveBeenCalled()
-      await context.time.advance(IDLE_RECHECK_MS - 1)
+      await context.time.advance(HEARTBEAT_MS - 1)
       expect(context.editLease.handOver).toHaveBeenCalledOnce()
       context.editLease.handOver.mockResolvedValue({ reservedFor: BEN, reservedUntil: RESERVED_UNTIL })
       await context.time.advance(1)
@@ -4129,7 +4128,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.editLease.handOver).not.toHaveBeenCalled()
       expect(context.editLease.release).not.toHaveBeenCalled()
       context.api.save.mockResolvedValue(SAVED)
-      await context.time.advance(IDLE_RECHECK_MS)
+      await context.time.advance(HEARTBEAT_MS)
       await settle()
       expect(context.editLease.handOver).toHaveBeenCalledOnce()
       expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
@@ -4144,7 +4143,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.mode.view().save?.status).toBe('conflict')
       const saves = context.api.save.mock.calls.length
       const seen = recordModes(context)
-      await context.time.advance(IDLE_RECHECK_MS * 3)
+      await context.time.advance(HEARTBEAT_MS * 3)
       expect(seen.filter(state => state.kind === 'exiting')).toEqual([])
       expect(context.api.save).toHaveBeenCalledTimes(saves)
       expect(editingOf(context.mode).request).toEqual(SHOWN)
@@ -4164,7 +4163,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(seen.filter(state => state.kind === 'exiting')).toEqual([])
       expect(context.api.save).not.toHaveBeenCalled()
       context.autosave.setPage({ writable: true, online: true })
-      await context.time.advance(IDLE_RECHECK_MS)
+      await context.time.advance(HEARTBEAT_MS)
       await settle()
       expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
     })

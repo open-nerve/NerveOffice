@@ -19,16 +19,13 @@ import type { PendingEditRequest, UserSummary } from '@nerve-office/contracts'
 import type { EditLease, EditLeaseApi, LeaseClock, LeaseLoss } from './edit-lease.ts'
 import type { IdleWatch } from './idle-watch.ts'
 import type { PageVisibility } from './reading-checks.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, NetworkError } from '../../shared/api/index.ts'
-import { leaseLossOf, within } from './edit-lease.ts'
+import { HEARTBEAT_MS, leaseLossOf, within } from './edit-lease.ts'
 import { createIdleWatch } from './idle-watch.ts'
 
 /** 有人请求编辑时，本页空闲满它就先保存再自动交出（US-M3-06）：2 分钟 */
 const HANDOVER_IDLE_MS = EDIT_HANDOVER_IDLE_SECONDS * 1000
-
-/** 自动交出这一轮没成（会话不对、没联网、没存上）之后，隔多久再看：一个心跳周期（M3-P5 设计 §3.6） */
-const HANDOVER_RECHECK_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 
 /**
  * 持有者这一侧收到的请求编辑（M3-P5 设计 §3.6：心跳带来的待回应的请求）：标识（交出、谢绝时带上）与请求方；declining 是"继续编辑"正在谢绝；
@@ -111,9 +108,9 @@ export interface HolderRequests {
   readonly stayed: (retry: { readonly automatic: boolean, readonly ended: boolean }) => void
   /** 离开了编辑、失去编辑权：请求、说明与计时都清掉 */
   readonly clear: () => void
-  /** 换了一代（进入编辑）：之前的请求、说明与刚谢绝的那个不再算（之后的心跳带来的才算） */
+  /** 换了一代（进入编辑）：之前的请求、说明、刚谢绝的那个与计时都不再算（之后的心跳带来的才算） */
   readonly reset: () => void
-  /** 停下（卸载）：不再计时、不再回调 */
+  /** 停下（卸载）：不再计时、不再回调；之后的 arrive、entered、stayed、leaving、clear 一律什么也不做 */
   readonly dispose: () => void
 }
 
@@ -165,12 +162,15 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
     options.onChange()
   }
 
-  /** 有请求在等、空闲满了 2 分钟：自动交出。会话不对、没联网时这一轮不交出（交出与保存都要它们；不主动向服务端确认会话），过一个心跳周期再看 */
+  /**
+   * 有请求在等、空闲满了 2 分钟：自动交出。会话不对、没联网时这一轮不交出（交出与保存都要它们；不主动向服务端确认会话），过一个心跳周期再看
+   * （HEARTBEAT_MS：与空闲释放没成之后同一个间隔，edit-mode.ts；M3-P5 设计 §3.6、§3.9）
+   */
   function idleReached(): void {
     if (!options.editing() || incoming === undefined || incoming.declining)
       return
     if (!options.writable()) {
-      watch?.resume(HANDOVER_RECHECK_MS)
+      watch?.resume(HEARTBEAT_MS)
       return
     }
     options.handOver()
@@ -258,7 +258,7 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
     },
 
     entered: () => {
-      if (incoming !== undefined)
+      if (!disposed && incoming !== undefined)
         respond()
     },
 
@@ -289,6 +289,8 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
     },
 
     leaving: () => {
+      if (disposed)
+        return
       watch?.stop()
     },
 
@@ -297,10 +299,10 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
     failed: (request, error) => noteFailure(request, 'handover', error),
 
     stayed: ({ automatic, ended }) => {
-      if (incoming === undefined)
+      if (disposed || incoming === undefined)
         return
-      // 离开的过程中才到的请求（离开时只记下、没有计时，审查 B3）：按"请求刚到"处理——空闲已满 2 分钟、会话可写、联网时随即自动交出，
-      // 否则显示提示、开始计时
+      // 离开的过程中才到的请求（离开时只记下、没有计时，审查 B3；换了一个请求的，原来的计时已经丢弃，复验 C3）：按"请求刚到"处理——
+      // 空闲已满 2 分钟、会话可写、联网时随即自动交出，否则显示提示、开始计时
       if (watch === undefined) {
         respond()
         return
@@ -308,16 +310,20 @@ export function createHolderRequests(options: HolderRequestsOptions): HolderRequ
       if (!automatic)
         watch.resume()
       else if (!ended)
-        watch.resume(HANDOVER_RECHECK_MS)
+        watch.resume(HEARTBEAT_MS)
     },
 
     clear: () => {
+      if (disposed)
+        return
       stopWatching()
       incoming = undefined
       notice = undefined
     },
 
     reset: () => {
+      // 计时一并停下（复验 C4）：它属于之前的请求；新的一代里请求到了（arrive、entered）再重新开始
+      stopWatching()
       incoming = undefined
       notice = undefined
       declinedId = undefined

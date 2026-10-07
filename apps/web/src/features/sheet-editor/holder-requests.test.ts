@@ -1,9 +1,10 @@
 import type { HandedOverEditLease, PendingEditRequest, UserSummary } from '@nerve-office/contracts'
 import type { EditLease, EditLeaseApi, LeaseOutcome } from './edit-lease.ts'
 import type { HolderRequestsOptions } from './holder-requests.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { HEARTBEAT_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { createHolderRequests } from './holder-requests.ts'
 
@@ -14,7 +15,6 @@ const REQUEST: PendingEditRequest = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1'
 const OTHER: PendingEditRequest = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f2', requester: CAT, requestedAt: '2026-10-07T03:02:00.000Z' }
 const SHOWN = { id: REQUEST.id, requester: BEN, declining: false, failure: undefined }
 const HANDOVER_MS = EDIT_HANDOVER_IDLE_SECONDS * 1000
-const HEARTBEAT_MS = EDIT_LEASE_HEARTBEAT_SECONDS * 1000
 const TOKEN = 'L'.repeat(43)
 const NEXT_TOKEN = 'M'.repeat(43)
 const HANDED_OVER: HandedOverEditLease = { reservedFor: BEN, reservedUntil: '2026-10-07T03:05:00.000Z' }
@@ -114,6 +114,8 @@ function setup(options: Setup = {}) {
       hidden = next
       visibilityListeners.forEach(listener => listener())
     },
+    /** 2 分钟的计时还挂着的部分：排着的计时器与可见性的订阅（计时停下、丢弃之后都是 0） */
+    watching: () => ({ timers: time.pending(), visibility: visibilityListeners.size }),
   }
 }
 
@@ -424,6 +426,40 @@ describe('离开编辑时', () => {
     expect(context.handOver).toHaveBeenCalledOnce()
     await context.time.advance(HEARTBEAT_MS)
     expect(context.handOver).toHaveBeenCalledTimes(2)
+  })
+
+  it('换了一代（reset）：计时一并停下、丢弃（复验 C4）——不再排计时器、不再订阅可见性；新的一代里请求到了再重新开始', async () => {
+    const context = setup()
+    context.holder.arrive(REQUEST)
+    expect(context.watching()).toEqual({ timers: 1, visibility: 1 })
+    context.holder.reset()
+    expect(context.watching()).toEqual({ timers: 0, visibility: 0 })
+    expect(context.holder.incoming()).toBeUndefined()
+    await context.time.advance(HANDOVER_MS * 2)
+    expect(context.handOver).not.toHaveBeenCalled()
+    context.act()
+    context.holder.arrive(REQUEST)
+    expect(context.watching()).toEqual({ timers: 1, visibility: 1 })
+    await context.time.advance(HANDOVER_MS)
+    expect(context.handOver).toHaveBeenCalledOnce()
+  })
+
+  it('卸载之后（dispose）：entered、stayed、leaving、clear 一律什么也不做（复验 C4）——不重新计时、不回调、不改请求', async () => {
+    const context = setup()
+    context.state.editing = false
+    context.holder.arrive(REQUEST)
+    context.holder.dispose()
+    context.state.editing = true
+    context.holder.entered()
+    context.holder.stayed({ automatic: false, ended: false })
+    context.holder.stayed({ automatic: true, ended: false })
+    context.holder.leaving()
+    context.holder.clear()
+    expect(context.watching()).toEqual({ timers: 0, visibility: 0 })
+    expect(context.onChange).not.toHaveBeenCalled()
+    expect(context.holder.incoming()).toEqual(SHOWN)
+    await context.time.advance(HANDOVER_MS * 2)
+    expect(context.handOver).not.toHaveBeenCalled()
   })
 
   it('离开了、失去编辑权（clear）：请求、说明与计时都清掉；卸载之后（dispose）不再回调', async () => {
