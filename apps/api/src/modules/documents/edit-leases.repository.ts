@@ -166,13 +166,24 @@ function writtenRequestOf(row: { readonly id: string | null, readonly requestedA
 }
 
 /**
- * 按时间还活着（M3-P5 设计 §3.5，DEF-044）：没到期、空闲不满 12 分钟——与有效条件的第 4、5 条（edit-lease-rules.ts）边界逐一相同，
- * 恰好到期、恰好空闲 12 分钟都算已经死了
+ * 在 moment 那一刻按时间还活着（M3-P5 设计 §3.5，DEF-044）：没到期、空闲不满 12 分钟，两个条件都按那一刻算——与有效条件的第 4、5 条
+ * （edit-lease-rules.ts）边界逐一相同，恰好到期、恰好空闲 12 分钟都算已经死了。两个条件都随时间单调：这一刻活着，之前的每一刻都活着
  */
-const ALIVE_BY_TIME = and(
-  gt(l.expiresAt, sql`now()`),
-  gt(l.lastActiveAt, sql`now() - make_interval(secs => ${EDIT_LEASE_IDLE_RECLAIM_SECONDS})`),
-)
+function aliveByTimeAt(moment: SQL): SQL | undefined {
+  return and(
+    gt(l.expiresAt, moment),
+    gt(l.lastActiveAt, sql`${moment} - make_interval(secs => ${EDIT_LEASE_IDLE_RECLAIM_SECONDS})`),
+  )
+}
+
+/** 按时间还活着：数据库的 now()（这个事务开始的时刻） */
+const ALIVE_BY_TIME = aliveByTimeAt(sql`now()`)
+
+/**
+ * 按时间刚死不久或者还活着（M3-P5 审查 A1）：一个有效期之前（now() 减 90 秒）那一刻按时间还活着——到期、空闲回收都发生在最近一个有效期之内，
+ * 或者还没发生。收回写入权拿它锁文档行、等在途的保存，见 lockInScope
+ */
+const ALIVE_A_TTL_AGO = aliveByTimeAt(sql`now() - make_interval(secs => ${EDIT_LEASE_TTL_SECONDS})`)
 
 /** 改写为新的一代时旧行的这一列：条件成立就沿用，否则清空（条件与列都按旧行算：ON CONFLICT DO UPDATE 里表名指的是已有的那一行） */
 function keptWhen(condition: SQL, column: AnyPgColumn): SQL {
@@ -408,29 +419,43 @@ export class EditLeasesRepository {
   }
 
   /**
-   * 收回写入权（P1 设计 §3.4.6 第 1 步）：找出这次范围涉及的、没有明确结束而且按时间还活着的租约（范围的条件见 writersIn，
-   * 与 coversWriter 同义；时间条件见 ALIVE_BY_TIME），先按文档 id 的顺序锁住它们的文档行，再按同样的顺序锁住这些租约行，
-   * 返回锁住的租约（带文档所在的空间、创建人与状态：收回写入权按它们判断持有者还能不能编辑，见 RevocableEditLease）。
+   * 收回写入权（P1 设计 §3.4.6 第 1 步），两条语句；范围的条件见 writersIn（与 coversWriter 同义），只看没有明确结束的租约。
    * 调用方在改动权限的事务里调用，之前已经持有账户行、空间行、成员行或这些文档行（ADR-014 的锁顺序，文档行之后才是租约行）。
-   * 第二步把条件再核对一次：第一步等文档行的锁时，别的申请可能已经提交、改写了租约（换了持有者），那条语句是按旧的租约行判断的范围；
-   * 现在持着文档行的锁，租约不会再被改写（申请要先拿文档行的锁），读到的就是最终的。
+   *
+   * 第一条按文档 id 的顺序锁住文档行：范围涉及的、按时间还活着或者刚死不久的租约（ALIVE_A_TTL_AGO：一个有效期之前那一刻还活着）。
+   * 连刚死不久的也锁，是为了等在途的保存（M3-P5 审查 A1）：保存按它的事务开始时的 now() 判断租约（PostgreSQL 的 now() 是事务开始的时刻），
+   * 持着文档行往下写；租约在它提交之前按时间到期（或空闲满 12 分钟）时，这时开始的撤权看这一行已经死了——要是只锁还活着的，撤权就不等
+   * 这次保存、先提交，保存随后提交，"进行中的保存与撤权互斥"（撤权提交之后的保存一定被拒绝）在这里出现缺口。锁住刚死不久的文档行之后，
+   * 在途的保存先提交、撤权在它之后生效；之后才拿到文档行的保存在锁下看到新的权限（停用另有锁下对登录的再核对），被拒绝。
+   * 上界的前提：保存的事务从开始（判断租约用的那个 now()）到提交远短于一个有效期（90 秒）——之间是等锁（lock_timeout 5 秒）与十来条
+   * 按主键的语句（每条受 statement_timeout 15 秒约束，语句之间的空闲受 idle_in_transaction_session_timeout 10 秒约束），正常是毫秒级。
+   * 调大这几个时限、或者让保存的事务里做更久的事之前，先重新核对这一条。明确结束了的（释放、交出）不锁：页面先存上再释放、交出（P4 的 flush；
+   * 关页时保存在途就不释放），在途的保存不会跨过它们。
+   *
+   * 第二条再按同样的顺序锁住租约行，并把条件再核对一次，只返回按时间还活着的（ALIVE_BY_TIME），连同文档所在的空间、创建人与状态
+   * （收回写入权按它们判断持有者还能不能编辑，见 RevocableEditLease）：
+   * - 第一条等文档行的锁时，别的申请可能已经提交、改写了租约（换了持有者），那条语句是按旧的租约行判断的范围；现在持着文档行的锁，
+   *   租约不会再被改写（申请要先拿文档行的锁），读到的就是最终的；
+   * - 刚死不久的只为等在途的保存锁住了文档行，不交给收回写入权（M3-P5 设计 §3.5，DEF-044）：按时间死了的租约不能再续租（心跳要求有效），
+   *   撤权之后才拿到文档行的保存又按上一条被拒绝，不必记 revoked、不必给代次加一——它照样按事实算异常结束，提醒得以保留。
+   *   死了超过一个有效期的连文档行也不锁：撤权不再锁一批历史文档行（DEF-044 的另一半）。
+   * 异常结束的租约里仍会被记 revoked 的只剩"登录已失效、还没到期"的（最长一个有效期）。
    * 申请在撤权提交之前判断了权限、在它之后才提交时，租约行不在这里找得到的范围里，由有效条件的第 7 条在每次使用时让它失效（§3.4.6）。
-   * 按时间已经死了的租约（到期、空闲满 12 分钟）不找（M3-P5 设计 §3.5，DEF-044）：它不可能再被续租或用来保存（心跳与保存都先判到期、
-   * 空闲，续租要求有效），不必记 revoked、不必给代次加一——它照样按事实算异常结束，提醒得以保留；撤权也不再锁这批文档行。
-   * 异常结束的租约里仍会被记 revoked 的只剩"登录已失效、还没到期"的（最长一个有效期）。时间按这个事务的 now() 判断：在它之前判断有效、在它之后
-   * 才提交的心跳（租约恰好在两者之间到期）续上的租约不在这里，与申请交错的那一种同样由第 7 条（停用另由第 6 条）在每次使用时让它失效。
+   * 心跳只锁租约行，同样按它的事务开始时的 now() 判断：事务开始在租约到期之前、在第二条读过租约行之后才锁住它的那一次续上的租约不在这里，
+   * 与申请交错的那一种同样由第 7 条（停用另由第 6 条）在每次使用时让它失效；在第二条之前提交了的或者正锁着租约行的，第二条读到
+   * （或者等它提交之后再核对）续上之后的行，照常收回。
    * 文档的状态不过滤：删除的调用方先把文档放进回收站，它们上面的租约同样要结束
    */
   async lockInScope(scope: WriteAccessScope, transaction: Transaction): Promise<RevocableEditLease[]> {
     if ((scope.kind === 'documents' || scope.kind === 'userDocuments') && scope.documentIds.length === 0)
       return []
     const executor = executorOf(this.db, transaction)
-    const open = and(isNull(l.endedAt), ALIVE_BY_TIME, writersIn(scope))
+    const open = and(isNull(l.endedAt), writersIn(scope))
     const locked = await executor
       .select({ id: d.id })
       .from(d)
       .innerJoin(l, eq(l.documentId, d.id))
-      .where(open)
+      .where(and(open, ALIVE_A_TTL_AGO))
       .orderBy(asc(d.id))
       .for('update', { of: d })
     if (locked.length === 0)
@@ -439,7 +464,7 @@ export class EditLeasesRepository {
       .select({ ...COLUMNS, spaceId: d.spaceId, createdBy: d.createdBy, documentStatus: d.status })
       .from(l)
       .innerJoin(d, eq(d.id, l.documentId))
-      .where(and(inIdArray(l.documentId, locked.map(row => row.id)), open))
+      .where(and(inIdArray(l.documentId, locked.map(row => row.id)), open, ALIVE_BY_TIME))
       .orderBy(asc(l.documentId))
       .for('update', { of: l })
   }

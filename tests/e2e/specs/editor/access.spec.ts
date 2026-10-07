@@ -16,7 +16,7 @@ import { shownCell } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, expectFoundOnce, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { blockLeaseRenewals, cellOf, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, expectFoundOnce, lostNotice, openAndEnterEditing, recordLeaseReleases, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -246,11 +246,14 @@ test.describe('US-M3-12 编辑中失去访问或被移走：读不到了就说�
     await typeInCell(page, 'A1', '搬家前写的')
 
     // 空间管理员把文档移到另一个空间（我在那里也是编辑者）：保存（或者心跳先一步）得知编辑权过时，期间没人保存过、我仍能编辑，
-    // 续上新的一代、用它重发这一次
+    // 续上新的一代、用它重发这一次。续上不先释放本页那一代（M3-P5 审查 A3）：服务端看本人的过时租约是空着的，先释放就让等待中的
+    // 请求方抢进"释放"与"申请"之间
+    const releases = recordLeaseReleases(page, documentId)
     await loginThroughApi(anotherDevice, lead)
     await actAs(anotherDevice, 'POST', `/api/documents/${documentId}/move`, { spaceId: to.id })
     await saveAndWait(page)
     expect(await editLeaseEpoch(documentId)).toBeGreaterThan(before)
+    expect(releases).toEqual([])
     await expect(page.getByRole('alert')).toHaveCount(0)
     const saved = await savedContent(page, documentId)
     expect([saved.revision, cellOf(saved.snapshot, 'A1')?.v]).toEqual([2, '搬家前写的'])

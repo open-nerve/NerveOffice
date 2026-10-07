@@ -255,7 +255,7 @@ describe('EditLeaseService.acquire', () => {
       const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
       await store.repositories.documents.advanceWriteEpoch(document.id)
       invalidate(store)
-      expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION), name).toMatchObject({ kind: 'acquired', interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false } : undefined })
+      expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION), name).toMatchObject({ kind: 'acquired', interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false, samePage: false } : undefined })
     }
   })
 
@@ -285,7 +285,7 @@ describe('EditLeaseService.acquire', () => {
     await acquired(setupResult)
     const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
     later(store, 20 * 60 * SECOND)
-    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false } }))
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false, samePage: false } }))
   })
 
   it('M3-P5 提醒带上上一位持有者是不是申请的人自己：自己的租约到期之后再申请，sameUser 为真', async () => {
@@ -294,7 +294,16 @@ describe('EditLeaseService.acquire', () => {
     await acquired(setupResult)
     const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
     later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
-    expect(await service.acquire({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: true } }))
+    expect(await service.acquire({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: true, samePage: false } }))
+  })
+
+  it('M3-P5 提醒带上那一代是不是申请的这个页面自己的：同一个标签页的那一代到期之后这个页面再申请（例如退出时释放没送到），samePage 为真；判断用的是申请带的标签页', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
+    later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
+    expect(await service.acquire(AMY, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION)).toEqual(expect.objectContaining({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: true, samePage: true } }))
   })
 
   it('M3-P5 先到期、后代次过时（跨空间移动、转移）：按事实仍是异常结束，照样提醒（设计 §3.5，P1 审查 A6 第 1 处）', async () => {
@@ -304,7 +313,7 @@ describe('EditLeaseService.acquire', () => {
     const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
     later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
     await store.repositories.documents.advanceWriteEpoch(document.id)
-    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false } })
+    expect(await service.acquire(BEN, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false, samePage: false } })
   })
 
   it('不给提醒：明确释放的、没了编辑权的、超过 30 分钟的', async () => {
@@ -422,7 +431,7 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
     await acquired(vacant)
     const renewedAt = vacant.store.leaseRecords.get(vacant.document.id)?.renewedAt
     later(vacant.store, EDIT_LEASE_TTL_SECONDS * SECOND)
-    expect(await claim(vacant, BEN, OTHER_TAB, 'force')).toMatchObject({ kind: 'acquired', writeEpoch: 2, interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false } })
+    expect(await claim(vacant, BEN, OTHER_TAB, 'force')).toMatchObject({ kind: 'acquired', writeEpoch: 2, interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false, samePage: false } })
     expect(vacant.store.leaseRecords.get(vacant.document.id)).toMatchObject({ holderId: BOB, takenOverTokenDigest: null, takeover: null })
     expect(vacant.store.leases.replace).toHaveBeenLastCalledWith(expect.objectContaining({ takenOver: undefined }), TRANSACTION)
     expect(vacant.store.audits).toEqual([])
@@ -719,7 +728,7 @@ describe('EditLeaseService.status', () => {
       await acquired(setupResult)
       const renewedAt = setupResult.store.leaseRecords.get(setupResult.document.id)?.renewedAt
       invalidate(setupResult)
-      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION), name).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false } : undefined })
+      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION), name).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false, samePage: false } : undefined })
     }
   })
 
@@ -730,8 +739,8 @@ describe('EditLeaseService.status', () => {
     const renewedAt = store.leaseRecords.get(document.id)?.renewedAt
     expect((await service.status(BEN, document.id, TRANSACTION)).interruption).toBeUndefined()
     later(store, 30 * 60 * SECOND)
-    expect((await service.status(BEN, document.id, TRANSACTION)).interruption).toEqual({ holderId: ALICE, endedAt: renewedAt, sameUser: false })
-    expect((await service.status(AMY, document.id, TRANSACTION)).interruption).toEqual({ holderId: ALICE, endedAt: renewedAt, sameUser: true })
+    expect((await service.status(BEN, document.id, TRANSACTION)).interruption).toEqual({ holderId: ALICE, endedAt: renewedAt, sameUser: false, samePage: false })
+    expect((await service.status(AMY, document.id, TRANSACTION)).interruption).toEqual({ holderId: ALICE, endedAt: renewedAt, sameUser: true, samePage: false })
     later(store, 1)
     expect((await service.status(BEN, document.id, TRANSACTION)).interruption).toBeUndefined()
 

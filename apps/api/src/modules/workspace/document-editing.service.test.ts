@@ -151,11 +151,11 @@ describe('DocumentEditingService.acquire', () => {
     expect(acquiredEditLeaseSchema.parse(acquired)).toEqual(acquired)
   })
 
-  it('上一个租约异常结束：提醒里补上上一位持有者的人名（同一个事务里），原样带上是不是自己（M3-P5）', async () => {
-    for (const sameUser of [false, true]) {
-      const { service, calls } = setup({ ...ACQUIRED, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser } })
+  it('上一个租约异常结束：提醒里补上上一位持有者的人名（同一个事务里），原样带上是不是自己（M3-P5）与是不是这个页面自己的那一代（审查之后）', async () => {
+    for (const [sameUser, samePage] of [[false, false], [true, false], [true, true]] as const) {
+      const { service, calls } = setup({ ...ACQUIRED, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser, samePage } })
       const acquired = await service.acquire(ACTOR, DOCUMENT, LEASE_REQUEST, ORIGIN)
-      expect(acquired.interruption, String(sameUser)).toEqual({ holder: { id: AMY, username: 'amy', displayName: '艾米' }, endedAt: ACTIVE.toISOString(), sameUser })
+      expect(acquired.interruption, `${sameUser} ${samePage}`).toEqual({ holder: { id: AMY, username: 'amy', displayName: '艾米' }, endedAt: ACTIVE.toISOString(), sameUser, samePage })
       expect(acquiredEditLeaseSchema.parse(acquired)).toEqual(acquired)
       expect(calls).toEqual(['begin', 'acquire', 'names', 'commit'])
     }
@@ -233,9 +233,9 @@ describe('DocumentEditingService 的心跳、释放与编辑状态', () => {
     expect(free.calls).toEqual(['snapshot', 'status', 'end snapshot'])
   })
 
-  it('US-M3-10 没人在编辑时的异常中断提醒（M3-P5 设计 §3.5）：补上上一位持有者的人名（同一个快照里），原样带上是不是自己', async () => {
+  it('US-M3-10 没人在编辑时的异常中断提醒（M3-P5 设计 §3.5）：补上上一位持有者的人名（同一个快照里），原样带上是不是自己；不带 samePage（编辑状态没有页面）', async () => {
     for (const sameUser of [false, true]) {
-      const { service, calls } = setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser } })
+      const { service, calls } = setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser, samePage: false } })
       const status = await service.status(ACTOR, DOCUMENT)
       expect(status, String(sameUser)).toEqual({ revision: 7, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: { holder: { id: AMY, username: 'amy', displayName: '艾米' }, endedAt: ACTIVE.toISOString(), sameUser } })
       expect(editStatusSchema.parse(status)).toEqual(status)
@@ -244,7 +244,7 @@ describe('DocumentEditingService 的心跳、释放与编辑状态', () => {
   })
 
   it('M3-P5 有人在编辑时提醒一律为 null（正在编辑的人与提醒至多有一个），人名只查正在编辑的人', async () => {
-    const { service, calls, users } = setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: { holderId: BEN, endedAt: ACTIVE, sameUser: true } })
+    const { service, calls, users } = setup(ACQUIRED, { revision: 7, editor: AMY_EDITING, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: { holderId: BEN, endedAt: ACTIVE, sameUser: true, samePage: false } })
     expect(await service.status(ACTOR, DOCUMENT)).toEqual({ revision: 7, editor: AMY_EDITOR, canEdit: true, canTakeOver: false, formulasPending: false, ...NOT_YET })
     expect(users.findByIds.mock.calls).toEqual([[[AMY], { transaction: true }]])
     expect(calls).toEqual(['snapshot', 'status', 'names', 'end snapshot'])
@@ -285,7 +285,7 @@ describe('US-M3-06 编辑状态里的请求编辑与保留（M3-P5 设计 §3.3�
   })
 
   it('交出之后的保留：reservation 补上留给的人的人名、留到何时与是不是调用者自己；没人在编辑时与异常中断的提醒、请求方的人名一次查齐', async () => {
-    const { service, users } = setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: { requesterId: BEN, requestedAt: ACTIVE, mine: true }, reservation: { reservedFor: CAT, reservedUntil: EXPIRES, mine: false }, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser: false } })
+    const { service, users } = setup(ACQUIRED, { revision: 7, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: { requesterId: BEN, requestedAt: ACTIVE, mine: true }, reservation: { reservedFor: CAT, reservedUntil: EXPIRES, mine: false }, interruption: { holderId: AMY, endedAt: ACTIVE, sameUser: false, samePage: false } })
     const status = await service.status(ACTOR, DOCUMENT)
     expect(status).toEqual({
       revision: 7,

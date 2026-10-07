@@ -10,15 +10,16 @@
 //   （P2 据此区分"还读得到就给副本"与"读不到就丢弃"）；401 与 CSRF 失效交给页面确认会话，确认之前不再续租；
 //   别的失败（网络、5xx、回包读不出来）下一次照常重试，到期由服务端判断；
 // - 续上（M3 总设计 §2.1 的细化；原在 P2，2026-10-04 决定提前到 P1，已经交付的 US-M1-05 不因编辑权绑定登录而倒退）：
-//   编辑权因为别的原因失效（EDIT_LEASE_LOST 的 none、replaced、released、stale、expired、idle、session），自动重新申请一次：
-//   先放掉本页手里那一代（令牌对得上就是持有者本人，P1 设计 §3.4.3；不放掉的话，换过登录、原来的登录还在时，它仍然有效，
-//   新的申请会被它占住）——释放的结果未知时不申请，保持现状，下一次心跳再试（审查 B9）；放掉之后页面已经释放或失效就不再申请
-//   （审查 B7）。再申请：取得了、而且修订号就是本页保存的基准（期间没人保存过）：换上新的令牌与代次，接着心跳与保存，
+//   编辑权因为别的原因失效（EDIT_LEASE_LOST 的 none、replaced、released、stale、expired、idle、session），自动重新申请一次。
+//   只有原因是 session（本页换过登录）时先放掉本页手里那一代（令牌对得上就是持有者本人，P1 设计 §3.4.3；不放掉的话，原来的登录还在时
+//   它仍然有效，新的申请会被它占住）——释放的结果未知时不申请，保持现状，下一次心跳再试（审查 B9）；放掉之后页面已经释放或失效就不再申请
+//   （审查 B7）。别的原因直接申请：服务端看本人那一代是空着的；先放反倒让等待中的请求方抢进"放"与"申请"之间（M3-P5 审查 A3，
+//   逐类的理由见 releasesBeforeRecovery）。再申请：取得了、而且修订号就是本页保存的基准（期间没人保存过）：换上新的令牌与代次，接着心跳与保存，
 //   用户不受打扰；修订号变了：当前修订的来源是本页一次结果未知的保存（其实已经提交，回包丢了）时以它为基准接着编辑，
 //   与冲突时认出"自己追自己"同一条规则（审查 B1，00 号计划书 §7.5），否则是别处保存过——放掉刚申请到的，按失效处理
 //   （不覆盖，另存为副本在 P2）；被占用、403、404 按失效处理；
 //   网络错误、5xx 保持现状，下一次心跳或保存时再判断；未登录、令牌失效交给页面确认会话。续上的申请带本页的空闲秒数（M3-P5 设计 §3.5：
-//   服务端把新的一代的最后活动按它往前推，空闲的兜底计时准确）。
+//   服务端把新的一代的最后活动按它往前推，空闲的兜底计时准确）；人在才申请，带的空闲因此短于回收阈值、不超过契约的上限（审查 A4）。
 //   每一代至多续上一次有结果（成了是新的一代，不成就是失效，不来回申请）；会话不是本人时不续；空闲释放的过程中不续（M3-P5 设计 §3.9：
 //   释放开始的那一刻就停止续上，免得回来时的第一下操作把 dormant 叫醒、申请新的一代——holdRecovery，没释放成时 allowRecovery）。
 //   人不在时不续（本页空闲已经到了服务端的回收阈值 EDIT_LEASE_IDLE_RECLAIM_SECONDS），等本页再有操作：人走开之后断网、休眠回来，
@@ -37,12 +38,13 @@
 //   接手（forced 为假）与空间管理员强制接管（forced 为真）分开交给页面；已经交出（handed_over：交出的回答没收到、下一次心跳才得知）同样不续上，
 //   单独交给页面（说明交给了请求编辑的人）；
 // - 异常中断的提醒（M3-P5 设计 §3.5，US-M3-10）：用户发起的申请（这里的 acquireEditLease）把申请响应里的提醒交回页面；续上（recover）的申请
-//   不交回——编辑权中断之后续上，上一代异常结束的就是本页自己，说了只会让人以为出了事；
+//   不交回——编辑权中断之后续上，上一代异常结束的就是本页自己，说了只会让人以为出了事。用户发起的申请也一样：服务端说那一代就是本页的
+//   （samePage，例如退出时释放没送到、到期之后本页再进入编辑）就不交回；
 // - 本人接管（M3-P5 设计 §3.7，"在此编辑"）：申请带 takeover: 'self'（只给用户发起的那一次，续上从不带）；被自己占着时要不要隔一会儿再试
 //   由页面判断（本浏览器里有标签页持有本机锁时不必再试：那不是刷新时晚到的释放）；
 // - 请求编辑（M3-P5 设计 §3.6）：心跳的响应带着待回应的请求（没有时为 null），每次续租成功都交给页面（onRequest）；交出与谢绝由页面带着
 //   现在的令牌直接发（edit-mode.ts），交出之后服务端已经结束这一代，页面 abandon（不再续租、不发释放）
-import type { AcquiredEditLease, DocumentEditor, EditInterruption, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, HandedOverEditLease, PendingEditRequest, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
+import type { AcquiredEditInterruption, AcquiredEditLease, DocumentEditor, EditInterruption, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, HandedOverEditLease, PendingEditRequest, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
@@ -73,6 +75,23 @@ function outcomeUnknown(error: unknown): boolean {
  * 不认识的原因（以后的 Phase 加的）也不续，按失效说明
  */
 const RECOVERABLE_REASONS: ReadonlySet<EditLeaseLostReason> = new Set<EditLeaseLostReason>(['none', 'replaced', 'released', 'stale', 'expired', 'idle', 'session'])
+
+/**
+ * 续上之前要不要先放掉本页手里那一代（M3-P5 审查 A3；按 recover 与 P1 审查 B9 的理由逐类核对）。服务端的释放只认"令牌是当前这一行的、
+ * 没有明确结束、释放的人是持有者"（edit-lease-rules.ts 的 releasableBy），申请看的是从申请的人看谁占着（occupancyOf）：
+ * - session（请求的登录不是租约绑定的那一个：本页换过登录）：要放。原来的登录还在时这一代在服务端仍然有效，新登录的申请会被它占住、
+ *   说成"你在别处正在编辑"（P1 审查 A4）；放的结果未知时不申请，下一次心跳再判断（P1 审查 B9）；
+ * - stale（代次过时：跨空间移动、转移之后）：不放。服务端看持有者本人的过时租约是空着的（R2 只对别人），不放、换没换过登录都申请得到；
+ *   先放就明确结束了这一代，R2（只让持有者本人续上）随之失效——等待中的请求方续期得到 free、抢先申请，本页的续上被占用；
+ * - expired、idle（按时间已死）：不放。谁看都是空着的，不放也申请得到；放了只是把异常结束改成明确结束，别人在这之后申请就看不到
+ *   "可能还有未同步的修改"的提醒，这时本页的续上若没成，那条提醒正该有；
+ * - none（没有这一行）、replaced（这一行已是新的一代）、released（已经释放）：不放。服务端的释放对它们什么也不改，白走一趟。
+ * 原因都按得知失效的那一刻：按时间死了的不会复活、代次只增不减、释放与换代不可逆，人回来再续上时（dormant）照样成立；只有 session
+ * 可能因原来的登录随后失效而不必再放，放了也无害
+ */
+function releasesBeforeRecovery(reason: EditLeaseLostReason): boolean {
+  return reason === 'session'
+}
 
 /** 租约用到的时钟：单调的"现在"与计时器（测试换成假的） */
 export interface LeaseClock {
@@ -269,7 +288,8 @@ export interface EditLeaseOptions {
 
 /**
  * 申请的结果：持有（租约已经开始心跳；修订号是文档当前的；formulasPending 是文档当前的"公式待更新"，M3-P4 设计 §3.5——带标记时
- * 进入编辑以强制全量重算创建、收齐之后补存；interruption 是上一位编辑者异常中断的提醒，M3-P5 设计 §3.5，没有时为 undefined）
+ * 进入编辑以强制全量重算创建、收齐之后补存；interruption 是上一位编辑者异常中断的提醒，M3-P5 设计 §3.5，没有时、说的是本页自己那一代时
+ * 为 undefined）
  * 或被占用（认不出服务端给的详情时 holder 为 undefined）
  */
 export type LeaseAcquisition
@@ -348,8 +368,16 @@ export async function acquireEditLease(options: EditLeaseOptions, intent: Acquir
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)
       continue
     }
-    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: acquired.interruption ?? undefined }
+    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
   }
+}
+
+/**
+ * 申请带回的提醒里要交给页面说的那一个（M3-P5 设计 §3.5）：异常结束的那一代就是本页自己的（samePage：同一个标签页——例如退出时释放没送到、
+ * 那一代到期之后本页再进入编辑）时不说，本页自己知道它的修改存没存上，说"可能没有存上"就是误报；与续上不交回提醒同一个理由
+ */
+function noticeOf(interruption: AcquiredEditInterruption | null): EditInterruption | undefined {
+  return interruption === null || interruption.samePage ? undefined : interruption
 }
 
 /**
@@ -382,6 +410,8 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   let releasing: Promise<boolean> | undefined
   /** 停止续上（空闲释放的过程中，holdRecovery）：得知的可以续上的失效先不续 */
   let recoveryHeld = false
+  /** 人不在（dormant）时那次失效的原因：只在 dormant 时读，人回来续上时按它决定要不要先放掉手里那一代（releasesBeforeRecovery） */
+  let dormantReason: EditLeaseLostReason = 'none'
 
   function stopTimer(): void {
     cancelTimer?.()
@@ -407,11 +437,27 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   }
 
   /**
+   * 续上的申请带的本页空闲（整秒，M3-P5 设计 §3.5）：人在时是这一刻的空闲向下取整——人在与秒数出自同一次读时钟，空闲短于回收阈值，
+   * 取整之后不超过契约的上限 EDIT_ACQUIRE_IDLE_SECONDS_MAX（审查 A4：带到阈值的新一代一出生就按空闲失效，服务端 400）；人已经不在时为 undefined
+   */
+  function presentIdleSeconds(): number | undefined {
+    const idleMs = clock.now() - options.lastActivity()
+    return idleMs < PRESENCE_MS ? Math.max(0, Math.floor(idleMs / 1000)) : undefined
+  }
+
+  /**
    * 已经到了终态（失效或释放）。经函数读：续上的几步之间隔着请求，状态随时可能被页面（释放、暂停）或另一条路（失效）改掉，
    * 每次都要读现在的值
    */
   function ended(): boolean {
     return state === 'lost' || state === 'released' || state === 'halted'
+  }
+
+  /** 人不在：停下续租，等本页再有操作时按这次失效的原因续上（noteActivity、allowRecovery） */
+  function sleep(reason: EditLeaseLostReason): void {
+    state = 'dormant'
+    dormantReason = reason
+    stopTimer()
   }
 
   /** 失效（没有续上）：终态，通知页面 */
@@ -438,28 +484,39 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   }
 
   /**
-   * 续上（见文件头）：先放掉本页手里那一代，再申请；取得了、修订号就是本页保存的基准，换上新的一代。
+   * 续上（见文件头），reason 是得知的失效原因：要先放的（只有 session，见 releasesBeforeRecovery）先放掉本页手里那一代，再申请；
+   * 取得了、修订号就是本页保存的基准，换上新的一代。
    * 释放的结果未知：不申请（手里那一代可能还占着，申请会被自己占住），保持现状，下一次心跳再试（审查 B9）；
    * 放掉之后页面已经释放或失效：不再申请（审查 B7）；申请回来时页面已经释放或失效：新的一代随即放掉
    */
-  async function recover(): Promise<LeaseOutcome> {
+  async function recover(reason: EditLeaseLostReason): Promise<LeaseOutcome> {
     stopTimer()
-    try {
-      await api.release(documentId, credentials.token)
-    }
-    catch (error) {
-      if (outcomeUnknown(error)) {
-        if (state === 'holding')
-          scheduleRenewal(HEARTBEAT_MS)
-        return { kind: 'unknown', error }
+    if (releasesBeforeRecovery(reason)) {
+      try {
+        await api.release(documentId, credentials.token)
       }
-      // 确定被拒（读不到、不能编辑、未登录等）：申请会给出确定的回答，照常申请
+      catch (error) {
+        if (outcomeUnknown(error)) {
+          if (state === 'holding')
+            scheduleRenewal(HEARTBEAT_MS)
+          return { kind: 'unknown', error }
+        }
+        // 确定被拒（读不到、不能编辑、未登录等）：申请会给出确定的回答，照常申请
+      }
+      if (ended())
+        return LOST
     }
-    if (ended())
-      return LOST
+    // 得知失效时人在，释放的来回期间本页的空闲却可能刚好满了回收阈值：这时人已经不在了，与得知失效时人不在同一个处理——
+    // 不申请（也就不带超过契约上限的空闲，审查 A4），等本页再有操作
+    const idle = presentIdleSeconds()
+    if (idle === undefined) {
+      if (state === 'holding')
+        sleep(reason)
+      return { kind: 'unknown', error: undefined }
+    }
     let next: AcquiredEditLease
     try {
-      next = await api.acquire(documentId, options.clientInstanceId, { idleSeconds: idleSeconds() })
+      next = await api.acquire(documentId, options.clientInstanceId, { idleSeconds: idle })
     }
     catch (error) {
       if (ended())
@@ -511,9 +568,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     return HELD
   }
 
-  /** 开始续上（调用方先确认没有进行中的：得知失效的都经 handleLoss 等进行中的那一次） */
-  async function startRecovery(): Promise<LeaseOutcome> {
-    const started = recover().finally(() => {
+  /** 开始续上（调用方先确认没有进行中的：得知失效的都经 handleLoss 等进行中的那一次），reason 是得知的失效原因 */
+  async function startRecovery(reason: EditLeaseLostReason): Promise<LeaseOutcome> {
+    const started = recover(reason).finally(() => {
       recovery = undefined
     })
     recovery = started
@@ -546,11 +603,10 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       return { kind: 'unknown', error: undefined }
     }
     if (!present()) {
-      state = 'dormant'
-      stopTimer()
+      sleep(loss.reason)
       return { kind: 'unknown', error: undefined }
     }
-    return startRecovery()
+    return startRecovery(loss.reason)
   }
 
   /** 尽力释放，不等、不看结果（页面隐藏与关闭、放掉续上时刚申请到却用不上的那一代） */
@@ -653,7 +709,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     noteActivity: () => {
       if (state === 'dormant' && !recoveryHeld) {
         state = 'holding'
-        void startRecovery()
+        void startRecovery(dormantReason)
       }
     },
     holdRecovery: () => {
@@ -663,7 +719,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       recoveryHeld = false
       if (state === 'dormant' && present()) {
         state = 'holding'
-        void startRecovery()
+        void startRecovery(dormantReason)
       }
     },
     abandon: () => {

@@ -170,10 +170,12 @@ export type {
   UpdateDocumentRequest,
 } from './documents/documents.ts'
 export {
+  acquiredEditInterruptionSchema,
   acquiredEditLeaseSchema,
   acquireEditLeaseRequestSchema,
   declineEditRequestSchema,
   documentEditorSchema,
+  EDIT_ACQUIRE_IDLE_SECONDS_MAX,
   EDIT_HANDOVER_IDLE_SECONDS,
   EDIT_HANDOVER_RESERVE_SECONDS,
   EDIT_IDLE_RELEASE_SECONDS,
@@ -207,6 +209,7 @@ export {
   requestEditRequestSchema,
 } from './documents/editing.ts'
 export type {
+  AcquiredEditInterruption,
   AcquiredEditLease,
   AcquireEditLeaseRequest,
   DeclineEditRequest,

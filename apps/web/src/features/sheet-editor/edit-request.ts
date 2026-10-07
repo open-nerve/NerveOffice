@@ -217,7 +217,8 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
         finish({ kind: 'occupied', requester: outcome.requester })
         return
       case 'reservedForOther':
-        // 续期时本人的请求还在槽里（服务端照样续了期）：撤回它，免得之后又交给一个不再等的页面
+        // 续期时本人的请求还在槽里（服务端照样续了期）：撤回它，免得之后又交给一个不再等的页面。服务端现有的写路径下续期得不到它
+        // （保留与待回应的请求不会同时在没人占着的一行上，edit-request-rules.ts 的 decideRequestRenewal，M3-P5 审查 A6），这里留作防御
         if (source === 'renew')
           void api.cancel(documentId).catch(() => undefined)
         finish({ kind: 'reserved-for-other', reservedFor: outcome.reservedFor, reservedUntil: outcome.reservedUntil })

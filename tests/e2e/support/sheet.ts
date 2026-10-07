@@ -387,6 +387,19 @@ export async function leaveEditor(page: Page, documentId: string): Promise<void>
 }
 
 /**
+ * 记下这个页面之后发出的释放编辑权（DELETE …/edit-lease）的请求（地址），按先后。续上只在换过登录时先释放本页那一代
+ * （M3-P5 审查 A3：到期、代次过时的直接申请），用例据此核对续上的过程里有没有释放
+ */
+export function recordLeaseReleases(page: Page, documentId: string): string[] {
+  const releases: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+      releases.push(request.url())
+  })
+  return releases
+}
+
+/**
  * 拦下这个页面的心跳续租（M3-P1）：续租一律按断网处理——页面照常隔 10 秒重试，编辑权的状态不变；unblock 之后照常。
  * 核对保存那一步的用例用它：心跳也会得知失去访问、登录失效，赶在保存之前说明编辑权已失效（页面这样做是对的，
  * 但那就不是这条用例要核对的那一步了，结果还取决于心跳恰好落在哪里）。申请与释放照常

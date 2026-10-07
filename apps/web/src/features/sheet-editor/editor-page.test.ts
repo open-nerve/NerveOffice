@@ -1507,9 +1507,9 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'failed', problem: { kind: 'request', error: lost } } })
   })
 
-  it('保存得到可以续上的失效（到期）：放掉手里那一代、重新申请，续上之后用新的编辑权重发这一次（requestId 不变），保存成功，不出现失效的说明', async () => {
+  it('保存得到可以续上的失效（本页换过登录，session）：先放掉手里那一代、再重新申请（原来的登录还在时那一代仍然有效），续上之后用新的编辑权重发这一次（requestId 不变），保存成功，不出现失效的说明', async () => {
     const save = vi.fn<EditorPageApi['save']>()
-      .mockRejectedValueOnce(leaseLost('expired'))
+      .mockRejectedValueOnce(leaseLost('session'))
       .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const { editorPage, editLease } = setup({ api: { save } })
     await editorPage.load()
@@ -1554,12 +1554,12 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'clean' } })
   })
 
-  it('续租得知中断（到期）：放掉手里那一代、重新申请，修订号没变就续上，不出现失效的说明；之后的保存与续租带新的令牌与代次', async () => {
+  it('续租得知中断（到期）：重新申请（到期的那一代谁看都是空着的，不先放，M3-P5 审查 A3），修订号没变就续上，不出现失效的说明；之后的保存与续租带新的令牌与代次', async () => {
     const { editorPage, api, editLease, time } = setup({ editLease: { renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(leaseLost('expired')).mockResolvedValue(RENEWED) } })
     await editorPage.load()
     editLease.acquire.mockResolvedValueOnce(NEXT_LEASE)
     await time.advance(10_000)
-    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(editLease.release).not.toHaveBeenCalled()
     // 续上的申请带本页的空闲秒数（M3-P5 设计 §3.5）
     expect(editLease.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, 'id-1', { idleSeconds: 10 })
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { canSave: true } })
@@ -2529,7 +2529,7 @@ describe('强制接管、异常中断的提醒与观察钩子（M3-P5 设计 §3
   })
 
   it('申请带回异常中断的提醒：进入编辑之后编辑的状态带着它；"知道了"交给编辑模式，提醒去掉', async () => {
-    const interruption = { holder: BOB_EDITING.holder, endedAt: '2026-09-27T02:58:00.000Z', sameUser: false }
+    const interruption = { holder: BOB_EDITING.holder, endedAt: '2026-09-27T02:58:00.000Z', sameUser: false, samePage: false }
     const { editorPage } = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption }) } })
     await editorPage.load()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', interruption })

@@ -1,4 +1,4 @@
-import type { AcquiredEditLease, ClientFormat, DocumentEditor, EditInterruption, EditLeaseHeldDetails, EditLeaseReservedDetails, EditRequestOutcome, EditRequestView, EditReservation, EditStatus, HandedOverEditLease, RenewedEditLease } from '@nerve-office/contracts'
+import type { AcquiredEditInterruption, AcquiredEditLease, ClientFormat, DocumentEditor, EditInterruption, EditLeaseHeldDetails, EditLeaseReservedDetails, EditRequestOutcome, EditRequestView, EditReservation, EditStatus, HandedOverEditLease, RenewedEditLease } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { EditingActor, LeaseEditor, LeaseInterruption, LeaseRequest, LeaseRequestView, LeaseReservation, LeaseReservationView, RenewalRequest, RequestOutcome } from '../documents/index.ts'
@@ -33,9 +33,14 @@ function reservationViewOf(reservation: LeaseReservationView, accounts: Accounts
   return { ...reservedOf(reservation, accounts), mine: reservation.mine }
 }
 
-/** 异常中断的提醒补上上一位持有者的人名 */
+/** 异常中断的提醒补上上一位持有者的人名（编辑状态：没有页面，不带 samePage） */
 function interruptionOf(interruption: LeaseInterruption, accounts: Accounts): EditInterruption {
   return { holder: toUserSummary(accountIn(accounts, interruption.holderId)), endedAt: interruption.endedAt.toISOString(), sameUser: interruption.sameUser }
+}
+
+/** 申请的结果里的提醒：另带那一代是不是申请的这个页面自己的（samePage，页面据此不说） */
+function acquiredInterruptionOf(interruption: LeaseInterruption, accounts: Accounts): AcquiredEditInterruption {
+  return { ...interruptionOf(interruption, accounts), samePage: interruption.samePage }
 }
 
 /** 请求编辑的结果里要补人名的人：正在编辑的人、先请求的人或留给的人（free、reserved 没有） */
@@ -122,7 +127,7 @@ export class DocumentEditingService {
   }
 
   /**
-   * 申请（201）：取得新的一代时给出令牌、代次、修订号与它的来源、到期时间、上一个租约异常结束的提醒（补上一位持有者的人名）
+   * 申请（201）：取得新的一代时给出令牌、代次、修订号与它的来源、到期时间、上一个租约异常结束的提醒（补上一位持有者的人名，带上 samePage）
    * 与文档的"公式待更新"；有效的租约在别人手里时 409 EDIT_LEASE_HELD，details 带正在编辑的人（人名、最后活动时间、是不是自己、
    * 是不是这次登录）、调用者能不能强制接管与有没有人在请求编辑（M3-P5）；编辑权刚交给了别人、还在保留期内时 409 EDIT_LEASE_RESERVED，
    * details 带留给的人与留到何时（M3-P5 设计 §3.6）。页面过旧时 409 CLIENT_OUTDATED、文档比服务端新时 409 DOCUMENT_TOO_NEW
@@ -147,7 +152,7 @@ export class DocumentEditingService {
         revision: outcome.revision,
         source: outcome.source,
         expiresAt: outcome.expiresAt.toISOString(),
-        interruption: outcome.interruption === undefined ? null : interruptionOf(outcome.interruption, await this.accountsOf([outcome.interruption.holderId], transaction)),
+        interruption: outcome.interruption === undefined ? null : acquiredInterruptionOf(outcome.interruption, await this.accountsOf([outcome.interruption.holderId], transaction)),
         formulasPending: outcome.formulasPending,
       }
     })

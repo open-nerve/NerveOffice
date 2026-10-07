@@ -10,7 +10,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_LEASE_HEADER, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema, editStatusSchema, errorResponseSchema, renewedEditLeaseSchema, sessionResponseSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -499,7 +499,7 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
     expect((await status(sessionOf(ben), document.id)).editor).toBeNull()
     const taken = await acquired(sessionOf(ben), document.id)
     expect(taken.writeEpoch).toBe(lease.writeEpoch + 1)
-    expect(taken.interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: false })
+    expect(taken.interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: false, samePage: false })
     expect(await lostReason(await renew(sessionOf(amy), document.id, lease.token))).toBe('replaced')
   })
 
@@ -509,7 +509,30 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
     await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
     const renewedAt = (await leaseOf(document.id))?.renewed_at.toISOString()
     const otherDevice = await login(app.baseUrl, amy.username, amy.password)
-    expect((await acquired(otherDevice, document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: true })
+    expect((await acquired(otherDevice, document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: true, samePage: false })
+  })
+
+  it('US-M3-10 提醒带上那一代是不是申请的这个页面自己的（samePage，M3-P5 审查之后）：本页退出时释放没送到、那一代到期之后同一个页面再申请——samePage 为真（页面据此不说），换过登录也是；编辑状态没有页面，不带它', async () => {
+    const document = await freshDocument()
+    const tab = randomUUID()
+    await acquired(sessionOf(amy), document.id, tab)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
+    const endedAt = (await leaseOf(document.id))?.renewed_at.toISOString()
+    expect((await status(sessionOf(amy), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: true })
+    expect((await acquired(sessionOf(amy), document.id, tab)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: true, samePage: true })
+
+    // 同一个页面换过登录（例如登录过期之后重新登录）：还是这个页面
+    const relogged = await freshDocument()
+    await acquired(sessionOf(amy), relogged.id, tab)
+    await passLeaseTime(database, relogged.id, EDIT_LEASE_TTL_SECONDS)
+    const again = await login(app.baseUrl, amy.username, amy.password)
+    expect((await acquired(again, relogged.id, tab)).interruption).toMatchObject({ sameUser: true, samePage: true })
+
+    // 别人带着同一个标签页标识也不是（同一个页面先要是同一个人）
+    const borrowed = await freshDocument()
+    await acquired(sessionOf(amy), borrowed.id, tab)
+    await passLeaseTime(database, borrowed.id, EDIT_LEASE_TTL_SECONDS)
+    expect((await acquired(sessionOf(ben), borrowed.id, tab)).interruption).toMatchObject({ sameUser: false, samePage: false })
   })
 
   it('US-M3-11 到期之后没人接手：持有者心跳得到 expired；离到期还有 10 秒时照常续租，别人申请被占用', async () => {
@@ -622,7 +645,7 @@ describe('US-M3-10 异常结束的提醒（服务端部分，界面在 P5）', (
     // 查看者也看得到；持有者本人看到的是关于自己的
     expect(await status(sessionOf(vic), document.id)).toMatchObject({ editor: null, interruption: { ...notice, sameUser: false } })
     expect((await status(sessionOf(amy), document.id)).interruption).toEqual({ ...notice, sameUser: true })
-    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ ...notice, sameUser: false })
+    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ ...notice, sameUser: false, samePage: false })
     // 本在编辑了：没有提醒
     expect(await status(sessionOf(vic), document.id)).toMatchObject({ editor: { holder: summaryOf(ben) }, interruption: null })
   })
@@ -647,7 +670,7 @@ describe('US-M3-10 异常结束的提醒（服务端部分，界面在 P5）', (
     await database.query(async client => client.query('UPDATE documents SET write_epoch = write_epoch + 1 WHERE id = $1', [document.id]))
     expect(await lostReason(await renew(sessionOf(amy), document.id, old.token))).toBe('stale')
     expect((await status(sessionOf(ben), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: false })
-    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: false })
+    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: false, samePage: false })
   })
 })
 
@@ -740,13 +763,22 @@ describe('US-M3-07 空闲：服务端 12 分钟的兜底按页面的空闲计时
     expect((await renew(sessionOf(amy), fresh.id, plain.token, 120)).status).toBe(200)
   })
 
-  it('US-M3-07 申请的空闲秒数按契约校验：负数、超过一天、不是整数都是 400，什么也不写', async () => {
+  it('US-M3-07 申请的空闲秒数按契约校验：负数、不比回收阈值短（12 分钟、一天、超过一天）、不是整数都是 400，什么也不写（审查 A4：带到回收阈值的新一代一出生就按空闲失效）', async () => {
     const document = await freshDocument()
-    for (const idleSeconds of [-1, 86_401, 1.5, '30']) {
+    for (const idleSeconds of [-1, EDIT_LEASE_IDLE_RECLAIM_SECONDS, 86_400, 86_401, 1.5, '30']) {
       const response = await asUser(app.baseUrl, sessionOf(amy), leasePath(document.id), { method: 'POST', body: { ...acquireBody(randomUUID()), idleSeconds } })
       expect(await errorOf(response), String(idleSeconds)).toMatchObject({ status: 400, code: 'REQUEST_INVALID' })
     }
     expect(await leaseOf(document.id)).toBeUndefined()
+    expect((await documentOf(document.id)).write_epoch).toBe(0)
+  })
+
+  it('US-M3-07 申请带的空闲取到上限（比回收阈值少一秒，审查 A4）：照常取得，新的一代的最后活动是申请的时刻减去它——出生时按时间活着（离回收还差一秒；之后的时间各请求各有各的 now()，不在这里卡一秒的边界）', async () => {
+    const document = await freshDocument()
+    await acquiredIdle(sessionOf(amy), document.id, EDIT_ACQUIRE_IDLE_SECONDS_MAX)
+    const row = await leaseOf(document.id)
+    expect((row?.acquired_at.getTime() ?? 0) - (row?.last_active_at.getTime() ?? 0)).toBe(EDIT_ACQUIRE_IDLE_SECONDS_MAX * 1000)
+    expect(EDIT_ACQUIRE_IDLE_SECONDS_MAX).toBeLessThan(EDIT_LEASE_IDLE_RECLAIM_SECONDS)
   })
 })
 

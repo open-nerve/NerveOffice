@@ -1,8 +1,8 @@
 // 上一位编辑者异常中断的提醒（US-M3-10；M3-P5 设计 §3.5、§3.8、§3.11）：编辑权因为到期、空闲回收或登录失效而结束（不是释放、交出、接管或收回）之后的
 // 30 分钟内，下一个申请编辑的人进入编辑之后，页头下面有一条不打断的说明——"上一位编辑者 [人名] 的会话在 HH:mm 异常中断，可能还有未同步的修改"
 // （是自己的那一代时说"你上一次的编辑在 HH:mm 异常中断……"），带"知道了"，同一句话在一直在的读屏状态区里播一次；阅读时没人在编辑、别人的那一代
-// 异常中断的，读屏状态区里也说（不必等点"编辑"）。续上（编辑权中断之后同一个页面自动重新申请）不说——续上先释放本页那一代、再申请，服务端的回答里
-// 本来就没有提醒，"续上不说"由编辑模式的单元测试核对（续上的申请带回提醒时也不显示）。
+// 异常中断的，读屏状态区里也说（不必等点"编辑"）。续上（编辑权中断之后同一个页面自动重新申请）不说，由编辑模式的单元测试核对（续上的申请带回提醒时
+// 也不显示）。异常结束的那一代就是本页自己的（服务端给的 samePage：本页退出时释放没送到，到期之后本页再进入编辑）同样不说。
 // 系统管理员签发重置链接（撤销这个人的全部登录）之后，他持有的编辑权随之结束（登录失效，算异常中断）；停用账户是收回编辑权（明确结束），没有提醒。
 // 时刻是服务端的（上一代最后一次续租），按页面的时区写成 HH:mm——那段 30 分钟跨过了午夜时带日期（与页面同一条规则，support 里按库里的时刻算出预期）。
 // 不真等：30 分钟、到期改库挪时间（support/database.ts 的 expireEditLeaseAgo、expireEditLease），阅读时的检查用 Playwright 的时钟拨过 30 秒。
@@ -24,6 +24,8 @@ test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 const READING_CHECK_MS = 30_000
 /** 异常中断的提醒只在结束之后 30 分钟以内给出（契约的 EDIT_INTERRUPTION_NOTICE_SECONDS） */
 const NOTICE_WINDOW_MS = 30 * 60_000
+/** 编辑权的有效期（契约的 EDIT_LEASE_TTL_SECONDS）：本页退出时没能确认放掉的那一代，到这时页面再读一次编辑状态 */
+const LEASE_TTL_MS = 90_000
 
 /**
  * 说明里的时刻：上一代最后一次续租的时刻按页面的时区写成 HH:mm；从它起 30 分钟之内跨过了午夜时前面加日期（页面的 formatRecentClockTime，
@@ -170,5 +172,29 @@ test.describe('US-M3-10 上一位编辑者异常中断时得到提醒', () => {
     await enterEditing(page)
     await expect(interruptionNotice(page)).toContainText(text)
     await expect(interruptionNotice(page).getByRole('button', { name: '知道了', exact: true })).toBeVisible()
+  })
+
+  test('US-M3-10 本页退出时释放没送到、那一代到期之后本页再进入编辑：服务端说那一代就是本页的（samePage），进入编辑之后不说"你上一次的编辑……异常中断"（本页的修改退出时都已存上）', async ({ page }) => {
+    const { holder, documentId } = await sharedDocument('it-same-page')
+    await loginThroughApi(page, holder)
+    await page.clock.install()
+    await openAndEnterEditing(page, documentId)
+    // 退出时的释放送不到服务端：那一代还在（没有明确结束），到期之后服务端按事实算异常中断
+    await page.route('**/api/documents/*/edit-lease', async route => route.request().method() === 'DELETE' ? route.abort('internetdisconnected') : route.continue())
+    await exitEditing(page)
+    await page.unroute('**/api/documents/*/edit-lease')
+    expect(await editLeaseEndReason(documentId)).toBeNull()
+    await expireEditLease(documentId)
+    // 本页没能确认放掉的那一代过了有效期：页面再读一次编辑状态，没人在编辑，回到"编辑"（阅读时自己那一代的提醒本来就不说）
+    await page.clock.fastForward(LEASE_TTL_MS)
+    await expect(enterEditButton(page)).toBeVisible()
+
+    const acquired = page.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+    await enterEditing(page)
+    const body = await (await acquired).json() as { readonly interruption: unknown }
+    expect(body.interruption).toMatchObject({ holder: { id: holder.id }, sameUser: true, samePage: true })
+    await expect(saveButton(page)).toBeVisible()
+    await expect(interruptionNotice(page)).toHaveCount(0)
+    await expect(statusRegion(page)).not.toContainText('异常中断')
   })
 })

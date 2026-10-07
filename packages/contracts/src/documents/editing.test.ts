@@ -3,10 +3,12 @@ import { ERROR_CODES, errorStatus } from '../errors/error-codes.ts'
 import { errorResponseSchema } from '../errors/error-response.ts'
 import { CSRF_TOKEN_HEADER } from '../http/headers.ts'
 import {
+  acquiredEditInterruptionSchema,
   acquiredEditLeaseSchema,
   acquireEditLeaseRequestSchema,
   declineEditRequestSchema,
   documentEditorSchema,
+  EDIT_ACQUIRE_IDLE_SECONDS_MAX,
   EDIT_HANDOVER_IDLE_SECONDS,
   EDIT_HANDOVER_RESERVE_SECONDS,
   EDIT_IDLE_RELEASE_SECONDS,
@@ -121,10 +123,11 @@ describe('申请编辑权', () => {
       expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, takeover }).success, JSON.stringify(takeover)).toBe(false)
   })
 
-  it('M3-P5：续上时可带本页已经空闲的秒数，与心跳同一个范围（0 到一天的整数）；不带也行', () => {
-    for (const idleSeconds of [0, 1, EDIT_IDLE_RELEASE_SECONDS, EDIT_IDLE_SECONDS_MAX])
+  it('M3-P5：续上时可带本页已经空闲的秒数——0 到比回收阈值少一秒的整数（审查 A4：带到回收阈值的新一代一出生就按空闲失效）；不带也行', () => {
+    expect(EDIT_ACQUIRE_IDLE_SECONDS_MAX).toBe(EDIT_LEASE_IDLE_RECLAIM_SECONDS - 1)
+    for (const idleSeconds of [0, 1, EDIT_IDLE_RELEASE_SECONDS, EDIT_ACQUIRE_IDLE_SECONDS_MAX])
       expect(acquireEditLeaseRequestSchema.parse({ clientInstanceId: TAB, idleSeconds })).toEqual({ clientInstanceId: TAB, idleSeconds })
-    for (const idleSeconds of [-1, EDIT_IDLE_SECONDS_MAX + 1, 1.5, '5', null, Number.NaN])
+    for (const idleSeconds of [-1, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX + 1, 1.5, '5', null, Number.NaN])
       expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, idleSeconds }).success, String(idleSeconds)).toBe(false)
     // 时刻由数据库给出：浏览器的时间一律不收
     expect(acquireEditLeaseRequestSchema.safeParse({ clientInstanceId: TAB, idleSeconds: 3, lastActiveAt: AT }).success).toBe(false)
@@ -146,11 +149,17 @@ describe('申请编辑权', () => {
     expect(acquiredEditLeaseSchema.safeParse({ ...acquired, source: { clientInstanceId: TAB } }).success).toBe(false)
   })
 
-  it('上一个租约异常结束时给出提醒：上一位持有者（"人"的结构）、结束的时间与是不是自己（M3-P5，必填）', () => {
-    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption }).interruption).toEqual(interruption)
-    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: { ...interruption, sameUser: true } }).interruption?.sameUser).toBe(true)
-    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { ...interruption, holder: { id: AMY.id } } }).success).toBe(false)
-    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { holder: AMY, endedAt: AT } }).success).toBe(false)
+  it('上一个租约异常结束时给出提醒：上一位持有者（"人"的结构）、结束的时间、是不是自己（M3-P5）与是不是这个页面自己的那一代（审查之后，都必填）', () => {
+    const acquiredInterruption = { ...interruption, samePage: false }
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: acquiredInterruption }).interruption).toEqual(acquiredInterruption)
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: { ...acquiredInterruption, sameUser: true } }).interruption?.sameUser).toBe(true)
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: { ...acquiredInterruption, sameUser: true, samePage: true } }).interruption?.samePage).toBe(true)
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { ...acquiredInterruption, holder: { id: AMY.id } } }).success).toBe(false)
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { holder: AMY, endedAt: AT, samePage: false } }).success).toBe(false)
+    // 申请的提醒少了 samePage 不行；编辑状态的提醒没有它（编辑状态没有页面），多出的被丢弃
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption }).success).toBe(false)
+    expect(acquiredEditInterruptionSchema.safeParse({ ...interruption, samePage: 'false' }).success).toBe(false)
+    expect(editInterruptionSchema.parse(acquiredInterruption)).toEqual(interruption)
     expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: undefined }).success).toBe(false)
     expect(editInterruptionSchema.safeParse({ ...interruption, sameUser: 'false' }).success).toBe(false)
   })

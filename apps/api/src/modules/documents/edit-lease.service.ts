@@ -56,8 +56,8 @@ export function editLeaseLost(loss: LeaseLoss): AppError {
 
 /**
  * 申请编辑权的请求（P1 设计 §3.4.2）：标签页，接管方式（M3-P5 设计 §3.7、§3.8：本人接管 self、强制接管 force，普通的申请没有），
- * 续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5：新的一代的最后活动按它往前推，服务端的空闲兜底不因续上而重新计时；别的申请是 0），
- * 与页面上报的构建与数据格式（M3-P3 设计 §3.5）
+ * 续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5：新的一代的最后活动按它往前推，服务端的空闲兜底不因续上而重新计时；别的申请是 0；
+ * 契约限它比回收阈值短，新的一代不会一出生就按空闲失效，审查 A4），与页面上报的构建与数据格式（M3-P3 设计 §3.5）
  */
 export interface LeaseRequest {
   readonly clientInstanceId: string
@@ -115,7 +115,7 @@ export interface LeaseRenewal {
  * 申请的结果（P1 设计 §3.4.2）：
  * - acquired：取得了新的一代（普通的申请、页面自己的重试、本人接管或强制接管，M3-P5 设计 §3.7、§3.8）——令牌（只在这里出现一次）、
  *   这一代的代次、文档当前的修订号与它的来源（新建、复制出来的为 null）、到期时间，上一个租约异常结束的提醒（接管时没有：占着的那一代
- *   是有效的），与文档的"公式待更新"（M3-P3 设计 §3.8：P4 据此在进入编辑时先全量重算）；
+ *   是有效的；带上那一代是不是申请的这个页面自己的，samePage），与文档的"公式待更新"（M3-P3 设计 §3.8：P4 据此在进入编辑时先全量重算）；
  * - held：有效的租约在别人手里（同一个人在别的标签页或设备上也算），或者代次过时、其余都还活着的租约在别人手里（M3-P5 设计 §3.5
  *   的 R2：只让持有者本人续上），申请又没有能起作用的接管方式（见 claimOf），什么也没写；正在编辑的人、调用者能不能强制接管
  *   （M3-P5，锁下判断权限时算出的那一位）与有没有人在请求编辑（M3-P5 设计 §3.3，待回应的）。workspace 补上人名，回 EDIT_LEASE_HELD；
@@ -141,7 +141,7 @@ export type LeaseAcquisition
  * 调用者现在能不能编辑、能不能强制接管这份文档（M3-P2 设计 §3.2：阅读页据此显示或隐藏"编辑"；M3-P5 设计 §3.8），
  * 文档的"公式待更新"（M3-P3 设计 §3.8），有人在请求编辑（待回应的，没有时为 undefined）与交出之后的保留（算数的，没有时为 undefined；
  * M3-P5 设计 §3.3、§3.6），以及没人在编辑时上一个租约异常结束的提醒（M3-P5 设计 §3.5：阅读页不必等点"编辑"；
- * 有人在编辑、没有异常结束或已经超过 30 分钟时为 undefined）
+ * 有人在编辑、没有异常结束或已经超过 30 分钟时为 undefined；看编辑状态的没有页面，samePage 恒为假，接口里也不给）
  */
 export interface LeaseStatus {
   readonly revision: number
@@ -221,7 +221,7 @@ export class EditLeaseService {
    * 之后有，那时没人占着、claimOf 一律是普通的申请，所以本人接管、强制接管同样被挡，不必另判断；留给的就是申请的人时照常取得
    * （用哪个标签页、哪次登录都行），新的一代清掉保留。
    * 发新的一代：文档的代次加一、生成令牌、改写租约行（最后活动按续上的页面带来的空闲往前推）→ 上一个租约按事实异常结束、
-   * 而且在 30 分钟以内时给出提醒。修订号取锁下的文档行：页面拿它与自己载入的比较。连同这一版的来源（这一条修订记录的标签页与本地序号，
+   * 而且在 30 分钟以内时给出提醒，带上那一代是不是申请的这个页面自己的（samePage：同一个人、同一个标签页，页面据此不说）。修订号取锁下的文档行：页面拿它与自己载入的比较。连同这一版的来源（这一条修订记录的标签页与本地序号，
    * 与修订号冲突的详情同一个取法，只给保存这一版的人本人，见 revisionSourceFor）：续上时页面据此认出期间的那一版是不是本页自己
    * 一次结果未知的保存（00 号计划书 §7.5）
    */
@@ -235,7 +235,7 @@ export class EditLeaseService {
     // 两把锁都在手里之后才查：之后到提交只剩判断与几条写，窗口最短
     await requireActiveLogin(this.sessions, actor, transaction)
     requireWritableDocument(document)
-    const occupancy = await occupancyOf(current, document.writeEpoch, actor.userId, holderFactsOf(this.sessions, this.policy, current, document, transaction))
+    const occupancy = await occupancyOf(current, document.writeEpoch, actor.userId, holderFactsOf(this.sessions, this.policy, current, document, transaction), clientInstanceId)
     const claim = claimOf(occupancy, { ...actor, clientInstanceId }, takeover)
     const parties = partyFactsOf(this.sessions, this.policy, document, transaction)
     if (claim.kind === 'held') {

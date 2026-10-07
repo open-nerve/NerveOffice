@@ -12,7 +12,7 @@ import type { Page } from '@playwright/test'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEpoch, expireEditLease, revisionOf, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, disconnectTab, EDITOR_TEST_TIMEOUT, expectFoundOnce, headerAnnouncement, isSaveRequest, lostNotice, openAndEnterEditing, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, EDITOR_TEST_TIMEOUT, expectFoundOnce, headerAnnouncement, isSaveRequest, lostNotice, openAndEnterEditing, recordLeaseReleases, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -26,10 +26,13 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
     const before = await editLeaseEpoch(documentId)
     await typeInCell(page, 'A1', 'after expiry')
 
+    // 到期的那一代谁看都是空着的：续上直接申请，不先释放（M3-P5 审查 A3，只有换过登录时才先释放）
+    const releases = recordLeaseReleases(page, documentId)
     await expireEditLease(documentId)
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('after expiry')
     expect(await editLeaseEpoch(documentId)).toBeGreaterThan(before ?? 0)
+    expect(releases).toEqual([])
     await expect(page.getByRole('alert')).toHaveCount(0)
 
     // 续上之后照常编辑、保存

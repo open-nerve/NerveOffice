@@ -42,13 +42,16 @@ export interface LeaseRequest {
 }
 
 /**
- * 上一个租约异常结束的事实（US-M3-10）：持有者、结束的时间——他最近一次续租的时间，以及他是不是调用者自己
- * （M3-P5 设计 §3.5：页面按它分别说"上一位编辑者……"与"你上一次的编辑……"）
+ * 上一个租约异常结束的事实（US-M3-10）：持有者、结束的时间——他最近一次续租的时间，他是不是调用者自己
+ * （M3-P5 设计 §3.5：页面按它分别说"上一位编辑者……"与"你上一次的编辑……"），以及那一代是不是调用者这个页面自己的（samePage：
+ * 同一个人、同一个标签页——本页退出时释放没送到、那一代到期之后本页再进入编辑，服务端照样按事实算异常中断，而本页知道自己的修改存没存上，
+ * 页面据此不说）。只有申请带着页面（标签页标识）；编辑状态、请求编辑没有页面，samePage 恒为假
  */
 export interface LeaseInterruption {
   readonly holderId: string
   readonly endedAt: Date
   readonly sameUser: boolean
+  readonly samePage: boolean
 }
 
 /** 请求的那一代失效的原因与详情（EDIT_LEASE_LOST 的 details，contracts 的 editLeaseLostDetailsSchema） */
@@ -167,23 +170,26 @@ export async function endedAbnormally(lease: ObservedEditLease, sessionActive: (
 /**
  * 上一个租约异常结束的提醒（P1 设计 §3.4.5，M3-P5 设计 §3.5）：按事实异常结束（endedAbnormally），而且结束在 30 分钟以内——
  * 结束的时间取它最近一次续租的时间（之后就没有它还在的消息了），恰好 30 分钟仍然提醒。callerId 是调用者（申请的人、看编辑状态的人）：
- * 提醒带上上一位持有者是不是他自己（sameUser，只按人比较，与登录、标签页无关）
+ * 提醒带上上一位持有者是不是他自己（sameUser，只按人比较，与登录、标签页无关），以及那一代是不是调用者这个页面的（samePage：同一个人、
+ * 绑定的标签页就是 callerPage——不看登录，页面换过登录还是这个页面；callerPage 只有申请给出，没有时为假）
  */
-async function interruptionOf(lease: ObservedEditLease, callerId: string, sessionActive: () => Promise<boolean>): Promise<LeaseInterruption | undefined> {
+async function interruptionOf(lease: ObservedEditLease, callerId: string, callerPage: string | undefined, sessionActive: () => Promise<boolean>): Promise<LeaseInterruption | undefined> {
   if (lease.now.getTime() - lease.renewedAt.getTime() > INTERRUPTION_NOTICE_MS)
     return undefined
   if (!await endedAbnormally(lease, sessionActive))
     return undefined
-  return { holderId: lease.holderId, endedAt: lease.renewedAt, sameUser: lease.holderId === callerId }
+  const sameUser = lease.holderId === callerId
+  return { holderId: lease.holderId, endedAt: lease.renewedAt, sameUser, samePage: sameUser && lease.clientInstanceId === callerPage }
 }
 
 /**
  * 从调用者（callerId）看，谁占着这份文档（申请、编辑状态；M3-P5 的请求编辑同样用它）。见 LeaseOccupancy：
  * 有效的租约占着；代次过时、按时间、登录、编辑权都还活着、持有者不是调用者（R2）同样占着——申请得到"被占用"，编辑状态里有人在编辑；
  * 持有者本人看这样的一行是空着的（他的续上就是一次普通的申请）。其余空着，带上异常结束的提醒（30 分钟以内）。
+ * callerPage 是申请的页面（标签页标识）：提醒据此说那一代是不是这个页面自己的（samePage，见 interruptionOf）；编辑状态、请求编辑不给。
  * 持有者的登录与编辑权按需问，同一项至多问一次：只有代次过时、按时间还活着的那一行比有效条件本身多问（R2 与异常结束）
  */
-export async function occupancyOf(lease: ObservedEditLease | undefined, documentEpoch: number, callerId: string, facts: HolderFacts): Promise<LeaseOccupancy> {
+export async function occupancyOf(lease: ObservedEditLease | undefined, documentEpoch: number, callerId: string, facts: HolderFacts, callerPage?: string): Promise<LeaseOccupancy> {
   if (lease === undefined)
     return { kind: 'vacant', lease, loss: 'none', interruption: undefined }
   const holder = askedOnce(facts)
@@ -193,7 +199,7 @@ export async function occupancyOf(lease: ObservedEditLease | undefined, document
   // stale 意味着没有明确结束（第 2 条在第 3 条之前）
   if (loss === 'stale' && lease.holderId !== callerId && timeLoss(lease) === undefined && await holder.sessionActive() && await holder.holderCanEdit())
     return { kind: 'occupied', lease, stale: true }
-  return { kind: 'vacant', lease, loss, interruption: await interruptionOf(lease, callerId, holder.sessionActive) }
+  return { kind: 'vacant', lease, loss, interruption: await interruptionOf(lease, callerId, callerPage, holder.sessionActive) }
 }
 
 /**

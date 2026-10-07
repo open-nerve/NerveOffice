@@ -29,6 +29,13 @@ export const EDIT_INTERRUPTION_NOTICE_SECONDS = 1800
 export const EDIT_IDLE_SECONDS_MAX = 86_400
 
 /**
+ * 申请（续上）带来的"多久没有操作"的上限（秒，M3-P5 审查 A4）：比服务端的回收阈值少一秒——新的一代的最后活动是申请的时刻减去它，
+ * 带到回收阈值（12 分钟）就是一出生就按空闲失效，白加一次代次，还给别人留下一条不实的异常中断提醒，所以超出的 400。
+ * 页面只在人在（本页空闲不到回收阈值）时续上，带的是同一刻的空闲，不会超过它
+ */
+export const EDIT_ACQUIRE_IDLE_SECONDS_MAX = EDIT_LEASE_IDLE_RECLAIM_SECONDS - 1
+
+/**
  * 页面的空闲释放（秒，US-M3-07，00 号计划书 §6.3）：10 分钟没有键盘、鼠标操作，页面先保存再释放编辑权、回到阅读；
  * 没存上就留在编辑，由服务端 12 分钟兜底（EDIT_LEASE_IDLE_RECLAIM_SECONDS）
  */
@@ -73,8 +80,11 @@ export const EDIT_LEASE_HEADER = 'x-edit-lease'
  */
 export const editLeaseTokenSchema = z.string().regex(/^[\w-]{43}$/)
 
-/** 本页"多久没有操作"（秒）：0 到一天之间的整数（心跳必带，申请时只在续上时带） */
+/** 本页"多久没有操作"（秒）：0 到一天之间的整数（心跳必带） */
 const idleSecondsSchema = z.number().int().min(0).max(EDIT_IDLE_SECONDS_MAX)
+
+/** 申请时（只在续上时带）本页"多久没有操作"（秒）：0 到 EDIT_ACQUIRE_IDLE_SECONDS_MAX 之间的整数，比回收阈值短（M3-P5 审查 A4） */
+const acquireIdleSecondsSchema = z.number().int().min(0).max(EDIT_ACQUIRE_IDLE_SECONDS_MAX)
 
 /**
  * 申请时的接管方式（M3-P5 设计 §3.7、§3.8）：
@@ -90,12 +100,12 @@ export type EditTakeoverMode = (typeof EDIT_TAKEOVER_MODES)[number]
  * （保存一直带着它），租约绑定它与这次登录。客户端的构建与数据格式（clientBuild、univerVersion、profile、formatVersion，
  * M3-P3 设计 §3.5）可选：过旧的页面不让进入编辑（CLIENT_OUTDATED），缺了由服务端按过旧处理。
  * M3-P5（设计 §3.3、§3.5）另有两项可选：takeover——接管方式（EDIT_TAKEOVER_MODES）；idleSeconds——只给续上用，
- * 本页已经空闲的秒数，新的一代的最后活动按它往前推（服务端的空闲兜底计时准确）
+ * 本页已经空闲的秒数，新的一代的最后活动按它往前推（服务端的空闲兜底计时准确），上限比回收阈值短（EDIT_ACQUIRE_IDLE_SECONDS_MAX）
  */
 export const acquireEditLeaseRequestSchema = z.strictObject({
   clientInstanceId: uuidSchema,
   takeover: z.enum(EDIT_TAKEOVER_MODES).optional(),
-  idleSeconds: idleSecondsSchema.optional(),
+  idleSeconds: acquireIdleSecondsSchema.optional(),
   ...clientFormatBodyShape,
 })
 
@@ -115,6 +125,17 @@ export const editInterruptionSchema = z.object({
 export type EditInterruption = z.infer<typeof editInterruptionSchema>
 
 /**
+ * 申请的结果里的提醒：另带 samePage——异常结束的那一代绑定的就是这次申请的页面（同一个人、同一个标签页，clientInstanceId 相同）。
+ * 本页退出时释放没送到，那一代到期之后本页再进入编辑，服务端照样按事实算异常中断，而本页的修改其实都已存上（没存上的本页自己知道）：
+ * 页面在 samePage 时不说。编辑状态（GET）没有页面，它的提醒不带这一项（阅读时页面只说别人那一代的）
+ */
+export const acquiredEditInterruptionSchema = editInterruptionSchema.extend({
+  samePage: z.boolean(),
+})
+
+export type AcquiredEditInterruption = z.infer<typeof acquiredEditInterruptionSchema>
+
+/**
  * 申请成功（201）：
  * - token：之后的心跳、释放与保存经 EDIT_LEASE_HEADER 带上它；
  * - writeEpoch：这一代的代次（申请时文档的代次加一，所以至少是 1），保存时作为查询参数带上；
@@ -122,7 +143,7 @@ export type EditInterruption = z.infer<typeof editInterruptionSchema>
  * - source：文档当前修订的来源——产生它的那次保存的标签页与本地序号；当前修订是新建、复制出来的，或者不是调用者本人保存的，为 null。
  *   续上时（编辑权中断之后同一个页面重新申请），修订号比本页的基准新，页面据此认出期间的那一版是不是本页自己一次结果未知的保存：
  *   是的话以它为基准接着编辑，不当成别处的修改（00 号计划书 §7.5）。取法与修订号冲突的详情相同；
- * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒，没有时为 null；
+ * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒（带上是不是这个页面自己的那一代，samePage），没有时为 null；
  * - formulasPending：文档的"公式待更新"（M3-P3 设计 §3.8，最近一次写入时页面带来的标记）：P4 据此在进入编辑时先全量重算。
  * 响应的结构宽松（多出的字段被丢弃），见 auth 的会话信息
  */
@@ -132,7 +153,7 @@ export const acquiredEditLeaseSchema = z.object({
   revision: z.number().int().min(1),
   source: revisionSourceSchema.nullable(),
   expiresAt: z.iso.datetime(),
-  interruption: editInterruptionSchema.nullable(),
+  interruption: acquiredEditInterruptionSchema.nullable(),
   formulasPending: z.boolean(),
 })
 
