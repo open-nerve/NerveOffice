@@ -14,9 +14,10 @@
 //   记下回应用了多久、多久进入编辑；核对服务器上 A 的修改（前两格一定在，第三格只在 answered 时在）；
 // - refresh-save（作者，阅读时开始，跨两次载入）：第一次——点"编辑"，写一格，经控制的 flush 发出保存（驱动脚本让这份文档的保存在服务端停
 //   10 秒），1.5 秒之后还在途就刷新（location.reload）；离开时看到了什么（保存的请求什么时候失败、pagehide 时保存的状态、页面的处理之后 localStorage
-//   里有没有记号、有没有发释放或交出）同步记进 sessionStorage。第二次（刷新之后）——这些交回；阅读时说明"另一台设备或浏览器（也可能是刚关闭、
-//   刷新过的页面）"；记号在；点"在此编辑"先等（waiting-save，"上一个页面的保存还在进行，稍后接手…"），那次保存提交了（在服务端停完）才以
-//   本人接管申请、进入编辑（committed），或者等满 30 秒（expired，从记号的时刻算）；服务器上有那次保存，记号清掉。
+//   里有没有记号、有没有发释放或交出）同步记进 sessionStorage。第二次（刷新之后）——这些交回；阅读时说明"你刚关闭或刷新的页面还有一次保存
+//   在进行"（持有者是自己、锁不在本浏览器、记号在 30 秒内而那次保存还没提交：just-closed，审查 B §七）；记号在；点"在此编辑"先等（waiting-save，
+//   "上一个页面的保存还在进行，稍后接手…"），那次保存提交了（在服务端停完）才以本人接管申请、进入编辑（committed），或者等满 30 秒（expired，
+//   从记号的时刻算）；服务器上有那次保存，记号清掉。
 import type { HandoverLog, HandoverLogEntry } from './handover-log.ts'
 import type { HandoverScenario, SelftestCheck, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'
@@ -29,6 +30,9 @@ import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeV
 
 /** 页头里"在此编辑"的说法（与编辑器页的文案相同；这里不引用编辑器页的模块） */
 const TAKE_OVER_HERE = '在此编辑'
+
+/** 刷新之后、刷新之前那次保存还没提交时的阅读说明（与编辑器页的文案相同，审查 B §七） */
+const JUST_CLOSED = `你刚关闭或刷新的页面还有一次保存在进行。点"${TAKE_OVER_HERE}"会先等它存完（至多 30 秒）再接着编辑`
 
 /** 捕获的静默与上限调到一小时：场景里只有控制的 flush 与切到后台会捕获、上传 */
 const NO_TIMED_CAPTURE_MS = 3_600_000
@@ -681,14 +685,15 @@ async function refreshSteps(session: Session, carry: RefreshCarry, observations:
   const reading = await check(session, 'refresh.reading', async () => {
     if (session.host.page.readOnly !== true)
       fail('刷新之后页面没有按阅读打开')
-    if (!await waitFor(() => session.host.view().selfHolder === 'elsewhere', SIGNAL_TIMEOUT_MS * 2, 100))
-      fail(`持有者不是"别处"（${describeView(session)}，selfHolder ${session.host.view().selfHolder ?? '没有'}）：刷新之前那一代被释放了？`)
-    const said = statusTexts(session).find(text => text.includes('正在编辑这份文档')) ?? ''
-    if (!said.includes('你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）'))
-      fail(`说明是"${said}"（应当说另一台设备或浏览器，也可能是刚关闭、刷新过的页面）`)
+    // 刷新之前那一代还在、本机锁随页面放开了，而那次保存还在服务端停着（记号在 30 秒内、修订号没前进）：是刚关闭或刷新的页面
+    if (!await waitFor(() => session.host.view().selfHolder === 'just-closed', SIGNAL_TIMEOUT_MS * 2, 100))
+      fail(`持有者不是"刚关闭或刷新的页面"（${describeView(session)}，selfHolder ${session.host.view().selfHolder ?? '没有'}）：刷新之前那一代被释放了，还是记号不在、那次保存已经提交了？`)
+    const said = statusTexts(session).find(text => text.includes('你刚关闭或刷新的页面')) ?? ''
+    if (said !== JUST_CLOSED)
+      fail(`说明是"${said}"（应当是"${JUST_CLOSED}"）`)
     if (chromeButton(session, TAKE_OVER_HERE) === undefined)
       fail(`页头没有"${TAKE_OVER_HERE}"`)
-    return `阅读：说明"${said}"，页头有"${TAKE_OVER_HERE}"（刷新之前那一代还在、本机锁随页面放开了）`
+    return `阅读：说明"${said}"，页头有"${TAKE_OVER_HERE}"（刷新之前那一代还在、本机锁随页面放开了，那次保存还没提交）`
   })
   if (!reading)
     return

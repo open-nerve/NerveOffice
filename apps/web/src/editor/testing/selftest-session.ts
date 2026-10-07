@@ -17,7 +17,7 @@ export interface SelftestPageView {
   readonly save?: string | undefined
   /**
    * 交接的复核（M3-P5，./selftest-handover.ts）用到的：阅读时"在此编辑"的进展（preparing、asking、waiting-save、failed）、持有者是自己时
-   * 那个页面在哪里（this-browser、elsewhere）、上一次操作留下的说明（例如 handed-over-tab；copied 是另存为副本成功之后回到阅读，
+   * 那个页面在哪里（this-browser、elsewhere、just-closed）、上一次操作留下的说明（例如 handed-over-tab；copied 是另存为副本成功之后回到阅读，
    * copyDocumentId 是建好的副本）；没有时 undefined
    */
   readonly takeover?: string | undefined

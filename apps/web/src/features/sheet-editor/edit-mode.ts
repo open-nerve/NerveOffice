@@ -54,10 +54,11 @@
 //
 // 本人接管（M3-P5 设计 §3.7，US-M3-08）：
 // - 阅读时持有者是自己（别的标签页或设备）：看这份文档的本机锁在本浏览器里有没有人持有（selfHolder：this-browser 是本浏览器的另一个
-//   标签页，elsewhere 是另一台设备、浏览器，也可能是刚关闭、刷新过的页面），页头的按钮换成"在此编辑"。点"编辑"之后才得知被自己占着
-//   时同样换成"在此编辑"；锁被本浏览器占着时不按 SAME_USER_RETRIES 再试（那几次是给刷新时晚到的释放的）；
+//   标签页，elsewhere 是另一台设备、浏览器，也可能是刚关闭、刷新过的页面；锁不在本浏览器而有 30 秒以内的记号、那次保存还没提交时是 just-closed：
+//   刚关闭、刷新过的页面还有一次保存在进行，到 30 秒时再读一次编辑状态，修订号前进了就清掉记号），页头的按钮换成"在此编辑"。点"编辑"之后
+//   才得知被自己占着时同样换成"在此编辑"；锁被本浏览器占着时不按 SAME_USER_RETRIES 再试（那几次是给刷新时晚到的释放的）；
 // - "在此编辑"（takeOver，阅读里带进展 takeover）：编排在 tab-handover.ts（takeOverHere：看锁在哪里、请本浏览器的标签页先保存再交出、等刷新之前
-//   在途的保存，再决定怎样申请），这里开始这一件事（阅读里带上进展、作废之前的）、按进展更新阅读、申请并以可编辑重建；"取消"撤下还挂着的等待；
+//   在途的保存，再以本人接管申请），这里开始这一件事（阅读里带上进展、作废之前的）、按进展更新阅读、申请并以可编辑重建；"取消"撤下还挂着的等待；
 // - 交接请求的回应在 tab-handover.ts（answerTabs）：编辑时它同步回 ack，再经回调让这里离开编辑（handover-tab：屏障 → 挂起 → 等面板 →
 //   flush('handover') → 存上就放弃这一代（停心跳、不释放：那边以本人接管换代，槽从来不空，审查 B4）→ 放锁 → done → 以只读重建 → 阅读，
 //   说明已交给本浏览器的另一个标签页；没存上发 failed、留在编辑）；离开编辑有了结果时经它告诉回应过 ack 的请求；
@@ -127,7 +128,7 @@ import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { HandoverFailure, HeldLock, SameBrowser } from './same-browser.ts'
 import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
-import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
+import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
 import { incompatibilityOf } from './client-format.ts'
@@ -251,9 +252,11 @@ export type ReadingNotice
 
 /**
  * 持有者是自己时那个页面在哪里（M3-P5 设计 §3.7，按本机锁在本浏览器里有没有人持有）：this-browser 是本浏览器的另一个标签页；elsewhere 是
- * 另一台设备、浏览器（或配置文件、无痕窗口），也可能是刚关闭、刷新过的页面（锁随页面放开了，编辑权还在服务端）
+ * 另一台设备、浏览器（或配置文件、无痕窗口），也可能是刚关闭、刷新过的页面（锁随页面放开了，编辑权还在服务端）；just-closed 是锁不在本浏览器、
+ * 而本浏览器里有 30 秒以内的"刷新时在途的保存"的记号、那次保存还没提交（编辑状态的修订号不大于记号里的基准）——刚关闭、刷新过的页面还有一次保存在
+ * 进行，"那边"已经不在了（M3-P5 设计 §3.7 的 R1，审查 B 之后的刷新说法）
  */
-export type SelfHolder = 'this-browser' | 'elsewhere'
+export type SelfHolder = 'this-browser' | 'elsewhere' | 'just-closed'
 
 export interface ReadingMode {
   readonly kind: 'reading'
@@ -662,6 +665,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let unconfirmedExpired = false
   /** 取消那一代到期的计时 */
   let cancelUnconfirmedExpiry: (() => void) | undefined
+  /** 刷新时在途的保存的记号到 30 秒时再检查一次（just-closed 到时回到一般的说法）：取消它 */
+  let cancelMarkerExpiry: (() => void) | undefined
   /** 本机锁（M3-P5 设计 §3.1）：服务端批准之后直到离开编辑持有，和 lease 一起拿、一起放 */
   let lock: HeldLock | undefined
   /** 空闲释放的计时（编辑时才有） */
@@ -847,7 +852,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         canEdit: status.canEdit,
         canTakeOver: status.canTakeOver,
         holder,
-        selfHolder: holder?.sameUser === true ? selfHolder : undefined,
+        selfHolder: holder?.sameUser === true && selfHolder !== undefined ? refineSelfHolder(selfHolder, status.revision) : undefined,
         // 上一位编辑者异常中断（M3-P5 设计 §3.5）：只说别人的那一代（见文件头）
         interruption: status.interruption !== null && !status.interruption.sameUser ? status.interruption : undefined,
         update: loading ? 'loading' : (status.revision > shown.revision ? 'available' : 'none'),
@@ -1563,9 +1568,44 @@ export function createEditMode(options: EditModeOptions): EditMode {
     return (await options.sameBrowser.heldHere()) ? 'this-browser' : 'elsewhere'
   }
 
-  /** 持有者是自己时那个页面在哪里；持有者不是自己、不知道是谁时为 undefined */
+  /**
+   * 持有者是自己时那个页面在哪里（申请被占用、续上时：不知道编辑状态的修订号，只看记号的时刻，随后的检查按修订号细分）；持有者不是自己、
+   * 不知道是谁时为 undefined
+   */
   async function selfHolderOf(holder: LeaseHolder | undefined): Promise<SelfHolder | undefined> {
-    return holder?.sameUser === true ? locate() : undefined
+    return holder?.sameUser === true ? refineSelfHolder(await locate(), undefined) : undefined
+  }
+
+  /**
+   * 锁不在本浏览器时（elsewhere）再看一眼刷新时在途的保存的记号（pending-save-marker.ts）：30 秒以内、而且编辑状态的修订号（revision，不知道时
+   * 不比）不大于记号里的基准——刚关闭、刷新过的页面还有一次保存在进行（just-closed），到 30 秒时排一次检查（说法随之回到一般的那句）；修订号已经
+   * 前进（那次保存提交了）就清掉记号。记号是墙上时间（由另一个页面写下）；墙上时间回拨时至多算 30 秒
+   */
+  function refineSelfHolder(where: SelfHolder, revision: number | undefined): SelfHolder {
+    if (where !== 'elsewhere')
+      return where
+    const marker = options.pendingSave.read()
+    if (marker === undefined)
+      return where
+    if (revision !== undefined && revision > marker.revision) {
+      options.pendingSave.clear()
+      return where
+    }
+    const left = Math.min(EDIT_PENDING_SAVE_WAIT_MS, marker.at + EDIT_PENDING_SAVE_WAIT_MS - options.now().getTime())
+    if (left <= 0)
+      return where
+    watchMarkerExpiry(left)
+    return 'just-closed'
+  }
+
+  /** 记号到 30 秒时（delayMs 之后）读一次编辑状态：那时还在阅读、说的还是 just-closed 才读（之前的计时作废） */
+  function watchMarkerExpiry(delayMs: number): void {
+    cancelMarkerExpiry?.()
+    cancelMarkerExpiry = clock.schedule(() => {
+      cancelMarkerExpiry = undefined
+      if (!disposed && mode.kind === 'reading' && mode.selfHolder === 'just-closed')
+        checks.checkNow()
+    }, delayMs)
   }
 
   /** "在此编辑"有了新的进展（这一次接手还在、还在阅读时） */
@@ -2103,6 +2143,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
       takeoverAbort = undefined
       cancelUnconfirmedExpiry?.()
       cancelUnconfirmedExpiry = undefined
+      cancelMarkerExpiry?.()
+      cancelMarkerExpiry = undefined
       stopWatchingIdle()
       holder.dispose()
       requests.dispose()

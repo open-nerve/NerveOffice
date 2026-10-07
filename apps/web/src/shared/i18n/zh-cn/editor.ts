@@ -2,7 +2,7 @@
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
 import type { ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS } from '@nerve-office/contracts'
 
 /** 本人接管的按钮（M3-P5 设计 §3.7）：说明里提到它时用同一个名字 */
 const TAKE_OVER_HERE = '在此编辑'
@@ -31,6 +31,9 @@ const TAKEOVER_FAILURES: Readonly<Record<TakeoverFailure, string>> = {
   // 那边的修改都已存上，只是正在把编辑权交给请求编辑的人、没交出去（请求已经不在、没有结果），留在了编辑（审查 B11）
   'not-handed-over': '另一个标签页的修改都已保存，但它在把编辑权交给请求编辑的人时没能交出去，还在编辑',
 }
+
+/** 刷新之前在途的保存最多等多久（秒，M3-P5 设计 §3.7 的 R1）：时长取自契约 */
+const PENDING_SAVE_WAIT_SECONDS = EDIT_PENDING_SAVE_WAIT_MS / 1000
 
 /** 空闲释放的阈值（分钟，US-M3-07）：时长取自契约，阈值改了说法跟着改 */
 const IDLE_RELEASE_MINUTES = EDIT_IDLE_RELEASE_SECONDS / 60
@@ -233,6 +236,11 @@ export const editorMessages = {
      * "在此编辑"立即接手，那边失去编辑权（说明写清）。reenter 同上
      */
     elsewhereAway: (reenter: boolean) => `你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）${reenter ? `。点"${TAKE_OVER_HERE}"在这里接着编辑，那边会失去编辑权，没保存的修改可以在那边另存为副本` : '，这里只能阅读'}`,
+    /**
+     * 是自己、锁不在本浏览器，而本浏览器里有 30 秒以内的"刷新时在途的保存"的记号、那次保存还没提交（M3-P5 设计 §3.7 的 R1，审查 B 之后）：刚关闭、
+     * 刷新过的页面已经不在了，不说"那边会失去编辑权、另存为副本"；"在此编辑"会先等那次保存（至多 30 秒）。reenter 同上
+     */
+    elsewhereJustClosed: (reenter: boolean) => `你刚关闭或刷新的页面还有一次保存在进行${reenter ? `。点"${TAKE_OVER_HERE}"会先等它存完（至多 ${PENDING_SAVE_WAIT_SECONDS} 秒）再接着编辑` : '，这里只能阅读'}`,
     /**
      * 编辑状态里是"自己在别处编辑"，而本页刚退出编辑、没能确认放掉编辑权（释放的结果未知或超过了等待的上限，审查 A13）：多半就是本页的那一代
      * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期。reenter 同上

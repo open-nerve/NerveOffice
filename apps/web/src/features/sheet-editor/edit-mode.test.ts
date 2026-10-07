@@ -3249,6 +3249,133 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
     })
   })
 
+  describe('刷新之后的说法：锁不在本浏览器、有刷新时在途的保存的记号（审查 B §七）', () => {
+    it('记号在 30 秒以内、编辑状态的修订号不大于记号里的基准：是刚关闭或刷新的页面（just-closed），记号不清', async () => {
+      const context = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+      context.marker.read.mockReturnValue({ at: WALL - 1_000, revision: 3 })
+      await opened(context)
+      expect(readingOf(context.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'just-closed', takeover: undefined })
+      expect(context.marker.clear).not.toHaveBeenCalled()
+      // 下一次检查照旧（修订号没动）
+      await context.time.advance(READING_CHECK_INTERVAL_MS)
+      expect(readingOf(context.mode).selfHolder).toBe('just-closed')
+      // 页面卸载：阅读时检查的计时与记号到点的计时一起取消
+      expect(context.time.pending()).toBe(2)
+      context.mode.dispose()
+      expect(context.time.pending()).toBe(0)
+    })
+
+    it('没有记号：照旧是别处（elsewhere）', async () => {
+      const context = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+      await opened(context)
+      expect(context.marker.read).toHaveBeenCalled()
+      expect(readingOf(context.mode).selfHolder).toBe('elsewhere')
+    })
+
+    it('记号已经过了 30 秒（从记号的时刻算）：是别处；锁在本浏览器里有人持有时不看记号', async () => {
+      const stale = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+      stale.marker.read.mockReturnValue({ at: WALL - EDIT_PENDING_SAVE_WAIT_MS, revision: 3 })
+      await opened(stale)
+      expect(readingOf(stale.mode).selfHolder).toBe('elsewhere')
+
+      const { b } = await twoTabs()
+      b.marker.read.mockReturnValue({ at: WALL - 1_000, revision: 3 })
+      await b.time.advance(READING_CHECK_INTERVAL_MS)
+      expect(readingOf(b.mode).selfHolder).toBe('this-browser')
+    })
+
+    it('修订号比记号里的基准新了（那次保存提交了）：清掉记号，是别处', async () => {
+      const context = setup({ api: { editStatus: async () => status(4, SELF_EDITING) } })
+      context.marker.read.mockReturnValue({ at: WALL - 1_000, revision: 3 })
+      await opened(context)
+      expect(readingOf(context.mode).selfHolder).toBe('elsewhere')
+      expect(context.marker.clear).toHaveBeenCalledOnce()
+    })
+
+    it('刚关闭、刷新过的页面的那次保存期间提交了：下一次检查清掉记号、回到别处', async () => {
+      const context = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+      context.marker.read.mockReturnValue({ at: WALL - 1_000, revision: 3 })
+      await opened(context)
+      expect(readingOf(context.mode).selfHolder).toBe('just-closed')
+      context.api.editStatus.mockResolvedValue(status(4, SELF_EDITING))
+      await context.time.advance(READING_CHECK_INTERVAL_MS)
+      expect(readingOf(context.mode).selfHolder).toBe('elsewhere')
+      expect(context.marker.clear).toHaveBeenCalledOnce()
+    })
+
+    it('记号到 30 秒时（从记号的时刻算）排一次检查：说法回到别处；之前不多读', async () => {
+      let wall = WALL
+      const context = setup({ now: () => new Date(wall), api: { editStatus: async () => status(3, SELF_EDITING) } })
+      context.marker.read.mockReturnValue({ at: WALL - 10_000, revision: 3 })
+      await opened(context)
+      expect(readingOf(context.mode).selfHolder).toBe('just-closed')
+      const checks = context.api.editStatus.mock.calls.length
+      const left = EDIT_PENDING_SAVE_WAIT_MS - 10_000
+      wall += left - 1
+      await context.time.advance(left - 1)
+      expect(context.api.editStatus).toHaveBeenCalledTimes(checks)
+      expect(readingOf(context.mode).selfHolder).toBe('just-closed')
+      wall += 1
+      await context.time.advance(1)
+      expect(context.api.editStatus).toHaveBeenCalledTimes(checks + 1)
+      expect(readingOf(context.mode).selfHolder).toBe('elsewhere')
+      // 回到别处之后不再为记号排检查：只剩每 30 秒一次的那一种
+      wall += READING_CHECK_INTERVAL_MS - 1
+      await context.time.advance(READING_CHECK_INTERVAL_MS - 1)
+      expect(context.api.editStatus).toHaveBeenCalledTimes(checks + 1)
+    })
+
+    it('那次保存在记号到 30 秒之前提交了（回到前台时读到）：清掉记号、回到别处，到点时不再为记号多读', async () => {
+      const context = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+      context.marker.read.mockReturnValue({ at: WALL - 1_000, revision: 3 })
+      await opened(context)
+      expect(readingOf(context.mode).selfHolder).toBe('just-closed')
+      context.api.editStatus.mockResolvedValue(status(4, SELF_EDITING))
+      context.page.set(true)
+      context.page.set(false)
+      await settle()
+      expect(readingOf(context.mode).selfHolder).toBe('elsewhere')
+      expect(context.marker.clear).toHaveBeenCalledOnce()
+      const checks = context.api.editStatus.mock.calls.length
+      // 记号原本到点的时刻（29 秒之后）不读；下一次是回到前台那一次之后的 30 秒
+      await context.time.advance(READING_CHECK_INTERVAL_MS - 1)
+      expect(context.api.editStatus).toHaveBeenCalledTimes(checks)
+      await context.time.advance(1)
+      expect(context.api.editStatus).toHaveBeenCalledTimes(checks + 1)
+    })
+
+    it('点"编辑"之后才得知被自己占着、锁空着、有记号（刷新之后点得快）：回到阅读时不等下一次检查，同样是刚关闭或刷新的页面', async () => {
+      const context = setup({ editLease: { acquire: async () => Promise.reject(HELD_BY_SELF) } })
+      context.marker.read.mockReturnValue({ at: WALL - 1_000, revision: 3 })
+      await opened(context)
+      expect(readingOf(context.mode).selfHolder).toBeUndefined()
+      // 之后的检查一直没有回答：说法只来自申请被占用时的判断
+      context.api.editStatus.mockImplementation(async () => new Promise<FetchedEditStatus>(() => {}))
+      const entering = context.mode.enter()
+      await context.time.advance(SAME_USER_RETRY_DELAY_MS * SAME_USER_RETRIES)
+      await entering
+      expect(readingOf(context.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'just-closed' })
+    })
+
+    it('"在此编辑"照旧先等那次保存：接手之后清掉记号，不再排那次检查', async () => {
+      const context = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+      context.marker.read.mockReturnValue({ at: WALL - 1_000, revision: 3 })
+      await opened(context)
+      expect(readingOf(context.mode).selfHolder).toBe('just-closed')
+      const taking = context.mode.takeOver()
+      await settle()
+      expect(readingOf(context.mode).takeover).toEqual({ kind: 'waiting-save' })
+      context.api.editStatus.mockResolvedValue(status(4, SELF_EDITING))
+      await context.time.advance(PENDING_SAVE_POLL_MS)
+      await taking
+      expect(modeOf(context.mode).kind).toBe('editing')
+      expect(context.marker.clear).toHaveBeenCalled()
+      const checks = context.api.editStatus.mock.calls.length
+      await context.time.advance(EDIT_PENDING_SAVE_WAIT_MS)
+      expect(context.api.editStatus).toHaveBeenCalledTimes(checks)
+    })
+  })
+
   describe('锁在本浏览器里没人持有：立即本人接管（跨设备、刚关闭或刷新过的页面、孤儿租约）', () => {
     it('以本人接管申请（不发交接请求、不等），拿锁（锁空着）、以可编辑重建；接手之后清掉记号', async () => {
       const context = setup({ api: { editStatus: async () => status(3, SELF_EDITING) } })

@@ -15,7 +15,7 @@
 // 交接成功时旧页的修改由交出前的保存或之前的自动保存存上，都按服务器上的内容断言
 import type { Page, Request } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
-import { holdSaves } from '../../support/autosave.ts'
+import { holdSaves, setPageHidden } from '../../support/autosave.ts'
 import { CURRENT_CLIENT } from '../../support/client-format.ts'
 import { createUser, editLeaseEndReason, editLeaseEpoch, editLeaseTakeover } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -29,6 +29,8 @@ test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 const IN_THIS_BROWSER = '你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里'
 /** 自己在别处（另一台设备或浏览器，或者刚关闭、刷新过的页面）编辑时的说明 */
 const ELSEWHERE = '你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）。点"在此编辑"在这里接着编辑，那边会失去编辑权，没保存的修改可以在那边另存为副本'
+/** 是自己、锁不在本浏览器，刚关闭或刷新的页面还有一次保存在进行（记号在 30 秒内、那次保存还没提交，审查 B §七）时的说明 */
+const JUST_CLOSED = '你刚关闭或刷新的页面还有一次保存在进行。点"在此编辑"会先等它存完（至多 30 秒）再接着编辑'
 
 /** 申请编辑权（POST …/edit-lease）的请求 */
 function isLeaseAcquisition(request: Request, documentId: string): boolean {
@@ -189,7 +191,7 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('after the orphan')
   })
 
-  test('US-M3-08 旧页面离开（刷新、关闭）时有保存在途（R1）：它不释放、留下记号；新页面点"在此编辑"先说上一个页面的保存还在进行、等它，那次保存提交了才接手——服务器上有那次保存，接手之后的内容包括它', async ({ page, context }) => {
+  test('US-M3-08 旧页面离开（刷新、关闭）时有保存在途（R1）：它不释放、留下记号；新页面说刚关闭或刷新的页面还有一次保存在进行，点"在此编辑"先说上一个页面的保存还在进行、等它，那次保存提交了才接手——服务器上有那次保存，接手之后的内容包括它', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('takeover-pending'))
     const documentId = await createSheetThroughApi(page)
     await page.clock.install()
@@ -204,6 +206,12 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await expect.poll(() => saves.held()).toBeGreaterThan(0)
     await page.evaluate(() => window.dispatchEvent(new Event('pagehide')))
     expect(await editLeaseEndReason(documentId)).toBeNull()
+
+    // 新页面再读一次编辑状态（回到前台时立即读）：锁空着、那一代还在，有 30 秒以内的记号、那次保存还没提交——说刚关闭或刷新的页面还有一次
+    // 保存在进行，不说"那边会失去编辑权、另存为副本"（审查 B §七）
+    await setPageHidden(fresh, true)
+    await setPageHidden(fresh, false)
+    await expect(statusRegion(fresh)).toHaveText(JUST_CLOSED)
 
     // 新页面：锁空着、那一代还在——"在此编辑"先等那次保存
     const takeovers = recordTakeovers(fresh, documentId)

@@ -691,9 +691,10 @@ function readingFailure(notice: ReadingNotice | undefined, personal: boolean): R
 /**
  * 别处正在编辑时的说明（M3-P1 设计 §3.4.7）：谁在编辑（人名经人名组件）、最后活动几分钟之前；能编辑的人另说现在只能阅读。
  * 是自己、而且现在能编辑时按那个页面在哪里说（M3-P5 设计 §3.7：本浏览器的另一个标签页，或者另一台设备、浏览器，也可能是刚关闭、刷新过的
- * 页面），能"在此编辑"时说点了会怎样——本页刚退出编辑、没能确认放掉编辑权时多半就是本页那一代，照实说（releaseUnconfirmed，审查 A13）；
- * 不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到新的编辑状态，照别人一样说谁在编辑，不提"在此编辑"。与服务端不兼容、数据
- * 不完整的阅读不给"在此编辑"，同样不提（M3-P3 审查 B8：停住续租之后退出编辑，那次释放没送到时这里也说本页刚退出）
+ * 页面；刚关闭、刷新过的页面还有一次保存在进行时照实说，不提"那边"，审查 B §七），能"在此编辑"时说点了会怎样——本页刚退出编辑、没能确认
+ * 放掉编辑权时多半就是本页那一代，照实说（releaseUnconfirmed，审查 A13）；不能编辑了时自己那一代已经失效（持有者要能编辑），只是还没读到
+ * 新的编辑状态，照别人一样说谁在编辑，不提"在此编辑"。与服务端不兼容、数据不完整的阅读不给"在此编辑"，同样不提（M3-P3 审查 B8：停住续租
+ * 之后退出编辑，那次释放没送到时这里也说本页刚退出）
  */
 function elsewhereNotice(reading: ReadingMode, holder: LeaseHolder | undefined): ReactNode {
   if (holder === undefined)
@@ -702,7 +703,16 @@ function elsewhereNotice(reading: ReadingMode, holder: LeaseHolder | undefined):
     const reenter = reading.blocked === undefined && reading.damaged === undefined
     if (reading.releaseUnconfirmed)
       return editorMessages.editing.elsewhereThisPage(reenter)
-    return reading.selfHolder === 'this-browser' ? editorMessages.editing.elsewhereThisBrowser(reenter) : editorMessages.editing.elsewhereAway(reenter)
+    switch (reading.selfHolder) {
+      case 'this-browser':
+        return editorMessages.editing.elsewhereThisBrowser(reenter)
+      // 刚关闭、刷新过的页面还有一次保存在进行（本浏览器里的记号）："那边"已经不在了，"在此编辑"会先等它
+      case 'just-closed':
+        return editorMessages.editing.elsewhereJustClosed(reenter)
+      case 'elsewhere':
+      case undefined:
+        return editorMessages.editing.elsewhereAway(reenter)
+    }
   }
   const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
   return <Phrase parts={editorMessages.editing.elsewhere(<PersonName person={holder.holder} />, lastActive, reading.canEdit)} />

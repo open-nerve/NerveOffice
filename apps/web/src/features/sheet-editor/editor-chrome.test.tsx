@@ -548,6 +548,18 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(infoRegion()).not.toHaveTextContent('90 秒')
   })
 
+  it('是自己、刚关闭或刷新的页面还有一次保存在进行（审查 B §七）：照实说在等它存完，不提"那边会失去编辑权、另存为副本"；按钮照旧是"在此编辑"；不能编辑时只说只能阅读', () => {
+    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const fake = renderChrome({ mode: { ...READING, holder: self, selfHolder: 'just-closed' }, save: undefined })
+    expect(infoRegion().textContent).toBe('你刚关闭或刷新的页面还有一次保存在进行。点"在此编辑"会先等它存完（至多 30 秒）再接着编辑')
+    expect(infoRegion()).not.toHaveTextContent('失去编辑权')
+    expect(infoRegion()).not.toHaveTextContent('另存为副本')
+    expect(screen.getByRole('button', { name: '在此编辑' })).toHaveAttribute('aria-disabled', 'false')
+    fake.set({ mode: { ...READING, blocked: 'client-outdated', holder: self, selfHolder: 'just-closed' } })
+    expect(infoRegion().textContent).toBe('你刚关闭或刷新的页面还有一次保存在进行，这里只能阅读')
+    expect(screen.queryByRole('button', { name: '在此编辑' })).toBeNull()
+  })
+
   it('是自己：按钮一律换成"在此编辑"（同一个按钮，不是另加一个），点了交给页面的本人接管，不是"编辑"', () => {
     const fake = renderChrome({ mode: READING, save: undefined })
     const enter = screen.getByRole('button', { name: '编辑' })
