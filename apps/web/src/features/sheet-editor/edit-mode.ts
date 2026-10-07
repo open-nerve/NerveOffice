@@ -678,6 +678,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let takeoverAbort: AbortController | undefined
   /** 进入编辑时申请带回的上一位编辑者异常中断的提醒（M3-P5 设计 §3.5）：编辑、离开编辑的过程中显示，"知道了"、离开编辑、失去编辑权时去掉 */
   let interruption: EditInterruption | undefined
+  /**
+   * 离开编辑里交给请求编辑的人、交出（POST …/handover）在途：这期间续租先得知"已经交出"（handed-over）时记在这里，不另走失去编辑权——
+   * 交出成了，等交出的回答把离开走完，说"已保存并把编辑权交给了"（见 lost）
+   */
+  let handoverInFlight: { handedSeen: boolean } | undefined
   /** 进入编辑的时刻（clock.now 的时间轴上）：空闲释放与自动交出都从它与最后一次操作中较晚的那个算起 */
   let editingSince = 0
   let generation = 0
@@ -1252,19 +1257,25 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 之后放下本机锁
     const until = clock.now() + EXIT_RELEASE_WAIT_MS
     const offer = handingTo ?? offerOnLeaving(cause)
+    const inFlight = offer === undefined ? undefined : { handedSeen: false }
+    handoverInFlight = inFlight
     const outcome = offer === undefined ? undefined : await holder.handOver(held, offer, until)
+    if (handoverInFlight === inFlight)
+      handoverInFlight = undefined
     if (!still(token))
       return
+    // 交出在途时续租先得知已经交出（lost 记下）：交出成了，不论交出的回答是什么、有没有回来
+    const handedSeen = inFlight?.handedSeen === true
     let handedTo: UserSummary | undefined
     let released = true
-    if (outcome?.kind === 'handed' || outcome?.kind === 'lost') {
+    if (handedSeen || outcome?.kind === 'handed' || outcome?.kind === 'lost') {
       // 交出了，或者这一代已经因为别的原因失效：服务端不再认这一代，停止续租、不再释放
       held.abandon()
-      if (outcome.kind === 'lost' && handingTo !== undefined) {
+      if (!handedSeen && outcome?.kind === 'lost' && handingTo !== undefined) {
         void lose(outcome.loss)
         return
       }
-      handedTo = outcome.kind === 'handed' ? offer?.requester : undefined
+      handedTo = handedSeen || outcome?.kind === 'handed' ? offer?.requester : undefined
     }
     else if (handingTo !== undefined && outcome !== undefined) {
       // 没交出：请求已经不在（请求方取消了），或者没有结果（提示里说明原因）——留在编辑，请求照旧在。修改都已存上：期间回应过 ack 的标签页
@@ -1354,6 +1365,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
   function lost(loss: LeaseLoss): void {
     if (disposed)
       return
+    if (mode.kind === 'exiting' && handoverInFlight !== undefined && loss.kind === 'handed-over') {
+      // 交出在途时续租先得知已经交出（两者几乎同时发出、服务端先提交了交出——空闲满 2 分钟的计时与心跳一起到点时，M3-P5 合并之后 CI 碰上过）：
+      // 交出成了。不另走失去编辑权（那会说成"编辑权已失效"），记下来，等交出的回答把离开走完
+      handoverInFlight.handedSeen = true
+      return
+    }
     if (mode.kind === 'editing' || mode.kind === 'exiting') {
       // 已经交出（交出的回答没收到、下一次心跳或保存才得知，M3-P5 设计 §3.6）：交给的就是还在等的那个请求
       const incoming = holder.incoming()

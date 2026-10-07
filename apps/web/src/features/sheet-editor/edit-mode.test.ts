@@ -4107,6 +4107,43 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(failure?.error).toBeInstanceOf(NetworkError)
     })
 
+    it('交出在途时续租先得知已经交出（两者几乎同时发出、服务端先提交了交出——空闲满 2 分钟的计时与心跳一起到点时，M3-P5 合并之后 CI 碰上过）：不说成失去编辑权，等交出的回答把离开走完，阅读里说明交给了谁', async () => {
+      const answer = deferred<HandedOverEditLease>()
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => answer.promise } })
+      await prompted(context)
+      // 下一次心跳 2 秒之后到点：落在交出的时限（EXIT_RELEASE_WAIT_MS）之内
+      await context.time.advance(HEARTBEAT_MS - 2_000)
+      const handing = context.mode.handOver()
+      await settle()
+      expect(context.editLease.handOver).toHaveBeenCalledOnce()
+      context.editLease.renew.mockRejectedValue(leaseLost('handed_over'))
+      await context.time.advance(2_000)
+      await settle()
+      expect(modeOf(context.mode)).toMatchObject({ kind: 'exiting', cause: 'handover-request' })
+      answer.resolve({ reservedFor: BEN, reservedUntil: RESERVED_UNTIL })
+      await handing
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: false })
+      expect(context.editLease.release).not.toHaveBeenCalled()
+    })
+
+    it('同上，交出的回答到了时限也没回来：续租已经得知交出了，照样当作交出完成（不留在编辑、不说成失去编辑权）', async () => {
+      const answer = deferred<HandedOverEditLease>()
+      const context = setup({ activity: 'manual', editLease: { handOver: async () => answer.promise } })
+      await prompted(context)
+      await context.time.advance(HEARTBEAT_MS - 2_000)
+      const handing = context.mode.handOver()
+      await settle()
+      context.editLease.renew.mockRejectedValue(leaseLost('handed_over'))
+      await context.time.advance(2_000)
+      await settle()
+      await context.time.advance(EXIT_RELEASE_WAIT_MS)
+      await handing
+      await settle()
+      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: false })
+      expect(context.editLease.release).not.toHaveBeenCalled()
+    })
+
     it('交出得到会话类失败（令牌失效）：交给页面确认会话，留在编辑、说明原因', async () => {
       const stale = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
       const context = setup({ activity: 'manual', editLease: { handOver: async () => Promise.reject(stale) } })
