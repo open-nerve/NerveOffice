@@ -4,11 +4,17 @@ import type { ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 
+/** 本人接管的按钮（M3-P5 设计 §3.7）：说明里提到它时用同一个名字 */
+const TAKE_OVER_HERE = '在此编辑'
+
 /**
- * 是自己在另一个标签页或设备上编辑时的补充：刚关闭、刷新过的那个页面没能放掉编辑权（释放没送到，或者载入中就离开了），
- * 那一代不再续租，最多一个有效期（EDIT_LEASE_TTL_SECONDS）就到期（M3-P1 审查 B7）。时长取自契约，有效期改了说法跟着改
+ * 本浏览器的另一个标签页没能交出（交接频道的 handover-failed，M3-P5 设计 §3.7）：按原因说那边为什么没交出
  */
-const SELF_ELSEWHERE_HINT = `要是刚刚关闭或刷新过那个页面，那边的编辑权最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，到时再点"编辑"就能编辑`
+const TAKEOVER_FAILURES: Readonly<Record<'not-saved' | 'conflict' | 'session', string>> = {
+  'not-saved': '另一个标签页的修改没能保存，没有交出编辑权',
+  'conflict': '另一个标签页的修改与别处保存的版本冲突、没能保存，没有交出编辑权',
+  'session': '另一个标签页暂时无法确认登录状态、没能保存，没有交出编辑权',
+}
 
 /** 空闲释放的阈值（分钟，US-M3-07）：时长取自契约，阈值改了说法跟着改 */
 const IDLE_RELEASE_MINUTES = EDIT_IDLE_RELEASE_SECONDS / 60
@@ -192,13 +198,21 @@ export const editorMessages = {
     elsewhere: <T>(holder: T, lastActive: string | undefined, canEdit: boolean): Phrase<T> => [holder, ` 正在编辑这份文档${lastActive === undefined ? '' : `（${lastActive}）`}${canEdit ? '，你现在只能阅读' : ''}`],
     /** 持有者最后一次操作在几分钟之前（服务端回答时，向下取整） */
     lastActive: (minutes: number) => minutes < 1 ? '最后活动不到 1 分钟前' : `最后活动 ${minutes} 分钟前`,
-    /** reenter：这一页能再点"编辑"（与服务端不兼容的阅读不给"编辑"，不提它，M3-P3 审查 B8） */
-    elsewhereBySelf: (reenter: boolean) => `你在另一个标签页或设备上正在编辑这份文档，这里只能阅读${reenter ? `。${SELF_ELSEWHERE_HINT}` : ''}`,
+    /**
+     * 是自己、那个页面在本浏览器的另一个标签页里（本机锁有人持有，M3-P5 设计 §3.7）。reenter：这一页给"在此编辑"（与服务端不兼容、
+     * 数据不完整的阅读不给，不提它，M3-P3 审查 B8）
+     */
+    elsewhereThisBrowser: (reenter: boolean) => `你在本浏览器的另一个标签页里正在编辑这份文档${reenter ? `。点"${TAKE_OVER_HERE}"，那个标签页会先保存，再把编辑权交给这里` : '，这里只能阅读'}`,
+    /**
+     * 是自己、那个页面不在本浏览器里（另一台设备、浏览器，也可能是刚关闭、刷新过的页面：锁随页面放开了，编辑权还在服务端）。
+     * "在此编辑"立即接手，那边失去编辑权（说明写清）。reenter 同上
+     */
+    elsewhereAway: (reenter: boolean) => `你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）${reenter ? `。点"${TAKE_OVER_HERE}"在这里接着编辑，那边会失去编辑权，没保存的修改可以在那边另存为副本` : '，这里只能阅读'}`,
     /**
      * 编辑状态里是"自己在别处编辑"，而本页刚退出编辑、没能确认放掉编辑权（释放的结果未知或超过了等待的上限，审查 A13）：多半就是本页的那一代
      * （同一个页面再申请照样取得），不说成另一个标签页或设备；那一代至多一个有效期后自行到期。reenter 同上
      */
-    elsewhereThisPage: (reenter: boolean) => `本页刚退出编辑，编辑权还没能确认放掉：最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，这期间别人还不能编辑${reenter ? '；这一页可以直接再点"编辑"' : ''}`,
+    elsewhereThisPage: (reenter: boolean) => `本页刚退出编辑，编辑权还没能确认放掉：最多 ${EDIT_LEASE_TTL_SECONDS} 秒后自动结束，这期间别人还不能编辑${reenter ? `；这一页可以直接点"${TAKE_OVER_HERE}"` : ''}`,
     /** 服务端给的详情认不出时的通用说法 */
     elsewhereUnknown: '这份文档正在别处编辑，你现在只能阅读',
     /**
@@ -220,19 +234,35 @@ export const editorMessages = {
     lostDenied: (reason: string) => `你已没有编辑这份文档的权限（${reason}）`,
     /** 续上时别人正在编辑（持有者经人名组件呈现）；lastActive 是"最后活动……"，服务端没给出时为 undefined */
     lostHeldBy: <T>(holder: T, lastActive: string | undefined): Phrase<T> => [holder, ` 正在编辑这份文档${lastActive === undefined ? '' : `（${lastActive}）`}`],
-    lostHeldBySelf: `你在另一个标签页或设备上正在编辑这份文档（${SELF_ELSEWHERE_HINT}）`,
+    /** 续上时被自己占着（另一个标签页或设备上的那一代，M3-P5 起回到阅读之后可以"在此编辑"） */
+    lostHeldBySelf: '你在另一个标签页或设备上正在编辑这份文档',
     lostHeldUnknown: '这份文档正在别处编辑',
     /** 续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它（可以另存为副本） */
     lostNewer: '编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它',
     /** 本人在本浏览器的另一个标签页接手了编辑（M3-P5：本页的本机锁被抢，不再问服务端） */
     lostTakenOverHere: '你在本浏览器的另一个标签页接手了编辑',
-    /** 本人在另一台设备或浏览器上接手了编辑（M3-P5：服务端的 taken_over，S6 接上） */
+    /** 本人在另一台设备或浏览器上接手了编辑（M3-P5：续租或保存得到 taken_over、forced 为假） */
     lostTakenOverElsewhere: '你在另一台设备或浏览器上接手了编辑',
   },
   /** 阅读与编辑（M3-P2 设计 §3.4）：打开即阅读，点"编辑"进入编辑，"退出编辑"回到阅读；模式切换一律重建编辑器 */
   mode: {
     enter: '编辑',
     entering: '正在进入编辑…',
+    /** 本人接管（M3-P5 设计 §3.7，US-M3-08）：持有者是自己（别的标签页或设备）时换掉"编辑" */
+    takeOverHere: TAKE_OVER_HERE,
+    /** "在此编辑"进行中（请那边交出、等刷新之前的保存）：按钮留着、不可用 */
+    takingOver: '正在接手…',
+    /** 本浏览器的另一个标签页没能交出之后：本人接管并抢锁（那边转为失去编辑权、给副本） */
+    takeOverAnyway: '仍在此编辑',
+    /** 同上，不再接手 */
+    cancelTakeOver: '取消',
+    /** "在此编辑"的进展，放进一直在的读屏状态区 */
+    takeoverAsking: '正在请本浏览器的另一个标签页保存并交出编辑权…',
+    takeoverWaitingSave: '上一个页面的保存还在进行，稍后接手…',
+    /** 那边没能交出：原因，与之后能做的 */
+    takeoverFailed: (reason: 'not-saved' | 'conflict' | 'session') => `${TAKEOVER_FAILURES[reason]}。点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`,
+    /** 本页交给了本浏览器的另一个标签页（US-M3-08）：阅读时读屏状态区里的说明 */
+    handedOverTab: '已在本浏览器的另一个标签页接着编辑',
     exit: '退出编辑',
     exiting: '正在退出编辑…',
     /** 空闲释放的过程中（US-M3-07）：先保存、再释放编辑权、回到阅读 */
