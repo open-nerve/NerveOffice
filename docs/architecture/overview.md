@@ -61,7 +61,7 @@ apps/api/src/
                   同一个空间里的结构性改动由空间树的 advisory lock 串行，保存内容不取这把锁；
                   单独授权（M2-P5：`document_grants` 与仓储、有效权限并上授权、分享在事务里的锁下复核与写入、收回写入权的 userDocuments）；
                   编辑租约（M3-P1，ADR-018：`document_edit_leases`、有效条件的纯函数、申请与心跳与释放与编辑状态、保存时核对租约、收回写入权接入租约；为判断别人的租约绑定的登录引入 auth）；
-                  交接规则（M3-P5，ADR-018 的补充：迁移 0025 的请求、保留与接管标记；占用判断 `occupancyOf`、申请怎样对待占着的那一代 `claimOf`、请求与保留的规则 `edit-request-rules.ts`；请求编辑与交出 `EditRequestService`；两个服务共用的事实 `edit-lease-facts.ts`；强制接管的权限位 `canTakeOver` 与操作 `takeOver`、审计 `documents.edit_taken_over`；收回写入权只锁按时间还活着的租约）；
+                  交接规则（M3-P5，ADR-018 的补充：迁移 0025 的请求、保留与接管标记；占用判断 `occupancyOf`、申请怎样对待占着的那一代 `claimOf`、请求与保留的规则 `edit-request-rules.ts`；请求编辑与交出 `EditRequestService`；两个服务共用的事实 `edit-lease-facts.ts`；强制接管的权限位 `canTakeOver` 与操作 `takeOver`、审计 `documents.edit_taken_over`；收回写入权只收回按时间还活着的租约，刚死不久的仍锁文档行等在途的保存）；
                   另存为副本与读取内容的条件请求（M3-P2，ADR-011、ADR-014 的补充：DocumentConflictCopyService、@IfNoneMatch()）；
                   保存协议加固（M3-P3，ADR-011 的修订）：重放预检与回执（save-outcomes、document-save-receipts）、拦截旧客户端（ClientFormatGate）、
                   快照的检查（SnapshotInspector：子进程池，每个账户至多 2 份；snapshot-checks、snapshot-inspection）、requestId 的锁与两张表的记录（RequestLedger）、不缩水（legacy-resources）、保留期清理的入口（RevisionPurgeService）；
