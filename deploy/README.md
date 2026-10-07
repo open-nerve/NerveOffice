@@ -145,6 +145,12 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 
 `test/compose.yaml` 没有给应用容器设内存上限（容器可以用到主机的内存，与默认值相容）；加上 `mem_limit`（或 `deploy.resources.limits.memory`）时按上面的规则取值。
 
+### 保存的事务时限
+
+- 保存的事务由数据库限时 60 秒（`transaction_timeout`，PostgreSQL 17 起有）：到点由数据库结束这个会话、事务整体回滚，应用按数据库繁忙回 503 带 `Retry-After`，页面稍后照常重试；日志里一条 warn（数据库繁忙，原因 `transaction_timeout`）与一条 error（连接池的连接出错）。正常的保存是毫秒到秒级。
+- 这个时限是"撤权提交之后的保存必定被拒绝"的前提（撤权等一个有效期以内的在途保存，ADR-018）。会话已有非 0 默认值时事务里设的更短的时限不起作用，所以应用的连接以启动参数把 `transaction_timeout` 的会话默认值定为 0：库或角色上设的默认值对应用的连接不起作用。
+- `NERVE_DATABASE_URL` 里不要带 `options` 参数（会盖掉这个启动参数）。现在的部署形态是应用直连 PostgreSQL；以后中间加 PgBouncer 一类的连接代理时它多半不转发 `options`，要另行保证库与角色上没有设 `transaction_timeout` 的默认值（PostgreSQL 的默认是 0）。
+
 ## 数据库角色
 
 `sql/bootstrap-roles.sql` 由数据库管理员在建库时执行一次，建两个角色与数据库：

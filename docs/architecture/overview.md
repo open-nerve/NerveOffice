@@ -40,7 +40,7 @@ apps/api/src/
     config/       环境变量（NERVE_*，机密可以用 _FILE），启动时校验；只有这里读 process.env
     logging/      pino 根日志、请求日志与请求标识、脱敏、请求上下文（认证后带 userId）、注入的 AppLogger、Nest 日志适配
     security/     安全响应头（M0 定稿的 CSP 等）、JSON 请求体的上限与嵌套深度、元素数量、代理未被信任的告警
-    database/     连接池与超时、Drizzle、TransactionRunner（写事务 run 与读请求的只读快照 readSnapshot，ADR-017）、迁移执行、就绪检查；
+    database/     连接池与超时（应用的连接以启动参数把 transaction_timeout 的会话默认值定为 0，M3-P5）、Drizzle、TransactionRunner（写事务 run——可带事务的时限 timeoutMs，在第一条语句设下——与读请求的只读快照 readSnapshot，ADR-017）、迁移执行、就绪检查；
                   请求级的提交记录 CommitLedger（M2-P6）
     audit/        审计事件（只追加）；启动时检查数据库角色能否关掉审计表的触发器
     health/       存活与就绪探针（公开）、应用的运行状态
@@ -61,7 +61,7 @@ apps/api/src/
                   同一个空间里的结构性改动由空间树的 advisory lock 串行，保存内容不取这把锁；
                   单独授权（M2-P5：`document_grants` 与仓储、有效权限并上授权、分享在事务里的锁下复核与写入、收回写入权的 userDocuments）；
                   编辑租约（M3-P1，ADR-018：`document_edit_leases`、有效条件的纯函数、申请与心跳与释放与编辑状态、保存时核对租约、收回写入权接入租约；为判断别人的租约绑定的登录引入 auth）；
-                  交接规则（M3-P5，ADR-018 的补充：迁移 0025 的请求、保留与接管标记；占用判断 `occupancyOf`、申请怎样对待占着的那一代 `claimOf`、请求与保留的规则 `edit-request-rules.ts`；请求编辑与交出 `EditRequestService`；两个服务共用的事实 `edit-lease-facts.ts`；强制接管的权限位 `canTakeOver` 与操作 `takeOver`、审计 `documents.edit_taken_over`；收回写入权只收回按时间还活着的租约，刚死不久的仍锁文档行等在途的保存）；
+                  交接规则（M3-P5，ADR-018 的补充：迁移 0025 的请求、保留与接管标记；占用判断 `occupancyOf`、申请怎样对待占着的那一代 `claimOf`、请求与保留的规则 `edit-request-rules.ts`；请求编辑与交出 `EditRequestService`；两个服务共用的事实 `edit-lease-facts.ts`；强制接管的权限位 `canTakeOver` 与操作 `takeOver`、审计 `documents.edit_taken_over`；收回写入权只收回按时间还活着的租约，刚死不久的仍锁文档行等在途的保存——保存的事务由数据库限时 60 秒 `SAVE_TRANSACTION_TIMEOUT_MS`，这个前提因此成立）；
                   另存为副本与读取内容的条件请求（M3-P2，ADR-011、ADR-014 的补充：DocumentConflictCopyService、@IfNoneMatch()）；
                   保存协议加固（M3-P3，ADR-011 的修订）：重放预检与回执（save-outcomes、document-save-receipts）、拦截旧客户端（ClientFormatGate）、
                   快照的检查（SnapshotInspector：子进程池，每个账户至多 2 份；snapshot-checks、snapshot-inspection）、requestId 的锁与两张表的记录（RequestLedger）、不缩水（legacy-resources）、保留期清理的入口（RevisionPurgeService）；
@@ -153,7 +153,7 @@ apps/api/src/
 - 连接池的语句、等锁与事务中空闲的超时取自配置；TCP keepalive 与客户端侧的查询时限兜住静默断开的连接；连接断开只记日志，不让进程退出。
 - 迁移由单独的命令执行，带 advisory lock；执行前比较已执行的迁移，库里不一致就拒绝。
 - 应用启动时不迁移，只检查库结构版本，不一致时就绪探针失败。
-- 表只由所属模块的仓储读写；服务用 `TransactionRunner` 开启事务，把不透明的 `Transaction` 显式传给仓储。`TransactionRunner` 自己借出、归还连接：除业务错误外，失败的事务丢弃它的连接；work 吞掉失败的语句时不报告成功。
+- 表只由所属模块的仓储读写；服务用 `TransactionRunner` 开启事务，把不透明的 `Transaction` 显式传给仓储。`TransactionRunner` 自己借出、归还连接：除业务错误外，失败的事务丢弃它的连接；work 吞掉失败的语句时不报告成功；回滚也失败时，work 的错误是数据库繁忙就照样交出它（超过事务的时限时数据库结束了会话，M3-P5）。
 - 登录之后的读请求（全部 GET 接口）在一个只读快照里判断权限、读数据（`TransactionRunner.readSnapshot`，REPEATABLE READ、READ ONLY，ADR-017）：快照在最外层的服务里开、不嵌套；开场核对由 auth 登记，在最前（会话仍然有效、账户仍然有效、守卫读到是系统管理员的仍是）；快照进行中连接池上的查询与借连接一律报错（共用的标记 `SnapshotScope`，`pool.ts`）。同一个事务或快照上的语句逐条执行（集成测试核对应用的连接上没有并发查询）。
 
 **有效权限**（M2-P2，ADR-014）：服务只经 `DocumentAccessPolicy` 判断权限，目标是文档或空间（在事务里判断时，查询走事务的连接）。
@@ -162,7 +162,7 @@ apps/api/src/
 - 看不到与不存在都是 `NOT_FOUND`，执行同样的查询；看得到却不能做是 `PERMISSION_DENIED`。需要锁的操作先判断、再加锁、锁下再判断。
 - "可访问文档"的条件只在 documents 的仓储里拼一处，范围（空间 id 的集合）由访问策略给出。
 - 收回写入权的入口：停用、移出、调整角色、归档、转移（M2-P6 起）、删除与跨空间移动在同一个事务里调用；M3-P1 起接入编辑租约：失去编辑权的持有者的租约记 `revoked`、文档的代次加一（ADR-014 的补充、ADR-018）。转移与（P4 起的）删除、跨空间移动递增 `documents.write_epoch`。
-- 数据库繁忙（等锁超时、语句超时、取不到连接）在请求里还没有事务提交时回 503 带 `Retry-After`、记 warn，已经提交过时回 500（结果未知）（M2-P6，ADR-006）；写入代次只增不减由触发器兜底；集成测试核对迁移与表定义整体一致、有数据的库能迁到最新，删库之前扫一遍不变量；永久删除前核对要删的都在回收站里；定时清理暂缓一直失败的条目、按数据库时间判断到期（ADR-016）。
+- 数据库繁忙（等锁超时、语句超时、超过事务的时限、取不到连接）在请求里还没有事务提交时回 503 带 `Retry-After`、记 warn，已经提交过时回 500（结果未知）（M2-P6，ADR-006）；写入代次只增不减由触发器兜底；集成测试核对迁移与表定义整体一致、有数据的库能迁到最新，删库之前扫一遍不变量；永久删除前核对要删的都在回收站里；定时清理暂缓一直失败的条目、按数据库时间判断到期（ADR-016）。
 - 团队空间的名称按判重键唯一（数据库的生成列 `name_key`，M2-P6，ADR-014）；复制在锁下对源文档重新判断；搜索的范围检查是不变量；不判断权限的永久删除本体（`TrashEntryPurger`）只在 documents 内部。按名称搜索（同事目录、团队空间的列表）时空白的种类与个数不算区别：名称与关键词两边的每一段空白都合成一个普通空格再比较，算作空白的字符与判重键共用 contracts 的一份清单（M2-P6）。集成测试专用的出口（`DATABASE`、`DocumentsRepository`、`spaces` 的表定义，仓储级的范围核对与"迁移与表定义一致"的核对等用）在单独的入口 `@nerve-office/api/testing`（`app/integration.test-support.ts`）：只在源码条件下可解析、不进构建产物，lint 只许 `tests/integration` 引用；应用的公开入口不再转出它们（M2-P6 复验 R-S4）。
 
 **文档的内容与保存**（ADR-011）：
@@ -203,7 +203,7 @@ apps/web/src/
                       编辑租约的管理（`edit-lease.ts`，M3-P1：申请、心跳、失效、续上与释放，不依赖 Univer 与界面）；
                       阅读与编辑的状态机（`edit-mode.ts`，M3-P2：持有租约与保存的状态机，模式切换一律重建，不依赖 Univer 与界面；当前的编辑器在
                       `editor-slot.ts`（单飞重建）、阅读时的检查在 `reading-checks.ts`、失去编辑权之后的那一份在 `lost-copy.ts`）；
-                      交接规则（M3-P5）：同一个浏览器里的锁与交接频道 `same-browser.ts`（先服务端、后本机锁）、空闲计时 `idle-watch.ts`、刷新时在途保存的记号 `pending-save-marker.ts`、本人接管的请求方一侧 `self-takeover.ts`、请求方的请求 `edit-request.ts`（只在发出过请求的标签页恢复等待：记号 `issued-request.ts`）、持有者一侧的请求 `holder-requests.ts`、交接频道的回应与"在此编辑"的编排 `tab-handover.ts`（审查之后从 `edit-mode.ts` 拆出，状态机只留各条转移与作废）、交接的观察事件 `handover-trace.ts`（测试构建的记录器在 `editor/testing/handover-log.ts`）；`edit-mode.ts` 的离开编辑 `leaveEditing(cause)`（退出、空闲释放、交给请求方、交给本浏览器的另一个标签页）与持有者一侧请求的入口（提示的状态、2 分钟计时、交出与谢绝的结果在 `holder-requests.ts`）
+                      交接规则（M3-P5）：同一个浏览器里的锁与交接频道 `same-browser.ts`（先服务端、后本机锁）、空闲计时 `idle-watch.ts`、刷新时在途保存的记号 `pending-save-marker.ts`、本人接管的请求方一侧 `self-takeover.ts`、请求方的请求 `edit-request.ts`（只在发出过请求的标签页恢复等待：记号 `issued-request.ts`，等待期间以共享方式持有本机锁 `nerve-office:edit-request:<documentId>` 认出复制出来的标签页）、持有者一侧的请求 `holder-requests.ts`、交接频道的回应与"在此编辑"的编排 `tab-handover.ts`（审查之后从 `edit-mode.ts` 拆出，状态机只留各条转移与作废）、交接的观察事件 `handover-trace.ts`（测试构建的记录器在 `editor/testing/handover-log.ts`）；`edit-mode.ts` 的离开编辑 `leaveEditing(cause)`（退出、空闲释放、交给请求方、交给本浏览器的另一个标签页）与持有者一侧请求的入口（提示的状态、2 分钟计时、交出与谢绝的结果在 `holder-requests.ts`）
                       自动保存（M3-P4，不依赖 Univer 与界面，时钟注入）：调度 `autosave.ts`（两级的节奏、立即上传、去重、退避、离线与会话、连按保存的合并）、捕获的规则 `capture-policy.ts`、捕获 `snapshot-capture.ts`（同步取快照；立即上传按下时提交单元格、轮到时等公式）、页头保存状态的全集 `save-indicator.ts`；保存的状态机 `save-coordinator.ts` 向来源取捕获；打开自检失败的上报 `open-check-report.ts`
   editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/；
                       只读守卫 read-only/（M2-P3，ADR-015）；视图状态 view-state.ts（M3-P2）；testing/ 是 E2E 的探针与真实 Safari 的页面自检（M3-P2；M3-P4 加自动保存的控制、捕获时机与自动保存的自检、主线程公式模式与档案故障的开关；M3-P5 加交接日志 `handover-log.ts`（含页面关闭时的处理 `page-hide`）与交接的自检 `selftest-handover.ts`——两个标签页的本人接管、收不到交接消息（挂接的 `deafenHandoverChannel`）、刷新时在途的保存，编排与判定在 `tests/e2e/support/selftest-handover.ts`），只在测试构建里（只能动态引入，lint，M2-P6）
