@@ -6,7 +6,7 @@
 // - 每一步的结论与退出码（outcomeOf、exitCodeOf；hidden-save 与交接的几步按库里的证据判定，serverJudgedOutcome）；结果文件的名字
 //   （resultFileName）；计时的说明（timingLines：切换的耗时，与捕获时机的时间线）。
 import type { SelftestReport, SelftestTiming } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import type { SelftestStep } from '../support/selftest-plan.ts'
+import type { SelftestStep, SelftestStepDefinition } from '../support/selftest-plan.ts'
 import { HANDOVER_SCENARIOS, RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { problemsOf, selftestPageUrl } from '../support/selftest-plan.ts'
 
@@ -39,6 +39,23 @@ export interface ChainLink {
   /** 由驱动脚本另开标签页打开（交接的复核） */
   readonly opened: boolean
   readonly after: AfterReport
+}
+
+/**
+ * 只跑其中几步（--steps：逗号分隔的标识）：按全部步骤里的先后选出来；不认识的标识、共用文档却没有选它共用的那一步的，交回原因。没有给时是全部
+ */
+export function selectSteps(all: readonly SelftestStepDefinition[], option: string | undefined): { readonly definitions: readonly SelftestStepDefinition[] } | { readonly error: string } {
+  if (option === undefined)
+    return { definitions: all }
+  const ids = option.split(',').map(id => id.trim()).filter(id => id !== '')
+  const unknown = ids.filter(id => !all.some(definition => definition.id === id))
+  if (ids.length === 0 || unknown.length > 0)
+    return { error: `--steps 里有不认识的步骤：${unknown.join('、') || '（空的）'}（可选 ${all.map(definition => definition.id).join('、')}）` }
+  const definitions = all.filter(definition => ids.includes(definition.id))
+  const orphan = definitions.find(definition => definition.sharesDocumentOf !== undefined && !ids.includes(definition.sharesDocumentOf))
+  if (orphan !== undefined)
+    return { error: `--steps 选了 ${orphan.id}，它与 ${orphan.sharesDocumentOf ?? '?'} 共用文档，要一起选` }
+  return { definitions }
 }
 
 /** 第 index 步的结果交回的地址 */

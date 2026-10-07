@@ -6,7 +6,7 @@ import type { SelftestStep } from '../support/selftest-plan.ts'
 import { describe, expect, it } from 'vitest'
 import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { SELFTEST_STEPS, stepsOf } from '../support/selftest-plan.ts'
-import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, serverJudgedOutcome, timingLines } from './run-plan.ts'
+import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, selectSteps, serverJudgedOutcome, timingLines } from './run-plan.ts'
 
 const ORIGIN = 'http://127.0.0.1:4100'
 const COLLECTOR = 'http://127.0.0.1:4200'
@@ -70,6 +70,24 @@ describe('一串步骤怎么接起来', () => {
     expect(`${url.origin}${url.pathname}`).toBe(`${ORIGIN}/documents/${holder?.step.documentId ?? '?'}`)
     expect([url.searchParams.get('selftest'), url.searchParams.get('next'), url.hash]).toEqual(['takeover-taker', reportUrlOf(COLLECTOR, takerIndex), ''])
     expect(holder?.url.startsWith(`${ORIGIN}/selftest.html#`)).toBe(true)
+  })
+})
+
+describe('只跑其中几步（--steps）', () => {
+  it('没有给时是全部；给了按全部步骤里的先后选出来；不认识的、只选了 B 没选 A 的交回原因', () => {
+    expect(selectSteps(SELFTEST_STEPS, undefined)).toEqual({ definitions: SELFTEST_STEPS })
+    const picked = selectSteps(SELFTEST_STEPS, 'refresh-save, takeover-taker,takeover-holder')
+    expect('definitions' in picked ? picked.definitions.map(definition => definition.id) : picked).toEqual(['takeover-holder', 'takeover-taker', 'refresh-save'])
+    expect(selectSteps(SELFTEST_STEPS, 'takeover-taker')).toEqual({ error: '--steps 选了 takeover-taker，它与 takeover-holder 共用文档，要一起选' })
+    expect(selectSteps(SELFTEST_STEPS, 'read-only,nope')).toHaveProperty('error', expect.stringContaining('不认识的步骤：nope'))
+    expect(selectSteps(SELFTEST_STEPS, ' , ')).toHaveProperty('error', expect.stringContaining('（空的）'))
+  })
+
+  it('只选了交接的几步：都由驱动脚本另开，没有由上一步带过去的', () => {
+    const picked = selectSteps(SELFTEST_STEPS, 'takeover-holder,takeover-taker,refresh-save')
+    const definitions = 'definitions' in picked ? picked.definitions : []
+    const chain = chainOf(stepsOf(definitions, { author: user('author'), viewer: user('viewer') }, definitions.map(definition => `${definition.id}-doc`)), ORIGIN, COLLECTOR)
+    expect(chain.map(link => [link.opened, link.after])).toEqual([[true, 'done'], [true, 'close'], [true, 'done']])
   })
 })
 

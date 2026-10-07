@@ -23,7 +23,8 @@
 // 6. 停后端、删库。Safari 里留下停在结束页的标签页（与 M0 相同），可以关掉。
 // 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 超时（有的步没有交回结果）；3 准备阶段失败（没有构建、
 // 库连不上、Safari 打不开）。
-// 用法：pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--timeout 秒]（命令先构建后端与测试构建）。不进 CI（CI 上没有 Safari）。
+// 用法：pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--timeout 秒] [--steps 标识,标识…]（命令先构建后端与测试构建；--steps 只跑
+// 这几步，例如 takeover-holder,takeover-taker,refresh-save——B 要与 A 一起选）。不进 CI（CI 上没有 Safari）。
 // 与 Playwright 的 E2E 共用 test-results/ 下的服务日志（e2e-server.log）与控制文件：不要与 pnpm test:e2e 在同一个检出里同时跑。
 // 自检的页面要看得见：Safari 不给隐藏的标签页（窗口被挡住、不在前面的标签页、屏幕锁定）动画帧，几秒之后连计时器也停了
 // （2026-10-04 本机 Safari 27.0 实测：Safari 的窗口不在前面时，open -g 打开的标签页一开始就是 hidden，动画帧 0 帧，计时器约 6 秒之后
@@ -43,8 +44,8 @@ import { decodeSelftestReport } from '../../../apps/web/src/editor/testing/selft
 import { revisionOf } from '../support/database.ts'
 import { databaseUrl, E2E_DATABASE_PREFIX, pickFreePort } from '../support/environment.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../support/selftest-handover.ts'
-import { selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
-import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, resultFileName, serverJudgedOutcome, timingLines } from './run-plan.ts'
+import { SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
+import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, resultFileName, selectSteps, serverJudgedOutcome, timingLines } from './run-plan.ts'
 
 const SERVE_SCRIPT = fileURLToPath(new URL('../support/serve.ts', import.meta.url))
 const SELFTEST_PAGE = fileURLToPath(new URL('../../../apps/web/dist-e2e/selftest.html', import.meta.url))
@@ -400,10 +401,13 @@ function printSummary(outcomes: readonly StepOutcome[], serverProblems: readonly
 }
 
 async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { timeout: { type: 'string', default: '1800' }, front: { type: 'boolean', default: false } } })
+  const { values } = parseArgs({ options: { timeout: { type: 'string', default: '1800' }, front: { type: 'boolean', default: false }, steps: { type: 'string' } } })
   const timeoutMs = Number(values.timeout) * 1000
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
     throw new SetupError(`--timeout 要是正的秒数：${values.timeout}`)
+  const selection = selectSteps(SELFTEST_STEPS, values.steps)
+  if ('error' in selection)
+    throw new SetupError(selection.error)
   if (!existsSync(SELFTEST_PAGE))
     throw new SetupError(`找不到 ${SELFTEST_PAGE}：先构建测试构建（pnpm --filter @nerve-office/web run build:e2e）`)
   const startedAt = new Date()
@@ -425,15 +429,15 @@ async function main(): Promise<number> {
   let collector: Collector | undefined
   try {
     await waitUntilReady(origin, server)
-    const scene = await selftestScene('safari')
+    const scene = await selftestScene('safari', selection.definitions)
     const { steps } = scene
     collector = await startCollector(collectorOrigin => chainOf(steps, origin, collectorOrigin))
-    const first = collector.chain[0]
-    if (first === undefined)
-      throw new SetupError('没有要跑的步骤')
+    // 由上一步带过去的第一步（只选了交接的几步时没有：它们由下面的编排各自另开）
+    const first = collector.chain.find(link => !link.opened)
     say(`收集端 ${collector.origin}；在 Safari 里（${values.front ? '带到前台' : '后台'}）打开第一步，共 ${steps.length} 步，最多等 ${timeoutMs / 1000} 秒`)
     try {
-      execFileSync('open', [...(values.front ? [] : ['-g']), '-a', 'Safari', first.url])
+      if (first !== undefined)
+        execFileSync('open', [...(values.front ? [] : ['-g']), '-a', 'Safari', first.url])
     }
     catch (error) {
       throw new SetupError(`Safari 打不开：${error instanceof Error ? error.message : String(error)}`)
