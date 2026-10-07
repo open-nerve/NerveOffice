@@ -155,9 +155,16 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
       <EditorChrome page={page} apple={apple} />
     </StrictMode>,
   )
-  // 测试构建、地址带 selftest 时：页面自检（真实 Safari 的复核，M3-P2 设计 §3.5）。在开始载入之前引入挂接：它很小，
-  // 会话与内容的请求回来之前就挂上了页面错误的收集。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
-  if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest'))
-    void import('./selftest-hook.ts').then(({ watchForSelftest }) => watchForSelftest(page, elements))
+  // 测试构建、地址带 selftest 时：页面自检（真实 Safari 的复核，M3-P2 设计 §3.5）。先等挂接引入、挂上，再开始载入（M3-P5 审查 B8）：页面错误的收集
+  // 要在会话与内容的请求回来之前挂上，"收不到交接消息"的那一页（takeover-holder-deaf）要在编辑器页第一次打开交接频道之前换上吞消息的频道——
+  // 频道在建编辑模式时就打开（订阅交接请求），那时会话、详情与内容都已回来；原来先发起载入、再引入挂接，靠挂接的小分块先回来，不是保证的先后。
+  // 引入失败照常载入（自检随之没有结果，错误交给浏览器的错误报告）。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
+  if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
+    void import('./selftest-hook.ts').then(
+      ({ watchForSelftest }) => watchForSelftest(page, elements),
+      (error: unknown) => reportError(error),
+    ).then(async () => page.load())
+    return
+  }
   void page.load()
 }
