@@ -198,7 +198,12 @@ async function interleave(first: Gated, second: () => Promise<Response>): Promis
   return { first: firstResponse, second: await pending, secondWaited: completed === false }
 }
 
-/** 测试持住 held 的那把锁，first、second 依次停在锁上（second 排在 first 后面），放开之后按先后进行 */
+/**
+ * 测试持住 held 的那把锁，first、second 依次停在锁上（second 排在 first 后面），放开之后按先后进行。
+ * 等 first 停在锁上再发 second；等两个都停在锁上由 raceAgainstHeldLock 自己做（waiting: 2，与 edit-leases.test.ts 的 raceTwoAcquires
+ * 同一个写法）——这里不能再等一次：两处各自轮询，外面那一处先看到就提交了，里面这一处之后只看得到已经结束的请求，误报前提不成立
+ * （M3-P5 S4 全量集成时出现过一次）
+ */
 async function inOrder(hold: (client: pg.Client) => Promise<unknown>, first: () => Promise<Response>, second: () => Promise<Response>): Promise<[Response, Response]> {
   return raceAgainstHeldLock(database, {
     hold,
@@ -206,7 +211,6 @@ async function inOrder(hold: (client: pg.Client) => Promise<unknown>, first: () 
       const a = step(first())
       await waitForWaiting(1)
       const b = step(second())
-      await waitForWaiting(2)
       return Promise.all([a, b])
     },
     change: async () => undefined,

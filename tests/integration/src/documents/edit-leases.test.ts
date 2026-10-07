@@ -262,7 +262,7 @@ describe('申请、心跳、释放与编辑状态（P1 设计 §3.4.2、§3.4.3�
 
   it('US-M3-04 编辑状态：能读就能看；有效的租约给出持有者（"人"的结构）、最后活动时间、是不是调用者自己与是不是调用者这次登录（M3-P5）；没有时为 null', async () => {
     const document = await freshDocument()
-    // M3-P5 S1：请求编辑、保留与编辑状态里的提醒还没有接上（S2、S4），一律 null
+    // M3-P5：没人在请求编辑、没有交出之后的保留、没有异常中断的提醒（请求与保留见 lease-requests.test.ts）
     const notYet = { request: null, reservation: null, interruption: null }
     expect(await status(sessionOf(vic), document.id)).toEqual({ revision: 1, editor: null, canEdit: false, canTakeOver: false, formulasPending: false, ...notYet })
     await acquired(sessionOf(amy), document.id)
@@ -402,7 +402,7 @@ describe('US-M3-04 同一时刻只有一个标签页能编辑', () => {
     await acquired(sessionOf(amy), document.id)
     const before = { lease: await leaseOf(document.id), document: await documentOf(document.id) }
     const lastActiveAt = before.lease?.last_active_at.toISOString()
-    // M3-P5：另带是不是调用者这次登录、调用者能不能强制接管（本是编辑者，不能）与待回应的请求（S1 还没有接上，null）
+    // M3-P5：另带是不是调用者这次登录、调用者能不能强制接管（本是编辑者，不能）与待回应的请求（没人在请求，null；有请求时见 lease-requests.test.ts）
     expect(await heldBy(await acquire(sessionOf(ben), document.id))).toEqual({ holder: summaryOf(amy), lastActiveAt, sameUser: false, sameSession: false, canTakeOver: false, request: null })
     expect(await heldBy(await acquire(sessionOf(amy), document.id))).toEqual({ holder: summaryOf(amy), lastActiveAt, sameUser: true, sameSession: true, canTakeOver: true, request: null })
     // 同一个人在另一个设备上（另一条登录）也一样，只是不是这次登录
@@ -788,7 +788,7 @@ const NO_HANDOVER: HandoverColumns = {
   end_reason: null,
 }
 
-describe('M3-P5 改写为新的一代时请求编辑、交出之后的保留与接管标记的沿用与清空（设计 §3.6、§3.7；写下它们的接口在 S3、S4，这里直接写库摆好）', () => {
+describe('M3-P5 改写为新的一代时请求编辑、交出之后的保留与接管标记的沿用与清空（设计 §3.6、§3.7；这里直接写库摆好，只核对这几列；经接口的发出、交出与接管见 lease-requests.test.ts、lease-takeover.test.ts）', () => {
   /** 这份文档的租约行上记下 requester 的请求（发出于 1 分钟前，有效期还有 9 分钟），declined 时持有者已经谢绝 */
   async function putRequest(documentId: string, requester: TestAccount, declined = false): Promise<HandoverColumns | undefined> {
     await database.query(async client => client.query(
@@ -801,12 +801,13 @@ describe('M3-P5 改写为新的一代时请求编辑、交出之后的保留与�
     return handoverOf(documentId)
   }
 
-  /** 交出了：这一代明确结束（handed_over），留给 reservedFor 两分钟 */
-  async function putReservation(documentId: string, reservedFor: TestAccount): Promise<void> {
+  /** 交出了：这一代明确结束（handed_over），留给 reservedFor 两分钟；expired 时保留已经过了期（还留在行上） */
+  async function putReservation(documentId: string, reservedFor: TestAccount, expired = false): Promise<void> {
     await database.query(async client => client.query(
-      `UPDATE document_edit_leases SET ended_at = now(), end_reason = 'handed_over', reserved_for = $2, reserved_until = now() + interval '2 minutes'
+      `UPDATE document_edit_leases SET ended_at = now(), end_reason = 'handed_over', reserved_for = $2,
+         reserved_until = CASE WHEN $3 THEN now() - interval '1 second' ELSE now() + interval '2 minutes' END
        WHERE document_id = $1`,
-      [documentId, reservedFor.id],
+      [documentId, reservedFor.id, expired],
     ))
   }
 
@@ -861,12 +862,12 @@ describe('M3-P5 改写为新的一代时请求编辑、交出之后的保留与�
     expect({ holder: (await leaseOf(fulfilled.id))?.holder_id, ...await handoverOf(fulfilled.id) }).toEqual({ holder: ben.id, ...NO_HANDOVER })
   })
 
-  it('US-M3-06 交出之后的保留：新的一代（被保留的人、原来的持有者、别人）一律连同明确结束清掉（同一条语句里，"有保留时结束原因是 handed_over"的约束照样成立）', async () => {
+  it('US-M3-06 交出之后的保留：新的一代（被保留的人、原来的持有者、别人）一律连同明确结束清掉（同一条语句里，"有保留时结束原因是 handed_over"的约束照样成立）——保留期内只有被保留的人申请得到（S4，别人得到 EDIT_LEASE_RESERVED，见 lease-requests.test.ts），过了期的保留照样留在行上、照样清掉', async () => {
     const { session: deb } = await freshEditor('lease-deb')
-    for (const [name, session] of [['被保留的人', sessionOf(ben)], ['原来的持有者', sessionOf(amy)], ['别人', deb]] as const) {
+    for (const [name, session, expired] of [['被保留的人', sessionOf(ben), false], ['原来的持有者', sessionOf(amy), true], ['别人', deb, true]] as const) {
       const document = await freshDocument()
       await acquired(sessionOf(amy), document.id)
-      await putReservation(document.id, ben)
+      await putReservation(document.id, ben, expired)
       expect(await handoverOf(document.id), name).toMatchObject({ end_reason: 'handed_over', reserved_for: ben.id })
       await acquired(session, document.id)
       expect(await handoverOf(document.id), name).toEqual(NO_HANDOVER)

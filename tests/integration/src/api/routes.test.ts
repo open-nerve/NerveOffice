@@ -29,12 +29,14 @@ const PUBLIC_ROUTES: readonly string[] = [
 
 /**
  * 后台请求（@BackgroundRequest()，M3-P2 设计 §3.2，DEF-043）：页面自己发的，不是用户的操作——阅读页每 30 秒读一次编辑状态、编辑时每 10 秒的心跳，
- * 以及打开自检失败的上报（M3-P4 设计 §3.13：编辑器打开时页面自己报，用户什么也没做）。
- * 申请、释放编辑权与保存都是用户的操作，照常顺延登录；P4 的自动保存是编辑的结果，同样要顺延，不能标它
+ * 等待请求编辑时每 5 秒的续期（M3-P5 设计 §3.4、§3.13），以及打开自检失败的上报（M3-P4 设计 §3.13：编辑器打开时页面自己报，用户什么也没做）。
+ * 申请、释放编辑权与保存都是用户的操作，照常顺延登录；P4 的自动保存是编辑的结果，同样要顺延，不能标它；请求编辑的发出与取消、谢绝、交出
+ * 与接管同样是用户的操作（持有者空闲之后自动交出也是先前的操作的结果），照常顺延
  */
 const BACKGROUND_ROUTES: readonly string[] = [
   'GET /api/documents/:id/edit-lease',
   'PUT /api/documents/:id/edit-lease',
+  'PUT /api/documents/:id/edit-lease/request',
   'POST /api/documents/:id/open-check-failures',
 ]
 
@@ -80,6 +82,14 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
     expect(names).toEqual(expect.arrayContaining(['GET /api/documents/:id/grants', 'PUT /api/documents/:id/grants/:userId', 'DELETE /api/documents/:id/grants/:userId', 'GET /api/shared']))
     // 编辑权的四个接口（M3-P1）同样在路由表里
     expect(names).toEqual(expect.arrayContaining(['GET /api/documents/:id/edit-lease', 'POST /api/documents/:id/edit-lease', 'PUT /api/documents/:id/edit-lease', 'DELETE /api/documents/:id/edit-lease']))
+    // 请求编辑与交出的五个接口（M3-P5）：未登录同样一律 401
+    expect(names).toEqual(expect.arrayContaining([
+      'POST /api/documents/:id/edit-lease/request',
+      'PUT /api/documents/:id/edit-lease/request',
+      'DELETE /api/documents/:id/edit-lease/request',
+      'POST /api/documents/:id/edit-lease/request/decline',
+      'POST /api/documents/:id/edit-lease/handover',
+    ]))
     // 另存为副本（M3-P2）：未登录同样一律 401
     expect(names).toContain('POST /api/documents/:id/conflict-copies')
     // 打开自检失败的上报（M3-P4）
@@ -98,8 +108,8 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
   })
 })
 
-describe('后台请求：标了 @BackgroundRequest() 的接口恰好是编辑状态、心跳与打开自检的上报（M3-P2 设计 §3.2，复核 B5；M3-P4 设计 §3.13）', () => {
-  it('从控制器的元数据列出的接口与路由表相同；按会话守卫的读法（方法上的覆盖控制器上的）带着这个标记的，恰好是写明的两个', () => {
+describe('后台请求：标了 @BackgroundRequest() 的接口恰好是编辑状态、心跳、请求编辑的续期与打开自检的上报（M3-P2 设计 §3.2，复核 B5；M3-P4 设计 §3.13；M3-P5 设计 §3.13）', () => {
+  it('从控制器的元数据列出的接口与路由表相同；按会话守卫的读法（方法上的覆盖控制器上的）带着这个标记的，恰好是写明的那几个', () => {
     const handled = controllerRoutesOf(app)
     expect(handled.map(nameOf)).toEqual(routes.map(nameOf))
     expect(handled.filter(route => route.metadata(BACKGROUND_REQUEST_ROUTE) === true).map(nameOf)).toEqual([...BACKGROUND_ROUTES])

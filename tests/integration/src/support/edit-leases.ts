@@ -1,15 +1,16 @@
 // 编辑租约（M3-P1）：保存要求租约之后（S4），集成测试发保存之前先申请——令牌放请求头（x-edit-lease），申请得到的代次与
 // 申请时的标签页放进保存的查询参数（writeEpoch、clientInstanceId）。现有用例的保存都经 saveContent：用例本身的断言不变，
 // 它们要验证的仍是租约之外的步骤（权限、幂等、修订号、锁）。另有心跳、结局与租约行的读取（收回写入权的用例），
-// 以及改写租约行时间的两个辅助（到期、空闲），不等真实的时间。
+// 以及改写租约行时间的几个辅助（到期、空闲、请求编辑的时间），不等真实的时间。
 // M3-P3 起申请、心跳与保存都带页面的构建与数据格式（support/client-format.ts）：这里的请求扮演现在的页面。
-import type { ClientFormat } from '@nerve-office/contracts'
+// M3-P5：请求编辑的发出、续期、取消，持有者的谢绝与交出。
+import type { ClientFormat, EditRequestOutcome } from '@nerve-office/contracts'
 import type { TestDatabase } from './database.ts'
 import type { LoggedIn } from './session-client.ts'
 import { randomUUID } from 'node:crypto'
-import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, editLeaseLostDetailsSchema, errorResponseSchema } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, editLeaseLostDetailsSchema, editRequestOutcomeSchema, errorResponseSchema } from '@nerve-office/contracts'
 import { expect } from 'vitest'
-import { acquireBody, clientFormatQuery, renewBody } from './client-format.ts'
+import { acquireBody, clientFormatQuery, renewBody, requestBody } from './client-format.ts'
 import { parseExact } from './contracts.ts'
 import { asUser } from './session-client.ts'
 
@@ -171,6 +172,62 @@ export async function passIdleTime(database: TestDatabase, documentId: string, s
      WHERE document_id = $1`,
     [documentId, seconds],
   ))
+}
+
+/**
+ * 请求编辑（M3-P5）的时间过去了 seconds 秒：只挪请求的三个时刻（发出、有效期、谢绝），租约本身的时间不动——
+ * "请求方停止续期 10 分钟就失效"要在持有者照常编辑（租约有效）时验证。约束"有效期晚于发出"照样成立
+ */
+export async function passRequestTime(database: TestDatabase, documentId: string, seconds: number): Promise<void> {
+  await database.query(async client => client.query(
+    `UPDATE document_edit_leases SET requested_at = requested_at - make_interval(secs => $2), request_expires_at = request_expires_at - make_interval(secs => $2),
+       request_declined_at = request_declined_at - make_interval(secs => $2)
+     WHERE document_id = $1`,
+    [documentId, seconds],
+  ))
+}
+
+function requestPath(documentId: string): string {
+  return `${leasePath(documentId)}/request`
+}
+
+/** 发出请求编辑（M3-P5）：带着现在的页面的构建与数据格式（format 给出时扮演旧页面） */
+export async function sendEditRequest(baseUrl: string, user: LoggedIn, documentId: string, format?: ClientFormat): Promise<Response> {
+  return asUser(baseUrl, user, requestPath(documentId), { method: 'POST', body: requestBody(format) })
+}
+
+/** 请求方续期（等待中的页面每 5 秒一次，后台请求）：没有请求体 */
+export async function renewEditRequest(baseUrl: string, user: LoggedIn, documentId: string): Promise<Response> {
+  return asUser(baseUrl, user, requestPath(documentId), { method: 'PUT' })
+}
+
+/** 请求方取消（清掉自己的请求与留给自己的保留） */
+export async function cancelEditRequest(baseUrl: string, user: LoggedIn, documentId: string): Promise<Response> {
+  return asUser(baseUrl, user, requestPath(documentId), { method: 'DELETE' })
+}
+
+/** 持有者谢绝：带着这份租约的令牌与请求的标识 */
+export async function declineEditRequest(baseUrl: string, user: LoggedIn, documentId: string, lease: HeldLease, requestId: string): Promise<Response> {
+  return asUser(baseUrl, user, `${requestPath(documentId)}/decline`, { method: 'POST', body: { requestId }, headers: { [EDIT_LEASE_HEADER]: lease.token } })
+}
+
+/** 持有者交出：带着这份租约的令牌与请求的标识 */
+export async function handOverLease(baseUrl: string, user: LoggedIn, documentId: string, lease: HeldLease, requestId: string): Promise<Response> {
+  return asUser(baseUrl, user, `${leasePath(documentId)}/handover`, { method: 'POST', body: { requestId }, headers: { [EDIT_LEASE_HEADER]: lease.token } })
+}
+
+/** 请求编辑的结果（发出、续期的响应，200），按契约逐字解析 */
+export async function requestOutcomeOf(response: Response): Promise<EditRequestOutcome> {
+  expect(response.status, await response.clone().text()).toBe(200)
+  return parseExact(editRequestOutcomeSchema, await response.json())
+}
+
+/** 发出请求编辑，要求在等待（pending）：返回请求的标识（交出、谢绝要带它） */
+export async function pendingRequestId(baseUrl: string, user: LoggedIn, documentId: string): Promise<string> {
+  const outcome = await requestOutcomeOf(await sendEditRequest(baseUrl, user, documentId))
+  if (outcome.kind !== 'pending')
+    throw new Error(`期望请求在等待，得到 ${outcome.kind}`)
+  return outcome.id
 }
 
 /** 最后一次操作在 seconds 秒之前（心跳还在：续租的时间、到期不动；申请的时间不晚于它） */

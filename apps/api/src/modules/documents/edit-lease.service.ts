@@ -46,7 +46,7 @@ export async function requireActiveLogin(sessions: SessionService, actor: Editin
 }
 
 /**
- * 持有者自己的请求（心跳、保存；M3-P5 S4 的交出、谢绝同样）发现请求的那一代已经失效：409 EDIT_LEASE_LOST，details 就是失效的原因与详情
+ * 持有者自己的请求（心跳、保存；M3-P5 的交出、谢绝同样，EditRequestService）发现请求的那一代已经失效：409 EDIT_LEASE_LOST，details 就是失效的原因与详情
  * （requestLeaseLoss 给出的，被接管时另带 forced），结构是 contracts 的 editLeaseLostDetailsSchema。几处共用这一个写法，免得哪一处漏了 forced
  */
 export function editLeaseLost(loss: LeaseLoss): AppError {
