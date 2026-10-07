@@ -1,7 +1,7 @@
 // 数据库繁忙的识别（M2-P6 复核 A 的 G-2）：等锁超时、语句被取消、连接池等不到空闲连接；包在 drizzle 的错误里也认得出。
 // 真实的数据库与连接池报出的错误由集成测试 api/database-busy.test.ts 核对，这里用同样形状的对象。
 import { describe, expect, it } from 'vitest'
-import { databaseBusyReasonOf, POOL_TIMEOUT_MESSAGE } from './busy-errors.ts'
+import { databaseBusyReasonOf, LateTransactionStartError, POOL_TIMEOUT_MESSAGE } from './busy-errors.ts'
 
 /** 与 pg 的 DatabaseError 同样的形状：SQLSTATE 与 severity */
 function pgError(code: string, severity = 'ERROR'): Error {
@@ -20,6 +20,14 @@ describe('databaseBusyReasonOf', () => {
     expect(databaseBusyReasonOf(pgError('25P04', 'FATAL'))).toBe('transaction_timeout')
     expect(databaseBusyReasonOf(drizzleError(pgError('25P04', 'FATAL')))).toBe('transaction_timeout')
     expect(databaseBusyReasonOf(new Error(POOL_TIMEOUT_MESSAGE))).toBe('pool_timeout')
+  })
+
+  it('限时的事务开始得太晚（事务运行器判断的 LateTransactionStartError，M3-P5 再复核 D1）：同样算超过事务的时限；包一层也认得出；说明写明过了多久、上限多少', () => {
+    const late = new LateTransactionStartError(12_345.6, 10_000)
+    expect(databaseBusyReasonOf(late)).toBe('transaction_timeout')
+    expect(databaseBusyReasonOf(new Error('外层', { cause: late }))).toBe('transaction_timeout')
+    expect(late.message).toBe('限时的事务在 BEGIN 之后 12346 毫秒才设下时限，超过了上限 10000 毫秒：不开始，回滚')
+    expect(late.name).toBe('LateTransactionStartError')
   })
 
   it('包在 drizzle 的错误、再包一层的错误里也认得出', () => {

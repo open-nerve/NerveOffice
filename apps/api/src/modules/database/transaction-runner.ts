@@ -4,7 +4,7 @@ import { Inject, Injectable } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
 import pg from 'pg'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { databaseBusyReasonOf } from './busy-errors.ts'
+import { databaseBusyReasonOf, LateTransactionStartError } from './busy-errors.ts'
 import { CommitLedger } from './commit-ledger.ts'
 import { createDatabase, PG_POOL } from './database.ts'
 import { SnapshotScope } from './snapshot-scope.ts'
@@ -13,23 +13,57 @@ import { SnapshotScope } from './snapshot-scope.ts'
 export const TRANSACTION_ABORTED_MESSAGE = '事务里有语句失败，事务已中止，不能当作成功提交：预期会失败的语句由仓储放进保存点（transaction()），或者改用 ON CONFLICT'
 
 /**
- * 一个写事务的选项（run）。timeoutMs：整个事务的时限（毫秒，正整数），由数据库保证（M3-P5 复验 C1）——事务的第一条语句设下
- * transaction_timeout（PostgreSQL 17 起；写成 set_config 的第三个参数为真，与 SET LOCAL 相同，只管这个事务，又是参数化的，规范 §5）。
- * PostgreSQL 18 上实测：
- * - 从设下的那一刻起算（会话里没有正在走的事务计时器时当场开始计时）；会话的默认值不是 0 时计时器在 BEGIN 就开始了，事务里再设一个
- *   更短的也缩不短它——所以连接池把会话的默认值定为 0（pool.ts），要限时的事务自己设；
- * - 到点时数据库结束整个会话（FATAL，SQLSTATE 25P04 transaction_timeout），事务随之回滚、什么也不生效，连接已断开：这里交出 25P04
- *   （见 failureToThrow），丢弃这个连接，异常过滤器按数据库繁忙回 503（busy-errors.ts）；
- * - 提交、回滚之后连接上恢复为 0，之后借到它的事务不受影响；
- * - statement_timeout、lock_timeout 照常起作用（各自更短时先到点，按原来的数据库繁忙回答）。
+ * 限时的事务（run 的 limit；M3-P5 复验 C1，再复核 D1、D2）：BEGIN 到提交至多 startWithinMs + timeoutMs，由数据库与这里保证——与会话的
+ * 默认值（库上、角色上设的，启动参数、连接串里的 options、PGOPTIONS）和各个超时的配置都无关。事务的第一条语句（limitTransaction）里依次：
+ * 1. 把 transaction_timeout 设成 0：停掉会话的默认值在 BEGIN 时启动的计时器——默认值不是 0 时它已经在走，事务里再设一个时限缩不短它，
+ *    也延不长它（PostgreSQL 18 实测）；
+ * 2. 设成 timeoutMs：从这一刻重新计时。到点时数据库结束整个会话（FATAL，SQLSTATE 25P04 transaction_timeout），事务随之回滚、什么也不
+ *    生效，连接已断开：这里交出 25P04（见 failureToThrow），丢弃这个连接，异常过滤器按数据库繁忙回 503（busy-errors.ts）；
+ * 3. 读出 BEGIN 到这一刻过了多久（clock_timestamp() − transaction_timestamp()）：超过 startWithinMs 就不开始（LateTransactionStartError，
+ *    同样按超过事务的时限回答），回滚，什么也没写——BEGIN 之后应用停住了（事件循环卡死、进程被暂停），这一段原来只受
+ *    idle_in_transaction_session_timeout 约束，而它可以配到 600 秒。
+ * 三步写在同一条语句里，先后由数据依赖强制：内层的 set_config 是外层的参数，读时刻在外层 CASE 的条件成立之后才算（CASE 按顺序求值，
+ * PostgreSQL 文档 §4.2.14 给的强制先后的写法），不靠目标列表各列的求值顺序。也不能拆成两条：两条之间没有计时器，那一段又只受
+ * idle_in_transaction_session_timeout 约束（PostgreSQL 18 实测）。
+ * 于是提交了的事务：C − S ≤（设下时限的时刻 − S）+ timeoutMs ≤ startWithinMs + timeoutMs（S 是 BEGIN，即事务里 now() 的值；
+ * 设下时限的时刻不晚于读时刻）。
+ * set_config 的第三个参数为真，与 SET LOCAL 相同：只管这个事务，提交、回滚之后回到会话的值，别的事务照旧（不改会话、不改连接）；
+ * 又是参数化的（规范 §5）。statement_timeout、lock_timeout 照常起作用，各自更短时先到点，按原来的数据库繁忙回答
  */
-export interface TransactionOptions {
-  readonly timeoutMs?: number
+export interface TransactionLimit {
+  /** 设下时限之后整个事务的时限（毫秒，正整数）：transaction_timeout */
+  readonly timeoutMs: number
+  /** BEGIN 到设下时限之间至多这么久（毫秒，正整数）：超过就不开始，按超过事务的时限（数据库繁忙）失败 */
+  readonly startWithinMs: number
 }
 
-/** 设下这个事务的时限（见 TransactionOptions）：事务的第一条语句 */
-async function limitTransaction(tx: DbTransaction, timeoutMs: number): Promise<void> {
-  await tx.execute(sql`SELECT set_config('transaction_timeout', ${String(timeoutMs)}, true)`)
+/** 一个写事务的选项（run） */
+export interface TransactionOptions {
+  /** 整个事务的时限（见 TransactionLimit）；不给时不限（会话照旧，库上设了默认值的话按它） */
+  readonly limit?: TransactionLimit
+}
+
+/** 时限的两个数都要是正整数毫秒：给错是接线错误，不借连接、直接报错 */
+function requireValidLimit(limit: TransactionLimit | undefined): void {
+  if (limit === undefined)
+    return
+  for (const [name, value] of [['timeoutMs', limit.timeoutMs], ['startWithinMs', limit.startWithinMs]] as const) {
+    if (!(Number.isSafeInteger(value) && value > 0))
+      throw new Error(`事务的时限要是正整数毫秒：${name} = ${value}`)
+  }
+}
+
+/** 设下这个事务的时限（见 TransactionLimit）：事务的第一条语句——先设 0、再设时限、再读 BEGIN 之后过了多久，开始得太晚就不开始 */
+async function limitTransaction(tx: DbTransaction, limit: TransactionLimit): Promise<void> {
+  const result = await tx.execute<{ elapsed_ms: number | null }>(sql`SELECT CASE
+    WHEN set_config('transaction_timeout', CASE WHEN set_config('transaction_timeout', '0', true) IS NOT NULL THEN ${String(limit.timeoutMs)} END, true) IS NOT NULL
+    THEN (extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000)::float8
+  END AS elapsed_ms`)
+  const elapsedMs = result.rows[0]?.elapsed_ms
+  if (typeof elapsedMs !== 'number')
+    throw new Error('设下事务的时限时没有读到 BEGIN 之后过了多久')
+  if (elapsedMs > limit.startWithinMs)
+    throw new LateTransactionStartError(elapsedMs, limit.startWithinMs)
 }
 
 /**
@@ -94,7 +128,8 @@ async function assertTransactionUsable(tx: DbTransaction): Promise<void> {
  * 归还的规则：事务以业务错误（AppError）结束时，回滚已经成功（drizzle 只在回滚成功时抛出 work 原来的错误），连接照常放回；
  * 其他失败一律丢弃这个连接，与连接池自己的 query() 一致；连接不是空闲状态（还在事务里、状态未知）时同样丢弃。
  *
- * 要限时的事务带上 timeoutMs（TransactionOptions，M3-P5 复验 C1：保存的事务）：超过时数据库结束会话、事务回滚，按数据库繁忙交出。
+ * 要限时的事务带上 limit（TransactionLimit，M3-P5 复验 C1、再复核 D1、D2：保存的事务）：BEGIN 到提交至多 startWithinMs + timeoutMs，
+ * 超过时数据库结束会话、事务回滚（或者开始得太晚、不开始），按数据库繁忙交出。
  *
  * COMMIT 成功之后在这个请求的记录上记一笔（CommitLedger，M2-P6 第 3 片复验）：之后这个请求再遇到数据库繁忙，
  * 写入已经生效，异常过滤器不再回答"确定没有生效"的 503。回滚、COMMIT 本身失败都不记
@@ -117,9 +152,8 @@ export class TransactionRunner {
 
   async run<T>(work: (transaction: Transaction) => Promise<T>, options: TransactionOptions = {}): Promise<T> {
     this.#refuseInsideSnapshot()
-    const { timeoutMs } = options
-    if (timeoutMs !== undefined && !(Number.isSafeInteger(timeoutMs) && timeoutMs > 0))
-      throw new Error(`事务的时限要是正整数毫秒：${timeoutMs}`)
+    const { limit } = options
+    requireValidLimit(limit)
     const client = await this.pool.connect()
     let discard = false
     /** 事务里（设时限、work、确认事务可用）抛出的错误：回滚也失败时据此决定交出哪个（failureToThrow） */
@@ -127,8 +161,9 @@ export class TransactionRunner {
     try {
       const result = await createDatabase(client).transaction(async (tx) => {
         try {
-          if (timeoutMs !== undefined)
-            await limitTransaction(tx, timeoutMs)
+          // 第一条语句：BEGIN 返回之后立即执行，中间没有别的等待
+          if (limit !== undefined)
+            await limitTransaction(tx, limit)
           const value = await work(tx as unknown as Transaction)
           // 抛出之后 drizzle 回滚（P2 复验 G3）
           await assertTransactionUsable(tx)
