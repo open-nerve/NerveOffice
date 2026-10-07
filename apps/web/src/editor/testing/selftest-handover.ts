@@ -371,11 +371,17 @@ async function holderSteps(session: Session, visibility: VisibilityWatch, observ
       if (button === undefined)
         fail('没有"另存为副本"')
       button.click()
-      if (!await waitFor(() => session.host.view().copy === 'done' || session.host.view().copy === 'failed' || session.host.view().copy === 'refused', SWITCH_TIMEOUT_MS, 100))
-        fail(`${SWITCH_TIMEOUT_MS / 1000} 秒内副本没有建好（${String(session.host.view().copy)}）`)
-      const copyId = session.host.view().copyDocumentId
-      if (session.host.view().copy !== 'done' || copyId === undefined)
-        fail(`另存为副本没有成功（${String(session.host.view().copy)}）`)
+      // 建好之后页面按最新的内容重建为阅读（说明是 copied）：A 在后台时这里每一轮看得慢，可能直接看到阅读，两种都认
+      const finished = (): boolean => {
+        const view = session.host.view()
+        return (view.mode === 'lost' && (view.copy === 'done' || view.copy === 'failed' || view.copy === 'refused')) || (view.mode === 'reading' && view.notice === 'copied')
+      }
+      if (!await waitFor(finished, SWITCH_TIMEOUT_MS, 100))
+        fail(`${SWITCH_TIMEOUT_MS / 1000} 秒内副本没有建好（${describeView(session)}，副本 ${String(session.host.view().copy)}）`)
+      const view = session.host.view()
+      const copyId = view.copyDocumentId
+      if ((view.mode === 'lost' && view.copy !== 'done') || copyId === undefined)
+        fail(`另存为副本没有成功（${describeView(session)}，副本 ${String(view.copy)}）`)
       const copied = cellsIn(await fetchServerContent(copyId), TAKEOVER_EDITS, [true, true, true])
       const original = cellsIn(await fetchServerContent(session.host.documentId), TAKEOVER_EDITS, [true, true, false])
       if (copied.wrong.length > 0 || original.wrong.length > 0)

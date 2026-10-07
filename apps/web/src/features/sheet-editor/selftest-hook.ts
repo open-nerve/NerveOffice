@@ -133,14 +133,16 @@ function lossOf(loss: LeaseLoss): string {
 
 /**
  * 交接的复核（M3-P5，editor/testing/selftest-handover.ts）要看的那一部分状态：阅读时"在此编辑"的进展、持有者是自己时那个页面在哪里、
- * 上一次操作留下的说明；失去编辑权时的原因、有没有没保存的修改、另存为副本的进展与建好的副本。别的状态没有这些
+ * 上一次操作留下的说明（另存为副本成功之后回到阅读的，另带建好的副本）；失去编辑权时的原因、有没有没保存的修改、另存为副本的进展与建好的副本。
+ * 别的状态没有这些
  */
 export function handoverViewOf(mode: EditModeState | undefined): Partial<SelftestPageView> {
   if (mode === undefined)
     return {}
   switch (mode.kind) {
     case 'reading':
-      return { takeover: mode.takeover?.kind, selfHolder: mode.selfHolder, notice: mode.notice?.kind }
+      // 另存为副本成功之后按最新的内容重建为阅读：说明里带着建好的副本
+      return { takeover: mode.takeover?.kind, selfHolder: mode.selfHolder, notice: mode.notice?.kind, copyDocumentId: mode.notice?.kind === 'copied' ? mode.notice.document.id : undefined }
     case 'losing':
       return { loss: lossOf(mode.loss) }
     case 'lost':

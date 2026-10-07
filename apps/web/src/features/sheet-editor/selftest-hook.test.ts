@@ -161,6 +161,9 @@ describe('页面自检的挂接', () => {
     expect(host.view()).toEqual({ mode: 'lost', surface: 'steady', loss: 'forced', unsaved: true, copy: 'done', copyDocumentId: 'copy-1' })
     set({ mode: { ...lost, copy: { kind: 'saving' } } as unknown as EditModeState })
     expect(host.view()).toEqual({ mode: 'lost', surface: 'steady', loss: 'forced', unsaved: true, copy: 'saving' })
+    // 另存为副本成功之后按最新的内容重建为阅读：说明里带着建好的副本
+    set({ mode: { ...reading, notice: { kind: 'copied', document: { id: 'copy-1' } } } as unknown as EditModeState })
+    expect(host.view()).toEqual({ mode: 'reading', surface: 'steady', notice: 'copied', copyDocumentId: 'copy-1' })
     set({ mode: { kind: 'editing' } })
     expect(host.view()).toEqual({ mode: 'editing', surface: 'steady' })
     expect(handoverViewOf(undefined)).toEqual({})
