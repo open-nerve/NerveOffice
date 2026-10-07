@@ -1322,6 +1322,7 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7、§3.11，US-M3-08
     ['not-saved', '另一个标签页的修改没能保存，没有交出编辑权。'],
     ['conflict', '另一个标签页的修改与别处保存的版本冲突、没能保存，没有交出编辑权。'],
     ['session', '另一个标签页暂时无法确认登录状态、没能保存，没有交出编辑权。'],
+    ['not-handed-over', '另一个标签页的修改都已保存，但它在把编辑权交给请求编辑的人时没能交出去，还在编辑。'],
   ] as const)('那边没能交出（%s）：说明原因与两个选择——同一个按钮换成"仍在此编辑"（可用，点了交给页面的本人接管），旁边加"取消"', (reason, text) => {
     const fake = renderChrome({ mode: { ...HERE, takeover: { kind: 'asking' } }, save: undefined })
     const button = screen.getByRole('button', { name: '正在接手…' })

@@ -29,8 +29,11 @@ export const HANDOVER_MESSAGE_VERSION = 1
 export const HANDOVER_ACK_STATES = ['editing', 'exiting'] as const
 export type HandoverAckState = (typeof HANDOVER_ACK_STATES)[number]
 
-/** 交出没能完成的原因（handover-failed）：本页的修改没存上（保存失败、单元格提交不了）、版本冲突、会话不对 */
-export const HANDOVER_FAILURES = ['not-saved', 'conflict', 'session'] as const
+/**
+ * 交出没能完成的原因（handover-failed）：本页的修改没存上（保存失败、单元格提交不了）、版本冲突、会话不对；not-handed-over 是修改都已存上，
+ * 但本页正在把编辑权交给请求编辑的人、没交出去（请求已经不在、没有结果），留在编辑（M3-P5 审查 B11）
+ */
+export const HANDOVER_FAILURES = ['not-saved', 'conflict', 'session', 'not-handed-over'] as const
 export type HandoverFailure = (typeof HANDOVER_FAILURES)[number]
 
 /**

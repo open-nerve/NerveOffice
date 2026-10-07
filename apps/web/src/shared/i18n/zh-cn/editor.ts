@@ -18,13 +18,18 @@ function takeoverRole(personal: boolean): string {
   return personal ? '文档的所有者' : '空间管理员'
 }
 
+/** 本浏览器的另一个标签页没能交出的原因（交接频道的 handover-failed，same-browser.ts 的 HANDOVER_FAILURES：这里不引用编辑器页的模块，另写一份） */
+type TakeoverFailure = 'not-saved' | 'conflict' | 'session' | 'not-handed-over'
+
 /**
  * 本浏览器的另一个标签页没能交出（交接频道的 handover-failed，M3-P5 设计 §3.7）：按原因说那边为什么没交出
  */
-const TAKEOVER_FAILURES: Readonly<Record<'not-saved' | 'conflict' | 'session', string>> = {
+const TAKEOVER_FAILURES: Readonly<Record<TakeoverFailure, string>> = {
   'not-saved': '另一个标签页的修改没能保存，没有交出编辑权',
   'conflict': '另一个标签页的修改与别处保存的版本冲突、没能保存，没有交出编辑权',
   'session': '另一个标签页暂时无法确认登录状态、没能保存，没有交出编辑权',
+  // 那边的修改都已存上，只是正在把编辑权交给请求编辑的人、没交出去（请求已经不在、没有结果），留在了编辑（审查 B11）
+  'not-handed-over': '另一个标签页的修改都已保存，但它在把编辑权交给请求编辑的人时没能交出去，还在编辑',
 }
 
 /** 空闲释放的阈值（分钟，US-M3-07）：时长取自契约，阈值改了说法跟着改 */
@@ -317,7 +322,7 @@ export const editorMessages = {
     takeoverAsking: '正在请本浏览器的另一个标签页保存并交出编辑权…',
     takeoverWaitingSave: '上一个页面的保存还在进行，稍后接手…',
     /** 那边没能交出：原因，与之后能做的 */
-    takeoverFailed: (reason: 'not-saved' | 'conflict' | 'session') => `${TAKEOVER_FAILURES[reason]}。点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`,
+    takeoverFailed: (reason: TakeoverFailure) => `${TAKEOVER_FAILURES[reason]}。点"仍在此编辑"在这里接着编辑（那边会失去编辑权，没保存的修改可以在那边另存为副本），或者点"取消"`,
     /**
      * 本页交给了本浏览器的另一个标签页（US-M3-08）：阅读时读屏状态区里的说明。不断言那边一定接着编辑了（审查 B4：本页存上之后只放弃这一代，
      * 那边随即以本人接管申请；它没跟上时这一代到期）

@@ -3516,6 +3516,30 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(modeOf(b.mode).kind).toBe('editing')
     })
 
+    it('A 正在交给请求编辑的人、没交出去（请求已经不在）：修改都已存上，发 failed 的原因是没交出去（not-handed-over），不说没存上（审查 B11）', async () => {
+      const incoming: PendingEditRequest = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f9', requester: BEN, requestedAt: '2026-10-04T03:01:00.000Z' }
+      const reply = deferred<SaveContentResponse>()
+      const { browser, a, b } = await twoTabs()
+      a.editLease.renew.mockResolvedValue({ ...RENEWED, request: incoming })
+      await a.time.advance(HEARTBEAT_MS)
+      expect(modeOf(a.mode)).toMatchObject({ kind: 'editing', request: { id: incoming.id } })
+      a.api.save.mockImplementation(async () => reply.promise)
+      a.editLease.handOver.mockRejectedValue(new ApiError(409, 'EDIT_REQUEST_GONE', '请求已不在'))
+      const handing = a.mode.handOver()
+      await settle()
+      expect(modeOf(a.mode)).toMatchObject({ kind: 'exiting', cause: 'handover-request' })
+      const taking = b.mode.takeOver()
+      await untilPosted(browser, 2)
+      expect(browser.posted(CHANNEL)[1]).toMatchObject({ type: 'handover-ack', state: 'exiting' })
+      reply.resolve(SAVED)
+      await handing
+      await taking
+      expect(modeOf(a.mode).kind).toBe('editing')
+      expect(postedTypes(browser)).toEqual(['handover-request', 'handover-ack', 'handover-failed'])
+      expect(browser.posted(CHANNEL)[2]).toMatchObject({ reason: 'not-handed-over' })
+      expect(readingOf(b.mode).takeover).toEqual({ kind: 'failed', reason: 'not-handed-over' })
+    })
+
     it('A 正在退出编辑、没退出成（保存失败）：发 failed，B 说明原因、等人选', async () => {
       const reply = deferred<SaveContentResponse>()
       const { browser, a, b } = await twoTabs()

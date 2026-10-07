@@ -1249,12 +1249,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
       handedTo = outcome.kind === 'handed' ? offer?.requester : undefined
     }
     else if (handingTo !== undefined && outcome !== undefined) {
-      // 没交出：请求已经不在（请求方取消了），或者没有结果（提示里说明原因）——留在编辑，请求照旧在
+      // 没交出：请求已经不在（请求方取消了），或者没有结果（提示里说明原因）——留在编辑，请求照旧在。修改都已存上：期间回应过 ack 的标签页
+      // 得到的原因是没交出去，不是没存上（审查 B11）
       if (outcome.kind === 'gone')
         holder.withdrawn(handingTo)
       else
         holder.failed(handingTo, outcome.error)
-      stay('not-saved')
+      stay('not-handed-over')
       return
     }
     else if (cause === 'handover-tab') {
