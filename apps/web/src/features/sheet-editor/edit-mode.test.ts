@@ -3105,6 +3105,12 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
     await settle()
   }
 
+  /** 这份文档的本机锁有几个在排队等（"在此编辑"等那边做完时排着一个） */
+  async function waitingForLock(browser: FakeBrowser): Promise<number> {
+    const snapshot = await browser.tab('probe').locks?.query() as { readonly pending?: readonly unknown[] } | undefined
+    return snapshot?.pending?.length ?? 0
+  }
+
   /** 本浏览器里另一个标签页发来的交接请求（请求方一侧不经编辑模式，直接发） */
   function requestFrom(browser: FakeBrowser, requestId: string, userId = AMY.id): SameBrowser {
     const tab = sameBrowserFor(DOCUMENT_ID, browser.tab('B'))
@@ -3289,11 +3295,14 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
     it('A 的释放没送到（普通申请得到被自己占着）：立即改以本人接管申请（不按 500 毫秒再试）；A 不说"本页那一代可能还在"（B 随即接手）', async () => {
       const { a, b } = await twoTabs()
       a.editLease.release.mockRejectedValue(new NetworkError('断网'))
+      // 交出之后 A 读到的持有者是自己（B 接手的那一代）
+      a.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
       b.editLease.acquire.mockRejectedValueOnce(HELD_BY_SELF).mockResolvedValueOnce(ACQUIRED)
       await b.mode.takeOver()
       expect(b.editLease.acquire.mock.calls).toEqual([[DOCUMENT_ID, TAB_B], [DOCUMENT_ID, TAB_B, { takeover: 'self' }]])
       expect(modeOf(b.mode).kind).toBe('editing')
-      expect(readingOf(a.mode)).toMatchObject({ notice: { kind: 'handed-over-tab' }, releaseUnconfirmed: false })
+      await settle()
+      expect(readingOf(a.mode)).toMatchObject({ notice: { kind: 'handed-over-tab' }, releaseUnconfirmed: false, holder: { sameUser: true }, selfHolder: 'this-browser' })
     })
 
     it('A 做完之后、B 申请之前别人申请了：回到阅读，说明谁在编辑', async () => {
@@ -3454,7 +3463,10 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(postedTypes(browser)).toEqual(['handover-request'])
       expect(b.api.contentIfChanged).not.toHaveBeenCalled()
       expect(readingOf(b.mode).takeover).toEqual({ kind: 'asking' })
+      expect(await waitingForLock(browser)).toBe(1)
       b.mode.dispose()
+      await settle()
+      expect(await waitingForLock(browser)).toBe(0)
       await b.time.advance(EDIT_TAB_HANDOVER_DONE_MS)
       expect(b.editLease.acquire).not.toHaveBeenCalled()
     })
@@ -3464,9 +3476,11 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       const taking = b.mode.takeOver()
       await untilPosted(browser, 1)
       expect(readingOf(b.mode).takeover).toEqual({ kind: 'asking' })
+      expect(await waitingForLock(browser)).toBe(1)
       b.mode.cancelTakeOver()
       await taking
       expect(readingOf(b.mode).takeover).toBeUndefined()
+      expect(await waitingForLock(browser)).toBe(0)
       await b.time.advance(EDIT_TAB_HANDOVER_DONE_MS)
       expect(b.editLease.acquire).not.toHaveBeenCalled()
     })
@@ -3534,6 +3548,15 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'taken-over', where: 'this-browser' }, unsaved: true })
       expect(context.api.save).not.toHaveBeenCalled()
       expect(context.editLease.release).not.toHaveBeenCalled()
+      expect(postedTypes(browser)).toEqual(['handover-request', 'handover-ack'])
+      // 之后放弃、再进入、再退出：那个请求早已作废，不再回答它
+      vi.mocked(context.factory.last().editor.settlePanels).mockImplementation(async () => {})
+      await context.mode.discard()
+      await settle()
+      await context.mode.enter()
+      expect(modeOf(context.mode).kind).toBe('editing')
+      await context.mode.exit()
+      expect(modeOf(context.mode).kind).toBe('reading')
       expect(postedTypes(browser)).toEqual(['handover-request', 'handover-ack'])
     })
 
