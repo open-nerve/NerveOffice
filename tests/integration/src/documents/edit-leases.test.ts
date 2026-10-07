@@ -527,6 +527,12 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
     await passLeaseTime(database, relogged.id, EDIT_LEASE_TTL_SECONDS)
     const again = await login(app.baseUrl, amy.username, amy.password)
     expect((await acquired(again, relogged.id, tab)).interruption).toMatchObject({ sameUser: true, samePage: true })
+
+    // 别人带着同一个标签页标识也不是（同一个页面先要是同一个人）
+    const borrowed = await freshDocument()
+    await acquired(sessionOf(amy), borrowed.id, tab)
+    await passLeaseTime(database, borrowed.id, EDIT_LEASE_TTL_SECONDS)
+    expect((await acquired(sessionOf(ben), borrowed.id, tab)).interruption).toMatchObject({ sameUser: false, samePage: false })
   })
 
   it('US-M3-11 到期之后没人接手：持有者心跳得到 expired；离到期还有 10 秒时照常续租，别人申请被占用', async () => {
