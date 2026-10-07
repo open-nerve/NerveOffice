@@ -133,12 +133,21 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
   })
 
   it('申请的响应带着上一位编辑者异常中断的提醒（M3-P5 设计 §3.5）：申请的结果交回它（用户发起的申请才经这里）；没有（null）时为 undefined', async () => {
-    const interruption = { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e2', username: 'ben', displayName: '本' }, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false }
+    const interruption = { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e2', username: 'ben', displayName: '本' }, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false, samePage: false }
     const context = setup({ acquire: async () => ({ ...ACQUIRED, interruption }) })
     expect(await acquireEditLease(context.options)).toMatchObject({ kind: 'acquired', interruption })
     const plain = setup()
     const result = await acquireEditLease(plain.options)
     expect(result.kind === 'acquired' ? result.interruption : 'held').toBeUndefined()
+  })
+
+  it('提醒说的是本页自己那一代（samePage：同一个标签页，例如退出时释放没送到、到期之后本页再进入编辑）：不交回，本页知道自己的修改存没存上；自己在别的标签页、设备上的那一代照样交回', async () => {
+    const own = { holder: AMY, endedAt: '2026-10-04T02:58:00.000Z', sameUser: true }
+    const thisPage = setup({ acquire: async () => ({ ...ACQUIRED, interruption: { ...own, samePage: true } }) })
+    const result = await acquireEditLease(thisPage.options)
+    expect(result.kind === 'acquired' ? result.interruption : 'held').toBeUndefined()
+    const otherPage = setup({ acquire: async () => ({ ...ACQUIRED, interruption: { ...own, samePage: false } }) })
+    expect(await acquireEditLease(otherPage.options)).toMatchObject({ kind: 'acquired', interruption: { ...own, samePage: false } })
   })
 
   it('持有：给出令牌、代次、文档当前的修订号与"公式待更新"（M3-P4），以本页这次加载的标识申请；10 秒之后第一次续租', async () => {

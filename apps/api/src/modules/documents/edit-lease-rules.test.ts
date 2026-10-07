@@ -81,9 +81,9 @@ const ROW_FAILURES: readonly (readonly [EditLeaseLostReason, Partial<ObservedEdi
   ['idle', { lastActiveAt: at(-IDLE) }],
 ]
 
-/** 上一位持有者（艾米）异常结束的提醒：结束的时间是她最近一次续租的时间 */
-function noticeOf(row: ObservedEditLease, sameUser = false) {
-  return { holderId: AMY, endedAt: row.renewedAt, sameUser }
+/** 上一位持有者（艾米）异常结束的提醒：结束的时间是她最近一次续租的时间；默认不是调用者、不是调用者这个页面 */
+function noticeOf(row: ObservedEditLease, sameUser = false, samePage = false) {
+  return { holderId: AMY, endedAt: row.renewedAt, sameUser, samePage }
 }
 
 /** 按时间已死、而续租在 30 分钟以内：3 分钟前最后一次续租，之后再没有心跳（90 秒前到期） */
@@ -431,9 +431,22 @@ describe('M3-P5 从调用者看谁占着这份文档（申请、编辑状态；�
     expect(await occupancyOf(row, EPOCH, BEN, facts())).toMatchObject({ kind: 'vacant', interruption: noticeOf(row, false) })
   })
 
+  it('US-M3-10 提醒带上那一代是不是申请的这个页面自己的（samePage：同一个人、绑定的标签页就是这次申请的；不看登录）；编辑状态没给页面时恒为假', async () => {
+    const row = lease({ expiresAt: NOW })
+    expect(await occupancyOf(row, EPOCH, AMY, facts(), TAB)).toEqual({ kind: 'vacant', lease: row, loss: 'expired', interruption: noticeOf(row, true, true) })
+    // 页面换过登录：还是这个页面
+    expect(await occupancyOf({ ...row, sessionId: OTHER_SESSION }, EPOCH, AMY, facts(), TAB)).toMatchObject({ interruption: { sameUser: true, samePage: true } })
+    // 同一个人别的标签页（刷新过、另开的、别的设备）：不是
+    expect(await occupancyOf(row, EPOCH, AMY, facts(), OTHER_TAB)).toMatchObject({ interruption: noticeOf(row, true, false) })
+    // 别人哪怕带着同一个标签页标识也不是（同一个页面先要是同一个人）
+    expect(await occupancyOf(row, EPOCH, BEN, facts(), TAB)).toMatchObject({ interruption: noticeOf(row, false, false) })
+    // 编辑状态、请求编辑：不给页面
+    expect(await occupancyOf(row, EPOCH, AMY, facts())).toMatchObject({ interruption: noticeOf(row, true, false) })
+  })
+
   it('US-M3-10 结束在 30 分钟以内才给：恰好 30 分钟仍然给，再晚 1 毫秒就不给', async () => {
     const ended = (milliseconds: number) => lease({ renewedAt: at(-milliseconds), expiresAt: at(-milliseconds + EDIT_LEASE_TTL_SECONDS * SECOND), lastActiveAt: at(-milliseconds) })
-    expect(await occupancyOf(ended(NOTICE), EPOCH, BEN, facts())).toMatchObject({ kind: 'vacant', loss: 'expired', interruption: { holderId: AMY, endedAt: at(-NOTICE), sameUser: false } })
+    expect(await occupancyOf(ended(NOTICE), EPOCH, BEN, facts())).toMatchObject({ kind: 'vacant', loss: 'expired', interruption: { holderId: AMY, endedAt: at(-NOTICE), sameUser: false, samePage: false } })
     expect(await occupancyOf(ended(NOTICE + 1), EPOCH, BEN, facts())).toMatchObject({ kind: 'vacant', loss: 'expired', interruption: undefined })
     // 代次过时的同样只看续租的时间
     expect(await occupancyOf({ ...ended(NOTICE + 1), writeEpoch: EPOCH - 1 }, EPOCH, BEN, facts())).toMatchObject({ kind: 'vacant', interruption: undefined })

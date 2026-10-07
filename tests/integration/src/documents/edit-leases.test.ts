@@ -499,7 +499,7 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
     expect((await status(sessionOf(ben), document.id)).editor).toBeNull()
     const taken = await acquired(sessionOf(ben), document.id)
     expect(taken.writeEpoch).toBe(lease.writeEpoch + 1)
-    expect(taken.interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: false })
+    expect(taken.interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: false, samePage: false })
     expect(await lostReason(await renew(sessionOf(amy), document.id, lease.token))).toBe('replaced')
   })
 
@@ -509,7 +509,24 @@ describe('US-M3-11 到期与空闲：时间以数据库为准（改写租约行�
     await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
     const renewedAt = (await leaseOf(document.id))?.renewed_at.toISOString()
     const otherDevice = await login(app.baseUrl, amy.username, amy.password)
-    expect((await acquired(otherDevice, document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: true })
+    expect((await acquired(otherDevice, document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt: renewedAt, sameUser: true, samePage: false })
+  })
+
+  it('US-M3-10 提醒带上那一代是不是申请的这个页面自己的（samePage，M3-P5 审查之后）：本页退出时释放没送到、那一代到期之后同一个页面再申请——samePage 为真（页面据此不说），换过登录也是；编辑状态没有页面，不带它', async () => {
+    const document = await freshDocument()
+    const tab = randomUUID()
+    await acquired(sessionOf(amy), document.id, tab)
+    await passLeaseTime(database, document.id, EDIT_LEASE_TTL_SECONDS)
+    const endedAt = (await leaseOf(document.id))?.renewed_at.toISOString()
+    expect((await status(sessionOf(amy), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: true })
+    expect((await acquired(sessionOf(amy), document.id, tab)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: true, samePage: true })
+
+    // 同一个页面换过登录（例如登录过期之后重新登录）：还是这个页面
+    const relogged = await freshDocument()
+    await acquired(sessionOf(amy), relogged.id, tab)
+    await passLeaseTime(database, relogged.id, EDIT_LEASE_TTL_SECONDS)
+    const again = await login(app.baseUrl, amy.username, amy.password)
+    expect((await acquired(again, relogged.id, tab)).interruption).toMatchObject({ sameUser: true, samePage: true })
   })
 
   it('US-M3-11 到期之后没人接手：持有者心跳得到 expired；离到期还有 10 秒时照常续租，别人申请被占用', async () => {
@@ -622,7 +639,7 @@ describe('US-M3-10 异常结束的提醒（服务端部分，界面在 P5）', (
     // 查看者也看得到；持有者本人看到的是关于自己的
     expect(await status(sessionOf(vic), document.id)).toMatchObject({ editor: null, interruption: { ...notice, sameUser: false } })
     expect((await status(sessionOf(amy), document.id)).interruption).toEqual({ ...notice, sameUser: true })
-    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ ...notice, sameUser: false })
+    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ ...notice, sameUser: false, samePage: false })
     // 本在编辑了：没有提醒
     expect(await status(sessionOf(vic), document.id)).toMatchObject({ editor: { holder: summaryOf(ben) }, interruption: null })
   })
@@ -647,7 +664,7 @@ describe('US-M3-10 异常结束的提醒（服务端部分，界面在 P5）', (
     await database.query(async client => client.query('UPDATE documents SET write_epoch = write_epoch + 1 WHERE id = $1', [document.id]))
     expect(await lostReason(await renew(sessionOf(amy), document.id, old.token))).toBe('stale')
     expect((await status(sessionOf(ben), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: false })
-    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: false })
+    expect((await acquired(sessionOf(ben), document.id)).interruption).toEqual({ holder: summaryOf(amy), endedAt, sameUser: false, samePage: false })
   })
 })
 

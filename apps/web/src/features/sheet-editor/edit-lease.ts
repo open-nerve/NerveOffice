@@ -37,12 +37,13 @@
 //   接手（forced 为假）与空间管理员强制接管（forced 为真）分开交给页面；已经交出（handed_over：交出的回答没收到、下一次心跳才得知）同样不续上，
 //   单独交给页面（说明交给了请求编辑的人）；
 // - 异常中断的提醒（M3-P5 设计 §3.5，US-M3-10）：用户发起的申请（这里的 acquireEditLease）把申请响应里的提醒交回页面；续上（recover）的申请
-//   不交回——编辑权中断之后续上，上一代异常结束的就是本页自己，说了只会让人以为出了事；
+//   不交回——编辑权中断之后续上，上一代异常结束的就是本页自己，说了只会让人以为出了事。用户发起的申请也一样：服务端说那一代就是本页的
+//   （samePage，例如退出时释放没送到、到期之后本页再进入编辑）就不交回；
 // - 本人接管（M3-P5 设计 §3.7，"在此编辑"）：申请带 takeover: 'self'（只给用户发起的那一次，续上从不带）；被自己占着时要不要隔一会儿再试
 //   由页面判断（本浏览器里有标签页持有本机锁时不必再试：那不是刷新时晚到的释放）；
 // - 请求编辑（M3-P5 设计 §3.6）：心跳的响应带着待回应的请求（没有时为 null），每次续租成功都交给页面（onRequest）；交出与谢绝由页面带着
 //   现在的令牌直接发（edit-mode.ts），交出之后服务端已经结束这一代，页面 abandon（不再续租、不发释放）
-import type { AcquiredEditLease, DocumentEditor, EditInterruption, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, HandedOverEditLease, PendingEditRequest, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
+import type { AcquiredEditInterruption, AcquiredEditLease, DocumentEditor, EditInterruption, EditLeaseLostDetails, EditLeaseLostReason, EditTakeoverMode, HandedOverEditLease, PendingEditRequest, RenewedEditLease, RevisionSource, UserSummary } from '@nerve-office/contracts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import { EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, editLeaseHeldDetailsSchema, editLeaseLostDetailsSchema } from '@nerve-office/contracts'
@@ -269,7 +270,8 @@ export interface EditLeaseOptions {
 
 /**
  * 申请的结果：持有（租约已经开始心跳；修订号是文档当前的；formulasPending 是文档当前的"公式待更新"，M3-P4 设计 §3.5——带标记时
- * 进入编辑以强制全量重算创建、收齐之后补存；interruption 是上一位编辑者异常中断的提醒，M3-P5 设计 §3.5，没有时为 undefined）
+ * 进入编辑以强制全量重算创建、收齐之后补存；interruption 是上一位编辑者异常中断的提醒，M3-P5 设计 §3.5，没有时、说的是本页自己那一代时
+ * 为 undefined）
  * 或被占用（认不出服务端给的详情时 holder 为 undefined）
  */
 export type LeaseAcquisition
@@ -348,8 +350,16 @@ export async function acquireEditLease(options: EditLeaseOptions, intent: Acquir
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)
       continue
     }
-    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: acquired.interruption ?? undefined }
+    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
   }
+}
+
+/**
+ * 申请带回的提醒里要交给页面说的那一个（M3-P5 设计 §3.5）：异常结束的那一代就是本页自己的（samePage：同一个标签页——例如退出时释放没送到、
+ * 那一代到期之后本页再进入编辑）时不说，本页自己知道它的修改存没存上，说"可能没有存上"就是误报；与续上不交回提醒同一个理由
+ */
+function noticeOf(interruption: AcquiredEditInterruption | null): EditInterruption | undefined {
+  return interruption === null || interruption.samePage ? undefined : interruption
 }
 
 /**

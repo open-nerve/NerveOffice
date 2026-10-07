@@ -1,4 +1,4 @@
-import type { AcquiredEditLease, CreatedDocument, DocumentEditor, EditInterruption, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckFailure, PendingEditRequest, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { AcquiredEditInterruption, AcquiredEditLease, CreatedDocument, DocumentEditor, EditInterruption, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckFailure, PendingEditRequest, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
@@ -4639,9 +4639,9 @@ describe('被强制接管与已经交出（M3-P5 设计 §3.6、§3.8）', () =>
 
 describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', () => {
   /** 别人（本）的那一代异常中断 */
-  const OTHERS: EditInterruption = { holder: BEN, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false }
-  /** 自己（艾米）的那一代异常中断 */
-  const OWN: EditInterruption = { holder: AMY, endedAt: '2026-10-04T02:55:00.000Z', sameUser: true }
+  const OTHERS: AcquiredEditInterruption = { holder: BEN, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false, samePage: false }
+  /** 自己（艾米）在别的标签页或设备上的那一代异常中断 */
+  const OWN: AcquiredEditInterruption = { holder: AMY, endedAt: '2026-10-04T02:55:00.000Z', sameUser: true, samePage: false }
 
   function editingInterruption(mode: EditMode): EditInterruption | undefined {
     const current = modeOf(mode)
@@ -4664,6 +4664,14 @@ describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', ()
     const context = setup()
     await editing(context)
     expect(editingInterruption(context.mode)).toBeUndefined()
+  })
+
+  it('点"编辑"的申请带回的提醒说的是本页自己那一代（samePage：例如退出时释放没送到、到期之后本页再进入编辑）：不显示，交接日志里记成没带提醒', async () => {
+    const events: HandoverTraceEvent[] = []
+    const context = setup({ trace: event => events.push(event), editLease: { acquire: async () => ({ ...ACQUIRED, interruption: { ...OWN, samePage: true } }) } })
+    await editing(context)
+    expect(editingInterruption(context.mode)).toBeUndefined()
+    expect(events.find(event => event.kind === 'acquire-result')).toMatchObject({ result: 'acquired', interruption: false })
   })
 
   it('离开编辑的过程中留着（"知道了"照样能按）；回到阅读之后没有，再进入编辑时按那一次申请的', async () => {
@@ -4788,7 +4796,7 @@ describe('测试构建的观察钩子（M3-P5 设计 §3.13）', () => {
 
   it('"编辑"、离开编辑：申请（触发的操作、接管方式）、结果（带没带提醒）、进入编辑、开始离开、离开的结果，时刻按单调的时钟', async () => {
     const { events, trace, kinds } = recorder()
-    const context = setup({ trace, editLease: { acquire: async () => ({ ...ACQUIRED, interruption: { holder: BEN, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false } }) } })
+    const context = setup({ trace, editLease: { acquire: async () => ({ ...ACQUIRED, interruption: { holder: BEN, endedAt: '2026-10-04T02:58:00.000Z', sameUser: false, samePage: false } }) } })
     await editing(context)
     await context.mode.exit()
     expect(kinds()).toEqual(['acquire', 'acquire-result', 'entered', 'leave', 'left'])

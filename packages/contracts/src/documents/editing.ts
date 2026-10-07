@@ -125,6 +125,17 @@ export const editInterruptionSchema = z.object({
 export type EditInterruption = z.infer<typeof editInterruptionSchema>
 
 /**
+ * 申请的结果里的提醒：另带 samePage——异常结束的那一代绑定的就是这次申请的页面（同一个人、同一个标签页，clientInstanceId 相同）。
+ * 本页退出时释放没送到，那一代到期之后本页再进入编辑，服务端照样按事实算异常中断，而本页的修改其实都已存上（没存上的本页自己知道）：
+ * 页面在 samePage 时不说。编辑状态（GET）没有页面，它的提醒不带这一项（阅读时页面只说别人那一代的）
+ */
+export const acquiredEditInterruptionSchema = editInterruptionSchema.extend({
+  samePage: z.boolean(),
+})
+
+export type AcquiredEditInterruption = z.infer<typeof acquiredEditInterruptionSchema>
+
+/**
  * 申请成功（201）：
  * - token：之后的心跳、释放与保存经 EDIT_LEASE_HEADER 带上它；
  * - writeEpoch：这一代的代次（申请时文档的代次加一，所以至少是 1），保存时作为查询参数带上；
@@ -132,7 +143,7 @@ export type EditInterruption = z.infer<typeof editInterruptionSchema>
  * - source：文档当前修订的来源——产生它的那次保存的标签页与本地序号；当前修订是新建、复制出来的，或者不是调用者本人保存的，为 null。
  *   续上时（编辑权中断之后同一个页面重新申请），修订号比本页的基准新，页面据此认出期间的那一版是不是本页自己一次结果未知的保存：
  *   是的话以它为基准接着编辑，不当成别处的修改（00 号计划书 §7.5）。取法与修订号冲突的详情相同；
- * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒，没有时为 null；
+ * - expiresAt：到期时间；interruption：上一个租约异常结束的提醒（带上是不是这个页面自己的那一代，samePage），没有时为 null；
  * - formulasPending：文档的"公式待更新"（M3-P3 设计 §3.8，最近一次写入时页面带来的标记）：P4 据此在进入编辑时先全量重算。
  * 响应的结构宽松（多出的字段被丢弃），见 auth 的会话信息
  */
@@ -142,7 +153,7 @@ export const acquiredEditLeaseSchema = z.object({
   revision: z.number().int().min(1),
   source: revisionSourceSchema.nullable(),
   expiresAt: z.iso.datetime(),
-  interruption: editInterruptionSchema.nullable(),
+  interruption: acquiredEditInterruptionSchema.nullable(),
   formulasPending: z.boolean(),
 })
 

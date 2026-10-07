@@ -3,6 +3,7 @@ import { ERROR_CODES, errorStatus } from '../errors/error-codes.ts'
 import { errorResponseSchema } from '../errors/error-response.ts'
 import { CSRF_TOKEN_HEADER } from '../http/headers.ts'
 import {
+  acquiredEditInterruptionSchema,
   acquiredEditLeaseSchema,
   acquireEditLeaseRequestSchema,
   declineEditRequestSchema,
@@ -148,11 +149,17 @@ describe('申请编辑权', () => {
     expect(acquiredEditLeaseSchema.safeParse({ ...acquired, source: { clientInstanceId: TAB } }).success).toBe(false)
   })
 
-  it('上一个租约异常结束时给出提醒：上一位持有者（"人"的结构）、结束的时间与是不是自己（M3-P5，必填）', () => {
-    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption }).interruption).toEqual(interruption)
-    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: { ...interruption, sameUser: true } }).interruption?.sameUser).toBe(true)
-    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { ...interruption, holder: { id: AMY.id } } }).success).toBe(false)
-    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { holder: AMY, endedAt: AT } }).success).toBe(false)
+  it('上一个租约异常结束时给出提醒：上一位持有者（"人"的结构）、结束的时间、是不是自己（M3-P5）与是不是这个页面自己的那一代（审查之后，都必填）', () => {
+    const acquiredInterruption = { ...interruption, samePage: false }
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: acquiredInterruption }).interruption).toEqual(acquiredInterruption)
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: { ...acquiredInterruption, sameUser: true } }).interruption?.sameUser).toBe(true)
+    expect(acquiredEditLeaseSchema.parse({ ...acquired, interruption: { ...acquiredInterruption, sameUser: true, samePage: true } }).interruption?.samePage).toBe(true)
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { ...acquiredInterruption, holder: { id: AMY.id } } }).success).toBe(false)
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: { holder: AMY, endedAt: AT, samePage: false } }).success).toBe(false)
+    // 申请的提醒少了 samePage 不行；编辑状态的提醒没有它（编辑状态没有页面），多出的被丢弃
+    expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption }).success).toBe(false)
+    expect(acquiredEditInterruptionSchema.safeParse({ ...interruption, samePage: 'false' }).success).toBe(false)
+    expect(editInterruptionSchema.parse(acquiredInterruption)).toEqual(interruption)
     expect(acquiredEditLeaseSchema.safeParse({ ...acquired, interruption: undefined }).success).toBe(false)
     expect(editInterruptionSchema.safeParse({ ...interruption, sameUser: 'false' }).success).toBe(false)
   })

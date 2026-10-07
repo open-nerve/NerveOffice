@@ -2529,7 +2529,7 @@ describe('强制接管、异常中断的提醒与观察钩子（M3-P5 设计 §3
   })
 
   it('申请带回异常中断的提醒：进入编辑之后编辑的状态带着它；"知道了"交给编辑模式，提醒去掉', async () => {
-    const interruption = { holder: BOB_EDITING.holder, endedAt: '2026-09-27T02:58:00.000Z', sameUser: false }
+    const interruption = { holder: BOB_EDITING.holder, endedAt: '2026-09-27T02:58:00.000Z', sameUser: false, samePage: false }
     const { editorPage } = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption }) } })
     await editorPage.load()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', interruption })

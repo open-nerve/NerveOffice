@@ -170,6 +170,7 @@ export type {
   UpdateDocumentRequest,
 } from './documents/documents.ts'
 export {
+  acquiredEditInterruptionSchema,
   acquiredEditLeaseSchema,
   acquireEditLeaseRequestSchema,
   declineEditRequestSchema,
@@ -208,6 +209,7 @@ export {
   requestEditRequestSchema,
 } from './documents/editing.ts'
 export type {
+  AcquiredEditInterruption,
   AcquiredEditLease,
   AcquireEditLeaseRequest,
   DeclineEditRequest,
