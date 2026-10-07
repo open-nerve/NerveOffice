@@ -498,7 +498,9 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     await reopened.goto(`/documents/${documentId}`)
     await waitForEditorAccess(reopened, 'read')
     await expect(cancelRequestButton(reopened)).toBeVisible()
-    await expect(statusRegion(reopened)).toHaveText(waitingFor(holder))
+    // 只看在等谁：持有者的修改由定时的自动保存存上（容器 E2E 与 E2E_AUTOSAVE=running），晚于这一页载入时状态区另有"有更新"的一句
+    await expect(statusRegion(reopened)).toContainText(waitingFor(holder))
+    await expect(statusRegion(reopened)).not.toContainText('你已在别处请求编辑这份文档')
     expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
     expect(sent).not.toContain('POST')
   })
