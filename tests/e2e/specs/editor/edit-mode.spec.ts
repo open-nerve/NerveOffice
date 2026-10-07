@@ -425,7 +425,8 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     await waitForEditorAccess(page, 'read')
     await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })).toBeVisible()
-    // 页面错误只有编辑器建不起来的那两次（以只读重建、按最新的内容重建）
+    // 页面错误只有编辑器建不起来的那两次（以只读重建、按最新的内容重建）——页面没有开始离开，加载失败照常立即上报（M3-P5 收尾 E1；
+    // wouldPromptOnLeave 派发的 beforeunload 不可信，不算开始离开）
     expect(pageErrors.list()).toEqual([expect.stringMatching(/^SheetEditorLoadError: 公式 Worker 起不来/), expect.stringMatching(/^SheetEditorLoadError: 公式 Worker 起不来/)])
   })
 })

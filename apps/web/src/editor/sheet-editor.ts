@@ -272,12 +272,26 @@ async function tearDown(cleanup: CleanupStack, round: FormulaRound | undefined):
   cleanup.run()
 }
 
+/**
+ * 引入测试构建的模块（档案故障、公式模式、探针）：没引入成（分块没下载下来，多半是整页跳转取消了还在路上的加载）按编辑器建不起来处理，
+ * 页面据此认出它是加载失败、页面开始离开之后不上报（M3-P5 收尾 E1，features/sheet-editor/start.tsx 的 loadFailureReporter）。
+ * 只在测试构建的分支里用到，生产构建里随那些分支一起去掉
+ */
+async function importTesting<T>(load: () => Promise<T>): Promise<T> {
+  try {
+    return await load()
+  }
+  catch (error) {
+    throw new SheetEditorLoadError('testing-module-failed', '测试构建的模块没能引入', { cause: error })
+  }
+}
+
 /** 按顺序创建、等到就绪；每创建一样就在 cleanup 里登记它的销毁，失败时由调用方统一销毁（主线程模式下先停下 rounds 里的那一轮） */
 async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapshot, formulaMode: FormulaMode, cleanup: CleanupStack, rounds: FormulaRoundRef): Promise<MountedEditor> {
   // 测试构建：档案故障开关（M3-P4 设计 §3.14，testing/profile-fault.ts）。注册哪些插件必须在注册之前决定，所以在创建任何东西之前引入；
   // 生产构建里 MODE 是 production，这个分支与开关的分块都被去掉（门禁 artifacts 按来源核对）。只能动态引入（lint，与探针同一个理由）
   const pluginEntries = import.meta.env.MODE === 'e2e'
-    ? (await import('./testing/profile-fault.ts')).sheetPluginEntriesUnderFault(location.search)
+    ? (await importTesting(async () => import('./testing/profile-fault.ts'))).sheetPluginEntriesUnderFault(location.search)
     : sheetPluginEntries
   const { container, access } = options
   const recalculate = options.recalculate === true
@@ -366,7 +380,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
  */
 async function formulaModeOf(): Promise<FormulaMode> {
   if (import.meta.env.MODE === 'e2e') {
-    const { formulaModeFromSearch } = await import('./testing/formula-mode.ts')
+    const { formulaModeFromSearch } = await importTesting(async () => import('./testing/formula-mode.ts'))
     return formulaModeFromSearch(window.location.search)
   }
   return 'worker'
@@ -389,7 +403,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     // 门禁 artifacts 核对生产产物里没有它。只能这样动态引入：静态引入时探针本身被摇树去掉，它补上的 Facade（probe-facades.ts）
     // 却留在生产构建里，门禁认不出（lint 拦下，M2-P6 复核 F5）
     if (import.meta.env.MODE === 'e2e') {
-      const { installEditorProbe } = await import('./testing/e2e-probe.ts')
+      const { installEditorProbe } = await importTesting(async () => import('./testing/e2e-probe.ts'))
       cleanup.defer(installEditorProbe(mounted))
     }
   }

@@ -78,41 +78,51 @@ function editIntentOf(location: Location): EditIntent {
   }
 }
 
-/** 加载失败等这么久、页面还在才报（reportUnlessLeaving） */
-const LOAD_FAILURE_REPORT_DELAY_MS = 3000
+/** 页面开始离开之后这么久以内的加载失败不报（loadFailureReporter）：留着是为了离开被取消（离开提示里选了留下）之后照常报 */
+const LEAVING_GRACE_MS = 10_000
 
 /**
- * 加载失败交给浏览器的错误报告，但页面正在离开时不报（M3-P5 收尾）：整页跳转会取消还在路上的加载，WebKit 还常常在 pagehide 之前就让
- * 它们失败（同 S6 的在途保存）——动态引入的分块报"TypeError: Importing a module script failed."，公式 Worker 的脚本让编辑器以
- * SheetEditorLoadError（worker-failed）失败。那不是错误，E2E 的页面错误夹具却会把它算成页面错误（specs/foundation/page-errors.spec.ts
- * 打开编辑器页、不等加载完就跳走，WebKit 上本机二十次失败一到两次）。所以等一会儿再报，期间页面离开（pagehide）就作罢；页面还在时照样报出。
- * 只用在加载失败上：页面对编辑器的加载失败另有可见的说明（"编辑器加载失败"），上报只用于诊断；别的意外错误照常立即上报
+ * 加载失败的上报（M3-P5 收尾 E1）：页面开始离开之后的不报，别的照常立即交给浏览器的错误报告。整页跳转会取消还在路上的加载——公式 Worker
+ * 的脚本让编辑器以 SheetEditorLoadError（worker-failed）失败，动态引入的分块报"TypeError: Importing a module script failed."；WebKit 还常常
+ * 在 pagehide 之前就让它们失败（同 S6 的在途保存），pagehide 也不一定派发。那不是错误，E2E 的页面错误夹具却会把它算成页面错误
+ * （specs/foundation/page-errors.spec.ts 打开编辑器页、不等加载完就跳走，WebKit 上本机十次失败两次）。"开始离开"认可信的 beforeunload：
+ * 三个浏览器在整页跳转（含 Playwright 的 page.goto）时都先派发它、之后才取消加载（探针核对）；页面自己派发的（E2E 的 wouldPromptOnLeave）
+ * 不可信，不算。要在加载开始之前就听着：编辑器在载入之后才建，这里在入口一执行就开始听，来得及；入口执行之前就开始的跳转听不到，所以一开始就
+ * 引入的测试钩子不经这里上报（见 startSheetEditorPage）。只用在加载失败上：编辑器的加载失败另有可见的说明（"编辑器加载失败"），上报只用于诊断；
+ * 别的意外错误照常立即上报
  */
-function reportUnlessLeaving(error: unknown): void {
-  const timer = window.setTimeout(reportError, LOAD_FAILURE_REPORT_DELAY_MS, error)
-  window.addEventListener('pagehide', () => window.clearTimeout(timer), { once: true })
+function loadFailureReporter(target: Window): (error: unknown) => void {
+  let leavingSince: number | undefined
+  target.addEventListener('beforeunload', (event) => {
+    if (event.isTrusted)
+      leavingSince = performance.now()
+  })
+  return (error) => {
+    if (leavingSince === undefined || performance.now() - leavingSince >= LEAVING_GRACE_MS)
+      reportError(error)
+  }
 }
 
 export function startSheetEditorPage(elements: SheetEditorPageElements): void {
+  const reportLoadFailure = loadFailureReporter(window)
   if (import.meta.env.MODE === 'e2e') {
-    // 引入失败（分块下载失败）：照常组装，没有那一样（用到它的 E2E 随之失败），错误交给浏览器的错误报告（页面正在离开时不报）
+    // 引入失败：照常组装，没有那一样，不上报——用到它的 E2E 自己会失败（控制、日志不在）。这两块在页面一开始就引入，整页跳转可能在入口的
+    // 脚本还没执行、还没开始听 beforeunload 时就已开始，随后取消它们（WebKit 报"Importing a module script failed."），分不清是不是跳转取消的
+    // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）
     void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts')]).then(([control, log]) => {
-      if (control.status === 'rejected')
-        reportUnlessLeaving(control.reason)
-      if (log.status === 'rejected')
-        reportUnlessLeaving(log.reason)
       assemble(
         elements,
+        reportLoadFailure,
         control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
         log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
       )
     })
     return
   }
-  assemble(elements, undefined, undefined)
+  assemble(elements, reportLoadFailure, undefined, undefined)
 }
 
-function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined): void {
+function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined): void {
   const page = createEditorPage({
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
@@ -160,8 +170,8 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
     currentPath: () => `${window.location.pathname}${window.location.search}`,
     newId: () => crypto.randomUUID(),
     now: () => new Date(),
-    // 编辑器的加载失败可能是页面正在离开、加载被取消（reportUnlessLeaving）；别的意外错误立即上报
-    reportError: error => error instanceof SheetEditorLoadError ? reportUnlessLeaving(error) : reportError(error),
+    // 编辑器的加载失败可能是页面正在离开、加载被取消（loadFailureReporter）；别的意外错误立即上报
+    reportError: error => error instanceof SheetEditorLoadError ? reportLoadFailure(error) : reportError(error),
   })
   // navigator.platform 已不推荐使用，但各浏览器都还给出真实的平台；userAgentData 只有 Chromium 有
   const apple = isApplePlatform(navigator.platform)
@@ -178,7 +188,7 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
   if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
     void import('./selftest-hook.ts').then(
       ({ watchForSelftest }) => watchForSelftest(page, elements),
-      (error: unknown) => reportUnlessLeaving(error),
+      (error: unknown) => reportLoadFailure(error),
     ).then(async () => page.load())
     return
   }
