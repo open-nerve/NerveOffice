@@ -59,7 +59,6 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await loginThroughApi(page, await createUser('takeover-tabs'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'A1', 'from the first tab')
 
     const other = await context.newPage()
     await openReader(other, documentId)
@@ -67,6 +66,9 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await expect(takeOverHereButton(other)).toBeVisible()
     await expect(enterEditButton(other)).toHaveCount(0)
     await expect(saveButton(other)).toHaveCount(0)
+    // B 打开之后 A 才改：自动保存照常运行时（容器 E2E），A 的这一处由自动保存存上，落在 B 打开之后时 B 会多说一句"这份文档有更新的版本"
+    // （M3-P5 合并之后 CI 的容器 E2E 在 handover-request 里碰上的同一个先后）。测试构建里这一处一直没存上，交出之前先存上
+    await typeInCell(page, 'A1', 'from the first tab')
 
     // 两边的请求按先后记下：A 的保存在 B 的申请之前，A 不发释放
     const order: string[] = []

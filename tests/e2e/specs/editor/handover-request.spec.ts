@@ -77,12 +77,17 @@ function recordAcquisitions(page: Page, documentId: string): (string | null)[] {
   return takeovers
 }
 
-/** 持有者：装上时钟、打开并进入编辑，改一处 */
+/**
+ * 持有者：装上时钟、打开并进入编辑，改一处并存上。先存上再让请求方打开：自动保存照常运行时（容器 E2E、E2E_AUTOSAVE=running），这一处
+ * 由自动保存在几秒之后存上，落在请求方打开之后时请求方的页面会多说一句"这份文档有更新的版本"（M3-P5 合并之后 CI 的容器 E2E，慢机器上
+ * 九条因此失败）；存上之后到下一次修改之前修订号不变，两种打开状态都一样
+ */
 async function holderEditing(page: Page, holder: TestUser, documentId: string): Promise<void> {
   await loginThroughApi(page, holder)
   await page.clock.install()
   await openAndEnterEditing(page, documentId)
   await typeInCell(page, 'A1', 'from holder')
+  await saveAndWait(page)
 }
 
 /**
@@ -163,12 +168,16 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     await holderEditing(page, holder, documentId)
     const acquisitions = await requesterWaiting(anotherDevice, requester, holder, documentId)
     await prompted(page, requester, documentId)
+    // 提示出现之后持有者又改了一处：测试构建里还没存上（生产构建里可能已由自动保存存上），交出之前先存上。请求方在等，不读编辑状态，
+    // 这一处存上也不会让它多说"有更新"
+    await typeInCell(page, 'B1', 'before handover')
 
     const handedOver = page.waitForResponse(response => isHandover(response.request(), documentId))
     await requestPrompt(page).getByRole('button', { name: '交出', exact: true }).click()
     expect((await handedOver).status()).toBe(200)
     await waitForEditorAccess(page, 'read')
     await expect(statusRegion(page)).toHaveText(`已保存并把编辑权交给了 ${shownName(requester)}`)
+    expect(await savedCells(page, documentId)).toEqual(['from holder', 'before handover'])
 
     await requesterEnters(anotherDevice, acquisitions)
     await typeInCell(anotherDevice, 'B1', 'from requester')
@@ -241,7 +250,6 @@ test.describe('US-M3-06 请求编辑与交出', () => {
   test('US-M3-06 持有者的页面没有响应（断网、休眠：心跳与保存都送不到）：编辑权到期之后请求方下一次续期得知没人在编辑，自动进入编辑；持有者恢复之后不能再保存，修改给副本', async ({ page, anotherDevice }) => {
     const { holder, requester, documentId } = await sharedDocument('rq-silent')
     await holderEditing(page, holder, documentId)
-    await saveAndWait(page)
     const epoch = await editLeaseEpoch(documentId) ?? 0
     // 持有者断网之后改了一处：这一处存不上
     const asleep = await disconnectTab(page)
