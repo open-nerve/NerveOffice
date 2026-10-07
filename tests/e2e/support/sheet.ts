@@ -100,7 +100,27 @@ export function takeOverHereButton(page: Page): Locator {
   return chrome(page).getByRole('banner').getByRole('button', { name: '在此编辑', exact: true })
 }
 
-/** 页头之外一直在的读屏状态区（M3-P2 起阅读时的说明都在这里：谁在编辑、空闲释放与交出之后、"在此编辑"的进展） */
+/**
+ * 页头里的"请求编辑"（M3-P5 设计 §3.6：持有者是别人、自己能编辑时换掉"编辑"）；同一个按钮之后说"正在请求…""取消请求""正在取消…"
+ */
+export function requestEditButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '请求编辑', exact: true })
+}
+
+/** 页头里的"取消请求"（请求编辑在等待时，同一个按钮） */
+export function cancelRequestButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '取消请求', exact: true })
+}
+
+/**
+ * 持有者页头下面有人请求编辑时的提示（M3-P5 设计 §3.6）：带标题的分组（role="group"，名字是"[人名] 请求编辑这份文档"），里面"交出""继续编辑"
+ * 与一行静态说明
+ */
+export function requestPrompt(page: Page): Locator {
+  return chrome(page).getByRole('group', { name: /请求编辑这份文档$/ })
+}
+
+/** 页头之外一直在的读屏状态区（M3-P2 起阅读时的说明都在这里：谁在编辑、空闲释放与交出之后、"在此编辑"与请求编辑的进展） */
 export function statusRegion(page: Page): Locator {
   return chrome(page).locator('[data-slot="status-region"]')
 }
@@ -142,11 +162,11 @@ export async function openReader(page: Page, documentId: string, stage: 'ready' 
 
 /**
  * 打开或刷新之后：以只读创建的编辑器就绪，页头有了阅读时的样子（载入的结果在编辑器就绪之后一刻才交给页头）——能编辑时"编辑"，持有者是自己时
- * "在此编辑"（M3-P5），不能编辑时"只能查看"
+ * "在此编辑"、别人时"请求编辑"（M3-P5），不能编辑时"只能查看"
  */
 async function whenReading(page: Page, stage: 'ready' | 'steady'): Promise<void> {
   await waitForEditorAccess(page, 'read', stage)
-  await expect(enterEditButton(page).or(takeOverHereButton(page)).or(saveStatus(page).filter({ hasText: /^只能查看$/ }))).toBeVisible()
+  await expect(enterEditButton(page).or(takeOverHereButton(page)).or(requestEditButton(page)).or(saveStatus(page).filter({ hasText: /^只能查看$/ }))).toBeVisible()
 }
 
 /** 打开并进入编辑（M3-P2：打开即阅读，点"编辑"才进入编辑）：要在编辑器里改内容、保存的用例用它 */

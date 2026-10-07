@@ -16,7 +16,7 @@ import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { browserLeaseClock, trackActivity } from './edit-lease.ts'
-import { acquireEditLease, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, releaseEditLease, renewEditLease, reportOpenCheckFailures, saveConflictCopy, saveContent, snapshotDigest } from './editor-api.ts'
+import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest, snapshotDigest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { installPageGuards, isApplePlatform } from './page-guards.ts'
@@ -109,6 +109,13 @@ function assemble(elements: SheetEditorPageElements, autosaveControl: AutosaveCo
         acquire: async (documentId, clientInstanceId, options) => acquireEditLease(documentId, clientInstanceId, options),
         renew: async (documentId, token, idleSeconds) => renewEditLease(documentId, token, idleSeconds),
         release: async (documentId, token) => releaseEditLease(documentId, token),
+        handOver: async (documentId, token, requestId) => handOverEditLease(documentId, token, requestId),
+        decline: async (documentId, token, requestId) => declineEditRequest(documentId, token, requestId),
+      },
+      editRequest: {
+        send: async documentId => sendEditRequest(documentId),
+        renew: async documentId => renewEditRequest(documentId),
+        cancel: async documentId => cancelEditRequest(documentId),
       },
     },
     createEditor: createSheetEditor,

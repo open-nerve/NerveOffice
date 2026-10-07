@@ -15,7 +15,7 @@ import { createDocumentIn, createFolderIn, createTeamSpace, createUser, expireEd
 import { expect, test } from '../../support/fixtures.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -235,11 +235,12 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
     expect(minuteLabels(lostFrom, lostBy, timeZone).map(label => `共同的表（冲突副本 ${label}）`)).toContain(placed?.title)
     await expect(notice).toContainText(`已另存为副本《${placed?.title}》。`)
 
-    // 甲的页面按服务器上的最新版本（乙的）回到阅读：乙还在编辑，读屏状态区说明是乙（与已另存为副本的说明在一起）；甲能编辑，有"编辑"
+    // 甲的页面按服务器上的最新版本（乙的）回到阅读：乙还在编辑，读屏状态区说明是乙（与已另存为副本的说明在一起）；甲能编辑——乙在编辑，
+    // 是"请求编辑"（M3-P5）
     await waitForEditorAccess(page, 'read')
     await expect(editingNotice(page)).toContainText(`${shownName(second)} 正在编辑这份文档`)
     await expect(editingNotice(page)).toContainText('你现在只能阅读')
-    await expect(enterEditButton(page)).toBeVisible()
+    await expect(requestEditButton(page)).toBeVisible()
     await expectFoundOnce(page, 'second only')
   })
 })

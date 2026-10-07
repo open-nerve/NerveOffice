@@ -75,10 +75,13 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     release: vi.fn<EditLeaseApi['release']>(api.release ?? (async (_documentId, token) => {
       calls.push(`release ${token.slice(0, 1)}`)
     })),
+    handOver: vi.fn<EditLeaseApi['handOver']>(api.handOver ?? (async () => ({ reservedFor: AMY, reservedUntil: '2026-10-04T03:03:00.000Z' }))),
+    decline: vi.fn<EditLeaseApi['decline']>(api.decline ?? (async () => {})),
   }
   const onLost = vi.fn<(loss: LeaseLoss) => void>()
   const onSessionProblem = vi.fn<(error: ApiError) => void>()
   const onIncompatible = vi.fn<(kind: Incompatibility) => void>()
+  const onRequest = vi.fn<NonNullable<EditLeaseOptions['onRequest']>>()
   /** 页面认不认得出期间的那一版是自己的保存：默认认不出（别处保存的） */
   const adopt = vi.fn<EditLeaseOptions['adoptOwnRevision']>(() => false)
   const options: EditLeaseOptions = {
@@ -92,6 +95,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     onLost,
     onSessionProblem,
     onIncompatible,
+    onRequest,
   }
   return {
     time,
@@ -99,6 +103,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     onLost,
     onSessionProblem,
     onIncompatible,
+    onRequest,
     adopt,
     options,
     calls,
@@ -1299,5 +1304,55 @@ describe('放弃这一代（M3-P5 设计 §3.1：本机锁被本浏览器的另�
     lease.abandon()
     expect(context.api.release).toHaveBeenCalledOnce()
     await expect(lease.release()).resolves.toBe(true)
+  })
+})
+
+describe('心跳带来的请求编辑（M3-P5 设计 §3.6）', () => {
+  const REQUEST = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requester: AMY, requestedAt: '2026-10-04T03:00:30.000Z' }
+
+  it('每次续租成功都把响应里的请求交给页面：有待回应的请求时是它，没有（取消、过期、被谢绝）时是 null', async () => {
+    const context = setup()
+    context.api.renew.mockResolvedValueOnce({ ...RENEWED, request: REQUEST })
+    await held(context)
+    await context.time.advance(10_000)
+    expect(context.onRequest).toHaveBeenLastCalledWith(REQUEST)
+    await context.time.advance(10_000)
+    expect(context.onRequest).toHaveBeenLastCalledWith(null)
+    expect(context.onRequest).toHaveBeenCalledTimes(2)
+  })
+
+  it('续租失败时不交（网络、失效）', async () => {
+    const context = setup()
+    context.api.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    await held(context)
+    await context.time.advance(10_000)
+    expect(context.onRequest).not.toHaveBeenCalled()
+  })
+
+  it('续租在途时这一代已经不用了（释放、放弃）：回来时不再交', async () => {
+    for (const end of ['release', 'abandon'] as const) {
+      const answer = deferred<RenewedEditLease>()
+      const context = setup()
+      context.api.renew.mockReturnValueOnce(answer.promise)
+      const lease = await held(context)
+      await context.time.advance(10_000)
+      if (end === 'release')
+        await lease.release()
+      else
+        lease.abandon()
+      answer.resolve({ ...RENEWED, request: REQUEST })
+      await settle()
+      expect(context.onRequest).not.toHaveBeenCalled()
+    }
+  })
+
+  it('放弃之后（交出了）：不再续租，也不发释放', async () => {
+    const context = setup()
+    const lease = await held(context)
+    lease.abandon()
+    await context.time.advance(60_000)
+    expect(context.api.renew).not.toHaveBeenCalled()
+    await lease.release()
+    expect(context.api.release).not.toHaveBeenCalled()
   })
 })

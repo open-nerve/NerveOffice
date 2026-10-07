@@ -23,7 +23,7 @@ import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
 import { ALERT, closePermissionAlert, OPENED, scene, watch } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, blockLeaseRenewals, cellOf, createSheetThroughApi, createSheetThroughUi, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { appendSheet, blockLeaseRenewals, cellOf, createSheetThroughApi, createSheetThroughUi, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -477,28 +477,35 @@ test.describe('US-M3-01 进入、退出编辑没有成功时焦点留在页头�
     await expect(backLink(page)).toBeFocused()
   })
 
-  test('US-M3-01 点"编辑"被别人占着：留在阅读，焦点还在"编辑"上；进入之后断网时按"退出编辑"、保存失败：留在编辑，焦点还在"退出编辑"上', async ({ page, anotherDevice }) => {
+  test('US-M3-01 点"编辑"被别人占着：留在阅读，焦点还在同一个按钮上（换成"请求编辑"）；进入之后断网时按"退出编辑"、保存失败：留在编辑，焦点还在"退出编辑"上', async ({ page, anotherDevice }) => {
     const lead = await createUser('focus-held-lead', '组长')
     const me = await createUser('focus-held-me', '我')
     const other = await createUser('focus-held-other', '别人')
     const space = await createTeamSpace('焦点与占用', lead, [[lead, 'admin'], [me, 'editor'], [other, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
+    // 我先打开（还没人在编辑："编辑"）；之后拦下我读编辑状态的请求：手里的编辑状态停在"没人在编辑"，仍点得到"编辑"（M3-P5 起别人在编辑时是"请求编辑"）
+    await loginThroughApi(page, me)
+    const checked = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+    await openReader(page, documentId)
+    await checked
+    await page.route('**/api/documents/*/edit-lease', async route => route.request().method() === 'GET' ? route.abort('internetdisconnected') : route.continue())
     await loginThroughApi(anotherDevice, other)
     await openAndEnterEditing(anotherDevice, documentId)
 
-    // 我：键盘按"编辑"，被占用、留在阅读（"编辑"在进入期间说正在进入），焦点还在它上面
-    await loginThroughApi(page, me)
-    await openReader(page, documentId)
+    // 我：键盘按"编辑"，被占用、留在阅读（"编辑"在进入期间说正在进入），焦点还在同一个按钮上——它换成了"请求编辑"
     const acquired = page.waitForResponse(response => new URL(response.url()).pathname === `/api/documents/${documentId}/edit-lease` && response.request().method() === 'POST')
     await enterEditButton(page).focus()
     await page.keyboard.press('Enter')
     expect((await acquired).status()).toBe(409)
     await expect(editingNotice(page)).toBeVisible()
-    await expect(enterEditButton(page)).toBeFocused()
+    await expect(requestEditButton(page)).toBeFocused()
+    await page.unroute('**/api/documents/*/edit-lease')
 
-    // 别人退出编辑；我进入编辑、改一处，断网时键盘按"退出编辑"：保存失败，留在编辑，焦点还在"退出编辑"上
+    // 别人退出编辑；我（手里的持有者还是别人）点"请求编辑"：没人在编辑，随即进入编辑；改一处，断网时键盘按"退出编辑"：保存失败，留在编辑，
+    // 焦点还在"退出编辑"上
     await exitEditing(anotherDevice)
-    await enterEditing(page)
+    await requestEditButton(page).click()
+    await waitForEditorAccess(page, 'edit')
     await typeInCell(page, 'A1', 'x')
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
     const isContent = (url: URL): boolean => url.pathname === `/api/documents/${documentId}/content`

@@ -22,6 +22,11 @@
 // 本人在本浏览器的另一个标签页、另一台设备上接手了编辑时，失效的说明照实说。本人接管（设计 §3.7）：持有者是自己时"编辑"换成"在此编辑"
 // （同一个按钮），说明区分本浏览器的另一个标签页与别处；接手进行中按钮留着、说"正在接手…"（不可用、进行中），进展在读屏状态区里说；那边没能
 // 交出时同一个按钮换成"仍在此编辑"，旁边加"取消"（点了随之消失，焦点由 useFocusRescue 交给返回链接）。
+// 请求编辑（设计 §3.6，US-M3-06）：持有者是别人、自己能编辑时"编辑"换成"请求编辑"，之后同一个按钮说"正在请求…""取消请求""正在取消…"
+// （进行中不可用、标为进行中）；等待中、结束之后（谢绝、别人已在请求、编辑权刚交给了别人、失效、空闲取消、交给了请求方）的说明都在读屏状态区里，
+// 没能请求编辑在提示条里。持有者这一侧：有人请求时页头下面一个带标题的分组（role="group"），"交出""继续编辑"与一行静态说明——不是对话框、
+// 不是 alert，出现时不移动焦点；读屏的那一句放进一直在的读屏状态区（只有这一句时视觉隐藏：分组里已经写着），请求方取消之后那里说明一句。
+// 离开编辑的过程中分组留着、按钮不可用（焦点不丢），回到阅读之后随之消失（useFocusRescue 交给返回链接）。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
@@ -29,17 +34,19 @@ import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
-import type { CopyState, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
+import type { CopyState, EditingNotice, IncomingRequest, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
+import type { EditRequestProgress } from './edit-request.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
 import { documentPagePath, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import { ApiError, describeError, isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
+import { formatClockTime } from '../../shared/lib/format.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { focusIsLost } from '../../shared/lib/use-focus-hand-off.ts'
@@ -263,15 +270,48 @@ function SaveControls({ page, save, confirming, leaving, apple }: { page: Editor
   )
 }
 
-/** 阅读时进入编辑的那个按钮的说法：进入编辑中、那边没能交出（仍在此编辑）、接手中、持有者是自己（在此编辑）、别的（编辑） */
+/**
+ * 阅读时进入编辑的那个按钮这一刻做什么（同一个按钮元素，M3-P5 设计 §3.11）：请求编辑进行中——等待时取消请求，发出、取消的过程中不做事；持有者是
+ * 自己、"在此编辑"进行中或等人选——本人接管；别人在编辑——请求编辑；没人在编辑（或者认不出是谁）——编辑。进入编辑中不做事
+ */
+type EnterAction = 'enter' | 'take-over' | 'request' | 'cancel-request' | 'none'
+
+function enterActionOf(reading: ReadingMode | undefined): EnterAction {
+  if (reading === undefined)
+    return 'none'
+  const request = reading.request
+  if (request !== undefined)
+    return request.kind === 'waiting' || request.kind === 'granted' ? 'cancel-request' : 'none'
+  if (reading.holder?.sameUser === true || reading.takeover !== undefined)
+    return 'take-over'
+  return reading.holder === undefined ? 'enter' : 'request'
+}
+
+/**
+ * 阅读时进入编辑的那个按钮的说法：进入编辑中；请求编辑的进展（正在请求、取消请求、正在取消）；那边没能交出（仍在此编辑）、接手中、持有者是自己
+ * （在此编辑）；别人在编辑（请求编辑）；别的（编辑）
+ */
 function enterLabel(reading: ReadingMode | undefined): string {
   if (reading === undefined)
     return editorMessages.mode.entering
+  switch (reading.request?.kind) {
+    case 'sending':
+      return editorMessages.mode.requesting
+    case 'cancelling':
+      return editorMessages.mode.cancellingRequest
+    case 'waiting':
+    case 'granted':
+      return editorMessages.mode.cancelRequest
+    case undefined:
+      break
+  }
   if (reading.takeover?.kind === 'failed')
     return editorMessages.mode.takeOverAnyway
   if (reading.takeover !== undefined)
     return editorMessages.mode.takingOver
-  return reading.holder?.sameUser === true ? editorMessages.mode.takeOverHere : editorMessages.mode.enter
+  if (reading.holder?.sameUser === true)
+    return editorMessages.mode.takeOverHere
+  return reading.holder === undefined ? editorMessages.mode.enter : editorMessages.mode.requestEdit
 }
 
 /**
@@ -289,8 +329,29 @@ function ReadingControls({ page, reading, session, confirming }: { page: EditorP
   const offersEdit = reading === undefined || (reading.canEdit && !reading.gone && reading.blocked === undefined && reading.damaged === undefined)
   const takeover = reading?.takeover
   const taking = takeover !== undefined && takeover.kind !== 'failed'
-  // 持有者是自己、正在接手或等人选：本人接管（"在此编辑""仍在此编辑"）
-  const takesOver = reading !== undefined && (reading.holder?.sameUser === true || takeover !== undefined)
+  // 请求编辑正在发出、正在取消（M3-P5）：按钮留着，不可用、标为进行中
+  const requestBusy = reading?.request?.kind === 'sending' || reading?.request?.kind === 'cancelling'
+  const action = enterActionOf(reading)
+  // 取消请求不受"正在载入最新的版本"影响（与重建无关）
+  const blockedByUpdate = update === 'loading' && action !== 'cancel-request'
+  const run = (): void => {
+    switch (action) {
+      case 'enter':
+        void page.enterEditing()
+        break
+      case 'take-over':
+        void page.takeOverHere()
+        break
+      case 'request':
+        void page.requestEditing()
+        break
+      case 'cancel-request':
+        void page.cancelRequest()
+        break
+      case 'none':
+        break
+    }
+  }
   return (
     <>
       {update !== 'none' && (
@@ -299,7 +360,7 @@ function ReadingControls({ page, reading, session, confirming }: { page: EditorP
         </Button>
       )}
       {offersEdit && (
-        <Button size="sm" aria-disabled={entering || taking || confirming || update === 'loading' || session !== 'active'} aria-busy={entering || taking || confirming} onClick={() => void (takesOver ? page.takeOverHere() : page.enterEditing())}>
+        <Button size="sm" aria-disabled={entering || taking || requestBusy || confirming || blockedByUpdate || session !== 'active'} aria-busy={entering || taking || requestBusy || confirming} onClick={run}>
           {enterLabel(reading)}
         </Button>
       )}
@@ -563,10 +624,20 @@ function readingFailure(notice: ReadingNotice | undefined): ReactNode {
       return editorMessages.mode.editorFailed
     case 'refresh-failed':
       return editorMessages.mode.refreshFailed(describeError(notice.error).message)
-    // 另存为副本成功、空闲释放、交给本浏览器的另一个标签页之后的说明在读屏状态区里（readingInfo）
+    case 'request-denied':
+      return editorMessages.mode.requestDenied(describeError(notice.error).message)
+    case 'request-failed':
+      return editorMessages.mode.requestFailed(describeError(notice.error).message)
+    // 另存为副本成功、空闲释放、交出之后、请求编辑结束（谢绝、别人已在请求、编辑权刚交给了别人、失效、空闲取消）的说明在读屏状态区里（readingInfo）
     case 'copied':
     case 'idle-released':
     case 'handed-over-tab':
+    case 'handed-over':
+    case 'reserved':
+    case 'request-declined':
+    case 'request-occupied':
+    case 'request-gone':
+    case 'request-idle':
     case undefined:
       return undefined
   }
@@ -608,29 +679,94 @@ function takeoverNotice(takeover: TakeoverProgress | undefined): string | undefi
 }
 
 /**
+ * 请求编辑的进展的说明（M3-P5 设计 §3.6）：等待中（取消中也是）说在等谁、他停下 2 分钟会自动交过来、可以取消（不倒计时），没取消成时另说原因；
+ * 编辑权已经可以交给本页而页面在后台时说回来就进入。正在发出时没有（照旧说谁在编辑）
+ */
+function requestNotice(progress: EditRequestProgress | undefined): ReactNode {
+  switch (progress?.kind) {
+    case 'waiting':
+    case 'cancelling': {
+      const holder = progress.holder === undefined ? undefined : <PersonName person={progress.holder} />
+      const failure = progress.kind === 'waiting' && progress.cancelFailure !== undefined ? progress.cancelFailure : undefined
+      return (
+        <>
+          <Phrase parts={editorMessages.mode.requestWaiting(holder)} />
+          {failure !== undefined && ` ${editorMessages.mode.cancelRequestFailed(describeError(failure).message)}`}
+        </>
+      )
+    }
+    case 'granted':
+      return editorMessages.mode.requestGranted
+    case 'sending':
+    case undefined:
+      return undefined
+  }
+}
+
+/**
+ * 阅读里说明请求编辑结束了、交出之后的那一句（M3-P5 设计 §3.6）：交给了请求编辑的人（持有者这一侧）；编辑权刚交给了别人（留到何时，服务端的时刻
+ * 按页面的时区写成 HH:mm）；持有者谢绝了（不能强制接管的人另说可以请空间管理员）；别人已在请求；请求失效了；空闲满 10 分钟取消了
+ */
+function requestOutcomeNotice(reading: ReadingMode): ReactNode {
+  const { notice } = reading
+  switch (notice?.kind) {
+    case 'handed-over':
+      return <Phrase parts={editorMessages.mode.handedOver(<PersonName person={notice.to} />, notice.auto)} />
+    case 'reserved':
+      return <Phrase parts={editorMessages.mode.reservedFor(<PersonName person={notice.reservedFor} />, formatClockTime(notice.reservedUntil))} />
+    case 'request-declined':
+      return <Phrase parts={editorMessages.mode.requestDeclined(<PersonName person={notice.holder} />, reading.canTakeOver)} />
+    case 'request-occupied':
+      return <Phrase parts={editorMessages.mode.requestOccupied(<PersonName person={notice.requester} />)} />
+    case 'request-gone':
+      return editorMessages.mode.requestGone
+    case 'request-idle':
+      return editorMessages.mode.requestIdle
+    case 'denied':
+    case 'enter-failed':
+    case 'enter-lost':
+    case 'editor-failed':
+    case 'refresh-failed':
+    case 'copied':
+    case 'idle-released':
+    case 'handed-over-tab':
+    case 'request-denied':
+    case 'request-failed':
+    case undefined:
+      return undefined
+  }
+}
+
+/**
  * 阅读时的说明，放进一直在的读屏状态区（规范 §2.4）：查看者看到的这一版数据不完整（M3-P4 设计 §3.12：能编辑的人与编辑器没有完整载入的
  * 说明在提示条里，DamagedNotice）、谁在编辑（能不能编辑都说：US-M3-04 的"其他人"包括查看者，编辑状态能读就能看；
  * P2 的定期检查会让它变化）、文档读不到了、有更新与正在载入（页头的按钮之外读屏也听得到，审查 A6）、另存为副本成功、
- * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能进入编辑的人另说进入编辑之后会重算并保存）、空闲释放与交给本浏览器的另一个
- * 标签页之后为什么回到了阅读、"在此编辑"的进展（M3-P5 设计 §3.7、§3.9、§3.11：不新插入 role="status"）
+ * 本页显示的这一版"公式待更新"（M3-P4 设计 §3.5 第 4 条：能进入编辑的人另说进入编辑之后会重算并保存）、空闲释放与交出之后为什么回到了阅读、
+ * "在此编辑"与请求编辑的进展、请求编辑为什么结束了（M3-P5 设计 §3.6、§3.7、§3.9、§3.11：不新插入 role="status"）
  */
 function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading === undefined)
     return undefined
   const lines: ReactNode[] = []
-  // 空闲释放、交给本浏览器的另一个标签页之后（US-M3-07、08）：为什么回到了阅读，放在最前面
+  // 空闲释放、交给本浏览器的另一个标签页之后（US-M3-07、08）：为什么回到了阅读，放在最前面；交出、请求编辑结束的说明（US-M3-06）同样
   if (reading.notice?.kind === 'idle-released')
     lines.push(<span key="idle">{editorMessages.mode.idleReleased}</span>)
   if (reading.notice?.kind === 'handed-over-tab')
     lines.push(<span key="handed-over">{editorMessages.mode.handedOverTab}</span>)
+  const outcome = requestOutcomeNotice(reading)
+  if (outcome !== undefined)
+    lines.push(<span key="request-outcome">{outcome}</span>)
   if (reading.damaged !== undefined && !reading.canEdit && damageOf(reading.damaged) === 'data')
     lines.push(<span key="damaged">{editorMessages.damaged.viewer}</span>)
-  // "在此编辑"进行中、那边没能交出（M3-P5 设计 §3.7）：说进展，代替谁在编辑的那一句（那一句说的是点了会怎样）
+  // "在此编辑"进行中、那边没能交出（M3-P5 设计 §3.7），请求编辑在等（§3.6）：说进展，代替谁在编辑的那一句（那一句说的是点了会怎样）
   const takeover = takeoverNotice(reading.takeover)
+  const waiting = requestNotice(reading.request)
   if (reading.gone)
     lines.push(<span key="gone">{editorMessages.mode.gone}</span>)
   else if (takeover !== undefined)
     lines.push(<span key="takeover">{takeover}</span>)
+  else if (waiting !== undefined)
+    lines.push(<span key="request">{waiting}</span>)
   else if (reading.holder !== undefined)
     lines.push(<span key="holder">{elsewhereNotice(reading, reading.holder)}</span>)
   if (reading.update !== 'none')
@@ -641,6 +777,54 @@ function readingInfo(reading: ReadingMode | undefined): ReactNode {
   if (reading.formulasPending && !reading.gone)
     lines.push(<span key="formulas">{editorMessages.mode.formulasPending(reading.canEdit && reading.blocked === undefined && reading.damaged === undefined)}</span>)
   return lines.length === 0 ? undefined : <>{lines.flatMap((line, index) => index === 0 ? [line] : [' ', line])}</>
+}
+
+/**
+ * 有人请求编辑时页头下面的提示（M3-P5 设计 §3.6）：带标题的分组（role="group"，aria-labelledby 指向"[人名] 请求编辑这份文档"），一行静态说明
+ * （不倒计时）与"交出""继续编辑"。不是对话框、不是 alert，不新插入 role="status"（读屏的那一句在一直在的状态区里），出现时不移动焦点。
+ * 离开编辑的过程中（leaving：交出、退出、空闲释放）、正在谢绝、正在确认会话时按钮留着、不可用（aria-disabled：焦点不丢），交出时"交出"说正在交出、
+ * 谢绝时"继续编辑"标为进行中；上一次交出、谢绝没成时说明原因（没存上的由保存的状态说明）
+ */
+function RequestPrompt({ page, request, leaving, handingOver, confirming }: { page: EditorPage, request: IncomingRequest, leaving: boolean, handingOver: boolean, confirming: boolean }) {
+  const titleId = useId()
+  const busy = leaving || request.declining || confirming
+  const failure = request.failure
+  return (
+    <div role="group" aria-labelledby={titleId} data-slot="edit-request-prompt" className="rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">
+      <p id={titleId} className="font-medium"><Phrase parts={editorMessages.editing.requestTitle(<PersonName person={request.requester} />)} /></p>
+      <p className="text-muted-foreground">{editorMessages.editing.requestNote}</p>
+      {failure !== undefined && (
+        <p>{failure.action === 'handover' ? editorMessages.editing.handOverFailed(describeError(failure.error).message) : editorMessages.editing.declineFailed(describeError(failure.error).message)}</p>
+      )}
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button size="sm" aria-disabled={busy} aria-busy={handingOver} onClick={() => void page.handOver()}>
+          {handingOver ? editorMessages.editing.handingOver : editorMessages.editing.handOver}
+        </Button>
+        <Button size="sm" variant="outline" aria-disabled={busy} aria-busy={request.declining} onClick={() => void page.keepEditing()}>
+          {editorMessages.editing.keepEditing}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 编辑时读屏状态区里的话（M3-P5 设计 §3.6、M3-P3）：有人请求编辑时的那一句（提示出现时礼貌地播一次）、请求方取消了请求、快照接近容量上限。
+ * 只有请求的那一句时视觉隐藏（分组里已经写着），别的照常显示
+ */
+function editingInfo(request: IncomingRequest | undefined, notice: EditingNotice | undefined, save: SaveView | undefined): { readonly content: ReactNode, readonly announcementOnly: boolean } {
+  const lines: ReactNode[] = []
+  if (request !== undefined)
+    lines.push(<span key="request"><Phrase parts={editorMessages.editing.requestAnnouncement(<PersonName person={request.requester} />)} /></span>)
+  if (notice !== undefined)
+    lines.push(<span key="withdrawn"><Phrase parts={editorMessages.editing.requestWithdrawn(<PersonName person={notice.requester} />)} /></span>)
+  const capacity = capacityNote(save)
+  if (capacity !== undefined)
+    lines.push(<span key="capacity">{capacity}</span>)
+  return {
+    content: lines.length === 0 ? undefined : <>{lines.flatMap((line, index) => index === 0 ? [line] : [' ', line])}</>,
+    announcementOnly: request !== undefined && lines.length === 1,
+  }
 }
 
 /** 向服务端确认会话失败（例如断网时按了保存）：说明原因，页面照旧等本人重新登录（复验 RB7） */
@@ -738,6 +922,10 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   const editing = ready !== undefined && (mode?.kind === 'editing' || mode?.kind === 'exiting') && save !== undefined ? save : undefined
   const lost = ready !== undefined && mode?.kind === 'lost' ? mode : undefined
   const failure = readingFailure(reading?.notice)
+  // 持有者这一侧在等回应的请求编辑（M3-P5）：编辑与离开编辑的过程中有；离开的是交出时提示里的"交出"说正在交出
+  const leaving = ready !== undefined && mode?.kind === 'exiting' ? mode : undefined
+  const incoming = ready !== undefined && (mode?.kind === 'editing' || mode?.kind === 'exiting') ? mode.request : undefined
+  const info = reading === undefined ? editingInfo(incoming, mode?.kind === 'editing' ? mode.notice : undefined, editing) : undefined
 
   /** 放弃本页的修改：先确认（规范 §2.4 的确认框）；放弃之后这个按钮不在了，焦点交给返回链接 */
   function confirmDiscard(): void {
@@ -776,9 +964,12 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
           </div>
         </header>
-        {/* 一直在的读屏状态区：阅读时谁在编辑、有更新等；编辑时快照接近容量上限的说明（不打断，M3-P3） */}
-        <StatusRegion className="mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">{readingInfo(reading) ?? capacityNote(editing)}</StatusRegion>
+        {/* 一直在的读屏状态区：阅读时谁在编辑、有更新、请求编辑的进展等；编辑时有人请求编辑的那一句（只有它时视觉隐藏）、请求方取消了、
+            快照接近容量上限的说明（不打断，M3-P3、M3-P5） */}
+        <StatusRegion className={info?.announcementOnly === true ? 'sr-only' : 'mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground'}>{readingInfo(reading) ?? info?.content}</StatusRegion>
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
+          {/* 有人请求编辑（M3-P5）：页头下面的提示，不移动焦点、不挂屏障 */}
+          {incoming !== undefined && <RequestPrompt page={page} request={incoming} leaving={leaving !== undefined} handingOver={leaving?.cause === 'handover-request'} confirming={view.confirmingSession} />}
           {/* 一直渲染（没有问题时什么也不画）：重试成功、说明连同"重试"一起消失时它才能把焦点交给返回链接（DEF-040） */}
           <DetailRefreshProblem
             query={{ isRefetchError: view.detailProblem !== undefined, isRefetching: view.detailRefreshing, error: view.detailProblem, refetch: page.refreshDetail }}

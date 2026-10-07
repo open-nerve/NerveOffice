@@ -305,6 +305,17 @@ export async function editLeaseTakeover(documentId: string): Promise<string | nu
   return withDatabase(async client => (await client.query<{ takeover: string | null }>('SELECT takeover FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.takeover)
 }
 
+/**
+ * 这份文档的编辑租约交出之后的保留（M3-P5：交给了谁、留到何时）；没有保留时为 undefined。核对交出确实写进了库、页面说的"留到 HH:mm"
+ * 是服务端的那个时刻
+ */
+export async function editLeaseReservation(documentId: string): Promise<{ readonly reservedFor: string, readonly reservedUntil: Date } | undefined> {
+  return withDatabase(async (client) => {
+    const row = (await client.query<{ reserved_for: string | null, reserved_until: Date | null }>('SELECT reserved_for, reserved_until FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]
+    return row?.reserved_for == null || row.reserved_until === null ? undefined : { reservedFor: row.reserved_for, reservedUntil: row.reserved_until }
+  })
+}
+
 /** 这份文档现在的编辑租约是第几代（每次申请加一）；从没有过租约时为 undefined。核对页面确实重新申请过（续上） */
 export async function editLeaseEpoch(documentId: string): Promise<number | undefined> {
   return withDatabase(async client => (await client.query<{ write_epoch: number }>('SELECT write_epoch FROM document_edit_leases WHERE document_id = $1', [documentId])).rows[0]?.write_epoch)
