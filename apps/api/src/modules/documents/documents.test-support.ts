@@ -13,14 +13,14 @@ import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-gr
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
 import type { DocumentSaveReceiptsRepository, ReceiptRow } from './document-save-receipts.repository.ts'
 import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow, WriteEnvelope } from './documents.repository.ts'
-import type { EditLeaseRow, EditLeasesRepository, NewEditLease, ObservedEditLease, RevocableEditLease } from './edit-leases.repository.ts'
+import type { EditLeaseRow, EditLeasesRepository, NewEditLease, ObservedEditLease, Requester, RevocableEditLease, WrittenRequest, WrittenReservation } from './edit-leases.repository.ts'
 import type { CreatedFolderRow, FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SnapshotInspector } from './snapshot-inspector.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
 import type { NewTrashEntry, TrashEntriesRepository, TrashEntryRow } from './trash-entries.repository.ts'
 import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
-import { DOCUMENT_PROFILE_OF, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, PLATFORM_FORMAT_VERSION, TRASH_RETENTION_DAYS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { DOCUMENT_PROFILE_OF, EDIT_HANDOVER_RESERVE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_REQUEST_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, PLATFORM_FORMAT_VERSION, TRASH_RETENTION_DAYS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { vi } from 'vitest'
 import { parseAuditEvent } from '../audit/index.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
@@ -647,6 +647,8 @@ export class FakeStore {
 
   /** 编辑租约（M3-P1）：文档 id → 租约行 */
   readonly leaseRecords = new Map<string, EditLeaseRow>()
+  /** 假仓储发出的请求编辑的序号（M3-P5）：新请求的标识按它生成，用例据此区分"续期（标识不变）"与"换成新的请求" */
+  requestSequence = 0
   /**
    * 假仓储里数据库的 now()（事务开始的时刻）：读出的租约行带着它，写下的时间也是它。
    * 用例改它模拟时间过去，不等真实的时间（与集成测试改写租约行的时间同一个意思）
@@ -725,6 +727,34 @@ export class FakeStore {
         if (row !== undefined && row.endedAt === null)
           this.leaseRecords.set(documentId, { ...row, endedAt: this.databaseNow, endReason: reason })
       }
+    }),
+    /** 请求编辑（M3-P5）：新的请求——新的标识（按序号），发出是 now，有效期 now 加 10 分钟，清掉谢绝 */
+    putRequest: vi.fn(async (documentId: string, requester: Requester): Promise<WrittenRequest> => {
+      this.requestSequence += 1
+      const id = `0199a2c4-0000-7000-8000-${String(this.requestSequence).padStart(12, '0')}`
+      const row = this.updateLease(documentId, { requestId: id, requestedBy: requester.userId, requestSessionId: requester.sessionId, requestedAt: this.databaseNow, requestExpiresAt: this.requestExpiryFrom(this.databaseNow), requestDeclinedAt: null })
+      return this.writtenRequestOf(row)
+    }),
+    /** 续期：有效期推到 now 加 10 分钟 */
+    extendRequest: vi.fn(async (documentId: string): Promise<WrittenRequest> =>
+      this.writtenRequestOf(this.updateLease(documentId, { requestExpiresAt: this.requestExpiryFrom(this.databaseNow) }))),
+    clearRequest: vi.fn(async (documentId: string) => {
+      this.updateLease(documentId, { requestId: null, requestedBy: null, requestSessionId: null, requestedAt: null, requestExpiresAt: null, requestDeclinedAt: null })
+    }),
+    clearReservation: vi.fn(async (documentId: string) => {
+      this.updateLease(documentId, { reservedFor: null, reservedUntil: null })
+    }),
+    declineRequest: vi.fn(async (documentId: string) => {
+      this.updateLease(documentId, { requestDeclinedAt: this.databaseNow })
+    }),
+    /** 交出：明确结束（handed_over），保留给原来的请求方 2 分钟，清掉请求 */
+    handOver: vi.fn(async (documentId: string): Promise<WrittenReservation> => {
+      const requester = this.leaseRecords.get(documentId)?.requestedBy
+      if (requester === undefined || requester === null)
+        throw new Error(`交出时没有请求：${documentId}`)
+      const reservation = { reservedFor: requester, reservedUntil: new Date(this.databaseNow.getTime() + EDIT_HANDOVER_RESERVE_SECONDS * 1000) }
+      this.updateLease(documentId, { endedAt: this.databaseNow, endReason: 'handed_over', ...reservation, requestId: null, requestedBy: null, requestSessionId: null, requestedAt: null, requestExpiresAt: null, requestDeclinedAt: null })
+      return reservation
     }),
     /**
      * 收回写入权的范围涉及的、没有明确结束而且按时间还活着（没到期、空闲不满 12 分钟，M3-P5）的租约（按文档 id 排序），带文档现在的
@@ -824,6 +854,28 @@ export class FakeStore {
   /** 到期的时刻：now 加有效期 */
   private expiryFrom(now: Date): Date {
     return new Date(now.getTime() + EDIT_LEASE_TTL_SECONDS * 1000)
+  }
+
+  /** 请求编辑的有效期：now 加 10 分钟（M3-P5） */
+  private requestExpiryFrom(now: Date): Date {
+    return new Date(now.getTime() + EDIT_REQUEST_TTL_SECONDS * 1000)
+  }
+
+  /** 改租约行的几列并返回新的行（没有这一行时是用例摆错了） */
+  private updateLease(documentId: string, changes: Partial<EditLeaseRow>): EditLeaseRow {
+    const row = this.leaseRecords.get(documentId)
+    if (row === undefined)
+      throw new Error(`${documentId} 没有租约`)
+    const next = { ...row, ...changes }
+    this.leaseRecords.set(documentId, next)
+    return next
+  }
+
+  /** 写下请求之后槽里的请求（与真实仓储一样，槽空着是意外） */
+  private writtenRequestOf(row: EditLeaseRow): WrittenRequest {
+    if (row.requestId === null || row.requestedAt === null || row.requestExpiresAt === null)
+      throw new Error(`写下请求编辑之后槽是空的：${row.documentId}`)
+    return { id: row.requestId, requestedAt: row.requestedAt, expiresAt: row.requestExpiresAt }
   }
 
   /** 改一份文档的几列并返回新的行 */

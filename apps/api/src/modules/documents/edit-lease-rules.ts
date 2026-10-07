@@ -10,12 +10,12 @@
 //   第 6、7 条要查数据库（各一两条语句），事实由调用方以函数的形式给出，规则决定问不问、先问哪个，同一项事实至多问一次；
 // - 申请怎样对待占着的那一代（claimOf）：普通的申请、页面自己的重试、本人接管或强制接管、被占用；
 // - 当前的租约失效的原因（currentLeaseLoss）：七条有效条件本身；
-// - 请求带的租约（requestLeaseLoss，心跳与保存，M3-P5 S4 的交出、谢绝同样用它）：持有者自己的请求。先要令牌对得上——对不上时是被接管
+// - 请求带的租约（requestLeaseLoss，心跳与保存，M3-P5 的交出、谢绝同样用它）：持有者自己的请求。先要令牌对得上——对不上时是被接管
 //   还是被换掉（supersededLoss）；第 6 条换成"请求的登录、标签页就是租约绑定的那一个"——换过令牌的页面拿的是新的登录，按 session 失效。
 //   "这次登录现在仍然有效"不在这里判断：调用方在事务里、锁下另查一次（edit-lease.service.ts 的 requireActiveLogin，M3-P1 审查 A1），
 //   失效时回 SESSION_EXPIRED；
 // 另有申请时的重试（isSamePage：同一个登录、同一个标签页）、释放（releasableBy：令牌对得上、没有明确结束、调用者是持有者本人——
-// 不要求同一个登录，也不核对登录）与交出之后的保留（reservedFor，S4 的申请与请求编辑用它）。
+// 不要求同一个登录，也不核对登录）与交出之后的保留（reservationOf：申请、请求编辑与编辑状态用它）。
 import type { EditLeaseLostReason, EditTakeoverMode } from '@nerve-office/contracts'
 import type { ObservedEditLease } from './edit-leases.repository.ts'
 import { EDIT_INTERRUPTION_NOTICE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
@@ -267,13 +267,19 @@ export function releasableBy(lease: ObservedEditLease | undefined, token: string
   return lease !== undefined && token !== undefined && lease.endReason === null && lease.holderId === userId && editLeaseTokenMatches(token, lease.tokenDigest)
 }
 
+/** 交出之后的保留（M3-P5 设计 §3.6）：留给谁、留到何时 */
+export interface LeaseReservation {
+  readonly reservedFor: string
+  readonly reservedUntil: Date
+}
+
 /**
- * 交出之后的保留还算不算数、留给了谁（M3-P5 设计 §3.6；S4 的申请与请求编辑据此回答）：有保留、没过期（恰好到期算过期，
+ * 交出之后的保留还算不算数（M3-P5 设计 §3.6；申请、请求编辑与编辑状态据此回答）：有保留、没过期（恰好到期算过期，
  * 与租约的到期同一个边界）、被保留的人仍能编辑——不算数时为 undefined。被保留的人能不能编辑要查数据库，只在前两条都满足时才问。
  * 保留按人、不按页面：被保留的人用哪个标签页、哪次登录都行，所以不看登录
  */
-export async function reservedFor(lease: ObservedEditLease | undefined, canEdit: (userId: string) => Promise<boolean>): Promise<string | undefined> {
+export async function reservationOf(lease: ObservedEditLease | undefined, canEdit: (userId: string) => Promise<boolean>): Promise<LeaseReservation | undefined> {
   if (lease === undefined || lease.reservedFor === null || lease.reservedUntil === null || lease.reservedUntil.getTime() <= lease.now.getTime())
     return undefined
-  return await canEdit(lease.reservedFor) ? lease.reservedFor : undefined
+  return await canEdit(lease.reservedFor) ? { reservedFor: lease.reservedFor, reservedUntil: lease.reservedUntil } : undefined
 }
