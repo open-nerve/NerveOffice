@@ -214,7 +214,7 @@ function heldLease(lease: AcquiredEditLease, clientInstanceId: string): HeldLeas
   return { token: lease.token, writeEpoch: lease.writeEpoch, clientInstanceId }
 }
 
-/** 这份文档的租约行上记下 requester 的待回应的请求编辑（S4 才有接口，这里直接写库摆好） */
+/** 这份文档的租约行上记下 requester 的待回应的请求编辑（直接写库摆好，只核对这几列的沿用与清空；经接口的请求编辑见 lease-requests.test.ts） */
 async function putRequest(documentId: string, requester: TestAccount): Promise<void> {
   await database.query(async client => client.query(
     `UPDATE document_edit_leases SET request_id = gen_random_uuid(), requested_by = $2, request_session_id = gen_random_uuid(),

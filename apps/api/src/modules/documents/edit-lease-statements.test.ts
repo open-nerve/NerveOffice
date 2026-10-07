@@ -1,14 +1,15 @@
 // 编辑租约的仓储发出的语句（M3-P1 设计 §3.3、§3.4.6）：不连数据库（recorded-statements.test-support.ts），核对语句的形状——
 // 时间都取数据库的 now()，读出的行带着同一条语句里的 now()，加锁的对象与顺序，收回写入权的范围条件与 coversWriter 逐种同义、
 // 只找按时间还活着的（M3-P5 设计 §3.5，边界与有效条件逐一相同）；改写为新的一代时请求、保留与接管标记的沿用与清空（§3.6、§3.7），
-// 接管时直接写下接管标记（§3.7、§3.8），最后活动按带来的空闲往前推、续租时只前进。这些语句在真实数据库上的行为（并发与交错、时间、约束）
-// 由集成测试覆盖（tests/integration 的 documents/edit-leases.test.ts、lease-takeover.test.ts、lease-revocation.test.ts、lease-revocation-locks.test.ts）。
+// 接管时直接写下接管标记（§3.7、§3.8），最后活动按带来的空闲往前推、续租时只前进；请求编辑的发出、续期、取消、谢绝与交出（§3.6）只改
+// 请求、保留与"结束"几列（§3.12：保存不加锁读租约行的论证靠它）。这些语句在真实数据库上的行为（并发与交错、时间、约束）由集成测试覆盖
+// （tests/integration 的 documents/edit-leases.test.ts、lease-takeover.test.ts、lease-requests.test.ts、lease-revocation.test.ts 与几个 *-locks.test.ts）。
 import type { Transaction } from '../database/index.ts'
 import type { NewEditLease } from './edit-leases.repository.ts'
 import type { RecordedStatement } from './recorded-statements.test-support.ts'
 import type { DocumentWriter, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
-import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_RESERVE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_REQUEST_TTL_SECONDS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { DocumentsRepository } from './documents.repository.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
@@ -179,6 +180,74 @@ describe('续租与明确结束', () => {
     expect(statement.text).toBe('update "document_edit_leases" set "ended_at" = now(), "end_reason" = $1 where ("document_edit_leases"."document_id" = ANY($2::uuid[]) and "document_edit_leases"."ended_at" is null)')
     expect(statement.values).toEqual(['revoked', [DOCUMENT, OTHER_DOCUMENT]])
     expect(await statementsOf(async (leases, transaction) => leases.endAll([], 'revoked', transaction))).toEqual([])
+  })
+})
+
+describe('M3-P5 请求编辑与交出（设计 §3.6、§3.12）：按主键一条语句（调用方已锁住租约行），时间是 now()，只改请求、保留与"结束"这几列', () => {
+  /** 一条 update 的 SET 里赋值的列（按出现的顺序） */
+  function assignedColumns(text: string): string[] {
+    const set = text.slice(text.indexOf(' set ') + ' set '.length, text.indexOf(' where '))
+    return [...set.matchAll(/(?:^|, )"([a-z_]+)" = /g)].map(match => match[1] ?? '')
+  }
+
+  /** 保存判断有效看的那几列（与持有者、绑定、令牌、代次有关的）：不锁文档行的写路径都不改它们（仓储的类注释） */
+  const GENERATION_COLUMNS = ['holder_id', 'session_id', 'client_instance_id', 'token_digest', 'write_epoch', 'acquired_at', 'renewed_at', 'expires_at', 'last_active_at']
+
+  it('发出新的请求：标识由数据库生成（uuidv7()），请求方与他这次登录是参数，发出是 now()，有效期 now() 加 10 分钟，谢绝清空；按主键，返回标识、发出与有效期', async () => {
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.putRequest(DOCUMENT, { userId: BEN, sessionId: SESSION }, transaction))
+    const matched = /^update "document_edit_leases" set "request_id" = uuidv7\(\), "requested_by" = \$(\d+), "request_session_id" = \$(\d+), "requested_at" = now\(\), "request_expires_at" = now\(\) \+ make_interval\(secs => \$(\d+)\), "request_declined_at" = \$(\d+) where "document_edit_leases"\."document_id" = \$(\d+) returning "request_id", "requested_at", "request_expires_at"$/.exec(statement.text)
+    expect(matched).not.toBeNull()
+    expect(matched?.slice(1).map(placeholder => parameter(statement, placeholder))).toEqual([BEN, SESSION, EDIT_REQUEST_TTL_SECONDS, null, DOCUMENT])
+  })
+
+  it('续期：只把有效期推到 now() 加 10 分钟（标识、请求方、登录、发出的时刻不变）', async () => {
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.extendRequest(DOCUMENT, transaction))
+    expect(statement.text).toBe('update "document_edit_leases" set "request_expires_at" = now() + make_interval(secs => $1) where "document_edit_leases"."document_id" = $2 returning "request_id", "requested_at", "request_expires_at"')
+    expect(statement.values).toEqual([EDIT_REQUEST_TTL_SECONDS, DOCUMENT])
+  })
+
+  it('取消：请求的六列都清空；清掉保留：保留的两列清空，明确结束（handed_over）不动', async () => {
+    const cleared = await onlyStatementOf(async (leases, transaction) => leases.clearRequest(DOCUMENT, transaction))
+    expect(assignedColumns(cleared.text)).toEqual(REQUEST_COLUMNS)
+    expect(cleared.values).toEqual([...REQUEST_COLUMNS.map(() => null), DOCUMENT])
+    expect(cleared.text.endsWith('where "document_edit_leases"."document_id" = $7')).toBe(true)
+    const unreserved = await onlyStatementOf(async (leases, transaction) => leases.clearReservation(DOCUMENT, transaction))
+    expect(unreserved.text).toBe('update "document_edit_leases" set "reserved_for" = $1, "reserved_until" = $2 where "document_edit_leases"."document_id" = $3')
+    expect(unreserved.values).toEqual([null, null, DOCUMENT])
+  })
+
+  it('谢绝：只记下谢绝的时刻 now()', async () => {
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.declineRequest(DOCUMENT, transaction))
+    expect(statement.text).toBe('update "document_edit_leases" set "request_declined_at" = now() where "document_edit_leases"."document_id" = $1')
+    expect(statement.values).toEqual([DOCUMENT])
+  })
+
+  it('交出：一条语句——明确结束（now()、handed_over），保留给改之前的请求方（requested_by 列本身，不是参数）到 now() 加 2 分钟，请求的六列清空；返回保留', async () => {
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.handOver(DOCUMENT, transaction))
+    expect(assignedColumns(statement.text)).toEqual(['ended_at', 'end_reason', ...REQUEST_COLUMNS, ...RESERVATION_COLUMNS])
+    expect(statement.text).toContain('"ended_at" = now(), "end_reason" = $1, ')
+    expect(statement.text).toContain(', "reserved_for" = "document_edit_leases"."requested_by", "reserved_until" = now() + make_interval(secs => $8) where "document_edit_leases"."document_id" = $9 returning "reserved_for", "reserved_until"')
+    expect(statement.values).toEqual(['handed_over', ...REQUEST_COLUMNS.map(() => null), EDIT_HANDOVER_RESERVE_SECONDS, DOCUMENT])
+  })
+
+  it('这几条都不改持有者、登录、标签页、令牌摘要、代次与续租的几项时间（保存不加锁读租约行，靠的就是这一条），也都不加锁、按主键', async () => {
+    const statements = await statementsOf(async (leases, transaction) => {
+      for (const call of [
+        async () => leases.putRequest(DOCUMENT, { userId: BEN, sessionId: SESSION }, transaction),
+        async () => leases.extendRequest(DOCUMENT, transaction),
+        async () => leases.clearRequest(DOCUMENT, transaction),
+        async () => leases.clearReservation(DOCUMENT, transaction),
+        async () => leases.declineRequest(DOCUMENT, transaction),
+        async () => leases.handOver(DOCUMENT, transaction),
+      ])
+        await call().catch(() => undefined)
+    })
+    expect(statements).toHaveLength(6)
+    for (const statement of statements) {
+      expect(assignedColumns(statement.text).filter(column => GENERATION_COLUMNS.includes(column)), statement.text).toEqual([])
+      expect(statement.text, statement.text).not.toContain('for update')
+      expect(whereOf(statement.text).replace(/ returning .*$/, ''), statement.text).toMatch(/^"document_edit_leases"\."document_id" = \$\d+$/)
+    }
   })
 })
 

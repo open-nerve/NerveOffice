@@ -5,7 +5,7 @@ import type { Buffer } from 'node:buffer'
 import type { EditLeaseEndReason, EditLeaseTakeover } from '../../db/schema/documents/index.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import type { WriteAccessScope } from './write-access.ts'
-import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_RESERVE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_REQUEST_TTL_SECONDS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, eq, gt, isNull, sql } from 'drizzle-orm'
 import { documentEditLeases, documents } from '../../db/schema/documents/index.ts'
@@ -83,6 +83,25 @@ export interface NewEditLease {
   readonly takenOver: TakeoverMarker | undefined
 }
 
+/** 请求方（M3-P5 设计 §3.6）：请求绑定他与他这次登录 */
+export interface Requester {
+  readonly userId: string
+  readonly sessionId: string
+}
+
+/** 发出或续期之后槽里的请求：标识、发出的时刻与有效期（续期往后推的那一个） */
+export interface WrittenRequest {
+  readonly id: string
+  readonly requestedAt: Date
+  readonly expiresAt: Date
+}
+
+/** 交出之后写下的保留：留给谁（原来的请求方）、留到何时 */
+export interface WrittenReservation {
+  readonly reservedFor: string
+  readonly reservedUntil: Date
+}
+
 /**
  * 收回写入权时锁住的一条租约，连同那份文档现在的几项属性（锁住文档行之后读的，看得到调用方刚做的改动）：
  * 所在的空间（对应 coversWriter 的 DocumentWriter：持有者、文档、空间）、创建人（与空间一起是访问策略判断用的 AccessTarget）、
@@ -123,6 +142,28 @@ const COLUMNS = {
 
 /** 到期的时刻：数据库的 now() 加上有效期（申请与每次续租） */
 const EXPIRES_AT = sql`now() + make_interval(secs => ${EDIT_LEASE_TTL_SECONDS})`
+
+/**
+ * 请求编辑的有效期（M3-P5 设计 §3.6）：数据库的 now() 加上它（发出与每次续期）。表上"有效期晚于发出"的约束在续期时比较的是
+ * 两个事务的 now()（发出的时刻是更早那个事务写下的），中间隔着这十分钟，只有数据库的时钟往回调超过十分钟才可能不成立（表定义的注释）
+ */
+const REQUEST_EXPIRES_AT = sql`now() + make_interval(secs => ${EDIT_REQUEST_TTL_SECONDS})`
+
+/** 交出之后的保留到何时（M3-P5 设计 §3.6）：数据库的 now() 加上保留的时长 */
+const RESERVED_UNTIL = sql`now() + make_interval(secs => ${EDIT_HANDOVER_RESERVE_SECONDS})`
+
+/** 槽里的请求写下之后读回的三列 */
+const WRITTEN_REQUEST = { id: l.requestId, requestedAt: l.requestedAt, expiresAt: l.requestExpiresAt }
+
+/** 请求编辑的六列都清空（取消、交出时请求转成保留） */
+const NO_REQUEST = { requestId: null, requestedBy: null, requestSessionId: null, requestedAt: null, requestExpiresAt: null, requestDeclinedAt: null }
+
+/** 写下请求之后读回的槽：几列都有值（表上的约束让请求的五列同时有值），没有时是数据不一致，按意外错误处理 */
+function writtenRequestOf(row: { readonly id: string | null, readonly requestedAt: Date | null, readonly expiresAt: Date | null } | undefined, documentId: string): WrittenRequest {
+  if (row === undefined || row.id === null || row.requestedAt === null || row.expiresAt === null)
+    throw new Error(`写下请求编辑之后槽是空的：${documentId}`)
+  return { id: row.id, requestedAt: row.requestedAt, expiresAt: row.expiresAt }
+}
 
 /**
  * 按时间还活着（M3-P5 设计 §3.5，DEF-044）：没到期、空闲不满 12 分钟——与有效条件的第 4、5 条（edit-lease-rules.ts）边界逐一相同，
@@ -169,11 +210,15 @@ function writersIn(scope: WriteAccessScope): SQL | undefined {
 /**
  * 编辑租约（M3-P1 设计 §3.3）：只有它读写 document_edit_leases（一表一仓储，规范 §1.2）。只在 documents 模块里用，
  * 不从模块的公开入口转出（lint 拦下）。时间都写数据库的 now()，读出的行带上同一条语句里的 now()（ObservedEditLease）。
- * 锁的顺序是文档行（FOR UPDATE）→ 租约行（P1 设计 §3.4.6）：申请与收回写入权先锁文档行、再锁租约行并改写它；
- * 心跳与释放只锁租约行；保存在文档行的锁下读它、不加锁。不加锁读是安全的，但理由要说全（M3-P1 审查 A7）：
- * 换成新的一代（申请）与收回（撤权）都要先拿文档行的锁，保存持着它，所以这两种改写不会夹在保存的读与提交之间；
- * 心跳与释放不锁文档行也会改这一行，但它们只续期或结束——与保存交错时，保存按"读到的那一刻"线性化（读到有效就是续期之前或结束之前）。
- * 以后要在不锁文档行的路上改别的列（例如持有者、代次）之前，先重新论证这一条
+ * 锁的顺序是文档行（FOR UPDATE）→ 租约行（P1 设计 §3.4.6）：申请（含本人接管、强制接管）与收回写入权先锁文档行、再锁租约行并改写它；
+ * 心跳与释放只锁租约行，M3-P5 的请求编辑（发出、续期、取消、谢绝）与交出同样只锁租约行（设计 §3.12）；保存在文档行的锁下读它、不加锁。
+ * 不加锁读是安全的，但理由要说全（M3-P1 审查 A7；M3-P5 设计 §3.12 加了不锁文档行的写路径之后重新论证过）：
+ * - 换成新的一代（申请、接管）与收回（撤权）都要先拿文档行的锁，保存持着它，所以这几种改写不会夹在保存的读与提交之间；
+ * - 不锁文档行的写路径都不改持有者、登录、标签页、令牌摘要与代次（保存判断有效看的那几列）：心跳只续期（续租、到期、最后活动），
+ *   释放与交出只结束（交出另写保留、清掉请求：结束的两列、保留的两列、请求的六列）——与保存交错时，保存按"读到的那一刻"线性化
+ *   （读到有效就是续期之前或结束之前；页面交出之前先存上，P4 的 flush，不靠这一条）；请求的发出、续期、取消与谢绝只改请求的六列，
+ *   取消另清保留的两列，保存不读这些列，有效条件也不看它们，与保存怎样交错都不影响保存的判断。
+ * 以后要在不锁文档行的路上改别的列（例如持有者、代次）、或者让保存读请求与保留之前，先重新论证这一条
  */
 @Injectable()
 export class EditLeasesRepository {
@@ -279,6 +324,74 @@ export class EditLeasesRepository {
       .where(and(eq(l.documentId, documentId), isNull(l.endedAt)))
       .returning({ documentId: l.documentId })
     return rows.length > 0
+  }
+
+  /**
+   * 写下一个新的请求编辑（M3-P5 设计 §3.6，调用方已锁住租约行，并判断过别人占着这份文档、槽里没有待回应的请求）：
+   * 新的标识（数据库生成）、请求方与他这次登录、发出的时刻 now()、有效期 now() 加 10 分钟，清掉谢绝——换掉槽里已谢绝、已失效的请求。
+   * 只改请求的六列（为什么不锁文档行也安全见类的注释）。返回写下的请求
+   */
+  async putRequest(documentId: string, requester: Requester, transaction: Transaction): Promise<WrittenRequest> {
+    const [row] = await executorOf(this.db, transaction)
+      .update(l)
+      .set({
+        requestId: sql`uuidv7()`,
+        requestedBy: requester.userId,
+        requestSessionId: requester.sessionId,
+        requestedAt: sql`now()`,
+        requestExpiresAt: REQUEST_EXPIRES_AT,
+        requestDeclinedAt: null,
+      })
+      .where(eq(l.documentId, documentId))
+      .returning(WRITTEN_REQUEST)
+    return writtenRequestOf(row, documentId)
+  }
+
+  /**
+   * 请求方续期（调用方已锁住租约行，并判断过槽里是他待回应的请求）：有效期推到 now() 加 10 分钟，标识、请求方、登录与发出的时刻不变。
+   * 返回续期之后的请求
+   */
+  async extendRequest(documentId: string, transaction: Transaction): Promise<WrittenRequest> {
+    const [row] = await executorOf(this.db, transaction)
+      .update(l)
+      .set({ requestExpiresAt: REQUEST_EXPIRES_AT })
+      .where(eq(l.documentId, documentId))
+      .returning(WRITTEN_REQUEST)
+    return writtenRequestOf(row, documentId)
+  }
+
+  /** 清掉槽里的请求（请求方取消，调用方已锁住租约行并判断过是他的请求）：请求的六列都清空 */
+  async clearRequest(documentId: string, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).update(l).set(NO_REQUEST).where(eq(l.documentId, documentId))
+  }
+
+  /**
+   * 清掉交出之后的保留（被保留的人取消，调用方已锁住租约行并判断过保留给的是他）：保留的两列清空，明确结束（handed_over）留着——
+   * 这一代确实交出了，别人随即能申请
+   */
+  async clearReservation(documentId: string, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).update(l).set({ reservedFor: null, reservedUntil: null }).where(eq(l.documentId, documentId))
+  }
+
+  /** 持有者谢绝了槽里的请求（调用方已锁住租约行，并判断过租约有效、请求的标识对得上、还没谢绝）：记下谢绝的时刻 now() */
+  async declineRequest(documentId: string, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).update(l).set({ requestDeclinedAt: sql`now()` }).where(eq(l.documentId, documentId))
+  }
+
+  /**
+   * 交出（M3-P5 设计 §3.6，调用方已锁住租约行，并判断过租约有效、槽里是对得上的待回应的请求）：一条语句里记下明确结束（handed_over，
+   * 时间是 now()），把请求转成保留（留给请求方，到 now() 加 2 分钟），清掉请求的六列——表上"有保留时结束原因是 handed_over"
+   * "请求方不是持有者"的约束都在这一条语句之后成立。SET 里的列取的都是改之前的值：保留给的就是原来的请求方。返回写下的保留
+   */
+  async handOver(documentId: string, transaction: Transaction): Promise<WrittenReservation> {
+    const [row] = await executorOf(this.db, transaction)
+      .update(l)
+      .set({ endedAt: sql`now()`, endReason: 'handed_over', reservedFor: sql`${l.requestedBy}`, reservedUntil: RESERVED_UNTIL, ...NO_REQUEST })
+      .where(eq(l.documentId, documentId))
+      .returning({ reservedFor: l.reservedFor, reservedUntil: l.reservedUntil })
+    if (row === undefined || row.reservedFor === null || row.reservedUntil === null)
+      throw new Error(`交出之后没有保留：${documentId}`)
+    return { reservedFor: row.reservedFor, reservedUntil: row.reservedUntil }
   }
 
   /**

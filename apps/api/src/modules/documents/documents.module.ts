@@ -26,6 +26,7 @@ import { DocumentsRepository } from './documents.repository.ts'
 import { DocumentsService } from './documents.service.ts'
 import { EditLeaseService } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
+import { EditRequestService } from './edit-request.service.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { FoldersService } from './folders.service.ts'
 import { LeaseWriteAccessRevocation } from './lease-write-access.ts'
@@ -63,6 +64,8 @@ import { WriteAccessRevocation } from './write-access.ts'
     // 编辑租约（M3-P1）：仓储只在本模块里用；申请、心跳、释放与编辑状态的服务给 workspace 的接口编排
     EditLeasesRepository,
     EditLeaseService,
+    // 请求编辑与交出（M3-P5）：发出、续期、取消、谢绝与交出的服务，同样给 workspace 的接口编排
+    EditRequestService,
     DocumentsService,
     DocumentCreationService,
     DocumentContentService,
@@ -102,10 +105,11 @@ import { WriteAccessRevocation } from './write-access.ts'
   // 文件夹、回收站与搜索的接口在 workspace（M2-P4 设计 §3.1），数据与规则在这里；
   // 分享的接口与写入的编排、"与我共享"在 workspace（要锁被授权人的账户行、补人名，M2-P5 设计 §3.1），授权的规则与数据在这里；
   // 到期的自动清理与修订记录、回执的保留期清理只给 jobs（M2-P4 设计 §3.1，M3-P3 设计 §3.9）；
-  // 编辑权的接口在 workspace（要补持有者的人名，M3-P1 设计 §3.1），租约的规则与数据在这里
+  // 编辑权的接口在 workspace（要补持有者的人名，M3-P1 设计 §3.1），租约的规则与数据在这里；请求编辑与交出（M3-P5）同样
   exports: [
     DocumentAccessPolicy,
     EditLeaseService,
+    EditRequestService,
     WriteAccessRevocation,
     DocumentSearchService,
     DocumentTransferService,

@@ -3,6 +3,7 @@
 import type { ClientFormat, EditTakeoverMode } from '@nerve-office/contracts'
 import type { AppError } from '../../shared/errors/app-error.ts'
 import type { EditingActor } from './edit-lease.service.ts'
+import type { EditLeaseRow } from './edit-leases.repository.ts'
 import { Buffer } from 'node:buffer'
 import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editLeaseTokenSchema } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
@@ -708,7 +709,7 @@ describe('EditLeaseService.status', () => {
 
   it('没有租约、租约无效（到期、登录失效、没了编辑权）：editor 为空；异常结束的（到期、登录失效）带上提醒（M3-P5），没了编辑权的不带', async () => {
     const { service, document } = setup()
-    expect(await service.status(BEN, document.id, TRANSACTION)).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, interruption: undefined })
+    expect(await service.status(BEN, document.id, TRANSACTION)).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: undefined })
     for (const [name, invalidate, notice] of [
       ['到期', ({ store }: Setup) => later(store, EDIT_LEASE_TTL_SECONDS * SECOND), true],
       ['登录失效', ({ store }: Setup) => void store.activeSessions.delete(ALICE_SESSION), true],
@@ -718,7 +719,7 @@ describe('EditLeaseService.status', () => {
       await acquired(setupResult)
       const renewedAt = setupResult.store.leaseRecords.get(setupResult.document.id)?.renewedAt
       invalidate(setupResult)
-      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION), name).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false } : undefined })
+      expect(await setupResult.service.status(BEN, setupResult.document.id, TRANSACTION), name).toStrictEqual({ revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: notice ? { holderId: ALICE, endedAt: renewedAt, sameUser: false } : undefined })
     }
   })
 
@@ -879,5 +880,153 @@ describe('"公式待更新"（M3-P3 设计 §3.8）：申请的结果与编辑�
     store.documents.set(document.id, { ...store.documents.get(document.id) ?? document, formulasPending: true })
     expect(await service.acquire(AMY, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION)).toMatchObject({ kind: 'acquired', formulasPending: true })
     expect((await service.status(BEN, document.id, TRANSACTION)).formulasPending).toBe(true)
+  })
+})
+
+describe('M3-P5 请求编辑与交出之后的保留（设计 §3.3、§3.6）：申请判断保留，被占用的详情、心跳与编辑状态带上待回应的请求', () => {
+  const CAROL_SESSION = '0199a2c4-0000-7000-8000-0000000000e4'
+  const BOB_OTHER_SESSION = '0199a2c4-0000-7000-8000-0000000000e9'
+  const CAT: EditingActor = { userId: CAROL, sessionId: CAROL_SESSION }
+  const REQUEST = '0199a2c4-0000-7000-8000-0000000000aa'
+
+  /** 艾米、本是编辑者（setup），卡萝尔另加为编辑者、登录有效 */
+  function withCarol(): Setup {
+    const setupResult = setup()
+    setupResult.store.setMember(TEAM_SPACE, CAROL, 'editor')
+    setupResult.store.activeSessions.add(CAROL_SESSION)
+    return setupResult
+  }
+
+  /** 改这份文档的租约行（用例摆好的） */
+  function patchLease({ store, document }: Setup, changes: Partial<EditLeaseRow>): void {
+    const row = store.leaseRecords.get(document.id)
+    if (row === undefined)
+      throw new Error('没有租约')
+    store.leaseRecords.set(document.id, { ...row, ...changes })
+  }
+
+  /** 槽里摆一个本的请求（一分钟前发出，还有 9 分钟有效），declined 时持有者已经谢绝 */
+  function putRequest(setupResult: Setup, declined = false): void {
+    const now = setupResult.store.databaseNow.getTime()
+    patchLease(setupResult, { requestId: REQUEST, requestedBy: BOB, requestSessionId: BOB_SESSION, requestedAt: new Date(now - 60 * SECOND), requestExpiresAt: new Date(now + 540 * SECOND), requestDeclinedAt: declined ? new Date(now) : null })
+  }
+
+  /** 交出了：明确结束（handed_over），留给本到 until（默认 2 分钟之后） */
+  function putReservation(setupResult: Setup, until: Date = new Date(setupResult.store.databaseNow.getTime() + 120 * SECOND)): void {
+    patchLease(setupResult, { endedAt: setupResult.store.databaseNow, endReason: 'handed_over', reservedFor: BOB, reservedUntil: until })
+  }
+
+  it('保留期内别人申请：reserved（留给谁、到何时），什么也不写——代次不加、租约行不动；普通的申请、本人接管、强制接管、交出的人自己都一样', async () => {
+    const setupResult = withCarol()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    putReservation(setupResult)
+    const before = store.leaseRecords.get(document.id)
+    store.setMember(TEAM_SPACE, CAROL, 'admin')
+    for (const takeover of [undefined, 'self', 'force'] as const)
+      expect(await service.acquire(CAT, document.id, leaseRequest(TAB, CURRENT_CLIENT, 0, takeover), HTTP_ORIGIN, TRANSACTION), String(takeover)).toEqual({ kind: 'reserved', reservedFor: BOB, reservedUntil: before?.reservedUntil })
+    expect((await service.acquire(AMY, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION)).kind).toBe('reserved')
+    expect(store.leaseRecords.get(document.id)).toEqual(before)
+    expect(store.documents.get(document.id)?.writeEpoch).toBe(1)
+    expect(store.repositories.documents.advanceWriteEpoch).toHaveBeenCalledTimes(1)
+    expect(store.audits).toEqual([])
+  })
+
+  it('被保留的人申请：照常取得（用哪个登录、哪个标签页都行），新的一代清掉保留与交出', async () => {
+    const setupResult = withCarol()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    putReservation(setupResult)
+    store.activeSessions.add(BOB_OTHER_SESSION)
+    const outcome = await service.acquire({ userId: BOB, sessionId: BOB_OTHER_SESSION }, document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)
+    expect(outcome).toMatchObject({ kind: 'acquired', writeEpoch: 2, interruption: undefined })
+    expect(store.leaseRecords.get(document.id)).toMatchObject({ holderId: BOB, endReason: null, reservedFor: null, reservedUntil: null })
+  })
+
+  it('保留不算数了：恰好到期（与租约的到期同一个边界）、被保留的人没了编辑权——别人照常取得', async () => {
+    for (const [name, spoil] of [
+      ['恰好到期', (setupResult: Setup) => putReservation(setupResult, setupResult.store.databaseNow)],
+      ['被保留的人没了编辑权', (setupResult: Setup) => {
+        putReservation(setupResult)
+        setupResult.store.setMember(TEAM_SPACE, BOB, 'viewer')
+      }],
+    ] as const) {
+      const setupResult = withCarol()
+      await acquired(setupResult)
+      spoil(setupResult)
+      expect((await setupResult.service.acquire(CAT, setupResult.document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION)).kind, name).toBe('acquired')
+    }
+  })
+
+  it('被占用的详情带上待回应的请求（请求方、时刻、是不是调用者自己）；已谢绝的不带', async () => {
+    const setupResult = withCarol()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    putRequest(setupResult)
+    const requestedAt = store.leaseRecords.get(document.id)?.requestedAt
+    expect(await service.acquire(CAT, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION)).toMatchObject({ kind: 'held', holderId: ALICE, request: { requesterId: BOB, requestedAt, mine: false } })
+    expect(await service.acquire(BEN, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION)).toMatchObject({ kind: 'held', request: { requesterId: BOB, mine: true } })
+    putRequest(setupResult, true)
+    expect(await service.acquire(CAT, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION)).toMatchObject({ kind: 'held', request: undefined })
+  })
+
+  it('心跳带上待回应的请求（标识、请求方、发出的时刻）；没有请求、已谢绝、已过期、请求方的登录失效或没了编辑权时不带', async () => {
+    const setupResult = withCarol()
+    const { store, service, document } = setupResult
+    const token = await acquired(setupResult)
+    expect((await service.renew(AMY, document.id, renewal(0), token, TRANSACTION)).request).toBeUndefined()
+    putRequest(setupResult)
+    const requestedAt = store.leaseRecords.get(document.id)?.requestedAt
+    expect((await service.renew(AMY, document.id, renewal(0), token, TRANSACTION)).request).toEqual({ id: REQUEST, requesterId: BOB, requestedAt })
+    const spoilers: readonly (readonly [string, () => void])[] = [
+      ['已谢绝', () => putRequest(setupResult, true)],
+      ['已过期', () => {
+        putRequest(setupResult)
+        patchLease(setupResult, { requestExpiresAt: store.databaseNow })
+      }],
+      ['请求方的登录失效', () => {
+        putRequest(setupResult)
+        store.activeSessions.delete(BOB_SESSION)
+      }],
+      ['请求方没了编辑权', () => {
+        store.activeSessions.add(BOB_SESSION)
+        store.setMember(TEAM_SPACE, BOB, 'viewer')
+      }],
+    ]
+    for (const [name, spoil] of spoilers) {
+      spoil()
+      expect((await service.renew(AMY, document.id, renewal(0), token, TRANSACTION)).request, name).toBeUndefined()
+    }
+  })
+
+  it('编辑状态带上待回应的请求（所有能读的人都看得到，mine 只对请求方为真）；没人在编辑了而请求还在等时照样给出；已谢绝的不给', async () => {
+    const setupResult = withCarol()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    putRequest(setupResult)
+    const requestedAt = store.leaseRecords.get(document.id)?.requestedAt
+    store.setMember(TEAM_SPACE, CAROL, 'viewer')
+    expect((await service.status(CAT, document.id, TRANSACTION)).request).toEqual({ requesterId: BOB, requestedAt, mine: false })
+    expect((await service.status(BEN, document.id, TRANSACTION)).request).toEqual({ requesterId: BOB, requestedAt, mine: true })
+    expect((await service.status(AMY, document.id, TRANSACTION)).request).toEqual({ requesterId: BOB, requestedAt, mine: false })
+    later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
+    expect(await service.status(CAT, document.id, TRANSACTION)).toMatchObject({ editor: undefined, request: { requesterId: BOB, mine: false } })
+    putRequest(setupResult, true)
+    expect((await service.status(CAT, document.id, TRANSACTION)).request).toBeUndefined()
+  })
+
+  it('编辑状态带上算数的保留（留给谁、到何时、mine 只对被保留的人为真）；被保留的人没了编辑权、过期时不给；交出不算异常结束，没有提醒', async () => {
+    const setupResult = withCarol()
+    const { store, service, document } = setupResult
+    await acquired(setupResult)
+    putReservation(setupResult)
+    const reservedUntil = store.leaseRecords.get(document.id)?.reservedUntil
+    expect(await service.status(CAT, document.id, TRANSACTION)).toMatchObject({ editor: undefined, reservation: { reservedFor: BOB, reservedUntil, mine: false }, interruption: undefined })
+    expect((await service.status(BEN, document.id, TRANSACTION)).reservation).toEqual({ reservedFor: BOB, reservedUntil, mine: true })
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect((await service.status(CAT, document.id, TRANSACTION)).reservation).toBeUndefined()
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    later(store, 120 * SECOND)
+    expect((await service.status(CAT, document.id, TRANSACTION)).reservation).toBeUndefined()
   })
 })

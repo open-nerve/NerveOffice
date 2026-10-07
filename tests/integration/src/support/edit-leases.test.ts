@@ -1,13 +1,14 @@
 // 测试辅助 passLeaseTime 的自测（support/edit-leases.ts，M3-P5 S1）：让时间过去，就是把这份文档的租约行上的每一个时间列往前挪同样的秒数——
 // 时间列以库里的为准（document_edit_leases 上全部 timestamptz 列）：以后加了时间列而辅助没有跟上，这里就失败，
 // 不会悄悄留下一个不动的时刻（例如请求的有效期、交出之后的保留），让"时间过去了"的用例测的是一个不存在的状态。
+// passRequestTime（M3-P5 S4）只挪请求编辑的三个时刻：持有者照常编辑时验证"请求方停止续期 10 分钟就失效"。
 import type { PassiveAccount } from './accounts.ts'
 import type { TestDatabase } from './database.ts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createPassiveAccount } from './accounts.ts'
 import { createTestDatabase } from './database.ts'
 import { seedDocument } from './documents.ts'
-import { passLeaseTime } from './edit-leases.ts'
+import { passLeaseTime, passRequestTime } from './edit-leases.ts'
 
 let database: TestDatabase
 let holder: PassiveAccount
@@ -84,5 +85,22 @@ describe('passLeaseTime', () => {
     expect(await timesOf(sparse, columns)).toEqual(moved(before.sparse))
     expect(Object.values(await timesOf(sparse, columns)).filter(time => time === null)).toHaveLength(5)
     expect(await timesOf(other, columns)).toEqual(before.other)
+  })
+})
+
+describe('passRequestTime（M3-P5 S4）', () => {
+  /** 请求编辑的三个时刻：只挪它们 */
+  const REQUEST_TIMES = ['request_declined_at', 'request_expires_at', 'requested_at']
+
+  it('只把请求编辑的三个时刻（发出、有效期、谢绝）往前挪，租约本身的时间、明确结束与保留都不动；空的列还是空的，别的文档的不动', async () => {
+    const columns = await timeColumns()
+    const full = await leaseRow(true)
+    const sparse = await leaseRow(false)
+    const before = { full: await timesOf(full, columns), sparse: await timesOf(sparse, columns) }
+    await passRequestTime(database, full, 600)
+    await passRequestTime(database, sparse, 600)
+    const moved = Object.fromEntries(Object.entries(before.full).map(([column, time]) => [column, time !== null && REQUEST_TIMES.includes(column) ? time - 600_000 : time]))
+    expect(await timesOf(full, columns)).toEqual(moved)
+    expect(await timesOf(sparse, columns)).toEqual(before.sparse)
   })
 })

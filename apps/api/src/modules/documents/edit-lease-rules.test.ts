@@ -9,7 +9,7 @@ import { Buffer } from 'node:buffer'
 import { EDIT_HANDOVER_RESERVE_SECONDS, EDIT_INTERRUPTION_NOTICE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { NO_HANDOVER } from './documents.test-support.ts'
-import { claimOf, currentLeaseLoss, endedAbnormally, isSamePage, occupancyOf, releasableBy, requestLeaseLoss, reservedFor, supersededLoss } from './edit-lease-rules.ts'
+import { claimOf, currentLeaseLoss, endedAbnormally, isSamePage, occupancyOf, releasableBy, requestLeaseLoss, reservationOf, supersededLoss } from './edit-lease-rules.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 
 const DOCUMENT = '0199a2c4-0000-7000-8000-0000000000d1'
@@ -444,28 +444,29 @@ describe('M3-P5 交出之后的保留（设计 §3.6）：有保留、没过期�
   /** 交出之后的一行：明确结束（handed_over），保留给本 */
   const handedOver = (reservedUntil: Date) => lease({ endedAt: at(-SECOND), endReason: 'handed_over', reservedFor: BEN, reservedUntil })
 
-  it('算数：留给的人；问的是被保留的人能不能编辑', async () => {
+  it('算数：留给的人与留到何时；问的是被保留的人能不能编辑', async () => {
     const canEdit = vi.fn(async () => true)
-    expect(await reservedFor(handedOver(at(EDIT_HANDOVER_RESERVE_SECONDS * SECOND)), canEdit)).toBe(BEN)
+    const until = at(EDIT_HANDOVER_RESERVE_SECONDS * SECOND)
+    expect(await reservationOf(handedOver(until), canEdit)).toEqual({ reservedFor: BEN, reservedUntil: until })
     expect(canEdit.mock.calls).toEqual([[BEN]])
   })
 
   it('恰好保留到期算过期（与租约的到期同一个边界），不问编辑权；差 1 毫秒仍算数', async () => {
     const canEdit = vi.fn(async () => true)
-    expect(await reservedFor(handedOver(NOW), canEdit)).toBeUndefined()
-    expect(await reservedFor(handedOver(at(-1)), canEdit)).toBeUndefined()
+    expect(await reservationOf(handedOver(NOW), canEdit)).toBeUndefined()
+    expect(await reservationOf(handedOver(at(-1)), canEdit)).toBeUndefined()
     expect(canEdit).not.toHaveBeenCalled()
-    expect(await reservedFor(handedOver(at(1)), canEdit)).toBe(BEN)
+    expect(await reservationOf(handedOver(at(1)), canEdit)).toEqual({ reservedFor: BEN, reservedUntil: at(1) })
   })
 
   it('被保留的人已经不能编辑（被降级、移出、取消授权）：不算数', async () => {
-    expect(await reservedFor(handedOver(at(SECOND)), async () => false)).toBeUndefined()
+    expect(await reservationOf(handedOver(at(SECOND)), async () => false)).toBeUndefined()
   })
 
   it('没有保留、没有这一行：不算数，不问', async () => {
     const canEdit = vi.fn(async () => true)
-    expect(await reservedFor(lease(), canEdit)).toBeUndefined()
-    expect(await reservedFor(undefined, canEdit)).toBeUndefined()
+    expect(await reservationOf(lease(), canEdit)).toBeUndefined()
+    expect(await reservationOf(undefined, canEdit)).toBeUndefined()
     expect(canEdit).not.toHaveBeenCalled()
   })
 })
