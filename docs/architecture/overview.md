@@ -40,7 +40,7 @@ apps/api/src/
     config/       环境变量（NERVE_*，机密可以用 _FILE），启动时校验；只有这里读 process.env
     logging/      pino 根日志、请求日志与请求标识、脱敏、请求上下文（认证后带 userId）、注入的 AppLogger、Nest 日志适配
     security/     安全响应头（M0 定稿的 CSP 等）、JSON 请求体的上限与嵌套深度、元素数量、代理未被信任的告警
-    database/     连接池与超时（应用的连接以启动参数把 transaction_timeout 的会话默认值定为 0，M3-P5）、Drizzle、TransactionRunner（写事务 run——可带事务的时限 timeoutMs，在第一条语句设下——与读请求的只读快照 readSnapshot，ADR-017）、迁移执行、就绪检查；
+    database/     连接池与超时、Drizzle、TransactionRunner（写事务 run——可带限时 limit：第一条语句里按数据依赖先把 transaction_timeout 设成 0 再设成 timeoutMs、读 BEGIN 至今的时长，超过 startWithinMs 就 LateTransactionStartError，M3-P5——与读请求的只读快照 readSnapshot，ADR-017）、迁移执行、就绪检查；
                   请求级的提交记录 CommitLedger（M2-P6）
     audit/        审计事件（只追加）；启动时检查数据库角色能否关掉审计表的触发器
     health/       存活与就绪探针（公开）、应用的运行状态
@@ -61,7 +61,7 @@ apps/api/src/
                   同一个空间里的结构性改动由空间树的 advisory lock 串行，保存内容不取这把锁；
                   单独授权（M2-P5：`document_grants` 与仓储、有效权限并上授权、分享在事务里的锁下复核与写入、收回写入权的 userDocuments）；
                   编辑租约（M3-P1，ADR-018：`document_edit_leases`、有效条件的纯函数、申请与心跳与释放与编辑状态、保存时核对租约、收回写入权接入租约；为判断别人的租约绑定的登录引入 auth）；
-                  交接规则（M3-P5，ADR-018 的补充：迁移 0025 的请求、保留与接管标记；占用判断 `occupancyOf`、申请怎样对待占着的那一代 `claimOf`、请求与保留的规则 `edit-request-rules.ts`；请求编辑与交出 `EditRequestService`；两个服务共用的事实 `edit-lease-facts.ts`；强制接管的权限位 `canTakeOver` 与操作 `takeOver`、审计 `documents.edit_taken_over`；收回写入权只收回按时间还活着的租约，刚死不久的仍锁文档行等在途的保存——保存的事务由数据库限时 60 秒 `SAVE_TRANSACTION_TIMEOUT_MS`，这个前提因此成立）；
+                  交接规则（M3-P5，ADR-018 的补充：迁移 0025 的请求、保留与接管标记；占用判断 `occupancyOf`、申请怎样对待占着的那一代 `claimOf`、请求与保留的规则 `edit-request-rules.ts`；请求编辑与交出 `EditRequestService`；两个服务共用的事实 `edit-lease-facts.ts`；强制接管的权限位 `canTakeOver` 与操作 `takeOver`、审计 `documents.edit_taken_over`；收回写入权只收回按时间还活着的租约，刚死不久的仍锁文档行等在途的保存——保存的事务从 BEGIN 到提交至多 70 秒——`SAVE_TRANSACTION_START_WITHIN_MS` 10 秒加 `SAVE_TRANSACTION_TIMEOUT_MS` 60 秒，这个前提因此成立）；
                   另存为副本与读取内容的条件请求（M3-P2，ADR-011、ADR-014 的补充：DocumentConflictCopyService、@IfNoneMatch()）；
                   保存协议加固（M3-P3，ADR-011 的修订）：重放预检与回执（save-outcomes、document-save-receipts）、拦截旧客户端（ClientFormatGate）、
                   快照的检查（SnapshotInspector：子进程池，每个账户至多 2 份；snapshot-checks、snapshot-inspection）、requestId 的锁与两张表的记录（RequestLedger）、不缩水（legacy-resources）、保留期清理的入口（RevisionPurgeService）；
@@ -162,7 +162,7 @@ apps/api/src/
 - 看不到与不存在都是 `NOT_FOUND`，执行同样的查询；看得到却不能做是 `PERMISSION_DENIED`。需要锁的操作先判断、再加锁、锁下再判断。
 - "可访问文档"的条件只在 documents 的仓储里拼一处，范围（空间 id 的集合）由访问策略给出。
 - 收回写入权的入口：停用、移出、调整角色、归档、转移（M2-P6 起）、删除与跨空间移动在同一个事务里调用；M3-P1 起接入编辑租约：失去编辑权的持有者的租约记 `revoked`、文档的代次加一（ADR-014 的补充、ADR-018）。转移与（P4 起的）删除、跨空间移动递增 `documents.write_epoch`。
-- 数据库繁忙（等锁超时、语句超时、超过事务的时限、取不到连接）在请求里还没有事务提交时回 503 带 `Retry-After`、记 warn，已经提交过时回 500（结果未知）（M2-P6，ADR-006）；写入代次只增不减由触发器兜底；集成测试核对迁移与表定义整体一致、有数据的库能迁到最新，删库之前扫一遍不变量；永久删除前核对要删的都在回收站里；定时清理暂缓一直失败的条目、按数据库时间判断到期（ADR-016）。
+- 数据库繁忙（等锁超时、语句超时、超过事务的时限或开始得太晚、取不到连接）在请求里还没有事务提交时回 503 带 `Retry-After`、记 warn，已经提交过时回 500（结果未知）（M2-P6，ADR-006）；写入代次只增不减由触发器兜底；集成测试核对迁移与表定义整体一致、有数据的库能迁到最新，删库之前扫一遍不变量；永久删除前核对要删的都在回收站里；定时清理暂缓一直失败的条目、按数据库时间判断到期（ADR-016）。
 - 团队空间的名称按判重键唯一（数据库的生成列 `name_key`，M2-P6，ADR-014）；复制在锁下对源文档重新判断；搜索的范围检查是不变量；不判断权限的永久删除本体（`TrashEntryPurger`）只在 documents 内部。按名称搜索（同事目录、团队空间的列表）时空白的种类与个数不算区别：名称与关键词两边的每一段空白都合成一个普通空格再比较，算作空白的字符与判重键共用 contracts 的一份清单（M2-P6）。集成测试专用的出口（`DATABASE`、`DocumentsRepository`、`spaces` 的表定义，仓储级的范围核对与"迁移与表定义一致"的核对等用）在单独的入口 `@nerve-office/api/testing`（`app/integration.test-support.ts`）：只在源码条件下可解析、不进构建产物，lint 只许 `tests/integration` 引用；应用的公开入口不再转出它们（M2-P6 复验 R-S4）。
 
 **文档的内容与保存**（ADR-011）：
