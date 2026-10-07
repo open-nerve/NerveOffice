@@ -148,7 +148,7 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 ### 保存的事务时限
 
 - 保存的事务从 BEGIN 到提交至多 70 秒：BEGIN 之后 10 秒内要开始（第一条语句），之后由数据库限时 60 秒（`transaction_timeout`，PostgreSQL 17 起有）。到点由数据库结束这个会话、事务整体回滚；开始得太晚的不执行。两种都按数据库繁忙回 503 带 `Retry-After`，页面稍后照常重试；日志里一条 warn（数据库繁忙，原因 `transaction_timeout`），到点时另有一条 error（连接池的连接出错）。正常的保存是毫秒到秒级。
-- 这个时限是"撤权提交之后的保存必定被拒绝"的前提（撤权等一个有效期以内的在途保存，ADR-018），由应用自己在事务里设下：与库上、角色上设的 `transaction_timeout` 默认值、连接串里的 `options`、`PGOPTIONS` 与 `NERVE_DATABASE_*_TIMEOUT_MS` 的配置都无关。别的事务照旧按库上的默认值；默认值比它短时，只有保存的事务改用自己的时限。
+- 这个时限是"撤权提交之后的保存必定被拒绝"的前提（撤权等一个有效期以内的在途保存，ADR-018），由应用自己在事务里设下：与库上、角色上设的 `transaction_timeout` 默认值、连接串里的 `options`、`PGOPTIONS` 与 `NERVE_DATABASE_*_TIMEOUT_MS` 的配置都无关。别的事务照旧按库上的默认值；默认值比它短时，只有保存的事务改用自己的时限（BEGIN 到第一条语句之间仍按库上的默认值，比那段停顿还短时保存回 500、什么也没写）。
 
 ## 数据库角色
 
