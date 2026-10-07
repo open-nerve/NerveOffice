@@ -17,6 +17,7 @@ import { SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS } from './edit-lease.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS, IDLE_RECHECK_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { channelNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
@@ -363,6 +364,8 @@ function setup(options: Setup = {}) {
   const autosave = fakeAutosave(options.autosave !== 'running')
   const browser = options.browser ?? fakeBrowser()
   const marker = { write: vi.fn<PendingSaveMarker['write']>(), read: vi.fn<PendingSaveMarker['read']>(() => undefined), clear: vi.fn<PendingSaveMarker['clear']>() }
+  /** 这一页发出过的请求编辑的记号（审查 B2）：每个"标签页"一份 */
+  const issued = memoryIssuedRequest(DOCUMENT_ID)
   let lastActive = time.now()
   const modeOptions: EditModeOptions = {
     documentId: DOCUMENT_ID,
@@ -380,6 +383,7 @@ function setup(options: Setup = {}) {
     autosave: { page: autosave.page, digest: async snapshot => `sha:${snapshot}`, tuning: autosave.tuning, attach: autosave.attach },
     sameBrowser: options.sameBrowser ?? sameBrowserFor(DOCUMENT_ID, browser.tab(options.tab ?? 'this')),
     pendingSave: marker,
+    issuedRequest: issued.marker,
     reportError,
     ...(options.trace === undefined ? {} : { trace: options.trace }),
   }
@@ -397,6 +401,7 @@ function setup(options: Setup = {}) {
     autosave,
     browser,
     marker,
+    issued,
     /** 本页有一次键盘、鼠标操作（activity 为 manual 时）：记下时刻，交给编辑模式 */
     act: () => {
       lastActive = time.now()
@@ -450,7 +455,7 @@ describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })
     expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: false })
     expect(context.factory.created.map(fake => [fake.access, fake.snapshot, fake.viewState])).toEqual([['read', LOADED.snapshot, undefined]])
-    expect(readingOf(context.mode)).toEqual({ kind: 'reading', canEdit: true, canTakeOver: false, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, formulasPending: false })
+    expect(readingOf(context.mode)).toEqual({ kind: 'reading', canEdit: true, canTakeOver: false, holder: undefined, requestedElsewhere: false, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, formulasPending: false })
     expect(context.mode.view()).toMatchObject({ surface: 'rendered', save: undefined })
     expect(context.editLease.acquire).not.toHaveBeenCalled()
     await settle()
@@ -4136,10 +4141,17 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(readingOf(context.mode).holder?.holder).toEqual(AMY)
     }
     const amyEdits = { editStatus: async () => status(3, AMY_EDITING) }
-    /** 编辑状态里有本人的请求（刷新之前发出的） */
-    function statusWithMyRequest(): FetchedEditStatus {
+    /** 本人的请求发出的时刻（服务端给的；同一个人再发只续期，时刻不变） */
+    const MY_REQUESTED_AT = '2026-10-04T03:01:00.000Z'
+    /** 编辑状态里有本人的请求（刷新之前发出的，或者本人在别的页面、设备上发出的） */
+    function statusWithMyRequest(requestedAt = MY_REQUESTED_AT): FetchedEditStatus {
       const fetched = status(3, AMY_EDITING)
-      return { ...fetched, status: { ...fetched.status, request: { requester: AMY, requestedAt: '2026-10-04T03:01:00.000Z', mine: true } } }
+      return { ...fetched, status: { ...fetched.status, request: { requester: AMY, requestedAt, mine: true } } }
+    }
+    /** 编辑状态里有留给本人的保留（请求交出之后转成的），没人在编辑 */
+    function statusWithMyReservation(): FetchedEditStatus {
+      const fetched = status(3)
+      return { ...fetched, status: { ...fetched.status, reservation: { reservedFor: AMY, reservedUntil: RESERVED_UNTIL, mine: true } } }
     }
 
     it('发出：阅读里先是正在请求、再是等待（等艾米）；之后每 5 秒续期（后台请求），不另发出', async () => {
@@ -4361,8 +4373,9 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
     })
 
-    it('刷新之后恢复等待：编辑状态里有本人的请求而本页没在等——不另发出，直接等待、立即续期', async () => {
+    it('刷新之后恢复等待：编辑状态里有本人的请求而本页没在等，这一页发出过它（记号对得上，刷新时撤回没送到）——不另发出，直接等待、立即续期', async () => {
       const context = setup({ api: { editStatus: async () => statusWithMyRequest() } })
+      context.issued.marker.write(MY_REQUESTED_AT)
       await opened(context)
       await settle()
       expect(readingOf(context.mode).request).toEqual({ kind: 'waiting', holder: AMY, cancelFailure: undefined })
@@ -4385,6 +4398,85 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       await opened(viewer, false)
       await settle()
       expect(readingOf(viewer.mode).request).toBeUndefined()
+    })
+
+    it('发出（等待）时在这一页记下它（服务端给的发出时刻）；请求结束（取消）时清掉，撤回（页面关闭）时不清（刷新之后照它恢复）', async () => {
+      const context = setup({ api: amyEdits })
+      await readingWhileAmyEdits(context)
+      await context.mode.requestEdit()
+      expect(context.issued.marker.read()).toEqual({ requestedAt: MY_REQUESTED_AT })
+      await context.mode.cancelRequest()
+      expect(context.issued.marker.read()).toBeUndefined()
+      await context.mode.requestEdit()
+      context.mode.releaseOnHide()
+      expect(context.api.editRequest.cancel).toHaveBeenCalledTimes(2)
+      expect(context.issued.marker.read()).toBeDefined()
+    })
+
+    it('本人在别的页面、设备上发出、正在等的请求（审查 B2，探针 B-P3）：这一页不恢复等待，阅读里说一句；它关掉（pagehide）不撤回那个请求', async () => {
+      const context = setup({ api: { editStatus: async () => statusWithMyRequest() } })
+      await opened(context)
+      await settle()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, requestedElsewhere: true })
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+      context.mode.releaseOnHide()
+      expect(context.api.editRequest.cancel).not.toHaveBeenCalled()
+    })
+
+    it('同上（探针 B-P3b）：这一页只是开着、10 分钟没有操作，不空闲取消（不撤掉别处的请求），也不续期', async () => {
+      const context = setup({ activity: 'manual', api: { editStatus: async () => statusWithMyRequest() } })
+      await opened(context)
+      await settle()
+      await context.time.advance(EDIT_IDLE_RELEASE_SECONDS * 1000 + 10_000)
+      await settle()
+      expect(context.api.editRequest.cancel).not.toHaveBeenCalled()
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, requestedElsewhere: true, notice: undefined })
+    })
+
+    it('同上：在这一页再点"请求编辑"照常发出（服务端只续期），这一页随之成为发出过的页面——等待、不再说在别处请求了', async () => {
+      const context = setup({ api: { editStatus: async () => statusWithMyRequest() } })
+      await opened(context)
+      await settle()
+      await context.mode.requestEdit()
+      expect(context.api.editRequest.send).toHaveBeenCalledOnce()
+      expect(readingOf(context.mode)).toMatchObject({ request: { kind: 'waiting' }, requestedElsewhere: false })
+      expect(context.issued.marker.read()).toBeDefined()
+    })
+
+    it('记号对不上（这一页发出的那一次已经不在了，现在是别处的另一次请求）：不恢复、说在别处请求了，清掉记号；读不到本人的请求时同样清掉', async () => {
+      const context = setup({ api: { editStatus: async () => statusWithMyRequest('2026-10-04T03:05:00.000Z') } })
+      context.issued.marker.write(MY_REQUESTED_AT)
+      await opened(context)
+      await settle()
+      expect(readingOf(context.mode)).toMatchObject({ request: undefined, requestedElsewhere: true })
+      expect(context.issued.marker.read()).toBeUndefined()
+
+      const gone = setup({ api: amyEdits })
+      gone.issued.marker.write(MY_REQUESTED_AT)
+      await opened(gone)
+      await settle()
+      expect(readingOf(gone.mode)).toMatchObject({ request: undefined, requestedElsewhere: false })
+      expect(gone.issued.marker.read()).toBeUndefined()
+    })
+
+    it('留给本人的保留（请求交出之后转成的）：只有发出过请求的那一页恢复、自动进入编辑；别的页面不进入、也不说在别处请求（点"编辑"照常申请）', async () => {
+      const issuer = setup({ api: { editStatus: async () => statusWithMyReservation() } })
+      issuer.api.editRequest.renew.mockResolvedValue({ kind: 'reserved', reservedUntil: RESERVED_UNTIL })
+      issuer.issued.marker.write(undefined)
+      await opened(issuer)
+      await settle()
+      await settle()
+      expect(issuer.api.editRequest.renew).toHaveBeenCalledOnce()
+      expect(modeOf(issuer.mode).kind).toBe('editing')
+      expect(issuer.issued.marker.read()).toBeUndefined()
+
+      const other = setup({ api: { editStatus: async () => statusWithMyReservation() } })
+      await opened(other)
+      await settle()
+      expect(readingOf(other.mode)).toMatchObject({ request: undefined, requestedElsewhere: false })
+      expect(other.api.editRequest.renew).not.toHaveBeenCalled()
+      expect(other.editLease.acquire).not.toHaveBeenCalled()
     })
 
     it('"编辑"时编辑权刚交给了别人（EDIT_LEASE_RESERVED）：留在阅读，说明交给了谁、留到何时（没人占着）', async () => {

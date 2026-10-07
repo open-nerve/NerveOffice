@@ -86,8 +86,8 @@
 // - 请求方（阅读时，持有者是别人）：请求的发出、等待、续期、取消与空闲取消在 edit-request.ts，进展放进阅读的状态（request）；编辑权交给了本页
 //   （或者空着）、页面看得见时以普通申请进入编辑（与"编辑"同一个入口，空闲释放从进入的那一刻重新算）；正在编辑的是自己时改走"在此编辑"；
 //   别的结束（谢绝、别人先请求了、编辑权刚交给了别人、请求不在了、空闲取消、没能请求）放进阅读的说明。与"在此编辑"互斥：一个在进行时另一个不开始。
-//   编辑状态里有本人的请求而本页没在等（刷新之后、别的标签页或设备发出的）时恢复等待。申请得到 EDIT_LEASE_RESERVED（编辑权刚交给了别人）
-//   时说明交给了谁、留到何时；
+//   编辑状态里有本人的请求而本页没在等时：这一页发出过它（刷新之前发出、刷新时撤回没送到）就恢复等待；本人在别的页面、设备上发出的不恢复，阅读里
+//   说一句（审查 B2：不然这一页关掉、空闲就把那边正在等的请求撤掉）。申请得到 EDIT_LEASE_RESERVED（编辑权刚交给了别人）时说明交给了谁、留到何时；
 // - 持有者（编辑时）：心跳带来的待回应的请求、2 分钟的计时、谢绝与交出的结果在 holder-requests.ts，在等的请求与说明放进编辑与离开编辑的状态
 //   （页头下面的提示）。本页空闲满 2 分钟（请求到达时已经满了，或者提示在的时候到了）就自动交出（会话可写、联网时）。"交出"与自动交出是
 //   leaveEditing('handover-request')：屏障 → 挂起 → 等面板 → flush('handover') → 存上了（公式没收齐也可以）就交出（POST …/handover，至多
@@ -119,6 +119,7 @@ import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { EditingNotice, IncomingRequest } from './holder-requests.ts'
 import type { IdleWatch } from './idle-watch.ts'
+import type { IssuedRequestMarker } from './issued-request.ts'
 import type { LostCopy } from './lost-copy.ts'
 import type { OpenCheckContext } from './open-check-report.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
@@ -266,6 +267,11 @@ export interface ReadingMode {
   readonly takeover: TakeoverProgress | undefined
   /** 请求编辑的进展（M3-P5 设计 §3.6，edit-request.ts）：没有请求时为 undefined。与"在此编辑"互斥 */
   readonly request: EditRequestProgress | undefined
+  /**
+   * 编辑状态里有本人在别的页面、设备上发出、正在等回应的请求，而不是这一页发出的（M3-P5 审查 B2，issued-request.ts）：读屏状态区里说一句；这一页不续期、
+   * 不撤回、不空闲取消、不自动进入。本页有请求时（这一页再点"请求编辑"就成为发出过的页面）为假
+   */
+  readonly requestedElsewhere: boolean
   /**
    * 能不能强制接管（空间管理员、个人空间的所有者，M3-P5 设计 §3.8）：打开时取详情的，之后随编辑状态更新。持有者谢绝了请求时，不能强制接管的人
    * 另说可以请空间管理员强制接管
@@ -446,6 +452,8 @@ export interface EditModeOptions {
   readonly sameBrowser: SameBrowser
   /** 刷新时在途的保存的记号（pending-save-marker.ts）：页面关闭时保存忙就记下（M3-P5 设计 §3.7 的 R1） */
   readonly pendingSave: PendingSaveMarker
+  /** 这一页发出过的请求编辑的记号（issued-request.ts，按标签页）：只有发出过它的那一页恢复等待（M3-P5 审查 B2） */
+  readonly issuedRequest: IssuedRequestMarker
   /** 意外的错误：上报（浏览器的 reportError） */
   readonly reportError: (error: unknown) => void
   /** 测试构建的观察钩子（M3-P5 设计 §3.13，handover-trace.ts）：交接的各步；生产不给 */
@@ -554,7 +562,7 @@ type SettledReading = ReadingMode & { readonly update: 'none' | 'available' }
 /** 失去编辑权之后的阅读：被收回、不能编辑了时没有"编辑"（之后随编辑状态更新）；别处在编辑时说明是谁。canTakeOver 是最近一次知道的 */
 function readingAfter(loss: LeaseLoss, notice: ReadingNotice | undefined, canTakeOver: boolean): ReadingMode {
   const canEdit = loss.kind !== 'denied' && !(loss.kind === 'lease' && loss.reason === 'revoked')
-  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, selfHolder: undefined, takeover: undefined, request: undefined, canTakeOver, interruption: undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
+  return { kind: 'reading', canEdit, holder: loss.kind === 'held' ? loss.holder : undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver, interruption: undefined, update: 'none', gone: false, notice, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 }
 
 /**
@@ -640,7 +648,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 保存的状态机建好之前保存的基准（进入编辑时选定的那一份内容的修订号）：续上时比较 */
   let editingBase = 0
   /** 进入编辑之前的阅读：没有进入成功时回到它 */
-  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
+  let readingBefore: SettledReading = { kind: 'reading', canEdit: false, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
   /** 最近一次知道的"能不能强制接管"（打开时的详情、阅读时的编辑状态）：离开编辑、失去编辑权之后回到阅读时带上 */
   let canTakeOver = false
   /** 失去编辑权之后的那一份（捕获的内容、失去的时刻与副本的请求）：按最新的内容回到阅读之后丢掉 */
@@ -710,6 +718,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     onProgress: requestProgressed,
     enter: enterGranted,
     onEnd: requestEnded,
+    issued: options.issuedRequest,
     trace: traced,
   })
   const checks = createReadingChecks<CheckedStatus>({
@@ -825,6 +834,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
       const holder = status.editor === null ? undefined : leaseHolderOf(status.editor, serverTime)
       latestFlag = { revision: status.revision, formulasPending: status.formulasPending }
       canTakeOver = status.canTakeOver
+      // 编辑状态里本人的请求（待回应的，或者已经交给了本人的保留）是谁发出的（M3-P5 审查 B2）：只在本页没有请求、检查发出之后请求的进展没变过
+      // （例如刚取消）时认——本页有请求时就是它自己的
+      const owner = requestVersion === requests.version() && requests.progress() === undefined
+        ? requests.whose({ requestedAt: status.request?.mine === true ? status.request.requestedAt : undefined, reserved: status.reservation?.mine === true })
+        : 'none'
       setMode({
         ...reading,
         // 只认本页显示的那一版的："有更新"时服务端的标记说的是更新的那一版
@@ -841,11 +855,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
         notice: ((reading.notice?.kind === 'denied' || reading.notice?.kind === 'request-denied') && status.canEdit) || (reading.notice?.kind === 'force-denied' && status.canTakeOver) ? undefined : reading.notice,
         // 持有者不再是自己：本页那一代已经不在了；那一代必然已经到期之后读到的自己也不是它（复验 C4）
         releaseUnconfirmed: reading.releaseUnconfirmed && holder?.sameUser === true && !unconfirmedExpired,
+        // 本人在别的页面、设备上发出、正在等的请求（不是这一页发出的）：说一句，不恢复（审查 B2）
+        requestedElsewhere: owner === 'elsewhere',
       })
-      // 编辑状态里有本人的请求（待回应的，或者已经交给了本人的保留）而本页没在等：刷新之前、别的标签页或设备发出的——恢复等待（M3-P5 设计 §3.6）。
-      // 检查发出之后请求的进展变过（例如刚取消）就不算；"在此编辑"进行中、不能进入编辑的阅读不恢复
-      const mine = status.request?.mine === true || status.reservation?.mine === true
-      if (mine && status.canEdit && requestVersion === requests.version() && requests.progress() === undefined && mode.kind === 'reading' && mode.takeover === undefined && mode.blocked === undefined && mode.damaged === undefined)
+      // 这一页发出过的请求而本页没在等（刷新之前发出、刷新时撤回没送到）：恢复等待（M3-P5 设计 §3.6）。"在此编辑"进行中、不能进入编辑的阅读不恢复
+      if (owner === 'here' && status.canEdit && mode.kind === 'reading' && mode.takeover === undefined && mode.blocked === undefined && mode.damaged === undefined)
         requests.resume(status.editor?.holder)
     }
     else if (isNotFoundError(result.error)) {
@@ -1063,11 +1077,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   // ---- 请求编辑：请求方这一侧（M3-P5 设计 §3.6，edit-request.ts） ----
 
-  /** 请求的进展变了：阅读时随之更新（新的请求开始时之前的说明不再成立） */
+  /** 请求的进展变了：阅读时随之更新（新的请求开始时之前的说明不再成立；本页有请求时不再说本人在别处请求了） */
   function requestProgressed(progress: EditRequestProgress | undefined): void {
     if (disposed || mode.kind !== 'reading' || mode.request === progress)
       return
-    setMode({ ...mode, request: progress, notice: progress === undefined ? mode.notice : undefined })
+    setMode({ ...mode, request: progress, notice: progress === undefined ? mode.notice : undefined, requestedElsewhere: progress === undefined && mode.requestedElsewhere })
   }
 
   /**
@@ -1278,7 +1292,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const damaged = openCheckOf(created, { access: 'read', trigger: 'exit', revision })
     // 交给了请求编辑的人：说明交给了谁（空闲满 2 分钟自动交出的、空闲释放时用交出代替释放的另说没有操作）
     const notice: ReadingNotice | undefined = handedTo === undefined ? LEAVE_NOTICES[cause] : { kind: 'handed-over', to: handedTo, auto: auto || idleRelease }
-    enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, canTakeOver, interruption: undefined, update: 'none', gone: false, notice, releaseUnconfirmed: unconfirmed, blocked, formulasPending: formulasPendingOf(revision), damaged })
+    enterReading(created, { snapshot, revision }, { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver, interruption: undefined, update: 'none', gone: false, notice, releaseUnconfirmed: unconfirmed, blocked, formulasPending: formulasPendingOf(revision), damaged })
     trace({ kind: 'left', at: clock.now(), cause, outcome: 'reading' })
   }
 
@@ -1855,7 +1869,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       const formulasPending = initial.formulasPending === true
       latestFlag = { revision: initial.revision, formulasPending }
       canTakeOver = initial.canTakeOver === true
-      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, canTakeOver, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked, formulasPending, damaged: undefined }
+      readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked, formulasPending, damaged: undefined }
       const token = generation
       if (enterEdit && initial.canEdit && blocked === undefined) {
         const outcome = await enterOnOpen(token)

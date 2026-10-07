@@ -24,7 +24,7 @@
 // 交出时同一个按钮换成"仍在此编辑"，旁边加"取消"（点了随之消失，焦点由 useFocusRescue 交给返回链接）。
 // 请求编辑（设计 §3.6，US-M3-06）：持有者是别人、自己能编辑时"编辑"换成"请求编辑"，之后同一个按钮说"正在请求…""取消请求""正在取消…"
 // （进行中不可用、标为进行中）；等待中、结束之后（谢绝、别人已在请求、编辑权刚交给了别人、失效、空闲取消、交给了请求方）的说明都在读屏状态区里，
-// 没能请求编辑在提示条里。持有者这一侧：有人请求时页头下面一个带标题的分组（role="group"），"交出""继续编辑"与一行静态说明——不是对话框、
+// 没能请求编辑在提示条里；本人在别的页面、设备上发出、正在等的请求（不是这一页发出的，审查 B2）同样在读屏状态区里说一句。持有者这一侧：有人请求时页头下面一个带标题的分组（role="group"），"交出""继续编辑"与一行静态说明——不是对话框、
 // 不是 alert，出现时不移动焦点；读屏的那一句放进一直在的读屏状态区（只有这一句时视觉隐藏：分组里已经写着），请求方取消之后那里说明一句。
 // 离开编辑的过程中分组留着、按钮不可用（焦点不丢），回到阅读之后随之消失（useFocusRescue 交给返回链接）。
 // 强制接管（设计 §3.8，US-M3-09）：阅读时、别人在编辑时、能强制接管时"请求编辑"旁边另有"强制接管"（与请求编辑、"在此编辑"互斥）；点了先确认
@@ -840,6 +840,9 @@ function readingInfo(reading: ReadingMode | undefined, personal: boolean): React
     lines.push(<span key="request">{waiting}</span>)
   else if (reading.holder !== undefined)
     lines.push(<span key="holder">{elsewhereNotice(reading, reading.holder)}</span>)
+  // 本人在别的页面、设备上发出、正在等的请求（审查 B2）：这一页不续期、不撤回、不自动进入，说一句（本页有请求时就是它自己的，不说）
+  if (reading.requestedElsewhere && reading.request === undefined && !reading.gone)
+    lines.push(<span key="requested-elsewhere">{editorMessages.mode.requestedElsewhere}</span>)
   // 上一位编辑者（别人）异常中断（M3-P5 设计 §3.5：没人在编辑时编辑状态里才有，阅读页不必等点"编辑"）
   if (reading.interruption !== undefined && !reading.gone)
     lines.push(<span key="interruption">{interruptionText(reading.interruption)}</span>)

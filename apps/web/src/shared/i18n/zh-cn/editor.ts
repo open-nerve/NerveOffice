@@ -362,8 +362,13 @@ export const editorMessages = {
     forceFailed: (reason: string) => `没能${FORCE_TAKE_OVER}：${reason}`,
     /** 别人先请求了（单槽、先到先得）：本页的请求没有发出 */
     requestOccupied: <T>(requester: T): Phrase<T> => [requester, ' 已在请求编辑这份文档，你的请求没有发出'],
-    /** 请求已经不在了（换了一代、过期、被别人的新请求替换） */
-    requestGone: `你的编辑请求已经失效（例如正在编辑的人换了），可以重新${REQUEST_EDIT}`,
+    /** 请求已经不在了（在别的页面取消了、换了一代、过期、被别人的新请求替换） */
+    requestGone: `你的编辑请求已经失效（可能在别的页面取消了，或者正在编辑的人换了），可以重新${REQUEST_EDIT}`,
+    /**
+     * 本人在别的页面、设备上发出、正在等回应的请求，不是这一页发出的（M3-P5 审查 B2）：这一页不续期、不撤回、不自动进入；在这一页再点"请求编辑"
+     * 照常发出（服务端只续期）
+     */
+    requestedElsewhere: '你已在别处请求编辑这份文档',
     /** 等待中本页空闲满 10 分钟，取消了 */
     requestIdle: `你 ${IDLE_RELEASE_MINUTES} 分钟没有操作，已取消编辑请求`,
     /** 发出请求时不能编辑了（403）：reason 是服务端这次给的原因 */

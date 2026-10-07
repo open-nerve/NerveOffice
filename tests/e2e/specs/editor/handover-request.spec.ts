@@ -345,6 +345,41 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     expect((await savedCells(anotherDevice, documentId))[0]).toBe('from holder')
   })
 
+  test('US-M3-06 同一个人的另一个页面不接手正在等的请求（审查 B2）：乙在 R1 请求编辑、在等；同一个浏览器里另开的 R2 只说"你已在别处请求编辑这份文档"，不进入等待；R2 关掉不撤回请求——R1 照旧在等，甲的提示照旧', async ({ page, anotherDevice }) => {
+    const { holder, requester, documentId } = await sharedDocument('rq-tabs')
+    await holderEditing(page, holder, documentId)
+    await requesterWaiting(anotherDevice, requester, holder, documentId)
+    await prompted(page, requester, documentId)
+
+    // R2：同一个浏览器上下文里另开（同一个会话，时钟是上下文级的）；这一页没发出过请求（记号按标签页，在 sessionStorage 里）
+    const second = await anotherDevice.context().newPage()
+    const requestPath = `/api/documents/${documentId}/edit-lease/request`
+    const fromSecond: string[] = []
+    second.on('request', (request) => {
+      if (new URL(request.url()).pathname === requestPath)
+        fromSecond.push(request.method())
+    })
+    await openReader(second, documentId)
+    await expect(statusRegion(second)).toContainText('你已在别处请求编辑这份文档')
+    await expect(statusRegion(second)).toContainText(`${shownName(holder)} 正在编辑这份文档`)
+    await expect(requestEditButton(second)).toBeVisible()
+    await expect(cancelRequestButton(second)).toHaveCount(0)
+
+    // R2 关掉（页面还在时派发 pagehide，与现有 E2E 同一个做法）：不撤回（DELETE），之前也没续期（PUT）
+    await second.evaluate(() => window.dispatchEvent(new Event('pagehide')))
+    expect(await second.evaluate(async () => (await fetch('/api/health/live')).status)).toBe(200)
+    expect(fromSecond).toEqual([])
+    await second.close()
+
+    // R1 的下一次续期：请求还在（pending），照旧在等；甲的下一次心跳：提示照旧
+    const renewed = anotherDevice.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === requestPath)
+    await nextRenewal(anotherDevice)
+    expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
+    await expect(statusRegion(anotherDevice)).toHaveText(waitingFor(holder))
+    await nextHeartbeat(page, documentId)
+    await expect(requestPrompt(page)).toBeVisible()
+  })
+
   test('US-M3-06 请求方的续期一直得到 CSRF_TOKEN_INVALID（例如网关剥掉了请求头）、确认会话照常是本人：续期与确认会话按续期的节奏，不按网络往返的速度连着发（审查 B1）', async ({ page, anotherDevice }) => {
     const { holder, requester, documentId } = await sharedDocument('rq-csrf')
     await holderEditing(page, holder, documentId)

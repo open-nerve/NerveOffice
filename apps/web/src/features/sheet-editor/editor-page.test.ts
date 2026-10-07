@@ -18,6 +18,7 @@ import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { lockNameOf, sameBrowserFor } from './same-browser.ts'
@@ -278,6 +279,8 @@ function setup(options: Setup = {}) {
   const activity = fakeActivity(surface)
   const browser = fakeBrowser()
   const storage = memoryStorage()
+  /** 这一页发出过的请求编辑的记号（审查 B2，sessionStorage） */
+  const issued = memoryIssuedRequest(DOCUMENT_ID)
   /** 编辑器页按文档建的锁与频道（M3-P5）：卸载时关掉 */
   const sameBrowsers: SameBrowser[] = []
   let id = 0
@@ -301,6 +304,7 @@ function setup(options: Setup = {}) {
       return tracked
     },
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => storage, now: () => Date.UTC(2026, 9, 7, 3, 0, 0) }),
+    issuedRequest: () => issued.marker,
     digest: async snapshot => `sha:${snapshot}`,
     autosaveControl: autosave.hooks,
     ...(options.handoverTrace === undefined ? {} : { handoverTrace: options.handoverTrace }),
@@ -311,7 +315,7 @@ function setup(options: Setup = {}) {
     reportError: vi.fn(),
   })
   pages.push(editorPage)
-  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave, activity, browser, storage, sameBrowsers }
+  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave, activity, browser, storage, issued, sameBrowsers }
 }
 
 /** 查看者读到的编辑状态：不能编辑 */

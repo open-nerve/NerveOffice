@@ -23,7 +23,7 @@ const READY: EditorPageReady = {
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
 const EDITING: EditModeState = { kind: 'editing' }
-const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
+const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
 const COPY = {
   id: '0199a2c4-0000-7000-8000-0000000000c9',
@@ -1480,6 +1480,14 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(screen.getByRole('button', { name: '取消请求' })).toBeInTheDocument()
     })
 
+    it('本人在别的页面、设备上发出、正在等的请求（审查 B2）：读屏状态区在谁在编辑之后说一句，按钮照旧是"请求编辑"（再点就成为发出过的页面）；本页有请求时不说', () => {
+      const fake = renderChrome({ mode: { ...OTHERS, requestedElsewhere: true }, save: undefined })
+      expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前），你现在只能阅读 你已在别处请求编辑这份文档')
+      expect(screen.getByRole('button', { name: '请求编辑' })).toHaveAttribute('aria-disabled', 'false')
+      fake.set({ mode: { ...OTHERS, requestedElsewhere: true, request: { kind: 'waiting', holder: AMY, cancelFailure: undefined } } })
+      expect(infoRegion().textContent).toBe(WAITING_TEXT)
+    })
+
     it('只能查看的人：别人在编辑时没有"请求编辑"', () => {
       renderChrome({ mode: { ...OTHERS, canEdit: false }, save: undefined })
       expect(screen.queryByRole('button', { name: '请求编辑' })).toBeNull()
@@ -1491,7 +1499,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       ['持有者谢绝了（能强制接管的人不另说）', { kind: 'request-declined', holder: AMY }, true, '@amy 艾米 选择继续编辑，你的请求已取消'],
       ['别人先请求了', { kind: 'request-occupied', requester: BEN }, false, '@ben 本 已在请求编辑这份文档，你的请求没有发出'],
       ['编辑权刚交给了别人（留到何时：服务端的时刻按页面的时区写成 HH:mm）', { kind: 'reserved', reservedFor: BEN, reservedUntil: new Date(2026, 9, 7, 15, 3, 20).toISOString() }, false, '编辑权刚交给了 @ben 本，留到 15:03'],
-      ['请求失效了', { kind: 'request-gone' }, false, '你的编辑请求已经失效（例如正在编辑的人换了），可以重新请求编辑'],
+      ['请求失效了（也可能是在别的页面取消了，审查 B2）', { kind: 'request-gone' }, false, '你的编辑请求已经失效（可能在别的页面取消了，或者正在编辑的人换了），可以重新请求编辑'],
       ['等待中空闲满 10 分钟', { kind: 'request-idle' }, false, '你 10 分钟没有操作，已取消编辑请求'],
       ['交给了请求编辑的人（人按的）', { kind: 'handed-over', to: BEN, auto: false }, false, '已保存并把编辑权交给了 @ben 本'],
       ['交给了请求编辑的人（空闲满 2 分钟自动交出）', { kind: 'handed-over', to: BEN, auto: true }, false, '你 2 分钟没有操作，已保存并把编辑权交给了 @ben 本'],

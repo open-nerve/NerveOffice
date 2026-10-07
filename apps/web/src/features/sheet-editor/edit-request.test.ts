@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createEditRequests, REQUEST_IDLE_MS, REQUEST_RENEW_MS } from './edit-request.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { memoryIssuedRequest } from './issued-request.test-support.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const REQUEST_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000f1'
@@ -80,6 +81,7 @@ function setup(options: Setup = {}) {
   const ends: EditRequestEnd[] = []
   const enter = vi.fn(options.enter ?? (() => true))
   const onSessionProblem = vi.fn<EditRequestsOptions['onSessionProblem']>()
+  const issued = memoryIssuedRequest(DOCUMENT_ID)
   const requests = createEditRequests({
     documentId: DOCUMENT_ID,
     api,
@@ -90,6 +92,7 @@ function setup(options: Setup = {}) {
     onProgress: next => progress.push(next),
     enter,
     onEnd: end => ends.push(end),
+    issued: issued.marker,
     trace: options.trace,
   })
   disposers.push(requests.dispose)
@@ -102,6 +105,7 @@ function setup(options: Setup = {}) {
     ends,
     enter,
     onSessionProblem,
+    issued: issued.marker,
     act: () => {
       lastActive = time.now()
     },
@@ -632,6 +636,65 @@ describe('取消（"取消请求"）', () => {
     expect(context.api.cancel).not.toHaveBeenCalled()
     answer.resolve(PENDING)
     await sending
+  })
+})
+
+describe('这一页发出过的请求（审查 B2，issued-request.ts）', () => {
+  it('发出之后在等待：记下服务端给的发出时刻；请求结束（谢绝、请求不在、取消……）时清掉', async () => {
+    const context = setup()
+    await waiting(context)
+    expect(context.issued.read()).toEqual({ requestedAt: PENDING.kind === 'pending' ? PENDING.requestedAt : undefined })
+    context.api.renew.mockResolvedValueOnce(DECLINED)
+    await context.time.advance(REQUEST_RENEW_MS)
+    expect(context.ends).toEqual([{ kind: 'declined', holder: AMY }])
+    expect(context.issued.read()).toBeUndefined()
+
+    const gone = setup({ renew: async () => GONE })
+    await waiting(gone)
+    await gone.time.advance(REQUEST_RENEW_MS)
+    expect(gone.issued.read()).toBeUndefined()
+
+    const cancelled = setup()
+    await waiting(cancelled)
+    await cancelled.requests.cancel()
+    expect(cancelled.issued.read()).toBeUndefined()
+  })
+
+  it('发出时编辑权就交给了本页（reserved、free）：页面看得见就进入（随之清掉）；在后台时留在 granted，记号在（不带时刻），刷新之后照它恢复', async () => {
+    const visible = setup({ send: async () => RESERVED })
+    await visible.requests.send()
+    expect(visible.enter).toHaveBeenCalledOnce()
+    expect(visible.issued.read()).toBeUndefined()
+
+    const hidden = setup({ send: async () => FREE })
+    hidden.page.set(true)
+    await hidden.requests.send()
+    expect(hidden.requests.progress()).toEqual({ kind: 'granted' })
+    expect(hidden.issued.read()).toEqual({ requestedAt: undefined })
+  })
+
+  it('撤回（页面关闭）时不清：刷新时那次撤回没送到的话，刷新之后照记号恢复等待', async () => {
+    const context = setup()
+    await waiting(context)
+    context.requests.withdraw()
+    expect(context.issued.read()).toBeDefined()
+  })
+
+  it('whose：记号对得上（发出时刻相同）是这一页的；本人别的请求是别处的（清掉对不上的记号）；没有本人的请求时清掉记号；保留只认有记号的', async () => {
+    const context = setup()
+    const requestedAt = PENDING.kind === 'pending' ? PENDING.requestedAt : ''
+    expect(context.requests.whose({ requestedAt, reserved: false })).toBe('elsewhere')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: true })).toBe('none')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: false })).toBe('none')
+    context.issued.write(requestedAt)
+    expect(context.requests.whose({ requestedAt, reserved: false })).toBe('here')
+    expect(context.requests.whose({ requestedAt: undefined, reserved: true })).toBe('here')
+    expect(context.issued.read()).toBeDefined()
+    expect(context.requests.whose({ requestedAt: '2026-10-07T03:09:00.000Z', reserved: false })).toBe('elsewhere')
+    expect(context.issued.read()).toBeUndefined()
+    context.issued.write(requestedAt)
+    expect(context.requests.whose({ requestedAt: undefined, reserved: false })).toBe('none')
+    expect(context.issued.read()).toBeUndefined()
   })
 })
 
