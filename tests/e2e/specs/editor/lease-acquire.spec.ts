@@ -1,6 +1,7 @@
 // 同一时刻只有一个人、一个标签页能编辑（US-M3-04；P1 设计 §3.4.7、§7 第一条；M3-P2 设计 §3.4）。M3-P2 起打开即阅读，点"编辑"才申请：
 // - 两个人：一个在编辑时，其他人（编辑者与查看者）打开都是阅读，看到"谁正在编辑（最后活动 x 分钟前）"——编辑状态能读就能看；
-//   能编辑的人点"编辑"得到被占用，留在阅读；两人同时点"编辑"，最多一个成功（并发的申请与锁的交错由集成测试确定地覆盖）；
+//   能编辑的人那里"编辑"换成"请求编辑"（M3-P5，请求编辑的各条在 handover-request.spec.ts）；手里的编辑状态过时、仍点得到"编辑"时
+//   得到被占用，留在阅读；两人同时点"编辑"，最多一个成功（并发的申请与锁的交错由集成测试确定地覆盖）；
 // - 同一个人的多个标签页：一个在编辑时另一个点"编辑"也进不去（被自己的另一个标签页占着；M3-P5 起锁在本浏览器里有人持有时不再试，换成
 //   "在此编辑"——本人接管，前一个先保存再交出，handover-takeover.spec.ts 另有各条路），任何时候只有一个标签页在编辑；打开时申请，回包丢了
 //   也不留下没人用的一代——同一个页面用同一个标识再试一次，服务端当作重试、发新的一代（审查 B7）；刷新、关闭时经 keepalive 释放，之后刷新、
@@ -11,7 +12,7 @@ import type { TestUser } from '../../support/database.ts'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, editLeaseEpoch } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, exitEditing, openAndEnterEditing, openReader, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, exitEditing, openAndEnterEditing, openReader, reloadAndEnterEditing, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -33,13 +34,13 @@ interface Contender {
 }
 
 /**
- * 点了"编辑"之后这个页面的结果：editing 是取得了编辑权、以可编辑重建（有保存按钮）；held 是被占用、回到阅读（又有"编辑"，说明谁在编辑）；
- * 别的时候还没有结果
+ * 点了"编辑"之后这个页面的结果：editing 是取得了编辑权、以可编辑重建（有保存按钮）；held 是被占用、回到阅读（同一个按钮换成"请求编辑"，
+ * 说明谁在编辑，M3-P5）；别的时候还没有结果
  */
 async function enterOutcome(page: Page): Promise<'editing' | 'held' | 'pending'> {
   if (await saveButton(page).isVisible())
     return 'editing'
-  return await enterEditButton(page).isVisible() && await editingNotice(page).isVisible() ? 'held' : 'pending'
+  return await requestEditButton(page).isVisible() && await editingNotice(page).isVisible() ? 'held' : 'pending'
 }
 
 /** 都有了结果之后：进入了编辑的一方与被占用的一方（不是一个进入、一个被占用时抛错，用例失败） */
@@ -53,28 +54,39 @@ async function splitOutcomes(contenders: readonly Contender[]): Promise<{ readon
 }
 
 test.describe('US-M3-04 同一时刻只有一个人能编辑：其他人打开是阅读，看到谁在编辑', () => {
-  test('US-M3-04 甲在编辑：乙（编辑者）与丙（查看者）打开都是阅读，看到"甲正在编辑（最后活动……）"；乙点"编辑"被占用、留在阅读，丙没有"编辑"；甲照常保存', async ({ page, anotherDevice }) => {
+  test('US-M3-04 甲在编辑：乙（编辑者）与丙（查看者）打开都是阅读，看到"甲正在编辑（最后活动……）"；乙那里没有"编辑"（换成"请求编辑"），手里的编辑状态过时、仍点得到"编辑"时被占用、留在阅读；丙没有"编辑"；甲照常保存', async ({ page, anotherDevice }) => {
     const lead = await createUser('presence-lead', '组长')
     const first = await createUser('presence-first', '甲')
     const second = await createUser('presence-second', '乙')
     const third = await createUser('presence-third', '丙')
     const space = await createTeamSpace('谁在编辑', lead, [[lead, 'admin'], [first, 'editor'], [second, 'editor'], [third, 'viewer']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
+    // 乙（编辑者）先打开（还没人在编辑："编辑"）；之后拦下乙读编辑状态的请求：乙手里的编辑状态停在"没人在编辑"，仍点得到"编辑"
+    await loginThroughApi(anotherDevice, second)
+    const checked = anotherDevice.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+    await openReader(anotherDevice, documentId)
+    await checked
+    await anotherDevice.route('**/api/documents/*/edit-lease', async route => route.request().method() === 'GET' ? route.abort('internetdisconnected') : route.continue())
     await loginThroughApi(page, first)
     await openAndEnterEditing(page, documentId)
+    await expect(enterEditButton(anotherDevice)).toBeVisible()
 
-    // 乙（编辑者）：打开即阅读，读到编辑状态——甲在编辑，自己现在只能阅读；有"编辑"
-    await loginThroughApi(anotherDevice, second)
-    await openReader(anotherDevice, documentId)
-    await expect(editingNotice(anotherDevice)).toHaveText(editingBy(first, true))
-    // 乙点"编辑"：申请被占用（409），留在阅读（只读的编辑器不换），说明还是甲在编辑
+    // 乙点"编辑"：申请被占用（409），留在阅读（只读的编辑器不换），说明甲在编辑；同一个按钮换成"请求编辑"（M3-P5）
     const acquisitions = recordAcquisitions(anotherDevice, documentId)
     await enterEditButton(anotherDevice).click()
     await expect.poll(() => acquisitions).toEqual([409])
-    await expect(enterEditButton(anotherDevice)).toBeVisible()
     await expect(editingNotice(anotherDevice)).toHaveText(editingBy(first, true))
+    await expect(requestEditButton(anotherDevice)).toBeVisible()
+    await expect(enterEditButton(anotherDevice)).toHaveCount(0)
     await expect(editorSurface(anotherDevice)).toHaveAttribute('data-editor-access', 'read')
     await expect(saveButton(anotherDevice)).toHaveCount(0)
+    await anotherDevice.unroute('**/api/documents/*/edit-lease')
+
+    // 乙重新打开：打开即阅读，读到编辑状态——甲在编辑，自己现在只能阅读；"请求编辑"，没有"编辑"
+    await openReader(anotherDevice, documentId)
+    await expect(editingNotice(anotherDevice)).toHaveText(editingBy(first, true))
+    await expect(requestEditButton(anotherDevice)).toBeVisible()
+    await expect(enterEditButton(anotherDevice)).toHaveCount(0)
 
     // 丙（查看者）：同样看到甲在编辑（编辑状态能读就能看），只能查看，没有"编辑"
     await anotherDevice.goto('about:blank')
@@ -83,6 +95,7 @@ test.describe('US-M3-04 同一时刻只有一个人能编辑：其他人打开�
     await expect(saveStatus(anotherDevice)).toHaveText('只能查看')
     await expect(editingNotice(anotherDevice)).toHaveText(editingBy(first, false))
     await expect(enterEditButton(anotherDevice)).toHaveCount(0)
+    await expect(requestEditButton(anotherDevice)).toHaveCount(0)
 
     // 甲不受影响：照常编辑、保存。甲在乙与丙打开之后才改：修改自动保存（M3-P4），先改的话生产构建里停 2 秒就存上了，阅读的两边
     // 随后读到"有更新"，说明区里多一句

@@ -83,7 +83,13 @@ async function chooseAutosave(context: BrowserContext, mode: AutosaveMode): Prom
   await context.addInitScript(applyAutosaveMode, autosaveModeScript(mode))
 }
 
-export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page, autosave: AutosaveMode, autosaveMode: void }>({
+/**
+ * 再开一台"设备"（M3-P5：第三个人在保留期里申请这类要两个以上的人同时在场的用例）：新的浏览器上下文，与 anotherDevice 同样挂上 CSP 违规、
+ * 页面错误的收集与自动保存的模式；用例结束时关闭
+ */
+export type NewDevice = () => Promise<Page>
+
+export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page, newDevice: NewDevice, autosave: AutosaveMode, autosaveMode: void }>({
   /**
    * 打开时定时的自动保存暂停（held，默认）还是照常（running）。E2E_AUTOSAVE=running 让默认也照常：本机按生产镜像里的样子
    * （自动保存照常运行）跑容器 E2E 会跑的那些用例（--grep-invert @test-build），三个浏览器都能核对它们与自动保存相容
@@ -94,19 +100,28 @@ export const test = base.extend<{ cspViolations: CspViolations, pageErrors: Page
     await use()
   }, { auto: true }],
   /**
-   * 另一台设备（M2-P1）：新的浏览器上下文，Cookie 与本用例的页面不共用；沿用配置里的基础地址、证书与语言设置。
+   * 另一台设备（M2-P1）：新的浏览器上下文（经 newDevice 建），Cookie 与本用例的页面不共用；沿用配置里的基础地址、证书与语言设置。
    * 用来验证"其他地方的登录被退出"等跨会话的行为；用例结束时关闭。
    * 同样收集 CSP 违规（审查 B1）。trace 与失败时的截图不用另做：测试运行器对用例里新建的每个上下文都开 trace，
    * 关闭上下文时给它的页面截图（Playwright 的 ArtifactsRecorder），按配置的 retain-on-failure、only-on-failure 保留
    */
-  anotherDevice: async ({ browser, cspViolations, pageErrors, autosave }, provide, testInfo) => {
+  anotherDevice: async ({ newDevice }, provide) => {
+    await provide(await newDevice())
+  },
+  /** 再开一台设备（见 NewDevice）：每次调用一个新的浏览器上下文，用例结束时一起关闭 */
+  newDevice: async ({ browser, cspViolations, pageErrors, autosave }, provide, testInfo) => {
     const { baseURL, ignoreHTTPSErrors, locale, timezoneId } = testInfo.project.use
-    const context = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, timezoneId })
-    await cspViolations.watch(context)
-    pageErrors.watch(context)
-    await chooseAutosave(context, autosave)
-    await provide(await context.newPage())
-    await context.close()
+    const contexts: BrowserContext[] = []
+    await provide(async () => {
+      const context = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, timezoneId })
+      contexts.push(context)
+      await cspViolations.watch(context)
+      pageErrors.watch(context)
+      await chooseAutosave(context, autosave)
+      return context.newPage()
+    })
+    for (const context of contexts)
+      await context.close()
   },
   pageErrors: [async ({ context }, use) => {
     const errors: string[] = []
