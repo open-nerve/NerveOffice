@@ -131,7 +131,7 @@ describe('US-M2-10 有效权限并上单独授权：内容取较高者，结构�
       spaceId,
       folderId: null,
       accessVia: 'grant',
-      permissions: { canEdit: false, canRename: false, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false },
+      permissions: { canEdit: false, canRename: false, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false },
     })
     expect((await asUser(app.baseUrl, benSession, `/api/documents/${document.id}/content`)).status).toBe(200)
     expect(await errorOf(await save(benSession, document, 1))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
@@ -173,7 +173,7 @@ describe('US-M2-10 有效权限并上单独授权：内容取较高者，结构�
     expect(await detailOf(catSession, document.id)).toMatchObject({
       folderId,
       accessVia: 'space',
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: false, canDelete: false, canShare: false },
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: false, canDelete: false, canShare: false, canTakeOver: false },
     })
     expect((await save(catSession, document, 1)).status).toBe(200)
     expect(await errorOf(await patch(catSession, document.id, { folderId: null }))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '没有移动这份文档的权限' })
@@ -185,7 +185,7 @@ describe('US-M2-10 有效权限并上单独授权：内容取较高者，结构�
     await setGrant(database, { documentId: document.id, userId: amy.id, role: 'viewer', grantedBy: root.id })
     await setGrant(database, { documentId: document.id, userId: cat.id, role: 'editor', grantedBy: amy.id })
 
-    expect((await detailOf(amySession, document.id)).permissions).toEqual({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canDelete: true, canShare: true })
+    expect((await detailOf(amySession, document.id)).permissions).toEqual({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canDelete: true, canShare: true, canTakeOver: true })
     expect(await detailOf(catSession, document.id)).toMatchObject({ accessVia: 'space', permissions: { canEdit: true, canMoveWithinSpace: false } })
     expect((await save(catSession, document, 1)).status).toBe(200)
   })
@@ -196,7 +196,7 @@ describe('US-M2-10 有效权限并上单独授权：内容取较高者，结构�
     await setGrant(database, { documentId: document.id, userId: ben.id, role: 'editor', grantedBy: amy.id })
     await setSpaceState(database, spaceId, { status: 'archived' })
 
-    expect(await detailOf(benSession, document.id)).toMatchObject({ accessVia: 'grant', folderId: null, permissions: { canEdit: false, canRename: false, canCopy: true, canShare: false } })
+    expect(await detailOf(benSession, document.id)).toMatchObject({ accessVia: 'grant', folderId: null, permissions: { canEdit: false, canRename: false, canCopy: true, canShare: false, canTakeOver: false } })
     expect(await errorOf(await save(benSession, document, 1))).toEqual({ status: 403, code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
     expect(await errorOf(await asUser(app.baseUrl, benSession, `/api/documents/${document.id}`, { method: 'DELETE' }))).toEqual(SHARED_ONLY_DELETE)
     // 空间管理员归档之后同样不能分享
@@ -213,7 +213,7 @@ describe('US-M2-10 有效权限并上单独授权：内容取较高者，结构�
     const response = await asUser(app.baseUrl, benSession, `/api/documents/${document.id}/copy`, { method: 'POST', body: { spaceId: ben.personalSpaceId, folderId, requestId: randomUUID() } })
     expect(response.status).toBe(201)
     const copy = parseExact(createdDocumentSchema, await response.json())
-    expect(copy).toMatchObject({ spaceId: ben.personalSpaceId, folderId, accessVia: 'space', permissions: { canEdit: true, canShare: true } })
+    expect(copy).toMatchObject({ spaceId: ben.personalSpaceId, folderId, accessVia: 'space', permissions: { canEdit: true, canShare: true, canTakeOver: true } })
     expect(await grantsOn(database, [copy.id])).toEqual([])
     expect((await grantsOn(database, [document.id])).map(grant => grant.userId).toSorted()).toEqual([ben.id, cat.id].toSorted())
 

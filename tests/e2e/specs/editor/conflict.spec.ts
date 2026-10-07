@@ -5,13 +5,17 @@
 // 不拦保存的话生产构建里停 2 秒就存上了（测试构建的夹具暂停了定时的上传，生产镜像里没有），在修改之前断开，两种构建里修改都没存上。
 // 恢复之后先发出的可能是自动保存的重试，按保存用快捷键（编辑权随之失效、没有保存按钮时它什么也不做）。
 // M3-P2 起打开即阅读、点"编辑"才申请编辑权；失去编辑权之后本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"。
+// M3-P5（设计 §3.1）：同一个浏览器里正在编辑的标签页持有本机锁，后一个取得编辑权时抢走它，前一个随即失去编辑权（说明是本人在本浏览器的
+// 另一个标签页接手了编辑），不再等它恢复之后由保存、心跳得知；前一个之后的保存照样不发（本页已经只读）。
+// M3-P5（设计 §3.7）：前一个在编辑时后一个读到"自己在本浏览器的另一个标签页里编辑"，按钮是"在此编辑"（本人接管，handover-takeover.spec.ts）；
+// 这里核对的是"前一个的编辑权到期之后"：后一个的下一次检查（阅读时每 30 秒，用 Playwright 的时钟拨过去）读到没人在编辑，才是"编辑"。
 // 两个人（US-M3-11）：甲断网、编辑权到期，乙接手并保存；甲回来之后的保存一定被拒，甲的内容另存为副本（服务端按快照新建，
 // 放在哪里按甲在原文档所在空间的新建权限，标题带上失效时的时间）。期间没人保存过时自动续上的情形在 lease-recovery.spec.ts
 import { createDocumentIn, createFolderIn, createTeamSpace, createUser, expireEditLease, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -38,33 +42,39 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
   test('A 编辑时 B 只能阅读；A 的编辑权到期之后 B 点"编辑"接手保存；A 再保存被拒、保留本页的内容，服务器上是 B 的版本', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('conflict'))
     const documentId = await createSheetThroughApi(page)
+    // Playwright 的时钟是上下文级的（两个标签页一起走）：之后把 B 的阅读时的检查拨到
+    await page.clock.install()
     await openAndEnterEditing(page, documentId)
     // A 断网、休眠（拦下心跳与保存）之后改了一处：这一处存不上
     const asleep = await disconnectTab(page)
     await typeInCell(page, 'A1', 'from A')
 
-    // B（同一个人的另一个标签页）：打开即阅读，读到编辑状态，说明是自己在另一个标签页或设备上编辑；能编辑的人照样有"编辑"，没有保存
+    // B（同一个人的另一个标签页）：打开即阅读，读到编辑状态，说明是自己在本浏览器的另一个标签页里编辑；按钮是"在此编辑"（不是"编辑"），没有保存
     const other = await context.newPage()
     await openReader(other, documentId)
-    await expect(editingNotice(other)).toHaveText('你在另一个标签页或设备上正在编辑这份文档，这里只能阅读。要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑')
-    await expect(enterEditButton(other)).toBeVisible()
+    await expect(editingNotice(other)).toHaveText('你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
+    await expect(takeOverHereButton(other)).toBeVisible()
+    await expect(enterEditButton(other)).toHaveCount(0)
     await expect(saveButton(other)).toHaveCount(0)
 
-    // A 的编辑权到期（改写租约行的时间，不等真实的 90 秒）；B 点"编辑"，取得编辑权，键入并保存
+    // A 的编辑权到期（改写租约行的时间，不等真实的 90 秒）；B 的下一次检查读到没人在编辑：说明随之消失，"编辑"回来。B 点"编辑"，取得编辑权，
+    // 键入并保存（A 还持有本机锁：B 取得编辑权之后抢走它）
     await expireEditLease(documentId)
+    await other.clock.fastForward(30_000)
+    await expect(editingNotice(other)).toHaveCount(0)
     await enterEditing(other)
     await expect(saveButton(other)).toBeVisible()
     await expect(editingNotice(other)).toHaveCount(0)
     await typeInCell(other, 'A1', 'from B')
     await saveAndWait(other)
 
-    // A 回来再保存：被拒（编辑权已经在 B 手里；A 的心跳也可能先一步得知），自动续上时被 B 占着：
-    // 页头说明编辑权已失效、是自己在另一个标签页上编辑、本页的修改没有保存，可以另存为副本或者放弃；本页换成只读，没有保存按钮
+    // A 回来再保存：B 取得编辑权的那一刻 A 就失去了编辑权（本机锁被抢，M3-P5），这次保存不发：
+    // 页头说明编辑权已失效、是本人在本浏览器的另一个标签页接手了编辑、本页的修改没有保存，可以另存为副本或者放弃；本页换成只读，没有保存按钮
     await asleep.reconnect()
     await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你在另一个标签页或设备上正在编辑这份文档（要是刚刚关闭或刷新过那个页面，那边的编辑权最多 90 秒后自动结束，到时再点"编辑"就能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await expect(lost.getByRole('button', { name: '另存为副本', exact: true })).toBeVisible()
     await expect(lost.getByRole('button', { name: '放弃本页的修改', exact: true })).toBeVisible()
     await waitForEditorAccess(page, 'read', 'steady')
@@ -146,12 +156,13 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await leaveEditor(other, documentId)
     await other.close()
 
-    // 这一页回来再保存被拒：自动续上时发现别处保存过更新的版本，不覆盖，说明之后给"另存为副本"与"放弃本页的修改"。
+    // 这一页回来再保存：另一个标签页取得编辑权的那一刻它就失去了编辑权（本机锁被抢，M3-P5），不覆盖别处保存的版本，
+    // 说明之后给"另存为副本"与"放弃本页的修改"。
     // 放弃（先确认）：按服务器上的最新版本重建为阅读，不重新加载整页（不出现离开的提示）；之后点"编辑"照常编辑、保存
     await asleep.reconnect()
     await page.keyboard.press('ControlOrMeta+s')
     const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     const dialogs: string[] = []
     page.on('dialog', (dialog) => {
       dialogs.push(dialog.type())
@@ -224,11 +235,12 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
     expect(minuteLabels(lostFrom, lostBy, timeZone).map(label => `共同的表（冲突副本 ${label}）`)).toContain(placed?.title)
     await expect(notice).toContainText(`已另存为副本《${placed?.title}》。`)
 
-    // 甲的页面按服务器上的最新版本（乙的）回到阅读：乙还在编辑，读屏状态区说明是乙（与已另存为副本的说明在一起）；甲能编辑，有"编辑"
+    // 甲的页面按服务器上的最新版本（乙的）回到阅读：乙还在编辑，读屏状态区说明是乙（与已另存为副本的说明在一起）；甲能编辑——乙在编辑，
+    // 是"请求编辑"（M3-P5）
     await waitForEditorAccess(page, 'read')
     await expect(editingNotice(page)).toContainText(`${shownName(second)} 正在编辑这份文档`)
     await expect(editingNotice(page)).toContainText('你现在只能阅读')
-    await expect(enterEditButton(page)).toBeVisible()
+    await expect(requestEditButton(page)).toBeVisible()
     await expectFoundOnce(page, 'second only')
   })
 })

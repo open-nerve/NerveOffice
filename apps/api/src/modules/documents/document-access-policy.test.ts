@@ -137,7 +137,7 @@ describe('requireDocumentContent：只凭授权的人（M2-P5 设计 §3.4(1)）
     store.setGrant('d1', BOB, 'editor')
     const allowed = await requireDocumentContent(store.policy, BOB, document, ['edit', 'rename', 'copy'])
     expect(allowed.access).toMatchObject({ accessVia: 'grant', contentRole: 'editor' })
-    expect(allowed.permissions).toMatchObject({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false })
+    expect(allowed.permissions).toMatchObject({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['moveWithinSpace']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能移动' })
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['moveAcrossSpaces']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能移动' })
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['delete']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能删除' })
@@ -213,6 +213,49 @@ describe('requireDocumentContent：分享（share，M2-P5 设计 §3.2）', () =
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['share']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只有空间管理员能分享这份文档' })
     // 对照：归档之前的空间管理员照旧是冻结的说明
     expect(await errorOf(requireDocumentContent(store.policy, ALICE, document, ['share']))).toMatchObject({ message: SHARING_FROZEN_MESSAGE })
+  })
+})
+
+describe('requireDocumentContent：强制接管（takeOver，M3-P5 设计 §3.8）', () => {
+  const document = { id: 'd1', spaceId: TEAM_SPACE, createdBy: ALICE }
+  const NOT_ADMIN = '只有空间管理员能强制接管这份文档的编辑'
+  const GRANT_ONLY = '这份文档是单独分享给你的，不能强制接管编辑'
+
+  it('空间管理员与个人空间的所有者可以（与 edit 一起要求）；空间里的编辑者、另有编辑授权的查看者 403"只有空间管理员能"', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    expect((await requireDocumentContent(store.policy, ALICE, document, ['edit', 'takeOver'])).permissions.canTakeOver).toBe(true)
+    expect((await requireDocumentContent(store.policy, BOB, { id: 'd2', spaceId: BOB_SPACE, createdBy: BOB }, ['edit', 'takeOver'])).permissions.canTakeOver).toBe(true)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit', 'takeOver']))).toMatchObject({ code: 'PERMISSION_DENIED', message: NOT_ADMIN })
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    store.setGrant('d1', BOB, 'editor')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit', 'takeOver']))).toMatchObject({ code: 'PERMISSION_DENIED', message: NOT_ADMIN })
+  })
+
+  it('查看者先按 edit 拒绝（"只能查看"）；单独要求 takeOver 时是"只有空间管理员能"', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, BOB, 'viewer')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit', 'takeOver']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['takeOver']))).toMatchObject({ code: 'PERMISSION_DENIED', message: NOT_ADMIN })
+  })
+
+  it('只凭授权的编辑者（团队空间里的、别人个人空间里的）：能编辑、不能强制接管，说明是他自己的那一句；归档时照样是那一句', async () => {
+    const store = new FakeStore()
+    store.setGrant('d1', BOB, 'editor')
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['edit', 'takeOver']))).toMatchObject({ code: 'PERMISSION_DENIED', message: GRANT_ONLY })
+    store.setGrant('d3', ALICE, 'editor')
+    expect(await errorOf(requireDocumentContent(store.policy, ALICE, { id: 'd3', spaceId: BOB_SPACE, createdBy: BOB }, ['edit', 'takeOver']))).toMatchObject({ code: 'PERMISSION_DENIED', message: GRANT_ONLY })
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['takeOver']))).toMatchObject({ code: 'PERMISSION_DENIED', message: GRANT_ONLY })
+  })
+
+  it('归档的空间：原来的空间管理员也不能，说明是默认的"空间已归档，只能查看"（恢复之后不许诺什么）', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.space(TEAM_SPACE).status = 'archived'
+    for (const operations of [['edit', 'takeOver'], ['takeOver']] as const)
+      expect(await errorOf(requireDocumentContent(store.policy, ALICE, document, operations)), operations.join()).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
   })
 })
 

@@ -3,6 +3,8 @@
 // 这期间退出、签发重置（撤销这个人的全部登录）、停用都不经文档行与租约行，挡不住在途的请求。所以持有者自己的请求——保存、心跳、申请——
 // 在事务里、锁下再核对一次这次登录仍然有效（edit-lease.service.ts 的 requireActiveLogin），失效时 401，什么也不写。
 // 保存先查重放、再核对登录：一次已经提交的保存原样重发，拿到原来的结果（重放只要求能访问：ADR-011，上线门槛 A07），撤销登录之后也一样。
+// M3-P5 的请求编辑（发出、续期）与持有者的谢绝、交出同样在锁住租约行之后核对登录（edit-request.service.ts 的 lockForEditor，M3-P5 审查 A5）：
+// 等在租约行上时登录被撤销，放行之后 401，什么也不写。
 // 由审查者 A 的探针改成的回归用例：持锁的交错用 support/held-lock.ts；慢上传那一条用"守卫顺延了这次登录"确认请求已经过了守卫，不靠固定的等待。
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
@@ -24,7 +26,7 @@ import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { acquireLease, contentPathWithLease, leaseStateOf, outcomeOf, releaseLease, renewLease, saveContent } from '../support/edit-leases.ts'
+import { acquireLease, contentPathWithLease, declineEditRequest, handOverLease, leaseStateOf, outcomeOf, pendingRequestId, releaseLease, renewEditRequest, renewLease, saveContent, sendEditRequest } from '../support/edit-leases.ts'
 import { completesWithoutWaiting, raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 import { createTeamSpace, setMember } from '../support/spaces.ts'
@@ -294,5 +296,77 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
     expect([await outcomeOf(acquired), (await disabling).status, disabledWithoutWaiting]).toEqual(['401 SESSION_EXPIRED', 200, true])
     // 租约行还是先前释放的那一代，文档的代次没再加
     expect(await leaseStateOf(database, document.id)).toEqual({ holderId: account.id, endReason: 'released', leaseEpoch: earlier.writeEpoch, documentEpoch: earlier.writeEpoch })
+  })
+})
+
+/** 租约行上的请求与结束（直接查库，时间换成毫秒）：请求编辑的写路径被拒之后核对什么也没写 */
+async function slotOf(documentId: string): Promise<Record<string, unknown> | undefined> {
+  const row = await database.query(async client => (await client.query<Record<string, unknown>>(
+    `SELECT holder_id, end_reason, ended_at, request_id, requested_by, request_session_id, requested_at, request_expires_at, request_declined_at, reserved_for, reserved_until
+     FROM document_edit_leases WHERE document_id = $1`,
+    [documentId],
+  )).rows[0])
+  return row === undefined ? undefined : Object.fromEntries(Object.entries(row).map(([column, value]) => [column, value instanceof Date ? value.getTime() : value]))
+}
+
+describe('US-M3-06 请求编辑的写路径在锁住租约行之后核对这次登录（M3-P5 审查 A5，与上面持有者自己的请求同一个约定）', () => {
+  it('US-M3-06 发出请求等在租约行上时请求方被签发重置（撤销全部登录）：放行之后锁下核对登录，401，槽里没有请求', async () => {
+    const requester = await editor()
+    const document = await freshDocument()
+    await acquireLease(app.baseUrl, catSession, document.id)
+    const before = await slotOf(document.id)
+    const sent = await raceAgainstHeldLock(database, {
+      hold: holdLeaseRow(document.id),
+      request: async () => sendEditRequest(app.baseUrl, requester.session, document.id),
+      change: async () => issueReset(requester.account),
+    })
+    expect(await outcomeOf(sent)).toBe('401 SESSION_EXPIRED')
+    expect(await slotOf(document.id)).toEqual(before)
+  })
+
+  it('US-M3-06 请求方续期等在租约行上时他被签发重置：放行之后锁下核对登录，401（不是"请求已不在"），有效期不往后推', async () => {
+    const requester = await editor()
+    const document = await freshDocument()
+    await acquireLease(app.baseUrl, catSession, document.id)
+    await pendingRequestId(app.baseUrl, requester.session, document.id)
+    const before = await slotOf(document.id)
+    const renewed = await raceAgainstHeldLock(database, {
+      hold: holdLeaseRow(document.id),
+      request: async () => renewEditRequest(app.baseUrl, requester.session, document.id),
+      change: async () => issueReset(requester.account),
+    })
+    expect(await outcomeOf(renewed)).toBe('401 SESSION_EXPIRED')
+    expect(await slotOf(document.id)).toEqual(before)
+  })
+
+  it('US-M3-06 持有者谢绝等在租约行上时他被签发重置：放行之后锁下核对登录，401，请求没被谢绝', async () => {
+    const holder = await editor()
+    const document = await freshDocument()
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const requestId = await pendingRequestId(app.baseUrl, catSession, document.id)
+    const before = await slotOf(document.id)
+    const declined = await raceAgainstHeldLock(database, {
+      hold: holdLeaseRow(document.id),
+      request: async () => declineEditRequest(app.baseUrl, holder.session, document.id, lease, requestId),
+      change: async () => issueReset(holder.account),
+    })
+    expect(await outcomeOf(declined)).toBe('401 SESSION_EXPIRED')
+    expect(await slotOf(document.id)).toEqual(before)
+  })
+
+  it('US-M3-06 持有者交出等在租约行上时他被签发重置：放行之后锁下核对登录，401，没有交出（不记 handed_over、不留给请求方，请求还在）', async () => {
+    const holder = await editor()
+    const document = await freshDocument()
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const requestId = await pendingRequestId(app.baseUrl, catSession, document.id)
+    const before = await slotOf(document.id)
+    const handedOver = await raceAgainstHeldLock(database, {
+      hold: holdLeaseRow(document.id),
+      request: async () => handOverLease(app.baseUrl, holder.session, document.id, lease, requestId),
+      change: async () => issueReset(holder.account),
+    })
+    expect(await outcomeOf(handedOver)).toBe('401 SESSION_EXPIRED')
+    expect(await slotOf(document.id)).toEqual(before)
+    expect(before).toMatchObject({ end_reason: null, request_id: requestId, reserved_for: null })
   })
 })

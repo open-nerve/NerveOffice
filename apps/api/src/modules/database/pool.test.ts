@@ -38,6 +38,9 @@ describe('createPool', () => {
         query_timeout: 8_000,
       })
       expect(KEEP_ALIVE_INITIAL_DELAY_MS).toBe(10_000)
+      // 不带 options 启动参数：连接串里的 options、PGOPTIONS 照旧起作用；要限时的事务在事务里自己设，与会话的默认值无关
+      // （M3-P5 再复核 D2，真实数据库上的效果见 tests/integration 的 database/pool.test.ts）
+      expect(pool.options).not.toHaveProperty('options')
     }
     finally {
       await pool.end()

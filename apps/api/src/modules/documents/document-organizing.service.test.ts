@@ -150,7 +150,7 @@ describe('DocumentOrganizingService.move', () => {
     const moved = await service.move(member(ALICE), document.id, { spaceId: TEAM_SPACE, folderId: folder.id }, HTTP_ORIGIN)
     expect(moved).toMatchObject({ spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' } })
     // 到了新空间只是编辑者：不能再把它移走、不能分享；途径是空间（照常带文件夹）
-    expect(moved.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false })
+    expect(moved.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false })
     expect(moved.accessVia).toBe('space')
     expect(store.writeEpochs.get(document.id)).toBe(1)
     expect(store.revocations).toEqual([{ kind: 'documents', documentIds: [document.id] }])

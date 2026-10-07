@@ -9,6 +9,12 @@
 // 自动保存却一直暂停）；页面关闭（pagehide）时有保存在途不释放编辑权（edit-mode.ts 的 releaseOnHide）；按保存在保存中照样做
 // （在途时排一次），按下的这一刻就提交开着的单元格编辑，会话确认之后才上传（审查 A1）。阅读页的"公式待更新"取载入时的详情（与内容是同一版时）。
 // 页头的文档详情正在重新取时给出进行中（DEF-045）。
+// 交接规则（M3-P5）：本页的键盘、鼠标操作由组装处给出（edit-lease.ts 的 trackActivity：只认可信事件、零位移的移动不算——心跳的空闲与
+// 空闲释放都按它）；这份文档在同一个浏览器里的锁与交接频道（same-browser.ts）、刷新时在途的保存的记号（pending-save-marker.ts）按文档
+// 交给编辑模式，频道随页面卸载关掉。"在此编辑"（本人接管，设计 §3.7）与"编辑"一样先确认会话；交接频道上只理会同一个人的请求，本页的用户
+// 取自载入时确认的会话。请求编辑（设计 §3.6）："请求编辑""取消请求"与持有者提示里的"交出""继续编辑"都是写的操作，与"编辑"一样先确认会话；
+// 能不能强制接管取自载入时的详情（之后随编辑状态更新）。"强制接管"（设计 §3.8）是写的操作：页头先确认（确认框关掉之后才交到这里），这里与"编辑"
+// 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -18,14 +24,17 @@ import type { LeaseClock } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
+import type { HandoverTrace } from './handover-trace.ts'
+import type { IssuedRequestMarker } from './issued-request.ts'
+import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility } from './reading-checks.ts'
+import type { SameBrowser } from './same-browser.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { isAuthenticationError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
 import { documentIsNewer } from './client-format.ts'
-import { trackActivity } from './edit-lease.ts'
 import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 
@@ -104,6 +113,14 @@ export interface PageNetwork {
   readonly onChange: (listener: () => void) => () => void
 }
 
+/**
+ * 本页的键盘、鼠标操作（组装处给出 edit-lease.ts 的 trackActivity：窗口的捕获阶段，只认可信事件、零位移的移动不算，M3-P5 设计 §3.9）：
+ * 有操作时调用 listener；返回退订的函数。订阅要在交互屏障之前挂上（载入期间被拦下的输入也算有操作）
+ */
+export interface PageActivity {
+  readonly subscribe: (listener: () => void) => () => void
+}
+
 /** 测试构建的自动保存控制（M3-P4 设计 §3.14）交给编辑模式的部分：节奏与暂停、日志、当前的调度 */
 export type AutosaveControlHooks = Pick<EditModeAutosave, 'tuning' | 'observe' | 'attach'>
 
@@ -134,10 +151,20 @@ export interface EditorPageOptions {
   readonly visibility: PageVisibility
   /** 联网与否（自动保存） */
   readonly network: PageNetwork
+  /** 本页的键盘、鼠标操作（心跳上报的空闲、空闲释放） */
+  readonly activity: PageActivity
+  /** 这份文档在同一个浏览器里的锁与交接频道（M3-P5 设计 §3.1、§3.7）：载入之后按文档建一次，卸载时关掉 */
+  readonly sameBrowser: (documentId: string) => SameBrowser
+  /** 这份文档的"刷新时在途的保存"的记号（M3-P5 设计 §3.7 的 R1） */
+  readonly pendingSave: (documentId: string) => PendingSaveMarker
+  /** 这份文档在这一页发出过的请求编辑的记号（M3-P5 审查 B2，按标签页、刷新之后还在） */
+  readonly issuedRequest: (documentId: string) => IssuedRequestMarker
   /** 快照 UTF-8 字节的摘要（自动保存的会话内去重，editor-api.ts 的 snapshotDigest） */
   readonly digest: (snapshot: string) => Promise<string>
   /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
   readonly autosaveControl?: AutosaveControlHooks | undefined
+  /** 测试构建的交接观察钩子（M3-P5 设计 §3.13，start.tsx 只在测试构建里给出）；生产为 undefined */
+  readonly handoverTrace?: HandoverTrace | undefined
   readonly editIntent: EditIntent
   /** 当前的地址（路径与查询）：转到登录页时带上，登录之后回到这里 */
   readonly currentPath: () => string
@@ -155,6 +182,25 @@ export interface EditorPage {
   readonly save: () => Promise<void>
   /** "编辑"：会话是本人时申请编辑权，重建为可编辑 */
   readonly enterEditing: () => Promise<void>
+  /**
+   * "在此编辑"（M3-P5 设计 §3.7）：会话是本人时本人接管自己在别的标签页或设备上的编辑权（本浏览器的标签页先保存再交出）；那边没能交出之后再按
+   * 就是"仍在此编辑"
+   */
+  readonly takeOverHere: () => Promise<void>
+  /** "在此编辑"那边没能交出之后选"取消" */
+  readonly cancelTakeOver: () => void
+  /** "强制接管"（M3-P5 设计 §3.8；页头已经确认过）：会话是本人时以强制接管申请编辑权，重建为可编辑 */
+  readonly forceTakeOver: () => Promise<void>
+  /** 异常中断的说明里的"知道了"（M3-P5 设计 §3.11）：说明消失 */
+  readonly dismissInterruption: () => void
+  /** "请求编辑"（M3-P5 设计 §3.6）：会话是本人时发出，之后等待、编辑权交给本页时自动进入编辑 */
+  readonly requestEditing: () => Promise<void>
+  /** "取消请求"：会话是本人时取消 */
+  readonly cancelRequest: () => Promise<void>
+  /** 持有者提示里的"交出"：会话是本人时先保存再交出，回到阅读 */
+  readonly handOver: () => Promise<void>
+  /** 持有者提示里的"继续编辑"：会话是本人时谢绝这个请求，提示消失 */
+  readonly keepEditing: () => Promise<void>
   /** "退出编辑"：先保存，释放编辑权，重建为只读 */
   readonly exitEditing: () => Promise<void>
   /** "有更新，点击刷新" */
@@ -531,10 +577,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
   }
 
-  function createMode(id: string): EditMode {
+  function createMode(id: string, user: string): EditMode {
+    const sameBrowser = options.sameBrowser(id)
+    cleanups.push(() => sameBrowser.close())
     const created = createEditMode({
       documentId: id,
       clientInstanceId,
+      userId: user,
       api,
       createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
       clock,
@@ -558,7 +607,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         readProblem: () => void recheckSession(),
       },
       autosave: { page: autosavePage, digest: options.digest, ...options.autosaveControl },
+      sameBrowser,
+      pendingSave: options.pendingSave(id),
+      issuedRequest: options.issuedRequest(id),
       reportError: options.reportError,
+      trace: options.handoverTrace,
     })
     cleanups.push(created.subscribe(modeChanged))
     return created
@@ -575,10 +628,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         finish({ kind: 'not-found' })
         return
       }
-      // 本页的键盘、鼠标操作（捕获阶段）：心跳据此上报多久没有操作。挂在交互屏障之前，载入期间被拦下的输入也算有操作。
+      // 本页的键盘、鼠标操作（捕获阶段）：心跳据此上报多久没有操作，空闲释放据此计时。挂在交互屏障之前，载入期间被拦下的输入也算有操作。
       // 页面隐藏、关闭时尽力释放编辑权（keepalive，结果不管）
       const pageWindow = options.chrome.ownerDocument.defaultView ?? window
-      cleanups.push(trackActivity(pageWindow, () => {
+      cleanups.push(options.activity.subscribe(() => {
         lastActivity = clock.now()
         mode?.noteActivity()
       }))
@@ -619,7 +672,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         return
       }
       heading = headingOf(document, signedIn.user.id)
-      const opened = createMode(documentId)
+      const opened = createMode(documentId, signedIn.user.id)
       mode = opened
       // 载入期间别的标签页换了人或者退出了：按确认的结果开始（不是本人时不续租、不检查）
       opened.setSession(session)
@@ -628,7 +681,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
       // 阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）：详情说的是它那一版的，与载入的内容是同一版时才用（并行读取之间有人保存过时下一次检查补上）
       const formulasPending = document.formulasPending && document.revision === content.revision
-      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending }, { enterEdit: options.editIntent.requested && canEdit, blocked })
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: options.editIntent.requested && canEdit, blocked })
       if (disposed)
         return
       if (outcome.kind === 'load-failed') {
@@ -662,6 +715,52 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       if (!confirmedForWrite() && !(await readyToWrite()))
         return
       await mode.enter()
+    },
+    takeOverHere: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      // 本人接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.takeOver()
+    },
+    cancelTakeOver: () => mode?.cancelTakeOver(),
+    forceTakeOver: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      // 强制接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.forceTakeOver()
+    },
+    dismissInterruption: () => mode?.dismissInterruption(),
+    requestEditing: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      // 发出请求是写的操作：与"编辑"同一个会话确认
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.requestEdit()
+    },
+    cancelRequest: async () => {
+      if (mode?.view().mode.kind !== 'reading')
+        return
+      if (!confirmedForWrite() && !(await readyToWrite()))
+        return
+      await mode.cancelRequest()
+    },
+    handOver: async () => {
+      if (mode?.view().mode.kind !== 'editing')
+        return
+      // 交出要先保存、带着令牌交出：与退出编辑同一个会话确认（换了人、令牌已知失效时不发，留在编辑）
+      if (await readyToWrite())
+        await mode.handOver()
+    },
+    keepEditing: async () => {
+      if (mode?.view().mode.kind !== 'editing')
+        return
+      if (await readyToWrite())
+        await mode.decline()
     },
     exitEditing: async () => {
       if (mode?.view().mode.kind !== 'editing')

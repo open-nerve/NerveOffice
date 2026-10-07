@@ -45,7 +45,7 @@ describe('DocumentsService.get', () => {
       formatVersion: 1,
       sdkVersion: '1.0.1',
       formulasPending: false,
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
     })
   })
 
@@ -72,7 +72,7 @@ describe('DocumentsService.get', () => {
       spaceId: TEAM_SPACE,
       folderId: null,
       accessVia: 'grant',
-      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false },
+      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false },
     })
     // 同一份文档，空间里的成员看到的照常带文件夹
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
@@ -90,7 +90,7 @@ describe('DocumentsService.get', () => {
     expect((await errorOf(service.get(ALICE, document.id))).code).toBe('NOT_FOUND')
     store.space(TEAM_SPACE).visibleToAll = true
     // 看得到就能复制（目标空间的新建权限另判）；查看者不能改名、不能移动、不能删除
-    expect((await service.get(ALICE, document.id)).permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false })
+    expect((await service.get(ALICE, document.id)).permissions).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false })
   })
 })
 

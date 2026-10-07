@@ -42,6 +42,8 @@ describe('页面自检的结果：编码与解开', () => {
       formulaValues: { 'sheet-1!G2': '苹果-12', 'sheet-1!B7': 70 },
       consoleErrors: ['警告：一段很长的文字'.repeat(40)],
       timings: [{ id: 'switch.enter', ms: { ready: 431.2, steady: 3390, content: null } }],
+      path: 'silent',
+      timeline: [{ kind: 'handover-request', wall: 1_791_355_102_563, at: 12, requestId: 'r' }, { kind: 'page:visibility-hidden', wall: 1_791_355_102_000 }],
     })
     const encoded = await encodeSelftestReport(original)
     expect(encoded).toMatch(/^[\w-]+$/)
@@ -73,6 +75,11 @@ describe('页面自检的结果：编码与解开', () => {
     ['计时里有不是数字的值', { timings: [{ id: 'switch.enter', ms: { ready: '431' } }] }],
     ['计时里有不是有限的数', { timings: [{ id: 'switch.enter', ms: { ready: Number.NaN } }] }],
     ['failure 不是字符串', { failure: 1 }],
+    ['path 不是字符串', { path: 1 }],
+    ['timeline 不是数组', { timeline: {} }],
+    ['时间线的一条缺了墙上时间', { timeline: [{ kind: 'entered' }] }],
+    ['时间线的一条的种类不是字符串', { timeline: [{ kind: 1, wall: 1 }] }],
+    ['时间线的墙上时间不是有限的数', { timeline: [{ kind: 'entered', wall: Number.POSITIVE_INFINITY }] }],
   ])('字段不对时拒绝：%s', (_case, overrides) => {
     expect(() => parseSelftestReport({ ...report(), ...overrides })).toThrow(SelftestReportError)
   })
@@ -128,8 +135,9 @@ describe('页面自检的结果：什么算通过', () => {
     expect(selftestPassed(report({ failure: '编辑器页没有就绪' }))).toBe(false)
   })
 
-  it('场景只认登记的四个', () => {
-    expect(['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit'].every(isSelftestScenario)).toBe(true)
+  it('场景只认登记的：M3-P2 的四个、捕获时机的、交接的（M3-P5）', () => {
+    expect(['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', 'hidden-save', 'takeover-holder', 'takeover-taker', 'refresh-save'].every(isSelftestScenario)).toBe(true)
     expect(isSelftestScenario('editing')).toBe(false)
+    expect(isSelftestScenario('takeover')).toBe(false)
   })
 })

@@ -20,7 +20,7 @@ import { EDIT_LEASE_HEADER, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
-import { acquireBody, clientFormatQuery, renewBody } from '../support/client-format.ts'
+import { acquireBody, clientFormatQuery, renewBody, requestBody } from '../support/client-format.ts'
 import { comparableOf } from '../support/comparable-response.ts'
 import { conflictCopyPath, pageSnapshot } from '../support/conflict-copies.ts'
 import { createTestDatabase } from '../support/database.ts'
@@ -197,6 +197,11 @@ async function call(session: LoggedIn, path: string, method = 'GET', body?: unkn
   return recorded(method, path) ?? asUser(app.baseUrl, session, path, { method, ...(body === undefined ? {} : { body }), ...(headers === undefined ? {} : { headers }) })
 }
 
+/** 带接管方式的申请（M3-P5）：本人接管、强制接管的请求体，标签页每次一个新的 */
+function takeoverBody(takeover: 'self' | 'force'): Record<string, unknown> {
+  return { ...acquireBody(randomUUID()), takeover }
+}
+
 /** 编辑权的心跳与释放带的令牌（M3-P1）：格式合法的一个，判断访问在租约之前，带不带、对不对都一样 404 */
 const LEASE_TOKEN = { [EDIT_LEASE_HEADER]: `${'a'.repeat(41)}-_` }
 
@@ -366,6 +371,38 @@ const PROBES: readonly Probe[] = [
   { name: '只有编辑授权 POST 申请没分享的文档的编辑权', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', acquireBody(randomUUID())) },
   { name: '只有编辑授权 DELETE 释放没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'DELETE', undefined, LEASE_TOKEN) },
   { name: '只有查看授权 GET 没分享的文档的编辑状态', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`) },
+  // ---- 本人接管与强制接管（M3-P5 设计 §3.13）：申请带上接管方式，强制接管另要能强制接管——都在判断访问之后，看不到的与不存在的一样 ----
+  { name: 'POST 本人接管', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', takeoverBody('self')) },
+  { name: 'POST 强制接管', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: 'POST 强制接管个人空间的文档', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: 'POST 本人接管回收站里的文档（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', takeoverBody('self')) },
+  { name: 'POST 强制接管回收站里的文档（空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '系统管理员 POST 强制接管团队空间的文档', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '只有编辑授权 POST 本人接管没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', takeoverBody('self')) },
+  { name: '只有编辑授权 POST 强制接管没分享的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '只有编辑授权 POST 强制接管回收站里有授权的文档', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease`, 'POST', takeoverBody('force')) },
+  { name: '只有查看授权 POST 强制接管取消了分享的文档', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.revokedDocument)}/edit-lease`, 'POST', takeoverBody('force')) },
+  // ---- 请求编辑与交出（M3-P5 设计 §3.4、§3.13）：发出、续期、谢绝、交出要能编辑，取消能读就行——都在判断访问之后、锁租约行之前，
+  //      看不到的与不存在的一样（发出先核对页面的格式，与文档无关，两边一样）----
+  { name: 'POST 发出请求编辑', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease/request`, 'POST', requestBody()) },
+  { name: 'POST 发出请求编辑（个人空间的文档）', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.personalDocument.id)}/edit-lease/request`, 'POST', requestBody()) },
+  { name: 'PUT 请求编辑的续期', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease/request`, 'PUT') },
+  { name: 'DELETE 取消请求编辑', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease/request`, 'DELETE') },
+  { name: 'POST 谢绝请求编辑', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease/request/decline`, 'POST', { requestId: randomUUID() }, LEASE_TOKEN) },
+  { name: 'POST 交出编辑权', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease/handover`, 'POST', { requestId: randomUUID() }, LEASE_TOKEN) },
+  { name: 'POST 发出请求编辑（回收站里的文档，空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease/request`, 'POST', requestBody()) },
+  { name: 'PUT 请求编辑的续期（回收站里的文档，空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease/request`, 'PUT') },
+  { name: 'DELETE 取消请求编辑（回收站里的文档，空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease/request`, 'DELETE') },
+  { name: 'POST 谢绝请求编辑（回收站里的文档，空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease/request/decline`, 'POST', { requestId: randomUUID() }, LEASE_TOKEN) },
+  { name: 'POST 交出编辑权（回收站里的文档，空间管理员自己）', actor: 'admin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease/handover`, 'POST', { requestId: randomUUID() }, LEASE_TOKEN) },
+  { name: '系统管理员 POST 发出请求编辑（团队空间的文档）', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease/request`, 'POST', requestBody()) },
+  { name: '系统管理员 POST 交出编辑权（团队空间的文档）', actor: 'systemAdmin', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/edit-lease/handover`, 'POST', { requestId: randomUUID() }, LEASE_TOKEN) },
+  { name: '只有编辑授权 POST 发出请求编辑（没分享的文档）', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease/request`, 'POST', requestBody()) },
+  { name: '只有编辑授权 PUT 请求编辑的续期（回收站里有授权的文档）', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamTrashedDocument)}/edit-lease/request`, 'PUT') },
+  { name: '只有编辑授权 POST 谢绝请求编辑（没分享的文档）', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease/request/decline`, 'POST', { requestId: randomUUID() }, LEASE_TOKEN) },
+  { name: '只有编辑授权 POST 交出编辑权（没分享的文档）', actor: 'grantEditor', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease/handover`, 'POST', { requestId: randomUUID() }, LEASE_TOKEN) },
+  { name: '只有查看授权 DELETE 取消请求编辑（取消了分享的文档）', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.revokedDocument)}/edit-lease/request`, 'DELETE') },
+  { name: '只有查看授权 DELETE 取消请求编辑（没分享的文档）', actor: 'grantViewer', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamOtherDocument.id)}/edit-lease/request`, 'DELETE') },
   // ---- 另存为副本与读取的条件请求（M3-P2 设计 §3.2、§3.6）：只要求能读原文档，读不到的与不存在的一样；304 之前照样判断权限 ----
   { name: 'POST 另存为副本', actor: 'outsider', request: async (s, h) => conflictCopy(s, pick(h, w.teamDocument.id), h ? w.teamDocument.unitId : randomUUID()) },
   { name: 'POST 另存为副本（个人空间的文档）', actor: 'outsider', request: async (s, h) => conflictCopy(s, pick(h, w.personalDocument.id), h ? w.personalDocument.unitId : randomUUID()) },

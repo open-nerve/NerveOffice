@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
-import { acquireEditLease, CONTENT_UNCHANGED, fetchContent, fetchContentIfChanged, fetchEditStatus, releaseEditLease, renewEditLease, saveConflictCopy, saveContent, snapshotDigest } from './editor-api.ts'
+import { acquireEditLease, cancelEditRequest, CONTENT_UNCHANGED, declineEditRequest, fetchContent, fetchContentIfChanged, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, saveConflictCopy, saveContent, sendEditRequest, snapshotDigest } from './editor-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
@@ -26,10 +26,26 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
     await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID)).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD' })
   })
 
-  it('续租：PUT 空闲的秒数与本页的构建与数据格式（M3-P3），令牌只在请求头里（不进地址）', async () => {
-    const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z' }) })
+  it('申请：续上时另带本页的空闲秒数（M3-P5 设计 §3.5）；用户发起的申请不带', async () => {
+    const api = installFakeApi({ [`POST ${LEASE}`]: () => json(201, ACQUIRED) })
     setCsrfToken('csrf-1')
-    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z' })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, { idleSeconds: 37 })
+    expect(api.requests[0]?.body).toEqual({ clientInstanceId: PAGE_ID, idleSeconds: 37, ...PAGE_CLIENT_FORMAT })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID)
+    expect(api.requests[1]?.body).toEqual({ clientInstanceId: PAGE_ID, ...PAGE_CLIENT_FORMAT })
+  })
+
+  it('申请："在此编辑"另带接管方式（takeover: self，M3-P5 设计 §3.7）', async () => {
+    const api = installFakeApi({ [`POST ${LEASE}`]: () => json(201, ACQUIRED) })
+    setCsrfToken('csrf-1')
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, { takeover: 'self' })
+    expect(api.requests[0]?.body).toEqual({ clientInstanceId: PAGE_ID, takeover: 'self', ...PAGE_CLIENT_FORMAT })
+  })
+
+  it('续租：PUT 空闲的秒数与本页的构建与数据格式（M3-P3），令牌只在请求头里（不进地址）', async () => {
+    const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z', request: null }) })
+    setCsrfToken('csrf-1')
+    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z', request: null })
     expect(api.requests[0]).toMatchObject({ key: `PUT ${LEASE}`, body: { idleSeconds: 12, ...PAGE_CLIENT_FORMAT }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-1' } })
   })
 
@@ -74,6 +90,74 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
   })
 })
 
+describe('请求编辑与交出（M3-P5 设计 §3.4、§3.6）', () => {
+  const REQUEST = `${LEASE}/request`
+  const REQUEST_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000f1'
+  const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }
+  const PENDING = { kind: 'pending', id: REQUEST_ID, requestedAt: '2026-10-07T03:01:00.000Z', expiresAt: '2026-10-07T03:11:00.000Z', holder: { holder: AMY, lastActiveAt: '2026-10-07T03:00:00.000Z', sameUser: false, sameSession: false } }
+
+  it('发出：POST request，带本页的构建与数据格式（过旧的页面先拦下）与 CSRF 令牌，按契约读出请求编辑的结果；版本过旧时抛出 CLIENT_OUTDATED', async () => {
+    const api = installFakeApi({ [`POST ${REQUEST}`]: () => json(200, PENDING) })
+    setCsrfToken('csrf-5')
+    await expect(sendEditRequest(DOCUMENT_ID)).resolves.toEqual(PENDING)
+    expect(api.requests[0]).toMatchObject({ body: PAGE_CLIENT_FORMAT, headers: { 'x-csrf-token': 'csrf-5' } })
+    api.on(`POST ${REQUEST}`, () => apiError(409, 'CLIENT_OUTDATED'))
+    await expect(sendEditRequest(DOCUMENT_ID)).rejects.toMatchObject({ code: 'CLIENT_OUTDATED' })
+  })
+
+  it('续期：PUT request，没有请求体（带 CSRF 令牌）；认不出的结果（kind 不认识）按契约不一致', async () => {
+    const api = installFakeApi({ [`PUT ${REQUEST}`]: () => json(200, { kind: 'gone', holder: null }) })
+    setCsrfToken('csrf-6')
+    await expect(renewEditRequest(DOCUMENT_ID)).resolves.toEqual({ kind: 'gone', holder: null })
+    expect(api.requests[0]).toMatchObject({ body: undefined, headers: { 'x-csrf-token': 'csrf-6' } })
+    expect(api.requests[0]?.headers['content-type']).toBeUndefined()
+    api.on(`PUT ${REQUEST}`, () => json(200, { kind: 'later' }))
+    await expect(renewEditRequest(DOCUMENT_ID)).rejects.toBeInstanceOf(ResponseFormatError)
+  })
+
+  it('取消：DELETE request，keepalive（页面关闭时也发）；204 时兑现，失败时抛出请求层的错误', async () => {
+    let init: RequestInit | undefined
+    const api = installFakeApi({
+      [`DELETE ${REQUEST}`]: (received) => {
+        init = received
+        return new Response(null, { status: 204 })
+      },
+    })
+    setCsrfToken('csrf-7')
+    await expect(cancelEditRequest(DOCUMENT_ID)).resolves.toBeUndefined()
+    expect(init?.keepalive).toBe(true)
+    expect(api.requests[0]?.headers['x-csrf-token']).toBe('csrf-7')
+    api.on(`DELETE ${REQUEST}`, networkFailure)
+    await expect(cancelEditRequest(DOCUMENT_ID)).rejects.toBeInstanceOf(NetworkError)
+  })
+
+  it('谢绝：POST request/decline，令牌只在请求头里、请求的标识在请求体里；204 时兑现，这一代失效时抛出 EDIT_LEASE_LOST', async () => {
+    const api = installFakeApi({ [`POST ${REQUEST}/decline`]: () => new Response(null, { status: 204 }) })
+    setCsrfToken('csrf-8')
+    await expect(declineEditRequest(DOCUMENT_ID, TOKEN, REQUEST_ID)).resolves.toBeUndefined()
+    expect(api.requests[0]).toMatchObject({ body: { requestId: REQUEST_ID }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-8', 'content-type': 'application/json' } })
+    api.on(`POST ${REQUEST}/decline`, () => apiError(409, 'EDIT_LEASE_LOST'))
+    await expect(declineEditRequest(DOCUMENT_ID, TOKEN, REQUEST_ID)).rejects.toMatchObject({ code: 'EDIT_LEASE_LOST' })
+  })
+
+  it('交出：POST handover，keepalive（页面关闭时代替释放），令牌只在请求头里；读出留给了谁、留到何时；请求已不在时抛出 EDIT_REQUEST_GONE', async () => {
+    let init: RequestInit | undefined
+    const handed = { reservedFor: AMY, reservedUntil: '2026-10-07T03:03:00.000Z' }
+    const api = installFakeApi({
+      [`POST ${LEASE}/handover`]: (received) => {
+        init = received
+        return json(200, handed)
+      },
+    })
+    setCsrfToken('csrf-9')
+    await expect(handOverEditLease(DOCUMENT_ID, TOKEN, REQUEST_ID)).resolves.toEqual(handed)
+    expect(init?.keepalive).toBe(true)
+    expect(api.requests[0]).toMatchObject({ body: { requestId: REQUEST_ID }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-9' } })
+    api.on(`POST ${LEASE}/handover`, () => apiError(409, 'EDIT_REQUEST_GONE'))
+    await expect(handOverEditLease(DOCUMENT_ID, TOKEN, REQUEST_ID)).rejects.toMatchObject({ code: 'EDIT_REQUEST_GONE' })
+  })
+})
+
 const CONTENT = `/api/documents/${DOCUMENT_ID}/content`
 const SNAPSHOT = '{"id":"unit-1"}'
 
@@ -105,7 +189,7 @@ describe('内容的读取（P4 设计 §3.3；M3-P2 设计 §3.2 的条件读取
 })
 
 describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
-  const STATUS = { revision: 3, editor: { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false }, canEdit: true, formulasPending: false }
+  const STATUS = { revision: 3, editor: { holder: { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }, lastActiveAt: '2026-10-04T03:00:00.000Z', sameUser: false, sameSession: false }, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }
 
   it('编辑状态：GET edit-lease，读出修订号、正在编辑的人与能不能编辑，连同服务端回答的时刻（响应头 Date）', async () => {
     const api = installFakeApi({ [`GET ${LEASE}`]: () => json(200, STATUS, { date: 'Sun, 04 Oct 2026 03:03:10 GMT' }) })
@@ -135,7 +219,7 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
       formatVersion: 1,
       sdkVersion: '1.0.1',
       formulasPending: false,
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true },
+      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
       replayed: false,
     }
     const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: created.title, formulasPending: true }

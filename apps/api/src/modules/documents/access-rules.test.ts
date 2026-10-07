@@ -127,10 +127,10 @@ describe('文档上能做的操作：只有空间角色时（00 号计划书 §5
   const mine = { createdBy: ALICE }
   const others = { createdBy: BOB }
 
-  it('改名、保存与空间内移动：编辑者及以上；跨空间移动与分享只给空间管理员；能读就能复制', () => {
-    expect(documentPermissionsOf(viaSpace('admin'), mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true })
-    expect(documentPermissionsOf(viaSpace('editor'), mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false })
-    expect(documentPermissionsOf(viaSpace('viewer'), mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false })
+  it('改名、保存与空间内移动：编辑者及以上；跨空间移动、分享与强制接管只给空间管理员；能读就能复制', () => {
+    expect(documentPermissionsOf(viaSpace('admin'), mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true })
+    expect(documentPermissionsOf(viaSpace('editor'), mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false })
+    expect(documentPermissionsOf(viaSpace('viewer'), mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('删除（P4-S3 spec §2）：空间管理员任意，编辑者只能删自己创建的，查看者一概不能', () => {
@@ -140,16 +140,26 @@ describe('文档上能做的操作：只有空间角色时（00 号计划书 §5
     expect(documentPermissionsOf(viaSpace('viewer'), mine, ALICE).canDelete).toBe(false)
   })
 
-  it('归档的空间：有效角色已经是查看者，只剩下复制（原来的空间管理员也不能分享）', () => {
+  it('归档的空间：有效角色已经是查看者，只剩下复制（原来的空间管理员也不能分享、强制接管）', () => {
     const archived = facts({ status: 'archived', memberRole: 'admin' })
     const access = documentAccessOf(archived, undefined)
     expect(access).toEqual({ spaceRole: 'viewer', contentRole: 'viewer', accessVia: 'space', space: archived })
-    expect(access && documentPermissionsOf(access, mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false })
+    expect(access && documentPermissionsOf(access, mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false })
   })
 
-  it('个人空间的所有者是空间管理员：能分享；别人的个人空间没有空间角色', () => {
-    expect(documentAccessOf(facts({ type: 'personal', owned: true }), undefined)).toMatchObject({ spaceRole: 'admin', contentRole: 'admin', accessVia: 'space' })
+  it('个人空间的所有者是空间管理员：能分享、能强制接管；别人的个人空间没有空间角色', () => {
+    const owned = documentAccessOf(facts({ type: 'personal', owned: true }), undefined)
+    expect(owned).toMatchObject({ spaceRole: 'admin', contentRole: 'admin', accessVia: 'space' })
+    expect(owned && documentPermissionsOf(owned, { createdBy: BOB }, ALICE)).toMatchObject({ canShare: true, canTakeOver: true })
     expect(documentAccessOf(facts({ type: 'personal', owned: false }), undefined)).toBeUndefined()
+  })
+
+  it('强制接管（M3-P5 设计 §3.8）：空间管理员并且能编辑；空间管理员却不能编辑（今天的规则里到不了，纵深防御）也没有', () => {
+    expect(documentPermissionsOf(viaSpace('admin'), others, ALICE).canTakeOver).toBe(true)
+    for (const role of ['editor', 'viewer'] as const)
+      expect(documentPermissionsOf(viaSpace(role), others, ALICE).canTakeOver, role).toBe(false)
+    const adminWithoutEditing: DocumentAccess = { spaceRole: 'admin', contentRole: 'viewer', accessVia: 'space', space: facts({ memberRole: 'admin' }) }
+    expect(documentPermissionsOf(adminWithoutEditing, others, ALICE)).toMatchObject({ canEdit: false, canTakeOver: false })
   })
 })
 
@@ -239,9 +249,12 @@ describe('文档的访问：空间角色 × 单独授权 × 归档的全部组�
         canDelete: spaceRank === 3 || (spaceRank >= 2 && creator),
         canShare: spaceRank === 3,
       }
+      // 强制接管（M3-P5）两样都看：空间管理员，并且能编辑
+      const takeOver: Partial<DocumentPermissions> = { canTakeOver: spaceRank === 3 && contentRank >= 2 }
       expect(pick(permissions, content), `内容 creator=${creator}`).toEqual(content)
       expect(pick(permissions, structure), `结构 creator=${creator}`).toEqual(structure)
-      expect(Object.keys(permissions).toSorted()).toEqual(Object.keys({ ...content, ...structure }).toSorted())
+      expect(pick(permissions, takeOver), `强制接管 creator=${creator}`).toEqual(takeOver)
+      expect(Object.keys(permissions).toSorted()).toEqual(Object.keys({ ...content, ...structure, ...takeOver }).toSorted())
     }
   })
 })
@@ -250,16 +263,16 @@ describe('文档的访问：几种要紧的情形（M2-P5 设计 §1、§3.4(1)�
   const others = { createdBy: BOB }
   const outsider = facts({ memberRole: null })
 
-  it('只凭授权的编辑者：能保存、改名、复制；不能移动、删除、分享——他是创建人也不能删（看不到空间的目录结构）', () => {
+  it('只凭授权的编辑者：能保存、改名、复制；不能移动、删除、分享、强制接管——他是创建人也不能删（看不到空间的目录结构）', () => {
     const access = documentAccessOf(outsider, 'editor')
     expect(access).toEqual({ spaceRole: undefined, contentRole: 'editor', accessVia: 'grant', space: outsider })
-    expect(access && documentPermissionsOf(access, { createdBy: ALICE }, ALICE)).toEqual({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false })
+    expect(access && documentPermissionsOf(access, { createdBy: ALICE }, ALICE)).toEqual({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('只凭授权的查看者：只能读与复制', () => {
     const access = documentAccessOf(outsider, 'viewer')
     expect(access).toMatchObject({ spaceRole: undefined, contentRole: 'viewer', accessVia: 'grant' })
-    expect(access && documentPermissionsOf(access, others, ALICE)).toEqual({ canEdit: false, canRename: false, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false })
+    expect(access && documentPermissionsOf(access, others, ALICE)).toEqual({ canEdit: false, canRename: false, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('归档的空间里授权同样降级：被单独授权为编辑者的人只是查看者', () => {
@@ -269,10 +282,10 @@ describe('文档的访问：几种要紧的情形（M2-P5 设计 §1、§3.4(1)�
     expect(documentAccessOf(facts({ status: 'archived', memberRole: 'viewer' }), 'editor')).toMatchObject({ spaceRole: 'viewer', contentRole: 'viewer' })
   })
 
-  it('取较高者：空间里的查看者另有编辑授权，内容是编辑者，结构仍按查看者（不能移动、删除）；途径是空间', () => {
+  it('取较高者：空间里的查看者另有编辑授权，内容是编辑者，结构仍按查看者（不能移动、删除、强制接管）；途径是空间', () => {
     const access = documentAccessOf(facts({ memberRole: 'viewer' }), 'editor')
     expect(access).toMatchObject({ spaceRole: 'viewer', contentRole: 'editor', accessVia: 'space' })
-    expect(access && documentPermissionsOf(access, { createdBy: ALICE }, ALICE)).toMatchObject({ canEdit: true, canRename: true, canMoveWithinSpace: false, canDelete: false, canShare: false })
+    expect(access && documentPermissionsOf(access, { createdBy: ALICE }, ALICE)).toMatchObject({ canEdit: true, canRename: true, canMoveWithinSpace: false, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('授权不覆盖空间角色：空间管理员另有查看授权，仍是空间管理员；全员可见的查看者另有编辑授权，内容是编辑者', () => {

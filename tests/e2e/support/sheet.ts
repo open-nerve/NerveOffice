@@ -92,6 +92,66 @@ export function enterEditButton(page: Page): Locator {
   return chrome(page).getByRole('banner').getByRole('button', { name: '编辑', exact: true })
 }
 
+/**
+ * 页头里的"在此编辑"（M3-P5 设计 §3.7：持有者是自己——本浏览器的另一个标签页、另一台设备或浏览器——时换掉"编辑"，本人接管）；
+ * 接手进行中同一个按钮说"正在接手…"，那边没能交出时说"仍在此编辑"
+ */
+export function takeOverHereButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '在此编辑', exact: true })
+}
+
+/**
+ * 页头里的"请求编辑"（M3-P5 设计 §3.6：持有者是别人、自己能编辑时换掉"编辑"）；同一个按钮之后说"正在请求…""取消请求""正在取消…"
+ */
+export function requestEditButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '请求编辑', exact: true })
+}
+
+/** 页头里的"取消请求"（请求编辑在等待时，同一个按钮） */
+export function cancelRequestButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '取消请求', exact: true })
+}
+
+/**
+ * 页头里的"强制接管"（M3-P5 设计 §3.8：阅读时、别人在编辑时、能强制接管时在"请求编辑"旁边）；强制接管的进入编辑中同一个按钮说"正在接管…"
+ */
+export function forceTakeOverButton(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('button', { name: '强制接管', exact: true })
+}
+
+/** 进入编辑之后页头下面异常中断的说明（M3-P5 设计 §3.11：不打断的说明与"知道了"，不是 alert） */
+export function interruptionNotice(page: Page): Locator {
+  return chrome(page).locator('[data-slot="interruption-notice"]')
+}
+
+/** 页头里返回所在空间的链接（一直在：随状态消失的按钮上的焦点交给它） */
+export function backLink(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByRole('link').first()
+}
+
+/** 焦点在哪里：body、页头与说明（#editor-chrome）里，或者别处（编辑器的输入框） */
+export async function focusPlace(page: Page): Promise<'body' | 'chrome' | 'editor'> {
+  return page.evaluate(() => {
+    const active = document.activeElement
+    if (active === null || active === document.body)
+      return 'body'
+    return document.querySelector('#editor-chrome')?.contains(active) === true ? 'chrome' : 'editor'
+  })
+}
+
+/**
+ * 持有者页头下面有人请求编辑时的提示（M3-P5 设计 §3.6）：带标题的分组（role="group"，名字是"[人名] 请求编辑这份文档"），里面"交出""继续编辑"
+ * 与一行静态说明
+ */
+export function requestPrompt(page: Page): Locator {
+  return chrome(page).getByRole('group', { name: /请求编辑这份文档$/ })
+}
+
+/** 页头之外一直在的读屏状态区（M3-P2 起阅读时的说明都在这里：谁在编辑、空闲释放与交出之后、"在此编辑"与请求编辑的进展） */
+export function statusRegion(page: Page): Locator {
+  return chrome(page).locator('[data-slot="status-region"]')
+}
+
 /** 页头里的"退出编辑"（编辑时，M3-P2） */
 export function exitEditButton(page: Page): Locator {
   return chrome(page).getByRole('banner').getByRole('button', { name: '退出编辑', exact: true })
@@ -127,10 +187,13 @@ export async function openReader(page: Page, documentId: string, stage: 'ready' 
   await whenReading(page, stage)
 }
 
-/** 打开或刷新之后：以只读创建的编辑器就绪，页头有了阅读时的样子（载入的结果在编辑器就绪之后一刻才交给页头） */
+/**
+ * 打开或刷新之后：以只读创建的编辑器就绪，页头有了阅读时的样子（载入的结果在编辑器就绪之后一刻才交给页头）——能编辑时"编辑"，持有者是自己时
+ * "在此编辑"、别人时"请求编辑"（M3-P5），不能编辑时"只能查看"
+ */
 async function whenReading(page: Page, stage: 'ready' | 'steady'): Promise<void> {
   await waitForEditorAccess(page, 'read', stage)
-  await expect(enterEditButton(page).or(saveStatus(page).filter({ hasText: /^只能查看$/ }))).toBeVisible()
+  await expect(enterEditButton(page).or(takeOverHereButton(page)).or(requestEditButton(page)).or(saveStatus(page).filter({ hasText: /^只能查看$/ }))).toBeVisible()
 }
 
 /** 打开并进入编辑（M3-P2：打开即阅读，点"编辑"才进入编辑）：要在编辑器里改内容、保存的用例用它 */
@@ -324,6 +387,19 @@ export async function leaveEditor(page: Page, documentId: string): Promise<void>
 }
 
 /**
+ * 记下这个页面之后发出的释放编辑权（DELETE …/edit-lease）的请求（地址），按先后。续上只在换过登录时先释放本页那一代
+ * （M3-P5 审查 A3：到期、代次过时的直接申请），用例据此核对续上的过程里有没有释放
+ */
+export function recordLeaseReleases(page: Page, documentId: string): string[] {
+  const releases: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+      releases.push(request.url())
+  })
+  return releases
+}
+
+/**
  * 拦下这个页面的心跳续租（M3-P1）：续租一律按断网处理——页面照常隔 10 秒重试，编辑权的状态不变；unblock 之后照常。
  * 核对保存那一步的用例用它：心跳也会得知失去访问、登录失效，赶在保存之前说明编辑权已失效（页面这样做是对的，
  * 但那就不是这条用例要核对的那一步了，结果还取决于心跳恰好落在哪里）。申请与释放照常
@@ -333,6 +409,35 @@ export async function blockLeaseRenewals(page: Page): Promise<{ readonly unblock
   const handler = async (route: Route): Promise<void> => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue()
   await page.route(pattern, handler)
   return { unblock: async () => page.unroute(pattern, handler) }
+}
+
+/**
+ * 拦下这个页面的保存（PUT …/content）：一律按断网失败，心跳、申请、释放与读取照常；unblock 之后照常（M3-P5：空闲释放时保存失败、留在编辑）。
+ * 生产构建里自动保存照常重试，同样被拦下
+ */
+export async function blockSaves(page: Page): Promise<{ readonly unblock: () => Promise<void> }> {
+  const pattern = '**/api/documents/*/content?*'
+  const handler = async (route: Route): Promise<void> => route.request().method() === 'PUT' ? route.abort('internetdisconnected') : route.continue()
+  await page.route(pattern, handler)
+  return { unblock: async () => page.unroute(pattern, handler) }
+}
+
+/**
+ * 只给这一个页面装（载入之前）：吞掉交接频道（nerve-office:doc:<documentId>，BroadcastChannel）的消息——"旧标签页不响应"（冻结、Safari 暂停了
+ * 后台页面、页面卡住；Playwright 模拟不了真正的冻结，M3-P5 探索 §3.3 第 8 条）。页面用 addEventListener('message') 收（same-browser.ts），
+ * 这里不让它挂上；别的频道（会话的）照常。只改浏览器的 BroadcastChannel，生产构建里同样成立
+ */
+export async function deafenHandover(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const Original = BroadcastChannel
+    window.BroadcastChannel = class extends Original {
+      override addEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): void {
+        if (type === 'message' && this.name.startsWith('nerve-office:doc:'))
+          return
+        super.addEventListener(type, listener, options)
+      }
+    }
+  })
 }
 
 /**

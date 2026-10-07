@@ -15,7 +15,9 @@ const QUERY_TIMEOUT_MARGIN_MS = 5_000
 export const KEEP_ALIVE_INITIAL_DELAY_MS = 10_000
 
 /**
- * 连接池与超时（P2 设计 §3.7）：处理时间的上限由语句超时、等锁超时与取连接的超时保证。
+ * 连接池与超时（P2 设计 §3.7）：处理时间的上限由语句超时、等锁超时与取连接的超时保证；要整个事务限时的由事务自己设
+ * （TransactionRunner 的 limit：它在事务里先把 transaction_timeout 设成 0、再设时限，与会话的默认值无关——所以这里不带 options
+ * 启动参数，连接串里的 options、PGOPTIONS 照旧起作用，M3-P5 再复核 D2）。
  * 只读快照进行中，连接池上的查询与借连接一律报错（refuseInsideSnapshot）
  */
 export function createPool(settings: AppConfig['database'], logger: AppLogger, snapshots: SnapshotScope): pg.Pool {

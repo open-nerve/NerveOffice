@@ -24,7 +24,7 @@ import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentSaveReceiptsRepository } from './document-save-receipts.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { requestLeaseLoss } from './edit-lease-rules.ts'
-import { requireActiveLogin } from './edit-lease.service.ts'
+import { editLeaseLost, requireActiveLogin } from './edit-lease.service.ts'
 import { EditLeasesRepository } from './edit-leases.repository.ts'
 import { matchesNoneMatch } from './if-none-match.ts'
 import { legacyNonEmptyResources } from './legacy-resources.ts'
@@ -34,6 +34,33 @@ import { revisionSourceFor } from './revision-source.ts'
 import { replayedSave, savedOutcome } from './save-outcomes.ts'
 import { SnapshotInspector } from './snapshot-inspector.ts'
 import { INSPECTED_PROFILE, rejectedSnapshot, requirePassingSnapshot } from './upload-inspection.ts'
+
+/**
+ * 保存的事务的时限（M3-P5 复验 C1，再复核 D1、D2）：BEGIN 到提交至多 SAVE_TRANSACTION_START_WITHIN_MS + SAVE_TRANSACTION_TIMEOUT_MS
+ * = 70 秒，由数据库与事务运行器保证（TransactionRunner 的 limit：事务的第一条语句里先把 transaction_timeout 设成 0、再设 60 秒、再读 BEGIN
+ * 之后过了多久，超过 10 秒就不开始）——与会话的默认值、连接参数、各个超时的配置都无关。到点（或开始得太晚）时整个事务回滚、什么也没写，
+ * 页面得到数据库繁忙（503）、照常重试。
+ * 为什么要有它：收回写入权锁"一个有效期之前那一刻按时间还活着"的租约所在的文档行，等在途的保存（edit-leases.repository.ts 的 lockInScope，
+ * M3-P5 审查 A1）。记撤权的 now() 为 T0，在途的保存开始于 S（它判断租约用的 now()，即 BEGIN 的时刻）、提交于 C。撤权执行时保存还在途，所以
+ * C > T0；只要 C − S < 90 秒（一个有效期，EDIT_LEASE_TTL_SECONDS），就有 S > T0 − 90：保存在 S 时判断租约有效，租约在 T0 − 90 时也按时间
+ * 活着，撤权的第一条语句一定锁住它、等保存提交——"撤权提交之后的保存必定被拒绝"成立。原来这个上界只是前提（lock_timeout、
+ * statement_timeout、idle_in_transaction_session_timeout 各管一次等锁、一条语句、语句之间的一次空闲，都不限整个事务，而且都能经环境变量
+ * 调到 600 秒），现在：
+ * - 设下时限的时刻记为 S'。BEGIN 之后的那一段 S' − S 由事务运行器量出、不超过 10 秒（超过就不开始；原来它只受
+ *   idle_in_transaction_session_timeout 约束，再复核 D1）；
+ * - 计时从 S' 起（先设 0 停掉会话默认值可能已经启动的计时器，再从这一刻按 60 秒重新计时，再复核 D2），到点没提交的不会再提交，
+ *   所以提交了的都有 C − S' ≤ 60 秒；
+ * - 合起来 C − S ≤ 10 + 60 = 70 < 90，余 20 秒。正常的保存是毫秒级（实测接近上限的保存，事务用 0.1 秒左右）；一份至多 5 MiB 的正文、
+ *   两处等锁（各受 lock_timeout 约束）远用不了 60 秒，用到了说明数据库已经严重变慢，按繁忙失败、页面重试是对的。
+ * 只有保存要它：别的"按事务开始时判断租约"的写路径（心跳、谢绝、交出）只锁租约行、不写内容，申请与它们的交错由有效条件第 7 条兜底
+ */
+export const SAVE_TRANSACTION_TIMEOUT_MS = 60_000
+
+/** 保存的事务从 BEGIN 到设下时限至多这么久（见上）：超过就不开始，按数据库繁忙失败（M3-P5 再复核 D1） */
+export const SAVE_TRANSACTION_START_WITHIN_MS = 10_000
+
+/** 保存开启事务时带的时限（TransactionRunner 的 limit） */
+const SAVE_TRANSACTION_LIMIT = { timeoutMs: SAVE_TRANSACTION_TIMEOUT_MS, startWithinMs: SAVE_TRANSACTION_START_WITHIN_MS } as const
 
 /** 读取到的内容：gzip 压缩的快照 JSON 字节，与它对应的修订号（ETag）。 */
 export interface DocumentContent {
@@ -117,7 +144,7 @@ export class DocumentContentService {
    *    其余情况一律往下走，不提前回答：看不到的、不存在的、另一份文档的 requestId 都留给事务里的再查（"看不到与不存在"的语句序列照旧）；
    * 2. 客户端的数据格式（与文档无关）：过旧时 CLIENT_OUTDATED（ClientFormatGate）；
    * 3. 快照的检查（与文档无关，子进程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希与资源名；
-   * 4. 一个事务：requestId 的锁（RequestLedger：事务的第一把锁，同一个 requestId 的写入排队，审查 A3）→ 能否访问 → 能编辑时锁文档行、
+   * 4. 一个事务（BEGIN 到提交至多 70 秒，由数据库与事务运行器保证，见 SAVE_TRANSACTION_TIMEOUT_MS；M3-P5 复验 C1）：requestId 的锁（RequestLedger：事务的第一把锁，同一个 requestId 的写入排队，审查 A3）→ 能否访问 → 能编辑时锁文档行、
    *    锁下再判断 → 再查一次重放（并发的同一次请求；查修订记录与回执两张表）→ 这次登录仍然有效 → 文档的格式
    *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、"公式待更新"
    *    只清不设（两边都为真才留着），修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、
@@ -176,7 +203,7 @@ export class DocumentContentService {
       if (current.contentHash?.equals(contentHash) === true)
         return this.confirmUnchanged(attempt, document, transaction)
       return this.write(attempt, document, contentHash, transaction)
-    })
+    }, { limit: SAVE_TRANSACTION_LIMIT })
   }
 
   /**
@@ -287,15 +314,16 @@ export class DocumentContentService {
 
   /**
    * 保存要求编辑租约（M3-P1 设计 §3.4.4）：令牌是当前这一行的、按有效条件有效（edit-lease-rules.ts 的 requestLeaseLoss）、
-   * 代次等于查询参数的 writeEpoch、这次登录与查询参数的标签页都是租约绑定的，否则 EDIT_LEASE_LOST（details 带原因）。
-   * 文档行已经锁住（能编辑的请求才走到这里），代次是锁下读到的；租约行不加锁读：能改写它的申请与收回写入权都要先拿文档行的锁。
-   * 保存不续租（续租靠心跳）
+   * 代次等于查询参数的 writeEpoch、这次登录与查询参数的标签页都是租约绑定的，否则 EDIT_LEASE_LOST（details 带原因；被接管时是
+   * taken_over 与 forced，M3-P5 设计 §3.7、§3.8：页面据此不续上，给副本）。
+   * 文档行已经锁住（能编辑的请求才走到这里），代次是锁下读到的；租约行不加锁读：能改写它的申请（含本人接管、强制接管）与收回写入权
+   * 都要先拿文档行的锁。保存不续租（续租靠心跳）
    */
   private async requireLease(saver: ContentSaver, document: DocumentRow, query: SaveContentQuery, transaction: Transaction): Promise<void> {
     const lease = await this.leases.findByDocument(document.id, transaction)
     const loss = requestLeaseLoss(lease, document.writeEpoch, { token: saver.token, sessionId: saver.sessionId, clientInstanceId: query.clientInstanceId, writeEpoch: query.writeEpoch })
     if (loss !== undefined)
-      throw new AppError('EDIT_LEASE_LOST', undefined, { details: { reason: loss } })
+      throw editLeaseLost(loss)
   }
 
   /**

@@ -1,4 +1,4 @@
-export { databaseBusyReasonOf, POOL_TIMEOUT_MESSAGE } from './busy-errors.ts'
+export { databaseBusyReasonOf, LateTransactionStartError, POOL_TIMEOUT_MESSAGE } from './busy-errors.ts'
 export type { DatabaseBusyReason } from './busy-errors.ts'
 export { CommitLedger } from './commit-ledger.ts'
 export { inSavepoint, isUniqueViolation } from './constraint-errors.ts'
@@ -19,4 +19,4 @@ export { APPLICATION_NAME } from './pool.ts'
 // 只由 database 模块提供（不在 DatabaseModule 的 exports 里）：转出只为别的模块的单元测试直接构造 TransactionRunner
 export { SnapshotScope } from './snapshot-scope.ts'
 export { TransactionRunner } from './transaction-runner.ts'
-export type { SnapshotOpening } from './transaction-runner.ts'
+export type { SnapshotOpening, TransactionLimit, TransactionOptions } from './transaction-runner.ts'

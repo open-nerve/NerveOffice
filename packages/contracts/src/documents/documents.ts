@@ -145,7 +145,7 @@ export type DocumentAccessVia = (typeof DOCUMENT_ACCESS_VIA)[number]
 /**
  * 调用者在这份文档上能做的操作：界面据此只显示能做的，服务端按同一套规则检查（M2-P4 设计 §3.7）。
  * 内容的操作（保存、改名、复制）看内容权限——空间角色与单独授权取较高者；结构性的操作（移动、删除、分享）只看空间角色，
- * 只凭授权的人一律没有（M2-P5 设计 §3.4(1)）。归档的空间里所有人至多是查看者，包括被单独授权为编辑者的人。
+ * 只凭授权的人一律没有（M2-P5 设计 §3.4(1)）；强制接管两样都看（M3-P5）。归档的空间里所有人至多是查看者，包括被单独授权为编辑者的人。
  */
 export const documentPermissionsSchema = z.object({
   /** 改动内容（保存）：内容权限是编辑者及以上 */
@@ -162,6 +162,11 @@ export const documentPermissionsSchema = z.object({
   canDelete: z.boolean(),
   /** 分享（查看、设置、调整、取消这份文档的单独授权）：空间管理员或个人空间的所有者；归档的空间里没有（M2-P5） */
   canShare: z.boolean(),
+  /**
+   * 强制接管别人的编辑（M3-P5 设计 §3.8）：空间管理员或个人空间的所有者，并且能编辑；归档的空间里没有，只凭授权的人没有。
+   * 编辑器页据此在别人正在编辑时显示"强制接管"
+   */
+  canTakeOver: z.boolean(),
 })
 
 export type DocumentPermissions = z.infer<typeof documentPermissionsSchema>

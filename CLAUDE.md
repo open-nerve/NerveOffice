@@ -94,7 +94,7 @@
 | `pnpm db:generate --name <名称>` | 按表定义生成迁移（人工审阅后入库；合并后的迁移不再修改） |
 | `pnpm --filter @nerve-office/e2e run update:sheet-template` | 经编辑器页重新生成新建表格用的模板快照（SDK 升级或插件档案变更之后；需要 `pnpm db:up` 与构建，同 `pnpm test:e2e`） |
 | `pnpm --filter @nerve-office/e2e run update:read-only-sample` | 同上，重新生成只读 E2E 用的样本（`tests/e2e/support/read-only-sample.json`：打开与画完每张表之后逐字节不变的形式） |
-| `pnpm --filter @nerve-office/e2e run safari:selftest [--front]` | 在本机真实 Safari 上跑编辑器的页面自检（测试构建的 `selftest.html`：只读入口、公式、进入与退出编辑，M3-P4 起另有捕获时机——变更检测、公式时序的两种模式、自动行高、大表复制、组合输入、环境与隐藏之后存下，都观察真实的自动保存、核对服务器上的内容；一次约 3 分多钟，整次运行默认限时 1800 秒；不进 CI）。Playwright 里的校准是 `specs/editor/selftest.spec.ts`，两种打开状态（暂停与 `E2E_AUTOSAVE=running`）都要通过。Safari 会暂停看不见的页面：窗口要露在外面，`--front` 把 Safari 带到前台；结果在 `tests/e2e/test-results/safari/` |
+| `pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--steps <步骤,…>]` | 在本机真实 Safari 上跑编辑器的页面自检（测试构建的 `selftest.html`：只读入口、公式、进入与退出编辑，M3-P4 起另有捕获时机——变更检测、公式时序的两种模式、自动行高、大表复制、组合输入、环境与隐藏之后存下，都观察真实的自动保存、核对服务器上的内容；M3-P5 起另有交接——两个标签页的本人接管（另一页照常回应、收不到交接消息）与刷新时在途的保存；共 17 步，一次约 4.5 分钟，`--steps` 只跑其中几步，整次运行默认限时 1800 秒；不进 CI）。Playwright 里的校准是 `specs/editor/selftest.spec.ts`，两种打开状态（暂停与 `E2E_AUTOSAVE=running`）都要通过。Safari 会暂停看不见的页面：窗口要露在外面，`--front` 把 Safari 带到前台，跑的时候别切走（窗口被挡住，这次就作废）；结果在 `tests/e2e/test-results/safari/` |
 | `pnpm --filter @nerve-office/e2e run measure:switch` / `measure:memory` | 实测阅读与编辑之间切换的耗时（三个浏览器、三份文档）/ 反复切换的内存（Chromium，CDP 回收之后的堆与 DOM 计数）；不进常规 E2E 与 CI，机器空闲时跑；结果在 `tests/e2e/measure/test-results/` |
 | `node --expose-gc apps/api/scripts/measure-snapshot-inspection.ts` | 实测快照检查的子进程池（耗时、事件循环延迟、内存，DEF-018；先 `pnpm --filter "@nerve-office/api..." run build`；可以在生产镜像里跑，见脚本开头；不进 CI） |
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |

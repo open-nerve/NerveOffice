@@ -561,10 +561,11 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  *   被单独动态引入时也自成分块（M3-P2 复核 B2）；
  * - 公式模式的开关（formula-mode，M3-P4 设计 §3.14）：createSheetEditor 在测试构建的分支里动态引入它，自成分块；
  * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块；
- * - 自动保存的控制（M3-P4 设计 §3.14，autosave-control）：编辑器页的组装处（start.tsx）动态引入它，自成分块。
- * 自检结果的格式标识与计时、自动保存的控制挂在 window 上的名字另由禁用关键字核对
+ * - 自动保存的控制（M3-P4 设计 §3.14，autosave-control）与交接日志（M3-P5 设计 §3.13，handover-log）：编辑器页的组装处（start.tsx）动态引入它们，
+ *   各自成分块。
+ * 自检结果的格式标识与计时、自动保存的控制与交接日志挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

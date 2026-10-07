@@ -3,9 +3,11 @@
 // 阅读模式（M3-P2 设计 §3.2）：内容的条件读取（If-None-Match，没有变化时 304）、编辑状态（阅读页每 30 秒一次）、另存为副本；
 // 保存协议（M3-P3 设计 §3.5、§3.8）：保存、另存为副本、申请编辑权与心跳都带上本页的构建与数据格式（client-format.ts），
 // 保存与另存为副本另带"公式待更新"。打开自检（M3-P4 设计 §3.13）：失败的上报。
-import type { AcquiredEditLease, ConflictCopyQuery, CreatedDocument, DocumentDetail, EditStatus, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+// 请求编辑与交出（M3-P5 设计 §3.4、§3.6）：请求方的发出、续期（后台请求）与取消，持有者的交出与谢绝（带令牌）。
+import type { AcquiredEditLease, ConflictCopyQuery, CreatedDocument, DocumentDetail, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { AcquireOptions } from './edit-lease.ts'
 import type { SaveRequest } from './save-coordinator.ts'
-import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editStatusSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editRequestOutcomeSchema, editStatusSchema, handedOverEditLeaseSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
 import { clientFormatParams, PAGE_CLIENT_FORMAT } from './client-format.ts'
 
@@ -132,10 +134,15 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
 
 /**
  * 申请编辑权（201）：clientInstanceId 是本页这次加载的标识，租约绑定它与这次登录；带上本页的构建与数据格式（M3-P3）。
+ * 续上时另带本页的空闲秒数（idleSeconds，M3-P5 设计 §3.5：新的一代的最后活动按它往前推；契约限它比回收阈值短，续上只在人在时进行，
+ * 带的不会超，edit-lease.ts）；用户发起的申请不带。
+ * "在此编辑"另带接管方式（takeover: 'self'，M3-P5 设计 §3.7：当前有效的租约就在自己手里时原子地结束那一代、发新的一代）。
  * 被占用时抛出 EDIT_LEASE_HELD，本页过旧时 CLIENT_OUTDATED，文档比服务端新时 DOCUMENT_TOO_NEW（ApiError）
  */
-export async function acquireEditLease(documentId: string, clientInstanceId: string): Promise<AcquiredEditLease> {
-  return apiRequest(leasePath(documentId), { method: 'POST', body: { clientInstanceId, ...PAGE_CLIENT_FORMAT }, schema: acquiredEditLeaseSchema })
+export async function acquireEditLease(documentId: string, clientInstanceId: string, options: AcquireOptions = {}): Promise<AcquiredEditLease> {
+  const { idleSeconds, takeover } = options
+  const body = { clientInstanceId, ...(idleSeconds === undefined ? {} : { idleSeconds }), ...(takeover === undefined ? {} : { takeover }), ...PAGE_CLIENT_FORMAT }
+  return apiRequest(leasePath(documentId), { method: 'POST', body, schema: acquiredEditLeaseSchema })
 }
 
 /**
@@ -161,4 +168,48 @@ export async function reportOpenCheckFailures(documentId: string, report: OpenCh
  */
 export async function releaseEditLease(documentId: string, token: string): Promise<void> {
   await apiFetch(leasePath(documentId), { method: 'DELETE', headers: leaseHeaders(token), keepalive: true })
+}
+
+function requestPath(documentId: string): string {
+  return `${leasePath(documentId)}/request`
+}
+
+/**
+ * 发出请求编辑（POST …/edit-lease/request，200，M3-P5 设计 §3.6）：带本页的构建与数据格式——过旧的页面先拦下（CLIENT_OUTDATED），
+ * 免得编辑权交给一个之后申请不了的页面。交回请求编辑的结果（不会是 gone）；用户的操作，顺延登录
+ */
+export async function sendEditRequest(documentId: string): Promise<EditRequestOutcome> {
+  return apiRequest(requestPath(documentId), { method: 'POST', body: { ...PAGE_CLIENT_FORMAT }, schema: editRequestOutcomeSchema })
+}
+
+/** 请求方续期（PUT，没有请求体，200）：等待中的页面每 5 秒一次，后台请求（服务端不顺延登录）；交回请求的现状（没有本人的请求时是 gone） */
+export async function renewEditRequest(documentId: string): Promise<EditRequestOutcome> {
+  return apiRequest(requestPath(documentId), { method: 'PUT', schema: editRequestOutcomeSchema })
+}
+
+/**
+ * 取消请求编辑（DELETE，204）：清掉本人的请求与留给本人的保留，都没有时同样 204。keepalive：页面关闭时也发（不看结果）；
+ * "取消请求"时等它，失败时抛出请求层的错误
+ */
+export async function cancelEditRequest(documentId: string): Promise<void> {
+  await apiFetch(requestPath(documentId), { method: 'DELETE', keepalive: true })
+}
+
+/**
+ * 谢绝请求编辑（持有者选了"继续编辑"，POST …/request/decline，204）：带令牌（请求头）与心跳带来的请求的标识；标识对不上时同样 204。
+ * 持有者的那一代已失效时抛出 EDIT_LEASE_LOST（ApiError）
+ */
+export async function declineEditRequest(documentId: string, token: string, requestId: string): Promise<void> {
+  await apiFetch(`${requestPath(documentId)}/decline`, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) } })
+}
+
+/**
+ * 交出编辑权（POST …/edit-lease/handover，200，M3-P5 设计 §3.6）：带令牌与心跳带来的请求的标识，交回编辑权留给了谁、留到何时。
+ * 请求已经不在时抛出 EDIT_REQUEST_GONE（租约不动）；这一代已失效时 EDIT_LEASE_LOST（回包丢了再交出得到 handed_over）。
+ * keepalive：页面关闭时用它代替释放（不看结果），与释放同一个做法
+ */
+export async function handOverEditLease(documentId: string, token: string, requestId: string): Promise<HandedOverEditLease> {
+  const path = `${leasePath(documentId)}/handover`
+  const response = await apiFetch(path, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) }, keepalive: true })
+  return readJson(response, handedOverEditLeaseSchema, `POST ${path}`)
 }

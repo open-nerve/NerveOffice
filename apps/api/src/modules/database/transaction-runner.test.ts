@@ -4,6 +4,7 @@ import type { DbTransaction, Transaction } from './database.ts'
 import { sql } from 'drizzle-orm'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { databaseBusyReasonOf, LateTransactionStartError } from './busy-errors.ts'
 import { CommitLedger } from './commit-ledger.ts'
 import { SnapshotScope } from './snapshot-scope.ts'
 import { NESTED_IN_SNAPSHOT_MESSAGE, TRANSACTION_ABORTED_MESSAGE, TransactionRunner } from './transaction-runner.ts'
@@ -14,20 +15,25 @@ type TransactionStatus = 'I' | 'T' | 'E'
  * 假的连接：记下执行过的语句；failOn 里的语句（按第一个词）执行时报错。
  * 事务状态按 PostgreSQL 的规则变化：BEGIN 之后在事务中，事务中的语句失败后事务中止，COMMIT、ROLLBACK 之后空闲；
  * 事务中止之后，除了 ROLLBACK，任何语句都报 25P02。
+ * 设下时限的那一条语句（带 transaction_timeout 的）交回 BEGIN 之后过了多久：elapsedMs（默认 1.5 毫秒，一次往返）
  */
-function fakeClient(failOn: readonly string[] = []) {
+function fakeClient(failOn: readonly string[] = [], answers: { readonly elapsedMs?: number | null } = {}) {
   const statements: string[] = []
+  /** 每条语句绑定的参数（与 statements 一一对应；drizzle 以第二个参数传入） */
+  const parameters: (readonly unknown[] | undefined)[] = []
   let status: TransactionStatus = 'I'
   return {
     statements,
+    parameters,
     release: vi.fn(),
     getTransactionStatus: vi.fn((): TransactionStatus => status),
     /** 模拟事务里有语句失败，而 work 把错误吞掉了 */
     abort: () => {
       status = 'E'
     },
-    query: vi.fn(async (config: { text: string }) => {
+    query: vi.fn(async (config: { text: string }, values?: readonly unknown[]) => {
       statements.push(config.text)
+      parameters.push(values)
       const verb = prefix(config.text).toLowerCase()
       if (status === 'E' && verb !== 'rollback')
         throw Object.assign(new Error('current transaction is aborted, commands ignored until end of transaction block'), { code: '25P02' })
@@ -40,6 +46,8 @@ function fakeClient(failOn: readonly string[] = []) {
         status = 'T'
       else if (verb === 'commit' || verb === 'rollback')
         status = 'I'
+      if (config.text.includes('transaction_timeout'))
+        return { rows: [{ elapsed_ms: answers.elapsedMs === undefined ? 1.5 : answers.elapsedMs }], rowCount: 1, command: 'SELECT', fields: [] }
       return { rows: [], rowCount: 0, command: '', fields: [] }
     }),
   }
@@ -156,6 +164,120 @@ describe('TransactionRunner', () => {
       throw new Error('timeout exceeded when trying to connect')
     }) }
     await expect(new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope()).run(async () => 1)).rejects.toThrow('timeout exceeded')
+  })
+})
+
+/** 与 pg 的 DatabaseError 同样的形状（SQLSTATE 与严重级别），包在 drizzle 的错误里（cause） */
+function failedQuery(code: string, severity: 'ERROR' | 'FATAL'): Error {
+  const cause = Object.assign(new Error(`数据库报错 ${code}`), { code, severity })
+  return Object.assign(new Error('Failed query: select 1\nparams: ', { cause }), { query: 'select 1', params: [] })
+}
+
+/** 保存用的那种时限：设下之后 60 秒，BEGIN 到设下至多 10 秒 */
+const LIMIT = { timeoutMs: 60_000, startWithinMs: 10_000 }
+
+/** 设下时限的那一条语句（空白压成一个空格，便于核对写法） */
+function limitStatementOf(client: ReturnType<typeof fakeClient>): string {
+  return (client.statements[1] ?? '').replaceAll(/\s+/g, ' ')
+}
+
+describe('TransactionRunner：限时的事务（limit，M3-P5 复验 C1、再复核 D1、D2）', () => {
+  it('BEGIN 之后的第一条语句设下时限，再执行 work、确认、提交；不带时限的事务不设', async () => {
+    const client = fakeClient()
+    await expect(runnerWith(client).run(async (transaction) => {
+      await select(transaction, 'work')
+      return 1
+    }, { limit: LIMIT })).resolves.toBe(1)
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'select', 'select', 'commit'])
+    expect(client.statements[2]).toBe('select \'work\'')
+    expect(client.parameters[1]).toEqual(['60000'])
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(false)
+
+    const unlimited = fakeClient()
+    await runnerWith(unlimited).run(async transaction => select(transaction, 'work'))
+    expect(unlimited.statements.map(prefix)).toEqual(['begin', 'select', 'select', 'commit'])
+    expect(unlimited.statements.join('\n')).not.toContain('transaction_timeout')
+  })
+
+  it('那一条语句的写法（再复核 D1、D2）：同一条语句里先把 transaction_timeout 设成 0（停掉会话默认值已经启动的计时器）、再设时限（从这一刻重新计时），先后由数据依赖强制——内层的 set_config 是外层的参数；读 BEGIN 之后过了多久放在外层 CASE 的条件成立之后；都只管这个事务（第三个参数为真）', async () => {
+    const client = fakeClient()
+    await runnerWith(client).run(async () => 1, { limit: LIMIT })
+    const statement = limitStatementOf(client)
+    expect(statement).toContain('CASE WHEN set_config(\'transaction_timeout\', CASE WHEN set_config(\'transaction_timeout\', \'0\', true) IS NOT NULL THEN $1 END, true) IS NOT NULL THEN (extract(epoch FROM clock_timestamp() - transaction_timestamp()) * 1000)::float8 END')
+    // 只有这一条语句碰 transaction_timeout：不拆成两条（两条之间没有计时器）
+    expect(client.statements.filter(text => text.includes('transaction_timeout'))).toHaveLength(1)
+  })
+
+  it('BEGIN 之后过了多久不超过上限（等于上限也算没超过）：照常开始', async () => {
+    const client = fakeClient([], { elapsedMs: 10_000 })
+    await expect(runnerWith(client).run(async () => 'ok', { limit: LIMIT })).resolves.toBe('ok')
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'select', 'commit'])
+  })
+
+  it('BEGIN 之后过了太久才设下时限（超过 startWithinMs，再复核 D1：应用在 BEGIN 与第一条语句之间停住了）：不开始——work 不执行、回滚，交出 LateTransactionStartError（算超过事务的时限，数据库繁忙），不记提交、丢弃连接', async () => {
+    const client = fakeClient([], { elapsedMs: 10_000.5 })
+    const work = vi.fn(async () => 1)
+    const commits = new CommitLedger()
+    const outcome = await inRequest(commits, async () => {
+      const error = await runnerWith(client, commits).run(work, { limit: LIMIT }).then(() => undefined, (rejected: unknown) => rejected)
+      return { error, committed: commits.hasCommitted() }
+    })
+    expect(outcome.error).toBeInstanceOf(LateTransactionStartError)
+    expect(outcome.error).toMatchObject({ elapsedMs: 10_000.5, startWithinMs: 10_000 })
+    expect(databaseBusyReasonOf(outcome.error)).toBe('transaction_timeout')
+    expect(outcome.committed).toBe(false)
+    expect(work).not.toHaveBeenCalled()
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'rollback'])
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('那一条语句没有交回 BEGIN 之后过了多久（不该发生）：当作意外错误，不开始、回滚', async () => {
+    const client = fakeClient([], { elapsedMs: null })
+    const work = vi.fn(async () => 1)
+    await expect(runnerWith(client).run(work, { limit: LIMIT })).rejects.toThrow('设下事务的时限时没有读到 BEGIN 之后过了多久')
+    expect(work).not.toHaveBeenCalled()
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'rollback'])
+  })
+
+  it('超过时限：数据库结束整个会话（work 的语句得到 FATAL 25P04），回滚随之失败——交出的是 25P04（数据库繁忙：确定没有生效，回 503），不是回滚的错误；丢弃连接，不记提交', async () => {
+    const client = fakeClient(['rollback'])
+    const timedOut = failedQuery('25P04', 'FATAL')
+    const commits = new CommitLedger()
+    const outcome = await inRequest(commits, async () => {
+      const error = await runnerWith(client, commits).run(async () => {
+        throw timedOut
+      }, { limit: LIMIT }).then(() => undefined, (rejected: unknown) => rejected)
+      return { error, committed: commits.hasCommitted() }
+    })
+    expect(outcome).toEqual({ error: timedOut, committed: false })
+    expect(client.statements.map(prefix)).toEqual(['begin', 'select', 'rollback'])
+    expect(client.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('回滚也失败时，work 的错误是别的数据库繁忙（等锁超时）同样交出它（没有生效）；不是数据库繁忙的（违反约束；业务错误见上面）照旧交出回滚的错误（意外错误），都丢弃连接', async () => {
+    const lockTimeout = failedQuery('55P03', 'ERROR')
+    const locked = fakeClient(['rollback'])
+    await expect(runnerWith(locked).run(async () => {
+      throw lockTimeout
+    })).rejects.toBe(lockTimeout)
+    expect(locked.release).toHaveBeenCalledExactlyOnceWith(true)
+
+    const violation = failedQuery('23505', 'ERROR')
+    const violated = fakeClient(['rollback'])
+    await expect(runnerWith(violated).run(async () => {
+      throw violation
+    })).rejects.toThrow('Failed query: rollback')
+    expect(violated.release).toHaveBeenCalledExactlyOnceWith(true)
+  })
+
+  it('时限的两个数都要是正整数毫秒：不然不借连接、直接报错（接线错误）', async () => {
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      for (const limit of [{ ...LIMIT, timeoutMs: bad }, { ...LIMIT, startWithinMs: bad }]) {
+        const pool = { connect: vi.fn(async () => fakeClient()) }
+        await expect(new TransactionRunner(pool as unknown as pg.Pool, new CommitLedger(), new SnapshotScope()).run(async () => 1, { limit }), JSON.stringify(limit)).rejects.toThrow('事务的时限要是正整数毫秒')
+        expect(pool.connect, JSON.stringify(limit)).not.toHaveBeenCalled()
+      }
+    }
   })
 })
 

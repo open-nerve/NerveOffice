@@ -50,6 +50,9 @@ const ERROR_MESSAGES: Record<ErrorCode, string | typeof SERVER_EXPLAINS> = {
   // 同一个人在另一个标签页或设备上编辑也会得到它，所以不说"别人"
   EDIT_LEASE_HELD: '这份文档正在别处编辑，现在不能编辑',
   EDIT_LEASE_LOST: '编辑权已失效，这次操作没有生效',
+  // 交接规则（M3-P5）：编辑器页按 details 另有具体的说明（留给了谁、到何时；对方已取消请求），这里是通用的说法
+  EDIT_LEASE_RESERVED: '编辑权刚交给了请求编辑的人，请稍后再试',
+  EDIT_REQUEST_GONE: '请求编辑已取消或失效，编辑权没有交出',
   // M3-P3：编辑器页另有具体的说明（"需要刷新"的终态、只能阅读），这里是通用的说法
   CLIENT_OUTDATED: '页面的版本过旧，这次操作没有生效，请重新加载页面',
   DOCUMENT_TOO_NEW: '这份文档由更新的版本保存过，当前只能阅读',

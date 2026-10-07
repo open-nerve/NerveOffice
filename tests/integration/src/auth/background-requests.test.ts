@@ -1,4 +1,4 @@
-// 后台请求不顺延登录（M3-P2 设计 §3.2，DEF-043）：页面在后台定时发的请求——阅读页每 30 秒读一次编辑状态、编辑时每 10 秒的心跳——
+// 后台请求不顺延登录（M3-P2 设计 §3.2，DEF-043）：页面在后台定时发的请求——阅读页每 30 秒读一次编辑状态、编辑时每 10 秒的心跳、等待请求编辑时每 5 秒的续期（M3-P5）——
 // 标了 @BackgroundRequest()，会话守卫照常认证，但不顺延空闲过期：页面开着、人却不在时，登录照样按空闲到期。
 // 用户自己的操作（打开、保存、申请编辑权）照常顺延；自动保存是编辑的结果，同样顺延（US-M3-02，M3-P4 设计 §3.10）。会话距上次记录活动超过 1 分钟才会顺延（P3 的写法），
 // 所以每次先把会话的最后活动挪到 2 分钟之前、空闲过期挪近，再看请求之后这两列有没有变。
@@ -17,7 +17,8 @@ import { acquireBody, renewBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { acquireLease, renewLease, saveContent } from '../support/edit-leases.ts'
+import { acquireLease, cancelEditRequest, declineEditRequest, handOverLease, pendingRequestId, releaseLease, renewEditRequest, renewLease, saveContent, sendEditRequest } from '../support/edit-leases.ts'
+import { setGrant } from '../support/grants.ts'
 import { postOpenCheckReport } from '../support/open-check.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 
@@ -106,6 +107,24 @@ describe('US-M3-05 后台请求不顺延登录（DEF-043）', () => {
     expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, raw, { baseRevision: 1, lease }), 200)).toBe(true)
     expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'DELETE', headers: { [EDIT_LEASE_HEADER]: lease.token } }), 204)).toBe(true)
     expect(await keptAlive(session, async () => asUser(app.baseUrl, session, leasePath(document.id), { method: 'POST', body: acquireBody(randomUUID()) }), 201)).toBe(true)
+  })
+
+  it('US-M3-06 请求编辑的续期（等待中的页面每 5 秒一次，M3-P5 设计 §3.13）：200，不顺延；发出与取消请求、谢绝、交出（用户的操作）照常顺延', async () => {
+    const { session, document } = await fresh()
+    // 本经单独授权能编辑艾米的这份文档：先由他编辑，艾米请求；再由艾米编辑，本请求
+    const ben = await createAccount(database, { username: `background-ben-${randomUUID().slice(0, 8)}` })
+    await setGrant(database, { documentId: document.id, userId: ben.id, role: 'editor', grantedBy: amy.id })
+    const benSession = await login(app.baseUrl, ben.username, ben.password)
+    const bens = await acquireLease(app.baseUrl, benSession, document.id)
+    expect(await keptAlive(session, async () => sendEditRequest(app.baseUrl, session, document.id), 200)).toBe(true)
+    expect(await keptAlive(session, async () => renewEditRequest(app.baseUrl, session, document.id), 200)).toBe(false)
+    expect(await keptAlive(session, async () => cancelEditRequest(app.baseUrl, session, document.id), 204)).toBe(true)
+    await releaseLease(app.baseUrl, benSession, document.id, bens)
+    const amys = await acquireLease(app.baseUrl, session, document.id)
+    const declined = await pendingRequestId(app.baseUrl, benSession, document.id)
+    expect(await keptAlive(session, async () => declineEditRequest(app.baseUrl, session, document.id, amys, declined), 204)).toBe(true)
+    const requestId = await pendingRequestId(app.baseUrl, benSession, document.id)
+    expect(await keptAlive(session, async () => handOverLease(app.baseUrl, session, document.id, amys, requestId), 200)).toBe(true)
   })
 
   it('US-M3-15 打开自检失败的上报（页面自己发的，M3-P4 设计 §3.13）：204，不顺延', async () => {

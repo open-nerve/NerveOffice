@@ -2,11 +2,12 @@
 // 先锁（lockInScope）、再判断、最后各一条语句写。范围的 SQL 与 coversWriter 同义由 edit-lease-statements.test.ts 核对；
 // 真实的加锁、锁下的再核对与交错由集成测试覆盖（tests/integration 的 documents/lease-revocation.test.ts）。
 import type { DocumentRow } from './documents.repository.ts'
+import type { EditLeaseRow } from './edit-leases.repository.ts'
 import type { WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
-import { EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
+import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { ALICE, ALICE_SPACE, BOB, FakeStore, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
+import { ALICE, ALICE_SPACE, BOB, FakeStore, NO_HANDOVER, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { LeaseWriteAccessRevocation } from './lease-write-access.ts'
 
 const CAROL = '0199a2c4-0000-7000-8000-00000000000c'
@@ -42,7 +43,16 @@ function holding(store: FakeStore, document: DocumentRow, holderId: string): voi
     lastActiveAt: now,
     endedAt: null,
     endReason: null,
+    ...NO_HANDOVER,
   })
+}
+
+/** 改这份文档上租约行的几列（时间） */
+function changeLease(store: FakeStore, document: DocumentRow, changes: Partial<EditLeaseRow>): void {
+  const row = store.leaseRecords.get(document.id)
+  if (row === undefined)
+    throw new Error(`${document.id} 没有租约`)
+  store.leaseRecords.set(document.id, { ...row, ...changes })
 }
 
 /** 每份文档上租约的结束原因（没有明确结束为 null）与文档现在的代次 */
@@ -187,6 +197,23 @@ describe('LeaseWriteAccessRevocation：步骤与写了什么', () => {
     expect(store.leases.endAll).not.toHaveBeenCalled()
     expect(store.repositories.documents.advanceWriteEpochs).not.toHaveBeenCalled()
     expect(stateOf(store, [released])).toEqual([['released', 0]])
+  })
+
+  it('M3-P5（DEF-044）按时间已死的租约（到期、空闲满 12 分钟）不收回：不记 revoked、不加代次——它不能再续租，撤权之后才拿到文档行的保存在锁下按新的权限被拒，异常中断的提醒得以保留；还活着的照常结束（刚死不久的文档行由仓储另锁、等在途的保存，审查 A1，见集成测试）', async () => {
+    const { store, revocation } = setup()
+    const expired = store.addDocument({ spaceId: TEAM_SPACE })
+    const idle = store.addDocument({ spaceId: TEAM_SPACE })
+    const alive = store.addDocument({ spaceId: TEAM_SPACE })
+    for (const document of [expired, idle, alive])
+      holding(store, document, ALICE)
+    const now = store.databaseNow.getTime()
+    // 恰好到期、恰好空闲 12 分钟：与有效条件的边界相同，都算死
+    changeLease(store, expired, { expiresAt: new Date(now) })
+    changeLease(store, idle, { lastActiveAt: new Date(now - EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000) })
+    store.setMember(TEAM_SPACE, ALICE, 'viewer')
+    await revocation.revoke({ kind: 'membership', userId: ALICE, spaceId: TEAM_SPACE }, TRANSACTION)
+    expect(stateOf(store, [expired, idle, alive])).toEqual([[null, 0], [null, 0], ['revoked', 1]])
+    expect(store.leases.endAll.mock.calls).toEqual([[[alive.id], 'revoked', TRANSACTION]])
   })
 
   it('先锁住范围里的租约，再逐个判断，最后一条语句结束这些租约、一条语句给这些文档加代次（一批文档也是各一条），都在调用方的事务里', async () => {

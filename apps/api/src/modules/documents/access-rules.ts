@@ -118,7 +118,8 @@ export function spacePermissionsOf(space: SpaceFacts, role: SpaceRole | undefine
  * 能拿到它就说明看得到这份文档。两组权限位分开算：
  * - 内容（保存、改名、复制）看 contentRole：空间角色与单独授权取较高者；
  * - 结构（空间内移动、跨空间移动、删除、分享）只看 spaceRole：只凭授权的人看不到空间的目录结构，这几项一律没有
- *   （00 号计划书 §5.3 补充说明与 §5.5，需求方 2026-10-01 确认只凭授权的人也不能删除）。
+ *   （00 号计划书 §5.3 补充说明与 §5.5，需求方 2026-10-01 确认只凭授权的人也不能删除）；
+ * - 强制接管（M3-P5 设计 §3.8）两样都看：空间角色是空间管理员，并且能编辑。
  * 两个角色都已按归档降级，所以归档的空间里只剩复制。
  */
 export function documentPermissionsOf(access: DocumentAccess, document: DocumentOwnership, userId: string): DocumentPermissions {
@@ -137,6 +138,10 @@ export function documentPermissionsOf(access: DocumentAccess, document: Document
     canDelete: spaceAdmin || (structureEditor && document.createdBy === userId),
     // 分享：空间管理员或个人空间的所有者（有效角色都是空间管理员），归档的空间里没有（M2-P5 设计 §3.2）
     canShare: sharesAs(access.spaceRole),
+    // 强制接管别人的编辑（M3-P5 设计 §3.8）：空间管理员或个人空间的所有者（有效角色都是空间管理员），并且能编辑。
+    // 归档的空间里空间角色已降为查看者、只凭授权的人没有空间角色，都没有。今天空间管理员一定能编辑，"能编辑"是纵深防御：
+    // 接管就是取得编辑权，不能编辑的人不该因为别的权限位拿到它
+    canTakeOver: spaceAdmin && contentEditor,
   }
 }
 

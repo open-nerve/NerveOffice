@@ -12,6 +12,8 @@ export type SheetEditorFailure
     | 'image-policy-failed'
   /** 到时限还没有全部就绪（渲染、两处 IMAGE() 的限制） */
     | 'ready-timeout'
+  /** 测试构建的模块（档案故障、公式模式、探针）没能引入，多半是整页跳转取消了加载（只在测试构建里，M3-P5 收尾 E1） */
+    | 'testing-module-failed'
 
 export class SheetEditorLoadError extends Error {
   readonly reason: SheetEditorFailure

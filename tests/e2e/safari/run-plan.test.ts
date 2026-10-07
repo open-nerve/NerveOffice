@@ -6,7 +6,7 @@ import type { SelftestStep } from '../support/selftest-plan.ts'
 import { describe, expect, it } from 'vitest'
 import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { SELFTEST_STEPS, stepsOf } from '../support/selftest-plan.ts'
-import { chainOf, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, serverJudgedOutcome, timingLines } from './run-plan.ts'
+import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, selectSteps, serverJudgedOutcome, timingLines } from './run-plan.ts'
 
 const ORIGIN = 'http://127.0.0.1:4100'
 const COLLECTOR = 'http://127.0.0.1:4200'
@@ -15,7 +15,7 @@ function user(username: string): TestUser {
   return { id: `${username}-id`, username, displayName: username, password: 'password', personalSpaceId: 'space' }
 }
 
-/** 前四步（M3-P2 的场景）与最后的 hidden-save */
+/** 全部步骤（共用文档的那一步取它共用的那一步的文档）；前四步是 M3-P2 的场景 */
 const ALL_STEPS = stepsOf(SELFTEST_STEPS, { author: user('author'), viewer: user('viewer') }, SELFTEST_STEPS.map(definition => definition.id === 'read-only' ? 'sample-doc' : `${definition.id}-doc`))
 const STEPS = ALL_STEPS.slice(0, 4)
 
@@ -45,6 +45,51 @@ describe('一串步骤怎么接起来', () => {
     expect(nextAfter(chain, 0, COLLECTOR)).toBe(chain[1]?.url)
     expect(nextAfter(chain, 2, COLLECTOR)).toBe(chain[3]?.url)
     expect(nextAfter(chain, 3, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
+  })
+
+  it('全部步骤：上一步带过去的到 hidden-save 为止（它之后去结束页）；交接的几步由驱动脚本另开（A 与 refresh-save 交回之后去结束页，B 去关掉自己的页）', () => {
+    const chain = chainOf(ALL_STEPS, ORIGIN, COLLECTOR)
+    const hidden = ALL_STEPS.findIndex(step => step.scenario === 'hidden-save')
+    expect(chain.map(link => [link.step.id, link.opened, link.after]).slice(hidden)).toEqual([
+      ['hidden-save', false, 'done'],
+      ['takeover-holder', true, 'done'],
+      ['takeover-taker', true, 'close'],
+      ['takeover-deaf-holder', true, 'done'],
+      ['takeover-deaf-taker', true, 'close'],
+      ['refresh-save', true, 'done'],
+    ])
+    expect(chain.slice(0, hidden).every(link => !link.opened && link.after === 'next')).toBe(true)
+    expect(nextAfter(chain, hidden - 1, COLLECTOR)).toBe(chain[hidden]?.url)
+    expect(nextAfter(chain, hidden, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
+    expect([1, 2, 3, 4, 5].map(offset => nextAfter(chain, hidden + offset, COLLECTOR))).toEqual([DONE_PATH, CLOSE_PATH, DONE_PATH, CLOSE_PATH, DONE_PATH].map(path => `${COLLECTOR}${path}`))
+  })
+
+  it('B（takeover-taker）直接打开编辑器页（同一个会话，不带账户），A 正在编辑的那一份文档；别的步骤经入口页', () => {
+    const chain = chainOf(ALL_STEPS, ORIGIN, COLLECTOR)
+    const holder = chain.find(link => link.step.scenario === 'takeover-holder')
+    const takerIndex = chain.findIndex(link => link.step.scenario === 'takeover-taker')
+    const url = new URL(chain[takerIndex]?.url ?? '')
+    expect(`${url.origin}${url.pathname}`).toBe(`${ORIGIN}/documents/${holder?.step.documentId ?? '?'}`)
+    expect([url.searchParams.get('selftest'), url.searchParams.get('next'), url.hash]).toEqual(['takeover-taker', reportUrlOf(COLLECTOR, takerIndex), ''])
+    expect(holder?.url.startsWith(`${ORIGIN}/selftest.html#`)).toBe(true)
+  })
+})
+
+describe('只跑其中几步（--steps）', () => {
+  it('没有给时是全部；给了按全部步骤里的先后选出来；不认识的、只选了 B 没选 A 的交回原因', () => {
+    expect(selectSteps(SELFTEST_STEPS, undefined)).toEqual({ definitions: SELFTEST_STEPS })
+    const picked = selectSteps(SELFTEST_STEPS, 'refresh-save, takeover-taker,takeover-holder')
+    expect('definitions' in picked ? picked.definitions.map(definition => definition.id) : picked).toEqual(['takeover-holder', 'takeover-taker', 'refresh-save'])
+    expect(selectSteps(SELFTEST_STEPS, 'takeover-taker')).toEqual({ error: '--steps 选了 takeover-taker，它与 takeover-holder 共用文档，要一起选' })
+    expect(selectSteps(SELFTEST_STEPS, 'read-only,nope')).toHaveProperty('error', expect.stringContaining('不认识的步骤：nope'))
+    expect(selectSteps(SELFTEST_STEPS, ' , ')).toHaveProperty('error', expect.stringContaining('（空的）'))
+  })
+
+  it('只选了交接的几步：都由驱动脚本另开，没有由上一步带过去的', () => {
+    const picked = selectSteps(SELFTEST_STEPS, 'takeover-holder,takeover-taker,takeover-deaf-holder,takeover-deaf-taker,refresh-save')
+    const definitions = 'definitions' in picked ? picked.definitions : []
+    const chain = chainOf(stepsOf(definitions, { author: user('author'), viewer: user('viewer') }, definitions.map(definition => `${definition.id}-doc`)), ORIGIN, COLLECTOR)
+    expect(chain.map(link => [link.opened, link.after])).toEqual([[true, 'done'], [true, 'close'], [true, 'done'], [true, 'close'], [true, 'done']])
   })
 })
 
@@ -96,9 +141,9 @@ describe('每步的结论与退出码', () => {
   })
 
   it('hidden-save 按库里的证据判定：库里对、没交回结果也算通过（说明写着证据）；库里不对或交回的结果有问题都算不通过', () => {
-    const hidden = ALL_STEPS.at(-1)
-    if (hidden?.scenario !== 'hidden-save')
-      throw new Error('最后一步不是 hidden-save')
+    const hidden = ALL_STEPS.find(step => step.scenario === 'hidden-save')
+    if (hidden === undefined)
+      throw new Error('没有 hidden-save 这一步')
     const hiddenReport = report({ scenario: 'hidden-save', documentId: hidden.documentId, page: { state: 'ready', readOnly: false } })
     expect(serverJudgedOutcome(hidden, undefined, [], '隐藏之后 0.8 秒存下')).toMatchObject({ status: 'passed', problems: [], evidence: '隐藏之后 0.8 秒存下' })
     expect(serverJudgedOutcome(hidden, hiddenReport, [], '证据')).toMatchObject({ status: 'passed', report: hiddenReport })

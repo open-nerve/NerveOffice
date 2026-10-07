@@ -8,7 +8,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import { CLIENT_BUILD_MAX_LENGTH, DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
-import { bytea, lengthBetween, oneOf } from '../common/index.ts'
+import { allOrNone, bytea, lengthBetween, oneOf } from '../common/index.ts'
 import { spaces } from '../spaces/index.ts'
 import { users } from '../users/index.ts'
 
@@ -254,12 +254,19 @@ export const documentGrants = pgTable('document_grants', {
 ])
 
 /**
- * 编辑租约明确结束的原因（M3-P1 设计 §3.3）：释放（released）、收回写入权（revoked）。到期、空闲、登录失效、代次过时
- * 不写进这一列，用到时按有效条件算出来（documents 模块的 edit-lease-rules.ts）。两个取值同时是编辑权失效的原因
+ * 编辑租约明确结束的原因（M3-P1 设计 §3.3）：释放（released）、收回写入权（revoked）、交给了请求编辑的人（handed_over，M3-P5 设计 §3.2）。
+ * 到期、空闲、登录失效、代次过时不写进这一列，用到时按有效条件算出来（documents 模块的 edit-lease-rules.ts）。这些取值同时是编辑权失效的原因
  * （contracts 的 EDIT_LEASE_LOST_REASONS，有效条件的第 2 条原样给出它）。新增取值时同时用迁移更新 CHECK 约束
  */
-export const EDIT_LEASE_END_REASONS = ['released', 'revoked'] as const satisfies readonly EditLeaseLostReason[]
+export const EDIT_LEASE_END_REASONS = ['released', 'revoked', 'handed_over'] as const satisfies readonly EditLeaseLostReason[]
 export type EditLeaseEndReason = (typeof EDIT_LEASE_END_REASONS)[number]
+
+/**
+ * 这一代接管了上一代的方式（M3-P5 设计 §3.2，库里的写法）：本人接管（self）、空间管理员强制接管（forced）。旧令牌据此得到失效原因
+ * taken_over 与 forced（申请时写的是 contracts 的 EDIT_TAKEOVER_MODES 的 self / force，记下的是结果）。新增取值时同时用迁移更新 CHECK 约束
+ */
+export const EDIT_LEASE_TAKEOVERS = ['self', 'forced'] as const
+export type EditLeaseTakeover = (typeof EDIT_LEASE_TAKEOVERS)[number]
 
 /**
  * 编辑租约（M3-P1 设计 §3.3）：同一时刻只有一个标签页能写一份文档（00 号计划书 §6.2）。每份文档至多一行（主键），
@@ -269,12 +276,23 @@ export type EditLeaseEndReason = (typeof EDIT_LEASE_END_REASONS)[number]
  * - session_id 不做外键：会话行过期之后会被清理，绑定的登录还在不在经 auth 判断（SessionService.isActive）；
  * - client_instance_id：编辑器页每次加载生成的标识（保存一直带着它），租约绑定这个标签页；
  * - write_epoch：这一代的代次，申请时文档的写入代次（documents.write_epoch）加一之后的值，所以至少是 1；
- * - 时间：申请时 acquired_at、renewed_at、last_active_at 都是 now()，expires_at 是 now() 加有效期；续租时 renewed_at 与
- *   expires_at 一起前进，last_active_at 是 now() 减去页面上报的空闲时长，不早于 acquired_at、不晚于 now()。
- *   表上兜底同一条语句里写下的两个不等式：到期晚于续租、最后活动不晚于续租。"不早于申请"比较的是两个事务的 now()，
+ * - 时间：申请时 acquired_at、renewed_at 是 now()，last_active_at 是 now() 减去续上的页面带来的空闲时长（别的申请是 now()，
+ *   M3-P5 设计 §3.5），expires_at 是 now() 加有效期；续租时 renewed_at 与 expires_at 一起前进，last_active_at 是 now() 减去页面上报的
+ *   空闲时长，只前进不后退（不早于原来的值）、不晚于 now()。
+ *   表上兜底同一条语句里写下的两个不等式：到期晚于续租、最后活动不晚于续租。"只前进"比较的是两个事务的 now()，
  *   数据库的时钟往回调时可能不成立，不写成拒绝写入的约束；
- * - 明确结束（释放、收回）记下 ended_at 与 end_reason，两列同时为空或同时有值；到期、空闲、登录失效、代次过时不写，
- *   按有效条件算出来。
+ * - 明确结束（释放、收回、交出）记下 ended_at 与 end_reason，两列同时为空或同时有值；到期、空闲、登录失效、代次过时不写，
+ *   按有效条件算出来；
+ * - 请求编辑（M3-P5 设计 §3.2、§3.6）：单槽，记在租约行上。request_id、requested_by（请求方，外键 restrict）、request_session_id
+ *   （请求方的登录，同 session_id 不做外键）、requested_at、request_expires_at（请求方每次续期往后推）五列同时为空或同时有值；
+ *   request_declined_at（持有者选了"继续编辑"）只在有请求时有值；到期晚于发出；请求方不是持有者（新的持有者就是请求方时，请求已经实现，清掉）；
+ * - 交出之后的保留：reserved_for（外键 restrict）、reserved_until 两列同时为空或同时有值，只在交出（end_reason 是 handed_over）之后有；
+ *   交出之后请求方取消时只清保留，handed_over 留着；
+ * - 接管标记：这一代接管的那一代的令牌摘要（taken_over_token_digest，32 字节）与方式（takeover：self、forced），两列同时为空或同时有值，
+ *   旧令牌据此得到 taken_over。
+ *   "同时为空或同时有值"与取值的组合由 CHECK 兜底。"到期晚于发出"在续期时比较的是两个事务的 now()（发出时写下发出的时刻，
+ *   续期时把到期推到 now() 加有效期）：中间隔着十分钟的有效期，只有数据库的时钟往回调超过十分钟时才可能不成立，按设计写成约束。
+ *   这几组列都按主键找，不另建索引；存量都是空的。
  * 有效条件与它们的顺序在 documents 模块的 edit-lease-rules.ts；锁的顺序是文档行（FOR UPDATE，代次在那里）→ 租约行（ADR-014）
  */
 export const documentEditLeases = pgTable('document_edit_leases', {
@@ -291,6 +309,19 @@ export const documentEditLeases = pgTable('document_edit_leases', {
   endedAt: timestamp('ended_at', { withTimezone: true }),
   // enum 只收窄 TypeScript 的类型，数据库里仍是 text 加 CHECK
   endReason: text('end_reason', { enum: EDIT_LEASE_END_REASONS }),
+  // 请求编辑（M3-P5）
+  requestId: uuid('request_id'),
+  requestedBy: uuid('requested_by').references(() => users.id, { onDelete: 'restrict' }),
+  requestSessionId: uuid('request_session_id'),
+  requestedAt: timestamp('requested_at', { withTimezone: true }),
+  requestExpiresAt: timestamp('request_expires_at', { withTimezone: true }),
+  requestDeclinedAt: timestamp('request_declined_at', { withTimezone: true }),
+  // 交出之后的保留（M3-P5）
+  reservedFor: uuid('reserved_for').references(() => users.id, { onDelete: 'restrict' }),
+  reservedUntil: timestamp('reserved_until', { withTimezone: true }),
+  // 接管标记（M3-P5）
+  takenOverTokenDigest: bytea('taken_over_token_digest'),
+  takeover: text('takeover', { enum: EDIT_LEASE_TAKEOVERS }),
 }, table => [
   check('document_edit_leases_token_digest_check', sql`octet_length(${table.tokenDigest}) = 32`),
   check('document_edit_leases_write_epoch_check', sql`${table.writeEpoch} >= 1`),
@@ -298,5 +329,15 @@ export const documentEditLeases = pgTable('document_edit_leases', {
   check('document_edit_leases_last_active_check', sql`${table.lastActiveAt} <= ${table.renewedAt}`),
   check('document_edit_leases_end_reason_check', oneOf(table.endReason, EDIT_LEASE_END_REASONS)),
   check('document_edit_leases_ended_check', sql`(${table.endedAt} IS NULL) = (${table.endReason} IS NULL)`),
+  check('document_edit_leases_request_check', allOrNone(table.requestId, table.requestedBy, table.requestSessionId, table.requestedAt, table.requestExpiresAt)),
+  check('document_edit_leases_request_declined_check', sql`${table.requestDeclinedAt} IS NULL OR ${table.requestId} IS NOT NULL`),
+  check('document_edit_leases_request_expiry_check', sql`${table.requestExpiresAt} > ${table.requestedAt}`),
+  check('document_edit_leases_requester_check', sql`${table.requestedBy} <> ${table.holderId}`),
+  check('document_edit_leases_reservation_check', allOrNone(table.reservedFor, table.reservedUntil)),
+  // 没有明确结束时 end_reason 为空，"= 'handed_over'"的结果是 NULL、CHECK 会放过，所以用 IS NOT DISTINCT FROM（空也算不相等）
+  check('document_edit_leases_reservation_end_check', sql`${table.reservedFor} IS NULL OR ${table.endReason} IS NOT DISTINCT FROM 'handed_over'`),
+  check('document_edit_leases_taken_over_check', allOrNone(table.takenOverTokenDigest, table.takeover)),
+  check('document_edit_leases_taken_over_token_digest_check', sql`octet_length(${table.takenOverTokenDigest}) = ${sql.raw(String(SHA256_BYTES))}`),
+  check('document_edit_leases_takeover_check', oneOf(table.takeover, EDIT_LEASE_TAKEOVERS)),
   index('document_edit_leases_holder_idx').on(table.holderId),
 ])

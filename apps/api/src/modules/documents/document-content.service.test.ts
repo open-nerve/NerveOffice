@@ -7,8 +7,8 @@ import zlib from 'node:zlib'
 import { canonicalContentText, contentHashInput, EDIT_LEASE_TTL_SECONDS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { DocumentContentService } from './document-content.service.ts'
-import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
+import { DocumentContentService, SAVE_TRANSACTION_START_WITHIN_MS, SAVE_TRANSACTION_TIMEOUT_MS } from './document-content.service.ts'
+import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, NO_HANDOVER, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
 import { savedPayloadDigest } from './payload-digest.ts'
 
@@ -42,6 +42,7 @@ function holding(store: FakeStore, documentId: string, userId: string, clientIns
     expiresAt: new Date(now.getTime() + EDIT_LEASE_TTL_SECONDS * 1000),
     endedAt: null,
     endReason: null,
+    ...NO_HANDOVER,
   })
 }
 
@@ -170,6 +171,15 @@ describe('DocumentContentService.save', () => {
     expect(store.revisions.at(-1)?.payloadDigest).toEqual(savedPayloadDigest(1, body.decompressed))
     expect(store.audits).toEqual([{ action: 'documents.content_saved', actor: { type: 'user', id: ALICE }, target: { type: 'document', id: document.id }, origin: HTTP_ORIGIN, details: { revision: 2 } }])
     expect(store.receipts).toEqual([])
+  })
+
+  it('US-M3-12 保存的事务限时（M3-P5 复验 C1、再复核 D1）：事务带着时限开启——BEGIN 到设下时限至多 SAVE_TRANSACTION_START_WITHIN_MS，之后至多 SAVE_TRANSACTION_TIMEOUT_MS（由数据库与事务运行器保证）；两者相加比一个有效期短，还留出至少 10 秒——撤权的"刚死不久"窗口（一个有效期）靠"保存从 BEGIN 到提交短于一个有效期"成立', async () => {
+    const { store, service, document } = setup()
+    await service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN)
+    expect(store.transactions.run).toHaveBeenCalledExactlyOnceWith(expect.any(Function), { limit: { timeoutMs: SAVE_TRANSACTION_TIMEOUT_MS, startWithinMs: SAVE_TRANSACTION_START_WITHIN_MS } })
+    const longest = SAVE_TRANSACTION_START_WITHIN_MS + SAVE_TRANSACTION_TIMEOUT_MS
+    expect(longest).toBeLessThan(EDIT_LEASE_TTL_SECONDS * 1000)
+    expect(EDIT_LEASE_TTL_SECONDS * 1000 - longest).toBeGreaterThanOrEqual(10_000)
   })
 
   it('快照不合格：SNAPSHOT_INVALID（details 是违反的规则），不开事务（与文档无关，别人的与不存在的结果相同）；记一条 warn（规则与文档 id），不记内容', async () => {
@@ -490,6 +500,27 @@ describe('DocumentContentService.save：保存要求编辑租约（M3-P1 设计 
     expect(await lostReason(noLease, noLease.service.save(saver(ALICE), noLease.document.id, query(), upload(noLease.document.unitId), HTTP_ORIGIN))).toBe('none')
     const replaced = setup()
     expect(await lostReason(replaced, replaced.service.save(saver(ALICE, { token: TOKENS[BOB] }), replaced.document.id, query(), upload(replaced.document.unitId), HTTP_ORIGIN))).toBe('replaced')
+  })
+
+  it('M3-P5 令牌是被接管的那一代的（本人在别处接手、空间管理员强制接管）：EDIT_LEASE_LOST 的详情是 taken_over 与方式，页面据此不续上、给副本；什么也没写', async () => {
+    for (const [takeover, forced] of [['self', false], ['forced', true]] as const) {
+      const setupResult = setup()
+      const { store, document } = setupResult
+      // 艾米这一代被接管：租约行换成新的一代（本人接管是艾米自己的另一个设备，强制接管是本），接管标记记着艾米手里的令牌
+      const taker = takeover === 'self' ? ALICE : BOB
+      holding(store, document.id, BOB, OTHER_CLIENT)
+      const row = store.leaseRecords.get(document.id)
+      if (row === undefined)
+        throw new Error('没有摆好租约')
+      store.leaseRecords.set(document.id, { ...row, holderId: taker, takenOverTokenDigest: editLeaseTokenDigest(TOKENS[ALICE] ?? ''), takeover })
+      const error = await rejection(setupResult.service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN))
+      expect([error.code, error.status, error.details], takeover).toEqual(['EDIT_LEASE_LOST', 409, { reason: 'taken_over', forced }])
+      expect(store.documents.get(document.id)?.revision, takeover).toBe(1)
+      expect(store.audits, takeover).toEqual([])
+      // 别的旧令牌（不是被接管的那一代的）：replaced，详情只有原因、不带方式
+      const other = await rejection(setupResult.service.save(saver(ALICE, { token: `${'c'.repeat(41)}-_` }), document.id, query(), upload(document.unitId), HTTP_ORIGIN))
+      expect([other.code, other.details], takeover).toEqual(['EDIT_LEASE_LOST', { reason: 'replaced' }])
+    }
   })
 
   it('代次：查询参数的 writeEpoch 不是租约的那一代、租约的那一代不是文档当前的（删除、移动、收回写入权之后）：stale', async () => {

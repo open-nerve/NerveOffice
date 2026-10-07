@@ -1,4 +1,4 @@
-import type { AcquiredEditLease, CreatedDocument, DocumentDetail, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, HandedOverEditLease, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
@@ -7,14 +7,21 @@ import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditModeState } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { EditorPage, EditorPageApi } from './editor-page.ts'
+import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
+import type { MarkerStorage } from './pending-save-marker.ts'
+import type { SameBrowser } from './same-browser.ts'
 import type { SaveRequest } from './save-coordinator.ts'
-import { EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
+import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, setCsrfToken } from '../../shared/api/index.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { memoryIssuedRequest } from './issued-request.test-support.ts'
+import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
+import { fakeBrowser } from './same-browser.test-support.ts'
+import { lockNameOf, sameBrowserFor } from './same-browser.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 
@@ -28,7 +35,7 @@ const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f
 /** 申请到的编辑租约：修订号与载入的内容相同（3） */
 const TOKEN = 'L'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-09-27T03:01:30.000Z', interruption: null, formulasPending: false }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z' }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z', request: null }
 /** 保存带上的编辑租约 */
 const CREDENTIALS = { token: TOKEN, writeEpoch: 7 }
 /** 续上时申请到的下一代（修订号没变：期间没人保存过） */
@@ -38,6 +45,11 @@ const NEXT_CREDENTIALS = { token: NEXT_TOKEN, writeEpoch: 8 }
 
 /** 另存为副本得到的新文档 */
 const COPY_ID = '0199a2c4-1f2e-7a3b-8c4d-0000000000c1'
+
+/** 请求编辑与交出（M3-P5）：别人（鲍勃）在编辑，请求在等；交出之后留给请求方 */
+const BOB_EDITING = { holder: { id: BOB.user.id, username: 'bob', displayName: '鲍勃' }, lastActiveAt: '2026-09-27T03:00:00.000Z', sameUser: false, sameSession: false }
+const REQUEST_PENDING: EditRequestOutcome = { kind: 'pending', id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requestedAt: '2026-09-27T03:01:00.000Z', expiresAt: '2026-09-27T03:11:00.000Z', holder: BOB_EDITING }
+const HANDED_OVER: HandedOverEditLease = { reservedFor: BOB_EDITING.holder, reservedUntil: '2026-09-27T03:03:00.000Z' }
 
 /** 打开自检失败（M3-P4）：编辑器没有完整载入（批注的插件没有注册） */
 const NOTE_MISSING = { ok: false, failures: [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }] } as const satisfies OpenCheck
@@ -57,7 +69,7 @@ const DETAIL: DocumentDetail = {
   formatVersion: 1,
   sdkVersion: '1.0.1',
   formulasPending: false,
-  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false },
+  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
 }
 
 /** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现；记下谁在订阅修改（每次新建都是新的一个，第一个由用例先拿到） */
@@ -114,6 +126,42 @@ function fakeChannel() {
     close: () => {},
   }
   return { channel, fromOtherTab: () => listeners.forEach(listener => listener()), listeners }
+}
+
+/**
+ * 本页的键盘、鼠标操作（组装处给出 trackActivity：只认可信事件，测试里派发的 DOM 事件一律不可信）：fire 模拟一次操作；
+ * subscribedAt 记下订阅那一刻容器的状态（订阅要在交互屏障之前，那时容器还没有状态）
+ */
+function fakeActivity(surface: HTMLElement) {
+  const listeners = new Set<() => void>()
+  const record: { subscribedAt: string | undefined | null } = { subscribedAt: null }
+  return {
+    activity: {
+      subscribe: (listener: () => void) => {
+        record.subscribedAt = surface.dataset.editorState
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    },
+    fire: () => listeners.forEach(listener => listener()),
+    listeners,
+    record,
+  }
+}
+
+/** 内存里的 localStorage（记号用） */
+function memoryStorage(): MarkerStorage & { readonly items: Map<string, string> } {
+  const items = new Map<string, string>()
+  return {
+    items,
+    getItem: key => items.get(key) ?? null,
+    setItem: (key, value) => {
+      items.set(key, value)
+    },
+    removeItem: (key) => {
+      items.delete(key)
+    },
+  }
 }
 
 /** 可以设的开关（页面的可见性、联网）：变了时同步通知 */
@@ -178,6 +226,8 @@ interface Setup {
    * 会话、保存与编辑权的用例都在编辑时进行；打开即阅读的用例传 false
    */
   readonly editIntent?: boolean
+  /** 测试构建的交接观察钩子（M3-P5 S8）：默认不给 */
+  readonly handoverTrace?: HandoverTrace
 }
 
 /** 这个用例建过的页面：用例结束时卸载，留下的交互屏障与窗口上的监听不影响下一个用例 */
@@ -196,6 +246,8 @@ function setup(options: Setup = {}) {
     acquire: vi.fn(options.editLease?.acquire ?? (async (): Promise<AcquiredEditLease> => ACQUIRED)),
     renew: vi.fn(options.editLease?.renew ?? (async (): Promise<RenewedEditLease> => RENEWED)),
     release: vi.fn(options.editLease?.release ?? (async (): Promise<void> => {})),
+    handOver: vi.fn(options.editLease?.handOver ?? (async (): Promise<HandedOverEditLease> => HANDED_OVER)),
+    decline: vi.fn(options.editLease?.decline ?? (async (): Promise<void> => {})),
   }
   const overrides = options.api ?? {}
   const api = {
@@ -203,12 +255,17 @@ function setup(options: Setup = {}) {
     document: vi.fn(overrides.document ?? (async () => DETAIL)),
     content: vi.fn(overrides.content ?? (async (): Promise<LoadedContent> => ({ snapshot: '{"id":"unit-1"}', revision: 3 }))),
     contentIfChanged: vi.fn(overrides.contentIfChanged ?? (async (): Promise<LoadedContent | typeof CONTENT_UNCHANGED> => CONTENT_UNCHANGED)),
-    editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true, formulasPending: false }, serverTime: undefined }))),
+    editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }))),
     compress: vi.fn(overrides.compress ?? (async (snapshot: string) => new TextEncoder().encode(snapshot))),
     save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }))),
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...DETAIL, id: COPY_ID, title: '周报（冲突副本 2026-10-04 15:30）', revision: 1, replayed: false }))),
     reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
     editLease,
+    editRequest: {
+      send: vi.fn(overrides.editRequest?.send ?? (async (): Promise<EditRequestOutcome> => REQUEST_PENDING)),
+      renew: vi.fn(overrides.editRequest?.renew ?? (async (): Promise<EditRequestOutcome> => REQUEST_PENDING)),
+      cancel: vi.fn(overrides.editRequest?.cancel ?? (async (): Promise<void> => {})),
+    },
   } satisfies EditorPageApi
   const createEditor = vi.fn(options.createEditor ?? (async () => {
     const next = fakes.length === 0 ? fake : fakeEditor()
@@ -219,6 +276,13 @@ function setup(options: Setup = {}) {
   const hidden = fakeSwitch(false)
   const online = fakeSwitch(true)
   const autosave = fakeAutosaveControl()
+  const activity = fakeActivity(surface)
+  const browser = fakeBrowser()
+  const storage = memoryStorage()
+  /** 这一页发出过的请求编辑的记号（审查 B2，sessionStorage） */
+  const issued = memoryIssuedRequest(DOCUMENT_ID)
+  /** 编辑器页按文档建的锁与频道（M3-P5）：卸载时关掉 */
+  const sameBrowsers: SameBrowser[] = []
   let id = 0
   const editorPage = createEditorPage({
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
@@ -231,8 +295,19 @@ function setup(options: Setup = {}) {
     clock: time.clock,
     visibility: { hidden: hidden.get, onChange: hidden.onChange },
     network: { online: online.get, onChange: online.onChange },
+    activity: activity.activity,
+    sameBrowser: (documentId) => {
+      const opened = sameBrowserFor(documentId, browser.tab('page'))
+      const close = vi.fn(opened.close)
+      const tracked = { ...opened, close }
+      sameBrowsers.push(tracked)
+      return tracked
+    },
+    pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => storage, now: () => Date.UTC(2026, 9, 7, 3, 0, 0) }),
+    issuedRequest: () => issued.marker,
     digest: async snapshot => `sha:${snapshot}`,
     autosaveControl: autosave.hooks,
+    ...(options.handoverTrace === undefined ? {} : { handoverTrace: options.handoverTrace }),
     editIntent,
     currentPath: () => `/documents/${DOCUMENT_ID}`,
     newId: options.newId ?? (() => `id-${++id}`),
@@ -240,12 +315,12 @@ function setup(options: Setup = {}) {
     reportError: vi.fn(),
   })
   pages.push(editorPage)
-  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave }
+  return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave, activity, browser, storage, issued, sameBrowsers }
 }
 
 /** 查看者读到的编辑状态：不能编辑 */
 async function VIEWER_STATUS(): Promise<FetchedEditStatus> {
-  return { status: { revision: 3, editor: null, canEdit: false, formulasPending: false }, serverTime: undefined }
+  return { status: { revision: 3, editor: null, canEdit: false, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }
 }
 
 /** 阅读与编辑的状态 */
@@ -1178,7 +1253,7 @@ const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-00000000000c', username: 'amy', displ
 /** 申请被占用：持有者是别人（艾米）或者自己；serverTime 是服务端回答的时刻（响应头 Date） */
 function heldBy(sameUser: boolean, serverTime?: number): ApiError {
   const holder = sameUser ? { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName } : AMY
-  return new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑这份文档', { details: { holder, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser }, serverTime })
+  return new ApiError(409, 'EDIT_LEASE_HELD', '别人正在编辑这份文档', { details: { holder, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser, sameSession: false, canTakeOver: false, request: null }, serverTime })
 }
 
 function leaseLost(reason: string): ApiError {
@@ -1201,16 +1276,22 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editLease.renew).toHaveBeenCalledTimes(2)
   })
 
-  it('续租上报距离本页最后一次键盘、鼠标操作的秒数：操作在窗口的捕获阶段记下', async () => {
-    const { editorPage, editLease, time } = setup()
+  it('续租上报距离本页最后一次键盘、鼠标操作的秒数：操作由组装处给出的来源记下（trackActivity：窗口的捕获阶段、只认可信事件）；订阅挂在交互屏障之前', async () => {
+    const { editorPage, editLease, time, activity } = setup()
     await editorPage.load()
+    // 订阅时容器还没有状态：交互屏障（setSurface('loading')）在它之后才挂上，载入期间被拦下的输入也算有操作
+    expect(activity.record.subscribedAt).toBeUndefined()
     await time.advance(4_000)
-    window.dispatchEvent(new Event('keydown'))
+    activity.fire()
     await time.advance(6_000)
     expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 6)
-    window.dispatchEvent(new Event('pointerdown'))
+    activity.fire()
     await time.advance(10_000)
     expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 10)
+    // 页面里派发的事件（不可信）不经这个来源：不算有操作，空闲照样往上加
+    window.dispatchEvent(new Event('keydown'))
+    await time.advance(10_000)
+    expect(editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, TOKEN, 20)
   })
 
   it('申请得到的修订号比载入的内容新（这期间有人保存过）：按条件读取（本页的修订号）取服务端的内容，按它创建，以它的修订号作保存的基准', async () => {
@@ -1241,7 +1322,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('别人正在编辑：按只读创建，页头说明持有者与最后活动几分钟之前（按服务端的时间算）；没有保存，不续租；地址里的标记留着', async () => {
     const serverTime = Date.UTC(2026, 8, 27, 3, 2, 30)
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: AMY, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: false }, canEdit: true, formulasPending: false }, serverTime })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: AMY, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: false, sameSession: false }, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime })
     const { editorPage, editLease, createEditor, surface, time, editIntent, chrome } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(heldBy(false, serverTime))) } })
     await editorPage.load()
     await settle()
@@ -1274,7 +1355,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
 
   it('自己在别处正在编辑、再试几次仍被占用：按只读，说明是自己', async () => {
     const acquire = vi.fn(async () => Promise.reject(heldBy(true)))
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName }, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: true }, canEdit: true, formulasPending: false }, serverTime: undefined })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: { holder: { id: ALICE.user.id, username: ALICE.user.username, displayName: ALICE.user.displayName }, lastActiveAt: '2026-09-27T02:55:00.000Z', sameUser: true, sameSession: false }, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined })
     const { editorPage, createEditor, time } = setup({ editLease: { acquire }, api: { editStatus } })
     const loading = editorPage.load()
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
@@ -1286,7 +1367,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   })
 
   it('申请时刚失去编辑权（403）：按只读打开，不说明谁在编辑，没有"编辑"', async () => {
-    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: false, formulasPending: false }, serverTime: undefined })
+    const editStatus = async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: false, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined })
     const { editorPage, createEditor } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能保存'))) } })
     await editorPage.load()
     expect(createEditor).toHaveBeenCalledWith(expect.objectContaining({ access: 'read' }))
@@ -1430,9 +1511,9 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'failed', problem: { kind: 'request', error: lost } } })
   })
 
-  it('保存得到可以续上的失效（到期）：放掉手里那一代、重新申请，续上之后用新的编辑权重发这一次（requestId 不变），保存成功，不出现失效的说明', async () => {
+  it('保存得到可以续上的失效（本页换过登录，session）：先放掉手里那一代、再重新申请（原来的登录还在时那一代仍然有效），续上之后用新的编辑权重发这一次（requestId 不变），保存成功，不出现失效的说明', async () => {
     const save = vi.fn<EditorPageApi['save']>()
-      .mockRejectedValueOnce(leaseLost('expired'))
+      .mockRejectedValueOnce(leaseLost('session'))
       .mockResolvedValueOnce({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     const { editorPage, editLease } = setup({ api: { save } })
     await editorPage.load()
@@ -1477,13 +1558,14 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'clean' } })
   })
 
-  it('续租得知中断（到期）：放掉手里那一代、重新申请，修订号没变就续上，不出现失效的说明；之后的保存与续租带新的令牌与代次', async () => {
+  it('续租得知中断（到期）：重新申请（到期的那一代谁看都是空着的，不先放，M3-P5 审查 A3），修订号没变就续上，不出现失效的说明；之后的保存与续租带新的令牌与代次', async () => {
     const { editorPage, api, editLease, time } = setup({ editLease: { renew: vi.fn<EditLeaseApi['renew']>().mockRejectedValueOnce(leaseLost('expired')).mockResolvedValue(RENEWED) } })
     await editorPage.load()
     editLease.acquire.mockResolvedValueOnce(NEXT_LEASE)
     await time.advance(10_000)
-    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
-    expect(editLease.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, 'id-1')
+    expect(editLease.release).not.toHaveBeenCalled()
+    // 续上的申请带本页的空闲秒数（M3-P5 设计 §3.5）
+    expect(editLease.acquire).toHaveBeenLastCalledWith(DOCUMENT_ID, 'id-1', { idleSeconds: 10 })
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { canSave: true } })
     await editorPage.save()
     expect(api.save).toHaveBeenLastCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), NEXT_CREDENTIALS)
@@ -1590,8 +1672,10 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
   it.each(['idle', 'expired'])('人走开 12 分钟之后续租得知中断（%s；休眠、断网回来时服务端给的是到期）：不续上；本页再有键盘、鼠标操作时续上（审查 B8）', async (reason) => {
     // 服务端的说法：上报的空闲到了回收阈值就算中断
     const renew = vi.fn<EditLeaseApi['renew']>(async (_documentId, _token, idleSeconds) => idleSeconds >= EDIT_LEASE_IDLE_RECLAIM_SECONDS ? Promise.reject(leaseLost(reason)) : RENEWED)
-    const { editorPage, editLease, time } = setup({ editLease: { renew } })
+    const { editorPage, editLease, time, activity, online } = setup({ editLease: { renew } })
     await editorPage.load()
+    // 人走开之后断网：10 分钟时的空闲释放这一轮做不了（存不上、放不掉，M3-P5），编辑权留到服务端兜底回收
+    online.set(false)
     await time.advance(EDIT_LEASE_IDLE_RECLAIM_SECONDS * 1000)
     await time.advance(300_000)
     expect(editLease.acquire).toHaveBeenCalledOnce()
@@ -1599,7 +1683,8 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
     const renewals = renew.mock.calls.length
     editLease.acquire.mockResolvedValueOnce(NEXT_LEASE)
-    window.dispatchEvent(new Event('pointermove'))
+    online.set(true)
+    activity.fire()
     await vi.waitFor(() => expect(editLease.acquire).toHaveBeenCalledTimes(2))
     await time.advance(10_000)
     expect(renew).toHaveBeenCalledTimes(renewals + 1)
@@ -1849,7 +1934,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     expect(blocked(surface)).toBe(false)
     const exiting = editorPage.exitEditing()
     await vi.waitFor(() => expect(editLease.release).toHaveBeenCalled())
-    expect(modeOf(editorPage)).toEqual({ kind: 'exiting' })
+    expect(modeOf(editorPage)).toEqual({ kind: 'exiting', cause: 'exit' })
     expect(editorPage.view().surface).toBe('loading')
     expect(blocked(surface)).toBe(true)
     releasing.resolve(undefined)
@@ -2046,7 +2131,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
 
   it('有更新，点击刷新：交给阅读与编辑的状态机（条件读取、重建为阅读）', async () => {
     const { editorPage, api, createEditor } = setup({ editIntent: false, api: {
-      editStatus: async () => ({ status: { revision: 5, editor: null, canEdit: true, formulasPending: false }, serverTime: undefined }),
+      editStatus: async () => ({ status: { revision: 5, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }),
       contentIfChanged: async () => ({ snapshot: '{"id":"unit-1","v":5}', revision: 5 }),
     } })
     await editorPage.load()
@@ -2149,7 +2234,7 @@ describe('自动保存要的页面信号（M3-P4 设计 §3.10）', () => {
 
 describe('阅读页的"公式待更新"与详情的刷新（M3-P4 设计 §3.5 第 4 条，DEF-045）', () => {
   it('载入时详情带着标记、与载入的内容是同一版：阅读里带着它', async () => {
-    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, formulasPending: true }), editStatus: async () => ({ status: { revision: 3, editor: null, canEdit: true, formulasPending: true }, serverTime: undefined }) } })
+    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, formulasPending: true }), editStatus: async () => ({ status: { revision: 3, editor: null, canEdit: true, canTakeOver: false, formulasPending: true, request: null, reservation: null, interruption: null }, serverTime: undefined }) } })
     await editorPage.load()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', formulasPending: true })
   })
@@ -2173,5 +2258,333 @@ describe('阅读页的"公式待更新"与详情的刷新（M3-P4 设计 §3.5 �
     await refreshing
     expect(editorPage.view().detailRefreshing).toBe(false)
     expect(editorPage.view().detailProblem).toBeInstanceOf(ApiError)
+  })
+})
+
+describe('交接规则的页面接线（M3-P5 设计 §3.1、§3.7、§3.9）', () => {
+  /** 在容器里的一个元素上派发一次键入：返回是否被交互屏障拦下 */
+  function blocked(surface: HTMLElement): boolean {
+    const inner = document.createElement('div')
+    surface.append(inner)
+    const event = new Event('keydown', { bubbles: true, cancelable: true })
+    inner.dispatchEvent(event)
+    inner.remove()
+    return event.defaultPrevented
+  }
+
+  afterEach(() => {
+    document.body.replaceChildren()
+  })
+
+  const IDLE_MS = EDIT_IDLE_RELEASE_SECONDS * 1000
+
+  it('进入编辑之后持有这份文档的本机锁；退出编辑之后放下；卸载时关掉这份文档的交接频道', async () => {
+    const { editorPage, browser, sameBrowsers } = setup()
+    await editorPage.load()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    expect(browser.holderOf(lockNameOf(DOCUMENT_ID))).toBe('page')
+    await editorPage.exitEditing()
+    await settle()
+    expect(browser.holderOf(lockNameOf(DOCUMENT_ID))).toBeUndefined()
+    expect(sameBrowsers).toHaveLength(1)
+    editorPage.dispose()
+    expect(sameBrowsers[0]?.close).toHaveBeenCalledOnce()
+  })
+
+  it('本浏览器的另一个标签页抢走了锁：本页立即失去编辑权（不等心跳），说明是本人在本浏览器的另一个标签页接手', async () => {
+    const { editorPage, browser, editLease } = setup()
+    await editorPage.load()
+    await sameBrowserFor(DOCUMENT_ID, browser.tab('other')).steal()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', loss: { kind: 'taken-over', where: 'this-browser' } }))
+    expect(editLease.renew).not.toHaveBeenCalled()
+    expect(editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('空闲满 10 分钟：先挂交互屏障再保存（等面板时已经拦着），不向服务端确认会话（按"不必先确认就能写"），释放、回到阅读并说明', async () => {
+    const { editorPage, surface, chrome, fake, api, editLease, time } = setup()
+    document.body.append(chrome, surface)
+    await editorPage.load()
+    expect(blocked(surface)).toBe(false)
+    const sessionChecks = api.session.mock.calls.length
+    const barrierAtSettle: boolean[] = []
+    Object.assign(fake.editor, {
+      settlePanels: async () => {
+        barrierAtSettle.push(blocked(surface))
+      },
+    })
+    await time.advance(IDLE_MS)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'idle-released' } }))
+    expect(barrierAtSettle).toEqual([true])
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(api.session).toHaveBeenCalledTimes(sessionChecks)
+    expect(blocked(surface)).toBe(false)
+  })
+
+  it('有操作就推后：本页的操作（注入的来源）让空闲从那一刻重新算', async () => {
+    const { editorPage, time, activity } = setup()
+    await editorPage.load()
+    await time.advance(IDLE_MS - 60_000)
+    activity.fire()
+    await time.advance(IDLE_MS - 1)
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    await time.advance(1)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'idle-released' } }))
+  })
+
+  it('确认会话进行中（"不必先确认就能写"为假）：这一轮不释放、不发确认，过一个心跳周期再看', async () => {
+    const check = deferred<SessionResponse>()
+    const { editorPage, api, time, fromOtherTab, editLease } = setup()
+    await editorPage.load()
+    api.session.mockImplementationOnce(async () => check.promise)
+    fromOtherTab()
+    await time.advance(IDLE_MS)
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    expect(editLease.release).not.toHaveBeenCalled()
+    check.resolve(ALICE)
+    await settle()
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'idle-released' } }))
+  })
+
+  /** 本页的标识与 requestId 按 UUID 的写法（交接频道的消息按契约解析） */
+  function uuids(): () => string {
+    let next = 0
+    return () => `0199a2c4-1f2e-7a3b-8c4d-${String(++next).padStart(12, '0')}`
+  }
+
+  it('"在此编辑"（M3-P5 设计 §3.7）：与"编辑"同一个会话确认——会话不是本人时先向服务端确认，还是别人就不申请；确认是本人之后以本人接管申请（锁空着：不发交接请求）', async () => {
+    const self = { holder: ALICE.user, lastActiveAt: '2026-09-27T03:00:00.000Z', sameUser: true, sameSession: false }
+    const { editorPage, api, editLease, fromOtherTab, browser } = setup({ editIntent: false, newId: uuids(), api: { editStatus: async () => ({ status: { revision: 3, editor: self, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }) } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { sameUser: true }, selfHolder: 'elsewhere' }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.takeOverHere()
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    await editorPage.takeOverHere()
+    expect(editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, '0199a2c4-1f2e-7a3b-8c4d-000000000001', { takeover: 'self' })
+    expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
+    expect(browser.posted(`nerve-office:doc:${DOCUMENT_ID}`)).toEqual([])
+  })
+
+  it('交接请求只理会载入时确认的用户的（同一个浏览器里本来就同一个人，另一个账户的不理）：本人的请求回 ack、先保存再交出、发 done，回到阅读并说明', async () => {
+    const { editorPage, browser } = setup({ newId: uuids() })
+    await editorPage.load()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    const other = sameBrowserFor(DOCUMENT_ID, browser.tab('other'))
+    const replies: string[] = []
+    other.subscribe(message => replies.push(message.type))
+    other.post({ type: 'handover-request', requestId: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', documentId: DOCUMENT_ID, from: '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb', userId: BOB.user.id })
+    await settle()
+    expect(replies).toEqual([])
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    other.post({ type: 'handover-request', requestId: '0199a2c4-1f2e-7a3b-8c4d-0000000000f2', documentId: DOCUMENT_ID, from: '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb', userId: ALICE.user.id })
+    await vi.waitFor(() => expect(replies).toEqual(['handover-ack', 'handover-done']))
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'handed-over-tab' } }))
+    expect(browser.holderOf(lockNameOf(DOCUMENT_ID))).toBeUndefined()
+  })
+
+  it('页面关闭（pagehide）：放下本机锁；有保存在途时不释放编辑权、在 localStorage 记下记号，没有在途的不记', async () => {
+    const pending = deferred<SaveContentResponse>()
+    const save = vi.fn<EditorPageApi['save']>(async () => pending.promise)
+    const { editorPage, editLease, browser, storage } = setup({ api: { save } })
+    await editorPage.load()
+    const saving = editorPage.save()
+    await vi.waitFor(() => expect(save).toHaveBeenCalledOnce())
+    window.dispatchEvent(new Event('pagehide'))
+    await settle()
+    expect(browser.holderOf(lockNameOf(DOCUMENT_ID))).toBeUndefined()
+    expect(editLease.release).not.toHaveBeenCalled()
+    expect(JSON.parse(storage.items.get(keyOf(DOCUMENT_ID)) ?? 'null')).toEqual({ v: 1, at: Date.UTC(2026, 9, 7, 3, 0, 0), revision: 3 })
+    pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
+    await saving
+    storage.items.clear()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(storage.items.size).toBe(0)
+  })
+})
+
+describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
+  /** 鲍勃在编辑（爱丽丝能编辑） */
+  async function BOB_STATUS(): Promise<FetchedEditStatus> {
+    return { status: { revision: 3, editor: BOB_EDITING, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }
+  }
+  /** 心跳带来的请求：鲍勃在请求编辑 */
+  const INCOMING = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requester: BOB_EDITING.holder, requestedAt: '2026-09-27T03:01:00.000Z' }
+
+  it('"请求编辑""取消请求"：与"编辑"同一个会话确认——会话不是本人时先向服务端确认，还是别人就不发；确认是本人之后发出、等待，取消', async () => {
+    const { editorPage, api, fromOtherTab } = setup({ editIntent: false, api: { editStatus: BOB_STATUS } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { holder: { username: 'bob' } } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.requestEditing()
+    expect(api.editRequest.send).not.toHaveBeenCalled()
+    await editorPage.requestEditing()
+    expect(api.editRequest.send).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.cancelRequest()
+    expect(api.editRequest.cancel).not.toHaveBeenCalled()
+    await editorPage.cancelRequest()
+    expect(api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: undefined })
+  })
+
+  it('持有者提示里的"交出"：先确认会话（同退出编辑）——会话不是本人时不交出；确认是本人之后先保存再交出，回到阅读并说明交给了谁', async () => {
+    const { editorPage, editLease, time, activity, api, fromOtherTab } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+    await editorPage.load()
+    activity.fire()
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: { id: INCOMING.id } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.handOver()
+    expect(editLease.handOver).not.toHaveBeenCalled()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    await editorPage.handOver()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'handed-over', auto: false } }))
+    expect(editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, INCOMING.id)
+    expect(editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('持有者提示里的"继续编辑"：会话不是本人时不谢绝；确认是本人之后谢绝，提示消失', async () => {
+    const { editorPage, editLease, time, activity, api, fromOtherTab } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+    await editorPage.load()
+    activity.fire()
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: { id: INCOMING.id } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.keepEditing()
+    expect(editLease.decline).not.toHaveBeenCalled()
+    await editorPage.keepEditing()
+    expect(editLease.decline).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, INCOMING.id)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: undefined })
+  })
+
+  it('页面关闭（pagehide）时有请求在等、保存不忙：用交出代替释放（keepalive，不看结果）', async () => {
+    const { editorPage, editLease, time, activity } = setup({ editLease: { renew: async () => ({ ...RENEWED, request: INCOMING }) } })
+    await editorPage.load()
+    activity.fire()
+    await time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', request: { id: INCOMING.id } }))
+    window.dispatchEvent(new Event('pagehide'))
+    await settle()
+    expect(editLease.handOver).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, INCOMING.id)
+    expect(editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('页面关闭时本页在请求编辑：尽力取消请求', async () => {
+    const { editorPage, api } = setup({ editIntent: false, api: { editStatus: BOB_STATUS } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { holder: { username: 'bob' } } }))
+    await editorPage.requestEditing()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(api.editRequest.cancel).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+  })
+
+  it('续期一直得到令牌失效（网关剥掉了 CSRF 的请求头）、确认会话照常是本人（审查 B1）：确认之后不立即再续期——续期与确认会话不按网络往返的速度连着发，下一次按续期的节奏', async () => {
+    const CSRF = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
+    /** 一次网络往返：下一个宏任务才回来（假接口不让出宏任务时，连着发就是同步的死循环） */
+    const roundTrip = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+    const { editorPage, api, time } = setup({
+      editIntent: false,
+      api: {
+        editStatus: BOB_STATUS,
+        session: async () => {
+          await roundTrip()
+          return ALICE
+        },
+        editRequest: {
+          send: async () => REQUEST_PENDING,
+          renew: async () => {
+            await roundTrip()
+            throw CSRF
+          },
+          cancel: async () => {},
+        },
+      },
+    })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', holder: { holder: { username: 'bob' } } }))
+    await editorPage.requestEditing()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    const sessionsBefore = vi.mocked(api.session).mock.calls.length
+    // 到第一次续期（5 秒）：之后时钟不动，只让往返一个个回来
+    await time.advance(5_000)
+    for (let i = 0; i < 50; i += 1)
+      await settle()
+    expect(vi.mocked(api.editRequest.renew).mock.calls.length).toBe(1)
+    expect(vi.mocked(api.session).mock.calls.length - sessionsBefore).toBe(1)
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', request: { kind: 'waiting' } })
+    // 下一次照续期的节奏（5 秒）
+    await time.advance(5_000)
+    await vi.waitFor(() => expect(vi.mocked(api.editRequest.renew).mock.calls.length).toBe(2))
+  })
+
+  it('载入时详情里的"能不能强制接管"交给阅读（之后随编辑状态更新）', async () => {
+    const { editorPage } = setup({ editIntent: false, api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canTakeOver: true } }), editStatus: async () => new Promise<FetchedEditStatus>(() => {}) } })
+    await editorPage.load()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', canTakeOver: true })
+  })
+})
+
+describe('强制接管、异常中断的提醒与观察钩子（M3-P5 设计 §3.5、§3.8、§3.13）', () => {
+  /** 鲍勃在编辑，爱丽丝能强制接管 */
+  async function ADMIN_STATUS(): Promise<FetchedEditStatus> {
+    return { status: { revision: 3, editor: BOB_EDITING, canEdit: true, canTakeOver: true, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }
+  }
+
+  it('"强制接管"（页头已经确认过）：与"编辑"同一个会话确认——会话不是本人时先向服务端确认，还是别人就不申请；确认是本人之后以强制接管申请、进入编辑', async () => {
+    const { editorPage, api, editLease, fromOtherTab } = setup({ editIntent: false, api: { editStatus: ADMIN_STATUS } })
+    await editorPage.load()
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', canTakeOver: true, holder: { holder: { username: 'bob' } } }))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    fromOtherTab()
+    await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
+    vi.mocked(api.session).mockResolvedValueOnce(BOB)
+    await editorPage.forceTakeOver()
+    expect(editLease.acquire).not.toHaveBeenCalled()
+    await editorPage.forceTakeOver()
+    expect(editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 'id-1', { takeover: 'force' })
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+  })
+
+  it('编辑时、不在阅读时"强制接管"什么也不做', async () => {
+    const { editorPage, editLease } = setup()
+    await editorPage.load()
+    expect(modeOf(editorPage)?.kind).toBe('editing')
+    await editorPage.forceTakeOver()
+    expect(editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('申请带回异常中断的提醒：进入编辑之后编辑的状态带着它；"知道了"交给编辑模式，提醒去掉', async () => {
+    const interruption = { holder: BOB_EDITING.holder, endedAt: '2026-09-27T02:58:00.000Z', sameUser: false, samePage: false }
+    const { editorPage } = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, interruption }) } })
+    await editorPage.load()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', interruption })
+    editorPage.dismissInterruption()
+    expect(modeOf(editorPage)).toMatchObject({ kind: 'editing', interruption: undefined })
+  })
+
+  it('测试构建的交接观察钩子交给编辑模式：申请、结果、进入编辑各报一条', async () => {
+    const events: HandoverTraceEvent[] = []
+    const { editorPage } = setup({ handoverTrace: event => events.push(event) })
+    await editorPage.load()
+    expect(events.map(event => event.kind)).toEqual(['acquire', 'acquire-result', 'entered'])
+    expect(events[0]).toMatchObject({ trigger: 'open', takeover: null })
   })
 })

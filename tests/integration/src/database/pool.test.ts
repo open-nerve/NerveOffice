@@ -1,7 +1,10 @@
 // 连接池（P2 设计 §3.3、§3.7）：超时设置取自配置；连接出错不让进程退出（审查 A1）；数据库报错的日志不带参数（审查 A2）；
 // 只读快照进行中，连接池上的查询与借连接报错（M2 Codex 评审复验的必须修 1，ADR-017；借连接这一条是第二轮复验的一般 7 补上的）。
+// 限时的事务（TransactionRunner 的 limit，M3-P5 复验 C1、再复核 D1、D2）：真实数据库上到点时结束会话、整个事务回滚，交出的错误算数据库繁忙；
+// 库上设了默认值、连接串里带了 options 时照样按自己的时限（事务里先设 0 再设时限），应用不改会话；BEGIN 之后停得太久的不开始。
 import type { Transaction } from '@nerve-office/api'
 import type { Database } from '@nerve-office/api/testing'
+import type { SQL } from 'drizzle-orm'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -9,9 +12,11 @@ import { AppError, DatabaseModule, Public, TransactionRunner } from '@nerve-offi
 import { APPLICATION_NAME, DATABASE } from '@nerve-office/api/testing'
 import { Controller, Get, Inject, Module } from '@nestjs/common'
 import { sql } from 'drizzle-orm'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import pg from 'pg'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { stallBeforeLimit } from '../support/limited-transactions.ts'
 
 const SENSITIVE = 'SENSITIVE-PARAM-7c1f'
 
@@ -200,5 +205,125 @@ describe('事务的连接（TransactionRunner，复验 N8）', () => {
       }).catch(() => {})
       return '完成'
     })).resolves.toBe('完成')
+  })
+})
+
+describe('限时的事务（TransactionRunner 的 limit，M3-P5 复验 C1、再复核 D1、D2：保存的事务从 BEGIN 到提交至多 70 秒）', () => {
+  // 单独的库：库上设了 transaction_timeout 的默认值（模拟运维设的 10 分钟），每个事务在 BEGIN 就带着 10 分钟的计时器，事务里再设一个
+  // 时限缩不短它（PostgreSQL 18 实测）。限时的事务在第一条语句里先设 0（停掉它）、再设时限，照样按自己的时限到点；应用不改会话，
+  // 不限时的事务照旧是库上的默认值。连接池只有一个连接：坏连接丢没丢、之后借到的是不是新连接，看后端的进程号
+  let limited: TestDatabase
+  let limitedApp: TestApp
+  /** 连接串里带着 options（把会话的默认值设成 5 分钟）的应用：连接串里的 options 不再被盖掉，限时的事务照样按自己的时限 */
+  let optionsApp: TestApp
+
+  beforeAll(async () => {
+    limited = await createTestDatabase()
+    await limited.query(async (client) => {
+      await client.query(`ALTER DATABASE ${pg.escapeIdentifier(limited.name)} SET transaction_timeout = '10min'`)
+      await client.query('CREATE TABLE timeout_probe (id integer PRIMARY KEY)')
+    })
+    limitedApp = await startTestApp({ databaseUrl: limited.url, env: { NERVE_DATABASE_POOL_MAX: '1' } })
+    const withOptions = new URL(limited.url)
+    withOptions.searchParams.set('options', '-c transaction_timeout=5min')
+    optionsApp = await startTestApp({ databaseUrl: withOptions.toString(), env: { NERVE_DATABASE_POOL_MAX: '1' } })
+  })
+
+  afterAll(async () => {
+    await optionsApp.close()
+    await limitedApp.close()
+    await limited.query(async client => client.query('DROP TABLE timeout_probe'))
+    await limited.drop()
+  })
+
+  /** 测试直接在事务上执行语句（应用代码只能把事务交给仓储） */
+  async function execute(transaction: Transaction, statement: SQL): Promise<void> {
+    await (transaction as unknown as Database).execute(statement)
+  }
+
+  async function backendPidIn(transaction: Transaction): Promise<number> {
+    return Number((await (transaction as unknown as Database).execute<{ pid: number }>(sql`SELECT pg_backend_pid() AS pid`)).rows[0]?.pid)
+  }
+
+  /** 这个事务里 transaction_timeout 现在的值 */
+  async function limitIn(transaction: Transaction): Promise<string | undefined> {
+    return (await (transaction as unknown as Database).execute<{ timeout: string }>(sql`SELECT current_setting('transaction_timeout') AS timeout`)).rows[0]?.timeout
+  }
+
+  async function probeRows(id: number): Promise<number> {
+    return limited.query(async client => Number((await client.query<{ count: string }>('SELECT count(*) AS count FROM timeout_probe WHERE id = $1', [id])).rows[0]?.count))
+  }
+
+  /** 限时的事务：BEGIN 到设下时限至多 2 秒，之后 300 毫秒 */
+  const SHORT = { timeoutMs: 300, startWithinMs: 2_000 }
+
+  it('应用不改会话：测试自己的连接、应用的连接里不限时的事务都是库上的默认值（10 分钟）——没有全局的副作用；连接串带 options 的应用照它（5 分钟）', async () => {
+    expect(await limited.query(async client => (await client.query<{ transaction_timeout: string }>('SHOW transaction_timeout')).rows[0]?.transaction_timeout)).toBe('10min')
+    expect(await limitedApp.runtime.get(TransactionRunner).run(limitIn)).toBe('10min')
+    expect(await optionsApp.runtime.get(TransactionRunner).run(limitIn)).toBe('5min')
+  })
+
+  it('库上的默认值是 10 分钟：限时的事务照样按自己的时限到点（先设 0 停掉 BEGIN 时启动的计时器，再从设下的那一刻计时）——数据库结束会话、整个事务回滚（已经写下的行不在），交出的是 25P04（FATAL，不是回滚失败的错误）；坏连接被丢弃，之后的事务用新连接、照常', async () => {
+    const runner = limitedApp.runtime.get(TransactionRunner)
+    const first = await runner.run(backendPidIn)
+    const started = performance.now()
+    const failure = await runner.run(async (transaction) => {
+      await execute(transaction, sql`INSERT INTO timeout_probe VALUES (1)`)
+      await execute(transaction, sql`SELECT pg_sleep(5)`)
+    }, { limit: SHORT }).then(() => undefined, (error: unknown) => error)
+    // 按事务的时限结束（库上的 10 分钟、语句超时的 15 秒都没起作用）
+    expect(performance.now() - started).toBeLessThan(3_000)
+    expect(failure).toMatchObject({ cause: { code: '25P04', severity: 'FATAL' } })
+    expect(await probeRows(1)).toBe(0)
+    const replaced = await runner.run(backendPidIn)
+    expect(replaced).not.toBe(first)
+    expect(await limited.query(async client => Number((await client.query<{ count: string }>('SELECT count(*) AS count FROM pg_stat_activity WHERE pid = $1', [first])).rows[0]?.count))).toBe(0)
+    await runner.run(async transaction => execute(transaction, sql`INSERT INTO timeout_probe VALUES (2)`))
+    expect(await probeRows(2)).toBe(1)
+  })
+
+  it('连接串里带 options（会话的默认值 5 分钟）：限时的事务照样按自己的时限到点，整个事务回滚', async () => {
+    const runner = optionsApp.runtime.get(TransactionRunner)
+    const started = performance.now()
+    const failure = await runner.run(async (transaction) => {
+      await execute(transaction, sql`INSERT INTO timeout_probe VALUES (3)`)
+      await execute(transaction, sql`SELECT pg_sleep(5)`)
+    }, { limit: SHORT }).then(() => undefined, (error: unknown) => error)
+    expect(performance.now() - started).toBeLessThan(3_000)
+    expect(failure).toMatchObject({ cause: { code: '25P04', severity: 'FATAL' } })
+    expect(await probeRows(3)).toBe(0)
+  })
+
+  it('只管这一个事务：限时的事务里是它自己的时限；提交之后同一个连接上的下一个事务回到会话的值（库上的 10 分钟），不受它的时限约束', async () => {
+    const runner = limitedApp.runtime.get(TransactionRunner)
+    const limitedPid = await runner.run(async (transaction) => {
+      expect(await limitIn(transaction)).toBe('300ms')
+      return backendPidIn(transaction)
+    }, { limit: SHORT })
+    const next = await runner.run(async (transaction) => {
+      await execute(transaction, sql`SELECT pg_sleep(0.6)`)
+      return { pid: await backendPidIn(transaction), timeout: await limitIn(transaction) }
+    })
+    expect(next).toEqual({ pid: limitedPid, timeout: '10min' })
+  })
+
+  it('BEGIN 之后停得超过上限（再复核 D1：应用在 BEGIN 与第一条语句之间停住了）：不开始——交出 LateTransactionStartError（算超过事务的时限，数据库繁忙），它读到的是从 BEGIN 起的时长；work 不执行、什么也没写；之后照常', async () => {
+    const runner = limitedApp.runtime.get(TransactionRunner)
+    const work = vi.fn(async (transaction: Transaction) => execute(transaction, sql`INSERT INTO timeout_probe VALUES (4)`))
+    const restore = stallBeforeLimit(limitedApp, 400)
+    let failure: unknown
+    try {
+      failure = await runner.run(work, { limit: { timeoutMs: 5_000, startWithinMs: 100 } }).then(() => undefined, (error: unknown) => error)
+    }
+    finally {
+      restore()
+    }
+    expect(failure).toMatchObject({ name: 'LateTransactionStartError', startWithinMs: 100 })
+    expect((failure as { readonly elapsedMs: number }).elapsedMs).toBeGreaterThanOrEqual(400)
+    expect(work).not.toHaveBeenCalled()
+    expect(await probeRows(4)).toBe(0)
+    // 没停的时候（一次往返）照常开始
+    await runner.run(work, { limit: { timeoutMs: 5_000, startWithinMs: 100 } })
+    expect(await probeRows(4)).toBe(1)
   })
 })

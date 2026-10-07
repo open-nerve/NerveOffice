@@ -30,3 +30,8 @@ export function acquireBody(clientInstanceId: string, format: ClientFormat = CUR
 export function renewBody(idleSeconds: number, format: ClientFormat = CURRENT_CLIENT): Record<string, unknown> {
   return { idleSeconds, ...format }
 }
+
+/** 发出请求编辑的请求体（M3-P5）：只有页面的构建与数据格式 */
+export function requestBody(format: ClientFormat = CURRENT_CLIENT): Record<string, unknown> {
+  return { ...format }
+}

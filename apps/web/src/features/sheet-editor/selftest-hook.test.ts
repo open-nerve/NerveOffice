@@ -1,9 +1,10 @@
 // 页面自检的挂接（selftest-hook.ts）：页面到 steady 才引入自检、只跑一次；载入失败、等不到就绪时同样交给自检（它把原因带回去）；
 // 页面错误、console.error 与可见性从挂上起就收集，浏览器的 ResizeObserver 通知另记。M3-P2 起打开即阅读：要在编辑时跑的场景先进入编辑。
 import type { SelftestHost } from '../../editor/testing/selftest.ts'
+import type { EditModeState } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { watchForSelftest } from './selftest-hook.ts'
+import { deafenHandoverChannel, handoverViewOf, watchForSelftest } from './selftest-hook.ts'
 
 const run = vi.hoisted(() => vi.fn(async (_host: SelftestHost) => undefined))
 vi.mock('../../editor/testing/selftest.ts', () => ({ runSelftestAndReport: run }))
@@ -38,7 +39,7 @@ const READY: EditorPageLoad = { kind: 'ready', documentId: DOCUMENT_ID, title: '
 
 /** 就绪的页面：阅读（readOnly）或编辑，编辑器的容器到了 surface 这一步 */
 function ready(surface: 'ready' | 'steady', readOnly = true): Partial<EditorPageView> {
-  const mode = readOnly ? { kind: 'reading', canEdit: true, holder: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined } as const : { kind: 'editing' } as const
+  const mode = readOnly ? { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined } as const : { kind: 'editing' } as const
   return { load: READY, mode, surface }
 }
 
@@ -125,6 +126,70 @@ describe('页面自检的挂接', () => {
     expect(host.view()).toEqual({ mode: 'entering', surface: 'loading' })
     set(ready('ready', false))
     expect(host.view()).toEqual({ mode: 'editing', surface: 'ready' })
+  })
+
+  it('交接的复核（M3-P5）：正在编辑的 A（takeover-holder、takeover-holder-deaf）先进入编辑；另开的 B（takeover-taker）与刷新的那一步（refresh-save）在阅读时开始', async () => {
+    for (const scenario of ['takeover-holder', 'takeover-holder-deaf']) {
+      window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
+      const holder = fakePage()
+      watchForSelftest(holder.page, elements)
+      holder.set(ready('steady'))
+      expect(holder.enterEditing).toHaveBeenCalledOnce()
+    }
+    for (const scenario of ['takeover-taker', 'refresh-save']) {
+      window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
+      const other = fakePage()
+      watchForSelftest(other.page, elements)
+      other.set(ready('steady'))
+      expect(other.enterEditing).not.toHaveBeenCalled()
+    }
+  })
+
+  it('交给自检的 view 另带交接的复核要看的（M3-P5）：阅读时"在此编辑"的进展、持有者是自己时在哪里、说明；失去编辑权时的原因（被接管的带在哪里）、有没有没保存的修改、副本的进展与建好的副本', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=takeover-taker`)
+    const { page, set } = fakePage()
+    watchForSelftest(page, elements)
+    set(ready('steady'))
+    const host = await hostOfFirstRun()
+    const reading = ready('steady').mode as Extract<EditModeState, { kind: 'reading' }>
+    set({ mode: { ...reading, selfHolder: 'this-browser', takeover: { kind: 'waiting-save' }, notice: { kind: 'handed-over-tab' } } })
+    expect(host.view()).toEqual({ mode: 'reading', surface: 'steady', takeover: 'waiting-save', selfHolder: 'this-browser', notice: 'handed-over-tab' })
+    set({ mode: { kind: 'losing', loss: { kind: 'taken-over', where: 'this-browser' } } })
+    expect(host.view()).toEqual({ mode: 'losing', surface: 'steady', loss: 'taken-over:this-browser' })
+    const lost = { kind: 'lost', loss: { kind: 'forced' }, unsaved: true, readable: true, checking: false, captureFailed: false, inputLeft: false, reopenFailed: false, copy: { kind: 'done', document: { id: 'copy-1' } }, reload: { kind: 'idle' } }
+    set({ mode: lost as unknown as EditModeState })
+    expect(host.view()).toEqual({ mode: 'lost', surface: 'steady', loss: 'forced', unsaved: true, copy: 'done', copyDocumentId: 'copy-1' })
+    set({ mode: { ...lost, copy: { kind: 'saving' } } as unknown as EditModeState })
+    expect(host.view()).toEqual({ mode: 'lost', surface: 'steady', loss: 'forced', unsaved: true, copy: 'saving' })
+    // 另存为副本成功之后按最新的内容重建为阅读：说明里带着建好的副本
+    set({ mode: { ...reading, notice: { kind: 'copied', document: { id: 'copy-1' } } } as unknown as EditModeState })
+    expect(host.view()).toEqual({ mode: 'reading', surface: 'steady', notice: 'copied', copyDocumentId: 'copy-1' })
+    set({ mode: { kind: 'editing' } })
+    expect(host.view()).toEqual({ mode: 'editing', surface: 'steady' })
+    expect(handoverViewOf(undefined)).toEqual({})
+  })
+
+  it('收不到交接频道消息的 A（takeover-holder-deaf）：交接频道（nerve-office:doc:*）的 message 监听挂不上，别的频道与别的事件照常', () => {
+    // jsdom 的环境里 BroadcastChannel 是 Node 的（它的事件与 jsdom 的不通用）：换成按名字建、能派发事件的假频道
+    class FakeChannel extends EventTarget {
+      readonly name: string
+      constructor(name: string) {
+        super()
+        this.name = name
+      }
+    }
+    const scope = { BroadcastChannel: FakeChannel as unknown as typeof BroadcastChannel }
+    deafenHandoverChannel(scope)
+    const handover = new scope.BroadcastChannel(`nerve-office:doc:${DOCUMENT_ID}`)
+    const other = new scope.BroadcastChannel('nerve-office:session')
+    const heard: string[] = []
+    handover.addEventListener('message', () => heard.push('handover'))
+    handover.addEventListener('messageerror', () => heard.push('handover-error'))
+    other.addEventListener('message', () => heard.push('other'))
+    handover.dispatchEvent(new Event('message'))
+    handover.dispatchEvent(new Event('messageerror'))
+    other.dispatchEvent(new Event('message'))
+    expect(heard).toEqual(['handover-error', 'other'])
   })
 
   it('载入失败时同样交给自检，说明失败的原因', async () => {

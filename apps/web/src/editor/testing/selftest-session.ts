@@ -3,7 +3,7 @@
 // 只在测试构建里（editor/testing/，随自检的分块动态引入）
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
 import type { EntryApi, EntryRange, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
-import type { SelftestCheck, SelftestPage, SelftestTiming } from './selftest-report.ts'
+import type { SelftestCheck, SelftestPage, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import { canonicalJson, contentOf } from './content-compare.ts'
 import { byRole, isVisible, waitFor } from './selftest-dom.ts'
 
@@ -15,6 +15,22 @@ export interface SelftestPageView {
   readonly mode: string | undefined
   readonly surface: string
   readonly save?: string | undefined
+  /**
+   * 交接的复核（M3-P5，./selftest-handover.ts）用到的：阅读时"在此编辑"的进展（preparing、asking、waiting-save、failed）、持有者是自己时
+   * 那个页面在哪里（this-browser、elsewhere、just-closed）、上一次操作留下的说明（例如 handed-over-tab；copied 是另存为副本成功之后回到阅读，
+   * copyDocumentId 是建好的副本）；没有时 undefined
+   */
+  readonly takeover?: string | undefined
+  readonly selfHolder?: string | undefined
+  readonly notice?: string | undefined
+  /**
+   * 失去编辑权时（losing、lost）：原因（种类，被接管的另带在哪里，例如 taken-over:this-browser）、本页有没有服务端没确认的内容、
+   * 另存为副本的进展（idle、saving、failed、refused、done）与建好的副本
+   */
+  readonly loss?: string | undefined
+  readonly unsaved?: boolean | undefined
+  readonly copy?: string | undefined
+  readonly copyDocumentId?: string | undefined
 }
 
 /** 编辑器页交给自检的（挂接在页面开始载入时就收集页面错误与可见性，到 steady 之后才引入自检） */
@@ -136,6 +152,9 @@ export interface Session {
   /** 页面被隐藏的时刻（自检开始之后第一次）：之后的检查不再做 */
   hiddenAt?: string
   formulaValues?: Record<string, unknown>
+  /** 交接的场景走了哪条路与时间线（M3-P5，selftest-report.ts 的 path、timeline） */
+  path?: string
+  timeline?: SelftestTimelineEntry[]
 }
 
 export async function check(session: Session, id: string, run: () => Promise<string>, timeoutMs = CHECK_TIMEOUT_MS): Promise<boolean> {

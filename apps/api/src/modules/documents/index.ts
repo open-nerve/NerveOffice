@@ -20,9 +20,12 @@ export { DocumentsModule } from './documents.module.ts'
 export { DocumentsRepository } from './documents.repository.ts'
 // 编辑租约（M3-P1）：编辑权的接口在 workspace，令牌的参数装饰器也给 S4 的保存用
 export { EditLeaseToken } from './edit-lease-header.ts'
-export type { LeaseInterruption } from './edit-lease-rules.ts'
+export type { LeaseInterruption, LeaseReservation } from './edit-lease-rules.ts'
 export { editingActorOf, EditLeaseService } from './edit-lease.service.ts'
-export type { EditingActor, LeaseAcquisition, LeaseRequest, LeaseStatus, RenewalRequest } from './edit-lease.service.ts'
+export type { EditingActor, LeaseAcquisition, LeaseEditor, LeaseRenewal, LeaseRequest, LeaseRequestView, LeaseReservationView, LeaseStatus, PendingRequest, RenewalRequest } from './edit-lease.service.ts'
+// 请求编辑与交出（M3-P5）：接口在 workspace
+export { EditRequestService } from './edit-request.service.ts'
+export type { RequestOutcome } from './edit-request.service.ts'
 export { FoldersService } from './folders.service.ts'
 export type { CreateFolderCommand, MoveFolderCommand, UpdateFolderCommand } from './folders.service.ts'
 // 修订记录与回执的保留期清理（M3-P3 设计 §3.9）：只给 jobs，别处经这里引用由 eslint 拦下

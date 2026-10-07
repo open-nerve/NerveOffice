@@ -196,6 +196,21 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(named.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveSwitchTiming']])
   })
 
+  it('违规：交接日志（M3-P5 设计 §3.13 的观察钩子）进了生产构建：分块名、按来源都认得出，并进别的分块时挂在 window 上的名字照样报出', () => {
+    // 测试构建（dist-e2e）里交接日志的写法（节选）
+    const log = 'const e="__nerveHandoverLog";function t(n){const r=[];return n[e]={log:()=>r.slice()},{observe:o=>r.push(o)}}export{t as installHandoverLog};'
+    const index = { name: 'index', modules: ['index.html', 'src/entries/platform/main.ts'] }
+    const handover = { name: 'handover-log', modules: ['src/editor/testing/handover-log.ts'] }
+    const chunk = artifactsGate(writeDist({ ...clean, 'assets/handover-log-zZeb8RYs.js': log, [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': index, 'assets/handover-log-zZeb8RYs.js': handover }) }))
+    expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([
+      ['artifacts/keyword', '__nerveHandoverLog'],
+      ['artifacts/test-only', 'assets/handover-log-zZeb8RYs.js'],
+      ['artifacts/test-only-source', 'assets/handover-log-zZeb8RYs.js'],
+    ])
+    const inlined = artifactsGate(writeDist({ ...clean, 'assets/index.js': `${clean['assets/index.js']}${log}` }))
+    expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveHandoverLog']])
+  })
+
   it('违规：没有模块来源清单、产物里有清单没记下的脚本（按来源的核对看不到它们）', () => {
     expect(artifactsGate(writeDist(clean, { sources: false })).violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/missing-module-sources', MODULE_SOURCES]])
     const unlisted = artifactsGate(writeDist({ ...clean, 'assets/extra-a1.js': 'export {}', [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': { name: 'index', modules: ['index.html'] } }) }))

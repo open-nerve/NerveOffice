@@ -193,8 +193,11 @@ export interface AccessibleDocument<T extends AccessTarget> extends Accessible<T
   readonly permissions: DocumentPermissions
 }
 
-/** 文档上要权限的操作（只看能不能读时用 requireAccess）；edit 是保存内容，share 是查看与改动这份文档的单独授权（M2-P5）。 */
-export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete' | 'share'
+/**
+ * 文档上要权限的操作（只看能不能读时用 requireAccess）；edit 是保存内容，share 是查看与改动这份文档的单独授权（M2-P5），
+ * takeOver 是强制接管别人的编辑（M3-P5，与 edit 一起要求）。
+ */
+export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete' | 'share' | 'takeOver'
 
 /** 一项操作看的权限位与不能做时的说明 */
 interface DocumentOperationRule {
@@ -240,6 +243,14 @@ const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule
     message: '只有空间管理员能分享这份文档',
     grantOnlyMessage: '这份文档是单独分享给你的，不能再分享给别人',
     frozen: { message: SHARING_FROZEN_MESSAGE, onceRestored: canShareOnceRestored },
+  },
+  // 强制接管别人的编辑（M3-P5 设计 §3.8）：空间管理员或个人空间的所有者，并且能编辑，与分享、跨空间移动同一个机制——申请按
+  // ['edit', 'takeOver'] 判断，不加锁一次、锁下一次。只凭授权的人没有空间角色，给他自己的说法（不是"只有空间管理员能"：
+  // 他在那个空间里本来就没有角色）；归档的空间里是默认的"空间已归档，只能查看"（恢复之后不许诺什么，与保存一样）
+  takeOver: {
+    permission: 'canTakeOver',
+    message: '只有空间管理员能强制接管这份文档的编辑',
+    grantOnlyMessage: '这份文档是单独分享给你的，不能强制接管编辑',
   },
 }
 

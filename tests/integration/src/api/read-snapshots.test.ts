@@ -15,12 +15,15 @@ import type { Route } from '../support/routes.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import type { CapturedQuery, StatementCapture } from '../support/statement-capture.ts'
 import { createHash, randomUUID } from 'node:crypto'
+import { editStatusSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { acquireBody } from '../support/client-format.ts'
+import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
+import { acquireLease, handOverLease, pendingRequestId } from '../support/edit-leases.ts'
 import { setGrants } from '../support/grants.ts'
 import { routesOf } from '../support/routes.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
@@ -45,7 +48,10 @@ interface World {
   readonly root: TestAccount
   /** 停用的账户，个人空间里有一份文档（管理界面的转移页） */
   readonly leaver: string
+  /** 艾米的文档：她在编辑，本（被授权的编辑者）在请求编辑（M3-P5） */
   readonly document: string
+  /** 艾米的另一份文档：她交给了本，还在保留期内（M3-P5） */
+  readonly reserved: string
   readonly team: string
 }
 
@@ -67,7 +73,8 @@ const PROBES: Readonly<Record<string, (w: World) => Probe>> = {
   'GET /api/documents': w => ({ who: 'amy', path: `/api/documents?spaceId=${w.amy.personalSpaceId}` }),
   'GET /api/documents/:id': w => ({ who: 'amy', path: `/api/documents/${w.document}` }),
   'GET /api/documents/:id/content': w => ({ who: 'amy', path: `/api/documents/${w.document}/content` }),
-  // 编辑状态（M3-P1）：这份文档上有艾米的有效租约，持有者的登录与编辑权也在快照里查
+  // 编辑状态（M3-P1）：这份文档上有艾米的有效租约，持有者的登录与编辑权也在快照里查；本在请求编辑（M3-P5），请求方的登录与编辑权、
+  // 补人名同样在快照里查。交出之后的保留在另一份文档上，见文件末尾的用例
   'GET /api/documents/:id/edit-lease': w => ({ who: 'amy', path: `/api/documents/${w.document}/edit-lease` }),
   'GET /api/documents/:id/grants': w => ({ who: 'amy', path: `/api/documents/${w.document}/grants` }),
   'GET /api/folders': w => ({ who: 'amy', path: `/api/folders?spaceId=${w.amy.personalSpaceId}` }),
@@ -96,10 +103,12 @@ beforeAll(async () => {
   await seedDocument(database, { spaceId: leaver.personalSpaceId, createdBy: leaver.id, title: '快照：停用者的' })
   const document = (await seedDocument(database, { spaceId: amy.personalSpaceId, createdBy: amy.id, title: '快照：艾米的' })).id
   const shared = (await seedDocument(database, { spaceId: ben.personalSpaceId, createdBy: ben.id, title: '快照：分享给艾米的' })).id
+  const reserved = (await seedDocument(database, { spaceId: amy.personalSpaceId, createdBy: amy.id, title: '快照：交给本的' })).id
   const team = await createTeamSpace(database, { name: '快照：团队', createdBy: root.id, members: { [amy.id]: 'viewer', [ben.id]: 'admin' } })
   await setGrants(database, [
     { documentId: shared, userId: amy.id, role: 'viewer', grantedBy: ben.id },
     { documentId: document, userId: ben.id, role: 'editor', grantedBy: amy.id },
+    { documentId: reserved, userId: ben.id, role: 'editor', grantedBy: amy.id },
   ])
   // 文件夹与回收站里的一份文档：经接口建、删（列表要算回收站的计数与原位置的名称）
   const session = await login(app.baseUrl, amy.username, amy.password)
@@ -109,7 +118,12 @@ beforeAll(async () => {
   expect((await asUser(app.baseUrl, session, `/api/documents/${trashed}`, { method: 'DELETE' })).status).toBe(204)
   // 艾米的文档上有她的有效租约（M3-P1）：编辑状态要判断持有者的登录与编辑权，那两条查询同样在快照里
   expect((await asUser(app.baseUrl, session, `/api/documents/${document}/edit-lease`, { method: 'POST', body: acquireBody(randomUUID()) })).status).toBe(201)
-  w = { amy, root, leaver: leaver.id, document, team }
+  // 本在请求编辑这份文档（M3-P5）：编辑状态另查请求方的登录与编辑权；另一份文档艾米交给了本：编辑状态另查被保留的人的编辑权
+  const benSession = await login(app.baseUrl, ben.username, ben.password)
+  await pendingRequestId(app.baseUrl, benSession, document)
+  const lease = await acquireLease(app.baseUrl, session, reserved)
+  expect((await handOverLease(app.baseUrl, session, reserved, lease, await pendingRequestId(app.baseUrl, benSession, reserved))).status).toBe(200)
+  w = { amy, root, leaver: leaver.id, document, reserved, team }
   routes = routesOf(app)
   capture = captureStatements(database.name)
 })
@@ -242,5 +256,19 @@ describe('登录之后的 GET 接口都在一个只读快照里判断权限、�
     expect(result).toBe(304)
     expect(snapshotProblems(queries, guard, { userId: w.amy.id, sessionId: await sessionIdOf(session) })).toEqual([])
     expect(queries.some(query => query.text.includes('"document_contents"')), '304 不读内容').toBe(false)
+  })
+
+  it('US-M3-06 编辑状态里有人在请求编辑、有交出之后的保留（M3-P5）：查请求方的登录与编辑权、被保留的人的编辑权、补人名的语句都在同一个快照里，COMMIT 之后再没有语句；响应里确实带着它们（走到了这些查询）', async () => {
+    const guard = await guardStatements()
+    for (const [documentId, field] of [[w.document, 'request'], [w.reserved, 'reservation']] as const) {
+      const session = await freshSession('amy')
+      const { result, queries } = await capture.during(async () => {
+        const response = await asUser(app.baseUrl, session, `/api/documents/${documentId}/edit-lease`)
+        return { status: response.status, body: parseExact(editStatusSchema, await response.json()) }
+      })
+      expect(result.status, field).toBe(200)
+      expect(result.body[field], field).toMatchObject({ mine: false })
+      expect(snapshotProblems(queries, guard, { userId: w.amy.id, sessionId: await sessionIdOf(session) }), field).toEqual([])
+    }
   })
 })
