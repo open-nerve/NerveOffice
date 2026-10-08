@@ -498,6 +498,28 @@ describe('被抢（M3-P6 设计 §3.13）', () => {
     expect(context.browser.holderOf(LOCK)).toBe('other')
   })
 
+  it('拿回来之后再被抢：被抢的时刻随之更新——两次被抢之间发出、第二次被抢之后才迟到成功的续租不拿锁，第二次被抢之后发出的才拿（复验 E9）', async () => {
+    const context = setup([CURRENT, { kind: 'unknown', error: new Error('断网') }])
+    await context.lock.claim()
+    context.time.elapse(1_000)
+    // 第一次被抢：核对是当前的，拿回来
+    await stolenByOther(context)
+    expect(context.lock.held()).toBe(true)
+    context.time.elapse(1_000)
+    const sentBetween = context.time.now()
+    context.time.elapse(1_000)
+    // 第二次被抢：核对不了，等心跳
+    await stolenByOther(context)
+    expect(context.lock.stolen()).toBe(true)
+    context.lock.renewed(sentBetween)
+    await settle()
+    expect(context.lock.held()).toBe(false)
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    await renewedLater(context)
+    expect(context.lock.held()).toBe(true)
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+  })
+
   it('浏览器没有锁（退化）：拿到的句柄从不被抢，照常编辑', async () => {
     const confirm = vi.fn(async (): Promise<LeaseVerdict> => CURRENT)
     const lock = holdLocalLock({ browser: sameBrowserFor(DOCUMENT_ID, { locks: undefined, openChannel: undefined }), confirm, lose: vi.fn(), onSuperseded: vi.fn(), clock: fakeLeaseClock().clock })

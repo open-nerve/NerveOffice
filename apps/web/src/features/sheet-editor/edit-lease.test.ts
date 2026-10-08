@@ -1600,22 +1600,92 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     expect(context.api.renew.mock.calls.map(call => call[1])).toEqual([TOKEN, TOKEN, NEXT_TOKEN])
   })
 
-  it('续上正在进行时核对得知不是当前的（核对的还是上一代）：交回已被取代；调用方随即放弃，续上回来的新一代随即放掉，不通知页面', async () => {
+  /** 心跳得知到期、开始续上，续上的申请等 reply 给出回答：交回租约与 reply */
+  async function recovering(context: ReturnType<typeof setup>) {
     const reply = deferred<AcquiredEditLease>()
-    const context = setup()
     const lease = await held(context)
     context.api.renew.mockRejectedValueOnce(lostError('expired'))
     context.api.acquire.mockReturnValueOnce(reply.promise)
     await context.time.advance(HEARTBEAT_MS)
     expect(context.api.acquire).toHaveBeenCalledTimes(2)
-    context.api.renew.mockRejectedValueOnce(takenOverError(false))
-    expect(await lease.confirm()).toMatchObject({ kind: 'superseded', loss: { kind: 'taken-over' } })
-    lease.abandon()
-    reply.resolve(NEXT)
+    return { lease, reply }
+  }
+
+  it('核对得到失效时本页的续上还在途（续上的新一代先在服务端提交、回包还没到，核对的还是上一代，复验 E8）：先等续上有了结果，不就这次的回答裁决——换了一代就核对现在的这一代', async () => {
+    const context = setup()
+    const { lease, reply } = await recovering(context)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    let answered = false
+    const confirming = lease.confirm().finally(() => {
+      answered = true
+    })
     await settle()
-    expect(context.calls).toEqual(['release N'])
+    expect(answered).toBe(false)
+    reply.resolve(NEXT)
+    expect(await confirming).toEqual({ kind: 'current' })
+    expect(context.api.renew.mock.calls.map(call => call[1])).toEqual([TOKEN, TOKEN, NEXT_TOKEN])
+    expect(context.calls).toEqual([])
     expect(context.onLost).not.toHaveBeenCalled()
+  })
+
+  it('核对得到失效时本页的续上还在途、续上失去了编辑权（被占用，页面已经得到通知）：交回已经结束', async () => {
+    const context = setup()
+    const { lease, reply } = await recovering(context)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    const confirming = lease.confirm()
+    await settle()
+    reply.reject(heldError(AMY_HELD))
+    expect(await confirming).toEqual({ kind: 'ended', loss: undefined })
+    expect(context.onLost).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ kind: 'held' }))
+    expect(context.api.renew).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    ['被新的一代改写（replaced）：改写它的可能正是本页自己（服务端提交了续上的申请、回包丢了）——当作这一代自己失效', lostError('replaced'), { kind: 'ended', loss: { kind: 'lease', reason: 'replaced' } }],
+    ['被本人接管（taken_over）：接管的记号对着本页这一代，不会是本页自己的申请——照旧是被取代', takenOverError(false), { kind: 'superseded', loss: { kind: 'taken-over', where: 'elsewhere' } }],
+    ['按时间到期', lostError('expired'), { kind: 'ended', loss: { kind: 'lease', reason: 'expired' } }],
+  ] as const)('核对得到失效时本页的续上还在途、续上的申请结果未知（断网）：这一代没换，按这次的回答裁决——%s（复验 E8）', async (_case, failure, verdict) => {
+    const context = setup()
+    const { lease, reply } = await recovering(context)
+    context.api.renew.mockRejectedValueOnce(failure)
+    const confirming = lease.confirm()
+    await settle()
+    reply.reject(new NetworkError('断网'))
+    expect(await confirming).toEqual(verdict)
+    expect(context.api.renew).toHaveBeenCalledTimes(2)
     expect(lease.credentials().token).toBe(TOKEN)
+  })
+
+  it('上一次续上的申请结果未知（断网）、之后没有续上在途：核对得到的 replaced 同样说不准是不是本页自己改写的，当作这一代自己失效；续上换了一代之后，replaced 照旧是被取代（复验 E8）', async () => {
+    const context = setup()
+    const lease = await held(context)
+    context.api.renew.mockRejectedValueOnce(lostError('expired'))
+    context.api.acquire.mockRejectedValueOnce(new NetworkError('断网'))
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    expect(await lease.confirm()).toEqual({ kind: 'ended', loss: { kind: 'lease', reason: 'replaced' } })
+    // 下一次心跳得知 replaced、续上了（申请到 NEXT）：本页知道自己最新的一代了
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    await context.time.advance(HEARTBEAT_MS)
+    expect(lease.credentials().token).toBe(NEXT_TOKEN)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    expect(await lease.confirm()).toEqual({ kind: 'superseded', loss: { kind: 'lease', reason: 'replaced' } })
+  })
+
+  it('上一次续上的申请结果未知之后人不在（dormant，那次得知的是 replaced）：核对按那次的原因同样当作这一代自己失效，不发（复验 E8）', async () => {
+    const context = setup()
+    const lease = await held(context)
+    context.api.renew.mockRejectedValueOnce(lostError('expired'))
+    context.api.acquire.mockRejectedValueOnce(new NetworkError('断网'))
+    await context.time.advance(HEARTBEAT_MS)
+    context.interact(context.time.now() - RECLAIM_MS)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    const renewals = context.api.renew.mock.calls.length
+    expect(await lease.confirm()).toEqual({ kind: 'ended', loss: { kind: 'lease', reason: 'replaced' } })
+    expect(context.api.renew).toHaveBeenCalledTimes(renewals)
   })
 })
 

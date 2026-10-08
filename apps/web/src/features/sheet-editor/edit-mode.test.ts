@@ -3454,6 +3454,103 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
     expect(modeOf(a.mode).kind).toBe('editing')
   })
 
+  /**
+   * A 编辑第 1 代；不核对的旧页面抢走 A 的锁，A 的核对等 gate 放行之后才交给服务端处理。之后 A 的心跳得知第 1 代按时间到期（假服务端不模拟
+   * 到期，这里给出）、续上：服务端提交第 2 代（同一个页面），续上的回包先等 reply 放行，再按 lost 交回成功还是断网（回包丢了）
+   */
+  async function confirmDuringRecovery(lost: 'answered' | 'lost') {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    await editing(a)
+    a.factory.last().edit('甲')
+    const gate = deferred<void>()
+    a.editLease.renew.mockImplementationOnce(async (documentId, token, idleSeconds) => {
+      await gate.promise
+      return server.api.renew(documentId, token, idleSeconds)
+    })
+    a.editLease.renew.mockImplementationOnce(async () => Promise.reject(leaseLost('expired')))
+    const reply = deferred<void>()
+    a.editLease.acquire.mockImplementationOnce(async (documentId, page, options) => {
+      const answer = await server.api.acquire(documentId, page, options)
+      await reply.promise
+      if (lost === 'lost')
+        throw new NetworkError('断网')
+      return answer
+    })
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A })
+    // 核对这时才被处理：第 1 代的令牌对不上本页自己续上的第 2 代——replaced；它先于续上的回包回来
+    gate.resolve()
+    await settle()
+    await settle()
+    return { server, browser, a, old, reply }
+  }
+
+  it('被抢之后的核对在途时本页续上（心跳得知按时间到期）：服务端先提交了续上的第 2 代、回包还没到，核对晚于它被处理、先回来，得到 replaced——那是本页自己续上的一代：不当作被取代，等续上有了结果、核对现在的这一代（当前的），把锁拿回来；续上的那一代照常用、不释放（复验 E8）', async () => {
+    const { server, browser, a, old, reply } = await confirmDuringRecovery('answered')
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(browser.holderOf(LOCK)).toBe('old')
+    reply.resolve()
+    await settle()
+    await settle()
+    expect(a.editLease.renew).toHaveBeenCalledTimes(3)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(2), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.release).not.toHaveBeenCalled()
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A, released: false })
+    await a.mode.save()
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(2), writeEpoch: 2 })
+  })
+
+  it('同上，续上的回包丢了（服务端已经提交了第 2 代，本页只看到断网）：这次的 replaced 说不准是不是本页自己改写的——不当作被取代，当作这一代自己失效交给租约：再续上（同一个页面的重试，第 3 代）、留在编辑，新的一代续租成功时把锁拿回来（复验 E8）', async () => {
+    const { server, browser, a, old, reply } = await confirmDuringRecovery('lost')
+    reply.resolve()
+    await settle()
+    await settle()
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.acquire).toHaveBeenCalledTimes(3)
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_A, released: false })
+    expect(browser.holderOf(LOCK)).toBe('old')
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(3), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('上一次续上的回包丢了（服务端已经提交了本页的第 2 代）、之后被不核对的旧页面抢锁：核对得到的 replaced 同样说不准——交给租约再续上（第 3 代）、留在编辑，之后把锁拿回来（复验 E8）', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    await editing(a)
+    a.editLease.renew.mockImplementationOnce(async () => Promise.reject(leaseLost('expired')))
+    a.editLease.acquire.mockImplementationOnce(async (documentId, page, options) => {
+      await server.api.acquire(documentId, page, options)
+      throw new NetworkError('断网')
+    })
+    await a.time.advance(HEARTBEAT_MS)
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A })
+    expect(modeOf(a.mode).kind).toBe('editing')
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    await settle()
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_A, released: false })
+    expect(browser.holderOf(LOCK)).toBe('old')
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(3), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+  })
+
   it.each([
     ['页面关闭（pagehide，刷新）', (context: ReturnType<typeof setup>) => context.mode.releaseOnHide()],
     ['卸载', (context: ReturnType<typeof setup>) => context.mode.dispose()],
