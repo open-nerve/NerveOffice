@@ -7,8 +7,10 @@
 //   照常提交：客户端早已断开（刷新），服务端不因为连接断了而放弃（Express：处理照常进行，只是回应写不出去）。不用锁住内容行的办法：后端等锁至多
 //   lock_timeout（5 秒）就放弃那次保存（55P03，回 503），而 pg_sleep 不是等锁，只受 statement_timeout（15 秒）约束。停着的时候那个连接的
 //   application_name 换成这份文档的标记（事务内有效），blockedSince、finishedSince 按 pg_stat_activity 看；
-// - 库里的时间线（watchDocument）：每 100 毫秒读一次修订号与编辑租约那一行（代次、明确结束的原因、接管的方式、绑定的标签页），记下变化；
-// - 服务端的请求日志（serverRequestsOf）：test-results/e2e-server.log 里这份文档的请求（方法、路由、状态码或者中断、用时、记下的时刻）；
+// - 库里的时间线（watchDocument）：每 100 毫秒读一次修订号与编辑租约那一行（代次、明确结束的原因、接管的方式、绑定的标签页；M3-P6 起另有持有者、
+//   请求方、留给谁、取得与最后一次续租的时刻），记下变化；
+// - 服务端的请求日志（serverRequestsOf）：test-results/e2e-server.log 里这份文档的请求（方法、路由、状态码或者中断、用时、记下的时刻；M3-P6 起另有
+//   认证出的用户）；请求编辑的两条路（M3-P6）的编排与判定在 ./selftest-request.ts，也用这两样；
 // - 判定（纯函数，单元测试覆盖）：takeoverJudgement、refreshJudgement——问题与证据的说明。
 import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { readFileSync } from 'node:fs'
@@ -140,7 +142,11 @@ export async function slowDownSave(documentId: string, seconds: number): Promise
 
 // ---- 库里的时间线 ----
 
-/** 某一刻库里的样子：修订号，编辑租约那一行的代次、明确结束的原因、接管的方式与绑定的标签页（没有租约时是 null） */
+/**
+ * 某一刻库里的样子：修订号，编辑租约那一行的代次、明确结束的原因、接管的方式与绑定的标签页（没有租约时是 null）。
+ * 请求编辑的两条路（M3-P6）另看：持有者、待回应的请求是谁发的、交出之后留给了谁，以及这一代取得与最后一次续租的时刻（数据库的时间，毫秒；
+ * "最后一次续租到另一方申请之间不短于一个有效期"按它算）。没有时 null
+ */
 export interface DocumentState {
   /** 读到的时刻（Date.now） */
   readonly at: number
@@ -149,6 +155,11 @@ export interface DocumentState {
   readonly endReason: string | null
   readonly takeover: string | null
   readonly clientInstanceId: string | null
+  readonly holderId?: string | null
+  readonly requestedBy?: string | null
+  readonly reservedFor?: string | null
+  readonly acquiredAt?: number | null
+  readonly renewedAt?: number | null
 }
 
 export interface DocumentWatch {
@@ -159,6 +170,20 @@ export interface DocumentWatch {
 
 function sameState(a: DocumentState, b: DocumentState): boolean {
   return a.revision === b.revision && a.epoch === b.epoch && a.endReason === b.endReason && a.takeover === b.takeover && a.clientInstanceId === b.clientInstanceId
+    && a.holderId === b.holderId && a.requestedBy === b.requestedBy && a.reservedFor === b.reservedFor && a.acquiredAt === b.acquiredAt && a.renewedAt === b.renewedAt
+}
+
+interface LeaseRow {
+  readonly revision: number | null
+  readonly write_epoch: number | null
+  readonly end_reason: string | null
+  readonly takeover: string | null
+  readonly client_instance_id: string | null
+  readonly holder_id: string | null
+  readonly requested_by: string | null
+  readonly reserved_for: string | null
+  readonly acquired_at: Date | null
+  readonly renewed_at: Date | null
 }
 
 /** 每 100 毫秒读一次这份文档的修订号与编辑租约，记下变化 */
@@ -167,13 +192,25 @@ export async function watchDocument(documentId: string): Promise<DocumentWatch> 
   const states: DocumentState[] = []
   const control = { stopped: false }
   const read = async (): Promise<DocumentState> => {
-    const { rows } = await client.query<{ revision: number | null, write_epoch: number | null, end_reason: string | null, takeover: string | null, client_instance_id: string | null }>(
-      `SELECT d.revision, l.write_epoch, l.end_reason, l.takeover, l.client_instance_id
+    const { rows } = await client.query<LeaseRow>(
+      `SELECT d.revision, l.write_epoch, l.end_reason, l.takeover, l.client_instance_id, l.holder_id, l.requested_by, l.reserved_for, l.acquired_at, l.renewed_at
        FROM documents d LEFT JOIN document_edit_leases l ON l.document_id = d.id WHERE d.id = $1`,
       [documentId],
     )
     const row = rows[0]
-    return { at: Date.now(), revision: row?.revision ?? null, epoch: row?.write_epoch ?? null, endReason: row?.end_reason ?? null, takeover: row?.takeover ?? null, clientInstanceId: row?.client_instance_id ?? null }
+    return {
+      at: Date.now(),
+      revision: row?.revision ?? null,
+      epoch: row?.write_epoch ?? null,
+      endReason: row?.end_reason ?? null,
+      takeover: row?.takeover ?? null,
+      clientInstanceId: row?.client_instance_id ?? null,
+      holderId: row?.holder_id ?? null,
+      requestedBy: row?.requested_by ?? null,
+      reservedFor: row?.reserved_for ?? null,
+      acquiredAt: row?.acquired_at?.getTime() ?? null,
+      renewedAt: row?.renewed_at?.getTime() ?? null,
+    }
   }
   const loop = (async () => {
     while (!control.stopped) {
@@ -210,6 +247,8 @@ export interface ServerRequest {
   readonly statusCode: number | undefined
   readonly aborted: boolean
   readonly durationMs: number | undefined
+  /** 认证出的用户（登录了的请求才有，规范 §7）：请求编辑的两条路（M3-P6）按它分开两个人的请求 */
+  readonly userId?: string | undefined
 }
 
 /** 日志的原文里这份文档的请求（路径里有它的 id），记下的时刻在 [since, until] 里，按时刻排好（纯函数） */
@@ -235,6 +274,7 @@ export function parseServerRequests(text: string, documentId: string, since: num
       statusCode: typeof entry.statusCode === 'number' ? entry.statusCode : undefined,
       aborted: entry.aborted === true,
       durationMs: typeof entry.durationMs === 'number' ? entry.durationMs : undefined,
+      userId: typeof entry.userId === 'string' ? entry.userId : undefined,
     })
   }
   return requests.sort((a, b) => a.time - b.time)

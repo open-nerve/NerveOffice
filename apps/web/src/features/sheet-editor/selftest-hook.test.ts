@@ -169,6 +169,51 @@ describe('页面自检的挂接', () => {
     expect(handoverViewOf(undefined)).toEqual({})
   })
 
+  it('请求编辑的两条路（M3-P6）：被暂停的持有者（paused-holder）先进入编辑；请求方（request-waiter）在阅读时开始', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=paused-holder`)
+    const holder = fakePage()
+    watchForSelftest(holder.page, elements)
+    holder.set(ready('steady'))
+    expect(holder.enterEditing).toHaveBeenCalledOnce()
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=request-waiter`)
+    const waiter = fakePage()
+    watchForSelftest(waiter.page, elements)
+    waiter.set(ready('steady'))
+    expect(waiter.enterEditing).not.toHaveBeenCalled()
+  })
+
+  it('交给自检的 view 另带请求编辑的复核要看的（M3-P6）：阅读时请求方这一侧的进展与 granted 在等什么；编辑、离开编辑时在等回应的请求是谁发的、离开的原因；续上时别处在编辑的是谁。subscribe 转给编辑器页', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=request-waiter`)
+    const { page, set } = fakePage()
+    watchForSelftest(page, elements)
+    set(ready('steady'))
+    const host = await hostOfFirstRun()
+    const reading = ready('steady').mode as Extract<EditModeState, { kind: 'reading' }>
+    set({ mode: { ...reading, request: { kind: 'waiting', holder: undefined, cancelFailure: undefined } } })
+    expect(host.view()).toEqual({ mode: 'reading', surface: 'steady', request: 'waiting' })
+    set({ mode: { ...reading, request: { kind: 'granted', until: 'visible' } } })
+    expect(host.view()).toEqual({ mode: 'reading', surface: 'steady', request: 'granted', requestUntil: 'visible' })
+    const requester = { id: 'peer-1', username: 'peer', displayName: '协作者' }
+    const incoming = { id: 'r1', requester, declining: false, failure: undefined }
+    set({ mode: { kind: 'editing', request: incoming } })
+    expect(host.view()).toEqual({ mode: 'editing', surface: 'steady', incoming: 'peer-1' })
+    set({ mode: { kind: 'exiting', cause: 'handover-request', request: incoming } })
+    expect(host.view()).toEqual({ mode: 'exiting', surface: 'steady', incoming: 'peer-1', leaving: 'handover-request' })
+    set({ mode: { kind: 'losing', loss: { kind: 'held', holder: { holder: requester, sameUser: false, lastActiveMinutes: 0 } } } })
+    expect(host.view()).toEqual({ mode: 'losing', surface: 'steady', loss: 'held:other' })
+    set({ mode: { kind: 'losing', loss: { kind: 'held', holder: { holder: requester, sameUser: true, lastActiveMinutes: undefined } } } })
+    expect(host.view().loss).toBe('held:self')
+    set({ mode: { kind: 'losing', loss: { kind: 'held', holder: undefined } } })
+    expect(host.view().loss).toBe('held:unknown')
+    const listener = vi.fn()
+    const unsubscribe = host.subscribe(listener)
+    set({ mode: { kind: 'editing' } })
+    expect(listener).toHaveBeenCalledOnce()
+    unsubscribe()
+    set({ mode: { kind: 'entering' } })
+    expect(listener).toHaveBeenCalledOnce()
+  })
+
   it('收不到交接频道消息的 A（takeover-holder-deaf）：交接频道（nerve-office:doc:*）的 message 监听挂不上，别的频道与别的事件照常', () => {
     // jsdom 的环境里 BroadcastChannel 是 Node 的（它的事件与 jsdom 的不通用）：换成按名字建、能派发事件的假频道
     class FakeChannel extends EventTarget {

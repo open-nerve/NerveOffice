@@ -6,7 +6,7 @@ import type { SelftestStep } from '../support/selftest-plan.ts'
 import { describe, expect, it } from 'vitest'
 import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { SELFTEST_STEPS, stepsOf } from '../support/selftest-plan.ts'
-import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, selectSteps, serverJudgedOutcome, timingLines } from './run-plan.ts'
+import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, selectSteps, serverJudgedOutcome, SHADE_COMMAND_PATH, SHADE_PAGE, SHADE_PATH, timingLines } from './run-plan.ts'
 
 const ORIGIN = 'http://127.0.0.1:4100'
 const COLLECTOR = 'http://127.0.0.1:4200'
@@ -47,7 +47,7 @@ describe('一串步骤怎么接起来', () => {
     expect(nextAfter(chain, 3, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
   })
 
-  it('全部步骤：上一步带过去的到 hidden-save 为止（它之后去结束页）；交接的几步由驱动脚本另开（A 与 refresh-save 交回之后去结束页，B 去关掉自己的页）', () => {
+  it('全部步骤：上一步带过去的到 hidden-save 为止（它之后去结束页）；交接的几步与请求编辑的两条路由驱动脚本另开（A、refresh-save、请求方与被暂停的持有者交回之后去结束页，B 去关掉自己的页）', () => {
     const chain = chainOf(ALL_STEPS, ORIGIN, COLLECTOR)
     const hidden = ALL_STEPS.findIndex(step => step.scenario === 'hidden-save')
     expect(chain.map(link => [link.step.id, link.opened, link.after]).slice(hidden)).toEqual([
@@ -57,11 +57,23 @@ describe('一串步骤怎么接起来', () => {
       ['takeover-deaf-holder', true, 'done'],
       ['takeover-deaf-taker', true, 'close'],
       ['refresh-save', true, 'done'],
+      ['request-waiter', true, 'done'],
+      ['paused-holder', true, 'done'],
     ])
     expect(chain.slice(0, hidden).every(link => !link.opened && link.after === 'next')).toBe(true)
     expect(nextAfter(chain, hidden - 1, COLLECTOR)).toBe(chain[hidden]?.url)
     expect(nextAfter(chain, hidden, COLLECTOR)).toBe(`${COLLECTOR}${DONE_PATH}`)
-    expect([1, 2, 3, 4, 5].map(offset => nextAfter(chain, hidden + offset, COLLECTOR))).toEqual([DONE_PATH, CLOSE_PATH, DONE_PATH, CLOSE_PATH, DONE_PATH].map(path => `${COLLECTOR}${path}`))
+    expect([1, 2, 3, 4, 5, 6, 7].map(offset => nextAfter(chain, hidden + offset, COLLECTOR))).toEqual([DONE_PATH, CLOSE_PATH, DONE_PATH, CLOSE_PATH, DONE_PATH, DONE_PATH, DONE_PATH].map(path => `${COLLECTOR}${path}`))
+    // 请求编辑的两步经入口页登录（作者），另一方由驱动脚本经接口扮演
+    expect(chain.filter(link => link.step.scenario === 'request-waiter' || link.step.scenario === 'paused-holder').every(link => link.url.startsWith(`${ORIGIN}/selftest.html#`))).toBe(true)
+  })
+
+  it('请求编辑的路 1 遮住请求方的那一页（SHADE_PATH）：每 300 毫秒问一次 SHADE_COMMAND_PATH，回答 close 时关掉自己，关不掉时说明', () => {
+    expect(SHADE_PAGE).toContain(`fetch('${SHADE_COMMAND_PATH}'`)
+    expect(SHADE_PAGE).toContain('if (command !== \'close\')')
+    expect(SHADE_PAGE).toContain('window.close()')
+    expect(SHADE_PAGE).toContain('NerveOffice 的 Safari 复核')
+    expect(SHADE_PATH).not.toBe(SHADE_COMMAND_PATH)
   })
 
   it('B（takeover-taker）直接打开编辑器页（同一个会话，不带账户），A 正在编辑的那一份文档；别的步骤经入口页', () => {
@@ -90,6 +102,15 @@ describe('只跑其中几步（--steps）', () => {
     const definitions = 'definitions' in picked ? picked.definitions : []
     const chain = chainOf(stepsOf(definitions, { author: user('author'), viewer: user('viewer') }, definitions.map(definition => `${definition.id}-doc`)), ORIGIN, COLLECTOR)
     expect(chain.map(link => [link.opened, link.after])).toEqual([[true, 'done'], [true, 'close'], [true, 'done'], [true, 'close'], [true, 'done']])
+  })
+
+  it('只选了请求编辑的两条路（M3-P6）：各自另开，交回之后去结束页；两步各自一份文档，可以只选其中一步', () => {
+    const picked = selectSteps(SELFTEST_STEPS, 'paused-holder,request-waiter')
+    const definitions = 'definitions' in picked ? picked.definitions : []
+    expect(definitions.map(definition => definition.id)).toEqual(['request-waiter', 'paused-holder'])
+    const chain = chainOf(stepsOf(definitions, { author: user('author'), viewer: user('viewer') }, definitions.map(definition => `${definition.id}-doc`)), ORIGIN, COLLECTOR)
+    expect(chain.map(link => [link.opened, link.after])).toEqual([[true, 'done'], [true, 'done']])
+    expect(selectSteps(SELFTEST_STEPS, 'paused-holder')).toHaveProperty('definitions')
   })
 })
 
