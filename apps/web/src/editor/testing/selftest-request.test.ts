@@ -1,5 +1,6 @@
 // 请求编辑的两条路的页面自检（selftest-request.ts）里的判读：请求方的时间线判读成一条路（在后台停在交给了我、回到前台才进入），被暂停的持有者的
-// 时间线判读成一条路（回到前台之后才得知失去编辑权、没有交出）与各段的用时。真实 Safari 的复核（M3-P6 设计 §3.10，DEF-062）按它们判断走的是不是设计的那一条
+// 时间线判读成一条路（回到前台之后才得知失去编辑权、没有交出）与各段的用时。真实 Safari 的复核（M3-P6 设计 §3.10，DEF-062）按它们判断走的是不是设计的那一条。
+// 有别的条件兜着的条件也各有一条只违反它的用例（审查 B13：每个条件单独有人看着）
 import type { SelftestTimelineEntry } from './selftest-report.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
@@ -77,6 +78,13 @@ describe('请求方的时间线判读成一条路（summarizeWaiter）', () => {
     expect(summarizeWaiter(without(WAITER, 'request-enter')).problems).toEqual(['回到前台之后没有记下开始进入（request-enter）'])
     expect(summarizeWaiter(without(WAITER, 'request-sent')).problems).toContain('发出请求的结果是 没有发出（应当在等 pending：另一方正在编辑）')
   })
+
+  it('只违反"回到前台之后才开始进入"：开始进入记在回到前台之前，申请却在回到前台之后（路照样是 entered-on-return，另记问题）', () => {
+    const early = WAITER.map(item => item.kind === 'request-enter' ? { ...item, wall: 20_000 } : item)
+    const summary = summarizeWaiter(early)
+    expect(summary.path).toBe('entered-on-return')
+    expect(summary.problems).toEqual(['开始进入（request-enter）记在回到前台之前 1000 ms（应当回到前台之后才开始进入）'])
+  })
 })
 
 /** 持有者：进入编辑，隐藏，6 秒之后心跳带来请求；计时器压低、最后停了 95 秒；隐藏之后 150 秒回到前台，随即开始自动交出（积压的计时器）、失去编辑权（held:other） */
@@ -139,6 +147,24 @@ describe('被盖屏的持有者的时间线判读成一条路（summarizePausedH
     expect(summarizePausedHolder(exited).problems).toEqual(['离开编辑的原因是 exit（应当是自动交出 handover-request）'])
     const unasked = ALIVE.filter(item => item.incoming === undefined)
     expect(summarizePausedHolder(unasked).problems).toEqual(['开始交出之前心跳没有带来请求'])
+  })
+
+  it('只违反"回到阅读的那一次也是自动交出"：空闲满 2 分钟的自动交出没成（留在编辑），人回来之后点"退出编辑"才交出、回到阅读', () => {
+    const retried: SelftestTimelineEntry[] = [
+      ...HOLDER.slice(0, 5),
+      entry('leave', 124_200, { cause: 'handover-request' }),
+      entry('page:state', 124_200, { mode: 'exiting', incoming: 'peer-id', leaving: 'handover-request' }),
+      entry('left', 124_900, { cause: 'handover-request', outcome: 'stayed' }),
+      entry('page:state', 124_900, { mode: 'editing', incoming: 'peer-id' }),
+      entry('page:visibility-visible', 142_400),
+      entry('leave', 143_000, { cause: 'exit' }),
+      entry('page:state', 143_000, { mode: 'exiting', incoming: 'peer-id', leaving: 'exit' }),
+      entry('left', 143_300, { cause: 'exit', outcome: 'reading' }),
+      entry('page:state', 143_300, { mode: 'reading' }),
+    ]
+    const summary = summarizePausedHolder(retried)
+    expect(summary.path).toBe('handed-over')
+    expect(summary.problems).toEqual(['离开编辑的原因是 handover-request、回到阅读的那一次是 exit（应当是自动交出 handover-request）'])
   })
 
   it('lost-while-hidden、not-lost、not-shown、not-hidden：各自说明', () => {

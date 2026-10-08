@@ -606,8 +606,11 @@ export function pausedHolderJudgement(evidence: PausedHolderEvidence): Judgement
   else if (grantedKind !== wantedKind)
     problems.push(handedPath ? `协作者接手之前那次续期的结果是 ${String(grantedKind)}（持有者交出了，应当是 reserved）` : `协作者接手之前那次续期的结果是 ${String(grantedKind)}（应当是 free：持有者那一代按时间到期${grantedKind === 'reserved' ? '；reserved 说明持有者交出了，没有被暂停' : ''}）`)
   const interruption = field(acquisition, 'interruption') as { readonly holder?: { readonly id?: unknown }, readonly sameUser?: unknown } | null | undefined
-  if (acquisition !== undefined && !handedPath && (interruption?.holder?.id !== holderId || interruption.sameUser !== false))
-    problems.push(`协作者申请的回答里${interruption === null || interruption === undefined ? '没有' : '不是持有者那一代的'}异常中断提醒（持有者那一代按时间到期时应当有）`)
+  if (acquisition !== undefined && !handedPath && (interruption?.holder?.id !== holderId || interruption.sameUser !== false)) {
+    problems.push(interruption === null || interruption === undefined
+      ? '协作者申请的回答里没有异常中断提醒（持有者那一代按时间到期时应当有）'
+      : `协作者申请的回答里的异常中断提醒对不上（中断的那一代的持有者 ${String(interruption.holder?.id ?? '空')}、sameUser ${String(interruption.sameUser)}；持有者那一代按时间到期时应当是持有者、sameUser 为 false）`)
+  }
   if (acquisition !== undefined && handedPath && interruption !== null && interruption !== undefined)
     problems.push('协作者申请的回答里有异常中断的提醒（持有者交出是明确结束，不该有）')
   const epochA = firstEpoch(states)

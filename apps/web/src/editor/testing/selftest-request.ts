@@ -175,7 +175,7 @@ export function summarizeWaiter(timeline: readonly SelftestTimelineEntry[]): Wai
   if (acquire !== undefined && (acquire.trigger !== 'granted' || acquire.takeover !== null))
     problems.push(`申请的来由是 ${String(acquire.trigger)}、接管方式是 ${String(acquire.takeover)}（应当是请求被批准之后的普通申请：granted、null）`)
   if (path === 'entered-on-return' && (enter === undefined || shown === undefined || enter.wall < shown.wall))
-    problems.push('回到前台之后没有记下开始进入（request-enter）')
+    problems.push(enter === undefined || shown === undefined ? '回到前台之后没有记下开始进入（request-enter）' : `开始进入（request-enter）记在回到前台之前 ${shown.wall - enter.wall} ms（应当回到前台之后才开始进入）`)
   const ms = {
     sentToHidden: between(sent, hidden),
     hiddenToGranted: between(hidden, granted),
@@ -261,8 +261,9 @@ export function summarizePausedHolder(timeline: readonly SelftestTimelineEntry[]
     problems.push(`失去编辑权的原因是 ${String(lost.loss ?? '没有')}（应当是 held:other：续上时另一方已经接手、正在编辑）`)
   const idleBeforeLeave = between(entered, leaving)
   if (path === 'handed-over') {
+    // 开始离开的那一次与回到阅读的那一次都要是自动交出：第一次自动交出没成（留在编辑）、之后别的原因（例如人回来点了退出）离开时交出的，不算这条路
     if (leaving?.cause !== 'handover-request' || handedOver?.cause !== 'handover-request')
-      problems.push(`离开编辑的原因是 ${String(leaving?.cause ?? '没有')}（应当是自动交出 handover-request）`)
+      problems.push(`离开编辑的原因是 ${String(leaving?.cause ?? '没有')}${handedOver?.cause === leaving?.cause ? '' : `、回到阅读的那一次是 ${String(handedOver?.cause ?? '没有')}`}（应当是自动交出 handover-request）`)
     if (arrived === undefined || leaving === undefined || arrived.wall > leaving.wall)
       problems.push('开始交出之前心跳没有带来请求')
     if (idleBeforeLeave === null || idleBeforeLeave < HANDOVER_IDLE_MS - 1_000)

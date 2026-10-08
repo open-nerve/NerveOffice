@@ -53,9 +53,10 @@ describe('盖屏的脚本（COVER_SCRIPT）', () => {
     expect(COVER_SCRIPT).toContain('app.activateIgnoringOtherApps(true)')
   })
 
-  it('Esc（键码 53）与鼠标按下就退出并说出来；取事件的掩码是 2^53 - 1（NSEventMaskAny 经 JXA 只剩最高一位，一个事件也取不到）；到了时限也退出', () => {
+  it('Esc（键码 53）与鼠标按下（左键、右键都算）就退出并说出来；取事件的掩码是 2^53 - 1（NSEventMaskAny 经 JXA 只剩最高一位，一个事件也取不到）；到了时限也退出', () => {
     expect(COVER_SCRIPT).toContain('Number(event.keyCode) === 53')
-    expect(COVER_SCRIPT).toContain('$.NSEventTypeLeftMouseDown')
+    // 盖屏的窗口写的是"按 Esc 或点这里中止"：右键点也要中止（审查 B13 的变异 DS3：原来只核对了左键）
+    expect(COVER_SCRIPT).toContain('if (type === Number($.NSEventTypeLeftMouseDown) || type === Number($.NSEventTypeRightMouseDown)) {\n      outcome = \'click\'')
     expect(COVER_SCRIPT).toContain('nextEventMatchingMaskUntilDateInModeDequeue(9007199254740991,')
     expect(2 ** 53 - 1).toBe(9_007_199_254_740_991)
     expect(COVER_SCRIPT).toContain('const until = Date.now() + seconds * 1000')
