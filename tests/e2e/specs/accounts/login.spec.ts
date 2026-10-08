@@ -1,5 +1,6 @@
 // 账户（P3，US-M1-01、US-M1-02）：命令行初始化的管理员登录；登录、错误提示、限流、退出、会话过期、断网、多个标签页。
 // 登录页的初始焦点（DEF-047）：直接打开、会话确认之后转来时，焦点给用户名；带着为什么来到这里的说明时先给说明。
+// 登录失败时这条说明留着，错误的说明另起一条（DEF-048）。
 import type { Page } from '@playwright/test'
 import { DOCUMENT_LIST_DEFAULT_LIMIT } from '@nerve-office/contracts'
 import { createDocument, createDocuments, createUser, expireSessions } from '../../support/database.ts'
@@ -114,6 +115,33 @@ test.describe('US-M1-02 登录与退出', () => {
     await page.keyboard.press('Tab')
     await page.keyboard.type(user.password)
     await page.keyboard.press('Enter')
+    await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
+  })
+
+  test('登录已过期、回到登录页之后用键盘输错了密码："登录已过期"的说明留着，错误的说明另起一条，焦点留在密码框里；改用正确的密码登录，回到原来的页面（DEF-048）', async ({ page }) => {
+    const user = await createUser('expired-wrong')
+    await loginThroughApi(page, user)
+    await expireSessions(user)
+    await page.goto('/?view=list')
+    await expect(page).toHaveURL(/\/login\?from=%2F%3Fview%3Dlist&reason=expired$/)
+    const notice = page.getByRole('status').filter({ hasText: '登录已过期，请重新登录' })
+    await expect(notice).toBeFocused()
+    await page.keyboard.press('Tab')
+    await page.keyboard.type(user.username)
+    await page.keyboard.press('Tab')
+    await page.keyboard.type('wrong password')
+    await page.keyboard.press('Enter')
+    // 错误的说明是 role="alert"（出现时读屏立即播报），排在说明下面；说明不被换掉
+    const error = page.getByRole('alert')
+    await expect(error).toHaveText('用户名或密码错误')
+    await expect(notice).toBeVisible()
+    await expect(page.getByLabel('密码')).toBeFocused()
+    const [noticeBox, errorBox] = await Promise.all([notice.boundingBox(), error.boundingBox()])
+    expect(noticeBox?.y).toBeLessThan(errorBox?.y ?? 0)
+
+    await page.getByLabel('密码').fill(user.password)
+    await page.keyboard.press('Enter')
+    await expect(page).toHaveURL(/\/\?view=list$/)
     await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })
 
