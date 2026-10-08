@@ -1,5 +1,6 @@
 // 管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）。账户页每一行都有（所有状态的账户）；确认框说清楚本机密钥的用途与吊销的后果，
-// 不说"没同步的修改都会作废"（A14）；成功的说明等确认框关掉之后写进页面顶部的状态区；结果未知用专门的说法（再吊销一次没有坏处）；
+// 不说"没同步的修改都会作废"（A14）、正面说正在编辑的页面照常保存（审查 B7），自己、别人、停用的各一版（审查 B1），逐字核对；
+// 成功的说明等确认框关掉之后写进页面顶部的状态区；结果未知用专门的说法（再吊销一次没有坏处）；
 // 焦点回到这一行的按钮；吊销不动会话，自己的账户也不重新确认。接口用假的 fetch。
 import type { AdminUser } from '@nerve-office/contracts'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
@@ -55,9 +56,8 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     renderApp('/admin/users')
     const { button, dialog } = await openRevoke(await rowOf('amy'), AMY_NAME)
     expect(dialog).toHaveAccessibleName(`吊销 ${AMY_NAME} 的本机密钥？`)
-    expect(dialog).toHaveAccessibleDescription('本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响，这个人的登录也不会退出。设备可能落在别人手里时，请同时为他生成重置链接（会退出他在所有地方的登录）。')
-    // 不说"没同步的修改都会作废"：页面里还没保存的修改不受吊销影响，那样说不实（A14）
-    expect(dialog).not.toHaveTextContent(/修改/)
+    // 不说"没同步的修改都会作废"（页面里还没保存的修改不受吊销影响，那样说不实，A14），正面说正在编辑的页面照常保存（审查 B7）
+    expect(dialog).toHaveAccessibleDescription('本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响；他正在编辑的页面也不受影响，修改照常保存；他的登录也不会退出。设备可能落在别人手里时，请同时为他生成重置链接（会退出他在所有地方的登录）。')
     expect(within(dialog).getByRole('button', { name: '吊销本机密钥' })).toHaveAttribute('data-variant', 'destructive')
     const listed = count(api, USERS)
     const announced = watchAnnouncement(`已吊销 ${AMY_NAME} 的本机密钥`)
@@ -73,12 +73,12 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(count(api, SESSION)).toBe(1)
   })
 
-  it('吊销自己的：专门的标题与说明（你的登录不会退出、为自己生成重置链接）；成功之后同样写进状态区，不重新确认会话', async () => {
+  it('吊销自己的：专门的标题与说明（你正在编辑的页面照常保存、你的登录不会退出、为自己生成重置链接）；成功之后同样写进状态区，不重新确认会话', async () => {
     const api = admin([withKey(ROOT, 3), AMY], { [REVOKE_ROOT]: () => json(200, withKey(ROOT, 4)) })
     renderApp('/admin/users')
     const { button, dialog } = await openRevoke(await rowOf('root'), ROOT_NAME)
     expect(dialog).toHaveAccessibleName('吊销你自己的本机密钥？')
-    expect(dialog).toHaveAccessibleDescription('本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响，你的登录也不会退出。设备可能落在别人手里时，请同时为自己生成重置链接（会退出你在所有地方的登录）。')
+    expect(dialog).toHaveAccessibleDescription('本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响；你正在编辑的页面也不受影响，修改照常保存；你的登录也不会退出。设备可能落在别人手里时，请同时为自己生成重置链接（会退出你在所有地方的登录）。')
     expect(within(dialog).getByRole('button', { name: '吊销本机密钥' })).toHaveAttribute('data-variant', 'destructive')
     confirmIn(dialog)
     await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${ROOT_NAME} 的本机密钥，换成了第 4 版。`))
