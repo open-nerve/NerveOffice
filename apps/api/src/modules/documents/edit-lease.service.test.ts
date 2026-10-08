@@ -672,7 +672,10 @@ describe('EditLeaseService.release', () => {
     expect(steps).toEqual(steps.toSorted((a, b) => a - b))
     expect(documents.lockById).toHaveBeenCalledWith(document.id, TRANSACTION)
     expect(store.leases.lockUnder.mock.calls).toEqual([[await documents.lockById.mock.results[0]?.value, TRANSACTION]])
-    expect(store.leases.end.mock.calls).toEqual([[await store.leases.lockUnder.mock.results[0]?.value, 'released', TRANSACTION]])
+    const locked: unknown = await store.leases.lockUnder.mock.results[0]?.value
+    expect(store.leases.end.mock.calls).toEqual([[locked, 'released', TRANSACTION]])
+    // 是锁下的那一行本身，不是不加锁先看的那一行（两者内容相同，只能按是不是同一个对象分）
+    expect(store.leases.end.mock.calls[0]?.[0]).toBe(locked)
     expect(store.leases.lockByDocument).not.toHaveBeenCalled()
   })
 

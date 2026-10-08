@@ -217,6 +217,7 @@ describe('LeaseWriteAccessRevocation：步骤与写了什么', () => {
     const locked = await store.leases.lockInScope.mock.results[0]?.value as readonly LockedEditLease[]
     expect(locked.map(lease => lease.documentId)).toEqual([alive.id])
     expect(store.leases.endAll.mock.calls).toEqual([[locked, 'revoked', TRANSACTION]])
+    expect(store.leases.endAll.mock.calls[0]?.[0].every(lease => locked.includes(lease))).toBe(true)
   })
 
   it('先锁住范围里的租约，再逐个判断，最后一条语句结束这些租约、一条语句给这些文档加代次（一批文档也是各一条），都在调用方的事务里', async () => {

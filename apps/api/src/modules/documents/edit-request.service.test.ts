@@ -434,7 +434,10 @@ describe('EditRequestService.handOver', () => {
     expect(store.sessions.isActive).toHaveBeenNthCalledWith(1, ALICE_SESSION, TRANSACTION)
     const locked: unknown = await documents.lockById.mock.results[0]?.value
     expect(store.leases.lockUnder.mock.calls).toEqual([[locked, TRANSACTION]])
-    expect(store.leases.handOver.mock.calls).toEqual([[await store.leases.lockUnder.mock.results[0]?.value, TRANSACTION]])
+    const lease: unknown = await store.leases.lockUnder.mock.results[0]?.value
+    expect(store.leases.handOver.mock.calls).toEqual([[lease, TRANSACTION]])
+    // 是锁下的那一行本身（只能按是不是同一个对象分：内容相同的行谁都造得出）
+    expect(store.leases.handOver.mock.calls[0]?.[0]).toBe(lease)
     expect(store.leases.lockByDocument).not.toHaveBeenCalled()
     // 锁下读到的文档行就是最终的：不再读一次
     expect(documents.findById).toHaveBeenCalledTimes(1)
