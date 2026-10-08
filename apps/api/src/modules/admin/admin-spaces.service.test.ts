@@ -173,7 +173,7 @@ describe('AdminUsersService.disable', () => {
     const transaction = { transaction: true }
     const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
     const localKeys = { statesOf: vi.fn(async () => new Map()) }
-    const service = new AdminUsersService(users as never, sessions as never, resets as never, invitations as never, lockouts as never, writeAccess, localKeys as never, audit as never, transactions as never)
+    const service = new AdminUsersService(users as never, sessions as never, resets as never, invitations as never, lockouts as never, writeAccess, localKeys as never, {} as never, audit as never, transactions as never)
     return { service, calls, writeAccess, resets, invitations, lockouts, transaction }
   }
 
@@ -210,7 +210,7 @@ describe('AdminUsersService：响应里的登录锁定与本机密钥的摘要�
     const localKeys = { statesOf: vi.fn(async () => new Map([[AMY, { version: 2, createdAt: NOW }]])) }
     const audit = { record: vi.fn(async () => {}) }
     const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
-    const service = new AdminUsersService(users as never, {} as never, {} as never, {} as never, lockouts as never, {} as never, localKeys as never, audit as never, transactions as never)
+    const service = new AdminUsersService(users as never, {} as never, {} as never, {} as never, lockouts as never, {} as never, localKeys as never, {} as never, audit as never, transactions as never)
     return { service, lockouts, localKeys, transaction }
   }
 

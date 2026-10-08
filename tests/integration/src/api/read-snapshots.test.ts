@@ -15,7 +15,7 @@ import type { Route } from '../support/routes.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import type { CapturedQuery, StatementCapture } from '../support/statement-capture.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { editStatusSchema } from '@nerve-office/contracts'
+import { adminUserListResponseSchema, adminUserSchema, editStatusSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -25,6 +25,7 @@ import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, handOverLease, pendingRequestId } from '../support/edit-leases.ts'
 import { setGrants } from '../support/grants.ts'
+import { takeLocalKey } from '../support/local-keys.ts'
 import { routesOf } from '../support/routes.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -123,6 +124,8 @@ beforeAll(async () => {
   await pendingRequestId(app.baseUrl, benSession, document)
   const lease = await acquireLease(app.baseUrl, session, reserved)
   expect((await handOverLease(app.baseUrl, session, reserved, lease, await pendingRequestId(app.baseUrl, benSession, reserved))).status).toBe(200)
+  // 艾米取过本机密钥（M3-P6）：管理界面的账户（列表与详情）要查当前的本机密钥，那条查询同样在快照里
+  await takeLocalKey(app.baseUrl, session)
   w = { amy, root, leaver: leaver.id, document, reserved, team }
   routes = routesOf(app)
   capture = captureStatements(database.name)
@@ -269,6 +272,25 @@ describe('登录之后的 GET 接口都在一个只读快照里判断权限、�
       expect(result.status, field).toBe(200)
       expect(result.body[field], field).toMatchObject({ mine: false })
       expect(snapshotProblems(queries, guard, { userId: w.amy.id, sessionId: await sessionIdOf(session) }), field).toEqual([])
+    }
+  })
+
+  it('US-M3-17 管理界面的账户（列表与详情）带着当前的本机密钥（M3-P6）：查本机密钥的语句在同一个快照里，COMMIT 之后再没有语句；响应里确实带着它', async () => {
+    const guard = await guardStatements()
+    for (const [path, localKeyOf] of [
+      [`/api/admin/users/${w.amy.id}`, (body: unknown) => parseExact(adminUserSchema, body).localKey],
+      ['/api/admin/users', (body: unknown) => parseExact(adminUserListResponseSchema, body).items.find(item => item.id === w.amy.id)?.localKey],
+    ] as const) {
+      const session = await freshSession('root')
+      const { result, queries } = await capture.during(async () => {
+        const response = await asUser(app.baseUrl, session, path)
+        return { status: response.status, localKey: localKeyOf(await response.json()) }
+      })
+      expect(result.status, path).toBe(200)
+      expect(result.localKey, path).toMatchObject({ version: 1 })
+      expect(snapshotProblems(queries, guard, { userId: w.root.id, sessionId: await sessionIdOf(session) }), path).toEqual([])
+      const begin = queries.findIndex(query => query.text.toLowerCase() === SNAPSHOT_BEGIN)
+      expect(queries.some((query, index) => index > begin && query.text.includes('"user_local_keys"') && query.connection === queries[begin]?.connection), path).toBe(true)
     }
   })
 })

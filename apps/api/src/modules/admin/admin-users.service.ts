@@ -9,7 +9,7 @@ import { AuditService } from '../audit/index.ts'
 import { InvitationsService, LoginLockouts, PasswordResetsService, SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { WriteAccessRevocation } from '../documents/index.ts'
-import { LocalKeyVersions } from '../local-keys/index.ts'
+import { LocalKeyRevocation, LocalKeyVersions } from '../local-keys/index.ts'
 import { UsersService } from '../users/index.ts'
 import { actorOf, toAdminUser } from './admin-views.ts'
 
@@ -31,6 +31,7 @@ export class AdminUsersService {
     private readonly lockouts: LoginLockouts,
     private readonly writeAccess: WriteAccessRevocation,
     private readonly localKeys: LocalKeyVersions,
+    private readonly localKeyRevocation: LocalKeyRevocation,
     private readonly audit: AuditService,
     private readonly transactions: TransactionRunner,
   ) {}
@@ -122,6 +123,36 @@ export class AdminUsersService {
         throw new AppError('NOT_FOUND')
       if (await this.lockouts.clear(locked.username, transaction))
         await this.audit.record({ action: 'users.login_unlocked', actor: actorOf(actor), target: { type: 'user', id: userId }, origin }, { transaction })
+      return this.view(locked, transaction)
+    })
+  }
+
+  /**
+   * 吊销某人的本机密钥（M3-P6 设计 §3.5，US-M3-17）：设备可能丢了时，那台设备上用旧密钥加密的本机草稿随即再也解不开；同时生成下一版，
+   * 本人下一次取用时拿到它（用现在的主密钥包装）。一个事务，锁的顺序：system-admins 的共享锁复核操作者 → 账户行（FOR NO KEY UPDATE，
+   * 没有这个账户 404；停用的账户也锁得到）→ 本机密钥行（标记吊销、擦掉密钥材料、插下一版）→ 审计 users.local_key_revoked（明细是被吊销的那一版）。
+   * 必须先锁账户行：两个并发的吊销只靠本机密钥行的锁时，后一个在 READ COMMITTED 的重新检查下拿到 0 行、被当成"没有可吊销的"（探索 A 实测）；
+   * 锁住账户行之后两次吊销串起来，后一个吊销前一个生成的那一版。
+   * 停用的账户能吊销（设备丢失常在离职之后），吊销自己也可以；吊销不撤销登录、停用也不顺带吊销（设计 §3.1：两件事分开，
+   * 设备丢失时另要生成重置链接退出他的登录）。没有密钥（从没取过）时原样返回、不记审计。原始的新密钥不交给管理员，响应里只有版本与时刻
+   */
+  async revokeLocalKey(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
+    return this.transactions.run(async (transaction) => {
+      await this.users.lockActingAdmin(actor.user.id, transaction)
+      const locked = await this.users.lockAccount(userId, transaction)
+      if (locked === undefined)
+        throw new AppError('NOT_FOUND')
+      // 用数据库给出的 id（ADR-014）：本机密钥的 AAD 按它绑定，审计的对象也是它
+      const revoked = await this.localKeyRevocation.revoke(locked.id, transaction)
+      if (revoked !== undefined) {
+        await this.audit.record({
+          action: 'users.local_key_revoked',
+          actor: actorOf(actor),
+          target: { type: 'user', id: locked.id },
+          origin,
+          details: { version: revoked.revokedVersion },
+        }, { transaction })
+      }
       return this.view(locked, transaction)
     })
   }
