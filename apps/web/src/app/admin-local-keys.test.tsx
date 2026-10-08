@@ -307,14 +307,31 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     await waitFor(() => expect(statusRegion()).toHaveTextContent(`吊销的那一刻 ${AMY_NAME} 还没有本机密钥，没有吊销任何密钥。`))
   })
 
-  it('Codex 评审 CX3：这一次的结果为空、现状里却已经有第 1 版（吊销没找到当前的那一把之后、读现状之前，他第一次取用并提交了）——状态区按结果如实说吊销的那一刻他还没有本机密钥、没有吊销任何密钥，不说"已吊销""换成了第 1 版"；这一行按现状显示第 1 版', async () => {
+  it('Codex 评审 CX3：这一次的结果为空、现状里却已经有第 1 版（吊销没找到当前的那一把之后、读现状之前，他第一次取用并提交了）——状态区按结果如实说吊销的那一刻他还没有本机密钥、没有吊销任何密钥，不说"已吊销""换成了第 1 版"；这一行先按响应里的现状换成第 1 版，再刷新列表（结果为空也换，复验 E4）', async () => {
     const server = keyServer([AMY])
-    admin([], { [USERS]: () => server.list(), [REVOKE_AMY]: () => server.revokeRacingFirstFetch(AMY.id) })
+    // 第 2 次列表请求是吊销之后的刷新：由用例放行（再复核 D3 的写法）。放行之前这一行显示的第 1 版只能来自按响应里的现状换上的那一下，
+    // 不是刷新带回来的（假服务端有状态，刷新回来的也是第 1 版）
+    const refreshing = inFlight(() => server.list())
+    let lists = 0
+    admin([], {
+      [USERS]: async (init) => {
+        lists += 1
+        return lists === 2 ? refreshing.handler(init) : server.list()
+      },
+      [REVOKE_AMY]: () => server.revokeRacingFirstFetch(AMY.id),
+    })
     renderApp('/admin/users')
     const row = await rowOf('amy')
     expect(keyLine(row)).toBeNull()
     const { button, dialog } = await openRevoke(row, AMY_NAME)
     confirmIn(dialog)
+    await waitFor(() => expect(refreshing.sent()).toBe(true))
+    // 刷新还没回来（确认框仍在处理）：这一行已经按响应里的现状换成第 1 版——只在吊销了的时候才换的话，这时还是"没有本机密钥"（复验 E4 的变异 K1）
+    expect(within(dialog).getByRole('button', { name: '正在处理…' })).toHaveAttribute('aria-disabled', 'true')
+    await waitFor(() => expect(keyLine(row)).toHaveTextContent('本机密钥第 1 版'))
+    expect(statusRegion()).toBeEmptyDOMElement()
+    await refreshing.deliver()
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(statusRegion()).toHaveTextContent(`吊销的那一刻 ${AMY_NAME} 还没有本机密钥，没有吊销任何密钥。`))
     expect(statusRegion()).not.toHaveTextContent('已吊销')
     expect(statusRegion()).not.toHaveTextContent('换成了')

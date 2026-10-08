@@ -499,10 +499,15 @@ export class EditLeasesRepository {
       .select({ ...COLUMNS, spaceId: d.spaceId, createdBy: d.createdBy, documentStatus: d.status })
       .from(l)
       .innerJoin(d, eq(d.id, l.documentId))
+      // 只在第一条锁住的文档里找：这是下面把结果当作凭据的条件，改这条语句时不能去掉（见 return 处）
       .where(and(inIdArray(l.documentId, locked.map(row => row.id)), open, ALIVE_BY_TIME))
       .orderBy(asc(l.documentId))
       .for('update', { of: l })
-    // 凭据只在这里与 lockUnder 给出：上一条先锁住了这些文档行，这些租约行在它们之后锁住
+    // 凭据只在这里与 lockUnder 给出：上一条先锁住了这些文档行，这一条只在其中找、在它们之后锁住租约行。
+    // 第二条只在第一条锁住的文档里找，这是凭据成立的条件（复验 E5）：去掉 inIdArray 那一项，第一条之后才提交的租约（例如那时没人占着、
+    // 或者已经明确结束的文档上新申请到的一代，第一条没锁它们的文档行）也会被交出去，在不持文档行锁的情况下被结束——
+    // 与在途的保存不再互斥，正是 Codex 评审 CX1 那一类缺口。edit-lease-statements.test.ts 按 SQL 的形状钉着这一项；
+    // 行为级的交错要把撤权停在两条语句之间，没有另做集成用例
     return revocable as RevocableEditLease[]
   }
 }
