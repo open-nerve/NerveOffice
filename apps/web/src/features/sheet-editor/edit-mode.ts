@@ -43,10 +43,12 @@
 // - 先服务端、后本机锁：服务端批准之后（进入编辑、?edit=new 直接进入）拿这份文档的本机锁；离开编辑（退出、空闲释放、失去编辑权、没能进入、
 //   卸载、页面关闭）一律放锁。锁的争用一律以服务端的事实裁决（M3-P6 设计 §3.13，Codex 评审 CX2；local-lock.ts）：申请成功的回包说明不了这一代
 //   此刻仍是当前的，锁被抢也说明不了这一代已经失效（批准之后、回包到达之前可能已经再换代）。拿锁时被本浏览器的别的标签页占着——先核对（续租
-//   一次），是当前的才抢；不是当前的就不抢、不释放，回到阅读（随即读的编辑状态说明现在谁在编辑，本浏览器的另一个标签页在编辑时照常给"在此编辑"）；
-//   核对不了就不抢，尽力释放、说明没能进入编辑。锁被抢——先核对，确实不再是当前的才失去编辑权（taken-over、this-browser；服务端另有原因时照它说，
-//   supersededLoss），有没保存的修改照旧给副本与放弃；仍是当前的就把锁拿回来、照常编辑；核对不了时照常编辑、不持有锁，由之后的心跳给出结论
-//   （续租成功就拿回锁，失效照心跳已有的处理）；
+//   一次），是当前的才抢；被别的一代取代了就不抢、不释放，回到阅读（随即读的编辑状态说明现在谁在编辑，本浏览器的另一个标签页在编辑时照常给
+//   "在此编辑"）；这一代自己失效了交给租约已有的失效处理（续不上的按失效说明没能进入编辑）；核对不了就不抢，尽力释放、说明没能进入编辑。
+//   锁被抢——先核对：被别的一代取代了才放弃这一代、失去编辑权（taken-over、this-browser；被强制接管照服务端说，supersededLoss），有没保存的修改
+//   照旧给副本与放弃；仍是当前的就把锁拿回来、照常编辑；这一代自己失效了（令牌仍是服务端这一行的，抢锁的一方拿着更旧的批准）交给租约已有的
+//   失效处理（与心跳、保存得知时同一条路：能续上就续上，续不上的按服务端的原因说，复验 E2）；核对不了、交给了租约的都照常编辑、不持有锁，由之后
+//   的心跳给出结论（被抢之后发出的续租成功就拿回锁，复验 E1；失效照心跳已有的处理）；
 // - 离开编辑一律先挡住输入再保存：begin(exiting) 的那一刻页面挂上交互屏障，然后挂起调度、等面板、flush（P4：提交哪一次单元格编辑
 //   在调用的那一刻定）；
 // - 空闲释放（idle-watch.ts）：编辑时 max(最后一次操作, 进入编辑的时刻) 起 10 分钟没有操作——会话可写、联网时（不主动向服务端确认会话）
@@ -593,27 +595,14 @@ function reservedNoticeOf(error: unknown, forced: boolean): ReadingNotice | unde
 const TAKEN_OVER_HERE: LeaseLoss = { kind: 'taken-over', where: 'this-browser' }
 
 /**
- * 本机锁被抢之后得知本页这一代已经不是当前的（M3-P6 设计 §3.13）：失去编辑权怎样说。抢走锁的是本浏览器的另一个标签页，它在抢之前核对过自己
- * 那一代是当前的——本页这一代被本人接管（服务端说的"另一台设备或浏览器"不对：正是那个标签页）、被新的一代改写、按时间或空闲失效之后被申请走
- * （可以续上的那些原因）、原因认不出时，都说成那边接手了（taken-over、this-browser，说法照旧）；服务端另有原因的（收回、不能编辑了、读不到了、
- * 强制接管、已经交出）照它说——之后的阅读与副本随之（读不到时不给副本，不能编辑时没有"编辑"）；被抢之后核对不了、由心跳续上时得知的（别处
- * 正在编辑、别处保存过更新的版本）同样照它说
+ * 本机锁被抢之后得知本页这一代确实被别的一代取代了（M3-P6 设计 §3.13）：失去编辑权怎样说。抢走锁的是本浏览器的另一个标签页，它在抢之前核对过
+ * 自己那一代是当前的——本页这一代被本人接管（服务端说的"另一台设备或浏览器"不对：正是那个标签页）、被新的一代改写（replaced），都说成那边接手了
+ * （taken-over、this-browser）。别的照服务端说：被强制接管；被接管而方式认不出的（不猜，与 leaseLossOf 相同）；这一代自己失效了的（到期、空闲、
+ * 代次过时、登录不对、收回、读不到、不能编辑、原因认不出……：令牌仍是服务端这一行的，抢锁的一方拿着更旧的批准，复验 E2）本来就不当作被取代，
+ * 交给租约已有的失效处理，续不上时得知的（别处正在编辑、别处保存过更新的版本、收回等）都照它说
  */
-function supersededLoss(loss: LeaseLoss | undefined): LeaseLoss {
-  switch (loss?.kind) {
-    case undefined:
-    case 'taken-over':
-      return TAKEN_OVER_HERE
-    case 'lease':
-      return loss.reason === 'revoked' ? loss : TAKEN_OVER_HERE
-    case 'not-found':
-    case 'denied':
-    case 'held':
-    case 'newer':
-    case 'forced':
-    case 'handed-over':
-      return loss
-  }
+function supersededLoss(loss: LeaseLoss): LeaseLoss {
+  return loss.kind === 'taken-over' || (loss.kind === 'lease' && loss.reason === 'replaced') ? TAKEN_OVER_HERE : loss
 }
 
 /** 错误的错误码（观察钩子里的写法）：不是服务端的错误（网络等）时为 null */
@@ -1008,8 +997,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
       onSessionProblem: hooks.writeProblem,
       onIncompatible: incompatible,
       onRequest: requestArrived,
-      // 心跳续租成功：锁被抢之后没能核对的，这时拿回来（local-lock.ts）
-      onRenewed: () => lock?.renewed(),
+      // 心跳续租成功：锁被抢之后还没有结论的，被抢之后发出的续租成功时拿回来（local-lock.ts）
+      onRenewed: sentAt => lock?.renewed(sentAt),
     }, { retrySameUser: async () => !(await options.sameBrowser.heldHere()), ...intent })
   }
 
@@ -1046,12 +1035,14 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /**
    * 服务端批准之后拿本机锁（先服务端、后本机锁；M3-P6 设计 §3.13）：这一代的本机锁（local-lock.ts）——锁空着就拿，被本浏览器的别的标签页占着时
-   * 先向服务端核对这一代（held.confirm），是当前的才抢；交回拿锁的结果
+   * 先向服务端核对这一代（held.confirm），是当前的才抢；核对得知这一代自己失效了的，交给租约已有的失效处理（held.lose：与心跳、保存得知时同一条
+   * 路，带的是核对用的这一代，复验 E2）。交回拿锁的结果
    */
   async function holdLock(held: EditLease): Promise<LockClaim> {
     const claimed: LocalLock = holdLocalLock({
       browser: options.sameBrowser,
       confirm: held.confirm,
+      lose: async loss => held.lose(loss, held.credentials()),
       onSuperseded: loss => superseded(claimed, held, loss),
       clock,
       trace: traced,
@@ -1061,10 +1052,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
   }
 
   /**
-   * 锁被本浏览器的另一个标签页抢走、核对得知本页这一代已经不是当前的（local-lock.ts）：放弃这一代（不再续租、不续上、不发释放——服务端已经
+   * 锁被本浏览器的另一个标签页抢走、核对得知本页这一代已被别的一代取代（local-lock.ts）：放弃这一代（不再续租、不续上、不发释放——服务端已经
    * 不认它），按失效处理——编辑、离开编辑时转入失去编辑权，有没保存的修改照旧给副本与放弃；进入编辑的途中放弃进入。说法见 supersededLoss
    */
-  function superseded(claimed: LocalLock, held: EditLease, loss: LeaseLoss | undefined): void {
+  function superseded(claimed: LocalLock, held: EditLease, loss: LeaseLoss): void {
     if (disposed || lock !== claimed)
       return
     held.abandon()
@@ -1397,9 +1388,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
   }
 
   /**
-   * 编辑权失效（续租或保存得知，续上没有成功；本机锁被抢、核对得知已被取代）。编辑、退出编辑时转入失去编辑权；进入编辑还在申请、取内容
-   * （只读的编辑器还在）时放弃进入、留在阅读；正在新建可编辑的编辑器时等它建好、进入编辑之后再处理（与 P1 一样：建好之后随即停住）。
-   * 本机锁被抢之后还没有结论时（核对中，核对不了、在等心跳）得知的，抢走锁的是本浏览器的另一个标签页，按 supersededLoss 说（M3-P6 设计 §3.13）
+   * 编辑权失效（续租或保存得知，续上没有成功；本机锁被抢或拿锁时核对得知已被取代，或者这一代自己失效、交给租约之后续不上）。编辑、退出编辑时
+   * 转入失去编辑权；进入编辑还在申请、取内容（只读的编辑器还在）时放弃进入、留在阅读；正在新建可编辑的编辑器时等它建好、进入编辑之后再处理
+   * （与 P1 一样：建好之后随即停住）。本机锁被抢之后还没有结论时（核对中、等心跳）得知被本人接管的，抢走锁的正是本浏览器的另一个标签页，
+   * 按 supersededLoss 说；别的照服务端说（M3-P6 设计 §3.13，复验 E2）
    */
   function lost(reported: LeaseLoss): void {
     if (disposed)
@@ -1479,11 +1471,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /**
    * 取得了编辑权之后：拿本机锁（被本浏览器的别的标签页占着时先核对，M3-P6 设计 §3.13）、选定内容（申请得到的修订号等于本页的就用本页的，
    * 否则按条件读取取服务端的）、以可编辑重建（带"公式待更新"时强制全量重算，M3-P4 设计 §3.5）、看过打开自检，再建好保存的状态机与自动保存的
-   * 调度、接上编辑器。核对得知这一代已被取代时交回 superseded（已经放弃那一代，不释放；调用方回到阅读）；核对不了、读取失败时已经释放编辑权，
-   * 交回错误（调用方按它说明）；重建失败、打开自检失败时（失败的编辑器绝不保存：保存的状态机根本不建）释放编辑权、以只读重建选定的那一份内容、
-   * 回到阅读并说明（backToReading）
+   * 调度、接上编辑器。核对得知这一代已被取代时交回 superseded（已经放弃那一代，不释放；调用方回到阅读）；这一代自己失效、交给租约之后续不上时
+   * 交回 lost（调用方按失效说明，readingAfterLostClaim）；核对不了、读取失败时已经释放编辑权，交回错误（调用方按它说明）；重建失败、打开自检失败时
+   * （失败的编辑器绝不保存：保存的状态机根本不建）释放编辑权、以只读重建选定的那一份内容、回到阅读并说明（backToReading）
    */
-  async function startEditing(token: number, held: EditLease, acquired: { readonly revision: number, readonly formulasPending: boolean, readonly interruption: EditInterruption | undefined }): Promise<'entered' | 'not-entered' | 'superseded' | { readonly error: unknown }> {
+  async function startEditing(token: number, held: EditLease, acquired: { readonly revision: number, readonly formulasPending: boolean, readonly interruption: EditInterruption | undefined }): Promise<'entered' | 'not-entered' | 'superseded' | 'lost' | { readonly error: unknown }> {
     const { revision, formulasPending } = acquired
     lease = held
     editingBase = revision
@@ -1507,8 +1499,16 @@ export function createEditMode(options: EditModeOptions): EditMode {
       interruption = undefined
       return 'superseded'
     }
+    if (claim.kind === 'lost') {
+      // 核对得知这一代自己失效了、交给租约之后续不上：租约已经通知过（直接进入编辑的打开记在 pendingLoss，调用方按它说明）
+      lease = undefined
+      dropLock()
+      interruption = undefined
+      return 'lost'
+    }
     if (claim.kind === 'unverified') {
-      // 核对不了：不抢。尽力释放（是当前的就让出来，不是的话服务端什么也不改），说明没能进入编辑、可以再试
+      // 核对不了，或者这一代自己失效、交给租约之后续上了或说不准（续上的申请同样说明不了现在）：不抢。尽力释放（是当前的就让出来，不是的话
+      // 服务端什么也不改），说明没能进入编辑、可以再试
       dropLease()
       interruption = undefined
       return { error: claim.error }
@@ -1634,10 +1634,25 @@ export function createEditMode(options: EditModeOptions): EditMode {
       readingBefore = { ...readingBefore, interruption: undefined, releaseUnconfirmed: false }
       return undefined
     }
+    if (started === 'lost') {
+      // 这一代自己失效、续不上：照常以只读打开，说明没能进入编辑（编辑权已失效、服务端的原因）
+      readingBefore = readingAfterLostClaim()
+      return undefined
+    }
     if (mode.kind === 'failed')
       return { kind: 'editor-failed', error: mode.error }
     // 打开自检失败（先取后放）：已经释放编辑权、以只读回到阅读
     return { kind: 'opened', entered: false, damaged: mode.kind === 'reading' && mode.damaged !== undefined }
+  }
+
+  /**
+   * 拿锁时核对得知这一代自己失效了、交给租约之后续不上（startEditing 交回 lost，复验 E2）：回到阅读、说明没能进入编辑（编辑权已失效，服务端的原因）。
+   * 租约已经通知过：直接进入编辑的打开记在 pendingLoss（这里取走）；进入编辑时页面已经由 lost() 回到阅读、开始了别的事，走不到这里
+   */
+  function readingAfterLostClaim(): SettledReading {
+    const loss = pendingLoss
+    pendingLoss = undefined
+    return { ...readingBefore, interruption: undefined, releaseUnconfirmed: false, notice: loss === undefined ? undefined : { kind: 'enter-lost', loss } }
   }
 
   /**
@@ -1748,6 +1763,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 标签页在编辑时照常给"在此编辑"）
     if (started === 'superseded' && still(token))
       begin({ ...readingBefore, interruption: undefined, releaseUnconfirmed: false })
+    // 这一代自己失效、续不上（复验 E2）：页面多半已经由租约的通知回到阅读；还在进入时同样说明没能进入编辑
+    if (started === 'lost' && still(token))
+      begin(readingAfterLostClaim())
     return started === 'entered'
   }
 

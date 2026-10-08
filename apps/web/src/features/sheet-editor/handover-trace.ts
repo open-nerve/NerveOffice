@@ -22,9 +22,10 @@ export type HandoverTraceEvent
     | { readonly kind: 'lock-stolen', readonly at: number }
   /**
    * 本机锁的争用由服务端裁决（M3-P6 设计 §3.13，local-lock.ts）：拿锁时被本浏览器的别的标签页占着（claim）、锁被抢之后（stolen）核对这一代的结果——
-   * current 是当前的（抢、拿回来），ended 已经不是当前的（不抢；被抢的转为失去编辑权），unknown 核对不了（不抢；被抢的等之后的心跳）
+   * current 是当前的（抢、拿回来），superseded 被别的一代取代了（不抢；被抢的放弃这一代、失去编辑权），ended 这一代自己失效了（不抢，交给租约已有
+   * 的失效处理；被抢的等之后的心跳），unknown 核对不了（不抢；被抢的等之后的心跳）
    */
-    | { readonly kind: 'lock-verdict', readonly at: number, readonly when: 'claim' | 'stolen', readonly verdict: 'current' | 'ended' | 'unknown' }
+    | { readonly kind: 'lock-verdict', readonly at: number, readonly when: 'claim' | 'stolen', readonly verdict: 'current' | 'superseded' | 'ended' | 'unknown' }
   /**
    * 页面关闭（pagehide）时怎样处理这一代（M3-P4 设计 §3.4、M3-P5 设计 §3.7 的 R1、7a759da）：kept 是保存在途（busy）或者结果未知（unknown）、
    * 不释放、记下记号；handed-over 是有请求在等、用交出代替释放；released 是释放；idle 是不在编辑（没有这一代）。busy、unknown 是那一刻保存的
