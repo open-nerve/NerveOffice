@@ -18,30 +18,24 @@
 //   在进行"（持有者是自己、锁不在本浏览器、记号在 30 秒内而那次保存还没提交：just-closed，审查 B §七）；记号在；点"在此编辑"先等（waiting-save，
 //   "上一个页面的保存还在进行，稍后接手…"），那次保存提交了（在服务端停完）才以本人接管申请、进入编辑（committed），或者等满 30 秒（expired，
 //   从记号的时刻算）；服务器上有那次保存，记号清掉。
-import type { HandoverLog, HandoverLogEntry } from './handover-log.ts'
+// 与请求编辑的场景（./selftest-request.ts）共用的观察（交接日志、时间线、可见性、页头的文字、内容里的格）在 ./selftest-timeline.ts，A 的前半段
+// （第一格存上、隐藏的那一刻上传第二格、隐藏之后写第三格）在 ./selftest-holder.ts。
 import type { HandoverScenario, SelftestCheck, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'
-import { HANDOVER_LOG_GLOBAL } from './handover-log.ts'
-import { autosaveControl, capturesIn, describeAutosave, prepareAutosave, requestOf, saveRequests, triggerText, untilUploaded } from './selftest-autosave.ts'
-import { checkEditing, facade, round, sleep } from './selftest-capture-common.ts'
+import type { LogEntry, VisibilityWatch } from './selftest-timeline.ts'
+import { autosaveControl, prepareAutosave, saveRequests } from './selftest-autosave.ts'
+import { facade, round, sleep } from './selftest-capture-common.ts'
 import { waitFor } from './selftest-dom.ts'
+import { holderPrelude, NO_TIMED_CAPTURE_MS } from './selftest-holder.ts'
 import { REFRESH_SAVE_EDIT, TAKEOVER_EDITS, TAKEOVER_TAKER_DELAY_MS } from './selftest-report.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeView, fail, fetchServerContent, fetchServerDocument, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, untilSwitched } from './selftest-session.ts'
+import { cellOf, cellsIn, editingSteady, firstOf, handoverLog, lostNoticeText, observation, since, statusRegionText, statusTexts, timelineWith, watchVisibility } from './selftest-timeline.ts'
 
 /** 页头里"在此编辑"的说法（与编辑器页的文案相同；这里不引用编辑器页的模块） */
 const TAKE_OVER_HERE = '在此编辑'
 
 /** 刷新之后、刷新之前那次保存还没提交时的阅读说明（与编辑器页的文案相同，审查 B §七） */
 const JUST_CLOSED = `你刚关闭或刷新的页面还有一次保存在进行。点"${TAKE_OVER_HERE}"会先等它存完（至多 30 秒）再接着编辑`
-
-/** 捕获的静默与上限调到一小时：场景里只有控制的 flush 与切到后台会捕获、上传 */
-const NO_TIMED_CAPTURE_MS = 3_600_000
-
-/** 等页面变成隐藏最多多久：驱动脚本在库里看到第一格之后才另开 B */
-const HIDDEN_WAIT_MS = 120_000
-
-/** 隐藏之后等自动保存把第二格上传最多多久（Safari 隐藏几秒之后就压低计时器：上传要在那之前发出） */
-const SAVE_WAIT_MS = 20_000
 
 /**
  * A 隐藏之后等结果最多多久：B 载入、等 8 秒、请 A 交出（至多 3 秒回应、20 秒做完）、进入编辑、交回结果、关掉标签页之后 A 才回到前台——
@@ -74,85 +68,6 @@ export function pendingSaveKeyOf(documentId: string): string {
   return `nerve-office:pending-save:${documentId}`
 }
 
-// ---- 日志与时间线 ----
-
-/** 交接日志里的一条（./handover-log.ts 的 HandoverLogEntry：种类、本页的单调时钟、墙上时间与各自的字段） */
-export type LogEntry = Pick<HandoverLogEntry, 'kind' | 'at' | 'wall'> & Readonly<Record<string, unknown>>
-
-/** 页面上的交接日志（测试构建在组装编辑器页之前装上） */
-function handoverLog(): HandoverLog {
-  const log = (window as unknown as Record<string, HandoverLog | undefined>)[HANDOVER_LOG_GLOBAL]
-  if (log === undefined)
-    fail(`页面上没有交接日志（window.${HANDOVER_LOG_GLOBAL}）：不是测试构建？`)
-  return log
-}
-
-/** 场景自己的一条观察：种类带 page: 前缀（与交接日志的分开），墙上时间与本页的单调时钟 */
-function observation(kind: string, fields: Readonly<Record<string, unknown>> = {}): SelftestTimelineEntry {
-  return { kind: `page:${kind}`, wall: Date.now(), at: round(performance.now()), ...fields }
-}
-
-/** 交回的时间线：交接日志（拷贝）与场景的观察，按墙上时间排好 */
-function timelineWith(observations: readonly SelftestTimelineEntry[]): SelftestTimelineEntry[] {
-  const log = (window as unknown as Record<string, HandoverLog | undefined>)[HANDOVER_LOG_GLOBAL]?.log() ?? []
-  return [...log.map(entry => ({ ...entry, at: round(entry.at) })), ...observations].sort((a, b) => a.wall - b.wall)
-}
-
-/** 页面变成隐藏、又显示出来（记进时间线）；在 window 上的捕获阶段听：先于编辑器页挂在 document 上的处理（自动保存在那里同步捕获、发起上传） */
-interface VisibilityWatch {
-  /** 第一次变成隐藏的时刻（performance.now） */
-  readonly hiddenAt: () => number | undefined
-  readonly dispose: () => void
-}
-
-function watchVisibility(observations: SelftestTimelineEntry[]): VisibilityWatch {
-  let hiddenAt: number | undefined
-  const listener = (): void => {
-    observations.push(observation(`visibility-${document.visibilityState}`))
-    if (document.visibilityState === 'hidden')
-      hiddenAt ??= performance.now()
-  }
-  window.addEventListener('visibilitychange', listener, true)
-  return { hiddenAt: () => hiddenAt, dispose: () => window.removeEventListener('visibilitychange', listener, true) }
-}
-
-// ---- 页面上的文字 ----
-
-/** 空白合并之后的文字 */
-function textOf(element: Element | null | undefined): string {
-  return (element?.textContent ?? '').replace(/\s+/g, ' ').trim()
-}
-
-/** 页头里的读屏状态（role=status）的文字 */
-function statusTexts(session: Session): string[] {
-  return [...session.host.chrome.querySelectorAll('[role="status"]')].map(textOf).filter(text => text !== '')
-}
-
-/** 一直在的读屏状态区（data-slot="status-region"）的文字 */
-function statusRegionText(session: Session): string {
-  return textOf(session.host.chrome.querySelector('[data-slot="status-region"]'))
-}
-
-/** 失去编辑权的说明（role=alert，以"编辑权已失效"开头）的文字；没有时空串 */
-function lostNoticeText(session: Session): string {
-  return [...session.host.chrome.querySelectorAll('[role="alert"]')].map(textOf).find(text => text.startsWith('编辑权已失效')) ?? ''
-}
-
-/** 快照里一格的值 */
-function cellOf(snapshot: string, cell: { readonly sheetId: string, readonly row: number, readonly column: number }): unknown {
-  const workbook = JSON.parse(snapshot) as { readonly sheets: Readonly<Record<string, { readonly cellData?: Readonly<Record<string, Readonly<Record<string, { readonly v?: unknown }>>>> }>> }
-  return workbook.sheets[cell.sheetId]?.cellData?.[cell.row]?.[cell.column]?.v
-}
-
-/** 内容里这几格在不在（值相同）：交回"A1 在、A3 不在"一类的说明与不符合 expected 的那些 */
-function cellsIn(snapshot: string, cells: readonly { readonly sheetId: string, readonly cell: string, readonly row: number, readonly column: number, readonly value: string }[], expected: readonly boolean[]): { readonly text: string, readonly wrong: string[] } {
-  const present = cells.map(cell => cellOf(snapshot, cell) === cell.value)
-  return {
-    text: cells.map((cell, index) => `${cell.cell}${present[index] === true ? '在' : '不在'}`).join('、'),
-    wrong: cells.flatMap((cell, index) => present[index] === expected[index] ? [] : [`${cell.cell}${expected[index] === true ? '应当在' : '不应在'}`]),
-  }
-}
-
 // ---- 交接日志的判读（纯函数，单元测试覆盖） ----
 
 /** B 这一侧走了哪条路 */
@@ -165,14 +80,6 @@ export interface TakerSummary {
   /** 不合预期的地方（空的就是按设计走完了一条路） */
   readonly problems: readonly string[]
   readonly text: string
-}
-
-function firstOf(log: readonly LogEntry[], kind: string, where: (entry: LogEntry) => boolean = () => true): LogEntry | undefined {
-  return log.find(entry => entry.kind === kind && where(entry))
-}
-
-function since(entry: LogEntry | undefined, origin: LogEntry | undefined): number | null {
-  return entry === undefined || origin === undefined ? null : round(entry.at - origin.at)
 }
 
 /**
@@ -272,60 +179,15 @@ async function takeoverHolderScenario(session: Session): Promise<void> {
 }
 
 async function holderSteps(session: Session, visibility: VisibilityWatch, observations: SelftestTimelineEntry[]): Promise<void> {
-  if (!await checkEditing(session, { mode: 'held', limits: { captureQuietMs: NO_TIMED_CAPTURE_MS, captureMaxMs: NO_TIMED_CAPTURE_MS } }))
-    return
-  const control = autosaveControl()
-  const [first, second, third] = TAKEOVER_EDITS
-  const sheet = facade(session).getActiveWorkbook().getActiveSheet()
-  const saved = await check(session, 'takeover.holder.first-save', async () => {
-    if (sheet.getSheetId() !== first.sheetId)
-      fail(`当前工作表是 ${sheet.getSheetId()}（应当是模板的 ${first.sheetId}）`)
-    sheet.getRange(first.cell).setValue(first.value)
-    const firstSeq = session.probe.changeSeq()
-    // 控制的 flush：同步捕获第一格、发起上传；随即写第二格——它不在这一次里，留到隐藏的那一刻（与 hidden-save 相同）
-    const started = performance.now()
-    const flushing = control.flush()
-    sheet.getRange(second.cell).setValue(second.value)
-    const result = await flushing
-    if (result?.outcome?.kind !== 'saved')
-      fail(`控制的 flush 没有存上：${JSON.stringify(result) ?? '没有当前的调度'}；${describeAutosave(session)}`)
-    const request = requestOf(result.outcome.requestId)
-    if (request?.status !== 200 || request.localSeq !== String(firstSeq))
-      fail(`第一格的保存请求：状态 ${String(request?.status)}、修改序号 ${String(request?.localSeq)}（应当是 200、${firstSeq}）`)
-    if (session.host.view().save !== 'dirty')
-      fail(`第一格存上之后保存状态是 ${session.host.view().save ?? '没有'}（应当是 dirty：第二格还没上传）`)
-    observations.push(observation('first-saved'))
-    return `第一格（${first.cell}）经控制的 flush 存上（${round(performance.now() - started)} ms），第二格（${second.cell}）留着；之后等驱动脚本另开 B（A 随之隐藏）`
+  const prelude = await holderPrelude(session, visibility, observations, {
+    edits: TAKEOVER_EDITS,
+    prefix: 'takeover',
+    afterSave: '之后等驱动脚本另开 B（A 随之隐藏）',
+    notHidden: '驱动脚本没有另开 B？',
+    // 第三格只在 A 回应交接（先保存再交出）时存上
+    afterWrite: '之后等 B 的"在此编辑"',
   })
-  if (!saved)
-    return
-  const uploaded = await check(session, 'takeover.holder.hidden-upload', async () => {
-    if (!await waitFor(() => visibility.hiddenAt() !== undefined, HIDDEN_WAIT_MS, 100))
-      fail(`${HIDDEN_WAIT_MS / 1000} 秒内页面没有变成隐藏（驱动脚本没有另开 B？）`)
-    const hiddenAt = visibility.hiddenAt() ?? 0
-    const seq = session.probe.changeSeq()
-    const { upload, request } = await untilUploaded(session, seq, { timeoutMs: SAVE_WAIT_MS })
-    const capture = capturesIn(control.log()).find(item => item.trigger === 'hidden')
-    if (capture?.seq !== seq || upload.trigger !== 'hidden')
-      fail(`隐藏的那一刻自动保存没有捕获、上传第二格（捕获 ${capture === undefined ? '没有' : triggerText(capture.trigger)}，上传 ${triggerText(upload.trigger)}）：${describeAutosave(session)}`)
-    if (request?.status !== 200 || request.answeredAt === undefined)
-      fail(`隐藏之后的保存请求：状态 ${String(request?.status)}`)
-    const ms = { capture: round(capture.at - hiddenAt), request: round(request.at - hiddenAt), response: round(request.answeredAt - hiddenAt) }
-    session.timings.push({ id: 'takeover.hidden-upload', ms })
-    return `隐藏之后 +${ms.capture} ms 自动保存捕获第二格（切到后台）、+${ms.request} ms 发出保存请求、+${ms.response} ms 收到 200`
-  }, HIDDEN_WAIT_MS + SAVE_WAIT_MS + CHECK_TIMEOUT_MS)
-  if (!uploaded)
-    return
-  const wrote = await check(session, 'takeover.holder.after-hidden-edit', async () => {
-    // 隐藏之后再写一格：模拟切走之前最后一刻没被捕获的修改（真实的用户在隐藏的页面里不会键入）。捕获的静默与上限是一小时、定时的上传暂停：
-    // 它只在 A 回应交接（先保存再交出）时存上
-    sheet.getRange(third.cell).setValue(third.value)
-    if (session.host.view().save !== 'dirty')
-      fail(`写了第三格，保存状态是 ${session.host.view().save ?? '没有'}（应当是 dirty）`)
-    observations.push(observation('after-hidden-edit'))
-    return `隐藏之后写下第三格（${third.cell}），留着没捕获、没上传；之后等 B 的"在此编辑"`
-  })
-  if (!wrote)
+  if (!prelude)
     return
   const hiddenWall = observations.find(entry => entry.kind === 'page:visibility-hidden')?.wall
   let outcome: 'handed-over' | 'lost' | undefined
@@ -408,12 +270,6 @@ async function takeoverTakerScenario(session: Session): Promise<void> {
   finally {
     session.timeline = timelineWith(observations)
   }
-}
-
-/** 进入了编辑：编辑的 steady，容器上是可编辑的编辑器 */
-function editingSteady(session: Session): boolean {
-  const view = session.host.view()
-  return view.mode === 'editing' && view.surface === 'steady' && session.host.surface.getAttribute('data-editor-access') === 'edit'
 }
 
 async function takerSteps(session: Session, observations: SelftestTimelineEntry[]): Promise<void> {

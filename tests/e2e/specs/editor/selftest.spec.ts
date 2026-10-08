@@ -21,18 +21,25 @@
 // - refresh-save：先让这份文档的保存在服务端停 10 秒（support/selftest-handover.ts 的 slowDownSave：改写内容行时 pg_sleep）再打开，页面自己刷新、
 //   接手。location.reload 时三个浏览器都先取消在途的请求、再派发 pagehide（结果未知；S6 用 Playwright 的 page.reload 时 Chromium 系 pagehide 时
 //   还在途）——两种都不释放、留下记号（7a759da），页面交回的时间线里看得出是哪一种
+// 请求编辑的两条路（M3-P6 设计 §3.10，DEF-062）照驱动脚本的编排（support/selftest-request.ts，共用）：作者在浏览器里，协作者经接口扮演另一方——
+// - request-waiter（路 1）：协作者编辑、心跳带来请求之后这里模拟请求方隐藏、协作者交出；请求方在"后台"停在交给了我、不申请，模拟回到前台之后才进入；
+// - paused-holder（路 2）：作者编辑、存上第一格之后这里模拟隐藏、拦住它的心跳与交出（Playwright 模拟不了 Safari 的暂停：页面照常跑，只是服务端
+//   听不到它）；协作者请求、续期，持有者那一代按时间到期（真等一个有效期）之后接手；放开、模拟回到前台之后持有者得知失去编辑权、另存为副本
 // 用到测试构建（自检的入口页与编辑器页里的自检）：标签 @test-build，外部模式测生产镜像时排除
-import type { Page } from '@playwright/test'
+import type { Page, Route } from '@playwright/test'
 import type { SelftestReport } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { TestUser } from '../../support/database.ts'
 import type { Judgement } from '../../support/selftest-handover.ts'
 import type { SelftestStep, SelftestStepDefinition } from '../../support/selftest-plan.ts'
+import type { RequestRun, RequestStage } from '../../support/selftest-request.ts'
 import process from 'node:process'
-import { decodeSelftestReport, HANDOVER_SCENARIOS, RESULT_PARAM } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
+import { decodeSelftestReport, HANDOVER_SCENARIOS, REQUEST_SCENARIOS, RESULT_PARAM } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { revisionOf } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../../support/selftest-handover.ts'
 import { problemsOf, SELFTEST_STEPS, selftestPageUrl, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
+import { runPausedHolder, runWaiter } from '../../support/selftest-request.ts'
 import { EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -90,8 +97,11 @@ async function summaryOf(report: SelftestReport, step: SelftestStep, path?: stri
   }
 }
 
-/** 只读打开的场景（查看者，与作者的 enter-exit：它从阅读开始，自己点"编辑""退出编辑"；交接里另开的 B 与刷新的那一步也从阅读开始） */
-const READ_ONLY_SCENARIOS: ReadonlySet<string> = new Set(['read-only', 'read-only-formulas', 'enter-exit', 'takeover-taker', 'refresh-save'])
+/**
+ * 只读打开的场景（查看者，与作者的 enter-exit：它从阅读开始，自己点"编辑""退出编辑"；交接里另开的 B 与刷新的那一步也从阅读开始；请求编辑的请求方
+ * 也从阅读开始）
+ */
+const READ_ONLY_SCENARIOS: ReadonlySet<string> = new Set(['read-only', 'read-only-formulas', 'enter-exit', 'takeover-taker', 'refresh-save', 'request-waiter'])
 
 function passed(step: SelftestStep): unknown {
   return { scenario: step.scenario, page: { state: 'ready', readOnly: READ_ONLY_SCENARIOS.has(step.scenario) }, hasChecks: true, problems: [], server: [] }
@@ -100,8 +110,8 @@ function passed(step: SelftestStep): unknown {
 /** hidden-save（Playwright 里模拟隐藏，单独一条用例） */
 const HIDDEN_SAVE = SELFTEST_STEPS.filter(item => item.scenario === 'hidden-save')
 
-/** 照常一步一条用例的（hidden-save 与交接的几步另有编排） */
-const PLAIN_STEPS = SELFTEST_STEPS.filter(item => item.scenario !== 'hidden-save' && !(HANDOVER_SCENARIOS as readonly string[]).includes(item.scenario))
+/** 照常一步一条用例的（hidden-save、交接与请求编辑的几步另有编排） */
+const PLAIN_STEPS = SELFTEST_STEPS.filter(item => item.scenario !== 'hidden-save' && !([...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS] as readonly string[]).includes(item.scenario))
 
 /** 定义里的一步 */
 function definitionOf(id: string): SelftestStepDefinition {
@@ -209,6 +219,39 @@ async function runRefreshSave(page: Page, step: SelftestStep): Promise<{ readonl
   return { report, judgement: refreshJudgement({ report, states, requests, blockedAt, finishedAt }), evidence: { blockedAt, finishedAt, states, requests } }
 }
 
+/** 请求编辑的一步（自己一份文档）与它的场景：作者在浏览器里，协作者（peer）经接口扮演另一方 */
+async function requestScene(prefix: string, id: string): Promise<{ readonly step: SelftestStep, readonly author: TestUser, readonly peer: TestUser }> {
+  const scene = await selftestScene(prefix, [definitionOf(id)])
+  const [step] = scene.steps
+  if (step === undefined)
+    throw new Error(`没有 ${id} 这一步`)
+  return { step, author: scene.author, peer: scene.peer }
+}
+
+/** 等结果交回（到 deadline），解开；交不回时 undefined（判定里记下，用例随之不通过） */
+async function reportBefore(delivered: readonly string[], deadline: number): Promise<SelftestReport | undefined> {
+  while (delivered.length === 0 && Date.now() < deadline)
+    await sleep(250)
+  const encoded = delivered[0] === undefined ? null : new URL(delivered[0]).searchParams.get(RESULT_PARAM)
+  return encoded === null ? undefined : decodeSelftestReport(encoded)
+}
+
+/** 编排完的一条路交给用例看：页面交回的结果与判定、库里的时间线、后端日志与协作者的调用（附件，失败时看） */
+async function attachRun(testInfo: Parameters<Parameters<typeof test>[2]>[1], run: RequestRun): Promise<void> {
+  await testInfo.attach('selftest-report', { body: JSON.stringify(run.report ?? null, null, 2), contentType: 'application/json' })
+  await testInfo.attach('request-evidence', { body: JSON.stringify({ judgement: run.judgement, marks: run.marks, notes: run.notes, states: run.states, requests: run.requests, calls: run.calls }, null, 2), contentType: 'application/json' })
+}
+
+/** 路 2 的"暂停"在 Playwright 里的模拟：拦住这份文档的心跳（PUT …/edit-lease）与交出（POST …/edit-lease/handover），别的照常（申请、释放、保存） */
+async function holdHolderBack(route: Route): Promise<void> {
+  const request = route.request()
+  const path = new URL(request.url()).pathname
+  if ((request.method() === 'PUT' && path.endsWith('/edit-lease')) || (request.method() === 'POST' && path.endsWith('/edit-lease/handover')))
+    await route.abort('internetdisconnected')
+  else
+    await route.fallback()
+}
+
 test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 的浏览器里每项都通过', { tag: '@test-build' }, () => {
   for (const definition of PLAIN_STEPS) {
     test(`步骤 ${definition.id}`, async ({ page }, testInfo) => {
@@ -265,5 +308,51 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
     expect(report.path).toBe('committed')
     expect(await summaryOf(report, step, report.path)).toEqual(passed(step))
     expect(judgement.problems).toEqual([])
+  })
+
+  test('步骤 request-waiter（M3-P6 设计 §3.10，DEF-062 路 1）：协作者经接口在编辑，作者点"请求编辑"；心跳带来请求之后作者的页面隐藏（这里模拟）、协作者交出——作者在后台续期得知交给了它，停在交给了我、不申请；回到前台之后才以普通申请进入编辑、写一格存上', async ({ page }, testInfo) => {
+    const { step, author, peer } = await requestScene('st-waiter', 'request-waiter')
+    let delivered: string[] = []
+    const stage: RequestStage = {
+      open: async () => {
+        delivered = await startSelftest(page, step)
+      },
+      hide: async () => setVisibility(page, 'hidden'),
+      show: async () => setVisibility(page, 'visible'),
+      report: async deadline => reportBefore(delivered, deadline),
+    }
+    const run = await runWaiter({ origin: e2eOrigin(), documentId: step.documentId, holder: peer, waiter: author, stage, deadline: Date.now() + REPORT_TIMEOUT_MS })
+    await attachRun(testInfo, run)
+    expect(run.report?.path).toBe('entered-on-return')
+    expect(run.report === undefined ? undefined : await summaryOf(run.report, step, run.report.path)).toEqual(passed(step))
+    expect(run.judgement.problems).toEqual([])
+  })
+
+  test('步骤 paused-holder（M3-P6 设计 §3.10，DEF-062 路 2）：作者编辑、存上第一格之后页面隐藏（这里模拟）、被"暂停"（这里拦住它的心跳与交出），隐藏的那一刻上传第二格、之后写第三格；协作者经接口请求、续期，作者那一代按时间到期（真等一个有效期）之后接手；回到前台之后作者得知失去编辑权（协作者在编辑）、第三格另存为副本；库里作者那一代没有交出、没有释放', async ({ page }, testInfo) => {
+    // 真等一个有效期（90 秒）再加打开、接手与另存为副本
+    test.setTimeout(EDITOR_TEST_TIMEOUT + 180_000)
+    const { step, author, peer } = await requestScene('st-paused', 'paused-holder')
+    const pattern = `**/api/documents/${step.documentId}/edit-lease**`
+    let delivered: string[] = []
+    const stage: RequestStage = {
+      open: async () => {
+        delivered = await startSelftest(page, step)
+      },
+      hide: async () => {
+        await setVisibility(page, 'hidden')
+        await page.route(pattern, holdHolderBack)
+      },
+      show: async () => {
+        // 先回到前台、再放开：放开之后的第一次心跳才得知失去编辑权（与真实 Safari 一样在回来之后）
+        await setVisibility(page, 'visible')
+        await page.unroute(pattern, holdHolderBack)
+      },
+      report: async deadline => reportBefore(delivered, deadline),
+    }
+    const run = await runPausedHolder({ origin: e2eOrigin(), documentId: step.documentId, holder: author, requester: peer, stage, deadline: Date.now() + REPORT_TIMEOUT_MS + 120_000, expectSuspended: false })
+    await attachRun(testInfo, run)
+    expect(run.report?.path).toBe('lost-after-pause')
+    expect(run.report === undefined ? undefined : await summaryOf(run.report, step, run.report.path)).toEqual(passed(step))
+    expect(run.judgement.problems).toEqual([])
   })
 })

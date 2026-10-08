@@ -51,6 +51,15 @@ describe('后端日志里这份文档的请求（parseServerRequests）', () => 
     ])
     expect(parseServerRequests(text, DOC, since, Date.parse('2026-10-07T01:00:11.900Z'))).toHaveLength(1)
   })
+
+  it('登录了的请求另带认证出的用户（userId，M3-P6：请求编辑的两条路按它分开两个人）；不是字符串时没有', () => {
+    const since = Date.parse('2026-10-07T01:00:00.000Z')
+    const text = [
+      line({ time: '2026-10-07T01:00:12.000Z', method: 'PUT', route: '/api/documents/:id/edit-lease/request', path: `/api/documents/${DOC}/edit-lease/request`, statusCode: 200, durationMs: 4, userId: 'user-1', msg: '请求完成' }),
+      line({ time: '2026-10-07T01:00:13.000Z', method: 'PUT', route: '/api/documents/:id/edit-lease', path: `/api/documents/${DOC}/edit-lease`, statusCode: 200, durationMs: 4, userId: 42, msg: '请求完成' }),
+    ].join('\n')
+    expect(parseServerRequests(text, DOC, since).map(request => request.userId)).toEqual(['user-1', undefined])
+  })
 })
 
 describe('两个标签页的本人接管（takeoverJudgement）', () => {

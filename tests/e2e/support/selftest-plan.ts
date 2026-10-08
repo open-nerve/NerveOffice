@@ -8,15 +8,16 @@
 // - 服务器上的核对（serverProblemsOf，直接查库；storedProblems 是纯函数）：只看不改的步骤与 change-detection 没有保存过；enter-exit 恰好
 //   多了一个修订、内容里有改的那一格；自动保存照常运行的几步（M3-P4 S7：formula-timing、auto-height、large-copy、composition）至少保存了
 //   一次，存下的内容另按定义核对（公式、字号与自动行高、复制品、批注）；hidden-save 恰好保存了两次、内容里有隐藏之前与隐藏的那一刻写的两格；
-//   交接的几步（M3-P5 S8）随走的路（A 回应了没有、刷新时停住的那次保存提交了没有）。交接的编排与库里的时间线在 ./selftest-handover.ts。
+//   交接的几步（M3-P5 S8）随走的路（A 回应了没有、刷新时停住的那次保存提交了没有）；请求编辑的两条路（M3-P6）同样随走的路。交接的编排与库里的
+//   时间线在 ./selftest-handover.ts，请求编辑的编排（另一方由驱动脚本经接口扮演）与判定在 ./selftest-request.ts。
 // 这里只有纯函数与读写库的辅助，不起浏览器
-import type { HandoverScenario, SelftestFormulaMode, SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { HandoverScenario, RequestScenario, SelftestFormulaMode, SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SnapshotFor, TestUser } from './database.ts'
 import { Buffer } from 'node:buffer'
 import zlib from 'node:zlib'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { BIG_SHEET, cellCount, verifyFormulaSnapshot } from '../../../apps/web/src/editor/testing/capture-samples.ts'
-import { COMPOSITION_NOTE, ENTER_EXIT_EDIT, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, HIDDEN_SAVE_EDITS, NEXT_PARAM, REFRESH_SAVE_EDIT, selftestEditorUrl, selftestPassed, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { COMPOSITION_NOTE, ENTER_EXIT_EDIT, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, HIDDEN_SAVE_EDITS, NEXT_PARAM, PAUSED_HOLDER_EDITS, REFRESH_SAVE_EDIT, REQUEST_WAITER_EDIT, selftestEditorUrl, selftestPassed, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { bigSheetFor, formulaSampleFor } from './capture-samples.ts'
 import { createDocumentIn, createTeamSpace, createUser, withDatabase } from './database.ts'
 import { readOnlySampleFor, SAMPLE_FORMULAS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from './read-only-sample.ts'
@@ -59,7 +60,9 @@ export interface SelftestStepDefinition {
  * - M3-P4 S1（捕获时机的复核，都在编辑时）：环境、变更检测（只读样本）、公式时序（Worker 与主线程各一步）、自动行高与大表复制（大表）、
  *   组合输入；hidden-save（驱动脚本在它第一次保存之后另开标签页让它隐藏，按库里的证据判定）是由上一步带过去的最后一步；
  * - M3-P5 S8（交接的复核，驱动脚本各开一个新的标签页）：两个标签页的本人接管（A 与 B，同一份文档；再一对里的 A 收不到交接频道的消息）、
- *   刷新时在途的保存
+ *   刷新时在途的保存；
+ * - M3-P6 S5（请求编辑的两条路，DEF-062，驱动脚本各开一个新的标签页、经接口扮演另一方——场景的协作者）：请求方在后台停在交给了我、回到前台才进入
+ *   （request-waiter）；持有者被暂停时自动交出走到到期（paused-holder，盖屏，放在最后）
  */
 export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'read-only', scenario: 'read-only', role: 'viewer', sample: 'read-only' },
@@ -79,6 +82,8 @@ export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'takeover-deaf-holder', scenario: 'takeover-holder-deaf', role: 'author', sample: 'template' },
   { id: 'takeover-deaf-taker', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'takeover-deaf-holder', opens: 'editor' },
   { id: 'refresh-save', scenario: 'refresh-save', role: 'author', sample: 'template' },
+  { id: 'request-waiter', scenario: 'request-waiter', role: 'author', sample: 'template' },
+  { id: 'paused-holder', scenario: 'paused-holder', role: 'author', sample: 'template' },
 ]
 
 /** 跑一步自检要的：用谁登录、打开哪份文档、跑哪个场景（与公式模式）、怎样打开（入口页或者直接打开编辑器页） */
@@ -95,10 +100,14 @@ export interface SelftestStep {
   readonly sharesDocumentOf?: string | undefined
 }
 
-/** 自检的账户与步骤 */
+/**
+ * 自检的账户与步骤。peer（协作者，空间的编辑者）是请求编辑的两条路（M3-P6）里由驱动脚本经接口扮演的另一方：路 1 里他在编辑、交出，路 2 里他请求编辑、
+ * 到期之后接手
+ */
 export interface SelftestScene {
   readonly author: TestUser
   readonly viewer: TestUser
+  readonly peer: TestUser
   readonly steps: readonly SelftestStep[]
 }
 
@@ -127,16 +136,20 @@ export function stepsOf(definitions: readonly SelftestStepDefinition[], people: 
   }))
 }
 
-/** 写库造场景：团队空间与账户（与 support/read-only.ts 的 scene 相同的空间与角色），每一步一份文档（作者建的；共用文档的那一步不另建） */
+/**
+ * 写库造场景：团队空间与账户（与 support/read-only.ts 的 scene 相同的空间与角色，另加协作者：编辑者，请求编辑的两条路里经接口扮演另一方），
+ * 每一步一份文档（作者建的；共用文档的那一步不另建）
+ */
 export async function selftestScene(prefix: string, definitions: readonly SelftestStepDefinition[] = SELFTEST_STEPS): Promise<SelftestScene> {
   const admin = await createUser(`${prefix}-admin`, '系统管理员', { systemRole: 'admin' })
   const author = await createUser(`${prefix}-author`, '作者')
   const viewer = await createUser(`${prefix}-viewer`, '查看者')
-  const space = await createTeamSpace('页面自检', admin, [[author, 'admin'], [viewer, 'viewer']])
+  const peer = await createUser(`${prefix}-peer`, '协作者')
+  const space = await createTeamSpace('页面自检', admin, [[author, 'admin'], [viewer, 'viewer'], [peer, 'editor']])
   const documentIds: string[] = []
   for (const definition of definitions)
     documentIds.push(definition.sharesDocumentOf === undefined ? await createDocumentIn(space.id, author, `自检 ${definition.id}`, { snapshotFor: SAMPLES[definition.sample] }) : '')
-  return { author, viewer, steps: stepsOf(definitions, { author, viewer }, documentIds) }
+  return { author, viewer, peer, steps: stepsOf(definitions, { author, viewer }, documentIds) }
 }
 
 /**
@@ -161,13 +174,18 @@ function formulaKey(sheetId: string, cell: string): string {
 /** enter-exit 交回的两次切换的耗时（进入、退出），各自到 steady 的时刻都要有 */
 const SWITCH_TIMINGS = ['switch.enter', 'switch.exit'] as const
 
-/** 交接的场景（M3-P5）交回的路：每个场景认得的几种（selftest-report.ts 的 path） */
+/**
+ * 交接的场景（M3-P5）交回的路：每个场景认得的几种（selftest-report.ts 的 path）。请求编辑的两条路（M3-P6）只认设计的那一条：页面自己判读出别的路时
+ * 说明哪里不对（apps/web/src/editor/testing/selftest-request.ts 的 WaiterPath、PausedHolderPath）
+ */
 export const HANDOVER_PATHS: Readonly<Partial<Record<SelftestScenario, readonly string[]>>> = {
   'takeover-holder': ['handed-over', 'lost'],
   // 收不到交接频道的消息：只会失去编辑权
   'takeover-holder-deaf': ['lost'],
   'takeover-taker': ['answered', 'silent'],
   'refresh-save': ['committed', 'expired'],
+  'request-waiter': ['entered-on-return'],
+  'paused-holder': ['lost-after-pause'],
 }
 
 /**
@@ -338,6 +356,21 @@ function handoverExpectation(scenario: HandoverScenario, path: string | undefine
   }
 }
 
+/**
+ * 请求编辑的两条路（M3-P6）在服务器上该有的样子，只认设计的那一条路：
+ * - request-waiter（entered-on-return）：另一方（经接口）没有保存过，这一页回到前台、进入编辑之后存上那一格——修订号 2、内容里有它；
+ * - paused-holder（lost-after-pause）：第一格（控制的 flush）、隐藏的那一刻上传的第二格，修订号 3；第三格不在（这一页被暂停、编辑权到期，只在副本里）。
+ * 走了别的路时交回 undefined（算问题：页面已经说明哪里不对）
+ */
+function requestExpectation(scenario: RequestScenario, path: string | undefined): ServerExpectation | undefined {
+  switch (scenario) {
+    case 'request-waiter':
+      return path === 'entered-on-return' ? { revision: 2, why: '回到前台、进入编辑之后存上一格（另一方没有保存过）', cells: [REQUEST_WAITER_EDIT] } : undefined
+    case 'paused-holder':
+      return path === 'lost-after-pause' ? { revision: 3, why: '控制的 flush、盖屏（隐藏）的那一刻各上传一次，第三格没有存上', cells: PAUSED_HOLDER_EDITS.slice(0, 2), absent: PAUSED_HOLDER_EDITS.slice(2) } : undefined
+  }
+}
+
 function serverExpectation(scenario: SelftestScenario, path: string | undefined): ServerExpectation | 'none' | undefined {
   switch (scenario) {
     case 'takeover-holder':
@@ -345,6 +378,9 @@ function serverExpectation(scenario: SelftestScenario, path: string | undefined)
     case 'takeover-taker':
     case 'refresh-save':
       return handoverExpectation(scenario, path)
+    case 'request-waiter':
+    case 'paused-holder':
+      return requestExpectation(scenario, path)
     case 'enter-exit':
       return { revision: 2, why: '退出编辑时保存了一次', cells: [ENTER_EXIT_EDIT] }
     case 'formula-timing':

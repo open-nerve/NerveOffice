@@ -5,7 +5,7 @@ import type { SelftestStep, StoredDocument } from './selftest-plan.ts'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { BIG_SHEET } from '../../../apps/web/src/editor/testing/capture-samples.ts'
-import { CAPTURE_SCENARIOS, COMPOSITION_NOTE, ENTER_EXIT_EDIT, HANDOVER_SCENARIOS, HIDDEN_SAVE_EDITS, REFRESH_SAVE_EDIT, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { CAPTURE_SCENARIOS, COMPOSITION_NOTE, ENTER_EXIT_EDIT, HANDOVER_SCENARIOS, HIDDEN_SAVE_EDITS, PAUSED_HOLDER_EDITS, REFRESH_SAVE_EDIT, REQUEST_SCENARIOS, REQUEST_WAITER_EDIT, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { bigSheetFor, formulaSampleFor } from './capture-samples.ts'
 import { SAMPLE_FORMULAS } from './read-only-sample.ts'
 import { problemsOf, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, stepsOf, storedProblems } from './selftest-plan.ts'
@@ -38,7 +38,7 @@ function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
 const EXPECTED_FORMULAS = Object.fromEntries(SAMPLE_FORMULAS.map(formula => [`${formula.sheetId}!${formula.cell}`, formula.value]))
 
 describe('页面自检的步骤', () => {
-  it('M3-P2 的四步（查看者的只读入口与公式，作者的界面对照、进入与退出编辑）之后是 M3-P4 的捕获时机复核（作者、编辑时），hidden-save 之后是 M3-P5 的交接复核', () => {
+  it('M3-P2 的四步（查看者的只读入口与公式，作者的界面对照、进入与退出编辑）之后是 M3-P4 的捕获时机复核（作者、编辑时），hidden-save 之后是 M3-P5 的交接复核，最后是 M3-P6 的请求编辑两条路（作者；路 2 盖屏，放在最后）', () => {
     expect(STEPS.map(step => [step.id, step.scenario, step.account.username, step.formula ?? '—'])).toEqual([
       ['read-only', 'read-only', 'viewer', '—'],
       ['read-only-formulas', 'read-only-formulas', 'viewer', '—'],
@@ -57,7 +57,10 @@ describe('页面自检的步骤', () => {
       ['takeover-deaf-holder', 'takeover-holder-deaf', 'author', '—'],
       ['takeover-deaf-taker', 'takeover-taker', 'author', '—'],
       ['refresh-save', 'refresh-save', 'author', '—'],
+      ['request-waiter', 'request-waiter', 'author', '—'],
+      ['paused-holder', 'paused-holder', 'author', '—'],
     ])
+    expect(REQUEST_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author' && definition.sharesDocumentOf === undefined))).toBe(true)
   })
 
   it('每一步自己一份文档（有的步骤会保存），只有另开的 B 与它的 A 共用（A 正在编辑的那一份）；每个场景至少一步，公式时序两种模式各一步', () => {
@@ -143,6 +146,11 @@ describe('页面自检的结果有什么问题', () => {
     expect(problemsOf(report({ ...base, scenario: 'takeover-holder-deaf', path: 'handed-over' }))).toEqual(['交回的路是 handed-over（应当是 lost 之一）'])
     // 没跑完时只说没跑完的原因
     expect(problemsOf(report({ ...base, scenario: 'refresh-save', failure: '自检中途出错' }))).toEqual(['没能跑完：自检中途出错'])
+    // 请求编辑的两条路（M3-P6）只认设计的那一条
+    expect(problemsOf(report({ ...base, scenario: 'request-waiter', path: 'entered-on-return' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'request-waiter', path: 'entered-while-hidden' }))).toEqual(['交回的路是 entered-while-hidden（应当是 entered-on-return 之一）'])
+    expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'lost-after-pause' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'handed-over' }))).toEqual(['交回的路是 handed-over（应当是 lost-after-pause 之一）'])
   })
 
   it('进入、退出编辑的场景另核对交回了两次切换的耗时（到 ready 与 steady 都有）', () => {
@@ -232,6 +240,22 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
     expect(storedProblems(step('refresh-save'), stored({ revision: 2, revisions: 2, snapshot: templateWith([REFRESH_SAVE_EDIT]) }), 'committed')).toEqual([])
     expect(storedProblems(step('refresh-save'), stored(), 'committed')).toHaveLength(2)
     expect(storedProblems(step('refresh-save'), stored(), 'expired')).toHaveLength(1)
+  })
+
+  it('请求编辑的两条路（M3-P6）只认设计的那一条：请求方回到前台才进入（entered-on-return）修订号 2、有它写的那一格；被暂停的持有者（lost-after-pause）前两格、修订号 3、第三格不在；别的路算问题', () => {
+    expect(storedProblems(step('request-waiter'), stored({ revision: 2, revisions: 2, snapshot: templateWith([REQUEST_WAITER_EDIT]) }), 'entered-on-return')).toEqual([])
+    expect(storedProblems(step('request-waiter'), stored(), 'entered-on-return')).toEqual([
+      '文档 request-waiter-doc 的修订号是 1、修订记录 1 条（应当都是 2：回到前台、进入编辑之后存上一格（另一方没有保存过））',
+      `服务器上 ${REQUEST_WAITER_EDIT.cell} 是 空（应当是 ${JSON.stringify(REQUEST_WAITER_EDIT.value)}）`,
+    ])
+    expect(storedProblems(step('request-waiter'), stored(), 'entered-while-hidden')).toEqual(['文档 request-waiter-doc：不知道走了哪条路（entered-while-hidden），说不出服务器上该是什么样子（修订号 1）'])
+    const [first, second, third] = PAUSED_HOLDER_EDITS
+    expect(storedProblems(step('paused-holder'), stored({ revision: 3, revisions: 3, snapshot: templateWith([first, second]) }), 'lost-after-pause')).toEqual([])
+    expect(storedProblems(step('paused-holder'), stored({ revision: 4, revisions: 4, snapshot: templateWith(PAUSED_HOLDER_EDITS) }), 'lost-after-pause')).toEqual([
+      '文档 paused-holder-doc 的修订号是 4、修订记录 4 条（应当都是 3：控制的 flush、盖屏（隐藏）的那一刻各上传一次，第三格没有存上）',
+      `服务器上 ${third.cell} 是 ${JSON.stringify(third.value)}（应当是空的）`,
+    ])
+    expect(storedProblems(step('paused-holder'), stored({ revision: 4, revisions: 4 }), 'handed-over')).toHaveLength(1)
   })
 })
 

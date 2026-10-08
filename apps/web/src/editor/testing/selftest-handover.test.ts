@@ -1,7 +1,7 @@
 // 交接的页面自检（selftest-handover.ts）里的判读：B 的交接日志判读成一条路（answered、silent）与各段的用时，A 的日志判读成一句话，
 // 刷新之前离开时的观察判读成先后与问题（真实 Safari 复核要回答的：WebKit 是不是先取消在途的保存、之后才派发 pagehide）。
-import type { LogEntry } from './selftest-handover.ts'
 import type { SelftestTimelineEntry } from './selftest-report.ts'
+import type { LogEntry } from './selftest-timeline.ts'
 import { EDIT_PENDING_SAVE_WAIT_MS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { leavingSummary, PENDING_SAVE_WAIT_MS, pendingSaveKeyOf, summarizeHolder, summarizeTaker } from './selftest-handover.ts'

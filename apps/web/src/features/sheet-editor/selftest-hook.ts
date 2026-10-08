@@ -28,9 +28,10 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
 /**
  * 要在编辑时跑的场景（地址里 selftest 的值）：M3-P2 起打开即阅读，到了阅读的 steady 之后先进入编辑（与页头的"编辑"同一个入口），
  * 到了编辑的 steady 再跑自检。enter-exit 在阅读时开始，场景里自己点页头的"编辑""退出编辑"（S5），按 host.view 等页面的状态变化。
- * 捕获时机的复核（M3-P4 S1）都在编辑时跑；交接的复核（M3-P5）里正在编辑的 A（takeover-holder）在编辑时跑，另开的 B 与刷新的那一步在阅读时开始
+ * 捕获时机的复核（M3-P4 S1）都在编辑时跑；交接的复核（M3-P5）里正在编辑的 A（takeover-holder）在编辑时跑，另开的 B 与刷新的那一步在阅读时开始；
+ * 请求编辑的两条路（M3-P6）里被暂停的持有者（paused-holder）在编辑时跑，请求方（request-waiter）在阅读时开始
  */
-const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder', 'takeover-holder-deaf'])
+const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder', 'takeover-holder-deaf', 'paused-holder'])
 
 /**
  * 交接的复核里收不到交接频道消息的 A（地址里 selftest 的值；与 editor/testing/selftest-report.ts 的 DEAF_HOLDER_SCENARIO 相同——模块边界不让这里
@@ -127,14 +128,22 @@ function failureOf(load: EditorPageLoad): string {
   return 'error' in load ? `${load.kind}：${describe(load.error)}` : load.kind
 }
 
-/** 失去编辑权的原因的写法（交给自检）：种类，被接管的另带在哪里（taken-over:this-browser、taken-over:elsewhere） */
+/**
+ * 失去编辑权的原因的写法（交给自检）：种类，被接管的另带在哪里（taken-over:this-browser、taken-over:elsewhere），续上时别处正在编辑的另带是谁
+ * （held:other 是别人、held:self 是自己在别的标签页或设备上、held:unknown 是不知道，M3-P6）
+ */
 function lossOf(loss: LeaseLoss): string {
-  return loss.kind === 'taken-over' ? `${loss.kind}:${loss.where}` : loss.kind
+  if (loss.kind === 'taken-over')
+    return `${loss.kind}:${loss.where}`
+  if (loss.kind === 'held')
+    return `${loss.kind}:${loss.holder === undefined ? 'unknown' : loss.holder.sameUser ? 'self' : 'other'}`
+  return loss.kind
 }
 
 /**
- * 交接的复核（M3-P5，editor/testing/selftest-handover.ts）要看的那一部分状态：阅读时"在此编辑"的进展、持有者是自己时那个页面在哪里、
- * 上一次操作留下的说明（另存为副本成功之后回到阅读的，另带建好的副本）；失去编辑权时的原因、有没有没保存的修改、另存为副本的进展与建好的副本。
+ * 交接的复核（M3-P5，editor/testing/selftest-handover.ts）与请求编辑的复核（M3-P6，selftest-request.ts）要看的那一部分状态：阅读时"在此编辑"的进展、
+ * 持有者是自己时那个页面在哪里、上一次操作留下的说明（另存为副本成功之后回到阅读的，另带建好的副本）、请求方这一侧的进展（granted 另带在等什么）；
+ * 编辑与离开编辑时持有者这一侧在等回应的请求是谁发的、离开的原因；失去编辑权时的原因、有没有没保存的修改、另存为副本的进展与建好的副本。
  * 别的状态没有这些
  */
 export function handoverViewOf(mode: EditModeState | undefined): Partial<SelftestPageView> {
@@ -143,15 +152,24 @@ export function handoverViewOf(mode: EditModeState | undefined): Partial<Selftes
   switch (mode.kind) {
     case 'reading':
       // 另存为副本成功之后按最新的内容重建为阅读：说明里带着建好的副本
-      return { takeover: mode.takeover?.kind, selfHolder: mode.selfHolder, notice: mode.notice?.kind, copyDocumentId: mode.notice?.kind === 'copied' ? mode.notice.document.id : undefined }
+      return {
+        takeover: mode.takeover?.kind,
+        selfHolder: mode.selfHolder,
+        notice: mode.notice?.kind,
+        copyDocumentId: mode.notice?.kind === 'copied' ? mode.notice.document.id : undefined,
+        request: mode.request?.kind,
+        requestUntil: mode.request?.kind === 'granted' ? mode.request.until : undefined,
+      }
+    case 'editing':
+      return { incoming: mode.request?.requester.id }
+    case 'exiting':
+      return { incoming: mode.request?.requester.id, leaving: mode.cause }
     case 'losing':
       return { loss: lossOf(mode.loss) }
     case 'lost':
       return { loss: lossOf(mode.loss), unsaved: mode.unsaved, copy: mode.copy.kind, copyDocumentId: mode.copy.kind === 'done' ? mode.copy.document.id : undefined }
     case 'opening':
     case 'entering':
-    case 'editing':
-    case 'exiting':
     case 'failed':
     case 'unavailable':
       return {}
@@ -187,6 +205,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
         const { mode, surface, save } = page.view()
         return { mode: mode?.kind, surface, save: save?.status, ...handoverViewOf(mode) }
       },
+      subscribe: listener => page.subscribe(listener),
       visibility: () => log.visibility,
       allowLeave,
       pageErrors: () => log.pageErrors,
