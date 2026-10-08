@@ -569,6 +569,22 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
     expect(loadServerConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY: MASTER_KEY }).localKeys.masterKey.reveal()).toBe(MASTER_KEY)
   })
 
+  it('可打印的边界（审查 A5）：0x20（空格）与 0x7E（~）算可打印，其余字节也可读时拒绝；0x1F 与 0x7F 不算，照常收', () => {
+    const https = { ...REQUIRED, NERVE_PUBLIC_ORIGIN: 'https://docs.example.com' }
+    /** 可读的 32 个字节，中间一个换成给定的字节 */
+    const keyWith = (byte: number): string => {
+      const bytes = Buffer.from('nerve-office-test-only-masterkey')
+      bytes[15] = byte
+      return bytes.toString('base64')
+    }
+    for (const byte of [0x20, 0x7E]) {
+      const issues = issuesOf(() => loadServerConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY: keyWith(byte) }))
+      expect(issues.map(issue => issue.problem), `0x${byte.toString(16)}`).toEqual([expect.stringContaining('不能用全是可打印字符的主密钥')])
+    }
+    for (const byte of [0x1F, 0x7F])
+      expect(loadServerConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY: keyWith(byte) }).localKeys.masterKey.reveal(), `0x${byte.toString(16)}`).toBe(keyWith(byte))
+  })
+
   it('主密钥是机密：整个配置被序列化、被打印时都不带它', () => {
     const config = loadServerConfig(SERVER)
     expect(JSON.stringify(config)).not.toContain(MASTER_KEY)
