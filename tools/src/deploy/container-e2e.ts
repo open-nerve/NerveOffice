@@ -1,8 +1,10 @@
 // 容器 E2E（P5 设计 §3.6）里可以单独测试的部分：编排的参数与变量文件、交给 Playwright 的环境变量、
-// 部署配置的核对（经代理的探针、客户端地址 DEF-014、应用的端口不发布）、遗留编排项目的识别、docker 输出的解析、
-// 空闲内存的取样与中位数（ADR-001）。执行的步骤在 container-e2e-cli.ts。
+// 部署配置的核对（经代理的探针、客户端地址 DEF-014、应用的端口不发布；本机密钥的主密钥缺失与写法不对时拒绝启动、
+// 日志里没有主密钥，M3-P6 设计 §3.9）、遗留编排项目的识别、docker 输出的解析、空闲内存的取样与中位数（ADR-001）。
+// 执行的步骤在 container-e2e-cli.ts。
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
+import { z } from 'zod'
 
 /** 测试环境的编排（相对仓库根目录） */
 export const COMPOSE_FILE = 'deploy/test/compose.yaml'
@@ -31,6 +33,8 @@ export interface ContainerE2eSettings {
   readonly httpsPort: number
   readonly databasePort: number
   readonly passwords: Passwords
+  /** 本机密钥的主密钥（M3-P6）：每次随机的 32 字节、标准 base64，与 openssl rand -base64 32 的输出同一个写法；只给应用容器 */
+  readonly localKeysMasterKey: string
 }
 
 export interface SettingsInput {
@@ -48,6 +52,10 @@ function password(random: (size: number) => Uint8Array): string {
   return Buffer.from(random(16)).toString('hex')
 }
 
+/** 本机密钥的主密钥的变量（应用容器的配置，M3-P6 设计 §3.4）与它的字节数 */
+export const MASTER_KEY_VARIABLE = 'NERVE_LOCAL_KEYS_MASTER_KEY'
+const MASTER_KEY_BYTES = 32
+
 export function createSettings(input: SettingsInput): ContainerE2eSettings {
   const random = input.random ?? randomBytes
   return {
@@ -58,6 +66,7 @@ export function createSettings(input: SettingsInput): ContainerE2eSettings {
     httpsPort: input.httpsPort,
     databasePort: input.databasePort,
     passwords: { admin: password(random), owner: password(random), app: password(random) },
+    localKeysMasterKey: Buffer.from(random(MASTER_KEY_BYTES)).toString('base64'),
   }
 }
 
@@ -68,6 +77,7 @@ export function renderEnvFile(settings: ContainerE2eSettings): string {
     `NERVE_DB_ADMIN_PASSWORD=${settings.passwords.admin}`,
     `NERVE_DB_OWNER_PASSWORD=${settings.passwords.owner}`,
     `NERVE_DB_APP_PASSWORD=${settings.passwords.app}`,
+    `${MASTER_KEY_VARIABLE}=${settings.localKeysMasterKey}`,
     `NERVE_TEST_HTTPS_PORT=${settings.httpsPort}`,
     `NERVE_TEST_DB_PORT=${settings.databasePort}`,
     'NERVE_LOG_LEVEL=info',
@@ -262,6 +272,94 @@ export function proxiedProbeProblems(responses: ReadonlyMap<string, ProbeRespons
     }
     return problems
   })
+}
+
+/**
+ * 主密钥缺失与写法不对时应用拒绝启动的核对（M3-P6 设计 §3.9）：用镜像默认的命令真的启动一次应用容器，等它退出的时限。
+ * 配置不合法时进程一开始就退出（一两秒）；到时还在跑，就是缺了主密钥（或写法不对）照样启动了
+ */
+export const MASTER_KEY_REFUSAL_TIME_LIMIT_MS = 60_000
+
+/** 拒绝启动的一次核对：交给应用容器的取值（覆盖变量文件里的那一把） */
+export interface MasterKeyRefusalAttempt {
+  readonly label: string
+  /** 空串：配置把空值当作没有设，应当说"缺少" */
+  readonly value: string
+}
+
+/**
+ * 两次：缺主密钥（空值）；写法不对——31 字节的标准 base64（与正确的一样是 44 个字符，只是字节数不对），每次随机：
+ * 输出里出现了它，就是应用把取值写进了日志或说明
+ */
+export function masterKeyRefusalAttempts(random: (size: number) => Uint8Array): MasterKeyRefusalAttempt[] {
+  return [
+    { label: '缺主密钥', value: '' },
+    { label: '主密钥的写法不对', value: Buffer.from(random(MASTER_KEY_BYTES - 1)).toString('base64') },
+  ]
+}
+
+/** 一次核对的结果：退出码（到时被强制结束、或者启动不了时是 null）、是不是到了时限还在跑、全部输出（标准输出与标准错误） */
+export interface MasterKeyRefusalRun {
+  readonly status: number | null
+  readonly timedOut: boolean
+  readonly output: string
+}
+
+/** 应用拒绝启动时记的那一条日志（apps/api 的进程入口：fatal、CONFIG_INVALID，只列变量名与原因） */
+const configRefusalSchema = z.object({
+  level: z.literal('fatal'),
+  code: z.literal('CONFIG_INVALID'),
+  issues: z.array(z.object({ variable: z.string(), problem: z.string() })),
+})
+
+/** 输出里各条拒绝启动的日志列出的、主密钥的原因；别的行（docker 自己的提示、别的日志、不是 JSON 的）跳过 */
+function masterKeyIssues(output: string): string[] {
+  return output.split('\n').flatMap((line) => {
+    let entry: unknown
+    try {
+      entry = JSON.parse(line)
+    }
+    catch {
+      return []
+    }
+    const refusal = configRefusalSchema.safeParse(entry)
+    return refusal.success ? refusal.data.issues.filter(issue => issue.variable === MASTER_KEY_VARIABLE).map(issue => issue.problem) : []
+  })
+}
+
+/**
+ * 拒绝启动的一次核对 → 问题：到了时限还在跑、退出码是 0、输出里没有一条 fatal 的 CONFIG_INVALID 列出这个变量
+ * （缺主密钥时原因是"缺少"；写法不对时不是"缺少"——取值到了应用、被认出写法不对）、开始监听了（"HTTP 服务已启动"）、
+ * 输出里有给出的取值。没有问题时为空
+ */
+export function masterKeyRefusalProblems(attempt: MasterKeyRefusalAttempt, run: MasterKeyRefusalRun): string[] {
+  const problems: string[] = []
+  if (run.timedOut)
+    problems.push(`${attempt.label}：${MASTER_KEY_REFUSAL_TIME_LIMIT_MS / 1000} 秒内应用没有退出，照样启动了`)
+  else if (run.status === 0)
+    problems.push(`${attempt.label}：应用的退出码是 0，期望拒绝启动`)
+  const issues = masterKeyIssues(run.output)
+  if (issues.length === 0)
+    problems.push(`${attempt.label}：输出里没有一条 fatal 的 CONFIG_INVALID 列出 ${MASTER_KEY_VARIABLE}`)
+  else if (attempt.value === '' && !issues.includes('缺少'))
+    problems.push(`${attempt.label}：CONFIG_INVALID 里 ${MASTER_KEY_VARIABLE} 的原因不是"缺少"（${issues.join('；')}）`)
+  else if (attempt.value !== '' && issues.includes('缺少'))
+    problems.push(`${attempt.label}：CONFIG_INVALID 说 ${MASTER_KEY_VARIABLE} 缺少，给出的取值没有到应用`)
+  if (run.output.includes('HTTP 服务已启动'))
+    problems.push(`${attempt.label}：应用开始监听了（输出里有"HTTP 服务已启动"）`)
+  if (attempt.value !== '' && run.output.includes(attempt.value))
+    problems.push(`${attempt.label}：输出里有给出的取值`)
+  return problems
+}
+
+/**
+ * 日志里不能出现本机密钥的主密钥（00 号计划书 §11.5 日志与隐私，M3-P6 设计 §3.9）：收完各容器的日志之后扫一遍——
+ * 标准 base64（变量里的写法）、base64url 与十六进制（解码之后的字节换一种写法写出来）。返回出现在哪些容器的日志里
+ */
+export function masterKeyLeakProblems(masterKey: string, logs: ReadonlyMap<string, string>): string[] {
+  const bytes = Buffer.from(masterKey, 'base64')
+  const forms = [masterKey, bytes.toString('base64url'), bytes.toString('hex')]
+  return [...logs].flatMap(([service, text]) => (forms.some(form => text.includes(form)) ? [`${service} 的日志里出现了本机密钥的主密钥`] : []))
 }
 
 const MEMORY_UNITS: Readonly<Record<string, number>> = { B: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3, kB: 1e3, KB: 1e3, MB: 1e6, GB: 1e9 }
