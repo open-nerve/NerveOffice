@@ -113,6 +113,18 @@ export const adminMessages = {
     confirmUnlockLogin: (name: string) => `解除 ${name} 的登录锁定？`,
     // 只按来源的计数（例如同一个办公网络失败太多次）不属于任何账户，解除清不掉，账户页也不显示（复验 N5）：不能说"可以立即登录"
     unlockLoginDescription: '解除后，清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期。多次输错密码的来源不一定是本人：如果不是本人所为，请提醒他修改密码。',
+    // 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：本机密钥只加密浏览器里还没同步的草稿，吊销不动登录、不动已经保存的文档；
+    // 设备可能丢了时，退出登录要另外生成重置链接（两件事分开）。不说"没同步的修改都会作废"：页面里还没保存的修改不受吊销影响，那样说不实（A14）
+    revokeLocalKey: '吊销本机密钥',
+    confirmRevokeLocalKey: (name: string) => `吊销 ${name} 的本机密钥？`,
+    revokeLocalKeyDescription: '本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响，这个人的登录也不会退出。设备可能落在别人手里时，请同时为他生成重置链接（会退出他在所有地方的登录）。',
+    confirmRevokeOwnLocalKey: '吊销你自己的本机密钥？',
+    revokeOwnLocalKeyDescription: '本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响，你的登录也不会退出。设备可能落在别人手里时，请同时为自己生成重置链接（会退出你在所有地方的登录）。',
+    localKeyRevoked: (name: string, version: number) => `已吊销 ${name} 的本机密钥，换成了第 ${version} 版。`,
+    // 这个人从没取过本机密钥：服务端原样返回、不记审计
+    noLocalKeyToRevoke: (name: string) => `${name} 还没有本机密钥，没有要吊销的。`,
+    // 吊销的结果未知：吊销不按状态幂等（每次都换一把新的），通用的"刷新之后看得出是否已经生效"不成立；再吊销一次没有坏处
+    revokeLocalKeyOutcomeUnknown: (reason: string) => `没能确认是否已经吊销（${reason}）。再吊销一次没有坏处：会再换一把新的密钥，之前的都已作废。`,
   },
   invitations: {
     // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）

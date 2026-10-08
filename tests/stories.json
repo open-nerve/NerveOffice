@@ -47,6 +47,6 @@
     "US-M3-14": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] },
     "US-M3-15": { "phase": "P4", "status": "active", "verification": ["integration", "e2e"] },
     "US-M3-16": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] },
-    "US-M3-17": { "phase": "P6", "status": "planned", "verification": ["integration", "e2e"] }
+    "US-M3-17": { "phase": "P6", "status": "active", "verification": ["integration", "e2e"] }
   }
 }

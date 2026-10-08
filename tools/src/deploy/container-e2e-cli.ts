@@ -1,20 +1,21 @@
 // 容器 E2E（P5 设计 §3.6、§3.8；pnpm test:e2e:container）：用生产镜像起一套测试环境（deploy/test），对它跑 E2E 的外部模式。
 // 用法：node tools/src/deploy/container-e2e-cli.ts [--browsers chromium,webkit] [-- <交给 Playwright 的参数>]
-// 1. 清理中断的运行留下的编排项目与镜像标签；随机生成三个密码，挑两个空闲端口，变量文件写在临时目录；
+// 1. 清理中断的运行留下的编排项目与镜像标签；随机生成三个密码与本机密钥的主密钥，挑两个空闲端口，变量文件写在临时目录；
 // 2. 构建镜像（标签带本进程的进程号）；起 db、migrate、app、caddy（compose 按依赖的条件依次等待）；等经 Caddy 的存活探针通过；
 // 3. 部署配置的核对：经 Caddy 的探针（就绪探针的各种写法都被屏蔽）、客户端地址（DEF-014：本机与编排网络里两个来源、
-//    伪造的转发头不被采信）、应用的端口没有发布到主机；
+//    伪造的转发头不被采信）、应用的端口没有发布到主机；本机密钥的主密钥缺失、写法不对时应用拒绝启动，输出里没有给出的取值（M3-P6）；
 // 4. 以外部模式运行 E2E（E2E 的管理员由 Playwright 的全局准备经编排初始化，tests/e2e/support/external-setup.ts）；
 // 5. 打印镜像体积与应用容器的内存（空闲：部署核对之后等一会儿、取几次样的中位数；E2E 期间每 2 秒取样的峰值；跑完之后，ADR-001）；
-// 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/，然后 down -v、去掉这次的镜像标签、删除临时目录：
-//    每一步都执行，前一步失败不跳过后面的，有一步失败就以非零退出（Codex 评审 CX13）。
+// 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/、扫一遍里面有没有主密钥（M3-P6），然后 down -v、
+//    去掉这次的镜像标签、删除临时目录：每一步都执行，前一步失败不跳过后面的，有一步失败就以非零退出（Codex 评审 CX13）。
 // 长命令（构建、起环境、编排网络里的核对、E2E）异步执行，收到信号时转给它们，之后不再开始新的步骤（Codex 评审 CX12，
 // container-e2e-process.ts）；短命令同步执行，带超时：docker 的守护进程卡住时不会一直停在那里。
 import type { AddressInfo } from 'node:net'
 import type { CleanupStep } from './container-e2e-process.ts'
 import type { ContainerE2eSettings, ProbeResponse } from './container-e2e.ts'
 import { execFile, spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -39,6 +40,11 @@ import {
   IDLE_MEMORY_SAMPLING,
   IMAGE_PREFIX,
   imageSizeArgs,
+  MASTER_KEY_REFUSAL_TIME_LIMIT_MS,
+  MASTER_KEY_VARIABLE,
+  masterKeyLeakProblems,
+  masterKeyRefusalAttempts,
+  masterKeyRefusalProblems,
   mebibytes,
   megabytes,
   MEMORY_SAMPLE_INTERVAL_MS,
@@ -253,6 +259,39 @@ function checkDistributedFiles(settings: ContainerE2eSettings): string[] {
   return distributedFileProblems(DISTRIBUTED_LICENSE_FILES, sizes.status, sizes.stdout)
 }
 
+/**
+ * 本机密钥的主密钥缺失与写法不对时应用拒绝启动（M3-P6 设计 §3.9）：各起一个一次性的应用容器（不带依赖，用镜像默认的命令真的启动），
+ * 用 -e 覆盖变量文件里的主密钥；等它退出，最多到时限——还在跑就按名字删掉容器（结束 docker 的命令行停不下容器），算问题。
+ * 判断在 container-e2e.ts（masterKeyRefusalProblems）。返回发现的问题
+ */
+async function checkMasterKeyRefusal(settings: ContainerE2eSettings): Promise<string[]> {
+  const problems: string[] = []
+  for (const [index, attempt] of masterKeyRefusalAttempts(randomBytes).entries()) {
+    const name = `${settings.project}-master-key-check-${index}`
+    const started = Date.now()
+    // 要起一个容器，是长命令：异步执行，收到信号时转给它（Codex 评审 CX12）
+    const running = runTracked(interruption, 'docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '--name', name, '-e', `${MASTER_KEY_VARIABLE}=${attempt.value}`, 'app'), { cwd: REPO_ROOT, capture: true })
+    const limit = new AbortController()
+    const timedOut = await Promise.race([running.then(() => false), delay(MASTER_KEY_REFUSAL_TIME_LIMIT_MS, true, { signal: limit.signal }).catch(() => false)])
+    limit.abort()
+    if (timedOut)
+      capture('docker', ['rm', '-f', name])
+    const result = await running
+    if (interruption.interrupted()) {
+      capture('docker', ['rm', '-f', name])
+      return ['收到终止信号，核对没有做完']
+    }
+    const output = `${result.stdout}\n${result.stderr}`
+    const found = masterKeyRefusalProblems(attempt, { status: timedOut ? null : result.status, timedOut, output })
+    const seconds = ((Date.now() - started) / 1000).toFixed(1)
+    log(`${attempt.label}时启动应用：${timedOut ? '到了时限还在跑，已结束' : `退出码 ${result.status}`}，${seconds} 秒${found.length === 0 ? '，按预期拒绝启动' : ''}`)
+    if (found.length > 0)
+      log(`${attempt.label}时启动应用的输出：\n${output.trim()}`)
+    problems.push(...found)
+  }
+  return problems
+}
+
 const execFileAsync = promisify(execFile)
 
 /** 等 ms 毫秒；收到终止信号时提前返回（每半秒看一次，与 waitUntilLive 相同） */
@@ -348,12 +387,27 @@ function collectLogs(settings: ContainerE2eSettings): boolean {
 }
 
 /**
- * 清理（Codex 评审 CX13）：收集日志、删除测试环境（连同数据卷）、去掉这次的镜像标签、删除临时目录（变量文件里有密码），
- * 每一步都执行。删除失败的编排项目与镜像标签带着本进程的进程号，下一次运行的遗留清理会认出来再删
+ * 收完的各容器日志里不能有本机密钥的主密钥（M3-P6 设计 §3.9，判断在 container-e2e.ts 的 masterKeyLeakProblems）：
+ * 出现了就说明在哪个容器的日志里，这一步不算成功（编排脚本随之以非零退出）。日志文件读不到时抛出，同样不算成功
+ */
+function scanLogsForMasterKey(settings: ContainerE2eSettings): boolean {
+  const logs = new Map(SERVICES.map(service => [service, readFileSync(join(LOG_DIR, `${service}.log`), 'utf8')] as const))
+  const problems = masterKeyLeakProblems(settings.localKeysMasterKey, logs)
+  for (const problem of problems)
+    log(problem)
+  if (problems.length === 0)
+    log(`扫了 ${logs.size} 个容器的日志，里面没有本机密钥的主密钥`)
+  return problems.length === 0
+}
+
+/**
+ * 清理（Codex 评审 CX13）：收集日志、扫一遍日志里的主密钥、删除测试环境（连同数据卷）、去掉这次的镜像标签、删除临时目录
+ * （变量文件里有密码与主密钥），每一步都执行。删除失败的编排项目与镜像标签带着本进程的进程号，下一次运行的遗留清理会认出来再删
  */
 function cleanUp(settings: ContainerE2eSettings, directory: string): boolean {
   const steps: CleanupStep[] = [
     { label: '收集日志', run: () => collectLogs(settings) },
+    { label: '扫一遍日志里的主密钥', run: () => scanLogsForMasterKey(settings) },
     { label: '删除测试环境', run: () => succeeded('删除测试环境', capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))) },
     {
       label: '去掉这次的镜像标签',
@@ -392,7 +446,7 @@ async function exercise(settings: ContainerE2eSettings, options: { version: stri
       log(`${LIVE_TIMEOUT_MS / 1000} 秒内经 Caddy 的存活探针没有通过`)
     return 1
   }
-  const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings), ...checkDistributedFiles(settings)]
+  const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings), ...checkDistributedFiles(settings), ...await checkMasterKeyRefusal(settings)]
   if (interruption.interrupted())
     return 1
   if (problems.length > 0) {

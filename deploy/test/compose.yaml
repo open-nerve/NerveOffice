@@ -81,6 +81,9 @@ services:
       <<: *nerve-environment
       # 应用用受限的应用角色：关不掉审计表的触发器，执行不了 DDL
       NERVE_DATABASE_URL: postgres://nerve_app:${NERVE_DB_APP_PASSWORD}@db:5432/nerve_office
+      # 本机密钥的主密钥（M3-P6）：只给应用容器（迁移与运维命令用不到，不放进上面共用的配置），缺失或写法不对时应用拒绝启动。
+      # 正式部署推荐经 Docker secrets 用 NERVE_LOCAL_KEYS_MASTER_KEY_FILE 提供（见部署说明的"本机密钥的主密钥"）
+      NERVE_LOCAL_KEYS_MASTER_KEY: ${NERVE_LOCAL_KEYS_MASTER_KEY:?缺少 NERVE_LOCAL_KEYS_MASTER_KEY（本机密钥的主密钥，用 openssl rand -base64 32 生成）}
     depends_on:
       migrate:
         condition: service_completed_successfully

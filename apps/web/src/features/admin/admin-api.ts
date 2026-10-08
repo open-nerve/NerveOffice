@@ -94,6 +94,14 @@ export async function issuePasswordReset(id: string): Promise<IssuedPasswordRese
   return apiRequest(`/api/admin/users/${id}/password-reset`, { method: 'POST', schema: issuedPasswordResetSchema })
 }
 
+/**
+ * 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：服务端擦掉当前的、换上下一版，响应是这个账户（localKey 是新的那一版；
+ * 这个人从没取过密钥时原样返回，localKey 为 null）。原始的密钥不经过管理员
+ */
+export async function revokeLocalKey(id: string): Promise<AdminUser> {
+  return apiRequest(`/api/admin/users/${id}/local-key/revoke`, { method: 'POST', schema: adminUserSchema })
+}
+
 export function invitationsQueryOptions(filter: Omit<InvitationListQuery, 'cursor'>) {
   return infiniteQueryOptions({
     queryKey: [...ADMIN_QUERY_KEY, 'invitations', filter],
