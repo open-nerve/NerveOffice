@@ -99,7 +99,7 @@
 | `node --expose-gc apps/api/scripts/measure-snapshot-inspection.ts` | 实测快照检查的子进程池（耗时、事件循环延迟、内存，DEF-018；先 `pnpm --filter "@nerve-office/api..." run build`；可以在生产镜像里跑，见脚本开头；不进 CI） |
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |
 | `pnpm test:e2e` | 构建后端与前端的测试构建后跑 E2E（真实后端与数据库，需要 `pnpm db:up`；端口每次自动挑选，后端日志在 `tests/e2e/test-results/e2e-server.log`） |
-| `E2E_AUTOSAVE=running`（环境变量） | E2E 的夹具不暂停定时的自动保存（默认暂停，M3-P4），按生产镜像的样子跑；在 `tests/e2e` 下与 `--project chromium --project chrome --project webkit --grep-invert @test-build` 一起直接 `npx playwright test`（要列出浏览器的项目：配置里的重启项目依赖所有浏览器的项目，命令行的 grep 不作用于被依赖的项目，不列就把 `@test-build` 的也跑了），核对容器 E2E 会跑的用例在自动保存照常运行时也成立 |
+| `E2E_AUTOSAVE=running`（环境变量） | E2E 的夹具不暂停定时的自动保存（默认暂停，M3-P4），按生产镜像的样子跑；在 `tests/e2e` 下与 `--project=chromium --project=chrome --project=webkit --grep-invert @test-build` 一起直接 `npx playwright test`（要列出浏览器的项目：配置里的重启项目依赖所有浏览器的项目，命令行的 grep 不作用于被依赖的项目，不列就把 `@test-build` 的也跑了；写成 `--project=名字`，要跑的文件路径放在前面、后面都行——写成 `--project 名字` 时紧跟在后面的文件路径会被当成项目名，报 "Project(s) … not found"），核对容器 E2E 会跑的用例在自动保存照常运行时也成立 |
 | `pnpm test:e2e:container` | 构建生产镜像，起一套测试环境（应用 + PostgreSQL + Caddy 的 HTTPS，见 `deploy/README.md`），对它跑 E2E（默认只跑 Chromium，`--browsers` 可多选）与重启用例，跑完删除；部署核对里另有本机密钥的主密钥（每次随机生成）缺失、写法不对时应用拒绝启动的两项，跑完扫各容器的日志里有没有主密钥；需要 Docker，各容器的日志在 `tests/e2e/test-results/container/`；放到后台跑用 tmux 或 `setsid`，不用 `nohup` |
 | `pnpm build` / `pnpm clean` | 构建 / 删除构建产物 |
 | `pnpm gate [名称…]` | A01 等检查：pins、config、stories、migrations、schema、deps、licenses、artifacts、budgets、audit |
