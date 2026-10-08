@@ -1,6 +1,7 @@
 // 焦点不落到 body（规范 §2.4）的两件共用的小东西：判断焦点是不是已经落到了 body；一块说明连同里面的按钮消失时把焦点交给一直在的元素。
 // 用到的地方：列表与详情的"没能刷新"（shared/ui/refresh-problem.tsx，DEF-040）、第一次就没取到时的"重试"（use-first-load-retry.ts）、
-// 页面级的焦点接住（use-focus-rescue.ts）、编辑器页头与登录页（初始焦点与为什么来到这里的说明，DEF-047）。
+// 页面级的焦点接住（use-focus-rescue.ts）、编辑器页头与登录页（初始焦点与为什么来到这里的说明，DEF-047）、
+// 选目标位置的表单（表单出现时按下的"移动""复制"随之卸载，DEF-049）。
 import type { FocusEvent, RefObject } from 'react'
 import { useLayoutEffect, useRef } from 'react'
 
