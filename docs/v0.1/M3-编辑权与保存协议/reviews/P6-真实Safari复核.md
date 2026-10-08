@@ -150,7 +150,7 @@ caffeinate -d -i pnpm --filter @nerve-office/e2e run safari:selftest --front --s
 # 全部 19 步（约 10 分钟）：去掉 --steps。开始之前用户要空闲满 --idle 秒（默认 120），最多等 --idle-wait 秒（默认 1800）
 ```
 
-- Safari 的窗口要露在外面；跑的时候别动电脑（一动这一次就作废，退出码 4，盖着屏就随即移走）；盖屏期间按 Esc 或点窗口同样中止。结果在 `tests/e2e/test-results/safari/<时间>.json`（`request.waiter`、`request.paused`：库里的时间线、后端日志里这份文档的请求、协作者的调用、各步的时刻、盖屏怎样结束的）——**跑完先拷走**，下一次 Playwright 运行会清空 `test-results/`。
+- Safari 的窗口要露在外面；跑的时候别动电脑（一动这一次就作废，退出码 4，盖着屏就随即移走）；盖屏期间按 Esc 或点窗口同样中止。结果在 `tests/e2e/test-results/safari/<时间>.json`（`request.waiter`、`request.paused`：库里的时间线、后端日志里这份文档的请求、协作者的调用、各步的时刻、盖屏怎样结束的）——**跑完先拷走**，下一次 Playwright 运行会清空 `test-results/`。（复核之后结果文件移到 `tests/e2e/safari-results/`，不再被清空，F6。）
 - 校准：`pnpm --filter @nerve-office/web run build:e2e` 之后在 `tests/e2e` 下 `NODE_OPTIONS=--conditions=@nerve-office/source npx playwright test specs/editor/selftest.spec.ts`；另一种打开状态加 `E2E_AUTOSAVE=running`。
 
 ## 八、变异验证
