@@ -3195,6 +3195,46 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
     expect(c.api.save.mock.calls[0]?.[3]).toEqual({ token: server.current()?.token, writeEpoch: 3 })
   })
 
+  it('三页再次换代（交接照常）：A 第 1 代的回包迟到；B 点"在此编辑"取得第 2 代、拿锁；C 点"在此编辑"——请 B 先保存再交出，以本人接管取得第 3 代；A 的回包到了：锁在 C，核对得知第 1 代已被换掉，不抢、不释放；B 回到阅读（已交给本浏览器的另一个标签页），C 照常编辑', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const reply = deferred<void>()
+    const a = tab(server, browser, 'A', TAB_A, reply.promise)
+    const b = tab(server, browser, 'B', TAB_B)
+    const c = tab(server, browser, 'C', TAB_C)
+    await opened(a)
+    const entering = a.mode.enter()
+    await settle()
+    await opened(b)
+    await b.mode.takeOver()
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
+    expect(browser.holderOf(LOCK)).toBe('B')
+    b.factory.last().edit('B 的修改')
+
+    await opened(c)
+    expect(readingOf(c.mode).selfHolder).toBe('this-browser')
+    await c.mode.takeOver()
+    expect(modeOf(c.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_C })
+    expect(browser.holderOf(LOCK)).toBe('C')
+    expect(readingOf(b.mode).notice).toEqual({ kind: 'handed-over-tab' })
+    expect(b.api.save).toHaveBeenCalledOnce()
+    // C 拿锁时锁空着（B 交出之后放了锁）：不核对
+    expect(c.editLease.renew).not.toHaveBeenCalled()
+
+    reply.resolve()
+    await entering
+    await settle()
+    expect(readingOf(a.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'this-browser', notice: undefined })
+    expect(a.editLease.renew).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, servedToken(1), 0)
+    expect(a.editLease.renew.mock.settledResults[0]).toMatchObject({ type: 'rejected', value: { code: 'EDIT_LEASE_LOST', details: { reason: 'replaced' } } })
+    expect(a.editLease.release).not.toHaveBeenCalled()
+    expect(browser.holderOf(LOCK)).toBe('C')
+    expect(modeOf(c.mode).kind).toBe('editing')
+    expect(readingOf(b.mode).notice).toEqual({ kind: 'handed-over-tab' })
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_C, released: false })
+  })
+
   it('核对的回包同样迟到（服务端处理时还是当前的、到达之前又换了代）：至多多抢一次——被抢的一方核对之后拿回来，迟到的一方下一次核对就得知已被取代，不会来回抢个不停', async () => {
     const server = fakeLeaseServer(AMY)
     const browser = fakeBrowser()
