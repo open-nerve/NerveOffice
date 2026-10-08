@@ -98,7 +98,7 @@ export function watchPanelDebounces(target: Document, options: PanelDebounceWatc
     const released = waiters.filter(waiter => waiter.until <= at)
     waiters = waiters.filter(waiter => waiter.until > at)
     arm()
-    // 先清掉、通知（保存的状态机随之更新），再放行在等的：它们的后续（捕获、判断有没有没存的）看到的是到点之后的状态
+    // 清掉与通知（保存的状态机随之更新）都在放行之前同步做完：放行的后续（捕获、判断有没有没存的）看到的是到点之后的状态
     if (ended)
       notify()
     for (const waiter of released)

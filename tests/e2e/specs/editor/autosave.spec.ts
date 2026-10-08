@@ -663,6 +663,9 @@ test.describe('面板的防抖：退出编辑之前先让面板里最后的改�
 test.describe('US-M3-02 面板里还没写进模型的输入：离开提示拦下、页头不说已保存，到点之后照常自动保存（Codex 评审 CX4）', () => {
   test.use({ autosave: 'running' })
 
+  /** 自动保存照常运行时，从改动到存上要停 1 秒捕获、2 秒上传，再加上服务端的处理：等它的断言留足余量，机器忙时也不误报 */
+  const AUTOSAVED_WITHIN = { timeout: 15_000 }
+
   /** 编辑器页头里回到"我的空间"的链接（整页跳转） */
   function backLink(page: Page): Locator {
     return page.locator('#editor-chrome').getByRole('link', { name: '我的空间', exact: true })
@@ -687,8 +690,8 @@ test.describe('US-M3-02 面板里还没写进模型的输入：离开提示拦�
     await page.getByRole('menuitem', { name: '新建规则' }).click()
     const value = page.getByRole('complementary', { name: '侧边栏' }).getByRole('textbox').last()
     await expect(value).toHaveValue('100')
-    await expect(saveStatus(page)).toHaveText('已保存到云端')
-    await expect.poll(async () => wouldPromptOnLeave(page)).toBe(false)
+    await expect(saveStatus(page)).toHaveText('已保存到云端', AUTOSAVED_WITHIN)
+    await expect.poll(async () => wouldPromptOnLeave(page), AUTOSAVED_WITHIN).toBe(false)
     expect(await storedRuleValue(page, documentId)).toBe('100')
     return { documentId, value }
   }
@@ -726,7 +729,7 @@ test.describe('US-M3-02 面板里还没写进模型的输入：离开提示拦�
     expect(await wouldPromptOnLeave(page)).toBe(true)
     // 自动保存照常：停 1 秒捕获、2 秒上传，之后回到已保存到云端、离开不提示
     await page.clock.resume()
-    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect(saveStatus(page)).toHaveText('已保存到云端', AUTOSAVED_WITHIN)
     expect(await wouldPromptOnLeave(page)).toBe(false)
     expect(await storedRuleValue(page, documentId)).toBe('250')
   })
@@ -746,7 +749,7 @@ test.describe('US-M3-02 面板里还没写进模型的输入：离开提示拦�
     await expect(page).toHaveURL(new RegExp(`/documents/${documentId}$`))
     await expect(value).toHaveValue('250')
     await page.clock.resume()
-    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect(saveStatus(page)).toHaveText('已保存到云端', AUTOSAVED_WITHIN)
     expect(await storedRuleValue(page, documentId)).toBe('250')
     await backLink(page).click()
     await expect(page).toHaveURL(/\/$/)
@@ -761,14 +764,14 @@ test.describe('US-M3-02 面板里还没写进模型的输入：离开提示拦�
     await page.getByRole('button', { name: '添加批注' }).click()
     await page.getByRole('textbox', { name: '在此输入' }).click()
     // 打开浮层时 SDK 按同一个 300 ms 的防抖写进一条空批注：等自动保存把它存上，键入之前都已存上
-    await expect.poll(() => writes.saves.length).toBeGreaterThanOrEqual(1)
-    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect.poll(() => writes.saves.length, AUTOSAVED_WITHIN).toBeGreaterThanOrEqual(1)
+    await expect(saveStatus(page)).toHaveText('已保存到云端', AUTOSAVED_WITHIN)
     await pauseWithNothingUnsaved(page)
     await page.keyboard.type('remember')
     expect(await wouldPromptOnLeave(page)).toBe(true)
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
     await page.clock.resume()
-    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect(saveStatus(page)).toHaveText('已保存到云端', AUTOSAVED_WITHIN)
     expect(await wouldPromptOnLeave(page)).toBe(false)
     const { snapshot } = await savedContent(page, documentId)
     expect(resourceOf(snapshot, 'SHEET_NOTE_PLUGIN')).toMatchObject({ [FIRST_SHEET]: { 3: { 3: { note: 'remember', row: 3, col: 3 } } } })
