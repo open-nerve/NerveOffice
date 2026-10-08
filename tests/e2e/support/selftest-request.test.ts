@@ -1,6 +1,6 @@
 // 请求编辑的两条路的编排（selftest-request.ts）里的判定（纯函数）：路 1 请求方在后台停在交给了我、回到前台才进入（waiterJudgement），路 2 持有者
 // 被暂停时编辑权按时间到期、另一方接手（pausedHolderJudgement）。证据是库里的时间线、后端日志里这份文档的请求（按认证出的用户分开两个人）与协作者
-// 自己的调用。时刻都写成相对 0 的毫秒数
+// 自己的调用。时刻都写成相对 0 的毫秒数。有别的条件兜着的条件也各有一条只违反它的用例（审查 B13：每个条件单独有人看着）
 import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { DocumentState, ServerRequest } from './selftest-handover.ts'
 import type { PausedHolderEvidence, PeerCall, WaiterEvidence } from './selftest-request.ts'
@@ -89,6 +89,13 @@ describe('路 1：请求方在后台停在交给了我，回到前台才进入�
     expect(waiterJudgement(evidence({ states: STATES.filter(item => item.endReason === null) })).problems).toEqual(['库里没有看到交出：协作者那一代没有明确结束为 handed_over，没有留给请求方的保留'])
     expect(waiterJudgement(evidence({ report: undefined })).problems).toEqual(['请求方没有交回结果'])
   })
+
+  it('只违反"回到前台之后的申请得到 201"：那一次被中断（后端日志里没有状态码）或 409 之后再申请才成，库里照样有请求方的新一代', () => {
+    const aborted = REQUESTS.map(request => request.time === 21_100 ? logged(21_100, 'POST', '/edit-lease', undefined, AUTHOR) : request)
+    expect(waiterJudgement(evidence({ requests: aborted })).problems).toEqual(['回到前台之后请求方没有取得编辑权（中断）'])
+    const retried = [...REQUESTS.slice(0, 6), logged(21_100, 'POST', '/edit-lease', 409, AUTHOR), logged(21_150, 'POST', '/edit-lease', 201, AUTHOR)]
+    expect(waiterJudgement(evidence({ requests: retried })).problems).toEqual(['回到前台之后请求方没有取得编辑权（409）'])
+  })
 })
 
 describe('路 2：持有者的心跳停下没有（heartbeatQuiet：盖屏之后等它停下再请求）', () => {
@@ -173,6 +180,21 @@ describe('路 2：持有者被暂停时编辑权按时间到期（pausedHolderJu
     expect(pausedHolderJudgement(evidence({ report: report('paused-holder', 'lost-after-pause', null), expectSuspended: false })).problems).toEqual([])
   })
 
+  it('只违反"新一代是协作者的"：持有者那一代之后的新一代是第三个人的普通申请', () => {
+    const stranger = STATES.map(item => item.epoch === 2 ? { ...item, holderId: 'stranger-id' } : item)
+    expect(pausedHolderJudgement(evidence({ states: stranger })).problems).toEqual(['库里的新一代：持有者 stranger-id、接管方式 空（应当是协作者的普通申请）'])
+  })
+
+  it('只违反"异常中断的提醒说的是持有者那一代、sameUser 为 false"：提醒里的持有者对、sameUser 不是 false', () => {
+    const same = CALLS.map(item => item.method === 'POST' && item.status === 201 ? { ...item, body: { token: 't', interruption: { holder: { id: AUTHOR }, sameUser: true, samePage: false } } } : item)
+    expect(pausedHolderJudgement(evidence({ calls: same })).problems).toEqual([`协作者申请的回答里的异常中断提醒对不上（中断的那一代的持有者 ${AUTHOR}、sameUser true；持有者那一代按时间到期时应当是持有者、sameUser 为 false）`])
+  })
+
+  it('只违反"盖屏期间持有者没有释放"：后端收到持有者的释放（没成：409），库里那一代照样没有明确结束', () => {
+    const released = [...REQUESTS.slice(0, 2), logged(60_000, 'DELETE', '/edit-lease', 409, AUTHOR), ...REQUESTS.slice(2)]
+    expect(pausedHolderJudgement(evidence({ requests: released })).problems).toEqual(['盖屏到协作者申请之间后端收到持有者的交出 0 个、释放 1 个（应当一个也没有）'])
+  })
+
   describe('页面交回 handed-over（没被暂停：空闲满 2 分钟自动交出，2026-10-08 第一次真实 Safari 运行的样子）', () => {
     /** 盖屏之后持有者照常心跳到 124 秒，124.1 秒交出（handed_over、留给协作者）；协作者 135.74 秒续期得到 reserved、135.78 秒申请 201（没有提醒） */
     const HANDED_STATES: readonly DocumentState[] = [
@@ -212,6 +234,16 @@ describe('路 2：持有者被暂停时编辑权按时间到期（pausedHolderJu
         '持有者那一代没有明确结束、没有留给协作者（自动交出时应当是 handed_over、留给协作者）',
         '盖屏到协作者申请之间后端收到持有者的交出 0 个（—）、释放 0 个（自动交出时应当恰好一个 200 的交出、没有释放）',
       ])
+    })
+
+    it('只违反"恰好一个交出"：第一个交出 200 之后又来了一个（409）', () => {
+      const twice = [...HANDED_REQUESTS.slice(0, 8), logged(124_300, 'POST', '/edit-lease/handover', 409, AUTHOR), ...HANDED_REQUESTS.slice(8)]
+      expect(pausedHolderJudgement(handed({ requests: twice })).problems).toEqual(['盖屏到协作者申请之间后端收到持有者的交出 2 个（200、409）、释放 0 个（自动交出时应当恰好一个 200 的交出、没有释放）'])
+    })
+
+    it('只违反"交出的那一代留给协作者"：那一代结束为 handed_over，保留的却是第三个人', () => {
+      const elsewhere = HANDED_STATES.map(item => item.endReason === 'handed_over' ? { ...item, reservedFor: 'stranger-id' } : item)
+      expect(pausedHolderJudgement(handed({ states: elsewhere })).problems).toEqual(['持有者那一代结束为 handed_over、没有留给协作者（自动交出时应当是 handed_over、留给协作者）'])
     })
   })
 

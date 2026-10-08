@@ -122,7 +122,7 @@ apps/api/src/
 | `GET /api/documents/{id}` | 文档元数据（含修订号、档案、格式版本、所在的空间）与调用者的权限；看不到的与不存在的文档都是 404 |
 | `GET /api/documents/{id}/content` | 当前快照：gzip 字节原样下发（`Content-Encoding: gzip`），修订号作 ETag；带 `If-None-Match` 而修订号对得上时 304，只带 ETag（M3-P2，DEF-017） |
 | `PUT /api/documents/{id}/content?baseRevision&requestId&clientInstanceId&localSeq&writeEpoch` | 保存（正文是 gzip 压缩的快照，请求头 `X-Edit-Lease` 带编辑租约的令牌）：压缩前后都限 5 MiB、基本校验、锁文档行、按 `requestId` 幂等、锁下核对登录、要求有效的编辑租约（M3-P1）、按基准修订号条件写入；冲突时 409，`details` 带当前修订号及其来源。M3-P3 起另带客户端的构建与数据格式（`clientBuild`、`univerVersion`、`profile`、`formatVersion`）与 `formulasPending`，内容与当前相同时不递增（`unchanged: true`，留回执），见 ADR-011 的修订 |
-| `GET/POST/PUT/DELETE /api/documents/{id}/edit-lease` | 编辑租约（M3-P1，ADR-018）：编辑状态（能读就能看）、申请（要能编辑；别人持有时 409 `EDIT_LEASE_HELD`；成功时给令牌、代次、修订号与当前修订的来源）、心跳续租（失效时 409 `EDIT_LEASE_LOST`）、释放（持有者本人、令牌是当前这一行的才结束，一律 204）；M3-P2 起编辑状态带调用者能否编辑（`canEdit`），编辑状态与心跳不顺延登录（`@BackgroundRequest()`）；M3-P5 起申请带 `takeover`（`self` 本人接管、`force` 强制接管，记审计）与 `idleSeconds`，编辑状态与被占用的详情带 `sameSession`、`canTakeOver`、请求、保留与异常中断的提醒，心跳带待回应的请求，保留期内 409 `EDIT_LEASE_RESERVED`，被接管的旧令牌得到 `taken_over` |
+| `GET/POST/PUT/DELETE /api/documents/{id}/edit-lease` | 编辑租约（M3-P1，ADR-018）：编辑状态（能读就能看）、申请（要能编辑；别人持有时 409 `EDIT_LEASE_HELD`；成功时给令牌、代次、修订号与当前修订的来源）、心跳续租（失效时 409 `EDIT_LEASE_LOST`）、释放（持有者本人、令牌是当前这一行的才结束，一律 204）；M3-P2 起编辑状态带调用者能否编辑（`canEdit`），编辑状态与心跳不顺延登录（`@BackgroundRequest()`）；M3-P5 起申请带 `takeover`（`self` 本人接管、`force` 强制接管，记审计）与 `idleSeconds`，编辑状态与被占用的详情带 `sameSession`、`canTakeOver`、请求、保留与异常中断的提醒，心跳带待回应的请求，保留期内 409 `EDIT_LEASE_RESERVED`，被接管的旧令牌得到 `taken_over`；M3-P6 起心跳带调用者自己当前的本机密钥的版本（`localKeyVersion`，从没取过为 null；M3 的页面不消费，ADR-019） |
 | `POST/PUT/DELETE /api/documents/{id}/edit-lease/request`、`POST …/edit-lease/request/decline`、`POST …/edit-lease/handover` | 请求编辑与交出（M3-P5，ADR-018 的补充）：发出（要能编辑，先拦旧页面）、续期（后台请求，等待中每 5 秒）、取消（能读就行，一律 204，清掉自己的请求与留给自己的保留）、谢绝（持有者，带令牌，对不上也 204）、交出（持有者，带令牌：结束租约、留给请求方 2 分钟；请求已不在时 409 `EDIT_REQUEST_GONE`、租约不动）；结果按 `kind` 区分（`pending`、`declined`、`reserved`、`free`、`self`、`occupied`、`reservedForOther`、`gone`） |
 | `POST /api/documents/{id}/open-check-failures` | 打开自检失败的上报（M3-P4，ADR-011 的补充）：只带失败的种类、资源名、异常的构造器名、修订号、打开方式与版本四项，不带内容；能读就能报、看不到与不存在一致；后台请求；进程内去重与按账户限量，记 warn（`event: open-check-failed`），不记审计；204 |
 | `POST /api/documents/{id}/conflict-copies?requestId&title` | 另存为副本（M3-P2，ADR-011、ADR-014 的补充）：正文是 gzip 压缩的快照（与保存同一个读取方式），`unitId` 要等于原文档的；只要求能读原文档；本人在原文档所在的空间能新建就放进原文档的文件夹，否则本人个人空间的根目录；不继承授权；`requestId` 幂等；响应同复制 |
@@ -192,7 +192,7 @@ apps/web/src/
   app/                运行时（路由、请求缓存、会话的全局处理：整页跳转、多标签页）、布局、404 与错误页
   features/auth/      登录页、会话、需要登录的外层路由、退出
   features/account/   修改密码；接受邀请与重置密码的公开页面（令牌从 # 读出后从地址里去掉）（M2-P1）
-  features/admin/     管理界面：账户、邀请、审计（M2-P1）；团队空间、停用者文档的转移（M2-P2）；账户页的吊销本机密钥与页面顶部的状态区（M3-P6）；按需加载，只被 app/routes.ts 动态引用
+  features/admin/     管理界面：账户、邀请、审计（M2-P1）；团队空间、停用者文档的转移（M2-P2）；账户页的吊销本机密钥、"状态"列里本机密钥的版本与页面顶部的状态区（M3-P6）；按需加载，只被 app/routes.ts 动态引用
   features/spaces/    左侧导航（窄屏时收起）、空间页（首页是个人空间，/spaces/{id} 是任意空间；按权限显示操作、行内改名）；空间与成员的接口函数，
                       空间看不到了（404）时刷新导航、去掉它的缓存（M2-P2）
   features/members/   成员页（M2-P2）：查看、添加、调整角色（每一行各自保存）、移出；按需加载，只被 app/routes.ts 动态引用
