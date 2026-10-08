@@ -37,10 +37,11 @@
 //   再换代）。续租成功是当前的；令牌对不上这一行（taken_over、replaced）是被别的一代取代了；别的失效（到期、空闲、代次过时、登录不对、收回、
 //   读不到、不能编辑……：令牌仍是这一行的）是这一代自己失效了，页面交给 lose——与心跳、保存得知同样的原因时同一条路（复验 E2）；别的失败
 //   （网络、5xx、会话的问题、与服务端不兼容）核对不了。回答说的是发出那一刻手里的那一代：期间续上换了一代就核对现在的这一代；得到失效时续上
-//   还在途就先等它有了结果（服务端可能先提交了本页续上的新一代，晚于它处理的核对得到的 replaced 说的正是本页自己，复验 E8）；本页上一次续上的
-//   申请结果未知时，replaced 同样说不准是谁改写的，当作这一代自己失效。只问、不改：自己不续上（被取代时续上就是去抢；自己失效的由页面交给
-//   lose），不暂停、不通知，这一代照旧——页面按裁决处理（被取代就 abandon），核对不了时由之后的心跳给出结论。心跳续租成功时另经 onRenewed
-//   告诉页面，带着这次续租发出的时刻（被抢之后还没有结论的，只认被抢之后发出的续租：之前发出的、迟到的成功可能跨过了一次换代，复验 E1）；
+//   还在途就先等它有了结果（服务端可能先提交了本页续上的新一代，晚于它处理的核对得到的 replaced 说的正是本页自己，复验 E8）；本页有结果未知、
+//   可能已在服务端改写这一行的申请时（续上的申请，或者取得这一代之前用户发起的申请里被放弃的那一次，复验 E11），replaced 同样说不准是谁改写的，
+//   当作这一代自己失效。只问、不改：自己不续上（被取代时续上就是去抢；自己失效的由页面交给 lose），不暂停、不通知，这一代照旧——页面按裁决
+//   处理（被取代就 abandon），核对不了时由之后的心跳给出结论。心跳续租成功时另经 onRenewed 告诉页面，带着这次续租发出的时刻（被抢之后还没有
+//   结论的，只认被抢之后发出的续租：之前发出的、迟到的成功可能跨过了一次换代，复验 E1）；
 // - 放弃这一代（abandon）：停止续租与续上，不发释放，也不通知。终态。用在服务端已经不认这一代、页面自己知道的时候——交出之后；本机锁的争用中
 //   核对得知这一代已被取代之后（M3-P6 设计 §3.13）；
 // - 被接管（M3-P5 设计 §3.7、§3.8：续租或保存得到 taken_over）：不续上（编辑权是有意交给别处的，续上就是抢回来）——本人在另一台设备或浏览器上
@@ -251,9 +252,9 @@ export type LeaseOutcome
  * - superseded：被别的一代取代了——令牌对不上服务端这一行：被接管（taken_over：本人在别处接手、空间管理员强制接管，方式认不出的同样）、被新的
  *   一代改写（replaced）。loss 是服务端说的原因；
  * - ended：这一代自己失效了——令牌仍是这一行的，而到期、空闲、代次过时、登录不对、已经释放、收回、已经交出，或者没有这一行、读不到（404）、
- *   不能编辑（403）；本页上一次续上的申请结果未知时的 replaced 也在这里（改写这一行的可能正是本页自己，复验 E8）（loss 是服务端说的原因：页面
- *   交给 lose，与心跳、保存得知同样的原因时同一条路，复验 E2）；或者核对之前、核对期间这一代在本页已经失效、释放、放弃（loss 为 undefined：
- *   结束它的那一处已经处理）；
+ *   不能编辑（403）；本页有结果未知、可能已在服务端改写这一行的申请时的 replaced 也在这里（改写这一行的可能正是本页自己，复验 E8、E11）（loss
+ *   是服务端说的原因：页面交给 lose，与心跳、保存得知同样的原因时同一条路，复验 E2）；或者核对之前、核对期间这一代在本页已经失效、释放、放弃
+ *   （loss 为 undefined：结束它的那一处已经处理）；
  * - unknown：核对不了——网络、服务端出错、回包读不出来、会话的问题、与服务端不兼容（error 是那次的错误），或者会话不是本人、暂停着（不发，
  *   error 为 undefined）
  */
@@ -418,7 +419,8 @@ export interface AcquireIntent {
  * 申请编辑权。被占用而且是自己时，隔 SAME_USER_RETRY_DELAY_MS 再试，最多 SAME_USER_RETRIES 次（intent.retrySameUser 说不必时不再试），
  * 仍被占用才按被占用返回。结果未知（网络错误、5xx、回包读不出来）时隔 UNKNOWN_OUTCOME_RETRY_DELAY_MS 用同一个标识再试
  * UNKNOWN_OUTCOME_RETRIES 次：服务端可能已经批给了本页，同一个页面再申请是重试，发新的一代（审查 B7；本人接管的重试沿用上一代的接管标记，
- * 服务端不再写一次）。别的失败（403、404、未登录等）、再试之后仍未知的，原样抛出，由页面处理
+ * 服务端不再写一次）。再试成功了，被放弃的那一次服务端仍可能晚于它才处理（同样按同一个页面的重试，换成本页不知道的新一代）：取得的这一代带着
+ * "结果未知"的记号（holdEditLease 的 ownAcquireUnknown，复验 E11）。别的失败（403、404、未登录等）、再试之后仍未知的，原样抛出，由页面处理
  */
 export async function acquireEditLease(options: EditLeaseOptions, intent: AcquireIntent = {}): Promise<LeaseAcquisition> {
   let sameUserRetries = 0
@@ -446,7 +448,9 @@ export async function acquireEditLease(options: EditLeaseOptions, intent: Acquir
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)
       continue
     }
-    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
+    // 之前有过结果未知的尝试：被放弃的那一次服务端可能晚于这一次才处理（同一个页面的重试，换成本页不知道的新一代，复验 E11）——取得的这一代
+    // 一开始就带着"结果未知"的记号（与续上的记号同一个含义、同样在续上换了一代时清掉）
+    return { kind: 'acquired', lease: holdEditLease(options, acquired, unknownRetries > 0), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
   }
 }
 
@@ -467,7 +471,10 @@ type LeaseState = 'holding' | 'paused' | 'dormant' | 'lost' | 'released' | 'halt
 const LOST: LeaseOutcome = { kind: 'lost' }
 const HELD: LeaseOutcome = { kind: 'held' }
 
-function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): EditLease {
+/**
+ * 持有取得的这一代（见 EditLease）。acquireUnknown：取得它的申请之前有过结果未知的尝试（acquireEditLease），记号 ownAcquireUnknown 的初值
+ */
+function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, acquireUnknown: boolean): EditLease {
   const { api, clock, documentId } = options
   let credentials: LeaseCredentials = { token: acquired.token, writeEpoch: acquired.writeEpoch }
   let state: LeaseState = 'holding'
@@ -491,10 +498,12 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   /** 人不在（dormant）时那次失效的原因：只在 dormant 时读，人回来续上时按它决定要不要先放掉手里那一代（releasesBeforeRecovery） */
   let dormantReason: EditLeaseLostReason = 'none'
   /**
-   * 本页最近一次续上的申请结果未知（网络、5xx、回包读不出来）：服务端可能已经提交了本页自己的新一代，本页却没拿到它的令牌——这时得知的
-   * replaced（这一行被新的申请改写了）说不准是不是本页自己改写的（复验 E8，judge）。之后续上换了一代（本页知道了自己最新的一代）时清掉
+   * 本页有结果未知、可能已在服务端改写这一行的申请（网络、5xx、回包读不出来）：续上的申请如此（复验 E8），或者取得这一代的那次用户发起的
+   * 申请之前有过这样的尝试（同一个标识再试成功了，被放弃的那一次服务端可能晚于它才处理，复验 E11）。服务端可能已经提交了本页自己的新一代、
+   * 本页却没拿到它的令牌——这期间得知的 replaced（这一行被新的申请改写了）说不准是不是本页自己改写的（judge）。确定被拒的申请没有提交，不算；
+   * 之后续上换了一代（本页知道了自己最新的一代）时清掉
    */
-  let ownAcquireUnknown = false
+  let ownAcquireUnknown = acquireUnknown
 
   function stopTimer(): void {
     cancelTimer?.()
@@ -768,10 +777,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   }
 
   /**
-   * 核对得到的失效怎样裁决（见 LeaseVerdict 与 verdictOf）：replaced 说的是这一行被新的申请改写了——本页最近一次续上的申请结果未知时，
-   * 改写它的可能正是本页自己（服务端提交了、回包没到），说明不了被别的一代取代：当作这一代自己失效，页面交给 lose（与心跳、保存得知 replaced 时
-   * 同一条路：续上——是本页自己的那一行就是同一个页面的重试，是别处的就被占用、照服务端说），复验 E8。被接管（taken_over）的记号对着本页手里
-   * 的这一代，不会是本页自己的申请（同一个页面的重试沿用原来的记号），照旧是被取代
+   * 核对得到的失效怎样裁决（见 LeaseVerdict 与 verdictOf）：replaced 说的是这一行被新的申请改写了——本页有结果未知、可能已在服务端改写这一行
+   * 的申请时（ownAcquireUnknown），改写它的可能正是本页自己（服务端提交了、回包没到，或者被放弃的那一次晚于再试才处理），说明不了被别的一代
+   * 取代：当作这一代自己失效，页面交给 lose（与心跳、保存得知 replaced 时同一条路：续上——是本页自己的那一行就是同一个页面的重试，是别处的就
+   * 被占用、照服务端说），复验 E8、E11。被接管（taken_over）的记号对着本页手里的这一代，不会是本页自己的申请（同一个页面的重试沿用原来的
+   * 记号），照旧是被取代
    */
   function judge(loss: LeaseLoss): LeaseVerdict {
     if (ownAcquireUnknown && loss.kind === 'lease' && loss.reason === 'replaced')
