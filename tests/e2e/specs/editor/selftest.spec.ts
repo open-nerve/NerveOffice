@@ -358,7 +358,7 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
     expect(run.judgement.problems).toEqual([])
   })
 
-  test('步骤 paused-holder 没被暂停（M3-P6 设计 §3.10，DEF-062 路 2 的另一条）：作者编辑、存上第一格之后页面隐藏（这里模拟），心跳照常带来协作者的请求；进入编辑之后空闲满 2 分钟（真等）先保存第三格再自动交出、回到阅读；协作者续期得到 reserved 之后接手；库里作者那一代结束为 handed_over', async ({ page }, testInfo) => {
+  test('步骤 paused-holder 没被暂停（M3-P6 设计 §3.10，DEF-062 路 2 的另一条）：作者编辑、存上第一格之后页面隐藏（这里模拟），心跳照常；空闲满 2 分钟之后协作者请求，作者的心跳带来请求的同一步就先保存第三格再自动交出、回到阅读；协作者续期得到 reserved 之后接手；库里作者那一代结束为 handed_over', async ({ page }, testInfo) => {
     // 真等空闲满 2 分钟再加打开与接手
     test.setTimeout(EDITOR_TEST_TIMEOUT + 180_000)
     const { step, author, peer } = await requestScene('st-alive', 'paused-holder')
@@ -371,7 +371,8 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
       show: async () => setVisibility(page, 'visible'),
       report: async deadline => reportBefore(delivered, deadline),
     }
-    const run = await runPausedHolder({ origin: e2eOrigin(), documentId: step.documentId, holder: author, requester: peer, stage, deadline: Date.now() + REPORT_TIMEOUT_MS + 120_000, expectSuspended: false })
+    // 心跳一直不停：等过 2 分钟的空闲就请求（它已空闲满 2 分钟，心跳带来请求的同一步就交出），不必等满真实 Safari 的 4 分钟
+    const run = await runPausedHolder({ origin: e2eOrigin(), documentId: step.documentId, holder: author, requester: peer, stage, deadline: Date.now() + REPORT_TIMEOUT_MS + 120_000, expectSuspended: false, suspendWaitMs: 125_000 })
     await attachRun(testInfo, run)
     expect(run.report?.path).toBe('handed-over')
     expect(run.report === undefined ? undefined : await summaryOf(run.report, step, run.report.path)).toEqual(passed(step))

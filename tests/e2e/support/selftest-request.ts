@@ -9,9 +9,10 @@
 //   直到心跳带来请求 → 让请求方隐藏 → 2 秒之后协作者交出 → 等后端日志里请求方在交出之后续期（它这时得知 reserved）→ 再停 GRANTED_HOLD_MS
 //   （这期间它应当停在 granted、不再续期、不申请）→ 让它回到前台 → 等它交回（进入编辑、写一格存上）；
 // - 路 2（runPausedHolder：持有者被暂停时自动交出走到到期）：打开持有者的页面（作者，进入编辑）→ 库里有了第一格（修订号 2）→ 盖屏 → 库里有了隐藏的
-//   那一刻上传的第二格（修订号 3）→ 协作者请求编辑、每 5 秒续期 → 得到 free（持有者那一代按时间到期）或 reserved（持有者没被暂停、空闲满 2 分钟
-//   自动交出了）→ 申请、之后每 10 秒心跳（持有者回来续上时被占着）→ 2 秒之后移走盖屏 → 等持有者交回（失去编辑权、另存为副本；或者已经交出、回到阅读）
-//   → 协作者释放。用户回来、按了 Esc 或点了盖屏的窗口（stage.voided）就中止：随即移走盖屏、撤回请求，这一次作废；
+//   那一刻上传的第二格（修订号 3）→ 看库里持有者那一代的续租：停下 25 秒就是被暂停了，最多等 150 秒（设计的先后：持有者先被暂停，之后才有请求）→
+//   协作者请求编辑、每 5 秒续期 → 得到 free（持有者那一代按时间到期）或 reserved（持有者没被暂停：已空闲满 2 分钟，心跳带来请求的同一步就自动交出）→
+//   申请、之后每 10 秒心跳（持有者回来续上时被占着）→ 2 秒之后移走盖屏 → 等持有者交回（失去编辑权、另存为副本；或者已经交出、回到阅读）→ 协作者释放。
+//   用户回来、按了 Esc 或点了盖屏的窗口（stage.voided）就中止：随即移走盖屏、撤回请求，这一次作废；
 // - 判定（纯函数，单元测试覆盖）：waiterJudgement、pausedHolderJudgement（按持有者交回的路：被暂停走到到期，或者没被暂停而自动交出——真实 Safari 怎样对待
 //   被挡住的编辑器页正是要复核的，2026-10-08 本机 Safari 27.0 没有暂停它）——库里的时间线（./selftest-handover.ts 的 watchDocument）、后端日志里这份
 //   文档的请求（按认证出的用户分开两个人）与协作者自己的调用。
@@ -332,8 +333,76 @@ export interface PausedHolderOptions {
   readonly requester: TestUser
   readonly stage: RequestStage
   readonly deadline: number
-  /** 真实 Safari：持有者的页面真的被暂停（判定要求隐藏期间计时器停过 SUSPENDED_GAP_MIN_MS 以上）；Playwright 里不暂停页面 */
+  /** 真实 Safari：持有者的页面走了"被暂停"那一条路时，要求隐藏期间计时器停过 SUSPENDED_GAP_MIN_MS 以上；Playwright 里不暂停页面 */
   readonly expectSuspended: boolean
+  /** 盖屏之后最多等多久看持有者的心跳停不停（默认 SUSPEND_WAIT_MS）：Playwright 里没被暂停的那一条只要等过 2 分钟的空闲 */
+  readonly suspendWaitMs?: number
+}
+
+/** 库里持有者那一代的续租停下这么久，就当它被暂停了（心跳 10 秒一次：两次多没来） */
+export const HEARTBEAT_QUIET_MS = 25_000
+
+/**
+ * 路 2：盖屏之后最多等多久看持有者的心跳停不停（之后才请求）：探索 B 的空白页约 50 秒被暂停，留出三倍的余量；等满还在续租就当它没被暂停，照样请求。
+ * 盖屏的总时长因此仍约 3 分钟（没被暂停：150 秒 + 交出与接手；被暂停：约 50 秒 + 25 秒 + 到期之前的约 65 秒）
+ */
+export const SUSPEND_WAIT_MS = 150_000
+
+/** 库里的时间线里持有者那一代（第一次出现的代次）最后一次续租的样子：库里的时刻、看到它变化的时刻；到 now 为止停了 quietMs 没有（纯函数） */
+export function heartbeatQuiet(states: readonly DocumentState[], now: number, quietMs: number): { readonly lastRenewedAt: number | undefined, readonly lastChangeSeenAt: number | undefined, readonly quiet: boolean } {
+  const epoch = firstEpoch(states)
+  const ofEpoch = states.filter(state => state.epoch === epoch && state.renewedAt !== null && state.renewedAt !== undefined)
+  // 时间线只在样子变了时记一条：续租的时刻变了的那一条，就是看到这一次续租的时刻
+  const last = ofEpoch.reduce<DocumentState | undefined>((latest, state) => (latest === undefined || (state.renewedAt ?? 0) > (latest.renewedAt ?? 0) ? state : latest), undefined)
+  return { lastRenewedAt: last?.renewedAt ?? undefined, lastChangeSeenAt: last?.at, quiet: last !== undefined && now - last.at >= quietMs && states.at(-1)?.epoch === epoch && states.at(-1)?.endReason === null }
+}
+
+/** 等持有者那一代的续租停下 HEARTBEAT_QUIET_MS（每秒看一次库里的时间线），到 deadline 还在续租时 quiet 为假 */
+async function untilHeartbeatsQuiet(watch: { readonly states: () => readonly DocumentState[] }, deadline: number, voided: () => string | undefined): Promise<{ readonly quiet: boolean, readonly lastChangeSeenAt: number | undefined }> {
+  for (;;) {
+    const seen = heartbeatQuiet(watch.states(), Date.now(), HEARTBEAT_QUIET_MS)
+    if (seen.quiet || Date.now() >= deadline || voided() !== undefined)
+      return seen
+    await sleep(1_000)
+  }
+}
+
+/**
+ * 协作者请求编辑、每 5 秒续期，直到得到 free（持有者那一代按时间到期）或 reserved（持有者交出了）就申请：交回取得的令牌（没取得时 undefined）。
+ * 别的结果、到了时限、作废时停下，说明记进 notes
+ */
+async function requestUntilGranted(peer: ApiPeer, documentId: string, deadline: number, voided: () => string | undefined, marks: Record<string, number | undefined>, notes: string[], say: (message: string) => void): Promise<string | undefined> {
+  const sent = await peer.request(documentId)
+  marks.requestedAt = sent.at
+  if (sent.status !== 200 || field(sent, 'kind') !== 'pending')
+    notes.push(`协作者请求编辑的回答是 ${String(sent.status)} ${JSON.stringify(sent.body)}（应当在等 pending）`)
+  say('路 2：协作者请求编辑，每 5 秒续期，等持有者那一代到期（或者交出）')
+  const until = Math.min(deadline, sent.at + EXPIRY_WAIT_MS)
+  while (Date.now() < until && voided() === undefined) {
+    await sleep(EDIT_REQUEST_RENEW_SECONDS * 1000)
+    if (voided() !== undefined)
+      return undefined
+    const renewed = await peer.renewRequest(documentId)
+    const kind = (renewed.body as Partial<EditRequestOutcome> | undefined)?.kind
+    if (kind === 'pending')
+      continue
+    if (kind !== 'free' && kind !== 'reserved') {
+      notes.push(`协作者续期得到 ${String(kind ?? renewed.status)}（${JSON.stringify(renewed.body)}），不再等`)
+      return undefined
+    }
+    marks.grantedAt = renewed.at
+    const acquired = await peer.acquire(documentId)
+    const token = (acquired.body as Partial<AcquiredEditLease> | undefined)?.token
+    if (acquired.status === 201 && token !== undefined) {
+      marks.acquiredAt = acquired.at
+      return token
+    }
+    notes.push(`续期得到 ${kind} 之后协作者申请没有成功：${String(acquired.status)} ${JSON.stringify(acquired.body)}`)
+    return undefined
+  }
+  if (voided() === undefined)
+    notes.push(`协作者请求之后 ${EXPIRY_WAIT_MS / 1000} 秒内没有等到 free 或 reserved（持有者那一代没有到期、也没有交出）`)
+  return undefined
 }
 
 /** 路 2（见文件头） */
@@ -369,39 +438,20 @@ export async function runPausedHolder(options: PausedHolderOptions): Promise<Req
           notes.push(`盖屏之后 ${HIDDEN_SAVE_WAIT_MS / 1000} 秒内库里没有隐藏的那一刻上传的第二格（修订号 3）`)
         else
           marks.hiddenSavedAt = second
-        const sent = await peer.request(documentId)
-        marks.requestedAt = sent.at
-        if (sent.status !== 200 || field(sent, 'kind') !== 'pending')
-          notes.push(`协作者请求编辑的回答是 ${String(sent.status)} ${JSON.stringify(sent.body)}（应当在等 pending）`)
-        say('路 2：协作者请求编辑，每 5 秒续期，等持有者那一代按时间到期')
-        const until = Math.min(deadline, sent.at + EXPIRY_WAIT_MS)
-        while (token === undefined && Date.now() < until && voided() === undefined) {
-          await sleep(EDIT_REQUEST_RENEW_SECONDS * 1000)
-          if (voided() !== undefined)
-            break
-          const renewed = await peer.renewRequest(documentId)
-          const kind = (renewed.body as Partial<EditRequestOutcome> | undefined)?.kind
-          if (kind === 'pending')
-            continue
-          if (kind === 'free' || kind === 'reserved') {
-            marks.grantedAt = renewed.at
-            const acquired = await peer.acquire(documentId)
-            const next = (acquired.body as Partial<AcquiredEditLease> | undefined)?.token
-            if (acquired.status === 201 && next !== undefined) {
-              token = next
-              marks.acquiredAt = acquired.at
-              beating = keepBeating(peer, documentId, next)
-            }
-            else {
-              notes.push(`续期得到 ${kind} 之后协作者申请没有成功：${String(acquired.status)} ${JSON.stringify(acquired.body)}`)
-            }
-            break
-          }
-          notes.push(`协作者续期得到 ${String(kind ?? renewed.status)}（${JSON.stringify(renewed.body)}），不再等`)
-          break
+        // 先看持有者会不会被暂停：库里它那一代的续租停下 HEARTBEAT_QUIET_MS 就是被暂停了，这时再请求（请求带不到它，空闲满 2 分钟的自动交出走不到）；
+        // 等满 suspendWaitMs 还在续租就是没被暂停，照样请求（它已空闲满 2 分钟，心跳带来请求的同一步就交出）
+        const suspendWaitMs = options.suspendWaitMs ?? SUSPEND_WAIT_MS
+        say(`路 2：盖屏了，等持有者的心跳停下（最多 ${suspendWaitMs / 1000} 秒），之后协作者请求编辑`)
+        const quiet = await untilHeartbeatsQuiet(watch, Math.min(deadline, marks.coveredAt + suspendWaitMs), voided)
+        marks.lastRenewalSeenAt = quiet.lastChangeSeenAt
+        if (quiet.quiet)
+          marks.quietAt = Date.now()
+        else if (voided() === undefined)
+          notes.push(`盖屏之后 ${suspendWaitMs / 1000} 秒持有者一直在续租（没有被暂停），照样请求编辑`)
+        if (voided() === undefined) {
+          token = await requestUntilGranted(peer, documentId, deadline, voided, marks, notes, say)
+          beating = token === undefined ? undefined : keepBeating(peer, documentId, token)
         }
-        if (token === undefined && voided() === undefined && notes.length === 0)
-          notes.push(`协作者请求之后 ${EXPIRY_WAIT_MS / 1000} 秒内没有等到 free（持有者那一代没有到期）`)
         if (token !== undefined)
           await sleep(UNCOVER_DELAY_MS)
       }

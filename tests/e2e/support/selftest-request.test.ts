@@ -6,7 +6,7 @@ import type { DocumentState, ServerRequest } from './selftest-handover.ts'
 import type { PausedHolderEvidence, PeerCall, WaiterEvidence } from './selftest-request.ts'
 import { describe, expect, it } from 'vitest'
 import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import { GRANTED_HOLD_MIN_MS, LEASE_TTL_MS, pausedHolderJudgement, SUSPENDED_GAP_MIN_MS, waiterJudgement } from './selftest-request.ts'
+import { GRANTED_HOLD_MIN_MS, HEARTBEAT_QUIET_MS, heartbeatQuiet, LEASE_TTL_MS, pausedHolderJudgement, SUSPENDED_GAP_MIN_MS, waiterJudgement } from './selftest-request.ts'
 
 const AUTHOR = 'author-id'
 const PEER = 'peer-id'
@@ -88,6 +88,28 @@ describe('路 1：请求方在后台停在交给了我，回到前台才进入�
     expect(waiterJudgement(evidence({ marks: { ...MARKS, handedOverAt: undefined } })).problems).toEqual(['协作者没有交出（心跳没有带来请求，或者交出没有成功）'])
     expect(waiterJudgement(evidence({ states: STATES.filter(item => item.endReason === null) })).problems).toEqual(['库里没有看到交出：协作者那一代没有明确结束为 handed_over，没有留给请求方的保留'])
     expect(waiterJudgement(evidence({ report: undefined })).problems).toEqual(['请求方没有交回结果'])
+  })
+})
+
+describe('路 2：持有者的心跳停下没有（heartbeatQuiet：盖屏之后等它停下再请求）', () => {
+  const TIMELINE: readonly DocumentState[] = [
+    state(0),
+    state(100, { epoch: 1, holderId: AUTHOR, renewedAt: 90 }),
+    state(10_100, { epoch: 1, holderId: AUTHOR, renewedAt: 10_080 }),
+    state(10_500, { revision: 2, epoch: 1, holderId: AUTHOR, renewedAt: 10_080 }),
+    state(20_150, { revision: 2, epoch: 1, holderId: AUTHOR, renewedAt: 20_120 }),
+  ]
+
+  it('最后一次续租是看到它变化的那一刻算起：停了 HEARTBEAT_QUIET_MS 才算停下（修订号变了不算续租）', () => {
+    expect(heartbeatQuiet(TIMELINE, 30_000, HEARTBEAT_QUIET_MS)).toEqual({ lastRenewedAt: 20_120, lastChangeSeenAt: 20_150, quiet: false })
+    expect(heartbeatQuiet(TIMELINE, 20_150 + HEARTBEAT_QUIET_MS, HEARTBEAT_QUIET_MS)).toEqual({ lastRenewedAt: 20_120, lastChangeSeenAt: 20_150, quiet: true })
+    expect(heartbeatQuiet(TIMELINE.slice(0, 4), 40_000, HEARTBEAT_QUIET_MS).lastChangeSeenAt).toBe(10_100)
+  })
+
+  it('那一代已经结束（交出、释放）或者换了一代：不算被暂停；还没有租约时也不算', () => {
+    expect(heartbeatQuiet([...TIMELINE, state(21_000, { revision: 2, epoch: 1, holderId: AUTHOR, renewedAt: 20_120, endReason: 'handed_over' })], 80_000, HEARTBEAT_QUIET_MS).quiet).toBe(false)
+    expect(heartbeatQuiet([...TIMELINE, state(21_000, { revision: 2, epoch: 2, holderId: PEER, renewedAt: 21_000 })], 80_000, HEARTBEAT_QUIET_MS).quiet).toBe(false)
+    expect(heartbeatQuiet([state(0)], 80_000, HEARTBEAT_QUIET_MS)).toEqual({ lastRenewedAt: undefined, lastChangeSeenAt: undefined, quiet: false })
   })
 })
 
