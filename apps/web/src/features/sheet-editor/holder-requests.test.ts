@@ -48,6 +48,7 @@ function fakeLease(outcome: LeaseOutcome = { kind: 'lost' }) {
     noteActivity: vi.fn(),
     holdRecovery: vi.fn(),
     allowRecovery: vi.fn(),
+    confirm: vi.fn(async () => ({ kind: 'current' as const })),
     abandon: vi.fn(),
     release: vi.fn(async () => true),
   }
