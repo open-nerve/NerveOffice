@@ -1,6 +1,7 @@
 import type { AuditAction } from './audit.ts'
 import { z } from 'zod'
 import { LINK_INVALID_REASONS, ONE_TIME_LINK_PURPOSES } from '../auth/links.ts'
+import { localKeyVersionSchema } from '../local-keys/local-keys.ts'
 import { GRANT_ROLES } from '../sharing/sharing.ts'
 import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES } from '../spaces/spaces.ts'
 import { codePointLength } from '../text/text.ts'
@@ -137,6 +138,8 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   entry('documents.conflict_copied', z.strictObject({ sourceId: id, spaceId: id })),
   // M3-P5：强制接管，对象是文档、操作者是接管的人（M3-P5 设计 §3.8）。被接管的人（那一代的持有者），不记标题与令牌
   entry('documents.edit_taken_over', z.strictObject({ holderId: id })),
+  // M3-P6：吊销本机密钥，对象是这个账户、操作者是系统管理员（M3-P6 设计 §3.5）。被吊销的那一版；不记任何密钥材料与主密钥的标识
+  entry('users.local_key_revoked', z.strictObject({ version: localKeyVersionSchema })),
 ])
 
 /** 一个动作与它的明细（解析之后） */

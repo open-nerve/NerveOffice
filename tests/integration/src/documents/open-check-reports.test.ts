@@ -116,6 +116,11 @@ describe('US-M3-15 打开自检失败的上报：204，记一条 warn', () => {
 })
 
 describe('US-M3-15 请求体严格解析：不合法的 400，什么也不记', () => {
+  /**
+   * 请求体里夹带的内容（日志里不该出现它）：原来只是"机密"两个字，M3-P6 起应用自己的日志里有"本机密钥"（启动自检），
+   * 两个字的标记会撞上，换成不会出现在应用日志里的写法
+   */
+  const SECRET = '机密正文'
   /** 不合法的请求到不了去重与限量：全部用例共用一个人、一份文档 */
   let shared: Awaited<ReturnType<typeof fresh>>
 
@@ -124,12 +129,12 @@ describe('US-M3-15 请求体严格解析：不合法的 400，什么也不记', 
   })
 
   it.each([
-    ['多出的字段：异常的 message', { message: 'Unexpected token \'机\', "{"note": 机密}" is not valid JSON' }],
-    ['多出的字段：快照', { snapshot: '{"id":"机密"}' }],
-    ['失败里多出 data', { failures: [{ kind: 'resource-emptied', resource: 'SHEET_NOTE_PLUGIN', data: '{"s1":"机密"}' }] }],
-    ['构造器名带着 message', { failures: [{ kind: 'parse-threw', resource: 'SHEET_NOTE_PLUGIN', error: 'SyntaxError: 机密' }] }],
+    ['多出的字段：异常的 message', { message: `Unexpected token '机', "{"note": ${SECRET}}" is not valid JSON` }],
+    ['多出的字段：快照', { snapshot: `{"id":"${SECRET}"}` }],
+    ['失败里多出 data', { failures: [{ kind: 'resource-emptied', resource: 'SHEET_NOTE_PLUGIN', data: `{"s1":"${SECRET}"}` }] }],
+    ['构造器名带着 message', { failures: [{ kind: 'parse-threw', resource: 'SHEET_NOTE_PLUGIN', error: `SyntaxError: ${SECRET}` }] }],
     ['不认识的种类', { failures: [{ kind: 'resource-changed', resource: 'SHEET_NOTE_PLUGIN' }] }],
-    ['资源名不合写法', { failures: [{ kind: 'resource-missing', resource: '机密' }] }],
+    ['资源名不合写法', { failures: [{ kind: 'resource-missing', resource: SECRET }] }],
     ['不是抛错的种类带构造器名', { failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN', error: 'TypeError' }] }],
     ['失败清单为空', { failures: [] }],
     ['失败清单超过 32 项', { failures: Array.from({ length: 33 }).fill({ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }) }],
@@ -144,7 +149,7 @@ describe('US-M3-15 请求体严格解析：不合法的 400，什么也不记', 
     expect(response.status, await response.clone().text()).toBe(400)
     expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('REQUEST_INVALID')
     expect(failureLogs(documentId)).toEqual([])
-    expect(app.logs.text()).not.toContain('机密')
+    expect(app.logs.text()).not.toContain(SECRET)
   })
 
   it('没有 CSRF 令牌：403（全局管线照常管它，后台请求的标记只影响顺延）', async () => {

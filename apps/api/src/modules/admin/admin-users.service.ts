@@ -9,6 +9,7 @@ import { AuditService } from '../audit/index.ts'
 import { InvitationsService, LoginLockouts, PasswordResetsService, SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { WriteAccessRevocation } from '../documents/index.ts'
+import { LocalKeyVersions } from '../local-keys/index.ts'
 import { UsersService } from '../users/index.ts'
 import { actorOf, toAdminUser } from './admin-views.ts'
 
@@ -17,8 +18,8 @@ type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 /**
  * 管理界面的账户操作（M2-P1 设计 §3.5）：跨模块的编排都在一个事务里。
  * 没有变化的操作（例如停用已停用的账户）原样返回，不记审计。
- * 返回的账户带着登录的锁定（M2-P6 复核 A1）：在同一个事务里、提交之前读（看得到这个事务自己的改动）。提交之后不再访问数据库——
- * 提交之后才读的话，这一步遇到数据库繁忙时账户已经停用，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
+ * 返回的账户带着登录的锁定（M2-P6 复核 A1）与当前的本机密钥的摘要（M3-P6 设计 §3.5）：在同一个事务里、提交之前读（看得到这个事务自己的改动）。
+ * 提交之后不再访问数据库——提交之后才读的话，这一步遇到数据库繁忙时账户已经停用，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
  */
 @Injectable()
 export class AdminUsersService {
@@ -29,6 +30,7 @@ export class AdminUsersService {
     private readonly invitations: InvitationsService,
     private readonly lockouts: LoginLockouts,
     private readonly writeAccess: WriteAccessRevocation,
+    private readonly localKeys: LocalKeyVersions,
     private readonly audit: AuditService,
     private readonly transactions: TransactionRunner,
   ) {}
@@ -43,12 +45,13 @@ export class AdminUsersService {
     })
   }
 
-  /** 账户列表与各自的登录锁定：在同一个只读快照里读（M2 Codex 评审 CX1） */
+  /** 账户列表与各自的登录锁定、当前的本机密钥：在同一个只读快照里读（M2 Codex 评审 CX1），一页的本机密钥一条语句 */
   async list(query: AdminUserListQuery): Promise<AdminUserListResponse> {
     return this.transactions.readSnapshot(async (transaction) => {
       const page = await this.users.listAccounts(query, transaction)
       const locks = await this.lockouts.locksOf(page.items.map(account => account.username), transaction)
-      return { items: page.items.map(account => toAdminUser(account, locks.get(account.username))), nextCursor: page.nextCursor }
+      const keys = await this.localKeys.statesOf(page.items.map(account => account.id), transaction)
+      return { items: page.items.map(account => toAdminUser(account, locks.get(account.username), keys.get(account.id))), nextCursor: page.nextCursor }
     })
   }
 
@@ -132,9 +135,10 @@ export class AdminUsersService {
     await this.invitations.revokeIssuedBy(actor.user, issuerId, reason, origin, transaction)
   }
 
-  /** 管理界面里的账户，带着登录的锁定：写操作传入它的事务（在提交之前读），读接口传入它的只读快照 */
+  /** 管理界面里的账户，带着登录的锁定与当前的本机密钥：写操作传入它的事务（在提交之前读），读接口传入它的只读快照 */
   private async view(account: AccountRecord, transaction: Transaction): Promise<AdminUser> {
     const locks = await this.lockouts.locksOf([account.username], transaction)
-    return toAdminUser(account, locks.get(account.username))
+    const keys = await this.localKeys.statesOf([account.id], transaction)
+    return toAdminUser(account, locks.get(account.username), keys.get(account.id))
   }
 }

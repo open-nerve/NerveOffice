@@ -20,6 +20,7 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'users.password_reset_completed': '重置密码',
   'users.password_reset_revoked': '作废重置链接',
   'users.login_unlocked': '解除登录锁定',
+  'users.local_key_revoked': '吊销本机密钥',
   'users.disabled': '停用账户',
   'users.enabled': '启用账户',
   'users.system_role_changed': '变更系统角色',

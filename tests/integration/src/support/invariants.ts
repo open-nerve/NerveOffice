@@ -55,6 +55,15 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
   // 回执记的是那时的当前修订（M3-P3 设计 §3.7），修订号只增不减：回执的修订号不会比文档现在的大
   'I18 回执的修订号不大于文档的修订号':
     'SELECT t.request_id, t.revision, d.revision AS document_revision FROM document_save_receipts t JOIN documents d ON d.id = t.document_id WHERE t.revision > d.revision',
+  // 本机密钥（M3-P6 设计 §3.2）：第一次取用插第 1 版，之后每次吊销在同一个事务里插下一版（账户行的锁把同一个人的吊销串起来）。
+  // 主键 (user_id, version) 与"版本从 1 起"由约束保证，所以"版本恰好是 1..n"等价于最大的版本等于行数
+  'I19 每个人的本机密钥版本从 1 起连续':
+    'SELECT user_id, count(*) AS keys, max(version) AS max_version FROM user_local_keys GROUP BY user_id HAVING max(version) <> count(*)',
+  // 吊销与插下一版在同一个事务里：有过任何一行的人恰好有一把当前的（至多一把由部分唯一索引保证），而且是版本最大的那一把。
+  // 没有当前的（吊销了却没有下一版）时，这个人再也取不到密钥（第 1 版撞主键）；当前的不是最大的，说明吊销之后又出现了旧版本
+  'I20 有过本机密钥的人恰好有一把当前的、而且是版本最大的那一把':
+    `SELECT user_id, max(version) AS max_version, max(version) FILTER (WHERE revoked_at IS NULL) AS current_version FROM user_local_keys
+     GROUP BY user_id HAVING max(version) FILTER (WHERE revoked_at IS NULL) IS DISTINCT FROM max(version)`,
 }
 
 /** 每条不变量最多列出几行：够定位，不把整张表打进错误信息 */

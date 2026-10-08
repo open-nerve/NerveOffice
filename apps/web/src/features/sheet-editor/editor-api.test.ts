@@ -43,9 +43,9 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
   })
 
   it('续租：PUT 空闲的秒数与本页的构建与数据格式（M3-P3），令牌只在请求头里（不进地址）', async () => {
-    const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z', request: null }) })
+    const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null }) })
     setCsrfToken('csrf-1')
-    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z', request: null })
+    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null })
     expect(api.requests[0]).toMatchObject({ key: `PUT ${LEASE}`, body: { idleSeconds: 12, ...PAGE_CLIENT_FORMAT }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-1' } })
   })
 

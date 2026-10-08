@@ -7,6 +7,13 @@ import process from 'node:process'
 export const E2E_ADMIN = { username: 'e2e-admin', displayName: 'E2E 管理员', password: 'e2e admin password 2026' } as const
 
 /**
+ * 本机 E2E 的本机密钥的主密钥（M3-P6 设计 §3.4）：固定的、可读的测试密钥（base64 解出来是 nerve-office-e2e-only-master-key；
+ * 公开地址是 HTTPS 时应用拒绝这种密钥，容器 E2E 每次随机生成）。重启用例（SIGUSR2 按原来的参数重启）沿用同一把，重启之后取到的是同一把。
+ * 只给后端进程（serve.ts）：迁移与初始化管理员的命令不需要它
+ */
+export const E2E_LOCAL_KEYS_MASTER_KEY = 'bmVydmUtb2ZmaWNlLWUyZS1vbmx5LW1hc3Rlci1rZXk='
+
+/**
  * 本机挑一个空闲端口（由操作系统分配）。只在 Playwright 的主进程里调用一次，结果经环境变量 E2E_PORT 交给工作进程与服务脚本：
  * 工作进程也会加载配置，各挑各的就对不上了。固定端口在多个 worktree 同时跑 E2E 时会互相占用，
  * 甚至把别人的服务当成自己的（审查 B9）。

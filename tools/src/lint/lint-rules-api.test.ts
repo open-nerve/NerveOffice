@@ -427,6 +427,56 @@ describe('US-M1-11 lint 规则的自测：绕过权限的服务只给指定的�
     }
   })
 
+  it('吊销本机密钥的入口（LocalKeyRevocation）只由管理界面的服务引用：workspace、documents、管理界面的控制器、app 层引用都失败，local-keys 模块自己不受影响（M3-P6 设计 §3.7）', async () => {
+    const REVOCATION_MESSAGE = '吊销本机密钥的入口（LocalKeyRevocation）不判断调用者的权限，只由管理界面的模块（modules/admin）的服务调用'
+    const importRevocation = 'import { LocalKeyRevocation } from \'../local-keys/index.ts\'\n\nexport const revocation = LocalKeyRevocation\n'
+    expect(await rulesFor(importRevocation, 'apps/api/src/modules/admin/admin-users.service.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor('import { LocalKeyRevocation } from \'./local-key-revocation.ts\'\n\nexport const revocation = LocalKeyRevocation\n', 'apps/api/src/modules/local-keys/local-keys.module.ts')).not.toContain('no-restricted-imports')
+    // 同一个公开入口里的版本读取照常引用（workspace 的心跳、admin 的账户视图）
+    expect(await rulesFor('import { LocalKeyVersions } from \'../local-keys/index.ts\'\n\nexport const versions = LocalKeyVersions\n', 'apps/api/src/modules/workspace/document-editing.service.ts')).not.toContain('no-restricted-imports')
+    const violations: [string, string, string, string][] = [
+      [importRevocation, 'apps/api/src/modules/workspace/document-editing.service.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      [importRevocation, 'apps/api/src/modules/documents/documents.service.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      // 管理界面的控制器同样拿不到：只有在锁里复核过操作者的服务调用它
+      [importRevocation, 'apps/api/src/modules/admin/admin-users.controller.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      ['import type { LocalKeyRevocation } from \'../local-keys/index.ts\'\n\nexport type Revocation = LocalKeyRevocation\n', 'apps/api/src/modules/workspace/document-editing.service.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      ['import * as localKeys from \'../local-keys/index.ts\'\n\nexport const revocation = localKeys.LocalKeyRevocation\n', 'apps/api/src/modules/workspace/document-editing.service.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      ['export { LocalKeyRevocation } from \'../local-keys/index.ts\'\n', 'apps/api/src/modules/spaces/index.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      ['import { LocalKeyRevocation } from \'../modules/local-keys/index.ts\'\n\nexport const revocation = LocalKeyRevocation\n', 'apps/api/src/app/app.module.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      ['export { LocalKeyRevocation } from \'../modules/local-keys/index.ts\'\n', 'apps/api/src/app/index.ts', 'no-restricted-imports', REVOCATION_MESSAGE],
+      // 不经公开入口、直接引用它的文件：模块边界拦下
+      ['import { LocalKeyRevocation } from \'../local-keys/local-key-revocation.ts\'\n\nexport const revocation = LocalKeyRevocation\n', 'apps/api/src/modules/workspace/document-editing.service.ts', 'boundaries/dependencies', ''],
+    ]
+    for (const [code, file, rule, message] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain(rule)
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(message)
+    }
+  })
+
+  it('本机密钥的主密钥（LOCAL_KEYS_CONFIG）只给 local-keys 模块注入：别的模块、admin、app 层引用都失败，config 模块自己不受影响（M3-P6 设计 §3.4）', async () => {
+    const CONFIG_MESSAGE = '本机密钥的主密钥（LOCAL_KEYS_CONFIG）只给 local-keys 模块注入'
+    const importConfig = (from: string): string => `import { LOCAL_KEYS_CONFIG } from '${from}'\n\nexport const token = LOCAL_KEYS_CONFIG\n`
+    expect(await rulesFor(importConfig('../config/index.ts'), 'apps/api/src/modules/local-keys/local-keys.module.ts')).not.toContain('no-restricted-imports')
+    expect(await rulesFor(importConfig('./config.module.ts'), 'apps/api/src/modules/config/index.ts')).not.toContain('no-restricted-imports')
+    // 同一个公开入口里的 APP_CONFIG 照常引用
+    expect(await rulesFor('import { APP_CONFIG } from \'../config/index.ts\'\n\nexport const token = APP_CONFIG\n', 'apps/api/src/modules/auth/auth.module.ts')).not.toContain('no-restricted-imports')
+    const violations: [string, string][] = [
+      [importConfig('../config/index.ts'), 'apps/api/src/modules/auth/auth.module.ts'],
+      [importConfig('../config/index.ts'), 'apps/api/src/modules/admin/admin.module.ts'],
+      [importConfig('../config/index.ts'), 'apps/api/src/modules/workspace/workspace.module.ts'],
+      [importConfig('../modules/config/index.ts'), 'apps/api/src/app/app.module.ts'],
+      ['export { LOCAL_KEYS_CONFIG } from \'../modules/config/index.ts\'\n', 'apps/api/src/app/index.ts'],
+      // local-keys 里的仓储、控制器这类文件同样拦下（后面按文件类型的块），只有组装与主密钥环要用的地方用它
+      [importConfig('../config/index.ts'), 'apps/api/src/modules/local-keys/local-keys.repository.ts'],
+    ]
+    for (const [code, file] of violations) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}：${code}`).toContain('no-restricted-imports')
+      expect(report.messages.join('\n'), `${file}：${code}`).toContain(CONFIG_MESSAGE)
+    }
+  })
+
   it('不判断权限的回收站清理只在 documents 与 jobs 里：TrashPurgeService 只给 jobs，删除单元的本体 TrashEntryPurger 谁都拿不到（M2-P6 复核 A 的 G1）', async () => {
     const PURGE_MESSAGE = '到期的回收站清理（TrashPurgeService）不判断人的权限'
     const PURGER_MESSAGE = '永久删除一个删除单元的本体（TrashEntryPurger）不判断权限'

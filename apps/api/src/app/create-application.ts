@@ -1,6 +1,6 @@
 import type { NestExpressApplication } from '@nestjs/platform-express'
 import type { DestinationStream } from 'pino'
-import type { AppConfig } from '../modules/config/index.ts'
+import type { ServerConfig } from '../modules/config/index.ts'
 import type { AdditionalModules } from './app.module.ts'
 import { NestFactory } from '@nestjs/core'
 import { RequestIdentities } from '../modules/auth/index.ts'
@@ -18,8 +18,11 @@ export interface ApplicationOptions {
   additionalModules?: AdditionalModules
 }
 
-/** 按配置建应用（P2 设计 §3.2）。进程入口与集成测试都经这里，走的是同一条管线。 */
-export async function createApplication(config: AppConfig, options: ApplicationOptions = {}): Promise<ApplicationRuntime> {
+/**
+ * 按配置建应用（P2 设计 §3.2）。进程入口与集成测试都经这里，走的是同一条管线。
+ * 配置是应用进程的那一份（loadServerConfig，带着本机密钥的主密钥，M3-P6 设计 §3.4）：命令行的配置在类型上就传不进来
+ */
+export async function createApplication(config: ServerConfig, options: ApplicationOptions = {}): Promise<ApplicationRuntime> {
   const rootLogger = createRootLogger({ level: config.log.level, destination: options.logDestination })
   const requestContext = new RequestContextStore()
   const logger = new AppLogger(rootLogger, requestContext)

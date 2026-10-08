@@ -193,14 +193,21 @@ describe('心跳续租', () => {
   })
 
   it('响应：新的到期时间与待回应的请求编辑（M3-P5：没有时为 null，不能省略）', () => {
-    expect(renewedEditLeaseSchema.parse({ expiresAt: AT, request: null, writeEpoch: 3 })).toEqual({ expiresAt: AT, request: null })
-    expect(renewedEditLeaseSchema.safeParse({ expiresAt: AT }).success).toBe(false)
-    expect(renewedEditLeaseSchema.safeParse({ request: null }).success).toBe(false)
+    expect(renewedEditLeaseSchema.parse({ expiresAt: AT, request: null, localKeyVersion: null, writeEpoch: 3 })).toEqual({ expiresAt: AT, request: null, localKeyVersion: null })
+    expect(renewedEditLeaseSchema.safeParse({ expiresAt: AT, localKeyVersion: null }).success).toBe(false)
+    expect(renewedEditLeaseSchema.safeParse({ request: null, localKeyVersion: null }).success).toBe(false)
+  })
+
+  it('M3-P6 响应带调用者当前的本机密钥的版本：从没取过时为 null，不能省略；版本从 1 起', () => {
+    expect(renewedEditLeaseSchema.parse({ expiresAt: AT, request: null, localKeyVersion: 2 })).toEqual({ expiresAt: AT, request: null, localKeyVersion: 2 })
+    expect(renewedEditLeaseSchema.safeParse({ expiresAt: AT, request: null }).success).toBe(false)
+    for (const localKeyVersion of [0, 1.5, '2'])
+      expect(renewedEditLeaseSchema.safeParse({ expiresAt: AT, request: null, localKeyVersion }).success, String(localKeyVersion)).toBe(false)
   })
 
   it('M3-P5 待回应的请求：标识（交出、谢绝时带上）、请求方（"人"的结构）与发出的时刻；多出的字段被丢弃', () => {
     const request = { id: REQUEST_ID, requester: BEN, requestedAt: AT }
-    expect(renewedEditLeaseSchema.parse({ expiresAt: AT, request: { ...request, sessionId: TAB } })).toEqual({ expiresAt: AT, request })
+    expect(renewedEditLeaseSchema.parse({ expiresAt: AT, request: { ...request, sessionId: TAB }, localKeyVersion: 1 })).toEqual({ expiresAt: AT, request, localKeyVersion: 1 })
     expect(pendingEditRequestSchema.safeParse({ ...request, id: 'request-1' }).success).toBe(false)
     expect(pendingEditRequestSchema.safeParse({ ...request, requester: { id: BEN.id } }).success).toBe(false)
     expect(pendingEditRequestSchema.safeParse({ id: REQUEST_ID, requester: BEN }).success).toBe(false)

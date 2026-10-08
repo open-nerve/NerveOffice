@@ -7,6 +7,7 @@ import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { EditLeaseService, EditRequestService } from '../documents/index.ts'
+import { LocalKeyVersions } from '../local-keys/index.ts'
 import { UsersService } from '../users/index.ts'
 import { accountIn, toUserSummary } from './workspace-views.ts'
 
@@ -87,7 +88,7 @@ function requestOutcomeOf(outcome: RequestOutcome, accounts: Accounts): EditRequ
 /**
  * 编辑权的接口编排（M3-P1 设计 §3.1、§3.2）：申请、心跳续租、释放与编辑状态；M3-P5（设计 §3.4、§3.6）的请求编辑（发出、续期、取消）、
  * 谢绝与交出。租约的规则与数据在 documents 的 EditLeaseService 与 EditRequestService；这里开事务、经 users 补人名（documents 不依赖 users，
- * 与分享同一个做法）、拼好响应。
+ * 与分享同一个做法）、拼好响应；心跳另经 local-keys 带上调用者当前的本机密钥的版本（M3-P6 设计 §3.6，documents 不依赖 local-keys）。
  * 写的几个各是一个业务事务，补人名也在同一个事务里，提交之后不再访问数据库；编辑状态在一个只读快照里（ADR-017）。一个响应里要的人名
  * （正在编辑的人、请求方、留给的人、上一位持有者）一次查齐，一个也不要时不查。
  * "被占用"在这里转成 EDIT_LEASE_HELD，交出之后的保留挡住的申请转成 EDIT_LEASE_RESERVED：事务随之回滚，而申请在判断出它们之前什么也没写
@@ -98,6 +99,7 @@ export class DocumentEditingService {
     private readonly leases: EditLeaseService,
     private readonly requests: EditRequestService,
     private readonly users: UsersService,
+    private readonly localKeys: LocalKeyVersions,
     private readonly transactions: TransactionRunner,
   ) {}
 
@@ -159,17 +161,24 @@ export class DocumentEditingService {
   }
 
   /**
-   * 心跳续租（200）：新的到期时间与待回应的请求编辑（M3-P5 设计 §3.3：标识、请求方的人名、发出的时刻；没有时为 null）；
-   * 租约不再有效时 409 EDIT_LEASE_LOST（documents 抛出，details 带原因）；页面过旧时 409 CLIENT_OUTDATED（M3-P3 设计 §3.5）
+   * 心跳续租（200）：新的到期时间与待回应的请求编辑（M3-P5 设计 §3.3：标识、请求方的人名、发出的时刻；没有时为 null），
+   * 以及调用者自己当前的本机密钥的版本（M3-P6 设计 §3.6：从没取过时为 null，正在编辑的页面据此得知密钥已被吊销）；
+   * 租约不再有效时 409 EDIT_LEASE_LOST（documents 抛出，details 带原因）；页面过旧时 409 CLIENT_OUTDATED（M3-P3 设计 §3.5）。
+   * 版本在续租成功之后、同一个事务里不加锁地读一条（部分唯一索引）：租约的锁顺序不变，每次心跳多一条按索引的读
    */
   async renew(actor: EditingActor, documentId: string, request: RenewalRequest, token: string | undefined): Promise<RenewedEditLease> {
     return this.transactions.run(async (transaction) => {
       const renewed = await this.leases.renew(actor, documentId, request, token, transaction)
+      const localKeyVersion = await this.localKeys.currentVersionOf(actor.userId, transaction)
       const pending = renewed.request
       if (pending === undefined)
-        return { expiresAt: renewed.expiresAt.toISOString(), request: null }
+        return { expiresAt: renewed.expiresAt.toISOString(), request: null, localKeyVersion }
       const accounts = await this.accountsOf([pending.requesterId], transaction)
-      return { expiresAt: renewed.expiresAt.toISOString(), request: { id: pending.id, requester: toUserSummary(accountIn(accounts, pending.requesterId)), requestedAt: pending.requestedAt.toISOString() } }
+      return {
+        expiresAt: renewed.expiresAt.toISOString(),
+        request: { id: pending.id, requester: toUserSummary(accountIn(accounts, pending.requesterId)), requestedAt: pending.requestedAt.toISOString() },
+        localKeyVersion,
+      }
     })
   }
 
