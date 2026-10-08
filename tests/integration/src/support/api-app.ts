@@ -1,8 +1,11 @@
 // 在测试进程里启动真实的 api 应用（与生产相同的 createApplication 与管线），监听随机端口。
 import type { ApplicationOptions, ApplicationRuntime } from '@nerve-office/api'
+import type { Database } from '@nerve-office/api/testing'
 import type { LogCapture } from './log-capture.ts'
 import { Buffer } from 'node:buffer'
-import { createApplication, loadServerConfig } from '@nerve-office/api'
+import { createApplication, loadServerConfig, TransactionRunner } from '@nerve-office/api'
+import { sql } from 'drizzle-orm'
+import { expect } from 'vitest'
 import { captureLogs } from './log-capture.ts'
 
 export interface TestApp {
@@ -76,4 +79,24 @@ export async function startTestApp(options: TestAppOptions): Promise<TestApp> {
       await runtime.shutdown('测试结束')
     },
   }
+}
+
+/**
+ * 应用的连接用 UTC 以外的会话时区另起一个应用（M2-P6 第 3 片复验建议 2，M3-P6 复验 C2、再复核 D6）：测试库的会话默认是 UTC，
+ * 时刻按"带微秒的 UTC 文本"在库与应用之间往返（keyset 分页的位置、登录限流的窗口）时，换算漏了时区也看不出来。
+ * 连接串带 options=-c TimeZone=…；起来之后先用应用自己的连接核对确实是这个时区（前提：options 没生效的话，用例测的还是 UTC）
+ */
+export async function startTestAppInTimeZone(options: TestAppOptions & { readonly timeZone: string }): Promise<TestApp> {
+  const url = new URL(options.databaseUrl)
+  url.searchParams.set('options', `-c TimeZone=${options.timeZone}`)
+  const app = await startTestApp({ ...options, databaseUrl: url.toString() })
+  try {
+    const zone = await app.runtime.get(TransactionRunner).run(async transaction => (await (transaction as unknown as Database).execute<{ zone: string }>(sql`SELECT current_setting('TimeZone') AS zone`)).rows[0]?.zone)
+    expect(zone, '应用的连接不在这个时区：用例的前提不成立').toBe(options.timeZone)
+  }
+  catch (error) {
+    await app.close()
+    throw error
+  }
+  return app
 }

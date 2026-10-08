@@ -348,7 +348,8 @@ export function AdminUsersPage() {
   return (
     <div className="flex flex-col gap-4">
       {/* 操作结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报。
-          它在长列表上方：写进说明时下面的内容整体下移，keepFocusInView 把焦点所在的元素（交还焦点的那一行的按钮）滚回可视区域（复验 C7 时发现） */}
+          它在长列表上方：写进说明（状态区变高）时下面的内容整体下移，keepFocusInView 把排在它后面、有焦点的元素（交还焦点的那一行的按钮）
+          滚回可视区域（复验 C7 时发现）；变矮时不滚（再复核 D1） */}
       <StatusRegion className="rounded-lg border p-3 text-sm" keepFocusInView>{done}</StatusRegion>
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-2">

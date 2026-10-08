@@ -1,7 +1,9 @@
 // 停用者文档的转移（M2-P2，US-M2-04）：系统管理员停用账户之后，在转移页只看得到标题，选文档与目标团队空间，确认之后转移；
 // 结果的说明等确认框关掉、焦点交还之后才写进状态区，写进去的那一刻不在 aria-hidden 之下，读屏读得到（M2-P5 复验 S1，support/status-writes.ts）；
 // 空间的成员随即能打开这些文档。系统管理员打不开停用者的文档。
-// 长列表之后转移：说明写进列表上方的状态区时下面的内容整体下移，焦点交还的"转移"由状态区的 keepFocusInView 滚回可视区域（M3-P6 复验）。
+// 长列表之后转移：说明写进列表上方的状态区时下面的内容整体下移，焦点交还的"转移"由状态区的 keepFocusInView 滚回可视区域（M3-P6 复验）；
+// "有文档已经不在了"的说明插在"转移"正上方，同样由共用的 useKeepFocusInView 把它滚回来（再复核 D5）。
+import type { Page } from '@playwright/test'
 import { createDocument, createDocuments, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
@@ -97,4 +99,40 @@ test.describe('US-M2-04 停用者文档的转移', () => {
     await expect(submit).toBeFocused()
     await expect(submit).toBeInViewport({ ratio: 1 })
   })
+
+  test('长列表之后用键盘转移、选中的文档在确认之前已被别人转走：确认框关掉之后"有文档已经不在了"的说明插在"转移"正上方，焦点交还的"转移"仍整个在可视区域里（M3-P6 再复核 D5）', async ({ page }) => {
+    const admin = await createUser('trconf-admin', '管理员', { systemRole: 'admin' })
+    const leaver = await createUser('trconf-leaver', '离职的同事')
+    const space = await createTeamSpace('长列表的去处', admin)
+    await createDocuments(leaver, '旧文档', 25)
+    await loginThroughApi(page, admin)
+    await actAs(page, 'POST', `/api/admin/users/${leaver.id}/disable`)
+    await page.goto(`/admin/users/${leaver.id}/documents`)
+    await expect(page.getByRole('table', { name: '个人空间里的文档' }).getByRole('row')).toHaveCount(26)
+    await page.getByLabel('选择 旧文档 1', { exact: true }).check()
+    await page.getByLabel('目标团队空间', { exact: true }).fill(space.name)
+    await page.getByRole('list', { name: '找到的团队空间', exact: true }).getByRole('button', { name: space.name, exact: true }).click()
+    // 确认之前，"旧文档 1"已经被别人转走
+    await actAs(page, 'POST', `/api/admin/users/${leaver.id}/documents/transfer`, { documentIds: [await documentIdOf(page, leaver.id, '旧文档 1')], target: { type: 'team', spaceId: space.id } })
+    const submit = page.getByRole('button', { name: '转移', exact: true })
+    await submit.focus()
+    await page.keyboard.press('Enter')
+    const confirm = page.getByRole('dialog', { name: `把 1 份文档转移到 ${space.name}？` })
+    await confirm.getByRole('button', { name: '转移', exact: true }).click()
+    await expect(confirm).toHaveCount(0)
+    await expect(page.getByRole('alert').filter({ hasText: '有文档已经不在' })).toBeVisible()
+    await expect(submit).toBeFocused()
+    await expect(submit).toBeInViewport({ ratio: 1 })
+  })
 })
+
+/** 停用者个人空间里这份文档的 id（经管理界面的接口按标题找） */
+async function documentIdOf(page: Page, userId: string, title: string): Promise<string> {
+  const response = await page.request.get(`/api/admin/users/${userId}/documents`)
+  expect(response.status(), await response.text()).toBe(200)
+  const { items } = await response.json() as { items: { id: string, title: string }[] }
+  const found = items.find(item => item.title === title)
+  if (found === undefined)
+    throw new Error(`找不到"${title}"`)
+  return found.id
+}

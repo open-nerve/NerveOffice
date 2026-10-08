@@ -2,7 +2,6 @@
 // 同时生成下一版、记审计）、管理界面的账户带当前的摘要、正在编辑的页面经心跳得知当前的版本。真实的 HTTP 与 PostgreSQL；
 // 库里的包装结果在测试这一侧按设计的格式独立解开（support/local-keys.ts），证明服务端确实是这样加密保存的。
 // 并发与确定的交错见 local-key-races.test.ts，主密钥对不上与包装结果被改动见 master-key-mismatch.test.ts，权限矩阵见 permissions/local-key-matrix.test.ts
-import type { Database } from '@nerve-office/api/testing'
 import type { AdminUser, LocalKey } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
@@ -10,12 +9,10 @@ import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomBytes } from 'node:crypto'
-import { TransactionRunner } from '@nerve-office/api'
 import { adminUserListResponseSchema, adminUserSchema, CSRF_TOKEN_HEADER, errorResponseSchema, localKeySchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
-import { sql } from 'drizzle-orm'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
-import { startTestApp, TEST_LOCAL_KEYS_MASTER_KEY, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
+import { startTestApp, startTestAppInTimeZone, TEST_LOCAL_KEYS_MASTER_KEY, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
@@ -210,14 +207,9 @@ describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id
   })
 
   it('应用连接的会话时区不是 UTC（上海）时吊销两次：每一版生成于上一版被吊销的那一刻（逐微秒相等，不变量 I21）、时间线单调，账户里的生成时刻与库里的一致（复验 C2：测试库的会话默认是 UTC，时刻的换算漏了时区也看不出来）', async () => {
-    // 照 jobs/trash-purge.test.ts：连接串带上会话时区，另起一个应用
-    const url = new URL(database.url)
-    url.searchParams.set('options', '-c TimeZone=Asia/Shanghai')
-    const shanghai = await startTestApp({ databaseUrl: url.toString() })
+    // 照 jobs/trash-purge.test.ts：连接串带上会话时区，另起一个应用；先核对应用自己的连接确实在上海时区（support/api-app.ts）
+    const shanghai = await startTestAppInTimeZone({ databaseUrl: database.url, timeZone: 'Asia/Shanghai' })
     try {
-      // 前提：应用自己的连接确实在上海时区（连接串的 options 生效了）
-      const zone = await shanghai.runtime.get(TransactionRunner).run(async transaction => (await (transaction as unknown as Database).execute<{ zone: string }>(sql`SELECT current_setting('TimeZone') AS zone`)).rows[0]?.zone)
-      expect(zone, '应用的连接不在上海时区：用例的前提不成立').toBe('Asia/Shanghai')
       people += 1
       const account = await createAccount(database, { username: `keys-${people}` })
       const admin = await login(shanghai.baseUrl, root.username, root.password)

@@ -6,6 +6,7 @@ import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { plainName } from '../shared/testing/people.test-support.ts'
+import { resize } from '../shared/testing/resize.test-support.ts'
 import { watchScrollIntoView } from '../shared/testing/scroll.test-support.ts'
 import { AMY, deferred, listPage, ROOT_ID, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
@@ -446,8 +447,9 @@ describe('US-M2-04 转移停用者的文档', () => {
     await waitFor(() => expect(screen.queryByText('文档 0')).not.toBeInTheDocument())
     expect(lastBody(api, TRANSFER_KEY)).toEqual({ documentIds: [titles(3)[0]?.id, titles(3)[1]?.id], target: { type: 'team', spaceId: SPACE.id } })
     await waitFor(() => expect(document.activeElement).toBe(submit))
-    // 状态区在文档列表上方（共用的状态区开着 keepFocusInView，M3-P6 复验）：说明写进去之后把焦点交还的"转移"按最小距离滚回可视区域
-    // （真实浏览器里的位置由 E2E 核对：admin/transfer.spec.ts 长列表之后的"转移"）
+    // 状态区在文档列表上方（共用的状态区开着 keepFocusInView）：说明写进去、状态区变高之后（jsdom 没有布局，这里当作它撑开了），
+    // 把焦点交还的"转移"按最小距离滚回可视区域（真实浏览器里的位置由 E2E 核对：admin/transfer.spec.ts 长列表之后的"转移"）
+    act(() => resize(result, 46))
     expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
     expect(scrolled.mock.contexts.at(-1)).toBe(submit)
   })
@@ -477,16 +479,26 @@ describe('US-M2-04 转移停用者的文档', () => {
     fireEvent.click(submit)
     const dialog = await screen.findByRole('dialog', { name: `把 2 份文档转移到 ${plainName('本', 'ben')} 的个人空间？` })
     const announced = watchAnnouncement('有文档已经不在这个人的个人空间里了')
+    const scrolled = watchScrollIntoView()
     fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     // 说明在页面上（弹窗之外），不在弹窗里；等弹窗关掉、页面不再被标为 aria-hidden、焦点交还之后才出现（M2-P5 复验 S1）
-    expect(await screen.findByRole('alert')).toHaveTextContent('有文档已经不在这个人的个人空间里了（可能被别人转走了）：列表已刷新，请重新选择后再转移')
+    const conflict = await screen.findByRole('alert')
+    expect(conflict).toHaveTextContent('有文档已经不在这个人的个人空间里了（可能被别人转走了）：列表已刷新，请重新选择后再转移')
     expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
     expect(lastBody(api, TRANSFER_KEY)).toEqual({ documentIds: titles(2).map(document => document.id), target: { type: 'personal', userId: BEN.id } })
     // 列表刷新了，已经不在的文档不再算作选中
     expect(screen.queryByText('文档 0')).toBeNull()
     expect(screen.getByText('已选择 1 份，一次最多 100 份')).toBeInTheDocument()
     await waitFor(() => expect(document.activeElement).toBe(submit))
+    // 说明插在"转移"正上方、放在一直在的容器里（再复核 D5）：容器变高之后（jsdom 没有布局，这里当作它从不显示撑开了），
+    // 共用的 useKeepFocusInView 把焦点所在的"转移"按最小距离滚回可视区域（真实浏览器里由 E2E 核对：admin/transfer.spec.ts）
+    const holder = conflict.parentElement
+    if (holder === null)
+      throw new Error('说明没有放在容器里')
+    act(() => resize(holder, 62))
+    expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
+    expect(scrolled.mock.contexts.at(-1)).toBe(submit)
     expect(requestCount(api, TRANSFER_KEY)).toBe(1)
 
     // 再次打开确认的弹窗：按新的选择；上一次的说明清掉
