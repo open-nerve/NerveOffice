@@ -365,6 +365,8 @@ describe('吊销成功之后接着刷新列表：在路上的列表请求回来�
       // 时限之前仍在等刷新；留出 2 秒的余量，测试本身的耗时不会让时限提前到
       await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS - 2_000))
       expect(within(dialog).getByRole('button', { name: '正在处理…' })).toHaveAttribute('aria-disabled', 'true')
+      // 等刷新的这段时间里，确认框后面的这一行已经按响应换成第 2 版：先换上这一行、再刷新（复验 C1、再复核 D3：顺序反了的话这时还是第 1 版）
+      expect(keyLine(row)).toHaveTextContent('本机密钥第 2 版')
       await act(async () => vi.advanceTimersByTimeAsync(2_000))
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
       await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
