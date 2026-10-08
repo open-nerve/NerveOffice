@@ -1,19 +1,20 @@
-// 面板的防抖（M3-P4 设计 §3.4）：面板开着时的输入才等，等到 SDK 的防抖到点（含余量）；页头里的不算；销毁时放行
-import { afterEach, describe, expect, it } from 'vitest'
+// 面板的防抖（M3-P4 设计 §3.4；Codex 评审 CX4，M3-P6 设计 §3.13）：面板开着时的输入才算，到 SDK 的防抖到点（含余量）之前是"防抖中"，
+// 开始与到点各通知一次；settled 等调用时的到点；页头里的不算；销毁时放行、不再通知
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PANEL_DEBOUNCES } from './internal-api/index.ts'
 import { PANEL_SETTLE_MARGIN_MS, watchPanelDebounces } from './panel-debounce-watch.ts'
 
 const NOTE_MS = PANEL_DEBOUNCES.find(debounce => debounce.panel === 'note')?.delayMs ?? Number.NaN
 const DV_MS = PANEL_DEBOUNCES.find(debounce => debounce.panel === 'data-validation')?.delayMs ?? Number.NaN
 
-/** 假的时钟：schedule 记下计时器，advance 到点执行 */
-function fakeTime() {
+/** 假的时钟：schedule 记下计时器，advance 到点执行；early 让计时器比它排定的时刻早 early 毫秒执行（时钟与计时器有出入） */
+function fakeTime(early = 0) {
   let now = 1_000
   const timers: { at: number, callback: () => void, cancelled: boolean }[] = []
   return {
     now: () => now,
     schedule: (callback: () => void, delayMs: number) => {
-      const timer = { at: now + delayMs, callback, cancelled: false }
+      const timer = { at: now + delayMs - early, callback, cancelled: false }
       timers.push(timer)
       return () => {
         timer.cancelled = true
@@ -63,8 +64,13 @@ function settledFlag(promise: Promise<void>): { readonly done: () => boolean } {
   return { done: () => done }
 }
 
+function typeInto(element: Element): void {
+  element.dispatchEvent(new InputEvent('input', { bubbles: true }))
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
+  vi.unstubAllGlobals()
 })
 
 describe('面板的防抖（M3-P4 设计 §3.4）', () => {
@@ -75,70 +81,81 @@ describe('面板的防抖（M3-P4 设计 §3.4）', () => {
     ])
   })
 
-  it('没有面板开着时的输入：不等', async () => {
+  it('没有面板开着时的输入：不算防抖中，不等也不通知', async () => {
     const time = fakeTime()
     const { surface } = page()
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const listener = vi.fn()
+    watch.onChange(listener)
     surface.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }))
     surface.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    expect(watch.pendingUntil()).toBeUndefined()
+    expect(watch.pending()).toBe(false)
     await watch.settled()
+    expect(time.pending()).toBe(0)
+    expect(listener).not.toHaveBeenCalled()
+    watch.dispose()
+  })
+
+  it('批注浮层开着时键入：防抖中，到 300 ms（加余量）才到点，从最后一次输入算；settled 同时兑现', async () => {
+    const time = fakeTime()
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    typeInto(note)
+    await time.advance(200)
+    typeInto(note)
+    const settled = settledFlag(watch.settled())
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS - 1)
+    expect(watch.pending()).toBe(true)
+    expect(settled.done()).toBe(false)
+    await time.advance(1)
+    expect(watch.pending()).toBe(false)
+    expect(settled.done()).toBe(true)
     expect(time.pending()).toBe(0)
     watch.dispose()
   })
 
-  it('批注浮层开着时键入：等到 300 ms（加余量）之后，从最后一次输入算', async () => {
+  it('关闭面板之后（SDK 的计时器照样会到点）：在关闭之前的输入照样算到点', async () => {
     const time = fakeTime()
     const { openNote } = page()
     const note = openNote()
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
-    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
-    await time.advance(200)
-    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
-    const last = time.now()
-    expect(watch.pendingUntil()).toBe(last + NOTE_MS + PANEL_SETTLE_MARGIN_MS)
-    const settled = settledFlag(watch.settled())
-    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS - 1)
-    expect(settled.done()).toBe(false)
-    await time.advance(1)
-    expect(settled.done()).toBe(true)
-    expect(watch.pendingUntil()).toBeUndefined()
-    watch.dispose()
-  })
-
-  it('关闭面板之后（SDK 的计时器照样会到点）：在关闭之前的输入照样等', async () => {
-    const time = fakeTime()
-    const { openNote } = page()
-    const note = openNote()
-    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
-    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    typeInto(note)
     note.remove()
     const settled = settledFlag(watch.settled())
     await time.advance(NOTE_MS)
+    expect(watch.pending()).toBe(true)
     expect(settled.done()).toBe(false)
     await time.advance(PANEL_SETTLE_MARGIN_MS)
+    expect(watch.pending()).toBe(false)
     expect(settled.done()).toBe(true)
     watch.dispose()
   })
 
-  it('数据验证面板开着时：目标不在面板里的输入（挂在 body 下的下拉框、在表格上选范围）同样算，等 1 秒', async () => {
+  it('数据验证面板开着时：目标不在面板里的输入（挂在 body 下的下拉框、在表格上选范围）同样算，到 1 秒（加余量）才到点', async () => {
     const time = fakeTime()
     const { openDataValidation, surface } = page()
     openDataValidation()
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
     surface.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
-    expect(watch.pendingUntil()).toBe(time.now() + DV_MS + PANEL_SETTLE_MARGIN_MS)
+    await time.advance(DV_MS + PANEL_SETTLE_MARGIN_MS - 1)
+    expect(watch.pending()).toBe(true)
+    await time.advance(1)
+    expect(watch.pending()).toBe(false)
     watch.dispose()
   })
 
-  it('两种面板都开着：按较长的那一种', () => {
+  it('两种面板都开着：按较长的那一种', async () => {
     const time = fakeTime()
     const { openNote, openDataValidation } = page()
     const note = openNote()
     openDataValidation()
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
-    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
-    expect(watch.pendingUntil()).toBe(time.now() + DV_MS + PANEL_SETTLE_MARGIN_MS)
+    typeInto(note)
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS)
+    expect(watch.pending()).toBe(true)
+    await time.advance(DV_MS - NOTE_MS)
+    expect(watch.pending()).toBe(false)
     watch.dispose()
   })
 
@@ -147,12 +164,14 @@ describe('面板的防抖（M3-P4 设计 §3.4）', () => {
     const { openNote, openDataValidation } = page()
     const panel = openDataValidation()
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
-    panel.querySelector('input')?.dispatchEvent(new InputEvent('input', { bubbles: true }))
-    const dvDue = time.now() + DV_MS + PANEL_SETTLE_MARGIN_MS
+    typeInto(panel.querySelector('input') ?? panel)
     panel.remove()
     await time.advance(100)
-    openNote().dispatchEvent(new InputEvent('input', { bubbles: true }))
-    expect(watch.pendingUntil()).toBe(dvDue)
+    typeInto(openNote())
+    await time.advance(DV_MS + PANEL_SETTLE_MARGIN_MS - 101)
+    expect(watch.pending()).toBe(true)
+    await time.advance(1)
+    expect(watch.pending()).toBe(false)
     watch.dispose()
   })
 
@@ -162,7 +181,7 @@ describe('面板的防抖（M3-P4 设计 §3.4）', () => {
     const note = openNote()
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
     note.dispatchEvent(new Event(type, { bubbles: true }))
-    expect(watch.pendingUntil()).toBeDefined()
+    expect(watch.pending()).toBe(true)
     watch.dispose()
   })
 
@@ -173,7 +192,8 @@ describe('面板的防抖（M3-P4 设计 §3.4）', () => {
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule, ignoreWithin: chrome })
     save.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     save.dispatchEvent(new PointerEvent('pointerup', { bubbles: true }))
-    expect(watch.pendingUntil()).toBeUndefined()
+    expect(watch.pending()).toBe(false)
+    expect(time.pending()).toBe(0)
     watch.dispose()
   })
 
@@ -183,33 +203,155 @@ describe('面板的防抖（M3-P4 设计 §3.4）', () => {
     const note = openNote()
     note.addEventListener('input', event => event.stopPropagation())
     const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
-    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
-    expect(watch.pendingUntil()).toBeDefined()
+    typeInto(note)
+    expect(watch.pending()).toBe(true)
     watch.dispose()
-  })
-
-  it('销毁：在等的立即放行，之后的输入不再记', async () => {
-    const time = fakeTime()
-    const { openNote } = page()
-    const note = openNote()
-    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
-    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
-    const settled = settledFlag(watch.settled())
-    watch.dispose()
-    await new Promise(resolve => setTimeout(resolve, 0))
-    expect(settled.done()).toBe(true)
-    expect(time.pending()).toBe(0)
-    await watch.settled()
   })
 
   it('默认用 performance.now 与 setTimeout：真的等到点', async () => {
     const { openNote } = page()
     const note = openNote()
     const watch = watchPanelDebounces(document)
-    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    typeInto(note)
     const started = performance.now()
     await watch.settled()
     expect(performance.now() - started).toBeGreaterThanOrEqual(NOTE_MS + PANEL_SETTLE_MARGIN_MS - 5)
+    expect(watch.pending()).toBe(false)
     watch.dispose()
+  })
+})
+
+describe('防抖中的状态与通知（Codex 评审 CX4）：开始与到点各通知一次', () => {
+  it('第一次输入通知一次（防抖开始）；期间再输入只把到点往后推、不通知；到点通知一次（防抖结束）', async () => {
+    const time = fakeTime()
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const seen: boolean[] = []
+    watch.onChange(() => seen.push(watch.pending()))
+    typeInto(note)
+    expect(seen).toEqual([true])
+    await time.advance(100)
+    typeInto(note)
+    await time.advance(100)
+    typeInto(note)
+    expect(seen).toEqual([true])
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS)
+    expect(seen).toEqual([true, false])
+    // 到点之后再输入：又一次开始
+    typeInto(note)
+    expect(seen).toEqual([true, false, true])
+    watch.dispose()
+  })
+
+  it('到点之前先通知、再放行在等的 settled：它们的后续看到的已经是到点之后的状态', async () => {
+    const time = fakeTime()
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const order: string[] = []
+    watch.onChange(() => order.push(`通知：${String(watch.pending())}`))
+    typeInto(note)
+    const settled = watch.settled().then(() => order.push(`放行：${String(watch.pending())}`))
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS)
+    await settled
+    expect(order).toEqual(['通知：true', '通知：false', '放行：false'])
+    watch.dispose()
+  })
+
+  it('计时器早到（时钟与计时器有出入）：没到点就接着等剩下的，不提前说写进了模型', async () => {
+    const time = fakeTime(5)
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const listener = vi.fn()
+    watch.onChange(listener)
+    typeInto(note)
+    const settled = settledFlag(watch.settled())
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS - 5)
+    expect(watch.pending()).toBe(true)
+    expect(settled.done()).toBe(false)
+    expect(listener).toHaveBeenCalledOnce()
+    await time.advance(5)
+    expect(watch.pending()).toBe(false)
+    expect(settled.done()).toBe(true)
+    expect(listener).toHaveBeenCalledTimes(2)
+    watch.dispose()
+  })
+
+  it('settled 等的是调用时的到点：之后的输入把到点往后推，它照样在原来的到点兑现，防抖中的状态留到新的到点', async () => {
+    const time = fakeTime()
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    typeInto(note)
+    const settled = settledFlag(watch.settled())
+    await time.advance(200)
+    typeInto(note)
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS - 200)
+    expect(settled.done()).toBe(true)
+    expect(watch.pending()).toBe(true)
+    await time.advance(200)
+    expect(watch.pending()).toBe(false)
+    watch.dispose()
+  })
+
+  it('监听者抛出的异常交给浏览器的错误报告：照样到点、别的监听者照样收到，在等的照样放行', async () => {
+    const report = vi.fn()
+    vi.stubGlobal('reportError', report)
+    const time = fakeTime()
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const failure = new Error('页面出错')
+    watch.onChange(() => {
+      throw failure
+    })
+    const other = vi.fn()
+    watch.onChange(other)
+    typeInto(note)
+    const settled = settledFlag(watch.settled())
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS)
+    expect(watch.pending()).toBe(false)
+    expect(settled.done()).toBe(true)
+    expect(other).toHaveBeenCalledTimes(2)
+    expect(report).toHaveBeenCalledTimes(2)
+    expect(report).toHaveBeenCalledWith(failure)
+    watch.dispose()
+  })
+
+  it('退订之后不再通知', async () => {
+    const time = fakeTime()
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const listener = vi.fn()
+    const unsubscribe = watch.onChange(listener)
+    unsubscribe()
+    typeInto(note)
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS)
+    expect(listener).not.toHaveBeenCalled()
+    watch.dispose()
+  })
+
+  it('销毁：防抖中的清掉、不通知，在等的立即放行，计时器撤掉，之后的输入不再记', async () => {
+    const time = fakeTime()
+    const { openNote } = page()
+    const note = openNote()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const listener = vi.fn()
+    watch.onChange(listener)
+    typeInto(note)
+    const settled = settledFlag(watch.settled())
+    watch.dispose()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(settled.done()).toBe(true)
+    expect(watch.pending()).toBe(false)
+    expect(time.pending()).toBe(0)
+    typeInto(note)
+    await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS)
+    expect(watch.pending()).toBe(false)
+    expect(listener).toHaveBeenCalledOnce()
+    await watch.settled()
   })
 })

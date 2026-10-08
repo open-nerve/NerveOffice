@@ -13,7 +13,10 @@
 // - "公式待更新"的初值由调用方给出（进入编辑时申请编辑权的响应里的标记，设计 §3.5）；
 // - 每次保存交回结果与失败的归类（SaveOutcome、classifySaveError），调度据此决定自动重试、等新内容、等会话还是停下（设计 §3.8）；
 // - 失败的说明在下一次保存的结果出来之前保留（设计 §3.9：自动重试期间不清掉再出现）；保存中仍可以再按（排一次）。
+// Codex 评审 CX4（M3-P6 设计 §3.13）：用户的输入还没写进模型（适配层合成的一个状态：单元格编辑器里的、面板防抖中的）算进未保存——页头
+// 不说"已保存到云端"、离开提示拦下，期间到来的旧的保存确认也不把它说成已保存；写进模型之后由修改序号接着算，到点却没有改动时随之清除。
 import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
+import type { UncommittedInput } from '../../editor/index.ts'
 import type { Incompatibility } from './client-format.ts'
 import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isNotFoundError } from '../../shared/api/index.ts'
@@ -23,10 +26,13 @@ import { incompatibilityOf } from './client-format.ts'
 export interface SaveEditor {
   readonly changeSeq: () => number
   readonly onChange: (listener: () => void) => () => void
-  readonly isCellEditing: () => boolean
-  /** 单元格编辑器里有还没提交的输入：也算有未保存的修改（Codex 评审 CX6） */
-  readonly hasPendingCellInput: () => boolean
-  readonly onCellEditingChange: (listener: () => void) => () => void
+  /**
+   * 用户的输入还没写进模型（适配层的 uncommittedInput，CX4）：pending 算有未保存的修改（Codex 评审 CX6 的单元格、CX4 的面板）；
+   * open（单元格编辑器只是打开）只让离开提示拦下
+   */
+  readonly uncommittedInput: () => UncommittedInput
+  /** 有没有还没写进模型的输入变了：开始与结束各一次 */
+  readonly onUncommittedInputChange: (listener: () => void) => () => void
 }
 
 /** 一次捕获：保存上传的就是它（snapshot-capture.ts 的 takeSnapshot 给出） */
@@ -151,7 +157,7 @@ export interface SaveView {
   readonly snapshotBytes: number | undefined
   /**
    * 本页有没有服务端还没确认的内容（只看内容，不看保存的状态，M3-P1 审查 B3）：确认过的修改序号之后又有修改、
-   * 公式结果尚未保存、单元格里还有没提交的输入，或者冲突之后本页的内容。按了保存却失败、而内容本来都已保存的，不算
+   * 公式结果尚未保存、还有没写进模型的输入（单元格编辑器里、面板防抖中，CX4），或者冲突之后本页的内容。按了保存却失败、而内容本来都已保存的，不算
    */
   readonly unsaved: boolean
   /**
@@ -233,7 +239,9 @@ export interface SaveCoordinator {
    * 停住保存时照样发：这是核对那一次，不是新的保存
    */
   readonly replayUnknownOutcome: () => Promise<'none' | 'committed' | 'not-committed' | 'unknown'>
-  /** 离开页面会丢掉内容：有未保存的修改、正在编辑的单元格、保存中、冲突之后本页的内容 */
+  /**
+   * 离开页面会丢掉内容：有未保存的修改、还没写进模型的输入（连只是打开的单元格编辑器也算，宁可多提示一次）、保存中、冲突之后本页的内容
+   */
   readonly hasUnsavedWork: () => boolean
   /**
    * 本页与服务端不兼容（续租得知，M3-P3）：转入终态（outdated、too-new），之后不再保存。保存自己得知时（请求得到 CLIENT_OUTDATED、
@@ -379,9 +387,12 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     return conflict !== undefined || blocked !== undefined
   }
 
-  /** 修改有服务端还没确认的部分（不算"公式结果尚未保存"）：确认过的修改序号之后又有修改、单元格里还有没提交的输入 */
+  /**
+   * 修改有服务端还没确认的部分（不算"公式结果尚未保存"）：确认过的修改序号之后又有修改，或者还有没写进模型的输入——它不在任何一次
+   * 捕获里，期间到来的保存确认（确认到的是之前的序号）也不能把它说成已保存（CX4）
+   */
   function editsUnsaved(): boolean {
-    return editor.changeSeq() > savedSeq || editor.hasPendingCellInput()
+    return editor.changeSeq() > savedSeq || editor.uncommittedInput() === 'pending'
   }
 
   /** 内容有服务端还没确认的部分：修改没确认完，或者公式结果尚未保存 */
@@ -400,7 +411,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   }
 
   const unsubscribeEditor = editor.onChange(update)
-  const unsubscribeCellEditing = editor.onCellEditingChange(update)
+  const unsubscribeInput = editor.onUncommittedInputChange(update)
 
   /** 服务端确认了这次捕获的内容，修订号是 revision */
   function confirm(capture: CaptureRecord, revision: number): void {
@@ -711,7 +722,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     hasUnknownOutcome: () => retryable !== undefined,
     busy: () => pendingSaves > 0 || verifying !== undefined,
     replayUnknownOutcome: replay,
-    hasUnsavedWork: () => conflict !== undefined || pendingSaves > 0 || editor.isCellEditing() || editor.changeSeq() > savedSeq || formulasPending,
+    hasUnsavedWork: () => conflict !== undefined || pendingSaves > 0 || editor.uncommittedInput() !== 'none' || editor.changeSeq() > savedSeq || formulasPending,
     block: kind => enterBlocked(kind, pendingSaves > 0),
     stop: () => {
       stopped = true
@@ -729,7 +740,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     },
     dispose: () => {
       unsubscribeEditor()
-      unsubscribeCellEditing()
+      unsubscribeInput()
       listeners.clear()
     },
   }
