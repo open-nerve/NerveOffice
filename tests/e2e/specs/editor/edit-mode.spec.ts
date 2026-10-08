@@ -7,7 +7,8 @@
 // - 以服务端当前的修订为基准：阅读期间别人保存过，点"编辑"先按 If-None-Match 取最新的内容再进入；
 // - 重建之前取出视图状态（当前工作表、左上角可见的行列、主选区），就绪之后恢复（风险表"重建丢掉用户的视图"）；
 // - 公式计算进行中切换：销毁的旧编辑器留下的计时器到点时不再抛出没接住的异常（SDK 的进度计时器调已销毁的语言服务，
-//   internal-api 的 disposalSafeLocaleOverride）。
+//   internal-api 的 disposalSafeLocaleOverride）；
+// - 阅读时页头里一行静态说明"阅读时显示的是已保存的版本，不是实时内容"（M3-P6，A14：已知限制在产品中可见），编辑时没有。
 // 失去编辑权之后另存为副本：上传本页捕获的内容（服务端按快照新建，M3-P2 S2 的接口），本页按服务器上的最新版本回到阅读。
 // 编辑器没能重新打开（以只读重建失败，审查 A3）时留在失去编辑权，焦点交给"另存为副本"；副本之后按最新的内容重建又失败也留着，
 // 副本的说明与链接照旧（复验 C1、C2）。
@@ -23,7 +24,7 @@ import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
 import { ALERT, closePermissionAlert, OPENED, scene, watch } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, blockLeaseRenewals, cellOf, createSheetThroughApi, createSheetThroughUi, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { appendSheet, blockLeaseRenewals, cellOf, createSheetThroughApi, createSheetThroughUi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, READING_NOTE, readingNote, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -166,6 +167,36 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
     await waitForEditorAccess(anotherDevice, 'read')
     await expect(saveStatus(anotherDevice)).toHaveText('只能查看')
     await expect(enterEditButton(anotherDevice)).toHaveCount(0)
+  })
+
+  test('US-M3-01 阅读时页头里一行静态说明（A14：已知限制"同一时刻一个人编辑、阅读者看到已保存的版本"在产品中可见）：看得见，读屏当作普通的文字读到（不在读屏状态区里）；进入编辑之后不在，退出编辑之后回来；别人在编辑时查看者两半都看得到', async ({ page, anotherDevice }) => {
+    const lead = await createUser('reading-note-lead')
+    const viewer = await createUser('reading-note-viewer')
+    const space = await createTeamSpace('阅读的说明', lead, [[lead, 'admin'], [viewer, 'viewer']])
+    const documentId = await createDocumentIn(space.id, lead, '共同的表')
+
+    await loginThroughApi(page, lead)
+    await openReader(page, documentId)
+    await expect(readingNote(page)).toBeVisible()
+    // 读屏读得到：在页头的无障碍树里是一段普通的文字（不是 aria-hidden、不是视觉隐藏）；不在读屏状态区（role="status"）、提示条里
+    expect(await page.locator('#editor-chrome').getByRole('banner').ariaSnapshot()).toContain(`- paragraph: ${READING_NOTE}`)
+    await expect(page.locator('#editor-chrome').getByRole('status').filter({ hasText: READING_NOTE })).toHaveCount(0)
+    await expect(page.locator('#editor-chrome').getByRole('alert').filter({ hasText: READING_NOTE })).toHaveCount(0)
+
+    // 进入编辑之后不在（这时显示的是本页正在编辑的内容）
+    await enterEditing(page)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect(readingNote(page)).toHaveCount(0)
+
+    // 别人在编辑时，查看者两半都看得到：谁在编辑（读屏状态区）与阅读时显示的是已保存的版本（页头）
+    await loginThroughApi(anotherDevice, viewer)
+    await openReader(anotherDevice, documentId)
+    await expect(editingNotice(anotherDevice)).toHaveText(editingBy(lead, false))
+    await expect(readingNote(anotherDevice)).toBeVisible()
+
+    // 退出编辑、回到阅读：说明回来
+    await exitEditing(page)
+    await expect(readingNote(page)).toBeVisible()
   })
 
   test('US-M3-01 阅读期间别人保存了新版本、本页还没刷新：点"编辑"以服务端当前的版本为基准（先按 If-None-Match 取最新的内容），进入之后照常保存，不冲突', async ({ page, anotherDevice }) => {

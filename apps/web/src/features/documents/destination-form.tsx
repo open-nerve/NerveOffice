@@ -3,11 +3,13 @@ import type { RefObject } from 'react'
 import type { FirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import type { TargetSpaces } from './target-spaces.ts'
 import { useQuery } from '@tanstack/react-query'
-import { useId, useRef, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
+import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
+import { focusIsLost } from '../../shared/lib/use-focus-hand-off.ts'
 import { Alert, AlertDescription, Button, Label, NativeSelect, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { folderChildrenQueryOptions } from './folders-api.ts'
@@ -86,16 +88,29 @@ function defaultSpaceOf(action: DestinationFormProps['action'], spaces: readonly
  * 复制的候选没能加载、按了"重试"：重试期间说明与按钮留着（不可用、说正在重试）；取到之后焦点交给"目标位置"这一行（随即选上的默认目标），
  * 一个也没有时交给那句说明，不落到 body（规范 §2.4，shared/lib/use-first-load-retry.ts）。
  * 目标空间里这一层的子文件夹第一次就没取到（复制与移动都一样，DEF-046）：说明原因、给出"重试"，重试期间说明与同一个按钮留着、
- * 不换成加载中；取到之后焦点交给一直在的"目标位置"这一行，又失败时换成新的原因、焦点还在按钮上
+ * 不换成加载中；取到之后焦点交给一直在的"目标位置"这一行，又失败时换成新的原因、焦点还在按钮上。
+ *
+ * 选目标位置的过程中按下的按钮常常随之不在了（DEF-049）：面板里的"移动""复制"随面板换成这个表单而卸载，点进的文件夹不在新的一层里，
+ * 回到根目录时"上一级"随之消失，目标位置没能刷新的说明连同"重试"在重试成功之后消失——原来焦点都由页面兜底交给页面的标题，离表单很远。
+ * 现在都交给"目标位置"这一行，读屏随之读到选到了哪里：表单出现时焦点落到了 body 就给它（还没有目标位置时给"取消"；焦点已经在别处时不抢）；
+ * 点"进入""上一级"之后一律给它（"上一级"还在时也是：不然换到的位置读屏听不到；按键盘的顺序它的下一个就是"上一级"）
  */
 export function DestinationForm({ panelId, action, targets, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
   const spaceSelectId = useId()
   const [choice, setChoice] = useState<TargetChoice>()
   /**
-   * 选好的目标位置这一行，或者"没有可以复制到的空间"（同一时刻只有一个，tabIndex -1）：候选或者这一层的子文件夹没能加载、
-   * 按"重试"取到之后焦点交给它
+   * 选好的目标位置这一行，或者"没有可以复制到的空间"（同一时刻只有一个，tabIndex -1）：表单出现、点"进入""上一级"之后（DEF-049），
+   * 候选或者这一层的子文件夹没能加载、按"重试"取到之后，焦点交给它
    */
   const targetRef = useRef<HTMLParagraphElement>(null)
+  /** "取消"（一直在）：表单出现时还没有目标位置的话焦点交给它 */
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const focusAfterRender = useFocusAfterRender()
+  // 表单出现时（见上）。用布局效果：DOM 刚改完、页面的 useFocusRescue（MutationObserver，之后的微任务）之前接住，不先跳到页面的标题
+  useLayoutEffect(() => {
+    if (focusIsLost())
+      (targetRef.current ?? cancelRef.current)?.focus()
+  }, [])
   const candidates = useFirstLoadRetry(targets.request, targetRef)
   const spaces = targets.items ?? []
   const spaceId = choice !== undefined && selectable(action, spaces, current, choice.spaceId) ? choice.spaceId : defaultSpaceOf(action, spaces, current)
@@ -114,14 +129,12 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
   const unchanged = action === 'move' && destination?.spaceId === current.spaceId && destination.folderId === current.folderId
   const blocked = pending || unchanged || destination === undefined
 
-  function enter(folder: TargetCrumb): void {
-    if (spaceId !== undefined)
-      setChoice({ spaceId, crumbs: [...crumbs, folder] })
-  }
-
-  function goUp(): void {
-    if (spaceId !== undefined)
-      setChoice({ spaceId, crumbs: crumbs.slice(0, -1) })
+  /** 换到这一层（点"进入""上一级"）：焦点交给"目标位置"这一行（DEF-049，见上） */
+  function goTo(next: readonly TargetCrumb[]): void {
+    if (spaceId === undefined)
+      return
+    setChoice({ spaceId, crumbs: next })
+    focusAfterRender(targetRef)
   }
 
   function changeSpace(value: string): void {
@@ -158,7 +171,7 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
                 <span className="font-medium">{label}</span>
               </p>
               <div className="flex flex-wrap items-center gap-2">
-                {crumbs.length > 0 && <Button type="button" variant="outline" size="sm" onClick={goUp}>{text.upOneLevel}</Button>}
+                {crumbs.length > 0 && <Button type="button" variant="outline" size="sm" onClick={() => goTo(crumbs.slice(0, -1))}>{text.upOneLevel}</Button>}
                 {!folders.failed && children.isPending && (
                   <div role="status" aria-label={text.targetLoading}>
                     <Skeleton className="h-6 w-32" />
@@ -171,15 +184,16 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
                     <RetryButton retrying={folders.retrying} onRetry={() => void children.refetch()} />
                   </div>
                 )}
-                {/* 留着之前的子文件夹、刷新却失败了（例如结果未知之后的刷新，Codex 对抗评审 CX5）：明说没能刷新、给出重试 */}
-                <RefreshProblem query={children} list={text.targetLocation} className="basis-full" />
+                {/* 留着之前的子文件夹、刷新却失败了（例如结果未知之后的刷新，Codex 对抗评审 CX5）：明说没能刷新、给出重试；
+                    重试成功、说明连同按钮消失时焦点交给"目标位置"这一行，不由页面交给标题（DEF-049 同一个落点） */}
+                <RefreshProblem query={children} list={text.targetLocation} className="basis-full" fallbackFocus={targetRef} />
                 {children.data !== undefined && (choices.length === 0
                   ? <span className="text-sm text-muted-foreground">{text.targetEmpty}</span>
                   : (
                       <ul aria-label={text.targetLocation} className="flex flex-wrap gap-1">
                         {choices.map(folder => (
                           <li key={folder.id}>
-                            <Button type="button" variant="outline" size="sm" aria-label={text.enterFolder(folder.name)} onClick={() => enter({ id: folder.id, name: folder.name })}>
+                            <Button type="button" variant="outline" size="sm" aria-label={text.enterFolder(folder.name)} onClick={() => goTo([...crumbs, { id: folder.id, name: folder.name }])}>
                               {folder.name}
                             </Button>
                           </li>
@@ -196,7 +210,7 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
             ? (action === 'move' ? text.moving : text.copying)
             : (action === 'move' ? text.moveHere : text.copyHere)}
         </Button>
-        <Button type="button" variant="ghost" size="sm" aria-disabled={pending} onClick={() => !pending && onCancel()}>{text.cancel}</Button>
+        <Button ref={cancelRef} type="button" variant="ghost" size="sm" aria-disabled={pending} onClick={() => !pending && onCancel()}>{text.cancel}</Button>
         {unchanged && <span className="text-sm text-muted-foreground">{text.sameLocation}</span>}
       </div>
       {error !== undefined && (

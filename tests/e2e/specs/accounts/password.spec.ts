@@ -206,7 +206,7 @@ test.describe('US-M2-02 修改密码', () => {
     await expect(page).toHaveURL(/\/login$/)
   })
 
-  test('修改密码的回包丢了（代理的 502），服务端其实已经改好：随即回到登录页，说明新密码可能已经生效；新密码登录得进去（M2-P6 复核第五批 G2）', async ({ page }) => {
+  test('修改密码的回包丢了（代理的 502），服务端其实已经改好：随即回到登录页，说明新密码可能已经生效；先用旧密码试，说明留着、错误另起一条（DEF-048）；新密码登录得进去（M2-P6 复核第五批 G2）', async ({ page }) => {
     const user = await createUser('pw-unknown', '回包丢了的人')
     await loginThroughApi(page, user)
     await page.goto('/settings/password')
@@ -224,9 +224,14 @@ test.describe('US-M2-02 修改密码', () => {
     await page.getByRole('button', { name: '修改密码' }).click()
     // 不等再提交、不等换页（原来一换页就只说"登录已过期"）：随即带着"新密码可能已经生效"回到登录页
     await expect(page).toHaveURL(/\/login\?from=%2Fsettings%2Fpassword&reason=password_changed$/)
-    await expect(page.getByText('刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。')).toBeVisible()
+    const notice = page.getByText('刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。')
+    await expect(notice).toBeVisible()
     await expect(page.getByText('登录已过期，请重新登录')).toBeHidden()
     await page.unroute('**/api/auth/password')
+    // 习惯性地先用旧密码：被拒，失败之后最用得着的那句说明不被错误的说明换掉（DEF-048）
+    await loginThroughUi(page, user)
+    await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
+    await expect(notice).toBeVisible()
     // 新密码确实已经生效：登录之后回到修改密码页
     await loginThroughUi(page, { username: user.username, password: NEW_PASSWORD })
     await expect(page).toHaveURL(/\/settings\/password$/)

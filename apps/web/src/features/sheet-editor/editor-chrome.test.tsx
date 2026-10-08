@@ -433,6 +433,35 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
   })
 
+  it('阅读时页头里一行静态说明（A14：已知限制"阅读者看到的是已保存的版本"）：能编辑与只能查看都有；是普通的文字，不在任何读屏状态区里；载入中、进入编辑中、编辑、退出编辑中、失去编辑权时都没有', () => {
+    const NOTE = '阅读时显示的是已保存的版本，不是实时内容'
+    const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
+    expect(screen.queryByText(NOTE)).toBeNull()
+    fake.set({ load: READY, mode: READING })
+    const note = within(screen.getByRole('banner')).getByText(NOTE)
+    expect(note.tagName).toBe('P')
+    expect(note.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull()
+    expect(note.closest('[aria-hidden="true"], .sr-only')).toBeNull()
+    // 只能查看的人同样有；别人在编辑时同样有，谁在编辑的说明照旧在读屏状态区里、不带上这一句
+    fake.set({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 1 } } })
+    expect(screen.getByText(NOTE)).toBe(note)
+    expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前）')
+
+    const notReading: [Partial<EditorPageView>, string][] = [
+      [{ mode: { kind: 'entering' }, save: undefined }, '进入编辑中'],
+      [{ mode: EDITING, save: CLEAN }, '编辑'],
+      [{ mode: { kind: 'exiting', cause: 'exit' }, save: CLEAN }, '退出编辑中'],
+      [{ mode: { kind: 'losing', loss: { kind: 'newer' } }, save: undefined }, '失去编辑权的过程中'],
+      [{ mode: lost({ kind: 'newer' }), save: undefined }, '失去编辑权'],
+    ]
+    for (const [view, name] of notReading) {
+      fake.set(view)
+      expect(screen.queryByText(NOTE), name).toBeNull()
+    }
+    fake.set({ mode: READING, save: undefined })
+    expect(screen.getByText(NOTE)).toBeInTheDocument()
+  })
+
   it('进入编辑中、退出编辑中、失去编辑权的过程中：页头说明正在做；进入、退出中的按钮留着、都不可用（说正在进入、正在退出），失去编辑权的过程中没有按钮', () => {
     /** 页头里的按钮：文字与是否可用 */
     const buttons = (): (string | null)[][] => within(screen.getByRole('banner')).queryAllByRole('button').map(button => [button.textContent, button.getAttribute('aria-disabled')])
