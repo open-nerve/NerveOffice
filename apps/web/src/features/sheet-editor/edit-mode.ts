@@ -1052,7 +1052,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const claimed: LocalLock = holdLocalLock({
       browser: options.sameBrowser,
       confirm: held.confirm,
-      onSuperseded: loss => superseded(claimed, loss),
+      onSuperseded: loss => superseded(claimed, held, loss),
       clock,
       trace: traced,
     })
@@ -1061,12 +1061,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
   }
 
   /**
-   * 锁被本浏览器的另一个标签页抢走、核对得知本页这一代已经不是当前的（local-lock.ts；那一代已经结束，不再续租、不发释放）：按失效处理——
-   * 编辑、离开编辑时转入失去编辑权，有没保存的修改照旧给副本与放弃；进入编辑的途中放弃进入。说法见 supersededLoss
+   * 锁被本浏览器的另一个标签页抢走、核对得知本页这一代已经不是当前的（local-lock.ts）：放弃这一代（不再续租、不续上、不发释放——服务端已经
+   * 不认它），按失效处理——编辑、离开编辑时转入失去编辑权，有没保存的修改照旧给副本与放弃；进入编辑的途中放弃进入。说法见 supersededLoss
    */
-  function superseded(claimed: LocalLock, loss: LeaseLoss | undefined): void {
+  function superseded(claimed: LocalLock, held: EditLease, loss: LeaseLoss | undefined): void {
     if (disposed || lock !== claimed)
       return
+    held.abandon()
     lost(supersededLoss(loss))
   }
 
@@ -1478,7 +1479,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /**
    * 取得了编辑权之后：拿本机锁（被本浏览器的别的标签页占着时先核对，M3-P6 设计 §3.13）、选定内容（申请得到的修订号等于本页的就用本页的，
    * 否则按条件读取取服务端的）、以可编辑重建（带"公式待更新"时强制全量重算，M3-P4 设计 §3.5）、看过打开自检，再建好保存的状态机与自动保存的
-   * 调度、接上编辑器。核对得知这一代已被取代时交回 superseded（那一代已经结束，不释放；调用方回到阅读）；核对不了、读取失败时已经释放编辑权，
+   * 调度、接上编辑器。核对得知这一代已被取代时交回 superseded（已经放弃那一代，不释放；调用方回到阅读）；核对不了、读取失败时已经释放编辑权，
    * 交回错误（调用方按它说明）；重建失败、打开自检失败时（失败的编辑器绝不保存：保存的状态机根本不建）释放编辑权、以只读重建选定的那一份内容、
    * 回到阅读并说明（backToReading）
    */
@@ -1499,7 +1500,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     if (!still(token) || claim.kind === 'released')
       return 'not-entered'
     if (claim.kind === 'superseded') {
-      // 服务端批准之后、回包到达之前又换了代：那一代已不是本页的（已经结束，不释放、不抢）
+      // 服务端批准之后、回包到达之前又换了代：那一代已不是本页的——放弃它（不再续租，不释放、不抢）
+      held.abandon()
       lease = undefined
       dropLock()
       interruption = undefined

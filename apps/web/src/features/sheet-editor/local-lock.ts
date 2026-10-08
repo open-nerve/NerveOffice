@@ -4,20 +4,20 @@
 // 本机锁只用来让同一个浏览器里的另一页及时得知，不是事实的来源：申请成功的回包说明不了"这一代此刻仍是当前的"（服务端批准之后、回包到达之前
 // 可能已经再换代），锁被抢也说明不了"这一代已经失效"（抢的一方可能拿着更旧的批准）。争用一律问服务端（续租一次，confirm）：
 // - 拿锁（claim，服务端批准之后）：锁空着就拿；被本浏览器的别的标签页占着时先核对——这一代是当前的才抢（那一页拿着的那一代必然已被取代，
-//   抢它只是让它及时得知）；不是当前的就不抢（服务端认的是别的页面，那一代随即结束）；核对不了（断网、出错、会话的问题）也不抢；
+//   抢它只是让它及时得知）；不是当前的就不抢（服务端认的是别的页面，页面放弃这一代）；核对不了（断网、出错、会话的问题）也不抢；
 // - 被抢（stolen）：先核对——仍是当前的，抢的一方拿着的是旧的批准，把锁拿回来、照常编辑；不再是当前的才算被取代（onSuperseded，页面失去编辑权）；
 //   核对不了时不把自己判为失效、也不抢，这期间不持有锁（不回应交接请求，别的标签页看到的是抢走它的那一页），等之后的心跳给出结论：续租成功
 //   （renewed）就拿回来，失效照心跳已有的处理（页面经租约得知）；
-// - 不会来回抢个不停：每次抢之前都核对过（看到争用之后才发出的续租），服务端任一时刻只认一代；核对得知不是当前的，那一代随即结束（租约转入
-//   终态），不再为它抢锁。核对的回包同样可能迟到（服务端处理时还是当前的、到达之前又换了代）：至多多抢一次，被抢的一方核对之后拿回来，
-//   迟到的一方下一次核对就得知已被取代。
+// - 不会来回抢个不停：每次抢之前都核对过（看到争用之后才发出的续租），服务端任一时刻只认一代；核对得知不是当前的，页面随即放弃那一代
+//   （租约 abandon），不再为它抢锁。核对的回包同样可能迟到（服务端处理时还是当前的、到达之前又换了代）：至多多抢一次，被抢的一方核对之后
+//   拿回来，迟到的一方下一次核对就得知已被取代。
 import type { LeaseClock, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
 
 /**
- * 拿锁的结果：held 拿到了；superseded 锁被占着、核对得知这一代已经不是当前的（loss 是服务端说的原因，没有时 undefined；那一代已经结束、没有
- * 释放）；unverified 锁被占着、核对不了（error 是那次的错误，暂停着没发时 undefined）；released 期间放下了（页面关闭）：不论裁决，不再拿
+ * 拿锁的结果：held 拿到了；superseded 锁被占着、核对得知这一代已经不是当前的（loss 是服务端说的原因，没有时 undefined；调用方放弃那一代，
+ * 不释放）；unverified 锁被占着、核对不了（error 是那次的错误，暂停着没发时 undefined）；released 期间放下了（页面关闭）：不论裁决，不再拿
  */
 export type LockClaim
   = | { readonly kind: 'held' }
@@ -28,9 +28,9 @@ export type LockClaim
 export interface LocalLockOptions {
   /** 这份文档的本机锁（same-browser.ts） */
   readonly browser: Pick<SameBrowser, 'tryHold' | 'steal'>
-  /** 核对这一代此刻是不是服务端当前的（edit-lease.ts 的 confirm：不是当前的时那一代随之结束） */
+  /** 核对这一代此刻是不是服务端当前的（edit-lease.ts 的 confirm：只问、不改这一代） */
   readonly confirm: () => Promise<LeaseVerdict>
-  /** 锁被抢之后核对得知这一代已经不是当前的：页面失去编辑权（loss 是服务端说的原因，没有时 undefined） */
+  /** 锁被抢之后核对得知这一代已经不是当前的：页面放弃这一代、失去编辑权（loss 是服务端说的原因，没有时 undefined） */
   readonly onSuperseded: (loss: LeaseLoss | undefined) => void
   /** 观察钩子的时刻（编辑模式的单调时钟） */
   readonly clock: LeaseClock

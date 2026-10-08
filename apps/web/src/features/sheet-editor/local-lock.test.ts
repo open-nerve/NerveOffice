@@ -86,7 +86,7 @@ describe('拿锁（服务端批准之后，M3-P6 设计 §3.13）', () => {
     expect(context.events).toEqual([{ kind: 'lock-verdict', at: expect.any(Number) as number, when: 'claim', verdict: 'current' }])
   })
 
-  it('被占着、核对得知这一代已经不是当前的：不抢，交回服务端说的原因（那一代已经结束）', async () => {
+  it('被占着、核对得知这一代已经不是当前的：不抢，交回服务端说的原因', async () => {
     const context = setup([ENDED])
     const holder = await context.other.tryHold()
     expect(await context.lock.claim()).toEqual({ kind: 'superseded', loss: TAKEN_OVER })

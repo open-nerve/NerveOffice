@@ -1462,21 +1462,26 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     ['编辑权被收回', lostError('revoked'), { kind: 'lease', reason: 'revoked' }],
     ['读不到了（404）', new ApiError(404, 'NOT_FOUND', '不存在'), { kind: 'not-found' }],
     ['不能编辑了（403）', new ApiError(403, 'PERMISSION_DENIED', '只能查看'), { kind: 'denied' }],
-  ] as const)('%s：已经不是当前的——交回服务端说的原因；不续上（不申请）、不发释放、不通知页面，之后不再续租（终态）', async (_case, failure, loss) => {
+  ] as const)('%s：已经不是当前的——交回服务端说的原因；只问、不改：不续上（不申请）、不通知页面、不结束这一代（由调用方放弃）', async (_case, failure, loss) => {
     const context = setup()
     const lease = await held(context)
     context.api.renew.mockRejectedValueOnce(failure)
     expect(await lease.confirm()).toMatchObject({ kind: 'ended', loss })
     expect(context.api.acquire).toHaveBeenCalledOnce()
     expect(context.onLost).not.toHaveBeenCalled()
+    expect(context.api.release).not.toHaveBeenCalled()
+    // 这一代照旧：心跳照常（裁决没人理会时之后照常由心跳得知）
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.api.renew).toHaveBeenCalledTimes(2)
+    // 调用方放弃之后才停：不再续租、不发释放
+    lease.abandon()
     await context.time.advance(HEARTBEAT_MS * 3)
-    expect(context.api.renew).toHaveBeenCalledOnce()
+    expect(context.api.renew).toHaveBeenCalledTimes(2)
     await expect(lease.release()).resolves.toBe(true)
     expect(context.api.release).not.toHaveBeenCalled()
-    expect(await lease.lose({ kind: 'lease', reason: 'replaced' }, lease.credentials())).toEqual({ kind: 'lost' })
     // 再核对：已经结束，不发
     expect(await lease.confirm()).toEqual({ kind: 'ended', loss: undefined })
-    expect(context.api.renew).toHaveBeenCalledOnce()
+    expect(context.api.renew).toHaveBeenCalledTimes(2)
   })
 
   it.each([
@@ -1506,7 +1511,7 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     expect(context.api.renew).not.toHaveBeenCalled()
   })
 
-  it('人不在、等再有操作才续上（dormant）：服务端已经说过这一代失效——交回那次的原因、随即结束，不发；之后有操作也不续上', async () => {
+  it('人不在、等再有操作才续上（dormant）：服务端已经说过这一代失效——交回那次的原因，不发；只问、不改（之后有操作照常续上，除非调用方放弃了）', async () => {
     const context = setup({ renew: vi.fn(async () => Promise.reject(lostError('expired'))) })
     const lease = await held(context)
     context.interact(context.time.now() - RECLAIM_MS)
@@ -1517,8 +1522,19 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     context.interact()
     lease.noteActivity()
     await settle()
-    expect(context.api.acquire).toHaveBeenCalledOnce()
-    expect(context.onLost).not.toHaveBeenCalled()
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+
+    const abandoned = setup({ renew: vi.fn(async () => Promise.reject(lostError('expired'))) })
+    const away = await held(abandoned)
+    abandoned.interact(abandoned.time.now() - RECLAIM_MS)
+    await abandoned.time.advance(HEARTBEAT_MS)
+    expect(await away.confirm()).toMatchObject({ kind: 'ended' })
+    away.abandon()
+    abandoned.interact()
+    away.noteActivity()
+    await settle()
+    expect(abandoned.api.acquire).toHaveBeenCalledOnce()
+    expect(abandoned.onLost).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -1559,7 +1575,7 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     expect(context.api.renew.mock.calls.map(call => call[1])).toEqual([TOKEN, TOKEN, NEXT_TOKEN])
   })
 
-  it('核对得知不是当前的时续上正在进行：续上回来的新一代随即放掉，不通知页面', async () => {
+  it('续上正在进行时核对得知不是当前的（核对的还是上一代）：交回已被取代；调用方随即放弃，续上回来的新一代随即放掉，不通知页面', async () => {
     const reply = deferred<AcquiredEditLease>()
     const context = setup()
     const lease = await held(context)
@@ -1569,6 +1585,7 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     expect(context.api.acquire).toHaveBeenCalledTimes(2)
     context.api.renew.mockRejectedValueOnce(takenOverError(false))
     expect(await lease.confirm()).toMatchObject({ kind: 'ended', loss: { kind: 'taken-over' } })
+    lease.abandon()
     reply.resolve(NEXT)
     await settle()
     expect(context.calls).toEqual(['release N'])
