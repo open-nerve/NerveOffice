@@ -66,6 +66,8 @@ apps/api/src/
                   保存协议加固（M3-P3，ADR-011 的修订）：重放预检与回执（save-outcomes、document-save-receipts）、拦截旧客户端（ClientFormatGate）、
                   快照的检查（SnapshotInspector：子进程池，每个账户至多 2 份；snapshot-checks、snapshot-inspection）、requestId 的锁与两张表的记录（RequestLedger）、不缩水（legacy-resources）、保留期清理的入口（RevisionPurgeService）；
                   打开自检失败的上报（M3-P4，ADR-011 的补充：OpenCheckReportsController、OpenCheckReportService，进程内去重与按账户限量的 OpenCheckReportGate）
+    local-keys/   本机密钥（M3-P6，ADR-019）：表 `user_local_keys` 与仓储、主密钥环（HKDF 派生、AES-256-GCM 包装）、取用 `POST /api/local-key`、吊销的入口 `LocalKeyRevocation`（只给 admin）、
+                  版本的读取 `LocalKeyVersions`（admin 的账户视图、workspace 的心跳）、启动自检 `MasterKeyCheck`；主密钥只经 `LOCAL_KEYS_CONFIG` 注入
     jobs/         应用内的定时任务（M2-P4，ADR-016）：回收站到期的自动清理、修订记录与回执的保留期清理（M3-P3，事务级 advisory lock）；共用的调度器 JobScheduler。
                   只做"按时触发 + 防重复执行"（回收站清理用会话级 advisory lock），
                   删除的语义在 documents；时钟可注入，测试不必等 30 天
@@ -124,6 +126,8 @@ apps/api/src/
 | `POST/PUT/DELETE /api/documents/{id}/edit-lease/request`、`POST …/edit-lease/request/decline`、`POST …/edit-lease/handover` | 请求编辑与交出（M3-P5，ADR-018 的补充）：发出（要能编辑，先拦旧页面）、续期（后台请求，等待中每 5 秒）、取消（能读就行，一律 204，清掉自己的请求与留给自己的保留）、谢绝（持有者，带令牌，对不上也 204）、交出（持有者，带令牌：结束租约、留给请求方 2 分钟；请求已不在时 409 `EDIT_REQUEST_GONE`、租约不动）；结果按 `kind` 区分（`pending`、`declined`、`reserved`、`free`、`self`、`occupied`、`reservedForOther`、`gone`） |
 | `POST /api/documents/{id}/open-check-failures` | 打开自检失败的上报（M3-P4，ADR-011 的补充）：只带失败的种类、资源名、异常的构造器名、修订号、打开方式与版本四项，不带内容；能读就能报、看不到与不存在一致；后台请求；进程内去重与按账户限量，记 warn（`event: open-check-failed`），不记审计；204 |
 | `POST /api/documents/{id}/conflict-copies?requestId&title` | 另存为副本（M3-P2，ADR-011、ADR-014 的补充）：正文是 gzip 压缩的快照（与保存同一个读取方式），`unitId` 要等于原文档的；只要求能读原文档；本人在原文档所在的空间能新建就放进原文档的文件夹，否则本人个人空间的根目录；不继承授权；`requestId` 幂等；响应同复制 |
+| `POST /api/local-key` | 本机密钥（M3-P6，ADR-019）：调用者自己当前的那一把（`{ version, key }`，`no-store`）；第一次取时生成第 1 版；写事务里按主键再核对这次登录；不是后台请求 |
+| `POST /api/admin/users/{id}/local-key/revoke` | 吊销某人的本机密钥（M3-P6，只给系统管理员）：擦掉当前那一版的材料、生成下一版、审计 `users.local_key_revoked`，返回账户（带本机密钥的版本与生成时刻，不带密钥材料） |
 | `GET /api/health/live`、`GET /api/health/ready` | 存活与就绪探针（公开） |
 | `PUT /api/auth/password` | 修改密码（M2-P1）：本人其他地方的登录全部退出；M2-P6 起连当前会话的令牌一起换掉，响应与登录相同（新的会话与 CSRF 令牌，写回 Cookie） |
 | `POST /api/auth/invitations/inspect`、`…/accept`、`POST /api/auth/password-resets/inspect`、`…/complete` | 一次性链接（公开，M2-P1）：令牌在请求体里；接受或完成之后已登录，响应同登录；不能用时 410 `LINK_INVALID` 与原因 |
@@ -315,6 +319,7 @@ A01 等检查（`pnpm gate <名称>`）：
 | `document_save_receipts` | documents | 内容相同、修订号没变的保存的回执（M3-P3，迁移 0024）：`request_id`（主键）、文档、修订号、负载摘要、保存人、保存的时间、写下的时间；重放时与修订记录一起查；保留 30 天 |
 | `document_edit_leases` | documents | 编辑租约（M3-P1，迁移 0022，ADR-018）：每份文档一行（主键，外键级联删除）、持有者（按它的索引）、绑定的登录与标签页、令牌摘要（CHECK 32 字节）、这一代的代次（CHECK 至少 1）、申请/续租/到期/最后活动的时间（CHECK 到期晚于续租、最后活动不晚于续租）、明确结束的时间与原因（`released`、`revoked`，M3-P5 加 `handed_over`；CHECK 同空同有）；M3-P5 加请求（标识、请求方、绑定的登录、发出与到期、谢绝）、保留（留给谁、到何时）与接管标记（被接管那一代的令牌摘要与方式）三组列，各自同空同有，有保留时结束原因是交出（迁移 0025） |
 | `document_grants` | documents | 单独授权（M2-P5，迁移 0020）：文档（外键级联删除）、被授权人、角色（查看者、编辑者）、最后设置它的人（CHECK 不是被授权人）、建立与最后设置的时间；主键（文档，被授权人），按被授权人的索引（"与我共享"与"可访问文档"的授权那一半） |
+| `user_local_keys` | local-keys | 本机密钥（M3-P6，迁移 0026，ADR-019）：主键（账户，版本）；当前的那一把带主密钥标识（16 字节）与包装结果（60 字节），吊销的那一版两列擦成空（CHECK"当前 ⇔ 有材料"）；每人至多一把当前的（部分唯一索引）；外键账户 RESTRICT；不变量 I19、I20 |
 
 ## 8. 部署
 
