@@ -1,18 +1,26 @@
 import type * as Crypto from 'node:crypto'
 import type { LocalKeyOwner, WrappedLocalKey } from './master-keyring.ts'
 import { Buffer } from 'node:buffer'
-import { createCipheriv, createDecipheriv, createHash, hkdfSync, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, createSecretKey, hkdfSync, randomBytes } from 'node:crypto'
 import { inspect } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Secret } from '../../shared/secret.ts'
 import { createRootLogger } from '../logging/index.ts'
+import { isZeroed } from './local-keys.test-support.ts'
 import { generateLocalKey, LocalKeyUnwrapError, MASTER_KEY_ID_BYTES, MasterKeyring, WRAPPED_KEY_BYTES } from './master-keyring.ts'
 
 // 两边是否都传了 authTagLength: 16 只能从调用里看出来：标签按固定位置切成 16 字节，截短的标签走不到 setAuthTag，
-// 类型检查也拦不住（这个选项是可选的）。所以包住 node:crypto 的两个函数，照常调用真实的实现、记下参数
+// 类型检查也拦不住（这个选项是可选的）。所以包住 node:crypto 的几个函数，照常调用真实的实现、记下参数；
+// 派生用到的字节用完清零（审查 A2）同样只能从交进去的那个 Buffer 上看出来，所以 hkdfSync 与 createSecretKey 也包住
 vi.mock('node:crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof Crypto>()
-  return { ...actual, createCipheriv: vi.fn(actual.createCipheriv), createDecipheriv: vi.fn(actual.createDecipheriv) }
+  return {
+    ...actual,
+    createCipheriv: vi.fn(actual.createCipheriv),
+    createDecipheriv: vi.fn(actual.createDecipheriv),
+    createSecretKey: vi.fn(actual.createSecretKey),
+    hkdfSync: vi.fn(actual.hkdfSync),
+  }
 })
 
 afterEach(() => {
@@ -176,6 +184,43 @@ describe('包装与解包（AES-256-GCM，AAD 绑定用户、版本与主密钥�
       expect(text).not.toContain(secret.toString('hex'))
       expect(text).not.toContain(secret.toString('base64'))
     }
+  })
+})
+
+describe('派生与解包用到的字节用完清零（M3-P6 设计 §3.3，审查 A2：尽力而为的纵深防御，配置里的 base64 文本是字符串、清不掉）', () => {
+  it('fromMasterKey：交给 HKDF 的主密钥字节（两次派生用的同一份）与交给 createSecretKey 的包装键字节，派生之后都是 0；环照常可用', () => {
+    const keyring = MasterKeyring.fromMasterKey(masterKey())
+    const ikms = vi.mocked(hkdfSync).mock.calls.map(([, ikm]) => ikm).filter(ikm => Buffer.isBuffer(ikm))
+    expect(ikms).toHaveLength(2)
+    for (const ikm of ikms)
+      expect(isZeroed(ikm)).toBe(true)
+    const wrapKeys = vi.mocked(createSecretKey).mock.calls.map(([key]) => key).filter(key => Buffer.isBuffer(key))
+    expect(wrapKeys).toHaveLength(1)
+    expect(isZeroed(wrapKeys[0])).toBe(true)
+    // 清零的是派生时的副本：KeyObject 自己持有一份，包装、解包照常
+    const raw = generateLocalKey()
+    expect(keyring.unwrap(keyring.wrap(raw, OWNER), OWNER).equals(raw)).toBe(true)
+  })
+
+  it('unwrap：解密时 update 交出的那份明文用完是 0；返回的是另拼出来的一份（由调用方用完清零），等于原来的密钥', async () => {
+    const actual = await vi.importActual<typeof Crypto>('node:crypto')
+    const keyring = MasterKeyring.fromMasterKey(masterKey())
+    const raw = generateLocalKey()
+    const wrapped = keyring.wrap(raw, OWNER)
+    const plains: Buffer[] = []
+    vi.mocked(createDecipheriv).mockImplementationOnce((algorithm, key, iv, options) => {
+      const decipher = actual.createDecipheriv(algorithm, key, iv, options)
+      const update = decipher.update.bind(decipher) as (data: Buffer) => Buffer
+      decipher.update = ((data: Buffer) => {
+        const plain = update(data)
+        plains.push(plain)
+        return plain
+      }) as typeof decipher.update
+      return decipher
+    })
+    expect(keyring.unwrap(wrapped, OWNER).equals(raw)).toBe(true)
+    expect(plains).toHaveLength(1)
+    expect(isZeroed(plains[0])).toBe(true)
   })
 })
 

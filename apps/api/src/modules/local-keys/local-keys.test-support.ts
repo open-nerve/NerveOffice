@@ -17,6 +17,11 @@ export function keyring(): MasterKeyring {
   return MasterKeyring.fromMasterKey(new Secret(randomBytes(32).toString('base64')))
 }
 
+/** 这个 Buffer 是不是全是 0（用完清零的核对，审查 A2）；空的不算，免得什么也没拿到时碰巧通过 */
+export function isZeroed(buffer: Buffer | undefined): boolean {
+  return buffer !== undefined && buffer.length > 0 && buffer.every(byte => byte === 0)
+}
+
 export interface FakeLocalKeyRow {
   readonly userId: string
   readonly version: number

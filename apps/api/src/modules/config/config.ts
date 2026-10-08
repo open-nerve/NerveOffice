@@ -275,7 +275,11 @@ const MASTER_KEY_PATTERN = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/
 const MASTER_KEY_BYTES = 32
 const MASTER_KEY_PROBLEM = '必须是 32 字节随机数的标准 base64（44 个字符、以 = 结尾，例如 openssl rand -base64 32 的输出）'
 
-/** 主密钥的字节（写法已经校验过）；调用方用完清零 */
+/**
+ * 主密钥的字节（写法已经校验过）；调用方用完清零。这两处清零（isCanonicalMasterKey、isPrintableMasterKey）是尽力而为、不测（审查 A2）：
+ * 取值本身是配置里的字符串，进程存活期间一直在 JS 堆上，清掉临时解出来的这份字节不改变暴露面；要从测试里看出来只能拦下全局的 Buffer.from。
+ * 主密钥环（派生用的字节、解包的明文）与服务层（交出的、生成的原始密钥）的清零有单元测试钉住
+ */
 function masterKeyBytesOf(value: string): Buffer {
   return Buffer.from(value, 'base64')
 }
