@@ -88,10 +88,18 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
     return true
   }
 
-  /** 核对过这一代是当前的（或者心跳刚续上）：拿锁——空着就拿，被占着就抢 */
+  /**
+   * 核对过这一代是当前的（或者心跳刚续上）：拿锁——空着就拿，被占着就抢。看锁空不空的这一下里放下了（页面关闭、离开编辑）就不抢：抢了也要
+   * 随即放掉，被抢的一方白白多核对一次（复验 E3）
+   */
   async function take(): Promise<boolean> {
     phase = 'claiming'
-    return adopt((await browser.tryHold()) ?? (await browser.steal()))
+    const free = await browser.tryHold()
+    if (free !== undefined)
+      return adopt(free)
+    if (now() === 'released')
+      return false
+    return adopt(await browser.steal())
   }
 
   /** 被抢（见文件头）：已经放下的、换过的那一把被抢不算 */

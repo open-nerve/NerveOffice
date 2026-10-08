@@ -137,13 +137,40 @@ describe('拿锁（服务端批准之后，M3-P6 设计 §3.13）', () => {
     expect(context.browser.holderOf(LOCK)).toBeUndefined()
   })
 
-  it('核对过是当前的、正要抢时放下了：抢到的随即放掉', async () => {
+  it('核对过是当前的，看锁空不空的这一下里放下了（页面关闭）：不抢——不再抢走别人的锁再随即放掉（复验 E3）', async () => {
+    const context = setup([CURRENT])
+    const holder = await context.other.tryHold()
+    let release: () => void = () => {}
+    let checks = 0
+    const steal = vi.fn(async (): Promise<HeldLock> => sameBrowserFor(DOCUMENT_ID, context.browser.tab('this')).steal())
+    const browser = {
+      // 第一次是拿锁时看锁空不空（被占着），第二次是核对过之后再看——这一下里页面关闭
+      tryHold: async (): Promise<HeldLock | undefined> => {
+        checks += 1
+        if (checks === 2)
+          release()
+        return undefined
+      },
+      steal,
+    }
+    const lock = holdLocalLock({ browser, confirm: async () => CURRENT, onSuperseded: vi.fn(), clock: fakeLeaseClock().clock })
+    release = lock.release
+    expect(await lock.claim()).toEqual({ kind: 'released' })
+    await settle()
+    expect(checks).toBe(2)
+    expect(steal).not.toHaveBeenCalled()
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(await settledNow(holder?.stolen ?? Promise.reject(new Error('没拿到')))).toBe(false)
+  })
+
+  it('抢的请求已经发出、还在途时放下了：抢到的随即放掉', async () => {
     const context = setup([CURRENT])
     await context.other.tryHold()
     let release: () => void = () => {}
     const steal = vi.fn(async (): Promise<HeldLock> => {
+      const taken = sameBrowserFor(DOCUMENT_ID, context.browser.tab('this')).steal()
       release()
-      return sameBrowserFor(DOCUMENT_ID, context.browser.tab('this')).steal()
+      return taken
     })
     const lock = holdLocalLock({ browser: { tryHold: async () => undefined, steal }, confirm: async () => CURRENT, onSuperseded: vi.fn(), clock: fakeLeaseClock().clock })
     release = lock.release
