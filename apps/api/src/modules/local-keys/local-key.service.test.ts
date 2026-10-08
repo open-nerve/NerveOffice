@@ -3,13 +3,28 @@
 // 仓储是假的（local-keys.test-support.ts），主密钥环是真的；库里的语句、并发与确定的交错由集成测试覆盖
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
+import type * as Keyring from './master-keyring.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { LocalKeyService } from './local-key.service.ts'
-import { FakeLocalKeysRepository, keyring, TRANSACTION } from './local-keys.test-support.ts'
-import { LocalKeyUnwrapError } from './master-keyring.ts'
+import { FakeLocalKeysRepository, isZeroed, keyring, TRANSACTION } from './local-keys.test-support.ts'
+import { generateLocalKey, LocalKeyUnwrapError } from './master-keyring.ts'
+
+// 原始密钥用完清零（审查 A2）只能从同一个 Buffer 上看出来：包住 generateLocalKey（默认照常生成），要看的用例经 nextGenerated 给出那一把
+vi.mock('./master-keyring.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof Keyring>()
+  return { ...actual, generateLocalKey: vi.fn(actual.generateLocalKey) }
+})
+
+/** 下一次生成的原始密钥由测试给出：返回服务拿到的那个 Buffer 与清零之前的字节 */
+function nextGenerated(): { readonly key: Buffer, readonly bytes: Buffer } {
+  const key = randomBytes(32)
+  const bytes = Buffer.from(key)
+  vi.mocked(generateLocalKey).mockImplementationOnce(() => key)
+  return { key, bytes }
+}
 
 const AMY = '0199a2c4-0000-7000-8000-00000000000a'
 const SESSION = '0199a2c4-0000-7000-8000-0000000000e1'
@@ -136,5 +151,51 @@ describe('LocalKeyService.fetch', () => {
     await service.fetch(PRINCIPAL)
     expect(repository.findCurrent.mock.calls.map(([userId]) => userId)).toEqual([AMY])
     expect(repository.insertFirst.mock.calls.map(([userId]) => userId)).toEqual([AMY])
+  })
+})
+
+describe('原始密钥用完清零（M3-P6 设计 §3.3，审查 A2：尽力而为的纵深防御——交给响应的 base64 字符串清不掉，Buffer 不留着）', () => {
+  it('已有当前的一把：解包得到的那把在交出之后全是 0，交出的是清零之前的字节', async () => {
+    const { ring, repository, service } = setup()
+    const raw = randomBytes(32)
+    repository.seedCurrent(ring, AMY, 3, raw)
+    const unwrap = vi.spyOn(ring, 'unwrap')
+    expect(await service.fetch(PRINCIPAL)).toEqual({ version: 3, key: raw.toString('base64') })
+    expect(unwrap.mock.results).toHaveLength(1)
+    expect(isZeroed(unwrap.mock.results[0]?.value as Buffer)).toBe(true)
+  })
+
+  it('第一次生成、插进去了：生成的那把交出之后全是 0', async () => {
+    const { service } = setup()
+    const { key, bytes } = nextGenerated()
+    expect(await service.fetch(PRINCIPAL)).toEqual({ version: 1, key: bytes.toString('base64') })
+    expect(isZeroed(key)).toBe(true)
+  })
+
+  it('第一次生成、输给并发的另一次：自己生成的那把（没交出去）与解包得到的赢的那一把都清零', async () => {
+    const { ring, repository, calls, service } = setup()
+    const { key } = nextGenerated()
+    const winner = randomBytes(32)
+    repository.insertFirst.mockImplementationOnce(async (userId: string) => {
+      calls.push('insertFirst')
+      repository.seedCurrent(ring, userId, 1, winner)
+      return false
+    })
+    const unwrap = vi.spyOn(ring, 'unwrap')
+    expect(await service.fetch(PRINCIPAL)).toEqual({ version: 1, key: winner.toString('base64') })
+    expect(isZeroed(key)).toBe(true)
+    expect(unwrap.mock.results).toHaveLength(1)
+    expect(isZeroed(unwrap.mock.results[0]?.value as Buffer)).toBe(true)
+  })
+
+  it('第一次生成、包装抛错：生成的那把照样清零，错误照常抛出，什么也没插', async () => {
+    const { ring, repository, service } = setup()
+    const { key } = nextGenerated()
+    vi.spyOn(ring, 'wrap').mockImplementationOnce(() => {
+      throw new Error('包装失败')
+    })
+    await expect(service.fetch(PRINCIPAL)).rejects.toThrow('包装失败')
+    expect(isZeroed(key)).toBe(true)
+    expect(repository.rows).toEqual([])
   })
 })

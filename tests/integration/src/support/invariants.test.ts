@@ -121,6 +121,13 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
       const material = 'decode(repeat(\'ab\', 16), \'hex\'), decode(repeat(\'cd\', 60), \'hex\')'
       await client.query(`INSERT INTO user_local_keys (user_id, version, revoked_at) VALUES ($1, 1, now()), ($2, 1, now())`, [gap.id, noCurrent.id])
       await client.query(`INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key) VALUES ($1, 3, ${material})`, [gap.id])
+      // I21：第 2 版的生成时刻不是第 1 版被吊销的那一刻（比它早：吊销取了事务开始的时刻、下一版跟着取了它的情形）
+      const drift = await createPassiveAccount(database, { username: 'drift' })
+      await client.query(
+        `INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key, created_at, revoked_at)
+         VALUES ($1, 1, NULL, NULL, now() - interval '2 hours', now() - interval '1 hour'), ($1, 2, ${material}, now() - interval '2 hours', NULL)`,
+        [drift.id],
+      )
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)
@@ -135,9 +142,13 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
   it('阴性对照：一致的数据（根目录与文件夹里的文档、整单在回收站里的子树与连带的删除单元，吊销过两次的本机密钥）什么也不报', async () => {
     const { database, owner, first } = await world()
     const violations = await database.query(async (client) => {
-      // 本机密钥：第 1、2 版吊销了（材料已擦），第 3 版是当前的
-      await client.query(`INSERT INTO user_local_keys (user_id, version, revoked_at) VALUES ($1, 1, now()), ($1, 2, now())`, [owner.id])
-      await client.query(`INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key) VALUES ($1, 3, decode(repeat('ab', 16), 'hex'), decode(repeat('cd', 60), 'hex'))`, [owner.id])
+      // 本机密钥：第 1、2 版吊销了（材料已擦），第 3 版是当前的；每一版生成于上一版被吊销的那一刻（同一条语句里的 now() 是同一个值）
+      await client.query(
+        `INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key, created_at, revoked_at)
+         VALUES ($1, 1, NULL, NULL, now() - interval '3 hours', now() - interval '2 hours'), ($1, 2, NULL, NULL, now() - interval '2 hours', now() - interval '1 hour'),
+                ($1, 3, decode(repeat('ab', 16), 'hex'), decode(repeat('cd', 60), 'hex'), now() - interval '1 hour', NULL)`,
+        [owner.id],
+      )
       const w = writer(client, owner.id)
       const top = await w.folder(first)
       const child = await w.folder(first, { parentId: top })

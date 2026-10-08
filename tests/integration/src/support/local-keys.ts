@@ -74,6 +74,22 @@ export async function localKeyRowsOf(database: TestDatabase, userId: string): Pr
   )).rows)
 }
 
+/** 库里一个人的一版本机密钥的时刻：带微秒的 UTC 文本（写法固定，按字符串比较先后也对；换成 Date 会丢掉微秒，比较相等就不准） */
+export interface LocalKeyMoments {
+  readonly version: number
+  readonly createdAt: string
+  readonly revokedAt: string | null
+}
+
+/** 这个人在库里的各版本机密钥的生成与吊销的时刻（按版本），精确到微秒 */
+export async function localKeyMomentsOf(database: TestDatabase, userId: string): Promise<LocalKeyMoments[]> {
+  const utc = (column: string): string => `to_char(${column} AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`
+  return database.query(async client => (await client.query<LocalKeyMoments>(
+    `SELECT version, ${utc('created_at')} AS "createdAt", ${utc('revoked_at')} AS "revokedAt" FROM user_local_keys WHERE user_id = $1 ORDER BY version`,
+    [userId],
+  )).rows)
+}
+
 /** 库里当前的那一把的密钥材料（测试的主密钥解得开）；没有时失败 */
 export async function currentMaterialOf(database: TestDatabase, userId: string): Promise<WrappedMaterial & { readonly version: number }> {
   const current = (await localKeyRowsOf(database, userId)).find(row => row.revokedAt === null)

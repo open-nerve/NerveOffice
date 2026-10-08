@@ -156,8 +156,9 @@ export interface AppConfig {
 
 /**
  * 应用进程（HTTP 服务）的配置：在 AppConfig 之上多出本机密钥的主密钥（M3-P6 设计 §3.4）。只有服务端的读法（loadServerConfig）给出它，
- * 缺失或格式不对时拒绝启动；命令行的读法（loadConfig）不要求它，给了也只校验格式、不带进配置——迁移、初始化管理员与签发重置链接拿不到它
- * （最小权限，与 ADR-012"迁移用所有者、应用用应用角色"同一个思路）
+ * 缺失或格式不对时拒绝启动；命令行的读法（loadConfig）不要求它，给了也只校验格式、不带进配置——迁移、初始化管理员与签发重置链接的配置里
+ * 没有主密钥，命令也不用它（最小权限，与 ADR-012"迁移用所有者、应用用应用角色"同一个思路）。这只管到配置这一层：按部署说明在应用容器里
+ * 执行初始化管理员、签发重置链接时，进程的环境里仍有它（审查 A7）；迁移的容器没有它
  */
 export type ServerConfig = AppConfig & {
   readonly localKeys: {
@@ -275,7 +276,11 @@ const MASTER_KEY_PATTERN = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/
 const MASTER_KEY_BYTES = 32
 const MASTER_KEY_PROBLEM = '必须是 32 字节随机数的标准 base64（44 个字符、以 = 结尾，例如 openssl rand -base64 32 的输出）'
 
-/** 主密钥的字节（写法已经校验过）；调用方用完清零 */
+/**
+ * 主密钥的字节（写法已经校验过）；调用方用完清零。这两处清零（isCanonicalMasterKey、isPrintableMasterKey）是尽力而为、不测（审查 A2）：
+ * 取值本身是配置里的字符串，进程存活期间一直在 JS 堆上，清掉临时解出来的这份字节不改变暴露面；要从测试里看出来只能拦下全局的 Buffer.from。
+ * 主密钥环（派生用的字节、解包的明文）与服务层（交出的、生成的原始密钥）的清零有单元测试钉住
+ */
 function masterKeyBytesOf(value: string): Buffer {
   return Buffer.from(value, 'base64')
 }

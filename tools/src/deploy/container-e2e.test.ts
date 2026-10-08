@@ -187,6 +187,17 @@ describe('本机密钥的主密钥：缺失、写法不对时拒绝启动，日�
     expect(masterKeyLeakProblems(key, new Map([...clean, ['migrate', bytes.toString('base64url')]]))).toEqual(['migrate 的日志里出现了本机密钥的主密钥'])
     expect(masterKeyLeakProblems(key, new Map([...clean, ['db', `DETAIL: ${bytes.toString('hex')}`], ['caddy', key]]))).toEqual(['db 的日志里出现了本机密钥的主密钥', 'caddy 的日志里出现了本机密钥的主密钥'])
   })
+
+  it('日志里的主密钥：Buffer 被直接打进 pino 的日志对象时的十进制数组（{"type":"Buffer","data":[…]}）也认得出（审查 A9）', () => {
+    const bytes = Buffer.from(Array.from({ length: 32 }, (_, index) => 250 - index))
+    const key = bytes.toString('base64')
+    // pino 用 JSON 序列化日志对象，Buffer 按 toJSON 写成十进制数组、逗号之间没有空格
+    const line = JSON.stringify({ level: 50, msg: '请求失败', masterKey: bytes })
+    expect(line).toContain('{"type":"Buffer","data":[250,249,')
+    expect(masterKeyLeakProblems(key, new Map([['db', 'LOG:  database system is ready'], ['app', line]]))).toEqual(['app 的日志里出现了本机密钥的主密钥'])
+    // 只有前 31 个字节：不算
+    expect(masterKeyLeakProblems(key, new Map([['app', JSON.stringify({ data: [...bytes.subarray(0, 31)] })]]))).toEqual([])
+  })
 })
 
 describe('中断的运行留下的临时目录（审查 B6）', () => {

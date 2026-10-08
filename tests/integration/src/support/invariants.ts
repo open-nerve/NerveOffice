@@ -64,6 +64,11 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
   'I20 有过本机密钥的人恰好有一把当前的、而且是版本最大的那一把':
     `SELECT user_id, max(version) AS max_version, max(version) FILTER (WHERE revoked_at IS NULL) AS current_version FROM user_local_keys
      GROUP BY user_id HAVING max(version) FILTER (WHERE revoked_at IS NULL) IS DISTINCT FROM max(version)`,
+  // 吊销记下执行那一刻的时间，同一个事务里插的下一版取同一个时刻（审查 A1）：时间线单调，下一版生成于上一版被吊销的那一刻。
+  // 下一版的生成时刻取了事务开始的 now()（吊销在锁上等过时，它早于上一版的生成），或者上一版没有被吊销，都在这里报出来
+  'I21 本机密钥的下一版生成于上一版被吊销的那一刻':
+    `SELECT n.user_id, n.version, n.created_at, p.revoked_at AS previous_revoked_at FROM user_local_keys n
+     JOIN user_local_keys p ON p.user_id = n.user_id AND p.version = n.version - 1 WHERE n.created_at IS DISTINCT FROM p.revoked_at`,
 }
 
 /** 每条不变量最多列出几行：够定位，不把整张表打进错误信息 */

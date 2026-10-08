@@ -127,7 +127,7 @@ export function staleRuns(names: readonly string[], prefix: string, isAlive: (pi
 
 /**
  * 中断的运行（例如被 SIGKILL）留下的临时目录：名字是前缀、进程号、连字符与随机后缀（mkdtemp）。
- * 里面的变量文件有三个密码，下一次运行时删掉（审查 B6）
+ * 里面的变量文件有三个密码与本机密钥的主密钥（M3-P6），下一次运行时删掉（审查 B6）
  */
 export function staleTemporaryDirectories(names: readonly string[], isAlive: (pid: number) => boolean): string[] {
   return names.filter((name) => {
@@ -354,11 +354,12 @@ export function masterKeyRefusalProblems(attempt: MasterKeyRefusalAttempt, run: 
 
 /**
  * 日志里不能出现本机密钥的主密钥（00 号计划书 §11.5 日志与隐私，M3-P6 设计 §3.9）：收完各容器的日志之后扫一遍——
- * 标准 base64（变量里的写法）、base64url 与十六进制（解码之后的字节换一种写法写出来）。返回出现在哪些容器的日志里
+ * 标准 base64（变量里的写法）、base64url 与十六进制（解码之后的字节换一种写法写出来），以及十进制数组（审查 A9：Buffer 被直接放进
+ * pino 的日志对象时，JSON 序列化成 {"type":"Buffer","data":[12,34,…]}）。返回出现在哪些容器的日志里
  */
 export function masterKeyLeakProblems(masterKey: string, logs: ReadonlyMap<string, string>): string[] {
   const bytes = Buffer.from(masterKey, 'base64')
-  const forms = [masterKey, bytes.toString('base64url'), bytes.toString('hex')]
+  const forms = [masterKey, bytes.toString('base64url'), bytes.toString('hex'), [...bytes].join(',')]
   return [...logs].flatMap(([service, text]) => (forms.some(form => text.includes(form)) ? [`${service} 的日志里出现了本机密钥的主密钥`] : []))
 }
 

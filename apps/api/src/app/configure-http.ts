@@ -31,6 +31,10 @@ export interface HttpPipeline {
 export function configureHttp(app: NestExpressApplication, config: AppConfig, pipeline: HttpPipeline): void {
   app.set('trust proxy', config.http.trustProxy)
   app.disable('x-powered-by')
+  // 不要 Express 按响应体自动算的弱 ETag（M3-P6 审查 A8）：所有响应都是 no-store，ETag 没有用处；响应体里有原始密钥（取用本机密钥）、
+  // 租约令牌、一次性链接时，它（W/"长度-SHA-1 的前 27 个字符"）就是这些机密的稳定指纹，记响应头的中间层（代理的访问日志、HAR）会留下它。
+  // 读取内容的 ETag 是修订号，由那个接口自己写（documents 的 ContentResponseInterceptor）；静态文件的 ETag 由 express.static 自己管。都不受影响
+  app.set('etag', false)
   // 在途请求最先计入：退出时要等每一个请求完成
   app.use(pipeline.inFlight.middleware())
   // 请求日志与请求标识紧随其后：所有响应都有日志与请求标识
