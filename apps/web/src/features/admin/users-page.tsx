@@ -394,8 +394,9 @@ export function AdminUsersPage() {
               <div className="flex flex-col items-start gap-1">
                 <Badge variant={user.status === 'active' ? 'secondary' : 'destructive'}>{messages.people.statusName(user.status)}</Badge>
                 {user.loginLock !== null && <span className="text-xs text-destructive">{loginLockText(user.loginLock)}</span>}
-                {/* 本机密钥的版本（审查 B2）：从没取过的不显示；吊销之后这一行换成新的一版 */}
-                {user.localKey !== null && <span className="text-xs text-muted-foreground">{text.localKeyVersion(user.localKey.version)}</span>}
+                {/* 本机密钥的版本（审查 B2）：从没取过的不显示；吊销之后这一行换成新的一版。不折行（与"创建时间"一格一样）：这一格很窄，
+                    原来 400 宽时折成三行、把"第 1 版"拆开，1280 宽时也折成两行（复验 C7）；表格在自己的容器里横向滚动 */}
+                {user.localKey !== null && <span className="text-xs whitespace-nowrap text-muted-foreground">{text.localKeyVersion(user.localKey.version)}</span>}
               </div>
             </TableCell>
             <TableCell className="whitespace-nowrap"><time dateTime={user.createdAt}>{formatDateTime(user.createdAt)}</time></TableCell>

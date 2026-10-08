@@ -1,6 +1,6 @@
 // 吊销本机密钥（US-M3-17；M3-P6 设计 §3.6、§3.8）：系统管理员在账户页对某人"吊销本机密钥"——确认框说清楚本机密钥的用途与吊销的后果
 // （不说"没同步的修改都会作废"，A14；正面说正在编辑的页面照常保存，审查 B7），确认之后页面顶部的状态区说明换成了第几版（确认框关掉、焦点交还之后才写，读屏读得到），
-// 这一行"状态"列里的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时状态区不在可视区域里，明眼人看这一行；说明写进状态区、下面的内容下移之后，页面把焦点所在的按钮滚回可视区域），
+// 这一行"状态"列里的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时状态区不在可视区域里，明眼人看这一行；说明写进状态区、下面的内容下移之后，页面把焦点所在的按钮滚回可视区域；窄屏时它排成一行，复验 C7），
 // 焦点回到这一行的按钮；审计页按动作找得到（操作者、对象、明细里被吊销的那一版）。
 // 这个人另一台设备上正在编辑的页面经心跳得知（M3 落在协议层：心跳的响应带着他当前的版本，页面上没有可见的反应）：下一次心跳的响应里版本加一，
 // 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。"没有可见的反应"以确定的界核对（审查 B3）：得知第 2 版之后再等下一次心跳回来
@@ -9,7 +9,7 @@
 // 不真等：编辑的那一页装 Playwright 的时钟（打开之前装上，之后照常流动），要它的下一次心跳时拨 10 秒。
 // 容器 E2E 也跑（不带 @test-build：只用公开的接口与界面）
 import type { LocalKey } from '@nerve-office/contracts'
-import type { Page, Request } from '@playwright/test'
+import type { Locator, Page, Request } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
 import { localKeySchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'
@@ -119,6 +119,17 @@ async function expectNoVisibleReaction(page: Page, before: EditorPageLook): Prom
   expect(now.text, '编辑器页上（画布之外）的文字与吊销之前不同（页面对吊销有了可见的反应）').toBe(before.text)
   await expect(lostNotice(page)).toHaveCount(0)
   await expect(page.getByRole('alert')).toHaveCount(0)
+}
+
+/**
+ * 这段文字排成了几行：按它自己的行高量高度（"状态"列里的小字是弹性布局里的一项、成了块，getClientRects 分不出几行；
+ * 原来 400 宽时是 3 行、48px 高，复验 C7）
+ */
+async function lineCountOf(text: Locator): Promise<number> {
+  return text.evaluate((element) => {
+    const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight)
+    return Math.round(element.getBoundingClientRect().height / lineHeight)
+  })
 }
 
 test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
@@ -238,5 +249,24 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     const status = page.getByRole('status').filter({ hasText: '已吊销' })
     await expect(status).toHaveText(`已吊销 ${plainName(owner)} 的本机密钥，换成了第 2 版。`)
     await expect(status).not.toBeInViewport()
+  })
+
+  test('US-M3-17 窄屏（400 宽）：账户页"状态"列里的"本机密钥第 N 版"排成一行，不把"第 1 版"拆开；表格在自己的容器里横向滚动，页面本身不横向滚动（复验 C7）', async ({ page, anotherDevice }) => {
+    const admin = await createUser('lknarrow-admin', '窄屏的管理员', { systemRole: 'admin' })
+    const owner = await createUser('lknarrow', '名字比较长的一位同事')
+    // 他取过本机密钥（第 1 版）
+    await loginThroughApi(anotherDevice, owner)
+    expect((await fetchLocalKey(anotherDevice)).version).toBe(1)
+
+    await page.setViewportSize({ width: 400, height: 800 })
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    await searchList(page, '按名字或登录名搜索', owner.username)
+    const row = page.getByRole('table', { name: '账户列表' }).getByRole('row').filter({ hasText: owner.username })
+    await expect(row).toHaveCount(1)
+    const keyLine = row.getByText(/^本机密钥第 \d+ 版$/)
+    await expect(keyLine).toHaveText('本机密钥第 1 版')
+    expect(await lineCountOf(keyLine), '"本机密钥第 1 版"排成的行数').toBe(1)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), '页面横向溢出').toBe(true)
   })
 })
