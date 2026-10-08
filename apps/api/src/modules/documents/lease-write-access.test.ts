@@ -2,7 +2,7 @@
 // 先锁（lockInScope）、再判断、最后各一条语句写。范围的 SQL 与 coversWriter 同义由 edit-lease-statements.test.ts 核对；
 // 真实的加锁、锁下的再核对与交错由集成测试覆盖（tests/integration 的 documents/lease-revocation.test.ts）。
 import type { DocumentRow } from './documents.repository.ts'
-import type { EditLeaseRow } from './edit-leases.repository.ts'
+import type { EditLeaseRow, LockedEditLease } from './edit-leases.repository.ts'
 import type { WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
 import { EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS } from '@nerve-office/contracts'
@@ -181,7 +181,7 @@ describe('LeaseWriteAccessRevocation：步骤与写了什么', () => {
     const { store, revocation } = setup()
     const released = store.addDocument({ spaceId: TEAM_SPACE })
     holding(store, released, ALICE)
-    await store.leases.end(released.id, 'released')
+    store.endLease(released.id, 'released')
     store.space(TEAM_SPACE).status = 'archived'
     const scopes: WriteAccessScope[] = [
       { kind: 'user', userId: BOB },
@@ -213,7 +213,11 @@ describe('LeaseWriteAccessRevocation：步骤与写了什么', () => {
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
     await revocation.revoke({ kind: 'membership', userId: ALICE, spaceId: TEAM_SPACE }, TRANSACTION)
     expect(stateOf(store, [expired, idle, alive])).toEqual([[null, 0], [null, 0], ['revoked', 1]])
-    expect(store.leases.endAll.mock.calls).toEqual([[[alive.id], 'revoked', TRANSACTION]])
+    // 结束凭的是 lockInScope 锁住的那一行（Codex 评审 CX1）：按时间死了的不在它交出的里面
+    const locked = await store.leases.lockInScope.mock.results[0]?.value as readonly LockedEditLease[]
+    expect(locked.map(lease => lease.documentId)).toEqual([alive.id])
+    expect(store.leases.endAll.mock.calls).toEqual([[locked, 'revoked', TRANSACTION]])
+    expect(store.leases.endAll.mock.calls[0]?.[0].every(lease => locked.includes(lease))).toBe(true)
   })
 
   it('先锁住范围里的租约，再逐个判断，最后一条语句结束这些租约、一条语句给这些文档加代次（一批文档也是各一条），都在调用方的事务里', async () => {
@@ -232,7 +236,11 @@ describe('LeaseWriteAccessRevocation：步骤与写了什么', () => {
 
     const { leases, spaces, repositories } = store
     expect(leases.lockInScope.mock.calls).toEqual([[{ kind: 'documents', documentIds: [first.id, second.id, kept.id] }, TRANSACTION]])
-    expect(leases.endAll.mock.calls).toEqual([[[first.id, second.id], 'revoked', TRANSACTION]])
+    // 结束凭的是 lockInScope 锁住的那几行本身（Codex 评审 CX1：LockedEditLease 只由先锁文档行、再锁租约行的方法给出），还能编辑的那一行不在里面
+    const locked = await leases.lockInScope.mock.results[0]?.value as readonly LockedEditLease[]
+    expect(leases.endAll.mock.calls).toEqual([[locked.filter(lease => lease.documentId !== kept.id), 'revoked', TRANSACTION]])
+    expect(leases.endAll.mock.calls[0]?.[0].every(lease => locked.includes(lease))).toBe(true)
+    expect(leases.endAll.mock.calls[0]?.[0].map(lease => lease.documentId)).toEqual([first.id, second.id])
     expect(repositories.documents.advanceWriteEpochs.mock.calls).toEqual([[[first.id, second.id], TRANSACTION]])
     // 每个租约的持有者问一次（三次），都在锁住之后、写之前
     expect(spaces.accessFactsOf).toHaveBeenCalledTimes(3)

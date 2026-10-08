@@ -52,7 +52,8 @@ import { INSPECTED_PROFILE, rejectedSnapshot, requirePassingSnapshot } from './u
  *   所以提交了的都有 C − S' ≤ 60 秒；
  * - 合起来 C − S ≤ 10 + 60 = 70 < 90，余 20 秒。正常的保存是毫秒级（实测接近上限的保存，事务用 0.1 秒左右）；一份至多 5 MiB 的正文、
  *   两处等锁（各受 lock_timeout 约束）远用不了 60 秒，用到了说明数据库已经严重变慢，按繁忙失败、页面重试是对的。
- * 只有保存要它：别的"按事务开始时判断租约"的写路径（心跳、谢绝、交出）只锁租约行、不写内容，申请与它们的交错由有效条件第 7 条兜底
+ * 只有保存要它：别的"按事务开始时判断租约"的写路径（心跳、谢绝只锁租约行；交出先锁文档行，Codex 评审 CX1）都不写内容，
+ * 申请与它们的交错由有效条件第 7 条兜底。明确结束了的租约撤权不锁、不等，由锁保证（明确结束先锁文档行，与在途的保存互斥），与这个上界无关
  */
 export const SAVE_TRANSACTION_TIMEOUT_MS = 60_000
 
@@ -316,8 +317,11 @@ export class DocumentContentService {
    * 保存要求编辑租约（M3-P1 设计 §3.4.4）：令牌是当前这一行的、按有效条件有效（edit-lease-rules.ts 的 requestLeaseLoss）、
    * 代次等于查询参数的 writeEpoch、这次登录与查询参数的标签页都是租约绑定的，否则 EDIT_LEASE_LOST（details 带原因；被接管时是
    * taken_over 与 forced，M3-P5 设计 §3.7、§3.8：页面据此不续上，给副本）。
-   * 文档行已经锁住（能编辑的请求才走到这里），代次是锁下读到的；租约行不加锁读：能改写它的申请（含本人接管、强制接管）与收回写入权
-   * 都要先拿文档行的锁。保存不续租（续租靠心跳）
+   * 文档行已经锁住（能编辑的请求才走到这里），代次是锁下读到的；租约行不加锁读：让它失效的写——换成新的一代（申请，含本人接管、
+   * 强制接管）与明确结束（释放、交出、收回写入权）——都要先拿这份文档行的锁，类型上凭锁（EditLeasesRepository 的 replace 要文档行的锁，
+   * end、handOver、endAll 要先锁文档行、再锁住的租约行，Codex 评审 CX1），这次保存持着它，它们夹不进这次的读与提交之间：
+   * 读到有效，到提交都有效；它们提交之后才拿到这把锁的保存读到的是失效的。只锁租约行的写（心跳续期、请求编辑）都不让租约失效。
+   * 保存不续租（续租靠心跳）
    */
   private async requireLease(saver: ContentSaver, document: DocumentRow, query: SaveContentQuery, transaction: Transaction): Promise<void> {
     const lease = await this.leases.findByDocument(document.id, transaction)

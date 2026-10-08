@@ -9,7 +9,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { adminUserSchema, errorResponseSchema } from '@nerve-office/contracts'
+import { errorResponseSchema, revokeLocalKeyResponseSchema } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_LOCAL_KEYS_MASTER_KEY } from '../support/api-app.ts'
@@ -119,7 +119,7 @@ describe('主密钥与库里的对不上（M3-P6 设计 §3.1：记 error、照�
 
     // 处置：系统管理员吊销（不需要旧的主密钥），下一版用现在的主密钥包装
     const revoked = await revokeLocalKey(next.baseUrl, adminSession, amy.id)
-    expect(parseExact(adminUserSchema, await revoked.json()).localKey?.version).toBe(2)
+    expect(parseExact(revokeLocalKeyResponseSchema, await revoked.json())).toMatchObject({ revoked: { version: 1, nextVersion: 2 }, account: { localKey: { version: 2 } } })
     const material = await currentMaterialOf(database, amy.id)
     expect(material.masterKeyId.equals(masterKeyIdOf(replaced))).toBe(true)
     const second = await takeLocalKey(next.baseUrl, amy.session)

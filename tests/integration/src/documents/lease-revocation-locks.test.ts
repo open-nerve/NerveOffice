@@ -9,8 +9,11 @@
 // 4. 保存按它的事务开始时的 now() 判断租约：在途的保存跨过了租约的到期（或空闲满 12 分钟）时，撤权照样等它提交（M3-P5 审查 A1，
 //    由审查者的探针改成）——撤权连按时间刚死不久（一个有效期之内）的租约的文档行也锁，只是不收回它（不记 revoked、不加代次，DEF-044）。
 //    死了约 70 秒（保存的事务从 BEGIN 到提交的上界，复验 C1、再复核 D1）的照样等：按行为钉住窗口的大小（复验 C5、再复核 D8）。
-// 另有锁的顺序（文档行 → 租约行）、锁下再核对一次范围、范围只锁涉及的文档，以及死了超过一个有效期的租约的文档行不锁（M3-P5 设计 §3.5，
-// DEF-044）、刚死不久的锁住而不收回。
+// 5. 明确结束（释放、交出）与在途的保存互斥（Codex 评审 CX1，由评审者的探针改成）：释放与交出同样先锁文档行、再锁租约行，
+//    保存过了租约检查、还没提交时，释放与交出等它提交；撤权不锁明确结束了的租约，靠的就是这一条——接着的撤权照样排在这次保存之后，
+//    "撤权提交之后的保存必定被拒绝"不再依赖页面"先存上再释放"。
+// 另有锁的顺序（文档行 → 租约行，撤权、释放与交出都是）、锁下再核对一次范围、范围只锁涉及的文档，以及死了超过一个有效期的租约的文档行不锁
+// （M3-P5 设计 §3.5，DEF-044）、刚死不久的锁住而不收回；释放不了的释放（令牌不对、不是持有者）不锁文档行。
 // 做法同 sharing-locks.test.ts："先取完锁的操作"停在写审计之前——给 audit_events 装 BEFORE INSERT 的触发器，按"动作 + 操作者"
 // 取 advisory 共享锁（闸门），测试的连接持有同一个键的排他锁。持锁构造的前提由 held-lock.ts 自己核对。
 import type { SpaceRole } from '@nerve-office/contracts'
@@ -24,7 +27,7 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editStatusSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, EDIT_LEASE_HEADER, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, editStatusSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -32,7 +35,7 @@ import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { acquireLease, idleLeaseFor, leaseStateOf, outcomeOf, passLeaseTime, releaseLease, renewLease, saveContent } from '../support/edit-leases.ts'
+import { acquireLease, handOverLease, idleLeaseFor, leaseStateOf, outcomeOf, passLeaseTime, pendingRequestId, releaseLease, renewLease, saveContent, strayLease } from '../support/edit-leases.ts'
 import { setGrant } from '../support/grants.ts'
 import { completesWithoutWaiting, raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
 import { asUser, login } from '../support/session-client.ts'
@@ -209,6 +212,44 @@ async function interleave(first: Gated, second: () => Promise<Response>): Promis
   return { first: firstResponse, second: await pending, secondWaited: completed === false }
 }
 
+/**
+ * 同 interleave，first 停住之后依次发出 then 里的几个请求：每发一个，看它是不是停在锁上（不等 first 提交就走完了的记为没等）；
+ * 都发出之后、first 提交之前执行 meanwhile（例如从另一个连接核对库里提交了的样子）；放开 first，全部结束
+ */
+async function interleaveAll(first: Gated, then: readonly (() => Promise<Response>)[], meanwhile: () => Promise<void>): Promise<{ first: Response, then: Response[], waited: boolean[] }> {
+  const pending: Promise<Response>[] = []
+  const waited: boolean[] = []
+  const firstResponse = await raceAgainstHeldLock(database, {
+    hold: holdGate(first.action, first.actorId),
+    request: async () => first.run(),
+    change: async () => {
+      for (const next of then) {
+        const request = next()
+        pending.push(request)
+        // 在等锁的：停住的 first、之前停在锁上的几个，加上这一个
+        waited.push(!await completesWithoutWaiting(database, request, 2 + waited.filter(Boolean).length))
+      }
+      await meanwhile()
+    },
+  })
+  return { first: firstResponse, then: await Promise.all(pending), waited }
+}
+
+/** 释放（接口一律 204）：交错的用例要核对它等没等、何时结束，所以交回响应（support 的 releaseLease 不看结果） */
+async function release(user: LoggedIn, documentId: string, lease: HeldLease): Promise<Response> {
+  return asUser(app.baseUrl, user, `/api/documents/${documentId}/edit-lease`, { method: 'DELETE', headers: { [EDIT_LEASE_HEADER]: lease.token } })
+}
+
+/** 从另一个连接看这份文档已经提交了的样子：修订号、租约明确结束的原因、持有者还是不是这个空间的成员 */
+async function committedOf(prepared: Prepared): Promise<{ readonly revision: number | undefined, readonly endReason: string | null | undefined, readonly member: boolean }> {
+  const { document, space, holder } = prepared
+  return database.query(async client => ({
+    revision: (await client.query<{ revision: number }>('SELECT revision FROM documents WHERE id = $1', [document.id])).rows[0]?.revision,
+    endReason: (await client.query<{ endReason: string | null }>('SELECT end_reason AS "endReason" FROM document_edit_leases WHERE document_id = $1', [document.id])).rows[0]?.endReason,
+    member: (await client.query('SELECT 1 FROM space_members WHERE space_id = $1 AND user_id = $2', [space, holder.account.id])).rowCount === 1,
+  }))
+}
+
 /** 一种撤权：持有者凭什么能编辑、审计的动作与操作者（闸门的键）、怎么发出、成功的状态码，以及撤权之后保存的结局 */
 interface Revocation {
   readonly name: string
@@ -378,6 +419,63 @@ describe('US-M3-12 在途的保存跨过了租约按时间的死亡（M3-P5 审�
     expect([result.first.status, result.second.status, result.secondWaited]).toEqual([200, 204, true])
     expect(await writesOf(document.id)).toEqual({ revision: 2, revisions: 2, saves: 1 })
     expect(await leaseStateOf(database, document.id)).toEqual(untouched(holder, lease))
+    expect(await outcomeOf(await save(holder.session, document, lease, 2))).toBe('404 NOT_FOUND')
+    expect(await writesOf(document.id)).toEqual({ revision: 2, revisions: 2, saves: 1 })
+  })
+})
+
+/** 一种明确结束：摆好之后交回怎么发出它（持有者自己带令牌），成功的状态码与记下的原因 */
+interface ExplicitEnd {
+  readonly name: string
+  readonly prepare: (prepared: Prepared, lease: HeldLease) => Promise<() => Promise<Response>>
+  readonly status: number
+  readonly endReason: string
+}
+
+const EXPLICIT_ENDS: readonly ExplicitEnd[] = [
+  {
+    name: '释放',
+    prepare: async ({ holder, document }, lease) => async () => release(holder.session, document.id, lease),
+    status: 204,
+    endReason: 'released',
+  },
+  {
+    // 交出之前先要有人在请求编辑：卡特（这个空间的编辑者）发出、在等
+    name: '交出',
+    prepare: async ({ holder, document }, lease) => {
+      const requestId = await pendingRequestId(app.baseUrl, catSession, document.id)
+      return async () => handOverLease(app.baseUrl, holder.session, document.id, lease, requestId)
+    },
+    status: 200,
+    endReason: 'handed_over',
+  },
+]
+
+describe('US-M3-12 明确结束（释放、交出）与在途的保存互斥（Codex 评审 CX1）：保存过了租约检查、还没提交时，明确结束等它提交；接着的撤权同样等，不先于这次保存提交', () => {
+  it.each(EXPLICIT_ENDS)('US-M3-12 保存先取完锁（停在写审计之前），这时$name、接着移出空间：两个都等保存提交（保存提交之前库里租约没结束、他还是成员）；保存写进去，$name随后照常（$endReason），移出空间不再收回已经结束的租约；之后的保存被拒绝', async (end) => {
+    const prepared = await prepare('member')
+    const { holder, document, space } = prepared
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const endLease = await end.prepare(prepared, lease)
+    let beforeSaveCommits: Awaited<ReturnType<typeof committedOf>> | undefined
+    const result = await interleaveAll(
+      { action: 'documents.content_saved', actorId: holder.account.id, run: async () => save(holder.session, document, lease) },
+      [
+        endLease,
+        async () => asUser(app.baseUrl, amySession, `/api/spaces/${space}/members/${holder.account.id}`, { method: 'DELETE' }),
+      ],
+      async () => {
+        beforeSaveCommits = await committedOf(prepared)
+      },
+    )
+    // 明确结束与撤权都停在锁上（原来明确结束只锁租约行、不等保存就提交，撤权随即看它已经结束、不锁文档行，先于保存提交：Codex 评审 CX1 的反例）
+    expect(result.waited).toEqual([true, true])
+    expect(beforeSaveCommits).toEqual({ revision: 1, endReason: null, member: true })
+    expect([result.first.status, ...result.then.map(response => response.status)]).toEqual([200, end.status, 204])
+    expect(await writesOf(document.id)).toEqual({ revision: 2, revisions: 2, saves: 1 })
+    // 明确结束排在保存之后、撤权之前：记下的是它的原因；撤权锁下看到租约已经结束，不再收回（不记 revoked、代次不加）
+    expect(await leaseStateOf(database, document.id)).toEqual({ holderId: holder.account.id, endReason: end.endReason, leaseEpoch: lease.writeEpoch, documentEpoch: lease.writeEpoch })
+    expect(await committedOf(prepared)).toEqual({ revision: 2, endReason: end.endReason, member: false })
     expect(await outcomeOf(await save(holder.session, document, lease, 2))).toBe('404 NOT_FOUND')
     expect(await writesOf(document.id)).toEqual({ revision: 2, revisions: 2, saves: 1 })
   })
@@ -571,7 +669,7 @@ describe('US-M3-12 仍能编辑的持有者：改动先取完锁（代次已加�
   })
 })
 
-describe('US-M3-12 收回写入权的锁（P1 设计 §3.4.6、ADR-014 的锁顺序：文档行之后是租约行）', () => {
+describe('US-M3-12 收回写入权、释放与交出的锁（P1 设计 §3.4.6、ADR-014 的锁顺序：文档行之后是租约行；释放与交出自 Codex 评审 CX1 起同样）', () => {
   it('US-M3-12 锁的顺序：撤权先锁文档行、再锁租约行——停在文档行上时租约行还没被锁；放开之后照常结束租约', async () => {
     const prepared = await prepare('member')
     const { holder, document, space } = prepared
@@ -681,6 +779,39 @@ describe('US-M3-12 收回写入权的锁（P1 设计 §3.4.6、ADR-014 的锁顺
       change: async () => undefined,
     })
     expect(removed.status).toBe(204)
+    expect(await leaseStateOf(database, document.id)).toEqual(untouched(holder, lease))
+  })
+
+  it.each(EXPLICIT_ENDS)('US-M3-12 锁的顺序：$name与撤权、申请一样先锁文档行、再锁租约行（Codex 评审 CX1）——停在文档行上时租约行还没被锁；放开之后照常（$endReason）', async (end) => {
+    const prepared = await prepare('member')
+    const { holder, document } = prepared
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const endLease = await end.prepare(prepared, lease)
+    const ended = await raceAgainstHeldLock(database, {
+      hold: holdDocuments(document.id),
+      request: endLease,
+      change: async () => {
+        expect(await leaseRowLock(document.id)).toBe('free')
+      },
+    })
+    expect(ended.status).toBe(end.status)
+    expect(await leaseStateOf(database, document.id)).toEqual({ holderId: holder.account.id, endReason: end.endReason, leaseEpoch: lease.writeEpoch, documentEpoch: lease.writeEpoch })
+  })
+
+  it('US-M3-12 释放不了的释放（令牌对不上这一代、释放的人不是持有者本人）不锁文档行：测试持住文档行时照常 204、不等，租约不动——能读这份文档的人不能借释放让编辑者的保存排队（同复验 RA7）', async () => {
+    const prepared = await prepare('member')
+    const { holder, document } = prepared
+    const lease = await acquireLease(app.baseUrl, holder.session, document.id)
+    const statuses = await whileHolding(database, holdDocuments(document.id), async () => {
+      const done: number[] = []
+      for (const attempt of [async () => release(holder.session, document.id, strayLease()), async () => release(catSession, document.id, lease)]) {
+        const pending = attempt()
+        expect(await completesWithoutWaiting(database, pending, 1)).toBe(true)
+        done.push((await pending).status)
+      }
+      return done
+    })
+    expect(statuses).toEqual([204, 204])
     expect(await leaseStateOf(database, document.id)).toEqual(untouched(holder, lease))
   })
 

@@ -3,10 +3,10 @@ import { Injectable } from '@nestjs/common'
 import { LocalKeysRepository } from './local-keys.repository.ts'
 import { generateLocalKey, MasterKeyring } from './master-keyring.ts'
 
-/** 吊销的结果：被吊销的那一版与随即生成的下一版 */
+/** 吊销这一次的结果：被吊销的那一版与随即生成的下一版（admin 原样交给管理员，Codex 评审 CX3：响应里的"这一次的结果"就是它） */
 export interface RevokedLocalKey {
   readonly revokedVersion: number
-  readonly currentVersion: number
+  readonly nextVersion: number
 }
 
 /**
@@ -29,14 +29,14 @@ export class LocalKeyRevocation {
     const revokedVersion = await this.repository.revokeCurrent(userId, transaction)
     if (revokedVersion === undefined)
       return undefined
-    const currentVersion = revokedVersion + 1
+    const nextVersion = revokedVersion + 1
     const rawKey = generateLocalKey()
     try {
-      await this.repository.insertNext(userId, currentVersion, this.keyring.wrap(rawKey, { userId, version: currentVersion }), transaction)
+      await this.repository.insertNext(userId, nextVersion, this.keyring.wrap(rawKey, { userId, version: nextVersion }), transaction)
     }
     finally {
       rawKey.fill(0)
     }
-    return { revokedVersion, currentVersion }
+    return { revokedVersion, nextVersion }
   }
 }

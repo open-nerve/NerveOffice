@@ -130,9 +130,11 @@ export const adminMessages = {
     // "状态"列里本机密钥的摘要（审查 B2）：这个人当前那一把的版本，从没取过的不显示。吊销之后这一行随之换成新的一版——在列表靠下的一行吊销时，
     // 页面顶部的状态区不在可视区域里，明眼人在这一行看得见结果
     localKeyVersion: (version: number) => `本机密钥第 ${version} 版`,
-    localKeyRevoked: (name: string, version: number) => `已吊销 ${name} 的本机密钥，换成了第 ${version} 版。`,
-    // 这个人从没取过本机密钥：服务端原样返回、不记审计
-    noLocalKeyToRevoke: (name: string) => `${name} 还没有本机密钥，没有要吊销的。`,
+    // 吊销的说法按这一次的结果（Codex 评审 CX3）：吊销了哪一版、换成了哪一版
+    localKeyRevoked: (name: string, version: number, nextVersion: number) => `已吊销 ${name} 的本机密钥第 ${version} 版，换成了第 ${nextVersion} 版。`,
+    // 没有可吊销的：吊销的那一刻他还没有本机密钥（从没取过），服务端什么也没吊销、不记审计。说"那一刻"：他可能恰好在这之后第一次取用了，
+    // 这一行（按账户的现状）随之显示第 1 版，这句话照样属实
+    noLocalKeyToRevoke: (name: string) => `吊销的那一刻 ${name} 还没有本机密钥，没有吊销任何密钥。`,
     // 吊销的结果未知：吊销不按状态幂等（每次都换一把新的），通用的"还没有生效的话可以再试一次"不合适：再吊销一次没有坏处。
     // 列表随即刷新（审查 B2）：刷新好了，这一行显示的就是现在的状态；没能刷新时如实说。说法对从没取过本机密钥的人也成立（复验 C8）：
     // 这一行不显示版本时不说"现在的版本"，他再吊销一次什么也不换，不说"会再换一把"

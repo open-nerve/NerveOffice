@@ -553,7 +553,7 @@ describe('DocumentContentService.save：保存要求编辑租约（M3-P1 设计 
       idle.store.leaseRecords.set(idle.document.id, { ...row, lastActiveAt: new Date(row.renewedAt.getTime() - 720_000) })
     expect(await lostReason(idle, idle.service.save(saver(ALICE), idle.document.id, query(), upload(idle.document.unitId), HTTP_ORIGIN))).toBe('idle')
     const released = setup()
-    await released.store.leases.end(released.document.id, 'released')
+    released.store.endLease(released.document.id, 'released')
     expect(await lostReason(released, released.service.save(saver(ALICE), released.document.id, query(), upload(released.document.unitId), HTTP_ORIGIN))).toBe('released')
   })
 

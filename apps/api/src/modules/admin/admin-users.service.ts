@@ -1,4 +1,4 @@
-import type { AdminUser, AdminUserListQuery, AdminUserListResponse, LinkIssuerRevocationReason, UserSystemRole } from '@nerve-office/contracts'
+import type { AdminUser, AdminUserListQuery, AdminUserListResponse, LinkIssuerRevocationReason, RevokeLocalKeyResponse, UserSystemRole } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
@@ -134,9 +134,12 @@ export class AdminUsersService {
    * 必须先锁账户行：两个并发的吊销只靠本机密钥行的锁时，后一个在 READ COMMITTED 的重新检查下拿到 0 行、被当成"没有可吊销的"（探索 A 实测）；
    * 锁住账户行之后两次吊销串起来，后一个吊销前一个生成的那一版。
    * 停用的账户能吊销（设备丢失常在离职之后），吊销自己也可以；吊销不撤销登录、停用也不顺带吊销（设计 §3.1：两件事分开，
-   * 设备丢失时另要生成重置链接退出他的登录）。没有密钥（从没取过）时原样返回、不记审计。原始的新密钥不交给管理员，响应里只有版本与时刻
+   * 设备丢失时另要生成重置链接退出他的登录）。原始的新密钥不交给管理员，响应里只有版本与时刻。
+   * 响应分成这一次的结果与账户的现状（Codex 评审 CX3）：结果直接来自吊销本身（吊销了哪一版、换成了哪一版），审计与它一致——
+   * 没有可吊销的（从没取过）时结果为 null、不记审计；现状照旧在同一个事务里读（view）。结果不能从现状推断：吊销没找到当前的那一把之后、
+   * 读现状之前，本人第一次取用可以提交（取用不锁账户行，插入的外键检查只取 FOR KEY SHARE），现状里就有了第 1 版，而这一次什么也没吊销
    */
-  async revokeLocalKey(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
+  async revokeLocalKey(actor: Principal, userId: string, origin: HttpOrigin): Promise<RevokeLocalKeyResponse> {
     return this.transactions.run(async (transaction) => {
       await this.users.lockActingAdmin(actor.user.id, transaction)
       const locked = await this.users.lockAccount(userId, transaction)
@@ -153,7 +156,10 @@ export class AdminUsersService {
           details: { version: revoked.revokedVersion },
         }, { transaction })
       }
-      return this.view(locked, transaction)
+      return {
+        revoked: revoked === undefined ? null : { version: revoked.revokedVersion, nextVersion: revoked.nextVersion },
+        account: await this.view(locked, transaction),
+      }
     })
   }
 

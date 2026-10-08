@@ -78,15 +78,15 @@ describe('StatusRegion 的 keepFocusInView（M3-P6 复验 N1、再复核 D1：�
     const button = screen.getByRole('button', { name: '列表下面的按钮' })
     button.focus()
     // 写进说明：状态区从 1 像素（空的时候视觉隐藏）撑开
-    rerender(<ListPage keep notice="已吊销 @amy 艾米 的本机密钥，换成了第 2 版。" />)
+    rerender(<ListPage keep notice="已吊销 @amy 艾米 的本机密钥第 1 版，换成了第 2 版。" />)
     act(() => resize(region, 46))
     expect(scrolled).toHaveBeenCalledTimes(1)
     expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
     expect(scrolled.mock.contexts.at(-1)).toBe(button)
     // 换成更长的说明、同一行放得下（高度不变）：不滚
-    rerender(<ListPage keep notice="已吊销 @amy 艾米 的本机密钥，换成了第 2 版；列表还在刷新" />)
+    rerender(<ListPage keep notice="已吊销 @amy 艾米 的本机密钥第 1 版，换成了第 2 版；列表还在刷新" />)
     // 那一句消失、清空：变矮，下面的内容往上走，不滚
-    rerender(<ListPage keep notice="已吊销 @amy 艾米 的本机密钥，换成了第 2 版。" />)
+    rerender(<ListPage keep notice="已吊销 @amy 艾米 的本机密钥第 1 版，换成了第 2 版。" />)
     rerender(<ListPage keep />)
     act(() => resize(region, 1))
     expect(scrolled).toHaveBeenCalledTimes(1)

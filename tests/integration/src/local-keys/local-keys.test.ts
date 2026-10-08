@@ -9,7 +9,7 @@ import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomBytes } from 'node:crypto'
-import { adminUserListResponseSchema, adminUserSchema, CSRF_TOKEN_HEADER, errorResponseSchema, localKeySchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
+import { adminUserListResponseSchema, adminUserSchema, CSRF_TOKEN_HEADER, errorResponseSchema, localKeySchema, renewedEditLeaseSchema, revokeLocalKeyResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp, startTestAppInTimeZone, TEST_LOCAL_KEYS_MASTER_KEY, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
@@ -157,13 +157,14 @@ describe('US-M3-17 本人取当前的本机密钥（POST /api/local-key）', () 
 })
 
 describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id}/local-key/revoke）', () => {
-  it('吊销：200，账户里的本机密钥是下一版；旧的那一行记下吊销的时刻、擦掉密钥材料；下一版立即存在、用现在的主密钥包装；本人再取得到下一版、不同的字节；审计逐字；响应里没有密钥材料', async () => {
+  it('吊销：200，这一次的结果是吊销第 1 版、换成第 2 版，账户的现状里本机密钥是第 2 版；旧的那一行记下吊销的时刻、擦掉密钥材料；下一版立即存在、用现在的主密钥包装；本人再取得到下一版、不同的字节；审计逐字；响应里没有密钥材料', async () => {
     const { account, session } = await person()
     const first = await take(session)
     const response = await revokeLocalKey(app.baseUrl, rootSession, account.id)
     expect(response.status).toBe(200)
     const text = await response.text()
-    const view = parseExact(adminUserSchema, JSON.parse(text))
+    const { revoked: thisTime, account: view } = parseExact(revokeLocalKeyResponseSchema, JSON.parse(text))
+    expect(thisTime).toEqual({ version: 1, nextVersion: 2 })
     expect(view).toMatchObject({ id: account.id, status: 'active', localKey: { version: 2 } })
 
     const rows = await localKeyRowsOf(database, account.id)
@@ -199,8 +200,8 @@ describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id
     const { account, session } = await person()
     await take(session)
     expect((await revokeLocalKey(app.baseUrl, rootSession, account.id)).status).toBe(200)
-    const again = await revokeLocalKey(app.baseUrl, rootSession, account.id)
-    expect(parseExact(adminUserSchema, await again.json()).localKey?.version).toBe(3)
+    const again = parseExact(revokeLocalKeyResponseSchema, await (await revokeLocalKey(app.baseUrl, rootSession, account.id)).json())
+    expect([again.revoked, again.account.localKey?.version]).toEqual([{ version: 2, nextVersion: 3 }, 3])
     expect((await localKeyRowsOf(database, account.id)).map(row => [row.version, row.revokedAt === null])).toEqual([[1, false], [2, false], [3, true]])
     expect((await revocationAuditsOf(account.id)).map(audit => audit.details)).toEqual([{ version: 1 }, { version: 2 }])
     expect((await take(session)).version).toBe(3)
@@ -221,8 +222,9 @@ describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id
       for (const version of [2, 3]) {
         const response = await revokeLocalKey(shanghai.baseUrl, admin, account.id)
         expect(response.status, await response.clone().text()).toBe(200)
-        view = parseExact(adminUserSchema, await response.json()).localKey
-        expect(view?.version).toBe(version)
+        const revocation = parseExact(revokeLocalKeyResponseSchema, await response.json())
+        view = revocation.account.localKey
+        expect([revocation.revoked?.nextVersion, view?.version]).toEqual([version, version])
       }
       await expectMonotonicTimeline(database, account.id, 3)
       // 账户里第 3 版的生成时刻（毫秒精度的 ISO 文本）与库里的（微秒）相差不到 1 毫秒，不差 8 小时
@@ -238,11 +240,13 @@ describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id
     }
   })
 
-  it('从没取过：原样返回（本机密钥为空），不记审计、什么也不写；之后第一次取得到第 1 版', async () => {
+  it('从没取过：这一次的结果为空（没有可吊销的），现状里本机密钥为空；不记审计、什么也不写；之后第一次取得到第 1 版', async () => {
     const { account, session } = await person()
     const response = await revokeLocalKey(app.baseUrl, rootSession, account.id)
     expect(response.status).toBe(200)
-    expect(parseExact(adminUserSchema, await response.json())).toMatchObject({ id: account.id, localKey: null })
+    const { revoked, account: view } = parseExact(revokeLocalKeyResponseSchema, await response.json())
+    expect(revoked).toBeNull()
+    expect(view).toMatchObject({ id: account.id, localKey: null })
     expect(await revocationAuditsOf(account.id)).toEqual([])
     expect(await localKeyRowsOf(database, account.id)).toEqual([])
     expect((await take(session)).version).toBe(1)
@@ -255,7 +259,7 @@ describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id
     // 停用不顺带吊销（设计 §3.1：停用是可撤回的暂停）
     expect((await localKeyRowsOf(database, account.id)).map(row => row.revokedAt)).toEqual([null])
     const response = await revokeLocalKey(app.baseUrl, rootSession, account.id)
-    expect(parseExact(adminUserSchema, await response.json())).toMatchObject({ status: 'disabled', localKey: { version: 2 } })
+    expect(parseExact(revokeLocalKeyResponseSchema, await response.json())).toMatchObject({ revoked: { version: 1, nextVersion: 2 }, account: { status: 'disabled', localKey: { version: 2 } } })
     expect((await revocationAuditsOf(account.id)).map(audit => audit.details)).toEqual([{ version: 1 }])
     expect((await asUser(app.baseUrl, rootSession, `/api/admin/users/${account.id}/enable`, { method: 'POST' })).status).toBe(200)
     const again = await login(app.baseUrl, account.username, account.password)
@@ -270,7 +274,7 @@ describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id
     const session = await login(app.baseUrl, admin.username, admin.password)
     const first = await take(session)
     const response = await revokeLocalKey(app.baseUrl, session, admin.id)
-    expect(parseExact(adminUserSchema, await response.json())).toMatchObject({ id: admin.id, localKey: { version: 2 } })
+    expect(parseExact(revokeLocalKeyResponseSchema, await response.json())).toMatchObject({ revoked: { version: 1, nextVersion: 2 }, account: { id: admin.id, localKey: { version: 2 } } })
     expect((await revocationAuditsOf(admin.id))[0]).toMatchObject({ actor_id: admin.id, target_id: admin.id, details: { version: 1 } })
     const next = await take(session)
     expect(next.version).toBe(2)

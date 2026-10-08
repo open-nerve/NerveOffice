@@ -4,6 +4,8 @@
 // - 两个并发的吊销：先锁账户行把它们串起来——只靠本机密钥行的锁时，后一个在 READ COMMITTED 的重新检查下拿到 0 行、被当成"没有可吊销的"；
 //   两种先后（先开始的先做完、后开始的先做完）都得到第 2、第 3 版；
 // - 吊销遇上还没提交的第一次取用：不等它、按"没有可吊销的"回答（那一刻还没有任何密钥发出过）；
+// - 吊销判定没有可吊销的之后、读账户现状之前，本人第一次取用提交了（Codex 评审 CX3）：响应的结果仍是"没有可吊销的"、不记审计，
+//   现状照实是第 1 版——这一次做了什么看结果，不从现状推断（原来只回现状，页面据此说成"已吊销、换成了第 1 版"）；
 // - 吊销开了事务、在锁上等着的时候，别的事务生成并提交了当前的那一把（本人第一次取用、另一个吊销生成的下一版）：吊销的时刻取执行那一刻，
 //   不早于那一把的生成，下一版生成于这一刻（审查 A1：原来取事务开始的 now()，约束 revoked_at >= created_at 失败、吊销 500）；
 // - 守卫之后、事务之前撤销这次登录（退出、签发重置、停用、别处修改密码、空闲过期）：事务的第一条语句按主键核对登录，401 SESSION_EXPIRED、
@@ -16,13 +18,13 @@ import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomBytes } from 'node:crypto'
 import { TransactionRunner } from '@nerve-office/api'
-import { adminUserSchema, errorResponseSchema, localKeySchema } from '@nerve-office/contracts'
+import { errorResponseSchema, localKeySchema, revokeLocalKeyResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_LOCAL_KEYS_MASTER_KEY } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
+import { completesWithoutWaiting, raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
 import { currentMaterialOf, expectMonotonicTimeline, fetchLocalKey, localKeyMomentsOf, localKeyRowsOf, revokeLocalKey, takeLocalKey, unwrapLocalKey, wrapLocalKey } from '../support/local-keys.ts'
 import { asUser, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
@@ -83,6 +85,23 @@ async function revocationAuditsOf(userId: string): Promise<{ actor_id: string, d
 
 const INSERT_KEY = 'INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key) VALUES ($1, $2, $3, $4)'
 
+/**
+ * 吊销的闸门（Codex 评审 CX3 的控制点）：user_local_keys 上的每一条 UPDATE 语句执行完（0 行也算：语句级的 AFTER 触发器）、交回结果之前，
+ * 取一把共享的 advisory lock；测试持着同一个键的排他锁时，吊销停在"已经判定有没有可吊销的、还没读账户的现状"这一刻。
+ * 第一次取用只插入（INSERT … ON CONFLICT DO NOTHING），不经过它。只装在这个文件的测试库里、只给用到它的那条用例，用完删掉
+ */
+const REVOKE_GATE_KEY = 'local-key-races:revoke-gate'
+const REVOKE_GATE_DDL = `
+CREATE FUNCTION local_key_revoke_gate() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock_shared(hashtextextended('${REVOKE_GATE_KEY}', 0));
+  RETURN NULL;
+END
+$$;
+CREATE TRIGGER local_key_revoke_gate AFTER UPDATE ON user_local_keys FOR EACH STATEMENT EXECUTE FUNCTION local_key_revoke_gate();
+`
+const REVOKE_GATE_DROP = 'DROP TRIGGER local_key_revoke_gate ON user_local_keys; DROP FUNCTION local_key_revoke_gate();'
+
 /** 闸门：走到这里时 arrived 兑现，等 release 之后才往下走 */
 function gate() {
   let reach: () => void = () => {}
@@ -127,10 +146,12 @@ async function pausedInTransaction(send: () => Promise<Response>, during: () => 
   return pending
 }
 
-/** 吊销成功，响应里账户的本机密钥是第几版 */
+/** 吊销成功、吊销了一把：这一次换成了第几版（账户现状里的本机密钥就是它） */
 async function revokedTo(response: Response): Promise<number | undefined> {
   expect(response.status, await response.clone().text()).toBe(200)
-  return parseExact(adminUserSchema, await response.json()).localKey?.version
+  const { revoked, account } = parseExact(revokeLocalKeyResponseSchema, await response.json())
+  expect(account.localKey?.version).toBe(revoked?.nextVersion)
+  return revoked?.nextVersion
 }
 
 describe('第一次取用的并发', () => {
@@ -233,10 +254,7 @@ describe('吊销的并发', () => {
       change: async () => {},
       waiting: 2,
     })
-    const versions = await Promise.all([first, second].map(async (response) => {
-      expect(response.status).toBe(200)
-      return parseExact(adminUserSchema, await response.json()).localKey?.version
-    }))
+    const versions = await Promise.all([first, second].map(revokedTo))
     expect(versions.toSorted()).toEqual([2, 3])
     expect((await localKeyRowsOf(database, account.id)).map(row => [row.version, row.revokedAt === null])).toEqual([[1, false], [2, false], [3, true]])
     await expectMonotonicTimeline(database, account.id, 3)
@@ -298,7 +316,7 @@ describe('吊销的并发', () => {
         await client.query(INSERT_KEY, [account.id, 1, pending.masterKeyId, pending.wrappedKey])
         const response = await revokeLocalKey(app.baseUrl, rootSession, account.id)
         expect(response.status).toBe(200)
-        expect(parseExact(adminUserSchema, await response.json()).localKey).toBeNull()
+        expect(parseExact(revokeLocalKeyResponseSchema, await response.json())).toMatchObject({ revoked: null, account: { localKey: null } })
         await client.query('COMMIT')
       }
       catch (error) {
@@ -308,6 +326,37 @@ describe('吊销的并发', () => {
     })
     expect(await revocationAuditsOf(account.id)).toEqual([])
     expect((await localKeyRowsOf(database, account.id)).map(row => [row.version, row.revokedAt === null])).toEqual([[1, true]])
+  })
+
+  it('空吊销与第一次取用交错（Codex 评审 CX3，由评审者的探针改成）：吊销判定没有可吊销的（UPDATE 0 行）之后、读账户现状之前，本人第一次取用提交了第 1 版——响应的结果仍是"没有可吊销的"，现状照实是第 1 版；不记审计，第 1 版没被吊销，本人再取还是同一把', async () => {
+    const { account, session } = await person()
+    await database.query(async client => client.query(REVOKE_GATE_DDL))
+    try {
+      let taken: { version: number, key: string } | undefined
+      const response = await raceAgainstHeldLock(database, {
+        // 吊销停在闸门上：已经锁住账户行、UPDATE 判定这个人没有当前的那一把（0 行），还没读账户的现状
+        hold: async client => client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [REVOKE_GATE_KEY]),
+        request: async () => revokeLocalKey(app.baseUrl, rootSession, account.id),
+        // 这时本人第一次取用：不锁账户行（插入的外键检查只取 FOR KEY SHARE）、只插入不更新（不经过闸门），不等吊销就提交第 1 版
+        change: async () => {
+          const fetching = fetchLocalKey(app.baseUrl, session)
+          expect(await completesWithoutWaiting(database, fetching, 2), '第一次取用等了吊销：用例的前提不成立').toBe(true)
+          taken = await keyOf(await fetching)
+        },
+      })
+      expect(taken?.version).toBe(1)
+      expect(response.status, await response.clone().text()).toBe(200)
+      const { revoked, account: view } = parseExact(revokeLocalKeyResponseSchema, await response.json())
+      // 这一次什么也没吊销；现状里的第 1 版说明交错确实发生在判定与读现状之间（用例的前提）
+      expect(revoked).toBeNull()
+      expect(view.localKey?.version).toBe(1)
+      expect(await revocationAuditsOf(account.id)).toEqual([])
+      expect((await localKeyRowsOf(database, account.id)).map(row => [row.version, row.revokedAt === null])).toEqual([[1, true]])
+      expect(await keyOf(await fetchLocalKey(app.baseUrl, session))).toEqual(taken)
+    }
+    finally {
+      await database.query(async client => client.query(REVOKE_GATE_DROP))
+    }
   })
 })
 
