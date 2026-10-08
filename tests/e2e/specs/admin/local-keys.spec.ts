@@ -3,7 +3,8 @@
 // 这一行"状态"列里的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时状态区不在可视区域里，明眼人看这一行），
 // 焦点回到这一行的按钮；审计页按动作找得到（操作者、对象、明细里被吊销的那一版）。
 // 这个人另一台设备上正在编辑的页面经心跳得知（M3 落在协议层：心跳的响应带着他当前的版本，页面上没有可见的反应）：下一次心跳的响应里版本加一，
-// 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
+// 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。"没有可见的反应"以确定的界核对（审查 B3）：得知第 2 版之后再等下一次心跳回来
+// （它是处理完上一次之后才排的），页头与状态区的文字与吊销之前相同、读屏状态区一句话也没写过、没有 alert、仍在编辑；键入、保存之后再核对一遍。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
 // 不真等：编辑的那一页装 Playwright 的时钟（打开之前装上，之后照常流动），要它的下一次心跳时拨 10 秒。
 // 容器 E2E 也跑（不带 @test-build：只用公开的接口与界面）
 import type { LocalKey } from '@nerve-office/contracts'
@@ -16,14 +17,20 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, lostNotice, openAndEnterEditing, saveAndWait, savedContent, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
-import { expectWrittenAfterClose, recordStatusWrites } from '../../support/status-writes.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, lostNotice, openAndEnterEditing, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { expectWrittenAfterClose, recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 /** 编辑时的心跳间隔（契约的 EDIT_LEASE_HEARTBEAT_SECONDS） */
 const HEARTBEAT_MS = 10_000
+
+/**
+ * 等下一次心跳的回答最多多久：拨过一个心跳间隔之后它随即发出；有一次在途时，在途的回来之后按真实时间（最多一个心跳间隔）才排下一次。
+ * 等不到就是这一页不再续租了（不在编辑了），随即失败、说清楚，不拖到用例的时限（审查 B3 的变异：页面按失去编辑权处理时原来要等满 4 分钟）
+ */
+const HEARTBEAT_WAIT_MS = 60_000
 
 /**
  * 确认框里的说明（与界面的文案逐字相同：说清楚本机密钥加密的是什么、吊销影响什么不影响什么，设备丢了另要做什么）。不说"没同步的修改都会作废"
@@ -57,7 +64,9 @@ async function nextHeartbeatVersion(page: Page, documentId: string): Promise<num
   }
   page.on('request', record)
   try {
-    const answered = page.waitForResponse(response => sent.has(response.request()))
+    const answered = page.waitForResponse(response => sent.has(response.request()), { timeout: HEARTBEAT_WAIT_MS }).catch((error: unknown) => {
+      throw new Error(`${HEARTBEAT_WAIT_MS / 1000} 秒内这一页没有发出、收到下一次心跳：它不再续租了，可能已经不在编辑（${error instanceof Error ? error.message : String(error)}）`)
+    })
     await page.clock.fastForward(HEARTBEAT_MS)
     const response = await answered
     expect(response.status(), await response.text()).toBe(200)
@@ -66,6 +75,33 @@ async function nextHeartbeatVersion(page: Page, documentId: string): Promise<num
   finally {
     page.off('request', record)
   }
+}
+
+/** 编辑器页自己的页头与说明（React 的挂载点：页头、页头之外的读屏状态区、页头下面的各种说明） */
+const EDITOR_CHROME = '#editor-chrome'
+
+/**
+ * 编辑器页上看得见的文字（审查 B3：核对页面对吊销没有可见的反应）：页头（标题、保存状态、按钮）、页头之外一直在的读屏状态区、页头下面的各种说明。
+ * 不含页头里读屏的播报区：它播完 7 秒之后清空，播过什么另由 recordStatusWrites 记下每一次写进去的话
+ */
+async function editorChromeText(page: Page): Promise<string> {
+  return page.locator(EDITOR_CHROME).evaluate((chrome) => {
+    const copy = chrome.cloneNode(true) as Element
+    for (const announcer of copy.querySelectorAll('header [role="status"]'))
+      announcer.remove()
+    return copy.textContent
+  })
+}
+
+/**
+ * 编辑器页对吊销没有可见的反应（审查 B3）：仍在编辑（可编辑的编辑器就绪），页头与状态区的文字与吊销之前记下的相同，没有 alert、没有失去编辑权的说明。
+ * 在确定的界之后调用（得知新版本之后的下一次心跳回来、保存之后），不当作"现在还没出现"的瞬时断言用
+ */
+async function expectNoVisibleReaction(page: Page, before: string): Promise<void> {
+  await waitForEditorAccess(page, 'edit')
+  expect(await editorChromeText(page), '编辑器页上的文字与吊销之前不同（页面对吊销有了可见的反应）').toBe(before)
+  await expect(lostNotice(page)).toHaveCount(0)
+  await expect(page.getByRole('alert')).toHaveCount(0)
 }
 
 test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
@@ -81,6 +117,11 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await anotherDevice.clock.install()
     await openAndEnterEditing(anotherDevice, documentId)
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(1)
+    // 吊销之前编辑器页上的样子（审查 B3）：已保存到云端，记下页头与状态区的文字；从这里起记下两个读屏状态区（页头里的播报区、页头之外的状态区）
+    // 写进去的每一句话
+    await expect(saveStatus(anotherDevice)).toHaveText('已保存到云端')
+    const quiet = await editorChromeText(anotherDevice)
+    await recordStatusWrites(anotherDevice.locator(`${EDITOR_CHROME} [role="status"]`))
 
     // 系统管理员在账户页找到他，用键盘打开"吊销本机密钥"的确认框
     await loginThroughApi(page, admin)
@@ -122,14 +163,19 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await expect(events.nth(1)).toContainText('吊销本机密钥')
     await expect(events.nth(1)).toContainText('{"version":1}')
 
-    // 他另一台设备上正在编辑的页面：下一次心跳的响应里是第 2 版；页面上没有可见的反应，照常编辑、保存
+    // 他另一台设备上正在编辑的页面：下一次心跳的响应里是第 2 版
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(2)
-    await expect(lostNotice(anotherDevice)).toHaveCount(0)
-    await expect(anotherDevice.getByRole('alert')).toHaveCount(0)
-    await waitForEditorAccess(anotherDevice, 'edit')
+    // 页面上没有可见的反应（审查 B3）：以再下一次心跳回来为界——它是页面处理完得知第 2 版的那一次之后才排的，之后才出现的反应也认得出。
+    // 页头与状态区的文字与吊销之前相同，读屏状态区一句话也没写过（说过又撤掉的也算），没有 alert、没有失去编辑权的说明，仍在编辑
+    expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(2)
+    await expectNoVisibleReaction(anotherDevice, quiet)
+    expect(await spokenWrites(anotherDevice), '读屏状态区里说了话（页面对吊销有了反应）').toEqual([])
+    // 照常编辑、保存
     await typeInCell(anotherDevice, 'A1', 'after revocation')
     await saveAndWait(anotherDevice)
     expect(cellOf((await savedContent(anotherDevice, documentId)).snapshot, 'A1')?.v).toBe('after revocation')
+    // 用例最后（键入、保存之后）再核对一遍
+    await expectNoVisibleReaction(anotherDevice, quiet)
 
     // 再经接口取：新的一版，字节与之前的不同
     const second = await fetchLocalKey(anotherDevice)
