@@ -12,6 +12,7 @@ import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { plainName } from '../shared/testing/people.test-support.ts'
+import { resize } from '../shared/testing/resize.test-support.ts'
 import { watchScrollIntoView } from '../shared/testing/scroll.test-support.ts'
 import { AMY, listPage, ROOT, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
@@ -158,7 +159,9 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     // 等确认的弹窗关掉之后才写进去（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下，焦点已经交还
     expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
     await waitFor(() => expect(document.activeElement).toBe(button))
-    // 说明写进去之后，焦点所在的按钮留在可视区域里（最小距离）：状态区在表格上方，写进说明时下面的内容整体下移（共用的状态区的 keepFocusInView）
+    // 说明写进去、状态区变高之后（jsdom 没有布局，这里当作它撑开了），焦点所在的按钮按最小距离滚回可视区域：状态区在表格上方，
+    // 写进说明时下面的内容整体下移（共用的状态区的 keepFocusInView）
+    act(() => resize(statusRegion(), 46))
     expect(scrolled).toHaveBeenCalledTimes(1)
     expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
     expect(scrolled.mock.contexts.at(-1)).toBe(button)
@@ -199,7 +202,8 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     confirmIn(await screen.findByRole('dialog'))
     await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
     await waitFor(() => expect(document.activeElement).toBe(row))
-    // 滚回可视区域的是焦点所在的这一行
+    // 状态区撑开之后，滚回可视区域的是焦点所在的这一行
+    act(() => resize(statusRegion(), 46))
     expect(scrolled.mock.contexts.at(-1)).toBe(row)
   })
 
@@ -300,7 +304,6 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
   it('确定的失败（例如这个账户不在了）：按错误码说明，不说成结果未知；弹窗留着，状态区不写', async () => {
     admin([AMY], { [REVOKE_AMY]: () => apiError(404, 'NOT_FOUND') })
     renderApp('/admin/users')
-    const scrolled = watchScrollIntoView()
     const { dialog } = await openRevoke(await rowOf('amy'), AMY_NAME)
     confirmIn(dialog)
     const alert = await within(dialog).findByRole('alert')
@@ -308,8 +311,6 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(alert).not.toHaveTextContent('没能确认')
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(statusRegion()).toBeEmptyDOMElement()
-    // 状态区没写说明，页面也不滚
-    expect(scrolled).not.toHaveBeenCalled()
   })
 
   it('打开下一个确认的弹窗（别的操作也一样）时清掉状态区里上一次的说明：同样的说法再出现时照样是一次变化，读屏照样播报', async () => {
