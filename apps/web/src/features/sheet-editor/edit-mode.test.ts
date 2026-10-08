@@ -3411,7 +3411,8 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
     expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
     expect(browser.holderOf(LOCK)).toBe('B')
     const renewalsOfB = b.editLease.renew.mock.calls.length
-    // A 那次被抢之前发出的心跳，成功的回包这时才到：不拿锁
+    // A 那次被抢之前发出的心跳，成功的回包在被抢之后过了一会儿才到（看的是它发出的时刻，不是到达的时刻）：不拿锁
+    await a.time.advance(1_000)
     heartbeat.resolve()
     await settle()
     await settle()
