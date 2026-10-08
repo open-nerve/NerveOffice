@@ -82,12 +82,14 @@ async function revocationAuditsOf(userId: string): Promise<Record<string, unknow
 }
 
 describe('US-M3-17 本人取当前的本机密钥（POST /api/local-key）', () => {
-  it('第一次取：生成第 1 版——200、响应逐字、key 是 32 字节、不缓存（Cache-Control: no-store）；再取、换一台设备登录再取都是同一把；库里只有这一行', async () => {
+  it('第一次取：生成第 1 版——200、响应逐字、key 是 32 字节、不缓存（Cache-Control: no-store）、没有 ETag；再取、换一台设备登录再取都是同一把；库里只有这一行', async () => {
     const { account, session } = await person()
     expect(await localKeyRowsOf(database, account.id)).toEqual([])
     const response = await fetchLocalKey(app.baseUrl, session)
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('no-store')
+    // 没有 Express 按响应体自动算的 ETag：响应体就是原始密钥，ETag 会是它的稳定指纹（M3-P6 审查 A8）
+    expect(response.headers.has('etag')).toBe(false)
     const first = parseExact(localKeySchema, await response.json())
     issued.add(first.key)
     expect(first.version).toBe(1)

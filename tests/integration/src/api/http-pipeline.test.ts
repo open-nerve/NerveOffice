@@ -176,6 +176,8 @@ describe('安全响应头（P2 设计 §3.6）', () => {
     expect(response.headers.get('cross-origin-resource-policy')).toBe('same-origin')
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(response.headers.has('x-powered-by')).toBe(false)
+    // 没有 Express 按响应体自动算的 ETag（M3-P6 审查 A8：响应体里有机密时它就是机密的稳定指纹）
+    expect(response.headers.has('etag')).toBe(false)
     expect(response.headers.has('strict-transport-security')).toBe(false)
   })
 
