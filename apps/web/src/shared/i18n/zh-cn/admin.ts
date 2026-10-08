@@ -127,11 +127,15 @@ export const adminMessages = {
     // 不说"登录不会退出""请同时生成重置链接"。风险在重新启用之后：旧密码照旧可用（ADR-013），拿着设备的人可以再登录、取到下一版。
     // 不说正在编辑的页面（审查 B7）：他已经登录不了，没有在用的页面
     revokeDisabledLocalKeyDescription: '本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响。这个账户已停用，他在所有地方的登录都已退出；重新启用之后旧密码照旧可用——设备可能落在别人手里时，启用之后请立即为他生成重置链接。',
+    // "状态"列里本机密钥的摘要（审查 B2）：这个人当前那一把的版本，从没取过的不显示。吊销之后这一行随之换成新的一版——在列表靠下的一行吊销时，
+    // 页面顶部的状态区不在可视区域里，明眼人在这一行看得见结果
+    localKeyVersion: (version: number) => `本机密钥第 ${version} 版`,
     localKeyRevoked: (name: string, version: number) => `已吊销 ${name} 的本机密钥，换成了第 ${version} 版。`,
     // 这个人从没取过本机密钥：服务端原样返回、不记审计
     noLocalKeyToRevoke: (name: string) => `${name} 还没有本机密钥，没有要吊销的。`,
-    // 吊销的结果未知：吊销不按状态幂等（每次都换一把新的），通用的"刷新之后看得出是否已经生效"不成立；再吊销一次没有坏处
-    revokeLocalKeyOutcomeUnknown: (reason: string) => `没能确认是否已经吊销（${reason}）。再吊销一次没有坏处：会再换一把新的密钥，之前的都已作废。`,
+    // 吊销的结果未知：吊销不按状态幂等（每次都换一把新的），通用的"还没有生效的话可以再试一次"不合适：再吊销一次没有坏处。
+    // 列表随即刷新（审查 B2）：刷新好了，这一行显示的就是本机密钥现在的版本；没能刷新时如实说
+    revokeLocalKeyOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经吊销（${reason}）。${messages.common.listRefreshed(refreshed)}${refreshed ? '：这一行显示的是本机密钥现在的版本' : ''}。再吊销一次没有坏处：会再换一把新的密钥，之前的都已作废。`,
   },
   invitations: {
     // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）

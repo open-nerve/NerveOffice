@@ -1,5 +1,6 @@
 // 吊销本机密钥（US-M3-17；M3-P6 设计 §3.6、§3.8）：系统管理员在账户页对某人"吊销本机密钥"——确认框说清楚本机密钥的用途与吊销的后果
 // （不说"没同步的修改都会作废"，A14；正面说正在编辑的页面照常保存，审查 B7），确认之后页面顶部的状态区说明换成了第几版（确认框关掉、焦点交还之后才写，读屏读得到），
+// 这一行"状态"列里的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时状态区不在可视区域里，明眼人看这一行），
 // 焦点回到这一行的按钮；审计页按动作找得到（操作者、对象、明细里被吊销的那一版）。
 // 这个人另一台设备上正在编辑的页面经心跳得知（M3 落在协议层：心跳的响应带着他当前的版本，页面上没有可见的反应）：下一次心跳的响应里版本加一，
 // 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
@@ -7,6 +8,7 @@
 // 容器 E2E 也跑（不带 @test-build：只用公开的接口与界面）
 import type { LocalKey } from '@nerve-office/contracts'
 import type { Page, Request } from '@playwright/test'
+import { randomBytes } from 'node:crypto'
 import { localKeySchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
@@ -67,7 +69,7 @@ async function nextHeartbeatVersion(page: Page, documentId: string): Promise<num
 }
 
 test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
-  test('US-M3-17 系统管理员在账户页吊销某人的本机密钥（键盘操作）：确认框说清楚用途与后果；状态区说明换成了第几版、焦点回到这个按钮；审计页按动作找得到；他另一台设备上正在编辑的页面下一次心跳得知新的版本，照常编辑、保存；再取得到新的一把', async ({ page, anotherDevice }) => {
+  test('US-M3-17 系统管理员在账户页吊销某人的本机密钥（键盘操作）：确认框说清楚用途与后果；状态区说明换成了第几版、这一行的本机密钥随之换成新的一版、焦点回到这个按钮；审计页按动作找得到；他另一台设备上正在编辑的页面下一次心跳得知新的版本，照常编辑、保存；再取得到新的一把', async ({ page, anotherDevice }) => {
     const admin = await createUser('lk-admin', '吊销的管理员', { systemRole: 'admin' })
     const owner = await createUser('lk-owner', '丢了设备的人')
     const documentId = await createDocument(owner, '设备上的表')
@@ -87,6 +89,9 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await searchList(page, '按名字或登录名搜索', owner.username)
     const row = page.getByRole('table', { name: '账户列表' }).getByRole('row').filter({ hasText: owner.username })
     await expect(row).toHaveCount(1)
+    // "状态"列里他当前的本机密钥（审查 B2）：吊销之前是第 1 版
+    const keyLine = row.getByText(/^本机密钥第 \d+ 版$/)
+    await expect(keyLine).toHaveText('本机密钥第 1 版')
     // 结果的说明：页面顶部的状态区一直在（空的时候只做视觉隐藏），记下它每一次内容变化的那一刻
     await recordStatusWrites(page.locator('[data-slot="status-region"]'))
     const revoke = row.getByRole('button', { name: `吊销本机密钥 ${plainName(owner)}`, exact: true })
@@ -101,6 +106,8 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     // 确认框开着时 Radix 把页面标为 aria-hidden：说明等它关掉、焦点交还之后才写，写进去的那一刻读屏读得到
     await expectWrittenAfterClose(page, done)
     await expect(revoke).toBeFocused()
+    // 这一行按吊销之后的账户换上：明眼人在这一行看得见结果（审查 B2）
+    await expect(keyLine).toHaveText('本机密钥第 2 版')
 
     // 审计：按动作筛选"吊销本机密钥"，点对象只看这个人——操作者是这位系统管理员，明细是被吊销的那一版
     await page.getByRole('navigation', { name: '管理界面' }).getByRole('link', { name: '审计' }).click()
@@ -128,5 +135,41 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     const second = await fetchLocalKey(anotherDevice)
     expect(second.version).toBe(2)
     expect(second.key).not.toBe(first.key)
+  })
+
+  test('US-M3-17 在账户列表靠下的一行吊销：这一行的本机密钥换成新的一版，就在可视区域里（页面顶部的状态区这时不在可视区域里，明眼人看的是这一行）', async ({ page, anotherDevice }) => {
+    const admin = await createUser('lkrow-admin', '看结果的管理员', { systemRole: 'admin' })
+    // 同一个前缀的 30 个人排在他前面（账户列表按登录名排序），搜这个前缀时他在最后一行：管理员常常按部门之类的共同部分找人
+    const prefix = `lkrow${randomBytes(3).toString('hex')}`
+    for (let index = 0; index < 30; index += 1)
+      await createUser(`${prefix}-a${String(index).padStart(2, '0')}`)
+    const owner = await createUser(`${prefix}-z`, '靠下的人')
+    // 他取过本机密钥（第 1 版）
+    await loginThroughApi(anotherDevice, owner)
+    expect((await fetchLocalKey(anotherDevice)).version).toBe(1)
+
+    await loginThroughApi(page, admin)
+    await page.goto('/admin/users')
+    await searchList(page, '按名字或登录名搜索', prefix)
+    const rows = page.getByRole('table', { name: '账户列表' }).getByRole('row')
+    // 表头一行，加上这 31 个人；他在最后
+    await expect(rows).toHaveCount(32)
+    await expect(rows.last()).toContainText(owner.username)
+    const keyLine = rows.last().getByText(/^本机密钥第 \d+ 版$/)
+    await expect(keyLine).toHaveText('本机密钥第 1 版')
+    const revoke = rows.last().getByRole('button', { name: `吊销本机密钥 ${plainName(owner)}`, exact: true })
+    await revoke.focus()
+    await page.keyboard.press('Enter')
+    const dialog = page.getByRole('dialog', { name: `吊销 ${plainName(owner)} 的本机密钥？` })
+    await dialog.getByRole('button', { name: '吊销本机密钥', exact: true }).click()
+    await expect(dialog).toHaveCount(0)
+    await expect(revoke).toBeFocused()
+    // 结果就在这一行、就在可视区域里
+    await expect(keyLine).toHaveText('本机密钥第 2 版')
+    await expect(keyLine).toBeInViewport()
+    // 前提：说明照常写进页面顶部的状态区（读屏靠它），而它这时不在可视区域里——这一行的变化才是明眼人看得见的结果
+    const status = page.getByRole('status').filter({ hasText: '已吊销' })
+    await expect(status).toHaveText(`已吊销 ${plainName(owner)} 的本机密钥，换成了第 2 版。`)
+    await expect(status).not.toBeInViewport()
   })
 })
