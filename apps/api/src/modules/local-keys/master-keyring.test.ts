@@ -137,28 +137,34 @@ describe('包装与解包（AES-256-GCM，AAD 绑定用户、版本与主密钥�
     expect(vi.mocked(createDecipheriv).mock.calls).toEqual([['aes-256-gcm', expect.anything(), expect.any(Buffer), { authTagLength: 16 }]])
   })
 
-  it('抛出的错误与它的日志里没有任何密钥材料（原始密钥、包装结果、主密钥、包装键）', () => {
+  it('抛出的错误与它的日志里没有任何密钥材料（原始密钥、交进来的包装结果与其中的密文、主密钥、包装键）：三种解不开的情形各一次', () => {
     const masterBytes = randomBytes(32)
     const keyring = MasterKeyring.fromMasterKey(masterKey(masterBytes))
     const raw = generateLocalKey()
     const wrapped = keyring.wrap(raw, OWNER)
-    const failures = [
-      unwrapFailure(() => keyring.unwrap({ ...wrapped, wrappedKey: flipped(wrapped.wrappedKey, 59) }, OWNER)),
-      unwrapFailure(() => MasterKeyring.fromMasterKey(masterKey()).unwrap(wrapped, OWNER)),
+    /** 每一种情形交进去的包装结果与得到的错误：不认识的主密钥、长度不对、标签对不上 */
+    const cases = [
+      { input: wrapped, run: (stored: WrappedLocalKey) => MasterKeyring.fromMasterKey(masterKey()).unwrap(stored, OWNER) },
+      { input: { ...wrapped, wrappedKey: wrapped.wrappedKey.subarray(0, 56) }, run: (stored: WrappedLocalKey) => keyring.unwrap(stored, OWNER) },
+      { input: { ...wrapped, wrappedKey: flipped(wrapped.wrappedKey, 59) }, run: (stored: WrappedLocalKey) => keyring.unwrap(stored, OWNER) },
     ]
     const wrapKey = Buffer.from(hkdfSync('sha256', masterBytes, Buffer.alloc(0), 'nerve-office/local-keys/wrap/v1', 32))
-    for (const failure of failures) {
+    const reasons: string[] = []
+    for (const { input, run } of cases) {
+      const failure = unwrapFailure(() => run(input))
+      reasons.push(failure.reason)
       // 经应用的根日志记一遍（异常的序列化与脱敏同请求日志），连同消息与打印出来的样子一起找
       const lines: string[] = []
       createRootLogger({ level: 'info', destination: { write: line => void lines.push(line) } }).error({ err: failure }, '请求失败')
       expect(lines.join('')).toContain(failure.masterKeyId)
       const text = `${failure.message}\n${lines.join('')}\n${inspect(failure)}`
-      for (const secret of [raw, wrapped.wrappedKey, masterBytes, wrapKey]) {
+      for (const secret of [raw, input.wrappedKey, input.wrappedKey.subarray(12, 44), masterBytes, wrapKey]) {
         expect(text).not.toContain(secret.toString('hex'))
         expect(text).not.toContain(secret.toString('base64'))
       }
       expect(failure.cause).toBeUndefined()
     }
+    expect(reasons).toEqual(['unknown_master_key', 'not_authentic', 'not_authentic'])
   })
 
   it('主密钥环被打印、被序列化时不带任何密钥材料（包装键是 KeyObject，字段是私有的）', () => {

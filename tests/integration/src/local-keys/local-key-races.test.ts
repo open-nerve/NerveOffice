@@ -118,12 +118,26 @@ describe('第一次取用的并发', () => {
 })
 
 describe('取用不等管理操作', () => {
+  /**
+   * 取用结束的那一刻，测试持着的锁确实还在（另一个连接 NOWAIT 地要同一把锁，立即得到 55P03）：取用是在锁还在的时候走完的，不是等到放开之后。
+   * 没有这一步时，持锁的写法写错了（什么也没锁住）用例照样通过
+   */
+  async function expectStillLocked(query: string, values: unknown[]): Promise<void> {
+    const failure = await database.query(async client => client.query(query, values).then(() => undefined, (error: unknown) => error))
+    expect(failure, '测试持着的锁已经不在了：用例的前提不成立').toMatchObject({ code: '55P03' })
+  }
+
   it('账户行被管理操作锁着（FOR NO KEY UPDATE：停用、签发重置、吊销都这样锁）：第一次取用与再取都不等它（插入的外键检查只取 FOR KEY SHARE）', async () => {
     const { account, session } = await person()
     const lockAccount = async (client: { query: (text: string, values: unknown[]) => Promise<unknown> }) => client.query('SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE', [account.id])
-    const first = await keyOf(await whileHolding(database, lockAccount, async () => fetchLocalKey(app.baseUrl, session)))
+    const fetchWhileLocked = async (): Promise<Response> => whileHolding(database, lockAccount, async () => {
+      const response = await fetchLocalKey(app.baseUrl, session)
+      await expectStillLocked('SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE NOWAIT', [account.id])
+      return response
+    })
+    const first = await keyOf(await fetchWhileLocked())
     expect(first.version).toBe(1)
-    expect(await keyOf(await whileHolding(database, lockAccount, async () => fetchLocalKey(app.baseUrl, session)))).toEqual(first)
+    expect(await keyOf(await fetchWhileLocked())).toEqual(first)
   })
 
   it('吊销的事务还没提交（已经标记吊销、擦掉材料、插了下一版）：取用不等它，交出吊销之前的那一把（按"请求先于吊销"线性化）', async () => {
@@ -133,7 +147,12 @@ describe('取用不等管理操作', () => {
     const during = await whileHolding(database, async (client) => {
       await client.query('UPDATE user_local_keys SET revoked_at = now(), master_key_id = NULL, wrapped_key = NULL WHERE user_id = $1 AND revoked_at IS NULL', [account.id])
       await client.query(INSERT_KEY, [account.id, 2, next.masterKeyId, next.wrappedKey])
-    }, async () => fetchLocalKey(app.baseUrl, session))
+    }, async () => {
+      const response = await fetchLocalKey(app.baseUrl, session)
+      // 吊销的事务还开着：它改过的第 1 版那一行仍被它锁着
+      await expectStillLocked('SELECT 1 FROM user_local_keys WHERE user_id = $1 AND version = 1 FOR UPDATE NOWAIT', [account.id])
+      return response
+    })
     expect(await keyOf(during)).toEqual(before)
   })
 })
