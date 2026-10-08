@@ -1,13 +1,14 @@
 // 真实 Safari 的页面自检：驱动脚本（./selftest.ts）里不碰进程与网络的部分，单元测试覆盖（./run-plan.test.ts）。
 // - 一串步骤怎么接起来（chainOf、nextAfter）：每一步的入口页把结果交回收集端的 /report?step=<序号>，收集端再把页面带到下一步，
-//   最后停在结束页；交接的复核（M3-P5）的几步由驱动脚本各另开一个标签页打开（opened），交回之后停在结束页，另开的 B 交回之后去一个
-//   关掉自己的页（CLOSE_PATH：B 的标签页关掉，Safari 回到 A）；
+//   最后停在结束页；交接的复核（M3-P5）与请求编辑的两条路（M3-P6）的几步由驱动脚本各另开一个标签页打开（opened），交回之后停在结束页，
+//   另开的 B 交回之后去一个关掉自己的页（CLOSE_PATH：B 的标签页关掉，Safari 回到 A）；路 1 让请求方隐藏的那一页（SHADE_PATH）听驱动脚本的话
+//   关掉自己（问 SHADE_COMMAND_PATH）；
 // - 收集端收到的请求（parseReportRequest）；
-// - 每一步的结论与退出码（outcomeOf、exitCodeOf；hidden-save 与交接的几步按库里的证据判定，serverJudgedOutcome）；结果文件的名字
+// - 每一步的结论与退出码（outcomeOf、exitCodeOf；hidden-save 与交接的几步按库里的证据判定，serverJudgedOutcome；作废的一次另有退出码）；结果文件的名字
 //   （resultFileName）；计时的说明（timingLines：切换的耗时，与捕获时机的时间线）。
 import type { SelftestReport, SelftestTiming } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SelftestStep, SelftestStepDefinition } from '../support/selftest-plan.ts'
-import { HANDOVER_SCENARIOS, RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { HANDOVER_SCENARIOS, REQUEST_SCENARIOS, RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { problemsOf, selftestPageUrl } from '../support/selftest-plan.ts'
 
 /** 收集端收结果的路径 */
@@ -25,8 +26,32 @@ export const HIDE_PATH = '/hide'
  */
 export const CLOSE_PATH = '/close'
 
-/** 驱动脚本另开标签页打开的场景（交接的复核）：不是上一步带过去的 */
-const OPENED_SCENARIOS: ReadonlySet<string> = new Set(HANDOVER_SCENARIOS)
+/**
+ * 请求编辑的路 1（M3-P6）：驱动脚本另开这一页让请求方的那一页隐藏（与 hidden-save 的 HIDE_PATH 一样遮住它，同一个窗口里被遮住的标签页只降频、不暂停）；
+ * 这一页每 300 毫秒问一次 SHADE_COMMAND_PATH，驱动脚本说"关"时关掉自己（window.close：由 open 打开、历史里只有一项），Safari 随之回到请求方的那一页
+ */
+export const SHADE_PATH = '/shade'
+
+/** 遮住请求方的那一页问它：回答 close 时关掉自己，别的时候回答 wait */
+export const SHADE_COMMAND_PATH = '/shade/command'
+
+/** 遮住请求方的那一页（SHADE_PATH）：听驱动脚本的话关掉自己；关不掉时说明 */
+export const SHADE_PAGE = `<!doctype html><meta charset="utf-8"><title>请求编辑的复核：遮住请求方的标签页</title>
+<p id="note">NerveOffice 的 Safari 复核（请求编辑，路 1）：这个标签页暂时遮住请求方的那一页，驱动脚本说可以了就自己关掉。</p>
+<script>
+const timer = setInterval(() => {
+  fetch('${SHADE_COMMAND_PATH}', { cache: 'no-store' }).then(response => response.text()).then((command) => {
+    if (command !== 'close')
+      return
+    clearInterval(timer)
+    window.close()
+    setTimeout(() => { document.getElementById('note').textContent = '这个标签页没能自己关掉：请切回请求方的那一页（或者关掉这一个）。' }, 1000)
+  }).catch(() => {})
+}, 300)
+</script>`
+
+/** 驱动脚本另开标签页打开的场景（交接的复核、请求编辑的两条路）：不是上一步带过去的 */
+const OPENED_SCENARIOS: ReadonlySet<string> = new Set([...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS])
 
 /** 一步交回结果之后页面去哪：下一步的入口（由这一步带过去）、结束页、关掉自己的页（另开的 B） */
 export type AfterReport = 'next' | 'done' | 'close'
@@ -144,7 +169,13 @@ export function serverJudgedOutcome(step: SelftestStep, received: Received | und
   return { ...base, status: problems.length === 0 ? 'passed' : 'failed', problems, report: page?.report }
 }
 
-/** 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 有的步没有交回结果（超时） */
+/**
+ * 这一次作废（M3-P6）的退出码：跑的时候用户回来了（键盘、鼠标有了操作）、在盖屏的窗口上按了 Esc 或点了它——Safari 的窗口可能被挡住、页面的暂停
+ * 不是按编排来的，结果不可信，不算通过也不算不通过（结果文件照样写，说明原因）
+ */
+export const VOIDED_EXIT_CODE = 4
+
+/** 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 有的步没有交回结果（超时）。作废的一次另是 VOIDED_EXIT_CODE */
 export function exitCodeOf(outcomes: readonly StepOutcome[], serverProblems: readonly string[]): 0 | 1 | 2 {
   if (outcomes.some(outcome => outcome.status === 'missing'))
     return 2

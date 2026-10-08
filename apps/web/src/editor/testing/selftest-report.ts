@@ -46,7 +46,8 @@ export type SelftestFormulaMode = keyof typeof FORMULA_MODE_VALUES
  * - enter-exit：作者打开自己的一份样本（M3-P2 S5）：阅读 → 点页头的"编辑"→ 经 Facade 改一格（ENTER_EXIT_EDIT）→ 点"退出编辑"
  *   （先保存）→ 回到阅读之后再试 Facade 的只读入口、撤销与重做（撤销栈已清空）与界面；两次切换的耗时记进 timings；
  * - 捕获时机的复核（CAPTURE_SCENARIOS，M3-P4 S1，DEF-003 的其余部分；都在编辑时跑，见 ./selftest-capture.ts）；
- * - 交接的复核（HANDOVER_SCENARIOS，M3-P5 设计 §3.14；驱动脚本编排，见 ./selftest-handover.ts）
+ * - 交接的复核（HANDOVER_SCENARIOS，M3-P5 设计 §3.14；驱动脚本编排，见 ./selftest-handover.ts）；
+ * - 请求编辑的两条路（REQUEST_SCENARIOS，M3-P6 设计 §3.10，DEF-062；驱动脚本经接口扮演另一方，见 ./selftest-request.ts）
  */
 export const CAPTURE_SCENARIOS = ['environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save'] as const
 
@@ -65,7 +66,21 @@ export const DEAF_HOLDER_SCENARIO = 'takeover-holder-deaf'
 
 export type HandoverScenario = (typeof HANDOVER_SCENARIOS)[number]
 
-export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS] as const
+/**
+ * 请求编辑的两条路（M3-P6 设计 §3.10，DEF-062）：被复核的一方在这个浏览器里，另一方（另一个账户）由驱动脚本经接口扮演（登录、申请、心跳、交出；
+ * 请求、续期、申请）：
+ * - request-waiter（路 1）：别人在编辑时这一页点"请求编辑"、在等；驱动脚本另开标签页让这一页隐藏、经接口交出——这一页的续期得知交给了它，
+ *   在后台停在"交给了我"（granted）、不申请；遮住它的标签页关掉、回到前台之后才进入编辑（普通申请），之后写一格、存上；
+ * - paused-holder（路 2）：这一页进入编辑、写一格并存上；驱动脚本盖住屏幕，这一页隐藏的那一刻上传第二格、之后再写第三格（只在本页）；另一方经接口
+ *   请求编辑、续期——这一页被暂停时，空闲满 2 分钟的自动交出走不到，编辑权按时间到期，另一方接手，移走盖屏之后这一页得知失去编辑权（另一方在编辑）、
+ *   第三格另存为副本（lost-after-pause）；没被暂停时空闲满 2 分钟先保存再自动交出（handed-over）。真实 Safari 走哪一条正是要复核的
+ *   （探索 B 的空白页约 50 秒就被暂停；2026-10-08 本机 Safari 27.0 上编辑器页没有被暂停）
+ */
+export const REQUEST_SCENARIOS = ['request-waiter', 'paused-holder'] as const
+
+export type RequestScenario = (typeof REQUEST_SCENARIOS)[number]
+
+export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS] as const
 
 export type SelftestScenario = (typeof SELFTEST_SCENARIOS)[number]
 
@@ -111,6 +126,20 @@ export const TAKEOVER_TAKER_DELAY_MS = 8_000
 
 /** refresh-save 进入编辑之后写的那一格：它的保存停在服务端（驱动脚本锁住了内容行）时页面刷新 */
 export const REFRESH_SAVE_EDIT = { sheetId: 'sheet-1', cell: 'A1', row: 0, column: 0, value: '刷新时在途的保存' } as const
+
+/** request-waiter（M3-P6，路 1）回到前台、进入编辑之后写下并存上的那一格：编辑权确实交给了它（保存照常提交） */
+export const REQUEST_WAITER_EDIT = { sheetId: 'sheet-1', cell: 'B1', row: 0, column: 1, value: '回到前台进入编辑之后写的' } as const
+
+/**
+ * paused-holder（M3-P6，路 2）写的三格（模板的第一张表 sheet-1），与 takeover-holder 同一个写法：第一格经控制的 flush 立即存上（驱动脚本看到这一版
+ * 才盖屏），同时写第二格（留着，隐藏的那一刻由自动保存上传）；隐藏之后再写第三格（捕获的静默与上限调到一小时、定时的上传暂停）——这一页被暂停、
+ * 编辑权到期，第三格只在这一页，失去编辑权之后另存为副本
+ */
+export const PAUSED_HOLDER_EDITS = [
+  { sheetId: 'sheet-1', cell: 'A1', row: 0, column: 0, value: '盖屏之前存上的' },
+  { sheetId: 'sheet-1', cell: 'A2', row: 1, column: 0, value: '盖屏的那一刻上传的' },
+  { sheetId: 'sheet-1', cell: 'A3', row: 2, column: 0, value: '盖屏之后写的' },
+] as const
 
 /**
  * 交接的场景交回的时间线（M3-P5）：交接日志（./handover-log.ts）与场景自己的观察（隐藏、显示、页面关闭时的状态、请求的结果等），
@@ -172,7 +201,9 @@ export interface SelftestReport {
   readonly timings?: readonly SelftestTiming[] | undefined
   /**
    * 交接的场景（M3-P5）走了哪条路：takeover-taker 是 answered（A 回应了、先保存再交出）或 silent（3 秒没有回应、本人接管并抢锁）；
-   * takeover-holder 是 handed-over（交出、回到阅读）或 lost（失去编辑权）；refresh-save 是 committed（那次保存提交了才接手）或 expired（等满 30 秒）
+   * takeover-holder 是 handed-over（交出、回到阅读）或 lost（失去编辑权）；refresh-save 是 committed（那次保存提交了才接手）或 expired（等满 30 秒）。
+   * 请求编辑的两条路（M3-P6）：request-waiter 是 entered-on-return（在后台停在交给了我、回到前台才进入）或别的（./selftest-request.ts 的 WaiterPath）；
+   * paused-holder 是 lost-after-pause（被暂停，回到前台才得知失去编辑权）、handed-over（没被暂停，空闲满 2 分钟自动交出）或别的（PausedHolderPath）
    */
   readonly path?: string | undefined
   /** 交接的场景：时间线（交接日志与场景的观察） */

@@ -35,7 +35,7 @@ const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f
 /** 申请到的编辑租约：修订号与载入的内容相同（3） */
 const TOKEN = 'L'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-09-27T03:01:30.000Z', interruption: null, formulasPending: false }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z', request: null }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z', request: null, localKeyVersion: null }
 /** 保存带上的编辑租约 */
 const CREDENTIALS = { token: TOKEN, writeEpoch: 7 }
 /** 续上时申请到的下一代（修订号没变：期间没人保存过） */
@@ -90,8 +90,8 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
       return () => lifecycleListeners.delete(listener)
     },
     isCellEditing: () => false,
-    hasPendingCellInput: () => false,
-    onCellEditingChange: () => () => {},
+    uncommittedInput: () => 'none',
+    onUncommittedInputChange: () => () => {},
     commitCellEditing: async () => true,
     settleFormulas: async () => 'settled',
     formulasSettled: () => true,
@@ -2291,13 +2291,15 @@ describe('交接规则的页面接线（M3-P5 设计 §3.1、§3.7、§3.9）', 
     expect(sameBrowsers[0]?.close).toHaveBeenCalledOnce()
   })
 
-  it('本浏览器的另一个标签页抢走了锁：本页立即失去编辑权（不等心跳），说明是本人在本浏览器的另一个标签页接手', async () => {
+  it('本浏览器的另一个标签页以本人接管换了代、抢走了锁：本页立即核对（续租一次，不等心跳），得知被接管就失去编辑权，说明是本人在本浏览器的另一个标签页接手（M3-P6 设计 §3.13）', async () => {
     const { editorPage, browser, editLease } = setup()
     await editorPage.load()
+    editLease.renew.mockRejectedValue(new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'taken_over', forced: false } }))
     await sameBrowserFor(DOCUMENT_ID, browser.tab('other')).steal()
     await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', loss: { kind: 'taken-over', where: 'this-browser' } }))
-    expect(editLease.renew).not.toHaveBeenCalled()
+    expect(editLease.renew).toHaveBeenCalledOnce()
     expect(editLease.release).not.toHaveBeenCalled()
+    expect(editLease.acquire).toHaveBeenCalledOnce()
   })
 
   it('空闲满 10 分钟：先挂交互屏障再保存（等面板时已经拦着），不向服务端确认会话（按"不必先确认就能写"），释放、回到阅读并说明', async () => {

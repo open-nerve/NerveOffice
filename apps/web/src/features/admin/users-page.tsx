@@ -19,9 +19,10 @@ import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { OWN_DISABLE_AFTER_UNKNOWN, OWN_RESET_AFTER_UNKNOWN, sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
-import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset, unlockLogin } from './admin-api.ts'
+import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset, revokeLocalKey, unlockLogin } from './admin-api.ts'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable, StillRefreshingLine } from './paged-table.tsx'
 
@@ -42,6 +43,16 @@ function loginLockText(lock: NonNullable<AdminUser['loginLock']>): string {
 }
 
 /**
+ * 吊销本机密钥的确认框里的说明（M3-P6 设计 §3.8）：自己的、停用的、别人的三版（审查 B1）。停用的账户登录都已退出，也生成不了重置链接，
+ * 不能照别人的那一版引导"同时生成重置链接"；要提醒的是重新启用之后旧密码照旧可用（ADR-013）。自己的账户总是有效的（停用的登录不了）
+ */
+function revokeLocalKeyDescription(user: AdminUser, own: boolean): string {
+  if (own)
+    return text.revokeOwnLocalKeyDescription
+  return user.status === 'disabled' ? text.revokeDisabledLocalKeyDescription : text.revokeLocalKeyDescription
+}
+
+/**
  * 对自己的操作结果未知之后，确认的弹窗换上的元数据：再试得到"登录已过期"时，登录页说明对应的原因——
  * 为自己生成重置链接（M2-P6 复核 S1）、停用自己（第五批 G1）
  */
@@ -55,7 +66,8 @@ interface IssuedReset {
 
 /**
  * 管理界面：账户（M2-P1 设计 §3.8，US-M2-03、04）。搜索与状态过滤；停用与启用、设为或取消系统管理员、生成重置链接，
- * 登录被锁定的账户显示锁到什么时候、可以解除（M2-P6 复核 A1）；
+ * 登录被锁定的账户显示锁到什么时候、可以解除（M2-P6 复核 A1）；吊销本机密钥（M3-P6 设计 §3.8，US-M3-17），"状态"列显示本机密钥的版本（审查 B2），
+ * 吊销的结果另写进页面顶部的状态区；
  * 每个操作先确认后果；失败按错误码说明（例如至少要保留一个有效的系统管理员）。
  * 操作的是自己的账户时另给说明，成功之后重新确认会话（审查 B4）：取消了自己的系统管理员就切到无权限，停用了自己就整页离开；
  * 给自己生成的重置链接要先交到本人手里，关闭链接的弹窗之后再确认。为自己生成重置链接、停用自己的结果未知时，带着原因确认会话
@@ -81,6 +93,12 @@ export function AdminUsersPage() {
   const [ownUnsure, setOwnUnsure] = useState<keyof typeof OWN_AFTER_UNKNOWN>()
   /** 写操作成功之后、到了时限还在后台的刷新（Codex 对抗评审 CX4）：表格上方说列表还在刷新 */
   const [background, setBackground] = useState<BackgroundRefresh>()
+  /**
+   * 页面顶部状态区里的说明（M3-P6 设计 §3.8）：吊销本机密钥的结果。这一行的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时，
+   * 状态区不在可视区域里，明眼人在这一行看得见；写进说明时这一行不被挤出可视区域，见状态区的 keepFocusInView），这一行的变化读屏不会播报，读屏靠这里的说明。
+   * 确认的弹窗关掉之后才写（AfterConfirmed）；打开下一个确认的弹窗时清掉——说明只对刚做完的那一次，同样的说法再出现时照样是一次变化，读屏照样播报
+   */
+  const [done, setDone] = useState<string>()
   const tableRef = useRef<PagedTableHandle>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchId = useId()
@@ -104,6 +122,12 @@ export function AdminUsersPage() {
     await refreshQueries(queryClient, [USERS_QUERY_KEY])
   }
 
+  /** 打开确认的弹窗：先清掉状态区里上一次的说明（见 done） */
+  function askToConfirm(confirmation: PendingConfirmation): void {
+    setDone(undefined)
+    setPending(confirmation)
+  }
+
   /** 焦点回到这个账户的那一行；这一行已经不在表里（例如按状态过滤掉了）时回到搜索框（审查 B9） */
   function focusRow(user: AdminUser): void {
     if (!(tableRef.current?.focusRow(user.id) ?? false))
@@ -116,7 +140,7 @@ export function AdminUsersPage() {
    */
   function confirmThen(user: AdminUser, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<AdminUser>): void {
     const own = user.id === session.data?.user.id
-    setPending({
+    askToConfirm({
       ...confirmation,
       run: async () => {
         replaceRow(await action())
@@ -143,7 +167,7 @@ export function AdminUsersPage() {
       confirmThen(user, { title: text.confirmDisable(name), description: text.disableDescription, confirmLabel: text.disable, destructive: true }, async () => disableUser(user.id))
       return
     }
-    setPending({
+    askToConfirm({
       title: text.confirmDisableOwn,
       description: text.disableOwnDescription,
       confirmLabel: text.disable,
@@ -181,7 +205,7 @@ export function AdminUsersPage() {
   function confirmReset(user: AdminUser): void {
     const own = user.id === session.data?.user.id
     const name = nameOf(user)
-    setPending({
+    askToConfirm({
       title: own ? text.confirmResetOwn : text.confirmReset(name),
       description: own ? text.resetOwnDescription(PASSWORD_RESET_LIFETIME_HOURS) : text.resetDescription(PASSWORD_RESET_LIFETIME_HOURS),
       confirmLabel: text.resetPassword,
@@ -216,6 +240,41 @@ export function AdminUsersPage() {
         })
       },
       refresh: own ? async () => recheckSession('password_reset') : async () => {},
+      returnFocus: () => focusRow(user),
+    })
+  }
+
+  /**
+   * 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：所有状态的账户都能吊销，自己的也一样（说明分自己、停用的、别人的三版，见 revokeLocalKeyDescription）。
+   * 成功时与别的操作（confirmThen）一样：先按响应里账户的现状换上这一行（审查 B2：这一行"状态"列里的本机密钥随之是新的一版），
+   * 再刷新账户列表（refresh：时限与"列表还在刷新"的说明都是共用的）。刷新经 refreshQueries 先取消在路上的列表请求——它们在吊销之前读的库
+   * （"加载更多"的下一页、上一个操作到了时限还在后台的刷新、结果未知之后还没回来的刷新），不取消的话回来时把这一行换回吊销之前的版本，
+   * 与状态区的说明矛盾（复验 C1）。成功的说明交回给确认的弹窗，关掉之后写进页面顶部的状态区（读屏靠它）。
+   * 说法按这一次的结果（Codex 评审 CX3）：吊销了就说吊销了哪一版、换成了哪一版；没有可吊销的就如实说吊销的那一刻他还没有本机密钥、
+   * 没有吊销任何密钥。不从现状推断：没有可吊销的、而他恰好在这之后第一次取用了时，现状里已经有第 1 版（这一行照实显示它）。
+   * 吊销不动会话：自己的账户也不重新确认会话。结果未知时刷新账户列表（刷新之后这一行显示的就是现在的状态），用专门的说法——
+   * 吊销每次都换一把新的（不按状态幂等），再吊销一次没有坏处。焦点回到这一行的"吊销本机密钥"（按钮一直在，打开之前有焦点的就交还给它；
+   * 点按钮不给焦点的浏览器回到这一行）
+   */
+  function confirmRevokeLocalKey(user: AdminUser): void {
+    const own = user.id === session.data?.user.id
+    const name = nameOf(user)
+    askToConfirm({
+      title: own ? text.confirmRevokeOwnLocalKey : text.confirmRevokeLocalKey(name),
+      description: revokeLocalKeyDescription(user, own),
+      confirmLabel: text.revokeLocalKey,
+      destructive: true,
+      describeFailure: (error, refreshed) => {
+        const reason = describeError(error).message
+        return isUnknownOutcome(error) ? text.revokeLocalKeyOutcomeUnknown(reason, refreshed) : reason
+      },
+      run: async () => {
+        const { revoked, account } = await revokeLocalKey(user.id)
+        replaceRow(account)
+        await refresh()
+        return () => setDone(revoked === null ? text.noLocalKeyToRevoke(name) : text.localKeyRevoked(name, revoked.version, revoked.nextVersion))
+      },
+      refresh: refreshAfterUnknown,
       returnFocus: () => focusRow(user),
     })
   }
@@ -266,6 +325,10 @@ export function AdminUsersPage() {
             {text.resetPassword}
           </Button>
         )}
+        {/* 吊销本机密钥（M3-P6 设计 §3.8）：所有状态的账户都给（设备丢了又停用、之后再启用时，旧设备上的草稿同样不该再解得开） */}
+        <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.revokeLocalKey, name)} onClick={() => confirmRevokeLocalKey(user)}>
+          {text.revokeLocalKey}
+        </Button>
         {/* 登录被锁定（M2-P6 复核 A1）：解除之后这一行不再有这个按钮，焦点回到这一行 */}
         {user.loginLock !== null && (
           <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.unlockLogin, name)} onClick={() => confirmThen(user, { title: text.confirmUnlockLogin(name), description: text.unlockLoginDescription, confirmLabel: text.unlockLogin }, async () => unlockLogin(user.id))}>
@@ -284,6 +347,10 @@ export function AdminUsersPage() {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* 操作结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报。
+          它在长列表上方：写进说明（状态区变高）时下面的内容整体下移，keepFocusInView 把排在它后面、有焦点的元素（交还焦点的那一行的按钮）
+          滚回可视区域（复验 C7 时发现）；变矮时不滚（再复核 D1） */}
+      <StatusRegion className="rounded-lg border p-3 text-sm" keepFocusInView>{done}</StatusRegion>
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-2">
           <Label htmlFor={searchId}>{text.search}</Label>
@@ -315,6 +382,9 @@ export function AdminUsersPage() {
               <div className="flex flex-col items-start gap-1">
                 <Badge variant={user.status === 'active' ? 'secondary' : 'destructive'}>{messages.people.statusName(user.status)}</Badge>
                 {user.loginLock !== null && <span className="text-xs text-destructive">{loginLockText(user.loginLock)}</span>}
+                {/* 本机密钥的版本（审查 B2）：从没取过的不显示；吊销之后这一行换成新的一版。不折行（与"创建时间"一格一样）：这一格很窄，
+                    原来 400 宽时折成三行、把"第 1 版"拆开，1280 宽时也折成两行（复验 C7）；表格在自己的容器里横向滚动 */}
+                {user.localKey !== null && <span className="text-xs whitespace-nowrap text-muted-foreground">{text.localKeyVersion(user.localKey.version)}</span>}
               </div>
             </TableCell>
             <TableCell className="whitespace-nowrap"><time dateTime={user.createdAt}>{formatDateTime(user.createdAt)}</time></TableCell>

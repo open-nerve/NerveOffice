@@ -3,6 +3,7 @@
 // 时间一律由数据库给出（UTC 的 ISO 8601）；页面不拿自己的时钟去比它们，"多久没有操作"只报相对的秒数（M3 总设计 §2.1）。
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
+import { localKeyVersionSchema } from '../local-keys/local-keys.ts'
 import { userSummarySchema } from '../users/users.ts'
 import { clientFormatBodyShape } from './client-format.ts'
 import { revisionSourceSchema } from './content.ts'
@@ -184,11 +185,14 @@ export const pendingEditRequestSchema = z.object({
 export type PendingEditRequest = z.infer<typeof pendingEditRequestSchema>
 
 /**
- * 续租成功（200）：新的到期时间，与待回应的请求编辑（M3-P5 设计 §3.3：持有者最多约一个心跳周期之后得知；没有时为 null）
+ * 续租成功（200）：新的到期时间，与待回应的请求编辑（M3-P5 设计 §3.3：持有者最多约一个心跳周期之后得知；没有时为 null）；
+ * 调用者自己当前的本机密钥的版本（M3-P6 设计 §3.6：从没取过时为 null）——正在编辑的页面据此在一个心跳周期之内得知密钥已被吊销
+ * （M4 起停止用旧密钥写发件箱、重新取密钥）。M3 的页面解析出它，不保存也不消费
  */
 export const renewedEditLeaseSchema = z.object({
   expiresAt: z.iso.datetime(),
   request: pendingEditRequestSchema.nullable(),
+  localKeyVersion: localKeyVersionSchema.nullable(),
 })
 
 export type RenewedEditLease = z.infer<typeof renewedEditLeaseSchema>

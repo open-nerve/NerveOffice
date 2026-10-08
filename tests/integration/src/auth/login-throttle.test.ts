@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
-import { startTestApp } from '../support/api-app.ts'
+import { startTestApp, startTestAppInTimeZone } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { requestIdOf } from '../support/request-id.ts'
 import { postLogin } from '../support/session-client.ts'
@@ -236,5 +236,18 @@ describe('地址维度', () => {
       expect(await failFrom('also bad', 'x2')).toBe(401)
       expect(await failFrom('999.1.1.1', 'x3')).toBe(429)
     })
+  })
+})
+
+describe('会话时区不是 UTC 时退回名额（M3-P6 再复核 D6）', () => {
+  it('应用连接的会话时区是上海：成功登录照样退回自己占的地址名额——窗口的开始时间按 UTC 文本交给应用、退回时再按它比较，往返不差 8 小时', async () => {
+    // 测试库的会话默认是 UTC，窗口的 UTC 文本换算漏了时区也看不出来：另起一个应用，连接用上海时区，先核对它自己的连接确实在上海时区
+    const app = await startTestAppInTimeZone({ databaseUrl: database.url, timeZone: 'Asia/Shanghai', env: { NERVE_LOGIN_MAX_FAILURES: '100', NERVE_LOGIN_ACCOUNT_MAX_FAILURES: '1000', NERVE_LOGIN_IP_MAX_FAILURES: '3' } })
+    apps.push(app)
+    const statuses: number[] = []
+    for (const [username, password] of [['u1', 'wrong'], ['alice', alice.password], ['u2', 'wrong'], ['u3', 'wrong']] as const)
+      statuses.push((await postLogin(app.baseUrl, { username, password })).status)
+    // 成功的那次退回了自己占的名额（退不回的话 u2 就触发锁定）；之前的失败照算（u3 触发锁定）
+    expect(statuses).toEqual([401, 200, 401, 429])
   })
 })

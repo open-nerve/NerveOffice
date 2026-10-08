@@ -5,8 +5,9 @@
 // 不拦保存的话生产构建里停 2 秒就存上了（测试构建的夹具暂停了定时的上传，生产镜像里没有），在修改之前断开，两种构建里修改都没存上。
 // 恢复之后先发出的可能是自动保存的重试，按保存用快捷键（编辑权随之失效、没有保存按钮时它什么也不做）。
 // M3-P2 起打开即阅读、点"编辑"才申请编辑权；失去编辑权之后本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"。
-// M3-P5（设计 §3.1）：同一个浏览器里正在编辑的标签页持有本机锁，后一个取得编辑权时抢走它，前一个随即失去编辑权（说明是本人在本浏览器的
-// 另一个标签页接手了编辑），不再等它恢复之后由保存、心跳得知；前一个之后的保存照样不发（本页已经只读）。
+// M3-P5（设计 §3.1）：同一个浏览器里正在编辑的标签页持有本机锁，后一个取得编辑权时（核对过自己那一代是当前的）抢走它；M3-P6（设计 §3.13，
+// Codex 评审 CX2）起被抢的一方先向服务端核对——前一个断着网、核对不了，就不判自己失效、照常留在编辑，等它恢复之后由保存、心跳得知：那一代已被
+// 换掉，续上时后一个在编辑（被自己的别的页面占着），或者后一个已经离开而别处保存过更新的版本；失去编辑权之后前一个的保存照样不发（本页已经只读）。
 // M3-P5（设计 §3.7）：前一个在编辑时后一个读到"自己在本浏览器的另一个标签页里编辑"，按钮是"在此编辑"（本人接管，handover-takeover.spec.ts）；
 // 这里核对的是"前一个的编辑权到期之后"：后一个的下一次检查（阅读时每 30 秒，用 Playwright 的时钟拨过去）读到没人在编辑，才是"编辑"。
 // 两个人（US-M3-11）：甲断网、编辑权到期，乙接手并保存；甲回来之后的保存一定被拒，甲的内容另存为副本（服务端按快照新建，
@@ -58,7 +59,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await expect(saveButton(other)).toHaveCount(0)
 
     // A 的编辑权到期（改写租约行的时间，不等真实的 90 秒）；B 的下一次检查读到没人在编辑：说明随之消失，"编辑"回来。B 点"编辑"，取得编辑权，
-    // 键入并保存（A 还持有本机锁：B 取得编辑权之后抢走它）
+    // 键入并保存（A 还持有本机锁：B 取得编辑权之后核对过自己那一代是当前的、抢走它）
     await expireEditLease(documentId)
     await other.clock.fastForward(30_000)
     await expect(editingNotice(other)).toHaveCount(0)
@@ -68,13 +69,14 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await typeInCell(other, 'A1', 'from B')
     await saveAndWait(other)
 
-    // A 回来再保存：B 取得编辑权的那一刻 A 就失去了编辑权（本机锁被抢，M3-P5），这次保存不发：
-    // 页头说明编辑权已失效、是本人在本浏览器的另一个标签页接手了编辑、本页的修改没有保存，可以另存为副本或者放弃；本页换成只读，没有保存按钮
+    // A 回来再保存：B 抢走本机锁时 A 断着网、核对不了，照常留在编辑（M3-P6 设计 §3.13）；这次保存（或者先一步的心跳）得知那一代已被换掉，
+    // 续上时被 B 占着（自己的另一个标签页）——不覆盖 B 的版本：页头说明编辑权已失效、是自己在别处正在编辑、本页的修改没有保存，可以另存为副本
+    // 或者放弃；本页换成只读，没有保存按钮
     await asleep.reconnect()
     await page.keyboard.press('ControlOrMeta+s')
     await expect(saveStatus(page)).toHaveText('编辑权已失效')
     const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    await expect(lost).toContainText('编辑权已失效：你在另一个标签页或设备上正在编辑这份文档。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await expect(lost.getByRole('button', { name: '另存为副本', exact: true })).toBeVisible()
     await expect(lost.getByRole('button', { name: '放弃本页的修改', exact: true })).toBeVisible()
     await waitForEditorAccess(page, 'read', 'steady')
@@ -156,13 +158,13 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await leaveEditor(other, documentId)
     await other.close()
 
-    // 这一页回来再保存：另一个标签页取得编辑权的那一刻它就失去了编辑权（本机锁被抢，M3-P5），不覆盖别处保存的版本，
-    // 说明之后给"另存为副本"与"放弃本页的修改"。
+    // 这一页回来再保存：另一个标签页抢走本机锁时它断着网、核对不了，照常留在编辑（M3-P6 设计 §3.13）；这次保存（或者先一步的心跳）得知
+    // 那一代已被换掉，续上时发现别处保存过更新的版本——不覆盖它，说明之后给"另存为副本"与"放弃本页的修改"。
     // 放弃（先确认）：按服务器上的最新版本重建为阅读，不重新加载整页（不出现离开的提示）；之后点"编辑"照常编辑、保存
     await asleep.reconnect()
     await page.keyboard.press('ControlOrMeta+s')
     const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    await expect(lost).toContainText('编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     const dialogs: string[] = []
     page.on('dialog', (dialog) => {
       dialogs.push(dialog.type())

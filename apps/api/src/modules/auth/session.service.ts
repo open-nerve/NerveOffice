@@ -1,6 +1,7 @@
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { APP_CONFIG } from '../config/index.ts'
 import { generateSessionToken, isWellFormedSessionToken, sessionTokenDigest } from './session-token.ts'
 import { SessionsRepository } from './sessions.repository.ts'
@@ -63,6 +64,18 @@ export class SessionService {
    */
   async isActive(sessionId: string, transaction: Transaction): Promise<boolean> {
     return this.repository.isActiveById(sessionId, transaction)
+  }
+
+  /**
+   * 写事务里再核对这次登录（M3-P1 审查 A1，ADR-017、ADR-018）：会话守卫在处理器之前判断过，之后到这一步还隔着上传正文、等锁、取连接，
+   * 这期间退出、签发重置（撤销这个人的全部登录）、停用（同一事务撤销全部登录）、换令牌、别处修改密码都不经调用方锁的行，挡不住在途的请求。
+   * 在调用方的事务里按主键查一条：撤销提交之后才做的核对一定看得到它，剩下"核对之后、提交之前"的几毫秒按"请求先于撤销"线性化。
+   * 失效时 401 SESSION_EXPIRED，不动 Cookie（与只读快照的开场核对同一个说法），下一个请求经守卫处理。
+   * 持有者自己的请求（documents 的申请、心跳、保存、交出、谢绝）与本机密钥的取用（M3-P6 设计 §3.5）共用这一个口径
+   */
+  async requireActive(sessionId: string, transaction: Transaction): Promise<void> {
+    if (!await this.isActive(sessionId, transaction))
+      throw new AppError('SESSION_EXPIRED')
   }
 
   /**

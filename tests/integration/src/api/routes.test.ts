@@ -94,6 +94,8 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
     expect(names).toContain('POST /api/documents/:id/conflict-copies')
     // 打开自检失败的上报（M3-P4）
     expect(names).toContain('POST /api/documents/:id/open-check-failures')
+    // 本机密钥（M3-P6）：本人取用、系统管理员吊销；取用不是后台请求（用户操作的结果，照常顺延登录），不在下面的后台清单里
+    expect(names).toEqual(expect.arrayContaining(['POST /api/local-key', 'POST /api/admin/users/:id/local-key/revoke']))
   })
 
   it('未登录：公开清单之外的每个接口都回 401 UNAUTHENTICATED；清单里的接口不回它', async () => {

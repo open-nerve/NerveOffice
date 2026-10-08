@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer'
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   clientAddressProblems,
@@ -12,6 +14,11 @@ import {
   FORGED_CLIENT_ADDRESS,
   IDLE_MEMORY_SAMPLING,
   imageSizeArgs,
+  MASTER_KEY_REFUSAL_TIME_LIMIT_MS,
+  MASTER_KEY_VARIABLE,
+  masterKeyLeakProblems,
+  masterKeyRefusalAttempts,
+  masterKeyRefusalProblems,
   mebibytes,
   median,
   megabytes,
@@ -51,12 +58,23 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
     expect(real.admin).toMatch(/^[\da-f]{32}$/)
   })
 
-  it('变量文件：镜像、三个密码、两个端口；按地址的登录失败上限调高', () => {
+  it('本机密钥的主密钥每次随机：32 字节的标准 base64，与 openssl rand -base64 32 的输出同一个写法（M3-P6）', () => {
+    expect(settings.localKeysMasterKey).toBe(Buffer.alloc(32, 4).toString('base64'))
+    const keys = [1, 2].map(pid => createSettings({ pid, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 }).localKeysMasterKey)
+    expect(new Set(keys).size).toBe(2)
+    for (const key of keys) {
+      expect(key).toMatch(/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/)
+      expect(Buffer.from(key, 'base64')).toHaveLength(32)
+    }
+  })
+
+  it('变量文件：镜像、三个密码、本机密钥的主密钥、两个端口；按地址的登录失败上限调高', () => {
     expect(renderEnvFile(settings)).toBe([
       'NERVE_IMAGE=nerve-office:e2e-4242',
       `NERVE_DB_ADMIN_PASSWORD=${'01'.repeat(16)}`,
       `NERVE_DB_OWNER_PASSWORD=${'02'.repeat(16)}`,
       `NERVE_DB_APP_PASSWORD=${'03'.repeat(16)}`,
+      `NERVE_LOCAL_KEYS_MASTER_KEY=${Buffer.alloc(32, 4).toString('base64')}`,
       'NERVE_TEST_HTTPS_PORT=18443',
       'NERVE_TEST_DB_PORT=15432',
       'NERVE_LOG_LEVEL=info',
@@ -89,6 +107,96 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
       .toEqual(['nerve-office-e2e-200'])
     expect(staleRuns(['nerve-office:e2e-100', 'nerve-office:e2e-300', 'nerve-office:test'], 'nerve-office:e2e-', pid => alive.has(pid)))
       .toEqual(['nerve-office:e2e-300'])
+  })
+})
+
+/** 应用拒绝启动时真实的一行日志（构建出来的应用实测的输出，只换了时刻、进程号与主机名） */
+function fatalLine(problem: string, variable = MASTER_KEY_VARIABLE): string {
+  return JSON.stringify({ level: 'fatal', time: '2026-10-08T02:49:35.650Z', pid: 1, hostname: 'app', code: 'CONFIG_INVALID', issues: [{ variable, problem }], msg: '配置不合法，无法启动' })
+}
+
+const FORMAT_PROBLEM = '必须是 32 字节随机数的标准 base64（44 个字符、以 = 结尾，例如 openssl rand -base64 32 的输出）'
+const MALFORMED = Buffer.alloc(31, 9).toString('base64')
+const MISSING_ATTEMPT = { label: '缺主密钥', value: '' }
+const MALFORMED_ATTEMPT = { label: '主密钥的写法不对', value: MALFORMED }
+
+describe('本机密钥的主密钥：缺失、写法不对时拒绝启动，日志里没有它（M3-P6 设计 §3.9）', () => {
+  it('两次核对：缺主密钥（空值）；写法不对——31 字节的标准 base64（长度与正确的一样是 44 个字符），每次随机', () => {
+    const attempts = masterKeyRefusalAttempts(counter())
+    expect(attempts).toEqual([MISSING_ATTEMPT, { label: '主密钥的写法不对', value: Buffer.alloc(31, 1).toString('base64') }])
+    const [, first] = masterKeyRefusalAttempts(randomBytes)
+    const [, second] = masterKeyRefusalAttempts(randomBytes)
+    expect(first?.value).toHaveLength(44)
+    expect(Buffer.from(first?.value ?? '', 'base64')).toHaveLength(31)
+    expect(first?.value).not.toBe(second?.value)
+  })
+
+  it('按预期拒绝启动：退出码非 0，一条 fatal 的 CONFIG_INVALID 列出这个变量（缺的说"缺少"，写法不对的说写法），没有开始监听，没有回显取值', () => {
+    expect(masterKeyRefusalProblems(MISSING_ATTEMPT, { status: 1, timedOut: false, output: `${fatalLine('缺少')}\n` })).toEqual([])
+    // docker 自己的提示行、别的日志行混在里面也认得出
+    const output = ['WARN[0000] Found orphan containers', '{"level":"info","msg":"别的"}', fatalLine(FORMAT_PROBLEM), ''].join('\n')
+    expect(masterKeyRefusalProblems(MALFORMED_ATTEMPT, { status: 1, timedOut: false, output })).toEqual([])
+  })
+
+  it('到了时限还在跑：照样启动了（被结束时没有退出码）', () => {
+    expect(MASTER_KEY_REFUSAL_TIME_LIMIT_MS).toBe(60_000)
+    expect(masterKeyRefusalProblems(MISSING_ATTEMPT, { status: null, timedOut: true, output: '{"level":"info","msg":"HTTP 服务已启动"}\n' })).toEqual([
+      '缺主密钥：60 秒内应用没有退出，照样启动了',
+      '缺主密钥：输出里没有一条 fatal 的 CONFIG_INVALID 列出 NERVE_LOCAL_KEYS_MASTER_KEY',
+      '缺主密钥：应用开始监听了（输出里有"HTTP 服务已启动"）',
+    ])
+  })
+
+  it('退出码是 0、或者没有那条 fatal：都算问题', () => {
+    expect(masterKeyRefusalProblems(MISSING_ATTEMPT, { status: 0, timedOut: false, output: fatalLine('缺少') })).toEqual(['缺主密钥：应用的退出码是 0，期望拒绝启动'])
+    // 别的原因启动失败（例如连不上数据库）、只列了别的变量、不是 fatal、错误码不对：都不能当作拒绝了主密钥
+    for (const output of [
+      '{"level":"fatal","msg":"启动失败","err":{"message":"connect ECONNREFUSED"}}',
+      fatalLine('缺少', 'NERVE_DATABASE_URL'),
+      fatalLine('缺少').replace('"fatal"', '"error"'),
+      fatalLine('缺少').replace('CONFIG_INVALID', 'INTERNAL_ERROR'),
+      '缺少 NERVE_LOCAL_KEYS_MASTER_KEY CONFIG_INVALID',
+      '',
+    ])
+      expect(masterKeyRefusalProblems(MISSING_ATTEMPT, { status: 1, timedOut: false, output }), output).toEqual(['缺主密钥：输出里没有一条 fatal 的 CONFIG_INVALID 列出 NERVE_LOCAL_KEYS_MASTER_KEY'])
+  })
+
+  it('原因对不上：缺的不说"缺少"；给了值却说"缺少"（取值没有到应用）', () => {
+    expect(masterKeyRefusalProblems(MISSING_ATTEMPT, { status: 1, timedOut: false, output: fatalLine(FORMAT_PROBLEM) }))
+      .toEqual([`缺主密钥：CONFIG_INVALID 里 NERVE_LOCAL_KEYS_MASTER_KEY 的原因不是"缺少"（${FORMAT_PROBLEM}）`])
+    expect(masterKeyRefusalProblems(MALFORMED_ATTEMPT, { status: 1, timedOut: false, output: fatalLine('缺少') }))
+      .toEqual(['主密钥的写法不对：CONFIG_INVALID 说 NERVE_LOCAL_KEYS_MASTER_KEY 缺少，给出的取值没有到应用'])
+  })
+
+  it('开始监听了、输出里有给出的取值：都算问题', () => {
+    expect(masterKeyRefusalProblems(MALFORMED_ATTEMPT, { status: 1, timedOut: false, output: `${fatalLine(FORMAT_PROBLEM)}\n{"level":"info","msg":"HTTP 服务已启动"}` }))
+      .toEqual(['主密钥的写法不对：应用开始监听了（输出里有"HTTP 服务已启动"）'])
+    const echoed = fatalLine(`${FORMAT_PROBLEM}：${MALFORMED}`)
+    expect(masterKeyRefusalProblems(MALFORMED_ATTEMPT, { status: 1, timedOut: false, output: echoed })).toEqual(['主密钥的写法不对：输出里有给出的取值'])
+    // 缺主密钥那一次没有取值可回显：空串不算
+    expect(masterKeyRefusalProblems(MISSING_ATTEMPT, { status: 1, timedOut: false, output: fatalLine('缺少') })).toEqual([])
+  })
+
+  it('日志里的主密钥：标准 base64、base64url、十六进制都认得出，说明在哪个容器的日志里；没有时为空', () => {
+    const key = Buffer.from(Array.from({ length: 32 }, (_, index) => 250 - index)).toString('base64')
+    expect(key).toMatch(/[+/]/)
+    const bytes = Buffer.from(key, 'base64')
+    const clean = new Map([['db', 'LOG:  database system is ready'], ['app', '{"level":"info","masterKeyId":"0123456789abcdef0123456789abcdef","msg":"本机密钥的主密钥已就绪"}']])
+    expect(masterKeyLeakProblems(key, clean)).toEqual([])
+    expect(masterKeyLeakProblems(key, new Map([...clean, ['app', `{"msg":"x","key":"${key}"}`]]))).toEqual(['app 的日志里出现了本机密钥的主密钥'])
+    expect(masterKeyLeakProblems(key, new Map([...clean, ['migrate', bytes.toString('base64url')]]))).toEqual(['migrate 的日志里出现了本机密钥的主密钥'])
+    expect(masterKeyLeakProblems(key, new Map([...clean, ['db', `DETAIL: ${bytes.toString('hex')}`], ['caddy', key]]))).toEqual(['db 的日志里出现了本机密钥的主密钥', 'caddy 的日志里出现了本机密钥的主密钥'])
+  })
+
+  it('日志里的主密钥：Buffer 被直接打进 pino 的日志对象时的十进制数组（{"type":"Buffer","data":[…]}）也认得出（审查 A9）', () => {
+    const bytes = Buffer.from(Array.from({ length: 32 }, (_, index) => 250 - index))
+    const key = bytes.toString('base64')
+    // pino 用 JSON 序列化日志对象，Buffer 按 toJSON 写成十进制数组、逗号之间没有空格
+    const line = JSON.stringify({ level: 50, msg: '请求失败', masterKey: bytes })
+    expect(line).toContain('{"type":"Buffer","data":[250,249,')
+    expect(masterKeyLeakProblems(key, new Map([['db', 'LOG:  database system is ready'], ['app', line]]))).toEqual(['app 的日志里出现了本机密钥的主密钥'])
+    // 只有前 31 个字节：不算
+    expect(masterKeyLeakProblems(key, new Map([['app', JSON.stringify({ data: [...bytes.subarray(0, 31)] })]]))).toEqual([])
   })
 })
 

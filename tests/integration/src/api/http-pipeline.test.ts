@@ -10,7 +10,7 @@ import { errorResponseSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, Module, Post } from '@nestjs/common'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
+import { startTestApp, TEST_HTTPS_LOCAL_KEYS_MASTER_KEY, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { waitFor } from '../support/wait.ts'
@@ -176,6 +176,8 @@ describe('安全响应头（P2 设计 §3.6）', () => {
     expect(response.headers.get('cross-origin-resource-policy')).toBe('same-origin')
     expect(response.headers.get('cache-control')).toBe('no-store')
     expect(response.headers.has('x-powered-by')).toBe(false)
+    // 没有 Express 按响应体自动算的 ETag（M3-P6 审查 A8：响应体里有机密时它就是机密的稳定指纹）
+    expect(response.headers.has('etag')).toBe(false)
     expect(response.headers.has('strict-transport-security')).toBe(false)
   })
 
@@ -194,7 +196,8 @@ describe('安全响应头（P2 设计 §3.6）', () => {
   })
 
   it('公开地址是 HTTPS，代理转发来的请求却不是 HTTPS（代理没有被信任）：告警一次（DEF-014）', async () => {
-    const env = { NERVE_PUBLIC_ORIGIN: 'https://office.example.com' }
+    // 公开地址是 HTTPS 时应用拒绝可读的主密钥（M3-P6 设计 §3.4）：用字节不全是可打印字符的那一把测试密钥
+    const env = { NERVE_PUBLIC_ORIGIN: 'https://office.example.com', NERVE_LOCAL_KEYS_MASTER_KEY: TEST_HTTPS_LOCAL_KEYS_MASTER_KEY }
     const untrusted = await startTestApp({ databaseUrl: database.url, env })
     const trusted = await startTestApp({ databaseUrl: database.url, env: { ...env, NERVE_TRUST_PROXY: 'loopback' } })
     const warnings = (app: TestApp): LogEntry[] => app.logs.entries().filter(entry => String(entry.msg).startsWith('反向代理转发来的请求不是 HTTPS'))

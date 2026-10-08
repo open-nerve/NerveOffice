@@ -1,10 +1,11 @@
-// 会话服务：令牌是不是因为换令牌而失效的（复验 N3）；修改密码时怎么撤销本人的会话（M2-P6 复验 一般-3）。
+// 会话服务：令牌是不是因为换令牌而失效的（复验 N3）；修改密码时怎么撤销本人的会话（M2-P6 复验 一般-3）；写事务里再核对这次登录（M3-P6）。
 // 仓储用假的，只核对问了什么、怎么解读、按什么顺序做；库里的查询由集成测试覆盖（session.test.ts、change-password.test.ts）。
 import type { Buffer } from 'node:buffer'
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { SessionsRepository } from './sessions.repository.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { generateSessionToken, sessionTokenDigest } from './session-token.ts'
 import { SessionService } from './session.service.ts'
 
@@ -14,6 +15,7 @@ const TRANSACTION = { opaque: true } as unknown as Transaction
 /** revoked：仓储回答"这条会话是不是因为给出的原因之一被撤销的"；currentActive：撤销当前这条时它还没被撤销过（这次撤销了它） */
 function setup(revoked: boolean, currentActive = true) {
   const repository = {
+    isActiveById: vi.fn(async (_id: string, _transaction: Transaction) => currentActive),
     revokedFor: vi.fn(async (_tokenHash: Buffer, _reasons: readonly string[], _transaction?: Transaction) => revoked),
     revoke: vi.fn(async (_where: { id: string } | { tokenHash: Buffer }, _reason: string, _transaction?: Transaction) => currentActive),
     revokeAllOfUser: vi.fn(async (_userId: string, _reason: string, _transaction?: Transaction) => {}),
@@ -69,5 +71,20 @@ describe('SessionService.revokeForPasswordChange（M2-P6 复验 一般-3）', ()
     expect(await service.revokeForPasswordChange('user-1', 'session-current', TRANSACTION)).toBe(false)
     expect(repository.revoke).toHaveBeenCalledExactlyOnceWith({ id: 'session-current' }, 'replaced', TRANSACTION)
     expect(repository.revokeAllOfUser).not.toHaveBeenCalled()
+  })
+})
+
+describe('SessionService.requireActive（M3-P1 审查 A1 的口径，M3-P6 收进 auth）', () => {
+  it('这次登录仍然有效：在调用方的事务里按 id 查一条，什么也不抛', async () => {
+    const { service, repository } = setup(false, true)
+    await expect(service.requireActive('session-1', TRANSACTION)).resolves.toBeUndefined()
+    expect(repository.isActiveById.mock.calls).toEqual([['session-1', TRANSACTION]])
+  })
+
+  it('已经失效（撤销、过期）：401 SESSION_EXPIRED（不动 Cookie 由守卫之外的这条路径保证：它只抛业务错误）', async () => {
+    const { service } = setup(false, false)
+    const failure = await service.requireActive('session-1', TRANSACTION).catch((error: unknown) => error)
+    expect(failure).toBeInstanceOf(AppError)
+    expect((failure as AppError).code).toBe('SESSION_EXPIRED')
   })
 })

@@ -12,8 +12,8 @@ import type { ContentEnvelope, CurrentContent, DocumentContentsRepository, Store
 import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
 import type { DocumentSaveReceiptsRepository, ReceiptRow } from './document-save-receipts.repository.ts'
-import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow, WriteEnvelope } from './documents.repository.ts'
-import type { EditLeaseRow, EditLeasesRepository, NewEditLease, ObservedEditLease, Requester, RevocableEditLease, WrittenRequest, WrittenReservation } from './edit-leases.repository.ts'
+import type { AccessibleScope, CopiedDocument, DocumentRow, DocumentRowLock, DocumentsRepository, GrantedDocumentRow, ListOptions, NewDocument, PageOptions, SearchOptions, SearchRow, WriteEnvelope } from './documents.repository.ts'
+import type { EditLeaseRow, EditLeasesRepository, LockedEditLease, NewEditLease, ObservedEditLease, Requester, RevocableEditLease, WrittenRequest, WrittenReservation } from './edit-leases.repository.ts'
 import type { CreatedFolderRow, FolderAncestorRow, FolderRow, FoldersRepository, NewFolder, SubtreeMove, SubtreeSummary } from './folders.repository.ts'
 import type { SnapshotInspector } from './snapshot-inspector.ts'
 import type { SpaceTreeRepository } from './space-tree.repository.ts'
@@ -22,6 +22,7 @@ import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
 import { DOCUMENT_PROFILE_OF, EDIT_HANDOVER_RESERVE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_REQUEST_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, PLATFORM_FORMAT_VERSION, TRASH_RETENTION_DAYS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { vi } from 'vitest'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { parseAuditEvent } from '../audit/index.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
@@ -40,6 +41,9 @@ export const TEAM_SPACE = '0199a2c4-0000-7000-8000-0000000000c1'
 /** 假的事务：事务与只读快照都直接执行，用例据此核对传给仓储的是调用方开的那一个 */
 export const TRANSACTION = { transaction: true } as unknown as Transaction
 const NOW = new Date('2026-09-27T08:00:00.000Z')
+
+/** 明确结束的原因（释放、收回、交出）：表定义只给仓储引用，这里按行类型取 */
+type EndReason = NonNullable<EditLeaseRow['endReason']>
 /** 假仓储里分享写入的"数据库时间"：比 NOW 晚，用例据此核对新建与调整更新了设置的时间、没有变化时没更新 */
 export const GRANT_WRITTEN_AT = new Date('2026-09-27T09:00:00.000Z')
 
@@ -674,18 +678,21 @@ export class FakeStore {
    * 编辑租约的仓储（M3-P1）：与真实仓储同样的语义——每份文档至多一行，改写为新的一代时清掉明确结束与保留，
    * 同一个持有者沿用请求；接管时写下给出的接管标记，不是接管时同一个页面沿用上一代的（M3-P5），最后活动按带来的空闲往前推；
    * 续租时最后活动只前进不后退、不晚于 now，明确结束不覆盖先记下的原因；收回写入权只交出按时间还活着的（不模拟锁）。
+   * 持锁的凭据（Codex 评审 CX1）只在类型上：lockUnder 与 lockInScope 交出的行当作 LockedEditLease，换代与结束按凭据里的文档 id 改。
    * SQL 本身由语句的核对（edit-lease-statements.test.ts）与集成测试覆盖
    */
   readonly leases = {
     findByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
     lockByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
-    replace: vi.fn(async (lease: NewEditLease): Promise<ObservedEditLease> => {
+    lockUnder: vi.fn(async (document: DocumentRowLock) => this.lockedLease(document.id)),
+    replace: vi.fn(async (document: DocumentRowLock, lease: NewEditLease): Promise<ObservedEditLease> => {
       const now = this.databaseNow
       const { idleSeconds, takenOver, ...generation } = lease
-      const old = this.leaseRecords.get(lease.documentId)
+      const old = this.leaseRecords.get(document.id)
       const sameHolder = old?.holderId === lease.holderId
       const samePage = old?.sessionId === lease.sessionId && old.clientInstanceId === lease.clientInstanceId
       const row: EditLeaseRow = {
+        documentId: document.id,
         ...generation,
         acquiredAt: now,
         renewedAt: now,
@@ -701,7 +708,7 @@ export class FakeStore {
           ? (old !== undefined && samePage ? { takenOverTokenDigest: old.takenOverTokenDigest, takeover: old.takeover } : {})
           : { takenOverTokenDigest: takenOver.tokenDigest, takeover: takenOver.takeover }),
       }
-      this.leaseRecords.set(lease.documentId, row)
+      this.leaseRecords.set(document.id, row)
       return { ...row, now }
     }),
     renew: vi.fn(async (documentId: string, idleSeconds: number): Promise<ObservedEditLease> => {
@@ -714,19 +721,10 @@ export class FakeStore {
       this.leaseRecords.set(documentId, renewed)
       return { ...renewed, now }
     }),
-    end: vi.fn(async (documentId: string, reason: NonNullable<EditLeaseRow['endReason']>) => {
-      const row = this.leaseRecords.get(documentId)
-      if (row === undefined || row.endedAt !== null)
-        return false
-      this.leaseRecords.set(documentId, { ...row, endedAt: this.databaseNow, endReason: reason })
-      return true
-    }),
-    endAll: vi.fn(async (documentIds: readonly string[], reason: NonNullable<EditLeaseRow['endReason']>) => {
-      for (const documentId of documentIds) {
-        const row = this.leaseRecords.get(documentId)
-        if (row !== undefined && row.endedAt === null)
-          this.leaseRecords.set(documentId, { ...row, endedAt: this.databaseNow, endReason: reason })
-      }
+    end: vi.fn(async (lease: LockedEditLease, reason: EndReason) => this.endLease(lease.documentId, reason)),
+    endAll: vi.fn(async (leases: readonly LockedEditLease[], reason: EndReason) => {
+      for (const lease of leases)
+        this.endLease(lease.documentId, reason)
     }),
     /** 请求编辑（M3-P5）：新的请求——新的标识（按序号），发出是 now，有效期 now 加 10 分钟，清掉谢绝 */
     putRequest: vi.fn(async (documentId: string, requester: Requester): Promise<WrittenRequest> => {
@@ -748,12 +746,12 @@ export class FakeStore {
       this.updateLease(documentId, { requestDeclinedAt: this.databaseNow })
     }),
     /** 交出：明确结束（handed_over），保留给原来的请求方 2 分钟，清掉请求 */
-    handOver: vi.fn(async (documentId: string): Promise<WrittenReservation> => {
-      const requester = this.leaseRecords.get(documentId)?.requestedBy
+    handOver: vi.fn(async (lease: LockedEditLease): Promise<WrittenReservation> => {
+      const requester = this.leaseRecords.get(lease.documentId)?.requestedBy
       if (requester === undefined || requester === null)
-        throw new Error(`交出时没有请求：${documentId}`)
+        throw new Error(`交出时没有请求：${lease.documentId}`)
       const reservation = { reservedFor: requester, reservedUntil: new Date(this.databaseNow.getTime() + EDIT_HANDOVER_RESERVE_SECONDS * 1000) }
-      this.updateLease(documentId, { endedAt: this.databaseNow, endReason: 'handed_over', ...reservation, requestId: null, requestedBy: null, requestSessionId: null, requestedAt: null, requestExpiresAt: null, requestDeclinedAt: null })
+      this.updateLease(lease.documentId, { endedAt: this.databaseNow, endReason: 'handed_over', ...reservation, requestId: null, requestedBy: null, requestSessionId: null, requestedAt: null, requestExpiresAt: null, requestDeclinedAt: null })
       return reservation
     }),
     /**
@@ -770,14 +768,41 @@ export class FakeStore {
           if (document === undefined || row.endedAt !== null || !aliveByTime || !coversWriter(scope, { userId: row.holderId, documentId: row.documentId, spaceId: document.spaceId }))
             return []
           const documentStatus = this.entryOfDocument(document.id) === null ? 'active' as const : 'trashed' as const
-          return [{ ...row, now: this.databaseNow, spaceId: document.spaceId, createdBy: document.createdBy, documentStatus }]
+          return [{ ...row, now: this.databaseNow, spaceId: document.spaceId, createdBy: document.createdBy, documentStatus } as RevocableEditLease]
         })
         .toSorted((a, b) => a.documentId.localeCompare(b.documentId))),
   }
 
-  /** auth 的会话服务（M3-P1：判断别人的租约绑定的登录还在不在） */
+  /**
+   * 这份文档现在的租约行，当作先锁文档行、再锁住的那一行（LockedEditLease，假仓储的 lockUnder 交出它）：用例改写 lockUnder 的一次调用
+   * （模拟等锁期间别的事务提交了什么）时照样交出它
+   */
+  lockedLease(documentId: string): LockedEditLease | undefined {
+    return this.observedLease(documentId) as LockedEditLease | undefined
+  }
+
+  /**
+   * 用例直接记下这份文档的租约明确结束（摆好"已释放""已收回"的租约，或模拟别的事务这期间提交了结束）：与仓储的 end 同一个语义——
+   * 没有这一行、已经结束过时不动（先记下的原因留着），返回这一次结束了没有。不经仓储的假实现，不算进它的调用
+   */
+  endLease(documentId: string, reason: EndReason): boolean {
+    const row = this.leaseRecords.get(documentId)
+    if (row === undefined || row.endedAt !== null)
+      return false
+    this.leaseRecords.set(documentId, { ...row, endedAt: this.databaseNow, endReason: reason })
+    return true
+  }
+
+  /**
+   * auth 的会话服务（M3-P1：判断别人的租约绑定的登录还在不在；持有者自己的请求在锁下再核对这次登录）。
+   * requireActive 照 SessionService 的口径经 isActive 判断、失效时 401：用例据 isActive 的调用核对先后
+   */
   readonly sessions = {
-    isActive: vi.fn(async (sessionId: string) => this.activeSessions.has(sessionId)),
+    isActive: vi.fn(async (sessionId: string, _transaction?: Transaction) => this.activeSessions.has(sessionId)),
+    requireActive: vi.fn(async (sessionId: string, transaction: Transaction) => {
+      if (!await this.sessions.isActive(sessionId, transaction))
+        throw new AppError('SESSION_EXPIRED')
+    }),
   }
 
   readonly transactions = {

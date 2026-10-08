@@ -24,13 +24,22 @@ export interface SelftestPageView {
   readonly selfHolder?: string | undefined
   readonly notice?: string | undefined
   /**
-   * 失去编辑权时（losing、lost）：原因（种类，被接管的另带在哪里，例如 taken-over:this-browser）、本页有没有服务端没确认的内容、
-   * 另存为副本的进展（idle、saving、failed、refused、done）与建好的副本
+   * 失去编辑权时（losing、lost）：原因（种类，被接管的另带在哪里，例如 taken-over:this-browser；续上时别处正在编辑的另带是谁，held:other、
+   * held:self、held:unknown，M3-P6）、本页有没有服务端没确认的内容、另存为副本的进展（idle、saving、failed、refused、done）与建好的副本
    */
   readonly loss?: string | undefined
   readonly unsaved?: boolean | undefined
   readonly copy?: string | undefined
   readonly copyDocumentId?: string | undefined
+  /**
+   * 请求编辑的复核（M3-P6，./selftest-request.ts）用到的：阅读时请求方这一侧的进展（sending、waiting、cancelling、granted）与 granted 在等什么
+   * （visible：回到这一页时进入；ready：一能进入就进入）；编辑与离开编辑时持有者这一侧在等回应的请求是谁发的（请求方的 id）、离开编辑的原因
+   * （exit、idle、handover-request、handover-tab）。没有时 undefined
+   */
+  readonly request?: string | undefined
+  readonly requestUntil?: string | undefined
+  readonly incoming?: string | undefined
+  readonly leaving?: string | undefined
 }
 
 /** 编辑器页交给自检的（挂接在页面开始载入时就收集页面错误与可见性，到 steady 之后才引入自检） */
@@ -43,6 +52,11 @@ export interface SelftestHost {
   readonly page: SelftestPage
   /** 编辑器页现在的样子：场景里点了"编辑""退出编辑""保存"之后按它等 */
   readonly view: () => SelftestPageView
+  /**
+   * 编辑器页的状态每变一次同步调用 listener（M3-P6：请求编辑的场景按它记下每一次变化的时刻——页面在后台时 Safari 压低、停下计时器，轮询看不准）；
+   * 交回退订的函数
+   */
+  readonly subscribe: (listener: () => void) => () => void
   readonly visibility: () => readonly string[]
   /** 自检要整页跳走交回结果了：之后编辑器页的离开提示不拦（编辑时改过内容的场景留着没保存的修改） */
   readonly allowLeave: () => void

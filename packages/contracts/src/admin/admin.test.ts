@@ -4,12 +4,14 @@ import {
   adminSpaceSchema,
   adminUserDocumentListResponseSchema,
   adminUserListQuerySchema,
+  adminUserSchema,
   changeSpaceVisibilityRequestSchema,
   changeSystemRoleRequestSchema,
   createInvitationRequestSchema,
   createTeamSpaceRequestSchema,
   invitationListQuerySchema,
   invitationSchema,
+  revokeLocalKeyResponseSchema,
   TRANSFER_MAX_DOCUMENTS,
   transferDocumentsRequestSchema,
 } from './admin.ts'
@@ -37,6 +39,30 @@ describe('管理界面的契约', () => {
     for (const status of ['pending', 'accepted', 'expired', 'revoked'])
       expect(invitationListQuerySchema.safeParse({ status }).success).toBe(true)
     expect(invitationListQuerySchema.safeParse({ status: 'used' }).success).toBe(false)
+  })
+
+  it('M3-P6 账户带当前的本机密钥：只有版本与生成的时刻，从没取过时为空、不能省略；密钥材料混进来也被丢弃', () => {
+    const account = { id: '0192f0c8-0000-7000-8000-000000000001', username: 'zhangsan', displayName: '张三', systemRole: 'member', status: 'active', createdAt: '2026-09-28T00:00:00.000Z', loginLock: null }
+    const localKey = { version: 2, createdAt: '2026-10-08T00:00:00.000Z' }
+    expect(adminUserSchema.parse({ ...account, localKey: null })).toEqual({ ...account, localKey: null })
+    expect(adminUserSchema.parse({ ...account, localKey: { ...localKey, key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', wrappedKey: 'x' } })).toEqual({ ...account, localKey })
+    expect(adminUserSchema.safeParse(account).success).toBe(false)
+    expect(adminUserSchema.safeParse({ ...account, localKey: { version: 0, createdAt: localKey.createdAt } }).success).toBe(false)
+  })
+
+  it('M3-P6 吊销本机密钥的响应分成这一次的结果与账户的现状（Codex 评审 CX3）：没有可吊销的时结果为空、不能省略，现状照样给（可以已经有第 1 版）；原来只有账户的形状解析不了；密钥材料混进来也被丢弃', () => {
+    const account = { id: '0192f0c8-0000-7000-8000-000000000001', username: 'zhangsan', displayName: '张三', systemRole: 'member', status: 'active', createdAt: '2026-09-28T00:00:00.000Z', loginLock: null }
+    const first = { version: 1, createdAt: '2026-10-08T00:00:00.000Z' }
+    const second = { version: 2, createdAt: '2026-10-08T01:00:00.000Z' }
+    expect(revokeLocalKeyResponseSchema.parse({ revoked: { version: 1, nextVersion: 2 }, account: { ...account, localKey: second } })).toEqual({ revoked: { version: 1, nextVersion: 2 }, account: { ...account, localKey: second } })
+    // 吊销的那一刻还没有本机密钥，之后本人第一次取用提交了：结果为空，现状是第 1 版
+    expect(revokeLocalKeyResponseSchema.parse({ revoked: null, account: { ...account, localKey: first } })).toEqual({ revoked: null, account: { ...account, localKey: first } })
+    expect(revokeLocalKeyResponseSchema.safeParse({ account: { ...account, localKey: null } }).success).toBe(false)
+    expect(revokeLocalKeyResponseSchema.safeParse({ ...account, localKey: second }).success).toBe(false)
+    expect(revokeLocalKeyResponseSchema.safeParse({ revoked: { version: 0, nextVersion: 1 }, account: { ...account, localKey: first } }).success).toBe(false)
+    expect(revokeLocalKeyResponseSchema.safeParse({ revoked: { version: 1 }, account: { ...account, localKey: second } }).success).toBe(false)
+    expect(revokeLocalKeyResponseSchema.parse({ revoked: { version: 1, nextVersion: 2, key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }, account: { ...account, localKey: second }, wrappedKey: 'x' }))
+      .toEqual({ revoked: { version: 1, nextVersion: 2 }, account: { ...account, localKey: second } })
   })
 
   it('邀请的响应不含令牌：多出来的字段被丢弃', () => {

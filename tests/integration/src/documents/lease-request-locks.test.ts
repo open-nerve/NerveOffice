@@ -1,6 +1,7 @@
-// 请求编辑与交出的确定交错（M3-P5 设计 §3.12）：两个连接构造。请求的发出、续期、取消、谢绝与交出都只锁租约行（与心跳、释放同一类），
+// 请求编辑与交出的确定交错（M3-P5 设计 §3.12）：两个连接构造。请求的发出、续期、取消与谢绝只锁租约行（与心跳同一类），
 // 锁住之后再读文档的代次；申请（含本人接管、强制接管）先锁文档行、再锁租约行，强制接管的审计排在最后（锁的顺序：文档行 → 租约行 → 审计，
-// ADR-014）。所以它们都在租约行上排队，后到的在锁下看到先到的提交之后的那一行——
+// ADR-014）；交出是明确结束，自 Codex 评审 CX1 起同样先锁文档行、再锁租约行（与在途的保存互斥，见 lease-revocation-locks.test.ts）。
+// 所以它们都在租约行上排队（交出与申请先在文档行上排），后到的在锁下看到先到的提交之后的那一行——
 // 1. 交出与请求方取消：交出先，保留给了请求方，取消随后清掉保留（第三人随即能申请）；取消先，交出得到 EDIT_REQUEST_GONE，租约不动；
 // 2. 交出与第三人申请：交出先，申请得到 EDIT_LEASE_RESERVED；申请先，仍被持有（EDIT_LEASE_HELD，详情带着那个请求），交出随后照常；
 // 3. 两个请求方同时发出：先到的写下请求，后到的 occupied（单槽、先到先得）；
@@ -8,7 +9,8 @@
 // 5. 请求方续期与第三人在到期之后申请：续期先，得到 free（照样续期），随后申请的一方取得、请求清掉；申请先，续期得到 gone；
 // 6. 谢绝与取消：两种先后都终止于"槽里没有请求"，都是 204；
 // 7. 接管与交出：交出先，保留给了请求方，接管（本人、强制）得到 EDIT_LEASE_RESERVED；接管先，交出得到 taken_over（带方式），没有保留。
-// 写法照搬 lease-takeover-locks.test.ts：测试持住租约行，让几个请求依次停在上面（inOrder）；或者"先取完锁的操作"停在写审计之前
+// 写法照搬 lease-takeover-locks.test.ts：测试持住租约行，让几个请求依次停在锁上（inOrder：先到的停在租约行上；交出与申请先拿到文档行，
+// 排在它后面的交出、申请停在文档行上，次序不变）；或者"先取完锁的操作"停在写审计之前
 // （闸门：audit_events 的 BEFORE INSERT 触发器按"动作 + 操作者"取 advisory 共享锁，测试的连接持有同一个键的排他锁，interleave）。
 // 持锁构造的前提由 held-lock.ts 自己核对。
 import type pg from 'pg'
@@ -194,7 +196,7 @@ describe('US-M3-06 交出与请求方取消在租约行上排队（设计 §3.12
 })
 
 describe('US-M3-06 交出与第三人申请（设计 §3.12）', () => {
-  it('US-M3-06 交出先拿到租约行；第三人的申请（已经锁住了文档行）排在后面——锁下看到交出与保留：EDIT_LEASE_RESERVED（留给请求方），什么也没写', async () => {
+  it('US-M3-06 交出先拿到锁（文档行，停在租约行上）；第三人的申请排在它后面——锁下看到交出与保留：EDIT_LEASE_RESERVED（留给请求方），什么也没写', async () => {
     const { document, amy, ben, dan, lease } = await prepare()
     const requestId = await pendingRequestId(app.baseUrl, ben.session, document)
     const [handed, acquired] = await inOrder(holdLeaseRow(document), async () => handOverLease(app.baseUrl, amy.session, document, lease, requestId), async () => acquire(dan, document))
@@ -205,7 +207,7 @@ describe('US-M3-06 交出与第三人申请（设计 §3.12）', () => {
     expect(await rowOf(document)).toMatchObject({ holderId: amy.account.id, endReason: 'handed_over', reservedFor: ben.account.id })
   })
 
-  it('US-M3-06 第三人的申请先拿到租约行：仍被持有（EDIT_LEASE_HELD，详情带着那个请求）；交出排在后面，照常交出', async () => {
+  it('US-M3-06 第三人的申请先拿到锁（文档行，停在租约行上）：仍被持有（EDIT_LEASE_HELD，详情带着那个请求）；交出排在后面，照常交出', async () => {
     const { document, amy, ben, dan, lease } = await prepare()
     const requestId = await pendingRequestId(app.baseUrl, ben.session, document)
     const [acquired, handed] = await inOrder(holdLeaseRow(document), async () => acquire(dan, document), async () => handOverLease(app.baseUrl, amy.session, document, lease, requestId))
@@ -308,7 +310,7 @@ describe('US-M3-06 谢绝与取消（设计 §3.12）：两种先后都终止于
 })
 
 describe('US-M3-08 / US-M3-09 接管与交出（设计 §3.12）', () => {
-  it('US-M3-09 强制接管先取完锁（停在写审计之前），交出等租约行：接管提交之后，交出锁下看到新的一代——taken_over（forced: true），没有保留；请求随强制接管清掉', async () => {
+  it('US-M3-09 强制接管先取完锁（停在写审计之前），交出等它（文档行）：接管提交之后，交出锁下看到新的一代——taken_over（forced: true），没有保留；请求随强制接管清掉', async () => {
     const { document, amy, ann, ben, lease } = await prepare()
     const requestId = await pendingRequestId(app.baseUrl, ben.session, document)
     const result = await interleave(
@@ -321,7 +323,7 @@ describe('US-M3-08 / US-M3-09 接管与交出（设计 §3.12）', () => {
     expect(await rowOf(document)).toMatchObject({ holderId: ann.account.id, endReason: null, requestId: null, reservedFor: null })
   })
 
-  it('US-M3-08 本人接管（另一台设备）先拿到租约行，交出排在后面：taken_over（forced: false），没有保留；请求沿用（同一个持有者）', async () => {
+  it('US-M3-08 本人接管（另一台设备）先拿到锁（文档行，停在租约行上），交出排在后面：taken_over（forced: false），没有保留；请求沿用（同一个持有者）', async () => {
     const { document, amy, ben, lease } = await prepare()
     const laptop: LoggedIn = await login(app.baseUrl, amy.account.username, amy.account.password)
     const requestId = await pendingRequestId(app.baseUrl, ben.session, document)
@@ -332,7 +334,7 @@ describe('US-M3-08 / US-M3-09 接管与交出（设计 §3.12）', () => {
     expect(await rowOf(document)).toMatchObject({ holderId: amy.account.id, endReason: null, requestId, reservedFor: null })
   })
 
-  it.each(['self', 'force'] as const)('US-M3-06 交出先拿到租约行，接管（%s，已经锁住了文档行）排在后面：锁下看到交出与保留——EDIT_LEASE_RESERVED，什么也没写，不写审计', async (takeover) => {
+  it.each(['self', 'force'] as const)('US-M3-06 交出先拿到锁（文档行，停在租约行上），接管（%s）排在后面：锁下看到交出与保留——EDIT_LEASE_RESERVED，什么也没写，不写审计', async (takeover) => {
     const { document, amy, ann, ben, lease } = await prepare()
     const laptop: LoggedIn = await login(app.baseUrl, amy.account.username, amy.account.password)
     const requestId = await pendingRequestId(app.baseUrl, ben.session, document)

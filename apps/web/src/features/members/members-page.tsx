@@ -364,8 +364,11 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
 
   return (
     <div>
-      {/* 表格上方的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填文字，读屏软件才会播报 */}
-      <StatusRegion className="mb-4 rounded-lg border p-3 text-sm">{notice}</StatusRegion>
+      {/* 表格上方的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填文字，读屏软件才会播报。
+          它在成员表上方：写进说明（状态区变高）时下面的内容整体下移，keepFocusInView 把排在它后面、有焦点的元素滚回可视区域——降低自己、
+          刷新超过时限时焦点交还给这一行的选择框，就在它下面（与账户页、转移页相同，M3-P6 复验、再复核 D2）；变矮时（"成员列表还在刷新"一句消失）
+          不滚，用户这期间滚走了也不拉回去（再复核 D1） */}
+      <StatusRegion className="mb-4 rounded-lg border p-3 text-sm" keepFocusInView>{notice}</StatusRegion>
       {list.items.length === 0
         ? <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
         : (

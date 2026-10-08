@@ -391,6 +391,22 @@ describe('US-M1-02 登录与退出', () => {
     expect(await screen.findByRole('heading', { name: '我的空间' })).toBeInTheDocument()
   })
 
+  /** 为什么来到登录页（地址里的 reason）与它的说明 */
+  const LOGIN_NOTICES = [
+    ['expired', '登录已过期，请重新登录'],
+    ['password_changed', '刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。'],
+    ['password_reset', '刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。'],
+    ['account_disabled', '刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。'],
+  ] as const
+
+  /** 说明那一条（Alert 的默认变体是 role="status"） */
+  async function loginNotice(text: string): Promise<HTMLElement> {
+    const notice = (await screen.findByText(text)).closest<HTMLElement>('[role="status"]')
+    if (notice === null)
+      throw new Error(`说明「${text}」不在 role="status" 的提示条里`)
+    return notice
+  }
+
   describe('登录页的初始焦点（DEF-047）', () => {
     it('直接打开登录页：确认会话之后表单出现，焦点在用户名上', async () => {
       installFakeApi(LOGGED_OUT)
@@ -399,16 +415,10 @@ describe('US-M1-02 登录与退出', () => {
       await waitFor(() => expect(window.document.activeElement).toBe(username))
     })
 
-    it.each([
-      ['expired', '登录已过期，请重新登录'],
-      ['password_changed', '刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。'],
-      ['password_reset', '刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。'],
-      ['account_disabled', '刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。'],
-    ])('带着为什么来到登录页的说明（%s）：焦点先给说明（读屏先读到它），不给用户名', async (reason, text) => {
+    it.each(LOGIN_NOTICES)('带着为什么来到登录页的说明（%s）：焦点先给说明（读屏先读到它），不给用户名', async (reason, text) => {
       installFakeApi(LOGGED_OUT)
       renderApp(`/login?reason=${reason}`)
-      const notice = (await screen.findByText(text)).closest('[role="status"]')
-      expect(notice).not.toBeNull()
+      const notice = await loginNotice(text)
       await waitFor(() => expect(window.document.activeElement).toBe(notice))
     })
 
@@ -426,17 +436,69 @@ describe('US-M1-02 登录与退出', () => {
       await settle()
       expect(window.document.activeElement).toBe(elsewhere)
     })
+  })
 
-    it('焦点还在说明上时登录失败（说明换成错误的说明）：焦点交给登录按钮，不落到 body', async () => {
+  describe('登录失败时，为什么来到这里的说明留着（DEF-048）', () => {
+    it.each(LOGIN_NOTICES)('带着说明（%s）登录失败：说明留着，错误的说明另起一条（role="alert"，读屏立即播报）、排在说明下面', async (reason, text) => {
+      installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => apiError(401, 'INVALID_CREDENTIALS') })
+      renderApp(`/login?reason=${reason}`)
+      const notice = await loginNotice(text)
+      await fillLogin('alice', 'wrong')
+      const error = await screen.findByRole('alert')
+      expect(error).toHaveTextContent('用户名或密码错误')
+      // 说明还是原来那一条（没有卸载重建），文字不变，也没有混进错误的说明里
+      expect(notice).toBeInTheDocument()
+      expect(notice).toHaveTextContent(text)
+      expect(error).not.toHaveTextContent(text)
+      expect(notice.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    })
+
+    it('焦点还在说明上时登录失败（例如密码管理器填好之后用鼠标点"登录"，Safari 里按钮不接焦点）：焦点留在说明上，不落到 body', async () => {
       installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => apiError(401, 'INVALID_CREDENTIALS') })
       renderApp('/login?reason=expired')
-      const notice = (await screen.findByText('登录已过期，请重新登录')).closest('[role="status"]')
+      const notice = await loginNotice('登录已过期，请重新登录')
       await waitFor(() => expect(window.document.activeElement).toBe(notice))
-      // 填写与点击都不移动焦点（例如密码管理器填好之后用鼠标点"登录"，Safari 里按钮不接焦点）：焦点还在说明上
+      // 填写与点击都不移动焦点：焦点还在说明上
       await fillLogin('alice', 'wrong')
       expect(await screen.findByRole('alert')).toHaveTextContent('用户名或密码错误')
-      expect(screen.queryByText('登录已过期，请重新登录')).toBeNull()
-      expect(window.document.activeElement).toBe(screen.getByRole('button', { name: '登录' }))
+      await settle()
+      expect(window.document.activeElement).toBe(notice)
+    })
+
+    it('用键盘在登录按钮上提交且登录失败：说明与错误都在，焦点留在按钮上（审查 B13）', async () => {
+      installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => apiError(429, 'TOO_MANY_ATTEMPTS', 'x', { 'retry-after': '600' }) })
+      renderApp('/login?reason=password_changed')
+      const notice = await loginNotice('刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。')
+      fireEvent.change(screen.getByLabelText('用户名'), { target: { value: 'alice' } })
+      fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'old password' } })
+      const submit = screen.getByRole('button', { name: '登录' })
+      submit.focus()
+      fireEvent.click(submit)
+      expect(await screen.findByRole('alert')).toHaveTextContent('尝试次数过多，请 10 分钟后再试')
+      expect(notice).toBeInTheDocument()
+      await settle()
+      expect(window.document.activeElement).toBe(submit)
+    })
+
+    it('失败之后再试：提交中错误的说明收起、说明照旧；这次成功，回到原来要去的地址', async () => {
+      const second = deferred()
+      const api = installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => apiError(401, 'INVALID_CREDENTIALS'), ...NO_DOCUMENTS })
+      const app = renderApp('/login?from=%2F%3Fview%3Dlist&reason=password_changed')
+      const notice = await loginNotice('刚才修改密码时没能确认结果，随后登录失效了：新密码可能已经生效，请试试用新密码登录。')
+      await fillLogin('alice', 'old password')
+      expect(await screen.findByRole('alert')).toHaveTextContent('用户名或密码错误')
+
+      api.on('POST /api/auth/login', second.handler)
+      fireEvent.change(screen.getByLabelText('密码'), { target: { value: 'new password' } })
+      fireEvent.click(screen.getByRole('button', { name: '登录' }))
+      expect(await screen.findByRole('button', { name: '正在登录…' })).toBeInTheDocument()
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(notice).toBeInTheDocument()
+
+      second.resolve(json(200, SESSION))
+      await screen.findByRole('heading', { name: '我的空间' })
+      expect(currentPath(app)).toBe('/?view=list')
+      expect(requestCount(api, 'POST /api/auth/login')).toBe(2)
     })
   })
 })

@@ -3,8 +3,8 @@
 // （包的出口 @nerve-office/api/testing）。放在这里的话，命令行与 app 层的其他文件经这里转手引用它们，lint 按路径的限制认不出来（M2-P6 复验 R-S4）
 export { AuditModule, AuditService, RequestOrigin } from '../modules/audit/index.ts'
 export type { AuditEvent, AuditOrigin } from '../modules/audit/index.ts'
-export { ConfigError, loadConfig, loadConfigFromEnvironment } from '../modules/config/index.ts'
-export type { AppConfig } from '../modules/config/index.ts'
+export { ConfigError, loadConfig, loadConfigFromEnvironment, loadServerConfig, loadServerConfigFromEnvironment } from '../modules/config/index.ts'
+export type { AppConfig, ServerConfig } from '../modules/config/index.ts'
 export { DatabaseModule, MigrationError, MIGRATIONS_FOLDER, readExpectedMigrations, runMigrations, TransactionRunner } from '../modules/database/index.ts'
 export type { MigrationOutcome, SchemaStatus, Transaction } from '../modules/database/index.ts'
 // 集成测试用：按给定的时刻跑一轮回收站的清理、修订记录与回执的保留期清理（假时钟推进 30 天，不必真的等）；核对生产的时钟取的是数据库的时间

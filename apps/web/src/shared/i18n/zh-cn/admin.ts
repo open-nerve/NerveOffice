@@ -20,6 +20,7 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'users.password_reset_completed': '重置密码',
   'users.password_reset_revoked': '作废重置链接',
   'users.login_unlocked': '解除登录锁定',
+  'users.local_key_revoked': '吊销本机密钥',
   'users.disabled': '停用账户',
   'users.enabled': '启用账户',
   'users.system_role_changed': '变更系统角色',
@@ -86,7 +87,9 @@ export const adminMessages = {
     confirmDisableOwn: '停用你自己的账户？',
     disableOwnDescription: '停用后你立即退出，不能再登录，只能由另一位系统管理员重新启用。至少要保留一个有效的系统管理员。',
     confirmEnable: (name: string) => `启用 ${name}？`,
-    enableDescription: '启用后这个人可以照常登录。停用期间转移走的文档不会回到他的个人空间。',
+    // 启用之后旧密码照旧可用（ADR-013），停用时退出的登录可以随即再登录回来：设备丢失而停用的，启用之后要立即生成重置链接（M3-P6 审查 B1，
+    // 与停用的账户上吊销本机密钥的说明是同一个提醒）
+    enableDescription: '启用后这个人可以照常登录。停用期间转移走的文档不会回到他的个人空间。停用是因为设备丢失的，启用之后请立即为他生成重置链接：旧密码照旧可用。',
     transfer: '转移文档',
     confirmGrantAdmin: (name: string) => `把 ${name} 设为系统管理员？`,
     grantAdminDescription: '系统管理员可以管理账户、邀请与审计，默认看不到任何人的文档内容。',
@@ -112,6 +115,30 @@ export const adminMessages = {
     confirmUnlockLogin: (name: string) => `解除 ${name} 的登录锁定？`,
     // 只按来源的计数（例如同一个办公网络失败太多次）不属于任何账户，解除清不掉，账户页也不显示（复验 N5）：不能说"可以立即登录"
     unlockLoginDescription: '解除后，清掉这个人在所有来源上的登录失败次数。他所在的网络如果整体被锁（同一来源失败次数太多），仍要等锁定到期。多次输错密码的来源不一定是本人：如果不是本人所为，请提醒他修改密码。',
+    // 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：本机密钥只加密浏览器里还没同步的草稿，吊销不动登录、不动已经保存的文档；
+    // 设备可能丢了时，退出登录要另外生成重置链接（两件事分开）。不说"没同步的修改都会作废"：页面里还没保存的修改不受吊销影响，那样说不实（A14）；
+    // 正面说一句正在编辑的页面不受影响、修改照常保存（审查 B7）——M3 的页面不消费吊销；M4 在线的页面换用新密钥，同样照常保存（M4 接上本机草稿时复核这一句）
+    revokeLocalKey: '吊销本机密钥',
+    confirmRevokeLocalKey: (name: string) => `吊销 ${name} 的本机密钥？`,
+    revokeLocalKeyDescription: '本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响；他正在编辑的页面也不受影响，修改照常保存；他的登录也不会退出。设备可能落在别人手里时，请同时为他生成重置链接（会退出他在所有地方的登录）。',
+    confirmRevokeOwnLocalKey: '吊销你自己的本机密钥？',
+    revokeOwnLocalKeyDescription: '本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响；你正在编辑的页面也不受影响，修改照常保存；你的登录也不会退出。设备可能落在别人手里时，请同时为自己生成重置链接（会退出你在所有地方的登录）。',
+    // 停用的账户（M3-P6 审查 B1）：停用时服务端已经撤销了他的全部会话，停用的账户也生成不了重置链接（这一行没有那个按钮，服务端拒绝）——
+    // 不说"登录不会退出""请同时生成重置链接"。风险在重新启用之后：旧密码照旧可用（ADR-013），拿着设备的人可以再登录、取到下一版。
+    // 不说正在编辑的页面（审查 B7）：他已经登录不了，没有在用的页面
+    revokeDisabledLocalKeyDescription: '本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响。这个账户已停用，他在所有地方的登录都已退出；重新启用之后旧密码照旧可用——设备可能落在别人手里时，启用之后请立即为他生成重置链接。',
+    // "状态"列里本机密钥的摘要（审查 B2）：这个人当前那一把的版本，从没取过的不显示。吊销之后这一行随之换成新的一版——在列表靠下的一行吊销时，
+    // 页面顶部的状态区不在可视区域里，明眼人在这一行看得见结果
+    localKeyVersion: (version: number) => `本机密钥第 ${version} 版`,
+    // 吊销的说法按这一次的结果（Codex 评审 CX3）：吊销了哪一版、换成了哪一版
+    localKeyRevoked: (name: string, version: number, nextVersion: number) => `已吊销 ${name} 的本机密钥第 ${version} 版，换成了第 ${nextVersion} 版。`,
+    // 没有可吊销的：吊销的那一刻他还没有本机密钥（从没取过），服务端什么也没吊销、不记审计。说"那一刻"：他可能恰好在这之后第一次取用了，
+    // 这一行（按账户的现状）随之显示第 1 版，这句话照样属实
+    noLocalKeyToRevoke: (name: string) => `吊销的那一刻 ${name} 还没有本机密钥，没有吊销任何密钥。`,
+    // 吊销的结果未知：吊销不按状态幂等（每次都换一把新的），通用的"还没有生效的话可以再试一次"不合适：再吊销一次没有坏处。
+    // 列表随即刷新（审查 B2）：刷新好了，这一行显示的就是现在的状态；没能刷新时如实说。说法对从没取过本机密钥的人也成立（复验 C8）：
+    // 这一行不显示版本时不说"现在的版本"，他再吊销一次什么也不换，不说"会再换一把"
+    revokeLocalKeyOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经吊销（${reason}）。${messages.common.listRefreshed(refreshed)}${refreshed ? '：这一行显示的是现在的状态' : ''}。再吊销一次没有坏处：有本机密钥的话会再换一把新的，之前的都已作废。`,
   },
   invitations: {
     // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）

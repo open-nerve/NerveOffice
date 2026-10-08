@@ -8,6 +8,7 @@
 import { auditEvents } from '../db/schema/audit/index.ts'
 import { authInvitations, authLoginThrottles, authPasswordResets, authSessions } from '../db/schema/auth/index.ts'
 import { documentContents, documentEditLeases, documentGrants, documentRevisions, documents, documentSaveReceipts, folders, trashEntries } from '../db/schema/documents/index.ts'
+import { userLocalKeys } from '../db/schema/local-keys/index.ts'
 import { spaceMembers, spaces } from '../db/schema/spaces/index.ts'
 import { users } from '../db/schema/users/index.ts'
 
@@ -32,6 +33,7 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   documentSaveReceipts,
   folders,
   trashEntries,
+  userLocalKeys,
   spaceMembers,
   spaces,
   users,

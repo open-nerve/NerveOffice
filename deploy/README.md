@@ -34,7 +34,7 @@ docker build -f deploy/Dockerfile -t nerve-office:test \
 
 ## 起测试环境
 
-1. 复制变量模板，把三个密码换成随机值（只用字母与数字，它们要拼进连接串，例如 `openssl rand -hex 16`）：
+1. 复制变量模板，把三个密码换成随机值（只用字母与数字，它们要拼进连接串，例如 `openssl rand -hex 16`），本机密钥的主密钥换成 `openssl rand -base64 32` 的输出（见下文"本机密钥的主密钥"）：
 
    ```sh
    cp deploy/test/.env.example deploy/test/.env
@@ -65,14 +65,14 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 
 标准输出只有链接（只显示这一次），日志写标准错误：把链接交给本人打开、设置新密码，不要贴进工单或聊天记录。签发记入审计（操作者是系统，来源是命令行）。不要用 `docker compose run` 执行这条命令：一次性容器的标准输出归容器的日志驱动收集，配置了集中日志时，链接会进日志系统；`exec` 的输出直接回到终端。
 
-容器 E2E（`pnpm test:e2e:container`）自己构建镜像、生成随机密码、挑选空闲端口，用单独的编排项目名起一套环境，跑完删除，不影响手工起的这一套。默认只跑 Chromium，`--browsers chromium,webkit` 可以多选；`--` 之后的参数交给 Playwright（例如 `pnpm test:e2e:container -- --project restart --no-deps` 只跑重启用例）。各容器的日志留在 `tests/e2e/test-results/container/`。放到后台跑用 tmux、screen 或 `setsid`，不要用 `nohup`：编排脚本处理 SIGHUP（关掉终端时先让 Playwright 正常结束，再清理），`nohup` 设下的忽略对它不起作用。
+容器 E2E（`pnpm test:e2e:container`）自己构建镜像、生成随机密码与本机密钥的主密钥、挑选空闲端口，用单独的编排项目名起一套环境，跑完删除，不影响手工起的这一套。部署核对里另外用缺失、写法不对的主密钥各启动一次应用，确认它拒绝启动、输出里没有给出的取值；收完各容器的日志之后扫一遍，里面不能有主密钥。默认只跑 Chromium，`--browsers chromium,webkit` 可以多选；`--` 之后的参数交给 Playwright（例如 `pnpm test:e2e:container -- --project restart --no-deps` 只跑重启用例）。各容器的日志留在 `tests/e2e/test-results/container/`。放到后台跑用 tmux、screen 或 `setsid`，不要用 `nohup`：编排脚本处理 SIGHUP（关掉终端时先让 Playwright 正常结束，再清理），`nohup` 设下的忽略对它不起作用。
 
 ### 升级
 
 顺序是 备份 → 迁移 → 换镜像：
 
 1. 备份数据库，例如 `docker compose -f deploy/test/compose.yaml exec -T db pg_dump -U postgres -Fc nerve_office > nerve_office.dump`（正式环境的备份与恢复在 M7）；
-2. 构建新镜像（用新的标签），改 `.env` 里的 `NERVE_IMAGE`；
+2. 构建新镜像（用新的标签），改 `.env` 里的 `NERVE_IMAGE`（本机密钥的主密钥保持不变）；
 3. `docker compose -f deploy/test/compose.yaml up -d`：compose 先停掉旧的应用（SIGTERM，排空在途请求再退出）并按新镜像重建 `migrate` 与 `app`，然后执行迁移（只向前、带锁，没有新迁移时说明"已是最新"），成功结束之后才启动新的应用。迁移期间服务不可用，单实例的测试环境可以接受；
 4. 核对：经 HTTPS 的存活探针通过，应用日志里有"数据库已就绪，库结构版本一致"。
 
@@ -86,6 +86,7 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 | `NERVE_DB_ADMIN_PASSWORD` | PostgreSQL 管理员（`postgres`）的密码 |
 | `NERVE_DB_OWNER_PASSWORD` | 所有者角色 `nerve_owner` 的密码（迁移用） |
 | `NERVE_DB_APP_PASSWORD` | 应用角色 `nerve_app` 的密码（应用运行时用） |
+| `NERVE_LOCAL_KEYS_MASTER_KEY` | 本机密钥的主密钥（M3-P6）：只给应用容器（迁移与运维命令用不到）。32 字节随机数的标准 base64，用 `openssl rand -base64 32` 生成；缺失或写法不对时应用拒绝启动。正式部署推荐经 Docker secrets 用 `NERVE_LOCAL_KEYS_MASTER_KEY_FILE` 提供，两者只能设一个。保管、备份与处置见下文"本机密钥的主密钥" |
 | `NERVE_TEST_HTTPS_PORT` | 发布到本机回环的 HTTPS 端口，默认 8443；公开地址随之是 `https://localhost:<端口>` |
 | `NERVE_TEST_DB_PORT` | 发布到本机回环的数据库端口，默认 54319，供测试数据与排查使用 |
 | `NERVE_LOG_LEVEL` | 日志级别，默认 `info` |
@@ -107,7 +108,7 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 | `NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS` | 一份快照的检查时限（毫秒），默认 10000，1000–600000（子进程的加载另有同样的时限）：超时就结束那个子进程，这一次 503 |
 | `NERVE_SNAPSHOT_INSPECTION_HEAP_MB` | 每个子进程的 V8 堆上限（MiB，`--max-old-space-size`），默认 512，128–16384：超出时只结束那个子进程，这份快照按"过于复杂"拒绝（`SNAPSHOT_INVALID`，规则 `too-complex`），服务照常。下限 128：5 MiB 的真实大表格要 96 才检查得完；默认 512：数量上限之内最费的形状要 256，留两倍余量（DEF-018 的测量） |
 
-三个密码只在第一次初始化数据卷时生效；之后要改，先 `down -v` 删除数据卷。应用的其余配置（`NERVE_*`）见 `apps/api/src/modules/config/config.ts`，未知的 `NERVE_*` 变量会让应用拒绝启动。
+三个密码只在第一次初始化数据卷时生效；之后要改，先 `down -v` 删除数据卷。本机密钥的主密钥不在数据卷里：数据卷还在时不要换它（库里已有的本机密钥会全部解不开，见下文）。应用的其余配置（`NERVE_*`）见 `apps/api/src/modules/config/config.ts`，未知的 `NERVE_*` 变量会让应用拒绝启动。
 
 ### 回收站的自动清理
 
@@ -144,6 +145,31 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 内存上限低于这个数时，容器的内存会先于子进程的堆上限用尽，内核结束一个子进程（子进程把自己的 `oom_score_adj` 调到了 1000，内核先挑它，主进程保住）。正在检查的那一份按"过于复杂"拒绝（`too-complex`，页面说明表格过于复杂），而不是 503 让页面一遍遍原样重发；应用记一条 error："快照检查的子进程在检查期间被系统结束（SIGKILL），多半是容器的内存不够……"。看到它就按上面的规则调高内存上限，或者调低子进程数、堆上限。
 
 `test/compose.yaml` 没有给应用容器设内存上限（容器可以用到主机的内存，与默认值相容）；加上 `mem_limit`（或 `deploy.resources.limits.memory`）时按上面的规则取值。
+
+### 本机密钥的主密钥
+
+本机密钥（M3-P6，ADR-019）用来加密每个人保存在浏览器里、还没同步的草稿（M4 的本机发件箱起使用）：服务端按人生成，用这把主密钥包装之后存进数据库（`user_local_keys`），本人登录之后取用。主密钥只在应用的内存里，不进数据库。
+
+- **生成与提供**：`openssl rand -base64 32`，输出（44 个字符、以 `=` 结尾）整个就是取值。只有应用容器需要它：迁移、初始化管理员、签发重置链接都用不到（命令行的配置里没有它），`test/compose.yaml` 也只给了 `app`，迁移的容器没有它。但初始化管理员与签发重置链接按上文在应用服务的容器里执行（`run … app`、`exec … app`），这两个进程的环境里仍有主密钥（`_FILE` 时文件也挂在那里）：命令不用它、不打印它（给了只校验写法、不带进配置），执行这两条命令的人能进应用容器，本来也就碰得到它。推荐经 Docker secrets 提供：写进一个文件，用 `NERVE_LOCAL_KEYS_MASTER_KEY_FILE` 指向它挂进容器的路径（例如 `/run/secrets/nerve_local_keys_master_key`，文件末尾的一个换行会被去掉）。文件要对容器里运行应用的 `node` 用户（uid 1000）可读：Compose（不用 swarm 时）的文件型 secret 是把宿主机上的文件绑定挂载进去，属主与权限照旧，宿主机上例如 `chown 1000 文件 && chmod 400 文件`；读不到时应用拒绝启动，原因是"指定的文件读取失败"。也可以直接设变量 `NERVE_LOCAL_KEYS_MASTER_KEY`，但环境变量会出现在 `docker inspect` 的输出里。两者只能设一个。
+- **拒绝启动**：缺失（变量与 `_FILE` 都没设）、写法不对（缺填充、base64url、十六进制、多一个或少一个字节都算）、`_FILE` 读不到或是空的、两者都设了，应用都拒绝启动：日志里一条 fatal（`code: CONFIG_INVALID`，`issues` 里只有变量名与原因，不带取值），退出码 1。公开地址是 HTTPS 时，32 个字节全是可打印字符的主密钥同样被拒绝：开发与测试用的主密钥是可读的一句话，多半是被抄进了正式部署。
+- **启动日志里的标识**：启动之后一条 info"本机密钥的主密钥已就绪"（`module: local-keys`），带 `masterKeyId`（由主密钥派生的标识，十六进制，不是机密）与 `currentKeys`（库里用它包装的当前密钥有几把）。核对部署的是哪一把主密钥时看它，例如恢复备份、迁移主机前后比较两次的标识。库里有当前的密钥不是这把主密钥包装的（配错了或者换过了）时，改为一条 error"库里有当前的本机密钥不是现在配置的主密钥包装的……"，带 `foreignKeys`（把数）与 `foreignMasterKeys`（各自的标识与把数）；应用照常启动，文档照常可用，只是这些人取本机密钥会失败（500）。日志里没有他们是谁，按下一条查。
+- **找出要吊销的人**：启动日志只给把数，管理界面也看不出谁的本机密钥是哪把主密钥包装的（账户页状态列里有"本机密钥第 N 版"的是取过本机密钥的人，但不分主密钥），以数据库为准。在数据库容器里用应用角色执行（只读两张表，应用角色就够；容器里经 Unix 套接字连接，不用密码），把 `<masterKeyId>` 换成启动日志里现在的 `masterKeyId`（32 个十六进制字符）：
+
+  ```sh
+  docker compose -f deploy/test/compose.yaml exec -T db psql -U nerve_app -d nerve_office -c "
+    SELECT u.username, u.status, k.version, encode(k.master_key_id, 'hex') AS master_key_id
+    FROM user_local_keys k JOIN users u ON u.id = k.user_id
+    WHERE k.revoked_at IS NULL AND k.master_key_id <> decode('<masterKeyId>', 'hex')
+    ORDER BY u.username"
+  ```
+
+  列出的是当前的本机密钥不是现在这把主密钥包装的人：行数等于 error 里的 `foreignKeys`，`master_key_id` 对得上 `foreignMasterKeys` 里的标识；停用的账户也会列出来，一并吊销。要所有取过本机密钥的人（`revoked_at IS NULL` 的全部），去掉 `AND k.master_key_id <> …` 那一句。在自己的 PostgreSQL 上，用应用角色或所有者角色连上库执行同一条 `SELECT`。
+- **保管与备份**：主密钥不在数据库里，也不在数据库的备份里——这正是它的用处：只拿到数据库或它的备份的人解不开本机密钥。所以要单独保管、单独备份（例如放进密码管理器或密钥管理系统，与数据库备份分开存放、分开授权）；恢复数据库备份时用同一把主密钥。
+- **不要随手更换**：换了主密钥，库里已有的本机密钥全部解不开，等于丢失（见下一条）。v0.1 没有在线轮换（用新的主密钥重新包装，DEF-065，M7）。
+- **丢失**：已保存的文档不受影响；取过本机密钥的人取不到了（500，启动日志的 error 报出把数），M4 起他们设备上用旧密钥加密的、还没同步的草稿随之解不开。处置：配置一把新的主密钥并重启，按"找出要吊销的人"用新的 `masterKeyId` 查出这些人，在管理界面的账户页逐个"吊销本机密钥"——吊销不需要旧的主密钥，下一版用新的主密钥包装。v0.1 没有批量作废的工具（DEF-066，M7）。
+- **泄露**：只有同时拿到数据库（或它的备份）才解得开本机密钥，再加上设备上的草稿才有用。处置：先换一把新的主密钥并重启（先吊销的话，下一版还是用泄露的那把包装），再按"找出要吊销的人"用新的 `masterKeyId` 查——列出的就是换之前取过本机密钥的所有人（换之前的当前密钥全是泄露的那把包装的），像丢失时一样逐个吊销（没有在线轮换：换了之后旧的都解不开，吊销之后的下一版用新的主密钥包装）；同时排查数据库与备份是否一并泄露。
+- **恢复数据库备份之后**：备份之后做过的吊销随恢复一起回退——被吊销的那一版连同它的包装结果回到库里，丢失的设备上的草稿又解得开了。要在恢复之前从当前的库导出这些吊销（审计页按动作"吊销本机密钥"筛选，或者查 `audit_events` 里的 `users.local_key_revoked`；恢复之后审计同样回退），恢复之后把这些人再吊销一次。运维手册在 M7（DEF-067）。
+- **已知局限**：吊销擦掉的是库里那一版的包装结果；PostgreSQL 回收旧版本的行（VACUUM）之前、WAL 归档与数据库备份的保留期之内，旧的包装结果仍在这些地方，拿到它们又拿到主密钥的人能解开旧的本机密钥——主密钥要与数据库、WAL 归档、备份分开保管。本机密钥的表违反约束时（正常运行中不会发生：只在手工改库、或者数据库服务器的时钟往回调时——吊销记下的是执行那一刻的时间，不早于被吊销的那一把的生成，见 ADR-019），PostgreSQL 服务器日志的 DETAIL 带出整行，其中有包装之后的密钥（密文，不是原始密钥）：数据库服务器的日志按机密对待。
 
 ### 保存的事务时限
 
@@ -186,6 +212,7 @@ NERVE_DB_OWNER_PASSWORD=… NERVE_DB_APP_PASSWORD=… psql -v ON_ERROR_STOP=1 \
 - 单实例：升级时先停应用、再迁移、再启动，期间服务不可用。不停机的滚动发布、退出前的摘流量（preStop）与多实例在 M7 随部署包决定（DEF-024）：滚动发布时，已经迁移的库比还在运行的旧实例新，旧实例的就绪探针会失败。
 - 测试环境的证书来自 Caddy 自带的 CA，浏览器不信任。
 - 镜像在本机与 CI 上构建，没有发布到镜像仓库。
+- 本机密钥的主密钥没有在线轮换，丢失或泄露时也没有批量作废的工具，只能逐个吊销（DEF-065、DEF-066，M7）；恢复备份之后要重做之后的吊销（DEF-067）。见"本机密钥的主密钥"。
 
 ## 排查
 

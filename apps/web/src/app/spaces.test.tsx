@@ -8,6 +8,8 @@ import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName } from '../shared/testing/people.test-support.ts'
+import { resize } from '../shared/testing/resize.test-support.ts'
+import { watchScrollIntoView } from '../shared/testing/scroll.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
@@ -607,6 +609,50 @@ describe('US-M2-06 成员页', () => {
     await waitFor(() => expect(document.activeElement).toBe(membersTitle()))
   })
 
+  it('空间管理员降低自己、刷新成员列表超过时限：确认框照常关掉，焦点交还给自己那一行的选择框（缓存里还能管理，它还在，在状态区下面）；说明写进状态区、状态区变高之后把它按最小距离滚回可视区域（共用的 keepFocusInView，再复核 D2）', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let finish: (response: Response) => void = () => {}
+      const api = loggedIn(MANAGER, {
+        [MEMBERS_KEY]: inTurn(() => json(200, membersList(true, [member(SESSION.user, 'admin'), member(BEN, 'admin')])), async () => new Promise<Response>((resolve) => {
+          finish = resolve
+        })),
+        [memberKey('PUT', SESSION.user)]: () => json(200, member(SESSION.user, 'viewer')),
+      })
+      renderApp(MEMBERS_PATH)
+      const { select, row } = await roleOf('艾米', 'amy')
+      select.focus()
+      saveRole(select, row, 'viewer')
+      const dialog = await screen.findByRole('dialog', { name: '把你自己的角色改为查看者？' })
+      const scrolled = watchScrollIntoView()
+      fireEvent.click(within(dialog).getByRole('button', { name: '修改' }))
+      // 前提：修改已经成功，刷新成员列表的请求已经发出、还没有回来
+      await waitFor(() => expect(api.requests.filter(request => request.key === MEMBERS_KEY)).toHaveLength(2))
+      await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS))
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+      const notice = await waitFor(() => {
+        const found = screen.getAllByRole('status').find(status => status.textContent.includes('成员列表还在刷新'))
+        expect(found).toBeDefined()
+        return found!
+      })
+      await waitFor(() => expect(document.activeElement).toBe(select))
+      // 前提：选择框排在状态区后面（文档顺序），状态区撑开时它被往下挤
+      expect(notice.compareDocumentPosition(select) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      act(() => resize(notice, 66))
+      expect(scrolled).toHaveBeenCalledTimes(1)
+      expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
+      expect(scrolled.mock.contexts.at(-1)).toBe(select)
+      // 刷新回来，"成员列表还在刷新"一句消失、状态区变矮：不再滚
+      await act(async () => finish(json(200, membersList(false, [member(SESSION.user, 'viewer'), member(BEN, 'admin')]))))
+      await waitFor(() => expect(notice).not.toHaveTextContent('成员列表还在刷新'))
+      act(() => resize(notice, 46))
+      expect(scrolled).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('移出：先确认；确认之后移出，列表刷新；这一行没了，焦点交给页面的标题（审查 B2）', async () => {
     let items = [member(SESSION.user, 'admin'), member(CAT, 'editor')]
     const api = loggedIn(MANAGER, {
@@ -644,6 +690,7 @@ describe('US-M2-06 成员页', () => {
     fireEvent.click(remove)
     const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
     const announced = watchAnnouncement('已经不在成员里了')
+    const scrolled = watchScrollIntoView()
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     // 说明等弹窗关掉之后才写进状态区（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下、焦点已经交还。说明里的人名同样用 PersonName（M2-P6 复核 M2）
@@ -657,6 +704,11 @@ describe('US-M2-06 成员页', () => {
     expect(screen.queryByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })).toBeNull()
     expect(screen.getByRole('button', { name: `移出 ${plainName('艾米', 'amy')}` })).toBeInTheDocument()
     await waitFor(() => expect(document.activeElement).toBe(membersTitle()))
+    // 状态区在成员表上方（共用的状态区开着 keepFocusInView）：说明写进去、状态区变高（jsdom 没有布局，这里当作它撑开了）时，
+    // 只滚排在它后面的焦点元素。这里焦点在页面的标题上（被移出的那一行已经不在），标题在状态区上方、挤不动，不滚——
+    // 用户这时已经滚走的话也不把页面拉回标题（再复核 D1）。焦点在状态区下面的情形见"降低自己、刷新超过时限"那一条
+    act(() => resize(notice, 46))
+    expect(scrolled).not.toHaveBeenCalled()
     expect(api.requests.filter(request => request.key === memberKey('DELETE', CAT))).toHaveLength(1)
 
     // 下一次打开确认的弹窗时，说明清掉

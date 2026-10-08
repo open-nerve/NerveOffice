@@ -267,9 +267,11 @@ export function isSamePage(lease: ObservedEditLease, sessionId: string, clientIn
  * （这一行已经是新的一代）、已经释放或收回都不动它：页面关闭时晚到的释放不能结束别人（或自己在别处）申请到的新的一代，
  * 也不能改掉先记下的结束原因。另要求是持有者本人（M3-P1 审查 A4，纵深防御）：令牌一旦经别的渠道外泄（例如代理的访问日志记下了请求头），
  * 能读这份文档的人也不能拿它反复打断别人的编辑；不要求是同一个登录——换过令牌的页面续上之前，要先释放自己那一代。
- * 到期、空闲、登录失效的租约照样可以释放：记下 released，就不再算异常结束
+ * 到期、空闲、登录失效的租约照样可以释放：记下 released，就不再算异常结束。
+ * 释放不了就一直释放不了（同一个令牌只属于一代，那一代的持有者不变，结束了也不会再开始）：释放据此先不加锁看一眼，释放不了的不取锁。
+ * 为真时这一行一定在（类型上收窄成调用方给的那一种行：先锁文档行、再锁住的那一行才能拿去结束）
  */
-export function releasableBy(lease: ObservedEditLease | undefined, token: string | undefined, userId: string): boolean {
+export function releasableBy<L extends ObservedEditLease>(lease: L | undefined, token: string | undefined, userId: string): lease is L {
   return lease !== undefined && token !== undefined && lease.endReason === null && lease.holderId === userId && editLeaseTokenMatches(token, lease.tokenDigest)
 }
 

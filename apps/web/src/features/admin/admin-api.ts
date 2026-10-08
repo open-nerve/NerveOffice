@@ -17,6 +17,7 @@ import type {
   InvitationListResponse,
   IssuedInvitation,
   IssuedPasswordReset,
+  RevokeLocalKeyResponse,
   TransferDocumentsRequest,
   TransferDocumentsResponse,
   UserSystemRole,
@@ -32,6 +33,7 @@ import {
   invitationSchema,
   issuedInvitationSchema,
   issuedPasswordResetSchema,
+  revokeLocalKeyResponseSchema,
   transferDocumentsResponseSchema,
 } from '@nerve-office/contracts'
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query'
@@ -92,6 +94,14 @@ export async function unlockLogin(id: string): Promise<AdminUser> {
 
 export async function issuePasswordReset(id: string): Promise<IssuedPasswordReset> {
   return apiRequest(`/api/admin/users/${id}/password-reset`, { method: 'POST', schema: issuedPasswordResetSchema })
+}
+
+/**
+ * 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：服务端擦掉当前的、换上下一版。响应分成这一次的结果（revoked：吊销了哪一版、换成了哪一版；
+ * 吊销的那一刻他还没有本机密钥时为 null）与账户的现状（account，Codex 评审 CX3）。原始的密钥不经过管理员
+ */
+export async function revokeLocalKey(id: string): Promise<RevokeLocalKeyResponse> {
+  return apiRequest(`/api/admin/users/${id}/local-key/revoke`, { method: 'POST', schema: revokeLocalKeyResponseSchema })
 }
 
 export function invitationsQueryOptions(filter: Omit<InvitationListQuery, 'cursor'>) {

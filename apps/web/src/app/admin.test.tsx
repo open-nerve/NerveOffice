@@ -148,10 +148,12 @@ describe('管理界面：账户', () => {
     })
     renderApp('/admin/users')
     const amy = await rowOf('amy')
-    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('艾米', 'amy')}`, `设为系统管理员 ${plainName('艾米', 'amy')}`, `生成重置链接 ${plainName('艾米', 'amy')}`])
+    // "吊销本机密钥"挨着"生成重置链接"，所有状态的账户都有（M3-P6 设计 §3.8）
+    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('艾米', 'amy')}`, `设为系统管理员 ${plainName('艾米', 'amy')}`, `生成重置链接 ${plainName('艾米', 'amy')}`, `吊销本机密钥 ${plainName('艾米', 'amy')}`])
     expect(within(amy).getByRole('button', { name: `停用 ${plainName('艾米', 'amy')}` })).toHaveTextContent('停用')
-    expect(within(await rowOf('root')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('管理员', 'root')}`, `取消系统管理员 ${plainName('管理员', 'root')}`, `生成重置链接 ${plainName('管理员', 'root')}`])
-    expect(within(await rowOf('cat')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`启用 ${plainName('凯特', 'cat')}`])
+    expect(within(amy).getByRole('button', { name: `吊销本机密钥 ${plainName('艾米', 'amy')}` })).toHaveTextContent('吊销本机密钥')
+    expect(within(await rowOf('root')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('管理员', 'root')}`, `取消系统管理员 ${plainName('管理员', 'root')}`, `生成重置链接 ${plainName('管理员', 'root')}`, `吊销本机密钥 ${plainName('管理员', 'root')}`])
+    expect(within(await rowOf('cat')).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`启用 ${plainName('凯特', 'cat')}`, `吊销本机密钥 ${plainName('凯特', 'cat')}`])
   })
 
   it('取消最后一个系统管理员：弹窗里说明原因，弹窗留着', async () => {
@@ -235,7 +237,7 @@ describe('管理界面：账户', () => {
     renderApp('/admin/users')
     const amy = await rowOf('amy')
     expect(within(amy).getByText(`登录已锁定，到 ${formatDateTime(LOCKED_UNTIL)} 解除`)).toBeInTheDocument()
-    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('艾米', 'amy')}`, `设为系统管理员 ${plainName('艾米', 'amy')}`, `生成重置链接 ${plainName('艾米', 'amy')}`, `解除锁定 ${plainName('艾米', 'amy')}`])
+    expect(within(amy).getAllByRole('button').map(button => button.getAttribute('aria-label'))).toEqual([`停用 ${plainName('艾米', 'amy')}`, `设为系统管理员 ${plainName('艾米', 'amy')}`, `生成重置链接 ${plainName('艾米', 'amy')}`, `吊销本机密钥 ${plainName('艾米', 'amy')}`, `解除锁定 ${plainName('艾米', 'amy')}`])
     const root = await rowOf('root')
     expect(within(root).queryByText(/登录已锁定/)).toBeNull()
     expect(within(root).queryByRole('button', { name: /^解除锁定/ })).toBeNull()

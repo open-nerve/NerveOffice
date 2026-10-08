@@ -5,6 +5,7 @@ import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
+import type { FakeLeaseServer } from './lease-server.test-support.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
@@ -13,11 +14,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
-import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS } from './edit-lease.ts'
+import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
+import { fakeLeaseServer, servedToken } from './lease-server.test-support.ts'
 import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { channelNameOf, issuedRequestLockNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
@@ -39,7 +41,7 @@ function snapshotOf(value: string): string {
 const LOADED = { snapshot: snapshotOf('载入的'), revision: 3 }
 const TOKEN = 'L'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null }
 const SAVED: SaveContentResponse = { revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }
 const DENIED = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
 const GONE = new ApiError(404, 'NOT_FOUND', '不存在')
@@ -124,8 +126,8 @@ function fakeFactory() {
           return () => lifecycleListeners.delete(listener)
         },
         isCellEditing: () => !fake.disposed && fake.cellEditing,
-        hasPendingCellInput: () => !fake.disposed && fake.cellEditing,
-        onCellEditingChange: () => () => {},
+        uncommittedInput: () => !fake.disposed && fake.cellEditing ? 'pending' : 'none',
+        onUncommittedInputChange: () => () => {},
         commitCellEditing: vi.fn(async () => {
           if (fake.cellEditing) {
             fake.cellEditing = false
@@ -2544,7 +2546,10 @@ async function settledNow(promise: Promise<unknown>): Promise<boolean> {
   return done
 }
 
-/** 本浏览器里的另一个标签页抢走这份文档的锁（它取得了服务端批准的新的一代） */
+/**
+ * 本浏览器里的另一个标签页抢走这份文档的锁，不改服务端：本页这一代照旧是当前的（抢的一方拿着旧的批准——它的申请回包迟到了，或者载入的是
+ * 旧版本的页面，M3-P6 设计 §3.13）
+ */
 async function stealFromAnotherTab(context: ReturnType<typeof setup>): Promise<HeldLock> {
   const taken = await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).steal()
   await settle()
@@ -2556,8 +2561,22 @@ function leaseLost(reason: string): ApiError {
   return new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason } })
 }
 
-describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () => {
-  it('服务端批准之后才拿锁：申请被占用时不碰锁；锁空着时进入编辑就拿（ifAvailable），本浏览器里看得到', async () => {
+/** 被本人接管（EDIT_LEASE_LOST 的 taken_over、forced 为假）：本页这一代被自己在别的页面上接手之后，续租、保存得到它 */
+const TAKEN_OVER = new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'taken_over', forced: false } })
+
+/**
+ * 本浏览器里的另一个标签页以本人接管换了代（服务端：本页这一代被接管，续租从此得到 taken_over）、核对过自己那一代之后抢走这份文档的锁
+ */
+async function takenOverByAnotherTab(context: ReturnType<typeof setup>): Promise<HeldLock> {
+  context.editLease.renew.mockRejectedValue(TAKEN_OVER)
+  return stealFromAnotherTab(context)
+}
+
+/** 续上时申请到的下一代 */
+const NEXT_TOKEN = 'N'.repeat(43)
+
+describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁；争用由服务端裁决，M3-P6 设计 §3.13）', () => {
+  it('服务端批准之后才拿锁：申请被占用时不碰锁；锁空着时进入编辑就拿（ifAvailable），不核对（不多发续租），本浏览器里看得到', async () => {
     const context = setup({ editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) }, api: { editStatus: async () => status(3, AMY_EDITING) } })
     const other = await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
     await opened(context)
@@ -2571,20 +2590,149 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     await context.mode.enter()
     expect(modeOf(context.mode).kind).toBe('editing')
     expect(context.browser.holderOf(LOCK)).toBe('this')
+    expect(context.editLease.renew).not.toHaveBeenCalled()
   })
 
-  it('被本浏览器的别的标签页占着：服务端批给了本页（那边的租约必然已经失效），就抢——那边的句柄随即兑现 stolen；?edit=new 直接进入时也一样', async () => {
+  it('被本浏览器的别的标签页占着：先向服务端核对（续租一次）本页这一代仍是当前的，是才抢——那边的句柄随即兑现 stolen；?edit=new 直接进入时也一样', async () => {
     const context = setup()
     const other = await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
     await editing(context)
+    expect(context.editLease.renew).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN, 0)
     expect(context.browser.holderOf(LOCK)).toBe('this')
     expect(await settledNow(other?.stolen ?? Promise.reject(new Error('没拿到')))).toBe(true)
 
     const created = setup()
     const elsewhere = await sameBrowserFor(DOCUMENT_ID, created.browser.tab('other')).tryHold()
     await created.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })
+    expect(created.editLease.renew).toHaveBeenCalledOnce()
     expect(created.browser.holderOf(LOCK)).toBe('this')
     expect(await settledNow(elsewhere?.stolen ?? Promise.reject(new Error('没拿到')))).toBe(true)
+  })
+
+  it('被占着、核对得知本页这一代已经不是当前的（服务端批准之后、回包到达之前又换了代，Codex 评审 CX2）：不抢、不释放、不进入，回到阅读——随即读的编辑状态说本浏览器的另一个标签页在编辑；那一代之后不再续租', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(TAKEN_OVER) } })
+    const other = await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    await opened(context)
+    context.api.editStatus.mockResolvedValue(status(3, SELF_EDITING))
+    await context.mode.enter()
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, holder: { sameUser: true }, selfHolder: 'this-browser', takeover: undefined, notice: undefined, interruption: undefined })
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(await settledNow(other?.stolen ?? Promise.reject(new Error('没拿到')))).toBe(false)
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    await context.time.advance(HEARTBEAT_MS * 3)
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('?edit=new 直接进入时被占着、核对得知这一代已被取代：照常以只读打开（不进入），之后的检查说明现在谁在编辑', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(TAKEN_OVER) }, api: { editStatus: async () => status(3, SELF_EDITING) } })
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    expect(await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })).toEqual({ kind: 'opened', entered: false, damaged: false })
+    await settle()
+    expect(readingOf(context.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'this-browser', notice: undefined })
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
+    expect(context.editLease.release).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['断网', new NetworkError('断网')],
+    ['服务端出错', new ApiError(503, 'SERVICE_UNAVAILABLE', '服务暂时不可用')],
+  ])('被占着、核对不了（%s）：不抢，尽力释放这一代，回到阅读、说明没能进入编辑（可以再试）', async (_case, failure) => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(failure) } })
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    await opened(context)
+    await context.mode.enter()
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, notice: { kind: 'enter-failed', error: failure } })
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
+    expect(context.hooks.writeProblem).not.toHaveBeenCalled()
+  })
+
+  it('被占着、核对得到登录已过期：不抢，交给页面确认会话（只一次），回到阅读、说明没能进入编辑', async () => {
+    const expired = new ApiError(401, 'SESSION_EXPIRED', '登录已过期')
+    const context = setup({ editLease: { renew: async () => Promise.reject(expired) } })
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    await opened(context)
+    await context.mode.enter()
+    expect(readingOf(context.mode).notice).toEqual({ kind: 'enter-failed', error: expired })
+    expect(context.hooks.writeProblem).toHaveBeenCalledExactlyOnceWith(expired)
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+  })
+
+  it('被占着、核对时得知本页过旧（CLIENT_OUTDATED）：不抢，回到阅读、不再给"编辑"（与申请得到它一样）', async () => {
+    const outdated = new ApiError(409, 'CLIENT_OUTDATED', '页面的版本过旧', { details: { reason: 'format' } })
+    const context = setup({ editLease: { renew: async () => Promise.reject(outdated) } })
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    await opened(context)
+    await context.mode.enter()
+    expect(readingOf(context.mode)).toMatchObject({ blocked: 'client-outdated', notice: undefined })
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+  })
+
+  it('被占着、核对得知这一代自己失效了、续不上（编辑权被收回）：交给租约已有的失效处理——不抢、不进入，回到阅读并照服务端说没能进入编辑；不释放、之后不续租（复验 E2）', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(leaseLost('revoked')) } })
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    await opened(context)
+    await context.mode.enter()
+    await settle()
+    expect(readingOf(context.mode).notice).toEqual({ kind: 'enter-lost', loss: { kind: 'lease', reason: 'revoked' } })
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
+    await context.time.advance(HEARTBEAT_MS * 3)
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('?edit=new 直接进入时被占着、核对得知这一代自己失效了、续不上（编辑权被收回）：照常以只读打开，照服务端说没能进入编辑（复验 E2）', async () => {
+    const context = setup({ editLease: { renew: async () => Promise.reject(leaseLost('revoked')) } })
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    expect(await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })).toEqual({ kind: 'opened', entered: false, damaged: false })
+    await settle()
+    expect(readingOf(context.mode).notice).toEqual({ kind: 'enter-lost', loss: { kind: 'lease', reason: 'revoked' } })
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(context.editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('被占着、核对得知这一代自己失效了（按时间到期）、交给租约续上了：续上的回包同样说明不了现在——不抢，尽力释放续上的那一代，回到阅读、说明没能进入编辑（可以再试）（复验 E2）', async () => {
+    const context = setup()
+    context.editLease.renew.mockRejectedValueOnce(leaseLost('expired'))
+    context.editLease.acquire.mockResolvedValueOnce(ACQUIRED).mockResolvedValueOnce({ ...ACQUIRED, token: NEXT_TOKEN, writeEpoch: 8 })
+    await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    await opened(context)
+    await context.mode.enter()
+    await settle()
+    expect(context.editLease.acquire).toHaveBeenCalledTimes(2)
+    expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, NEXT_TOKEN)
+    expect(readingOf(context.mode)).toMatchObject({ canEdit: true, notice: { kind: 'enter-failed', error: undefined } })
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
+  })
+
+  it.each([
+    ['页面关闭（pagehide）', (context: ReturnType<typeof setup>) => context.mode.releaseOnHide()],
+    ['卸载', (context: ReturnType<typeof setup>) => context.mode.dispose()],
+  ])('被占着、核对期间%s：结论回来时不抢、不往下进入（这一代尽力释放了）', async (_case, leave) => {
+    const answer = deferred<RenewedEditLease>()
+    const context = setup({ editLease: { renew: async () => answer.promise } })
+    const other = await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).tryHold()
+    await opened(context)
+    const entering = context.mode.enter()
+    await settle()
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    leave(context)
+    expect(context.editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
+    answer.resolve(RENEWED)
+    await entering
+    await settle()
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(await settledNow(other?.stolen ?? Promise.reject(new Error('没拿到')))).toBe(false)
+    expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
   })
 
   it('拿锁期间这一代已经失效（进入的途中续租得知编辑权被收回）：拿到的锁随即放掉——回到阅读的这一页不一直持有本机锁（审查 B7 的 M05）', async () => {
@@ -2622,6 +2770,23 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     await settle()
     expect(modeOf(context.mode).kind).toBe('reading')
     expect(context.browser.holderOf(LOCK)).toBeUndefined()
+  })
+
+  it('退出编辑、释放在途时锁被本浏览器的另一个标签页抢走：核对得知这一代在本页已经结束（释放了，不发续租）——照常退出、回到阅读，不说被接管', async () => {
+    const answer = deferred<undefined>()
+    const context = setup({ editLease: { release: async () => answer.promise } })
+    await editing(context)
+    const exiting = context.mode.exit()
+    await settle()
+    expect(context.editLease.release).toHaveBeenCalledOnce()
+    await stealFromAnotherTab(context)
+    expect(context.editLease.renew).not.toHaveBeenCalled()
+    answer.resolve(undefined)
+    await exiting
+    await settle()
+    expect(modeOf(context.mode).kind).toBe('reading')
+    expect(readingOf(context.mode).notice).toBeUndefined()
+    expect(context.browser.holderOf(LOCK)).toBe('other')
   })
 
   it('退出编辑没有成功（保存失败、留在编辑）：锁留着', async () => {
@@ -2697,15 +2862,16 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     expect(release).toHaveBeenCalledOnce()
   })
 
-  it('编辑时锁被本浏览器的另一个标签页抢走：立即失去编辑权（taken-over、this-browser），不再问服务端（不续租、不放、不再申请）；本页的修改给副本与放弃', async () => {
+  it('编辑时锁被本浏览器的另一个标签页抢走：先核对（续租一次）——得知本页这一代被本人接管才失去编辑权（taken-over、this-browser），之后不续租、不放、不再申请；本页的修改给副本与放弃', async () => {
     const context = setup()
     await editing(context)
     context.factory.last().edit('甲')
-    await stealFromAnotherTab(context)
+    await takenOverByAnotherTab(context)
     expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'taken-over', where: 'this-browser' }, unsaved: true, readable: true, checking: false })
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('甲') })
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
     await context.time.advance(HEARTBEAT_MS * 6)
-    expect(context.editLease.renew).not.toHaveBeenCalled()
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
     expect(context.editLease.release).not.toHaveBeenCalled()
     expect(context.editLease.acquire).toHaveBeenCalledOnce()
     expect(context.mode.hasUnsavedWork()).toBe(true)
@@ -2714,15 +2880,202 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     expect(readingOf(context.mode)).toMatchObject({ canEdit: true, notice: { kind: 'copied' } })
   })
 
-  it('被抢时没有修改：失去编辑权，修改都已保存（不给副本）', async () => {
+  it('被抢、得知被接管时没有修改：失去编辑权，修改都已保存（不给副本）', async () => {
     const context = setup()
     await editing(context)
-    await stealFromAnotherTab(context)
+    await takenOverByAnotherTab(context)
     expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'taken-over', where: 'this-browser' }, unsaved: false })
     expect(context.mode.hasUnsavedWork()).toBe(false)
   })
 
-  it('退出编辑的过程中（还没释放）被抢：同样转入失去编辑权，不再接着退出、不释放', async () => {
+  it('编辑时锁被抢走、核对得知本页这一代仍是当前的（抢的一方拿着旧的批准）：把锁拿回来、照常编辑——抢的一方的句柄随即兑现 stolen；拿回来的那一把被抢同样先核对', async () => {
+    const context = setup()
+    await editing(context)
+    const stale = await stealFromAnotherTab(context)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+    expect(await settledNow(stale.stolen)).toBe(true)
+    context.factory.last().edit('乙')
+    await context.mode.save()
+    expect(context.api.save).toHaveBeenCalledOnce()
+    await takenOverByAnotherTab(context)
+    expect(context.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
+  })
+
+  it.each([
+    // 被别的一代取代了（令牌对不上服务端这一行）：放弃这一代
+    ['被强制接管', new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'taken_over', forced: true } }), { kind: 'forced' }, true],
+    ['换了代（replaced：到期之后被申请走，抢走锁的那一页现在是当前的）', leaseLost('replaced'), { kind: 'taken-over', where: 'this-browser' }, true],
+    ['被接管、方式认不出（不猜是不是本浏览器的标签页）', leaseLost('taken_over'), { kind: 'lease', reason: 'taken_over' }, true],
+    // 这一代自己失效了、续不上（复验 E2）：交给租约已有的失效处理，照它说
+    ['编辑权被收回', leaseLost('revoked'), { kind: 'lease', reason: 'revoked' }, true],
+    ['不能编辑了（403）', DENIED, { kind: 'denied', error: DENIED }, true],
+    ['读不到了（404）', GONE, { kind: 'not-found', error: GONE }, false],
+    ['原因认不出（不猜）', new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: {} }), { kind: 'lease', reason: undefined }, true],
+  ] as const)('编辑时锁被抢走、核对得知%s：照服务端说的失去编辑权（不再续租、不续上、不释放）', async (_case, failure, loss, readable) => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('甲')
+    context.editLease.renew.mockRejectedValue(failure)
+    await stealFromAnotherTab(context)
+    await settle()
+    expect(lostOf(context.mode)).toMatchObject({ loss, readable })
+    await context.time.advance(HEARTBEAT_MS * 3)
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('编辑时锁被抢走、核对得知这一代按时间到期了（令牌仍是服务端这一行的）、续上时得知别处保存过更新的版本：照租约已有的处理失去编辑权（newer），不说本浏览器的另一个标签页接手了（复验 E2）', async () => {
+    const context = setup()
+    await editing(context)
+    context.factory.last().edit('甲')
+    context.editLease.renew.mockRejectedValueOnce(leaseLost('expired'))
+    context.editLease.acquire.mockResolvedValueOnce({ ...ACQUIRED, revision: 6, token: NEXT_TOKEN, writeEpoch: 9 })
+    await stealFromAnotherTab(context)
+    await settle()
+    expect(context.editLease.acquire).toHaveBeenCalledTimes(2)
+    expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'newer' }, unsaved: true, readable: true })
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+  })
+
+  it('编辑时锁被抢走、核对一直没回来（核对的请求同样没有时限，DEF-041）：被抢之后发出的心跳续租成功同样把锁拿回来（复验 E1）；核对之后才回来，不再算', async () => {
+    const reply = deferred<RenewedEditLease>()
+    const context = setup()
+    await editing(context)
+    context.editLease.renew.mockImplementationOnce(async () => reply.promise)
+    const stale = await stealFromAnotherTab(context)
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(modeOf(context.mode).kind).toBe('editing')
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+    expect(await settledNow(stale.stolen)).toBe(true)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    reply.resolve(RENEWED)
+    await settle()
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+    expect(context.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(modeOf(context.mode).kind).toBe('editing')
+  })
+
+  it('编辑时锁被抢走、核对不了（断网）：照常编辑、照常保存，不把自己判为失效、不抢；这期间不持有锁（不回应交接请求）；之后的心跳续租成功就把锁拿回来', async () => {
+    const browser = fakeBrowser()
+    const context = setup({ browser, tab: 'this' })
+    await editing(context)
+    context.editLease.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    const stale = await stealFromAnotherTab(context)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(browser.holderOf(LOCK)).toBe('other')
+    expect(await settledNow(stale.stolen)).toBe(false)
+    // 不回应交接请求：这期间别的标签页看到的是抢走锁的那一页
+    sameBrowserFor(DOCUMENT_ID, browser.tab('B')).post({ type: 'handover-request', requestId: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', documentId: DOCUMENT_ID, from: '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb', userId: AMY.id })
+    await settle()
+    expect(browser.posted(channelNameOf(DOCUMENT_ID))).toHaveLength(1)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    // 照常保存（服务端照样是唯一的权威：这一代不是当前的话保存会被拒）
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    expect(context.api.save).toHaveBeenCalledOnce()
+    // 下一次心跳续租成功：这一代此刻是当前的，把锁拿回来
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(browser.holderOf(LOCK)).toBe('this')
+    expect(await settledNow(stale.stolen)).toBe(true)
+    expect(modeOf(context.mode).kind).toBe('editing')
+  })
+
+  it('编辑时锁被抢走、核对不了，之后的心跳得知被本人接管：失去编辑权——说本浏览器的另一个标签页接手了（抢走锁的正是它，不说另一台设备）', async () => {
+    const context = setup()
+    await editing(context)
+    context.editLease.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    await stealFromAnotherTab(context)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    context.editLease.renew.mockRejectedValue(TAKEN_OVER)
+    await context.time.advance(HEARTBEAT_MS)
+    expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+  })
+
+  it('编辑时锁被抢走、核对不了，之后的心跳得知换了代：照心跳已有的处理续上——被自己的别的页面占着就失去编辑权（别处正在编辑），不另外抢锁', async () => {
+    const heldBySelf = new ApiError(409, 'EDIT_LEASE_HELD', '你在别处正在编辑', { details: { ...SELF_EDITING, canTakeOver: false, request: null }, serverTime: Date.parse(ANSWERED_AT) })
+    const context = setup()
+    await editing(context)
+    context.editLease.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    await stealFromAnotherTab(context)
+    context.editLease.renew.mockRejectedValue(leaseLost('replaced'))
+    context.editLease.acquire.mockRejectedValue(heldBySelf)
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.editLease.acquire).toHaveBeenCalledTimes(2)
+    expect(lostOf(context.mode).loss).toMatchObject({ kind: 'held', holder: { sameUser: true } })
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+  })
+
+  it('编辑时锁被抢走、核对不了，之后的心跳得知换了代、续上了（没人占着）：续上的回包同样说明不了现在——新的一代下一次续租成功时才把锁拿回来', async () => {
+    const context = setup()
+    await editing(context)
+    context.editLease.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    await stealFromAnotherTab(context)
+    context.editLease.renew.mockRejectedValueOnce(leaseLost('replaced'))
+    context.editLease.acquire.mockResolvedValueOnce({ ...ACQUIRED, token: NEXT_TOKEN, writeEpoch: 8 })
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.editLease.acquire).toHaveBeenCalledTimes(2)
+    expect(modeOf(context.mode).kind).toBe('editing')
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, NEXT_TOKEN, 0)
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+    expect(modeOf(context.mode).kind).toBe('editing')
+  })
+
+  it.each([
+    ['退出编辑', async (context: ReturnType<typeof setup>) => context.mode.exit(), 'reading'],
+    ['页面关闭（pagehide）', async (context: ReturnType<typeof setup>) => context.mode.releaseOnHide(), 'editing'],
+    ['卸载', async (context: ReturnType<typeof setup>) => context.mode.dispose(), 'editing'],
+  ] as const)('编辑时锁被抢走、核对期间%s：结论回来时不拿回锁、不转为失去编辑权', async (_case, leave, after) => {
+    for (const answer of [RENEWED, TAKEN_OVER]) {
+      const reply = deferred<RenewedEditLease>()
+      const context = setup()
+      await editing(context)
+      context.editLease.renew.mockImplementationOnce(async () => reply.promise)
+      const stale = await stealFromAnotherTab(context)
+      expect(context.editLease.renew).toHaveBeenCalledOnce()
+      await leave(context)
+      if (answer === RENEWED)
+        reply.resolve(RENEWED)
+      else
+        reply.reject(answer)
+      await settle()
+      expect(modeOf(context.mode).kind).toBe(after)
+      expect(context.browser.holderOf(LOCK)).toBe('other')
+      expect(await settledNow(stale.stolen)).toBe(false)
+    }
+  })
+
+  it('编辑时锁被抢走、核对不了，等心跳期间页面关闭（pagehide，保存在途：不释放、照常心跳）：之后的心跳续租成功也不拿回锁', async () => {
+    const context = setup()
+    await editing(context)
+    context.editLease.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    await stealFromAnotherTab(context)
+    const reply = deferred<SaveContentResponse>()
+    context.api.save.mockImplementationOnce(async () => reply.promise)
+    context.factory.last().edit('甲')
+    const saving = context.mode.save()
+    await settle()
+    context.mode.releaseOnHide()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    reply.resolve(SAVED)
+    await saving
+  })
+
+  it('退出编辑的过程中（还没释放）被抢、核对得知被接管：同样转入失去编辑权，不再接着退出、不释放', async () => {
     const reply = deferred<SaveContentResponse>()
     const context = setup()
     await editing(context)
@@ -2731,7 +3084,7 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     const exiting = context.mode.exit()
     await settle()
     expect(modeOf(context.mode)).toEqual({ kind: 'exiting', cause: 'exit' })
-    await stealFromAnotherTab(context)
+    await takenOverByAnotherTab(context)
     expect(modeOf(context.mode).kind).toBe('losing')
     reply.reject(leaseLost('replaced'))
     await exiting
@@ -2771,7 +3124,9 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     handles[0]?.steal()
     await settle()
     expect(modeOf(context.mode).kind).toBe('editing')
-    // 这一次的那一把被抢才算
+    expect(context.editLease.renew).not.toHaveBeenCalled()
+    // 这一次的那一把被抢才算（核对得知被接管）
+    context.editLease.renew.mockRejectedValue(TAKEN_OVER)
     handles[1]?.steal()
     await settle()
     expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
@@ -2783,38 +3138,497 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁）', () =
     await context.mode.exit()
     await stealFromAnotherTab(context)
     expect(modeOf(context.mode).kind).toBe('reading')
+    expect(context.editLease.renew).not.toHaveBeenCalled()
   })
 
-  it('进入编辑的途中被抢（申请之后、取内容时）：放弃进入，留在阅读并说明；不释放（那一代已被取代），之后也不续租', async () => {
+  it('进入编辑的途中被抢（申请之后、取内容时）、核对得知被接管：放弃进入，留在阅读并说明；不释放（那一代已被取代），之后也不续租', async () => {
     const fetching = deferred<LoadedContent>()
     const context = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision: 5 }) }, api: { contentIfChanged: async () => fetching.promise } })
     await opened(context)
     const entering = context.mode.enter()
     await settle()
     expect(context.browser.holderOf(LOCK)).toBe('this')
-    await stealFromAnotherTab(context)
+    await takenOverByAnotherTab(context)
     expect(readingOf(context.mode).notice).toEqual({ kind: 'enter-lost', loss: { kind: 'taken-over', where: 'this-browser' } })
     fetching.resolve({ snapshot: snapshotOf('服务端的'), revision: 5 })
     await entering
     expect(modeOf(context.mode).kind).toBe('reading')
     expect(context.factory.created.map(fake => fake.access)).toEqual(['read'])
     await context.time.advance(HEARTBEAT_MS * 3)
-    expect(context.editLease.renew).not.toHaveBeenCalled()
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
     expect(context.editLease.release).not.toHaveBeenCalled()
   })
 
-  it('以可编辑重建的过程中被抢：建好之后随即失去编辑权', async () => {
+  it('以可编辑重建的过程中被抢、核对得知被接管：建好之后随即失去编辑权', async () => {
     const context = setup()
     await opened(context)
     const gate = context.factory.holdNext()
     const entering = context.mode.enter()
     await settle()
-    await stealFromAnotherTab(context)
+    await takenOverByAnotherTab(context)
     gate.release()
     await entering
     await settle()
     expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
     expect(context.editLease.release).not.toHaveBeenCalled()
+  })
+})
+
+describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3.13，Codex 评审 CX2）', () => {
+  const TAB_A = PAGE_ID
+  const TAB_B = '0199a2c4-1f2e-7a3b-8c4d-00000000bbbb'
+  const TAB_C = '0199a2c4-1f2e-7a3b-8c4d-00000000cccc'
+
+  /**
+   * 同一个浏览器里的一页（共用锁、频道与服务端；各有各的时钟）：编辑状态照服务端说——有人持有这一代时是自己在编辑（几页都是艾米）。
+   * replies 给出时，这一页申请的回包在服务端提交之后等它放行再交回（迟到）
+   */
+  function tab(server: FakeLeaseServer, browser: FakeBrowser, name: string, clientInstanceId: string, replies?: Promise<void>) {
+    const editStatus = async (): Promise<FetchedEditStatus> => {
+      const current = server.current()
+      return status(3, current === undefined || current.released ? null : SELF_EDITING)
+    }
+    const acquire: EditLeaseApi['acquire'] = async (documentId, page, options) => {
+      const answer = await server.api.acquire(documentId, page, options)
+      await replies
+      return answer
+    }
+    return setup({ browser, tab: name, clientInstanceId, editLease: { ...server.api, acquire }, api: { editStatus } })
+  }
+
+  it('两页：A 的申请（第 1 代）已经提交、回包迟到，B 点"在此编辑"取得第 2 代、拿锁、编辑；A 的回包到了——锁被 B 占着，核对得知第 1 代已被接管：不抢、不释放，回到阅读（本浏览器的另一个标签页在编辑，照常给"在此编辑"）；B 照常编辑、保存', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const reply = deferred<void>()
+    const a = tab(server, browser, 'A', TAB_A, reply.promise)
+    const b = tab(server, browser, 'B', TAB_B)
+    await opened(a)
+    const entering = a.mode.enter()
+    await settle()
+    // 服务端已经批给了 A（第 1 代），回包还没到：A 没拿锁、没心跳
+    expect(server.current()).toMatchObject({ epoch: 1, page: TAB_A })
+    expect(modeOf(a.mode).kind).toBe('entering')
+    expect(browser.holderOf(LOCK)).toBeUndefined()
+
+    await opened(b)
+    expect(readingOf(b.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'elsewhere' })
+    await b.mode.takeOver()
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
+    expect(browser.holderOf(LOCK)).toBe('B')
+    b.factory.last().edit('B 的修改')
+
+    reply.resolve()
+    await entering
+    await settle()
+    // A：核对（续租第 1 代）得知已被接管，不抢、不释放、不进入
+    expect(a.editLease.renew).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, servedToken(1), 0)
+    expect(a.editLease.renew.mock.settledResults[0]).toMatchObject({ type: 'rejected', value: { code: 'EDIT_LEASE_LOST', details: { reason: 'taken_over', forced: false } } })
+    expect(a.editLease.release).not.toHaveBeenCalled()
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(readingOf(a.mode)).toMatchObject({ canEdit: true, holder: { sameUser: true }, selfHolder: 'this-browser', takeover: undefined, notice: undefined })
+    expect(a.factory.created.map(fake => fake.access)).toEqual(['read'])
+    // B 不受影响：照常编辑，保存带着第 2 代
+    expect(modeOf(b.mode).kind).toBe('editing')
+    await b.mode.save()
+    expect(b.api.save).toHaveBeenCalledOnce()
+    expect(b.api.save.mock.calls[0]?.[3]).toEqual({ token: server.current()?.token, writeEpoch: 2 })
+    // 之后：A 那一代不再续租；B 照常心跳（续租成功）、锁一直在 B
+    await a.time.advance(HEARTBEAT_MS * 3)
+    await b.time.advance(HEARTBEAT_MS * 3)
+    expect(a.editLease.renew).toHaveBeenCalledOnce()
+    expect(b.editLease.renew).toHaveBeenCalledTimes(3)
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B, released: false })
+  })
+
+  it('三页再次换代：A 第 1 代、B 第 2 代的回包都迟到，C 取得第 3 代、拿锁编辑；A、B 的回包先后到——都核对得知已被取代（第 1 代被换掉、第 2 代被接管），不抢、不释放，C 照常编辑', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const replyA = deferred<void>()
+    const replyB = deferred<void>()
+    const a = tab(server, browser, 'A', TAB_A, replyA.promise)
+    const b = tab(server, browser, 'B', TAB_B, replyB.promise)
+    const c = tab(server, browser, 'C', TAB_C)
+    await opened(a)
+    await opened(b)
+    await opened(c)
+    const aEntering = a.mode.enter()
+    await settle()
+    expect(server.current()).toMatchObject({ epoch: 1, page: TAB_A })
+    await b.time.advance(READING_CHECK_INTERVAL_MS)
+    const bTaking = b.mode.takeOver()
+    await settle()
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
+    await c.time.advance(READING_CHECK_INTERVAL_MS)
+    await c.mode.takeOver()
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_C })
+    expect(modeOf(c.mode).kind).toBe('editing')
+    expect(browser.holderOf(LOCK)).toBe('C')
+
+    replyA.resolve()
+    await aEntering
+    await settle()
+    expect(readingOf(a.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'this-browser' })
+    replyB.resolve()
+    await bTaking
+    await settle()
+    expect(readingOf(b.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'this-browser', takeover: undefined })
+    // 核对的回答：第 1 代被第 2 代接管之后又换过一代（replaced），第 2 代被第 3 代接管（taken_over）——两页都不抢、不释放
+    expect(a.editLease.renew).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, servedToken(1), 0)
+    expect(a.editLease.renew.mock.settledResults[0]).toMatchObject({ type: 'rejected', value: { code: 'EDIT_LEASE_LOST', details: { reason: 'replaced' } } })
+    expect(b.editLease.renew).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, servedToken(2), 0)
+    expect(b.editLease.renew.mock.settledResults[0]).toMatchObject({ type: 'rejected', value: { code: 'EDIT_LEASE_LOST', details: { reason: 'taken_over', forced: false } } })
+    expect(a.editLease.release).not.toHaveBeenCalled()
+    expect(b.editLease.release).not.toHaveBeenCalled()
+    expect(browser.holderOf(LOCK)).toBe('C')
+    expect(modeOf(c.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_C, released: false })
+    c.factory.last().edit('C 的修改')
+    await c.mode.save()
+    expect(c.api.save.mock.calls[0]?.[3]).toEqual({ token: server.current()?.token, writeEpoch: 3 })
+  })
+
+  it('三页再次换代（交接照常）：A 第 1 代的回包迟到；B 点"在此编辑"取得第 2 代、拿锁；C 点"在此编辑"——请 B 先保存再交出，以本人接管取得第 3 代；A 的回包到了：锁在 C，核对得知第 1 代已被换掉，不抢、不释放；B 回到阅读（已交给本浏览器的另一个标签页），C 照常编辑', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const reply = deferred<void>()
+    const a = tab(server, browser, 'A', TAB_A, reply.promise)
+    const b = tab(server, browser, 'B', TAB_B)
+    const c = tab(server, browser, 'C', TAB_C)
+    await opened(a)
+    const entering = a.mode.enter()
+    await settle()
+    await opened(b)
+    await b.mode.takeOver()
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
+    expect(browser.holderOf(LOCK)).toBe('B')
+    b.factory.last().edit('B 的修改')
+
+    await opened(c)
+    expect(readingOf(c.mode).selfHolder).toBe('this-browser')
+    await c.mode.takeOver()
+    expect(modeOf(c.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_C })
+    expect(browser.holderOf(LOCK)).toBe('C')
+    expect(readingOf(b.mode).notice).toEqual({ kind: 'handed-over-tab' })
+    expect(b.api.save).toHaveBeenCalledOnce()
+    // C 拿锁时锁空着（B 交出之后放了锁）：不核对
+    expect(c.editLease.renew).not.toHaveBeenCalled()
+
+    reply.resolve()
+    await entering
+    await settle()
+    expect(readingOf(a.mode)).toMatchObject({ holder: { sameUser: true }, selfHolder: 'this-browser', notice: undefined })
+    expect(a.editLease.renew).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, servedToken(1), 0)
+    expect(a.editLease.renew.mock.settledResults[0]).toMatchObject({ type: 'rejected', value: { code: 'EDIT_LEASE_LOST', details: { reason: 'replaced' } } })
+    expect(a.editLease.release).not.toHaveBeenCalled()
+    expect(browser.holderOf(LOCK)).toBe('C')
+    expect(modeOf(c.mode).kind).toBe('editing')
+    expect(readingOf(b.mode).notice).toEqual({ kind: 'handed-over-tab' })
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_C, released: false })
+  })
+
+  it('核对的回包同样迟到（服务端处理时还是当前的、到达之前又换了代）：至多多抢一次——被抢的一方核对之后拿回来，迟到的一方下一次核对就得知已被取代，不会来回抢个不停', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    const b = tab(server, browser, 'B', TAB_B)
+    await editing(a)
+    expect(server.current()).toMatchObject({ epoch: 1, page: TAB_A })
+    // 旧版本的页面（不认识这个协议、不核对）抢走了 A 的锁；A 核对，服务端处理时第 1 代还是当前的，回包却迟到
+    const verdict = deferred<void>()
+    a.editLease.renew.mockImplementationOnce(async (documentId, token, idleSeconds) => {
+      const answer = await server.api.renew(documentId, token, idleSeconds)
+      await verdict.promise
+      return answer
+    })
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    expect(a.editLease.renew).toHaveBeenCalledOnce()
+    expect(browser.holderOf(LOCK)).toBe('old')
+    // B 点"在此编辑"：锁在本浏览器（旧页面拿着），请它交出、没有回应，3 秒之后本人接管（第 2 代），核对过自己是当前的才抢
+    await opened(b)
+    const taking = b.mode.takeOver()
+    await settle()
+    await b.time.advance(EDIT_TAB_HANDOVER_ACK_MS)
+    await taking
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(await settledNow(old.stolen)).toBe(true)
+
+    // A 迟到的回包说第 1 代是当前的：A 抢了一次；B 核对（第 2 代当前）拿回来；A 再核对得知第 1 代已被接管，失去编辑权
+    verdict.resolve()
+    await settle()
+    await settle()
+    expect(lostOf(a.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(a.editLease.renew).toHaveBeenCalledTimes(2)
+    // 之后锁一直在 B：谁也不再抢
+    const renewalsOfB = b.editLease.renew.mock.calls.length
+    await a.time.advance(HEARTBEAT_MS * 3)
+    await b.time.advance(HEARTBEAT_MS * 3)
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(a.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(b.editLease.renew).toHaveBeenCalledTimes(renewalsOfB + 3)
+    expect(modeOf(b.mode).kind).toBe('editing')
+  })
+
+  it('被抢之后核对不了、等心跳；A 一次被抢之前发出的心跳（服务端处理时第 1 代还是当前的）回包迟到，到的时候 B 已经以本人接管取得第 2 代、拿了锁：这次成功说明不了现在——A 不据此抢 B 的锁（B 不为此多核对一次）；A 之后发出的心跳得知被接管，失去编辑权（本浏览器的另一个标签页接手了）（复验 E1）', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    const b = tab(server, browser, 'B', TAB_B)
+    await editing(a)
+    expect(server.current()).toMatchObject({ epoch: 1, page: TAB_A })
+    expect(browser.holderOf(LOCK)).toBe('A')
+    // A 的下一次心跳：服务端处理时第 1 代是当前的（成功），回包扣住
+    const heartbeat = deferred<void>()
+    a.editLease.renew.mockImplementationOnce(async (documentId, token, idleSeconds) => {
+      const answer = await server.api.renew(documentId, token, idleSeconds)
+      await heartbeat.promise
+      return answer
+    })
+    // 第二次续租就是被抢之后的核对：断网
+    a.editLease.renew.mockImplementationOnce(async () => Promise.reject(new NetworkError('断网')))
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenCalledOnce()
+    // 不核对的旧页面抢走 A 的锁：A 核对（断网）→ 等心跳，不持有锁
+    await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    expect(a.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    // B 点"在此编辑"：锁在本浏览器（旧页面拿着），请它交出、没有回应，3 秒之后本人接管（第 2 代），核对过自己是当前的才抢
+    await opened(b)
+    const taking = b.mode.takeOver()
+    await settle()
+    await b.time.advance(EDIT_TAB_HANDOVER_ACK_MS)
+    await taking
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
+    expect(browser.holderOf(LOCK)).toBe('B')
+    const renewalsOfB = b.editLease.renew.mock.calls.length
+    // A 那次被抢之前发出的心跳，成功的回包在被抢之后过了一会儿才到（看的是它发出的时刻，不是到达的时刻）：不拿锁
+    await a.time.advance(1_000)
+    heartbeat.resolve()
+    await settle()
+    await settle()
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(b.editLease.renew).toHaveBeenCalledTimes(renewalsOfB)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    // A 之后发出的心跳得知第 1 代被接管：失去编辑权——抢走锁的是本浏览器的标签页，不说另一台设备
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenCalledTimes(3)
+    expect(lostOf(a.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(b.editLease.renew).toHaveBeenCalledTimes(renewalsOfB)
+  })
+
+  it.each(['expired', 'idle', 'stale', 'session'] as const)('被抢之后核对得知本页这一代自己失效了（%s：令牌仍是服务端这一行的——没有更新的一代，抢锁的是拿着更旧批准的页面）：不当作被取代、不说本浏览器的另一个标签页接手了，交给租约已有的失效处理——续上（第 2 代）、留在编辑、照常保存；续上的新一代下一次续租成功时把锁拿回来（复验 E2）', async (reason) => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    await editing(a)
+    a.factory.last().edit('甲')
+    // 核对：服务端说这一代自己失效了（没有别的一代改写它）
+    a.editLease.renew.mockImplementationOnce(async () => Promise.reject(leaseLost(reason)))
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    await settle()
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.acquire).toHaveBeenCalledTimes(2)
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A, released: false })
+    expect(browser.holderOf(LOCK)).toBe('old')
+    // 续上的回包同样说明不了现在：新的一代下一次续租成功时才把锁拿回来
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(2), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    // 照常保存，带的是续上的第 2 代
+    await a.mode.save()
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(2), writeEpoch: 2 })
+    expect(modeOf(a.mode).kind).toBe('editing')
+  })
+
+  /**
+   * A 编辑第 1 代；不核对的旧页面抢走 A 的锁，A 的核对等 gate 放行之后才交给服务端处理。之后 A 的心跳得知第 1 代按时间到期（假服务端不模拟
+   * 到期，这里给出）、续上：服务端提交第 2 代（同一个页面），续上的回包先等 reply 放行，再按 lost 交回成功还是断网（回包丢了）
+   */
+  async function confirmDuringRecovery(lost: 'answered' | 'lost') {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    await editing(a)
+    a.factory.last().edit('甲')
+    const gate = deferred<void>()
+    a.editLease.renew.mockImplementationOnce(async (documentId, token, idleSeconds) => {
+      await gate.promise
+      return server.api.renew(documentId, token, idleSeconds)
+    })
+    a.editLease.renew.mockImplementationOnce(async () => Promise.reject(leaseLost('expired')))
+    const reply = deferred<void>()
+    a.editLease.acquire.mockImplementationOnce(async (documentId, page, options) => {
+      const answer = await server.api.acquire(documentId, page, options)
+      await reply.promise
+      if (lost === 'lost')
+        throw new NetworkError('断网')
+      return answer
+    })
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenCalledTimes(2)
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A })
+    // 核对这时才被处理：第 1 代的令牌对不上本页自己续上的第 2 代——replaced；它先于续上的回包回来
+    gate.resolve()
+    await settle()
+    await settle()
+    return { server, browser, a, old, reply }
+  }
+
+  it('被抢之后的核对在途时本页续上（心跳得知按时间到期）：服务端先提交了续上的第 2 代、回包还没到，核对晚于它被处理、先回来，得到 replaced——那是本页自己续上的一代：不当作被取代，等续上有了结果、核对现在的这一代（当前的），把锁拿回来；续上的那一代照常用、不释放（复验 E8）', async () => {
+    const { server, browser, a, old, reply } = await confirmDuringRecovery('answered')
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(browser.holderOf(LOCK)).toBe('old')
+    reply.resolve()
+    await settle()
+    await settle()
+    expect(a.editLease.renew).toHaveBeenCalledTimes(3)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(2), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.release).not.toHaveBeenCalled()
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A, released: false })
+    await a.mode.save()
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(2), writeEpoch: 2 })
+  })
+
+  it('同上，续上的回包丢了（服务端已经提交了第 2 代，本页只看到断网）：这次的 replaced 说不准是不是本页自己改写的——不当作被取代，当作这一代自己失效交给租约：再续上（同一个页面的重试，第 3 代）、留在编辑，新的一代续租成功时把锁拿回来（复验 E8）', async () => {
+    const { server, browser, a, old, reply } = await confirmDuringRecovery('lost')
+    reply.resolve()
+    await settle()
+    await settle()
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.acquire).toHaveBeenCalledTimes(3)
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_A, released: false })
+    expect(browser.holderOf(LOCK)).toBe('old')
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(3), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.release).not.toHaveBeenCalled()
+  })
+
+  it('上一次续上的回包丢了（服务端已经提交了本页的第 2 代）、之后被不核对的旧页面抢锁：核对得到的 replaced 同样说不准——交给租约再续上（第 3 代）、留在编辑，之后把锁拿回来（复验 E8）', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    await editing(a)
+    a.editLease.renew.mockImplementationOnce(async () => Promise.reject(leaseLost('expired')))
+    a.editLease.acquire.mockImplementationOnce(async (documentId, page, options) => {
+      await server.api.acquire(documentId, page, options)
+      throw new NetworkError('断网')
+    })
+    await a.time.advance(HEARTBEAT_MS)
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A })
+    expect(modeOf(a.mode).kind).toBe('editing')
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    await settle()
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_A, released: false })
+    expect(browser.holderOf(LOCK)).toBe('old')
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(3), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+  })
+
+  it('点"编辑"的申请第一次结果未知（断网）、同一个标识再试成功（第 1 代）；被放弃的那一次服务端晚于再试才处理（同一个页面的重试，换成本页不知道的第 2 代）；之后被不核对的旧页面抢锁，核对得到 replaced——说不准是不是本页自己改写的：不当作被取代，交给租约再续上（第 3 代）、留在编辑，之后把锁拿回来（复验 E11）', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    let abandoned: (() => Promise<unknown>) | undefined
+    a.editLease.acquire.mockImplementationOnce(async (documentId, page, options) => {
+      abandoned = async () => server.api.acquire(documentId, page, options)
+      throw new NetworkError('断网')
+    })
+    await opened(a)
+    const entering = a.mode.enter()
+    await settle()
+    await a.time.advance(UNKNOWN_OUTCOME_RETRY_DELAY_MS)
+    await entering
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 1, page: TAB_A })
+    // 被放弃的那一次这时才在服务端处理：同一个页面的重试，换成第 2 代
+    await abandoned?.()
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A })
+    a.factory.last().edit('甲')
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    await settle()
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.acquire).toHaveBeenCalledTimes(3)
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_A, released: false })
+    expect(browser.holderOf(LOCK)).toBe('old')
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(3), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    await a.mode.save()
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(3), writeEpoch: 3 })
+  })
+
+  it.each([
+    ['页面关闭（pagehide，刷新）', (context: ReturnType<typeof setup>) => context.mode.releaseOnHide()],
+    ['卸载', (context: ReturnType<typeof setup>) => context.mode.dispose()],
+  ])('A 的回包迟到期间%s：回包到了也不抢、不进入；B 照常编辑', async (_case, leave) => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const reply = deferred<void>()
+    const a = tab(server, browser, 'A', TAB_A, reply.promise)
+    const b = tab(server, browser, 'B', TAB_B)
+    await opened(a)
+    const entering = a.mode.enter()
+    await settle()
+    await opened(b)
+    await b.mode.takeOver()
+    expect(browser.holderOf(LOCK)).toBe('B')
+    leave(a)
+    reply.resolve()
+    await entering
+    await settle()
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B, released: false })
+    expect(a.factory.created.map(fake => fake.access)).toEqual(['read'])
+  })
+
+  it('正常的先存再交出（"在此编辑"，交接频道）照旧：A 存上、放弃那一代、放锁；B 申请之后锁空着，直接拿、不核对', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    const b = tab(server, browser, 'B', TAB_B)
+    await editing(a)
+    a.factory.last().edit('A 的修改')
+    await opened(b)
+    expect(readingOf(b.mode).selfHolder).toBe('this-browser')
+    await b.mode.takeOver()
+    expect(modeOf(b.mode).kind).toBe('editing')
+    expect(readingOf(a.mode).notice).toEqual({ kind: 'handed-over-tab' })
+    expect(a.api.save).toHaveBeenCalledOnce()
+    expect(a.editLease.release).not.toHaveBeenCalled()
+    expect(b.editLease.renew).not.toHaveBeenCalled()
+    expect(browser.holderOf(LOCK)).toBe('B')
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
   })
 })
 
@@ -3165,19 +3979,21 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
   const WALL = new Date(2026, 9, 4, 15, 30, 12).getTime()
 
   /**
-   * 同一个浏览器里的两个标签页（共用锁与频道，各有各的接口与时钟）：A 在编辑、改了一处（没存：测试里定时的自动保存暂停）；B 在阅读，
-   * 读到自己在编辑。deafA：A 收不到交接频道的消息（冻结、暂停、卡住，或者载入的是不认识这个协议的页面；E2E 用注入吞掉）
+   * 同一个浏览器里的两个标签页（共用锁、频道与服务端的租约，各有各的接口与时钟）：A 在编辑、改了一处（没存：测试里定时的自动保存暂停）；B 在阅读，
+   * 读到自己在编辑。deafA：A 收不到交接频道的消息（冻结、暂停、卡住，或者载入的是不认识这个协议的页面；E2E 用注入吞掉）。两页的申请、续租、释放
+   * 默认经同一个服务端（lease-server.test-support.ts）：B 本人接管之后 A 那一代的续租得到 taken_over——锁的争用由服务端裁决（M3-P6 设计 §3.13）
    */
   async function twoTabs(options: { readonly a?: Setup, readonly b?: Setup, readonly deafA?: boolean } = {}) {
     const browser = fakeBrowser()
+    const server = fakeLeaseServer(AMY)
     const real = sameBrowserFor(DOCUMENT_ID, browser.tab('A'))
-    const a = setup({ ...options.a, browser, tab: 'A', clientInstanceId: TAB_A, ...(options.deafA === true ? { sameBrowser: { ...real, subscribe: () => () => {} } } : {}) })
+    const a = setup({ ...options.a, editLease: { ...server.api, ...options.a?.editLease }, browser, tab: 'A', clientInstanceId: TAB_A, ...(options.deafA === true ? { sameBrowser: { ...real, subscribe: () => () => {} } } : {}) })
     await editing(a)
     a.factory.last().edit('A 的修改')
-    const b = setup({ ...options.b, api: { editStatus: async () => status(3, SELF_EDITING), ...options.b?.api }, browser, tab: 'B', clientInstanceId: TAB_B })
+    const b = setup({ ...options.b, editLease: { ...server.api, ...options.b?.editLease }, api: { editStatus: async () => status(3, SELF_EDITING), ...options.b?.api }, browser, tab: 'B', clientInstanceId: TAB_B })
     await opened(b)
     await settle()
-    return { browser, a, b }
+    return { browser, server, a, b }
   }
 
   /** 交接频道上发过的消息的类型，按先后 */
@@ -3777,7 +4593,8 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       const context = setup({ browser, tab: 'A' })
       await editing(context)
       context.factory.last().edit('甲')
-      // B 没收到回应、本人接管成功、抢了锁（A 冻结时）；A 恢复之后先处理被抢
+      // B 没收到回应、本人接管成功、核对过之后抢了锁（A 冻结时）；A 恢复之后先处理被抢：核对得知被接管
+      context.editLease.renew.mockRejectedValue(TAKEN_OVER)
       await sameBrowserFor(DOCUMENT_ID, browser.tab('B')).steal()
       await settle()
       expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
@@ -3797,6 +4614,7 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       requestFrom(browser, REQUEST_1)
       await settle()
       expect(modeOf(context.mode)).toEqual({ kind: 'exiting', cause: 'handover-tab' })
+      context.editLease.renew.mockRejectedValue(TAKEN_OVER)
       await sameBrowserFor(DOCUMENT_ID, browser.tab('B')).steal()
       await settle()
       expect(modeOf(context.mode).kind).toBe('losing')
@@ -3808,6 +4626,7 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(context.editLease.release).not.toHaveBeenCalled()
       expect(postedTypes(browser)).toEqual(['handover-request', 'handover-ack'])
       // 之后放弃、再进入、再退出：那个请求早已作废，不再回答它
+      context.editLease.renew.mockResolvedValue(RENEWED)
       vi.mocked(context.factory.last().editor.settlePanels).mockImplementation(async () => {})
       await context.mode.discard()
       await settle()
@@ -5398,14 +6217,33 @@ describe('测试构建的观察钩子（M3-P5 设计 §3.13）', () => {
     expect(stayed.events.at(-1)).toEqual({ kind: 'left', at: expect.any(Number) as number, cause: 'exit', outcome: 'stayed' })
   })
 
-  it('锁被本浏览器的另一个标签页抢走：lock-stolen', async () => {
-    const { kinds, trace } = recorder()
+  it('锁被本浏览器的另一个标签页抢走：lock-stolen，随即核对的裁决（lock-verdict，被抢之后）；拿锁时被占着同样报裁决（拿锁时）', async () => {
+    const { events, trace, kinds } = recorder()
     const context = setup({ trace })
     await editing(context)
+    context.editLease.renew.mockRejectedValue(TAKEN_OVER)
     await sameBrowserFor(DOCUMENT_ID, context.browser.tab('other')).steal()
     await settle()
-    expect(kinds()).toContain('lock-stolen')
+    expect(kinds().slice(-2)).toEqual(['lock-stolen', 'lock-verdict'])
+    expect(events.at(-1)).toEqual({ kind: 'lock-verdict', at: context.time.now(), when: 'stolen', verdict: 'superseded' })
     expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'this-browser' })
+
+    // 这一代自己失效了（令牌仍是这一行的）：裁决是 ended，交给租约（续上了、留在编辑）
+    const ended = recorder()
+    const expiring = setup({ trace: ended.trace })
+    await editing(expiring)
+    expiring.editLease.renew.mockRejectedValueOnce(leaseLost('expired'))
+    await sameBrowserFor(DOCUMENT_ID, expiring.browser.tab('other')).steal()
+    await settle()
+    expect(ended.events.filter(event => event.kind === 'lock-verdict')).toEqual([{ kind: 'lock-verdict', at: expiring.time.now(), when: 'stolen', verdict: 'ended' }])
+    expect(modeOf(expiring.mode).kind).toBe('editing')
+
+    const claiming = recorder()
+    const contended = setup({ trace: claiming.trace })
+    await sameBrowserFor(DOCUMENT_ID, contended.browser.tab('other')).tryHold()
+    await editing(contended)
+    expect(claiming.events.filter(event => event.kind === 'lock-verdict')).toEqual([{ kind: 'lock-verdict', at: contended.time.now(), when: 'claim', verdict: 'current' }])
+    expect(claiming.kinds()).not.toContain('lock-stolen')
   })
 
   it('同一个浏览器的交接：请求方报"在此编辑"开始、锁在本浏览器、发出请求、收到 ack、锁空了（或 done）、申请与进入；回应方报回应、开始离开、告诉它做完了、离开的结果', async () => {

@@ -1,7 +1,7 @@
 // SDK 面板里按防抖写进模型的输入（M3-P4 设计 §3.4"面板的防抖"、§7 的风险表）：用户在这些面板里改动之后，SDK 过一段时间才执行写模型的
 // 命令；关闭面板既不取消、也不提前执行（计时器照样到点），没有对外的"立即提交"。退出编辑与交出之前要销毁编辑器，到点之前销毁就丢了：
-// 适配层记下这些面板开着时的用户输入，捕获之前等 SDK 的防抖到点（panel-debounce-watch.ts）。每一项是面板的 DOM 标记与防抖的时长
-// （SDK 里的字面量，没有导出）：
+// 适配层记下这些面板开着时的用户输入，捕获之前等 SDK 的防抖到点（panel-debounce-watch.ts）；到点之前这段输入算"还没写进模型的输入"，
+// 页头与离开提示据此算未保存（Codex 评审 CX4）。每一项是面板的 DOM 标记与防抖的时长（SDK 里的字面量，没有导出）：
 // - 批注浮层的文本框：ui 的 useDebounceFn 默认 300 ms（views/hooks/use-debounce.ts:19-30：组件卸载时不清计时器），
 //   sheets-note-ui 的 views/Note.tsx:110-143 用它写 SheetUpdateNoteCommand；1.0.1 的 ui lib/es/index.js:6584-6592、
 //   sheets-note-ui lib/es/index.js:648（文本框的标记 :691，即 NOTE_TEXTAREA_SELECTOR）；

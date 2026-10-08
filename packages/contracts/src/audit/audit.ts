@@ -68,6 +68,9 @@ export const AUDIT_ACTIONS = [
   'documents.conflict_copied',
   // M3-P5：空间管理员（个人空间的所有者）强制接管别人的编辑。对象是文档，details 带被接管的人，不记标题；本人接管、交出不记
   'documents.edit_taken_over',
+  // M3-P6：系统管理员吊销某人的本机密钥，同时生成下一版。对象是这个账户，details 是被吊销的那一版（下一版就是它加一）；
+  // 没有密钥（从没取过）时什么也没变，不记
+  'users.local_key_revoked',
 ] as const
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS)

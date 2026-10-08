@@ -548,6 +548,109 @@ describe('US-M2-07 行内的整理操作', () => {
   })
 })
 
+// 选目标位置的过程中按下的按钮随之卸载（DEF-049）：面板里的"移动""复制"随面板换成表单、点进的文件夹不在新的一层里、回到根目录时的"上一级"。
+// 原来焦点由页面兜底交给页面的标题；现在交给"目标位置"这一行。按钮先接住焦点再点（键盘按下时就是这样；fireEvent.click 本身不移动焦点），
+// 这样页面的兜底（useFocusRescue）在没有修复时会把焦点交给标题，用例才认得出
+describe('US-M2-07 选目标位置时焦点的落点（DEF-049）', () => {
+  /** 表单里"目标位置"那一行（tabIndex -1） */
+  function targetRow(form: HTMLElement): HTMLElement {
+    return within(form).getByText('目标位置：')
+  }
+
+  /** 先让按钮接住焦点再点（与键盘按下一样） */
+  function press(button: HTMLElement): void {
+    button.focus()
+    fireEvent.click(button)
+  }
+
+  /** 让随后的请求、渲染与页面的兜底都走完：用来断言焦点没有再移动 */
+  async function settle(): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+
+  /** 根目录下有"方案"，方案下有"二季度" */
+  function nestedFolders(): ReturnType<typeof installFakeApi> {
+    return loggedIn({
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: folderPage([folder(QUARTER_ID, '二季度', { parentId: PLAN_ID, depth: 2 })]),
+      [foldersKey(SPACE_ID, QUARTER_ID)]: noFolders(),
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+    })
+  }
+
+  it('用键盘按"移动"：按钮随面板换成表单而卸载，焦点交给"目标位置"这一行（读到默认的目标），不交给页面的标题', async () => {
+    nestedFolders()
+    renderApp('/')
+    await openActions('周报')
+    press(await screen.findByRole('button', { name: '移动' }))
+    const form = screen.getByRole('form', { name: '移动' })
+    await waitFor(() => expect(document.activeElement).toBe(targetRow(form)))
+    expect(targetRow(form)).toHaveTextContent('目标位置：我的空间')
+  })
+
+  it('点"进入"：点进的那个文件夹不在新的一层里，焦点交给"目标位置"这一行；点"上一级"：还在里面一层（按钮留着）与回到根目录（按钮随之消失）都交给它', async () => {
+    nestedFolders()
+    renderApp('/')
+    await openActions('周报')
+    press(await screen.findByRole('button', { name: '移动' }))
+    const form = screen.getByRole('form', { name: '移动' })
+
+    press(await within(form).findByRole('button', { name: '进入 方案' }))
+    await waitFor(() => expect(document.activeElement).toBe(targetRow(form)))
+    expect(targetRow(form)).toHaveTextContent('目标位置：我的空间 / 方案')
+    press(await within(form).findByRole('button', { name: '进入 二季度' }))
+    await waitFor(() => expect(document.activeElement).toBe(targetRow(form)))
+    expect(targetRow(form)).toHaveTextContent('目标位置：我的空间 / 方案 / 二季度')
+
+    // 第二层回到第一层："上一级"还在，焦点同样交给目标位置（换到的位置读屏听得到）
+    press(within(form).getByRole('button', { name: '上一级' }))
+    await waitFor(() => expect(targetRow(form)).toHaveTextContent('目标位置：我的空间 / 方案'))
+    expect(document.activeElement).toBe(targetRow(form))
+    // 第一层回到根目录："上一级"随之消失（DEF-049 登记的那一处）
+    press(within(form).getByRole('button', { name: '上一级' }))
+    await waitFor(() => expect(within(form).queryByRole('button', { name: '上一级' })).toBeNull())
+    expect(targetRow(form)).toHaveTextContent(/^目标位置：我的空间$/)
+    await settle()
+    expect(document.activeElement).toBe(targetRow(form))
+  })
+
+  it('复制的候选还没取到时打开复制：还没有目标位置，焦点交给"取消"；候选到了、目标位置出现，焦点不再移动', async () => {
+    let openSpaces: () => void = () => {}
+    const spacesOpened = new Promise<void>((resolve) => {
+      openSpaces = resolve
+    })
+    loggedIn({
+      'GET /api/spaces': async () => {
+        await spacesOpened
+        return json(200, { items: [personalSpaceOf(SESSION)] })
+      },
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+    })
+    renderApp('/')
+    await openActions('周报')
+    press(await screen.findByRole('button', { name: '复制' }))
+    const form = screen.getByRole('form', { name: '复制' })
+    expect(within(form).getByRole('status', { name: '正在加载可以复制到的空间…' })).toBeInTheDocument()
+    const cancel = within(form).getByRole('button', { name: '取消' })
+    await waitFor(() => expect(document.activeElement).toBe(cancel))
+    openSpaces()
+    expect(await within(form).findByText('目标位置：')).toHaveTextContent('目标位置：我的空间')
+    await settle()
+    expect(document.activeElement).toBe(cancel)
+  })
+
+  it('焦点已经在别处时不抢（Safari 里点按钮不接焦点）：打开表单时焦点留在原处', async () => {
+    nestedFolders()
+    renderApp('/')
+    const trigger = await openActionsFrom('周报')
+    trigger.focus()
+    fireEvent.click(await screen.findByRole('button', { name: '移动' }))
+    expect(screen.getByRole('form', { name: '移动' })).toBeInTheDocument()
+    await settle()
+    expect(document.activeElement).toBe(trigger)
+  })
+})
+
 // 写入已经确定成功之后的刷新（Codex 对抗评审 CX4、CX5）：整理面板原来等刷新回来才结束，刷新一直不回来时一直停在"正在…"；
 // 列表留着之前的数据、刷新却失败了时原来只有一句错误的原因（加载下一页的说法），没有说清楚列表没能刷新、也没有重试
 describe('US-M2-07 整理：写入成功之后的刷新（Codex 对抗评审 CX4、CX5）', () => {
@@ -667,7 +770,7 @@ describe('US-M2-07 整理：写入成功之后的刷新（Codex 对抗评审 CX4
     expect(screen.queryByText('文件夹列表没能刷新，显示的还是之前的内容')).toBeNull()
   })
 
-  it('复制的结果未知，随后刷新目标位置回 500：复制表单里说明目标位置没能刷新、给出重试（之前的子文件夹照常列着）', async () => {
+  it('复制的结果未知，随后刷新目标位置回 500：复制表单里说明目标位置没能刷新、给出重试（之前的子文件夹照常列着）；用键盘按的重试成功之后说明连同按钮消失，焦点交给"目标位置"这一行（DEF-049 同一个落点）', async () => {
     const api = loggedIn({
       [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
       [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
@@ -681,8 +784,11 @@ describe('US-M2-07 整理：写入成功之后的刷新（Codex 对抗评审 CX4
     const problem = await within(form).findByText('目标位置没能刷新，显示的还是之前的内容', {}, { timeout: 4000 })
     expect(within(form).getByRole('button', { name: '进入 方案' })).toBeInTheDocument()
     api.on(foldersKey(SPACE_ID), folderPage([folder(PLAN_ID, '方案'), folder(QUARTER_ID, '二季度')]))
-    fireEvent.click(within(problem.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: '重试' }))
+    const retry = within(problem.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: '重试' })
+    retry.focus()
+    fireEvent.click(retry)
     expect(await within(form).findByRole('button', { name: '进入 二季度' })).toBeInTheDocument()
     expect(within(form).queryByText('目标位置没能刷新，显示的还是之前的内容')).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(within(form).getByText('目标位置：')))
   })
 })

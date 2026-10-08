@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { documentDetailSchema, documentListResponseSchema, errorResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
-import { startTestApp } from '../support/api-app.ts'
+import { startTestApp, startTestAppInTimeZone } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { createDocument } from '../support/documents.ts'
@@ -83,6 +83,32 @@ describe('US-M1-03 个人空间的文档列表', () => {
     expect(pages).toBe(3)
     expect(seen).toHaveLength(5)
     expect(new Set(seen)).toEqual(new Set(aliceDocuments))
+  })
+
+  it('应用连接的会话时区不是 UTC（上海）时：按游标逐页取完，不丢、不重——游标里的位置是数据库算成的 UTC 文本，往返不差 8 小时（M3-P6 再复核 D6）', async () => {
+    // 测试库的会话默认是 UTC，keyset 分页的位置（database 模块的 keysetPosition）换算漏了时区也看不出来：另起一个应用，连接用上海时区，
+    // 先核对它自己的连接确实在上海时区（support/api-app.ts）
+    const shanghai = await startTestAppInTimeZone({ databaseUrl: database.url, timeZone: 'Asia/Shanghai' })
+    try {
+      const session = await login(shanghai.baseUrl, 'alice', alice.password)
+      const seen: string[] = []
+      let cursor: string | null = null
+      let pages = 0
+      do {
+        const response = await asUser(shanghai.baseUrl, session, `/api/documents?limit=2${cursor === null ? '' : `&cursor=${cursor}`}`)
+        expect(response.status).toBe(200)
+        const page: DocumentListResponse = parseExact(documentListResponseSchema, await response.json())
+        seen.push(...page.items.map(item => item.id))
+        cursor = page.nextCursor
+        pages += 1
+      } while (cursor !== null && pages < 10)
+      expect(pages).toBe(3)
+      expect(seen).toHaveLength(5)
+      expect(new Set(seen)).toEqual(new Set(aliceDocuments))
+    }
+    finally {
+      await shanghai.close()
+    }
   })
 
   it('更新时间只差 1 微秒的两份文档，一页一条也不丢（游标保留微秒）', async () => {

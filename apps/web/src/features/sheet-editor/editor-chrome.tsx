@@ -37,6 +37,10 @@
 // 焦点（规范 §2.4，M3-P5 的通查）：每次重建（进入编辑、离开编辑、空闲释放、交出、失去编辑权）都由新建的编辑器把焦点放进它的输入框（SDK 初始化时做，
 // edit-mode.spec 的 US-M3-01 钉着），页头里随之消失的按钮不必另接；不重建就消失的（"知道了"、"继续编辑"之后的提示、"在此编辑"的"取消"、
 // 随权限消失的"强制接管"）由 useFocusRescue 交给返回链接。
+// 已知限制在产品中可见（M3-P6，A14；计划书 §4.5 第一条）：阅读时页头里一行静态说明"阅读时显示的是已保存的版本，不是实时内容"（前半句"同一时刻一个人
+// 编辑"由谁在编辑的说明给出）。它是普通的文字，读屏按顺序读到；不放进读屏状态区——那里的整段文字随别的变化重播（DEF-063），也被大量用例逐字断言。
+// 只在阅读时有（与读屏状态区里阅读时的说明一样）：进入编辑一开始就收起（交互屏障之下，可编辑的编辑器按收起之后的高度建出）；编辑时、
+// 失去编辑权之后（显示的是本页的内容）都没有。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { EditInterruption, SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
@@ -1066,22 +1070,26 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     <QueryClientProvider client={queryClient}>
       {/* 只为接住焦点包一层（display: contents，不影响布局） */}
       <div ref={rescueFocus} className="contents">
-        <header className="flex h-12 items-center gap-3 border-b border-border px-3">
-          {/* 回到平台页面是整页跳转（两个入口，P4 设计 §3.8） */}
-          <a ref={backRef} href={back.href} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
-            <ArrowLeft aria-hidden="true" />
-            {back.label}
-          </a>
-          {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
-          <div className="ml-auto flex items-center gap-3">
-            {/* 分享（M2-P5）：只在能分享时出现 */}
-            {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
-            {/* 看得见的状态（不是播报区：例行的变化只改文字）与读屏的播报区（只播有意义的变化） */}
-            <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-            <SaveAnnouncer view={view} />
-            {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
-            {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
+        <header className="border-b border-border">
+          <div className="flex h-12 items-center gap-3 px-3">
+            {/* 回到平台页面是整页跳转（两个入口，P4 设计 §3.8） */}
+            <a ref={backRef} href={back.href} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+              <ArrowLeft aria-hidden="true" />
+              {back.label}
+            </a>
+            {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
+            <div className="ml-auto flex items-center gap-3">
+              {/* 分享（M2-P5）：只在能分享时出现 */}
+              {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
+              {/* 看得见的状态（不是播报区：例行的变化只改文字）与读屏的播报区（只播有意义的变化） */}
+              <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
+              <SaveAnnouncer view={view} />
+              {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
+              {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
+            </div>
           </div>
+          {/* 阅读时的一行静态说明（A14，见文件头） */}
+          {reading !== undefined && <p data-slot="reading-note" className="px-3 pb-2 text-xs text-muted-foreground">{editorMessages.mode.readingNote}</p>}
         </header>
         {/* 一直在的读屏状态区：阅读时谁在编辑、有更新、请求编辑的进展等；编辑时有人请求编辑的那一句（只有它时视觉隐藏）、请求方取消了、
             快照接近容量上限的说明（不打断，M3-P3、M3-P5） */}

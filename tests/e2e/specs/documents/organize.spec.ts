@@ -1,5 +1,6 @@
 // 文件夹与文档的整理（M2-P4，US-M2-07）：新建文件夹、进入与面包屑、在里面新建表格、改名、移动、删除；
 // 跨空间移动之后权限随之改变；查看者看不到这些入口。行内按钮的可读名称是"操作 对象"。
+// 选目标位置时按下的按钮随之卸载（"移动"、点进的文件夹、回到根目录时的"上一级"）：焦点交给"目标位置"这一行（DEF-049）。
 import type { Page, Request } from '@playwright/test'
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -148,6 +149,42 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
     await page.getByRole('navigation', { name: '位置' }).getByRole('link', { name: '我的空间', exact: true }).click()
     await expect(folders.getByRole('link', { name: '季度方案', exact: true })).toBeVisible()
     await expect(folders.getByRole('link', { name: '子文件夹', exact: true })).toHaveCount(0)
+  })
+
+  test('只用键盘移动文档：打开"移动"、点进文件夹、按"上一级"（还在里面一层与回到根目录）之后，焦点都交给"目标位置"这一行，不交给页面的标题；最后移进文件夹（DEF-049）', async ({ page }) => {
+    const owner = await createUser('org-keyboard')
+    const plan = await createFolderIn(owner.personalSpaceId, owner, '方案')
+    await createFolderIn(owner.personalSpaceId, owner, '二季度', plan)
+    await createDocument(owner, '合同')
+    await loginThroughApi(page, owner)
+    await page.goto('/')
+    await page.getByRole('button', { name: '操作 合同', exact: true }).press('Enter')
+    // "移动"随面板换成表单而卸载：焦点交给目标位置（默认是它现在所在的地方）
+    await page.getByRole('button', { name: '移动', exact: true }).press('Enter')
+    const form = page.getByRole('form', { name: '移动' })
+    const target = (label: string) => form.getByText(`目标位置：${label}`, { exact: true })
+    await expect(target('我的空间')).toBeFocused()
+
+    // 点进的文件夹不在新的一层里：焦点交给目标位置，读屏读到新的位置
+    await form.getByRole('button', { name: '进入 方案', exact: true }).press('Enter')
+    await expect(target('我的空间 / 方案')).toBeFocused()
+    await form.getByRole('button', { name: '进入 二季度', exact: true }).press('Enter')
+    await expect(target('我的空间 / 方案 / 二季度')).toBeFocused()
+
+    // 还在里面一层："上一级"留着，焦点同样交给目标位置（换到的位置读屏听得到）
+    const up = form.getByRole('button', { name: '上一级', exact: true })
+    await up.press('Enter')
+    await expect(target('我的空间 / 方案')).toBeFocused()
+    // 回到根目录："上一级"随之卸载（DEF-049 登记的那一处），焦点交给目标位置，不交给页面的标题
+    await up.press('Enter')
+    await expect(up).toHaveCount(0)
+    await expect(target('我的空间')).toBeFocused()
+
+    await form.getByRole('button', { name: '进入 方案', exact: true }).press('Enter')
+    await expect(target('我的空间 / 方案')).toBeFocused()
+    await form.getByRole('button', { name: '移动到这里', exact: true }).press('Enter')
+    await expect(page.getByText('已把「合同」移动到我的空间 / 方案')).toBeVisible()
+    await expect(page.getByRole('list', { name: '文档列表' })).toHaveCount(0)
   })
 
   test('跨空间移动：文档换了空间，原空间的编辑者不再看得到、也打不开它', async ({ page, anotherDevice }) => {

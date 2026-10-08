@@ -1,0 +1,5 @@
+export { LocalKeyRevocation } from './local-key-revocation.ts'
+export type { RevokedLocalKey } from './local-key-revocation.ts'
+export { LocalKeyVersions } from './local-key-versions.ts'
+export type { LocalKeyState } from './local-key-versions.ts'
+export { LocalKeysModule } from './local-keys.module.ts'

@@ -25,29 +25,29 @@ function listenerSet() {
 }
 
 /**
- * 假的编辑器：edit 是一次修改（工作簿的内容换成 text）；公式收齐、组字、单元格编辑可设，各自发出信号。单元格里键入的内容在提交
- * （等同回车）之前不在工作簿里、捕获不到。captureCost 是一次捕获的耗时（同步地拨快假时钟，大文档的间隔用）。
- * 修改的信号与 SDK 一样在"命令执行的过程中"同步发出：这期间的捕获记进 capturesInCommand（调度不该在信号里捕获）
+ * 假的编辑器：edit 是一次修改（工作簿的内容换成 text）；公式收齐、组字、单元格编辑、面板里防抖中的输入可设，各自发出信号。单元格里键入的
+ * 内容在提交（等同回车）之前、面板里的输入在防抖到点之前不在工作簿里，捕获不到。captureCost 是一次捕获的耗时（同步地拨快假时钟，
+ * 大文档的间隔用）。修改的信号与 SDK 一样在"命令执行的过程中"同步发出：这期间的捕获记进 capturesInCommand（调度不该在信号里捕获）
  */
 function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean, seq?: number } = {}) {
-  const state = { seq: initial.seq ?? 0, content: '初始', cellInput: '', settled: initial.settled ?? true, composing: false, editing: false, pendingInput: false, captureCost: 0, inCommand: false, capturesInCommand: 0 }
+  const state = { seq: initial.seq ?? 0, content: '初始', cellInput: '', settled: initial.settled ?? true, composing: false, editing: false, pendingInput: false, panelInput: false, captureCost: 0, inCommand: false, capturesInCommand: 0 }
   const changes = listenerSet()
   const formulas = listenerSet()
   const composition = listenerSet()
-  const cellEditing = listenerSet()
+  const input = listenerSet()
   const editor: AutosaveEditor & SaveEditor = {
     changeSeq: () => state.seq,
     onChange: changes.subscribe,
     isCellEditing: () => state.editing,
-    hasPendingCellInput: () => state.pendingInput,
-    onCellEditingChange: cellEditing.subscribe,
+    uncommittedInput: () => state.pendingInput || state.panelInput ? 'pending' : state.editing ? 'open' : 'none',
+    onUncommittedInputChange: input.subscribe,
     commitCellEditing: vi.fn(async () => {
       state.editing = false
       state.pendingInput = false
       state.content = state.cellInput
       state.seq += 1
       changes.notify()
-      cellEditing.notify()
+      input.notify()
       return true
     }),
     settleFormulas: vi.fn(async () => state.settled ? 'settled' as const : 'timeout' as const),
@@ -89,13 +89,25 @@ function fakeEditor(elapse: (ms: number) => void, initial: { settled?: boolean, 
       state.editing = true
       state.pendingInput = true
       state.cellInput = text
-      cellEditing.notify()
+      input.notify()
     },
     /** 按 Esc 放弃单元格编辑 */
     cancelCellEditing(): void {
       state.editing = false
       state.pendingInput = false
-      cellEditing.notify()
+      input.notify()
+    },
+    /** 在面板里键入：按 SDK 的防抖还没写进工作簿 */
+    typeInPanel(): void {
+      state.panelInput = true
+      input.notify()
+    },
+    /** 面板的防抖到点：text 是 SDK 这时写进工作簿的内容（一次修改），没给时是没有改动 */
+    panelSettled(text?: string): void {
+      if (text !== undefined)
+        control.edit(text)
+      state.panelInput = false
+      input.notify()
     },
     /** 现在的工作簿内容与单元格编辑器（断言用） */
     state: () => ({ content: state.content, editing: state.editing, cellInput: state.cellInput }),
@@ -541,6 +553,42 @@ describe('单元格编辑器开着（设计 §3.2 第 4 条）：自动保存不
     await drain(context)
     expect(context.coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
     expect(context.autosave.saved()).toEqual({ edits: false, formulas: true })
+  })
+})
+
+describe('面板里防抖中的输入（Codex 评审 CX4，M3-P6 设计 §3.13）：还没写进模型时不提前捕获，写进之后按现有规则捕获、上传', () => {
+  it('防抖中：静默与上限都不因它捕获、上传，页头是有未保存的修改、没全部存上；写进模型之后停 1 秒捕获、停 2 秒上传，存上之后回到已保存到云端', async () => {
+    const context = setup()
+    context.control.typeInPanel()
+    expect(context.coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
+    expect(context.autosave.saved()).toEqual({ edits: false, formulas: true })
+    await context.time.advance(30_000)
+    expect(context.captures()).toHaveLength(0)
+    expect(context.calls).toHaveLength(0)
+    context.control.panelSettled('面板里改的')
+    await context.time.advance(999)
+    expect(context.captures()).toHaveLength(0)
+    await context.time.advance(1)
+    expect(context.captures()).toEqual([expect.objectContaining({ trigger: 'quiet', at: T0 + 31_000, seq: 1 })])
+    expect(context.coordinator.view().status).toBe('dirty')
+    await context.time.advance(1000)
+    const call = await sent(context, 1)
+    expect(call).toMatchObject({ at: T0 + 32_000, request: { localSeq: 1, snapshot: '{"content":"面板里改的"}' } })
+    call.resolve(saved(2))
+    await drain(context)
+    expect(context.coordinator.view()).toMatchObject({ status: 'clean', unsavedEdits: false })
+    expect(context.autosave.saved()).toEqual({ edits: true, formulas: true })
+  })
+
+  it('防抖到点却没有改动：回到已保存到云端，不捕获也不上传', async () => {
+    const context = setup()
+    context.control.typeInPanel()
+    await context.time.advance(500)
+    context.control.panelSettled()
+    expect(context.coordinator.view()).toMatchObject({ status: 'clean', unsavedEdits: false })
+    await context.time.advance(60_000)
+    expect(context.captures()).toHaveLength(0)
+    expect(context.calls).toHaveLength(0)
   })
 })
 

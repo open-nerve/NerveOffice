@@ -1,6 +1,7 @@
 // 配置（规范 §7，P2 设计 §3.3）：全部来自环境变量，机密也可以用 <变量>_FILE 从文件读取。
 // 启动时一次校验全部变量，不合法就列出变量名与原因（不含取值，取值可能是机密）后退出。
 // api 里只有这个模块读取 process.env（lint 强制）。
+import { Buffer } from 'node:buffer'
 import { readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { isAbsolute } from 'node:path'
@@ -14,8 +15,10 @@ const PREFIX = 'NERVE_'
 /** 留给测试工具的变量（例如集成测试的数据库地址）：应用不读取，也不当作拼写错误。 */
 const RESERVED_FOR_TESTS = 'NERVE_TEST_'
 const FILE_SUFFIX = '_FILE'
+/** 本机密钥的主密钥（M3-P6 设计 §3.4）：只有应用进程要求它，迁移、初始化管理员与签发重置链接的命令都不需要 */
+const MASTER_KEY_VARIABLE = 'NERVE_LOCAL_KEYS_MASTER_KEY'
 /** 可以用 `<变量>_FILE` 从文件读取的机密。 */
-const SECRETS: ReadonlySet<string> = new Set(['NERVE_DATABASE_URL'])
+const SECRETS: ReadonlySet<string> = new Set(['NERVE_DATABASE_URL', MASTER_KEY_VARIABLE])
 
 const LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'] as const
 export type LogLevel = (typeof LOG_LEVELS)[number]
@@ -151,6 +154,19 @@ export interface AppConfig {
   }
 }
 
+/**
+ * 应用进程（HTTP 服务）的配置：在 AppConfig 之上多出本机密钥的主密钥（M3-P6 设计 §3.4）。只有服务端的读法（loadServerConfig）给出它，
+ * 缺失或格式不对时拒绝启动；命令行的读法（loadConfig）不要求它，给了也只校验格式、不带进配置——迁移、初始化管理员与签发重置链接的配置里
+ * 没有主密钥，命令也不用它（最小权限，与 ADR-012"迁移用所有者、应用用应用角色"同一个思路）。这只管到配置这一层：按部署说明在应用容器里
+ * 执行初始化管理员、签发重置链接时，进程的环境里仍有它（审查 A7）；迁移的容器没有它
+ */
+export type ServerConfig = AppConfig & {
+  readonly localKeys: {
+    /** 主密钥：32 字节随机数的标准 base64（openssl rand -base64 32 的输出）。只由 local-keys 模块在启动时派生包装键与标识 */
+    readonly masterKey: Secret
+  }
+}
+
 export interface ConfigIssue {
   readonly variable: string
   readonly problem: string
@@ -250,6 +266,56 @@ const OUTBOX_RECORD_MAX_DAYS = 14
 const REVISION_RETENTION_MIN_DAYS = OUTBOX_RECORD_MAX_DAYS + 1
 const REVISION_RETENTION_REASON = `保留期要长于本机发件箱一条记录的最长留存（${OUTBOX_RECORD_MAX_DAYS} 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了`
 
+/**
+ * 主密钥的写法（M3-P6 设计 §3.4）：标准 base64、带填充、恰好 32 字节、规范写法，即 openssl rand -base64 32 的输出（44 个字符，以一个 = 结尾）。
+ * Buffer.from(…, 'base64') 极其宽松（夹杂非法字符、缺填充、base64url、首尾空白、31 字节都照样解出东西），所以校验三步：
+ * 正则（前 42 个字符各带 6 位，第 43 个字符只有高 4 位是数据、低 2 位必须是 0）→ 解出恰好 32 字节 → 回编码等于原文。
+ * 只认这一种写法（不认十六进制等）：配错时说明简单。说明里不带取值
+ */
+const MASTER_KEY_PATTERN = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/
+const MASTER_KEY_BYTES = 32
+const MASTER_KEY_PROBLEM = '必须是 32 字节随机数的标准 base64（44 个字符、以 = 结尾，例如 openssl rand -base64 32 的输出）'
+
+/**
+ * 主密钥的字节（写法已经校验过）；调用方用完清零。这两处清零（isCanonicalMasterKey、isPrintableMasterKey）是尽力而为、不测（审查 A2）：
+ * 取值本身是配置里的字符串，进程存活期间一直在 JS 堆上，清掉临时解出来的这份字节不改变暴露面；要从测试里看出来只能拦下全局的 Buffer.from。
+ * 主密钥环（派生用的字节、解包的明文）与服务层（交出的、生成的原始密钥）的清零有单元测试钉住
+ */
+function masterKeyBytesOf(value: string): Buffer {
+  return Buffer.from(value, 'base64')
+}
+
+function isCanonicalMasterKey(value: string): boolean {
+  if (!MASTER_KEY_PATTERN.test(value))
+    return false
+  const bytes = masterKeyBytesOf(value)
+  try {
+    return bytes.length === MASTER_KEY_BYTES && bytes.toString('base64') === value
+  }
+  finally {
+    bytes.fill(0)
+  }
+}
+
+const masterKey = text().refine(isCanonicalMasterKey, MASTER_KEY_PROBLEM)
+
+/**
+ * 主密钥的 32 个字节都是可打印的 ASCII（0x20–0x7E）：入库的开发与测试用的主密钥是可读的一句话（一眼看得出不是真的），
+ * 随机的 32 字节全落在这个范围里的概率约 (95/256)^32 ≈ 1.7×10⁻¹⁴
+ */
+function isPrintableMasterKey(value: string): boolean {
+  const bytes = masterKeyBytesOf(value)
+  try {
+    return bytes.every(byte => byte >= 0x20 && byte <= 0x7E)
+  }
+  finally {
+    bytes.fill(0)
+  }
+}
+
+const READABLE_MASTER_KEY_PROBLEM = '公开地址是 HTTPS（正式部署）时不能用全是可打印字符的主密钥：开发与测试用的主密钥是可读的一句话，'
+  + '多半是被抄进了正式部署。用 openssl rand -base64 32 生成一把随机的（见部署说明）'
+
 const environmentSchema = z.object({
   NERVE_DATABASE_URL: text().pipe(z.url({ protocol: /^postgres(?:ql)?$/, error: '必须是 postgres:// 或 postgresql:// 开头的连接串' })),
   NERVE_DATABASE_POOL_MAX: integer(1, 100).default(10),
@@ -310,6 +376,8 @@ const environmentSchema = z.object({
   NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: integer(100, 600_000).default(10_000),
   NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: integer(1_000, 600_000).default(10_000),
   NERVE_SNAPSHOT_INSPECTION_HEAP_MB: integer(128, 16_384).default(512),
+  // 本机密钥的主密钥（M3-P6 设计 §3.4）：机密（可以用 _FILE）。这里可选、照常校验写法；只有服务端的读法要求它（缺失时报"缺少"）
+  NERVE_LOCAL_KEYS_MASTER_KEY: masterKey.optional(),
 })
 
 type Environment = z.output<typeof environmentSchema>
@@ -360,7 +428,7 @@ const TRASH_PURGE_MIN_POOL = 2
  * threadpool 是 libuv 线程池的大小，不合法时为 undefined（它自己的问题另外报出，这里不再比较）；
  * defaults 是没有设置、用了默认值的变量。
  */
-function crossChecks(env: Environment, threadpool: Threadpool | undefined, defaults: ReadonlySet<string>): ConfigIssue[] {
+function crossChecks(env: Environment, threadpool: Threadpool | undefined, defaults: ReadonlySet<string>, variableOf: (name: keyof Environment) => string): ConfigIssue[] {
   const issues: ConfigIssue[] = []
   const current = (variable: keyof Environment, value: number): string => `${value}${defaults.has(variable) ? '（默认值）' : ''}`
   // 只按用户名的上限要比按用户名与来源的上限大（M2-P6 复核 A1）：否则一个来源的失败就能把这个账户在所有来源上锁住
@@ -400,6 +468,11 @@ function crossChecks(env: Environment, threadpool: Threadpool | undefined, defau
         + `把它调小，或者把 ${THREADPOOL_VARIABLE} 调到至少 ${concurrency * 2}`,
     })
   }
+  // 公开地址是 HTTPS（真部署，只有本机调试才允许 HTTP）时拒绝可读的主密钥（M3-P6 设计 §3.4）：入库的开发、测试用密钥不会被抄进正式部署。
+  // 写法与"只有本机调试才允许 HTTP 的公开地址"同一类规则；给了就查，命令行的读法同样（配置本身就是错的）
+  const key = env.NERVE_LOCAL_KEYS_MASTER_KEY
+  if (key !== undefined && env.NERVE_PUBLIC_ORIGIN.startsWith('https:') && isPrintableMasterKey(key))
+    issues.push({ variable: variableOf('NERVE_LOCAL_KEYS_MASTER_KEY'), problem: READABLE_MASTER_KEY_PROBLEM })
   return issues
 }
 
@@ -480,14 +553,20 @@ function deepFreeze<T>(value: T): T {
   return value
 }
 
+/** 读配置的是哪一个进程：命令行（迁移、初始化管理员、签发重置链接）或应用（HTTP 服务，要求主密钥，M3-P6 设计 §3.4） */
+type ConfigPurpose = 'command' | 'server'
+
+type EnvironmentInput = Readonly<Record<string, string | undefined>>
+type SecretFileReader = (path: string) => string
+
+const readFileText: SecretFileReader = path => readFileSync(path, 'utf8')
+
 /**
- * 从给定的环境变量读取配置；不合法时抛出 ConfigError，一次列出全部问题。
- * 空字符串视为没有设置（编排文件里常见 `VAR=` 的写法）。
+ * 读出并校验全部变量；不合法时抛出 ConfigError，一次列出全部问题。
+ * 空字符串视为没有设置（编排文件里常见 `VAR=` 的写法）。服务端另要求主密钥：缺失时报"缺少"，与别的变量的问题一起列出
+ * （它不依赖别的变量，不放在只在各变量都合法之后才查的 crossChecks 里）
  */
-export function loadConfig(
-  env: Readonly<Record<string, string | undefined>>,
-  readSecretFile: (path: string) => string = path => readFileSync(path, 'utf8'),
-): AppConfig {
+function parseEnvironment(env: EnvironmentInput, readSecretFile: SecretFileReader, purpose: ConfigPurpose): Environment {
   const issues: ConfigIssue[] = []
   /** 已经报告过问题的变量，校验时不再重复报告（例如文件读取失败的机密不再报"缺少"） */
   const reported = new Set<string>()
@@ -552,16 +631,45 @@ export function loadConfig(
         issues.push({ variable, problem: issue.message })
     }
   }
-  else {
+  // 应用进程要求主密钥（M3-P6 设计 §3.4）：变量与 _FILE 都没设时"缺少"（_FILE 读不到、是空的已经报在 _FILE 上，不再重复）
+  if (purpose === 'server' && !(MASTER_KEY_VARIABLE in input) && !reported.has(MASTER_KEY_VARIABLE))
+    issues.push({ variable: MASTER_KEY_VARIABLE, problem: '缺少' })
+  if (result.success) {
     const defaults = new Set(Object.keys(environmentSchema.shape).filter(name => !(name in input)))
-    issues.push(...crossChecks(result.data, threadpool, defaults))
+    issues.push(...crossChecks(result.data, threadpool, defaults, name => fromFile.get(name) ?? name))
   }
   if (!result.success || issues.length > 0)
     throw new ConfigError(issues)
-  return deepFreeze(toAppConfig(result.data))
+  return result.data
 }
 
-/** 从进程的环境变量读取配置。 */
+/**
+ * 命令行（迁移、初始化管理员、签发重置链接）读配置：不要求主密钥（M3-P6 设计 §3.4），给了也只校验写法、不带进配置。
+ * 不合法时抛出 ConfigError，一次列出全部问题（说明里只有变量名与原因，不含取值）
+ */
+export function loadConfig(env: EnvironmentInput, readSecretFile: SecretFileReader = readFileText): AppConfig {
+  return deepFreeze(toAppConfig(parseEnvironment(env, readSecretFile, 'command')))
+}
+
+/**
+ * 应用进程（HTTP 服务）读配置（M3-P6 设计 §3.4）：在命令行的基础上要求本机密钥的主密钥，缺失或写法不对时抛出 ConfigError
+ * （进程入口记 fatal、退出码 1，说明里不带取值）
+ */
+export function loadServerConfig(env: EnvironmentInput, readSecretFile: SecretFileReader = readFileText): ServerConfig {
+  const environment = parseEnvironment(env, readSecretFile, 'server')
+  const masterKey = environment.NERVE_LOCAL_KEYS_MASTER_KEY
+  // 走不到：缺失时 parseEnvironment 已经报了"缺少"
+  if (masterKey === undefined)
+    throw new Error('服务端的配置没有主密钥，却通过了校验')
+  return deepFreeze({ ...toAppConfig(environment), localKeys: { masterKey: new Secret(masterKey) } })
+}
+
+/** 命令行从进程的环境变量读取配置。 */
 export function loadConfigFromEnvironment(): AppConfig {
   return loadConfig(process.env)
+}
+
+/** 应用进程从进程的环境变量读取配置（要求主密钥）。 */
+export function loadServerConfigFromEnvironment(): ServerConfig {
+  return loadServerConfig(process.env)
 }

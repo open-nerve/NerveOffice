@@ -172,7 +172,8 @@ describe('AdminUsersService.disable', () => {
     }
     const transaction = { transaction: true }
     const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
-    const service = new AdminUsersService(users as never, sessions as never, resets as never, invitations as never, lockouts as never, writeAccess, audit as never, transactions as never)
+    const localKeys = { statesOf: vi.fn(async () => new Map()) }
+    const service = new AdminUsersService(users as never, sessions as never, resets as never, invitations as never, lockouts as never, writeAccess, localKeys as never, {} as never, audit as never, transactions as never)
     return { service, calls, writeAccess, resets, invitations, lockouts, transaction }
   }
 
@@ -194,7 +195,7 @@ describe('AdminUsersService.disable', () => {
   })
 })
 
-describe('AdminUsersService：响应里的登录锁定在同一个事务里读（M2-P6 第 3 片复验：提交之后不再访问数据库）', () => {
+describe('AdminUsersService：响应里的登录锁定与本机密钥的摘要（M3-P6）在同一个事务里读（M2-P6 第 3 片复验：提交之后不再访问数据库）', () => {
   const ACCOUNT = { id: AMY, username: 'amy', displayName: '艾米', systemRole: 'member', status: 'active', createdAt: NOW } as const
 
   function viewSetup() {
@@ -206,10 +207,11 @@ describe('AdminUsersService：响应里的登录锁定在同一个事务里读�
       lockAccount: vi.fn(async () => ACCOUNT),
     }
     const lockouts = { locksOf: vi.fn(async () => new Map()), clear: vi.fn(async () => true) }
+    const localKeys = { statesOf: vi.fn(async () => new Map([[AMY, { version: 2, createdAt: NOW }]])) }
     const audit = { record: vi.fn(async () => {}) }
     const transactions = { run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => work(transaction as never)) }
-    const service = new AdminUsersService(users as never, {} as never, {} as never, {} as never, lockouts as never, {} as never, audit as never, transactions as never)
-    return { service, lockouts, transaction }
+    const service = new AdminUsersService(users as never, {} as never, {} as never, {} as never, lockouts as never, {} as never, localKeys as never, {} as never, audit as never, transactions as never)
+    return { service, lockouts, localKeys, transaction }
   }
 
   it.each([
@@ -217,8 +219,10 @@ describe('AdminUsersService：响应里的登录锁定在同一个事务里读�
     ['改系统角色', async (service: AdminUsersService) => service.changeSystemRole(ACTOR, AMY, 'admin', ORIGIN)],
     ['解除登录锁定', async (service: AdminUsersService) => service.unlockLogin(ACTOR, AMY, ORIGIN)],
   ])('%s', async (_name, run) => {
-    const { service, lockouts, transaction } = viewSetup()
-    await run(service)
+    const { service, lockouts, localKeys, transaction } = viewSetup()
+    const account = await run(service)
     expect(lockouts.locksOf).toHaveBeenCalledWith(['amy'], transaction)
+    expect(localKeys.statesOf).toHaveBeenCalledWith([AMY], transaction)
+    expect(account.localKey).toEqual({ version: 2, createdAt: NOW.toISOString() })
   })
 })

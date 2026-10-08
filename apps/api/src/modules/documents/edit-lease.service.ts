@@ -37,12 +37,10 @@ export function editingActorOf(principal: Principal): EditingActor {
 /**
  * 持有者自己的请求（申请、心跳、保存）在事务里、锁下再核对一次这次登录仍然有效（M3-P1 审查 A1）：会话守卫在处理器之前判断过，
  * 之后到这一步还隔着上传正文、等锁的时间，这期间退出、签发重置（撤销这个人的全部登录，"强制结束编辑"）、换令牌都不经文档行与租约行，
- * 挡不住在途的请求。锁下按主键查一条：撤销提交之后才做的判断一定看得到它，剩下"判断之后、提交之前"的几毫秒按"请求先于撤销"线性化。
- * 失效时与只读快照的开场核对（ADR-017）一样回 SESSION_EXPIRED，不动 Cookie，下一个请求经守卫处理
+ * 挡不住在途的请求。核对的口径在 auth（SessionService.requireActive，本机密钥的取用共用，M3-P6）：失效时 401 SESSION_EXPIRED，不动 Cookie
  */
 export async function requireActiveLogin(sessions: SessionService, actor: EditingActor, transaction: Transaction): Promise<void> {
-  if (!await sessions.isActive(actor.sessionId, transaction))
-    throw new AppError('SESSION_EXPIRED')
+  await sessions.requireActive(actor.sessionId, transaction)
 }
 
 /**
@@ -181,8 +179,9 @@ function previousOf(claim: LeaseClaim, occupancy: LeaseOccupancy): Readonly<Reco
  * 有效条件在 edit-lease-rules.ts，这里按步骤取事实、加锁：
  * - 失去访问与失去编辑权先于租约判断（§3.2）：读不到 404，能读不能编辑 403，之后才看租约；看不到的请求不取任何锁，
  *   与不存在的文档执行同样的语句（permissions/hidden-missing-parity 核对）；
- * - 锁的顺序是文档行（FOR UPDATE）→ 租约行（§3.4.6，ADR-014 的锁顺序表在文档行之后加上租约行）：申请先锁文档行再锁租约行；
- *   心跳与释放只锁租约行，与申请、收回写入权按租约行串行，不成环；
+ * - 锁的顺序是文档行（FOR UPDATE）→ 租约行（§3.4.6，ADR-014 的锁顺序表在文档行之后加上租约行）：申请与释放先锁文档行、再锁租约行
+ *   （lockUnder；释放是明确结束，要与在途的保存互斥，Codex 评审 CX1）；心跳只锁租约行（它不让租约失效），与申请、释放、收回写入权按租约行串行。
+ *   没有哪条路径先锁租约行再锁文档行，不成环（EditLeasesRepository 的类注释）；
  * - 时间一律取数据库的 now()：租约行与同一条语句里的 now() 一起读出来（ObservedEditLease）；
  * - 页面的构建与数据格式（M3-P3 设计 §3.5）：申请与心跳先核对它（与文档无关，在任何查询之前：看不到与不存在的文档得到同样的回答），
  *   过旧时 CLIENT_OUTDATED；文档由比服务端新的版本写过（回滚之后）时 DOCUMENT_TOO_NEW，在判断访问与编辑权之后。
@@ -208,7 +207,8 @@ export class EditLeaseService {
 
   /**
    * 申请（P1 设计 §3.4.2）：页面的构建与数据格式（CLIENT_OUTDATED，M3-P3）→ 不加锁判断能编辑（404 / 403；强制接管另要能强制接管，
-   * M3-P5 设计 §3.8）→ 锁文档行、锁下再判断同样几项 → 锁租约行 → 这次登录仍然有效（否则 401，requireActiveLogin：撤销登录之后才到这一步的
+   * M3-P5 设计 §3.8）→ 锁文档行、锁下再判断同样几项 → 锁租约行（lockUnder：凭文档行的锁，改写为新的一代同样凭它）→
+   * 这次登录仍然有效（否则 401，requireActiveLogin：撤销登录之后才到这一步的
    * 在途申请不写下绑定失效登录的租约）→ 文档的格式（比服务端新：DOCUMENT_TOO_NEW，M3-P3，锁下读到的文档行）→ 从申请的人看谁占着
    * 这份文档（occupancyOf）→ 申请怎样对待占着的那一代（claimOf）：
    * - 没人占着：普通的申请（带了接管方式也一样，不写接管标记、不写审计）；
@@ -231,7 +231,7 @@ export class EditLeaseService {
     const operations: readonly DocumentOperation[] = takeover === 'force' ? ['edit', 'takeOver'] : ['edit']
     await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), operations, transaction)
     const { document, permissions } = await requireDocumentContent(this.policy, actor.userId, await this.documents.lockById(documentId, transaction), operations, transaction)
-    const current = await this.leases.lockByDocument(documentId, transaction)
+    const current = await this.leases.lockUnder(document, transaction)
     // 两把锁都在手里之后才查：之后到提交只剩判断与几条写，窗口最短
     await requireActiveLogin(this.sessions, actor, transaction)
     requireWritableDocument(document)
@@ -252,8 +252,7 @@ export class EditLeaseService {
     }
     const writeEpoch = await this.documents.advanceWriteEpoch(documentId, transaction)
     const token = generateEditLeaseToken()
-    const lease = await this.leases.replace({
-      documentId,
+    const lease = await this.leases.replace(document, {
       holderId: actor.userId,
       sessionId: actor.sessionId,
       clientInstanceId,
@@ -321,15 +320,25 @@ export class EditLeaseService {
   }
 
   /**
-   * 释放（P1 设计 §3.4.3）：能访问就行（读不到 404，看不到与不存在一致）→ 锁租约行 → 令牌是当前这一行的、没有明确结束、
-   * 释放的人就是持有者（M3-P1 审查 A4，见 releasableBy），就记 released；其余情况（没带令牌、令牌不对、已经结束、不是持有者）什么也不做。
+   * 释放（P1 设计 §3.4.3）：能访问就行（读不到 404，看不到与不存在一致）→ 不加锁看一眼能不能释放（令牌是当前这一行的、没有明确结束、
+   * 释放的人就是持有者，M3-P1 审查 A4，见 releasableBy）：释放不了就一直释放不了，什么也不锁、直接结束——能读这份文档的人不能借释放
+   * 让编辑者的保存排队（同复验 RA7）→ 锁文档行 → 锁租约行（lockUnder）→ 锁下再判断一次，能释放就记 released。
+   * 先锁文档行（Codex 评审 CX1）：释放是明确结束，要与在途的保存互斥——保存过了租约检查、还没提交时，释放等它提交；收回写入权不锁
+   * 明确结束了的租约，靠的就是这一条（EditLeasesRepository 的类注释）。等锁期间文档进了回收站或被永久删除（锁不到正常状态的文档行）时
+   * 什么也不做：回收站里的文档上不会再有保存（保存同样只锁得到正常状态的文档行），放进回收站的同一个事务已经收回了按时间还活着的租约，
+   * 永久删除时租约行随文档一起删掉。其余情况（没带令牌、令牌不对、已经结束、不是持有者）同样什么也不做。
    * 调用方一律回 204：页面关闭时的 keepalive 请求不看结果
    */
   async release(actor: EditingActor, documentId: string, token: string | undefined, transaction: Transaction): Promise<void> {
     await requireAccess(this.policy, actor.userId, await this.documents.findById(documentId, transaction), transaction)
-    const lease = await this.leases.lockByDocument(documentId, transaction)
+    if (!releasableBy(await this.leases.findByDocument(documentId, transaction), token, actor.userId))
+      return
+    const document = await this.documents.lockById(documentId, transaction)
+    if (document === undefined)
+      return
+    const lease = await this.leases.lockUnder(document, transaction)
     if (releasableBy(lease, token, actor.userId))
-      await this.leases.end(documentId, 'released', transaction)
+      await this.leases.end(lease, 'released', transaction)
   }
 
   /**

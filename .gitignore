@@ -33,6 +33,8 @@ Thumbs.db
 test-results/
 playwright-report/
 blob-report/
+# 真实 Safari 的页面自检的结果（tests/e2e/safari/selftest.ts）：不放在 test-results/ 里，免得被下一次 Playwright 运行清空
+safari-results/
 
 # lint 规则自测临时创建的探针文件（tools/src/lint/lint-harness.test-support.ts）
 lint-probe-*

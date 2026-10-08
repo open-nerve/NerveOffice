@@ -9,7 +9,8 @@
 //    不用"允许远程自动化"；
 // 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档（support/selftest-plan.ts 的 storedProblems：只看不改的几步没有保存过；
 //    enter-exit 恰好保存了一次、内容里有改的那一格；自动保存照常运行的几步至少保存了一次、存下的内容按定义核对），
-//    写 tests/e2e/test-results/safari/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、计时与时间线），打印汇总；
+//    写 tests/e2e/safari-results/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、计时与时间线；不放在 test-results/ 里：
+//    Playwright 每次运行清空它，M3-P6 的复核丢过两次结果），打印汇总；
 //    上一步带过去的最后一步 hidden-save（M3-P4 S1；S7 起由自动保存上传）由这里编排：在库里看到它第一次上传（修订号 2）之后，open -a Safari
 //    另开收集端的空白页（HIDE_PATH），编辑器页随之真的变成隐藏，自动保存在隐藏的那一刻捕获、上传留着的第二格；按库里的证据判定（修订号 3、
 //    内容里有两格）与用时，页面在后台交不回结果也不算超时；
@@ -20,19 +21,35 @@
 //    · refresh-save：先让这份文档的保存在服务端停 10 秒（support/selftest-handover.ts 的 slowDownSave：改写内容行之前 pg_sleep），再另开它；
 //      页面发出保存、1.5 秒之后刷新，刷新之后"在此编辑"、等那次保存；按页面交回的、库里的时间线与后端日志里这份文档的请求判定
 //      （refreshJudgement：刷新之前那一代没被释放、接手是本人接管、修订号在接手之前前进、接手之前没有释放的请求）；
-// 6. 停后端、删库。Safari 里留下停在结束页的标签页（与 M0 相同），可以关掉。
+//    最后是请求编辑的两条路（M3-P6 设计 §3.10，DEF-062；support/selftest-request.ts 的编排，与 Playwright 的校准共用）：被复核的一方（作者）在 Safari 里，
+//    另一方（场景的协作者）由这里经接口扮演——
+//    · request-waiter（路 1）：协作者申请编辑权、心跳；另开作者的页面，点"请求编辑"；协作者的心跳带来请求之后另开遮住它的标签页（SHADE_PATH）、
+//      协作者交出；后端日志里作者在交出之后续期了（它在后台得知交给了它），再停 12 秒，让遮住它的标签页关掉自己，作者回到前台之后才进入编辑
+//      （waiterJudgement：停着的时候没有申请、回到前台之后普通申请）；
+//    · paused-holder（路 2，盖屏）：另开作者的页面（进入编辑，存上第一格）；用 osascript 自己的窗口盖住每一块屏幕（./desktop.ts，写明用途、按 Esc 或
+//      点它就中止，到了自己的时限也会关掉），作者的页面隐藏；看库里作者那一代的续租停不停（最多 150 秒），之后协作者请求、续期。Safari 暂停了作者的页面时：
+//      作者那一代按时间到期之后协作者申请；移走盖屏，作者回来、得知失去编辑权、另存为副本（pausedHolderJudgement：那一代没有交出、没有释放，最后一次续租
+//      到协作者申请不短于 90 秒，页面的计时器停过）。没有暂停时（2026-10-08 本机 Safari 27.0 上编辑器页就是这样）：作者已空闲满 2 分钟，心跳带来请求的
+//      同一步就先保存再自动交出，协作者续期得到 reserved 之后申请（判定按这条路）；
+// 6. 停后端、删库。Safari 里留下停在结束页的标签页（与 M0 相同），可以关掉；盖屏的窗口与 osascript 跑完一定不在（核对进程号）。
+// 只在用户空闲时跑（--idle，默认 120 秒；开头检查，等不到就不跑；屏幕锁着时不跑）：跑的时候每秒看一次用户回来没有（./desktop.ts），回来了这一次作废
+// （退出码 4），盖着屏就随即移走；在盖屏的窗口上按 Esc 或点它同样中止、作废。
 // 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 超时（有的步没有交回结果）；3 准备阶段失败（没有构建、
-// 库连不上、Safari 打不开）。
-// 用法：pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--timeout 秒] [--steps 标识,标识…]（命令先构建后端与测试构建；--steps 只跑
-// 这几步，例如 takeover-holder,takeover-taker,refresh-save——B 要与 A 一起选）。不进 CI（CI 上没有 Safari）。
+// 库连不上、Safari 打不开、用户一直在用电脑、屏幕锁着）；4 作废（用户回来了、中止了）。
+// 用法：pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--timeout 秒] [--steps 标识,标识…] [--idle 秒] [--idle-wait 秒]（命令先构建后端与
+// 测试构建；--steps 只跑这几步，例如 takeover-holder,takeover-taker,refresh-save——B 要与 A 一起选；request-waiter,paused-holder 是请求编辑的两条路；
+// --idle 是开始之前用户要空闲多久，--idle-wait 是最多等多久）。不进 CI（CI 上没有 Safari）。
 // 与 Playwright 的 E2E 共用 test-results/ 下的服务日志（e2e-server.log）与控制文件：不要与 pnpm test:e2e 在同一个检出里同时跑。
 // 自检的页面要看得见：Safari 不给隐藏的标签页（窗口被挡住、不在前面的标签页、屏幕锁定）动画帧，几秒之后连计时器也停了
 // （2026-10-04 本机 Safari 27.0 实测：Safari 的窗口不在前面时，open -g 打开的标签页一开始就是 hidden，动画帧 0 帧，计时器约 6 秒之后
 // 不再触发），编辑器画不出来。页面开始时是隐藏的，自检马上交回"页面在后台"（不等超时）；这时让 Safari 的窗口露出来再跑，或者加 --front
 import type { ChildProcess } from 'node:child_process'
 import type { AddressInfo } from 'node:net'
+import type { TestUser } from '../support/database.ts'
 import type { DocumentState, Judgement, ServerRequest } from '../support/selftest-handover.ts'
 import type { SelftestStep } from '../support/selftest-plan.ts'
+import type { RequestRun, RequestStage } from '../support/selftest-request.ts'
+import type { ActivityWatch, Cover, CoverOutcome } from './desktop.ts'
 import type { ChainLink, Received, StepOutcome } from './run-plan.ts'
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -45,14 +62,22 @@ import { revisionOf } from '../support/database.ts'
 import { databaseUrl, E2E_DATABASE_PREFIX, pickFreePort } from '../support/environment.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../support/selftest-handover.ts'
 import { SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
-import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, resultFileName, selectSteps, serverJudgedOutcome, timingLines } from './run-plan.ts'
+import { runPausedHolder, runWaiter } from '../support/selftest-request.ts'
+import { hidIdleSeconds, processAlive, screenLocked, startCover, waitForIdle, watchActivity } from './desktop.ts'
+import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, resultFileName, selectSteps, serverJudgedOutcome, SHADE_COMMAND_PATH, SHADE_PAGE, SHADE_PATH, timingLines, VOIDED_EXIT_CODE } from './run-plan.ts'
 
 const SERVE_SCRIPT = fileURLToPath(new URL('../support/serve.ts', import.meta.url))
 const SELFTEST_PAGE = fileURLToPath(new URL('../../../apps/web/dist-e2e/selftest.html', import.meta.url))
-const RESULTS_DIR = fileURLToPath(new URL('../test-results/safari/', import.meta.url))
+const RESULTS_DIR = fileURLToPath(new URL('../safari-results/', import.meta.url))
 
 /** 准备阶段失败 */
 const SETUP_FAILED = 3
+
+/** 开始之前用户要空闲多久（秒，--idle）：P5 的复核里用户切回来挡住 Safari 的窗口，这次之后改为空闲满 1.5–4 分钟再跑 */
+const DEFAULT_IDLE_SECONDS = 120
+
+/** 等用户空闲最多等多久（秒，--idle-wait）：等不到就不跑 */
+const DEFAULT_IDLE_WAIT_SECONDS = 1800
 
 /** 后端起来最多等多久（迁移、初始化管理员、启动） */
 const SERVER_READY_TIMEOUT_MS = 120_000
@@ -119,16 +144,28 @@ interface Collector {
   readonly received: Map<number, Received>
   /** 每一步与它的入口地址、交回之后去哪 */
   readonly chain: readonly ChainLink[]
+  /** 请求编辑的路 1（M3-P6）：遮住请求方的那一页（SHADE_PATH）问 SHADE_COMMAND_PATH 时回答什么——close 时它关掉自己 */
+  readonly shade: { command: 'wait' | 'close' }
   readonly close: () => Promise<void>
 }
 
 async function startCollector(chainFor: (collector: string) => readonly ChainLink[]): Promise<Collector> {
   const received = new Map<number, Received>()
+  const shade: Collector['shade'] = { command: 'wait' }
   let chain: readonly ChainLink[] = []
   let origin = ''
   const server = createServer({ maxHeaderSize: MAX_REQUEST_HEADER_BYTES }, (request, response) => {
     const url = new URL(request.url ?? '/', origin)
+    if (url.pathname === SHADE_COMMAND_PATH) {
+      // 遮住请求方的那一页每 300 毫秒问一次：不记日志
+      response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end(shade.command)
+      return
+    }
     say(`收集端收到 ${request.method ?? ''} ${url.pathname}（地址 ${String(request.url?.length ?? 0)} 个字符）`)
+    if (url.pathname === SHADE_PATH) {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }).end(SHADE_PAGE)
+      return
+    }
     if (url.pathname === DONE_PATH) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
       response.end('<!doctype html><meta charset="utf-8"><title>页面自检结束</title><p>页面自检结束，结果已交给驱动脚本。可以关掉这个标签页。</p>')
@@ -181,6 +218,7 @@ async function startCollector(chainFor: (collector: string) => readonly ChainLin
     origin,
     received,
     chain,
+    shade,
     close: async () => new Promise<void>((resolve) => {
       server.closeAllConnections()
       server.close(() => resolve())
@@ -384,6 +422,102 @@ async function driveRefreshSave(collector: Collector, index: number, deadline: n
   return { judgement: { problems: judgement.problems, evidence: [judgement.evidence, ...notes].join('；') }, states, requests, notes }
 }
 
+/** 请求编辑的两条路（M3-P6）要的：被测站点的源、作者（Safari 里）与协作者（经接口），跑的时候用户回来没有 */
+interface RequestContext {
+  readonly origin: string
+  readonly author: TestUser
+  readonly peer: TestUser
+  readonly returned: () => string | undefined
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/**
+ * 盖屏最多盖多久（秒）：等第二格（至多 60 秒）、看持有者的心跳停不停（至多 150 秒）、协作者请求之后等到期或交出（至多 240 秒），加上接手与移走的余量。
+ * 正常时约 3 分钟，驱动脚本在协作者接手之后两秒就移走它；驱动脚本死掉时它到点自己关掉
+ */
+const COVER_MAX_SECONDS = 480
+
+/** 正盖着屏的 osascript（收到 SIGINT、SIGTERM 时一并结束） */
+let activeCover: Cover | undefined
+
+/**
+ * 编排 request-waiter（路 1，见文件头）：作者的页面另开；遮住它的标签页（SHADE_PATH）另开在它右边，叫它关掉时 Safari 回到作者的那一页
+ */
+async function driveWaiter(collector: Collector, index: number, context: RequestContext, deadline: number): Promise<RequestRun> {
+  const link = collector.chain[index]
+  if (link === undefined)
+    throw new SetupError('没有 request-waiter 这一步')
+  collector.shade.command = 'wait'
+  const stage: RequestStage = {
+    open: async () => openInSafari(link.url),
+    hide: async () => openInSafari(new URL(SHADE_PATH, collector.origin).href),
+    show: async () => {
+      collector.shade.command = 'close'
+      // 它每 300 毫秒问一次；关掉之后 Safari 回到作者的那一页
+      await sleep(1_000)
+    },
+    report: async (until) => {
+      await waitForResult(collector, index, until)
+      return reportAt(collector, index)
+    },
+    voided: context.returned,
+    say,
+  }
+  return runWaiter({ origin: context.origin, documentId: link.step.documentId, holder: context.peer, waiter: context.author, stage, deadline })
+}
+
+/** 路 2 编排完的样子：另带盖屏怎样结束的、跑完之后 osascript 还在不在（应当不在） */
+interface PausedRun extends RequestRun {
+  readonly cover: CoverOutcome | undefined
+  readonly coverLeft: boolean
+}
+
+/**
+ * 编排 paused-holder（路 2，见文件头）：盖屏用 ./desktop.ts 的 startCover；在盖屏的窗口上按了 Esc、点了它，或者用户回来了，就中止（随即移走、作废）。
+ * 移走之后把 Safari 带回前台（作废时不带：别抢回来了的用户的焦点）
+ */
+async function drivePausedHolder(collector: Collector, index: number, context: RequestContext, deadline: number): Promise<PausedRun> {
+  const link = collector.chain[index]
+  if (link === undefined)
+    throw new SetupError('没有 paused-holder 这一步')
+  let cover: Cover | undefined
+  let ended: CoverOutcome | undefined
+  const voided = (): string | undefined => {
+    const outcome = cover?.outcome()
+    if (outcome === 'escape' || outcome === 'click')
+      return `在盖屏的窗口上${outcome === 'escape' ? '按了 Esc' : '点了一下'}`
+    if (outcome === 'timeout' || outcome === 'failed')
+      return outcome === 'timeout' ? '盖屏到了它自己的时限' : '盖屏的 osascript 出错'
+    return context.returned()
+  }
+  const stage: RequestStage = {
+    open: async () => openInSafari(link.url),
+    hide: async () => {
+      cover = startCover(COVER_MAX_SECONDS)
+      activeCover = cover
+      // 窗口铺开，Safari 的页面随之隐藏
+      await sleep(500)
+    },
+    show: async () => {
+      ended = await cover?.stop()
+      activeCover = undefined
+      if (voided() === undefined)
+        execFileSync('open', ['-a', 'Safari'])
+    },
+    report: async (until) => {
+      await waitForResult(collector, index, until)
+      return reportAt(collector, index)
+    },
+    voided,
+    say,
+  }
+  const run = await runPausedHolder({ origin: context.origin, documentId: link.step.documentId, holder: context.author, requester: context.peer, stage, deadline, expectSuspended: true })
+  return { ...run, cover: ended, coverLeft: processAlive(cover?.pid) }
+}
+
 /** 服务器上的核对（每一步的文档，support/selftest-plan.ts 的 storedProblems；交接的几步带上走的路，共用文档的那一步随它共用的那一步核对） */
 async function checkServer(steps: readonly SelftestStep[], pathOf: (step: SelftestStep) => string | undefined): Promise<{ readonly revisions: Readonly<Record<string, number | undefined>>, readonly problems: string[] }> {
   const revisions: Record<string, number | undefined> = {}
@@ -414,15 +548,27 @@ function printSummary(outcomes: readonly StepOutcome[], serverProblems: readonly
 }
 
 async function main(): Promise<number> {
-  const { values } = parseArgs({ options: { timeout: { type: 'string', default: '1800' }, front: { type: 'boolean', default: false }, steps: { type: 'string' } } })
+  const { values } = parseArgs({ options: {
+    'timeout': { type: 'string', default: '1800' },
+    'front': { type: 'boolean', default: false },
+    'steps': { type: 'string' },
+    'idle': { type: 'string', default: String(DEFAULT_IDLE_SECONDS) },
+    'idle-wait': { type: 'string', default: String(DEFAULT_IDLE_WAIT_SECONDS) },
+  } })
   const timeoutMs = Number(values.timeout) * 1000
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
     throw new SetupError(`--timeout 要是正的秒数：${values.timeout}`)
+  const idleSeconds = Number(values.idle)
+  const idleWaitSeconds = Number(values['idle-wait'])
+  if (!Number.isFinite(idleSeconds) || idleSeconds < 0 || !Number.isFinite(idleWaitSeconds) || idleWaitSeconds < 0)
+    throw new SetupError(`--idle、--idle-wait 要是不小于 0 的秒数：${values.idle}、${values['idle-wait']}`)
   const selection = selectSteps(SELFTEST_STEPS, values.steps)
   if ('error' in selection)
     throw new SetupError(selection.error)
   if (!existsSync(SELFTEST_PAGE))
     throw new SetupError(`找不到 ${SELFTEST_PAGE}：先构建测试构建（pnpm --filter @nerve-office/web run build:e2e）`)
+  if (screenLocked())
+    throw new SetupError('屏幕锁着（或者这次登录不在控制台上）：Safari 的页面都是隐藏的，跑不了')
   const startedAt = new Date()
   const safari = safariVersion()
   const macos = macosVersion()
@@ -434,17 +580,31 @@ async function main(): Promise<number> {
   say(`Safari ${safari}（macOS ${macos}），起后端 ${origin}`)
   const server = startServer(port, database)
   const stop = (signal: NodeJS.Signals): void => {
-    say(`收到 ${signal}，停后端`)
+    say(`收到 ${signal}，移走盖屏（如果盖着）、停后端`)
+    void activeCover?.stop()
     void stopServer(server).then(() => process.exit(130))
   }
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   let collector: Collector | undefined
+  let activity: ActivityWatch | undefined
   try {
     await waitUntilReady(origin, server)
     const scene = await selftestScene('safari', selection.definitions)
     const { steps } = scene
     collector = await startCollector(collectorOrigin => chainOf(steps, origin, collectorOrigin))
+    // 只在用户空闲时跑（用户在用电脑时 Safari 的窗口会被挡住；请求编辑的路 2 还要盖屏）：等他空闲满 --idle 秒，之后每秒看一次他回来没有
+    if (!await waitForIdle(idleSeconds, idleWaitSeconds, say))
+      throw new SetupError(`等了 ${idleWaitSeconds} 秒，用户一直在用电脑（要空闲满 ${idleSeconds} 秒才跑）`)
+    if (screenLocked())
+      throw new SetupError('屏幕锁着（或者这次登录不在控制台上）：Safari 的页面都是隐藏的，跑不了')
+    say(`用户已空闲 ${(hidIdleSeconds() ?? 0).toFixed(0)} 秒，开始（之后用户一回来这一次就作废）`)
+    const watching = watchActivity()
+    activity = watching
+    const returned = (): string | undefined => {
+      const at = watching.returnedAt()
+      return at === undefined ? undefined : `用户在 ${new Date(at).toISOString()} 回来了（键盘、鼠标有了操作）`
+    }
     // 由上一步带过去的第一步（只选了交接的几步时没有：它们由下面的编排各自另开）
     const first = collector.chain.find(link => !link.opened)
     say(`收集端 ${collector.origin}；在 Safari 里（${values.front ? '带到前台' : '后台'}）打开第一步，共 ${steps.length} 步，最多等 ${timeoutMs / 1000} 秒`)
@@ -471,15 +631,25 @@ async function main(): Promise<number> {
       takeovers.set(pair.holder, await driveTakeover(collector, pair.holder, pair.taker, deadline))
     const refreshIndex = steps.findIndex(step => step.scenario === 'refresh-save')
     const refresh = refreshIndex >= 0 ? await driveRefreshSave(collector, refreshIndex, deadline) : undefined
+    // 请求编辑的两条路（M3-P6）：路 1 先、路 2（盖屏）最后；用户已经回来了就不再盖屏
+    const context: RequestContext = { origin, author: scene.author, peer: scene.peer, returned }
+    const waiterIndex = steps.findIndex(step => step.scenario === 'request-waiter')
+    const waiter = waiterIndex >= 0 ? await driveWaiter(collector, waiterIndex, context, deadline) : undefined
+    const pausedIndex = steps.findIndex(step => step.scenario === 'paused-holder')
+    if (pausedIndex >= 0 && returned() !== undefined)
+      say(`没有跑 paused-holder（不盖屏）：${returned() ?? ''}`)
+    const paused = pausedIndex >= 0 && returned() === undefined ? await drivePausedHolder(collector, pausedIndex, context, deadline) : undefined
+    watching.stop()
     const active = collector
     const { received } = active
-    // 交接的几步在服务器上该是什么样子随走的路：A 的文档按 B 走的路，refresh-save 按它自己交回的
+    // 交接的几步在服务器上该是什么样子随走的路：A 的文档按 B 走的路，refresh-save 与请求编辑的两步按它自己交回的
     const pathOf = (step: SelftestStep): string | undefined => {
       const pair = pairs.find(item => item.holder === steps.indexOf(step))
       return reportAt(active, pair === undefined ? steps.indexOf(step) : pair.taker)?.path
     }
     const stored = await checkServer(steps, pathOf)
     const storedOf = (step: SelftestStep): string[] => stored.problems.filter(problem => problem.startsWith(`${step.id}：`))
+    const requestRuns = new Map<number, RequestRun>([...(waiter === undefined ? [] : [[waiterIndex, waiter] as const]), ...(paused === undefined ? [] : [[pausedIndex, paused] as const])])
     const outcomes = steps.map((step, index) => {
       if (index === hiddenIndex)
         return serverJudgedOutcome(step, received.get(index), storedOf(step), evidence ?? '')
@@ -488,11 +658,19 @@ async function main(): Promise<number> {
         return serverJudgedOutcome(step, received.get(index), [...storedOf(step), ...takeover.judgement.problems], takeover.judgement.evidence)
       if (index === refreshIndex && refresh !== undefined)
         return serverJudgedOutcome(step, received.get(index), [...storedOf(step), ...refresh.judgement.problems], refresh.judgement.evidence)
+      const request = requestRuns.get(index)
+      if (request !== undefined)
+        return serverJudgedOutcome(step, received.get(index), [...storedOf(step), ...request.judgement.problems], request.judgement.evidence)
       return outcomeOf(step, received.get(index))
     })
-    const exitCode = exitCodeOf(outcomes, stored.problems)
+    // 作废：用户回来了（任何一步跑的时候）、在盖屏的窗口上按了 Esc 或点了它、盖屏到了时限；跑完之后盖屏的 osascript 还在也说出来
+    const voided = returned() ?? waiter?.voided ?? paused?.voided
+    if (paused?.coverLeft === true)
+      stored.problems.push('盖屏的 osascript 跑完之后还在')
+    const exitCode = voided === undefined ? exitCodeOf(outcomes, stored.problems) : VOIDED_EXIT_CODE
     mkdirSync(RESULTS_DIR, { recursive: true })
     const file = `${RESULTS_DIR}${resultFileName(startedAt)}`
+    const requestSummary = (run: RequestRun | undefined): unknown => run === undefined ? undefined : { states: run.states, requests: run.requests, calls: run.calls, marks: run.marks, notes: run.notes, voided: run.voided }
     writeFileSync(file, `${JSON.stringify({
       tool: 'tests/e2e/safari/selftest.ts',
       startedAt: startedAt.toISOString(),
@@ -501,6 +679,7 @@ async function main(): Promise<number> {
       macos,
       origin,
       exitCode,
+      voided,
       server: stored,
       steps: outcomes,
       // 交接的复核：库里的时间线（修订号与编辑租约每次变化的时刻）与 refresh-save 这份文档在后端日志里的请求
@@ -508,12 +687,21 @@ async function main(): Promise<number> {
         takeover: Object.fromEntries([...takeovers].map(([index, run]) => [steps[index]?.id ?? String(index), { states: run.states, requests: run.requests }])),
         refresh: refresh === undefined ? undefined : { states: refresh.states, requests: refresh.requests },
       },
+      // 请求编辑的两条路（M3-P6）：库里的时间线、后端日志里这份文档的请求、协作者的调用、各步的时刻；路 2 另有盖屏怎样结束的
+      request: {
+        waiter: requestSummary(waiter),
+        paused: paused === undefined ? undefined : { ...requestSummary(paused) as object, cover: paused.cover, coverLeft: paused.coverLeft },
+      },
     }, null, 2)}\n`)
     printSummary(outcomes, stored.problems)
+    if (voided !== undefined)
+      say(`这一次作废：${voided}`)
     say(`结果写在 ${file}；退出码 ${exitCode}`)
     return exitCode
   }
   finally {
+    activity?.stop()
+    await activeCover?.stop()
     await collector?.close()
     await stopServer(server)
   }

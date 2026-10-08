@@ -32,8 +32,18 @@
 //   等多久由 edit-mode.ts 设上限），结果交回服务端确认了没有（没确认时那一代可能还在，阅读页如实说明，审查 A13）。
 // - 与服务端不兼容（M3-P3 设计 §3.5）：续租或续上的申请得到 CLIENT_OUTDATED（本页过旧）或 DOCUMENT_TOO_NEW（文档比服务端新）——
 //   本页写不进去了：停止续租、尽力放掉手里那一代（别人与重新加载之后的本页立即能申请，不用等它到期），经 onIncompatible 通知页面。终态；
-// - 被本浏览器的另一个标签页取代（M3-P5 设计 §3.1：本机锁被抢）：服务端批给了那边，本页这一代必然已经失效——abandon 停止续租与续上，
-//   不发释放（令牌已经对不上），也不通知（页面自己转为失去编辑权）。终态；
+// - 核对这一代此刻是不是服务端当前的（M3-P6 设计 §3.13，Codex 评审 CX2）：本机锁的争用（拿锁时被本浏览器的别的标签页占着、锁被抢）由服务端
+//   裁决，页面（local-lock.ts）经 confirm 立即续租一次——申请成功的回包、本机锁都说明不了这一刻的事实（服务端批准之后、回包到达之前可能已经
+//   再换代）。续租成功是当前的；令牌对不上这一行（taken_over、replaced）是被别的一代取代了；别的失效（到期、空闲、代次过时、登录不对、收回、
+//   读不到、不能编辑……：令牌仍是这一行的）是这一代自己失效了，页面交给 lose——与心跳、保存得知同样的原因时同一条路（复验 E2）；别的失败
+//   （网络、5xx、会话的问题、与服务端不兼容）核对不了。回答说的是发出那一刻手里的那一代：期间续上换了一代就核对现在的这一代；得到失效时续上
+//   还在途就先等它有了结果（服务端可能先提交了本页续上的新一代，晚于它处理的核对得到的 replaced 说的正是本页自己，复验 E8）；本页有结果未知、
+//   可能已在服务端改写这一行的申请时（续上的申请，或者取得这一代之前用户发起的申请里被放弃的那一次，复验 E11），replaced 同样说不准是谁改写的，
+//   当作这一代自己失效。只问、不改：自己不续上（被取代时续上就是去抢；自己失效的由页面交给 lose），不暂停、不通知，这一代照旧——页面按裁决
+//   处理（被取代就 abandon），核对不了时由之后的心跳给出结论。心跳续租成功时另经 onRenewed 告诉页面，带着这次续租发出的时刻（被抢之后还没有
+//   结论的，只认被抢之后发出的续租：之前发出的、迟到的成功可能跨过了一次换代，复验 E1）；
+// - 放弃这一代（abandon）：停止续租与续上，不发释放，也不通知。终态。用在服务端已经不认这一代、页面自己知道的时候——交出之后；本机锁的争用中
+//   核对得知这一代已被取代之后（M3-P6 设计 §3.13）；
 // - 被接管（M3-P5 设计 §3.7、§3.8：续租或保存得到 taken_over）：不续上（编辑权是有意交给别处的，续上就是抢回来）——本人在另一台设备或浏览器上
 //   接手（forced 为假）与空间管理员强制接管（forced 为真）分开交给页面；已经交出（handed_over：交出的回答没收到、下一次心跳才得知）同样不续上，
 //   单独交给页面（说明交给了请求编辑的人）；
@@ -178,7 +188,8 @@ export interface LeaseHolder {
  * - denied：读得到却不能编辑了（403，例如被降为查看者、空间被归档），原因的说明由服务端给出；
  * - held：续上时别人（或者自己在别的标签页、设备上）正在编辑；
  * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它；
- * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，不再问服务端）；
+ * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，核对得知这一代已被取代，
+ *   M3-P6 设计 §3.13）；
  *   elsewhere 是另一台设备或浏览器（续租或保存得到 taken_over、forced 为假：那边以本人接管申请，服务端结束了这一代）；
  * - forced：空间管理员（个人空间是所有者）强制接管了编辑（M3-P5 设计 §3.8：taken_over、forced 为真）。by 是接管的人：转为阅读之后读一次
  *   编辑状态，正在编辑的是别人就是他（edit-mode.ts 补上；没读到时为 undefined，只说空间管理员强制接管了编辑）；
@@ -236,6 +247,38 @@ export type LeaseOutcome
     | { readonly kind: 'unknown', readonly error: unknown }
 
 /**
+ * 核对（confirm）的裁决（M3-P6 设计 §3.13）：
+ * - current：续租成功——服务端处理这次续租时这一代是当前的；
+ * - superseded：被别的一代取代了——令牌对不上服务端这一行：被接管（taken_over：本人在别处接手、空间管理员强制接管，方式认不出的同样）、被新的
+ *   一代改写（replaced）。loss 是服务端说的原因；
+ * - ended：这一代自己失效了——令牌仍是这一行的，而到期、空闲、代次过时、登录不对、已经释放、收回、已经交出，或者没有这一行、读不到（404）、
+ *   不能编辑（403）；本页有结果未知、可能已在服务端改写这一行的申请时的 replaced 也在这里（改写这一行的可能正是本页自己，复验 E8、E11）（loss
+ *   是服务端说的原因：页面交给 lose，与心跳、保存得知同样的原因时同一条路，复验 E2）；或者核对之前、核对期间这一代在本页已经失效、释放、放弃
+ *   （loss 为 undefined：结束它的那一处已经处理）；
+ * - unknown：核对不了——网络、服务端出错、回包读不出来、会话的问题、与服务端不兼容（error 是那次的错误），或者会话不是本人、暂停着（不发，
+ *   error 为 undefined）
+ */
+export type LeaseVerdict
+  = | { readonly kind: 'current' }
+    | { readonly kind: 'superseded', readonly loss: LeaseLoss }
+    | { readonly kind: 'ended', readonly loss: LeaseLoss | undefined }
+    | { readonly kind: 'unknown', readonly error: unknown }
+
+/**
+ * 服务端说的失效是不是"被别的一代取代"（核对的裁决 superseded，见 LeaseVerdict）：令牌对不上这一行时服务端回 taken_over（带方式；方式认不出时
+ * leaseLossOf 给出原因 taken_over 本身）或 replaced（apps/api 的 edit-lease-rules.ts 的 supersededLoss）；别的原因都是令牌仍是这一行的（或者
+ * 失去了访问、编辑权），原因认不出的也不当作被取代
+ */
+function supersedes(loss: LeaseLoss): boolean {
+  return loss.kind === 'taken-over' || loss.kind === 'forced' || (loss.kind === 'lease' && (loss.reason === 'replaced' || loss.reason === 'taken_over'))
+}
+
+/** 核对得到的失效怎样裁决：被别的一代取代（superseded），或者这一代自己失效了（ended） */
+function verdictOf(loss: LeaseLoss): LeaseVerdict {
+  return supersedes(loss) ? { kind: 'superseded', loss } : { kind: 'ended', loss }
+}
+
+/**
  * 本页持有的编辑租约：令牌与代次随保存带上（续上之后换成新的一代）；心跳在后台进行，失效时经 onLost 通知页面。
  * 失效与释放都是终态
  */
@@ -261,9 +304,17 @@ export interface EditLease {
   /** 恢复续上（空闲释放没成、留在编辑）：停止期间人回来过（dormant 而人在）就随即续上 */
   readonly allowRecovery: () => void
   /**
-   * 放弃这一代：停止续租与续上，不发释放，不通知页面。终态；进行中的续上回来时新的一代随即放掉。用在服务端已经不认这一代的时候——
-   * 本机锁被本浏览器的另一个标签页抢走（M3-P5 设计 §3.1 第 2 条：服务端批给了那边，本页这一代必然已经失效，令牌已经对不上）；
-   * 交出之后（M3-P5 设计 §3.6：服务端已经结束这一代、留给请求方；页面关闭时发了交出的也是）
+   * 核对这一代此刻是不是服务端当前的（M3-P6 设计 §3.13：本机锁的争用由服务端裁决，local-lock.ts）：立即续租一次，交回裁决（LeaseVerdict）。
+   * 与心跳互不等待：心跳在途时它可能早于对方取得新的一代发出，说明不了现在；这一次在页面看到争用之后才发出。只问、不改：不续上（被取代时续上
+   * 就是去抢服务端已经给了别处的编辑权；这一代自己失效时由页面交给 lose），不暂停、不通知、不结束这一代——页面按裁决处理（被取代就 abandon）；
+   * 裁决没人理会时（页面已经离开编辑）什么也没改过，之后照常由心跳得知。期间续上换了一代时核对现在的这一代；得到失效时续上还在途就先等它有了
+   * 结果再定（复验 E8）。会话不是本人（暂停）时不发；人不在、等再有操作时续上（dormant）的这一代服务端已经说过失效，不发、按那次的原因裁决
+   */
+  readonly confirm: () => Promise<LeaseVerdict>
+  /**
+   * 放弃这一代：停止续租与续上，不发释放，不通知页面。终态；进行中的续上回来时新的一代随即放掉。用在服务端已经不认这一代、页面自己知道的时候——
+   * 交出之后（M3-P5 设计 §3.6：服务端已经结束这一代、留给请求方；页面关闭时发了交出的也是；交给本浏览器的另一个标签页时那边随即以本人接管结束它）；
+   * 本机锁的争用中核对得知这一代已被取代之后（M3-P6 设计 §3.13）
    */
   readonly abandon: () => void
   /**
@@ -305,6 +356,13 @@ export interface EditLeaseOptions {
    * 被谢绝了都是 null。不需要时不给
    */
   readonly onRequest?: ((request: PendingEditRequest | null) => void) | undefined
+  /**
+   * 每次心跳续租成功（这一代还在用时，M3-P6 设计 §3.13）：服务端处理这次续租时这一代是当前的。sentAt 是这次续租发出的时刻（clock.now 的时间轴）：
+   * 本机锁被抢之后还没有结论的页面只认被抢之后发出的（之前发出的、迟到的成功可能跨过了一次换代，复验 E1），这时把锁拿回来（local-lock.ts 的
+   * renewed）。核对（confirm）的那一次不经这里（裁决直接交回调用方）；续上申请到的新的一代也不经这里（申请的回包同样说明不了现在，等它的
+   * 第一次续租）。不需要时不给
+   */
+  readonly onRenewed?: ((sentAt: number) => void) | undefined
 }
 
 /**
@@ -361,7 +419,8 @@ export interface AcquireIntent {
  * 申请编辑权。被占用而且是自己时，隔 SAME_USER_RETRY_DELAY_MS 再试，最多 SAME_USER_RETRIES 次（intent.retrySameUser 说不必时不再试），
  * 仍被占用才按被占用返回。结果未知（网络错误、5xx、回包读不出来）时隔 UNKNOWN_OUTCOME_RETRY_DELAY_MS 用同一个标识再试
  * UNKNOWN_OUTCOME_RETRIES 次：服务端可能已经批给了本页，同一个页面再申请是重试，发新的一代（审查 B7；本人接管的重试沿用上一代的接管标记，
- * 服务端不再写一次）。别的失败（403、404、未登录等）、再试之后仍未知的，原样抛出，由页面处理
+ * 服务端不再写一次）。再试成功了，被放弃的那一次服务端仍可能晚于它才处理（同样按同一个页面的重试，换成本页不知道的新一代）：取得的这一代带着
+ * "结果未知"的记号（holdEditLease 的 ownAcquireUnknown，复验 E11）。别的失败（403、404、未登录等）、再试之后仍未知的，原样抛出，由页面处理
  */
 export async function acquireEditLease(options: EditLeaseOptions, intent: AcquireIntent = {}): Promise<LeaseAcquisition> {
   let sameUserRetries = 0
@@ -389,7 +448,9 @@ export async function acquireEditLease(options: EditLeaseOptions, intent: Acquir
       await wait(options.clock, SAME_USER_RETRY_DELAY_MS)
       continue
     }
-    return { kind: 'acquired', lease: holdEditLease(options, acquired), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
+    // 之前有过结果未知的尝试：被放弃的那一次服务端可能晚于这一次才处理（同一个页面的重试，换成本页不知道的新一代，复验 E11）——取得的这一代
+    // 一开始就带着"结果未知"的记号（与续上的记号同一个含义、同样在续上换了一代时清掉）
+    return { kind: 'acquired', lease: holdEditLease(options, acquired, unknownRetries > 0), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
   }
 }
 
@@ -410,7 +471,10 @@ type LeaseState = 'holding' | 'paused' | 'dormant' | 'lost' | 'released' | 'halt
 const LOST: LeaseOutcome = { kind: 'lost' }
 const HELD: LeaseOutcome = { kind: 'held' }
 
-function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): EditLease {
+/**
+ * 持有取得的这一代（见 EditLease）。acquireUnknown：取得它的申请之前有过结果未知的尝试（acquireEditLease），记号 ownAcquireUnknown 的初值
+ */
+function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, acquireUnknown: boolean): EditLease {
   const { api, clock, documentId } = options
   let credentials: LeaseCredentials = { token: acquired.token, writeEpoch: acquired.writeEpoch }
   let state: LeaseState = 'holding'
@@ -433,6 +497,13 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   let recoveryHeld = false
   /** 人不在（dormant）时那次失效的原因：只在 dormant 时读，人回来续上时按它决定要不要先放掉手里那一代（releasesBeforeRecovery） */
   let dormantReason: EditLeaseLostReason = 'none'
+  /**
+   * 本页有结果未知、可能已在服务端改写这一行的申请（网络、5xx、回包读不出来）：续上的申请如此（复验 E8），或者取得这一代的那次用户发起的
+   * 申请之前有过这样的尝试（同一个标识再试成功了，被放弃的那一次服务端可能晚于它才处理，复验 E11）。服务端可能已经提交了本页自己的新一代、
+   * 本页却没拿到它的令牌——这期间得知的 replaced（这一行被新的申请改写了）说不准是不是本页自己改写的（judge）。确定被拒的申请没有提交，不算；
+   * 之后续上换了一代（本页知道了自己最新的一代）时清掉
+   */
+  let ownAcquireUnknown = acquireUnknown
 
   function stopTimer(): void {
     cancelTimer?.()
@@ -564,7 +635,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         options.onSessionProblem(error)
         return { kind: 'unknown', error }
       }
-      // 网络、5xx、回包读不出来：结果未知，保持现状（仍按手里那一代），下一次心跳或保存时再判断
+      // 网络、5xx、回包读不出来：结果未知，保持现状（仍按手里那一代），下一次心跳或保存时再判断。服务端可能已经提交了这次申请（本页自己的
+      // 新一代，本页没拿到）：记下来，之后得知的 replaced 说不准是谁改写的
+      ownAcquireUnknown = true
       if (state === 'holding')
         scheduleRenewal(HEARTBEAT_MS)
       return { kind: 'unknown', error }
@@ -582,6 +655,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       return LOST
     }
     credentials = { token: next.token, writeEpoch: next.writeEpoch }
+    ownAcquireUnknown = false
     if (state === 'dormant')
       state = 'holding'
     if (state === 'holding')
@@ -669,9 +743,12 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       }
       // 网络、5xx、回包读不出来：结果未知，下一次照常重试，到期由服务端判断
     }
-    // 这一代还在用（没有释放、失效、放弃）：心跳带来的请求交给页面（在 try 之外：页面那边出错不当作续租失败）
-    if (renewed !== undefined && !ended())
+    // 这一代还在用（没有释放、失效、放弃）：心跳带来的请求交给页面，并告诉页面服务端处理这次续租时这一代是当前的、这次续租是什么时候发出的
+    // （在 try 之外：页面那边出错不当作续租失败）
+    if (renewed !== undefined && !ended()) {
       options.onRequest?.(renewed.request)
+      options.onRenewed?.(sentAt)
+    }
     if (state === 'holding' && !renewAgain && recovery === undefined)
       scheduleRenewal(Math.max(0, sentAt + HEARTBEAT_MS - clock.now()))
   }
@@ -697,6 +774,62 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     }
     inFlight = run()
     return inFlight
+  }
+
+  /**
+   * 核对得到的失效怎样裁决（见 LeaseVerdict 与 verdictOf）：replaced 说的是这一行被新的申请改写了——本页有结果未知、可能已在服务端改写这一行
+   * 的申请时（ownAcquireUnknown），改写它的可能正是本页自己（服务端提交了、回包没到，或者被放弃的那一次晚于再试才处理），说明不了被别的一代
+   * 取代：当作这一代自己失效，页面交给 lose（与心跳、保存得知 replaced 时同一条路：续上——是本页自己的那一行就是同一个页面的重试，是别处的就
+   * 被占用、照服务端说），复验 E8、E11。被接管（taken_over）的记号对着本页手里的这一代，不会是本页自己的申请（同一个页面的重试沿用原来的
+   * 记号），照旧是被取代
+   */
+  function judge(loss: LeaseLoss): LeaseVerdict {
+    if (ownAcquireUnknown && loss.kind === 'lease' && loss.reason === 'replaced')
+      return { kind: 'ended', loss }
+    return verdictOf(loss)
+  }
+
+  /**
+   * 核对（见 EditLease 的 confirm）：续租一次，按回答给出裁决；只问、不改这一代。回答说的是发出那一刻手里的那一代：期间续上换了一代就核对
+   * 现在的这一代；得到失效时续上还在途（心跳、保存得知失效之后），这一代正在被替换——服务端可能先提交了续上的新一代、回包还没到，核对晚于它
+   * 被处理却先回来，得到的 replaced 说的正是本页自己续上的那一代（复验 E8）：先等续上有了结果，结束了、换了一代都重新来过（换了就核对现在的
+   * 这一代），没换（续上说不准）才按这次的回答裁决
+   */
+  async function confirm(): Promise<LeaseVerdict> {
+    for (;;) {
+      if (ended())
+        return { kind: 'ended', loss: undefined }
+      // 服务端已经说过这一代失效（人不在，等再有操作才续上）：按那次的原因裁决
+      if (state === 'dormant')
+        return judge({ kind: 'lease', reason: dormantReason })
+      if (state === 'paused')
+        return { kind: 'unknown', error: undefined }
+      const used = credentials.token
+      let failure: { readonly error: unknown } | undefined
+      try {
+        await api.renew(documentId, used, idleSeconds())
+      }
+      catch (error) {
+        failure = { error }
+      }
+      // 期间页面释放、放弃，或者心跳、保存得知失效（已经通知了页面）：这一代已经不用了
+      if (ended())
+        return { kind: 'ended', loss: undefined }
+      // 期间续上换了一代（心跳、保存得知失效之后）：这次回答说的是上一代，再核对现在的这一代
+      if (used !== credentials.token)
+        continue
+      if (failure === undefined)
+        return { kind: 'current' }
+      const loss = leaseLossOf(failure.error)
+      if (loss === undefined)
+        return { kind: 'unknown', error: failure.error }
+      if (recovery !== undefined) {
+        await recovery
+        if (ended() || used !== credentials.token)
+          continue
+      }
+      return judge(loss)
+    }
   }
 
   scheduleRenewal(HEARTBEAT_MS)
@@ -743,6 +876,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         void startRecovery(dormantReason)
       }
     },
+    confirm,
     abandon: () => {
       if (ended())
         return

@@ -4,6 +4,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import type { Buffer } from 'node:buffer'
 import type { EditLeaseEndReason, EditLeaseTakeover } from '../../db/schema/documents/index.ts'
 import type { Database, Transaction } from '../database/index.ts'
+import type { DocumentRowLock } from './documents.repository.ts'
 import type { WriteAccessScope } from './write-access.ts'
 import { EDIT_HANDOVER_RESERVE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_REQUEST_TTL_SECONDS } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
@@ -61,6 +62,15 @@ export interface ObservedEditLease extends EditLeaseRow {
   readonly now: Date
 }
 
+declare const LEASE_ROW_LOCKED: unique symbol
+
+/**
+ * 先锁住文档行、再锁住的租约行（Codex 评审 CX1）：只由 lockUnder（凭文档行的锁，DocumentRowLock）与 lockInScope（收回写入权，自己先锁文档行）给出，
+ * 类型上别处造不出来（与 Transaction 同一个写法）。明确结束这一代（end、handOver、endAll）只凭它，结束因此与在途的保存互斥：
+ * 保存持着文档行的锁、不加锁地读租约，结束要等它提交；结束提交之后才拿到文档行的保存读到它已经结束（见类的注释）
+ */
+export type LockedEditLease = ObservedEditLease & { readonly [LEASE_ROW_LOCKED]: true }
+
 /** 接管标记（M3-P5 设计 §3.7、§3.8）：这一代接管的那一代的令牌摘要（不存令牌本身）与方式 */
 export interface TakeoverMarker {
   readonly tokenDigest: Buffer
@@ -68,12 +78,11 @@ export interface TakeoverMarker {
 }
 
 /**
- * 改写为新的一代要写的东西：时间由数据库给出（申请与续租是 now()，到期是 now() 加有效期）；最后活动是 now() 减去 idleSeconds——
- * 续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5，复验 P1-C5：服务端的空闲兜底不因续上而重新计时），别的申请是 0。
- * takenOver：这一代接管了占着的那一代（本人接管、强制接管）时写下的接管标记；不是接管时为 undefined，接管标记只在同一个页面重试时沿用
+ * 改写为新的一代要写的东西（哪份文档由调用方持锁的凭据给出，见 replace）：时间由数据库给出（申请与续租是 now()，到期是 now() 加有效期）；
+ * 最后活动是 now() 减去 idleSeconds——续上的页面带来的本页空闲秒数（M3-P5 设计 §3.5，复验 P1-C5：服务端的空闲兜底不因续上而重新计时），
+ * 别的申请是 0。takenOver：这一代接管了占着的那一代（本人接管、强制接管）时写下的接管标记；不是接管时为 undefined，接管标记只在同一个页面重试时沿用
  */
 export interface NewEditLease {
-  readonly documentId: string
   readonly holderId: string
   readonly sessionId: string
   readonly clientInstanceId: string
@@ -103,11 +112,11 @@ export interface WrittenReservation {
 }
 
 /**
- * 收回写入权时锁住的一条租约，连同那份文档现在的几项属性（锁住文档行之后读的，看得到调用方刚做的改动）：
- * 所在的空间（对应 coversWriter 的 DocumentWriter：持有者、文档、空间）、创建人（与空间一起是访问策略判断用的 AccessTarget）、
- * 状态（删除的调用方先把文档放进回收站：回收站里的文档谁也不能编辑）
+ * 收回写入权时锁住的一条租约（先锁文档行、再锁租约行，凭它结束：LockedEditLease），连同那份文档现在的几项属性（锁住文档行之后读的，
+ * 看得到调用方刚做的改动）：所在的空间（对应 coversWriter 的 DocumentWriter：持有者、文档、空间）、创建人（与空间一起是访问策略判断用的
+ * AccessTarget）、状态（删除的调用方先把文档放进回收站：回收站里的文档谁也不能编辑）
  */
-export interface RevocableEditLease extends ObservedEditLease {
+export interface RevocableEditLease extends LockedEditLease {
   readonly spaceId: string
   readonly createdBy: string
   readonly documentStatus: DocumentStatus
@@ -221,29 +230,36 @@ function writersIn(scope: WriteAccessScope): SQL | undefined {
 /**
  * 编辑租约（M3-P1 设计 §3.3）：只有它读写 document_edit_leases（一表一仓储，规范 §1.2）。只在 documents 模块里用，
  * 不从模块的公开入口转出（lint 拦下）。时间都写数据库的 now()，读出的行带上同一条语句里的 now()（ObservedEditLease）。
- * 锁的顺序是文档行（FOR UPDATE）→ 租约行（P1 设计 §3.4.6）：申请（含本人接管、强制接管）与收回写入权先锁文档行、再锁租约行并改写它；
- * 心跳与释放只锁租约行，M3-P5 的请求编辑（发出、续期、取消、谢绝）与交出同样只锁租约行（设计 §3.12）；保存在文档行的锁下读它、不加锁。
- * 不加锁读是安全的，但理由要说全（M3-P1 审查 A7；M3-P5 设计 §3.12 加了不锁文档行的写路径之后重新论证过）：
- * - 换成新的一代（申请、接管）与收回（撤权）都要先拿文档行的锁，保存持着它，所以这几种改写不会夹在保存的读与提交之间；
- * - 不锁文档行的写路径都不改持有者、登录、标签页、令牌摘要与代次（保存判断有效看的那几列）：心跳只续期（续租、到期、最后活动），
- *   释放与交出只结束（交出另写保留、清掉请求：结束的两列、保留的两列、请求的六列）——与保存交错时，保存按"读到的那一刻"线性化
- *   （读到有效就是续期之前或结束之前；页面交出之前先存上，P4 的 flush，不靠这一条）；请求的发出、续期、取消与谢绝只改请求的六列，
+ * 锁的顺序是文档行（FOR UPDATE）→ 租约行（P1 设计 §3.4.6，ADR-014），全局只有这一个方向：没有哪条路径在锁住租约行之后再锁文档行，不成环——
+ * - 让租约失效的写先锁文档行、再锁租约行：换成新的一代（申请，含本人接管、强制接管）与明确结束（释放、交出、收回写入权）。类型上凭锁：
+ *   换代凭文档行的锁（replace 要 DocumentRowLock，只有 DocumentsRepository.lockById 给出）；明确结束凭先锁文档行、再锁住的租约行
+ *   （end、handOver、endAll 要 LockedEditLease，只有 lockUnder 与 lockInScope 给出）——以后加的结束路径忘不了先锁文档行（Codex 评审 CX1）；
+ * - 心跳与请求编辑（发出、续期、取消、谢绝，M3-P5 设计 §3.12）只锁租约行（lockByDocument），锁住之后读文档行不加锁；
+ * - 永久删除文档时租约行随外键级联删掉：同样先删（锁）文档行、后删租约行。
+ * 保存在文档行的锁下读租约、不加锁。这是安全的，理由（M3-P1 审查 A7；M3-P5 设计 §3.12；Codex 评审 CX1 之后重新论证）：
+ * - 让租约失效的写都要先拿文档行的锁，保存持着它，所以它们不会夹在保存的读与提交之间：保存读到有效，到提交都有效。反过来，
+ *   明确结束提交的那一刻，这份文档上没有读过它、还没提交的保存——收回写入权不锁明确结束了的租约，靠的就是这一条（lockInScope）。
+ *   原来释放与交出只锁租约行：保存读到有效之后它们照样提交，撤权随即看租约已经结束、不等这次保存就先提交，保存随后提交（CX1 的反例）；
+ * - 只锁租约行的写都不让租约失效：心跳只续期（续租、到期、最后活动只往前走）；请求的发出、续期、取消与谢绝只改请求的六列，
  *   取消另清保留的两列，保存不读这些列，有效条件也不看它们，与保存怎样交错都不影响保存的判断。
- * 以后要在不锁文档行的路上改别的列（例如持有者、代次）、或者让保存读请求与保留之前，先重新论证这一条
+ * 以后要在只锁租约行的路上改别的列（例如持有者、代次、结束）、或者让保存读请求与保留之前，先重新论证这一条
  */
 @Injectable()
 export class EditLeasesRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
-  /** 这份文档的租约（不加锁），没有时为 undefined：编辑状态在只读快照里读它，保存在文档行的锁下读它 */
+  /**
+   * 这份文档的租约（不加锁），没有时为 undefined：编辑状态在只读快照里读它，保存在文档行的锁下读它；释放先不加锁看一眼
+   * 能不能释放（释放不了的不取锁）
+   */
   async findByDocument(documentId: string, transaction: Transaction): Promise<ObservedEditLease | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(l).where(eq(l.documentId, documentId))
     return row
   }
 
   /**
-   * 锁住这份文档的租约行（FOR UPDATE），没有时为 undefined。申请在文档行的锁下调用（同一份文档上的申请因此逐个进行，
-   * 不会两个都看到"没有这一行"再各自插入）；心跳与释放直接调用
+   * 只锁这份文档的租约行（FOR UPDATE），没有时为 undefined：心跳与请求编辑（发出、续期、取消、谢绝）用——它们都不让租约失效（见类的注释）。
+   * 要让租约失效的申请、释放与交出用 lockUnder，先锁文档行
    */
   async lockByDocument(documentId: string, transaction: Transaction): Promise<ObservedEditLease | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(l).where(eq(l.documentId, documentId)).for('update')
@@ -251,7 +267,19 @@ export class EditLeasesRepository {
   }
 
   /**
-   * 改写为新的一代（调用方已锁住文档行并给文档的代次加了一，lease.writeEpoch 是加一之后的值）：没有这一行就插入，有就整行改写——
+   * 在文档行的锁下锁住它的租约行（FOR UPDATE，Codex 评审 CX1），没有时为 undefined：document 是调用方锁住文档行时拿到的凭据，
+   * 锁的顺序因此一定是文档行 → 租约行。返回的行是明确结束的凭据（LockedEditLease）：释放、交出凭它结束这一代；
+   * 申请在这里锁住当前的那一代再判断怎样对待它（同一份文档上的申请因此逐个进行，不会两个都看到"没有这一行"再各自插入）
+   */
+  async lockUnder(document: DocumentRowLock, transaction: Transaction): Promise<LockedEditLease | undefined> {
+    const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(l).where(eq(l.documentId, document.id)).for('update')
+    // 凭据只在这里与 lockInScope 给出：调用方持着这份文档行的锁，这一行在它之后锁住
+    return row as LockedEditLease | undefined
+  }
+
+  /**
+   * 改写这份文档的租约为新的一代：document 是调用方锁住文档行时拿到的凭据（换代因此与在途的保存互斥），调用方已给文档的代次加了一，
+   * lease.writeEpoch 是加一之后的值。没有这一行就插入，有就整行改写——
    * 持有者、登录、标签页、令牌摘要与代次换成新的，申请与续租的时间是 now()，最后活动是 now() 减去续上的页面带来的空闲秒数
    * （M3-P5 设计 §3.5），到期是 now() 加有效期，清掉明确结束的两列。M3-P5 的三组列（设计 §3.6、§3.7，探索报告 §3.4）：
    * - 请求编辑：新的持有者还是旧行的持有者（他自己的重试、续上、本人接管）就原样沿用，包括已谢绝的状态——否则持有者续上一次
@@ -263,7 +291,7 @@ export class EditLeasesRepository {
    *   插入那一半同样写下给出的标记：接管时这一行一定在，写上只是让"给了就写下"不依赖这一点。
    * 沿用与否按旧行判断，写在这条语句里：改写之前的那一行在文档行的锁下，就是调用方判断时读到的那一行。返回写下的这一行
    */
-  async replace(lease: NewEditLease, transaction: Transaction): Promise<ObservedEditLease> {
+  async replace(document: DocumentRowLock, lease: NewEditLease, transaction: Transaction): Promise<ObservedEditLease> {
     const generation = {
       holderId: lease.holderId,
       sessionId: lease.sessionId,
@@ -282,7 +310,7 @@ export class EditLeasesRepository {
     const written = lease.takenOver === undefined ? undefined : { takenOverTokenDigest: lease.takenOver.tokenDigest, takeover: lease.takenOver.takeover }
     const [row] = await executorOf(this.db, transaction)
       .insert(l)
-      .values({ documentId: lease.documentId, ...generation, ...written })
+      .values({ documentId: document.id, ...generation, ...written })
       .onConflictDoUpdate({
         target: l.documentId,
         set: {
@@ -300,7 +328,7 @@ export class EditLeasesRepository {
       })
       .returning(COLUMNS)
     if (row === undefined)
-      throw new Error(`改写租约没有返回记录：${lease.documentId}`)
+      throw new Error(`改写租约没有返回记录：${document.id}`)
     return row
   }
 
@@ -325,14 +353,15 @@ export class EditLeasesRepository {
   }
 
   /**
-   * 记下明确结束（释放 released、收回写入权 revoked）：结束的时间是 now()。已经明确结束的不再改动，先记下的原因留着；
-   * 返回这一次结束了没有（没有这一行、已经结束过时为假）。调用方已锁住租约行
+   * 记下这一代明确结束（释放 released；收回写入权一次是一批，见 endAll）：结束的时间是 now()。lease 是先锁文档行、再锁住的这一行
+   * （凭据，见 LockedEditLease）：结束因此与在途的保存互斥。已经明确结束的不再改动，先记下的原因留着；
+   * 返回这一次结束了没有（已经结束过时为假）
    */
-  async end(documentId: string, reason: EditLeaseEndReason, transaction: Transaction): Promise<boolean> {
+  async end(lease: LockedEditLease, reason: EditLeaseEndReason, transaction: Transaction): Promise<boolean> {
     const rows = await executorOf(this.db, transaction)
       .update(l)
       .set({ endedAt: sql`now()`, endReason: reason })
-      .where(and(eq(l.documentId, documentId), isNull(l.endedAt)))
+      .where(and(eq(l.documentId, lease.documentId), isNull(l.endedAt)))
       .returning({ documentId: l.documentId })
     return rows.length > 0
   }
@@ -390,32 +419,33 @@ export class EditLeasesRepository {
   }
 
   /**
-   * 交出（M3-P5 设计 §3.6，调用方已锁住租约行，并判断过租约有效、槽里是对得上的待回应的请求）：一条语句里记下明确结束（handed_over，
-   * 时间是 now()），把请求转成保留（留给请求方，到 now() 加 2 分钟），清掉请求的六列——表上"有保留时结束原因是 handed_over"
-   * "请求方不是持有者"的约束都在这一条语句之后成立。SET 里的列取的都是改之前的值：保留给的就是原来的请求方。返回写下的保留
+   * 交出（M3-P5 设计 §3.6）：lease 是先锁文档行、再锁住的这一行（凭据，见 LockedEditLease：交出是明确结束，与在途的保存互斥），
+   * 调用方判断过它有效、槽里是对得上的待回应的请求。一条语句里记下明确结束（handed_over，时间是 now()），把请求转成保留
+   * （留给请求方，到 now() 加 2 分钟），清掉请求的六列——表上"有保留时结束原因是 handed_over""请求方不是持有者"的约束都在这一条语句之后成立。
+   * SET 里的列取的都是改之前的值：保留给的就是原来的请求方。返回写下的保留
    */
-  async handOver(documentId: string, transaction: Transaction): Promise<WrittenReservation> {
+  async handOver(lease: LockedEditLease, transaction: Transaction): Promise<WrittenReservation> {
     const [row] = await executorOf(this.db, transaction)
       .update(l)
       .set({ endedAt: sql`now()`, endReason: 'handed_over', reservedFor: sql`${l.requestedBy}`, reservedUntil: RESERVED_UNTIL, ...NO_REQUEST })
-      .where(eq(l.documentId, documentId))
+      .where(eq(l.documentId, lease.documentId))
       .returning({ reservedFor: l.reservedFor, reservedUntil: l.reservedUntil })
     if (row === undefined || row.reservedFor === null || row.reservedUntil === null)
-      throw new Error(`交出之后没有保留：${documentId}`)
+      throw new Error(`交出之后没有保留：${lease.documentId}`)
     return { reservedFor: row.reservedFor, reservedUntil: row.reservedUntil }
   }
 
   /**
-   * 同 end，一条语句记下这些文档上的租约明确结束（收回写入权的第 3 步，P1 设计 §3.4.6：文件夹连同子树移走、归档时一次是一批，
-   * 不逐份发语句）。调用方已按文档 id 的顺序锁住了这些文档行与租约行（lockInScope）；已经明确结束的不改。一串 id 作为一个数组参数
+   * 同 end，一条语句记下这些租约明确结束（收回写入权的第 3 步，P1 设计 §3.4.6：文件夹连同子树移走、归档时一次是一批，不逐份发语句）。
+   * leases 是 lockInScope 按文档 id 的顺序先锁文档行、再锁住的那几行（凭据）；已经明确结束的不改。一串 id 作为一个数组参数
    */
-  async endAll(documentIds: readonly string[], reason: EditLeaseEndReason, transaction: Transaction): Promise<void> {
-    if (documentIds.length === 0)
+  async endAll(leases: readonly LockedEditLease[], reason: EditLeaseEndReason, transaction: Transaction): Promise<void> {
+    if (leases.length === 0)
       return
     await executorOf(this.db, transaction)
       .update(l)
       .set({ endedAt: sql`now()`, endReason: reason })
-      .where(and(inIdArray(l.documentId, documentIds), isNull(l.endedAt)))
+      .where(and(inIdArray(l.documentId, leases.map(lease => lease.documentId)), isNull(l.endedAt)))
   }
 
   /**
@@ -431,8 +461,11 @@ export class EditLeasesRepository {
    * 再复核 D1、D2）——BEGIN 到设下时限至多 10 秒（超过就不开始），之后至多 60 秒（transaction_timeout，到点时数据库结束会话、事务回滚），
    * 合起来至多 70 秒（document-content.service.ts 的 SAVE_TRANSACTION_TIMEOUT_MS，推导写在那里）；lock_timeout、statement_timeout、
    * idle_in_transaction_session_timeout 各管一次等锁、一条语句、一次空闲，不限整个事务。
-   * 窗口的大小（一个有效期）由 tests/integration 的 lease-revocation-locks.test.ts 按行为钉住（死了约 60 秒的仍锁、仍等在途的保存）。
-   * 明确结束了的（释放、交出）不锁：页面先存上再释放、交出（P4 的 flush；关页时保存在途就不释放），在途的保存不会跨过它们。
+   * 窗口的大小（一个有效期）由 tests/integration 的 lease-revocation-locks.test.ts 按行为钉住（死了约 70 秒的仍锁、仍等在途的保存）。
+   * 明确结束了的（释放、交出、收回）不锁，由锁保证：明确结束与申请一样先锁文档行、再锁租约行（end、handOver、endAll 只凭 LockedEditLease，
+   * Codex 评审 CX1），与在途的保存互斥——结束提交的那一刻，读过这份租约的保存都已提交；之后的保存在文档行的锁下读到它已经结束，被拒绝。
+   * 原来这一条靠页面"先存上再释放、交出"（P4 的 flush）的先后，服务端的释放与交出照样能夹在保存的读与提交之间（CX1 的反例）；
+   * 结束在等文档行的锁、还没提交时，这里读到的仍是没结束的，照常锁文档行、排在它与保存之后。
    *
    * 第二条再按同样的顺序锁住租约行，并把条件再核对一次，只返回按时间还活着的（ALIVE_BY_TIME），连同文档所在的空间、创建人与状态
    * （收回写入权按它们判断持有者还能不能编辑，见 RevocableEditLease）：
@@ -462,12 +495,19 @@ export class EditLeasesRepository {
       .for('update', { of: d })
     if (locked.length === 0)
       return []
-    return executor
+    const revocable = await executor
       .select({ ...COLUMNS, spaceId: d.spaceId, createdBy: d.createdBy, documentStatus: d.status })
       .from(l)
       .innerJoin(d, eq(d.id, l.documentId))
+      // 只在第一条锁住的文档里找：这是下面把结果当作凭据的条件，改这条语句时不能去掉（见 return 处）
       .where(and(inIdArray(l.documentId, locked.map(row => row.id)), open, ALIVE_BY_TIME))
       .orderBy(asc(l.documentId))
       .for('update', { of: l })
+    // 凭据只在这里与 lockUnder 给出：上一条先锁住了这些文档行，这一条只在其中找、在它们之后锁住租约行。
+    // 第二条只在第一条锁住的文档里找，这是凭据成立的条件（复验 E5）：去掉 inIdArray 那一项，第一条之后才提交的租约（例如那时没人占着、
+    // 或者已经明确结束的文档上新申请到的一代，第一条没锁它们的文档行）也会被交出去，在不持文档行锁的情况下被结束——
+    // 与在途的保存不再互斥，正是 Codex 评审 CX1 那一类缺口。edit-lease-statements.test.ts 按 SQL 的形状钉着这一项；
+    // 行为级的交错要把撤权停在两条语句之间，没有另做集成用例
+    return revocable as RevocableEditLease[]
   }
 }

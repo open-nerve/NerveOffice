@@ -17,8 +17,8 @@ export function session(systemRole: 'admin' | 'member', csrfToken = 'csrf-1'): S
 /** 页框的导航与首页的页头（M2-P2）：两种角色的会话共用同一个个人空间 */
 export const SPACES = spaceRoutes(session('admin'))
 
-export const AMY: AdminUser = { id: '0199a2c4-0000-7000-8000-000000000002', username: 'amy', displayName: '艾米', systemRole: 'member', status: 'active', createdAt: '2026-09-28T01:00:00.000Z', loginLock: null }
-export const ROOT: AdminUser = { id: ROOT_ID, username: 'root', displayName: '管理员', systemRole: 'admin', status: 'active', createdAt: '2026-09-27T01:00:00.000Z', loginLock: null }
+export const AMY: AdminUser = { id: '0199a2c4-0000-7000-8000-000000000002', username: 'amy', displayName: '艾米', systemRole: 'member', status: 'active', createdAt: '2026-09-28T01:00:00.000Z', loginLock: null, localKey: null }
+export const ROOT: AdminUser = { id: ROOT_ID, username: 'root', displayName: '管理员', systemRole: 'admin', status: 'active', createdAt: '2026-09-27T01:00:00.000Z', loginLock: null, localKey: null }
 
 export const INVITATION: Invitation = {
   id: '0199a2c4-0000-7000-8000-000000000010',

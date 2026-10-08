@@ -17,6 +17,7 @@ import { updatePagedItems } from '../../shared/lib/paged-cache.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
+import { useKeepFocusInView } from '../../shared/lib/use-keep-focus-in-view.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Label, PersonName, Phrase, RetryButton, Skeleton, TableCell } from '../../shared/ui/index.ts'
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
@@ -82,6 +83,8 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
    */
   const [unsure, setUnsure] = useState(false)
   const submitRef = useRef<HTMLButtonElement>(null)
+  /** "有文档已经不在了"的说明的容器：它变高时把焦点所在的"转移"滚回可视区域（见下） */
+  const keepSubmitInView = useKeepFocusInView()
   const groupId = useId()
   const hintId = useId()
   const loaded = documents.data?.pages.flatMap(page => page.items) ?? []
@@ -190,8 +193,10 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报（审查 B10） */}
-      <StatusRegion className="rounded-lg border p-3 text-sm">{done}</StatusRegion>
+      {/* 结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报（审查 B10）。
+          它在文档列表上方：写进说明（状态区变高）时下面的内容整体下移，keepFocusInView 把焦点交还的"转移"滚回可视区域（与账户页、成员页相同，
+          M3-P6 复验）；变矮时不滚（再复核 D1） */}
+      <StatusRegion className="rounded-lg border p-3 text-sm" keepFocusInView>{done}</StatusRegion>
       {loaded.length > 0 && (
         <div className="flex items-center gap-2">
           <input
@@ -236,11 +241,16 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
           ? <KeywordPicker label={text.pickTeam} selected={team} onSelect={setTeam} search={transferTargetsQueryOptions} itemKey={spaceId} renderItem={spaceName} texts={TEAM_TEXTS} />
           : <ColleaguePicker label={text.pickPerson} selected={person} onSelect={setPerson} exclude={excludedPeople} />}
       </fieldset>
-      {conflict && (
-        <Alert variant="destructive">
-          <AlertDescription>{unsure ? text.conflictAfterUnknown : text.conflict}</AlertDescription>
-        </Alert>
-      )}
+      {/* "有文档已经不在了"的说明插在"转移"正上方：确认框关掉、焦点交还"转移"之后才出现，把它往下挤——长列表之后用键盘走到"转移"时
+          它在可视区域底部，会被挤出去（再复核 D5）。放在一直在的容器里（空的时候不显示、不占位置也不撑开间距），容器变高时
+          共用的 useKeepFocusInView 把焦点所在的"转移"滚回可视区域 */}
+      <div ref={keepSubmitInView} className="empty:hidden">
+        {conflict && (
+          <Alert variant="destructive">
+            <AlertDescription>{unsure ? text.conflictAfterUnknown : text.conflict}</AlertDescription>
+          </Alert>
+        )}
+      </div>
       {/* 还不能转移时说明原因，按钮经 aria-describedby 指向它（审查 B5） */}
       {blocked !== undefined && <p id={hintId} className="text-sm text-muted-foreground">{blocked}</p>}
       <Button ref={submitRef} className="self-start" aria-disabled={blocked !== undefined} aria-describedby={blocked === undefined ? undefined : hintId} onClick={submit}>{text.submit}</Button>

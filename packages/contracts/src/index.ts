@@ -20,6 +20,7 @@ export {
   invitationSchema,
   issuedInvitationSchema,
   issuedPasswordResetSchema,
+  revokeLocalKeyResponseSchema,
   TRANSFER_MAX_DOCUMENTS,
   transferDocumentsRequestSchema,
   transferDocumentsResponseSchema,
@@ -45,6 +46,7 @@ export type {
   InvitationStatus,
   IssuedInvitation,
   IssuedPasswordReset,
+  RevokeLocalKeyResponse,
   TransferDocumentsRequest,
   TransferDocumentsResponse,
   TransferTarget,
@@ -287,6 +289,8 @@ export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/he
 export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts'
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'
 export { uuidSchema } from './ids/ids.ts'
+export { LOCAL_KEY_BYTES, LOCAL_KEY_PATTERN_SOURCE, localKeySchema, localKeySummarySchema, localKeyVersionSchema } from './local-keys/local-keys.ts'
+export type { LocalKey, LocalKeySummary } from './local-keys/local-keys.ts'
 export {
   SEARCH_PAGE_SIZE,
   searchKeywordSchema,
