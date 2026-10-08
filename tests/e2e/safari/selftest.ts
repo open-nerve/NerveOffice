@@ -9,7 +9,8 @@
 //    不用"允许远程自动化"；
 // 5. 等全部的结果（总时限，--timeout 秒），核对服务器上的文档（support/selftest-plan.ts 的 storedProblems：只看不改的几步没有保存过；
 //    enter-exit 恰好保存了一次、内容里有改的那一格；自动保存照常运行的几步至少保存了一次、存下的内容按定义核对），
-//    写 tests/e2e/test-results/safari/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、计时与时间线），打印汇总；
+//    写 tests/e2e/safari-results/<时间>.json（Safari 与 macOS 的版本、每步每项的结果、页面错误、计时与时间线；不放在 test-results/ 里：
+//    Playwright 每次运行清空它，M3-P6 的复核丢过两次结果），打印汇总；
 //    上一步带过去的最后一步 hidden-save（M3-P4 S1；S7 起由自动保存上传）由这里编排：在库里看到它第一次上传（修订号 2）之后，open -a Safari
 //    另开收集端的空白页（HIDE_PATH），编辑器页随之真的变成隐藏，自动保存在隐藏的那一刻捕获、上传留着的第二格；按库里的证据判定（修订号 3、
 //    内容里有两格）与用时，页面在后台交不回结果也不算超时；
@@ -67,7 +68,7 @@ import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outco
 
 const SERVE_SCRIPT = fileURLToPath(new URL('../support/serve.ts', import.meta.url))
 const SELFTEST_PAGE = fileURLToPath(new URL('../../../apps/web/dist-e2e/selftest.html', import.meta.url))
-const RESULTS_DIR = fileURLToPath(new URL('../test-results/safari/', import.meta.url))
+const RESULTS_DIR = fileURLToPath(new URL('../safari-results/', import.meta.url))
 
 /** 准备阶段失败 */
 const SETUP_FAILED = 3

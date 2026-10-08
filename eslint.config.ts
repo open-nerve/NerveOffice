@@ -877,6 +877,7 @@ export default antfu(
       '**/coverage/**',
       '**/playwright-report/**',
       '**/test-results/**',
+      '**/safari-results/**',
       '**/blob-report/**',
       // drizzle-kit 生成的 journal 与快照：合并后不再修改（ADR-005），不做 lint 与格式化。
       // 只忽略这些 JSON：SQL 本来就不检查，误放进迁移目录的代码文件仍然受边界约束（审查 B15）
