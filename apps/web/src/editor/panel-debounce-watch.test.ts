@@ -7,9 +7,13 @@ import { PANEL_SETTLE_MARGIN_MS, watchPanelDebounces } from './panel-debounce-wa
 const NOTE_MS = PANEL_DEBOUNCES.find(debounce => debounce.panel === 'note')?.delayMs ?? Number.NaN
 const DV_MS = PANEL_DEBOUNCES.find(debounce => debounce.panel === 'data-validation')?.delayMs ?? Number.NaN
 
-/** 假的时钟：schedule 记下计时器，advance 到点执行；early 让计时器比它排定的时刻早 early 毫秒执行（时钟与计时器有出入） */
+/**
+ * 假的时钟：schedule 记下计时器，advance 到点执行；early 让计时器比它排定的时刻早 early 毫秒执行（时钟与计时器有出入）。
+ * fired 是执行过的计时器个数（用例据此核对自己的前提：计时器确实早到执行过）
+ */
 function fakeTime(early = 0) {
   let now = 1_000
+  let fired = 0
   const timers: { at: number, callback: () => void, cancelled: boolean }[] = []
   return {
     now: () => now,
@@ -24,11 +28,13 @@ function fakeTime(early = 0) {
       now += ms
       for (const timer of timers.filter(entry => !entry.cancelled && entry.at <= now)) {
         timer.cancelled = true
+        fired += 1
         timer.callback()
       }
       await new Promise(resolve => setTimeout(resolve, 0))
     },
     pending: () => timers.filter(entry => !entry.cancelled).length,
+    fired: () => fired,
   }
 }
 
@@ -269,6 +275,8 @@ describe('防抖中的状态与通知（Codex 评审 CX4）：开始与到点各
     typeInto(note)
     const settled = settledFlag(watch.settled())
     await time.advance(NOTE_MS + PANEL_SETTLE_MARGIN_MS - 5)
+    // 前提：计时器确实在到点之前执行过一次（之后接着等剩下的）
+    expect(time.fired()).toBe(1)
     expect(watch.pending()).toBe(true)
     expect(settled.done()).toBe(false)
     expect(listener).toHaveBeenCalledOnce()

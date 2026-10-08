@@ -554,6 +554,8 @@ describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、�
     expect(listener).toHaveBeenCalledTimes(4)
     note.dispatchEvent(new InputEvent('input', { bubbles: true }))
     expect(editor.uncommittedInput()).toBe('pending')
+    // 销毁之后一律是 none：工作簿这时还说正在编辑也不算（编辑器已经不在了）
+    facade.workbook.isCellEditing.mockReturnValue(true)
     await editor.dispose()
     expect(editor.uncommittedInput()).toBe('none')
     note.remove()
