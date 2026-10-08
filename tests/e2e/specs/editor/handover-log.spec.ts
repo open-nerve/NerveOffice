@@ -50,7 +50,12 @@ test.describe('US-M3-08 测试构建的交接日志（观察钩子）', { tag: '
     // B：开始、锁在本浏览器、请求，之后收到回应或者锁空了，最后申请（"在此编辑"：那边做完了、没有释放，以本人接管换代）、结果、进入编辑
     const kinds = b.map(entry => entry.kind)
     expect(kinds.slice(0, 3)).toEqual(['takeover-start', 'takeover-locate', 'handover-request'])
-    expect(kinds.slice(-3)).toEqual(['acquire', 'acquire-result', 'entered'])
+    // 拿锁时 A 的锁可能还没真正放开（B 收到 done 先于锁放开：A 放锁之后随即重建编辑器，页面忙着时锁的回调晚一步结束，WebKit 上碰到过）：
+    // B 先向服务端核对自己那一代是当前的才抢（M3-P6 设计 §3.13），日志里多一条拿锁时的裁决——只会是拿锁时、当前的
+    expect(kinds.filter(kind => kind !== 'lock-verdict').slice(-3)).toEqual(['acquire', 'acquire-result', 'entered'])
+    for (const entry of b.filter(item => item.kind === 'lock-verdict'))
+      expect(entry).toMatchObject({ when: 'claim', verdict: 'current' })
+    expect(kinds.slice(0, kinds.lastIndexOf('acquire-result'))).not.toContain('lock-verdict')
     expect(first(b, 'takeover-locate')).toMatchObject({ here: true })
     expect(first(b, 'acquire')).toMatchObject({ trigger: 'take-over', takeover: 'self' })
     expect(first(b, 'acquire-result')).toMatchObject({ result: 'acquired', interruption: false })
