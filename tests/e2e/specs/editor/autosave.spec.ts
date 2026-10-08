@@ -1,5 +1,5 @@
-// 修改自动保存，保存状态如实显示（US-M3-02；M3-P4 设计 §3.2–§3.9，A02、A08）与面板的防抖（§3.4）。公式的一致（US-M3-03）在
-// autosave-formulas.spec.ts。
+// 修改自动保存，保存状态如实显示（US-M3-02；M3-P4 设计 §3.2–§3.9，A02、A08）与面板的防抖（§3.4；面板里还没写进模型的输入算未保存，
+// Codex 评审 CX4）。公式的一致（US-M3-03）在 autosave-formulas.spec.ts。
 // 节奏经测试构建的自动保存控制（support/autosave.ts：夹具默认暂停定时的上传，用例放开；日志记下每次捕获与上传的原因、序号与时刻）与
 // Playwright 的时钟（page.clock）把握：要看节奏的用例在打开之前装上时钟（之后时间照常流动，页面照常载入、渲染），修改之前停住时间，
 // 之后只在往前拨的时候走——机器多忙，修改、捕获、上传与断言之间都不会有计时器自己到点，捕获与上传的时刻按调度的日志断言到毫秒
@@ -9,7 +9,7 @@
 // 这段时间里什么也不该发生时用它
 // 立即上传（保存按钮、快捷键、退出编辑、切到后台）在定时上传暂停时照常，那几条不放开。
 // 控制只在测试构建里：标签 @test-build（容器 E2E 测生产镜像，按标签排除；生产镜像里自动保存照常运行，现有用例按此改写，见 S6 的汇报）
-import type { Page, Route } from '@playwright/test'
+import type { Locator, Page, Route } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { canonicalContentText } from '@nerve-office/contracts'
 import { autosaveLog, capturesOf, clearAutosaveLog, holdSaves, logNow, pauseTime, recordWrites, releaseAutosave, saveParam, setPageHidden, settleAfterEdit, skipAhead, uploadedText, uploadsOf } from '../../support/autosave.ts'
@@ -652,5 +652,140 @@ test.describe('面板的防抖：退出编辑之前先让面板里最后的改�
     expect(resourceOf(snapshot, 'SHEET_DATA_VALIDATION_PLUGIN')).toMatchObject({
       [FIRST_SHEET]: [{ type: 'decimal', operator: 'equal', formula1: '250', ranges: [{ startRow: 2, startColumn: 2, endRow: 2, endColumn: 2 }] }],
     })
+  })
+})
+
+// 面板里还没写进模型的输入（Codex 评审 CX4，M3-P6 设计 §3.13）：批注浮层、数据验证面板按 SDK 的防抖（300 ms、1 秒）才把改动写进模型。
+// 这段时间离开提示要拦下、页头不说"已保存到云端"（期间到来的旧的保存确认也不说），到点写进模型之后照常自动保存。原来保存的状态机看不到
+// 这一段：页头说已保存、离开不提示，离开就丢（评审在真实 Chromium 上复现：数据验证的数值 100 改成 250，导航没有提示，服务器上仍是 100）。
+// 不用测试构建的控制（容器 E2E 同样跑）：自动保存照常运行，时间经 Playwright 的时钟停住——SDK 的防抖与自动保存的计时器都只在往前拨、
+// 恢复之后到点
+test.describe('US-M3-02 面板里还没写进模型的输入：离开提示拦下、页头不说已保存，到点之后照常自动保存（Codex 评审 CX4）', () => {
+  test.use({ autosave: 'running' })
+
+  /** 编辑器页头里回到"我的空间"的链接（整页跳转） */
+  function backLink(page: Page): Locator {
+    return page.locator('#editor-chrome').getByRole('link', { name: '我的空间', exact: true })
+  }
+
+  /** 服务器上 C3 的数据验证规则的数值 */
+  async function storedRuleValue(page: Page, documentId: string): Promise<unknown> {
+    const rules = resourceOf((await savedContent(page, documentId)).snapshot, 'SHEET_DATA_VALIDATION_PLUGIN') as Record<string, { formula1?: unknown }[] | undefined> | undefined
+    return rules?.[FIRST_SHEET]?.[0]?.formula1
+  }
+
+  /**
+   * 打开新表格（先装上时钟）、进入编辑，在 C3 上新建数据验证规则（数字等于 100），等自动保存把它存上、离开不再提示：之后"有没存的"
+   * 只看面板里的输入。交回文档与面板里数值的输入框
+   */
+  async function openSavedRule(page: Page, prefix: string): Promise<{ documentId: string, value: Locator }> {
+    await page.clock.install()
+    const documentId = await openNewSheet(page, prefix)
+    await selectCell(page, 'C3')
+    const data = await ribbon(page, '数据')
+    await data.getByRole('button', { name: '数据验证' }).click()
+    await page.getByRole('menuitem', { name: '新建规则' }).click()
+    const value = page.getByRole('complementary', { name: '侧边栏' }).getByRole('textbox').last()
+    await expect(value).toHaveValue('100')
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await expect.poll(async () => wouldPromptOnLeave(page)).toBe(false)
+    expect(await storedRuleValue(page, documentId)).toBe('100')
+    return { documentId, value }
+  }
+
+  /**
+   * 停住时间（pauseTime：先往前跳 1 秒，其间到点的计时器照常执行），再核对前提：都已存上、离开不提示。之后的"未保存""离开提示"只能
+   * 来自面板里这一次的输入——之前若还有 SDK 防抖中的写入（打开批注浮层时 SDK 按同一个防抖写进一条空批注），它会在这 1 秒里到点，
+   * 旧的实现上用例就会为了别的原因通过（变异验证时发现）
+   */
+  async function pauseWithNothingUnsaved(page: Page): Promise<void> {
+    await pauseTime(page)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(await wouldPromptOnLeave(page)).toBe(false)
+  }
+
+  test('US-M3-02 数据验证面板改了数值、SDK 1 秒的防抖还没到点：离开提示拦下，页头不说已保存到云端（期间到来的旧的保存确认也不说）；到点之后照常自动保存，服务器上是改过的', async ({ page }) => {
+    const { documentId, value } = await openSavedRule(page, 'panel-dv-unsaved')
+    await pauseWithNothingUnsaved(page)
+    // 一次保存在途（拦着）：它确认的是改数值之前的那一份
+    const held = await holdSaves(page)
+    await saveButton(page).click()
+    await expect.poll(held.held).toBe(1)
+    await value.fill('250')
+    await expect(value).toHaveValue('250')
+    expect(await wouldPromptOnLeave(page)).toBe(true)
+    await expect(saveStatus(page)).not.toHaveText('已保存到云端')
+    // 旧的保存确认在防抖期间到来：仍是有未保存的修改、离开提示拦下；服务器上确实还是 100
+    held.release()
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    expect(await wouldPromptOnLeave(page)).toBe(true)
+    expect(await storedRuleValue(page, documentId)).toBe('100')
+    // 防抖到点：SDK 把 250 写进规则（一处修改），存上之前照旧有未保存的修改
+    await skipAhead(page, 1_100)
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    expect(await wouldPromptOnLeave(page)).toBe(true)
+    // 自动保存照常：停 1 秒捕获、2 秒上传，之后回到已保存到云端、离开不提示
+    await page.clock.resume()
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(await wouldPromptOnLeave(page)).toBe(false)
+    expect(await storedRuleValue(page, documentId)).toBe('250')
+  })
+
+  test('US-M3-02 数据验证面板改了数值、防抖还没到点时真实地离开（点页头的"我的空间"）：浏览器弹出离开的提示；选留下，到点之后照常自动保存，存上之后再离开不提示', async ({ page }) => {
+    const { documentId, value } = await openSavedRule(page, 'panel-dv-leave')
+    await pauseWithNothingUnsaved(page)
+    await value.fill('250')
+    await expect(value).toHaveValue('250')
+    const dialogs: string[] = []
+    page.on('dialog', (dialog) => {
+      dialogs.push(dialog.type())
+      void dialog.dismiss()
+    })
+    await backLink(page).click()
+    await expect.poll(() => dialogs).toEqual(['beforeunload'])
+    await expect(page).toHaveURL(new RegExp(`/documents/${documentId}$`))
+    await expect(value).toHaveValue('250')
+    await page.clock.resume()
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(await storedRuleValue(page, documentId)).toBe('250')
+    await backLink(page).click()
+    await expect(page).toHaveURL(/\/$/)
+    expect(dialogs).toEqual(['beforeunload'])
+  })
+
+  test('US-M3-02 批注浮层里键入、SDK 300 ms 的防抖还没到点：离开提示拦下，页头不说已保存到云端；到点之后照常自动保存，服务器上有这次键入的文字', async ({ page }) => {
+    await page.clock.install()
+    const documentId = await openNewSheet(page, 'panel-note-unsaved')
+    const writes = recordWrites(page, documentId)
+    await selectCell(page, 'D4', { button: 'right' })
+    await page.getByRole('button', { name: '添加批注' }).click()
+    await page.getByRole('textbox', { name: '在此输入' }).click()
+    // 打开浮层时 SDK 按同一个 300 ms 的防抖写进一条空批注：等自动保存把它存上，键入之前都已存上
+    await expect.poll(() => writes.saves.length).toBeGreaterThanOrEqual(1)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    await pauseWithNothingUnsaved(page)
+    await page.keyboard.type('remember')
+    expect(await wouldPromptOnLeave(page)).toBe(true)
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    await page.clock.resume()
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(await wouldPromptOnLeave(page)).toBe(false)
+    const { snapshot } = await savedContent(page, documentId)
+    expect(resourceOf(snapshot, 'SHEET_NOTE_PLUGIN')).toMatchObject({ [FIRST_SHEET]: { 3: { 3: { note: 'remember', row: 3, col: 3 } } } })
+  })
+
+  test('US-M3-02 数据验证面板里只是点了一下（没有改动）：防抖期间同样先说有未保存的修改、离开提示拦下；到点之后回到已保存到云端，不发保存', async ({ page }) => {
+    const { documentId, value } = await openSavedRule(page, 'panel-dv-noop')
+    const writes = recordWrites(page, documentId)
+    await pauseWithNothingUnsaved(page)
+    await value.click()
+    expect(await wouldPromptOnLeave(page)).toBe(true)
+    await expect(saveStatus(page)).toHaveText('有未保存的修改')
+    await skipAhead(page, 1_100)
+    await expect(saveStatus(page)).toHaveText('已保存到云端')
+    expect(await wouldPromptOnLeave(page)).toBe(false)
+    await skipAhead(page, 5_000)
+    expect(writes.saves).toHaveLength(0)
+    expect(await storedRuleValue(page, documentId)).toBe('100')
   })
 })
