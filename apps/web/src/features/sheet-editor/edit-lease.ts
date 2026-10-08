@@ -36,9 +36,11 @@
 //   裁决，页面（local-lock.ts）经 confirm 立即续租一次——申请成功的回包、本机锁都说明不了这一刻的事实（服务端批准之后、回包到达之前可能已经
 //   再换代）。续租成功是当前的；令牌对不上这一行（taken_over、replaced）是被别的一代取代了；别的失效（到期、空闲、代次过时、登录不对、收回、
 //   读不到、不能编辑……：令牌仍是这一行的）是这一代自己失效了，页面交给 lose——与心跳、保存得知同样的原因时同一条路（复验 E2）；别的失败
-//   （网络、5xx、会话的问题、与服务端不兼容）核对不了。只问、不改：自己不续上（被取代时续上就是去抢；自己失效的由页面交给 lose），不暂停、
-//   不通知，这一代照旧——页面按裁决处理（被取代就 abandon），核对不了时由之后的心跳给出结论。心跳续租成功时另经 onRenewed 告诉页面，带着这次
-//   续租发出的时刻（被抢之后还没有结论的，只认被抢之后发出的续租：之前发出的、迟到的成功可能跨过了一次换代，复验 E1）；
+//   （网络、5xx、会话的问题、与服务端不兼容）核对不了。回答说的是发出那一刻手里的那一代：期间续上换了一代就核对现在的这一代；得到失效时续上
+//   还在途就先等它有了结果（服务端可能先提交了本页续上的新一代，晚于它处理的核对得到的 replaced 说的正是本页自己，复验 E8）；本页上一次续上的
+//   申请结果未知时，replaced 同样说不准是谁改写的，当作这一代自己失效。只问、不改：自己不续上（被取代时续上就是去抢；自己失效的由页面交给
+//   lose），不暂停、不通知，这一代照旧——页面按裁决处理（被取代就 abandon），核对不了时由之后的心跳给出结论。心跳续租成功时另经 onRenewed
+//   告诉页面，带着这次续租发出的时刻（被抢之后还没有结论的，只认被抢之后发出的续租：之前发出的、迟到的成功可能跨过了一次换代，复验 E1）；
 // - 放弃这一代（abandon）：停止续租与续上，不发释放，也不通知。终态。用在服务端已经不认这一代、页面自己知道的时候——交出之后；本机锁的争用中
 //   核对得知这一代已被取代之后（M3-P6 设计 §3.13）；
 // - 被接管（M3-P5 设计 §3.7、§3.8：续租或保存得到 taken_over）：不续上（编辑权是有意交给别处的，续上就是抢回来）——本人在另一台设备或浏览器上
@@ -249,8 +251,9 @@ export type LeaseOutcome
  * - superseded：被别的一代取代了——令牌对不上服务端这一行：被接管（taken_over：本人在别处接手、空间管理员强制接管，方式认不出的同样）、被新的
  *   一代改写（replaced）。loss 是服务端说的原因；
  * - ended：这一代自己失效了——令牌仍是这一行的，而到期、空闲、代次过时、登录不对、已经释放、收回、已经交出，或者没有这一行、读不到（404）、
- *   不能编辑（403）（loss 是服务端说的原因：页面交给 lose，与心跳、保存得知同样的原因时同一条路，复验 E2）；或者核对之前、核对期间这一代在本页
- *   已经失效、释放、放弃（loss 为 undefined：结束它的那一处已经处理）；
+ *   不能编辑（403）；本页上一次续上的申请结果未知时的 replaced 也在这里（改写这一行的可能正是本页自己，复验 E8）（loss 是服务端说的原因：页面
+ *   交给 lose，与心跳、保存得知同样的原因时同一条路，复验 E2）；或者核对之前、核对期间这一代在本页已经失效、释放、放弃（loss 为 undefined：
+ *   结束它的那一处已经处理）；
  * - unknown：核对不了——网络、服务端出错、回包读不出来、会话的问题、与服务端不兼容（error 是那次的错误），或者会话不是本人、暂停着（不发，
  *   error 为 undefined）
  */
@@ -303,8 +306,8 @@ export interface EditLease {
    * 核对这一代此刻是不是服务端当前的（M3-P6 设计 §3.13：本机锁的争用由服务端裁决，local-lock.ts）：立即续租一次，交回裁决（LeaseVerdict）。
    * 与心跳互不等待：心跳在途时它可能早于对方取得新的一代发出，说明不了现在；这一次在页面看到争用之后才发出。只问、不改：不续上（被取代时续上
    * 就是去抢服务端已经给了别处的编辑权；这一代自己失效时由页面交给 lose），不暂停、不通知、不结束这一代——页面按裁决处理（被取代就 abandon）；
-   * 裁决没人理会时（页面已经离开编辑）什么也没改过，之后照常由心跳得知。期间续上换了一代时核对现在的这一代。会话不是本人（暂停）时不发；
-   * 人不在、等再有操作时续上（dormant）的这一代服务端已经说过失效，不发、按那次的原因裁决
+   * 裁决没人理会时（页面已经离开编辑）什么也没改过，之后照常由心跳得知。期间续上换了一代时核对现在的这一代；得到失效时续上还在途就先等它有了
+   * 结果再定（复验 E8）。会话不是本人（暂停）时不发；人不在、等再有操作时续上（dormant）的这一代服务端已经说过失效，不发、按那次的原因裁决
    */
   readonly confirm: () => Promise<LeaseVerdict>
   /**
@@ -487,6 +490,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
   let recoveryHeld = false
   /** 人不在（dormant）时那次失效的原因：只在 dormant 时读，人回来续上时按它决定要不要先放掉手里那一代（releasesBeforeRecovery） */
   let dormantReason: EditLeaseLostReason = 'none'
+  /**
+   * 本页最近一次续上的申请结果未知（网络、5xx、回包读不出来）：服务端可能已经提交了本页自己的新一代，本页却没拿到它的令牌——这时得知的
+   * replaced（这一行被新的申请改写了）说不准是不是本页自己改写的（复验 E8，judge）。之后续上换了一代（本页知道了自己最新的一代）时清掉
+   */
+  let ownAcquireUnknown = false
 
   function stopTimer(): void {
     cancelTimer?.()
@@ -618,7 +626,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
         options.onSessionProblem(error)
         return { kind: 'unknown', error }
       }
-      // 网络、5xx、回包读不出来：结果未知，保持现状（仍按手里那一代），下一次心跳或保存时再判断
+      // 网络、5xx、回包读不出来：结果未知，保持现状（仍按手里那一代），下一次心跳或保存时再判断。服务端可能已经提交了这次申请（本页自己的
+      // 新一代，本页没拿到）：记下来，之后得知的 replaced 说不准是谁改写的
+      ownAcquireUnknown = true
       if (state === 'holding')
         scheduleRenewal(HEARTBEAT_MS)
       return { kind: 'unknown', error }
@@ -636,6 +646,7 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       return LOST
     }
     credentials = { token: next.token, writeEpoch: next.writeEpoch }
+    ownAcquireUnknown = false
     if (state === 'dormant')
       state = 'holding'
     if (state === 'holding')
@@ -756,14 +767,31 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
     return inFlight
   }
 
-  /** 核对（见 EditLease 的 confirm）：续租一次，按回答给出裁决；只问、不改这一代。期间续上换了一代就核对现在的这一代 */
+  /**
+   * 核对得到的失效怎样裁决（见 LeaseVerdict 与 verdictOf）：replaced 说的是这一行被新的申请改写了——本页最近一次续上的申请结果未知时，
+   * 改写它的可能正是本页自己（服务端提交了、回包没到），说明不了被别的一代取代：当作这一代自己失效，页面交给 lose（与心跳、保存得知 replaced 时
+   * 同一条路：续上——是本页自己的那一行就是同一个页面的重试，是别处的就被占用、照服务端说），复验 E8。被接管（taken_over）的记号对着本页手里
+   * 的这一代，不会是本页自己的申请（同一个页面的重试沿用原来的记号），照旧是被取代
+   */
+  function judge(loss: LeaseLoss): LeaseVerdict {
+    if (ownAcquireUnknown && loss.kind === 'lease' && loss.reason === 'replaced')
+      return { kind: 'ended', loss }
+    return verdictOf(loss)
+  }
+
+  /**
+   * 核对（见 EditLease 的 confirm）：续租一次，按回答给出裁决；只问、不改这一代。回答说的是发出那一刻手里的那一代：期间续上换了一代就核对
+   * 现在的这一代；得到失效时续上还在途（心跳、保存得知失效之后），这一代正在被替换——服务端可能先提交了续上的新一代、回包还没到，核对晚于它
+   * 被处理却先回来，得到的 replaced 说的正是本页自己续上的那一代（复验 E8）：先等续上有了结果，结束了、换了一代都重新来过（换了就核对现在的
+   * 这一代），没换（续上说不准）才按这次的回答裁决
+   */
   async function confirm(): Promise<LeaseVerdict> {
     for (;;) {
       if (ended())
         return { kind: 'ended', loss: undefined }
       // 服务端已经说过这一代失效（人不在，等再有操作才续上）：按那次的原因裁决
       if (state === 'dormant')
-        return verdictOf({ kind: 'lease', reason: dormantReason })
+        return judge({ kind: 'lease', reason: dormantReason })
       if (state === 'paused')
         return { kind: 'unknown', error: undefined }
       const used = credentials.token
@@ -783,7 +811,14 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease): 
       if (failure === undefined)
         return { kind: 'current' }
       const loss = leaseLossOf(failure.error)
-      return loss === undefined ? { kind: 'unknown', error: failure.error } : verdictOf(loss)
+      if (loss === undefined)
+        return { kind: 'unknown', error: failure.error }
+      if (recovery !== undefined) {
+        await recovery
+        if (ended() || used !== credentials.token)
+          continue
+      }
+      return judge(loss)
     }
   }
 
