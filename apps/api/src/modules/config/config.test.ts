@@ -494,7 +494,7 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
     ])
   })
 
-  it('命令行的读法不要求它：没有时照常；给了也只校验写法，不带进配置（迁移、初始化管理员、签发重置链接拿不到它）', () => {
+  it('命令行的读法不要求它：没有时照常；给了也只校验写法，不带进配置（命令行的配置里没有主密钥；按部署说明在应用容器里执行时，进程的环境里仍有它）', () => {
     expect(loadConfig({ ...REQUIRED })).not.toHaveProperty('localKeys')
     const config = loadConfig(SERVER)
     expect(config).not.toHaveProperty('localKeys')
