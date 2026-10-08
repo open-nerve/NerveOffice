@@ -8,7 +8,7 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
 import { Buffer } from 'node:buffer'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { adminUserListResponseSchema, adminUserSchema, CSRF_TOKEN_HEADER, errorResponseSchema, localKeySchema, renewedEditLeaseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
@@ -17,7 +17,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, renewLease } from '../support/edit-leases.ts'
-import { currentMaterialOf, fetchLocalKey, localKeyRowsOf, masterKeyIdOf, revokeLocalKey, takeLocalKey, unwrapLocalKey } from '../support/local-keys.ts'
+import { currentMaterialOf, fetchLocalKey, localKeyRowsOf, masterKeyIdOf, revokeLocalKey, takeLocalKey, unwrapLocalKey, wrapLocalKey } from '../support/local-keys.ts'
 import { requestIdOf } from '../support/request-id.ts'
 import { asUser, login, SESSION_COOKIE } from '../support/session-client.ts'
 import { createTeamSpace } from '../support/spaces.ts'
@@ -251,6 +251,36 @@ describe('US-M3-17 系统管理员吊销本机密钥（POST /api/admin/users/{id
     const byId = new Map(list.items.map(item => [item.id, item.localKey]))
     expect(byId.get(keyed.id)).toEqual({ version: 1, createdAt: row?.createdAt.toISOString() })
     expect(byId.get(never.id)).toBeNull()
+  })
+
+  it('账户的摘要只取当前的那一把：库里的行先是当前的第 2 版、后是吊销了的第 1 版（物理顺序与版本相反）时，详情与列表给的仍是第 2 版（审查 A4）', async () => {
+    const { account } = await person()
+    const material = wrapLocalKey(randomBytes(32), { userId: account.id, version: 2 })
+    await database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        // 同一个事务里 now() 是同一个值：第 2 版生成于第 1 版被吊销的那一刻（不变量 I21）
+        await client.query(
+          'INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key, created_at) VALUES ($1, 2, $2, $3, now() - interval \'1 hour\')',
+          [account.id, material.masterKeyId, material.wrappedKey],
+        )
+        await client.query('INSERT INTO user_local_keys (user_id, version, created_at, revoked_at) VALUES ($1, 1, now() - interval \'2 hours\', now() - interval \'1 hour\')', [account.id])
+        await client.query('COMMIT')
+      }
+      catch (error) {
+        await client.query('ROLLBACK')
+        throw error
+      }
+    })
+    // 前提：物理顺序确实是第 2 版在前——不限"当前的"时按物理顺序读出来，同一个人的最后一行是吊销了的第 1 版，摘要就错成它
+    const physical = await database.query(async client => (await client.query<{ version: number }>('SELECT version FROM user_local_keys WHERE user_id = $1 ORDER BY ctid', [account.id])).rows)
+    expect(physical.map(row => row.version)).toEqual([2, 1])
+    const current = (await localKeyRowsOf(database, account.id)).find(row => row.revokedAt === null)
+    const summary = { version: 2, createdAt: current?.createdAt.toISOString() }
+    expect(current?.version).toBe(2)
+    expect(parseExact(adminUserSchema, await (await asUser(app.baseUrl, rootSession, `/api/admin/users/${account.id}`)).json()).localKey).toEqual(summary)
+    const list = parseExact(adminUserListResponseSchema, await (await asUser(app.baseUrl, rootSession, `/api/admin/users?query=${account.username}`)).json())
+    expect(list.items.find(item => item.id === account.id)?.localKey).toEqual(summary)
   })
 })
 
