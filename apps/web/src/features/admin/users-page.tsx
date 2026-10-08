@@ -43,6 +43,16 @@ function loginLockText(lock: NonNullable<AdminUser['loginLock']>): string {
 }
 
 /**
+ * 吊销本机密钥的确认框里的说明（M3-P6 设计 §3.8）：自己的、停用的、别人的三版（审查 B1）。停用的账户登录都已退出，也生成不了重置链接，
+ * 不能照别人的那一版引导"同时生成重置链接"；要提醒的是重新启用之后旧密码照旧可用（ADR-013）。自己的账户总是有效的（停用的登录不了）
+ */
+function revokeLocalKeyDescription(user: AdminUser, own: boolean): string {
+  if (own)
+    return text.revokeOwnLocalKeyDescription
+  return user.status === 'disabled' ? text.revokeDisabledLocalKeyDescription : text.revokeLocalKeyDescription
+}
+
+/**
  * 对自己的操作结果未知之后，确认的弹窗换上的元数据：再试得到"登录已过期"时，登录页说明对应的原因——
  * 为自己生成重置链接（M2-P6 复核 S1）、停用自己（第五批 G1）
  */
@@ -233,7 +243,8 @@ export function AdminUsersPage() {
   }
 
   /**
-   * 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：所有状态的账户都能吊销，自己的也一样。吊销不改这一行显示的任何一项（列表不显示密钥），
+   * 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：所有状态的账户都能吊销，自己的也一样（说明分自己、停用的、别人的三版，见 revokeLocalKeyDescription）。
+   * 吊销不改这一行显示的任何一项（列表不显示密钥），
    * refresh 用空操作；成功的说明交回给确认的弹窗，关掉之后写进页面顶部的状态区。这个人从没取过本机密钥时服务端原样返回，说明没有要吊销的。
    * 吊销不动会话：自己的账户也不重新确认会话。结果未知时用专门的说法——吊销每次都换一把新的（不按状态幂等），刷新也看不出是否已经生效，
    * 再吊销一次没有坏处。焦点回到这一行的"吊销本机密钥"（按钮一直在，打开之前有焦点的就交还给它；点按钮不给焦点的浏览器回到这一行）
@@ -243,7 +254,7 @@ export function AdminUsersPage() {
     const name = nameOf(user)
     askToConfirm({
       title: own ? text.confirmRevokeOwnLocalKey : text.confirmRevokeLocalKey(name),
-      description: own ? text.revokeOwnLocalKeyDescription : text.revokeLocalKeyDescription,
+      description: revokeLocalKeyDescription(user, own),
       confirmLabel: text.revokeLocalKey,
       destructive: true,
       describeFailure: (error) => {

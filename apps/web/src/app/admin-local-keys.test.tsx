@@ -98,14 +98,24 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     await waitFor(() => expect(document.activeElement).toBe(row))
   })
 
-  it('停用的账户也能吊销；这个人从没取过本机密钥：服务端原样返回，状态区说明没有要吊销的', async () => {
+  it('停用的账户也能吊销：说明另一版——登录都已退出、重新启用之后旧密码照旧可用，启用之后再生成重置链接（这时这一行没有"生成重置链接"）；启用的确认框里同样提醒。这个人从没取过本机密钥：服务端原样返回，状态区说明没有要吊销的', async () => {
     const disabled: AdminUser = { ...AMY, status: 'disabled' }
     const api = admin([disabled], { [REVOKE_AMY]: () => json(200, disabled) })
     renderApp('/admin/users')
-    const { dialog } = await openRevoke(await rowOf('amy'), AMY_NAME)
+    const row = await rowOf('amy')
+    expect(within(row).queryByRole('button', { name: `生成重置链接 ${AMY_NAME}` })).toBeNull()
+    const { dialog } = await openRevoke(row, AMY_NAME)
+    expect(dialog).toHaveAccessibleName(`吊销 ${AMY_NAME} 的本机密钥？`)
+    expect(dialog).toHaveAccessibleDescription('本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响。这个账户已停用，他在所有地方的登录都已退出；重新启用之后旧密码照旧可用——设备可能落在别人手里时，启用之后请立即为他生成重置链接。')
     confirmIn(dialog)
     await waitFor(() => expect(statusRegion()).toHaveTextContent(`${AMY_NAME} 还没有本机密钥，没有要吊销的。`))
     expect(count(api, REVOKE_AMY)).toBe(1)
+
+    // 启用的确认框：设备丢失而停用的，启用之后旧密码照旧可用，要立即生成重置链接
+    fireEvent.click(within(row).getByRole('button', { name: `启用 ${AMY_NAME}` }))
+    const enable = await screen.findByRole('dialog')
+    expect(enable).toHaveAccessibleName(`启用 ${AMY_NAME}？`)
+    expect(enable).toHaveAccessibleDescription('启用后这个人可以照常登录。停用期间转移走的文档不会回到他的个人空间。停用是因为设备丢失的，启用之后请立即为他生成重置链接：旧密码照旧可用。')
   })
 
   it('结果未知（断网）：专门的说法——没能确认是否已经吊销、再吊销一次没有坏处，不用通用的"页面已刷新"；不刷新列表；弹窗留着，再点一次成功', async () => {
