@@ -4,6 +4,7 @@ import {
   adminSpaceSchema,
   adminUserDocumentListResponseSchema,
   adminUserListQuerySchema,
+  adminUserSchema,
   changeSpaceVisibilityRequestSchema,
   changeSystemRoleRequestSchema,
   createInvitationRequestSchema,
@@ -37,6 +38,15 @@ describe('管理界面的契约', () => {
     for (const status of ['pending', 'accepted', 'expired', 'revoked'])
       expect(invitationListQuerySchema.safeParse({ status }).success).toBe(true)
     expect(invitationListQuerySchema.safeParse({ status: 'used' }).success).toBe(false)
+  })
+
+  it('M3-P6 账户带当前的本机密钥：只有版本与生成的时刻，从没取过时为空、不能省略；密钥材料混进来也被丢弃', () => {
+    const account = { id: '0192f0c8-0000-7000-8000-000000000001', username: 'zhangsan', displayName: '张三', systemRole: 'member', status: 'active', createdAt: '2026-09-28T00:00:00.000Z', loginLock: null }
+    const localKey = { version: 2, createdAt: '2026-10-08T00:00:00.000Z' }
+    expect(adminUserSchema.parse({ ...account, localKey: null })).toEqual({ ...account, localKey: null })
+    expect(adminUserSchema.parse({ ...account, localKey: { ...localKey, key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', wrappedKey: 'x' } })).toEqual({ ...account, localKey })
+    expect(adminUserSchema.safeParse(account).success).toBe(false)
+    expect(adminUserSchema.safeParse({ ...account, localKey: { version: 0, createdAt: localKey.createdAt } }).success).toBe(false)
   })
 
   it('邀请的响应不含令牌：多出来的字段被丢弃', () => {

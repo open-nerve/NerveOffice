@@ -115,6 +115,12 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
         `INSERT INTO document_save_receipts (request_id, document_id, revision, payload_digest, saved_by, saved_at) VALUES ($1, $2, 5, sha256('r'::bytea), $3, now())`,
         [randomUUID(), await w.document(first), owner.id],
       )
+      // I19：本机密钥缺了第 2 版（第 1 版吊销了，当前的是第 3 版）；I20：吊销了第 1 版却没有下一版（这个人没有当前的）
+      const gap = await createPassiveAccount(database, { username: 'gap' })
+      const noCurrent = await createPassiveAccount(database, { username: 'no-current' })
+      const material = 'decode(repeat(\'ab\', 16), \'hex\'), decode(repeat(\'cd\', 60), \'hex\')'
+      await client.query(`INSERT INTO user_local_keys (user_id, version, revoked_at) VALUES ($1, 1, now()), ($2, 1, now())`, [gap.id, noCurrent.id])
+      await client.query(`INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key) VALUES ($1, 3, ${material})`, [gap.id])
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)
@@ -126,9 +132,12 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
     expect(left).toBe(0)
   })
 
-  it('阴性对照：一致的数据（根目录与文件夹里的文档、整单在回收站里的子树与连带的删除单元）什么也不报', async () => {
+  it('阴性对照：一致的数据（根目录与文件夹里的文档、整单在回收站里的子树与连带的删除单元，吊销过两次的本机密钥）什么也不报', async () => {
     const { database, owner, first } = await world()
     const violations = await database.query(async (client) => {
+      // 本机密钥：第 1、2 版吊销了（材料已擦），第 3 版是当前的
+      await client.query(`INSERT INTO user_local_keys (user_id, version, revoked_at) VALUES ($1, 1, now()), ($1, 2, now())`, [owner.id])
+      await client.query(`INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key) VALUES ($1, 3, decode(repeat('ab', 16), 'hex'), decode(repeat('cd', 60), 'hex'))`, [owner.id])
       const w = writer(client, owner.id)
       const top = await w.folder(first)
       const child = await w.folder(first, { parentId: top })

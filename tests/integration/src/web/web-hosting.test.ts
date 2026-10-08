@@ -4,10 +4,10 @@ import type { TestDatabase } from '../support/database.ts'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createApplication, loadConfig } from '@nerve-office/api'
+import { createApplication, loadServerConfig } from '@nerve-office/api'
 import { errorResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { startTestApp, testEnvironment } from '../support/api-app.ts'
+import { serverEnvironment, startTestApp } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { captureLogs } from '../support/log-capture.ts'
@@ -132,7 +132,7 @@ describe('没有配置或配置错了', () => {
   it('目录里没有入口页：启动失败，说明原因', async () => {
     const empty = mkdtempSync(join(tmpdir(), 'nerve-web-empty-'))
     try {
-      const config = loadConfig(testEnvironment(database.url, { NERVE_WEB_ROOT: empty }))
+      const config = loadServerConfig(serverEnvironment(database.url, { NERVE_WEB_ROOT: empty }))
       await expect(createApplication(config, { logDestination: captureLogs().destination })).rejects.toThrow(/没有入口页 index\.html/)
       // 只有平台页面、没有编辑器页（例如指向了旧的构建目录）同样启动失败
       writeFileSync(join(empty, 'index.html'), INDEX_HTML)

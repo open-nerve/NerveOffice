@@ -93,4 +93,13 @@ describe('createRootLogger', () => {
     expect(logs.entries()[0]).toMatchObject({ url: REDACTION_CENSOR, issued: { link: REDACTION_CENSOR }, nested: { invitation: { url: REDACTION_CENSOR } } })
     expect(logs.lines().join('')).not.toContain('AAAAAAAA')
   })
+
+  // 本机密钥（M3-P6 设计 §3.4）：清单里要有这几个键名，同样不能只靠按清单逐个核对的用例
+  it('本机密钥的主密钥、原始的与包装之后的密钥（masterKey、localKey、rawKey、wrappedKey）脱敏', () => {
+    const logs = captureLogs()
+    const material = 'bmVydmUtb2ZmaWNlLXRlc3Qtb25seS1tYXN0ZXJrZXk='
+    createRootLogger({ level: 'info', destination: logs.destination }).info({ masterKey: material, issued: { localKey: material, rawKey: material }, nested: { row: { wrappedKey: material } } }, '本机密钥')
+    expect(logs.entries()[0]).toMatchObject({ masterKey: REDACTION_CENSOR, issued: { localKey: REDACTION_CENSOR, rawKey: REDACTION_CENSOR }, nested: { row: { wrappedKey: REDACTION_CENSOR } } })
+    expect(logs.lines().join('')).not.toContain(material)
+  })
 })

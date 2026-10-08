@@ -638,3 +638,89 @@ describe('0025_m3_p5_handover（M3-P5 设计 §3.2）', () => {
     expect(await violation(audit, ['documents.edit_handed_over', holder, documentId, {}])).toMatchObject(check('audit_events_action_check'))
   })
 })
+
+describe('0026_m3_p6_local_keys（M3-P6 设计 §3.2）', () => {
+  it('0025 的库上已有账户与审计：执行之后原样保留，新表是空的（第一次取用时才生成，存量账户不用补发，迁移也不需要主密钥）', async () => {
+    const database = await emptyDatabase()
+    await runMigrations({ connectionString: database.url, lockTimeoutMs: 10_000, migrationsFolder: migrationsUpTo('0025_m3_p5_handover') })
+    const { userId } = await seedOwner(database)
+    const snapshot = 'SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM audit_events) AS audits'
+    const before = await database.query(async (client) => {
+      await client.query('INSERT INTO audit_events (action, actor_type, actor_id, source, target_type, target_id, details) VALUES (\'documents.edit_taken_over\', \'user\', $1, \'cli\', \'user\', $1, $2)', [userId, { holderId: userId }])
+      return (await client.query<Record<string, string>>(snapshot)).rows[0]
+    })
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const after = await database.query(async client => ({
+      counts: (await client.query<Record<string, string>>(snapshot)).rows[0],
+      keys: (await client.query<{ count: string }>('SELECT count(*) FROM user_local_keys')).rows[0]?.count,
+    }))
+    expect(after).toEqual({ counts: before, keys: '0' })
+  })
+
+  it('新表的约束：版本从 1 起；标识 16 字节、包装结果 60 字节、两列同空同有；当前的有密钥材料、吊销的没有；吊销不早于生成；每人至多一把当前的；主键；外键 restrict；ON CONFLICT DO NOTHING 接住撞主键与撞部分唯一索引；审计的吊销动作能写', async () => {
+    const database = await emptyDatabase()
+    expect(await migrateDatabase(database)).toMatchObject({ status: 'applied' })
+    const { userId } = await seedOwner(database)
+    /** 没有个人空间的账户：删它时只有本机密钥的外键挡着 */
+    const loner = await database.query(async client => (await client.query<{ id: string }>('INSERT INTO users (username, display_name, password_hash, system_role) VALUES (\'loner\', \'loner\', \'$argon2id$x\', \'member\') RETURNING id')).rows[0]?.id ?? '')
+    /** 在一个事务里先执行 setup（每条带这个人的 id），再执行 text，看结果（违反约束时是那个错误）；一律回滚，每次都从空表开始 */
+    const attempt = async (text: string, setup: readonly string[] = [], user = userId): Promise<unknown> => database.query(async (client) => {
+      await client.query('BEGIN')
+      try {
+        for (const statement of setup)
+          await client.query(statement, [user])
+        return { rows: (await client.query(text, [user])).rowCount }
+      }
+      catch (error) {
+        return error
+      }
+      finally {
+        await client.query('ROLLBACK')
+      }
+    })
+    const check = (constraint: string) => ({ code: '23514', constraint })
+    const material = 'decode(repeat(\'ab\', 16), \'hex\'), decode(repeat(\'cd\', 60), \'hex\')'
+    const current = (version: number): string => `INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key) VALUES ($1, ${version}, ${material})`
+    const revoked = (version: number): string => `INSERT INTO user_local_keys (user_id, version, revoked_at) VALUES ($1, ${version}, now())`
+    const withMaterial = (masterKeyBytes: number, wrappedBytes: number): string =>
+      `INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key) VALUES ($1, 1, decode(repeat('ab', ${masterKeyBytes}), 'hex'), decode(repeat('cd', ${wrappedBytes}), 'hex'))`
+
+    // 当前的一把：有密钥材料、没有吊销时刻（created_at 默认 now()）；吊销了的：有时刻、没有材料
+    expect(await attempt(current(1))).toEqual({ rows: 1 })
+    expect(await attempt(revoked(1))).toEqual({ rows: 1 })
+    expect(await attempt(current(0))).toMatchObject(check('user_local_keys_version_check'))
+    // 长度：标识 16 字节、包装结果 60 字节（IV 12 ‖ 密文 32 ‖ 标签 16）
+    expect(await attempt(withMaterial(8, 60))).toMatchObject(check('user_local_keys_master_key_id_check'))
+    for (const length of [56, 61])
+      expect(await attempt(withMaterial(16, length)), String(length)).toMatchObject(check('user_local_keys_wrapped_key_check'))
+    // 两列同空同有
+    expect(await attempt(`INSERT INTO user_local_keys (user_id, version, wrapped_key) VALUES ($1, 1, decode(repeat('cd', 60), 'hex'))`)).toMatchObject(check('user_local_keys_material_check'))
+    expect(await attempt(`INSERT INTO user_local_keys (user_id, version, master_key_id, revoked_at) VALUES ($1, 1, decode(repeat('ab', 16), 'hex'), now())`)).toMatchObject(check('user_local_keys_material_check'))
+    // 当前的有密钥材料、吊销的没有：当前却没有材料、吊销了却留着材料都拒绝
+    expect(await attempt('INSERT INTO user_local_keys (user_id, version) VALUES ($1, 1)')).toMatchObject(check('user_local_keys_current_check'))
+    expect(await attempt(`INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key, revoked_at) VALUES ($1, 1, ${material}, now())`)).toMatchObject(check('user_local_keys_current_check'))
+    // 吊销：记下时刻、擦掉两列；只记时刻不擦材料拒绝；吊销不早于生成
+    expect(await attempt('UPDATE user_local_keys SET revoked_at = now(), master_key_id = NULL, wrapped_key = NULL WHERE user_id = $1 AND revoked_at IS NULL', [current(1)])).toEqual({ rows: 1 })
+    expect(await attempt('UPDATE user_local_keys SET revoked_at = now() WHERE user_id = $1', [current(1)])).toMatchObject(check('user_local_keys_current_check'))
+    expect(await attempt('UPDATE user_local_keys SET revoked_at = created_at - interval \'1 second\', master_key_id = NULL, wrapped_key = NULL WHERE user_id = $1', [current(1)])).toMatchObject(check('user_local_keys_revoked_at_check'))
+    // 每人至多一把当前的（部分唯一索引）；吊销的可以有好几把
+    expect(await attempt(current(2), [current(1)])).toMatchObject({ code: '23505', constraint: 'user_local_keys_current_key' })
+    expect(await attempt(current(3), [revoked(1), revoked(2)])).toEqual({ rows: 1 })
+    // 主键：同一个人的同一版只有一行
+    expect(await attempt(revoked(1), [revoked(1)])).toMatchObject({ code: '23505', constraint: 'user_local_keys_pkey' })
+    // ON CONFLICT DO NOTHING（不带冲突目标，取用插第 1 版的写法）：撞主键（已有第 1 版）、撞部分唯一索引（第 1 版吊销了、已有当前的第 2 版）都接住
+    expect(await attempt(`${current(1)} ON CONFLICT DO NOTHING`, [current(1)])).toEqual({ rows: 0 })
+    expect(await attempt(`${current(1)} ON CONFLICT DO NOTHING`, [revoked(1)])).toEqual({ rows: 0 })
+    expect(await attempt(`${current(3)} ON CONFLICT DO NOTHING`, [revoked(1), current(2)])).toEqual({ rows: 0 })
+    // 外键：不存在的账户插不进来；账户只停用不删除（restrict）
+    expect(await attempt(current(1), [], '0199a2c4-0000-7000-8000-0000000000ff')).toMatchObject({ code: '23503', constraint: 'user_local_keys_user_id_users_id_fk' })
+    expect(await attempt('DELETE FROM users WHERE id = $1', [current(1)], loner)).toMatchObject({ constraint: 'user_local_keys_user_id_users_id_fk' })
+    expect(await attempt('DELETE FROM users WHERE id = $1', [], loner)).toEqual({ rows: 1 })
+
+    // 审计：吊销本机密钥的动作能写，不认识的动作照样被拒
+    const audit = 'INSERT INTO audit_events (action, actor_type, actor_id, source, target_type, target_id, details) VALUES ($1, \'user\', $2, \'cli\', \'user\', $2, $3)'
+    const violation = async (text: string, values: unknown[] = []): Promise<unknown> => database.query(async client => client.query(text, values).then(() => undefined, (error: unknown) => error))
+    expect(await violation(audit, ['users.local_key_revoked', userId, { version: 1 }])).toBeUndefined()
+    expect(await violation(audit, ['users.local_key_rotated', userId, {}])).toMatchObject(check('audit_events_action_check'))
+  })
+})

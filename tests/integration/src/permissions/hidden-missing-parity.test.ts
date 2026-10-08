@@ -469,6 +469,8 @@ const EXEMPT: Readonly<Record<string, string>> = {
   'POST /api/admin/users/:id/password-reset': NO_HIDDEN_OBJECTS,
   'PUT /api/admin/users/:id/system-role': NO_HIDDEN_OBJECTS,
   'POST /api/admin/users/:id/unlock-login': NO_HIDDEN_OBJECTS,
+  // 吊销本机密钥（M3-P6）：同上，不存在的账户 404 由 local-keys/local-keys.test.ts 与 permissions/local-key-matrix.test.ts 核对
+  'POST /api/admin/users/:id/local-key/revoke': NO_HIDDEN_OBJECTS,
 }
 
 describe('路径里带 id 的每个接口都在上面的清单里，或者明确豁免（M2-P6 第 6 片复核 S5）', () => {

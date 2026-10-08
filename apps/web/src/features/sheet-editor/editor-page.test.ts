@@ -35,7 +35,7 @@ const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f
 /** 申请到的编辑租约：修订号与载入的内容相同（3） */
 const TOKEN = 'L'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-09-27T03:01:30.000Z', interruption: null, formulasPending: false }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z', request: null }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-09-27T03:01:40.000Z', request: null, localKeyVersion: null }
 /** 保存带上的编辑租约 */
 const CREDENTIALS = { token: TOKEN, writeEpoch: 7 }
 /** 续上时申请到的下一代（修订号没变：期间没人保存过） */

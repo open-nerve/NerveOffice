@@ -22,6 +22,7 @@ import type { WriteAccessRevocation, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
 import { DOCUMENT_PROFILE_OF, EDIT_HANDOVER_RESERVE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_REQUEST_TTL_SECONDS, FOLDER_LIST_MAX_ITEMS, PLATFORM_FORMAT_VERSION, TRASH_RETENTION_DAYS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { vi } from 'vitest'
+import { AppError } from '../../shared/errors/app-error.ts'
 import { parseAuditEvent } from '../audit/index.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
@@ -775,9 +776,16 @@ export class FakeStore {
         .toSorted((a, b) => a.documentId.localeCompare(b.documentId))),
   }
 
-  /** auth 的会话服务（M3-P1：判断别人的租约绑定的登录还在不在） */
+  /**
+   * auth 的会话服务（M3-P1：判断别人的租约绑定的登录还在不在；持有者自己的请求在锁下再核对这次登录）。
+   * requireActive 照 SessionService 的口径经 isActive 判断、失效时 401：用例据 isActive 的调用核对先后
+   */
   readonly sessions = {
-    isActive: vi.fn(async (sessionId: string) => this.activeSessions.has(sessionId)),
+    isActive: vi.fn(async (sessionId: string, _transaction?: Transaction) => this.activeSessions.has(sessionId)),
+    requireActive: vi.fn(async (sessionId: string, transaction: Transaction) => {
+      if (!await this.sessions.isActive(sessionId, transaction))
+        throw new AppError('SESSION_EXPIRED')
+    }),
   }
 
   readonly transactions = {

@@ -1,6 +1,10 @@
-import type { ConfigIssue } from './config.ts'
+import type { ConfigIssue, ServerConfig } from './config.ts'
+import { Buffer } from 'node:buffer'
+import { randomBytes } from 'node:crypto'
+import { inspect } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { ConfigError, loadConfig } from './config.ts'
+import { APP_CONFIG, ConfigModule, LOCAL_KEYS_CONFIG } from './config.module.ts'
+import { ConfigError, loadConfig, loadServerConfig } from './config.ts'
 
 const DATABASE_URL = 'postgres://nerve:s3cret-password@db.internal:5432/nerve_office'
 const PUBLIC_ORIGIN = 'https://docs.example.com'
@@ -457,5 +461,131 @@ describe('loadConfig', () => {
     expect(Object.isFrozen(config)).toBe(true)
     expect(Object.isFrozen(config.http)).toBe(true)
     expect(Object.isFrozen(config.http.trustProxy)).toBe(true)
+  })
+})
+
+describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
+  const MASTER_KEY = randomBytes(32).toString('base64')
+  const SERVER = { ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: MASTER_KEY }
+  const PROBLEM = '必须是 32 字节随机数的标准 base64（44 个字符、以 = 结尾，例如 openssl rand -base64 32 的输出）'
+  /** 可读的 32 字节（开发、测试用的那种） */
+  const READABLE = Buffer.from('nerve-office-test-only-masterkey').toString('base64')
+
+  it('应用进程的读法：主密钥用 Secret 包住，配置被冻结；其余与命令行的读法相同', () => {
+    const config = loadServerConfig(SERVER)
+    expect(config.localKeys.masterKey.reveal()).toBe(MASTER_KEY)
+    expect(Object.isFrozen(config)).toBe(true)
+    expect(Object.isFrozen(config.localKeys)).toBe(true)
+    const { localKeys, ...app } = config
+    void localKeys
+    const { database: { url, ...database }, ...rest } = app
+    const { database: { url: commandUrl, ...commandDatabase }, ...commandRest } = loadConfig(SERVER)
+    expect(url.reveal()).toBe(commandUrl.reveal())
+    expect({ database, ...rest }).toEqual({ database: commandDatabase, ...commandRest })
+  })
+
+  it('应用进程缺主密钥：报"缺少"；别的变量也有问题时一起列出（它不依赖别的变量）', () => {
+    expect(issuesOf(() => loadServerConfig({ ...REQUIRED }))).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '缺少' }])
+    expect(issuesOf(() => loadServerConfig({ ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: '' }))).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '缺少' }])
+    expect(issuesOf(() => loadServerConfig({}))).toEqual([
+      { variable: 'NERVE_DATABASE_URL', problem: '缺少' },
+      { variable: 'NERVE_PUBLIC_ORIGIN', problem: '缺少' },
+      { variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '缺少' },
+    ])
+  })
+
+  it('命令行的读法不要求它：没有时照常；给了也只校验写法，不带进配置（迁移、初始化管理员、签发重置链接拿不到它）', () => {
+    expect(loadConfig({ ...REQUIRED })).not.toHaveProperty('localKeys')
+    const config = loadConfig(SERVER)
+    expect(config).not.toHaveProperty('localKeys')
+    expect(JSON.stringify(config)).not.toContain(MASTER_KEY)
+    expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: MASTER_KEY.slice(0, -1) }))).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: PROBLEM }])
+  })
+
+  it.each([
+    ['缺填充', (key: string) => key.slice(0, -1)],
+    ['base64url 的字符', () => Buffer.alloc(32, 0xFB).toString('base64').replaceAll('+', '-').replaceAll('/', '_')],
+    ['非规范的尾位（第 43 个字符的低 2 位不是 0）', () => `${'A'.repeat(42)}B=`],
+    ['31 字节（两个等号的填充）', () => randomBytes(31).toString('base64')],
+    ['33 字节', () => randomBytes(33).toString('base64')],
+    ['开头有空白', (key: string) => ` ${key}`],
+    ['结尾有空白', (key: string) => `${key} `],
+    ['中间夹着换行', (key: string) => `${key.slice(0, 20)}\n${key.slice(20)}`],
+    ['夹杂非法字符', (key: string) => `${key.slice(0, 10)}!${key.slice(11)}`],
+    ['十六进制（64 个字符）', () => randomBytes(32).toString('hex')],
+    ['48 字节（多抄了一段）', () => randomBytes(48).toString('base64')],
+  ])('写法不对时拒绝启动（%s），说明里不带取值', (_case, alter) => {
+    const value = alter(MASTER_KEY)
+    for (const read of [loadServerConfig, loadConfig]) {
+      const issues = issuesOf(() => read({ ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: value }))
+      expect(issues).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: PROBLEM }])
+      expect(JSON.stringify(issues)).not.toContain(value.trim())
+    }
+  })
+
+  it('openssl rand -base64 32 的各种输出都收：尾字符是 A E I M Q U Y c g k o s w 0 4 8 之一', () => {
+    for (const last of 'AEIMQUYcgkosw048') {
+      const key = `${'A'.repeat(42)}${last}=`
+      expect(Buffer.from(key, 'base64')).toHaveLength(32)
+      expect(loadServerConfig({ ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: key }).localKeys.masterKey.reveal(), last).toBe(key)
+    }
+  })
+
+  it('NERVE_LOCAL_KEYS_MASTER_KEY_FILE：读文件、去掉末尾的一个换行；空文件、读不到、与变量同时设置、内容不对时都拒绝，问题记在运维设置的变量上、不带取值', () => {
+    const read = (content: string) => (path: string) => (path === '/run/secrets/master-key' ? content : '')
+    const fileEnv = { ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY_FILE: '/run/secrets/master-key' }
+    expect(loadServerConfig(fileEnv, read(`${MASTER_KEY}\n`)).localKeys.masterKey.reveal()).toBe(MASTER_KEY)
+    expect(loadServerConfig(fileEnv, read(`${MASTER_KEY}\r\n`)).localKeys.masterKey.reveal()).toBe(MASTER_KEY)
+    expect(issuesOf(() => loadServerConfig(fileEnv, read('\n')))).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY_FILE', problem: '指定的文件是空的' }])
+    expect(issuesOf(() => loadServerConfig(fileEnv, () => {
+      throw new Error('EACCES')
+    }))).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY_FILE', problem: '指定的文件读取失败' }])
+    const both = issuesOf(() => loadServerConfig({ ...fileEnv, NERVE_LOCAL_KEYS_MASTER_KEY: MASTER_KEY }, read(MASTER_KEY)))
+    expect(both).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '与 NERVE_LOCAL_KEYS_MASTER_KEY_FILE 只能设置一个' }])
+    const hex = randomBytes(32).toString('hex')
+    const invalid = issuesOf(() => loadServerConfig(fileEnv, read(`${hex}\n`)))
+    expect(invalid).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY_FILE', problem: `文件内容${PROBLEM}` }])
+    expect(JSON.stringify(invalid)).not.toContain(hex)
+    // 文件里多一个换行（echo 之后又追加了一行）：只去掉一个，剩下的换行让写法不对
+    expect(issuesOf(() => loadServerConfig(fileEnv, read(`${MASTER_KEY}\n\n`)))).toEqual([{ variable: 'NERVE_LOCAL_KEYS_MASTER_KEY_FILE', problem: `文件内容${PROBLEM}` }])
+  })
+
+  it('公开地址是 HTTPS 时拒绝全是可打印字符的主密钥（入库的开发、测试用密钥不会被抄进正式部署）；本机调试的 HTTP 照常收；随机的照常', () => {
+    const https = { ...REQUIRED, NERVE_PUBLIC_ORIGIN: 'https://docs.example.com' }
+    const issues = issuesOf(() => loadServerConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY: READABLE }))
+    expect(issues.map(issue => issue.variable)).toEqual(['NERVE_LOCAL_KEYS_MASTER_KEY'])
+    expect(issues[0]?.problem).toContain('不能用全是可打印字符的主密钥')
+    expect(issues[0]?.problem).toContain('openssl rand -base64 32')
+    expect(JSON.stringify(issues)).not.toContain(READABLE)
+    // 从文件读的：问题记在 _FILE 上
+    expect(issuesOf(() => loadServerConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY_FILE: '/run/secrets/master-key' }, () => READABLE)).map(issue => issue.variable)).toEqual(['NERVE_LOCAL_KEYS_MASTER_KEY_FILE'])
+    // 命令行的读法同样（配置本身就是错的）
+    expect(issuesOf(() => loadConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY: READABLE })).map(issue => issue.variable)).toEqual(['NERVE_LOCAL_KEYS_MASTER_KEY'])
+    expect(loadServerConfig({ ...REQUIRED, NERVE_PUBLIC_ORIGIN: 'http://127.0.0.1:4100', NERVE_LOCAL_KEYS_MASTER_KEY: READABLE }).localKeys.masterKey.reveal()).toBe(READABLE)
+    // 只有一个字节落在可打印范围之外：不算可读
+    const almost = Buffer.from('nerve-office-test-only-masterkey')
+    almost[31] = 0x80
+    expect(loadServerConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY: almost.toString('base64') }).localKeys.masterKey.reveal()).toBe(almost.toString('base64'))
+    expect(loadServerConfig({ ...https, NERVE_LOCAL_KEYS_MASTER_KEY: MASTER_KEY }).localKeys.masterKey.reveal()).toBe(MASTER_KEY)
+  })
+
+  it('主密钥是机密：整个配置被序列化、被打印时都不带它', () => {
+    const config = loadServerConfig(SERVER)
+    expect(JSON.stringify(config)).not.toContain(MASTER_KEY)
+    expect(inspect(config, { depth: 10 })).not.toContain(MASTER_KEY)
+    expect(String(config.localKeys.masterKey)).not.toContain(MASTER_KEY)
+  })
+
+  it('应用进程的组装（ConfigModule.forServer）：APP_CONFIG 里没有主密钥，主密钥只经 LOCAL_KEYS_CONFIG 给出', () => {
+    const config: ServerConfig = loadServerConfig(SERVER)
+    const providers = (ConfigModule.forServer(config).providers ?? []) as { provide: symbol, useValue: unknown }[]
+    const app = providers.find(provider => provider.provide === APP_CONFIG)?.useValue
+    const localKeys = providers.find(provider => provider.provide === LOCAL_KEYS_CONFIG)?.useValue
+    expect(app).not.toHaveProperty('localKeys')
+    expect(Object.isFrozen(app)).toBe(true)
+    expect(app).toMatchObject({ http: config.http, database: config.database })
+    expect(localKeys).toBe(config.localKeys)
+    // 命令行的组装只有 APP_CONFIG
+    expect((ConfigModule.forRoot(loadConfig(SERVER)).providers ?? []).map(provider => (provider as { provide: symbol }).provide)).toEqual([APP_CONFIG])
   })
 })

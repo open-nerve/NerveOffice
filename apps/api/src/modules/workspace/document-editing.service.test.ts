@@ -42,7 +42,7 @@ function summary(id: string) {
 }
 
 /** 每一步记进 calls，核对顺序与"都在事务里" */
-function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: undefined }, outcome: RequestOutcome = { kind: 'free' }, renewal: LeaseRenewal = { expiresAt: EXPIRES, request: undefined }) {
+function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 3, editor: undefined, canEdit: true, canTakeOver: false, formulasPending: false, request: undefined, reservation: undefined, interruption: undefined }, outcome: RequestOutcome = { kind: 'free' }, renewal: LeaseRenewal = { expiresAt: EXPIRES, request: undefined }, localKeyVersion: number | null = null) {
   const calls: string[] = []
   const transaction = { transaction: true }
   const leases = {
@@ -88,6 +88,13 @@ function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 
       return new Map(ids.map(id => [id, user(id)]))
     }),
   }
+  /** local-keys 的版本读取（M3-P6）：调用者当前的本机密钥的版本 */
+  const localKeys = {
+    currentVersionOf: vi.fn(async () => {
+      calls.push('local key version')
+      return localKeyVersion
+    }),
+  }
   const transactions = {
     run: vi.fn(async <T>(work: (transaction: never) => Promise<T>) => {
       calls.push('begin')
@@ -108,8 +115,8 @@ function setup(acquisition: LeaseAcquisition, status: LeaseStatus = { revision: 
       return result
     }),
   }
-  const service = new DocumentEditingService(leases as never, requests as never, users as never, transactions as never)
-  return { service, calls, leases, requests, users, transaction }
+  const service = new DocumentEditingService(leases as never, requests as never, users as never, localKeys as never, transactions as never)
+  return { service, calls, leases, requests, users, localKeys, transaction }
 }
 
 const ACQUIRED: LeaseAcquisition = { kind: 'acquired', token: TOKEN, writeEpoch: 4, revision: 3, source: null, expiresAt: EXPIRES, interruption: undefined, formulasPending: false }
@@ -198,21 +205,39 @@ describe('DocumentEditingService.acquire', () => {
 })
 
 describe('DocumentEditingService 的心跳、释放与编辑状态', () => {
-  it('心跳：一个业务事务，带上令牌与空闲秒数，返回 ISO 的到期时间；没有待回应的请求编辑时 request 为 null、不查人名', async () => {
+  it('心跳：一个业务事务，带上令牌与空闲秒数，返回 ISO 的到期时间；没有待回应的请求编辑时 request 为 null、不查人名；从没取过本机密钥时版本为 null', async () => {
     const { service, calls, leases, transaction } = setup(ACQUIRED)
     const renewed = await service.renew(ACTOR, DOCUMENT, { idleSeconds: 42, format: FORMAT }, TOKEN)
-    expect(renewed).toEqual({ expiresAt: EXPIRES.toISOString(), request: null })
+    expect(renewed).toEqual({ expiresAt: EXPIRES.toISOString(), request: null, localKeyVersion: null })
     expect(renewedEditLeaseSchema.parse(renewed)).toEqual(renewed)
     expect(leases.renew).toHaveBeenCalledWith(ACTOR, DOCUMENT, { idleSeconds: 42, format: FORMAT }, TOKEN, transaction)
-    expect(calls).toEqual(['begin', 'renew', 'commit'])
+    expect(calls).toEqual(['begin', 'renew', 'local key version', 'commit'])
   })
 
   it('US-M3-06 心跳带上待回应的请求编辑（M3-P5 设计 §3.3）：标识、请求方的人名（同一个事务里补）、发出的时刻', async () => {
     const { service, calls } = setup(ACQUIRED, undefined, undefined, { expiresAt: EXPIRES, request: { id: REQUEST, requesterId: CAT, requestedAt: ACTIVE } })
     const renewed = await service.renew(ACTOR, DOCUMENT, { idleSeconds: 0, format: FORMAT }, TOKEN)
-    expect(renewed).toEqual({ expiresAt: EXPIRES.toISOString(), request: { id: REQUEST, requester: summary(CAT), requestedAt: ACTIVE.toISOString() } })
+    expect(renewed).toEqual({ expiresAt: EXPIRES.toISOString(), request: { id: REQUEST, requester: summary(CAT), requestedAt: ACTIVE.toISOString() }, localKeyVersion: null })
     expect(renewedEditLeaseSchema.parse(renewed)).toEqual(renewed)
-    expect(calls).toEqual(['begin', 'renew', 'names', 'commit'])
+    expect(calls).toEqual(['begin', 'renew', 'local key version', 'names', 'commit'])
+  })
+
+  it('US-M3-17 心跳带上调用者自己当前的本机密钥的版本（M3-P6 设计 §3.6）：续租成功之后、同一个事务里按调用者的 id 读；续租失败时不读', async () => {
+    const { service, calls, localKeys, transaction } = setup(ACQUIRED, undefined, undefined, undefined, 3)
+    const renewed = await service.renew(ACTOR, DOCUMENT, { idleSeconds: 0, format: FORMAT }, TOKEN)
+    expect(renewed).toEqual({ expiresAt: EXPIRES.toISOString(), request: null, localKeyVersion: 3 })
+    expect(renewedEditLeaseSchema.parse(renewed)).toEqual(renewed)
+    expect(localKeys.currentVersionOf.mock.calls).toEqual([[BEN, transaction]])
+    expect(calls).toEqual(['begin', 'renew', 'local key version', 'commit'])
+
+    const lost = setup(ACQUIRED, undefined, undefined, undefined, 3)
+    lost.leases.renew.mockImplementationOnce(async () => {
+      lost.calls.push('renew')
+      throw new AppError('EDIT_LEASE_LOST', undefined, { details: { reason: 'expired' } })
+    })
+    expect((await rejection(lost.service.renew(ACTOR, DOCUMENT, { idleSeconds: 0, format: FORMAT }, TOKEN))).code).toBe('EDIT_LEASE_LOST')
+    expect(lost.localKeys.currentVersionOf).not.toHaveBeenCalled()
+    expect(lost.calls).toEqual(['begin', 'renew', 'rollback'])
   })
 
   it('释放：一个业务事务，没带令牌也照样交给 documents（由它什么也不做）', async () => {

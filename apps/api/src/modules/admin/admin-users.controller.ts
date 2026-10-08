@@ -70,6 +70,20 @@ export class AdminUsersController {
     return this.accounts.unlockLogin(principal, id, origin)
   }
 
+  /**
+   * 吊销本机密钥（M3-P6 设计 §3.5，US-M3-17）：200，返回账户（本机密钥是下一版）；没有密钥时原样返回。
+   * 不带请求体；看不到与不存在的豁免同解除锁定（只给系统管理员，没有看不到的账户）
+   */
+  @Post(':id/local-key/revoke')
+  @HttpCode(200)
+  async revokeLocalKey(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', { schema: userIdSchema }) id: string,
+    @RequestOrigin() origin: HttpOrigin,
+  ): Promise<AdminUser> {
+    return this.accounts.revokeLocalKey(principal, id, origin)
+  }
+
   @Put(':id/system-role')
   async changeSystemRole(
     @CurrentPrincipal() principal: Principal,

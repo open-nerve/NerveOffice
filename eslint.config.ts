@@ -600,6 +600,21 @@ const API_DOCUMENT_TRANSFER = {
   importNames: ['DocumentTransferService'],
   message: '停用者文档的转移（DocumentTransferService）不经内容权限，只由管理界面的模块（modules/admin）调用（M2-P2 审查 A9）',
 }
+// 吊销本机密钥的入口（LocalKeyRevocation）不判断调用者是谁、有没有权限（M3-P6 设计 §3.7）：只由管理界面的模块调用，它在调用之前
+// 在锁里复核操作者（system-admins 的共享锁）、锁住账户的行（两个并发的吊销由此串起来）。local-keys 模块自己经相对路径引用，不经公开入口，
+// 不受影响；管理界面的控制器同样拦下（后面按文件类型的块），只有它的服务调用。写法同上：静态导入、import type、再导出与命名空间导入都拦下
+const API_LOCAL_KEY_REVOCATION = {
+  regex: String.raw`(?:^|/)local-keys/index\.ts$`,
+  importNames: ['LocalKeyRevocation'],
+  message: '吊销本机密钥的入口（LocalKeyRevocation）不判断调用者的权限，只由管理界面的模块（modules/admin）的服务调用：它先在锁里复核操作者、锁住账户的行（M3-P6 设计 §3.7）',
+}
+// 本机密钥的主密钥（LOCAL_KEYS_CONFIG）只给 local-keys 模块注入（M3-P6 设计 §3.4）：主密钥环在那里派生包装键与标识，别的模块经配置拿不到
+// 主密钥（应用进程的 APP_CONFIG 里本来就去掉了它）。config 模块自己经相对路径引用，不受影响；app 层只调用 ConfigModule.forServer
+const API_LOCAL_KEYS_CONFIG = {
+  regex: String.raw`(?:^|/)config/index\.ts$`,
+  importNames: ['LOCAL_KEYS_CONFIG'],
+  message: '本机密钥的主密钥（LOCAL_KEYS_CONFIG）只给 local-keys 模块注入：别的模块经配置拿不到主密钥（M3-P6 设计 §3.4）',
+}
 // 到期的回收站清理（TrashPurgeService）不判断人的权限（操作者是系统，归档的空间照样清，M2-P4 设计 §3.1）：
 // 只由定时任务的模块（modules/jobs）调用，人工的永久删除走 TrashService.purge。写法同上：静态导入、import type、
 // 再导出与命名空间导入都拦下
@@ -687,6 +702,10 @@ interface ApiFileKind {
   processEnv?: boolean
   /** 引用停用者文档的转移 DocumentTransferService（管理界面的模块与 documents 模块） */
   documentTransfer?: boolean
+  /** 引用吊销本机密钥的入口 LocalKeyRevocation（管理界面的模块，M3-P6） */
+  localKeyRevocation?: boolean
+  /** 注入本机密钥的主密钥 LOCAL_KEYS_CONFIG（local-keys 模块，M3-P6） */
+  localKeysConfig?: boolean
   /**
    * 引用 documents 只给定时任务的入口：到期的回收站清理 TrashPurgeService、修订记录与回执的保留期清理 RevisionPurgeService
    * （定时任务的模块与 documents 模块）
@@ -714,6 +733,8 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.tables === true ? [] : [API_TABLES]),
     ...(kind.controller === true ? [API_REPOSITORY_FROM_CONTROLLER, API_TRANSACTIONS_FROM_CONTROLLER] : []),
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
+    ...(kind.localKeyRevocation === true ? [] : [API_LOCAL_KEY_REVOCATION]),
+    ...(kind.localKeysConfig === true ? [] : [API_LOCAL_KEYS_CONFIG]),
     ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
@@ -962,11 +983,13 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
-  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9），定时任务的模块可以引用到期的回收站清理与修订记录、回执的保留期清理
-  // （M2-P4 设计 §3.1，M3-P3 设计 §3.9）；documents 模块自己都可以。紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
-  { name: 'nerve/api-document-transfer', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true }) },
+  // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9）与吊销本机密钥的入口（M3-P6），定时任务的模块可以引用到期的回收站清理与修订记录、
+  // 回执的保留期清理（M2-P4 设计 §3.1，M3-P3 设计 §3.9）；documents 模块自己都可以；local-keys 模块可以注入主密钥（M3-P6）。
+  // 紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
+  { name: 'nerve/api-admin', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true, localKeyRevocation: true }) },
   { name: 'nerve/api-jobs', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ jobEntries: true }) },
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, jobEntries: true }) },
+  { name: 'nerve/api-local-keys', files: ['apps/api/src/modules/local-keys/**/*.ts'], rules: apiRules({ localKeysConfig: true }) },
   // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
   // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
   { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true }) },

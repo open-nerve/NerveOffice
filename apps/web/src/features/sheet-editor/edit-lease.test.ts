@@ -14,7 +14,7 @@ const TOKEN = 'T'.repeat(43)
 const NEXT_TOKEN = 'N'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 3, revision: 5, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
 const NEXT: AcquiredEditLease = { ...ACQUIRED, token: NEXT_TOKEN, writeEpoch: 4 }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null }
 const AMY: UserSummary = { id: '0199a2c4-1f2e-7a3b-8c4d-00000000000a', username: 'amy', displayName: '艾米' }
 
 /** 申请被占用：details 是持有者的详情，serverTime 是响应头 Date 的时刻 */

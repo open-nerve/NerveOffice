@@ -23,7 +23,7 @@ import { dirname } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pg from 'pg'
-import { E2E_ADMIN, E2E_DATABASE_PREFIX, e2eDatabaseUrl, e2eOrigin, e2ePort, maintenanceDatabaseUrl } from './environment.ts'
+import { E2E_ADMIN, E2E_DATABASE_PREFIX, E2E_LOCAL_KEYS_MASTER_KEY, e2eDatabaseUrl, e2eOrigin, e2ePort, maintenanceDatabaseUrl } from './environment.ts'
 import { writeServerControl } from './server-control.ts'
 
 const API_DIST = fileURLToPath(new URL('../../../apps/api/dist', import.meta.url))
@@ -182,8 +182,10 @@ async function main(): Promise<void> {
   if (stopping)
     return
 
+  // 本机密钥的主密钥只给后端（M3-P6 设计 §3.4）：迁移与初始化管理员的命令不需要它
+  const apiEnv: NodeJS.ProcessEnv = { ...env, NERVE_LOCAL_KEYS_MASTER_KEY: E2E_LOCAL_KEYS_MASTER_KEY }
   const startApi = (): ChildProcess => {
-    const child = spawn(process.execPath, ['--import', EXIT_WITH_PARENT, `${API_DIST}/app/main.js`], { env, stdio: ['pipe', log, log], detached: true })
+    const child = spawn(process.execPath, ['--import', EXIT_WITH_PARENT, `${API_DIST}/app/main.js`], { env: apiEnv, stdio: ['pipe', log, log], detached: true })
     child.once('exit', (code, signal) => {
       // 正在停止，或者是按 SIGUSR2 强制结束的上一个后端
       if (stopping || child !== api)

@@ -37,12 +37,10 @@ export function editingActorOf(principal: Principal): EditingActor {
 /**
  * 持有者自己的请求（申请、心跳、保存）在事务里、锁下再核对一次这次登录仍然有效（M3-P1 审查 A1）：会话守卫在处理器之前判断过，
  * 之后到这一步还隔着上传正文、等锁的时间，这期间退出、签发重置（撤销这个人的全部登录，"强制结束编辑"）、换令牌都不经文档行与租约行，
- * 挡不住在途的请求。锁下按主键查一条：撤销提交之后才做的判断一定看得到它，剩下"判断之后、提交之前"的几毫秒按"请求先于撤销"线性化。
- * 失效时与只读快照的开场核对（ADR-017）一样回 SESSION_EXPIRED，不动 Cookie，下一个请求经守卫处理
+ * 挡不住在途的请求。核对的口径在 auth（SessionService.requireActive，本机密钥的取用共用，M3-P6）：失效时 401 SESSION_EXPIRED，不动 Cookie
  */
 export async function requireActiveLogin(sessions: SessionService, actor: EditingActor, transaction: Transaction): Promise<void> {
-  if (!await sessions.isActive(actor.sessionId, transaction))
-    throw new AppError('SESSION_EXPIRED')
+  await sessions.requireActive(actor.sessionId, transaction)
 }
 
 /**

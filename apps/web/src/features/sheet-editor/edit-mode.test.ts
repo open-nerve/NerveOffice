@@ -39,7 +39,7 @@ function snapshotOf(value: string): string {
 const LOADED = { snapshot: snapshotOf('载入的'), revision: 3 }
 const TOKEN = 'L'.repeat(43)
 const ACQUIRED: AcquiredEditLease = { token: TOKEN, writeEpoch: 7, revision: 3, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
-const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null }
+const RENEWED: RenewedEditLease = { expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null }
 const SAVED: SaveContentResponse = { revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }
 const DENIED = new ApiError(403, 'PERMISSION_DENIED', '空间已归档，只能查看')
 const GONE = new ApiError(404, 'NOT_FOUND', '不存在')

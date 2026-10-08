@@ -114,6 +114,18 @@ describe('审计明细的结构', () => {
     expect(accepts('documents.edit_taken_over', { holderId: ID, spaceId: OTHER })).toBe(false)
   })
 
+  it('US-M3-17 吊销本机密钥（M3-P6 设计 §3.5）：只有被吊销的那一版（从 1 起的整数）；不收密钥材料、主密钥的标识、下一版与别的字段', () => {
+    expect(accepts('users.local_key_revoked', { version: 1 })).toBe(true)
+    expect(accepts('users.local_key_revoked', { version: 7 })).toBe(true)
+    expect(accepts('users.local_key_revoked', {})).toBe(false)
+    for (const version of [0, -1, 1.5, '1'])
+      expect(accepts('users.local_key_revoked', { version }), String(version)).toBe(false)
+    expect(accepts('users.local_key_revoked', { version: 1, key: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' })).toBe(false)
+    expect(accepts('users.local_key_revoked', { version: 1, wrappedKey: 'x' })).toBe(false)
+    expect(accepts('users.local_key_revoked', { version: 1, masterKeyId: '00112233445566778899aabbccddeeff' })).toBe(false)
+    expect(accepts('users.local_key_revoked', { version: 1, nextVersion: 2 })).toBe(false)
+  })
+
   it('类型不对拒绝：id 不是 UUID、份数是负数或小数、原因不在列表里', () => {
     expect(accepts('documents.deleted', { spaceId: 'x', folderId: null, trashEntryId: OTHER })).toBe(false)
     expect(accepts('folders.deleted', { spaceId: ID, parentId: null, trashEntryId: OTHER, folders: -1, documents: 0 })).toBe(false)

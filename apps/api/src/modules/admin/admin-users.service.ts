@@ -9,6 +9,7 @@ import { AuditService } from '../audit/index.ts'
 import { InvitationsService, LoginLockouts, PasswordResetsService, SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { WriteAccessRevocation } from '../documents/index.ts'
+import { LocalKeyRevocation, LocalKeyVersions } from '../local-keys/index.ts'
 import { UsersService } from '../users/index.ts'
 import { actorOf, toAdminUser } from './admin-views.ts'
 
@@ -17,8 +18,8 @@ type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 /**
  * 管理界面的账户操作（M2-P1 设计 §3.5）：跨模块的编排都在一个事务里。
  * 没有变化的操作（例如停用已停用的账户）原样返回，不记审计。
- * 返回的账户带着登录的锁定（M2-P6 复核 A1）：在同一个事务里、提交之前读（看得到这个事务自己的改动）。提交之后不再访问数据库——
- * 提交之后才读的话，这一步遇到数据库繁忙时账户已经停用，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
+ * 返回的账户带着登录的锁定（M2-P6 复核 A1）与当前的本机密钥的摘要（M3-P6 设计 §3.5）：在同一个事务里、提交之前读（看得到这个事务自己的改动）。
+ * 提交之后不再访问数据库——提交之后才读的话，这一步遇到数据库繁忙时账户已经停用，客户端却只能得到"结果未知"（M2-P6 第 3 片复验）
  */
 @Injectable()
 export class AdminUsersService {
@@ -29,6 +30,8 @@ export class AdminUsersService {
     private readonly invitations: InvitationsService,
     private readonly lockouts: LoginLockouts,
     private readonly writeAccess: WriteAccessRevocation,
+    private readonly localKeys: LocalKeyVersions,
+    private readonly localKeyRevocation: LocalKeyRevocation,
     private readonly audit: AuditService,
     private readonly transactions: TransactionRunner,
   ) {}
@@ -43,12 +46,13 @@ export class AdminUsersService {
     })
   }
 
-  /** 账户列表与各自的登录锁定：在同一个只读快照里读（M2 Codex 评审 CX1） */
+  /** 账户列表与各自的登录锁定、当前的本机密钥：在同一个只读快照里读（M2 Codex 评审 CX1），一页的本机密钥一条语句 */
   async list(query: AdminUserListQuery): Promise<AdminUserListResponse> {
     return this.transactions.readSnapshot(async (transaction) => {
       const page = await this.users.listAccounts(query, transaction)
       const locks = await this.lockouts.locksOf(page.items.map(account => account.username), transaction)
-      return { items: page.items.map(account => toAdminUser(account, locks.get(account.username))), nextCursor: page.nextCursor }
+      const keys = await this.localKeys.statesOf(page.items.map(account => account.id), transaction)
+      return { items: page.items.map(account => toAdminUser(account, locks.get(account.username), keys.get(account.id))), nextCursor: page.nextCursor }
     })
   }
 
@@ -124,6 +128,36 @@ export class AdminUsersService {
   }
 
   /**
+   * 吊销某人的本机密钥（M3-P6 设计 §3.5，US-M3-17）：设备可能丢了时，那台设备上用旧密钥加密的本机草稿随即再也解不开；同时生成下一版，
+   * 本人下一次取用时拿到它（用现在的主密钥包装）。一个事务，锁的顺序：system-admins 的共享锁复核操作者 → 账户行（FOR NO KEY UPDATE，
+   * 没有这个账户 404；停用的账户也锁得到）→ 本机密钥行（标记吊销、擦掉密钥材料、插下一版）→ 审计 users.local_key_revoked（明细是被吊销的那一版）。
+   * 必须先锁账户行：两个并发的吊销只靠本机密钥行的锁时，后一个在 READ COMMITTED 的重新检查下拿到 0 行、被当成"没有可吊销的"（探索 A 实测）；
+   * 锁住账户行之后两次吊销串起来，后一个吊销前一个生成的那一版。
+   * 停用的账户能吊销（设备丢失常在离职之后），吊销自己也可以；吊销不撤销登录、停用也不顺带吊销（设计 §3.1：两件事分开，
+   * 设备丢失时另要生成重置链接退出他的登录）。没有密钥（从没取过）时原样返回、不记审计。原始的新密钥不交给管理员，响应里只有版本与时刻
+   */
+  async revokeLocalKey(actor: Principal, userId: string, origin: HttpOrigin): Promise<AdminUser> {
+    return this.transactions.run(async (transaction) => {
+      await this.users.lockActingAdmin(actor.user.id, transaction)
+      const locked = await this.users.lockAccount(userId, transaction)
+      if (locked === undefined)
+        throw new AppError('NOT_FOUND')
+      // 用数据库给出的 id（ADR-014）：本机密钥的 AAD 按它绑定，审计的对象也是它
+      const revoked = await this.localKeyRevocation.revoke(locked.id, transaction)
+      if (revoked !== undefined) {
+        await this.audit.record({
+          action: 'users.local_key_revoked',
+          actor: actorOf(actor),
+          target: { type: 'user', id: locked.id },
+          origin,
+          details: { version: revoked.revokedVersion },
+        }, { transaction })
+      }
+      return this.view(locked, transaction)
+    })
+  }
+
+  /**
    * 这个人签发的、还没用的重置与邀请一并作废（M2-P6 复核 A2），逐条记审计。调用方已在同一个事务里锁住这个人的账户行：
    * 锁的顺序是账户行在前、链接行在后，与完成重置（被重置者的账户行 → 重置行）、接受邀请（登录名的锁 → 邀请行）不成环
    */
@@ -132,9 +166,10 @@ export class AdminUsersService {
     await this.invitations.revokeIssuedBy(actor.user, issuerId, reason, origin, transaction)
   }
 
-  /** 管理界面里的账户，带着登录的锁定：写操作传入它的事务（在提交之前读），读接口传入它的只读快照 */
+  /** 管理界面里的账户，带着登录的锁定与当前的本机密钥：写操作传入它的事务（在提交之前读），读接口传入它的只读快照 */
   private async view(account: AccountRecord, transaction: Transaction): Promise<AdminUser> {
     const locks = await this.lockouts.locksOf([account.username], transaction)
-    return toAdminUser(account, locks.get(account.username))
+    const keys = await this.localKeys.statesOf([account.id], transaction)
+    return toAdminUser(account, locks.get(account.username), keys.get(account.id))
   }
 }

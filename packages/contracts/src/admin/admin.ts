@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { DOCUMENT_TYPES } from '../documents/documents.ts'
 import { uuidSchema } from '../ids/ids.ts'
+import { localKeySummarySchema } from '../local-keys/local-keys.ts'
 import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, spaceNameSchema } from '../spaces/spaces.ts'
 import { displayNameSchema, USER_SEARCH_QUERY_MAX_LENGTH, USER_STATUSES, USER_SYSTEM_ROLES, usernameSchema, userSummarySchema } from '../users/users.ts'
 
@@ -25,6 +26,11 @@ export const adminUserSchema = z.object({
    * 系统管理员可以解除（POST /api/admin/users/{id}/unlock-login），清掉这个账户在所有来源上的计数
    */
   loginLock: z.object({ until: z.iso.datetime(), allSources: z.boolean() }).nullable(),
+  /**
+   * 这个人当前的本机密钥（M3-P6 设计 §3.5）：版本与生成的时刻，从没取过时为空。只有这两项，绝不带密钥材料。
+   * 系统管理员可以吊销（POST /api/admin/users/{id}/local-key/revoke）：用旧密钥加密的本机草稿随即再也解不开，同时生成下一版
+   */
+  localKey: localKeySummarySchema.nullable(),
 })
 
 export type AdminUser = z.infer<typeof adminUserSchema>
