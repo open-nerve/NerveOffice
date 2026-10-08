@@ -134,8 +134,9 @@ export const adminMessages = {
     // 这个人从没取过本机密钥：服务端原样返回、不记审计
     noLocalKeyToRevoke: (name: string) => `${name} 还没有本机密钥，没有要吊销的。`,
     // 吊销的结果未知：吊销不按状态幂等（每次都换一把新的），通用的"还没有生效的话可以再试一次"不合适：再吊销一次没有坏处。
-    // 列表随即刷新（审查 B2）：刷新好了，这一行显示的就是本机密钥现在的版本；没能刷新时如实说
-    revokeLocalKeyOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经吊销（${reason}）。${messages.common.listRefreshed(refreshed)}${refreshed ? '：这一行显示的是本机密钥现在的版本' : ''}。再吊销一次没有坏处：会再换一把新的密钥，之前的都已作废。`,
+    // 列表随即刷新（审查 B2）：刷新好了，这一行显示的就是现在的状态；没能刷新时如实说。说法对从没取过本机密钥的人也成立（复验 C8）：
+    // 这一行不显示版本时不说"现在的版本"，他再吊销一次什么也不换，不说"会再换一把"
+    revokeLocalKeyOutcomeUnknown: (reason: string, refreshed: boolean) => `没能确认是否已经吊销（${reason}）。${messages.common.listRefreshed(refreshed)}${refreshed ? '：这一行显示的是现在的状态' : ''}。再吊销一次没有坏处：有本机密钥的话会再换一把新的，之前的都已作废。`,
   },
   invitations: {
     // 有效期来自 contracts 的常量（INVITATION_LIFETIME_DAYS），界面不写死天数（M2-P6 复核 S-2）

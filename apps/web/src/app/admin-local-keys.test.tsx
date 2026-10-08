@@ -238,7 +238,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(enable).toHaveAccessibleDescription('启用后这个人可以照常登录。停用期间转移走的文档不会回到他的个人空间。停用是因为设备丢失的，启用之后请立即为他生成重置链接：旧密码照旧可用。')
   })
 
-  it('结果未知（断网）：刷新账户列表，这一行随之是本机密钥现在的版本（这里那一次其实已经生效：第 2 版）；专门的说法——没能确认是否已经吊销、列表已刷新、再吊销一次没有坏处，不用通用的"还没有生效的话可以再试一次"；弹窗留着，再点一次成功', async () => {
+  it('结果未知（断网）：刷新账户列表，这一行随之是现在的状态（这里那一次其实已经生效：第 2 版）；专门的说法——没能确认是否已经吊销、列表已刷新、再吊销一次没有坏处，不用通用的"还没有生效的话可以再试一次"；弹窗留着，再点一次成功', async () => {
     const server = keyServer([withKey(AMY, 1)])
     const api = admin([], {
       [USERS]: () => server.list(),
@@ -254,7 +254,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     const { button, dialog } = await openRevoke(row, AMY_NAME)
     const listed = count(api, USERS)
     confirmIn(dialog)
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表已刷新：这一行显示的是本机密钥现在的版本。再吊销一次没有坏处：会再换一把新的密钥，之前的都已作废。')
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表已刷新：这一行显示的是现在的状态。再吊销一次没有坏处：有本机密钥的话会再换一把新的，之前的都已作废。')
     expect(count(api, USERS)).toBe(listed + 1)
     expect(keyLine(row)).toHaveTextContent('本机密钥第 2 版')
     expect(statusRegion()).toBeEmptyDOMElement()
@@ -266,7 +266,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(count(api, REVOKE_AMY)).toBe(2)
   })
 
-  it('结果未知、随后刷新账户列表也失败（仍然断网）：说明列表没能刷新、显示的可能还是之前的，不说"这一行显示的是本机密钥现在的版本"', async () => {
+  it('结果未知、随后刷新账户列表也失败（仍然断网）：说明列表没能刷新、显示的可能还是之前的，不说"这一行显示的是现在的状态"', async () => {
     let lists = 0
     admin([], {
       [USERS]: () => {
@@ -278,9 +278,25 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     renderApp('/admin/users')
     const { dialog } = await openRevoke(await rowOf('amy'), AMY_NAME)
     confirmIn(dialog)
-    expect(await within(dialog).findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表没能刷新，显示的可能还是之前的，请稍后再看。再吊销一次没有坏处：会再换一把新的密钥，之前的都已作废。')
+    expect(await within(dialog).findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表没能刷新，显示的可能还是之前的，请稍后再看。再吊销一次没有坏处：有本机密钥的话会再换一把新的，之前的都已作废。')
     expect(lists).toBeGreaterThan(1)
     expect(statusRegion()).toBeEmptyDOMElement()
+  })
+
+  it('从没取过本机密钥的人，吊销的结果未知、列表刷新好了：说"这一行显示的是现在的状态"（这一行不显示版本），不说"本机密钥现在的版本"，也不说再吊销一次"会再换一把新的密钥"——他没有密钥可换（复验 C8）', async () => {
+    const api = admin([AMY], { [REVOKE_AMY]: inTurn(() => networkFailure(), () => json(200, AMY)) })
+    renderApp('/admin/users')
+    const row = await rowOf('amy')
+    const { dialog } = await openRevoke(row, AMY_NAME)
+    const listed = count(api, USERS)
+    confirmIn(dialog)
+    const alert = await within(dialog).findByRole('alert')
+    expect(alert.textContent).toBe('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表已刷新：这一行显示的是现在的状态。再吊销一次没有坏处：有本机密钥的话会再换一把新的，之前的都已作废。')
+    expect(count(api, USERS)).toBe(listed + 1)
+    expect(keyLine(row)).toBeNull()
+    // 照说明再吊销一次：没有要吊销的
+    confirmIn(dialog)
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`${AMY_NAME} 还没有本机密钥，没有要吊销的。`))
   })
 
   it('账户列表的"状态"列：取过本机密钥的人显示当前是第几版（停用的也一样），从没取过的不显示；与登录锁定的说明一样是这一格里的一行小字', async () => {
@@ -455,7 +471,7 @@ describe('吊销成功之后接着刷新列表：在路上的列表请求回来�
       confirmIn(dialog)
       await waitFor(() => expect(lateRefresh.sent()).toBe(true))
       await passRefreshTimeLimit()
-      expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表没能刷新，显示的可能还是之前的，请稍后再看。再吊销一次没有坏处：会再换一把新的密钥，之前的都已作废。')
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表没能刷新，显示的可能还是之前的，请稍后再看。再吊销一次没有坏处：有本机密钥的话会再换一把新的，之前的都已作废。')
       // 照说明再吊销一次
       confirmIn(dialog)
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
