@@ -2,10 +2,12 @@
 // 时间都取数据库的 now()，读出的行带着同一条语句里的 now()，加锁的对象与顺序，收回写入权的范围条件与 coversWriter 逐种同义、
 // 第一条连按时间刚死不久的也锁、第二条只交出按时间还活着的（M3-P5 设计 §3.5、审查 A1，边界与有效条件逐一相同）；
 // 改写为新的一代时请求、保留与接管标记的沿用与清空（§3.6、§3.7），接管时直接写下接管标记（§3.7、§3.8），最后活动按带来的空闲往前推、续租时只前进；请求编辑的发出、续期、取消、谢绝与交出（§3.6）只改
-// 请求、保留与"结束"几列（§3.12：保存不加锁读租约行的论证靠它）。这些语句在真实数据库上的行为（并发与交错、时间、约束）由集成测试覆盖
+// 请求、保留与"结束"几列（§3.12：保存不加锁读租约行的论证靠它）；换代与明确结束凭持锁的凭据，语句只用其中的文档 id（Codex 评审 CX1：
+// 凭据只在类型上，先锁文档行再锁租约行由服务的单元测试与集成测试核对）。这些语句在真实数据库上的行为（并发与交错、时间、约束）由集成测试覆盖
 // （tests/integration 的 documents/edit-leases.test.ts、lease-takeover.test.ts、lease-requests.test.ts、lease-revocation.test.ts 与几个 *-locks.test.ts）。
 import type { Transaction } from '../database/index.ts'
-import type { NewEditLease } from './edit-leases.repository.ts'
+import type { DocumentRowLock } from './documents.repository.ts'
+import type { LockedEditLease, NewEditLease } from './edit-leases.repository.ts'
 import type { RecordedStatement } from './recorded-statements.test-support.ts'
 import type { DocumentWriter, WriteAccessScope } from './write-access.ts'
 import { Buffer } from 'node:buffer'
@@ -62,6 +64,17 @@ function quoted(columns: readonly string[]): string {
   return columns.map(column => `"${column}"`).join(', ')
 }
 
+/**
+ * 持锁的凭据（Codex 评审 CX1）：类型上只有锁住它的仓储方法给出；这里只核对语句的形状（语句只用其中的文档 id），照样造一个
+ */
+function documentLock(id: string): DocumentRowLock {
+  return { id } as DocumentRowLock
+}
+
+function lockedLease(documentId: string): LockedEditLease {
+  return { documentId } as LockedEditLease
+}
+
 describe('读与锁：读出的行带着同一条语句里数据库的 now()', () => {
   it('按文档读：不加锁；一条语句里取出整行（含 M3-P5 的请求、保留与接管标记）与 now()', async () => {
     const statement = await onlyStatementOf(async (leases, transaction) => leases.findByDocument(DOCUMENT, transaction))
@@ -75,14 +88,21 @@ describe('读与锁：读出的行带着同一条语句里数据库的 now()', (
     expect(statement.text).toMatch(/^select .*now\(\) from "document_edit_leases" where "document_edit_leases"\."document_id" = \$1 for update$/)
     expect(statement.values).toEqual([DOCUMENT])
   })
+
+  it('在文档行的锁下锁租约行（Codex 评审 CX1）：与按文档锁同一条语句，文档 id 取自文档行的凭据；只锁租约行，文档行由调用方先锁', async () => {
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.lockUnder(documentLock(DOCUMENT), transaction))
+    const plain = await onlyStatementOf(async (leases, transaction) => leases.lockByDocument(DOCUMENT, transaction))
+    expect(statement).toEqual(plain)
+  })
 })
 
 describe('改写为新的一代', () => {
   /** 续上的页面带来 37 秒的空闲；不是接管 */
-  const lease = { documentId: DOCUMENT, holderId: AMY, sessionId: SESSION, clientInstanceId: TAB, tokenDigest: DIGEST, writeEpoch: 5, idleSeconds: 37, takenOver: undefined }
+  const lease = { holderId: AMY, sessionId: SESSION, clientInstanceId: TAB, tokenDigest: DIGEST, writeEpoch: 5, idleSeconds: 37, takenOver: undefined }
 
+  /** 改写 DOCUMENT 的租约（文档 id 取自文档行的凭据） */
   async function replaced(takenOver: NewEditLease['takenOver'] = undefined): Promise<RecordedStatement> {
-    return onlyStatementOf(async (leases, transaction) => leases.replace({ ...lease, takenOver }, transaction))
+    return onlyStatementOf(async (leases, transaction) => leases.replace(documentLock(DOCUMENT), { ...lease, takenOver }, transaction))
   }
 
   /** 改写那一半（ON CONFLICT DO UPDATE SET）里这一列的赋值：去掉前面的"列 = "，到下一列（或 returning）之前 */
@@ -170,27 +190,30 @@ describe('续租与明确结束', () => {
   })
 
   it('明确结束：结束的时间是 now()，记下原因；已经结束的不改（先记下的原因留着）', async () => {
-    const statement = await onlyStatementOf(async (leases, transaction) => leases.end(DOCUMENT, 'released', transaction))
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.end(lockedLease(DOCUMENT), 'released', transaction))
     expect(statement.text).toMatch(/^update "document_edit_leases" set "ended_at" = now\(\), "end_reason" = \$1 where \("document_edit_leases"\."document_id" = \$2 and "document_edit_leases"\."ended_at" is null\)/)
     expect(statement.values).toEqual(['released', DOCUMENT])
   })
 
   it('一批明确结束（收回写入权）：一条语句，这串文档 id 作为一个数组参数，同样只改还没结束的；没有文档时一条也不发', async () => {
-    const statement = await onlyStatementOf(async (leases, transaction) => leases.endAll([DOCUMENT, OTHER_DOCUMENT], 'revoked', transaction))
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.endAll([lockedLease(DOCUMENT), lockedLease(OTHER_DOCUMENT)], 'revoked', transaction))
     expect(statement.text).toBe('update "document_edit_leases" set "ended_at" = now(), "end_reason" = $1 where ("document_edit_leases"."document_id" = ANY($2::uuid[]) and "document_edit_leases"."ended_at" is null)')
     expect(statement.values).toEqual(['revoked', [DOCUMENT, OTHER_DOCUMENT]])
     expect(await statementsOf(async (leases, transaction) => leases.endAll([], 'revoked', transaction))).toEqual([])
   })
 })
 
-describe('M3-P5 请求编辑与交出（设计 §3.6、§3.12）：按主键一条语句（调用方已锁住租约行），时间是 now()，只改请求、保留与"结束"这几列', () => {
+describe('M3-P5 请求编辑与交出（设计 §3.6、§3.12）：按主键一条语句（调用方已锁住租约行；交出另先锁文档行，Codex 评审 CX1），时间是 now()，只改请求、保留与"结束"这几列', () => {
   /** 一条 update 的 SET 里赋值的列（按出现的顺序） */
   function assignedColumns(text: string): string[] {
     const set = text.slice(text.indexOf(' set ') + ' set '.length, text.indexOf(' where '))
     return [...set.matchAll(/(?:^|, )"([a-z_]+)" = /g)].map(match => match[1] ?? '')
   }
 
-  /** 保存判断有效看的那几列（与持有者、绑定、令牌、代次有关的）：不锁文档行的写路径都不改它们（仓储的类注释） */
+  /**
+   * 保存判断有效看的那几列（与持有者、绑定、令牌、代次有关的）：只锁租约行的写路径（请求编辑）都不改它们（仓储的类注释）；
+   * 交出凭文档行的锁结束这一代（"结束"两列），同样不改它们
+   */
   const GENERATION_COLUMNS = ['holder_id', 'session_id', 'client_instance_id', 'token_digest', 'write_epoch', 'acquired_at', 'renewed_at', 'expires_at', 'last_active_at']
 
   it('发出新的请求：标识由数据库生成（uuidv7()），请求方与他这次登录是参数，发出是 now()，有效期 now() 加 10 分钟，谢绝清空；按主键，返回标识、发出与有效期', async () => {
@@ -223,14 +246,14 @@ describe('M3-P5 请求编辑与交出（设计 §3.6、§3.12）：按主键一�
   })
 
   it('交出：一条语句——明确结束（now()、handed_over），保留给改之前的请求方（requested_by 列本身，不是参数）到 now() 加 2 分钟，请求的六列清空；返回保留', async () => {
-    const statement = await onlyStatementOf(async (leases, transaction) => leases.handOver(DOCUMENT, transaction))
+    const statement = await onlyStatementOf(async (leases, transaction) => leases.handOver(lockedLease(DOCUMENT), transaction))
     expect(assignedColumns(statement.text)).toEqual(['ended_at', 'end_reason', ...REQUEST_COLUMNS, ...RESERVATION_COLUMNS])
     expect(statement.text).toContain('"ended_at" = now(), "end_reason" = $1, ')
     expect(statement.text).toContain(', "reserved_for" = "document_edit_leases"."requested_by", "reserved_until" = now() + make_interval(secs => $8) where "document_edit_leases"."document_id" = $9 returning "reserved_for", "reserved_until"')
     expect(statement.values).toEqual(['handed_over', ...REQUEST_COLUMNS.map(() => null), EDIT_HANDOVER_RESERVE_SECONDS, DOCUMENT])
   })
 
-  it('这几条都不改持有者、登录、标签页、令牌摘要、代次与续租的几项时间（保存不加锁读租约行，靠的就是这一条），也都不加锁、按主键', async () => {
+  it('这几条都不改持有者、登录、标签页、令牌摘要、代次与续租的几项时间（保存不加锁读租约行，请求编辑只锁租约行，靠的就是这一条），语句本身都不加锁、按主键', async () => {
     const statements = await statementsOf(async (leases, transaction) => {
       for (const call of [
         async () => leases.putRequest(DOCUMENT, { userId: BEN, sessionId: SESSION }, transaction),
@@ -238,7 +261,7 @@ describe('M3-P5 请求编辑与交出（设计 §3.6、§3.12）：按主键一�
         async () => leases.clearRequest(DOCUMENT, transaction),
         async () => leases.clearReservation(DOCUMENT, transaction),
         async () => leases.declineRequest(DOCUMENT, transaction),
-        async () => leases.handOver(DOCUMENT, transaction),
+        async () => leases.handOver(lockedLease(DOCUMENT), transaction),
       ])
         await call().catch(() => undefined)
     })

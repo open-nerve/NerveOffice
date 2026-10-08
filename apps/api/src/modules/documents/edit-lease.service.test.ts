@@ -102,9 +102,13 @@ describe('EditLeaseService.acquire', () => {
     expect(row?.tokenDigest.equals(editLeaseTokenDigest(outcome.token))).toBe(true)
     // 先不加锁判断、再锁文档行、锁租约行，最后加代次、改写租约行（锁的顺序：文档行 → 租约行）
     const { documents } = store.repositories
-    const steps = [orderOf(documents.findById), orderOf(documents.lockById), orderOf(store.leases.lockByDocument), orderOf(documents.advanceWriteEpoch), orderOf(store.leases.replace)]
+    const steps = [orderOf(documents.findById), orderOf(documents.lockById), orderOf(store.leases.lockUnder), orderOf(documents.advanceWriteEpoch), orderOf(store.leases.replace)]
     expect(steps).toEqual(steps.toSorted((a, b) => a - b))
     expect(documents.lockById).toHaveBeenCalledWith(document.id, TRANSACTION)
+    // 租约行在文档行的锁下锁住，改写为新的一代凭的也是这把锁（Codex 评审 CX1）：两处拿到的都是锁住的那一行
+    const locked: unknown = await documents.lockById.mock.results[0]?.value
+    expect(store.leases.lockUnder.mock.calls).toEqual([[locked, TRANSACTION]])
+    expect(store.leases.replace.mock.calls[0]?.[0]).toBe(locked)
   })
 
   it('当前修订的来源：锁下的修订号那一条修订记录的标签页与本地序号（与修订号冲突的详情同一个取法）；新建出来的为 null', async () => {
@@ -134,7 +138,7 @@ describe('EditLeaseService.acquire', () => {
     expect(store.leaseRecords.has(document.id)).toBe(false)
     expect(store.documents.get(document.id)?.writeEpoch).toBe(0)
     expect(store.sessions.isActive).toHaveBeenCalledWith(ALICE_SESSION, TRANSACTION)
-    const steps = [orderOf(store.repositories.documents.lockById), orderOf(store.leases.lockByDocument), orderOf(store.sessions.isActive)]
+    const steps = [orderOf(store.repositories.documents.lockById), orderOf(store.leases.lockUnder), orderOf(store.sessions.isActive)]
     expect(steps).toEqual(steps.toSorted((a, b) => a - b))
   })
 
@@ -145,7 +149,7 @@ describe('EditLeaseService.acquire', () => {
     expect((await rejection(service.acquire(BEN, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION))).code).toBe('PERMISSION_DENIED')
     expect((await rejection(service.acquire(AMY, '0199a2c4-0000-7000-8000-0000000000ff', leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION))).code).toBe('NOT_FOUND')
     expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
-    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
     expect(store.leaseRecords.size).toBe(0)
   })
 
@@ -156,7 +160,7 @@ describe('EditLeaseService.acquire', () => {
       return store.documents.get(id)
     })
     expect((await rejection(service.acquire(AMY, document.id, leaseRequest(TAB), HTTP_ORIGIN, TRANSACTION))).code).toBe('PERMISSION_DENIED')
-    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
     expect(store.documents.get(document.id)?.writeEpoch).toBe(0)
   })
 
@@ -213,7 +217,7 @@ describe('EditLeaseService.acquire', () => {
       ['空闲', ({ store, document }) => idleFor(store, document.id, EDIT_LEASE_IDLE_RECLAIM_SECONDS)],
       ['登录失效', ({ store }) => void store.activeSessions.delete(ALICE_SESSION)],
       ['没了编辑权', ({ store }) => store.setMember(TEAM_SPACE, ALICE, 'viewer')],
-      ['已释放', async ({ store, document }) => void await store.leases.end(document.id, 'released')],
+      ['已释放', ({ store, document }) => void store.endLease(document.id, 'released')],
       ['代次过时、而且到期了', async ({ store, document }) => {
         await store.repositories.documents.advanceWriteEpoch(document.id)
         later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
@@ -262,7 +266,7 @@ describe('EditLeaseService.acquire', () => {
   it('M3-P5 续上的页面带来的空闲（idleSeconds）交给仓储：新的一代的最后活动是 now 减去它（设计 §3.5，复验 P1-C5）', async () => {
     const { store, service, document } = setup()
     await service.acquire(AMY, document.id, leaseRequest(TAB, CURRENT_CLIENT, 300), HTTP_ORIGIN, TRANSACTION)
-    expect(store.leases.replace).toHaveBeenCalledWith(expect.objectContaining({ documentId: document.id, idleSeconds: 300 }), TRANSACTION)
+    expect(store.leases.replace).toHaveBeenCalledWith(expect.objectContaining({ id: document.id }), expect.objectContaining({ idleSeconds: 300 }), TRANSACTION)
     expect(store.leaseRecords.get(document.id)).toMatchObject({ acquiredAt: store.databaseNow, lastActiveAt: new Date(store.databaseNow.getTime() - 300 * SECOND) })
   })
 
@@ -319,7 +323,7 @@ describe('EditLeaseService.acquire', () => {
   it('不给提醒：明确释放的、没了编辑权的、超过 30 分钟的', async () => {
     const released = setup()
     await acquired(released)
-    await released.store.leases.end(released.document.id, 'released')
+    released.store.endLease(released.document.id, 'released')
     expect(await released.service.acquire(BEN, released.document.id, leaseRequest(OTHER_TAB), HTTP_ORIGIN, TRANSACTION)).toMatchObject({ kind: 'acquired', interruption: undefined })
 
     const demoted = setup()
@@ -377,7 +381,7 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
         return
       expect(outcome.token).not.toBe(taken)
       expect(store.leaseRecords.get(document.id), actor.sessionId).toMatchObject({ holderId: ALICE, sessionId: actor.sessionId, clientInstanceId: tab, writeEpoch: 2, takenOverTokenDigest: editLeaseTokenDigest(taken), takeover: 'self' })
-      expect(store.leases.replace).toHaveBeenLastCalledWith(expect.objectContaining({ takenOver: { tokenDigest: editLeaseTokenDigest(taken), takeover: 'self' } }), TRANSACTION)
+      expect(store.leases.replace).toHaveBeenLastCalledWith(expect.objectContaining({ id: document.id }), expect.objectContaining({ takenOver: { tokenDigest: editLeaseTokenDigest(taken), takeover: 'self' } }), TRANSACTION)
       expect(store.documents.get(document.id)?.writeEpoch).toBe(2)
       expect(store.audits).toEqual([])
     }
@@ -403,7 +407,7 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
     expect(store.audits).toEqual([{ action: 'documents.edit_taken_over', actor: { type: 'user', id: BOB }, target: { type: 'document', id: document.id }, origin: HTTP_ORIGIN, details: { holderId: ALICE } }])
     expect(store.audit.record).toHaveBeenCalledWith(expect.anything(), { transaction: TRANSACTION })
     // 锁的顺序：文档行 → 租约行 → 审计
-    const steps = [orderOf(store.repositories.documents.lockById, 1), orderOf(store.leases.lockByDocument, 1), orderOf(store.leases.replace, 1), orderOf(store.audit.record)]
+    const steps = [orderOf(store.repositories.documents.lockById, 1), orderOf(store.leases.lockUnder, 1), orderOf(store.leases.replace, 1), orderOf(store.audit.record)]
     expect(steps).toEqual(steps.toSorted((a, b) => a - b))
   })
 
@@ -433,7 +437,7 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
     later(vacant.store, EDIT_LEASE_TTL_SECONDS * SECOND)
     expect(await claim(vacant, BEN, OTHER_TAB, 'force')).toMatchObject({ kind: 'acquired', writeEpoch: 2, interruption: { holderId: ALICE, endedAt: renewedAt, sameUser: false, samePage: false } })
     expect(vacant.store.leaseRecords.get(vacant.document.id)).toMatchObject({ holderId: BOB, takenOverTokenDigest: null, takeover: null })
-    expect(vacant.store.leases.replace).toHaveBeenLastCalledWith(expect.objectContaining({ takenOver: undefined }), TRANSACTION)
+    expect(vacant.store.leases.replace).toHaveBeenLastCalledWith(expect.objectContaining({ id: vacant.document.id }), expect.objectContaining({ takenOver: undefined }), TRANSACTION)
     expect(vacant.store.audits).toEqual([])
   })
 
@@ -446,7 +450,7 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
     for (const takeover of ['force', 'self', undefined] as const) {
       expect(await claim(setupResult, BEN, OTHER_TAB, takeover), String(takeover)).toMatchObject({ kind: 'acquired' })
       expect(store.leaseRecords.get(document.id), String(takeover)).toMatchObject({ holderId: BOB, takenOverTokenDigest: editLeaseTokenDigest(taken), takeover: 'forced' })
-      expect(store.leases.replace, String(takeover)).toHaveBeenLastCalledWith(expect.objectContaining({ takenOver: undefined }), TRANSACTION)
+      expect(store.leases.replace, String(takeover)).toHaveBeenLastCalledWith(expect.objectContaining({ id: document.id }), expect.objectContaining({ takenOver: undefined }), TRANSACTION)
     }
     expect(store.audits).toHaveLength(1)
   })
@@ -456,7 +460,7 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
     const { store, document } = setupResult
     await acquired(setupResult)
     store.repositories.documents.lockById.mockClear()
-    store.leases.lockByDocument.mockClear()
+    store.leases.lockUnder.mockClear()
     expect(await rejection(claim(setupResult, BEN, OTHER_TAB, 'force'))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只有空间管理员能强制接管这份文档的编辑' })
     store.setMember(TEAM_SPACE, BOB, undefined)
     store.setGrant(document.id, BOB, 'editor')
@@ -465,7 +469,7 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
     store.setMember(TEAM_SPACE, BOB, 'viewer')
     expect(await rejection(claim(setupResult, BEN, OTHER_TAB, 'force'))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只能查看这份文档，不能编辑' })
     expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
-    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
     expect(store.leaseRecords.get(document.id)).toMatchObject({ holderId: ALICE, takeover: null })
     expect(store.audits).toEqual([])
   })
@@ -475,13 +479,13 @@ describe('M3-P5 EditLeaseService.acquire 的本人接管与强制接管（设计
     const { store, document } = setupResult
     await acquired(setupResult)
     store.setMember(TEAM_SPACE, BOB, 'admin')
-    store.leases.lockByDocument.mockClear()
+    store.leases.lockUnder.mockClear()
     store.repositories.documents.lockById.mockImplementationOnce(async (id: string) => {
       store.setMember(TEAM_SPACE, BOB, 'editor')
       return store.documents.get(id)
     })
     expect(await rejection(claim(setupResult, BEN, OTHER_TAB, 'force'))).toMatchObject({ code: 'PERMISSION_DENIED', message: '只有空间管理员能强制接管这份文档的编辑' })
-    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
     expect(store.leaseRecords.get(document.id)).toMatchObject({ holderId: ALICE, takeover: null })
     expect(store.documents.get(document.id)?.writeEpoch).toBe(1)
     expect(store.audits).toEqual([])
@@ -516,9 +520,9 @@ describe('EditLeaseService.renew', () => {
     expect(renewed).toEqual({ expiresAt: new Date(store.databaseNow.getTime() + EDIT_LEASE_TTL_SECONDS * SECOND) })
     expect(store.leases.renew).toHaveBeenCalledWith(document.id, 15, TRANSACTION)
     expect(store.leaseRecords.get(document.id)).toMatchObject({ renewedAt: store.databaseNow, lastActiveAt: new Date(store.databaseNow.getTime() - 15 * SECOND) })
-    // 这次续租的两次读文档（判断能编辑、锁住租约行之后读代次）夹着锁租约行与登录的核对（申请时已经各调过一次）
+    // 这次续租的两次读文档（判断能编辑、锁住租约行之后读代次）夹着锁租约行与登录的核对（申请时已经核对过一次登录、读过文档；申请锁租约行用的是 lockUnder，这里的是心跳自己的那一次）
     const reads = store.repositories.documents.findById.mock.invocationCallOrder.slice(-2)
-    const steps = [reads[0], orderOf(store.leases.lockByDocument, 1), store.sessions.isActive.mock.invocationCallOrder.at(-1), reads[1], orderOf(store.leases.renew)]
+    const steps = [reads[0], orderOf(store.leases.lockByDocument), store.sessions.isActive.mock.invocationCallOrder.at(-1), reads[1], orderOf(store.leases.renew)]
     expect(steps).toEqual(steps.toSorted((a, b) => (a ?? 0) - (b ?? 0)))
     // 心跳不锁文档行
     expect(store.repositories.documents.lockById).toHaveBeenCalledTimes(1)
@@ -551,7 +555,7 @@ describe('EditLeaseService.renew', () => {
       return {}
     })).toEqual({ reason: 'replaced' })
     expect(await lostWith(async ({ store, document }) => {
-      await store.leases.end(document.id, 'released')
+      store.endLease(document.id, 'released')
       return {}
     })).toEqual({ reason: 'released' })
     expect(await lostWith(async ({ store, document }) => {
@@ -593,7 +597,7 @@ describe('EditLeaseService.renew', () => {
     const error = await rejection(service.renew(AMY, document.id, renewal(0), token, TRANSACTION))
     expect([error.code, error.status]).toEqual(['SESSION_EXPIRED', 401])
     expect(store.leases.renew).not.toHaveBeenCalled()
-    expect(orderOf(store.leases.lockByDocument, 1)).toBeLessThan(store.sessions.isActive.mock.invocationCallOrder.at(-1) ?? 0)
+    expect(orderOf(store.leases.lockByDocument)).toBeLessThan(store.sessions.isActive.mock.invocationCallOrder.at(-1) ?? 0)
   })
 
   it('失效时先再判断一次能编辑（M3-P1 审查 A2）：等租约行的锁期间被降为查看者、被移出（撤权结束了租约），回 403 / 404 而不是 revoked', async () => {
@@ -604,7 +608,7 @@ describe('EditLeaseService.renew', () => {
       store.leases.lockByDocument.mockImplementationOnce(async (documentId: string) => {
         // 撤权在这期间提交：成员的角色变了，租约记 revoked
         store.setMember(TEAM_SPACE, ALICE, role)
-        await store.leases.end(documentId, 'revoked')
+        store.endLease(documentId, 'revoked')
         const row = store.leaseRecords.get(documentId)
         return row === undefined ? undefined : { ...row, now: store.databaseNow }
       })
@@ -655,45 +659,90 @@ describe('EditLeaseService.renew', () => {
 })
 
 describe('EditLeaseService.release', () => {
-  it('令牌是当前这一行的、没有明确结束：记 released', async () => {
+  it('令牌是当前这一行的、没有明确结束：记 released。先判断能访问、不加锁看一眼能释放，再锁文档行、在它的锁下锁租约行（Codex 评审 CX1：释放与在途的保存互斥），结束凭的是锁下的那一行', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
     const token = await acquired(setupResult)
+    const { documents } = store.repositories
+    for (const fn of [documents.findById, documents.lockById, store.leases.findByDocument, store.leases.lockUnder])
+      fn.mockClear()
     await service.release(AMY, document.id, token, TRANSACTION)
     expect(store.leaseRecords.get(document.id)).toMatchObject({ endedAt: store.databaseNow, endReason: 'released' })
+    const steps = [orderOf(documents.findById), orderOf(store.leases.findByDocument), orderOf(documents.lockById), orderOf(store.leases.lockUnder), orderOf(store.leases.end)]
+    expect(steps).toEqual(steps.toSorted((a, b) => a - b))
+    expect(documents.lockById).toHaveBeenCalledWith(document.id, TRANSACTION)
+    expect(store.leases.lockUnder.mock.calls).toEqual([[await documents.lockById.mock.results[0]?.value, TRANSACTION]])
+    expect(store.leases.end.mock.calls).toEqual([[await store.leases.lockUnder.mock.results[0]?.value, 'released', TRANSACTION]])
+    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
   })
 
-  it('没带令牌、令牌不是这一行的、已经结束的、没有租约：什么也不做', async () => {
+  it('没带令牌、令牌不是这一行的、已经结束的、没有租约：什么也不做——不加锁看一眼就结束，文档行与租约行都不锁（能读这份文档的人不能借释放让编辑者的保存排队，同复验 RA7）', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
     await service.release(AMY, document.id, 'x'.repeat(43), TRANSACTION)
     const token = await acquired(setupResult)
+    store.repositories.documents.lockById.mockClear()
+    store.leases.lockUnder.mockClear()
     await service.release(AMY, document.id, undefined, TRANSACTION)
     await service.release(AMY, document.id, 'y'.repeat(43), TRANSACTION)
+    store.endLease(document.id, 'revoked')
+    await service.release(AMY, document.id, token, TRANSACTION)
+    expect(store.leases.findByDocument).toHaveBeenCalledTimes(4)
     expect(store.leases.end).not.toHaveBeenCalled()
-    await store.leases.end(document.id, 'revoked')
-    store.leases.end.mockClear()
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
+    expect(store.leaseRecords.get(document.id)?.endReason).toBe('revoked')
+  })
+
+  it('释放的人要是持有者（M3-P1 审查 A4）：别人拿到了令牌也不能结束这一代（同样什么也不锁）；同一个人换了登录照样能释放（续上之前先释放自己那一代）', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const token = await acquired(setupResult)
+    store.leases.lockUnder.mockClear()
+    await service.release(BEN, document.id, token, TRANSACTION)
+    expect(store.leaseRecords.get(document.id)?.endReason).toBeNull()
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
+    await service.release({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, token, TRANSACTION)
+    expect(store.leaseRecords.get(document.id)?.endReason).toBe('released')
+  })
+
+  it('不加锁时能释放、锁下已经释放不了（等文档行的锁期间这一代被收回了）：锁下再判断，什么也不做，先记下的原因留着', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const token = await acquired(setupResult)
+    store.leases.lockUnder.mockImplementationOnce(async (locked) => {
+      // 撤权排在前面、先提交了：租约记 revoked
+      store.endLease(locked.id, 'revoked')
+      return store.lockedLease(locked.id)
+    })
     await service.release(AMY, document.id, token, TRANSACTION)
     expect(store.leases.end).not.toHaveBeenCalled()
     expect(store.leaseRecords.get(document.id)?.endReason).toBe('revoked')
   })
 
-  it('释放的人要是持有者（M3-P1 审查 A4）：别人拿到了令牌也不能结束这一代；同一个人换了登录照样能释放（续上之前先释放自己那一代）', async () => {
+  it('等文档行的锁期间文档进了回收站（锁不到正常状态的文档行）：什么也不做，不锁租约行（放进回收站的那个事务已经收回了还活着的租约）', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
     const token = await acquired(setupResult)
-    await service.release(BEN, document.id, token, TRANSACTION)
+    store.leases.lockUnder.mockClear()
+    store.repositories.documents.lockById.mockImplementationOnce(async (id: string) => {
+      store.documentEntries.set(id, 'trash-entry-1')
+      return undefined
+    })
+    await service.release(AMY, document.id, token, TRANSACTION)
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
+    expect(store.leases.end).not.toHaveBeenCalled()
     expect(store.leaseRecords.get(document.id)?.endReason).toBeNull()
-    await service.release({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, token, TRANSACTION)
-    expect(store.leaseRecords.get(document.id)?.endReason).toBe('released')
   })
 
-  it('能读就行（读不到 404，在锁租约行之前）：持有者被降为查看者之后仍能释放；到期的也能释放（之后不再算异常结束）', async () => {
+  it('能读就行（读不到 404，在读租约、取任何锁之前）：持有者被降为查看者之后仍能释放；到期的也能释放（之后不再算异常结束）', async () => {
     const setupResult = setup()
     const { store, service, document } = setupResult
     const token = await acquired(setupResult)
+    store.repositories.documents.lockById.mockClear()
     expect((await rejection(service.release({ userId: CAROL, sessionId: BOB_SESSION }, document.id, token, TRANSACTION))).code).toBe('NOT_FOUND')
-    expect(store.leases.lockByDocument).toHaveBeenCalledTimes(1)
+    expect(store.leases.findByDocument).not.toHaveBeenCalled()
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
     store.setMember(TEAM_SPACE, ALICE, 'viewer')
     later(store, EDIT_LEASE_TTL_SECONDS * SECOND)
     await service.release(AMY, document.id, token, TRANSACTION)
@@ -713,7 +762,9 @@ describe('EditLeaseService.status', () => {
     // 同一个人的另一个登录（别的设备）：是本人，不是这次登录
     expect((await service.status({ userId: ALICE, sessionId: ALICE_OTHER_SESSION }, document.id, TRANSACTION)).editor).toEqual({ holderId: ALICE, lastActiveAt, sameUser: true, sameSession: false })
     expect(store.leases.findByDocument).toHaveBeenCalledWith(document.id, TRANSACTION)
-    expect(store.leases.lockByDocument).toHaveBeenCalledTimes(1)
+    // 编辑状态不锁租约行：只有申请锁过一次（在文档行的锁下）
+    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
+    expect(store.leases.lockUnder).toHaveBeenCalledTimes(1)
   })
 
   it('没有租约、租约无效（到期、登录失效、没了编辑权）：editor 为空；异常结束的（到期、登录失效）带上提醒（M3-P5），没了编辑权的不带', async () => {

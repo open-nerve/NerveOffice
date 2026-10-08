@@ -37,6 +37,21 @@ export interface DocumentRow {
   readonly writeEpoch: number
 }
 
+declare const DOCUMENT_ROW_LOCKED: unique symbol
+
+/**
+ * 这个事务锁住了这份文档行（FOR UPDATE）的凭据（Codex 评审 CX1）：只由锁住它的 lockById 给出，类型上别处造不出来（与 Transaction 同一个写法）。
+ * 让在途的保存读到的编辑租约失效的写——换成新的一代、明确结束——都要凭它（EditLeasesRepository 的 replace 与 lockUnder）：保存持着这把锁、
+ * 不加锁地读租约，这些写因此不会夹在保存的读与提交之间
+ */
+export interface DocumentRowLock {
+  readonly id: string
+  readonly [DOCUMENT_ROW_LOCKED]: true
+}
+
+/** 锁住了的文档行：行本身，连同持锁的凭据 */
+export type LockedDocumentRow = DocumentRow & DocumentRowLock
+
 /** 新建文档要写的列：修订号从 1 开始，状态为正常，时间取数据库的当前时间。 */
 export interface NewDocument {
   readonly spaceId: string
@@ -250,10 +265,14 @@ export class DocumentsRepository {
     return row
   }
 
-  /** 锁住文档行（FOR UPDATE）：同一份文档的保存按到达的顺序逐个执行，修订号的判断与加一之间不会插进别的保存。 */
-  async lockById(id: string, transaction: Transaction): Promise<DocumentRow | undefined> {
+  /**
+   * 锁住文档行（FOR UPDATE）：同一份文档的保存按到达的顺序逐个执行，修订号的判断与加一之间不会插进别的保存。
+   * 返回的行带着持锁的凭据（LockedDocumentRow）；只认正常状态的：等锁期间进了回收站或被永久删除时返回 undefined，什么也没锁住
+   */
+  async lockById(id: string, transaction: Transaction): Promise<LockedDocumentRow | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(d).where(and(eq(d.id, id), eq(d.status, 'active'))).for('update')
-    return row
+    // 凭据只在这里给出：这一行刚在这个事务里锁住
+    return row as LockedDocumentRow | undefined
   }
 
   /**

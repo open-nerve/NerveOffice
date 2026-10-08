@@ -112,7 +112,7 @@ describe('EditRequestService.send', () => {
       expect([error.code, error.details], documentId).toEqual(['CLIENT_OUTDATED', { reason: 'format' }])
     }
     expect(store.repositories.documents.findById).not.toHaveBeenCalled()
-    expect(store.leases.lockByDocument).toHaveBeenCalledTimes(1)
+    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
     expect(rowOf(setupResult).requestId).toBeNull()
   })
 
@@ -417,8 +417,79 @@ describe('EditRequestService.handOver', () => {
     const reservedUntil = new Date(store.databaseNow.getTime() + EDIT_HANDOVER_RESERVE_SECONDS * SECOND)
     expect(await service.handOver(AMY, document.id, requestId, token, TRANSACTION)).toEqual({ reservedFor: BOB, reservedUntil })
     expect(rowOf(setupResult)).toMatchObject({ endedAt: store.databaseNow, endReason: 'handed_over', reservedFor: BOB, reservedUntil, requestId: null, requestedBy: null })
-    expect(store.leases.handOver).toHaveBeenCalledWith(document.id, TRANSACTION)
+    expect(store.leases.handOver).toHaveBeenCalledWith(expect.objectContaining({ documentId: document.id }), TRANSACTION)
     expect(store.audits).toEqual([])
+  })
+
+  it('先不加锁判断能编辑，再锁文档行、在它的锁下锁租约行（与申请同一个顺序，Codex 评审 CX1：交出是明确结束，与在途的保存互斥），锁下核对这次登录；交出凭的是锁下的那一行，不用只锁租约行的 lockByDocument', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const { token, requestId } = await requested(setupResult)
+    const { documents } = store.repositories
+    for (const fn of [documents.findById, documents.lockById, store.leases.lockByDocument, store.leases.lockUnder, store.sessions.isActive])
+      fn.mockClear()
+    await service.handOver(AMY, document.id, requestId, token, TRANSACTION)
+    const steps = [orderOf(documents.findById), orderOf(documents.lockById), orderOf(store.leases.lockUnder), orderOf(store.sessions.isActive), orderOf(store.leases.handOver)]
+    expect(steps).toEqual(steps.toSorted((a, b) => a - b))
+    expect(store.sessions.isActive).toHaveBeenNthCalledWith(1, ALICE_SESSION, TRANSACTION)
+    const locked: unknown = await documents.lockById.mock.results[0]?.value
+    expect(store.leases.lockUnder.mock.calls).toEqual([[locked, TRANSACTION]])
+    expect(store.leases.handOver.mock.calls).toEqual([[await store.leases.lockUnder.mock.results[0]?.value, TRANSACTION]])
+    expect(store.leases.lockByDocument).not.toHaveBeenCalled()
+    // 锁下读到的文档行就是最终的：不再读一次
+    expect(documents.findById).toHaveBeenCalledTimes(1)
+  })
+
+  it('看不到 404、只能查看 403：都在取任何锁之前，什么也不写', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const { token, requestId } = await requested(setupResult)
+    store.repositories.documents.lockById.mockClear()
+    store.leases.lockUnder.mockClear()
+    expect((await rejection(service.handOver({ userId: DAVE, sessionId: BOB_SESSION }, document.id, requestId, token, TRANSACTION))).code).toBe('NOT_FOUND')
+    expect((await rejection(service.handOver(AMY, MISSING_DOCUMENT, requestId, token, TRANSACTION))).code).toBe('NOT_FOUND')
+    store.setMember(TEAM_SPACE, ALICE, 'viewer')
+    expect((await rejection(service.handOver(AMY, document.id, requestId, token, TRANSACTION))).code).toBe('PERMISSION_DENIED')
+    expect(store.repositories.documents.lockById).not.toHaveBeenCalled()
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
+    expect(store.leases.handOver).not.toHaveBeenCalled()
+  })
+
+  it('等文档行的锁期间文档进了回收站：按读不到回答（NOT_FOUND），不锁租约行、什么也不写', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const { token, requestId } = await requested(setupResult)
+    store.leases.lockUnder.mockClear()
+    store.repositories.documents.lockById.mockImplementationOnce(async (id: string) => {
+      store.documentEntries.set(id, 'trash-entry-1')
+      return undefined
+    })
+    expect((await rejection(service.handOver(AMY, document.id, requestId, token, TRANSACTION))).code).toBe('NOT_FOUND')
+    expect(store.leases.lockUnder).not.toHaveBeenCalled()
+    expect(store.leases.handOver).not.toHaveBeenCalled()
+  })
+
+  it('失去编辑权先于租约（M3-P1 审查 A2）：不加锁时能编辑、锁下已被降为查看者——403，不是 EDIT_LEASE_LOST，不交出', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const { requestId } = await requested(setupResult)
+    store.leases.lockUnder.mockImplementationOnce(async (locked) => {
+      store.setMember(TEAM_SPACE, ALICE, 'viewer')
+      return store.lockedLease(locked.id)
+    })
+    expect((await rejection(service.handOver(AMY, document.id, requestId, `${'z'.repeat(41)}-_`, TRANSACTION))).code).toBe('PERMISSION_DENIED')
+    expect(store.leases.handOver).not.toHaveBeenCalled()
+  })
+
+  it('这次登录在两把锁之后再核对（M3-P1 审查 A1）：被撤销时 401 SESSION_EXPIRED，不交出', async () => {
+    const setupResult = setup()
+    const { store, service, document } = setupResult
+    const { token, requestId } = await requested(setupResult)
+    store.activeSessions.delete(ALICE_SESSION)
+    const error = await rejection(service.handOver(AMY, document.id, requestId, token, TRANSACTION))
+    expect([error.code, error.status]).toEqual(['SESSION_EXPIRED', 401])
+    expect(store.leases.handOver).not.toHaveBeenCalled()
+    expect(rowOf(setupResult)).toMatchObject({ endReason: null, requestedBy: BOB })
   })
 
   it('请求已不在：标识对不上、请求方取消了、谢绝了、过期了、请求方的登录失效、请求方没了编辑权——EDIT_REQUEST_GONE，租约不动', async () => {

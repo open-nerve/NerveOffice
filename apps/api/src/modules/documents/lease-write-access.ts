@@ -14,11 +14,13 @@ import { WriteAccessRevocation } from './write-access.ts'
  *    只有按时间还活着的（M3-P5 设计 §3.5，DEF-044：按时间死了的不能再续租，不记 revoked、不加代次，异常中断的提醒得以保留；
  *    死了超过一个有效期的连文档行也不锁）；
  * 2. 逐个按变化之后的权限判断持有者还能不能编辑（见 holderStillEdits）：访问策略在同一个事务里查，看得到调用方刚做的改动；
- * 3. 不能编辑了：租约记 revoked，文档的代次加一（各一条语句）。还能编辑的不动——跨空间移动、转移之后在新的空间里仍能编辑的持有者：
- *    调用方已经给代次加了一，他的租约按 stale 失效，P2 的页面自动续上。
+ * 3. 不能编辑了：租约记 revoked（凭第 1 步锁住的那几行，EditLeasesRepository.endAll 只收 LockedEditLease），文档的代次加一（各一条语句）。
+ *    还能编辑的不动——跨空间移动、转移之后在新的空间里仍能编辑的持有者：调用方已经给代次加了一，他的租约按 stale 失效，P2 的页面自动续上。
  *
  * 收口"进行中的保存与撤权不互斥"（M2-P2 设计 §7、ADR-014）：保存在租约这一步之前锁住了文档行，撤权要锁住同一把锁。两者必有先后：
  * 保存先提交，撤权在它之后生效；撤权先提交，保存在锁下看到新的权限、结束了的租约与新的代次，被拒绝。
+ * 已经明确结束（释放、交出）的租约第 1 步不找：明确结束同样先锁文档行（Codex 评审 CX1），结束提交的那一刻这份文档上没有在途的保存——
+ * 由锁保证，不靠页面"先存上再释放"；结束还在等文档行的锁时，第 1 步读到它没结束，照常锁文档行、排在保存之后。
  * 保存按它的事务开始时的 now() 判断租约，在途时租约可能已经按时间死了（M3-P5 审查 A1）：所以第 1 步对刚死不久的也锁文档行，
  * 撤权照样等这次保存提交。上界：保存的事务从开始（BEGIN）到提交短于一个有效期（90 秒），由数据库与事务运行器保证——至多 70 秒
  * （BEGIN 到设下时限至多 10 秒，之后 transaction_timeout 60 秒；document-content.service.ts 的 SAVE_TRANSACTION_TIMEOUT_MS 写了推导，
@@ -40,16 +42,16 @@ export class LeaseWriteAccessRevocation extends WriteAccessRevocation {
 
   async revoke(scope: WriteAccessScope, transaction: Transaction): Promise<void> {
     const locked = await this.leases.lockInScope(scope, transaction)
-    const lost: string[] = []
+    const lost: RevocableEditLease[] = []
     // 逐个判断：持有者各不相同，权限按各自的空间角色与授权算（每次是访问策略的两条语句）
     for (const lease of locked) {
       if (!await this.holderStillEdits(scope, lease, transaction))
-        lost.push(lease.documentId)
+        lost.push(lease)
     }
     if (lost.length === 0)
       return
     await this.leases.endAll(lost, 'revoked', transaction)
-    await this.documents.advanceWriteEpochs(lost, transaction)
+    await this.documents.advanceWriteEpochs(lost.map(lease => lease.documentId), transaction)
   }
 
   /**

@@ -3,7 +3,7 @@ import type { Transaction } from '../database/index.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import type { LeaseLoss, LeaseReservation } from './edit-lease-rules.ts'
 import type { EditingActor, LeaseEditor } from './edit-lease.service.ts'
-import type { ObservedEditLease } from './edit-leases.repository.ts'
+import type { LockedEditLease, ObservedEditLease } from './edit-leases.repository.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SessionService } from '../auth/index.ts'
@@ -35,9 +35,12 @@ export type RequestOutcome
     | ({ readonly kind: 'reservedForOther' } & LeaseReservation)
     | { readonly kind: 'gone', readonly holder: LeaseEditor | undefined }
 
-/** 锁住租约行之后的这份文档与它的租约行（请求编辑的几个写路径共用的开头） */
-interface LockedLease {
-  readonly lease: ObservedEditLease | undefined
+/**
+ * 锁住之后的这份文档与它的租约行（请求编辑与交出的几个写路径共用的开头）：发出、续期与谢绝只锁租约行（ObservedEditLease）；
+ * 交出先锁文档行、再锁租约行，租约行是明确结束的凭据（LockedEditLease）
+ */
+interface LockedLease<L extends ObservedEditLease = ObservedEditLease> {
+  readonly lease: L | undefined
   readonly document: DocumentRow
 }
 
@@ -47,9 +50,12 @@ interface LockedLease {
  * 这里按步骤取事实、加锁、写：
  * - 失去访问与失去编辑权先于租约判断（404 在 403 之前）：发出、续期、谢绝、交出要能编辑，取消能读就行；看不到的请求不读租约行、
  *   不取任何锁，与不存在的文档执行同样的语句（permissions/hidden-missing-parity 核对）；
- * - 都只锁租约行（设计 §3.12，与心跳、释放同一类），锁住之后再读文档的代次：申请（含接管）与收回写入权都先锁文档行、再锁租约行、
- *   改代次在前，锁住租约行之后再读，它们要么已经提交，要么还在等这把锁。这几条写路径只改请求、保留与"结束"几列，不改持有者、令牌、
- *   代次（为什么保存不加锁读租约行仍然安全见 EditLeasesRepository 的类注释）；
+ * - 发出、续期、取消与谢绝只锁租约行（设计 §3.12，与心跳同一类），锁住之后再读文档的代次：申请（含接管）、释放、交出与收回写入权
+ *   都先锁文档行、再锁租约行、改代次在前，锁住租约行之后再读，它们要么已经提交，要么还在等这把锁。这几条写路径只改请求与保留几列，
+ *   不让租约失效（为什么保存不加锁读租约行仍然安全见 EditLeasesRepository 的类注释）；
+ * - 交出是明确结束（handed_over），与申请、释放一样先锁文档行、再锁租约行（lockForHandOver，Codex 评审 CX1）：与在途的保存互斥——
+ *   保存过了租约检查、还没提交时，交出等它提交；收回写入权不锁明确结束了的租约，靠的就是这一条。原来交出只锁租约行，
+ *   "页面交出之前先存上"（P4 的 flush）是页面的先后，挡不住服务端的交错。锁的顺序与申请相同，不成环；
  * - 写下与请求方登录绑定的东西、或者凭令牌改动租约之前，在锁下按主键再核对这次登录（requireActiveLogin，M3-P1 审查 A1）：
  *   发出、续期、谢绝、交出；取消只清掉调用者自己的请求与留给他的保留，与释放一样不核对（页面关闭时 keepalive 发的，不看结果）；
  * - 发出是用户的操作，按页面上报的格式先拦旧页面（CLIENT_OUTDATED，在任何查询之前：看不到与不存在的文档得到同样的回答），
@@ -151,13 +157,14 @@ export class EditRequestService {
   }
 
   /**
-   * 持有者谢绝（POST …/request/decline，设计 §3.6）：持有者自己带令牌的请求（lockHeldLease：能编辑、锁租约行、这次登录、租约有效）→
+   * 持有者谢绝（POST …/request/decline，设计 §3.6）：能编辑、锁租约行、这次登录（lockForEditor）→ 持有者自己带令牌的租约有效（requireHeld）→
    * 槽里的请求标识对得上、还没谢绝，就记下谢绝的时刻：请求方下一次续期得到 declined，心跳不再带它。对不上（已取消、已换成新的请求）
-   * 或已经谢绝过时什么也不做——重试与回包丢失都安全
+   * 或已经谢绝过时什么也不做——重试与回包丢失都安全。只锁租约行：谢绝只改请求的一列，不让租约失效
    */
   async decline(actor: EditingActor, documentId: string, requestId: string, token: string | undefined, transaction: Transaction): Promise<void> {
-    const { lease } = await this.lockHeldLease(actor, documentId, token, transaction)
-    const request = slotRequestOf(lease)
+    const locked = await this.lockForEditor(actor, documentId, transaction)
+    await this.requireHeld(actor, documentId, locked, token, transaction)
+    const request = slotRequestOf(locked.lease)
     const declined = request?.id === requestId && request.declinedAt === null
     if (declined)
       await this.leases.declineRequest(documentId, transaction)
@@ -165,25 +172,27 @@ export class EditRequestService {
   }
 
   /**
-   * 交出（POST …/handover，设计 §3.6）：持有者自己带令牌的请求（lockHeldLease）→ 槽里的请求标识对得上、而且仍是待回应的
-   * （没谢绝、没过期、请求方的登录仍然有效、他仍能编辑）——否则 EDIT_REQUEST_GONE，租约不动，持有者留在编辑——→ 一条语句里
-   * 记下明确结束（handed_over）、把请求转成保留（留给请求方 2 分钟）、清掉请求。普通的释放不会变成交出。
-   * 回包丢了再交出：这一代已经明确结束，lockHeldLease 给出 EDIT_LEASE_LOST（handed_over），页面据此认出已经交出
+   * 交出（POST …/handover，设计 §3.6）：能编辑、先锁文档行再锁租约行、这次登录（lockForHandOver）→ 持有者自己带令牌的租约有效（requireHeld）→
+   * 槽里的请求标识对得上、而且仍是待回应的（没谢绝、没过期、请求方的登录仍然有效、他仍能编辑）——否则 EDIT_REQUEST_GONE，
+   * 租约不动，持有者留在编辑——→ 一条语句里记下明确结束（handed_over）、把请求转成保留（留给请求方 2 分钟）、清掉请求。
+   * 普通的释放不会变成交出。回包丢了再交出：这一代已经明确结束，requireHeld 给出 EDIT_LEASE_LOST（handed_over），页面据此认出已经交出
    */
   async handOver(actor: EditingActor, documentId: string, requestId: string, token: string | undefined, transaction: Transaction): Promise<LeaseReservation> {
-    const { lease, document } = await this.lockHeldLease(actor, documentId, token, transaction)
-    // 标识对不上就不必再问请求方的事实
-    if (slotRequestOf(lease)?.id !== requestId || await requestStandingOf(lease, partyFactsOf(this.sessions, this.policy, document, transaction)) !== 'pending') {
+    const locked = await this.lockForHandOver(actor, documentId, transaction)
+    await this.requireHeld(actor, documentId, locked, token, transaction)
+    const { lease, document } = locked
+    // 没有这一行就没有请求（requireHeld 已经按 none 回答了）；标识对不上就不必再问请求方的事实
+    if (lease === undefined || slotRequestOf(lease)?.id !== requestId || await requestStandingOf(lease, partyFactsOf(this.sessions, this.policy, document, transaction)) !== 'pending') {
       this.#logger.debug('交出：请求已不在', { documentId })
       throw new AppError('EDIT_REQUEST_GONE')
     }
-    const reservation = await this.leases.handOver(documentId, transaction)
+    const reservation = await this.leases.handOver(lease, transaction)
     this.#logger.debug('交出：编辑权留给了请求方', { documentId })
     return reservation
   }
 
   /**
-   * 发出、续期、谢绝、交出共同的开头：不加锁判断能编辑（404 / 403）→ 锁租约行 → 这次登录仍然有效（否则 401，requireActiveLogin）→
+   * 发出、续期、谢绝共同的开头：不加锁判断能编辑（404 / 403）→ 只锁租约行 → 这次登录仍然有效（否则 401，requireActiveLogin）→
    * 再读文档（代次、权限判断的对象；锁住租约行之前被删、被永久删除的按读不到回答，NOT_FOUND）
    */
   private async lockForEditor(actor: EditingActor, documentId: string, transaction: Transaction): Promise<LockedLease> {
@@ -197,18 +206,31 @@ export class EditRequestService {
   }
 
   /**
-   * 持有者自己带令牌的请求（谢绝、交出）：lockForEditor 之后按有效条件判断请求带的租约（requestLeaseLoss，与心跳同一个判断）。
-   * 失效时先再判断一次能编辑（M3-P1 审查 A2：等租约行的锁期间权限可能刚被收回，失去访问与失去编辑权要先于租约回答），
+   * 交出的开头（Codex 评审 CX1）：不加锁判断能编辑（404 / 403，看不到的请求不取任何锁）→ 锁文档行（等锁期间进了回收站、被永久删除的
+   * 按读不到回答，NOT_FOUND）→ 在它的锁下锁租约行（lockUnder：交出凭这一行结束这一代）→ 这次登录仍然有效（否则 401，requireActiveLogin）。
+   * 与申请同一个顺序；锁下读到的文档行就是最终的（改代次的都要先拿这把锁），不必再读
+   */
+  private async lockForHandOver(actor: EditingActor, documentId: string, transaction: Transaction): Promise<LockedLease<LockedEditLease>> {
+    await requireDocumentContent(this.policy, actor.userId, await this.documents.findById(documentId, transaction), ['edit'], transaction)
+    const document = await this.documents.lockById(documentId, transaction)
+    if (document === undefined)
+      throw new AppError('NOT_FOUND')
+    const lease = await this.leases.lockUnder(document, transaction)
+    await requireActiveLogin(this.sessions, actor, transaction)
+    return { lease, document }
+  }
+
+  /**
+   * 持有者自己带令牌的请求（谢绝、交出）：锁住之后按有效条件判断请求带的租约（requestLeaseLoss，与心跳同一个判断）。
+   * 失效时先再判断一次能编辑（M3-P1 审查 A2：等锁期间权限可能刚被收回，失去访问与失去编辑权要先于租约回答），
    * 再回 EDIT_LEASE_LOST（editLeaseLost：被接管时是 taken_over 与 forced，已经交出时是 handed_over）
    */
-  private async lockHeldLease(actor: EditingActor, documentId: string, token: string | undefined, transaction: Transaction): Promise<LockedLease> {
-    const locked = await this.lockForEditor(actor, documentId, transaction)
+  private async requireHeld(actor: EditingActor, documentId: string, locked: LockedLease<ObservedEditLease>, token: string | undefined, transaction: Transaction): Promise<void> {
     const loss = requestLeaseLoss(locked.lease, locked.document.writeEpoch, { token, sessionId: actor.sessionId })
-    if (loss !== undefined) {
-      await requireDocumentContent(this.policy, actor.userId, locked.document, ['edit'], transaction)
-      throw this.lost(documentId, loss)
-    }
-    return locked
+    if (loss === undefined)
+      return
+    await requireDocumentContent(this.policy, actor.userId, locked.document, ['edit'], transaction)
+    throw this.lost(documentId, loss)
   }
 
   /** 持有者的那一代已失效：记一条日志（文档、原因与被接管的方式，不记令牌），details 带原因与被接管的方式（editLeaseLost） */

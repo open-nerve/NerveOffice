@@ -3,8 +3,8 @@
 // 这期间退出、签发重置（撤销这个人的全部登录）、停用都不经文档行与租约行，挡不住在途的请求。所以持有者自己的请求——保存、心跳、申请——
 // 在事务里、锁下再核对一次这次登录仍然有效（edit-lease.service.ts 的 requireActiveLogin），失效时 401，什么也不写。
 // 保存先查重放、再核对登录：一次已经提交的保存原样重发，拿到原来的结果（重放只要求能访问：ADR-011，上线门槛 A07），撤销登录之后也一样。
-// M3-P5 的请求编辑（发出、续期）与持有者的谢绝、交出同样在锁住租约行之后核对登录（edit-request.service.ts 的 lockForEditor，M3-P5 审查 A5）：
-// 等在租约行上时登录被撤销，放行之后 401，什么也不写。
+// M3-P5 的请求编辑（发出、续期）与持有者的谢绝、交出同样在锁住租约行之后核对登录（edit-request.service.ts 的 lockForEditor 与
+// lockForHandOver——交出自 Codex 评审 CX1 起先锁文档行、再锁租约行，M3-P5 审查 A5）：等在租约行上时登录被撤销，放行之后 401，什么也不写。
 // 由审查者 A 的探针改成的回归用例：持锁的交错用 support/held-lock.ts；慢上传那一条用"守卫顺延了这次登录"确认请求已经过了守卫，不靠固定的等待。
 import type pg from 'pg'
 import type { TestAccount } from '../support/accounts.ts'
