@@ -78,8 +78,8 @@ function fakeFactory() {
           return () => listeners.delete(listener)
         },
         isCellEditing: () => false,
-        hasPendingCellInput: () => false,
-        onCellEditingChange: () => () => {},
+        uncommittedInput: () => 'none',
+        onUncommittedInputChange: () => () => {},
         commitCellEditing: async () => true,
         settleFormulas: async () => 'settled',
         formulasSettled: () => true,

@@ -13,6 +13,8 @@ import type { ReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { profileResourceNames, sheetSnapshotFor } from '@nerve-office/contracts'
 import { CommandType, LifecycleStages, Univer, UniverInstanceType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
+import { DeviceInputEventType } from '@univerjs/engine-render'
+import { KeyCode } from '@univerjs/ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { ROUND_STOP_TIMEOUT_MS } from './formula-round-stop.ts'
@@ -226,7 +228,7 @@ interface FakeCommandEvent {
  */
 function steppingFacade(log: string[], unitId: string) {
   const listeners = new Map<string, Set<(event: never) => void>>()
-  const workbook = { getId: () => unitId }
+  const workbook = { getId: () => unitId, isCellEditing: vi.fn(() => false) }
   const subscribers = <T>(name: string): ((event: T) => void)[] => [...(listeners.get(name) ?? [])] as ((event: T) => void)[]
   const fire = (event: FakeCommandEvent): void => {
     for (const listener of subscribers<FakeCommandEvent>('CommandExecuted'))
@@ -271,6 +273,11 @@ function steppingFacade(log: string[], unitId: string) {
     },
     /** SDK 执行了一条命令（送给 CommandExecuted 的订阅者） */
     fire,
+    /** Facade 的一个事件（送给它的订阅者，例如单元格编辑的 SheetEditStarted） */
+    emit: (name: string, event: object): void => {
+      for (const listener of subscribers<object>(name))
+        listener(event)
+    },
     /** 编辑器经 Facade 同步执行的命令 */
     syncExecuteCommand: api.syncExecuteCommand,
   }
@@ -510,6 +517,47 @@ describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、�
     await editor.settlePanels()
     expect(performance.now() - started).toBeGreaterThanOrEqual(250)
     await editor.dispose()
+    note.remove()
+    container.remove()
+  })
+
+  it('还没写进模型的输入（Codex 评审 CX4）：单元格编辑器里的与面板防抖中的合成一个状态——各自开始与结束都通知，只是打开单元格编辑器是 open；销毁之后是 none', async () => {
+    const facade = steppingFacade([], 'unit-cx4')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const container = document.createElement('div')
+    document.body.append(container)
+    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-cx4'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    const listener = vi.fn()
+    editor.onUncommittedInputChange(listener)
+    expect(editor.uncommittedInput()).toBe('none')
+    // 单元格编辑器：键入字符开始编辑是 pending，按 Esc 放弃回到 none；只是打开（工作簿说正在编辑）是 open，不通知
+    facade.emit('SheetEditStarted', { workbook: facade.workbook, eventType: DeviceInputEventType.Keyboard, keycode: KeyCode.A })
+    expect(editor.uncommittedInput()).toBe('pending')
+    facade.emit('SheetEditEnded', { workbook: facade.workbook, isConfirm: false })
+    expect(editor.uncommittedInput()).toBe('none')
+    expect(listener).toHaveBeenCalledTimes(2)
+    facade.workbook.isCellEditing.mockReturnValue(true)
+    expect(editor.uncommittedInput()).toBe('open')
+    facade.workbook.isCellEditing.mockReturnValue(false)
+    expect(listener).toHaveBeenCalledTimes(2)
+    // 面板：批注浮层开着时键入是 pending，SDK 的防抖到点之后回到 none
+    const note = document.createElement('textarea')
+    note.dataset.uComp = 'note-textarea'
+    document.body.append(note)
+    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    expect(editor.uncommittedInput()).toBe('pending')
+    expect(listener).toHaveBeenCalledTimes(3)
+    await editor.settlePanels()
+    expect(editor.uncommittedInput()).toBe('none')
+    expect(listener).toHaveBeenCalledTimes(4)
+    note.dispatchEvent(new InputEvent('input', { bubbles: true }))
+    expect(editor.uncommittedInput()).toBe('pending')
+    // 销毁之后一律是 none：工作簿这时还说正在编辑也不算（编辑器已经不在了）
+    facade.workbook.isCellEditing.mockReturnValue(true)
+    await editor.dispose()
+    expect(editor.uncommittedInput()).toBe('none')
     note.remove()
     container.remove()
   })

@@ -7,7 +7,8 @@
 //   "已保存到云端"。同一张表的提交在结束事件之前就同步写入了（编辑期间已经有修改记下，立即清掉）；跨工作表的提交在 SDK 里
 //   先切表（set-worksheet-activate.command.ts 用 setTimeout 4 毫秒）再写入，等下一次修改；值没变时 SDK 不写，最多等 WRITE_WAIT_MS
 //   （独立复验 S1：原来只等一个宏任务，setTimeout 0 先于切表到来）。
-// 离开提示仍按"单元格编辑器开着"判断（isCellEditing），宁可多提示一次。
+// 它与面板防抖中的输入合成"还没写进模型的输入"一个状态交出（uncommitted-input.ts，Codex 评审 CX4）；离开提示另把"单元格编辑器开着"
+// 也算上（那里的 open），宁可多提示一次。
 // 这里的回调在 SDK 的命令执行过程中同步调用，抛出的异常会打断命令，所以一律接住、交给浏览器的错误报告
 import type { FUniver } from '@univerjs/core/facade'
 import { DeviceInputEventType } from '@univerjs/engine-render'

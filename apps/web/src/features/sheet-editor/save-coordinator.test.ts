@@ -13,20 +13,23 @@ const OTHER_TAB = '0199a2c4-1f2e-4a3b-8c4d-00000000bbbb'
 const EXPLICIT: SaveOptions = { dedupe: false }
 
 /**
- * 假的编辑器：edit() 是一次修改；可以设定正在编辑、提交的结果与公式收齐的结果。
- * startCellEditing 打开单元格编辑器，typed 为真时编辑中的内容已经改动（还没提交的输入）
+ * 假的编辑器：edit() 是一次修改；可以设定正在编辑、提交的结果与公式收齐的结果。还没写进模型的输入按适配层的口径合成一个状态
+ * （uncommitted-input.ts）：startCellEditing 打开单元格编辑器，typed 为真时编辑中的内容已经改动（还没提交的输入）；typeInPanel 是面板里
+ * 按 SDK 的防抖还没写进模型的输入，panelSettled 是它到点（给了 text 时 SDK 这时把它写进模型，是一次修改；没给时是没有改动）
  */
 function fakeEditor() {
   let seq = 0
   let content = '初始'
   let editing = false
   let pendingInput = false
+  let panelInput = false
   const listeners = new Set<() => void>()
-  const cellEditingListeners = new Set<() => void>()
+  const inputListeners = new Set<() => void>()
   const notify = (): void => listeners.forEach(listener => listener())
+  const notifyInput = (): void => inputListeners.forEach(listener => listener())
   const setPendingInput = (next: boolean): void => {
     pendingInput = next
-    cellEditingListeners.forEach(listener => listener())
+    notifyInput()
   }
   const control = {
     commitResult: true,
@@ -50,6 +53,18 @@ function fakeEditor() {
       editing = false
       setPendingInput(false)
     },
+    /** 在面板里键入（批注浮层、数据验证面板）：按 SDK 的防抖还没写进模型 */
+    typeInPanel(): void {
+      panelInput = true
+      notifyInput()
+    },
+    /** 面板的防抖到点：text 是 SDK 这时写进模型的内容，没给时是没有改动 */
+    panelSettled(text?: string): void {
+      if (text !== undefined)
+        control.edit(text)
+      panelInput = false
+      notifyInput()
+    },
   }
   const editor: SaveEditor & CaptureEditor = {
     changeSeq: () => seq,
@@ -58,10 +73,10 @@ function fakeEditor() {
       return () => listeners.delete(listener)
     },
     isCellEditing: () => editing,
-    hasPendingCellInput: () => pendingInput,
-    onCellEditingChange: (listener) => {
-      cellEditingListeners.add(listener)
-      return () => cellEditingListeners.delete(listener)
+    uncommittedInput: () => pendingInput || panelInput ? 'pending' : editing ? 'open' : 'none',
+    onUncommittedInputChange: (listener) => {
+      inputListeners.add(listener)
+      return () => inputListeners.delete(listener)
     },
     commitCellEditing: vi.fn(async () => {
       if (!control.commitResult)
@@ -336,7 +351,74 @@ describe('单元格里还没提交的输入（Codex 评审 CX6）', () => {
     coordinator.subscribe(listener)
     coordinator.dispose()
     control.startCellEditing('甲')
+    control.typeInPanel()
     expect(listener).not.toHaveBeenCalled()
+  })
+})
+
+describe('面板里还没写进模型的输入（Codex 评审 CX4，M3-P6 设计 §3.13）', () => {
+  it('防抖中：页头是有未保存的修改，离开提示拦下；写进模型之后由修改序号接着算，存上之后回到已保存到云端', async () => {
+    const { coordinator, control, calls } = setup()
+    const listener = vi.fn()
+    coordinator.subscribe(listener)
+    control.typeInPanel()
+    expect(coordinator.view()).toMatchObject({ status: 'dirty', unsaved: true, unsavedEdits: true })
+    expect(coordinator.hasUnsavedWork()).toBe(true)
+    expect(listener).toHaveBeenCalledOnce()
+    control.panelSettled('面板里改的')
+    expect(coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
+    expect(coordinator.hasUnsavedWork()).toBe(true)
+    const saving = coordinator.save()
+    expect((await sent(calls, 1)).request).toMatchObject({ localSeq: 1, snapshot: '{"content":"面板里改的"}' })
+    calls[0]?.resolve(saved(2))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'clean', unsaved: false, unsavedEdits: false })
+    expect(coordinator.hasUnsavedWork()).toBe(false)
+  })
+
+  it('防抖到点却没有改动：随之清除，回到已保存到云端，离开不再提示', () => {
+    const { coordinator, control } = setup()
+    const listener = vi.fn()
+    coordinator.subscribe(listener)
+    control.typeInPanel()
+    expect(coordinator.view().status).toBe('dirty')
+    control.panelSettled()
+    expect(coordinator.view()).toMatchObject({ status: 'clean', unsaved: false, unsavedEdits: false })
+    expect(coordinator.hasUnsavedWork()).toBe(false)
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it('旧的保存确认在防抖期间到来：确认的是之前那次捕获，仍是有未保存的修改、离开提示拦下，不把还没写进模型的输入说成已保存', async () => {
+    const { coordinator, control, calls } = setup()
+    control.edit('甲')
+    const saving = coordinator.save()
+    const request = await sent(calls, 1)
+    control.typeInPanel()
+    expect(coordinator.view().status).toBe('saving')
+    request.resolve(saved(2))
+    await saving
+    expect(coordinator.view()).toMatchObject({ status: 'dirty', unsaved: true, unsavedEdits: true })
+    expect(coordinator.hasUnsavedWork()).toBe(true)
+    // 到点写进模型：是新的一处修改，再存一次才回到已保存
+    control.panelSettled('甲与面板里改的')
+    expect(coordinator.view().status).toBe('dirty')
+    const again = coordinator.save()
+    expect((await sent(calls, 2)).request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲与面板里改的"}' })
+    calls[1]?.resolve(saved(3))
+    await again
+    expect(coordinator.view().status).toBe('clean')
+  })
+
+  it('单元格里与面板里先后都有还没写进模型的输入：两样都结束才回到已保存到云端', () => {
+    const { coordinator, control } = setup()
+    control.typeInPanel()
+    control.startCellEditing('还没回车')
+    control.panelSettled()
+    expect(coordinator.view().status).toBe('dirty')
+    expect(coordinator.hasUnsavedWork()).toBe(true)
+    control.cancelCellEditing()
+    expect(coordinator.view().status).toBe('clean')
+    expect(coordinator.hasUnsavedWork()).toBe(false)
   })
 })
 

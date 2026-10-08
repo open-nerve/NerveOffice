@@ -24,6 +24,8 @@
 // M3-P4（设计 §3.2、§3.4–§3.6、§3.10）：自动保存要的信号——公式的进度（变更检测的跟踪器）、组合输入（composition-watch.ts）、
 // 面板的防抖（panel-debounce-watch.ts）；创建参数 recalculate：带"公式待更新"的文档进入编辑时强制全量重算（档案的表格公式插件以
 // CalculationMode.FORCED 创建），收齐的跟踪器在看到它的触发命令之前不算收齐（formula-settle-tracker.ts）。
+// 还没写进模型的输入（Codex 评审 CX4，M3-P6 设计 §3.13）：单元格编辑器里的与面板防抖中的合成一个状态交出（uncommitted-input.ts），
+// 保存的状态机据此算未保存、页头与离开提示；SDK 的细节（单元格编辑器、面板的 DOM 标记与防抖时长）留在这里。
 // 销毁（M3-P4 设计 §3.14）：主线程公式模式下有一轮公式正在算时，先停下它、等它结束再销毁（formula-round-stop.ts：否则旧的一轮在销毁之后
 // 接着跑，把坏的语法树写进 engine-formula 模块级的缓存，之后新建的编辑器里公式得出 #NAME?）；创建失败的销毁同样如此。所以 dispose 交回
 // Promise，编辑器槽位等它销毁完才在同一个容器里新建下一个。Worker 模式与没有在算时照旧立即销毁。
@@ -38,6 +40,7 @@ import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
 import type { FormulaExecution, FormulaMode } from './profile/sheet-profile.ts'
+import type { UncommittedInput, UncommittedInputWatch } from './uncommitted-input.ts'
 import type { SheetViewState } from './view-state.ts'
 import type { WorkbookSnapshot } from './workbook-snapshot.ts'
 import { LocaleType, LogLevel, Univer } from '@univerjs/core'
@@ -62,6 +65,7 @@ import { checkCreated, recheckReady } from './profile/open-check.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, SHEET_PROFILE_ID, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
+import { watchUncommittedInput } from './uncommitted-input.ts'
 import { readViewState, restoreViewState } from './view-state.ts'
 import { parseWorkbookSnapshot } from './workbook-snapshot.ts'
 // Facade 只引用用到的部分（包体积）：createWorkbook、getWorkbook、save 在 sheets，编辑中的单元格在 sheets-ui
@@ -76,12 +80,18 @@ export interface SheetEditor {
   readonly onChange: (listener: () => void) => () => void
   readonly lifecycle: () => SheetEditorLifecycle
   readonly onLifecycle: (listener: (stage: SheetEditorLifecycle) => void) => () => void
-  /** 单元格编辑器开着（单元格或编辑栏里正在编辑，还没提交或放弃）：离开提示据此判断 */
+  /**
+   * 单元格编辑器开着（单元格或编辑栏里正在编辑，还没提交或放弃）：提交与捕获的准备据此决定先不先提交（commitCellEditing）。
+   * 有没有没保存的输入看 uncommittedInput
+   */
   readonly isCellEditing: () => boolean
-  /** 单元格编辑器里有还没提交的输入（只是打开、还没改动时没有）：页头据此显示有未保存的修改（Codex 评审 CX6） */
-  readonly hasPendingCellInput: () => boolean
-  /** 有没有还没提交的输入变了 */
-  readonly onCellEditingChange: (listener: () => void) => () => void
+  /**
+   * 用户的输入还没写进模型（uncommitted-input.ts，Codex 评审 CX4）：单元格编辑器里改动了还没提交的、批注浮层与数据验证面板里按 SDK 的
+   * 防抖还没写进去的是 pending；单元格编辑器只是打开是 open。保存的状态机据此算未保存、页头与离开提示，写进模型之后由修改序号接着算
+   */
+  readonly uncommittedInput: () => UncommittedInput
+  /** 有没有还没写进模型的输入（pending）变了：开始与结束各通知一次 */
+  readonly onUncommittedInputChange: (listener: () => void) => () => void
   /**
    * 提交正在编辑的单元格（等同回车，选区随之下移），返回时这次的提交已经写进工作簿（跨工作表的提交也等到写入）；
    * 提交之后仍在编辑时返回 false。
@@ -103,7 +113,8 @@ export interface SheetEditor {
   readonly onCompositionChange: (listener: () => void) => () => void
   /**
    * 等面板里防抖中的改动写进模型（批注浮层 300 ms、数据验证面板 1 秒，panel-debounce-watch.ts）：这些面板开着时有过输入，就等到
-   * SDK 的防抖到点；没有时立即兑现。退出编辑、交出、按保存与失去编辑权的捕获之前等它（M3-P4 设计 §3.4）。从不失败
+   * SDK 的防抖到点（调用这一刻的到点，之后的输入不跟着等）；没有时立即兑现。退出编辑、交出、按保存与失去编辑权的捕获之前等它
+   * （M3-P4 设计 §3.4）。从不失败
    */
   readonly settlePanels: () => Promise<void>
   /** 捕获：JSON.stringify(save())；捕获前不调用 Facade 的读取方法（它们可能改动模型） */
@@ -204,6 +215,8 @@ interface MountedEditor {
   readonly lifecycle: LifecycleWatch
   readonly composition: CompositionWatch
   readonly panels: PanelDebounceWatch
+  /** 还没写进模型的输入：单元格编辑器与面板的防抖合成的一个状态 */
+  readonly input: UncommittedInputWatch
   readonly openCheck: OpenCheck
   /** 公式在哪里计算（测试构建的探针报告它，页面自检据此核对选中的模式确实生效） */
   readonly formulaMode: FormulaMode
@@ -349,6 +362,9 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 打开自检的"之前"一侧（M3-P4 设计 §3.11 第 3 条）：SDK 会改动交给 createWorkbook 的对象，先把载入的快照里的资源取出一份
   const resourcesBefore = structuredClone(snapshot.data.resources)
   const workbook = createWorkbook(univerAPI, snapshot)
+  // 还没写进模型的输入（Codex 评审 CX4）：单元格编辑器里的与面板防抖中的合成一个状态；单元格编辑器开着与否问工作簿，所以在它之后建
+  const input = watchUncommittedInput({ cellEditorOpen: () => workbook.isCellEditing(), cellInput: cellEditing, panelInput: panels })
+  cleanup.defer(input.dispose)
   // createWorkbook() 刚返回：表格的十个资源 hook 都已注册并加载完（6 个在 Starting 经 loadResources，4 个在 Ready 经晚注册），
   // 这时还没有渲染、没有公式的写回、也不可能有用户输入，资源比较最纯；只捕获资源（逐个 hook 的 toJson），与文档大小无关
   const created = checkCreated({
@@ -371,7 +387,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
-  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, openCheck, formulaMode }
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode }
 }
 
 /**
@@ -411,7 +427,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     await tearDown(cleanup, rounds.round)
     throw error
   }
-  const { workbook, changes, cellEditing, lifecycle, composition, panels, openCheck } = mounted
+  const { workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck } = mounted
 
   let disposed = false
   /** 这一次销毁（第一次调用 dispose 时开始）：重复调用等的都是它，不再销毁一次 */
@@ -437,8 +453,8 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     lifecycle: () => lifecycle.current() ?? 'rendered',
     onLifecycle: lifecycle.onChange,
     isCellEditing: () => !disposed && workbook.isCellEditing(),
-    hasPendingCellInput: () => !disposed && cellEditing.hasPendingInput(),
-    onCellEditingChange: cellEditing.onChange,
+    uncommittedInput: () => disposed ? 'none' : input.current(),
+    onUncommittedInputChange: input.onChange,
     async commitCellEditing() {
       usable()
       if (!workbook.isCellEditing())

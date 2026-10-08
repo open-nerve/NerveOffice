@@ -124,8 +124,8 @@ function fakeFactory() {
           return () => lifecycleListeners.delete(listener)
         },
         isCellEditing: () => !fake.disposed && fake.cellEditing,
-        hasPendingCellInput: () => !fake.disposed && fake.cellEditing,
-        onCellEditingChange: () => () => {},
+        uncommittedInput: () => !fake.disposed && fake.cellEditing ? 'pending' : 'none',
+        onUncommittedInputChange: () => () => {},
         commitCellEditing: vi.fn(async () => {
           if (fake.cellEditing) {
             fake.cellEditing = false
