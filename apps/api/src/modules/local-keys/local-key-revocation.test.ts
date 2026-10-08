@@ -1,5 +1,6 @@
-// 吊销的入口（M3-P6 设计 §3.5）：标记、擦掉密钥材料、插下一版（用现在的主密钥包装，生成时刻就是上一版被吊销的那一刻）；没有当前的时什么也不写。
-// 锁的顺序（admin 先锁账户行）、两个并发的吊销、吊销与取用的交错与审计由集成测试覆盖（local-keys.test.ts、local-key-races.test.ts）
+// 吊销的入口（M3-P6 设计 §3.5）：标记、擦掉密钥材料、插下一版（用现在的主密钥包装）；没有当前的时什么也不写。
+// 下一版的生成时刻（上一版被吊销的那一刻，仓储在 SQL 里取）、锁的顺序（admin 先锁账户行）、两个并发的吊销、吊销与取用的交错、
+// 会话时区不是 UTC 时的时间线与审计由集成测试覆盖（local-keys.test.ts、local-key-races.test.ts）
 import type * as Keyring from './master-keyring.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
@@ -32,7 +33,7 @@ function setup() {
 }
 
 describe('LocalKeyRevocation', () => {
-  it('有当前的一把：先吊销它（记下时刻、擦掉密钥材料），再插下一版——用现在的主密钥包装、绑定这个人与新的版本，与原来的不是同一把；生成时刻原样取吊销的时刻（审查 A1）', async () => {
+  it('有当前的一把：先吊销它（记下时刻、擦掉密钥材料），再插下一版——用现在的主密钥包装、绑定这个人与新的版本，与原来的不是同一把；时刻不经这里（仓储在 SQL 里取上一版被吊销的时刻，复验 C2）', async () => {
     const { ring, repository, revocation } = setup()
     const original = randomBytes(32)
     repository.seedCurrent(ring, AMY, 1, original)
@@ -40,10 +41,10 @@ describe('LocalKeyRevocation', () => {
     expect(repository.calls).toEqual(['revokeCurrent', 'insertNext'])
     expect(repository.revokeCurrent).toHaveBeenCalledWith(AMY, TRANSACTION)
     const [first, second] = repository.rows
-    expect(first).toMatchObject({ version: 1, material: null, revokedAt: new Date(repository.revokedAt) })
+    expect(first).toMatchObject({ version: 1, material: null, revokedAt: repository.revokedAt })
     expect(second).toMatchObject({ userId: AMY, version: 2, revokedAt: null })
-    // 吊销交回的文本原样传下去（带微秒：转一趟 Date 就丢了微秒，库里两个时刻不再相等）
-    expect(repository.insertNext.mock.calls[0]?.[3]).toBe(repository.revokedAt)
+    // 插下一版只给这个人、新的版本、包装结果与事务：生成时刻由仓储在同一个事务里从上一版取（时刻不在仓储与服务之间传）
+    expect(repository.insertNext).toHaveBeenCalledWith(AMY, 2, second?.material, TRANSACTION)
     const material = second?.material
     if (material === undefined || material === null)
       throw new Error('第 2 版没有密钥材料')
@@ -51,7 +52,6 @@ describe('LocalKeyRevocation', () => {
     const next = ring.unwrap(material, { userId: AMY, version: 2 })
     expect(next).toHaveLength(32)
     expect(next.equals(original)).toBe(false)
-    expect(repository.insertNext.mock.calls[0]?.[4]).toBe(TRANSACTION)
   })
 
   it('再吊销一次：吊销第 2 版、插第 3 版；版本从 1 起连续，任何时刻至多一把当前的', async () => {

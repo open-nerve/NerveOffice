@@ -1,8 +1,9 @@
 // local-keys 的单元测试共用：内存里的假仓储，按真实仓储的语义——当前的那一把（revoked_at 为空）至多一把、第一次插入撞上已有的
-// 第 1 版或当前的一把时什么也不写（ON CONFLICT DO NOTHING）、吊销擦掉密钥材料、下一版撞上时报错。库里的语句、约束与并发由集成测试覆盖
+// 第 1 版或当前的一把时什么也不写（ON CONFLICT DO NOTHING）、吊销擦掉密钥材料、下一版的生成时刻取上一版被吊销的时刻（取不到时报错，
+// 与 NOT NULL 约束一样）、下一版撞上时报错。库里的语句、约束、时刻与并发由集成测试覆盖
 import type { Buffer } from 'node:buffer'
 import type { Transaction } from '../database/index.ts'
-import type { LocalKeyRecord, LocalKeysRepository, MasterKeyUsage, RevokedLocalKeyRecord, StoredLocalKey } from './local-keys.repository.ts'
+import type { LocalKeyRecord, LocalKeysRepository, MasterKeyUsage, StoredLocalKey } from './local-keys.repository.ts'
 import type { WrappedLocalKey } from './master-keyring.ts'
 import { randomBytes } from 'node:crypto'
 import { vi } from 'vitest'
@@ -31,14 +32,14 @@ export interface FakeLocalKeyRow {
 }
 
 /**
- * 假仓储：rows 是"库里"的行；calls 按先后记下每次调用（核对顺序）；now 是"数据库的时间"（插入的行的生成时刻）；
- * revokedAt 是吊销时记下的时刻，写法与真实仓储交回的相同（带微秒的 UTC 文本：转成 Date 会丢掉微秒，原样传给 insertNext 才相等）
+ * 假仓储：rows 是"库里"的行；calls 按先后记下每次调用（核对顺序）；now 是"数据库的时间"（第 1 版的生成时刻）；
+ * revokedAt 是吊销时记下的时刻（下一版的生成时刻照真实仓储的 SQL 取上一版的这个时刻）
  */
 export class FakeLocalKeysRepository {
   readonly rows: FakeLocalKeyRow[] = []
   readonly calls: string[] = []
   now = new Date('2026-10-08T03:00:00.000Z')
-  revokedAt = '2026-10-08T03:05:00.123456Z'
+  revokedAt = new Date('2026-10-08T03:05:00.123Z')
 
   readonly findCurrent = vi.fn(async (userId: string, _transaction: Transaction): Promise<StoredLocalKey | undefined> => {
     this.calls.push('findCurrent')
@@ -54,21 +55,24 @@ export class FakeLocalKeysRepository {
     return true
   })
 
-  readonly revokeCurrent = vi.fn(async (userId: string, _transaction: Transaction): Promise<RevokedLocalKeyRecord | undefined> => {
+  readonly revokeCurrent = vi.fn(async (userId: string, _transaction: Transaction): Promise<number | undefined> => {
     this.calls.push('revokeCurrent')
     const row = this.currentRow(userId)
     if (row === undefined)
       return undefined
-    row.revokedAt = new Date(this.revokedAt)
+    row.revokedAt = this.revokedAt
     row.material = null
-    return { version: row.version, revokedAt: this.revokedAt }
+    return row.version
   })
 
-  readonly insertNext = vi.fn(async (userId: string, version: number, material: WrappedLocalKey, createdAt: string, _transaction: Transaction): Promise<void> => {
+  readonly insertNext = vi.fn(async (userId: string, version: number, material: WrappedLocalKey, _transaction: Transaction): Promise<void> => {
     this.calls.push('insertNext')
+    const previous = this.rows.find(row => row.userId === userId && row.version === version - 1)?.revokedAt ?? null
+    if (previous === null)
+      throw new Error('违反 created_at 的 NOT NULL：取不到上一版被吊销的时刻')
     if (this.rows.some(row => row.userId === userId && (row.version === version || row.revokedAt === null)))
       throw new Error('违反主键或"每人至多一把当前的"')
-    this.rows.push({ userId, version, material, createdAt: new Date(createdAt), revokedAt: null })
+    this.rows.push({ userId, version, material, createdAt: previous, revokedAt: null })
   })
 
   readonly currentVersionOf = vi.fn(async (userId: string, _transaction: Transaction): Promise<number | undefined> => {
