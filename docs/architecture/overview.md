@@ -1,6 +1,6 @@
 # 架构总览
 
-> 活文档：每个 Phase 结束时更新｜当前：v1（M3-P5 交接规则）｜更新：2026-10-07
+> 活文档：每个 Phase 结束时更新｜当前：v1（M3-P6 本机密钥与 M3 收尾）｜更新：2026-10-08
 
 ## 1. 目标形态与当前进度
 
@@ -273,7 +273,7 @@ apps/web/src/
 | 提交钩子（lefthook） | 每次提交 | 暂存文件的 `eslint --fix`；去掉提交说明里的 AI 署名 |
 | `pnpm verify --fast` | pre-push | lint、类型检查、单元测试、静态检查（精确版本、包管理配置、故事对照、迁移只向前、表定义与迁移同步） |
 | `pnpm verify` | 合并到 main 之前 | lint、类型检查、静态检查；启动开发数据库；单元与集成测试合在一起跑并统计覆盖率；清理并构建；依赖图与许可、产物扫描与第三方许可清单、首屏体积预算；前端的测试构建；E2E（本机三个浏览器，真实后端与数据库） |
-| CI（`.github/workflows/ci.yml`） | 推送 main；每周一次；手动 | 两个并行的 job：`verify`（`pnpm verify --ci`，PostgreSQL 服务容器，与依赖漏洞扫描）；`container`（`pnpm test:e2e:container`：构建生产镜像，起测试环境，跑 Chromium 的 E2E 与重启用例）。失败的步骤、汇总与失败的 E2E 用例写成 GitHub 注解，不登录也能读取 |
+| CI（`.github/workflows/ci.yml`） | 推送 main；每周一次；手动 | 三个 job 并行：`verify`（`pnpm verify --ci --scope=no-e2e`：PostgreSQL 服务容器，E2E 之外的全部门禁，含依赖漏洞扫描）；`e2e`（`pnpm verify --ci --scope=e2e`，按浏览器分成 Chromium、Chrome、WebKit、Edge 四个并行的任务）；`container`（`pnpm test:e2e:container`：构建生产镜像，起测试环境，跑 Chromium 的 E2E 与重启用例）。失败的步骤、汇总与失败的 E2E 用例写成 GitHub 注解，不登录也能读取 |
 
 A01 等检查（`pnpm gate <名称>`）：
 
