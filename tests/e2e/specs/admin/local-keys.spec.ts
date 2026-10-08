@@ -4,7 +4,8 @@
 // 焦点回到这一行的按钮；审计页按动作找得到（操作者、对象、明细里被吊销的那一版）。
 // 这个人另一台设备上正在编辑的页面经心跳得知（M3 落在协议层：心跳的响应带着他当前的版本，页面上没有可见的反应）：下一次心跳的响应里版本加一，
 // 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。"没有可见的反应"以确定的界核对（审查 B3）：得知第 2 版之后再等下一次心跳回来
-// （它是处理完上一次之后才排的），页头与状态区的文字与吊销之前相同、读屏状态区一句话也没写过、没有 alert、仍在编辑；键入、保存之后再核对一遍。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
+// （它是处理完上一次之后才排的），标签页的标题、对话框、body 里画布之外的文字（复验 C3：门户里的提示条挂在 #editor-chrome 之外）与吊销之前相同、
+// 读屏状态区一句话也没写过、没有 alert、仍在编辑；键入、保存之后再核对一遍。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
 // 不真等：编辑的那一页装 Playwright 的时钟（打开之前装上，之后照常流动），要它的下一次心跳时拨 10 秒。
 // 容器 E2E 也跑（不带 @test-build：只用公开的接口与界面）
 import type { LocalKey } from '@nerve-office/contracts'
@@ -17,7 +18,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, lostNotice, openAndEnterEditing, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, EDITOR_SURFACE, EDITOR_TEST_TIMEOUT, lostNotice, openAndEnterEditing, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 import { expectWrittenAfterClose, recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -80,26 +81,42 @@ async function nextHeartbeatVersion(page: Page, documentId: string): Promise<num
 /** 编辑器页自己的页头与说明（React 的挂载点：页头、页头之外的读屏状态区、页头下面的各种说明） */
 const EDITOR_CHROME = '#editor-chrome'
 
-/**
- * 编辑器页上看得见的文字（审查 B3：核对页面对吊销没有可见的反应）：页头（标题、保存状态、按钮）、页头之外一直在的读屏状态区、页头下面的各种说明。
- * 不含页头里读屏的播报区：它播完 7 秒之后清空，播过什么另由 recordStatusWrites 记下每一次写进去的话
- */
-async function editorChromeText(page: Page): Promise<string> {
-  return page.locator(EDITOR_CHROME).evaluate((chrome) => {
-    const copy = chrome.cloneNode(true) as Element
-    for (const announcer of copy.querySelectorAll('header [role="status"]'))
-      announcer.remove()
-    return copy.textContent
-  })
+/** 编辑器页看得见的样子（审查 B3、复验 C3）：浏览器标签页的标题、页面上的对话框有几个、body 里画布之外的文字 */
+interface EditorPageLook {
+  readonly title: string
+  readonly dialogs: number
+  readonly text: string
 }
 
 /**
- * 编辑器页对吊销没有可见的反应（审查 B3）：仍在编辑（可编辑的编辑器就绪），页头与状态区的文字与吊销之前记下的相同，没有 alert、没有失去编辑权的说明。
- * 在确定的界之后调用（得知新版本之后的下一次心跳回来、保存之后），不当作"现在还没出现"的瞬时断言用
+ * 编辑器页看得见的样子（核对页面对吊销没有可见的反应）。文字取整个 body：页头（标题、保存状态、按钮）、页头之外一直在的读屏状态区、
+ * 页头下面的各种说明，以及挂在 body 上的东西——门户里的提示条与对话框、Univer 的弹层都在 #editor-chrome 之外（复验 C3：原来只看
+ * #editor-chrome，挂在 body 上的提示条认不出）。按"吊销之前的那一刻"与界之后的两次比较，不比较的几处本来就会变（三个浏览器实测过 body 的内容）：
+ * - 画布（#sheet-editor：Univer 的工作区、编辑栏、单元格编辑器与工作表标签，键入、保存时本来就变）；
+ * - 页头里读屏的播报区（播完 7 秒之后清空；播过什么另由 recordStatusWrites 记下每一次写进去的话）；
+ * - script、style（不是显示的文字）。
+ * Univer 挂在 body 上、平时隐藏的弹层（编辑栏的选区容器、工作表标签的右键菜单）在这两刻之间不变，照常比较
  */
-async function expectNoVisibleReaction(page: Page, before: string): Promise<void> {
+async function editorPageLook(page: Page): Promise<EditorPageLook> {
+  return page.evaluate(({ surface, announcer }) => {
+    const copy = document.body.cloneNode(true) as HTMLElement
+    for (const element of copy.querySelectorAll(`${surface}, ${announcer}, script, style`))
+      element.remove()
+    return { title: document.title, dialogs: document.querySelectorAll('[role="dialog"], [role="alertdialog"]').length, text: copy.textContent }
+  }, { surface: EDITOR_SURFACE, announcer: `${EDITOR_CHROME} header [role="status"]` })
+}
+
+/**
+ * 编辑器页对吊销没有可见的反应（审查 B3、复验 C3）：仍在编辑（可编辑的编辑器就绪）；标签页的标题、对话框的个数、body 里画布之外的文字
+ * 都与吊销之前记下的相同；没有 alert、没有失去编辑权的说明。在确定的界之后调用（得知新版本之后的下一次心跳回来、保存之后），
+ * 不当作"现在还没出现"的瞬时断言用
+ */
+async function expectNoVisibleReaction(page: Page, before: EditorPageLook): Promise<void> {
   await waitForEditorAccess(page, 'edit')
-  expect(await editorChromeText(page), '编辑器页上的文字与吊销之前不同（页面对吊销有了可见的反应）').toBe(before)
+  const now = await editorPageLook(page)
+  expect(now.title, '浏览器标签页的标题与吊销之前不同（页面对吊销有了可见的反应）').toBe(before.title)
+  expect(now.dialogs, '页面上多了对话框（页面对吊销有了可见的反应）').toBe(before.dialogs)
+  expect(now.text, '编辑器页上（画布之外）的文字与吊销之前不同（页面对吊销有了可见的反应）').toBe(before.text)
   await expect(lostNotice(page)).toHaveCount(0)
   await expect(page.getByRole('alert')).toHaveCount(0)
 }
@@ -117,10 +134,11 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await anotherDevice.clock.install()
     await openAndEnterEditing(anotherDevice, documentId)
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(1)
-    // 吊销之前编辑器页上的样子（审查 B3）：已保存到云端，记下页头与状态区的文字；从这里起记下两个读屏状态区（页头里的播报区、页头之外的状态区）
-    // 写进去的每一句话
+    // 吊销之前编辑器页上的样子（审查 B3、复验 C3）：已保存到云端，记下标签页的标题、对话框的个数（没有）与 body 里画布之外的文字；
+    // 从这里起记下两个读屏状态区（页头里的播报区、页头之外的状态区）写进去的每一句话
     await expect(saveStatus(anotherDevice)).toHaveText('已保存到云端')
-    const quiet = await editorChromeText(anotherDevice)
+    const quiet = await editorPageLook(anotherDevice)
+    expect(quiet.dialogs).toBe(0)
     await recordStatusWrites(anotherDevice.locator(`${EDITOR_CHROME} [role="status"]`))
 
     // 系统管理员在账户页找到他，用键盘打开"吊销本机密钥"的确认框
@@ -166,7 +184,8 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     // 他另一台设备上正在编辑的页面：下一次心跳的响应里是第 2 版
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(2)
     // 页面上没有可见的反应（审查 B3）：以再下一次心跳回来为界——它是页面处理完得知第 2 版的那一次之后才排的，之后才出现的反应也认得出。
-    // 页头与状态区的文字与吊销之前相同，读屏状态区一句话也没写过（说过又撤掉的也算），没有 alert、没有失去编辑权的说明，仍在编辑
+    // 标签页的标题、对话框、body 里画布之外的文字与吊销之前相同（复验 C3），读屏状态区一句话也没写过（说过又撤掉的也算），没有 alert、
+    // 没有失去编辑权的说明，仍在编辑
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(2)
     await expectNoVisibleReaction(anotherDevice, quiet)
     expect(await spokenWrites(anotherDevice), '读屏状态区里说了话（页面对吊销有了反应）').toEqual([])
