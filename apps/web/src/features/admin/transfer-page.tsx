@@ -190,8 +190,9 @@ function TransferForm({ account }: { readonly account: AdminUser }) {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报（审查 B10） */}
-      <StatusRegion className="rounded-lg border p-3 text-sm">{done}</StatusRegion>
+      {/* 结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报（审查 B10）。
+          它在文档列表上方：写进说明时下面的内容整体下移，keepFocusInView 把焦点交还的"转移"滚回可视区域（与账户页、成员页相同，M3-P6 复验） */}
+      <StatusRegion className="rounded-lg border p-3 text-sm" keepFocusInView>{done}</StatusRegion>
       {loaded.length > 0 && (
         <div className="flex items-center gap-2">
           <input

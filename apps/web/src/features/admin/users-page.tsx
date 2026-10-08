@@ -5,7 +5,7 @@ import type { IssuedLink } from './issued-link-dialog.tsx'
 import type { PagedTableHandle } from './paged-table.tsx'
 import { PASSWORD_RESET_LIFETIME_HOURS, USER_STATUSES } from '@nerve-office/contracts'
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useId, useLayoutEffect, useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { describeError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { refreshAfterSuccess } from '../../shared/api/write-outcome.ts'
@@ -95,7 +95,7 @@ export function AdminUsersPage() {
   const [background, setBackground] = useState<BackgroundRefresh>()
   /**
    * 页面顶部状态区里的说明（M3-P6 设计 §3.8）：吊销本机密钥的结果。这一行的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时，
-   * 状态区不在可视区域里，明眼人在这一行看得见），这一行的变化读屏不会播报，读屏靠这里的说明。
+   * 状态区不在可视区域里，明眼人在这一行看得见；写进说明时这一行不被挤出可视区域，见状态区的 keepFocusInView），这一行的变化读屏不会播报，读屏靠这里的说明。
    * 确认的弹窗关掉之后才写（AfterConfirmed）；打开下一个确认的弹窗时清掉——说明只对刚做完的那一次，同样的说法再出现时照样是一次变化，读屏照样播报
    */
   const [done, setDone] = useState<string>()
@@ -103,20 +103,6 @@ export function AdminUsersPage() {
   const searchRef = useRef<HTMLInputElement>(null)
   const searchId = useId()
   const statusId = useId()
-
-  /**
-   * 说明写进去之后，焦点所在的元素留在可视区域里（最小距离，本来就看得见的不动）。状态区在表格上方，空的时候不占位置：写进说明时下面的内容
-   * 整体下移，三个浏览器都不补偿滚动——在可视区域底部附近的一行吊销时（键盘往下走到的行常在那里），这一行连同焦点交还的按钮被挤出可视区域，
-   * 明眼人又看不到这一行的结果（审查 B2 要的正是它；复验 C7 时发现：B2 的 E2E 只剩 3 像素的字在可视区域里）。说明要等焦点交还之后才写
-   * （读屏才播报，ConfirmDialog 的 AfterConfirmed），所以只能写进去之后再把焦点所在的元素滚回来
-   */
-  useLayoutEffect(() => {
-    if (done === undefined)
-      return
-    const active = document.activeElement
-    if (active instanceof HTMLElement && active !== document.body)
-      active.scrollIntoView({ block: 'nearest' })
-  }, [done])
 
   /**
    * 成功之后刷新账户列表，最多等到时限（Codex 对抗评审 CX4）：一直不回来时操作照常结束，表格上方说列表还在刷新。
@@ -361,8 +347,9 @@ export function AdminUsersPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 操作结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报 */}
-      <StatusRegion className="rounded-lg border p-3 text-sm">{done}</StatusRegion>
+      {/* 操作结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报。
+          它在长列表上方：写进说明时下面的内容整体下移，keepFocusInView 把焦点所在的元素（交还焦点的那一行的按钮）滚回可视区域（复验 C7 时发现） */}
+      <StatusRegion className="rounded-lg border p-3 text-sm" keepFocusInView>{done}</StatusRegion>
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-2">
           <Label htmlFor={searchId}>{text.search}</Label>

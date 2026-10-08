@@ -7,11 +7,12 @@
 import type { AdminUser } from '@nerve-office/contracts'
 import type { Handler } from '../shared/testing/fake-api.test-support.ts'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { plainName } from '../shared/testing/people.test-support.ts'
+import { watchScrollIntoView } from '../shared/testing/scroll.test-support.ts'
 import { AMY, listPage, ROOT, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
@@ -103,21 +104,6 @@ async function passRefreshTimeLimit(): Promise<void> {
   await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS))
 }
 
-/**
- * 说明写进去之后，页面把焦点所在的元素滚回可视区域（状态区在表格上方，写进说明时下面的内容整体下移）。jsdom 没有布局，也没有
- * scrollIntoView：换成记录调用的假实现，核对滚的是哪一个、怎样滚；真实浏览器里的位置由 E2E 核对（specs/admin/local-keys.spec.ts 靠下的一行）
- */
-const scrollIntoView = vi.fn<(options?: ScrollIntoViewOptions) => void>()
-
-beforeEach(() => {
-  scrollIntoView.mockClear()
-  Element.prototype.scrollIntoView = scrollIntoView
-})
-
-afterEach(() => {
-  Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
-})
-
 /** 点行里的"吊销本机密钥"（先让它得到焦点，与键盘操作一样），返回这个按钮与弹出的确认框 */
 async function openRevoke(row: HTMLElement, name: string): Promise<{ readonly button: HTMLElement, readonly dialog: HTMLElement }> {
   const button = within(row).getByRole('button', { name: `吊销本机密钥 ${name}` })
@@ -165,16 +151,17 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(within(dialog).getByRole('button', { name: '吊销本机密钥' })).toHaveAttribute('data-variant', 'destructive')
     const listed = count(api, USERS)
     const announced = watchAnnouncement(`已吊销 ${AMY_NAME} 的本机密钥`)
+    const scrolled = watchScrollIntoView()
     confirmIn(dialog)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
     // 等确认的弹窗关掉之后才写进去（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下，焦点已经交还
     expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
     await waitFor(() => expect(document.activeElement).toBe(button))
-    // 说明写进去之后，焦点所在的按钮留在可视区域里（最小距离）：状态区在表格上方，写进说明时下面的内容整体下移
-    expect(scrollIntoView).toHaveBeenCalledTimes(1)
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: 'nearest' })
-    expect(scrollIntoView.mock.contexts.at(-1)).toBe(button)
+    // 说明写进去之后，焦点所在的按钮留在可视区域里（最小距离）：状态区在表格上方，写进说明时下面的内容整体下移（共用的状态区的 keepFocusInView）
+    expect(scrolled).toHaveBeenCalledTimes(1)
+    expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
+    expect(scrolled.mock.contexts.at(-1)).toBe(button)
     expect(count(api, REVOKE_AMY)).toBe(1)
     // 这一行是吊销之后的样子：明眼人在这一行看得见结果（审查 B2）。成功之后与别的操作一样刷新一次列表（复验 C1：先取消在路上的列表请求，
     // 见下面"在路上的列表请求"一组）；吊销不动会话：不重新确认
@@ -206,13 +193,14 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     admin([], { [USERS]: () => server.list(), [REVOKE_AMY]: () => server.revoke(AMY.id) })
     renderApp('/admin/users')
     const row = await rowOf('amy')
+    const scrolled = watchScrollIntoView()
     ;(document.activeElement as HTMLElement | null)?.blur()
     fireEvent.click(within(row).getByRole('button', { name: `吊销本机密钥 ${AMY_NAME}` }))
     confirmIn(await screen.findByRole('dialog'))
     await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
     await waitFor(() => expect(document.activeElement).toBe(row))
     // 滚回可视区域的是焦点所在的这一行
-    expect(scrollIntoView.mock.contexts.at(-1)).toBe(row)
+    expect(scrolled.mock.contexts.at(-1)).toBe(row)
   })
 
   it('停用的账户也能吊销：说明另一版——登录都已退出、重新启用之后旧密码照旧可用，启用之后再生成重置链接（这时这一行没有"生成重置链接"）；启用的确认框里同样提醒。这个人从没取过本机密钥：服务端原样返回，状态区说明没有要吊销的', async () => {
@@ -312,6 +300,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
   it('确定的失败（例如这个账户不在了）：按错误码说明，不说成结果未知；弹窗留着，状态区不写', async () => {
     admin([AMY], { [REVOKE_AMY]: () => apiError(404, 'NOT_FOUND') })
     renderApp('/admin/users')
+    const scrolled = watchScrollIntoView()
     const { dialog } = await openRevoke(await rowOf('amy'), AMY_NAME)
     confirmIn(dialog)
     const alert = await within(dialog).findByRole('alert')
@@ -320,7 +309,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     expect(statusRegion()).toBeEmptyDOMElement()
     // 状态区没写说明，页面也不滚
-    expect(scrollIntoView).not.toHaveBeenCalled()
+    expect(scrolled).not.toHaveBeenCalled()
   })
 
   it('打开下一个确认的弹窗（别的操作也一样）时清掉状态区里上一次的说明：同样的说法再出现时照样是一次变化，读屏照样播报', async () => {
