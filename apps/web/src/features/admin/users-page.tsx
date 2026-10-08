@@ -19,9 +19,10 @@ import { useSessionRecheck } from '../../shared/lib/session-recheck.ts'
 import { useDebouncedValue } from '../../shared/lib/use-debounced-value.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { Badge, Button, buttonVariants, Input, Label, NativeSelect, TableCell } from '../../shared/ui/index.ts'
+import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { OWN_DISABLE_AFTER_UNKNOWN, OWN_RESET_AFTER_UNKNOWN, sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
-import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset, unlockLogin } from './admin-api.ts'
+import { ADMIN_QUERY_KEY, adminUsersQueryOptions, changeSystemRole, disableUser, enableUser, issuePasswordReset, revokeLocalKey, unlockLogin } from './admin-api.ts'
 import { IssuedLinkDialog } from './issued-link-dialog.tsx'
 import { PagedTable, StillRefreshingLine } from './paged-table.tsx'
 
@@ -55,7 +56,7 @@ interface IssuedReset {
 
 /**
  * 管理界面：账户（M2-P1 设计 §3.8，US-M2-03、04）。搜索与状态过滤；停用与启用、设为或取消系统管理员、生成重置链接，
- * 登录被锁定的账户显示锁到什么时候、可以解除（M2-P6 复核 A1）；
+ * 登录被锁定的账户显示锁到什么时候、可以解除（M2-P6 复核 A1）；吊销本机密钥（M3-P6 设计 §3.8，US-M3-17），结果写进页面顶部的状态区；
  * 每个操作先确认后果；失败按错误码说明（例如至少要保留一个有效的系统管理员）。
  * 操作的是自己的账户时另给说明，成功之后重新确认会话（审查 B4）：取消了自己的系统管理员就切到无权限，停用了自己就整页离开；
  * 给自己生成的重置链接要先交到本人手里，关闭链接的弹窗之后再确认。为自己生成重置链接、停用自己的结果未知时，带着原因确认会话
@@ -81,6 +82,11 @@ export function AdminUsersPage() {
   const [ownUnsure, setOwnUnsure] = useState<keyof typeof OWN_AFTER_UNKNOWN>()
   /** 写操作成功之后、到了时限还在后台的刷新（Codex 对抗评审 CX4）：表格上方说列表还在刷新 */
   const [background, setBackground] = useState<BackgroundRefresh>()
+  /**
+   * 页面顶部状态区里的说明（M3-P6 设计 §3.8）：吊销本机密钥不改这一行显示的任何一项，结果只能说出来。
+   * 确认的弹窗关掉之后才写（AfterConfirmed）；打开下一个确认的弹窗时清掉——说明只对刚做完的那一次，同样的说法再出现时照样是一次变化，读屏照样播报
+   */
+  const [done, setDone] = useState<string>()
   const tableRef = useRef<PagedTableHandle>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const searchId = useId()
@@ -104,6 +110,12 @@ export function AdminUsersPage() {
     await refreshQueries(queryClient, [USERS_QUERY_KEY])
   }
 
+  /** 打开确认的弹窗：先清掉状态区里上一次的说明（见 done） */
+  function askToConfirm(confirmation: PendingConfirmation): void {
+    setDone(undefined)
+    setPending(confirmation)
+  }
+
   /** 焦点回到这个账户的那一行；这一行已经不在表里（例如按状态过滤掉了）时回到搜索框（审查 B9） */
   function focusRow(user: AdminUser): void {
     if (!(tableRef.current?.focusRow(user.id) ?? false))
@@ -116,7 +128,7 @@ export function AdminUsersPage() {
    */
   function confirmThen(user: AdminUser, confirmation: Omit<PendingConfirmation, 'run' | 'refresh' | 'returnFocus'>, action: () => Promise<AdminUser>): void {
     const own = user.id === session.data?.user.id
-    setPending({
+    askToConfirm({
       ...confirmation,
       run: async () => {
         replaceRow(await action())
@@ -143,7 +155,7 @@ export function AdminUsersPage() {
       confirmThen(user, { title: text.confirmDisable(name), description: text.disableDescription, confirmLabel: text.disable, destructive: true }, async () => disableUser(user.id))
       return
     }
-    setPending({
+    askToConfirm({
       title: text.confirmDisableOwn,
       description: text.disableOwnDescription,
       confirmLabel: text.disable,
@@ -181,7 +193,7 @@ export function AdminUsersPage() {
   function confirmReset(user: AdminUser): void {
     const own = user.id === session.data?.user.id
     const name = nameOf(user)
-    setPending({
+    askToConfirm({
       title: own ? text.confirmResetOwn : text.confirmReset(name),
       description: own ? text.resetOwnDescription(PASSWORD_RESET_LIFETIME_HOURS) : text.resetDescription(PASSWORD_RESET_LIFETIME_HOURS),
       confirmLabel: text.resetPassword,
@@ -216,6 +228,33 @@ export function AdminUsersPage() {
         })
       },
       refresh: own ? async () => recheckSession('password_reset') : async () => {},
+      returnFocus: () => focusRow(user),
+    })
+  }
+
+  /**
+   * 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：所有状态的账户都能吊销，自己的也一样。吊销不改这一行显示的任何一项（列表不显示密钥），
+   * refresh 用空操作；成功的说明交回给确认的弹窗，关掉之后写进页面顶部的状态区。这个人从没取过本机密钥时服务端原样返回，说明没有要吊销的。
+   * 吊销不动会话：自己的账户也不重新确认会话。结果未知时用专门的说法——吊销每次都换一把新的（不按状态幂等），刷新也看不出是否已经生效，
+   * 再吊销一次没有坏处。焦点回到这一行的"吊销本机密钥"（按钮一直在，打开之前有焦点的就交还给它；点按钮不给焦点的浏览器回到这一行）
+   */
+  function confirmRevokeLocalKey(user: AdminUser): void {
+    const own = user.id === session.data?.user.id
+    const name = nameOf(user)
+    askToConfirm({
+      title: own ? text.confirmRevokeOwnLocalKey : text.confirmRevokeLocalKey(name),
+      description: own ? text.revokeOwnLocalKeyDescription : text.revokeLocalKeyDescription,
+      confirmLabel: text.revokeLocalKey,
+      destructive: true,
+      describeFailure: (error) => {
+        const reason = describeError(error).message
+        return isUnknownOutcome(error) ? text.revokeLocalKeyOutcomeUnknown(reason) : reason
+      },
+      run: async () => {
+        const { localKey } = await revokeLocalKey(user.id)
+        return () => setDone(localKey === null ? text.noLocalKeyToRevoke(name) : text.localKeyRevoked(name, localKey.version))
+      },
+      refresh: async () => {},
       returnFocus: () => focusRow(user),
     })
   }
@@ -266,6 +305,10 @@ export function AdminUsersPage() {
             {text.resetPassword}
           </Button>
         )}
+        {/* 吊销本机密钥（M3-P6 设计 §3.8）：所有状态的账户都给（设备丢了又停用、之后再启用时，旧设备上的草稿同样不该再解得开） */}
+        <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.revokeLocalKey, name)} onClick={() => confirmRevokeLocalKey(user)}>
+          {text.revokeLocalKey}
+        </Button>
         {/* 登录被锁定（M2-P6 复核 A1）：解除之后这一行不再有这个按钮，焦点回到这一行 */}
         {user.loginLock !== null && (
           <Button variant="ghost" size="sm" aria-label={messages.common.actionOn(text.unlockLogin, name)} onClick={() => confirmThen(user, { title: text.confirmUnlockLogin(name), description: text.unlockLoginDescription, confirmLabel: text.unlockLogin }, async () => unlockLogin(user.id))}>
@@ -284,6 +327,8 @@ export function AdminUsersPage() {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* 操作结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报 */}
+      <StatusRegion className="rounded-lg border p-3 text-sm">{done}</StatusRegion>
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-2">
           <Label htmlFor={searchId}>{text.search}</Label>
