@@ -1,7 +1,8 @@
 // 同一个浏览器里的标签页（M3-P5 设计 §3.1、§3.7、§3.10）：Web Locks 与交接频道的薄适配。不依赖 Univer 与界面；浏览器的两样 API 经参数注入
 // （组装处给出 navigator.locks 与 BroadcastChannel，start.tsx），单元测试用假的（same-browser.test-support.ts）。
 // - 锁 nerve-doc:<documentId>（00 号计划书 §7.5 的锁名）：正在编辑的标签页从服务端批准之后直到离开编辑持有它（先服务端、后本机锁，
-//   设计 §3.1 第 2 条）。tryHold 锁空着才拿（ifAvailable）；steal 抢——原来的持有者的请求以 AbortError 结束，它的句柄的 stolen 随之兑现；
+//   设计 §3.1 第 2 条；什么时候拿、被占着时抢不抢、被抢之后怎样，一律问服务端，M3-P6 设计 §3.13，local-lock.ts）。tryHold 锁空着才拿
+//   （ifAvailable）；steal 抢——原来的持有者的请求以 AbortError 结束，它的句柄的 stolen 随之兑现；
 //   heldHere 看本浏览器里有没有标签页持有它（query：别的浏览器、配置文件、无痕窗口与设备都看不到）。拿到之后锁的回调一直挂着，
 //   直到 release；页面关闭、刷新、导航离开、崩溃时浏览器自己放开（探索 §3.2：1–13 ms）；
 //   untilFree 等它空着（排队、轮到即放开，只当信号）：同一个浏览器里的交接以它为"那边做完了"的信号；

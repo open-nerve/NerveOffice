@@ -10,8 +10,9 @@
 //   锁在本浏览器里没人持有（跨设备、另一个浏览器或配置文件、刚关闭或刷新过的页面、孤儿租约）——先等刷新之前在途的保存（记号在 30 秒内时，
 //   self-takeover.ts），再申请、拿锁；锁被本浏览器的标签页持有——请它先保存再交出（self-takeover.ts）：做完了（锁空了、done）同样先看记号再申请——
 //   那边存上之后不释放（审查 B4：先释放、再申请之间，等待中的请求方会抢进来），这里的本人接管结束它那一代，请求随新的一代沿用；没有回应（冻结、
-//   暂停、卡住）或者回应了、到时限没做完——申请、拿锁时抢（那边随即转为失去编辑权），不看记号（那边还活着）；它没能保存（failed）就把原因交给阅读的
-//   进展，让人选"仍在此编辑"（anyway：同样申请并抢锁，不再请它交出）或"取消"。进入了就清掉刷新时在途的保存的记号（它只用来挡住过早的接手）。
+//   暂停、卡住）或者回应了、到时限没做完——申请、拿锁（锁被那边占着：先向服务端核对本页这一代是当前的才抢，M3-P6 设计 §3.13，local-lock.ts；
+//   那边得知被抢、核对之后转为失去编辑权），不看记号（那边还活着）；它没能保存（failed）就把原因交给阅读的进展，让人选"仍在此编辑"（anyway：
+//   同样申请、拿锁，不再请它交出）或"取消"。进入了就清掉刷新时在途的保存的记号（它只用来挡住过早的接手）。
 import type { FlushResult } from './autosave.ts'
 import type { LeaseClock } from './edit-lease.ts'
 import type { HandoverTrace } from './handover-trace.ts'
@@ -63,7 +64,7 @@ export interface TabAnswersOptions {
   /** 本页的用户：只理会同一个人的请求 */
   readonly userId: string
   readonly clock: LeaseClock
-  /** 本页确实还持有本机锁（被抢之后、离开编辑之后没有） */
+  /** 本页确实还持有本机锁（被抢之后——核对中、核对不了在等心跳——与离开编辑之后没有） */
   readonly holdsLock: () => boolean
   /** 本页现在在做什么（TabAnswerPhase） */
   readonly phase: () => TabAnswerPhase
@@ -158,7 +159,7 @@ export interface TakeOverHereOptions {
   readonly wallNow: () => number
   /** 读一次编辑状态，交回修订号（等刷新之前的保存）；失败时抛出 */
   readonly revision: () => Promise<number>
-  /** "仍在此编辑"（那边没能交出之后再按）：本人接管、拿锁时抢，不再请它交出 */
+  /** "仍在此编辑"（那边没能交出之后再按）：本人接管、拿锁（被占着时核对过才抢），不再请它交出 */
   readonly anyway: boolean
   /** 本页不再等时撤销（取消、卸载、又开始一次） */
   readonly signal: AbortSignal
@@ -166,7 +167,10 @@ export interface TakeOverHereOptions {
   readonly still: () => boolean
   /** "在此编辑"有了新的进展（状态机放进阅读的状态） */
   readonly progress: (progress: TakeoverProgress) => void
-  /** 以本人接管申请并进入编辑（状态机：申请、拿锁——被本浏览器的标签页占着就抢——以可编辑重建）。交回进入了没有 */
+  /**
+   * 以本人接管申请并进入编辑（状态机：申请、拿锁——被本浏览器的标签页占着时先核对本页这一代是当前的才抢，已被取代就回到阅读——以可编辑重建）。
+   * 交回进入了没有
+   */
   readonly enter: () => Promise<boolean>
   /** 测试构建的观察钩子（handover-trace.ts）：生产不给 */
   readonly trace?: HandoverTrace | undefined
@@ -179,7 +183,7 @@ export interface TakeOverHereOptions {
 export async function takeOverHere(options: TakeOverHereOptions): Promise<void> {
   const { browser, clock, signal } = options
   options.trace?.({ kind: 'takeover-start', at: clock.now(), anyway: options.anyway })
-  // 人选了"仍在此编辑"：申请、拿锁时抢，不再请它交出、不看记号（那边还活着）
+  // 人选了"仍在此编辑"：申请、拿锁（被占着时核对过才抢），不再请它交出、不看记号（那边还活着）
   if (!options.anyway) {
     const here = await browser.heldHere()
     if (!options.still())
@@ -195,7 +199,7 @@ export async function takeOverHere(options: TakeOverHereOptions): Promise<void> 
         options.progress({ kind: 'failed', reason: outcome.reason })
         return
       }
-      // 没有回应（冻结、暂停、卡住），或者回应了、到时限没做完：申请、拿锁时抢（那边随即转为失去编辑权），不看记号
+      // 没有回应（冻结、暂停、卡住），或者回应了、到时限没做完：申请、拿锁（被占着时核对过才抢，那边核对之后转为失去编辑权），不看记号
       silent = outcome.kind === 'silent'
     }
     if (!silent) {
