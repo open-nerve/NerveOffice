@@ -1687,6 +1687,54 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     expect(await lease.confirm()).toEqual({ kind: 'ended', loss: { kind: 'lease', reason: 'replaced' } })
     expect(context.api.renew).toHaveBeenCalledTimes(renewals)
   })
+
+  it('续上的申请被确定拒绝（未登录：没有提交）不算结果未知——会话确认之后，核对得到的 replaced 照旧是被取代', async () => {
+    const context = setup()
+    const lease = await held(context)
+    context.api.renew.mockRejectedValueOnce(lostError('expired'))
+    context.api.acquire.mockRejectedValueOnce(new ApiError(401, 'SESSION_EXPIRED', '登录已过期'))
+    await context.time.advance(HEARTBEAT_MS)
+    expect(context.onSessionProblem).toHaveBeenCalledOnce()
+    await lease.resume()
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    expect(await lease.confirm()).toEqual({ kind: 'superseded', loss: { kind: 'lease', reason: 'replaced' } })
+  })
+
+  /** 用户发起的申请：acquire 依次给出 answers 的回答（之后照常是 NEXT），途中要等的时间由 waits 依次走过；交回取得的租约 */
+  async function acquiredAfter(context: ReturnType<typeof setup>, answers: readonly (AcquiredEditLease | Error)[], waits: readonly number[]) {
+    context.api.acquire.mockReset().mockResolvedValue(NEXT)
+    for (const answer of answers)
+      context.api.acquire.mockImplementationOnce(async () => answer instanceof Error ? Promise.reject(answer) : answer)
+    const acquiring = acquireEditLease(context.options)
+    for (const ms of waits)
+      await context.time.advance(ms)
+    const result = await acquiring
+    if (result.kind !== 'acquired')
+      throw new Error('没有取得编辑权')
+    return result.lease
+  }
+
+  it('用户发起的申请有过结果未知的尝试、同一个标识再试成功：被放弃的那一次服务端可能晚于再试才处理（同一个页面的重试，换成本页不知道的新一代）——取得的这一代带着记号：核对得到的 replaced 当作这一代自己失效；续上换了一代之后照旧是被取代（复验 E11）', async () => {
+    const context = setup()
+    const lease = await acquiredAfter(context, [new NetworkError('断网'), ACQUIRED], [UNKNOWN_OUTCOME_RETRY_DELAY_MS])
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    expect(await lease.confirm()).toEqual({ kind: 'ended', loss: { kind: 'lease', reason: 'replaced' } })
+    // 心跳得知 replaced、续上了（申请到 NEXT）：本页知道了自己最新的一代
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    await context.time.advance(HEARTBEAT_MS)
+    expect(lease.credentials().token).toBe(NEXT_TOKEN)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    expect(await lease.confirm()).toEqual({ kind: 'superseded', loss: { kind: 'lease', reason: 'replaced' } })
+  })
+
+  it('用户发起的申请被自己占着、隔一会儿再试成功（被占用是确定的回答，没有提交）：不带记号——核对得到的 replaced 照旧是被取代', async () => {
+    const context = setup()
+    const lease = await acquiredAfter(context, [heldError(SELF_HELD), ACQUIRED], [SAME_USER_RETRY_DELAY_MS])
+    expect(context.api.acquire).toHaveBeenCalledTimes(2)
+    context.api.renew.mockRejectedValueOnce(lostError('replaced'))
+    expect(await lease.confirm()).toEqual({ kind: 'superseded', loss: { kind: 'lease', reason: 'replaced' } })
+  })
 })
 
 describe('心跳续租成功（onRenewed，M3-P6 设计 §3.13：被抢之后没能核对的页面这时拿回锁）', () => {

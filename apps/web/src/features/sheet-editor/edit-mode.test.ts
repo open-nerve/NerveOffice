@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
-import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS } from './edit-lease.ts'
+import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
@@ -3549,6 +3549,42 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
     expect(browser.holderOf(LOCK)).toBe('A')
     expect(await settledNow(old.stolen)).toBe(true)
     expect(modeOf(a.mode).kind).toBe('editing')
+  })
+
+  it('点"编辑"的申请第一次结果未知（断网）、同一个标识再试成功（第 1 代）；被放弃的那一次服务端晚于再试才处理（同一个页面的重试，换成本页不知道的第 2 代）；之后被不核对的旧页面抢锁，核对得到 replaced——说不准是不是本页自己改写的：不当作被取代，交给租约再续上（第 3 代）、留在编辑，之后把锁拿回来（复验 E11）', async () => {
+    const server = fakeLeaseServer(AMY)
+    const browser = fakeBrowser()
+    const a = tab(server, browser, 'A', TAB_A)
+    let abandoned: (() => Promise<unknown>) | undefined
+    a.editLease.acquire.mockImplementationOnce(async (documentId, page, options) => {
+      abandoned = async () => server.api.acquire(documentId, page, options)
+      throw new NetworkError('断网')
+    })
+    await opened(a)
+    const entering = a.mode.enter()
+    await settle()
+    await a.time.advance(UNKNOWN_OUTCOME_RETRY_DELAY_MS)
+    await entering
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(server.current()).toMatchObject({ epoch: 1, page: TAB_A })
+    // 被放弃的那一次这时才在服务端处理：同一个页面的重试，换成第 2 代
+    await abandoned?.()
+    expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A })
+    a.factory.last().edit('甲')
+    const old = await sameBrowserFor(DOCUMENT_ID, browser.tab('old')).steal()
+    await settle()
+    await settle()
+    expect(modeOf(a.mode).kind).toBe('editing')
+    expect(a.editLease.acquire).toHaveBeenCalledTimes(3)
+    expect(server.current()).toMatchObject({ epoch: 3, page: TAB_A, released: false })
+    expect(browser.holderOf(LOCK)).toBe('old')
+    await a.time.advance(HEARTBEAT_MS)
+    expect(a.editLease.renew).toHaveBeenLastCalledWith(DOCUMENT_ID, servedToken(3), expect.any(Number))
+    expect(browser.holderOf(LOCK)).toBe('A')
+    expect(await settledNow(old.stolen)).toBe(true)
+    expect(modeOf(a.mode).kind).toBe('editing')
+    await a.mode.save()
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(3), writeEpoch: 3 })
   })
 
   it.each([
