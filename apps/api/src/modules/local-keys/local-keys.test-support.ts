@@ -2,7 +2,7 @@
 // 第 1 版或当前的一把时什么也不写（ON CONFLICT DO NOTHING）、吊销擦掉密钥材料、下一版撞上时报错。库里的语句、约束与并发由集成测试覆盖
 import type { Buffer } from 'node:buffer'
 import type { Transaction } from '../database/index.ts'
-import type { LocalKeyRecord, LocalKeysRepository, MasterKeyUsage, StoredLocalKey } from './local-keys.repository.ts'
+import type { LocalKeyRecord, LocalKeysRepository, MasterKeyUsage, RevokedLocalKeyRecord, StoredLocalKey } from './local-keys.repository.ts'
 import type { WrappedLocalKey } from './master-keyring.ts'
 import { randomBytes } from 'node:crypto'
 import { vi } from 'vitest'
@@ -25,11 +25,15 @@ export interface FakeLocalKeyRow {
   revokedAt: Date | null
 }
 
-/** 假仓储：rows 是"库里"的行；calls 按先后记下每次调用（核对顺序）；now 是"数据库的时间" */
+/**
+ * 假仓储：rows 是"库里"的行；calls 按先后记下每次调用（核对顺序）；now 是"数据库的时间"（插入的行的生成时刻）；
+ * revokedAt 是吊销时记下的时刻，写法与真实仓储交回的相同（带微秒的 UTC 文本：转成 Date 会丢掉微秒，原样传给 insertNext 才相等）
+ */
 export class FakeLocalKeysRepository {
   readonly rows: FakeLocalKeyRow[] = []
   readonly calls: string[] = []
   now = new Date('2026-10-08T03:00:00.000Z')
+  revokedAt = '2026-10-08T03:05:00.123456Z'
 
   readonly findCurrent = vi.fn(async (userId: string, _transaction: Transaction): Promise<StoredLocalKey | undefined> => {
     this.calls.push('findCurrent')
@@ -45,21 +49,21 @@ export class FakeLocalKeysRepository {
     return true
   })
 
-  readonly revokeCurrent = vi.fn(async (userId: string, _transaction: Transaction): Promise<number | undefined> => {
+  readonly revokeCurrent = vi.fn(async (userId: string, _transaction: Transaction): Promise<RevokedLocalKeyRecord | undefined> => {
     this.calls.push('revokeCurrent')
     const row = this.currentRow(userId)
     if (row === undefined)
       return undefined
-    row.revokedAt = this.now
+    row.revokedAt = new Date(this.revokedAt)
     row.material = null
-    return row.version
+    return { version: row.version, revokedAt: this.revokedAt }
   })
 
-  readonly insertNext = vi.fn(async (userId: string, version: number, material: WrappedLocalKey, _transaction: Transaction): Promise<void> => {
+  readonly insertNext = vi.fn(async (userId: string, version: number, material: WrappedLocalKey, createdAt: string, _transaction: Transaction): Promise<void> => {
     this.calls.push('insertNext')
     if (this.rows.some(row => row.userId === userId && (row.version === version || row.revokedAt === null)))
       throw new Error('违反主键或"每人至多一把当前的"')
-    this.rows.push({ userId, version, material, createdAt: this.now, revokedAt: null })
+    this.rows.push({ userId, version, material, createdAt: new Date(createdAt), revokedAt: null })
   })
 
   readonly currentVersionOf = vi.fn(async (userId: string, _transaction: Transaction): Promise<number | undefined> => {
