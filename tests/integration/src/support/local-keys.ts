@@ -90,6 +90,22 @@ export async function localKeyMomentsOf(database: TestDatabase, userId: string):
   )).rows)
 }
 
+/**
+ * 时间线（审查 A1）：这个人有第 1 到第 versions 版，只有最后一版是当前的；每一版吊销的时刻不早于它的生成，下一版生成于上一版被吊销的那一刻
+ * （不变量 I21，逐微秒相等）。按库里带微秒的 UTC 文本比较（写法固定，字符串的先后就是时间的先后）
+ */
+export async function expectMonotonicTimeline(database: TestDatabase, userId: string, versions: number): Promise<void> {
+  const moments = await localKeyMomentsOf(database, userId)
+  expect(moments.map(moment => [moment.version, moment.revokedAt === null])).toEqual(Array.from({ length: versions }, (_, index) => [index + 1, index === versions - 1]))
+  for (const [index, moment] of moments.entries()) {
+    const next = moments[index + 1]
+    if (next === undefined)
+      continue
+    expect((moment.revokedAt ?? '') >= moment.createdAt, `第 ${moment.version} 版吊销的时刻早于它的生成`).toBe(true)
+    expect(next.createdAt, `第 ${next.version} 版不是生成于第 ${moment.version} 版被吊销的那一刻`).toBe(moment.revokedAt)
+  }
+}
+
 /** 库里当前的那一把的密钥材料（测试的主密钥解得开）；没有时失败 */
 export async function currentMaterialOf(database: TestDatabase, userId: string): Promise<WrappedMaterial & { readonly version: number }> {
   const current = (await localKeyRowsOf(database, userId)).find(row => row.revokedAt === null)

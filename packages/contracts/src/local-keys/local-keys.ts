@@ -18,7 +18,7 @@ export const localKeyVersionSchema = z.int().min(1)
 /**
  * 取当前的本机密钥（POST /api/local-key，只给本人，M3-P6 设计 §3.5）：版本与原始密钥（32 字节的标准 base64）。第一次取时生成第 1 版，
  * 之后的各版在系统管理员吊销时生成。不用 GET：第一次取要写库，而登录之后的 GET 一律在只读快照里（ADR-017）。
- * 响应不缓存（所有响应都带 Cache-Control: no-store）；页面只放在内存里（M4 导入为不可导出的 CryptoKey）
+ * 响应不缓存（接口的响应都带 Cache-Control: no-store）；页面只放在内存里（M4 导入为不可导出的 CryptoKey）
  */
 export const localKeySchema = z.object({
   version: localKeyVersionSchema,

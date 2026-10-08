@@ -95,7 +95,7 @@ export function AdminUsersPage() {
   const [background, setBackground] = useState<BackgroundRefresh>()
   /**
    * 页面顶部状态区里的说明（M3-P6 设计 §3.8）：吊销本机密钥的结果。这一行的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时，
-   * 状态区不在可视区域里，明眼人在这一行看得见），这一行的变化读屏不会播报，读屏靠这里的说明。
+   * 状态区不在可视区域里，明眼人在这一行看得见；写进说明时这一行不被挤出可视区域，见状态区的 keepFocusInView），这一行的变化读屏不会播报，读屏靠这里的说明。
    * 确认的弹窗关掉之后才写（AfterConfirmed）；打开下一个确认的弹窗时清掉——说明只对刚做完的那一次，同样的说法再出现时照样是一次变化，读屏照样播报
    */
   const [done, setDone] = useState<string>()
@@ -246,9 +246,12 @@ export function AdminUsersPage() {
 
   /**
    * 吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）：所有状态的账户都能吊销，自己的也一样（说明分自己、停用的、别人的三版，见 revokeLocalKeyDescription）。
-   * 成功时按响应（吊销之后的账户）换上这一行（审查 B2）：这一行"状态"列里的本机密钥随之是新的一版，别的行不变、不刷新列表；成功的说明交回给
-   * 确认的弹窗，关掉之后写进页面顶部的状态区（读屏靠它）。这个人从没取过本机密钥时服务端原样返回，说明没有要吊销的。
-   * 吊销不动会话：自己的账户也不重新确认会话。结果未知时刷新账户列表（刷新之后这一行就是本机密钥现在的版本），用专门的说法——
+   * 成功时与别的操作（confirmThen）一样：先按响应（吊销之后的账户）换上这一行（审查 B2：这一行"状态"列里的本机密钥随之是新的一版），
+   * 再刷新账户列表（refresh：时限与"列表还在刷新"的说明都是共用的）。刷新经 refreshQueries 先取消在路上的列表请求——它们在吊销之前读的库
+   * （"加载更多"的下一页、上一个操作到了时限还在后台的刷新、结果未知之后还没回来的刷新），不取消的话回来时把这一行换回吊销之前的版本，
+   * 与状态区的说明矛盾（复验 C1）。成功的说明交回给确认的弹窗，关掉之后写进页面顶部的状态区（读屏靠它）。
+   * 这个人从没取过本机密钥时服务端原样返回，说明没有要吊销的。
+   * 吊销不动会话：自己的账户也不重新确认会话。结果未知时刷新账户列表（刷新之后这一行显示的就是现在的状态），用专门的说法——
    * 吊销每次都换一把新的（不按状态幂等），再吊销一次没有坏处。焦点回到这一行的"吊销本机密钥"（按钮一直在，打开之前有焦点的就交还给它；
    * 点按钮不给焦点的浏览器回到这一行）
    */
@@ -267,6 +270,7 @@ export function AdminUsersPage() {
       run: async () => {
         const revoked = await revokeLocalKey(user.id)
         replaceRow(revoked)
+        await refresh()
         const { localKey } = revoked
         return () => setDone(localKey === null ? text.noLocalKeyToRevoke(name) : text.localKeyRevoked(name, localKey.version))
       },
@@ -343,8 +347,9 @@ export function AdminUsersPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      {/* 操作结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报 */}
-      <StatusRegion className="rounded-lg border p-3 text-sm">{done}</StatusRegion>
+      {/* 操作结果的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），结果出来时往里填文字，读屏软件才会播报。
+          它在长列表上方：写进说明时下面的内容整体下移，keepFocusInView 把焦点所在的元素（交还焦点的那一行的按钮）滚回可视区域（复验 C7 时发现） */}
+      <StatusRegion className="rounded-lg border p-3 text-sm" keepFocusInView>{done}</StatusRegion>
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex min-w-48 flex-1 flex-col gap-2">
           <Label htmlFor={searchId}>{text.search}</Label>
@@ -376,8 +381,9 @@ export function AdminUsersPage() {
               <div className="flex flex-col items-start gap-1">
                 <Badge variant={user.status === 'active' ? 'secondary' : 'destructive'}>{messages.people.statusName(user.status)}</Badge>
                 {user.loginLock !== null && <span className="text-xs text-destructive">{loginLockText(user.loginLock)}</span>}
-                {/* 本机密钥的版本（审查 B2）：从没取过的不显示；吊销之后这一行换成新的一版 */}
-                {user.localKey !== null && <span className="text-xs text-muted-foreground">{text.localKeyVersion(user.localKey.version)}</span>}
+                {/* 本机密钥的版本（审查 B2）：从没取过的不显示；吊销之后这一行换成新的一版。不折行（与"创建时间"一格一样）：这一格很窄，
+                    原来 400 宽时折成三行、把"第 1 版"拆开，1280 宽时也折成两行（复验 C7）；表格在自己的容器里横向滚动 */}
+                {user.localKey !== null && <span className="text-xs whitespace-nowrap text-muted-foreground">{text.localKeyVersion(user.localKey.version)}</span>}
               </div>
             </TableCell>
             <TableCell className="whitespace-nowrap"><time dateTime={user.createdAt}>{formatDateTime(user.createdAt)}</time></TableCell>

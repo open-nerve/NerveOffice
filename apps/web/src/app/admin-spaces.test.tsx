@@ -6,6 +6,7 @@ import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { plainName } from '../shared/testing/people.test-support.ts'
+import { watchScrollIntoView } from '../shared/testing/scroll.test-support.ts'
 import { AMY, deferred, listPage, ROOT_ID, rowOf, session, settle, SPACES } from './admin.test-support.ts'
 import { renderApp } from './render-app.test-support.tsx'
 
@@ -437,6 +438,7 @@ describe('US-M2-04 转移停用者的文档', () => {
     fireEvent.click(submit)
     const dialog = await screen.findByRole('dialog', { name: '把 2 份文档转移到 市场部？' })
     const announced = watchAnnouncement('已把 2 份文档转移到 市场部')
+    const scrolled = watchScrollIntoView()
     fireEvent.click(within(dialog).getByRole('button', { name: '转移' }))
     await waitFor(() => expect(result).toHaveTextContent('已把 2 份文档转移到 市场部'))
     // 等确认的弹窗关掉之后才写进去（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下，焦点已经交还
@@ -444,6 +446,10 @@ describe('US-M2-04 转移停用者的文档', () => {
     await waitFor(() => expect(screen.queryByText('文档 0')).not.toBeInTheDocument())
     expect(lastBody(api, TRANSFER_KEY)).toEqual({ documentIds: [titles(3)[0]?.id, titles(3)[1]?.id], target: { type: 'team', spaceId: SPACE.id } })
     await waitFor(() => expect(document.activeElement).toBe(submit))
+    // 状态区在文档列表上方（共用的状态区开着 keepFocusInView，M3-P6 复验）：说明写进去之后把焦点交还的"转移"按最小距离滚回可视区域
+    // （真实浏览器里的位置由 E2E 核对：admin/transfer.spec.ts 长列表之后的"转移"）
+    expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
+    expect(scrolled.mock.contexts.at(-1)).toBe(submit)
   })
 
   it('转移到某人的个人空间：按名字选同事，不列出这个停用的人与操作者本人（审查 A7）；有文档已被别人转走时刷新列表、清掉不在了的选择，关闭弹窗，在转移按钮旁说明，焦点回到"转移"，不会原样重发（审查 B12，复验）', async () => {

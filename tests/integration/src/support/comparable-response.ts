@@ -1,7 +1,10 @@
 // 响应里可以比较的部分（M2-P6 复核 S2）："看不到"与"不存在"的响应要完全一致：状态码、错误体（去掉每个请求都不同的请求标识）、
 // 非易变的响应头（名称与取值）。权限矩阵的 404 格与"看不到与不存在"的逐条比较都用它。
 
-/** 每个请求都不同的响应头：日期、请求标识、按正文算出的 ETag、会话的 Cookie、连接的保持 */
+/**
+ * 每个请求都不同的响应头：日期、请求标识、会话的 Cookie、连接的保持；ETag 也不比较——M3-P6 审查 A8 之后应用不再按正文自动算 ETag，
+ * 接口里只有读取内容的 200 与 304 带修订号（这里比较的错误响应都没有它）
+ */
 const VOLATILE_HEADERS: ReadonlySet<string> = new Set(['date', 'x-request-id', 'etag', 'set-cookie', 'keep-alive', 'connection'])
 
 export interface ComparableResponse {

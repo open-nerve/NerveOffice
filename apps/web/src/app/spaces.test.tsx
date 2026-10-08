@@ -8,6 +8,7 @@ import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { watchAnnouncement } from '../shared/testing/announcement.test-support.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName } from '../shared/testing/people.test-support.ts'
+import { watchScrollIntoView } from '../shared/testing/scroll.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { deferred, settle } from './admin.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
@@ -644,6 +645,7 @@ describe('US-M2-06 成员页', () => {
     fireEvent.click(remove)
     const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
     const announced = watchAnnouncement('已经不在成员里了')
+    const scrolled = watchScrollIntoView()
     fireEvent.click(within(dialog).getByRole('button', { name: '移出' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     // 说明等弹窗关掉之后才写进状态区（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下、焦点已经交还。说明里的人名同样用 PersonName（M2-P6 复核 M2）
@@ -657,6 +659,10 @@ describe('US-M2-06 成员页', () => {
     expect(screen.queryByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })).toBeNull()
     expect(screen.getByRole('button', { name: `移出 ${plainName('艾米', 'amy')}` })).toBeInTheDocument()
     await waitFor(() => expect(document.activeElement).toBe(membersTitle()))
+    // 状态区在成员表上方（共用的状态区开着 keepFocusInView，M3-P6 复验）：说明写进去之后把焦点所在的元素（这里是页面的标题）
+    // 按最小距离滚回可视区域。标题在状态区上方，真实浏览器里不会被挤动，E2E 认不出接没接上，这里核对接线
+    expect(scrolled).toHaveBeenLastCalledWith({ block: 'nearest' })
+    expect(scrolled.mock.contexts.at(-1)).toBe(membersTitle())
     expect(api.requests.filter(request => request.key === memberKey('DELETE', CAT))).toHaveLength(1)
 
     // 下一次打开确认的弹窗时，说明清掉

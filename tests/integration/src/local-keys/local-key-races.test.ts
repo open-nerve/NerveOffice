@@ -23,7 +23,7 @@ import { startTestApp, TEST_LOCAL_KEYS_MASTER_KEY } from '../support/api-app.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
-import { currentMaterialOf, fetchLocalKey, localKeyMomentsOf, localKeyRowsOf, revokeLocalKey, takeLocalKey, unwrapLocalKey, wrapLocalKey } from '../support/local-keys.ts'
+import { currentMaterialOf, expectMonotonicTimeline, fetchLocalKey, localKeyMomentsOf, localKeyRowsOf, revokeLocalKey, takeLocalKey, unwrapLocalKey, wrapLocalKey } from '../support/local-keys.ts'
 import { asUser, login, SESSION_COOKIE, sessionSetCookie } from '../support/session-client.ts'
 
 let database: TestDatabase
@@ -133,22 +133,6 @@ async function revokedTo(response: Response): Promise<number | undefined> {
   return parseExact(adminUserSchema, await response.json()).localKey?.version
 }
 
-/**
- * 时间线（审查 A1）：每一版吊销的时刻不早于它的生成，下一版生成于上一版被吊销的那一刻；只有最后一版是当前的。
- * 按库里带微秒的文本比较（写法固定，字符串的先后就是时间的先后）
- */
-async function expectMonotonicTimeline(userId: string, versions: number): Promise<void> {
-  const moments = await localKeyMomentsOf(database, userId)
-  expect(moments.map(moment => [moment.version, moment.revokedAt === null])).toEqual(Array.from({ length: versions }, (_, index) => [index + 1, index === versions - 1]))
-  for (const [index, moment] of moments.entries()) {
-    const next = moments[index + 1]
-    if (next === undefined)
-      continue
-    expect((moment.revokedAt ?? '') >= moment.createdAt, `第 ${moment.version} 版吊销的时刻早于它的生成`).toBe(true)
-    expect(next.createdAt, `第 ${next.version} 版不是生成于第 ${moment.version} 版被吊销的那一刻`).toBe(moment.revokedAt)
-  }
-}
-
 describe('第一次取用的并发', () => {
   it('同一个人 8 次并发的第一次取用（同一次登录与另一台设备上的登录交替）：拿到的完全相同，都是第 1 版，库里只有一行', async () => {
     const { account, session } = await person()
@@ -255,7 +239,7 @@ describe('吊销的并发', () => {
     }))
     expect(versions.toSorted()).toEqual([2, 3])
     expect((await localKeyRowsOf(database, account.id)).map(row => [row.version, row.revokedAt === null])).toEqual([[1, false], [2, false], [3, true]])
-    await expectMonotonicTimeline(account.id, 3)
+    await expectMonotonicTimeline(database, account.id, 3)
     const audits = await revocationAuditsOf(account.id)
     expect(audits.map(audit => audit.details)).toEqual([{ version: 1 }, { version: 2 }])
     expect(audits.map(audit => audit.actor_id).toSorted()).toEqual([root.id, other.id].toSorted())
@@ -271,7 +255,7 @@ describe('吊销的并发', () => {
     })
     expect(laterVersion).toBe(2)
     expect(await revokedTo(earlier)).toBe(3)
-    await expectMonotonicTimeline(account.id, 3)
+    await expectMonotonicTimeline(database, account.id, 3)
     // 先做完的是后开始的那位管理员：他吊销第 1 版，先开始的吊销第 2 版
     const audits = await revocationAuditsOf(account.id)
     const byVersion = new Map(audits.map(audit => [JSON.stringify(audit.details), audit]))
@@ -296,7 +280,7 @@ describe('吊销的并发', () => {
     })
     expect(taken).toBe(1)
     expect(await revokedTo(response)).toBe(2)
-    await expectMonotonicTimeline(account.id, 2)
+    await expectMonotonicTimeline(database, account.id, 2)
     const audits = await revocationAuditsOf(account.id)
     expect(audits.map(audit => audit.details)).toEqual([{ version: 1 }])
     // 前提：吊销的事务早于第 1 版的生成开始（审计的时刻是吊销的事务开始的时刻）

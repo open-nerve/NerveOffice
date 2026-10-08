@@ -1,11 +1,12 @@
 // 停用者文档的转移（M2-P2，US-M2-04）：系统管理员停用账户之后，在转移页只看得到标题，选文档与目标团队空间，确认之后转移；
 // 结果的说明等确认框关掉、焦点交还之后才写进状态区，写进去的那一刻不在 aria-hidden 之下，读屏读得到（M2-P5 复验 S1，support/status-writes.ts）；
 // 空间的成员随即能打开这些文档。系统管理员打不开停用者的文档。
-import { createDocument, createTeamSpace, createUser } from '../../support/database.ts'
+// 长列表之后转移：说明写进列表上方的状态区时下面的内容整体下移，焦点交还的"转移"由状态区的 keepFocusInView 滚回可视区域（M3-P6 复验）。
+import { createDocument, createDocuments, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { searchList } from '../../support/list-search.ts'
 import { shownName } from '../../support/people.ts'
-import { loginThroughApi } from '../../support/session.ts'
+import { actAs, loginThroughApi } from '../../support/session.ts'
 import { expectWrittenAfterClose, recordStatusWrites, statusWrites } from '../../support/status-writes.ts'
 
 test.describe('US-M2-04 停用者文档的转移', () => {
@@ -71,5 +72,29 @@ test.describe('US-M2-04 停用者文档的转移', () => {
     await anotherDevice.goto(`/spaces/${space.id}`)
     await anotherDevice.getByRole('link', { name: /交接清单/ }).click()
     await expect(anotherDevice.getByRole('heading', { name: '交接清单' })).toBeVisible()
+  })
+
+  test('长列表之后用键盘转移：结果的说明写进列表上方的状态区之后，焦点交还的"转移"仍整个在可视区域里（状态区空的时候不占位置，写进说明时下面的内容整体下移，M3-P6 复验）', async ({ page }) => {
+    const admin = await createUser('trlong-admin', '管理员', { systemRole: 'admin' })
+    const leaver = await createUser('trlong-leaver', '离职的同事')
+    const space = await createTeamSpace('长列表的去处', admin)
+    // 一长串文档："转移"在页面最下面，用键盘走到它时页面滚到底
+    await createDocuments(leaver, '旧文档', 25)
+    await loginThroughApi(page, admin)
+    await actAs(page, 'POST', `/api/admin/users/${leaver.id}/disable`)
+    await page.goto(`/admin/users/${leaver.id}/documents`)
+    await expect(page.getByRole('table', { name: '个人空间里的文档' }).getByRole('row')).toHaveCount(26)
+    await page.getByLabel('选择 旧文档 1', { exact: true }).check()
+    await page.getByLabel('目标团队空间', { exact: true }).fill(space.name)
+    await page.getByRole('list', { name: '找到的团队空间', exact: true }).getByRole('button', { name: space.name, exact: true }).click()
+    const submit = page.getByRole('button', { name: '转移', exact: true })
+    await submit.focus()
+    await page.keyboard.press('Enter')
+    const confirm = page.getByRole('dialog', { name: `把 1 份文档转移到 ${space.name}？` })
+    await confirm.getByRole('button', { name: '转移', exact: true }).click()
+    await expect(confirm).toHaveCount(0)
+    await expect(page.getByRole('status').filter({ hasText: '已把 1 份文档转移到' })).toHaveText(`已把 1 份文档转移到 ${space.name}`)
+    await expect(submit).toBeFocused()
+    await expect(submit).toBeInViewport({ ratio: 1 })
   })
 })

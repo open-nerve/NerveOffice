@@ -364,8 +364,9 @@ function MembersTable({ spaceId, list, selfId, focusTitle }: MembersTableProps) 
 
   return (
     <div>
-      {/* 表格上方的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填文字，读屏软件才会播报 */}
-      <StatusRegion className="mb-4 rounded-lg border p-3 text-sm">{notice}</StatusRegion>
+      {/* 表格上方的说明：共用的状态区，一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填文字，读屏软件才会播报。
+          它在成员表上方：写进说明时下面的内容整体下移，keepFocusInView 把焦点所在的元素滚回可视区域（与账户页、转移页相同，M3-P6 复验） */}
+      <StatusRegion className="mb-4 rounded-lg border p-3 text-sm" keepFocusInView>{notice}</StatusRegion>
       {list.items.length === 0
         ? <p className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">{text.empty}</p>
         : (
