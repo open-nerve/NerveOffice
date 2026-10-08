@@ -2,13 +2,14 @@
 // 这里按当时的结构写入有代表性的数据——每个审计动作、目标类型与来源各一条，会话的每个撤销原因，邀请、重置与限流的行，
 // 团队空间（全员可见的、归档的）与成员、写入代次不为 0 的文档，10 层文件夹、两种删除单元与"文件夹的删除单元里还有单独删过的子孙"，
 // 单独授权（M2-P5 起），编辑租约（M3-P1 起：一个有效的、一个明确结束的），保存协议的信封与回执（M3-P3 起：内容哈希、资源名、
-// 客户端构建、"公式待更新"、一条回执），交接规则的列（M3-P5 起：待回应与被谢绝的请求、交出之后的保留、本人与强制接管的标记）——
+// 客户端构建、"公式待更新"、一条回执），交接规则的列（M3-P5 起：待回应与被谢绝的请求、交出之后的保留、本人与强制接管的标记），
+// 本机密钥（M3-P6 起：吊销过一次的人、只有当前一把的人）——
 // 迁移到最新之后核对：每张表的行数不变、约束全部已验证、
 // 只由服务保证的不变量都成立，迁移之前的删除单元能经接口恢复与永久删除，迁移之前建的文件夹原样重发当初的新建请求是重放
 // （0021 在 SQL 里回填的请求摘要与服务算的一致，M2 Codex 评审 CX6），迁移之前的文档能经接口保存（M3-P3：存量没有内容哈希与资源名，
 // 第一次保存照常加一个修订、补上它们，之后内容相同的保存不加修订号）。
 //
-// 基准是每个阶段结束时的最后一个迁移（13 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是每个阶段结束时的最后一个迁移（14 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -49,10 +50,12 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M3-P3 结束', '0024_m3_p3_save_protocol'],
   // 租约行上有待回应与被谢绝的请求、交出之后的保留与接管标记，审计里有强制接管的库迁到以后的（M3-P4 没有迁移）
   ['M3-P5 结束', '0025_m3_p5_handover'],
+  // M3 的最后一个迁移（v0.1-m3）：有本机密钥（吊销过的、当前的）、审计里有吊销本机密钥的库迁到以后的
+  ['M3 结束（v0.1-m3）', '0026_m3_p6_local_keys'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
-const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'document_save_receipts', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles']
+const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'document_save_receipts', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles', 'user_local_keys']
 
 const PASSWORD = 'correct horse battery staple'
 
@@ -206,6 +209,18 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
   await client.query('INSERT INTO auth_login_throttles (key_hash, failures, window_started_at, locked_until) VALUES (sha256(\'k\'), 0, now(), NULL)')
   if (at('0015_m2_p6_login_throttle_accounts'))
     await client.query('INSERT INTO auth_login_throttles (key_hash, failures, window_started_at, account_hash) VALUES (sha256(\'k2\'), 3, now(), sha256(\'acct\'))')
+
+  // 本机密钥（M3-P6）：艾米吊销过一次（第 1 版的密钥材料已擦掉，第 2 版是当前的），根账户只有当前的第 1 版。
+  // 包装结果是占位的字节：迁移不解包，只核对行与约束
+  if (at('0026_m3_p6_local_keys')) {
+    await client.query(
+      `INSERT INTO user_local_keys (user_id, version, master_key_id, wrapped_key, created_at, revoked_at)
+       VALUES ($1, 1, NULL, NULL, now() - interval '1 day', now() - interval '1 hour'),
+              ($1, 2, $3, $4, now() - interval '1 hour', NULL),
+              ($2, 1, $3, $4, now() - interval '2 days', NULL)`,
+      [amy, root, Buffer.alloc(16, 1), Buffer.alloc(60, 2)],
+    )
+  }
 
   if (!at('0009_m2_team_spaces'))
     return { amy, personalDocument }
