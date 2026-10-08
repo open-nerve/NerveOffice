@@ -78,7 +78,7 @@ apps/api/src/
   cli/            迁移命令 migrate.ts、初始化管理员 init-admin.ts、运维的重置链接 reset-link.ts（M2-P1）
 ```
 
-**请求管线**（`app/configure-http.ts`，顺序一次写定）。管线之前的应用设置：信任代理的跳数取自配置；不发 `X-Powered-By`；不要 Express 按响应体自动算的 ETag（M3-P6 审查 A8：所有响应都 `no-store`，ETag 没有用处；响应体里有原始密钥、租约令牌、一次性链接时，它就是这些机密的稳定指纹）——读取内容的 ETag 是修订号，由那个接口自己写，静态文件的由 `express.static` 自己管，都不受影响：
+**请求管线**（`app/configure-http.ts`，顺序一次写定）。管线之前的应用设置：信任代理的跳数取自配置；不发 `X-Powered-By`；不要 Express 按响应体自动算的 ETag（M3-P6 审查 A8：接口的响应都是 `no-store`，ETag 没有用处；响应体里有原始密钥、租约令牌、一次性链接时，它就是这些机密的稳定指纹）——读取内容的 ETag 是修订号，由那个接口自己写，静态文件的由 `express.static` 自己管，都不受影响：
 
 | 顺序 | 环节 |
 |---|---|
