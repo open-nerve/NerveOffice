@@ -152,6 +152,14 @@ export function statusRegion(page: Page): Locator {
   return chrome(page).locator('[data-slot="status-region"]')
 }
 
+/** 阅读时页头里的一行静态说明（M3-P6，A14：已知限制"阅读者看到的是已保存的版本"在产品中可见） */
+export const READING_NOTE = '阅读时显示的是已保存的版本，不是实时内容'
+
+/** 页头里的那一行（普通的文字，不在读屏状态区里；只在阅读时有） */
+export function readingNote(page: Page): Locator {
+  return chrome(page).getByRole('banner').getByText(READING_NOTE, { exact: true })
+}
+
 /** 页头里的"退出编辑"（编辑时，M3-P2） */
 export function exitEditButton(page: Page): Locator {
   return chrome(page).getByRole('banner').getByRole('button', { name: '退出编辑', exact: true })
