@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { DOCUMENT_TYPES } from '../documents/documents.ts'
 import { uuidSchema } from '../ids/ids.ts'
-import { localKeySummarySchema } from '../local-keys/local-keys.ts'
+import { localKeySummarySchema, localKeyVersionSchema } from '../local-keys/local-keys.ts'
 import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, spaceNameSchema } from '../spaces/spaces.ts'
 import { displayNameSchema, USER_SEARCH_QUERY_MAX_LENGTH, USER_STATUSES, USER_SYSTEM_ROLES, usernameSchema, userSummarySchema } from '../users/users.ts'
 
@@ -34,6 +34,22 @@ export const adminUserSchema = z.object({
 })
 
 export type AdminUser = z.infer<typeof adminUserSchema>
+
+/**
+ * 吊销本机密钥的响应（POST /api/admin/users/{id}/local-key/revoke，M3-P6 设计 §3.5），分成两部分（Codex 评审 CX3）：
+ * - revoked：这一次的结果——吊销了哪一版（version，与审计的明细同一个数）、随即换成了哪一版（nextVersion）。吊销的那一刻这个人还没有
+ *   本机密钥（从没取过）时为 null：什么也没吊销，也不记审计。页面按它说这一次做了什么；
+ * - account：账户的现状，与别的账户操作一样在同一个事务里、提交之前读的，页面按它换上这一行。
+ * 两部分不一定"对得上"：没有可吊销的、而本人恰好在这之后第一次取用并提交了时，结果为 null，现状却已经有第 1 版——这一次做了什么只能看结果，
+ * 不能从现状推断（原来只回现状，页面按"现状里有没有本机密钥"推断，在这种交错下说成"已吊销、换成了第 1 版"）。
+ * M3 还没有上线，原来的响应形状（只有 AdminUser）不再保留；只有绝不带密钥材料这一条不变
+ */
+export const revokeLocalKeyResponseSchema = z.object({
+  revoked: z.object({ version: localKeyVersionSchema, nextVersion: localKeyVersionSchema }).nullable(),
+  account: adminUserSchema,
+})
+
+export type RevokeLocalKeyResponse = z.infer<typeof revokeLocalKeyResponseSchema>
 
 /** 账户列表（GET /api/admin/users）：含停用的账户，可按关键词与状态过滤，按登录名排序分页 */
 export const adminUserListQuerySchema = z.strictObject({

@@ -1,10 +1,11 @@
 // 管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）。账户页每一行都有（所有状态的账户）；确认框说清楚本机密钥的用途与吊销的后果，
 // 不说"没同步的修改都会作废"（A14）、正面说正在编辑的页面照常保存（审查 B7），自己、别人、停用的各一版（审查 B1），逐字核对；
-// 成功之后这一行"状态"列里本机密钥的版本按响应换成新的一版（审查 B2），随后与别的操作一样刷新列表——先取消在路上的列表请求，
+// 成功之后这一行"状态"列里本机密钥的版本按响应里账户的现状换成新的一版（审查 B2），随后与别的操作一样刷新列表——先取消在路上的列表请求，
 // 它们回来时不会把这一行换回吊销之前的版本（复验 C1）；说明等确认框关掉之后写进页面顶部的状态区；结果未知时刷新列表、
-// 用专门的说法（再吊销一次没有坏处）；焦点回到这一行的按钮；吊销不动会话，自己的账户也不重新确认。接口用假的 fetch，
+// 用专门的说法（再吊销一次没有坏处）；焦点回到这一行的按钮；吊销不动会话，自己的账户也不重新确认。说法按响应里这一次的结果
+// （吊销了哪一版、换成了哪一版；没有可吊销的），不从账户的现状推断（Codex 评审 CX3）。接口用假的 fetch，
 // 账户与本机密钥的版本存在有状态的假服务端里（keyServer）：刷新回来的是服务端现在的样子。
-import type { AdminUser } from '@nerve-office/contracts'
+import type { AdminUser, RevokeLocalKeyResponse } from '@nerve-office/contracts'
 import type { Handler } from '../shared/testing/fake-api.test-support.ts'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -31,6 +32,11 @@ function withKey(user: AdminUser, version: number): AdminUser {
   return { ...user, localKey: { version, createdAt: '2026-10-08T02:00:00.000Z' } }
 }
 
+/** 吊销的响应：这一次的结果（没有可吊销的为 null）与账户的现状 */
+function revokeResponse(account: AdminUser, revoked: RevokeLocalKeyResponse['revoked']): Response {
+  return json(200, { revoked, account } satisfies RevokeLocalKeyResponse)
+}
+
 function count(api: ReturnType<typeof installFakeApi>, key: string): number {
   return api.requests.filter(request => request.key === key).length
 }
@@ -41,7 +47,8 @@ function admin(users: readonly AdminUser[], handlers: Parameters<typeof installF
 
 /**
  * 有状态的假服务端（复验 C1）：账户按 id 存着，列表按收到请求那一刻的样子回答；吊销把这个人当前的本机密钥换成下一版
- * （从没取过的原样），交回吊销之后的账户。吊销之后的刷新回来的就是吊销之后的样子
+ * （从没取过的原样），交回这一次的结果（吊销了哪一版、换成了哪一版；没有可吊销的为 null）与吊销之后的账户（Codex 评审 CX3）。
+ * 吊销之后的刷新回来的就是吊销之后的样子
  */
 function keyServer(initial: readonly AdminUser[]) {
   const users = new Map(initial.map(user => [user.id, user]))
@@ -56,8 +63,17 @@ function keyServer(initial: readonly AdminUser[]) {
   return {
     /** 现在的账户列表（一页；nextCursor 不为空时还有下一页） */
     list: (nextCursor: string | null = null): Response => json(200, listPage([...users.values()], nextCursor)),
-    /** 吊销：版本加一，交回吊销之后的账户 */
-    revoke: (id: string): Response => json(200, change(id, user => (user.localKey === null ? user : withKey(user, user.localKey.version + 1)))),
+    /** 吊销：版本加一，交回这一次的结果与吊销之后的账户 */
+    revoke: (id: string): Response => {
+      const before = users.get(id)?.localKey ?? null
+      const account = change(id, user => (user.localKey === null ? user : withKey(user, user.localKey.version + 1)))
+      return revokeResponse(account, before === null ? null : { version: before.version, nextVersion: before.version + 1 })
+    },
+    /**
+     * 吊销与他的第一次取用交错（Codex 评审 CX3）：吊销没找到当前的那一把（他从没取过）、读现状之前他第一次取用并提交了——
+     * 这一次的结果为空，现状（之后的列表也是）是第 1 版
+     */
+    revokeRacingFirstFetch: (id: string): Response => revokeResponse(change(id, user => withKey(user, 1)), null),
     /** 别的写操作（例如启用）：改这个账户，交回改了之后的 */
     update: (id: string, update: (user: AdminUser) => AdminUser): Response => json(200, change(id, update)),
   }
@@ -155,7 +171,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     const scrolled = watchScrollIntoView()
     confirmIn(dialog)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥第 1 版，换成了第 2 版。`))
     // 等确认的弹窗关掉之后才写进去（M2-P5 复验 S1）：写进去的那一刻页面不在 aria-hidden 之下，焦点已经交还
     expect(announced()).toEqual({ ariaHidden: false, focusReturned: true })
     await waitFor(() => expect(document.activeElement).toBe(button))
@@ -184,7 +200,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(dialog).toHaveAccessibleDescription('本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响；你正在编辑的页面也不受影响，修改照常保存；你的登录也不会退出。设备可能落在别人手里时，请同时为自己生成重置链接（会退出你在所有地方的登录）。')
     expect(within(dialog).getByRole('button', { name: '吊销本机密钥' })).toHaveAttribute('data-variant', 'destructive')
     confirmIn(dialog)
-    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${ROOT_NAME} 的本机密钥，换成了第 4 版。`))
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${ROOT_NAME} 的本机密钥第 3 版，换成了第 4 版。`))
     expect(keyLine(row)).toHaveTextContent('本机密钥第 4 版')
     await waitFor(() => expect(document.activeElement).toBe(button))
     expect(count(api, REVOKE_ROOT)).toBe(1)
@@ -200,16 +216,16 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     ;(document.activeElement as HTMLElement | null)?.blur()
     fireEvent.click(within(row).getByRole('button', { name: `吊销本机密钥 ${AMY_NAME}` }))
     confirmIn(await screen.findByRole('dialog'))
-    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥第 1 版，换成了第 2 版。`))
     await waitFor(() => expect(document.activeElement).toBe(row))
     // 状态区撑开之后，滚回可视区域的是焦点所在的这一行
     act(() => resize(statusRegion(), 46))
     expect(scrolled.mock.contexts.at(-1)).toBe(row)
   })
 
-  it('停用的账户也能吊销：说明另一版——登录都已退出、重新启用之后旧密码照旧可用，启用之后再生成重置链接（这时这一行没有"生成重置链接"）；启用的确认框里同样提醒。这个人从没取过本机密钥：服务端原样返回，状态区说明没有要吊销的', async () => {
+  it('停用的账户也能吊销：说明另一版——登录都已退出、重新启用之后旧密码照旧可用，启用之后再生成重置链接（这时这一行没有"生成重置链接"）；启用的确认框里同样提醒。这个人从没取过本机密钥：这一次的结果为空，状态区如实说吊销的那一刻他还没有本机密钥、没有吊销任何密钥', async () => {
     const disabled: AdminUser = { ...AMY, status: 'disabled' }
-    const api = admin([disabled], { [REVOKE_AMY]: () => json(200, disabled) })
+    const api = admin([disabled], { [REVOKE_AMY]: () => revokeResponse(disabled, null) })
     renderApp('/admin/users')
     const row = await rowOf('amy')
     expect(within(row).queryByRole('button', { name: `生成重置链接 ${AMY_NAME}` })).toBeNull()
@@ -219,7 +235,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(dialog).toHaveAccessibleName(`吊销 ${AMY_NAME} 的本机密钥？`)
     expect(dialog).toHaveAccessibleDescription('本机密钥用来加密保存在浏览器里、还没同步的草稿，吊销之后用旧密钥加密的草稿都无法再解开；已经保存到云端的文档不受影响。这个账户已停用，他在所有地方的登录都已退出；重新启用之后旧密码照旧可用——设备可能落在别人手里时，启用之后请立即为他生成重置链接。')
     confirmIn(dialog)
-    await waitFor(() => expect(statusRegion()).toHaveTextContent(`${AMY_NAME} 还没有本机密钥，没有要吊销的。`))
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`吊销的那一刻 ${AMY_NAME} 还没有本机密钥，没有吊销任何密钥。`))
     expect(count(api, REVOKE_AMY)).toBe(1)
     expect(keyLine(row)).toBeNull()
 
@@ -252,7 +268,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(statusRegion()).toBeEmptyDOMElement()
     confirmIn(dialog)
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 3 版。`))
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥第 2 版，换成了第 3 版。`))
     expect(keyLine(row)).toHaveTextContent('本机密钥第 3 版')
     await waitFor(() => expect(document.activeElement).toBe(button))
     expect(count(api, REVOKE_AMY)).toBe(2)
@@ -276,7 +292,7 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
   })
 
   it('从没取过本机密钥的人，吊销的结果未知、列表刷新好了：说"这一行显示的是现在的状态"（这一行不显示版本），不说"本机密钥现在的版本"，也不说再吊销一次"会再换一把新的密钥"——他没有密钥可换（复验 C8）', async () => {
-    const api = admin([AMY], { [REVOKE_AMY]: inTurn(() => networkFailure(), () => json(200, AMY)) })
+    const api = admin([AMY], { [REVOKE_AMY]: inTurn(() => networkFailure(), () => revokeResponse(AMY, null)) })
     renderApp('/admin/users')
     const row = await rowOf('amy')
     const { dialog } = await openRevoke(row, AMY_NAME)
@@ -286,9 +302,24 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
     expect(alert.textContent).toBe('没能确认是否已经吊销（网络连接失败，请检查网络后重试）。列表已刷新：这一行显示的是现在的状态。再吊销一次没有坏处：有本机密钥的话会再换一把新的，之前的都已作废。')
     expect(count(api, USERS)).toBe(listed + 1)
     expect(keyLine(row)).toBeNull()
-    // 照说明再吊销一次：没有要吊销的
+    // 照说明再吊销一次：没有可吊销的
     confirmIn(dialog)
-    await waitFor(() => expect(statusRegion()).toHaveTextContent(`${AMY_NAME} 还没有本机密钥，没有要吊销的。`))
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`吊销的那一刻 ${AMY_NAME} 还没有本机密钥，没有吊销任何密钥。`))
+  })
+
+  it('Codex 评审 CX3：这一次的结果为空、现状里却已经有第 1 版（吊销没找到当前的那一把之后、读现状之前，他第一次取用并提交了）——状态区按结果如实说吊销的那一刻他还没有本机密钥、没有吊销任何密钥，不说"已吊销""换成了第 1 版"；这一行按现状显示第 1 版', async () => {
+    const server = keyServer([AMY])
+    admin([], { [USERS]: () => server.list(), [REVOKE_AMY]: () => server.revokeRacingFirstFetch(AMY.id) })
+    renderApp('/admin/users')
+    const row = await rowOf('amy')
+    expect(keyLine(row)).toBeNull()
+    const { button, dialog } = await openRevoke(row, AMY_NAME)
+    confirmIn(dialog)
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`吊销的那一刻 ${AMY_NAME} 还没有本机密钥，没有吊销任何密钥。`))
+    expect(statusRegion()).not.toHaveTextContent('已吊销')
+    expect(statusRegion()).not.toHaveTextContent('换成了')
+    expect(keyLine(row)).toHaveTextContent('本机密钥第 1 版')
+    await waitFor(() => expect(document.activeElement).toBe(button))
   })
 
   it('账户列表的"状态"列：取过本机密钥的人显示当前是第几版（停用的也一样），从没取过的不显示；与登录锁定的说明一样是这一格里的一行小字', async () => {
@@ -314,8 +345,8 @@ describe('管理界面：吊销本机密钥（M3-P6 设计 §3.8，US-M3-17）',
   })
 
   it('打开下一个确认的弹窗（别的操作也一样）时清掉状态区里上一次的说明：同样的说法再出现时照样是一次变化，读屏照样播报', async () => {
-    const nothing = `${AMY_NAME} 还没有本机密钥，没有要吊销的。`
-    admin([AMY], { [REVOKE_AMY]: () => json(200, AMY) })
+    const nothing = `吊销的那一刻 ${AMY_NAME} 还没有本机密钥，没有吊销任何密钥。`
+    admin([AMY], { [REVOKE_AMY]: () => revokeResponse(AMY, null) })
     renderApp('/admin/users')
     const row = await rowOf('amy')
     confirmIn((await openRevoke(row, AMY_NAME)).dialog)
@@ -370,7 +401,7 @@ describe('吊销成功之后接着刷新列表：在路上的列表请求回来�
       expect(keyLine(row)).toHaveTextContent('本机密钥第 2 版')
       await act(async () => vi.advanceTimersByTimeAsync(2_000))
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-      await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
+      await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥第 1 版，换成了第 2 版。`))
       expect(keyLine(row)).toHaveTextContent('本机密钥第 2 版')
       await waitFor(() => expect(document.activeElement).toBe(button))
       const line = screen.getByText('列表还在刷新，显示的可能还是之前的，刷新好了会自动更新。')
@@ -397,7 +428,7 @@ describe('吊销成功之后接着刷新列表：在路上的列表请求回来�
     fireEvent.click(screen.getByRole('button', { name: '加载更多' }))
     await waitFor(() => expect(nextPage.sent()).toBe(true))
     confirmIn((await openRevoke(row, AMY_NAME)).dialog)
-    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
+    await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥第 1 版，换成了第 2 版。`))
     expect(keyLine(await rowOf('amy'))).toHaveTextContent('本机密钥第 2 版')
     await nextPage.deliver()
     expect(keyLine(await rowOf('amy'))).toHaveTextContent('本机密钥第 2 版')
@@ -430,7 +461,7 @@ describe('吊销成功之后接着刷新列表：在路上的列表请求回来�
       expect(screen.getByText('列表还在刷新，显示的可能还是之前的，刷新好了会自动更新。')).toBeInTheDocument()
 
       confirmIn((await openRevoke(await rowOf('amy'), AMY_NAME)).dialog)
-      await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 2 版。`))
+      await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥第 1 版，换成了第 2 版。`))
       expect(keyLine(await rowOf('amy'))).toHaveTextContent('本机密钥第 2 版')
       await lateRefresh.deliver()
       expect(keyLine(await rowOf('amy'))).toHaveTextContent('本机密钥第 2 版')
@@ -467,7 +498,7 @@ describe('吊销成功之后接着刷新列表：在路上的列表请求回来�
       // 照说明再吊销一次
       confirmIn(dialog)
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-      await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥，换成了第 3 版。`))
+      await waitFor(() => expect(statusRegion()).toHaveTextContent(`已吊销 ${AMY_NAME} 的本机密钥第 2 版，换成了第 3 版。`))
       expect(keyLine(await rowOf('amy'))).toHaveTextContent('本机密钥第 3 版')
       await lateRefresh.deliver()
       expect(keyLine(await rowOf('amy'))).toHaveTextContent('本机密钥第 3 版')

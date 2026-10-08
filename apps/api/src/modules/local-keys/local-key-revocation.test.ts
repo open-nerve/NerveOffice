@@ -37,7 +37,7 @@ describe('LocalKeyRevocation', () => {
     const { ring, repository, revocation } = setup()
     const original = randomBytes(32)
     repository.seedCurrent(ring, AMY, 1, original)
-    expect(await revocation.revoke(AMY, TRANSACTION)).toEqual({ revokedVersion: 1, currentVersion: 2 })
+    expect(await revocation.revoke(AMY, TRANSACTION)).toEqual({ revokedVersion: 1, nextVersion: 2 })
     expect(repository.calls).toEqual(['revokeCurrent', 'insertNext'])
     expect(repository.revokeCurrent).toHaveBeenCalledWith(AMY, TRANSACTION)
     const [first, second] = repository.rows
@@ -58,7 +58,7 @@ describe('LocalKeyRevocation', () => {
     const { ring, repository, revocation } = setup()
     repository.seedCurrent(ring, AMY, 1, randomBytes(32))
     await revocation.revoke(AMY, TRANSACTION)
-    expect(await revocation.revoke(AMY, TRANSACTION)).toEqual({ revokedVersion: 2, currentVersion: 3 })
+    expect(await revocation.revoke(AMY, TRANSACTION)).toEqual({ revokedVersion: 2, nextVersion: 3 })
     expect(repository.rows.map(row => [row.version, row.revokedAt === null, row.material === null])).toEqual([[1, false, true], [2, false, true], [3, true, false]])
   })
 

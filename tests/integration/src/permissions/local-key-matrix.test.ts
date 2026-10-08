@@ -7,7 +7,7 @@ import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LoggedIn } from '../support/session-client.ts'
-import { adminUserSchema, errorResponseSchema, localKeySchema } from '@nerve-office/contracts'
+import { errorResponseSchema, localKeySchema, revokeLocalKeyResponseSchema } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
@@ -125,7 +125,7 @@ describe('吊销（POST /api/admin/users/{id}/local-key/revoke）× 调用者 ×
       ? await fetch(`${app.baseUrl}/api/admin/users/${targetId}/local-key/revoke`, { method: 'POST', headers: { origin: TEST_PUBLIC_ORIGIN } })
       : await revokeLocalKey(app.baseUrl, session, targetId)
     if (expected === '200')
-      expect(parseExact(adminUserSchema, await response.clone().json())).toMatchObject({ id: targetId, localKey: { version: 2 } })
+      expect(parseExact(revokeLocalKeyResponseSchema, await response.clone().json())).toMatchObject({ revoked: { version: 1, nextVersion: 2 }, account: { id: targetId, localKey: { version: 2 } } })
     expect(await outcomeOf(response)).toBe(expected)
     if (keyed !== undefined) {
       const versions = (await localKeyRowsOf(database, keyed)).map(row => [row.version, row.revokedAt === null])

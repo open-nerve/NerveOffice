@@ -1,4 +1,4 @@
-import type { AdminUser, AdminUserListQuery, AdminUserListResponse, ChangeSystemRoleRequest, IssuedPasswordReset } from '@nerve-office/contracts'
+import type { AdminUser, AdminUserListQuery, AdminUserListResponse, ChangeSystemRoleRequest, IssuedPasswordReset, RevokeLocalKeyResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import { adminUserListQuerySchema, changeSystemRoleRequestSchema, userIdSchema } from '@nerve-office/contracts'
@@ -71,8 +71,8 @@ export class AdminUsersController {
   }
 
   /**
-   * 吊销本机密钥（M3-P6 设计 §3.5，US-M3-17）：200，返回账户（本机密钥是下一版）；没有密钥时原样返回。
-   * 不带请求体；看不到与不存在的豁免同解除锁定（只给系统管理员，没有看不到的账户）
+   * 吊销本机密钥（M3-P6 设计 §3.5，US-M3-17）：200，这一次的结果（吊销了哪一版、换成了哪一版；没有可吊销的时为 null）与账户的现状
+   * （Codex 评审 CX3，contracts 的 revokeLocalKeyResponseSchema）。不带请求体；看不到与不存在的豁免同解除锁定（只给系统管理员，没有看不到的账户）
    */
   @Post(':id/local-key/revoke')
   @HttpCode(200)
@@ -80,7 +80,7 @@ export class AdminUsersController {
     @CurrentPrincipal() principal: Principal,
     @Param('id', { schema: userIdSchema }) id: string,
     @RequestOrigin() origin: HttpOrigin,
-  ): Promise<AdminUser> {
+  ): Promise<RevokeLocalKeyResponse> {
     return this.accounts.revokeLocalKey(principal, id, origin)
   }
 

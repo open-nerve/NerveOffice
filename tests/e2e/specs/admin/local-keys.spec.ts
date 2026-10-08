@@ -1,5 +1,6 @@
 // 吊销本机密钥（US-M3-17；M3-P6 设计 §3.6、§3.8）：系统管理员在账户页对某人"吊销本机密钥"——确认框说清楚本机密钥的用途与吊销的后果
-// （不说"没同步的修改都会作废"，A14；正面说正在编辑的页面照常保存，审查 B7），确认之后页面顶部的状态区说明换成了第几版（确认框关掉、焦点交还之后才写，读屏读得到），
+// （不说"没同步的修改都会作废"，A14；正面说正在编辑的页面照常保存，审查 B7），确认之后页面顶部的状态区按这一次的结果说明吊销了哪一版、换成了第几版
+// （Codex 评审 CX3：说法来自响应里这一次的结果，不从账户的现状推断；确认框关掉、焦点交还之后才写，读屏读得到），
 // 这一行"状态"列里的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时状态区不在可视区域里，明眼人看这一行；说明写进状态区、下面的内容下移之后，页面把焦点所在的按钮滚回可视区域；窄屏时它排成一行，复验 C7），
 // 焦点回到这一行的按钮；审计页按动作找得到（操作者、对象、明细里被吊销的那一版）。
 // 这个人另一台设备上正在编辑的页面经心跳得知（M3 落在协议层：心跳的响应带着他当前的版本，页面上没有可见的反应）：下一次心跳的响应里版本加一，
@@ -133,7 +134,7 @@ async function lineCountOf(text: Locator): Promise<number> {
 }
 
 test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
-  test('US-M3-17 系统管理员在账户页吊销某人的本机密钥（键盘操作）：确认框说清楚用途与后果；状态区说明换成了第几版、这一行的本机密钥随之换成新的一版、焦点回到这个按钮；审计页按动作找得到；他另一台设备上正在编辑的页面下一次心跳得知新的版本，照常编辑、保存；再取得到新的一把', async ({ page, anotherDevice }) => {
+  test('US-M3-17 系统管理员在账户页吊销某人的本机密钥（键盘操作）：确认框说清楚用途与后果；状态区说明吊销了哪一版、换成了第几版，这一行的本机密钥随之换成新的一版、焦点回到这个按钮；审计页按动作找得到；他另一台设备上正在编辑的页面下一次心跳得知新的版本，照常编辑、保存；再取得到新的一把', async ({ page, anotherDevice }) => {
     const admin = await createUser('lk-admin', '吊销的管理员', { systemRole: 'admin' })
     const owner = await createUser('lk-owner', '丢了设备的人')
     const documentId = await createDocument(owner, '设备上的表')
@@ -171,7 +172,7 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await expect(dialog).toHaveAccessibleDescription(DESCRIPTION)
     await dialog.getByRole('button', { name: '吊销本机密钥', exact: true }).click()
     await expect(dialog).toHaveCount(0)
-    const done = `已吊销 ${plainName(owner)} 的本机密钥，换成了第 2 版。`
+    const done = `已吊销 ${plainName(owner)} 的本机密钥第 1 版，换成了第 2 版。`
     await expect(page.getByRole('status').filter({ hasText: '已吊销' })).toHaveText(done)
     // 确认框开着时 Radix 把页面标为 aria-hidden：说明等它关掉、焦点交还之后才写，写进去的那一刻读屏读得到
     await expectWrittenAfterClose(page, done)
@@ -247,7 +248,7 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await expect(revoke).toBeInViewport({ ratio: 1 })
     // 前提：说明照常写进页面顶部的状态区（读屏靠它），而它这时不在可视区域里——这一行的变化才是明眼人看得见的结果
     const status = page.getByRole('status').filter({ hasText: '已吊销' })
-    await expect(status).toHaveText(`已吊销 ${plainName(owner)} 的本机密钥，换成了第 2 版。`)
+    await expect(status).toHaveText(`已吊销 ${plainName(owner)} 的本机密钥第 1 版，换成了第 2 版。`)
     await expect(status).not.toBeInViewport()
   })
 
