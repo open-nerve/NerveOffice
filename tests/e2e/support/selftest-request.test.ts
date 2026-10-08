@@ -151,6 +151,48 @@ describe('路 2：持有者被暂停时编辑权按时间到期（pausedHolderJu
     expect(pausedHolderJudgement(evidence({ report: report('paused-holder', 'lost-after-pause', null), expectSuspended: false })).problems).toEqual([])
   })
 
+  describe('页面交回 handed-over（没被暂停：空闲满 2 分钟自动交出，2026-10-08 第一次真实 Safari 运行的样子）', () => {
+    /** 盖屏之后持有者照常心跳到 124 秒，124.1 秒交出（handed_over、留给协作者）；协作者 135.74 秒续期得到 reserved、135.78 秒申请 201（没有提醒） */
+    const HANDED_STATES: readonly DocumentState[] = [
+      ...STATES.slice(0, 3),
+      state(120_000, { epoch: 1, holderId: AUTHOR, acquiredAt: -10_000, renewedAt: 120_000, requestedBy: PEER }),
+      state(124_150, { revision: 4, epoch: 1, holderId: AUTHOR, acquiredAt: -10_000, renewedAt: 120_000, endReason: 'handed_over', reservedFor: PEER }),
+      state(135_850, { revision: 4, epoch: 2, holderId: PEER, acquiredAt: 135_800, renewedAt: 135_800 }),
+    ]
+    const HANDED_REQUESTS: readonly ServerRequest[] = [
+      ...[10_000, 20_000, 30_000, 60_000, 90_000, 120_000].map(time => logged(time, 'PUT', '/edit-lease', 200, AUTHOR)),
+      logged(124_050, 'PUT', '/content', 200, AUTHOR),
+      logged(124_100, 'POST', '/edit-lease/handover', 200, AUTHOR),
+      logged(135_810, 'POST', '/edit-lease', 201, PEER),
+    ]
+    const HANDED_CALLS: readonly PeerCall[] = [
+      call(1_000, 'POST', '/request', 200, { kind: 'pending' }),
+      call(130_700, 'PUT', '/request', 200, { kind: 'pending' }),
+      call(135_740, 'PUT', '/request', 200, { kind: 'reserved', reservedUntil: '2026-10-08T01:05:00.000Z' }),
+      call(135_820, 'POST', '', 201, { token: 't', interruption: null }),
+    ]
+    const handed = (overrides: Partial<PausedHolderEvidence> = {}): PausedHolderEvidence => evidence({ report: report('paused-holder', 'handed-over', 7_700), states: HANDED_STATES, requests: HANDED_REQUESTS, calls: HANDED_CALLS, marks: { ...MARKS, grantedAt: 135_740, acquiredAt: 135_820, uncoveredAt: 137_800 }, ...overrides })
+
+    it('按这条路的要求都对：交出 200、那一代结束为 handed_over 留给协作者、续期得到 reserved、申请没有提醒；不要求停过、不要求隔一个有效期', () => {
+      const judgement = pausedHolderJudgement(handed())
+      expect(judgement.problems).toEqual([])
+      expect(judgement.evidence).toContain('盖屏之后持有者心跳 6 次、最后一次 +120000 ms')
+      expect(judgement.evidence).toContain('持有者交出 200 +124100 ms')
+      expect(judgement.evidence).toContain('持有者那一代明确结束（handed_over，+124150 ms）')
+    })
+
+    it('交出不在后端日志里、续期得到 free、申请带着提醒、那一代不是 handed_over：各自说明', () => {
+      const free = HANDED_CALLS.map(item => item.at === 135_740 ? { ...item, body: { kind: 'free' } } : item.status === 201 ? { ...item, body: { token: 't', interruption: { holder: { id: AUTHOR }, sameUser: false } } } : item)
+      const states = HANDED_STATES.map(item => item.endReason === 'handed_over' ? { ...item, endReason: null, reservedFor: null } : item)
+      expect(pausedHolderJudgement(handed({ calls: free, states, requests: HANDED_REQUESTS.filter(request => !(request.route ?? '').endsWith('/handover')) })).problems).toEqual([
+        '协作者接手之前那次续期的结果是 free（持有者交出了，应当是 reserved）',
+        '协作者申请的回答里有异常中断的提醒（持有者交出是明确结束，不该有）',
+        '持有者那一代没有明确结束、没有留给协作者（自动交出时应当是 handed_over、留给协作者）',
+        '盖屏到协作者申请之间后端收到持有者的交出 0 个（—）、释放 0 个（自动交出时应当恰好一个 200 的交出、没有释放）',
+      ])
+    })
+  })
+
   it('协作者没有接手、库里没有新一代、持有者没有交回：各自说明', () => {
     const judgement = pausedHolderJudgement(evidence({ calls: CALLS.slice(0, 2), states: STATES.slice(0, 4), marks: { ...MARKS, acquiredAt: undefined, grantedAt: undefined }, report: undefined }))
     expect(judgement.problems).toEqual(['持有者没有交回结果', '协作者没有接手（持有者那一代没有按时间到期？）', '库里没有看到持有者那一代之后的新一代', '持有者的页面隐藏期间计时器最长只停了 —（真实 Safari 里被暂停时应当不短于 30 秒）'])

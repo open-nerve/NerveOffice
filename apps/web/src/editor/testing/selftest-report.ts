@@ -71,9 +71,10 @@ export type HandoverScenario = (typeof HANDOVER_SCENARIOS)[number]
  * 请求、续期、申请）：
  * - request-waiter（路 1）：别人在编辑时这一页点"请求编辑"、在等；驱动脚本另开标签页让这一页隐藏、经接口交出——这一页的续期得知交给了它，
  *   在后台停在"交给了我"（granted）、不申请；遮住它的标签页关掉、回到前台之后才进入编辑（普通申请），之后写一格、存上；
- * - paused-holder（路 2）：这一页进入编辑、写一格并存上；驱动脚本盖住屏幕（真实 Safari 约 50 秒后暂停整页），这一页隐藏的那一刻上传第二格、
- *   之后再写第三格（只在本页）；另一方经接口请求编辑、续期——这一页被暂停，空闲满 2 分钟的自动交出走不到，编辑权按时间到期，另一方接手；
- *   移走盖屏之后这一页得知失去编辑权（另一方在编辑）、第三格另存为副本
+ * - paused-holder（路 2）：这一页进入编辑、写一格并存上；驱动脚本盖住屏幕，这一页隐藏的那一刻上传第二格、之后再写第三格（只在本页）；另一方经接口
+ *   请求编辑、续期——这一页被暂停时，空闲满 2 分钟的自动交出走不到，编辑权按时间到期，另一方接手，移走盖屏之后这一页得知失去编辑权（另一方在编辑）、
+ *   第三格另存为副本（lost-after-pause）；没被暂停时空闲满 2 分钟先保存再自动交出（handed-over）。真实 Safari 走哪一条正是要复核的
+ *   （探索 B 的空白页约 50 秒就被暂停；2026-10-08 本机 Safari 27.0 上编辑器页没有被暂停）
  */
 export const REQUEST_SCENARIOS = ['request-waiter', 'paused-holder'] as const
 
@@ -202,7 +203,7 @@ export interface SelftestReport {
    * 交接的场景（M3-P5）走了哪条路：takeover-taker 是 answered（A 回应了、先保存再交出）或 silent（3 秒没有回应、本人接管并抢锁）；
    * takeover-holder 是 handed-over（交出、回到阅读）或 lost（失去编辑权）；refresh-save 是 committed（那次保存提交了才接手）或 expired（等满 30 秒）。
    * 请求编辑的两条路（M3-P6）：request-waiter 是 entered-on-return（在后台停在交给了我、回到前台才进入）或别的（./selftest-request.ts 的 WaiterPath）；
-   * paused-holder 是 lost-after-pause（回到前台才得知失去编辑权）或别的（PausedHolderPath）
+   * paused-holder 是 lost-after-pause（被暂停，回到前台才得知失去编辑权）、handed-over（没被暂停，空闲满 2 分钟自动交出）或别的（PausedHolderPath）
    */
   readonly path?: string | undefined
   /** 交接的场景：时间线（交接日志与场景的观察） */

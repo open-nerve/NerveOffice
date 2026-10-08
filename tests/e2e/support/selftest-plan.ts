@@ -175,8 +175,9 @@ function formulaKey(sheetId: string, cell: string): string {
 const SWITCH_TIMINGS = ['switch.enter', 'switch.exit'] as const
 
 /**
- * 交接的场景（M3-P5）交回的路：每个场景认得的几种（selftest-report.ts 的 path）。请求编辑的两条路（M3-P6）只认设计的那一条：页面自己判读出别的路时
- * 说明哪里不对（apps/web/src/editor/testing/selftest-request.ts 的 WaiterPath、PausedHolderPath）
+ * 交接的场景（M3-P5）交回的路：每个场景认得的几种（selftest-report.ts 的 path）。请求编辑的两条路（M3-P6）：请求方只认设计的那一条；被盖屏的持有者
+ * 两条都认——被暂停了走到到期（lost-after-pause），或者没被暂停、空闲满 2 分钟自动交出（handed-over：真实 Safari 怎样对待被挡住的编辑器页正是要复核的）。
+ * 页面自己判读出别的路时说明哪里不对（apps/web/src/editor/testing/selftest-request.ts 的 WaiterPath、PausedHolderPath）
  */
 export const HANDOVER_PATHS: Readonly<Partial<Record<SelftestScenario, readonly string[]>>> = {
   'takeover-holder': ['handed-over', 'lost'],
@@ -185,7 +186,7 @@ export const HANDOVER_PATHS: Readonly<Partial<Record<SelftestScenario, readonly 
   'takeover-taker': ['answered', 'silent'],
   'refresh-save': ['committed', 'expired'],
   'request-waiter': ['entered-on-return'],
-  'paused-holder': ['lost-after-pause'],
+  'paused-holder': ['lost-after-pause', 'handed-over'],
 }
 
 /**
@@ -357,9 +358,10 @@ function handoverExpectation(scenario: HandoverScenario, path: string | undefine
 }
 
 /**
- * 请求编辑的两条路（M3-P6）在服务器上该有的样子，只认设计的那一条路：
+ * 请求编辑的两条路（M3-P6）在服务器上该有的样子，随走的路：
  * - request-waiter（entered-on-return）：另一方（经接口）没有保存过，这一页回到前台、进入编辑之后存上那一格——修订号 2、内容里有它；
- * - paused-holder（lost-after-pause）：第一格（控制的 flush）、隐藏的那一刻上传的第二格，修订号 3；第三格不在（这一页被暂停、编辑权到期，只在副本里）。
+ * - paused-holder：被暂停了（lost-after-pause）——第一格（控制的 flush）、隐藏的那一刻上传的第二格，修订号 3，第三格不在（编辑权到期，只在副本里）；
+ *   没被暂停（handed-over）——空闲满 2 分钟先保存再交出，三格都在，修订号 4。
  * 走了别的路时交回 undefined（算问题：页面已经说明哪里不对）
  */
 function requestExpectation(scenario: RequestScenario, path: string | undefined): ServerExpectation | undefined {
@@ -367,7 +369,11 @@ function requestExpectation(scenario: RequestScenario, path: string | undefined)
     case 'request-waiter':
       return path === 'entered-on-return' ? { revision: 2, why: '回到前台、进入编辑之后存上一格（另一方没有保存过）', cells: [REQUEST_WAITER_EDIT] } : undefined
     case 'paused-holder':
-      return path === 'lost-after-pause' ? { revision: 3, why: '控制的 flush、盖屏（隐藏）的那一刻各上传一次，第三格没有存上', cells: PAUSED_HOLDER_EDITS.slice(0, 2), absent: PAUSED_HOLDER_EDITS.slice(2) } : undefined
+      if (path === 'lost-after-pause')
+        return { revision: 3, why: '控制的 flush、盖屏（隐藏）的那一刻各上传一次，第三格没有存上', cells: PAUSED_HOLDER_EDITS.slice(0, 2), absent: PAUSED_HOLDER_EDITS.slice(2) }
+      if (path === 'handed-over')
+        return { revision: 4, why: '控制的 flush、盖屏（隐藏）的那一刻、自动交出之前各上传一次', cells: PAUSED_HOLDER_EDITS }
+      return undefined
   }
 }
 

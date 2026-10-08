@@ -146,11 +146,12 @@ describe('页面自检的结果有什么问题', () => {
     expect(problemsOf(report({ ...base, scenario: 'takeover-holder-deaf', path: 'handed-over' }))).toEqual(['交回的路是 handed-over（应当是 lost 之一）'])
     // 没跑完时只说没跑完的原因
     expect(problemsOf(report({ ...base, scenario: 'refresh-save', failure: '自检中途出错' }))).toEqual(['没能跑完：自检中途出错'])
-    // 请求编辑的两条路（M3-P6）只认设计的那一条
+    // 请求编辑的两条路（M3-P6）：请求方只认设计的那一条；被盖屏的持有者被暂停（lost-after-pause）、没被暂停而自动交出（handed-over）两条都认
     expect(problemsOf(report({ ...base, scenario: 'request-waiter', path: 'entered-on-return' }))).toEqual([])
     expect(problemsOf(report({ ...base, scenario: 'request-waiter', path: 'entered-while-hidden' }))).toEqual(['交回的路是 entered-while-hidden（应当是 entered-on-return 之一）'])
     expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'lost-after-pause' }))).toEqual([])
-    expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'handed-over' }))).toEqual(['交回的路是 handed-over（应当是 lost-after-pause 之一）'])
+    expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'handed-over' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'lost-while-hidden' }))).toEqual(['交回的路是 lost-while-hidden（应当是 lost-after-pause、handed-over 之一）'])
   })
 
   it('进入、退出编辑的场景另核对交回了两次切换的耗时（到 ready 与 steady 都有）', () => {
@@ -242,7 +243,7 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
     expect(storedProblems(step('refresh-save'), stored(), 'expired')).toHaveLength(1)
   })
 
-  it('请求编辑的两条路（M3-P6）只认设计的那一条：请求方回到前台才进入（entered-on-return）修订号 2、有它写的那一格；被暂停的持有者（lost-after-pause）前两格、修订号 3、第三格不在；别的路算问题', () => {
+  it('请求编辑的两条路（M3-P6）随走的路：请求方回到前台才进入（entered-on-return）修订号 2、有它写的那一格；被暂停的持有者（lost-after-pause）前两格、修订号 3、第三格不在，没被暂停而自动交出（handed-over）三格、修订号 4；别的路算问题', () => {
     expect(storedProblems(step('request-waiter'), stored({ revision: 2, revisions: 2, snapshot: templateWith([REQUEST_WAITER_EDIT]) }), 'entered-on-return')).toEqual([])
     expect(storedProblems(step('request-waiter'), stored(), 'entered-on-return')).toEqual([
       '文档 request-waiter-doc 的修订号是 1、修订记录 1 条（应当都是 2：回到前台、进入编辑之后存上一格（另一方没有保存过））',
@@ -255,7 +256,12 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
       '文档 paused-holder-doc 的修订号是 4、修订记录 4 条（应当都是 3：控制的 flush、盖屏（隐藏）的那一刻各上传一次，第三格没有存上）',
       `服务器上 ${third.cell} 是 ${JSON.stringify(third.value)}（应当是空的）`,
     ])
-    expect(storedProblems(step('paused-holder'), stored({ revision: 4, revisions: 4 }), 'handed-over')).toHaveLength(1)
+    expect(storedProblems(step('paused-holder'), stored({ revision: 4, revisions: 4, snapshot: templateWith(PAUSED_HOLDER_EDITS) }), 'handed-over')).toEqual([])
+    expect(storedProblems(step('paused-holder'), stored({ revision: 3, revisions: 3, snapshot: templateWith([first, second]) }), 'handed-over')).toEqual([
+      '文档 paused-holder-doc 的修订号是 3、修订记录 3 条（应当都是 4：控制的 flush、盖屏（隐藏）的那一刻、自动交出之前各上传一次）',
+      `服务器上 ${third.cell} 是 空（应当是 ${JSON.stringify(third.value)}）`,
+    ])
+    expect(storedProblems(step('paused-holder'), stored({ revision: 4, revisions: 4 }), 'not-lost')).toHaveLength(1)
   })
 })
 

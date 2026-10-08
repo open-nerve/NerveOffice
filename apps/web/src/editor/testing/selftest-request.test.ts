@@ -1,8 +1,9 @@
 // 请求编辑的两条路的页面自检（selftest-request.ts）里的判读：请求方的时间线判读成一条路（在后台停在交给了我、回到前台才进入），被暂停的持有者的
 // 时间线判读成一条路（回到前台之后才得知失去编辑权、没有交出）与各段的用时。真实 Safari 的复核（M3-P6 设计 §3.10，DEF-062）按它们判断走的是不是设计的那一条
 import type { SelftestTimelineEntry } from './selftest-report.ts'
+import { EDIT_HANDOVER_IDLE_SECONDS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { summarizePausedHolder, summarizeWaiter } from './selftest-request.ts'
+import { HANDOVER_IDLE_MS, summarizePausedHolder, summarizeWaiter } from './selftest-request.ts'
 
 /** 一条：wall 是墙上时间（毫秒），at 随便取 */
 function entry(kind: string, wall: number, fields: Readonly<Record<string, unknown>> = {}): SelftestTimelineEntry {
@@ -78,8 +79,9 @@ describe('请求方的时间线判读成一条路（summarizeWaiter）', () => {
   })
 })
 
-/** 持有者：隐藏，6 秒之后心跳带来请求；计时器压低、最后停了 95 秒；隐藏之后 150 秒回到前台，随即开始自动交出（积压的计时器）、失去编辑权（held:other） */
+/** 持有者：进入编辑，隐藏，6 秒之后心跳带来请求；计时器压低、最后停了 95 秒；隐藏之后 150 秒回到前台，随即开始自动交出（积压的计时器）、失去编辑权（held:other） */
 const HOLDER: readonly SelftestTimelineEntry[] = [
+  entry('entered', 500),
   entry('page:state', 1_000, { mode: 'editing' }),
   entry('page:visibility-hidden', 10_000),
   entry('page:state', 16_000, { mode: 'editing', incoming: 'peer-id' }),
@@ -92,12 +94,26 @@ const HOLDER: readonly SelftestTimelineEntry[] = [
   entry('page:state', 160_300, { mode: 'lost', loss: 'held:other' }),
 ]
 
-describe('被暂停的持有者的时间线判读成一条路（summarizePausedHolder）', () => {
+/** 没被暂停的持有者（2026-10-08 第一次真实 Safari 运行的样子）：进入编辑 0.5 秒，隐藏之后照常心跳、带来请求；进入编辑之后 123.7 秒自动交出，回来之后回到阅读 */
+const ALIVE: readonly SelftestTimelineEntry[] = [
+  ...HOLDER.slice(0, 5),
+  entry('leave', 124_200, { cause: 'handover-request' }),
+  entry('page:state', 124_200, { mode: 'exiting', incoming: 'peer-id', leaving: 'handover-request' }),
+  entry('page:visibility-visible', 142_400),
+  entry('left', 142_700, { cause: 'handover-request', outcome: 'reading' }),
+  entry('page:state', 142_700, { mode: 'reading' }),
+]
+
+describe('被盖屏的持有者的时间线判读成一条路（summarizePausedHolder）', () => {
+  it('与 contracts 的空闲满 2 分钟自动交出相同（这里另写一份：引用 contracts 会改变测试构建的分块）', () => {
+    expect(HANDOVER_IDLE_MS).toBe(EDIT_HANDOVER_IDLE_SECONDS * 1000)
+  })
+
   it('lost-after-pause：隐藏（心跳带来请求、出现提示）、计时器停了很久，回到前台之后才失去编辑权（另一方在编辑），没有交出', () => {
     const summary = summarizePausedHolder(HOLDER)
     expect(summary.path).toBe('lost-after-pause')
     expect(summary.problems).toEqual([])
-    expect(summary.ms).toEqual({ hiddenToRequest: 6_000, longestGap: 95_000, hiddenToShown: 150_002, shownToLost: 88 })
+    expect(summary.ms).toEqual({ hiddenToRequest: 6_000, longestGap: 95_000, hiddenToShown: 150_002, shownToLost: 88, enteredToLeave: null })
     expect(summary.text).toBe('隐藏，隐藏之后 6.0 秒心跳带来请求（出现提示），计时器最长停了 95.0 秒（到隐藏之后 150.0 秒），隐藏之后 150.0 秒回到前台，回来之后 +3 ms 开始离开编辑（handover-request），回来之后 +88 ms 失去编辑权（held:other）')
   })
 
@@ -108,19 +124,30 @@ describe('被暂停的持有者的时间线判读成一条路（summarizePausedH
     expect(summary.text).toBe('隐藏，隐藏期间心跳没有带来请求，计时器没有超过 3 秒的停顿，隐藏之后 100.0 秒回到前台，回来之后没有开始离开编辑，回来之后 +5000 ms 失去编辑权（held:other）')
   })
 
-  it('handed-over：离开编辑回到了阅读（这一页没有被暂停，交出了）', () => {
-    const handed = [...HOLDER.slice(0, 3), entry('left', 130_000, { cause: 'handover-request', outcome: 'reading' }), entry('page:state', 130_000, { mode: 'reading' })]
-    expect(summarizePausedHolder(handed).path).toBe('handed-over')
-    expect(summarizePausedHolder(handed).problems).toEqual(['离开编辑回到了阅读（handover-request）：这一页没有被暂停，交出了'])
+  it('handed-over：没被暂停——心跳带来请求，进入编辑之后空闲满 2 分钟才自动交出、回到阅读；没有失去编辑权', () => {
+    const summary = summarizePausedHolder(ALIVE)
+    expect(summary.path).toBe('handed-over')
+    expect(summary.problems).toEqual([])
+    expect(summary.ms).toEqual({ hiddenToRequest: 6_000, longestGap: 4_000, hiddenToShown: 132_400, shownToLost: null, enteredToLeave: 123_700 })
+    expect(summary.text).toBe('隐藏，隐藏之后 6.0 秒心跳带来请求（出现提示），计时器最长停了 4.0 秒（到隐藏之后 20.0 秒），隐藏之后 132.4 秒回到前台，进入编辑之后 123.7 秒（隐藏之后 114.2 秒）开始自动交出（handover-request），隐藏之后 132.7 秒回到阅读，没有失去编辑权')
+  })
+
+  it('handed-over 而细节不对：空闲不满 2 分钟就交出、不是自动交出、交出之前心跳没有带来请求，各自说明', () => {
+    const early = ALIVE.map(item => item.kind === 'leave' ? { ...item, wall: 100_000 } : item)
+    expect(summarizePausedHolder(early).problems).toEqual(['进入编辑之后 99.5 秒就开始自动交出（应当空闲满 120 秒）'])
+    const exited = ALIVE.map(item => item.kind === 'leave' || item.kind === 'left' ? { ...item, cause: 'exit' } : item)
+    expect(summarizePausedHolder(exited).problems).toEqual(['离开编辑的原因是 exit（应当是自动交出 handover-request）'])
+    const unasked = ALIVE.filter(item => item.incoming === undefined)
+    expect(summarizePausedHolder(unasked).problems).toEqual(['开始交出之前心跳没有带来请求'])
   })
 
   it('lost-while-hidden、not-lost、not-shown、not-hidden：各自说明', () => {
-    const early = [...HOLDER.slice(0, 3), entry('page:state', 120_000, { mode: 'lost', loss: 'held:other' }), entry('page:visibility-visible', 160_000)]
-    expect(summarizePausedHolder(early).problems).toEqual(['还在后台就得知失去编辑权：这一页没有被暂停'])
+    const early = [...HOLDER.slice(0, 4), entry('page:state', 120_000, { mode: 'lost', loss: 'held:other' }), entry('page:visibility-visible', 160_000)]
+    expect(summarizePausedHolder(early).problems).toEqual(['还在后台就得知失去编辑权：这一页没有被暂停，却也没有在空闲满 2 分钟时交出'])
     expect(summarizePausedHolder(early).text).toContain('还在后台时失去编辑权（held:other）')
-    expect(summarizePausedHolder(HOLDER.slice(0, 6)).path).toBe('not-lost')
-    expect(summarizePausedHolder(HOLDER.slice(0, 5)).path).toBe('not-shown')
-    expect(summarizePausedHolder(HOLDER.slice(0, 1)).problems).toEqual(['页面一直没有隐藏（驱动脚本没有盖屏？）'])
+    expect(summarizePausedHolder(HOLDER.slice(0, 7)).path).toBe('not-lost')
+    expect(summarizePausedHolder(HOLDER.slice(0, 6)).path).toBe('not-shown')
+    expect(summarizePausedHolder(HOLDER.slice(0, 2)).problems).toEqual(['页面一直没有隐藏（驱动脚本没有盖屏？）'])
   })
 
   it('失去编辑权的原因不是另一方在编辑（例如自己在别处、被收回）时另记问题', () => {

@@ -9,10 +9,11 @@
 //   直到心跳带来请求 → 让请求方隐藏 → 2 秒之后协作者交出 → 等后端日志里请求方在交出之后续期（它这时得知 reserved）→ 再停 GRANTED_HOLD_MS
 //   （这期间它应当停在 granted、不再续期、不申请）→ 让它回到前台 → 等它交回（进入编辑、写一格存上）；
 // - 路 2（runPausedHolder：持有者被暂停时自动交出走到到期）：打开持有者的页面（作者，进入编辑）→ 库里有了第一格（修订号 2）→ 盖屏 → 库里有了隐藏的
-//   那一刻上传的第二格（修订号 3）→ 协作者请求编辑、每 5 秒续期 → 得到 free（持有者那一代按时间到期）→ 申请、之后每 10 秒心跳（持有者回来续上时
-//   被占着）→ 2 秒之后移走盖屏 → 等持有者交回（失去编辑权、另存为副本）→ 协作者释放。用户回来、按了 Esc 或点了盖屏的窗口（stage.voided）就中止：
-//   随即移走盖屏、撤回请求，这一次作废；
-// - 判定（纯函数，单元测试覆盖）：waiterJudgement、pausedHolderJudgement——库里的时间线（./selftest-handover.ts 的 watchDocument）、后端日志里这份
+//   那一刻上传的第二格（修订号 3）→ 协作者请求编辑、每 5 秒续期 → 得到 free（持有者那一代按时间到期）或 reserved（持有者没被暂停、空闲满 2 分钟
+//   自动交出了）→ 申请、之后每 10 秒心跳（持有者回来续上时被占着）→ 2 秒之后移走盖屏 → 等持有者交回（失去编辑权、另存为副本；或者已经交出、回到阅读）
+//   → 协作者释放。用户回来、按了 Esc 或点了盖屏的窗口（stage.voided）就中止：随即移走盖屏、撤回请求，这一次作废；
+// - 判定（纯函数，单元测试覆盖）：waiterJudgement、pausedHolderJudgement（按持有者交回的路：被暂停走到到期，或者没被暂停而自动交出——真实 Safari 怎样对待
+//   被挡住的编辑器页正是要复核的，2026-10-08 本机 Safari 27.0 没有暂停它）——库里的时间线（./selftest-handover.ts 的 watchDocument）、后端日志里这份
 //   文档的请求（按认证出的用户分开两个人）与协作者自己的调用。
 import type { AcquiredEditLease, EditRequestOutcome, RenewedEditLease } from '@nerve-office/contracts'
 import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
@@ -524,18 +525,24 @@ export interface PausedHolderEvidence {
   readonly holderId: string
   readonly requesterId: string
   readonly marks: Readonly<Record<string, number | undefined>>
+  /** 真实 Safari：页面走了"被暂停"那一条路（lost-after-pause）时，要求隐藏期间计时器真的停过（Playwright 里只是拦住心跳与交出，页面照常跑） */
   readonly expectSuspended: boolean
 }
 
 /**
- * 路 2（纯函数）：协作者续期得到 free（不是 reserved：持有者没有交出）之后申请成功，申请的回答里带着持有者那一代异常中断的提醒（按时间到期）；
- * 库里持有者那一代从没明确结束（没有交出、没有释放），之后的一代是协作者的普通申请；持有者那一代最后一次续租到协作者那一代取得不短于一个有效期
- * （数据库的时间）；后端日志里盖屏到协作者申请之间没有持有者的交出与释放。expectSuspended（真实 Safari）时另要求持有者的页面隐藏期间计时器停过
- * SUSPENDED_GAP_MIN_MS 以上（页面交回的 request.holder 计时里的 longestGap）
+ * 路 2（纯函数），按页面交回的路判定（真实 Safari 怎样对待被挡住的编辑器页，正是要复核的；两条都是设计里的，见页面的 PausedHolderPath）：
+ * - lost-after-pause（被暂停，编辑权按时间到期）：协作者续期得到 free（不是 reserved）之后申请成功，申请的回答里带着持有者那一代异常中断的提醒；
+ *   库里持有者那一代从没明确结束（没有交出、没有释放），之后的一代是协作者的普通申请；持有者那一代最后一次续租到协作者那一代取得不短于一个有效期
+ *   （数据库的时间）；后端日志里盖屏到协作者申请之间没有持有者的交出与释放。expectSuspended（真实 Safari）时另要求持有者的页面隐藏期间计时器停过
+ *   SUSPENDED_GAP_MIN_MS 以上（页面交回的 request.holder 计时里的 longestGap）；
+ * - handed-over（没被暂停，空闲满 2 分钟自动交出）：后端日志里持有者交出（200）、在协作者申请之前；库里持有者那一代明确结束为 handed_over、留给协作者；
+ *   协作者续期得到 reserved 之后申请成功（明确结束，回答里没有异常中断的提醒），新一代是协作者的普通申请；盖屏期间持有者照常心跳（证据里说几次）。
+ * 交回别的路（或者没交回）时按 lost-after-pause 的要求列出不符合的地方
  */
 export function pausedHolderJudgement(evidence: PausedHolderEvidence): Judgement {
   const { report, states, requests, calls, holderId, requesterId, marks } = evidence
   const origin = marks.coveredAt ?? states[0]?.at ?? 0
+  const handedPath = report?.path === 'handed-over'
   const problems: string[] = []
   if (report === undefined)
     problems.push('持有者没有交回结果')
@@ -543,20 +550,25 @@ export function pausedHolderJudgement(evidence: PausedHolderEvidence): Judgement
   const acquisition = calls.find(call => call.method === 'POST' && call.path.endsWith('/edit-lease') && call.status === 201)
   const granting = acquisition === undefined ? undefined : calls.filter(call => call.method === 'PUT' && call.path.endsWith('/edit-lease/request') && call.at <= acquisition.sentAt).at(-1)
   const grantedKind = field(granting, 'kind')
+  const wantedKind = handedPath ? 'reserved' : 'free'
   if (acquiredAt === undefined || acquisition === undefined)
-    problems.push('协作者没有接手（持有者那一代没有按时间到期？）')
-  else if (grantedKind !== 'free')
-    problems.push(`协作者接手之前那次续期的结果是 ${String(grantedKind)}（应当是 free：持有者那一代按时间到期${grantedKind === 'reserved' ? '；reserved 说明持有者交出了，没有被暂停' : ''}）`)
+    problems.push(handedPath ? '协作者没有接手（持有者交出之后编辑权留给他）' : '协作者没有接手（持有者那一代没有按时间到期？）')
+  else if (grantedKind !== wantedKind)
+    problems.push(handedPath ? `协作者接手之前那次续期的结果是 ${String(grantedKind)}（持有者交出了，应当是 reserved）` : `协作者接手之前那次续期的结果是 ${String(grantedKind)}（应当是 free：持有者那一代按时间到期${grantedKind === 'reserved' ? '；reserved 说明持有者交出了，没有被暂停' : ''}）`)
   const interruption = field(acquisition, 'interruption') as { readonly holder?: { readonly id?: unknown }, readonly sameUser?: unknown } | null | undefined
-  if (acquisition !== undefined && (interruption?.holder?.id !== holderId || interruption.sameUser !== false))
+  if (acquisition !== undefined && !handedPath && (interruption?.holder?.id !== holderId || interruption.sameUser !== false))
     problems.push(`协作者申请的回答里${interruption === null || interruption === undefined ? '没有' : '不是持有者那一代的'}异常中断提醒（持有者那一代按时间到期时应当有）`)
+  if (acquisition !== undefined && handedPath && interruption !== null && interruption !== undefined)
+    problems.push('协作者申请的回答里有异常中断的提醒（持有者交出是明确结束，不该有）')
   const epochA = firstEpoch(states)
   const ofA = states.filter(state => state.epoch === epochA)
   const ended = ofA.find(state => state.endReason !== null)
   const next = epochA === undefined ? undefined : states.find(state => state.epoch !== null && state.epoch > epochA)
   if (epochA === undefined || ofA[0]?.holderId !== holderId)
     problems.push(`库里没有看到持有者那一代的编辑租约（第一代的持有者是 ${ofA[0]?.holderId ?? '空'}）`)
-  if (ended !== undefined)
+  if (handedPath && (ended?.endReason !== 'handed_over' || !ofA.some(state => state.reservedFor === requesterId)))
+    problems.push(`持有者那一代${ended === undefined ? '没有明确结束' : `结束为 ${ended.endReason ?? ''}`}、${ofA.some(state => state.reservedFor === requesterId) ? '' : '没有'}留给协作者（自动交出时应当是 handed_over、留给协作者）`)
+  if (!handedPath && ended !== undefined)
     problems.push(`持有者那一代明确结束了（${ended.endReason ?? ''}，${relative(ended.at, origin)}）：应当没有交出、没有释放，按时间到期`)
   if (next === undefined)
     problems.push('库里没有看到持有者那一代之后的新一代')
@@ -564,15 +576,17 @@ export function pausedHolderJudgement(evidence: PausedHolderEvidence): Judgement
     problems.push(`库里的新一代：持有者 ${next.holderId ?? '空'}、接管方式 ${next.takeover ?? '空'}（应当是协作者的普通申请）`)
   const lastRenewal = ofA.reduce<number | undefined>((latest, state) => (state.renewedAt === null || state.renewedAt === undefined ? latest : Math.max(latest ?? state.renewedAt, state.renewedAt)), undefined)
   const gap = lastRenewal === undefined || next?.acquiredAt === null || next?.acquiredAt === undefined ? undefined : next.acquiredAt - lastRenewal
-  if (next !== undefined && (gap === undefined || gap < LEASE_TTL_MS))
+  if (!handedPath && next !== undefined && (gap === undefined || gap < LEASE_TTL_MS))
     problems.push(`持有者那一代最后一次续租到协作者那一代取得${gap === undefined ? '说不出隔了多久' : `只隔了 ${seconds(gap)}`}（应当不短于 ${EDIT_LEASE_TTL_SECONDS} 秒：按时间到期）`)
   const window = (request: ServerRequest): boolean => request.time >= (marks.coveredAt ?? 0) && request.time <= (acquiredAt ?? Number.POSITIVE_INFINITY)
   const handovers = requests.filter(request => window(request) && request.userId === holderId && request.method === 'POST' && (request.route ?? '').endsWith('/edit-lease/handover'))
   const releases = requests.filter(request => window(request) && request.userId === holderId && request.method === 'DELETE' && (request.route ?? '').endsWith('/edit-lease'))
-  if (handovers.length > 0 || releases.length > 0)
+  if (!handedPath && (handovers.length > 0 || releases.length > 0))
     problems.push(`盖屏到协作者申请之间后端收到持有者的交出 ${handovers.length} 个、释放 ${releases.length} 个（应当一个也没有）`)
+  if (handedPath && (handovers.length !== 1 || handovers[0]?.statusCode !== 200 || releases.length > 0))
+    problems.push(`盖屏到协作者申请之间后端收到持有者的交出 ${handovers.length} 个（${handovers.map(request => String(request.statusCode ?? '中断')).join('、') || '—'}）、释放 ${releases.length} 个（自动交出时应当恰好一个 200 的交出、没有释放）`)
   const longestGap = report?.timings?.find(timing => timing.id === 'request.holder')?.ms.longestGap ?? null
-  if (evidence.expectSuspended && (longestGap === null || longestGap < SUSPENDED_GAP_MIN_MS))
+  if (evidence.expectSuspended && !handedPath && (longestGap === null || longestGap < SUSPENDED_GAP_MIN_MS))
     problems.push(`持有者的页面隐藏期间计时器最长只停了 ${longestGap === null ? '—' : seconds(longestGap)}（真实 Safari 里被暂停时应当不短于 ${SUSPENDED_GAP_MIN_MS / 1000} 秒）`)
   const beats = requests.filter(request => request.userId === holderId && request.method === 'PUT' && (request.route ?? '').endsWith('/edit-lease') && request.time >= origin && request.time <= (acquiredAt ?? Number.POSITIVE_INFINITY))
   const uncoveredAt = marks.uncoveredAt
@@ -582,8 +596,8 @@ export function pausedHolderJudgement(evidence: PausedHolderEvidence): Judgement
     `（相对盖屏）第二格（隐藏的那一刻）${relative(marks.hiddenSavedAt, origin)}`,
     `协作者请求 ${relative(marks.requestedAt, origin)}，续期 ${renewals.length} 次，${relative(granting?.at, origin)} 得到 ${String(grantedKind ?? '—')}、${relative(acquiredAt, origin)} 申请 ${acquisition === undefined ? '没有成功' : '201'}（异常中断的提醒：${interruption?.holder?.id === holderId ? '持有者那一代' : '没有'}）`,
     `盖屏之后持有者心跳 ${beats.length} 次${beats.at(-1) === undefined ? '' : `、最后一次 ${relative(beats.at(-1)?.time, origin)}`}，库里最后一次续租 ${relative(lastRenewal, origin)}`,
-    `最后一次续租到协作者取得 ${gap === undefined ? '—' : seconds(gap)}`,
-    `持有者那一代${ended === undefined ? '没有明确结束' : `明确结束（${ended.endReason ?? ''}）`}；${next === undefined ? '没有新一代' : `第 ${next.epoch ?? '?'} 代 ${relative(next.at, origin)}，接管方式 ${next.takeover ?? '空（普通申请）'}`}`,
+    handedPath ? `持有者交出 ${handovers.map(request => `${request.statusCode ?? '中断'} ${relative(request.time, origin)}`).join('、') || '没有'}` : `最后一次续租到协作者取得 ${gap === undefined ? '—' : seconds(gap)}`,
+    `持有者那一代${ended === undefined ? '没有明确结束' : `明确结束（${ended.endReason ?? ''}，${relative(ended.at, origin)}）`}；${next === undefined ? '没有新一代' : `第 ${next.epoch ?? '?'} 代 ${relative(next.at, origin)}，接管方式 ${next.takeover ?? '空（普通申请）'}`}`,
     `移走盖屏 ${relative(marks.uncoveredAt, origin)}，之后持有者的请求：${after.length === 0 ? '没有' : after.map(request => `${request.method} ${(request.route ?? '?').replace('/api/documents/:id', '')} ${request.statusCode ?? '中断'}`).join('、')}`,
     `隐藏期间计时器最长停了 ${longestGap === null ? '—' : seconds(longestGap)}`,
     `页面交回的路 ${report?.path ?? '没有'}`,

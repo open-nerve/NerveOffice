@@ -23,8 +23,10 @@
 //   还在途）——两种都不释放、留下记号（7a759da），页面交回的时间线里看得出是哪一种
 // 请求编辑的两条路（M3-P6 设计 §3.10，DEF-062）照驱动脚本的编排（support/selftest-request.ts，共用）：作者在浏览器里，协作者经接口扮演另一方——
 // - request-waiter（路 1）：协作者编辑、心跳带来请求之后这里模拟请求方隐藏、协作者交出；请求方在"后台"停在交给了我、不申请，模拟回到前台之后才进入；
-// - paused-holder（路 2）：作者编辑、存上第一格之后这里模拟隐藏、拦住它的心跳与交出（Playwright 模拟不了 Safari 的暂停：页面照常跑，只是服务端
-//   听不到它）；协作者请求、续期，持有者那一代按时间到期（真等一个有效期）之后接手；放开、模拟回到前台之后持有者得知失去编辑权、另存为副本
+// - paused-holder（路 2）两条路各一条：被暂停——作者编辑、存上第一格之后这里模拟隐藏、拦住它的心跳与交出（Playwright 模拟不了 Safari 的暂停：页面照常跑，
+//   只是服务端听不到它），协作者请求、续期，持有者那一代按时间到期（真等一个有效期）之后接手；放开、模拟回到前台之后持有者得知失去编辑权、另存为副本；
+//   没被暂停——只模拟隐藏，心跳照常带来请求，进入编辑之后空闲满 2 分钟（真等）先保存再自动交出，协作者续期得到 reserved 之后接手（2026-10-08 真实 Safari
+//   上被盖住的编辑器页就是这样：持有 Web Lock、开着 Worker 与 BroadcastChannel 的页面被挡住时 Safari 不暂停）
 // 用到测试构建（自检的入口页与编辑器页里的自检）：标签 @test-build，外部模式测生产镜像时排除
 import type { Page, Route } from '@playwright/test'
 import type { SelftestReport } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
@@ -352,6 +354,26 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
     const run = await runPausedHolder({ origin: e2eOrigin(), documentId: step.documentId, holder: author, requester: peer, stage, deadline: Date.now() + REPORT_TIMEOUT_MS + 120_000, expectSuspended: false })
     await attachRun(testInfo, run)
     expect(run.report?.path).toBe('lost-after-pause')
+    expect(run.report === undefined ? undefined : await summaryOf(run.report, step, run.report.path)).toEqual(passed(step))
+    expect(run.judgement.problems).toEqual([])
+  })
+
+  test('步骤 paused-holder 没被暂停（M3-P6 设计 §3.10，DEF-062 路 2 的另一条）：作者编辑、存上第一格之后页面隐藏（这里模拟），心跳照常带来协作者的请求；进入编辑之后空闲满 2 分钟（真等）先保存第三格再自动交出、回到阅读；协作者续期得到 reserved 之后接手；库里作者那一代结束为 handed_over', async ({ page }, testInfo) => {
+    // 真等空闲满 2 分钟再加打开与接手
+    test.setTimeout(EDITOR_TEST_TIMEOUT + 180_000)
+    const { step, author, peer } = await requestScene('st-alive', 'paused-holder')
+    let delivered: string[] = []
+    const stage: RequestStage = {
+      open: async () => {
+        delivered = await startSelftest(page, step)
+      },
+      hide: async () => setVisibility(page, 'hidden'),
+      show: async () => setVisibility(page, 'visible'),
+      report: async deadline => reportBefore(delivered, deadline),
+    }
+    const run = await runPausedHolder({ origin: e2eOrigin(), documentId: step.documentId, holder: author, requester: peer, stage, deadline: Date.now() + REPORT_TIMEOUT_MS + 120_000, expectSuspended: false })
+    await attachRun(testInfo, run)
+    expect(run.report?.path).toBe('handed-over')
     expect(run.report === undefined ? undefined : await summaryOf(run.report, step, run.report.path)).toEqual(passed(step))
     expect(run.judgement.problems).toEqual([])
   })

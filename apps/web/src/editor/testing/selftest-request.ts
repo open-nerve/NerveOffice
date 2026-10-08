@@ -9,10 +9,11 @@
 //   （库里没有新的一代、后端日志里没有它的申请）再让遮住它的标签页关掉自己——回到前台之后才进入编辑（普通申请，trigger 是 granted）；之后写一格、
 //   经控制的 flush 存上（编辑权确实交给了它）。判读：summarizeWaiter；
 // - paused-holder（路 2，持有者：作者，编辑时）：前半段与 takeover-holder 相同（./selftest-holder.ts：第一格存上，驱动脚本看到这一版才盖屏；隐藏的那一刻
-//   上传第二格；之后写第三格，只在这一页）。驱动脚本以另一方的身份经接口请求编辑、续期；真实 Safari 约 50 秒之后暂停整页（计时器、请求都停，探索 B
-//   实测）——心跳停了，空闲满 2 分钟的自动交出也走不到；编辑权按时间到期之后另一方申请成功，驱动脚本移走盖屏：这一页回来，积压的计时器一起触发，
-//   得知失去编辑权（另一方在编辑：held:other），第三格另存为副本（副本里三格，原文档里只有前两格）。判读：summarizePausedHolder。
-//   Playwright 里页面不会被暂停：校准用模拟的隐藏、拦住这一页的心跳与交出代替（判读相同，计时器的停顿只在真实 Safari 里有）。
+//   上传第二格；之后写第三格，只在这一页）。驱动脚本以另一方的身份经接口请求编辑、续期。设计的那一条（lost-after-pause）：Safari 暂停整页（探索 B 的
+//   空白页约 50 秒之后计时器、请求都停）——心跳停了，空闲满 2 分钟的自动交出也走不到；编辑权按时间到期之后另一方申请成功，驱动脚本移走盖屏：这一页回来，
+//   积压的计时器一起触发，得知失去编辑权（另一方在编辑：held:other），第三格另存为副本（副本里三格，原文档里只有前两格）。另一条（handed-over）：页面
+//   没有被暂停（2026-10-08 本机 Safari 27.0：持有 Web Lock、开着 Worker 或 BroadcastChannel 的页面被挡住时照常跑），心跳照常带来请求，空闲满 2 分钟先存上
+//   第三格再自动交出。判读：summarizePausedHolder。Playwright 里页面不会被暂停：校准一条拦住这一页的心跳与交出（走到到期），一条只模拟隐藏（自动交出）。
 import type { RequestScenario, SelftestTimelineEntry } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'
 import type { VisibilityWatch } from './selftest-timeline.ts'
@@ -193,11 +194,21 @@ export function summarizeWaiter(timeline: readonly SelftestTimelineEntry[]): Wai
 }
 
 /**
- * 被暂停的持有者走了哪条路：lost-after-pause 是设计的那一条（隐藏、被暂停期间什么也没做，回到前台之后才得知失去编辑权）；
- * not-hidden（一直没有隐藏）、handed-over（交出了、回到阅读：这一页没有被暂停，空闲满 2 分钟的自动交出走到了）、not-shown（一直没回到前台）、
- * not-lost（回到前台之后没有失去编辑权）、lost-while-hidden（还在后台就得知失去编辑权：这一页没有被暂停）
+ * 持有者有人请求编辑时空闲满它（毫秒）就先保存再自动交出（contracts 的 EDIT_HANDOVER_IDLE_SECONDS；这里不引用 contracts——测试构建的分块会变，
+ * 见 ./selftest-handover.ts 的 PENDING_SAVE_WAIT_MS——另写一份，单元测试核对两边相同）
  */
-export type PausedHolderPath = 'lost-after-pause' | 'not-hidden' | 'handed-over' | 'not-shown' | 'not-lost' | 'lost-while-hidden'
+export const HANDOVER_IDLE_MS = 120_000
+
+/**
+ * 被盖屏的持有者走了哪条路（真实 Safari 怎样对待被挡住的、正在编辑的页面，就是这一项要复核的）：
+ * - lost-after-pause：页面被暂停（计时器、请求都停了）——空闲满 2 分钟的自动交出走不到，编辑权按时间到期、另一方接手；回到前台之后才得知失去编辑权
+ *   （设计 §3.10 的路 2；Playwright 里拦住心跳与交出模拟）；
+ * - handed-over：页面没有被暂停（照常心跳，心跳带来请求）——空闲满 2 分钟就先保存再自动交出（第三格也存上）、回到阅读（2026-10-08 本机 Safari 27.0：
+ *   持有 Web Lock、开着 Worker 或 BroadcastChannel 的页面被挡住时不暂停，编辑器页三样都有）；
+ * 别的说明哪里不对：not-hidden（一直没有隐藏）、not-shown（一直没回到前台，也没交出）、not-lost（回到前台之后既没失去编辑权、也没交出）、
+ * lost-while-hidden（还在后台就得知失去编辑权：没被暂停，却也没在空闲满 2 分钟时交出）
+ */
+export type PausedHolderPath = 'lost-after-pause' | 'handed-over' | 'not-hidden' | 'not-shown' | 'not-lost' | 'lost-while-hidden'
 
 export interface PausedHolderSummary {
   readonly path: PausedHolderPath
@@ -207,17 +218,22 @@ export interface PausedHolderSummary {
 }
 
 /**
- * 持有者的时间线判读成一条路：隐藏之后（可能先由心跳带来请求、出现提示）被暂停；回到前台之后失去编辑权，原因是续上时别人在编辑（held:other——
- * 另一方已经接手）；从头到尾没有离开编辑回到阅读（没有交出）。另记：心跳带来请求的时刻（暂停之前带到了就有）、回来之后有没有开始自动交出
- * （空闲满 2 分钟的计时到点，积压的计时器一起触发：先保存再交出，保存被拒，随之失去编辑权）、隐藏期间计时器的最长停顿（真实 Safari 里就是暂停）
+ * 持有者的时间线判读成一条路（两条都认，见 PausedHolderPath）：
+ * - lost-after-pause：隐藏之后（可能先由心跳带来请求、出现提示）被暂停，从头到尾没有离开编辑回到阅读；回到前台之后失去编辑权，原因是续上时别人在编辑
+ *   （held:other——另一方已经接手）。另记回来之后有没有开始自动交出（空闲满 2 分钟的计时到点，积压的计时器一起触发：先保存再交出，保存被拒，随之
+ *   失去编辑权）；
+ * - handed-over：心跳带来请求之后，自动交出（离开的原因是 handover-request）在进入编辑之后空闲满 2 分钟才开始，回到阅读；没有失去编辑权。
+ * 两条都另记隐藏期间计时器的最长停顿（真实 Safari 里页面被暂停时就是它）
  */
 export function summarizePausedHolder(timeline: readonly SelftestTimelineEntry[]): PausedHolderSummary {
   const hidden = first(timeline, 'page:visibility-hidden')
   const shown = hidden === undefined ? undefined : first(timeline, 'page:visibility-visible', entry => entry.wall >= hidden.wall)
+  const entered = first(timeline, 'entered')
   const states = timeline.filter(entry => entry.kind === 'page:state')
   const arrived = states.find(entry => entry.incoming !== undefined)
   const lost = states.find(entry => entry.mode === 'losing' || entry.mode === 'lost')
   const handedOver = first(timeline, 'left', entry => entry.outcome === 'reading')
+  const leaving = first(timeline, 'leave')
   const lateLeave = shown === undefined ? undefined : first(timeline, 'leave', entry => entry.wall >= shown.wall)
   const gaps = hidden === undefined ? [] : timeline.filter(entry => entry.kind === 'page:tick-gap' && entry.wall >= hidden.wall && (shown === undefined || entry.wall <= shown.wall + 5_000))
   const longest = gaps.reduce<SelftestTimelineEntry | undefined>((best, entry) => (best === undefined || Number(entry.gapMs) > Number(best.gapMs) ? entry : best), undefined)
@@ -232,30 +248,42 @@ export function summarizePausedHolder(timeline: readonly SelftestTimelineEntry[]
     path = 'lost-while-hidden'
   else
     path = 'lost-after-pause'
-  const why: Readonly<Record<Exclude<PausedHolderPath, 'lost-after-pause'>, string>> = {
+  const why: Readonly<Record<Exclude<PausedHolderPath, 'lost-after-pause' | 'handed-over'>, string>> = {
     'not-hidden': '页面一直没有隐藏（驱动脚本没有盖屏？）',
-    'handed-over': `离开编辑回到了阅读（${String(handedOver?.cause ?? '?')}）：这一页没有被暂停，交出了`,
-    'not-shown': '页面一直没有回到前台（驱动脚本没有移走盖屏？）',
-    'not-lost': '回到前台之后没有失去编辑权',
-    'lost-while-hidden': '还在后台就得知失去编辑权：这一页没有被暂停',
+    'not-shown': '页面一直没有回到前台（驱动脚本没有移走盖屏？），也没有交出',
+    'not-lost': '回到前台之后既没有失去编辑权，也没有交出',
+    'lost-while-hidden': '还在后台就得知失去编辑权：这一页没有被暂停，却也没有在空闲满 2 分钟时交出',
   }
   const problems: string[] = []
-  if (path !== 'lost-after-pause')
+  if (path !== 'lost-after-pause' && path !== 'handed-over')
     problems.push(why[path])
   if (lost !== undefined && lost.loss !== 'held:other')
     problems.push(`失去编辑权的原因是 ${String(lost.loss ?? '没有')}（应当是 held:other：续上时另一方已经接手、正在编辑）`)
+  const idleBeforeLeave = between(entered, leaving)
+  if (path === 'handed-over') {
+    if (leaving?.cause !== 'handover-request' || handedOver?.cause !== 'handover-request')
+      problems.push(`离开编辑的原因是 ${String(leaving?.cause ?? '没有')}（应当是自动交出 handover-request）`)
+    if (arrived === undefined || leaving === undefined || arrived.wall > leaving.wall)
+      problems.push('开始交出之前心跳没有带来请求')
+    if (idleBeforeLeave === null || idleBeforeLeave < HANDOVER_IDLE_MS - 1_000)
+      problems.push(`进入编辑之后 ${seconds(idleBeforeLeave)}就开始自动交出（应当空闲满 ${HANDOVER_IDLE_MS / 1000} 秒）`)
+  }
   const ms = {
     hiddenToRequest: arrived === undefined ? null : between(hidden, arrived),
     longestGap: longest === undefined ? null : Number(longest.gapMs),
     hiddenToShown: between(hidden, shown),
     shownToLost: between(shown, lost),
+    enteredToLeave: path === 'handed-over' ? idleBeforeLeave : null,
   }
+  const outcome = path === 'handed-over'
+    ? `进入编辑之后 ${seconds(idleBeforeLeave)}（隐藏之后 ${seconds(between(hidden, leaving))}）开始自动交出（${String(leaving?.cause ?? '?')}），${handedOver === undefined ? '' : `隐藏之后 ${seconds(between(hidden, handedOver))}回到阅读`}`
+    : lateLeave === undefined ? '回来之后没有开始离开编辑' : `回来之后 +${String(between(shown, lateLeave))} ms 开始离开编辑（${String(lateLeave.cause)}）`
   const text = [
     hidden === undefined ? '一直没有隐藏' : '隐藏',
     arrived === undefined ? '隐藏期间心跳没有带来请求' : `隐藏之后 ${seconds(ms.hiddenToRequest)}心跳带来请求（出现提示）`,
     longest === undefined ? '计时器没有超过 3 秒的停顿' : `计时器最长停了 ${seconds(ms.longestGap)}（到隐藏之后 ${seconds(between(hidden, longest))}）`,
     shown === undefined ? '一直没有回到前台' : `隐藏之后 ${seconds(ms.hiddenToShown)}回到前台`,
-    lateLeave === undefined ? '回来之后没有开始离开编辑' : `回来之后 +${String(between(shown, lateLeave))} ms 开始离开编辑（${String(lateLeave.cause)}）`,
+    outcome,
     lost === undefined ? '没有失去编辑权' : `${lost.wall >= (shown?.wall ?? Number.POSITIVE_INFINITY) ? `回来之后 +${String(ms.shownToLost)} ms ` : '还在后台时'}失去编辑权（${String(lost.loss)}）`,
   ].join('，')
   return { path, ms, problems, text }
@@ -385,25 +413,34 @@ async function pausedHolderSteps(session: Session, visibility: VisibilityWatch, 
     prefix: 'request',
     afterSave: '之后等驱动脚本盖住屏幕（这一页随之隐藏）',
     notHidden: '驱动脚本没有盖屏？',
-    // 第三格只在这一页：这一页被暂停、编辑权到期，失去编辑权之后另存为副本
-    afterWrite: '之后另一方经接口请求编辑；等这一页被暂停、编辑权到期、另一方接手，移走盖屏之后得知失去编辑权',
+    // 第三格只在这一页：这一页被暂停、编辑权到期时失去编辑权之后另存为副本；没被暂停时空闲满 2 分钟先存上它再交出
+    afterWrite: '之后另一方经接口请求编辑；这一页被暂停时编辑权到期、另一方接手，移走盖屏之后得知失去编辑权；没被暂停时空闲满 2 分钟自动交出',
   })
   if (!prelude)
     return
-  let lost = false
+  let path: PausedHolderPath | undefined
   await check(session, 'request.holder.outcome', async () => {
-    // 不等编辑器重建到 steady：回来之后才得知，页头的说明（React）照常更新
+    // 不等编辑器重建到 steady：回来之后才得知（或者交出之后在后台重建为阅读，没有动画帧画不出来），页头的说明（React）照常更新
     const settled = (): boolean => {
       const { mode } = session.host.view()
       return mode === 'lost' || mode === 'reading'
     }
     if (!await waitFor(settled, HOLDER_LOST_WAIT_MS, 100))
-      fail(`${HOLDER_LOST_WAIT_MS / 1000} 秒内没有失去编辑权（${describeView(session)}，${session.host.view().incoming === undefined ? '没有' : '有'}在等回应的请求）`)
+      fail(`${HOLDER_LOST_WAIT_MS / 1000} 秒内既没有失去编辑权、也没有交出（${describeView(session)}，${session.host.view().incoming === undefined ? '没有' : '有'}在等回应的请求）`)
     observations.push(observation('outcome'))
     const summary = summarizePausedHolder(timelineWith(observations))
     session.path = summary.path
     session.timings.push({ id: 'request.holder', ms: summary.ms })
     const view = session.host.view()
+    if (summary.path === 'handed-over') {
+      const said = statusRegionText(session)
+      if (summary.problems.length > 0)
+        fail(`${summary.problems.join('；')}（${summary.text}；读屏状态区说"${said}"）`)
+      if (view.notice !== 'handed-over' || !said.includes(`你 ${HANDOVER_IDLE_MS / 60_000} 分钟没有操作，已保存并把编辑权交给了`))
+        fail(`回到了阅读，说明是 ${view.notice ?? '没有'}、读屏状态区说"${said}"（应当说 ${HANDOVER_IDLE_MS / 60_000} 分钟没有操作、已保存并把编辑权交给了另一方）`)
+      path = summary.path
+      return `${summary.text}；读屏状态区说"${said}"`
+    }
     const notice = lostNoticeText(session)
     if (summary.problems.length > 0)
       fail(`${summary.problems.join('；')}（${summary.text}；说明"${notice}"）`)
@@ -413,10 +450,19 @@ async function pausedHolderSteps(session: Session, visibility: VisibilityWatch, 
       fail(`失去编辑权的说明是"${notice}"（应当说另一个人正在编辑这份文档、本页的修改没有保存、可以另存为副本）`)
     if (view.unsaved !== true || chromeButton(session, SAVE_AS_COPY) === undefined)
       fail(`本页${view.unsaved === true ? '有' : '没有'}没保存的修改，${chromeButton(session, SAVE_AS_COPY) === undefined ? '没有' : '有'}"${SAVE_AS_COPY}"（第三格没有存上：两样都应当有）`)
-    lost = true
+    path = summary.path
     return `${summary.text}；说明"${notice}"`
   }, HOLDER_LOST_WAIT_MS + CHECK_TIMEOUT_MS)
-  if (!lost)
+  if (path === 'handed-over') {
+    await check(session, 'request.holder.server', async () => {
+      // 先保存再交出：三格都在服务器上（第三格是交出之前那一次存上的）
+      const cells = cellsIn(await fetchServerContent(session.host.documentId), PAUSED_HOLDER_EDITS, [true, true, true])
+      if (cells.wrong.length > 0)
+        fail(`服务器上 ${cells.text}（先保存再交出：三格都应当在）`)
+      return `服务器上 ${cells.text}（交出之前存上了第三格）`
+    })
+  }
+  if (path !== 'lost-after-pause')
     return
   await check(session, 'request.holder.copy', async () => {
     const button = chromeButton(session, SAVE_AS_COPY)
