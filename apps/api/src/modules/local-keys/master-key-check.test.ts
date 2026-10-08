@@ -57,7 +57,9 @@ describe('MasterKeyCheck', () => {
     const foreignMasterKeys = [{ masterKeyId: lost.currentMasterKeyId, keys: 2 }, { masterKeyId: other.currentMasterKeyId, keys: 1 }]
       .toSorted((a, b) => a.masterKeyId.localeCompare(b.masterKeyId))
     expect(error).toHaveBeenCalledWith(FOREIGN_MASTER_KEY_ERROR, { masterKeyId: ring.currentMasterKeyId, currentKeys: 1, foreignKeys: 3, foreignMasterKeys })
-    expect(FOREIGN_MASTER_KEY_ERROR).toContain('逐个吊销')
+    // 处置能照做（审查 B4）：日志只有把数，说明里指向部署说明的查法（按 masterKeyId 查库），再到账户页逐个吊销
+    expect(FOREIGN_MASTER_KEY_ERROR).toContain('按部署说明（"本机密钥的主密钥"一节）用这条日志里的 masterKeyId 在数据库里查出这些人')
+    expect(FOREIGN_MASTER_KEY_ERROR).toContain('在管理界面的账户页逐个吊销')
   })
 
   it('查询失败（数据库不可达、还没有迁移）：记一条告警后跳过，不影响启动', async () => {
