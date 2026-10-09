@@ -1,6 +1,7 @@
 // 崩溃工具（M4-P1 设计 §3.7；P3 的崩溃恢复沿用）：持久化的浏览器目录、结束整棵浏览器进程、以同一个目录重开。认进程的部分在 ./browser-processes.ts。
 //
-// - 启动（launch）：持久上下文，资料目录在 test-results/crash-profiles/ 下（每条用例、每次重复与重试唯一，见 profileDirFor）。
+// - 启动（launch）：持久上下文，资料目录经 ./persistent-profile.ts 的 profileDirFor 取（test-results/persistent-profiles/ 下，每条用例、每次重复与
+//   重试唯一，只有 ASCII：Linux 上的 WebKit 遇到非 ASCII 的路径起不来）。
 //   持久上下文不经共用夹具的 context，夹具的那几样自己挂上：CSP 违规、页面错误（用例结束时断言，与共用夹具同一套收集）、自动保存的打开状态，
 //   以及 locale、timezoneId、baseURL、ignoreHTTPSErrors。启动之后在进程表里认出根（测试的工作进程的子进程、命令行带资料目录）。
 // - 结束（prepareCrash → crash）：prepare 现取进程表认出这次启动的全部进程（macOS 的 WebKit 另经 lsof 认承载存储的 Networking），核对要求的
@@ -22,8 +23,8 @@ import type { AutosaveMode } from './autosave.ts'
 import type { CrashPlatform, InstanceProcess, InstanceSpec, ProcessRole, ProcessRow } from './browser-processes.ts'
 import type { CspViolations, PageErrors } from './fixtures.ts'
 import type { IndexedDbLogState, TornLog } from './leveldb-log.ts'
-import { mkdirSync, realpathSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
 import process from 'node:process'
 import { test as base, expect } from '@playwright/test'
 import {
@@ -42,7 +43,8 @@ import {
   webkitNetworkingCandidates,
 } from './browser-processes.ts'
 import { chooseAutosave, cspViolationCollector, defaultAutosaveMode, pageErrorCollector } from './fixtures.ts'
-import { indexedDbLogStates, tearIndexedDbLog } from './leveldb-log.ts'
+import { indexedDbDirName, indexedDbLogStates, tearIndexedDbLog } from './leveldb-log.ts'
+import { profileDirFor } from './persistent-profile.ts'
 
 /** 一次持久化的启动 */
 export interface PersistentLaunch {
@@ -404,15 +406,21 @@ function createCrashTool(environment: LaunchEnvironment, collectors: Pick<CrashT
 }
 
 /**
- * 资料目录：test-results/crash-profiles/<用例的 id>-<第几次重复>-<第几次重试>。每条用例、每次重复与重试唯一；失败时留着便于看，下次运行 Playwright
- * 清空 test-results；路径记进用例的注解（crash-profile）。不用 testInfo.outputPath('profile')：用例的输出目录名里有中文标题，Linux 上的 WebKit
- * （GLib 按区域设置解析命令行参数）在非 UTF-8 的区域设置下起不来（容器里实测："Cannot parse arguments: Invalid byte sequence in conversion input"）
+ * 用例依赖 UR-034（docs/upstream/UR-034-chromium-indexeddb-torn-log-wipe.md）的前提——Chromium 的 IndexedDB 是 LevelDB、复用日志，补的半条记录
+ * 之后新写的接在它后面，再下一次打开时删掉整个来源的库——前提不在了时，失败说明以这一句开头；到时的处理写在用到它的用例文件开头
  */
-function profileDirFor(testInfo: TestInfo): string {
-  const dir = join(testInfo.project.outputDir, 'crash-profiles', `${testInfo.testId}-${testInfo.repeatEachIndex}-${testInfo.retry}`)
-  mkdirSync(dir, { recursive: true })
-  testInfo.annotations.push({ type: 'crash-profile', description: dir })
-  return dir
+export const UR034_PREMISE_GONE = 'UR-034 的前提不在了'
+
+/**
+ * 结束的报告里被测来源（origin，即 baseURL）的那一条 IndexedDB 日志：只看这一个来源（浏览器可能给内建的来源另建 IndexedDB，不算）。
+ * 资料目录里没有这个来源的 LevelDB IndexedDB 时用例失败，说明 UR-034 的前提不在了（浏览器换了后端，例如 Chromium 的 SQLite 后端）
+ */
+export function indexedDbLogOf(report: CrashReport, origin: string | undefined): IndexedDbLogState {
+  expect(origin, '没有 baseURL，认不出被测的来源').toBeDefined()
+  const database = indexedDbDirName(origin ?? '')
+  const state = report.indexedDbLogs.find(item => item.database === database)
+  expect(state, `${UR034_PREMISE_GONE}：资料目录里没有这个来源的 LevelDB IndexedDB（${database}；现有：${report.indexedDbLogs.map(item => item.database).join('、') || '无'}）——浏览器换了 IndexedDB 的后端（例如 Chromium 的 SQLite 后端）`).toBeDefined()
+  return state as IndexedDbLogState
 }
 
 /** 断言一次结束：要求的角色都结束了、没有幸存者、认得准 */
@@ -436,7 +444,7 @@ export const test = base.extend<{ autosave: AutosaveMode, crashTool: CrashTool }
       browserType,
       platform: currentPlatform(),
       family: browserName,
-      profileDir: profileDirFor(testInfo),
+      profileDir: profileDirFor(testInfo, 'crash'),
       webkitInstallDir: browserName === 'webkit' ? realpathSync(dirname(browserType.executablePath())) : undefined,
       options: { channel, baseURL, ignoreHTTPSErrors, locale, timezoneId },
       prepareContext: async (context) => {

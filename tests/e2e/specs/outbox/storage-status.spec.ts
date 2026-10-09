@@ -5,6 +5,7 @@ import { chromium } from '@playwright/test'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { openOutboxProbe, outcomeOf, probeStorage } from '../../support/outbox-probe.ts'
+import { profileDirFor } from '../../support/persistent-profile.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
 test.describe('本机存储的状态', { tag: '@test-build' }, () => {
@@ -22,7 +23,7 @@ test.describe('本机存储的状态', { tag: '@test-build' }, () => {
     // eslint-disable-next-line playwright/no-skipped-test -- WebKit 没有授予持久保存的接口（CDP 的 Browser.grantPermissions 只在 Chromium 内核里有）；Safari 上的实际结果由真实 Safari 的复核记录（P1 设计 §3.6 第 1 项）
     test.skip(browserName === 'webkit', 'WebKit 没有授予持久保存的接口：Safari 上的实际结果由真实 Safari 的复核记录（P1 设计 §3.6 第 1 项）')
     const { baseURL, channel, locale, timezoneId, ignoreHTTPSErrors } = testInfo.project.use
-    const context = await chromium.launchPersistentContext(testInfo.outputPath('profile'), { baseURL, channel, locale, timezoneId, ignoreHTTPSErrors })
+    const context = await chromium.launchPersistentContext(profileDirFor(testInfo, 'profile'), { baseURL, channel, locale, timezoneId, ignoreHTTPSErrors })
     try {
       await cspViolations.watch(context)
       pageErrors.watch(context)

@@ -220,7 +220,7 @@ describe('资料目录里的日志（临时目录里现造）', () => {
     expect(readFileSync(join(profile, 'Default', 'IndexedDB', 'http_127.0.0.1_5000.indexeddb.leveldb', '000003.log'))).toHaveLength(log.length)
     expect(() => tearIndexedDbLog(profile, 'http://127.0.0.1:4000', 64)).toThrow(/本来就不完整/)
     expect(readFileSync(file)).toHaveLength(log.length + LOG_HEADER_SIZE)
-    expect(() => tearIndexedDbLog(profile, 'http://127.0.0.1:6000', 64)).toThrow(/还没有 IndexedDB/)
+    expect(() => tearIndexedDbLog(profile, 'http://127.0.0.1:6000', 64)).toThrow(/没有 LevelDB 的 IndexedDB.*UR-034 的前提不在了/)
   })
 })
 
