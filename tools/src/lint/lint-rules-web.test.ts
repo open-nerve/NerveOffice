@@ -1,7 +1,7 @@
 // lint 规则的自测（平台页面）：前端的模块边界与入口、按需加载与平台页面的首屏、Radix 的弹窗原语、人名的拼法、读屏用的状态区。
 // 共用的准备与时限见 lint-harness.test-support.ts
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, posix } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { REPO_ROOT } from '../shared/repo.ts'
 import {
@@ -654,24 +654,50 @@ describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（fe
   })
 }, LINT_TIMEOUT)
 
-describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1 设计 §3.1，计划 S8 第 2 项）', () => {
+describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1 设计 §3.1，计划 S8 第 2 项；P1 审查 A7、B10）', () => {
   const RULE = 'ts/no-restricted-imports'
   const SYNTAX = 'no-restricted-syntax'
+  const GLOBALS = 'no-restricted-globals'
+  const PROPERTIES = 'no-restricted-properties'
   const PLATFORM_MESSAGE = '平台页面对本机发件箱（shared/outbox/）只许按需 import() 列表的标记 draft-index.ts'
-  const ZOD_FREE_MESSAGE = '发件箱 Worker 会用到的文件与测试构建的探针不引用 zod、带 zod 的契约模块与请求层（shared/api/）'
+  const ZOD_FREE_MESSAGE = '本机发件箱的文件（本机密钥 local-key.ts 之外）与测试构建的探针不引用 zod、带 zod 的契约模块与请求层（shared/api/）'
+  const WORKER_AREA_MESSAGE = '发件箱 Worker 一侧的文件只引用 Worker 一侧的文件'
+  const MAIN_THREAD_MESSAGE = '发件箱 Worker 一侧的文件不引用只在主线程用的模块'
+  const PAGE_ONLY_MESSAGE = '发件箱 Worker 一侧的文件不用只在页面里有的全局'
+  const PERSIST_MESSAGE = 'StorageManager.persist() 只在页面里有'
+  const DYNAMIC_IMPORT_MESSAGE = '发件箱 Worker 一侧的文件不用动态 import()'
   const EDITOR_PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
-  const WORKER_SHARED = 'apps/web/src/shared/outbox/writer-fence.ts'
-  const WORKER_FEATURE = ['apps/web/src/features/sheet-editor/outbox/outbox-protocol.ts', 'apps/web/src/features/sheet-editor/outbox/outbox-worker-handler.ts', 'apps/web/src/features/sheet-editor/outbox/outbox.worker.ts']
-  const PROBE = 'apps/web/src/features/sheet-editor/outbox/testing/outbox-probe.ts'
+  const OUTBOX_SHARED = 'apps/web/src/shared/outbox'
+  const OUTBOX_FEATURE = 'apps/web/src/features/sheet-editor/outbox'
+  const WORKER_SHARED = `${OUTBOX_SHARED}/writer-fence.ts`
+  const WORKER_FEATURE = [`${OUTBOX_FEATURE}/outbox-protocol.ts`, `${OUTBOX_FEATURE}/outbox-worker-handler.ts`, `${OUTBOX_FEATURE}/outbox.worker.ts`]
+  const WORKER_TESTING = [`${OUTBOX_FEATURE}/testing/transaction-recorder.ts`, `${OUTBOX_FEATURE}/testing/mirror-review.ts`, `${OUTBOX_FEATURE}/testing/outbox-probe.worker.ts`]
+  const WORKER_FILES = [WORKER_SHARED, ...WORKER_FEATURE, ...WORKER_TESTING]
+  /** 三个目录各一个：逐条核对的写法多，每个目录挑一个 */
+  const WORKER_SAMPLES = [WORKER_SHARED, `${OUTBOX_FEATURE}/outbox.worker.ts`, `${OUTBOX_FEATURE}/testing/outbox-probe.worker.ts`]
+  const PROBE = `${OUTBOX_FEATURE}/testing/outbox-probe.ts`
+  /** 只在主线程用的（不在 Worker 一侧）：本机密钥、存储状态、合一的清理、Worker 的客户端、页面一侧的探针 */
+  const MAIN_THREAD_FILES = [`${OUTBOX_SHARED}/local-key.ts`, `${OUTBOX_SHARED}/storage-status.ts`, `${OUTBOX_SHARED}/local-cleanup.ts`, `${OUTBOX_FEATURE}/outbox-worker-client.ts`, PROBE]
 
-  async function expectBlocked(code: string, file: string, rule: string, message: string): Promise<void> {
+  /** 从 file 引用 shared/outbox 里的 name 的写法 */
+  const sharedOutbox = (file: string, name: string): string => `${file.includes('/testing/') ? '../../../../shared/outbox/' : file.includes('/features/') ? '../../../shared/outbox/' : './'}${name}`
+  /** 从 file 引用请求层的写法 */
+  const apiClient = (file: string): string => `${file.includes('/testing/') ? '../../../../shared' : file.includes('/features/') ? '../../../shared' : '..'}/api/client.ts`
+
+  /** 报出这条规则、带着这条说明；absent 里的说明都没有报（一处引用只报一条） */
+  async function expectBlocked(code: string, file: string, rule: string, message: string, ...absent: readonly string[]): Promise<void> {
     const report = await lint(code, file)
     expect(report.rules, `${file}\n${code}`).toContain(rule)
-    expect(report.messages.join('\n'), `${file}\n${code}`).toContain(message)
+    const reported = report.messages.join('\n')
+    expect(reported, `${file}\n${code}`).toContain(message)
+    for (const other of absent)
+      expect(reported, `${file}\n${code}`).not.toContain(other)
   }
 
-  async function expectAllowed(code: string, file: string, message: string): Promise<void> {
-    expect((await lint(code, file)).messages.join('\n'), `${file}\n${code}`).not.toContain(message)
+  async function expectAllowed(code: string, file: string, ...messages: readonly string[]): Promise<void> {
+    const reported = (await lint(code, file)).messages.join('\n')
+    for (const message of messages)
+      expect(reported, `${file}\n${code}`).not.toContain(message)
   }
 
   it('平台页面：静态引用发件箱的任何文件（含 draft-index.ts、import type、副作用导入与再导出）都报错；应用层、功能、shared 的别的文件、平台页面的入口都一样', async () => {
@@ -700,32 +726,183 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
   it('编辑器页与发件箱自己不受平台页面那一条限制', async () => {
     await expectAllowed('import { createDraftStore } from \'../../shared/outbox/draft-store.ts\'\n\nexport const create = createDraftStore\n', EDITOR_PAGE, PLATFORM_MESSAGE)
     await expectAllowed(dynamicImport('../../shared/outbox/local-key.ts'), EDITOR_PAGE, PLATFORM_MESSAGE)
-    await expectAllowed('import { openOutboxDatabase } from \'./database.ts\'\n\nexport const open = openOutboxDatabase\n', 'apps/web/src/shared/outbox/draft-index.ts', PLATFORM_MESSAGE)
+    await expectAllowed('import { openOutboxDatabase } from \'./database.ts\'\n\nexport const open = openOutboxDatabase\n', `${OUTBOX_SHARED}/draft-index.ts`, PLATFORM_MESSAGE)
   })
 
-  it('Worker 会用到的文件与探针：引用 zod（含子路径）、请求层、契约里带 zod 的结构都报错；契约里不带 zod 的常量与类型照常', async () => {
-    const blocked = [
-      'import { z } from \'zod\'\n\nexport const s = z.string()\n',
-      'import { z } from \'zod/v4\'\n\nexport const s = z.string()\n',
-      'import { localKeySchema } from \'@nerve-office/contracts\'\n\nexport const schema = localKeySchema\n',
-    ]
-    const apiImport = (file: string): string => `import { apiRequest } from '${file.includes('/features/') ? '../../../shared' : '..'}/api/client.ts'\n\nexport const request = apiRequest\n`
-    for (const file of [WORKER_SHARED, ...WORKER_FEATURE, PROBE]) {
-      for (const code of blocked)
+  it('不引用 zod 的几处：探针与探针引用的存储状态、合一的清理引用 zod（含子路径）、请求层、契约里带 zod 的结构都报错；Worker 一侧引用契约里带 zod 的结构报错，zod 与请求层由区域那一条拦；契约里不带 zod 的常量与类型照常', async () => {
+    const zod = ['import { z } from \'zod\'\n\nexport const s = z.string()\n', 'import { z } from \'zod/v4\'\n\nexport const s = z.string()\n']
+    const zodContract = 'import { localKeySchema } from \'@nerve-office/contracts\'\n\nexport const schema = localKeySchema\n'
+    const api = (file: string): string => `import { apiRequest } from '${apiClient(file)}'\n\nexport const request = apiRequest\n`
+    for (const file of [PROBE, `${OUTBOX_SHARED}/storage-status.ts`, `${OUTBOX_SHARED}/local-cleanup.ts`]) {
+      for (const code of [...zod, zodContract, api(file)])
         await expectBlocked(code, file, RULE, ZOD_FREE_MESSAGE)
-      await expectBlocked(apiImport(file.replace('/testing/', '/')), file, RULE, ZOD_FREE_MESSAGE)
-      await expectAllowed('import { LOCAL_DRAFT_RETENTION_DAYS } from \'@nerve-office/contracts\'\n\nexport const days = LOCAL_DRAFT_RETENTION_DAYS\n', file, ZOD_FREE_MESSAGE)
-      await expectAllowed('import type { LocalKey } from \'@nerve-office/contracts\'\n\nexport type K = LocalKey\n', file, ZOD_FREE_MESSAGE)
     }
-    await expectBlocked('import { apiRequest } from \'../../../../shared/api/client.ts\'\n\nexport const request = apiRequest\n', PROBE, RULE, ZOD_FREE_MESSAGE)
+    for (const file of WORKER_SAMPLES) {
+      await expectBlocked(zodContract, file, RULE, ZOD_FREE_MESSAGE)
+      for (const code of [...zod, api(file)])
+        await expectBlocked(code, file, RULE, WORKER_AREA_MESSAGE)
+    }
+    for (const file of [...WORKER_SAMPLES, PROBE, `${OUTBOX_SHARED}/storage-status.ts`]) {
+      await expectAllowed('import { LOCAL_DRAFT_RETENTION_DAYS } from \'@nerve-office/contracts\'\n\nexport const days = LOCAL_DRAFT_RETENTION_DAYS\n', file, ZOD_FREE_MESSAGE, WORKER_AREA_MESSAGE)
+      await expectAllowed('import type { LocalKey } from \'@nerve-office/contracts\'\n\nexport type K = LocalKey\n', file, ZOD_FREE_MESSAGE, WORKER_AREA_MESSAGE)
+    }
   })
 
-  it('只在主线程用的（本机密钥、存储状态、Worker 的客户端）不受这一条限制；同一份限制里仍拦着测试辅助与 sheet-editor 的 testing/', async () => {
-    const code = 'import { localKeySchema } from \'@nerve-office/contracts\'\n\nexport const schema = localKeySchema\n'
-    for (const file of ['apps/web/src/shared/outbox/local-key.ts', 'apps/web/src/shared/outbox/storage-status.ts', 'apps/web/src/features/sheet-editor/outbox/outbox-worker-client.ts'])
-      await expectAllowed(code, file, ZOD_FREE_MESSAGE)
+  it('本机密钥与 Worker 的客户端不受不引用 zod 那一条与 Worker 一侧的限制；Worker 一侧的同一份限制里仍拦着测试辅助与 sheet-editor 的 testing/', async () => {
+    for (const file of [`${OUTBOX_SHARED}/local-key.ts`, `${OUTBOX_FEATURE}/outbox-worker-client.ts`])
+      await expectAllowed(`import { localKeySchema } from '@nerve-office/contracts'\nimport { apiRequest } from '${apiClient(file)}'\n\nexport const schema = [localKeySchema, apiRequest]\n`, file, ZOD_FREE_MESSAGE, WORKER_AREA_MESSAGE, MAIN_THREAD_MESSAGE)
     await expectBlocked('import { sampleMeta } from \'./draft-record.test-support.ts\'\n\nexport const meta = sampleMeta\n', WORKER_SHARED, RULE, '测试与测试辅助')
+    await expectBlocked('import { sample } from \'./pipeline.test-support.ts\'\n\nexport const s = sample\n', WORKER_TESTING[0] ?? '', RULE, '测试与测试辅助')
     await expectBlocked('import \'./testing/outbox-probe.ts\'\n\nexport const a = 1\n', WORKER_FEATURE[0] ?? '', RULE, '编辑器页的测试构建探针')
+    await expectBlocked('import type { ProbePipeline } from \'./testing/pipeline-probe.ts\'\n\nexport type P = ProbePipeline\n', WORKER_FEATURE[1] ?? '', RULE, '编辑器页的测试构建探针')
+  })
+
+  it('Worker 一侧（直接）：引用只在主线程用的模块报错——三个目录、值、副作用导入与再导出都算，每处只报这一条；类型照常', async () => {
+    /** 每个引用各报一次"只在主线程用的"，没有报"区域之外"的 */
+    async function expectMainThread(code: string, file: string, count: number): Promise<void> {
+      const report = await lint(code, file)
+      expect(report.messages.filter(message => message.includes(MAIN_THREAD_MESSAGE)), `${file}\n${code}`).toHaveLength(count)
+      expect(report.messages.join('\n'), `${file}\n${code}`).not.toContain(WORKER_AREA_MESSAGE)
+    }
+    const shared = ['local-key.ts', 'storage-status.ts', 'local-cleanup.ts']
+    for (const file of WORKER_FILES)
+      await expectMainThread(`${shared.map((name, index) => `import { a${index} } from '${sharedOutbox(file, name)}'`).join('\n')}\n\nexport const b = [a0, a1, a2]\n`, file, shared.length)
+    for (const file of WORKER_FEATURE)
+      await expectMainThread('import \'./outbox-worker-client.ts\'\n\nexport const a = 1\n', file, 1)
+    const probes = ['outbox-probe.ts', 'crash-probe.ts', 'outbox-review-probe.ts']
+    for (const file of WORKER_TESTING)
+      await expectMainThread(`export { createPipelineProbe } from './pipeline-probe.ts'\n${probes.map((name, index) => `import { a${index} } from './${name}'`).join('\n')}\nimport { createOutboxWorkerClient } from '../outbox-worker-client.ts'\n\nexport const b = [a0, a1, a2, createOutboxWorkerClient]\n`, file, probes.length + 2)
+    // 类型照常：import type 编译之后就没有了（探针 Worker 记事务用页面一侧探针的类型）
+    await expectAllowed('import type { LocalKeyOutcome } from \'./local-key.ts\'\n\nexport type K = LocalKeyOutcome\n', WORKER_SHARED, MAIN_THREAD_MESSAGE, WORKER_AREA_MESSAGE)
+    await expectAllowed('import type { ProbeWorkerTransaction } from \'./pipeline-probe.ts\'\n\nexport type T = ProbeWorkerTransaction\n', WORKER_TESTING[0] ?? '', MAIN_THREAD_MESSAGE, WORKER_AREA_MESSAGE)
+  })
+
+  it('Worker 一侧（间接）：区域之外的一律报错——没列进 Worker 一侧的文件、编辑器页与 shared 的别的模块、别的包、换了写法或带查询的路径、区域之外的类型、动态 import()；中转的文件只能在 Worker 一侧，它自己同样受约束', async () => {
+    const outside: (readonly [string, string])[] = [
+      // 页面一侧的模块经中转进 Worker：Worker 的客户端引用的编辑权、同一目录里没列进 Worker 一侧的文件（可能是页面一侧的）
+      [WORKER_FEATURE[1] ?? '', 'import { a } from \'../edit-lease.ts\'\n\nexport const b = a\n'],
+      [WORKER_FEATURE[1] ?? '', 'import { a } from \'./outbox-session.ts\'\n\nexport const b = a\n'],
+      [WORKER_TESTING[0] ?? '', 'import { a } from \'./probe-helper.ts\'\n\nexport const b = a\n'],
+      [WORKER_TESTING[0] ?? '', 'import { a } from \'../outbox-session.ts\'\n\nexport const b = a\n'],
+      [WORKER_TESTING[0] ?? '', 'import { a } from \'../../edit-lease.ts\'\n\nexport const b = a\n'],
+      // 别的目录、别的包
+      [WORKER_SHARED, 'import { a } from \'../lib/format.ts\'\n\nexport const b = a\n'],
+      [WORKER_FEATURE[0] ?? '', 'import { useState } from \'react\'\n\nexport const use = useState\n'],
+      [WORKER_FEATURE[0] ?? '', 'import { a } from \'../../../editor/sheet-editor.ts\'\n\nexport const b = a\n'],
+      // 换了写法、带查询（?worker 会另起一个 Worker）
+      [WORKER_SHARED, 'import { a } from \'../outbox/draft-record.ts\'\n\nexport const b = a\n'],
+      [WORKER_SHARED, 'import { a } from \'./draft-record\'\n\nexport const b = a\n'],
+      [WORKER_FEATURE[1] ?? '', 'import OutboxWorker from \'./outbox.worker.ts?worker\'\n\nexport const W = OutboxWorker\n'],
+      // 区域之外的类型也不放行（放行类型的只有只在主线程用的那几个模块的确切写法）
+      [WORKER_FEATURE[1] ?? '', 'import type { EditLease } from \'../edit-lease.ts\'\n\nexport type L = EditLease\n'],
+    ]
+    for (const [file, code] of outside)
+      await expectBlocked(code, file, RULE, WORKER_AREA_MESSAGE)
+    for (const file of WORKER_FILES)
+      await expectBlocked(dynamicImport(sharedOutbox(file, 'draft-store.ts')), file, SYNTAX, DYNAMIC_IMPORT_MESSAGE)
+    // 区域之内照常：同一目录与别的发件箱目录里 Worker 一侧的文件
+    const inside: (readonly [string, string])[] = [
+      [WORKER_SHARED, 'import { readDraftMeta } from \'./draft-record.ts\'\n\nexport const read = readDraftMeta\n'],
+      [WORKER_FEATURE[1] ?? '', 'import { createDraftStore } from \'../../../shared/outbox/draft-store.ts\'\nimport { a } from \'./outbox-protocol.ts\'\n\nexport const b = [createDraftStore, a]\n'],
+      [WORKER_TESTING[2] ?? '', 'import \'./transaction-recorder.ts\'\nimport \'../outbox.worker.ts\'\n'],
+      [WORKER_TESTING[1] ?? '', 'import { a } from \'../../../../shared/outbox/mirror-directory.ts\'\nimport { b } from \'../outbox-protocol.ts\'\n\nexport const c = [a, b]\n'],
+    ]
+    for (const [file, code] of inside)
+      await expectAllowed(code, file, WORKER_AREA_MESSAGE, MAIN_THREAD_MESSAGE)
+    // 转了一手：中转的文件只能在 Worker 一侧（上面），它自己同样受这几条约束——现有的文件由 lint 本身逐个检查；shared/outbox 里新放的文件
+    // 默认在 Worker 一侧，编辑器页 outbox/ 与 testing/ 里新的 *.worker.ts 也是（文件还不存在，类型感知的检查跑不了，核对算出的配置）
+    for (const added of [`${OUTBOX_SHARED}/draft-helper.ts`, `${OUTBOX_FEATURE}/session.worker.ts`, `${OUTBOX_FEATURE}/testing/replay.worker.ts`]) {
+      const config = await configFor(added)
+      expect(JSON.stringify(config.rules?.[RULE]), added).toContain(WORKER_AREA_MESSAGE)
+      expect(JSON.stringify(config.rules?.[RULE]), added).toContain(MAIN_THREAD_MESSAGE)
+      expect(JSON.stringify(config.rules?.[GLOBALS]), added).toContain(PAGE_ONLY_MESSAGE)
+      expect(JSON.stringify(config.rules?.[PROPERTIES]), added).toContain(PERSIST_MESSAGE)
+      expect(JSON.stringify(config.rules?.[SYNTAX]), added).toContain(DYNAMIC_IMPORT_MESSAGE)
+    }
+  })
+
+  it('Worker 一侧不依赖 DOM：只在页面里有的全局（直接写、经 globalThis）与 StorageManager.persist（各种写法）报错；Worker 里有的照常；self 仍由 antfu 改写成 globalThis', async () => {
+    const pageOnly: (readonly [string, string])[] = [
+      ['export const title = document.title\n', GLOBALS],
+      ['window.addEventListener(\'message\', () => {})\n', GLOBALS],
+      ['export const value = localStorage.getItem(\'k\')\n', GLOBALS],
+      ['sessionStorage.clear()\n', GLOBALS],
+      ['export const title = globalThis.document.title\n', PROPERTIES],
+      ['export const storage = globalThis.localStorage\n', PROPERTIES],
+      ['export const session = globalThis.sessionStorage\n', PROPERTIES],
+    ]
+    const persist = [
+      'export async function keep() {\n  return navigator.storage.persist()\n}\n',
+      'export async function keep() {\n  return globalThis.navigator.storage.persist()\n}\n',
+      'export async function keep() {\n  return navigator.storage?.persist?.()\n}\n',
+      'export async function keep() {\n  return navigator.storage[\'persist\']()\n}\n',
+      'const { persist } = navigator.storage\n\nexport const keep = persist\n',
+    ]
+    for (const file of WORKER_SAMPLES) {
+      for (const [code, rule] of pageOnly)
+        await expectBlocked(code, file, rule, PAGE_ONLY_MESSAGE)
+      for (const code of persist)
+        await expectBlocked(code, file, PROPERTIES, PERSIST_MESSAGE)
+      await expectBlocked('self.postMessage(1)\n', file, GLOBALS, 'Use `globalThis` instead.')
+    }
+    // 名单里的每一个：直接写与经 globalThis 各报一次
+    const entry = (await configFor(WORKER_SHARED)).rules?.[GLOBALS]
+    const names = (Array.isArray(entry) ? entry.slice(1) as { readonly name: string, readonly message?: string }[] : []).filter(item => item.message?.includes(PAGE_ONLY_MESSAGE) === true).map(item => item.name)
+    expect(names).toEqual(expect.arrayContaining(['window', 'document', 'localStorage', 'sessionStorage']))
+    const direct = await lint(`export const values = [${names.join(', ')}]\n`, WORKER_SHARED)
+    expect(direct.messages.filter(message => message.includes(PAGE_ONLY_MESSAGE))).toHaveLength(names.length)
+    const viaGlobal = await lint(`export const values = [${names.map(name => `globalThis.${name}`).join(', ')}]\n`, WORKER_SHARED)
+    expect(viaGlobal.messages.filter(message => message.includes(PAGE_ONLY_MESSAGE))).toHaveLength(names.length)
+    // Worker 里有的照常：crypto、indexedDB、navigator（locks、storage 的 getDirectory、persisted、estimate）、location、BroadcastChannel
+    const available = [
+      'export const subtle = crypto.subtle',
+      'export const subtleViaGlobal = globalThis.crypto.subtle',
+      'export const request = indexedDB.open(\'x\')',
+      'export const factory = globalThis.indexedDB',
+      'export const locks = navigator.locks',
+      'export const directory = navigator.storage.getDirectory()',
+      'export const persisted = navigator.storage.persisted()',
+      'export const estimate = navigator.storage.estimate()',
+      'export const origin = location.origin',
+      'export const channel = new BroadcastChannel(\'x\')',
+    ].join('\n')
+    for (const file of WORKER_SAMPLES) {
+      const report = await lint(`${available}\n`, file)
+      expect(report.rules, file).not.toContain(GLOBALS)
+      expect(report.rules, file).not.toContain(PROPERTIES)
+    }
+    // 只在主线程用的文件不受这几条限制
+    for (const file of MAIN_THREAD_FILES)
+      await expectAllowed('export const title = document.title\n\nexport async function keep() {\n  return navigator.storage.persist()\n}\n', file, PAGE_ONLY_MESSAGE, PERSIST_MESSAGE)
+  })
+
+  it('Worker 一侧的同名规则带上了原有的整组限制：web 的语法限制（另加动态 import() 一条）、antfu 的 __proto__ 一类与 global、self', async () => {
+    for (const file of WORKER_SAMPLES) {
+      const selectors = restrictedSyntaxSelectors(await configFor(file))
+      const base = restrictedSyntaxSelectors(await configFor(EDITOR_PAGE))
+      expect(selectors).toEqual(expect.arrayContaining(base))
+      expect(selectors.length).toBe(base.length + 1)
+      await expectBlocked('export const prototype = ({}).__proto__\n', file, PROPERTIES, 'Object.getPrototypeOf')
+      await expectBlocked('export const g = global\n', file, GLOBALS, 'Use `globalThis` instead.')
+    }
+  })
+
+  it('发件箱目录里创建的 Worker（new Worker(new URL(…))）的脚本都在 Worker 一侧：它们是 Worker 模块图的起点', async () => {
+    const entries: string[] = []
+    for (const dir of [OUTBOX_SHARED, OUTBOX_FEATURE, `${OUTBOX_FEATURE}/testing`]) {
+      for (const name of readdirSync(join(REPO_ROOT, dir)).filter(name => name.endsWith('.ts') && !name.includes('.test'))) {
+        const source = readFileSync(join(REPO_ROOT, dir, name), 'utf8')
+        for (const match of source.matchAll(/new Worker\(new URL\('([^']+)', import\.meta\.url\)/g))
+          entries.push(posix.join(dir, match[1] ?? ''))
+      }
+    }
+    expect(entries).toContain(`${OUTBOX_FEATURE}/outbox.worker.ts`)
+    expect(entries.length).toBeGreaterThan(1)
+    for (const entry of entries) {
+      const config = await configFor(entry)
+      expect(JSON.stringify(config.rules?.[RULE]), entry).toContain(WORKER_AREA_MESSAGE)
+      expect(JSON.stringify(config.rules?.[GLOBALS]), entry).toContain(PAGE_ONLY_MESSAGE)
+    }
   })
 
   it('放行的契约常量都定义在不引用 zod 的模块里（入口里找到定义它的模块，逐个核对）', async () => {

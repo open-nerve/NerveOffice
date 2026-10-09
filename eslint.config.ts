@@ -565,6 +565,11 @@ const ANTFU_RESTRICTED_PROPERTIES = [
   { property: '__lookupGetter__', message: 'Use `Object.getOwnPropertyDescriptor` instead.' },
   { property: '__lookupSetter__', message: 'Use `Object.getOwnPropertyDescriptor` instead.' },
 ]
+// antfu 的配置给 no-restricted-globals 的两项（global、self 都改用 globalThis）：自己配置这条规则的块（发件箱 Worker 一侧）要带上它们
+const ANTFU_RESTRICTED_GLOBALS = [
+  { name: 'global', message: 'Use `globalThis` instead.' },
+  { name: 'self', message: 'Use `globalThis` instead.' },
+]
 // 有条件地跳过用例同样是跳过（规范 §8.4）：test/no-disabled-tests 只认 .skip 与 x 前缀，playwright/no-skipped-test 只认 test.skip 一类。
 // skipIf、runIf 与用例里的 skip()（测试上下文的 ctx.skip()、解构出来的 skip、Playwright 的 testInfo.skip()）在测试里一并拦下；
 // 确需跳过时用 eslint-disable 注释在 -- 之后写明原因（eslint-comments/require-description 要求写），经审查（M2-P6 第 6 片复核 S4）。
@@ -862,23 +867,108 @@ const OUTBOX_DYNAMIC_FROM_PLATFORM = {
   message: '平台页面对本机发件箱（shared/outbox/）只许按需 import() 列表的标记 draft-index.ts：别的文件（存储、编解码、本机密钥……）只给编辑器页与按需加载的本机草稿页（P4 另行放行）用（M4-P1 设计 §3.1）',
 }
 
-// 发件箱 Worker 会用到的文件（shared/outbox/ 里除 local-key.ts、storage-status.ts 之外的，与编辑器页 outbox/ 的协议、处理、*.worker.ts）
-// 与测试构建的探针（features/sheet-editor/**/testing/**）：不引用 zod、带 zod 的契约模块与请求层（shared/api/）。
+// 本机发件箱的共享文件（shared/outbox/ 里除本机密钥 local-key.ts 之外的）与测试构建的探针（features/sheet-editor/**/testing/**）：
+// 不引用 zod、带 zod 的契约模块与请求层（shared/api/）。
 // - Worker：门禁按全部产物数 zod 的 JIT 探测（上限 1 次），Worker 里再打进一份就超限；Worker 里也没有关掉 zod 的 JIT 的入口。
+//   Worker 一侧的文件另有更严的区域限制（下一节），这里的限制对它们只剩契约的那一条。
 // - 探针：引用请求层会让测试构建把请求层连同 zod 与契约的结构拆进一个新的共享分块，先于 zod-jitless.ts 求值（M4-P1 S6 实测），
-//   测试构建里两个入口的分块就与生产的不同（M3-P2 复核 B4）。
+//   测试构建里两个入口的分块就与生产的不同（M3-P2 复核 B4）。只在主线程用的存储状态与合一的清理被探针引用，同样不引用。
 // 契约只经入口引用（模块边界），所以按导入的名字放行不带 zod 的那几个常量（OUTBOX_ZOD_FREE_CONTRACT_VALUES，定义它们的模块不引用 zod，
-// lint 自测逐个核对）；类型照常（编译之后就没有了）。转了一手的引用 lint 看不出来，门禁 artifacts 的 zod 计数兜底 Worker
+// lint 自测逐个核对）；类型照常（编译之后就没有了）。Worker 一侧转了一手的引用由下一节的区域限制拦住（门禁 artifacts 的 zod 计数
+// 另外兜底）；探针转了一手的引用 lint 看不出来，由审查兜底（S6 的分块问题是测试构建的 E2E 发现的）
 const OUTBOX_ZOD_FREE_CONTRACT_VALUES = ['LOCAL_DRAFT_RETENTION_DAYS', 'LOCAL_KEY_BYTES', 'LOCAL_KEY_PATTERN_SOURCE']
-const OUTBOX_ZOD_FREE_MESSAGE = '发件箱 Worker 会用到的文件与测试构建的探针不引用 zod、带 zod 的契约模块与请求层（shared/api/）：Worker 里再打进一份 zod 门禁就超限，探针引用它们会改变测试构建的入口分块、让 zod 的结构先于关掉 JIT 求值（M4-P1 S6）；契约只许引用不带 zod 的常量（eslint.config.ts 的 OUTBOX_ZOD_FREE_CONTRACT_VALUES）'
-const OUTBOX_ZOD_FREE_PATHS = [
-  { name: 'zod', message: OUTBOX_ZOD_FREE_MESSAGE },
-  { name: '@nerve-office/contracts', allowImportNames: OUTBOX_ZOD_FREE_CONTRACT_VALUES, allowTypeImports: true, message: OUTBOX_ZOD_FREE_MESSAGE },
-]
+const OUTBOX_ZOD_FREE_MESSAGE = '本机发件箱的文件（本机密钥 local-key.ts 之外）与测试构建的探针不引用 zod、带 zod 的契约模块与请求层（shared/api/）：Worker 里再打进一份 zod 门禁就超限，探针（连同它们引用的发件箱文件）引用它们会改变测试构建的入口分块、让 zod 的结构先于关掉 JIT 求值（M4-P1 S6）；契约只许引用不带 zod 的常量（eslint.config.ts 的 OUTBOX_ZOD_FREE_CONTRACT_VALUES）'
+const OUTBOX_ZOD_FREE_CONTRACTS = { name: '@nerve-office/contracts', allowImportNames: OUTBOX_ZOD_FREE_CONTRACT_VALUES, allowTypeImports: true, message: OUTBOX_ZOD_FREE_MESSAGE }
+const OUTBOX_ZOD_FREE_PATHS = [{ name: 'zod', message: OUTBOX_ZOD_FREE_MESSAGE }, OUTBOX_ZOD_FREE_CONTRACTS]
 const OUTBOX_ZOD_FREE_PATTERNS = [
   { regex: '^zod/', message: OUTBOX_ZOD_FREE_MESSAGE },
   { regex: String.raw`(?:^|/)api/`, message: OUTBOX_ZOD_FREE_MESSAGE },
 ]
+
+// ---- 发件箱 Worker 一侧的文件（M4-P1 设计 §3.1；P1 审查 A7、B10）----
+// 发件箱 Worker（outbox.worker.ts）与测试构建的探针 Worker 执行的代码不依赖 DOM（专用 Worker 里没有 window、document、localStorage、
+// StorageManager.persist），也不带进 zod、请求层与页面一侧的模块。lint 逐个文件检查，看不到转了一手的引用，所以按区域约束：
+// - Worker 一侧的文件只引用 Worker 一侧的文件与契约里不带 zod 的常量，不引用别的包（zod、React、Univer……）、请求层与页面一侧的模块。
+//   它们自己同样受这几条约束，所以 Worker 执行的整个模块图都在这个区域里，转了一手的引用也就拦住了；
+// - 只在主线程用的发件箱模块逐个列出（OUTBOX_MAIN_THREAD_ONLY），Worker 一侧不引用它们。类型照常：import type 编译之后就没有了
+//   （import/consistent-type-specifier-style 与 ts/no-import-type-side-effects 保证类型只写成整条的 import type）；
+// - Worker 一侧不用只在页面里有的全局（OUTBOX_PAGE_ONLY_GLOBALS，直接写与经 globalThis）与 StorageManager.persist，
+//   不用动态 import()（模块图要静态可见）。Worker 里有的照常：globalThis、navigator、crypto、indexedDB、location……
+//   （self 由 antfu 的规则统一改写成 globalThis）。
+// shared/outbox 里的文件默认在 Worker 一侧（新文件默认受约束），只在主线程用的除外；编辑器页 outbox/ 与 testing/ 里的逐个列出
+// （OUTBOX_WORKER_SIDE）。没列出的是页面一侧的，Worker 一侧引用不到：确实要在 Worker 里用，就把它列进来（它自己随之受约束）。
+// 按引用路径的文字认：只认这几种写法（同一目录的文件、别的发件箱目录的文件、契约），别的写法一律算区域之外
+const OUTBOX_DIRS = {
+  shared: 'apps/web/src/shared/outbox',
+  feature: 'apps/web/src/features/sheet-editor/outbox',
+  testing: 'apps/web/src/features/sheet-editor/outbox/testing',
+} as const
+type OutboxDir = keyof typeof OUTBOX_DIRS
+/**
+ * 只在主线程（页面里）用的发件箱模块：本机密钥（经请求层取，带 zod）、存储状态（StorageManager.persist 只在页面里有）、
+ * 合一的清理（页面调它；Worker 放弃草稿走 DraftWriter.remove）、Worker 的客户端（创建 Worker、引用编辑权）、测试构建里页面一侧的探针
+ */
+const OUTBOX_MAIN_THREAD_ONLY: Readonly<Record<OutboxDir, readonly string[]>> = {
+  shared: ['local-key.ts', 'storage-status.ts', 'local-cleanup.ts'],
+  feature: ['outbox-worker-client.ts'],
+  testing: ['outbox-probe.ts', 'pipeline-probe.ts', 'crash-probe.ts', 'outbox-review-probe.ts'],
+}
+/** 编辑器页 outbox/ 与 testing/ 里 Worker 一侧的文件（* 通配一段）；shared/outbox 里只在主线程用的之外都是 */
+const OUTBOX_WORKER_SIDE: Readonly<Record<Exclude<OutboxDir, 'shared'>, readonly string[]>> = {
+  feature: ['outbox-protocol.ts', 'outbox-worker-handler.ts', '*.worker.ts'],
+  testing: ['*.worker.ts', 'transaction-recorder.ts', 'mirror-recorder.ts', 'mirror-review.ts'],
+}
+/** Worker 一侧的文件引用发件箱各目录的文件时路径的前缀：shared 不引用编辑器页（模块边界），编辑器页的 outbox/ 不引用 testing/（只许动态引入） */
+const OUTBOX_IMPORT_PREFIXES: Readonly<Record<OutboxDir, readonly (readonly [OutboxDir, string])[]>> = {
+  shared: [['shared', './']],
+  feature: [['feature', './'], ['shared', '../../../shared/outbox/']],
+  testing: [['testing', './'], ['feature', '../'], ['shared', '../../../../shared/outbox/']],
+}
+const OUTBOX_WORKER_FILES: Readonly<Record<OutboxDir, string[]>> = {
+  shared: [`${OUTBOX_DIRS.shared}/**`],
+  feature: OUTBOX_WORKER_SIDE.feature.map(name => `${OUTBOX_DIRS.feature}/${name}`),
+  testing: OUTBOX_WORKER_SIDE.testing.map(name => `${OUTBOX_DIRS.testing}/${name}`),
+}
+const OUTBOX_WORKER_IGNORES = [...TEST_CODE, ...OUTBOX_MAIN_THREAD_ONLY.shared.map(name => `${OUTBOX_DIRS.shared}/${name}`)]
+/** shared/outbox 里任意一个 .ts 文件（不以点开头，不带查询与片段） */
+const OUTBOX_ANY_FILE = String.raw`[^./?#][^/?#]*\.ts`
+const OUTBOX_MAIN_THREAD_MESSAGE = '发件箱 Worker 一侧的文件不引用只在主线程用的模块（eslint.config.ts 的 OUTBOX_MAIN_THREAD_ONLY：本机密钥 local-key.ts、存储状态 storage-status.ts、合一的清理 local-cleanup.ts、Worker 的客户端 outbox-worker-client.ts、测试构建里页面一侧的探针）：它们经请求层带进 zod、用只在页面里有的 StorageManager.persist、创建 Worker；类型照常（import type 编译之后就没有了）（M4-P1 审查 A7）'
+const OUTBOX_WORKER_AREA_MESSAGE = '发件箱 Worker 一侧的文件只引用 Worker 一侧的文件（eslint.config.ts 的 OUTBOX_WORKER_SIDE：shared/outbox 里只在主线程用的之外的，编辑器页 outbox/ 与 testing/ 里列出的）与契约里不带 zod 的常量：别的包（zod、React、Univer……）、请求层与页面一侧的模块会把 zod 与 DOM 带进 Worker，转了一手的同样会。确实要在 Worker 里用的文件先列进 OUTBOX_WORKER_SIDE（它自己随之受这些规则约束）（M4-P1 审查 A7）'
+/** 只在页面里有的全局（专用 Worker 的全局对象上没有）：Worker 一侧的文件不用，直接写与经 globalThis 都拦 */
+const OUTBOX_PAGE_ONLY_GLOBALS = ['window', 'document', 'localStorage', 'sessionStorage', 'history', 'parent', 'top', 'opener', 'frames', 'frameElement', 'alert', 'confirm', 'prompt', 'print', 'customElements', 'getComputedStyle', 'getSelection', 'matchMedia', 'requestIdleCallback', 'cancelIdleCallback', 'screen', 'visualViewport']
+const OUTBOX_PAGE_ONLY_MESSAGE = '发件箱 Worker 一侧的文件不用只在页面里有的全局（eslint.config.ts 的 OUTBOX_PAGE_ONLY_GLOBALS：window、document、localStorage、sessionStorage……）：专用 Worker 里没有它们；Worker 里有的（globalThis、navigator、crypto、indexedDB、location）照常用（M4-P1 审查 B10）'
+const OUTBOX_PERSIST_MESSAGE = 'StorageManager.persist() 只在页面里有（专用 Worker 的 navigator.storage 没有它）：发件箱 Worker 一侧的文件不申请持久存储，页面经 storage-status.ts 申请（M4-P1 审查 B10）'
+const OUTBOX_WORKER_NO_DYNAMIC_IMPORT = {
+  selector: 'ImportExpression',
+  message: '发件箱 Worker 一侧的文件不用动态 import()：Worker 执行的模块图要静态可见，引用的区域才由 lint 看得住（M4-P1 审查 A7）',
+}
+
+/** 文件名（* 通配一段：不含斜杠、查询与片段）写成正则 */
+function outboxNamesRegex(names: readonly string[]): string {
+  return `(?:${names.map(name => name.split('*').map(part => part.replaceAll('.', String.raw`\.`)).join('[^/?#]*')).join('|')})`
+}
+
+/**
+ * from 目录里 Worker 一侧的文件引用的限制：测试代码；只在主线程用的模块（类型照常）；区域之外的一切（发件箱各目录里没列出的文件、
+ * 别的目录、别的包、带查询的写法）；契约只许不带 zod 的常量。编辑器页 outbox/ 的生产文件另带 sheet-editor 那一块的限制
+ * （testing/ 只许动态引入，连 import type 也不许）：同名规则后者整体覆盖前者
+ */
+function outboxWorkerImports(from: OutboxDir): Linter.RuleEntry {
+  const prefixes = OUTBOX_IMPORT_PREFIXES[from]
+  const prefixRegex = (prefix: string): string => prefix.replaceAll('.', String.raw`\.`)
+  const known = prefixes.map(([dir, prefix]) => prefixRegex(prefix) + (dir === 'shared' ? OUTBOX_ANY_FILE : outboxNamesRegex([...OUTBOX_WORKER_SIDE[dir], ...OUTBOX_MAIN_THREAD_ONLY[dir]])))
+  const mainThread = prefixes.map(([dir, prefix]) => prefixRegex(prefix) + outboxNamesRegex(OUTBOX_MAIN_THREAD_ONLY[dir]))
+  return ['error', {
+    paths: [OUTBOX_ZOD_FREE_CONTRACTS],
+    patterns: [
+      TEST_MODULES,
+      ...(from === 'feature' ? [SHEET_EDITOR_PROBE_MODULES] : []),
+      // 只认这几个模块的确切写法放行类型：allowTypeImports 的模式一旦匹配，这条 import type 的别的限制也都不查了
+      { regex: `^(?:${mainThread.join('|')})$`, allowTypeImports: true, message: OUTBOX_MAIN_THREAD_MESSAGE },
+      { regex: `^(?!(?:${known.join('|')})$|@nerve-office/contracts$)`, message: OUTBOX_WORKER_AREA_MESSAGE },
+    ],
+  }]
+}
 
 /** 规范 §2.2：lint 不设警告级别，规则要么是错误，要么关闭。 */
 function promoteRule(entry: Linter.RuleEntry): Linter.RuleEntry {
@@ -1120,30 +1210,58 @@ export default antfu(
     },
   },
   {
-    // 发件箱 Worker 会用到的共享文件（M4-P1 设计 §3.1）：不引用 zod、带 zod 的契约模块与请求层。只在主线程用的本机密钥与存储状态不在此列
-    name: 'nerve/web-outbox-worker-shared',
-    files: ['apps/web/src/shared/outbox/**'],
-    ignores: [...TEST_CODE, 'apps/web/src/shared/outbox/local-key.ts', 'apps/web/src/shared/outbox/storage-status.ts'],
+    // 发件箱的共享文件（本机密钥之外）不引用 zod、带 zod 的契约模块与请求层（M4-P1 设计 §3.1）：只在主线程用的存储状态与合一的清理
+    // 被测试构建的探针引用，同样不引用。Worker 一侧的文件由下一块整体覆盖（更严的区域限制）
+    name: 'nerve/web-outbox-zod-free',
+    files: [`${OUTBOX_DIRS.shared}/**`],
+    ignores: [...TEST_CODE, `${OUTBOX_DIRS.shared}/local-key.ts`],
     rules: {
       'ts/no-restricted-imports': ['error', { paths: OUTBOX_ZOD_FREE_PATHS, patterns: [TEST_MODULES, ...OUTBOX_ZOD_FREE_PATTERNS] }],
     },
   },
   {
-    // 编辑器页 outbox/ 里 Worker 会用到的文件：协议、Worker 里的处理、Worker 的入口。主线程的客户端不在此列。
-    // 上面 sheet-editor 那一块的限制（testing/ 只许动态引入）一并带上
-    name: 'nerve/web-outbox-worker-feature',
-    files: ['apps/web/src/features/sheet-editor/outbox/outbox-protocol.ts', 'apps/web/src/features/sheet-editor/outbox/outbox-worker-handler.ts', 'apps/web/src/features/sheet-editor/outbox/*.worker.ts'],
-    rules: {
-      'ts/no-restricted-imports': ['error', { paths: OUTBOX_ZOD_FREE_PATHS, patterns: [TEST_MODULES, SHEET_EDITOR_PROBE_MODULES, ...OUTBOX_ZOD_FREE_PATTERNS] }],
-    },
+    // 发件箱 Worker 一侧的共享文件（shared/outbox 里只在主线程用的之外的，P1 审查 A7）：只引用 Worker 一侧的文件与契约里不带 zod 的常量
+    name: 'nerve/web-outbox-worker-shared',
+    files: OUTBOX_WORKER_FILES.shared,
+    ignores: OUTBOX_WORKER_IGNORES,
+    rules: { 'ts/no-restricted-imports': outboxWorkerImports('shared') },
   },
   {
-    // 测试构建的探针（编辑器页的 testing/）：同样不引用 zod、带 zod 的契约模块与请求层（M4-P1 S6 的分块问题）
+    // 编辑器页 outbox/ 里 Worker 一侧的文件：协议、Worker 里的处理、Worker 的入口（主线程的客户端不在此列）。
+    // 上面 sheet-editor 那一块的限制（testing/ 只许动态引入）一并带上
+    name: 'nerve/web-outbox-worker-feature',
+    files: OUTBOX_WORKER_FILES.feature,
+    ignores: [...TEST_CODE],
+    rules: { 'ts/no-restricted-imports': outboxWorkerImports('feature') },
+  },
+  {
+    // 测试构建的探针（编辑器页的 testing/）：同样不引用 zod、带 zod 的契约模块与请求层（M4-P1 S6 的分块问题）。
+    // 其中探针 Worker 用的文件由下一块整体覆盖（Worker 一侧的区域限制）
     name: 'nerve/web-outbox-probes',
     files: ['apps/web/src/features/sheet-editor/**/testing/**'],
     ignores: [...TEST_CODE],
     rules: {
       'ts/no-restricted-imports': ['error', { paths: OUTBOX_ZOD_FREE_PATHS, patterns: [TEST_MODULES, ...OUTBOX_ZOD_FREE_PATTERNS] }],
+    },
+  },
+  {
+    // testing/ 里探针 Worker 用的文件（*.worker.ts 与它们引入的记录、复核）：Worker 一侧的区域限制；页面一侧探针的类型照常引用
+    name: 'nerve/web-outbox-worker-testing',
+    files: OUTBOX_WORKER_FILES.testing,
+    ignores: [...TEST_CODE],
+    rules: { 'ts/no-restricted-imports': outboxWorkerImports('testing') },
+  },
+  {
+    // 发件箱 Worker 一侧的文件不依赖 DOM（P1 审查 B10）：只在页面里有的全局（直接写与经 globalThis）、StorageManager.persist
+    // （按属性名认：Worker 一侧别的对象也不用叫 persist 的成员）、动态 import() 都拦下。同名规则后者整体覆盖前者：
+    // antfu 的 global、self（改用 globalThis）与 __proto__ 一类、web 的整组语法限制一并带上
+    name: 'nerve/web-outbox-worker-no-dom',
+    files: [...OUTBOX_WORKER_FILES.shared, ...OUTBOX_WORKER_FILES.feature, ...OUTBOX_WORKER_FILES.testing],
+    ignores: OUTBOX_WORKER_IGNORES,
+    rules: {
+      'no-restricted-globals': ['error', ...ANTFU_RESTRICTED_GLOBALS, ...OUTBOX_PAGE_ONLY_GLOBALS.map(name => ({ name, message: OUTBOX_PAGE_ONLY_MESSAGE }))],
+      'no-restricted-properties': ['error', ...ANTFU_RESTRICTED_PROPERTIES, ...OUTBOX_PAGE_ONLY_GLOBALS.map(property => ({ object: 'globalThis', property, message: OUTBOX_PAGE_ONLY_MESSAGE })), { property: 'persist', message: OUTBOX_PERSIST_MESSAGE }],
+      'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX, OUTBOX_WORKER_NO_DYNAMIC_IMPORT],
     },
   },
   {
