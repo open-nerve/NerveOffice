@@ -178,6 +178,17 @@ export function readWriterRecord(value: unknown): WriterRecord | undefined {
   return { userId, documentId, writeEpoch, writerId, lastDraftSeq, registeredAt }
 }
 
+/**
+ * 记录里读得出的更新时间（毫秒）：不论格式——形状不对的、更新的页面写的，只要 updatedAt 是个有限的数就交回它；读不出时为 undefined。
+ * 保留期清理按它判断（单条记录最长保留 14 天，00 号计划书 §7.6）：部署回滚之后旧页面永远认不出新格式的记录，不按它判断就会一直留着
+ */
+export function readableUpdatedAt(value: unknown): number | undefined {
+  if (!isFields(value))
+    return undefined
+  const { updatedAt } = value
+  return typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : undefined
+}
+
 /** 草稿的元数据（去掉 IV 与密文）：本机草稿页的列表只要这些，不交出密文 */
 export function draftMetaOf(draft: StoredDraft): DraftMeta {
   const { iv: _iv, ciphertext: _ciphertext, ...meta } = draft

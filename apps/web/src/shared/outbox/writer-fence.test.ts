@@ -186,12 +186,11 @@ describe('保留期（§3.4.6、§3.4.7）：14 天，与契约同源', () => {
     expect(canReplayAsSent({ draftSeq: 7, inFlight: null }, NOW), '不在途').toBe(false)
   })
 
-  it('清理草稿：认得出的按更新时间；更新的页面写的不动它；形状不对的留给本机草稿页（看不出它多久了）', () => {
-    expect(shouldPurgeDraft(draft({ updatedAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }), NOW)).toBe(true)
-    expect(shouldPurgeDraft(foreignDraft({ updatedAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }), NOW), '不论属于谁').toBe(true)
-    expect(shouldPurgeDraft(draft({ updatedAt: NOW - LOCAL_DRAFT_RETENTION_MS }), NOW)).toBe(false)
-    expect(shouldPurgeDraft(NEWER, NOW)).toBe(false)
-    expect(shouldPurgeDraft(MALFORMED, NOW)).toBe(false)
+  it('清理草稿：按记录里读得出的更新时间（不论格式、不论属于谁），超过 14 天才删；读不出更新时间的留着（P3、P4 发现之后说明并删）', () => {
+    expect(shouldPurgeDraft(NOW - LOCAL_DRAFT_RETENTION_MS - 1, NOW)).toBe(true)
+    expect(shouldPurgeDraft(NOW - LOCAL_DRAFT_RETENTION_MS, NOW), '恰好 14 天不算').toBe(false)
+    expect(shouldPurgeDraft(NOW + DAY_MS, NOW), '更新时间在将来（时钟往回拨过）').toBe(false)
+    expect(shouldPurgeDraft(undefined, NOW), '读不出更新时间').toBe(false)
   })
 
   it('清理写入者：没有草稿、并且登记超过 14 天才删；形状不对的（undefined）没有草稿时也删', () => {

@@ -38,46 +38,62 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     expect(await probeDatabase(page, 'getRaw', 'writers', theirs)).not.toBeNull()
   })
 
-  test('保留期：超过 14 天的草稿不论属于谁都删、交回删掉的键；登记超过 14 天又没有草稿的写入者一并删；还有草稿的、刚登记的写入者与认不出的记录留着', async ({ page }) => {
+  test('保留期：读得出的更新时间超过 14 天的草稿都删（不论属于谁、不论格式，交回的键标明是哪一种）；读不出更新时间的留着；登记超过 14 天又没有草稿的写入者一并删', async ({ page }) => {
     const user = await createUser('ob-retention')
     const other = await createUser('ob-retention-other')
     await loginThroughApi(page, user)
     await openOutboxProbe(page)
     await probe(page, 'chooseKey', 1)
     const writer = writerOf(3)
-    const oldDraft = { userId: user.id, documentId: randomUUID() }
-    const freshDraft = { userId: user.id, documentId: randomUUID() }
-    const othersOldDraft = { userId: other.id, documentId: randomUUID() }
-    const boundaryDraft = { userId: user.id, documentId: randomUUID() }
-    const idleWriter = { userId: user.id, documentId: randomUUID() }
-    const newWriter = { userId: user.id, documentId: randomUUID() }
-    const unrecognized = { userId: user.id, documentId: randomUUID() }
+    const keyOf = (userId: string): DraftKey => ({ userId, documentId: randomUUID() })
+    const oldDraft = keyOf(user.id)
+    const freshDraft = keyOf(user.id)
+    const othersOldDraft = keyOf(other.id)
+    const boundaryDraft = keyOf(user.id)
+    const oldNewer = keyOf(user.id)
+    const freshNewer = keyOf(user.id)
+    const oldBroken = keyOf(user.id)
+    const timeless = keyOf(user.id)
+    const idleWriter = keyOf(user.id)
+    const newWriter = keyOf(user.id)
     const longAgo = NOW - RETENTION_MS - 1
 
     // 写入者都在很久以前登记；草稿按各自的更新时间
-    for (const [key, updatedAt] of [[oldDraft, longAgo], [freshDraft, NOW - DAY_MS], [othersOldDraft, longAgo], [boundaryDraft, NOW - RETENTION_MS], [unrecognized, longAgo]] as const) {
+    const drafts = [[oldDraft, longAgo], [freshDraft, NOW - DAY_MS], [othersOldDraft, longAgo], [boundaryDraft, NOW - RETENTION_MS], [oldNewer, longAgo], [freshNewer, NOW - DAY_MS], [oldBroken, longAgo], [timeless, longAgo]] as const
+    for (const [key, updatedAt] of drafts) {
       await probe(page, 'register', key, writer, { now: longAgo, force: false })
       expect(await probe(page, 'write', draftFor(key, writer, 1, { updatedAt }))).toEqual({ kind: 'written' })
     }
-    // 认不出的记录（更新的页面写的）：看不出它多久了，不删
-    await probeDatabase(page, 'patchDraft', unrecognized, { recordVersion: 2 })
+    // 更新的页面写的（部署回滚之后旧页面认不出）：更新时间照样读得出
+    for (const key of [oldNewer, freshNewer])
+      await probeDatabase(page, 'patchDraft', key, { recordVersion: 2 })
+    // 形状不对、更新时间读得出的；形状不对、连更新时间也读不出的
+    await probeDatabase(page, 'patchDraft', oldBroken, { iv: 'abcd' })
+    await probeDatabase(page, 'patchDraft', timeless, { updatedAt: 'long ago' })
     // 没有草稿的写入者：一个早已不用，一个刚登记
     await probe(page, 'register', idleWriter, writer, { now: longAgo, force: false })
     await probe(page, 'register', newWriter, writer, { now: NOW - DAY_MS, force: false })
 
     const removed = outcomeOf(await probe(page, 'purge', NOW), 'purged').drafts
-    expect([...removed].sort((a, b) => a.documentId.localeCompare(b.documentId))).toEqual([oldDraft, othersOldDraft].sort((a, b) => a.documentId.localeCompare(b.documentId)))
+    const byDocument = (a: { readonly key: DraftKey }, b: { readonly key: DraftKey }) => a.key.documentId.localeCompare(b.key.documentId)
+    expect([...removed].sort(byDocument)).toEqual([
+      { key: oldDraft, record: 'draft' },
+      { key: othersOldDraft, record: 'draft' },
+      { key: oldNewer, record: 'newer-format' },
+      { key: oldBroken, record: 'malformed' },
+    ].sort(byDocument))
 
-    expect(await probe(page, 'read', oldDraft)).toEqual({ kind: 'absent' })
-    expect(await probe(page, 'read', othersOldDraft)).toEqual({ kind: 'absent' })
+    for (const key of [oldDraft, othersOldDraft, oldNewer, oldBroken])
+      expect(await probe(page, 'read', key), key.documentId).toEqual({ kind: 'absent' })
     for (const key of [freshDraft, boundaryDraft])
       expect((await probe(page, 'read', key)).kind, '没超过 14 天（恰好 14 天不算）').toBe('draft')
-    expect(await probe(page, 'read', unrecognized)).toEqual({ kind: 'newer-format', recordVersion: 2 })
+    expect(await probe(page, 'read', freshNewer)).toEqual({ kind: 'newer-format', recordVersion: 2 })
+    expect(await probe(page, 'read', timeless), '读不出更新时间：留给 P3、P4 发现之后说明并删').toEqual({ kind: 'malformed' })
 
     // 写入者：草稿删了的、早已不用的删掉；还有草稿的（高水位要接着用）、刚登记的留着
-    for (const key of [oldDraft, othersOldDraft, idleWriter])
+    for (const key of [oldDraft, othersOldDraft, oldNewer, oldBroken, idleWriter])
       expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).toBeNull()
-    for (const key of [freshDraft, boundaryDraft, unrecognized, newWriter])
+    for (const key of [freshDraft, boundaryDraft, freshNewer, timeless, newWriter])
       expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).not.toBeNull()
   })
 

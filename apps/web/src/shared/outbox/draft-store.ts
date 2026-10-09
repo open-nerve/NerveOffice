@@ -6,7 +6,7 @@ import type { OutboxConnection, OutboxUnavailable } from './database.ts'
 import type { DraftKey, DraftMeta, ReadDraft, StoredDraft, WriterRecord } from './draft-record.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
-import { draftMetaOf, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideWrite, isSameWriter, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
 
 /**
@@ -63,8 +63,13 @@ export type StoreRemoveOutcome = { readonly kind: 'removed' | 'changed' | 'absen
 
 export type StoreClearOutcome = { readonly kind: 'cleared' } | StoreProblem
 
-/** 保留期清理：删掉的草稿的键（属于当前用户的由 P4 说明） */
-export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly DraftKey[] } | StoreProblem
+/** 保留期清理删掉的一条：键，与它是认得出的草稿、更新的页面写的还是形状不对的（属于当前用户的由 P4 说明删了哪几份） */
+export interface PurgedDraft {
+  readonly key: DraftKey
+  readonly record: ReadDraft['kind']
+}
+
+export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly PurgedDraft[] } | StoreProblem
 
 export interface DraftStore {
   /**
@@ -96,7 +101,9 @@ export interface DraftStore {
   readonly removeDraft: (key: DraftKey, expectedSeq?: number) => Promise<StoreRemoveOutcome>
   /** 按用户清理（退出登录、账户停用）：草稿与写入者在一个事务里一起删；之后才到的写入因写入者不在而 not-writer */
   readonly removeUserData: (userId: string) => Promise<StoreClearOutcome>
-  /** 保留期（§3.4.7）：删掉超过 14 天的草稿（不论属于谁），以及登记超过 14 天、又没有草稿的写入者 */
+  /**
+   * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着），以及登记超过 14 天、又没有草稿的写入者
+   */
   readonly purgeExpired: (now: number) => Promise<StorePurgeOutcome>
   /** 关掉连接（页面离开、Worker 结束）；之后的操作重新打开 */
   readonly close: () => void
@@ -406,16 +413,17 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     }),
 
     purgeExpired: async now => run<StorePurgeOutcome>('readwrite', (scope) => {
-      const purged: DraftKey[] = []
+      const purged: PurgedDraft[] = []
       /** 留下来的草稿的键（JSON）：还有草稿的写入者不删，高水位要接着用 */
       const remaining = new Set<string>()
       scope.then(scope.tx.objectStore(DRAFTS_STORE).openCursor(), (cursor) => {
         if (cursor !== null) {
+          const value: unknown = cursor.value
           const key = draftKeyOf(cursor.primaryKey)
-          if (shouldPurgeDraft(readStoredDraft(cursor.value), now)) {
+          if (shouldPurgeDraft(readableUpdatedAt(value), now)) {
             cursor.delete()
             if (key !== undefined)
-              purged.push(key)
+              purged.push({ key, record: readStoredDraft(value).kind })
           }
           else {
             remaining.add(JSON.stringify(cursor.primaryKey))

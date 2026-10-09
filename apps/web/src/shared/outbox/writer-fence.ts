@@ -114,7 +114,11 @@ export function isExpired(meta: Pick<DraftMeta, 'updatedAt'>, now: number): bool
   return pastRetention(meta.updatedAt, now)
 }
 
-/** 写入者超过保留期（按登记的时刻） */
+/**
+ * 写入者超过保留期（按登记的时刻）。不另记"最后写入的时刻"：一个连续开着、编辑超过 14 天的页面，草稿刚被确认删掉的那一刻，
+ * 它的写入者可能被别的页面的保留期清理删掉——下一次写入得到 not-writer，页面（P2）经服务端核对仍是当前的一代之后以 force 重新登记，
+ * 多一次核对、不丢数据
+ */
 export function isWriterExpired(writer: Pick<WriterRecord, 'registeredAt'>, now: number): boolean {
   return pastRetention(writer.registeredAt, now)
 }
@@ -129,16 +133,17 @@ export function canReplayAsSent(meta: Pick<DraftMeta, 'draftSeq' | 'inFlight'>, 
 }
 
 /**
- * 保留期清理时这条草稿要不要删：认得出的按更新时间，不论属于谁（别人的本来就解不开）；更新的页面写的不动它；
- * 形状不对的看不出它多久了，留给本机草稿页（P4）
+ * 保留期清理时这条草稿要不要删（§3.4.7）：按记录里读得出的更新时间（draft-record.ts 的 readableUpdatedAt），不论格式、不论属于谁
+ * （别人的本来就解不开）——形状不对的、更新的页面写的，读得出更新时间并且超过 14 天同样删（部署回滚之后旧页面永远认不出新格式的记录，
+ * 计划书 §7.6：单条记录最长保留 14 天）；读不出才留着，由 P3 打开文档时、P4 本机草稿页发现之后说明并删
  */
-export function shouldPurgeDraft(existing: ExistingDraft, now: number): boolean {
-  return existing.kind === 'draft' && isExpired(existing.draft, now)
+export function shouldPurgeDraft(updatedAt: number | undefined, now: number): boolean {
+  return updatedAt !== undefined && pastRetention(updatedAt, now)
 }
 
 /**
- * 保留期清理时这个写入者要不要删：没有草稿、并且登记超过保留期（早已不用了）；还有草稿时留着（高水位要接着用）。
- * writer 为 undefined 表示库里那一条形状不对（判定本来就当作没有写入者），没有草稿时一并删
+ * 保留期清理时这个写入者要不要删：没有草稿、并且登记超过保留期（早已不用了，连续开着的页面见 isWriterExpired）；还有草稿时留着
+ * （高水位要接着用）。writer 为 undefined 表示库里那一条形状不对（判定本来就当作没有写入者），没有草稿时一并删
  */
 export function shouldPurgeWriter(writer: Pick<WriterRecord, 'registeredAt'> | undefined, hasDraft: boolean, now: number): boolean {
   return !hasDraft && (writer === undefined || isWriterExpired(writer, now))
