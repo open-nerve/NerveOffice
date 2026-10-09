@@ -226,6 +226,21 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveOutboxProbe']])
   })
 
+  it('违规：崩溃用例的探针（M4-P1 设计 §3.7）进了生产构建：分块名、按来源都认得出，并进别的分块时挂在 window 上的名字照样报出', () => {
+    // 测试构建（dist-e2e）里探针的写法（节选）
+    const probe = 'const e="__nerveCrashProbe";function t(n){const r={last:()=>{}};return n[e]=r,r}export{t as installCrashProbe};'
+    const index = { name: 'index', modules: ['index.html', 'src/entries/platform/main.ts'] }
+    const crash = { name: 'crash-probe', modules: ['src/features/sheet-editor/outbox/testing/crash-probe.ts'] }
+    const chunk = artifactsGate(writeDist({ ...clean, 'assets/crash-probe-Q1w2E3r4.js': probe, [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': index, 'assets/crash-probe-Q1w2E3r4.js': crash }) }))
+    expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([
+      ['artifacts/keyword', '__nerveCrashProbe'],
+      ['artifacts/test-only', 'assets/crash-probe-Q1w2E3r4.js'],
+      ['artifacts/test-only-source', 'assets/crash-probe-Q1w2E3r4.js'],
+    ])
+    const inlined = artifactsGate(writeDist({ ...clean, 'assets/index.js': `${clean['assets/index.js']}${probe}` }))
+    expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveCrashProbe']])
+  })
+
   it('违规：没有模块来源清单、产物里有清单没记下的脚本（按来源的核对看不到它们）', () => {
     expect(artifactsGate(writeDist(clean, { sources: false })).violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/missing-module-sources', MODULE_SOURCES]])
     const unlisted = artifactsGate(writeDist({ ...clean, 'assets/extra-a1.js': 'export {}', [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': { name: 'index', modules: ['index.html'] } }) }))

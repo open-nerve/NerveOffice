@@ -609,6 +609,13 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/outbox-probe.worker-q72kaOrf.js', 'assets/outbox.worker-DfsCheLT.js', 'assets/outbox-probe.workers-x.js']).map(v => v.subject)).toEqual(['assets/outbox-probe.worker-q72kaOrf.js'])
   })
 
+  it('崩溃用例的探针（M4-P1 设计 §3.7）：来源在 features/sheet-editor/outbox/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/crash-probe.ts')).toBe(true)
+    expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/features/sheet-editor/start.tsx', 'src/features/sheet-editor/outbox/testing/crash-probe.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/crash-probe-Cx1.js', 'assets/crash-Cx1.js', 'assets/my-crash-probe-x.js', 'assets/crash-probes.js']).map(v => v.subject)).toEqual(['assets/crash-probe-Cx1.js'])
+  })
+
   it('真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：来源在 outbox/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
     expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/outbox-review-probe.ts')).toBe(true)
     expect(checkTestOnlyArtifacts(['assets/outbox-review-probe-Bq1x.js', 'assets/outbox-review-probes.js', 'assets/my-outbox-review-probe-x.js', 'assets/outbox-review-Bq1x.js']).map(v => v.subject)).toEqual(['assets/outbox-review-probe-Bq1x.js'])
