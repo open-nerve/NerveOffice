@@ -13,8 +13,8 @@
 //   在 ./selftest-capture.ts；
 // - 交接的复核（M3-P5 设计 §3.14：同一个浏览器里两个标签页的本人接管、刷新时在途的保存）在 ./selftest-handover.ts；
 // - 请求编辑的两条路（M3-P6 设计 §3.10，DEF-062：请求方在后台停在交给了我、回到前台才进入；持有者被暂停时自动交出走到到期）在 ./selftest-request.ts；
-// - 真实浏览器的前置复核（M4-P1 设计 §3.6，S1：存储、密钥交给 Worker、写满、Worker 的停顿、捕获成本与性能基线）在 ./selftest-storage.ts、
-//   ./selftest-stall.ts、./selftest-cost.ts：只交回事实（facts）与计时，判定在驱动脚本里；次数按地址里的 runs。
+// - 真实浏览器的前置复核（M4-P1 设计 §3.6，S1：存储、密钥交给 Worker、写满、Worker 的停顿、捕获成本与性能基线，以及生产发件箱的停顿与各段）在
+//   ./selftest-storage.ts、./selftest-stall.ts、./selftest-cost.ts、./selftest-outbox.ts：只交回事实（facts）与计时，判定在驱动脚本里；次数按地址里的 runs。
 // 一次运行的共用部分（编辑器页交给自检的、一项检查怎么记、命令日志的查询）在 ./selftest-session.ts。
 // 只读的入口里能用 Facade 与合成事件执行的部分才在这里；可信的键盘输入、输入法与鼠标的拖动由 Playwright 的 WebKit 覆盖
 // （read-only.spec.ts、read-only-shortcuts.spec.ts），Worker 作用域里的错误这里看不到（设计 §3.5 第 4 条）。
@@ -33,10 +33,11 @@ import { EXPECTS_HIDDEN as CAPTURE_EXPECTS_HIDDEN, CAPTURE_SCENARIO_RUNNERS } fr
 import { COST_SCENARIO_RUNNERS } from './selftest-cost.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
 import { HANDOVER_EXPECTS_HIDDEN, HANDOVER_SCENARIO_RUNNERS } from './selftest-handover.ts'
+import { OUTBOX_SCENARIO_RUNNERS } from './selftest-outbox.ts'
 import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, RUNS_MAX, RUNS_PARAM, runsOfValue, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
 import { REQUEST_EXPECTS_HIDDEN, REQUEST_SCENARIO_BUDGET_MS, REQUEST_SCENARIO_RUNNERS } from './selftest-request.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, fetchServerContent, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
-import { STALL_SCENARIO_RUNNERS, stallBudgetMs } from './selftest-stall.ts'
+import { productionStallBudgetMs, STALL_SCENARIO_RUNNERS, stallBudgetMs } from './selftest-stall.ts'
 import { STORAGE_SCENARIO_RUNNERS } from './selftest-storage.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
@@ -652,6 +653,7 @@ const SCENARIOS: Readonly<Record<SelftestScenario, (session: Session) => Promise
   ...STORAGE_SCENARIO_RUNNERS,
   ...STALL_SCENARIO_RUNNERS,
   ...COST_SCENARIO_RUNNERS,
+  ...OUTBOX_SCENARIO_RUNNERS,
 }
 
 /**
@@ -667,6 +669,8 @@ const EXPECTS_HIDDEN: ReadonlySet<string> = new Set([...CAPTURE_EXPECTS_HIDDEN, 
 function budgetOf(scenario: SelftestScenario, runs: number | undefined): number {
   if (scenario === 'worker-stall')
     return stallBudgetMs(runs)
+  if (scenario === 'outbox-stall')
+    return productionStallBudgetMs(runs)
   return REQUEST_EXPECTS_HIDDEN.has(scenario) ? REQUEST_SCENARIO_BUDGET_MS : SCENARIO_BUDGET_MS
 }
 

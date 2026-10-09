@@ -103,9 +103,11 @@ export type RequestScenario = (typeof REQUEST_SCENARIOS)[number]
  *   经 CDP）时在这之前写满；没被覆盖时写到上限就停、删掉。不在真实 Safari 的步骤里：Safari 没有覆盖配额的接口，写满由第 5 项的回滚作有界的替代；
  * - worker-stall（阅读）：探针 Worker 有无空定时器 × 空闲多久之后，第一次异步操作的用时（第 9 项，DEF-011）；
  * - capture-cost（编辑）：捕获的主线程成本（save、序列化、编码分开）、Worker 放置时异步段与主线程 gzip 的主线程阻塞（第 10 项，DEF-012）；
- * - perf-baseline（编辑）：首屏、两种公式模式下增量与全量计算的收齐、事件循环与帧间隔（第 12 项，DEF-012）
+ * - perf-baseline（编辑）：首屏、两种公式模式下增量与全量计算的收齐、事件循环与帧间隔（第 12 项，DEF-012）；
+ * - outbox-stall、outbox-pipeline（阅读）：生产的发件箱（主会话把 S8 的第二轮并进这一轮，./selftest-outbox.ts）——生产的发件箱 Worker 带空定时器
+ *   空闲 ≥ 1 秒之后的往返（第 9 项的生产部分），进程内磁盘上的写入与恢复各段（第 11 项）
  */
-export const PROBE_SCENARIOS = ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'capture-cost', 'perf-baseline'] as const
+export const PROBE_SCENARIOS = ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'capture-cost', 'perf-baseline', 'outbox-stall', 'outbox-pipeline'] as const
 
 export type ProbeScenario = (typeof PROBE_SCENARIOS)[number]
 

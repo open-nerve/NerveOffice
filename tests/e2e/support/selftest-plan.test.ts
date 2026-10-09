@@ -59,6 +59,8 @@ describe('页面自检的步骤', () => {
       ['storage', 'storage', 'viewer', '—'],
       ['key-transfer', 'key-transfer', 'viewer', '—'],
       ['worker-stall', 'worker-stall', 'viewer', '—'],
+      ['outbox-stall', 'outbox-stall', 'viewer', '—'],
+      ['outbox-pipeline', 'outbox-pipeline', 'viewer', '—'],
       ['hidden-save', 'hidden-save', 'author', '—'],
       ['takeover-holder', 'takeover-holder', 'author', '—'],
       ['takeover-taker', 'takeover-taker', 'author', '—'],
@@ -116,7 +118,7 @@ describe('页面自检的步骤', () => {
       return new URLSearchParams(new URL(selftestPageUrl('http://127.0.0.1:4100', step, 'http://127.0.0.1:4200/report?step=0')).hash.slice(1)).get('runs')
     }
     expect([runsOf('worker-stall'), runsOf('capture-1m'), runsOf('perf-main'), runsOf('read-only'), runsOf('hidden-save')]).toEqual(['40', '40', '40', null, null])
-    expect(withRuns.filter(step => step.runs !== undefined).map(step => step.id)).toEqual(['perf-worker', 'perf-main', 'perf-worker-warm', 'capture-1m', 'capture-5m', 'storage', 'key-transfer', 'worker-stall'])
+    expect(withRuns.filter(step => step.runs !== undefined).map(step => step.id)).toEqual(['perf-worker', 'perf-main', 'perf-worker-warm', 'capture-1m', 'capture-5m', 'storage', 'key-transfer', 'worker-stall', 'outbox-stall', 'outbox-pipeline'])
     expect(runsOf('worker-stall', STEPS)).toBeNull()
   })
 
@@ -247,7 +249,7 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
 
   it('真实浏览器的复核（M4-P1）：只看不改的几步修订号恰好 1；首屏与公式冻结改了内容（暂停定时的上传，整页跳走时可能上传），至少 1', () => {
     const plain = { revision: 1, revisions: 1, formulasPending: false, snapshot: sheetSnapshotFor('unit-1') }
-    for (const scenario of ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'capture-cost'] as const) {
+    for (const scenario of ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'capture-cost', 'outbox-stall', 'outbox-pipeline'] as const) {
       expect(storedProblems({ scenario, documentId: 'doc' }, plain), scenario).toEqual([])
       expect(storedProblems({ scenario, documentId: 'doc' }, { ...plain, revision: 2, revisions: 2 }), scenario).toHaveLength(1)
     }

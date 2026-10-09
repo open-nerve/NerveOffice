@@ -57,21 +57,18 @@ export interface StallBlock {
   readonly idles: readonly number[]
 }
 
-/**
- * 这一次运行的编排（纯函数）：runs 是 1–1.5 秒那一档每个条件的次数，其余各档按 share 的比例、至少一次；不带 runs（Playwright 的校准）时
- * 只有 0.2 秒与 1–1.5 秒两档各一次。random 给区间的那一档（1–1.5 秒）取值（页面用 Math.random），固定的档不取
- */
-export function stallSchedule(runs: number | undefined, random: () => number): StallBlock[] {
-  const levels = runs === undefined ? STALL_LEVELS.slice(0, 2) : STALL_LEVELS
-  const perLevel = levels.map((level) => {
-    const count = runs === undefined ? 1 : Math.max(1, Math.round(runs * level.share))
-    const chunks: number[][] = []
-    for (let start = 0; start < count; start += STALL_BLOCK_SIZE) {
-      const size = Math.min(STALL_BLOCK_SIZE, count - start)
-      chunks.push(Array.from({ length: size }, () => level.maxMs === level.minMs ? level.minMs : Math.round(level.minMs + random() * (level.maxMs - level.minMs))))
-    }
-    return { level, chunks }
-  })
+/** 一档的 count 次空闲，切成每组最多 STALL_BLOCK_SIZE 次；区间的档按 random 取值（取整），固定的档不取 */
+function chunksOf(level: StallLevel, count: number, random: () => number): number[][] {
+  const chunks: number[][] = []
+  for (let start = 0; start < count; start += STALL_BLOCK_SIZE) {
+    const size = Math.min(STALL_BLOCK_SIZE, count - start)
+    chunks.push(Array.from({ length: size }, () => level.maxMs === level.minMs ? level.minMs : Math.round(level.minMs + random() * (level.maxMs - level.minMs))))
+  }
+  return chunks
+}
+
+/** 各档轮流排成组：第 round 轮里每一档的第 round 组，按 conditions(round, 档的序号) 给的条件各排一组（同一串空闲） */
+function interleave(perLevel: readonly { readonly level: StallLevel, readonly chunks: readonly (readonly number[])[] }[], conditions: (round: number, index: number) => readonly boolean[]): StallBlock[] {
   const blocks: StallBlock[] = []
   const rounds = Math.max(...perLevel.map(entry => entry.chunks.length))
   for (let round = 0; round < rounds; round += 1) {
@@ -79,12 +76,32 @@ export function stallSchedule(runs: number | undefined, random: () => number): S
       const idles = chunks[round]
       if (idles === undefined)
         return
-      const order = (round + index) % 2 === 0 ? [false, true] : [true, false]
-      for (const keepAlive of order)
+      for (const keepAlive of conditions(round, index))
         blocks.push({ keepAlive, level, idles })
     })
   }
   return blocks
+}
+
+/**
+ * 这一次运行的编排（纯函数）：runs 是 1–1.5 秒那一档每个条件的次数，其余各档按 share 的比例、至少一次；不带 runs（Playwright 的校准）时
+ * 只有 0.2 秒与 1–1.5 秒两档各一次。random 给区间的那一档（1–1.5 秒）取值（页面用 Math.random），固定的档不取
+ */
+export function stallSchedule(runs: number | undefined, random: () => number): StallBlock[] {
+  const levels = runs === undefined ? STALL_LEVELS.slice(0, 2) : STALL_LEVELS
+  const perLevel = levels.map(level => ({ level, chunks: chunksOf(level, runs === undefined ? 1 : Math.max(1, Math.round(runs * level.share)), random) }))
+  return interleave(perLevel, (round, index) => (round + index) % 2 === 0 ? [false, true] : [true, false])
+}
+
+/**
+ * 生产的发件箱 Worker 的编排（设计 §3.6 第 9 项的生产部分：带空定时器，T ≥ 1 秒）：只有一个条件（生产的 Worker 一律开着空定时器），
+ * 只有 ≥ 1 秒的三档，次数与 stallSchedule 同一个比例（runs 40：1–1.5 秒 40 次、3 秒 10 次、10 秒 5 次，共 55 次）；
+ * 不带 runs（Playwright 的校准）时只有 1–1.5 秒一次
+ */
+export function productionStallSchedule(runs: number | undefined, random: () => number): StallBlock[] {
+  const levels = STALL_LEVELS.filter(level => level.minMs >= 1_000).slice(0, runs === undefined ? 1 : undefined)
+  const perLevel = levels.map(level => ({ level, chunks: chunksOf(level, runs === undefined ? 1 : Math.max(1, Math.round(runs * level.share)), random) }))
+  return interleave(perLevel, () => [true])
 }
 
 /** 一组最多用多久：热身、各次的空闲与每次的余量 */
@@ -96,6 +113,11 @@ export function stallBlockBudgetMs(block: StallBlock): number {
 export function stallBudgetMs(runs: number | undefined): number {
   // 按最长的空闲估：1–1.5 秒那一档取 1.5 秒
   return stallSchedule(runs, () => 1).reduce((total, block) => total + stallBlockBudgetMs(block), 60_000)
+}
+
+/** 生产的发件箱 Worker 那一步最多用多久（同上的估法） */
+export function productionStallBudgetMs(runs: number | undefined): number {
+  return productionStallSchedule(runs, () => 1).reduce((total, block) => total + stallBlockBudgetMs(block), 60_000)
 }
 
 /** 一次的结果：Worker 交回的各段，加上页面这一侧的空闲、送达（发出到 Worker 收到）、交回（Worker 做完到页面收到）与往返（墙上时间） */

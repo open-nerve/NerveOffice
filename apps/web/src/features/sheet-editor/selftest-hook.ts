@@ -31,7 +31,8 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
  * 捕获时机的复核（M3-P4 S1）都在编辑时跑；交接的复核（M3-P5）里正在编辑的 A（takeover-holder）在编辑时跑，另开的 B 与刷新的那一步在阅读时开始；
  * 请求编辑的两条路（M3-P6）里被暂停的持有者（paused-holder）在编辑时跑，请求方（request-waiter）在阅读时开始。
  * 真实浏览器的前置复核（M4-P1 S1）里捕获成本（capture-cost）与公式冻结（perf-baseline）在编辑时跑（生产的捕获与公式计算都在编辑时），
- * 存储与 Worker 的探针（storage、key-transfer、storage-quota、worker-stall）用不着编辑器，在阅读时跑
+ * 存储与 Worker 的探针（storage、key-transfer、storage-quota、worker-stall）与生产发件箱的两项（outbox-stall、outbox-pipeline）用不着编辑器，
+ * 在阅读时跑
  */
 const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder', 'takeover-holder-deaf', 'paused-holder', 'capture-cost', 'perf-baseline'])
 
@@ -216,6 +217,8 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       consoleErrors: () => log.consoleErrors,
       ignoredNotices: () => log.ignoredNotices,
       firstLoad: () => ({ ...firstLoad }),
+      // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（outbox/testing/ 只在测试构建里、只能动态引入）
+      outboxReview: async () => (await import('./outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
     }
     void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => runSelftestAndReport(host))
   }

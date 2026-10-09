@@ -70,7 +70,8 @@ export interface SelftestStepDefinition {
  *   （request-waiter）；持有者被暂停时自动交出走到到期（paused-holder，盖屏，放在最后）；
  * - M4-P1 S1（真实浏览器的前置复核，设计 §3.6，都由上一步带过去，放在 hidden-save 之前）：首屏与公式冻结（作者，perf-50k，Worker、主线程、
  *   再一次 Worker——只选这几步时第一步是这次运行里第一次打开编辑器页，冷的；之后的热），捕获成本（作者，约 1 MiB 与约 5 MiB），存储、密钥交给 Worker、
- *   Worker 的停顿（查看者，阅读时跑；密钥单独一步：万一停在钥匙串的提示上，别的几项已经交回）
+ *   Worker 的停顿（查看者，阅读时跑；密钥单独一步：万一停在钥匙串的提示上，别的几项已经交回），以及生产的发件箱（主会话把 S8 的第二轮并进来）：
+ *   生产 Worker 的停顿（outbox-stall）、磁盘上的管道各段与恢复路径（outbox-pipeline）
  */
 export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'read-only', scenario: 'read-only', role: 'viewer', sample: 'read-only' },
@@ -92,6 +93,8 @@ export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'storage', scenario: 'storage', role: 'viewer', sample: 'template' },
   { id: 'key-transfer', scenario: 'key-transfer', role: 'viewer', sample: 'template' },
   { id: 'worker-stall', scenario: 'worker-stall', role: 'viewer', sample: 'template' },
+  { id: 'outbox-stall', scenario: 'outbox-stall', role: 'viewer', sample: 'template' },
+  { id: 'outbox-pipeline', scenario: 'outbox-pipeline', role: 'viewer', sample: 'template' },
   { id: 'hidden-save', scenario: 'hidden-save', role: 'author', sample: 'template' },
   { id: 'takeover-holder', scenario: 'takeover-holder', role: 'author', sample: 'template' },
   { id: 'takeover-taker', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'takeover-holder', opens: 'editor' },
@@ -412,6 +415,8 @@ function probeExpectation(scenario: ProbeScenario): ServerExpectation {
     case 'storage-quota':
     case 'worker-stall':
     case 'capture-cost':
+    case 'outbox-stall':
+    case 'outbox-pipeline':
       return { revision: 1, why: '没有保存过', cells: [] }
   }
 }

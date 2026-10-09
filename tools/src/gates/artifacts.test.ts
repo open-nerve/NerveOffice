@@ -609,6 +609,11 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/outbox-probe.worker-q72kaOrf.js', 'assets/outbox.worker-DfsCheLT.js', 'assets/outbox-probe.workers-x.js']).map(v => v.subject)).toEqual(['assets/outbox-probe.worker-q72kaOrf.js'])
   })
 
+  it('真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：来源在 outbox/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/outbox-review-probe.ts')).toBe(true)
+    expect(checkTestOnlyArtifacts(['assets/outbox-review-probe-Bq1x.js', 'assets/outbox-review-probes.js', 'assets/my-outbox-review-probe-x.js', 'assets/outbox-review-Bq1x.js']).map(v => v.subject)).toEqual(['assets/outbox-review-probe-Bq1x.js'])
+  })
+
   it('真实浏览器复核的探针 Worker（M4-P1 S1）：来源在 editor/testing/ 下，按来源认；Worker 的产物按名字兜底，名字相近的不算', () => {
     expect(isTestOnlySource('src/editor/testing/storage-probe-worker.ts')).toBe(true)
     expect(checkTestOnlySources({ 'assets/storage-probe-worker-ChQO.js': { name: 'storage-probe-worker', modules: ['src/editor/testing/storage-probe-worker.ts', 'src/editor/testing/probe-bytes.ts'] } }, ['assets/storage-probe-worker-ChQO.js']).map(v => v.rule))

@@ -4,7 +4,8 @@
 // pnpm --filter @nerve-office/e2e run measure:probe（先构建后端与测试构建；三个浏览器依次跑、一个工作进程，每个浏览器约 15 分钟）。
 // 每个浏览器一条用例：
 // 1. 一个持久上下文里依次跑首屏与公式冻结（Worker、主线程、再一次 Worker：第一步是这个资料目录里第一次打开编辑器页，冷的）、捕获成本（约 1 MiB、
-//    约 5 MiB）、存储、密钥交给 Worker、Worker 的停顿；Chromium 系另经 CDP 造出"已授予持久保存"再跑一次存储（第 1 项的另一条路）；
+//    约 5 MiB）、存储、密钥交给 Worker、Worker 的停顿（探针 Worker），以及生产的发件箱（主会话把 S8 的第二轮并进来）：生产 Worker 的停顿、
+//    磁盘上的管道各段与恢复路径；Chromium 系另经 CDP 造出"已授予持久保存"再跑一次存储（第 1 项的另一条路）；
 // 2. 另一个持久上下文（新的资料目录）里跑写满：Chromium 系经 CDP 把配额覆盖成 12 MiB；WebKit 没有这个接口，只记下配额、不写。
 // 运行次数 MEASURE_PROBE_RUNS（默认 40，与真实 Safari 的驱动脚本相同）。各步的原始结果与逐项的判定（support/probe-verdicts.ts）写在
 // measure/test-results/probe/<浏览器>.json 与 .md（下一次实测覆盖）。用例只要求每一步都交回了结果、各项的数据齐；判定的结论写进复核报告
@@ -31,7 +32,7 @@ const STEP_TIMEOUT_MS = 30 * 60_000
 test.describe.configure({ timeout: 90 * 60_000 })
 
 /** 一个持久上下文里依次跑的几步（与真实 Safari 的步骤相同，按 SELFTEST_STEPS 的先后） */
-const STEP_IDS = ['perf-worker', 'perf-main', 'perf-worker-warm', 'capture-1m', 'capture-5m', 'storage', 'key-transfer', 'worker-stall'] as const
+const STEP_IDS = ['perf-worker', 'perf-main', 'perf-worker-warm', 'capture-1m', 'capture-5m', 'storage', 'key-transfer', 'worker-stall', 'outbox-stall', 'outbox-pipeline'] as const
 
 /** Chromium 系在"已授予持久保存"之后再跑一次存储 */
 const GRANTED_STORAGE: SelftestStepDefinition = { id: 'storage-granted', scenario: 'storage', role: 'viewer', sample: 'template' }
@@ -90,7 +91,7 @@ function writeResults(testInfo: TestInfo, startedAt: string, loadBefore: readonl
   const main = reports.filter(entry => entry.stepId !== GRANTED_STORAGE.id)
   const verdicts = probeVerdicts(main)
   const granted = reports.filter(entry => entry.stepId === GRANTED_STORAGE.id)
-  const grantedVerdicts = granted.length === 0 ? [] : probeVerdicts(granted).filter(verdict => verdict.item === 1)
+  const grantedVerdicts = granted.length === 0 ? [] : probeVerdicts(granted).filter(verdict => verdict.id === '1')
   const lines = [
     `# ${testInfo.project.name}（持久上下文，运行次数 ${RUNS}）`,
     '',

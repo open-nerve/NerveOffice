@@ -22,6 +22,8 @@ export type VerdictStatus = 'pass' | 'fail' | 'record' | 'unavailable' | 'missin
 
 /** 一项的结论 */
 export interface ItemVerdict {
+  /** 这一项的标识：项的编号（"1"……"12"）；第 9 项另有生产的发件箱 Worker 那一部分（"9-production"） */
+  readonly id: string
   /** 设计 §3.6 的第几项 */
   readonly item: number
   readonly title: string
@@ -31,6 +33,9 @@ export interface ItemVerdict {
   /** 缺了的事实或计时 */
   readonly missing: readonly string[]
 }
+
+/** 各项的判定交回的（标识由 probeVerdicts 加上） */
+type Verdict = Omit<ItemVerdict, 'id'>
 
 const STATUS_TEXT: Readonly<Record<VerdictStatus, string>> = { pass: '通过', fail: '不通过', record: '记录', unavailable: '这次做不了', missing: '数据不齐' }
 
@@ -97,12 +102,12 @@ function number(value: SelftestFact | undefined): number | undefined {
   return typeof value === 'number' ? value : undefined
 }
 
-function noStep(item: number, title: string, step: string): ItemVerdict {
+function noStep(item: number, title: string, step: string): Verdict {
   return { item, title, status: 'missing', lines: [`没有 ${step} 这一步的结果`], missing: [step] }
 }
 
 /** 规则核对的结论：缺了就是 missing，有不对的就是 fail，否则 pass */
-function ruled(item: number, title: string, facts: Readonly<Record<string, SelftestFact>>, rules: readonly Rule[], lines: readonly string[]): ItemVerdict {
+function ruled(item: number, title: string, facts: Readonly<Record<string, SelftestFact>>, rules: readonly Rule[], lines: readonly string[]): Verdict {
   const { missing, wrong } = judge(facts, rules)
   if (missing.length > 0)
     return { item, title, status: 'missing', lines, missing }
@@ -129,7 +134,7 @@ function spread(values: Distribution | null): string {
 
 // ---- 各项 ----
 
-function persistence(reports: readonly ProbeReport[]): ItemVerdict {
+function persistence(reports: readonly ProbeReport[]): Verdict {
   const title = '持久保存'
   const facts = factsOf(reports, 'storage')
   if (facts === undefined)
@@ -142,7 +147,7 @@ function persistence(reports: readonly ProbeReport[]): ItemVerdict {
   return { item: 1, title, status: missing.length > 0 ? 'missing' : 'record', lines, missing }
 }
 
-function quotaAndUsage(reports: readonly ProbeReport[]): ItemVerdict {
+function quotaAndUsage(reports: readonly ProbeReport[]): Verdict {
   const title = '配额与用量'
   const facts = factsOf(reports, 'storage')
   if (facts === undefined)
@@ -169,7 +174,7 @@ function quotaAndUsage(reports: readonly ProbeReport[]): ItemVerdict {
   return { item: 2, title, status: pass ? 'pass' : 'fail', lines: pass ? lines : [...lines, '不对：配额要大于 0，用量的增长要与写入量同一量级（0.1–10 倍）'], missing: [] }
 }
 
-function durability(reports: readonly ProbeReport[]): ItemVerdict {
+function durability(reports: readonly ProbeReport[]): Verdict {
   const title = 'durability'
   const entry = reportOf(reports, 'storage')
   const facts = entry?.report.facts
@@ -201,7 +206,7 @@ function durability(reports: readonly ProbeReport[]): ItemVerdict {
   }
 }
 
-function quotaFill(reports: readonly ProbeReport[]): ItemVerdict {
+function quotaFill(reports: readonly ProbeReport[]): Verdict {
   const title = '写满'
   const facts = factsOf(reports, 'storage-quota')
   if (facts === undefined)
@@ -219,7 +224,7 @@ function quotaFill(reports: readonly ProbeReport[]): ItemVerdict {
   ], lines)
 }
 
-function rollback(reports: readonly ProbeReport[]): ItemVerdict {
+function rollback(reports: readonly ProbeReport[]): Verdict {
   const title = '回滚（写满的有界替代）'
   const facts = factsOf(reports, 'storage')
   if (facts === undefined)
@@ -236,7 +241,7 @@ function rollback(reports: readonly ProbeReport[]): ItemVerdict {
   ], ['两个仓库的事务：put 之后 abort、put 之后违反约束——已有的记录逐字节不变、新的不在、写入者不变'])
 }
 
-function indexedDbBasics(reports: readonly ProbeReport[]): ItemVerdict {
+function indexedDbBasics(reports: readonly ProbeReport[]): Verdict {
   const title = 'IndexedDB 的基本行为'
   const facts = factsOf(reports, 'storage')
   if (facts === undefined)
@@ -267,7 +272,7 @@ const RAW_RULES: readonly Rule[] = [
   ['crypto.raw-digest', is(true), 'true'],
 ]
 
-function keyTransfer(reports: readonly ProbeReport[]): ItemVerdict {
+function keyTransfer(reports: readonly ProbeReport[]): Verdict {
   const title = '不可导出的 CryptoKey 交给 Worker'
   const facts = factsOf(reports, 'key-transfer')
   if (facts === undefined)
@@ -293,7 +298,7 @@ function keyTransfer(reports: readonly ProbeReport[]): ItemVerdict {
   ], [`CryptoKey 经 postMessage 交给 Worker：${ms(number(facts['crypto.key-transfer-ms']))}，${text(facts['crypto.key-algorithm'])}、用途 ${text(facts['crypto.key-usages'])}；没有钥匙串的提示`, fallback])
 }
 
-function webLocks(reports: readonly ProbeReport[]): ItemVerdict {
+function webLocks(reports: readonly ProbeReport[]): Verdict {
   const title = 'Web Locks（页面与 Worker）'
   const facts = factsOf(reports, 'storage')
   if (facts === undefined)
@@ -357,7 +362,7 @@ export function stallGroups(timings: readonly SelftestTiming[]): StallGroup[] {
 
 const LEVEL_TEXT: Readonly<Record<number, string>> = { 200: '0.2 秒', 1000: '1–1.5 秒', 3000: '3 秒', 10_000: '10 秒' }
 
-function workerStall(reports: readonly ProbeReport[]): ItemVerdict {
+function workerStall(reports: readonly ProbeReport[]): Verdict {
   const title = 'Worker 的停顿（探针 Worker，第一轮）'
   const entry = reportOf(reports, 'worker-stall')
   if (entry === undefined)
@@ -378,9 +383,70 @@ function workerStall(reports: readonly ProbeReport[]): ItemVerdict {
   const p95 = decisiveWorker?.p95 ?? Number.NaN
   const pass = stalls === 0 && p95 <= WORKER_SEGMENT_P95_MS
   lines.push(pass
-    ? `有空定时器、空闲 ≥ 1 秒：0 次停顿，Worker 段 p95 ${ms(p95)}（≤ ${WORKER_SEGMENT_P95_MS} ms）：保留 Worker 放置（S8 用生产的 Worker 再跑一次定下）`
+    ? `有空定时器、空闲 ≥ 1 秒：0 次停顿，Worker 段 p95 ${ms(p95)}（≤ ${WORKER_SEGMENT_P95_MS} ms）：保留 Worker 放置（探针 Worker 的结论；定论看生产的发件箱 Worker 那一项，9-production）`
     : `有空定时器、空闲 ≥ 1 秒：${stalls} 次停顿，Worker 段 p95 ${ms(p95)}：WebKit 改在主线程放置（前提是主线程 gzip 的最长阻塞 ≤ ${MAIN_GZIP_LAG_MS} ms，见第 10 项）`)
   return { item: 9, title, status: pass ? 'pass' : 'fail', lines, missing: [] }
+}
+
+function numbers(values: readonly (number | null | undefined)[]): number[] {
+  return values.filter((value): value is number => typeof value === 'number')
+}
+
+/**
+ * 第 9 项的生产部分（DEF-011 的定论）：生产的发件箱 Worker（带空定时器），空闲 ≥ 1 秒的各档。生产的协议不交回 Worker 里各段的计时，
+ * 按页面这一侧的往返判：停顿 = 比同档的中位数多出 ≥ STALL_EXCESS_MS；往返 p95 ≤ WORKER_SEGMENT_P95_MS（往返含来回的消息，偏保守）
+ */
+function productionStall(reports: readonly ProbeReport[]): Verdict {
+  const title = 'Worker 的停顿（生产的发件箱 Worker，带空定时器）'
+  const entry = reportOf(reports, 'outbox-stall')
+  if (entry === undefined)
+    return noStep(9, title, 'outbox-stall')
+  const samples = (entry.report.timings ?? []).filter(timing => timing.id.startsWith('outbox-stall#')).map(timing => timing.ms)
+  if (samples.length === 0)
+    return { item: 9, title, status: 'missing', lines: [], missing: ['outbox-stall#*'] }
+  const levels = [...new Set(samples.map(sample => sample.level ?? 0))].sort((a, b) => a - b)
+  let stalls = 0
+  const lines = levels.map((level) => {
+    const trips = numbers(samples.filter(sample => (sample.level ?? 0) === level).map(sample => sample.roundTrip))
+    const spreadOf = distribution(trips)
+    const excess = trips.map(value => value - (spreadOf?.p50 ?? 0)).filter(value => value >= STALL_EXCESS_MS).map(Math.round)
+    stalls += excess.length
+    return `空闲 ${LEVEL_TEXT[level] ?? `${level} ms`} ${trips.length} 次里 ${excess.length} 次停顿${excess.length > 0 ? `（多出 ${excess.join('、')} ms）` : ''}；往返 ${spread(spreadOf)}`
+  })
+  const all = distribution(numbers(samples.map(sample => sample.roundTrip)))
+  const p95 = all?.p95 ?? Number.NaN
+  const pass = stalls === 0 && p95 <= WORKER_SEGMENT_P95_MS
+  lines.push(pass
+    ? `空闲 ≥ 1 秒共 ${all?.n ?? 0} 次：0 次停顿，往返 p95 ${ms(p95)}（≤ ${WORKER_SEGMENT_P95_MS} ms，往返含来回的消息）：保留 Worker 放置`
+    : `空闲 ≥ 1 秒共 ${all?.n ?? 0} 次：${stalls} 次停顿，往返 p95 ${ms(p95)}：WebKit 改在主线程放置（前提是主线程 gzip 的最长阻塞 ≤ ${MAIN_GZIP_LAG_MS} ms，见第 10 项）`)
+  return { item: 9, title, status: pass ? 'pass' : 'fail', lines, missing: [] }
+}
+
+const PIPELINE_SIZE_TEXT: Readonly<Record<string, string>> = { '1m': '约 1 MiB', '5m': '约 5 MiB' }
+
+/** 第 11 项：磁盘上的管道各段与恢复路径（生产的存储，进程内）。只作记录，与 M0 内存库上的数对照 */
+function pipelineSegments(reports: readonly ProbeReport[]): Verdict {
+  const title = '磁盘上的管道各段与恢复路径（生产的存储，进程内）'
+  const entry = reportOf(reports, 'outbox-pipeline')
+  if (entry === undefined)
+    return noStep(11, title, 'outbox-pipeline')
+  const timings = entry.report.timings ?? []
+  const sizes = Object.keys(PIPELINE_SIZE_TEXT).filter(size => timings.some(timing => timing.id.startsWith(`outbox-pipeline.${size}#`)))
+  if (sizes.length === 0)
+    return { item: 11, title, status: 'missing', lines: [], missing: ['outbox-pipeline.*#*'] }
+  const facts = entry.report.facts ?? {}
+  const lines = [`事务的 durability 属性：请求 strict → ${text(facts['outbox-pipeline.strict-attribute'])}，请求 default → ${text(facts['outbox-pipeline.default-attribute'])}`]
+  for (const size of sizes) {
+    const prefix = `outbox-pipeline.${size}`
+    const p50 = (field: string): number | undefined => distribution(fieldOf(timings, prefix, field))?.p50
+    const strict = p50('rawStrict')
+    const plain = p50('rawDefault')
+    lines.push(
+      `${PIPELINE_SIZE_TEXT[size] ?? size}（${fieldOf(timings, prefix, 'rawBytes')[0] ?? '—'} 字节）× ${fieldOf(timings, prefix, 'digest').length}：写入一侧 SHA-256 ${ms(p50('digest'))}、gzip ${ms(p50('gzip'))}、封 ${ms(p50('seal'))}、写入（生产的存储，strict）${ms(p50('storeWrite'))}；恢复：读 ${ms(p50('read'))}、解开 ${ms(p50('open'))}、解压 ${ms(p50('gunzip'))}、解析 ${ms(p50('parse'))}（中位数）`,
+      `  直接写入 strict p50 ${ms(strict)}、default p50 ${ms(plain)}，strict 多 ${ms(strict === undefined || plain === undefined ? undefined : strict - plain)}；生产的存储写入 p95 ${ms(distribution(fieldOf(timings, prefix, 'storeWrite'))?.p95)}`,
+    )
+  }
+  return { item: 11, title, status: 'record', lines, missing: [] }
 }
 
 interface CaptureFigures {
@@ -402,7 +468,7 @@ function captureFigures(entry: ProbeReport): CaptureFigures {
   }
 }
 
-function captureCost(reports: readonly ProbeReport[]): ItemVerdict {
+function captureCost(reports: readonly ProbeReport[]): Verdict {
   const title = '捕获的主线程成本'
   const entries = reports.filter(entry => entry.report.scenario === 'capture-cost')
   const lines = entries.map((entry) => {
@@ -437,7 +503,7 @@ function rounds(timings: readonly SelftestTiming[], prefix: string): string {
   return `×${settle?.n ?? 0} 收齐 p50 ${ms(settle?.p50)}、最长 ${ms(settle?.max)}，主线程最长阻塞 ${ms(lag)}、最长帧间隔 ${ms(frame)}`
 }
 
-function perfBaseline(reports: readonly ProbeReport[]): ItemVerdict {
+function perfBaseline(reports: readonly ProbeReport[]): Verdict {
   const title = '首屏与公式冻结（只作对照）'
   const entries = reports.filter(entry => entry.report.scenario === 'perf-baseline')
   if (entries.length === 0)
@@ -458,20 +524,26 @@ function perfBaseline(reports: readonly ProbeReport[]): ItemVerdict {
   return { item: 12, title, status: missing.length > 0 ? 'missing' : 'record', lines, missing }
 }
 
-/** 全部的项（设计 §3.6 第 1–10、12 项；第 11 项在 S8 用生产的发件箱跑），按项的顺序 */
+/**
+ * 全部的项（设计 §3.6 第 1–12 项；第 9 项分探针 Worker 与生产的发件箱 Worker 两部分，第 11 项是生产的存储），按项的顺序。
+ * 标识：项的编号，生产的发件箱 Worker 那一部分是 9-production
+ */
 export function probeVerdicts(reports: readonly ProbeReport[]): ItemVerdict[] {
+  const numbered = (verdict: Verdict): ItemVerdict => ({ id: String(verdict.item), ...verdict })
   return [
-    persistence(reports),
-    quotaAndUsage(reports),
-    durability(reports),
-    quotaFill(reports),
-    rollback(reports),
-    indexedDbBasics(reports),
-    keyTransfer(reports),
-    webLocks(reports),
-    workerStall(reports),
-    captureCost(reports),
-    perfBaseline(reports),
+    numbered(persistence(reports)),
+    numbered(quotaAndUsage(reports)),
+    numbered(durability(reports)),
+    numbered(quotaFill(reports)),
+    numbered(rollback(reports)),
+    numbered(indexedDbBasics(reports)),
+    numbered(keyTransfer(reports)),
+    numbered(webLocks(reports)),
+    numbered(workerStall(reports)),
+    { id: '9-production', ...productionStall(reports) },
+    numbered(captureCost(reports)),
+    numbered(pipelineSegments(reports)),
+    numbered(perfBaseline(reports)),
   ]
 }
 

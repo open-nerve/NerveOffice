@@ -41,7 +41,8 @@
 // 库连不上、Safari 打不开、用户一直在用电脑、屏幕锁着）；4 作废（用户回来了、中止了）。
 // 用法：pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--timeout 秒] [--steps 标识,标识…] [--idle 秒] [--idle-wait 秒] [--runs 次数]
 // （命令先构建后端与测试构建；--steps 只跑这几步，例如 takeover-holder,takeover-taker,refresh-save——B 要与 A 一起选；request-waiter,paused-holder 是
-// 请求编辑的两条路；perf-worker,perf-main,perf-worker-warm,capture-1m,capture-5m,storage,key-transfer,worker-stall 是 M4-P1 的复核；
+// 请求编辑的两条路；perf-worker,perf-main,perf-worker-warm,capture-1m,capture-5m,storage,key-transfer,worker-stall,outbox-stall,outbox-pipeline
+// 是 M4-P1 的复核（后两步调用生产的发件箱）；
 // --idle 是开始之前用户要空闲多久，--idle-wait 是最多等多久；--runs 是复核的运行次数）。不进 CI（CI 上没有 Safari）。
 // 与 Playwright 的 E2E 共用 test-results/ 下的服务日志（e2e-server.log）与控制文件：不要与 pnpm test:e2e 在同一个检出里同时跑。
 // 自检的页面要看得见：Safari 不给隐藏的标签页（窗口被挡住、不在前面的标签页、屏幕锁定）动画帧，几秒之后连计时器也停了

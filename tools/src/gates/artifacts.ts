@@ -567,10 +567,11 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  *   各自成分块；
  * - 发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox-probe）：同样由 start.tsx 动态引入，自成分块（P1 里发件箱的模块只有它引用，一起在这个分块里）；
  *   它创建的记下事务的测试 Worker（outbox-probe.worker，M4-P1 S5）是另一个产物。生产的发件箱 Worker（outbox.worker）不在此列；
- * - 真实浏览器复核的探针 Worker（M4-P1 S1，storage-probe-worker）：自检的场景按 new Worker(new URL(…)) 引入，产物自成一个文件。
+ * - 真实浏览器复核的探针 Worker（M4-P1 S1，storage-probe-worker）：自检的场景按 new Worker(new URL(…)) 引入，产物自成一个文件；
+ * - 真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：页面自检的挂接用到时动态引入，自成分块。
  * 自检结果的格式标识与计时、自动保存的控制、交接日志与发件箱探针挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe(?:\.worker)?|storage-probe-worker)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe(?:\.worker)?|outbox-review-probe|storage-probe-worker)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

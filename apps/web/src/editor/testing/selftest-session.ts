@@ -2,6 +2,7 @@
 // 命令日志的几个查询、内容的差别与页头的按钮。场景在 ./selftest.ts（只读与进入、退出编辑）与 ./selftest-capture.ts（捕获时机的复核）。
 // 只在测试构建里（editor/testing/，随自检的分块动态引入）
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
+import type { OutboxReviewApi } from './outbox-review-api.ts'
 import type { EntryApi, EntryRange, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
 import type { SelftestCheck, SelftestFact, SelftestPage, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import { canonicalJson, contentOf } from './content-compare.ts'
@@ -74,6 +75,11 @@ export interface SelftestHost {
   readonly ignoredNotices: () => readonly string[]
   /** 第一次载入的时刻（见 SelftestFirstLoad） */
   readonly firstLoad: () => SelftestFirstLoad
+  /**
+   * 生产的发件箱（M4-P1 设计 §3.6 第 9 项的生产 Worker、第 11 项）：挂接动态引入 features 那一侧的实现交给自检（editor/testing 不能引用 features）；
+   * 用到的场景才调用。没有时（单元测试）为 undefined
+   */
+  readonly outboxReview?: (() => Promise<OutboxReviewApi>) | undefined
 }
 
 /**

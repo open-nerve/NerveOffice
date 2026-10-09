@@ -1,6 +1,6 @@
 // Worker 停顿的复核（selftest-stall.ts，M4-P1 设计 §3.6 第 9 项）的编排：各档的次数、每组的大小、两个条件成对、先后轮流；场景的预算
 import { describe, expect, it } from 'vitest'
-import { STALL_BLOCK_SIZE, STALL_LEVELS, stallBudgetMs, stallSchedule } from './selftest-stall.ts'
+import { productionStallBudgetMs, productionStallSchedule, STALL_BLOCK_SIZE, STALL_LEVELS, stallBudgetMs, stallSchedule } from './selftest-stall.ts'
 
 /** 固定的"随机"：依次给出 values 里的数 */
 function sequence(...values: number[]): () => number {
@@ -59,5 +59,22 @@ describe('Worker 停顿的编排（stallSchedule）', () => {
     expect(stallBudgetMs(40)).toBeLessThan(20 * 60_000)
     expect(stallBudgetMs(undefined)).toBeLessThan(stallBudgetMs(10))
     expect(stallBudgetMs(10)).toBeLessThan(stallBudgetMs(40))
+  })
+})
+
+describe('生产的发件箱 Worker 的编排（productionStallSchedule，第 9 项的生产部分）', () => {
+  it('runs 40：只有开着空定时器的一个条件、只有 ≥ 1 秒的三档——1–1.5 秒 40 次、3 秒 10 次、10 秒 5 次；一组最多 10 次、各档轮流', () => {
+    const blocks = productionStallSchedule(40, Math.random)
+    expect(blocks.every(block => block.keepAlive)).toBe(true)
+    const count = (level: string): number => blocks.filter(block => block.level.id === level).reduce((total, block) => total + block.idles.length, 0)
+    expect(['0.2s', '1-1.5s', '3s', '10s'].map(count)).toEqual([0, 40, 10, 5])
+    expect(blocks.map(block => block.level.id)).toEqual(['1-1.5s', '3s', '10s', '1-1.5s', '1-1.5s', '1-1.5s'])
+    expect(blocks.every(block => block.idles.length <= STALL_BLOCK_SIZE)).toBe(true)
+  })
+
+  it('不带 runs（Playwright 的校准）：1–1.5 秒一次；预算随次数变长', () => {
+    expect(productionStallSchedule(undefined, () => 0).map(block => [block.keepAlive, block.level.id, block.idles])).toEqual([[true, '1-1.5s', [1000]]])
+    expect(productionStallBudgetMs(undefined)).toBeLessThan(productionStallBudgetMs(40))
+    expect(productionStallBudgetMs(40)).toBeLessThan(stallBudgetMs(40))
   })
 })

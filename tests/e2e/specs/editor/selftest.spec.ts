@@ -87,7 +87,7 @@ async function summaryOf(report: SelftestReport, step: SelftestStep, path?: stri
  * 只读打开的场景（查看者，与作者的 enter-exit：它从阅读开始，自己点"编辑""退出编辑"；交接里另开的 B 与刷新的那一步也从阅读开始；请求编辑的请求方
  * 也从阅读开始；M4-P1 的存储、密钥、写满与 Worker 停顿的探针用不着编辑器，在阅读时跑）
  */
-const READ_ONLY_SCENARIOS: ReadonlySet<string> = new Set(['read-only', 'read-only-formulas', 'enter-exit', 'takeover-taker', 'refresh-save', 'request-waiter', 'storage', 'key-transfer', 'storage-quota', 'worker-stall'])
+const READ_ONLY_SCENARIOS: ReadonlySet<string> = new Set(['read-only', 'read-only-formulas', 'enter-exit', 'takeover-taker', 'refresh-save', 'request-waiter', 'storage', 'key-transfer', 'storage-quota', 'worker-stall', 'outbox-stall', 'outbox-pipeline'])
 
 function passed(step: SelftestStep): unknown {
   return { scenario: step.scenario, page: { state: 'ready', readOnly: READ_ONLY_SCENARIOS.has(step.scenario) }, hasChecks: true, problems: [], server: [] }
@@ -109,30 +109,32 @@ const PLAIN_STEPS = SELFTEST_STEPS.filter(item => item.scenario !== 'hidden-save
  * 真实浏览器复核的一步在 CI 里该有的判定（support/probe-verdicts.ts）：这一步负责的各项数据都齐（不是 missing）；与时间无关的几项（回滚、
  * IndexedDB 的基本行为、密钥交给 Worker、Web Locks）通过。与时间有关的项与持久保存、配额（非持久的上下文里 IndexedDB 在内存里）只要求数据齐
  */
-const PROBE_ITEMS: Readonly<Record<string, readonly number[]>> = {
-  'storage': [1, 2, 3, 5, 6, 8],
-  'key-transfer': [7],
-  'worker-stall': [9],
-  'capture-cost': [10],
-  'perf-baseline': [12],
+const PROBE_ITEMS: Readonly<Record<string, readonly string[]>> = {
+  'storage': ['1', '2', '3', '5', '6', '8'],
+  'key-transfer': ['7'],
+  'worker-stall': ['9'],
+  'outbox-stall': ['9-production'],
+  'capture-cost': ['10'],
+  'outbox-pipeline': ['11'],
+  'perf-baseline': ['12'],
 }
 
-const SEMANTIC_ITEMS: ReadonlySet<number> = new Set([5, 6, 7, 8])
+const SEMANTIC_ITEMS: ReadonlySet<string> = new Set(['5', '6', '7', '8'])
 
 /** 一步的判定的要点：各项的结论（与时间无关的几项）或者数据齐不齐 */
 function probeSummary(step: SelftestStep, report: SelftestReport): unknown {
   const verdicts = probeVerdicts([{ stepId: step.id, report, cold: true }])
-  const statusOf = (verdict: ItemVerdict): string => SEMANTIC_ITEMS.has(verdict.item) || verdict.status === 'missing' ? verdict.status : 'complete'
-  return (PROBE_ITEMS[step.scenario] ?? []).map((item) => {
-    const verdict = verdicts.find(entry => entry.item === item)
+  const statusOf = (verdict: ItemVerdict): string => SEMANTIC_ITEMS.has(verdict.id) || verdict.status === 'missing' ? verdict.status : 'complete'
+  return (PROBE_ITEMS[step.scenario] ?? []).map((id) => {
+    const verdict = verdicts.find(entry => entry.id === id)
     return verdict === undefined
-      ? { item, status: '没有这一项', missing: [], lines: [] }
-      : { item, status: statusOf(verdict), missing: verdict.missing, lines: verdict.status === 'fail' || verdict.status === 'missing' ? verdict.lines : [] }
+      ? { id, status: '没有这一项', missing: [], lines: [] }
+      : { id, status: statusOf(verdict), missing: verdict.missing, lines: verdict.status === 'fail' || verdict.status === 'missing' ? verdict.lines : [] }
   })
 }
 
 function probePassed(step: SelftestStep): unknown {
-  return (PROBE_ITEMS[step.scenario] ?? []).map(item => ({ item, status: SEMANTIC_ITEMS.has(item) ? 'pass' : 'complete', missing: [], lines: [] }))
+  return (PROBE_ITEMS[step.scenario] ?? []).map(id => ({ id, status: SEMANTIC_ITEMS.has(id) ? 'pass' : 'complete', missing: [], lines: [] }))
 }
 
 /** 写满（M4-P1 §3.6 第 4 项）：不在真实 Safari 的步骤里，这一条用例自己的一步 */
@@ -151,7 +153,7 @@ async function prepareQuota(context: BrowserContext, page: Page, browserName: st
  * estimate() 照旧报真实的配额）
  */
 function quotaSummary(report: SelftestReport): unknown {
-  const verdict = probeVerdicts([{ stepId: QUOTA_STEP.id, report, cold: true }]).find(entry => entry.item === 4)
+  const verdict = probeVerdicts([{ stepId: QUOTA_STEP.id, report, cold: true }]).find(entry => entry.id === '4')
   const records = report.facts?.['quota.records']
   return { status: verdict?.status, lines: verdict?.status === 'fail' ? verdict.lines : [], withinOverride: typeof records === 'number' && records * 1024 * 1024 < QUOTA_OVERRIDE_BYTES }
 }

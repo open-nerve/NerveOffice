@@ -169,7 +169,7 @@ describe('页面自检的挂接', () => {
     expect(handoverViewOf(undefined)).toEqual({})
   })
 
-  it('真实浏览器的前置复核（M4-P1 S1）：捕获成本与公式冻结（capture-cost、perf-baseline）先进入编辑；存储与 Worker 的探针（storage、key-transfer、storage-quota、worker-stall）在阅读时开始', async () => {
+  it('真实浏览器的前置复核（M4-P1 S1）：捕获成本与公式冻结（capture-cost、perf-baseline）先进入编辑；存储与 Worker 的探针（storage、key-transfer、storage-quota、worker-stall）与生产发件箱的两项（outbox-stall、outbox-pipeline）在阅读时开始', async () => {
     for (const scenario of ['capture-cost', 'perf-baseline']) {
       window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
       const editing = fakePage()
@@ -177,7 +177,7 @@ describe('页面自检的挂接', () => {
       editing.set(ready('steady'))
       expect(editing.enterEditing, scenario).toHaveBeenCalledOnce()
     }
-    for (const scenario of ['storage', 'key-transfer', 'storage-quota', 'worker-stall']) {
+    for (const scenario of ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'outbox-stall', 'outbox-pipeline']) {
       window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
       const reading = fakePage()
       watchForSelftest(reading.page, elements)
@@ -200,7 +200,10 @@ describe('页面自检的挂接', () => {
     set({ mode: { kind: 'entering' }, surface: 'loading' })
     set(ready('ready', false))
     set(ready('steady', false))
-    expect((await hostOfFirstRun()).firstLoad()).toEqual({ ready: 1200, steady: 4300 })
+    const host = await hostOfFirstRun()
+    expect(host.firstLoad()).toEqual({ ready: 1200, steady: 4300 })
+    // 生产的发件箱（复核的生产部分）：交给自检的是一个用到时才引入的函数
+    expect(typeof host.outboxReview).toBe('function')
   })
 
   it('请求编辑的两条路（M3-P6）：被暂停的持有者（paused-holder）先进入编辑；请求方（request-waiter）在阅读时开始', async () => {
