@@ -190,7 +190,8 @@ export interface LeaseHolder {
  * - newer：续上时发现编辑权中断期间别处保存了更新的版本：不覆盖它；
  * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，核对得知这一代已被取代，
  *   M3-P6 设计 §3.13）；
- *   elsewhere 是另一台设备或浏览器（续租或保存得到 taken_over、forced 为假：那边以本人接管申请，服务端结束了这一代）；
+ *   elsewhere 是另一台设备或浏览器（续租或保存得到 taken_over、forced 为假：那边以本人接管申请，服务端结束了这一代）。服务端的这个回答说不了
+ *   在哪，租约照它给出 elsewhere；本浏览器里接手的那一页随后会来抢本机锁，页面按本机的证据改说 this-browser（edit-mode.ts 的 locateTakeover）；
  * - forced：空间管理员（个人空间是所有者）强制接管了编辑（M3-P5 设计 §3.8：taken_over、forced 为真）。by 是接管的人：转为阅读之后读一次
  *   编辑状态，正在编辑的是别人就是他（edit-mode.ts 补上；没读到时为 undefined，只说空间管理员强制接管了编辑）；
  * - handed-over：本页这一代已经交给了请求编辑的人（handed_over：交出的回答没有在时限之内收到、留在了编辑，下一次心跳或保存才得知；
