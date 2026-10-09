@@ -290,7 +290,8 @@ export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/he
 export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts'
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'
 export { uuidSchema } from './ids/ids.ts'
-export { LOCAL_KEY_BYTES, LOCAL_KEY_PATTERN_SOURCE, localKeySchema, localKeySummarySchema, localKeyVersionSchema } from './local-keys/local-keys.ts'
+export { LOCAL_KEY_BYTES, LOCAL_KEY_PATTERN_SOURCE } from './local-keys/local-key-format.ts'
+export { localKeySchema, localKeySummarySchema, localKeyVersionSchema } from './local-keys/local-keys.ts'
 export type { LocalKey, LocalKeySummary } from './local-keys/local-keys.ts'
 export {
   SEARCH_PAGE_SIZE,

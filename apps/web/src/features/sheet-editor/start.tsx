@@ -6,7 +6,8 @@ import type { HandoverTrace } from './handover-trace.ts'
 // （sessionStorage）。
 // 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）与交接日志
 // （editor/testing/handover-log.ts，M3-P5 设计 §3.13 的观察钩子）再组装：第一个调度建起来、第一次申请之前它们就在（?edit=new 直接进入编辑也一样）；
-// 两个各自引入，一个没引入成不影响另一个；生产构建里这个分支与它们的分块都被去掉（门禁 artifacts 核对）。
+// 两个各自引入，一个没引入成不影响另一个；地址带 outboxProbe 时另引入发件箱的浏览器层探针（M4-P1）。生产构建里这个分支与它们的分块
+// 都被去掉（门禁 artifacts 核对）。
 import type { PageVisibility } from './reading-checks.ts'
 import type { SameBrowserApis } from './same-browser.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
@@ -106,6 +107,14 @@ function loadFailureReporter(target: Window): (error: unknown) => void {
 export function startSheetEditorPage(elements: SheetEditorPageElements): void {
   const reportLoadFailure = loadFailureReporter(window)
   if (import.meta.env.MODE === 'e2e') {
+    // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
+    // 与组装各走各的；引入失败同样不上报（理由见下），用到它的 E2E 等不到探针、自己会失败
+    if (new URLSearchParams(window.location.search).has('outboxProbe')) {
+      void Promise.allSettled([import('./outbox/testing/outbox-probe.ts')]).then(([probe]) => {
+        if (probe.status === 'fulfilled')
+          probe.value.installOutboxProbe(window)
+      })
+    }
     // 引入失败：照常组装，没有那一样，不上报——用到它的 E2E 自己会失败（控制、日志不在）。这两块在页面一开始就引入，整页跳转可能在入口的
     // 脚本还没执行、还没开始听 beforeunload 时就已开始，随后取消它们（WebKit 报"Importing a module script failed."），分不清是不是跳转取消的
     // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）

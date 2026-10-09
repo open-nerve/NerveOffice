@@ -613,3 +613,41 @@ describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"�
       expect((await lint(code, FEATURE_FILE)).messages.join('\n'), code).toContain(LIVE_STATUS_MESSAGE)
   })
 }, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（features/sheet-editor/**/testing/**）只能动态引入（M4-P1 设计 §3.1）', () => {
+  const PROBE_MESSAGE = '编辑器页的测试构建探针（features/sheet-editor/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入'
+  const RULE = 'ts/no-restricted-imports'
+  const START = 'apps/web/src/features/sheet-editor/start.tsx'
+  const PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
+
+  it('静态导入、import type、副作用导入、再导出与 export * 都报错：发件箱的探针与编辑器的 testing/ 都一样', async () => {
+    const cases: (readonly [string, string])[] = [
+      [START, 'import { installOutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n\nexport const install = installOutboxProbe\n'],
+      [PAGE, 'import type { OutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n\nexport type P = OutboxProbe\n'],
+      [PAGE, 'import \'./outbox/testing/outbox-probe.ts\'\n\nexport const a = 1\n'],
+      [PAGE, 'export { installOutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n'],
+      [PAGE, 'export * from \'./outbox/testing/outbox-probe.ts\'\n'],
+      [PAGE, 'import { installHandoverLog } from \'../../editor/testing/handover-log.ts\'\n\nexport const install = installHandoverLog\n'],
+      // 大小写不同（不区分大小写的文件系统上照样找得到）
+      [PAGE, 'import \'./outbox/Testing/outbox-probe.ts\'\n\nexport const a = 1\n'],
+    ]
+    for (const [file, code] of cases) {
+      const report = await lint(code, file)
+      expect(report.rules, `${file}\n${code}`).toContain(RULE)
+      expect(report.messages.join('\n'), `${file}\n${code}`).toContain(PROBE_MESSAGE)
+    }
+  })
+
+  it('动态 import() 通过；testing/ 里的文件之间照常静态引用；页面自检的挂接与测试代码不受限；同一份限制里仍拦着测试与测试辅助', async () => {
+    expect(await rulesFor(dynamicImport('./outbox/testing/outbox-probe.ts'), START)).not.toContain(RULE)
+    expect(await rulesFor('import { OUTBOX_PROBE_NAME } from \'../testing/outbox-probe.ts\'\n\nexport const name = OUTBOX_PROBE_NAME\n', 'apps/web/src/features/sheet-editor/outbox/testing/outbox-probe.ts')).not.toContain(RULE)
+    expect(await rulesFor('import type { SelftestHost } from \'../../editor/testing/selftest.ts\'\n\nexport type H = SelftestHost\n', 'apps/web/src/features/sheet-editor/selftest-hook.ts')).not.toContain(RULE)
+    expect(await rulesFor('import { installOutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n\nexport const install = installOutboxProbe\n', 'apps/web/src/features/sheet-editor/editor-page.test.ts')).not.toContain(RULE)
+    // 这一块覆盖了 nerve/test-code-only-in-tests 的同名规则：测试辅助照样拦下
+    const report = await lint('import { leaseServer } from \'./lease-server.test-support.ts\'\n\nexport const server = leaseServer\n', PAGE)
+    expect(report.rules).toContain(RULE)
+    expect(report.messages.join('\n')).toContain('测试与测试辅助')
+    // 别的目录里叫 testing 的包名不算（只认路径里的 testing 这一段）
+    expect(await rulesFor('import { render } from \'@testing-library/react\'\n\nexport const r = render\n', PAGE)).not.toContain(RULE)
+  })
+}, LINT_TIMEOUT)

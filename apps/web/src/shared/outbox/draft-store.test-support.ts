@@ -3,9 +3,9 @@
 // 读出的是另一份；写进去之前照样过形状核对（形状不对的不写）。
 // 另有故障与交错：下一次某个操作交回指定的问题（写满、库用不了、出错），或者停在开始之前、等测试放行（确定的交错）
 import type { DraftKey, StoredDraft } from './draft-record.ts'
-import type { DraftStore, ListedDraft, StoreProblem } from './draft-store.ts'
+import type { DraftStore, ListedDraft, PurgedDraft, StoreProblem } from './draft-store.ts'
 import type { WriterIdentity } from './writer-fence.ts'
-import { draftMetaOf, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideWrite, isSameWriter, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
 
 export type StoreOperation = Exclude<keyof DraftStore, 'close'>
@@ -188,13 +188,13 @@ export function fakeDraftStore(): FakeDraftStore {
       const problem = await begin('purgeExpired')
       if (problem !== undefined)
         return problem
-      const purged: DraftKey[] = []
-      for (const id of [...drafts.keys()]) {
-        const existing = existingOf(id)
-        if (existing !== undefined && shouldPurgeDraft(existing, now)) {
+      // 与 IndexedDB 的实现同一个口径：按记录里读得出的更新时间，不论格式；交回的键标明是哪一种
+      const purged: PurgedDraft[] = []
+      for (const [id, raw] of [...drafts]) {
+        if (shouldPurgeDraft(readableUpdatedAt(raw), now)) {
           drafts.delete(id)
           const [userId, documentId] = JSON.parse(id) as [string, string]
-          purged.push({ userId, documentId })
+          purged.push({ key: { userId, documentId }, record: readStoredDraft(structuredClone(raw)).kind })
         }
       }
       for (const [id, raw] of [...writers]) {

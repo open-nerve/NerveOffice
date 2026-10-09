@@ -144,7 +144,9 @@ export function readInFlight(value: unknown): InFlightSave | null | undefined {
 
 /**
  * 本页这个格式版本的草稿元数据：逐项核对，交回只带已知字段的一份；格式版本不是本页的、形状不对时为 undefined。
- * 库里读出的草稿（readStoredDraft）与发件箱 Worker 交回的元数据都经过这里
+ * 库里读出的草稿（readStoredDraft）与发件箱 Worker 交回的元数据都经过这里。
+ * 另有一条不变量：在途的保存的序号不大于草稿的序号（在途的是这一份，或者这一份之前的一次上传）。反过来的记录在恢复时会把旧内容
+ * 当"自己追自己"接到服务端更新的那一版上，静默退回别人已存的修改——写入管道写入与标记在途时都已拦下，存储与读出这里再兜一层
  */
 export function readDraftMeta(value: unknown): DraftMeta | undefined {
   if (!isFields(value))
@@ -157,6 +159,8 @@ export function readDraftMeta(value: unknown): DraftMeta | undefined {
   if (!isText(userId) || !isText(documentId) || !isWhole(draftSeq, 1) || !isWhole(baseRevision, 1) || !isWhole(writeEpoch, 1) || !isText(writerId) || !isText(writtenBy))
     return undefined
   if (format === undefined || typeof formulasPending !== 'boolean' || !isWhole(keyVersion, 1) || inFlight === undefined || !isWhole(rawBytes, 0) || !isWhole(updatedAt, 0))
+    return undefined
+  if (inFlight !== null && inFlight.localSeq > draftSeq)
     return undefined
   return { userId, documentId, recordVersion, draftSeq, baseRevision, writeEpoch, writerId, writtenBy, format, formulasPending, keyVersion, inFlight, rawBytes, updatedAt }
 }
@@ -190,6 +194,17 @@ export function readWriterRecord(value: unknown): WriterRecord | undefined {
   if (!isText(userId) || !isText(documentId) || !isWhole(writeEpoch, 1) || !isText(writerId) || !isWhole(lastDraftSeq, 0) || !isWhole(registeredAt, 0))
     return undefined
   return { userId, documentId, writeEpoch, writerId, lastDraftSeq, registeredAt }
+}
+
+/**
+ * 记录里读得出的更新时间（毫秒）：不论格式——形状不对的、更新的页面写的，只要 updatedAt 是个有限的数就交回它；读不出时为 undefined。
+ * 保留期清理按它判断（单条记录最长保留 14 天，00 号计划书 §7.6）：部署回滚之后旧页面永远认不出新格式的记录，不按它判断就会一直留着
+ */
+export function readableUpdatedAt(value: unknown): number | undefined {
+  if (!isFields(value))
+    return undefined
+  const { updatedAt } = value
+  return typeof updatedAt === 'number' && Number.isFinite(updatedAt) ? updatedAt : undefined
 }
 
 /** 草稿的元数据（去掉 IV 与密文）：本机草稿页的列表只要这些，不交出密文 */

@@ -1,7 +1,7 @@
 import type { StoredDraft, WriterRecord } from './draft-record.ts'
 import { describe, expect, it } from 'vitest'
 import { sampleMeta, sampleStoredDraft, sampleWriter } from './draft-record.test-support.ts'
-import { DRAFT_IV_BYTES, DRAFT_RECORD_VERSION, DRAFT_TAG_BYTES, draftMetaOf, readDraftMeta, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { DRAFT_IV_BYTES, DRAFT_RECORD_VERSION, DRAFT_TAG_BYTES, draftMetaOf, readableUpdatedAt, readDraftMeta, readStoredDraft, readWriterRecord } from './draft-record.ts'
 
 /** 把样例的某一项换成别的值（可以是任何东西，模拟库里读出来的） */
 function withField(record: object, field: string, value: unknown): Record<string, unknown> {
@@ -115,12 +115,41 @@ describe('草稿的形状核对（M4-P1 设计 §3.2、§3.4.6）：读出来的
       expect(readDraftMeta(value), String(value)).toBeUndefined()
   })
 
+  it('在途的序号不大于草稿的序号：反过来的记录（在途的那一次比这一份还新）恢复时会把旧内容当"自己追自己"接到服务端更新的那一版上、静默退回别人已存的修改，读成 malformed', () => {
+    const inFlight = sampleMeta().inFlight ?? undefined
+    for (const localSeq of [7, 6, 1]) {
+      const stored = sampleStoredDraft({ draftSeq: 7, inFlight: { ...inFlight, requestId: 'r', clientInstanceId: 'c', sentAt: 1, localSeq } })
+      expect(readStoredDraft(stored), `localSeq ${localSeq}`).toEqual({ kind: 'draft', draft: stored })
+      expect(readDraftMeta(draftMetaOf(stored)), `localSeq ${localSeq}`).toEqual(draftMetaOf(stored))
+    }
+    const reversed = sampleStoredDraft({ draftSeq: 7, inFlight: { requestId: 'r', clientInstanceId: 'c', sentAt: 1, localSeq: 8 } })
+    expect(readStoredDraft(reversed)).toEqual({ kind: 'malformed' })
+    expect(readDraftMeta(draftMetaOf(reversed))).toBeUndefined()
+    expect(readStoredDraft({ ...reversed, inFlight: null }).kind, '不在途时不受这一条限制').toBe('draft')
+  })
+
   it('元数据：去掉 IV 与密文（本机草稿页的列表不交出密文）', () => {
     const stored: StoredDraft = sampleStoredDraft()
     const meta = draftMetaOf(stored)
     expect(meta).toEqual(sampleMeta())
     expect(Object.keys(meta)).not.toContain('iv')
     expect(Object.keys(meta)).not.toContain('ciphertext')
+  })
+})
+
+describe('读得出的更新时间（保留期清理用，不论格式）', () => {
+  it('认得出的、更新的格式、形状不对的记录：updatedAt 是个有限的数就交回它', () => {
+    const stored = sampleStoredDraft()
+    expect(readableUpdatedAt(stored)).toBe(stored.updatedAt)
+    expect(readableUpdatedAt({ recordVersion: DRAFT_RECORD_VERSION + 1, updatedAt: 12_345 })).toBe(12_345)
+    expect(readableUpdatedAt(withField(stored, 'iv', 'broken')), '形状不对，更新时间照样读得出').toBe(stored.updatedAt)
+    expect(readableUpdatedAt({ updatedAt: 1.5 })).toBe(1.5)
+    expect(readableUpdatedAt({ updatedAt: -1 })).toBe(-1)
+  })
+
+  it('读不出：没有 updatedAt、不是数、不是有限的数、整条不是对象', () => {
+    for (const value of [withoutField(sampleStoredDraft(), 'updatedAt'), { updatedAt: '2026-10-09' }, { updatedAt: Number.NaN }, { updatedAt: Number.POSITIVE_INFINITY }, { updatedAt: null }, null, 'draft', 7, []])
+      expect(readableUpdatedAt(value), JSON.stringify(value)).toBeUndefined()
   })
 })
 

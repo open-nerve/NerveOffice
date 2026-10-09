@@ -2,9 +2,12 @@
 // 事务里只有 IndexedDB 的请求回调，不 await 加密、压缩这类别的异步（否则事务自动提交，判定与写入之间就能插进别的标签页）。
 // 跨边界不抛异常：每个操作的结果都是带 kind 的值，写满、库用不了、未知的错误各有一种。
 // 发件箱 Worker 也引用这个文件：不引用 zod，不依赖 DOM
-import type { OutboxUnavailable } from './database.ts'
-import type { DraftKey, DraftMeta, ReadDraft, StoredDraft } from './draft-record.ts'
+import type { OutboxConnection, OutboxUnavailable } from './database.ts'
+import type { DraftKey, DraftMeta, ReadDraft, StoredDraft, WriterRecord } from './draft-record.ts'
 import type { WriterIdentity } from './writer-fence.ts'
+import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
+import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideWrite, isSameWriter, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
 
 /**
  * 存储这一侧的问题：
@@ -60,8 +63,13 @@ export type StoreRemoveOutcome = { readonly kind: 'removed' | 'changed' | 'absen
 
 export type StoreClearOutcome = { readonly kind: 'cleared' } | StoreProblem
 
-/** 保留期清理：删掉的草稿的键（属于当前用户的由 P4 说明） */
-export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly DraftKey[] } | StoreProblem
+/** 保留期清理删掉的一条：键，与它是认得出的草稿、更新的页面写的还是形状不对的（属于当前用户的由 P4 说明删了哪几份） */
+export interface PurgedDraft {
+  readonly key: DraftKey
+  readonly record: ReadDraft['kind']
+}
+
+export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly PurgedDraft[] } | StoreProblem
 
 export interface DraftStore {
   /**
@@ -82,8 +90,8 @@ export interface DraftStore {
   readonly replaceDraft: (draft: StoredDraft) => Promise<StoreWriteOutcome>
   /**
    * 确认（§3.4.5）：服务端确认了 confirmedSeq。strict 事务里按 decideConfirm 判定：不大于它的删掉；更新的换成 rebased
-   * （管道事先按"草稿是不是更新"准备好的重封那一份：同一个写入者、同一个序号，基准是新的修订号、不在途）——
-   * rebased 不是库里现在这一份时交回 needs-rebase、不改动
+   * （管道事先按"草稿是不是更新"准备好的重封那一份：基准是新的修订号、不在途）——rebased 不是库里现在这一份（同一个写入者、
+   * 同一个序号）时交回 needs-rebase、不改动；形状不对、不是这份文档的交回 failed
    */
   readonly confirmDraft: (key: DraftKey, writer: WriterIdentity, confirmedSeq: number, rebased: StoredDraft | undefined) => Promise<StoreConfirmOutcome>
   readonly readDraft: (key: DraftKey) => Promise<StoreReadOutcome>
@@ -93,8 +101,354 @@ export interface DraftStore {
   readonly removeDraft: (key: DraftKey, expectedSeq?: number) => Promise<StoreRemoveOutcome>
   /** 按用户清理（退出登录、账户停用）：草稿与写入者在一个事务里一起删；之后才到的写入因写入者不在而 not-writer */
   readonly removeUserData: (userId: string) => Promise<StoreClearOutcome>
-  /** 保留期（§3.4.7）：删掉超过 14 天的草稿（不论属于谁），以及登记超过 14 天、又没有草稿的写入者 */
+  /**
+   * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着），以及登记超过 14 天、又没有草稿的写入者
+   */
   readonly purgeExpired: (now: number) => Promise<StorePurgeOutcome>
   /** 关掉连接（页面离开、Worker 结束）；之后的操作重新打开 */
   readonly close: () => void
+}
+
+export interface DraftStoreOptions {
+  /** 取 IndexedDB 的工厂（database.ts 的 browserIndexedDb，页面与 Worker 里都是 globalThis.indexedDB） */
+  readonly factory?: () => IDBFactory | undefined
+  /** 升级被别的标签页挡住时等多久（毫秒） */
+  readonly blockedTimeoutMs: number
+}
+
+/** 一次事务的结局：提交了（带判定的结果），或者中止了（带错误：写满、连接断开……，提交时写满同样在这里） */
+type Settled<T>
+  = | { readonly kind: 'committed', readonly value: T }
+    | { readonly kind: 'aborted', readonly error: unknown }
+
+/** 事务里的写法：结果经 finish 记下，提交之后才交回；请求的回调经 then 挂上——回调里抛出的错误中止事务、交回这个错误 */
+interface TransactionScope<T> {
+  readonly tx: IDBTransaction
+  readonly finish: (value: T) => void
+  readonly then: <R>(request: IDBRequest<R>, callback: (value: R) => void) => void
+}
+
+function errorName(error: unknown): string | undefined {
+  return typeof error === 'object' && error !== null && 'name' in error && typeof error.name === 'string' ? error.name : undefined
+}
+
+/** 写满：put 上或提交时的 QuotaExceededError，整个事务回滚 */
+function isQuota(error: unknown): boolean {
+  return errorName(error) === 'QuotaExceededError'
+}
+
+/**
+ * 连接断了：连接正在关闭时开事务（InvalidStateError）、Safari 的"Connection to Indexed Database server lost"（UnknownError）。
+ * 中止了的事务什么也没写，重开一次再试；写入的重试是幂等的（同一写入者同一序号按 duplicate）
+ */
+function isConnectionLost(error: unknown): boolean {
+  const name = errorName(error)
+  return name === 'InvalidStateError' || name === 'UnknownError'
+}
+
+/** 非安全上下文里没有 crypto.subtle：草稿加密不了，发件箱整个用不了 */
+function hasSubtleCrypto(): boolean {
+  return (globalThis.crypto as { readonly subtle?: SubtleCrypto } | undefined)?.subtle !== undefined
+}
+
+/**
+ * 在 [drafts, writers] 上开一个事务：读写的一律 strict（报告写完之前要求落盘，00 号计划书 §7.5）。body 里只用请求的回调，
+ * 不 await 别的异步（否则事务自动提交，判定与写入之间就能插进别的标签页）。开事务本身抛出（连接正在关闭）由调用方接住
+ */
+async function transact<T>(db: IDBDatabase, mode: IDBTransactionMode, body: (scope: TransactionScope<T>) => void): Promise<Settled<T>> {
+  const stores = [DRAFTS_STORE, WRITERS_STORE]
+  const tx = mode === 'readwrite' ? db.transaction(stores, mode, { durability: 'strict' }) : db.transaction(stores, mode)
+  return new Promise((resolve) => {
+    let result: { readonly value: T } | undefined
+    let failure: { readonly error: unknown } | undefined
+    const fail = (error: unknown): void => {
+      failure ??= { error }
+      try {
+        tx.abort()
+      }
+      catch {
+        // 事务已经结束（提交或中止过了）：结局由 complete 或 abort 交回
+      }
+    }
+    tx.oncomplete = () => resolve(result === undefined ? { kind: 'aborted', error: new Error('事务提交了，却没有给出结果') } : { kind: 'committed', value: result.value })
+    tx.onabort = () => resolve({ kind: 'aborted', error: failure?.error ?? tx.error ?? new DOMException('事务被中止', 'AbortError') })
+    const scope: TransactionScope<T> = {
+      tx,
+      finish: (value) => {
+        result = { value }
+      },
+      then: (request, callback) => {
+        request.onsuccess = () => {
+          try {
+            callback(request.result)
+          }
+          catch (error) {
+            fail(error)
+          }
+        }
+      },
+    }
+    try {
+      body(scope)
+    }
+    catch (error) {
+      fail(error)
+    }
+  })
+}
+
+/**
+ * 同一个事务里读出这份文档的写入者与草稿：请求按发出的顺序完成，草稿的回调里两个都有了。形状不对的写入者当作没有（readWriterRecord）
+ */
+function readCurrent<T>(scope: TransactionScope<T>, key: DraftKey, then: (writer: WriterRecord | undefined, existing: ReadDraft | undefined) => void): void {
+  const path = draftKeyPath(key)
+  const writerRequest = scope.tx.objectStore(WRITERS_STORE).get(path)
+  scope.then(scope.tx.objectStore(DRAFTS_STORE).get(path), (draftValue: unknown) => {
+    const writerValue: unknown = writerRequest.result
+    then(writerValue === undefined ? undefined : readWriterRecord(writerValue), draftValue === undefined ? undefined : readStoredDraft(draftValue))
+  })
+}
+
+/** 库里的键 [userId, documentId]；不是两个字符串时为 undefined（不是本页写的，列表里不列它） */
+function draftKeyOf(key: IDBValidKey): DraftKey | undefined {
+  if (!Array.isArray(key) || key.length !== 2)
+    return undefined
+  const [userId, documentId] = key as readonly unknown[]
+  return typeof userId === 'string' && typeof documentId === 'string' ? { userId, documentId } : undefined
+}
+
+function listed(key: DraftKey, read: ReadDraft): ListedDraft {
+  switch (read.kind) {
+    case 'draft':
+      return { kind: 'draft', meta: draftMetaOf(read.draft) }
+    case 'newer-format':
+      return { kind: 'newer-format', key, recordVersion: read.recordVersion }
+    case 'malformed':
+      return { kind: 'malformed', key }
+  }
+}
+
+function failed(message: string): { readonly kind: 'failed', readonly error: unknown } {
+  return { kind: 'failed', error: new TypeError(message) }
+}
+
+/**
+ * IndexedDB 的发件箱存储：连接按需打开、复用；versionchange 时连接自己关掉（别的标签页升级、删库），下一次操作重新打开。
+ * 每个操作一个事务；事务因连接断开而中止时重开一次再试，写满归为 quota，别的错误归为 failed
+ */
+export function createDraftStore(options: DraftStoreOptions): DraftStore {
+  const factory = options.factory ?? browserIndexedDb
+  let connection: OutboxConnection | undefined
+  let opening: Promise<OutboxConnection | OutboxUnavailable> | undefined
+
+  async function connect(): Promise<OutboxConnection | OutboxUnavailable> {
+    if (connection !== undefined && !connection.isClosed())
+      return connection
+    if (!hasSubtleCrypto())
+      return { kind: 'unavailable', reason: 'unsupported' }
+    opening ??= openOutboxDatabase({ factory, blockedTimeoutMs: options.blockedTimeoutMs }).then((result) => {
+      opening = undefined
+      if (result.kind === 'connected')
+        connection = result
+      return result
+    })
+    return opening
+  }
+
+  async function run<T>(mode: IDBTransactionMode, body: (scope: TransactionScope<T>) => void): Promise<T | StoreProblem> {
+    for (let attempt = 1; ; attempt += 1) {
+      const current = await connect()
+      if (current.kind === 'unavailable')
+        return current
+      let settled: Settled<T>
+      try {
+        settled = await transact(current.db, mode, body)
+      }
+      catch (error) {
+        settled = { kind: 'aborted', error }
+      }
+      if (settled.kind === 'committed')
+        return settled.value
+      if (isQuota(settled.error))
+        return { kind: 'quota' }
+      if (attempt === 1 && isConnectionLost(settled.error)) {
+        current.close()
+        continue
+      }
+      return { kind: 'failed', error: settled.error }
+    }
+  }
+
+  return {
+    registerWriter: async (key, writer, { now, force }) => {
+      const record: WriterRecord = { userId: key.userId, documentId: key.documentId, writeEpoch: writer.writeEpoch, writerId: writer.writerId, lastDraftSeq: 0, registeredAt: now }
+      if (readWriterRecord(record) === undefined)
+        return failed('写入者的形状不对：不登记')
+      return run<StoreRegisterOutcome>('readwrite', (scope) => {
+        readCurrent(scope, key, (current, existing) => {
+          const verdict = decideRegistration(current, existing, writer, force)
+          if (verdict.kind === 'superseded') {
+            scope.finish(verdict)
+            return
+          }
+          scope.tx.objectStore(WRITERS_STORE).put({ ...record, lastDraftSeq: verdict.lastDraftSeq })
+          scope.finish({ kind: 'registered', lastDraftSeq: verdict.lastDraftSeq, existing })
+        })
+      })
+    },
+
+    writeDraft: async (draft, writeOptions) => {
+      const checked = readStoredDraft(draft)
+      if (checked.kind !== 'draft')
+        return failed('草稿的形状不对：不写（存进去的一律要读得回来）')
+      const record = checked.draft
+      return run<StoreWriteOutcome>('readwrite', (scope) => {
+        readCurrent(scope, record, (current, existing) => {
+          const verdict = decideWrite(current, existing, { writeEpoch: record.writeEpoch, writerId: record.writerId, draftSeq: record.draftSeq, adoptSeq: writeOptions?.adoptSeq })
+          switch (verdict) {
+            case 'ok':
+              scope.tx.objectStore(DRAFTS_STORE).put(record)
+              if (current !== undefined)
+                scope.tx.objectStore(WRITERS_STORE).put({ ...current, lastDraftSeq: record.draftSeq })
+              scope.finish({ kind: 'written' })
+              return
+            case 'duplicate':
+              scope.finish({ kind: 'written' })
+              return
+            case 'not-writer':
+            case 'stale-seq':
+            case 'foreign-draft':
+              scope.finish({ kind: 'fenced', reason: verdict })
+          }
+        })
+      })
+    },
+
+    replaceDraft: async (draft) => {
+      const checked = readStoredDraft(draft)
+      if (checked.kind !== 'draft')
+        return failed('草稿的形状不对：不写（存进去的一律要读得回来）')
+      const record = checked.draft
+      return run<StoreWriteOutcome>('readwrite', (scope) => {
+        readCurrent(scope, record, (current, existing) => {
+          const verdict = decideReplace(current, existing, { writeEpoch: record.writeEpoch, writerId: record.writerId, expectedSeq: record.draftSeq })
+          if (verdict !== 'ok') {
+            scope.finish({ kind: 'fenced', reason: verdict })
+            return
+          }
+          scope.tx.objectStore(DRAFTS_STORE).put(record)
+          scope.finish({ kind: 'written' })
+        })
+      })
+    },
+
+    confirmDraft: async (key, writer, confirmedSeq, rebased) => {
+      let prepared: StoredDraft | undefined
+      if (rebased !== undefined) {
+        // 形状不对、不是这份文档的：调用方的错（写进去会落到别的键上），不写
+        const checked = readStoredDraft(rebased)
+        if (checked.kind !== 'draft' || checked.draft.userId !== key.userId || checked.draft.documentId !== key.documentId)
+          return failed('重封的那一份形状不对，或者不是这份文档的')
+        prepared = checked.draft
+      }
+      return run<StoreConfirmOutcome>('readwrite', (scope) => {
+        readCurrent(scope, key, (current, existing) => {
+          const verdict = decideConfirm(current, existing, { ...writer, confirmedSeq })
+          switch (verdict) {
+            case 'delete':
+              scope.tx.objectStore(DRAFTS_STORE).delete(draftKeyPath(key))
+              scope.finish({ kind: 'deleted' })
+              return
+            case 'rebase':
+              // 交来的重封那一份就是库里现在这一份：同一个写入者（代次与 writerId）、同一个序号（与写入管道的假存储同一个口径）；不是就由管道重做
+              if (prepared !== undefined && existing?.kind === 'draft' && isSameWriter(prepared, existing.draft) && prepared.draftSeq === existing.draft.draftSeq) {
+                scope.tx.objectStore(DRAFTS_STORE).put(prepared)
+                scope.finish({ kind: 'rebased' })
+                return
+              }
+              scope.finish({ kind: 'needs-rebase' })
+              return
+            case 'absent':
+              scope.finish({ kind: 'absent' })
+              return
+            case 'not-writer':
+            case 'foreign-draft':
+              scope.finish({ kind: 'fenced', reason: verdict })
+          }
+        })
+      })
+    },
+
+    readDraft: async key => run<StoreReadOutcome>('readonly', (scope) => {
+      scope.then(scope.tx.objectStore(DRAFTS_STORE).get(draftKeyPath(key)), (value: unknown) => {
+        scope.finish(value === undefined ? { kind: 'absent' } : readStoredDraft(value))
+      })
+    }),
+
+    listDrafts: async userId => run<StoreListOutcome>('readonly', (scope) => {
+      const drafts: ListedDraft[] = []
+      scope.then(scope.tx.objectStore(DRAFTS_STORE).openCursor(userKeyRange(userId)), (cursor) => {
+        if (cursor === null) {
+          scope.finish({ kind: 'listed', drafts })
+          return
+        }
+        const key = draftKeyOf(cursor.primaryKey)
+        if (key !== undefined)
+          drafts.push(listed(key, readStoredDraft(cursor.value)))
+        cursor.continue()
+      })
+    }),
+
+    removeDraft: async (key, expectedSeq) => run<StoreRemoveOutcome>('readwrite', (scope) => {
+      scope.then(scope.tx.objectStore(DRAFTS_STORE).get(draftKeyPath(key)), (value: unknown) => {
+        const verdict = decideRemove(value === undefined ? undefined : readStoredDraft(value), expectedSeq)
+        if (verdict === 'remove')
+          scope.tx.objectStore(DRAFTS_STORE).delete(draftKeyPath(key))
+        scope.finish({ kind: verdict === 'remove' ? 'removed' : verdict })
+      })
+    }),
+
+    removeUserData: async userId => run<StoreClearOutcome>('readwrite', (scope) => {
+      scope.tx.objectStore(DRAFTS_STORE).delete(userKeyRange(userId))
+      scope.tx.objectStore(WRITERS_STORE).delete(userKeyRange(userId))
+      scope.finish({ kind: 'cleared' })
+    }),
+
+    purgeExpired: async now => run<StorePurgeOutcome>('readwrite', (scope) => {
+      const purged: PurgedDraft[] = []
+      /** 留下来的草稿的键（JSON）：还有草稿的写入者不删，高水位要接着用 */
+      const remaining = new Set<string>()
+      scope.then(scope.tx.objectStore(DRAFTS_STORE).openCursor(), (cursor) => {
+        if (cursor !== null) {
+          const value: unknown = cursor.value
+          const key = draftKeyOf(cursor.primaryKey)
+          if (shouldPurgeDraft(readableUpdatedAt(value), now)) {
+            cursor.delete()
+            if (key !== undefined)
+              purged.push({ key, record: readStoredDraft(value).kind })
+          }
+          else {
+            remaining.add(JSON.stringify(cursor.primaryKey))
+          }
+          cursor.continue()
+          return
+        }
+        scope.then(scope.tx.objectStore(WRITERS_STORE).openCursor(), (writerCursor) => {
+          if (writerCursor === null) {
+            scope.finish({ kind: 'purged', drafts: purged })
+            return
+          }
+          const writerValue: unknown = writerCursor.value
+          if (shouldPurgeWriter(readWriterRecord(writerValue), remaining.has(JSON.stringify(writerCursor.primaryKey)), now))
+            writerCursor.delete()
+          writerCursor.continue()
+        })
+      })
+    }),
+
+    close: () => {
+      connection?.close()
+      connection = undefined
+    },
+  }
 }
