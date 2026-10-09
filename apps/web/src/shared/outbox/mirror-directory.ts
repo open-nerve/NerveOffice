@@ -39,13 +39,32 @@ export type OpenedSlots
 
 export type MirrorListOutcome = { readonly kind: 'listed', readonly documentIds: readonly string[] } | MirrorProblem
 
+export type MirrorUsersOutcome = { readonly kind: 'listed', readonly userIds: readonly string[] } | MirrorProblem
+
 export type MirrorRemoveOutcome = { readonly kind: 'removed' } | { readonly kind: 'busy' } | MirrorProblem
+
+/** 一个槽位文件的大小与最后改动的时刻（File 的 size、lastModified，墙上时间的毫秒）：保留期按它判断（local-cleanup.ts） */
+export interface SlotFileInfo {
+  readonly size: number
+  readonly lastModified: number
+}
+
+/** 两个槽位文件的样子（不在的那一个是 undefined）；这份文档的目录不在；被占着读不了；问题 */
+export type SlotFilesOutcome
+  = | { readonly kind: 'files', readonly files: readonly [SlotFileInfo | undefined, SlotFileInfo | undefined] }
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'busy' }
+    | MirrorProblem
 
 export interface MirrorDirectory {
   /** 这份文档的两个槽位文件的同步访问句柄：create 为真时没有就建（目录与文件）；拿到一个、另一个拿不到时放开已拿到的 */
   readonly openSlots: (key: DraftKey, create: boolean) => Promise<OpenedSlots>
   /** 这个用户在镜像里有哪些文档（目录名）；没有这个用户的目录时为空 */
   readonly listDocuments: (userId: string) => Promise<MirrorListOutcome>
+  /** 这台设备的镜像里有哪些用户（目录名，保留期不论属于谁）；还没有镜像时为空 */
+  readonly listUsers: () => Promise<MirrorUsersOutcome>
+  /** 两个槽位文件的大小与最后改动的时刻（经 getFile，不拿同步访问句柄、不读内容；页面里也能用） */
+  readonly slotFiles: (key: DraftKey) => Promise<SlotFilesOutcome>
   /** 删掉这个用户的整个目录（退出登录、账户停用）；有句柄开着时是 busy */
   readonly removeUser: (userId: string) => Promise<MirrorRemoveOutcome>
   /** 删掉这份文档的目录（保留期）；有句柄开着时是 busy */
@@ -211,6 +230,37 @@ export function opfsMirrorDirectory(root: () => Promise<FileSystemDirectoryHandl
       catch (error) {
         const problem = problemOf(error)
         return problem.kind === 'busy' ? { kind: 'failed', error } : problem
+      }
+    },
+    listUsers: async () => {
+      try {
+        const top = await base(false)
+        if (top === 'unsupported')
+          return { kind: 'unsupported' }
+        return { kind: 'listed', userIds: top === undefined ? [] : await childDirectories(top) }
+      }
+      catch (error) {
+        const problem = problemOf(error)
+        return problem.kind === 'busy' ? { kind: 'failed', error } : problem
+      }
+    },
+    slotFiles: async (key) => {
+      try {
+        const directory = await documentDirectory(key, false)
+        if (directory === 'unsupported')
+          return { kind: 'unsupported' }
+        if (directory === undefined)
+          return { kind: 'absent' }
+        const files: (SlotFileInfo | undefined)[] = []
+        for (const name of SLOT_FILE_NAMES) {
+          const handle = await fileIn(directory, name, false)
+          const file = handle === undefined ? undefined : await handle.getFile()
+          files.push(file === undefined ? undefined : { size: file.size, lastModified: file.lastModified })
+        }
+        return { kind: 'files', files: [files[0], files[1]] }
+      }
+      catch (error) {
+        return isNotFound(error) ? { kind: 'absent' } : problemOf(error)
       }
     },
     removeUser: async userId => removeEntry(async () => base(false), userId),

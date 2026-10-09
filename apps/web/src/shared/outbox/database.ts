@@ -1,5 +1,5 @@
-// 本机发件箱的库（M4-P1 设计 §3.3、§3.4.1）：IndexedDB 的库 nerve-office-outbox，两个对象仓库，键路径都是 ['userId', 'documentId']，
-// 没有索引。某个用户的全部记录用键范围 [userId] 到 [userId, []] 取（IndexedDB 的键序里数组排在字符串之后）。
+// 本机发件箱的库（M4-P1 设计 §3.3、§3.4.1、§3.8）：IndexedDB 的库 nerve-office-outbox，三个对象仓库（草稿、写入者、比对镜像留下的提示），
+// 键路径都是 ['userId', 'documentId']，没有索引。某个用户的全部记录用键范围 [userId] 到 [userId, []] 取（IndexedDB 的键序里数组排在字符串之后）。
 // 结构以后有变，只做加法的升级（加仓库、加索引），旧的页面打开更新过的库得到 VersionError，按"不可用"退化。
 // 连接上 versionchange 时立即关掉，让别的标签页的升级与删库继续（M0 审查 S5：打开着的页面挡住了升级）；被浏览器断开时记下，
 // 之后由调用方重新打开（draft-store.ts）。
@@ -17,7 +17,13 @@ export const DRAFTS_STORE = 'drafts'
 /** 写入者：WriterRecord */
 export const WRITERS_STORE = 'writers'
 
-/** 两个仓库共用的键路径：记录里的 userId 与 documentId 就是它的键 */
+/**
+ * 比对 OPFS 镜像与库留下的提示：RecoveryNotice（recovery-notice.ts），一份文档一条。S9 加的；库还没有真实用户，直接放进版本 1 的结构，
+ * 不另升级（开发时浏览器里留着没有它的旧库的，清掉站点数据）
+ */
+export const NOTICES_STORE = 'notices'
+
+/** 三个仓库共用的键路径：记录里的 userId 与 documentId 就是它的键 */
 export const OUTBOX_KEY_PATH: readonly (keyof DraftKey)[] = ['userId', 'documentId']
 
 /**
@@ -81,9 +87,9 @@ function connectionOf(db: IDBDatabase): OutboxConnection {
   return { kind: 'connected', db, isClosed: () => closed, close }
 }
 
-/** 只做加法的升级：补上缺的仓库（v1 是两个仓库，键路径相同，没有索引）。按"有没有"判断，不按旧版本号：以后的版本照样只补缺的 */
+/** 只做加法的升级：补上缺的仓库（v1 是三个仓库，键路径相同，没有索引）。按"有没有"判断，不按旧版本号：以后的版本照样只补缺的 */
 function upgrade(db: IDBDatabase): void {
-  for (const name of [DRAFTS_STORE, WRITERS_STORE]) {
+  for (const name of [DRAFTS_STORE, WRITERS_STORE, NOTICES_STORE]) {
     if (!db.objectStoreNames.contains(name))
       db.createObjectStore(name, { keyPath: [...OUTBOX_KEY_PATH] })
   }
