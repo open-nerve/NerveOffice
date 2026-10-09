@@ -203,11 +203,14 @@ export interface ProbeWorkerTransaction {
   readonly durability: string | undefined
 }
 
-/** 比对镜像与库留下的事件（S9） */
-export interface RecoveryEvent {
+/** 比对镜像与库留下的提示（S9，存在库里） */
+export interface RecoveryNotice extends DraftKey {
   readonly kind: 'restored' | 'lost'
-  readonly key: DraftKey
+  readonly at: number
 }
+
+/** 库那一侧的问题（结果里） */
+export type ProbeStoreProblem = { readonly kind: 'quota' } | { readonly kind: 'unavailable', readonly reason: string } | { readonly kind: 'failed', readonly error: ProbeError }
 
 /** 镜像的一个槽位文件读出来的样子 */
 export type ProbeSlot
@@ -235,7 +238,11 @@ export interface ProbePipeline {
   readonly workerTransactions: (id: number) => readonly ProbeWorkerTransaction[]
   readonly release: (id: number, key: DraftKey) => Promise<void>
   readonly reconcile: (id: number, userId: string) => Promise<{ readonly kind: 'reconciled', readonly documents: number } | { readonly kind: 'failed', readonly error: ProbeError }>
-  readonly takeEvents: (id: number) => Promise<readonly RecoveryEvent[]>
+  readonly notices: (id: number, userId: string) => Promise<{ readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | ProbeStoreProblem>
+  readonly clearNotice: (id: number, key: DraftKey, expectedAt?: number) => Promise<{ readonly kind: 'cleared' | 'changed' | 'absent' } | ProbeStoreProblem>
+  readonly cleanupUser: (userId: string) => Promise<{ readonly kind: 'cleared', readonly pending: readonly DraftKey[] } | ProbeStoreProblem>
+  readonly cleanupAbandon: (key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'absent', readonly pending: readonly DraftKey[] } | { readonly kind: 'changed' } | ProbeStoreProblem>
+  readonly cleanupExpired: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: string }[], readonly pending: readonly DraftKey[] } | ProbeStoreProblem>
   readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
   readonly corruptSlot: (key: DraftKey, slot: 0 | 1, corruption: ProbeCorruption) => Promise<void>
   readonly removeMirror: (userId: string) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>

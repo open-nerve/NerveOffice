@@ -8,10 +8,11 @@ import type { OutboxUnavailableReason } from '../../../shared/outbox/database.ts
 import type { MirrorStatus } from '../../../shared/outbox/draft-mirror.ts'
 import type { DraftKey, Fields, InFlightSave } from '../../../shared/outbox/draft-record.ts'
 import type { FenceReason } from '../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, OpenedRecord, ReconcileResult, RecoveryEvent, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, KeyChange, NoticesResult, OpenedRecord, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
 import { isFields, isText, isWhole, readContentFormat, readDraftMeta, readInFlight } from '../../../shared/outbox/draft-record.ts'
+import { readRecoveryNotice } from '../../../shared/outbox/recovery-notice.ts'
 
 export const OUTBOX_PROTOCOL_VERSION = 1
 
@@ -36,7 +37,8 @@ export type OutboxCall
     | { readonly type: 'seed-digest', readonly draft: DraftKey, readonly seed: DedupeKey | null }
     | { readonly type: 'release', readonly draft: DraftKey }
     | { readonly type: 'reconcile', readonly userId: string }
-    | { readonly type: 'take-events' }
+    | { readonly type: 'notices', readonly userId: string }
+    | { readonly type: 'clear-notice', readonly draft: DraftKey, readonly expectedAt: number | null }
 
 export type OutboxCallType = OutboxCall['type']
 
@@ -51,9 +53,6 @@ export type SeedResult = { readonly kind: 'seeded' } | { readonly kind: 'failed'
 /** 放开镜像的句柄的结果 */
 export type ReleaseResult = { readonly kind: 'released' } | { readonly kind: 'failed', readonly error: FailureDescription }
 
-/** 取走比对留下的事件的结果 */
-export type EventsResult = { readonly kind: 'events', readonly events: readonly RecoveryEvent[] } | { readonly kind: 'failed', readonly error: FailureDescription }
-
 /** 每种请求的结果（与 DraftWriter 各方法交回的相同） */
 export interface OutboxResults {
   readonly 'hello': HelloResult
@@ -67,7 +66,8 @@ export interface OutboxResults {
   readonly 'seed-digest': SeedResult
   readonly 'release': ReleaseResult
   readonly 'reconcile': ReconcileResult
-  readonly 'take-events': EventsResult
+  readonly 'notices': NoticesResult
+  readonly 'clear-notice': ClearNoticeResult
 }
 
 /** Worker → 主线程：按 id 的回复。ok: false 是这个请求没能处理（认不出、管道之外出的错）；操作本身的失败在 result 里 */
@@ -197,8 +197,12 @@ function readCall(data: Fields): OutboxCall | undefined {
       return draft === undefined ? undefined : { type: 'release', draft }
     case 'reconcile':
       return isText(data.userId) ? { type: 'reconcile', userId: data.userId } : undefined
-    case 'take-events':
-      return { type: 'take-events' }
+    case 'notices':
+      return isText(data.userId) ? { type: 'notices', userId: data.userId } : undefined
+    case 'clear-notice': {
+      const { expectedAt } = data
+      return draft !== undefined && (expectedAt === null || isWhole(expectedAt, 0)) ? { type: 'clear-notice', draft, expectedAt } : undefined
+    }
     default:
       return undefined
   }
@@ -412,18 +416,22 @@ function readReconcileResult(value: Fields): ReconcileResult | null {
   return readFailed(value)
 }
 
-function readRecoveryEvent(value: unknown): RecoveryEvent | undefined {
-  if (!isFields(value) || (value.kind !== 'restored' && value.kind !== 'lost'))
-    return undefined
-  const key = readDraftKey(value.key)
-  return key === undefined ? undefined : { kind: value.kind, key }
+function readNoticesResult(value: Fields): NoticesResult | null {
+  if (value.kind !== 'notices')
+    return readProblem(value)
+  const notices = Array.isArray(value.notices) ? (value.notices as readonly unknown[]).map(readRecoveryNotice) : undefined
+  return notices === undefined || notices.includes(undefined) ? null : { kind: 'notices', notices: notices.filter(notice => notice !== undefined) }
 }
 
-function readEventsResult(value: Fields): EventsResult | null {
-  if (value.kind !== 'events')
-    return readFailed(value)
-  const events = Array.isArray(value.events) ? (value.events as readonly unknown[]).map(readRecoveryEvent) : undefined
-  return events === undefined || events.includes(undefined) ? null : { kind: 'events', events: events.filter(event => event !== undefined) }
+function readClearNoticeResult(value: Fields): ClearNoticeResult | null {
+  switch (value.kind) {
+    case 'cleared':
+    case 'changed':
+    case 'absent':
+      return { kind: value.kind }
+    default:
+      return readProblem(value)
+  }
 }
 
 const RESULT_READERS: { readonly [T in OutboxCallType]: (value: Fields) => OutboxResults[T] | null } = {
@@ -438,7 +446,8 @@ const RESULT_READERS: { readonly [T in OutboxCallType]: (value: Fields) => Outbo
   'seed-digest': readSeedResult,
   'release': readReleaseResult,
   'reconcile': readReconcileResult,
-  'take-events': readEventsResult,
+  'notices': readNoticesResult,
+  'clear-notice': readClearNoticeResult,
 }
 
 /** 主线程一侧：按请求的种类核对 Worker 交回的结果；认不出时为 null */
@@ -458,7 +467,8 @@ const FAILED_RESULTS: { readonly [T in OutboxCallType]: (error: FailureDescripti
   'seed-digest': error => ({ kind: 'failed', error }),
   'release': error => ({ kind: 'failed', error }),
   'reconcile': error => ({ kind: 'failed', error }),
-  'take-events': error => ({ kind: 'failed', error }),
+  'notices': error => ({ kind: 'failed', error }),
+  'clear-notice': error => ({ kind: 'failed', error }),
 }
 
 /** 这种请求没能完成时的结果（Worker 坏了、回复是 ok: false、结果认不出） */

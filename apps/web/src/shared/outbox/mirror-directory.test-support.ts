@@ -2,7 +2,7 @@
 // 只有一个（与浏览器一样：再拿交回 busy）；另有别的标签页占着句柄、下一次写入写到一半抛出（写满、出错）或者只写了一部分、没有 OPFS 这几样，
 // 并记下每个槽位文件上改动的操作（截断、写、flush 的先后）
 import type { DraftKey } from './draft-record.ts'
-import type { MirrorDirectory, MirrorProblem, SlotHandle } from './mirror-directory.ts'
+import type { MirrorDirectory, MirrorProblem, SlotFileInfo, SlotHandle } from './mirror-directory.ts'
 import { SLOT_FILE_NAMES } from './mirror-directory.ts'
 
 export interface FakeMirrorDirectory {
@@ -27,14 +27,19 @@ export interface FakeMirrorDirectory {
   readonly flushes: () => number
   /** 这个槽位文件上改动的操作，按先后：truncate@大小、write@偏移、flush */
   readonly operations: (key: DraftKey, slot: 0 | 1) => readonly string[]
+  /** 改一个槽位文件最后改动的时刻（模拟很久以前写的） */
+  readonly touch: (key: DraftKey, slot: 0 | 1, lastModified: number) => void
 }
 
 function pathOf(key: DraftKey, slot: 0 | 1): string {
   return `${key.userId}/${key.documentId}/${SLOT_FILE_NAMES[slot]}`
 }
 
-export function fakeMirrorDirectory(): FakeMirrorDirectory {
+/** clock：文件最后改动的时刻取它（墙上时间；默认一直是 0） */
+export function fakeMirrorDirectory(options: { readonly clock?: () => number } = {}): FakeMirrorDirectory {
+  const clock = options.clock ?? (() => 0)
   const files = new Map<string, Uint8Array<ArrayBuffer>>()
+  const modified = new Map<string, number>()
   const locked = new Set<string>()
   const elsewhere = new Set<string>()
   /** name 为 undefined 时只写一部分、不抛出 */
@@ -46,6 +51,22 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
 
   function record(path: string, operation: string): void {
     operations.set(path, [...(operations.get(path) ?? []), operation])
+    modified.set(path, clock())
+  }
+
+  function put(path: string, bytes: Uint8Array<ArrayBuffer>): void {
+    files.set(path, bytes)
+    modified.set(path, clock())
+  }
+
+  function documentPaths(): Map<string, readonly [string, string]> {
+    const documents = new Map<string, readonly [string, string]>()
+    for (const path of files.keys()) {
+      const [owner, documentId] = path.split('/')
+      if (owner !== undefined && documentId !== undefined)
+        documents.set(`${owner}/${documentId}`, [owner, documentId])
+    }
+    return documents
   }
 
   function handleFor(path: string): SlotHandle {
@@ -114,7 +135,7 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
           return { kind: 'absent' }
         for (const path of paths) {
           if (!files.has(path))
-            files.set(path, new Uint8Array(0))
+            put(path, new Uint8Array(0))
         }
       }
       if (paths.some(path => locked.has(path) || elsewhere.has(path)))
@@ -123,13 +144,23 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
       return { kind: 'opened', slots: [handleFor(paths[0]), handleFor(paths[1])] }
     },
     listDocuments: async (userId) => {
-      const documents = new Set<string>()
-      for (const path of files.keys()) {
-        const [owner, documentId] = path.split('/')
-        if (owner === userId && documentId !== undefined)
-          documents.add(documentId)
+      const documents = [...documentPaths().values()].filter(([owner]) => owner === userId).map(([, documentId]) => documentId)
+      return { kind: 'listed', documentIds: documents.sort() }
+    },
+    listUsers: async () => {
+      const users = new Set([...documentPaths().values()].map(([owner]) => owner))
+      return { kind: 'listed', userIds: [...users].sort() }
+    },
+    slotFiles: async (key) => {
+      const paths = [pathOf(key, 0), pathOf(key, 1)] as const
+      if (!paths.some(path => files.has(path)))
+        return { kind: 'absent' }
+      // 与浏览器一样（Chromium 系与 WebKit 实测）：别的句柄拿着时 getFile 照样读得出大小与改动时刻，删目录才是 busy
+      const info = (path: string): SlotFileInfo | undefined => {
+        const bytes = files.get(path)
+        return bytes === undefined ? undefined : { size: bytes.byteLength, lastModified: modified.get(path) ?? 0 }
       }
-      return { kind: 'listed', documentIds: [...documents].sort() }
+      return { kind: 'files', files: [info(paths[0]), info(paths[1])] }
     },
     removeUser: async (userId) => {
       const paths = [...files.keys()].filter(path => path.startsWith(`${userId}/`))
@@ -157,7 +188,7 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
       if (bytes === undefined)
         files.delete(pathOf(key, slot))
       else
-        files.set(pathOf(key, slot), new Uint8Array(bytes))
+        put(pathOf(key, slot), new Uint8Array(bytes))
     },
     holdElsewhere: (key) => {
       const paths = [pathOf(key, 0), pathOf(key, 1)]
@@ -177,5 +208,8 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
     opens: () => opens,
     flushes: () => flushes,
     operations: (key, slot) => [...(operations.get(pathOf(key, slot)) ?? [])],
+    touch: (key, slot, lastModified) => {
+      modified.set(pathOf(key, slot), lastModified)
+    },
   }
 }

@@ -56,7 +56,10 @@ function sampleCalls(): readonly OutboxCall[] {
     { type: 'seed-digest', draft: DRAFT, seed: null },
     { type: 'release', draft: DRAFT },
     { type: 'reconcile', userId: USER_ID },
-    { type: 'take-events' },
+    { type: 'notices', userId: USER_ID },
+    { type: 'clear-notice', draft: DRAFT, expectedAt: null },
+    { type: 'clear-notice', draft: DRAFT, expectedAt: 0 },
+    { type: 'clear-notice', draft: DRAFT, expectedAt: 1_700_000_000_000 },
   ]
 }
 
@@ -121,6 +124,13 @@ describe('请求（Worker 一侧认）：带协议版本与 id，参数逐项核
       { type: 'release', draft: { documentId: DOCUMENT_ID } },
       { type: 'reconcile' },
       { type: 'reconcile', userId: '' },
+      { type: 'notices' },
+      { type: 'notices', userId: 7 },
+      { type: 'clear-notice', draft: DRAFT },
+      { type: 'clear-notice', draft: DRAFT, expectedAt: -1 },
+      { type: 'clear-notice', draft: DRAFT, expectedAt: 1.5 },
+      { type: 'clear-notice', expectedAt: null },
+      { type: 'take-events' },
     ]
     for (const call of broken)
       expect(readOutboxRequest({ ...call, v: OUTBOX_PROTOCOL_VERSION, id: 9 }), JSON.stringify(call)).toEqual({ kind: 'invalid', id: 9 })
@@ -245,7 +255,14 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
     'seed-digest': [{ kind: 'seeded' }, { kind: 'failed', error: FAILURE }],
     'release': [{ kind: 'released' }, { kind: 'failed', error: FAILURE }],
     'reconcile': [{ kind: 'reconciled', documents: 0 }, { kind: 'reconciled', documents: 3 }, { kind: 'failed', error: FAILURE }],
-    'take-events': [{ kind: 'events', events: [] }, { kind: 'events', events: [{ kind: 'restored', key: DRAFT }, { kind: 'lost', key: DRAFT }] }, { kind: 'failed', error: FAILURE }],
+    'notices': [
+      { kind: 'notices', notices: [] },
+      { kind: 'notices', notices: [{ ...DRAFT, kind: 'restored', at: 1 }, { ...DRAFT, kind: 'lost', at: 0 }] },
+      { kind: 'quota' },
+      { kind: 'unavailable', reason: 'blocked' },
+      { kind: 'failed', error: FAILURE },
+    ],
+    'clear-notice': [{ kind: 'cleared' }, { kind: 'changed' }, { kind: 'absent' }, { kind: 'quota' }, { kind: 'unavailable', reason: 'denied' }, { kind: 'failed', error: FAILURE }],
   }
 
   it('每种结果的每种样子都认得出（经结构化克隆，多出的字段不带出去）', () => {
@@ -300,7 +317,16 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
       'seed-digest': [{ kind: 'ready' }, { kind: 'failed', error: { message: 'x' } }],
       'release': [{ kind: 'seeded' }, { kind: 'failed' }],
       'reconcile': [{ kind: 'reconciled' }, { kind: 'reconciled', documents: -1 }, { kind: 'failed', error: null }],
-      'take-events': [{ kind: 'events' }, { kind: 'events', events: [{ kind: 'restored' }] }, { kind: 'events', events: [{ kind: 'gone', key: DRAFT }] }, { kind: 'events', events: 'x' }],
+      'notices': [
+        { kind: 'notices' },
+        { kind: 'notices', notices: 'x' },
+        { kind: 'notices', notices: [{ ...DRAFT, kind: 'restored' }] },
+        { kind: 'notices', notices: [{ ...DRAFT, kind: 'gone', at: 1 }] },
+        { kind: 'notices', notices: [{ kind: 'lost', at: 1 }] },
+        { kind: 'events', events: [] },
+        { kind: 'unavailable', reason: 'gone' },
+      ],
+      'clear-notice': [{ kind: 'removed' }, { kind: 'failed', error: null }, { kind: 'other' }],
     }
     for (const [type, results] of Object.entries(broken) as [OutboxCallType, readonly unknown[]][]) {
       expect(readOutboxResult(type, 'not an object'), type).toBeNull()

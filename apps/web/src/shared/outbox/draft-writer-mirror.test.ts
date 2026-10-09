@@ -14,6 +14,7 @@ import { fakeDraftStore } from './draft-store.test-support.ts'
 import { createDraftWriter } from './draft-writer.ts'
 import { fakeMirrorDirectory } from './mirror-directory.test-support.ts'
 import { encodeSlot, parseSlot, SLOT_HEADER_BYTES } from './mirror-slot.ts'
+import { readRecoveryNotice } from './recovery-notice.ts'
 import { LOCAL_DRAFT_RETENTION_MS } from './writer-fence.ts'
 
 const KEY: DraftKey = { userId: USER_ID, documentId: DOCUMENT_ID }
@@ -160,6 +161,7 @@ describe('写镜像（M4-P1 设计 §3.8）：IndexedDB 写成之后同一份记
     const throwing: DraftMirror = {
       attach: async () => ({ kind: 'mirrored' }),
       write: async () => Promise.reject(new TypeError('坏了')),
+      backfill: async () => Promise.reject(new TypeError('坏了')),
       clear: async () => ({ kind: 'mirrored' }),
       read: async () => ({ kind: 'absent' }),
       detach: () => {},
@@ -236,7 +238,7 @@ describe('写镜像（M4-P1 设计 §3.8）：IndexedDB 写成之后同一份记
 })
 
 describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写回；读时取校验通过、解得开、最新的那一份', () => {
-  it('删库之后：读回镜像里那一份，写回库（连同写入者：代次、writerId、高水位），留下 restored（只留一次）', async () => {
+  it('删库之后：读回镜像里那一份，写回库（连同写入者：代次、writerId、高水位），库里同时留下 restored 提示；之后再读不再写回', async () => {
     const { files, writer, reopen } = await setup()
     await writer.write(capture(1, 'one'))
     await writer.write(capture(2, 'two'))
@@ -248,9 +250,9 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(read.kind === 'draft' && textOf(await gunzipBytes(read.gzip))).toBe('two')
     expect(readStoredDraft(wiped.rawDraft(KEY))).toMatchObject({ kind: 'draft', draft: { draftSeq: 2 } })
     expect(readWriterRecord(wiped.rawWriter(KEY))).toMatchObject({ writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 2 })
-    expect(await reopened.takeRecoveryEvents()).toEqual([{ kind: 'restored', key: KEY }])
+    expect(await reopened.notices(USER_ID)).toEqual({ kind: 'notices', notices: [{ ...KEY, kind: 'restored', at: NOW }] })
     await reopened.read(KEY)
-    expect(await reopened.takeRecoveryEvents(), '取走之后没有新的').toEqual([])
+    expect(wiped.calls.filter(call => call === 'restoreDraft'), '库里已经是那一份：不再写回').toHaveLength(1)
     expect(await slots(files)).toEqual(['seq1', 'seq2'])
   })
 
@@ -263,7 +265,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     const registered = await reopened.register(KEY, { writeEpoch: 4, writerId: OTHER_WRITER_ID }, false)
     expect(registered).toMatchObject({ kind: 'registered', lastDraftSeq: 5, existing: { kind: 'draft', meta: { draftSeq: 5, writerId: WRITER_ID } }, mirror: { kind: 'mirrored' } })
     expect(readWriterRecord(wiped.rawWriter(KEY))).toMatchObject({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 })
-    expect(await reopened.takeRecoveryEvents()).toEqual([{ kind: 'restored', key: KEY }])
+    expect(readRecoveryNotice(wiped.rawNotice(KEY))).toEqual({ ...KEY, kind: 'restored', at: NOW })
   })
 
   it('库丢了已提交的写入（Chromium 的悄悄丢失）：镜像里的更新，写回、抬高水位', async () => {
@@ -274,7 +276,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     const read = await writer.read(KEY)
     expect(read.kind === 'draft' && textOf(await gunzipBytes(read.gzip))).toBe('two')
     expect(readWriterRecord(store.rawWriter(KEY))?.lastDraftSeq).toBe(2)
-    expect(await writer.takeRecoveryEvents()).toEqual([{ kind: 'restored', key: KEY }])
+    expect(readRecoveryNotice(store.rawNotice(KEY))?.kind).toBe('restored')
   })
 
   it('同一份内容的重封更新（库丢了标记在途的那次提交）：按更新时间认出镜像更新，写回', async () => {
@@ -286,15 +288,15 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(readStoredDraft(store.rawDraft(KEY))).toMatchObject({ kind: 'draft', draft: { inFlight: inFlight(1) } })
   })
 
-  it('被确认删掉、放弃过的不复活：镜像里留着的那一份（当时没截断成）随之截断，没有事件', async () => {
-    const { files, writer, key } = await setup()
+  it('被确认删掉、放弃过的不复活：镜像里留着的那一份（当时没截断成）随之截断，没有提示', async () => {
+    const { store, files, writer, key } = await setup()
     await writer.write(capture(1, 'one'))
     expect(await writer.confirm(KEY, ME, 1, 13)).toEqual({ kind: 'deleted' })
     await writer.release(KEY)
     await putSlot(files, KEY, 0, await sealed(key, 'one', { draftSeq: 1 }), 5)
     expect(await writer.read(KEY)).toEqual({ kind: 'absent' })
     expect(await slots(files)).toEqual(['empty', 'empty'])
-    expect(await writer.takeRecoveryEvents()).toEqual([])
+    expect(store.rawNotice(KEY)).toBeUndefined()
   })
 
   it('超过保留期的不写回（删库之后也一样），镜像随之截断', async () => {
@@ -306,21 +308,29 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(await slots(files)).toEqual(['empty', 'empty'])
   })
 
-  it('两个槽位都不合格、库里也没有（连写入者都没了：删库）：留下 lost（只留一次）；库里还有写入者（草稿是被删掉的）时不算', async () => {
+  it('两个槽位都不合格、库里也没有（连写入者都没了：删库）：库里留下 lost 提示，两个没用的槽位截断（之后不再核对、不再留）；库里还有写入者（草稿是被删掉的）时不留、同样截断', async () => {
     const { files, reopen, key } = await setup({ register: false })
-    const record = await sealed(key, 'one', { draftSeq: 1 })
-    await putSlot(files, KEY, 0, record, 1)
-    files.putFile(KEY, 0, (files.file(KEY, 0) ?? new Uint8Array()).slice(0, 300))
-    files.putFile(KEY, 1, new Uint8Array(400).fill(7))
-    const wiped = await reopen({ store: fakeDraftStore() })
+    const tear = async (): Promise<void> => {
+      await putSlot(files, KEY, 0, await sealed(key, 'one', { draftSeq: 1 }), 1)
+      files.putFile(KEY, 0, (files.file(KEY, 0) ?? new Uint8Array()).slice(0, 300))
+      files.putFile(KEY, 1, new Uint8Array(400).fill(7))
+    }
+    await tear()
+    const wipedStore = fakeDraftStore()
+    const wiped = await reopen({ store: wipedStore })
     expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
+    expect(await wiped.notices(USER_ID)).toEqual({ kind: 'notices', notices: [{ ...KEY, kind: 'lost', at: NOW }] })
+    expect(await slots(files)).toEqual(['empty', 'empty'])
     expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
-    expect(await wiped.takeRecoveryEvents()).toEqual([{ kind: 'lost', key: KEY }])
+    expect(wipedStore.calls.filter(call => call === 'recordLost'), '截断之后不再核对').toHaveLength(1)
+
+    await tear()
     const withWriter = fakeDraftStore()
     withWriter.putRaw('writers', KEY, { ...KEY, ...ME, lastDraftSeq: 1, registeredAt: NOW })
     const notLost = await reopen({ store: withWriter })
     expect(await notLost.read(KEY)).toEqual({ kind: 'absent' })
-    expect(await notLost.takeRecoveryEvents()).toEqual([])
+    expect(withWriter.rawNotice(KEY)).toBeUndefined()
+    expect(await slots(files)).toEqual(['empty', 'empty'])
   })
 
   it('两个槽位都是空的（确认删掉时截断过）而库被删了：没有可丢的，不留 lost', async () => {
@@ -328,9 +338,11 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     await writer.write(capture(1, 'one'))
     expect(await writer.confirm(KEY, ME, 1, 13)).toEqual({ kind: 'deleted' })
     writer.dispose()
-    const wiped = await reopen({ store: fakeDraftStore() })
+    const wipedStore = fakeDraftStore()
+    const wiped = await reopen({ store: wipedStore })
     expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
-    expect(await wiped.takeRecoveryEvents()).toEqual([])
+    expect(wipedStore.rawNotice(KEY)).toBeUndefined()
+    expect(wipedStore.calls).not.toContain('recordLost')
   })
 
   it('库用不了（读草稿交回 unavailable、failed）：镜像里有合格的就交回它（不写回）；没有时如实交回库的问题', async () => {
@@ -364,7 +376,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(await slots(files)).toEqual(['seq1', 'invalid:torn'])
   })
 
-  it('打开平台时的比对：这个用户在镜像里的每份文档，删库之后都写回，各留一个 restored', async () => {
+  it('打开平台时的比对：这个用户在镜像里的每份文档，删库之后都写回，各留一个 restored 提示', async () => {
     const { writer, reopen } = await setup()
     await writer.register(OTHER_DOCUMENT, ME, false)
     await writer.write(capture(1, 'one'))
@@ -373,9 +385,10 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     const wiped = fakeDraftStore()
     const reopened = await reopen({ store: wiped })
     expect(await reopened.reconcile(USER_ID)).toEqual({ kind: 'reconciled', documents: 2 })
-    expect((await reopened.takeRecoveryEvents()).map(event => event.key.documentId).sort()).toEqual([DOCUMENT_ID, OTHER_DOCUMENT.documentId].sort())
-    for (const key of [KEY, OTHER_DOCUMENT])
+    for (const key of [KEY, OTHER_DOCUMENT]) {
       expect(readStoredDraft(wiped.rawDraft(key)).kind).toBe('draft')
+      expect(readRecoveryNotice(wiped.rawNotice(key))?.kind).toBe('restored')
+    }
   })
 
   it('库里已经是镜像里那一份或者更新的（打开、读草稿时的常事）：只读地看库，不开读写的事务；库里更旧时才交给存储写回', async () => {
@@ -397,7 +410,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     await reopened.release(KEY)
     await putSlot(files, KEY, 1, await sealed(key, 'two', { draftSeq: 2 }), 99)
     expect(await callsOf(async () => reopened.read(KEY))).toEqual(['readDraft', 'restoreDraft'])
-    expect(await reopened.takeRecoveryEvents()).toEqual([{ kind: 'restored', key: KEY }])
+    expect(readRecoveryNotice(store.rawNotice(KEY))?.kind).toBe('restored')
   })
 
   it('没有镜像的宿主：读与比对照旧只看库，结果里是 off', async () => {
@@ -407,6 +420,100 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(await writer.register(KEY, ME, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror: { kind: 'off' } })
     expect(await writer.write(capture(1, 'one'))).toMatchObject({ kind: 'written', mirror: { kind: 'off' } })
     expect(await writer.reconcile(USER_ID)).toEqual({ kind: 'reconciled', documents: 0 })
-    expect(await writer.takeRecoveryEvents()).toEqual([])
+    expect(await writer.notices(USER_ID)).toEqual({ kind: 'notices', notices: [] })
+  })
+})
+
+describe('提示（§3.8）：存在库里，P3、P4 读出、说明之后清除', () => {
+  it('列出这个用户的提示；带时刻清除时只清那一条（读出之后又留下的新的一条留着）；不带时刻照清；放弃时一并删', async () => {
+    const { store, writer, advance } = await setup()
+    store.putRaw('notices', KEY, { ...KEY, kind: 'restored', at: NOW })
+    store.putRaw('notices', OTHER_DOCUMENT, { ...OTHER_DOCUMENT, kind: 'lost', at: NOW })
+    store.putRaw('notices', { userId: 'someone-else', documentId: DOCUMENT_ID }, { userId: 'someone-else', documentId: DOCUMENT_ID, kind: 'lost', at: NOW })
+    const listed = await writer.notices(USER_ID)
+    expect(listed.kind === 'notices' && listed.notices.map(notice => [notice.documentId, notice.kind]).sort()).toEqual([[DOCUMENT_ID, 'restored'], [OTHER_DOCUMENT.documentId, 'lost']].sort())
+    advance(1_000)
+    store.putRaw('notices', KEY, { ...KEY, kind: 'lost', at: NOW + 1_000 })
+    expect(await writer.clearNotice(KEY, NOW)).toEqual({ kind: 'changed' })
+    expect(readRecoveryNotice(store.rawNotice(KEY))?.kind).toBe('lost')
+    expect(await writer.clearNotice(KEY, NOW + 1_000)).toEqual({ kind: 'cleared' })
+    expect(await writer.clearNotice(KEY)).toEqual({ kind: 'absent' })
+    expect(await writer.clearNotice(OTHER_DOCUMENT)).toEqual({ kind: 'cleared' })
+    // 放弃这份草稿：提示一并删
+    await writer.write(capture(1, 'one'))
+    store.putRaw('notices', KEY, { ...KEY, kind: 'restored', at: NOW })
+    expect(await writer.remove(KEY)).toEqual({ kind: 'removed' })
+    expect(store.rawNotice(KEY)).toBeUndefined()
+  })
+
+  it('库的问题如实交回', async () => {
+    const { store, writer } = await setup()
+    store.failNext('listNotices', { kind: 'unavailable', reason: 'blocked' })
+    expect(await writer.notices(USER_ID)).toEqual({ kind: 'unavailable', reason: 'blocked' })
+    store.failNext('clearNotice', { kind: 'quota' })
+    expect(await writer.clearNotice(KEY)).toEqual({ kind: 'quota' })
+    writer.dispose()
+    expect(await writer.notices(USER_ID)).toMatchObject({ kind: 'failed', error: { name: 'InvalidStateError' } })
+  })
+})
+
+describe('补写（§3.8）：库里那一份比镜像里最新的合格那一份新（被结束在"库已提交、镜像还没写完"之间）', () => {
+  it('登记时补写：照常写在不是最新的那个槽位上；之后删库，读回的是最后一次提交的那一份', async () => {
+    const { store, files, writer, reopen } = await setup()
+    await writer.write(capture(1, 'one'))
+    await writer.write(capture(2, 'two'))
+    writer.dispose()
+    // 第 2 份的镜像写到一半就被结束：存着它的槽位不合格，镜像里最新的合格那一份是第 1 份
+    files.putFile(KEY, 1, (files.file(KEY, 1) ?? new Uint8Array()).slice(0, 300))
+    const reopened = await reopen()
+    expect(await reopened.register(KEY, ME, false)).toMatchObject({ kind: 'registered', lastDraftSeq: 2, existing: { kind: 'draft', meta: { draftSeq: 2 } }, mirror: { kind: 'mirrored' } })
+    expect(await slots(files)).toEqual(['seq1', 'seq2'])
+    expect(files.operations(KEY, 1).slice(-4)).toEqual(['truncate@0', `write@${SLOT_HEADER_BYTES}`, 'write@0', 'flush'])
+    expect(store.calls.filter(call => call === 'restoreDraft'), '库里的更新：不写回').toEqual([])
+    reopened.dispose()
+    const restored = await (await reopen({ store: fakeDraftStore() })).read(KEY)
+    expect(restored.kind === 'draft' && textOf(await gunzipBytes(restored.gzip))).toBe('two')
+  })
+
+  it('镜像里一份合格的也没有、库里有：登记时补写进第一个槽位', async () => {
+    const { files, writer, reopen } = await setup()
+    await writer.write(capture(1, 'one'))
+    writer.dispose()
+    files.putFile(KEY, 0, new Uint8Array(0))
+    const reopened = await reopen()
+    expect(await reopened.register(KEY, ME, false)).toMatchObject({ kind: 'registered', mirror: { kind: 'mirrored' } })
+    expect(await slots(files)).toEqual(['seq1', 'empty'])
+  })
+
+  it('镜像不比库旧时不写；补写没写成（写满）如实交回，库那一份不受影响', async () => {
+    const { files, writer, reopen } = await setup()
+    await writer.write(capture(1, 'one'))
+    await writer.write(capture(2, 'two'))
+    writer.dispose()
+    const unchanged = await reopen()
+    const before = files.operations(KEY, 0).length + files.operations(KEY, 1).length
+    expect(await unchanged.register(KEY, ME, false)).toMatchObject({ kind: 'registered', mirror: { kind: 'mirrored' } })
+    expect(files.operations(KEY, 0).length + files.operations(KEY, 1).length, '镜像里就是库里那一份：不写').toBe(before)
+    unchanged.dispose()
+    files.putFile(KEY, 1, (files.file(KEY, 1) ?? new Uint8Array()).slice(0, 300))
+    files.failWrite(0, 5, 'QuotaExceededError')
+    const full = await reopen()
+    expect(await full.register(KEY, ME, false)).toMatchObject({ kind: 'registered', existing: { kind: 'draft', meta: { draftSeq: 2 } }, mirror: { kind: 'not-mirrored', reason: 'quota' } })
+  })
+
+  it('读草稿时本页拿着句柄（写入者）：库里的更新就补写；不是写入者的（打开平台时的比对）不动镜像', async () => {
+    const { files, writer, reopen } = await setup()
+    await writer.write(capture(1, 'one'))
+    files.failWrite(0, 5, 'QuotaExceededError')
+    expect(await writer.write(capture(2, 'two'))).toMatchObject({ kind: 'written', mirror: { kind: 'not-mirrored', reason: 'quota' } })
+    // 另一个管道（不是写入者、没拿着句柄）比对：只读，不写镜像
+    const other = await reopen()
+    const before = files.operations(KEY, 1).length
+    expect(await other.reconcile(USER_ID)).toEqual({ kind: 'reconciled', documents: 1 })
+    expect(files.operations(KEY, 1).length, '不是写入者：不动').toBe(before)
+    // 写入者读草稿：补写
+    expect(await writer.read(KEY)).toMatchObject({ kind: 'draft', meta: { draftSeq: 2 } })
+    await writer.release(KEY)
+    expect(await slots(files)).toEqual(['seq1', 'seq2'])
   })
 })
