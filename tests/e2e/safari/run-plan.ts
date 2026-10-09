@@ -5,10 +5,13 @@
 //   关掉自己（问 SHADE_COMMAND_PATH）；
 // - 收集端收到的请求（parseReportRequest）；
 // - 每一步的结论与退出码（outcomeOf、exitCodeOf；hidden-save 与交接的几步按库里的证据判定，serverJudgedOutcome；作废的一次另有退出码）；结果文件的名字
-//   （resultFileName）；计时的说明（timingLines：切换的耗时，与捕获时机的时间线）。
+//   （resultFileName）；计时的说明（timingLines：切换的耗时，与捕获时机的时间线）；
+// - 真实浏览器的前置复核（M4-P1 S1）的几步交回的结果交给判定（probeReportsOf → support/probe-verdicts.ts）：第一步由上一步带过去的那一页是这次运行里
+//   第一次打开编辑器页（首屏的冷），之后的是热的。
 import type { SelftestReport, SelftestTiming } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { ProbeReport } from '../support/probe-verdicts.ts'
 import type { SelftestStep, SelftestStepDefinition } from '../support/selftest-plan.ts'
-import { HANDOVER_SCENARIOS, REQUEST_SCENARIOS, RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { HANDOVER_SCENARIOS, isProbeScenario, REQUEST_SCENARIOS, RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { problemsOf, selftestPageUrl } from '../support/selftest-plan.ts'
 
 /** 收集端收结果的路径 */
@@ -201,4 +204,18 @@ export function timingLines(timings: readonly SelftestTiming[]): string[] {
   return timings.map(({ id, ms }) => id.startsWith('switch.')
     ? `${id}：点击到可以操作 ${milliseconds(ms.ready)}、到 steady ${milliseconds(ms.steady)}（页头 ${milliseconds(ms.header)}，网络 ${milliseconds(ms.network)}，重建 ${milliseconds(ms.rebuild)}）`
     : `${id}：${Object.entries(ms).map(([key, value]) => `${key} ${milliseconds(value)}`).join('、')}`)
+}
+
+/**
+ * 真实浏览器的前置复核（M4-P1 S1）的几步交回的结果（解得开的），按步骤的先后交给判定（support/probe-verdicts.ts）。cold：这一步是不是
+ * 由驱动脚本打开的第一步——一次运行里第一次打开编辑器页（这次运行的端口是新的，浏览器的缓存里没有这个源的脚本），首屏是冷的
+ */
+export function probeReportsOf(chain: readonly ChainLink[], received: ReadonlyMap<number, Received>): ProbeReport[] {
+  const first = chain.findIndex(link => !link.opened)
+  return chain.flatMap((link, index) => {
+    const result = received.get(index)
+    if (!isProbeScenario(link.step.scenario) || result === undefined || 'undecodable' in result)
+      return []
+    return [{ stepId: link.step.id, report: result, cold: index === first }]
+  })
 }

@@ -31,14 +31,19 @@
 //      作者那一代按时间到期之后协作者申请；移走盖屏，作者回来、得知失去编辑权、另存为副本（pausedHolderJudgement：那一代没有交出、没有释放，最后一次续租
 //      到协作者申请不短于 90 秒，页面的计时器停过）。没有暂停时（2026-10-08 本机 Safari 27.0 上编辑器页就是这样）：作者已空闲满 2 分钟，心跳带来请求的
 //      同一步就先保存再自动交出，协作者续期得到 reserved 之后申请（判定按这条路）；
+//    M4-P1 S1 的真实浏览器复核（首屏与公式冻结、捕获成本、存储、密钥交给 Worker、Worker 的停顿）是上一步带过去的几步（在 hidden-save 之前），
+//    运行次数按 --runs（默认 40，设计 §3.6）带进地址；它们交回的事实与计时由 support/probe-verdicts.ts 判定，逐项打印、写进结果文件的 probe
+//    （判定只是复核的结论，不影响退出码：退出码只看自检本身跑没跑完、页面上的检查与服务器上的核对）；
 // 6. 停后端、删库。Safari 里留下停在结束页的标签页（与 M0 相同），可以关掉；盖屏的窗口与 osascript 跑完一定不在（核对进程号）。
 // 只在用户空闲时跑（--idle，默认 120 秒；开头检查，等不到就不跑；屏幕锁着时不跑）：跑的时候每秒看一次用户回来没有（./desktop.ts），回来了这一次作废
 // （退出码 4），盖着屏就随即移走；在盖屏的窗口上按 Esc 或点它同样中止、作废。
 // 退出码：0 全部通过；1 有不通过的检查、页面错误或服务器上的核对不对；2 超时（有的步没有交回结果）；3 准备阶段失败（没有构建、
 // 库连不上、Safari 打不开、用户一直在用电脑、屏幕锁着）；4 作废（用户回来了、中止了）。
-// 用法：pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--timeout 秒] [--steps 标识,标识…] [--idle 秒] [--idle-wait 秒]（命令先构建后端与
-// 测试构建；--steps 只跑这几步，例如 takeover-holder,takeover-taker,refresh-save——B 要与 A 一起选；request-waiter,paused-holder 是请求编辑的两条路；
-// --idle 是开始之前用户要空闲多久，--idle-wait 是最多等多久）。不进 CI（CI 上没有 Safari）。
+// 用法：pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--timeout 秒] [--steps 标识,标识…] [--idle 秒] [--idle-wait 秒] [--runs 次数]
+// （命令先构建后端与测试构建；--steps 只跑这几步，例如 takeover-holder,takeover-taker,refresh-save——B 要与 A 一起选；request-waiter,paused-holder 是
+// 请求编辑的两条路；perf-worker,perf-main,perf-worker-warm,capture-1m,capture-5m,storage,key-transfer,worker-stall,outbox-stall,outbox-pipeline
+// 是 M4-P1 的复核（后两步调用生产的发件箱）；
+// --idle 是开始之前用户要空闲多久，--idle-wait 是最多等多久；--runs 是复核的运行次数）。不进 CI（CI 上没有 Safari）。
 // 与 Playwright 的 E2E 共用 test-results/ 下的服务日志（e2e-server.log）与控制文件：不要与 pnpm test:e2e 在同一个检出里同时跑。
 // 自检的页面要看得见：Safari 不给隐藏的标签页（窗口被挡住、不在前面的标签页、屏幕锁定）动画帧，几秒之后连计时器也停了
 // （2026-10-04 本机 Safari 27.0 实测：Safari 的窗口不在前面时，open -g 打开的标签页一开始就是 hidden，动画帧 0 帧，计时器约 6 秒之后
@@ -57,14 +62,15 @@ import { createServer } from 'node:http'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { decodeSelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { decodeSelftestReport, isProbeScenario, RUNS_MAX, runsOfValue } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { revisionOf } from '../support/database.ts'
 import { databaseUrl, E2E_DATABASE_PREFIX, pickFreePort } from '../support/environment.ts'
+import { probeVerdicts, verdictLines } from '../support/probe-verdicts.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../support/selftest-handover.ts'
 import { SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
 import { runPausedHolder, runWaiter } from '../support/selftest-request.ts'
 import { hidIdleSeconds, processAlive, screenLocked, startCover, waitForIdle, watchActivity } from './desktop.ts'
-import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, resultFileName, selectSteps, serverJudgedOutcome, SHADE_COMMAND_PATH, SHADE_PAGE, SHADE_PATH, timingLines, VOIDED_EXIT_CODE } from './run-plan.ts'
+import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, probeReportsOf, resultFileName, selectSteps, serverJudgedOutcome, SHADE_COMMAND_PATH, SHADE_PAGE, SHADE_PATH, timingLines, VOIDED_EXIT_CODE } from './run-plan.ts'
 
 const SERVE_SCRIPT = fileURLToPath(new URL('../support/serve.ts', import.meta.url))
 const SELFTEST_PAGE = fileURLToPath(new URL('../../../apps/web/dist-e2e/selftest.html', import.meta.url))
@@ -78,6 +84,9 @@ const DEFAULT_IDLE_SECONDS = 120
 
 /** 等用户空闲最多等多久（秒，--idle-wait）：等不到就不跑 */
 const DEFAULT_IDLE_WAIT_SECONDS = 1800
+
+/** M4-P1 的复核的运行次数（--runs）：Worker 停顿的 1–1.5 秒那一档每个条件 40 次（设计 §3.6 第 9 项），别的场景按各自的上限截 */
+const DEFAULT_PROBE_RUNS = 40
 
 /** 后端起来最多等多久（迁移、初始化管理员、启动） */
 const SERVER_READY_TIMEOUT_MS = 120_000
@@ -540,6 +549,9 @@ function printSummary(outcomes: readonly StepOutcome[], serverProblems: readonly
       say(`  库里的证据：${outcome.evidence}`)
     for (const problem of outcome.problems)
       say(`  - ${problem}`)
+    // M4-P1 的复核每一次都有计时（Worker 停顿一百多条）：它们按项汇总在后面（verdictLines），这里不逐条打印
+    if (isProbeScenario(outcome.scenario))
+      continue
     for (const line of timingLines(outcome.report?.timings ?? []))
       say(`  ${line}`)
   }
@@ -554,6 +566,7 @@ async function main(): Promise<number> {
     'steps': { type: 'string' },
     'idle': { type: 'string', default: String(DEFAULT_IDLE_SECONDS) },
     'idle-wait': { type: 'string', default: String(DEFAULT_IDLE_WAIT_SECONDS) },
+    'runs': { type: 'string', default: String(DEFAULT_PROBE_RUNS) },
   } })
   const timeoutMs = Number(values.timeout) * 1000
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
@@ -562,6 +575,9 @@ async function main(): Promise<number> {
   const idleWaitSeconds = Number(values['idle-wait'])
   if (!Number.isFinite(idleSeconds) || idleSeconds < 0 || !Number.isFinite(idleWaitSeconds) || idleWaitSeconds < 0)
     throw new SetupError(`--idle、--idle-wait 要是不小于 0 的秒数：${values.idle}、${values['idle-wait']}`)
+  const runs = runsOfValue(values.runs)
+  if (runs === null || runs === undefined)
+    throw new SetupError(`--runs 要是 1 到 ${RUNS_MAX} 的整数：${values.runs}`)
   const selection = selectSteps(SELFTEST_STEPS, values.steps)
   if ('error' in selection)
     throw new SetupError(selection.error)
@@ -590,7 +606,7 @@ async function main(): Promise<number> {
   let activity: ActivityWatch | undefined
   try {
     await waitUntilReady(origin, server)
-    const scene = await selftestScene('safari', selection.definitions)
+    const scene = await selftestScene('safari', selection.definitions, runs)
     const { steps } = scene
     collector = await startCollector(collectorOrigin => chainOf(steps, origin, collectorOrigin))
     // 只在用户空闲时跑（用户在用电脑时 Safari 的窗口会被挡住；请求编辑的路 2 还要盖屏）：等他空闲满 --idle 秒，之后每秒看一次他回来没有
@@ -668,6 +684,9 @@ async function main(): Promise<number> {
     if (paused?.coverLeft === true)
       stored.problems.push('盖屏的 osascript 跑完之后还在')
     const exitCode = voided === undefined ? exitCodeOf(outcomes, stored.problems) : VOIDED_EXIT_CODE
+    // M4-P1 的复核：交回的事实与计时逐项判定（只是复核的结论，不影响退出码）
+    const probeReports = probeReportsOf(active.chain, received)
+    const verdicts = probeReports.length === 0 ? undefined : probeVerdicts(probeReports)
     mkdirSync(RESULTS_DIR, { recursive: true })
     const file = `${RESULTS_DIR}${resultFileName(startedAt)}`
     const requestSummary = (run: RequestRun | undefined): unknown => run === undefined ? undefined : { states: run.states, requests: run.requests, calls: run.calls, marks: run.marks, notes: run.notes, voided: run.voided }
@@ -692,8 +711,15 @@ async function main(): Promise<number> {
         waiter: requestSummary(waiter),
         paused: paused === undefined ? undefined : { ...requestSummary(paused) as object, cover: paused.cover, coverLeft: paused.coverLeft },
       },
+      // M4-P1 S1 的复核：运行次数与逐项的判定（support/probe-verdicts.ts）；原始的事实与计时在 steps 各步的 report 里
+      probe: verdicts === undefined ? undefined : { runs, cold: probeReports.find(entry => entry.cold)?.stepId, verdicts },
     }, null, 2)}\n`)
     printSummary(outcomes, stored.problems)
+    if (verdicts !== undefined) {
+      say(`M4-P1 的复核（运行次数 ${runs}）：`)
+      for (const line of verdictLines(verdicts))
+        say(`  ${line}`)
+    }
     if (voided !== undefined)
       say(`这一次作废：${voided}`)
     say(`结果写在 ${file}；退出码 ${exitCode}`)
