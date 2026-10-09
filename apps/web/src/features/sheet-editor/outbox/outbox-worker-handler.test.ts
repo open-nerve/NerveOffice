@@ -6,9 +6,11 @@ import type { OutboxCall, OutboxMessage } from './outbox-protocol.ts'
 import type { OutboxWorkerHandler } from './outbox-worker-handler.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { gunzipBytes, openDraft } from '../../../shared/outbox/draft-codec.ts'
+import { createDraftMirror } from '../../../shared/outbox/draft-mirror.ts'
 import { CLIENT_INSTANCE_ID, DOCUMENT_ID, NOW, sampleMeta, USER_ID, WRITER_ID } from '../../../shared/outbox/draft-record.test-support.ts'
 import { readStoredDraft } from '../../../shared/outbox/draft-record.ts'
 import { fakeDraftStore } from '../../../shared/outbox/draft-store.test-support.ts'
+import { fakeMirrorDirectory } from '../../../shared/outbox/mirror-directory.test-support.ts'
 import { OUTBOX_PROTOCOL_VERSION, RAW_KEY_BYTES } from './outbox-protocol.ts'
 import { createOutboxWorkerHandler } from './outbox-worker-handler.ts'
 
@@ -188,6 +190,40 @@ describe('分派：每种请求交给写入管道，结果原样回复；交回�
     expect(replyTo(11)).toMatchObject({ ok: true, result: { kind: 'changed' } })
     await send({ type: 'remove', draft: DRAFT, expectedSeq: 2 }, 12)
     expect(replyTo(12)).toMatchObject({ ok: true, result: { kind: 'removed' } })
+  })
+})
+
+describe('OPFS 的镜像（M4-P1 设计 §3.8）：镜像交给管道；放开、比对、取走事件', () => {
+  it('写入的结果带上镜像写成了没有；放开句柄、比对用户的文档、取走事件都交给管道', async () => {
+    const files = fakeMirrorDirectory()
+    const store = fakeDraftStore()
+    const posted: OutboxMessage[] = []
+    const handler = createOutboxWorkerHandler({
+      store: store.store,
+      mirror: createDraftMirror({ directory: files.directory, clock: { now: () => 0 } }),
+      now: () => NOW,
+      post: (message, transfer) => posted.push(structuredClone(message, { transfer })),
+      stopKeepAlive: undefined,
+    })
+    const send = async (call: OutboxCall, id: number): Promise<OutboxMessage | undefined> => {
+      await handler.receive(structuredClone({ ...call, v: OUTBOX_PROTOCOL_VERSION, id }))
+      return posted.find(message => 'id' in message && message.id === id)
+    }
+    const { handle } = await keyOf(2)
+    await send({ type: 'set-key', key: { form: 'crypto-key', version: 2, key: handle.key } }, 1)
+    expect(await send({ type: 'register', draft: DRAFT, writer: ME, force: false }, 2)).toMatchObject({ ok: true, result: { kind: 'registered', mirror: { kind: 'mirrored' } } })
+    expect(await send({ type: 'write', capture: capture(1, 'mirrored') }, 3)).toMatchObject({ ok: true, result: { kind: 'written', mirror: { kind: 'mirrored' } } })
+    expect(files.openHandles()).toBe(2)
+    expect(await send({ type: 'release', draft: DRAFT }, 4)).toMatchObject({ ok: true, result: { kind: 'released' } })
+    expect(files.openHandles()).toBe(0)
+    expect(await send({ type: 'reconcile', userId: USER_ID }, 5)).toMatchObject({ ok: true, result: { kind: 'reconciled', documents: 1 } })
+    expect(await send({ type: 'take-events' }, 6)).toMatchObject({ ok: true, result: { kind: 'events', events: [] } })
+    // 库被删（草稿与写入者都没了）：比对时从镜像写回，事件交出一次
+    store.putRaw('drafts', DRAFT, undefined)
+    store.putRaw('writers', DRAFT, undefined)
+    expect(await send({ type: 'reconcile', userId: USER_ID }, 7)).toMatchObject({ ok: true, result: { kind: 'reconciled', documents: 1 } })
+    expect(await send({ type: 'take-events' }, 8)).toEqual({ v: OUTBOX_PROTOCOL_VERSION, id: 8, ok: true, result: { kind: 'events', events: [{ kind: 'restored', key: DRAFT }] } })
+    expect(await send({ type: 'take-events' }, 9)).toMatchObject({ ok: true, result: { kind: 'events', events: [] } })
   })
 })
 

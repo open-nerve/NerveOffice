@@ -598,7 +598,7 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
   })
 
   it('发件箱的浏览器层探针（M4-P1 设计 §3.1）：来源在 features/sheet-editor/outbox/testing/ 下，按来源认；单独成块时按名字兜底；发件箱的生产模块与名字相近的都不算', () => {
-    for (const module of ['src/features/sheet-editor/outbox/testing/outbox-probe.ts', 'src/features/sheet-editor/outbox/testing/pipeline-probe.ts', 'src/features/sheet-editor/outbox/testing/outbox-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/transaction-recorder.ts'])
+    for (const module of ['src/features/sheet-editor/outbox/testing/outbox-probe.ts', 'src/features/sheet-editor/outbox/testing/pipeline-probe.ts', 'src/features/sheet-editor/outbox/testing/outbox-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/opfs-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/transaction-recorder.ts'])
       expect(isTestOnlySource(module), module).toBe(true)
     for (const module of ['src/features/sheet-editor/outbox/outbox-worker-client.ts', 'src/features/sheet-editor/outbox/outbox.worker.ts', 'src/shared/outbox/draft-store.ts', 'src/features/sheet-editor/outbox/testing-like.ts', 'src/features/sheet-editor/start.tsx'])
       expect(isTestOnlySource(module), module).toBe(false)
@@ -607,6 +607,8 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/outbox-probe-Cx1.js', 'assets/outbox-Cx1.js', 'assets/my-outbox-probe-x.js', 'assets/outbox-probes.js']).map(v => v.subject)).toEqual(['assets/outbox-probe-Cx1.js'])
     // 探针创建的记下事务的测试 Worker（M4-P1 S5）按名字兜底；生产的发件箱 Worker 不算
     expect(checkTestOnlyArtifacts(['assets/outbox-probe.worker-q72kaOrf.js', 'assets/outbox.worker-DfsCheLT.js', 'assets/outbox-probe.workers-x.js']).map(v => v.subject)).toEqual(['assets/outbox-probe.worker-q72kaOrf.js'])
+    // 看、改 OPFS 镜像文件的测试 Worker（M4-P1 S9）同样按名字兜底；名字相近的不算
+    expect(checkTestOnlyArtifacts(['assets/opfs-probe.worker-3LVrYFXG.js', 'assets/opfs-probe-3LVr.js', 'assets/my-opfs-probe.worker-x.js', 'assets/opfs-probe.workers-x.js']).map(v => v.subject)).toEqual(['assets/opfs-probe.worker-3LVrYFXG.js'])
   })
 
   it('崩溃用例的探针（M4-P1 设计 §3.7）：来源在 features/sheet-editor/outbox/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
