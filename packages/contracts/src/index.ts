@@ -235,6 +235,7 @@ export type {
 } from './documents/editing.ts'
 export { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './documents/link-address.ts'
 export type { CanonicalLink, CellLinkRule, LinkAddressInvalidReason } from './documents/link-address.ts'
+export { LOCAL_DRAFT_RETENTION_DAYS } from './documents/local-drafts.ts'
 export {
   compareOpenCheckFailures,
   ERROR_NAME_PATTERN,
@@ -289,7 +290,8 @@ export { healthLiveResponseSchema, healthReadyResponseSchema } from './health/he
 export type { HealthLiveResponse, HealthReadyResponse } from './health/health.ts'
 export { CSRF_TOKEN_HEADER, REQUEST_ID_HEADER } from './http/headers.ts'
 export { uuidSchema } from './ids/ids.ts'
-export { LOCAL_KEY_BYTES, LOCAL_KEY_PATTERN_SOURCE, localKeySchema, localKeySummarySchema, localKeyVersionSchema } from './local-keys/local-keys.ts'
+export { LOCAL_KEY_BYTES, LOCAL_KEY_PATTERN_SOURCE } from './local-keys/local-key-format.ts'
+export { localKeySchema, localKeySummarySchema, localKeyVersionSchema } from './local-keys/local-keys.ts'
 export type { LocalKey, LocalKeySummary } from './local-keys/local-keys.ts'
 export {
   SEARCH_PAGE_SIZE,

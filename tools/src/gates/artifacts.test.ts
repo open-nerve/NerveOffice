@@ -597,6 +597,18 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/formula-mode-Dx1.js', 'assets/formula-D2.js', 'assets/my-formula-mode-x.js']).map(v => v.subject)).toEqual(['assets/formula-mode-Dx1.js'])
   })
 
+  it('发件箱的浏览器层探针（M4-P1 设计 §3.1）：来源在 features/sheet-editor/outbox/testing/ 下，按来源认；单独成块时按名字兜底；发件箱的生产模块与名字相近的都不算', () => {
+    for (const module of ['src/features/sheet-editor/outbox/testing/outbox-probe.ts', 'src/features/sheet-editor/outbox/testing/pipeline-probe.ts', 'src/features/sheet-editor/outbox/testing/outbox-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/transaction-recorder.ts'])
+      expect(isTestOnlySource(module), module).toBe(true)
+    for (const module of ['src/features/sheet-editor/outbox/outbox-worker-client.ts', 'src/features/sheet-editor/outbox/outbox.worker.ts', 'src/shared/outbox/draft-store.ts', 'src/features/sheet-editor/outbox/testing-like.ts', 'src/features/sheet-editor/start.tsx'])
+      expect(isTestOnlySource(module), module).toBe(false)
+    expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/features/sheet-editor/start.tsx', 'src/features/sheet-editor/outbox/testing/outbox-probe.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/outbox-probe-Cx1.js', 'assets/outbox-Cx1.js', 'assets/my-outbox-probe-x.js', 'assets/outbox-probes.js']).map(v => v.subject)).toEqual(['assets/outbox-probe-Cx1.js'])
+    // 探针创建的记下事务的测试 Worker（M4-P1 S5）按名字兜底；生产的发件箱 Worker 不算
+    expect(checkTestOnlyArtifacts(['assets/outbox-probe.worker-q72kaOrf.js', 'assets/outbox.worker-DfsCheLT.js', 'assets/outbox-probe.workers-x.js']).map(v => v.subject)).toEqual(['assets/outbox-probe.worker-q72kaOrf.js'])
+  })
+
   it('真实浏览器复核的探针 Worker（M4-P1 S1）：来源在 editor/testing/ 下，按来源认；Worker 的产物按名字兜底，名字相近的不算', () => {
     expect(isTestOnlySource('src/editor/testing/storage-probe-worker.ts')).toBe(true)
     expect(checkTestOnlySources({ 'assets/storage-probe-worker-ChQO.js': { name: 'storage-probe-worker', modules: ['src/editor/testing/storage-probe-worker.ts', 'src/editor/testing/probe-bytes.ts'] } }, ['assets/storage-probe-worker-ChQO.js']).map(v => v.rule))

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { LOCAL_KEY_BYTES, localKeySchema, localKeySummarySchema, localKeyVersionSchema } from './local-keys.ts'
+import { LOCAL_KEY_BYTES } from './local-key-format.ts'
+import { localKeySchema, localKeySummarySchema, localKeyVersionSchema } from './local-keys.ts'
 
 /** 32 字节（0x0b、0x30、0x55……）的标准 base64：任意取的测试值，不是任何环境的密钥 */
 const KEY = 'CzBVep/E6Q4zWH2ix+wRNluApcrvFDleg6jN8hc8YYY='

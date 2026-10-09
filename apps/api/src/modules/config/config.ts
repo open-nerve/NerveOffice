@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { isAbsolute } from 'node:path'
 import process from 'node:process'
-import { parseVersion } from '@nerve-office/contracts'
+import { LOCAL_DRAFT_RETENTION_DAYS, parseVersion } from '@nerve-office/contracts'
 import { z } from 'zod'
 import { Secret } from '../../shared/secret.ts'
 
@@ -254,17 +254,12 @@ const trustProxy = text().transform((value, ctx): number | string[] => {
 })
 
 /**
- * 本机发件箱里一条记录最长留多少天（00 号计划书 §7.5，M4 实现发件箱）：一次结果未知的保存，页面最晚在这么多天之后还会原样重发
+ * 修订记录与回执的保留期的下限（M3-P3 设计 §3.9）：比本机发件箱一条记录的最长留存（契约的 LOCAL_DRAFT_RETENTION_DAYS，前端按它清理，
+ * M4-P1 设计 §3.3）多一天。保留期是保存的幂等窗口——发件箱里一次结果未知的保存在第 14 天重发时，服务端要还找得到原来的修订记录
+ * 或回执，才能把原来的结果交回（A07）；找不到时它按一次新的保存处理，基准修订号多半已经落后，得到修订号冲突，页面会误以为"没有保存"
  */
-const OUTBOX_RECORD_MAX_DAYS = 14
-
-/**
- * 修订记录与回执的保留期的下限（M3-P3 设计 §3.9）：比发件箱的最长留存多一天。保留期是保存的幂等窗口——发件箱里一次结果未知的保存
- * 在第 14 天重发时，服务端要还找得到原来的修订记录或回执，才能把原来的结果交回（A07）；找不到时它按一次新的保存处理，
- * 基准修订号多半已经落后，得到修订号冲突，页面会误以为"没有保存"
- */
-const REVISION_RETENTION_MIN_DAYS = OUTBOX_RECORD_MAX_DAYS + 1
-const REVISION_RETENTION_REASON = `保留期要长于本机发件箱一条记录的最长留存（${OUTBOX_RECORD_MAX_DAYS} 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了`
+const REVISION_RETENTION_MIN_DAYS = LOCAL_DRAFT_RETENTION_DAYS + 1
+const REVISION_RETENTION_REASON = `保留期要长于本机发件箱一条记录的最长留存（${LOCAL_DRAFT_RETENTION_DAYS} 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了`
 
 /**
  * 主密钥的写法（M3-P6 设计 §3.4）：标准 base64、带填充、恰好 32 字节、规范写法，即 openssl rand -base64 32 的输出（44 个字符，以一个 = 结尾）。
