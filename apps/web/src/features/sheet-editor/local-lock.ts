@@ -1,6 +1,7 @@
 // 本机锁的持有（M3-P5 设计 §3.1；争用以服务端的事实裁决，M3-P6 设计 §3.13，Codex 评审 CX2）。不依赖 Univer 与界面；锁（same-browser.ts）
 // 与核对（edit-lease.ts 的 confirm）、租约已有的失效处理（lose）都注入，用假的做单元测试（local-lock.test.ts）。编辑模式（edit-mode.ts）每取得
-// 一代编辑权建一个，离开编辑（退出、交出、失去编辑权、没能进入）、页面关闭与卸载时放下。
+// 一代编辑权建一个，离开编辑（退出、交出、失去编辑权、没能进入）、页面关闭与卸载时放下（失去编辑权时服务端说被本人接管、锁还拿着的，留到
+// "在哪"定了才放，见末条）。
 // 本机锁只用来让同一个浏览器里的另一页及时得知，不是事实的来源：申请成功的回包说明不了"这一代此刻仍是当前的"（服务端批准之后、回包到达之前
 // 可能已经再换代），锁被抢也说明不了"这一代已经失效"（抢的一方可能拿着更旧的批准）。争用一律问服务端（续租一次，confirm）：
 // - 拿锁（claim，服务端批准之后）：锁空着就拿；被本浏览器的别的标签页占着时先核对——这一代是当前的才抢（那一页拿着的那一代必然已被取代，
@@ -15,6 +16,9 @@
 // - 不会来回抢个不停：每次抢之前都有一个看到争用之后才发出的续租说是当前的，服务端任一时刻只认一代；得知被取代，页面随即放弃那一代
 //   （租约 abandon），不再为它抢锁。核对的回包同样可能迟到（服务端处理时还是当前的、到达之前又换了代）：至多多抢一次，被抢的一方核对之后
 //   拿回来，迟到的一方下一次核对就得知已被取代。
+// - 被本人接管之后"在哪"的本机证据（takenHere，edit-mode.ts）：服务端只说这一代被本人接管、不说在哪；本浏览器里接手的那一页取得新的一代之后
+//   一定来拿这把锁，锁还在本页手里就得抢（抢之前核对过它那一代是当前的）。所以被抢了（之后没有得知本页仍是当前的）就是本浏览器的另一个标签页；
+//   服务端的回答先到、锁还拿着时留着它等一会儿（不再当作编辑权的锁），等到被抢也是，到时还没有就是别处——与两个消息谁先到无关。
 import type { LeaseClock, LeaseLoss, LeaseOutcome, LeaseVerdict } from './edit-lease.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
@@ -64,15 +68,23 @@ export interface LocalLock {
    * 的 supersededLoss）
    */
   readonly stolen: () => boolean
+  /**
+   * 这一代已经失效、服务端说被本人接管（没说在哪）时，"在哪"的本机证据（见文件头；edit-mode.ts 的 locateTakeover）：被本浏览器的别的标签页抢走了、
+   * 之后没有得知本页仍是当前的（核对中、等心跳，或者得知已被取代、这一代在本页已经结束）——交回 true。还拿着时不再当作编辑权的锁（不回应交接请求，
+   * held 为假），留着等到 until（clock 的时间轴上）：期间被抢交回 true，到时还没有交回 false；没拿着（还没拿到、拿锁时没拿成）交回 false。
+   * 期间放下（release：页面关闭、卸载）交回 false。交回之前锁已经放开（之后的 release 什么也不做）；重复调用交回同一个结果
+   */
+  readonly takenHere: (until: number) => Promise<boolean>
   /** 放下（离开编辑、页面关闭、卸载）：拿着的随即放开，之后不再拿，被抢、核对的结果都不再算。重复调用无害 */
   readonly release: () => void
 }
 
 /**
  * 进展：idle 还没拿；claiming 在拿（锁空着就拿，被占着先核对，核对过是当前的就抢）；held 拿着；verifying 被抢了、在核对；awaiting 被抢之后
- * 这一代自己失效（交给了租约）或者核对不了，等心跳；done 拿锁时没拿成（被取代、失效、核对不了），或者被抢之后得知已被取代；released 放下了
+ * 这一代自己失效（交给了租约）或者核对不了，等心跳；taken 被抢之后得知已被取代，或者这一代在本页已经结束；done 拿锁时没拿成（被取代、失效、
+ * 核对不了）；yielding 这一代已经失效、锁留着等被抢（takenHere）；released 放下了
  */
-type Phase = 'idle' | 'claiming' | 'held' | 'verifying' | 'awaiting' | 'done' | 'released'
+type Phase = 'idle' | 'claiming' | 'held' | 'verifying' | 'awaiting' | 'taken' | 'done' | 'yielding' | 'released'
 
 const HELD: LockClaim = { kind: 'held' }
 const LOST: LockClaim = { kind: 'lost' }
@@ -85,12 +97,75 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
   let handle: HeldLock | undefined
   /** 最近一次被抢的时刻：之后发出的续租成功才说明得了现在 */
   let stolenAt = Number.NEGATIVE_INFINITY
+  /** 留着锁等被抢（yielding）时结束它（被抢为 true，到时、放下为 false）；没在等时为 undefined */
+  let finishYield: ((taken: boolean) => void) | undefined
+  /** 本人接管之后"在哪"的结论（takenHere 交回过的）：重复调用时交回它 */
+  let located: Promise<boolean> | undefined
 
   /**
    * 现在的进展。经函数读：拿锁、核对之间隔着请求，期间页面随时可能放下（release）、锁随时可能被抢，每次都要读现在的值
    */
   function now(): Phase {
     return phase
+  }
+
+  /** 放下（见 LocalLock 的 release）：拿着的随即放开；留着锁等被抢的随即以 false 结束 */
+  function release(): void {
+    phase = 'released'
+    const taken = handle
+    handle = undefined
+    taken?.release()
+    finishYield?.(false)
+  }
+
+  /**
+   * 这一代已经失效、锁还拿着：留着它等被抢，至多到 until（见 LocalLock 的 takenHere）。这期间不是编辑权的锁（held 为假，不回应交接请求）；被抢时
+   * 报 lock-stolen（不核对：这一代已经失效），结束时放开
+   */
+  async function yieldUntil(until: number): Promise<boolean> {
+    const kept = handle
+    phase = 'yielding'
+    return new Promise<boolean>((resolve) => {
+      let cancel: () => void = () => {}
+      const finish = (taken: boolean): void => {
+        if (finishYield !== finish)
+          return
+        finishYield = undefined
+        cancel()
+        release()
+        resolve(taken)
+      }
+      finishYield = finish
+      cancel = clock.schedule(() => finish(false), Math.max(0, until - clock.now()))
+      void kept?.stolen.then(() => {
+        if (finishYield !== finish)
+          return
+        options.trace?.({ kind: 'lock-stolen', at: clock.now() })
+        finish(true)
+      })
+    })
+  }
+
+  /** 本人接管之后"在哪"的本机证据（见 LocalLock 的 takenHere；只调用一次：yielding 只由这里进入） */
+  async function locate(until: number): Promise<boolean> {
+    switch (now()) {
+      case 'verifying':
+      case 'awaiting':
+      case 'taken':
+        // 被抢了、之后没有得知本页仍是当前的（核对得知是当前的、被抢之后发出的续租成功都会去拿回来，离开这几种进展）
+        release()
+        return true
+      case 'held':
+        return yieldUntil(until)
+      case 'idle':
+      case 'claiming':
+      case 'done':
+      case 'yielding':
+      case 'released':
+        // 没拿着：拿锁还在途的随即放掉拿到的（与放下相同）
+        release()
+        return false
+    }
   }
 
   /** 拿到了：还要它就留着、盯着被抢；期间放下了就随即放掉。交回留下了没有 */
@@ -136,13 +211,14 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
         await take()
         return
       case 'superseded':
-        phase = 'done'
+        phase = 'taken'
         options.onSuperseded(verdict.loss)
         return
       case 'ended':
-        // 这一代在本页已经结束（loss 为空：退出时的释放、交出之后的放弃……结束它的那一处已经处理、随即放下锁）：什么也不做
+        // 这一代在本页已经结束（loss 为空：退出时的释放、交出之后的放弃、失效……结束它的那一处已经处理、随即放下锁）：什么也不做。仍记着被抢了
+        // （taken）：服务端先说了被本人接管、锁还没来得及放下时（进入编辑途中，edit-mode.ts 的 pendingLoss），这就是那边接手的本机证据
         if (verdict.loss === undefined) {
-          phase = 'done'
+          phase = 'taken'
           return
         }
         // 这一代自己失效了：交给租约（续不上的租约通知页面，页面随即放下锁）；续上了、说不准的都等心跳
@@ -194,11 +270,10 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
     },
     held: () => now() === 'held',
     stolen: () => now() === 'verifying' || now() === 'awaiting',
-    release: () => {
-      phase = 'released'
-      const taken = handle
-      handle = undefined
-      taken?.release()
+    takenHere: async (until) => {
+      located ??= locate(until)
+      return located
     },
+    release,
   }
 }
