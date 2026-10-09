@@ -91,18 +91,22 @@ export type ReadDraft
     | { readonly kind: 'newer-format', readonly recordVersion: number }
     | { readonly kind: 'malformed' }
 
-type Fields = Readonly<Record<string, unknown>>
+// 下面几个守卫也给发件箱 Worker 的协议用（features/sheet-editor/outbox/outbox-protocol.ts）：同一组形状，跨 Worker 的消息照样逐项核对
 
-function isFields(value: unknown): value is Fields {
+export type Fields = Readonly<Record<string, unknown>>
+
+/** 普通的对象（不是 null、不是数组） */
+export function isFields(value: unknown): value is Fields {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isText(value: unknown): value is string {
+/** 非空的字符串 */
+export function isText(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0
 }
 
 /** 不小于 min 的安全整数（序号、代次、版本、字节数、毫秒时刻） */
-function isWhole(value: unknown, min: number): value is number {
+export function isWhole(value: unknown, min: number): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= min
 }
 
@@ -117,7 +121,7 @@ function isCompactBytes(value: unknown): value is Uint8Array<ArrayBuffer> {
   return Object.prototype.toString.call(bytes.buffer) === '[object ArrayBuffer]' && bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
 }
 
-function readContentFormat(value: unknown): ContentFormat | undefined {
+export function readContentFormat(value: unknown): ContentFormat | undefined {
   if (!isFields(value))
     return undefined
   const { clientBuild, univerVersion, profile, formatVersion } = value
@@ -127,7 +131,7 @@ function readContentFormat(value: unknown): ContentFormat | undefined {
 }
 
 /** 在途的保存：null（不在途）照样交回 null；形状不对时为 undefined */
-function readInFlight(value: unknown): InFlightSave | null | undefined {
+export function readInFlight(value: unknown): InFlightSave | null | undefined {
   if (value === null)
     return null
   if (!isFields(value))
@@ -139,30 +143,40 @@ function readInFlight(value: unknown): InFlightSave | null | undefined {
 }
 
 /**
+ * 本页这个格式版本的草稿元数据：逐项核对，交回只带已知字段的一份；格式版本不是本页的、形状不对时为 undefined。
+ * 库里读出的草稿（readStoredDraft）与发件箱 Worker 交回的元数据都经过这里
+ */
+export function readDraftMeta(value: unknown): DraftMeta | undefined {
+  if (!isFields(value))
+    return undefined
+  const { recordVersion, userId, documentId, draftSeq, baseRevision, writeEpoch, writerId, writtenBy, formulasPending, keyVersion, rawBytes, updatedAt } = value
+  if (recordVersion !== DRAFT_RECORD_VERSION)
+    return undefined
+  const format = readContentFormat(value.format)
+  const inFlight = readInFlight(value.inFlight)
+  if (!isText(userId) || !isText(documentId) || !isWhole(draftSeq, 1) || !isWhole(baseRevision, 1) || !isWhole(writeEpoch, 1) || !isText(writerId) || !isText(writtenBy))
+    return undefined
+  if (format === undefined || typeof formulasPending !== 'boolean' || !isWhole(keyVersion, 1) || inFlight === undefined || !isWhole(rawBytes, 0) || !isWhole(updatedAt, 0))
+    return undefined
+  return { userId, documentId, recordVersion, draftSeq, baseRevision, writeEpoch, writerId, writtenBy, format, formulasPending, keyVersion, inFlight, rawBytes, updatedAt }
+}
+
+/**
  * 库里读出的一条草稿：先看记录的格式版本——比本页认识的新就不往下看（更新的页面可能改了别的字段）；是本页的版本才逐项核对，
  * 交回只带已知字段的一份（多出来的字段不带出去，也就不会被当成元数据用）
  */
 export function readStoredDraft(value: unknown): ReadDraft {
   if (!isFields(value))
     return { kind: 'malformed' }
-  const { recordVersion } = value
+  const { recordVersion, iv, ciphertext } = value
   if (isWhole(recordVersion, DRAFT_RECORD_VERSION + 1))
     return { kind: 'newer-format', recordVersion }
-  if (recordVersion !== DRAFT_RECORD_VERSION)
-    return { kind: 'malformed' }
-  const { userId, documentId, draftSeq, baseRevision, writeEpoch, writerId, writtenBy, formulasPending, keyVersion, rawBytes, updatedAt, iv, ciphertext } = value
-  const format = readContentFormat(value.format)
-  const inFlight = readInFlight(value.inFlight)
-  if (!isText(userId) || !isText(documentId) || !isWhole(draftSeq, 1) || !isWhole(baseRevision, 1) || !isWhole(writeEpoch, 1) || !isText(writerId) || !isText(writtenBy))
-    return { kind: 'malformed' }
-  if (format === undefined || typeof formulasPending !== 'boolean' || !isWhole(keyVersion, 1) || inFlight === undefined || !isWhole(rawBytes, 0) || !isWhole(updatedAt, 0))
+  const meta = readDraftMeta(value)
+  if (meta === undefined)
     return { kind: 'malformed' }
   if (!isCompactBytes(iv) || iv.byteLength !== DRAFT_IV_BYTES || !isCompactBytes(ciphertext) || ciphertext.byteLength < DRAFT_TAG_BYTES)
     return { kind: 'malformed' }
-  return {
-    kind: 'draft',
-    draft: { userId, documentId, recordVersion, draftSeq, baseRevision, writeEpoch, writerId, writtenBy, format, formulasPending, keyVersion, inFlight, rawBytes, updatedAt, iv, ciphertext },
-  }
+  return { kind: 'draft', draft: { ...meta, iv, ciphertext } }
 }
 
 /**
