@@ -51,7 +51,10 @@ export const WORKER_SEGMENT_P95_MS = 300
 /** 计划书 §12.2：1 MiB 的捕获在主线程上的同步段 p95 */
 export const CAPTURE_SYNC_P95_MS = 100
 
-/** Worker 放置时异步段主线程的最长阻塞（每一次的最长阻塞取中位数）：设计 §3.6 第 10 项"约 10 ms 以内" */
+/**
+ * Worker 放置时异步段主线程的最长阻塞（每一次的最长阻塞取中位数）：设计 §3.6 第 10 项"约 10 ms 以内"。约 1 MiB 与约 5 MiB 两档都按它判
+ * （5 MiB 只记录的是同步段；复核 B12）
+ */
 export const WORKER_ASYNC_LAG_MS = 10
 
 /** WebKit 改在主线程放置的前提：主线程 gzip 的最长阻塞（p95）不超过这么多（M4 总设计 §6.1） */

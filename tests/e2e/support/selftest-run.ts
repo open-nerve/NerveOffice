@@ -21,6 +21,9 @@ export function selftestCollector(): string {
 /** 自检要等编辑器到 steady（渲染完成后 3 秒）再逐项检查，场景的总时限 180 秒：给足时限，失败时看附件里的页面 */
 export const REPORT_TIMEOUT_MS = 200_000
 
+/** 收集端收到结果之后，页面跳到收集端那一页最多等多久 */
+const LEAVE_TIMEOUT_MS = 30_000
+
 /** 打开入口页，交回的结果由这里拦下：返回已经交回的地址（解开用 reportOf）。页面装了路由，HTTP 缓存随之关掉：只用在不量时间的校准里 */
 export async function startSelftest(page: Page, step: SelftestStep): Promise<string[]> {
   const delivered: string[] = []
@@ -54,5 +57,9 @@ export async function runSelftestStep(page: Page, step: SelftestStep, collector:
   // 打开失败时这里先抛出，等不到交回的那个失败不再有人接：先接住，免得成了没处理的拒绝（下面照样 await 它）
   void delivered.catch(() => undefined)
   await page.goto(selftestPageUrl(e2eOrigin(), step, next))
-  return decodeDelivered(await delivered)
+  const url = await delivered
+  // 收集端收到请求时页面还在编辑器页上（跳转刚发出、还没提交）：等它真的到了收集端的那一页再交回，下一步的打开不会打断这次跳转、
+  // 在编辑器页上触发离开的提示（第一版没等，Chromium 系第二步打开时 net::ERR_ABORTED、对话框的协议错误）
+  await page.waitForURL(current => current.origin === collector.origin, { timeout: LEAVE_TIMEOUT_MS })
+  return decodeDelivered(url)
 }
