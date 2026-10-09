@@ -1,5 +1,6 @@
 // 集成测试的数据库（规范 §8.1）：每个测试文件使用独立的数据库，不 mock 数据库。
 // 已迁移的库从模板库复制：模板按迁移的哈希命名，迁移不变时跨运行复用，第一次需要时在 advisory lock 下创建。
+// 别的迁移（别的检出、别的分支）的模板只删没人在用的，不用 FORCE：两个迁移不同的检出同时跑集成测试时各用各的模板（M4-P1 S7）。
 // 删库之前扫一遍只由服务保证的数据不变量（invariants.ts，M2-P6 复核 B 的 B5）：违反了就让这个测试文件失败。
 import { createHash, randomBytes } from 'node:crypto'
 import process from 'node:process'
@@ -83,21 +84,68 @@ async function dropAbandoned(client: pg.Client): Promise<void> {
     await client.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(rolname)}`)
 }
 
-/** 确保当前迁移的模板存在：先用临时名创建并迁移，完成后再改名，半成品永远不会被复用；顺带删除旧模板。 */
+/** 别的迁移（别的检出、别的分支）的模板与它们没建完的半成品：当前的模板与当前的半成品除外 */
+export function otherTemplates(names: readonly string[], current: string): string[] {
+  return names.filter(name => name !== current && name !== `${current}_building`)
+}
+
+/** PostgreSQL 的 SQLSTATE：55006 库正被别的连接使用；55P03 等锁超时（正以它为模板复制，CREATE DATABASE 持有它的锁） */
+const OBJECT_IN_USE = '55006'
+const LOCK_NOT_AVAILABLE = '55P03'
+
+/** 删不掉是因为有人在用：跳过，留给下一次；别的错误照常抛出 */
+export function isInUse(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code
+  return code === OBJECT_IN_USE || code === LOCK_NOT_AVAILABLE
+}
+
+/** 删模板时等锁的时限：正以它为模板复制时，DROP 要等复制完；不等，留给下一次 */
+const TEMPLATE_DROP_LOCK_TIMEOUT = '1s'
+
+/** 执行语句的连接（单元测试换成假的，记下发出的语句） */
+export interface Queryable {
+  readonly query: (text: string, values?: unknown[]) => Promise<{ readonly rowCount: number | null }>
+}
+
+/**
+ * 删掉一个别的迁移的模板，只在没人在用时：有连到它的会话（pg_stat_activity）就跳过——不发 DROP：不用 FORCE 的 DROP 遇到连接时
+ * 要在 advisory lock 下等 5 秒才报错，挡住所有测试文件；没有连接时不用 FORCE 地删，删的那一刻有人连上（55006）或正以它为模板复制
+ * （等锁超时，55P03）同样跳过
+ */
+export async function dropUnusedTemplate(client: Queryable, name: string): Promise<void> {
+  const connected = await client.query('SELECT 1 FROM pg_stat_activity WHERE datname = $1 LIMIT 1', [name])
+  if (connected.rowCount !== 0)
+    return
+  await client.query(`SET lock_timeout = '${TEMPLATE_DROP_LOCK_TIMEOUT}'`)
+  try {
+    await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)}`)
+  }
+  catch (error) {
+    if (!isInUse(error))
+      throw error
+  }
+  finally {
+    await client.query('RESET lock_timeout')
+  }
+}
+
+/**
+ * 确保当前迁移的模板存在：先用临时名创建并迁移，完成后再改名，半成品永远不会被复用。当前迁移的半成品只可能是中断的运行留下的
+ * （建模板在 advisory lock 下进行），直接删；别的迁移的模板只删没人在用的（dropUnusedTemplate）
+ */
 async function ensureTemplate(client: pg.Client): Promise<string> {
   const template = templateName()
   const existing = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [TEMPLATE_PREFIX])
-  if (!existing.rows.some(row => row.datname === template)) {
+  const names = existing.rows.map(row => row.datname)
+  if (!names.includes(template)) {
     const building = `${template}_building`
     await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(building)} WITH (FORCE)`)
     await client.query(`CREATE DATABASE ${pg.escapeIdentifier(building)}`)
     await runMigrations({ connectionString: databaseUrl(building), lockTimeoutMs: 30_000 })
     await client.query(`ALTER DATABASE ${pg.escapeIdentifier(building)} RENAME TO ${pg.escapeIdentifier(template)}`)
   }
-  for (const { datname } of existing.rows) {
-    if (datname !== template)
-      await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(datname)} WITH (FORCE)`)
-  }
+  for (const name of otherTemplates(names, template))
+    await dropUnusedTemplate(client, name)
   return template
 }
 
