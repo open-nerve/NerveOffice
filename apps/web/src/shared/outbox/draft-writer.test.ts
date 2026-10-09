@@ -345,6 +345,16 @@ describe('标记在途（§3.4.4）：先落盘再发请求；按新的 AAD 与�
     expect((await stored(fake, key)).meta.inFlight).toBeNull()
   })
 
+  it('手里没有、库里是别的写入者的：不解开就知道不是本页的（不需要密钥），fenced（changed）；确认同样不准备重封', async () => {
+    const { fake, key } = await setup({ register: false })
+    await putForeignDraft(fake, key, 'theirs', { draftSeq: 9 })
+    fake.putRaw('writers', KEY, { ...KEY, ...ME, lastDraftSeq: 9, registeredAt: NOW })
+    const keyless = createDraftWriter({ store: fake.store, now: () => NOW })
+    expect(await keyless.markInFlight(KEY, ME, inFlight(1))).toEqual({ kind: 'fenced', reason: 'changed' })
+    expect(await keyless.confirm(KEY, ME, 1, 13)).toEqual({ kind: 'fenced', reason: 'foreign-draft' })
+    expect((await stored(fake, key)).text).toBe('theirs')
+  })
+
   it('库里那一份是本页写下的、却用当前的密钥解不开：failed，不动它', async () => {
     const { fake, writer, key } = await setup()
     await writer.write(capture(1, 'content'))
