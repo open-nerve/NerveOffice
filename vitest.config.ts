@@ -15,8 +15,8 @@ export default defineConfig({
           environment: 'node',
           // api 的装饰器元数据由 Oxc 按 apps/api/tsconfig.json 输出（ADR-004）
           // tests/e2e/support 里的纯函数（例如页面错误里哪些是浏览器的通知）与真实 Safari 自检的驱动脚本（tests/e2e/safari）里的纯函数
-          // 也在这里测，不用起浏览器
-          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts', 'apps/*/build/**/*.test.ts', 'apps/api/src/**/*.test.ts', 'tests/e2e/support/**/*.test.ts', 'tests/e2e/safari/**/*.test.ts'],
+          // 也在这里测，不用起浏览器；E2E 与集成测试共用的测试辅助（tests/shared，例如测试库的命名）同样
+          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts', 'apps/*/build/**/*.test.ts', 'apps/api/src/**/*.test.ts', 'tests/e2e/support/**/*.test.ts', 'tests/e2e/safari/**/*.test.ts', 'tests/shared/**/*.test.ts'],
         },
       },
       {

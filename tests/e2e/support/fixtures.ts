@@ -67,6 +67,31 @@ async function watchCspViolations(context: BrowserContext, report: (violation: C
   await context.addInitScript(listenForViolations, REPORT_BINDING)
 }
 
+/**
+ * 一个用例的 CSP 违规的收集：cspViolations 交给用例（watch 挂上各个浏览器上下文），check 在用例结束时断言一条也没有（声明了预期的除外）。
+ * cspViolations 夹具与崩溃用例的夹具（support/browser-crash.ts：持久上下文不经这里的 context）共用
+ */
+export function cspViolationCollector(): { readonly cspViolations: CspViolations, readonly check: () => void } {
+  const violations: CspViolation[] = []
+  let expected = false
+  const report = (violation: CspViolation) => {
+    violations.push(violation)
+  }
+  return {
+    cspViolations: {
+      list: () => [...violations],
+      expectViolations: () => {
+        expected = true
+      },
+      watch: async other => watchCspViolations(other, report),
+    },
+    check: () => {
+      if (!expected)
+        expect(violations, '页面里出现了 CSP 违规').toEqual([])
+    },
+  }
+}
+
 export interface PageErrors {
   /** 到目前为止收到的页面错误（"名称: 说明"），浏览器的通知除外 */
   readonly list: () => readonly string[]
@@ -78,8 +103,46 @@ export interface PageErrors {
   readonly watch: (context: BrowserContext) => void
 }
 
-/** 这个浏览器上下文里每个文档加载之前写好"打开时定时的自动保存是否暂停"（support/autosave.ts） */
-async function chooseAutosave(context: BrowserContext, mode: AutosaveMode): Promise<void> {
+/**
+ * 一个用例的页面错误的收集：pageErrors 交给用例（watch 挂上各个浏览器上下文），check 在用例结束时断言一条也没有（声明了预期的除外）。
+ * pageErrors 夹具与崩溃用例的夹具（support/browser-crash.ts）共用
+ */
+export function pageErrorCollector(): { readonly pageErrors: PageErrors, readonly check: () => void } {
+  const errors: string[] = []
+  const notices: string[] = []
+  let expected = false
+  const report = (error: string) => {
+    errors.push(error)
+  }
+  const ignore = (notice: string) => {
+    notices.push(notice)
+  }
+  return {
+    pageErrors: {
+      list: () => [...errors],
+      ignored: () => [...notices],
+      expectErrors: () => {
+        expected = true
+      },
+      watch: other => watchPageErrors(other, report, ignore),
+    },
+    check: () => {
+      if (!expected)
+        expect(errors, '页面里出现了没接住的异常（pageerror）').toEqual([])
+    },
+  }
+}
+
+/**
+ * 打开时定时的自动保存默认暂停（held）；E2E_AUTOSAVE=running 让默认也照常：本机按生产镜像里的样子（自动保存照常运行）跑容器 E2E 会跑的那些用例
+ * （--grep-invert @test-build），三个浏览器都能核对它们与自动保存相容
+ */
+export function defaultAutosaveMode(): AutosaveMode {
+  return process.env.E2E_AUTOSAVE === 'running' ? 'running' : 'held'
+}
+
+/** 这个浏览器上下文里每个文档加载之前写好"打开时定时的自动保存是否暂停"（support/autosave.ts）；崩溃用例的持久上下文同样用它 */
+export async function chooseAutosave(context: BrowserContext, mode: AutosaveMode): Promise<void> {
   await context.addInitScript(applyAutosaveMode, autosaveModeScript(mode))
 }
 
@@ -90,11 +153,8 @@ async function chooseAutosave(context: BrowserContext, mode: AutosaveMode): Prom
 export type NewDevice = () => Promise<Page>
 
 export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page, newDevice: NewDevice, autosave: AutosaveMode, autosaveMode: void }>({
-  /**
-   * 打开时定时的自动保存暂停（held，默认）还是照常（running）。E2E_AUTOSAVE=running 让默认也照常：本机按生产镜像里的样子
-   * （自动保存照常运行）跑容器 E2E 会跑的那些用例（--grep-invert @test-build），三个浏览器都能核对它们与自动保存相容
-   */
-  autosave: [process.env.E2E_AUTOSAVE === 'running' ? 'running' : 'held', { option: true }],
+  /** 打开时定时的自动保存暂停（held，默认）还是照常（running），见 defaultAutosaveMode */
+  autosave: [defaultAutosaveMode(), { option: true }],
   autosaveMode: [async ({ context, autosave }, use) => {
     await chooseAutosave(context, autosave)
     await use()
@@ -124,43 +184,16 @@ export const test = base.extend<{ cspViolations: CspViolations, pageErrors: Page
       await context.close()
   },
   pageErrors: [async ({ context }, use) => {
-    const errors: string[] = []
-    const notices: string[] = []
-    let expected = false
-    const report = (error: string) => {
-      errors.push(error)
-    }
-    const ignore = (notice: string) => {
-      notices.push(notice)
-    }
-    watchPageErrors(context, report, ignore)
-    await use({
-      list: () => [...errors],
-      ignored: () => [...notices],
-      expectErrors: () => {
-        expected = true
-      },
-      watch: other => watchPageErrors(other, report, ignore),
-    })
-    if (!expected)
-      expect(errors, '页面里出现了没接住的异常（pageerror）').toEqual([])
+    const collector = pageErrorCollector()
+    collector.pageErrors.watch(context)
+    await use(collector.pageErrors)
+    collector.check()
   }, { auto: true }],
   cspViolations: [async ({ context }, use) => {
-    const violations: CspViolation[] = []
-    let expected = false
-    const report = (violation: CspViolation) => {
-      violations.push(violation)
-    }
-    await watchCspViolations(context, report)
-    await use({
-      list: () => [...violations],
-      expectViolations: () => {
-        expected = true
-      },
-      watch: async other => watchCspViolations(other, report),
-    })
-    if (!expected)
-      expect(violations, '页面里出现了 CSP 违规').toEqual([])
+    const collector = cspViolationCollector()
+    await collector.cspViolations.watch(context)
+    await use(collector.cspViolations)
+    collector.check()
   }, { auto: true }],
 })
 

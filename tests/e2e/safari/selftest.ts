@@ -64,7 +64,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { decodeSelftestReport, isProbeScenario, RUNS_MAX, runsOfValue } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { revisionOf } from '../support/database.ts'
-import { databaseUrl, E2E_DATABASE_PREFIX, pickFreePort } from '../support/environment.ts'
+import { databaseUrl, e2eDatabaseName, pickFreePort } from '../support/environment.ts'
 import { probeVerdicts, verdictLines } from '../support/probe-verdicts.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../support/selftest-handover.ts'
 import { SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
@@ -590,7 +590,7 @@ async function main(): Promise<number> {
   const macos = macosVersion()
   const port = await pickFreePort()
   const origin = `http://127.0.0.1:${port}`
-  const database = databaseUrl(`${E2E_DATABASE_PREFIX}${process.pid}`)
+  const database = databaseUrl(e2eDatabaseName(process.pid))
   // 写库的辅助（support/database.ts）从环境变量取本次运行的库
   process.env.E2E_DATABASE_URL = database
   say(`Safari ${safari}（macOS ${macos}），起后端 ${origin}`)
