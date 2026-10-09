@@ -7,7 +7,8 @@
 import type { OutboxUnavailableReason } from '../../../shared/outbox/database.ts'
 import type { DraftKey, Fields, InFlightSave } from '../../../shared/outbox/draft-record.ts'
 import type { FenceReason } from '../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, FailureDescription, KeyChange, OpenedRecord, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, OpenedRecord, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
 import { isFields, isText, isWhole, readContentFormat, readDraftMeta, readInFlight } from '../../../shared/outbox/draft-record.ts'
 

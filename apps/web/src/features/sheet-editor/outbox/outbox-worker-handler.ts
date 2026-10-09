@@ -10,7 +10,8 @@ import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { DraftStore } from '../../../shared/outbox/draft-store.ts'
 import type { KeyChange } from '../../../shared/outbox/draft-writer.ts'
 import type { KeyTransfer, OutboxMessage, OutboxReply, OutboxRequest } from './outbox-protocol.ts'
-import { createDraftWriter, describeFailure } from '../../../shared/outbox/draft-writer.ts'
+import { createDraftWriter } from '../../../shared/outbox/draft-writer.ts'
+import { describeFailure } from '../../../shared/outbox/failure.ts'
 import { OUTBOX_PROTOCOL_VERSION, readOutboxRequest } from './outbox-protocol.ts'
 
 export interface OutboxWorkerHandlerOptions {

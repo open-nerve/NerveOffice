@@ -15,7 +15,8 @@ import type { OutboxWorkerFailure, OutboxWorkerReady, WorkerLike } from '../outb
 import { gunzipBytes, openDraft, sha256Hex } from '../../../../shared/outbox/draft-codec.ts'
 import { draftMetaOf } from '../../../../shared/outbox/draft-record.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
-import { createDraftWriter, describeFailure } from '../../../../shared/outbox/draft-writer.ts'
+import { createDraftWriter } from '../../../../shared/outbox/draft-writer.ts'
+import { describeFailure } from '../../../../shared/outbox/failure.ts'
 import { createOutboxWorker, createOutboxWorkerClient } from '../outbox-worker-client.ts'
 
 export type ProbeHost = 'in-process' | 'worker'

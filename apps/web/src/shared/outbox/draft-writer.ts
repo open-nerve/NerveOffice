@@ -13,16 +13,12 @@ import type { OutboxUnavailable } from './database.ts'
 import type { LocalKeyHandle } from './draft-codec.ts'
 import type { ContentFormat, DraftKey, DraftMeta, InFlightSave, ReadDraft, StoredDraft } from './draft-record.ts'
 import type { DraftStore, FenceReason, StoreProblem } from './draft-store.ts'
+import type { FailureDescription } from './failure.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { gzipBytes, openDraft, sealDraft, sha256Hex } from './draft-codec.ts'
 import { DRAFT_RECORD_VERSION, draftMetaOf } from './draft-record.ts'
+import { describeFailure } from './failure.ts'
 import { isSameWriter } from './writer-fence.ts'
-
-/** 未知的错误：只带名字与消息（跨 Worker 时结构化克隆得了；不带堆栈，也就不会带出内容） */
-export interface FailureDescription {
-  readonly name: string
-  readonly message: string
-}
 
 /** 存储与管道这一侧的问题：写满（整个事务回滚，原记录不变）、库用不了（调用方退化为内存实现）、未知的错误 */
 export type WriterProblem
@@ -140,13 +136,6 @@ export interface DraftWriterOptions {
 const CONFIRM_ATTEMPTS = 3
 
 const CLOSED: FailureDescription = { name: 'InvalidStateError', message: '写入管道已关闭' }
-
-/** 未知的错误折成名字与消息：Error 与 DOMException 照原样（按形状认，不用 instanceof：别的 realm 的错误），别的东西转成文字 */
-export function describeFailure(error: unknown): FailureDescription {
-  if (typeof error === 'object' && error !== null && 'name' in error && 'message' in error && typeof error.name === 'string' && typeof error.message === 'string')
-    return { name: error.name, message: error.message }
-  return { name: 'Error', message: String(error) }
-}
 
 /** 存储的问题折成管道的：只带约定的字段（跨 Worker 时结构化克隆的就是这一份），错误折成名字与消息 */
 function problemOf(problem: StoreProblem): WriterProblem {

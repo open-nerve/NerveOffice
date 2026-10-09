@@ -6,7 +6,7 @@ import type { DraftKey, StoredDraft } from './draft-record.ts'
 import type { DraftStore, ListedDraft, PurgedDraft, StoreProblem } from './draft-store.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideWrite, isSameWriter, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
+import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isSameWriter, restoredWriterOf, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
 
 export type StoreOperation = Exclude<keyof DraftStore, 'close'>
 
@@ -202,6 +202,27 @@ export function fakeDraftStore(): FakeDraftStore {
           writers.delete(id)
       }
       return { kind: 'purged', drafts: purged }
+    },
+    async restoreDraft(draft, { now }) {
+      const problem = await begin('restoreDraft') ?? unwritable(draft)
+      if (problem !== undefined)
+        return problem
+      const id = idOf(draft)
+      const current = writerOf(id)
+      const verdict = decideRestore(current, existingOf(id), draft, now)
+      if (verdict.kind === 'skip')
+        return { kind: 'kept', reason: verdict.reason }
+      drafts.set(id, structuredClone(draft))
+      const restoredWriter = restoredWriterOf(current, draft, verdict.writer, now)
+      if (restoredWriter !== undefined)
+        writers.set(id, structuredClone(restoredWriter))
+      return { kind: 'restored' }
+    },
+    async readWriter(key) {
+      const problem = await begin('readWriter')
+      if (problem !== undefined)
+        return problem
+      return { kind: 'writer', writer: writerOf(idOf(key)) }
     },
     close() {
       closeCount += 1
