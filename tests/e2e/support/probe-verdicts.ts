@@ -194,7 +194,8 @@ function durability(reports: readonly ProbeReport[]): ItemVerdict {
     status: 'record',
     lines: [
       `durability ${facts['durability.supported'] === true ? '在' : '不在'} IDBTransaction 上；请求 strict 时事务的 durability 属性是 ${text(facts['durability.strict-attribute'])}，请求 default 时是 ${text(facts['durability.default-attribute'])}`,
-      `${text(facts['durability.bytes'])} 字节交替各写 ${plain?.n ?? 0} 次（磁盘上）：default ${spread(plain)}；strict ${spread(strict)}；strict 比 default 多 ${ms(overhead)}（中位数）`,
+      // 落不落盘看这次的上下文：真实 Safari 的普通窗口与持久上下文在磁盘上，Playwright 默认的上下文在内存里（设计 §1 偏差 7），由报告写明
+      `${text(facts['durability.bytes'])} 字节交替各写 ${plain?.n ?? 0} 次：default ${spread(plain)}；strict ${spread(strict)}；strict 比 default 多 ${ms(overhead)}（中位数）`,
     ],
     missing: [],
   }
