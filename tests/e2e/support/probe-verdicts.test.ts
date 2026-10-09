@@ -3,7 +3,7 @@ import type { SelftestFact, SelftestReport, SelftestTiming } from '../../../apps
 import type { ProbeReport } from './probe-verdicts.ts'
 import { describe, expect, it } from 'vitest'
 import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import { probeVerdicts, stallGroups, verdictLines } from './probe-verdicts.ts'
+import { cacheStateOf, coldWarmLines, firstRoundExcess, probeVerdicts, stallGroups, verdictLines } from './probe-verdicts.ts'
 
 function report(scenario: string, facts: Record<string, SelftestFact>, timings: SelftestTiming[] = []): SelftestReport {
   return {
@@ -283,11 +283,46 @@ describe('第 12 项：首屏与公式冻结（perf-baseline，只作对照）',
   ]
   const facts = { 'perf.ready': 1850, 'perf.steady': 4900, 'perf.formula-mode': 'worker', 'perf.formulas': 1000, 'perf.script-entries': 30, 'perf.script-transfer-bytes': 3_000_000, 'perf.script-decoded-bytes': 9_000_000 }
 
-  it('每一步一行：冷热、公式模式、首屏、增量与全量的收齐与界面冻结', () => {
-    const result = verdict([probe('perf-worker', 'perf-baseline', facts, timings, true), probe('perf-main', 'perf-baseline', { ...facts, 'perf.formula-mode': 'main-thread', 'perf.script-transfer-bytes': 0 }, timings)], 12)
+  it('每一步一行：冷热、公式模式、首屏、增量与全量的收齐与界面冻结，第一次增量与其后的中位数', () => {
+    const result = verdict([probe('perf-worker', 'perf-baseline', { ...facts, 'perf.first-edit-after-steady': 2100 }, timings, true), probe('perf-main', 'perf-baseline', { ...facts, 'perf.formula-mode': 'main-thread', 'perf.script-transfer-bytes': 0 }, timings)], 12)
     expect(result.status).toBe('record')
-    expect(result.lines[0]).toBe('perf-worker（冷，公式在 Worker）：首屏到渲染完成 1850 ms、到 steady 4900 ms；脚本经网络 3000000 字节；增量 ×2 收齐 p50 300 ms、最长 320 ms，主线程最长阻塞 14 ms、最长帧间隔 21 ms；全量 ×1 收齐 p50 900 ms、最长 900 ms，主线程最长阻塞 15 ms、最长帧间隔 25 ms')
+    expect(result.lines[0]).toBe('perf-worker（冷，公式在 Worker）：首屏到渲染完成 1850 ms、到 steady 4900 ms；脚本经网络 3000000 字节；增量 ×2 收齐 p50 300 ms、最长 320 ms，主线程最长阻塞 14 ms、最长帧间隔 21 ms；第一次 300 ms、其后的中位数 320 ms（第一次改格子在 steady 之后 2100 ms）；全量 ×1 收齐 p50 900 ms、最长 900 ms，主线程最长阻塞 15 ms、最长帧间隔 25 ms')
     expect(result.lines[1]).toContain('perf-main（热，公式在主线程）')
+    expect(result.lines[1], '没记下第一次改格子离 steady 多久').toContain('（第一次改格子在 steady 之后 —）')
+  })
+
+  it('冷热按脚本经网络多少认、不按先后（复核 B5：Playwright 装了路由就不进缓存）：标成热却整个重传了写明按冷算，标成冷却命中了缓存写明按热算', () => {
+    const warmByOrder = probe('perf-worker-warm', 'perf-baseline', { ...facts, 'perf.script-transfer-bytes': 14_093_760 }, timings)
+    const hit = probe('perf-worker-warm', 'perf-baseline', { ...facts, 'perf.script-transfer-bytes': 3_300 }, timings)
+    const coldButCached = probe('perf-worker', 'perf-baseline', { ...facts, 'perf.script-transfer-bytes': 3_300 }, timings, true)
+    expect([warmByOrder, hit, coldButCached].map(cacheStateOf)).toEqual(['cold', 'warm', 'warm'])
+    expect(cacheStateOf(probe('perf-worker', 'perf-baseline', { 'perf.formula-mode': 'worker' }, timings, true)), '没记下脚本经网络多少').toBe('unknown')
+    const lines = verdict([warmByOrder, hit, coldButCached], 12).lines
+    expect(lines[0]).toContain('perf-worker-warm（标成热、缓存没命中，按冷算，公式在 Worker）')
+    expect(lines[1]).toContain('perf-worker-warm（热，公式在 Worker）')
+    expect(lines[2]).toContain('perf-worker（标成冷、脚本却命中了缓存，按热算，公式在 Worker）')
+  })
+
+  it('第一次增量比其后几次的中位数多出多少（按次序号，不按交回的先后）；只有一次时其后的没有', () => {
+    const rounds = [5, 1, 3, 2, 4].map(index => ({ id: `perf.incremental#${index}`, ms: { settle: index === 1 ? 1615 : 600 + index, lagMax: 10, frameMax: 19, frames: 40 } }))
+    expect(firstRoundExcess(probe('perf-worker', 'perf-baseline', facts, rounds, true))).toEqual({ first: 1615, rest: 603, excess: 1012 })
+    expect(firstRoundExcess(probe('perf-worker', 'perf-baseline', facts, [{ id: 'perf.incremental#1', ms: { settle: 700 } }], true))).toEqual({ first: 700, rest: undefined, excess: undefined })
+  })
+
+  it('冷热对照：按公式模式与实际的冷热分组，列出每一次的第一次增量、多出多少与第一次改格子离 steady 多久', () => {
+    const round = (first: number): SelftestTiming[] => [1, 2, 3].map(index => ({ id: `perf.incremental#${index}`, ms: { settle: index === 1 ? first : 750 } }))
+    const entries = [
+      probe('perf-1-cold', 'perf-baseline', { ...facts, 'perf.script-transfer-bytes': 14_093_760, 'perf.first-edit-after-steady': 2100 }, round(1761), true),
+      probe('perf-1-warm-a', 'perf-baseline', { ...facts, 'perf.script-transfer-bytes': 3_300, 'perf.first-edit-after-steady': 2050 }, round(760)),
+      probe('perf-1-warm-b', 'perf-baseline', { ...facts, 'perf.script-transfer-bytes': 3_300, 'perf.first-edit-after-steady': 2080 }, round(745)),
+      probe('perf-main', 'perf-baseline', { ...facts, 'perf.formula-mode': 'main-thread', 'perf.script-transfer-bytes': 3_300 }, round(740)),
+    ]
+    expect(coldWarmLines(entries)).toEqual([
+      '冷热对照，公式在 Worker、冷（脚本没命中缓存）×1：第一次增量 1761 ms，比其后的中位数多出 1011 ms；第一次改格子在 steady 之后 2100 ms',
+      '冷热对照，公式在 Worker、热（脚本命中了缓存）×2：第一次增量 760、745 ms，比其后的中位数多出 10、-5 ms；第一次改格子在 steady 之后 2050、2080 ms',
+      '冷热对照，公式在主线程、热（脚本命中了缓存）×1：第一次增量 740 ms，比其后的中位数多出 -10 ms；第一次改格子在 steady 之后 — ms',
+    ])
+    expect(verdict(entries, 12).lines.slice(-3), '第 12 项的说明后面附上冷热对照').toEqual(coldWarmLines(entries))
   })
 })
 
