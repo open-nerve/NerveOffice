@@ -1,8 +1,12 @@
-// 在 Playwright 的页面里跑一步页面自检、拦下交回的结果（M3-P2 设计 §3.5）：校准（specs/editor/selftest.spec.ts）与 M4-P1 S1 起的实测
-// （measure/probe.spec.ts：持久上下文里跑真实浏览器的复核）共用。结果的交回与驱动脚本相同（整页跳到 next，结果在查询参数里）：next 是本机的地址
-// （自检只把结果交给本机，M3-P2 复核 B7），用被测站点自己的源加一个没有的路径，这里拦下那次导航、读出结果，不会发到后端
-import type { Page, Route } from '@playwright/test'
+// 在 Playwright 的页面里跑一步页面自检、收下交回的结果（M3-P2 设计 §3.5）：校准（specs/editor/selftest.spec.ts）与 M4-P1 S1 起的实测
+// （measure/probe.spec.ts：持久上下文里跑真实浏览器的复核）共用。结果的交回与驱动脚本相同（整页跳到 next，结果在查询参数里），next 是本机的地址
+// （自检只把结果交给本机，M3-P2 复核 B7）。两种收法：
+// - 校准（startSelftest、reportOf）：用被测站点自己的源加一个没有的路径，page.route 拦下那次导航、读出结果，不会发到后端；
+// - 实测（runSelftestStep）：交给另起的本机收集端（./selftest-collector.ts），不碰页面的路由——Playwright 一路由页面就关掉 HTTP 缓存，
+//   热的那几步就成了冷的（M4-P1 复核 B5）
+import type { Page } from '@playwright/test'
 import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { ResultCollector } from './selftest-collector.ts'
 import type { SelftestStep } from './selftest-plan.ts'
 import { decodeSelftestReport, RESULT_PARAM } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { e2eOrigin } from './environment.ts'
@@ -17,7 +21,10 @@ export function selftestCollector(): string {
 /** 自检要等编辑器到 steady（渲染完成后 3 秒）再逐项检查，场景的总时限 180 秒：给足时限，失败时看附件里的页面 */
 export const REPORT_TIMEOUT_MS = 200_000
 
-/** 打开入口页，交回的结果由这里拦下：返回已经交回的地址（解开用 reportOf） */
+/** 收集端收到结果之后，页面跳到收集端那一页最多等多久 */
+const LEAVE_TIMEOUT_MS = 30_000
+
+/** 打开入口页，交回的结果由这里拦下：返回已经交回的地址（解开用 reportOf）。页面装了路由，HTTP 缓存随之关掉：只用在不量时间的校准里 */
 export async function startSelftest(page: Page, step: SelftestStep): Promise<string[]> {
   const delivered: string[] = []
   await page.route(`${selftestCollector()}/**`, async (route) => {
@@ -28,31 +35,31 @@ export async function startSelftest(page: Page, step: SelftestStep): Promise<str
   return delivered
 }
 
-/** 等结果交回，解开 */
-export async function reportOf(delivered: readonly string[], timeoutMs = REPORT_TIMEOUT_MS): Promise<SelftestReport> {
-  await expect.poll(() => delivered.length, { message: '等自检把结果交回', timeout: timeoutMs }).toBe(1)
-  const encoded = new URL(delivered[0] ?? '').searchParams.get(RESULT_PARAM)
+/** 交回的地址里的结果解开 */
+async function decodeDelivered(url: string): Promise<SelftestReport> {
+  const encoded = new URL(url).searchParams.get(RESULT_PARAM)
   expect(encoded, '交回的地址里有结果').not.toBeNull()
   return decodeSelftestReport(encoded ?? '')
 }
 
+/** 等结果交回，解开 */
+export async function reportOf(delivered: readonly string[], timeoutMs = REPORT_TIMEOUT_MS): Promise<SelftestReport> {
+  await expect.poll(() => delivered.length, { message: '等自检把结果交回', timeout: timeoutMs }).toBe(1)
+  return decodeDelivered(delivered[0] ?? '')
+}
+
 /**
- * 同一个页面里接连跑几步（M4-P1 的实测：持久上下文里一个页面跑完全部复核）：每一步装上拦截、等它交回、再撤掉——拦截不越积越多，
- * 上一步的结果不会被下一步收走
+ * 同一个页面里接连跑几步（M4-P1 的实测：持久上下文里一个页面跑完全部复核）：结果交给本机的收集端，页面不装路由，HTTP 缓存照常——
+ * 同一个资料目录里第二次打开编辑器页的那几步才是真的热（复核 B5）。每一步用收集端的一个新标记，上一步迟到的交回不会被这一步收走
  */
-export async function runSelftestStep(page: Page, step: SelftestStep, timeoutMs = REPORT_TIMEOUT_MS): Promise<SelftestReport> {
-  const delivered: string[] = []
-  const pattern = `${selftestCollector()}/**`
-  const handler = async (route: Route): Promise<void> => {
-    delivered.push(route.request().url())
-    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: '自检的结果已收到' })
-  }
-  await page.route(pattern, handler)
-  try {
-    await page.goto(selftestPageUrl(e2eOrigin(), step, `${selftestCollector()}/report?step=${step.id}`))
-    return await reportOf(delivered, timeoutMs)
-  }
-  finally {
-    await page.unroute(pattern, handler)
-  }
+export async function runSelftestStep(page: Page, step: SelftestStep, collector: ResultCollector, timeoutMs = REPORT_TIMEOUT_MS): Promise<SelftestReport> {
+  const { next, delivered } = collector.expect(timeoutMs)
+  // 打开失败时这里先抛出，等不到交回的那个失败不再有人接：先接住，免得成了没处理的拒绝（下面照样 await 它）
+  void delivered.catch(() => undefined)
+  await page.goto(selftestPageUrl(e2eOrigin(), step, next))
+  const url = await delivered
+  // 收集端收到请求时页面还在编辑器页上（跳转刚发出、还没提交）：等它真的到了收集端的那一页再交回，下一步的打开不会打断这次跳转、
+  // 在编辑器页上触发离开的提示（第一版没等，Chromium 系第二步打开时 net::ERR_ABORTED、对话框的协议错误）
+  await page.waitForURL(current => current.origin === collector.origin, { timeout: LEAVE_TIMEOUT_MS })
+  return decodeDelivered(url)
 }
