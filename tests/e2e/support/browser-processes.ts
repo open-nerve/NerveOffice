@@ -7,9 +7,10 @@
 //   Chromium 系的根是浏览器本身，WebKit 的根是启动脚本 pw_run.sh（bash，不 exec：macOS 起 Playwright.app，Linux 起 MiniBrowser）；
 // - 进程树（按 ppid 往下）∪ 进程组（pgid 等于根）∪ 命令行里提到资料目录的（例如守护进程化的 crashpad）；
 // - macOS 上的 WebKit：XPC 服务（WebContent、Networking、GPU）由 launchd 拉起（父进程是 1、各自一个进程组），不在树里。Networking 承载
-//   IndexedDB 与 Cookie，按它打开着资料目录里的文件认（调用方只对安装目录下的 XPC 跑 lsof；这里另外只认安装目录下的 XPC，Spotlight 一类
-//   打开着文件的系统进程不会被认进来）；WebContent 与 GPU 只能按安装目录与启动时刻（不早于启动之前 2 秒）认，前提是机器上只有这一个
-//   Playwright WebKit 实例（同一个安装目录的 UI 进程只有这次的）——有别的实例时记成问题、不按这条认，由调用方报错说明，不静默跳过。
+//   IndexedDB 与 Cookie，只按它打开着资料目录里的文件认（调用方只对安装目录下的 Networking 跑 lsof；这里另外只认安装目录下的 XPC，Spotlight
+//   一类打开着文件的系统进程不会被认进来）：认不出来就缺这个角色，调用方报错；WebContent 与 GPU 只能按安装目录与启动时刻（不早于启动之前 2 秒）
+//   认，前提是机器上只有这一个 Playwright WebKit 实例（同一个安装目录的 UI 进程只有这次的）——有别的实例时记成问题、不按这条认，由调用方报错
+//   说明，不静默跳过。
 // Linux（CI 是 ubuntu-24.04）上三个浏览器的进程都在根的进程树里（读 /proc，不依赖 ps 的列宽与区域设置）。
 import type { Cookie } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
@@ -289,7 +290,8 @@ export function identifyInstance(table: readonly ProcessRow[], spec: InstanceSpe
       return undefined
     if (profileHolders.has(row.pid))
       return 'profile-files'
-    return others.length === 0 && row.startedAt >= spec.launchedAt - XPC_START_SLACK_MS ? 'webkit-xpc' : undefined
+    // 承载存储的 Networking 只按它打开着的文件认（确实是这个资料目录的那一个）；按安装目录与启动时刻只认 WebContent、GPU 这些
+    return others.length === 0 && row.startedAt >= spec.launchedAt - XPC_START_SLACK_MS && webkitRole(row, spec) !== 'networking' ? 'webkit-xpc' : undefined
   }
   const found = new Map<number, ProcessVia>()
   for (const row of table) {

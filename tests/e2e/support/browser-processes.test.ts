@@ -294,6 +294,13 @@ describe('认出这次启动的全部进程（identifyInstance）', () => {
     ])
   })
 
+  it('Networking 只按打开着资料目录里的文件认：lsof 没看到它时不按启动时刻认，缺了网络进程这个角色（调用方报错）', () => {
+    const { processes, problems } = identifyInstance(webkitTable(), webkitSpec, new Set())
+    expect(problems).toEqual([])
+    expect(processes.map(p => p.pid)).not.toContain(6922)
+    expect(missingRoles(processes, webkitSpec)).toEqual(['networking'])
+  })
+
   it('打开着资料目录里文件的进程只认安装目录下的 XPC：Spotlight、系统的 WebKit 打开着也不碰', () => {
     const { processes } = identifyInstance(webkitTable(), webkitSpec, new Set([6922, 777, 10854]))
     expect(processes.map(p => p.pid)).not.toContain(777)
