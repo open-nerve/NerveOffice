@@ -113,6 +113,8 @@ export interface ProbePipeline {
   readonly corruptSlot: (key: DraftKey, slot: 0 | 1, corruption: ProbeCorruption) => Promise<void>
   /** 删掉这个用户的镜像目录（用例收尾：WebKit 在 macOS 上把 OPFS 放在共用的目录里）；先 disposeAll 放开句柄 */
   readonly removeMirror: (userId: string) => Promise<MirrorRemoveOutcome>
+  /** 删掉一份文档的镜像目录（P4 的保留期用的那一个，页面里调） */
+  readonly removeMirrorDocument: (key: DraftKey) => Promise<MirrorRemoveOutcome>
   /** 关掉这一页的全部管道（Worker 随之终止、句柄放开）与 OPFS 的探针 Worker */
   readonly disposeAll: () => void
 }
@@ -326,6 +328,7 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
       await opfs('truncate' in corruption ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate } : { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value })
     },
     removeMirror: async userId => opfsMirrorDirectory().removeUser(userId),
+    removeMirrorDocument: async key => opfsMirrorDirectory().removeDocument(key),
     disposeAll: () => {
       for (const pipeline of pipelines.values()) {
         pipeline.writer.dispose()

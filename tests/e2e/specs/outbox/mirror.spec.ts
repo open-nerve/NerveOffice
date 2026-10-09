@@ -225,6 +225,27 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
     expect(await probe(page, 'draftIds', key.userId)).toEqual([key.documentId, other.documentId].sort())
   })
 
+  test('删目录（P4 的保留期、按用户清理用，页面里调）：句柄开着时 busy；放开之后删掉这份文档的目录，别的文档不动；按用户删掉整个目录', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-remove')
+    const other = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const id = await workerPipeline(page)
+    for (const target of [key, other]) {
+      await probePipeline(page, 'register', id, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', id, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+    }
+    expect(await probePipeline(page, 'removeMirrorDocument', key), '发件箱 Worker 拿着句柄').toEqual({ kind: 'busy' })
+    await probePipeline(page, 'release', id, key)
+    expect(await probePipeline(page, 'removeMirrorDocument', key)).toEqual({ kind: 'removed' })
+    expect(await probePipeline(page, 'removeMirrorDocument', key), '已经不在').toEqual({ kind: 'removed' })
+    expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
+    expect(await probePipeline(page, 'reconcile', id, key.userId), '只剩另一份').toEqual({ kind: 'reconciled', documents: 1 })
+    expect(await probePipeline(page, 'removeMirror', key.userId), '另一份的句柄还开着').toEqual({ kind: 'busy' })
+    await probePipeline(page, 'release', id, other)
+    expect(await probePipeline(page, 'removeMirror', key.userId)).toEqual({ kind: 'removed' })
+    expect(await probePipeline(page, 'reconcile', id, key.userId)).toEqual({ kind: 'reconciled', documents: 0 })
+  })
+
   test('写满（Chromium 内核经 CDP 把配额设小）：IndexedDB 写成、镜像写满，结果带 quota；库里那一份完好、镜像里没有合格的半截', async ({ browserName, profile: { context, page } }, testInfo) => {
     // eslint-disable-next-line playwright/no-skipped-test -- WebKit 没有覆盖配额的接口（CDP 的 Storage.overrideQuotaForOrigin 只在 Chromium 内核里有），写满在 Playwright 的 WebKit 上造不出来
     test.skip(browserName === 'webkit', 'WebKit 没有覆盖配额的接口（CDP 只在 Chromium 内核里有）')

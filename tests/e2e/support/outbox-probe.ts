@@ -239,6 +239,7 @@ export interface ProbePipeline {
   readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
   readonly corruptSlot: (key: DraftKey, slot: 0 | 1, corruption: ProbeCorruption) => Promise<void>
   readonly removeMirror: (userId: string) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>
+  readonly removeMirrorDocument: (key: DraftKey) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>
   readonly disposeAll: () => void
 }
 
