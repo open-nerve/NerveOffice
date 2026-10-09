@@ -1,7 +1,8 @@
 // 写入中途结束整棵浏览器进程时的原子性（M4-P1 设计 §3.7、S7）接到生产代码：编辑器页测试构建里的崩溃用例探针
 // （apps/web/src/features/sheet-editor/outbox/testing/crash-probe.ts，地址带 crashProbe 时挂在 window.__nerveCrashProbe 上）。
-// 探针用生产的写入管道（进程内的放置：createDraftWriter 配 IndexedDB 的存储）写约 5 MiB 的内容，交给存储之前经这里挂上的绑定函数发
-// "写入之前"的信号；读回时经管道解开、解压，按序号逐字节比较，另读写入者的高水位。E2E 这边看不到 web 的类型，这里声明用到的部分（与探针的写法相同）。
+// 探针用生产的写入管道写约 5 MiB 的内容，两种放置：进程内（createDraftWriter 配 IndexedDB 的存储）与发件箱 Worker（生产的客户端配记下事务的
+// 测试 Worker）；交给存储之前（Worker 时：Worker 开写入的事务时）经这里挂上的绑定函数发"写入之前"的信号；读回时经管道解开、解压，按序号
+// 逐字节比较，另读写入者的高水位。E2E 这边看不到 web 的类型，这里声明用到的部分（与探针的写法相同）。
 // 打开的是一份不存在的文档：页面只确认会话、说明"内容不存在"，不建编辑器（同 support/outbox-probe.ts），所以要先登录；重开时走 Cookie 的
 // restore（同一次登录接着有效）。用到它的用例打上 @test-build：外部模式测生产镜像，里面没有探针
 import type { Page } from '@playwright/test'
@@ -16,8 +17,14 @@ export const CRASH_CONTENT_CHARS = 5 * 1024 * 1024
 const CRASH_PROBE_GLOBAL = '__nerveCrashProbe'
 const SIGNAL_BINDING = '__nerveCrashBeforePut'
 
+/** 写入管道放在哪（与探针的 CrashProbePlacement 相同） */
+export type CrashPlacement = 'in-process' | 'worker'
+
+export const CRASH_PLACEMENTS: readonly CrashPlacement[] = ['in-process', 'worker']
+
 /** 每次启动交给探针的（与探针的 CrashProbeSetup 相同） */
 export interface CrashSetup {
+  readonly placement: CrashPlacement
   readonly key: DraftKey
   readonly writer: WriterIdentity
   readonly localKey: { readonly version: number, readonly rawHex: string }
@@ -60,9 +67,10 @@ interface CrashProbe {
 
 type ProbeWindow = Record<string, CrashProbe | undefined>
 
-/** 一次运行用的（重开之后还是这一份）：这个用户的一份新文档、第 1 代的一个写入者、随机的一把本机密钥（测试进程记着原始字节，重开之后用同一把） */
-export function crashSetupFor(userId: string): CrashSetup {
+/** 一次运行用的（重开之后还是这一份）：这个放置、这个用户的一份新文档、第 1 代的一个写入者、随机的一把本机密钥（测试进程记着原始字节，重开之后用同一把） */
+export function crashSetupFor(userId: string, placement: CrashPlacement): CrashSetup {
   return {
+    placement,
     key: { userId, documentId: randomUUID() },
     writer: { writeEpoch: 1, writerId: randomUUID() },
     localKey: { version: 1, rawHex: randomBytes(32).toString('hex') },

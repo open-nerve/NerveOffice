@@ -1,17 +1,19 @@
-// 写入中途结束整棵浏览器进程时的原子性（M4-P1 设计 §3.7、S7）：生产的写入管道与 IndexedDB 的存储（进程内的放置；Worker 的放置等发件箱 Worker
-// 的入口合并之后接上），经编辑器页测试构建里的崩溃用例探针（support/crash-probe.ts）反复写约 5 MiB 的内容，冻住并结束整棵进程，以同一个目录重开：
+// 写入中途结束整棵浏览器进程时的原子性（M4-P1 设计 §3.7、S7）：生产的写入管道与 IndexedDB 的存储，两种放置（进程内；发件箱 Worker），
+// 经编辑器页测试构建里的崩溃用例探针（support/crash-probe.ts）反复写约 5 MiB 的内容，冻住并结束整棵进程，以同一个目录重开：
 // 读回的必须是旧的或新的一份——都能解开（管道解开、解压）、序号是两者之一、内容逐字节对得上、写入者的高水位与草稿的序号一致（同一个事务）。
-// 结束的时机两组，每个浏览器共 22 次：
+// 结束的时机两组，每种放置、每个浏览器共 22 次：
 // - 开始写之后 0–260 ms 的延迟（12 次，前密后疏）：落在去重、压缩、加密、交给存储、提交与提交之后；
-// - "写入之前"的信号（交给存储之前经绑定函数通知测试进程）之后 0 到 1.5 倍提交用时（10 次）：信号一到就冻住时事务还没开始，读回的总是旧的，
-//   所以按先量出的提交用时（交给存储到管道交回结果）往后错开，让冻住的那一刻落在事务的各个阶段（M0 P6 审查 G5："杀点落在事务提交附近"）。
-// 另有一条锚点：写完了再结束，读回的必须是新的（写成了的扛得住进程被结束）。每次的结局（旧、新）与冻住的时机记成附件，不断言两种结局的比例
-// （与机器的快慢有关）。要先登录（探针在编辑器页里），重开时走 Cookie 的 restore
+// - "写入之前"的信号（进程内：交给存储之前；Worker：Worker 开写入的事务时，经绑定函数通知测试进程）之后 0 到 1.5 倍提交用时（10 次）：
+//   信号一到就冻住时事务还没开始，读回的总是旧的，所以按先量出的提交用时往后错开，让冻住的那一刻落在事务的各个阶段（M0 P6 审查 G5）。
+// 另有一条锚点：写完了再结束，读回的必须是新的（写成了的扛得住进程被结束）。每次的结局（旧、新）、冻住的时机与结束之后 IndexedDB 日志结尾的
+// 状态记成附件，不断言两种结局的比例（与机器的快慢有关）。
+// 口径不放宽（设计 §3.8）：Chromium 偶尔在被结束之后删掉整个来源的 IndexedDB（之前一次结束之后日志结尾写了一半）——OPFS 的冗余（S9）
+// 做完之前这里读不回就是红的；失败的说明里带上日志结尾的状态。要先登录（探针在编辑器页里），重开时走 Cookie 的 restore
 import type { TestInfo } from '@playwright/test'
 import type { CrashReport, CrashTool, PersistentLaunch } from '../../support/browser-crash.ts'
-import type { CrashCheck, CrashProbeRead, CrashSetup } from '../../support/crash-probe.ts'
+import type { CrashCheck, CrashPlacement, CrashProbeRead, CrashSetup } from '../../support/crash-probe.ts'
 import { expect, expectCrashed, test } from '../../support/browser-crash.ts'
-import { CRASH_CONTENT_CHARS, crashSetupFor, openCrashProbe } from '../../support/crash-probe.ts'
+import { CRASH_CONTENT_CHARS, CRASH_PLACEMENTS, crashSetupFor, openCrashProbe } from '../../support/crash-probe.ts'
 import { createUser } from '../../support/database.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
@@ -22,6 +24,8 @@ const SIGNAL_RUNS = 10
 /** 等"写入之前"的信号的时限：交给存储之前要压缩、加密约 5 MiB，慢的机器上也远小于它 */
 const SIGNAL_TIMEOUT_MS = 30_000
 
+const PLACEMENT_LABELS: Readonly<Record<CrashPlacement, string>> = { 'in-process': '进程内的写入管道', 'worker': '发件箱 Worker 里的写入管道' }
+
 /** 一次结束的结局 */
 interface Outcome {
   readonly trigger: string
@@ -30,6 +34,8 @@ interface Outcome {
   /** 从开始写（发出 evaluate 之前）到冻住的毫秒数 */
   readonly frozenAfterMs: number
   readonly read: CrashProbeRead
+  /** 这次结束之后 IndexedDB 日志结尾的状态（Chromium 系；clean 之外的带说明） */
+  readonly logs: readonly string[]
 }
 
 /** 读回的序号（没读出草稿时为 null） */
@@ -37,13 +43,20 @@ function seqOf(read: CrashProbeRead): number | null {
   return read.kind === 'draft' ? read.seq : null
 }
 
-/** 读回的不是旧的或新的一份（能解开、序号、内容、两个仓库一致）时的说明 */
+function logsOf(report: CrashReport): string[] {
+  return report.indexedDbLogs.map(state => state.tail.status === 'clean' ? 'clean' : `${state.tail.status}：${state.tail.detail}`)
+}
+
+/** 读回的不是旧的或新的一份（能解开、序号、内容、两个仓库一致）时的说明；读不回时带上前后两次结束之后日志结尾的状态 */
 function problemsOf(outcomes: readonly Outcome[]): string[] {
   return outcomes.flatMap((outcome, index) => {
     const { read, before } = outcome
     const label = `第 ${index + 1} 次（${outcome.trigger}，冻在开始写之后 ${outcome.frozenAfterMs} ms）`
-    if (read.kind !== 'draft')
-      return [`${label}：没读出能解开的草稿：${JSON.stringify(read)}`]
+    if (read.kind !== 'draft') {
+      const previous = outcomes[index - 1]
+      const logs = `IndexedDB 日志的结尾：上一次结束之后 ${previous === undefined ? '（第一次）' : previous.logs.join('；') || '无'}，这一次结束之后 ${outcome.logs.join('；') || '无'}`
+      return [`${label}：没读出能解开的草稿：${JSON.stringify(read)}（${logs}）`]
+    }
     const problems: string[] = []
     if (read.seq !== before && read.seq !== before + 1)
       problems.push(`${label}：读回的序号是 ${read.seq}，不是旧的 ${before} 或新的 ${before + 1}`)
@@ -63,9 +76,9 @@ function resultOf({ before, read }: Outcome): 'old' | 'new' | 'other' {
   return seq === before + 1 ? 'new' : 'other'
 }
 
-/** 结局的附件：每次是旧的还是新的、冻在开始写之后多少毫秒 */
+/** 结局的附件：每次是旧的还是新的、冻在开始写之后多少毫秒、日志结尾的状态 */
 async function attachOutcomes(testInfo: TestInfo, outcomes: readonly Outcome[]): Promise<void> {
-  const rows = outcomes.map(outcome => ({ trigger: outcome.trigger, frozenAfterMs: outcome.frozenAfterMs, result: resultOf(outcome), read: outcome.read }))
+  const rows = outcomes.map(outcome => ({ trigger: outcome.trigger, frozenAfterMs: outcome.frozenAfterMs, result: resultOf(outcome), read: outcome.read, indexedDbLogs: outcome.logs }))
   await testInfo.attach('outcomes.json', { body: JSON.stringify(rows, null, 2), contentType: 'application/json' })
 }
 
@@ -73,18 +86,18 @@ async function waitMs(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-/** 第一次启动：登录、打开探针、写完第 1 份 */
-async function begin(crashTool: CrashTool, prefix: string): Promise<{ launch: PersistentLaunch, check: CrashCheck, setup: CrashSetup }> {
+/** 第一次启动：登录、打开探针（这种放置）、写完第 1 份 */
+async function begin(crashTool: CrashTool, prefix: string, placement: CrashPlacement): Promise<{ launch: PersistentLaunch, check: CrashCheck, setup: CrashSetup }> {
   const user = await createUser(prefix)
   const launch = await crashTool.launch()
   await loginThroughApi(launch.page, user)
-  const setup = crashSetupFor(user.id)
+  const setup = crashSetupFor(user.id, placement)
   const check = await openCrashProbe(launch, setup)
   expect(await check.write(1)).toBe('written')
   return { launch, check, setup }
 }
 
-/** 量一次没被打断的写入：交给存储到管道交回结果用了多少毫秒，至少 1 毫秒 */
+/** 量一次没被打断的写入：交给存储（Worker：开写入的事务）到管道交回结果用了多少毫秒，至少 1 毫秒 */
 async function commitDuration(check: CrashCheck, seq: number): Promise<number> {
   const written = await check.write(seq)
   const state = await check.lastWrite()
@@ -122,57 +135,59 @@ async function relaunchAndRead(crashTool: Pick<CrashTool, 'relaunch'>, launch: P
   return { launch: next, check, read: await check.read() }
 }
 
-test.describe('写入中途结束整棵浏览器进程：读回旧的或新的一份（进程内的写入管道）', { tag: '@test-build' }, () => {
-  test('写完了再结束：以同一个目录重开之后读回的是它', async ({ crashTool }) => {
-    const { launch, setup } = await begin(crashTool, 'crash-anchor')
-    const report = await crashTool.crash(launch)
-    expectCrashed(report)
-    const reopened = await relaunchAndRead(crashTool, launch, report, setup)
-    expect(reopened.read).toEqual({ kind: 'draft', seq: 1, writerSeq: 1, bytes: CRASH_CONTENT_CHARS, intact: true })
-  })
-
-  test('开始写之后 0–260 ms 结束：每次读回的都是旧的或新的一份', async ({ crashTool }, testInfo) => {
-    let { launch, check, setup } = await begin(crashTool, 'crash-delay')
-    let committed = 1
-    const outcomes: Outcome[] = []
-    for (const delayMs of KILL_DELAYS_MS) {
-      const plan = await crashTool.prepareCrash(launch)
-      const startedAt = Date.now()
-      await check.start(committed + 1, { signal: false })
-      await waitMs(delayMs)
-      const report = await plan.crash()
+for (const placement of CRASH_PLACEMENTS) {
+  test.describe(`写入中途结束整棵浏览器进程：读回旧的或新的一份（${PLACEMENT_LABELS[placement]}）`, { tag: '@test-build' }, () => {
+    test('写完了再结束：以同一个目录重开之后读回的是它', async ({ crashTool }) => {
+      const { launch, setup } = await begin(crashTool, 'crash-anchor', placement)
+      const report = await crashTool.crash(launch)
       expectCrashed(report)
       const reopened = await relaunchAndRead(crashTool, launch, report, setup)
-      launch = reopened.launch
-      check = reopened.check
-      outcomes.push({ trigger: `延迟 ${delayMs} ms`, before: committed, frozenAfterMs: report.frozenAt - startedAt, read: reopened.read })
-      committed = seqOf(reopened.read) ?? committed
-    }
-    await attachOutcomes(testInfo, outcomes)
-    expect(outcomes).toHaveLength(KILL_DELAYS_MS.length)
-    expect(problemsOf(outcomes)).toEqual([])
-  })
+      expect(reopened.read).toEqual({ kind: 'draft', seq: 1, writerSeq: 1, bytes: CRASH_CONTENT_CHARS, intact: true })
+    })
 
-  test('"写入之前"的信号之后 0 到 1.5 倍提交用时结束：每次读回的都是旧的或新的一份', async ({ crashTool }, testInfo) => {
-    let { launch, check, setup } = await begin(crashTool, 'crash-signal')
-    const commitMs = await commitDuration(check, 2)
-    let committed = 2
-    const outcomes: Outcome[] = []
-    for (const offsetMs of signalOffsets(commitMs)) {
-      const plan = await crashTool.prepareCrash(launch)
-      const crashed = crashAfterSignal(check, plan.crash, offsetMs)
-      const startedAt = Date.now()
-      await check.start(committed + 1, { signal: true })
-      const report = await crashed
-      expectCrashed(report)
-      const reopened = await relaunchAndRead(crashTool, launch, report, setup)
-      launch = reopened.launch
-      check = reopened.check
-      outcomes.push({ trigger: `信号之后 ${offsetMs} ms（提交用时 ${commitMs} ms）`, before: committed, frozenAfterMs: report.frozenAt - startedAt, read: reopened.read })
-      committed = seqOf(reopened.read) ?? committed
-    }
-    await attachOutcomes(testInfo, outcomes)
-    expect(outcomes).toHaveLength(SIGNAL_RUNS)
-    expect(problemsOf(outcomes)).toEqual([])
+    test('开始写之后 0–260 ms 结束：每次读回的都是旧的或新的一份', async ({ crashTool }, testInfo) => {
+      let { launch, check, setup } = await begin(crashTool, 'crash-delay', placement)
+      let committed = 1
+      const outcomes: Outcome[] = []
+      for (const delayMs of KILL_DELAYS_MS) {
+        const plan = await crashTool.prepareCrash(launch)
+        const startedAt = Date.now()
+        await check.start(committed + 1, { signal: false })
+        await waitMs(delayMs)
+        const report = await plan.crash()
+        expectCrashed(report)
+        const reopened = await relaunchAndRead(crashTool, launch, report, setup)
+        launch = reopened.launch
+        check = reopened.check
+        outcomes.push({ trigger: `延迟 ${delayMs} ms`, before: committed, frozenAfterMs: report.frozenAt - startedAt, read: reopened.read, logs: logsOf(report) })
+        committed = seqOf(reopened.read) ?? committed
+      }
+      await attachOutcomes(testInfo, outcomes)
+      expect(outcomes).toHaveLength(KILL_DELAYS_MS.length)
+      expect(problemsOf(outcomes)).toEqual([])
+    })
+
+    test('"写入之前"的信号之后 0 到 1.5 倍提交用时结束：每次读回的都是旧的或新的一份', async ({ crashTool }, testInfo) => {
+      let { launch, check, setup } = await begin(crashTool, 'crash-signal', placement)
+      const commitMs = await commitDuration(check, 2)
+      let committed = 2
+      const outcomes: Outcome[] = []
+      for (const offsetMs of signalOffsets(commitMs)) {
+        const plan = await crashTool.prepareCrash(launch)
+        const crashed = crashAfterSignal(check, plan.crash, offsetMs)
+        const startedAt = Date.now()
+        await check.start(committed + 1, { signal: true })
+        const report = await crashed
+        expectCrashed(report)
+        const reopened = await relaunchAndRead(crashTool, launch, report, setup)
+        launch = reopened.launch
+        check = reopened.check
+        outcomes.push({ trigger: `信号之后 ${offsetMs} ms（提交用时 ${commitMs} ms）`, before: committed, frozenAfterMs: report.frozenAt - startedAt, read: reopened.read, logs: logsOf(report) })
+        committed = seqOf(reopened.read) ?? committed
+      }
+      await attachOutcomes(testInfo, outcomes)
+      expect(outcomes).toHaveLength(SIGNAL_RUNS)
+      expect(problemsOf(outcomes)).toEqual([])
+    })
   })
-})
+}

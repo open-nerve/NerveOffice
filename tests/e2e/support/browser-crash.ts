@@ -11,6 +11,9 @@
 // - 重开（relaunch）：以同一个目录重开。Cookie 不一定已经落盘，走两条确定的路：restore（崩溃之前存下的加回去，模拟已落盘）、clear（清掉，用例
 //   自己重新登录，模拟没落盘）；浏览器实际留下了哪些记下来（不带值），不断言。每次结束与重开的记录在用例结束时记成一个附件 crash-tool.json。本机实测：Chromium、Chrome 与 macOS 的 WebKit 被结束时
 //   会话 Cookie 还没落盘，Linux 的 WebKit（WPE）已经落盘。另有 reopen：正常关闭再打开（浏览器落了盘），给要"浏览器自己留着"前提的用例。
+// - Chromium 系的 IndexedDB 日志（M4-P1 设计 §3.8，./leveldb-log.ts）：每次结束、全部退出之后读各个来源的 LevelDB 日志的结尾，记进报告与附件——
+//   结尾写了一半是之后删库的前兆（S7 的调查）。tearIndexedDbLog：结束之后、重开之前往这个来源的日志结尾补一个只有头的记录，确定地造出删库
+//   （之后的一次会话写过东西，再下一次打开时 Chromium 删掉这个来源的全部 IndexedDB）。
 //
 // 跑法：崩溃用例单独成项目（每个浏览器一个、workers: 1、等全部浏览器项目跑完，playwright.config.ts）。macOS 上认 WebKit 的 WebContent 与 GPU
 // 要求机器上只有这一个 Playwright WebKit 实例，所以崩溃用例不经共用夹具：共用夹具的 context 会起一个共用的浏览器，在 WebKit 上就是第二个实例。
@@ -18,6 +21,7 @@ import type { BrowserContext, BrowserType, Cookie, Page, TestInfo } from '@playw
 import type { AutosaveMode } from './autosave.ts'
 import type { CrashPlatform, InstanceProcess, InstanceSpec, ProcessRole, ProcessRow } from './browser-processes.ts'
 import type { CspViolations, PageErrors } from './fixtures.ts'
+import type { IndexedDbLogState, TornLog } from './leveldb-log.ts'
 import { mkdirSync, realpathSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -38,6 +42,7 @@ import {
   webkitNetworkingCandidates,
 } from './browser-processes.ts'
 import { chooseAutosave, cspViolationCollector, defaultAutosaveMode, pageErrorCollector } from './fixtures.ts'
+import { indexedDbLogStates, tearIndexedDbLog } from './leveldb-log.ts'
 
 /** 一次持久化的启动 */
 export interface PersistentLaunch {
@@ -68,6 +73,11 @@ export interface CrashReport {
   readonly notes: readonly string[]
   /** 准备时存下的 Cookie（重开时 restore 用；带值，不写进附件与日志） */
   readonly cookies: readonly Cookie[]
+  /**
+   * 全部退出之后各个来源的 IndexedDB 日志与结尾的状态（Chromium 系；WebKit 的 IndexedDB 是 SQLite，为空）：torn-* 是删库的前兆，
+   * corrupt 是下一次打开时删库（./leveldb-log.ts）
+   */
+  readonly indexedDbLogs: readonly IndexedDbLogState[]
 }
 
 /** 准备好的一次结束：进程都认出来了，要测的时机一到就调用 crash */
@@ -93,6 +103,11 @@ export interface CrashTool {
   readonly relaunch: (previous: PersistentLaunch, report: CrashReport, options: { readonly cookies: RelaunchCookies }) => Promise<PersistentLaunch>
   /** 正常关闭再以同一个目录打开：浏览器把 Cookie 等落了盘（被结束时不一定来得及），用例要"浏览器自己留着"的前提时用 */
   readonly reopen: (previous: PersistentLaunch) => Promise<PersistentLaunch>
+  /**
+   * 结束之后、重开之前，往这个来源（baseURL）的 IndexedDB 日志结尾补一个只有头的记录（Chromium 系；日志原来的结尾要完整）。
+   * declaredLength 默认 64：之后的一次会话写过东西，再下一次打开时删库；比之后写的长时，恢复时把之后写的悄悄丢掉。记进附件
+   */
+  readonly tearIndexedDbLog: (crashed: PersistentLaunch, report: CrashReport, options?: { readonly declaredLength?: number }) => TornLog
   /** 持久上下文里的 CSP 违规与页面错误：用例结束时断言为空（声明了预期的除外） */
   readonly cspViolations: CspViolations
   readonly pageErrors: PageErrors
@@ -257,7 +272,14 @@ async function crashNow(launch: PersistentLaunch, planned: readonly InstanceProc
     problems,
     notes,
     cookies,
+    // 全部退出之后读：没有人在写日志
+    indexedDbLogs: indexedDbLogStates(spec.profileDir),
   }
+}
+
+/** 日志的状态记进附件：不带日志的内容 */
+function logRecord(state: IndexedDbLogState): Record<string, unknown> {
+  return { database: state.database, log: state.log, status: state.tail.status, detail: state.tail.detail, records: state.tail.records, size: state.tail.size }
 }
 
 /** 一次结束的记录（不带 Cookie 的值）：用例结束时与重开的记录一起记成一个附件 crash-tool.json */
@@ -276,6 +298,7 @@ function crashRecord(report: CrashReport, generation: number): Record<string, un
     problems: report.problems,
     notes: report.notes,
     cookies: cookieSummary(report.cookies),
+    indexedDbLogs: report.indexedDbLogs.map(logRecord),
   }
 }
 
@@ -345,6 +368,20 @@ function createCrashTool(environment: LaunchEnvironment, collectors: Pick<CrashT
       live = await launchPersistent(environment, previous.generation + 1)
       records.push({ kind: 'reopen', generation: live.generation })
       return live
+    },
+    tearIndexedDbLog: (crashed, report, options = {}) => {
+      if (environment.family !== 'chromium')
+        throw new Error('只有 Chromium 系的 IndexedDB 是 LevelDB')
+      if (live !== undefined || report.spec.rootPid !== crashed.spec.rootPid)
+        throw new Error('只能在这一次启动被结束之后、重开之前补')
+      if (report.survivors.length > 0 || report.problems.length > 0)
+        throw new Error('上一次没有结束干净：日志可能还有人在写')
+      const origin = environment.options?.baseURL
+      if (origin === undefined)
+        throw new Error('没有 baseURL，认不出是哪个来源的 IndexedDB')
+      const torn = tearIndexedDbLog(environment.profileDir, origin, options.declaredLength ?? 64)
+      records.push({ kind: 'tear-indexeddb-log', generation: crashed.generation, database: torn.database, log: torn.log, sizeBefore: torn.sizeBefore, record: torn.record, status: torn.tail.status, detail: torn.tail.detail })
+      return torn
     },
     dispose: async () => {
       if (records.length > 0)
