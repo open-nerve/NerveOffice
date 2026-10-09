@@ -141,6 +141,16 @@ describe('存储的几项（storage 一步）', () => {
     expect(verdict([probe('storage', 'storage', { ...STORAGE_FACTS, 'locks.page-request': 'still-held' }, DURABILITY_TIMINGS)], 8).status).toBe('fail')
   })
 
+  it('浏览器没有 estimate()、没有 Web Locks：不通过（不是数据不齐），说出没有什么', () => {
+    const noEstimate = verdict([probe('storage', 'storage', { ...STORAGE_FACTS, 'estimate.supported': false }, DURABILITY_TIMINGS)], 2)
+    expect(noEstimate.status).toBe('fail')
+    expect(noEstimate.lines.join('\n')).toContain('没有 navigator.storage.estimate')
+    const { 'locks.if-available': _a, 'locks.query-held': _b, 'locks.steal-granted': _c, 'locks.page-request': _d, 'locks.query-after-steal': _e, 'locks.after-terminate': _f, ...noLocks } = STORAGE_FACTS
+    const locks = verdict([probe('storage', 'storage', { ...noLocks, 'locks.supported': false }, DURABILITY_TIMINGS)], 8)
+    expect(locks).toMatchObject({ status: 'fail', missing: [] })
+    expect(locks.lines.join('\n')).toContain('没有 navigator.locks')
+  })
+
   it('indexedDB.databases() 不支持时不算不通过（记下）', () => {
     expect(verdict([probe('storage', 'storage', { ...STORAGE_FACTS, 'idb.databases': 'unsupported', 'idb.databases-after-delete': 'unsupported' }, DURABILITY_TIMINGS)], 6).status).toBe('pass')
   })
@@ -164,6 +174,12 @@ describe('第 7 项：不可导出的 CryptoKey 交给 Worker（key-transfer 一
     expect(failed.lines.join('\n')).toContain('退路可行')
     const clone = verdict([probe('key-transfer', 'key-transfer', { ...KEY_FACTS, 'crypto.key-transfer': 'DataCloneError' })], 7)
     expect(clone.status).toBe('fail')
+  })
+
+  it('退路的核对也包括页面这一份原始字节用完清零：没清零时写明退路不行', () => {
+    const failed = verdict([probe('key-transfer', 'key-transfer', { ...KEY_FACTS, 'crypto.key-transfer': 'DataCloneError', 'crypto.page-raw-zeroed': false })], 7)
+    expect(failed.lines.join('\n')).toContain('退路（Worker 里导入）也不行')
+    expect(failed.lines.join('\n')).toContain('crypto.page-raw-zeroed')
   })
 
   it('交过去了但是可以导出、或者改了 AAD 还解得开：不通过', () => {

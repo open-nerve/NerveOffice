@@ -174,6 +174,8 @@ export interface Session {
   readonly timings: SelftestTiming[]
   /** 场景的检查最晚做到什么时候（performance.now()）：之后的检查不再做 */
   readonly deadline: number
+  /** 这个场景的总时限（毫秒）：deadline 是开始的时刻加上它；超过时的说明写它（各场景不同：请求编辑、Worker 的停顿更长） */
+  readonly budgetMs: number
   /** 页面被隐藏的时刻（自检开始之后第一次）：之后的检查不再做 */
   hiddenAt?: string
   formulaValues?: Record<string, unknown>
@@ -189,7 +191,7 @@ export interface Session {
 export async function check(session: Session, id: string, run: () => Promise<string>, timeoutMs = CHECK_TIMEOUT_MS): Promise<boolean> {
   const started = performance.now()
   if (started > session.deadline) {
-    session.checks.push({ id, pass: false, detail: `没有做：这个场景的检查超过了总时限（${SCENARIO_BUDGET_MS / 1000} 秒）`, ms: 0 })
+    session.checks.push({ id, pass: false, detail: `没有做：这个场景的检查超过了总时限（${Math.round(session.budgetMs / 1000)} 秒）`, ms: 0 })
     return false
   }
   if (session.hiddenAt !== undefined) {

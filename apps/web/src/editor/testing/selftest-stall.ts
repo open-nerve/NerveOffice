@@ -6,7 +6,7 @@
 // - 空闲多久（从 Worker 上一次做完算起）：0.2 秒（M0 没出现的对照）、1–1.5 秒（M0 出现的条件，均匀随机）、3 秒、10 秒；1–1.5 秒每个条件 runs 次，
 //   其余按比例（stallSchedule）；两个条件用同一串空闲（成对比较），一组最多 STALL_BLOCK_SIZE 次，各档轮流、两个条件的先后轮流；
 // - 每一次：把约 5 MiB 的类表格 JSON 复制一份转移给 Worker，Worker 依次做 SHA-256 → gzip → AES-GCM → IndexedDB（strict），交回各段（与 M0 的管道相同）。
-// 交回每一次的计时（timings 的 stall#n）；停顿的判定（比同条件的中位数多出 ≥ 500 ms）在驱动脚本里（tests/e2e/safari/probe-verdicts.ts），
+// 交回每一次的计时（timings 的 stall#n）；停顿的判定（比同条件的中位数多出 ≥ 500 ms）在驱动脚本里（tests/e2e/support/probe-verdicts.ts），
 // 页面只核对每一次都做完、数都在。地址不带 runs（Playwright 的校准）时只跑 0.2 秒与 1–1.5 秒两档各一次：只核对探针本身
 import type { SelftestTiming } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'

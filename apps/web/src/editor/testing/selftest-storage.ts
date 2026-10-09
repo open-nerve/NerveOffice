@@ -1,6 +1,6 @@
 // 真实浏览器的前置复核（M4-P1 设计 §3.6，S1 第一轮）里存储的几项：不依赖发件箱的生产代码，只用浏览器的接口与探针 Worker
 // （./storage-probe-worker.ts）。页面只核对"跑完、数据齐"（每一项做完、事实记下）；是否符合预期由驱动脚本一侧的纯函数判定
-// （tests/e2e/safari/probe-verdicts.ts）。事实的键写成"项.名"，与判定一一对应：
+// （tests/e2e/support/probe-verdicts.ts）。事实的键写成"项.名"，与判定一一对应：
 // - storage（阅读）：
 //   · 第 1 项持久保存：persisted → persist（新的源、没有用户激活）→ persisted；
 //   · 第 2 项配额与用量：写 5 MiB 之前与之后的 estimate()；

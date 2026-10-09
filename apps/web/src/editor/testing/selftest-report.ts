@@ -93,7 +93,7 @@ export type RequestScenario = (typeof REQUEST_SCENARIOS)[number]
 /**
  * 真实浏览器的前置复核（M4-P1 设计 §3.6，S1 第一轮）：不依赖发件箱生产代码的探针（场景在 ./selftest-storage.ts、./selftest-stall.ts、
  * ./selftest-cost.ts，探针 Worker 是 ./storage-probe-worker.ts）。页面只核对"跑完、数据齐"，事实（facts）与计时交回，
- * 判定在驱动脚本一侧的纯函数里（tests/e2e/safari/probe-verdicts.ts）：
+ * 判定在驱动脚本一侧的纯函数里（tests/e2e/support/probe-verdicts.ts）：
  * - storage（阅读）：持久保存、配额与用量、durability 与磁盘上的写入耗时、事务中止的回滚、IndexedDB 的基本行为（含 Worker 里）、
  *   Web Locks（§3.6 第 1–3、5、6、8 项）；
  * - key-transfer（阅读）：不可导出的 CryptoKey 经 postMessage 交给 Worker、Worker 里的 AES-GCM 带 AAD、CompressionStream 与 SHA-256，
@@ -199,7 +199,7 @@ export interface SelftestTiming {
 
 /**
  * 一项事实（M4-P1 S1：真实浏览器的复核交回的，例如 persisted、配额的字节数、durability 是否被反映、出错的名字）。
- * 键写成"项.名"（例如 persist.after）；判定在驱动脚本里（tests/e2e/safari/probe-verdicts.ts），页面不判断它们对不对
+ * 键写成"项.名"（例如 persist.after）；判定在驱动脚本里（tests/e2e/support/probe-verdicts.ts），页面不判断它们对不对
  */
 export type SelftestFact = string | number | boolean | null
 

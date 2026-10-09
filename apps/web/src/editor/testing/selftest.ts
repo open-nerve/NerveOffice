@@ -693,7 +693,8 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string, ru
     failure = '页面里没有编辑器的探针（不是测试构建？）'
   if (failure === undefined && probe !== undefined && isSelftestScenario(scenario)) {
     const api = probe.univerAPI as unknown as SelftestApi
-    const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, timings, deadline: performance.now() + budgetOf(scenario, runs ?? undefined), facts: {}, runs: runs ?? undefined }
+    const budgetMs = budgetOf(scenario, runs ?? undefined)
+    const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, timings, deadline: performance.now() + budgetMs, budgetMs, facts: {}, runs: runs ?? undefined }
     // 页面中途被隐藏（浏览器窗口被挡住、切到别的标签页）：Safari 几秒之后就暂停它，余下的检查不再做，趁计时器还在走把结果交回去。
     // 自检开始时已经隐藏了（到 steady 之前就被挡住：挂接只在页面一开始就隐藏时不等 steady）同样算：不然每项都在没有动画帧的页面上超时
     // hidden-save 本来就要页面在中途变成隐藏（EXPECTS_HIDDEN），不按这一条处理

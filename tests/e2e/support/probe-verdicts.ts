@@ -147,6 +147,8 @@ function quotaAndUsage(reports: readonly ProbeReport[]): ItemVerdict {
   const facts = factsOf(reports, 'storage')
   if (facts === undefined)
     return noStep(2, title, 'storage')
+  if (facts['estimate.supported'] === false)
+    return { item: 2, title, status: 'fail', lines: ['没有 navigator.storage.estimate（本机草稿页要显示用量与配额，US-M4-07）'], missing: [] }
   const keys = ['estimate.supported', 'estimate.quota-before', 'estimate.usage-before', 'estimate.usage-after', 'estimate.written']
   const missing = keys.filter(key => !(key in facts))
   if (missing.length > 0)
@@ -254,6 +256,7 @@ function indexedDbBasics(reports: readonly ProbeReport[]): ItemVerdict {
 }
 
 const RAW_RULES: readonly Rule[] = [
+  ['crypto.page-raw-zeroed', is(true), 'true（页面这一份原始字节导入之后清零）'],
   ['crypto.raw-extractable', is(false), 'false'],
   ['crypto.raw-zeroed', is(true), 'true（Worker 导入之后清零）'],
   ['crypto.raw-opened-page-seal', is(true), 'true'],
@@ -294,6 +297,8 @@ function webLocks(reports: readonly ProbeReport[]): ItemVerdict {
   const facts = factsOf(reports, 'storage')
   if (facts === undefined)
     return noStep(8, title, 'storage')
+  if (facts['locks.supported'] === false)
+    return { item: 8, title, status: 'fail', lines: ['没有 navigator.locks（M3 的本机锁与 M4 的写入栅栏都建在它上面；没有时 M3 退化为"当作已持有"，防线只剩写入者的核对）'], missing: [] }
   return ruled(8, title, facts, [
     ['locks.supported', is(true), 'true'],
     ['locks.if-available', is('null'), 'null（页面拿着时 Worker 以 ifAvailable 申请拿不到）'],

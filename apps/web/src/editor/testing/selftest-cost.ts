@@ -11,7 +11,7 @@
 //     这一页的脚本经网络传了多少（资源计时的 transferSize）：一次运行里第一次打开编辑器页的是冷的，之后的是热的（带哈希的资源一年内不变）；
 //   · 公式：增量（改数据表 D 列的一格，牵动约 320 个公式）N 次、全量（强制重算 1,000 个公式）N 次：到这一轮收齐的时间，期间主线程的最长阻塞与
 //     最长的帧间隔（界面冻结）。改了内容（暂停定时的上传：交回结果整页跳走时页面隐藏，自动保存会在那一刻上传）。
-// 两个场景都只交回计时与事实；是否达标在驱动脚本里判定（tests/e2e/safari/probe-verdicts.ts）。
+// 两个场景都只交回计时与事实；是否达标在驱动脚本里判定（tests/e2e/support/probe-verdicts.ts）。
 // 自动保存：暂停定时的上传、捕获的静默与上限调到一小时——调度的捕获（主线程上的 save 与序列化）不落进计时里
 import type { AutosaveSetup } from './selftest-autosave.ts'
 import type { Session } from './selftest-session.ts'
