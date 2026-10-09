@@ -1,5 +1,6 @@
 // 测试用：照 MirrorDirectory 的接口写的内存里的 OPFS（M4-P1 设计 §3.8）。文件按"用户/文档/槽位"存字节；同步访问句柄同一个文件同一时刻
-// 只有一个（与浏览器一样：再拿交回 busy）；另有别的标签页占着句柄、下一次写入写到一半抛出（写满、出错）、没有 OPFS 这几样
+// 只有一个（与浏览器一样：再拿交回 busy）；另有别的标签页占着句柄、下一次写入写到一半抛出（写满、出错）或者只写了一部分、没有 OPFS 这几样，
+// 并记下每个槽位文件上改动的操作（截断、写、flush 的先后）
 import type { DraftKey } from './draft-record.ts'
 import type { MirrorDirectory, MirrorProblem, SlotHandle } from './mirror-directory.ts'
 import { SLOT_FILE_NAMES } from './mirror-directory.ts'
@@ -14,6 +15,8 @@ export interface FakeMirrorDirectory {
   readonly holdElsewhere: (key: DraftKey) => () => void
   /** 再成功 after 次 write 之后，下一次只写前 bytes 个字节就抛出名为 name 的错误（写满是 QuotaExceededError）：每次镜像先写内容、再写头 */
   readonly failWrite: (after: number, bytes: number, name: string) => void
+  /** 再成功 after 次 write 之后，下一次只写前 bytes 个字节、不抛出（write 交回的字节数比要写的少） */
+  readonly shortWrite: (after: number, bytes: number) => void
   /** 下一次 openSlots 交回这个问题 */
   readonly failNextOpen: (problem: MirrorProblem) => void
   /** 开着的句柄个数 */
@@ -22,6 +25,8 @@ export interface FakeMirrorDirectory {
   readonly opens: () => number
   /** flush 被调用的次数 */
   readonly flushes: () => number
+  /** 这个槽位文件上改动的操作，按先后：truncate@大小、write@偏移、flush */
+  readonly operations: (key: DraftKey, slot: 0 | 1) => readonly string[]
 }
 
 function pathOf(key: DraftKey, slot: 0 | 1): string {
@@ -32,10 +37,16 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
   const files = new Map<string, Uint8Array<ArrayBuffer>>()
   const locked = new Set<string>()
   const elsewhere = new Set<string>()
-  let writeFailure: { after: number, readonly bytes: number, readonly name: string } | undefined
+  /** name 为 undefined 时只写一部分、不抛出 */
+  let writeFailure: { after: number, readonly bytes: number, readonly name: string | undefined } | undefined
+  const operations = new Map<string, string[]>()
   let nextOpenFailure: MirrorProblem | undefined
   let opens = 0
   let flushes = 0
+
+  function record(path: string, operation: string): void {
+    operations.set(path, [...(operations.get(path) ?? []), operation])
+  }
 
   function handleFor(path: string): SlotHandle {
     let closed = false
@@ -52,7 +63,7 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
       },
       write: (buffer, { at }) => {
         const current = live()
-        let failure: { readonly bytes: number, readonly name: string } | undefined
+        let failure: { readonly bytes: number, readonly name: string | undefined } | undefined
         if (writeFailure !== undefined) {
           if (writeFailure.after === 0) {
             failure = writeFailure
@@ -67,17 +78,20 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
         next.set(current)
         next.set(written, at)
         files.set(path, next)
-        if (failure !== undefined)
+        record(path, `write@${at}`)
+        if (failure?.name !== undefined)
           throw new DOMException('写到一半出了错', failure.name)
         return written.byteLength
       },
       truncate: (size) => {
         files.set(path, live().slice(0, size))
+        record(path, `truncate@${size}`)
       },
       getSize: () => live().byteLength,
       flush: () => {
         live()
         flushes += 1
+        record(path, 'flush')
       },
       close: () => {
         if (!closed)
@@ -153,11 +167,15 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
     failWrite: (after, bytes, name) => {
       writeFailure = { after, bytes, name }
     },
+    shortWrite: (after, bytes) => {
+      writeFailure = { after, bytes, name: undefined }
+    },
     failNextOpen: (problem) => {
       nextOpenFailure = problem
     },
     openHandles: () => locked.size,
     opens: () => opens,
     flushes: () => flushes,
+    operations: (key, slot) => [...(operations.get(pathOf(key, slot)) ?? [])],
   }
 }

@@ -129,10 +129,12 @@ describe('登记时建好两个槽位、拿着句柄（M4-P1 设计 §3.8）', (
 })
 
 describe('写：两个槽位轮流原地改写（截断 → 内容 → 头 → flush），写在不是最新那一份的槽位上', () => {
-  it('a、b、a……代号一次比一次大；每次都 flush', async () => {
+  it('a、b、a……代号一次比一次大；每次截断 → 写内容（头之后）→ 写头 → flush', async () => {
     const { fake, mirror } = setup()
     expect(await mirror.write(record(1))).toEqual({ kind: 'mirrored' })
     expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq1@1', 'empty'])
+    expect(fake.operations(KEY, 0), '头最后写：写一半时头不合格').toEqual(['truncate@0', `write@${SLOT_HEADER_BYTES}`, 'write@0', 'flush'])
+    expect(fake.operations(KEY, 1)).toEqual([])
     expect(await mirror.write(record(2))).toEqual({ kind: 'mirrored' })
     expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq1@1', 'seq2@2'])
     expect(await mirror.write(record(3))).toEqual({ kind: 'mirrored' })
@@ -175,6 +177,15 @@ describe('写：两个槽位轮流原地改写（截断 → 内容 → 头 → f
     expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['invalid:torn', 'seq2@2'])
   })
 
+  it('写的字节数比要写的少（write 不抛出、交回的数小）：同样落选，交回 failed，不接着写头', async () => {
+    const { fake, mirror } = setup()
+    await mirror.write(record(1))
+    fake.shortWrite(0, 10)
+    expect(await mirror.write(record(2))).toMatchObject({ kind: 'not-mirrored', reason: 'failed', error: { name: 'UnknownError' } })
+    expect(fake.operations(KEY, 1)).toEqual(['truncate@0', `write@${SLOT_HEADER_BYTES}`])
+    expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq1@1', 'invalid:torn'])
+  })
+
   it('写不下的记录（writerId 超过 64 字节）：failed，不动文件', async () => {
     const { fake, mirror } = setup()
     expect(await mirror.write(record(1, { writerId: 'w'.repeat(65) }))).toMatchObject({ kind: 'not-mirrored', reason: 'failed', error: { name: 'TypeError' } })
@@ -183,14 +194,16 @@ describe('写：两个槽位轮流原地改写（截断 → 内容 → 头 → f
 })
 
 describe('截断、读、放开', () => {
-  it('截断：拿着句柄时两个都截断为 0；之后从 a 开始写，代号照样往上', async () => {
+  it('截断：拿着句柄时两个都截断为 0；之后从 a 开始写（截断之前最新的是哪一个都一样），代号照样往上', async () => {
     const { fake, mirror } = setup()
     await mirror.write(record(1))
     await mirror.write(record(2))
+    await mirror.write(record(3))
+    expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq3@3', 'seq2@2'])
     expect(await mirror.clear(KEY)).toEqual({ kind: 'mirrored' })
     expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['empty', 'empty'])
-    await mirror.write(record(3))
-    expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq3@3', 'empty'])
+    await mirror.write(record(4))
+    expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq4@4', 'empty'])
   })
 
   it('截断：手里没有句柄时临时拿一下、截断、放开；文件不在时什么也不做；别人占着时 busy', async () => {

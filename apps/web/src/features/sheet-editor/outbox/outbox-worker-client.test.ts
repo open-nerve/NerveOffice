@@ -307,6 +307,23 @@ describe('Worker 出事时不挂住：在途的全部以失败结束，之后立
   })
 })
 
+describe('镜像的放开、比对与事件（M4-P1 设计 §3.8）', () => {
+  it('放开句柄、比对、取走事件：各发一条给 Worker，等它回复；结果照它的回复', async () => {
+    const { worker, client } = await scripted()
+    const released = client.release(DRAFT)
+    expect(worker.posted.findLast(entry => entry.message.type === 'release')?.message).toMatchObject({ draft: DRAFT })
+    worker.reply(worker.idOf('release'), { kind: 'released' })
+    await expect(released).resolves.toBeUndefined()
+    const reconciled = client.reconcile(USER_ID)
+    expect(worker.posted.findLast(entry => entry.message.type === 'reconcile')?.message).toMatchObject({ userId: USER_ID })
+    worker.reply(worker.idOf('reconcile'), { kind: 'reconciled', documents: 2 })
+    expect(await reconciled).toEqual({ kind: 'reconciled', documents: 2 })
+    const taken = client.takeRecoveryEvents()
+    worker.reply(worker.idOf('take-events'), { kind: 'events', events: [{ kind: 'restored', key: DRAFT }, { kind: 'lost', key: DRAFT }] })
+    expect(await taken).toEqual([{ kind: 'restored', key: DRAFT }, { kind: 'lost', key: DRAFT }])
+  })
+})
+
 describe('转移与交密钥', () => {
   it('写入的字节转移给 Worker：调用方那一份随之清空', async () => {
     const { worker, client } = await scripted()

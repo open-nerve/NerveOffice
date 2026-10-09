@@ -264,6 +264,7 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
         { kind: 'registered', lastDraftSeq: -1, existing: undefined, mirror: { kind: 'off' } },
         { kind: 'registered', lastDraftSeq: 1, existing: undefined },
         { kind: 'registered', lastDraftSeq: 1, existing: undefined, mirror: { kind: 'other' } },
+        { kind: 'registered', lastDraftSeq: 1, existing: undefined, mirror: { kind: 'other', reason: 'busy' } },
         { kind: 'registered', lastDraftSeq: 1, existing: null, mirror: { kind: 'off' } },
         { kind: 'registered', lastDraftSeq: 1, existing: { kind: 'draft', meta, gzip: 'x' } },
         { kind: 'registered', lastDraftSeq: 1, existing: { kind: 'draft', meta: { ...meta, draftSeq: 0 }, gzip: gzip() } },

@@ -219,6 +219,20 @@ describe('写镜像（M4-P1 设计 §3.8）：IndexedDB 写成之后同一份记
     await writer.release(KEY)
     expect(files.openHandles()).toBe(0)
   })
+
+  it('标记在途、确认被栅栏拒绝（not-writer）、登记被更新的一代挡住：同样放开句柄', async () => {
+    const newer = { ...KEY, writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 1, registeredAt: NOW }
+    const fencedOn = async (action: (writer: DraftWriter) => Promise<unknown>): Promise<{ readonly result: unknown, readonly handles: number }> => {
+      const { store, files, writer } = await setup()
+      await writer.write(capture(1, 'one'))
+      expect(files.openHandles()).toBe(2)
+      store.putRaw('writers', KEY, newer)
+      return { result: await action(writer), handles: files.openHandles() }
+    }
+    expect(await fencedOn(async writer => writer.markInFlight(KEY, ME, inFlight(1)))).toEqual({ result: { kind: 'fenced', reason: 'not-writer' }, handles: 0 })
+    expect(await fencedOn(async writer => writer.confirm(KEY, ME, 1, 13))).toEqual({ result: { kind: 'fenced', reason: 'not-writer' }, handles: 0 })
+    expect(await fencedOn(async writer => writer.register(KEY, ME, false))).toEqual({ result: { kind: 'superseded', currentEpoch: 4, sameEpoch: false }, handles: 0 })
+  })
 })
 
 describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写回；读时取校验通过、解得开、最新的那一份', () => {
@@ -292,7 +306,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(await slots(files)).toEqual(['empty', 'empty'])
   })
 
-  it('两个槽位都不合格、库里也没有（连写入者都没了：删库）：留下 lost；库里还有写入者（草稿是被删掉的）时不算', async () => {
+  it('两个槽位都不合格、库里也没有（连写入者都没了：删库）：留下 lost（只留一次）；库里还有写入者（草稿是被删掉的）时不算', async () => {
     const { files, reopen, key } = await setup({ register: false })
     const record = await sealed(key, 'one', { draftSeq: 1 })
     await putSlot(files, KEY, 0, record, 1)
@@ -300,12 +314,36 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     files.putFile(KEY, 1, new Uint8Array(400).fill(7))
     const wiped = await reopen({ store: fakeDraftStore() })
     expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
+    expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
     expect(await wiped.takeRecoveryEvents()).toEqual([{ kind: 'lost', key: KEY }])
     const withWriter = fakeDraftStore()
     withWriter.putRaw('writers', KEY, { ...KEY, ...ME, lastDraftSeq: 1, registeredAt: NOW })
     const notLost = await reopen({ store: withWriter })
     expect(await notLost.read(KEY)).toEqual({ kind: 'absent' })
     expect(await notLost.takeRecoveryEvents()).toEqual([])
+  })
+
+  it('两个槽位都是空的（确认删掉时截断过）而库被删了：没有可丢的，不留 lost', async () => {
+    const { writer, reopen } = await setup()
+    await writer.write(capture(1, 'one'))
+    expect(await writer.confirm(KEY, ME, 1, 13)).toEqual({ kind: 'deleted' })
+    writer.dispose()
+    const wiped = await reopen({ store: fakeDraftStore() })
+    expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
+    expect(await wiped.takeRecoveryEvents()).toEqual([])
+  })
+
+  it('库用不了（读草稿交回 unavailable、failed）：镜像里有合格的就交回它（不写回）；没有时如实交回库的问题', async () => {
+    const { store, files, writer } = await setup()
+    await writer.write(capture(1, 'one'))
+    await writer.release(KEY)
+    store.failNext('readDraft', { kind: 'unavailable', reason: 'blocked' })
+    const fromMirror = await writer.read(KEY)
+    expect(fromMirror.kind === 'draft' && [fromMirror.meta.draftSeq, textOf(await gunzipBytes(fromMirror.gzip))]).toEqual([1, 'one'])
+    expect(store.calls.filter(call => call === 'restoreDraft')).toEqual([])
+    files.putFile(KEY, 0, new Uint8Array(0))
+    store.failNext('readDraft', { kind: 'failed', error: new TypeError('坏了') })
+    expect(await writer.read(KEY)).toEqual({ kind: 'failed', error: { name: 'TypeError', message: '坏了' } })
   })
 
   it('读时取最新、解得开的那一份：库里那一份坏了（解不开）时交回镜像里同一份完好的；镜像里那一份也坏了时交回能解开的旧的', async () => {

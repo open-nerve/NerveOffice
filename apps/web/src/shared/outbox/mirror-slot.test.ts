@@ -130,7 +130,7 @@ describe('槽位的头：固定 256 字节，魔数与版本、写入者、序�
     expect(await parseSlotHeader(zeroVersion)).toBeUndefined()
   })
 
-  it('校验得过但取值不对（不是本页写的样子）：writerId 的长度为 0、超过 64、不是 UTF-8，序号为 0，数超出安全整数', async () => {
+  it('校验得过但取值不对（不是本页写的样子）：魔数不对，writerId 的长度为 0、超过 64、不是 UTF-8，序号为 0，数超出安全整数；内容的长度与文件对不上', async () => {
     const draft = record()
     const content = encodeRecord(draft)
     const fields: SlotHeaderFields = { writeEpoch: draft.writeEpoch, writerId: draft.writerId, draftSeq: draft.draftSeq, generation: 1 }
@@ -148,6 +148,11 @@ describe('槽位的头：固定 256 字节，魔数与版本、写入者、序�
     expect(await parseSlotHeader(await resealed(view => view.setBigUint64(20, 0n, true))), '序号 0').toBeUndefined()
     expect(await parseSlotHeader(await resealed(view => view.setBigUint64(12, 2n ** 53n, true))), '代次超出安全整数').toBeUndefined()
     expect(await parseSlotHeader(await resealed(view => view.setBigUint64(28, 0n, true))), '代号 0').toBeUndefined()
+    // 别的格式的文件碰巧也有一样的头校验：魔数是格式的标识，不对就不认
+    expect(await parseSlotHeader(await resealed((_, bytes) => bytes.set([0x4E, 0x52, 0x56, 0x4F, 0x4D, 0x49, 0x52, 0x53], 0))), '魔数不对').toBeUndefined()
+    // 头说的内容长度与文件里的不一样（内容的 SHA-256 照样对得上）：写一半
+    const longer = await resealed(view => view.setBigUint64(36, BigInt(content.byteLength + 1), true))
+    expect(await parseSlot(fileOf({ header: longer, content })), '内容的长度对不上').toEqual({ kind: 'invalid', reason: 'torn' })
   })
 
   it('写不下的：writerId 的 UTF-8 超过 64 字节、代号不是正的安全整数', async () => {
