@@ -51,7 +51,10 @@ export const WORKER_SEGMENT_P95_MS = 300
 /** 计划书 §12.2：1 MiB 的捕获在主线程上的同步段 p95 */
 export const CAPTURE_SYNC_P95_MS = 100
 
-/** Worker 放置时异步段主线程的最长阻塞（每一次的最长阻塞取中位数）：设计 §3.6 第 10 项"约 10 ms 以内" */
+/**
+ * Worker 放置时异步段主线程的最长阻塞（每一次的最长阻塞取中位数）：设计 §3.6 第 10 项"约 10 ms 以内"。约 1 MiB 与约 5 MiB 两档都按它判
+ * （5 MiB 只记录的是同步段；复核 B12）
+ */
 export const WORKER_ASYNC_LAG_MS = 10
 
 /** WebKit 改在主线程放置的前提：主线程 gzip 的最长阻塞（p95）不超过这么多（M4 总设计 §6.1） */
@@ -59,6 +62,12 @@ export const MAIN_GZIP_LAG_MS = 100
 
 /** 第 1 MiB 那一档的样本：快照不到这么多字节（真实的两档约 1 MiB 与约 5 MiB） */
 const SMALL_CAPTURE_MAX_BYTES = 2 * 1024 * 1024
+
+/**
+ * 首屏的脚本经网络不到这么多字节算命中了缓存（真实 Safari 热的两次只有入口页的几 KiB；冷的一次 8–14 MB）。冷热按它认、不按先后：
+ * Playwright 里页面装了路由就不进 HTTP 缓存，按先后标成热的几步其实是冷的（M4-P1 复核 B5）
+ */
+export const CACHED_SCRIPT_MAX_BYTES = 100 * 1024
 
 type Rule = readonly [key: string, ok: (value: SelftestFact) => boolean, want: string]
 
@@ -535,6 +544,63 @@ function captureCost(reports: readonly ProbeReport[]): Verdict {
 
 const MODE_TEXT: Readonly<Record<string, string>> = { 'worker': ' Worker', 'main-thread': '主线程' }
 
+export type CacheState = 'cold' | 'warm' | 'unknown'
+
+/** 首屏实际是冷是热：脚本经网络传了多少（没记下时 unknown） */
+export function cacheStateOf(entry: ProbeReport): CacheState {
+  const transfer = number(entry.report.facts?.['perf.script-transfer-bytes'])
+  if (transfer === undefined)
+    return 'unknown'
+  return transfer < CACHED_SCRIPT_MAX_BYTES ? 'warm' : 'cold'
+}
+
+/** 冷热的说法：按实际的；与先后（第一次打开编辑器页的是冷的）对不上时写明 */
+function cacheLabel(entry: ProbeReport): string {
+  switch (cacheStateOf(entry)) {
+    case 'unknown':
+      return entry.cold ? '冷' : '热'
+    case 'cold':
+      return entry.cold ? '冷' : '标成热、缓存没命中，按冷算'
+    case 'warm':
+      return entry.cold ? '标成冷、脚本却命中了缓存，按热算' : '热'
+  }
+}
+
+/** 第一次增量与其后几次的中位数：第一次多出多少（冷启动、Worker 空闲之后的停顿都落在第一次）。按次序号排，只有一次时其后的没有 */
+export function firstRoundExcess(entry: ProbeReport): { readonly first: number | undefined, readonly rest: number | undefined, readonly excess: number | undefined } {
+  const rounds = (entry.report.timings ?? [])
+    .filter(timing => timing.id.startsWith('perf.incremental#'))
+    .map(timing => ({ index: Number(timing.id.slice('perf.incremental#'.length)), settle: timing.ms.settle }))
+    .filter((round): round is { index: number, settle: number } => typeof round.settle === 'number')
+    .sort((a, b) => a.index - b.index)
+  const first = rounds[0]?.settle
+  const rest = distribution(rounds.slice(1).map(round => round.settle))?.p50
+  return { first, rest, excess: first === undefined || rest === undefined ? undefined : first - rest }
+}
+
+/** 一串毫秒（保留一位小数，没有的写 —） */
+function msList(values: readonly (number | undefined)[]): string {
+  return `${values.map(value => value === undefined || Number.isNaN(value) ? '—' : String(Math.round(value * 10) / 10)).join('、')} ms`
+}
+
+const CACHE_TEXT: Readonly<Record<CacheState, string>> = { cold: '冷（脚本没命中缓存）', warm: '热（脚本命中了缓存）', unknown: '冷热不明' }
+
+/**
+ * 冷热对照（M4-P1 复核 B5）：按公式模式与实际的冷热分组，列出每一次的第一次增量、比其后的中位数多出多少、第一次改格子离 steady 多久。
+ * 冷启动的代价只在冷的几次出现；Worker 空闲之后的停顿与缓存无关，冷热都会出现
+ */
+export function coldWarmLines(entries: readonly ProbeReport[]): string[] {
+  const perf = entries.filter(entry => entry.report.scenario === 'perf-baseline')
+  const modes = [...new Set(perf.map(entry => text(entry.report.facts?.['perf.formula-mode'])))]
+  return modes.flatMap(mode => (['cold', 'warm', 'unknown'] as const).flatMap((state) => {
+    const group = perf.filter(entry => text(entry.report.facts?.['perf.formula-mode']) === mode && cacheStateOf(entry) === state)
+    if (group.length === 0)
+      return []
+    const figures = group.map(firstRoundExcess)
+    return [`冷热对照，公式在${MODE_TEXT[mode] ?? mode}、${CACHE_TEXT[state]}×${group.length}：第一次增量 ${msList(figures.map(figure => figure.first))}，比其后的中位数多出 ${msList(figures.map(figure => figure.excess))}；第一次改格子在 steady 之后 ${msList(group.map(entry => number(entry.report.facts?.['perf.first-edit-after-steady'])))}`]
+  }))
+}
+
 function rounds(timings: readonly SelftestTiming[], prefix: string): string {
   const settle = distribution(fieldOf(timings, prefix, 'settle'))
   const lag = Math.max(...fieldOf(timings, prefix, 'lagMax'))
@@ -558,9 +624,10 @@ function perfBaseline(reports: readonly ProbeReport[]): Verdict {
     if (fieldOf(timings, 'perf.incremental', 'settle').length === 0 || fieldOf(timings, 'perf.full', 'settle').length === 0)
       missing.push(`${entry.stepId}：perf.incremental#*、perf.full#*`)
     const mode = MODE_TEXT[text(facts['perf.formula-mode'])] ?? text(facts['perf.formula-mode'])
-    return `${entry.stepId}（${entry.cold ? '冷' : '热'}，公式在${mode}）：首屏到渲染完成 ${ms(number(facts['perf.ready']))}、到 steady ${ms(number(facts['perf.steady']))}；脚本经网络 ${text(facts['perf.script-transfer-bytes'])} 字节；增量 ${rounds(timings, 'perf.incremental')}；全量 ${rounds(timings, 'perf.full')}`
+    const first = firstRoundExcess(entry)
+    return `${entry.stepId}（${cacheLabel(entry)}，公式在${mode}）：首屏到渲染完成 ${ms(number(facts['perf.ready']))}、到 steady ${ms(number(facts['perf.steady']))}；脚本经网络 ${text(facts['perf.script-transfer-bytes'])} 字节；增量 ${rounds(timings, 'perf.incremental')}；第一次 ${ms(first.first)}、其后的中位数 ${ms(first.rest)}（第一次改格子在 steady 之后 ${ms(number(facts['perf.first-edit-after-steady']))}）；全量 ${rounds(timings, 'perf.full')}`
   })
-  return { item: 12, title, status: missing.length > 0 ? 'missing' : 'record', lines, missing }
+  return { item: 12, title, status: missing.length > 0 ? 'missing' : 'record', lines: [...lines, ...coldWarmLines(entries)], missing }
 }
 
 /**

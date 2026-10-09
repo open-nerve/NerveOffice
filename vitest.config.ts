@@ -65,7 +65,8 @@ export default defineConfig({
         'apps/web/src/editor/**',
         // 本机发件箱的 IndexedDB 接线（库的打开与升级、存储的事务、列表的索引）：jsdom 与 Node 都没有 IndexedDB，也不引入 fake-indexeddb
         // （它模拟不了配额与"事务里 await 别的异步就自动提交"），由三个浏览器的浏览器层用例覆盖（tests/e2e/specs/outbox，M4-P1 设计 §1 偏差 8）；
-        // 判定是纯函数（writer-fence.ts），在单元测试里测
+        // 判定都是纯函数，在单元测试里测：栅栏、恢复与保留期（writer-fence.ts），记录与提示的读法（draft-record.ts、recovery-notice.ts），
+        // 能不能封草稿（draft-codec.ts 的 canSealDrafts）
         'apps/web/src/shared/outbox/database.ts',
         'apps/web/src/shared/outbox/draft-store.ts',
         'apps/web/src/shared/outbox/draft-index.ts',

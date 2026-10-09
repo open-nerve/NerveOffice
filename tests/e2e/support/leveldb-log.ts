@@ -207,7 +207,7 @@ export function tearIndexedDbLog(profileDir: string, origin: string, declaredLen
   const database = indexedDbDirName(origin)
   const dir = join(indexedDbRoot(profileDir), database)
   if (!existsSync(dir))
-    throw new Error(`这个来源还没有 IndexedDB：${dir}`)
+    throw new Error(`这个来源没有 LevelDB 的 IndexedDB（${dir}）：还没打开过 IndexedDB，或者浏览器换了后端（例如 Chromium 的 SQLite 后端；那样 UR-034 的前提不在了）`)
   const log = currentLogName(readdirSync(dir))
   if (log === undefined)
     throw new Error(`${dir} 里没有日志`)

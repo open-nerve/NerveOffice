@@ -3,10 +3,18 @@
 // 否则在下一次写成之前发生删库，从镜像写回的比最后一次提交的旧（已提交的写入丢了；修之前实测读回第 1 份）。
 // 确定地造出来：写完第 1、2 份（两个槽位分别是它们）→ 把存着第 2 份的槽位改坏（等于写第 2 份的镜像时被结束）→ 结束、往日志结尾补只有头的记录
 // → 重开（登记：库里第 2 份比镜像新，补写镜像）、在同一来源的另一个库里写一条（新数据接在那半条后面）→ 结束、重开：Chromium 删库，从镜像
-// 写回的应当是第 2 份。只在 Chromium 系上跑（同 indexeddb-restore.spec.ts）。标签 @test-build
+// 写回的应当是第 2 份。只在 Chromium 系上跑（同 indexeddb-restore.spec.ts）；只看被测来源（baseURL）的那一条日志。标签 @test-build
+// UR-034 的前提（docs/upstream/UR-034-chromium-indexeddb-torn-log-wipe.md）：Chromium 的 IndexedDB 是 LevelDB、复用日志，补的半条记录之后新写的
+// 接在它后面，再下一次打开时删掉整个来源的库。CI 装的是当时最新的稳定版 Chrome 与 Edge，前提哪天不在了，这里的用例会失败，说明以
+// "UR-034 的前提不在了"开头。到时的处理：
+// - 资料目录里没有这个来源的 LevelDB IndexedDB（浏览器换了后端，例如 Chromium 的 SQLite 后端）：先用 S7 调查的自然出现的循环在新后端上重查
+//   崩溃之后会不会丢库、丢成什么样；不丢就把造删库的这几步改成经删库的接口造出"库没了"（同 specs/outbox/mirror.spec.ts），丢就照新的机理另造；
+//   UR-034 与设计 §3.8 一并订正。
+// - 补了半条记录之后没有删库（缺陷修好了）：用 UR-034 的最小复现确认是哪个版本修的，同样改用删库的接口造出"库没了"；OPFS 的冗余留不留由
+//   需求方定（修好之前的 Chromium 与别的浏览器仍可能需要）。
 import type { Page } from '@playwright/test'
 import type { CrashCheck } from '../../support/crash-probe.ts'
-import { expect, expectCrashed, test } from '../../support/browser-crash.ts'
+import { expect, expectCrashed, indexedDbLogOf, test, UR034_PREMISE_GONE } from '../../support/browser-crash.ts'
 import { CRASH_CONTENT_CHARS, crashSetupFor, openCrashProbe, removeCrashMirror, slotWord } from '../../support/crash-probe.ts'
 import { createUser } from '../../support/database.ts'
 import { loginThroughApi } from '../../support/session.ts'
@@ -50,7 +58,7 @@ test.describe('镜像比库落后一份时删库（发件箱 Worker）', { tag: 
     test.skip(browserName === 'webkit', 'WebKit 的 IndexedDB 是 SQLite，没有这个缺陷')
   })
 
-  test('写第 2 份的镜像被结束在半途、之后删库：重开之前补写过镜像，写回的是第 2 份', async ({ crashTool }) => {
+  test('写第 2 份的镜像被结束在半途、之后删库：重开之前补写过镜像，写回的是第 2 份', async ({ crashTool, baseURL }) => {
     const user = await createUser('crash-stale-mirror')
     let launch = await crashTool.launch()
     await loginThroughApi(launch.page, user)
@@ -79,13 +87,14 @@ test.describe('镜像比库落后一份时删库（发件箱 Worker）', { tag: 
     live = undefined
     report = await crashTool.crash(launch)
     expectCrashed(report)
-    expect(report.indexedDbLogs.map(state => state.tail.status)).toEqual(['corrupt'])
+    const log = indexedDbLogOf(report, baseURL)
+    expect(log.tail.status, `${UR034_PREMISE_GONE}：补的半条记录之后新写的没有接在它后面（LevelDB 不再复用日志？）：${JSON.stringify(log.tail)}`).toBe('corrupt')
 
     // 再重开：Chromium 删库，从镜像写回
     launch = await crashTool.relaunch(launch, report, { cookies: 'restore' })
     check = await openCrashProbe(launch, setup)
     live = check
-    expect(check.registered.peek.existed).toBe(false)
+    expect(check.registered.peek.existed, `${UR034_PREMISE_GONE}：补了半条记录、之后写过一次，再打开时 Chromium 没有删库（缺陷修好了？）`).toBe(false)
     expect(await check.notices()).toEqual(['restored@这份文档'])
     expect(await check.read()).toEqual({ kind: 'draft', seq: 2, writerSeq: 2, bytes: CRASH_CONTENT_CHARS, intact: true })
   })

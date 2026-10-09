@@ -7,6 +7,7 @@ import type { DraftKey, DraftMeta, ReadDraft, StoredDraft, WriterRecord } from '
 import type { RecoveryNotice, RecoveryNoticeKind } from './recovery-notice.ts'
 import type { ExistingDraft, RestoreVerdict, WriterIdentity } from './writer-fence.ts'
 import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, NOTICES_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
+import { canSealDrafts } from './draft-codec.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
 import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
@@ -202,11 +203,6 @@ function isConnectionLost(error: unknown): boolean {
   return name === 'InvalidStateError' || name === 'UnknownError'
 }
 
-/** 非安全上下文里没有 crypto.subtle：草稿加密不了，发件箱整个用不了 */
-function hasSubtleCrypto(): boolean {
-  return (globalThis.crypto as { readonly subtle?: SubtleCrypto } | undefined)?.subtle !== undefined
-}
-
 /** 草稿与写入者：登记、写入、重封、确认、读回的事务开在这两个仓库上 */
 const DRAFT_STORES: readonly string[] = [DRAFTS_STORE, WRITERS_STORE]
 
@@ -309,7 +305,8 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
   async function connect(): Promise<OutboxConnection | OutboxUnavailable> {
     if (connection !== undefined && !connection.isClosed())
       return connection
-    if (!hasSubtleCrypto())
+    // 非安全上下文里没有 crypto.subtle：草稿封不了，发件箱整个用不了（判断在 draft-codec.ts，单元测试覆盖）
+    if (!canSealDrafts(globalThis))
       return { kind: 'unavailable', reason: 'unsupported' }
     opening ??= openOutboxDatabase({ factory, blockedTimeoutMs: options.blockedTimeoutMs }).then((result) => {
       opening = undefined

@@ -1,7 +1,7 @@
 import type { LocalKeyHandle } from './draft-codec.ts'
 import type { StoredDraft } from './draft-record.ts'
 import { describe, expect, it } from 'vitest'
-import { gunzipBytes, gzipBytes, newDraftIv, openDraft, sealDraft, sha256Hex, unsealFailureOf } from './draft-codec.ts'
+import { canSealDrafts, gunzipBytes, gzipBytes, newDraftIv, openDraft, sealDraft, sha256Hex, unsealFailureOf } from './draft-codec.ts'
 import { metaVariants, sampleMeta } from './draft-record.test-support.ts'
 import { DRAFT_IV_BYTES, DRAFT_TAG_BYTES, readStoredDraft } from './draft-record.ts'
 
@@ -55,6 +55,17 @@ describe('已知答案（KAT）：草稿的加密格式一旦有库里的数据�
     const opened = await openDraft(key, sealed)
     expect(opened.kind).toBe('opened')
     expect(opened.kind === 'opened' && new TextDecoder().decode(opened.gzip)).toBe(PLAIN)
+  })
+})
+
+describe('这里能不能封草稿（crypto.subtle 只在安全上下文里有，P1 审查 B14）', () => {
+  it('有 crypto.subtle 才能；没有 crypto、crypto 上没有 subtle（经 http 打开的部署）都不能——存储随之按 unsupported 交回', () => {
+    expect(canSealDrafts(globalThis)).toBe(true)
+    expect(canSealDrafts({ crypto: globalThis.crypto })).toBe(true)
+    expect(canSealDrafts({})).toBe(false)
+    // 非安全上下文里 crypto 还在（getRandomValues 照常），只是没有 subtle
+    expect(canSealDrafts({ crypto: {} })).toBe(false)
+    expect(canSealDrafts({ crypto: { subtle: undefined } })).toBe(false)
   })
 })
 

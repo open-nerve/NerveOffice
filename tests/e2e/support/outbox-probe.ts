@@ -348,7 +348,6 @@ export async function probeDatabase<M extends DatabaseMethod>(page: Page, method
   }, { method, args }) as Promise<Awaited<ReturnType<OutboxProbe['database'][M]>>>
 }
 
-/** 在页面里调探针的本机密钥一侧的方法（经生产的 fetchLocalKey 取、用它加密） */
 /** 在页面里调探针的本机存储状态（生产的 storage-status.ts） */
 export async function probeStorage<M extends StorageMethod>(page: Page, method: M): Promise<Awaited<ReturnType<OutboxProbe['storage'][M]>>> {
   return page.evaluate(async (name) => {
@@ -359,6 +358,10 @@ export async function probeStorage<M extends StorageMethod>(page: Page, method: 
   }, method) as Promise<Awaited<ReturnType<OutboxProbe['storage'][M]>>>
 }
 
+/**
+ * 在页面里调探针的本机密钥一侧的方法：探针自己发请求取本机密钥（会话里的 CSRF 令牌），用生产的 importLocalKey 导入，再用它加密；
+ * 不经 local-key.ts 的 fetchLocalKey（它引用请求层，探针引用了会改变测试构建的分块，M4-P1 S6）
+ */
 export async function probeLocalKey<M extends LocalKeyMethod>(page: Page, method: M, ...args: Parameters<OutboxProbe['localKey'][M]>): Promise<Awaited<ReturnType<OutboxProbe['localKey'][M]>>> {
   return page.evaluate(async ({ method, args }) => {
     const target = window.__nerveOutboxProbe

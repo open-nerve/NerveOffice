@@ -1,17 +1,27 @@
 // 真实浏览器的前置复核在本机的持久上下文里的实测（M4-P1 设计 §3.6、§1 偏差 7）：Playwright 默认的浏览器上下文不落盘（Chromium 是无痕式的上下文、
 // WebKit 用临时的数据存储），M0 的写入耗时、strict 的开销与写满都是在内存里的 IndexedDB 上测的；这里在持久化的浏览器目录里、按足够的次数
 // 跑与真实 Safari 同一套页面自检（apps/web/src/editor/testing/ 的复核场景），作三个浏览器的对照。不进常规的 E2E 与 CI：
-// pnpm --filter @nerve-office/e2e run measure:probe（先构建后端与测试构建；三个浏览器依次跑、一个工作进程，每个浏览器约 15 分钟）。
-// 每个浏览器一条用例：
-// 1. 一个持久上下文里依次跑首屏与公式冻结（Worker、主线程、再一次 Worker：第一步是这个资料目录里第一次打开编辑器页，冷的）、捕获成本（约 1 MiB、
+// pnpm --filter @nerve-office/e2e run measure:probe（先构建后端与测试构建；三个浏览器依次跑、一个工作进程；2026-10-10 实测第一条用例每个浏览器
+// 约 9 分钟，冷热对照每个浏览器约 3 分钟；只跑其中一条用 -g，例如 -g 冷热）。
+// 结果交给另起的本机收集端（support/selftest-collector.ts），页面不装路由：Playwright 一路由页面就关掉 HTTP 缓存，按先后标成热的几步
+// 就成了冷的（M4-P1 复核 B5：2026-10-10 那一次的 perf-main、perf-worker-warm 都把脚本整个重传了）。每个浏览器两条用例：
+// - 复核的各步：
+// 1. 一个持久上下文里依次跑首屏与公式冻结（Worker、主线程、再一次 Worker：第一步是这个资料目录里第一次打开编辑器页，冷的，之后的热）、捕获成本（约 1 MiB、
 //    约 5 MiB）、存储、密钥交给 Worker、Worker 的停顿（探针 Worker），以及生产的发件箱（主会话把 S8 的第二轮并进来）：生产 Worker 的停顿、
 //    磁盘上的管道各段与恢复路径，连同 OPFS 的镜像（设计 §3.8；持久上下文里三个浏览器都有 OPFS——WebKit 的默认上下文没有——Playwright 的
 //    WebKit 在 macOS 上把它放在共用的目录里，探针收尾时按复核用户删掉）；Chromium 系另经 CDP 造出"已授予持久保存"再跑一次存储（第 1 项的另一条路）；
 // 2. 另一个持久上下文（新的资料目录）里跑写满：Chromium 系经 CDP 把配额覆盖成 12 MiB；WebKit 没有这个接口，只记下配额、不写。
+// - 首屏与公式冻结的冷热对照（复核 B5）：MEASURE_WARMUP_ROUNDS 轮（默认 4），每一轮一个新的资料目录（HTTP 缓存是空的），perf-baseline 打开
+//   三次——冷的一次、热的两次，看第一次增量计算慢的那一下跟着冷启动走、还是跟着 Worker 的空闲走（冷热两边第一次改格子之前的空闲相当，页面
+//   另记）。公式默认在 Worker；MEASURE_WARMUP_FORMULA=main-thread 换成主线程模式作对照（没有公式 Worker）。用例另核对冷的那一次没命中缓存、
+//   热的两次命中了。
 // 运行次数 MEASURE_PROBE_RUNS（默认 40，与真实 Safari 的驱动脚本相同）。各步的原始结果与逐项的判定（support/probe-verdicts.ts）写在
-// measure/test-results/probe/<浏览器>.json 与 .md（下一次实测覆盖）。用例只要求每一步都交回了结果、各项的数据齐；判定的结论写进复核报告
-import type { BrowserContext, Page, TestInfo } from '@playwright/test'
-import type { ProbeReport } from '../support/probe-verdicts.ts'
+// measure/test-results/probe/<浏览器>.json 与 .md，冷热对照写在 <浏览器>-warmup.json 与 .md（主线程模式的对照是 -warmup-main-thread；下一次实测覆盖）。
+// 用例只要求每一步都交回了结果、各项的数据齐；判定的结论写进复核报告
+import type { BrowserContext, BrowserType, Page, TestInfo } from '@playwright/test'
+import type { ProfileWatchers } from '../support/persistent-profile.ts'
+import type { CacheState, ProbeReport } from '../support/probe-verdicts.ts'
+import type { ResultCollector } from '../support/selftest-collector.ts'
 import type { SelftestStep, SelftestStepDefinition } from '../support/selftest-plan.ts'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { loadavg } from 'node:os'
@@ -20,7 +30,8 @@ import process from 'node:process'
 import { e2eOrigin } from '../support/environment.ts'
 import { expect, test } from '../support/fixtures.ts'
 import { firstPage, grantDurableStorage, launchPersistentProfile, overrideQuota } from '../support/persistent-profile.ts'
-import { probeVerdicts, verdictLines } from '../support/probe-verdicts.ts'
+import { cacheStateOf, probeVerdicts, verdictLines } from '../support/probe-verdicts.ts'
+import { startResultCollector } from '../support/selftest-collector.ts'
 import { SELFTEST_STEPS, selftestScene } from '../support/selftest-plan.ts'
 import { runSelftestStep } from '../support/selftest-run.ts'
 
@@ -40,6 +51,20 @@ const GRANTED_STORAGE: SelftestStepDefinition = { id: 'storage-granted', scenari
 
 /** 写满（新的资料目录） */
 const QUOTA: SelftestStepDefinition = { id: 'storage-quota', scenario: 'storage-quota', role: 'viewer', sample: 'template' }
+
+/** 冷热对照的轮数（每一轮一个新的资料目录）与每一轮打开编辑器页的三次：冷的一次、热的两次 */
+const WARMUP_ROUNDS = Number(process.env.MEASURE_WARMUP_ROUNDS ?? '4')
+const WARMUP_KINDS = ['cold', 'warm-a', 'warm-b'] as const
+
+/** 冷热对照的公式模式（默认 Worker；主线程模式作对照）与结果文件名里的后缀 */
+const WARMUP_FORMULA = process.env.MEASURE_WARMUP_FORMULA === 'main-thread' ? 'main-thread' : 'worker'
+const WARMUP_NAME = WARMUP_FORMULA === 'worker' ? 'warmup' : 'warmup-main-thread'
+const WARMUP_MODE_TEXT = WARMUP_FORMULA === 'worker' ? '公式在 Worker' : '公式在主线程'
+
+/** 冷热对照的各步：每一轮三份文档（perf-50k），步骤名带轮次与冷热 */
+function warmupDefinitions(rounds: number): SelftestStepDefinition[] {
+  return Array.from({ length: rounds }, (_, round) => WARMUP_KINDS.map((kind): SelftestStepDefinition => ({ id: `perf-${round + 1}-${kind}`, scenario: 'perf-baseline', role: 'author', sample: 'perf-50k', formula: WARMUP_FORMULA }))).flat()
+}
 
 /** Chromium 系经 CDP 把配额覆盖成多少（设计 §3.6 第 4 项：8–16 MiB） */
 const QUOTA_OVERRIDE_BYTES = 12 * 1024 * 1024
@@ -64,27 +89,66 @@ function chromiumFamily(browserName: string): boolean {
 }
 
 /** 第 1 步起依次跑；第一步是这个资料目录里第一次打开编辑器页（冷的）。Chromium 系最后造出"已授予持久保存"再跑一次存储 */
-async function runInProfile(context: BrowserContext, page: Page, steps: readonly SelftestStep[], browserName: string): Promise<ProbeReport[]> {
+async function runInProfile(context: BrowserContext, page: Page, steps: readonly SelftestStep[], browserName: string, collector: ResultCollector): Promise<ProbeReport[]> {
   const reports: ProbeReport[] = []
   for (const [index, id] of STEP_IDS.entries()) {
     const step = stepNamed(steps, id)
-    reports.push({ stepId: step.id, report: await runSelftestStep(page, step, STEP_TIMEOUT_MS), cold: index === 0 })
+    reports.push({ stepId: step.id, report: await runSelftestStep(page, step, collector, STEP_TIMEOUT_MS), cold: index === 0 })
   }
   if (chromiumFamily(browserName)) {
     const release = await grantDurableStorage(context, page, e2eOrigin())
     const step = stepNamed(steps, GRANTED_STORAGE.id)
-    reports.push({ stepId: step.id, report: await runSelftestStep(page, step, STEP_TIMEOUT_MS), cold: false })
+    reports.push({ stepId: step.id, report: await runSelftestStep(page, step, collector, STEP_TIMEOUT_MS), cold: false })
     await release()
   }
   return reports
 }
 
 /** 写满：新的资料目录（这个源还没有写过 IndexedDB），Chromium 系先覆盖配额（CDP 的会话开着才生效） */
-async function runQuota(context: BrowserContext, page: Page, step: SelftestStep, browserName: string): Promise<ProbeReport> {
+async function runQuota(context: BrowserContext, page: Page, step: SelftestStep, browserName: string, collector: ResultCollector): Promise<ProbeReport> {
   const release = chromiumFamily(browserName) ? await overrideQuota(context, page, e2eOrigin(), QUOTA_OVERRIDE_BYTES) : async () => {}
-  const report = await runSelftestStep(page, step, STEP_TIMEOUT_MS)
+  const report = await runSelftestStep(page, step, collector, STEP_TIMEOUT_MS)
   await release()
   return { stepId: step.id, report, cold: false }
+}
+
+/** 冷热对照：每一轮开一个新的资料目录，按冷、热、热打开三次（第一次是这个资料目录里第一次打开编辑器页） */
+async function runWarmup(browserType: BrowserType, testInfo: TestInfo, watchers: ProfileWatchers, steps: readonly SelftestStep[], collector: ResultCollector): Promise<ProbeReport[]> {
+  const reports: ProbeReport[] = []
+  for (let round = 1; round <= WARMUP_ROUNDS; round += 1) {
+    const profile = await launchPersistentProfile(browserType, testInfo, `warmup-${round}`, watchers)
+    try {
+      const page = await firstPage(profile)
+      for (const kind of WARMUP_KINDS) {
+        const step = stepNamed(steps, `perf-${round}-${kind}`)
+        reports.push({ stepId: step.id, report: await runSelftestStep(page, step, collector, STEP_TIMEOUT_MS), cold: kind === 'cold' })
+      }
+    }
+    finally {
+      await profile.close()
+    }
+  }
+  return reports
+}
+
+/** 冷热对照里每一次应当的冷热：冷的那一次没命中缓存，热的两次命中了 */
+function expectedCacheStates(reports: readonly ProbeReport[]): CacheState[] {
+  return reports.map(entry => (entry.cold ? 'cold' : 'warm'))
+}
+
+/** 写下冷热对照的结果：原始的各次与第 12 项的说明（每一次一行，末尾按冷热分组） */
+function writeWarmup(testInfo: TestInfo, startedAt: string, loadBefore: readonly number[], reports: readonly ProbeReport[]): void {
+  const lines = [
+    `# ${testInfo.project.name}：首屏与公式冻结的冷热对照（持久上下文，${WARMUP_ROUNDS} 轮 × 冷 1、热 2，${WARMUP_MODE_TEXT}；运行次数 ${RUNS}）`,
+    '',
+    `- 浏览器：${reports[0]?.report.userAgent ?? '—'}`,
+    `- 开始 ${startedAt}，负载（1、5、15 分钟）${loadBefore.map(value => value.toFixed(2)).join(' ')} → ${loadavg().map(value => value.toFixed(2)).join(' ')}`,
+    '',
+    ...verdictLines(probeVerdicts(reports).filter(verdict => verdict.id === '12')),
+  ]
+  mkdirSync(RESULTS_DIR, { recursive: true })
+  writeFileSync(join(RESULTS_DIR, `${testInfo.project.name}-${WARMUP_NAME}.json`), `${JSON.stringify({ format: 'nerve-office.probe-warmup.v1', project: testInfo.project.name, rounds: WARMUP_ROUNDS, formula: WARMUP_FORMULA, runs: RUNS, startedAt, finishedAt: new Date().toISOString(), load: { before: loadBefore, after: loadavg() }, reports }, null, 2)}\n`)
+  writeFileSync(join(RESULTS_DIR, `${testInfo.project.name}-${WARMUP_NAME}.md`), `${lines.join('\n')}\n`)
 }
 
 /** 写下这个浏览器的结果：原始的各步与逐项的判定（"已授予"的那一次存储单独判定第 1 项） */
@@ -114,23 +178,48 @@ test(`真实浏览器的前置复核（M4-P1 §3.6）：持久上下文里跑首
   const startedAt = new Date().toISOString()
   const scene = await selftestScene(`mp-${testInfo.project.name}`, [...STEP_IDS.map(definitionOf), GRANTED_STORAGE, QUOTA], RUNS)
   const watchers = { cspViolations, pageErrors }
-  const profile = await launchPersistentProfile(playwright[browserName], testInfo, 'profile', watchers)
+  const collector = await startResultCollector()
   let reports: ProbeReport[]
   try {
-    reports = await runInProfile(profile, await firstPage(profile), scene.steps, browserName)
+    const profile = await launchPersistentProfile(playwright[browserName], testInfo, 'profile', watchers)
+    try {
+      reports = await runInProfile(profile, await firstPage(profile), scene.steps, browserName, collector)
+    }
+    finally {
+      await profile.close()
+    }
+    const quotaProfile = await launchPersistentProfile(playwright[browserName], testInfo, 'quota-profile', watchers)
+    try {
+      reports.push(await runQuota(quotaProfile, await firstPage(quotaProfile), stepNamed(scene.steps, QUOTA.id), browserName, collector))
+    }
+    finally {
+      await quotaProfile.close()
+    }
   }
   finally {
-    await profile.close()
-  }
-  const quotaProfile = await launchPersistentProfile(playwright[browserName], testInfo, 'quota-profile', watchers)
-  try {
-    reports.push(await runQuota(quotaProfile, await firstPage(quotaProfile), stepNamed(scene.steps, QUOTA.id), browserName))
-  }
-  finally {
-    await quotaProfile.close()
+    await collector.close()
   }
   const missing = writeResults(testInfo, startedAt, loadBefore, reports)
   await testInfo.attach('probe-measure', { path: join(RESULTS_DIR, `${testInfo.project.name}.md`), contentType: 'text/markdown' })
   expect(reports.map(entry => entry.report.failure ?? 'ok'), '每一步都跑完了').toEqual(reports.map(() => 'ok'))
   expect(missing, '各项的数据都齐').toEqual([])
+})
+
+test(`首屏与公式冻结的冷热对照（M4-P1 复核 B5）：${WARMUP_ROUNDS} 个新的资料目录，各打开编辑器页三次（冷的一次、热的两次），${WARMUP_MODE_TEXT}`, async ({ playwright, browserName, cspViolations, pageErrors }, testInfo) => {
+  expect(WARMUP_ROUNDS, 'MEASURE_WARMUP_ROUNDS 是 1 到 20 的整数').toBeGreaterThanOrEqual(1)
+  const loadBefore = loadavg()
+  const startedAt = new Date().toISOString()
+  const scene = await selftestScene(`mw-${testInfo.project.name}`, warmupDefinitions(WARMUP_ROUNDS), RUNS)
+  const collector = await startResultCollector()
+  let reports: ProbeReport[]
+  try {
+    reports = await runWarmup(playwright[browserName], testInfo, { cspViolations, pageErrors }, scene.steps, collector)
+  }
+  finally {
+    await collector.close()
+  }
+  writeWarmup(testInfo, startedAt, loadBefore, reports)
+  await testInfo.attach('probe-warmup', { path: join(RESULTS_DIR, `${testInfo.project.name}-${WARMUP_NAME}.md`), contentType: 'text/markdown' })
+  expect(reports.map(entry => entry.report.failure ?? 'ok'), '每一次都跑完了').toEqual(reports.map(() => 'ok'))
+  expect(reports.map(cacheStateOf), '冷的那一次没命中缓存、热的两次命中了（收集结果不经 page.route，HTTP 缓存照常）').toEqual(expectedCacheStates(reports))
 })

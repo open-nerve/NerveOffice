@@ -11,7 +11,9 @@
 // 结束的时机两组，每种放置、每个浏览器共 22 次：
 // - 开始写之后 0–260 ms 的延迟（12 次，前密后疏）：落在去重、压缩、加密、交给存储、提交、写镜像与之后；
 // - "写入之前"的信号（进程内：交给存储之前；Worker：Worker 开写入的事务时）之后 0 到 1.5 倍提交用时（10 次）：信号一到就冻住时事务还没开始，
-//   读回的总是旧的，所以按先量出的提交用时往后错开，让冻住的那一刻落在事务的各个阶段（M0 P6 审查 G5）。
+//   读回的总是旧的，所以按先量出的提交用时往后错开，让冻住的那一刻落在事务的各个阶段（M0 P6 审查 G5）。信号要经 BroadcastChannel（Worker）与
+//   绑定函数才到测试进程，慢机器上这段延迟可能比提交还长、十次都冻在提交之后（全是新的），覆盖就悄悄变弱了：不断言分布，但在附件之外另记一条
+//   注解"冻在提交之前 n / 10"（P1 审查 B14），看得出来。
 // 另有一条锚点：写完了再结束，读回的必须是新的（写成了的扛得住进程被结束）。每次的结局、冻住的时机、打开之前库在不在、提示与结束之后
 // IndexedDB 日志结尾的状态（删库的前兆）记成附件，不断言两种结局的比例（与机器的快慢有关）。要先登录（探针在编辑器页里），重开时走 Cookie 的 restore
 import type { TestInfo } from '@playwright/test'
@@ -105,6 +107,12 @@ function resultOf({ before, read }: Outcome): 'old' | 'new' | 'other' {
 async function attachOutcomes(testInfo: TestInfo, outcomes: readonly Outcome[]): Promise<void> {
   const rows = outcomes.map(outcome => ({ trigger: outcome.trigger, frozenAfterMs: outcome.frozenAfterMs, result: resultOf(outcome), read: outcome.read, databaseExisted: outcome.databaseExisted, notices: outcome.notices, indexedDbLogs: outcome.logs }))
   await testInfo.attach('outcomes.json', { body: JSON.stringify(rows, null, 2), contentType: 'application/json' })
+}
+
+/** 冻在提交之前（读回旧的）的有几次：一行，记成注解（不断言分布；0 次时说明信号到得比提交晚，这一组只测到了提交之后） */
+function beforeCommitLine(outcomes: readonly Outcome[]): string {
+  const before = outcomes.filter(outcome => resultOf(outcome) === 'old').length
+  return `${before} / ${outcomes.length}${before === 0 ? '（全是新的：信号到得比提交晚，这次只测到了提交之后）' : ''}`
 }
 
 async function waitMs(ms: number): Promise<void> {
@@ -220,6 +228,7 @@ for (const placement of CRASH_PLACEMENTS) {
         committed = seqOf(reopened.read) ?? committed
       }
       await attachOutcomes(testInfo, outcomes)
+      testInfo.annotations.push({ type: '冻在提交之前', description: beforeCommitLine(outcomes) })
       expect(outcomes).toHaveLength(SIGNAL_RUNS)
       expect(problemsOf(outcomes)).toEqual([])
     })

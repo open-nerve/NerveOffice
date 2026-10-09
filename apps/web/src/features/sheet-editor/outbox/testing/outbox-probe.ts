@@ -128,13 +128,13 @@ export interface OutboxProbe {
     /** 放开撑着的事务，等它提交 */
     readonly releaseTransaction: (held: number) => Promise<void>
   }
-  /** 本机密钥：探针自己发请求取（会话里的 CSRF 令牌），用生产的 importLocalKey 导入；只交回事实，不交出密钥 */
   /** 本机存储的状态：生产的 storage-status.ts（persisted、persist、estimate），结果原样交回 */
   readonly storage: {
     readonly persisted: () => Promise<Awaited<ReturnType<typeof storagePersisted>>>
     readonly persist: () => Promise<Awaited<ReturnType<typeof requestPersistence>>>
     readonly estimate: () => Promise<Awaited<ReturnType<typeof storageEstimate>>>
   }
+  /** 本机密钥：探针自己发请求取（会话里的 CSRF 令牌），用生产的 importLocalKey 导入；只交回事实，不交出密钥 */
   readonly localKey: {
     readonly fetch: () => Promise<ProbeLocalKey>
     /** 用最近一次取到的密钥加密（AES-GCM，不带 AAD）：E2E 用服务端给的原始字节独立解开，核对就是那一把 */
