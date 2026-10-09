@@ -6,16 +6,19 @@
 // 只引用发件箱自己的、不带 zod 的模块：不引用请求层（shared/api）、zod 与带 zod 的契约模块——引用了，测试构建里平台页面与编辑器页的入口分块
 // 就与生产的不同（M3-P2 复核 B4）；S6 实测探针经 local-key.ts 引用请求层时，请求层连同 zod 与契约的结构被拆进一个新的共享分块，
 // 先于关掉 zod 的 JIT（shared/lib/zod-jitless.ts）求值。所以取本机密钥的请求由探针自己发（取会话里的 CSRF 令牌、POST），导入用生产的
-// importLocalKey；请求层的写法（自动带 CSRF、按契约校验）由 local-key.ts 的单元测试覆盖
+// importLocalKey；请求层的写法（自动带 CSRF、按契约校验）由 local-key.ts 的单元测试覆盖。
+// 写入管道（进程内与发件箱 Worker 两种宿主）的那一部分在 pipeline-probe.ts，挂在 pipeline 上
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { DraftKey, DraftMeta, ReadDraft } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore, ListedDraft, StoreProblem } from '../../../../shared/outbox/draft-store.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
+import type { ProbePipeline } from './pipeline-probe.ts'
 import { browserIndexedDb, DRAFTS_STORE, openOutboxDatabase, OUTBOX_DATABASE_NAME, OUTBOX_DATABASE_VERSION, OUTBOX_KEY_PATH, WRITERS_STORE } from '../../../../shared/outbox/database.ts'
 import { gunzipBytes, gzipBytes, openDraft, sealDraft } from '../../../../shared/outbox/draft-codec.ts'
 import { draftDocumentIds } from '../../../../shared/outbox/draft-index.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { importLocalKey } from '../../../../shared/outbox/local-key-import.ts'
+import { createPipelineProbe } from './pipeline-probe.ts'
 
 /** 挂在 window 上的名字（门禁的禁用关键字里登记了它：生产构建里连名字都不能有） */
 export const OUTBOX_PROBE_NAME = '__nerveOutboxProbe'
@@ -137,6 +140,8 @@ export interface OutboxProbe {
   /** 写一份形状不对的草稿（封好之后把 IV 截成 11 字节）：核对存储不写它 */
   readonly writeMalformed: (input: ProbeDraftInput) => Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>
   readonly transactions: () => readonly ProbeTransaction[]
+  /** 写入管道：进程内与发件箱 Worker 两种宿主跑同一组操作（pipeline-probe.ts） */
+  readonly pipeline: ProbePipeline
 }
 
 declare global {
@@ -564,6 +569,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
         failures.push(name)
     },
     transactions: () => [...recorded],
+    pipeline: createPipelineProbe({ key: () => key, store: () => store }),
   }
   target[OUTBOX_PROBE_NAME] = probe
   return probe
