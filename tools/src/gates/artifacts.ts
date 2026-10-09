@@ -511,7 +511,8 @@ export function classifyArtifact(path: string): ArtifactKind {
  * - 编辑器的 testing/（M2-P3 设计 §3.7、M3-P2 设计 §3.5、M3-P4 设计 §3.14）：E2E 探针（把 Facade 挂在 window 上）与它补上的插件 Facade、
  *   页面自检与它和 E2E 共用的文件（入口清单、比较口径、结果的格式、切换的计时：switch-timing.ts 装上时替换 window.fetch；捕获时机复核的
  *   样本与捕获规则的参考实现）、公式模式的开关（formula-mode.ts：地址参数选主线程模式，生产构建里只有 Worker 模式）；
- * - 页面自检的入口页与编辑器页的挂接（features/sheet-editor/selftest-hook.ts，start.tsx 只在测试构建里动态引入）。
+ * - 页面自检的入口页与编辑器页的挂接（features/sheet-editor/selftest-hook.ts，start.tsx 只在测试构建里动态引入）；
+ * - 发件箱的浏览器层探针（M4-P1 设计 §3.1，features/sheet-editor/outbox/testing/：start.tsx 只在测试构建、地址带 outboxProbe 时动态引入）。
  * 按模块的来源认（web 构建写出的模块来源清单，M3-P2 复核 B2）：分块改了名、被并进别的分块、被生产代码直接动态引入成了自己的分块，
  * 都认得出。分块名（TEST_ONLY_ARTIFACTS）与禁用关键字（policy.ts）照旧作兜底
  */
@@ -522,6 +523,7 @@ export const TEST_ONLY_SOURCES: readonly string[] = [
   'src/entries/csp-probe/',
   'src/entries/selftest/',
   'src/features/sheet-editor/selftest-hook.ts',
+  'src/features/sheet-editor/outbox/testing/',
 ]
 
 /** 模块是不是只属于测试构建：按路径认（查询串不算） */
@@ -562,10 +564,11 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  * - 公式模式的开关（formula-mode，M3-P4 设计 §3.14）：createSheetEditor 在测试构建的分支里动态引入它，自成分块；
  * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块；
  * - 自动保存的控制（M3-P4 设计 §3.14，autosave-control）与交接日志（M3-P5 设计 §3.13，handover-log）：编辑器页的组装处（start.tsx）动态引入它们，
- *   各自成分块。
- * 自检结果的格式标识与计时、自动保存的控制与交接日志挂在 window 上的名字另由禁用关键字核对
+ *   各自成分块；
+ * - 发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox-probe）：同样由 start.tsx 动态引入，自成分块（P1 里发件箱的模块只有它引用，一起在这个分块里）。
+ * 自检结果的格式标识与计时、自动保存的控制、交接日志与发件箱探针挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths
