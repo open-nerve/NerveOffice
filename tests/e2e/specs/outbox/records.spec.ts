@@ -27,7 +27,7 @@ function flippedHex(hex: string): string {
 }
 
 test.describe('发件箱的记录', { tag: '@test-build' }, () => {
-  test('直接改库里的任何一个明文字段之后解不开：密钥版本改小算"已吊销"，其余算"已损坏"；IV、密文改一个字节同样；格式版本改大算更新的格式、不动它；形状不对算损坏', async ({ page }) => {
+  test('直接改库里的任何一个明文字段之后解不开：密钥版本改小算"已吊销"、改大算"本页的密钥过时"（审查 A3），其余算"已损坏"；IV、密文改一个字节同样；格式版本改大算更新的格式、不动它；形状不对算损坏', async ({ page }) => {
     const { key, writer } = await prepare(page, 'ob-tamper', 3)
     const inFlight = { requestId: randomUUID(), clientInstanceId: `instance-${writer.writerId}`, localSeq: 0, sentAt: NOW - 1_000 }
     const cases: readonly { readonly label: string, readonly patch: (raw: Record<string, unknown>) => Record<string, unknown>, readonly expected: unknown }[] = [
@@ -42,7 +42,7 @@ test.describe('发件箱的记录', { tag: '@test-build' }, () => {
       { label: 'inFlight.localSeq', patch: raw => ({ inFlight: { ...raw.inFlight as object, localSeq: Number((raw.inFlight as { localSeq: number }).localSeq) - 1 } }), expected: { kind: 'unreadable', reason: 'corrupted' } },
       { label: 'inFlight（去掉）', patch: () => ({ inFlight: null }), expected: { kind: 'unreadable', reason: 'corrupted' } },
       { label: 'keyVersion（改小）', patch: () => ({ keyVersion: 2 }), expected: { kind: 'unreadable', reason: 'revoked' } },
-      { label: 'keyVersion（改大）', patch: () => ({ keyVersion: 4 }), expected: { kind: 'unreadable', reason: 'corrupted' } },
+      { label: 'keyVersion（改大）', patch: () => ({ keyVersion: 4 }), expected: { kind: 'unreadable', reason: 'stale-key' } },
       { label: 'iv', patch: raw => ({ iv: flippedHex((raw.iv as { hex: string }).hex) }), expected: { kind: 'unreadable', reason: 'corrupted' } },
       { label: 'ciphertext', patch: raw => ({ ciphertext: flippedHex((raw.ciphertext as { hex: string }).hex) }), expected: { kind: 'unreadable', reason: 'corrupted' } },
     ]

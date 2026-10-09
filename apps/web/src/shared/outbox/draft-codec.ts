@@ -72,17 +72,25 @@ export async function sealDraft(key: LocalKeyHandle, meta: Omit<DraftMeta, 'keyV
   return { ...full, iv, ciphertext: new Uint8Array(ciphertext) }
 }
 
+/**
+ * 解不开的原因（M4 总设计 §6.4；审查 A3）：
+ * - revoked：记录的密钥版本比当前的小——那一版已吊销；
+ * - stale-key：记录的密钥版本比当前的大——本页手里的密钥过时了（版本连续、只增，ADR-019），去取新密钥再试，绝不删除；
+ * - corrupted：版本相同却解不开——记录已损坏（包括被改过：改了任何一项明文，AAD 就对不上）。
+ * revoked 与 corrupted 都删除，只是说法不同
+ */
+export type UnsealFailure = 'revoked' | 'stale-key' | 'corrupted'
+
 /** 解开的结果：gzip 之后的内容，或者解不开及原因 */
 export type OpenedDraft
   = | { readonly kind: 'opened', readonly gzip: Uint8Array<ArrayBuffer> }
-    | { readonly kind: 'unreadable', readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'unreadable', readonly reason: UnsealFailure }
 
-/**
- * 解不开时的归类（M4 总设计 §6.4）：记录的密钥版本比当前的小 → 密钥已吊销；否则 → 记录已损坏（包括被改过：改了任何一项明文，
- * AAD 就对不上）。两种都删除，只是说法不同
- */
-export function unsealFailureOf(recordKeyVersion: number, currentKeyVersion: number): 'revoked' | 'corrupted' {
-  return recordKeyVersion < currentKeyVersion ? 'revoked' : 'corrupted'
+/** 解不开时按记录与当前的密钥版本归类（见 UnsealFailure） */
+export function unsealFailureOf(recordKeyVersion: number, currentKeyVersion: number): UnsealFailure {
+  if (recordKeyVersion < currentKeyVersion)
+    return 'revoked'
+  return recordKeyVersion > currentKeyVersion ? 'stale-key' : 'corrupted'
 }
 
 /**

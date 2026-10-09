@@ -5,11 +5,11 @@
 import type { OutboxConnection, OutboxUnavailable } from './database.ts'
 import type { DraftKey, DraftMeta, ReadDraft, StoredDraft, WriterRecord } from './draft-record.ts'
 import type { RecoveryNotice, RecoveryNoticeKind } from './recovery-notice.ts'
-import type { WriterIdentity } from './writer-fence.ts'
+import type { ExistingDraft, RestoreVerdict, WriterIdentity } from './writer-fence.ts'
 import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, NOTICES_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isSameWriter, restoredWriterOf, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
+import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
 
 /**
  * 存储这一侧的问题：
@@ -76,8 +76,16 @@ export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: read
 /** 从 OPFS 镜像写回（§3.8）：写回了；没写回及原因（writer-fence.ts 的 decideRestore） */
 export type StoreRestoreOutcome
   = | { readonly kind: 'restored' }
-    | { readonly kind: 'kept', readonly reason: 'expired' | 'unrecognized' | 'not-newer' | 'seen' }
+    | { readonly kind: 'kept', readonly reason: Extract<RestoreVerdict, { readonly kind: 'skip' }>['reason'] }
     | StoreProblem
+
+/** 把写入者换成墓碑（审查 A1、A6）：换了 */
+export type StoreRetireOutcome = { readonly kind: 'retired' } | StoreProblem
+
+/** 库里的墓碑（不论属于谁）：合一的清理据此删掉镜像目录已经不在的那几块 */
+export type StoreTombstonesOutcome = { readonly kind: 'tombstones', readonly keys: readonly DraftKey[] } | StoreProblem
+
+export type StoreDropOutcome = { readonly kind: 'dropped' } | StoreProblem
 
 /** 镜像里没有合格的一份可写回时（§3.8）：库里草稿与写入者都没了（删库），留下了 lost；库里还有（草稿被删掉了、正写着）没留 */
 export type StoreLostOutcome = { readonly kind: 'noted' } | { readonly kind: 'kept' } | StoreProblem
@@ -119,18 +127,28 @@ export interface DraftStore {
    */
   readonly removeDraft: (key: DraftKey, expectedSeq?: number) => Promise<StoreRemoveOutcome>
   /**
-   * 按用户清理（退出登录、账户停用）：草稿、写入者与提示在一个事务里一起删；之后才到的写入因写入者不在而 not-writer。
-   * keepDocumentIds 里的文档留着（S9：它的镜像目录这一次删不掉，库里的也留着，免得下一次比对时把镜像里的写回来；见 local-cleanup.ts）
+   * 按用户清理（退出登录、账户停用）：草稿、写入者（含墓碑）与提示在一个事务里一起删；之后才到的写入因写入者不在而 not-writer。
+   * retire 里的文档（它的镜像目录这一次删不掉：编辑器页的发件箱 Worker 正拿着句柄，见 local-cleanup.ts）草稿与提示留着、写入者换成墓碑
+   * （审查 A1：之后那一页的写入一律 not-writer；比对时不从镜像写回），之后再清时一起删
    */
-  readonly removeUserData: (userId: string, options?: { readonly keepDocumentIds?: readonly string[] }) => Promise<StoreClearOutcome>
+  readonly removeUserData: (userId: string, options?: { readonly retire: readonly string[], readonly now: number }) => Promise<StoreClearOutcome>
   /**
-   * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着），登记超过 14 天、又没有草稿的写入者，
-   * 以及留下超过 14 天、形状不对的提示（S9）
+   * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着）；写入者按 writerRetention——登记超过 14 天、
+   * 又没有草稿的换成墓碑（审查 A6），形状不对、又没有草稿的删掉，墓碑留着（由合一的清理在镜像目录不在之后删）；以及留下超过 14 天、
+   * 形状不对的提示（S9）
    */
   readonly purgeExpired: (now: number) => Promise<StorePurgeOutcome>
   /**
-   * 从 OPFS 镜像写回（§3.8，S9）：镜像里校验通过、比库里新的那一份。strict 事务里按 decideRestore 判定：写回时连同写入者的记录
-   * （没有就建、更早的一代就换、就是它就抬高水位，更新的一代不动），并在同一个事务里留下 restored 提示（时刻是 now）；
+   * 把这份文档的写入者换成墓碑（审查 A1、A6：放弃时镜像目录删不掉）：高水位不低于现有草稿的序号；没有写入者时也立一块。草稿与提示不动
+   */
+  readonly retireWriter: (key: DraftKey, options: { readonly now: number }) => Promise<StoreRetireOutcome>
+  /** 库里全部的墓碑（不论属于谁） */
+  readonly listTombstones: () => Promise<StoreTombstonesOutcome>
+  /** 删掉这几份文档的墓碑（它们的镜像目录已经不在了）；那一条已经换成活的写入者（又登记了）的不动 */
+  readonly dropTombstones: (keys: readonly DraftKey[]) => Promise<StoreDropOutcome>
+  /**
+   * 从 OPFS 镜像写回（§3.8，S9）：镜像里校验通过的最新一份。strict 事务里按 decideRestore 判定（审查 A2：只在删库、或者同一个写入者
+   * 而库被悄悄退回时写回）：写回时连同写入者的记录（没有就照它建，就是它就抬高水位），并在同一个事务里留下 restored 提示（时刻是 now）；
    * 不写回时交回原因。形状不对的记录不写（failed）
    */
   readonly restoreDraft: (draft: StoredDraft, options: { readonly now: number }) => Promise<StoreRestoreOutcome>
@@ -329,8 +347,8 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
   return {
     registerWriter: async (key, writer, { now, force }) => {
       const record: WriterRecord = { userId: key.userId, documentId: key.documentId, writeEpoch: writer.writeEpoch, writerId: writer.writerId, lastDraftSeq: 0, registeredAt: now }
-      if (readWriterRecord(record) === undefined)
-        return failed('写入者的形状不对：不登记')
+      if (readWriterRecord(record) === undefined || isRetired(writer))
+        return failed('写入者的形状不对（或者用了墓碑保留的 writerId）：不登记')
       return run<StoreRegisterOutcome>('readwrite', (scope) => {
         readCurrent(scope, key, (current, existing) => {
           const verdict = decideRegistration(current, existing, writer, force)
@@ -458,30 +476,52 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     }, [DRAFTS_STORE, NOTICES_STORE]),
 
     removeUserData: async (userId, removeOptions) => {
-      const keep = new Set(removeOptions?.keepDocumentIds ?? [])
+      const retire = new Set(removeOptions?.retire ?? [])
+      const now = removeOptions?.now ?? 0
       return run<StoreClearOutcome>('readwrite', (scope) => {
-        if (keep.size === 0) {
+        if (retire.size === 0) {
           for (const name of ALL_STORES)
             scope.tx.objectStore(name).delete(userKeyRange(userId))
           scope.finish({ kind: 'cleared' })
           return
         }
-        // 留下几份：三个仓库各走一遍这个用户的键，不在 keep 里的删掉；三遍都走完才算清完
-        let walking = ALL_STORES.length
-        for (const name of ALL_STORES) {
+        // retire 里的几份：草稿与提示留着、写入者换成墓碑；别的删掉。草稿、提示、写入者依次各走一遍这个用户的键
+        const existing = new Map<string, ExistingDraft>()
+        const retiredWriters = new Set<string>()
+        const walk = (name: string, onEntry: (cursor: IDBCursorWithValue, key: DraftKey | undefined) => void, done: () => void): void => {
           scope.then(scope.tx.objectStore(name).openCursor(userKeyRange(userId)), (cursor) => {
             if (cursor === null) {
-              walking -= 1
-              if (walking === 0)
-                scope.finish({ kind: 'cleared' })
+              done()
               return
             }
-            const key = draftKeyOf(cursor.primaryKey)
-            if (key === undefined || !keep.has(key.documentId))
-              cursor.delete()
+            onEntry(cursor, draftKeyOf(cursor.primaryKey))
             cursor.continue()
           })
         }
+        const kept = (key: DraftKey | undefined): key is DraftKey => key !== undefined && retire.has(key.documentId)
+        walk(DRAFTS_STORE, (cursor, key) => {
+          if (kept(key))
+            existing.set(key.documentId, readStoredDraft(cursor.value))
+          else
+            cursor.delete()
+        }, () => walk(NOTICES_STORE, (cursor, key) => {
+          if (!kept(key))
+            cursor.delete()
+        }, () => walk(WRITERS_STORE, (cursor, key) => {
+          if (!kept(key)) {
+            cursor.delete()
+            return
+          }
+          cursor.update(retiredWriterOf(key, readWriterRecord(cursor.value), existing.get(key.documentId), now))
+          retiredWriters.add(key.documentId)
+        }, () => {
+          // 没有写入者的那几份同样立一块墓碑：挡住镜像里那一份被写回
+          for (const documentId of retire) {
+            if (!retiredWriters.has(documentId))
+              scope.tx.objectStore(WRITERS_STORE).put(retiredWriterOf({ userId, documentId }, undefined, existing.get(documentId), now))
+          }
+          scope.finish({ kind: 'cleared' })
+        })))
       }, ALL_STORES)
     },
 
@@ -519,9 +559,19 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
             })
             return
           }
-          const writerValue: unknown = writerCursor.value
-          if (shouldPurgeWriter(readWriterRecord(writerValue), remaining.has(JSON.stringify(writerCursor.primaryKey)), now))
-            writerCursor.delete()
+          const writer = readWriterRecord(writerCursor.value)
+          const key = draftKeyOf(writerCursor.primaryKey)
+          switch (writerRetention(writer, remaining.has(JSON.stringify(writerCursor.primaryKey)), now)) {
+            case 'delete':
+              writerCursor.delete()
+              break
+            case 'retire':
+              if (key !== undefined)
+                writerCursor.update(retiredWriterOf(key, writer, undefined, now))
+              break
+            case 'keep':
+              break
+          }
           writerCursor.continue()
         })
       })
@@ -540,14 +590,52 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
             return
           }
           scope.tx.objectStore(DRAFTS_STORE).put(record)
-          const restoredWriter = restoredWriterOf(current, record, verdict.writer, now)
-          if (restoredWriter !== undefined)
-            scope.tx.objectStore(WRITERS_STORE).put(restoredWriter)
+          scope.tx.objectStore(WRITERS_STORE).put(restoredWriterOf(current, record, verdict.writer, now))
           scope.tx.objectStore(NOTICES_STORE).put(noticeOf(record, 'restored', now))
           scope.finish({ kind: 'restored' })
         })
       }, ALL_STORES)
     },
+
+    retireWriter: async (key, { now }) => run<StoreRetireOutcome>('readwrite', (scope) => {
+      readCurrent(scope, key, (current, existing) => {
+        scope.tx.objectStore(WRITERS_STORE).put(retiredWriterOf(key, current, existing, now))
+        scope.finish({ kind: 'retired' })
+      })
+    }),
+
+    listTombstones: async () => run<StoreTombstonesOutcome>('readonly', (scope) => {
+      const keys: DraftKey[] = []
+      scope.then(scope.tx.objectStore(WRITERS_STORE).openCursor(), (cursor) => {
+        if (cursor === null) {
+          scope.finish({ kind: 'tombstones', keys })
+          return
+        }
+        const writer = readWriterRecord(cursor.value)
+        const key = draftKeyOf(cursor.primaryKey)
+        if (writer !== undefined && isRetired(writer) && key !== undefined)
+          keys.push(key)
+        cursor.continue()
+      })
+    }, [WRITERS_STORE]),
+
+    dropTombstones: async keys => run<StoreDropOutcome>('readwrite', (scope) => {
+      let waiting = keys.length
+      if (waiting === 0) {
+        scope.finish({ kind: 'dropped' })
+        return
+      }
+      for (const key of keys) {
+        scope.then(scope.tx.objectStore(WRITERS_STORE).get(draftKeyPath(key)), (value: unknown) => {
+          const writer = readWriterRecord(value)
+          if (writer !== undefined && isRetired(writer))
+            scope.tx.objectStore(WRITERS_STORE).delete(draftKeyPath(key))
+          waiting -= 1
+          if (waiting === 0)
+            scope.finish({ kind: 'dropped' })
+        })
+      }
+    }, [WRITERS_STORE]),
 
     recordLost: async (key, { now }) => run<StoreLostOutcome>('readwrite', (scope) => {
       readCurrent(scope, key, (current, existing) => {

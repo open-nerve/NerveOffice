@@ -10,6 +10,7 @@ import { gunzipBytes, gzipBytes, sealDraft } from './draft-codec.ts'
 import { createDraftMirror } from './draft-mirror.ts'
 import { CLIENT_INSTANCE_ID, DOCUMENT_ID, NOW, OTHER_WRITER_ID, sampleMeta, USER_ID, WRITER_ID } from './draft-record.test-support.ts'
 import { draftMetaOf, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { createDraftRecovery, reconcileAll } from './draft-recovery.ts'
 import { fakeDraftStore } from './draft-store.test-support.ts'
 import { createDraftWriter } from './draft-writer.ts'
 import { fakeMirrorDirectory } from './mirror-directory.test-support.ts'
@@ -63,7 +64,7 @@ async function setup(options: { readonly register?: boolean } = {}): Promise<Set
   const key = await localKey(2)
   const make = async (target: FakeDraftStore): Promise<{ readonly writer: DraftWriter, readonly mirror: DraftMirror }> => {
     const mirror = createDraftMirror({ directory: files.directory, clock: { now: () => monotonic }, retry: RETRY })
-    const writer = createDraftWriter({ store: target.store, now: () => wall, mirror })
+    const writer = createDraftWriter({ store: target.store, now: () => wall, mirror, recovery: createDraftRecovery({ store: target.store, mirror, now: () => wall }) })
     await writer.setKey(key)
     return { writer, mirror }
   }
@@ -324,12 +325,12 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
     expect(wipedStore.calls.filter(call => call === 'recordLost'), '截断之后不再核对').toHaveLength(1)
 
-    // 库那一侧出了问题（写满）：没核对成，槽位留着，下一次再核对
+    // 库那一侧出了问题（写满）：没核对成，读草稿如实交回，槽位留着，下一次再核对
     await tear()
     const failingStore = fakeDraftStore()
     failingStore.failNext('recordLost', { kind: 'quota' })
     const failing = await reopen({ store: failingStore })
-    expect(await failing.read(KEY)).toEqual({ kind: 'absent' })
+    expect(await failing.read(KEY)).toEqual({ kind: 'quota' })
     expect(await slots(files)).toEqual(['invalid:torn', 'invalid:torn'])
     expect(await failing.read(KEY)).toEqual({ kind: 'absent' })
     expect(readRecoveryNotice(failingStore.rawNotice(KEY))?.kind).toBe('lost')
@@ -368,7 +369,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(await writer.read(KEY)).toEqual({ kind: 'failed', error: { name: 'TypeError', message: '坏了' } })
   })
 
-  it('读时取最新、解得开的那一份：库里那一份坏了（解不开）时交回镜像里同一份完好的；镜像里那一份也坏了时交回能解开的旧的', async () => {
+  it('读时交回最新的那个版本（审查 A3）：库里那一份坏了（解不开）时交回镜像里同一版本完好的那一份；同一版本都坏了时如实交回解不开，不退回更旧的', async () => {
     const { store, files, writer } = await setup()
     await writer.write(capture(1, 'one'))
     await writer.write(capture(2, 'two'))
@@ -379,10 +380,9 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     store.putRaw('drafts', KEY, { ...raw, ciphertext: tampered })
     const fromMirror = await writer.read(KEY)
     expect(fromMirror.kind === 'draft' && [fromMirror.meta.draftSeq, textOf(await gunzipBytes(fromMirror.gzip))]).toEqual([2, 'two'])
-    // 镜像里第 2 份所在的槽位也坏了（写一半）：只剩第 1 份能解开
+    // 镜像里第 2 份所在的槽位也坏了（写一半）：第 1 份虽然解得开，却是更旧的版本——不交回它
     files.putFile(KEY, 1, (files.file(KEY, 1) ?? new Uint8Array()).slice(0, 300))
-    const older = await writer.read(KEY)
-    expect(older.kind === 'draft' && [older.meta.draftSeq, textOf(await gunzipBytes(older.gzip))]).toEqual([1, 'one'])
+    expect(await writer.read(KEY)).toMatchObject({ kind: 'unreadable', reason: 'corrupted', meta: { draftSeq: 2 } })
     expect(await slots(files)).toEqual(['seq1', 'invalid:torn'])
   })
 
@@ -394,7 +394,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     writer.dispose()
     const wiped = fakeDraftStore()
     const reopened = await reopen({ store: wiped })
-    expect(await reopened.reconcile(USER_ID)).toEqual({ kind: 'reconciled', documents: 2 })
+    expect(await reconcileAll(reopened, USER_ID)).toEqual({ kind: 'reconciled', documents: 2, failed: [] })
     for (const key of [KEY, OTHER_DOCUMENT]) {
       expect(readStoredDraft(wiped.rawDraft(key)).kind).toBe('draft')
       expect(readRecoveryNotice(wiped.rawNotice(key))?.kind).toBe('restored')
@@ -415,7 +415,7 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     }
     expect(await callsOf(async () => reopened.read(KEY)), '读草稿：读库一次').toEqual(['readDraft'])
     expect(await callsOf(async () => reopened.register(KEY, ME, false)), '登记：先只读地比对').toEqual(['readDraft', 'registerWriter'])
-    expect(await callsOf(async () => reopened.reconcile(USER_ID)), '打开平台时的比对').toEqual(['readDraft', 'readDraft'])
+    expect(await callsOf(async () => reconcileAll(reopened, USER_ID)), '打开平台时的比对').toEqual(['readDraft', 'readDraft'])
     // 库里的更旧（库丢了已提交的写入）：交给存储在一个事务里判定、写回
     await reopened.release(KEY)
     await putSlot(files, KEY, 1, await sealed(key, 'two', { draftSeq: 2 }), 99)
@@ -429,8 +429,31 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     await writer.setKey(await localKey(2))
     expect(await writer.register(KEY, ME, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror: { kind: 'off' } })
     expect(await writer.write(capture(1, 'one'))).toMatchObject({ kind: 'written', mirror: { kind: 'off' } })
-    expect(await writer.reconcile(USER_ID)).toEqual({ kind: 'reconciled', documents: 0 })
+    expect(await reconcileAll(writer, USER_ID)).toEqual({ kind: 'reconciled', documents: 0, failed: [] })
     expect(await writer.notices(USER_ID)).toEqual({ kind: 'notices', notices: [] })
+  })
+})
+
+describe('代次倒退之后以 force 登记（审查 A2）：库里有当前的写入者时，镜像里别的写入者的那一份不胜出', () => {
+  it('新的一代（代次更小）接手写了更新的一份：读回它，不拿旧一代的镜像换掉；删库之后写回的是最后写的那一份（按代号，不按代次）', async () => {
+    const { store, files, writer, reopen } = await setup()
+    await writer.write(capture(10, 'ten'))
+    writer.dispose()
+    const rolledBack: WriterIdentity = { writeEpoch: 2, writerId: OTHER_WRITER_ID }
+    const taker = await reopen()
+    expect(await taker.register(KEY, rolledBack, true)).toMatchObject({ kind: 'registered', lastDraftSeq: 10, existing: { kind: 'draft', meta: { draftSeq: 10, writeEpoch: 3 } }, mirror: { kind: 'mirrored' } })
+    expect(await taker.write(capture(11, 'eleven', { writer: rolledBack, adoptSeq: 10 }))).toMatchObject({ kind: 'written', mirror: { kind: 'mirrored' } })
+    const read = await taker.read(KEY)
+    expect(read.kind === 'draft' && [read.meta.writeEpoch, read.meta.draftSeq, textOf(await gunzipBytes(read.gzip))]).toEqual([2, 11, 'eleven'])
+    expect(readWriterRecord(store.rawWriter(KEY)), '写入者还是新的一代').toMatchObject({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 })
+    expect(store.rawNotice(KEY)).toBeUndefined()
+    expect(await taker.write(capture(12, 'twelve', { writer: rolledBack }))).toMatchObject({ kind: 'written' })
+    taker.dispose()
+    expect(await slots(files)).toEqual(['seq12', 'seq11'])
+
+    const wiped = await reopen({ store: fakeDraftStore() })
+    const restored = await wiped.read(KEY)
+    expect(restored.kind === 'draft' && [restored.meta.writeEpoch, restored.meta.draftSeq]).toEqual([2, 12])
   })
 })
 
@@ -536,7 +559,7 @@ describe('补写（§3.8）：库里那一份比镜像里最新的合格那一�
     // 另一个管道（不是写入者、没拿着句柄）比对：只读，不写镜像
     const other = await reopen()
     const before = files.operations(KEY, 1).length
-    expect(await other.reconcile(USER_ID)).toEqual({ kind: 'reconciled', documents: 1 })
+    expect(await reconcileAll(other, USER_ID)).toEqual({ kind: 'reconciled', documents: 1, failed: [] })
     expect(files.operations(KEY, 1).length, '不是写入者：不动').toBe(before)
     // 写入者读草稿：补写
     expect(await writer.read(KEY)).toMatchObject({ kind: 'draft', meta: { draftSeq: 2 } })

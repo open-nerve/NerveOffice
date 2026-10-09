@@ -42,7 +42,7 @@ export interface ProbeDraftInput {
 /** 读出的一份：解开了给出内容，解不开给出原因；探针还没有密钥时 no-key */
 export type ProbeOpened
   = | { readonly kind: 'opened', readonly content: string }
-    | { readonly kind: 'unreadable', readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'unreadable', readonly reason: 'revoked' | 'stale-key' | 'corrupted' }
     | { readonly kind: 'no-key' }
 
 export type ProbeRead

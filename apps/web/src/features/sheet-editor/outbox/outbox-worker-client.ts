@@ -226,7 +226,8 @@ export function createOutboxWorkerClient(options: OutboxWorkerClientOptions): Ou
     release: async (key) => {
       await call({ type: 'release', draft: key }, [])
     },
-    reconcile: async userId => call({ type: 'reconcile', userId }, []),
+    mirroredDocuments: async userId => call({ type: 'mirrored-documents', userId }, []),
+    reconcile: async key => call({ type: 'reconcile', draft: key }, []),
     notices: async userId => call({ type: 'notices', userId }, []),
     clearNotice: async (key, expectedAt) => call({ type: 'clear-notice', draft: key, expectedAt: expectedAt ?? null }, []),
     dispose: () => breakWith('terminated'),

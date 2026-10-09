@@ -8,7 +8,7 @@ import type { RecoveryNotice } from './recovery-notice.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isSameWriter, restoredWriterOf, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
+import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
 
 export type StoreOperation = Exclude<keyof DraftStore, 'close'>
 
@@ -88,7 +88,7 @@ export function fakeDraftStore(): FakeDraftStore {
 
   const store: DraftStore = {
     async registerWriter(key, writer, options) {
-      const problem = await begin('registerWriter')
+      const problem = await begin('registerWriter') ?? (isRetired(writer) ? { kind: 'failed', error: new TypeError('墓碑保留的 writerId 不能登记') } as const : undefined)
       if (problem !== undefined)
         return problem
       const id = idOf(key)
@@ -186,12 +186,17 @@ export function fakeDraftStore(): FakeDraftStore {
       const problem = await begin('removeUserData')
       if (problem !== undefined)
         return problem
-      const keep = new Set(options?.keepDocumentIds ?? [])
+      const retire = new Set(options?.retire ?? [])
       for (const table of [drafts, writers, notices]) {
         for (const id of [...table.keys()]) {
-          if (ownedBy(id, userId) && !keep.has(documentOf(id)))
+          if (ownedBy(id, userId) && !retire.has(documentOf(id)))
             table.delete(id)
         }
+      }
+      // 留下的几份：写入者换成墓碑（没有写入者的也立一块）
+      for (const documentId of retire) {
+        const key = { userId, documentId }
+        writers.set(idOf(key), retiredWriterOf(key, writerOf(idOf(key)), existingOf(idOf(key)), options?.now ?? 0))
       }
       return { kind: 'cleared' }
     },
@@ -209,8 +214,19 @@ export function fakeDraftStore(): FakeDraftStore {
         }
       }
       for (const [id, raw] of [...writers]) {
-        if (shouldPurgeWriter(readWriterRecord(raw), drafts.has(id), now))
-          writers.delete(id)
+        const writer = readWriterRecord(raw)
+        switch (writerRetention(writer, drafts.has(id), now)) {
+          case 'delete':
+            writers.delete(id)
+            break
+          case 'retire': {
+            const [userId, documentId] = JSON.parse(id) as [string, string]
+            writers.set(id, retiredWriterOf({ userId, documentId }, writer, undefined, now))
+            break
+          }
+          case 'keep':
+            break
+        }
       }
       for (const [id, raw] of [...notices]) {
         const read = readRecoveryNotice(raw)
@@ -229,11 +245,41 @@ export function fakeDraftStore(): FakeDraftStore {
       if (verdict.kind === 'skip')
         return { kind: 'kept', reason: verdict.reason }
       drafts.set(id, structuredClone(draft))
-      const restoredWriter = restoredWriterOf(current, draft, verdict.writer, now)
-      if (restoredWriter !== undefined)
-        writers.set(id, structuredClone(restoredWriter))
+      writers.set(id, structuredClone(restoredWriterOf(current, draft, verdict.writer, now)))
       notices.set(id, notice(draft, 'restored', now))
       return { kind: 'restored' }
+    },
+    async retireWriter(key, { now }) {
+      const problem = await begin('retireWriter')
+      if (problem !== undefined)
+        return problem
+      writers.set(idOf(key), retiredWriterOf(keyOf(key), writerOf(idOf(key)), existingOf(idOf(key)), now))
+      return { kind: 'retired' }
+    },
+    async listTombstones() {
+      const problem = await begin('listTombstones')
+      if (problem !== undefined)
+        return problem
+      const keys: DraftKey[] = []
+      for (const [id, raw] of [...writers].sort(([a], [b]) => a.localeCompare(b))) {
+        const writer = readWriterRecord(raw)
+        if (writer !== undefined && isRetired(writer)) {
+          const [userId, documentId] = JSON.parse(id) as [string, string]
+          keys.push({ userId, documentId })
+        }
+      }
+      return { kind: 'tombstones', keys }
+    },
+    async dropTombstones(keys) {
+      const problem = await begin('dropTombstones')
+      if (problem !== undefined)
+        return problem
+      for (const key of keys) {
+        const writer = writerOf(idOf(key))
+        if (writer !== undefined && isRetired(writer))
+          writers.delete(idOf(key))
+      }
+      return { kind: 'dropped' }
     },
     async recordLost(key, { now }) {
       const problem = await begin('recordLost')

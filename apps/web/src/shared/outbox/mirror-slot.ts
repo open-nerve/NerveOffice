@@ -3,7 +3,9 @@
 //   写头途中被结束时头自己的校验不过——写一半的槽位都落选，另一个槽位上的上一份还在。
 // - 头：魔数与格式版本、写入者（代次、writerId）、草稿序号、代号（这个槽位对之间的写入次数，越大越新：同一份内容的重封
 //   ——标记在途、改基准、换密钥——序号不变，靠它分先后）、内容的长度与 SHA-256、头自己的 SHA-256。
-// - 内容就是存进 IndexedDB 的那一份记录（明文元数据、IV、密文），元数据仍由 AAD 认证；读出时照样过记录的形状核对。
+// - 内容就是存进 IndexedDB 的那一份记录（明文元数据、IV、密文），元数据仍由 AAD 认证；读出时照样过记录的形状核对，并核对它就是这份
+//   文档的（审查 A4：AAD 由记录自己的键生成，别的文档的槽位文件被挪进这个目录时照样解得开）；更新的页面写的记录（记录的格式版本
+//   更新）不算写一半（审查 A10）。
 // 布局：
 //   [0, 8)     魔数 "NRVOMIRR"（ASCII）
 //   [8, 10)    格式版本（u16，小端）
@@ -14,8 +16,8 @@
 //   [140, 224) 保留（0）
 //   [224, 256) [0, 224) 的 SHA-256
 // 发件箱 Worker 也引用这个文件：不引用 zod，不依赖 DOM
-import type { StoredDraft } from './draft-record.ts'
-import { DRAFT_IV_BYTES, readDraftMeta, readStoredDraft } from './draft-record.ts'
+import type { DraftKey, ReadDraft, StoredDraft } from './draft-record.ts'
+import { DRAFT_IV_BYTES, isFields, readStoredDraft } from './draft-record.ts'
 
 /** 头的字节数：固定 */
 export const SLOT_HEADER_BYTES = 256
@@ -95,8 +97,11 @@ export function encodeRecord(draft: StoredDraft): Uint8Array<ArrayBuffer> {
   return content
 }
 
-/** 槽位的内容读回记录：长度、JSON、记录的形状任何一处不对都是 undefined（交回的字节是紧凑的拷贝） */
-export function decodeRecord(content: Uint8Array): StoredDraft | undefined {
+/**
+ * 槽位的内容读回记录（与库里读出的同一个口径，readStoredDraft）：认得出的草稿、更新的页面写的（记录的格式版本更新：不往下看）、
+ * 形状不对的；长度、JSON 不对是 undefined（交回的字节是紧凑的拷贝）
+ */
+export function decodeRecord(content: Uint8Array): ReadDraft | undefined {
   if (content.byteLength < META_LENGTH_BYTES)
     return undefined
   const metaLength = new DataView(content.buffer, content.byteOffset, content.byteLength).getUint32(0, true)
@@ -110,11 +115,9 @@ export function decodeRecord(content: Uint8Array): StoredDraft | undefined {
   catch {
     return undefined
   }
-  const meta = readDraftMeta(parsed)
-  if (meta === undefined)
+  if (!isFields(parsed))
     return undefined
-  const read = readStoredDraft({ ...meta, iv: content.slice(ivAt, ivAt + DRAFT_IV_BYTES), ciphertext: content.slice(ivAt + DRAFT_IV_BYTES) })
-  return read.kind === 'draft' ? read.draft : undefined
+  return readStoredDraft({ ...parsed, iv: content.slice(ivAt, ivAt + DRAFT_IV_BYTES), ciphertext: content.slice(ivAt + DRAFT_IV_BYTES) })
 }
 
 /** 头：各项写进固定的偏移，最后 32 字节是前 224 字节的 SHA-256。写不下的（writerId 太长、数不是正的安全整数）抛出 TypeError */
@@ -184,10 +187,11 @@ export async function parseSlotHeader(bytes: Uint8Array): Promise<SlotHeader | '
 }
 
 /**
- * 读整个槽位文件：长度为 0 的是空的；头不合格、内容的长度或 SHA-256 对不上的是写一半（torn）；校验都过、内容却读不出记录或者
- * 与头说的写入者、序号对不上的是 mismatch；更新的格式写的不往下看
+ * 读整个槽位文件：长度为 0 的是空的；头不合格、内容的长度或 SHA-256 对不上的是写一半（torn）；校验都过、内容却读不出记录、
+ * 与头说的写入者与序号对不上、或者不是这份文档的（key 给出时：记录的 userId、documentId 与目录的键不一致，审查 A4）是 mismatch；
+ * 槽位格式更新、或者里面装的记录的格式更新（审查 A10）的是 newer-format，不往下看
  */
-export async function parseSlot(file: Uint8Array): Promise<SlotRead> {
+export async function parseSlot(file: Uint8Array, key?: DraftKey): Promise<SlotRead> {
   if (file.byteLength === 0)
     return { kind: 'empty' }
   const header = await parseSlotHeader(file)
@@ -198,8 +202,15 @@ export async function parseSlot(file: Uint8Array): Promise<SlotRead> {
   const content = file.subarray(SLOT_HEADER_BYTES)
   if (hex(await sha256(content)) !== header.contentSha256)
     return { kind: 'invalid', reason: 'torn' }
-  const record = decodeRecord(content)
-  if (record === undefined || record.writeEpoch !== header.writeEpoch || record.writerId !== header.writerId || record.draftSeq !== header.draftSeq)
+  const decoded = decodeRecord(content)
+  if (decoded?.kind === 'newer-format')
+    return { kind: 'invalid', reason: 'newer-format' }
+  if (decoded?.kind !== 'draft')
+    return { kind: 'invalid', reason: 'mismatch' }
+  const record = decoded.draft
+  if (record.writeEpoch !== header.writeEpoch || record.writerId !== header.writerId || record.draftSeq !== header.draftSeq)
+    return { kind: 'invalid', reason: 'mismatch' }
+  if (key !== undefined && (record.userId !== key.userId || record.documentId !== key.documentId))
     return { kind: 'invalid', reason: 'mismatch' }
   return { kind: 'valid', header, record }
 }

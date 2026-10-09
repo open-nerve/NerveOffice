@@ -166,6 +166,16 @@ export function fakeMirrorDirectory(options: { readonly clock?: () => number } =
       }
       return { kind: 'files', files: [info(paths[0]), info(paths[1])] }
     },
+    readSlots: async (key) => {
+      const paths = [pathOf(key, 0), pathOf(key, 1)] as const
+      if (!directories.has(`${key.userId}/${key.documentId}`))
+        return { kind: 'absent' }
+      const bytes = (path: string): Uint8Array<ArrayBuffer> | undefined => {
+        const file = files.get(path)
+        return file === undefined ? undefined : new Uint8Array(file)
+      }
+      return { kind: 'bytes', files: [bytes(paths[0]), bytes(paths[1])] }
+    },
     removeUser: async userId => removeTree(userId),
     removeDocument: async key => removeTree(`${key.userId}/${key.documentId}`),
   }

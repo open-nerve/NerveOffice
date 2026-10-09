@@ -10,6 +10,7 @@
 // 不引用编辑器页的时钟模块（它带着请求层与 zod，见 outbox-probe.ts 开头的说明）：看门狗用这里的计时器
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { DraftKey, DraftMeta, InFlightSave } from '../../../../shared/outbox/draft-record.ts'
+import type { ReconcileAllOutcome } from '../../../../shared/outbox/draft-recovery.ts'
 import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
 import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, DraftWriter, KeyChange, NoticesResult, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../../shared/outbox/failure.ts'
@@ -20,6 +21,7 @@ import type { OutboxWorkerFailure, OutboxWorkerReady, WorkerLike } from '../outb
 import type { OpfsProbeCall, OpfsProbeReply } from './opfs-probe.worker.ts'
 import { gunzipBytes, openDraft, sha256Hex } from '../../../../shared/outbox/draft-codec.ts'
 import { draftMetaOf } from '../../../../shared/outbox/draft-record.ts'
+import { pageReconciliation, reconcileAll } from '../../../../shared/outbox/draft-recovery.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { createDraftWriter } from '../../../../shared/outbox/draft-writer.ts'
 import { describeFailure } from '../../../../shared/outbox/failure.ts'
@@ -66,7 +68,7 @@ export type ProbeCapture = Omit<CaptureToWrite, 'bytes'> & { readonly content: s
 /** 库里这份草稿（用探针当前的密钥解开）的 gzip 与元数据，与管道交回的比 */
 export type ProbeStoredGzip
   = | { readonly kind: 'gzip', readonly meta: DraftMeta, readonly gzip: ProbeGzip }
-    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'stale-key' | 'corrupted' }
     | { readonly kind: 'absent' | 'newer-format' | 'malformed' | 'no-key' }
     | WriterProblem
 
@@ -106,8 +108,12 @@ export interface ProbePipeline {
   readonly workerTransactions: (id: number) => readonly ProbeWorkerTransaction[]
   /** 这一页不再是写入者：放开镜像的句柄（S9） */
   readonly release: (id: number, key: DraftKey) => Promise<void>
-  /** 打开平台时的比对（S9） */
-  readonly reconcile: (id: number, userId: string) => Promise<ReconcileResult>
+  /** 打开平台时的比对（S9）：这个用户在镜像里的文档一份一份地比对（审查 A13，draft-recovery.ts 的 reconcileAll） */
+  readonly reconcile: (id: number, userId: string) => Promise<ReconcileAllOutcome>
+  /** 比对一份文档 */
+  readonly reconcileDocument: (id: number, key: DraftKey) => Promise<ReconcileResult>
+  /** 平台页面里的比对（P4 的本机草稿页列出之前，审查 A18）：探针的存储与只读的镜像，不经发件箱 Worker */
+  readonly pageReconcile: (userId: string) => Promise<ReconcileAllOutcome>
   /** 这个用户的提示（S9：比对镜像与库留下的，存在库里） */
   readonly notices: (id: number, userId: string) => Promise<NoticesResult>
   /** 清除一条提示 */
@@ -115,7 +121,7 @@ export interface ProbePipeline {
   /** 库与镜像合一的清理（S9，local-cleanup.ts）：在页面里调（与 P4 一样），用探针的存储与生产的镜像目录；出错折成名字与消息 */
   readonly cleanupUser: (userId: string) => Promise<Plain<UserCleanupOutcome>>
   readonly cleanupAbandon: (key: DraftKey, expectedSeq?: number) => Promise<Plain<AbandonOutcome>>
-  readonly cleanupExpired: (now: number) => Promise<Plain<PurgeOutcome>>
+  readonly cleanupExpired: (now: number) => Promise<PlainPurge>
   /** 镜像的两个槽位文件（a、b）读出来的样子：要先让发件箱 Worker 放开句柄 */
   readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
   /** 把一个槽位改坏（同样要先放开句柄） */
@@ -139,6 +145,17 @@ export type Plain<T> = T extends { readonly kind: 'failed', readonly error: unkn
 
 function plain<T extends { readonly kind: string }>(outcome: T): Plain<T> {
   return ('error' in outcome && outcome.kind === 'failed' ? { kind: 'failed', error: describeFailure(outcome.error) } : outcome) as Plain<T>
+}
+
+/** 保留期的结果：镜像那一段的错误同样折成名字与消息 */
+export type PlainPurge
+  = | { readonly kind: 'purged', readonly drafts: Extract<PurgeOutcome, { readonly kind: 'purged' }>['drafts'], readonly pending: readonly DraftKey[], readonly mirror: { readonly kind: 'done' } | { readonly kind: 'failed', readonly error: FailureDescription } }
+    | Plain<Exclude<PurgeOutcome, { readonly kind: 'purged' }>>
+
+function plainPurge(outcome: PurgeOutcome): PlainPurge {
+  if (outcome.kind !== 'purged')
+    return plain(outcome)
+  return { ...outcome, mirror: outcome.mirror.kind === 'done' ? outcome.mirror : { kind: 'failed', error: describeFailure(outcome.mirror.error) } }
 }
 
 /** 不存在的 Worker 脚本：服务端对带扩展名、找不到的文件统一回 404 */
@@ -196,7 +213,7 @@ interface Pipeline {
 }
 
 export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
-  const localCleanup = () => createLocalCleanup({ store: deps.store(), directory: opfsMirrorDirectory() })
+  const localCleanup = () => createLocalCleanup({ store: deps.store(), directory: opfsMirrorDirectory(), now: () => Date.now() })
   const pipelines = new Map<number, Pipeline>()
   let nextId = 1
   let opfsWorker: Worker | undefined
@@ -338,12 +355,14 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
     },
     workerTransactions: id => [...pipelineOf(id).transactions],
     release: async (id, key) => pipelineOf(id).writer.release(key),
-    reconcile: async (id, userId) => pipelineOf(id).writer.reconcile(userId),
+    reconcile: async (id, userId) => reconcileAll(pipelineOf(id).writer, userId),
+    reconcileDocument: async (id, key) => pipelineOf(id).writer.reconcile(key),
+    pageReconcile: async userId => reconcileAll(pageReconciliation({ store: deps.store(), directory: opfsMirrorDirectory(), now: () => Date.now() }), userId),
     notices: async (id, userId) => pipelineOf(id).writer.notices(userId),
     clearNotice: async (id, key, expectedAt) => pipelineOf(id).writer.clearNotice(key, expectedAt),
     cleanupUser: async userId => plain(await localCleanup().removeUser(userId)),
     cleanupAbandon: async (key, expectedSeq) => plain(await localCleanup().abandon(key, expectedSeq)),
-    cleanupExpired: async now => plain(await localCleanup().purgeExpired(now)),
+    cleanupExpired: async now => plainPurge(await localCleanup().purgeExpired(now)),
     mirrorSlots: async key => [await slotOf(key, 0), await slotOf(key, 1)],
     corruptSlot: async (key, slot, corruption) => {
       await opfs('truncate' in corruption ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate } : { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value })

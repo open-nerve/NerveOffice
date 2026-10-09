@@ -479,12 +479,15 @@ describe('读回（§3.4.6）：解开，或者归类', () => {
     expect(read.kind === 'draft' && textOf(await gunzipBytes(read.gzip))).toBe('content')
   })
 
-  it('解不开：记录的密钥版本比当前的小 → revoked；版本不小（被改过的明文、不是这把密钥）→ corrupted；都带元数据', async () => {
+  it('解不开：记录的密钥版本比当前的小 → revoked；比当前的大 → stale-key（本页的密钥过时，去取新的再试，审查 A3）；相同（被改过的明文、不是这把密钥）→ corrupted；都带元数据', async () => {
     const { fake, writer } = await setup()
     await writer.write(capture(1, 'content'))
     const newer = createDraftWriter({ store: fake.store, now: () => NOW })
     await newer.setKey(await localKey(3))
     expect(await newer.read(KEY)).toMatchObject({ kind: 'unreadable', reason: 'revoked', meta: { draftSeq: 1, keyVersion: 2 } })
+    const older = createDraftWriter({ store: fake.store, now: () => NOW })
+    await older.setKey(await localKey(1))
+    expect(await older.read(KEY)).toMatchObject({ kind: 'unreadable', reason: 'stale-key', meta: { draftSeq: 1, keyVersion: 2 } })
     const raw = fake.rawDraft(KEY) as StoredDraft
     fake.putRaw('drafts', KEY, { ...raw, baseRevision: raw.baseRevision + 1 })
     expect(await writer.read(KEY)).toMatchObject({ kind: 'unreadable', reason: 'corrupted', meta: { baseRevision: 13 } })
@@ -567,7 +570,7 @@ describe('放弃（§3.4.7）', () => {
 })
 
 describe('换密钥（§3.4.4）：之后的写入用新密钥；本页写下的草稿用新密钥重封', () => {
-  it('重封本页写下的每一份：内容不变，带上新版本；旧密钥随之解不开', async () => {
+  it('重封本页写下的每一份：内容不变，带上新版本；旧密钥随之解不开（拿旧密钥的页面得到"本页的密钥过时"，审查 A3）', async () => {
     const { fake, writer, key } = await setup()
     expect(await writer.register(OTHER_DOCUMENT, ME, false)).toMatchObject({ kind: 'registered' })
     await writer.write(capture(1, 'one'))
@@ -577,7 +580,7 @@ describe('换密钥（§3.4.4）：之后的写入用新密钥；本页写下的
     for (const [draftKey, content] of [[KEY, 'one'], [OTHER_DOCUMENT, 'other']] as const) {
       const { meta, text, record } = await stored(fake, next, draftKey)
       expect([meta.keyVersion, text]).toEqual([3, content])
-      expect(await openDraft(key, record)).toEqual({ kind: 'unreadable', reason: 'corrupted' })
+      expect(await openDraft(key, record)).toEqual({ kind: 'unreadable', reason: 'stale-key' })
     }
     expect(await writer.write(capture(2, 'two'))).toMatchObject({ kind: 'written' })
     expect((await stored(fake, next)).meta).toMatchObject({ keyVersion: 3, draftSeq: 2 })

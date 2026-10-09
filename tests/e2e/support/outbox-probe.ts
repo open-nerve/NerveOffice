@@ -63,7 +63,7 @@ export interface ProbeDraftInput {
 
 export type ProbeOpened
   = | { readonly kind: 'opened', readonly content: string }
-    | { readonly kind: 'unreadable', readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'unreadable', readonly reason: 'revoked' | 'stale-key' | 'corrupted' }
     | { readonly kind: 'no-key' }
 
 export type ProbeRead
@@ -172,7 +172,7 @@ export type PipelineWritten
 
 export type PipelineOpened
   = | { readonly kind: 'draft', readonly meta: DraftMeta, readonly gzip: ProbeGzip }
-    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'stale-key' | 'corrupted' }
     | { readonly kind: 'no-key', readonly meta: DraftMeta }
     | { readonly kind: 'newer-format', readonly recordVersion: number }
     | { readonly kind: 'malformed' }
@@ -190,7 +190,7 @@ export type PipelineKeyChange = { readonly kind: 'key-set', readonly notResealed
 
 export type ProbeStoredGzip
   = | { readonly kind: 'gzip', readonly meta: DraftMeta, readonly gzip: ProbeGzip }
-    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'stale-key' | 'corrupted' }
     | { readonly kind: 'absent' }
     | { readonly kind: 'newer-format' }
     | { readonly kind: 'malformed' }
@@ -208,6 +208,11 @@ export interface RecoveryNotice extends DraftKey {
   readonly kind: 'restored' | 'lost'
   readonly at: number
 }
+
+/** 一份一份地比对的结果：比对了几份、哪几份出了错；列不出时 failed */
+export type ProbeReconcileAll
+  = | { readonly kind: 'reconciled', readonly documents: number, readonly failed: readonly DraftKey[] }
+    | { readonly kind: 'failed', readonly error: ProbeError }
 
 /** 库那一侧的问题（结果里） */
 export type ProbeStoreProblem = { readonly kind: 'quota' } | { readonly kind: 'unavailable', readonly reason: string } | { readonly kind: 'failed', readonly error: ProbeError }
@@ -237,12 +242,16 @@ export interface ProbePipeline {
   readonly storedGzip: (key: DraftKey) => Promise<ProbeStoredGzip>
   readonly workerTransactions: (id: number) => readonly ProbeWorkerTransaction[]
   readonly release: (id: number, key: DraftKey) => Promise<void>
-  readonly reconcile: (id: number, userId: string) => Promise<{ readonly kind: 'reconciled', readonly documents: number } | { readonly kind: 'failed', readonly error: ProbeError }>
+  /** 打开平台时的比对：一份一份地（审查 A13） */
+  readonly reconcile: (id: number, userId: string) => Promise<ProbeReconcileAll>
+  readonly reconcileDocument: (id: number, key: DraftKey) => Promise<{ readonly kind: 'reconciled' } | ProbeStoreProblem>
+  /** 平台页面里的比对（P4，审查 A18）：不经发件箱 Worker、只读的镜像 */
+  readonly pageReconcile: (userId: string) => Promise<ProbeReconcileAll>
   readonly notices: (id: number, userId: string) => Promise<{ readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | ProbeStoreProblem>
   readonly clearNotice: (id: number, key: DraftKey, expectedAt?: number) => Promise<{ readonly kind: 'cleared' | 'changed' | 'absent' } | ProbeStoreProblem>
   readonly cleanupUser: (userId: string) => Promise<{ readonly kind: 'cleared', readonly pending: readonly DraftKey[] } | ProbeStoreProblem>
   readonly cleanupAbandon: (key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'absent', readonly pending: readonly DraftKey[] } | { readonly kind: 'changed' } | ProbeStoreProblem>
-  readonly cleanupExpired: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: string }[], readonly pending: readonly DraftKey[] } | ProbeStoreProblem>
+  readonly cleanupExpired: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: string }[], readonly pending: readonly DraftKey[], readonly mirror: { readonly kind: 'done' } | { readonly kind: 'failed', readonly error: ProbeError } } | ProbeStoreProblem>
   readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
   readonly corruptSlot: (key: DraftKey, slot: 0 | 1, corruption: ProbeCorruption) => Promise<void>
   readonly removeMirror: (userId: string) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>
