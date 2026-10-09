@@ -111,6 +111,108 @@ export interface ProbeStoreOptions {
   readonly factory?: 'browser' | 'missing' | 'throws'
 }
 
+// ---- 写入管道（探针的 pipeline，apps/web/src/features/sheet-editor/outbox/testing/pipeline-probe.ts）----
+
+/** 管道的宿主：进程内（createDraftWriter）或发件箱 Worker（客户端） */
+export type ProbeHost = 'in-process' | 'worker'
+
+/** Worker 的脚本：生产的、记下事务的测试脚本、不存在的（加载失败） */
+export type ProbeWorkerScript = 'production' | 'recording' | 'missing'
+
+export interface ProbePipelineOptions {
+  readonly host: ProbeHost
+  readonly script?: ProbeWorkerScript
+  readonly requestTimeoutMs?: number
+  readonly keepAlive?: boolean
+}
+
+export type OutboxWorkerFailure = 'load-failed' | 'crashed' | 'message-error' | 'terminated' | 'timeout'
+
+export type OutboxWorkerReady = { readonly kind: 'ready' } | { readonly kind: 'broken', readonly failure: OutboxWorkerFailure }
+
+/** gzip 的摘要：字节数与 SHA-256；解压之后的内容（不长于 4096 个字符时）与它的长度、UTF-8 字节的 SHA-256 */
+export interface ProbeGzip {
+  readonly bytes: number
+  readonly sha256: string
+  readonly text: string | undefined
+  readonly textLength: number
+  readonly textSha256: string
+}
+
+/** 要写的一次捕获：字节换成文字（或随机的 base64） */
+export interface ProbeCapture {
+  readonly key: DraftKey
+  readonly writer: WriterIdentity
+  readonly draftSeq: number
+  readonly baseRevision: number
+  readonly writtenBy: string
+  readonly format: ContentFormat
+  readonly formulasPending: boolean
+  readonly inFlight: InFlightSave | null
+  readonly dedupe: boolean
+  readonly adoptSeq?: number
+  readonly content: string | { readonly randomBase64Chars: number }
+}
+
+export type PipelineWritten
+  = | { readonly kind: 'written', readonly gzip: ProbeGzip, readonly digest: string }
+    | { readonly kind: 'unchanged', readonly digest: string }
+    | { readonly kind: 'fenced', readonly reason: 'not-writer' | 'stale-seq' | 'foreign-draft' | 'changed', readonly gzip: ProbeGzip }
+    | { readonly kind: 'no-key', readonly gzip: ProbeGzip }
+    | { readonly kind: 'quota', readonly gzip: ProbeGzip }
+    | { readonly kind: 'unavailable', readonly reason: 'unsupported' | 'denied' | 'newer-version' | 'blocked', readonly gzip: ProbeGzip }
+    | { readonly kind: 'failed', readonly error: ProbeError, readonly gzip: ProbeGzip | null }
+
+export type PipelineOpened
+  = | { readonly kind: 'draft', readonly meta: DraftMeta, readonly gzip: ProbeGzip }
+    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'no-key', readonly meta: DraftMeta }
+    | { readonly kind: 'newer-format', readonly recordVersion: number }
+    | { readonly kind: 'malformed' }
+
+export type PipelineRegistered
+  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: PipelineOpened | undefined }
+    | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean }
+    | ProbeProblem
+
+export type PipelineResealed = { readonly kind: 'resealed' } | { readonly kind: 'absent' } | { readonly kind: 'no-key' } | { readonly kind: 'fenced', readonly reason: 'not-writer' | 'changed' } | ProbeProblem
+
+export type PipelineConfirmed = { readonly kind: 'deleted' } | { readonly kind: 'rebased' } | { readonly kind: 'absent' } | { readonly kind: 'no-key' } | { readonly kind: 'fenced', readonly reason: 'not-writer' | 'foreign-draft' } | ProbeProblem
+
+export type PipelineKeyChange = { readonly kind: 'key-set', readonly notResealed: readonly DraftKey[] } | { readonly kind: 'failed', readonly error: ProbeError }
+
+export type ProbeStoredGzip
+  = | { readonly kind: 'gzip', readonly meta: DraftMeta, readonly gzip: ProbeGzip }
+    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'newer-format' }
+    | { readonly kind: 'malformed' }
+    | { readonly kind: 'no-key' }
+    | ProbeProblem
+
+export interface ProbeWorkerTransaction {
+  readonly stores: readonly string[]
+  readonly mode: string
+  readonly durability: string | undefined
+}
+
+export interface ProbePipeline {
+  readonly create: (options: ProbePipelineOptions) => Promise<{ readonly id: number, readonly ready: OutboxWorkerReady }>
+  readonly setKey: (id: number, key: 'probe' | 'none') => Promise<PipelineKeyChange>
+  readonly register: (id: number, key: DraftKey, writer: WriterIdentity, force: boolean) => Promise<PipelineRegistered>
+  readonly write: (id: number, capture: ProbeCapture) => Promise<PipelineWritten>
+  readonly markInFlight: (id: number, key: DraftKey, writer: WriterIdentity, inFlight: InFlightSave) => Promise<PipelineResealed>
+  readonly confirm: (id: number, key: DraftKey, writer: WriterIdentity, confirmedSeq: number, revision: number) => Promise<PipelineConfirmed>
+  readonly read: (id: number, key: DraftKey) => Promise<PipelineOpened | { readonly kind: 'absent' } | ProbeProblem>
+  readonly remove: (id: number, key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'changed' | 'absent' } | ProbeProblem>
+  readonly seedDigest: (id: number, key: DraftKey, seed: { readonly digest: string, readonly formulasPending: boolean } | undefined) => Promise<void>
+  readonly broken: (id: number) => OutboxWorkerFailure | undefined
+  readonly dispose: (id: number) => void
+  readonly writeThenDispose: (id: number, capture: ProbeCapture, delayMs: number) => Promise<{ readonly result: PipelineWritten, readonly settledAfterDisposeMs: number, readonly contentSha256: string }>
+  readonly storedGzip: (key: DraftKey) => Promise<ProbeStoredGzip>
+  readonly workerTransactions: (id: number) => readonly ProbeWorkerTransaction[]
+}
+
 export interface OutboxProbe {
   readonly names: { readonly database: string, readonly version: number, readonly drafts: string, readonly writers: string }
   readonly chooseKey: (version: number, rawHex?: string) => Promise<void>
@@ -150,6 +252,7 @@ export interface OutboxProbe {
   readonly failTransactions: (count: number, name: string) => void
   readonly writeMalformed: (input: ProbeDraftInput) => Promise<ProbeWriteOutcome>
   readonly transactions: () => readonly ProbeTransaction[]
+  readonly pipeline: ProbePipeline
 }
 
 declare global {
@@ -159,9 +262,10 @@ declare global {
   }
 }
 
-type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey'>
+type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline'>
 type DatabaseMethod = keyof OutboxProbe['database']
 type LocalKeyMethod = keyof OutboxProbe['localKey']
+type PipelineMethod = keyof OutboxProbe['pipeline']
 
 /**
  * 打开编辑器页、等探针挂上（要先登录：编辑器页先确认会话，没登录时整页跳到登录页）。默认打开一份不存在的文档——页面只确认会话、
@@ -200,6 +304,16 @@ export async function probeLocalKey<M extends LocalKeyMethod>(page: Page, method
       throw new Error('页面里没有发件箱的探针')
     return (target.localKey[method] as unknown as (...values: unknown[]) => unknown)(...args)
   }, { method, args }) as Promise<Awaited<ReturnType<OutboxProbe['localKey'][M]>>>
+}
+
+/** 在页面里调探针的写入管道一侧的方法（进程内与发件箱 Worker 两种宿主） */
+export async function probePipeline<M extends PipelineMethod>(page: Page, method: M, ...args: Parameters<OutboxProbe['pipeline'][M]>): Promise<Awaited<ReturnType<OutboxProbe['pipeline'][M]>>> {
+  return page.evaluate(async ({ method, args }) => {
+    const target = window.__nerveOutboxProbe
+    if (target === undefined)
+      throw new Error('页面里没有发件箱的探针')
+    return (target.pipeline[method] as unknown as (...values: unknown[]) => unknown)(...args)
+  }, { method, args }) as Promise<Awaited<ReturnType<OutboxProbe['pipeline'][M]>>>
 }
 
 /** 结果是 kind 这一种（不是就失败，说明里带上整个结果），交回收窄了类型的它：用例里不写条件判断 */
