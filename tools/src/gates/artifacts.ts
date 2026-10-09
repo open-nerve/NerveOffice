@@ -512,7 +512,8 @@ export function classifyArtifact(path: string): ArtifactKind {
  *   页面自检与它和 E2E 共用的文件（入口清单、比较口径、结果的格式、切换的计时：switch-timing.ts 装上时替换 window.fetch；捕获时机复核的
  *   样本与捕获规则的参考实现）、公式模式的开关（formula-mode.ts：地址参数选主线程模式，生产构建里只有 Worker 模式）；
  * - 页面自检的入口页与编辑器页的挂接（features/sheet-editor/selftest-hook.ts，start.tsx 只在测试构建里动态引入）；
- * - 发件箱的浏览器层探针（M4-P1 设计 §3.1，features/sheet-editor/outbox/testing/：start.tsx 只在测试构建、地址带 outboxProbe 时动态引入）。
+ * - 发件箱的浏览器层探针与崩溃用例的探针（M4-P1 设计 §3.1、§3.7，features/sheet-editor/outbox/testing/：start.tsx 只在测试构建、
+ *   地址带 outboxProbe、crashProbe 时动态引入）。
  * 按模块的来源认（web 构建写出的模块来源清单，M3-P2 复核 B2）：分块改了名、被并进别的分块、被生产代码直接动态引入成了自己的分块，
  * 都认得出。分块名（TEST_ONLY_ARTIFACTS）与禁用关键字（policy.ts）照旧作兜底
  */
@@ -565,10 +566,11 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块；
  * - 自动保存的控制（M3-P4 设计 §3.14，autosave-control）与交接日志（M3-P5 设计 §3.13，handover-log）：编辑器页的组装处（start.tsx）动态引入它们，
  *   各自成分块；
- * - 发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox-probe）：同样由 start.tsx 动态引入，自成分块（P1 里发件箱的模块只有它引用，一起在这个分块里）。
- * 自检结果的格式标识与计时、自动保存的控制、交接日志与发件箱探针挂在 window 上的名字另由禁用关键字核对
+ * - 发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox-probe）与崩溃用例的探针（§3.7，crash-probe）：同样由 start.tsx 动态引入，各自成分块
+ *   （两个都引用的发件箱模块另成一个共用的分块，生产构建里没有：生产代码还不引用发件箱）。
+ * 自检结果的格式标识与计时、自动保存的控制、交接日志与两个发件箱探针挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe|crash-probe)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

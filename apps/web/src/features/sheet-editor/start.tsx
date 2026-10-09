@@ -6,8 +6,8 @@ import type { HandoverTrace } from './handover-trace.ts'
 // （sessionStorage）。
 // 测试构建（MODE === 'e2e'）先动态引入自动保存的控制（editor/testing/autosave-control.ts，M3-P4 设计 §3.14）与交接日志
 // （editor/testing/handover-log.ts，M3-P5 设计 §3.13 的观察钩子）再组装：第一个调度建起来、第一次申请之前它们就在（?edit=new 直接进入编辑也一样）；
-// 两个各自引入，一个没引入成不影响另一个；地址带 outboxProbe 时另引入发件箱的浏览器层探针（M4-P1）。生产构建里这个分支与它们的分块
-// 都被去掉（门禁 artifacts 核对）。
+// 两个各自引入，一个没引入成不影响另一个；地址带 outboxProbe 时另引入发件箱的浏览器层探针、带 crashProbe 时另引入崩溃用例的探针（M4-P1）。
+// 生产构建里这个分支与它们的分块都被去掉（门禁 artifacts 核对）。
 import type { PageVisibility } from './reading-checks.ts'
 import type { SameBrowserApis } from './same-browser.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
@@ -113,6 +113,13 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
       void Promise.allSettled([import('./outbox/testing/outbox-probe.ts')]).then(([probe]) => {
         if (probe.status === 'fulfilled')
           probe.value.installOutboxProbe(window)
+      })
+    }
+    // 地址带 crashProbe 时：写入中途结束整棵浏览器进程的原子性用例的探针（M4-P1 设计 §3.7，outbox/testing/crash-probe.ts），同上
+    if (new URLSearchParams(window.location.search).has('crashProbe')) {
+      void Promise.allSettled([import('./outbox/testing/crash-probe.ts')]).then(([probe]) => {
+        if (probe.status === 'fulfilled')
+          probe.value.installCrashProbe(window)
       })
     }
     // 引入失败：照常组装，没有那一样，不上报——用到它的 E2E 自己会失败（控制、日志不在）。这两块在页面一开始就引入，整页跳转可能在入口的
