@@ -1,6 +1,7 @@
-// 实测（M3-P2 S5）：模式切换的耗时（三个浏览器）与反复切换的内存（Chromium，经 CDP）。与 E2E 用同一套服务与设置，只跑 measure/ 下的用例，
-// 不进常规的 E2E 与 CI（常规的配置只认 specs/）。计时要准：一个工作进程，浏览器一个接一个地跑，不重试。
-// pnpm --filter @nerve-office/e2e run measure:switch、pnpm --filter @nerve-office/e2e run measure:memory（先构建，同 pnpm test:e2e）
+// 实测（M3-P2 S5）：模式切换的耗时（三个浏览器）与反复切换的内存（Chromium，经 CDP）；M4-P1 S1 起另有真实浏览器复核在持久上下文里的实测
+// （probe.spec.ts）。与 E2E 用同一套服务与设置，只跑 measure/ 下的用例，不进常规的 E2E 与 CI（常规的配置只认 specs/）。
+// 计时要准：一个工作进程，浏览器一个接一个地跑，不重试。
+// pnpm --filter @nerve-office/e2e run measure:switch、measure:memory、measure:probe（先构建，同 pnpm test:e2e）
 import { defineConfig } from '@playwright/test'
 import base from './playwright.config.ts'
 

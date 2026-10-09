@@ -28,6 +28,16 @@ export const FORMULA_MODE_PARAM = 'formula'
 export const FORMULA_MODE_VALUES = { 'worker': 'worker', 'main-thread': 'main' } as const
 
 /**
+ * 运行次数的地址参数（M4-P1 S1，设计 §3.6）：真实浏览器的前置复核（PROBE_SCENARIOS）按它定各项重复几次——驱动脚本默认 40
+ * （真实 Safari 与本机持久上下文里的实测），Playwright 的校准不带（每项最少的次数：CI 只核对探针本身）。入口页从 # 片段读、
+ * 原样带到编辑器页的地址上（selftestEditorUrl）；别的场景不看它
+ */
+export const RUNS_PARAM = 'runs'
+
+/** runs 的上限：再多只是拉长一次运行（worker-stall 的 40 次在真实 Safari 上约 5 分钟） */
+export const RUNS_MAX = 400
+
+/**
  * 打开编辑器页时暂停定时的自动保存（M3-P4 S7，审查 B1）：入口页登录之后、跳到编辑器页之前在 sessionStorage 里写下它（同一个标签页里跳转，
  * sessionStorage 跟着走），测试构建的自动保存控制（./autosave-control.ts 的 AUTOSAVE_HOLD_STORAGE_KEY、AUTOSAVE_HELD）据此打开即暂停——
  * 真实 Safari 与 Playwright 的夹具（默认暂停）从打开起是同一个状态。自检开始时还会再暂停一次、各场景按需要放开（selftest-autosave.ts），
@@ -80,7 +90,37 @@ export const REQUEST_SCENARIOS = ['request-waiter', 'paused-holder'] as const
 
 export type RequestScenario = (typeof REQUEST_SCENARIOS)[number]
 
-export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS] as const
+/**
+ * 真实浏览器的前置复核（M4-P1 设计 §3.6，S1 第一轮）：不依赖发件箱生产代码的探针（场景在 ./selftest-storage.ts、./selftest-stall.ts、
+ * ./selftest-cost.ts，探针 Worker 是 ./storage-probe-worker.ts）。页面只核对"跑完、数据齐"，事实（facts）与计时交回，
+ * 判定在驱动脚本一侧的纯函数里（tests/e2e/safari/probe-verdicts.ts）：
+ * - storage（阅读）：持久保存、配额与用量、durability 与磁盘上的写入耗时、事务中止的回滚、IndexedDB 的基本行为（含 Worker 里）、
+ *   Web Locks（§3.6 第 1–3、5、6、8 项）；
+ * - key-transfer（阅读）：不可导出的 CryptoKey 经 postMessage 交给 Worker、Worker 里的 AES-GCM 带 AAD、CompressionStream 与 SHA-256，
+ *   以及交不过去时的退路（原始字节在 Worker 里导入）（第 7 项）。单独一步：WebKit 序列化 CryptoKey 时可能要用钥匙串里的主密钥，
+ *   万一弹出钥匙串的提示、页面停住，别的几项的结果已经交回
+ * - storage-quota（阅读）：写满（第 4 项）——一条一条地加，最多写 QUOTA_PROBE_MAX_BYTES：配额被覆盖成 8–16 MiB（Playwright 的 Chromium 系
+ *   经 CDP）时在这之前写满；没被覆盖时写到上限就停、删掉。不在真实 Safari 的步骤里：Safari 没有覆盖配额的接口，写满由第 5 项的回滚作有界的替代；
+ * - worker-stall（阅读）：探针 Worker 有无空定时器 × 空闲多久之后，第一次异步操作的用时（第 9 项，DEF-011）；
+ * - capture-cost（编辑）：捕获的主线程成本（save、序列化、编码分开）、Worker 放置时异步段与主线程 gzip 的主线程阻塞（第 10 项，DEF-012）；
+ * - perf-baseline（编辑）：首屏、两种公式模式下增量与全量计算的收齐、事件循环与帧间隔（第 12 项，DEF-012）
+ */
+export const PROBE_SCENARIOS = ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'capture-cost', 'perf-baseline'] as const
+
+export type ProbeScenario = (typeof PROBE_SCENARIOS)[number]
+
+export function isProbeScenario(value: string): value is ProbeScenario {
+  return (PROBE_SCENARIOS as readonly string[]).includes(value)
+}
+
+/**
+ * storage-quota 最多往里写这么多（字节）：Playwright 经 CDP 把配额覆盖成 8–16 MiB（设计 §3.6 第 4 项）时在这之前写满；没被覆盖时
+ * （真实浏览器的配额是磁盘的一部分，GiB 级）写到这里就停、删掉，不会把磁盘写满。页面看不出配额有没有被覆盖：estimate() 照旧报真实的配额
+ * （M0-P6 的实测：覆盖成 8 MiB 时 estimate 仍是 8 GiB，2026-10-09 持久上下文里同样）
+ */
+export const QUOTA_PROBE_MAX_BYTES = 64 * 1024 * 1024
+
+export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS, ...PROBE_SCENARIOS] as const
 
 export type SelftestScenario = (typeof SELFTEST_SCENARIOS)[number]
 
@@ -157,6 +197,12 @@ export interface SelftestTiming {
   readonly ms: Readonly<Record<string, number | null>>
 }
 
+/**
+ * 一项事实（M4-P1 S1：真实浏览器的复核交回的，例如 persisted、配额的字节数、durability 是否被反映、出错的名字）。
+ * 键写成"项.名"（例如 persist.after）；判定在驱动脚本里（tests/e2e/safari/probe-verdicts.ts），页面不判断它们对不对
+ */
+export type SelftestFact = string | number | boolean | null
+
 /** 一项检查的结果 */
 export interface SelftestCheck {
   /** 稳定的标识（例如 facade.筛选、shortcut.undo）：驱动脚本与报告按它对照不同浏览器的结果 */
@@ -208,6 +254,8 @@ export interface SelftestReport {
   readonly path?: string | undefined
   /** 交接的场景：时间线（交接日志与场景的观察） */
   readonly timeline?: readonly SelftestTimelineEntry[] | undefined
+  /** 真实浏览器的前置复核（PROBE_SCENARIOS，M4-P1）：事实（SelftestFact）；计时在 timings 里 */
+  readonly facts?: Readonly<Record<string, SelftestFact>> | undefined
   /** 自检本身没能跑完的原因（编辑器没就绪、自检抛错）；跑完时没有 */
   readonly failure?: string | undefined
 }
@@ -308,17 +356,29 @@ export function reportUrl(next: string, encoded: string): string {
 }
 
 /**
- * 入口页登录之后整页跳去的编辑器页：/documents/<文档 id>?selftest=<场景>&next=<…>，给了公式模式时另带 formula=<…>。
- * 路径与 contracts 的 documentPagePath 相同（单元测试对照）：入口页不引用 contracts 与平台页面、编辑器页共用的任何模块
- * （M3-P2 复核 B4），所以在这里就地写
+ * 入口页登录之后整页跳去的编辑器页：/documents/<文档 id>?selftest=<场景>&next=<…>，给了公式模式时另带 formula=<…>，给了运行次数时
+ * 另带 runs=<…>（M4-P1）。路径与 contracts 的 documentPagePath 相同（单元测试对照）：入口页不引用 contracts 与平台页面、编辑器页共用的
+ * 任何模块（M3-P2 复核 B4），所以在这里就地写
  */
-export function selftestEditorUrl(origin: string, documentId: string, scenario: string, next: string, formula?: SelftestFormulaMode): string {
+export function selftestEditorUrl(origin: string, documentId: string, scenario: string, next: string, formula?: SelftestFormulaMode, runs?: number): string {
   const url = new URL(`/documents/${encodeURIComponent(documentId)}`, origin)
   url.searchParams.set(SELFTEST_PARAM, scenario)
   url.searchParams.set(NEXT_PARAM, next)
   if (formula !== undefined)
     url.searchParams.set(FORMULA_MODE_PARAM, FORMULA_MODE_VALUES[formula])
+  if (runs !== undefined)
+    url.searchParams.set(RUNS_PARAM, String(runs))
   return url.href
+}
+
+/** 地址里的运行次数（入口页从 # 片段读，编辑器页从查询串读）：没有时 undefined，不是 1–RUNS_MAX 的整数时 null */
+export function runsOfValue(value: string | null): number | undefined | null {
+  if (value === null)
+    return undefined
+  if (!/^[1-9]\d{0,5}$/.test(value))
+    return null
+  const runs = Number(value)
+  return runs <= RUNS_MAX ? runs : null
 }
 
 /** 地址里的公式模式（入口页从 # 片段读）：认识的写法交回模式，没有时是 undefined，不认识时是 null（入口页按登录失败一样交回原因） */
@@ -354,6 +414,10 @@ function isTimelineEntry(value: unknown): value is SelftestTimelineEntry {
   return isObject(value) && typeof value.kind === 'string' && typeof value.wall === 'number' && Number.isFinite(value.wall)
 }
 
+function isFact(value: unknown): value is SelftestFact {
+  return value === null || typeof value === 'string' || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))
+}
+
 function isPage(value: unknown): value is SelftestPage {
   return isObject(value) && (value.state === 'ready' || value.state === 'failed' || value.state === 'timeout' || value.state === 'hidden')
     && (value.readOnly === undefined || typeof value.readOnly === 'boolean')
@@ -387,6 +451,8 @@ export function parseSelftestReport(value: unknown): SelftestReport {
     throw new SelftestReportError('结果的 path 不是字符串')
   if (value.timeline !== undefined && (!Array.isArray(value.timeline) || !value.timeline.every(isTimelineEntry)))
     throw new SelftestReportError('结果的 timeline 不对')
+  if (value.facts !== undefined && (!isObject(value.facts) || !Object.values(value.facts).every(isFact)))
+    throw new SelftestReportError('结果的 facts 不对（值只能是字符串、有限的数、真假或 null）')
   if (value.failure !== undefined && typeof value.failure !== 'string')
     throw new SelftestReportError('结果的 failure 不是字符串')
   return value as unknown as SelftestReport

@@ -3,10 +3,11 @@
 import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { TestUser } from '../support/database.ts'
 import type { SelftestStep } from '../support/selftest-plan.ts'
+import type { Received } from './run-plan.ts'
 import { describe, expect, it } from 'vitest'
 import { SELFTEST_REPORT_FORMAT } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { SELFTEST_STEPS, stepsOf } from '../support/selftest-plan.ts'
-import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, REPORT_PATH, reportUrlOf, resultFileName, selectSteps, serverJudgedOutcome, SHADE_COMMAND_PATH, SHADE_PAGE, SHADE_PATH, timingLines } from './run-plan.ts'
+import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, nextAfter, outcomeOf, parseReportRequest, probeReportsOf, REPORT_PATH, reportUrlOf, resultFileName, selectSteps, serverJudgedOutcome, SHADE_COMMAND_PATH, SHADE_PAGE, SHADE_PATH, timingLines } from './run-plan.ts'
 
 const ORIGIN = 'http://127.0.0.1:4100'
 const COLLECTOR = 'http://127.0.0.1:4200'
@@ -202,5 +203,28 @@ describe('切换耗时的说明', () => {
 
   it('捕获时机的时间线：逐段列出（毫秒取整，缺的写成"—"）', () => {
     expect(timingLines([{ id: 'formula.chain', ms: { firstStart: 11.6, lastResult: null, capture: 1013.2 } }])).toEqual(['formula.chain：firstStart 12 ms、lastResult —、capture 1013 ms'])
+  })
+})
+
+describe('真实浏览器的前置复核（M4-P1 S1）交给判定的结果', () => {
+  it('只取复核的几步、解得开的结果，按步骤的先后；由上一步带过去的第一步是冷的（这次运行里第一次打开编辑器页）', () => {
+    const selection = selectSteps(SELFTEST_STEPS, 'perf-worker,perf-main,storage,worker-stall')
+    if ('error' in selection)
+      throw new Error(selection.error)
+    const steps = stepsOf(selection.definitions, { author: user('author'), viewer: user('viewer') }, selection.definitions.map(definition => `${definition.id}-doc`), 40)
+    const chain = chainOf(steps, ORIGIN, COLLECTOR)
+    const received = new Map<number, Received>([
+      [0, report({ scenario: 'perf-baseline', documentId: 'perf-worker-doc' })],
+      [1, report({ scenario: 'perf-baseline', documentId: 'perf-main-doc' })],
+      [2, { undecodable: '不是 gzip' }],
+    ])
+    expect(probeReportsOf(chain, received).map(entry => [entry.stepId, entry.cold])).toEqual([['perf-worker', true], ['perf-main', false]])
+  })
+
+  it('全部步骤时第一步是 M3 的只读入口：复核的几步都是热的；不是复核的几步不交给判定', () => {
+    const chain = chainOf(ALL_STEPS, ORIGIN, COLLECTOR)
+    const perf = ALL_STEPS.findIndex(step => step.id === 'perf-worker')
+    const received = new Map<number, Received>([[0, report()], [perf, report({ scenario: 'perf-baseline', documentId: 'perf-worker-doc' })]])
+    expect(probeReportsOf(chain, received).map(entry => [entry.stepId, entry.cold])).toEqual([['perf-worker', false]])
   })
 })

@@ -38,7 +38,7 @@ function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
 const EXPECTED_FORMULAS = Object.fromEntries(SAMPLE_FORMULAS.map(formula => [`${formula.sheetId}!${formula.cell}`, formula.value]))
 
 describe('页面自检的步骤', () => {
-  it('M3-P2 的四步（查看者的只读入口与公式，作者的界面对照、进入与退出编辑）之后是 M3-P4 的捕获时机复核（作者、编辑时），hidden-save 之后是 M3-P5 的交接复核，最后是 M3-P6 的请求编辑两条路（作者；路 2 盖屏，放在最后）', () => {
+  it('M3-P2 的四步（查看者的只读入口与公式，作者的界面对照、进入与退出编辑）之后是 M3-P4 的捕获时机复核（作者、编辑时）与 M4-P1 的真实浏览器复核（由上一步带过去），hidden-save 之后是 M3-P5 的交接复核，最后是 M3-P6 的请求编辑两条路（作者；路 2 盖屏，放在最后）', () => {
     expect(STEPS.map(step => [step.id, step.scenario, step.account.username, step.formula ?? '—'])).toEqual([
       ['read-only', 'read-only', 'viewer', '—'],
       ['read-only-formulas', 'read-only-formulas', 'viewer', '—'],
@@ -51,6 +51,14 @@ describe('页面自检的步骤', () => {
       ['auto-height', 'auto-height', 'author', '—'],
       ['large-copy', 'large-copy', 'author', '—'],
       ['composition', 'composition', 'author', '—'],
+      ['perf-worker', 'perf-baseline', 'author', 'worker'],
+      ['perf-main', 'perf-baseline', 'author', 'main-thread'],
+      ['perf-worker-warm', 'perf-baseline', 'author', 'worker'],
+      ['capture-1m', 'capture-cost', 'author', '—'],
+      ['capture-5m', 'capture-cost', 'author', '—'],
+      ['storage', 'storage', 'viewer', '—'],
+      ['key-transfer', 'key-transfer', 'viewer', '—'],
+      ['worker-stall', 'worker-stall', 'viewer', '—'],
       ['hidden-save', 'hidden-save', 'author', '—'],
       ['takeover-holder', 'takeover-holder', 'author', '—'],
       ['takeover-taker', 'takeover-taker', 'author', '—'],
@@ -71,7 +79,8 @@ describe('页面自检的步骤', () => {
     expect(new Set(STEPS.map(step => step.documentId)).size).toBe(STEPS.length - 2)
     expect(STEPS.filter(step => step.sharesDocumentOf === undefined).every(step => step.opens === 'entry')).toBe(true)
     expect(new Set(STEPS.map(step => step.id)).size).toBe(STEPS.length)
-    expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual([...SELFTEST_SCENARIOS].sort())
+    // 写满（storage-quota）不在步骤里：只在 Playwright 的 Chromium 系经 CDP 覆盖配额时做（真实 Safari 没有覆盖配额的接口）
+    expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual(SELFTEST_SCENARIOS.filter(scenario => scenario !== 'storage-quota').sort())
     expect(CAPTURE_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
     expect(HANDOVER_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
     expect(() => stepsOf(SELFTEST_STEPS, PEOPLE, ['one'])).toThrow('步却有 1 份文档')
@@ -96,6 +105,19 @@ describe('页面自检的步骤', () => {
     expect(url.search).toBe('')
     const fragment = new URLSearchParams(url.hash.slice(1))
     expect(Object.fromEntries(fragment)).toEqual({ user: 'viewer', password: 'viewer 的密码 &=#', document: 'read-only-doc', scenario: 'read-only', next: 'http://127.0.0.1:4200/report?step=0' })
+  })
+
+  it('运行次数（M4-P1 S1）：只交给真实浏览器复核的步骤，入口页的片段里带 runs；别的步骤不带；不给时都不带', () => {
+    const withRuns = stepsOf(SELFTEST_STEPS, PEOPLE, SELFTEST_STEPS.map(definition => `${definition.id}-doc`), 40)
+    const runsOf = (id: string, steps = withRuns): string | null => {
+      const step = steps.find(item => item.id === id)
+      if (step === undefined)
+        throw new Error(`没有 ${id} 这一步`)
+      return new URLSearchParams(new URL(selftestPageUrl('http://127.0.0.1:4100', step, 'http://127.0.0.1:4200/report?step=0')).hash.slice(1)).get('runs')
+    }
+    expect([runsOf('worker-stall'), runsOf('capture-1m'), runsOf('perf-main'), runsOf('read-only'), runsOf('hidden-save')]).toEqual(['40', '40', '40', null, null])
+    expect(withRuns.filter(step => step.runs !== undefined).map(step => step.id)).toEqual(['perf-worker', 'perf-main', 'perf-worker-warm', 'capture-1m', 'capture-5m', 'storage', 'key-transfer', 'worker-stall'])
+    expect(runsOf('worker-stall', STEPS)).toBeNull()
   })
 
   it('选了公式模式的步骤：片段里带 formula（主线程是 main，Worker 是 worker）', () => {
@@ -221,6 +243,16 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
       `服务器上存下的内容：大表 ${BIG_SHEET.rows} 行里字号是 28 的 0 行`,
       `服务器上存下的内容：大表 ${BIG_SHEET.rows} 行里有自动行高（ah）的 0 行（迟到的行高没有存上？）`,
     ])
+  })
+
+  it('真实浏览器的复核（M4-P1）：只看不改的几步修订号恰好 1；首屏与公式冻结改了内容（暂停定时的上传，整页跳走时可能上传），至少 1', () => {
+    const plain = { revision: 1, revisions: 1, formulasPending: false, snapshot: sheetSnapshotFor('unit-1') }
+    for (const scenario of ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'capture-cost'] as const) {
+      expect(storedProblems({ scenario, documentId: 'doc' }, plain), scenario).toEqual([])
+      expect(storedProblems({ scenario, documentId: 'doc' }, { ...plain, revision: 2, revisions: 2 }), scenario).toHaveLength(1)
+    }
+    expect(storedProblems({ scenario: 'perf-baseline', documentId: 'doc' }, plain)).toEqual([])
+    expect(storedProblems({ scenario: 'perf-baseline', documentId: 'doc' }, { ...plain, revision: 2, revisions: 2 })).toEqual([])
   })
 
   it('"公式待更新"还在：算问题', () => {

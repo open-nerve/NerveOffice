@@ -597,6 +597,13 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/formula-mode-Dx1.js', 'assets/formula-D2.js', 'assets/my-formula-mode-x.js']).map(v => v.subject)).toEqual(['assets/formula-mode-Dx1.js'])
   })
 
+  it('真实浏览器复核的探针 Worker（M4-P1 S1）：来源在 editor/testing/ 下，按来源认；Worker 的产物按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/editor/testing/storage-probe-worker.ts')).toBe(true)
+    expect(checkTestOnlySources({ 'assets/storage-probe-worker-ChQO.js': { name: 'storage-probe-worker', modules: ['src/editor/testing/storage-probe-worker.ts', 'src/editor/testing/probe-bytes.ts'] } }, ['assets/storage-probe-worker-ChQO.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/storage-probe-worker-ChQO0U-n.js', 'assets/storage-probe-workers.js', 'assets/my-storage-probe-worker-x.js', 'assets/outbox.worker-Bx1.js']).map(v => v.subject)).toEqual(['assets/storage-probe-worker-ChQO0U-n.js'])
+  })
+
   it('档案故障开关（M3-P4 设计 §3.14）：来源在 editor/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
     expect(isTestOnlySource('src/editor/testing/profile-fault.ts')).toBe(true)
     expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/editor/sheet-editor.ts', 'src/editor/testing/profile-fault.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))

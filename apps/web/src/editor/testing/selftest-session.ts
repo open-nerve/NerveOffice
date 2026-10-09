@@ -3,7 +3,7 @@
 // 只在测试构建里（editor/testing/，随自检的分块动态引入）
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
 import type { EntryApi, EntryRange, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
-import type { SelftestCheck, SelftestPage, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
+import type { SelftestCheck, SelftestFact, SelftestPage, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import { canonicalJson, contentOf } from './content-compare.ts'
 import { byRole, isVisible, waitFor } from './selftest-dom.ts'
 
@@ -42,6 +42,15 @@ export interface SelftestPageView {
   readonly leaving?: string | undefined
 }
 
+/**
+ * 编辑器页第一次载入（打开即阅读）时容器第一次到 ready（渲染完成，交互屏障撤掉）与 steady 的时刻：performance.now()，页面的导航开始是 0；
+ * 还没到时是 null。首屏的计时（M4-P1 S1 的 perf-baseline，设计 §3.6 第 12 项）：挂接在载入之前就订阅了页面的状态，这两个时刻不靠自检开始之后再装的计时
+ */
+export interface SelftestFirstLoad {
+  readonly ready: number | null
+  readonly steady: number | null
+}
+
 /** 编辑器页交给自检的（挂接在页面开始载入时就收集页面错误与可见性，到 steady 之后才引入自检） */
 export interface SelftestHost {
   readonly documentId: string
@@ -63,6 +72,8 @@ export interface SelftestHost {
   readonly pageErrors: () => readonly string[]
   readonly consoleErrors: () => readonly string[]
   readonly ignoredNotices: () => readonly string[]
+  /** 第一次载入的时刻（见 SelftestFirstLoad） */
+  readonly firstLoad: () => SelftestFirstLoad
 }
 
 /**
@@ -169,6 +180,10 @@ export interface Session {
   /** 交接的场景走了哪条路与时间线（M3-P5，selftest-report.ts 的 path、timeline） */
   path?: string
   timeline?: SelftestTimelineEntry[]
+  /** 真实浏览器的前置复核（M4-P1）记下的事实（selftest-report.ts 的 facts）：判定在驱动脚本里 */
+  readonly facts: Record<string, SelftestFact>
+  /** 地址里的运行次数（RUNS_PARAM）；没有带时 undefined，复核的场景用各自最少的次数 */
+  readonly runs: number | undefined
 }
 
 export async function check(session: Session, id: string, run: () => Promise<string>, timeoutMs = CHECK_TIMEOUT_MS): Promise<boolean> {

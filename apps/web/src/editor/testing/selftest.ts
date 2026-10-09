@@ -12,7 +12,9 @@
 // - 捕获时机的复核（M3-P4 S1：环境、变更检测、公式时序 × 两种模式、自动行高、大表复制、组合输入、隐藏时保存；S7 起观察真实的自动保存）
 //   在 ./selftest-capture.ts；
 // - 交接的复核（M3-P5 设计 §3.14：同一个浏览器里两个标签页的本人接管、刷新时在途的保存）在 ./selftest-handover.ts；
-// - 请求编辑的两条路（M3-P6 设计 §3.10，DEF-062：请求方在后台停在交给了我、回到前台才进入；持有者被暂停时自动交出走到到期）在 ./selftest-request.ts。
+// - 请求编辑的两条路（M3-P6 设计 §3.10，DEF-062：请求方在后台停在交给了我、回到前台才进入；持有者被暂停时自动交出走到到期）在 ./selftest-request.ts；
+// - 真实浏览器的前置复核（M4-P1 设计 §3.6，S1：存储、密钥交给 Worker、写满、Worker 的停顿、捕获成本与性能基线）在 ./selftest-storage.ts、
+//   ./selftest-stall.ts、./selftest-cost.ts：只交回事实（facts）与计时，判定在驱动脚本里；次数按地址里的 runs。
 // 一次运行的共用部分（编辑器页交给自检的、一项检查怎么记、命令日志的查询）在 ./selftest-session.ts。
 // 只读的入口里能用 Facade 与合成事件执行的部分才在这里；可信的键盘输入、输入法与鼠标的拖动由 Playwright 的 WebKit 覆盖
 // （read-only.spec.ts、read-only-shortcuts.spec.ts），Worker 作用域里的错误这里看不到（设计 §3.5 第 4 条）。
@@ -28,11 +30,14 @@ import { canonicalJson, documentChangeAttemptsIn, documentChangesIn, sameContent
 import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
 import { holdTimedAutosave } from './selftest-autosave.ts'
 import { EXPECTS_HIDDEN as CAPTURE_EXPECTS_HIDDEN, CAPTURE_SCENARIO_RUNNERS } from './selftest-capture.ts'
+import { COST_SCENARIO_RUNNERS } from './selftest-cost.ts'
 import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, isShown, isVisible, keyboardTarget, nextFrames, pressKeys, rightClickAt, sheetCanvas, sheetTab, univerIsMac, waitFor } from './selftest-dom.ts'
 import { HANDOVER_EXPECTS_HIDDEN, HANDOVER_SCENARIO_RUNNERS } from './selftest-handover.ts'
-import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
+import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, RUNS_MAX, RUNS_PARAM, runsOfValue, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
 import { REQUEST_EXPECTS_HIDDEN, REQUEST_SCENARIO_BUDGET_MS, REQUEST_SCENARIO_RUNNERS } from './selftest-request.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, fetchServerContent, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
+import { STALL_SCENARIO_RUNNERS, stallBudgetMs } from './selftest-stall.ts'
+import { STORAGE_SCENARIO_RUNNERS } from './selftest-storage.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
 export type { SelftestHost, SelftestPageView } from './selftest-session.ts'
@@ -644,6 +649,9 @@ const SCENARIOS: Readonly<Record<SelftestScenario, (session: Session) => Promise
   ...CAPTURE_SCENARIO_RUNNERS,
   ...HANDOVER_SCENARIO_RUNNERS,
   ...REQUEST_SCENARIO_RUNNERS,
+  ...STORAGE_SCENARIO_RUNNERS,
+  ...STALL_SCENARIO_RUNNERS,
+  ...COST_SCENARIO_RUNNERS,
 }
 
 /**
@@ -652,29 +660,40 @@ const SCENARIOS: Readonly<Record<SelftestScenario, (session: Session) => Promise
  */
 const EXPECTS_HIDDEN: ReadonlySet<string> = new Set([...CAPTURE_EXPECTS_HIDDEN, ...HANDOVER_EXPECTS_HIDDEN, ...REQUEST_EXPECTS_HIDDEN])
 
-/** 一个场景的检查一共最多用多久：请求编辑的两条路（M3-P6）更长（路 2 光是盖屏就约 3 分钟），别的是 SCENARIO_BUDGET_MS */
-function budgetOf(scenario: SelftestScenario): number {
+/**
+ * 一个场景的检查一共最多用多久：请求编辑的两条路（M3-P6）更长（路 2 光是盖屏就约 3 分钟），Worker 的停顿（M4-P1）按这一次的编排算
+ * （runs 是 40 时约 5 分钟的空闲），别的是 SCENARIO_BUDGET_MS
+ */
+function budgetOf(scenario: SelftestScenario, runs: number | undefined): number {
+  if (scenario === 'worker-stall')
+    return stallBudgetMs(runs)
   return REQUEST_EXPECTS_HIDDEN.has(scenario) ? REQUEST_SCENARIO_BUDGET_MS : SCENARIO_BUDGET_MS
 }
 
-/** 跑一次自检，返回结果（不跳转） */
-export async function runEditorSelftest(host: SelftestHost, scenario: string): Promise<SelftestReport> {
+/**
+ * 跑一次自检，返回结果（不跳转）。runs 是地址里的运行次数（RUNS_PARAM；真实浏览器的复核按它定次数）：没有带时 undefined，
+ * 写法不对时 null（不跑，结果说明原因）
+ */
+export async function runEditorSelftest(host: SelftestHost, scenario: string, runs?: number | null): Promise<SelftestReport> {
   const checks: SelftestCheck[] = []
   const timings: SelftestTiming[] = []
   let failure: string | undefined
   let formulaValues: Record<string, unknown> | undefined
   let path: string | undefined
   let timeline: SelftestTimelineEntry[] | undefined
+  let facts: SelftestReport['facts']
   const probe = window.__nerveEditorProbe
   if (!isSelftestScenario(scenario))
     failure = `不认识的场景 ${scenario}`
+  else if (runs === null)
+    failure = `地址里的 ${RUNS_PARAM} 只能是 1 到 ${RUNS_MAX} 的整数`
   else if (host.page.state !== 'ready')
     failure = `编辑器页没有就绪（${host.page.state}${host.page.detail === undefined ? '' : `：${host.page.detail}`}）`
   else if (probe === undefined)
     failure = '页面里没有编辑器的探针（不是测试构建？）'
   if (failure === undefined && probe !== undefined && isSelftestScenario(scenario)) {
     const api = probe.univerAPI as unknown as SelftestApi
-    const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, timings, deadline: performance.now() + budgetOf(scenario) }
+    const session: Session = { host, probe, api, unitId: api.getActiveWorkbook().getId(), opened: probe.snapshot(), checks, timings, deadline: performance.now() + budgetOf(scenario, runs ?? undefined), facts: {}, runs: runs ?? undefined }
     // 页面中途被隐藏（浏览器窗口被挡住、切到别的标签页）：Safari 几秒之后就暂停它，余下的检查不再做，趁计时器还在走把结果交回去。
     // 自检开始时已经隐藏了（到 steady 之前就被挡住：挂接只在页面一开始就隐藏时不等 steady）同样算：不然每项都在没有动画帧的页面上超时
     // hidden-save 本来就要页面在中途变成隐藏（EXPECTS_HIDDEN），不按这一条处理
@@ -700,6 +719,7 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     formulaValues = session.formulaValues
     path = session.path
     timeline = session.timeline
+    facts = Object.keys(session.facts).length === 0 ? undefined : session.facts
   }
   return {
     format: SELFTEST_REPORT_FORMAT,
@@ -718,6 +738,7 @@ export async function runEditorSelftest(host: SelftestHost, scenario: string): P
     timings: timings.length === 0 ? undefined : timings,
     path,
     timeline,
+    facts,
     failure,
   }
 }
@@ -743,7 +764,7 @@ export async function runSelftestAndReport(host: SelftestHost): Promise<Selftest
     showProblem(`页面自检没有运行：${problem}`)
     return undefined
   }
-  const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '')
+  const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '', runsOfValue(params.get(RUNS_PARAM)))
   if (next !== null) {
     const url = reportUrl(next, await encodeSelftestReport(report))
     host.allowLeave()
