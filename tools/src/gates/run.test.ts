@@ -211,6 +211,21 @@ describe('US-M1-11 产物门禁的装配', () => {
     expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveHandoverLog']])
   })
 
+  it('违规：发件箱的浏览器层探针（M4-P1 设计 §3.1）进了生产构建：分块名、按来源都认得出，并进别的分块时挂在 window 上的名字照样报出', () => {
+    // 测试构建（dist-e2e）里探针的写法（节选）
+    const probe = 'const e="__nerveOutboxProbe";function t(n){const r={names:{}};return n[e]=r,r}export{t as installOutboxProbe};'
+    const index = { name: 'index', modules: ['index.html', 'src/entries/platform/main.ts'] }
+    const outbox = { name: 'outbox-probe', modules: ['src/features/sheet-editor/outbox/testing/outbox-probe.ts', 'src/shared/outbox/draft-store.ts'] }
+    const chunk = artifactsGate(writeDist({ ...clean, 'assets/outbox-probe-Q1w2E3r4.js': probe, [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': index, 'assets/outbox-probe-Q1w2E3r4.js': outbox }) }))
+    expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([
+      ['artifacts/keyword', '__nerveOutboxProbe'],
+      ['artifacts/test-only', 'assets/outbox-probe-Q1w2E3r4.js'],
+      ['artifacts/test-only-source', 'assets/outbox-probe-Q1w2E3r4.js'],
+    ])
+    const inlined = artifactsGate(writeDist({ ...clean, 'assets/index.js': `${clean['assets/index.js']}${probe}` }))
+    expect(inlined.violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/keyword', '__nerveOutboxProbe']])
+  })
+
   it('违规：没有模块来源清单、产物里有清单没记下的脚本（按来源的核对看不到它们）', () => {
     expect(artifactsGate(writeDist(clean, { sources: false })).violations.map(v => [v.rule, v.subject])).toEqual([['artifacts/missing-module-sources', MODULE_SOURCES]])
     const unlisted = artifactsGate(writeDist({ ...clean, 'assets/extra-a1.js': 'export {}', [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': { name: 'index', modules: ['index.html'] } }) }))

@@ -1,16 +1,9 @@
 // 本机密钥（M3-P6 设计 §3.5、§3.6，M3 总设计 §6.6，00 号计划书 §7.6）：每人一把当前有效的 AES-GCM-256 密钥，带版本号，
 // 服务端用主密钥包装之后保存。页面（M4）用它加密保存在浏览器里、还没同步的草稿：系统管理员吊销之后，用旧密钥加密的草稿再也解不开，
 // 恢复时按版本区分"已吊销"与"被篡改"。M3 的页面不取密钥。
+// 字节数与 base64 的写法在 local-key-format.ts（不引用 zod）
 import { z } from 'zod'
-
-/** 本机密钥的字节数（AES-256） */
-export const LOCAL_KEY_BYTES = 32
-
-/**
- * 32 字节的标准 base64（带填充、规范写法）：44 个字符，以一个 = 结尾。前 42 个字符各带 6 位；第 43 个字符只有高 4 位是数据、
- * 低 2 位必须是 0（取值是 4 的倍数：A E I M Q U Y c g k o s w 0 4 8），所以 32 字节恰好只有这一种写法
- */
-export const LOCAL_KEY_PATTERN_SOURCE = '^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$'
+import { LOCAL_KEY_PATTERN_SOURCE } from './local-key-format.ts'
 
 /** 本机密钥的版本：每人从 1 起，吊销一次加一 */
 export const localKeyVersionSchema = z.int().min(1)

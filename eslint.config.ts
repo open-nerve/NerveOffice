@@ -296,6 +296,16 @@ const EDITOR_PROBE_MODULES = {
   message: '编辑器的 E2E 探针（editor/testing/**）只在测试构建里，只能经动态 import() 引入（sheet-editor.ts 的 e2e 分支）：静态导入与再导出会把 probe-facades.ts 补上的 Facade 带进生产构建，门禁 artifacts 发现不了（M2-P6 复核 F5）',
 }
 
+// ---- 编辑器页的测试构建探针同样只能动态引入（M4-P1 设计 §3.1）----
+// features/sheet-editor 里 testing/ 下的文件（发件箱的浏览器层探针）只在测试构建里，由 start.tsx 在 e2e 分支、地址带 outboxProbe 时
+// 动态 import()；editor/testing/ 同样只在测试构建里。静态导入（含 import type）与再导出都会让生产代码依赖它们（副作用可能留在生产构建里），
+// 所以 sheet-editor 里测试代码之外的文件对路径里有 testing 这一段的模块只能动态引入。testing/ 里的文件之间照常静态引用；
+// 页面自检的挂接（selftest-hook.ts）本身只在测试构建里（start.tsx 动态引入它），对 editor/testing/ 的类型引用不在此列
+const SHEET_EDITOR_PROBE_MODULES = {
+  regex: String.raw`(?:^|/)testing(?:/|$)`,
+  message: '编辑器页的测试构建探针（features/sheet-editor/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入（start.tsx 的 e2e 分支）：静态导入（含 import type）与再导出会让生产代码依赖它们（M4-P1 设计 §3.1）',
+}
+
 // 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
 const DYNAMIC_TEST_MODULES = {
   // 带查询或片段（?raw、#x）、大小写不同（不区分大小写的文件系统上照样找得到）也算（复验 S5）
@@ -1045,6 +1055,16 @@ export default antfu(
     ignores: [...TEST_CODE, 'apps/web/src/editor/testing/**'],
     rules: {
       'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, EDITOR_PROBE_MODULES] }],
+    },
+  },
+  {
+    // 编辑器页的测试构建探针只能动态引入（M4-P1 设计 §3.1）：sheet-editor 里测试代码、testing/ 与页面自检的挂接之外的文件，
+    // 在 nerve/test-code-only-in-tests 的基础上加这条限制。同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上
+    name: 'nerve/sheet-editor-probe-dynamic-only',
+    files: ['apps/web/src/features/sheet-editor/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**/testing/**', 'apps/web/src/features/sheet-editor/selftest-hook.ts'],
+    rules: {
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, SHEET_EDITOR_PROBE_MODULES] }],
     },
   },
   {
