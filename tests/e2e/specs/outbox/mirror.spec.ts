@@ -14,7 +14,7 @@ import type { DraftKey, InFlightSave, ProbeCapture, ProbeSlot, WriterIdentity } 
 import { randomBytes, randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { test as base, expect } from '../../support/fixtures.ts'
-import { NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, probePipeline, removeMirrorOf, writerOf } from '../../support/outbox-probe.ts'
+import { draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, probePipeline, removeMirrorOf, writerOf } from '../../support/outbox-probe.ts'
 import { firstPage, launchPersistentProfile, overrideQuota } from '../../support/persistent-profile.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
@@ -317,6 +317,35 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
     const restored = await workerPipeline(page)
     const afterWipe = outcomeOf(await probePipeline(page, 'read', restored, key), 'draft')
     expect([afterWipe.meta.writeEpoch, afterWipe.meta.draftSeq, afterWipe.gzip.text]).toEqual([3, 12, 'twelve'])
+  })
+
+  test('库悄悄丢了更新的那次登记与它的写入（UR-034 的变体，审查 A2 的订正）：库退回了旧一代的写入者与草稿，比对时从镜像写回更新的一代写的那一份，写入者换成它的', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-regloss')
+    const w5 = writerOf(5)
+    const first = await workerPipeline(page)
+    await probePipeline(page, 'register', first, key, w5, false)
+    outcomeOf(await probePipeline(page, 'write', first, captureOf(key, w5, 10, 'ten')), 'written')
+    await probePipeline(page, 'dispose', first)
+    await waitForRelease(page, key)
+
+    const w6 = writerOf(6)
+    const second = await workerPipeline(page)
+    expect(await probePipeline(page, 'register', second, key, w6, false)).toMatchObject({ kind: 'registered', lastDraftSeq: 10 })
+    outcomeOf(await probePipeline(page, 'write', second, captureOf(key, w6, 11, 'eleven', { adoptSeq: 10 })), 'written')
+    await probePipeline(page, 'dispose', second)
+    await waitForRelease(page, key)
+
+    // 库悄悄退回：新一代的登记与它写的第 11 份都没了，又是旧一代 W5 与它的第 10 份
+    expect(await probe(page, 'remove', key)).toEqual({ kind: 'removed' })
+    await probeDatabase(page, 'putRaw', 'writers', { ...key, writeEpoch: 5, writerId: w5.writerId, lastDraftSeq: 9, registeredAt: Date.now() })
+    expect(await probe(page, 'write', draftFor(key, w5, 10))).toEqual({ kind: 'written' })
+    expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ writeEpoch: 5, lastDraftSeq: 10 })
+
+    const after = await workerPipeline(page)
+    const read = outcomeOf(await probePipeline(page, 'read', after, key), 'draft')
+    expect([read.meta.writeEpoch, read.meta.draftSeq, read.gzip.text]).toEqual([6, 11, 'eleven'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key), '写入者换成镜像里那一份的，高水位是它的序号').toMatchObject({ writeEpoch: 6, writerId: w6.writerId, lastDraftSeq: 11 })
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toMatchObject({ kind: 'restored' })
   })
 
   test('平台页面里的比对（P4 的本机草稿页列出与清理之前，审查 A18）：删库之后只在镜像里的草稿，不经发件箱 Worker 写回库，列出来就有、提示照留', async ({ profile: { page } }) => {

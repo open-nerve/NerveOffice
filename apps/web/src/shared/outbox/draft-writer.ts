@@ -479,8 +479,9 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       // 现有的草稿：库里的（比对写回的已经在库里），同一版本在镜像里的拷贝备着
       const existing = await openedOf(outcome.existing ?? { kind: 'absent' }, { mirror: reconciled.mirror, restored: undefined })
       const attached = mirror === undefined ? MIRROR_OFF : await mirror.attach(key)
-      // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回
-      const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' ? await mirrorBackfill(outcome.existing.draft) : undefined
+      // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回。
+      // 比对没做完（写回时库出了问题）时不补写：还不知道镜像里那一份该不该胜出，不拿库里的盖掉它
+      const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' && reconciled.problem === undefined ? await mirrorBackfill(outcome.existing.draft) : undefined
       return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing, mirror: filled ?? attached }
     }, error => ({ kind: 'failed', error })),
 

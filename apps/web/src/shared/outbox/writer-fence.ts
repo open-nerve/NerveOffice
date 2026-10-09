@@ -207,20 +207,23 @@ export function compareDrafts(a: Pick<DraftMeta, 'writeEpoch' | 'draftSeq' | 'up
 }
 
 /**
- * 从 OPFS 镜像写回 IndexedDB 的判定（§3.8，审查 A2）：镜像里那一份只在两种情况下胜过库——
- * - 库里这份文档既没有写入者也没有草稿（删库）：写回，写入者照它建（create），删库时写入者也没了，不补就挡不住旧的写入者；
- * - 镜像里那一份就是库里当前的写入者（代次与 writerId 都相同）写的，而比库里的新（库悄悄退回了已提交的写入）：写回，高水位抬到它（raise）。
- * 别的都不写回：
+ * 从 OPFS 镜像写回 IndexedDB 的判定（§3.8，审查 A2 与它的订正）。草稿序号是一份文档一条线，登记时高水位取 max 继承下来——
+ * 候选的序号不大于库里写入者的高水位，就说明库里的写入者看过它。
  * - expired：超过保留期（镜像随之作废，保留期本来就要删它）；
  * - unrecognized：库里那一条认不出（更新的页面写的、形状不对）：不动它；
+ * - 库里没有写入者：没有草稿（删库）→ 写回，写入者照它建（create）；有草稿 → foreign，不拿镜像换掉库里的；
  * - retired：库里是墓碑（清理删不掉镜像目录时立的）：镜像里的是该删的，不写回；
- * - foreign：库里有当前的写入者而镜像里那一份不是它写的（以 force 登记、代次倒退之后旧一代的镜像），或者库里有草稿却没有写入者——
- *   不拿它换掉库里的；
- * - not-newer：同一个写入者，库里那一份不比它旧；
- * - seen：同一个写入者，库里没有它写的草稿而高水位已经到了它的序号——它被确认删掉、放弃过，镜像是过时的，不复活
+ * - 同一个写入者：库里是它的草稿 → 比先后，镜像的更新才写回、抬高水位（raise，库悄悄退回了已提交的写入），否则 not-newer；
+ *   库里不是它的草稿 → 序号不大于高水位是 seen（被确认删掉、放弃过），否则写回、抬高水位；
+ * - 不同的写入者：
+ *   1. 序号不大于库里写入者的高水位 → seen（当前的写入者登记时已经看过它；含以 force 登记、代次倒退之后旧一代的镜像）；
+ *   2. 候选的代次更大 → 写回，写入者换成候选的（replace：库悄悄丢了更新的那次登记与它的写入——UR-034 的变体）；
+ *   3. 库里没有草稿 → 写回成别人留下的草稿，写入者与高水位不动（keep：库里的写入者同代或更新、还没写过草稿；活着的那一页按自己
+ *      交回的高水位分配序号，抬高会让它的写入变成 stale-seq；不覆盖别人的草稿护住它，P3 给副本）；
+ *   4. 否则 → foreign（库里的写入者同代或更新、已有自己的草稿，不拿镜像里的覆盖它）
  */
 export type RestoreVerdict
-  = | { readonly kind: 'restore', readonly writer: 'create' | 'raise' }
+  = | { readonly kind: 'restore', readonly writer: 'create' | 'replace' | 'raise' | 'keep' }
     | { readonly kind: 'skip', readonly reason: 'expired' | 'unrecognized' | 'retired' | 'foreign' | 'not-newer' | 'seen' }
 
 export function decideRestore(writer: WriterRecord | undefined, existing: ExistingDraft | undefined, candidate: DraftMeta, now: number): RestoreVerdict {
@@ -232,17 +235,30 @@ export function decideRestore(writer: WriterRecord | undefined, existing: Existi
     return existing === undefined ? { kind: 'restore', writer: 'create' } : { kind: 'skip', reason: 'foreign' }
   if (isRetired(writer))
     return { kind: 'skip', reason: 'retired' }
-  if (!isSameWriter(writer, candidate))
-    return { kind: 'skip', reason: 'foreign' }
-  if (existing !== undefined && isSameWriter(existing.draft, candidate))
+  if (isSameWriter(writer, candidate) && existing !== undefined && isSameWriter(existing.draft, candidate))
     return compareDrafts(existing.draft, candidate) >= 0 ? { kind: 'skip', reason: 'not-newer' } : { kind: 'restore', writer: 'raise' }
-  return candidate.draftSeq <= writer.lastDraftSeq ? { kind: 'skip', reason: 'seen' } : { kind: 'restore', writer: 'raise' }
+  if (candidate.draftSeq <= writer.lastDraftSeq)
+    return { kind: 'skip', reason: 'seen' }
+  if (isSameWriter(writer, candidate))
+    return { kind: 'restore', writer: 'raise' }
+  if (candidate.writeEpoch > writer.writeEpoch)
+    return { kind: 'restore', writer: 'replace' }
+  return existing === undefined ? { kind: 'restore', writer: 'keep' } : { kind: 'skip', reason: 'foreign' }
 }
 
-/** 写回时写入者的记录（decideRestore 的 writer）：create 照写回的那一份建（登记时刻记为 now）；raise 把高水位抬到它的序号 */
-export function restoredWriterOf(current: WriterRecord | undefined, restored: DraftMeta, verdict: 'create' | 'raise', now: number): WriterRecord {
+/**
+ * 写回时写入者的记录（decideRestore 的 writer）：create、replace 换成写回的那一份的写入者（登记时刻记为 now），高水位不低于它的序号；
+ * raise 只抬高水位；keep 不动（交回 undefined，不写写入者）
+ */
+export function restoredWriterOf(current: WriterRecord | undefined, restored: DraftMeta, verdict: 'create' | 'replace' | 'raise' | 'keep', now: number): WriterRecord | undefined {
   const lastDraftSeq = Math.max(current?.lastDraftSeq ?? 0, restored.draftSeq)
-  if (verdict === 'raise' && current !== undefined)
-    return { ...current, lastDraftSeq }
-  return { userId: restored.userId, documentId: restored.documentId, writeEpoch: restored.writeEpoch, writerId: restored.writerId, lastDraftSeq, registeredAt: now }
+  switch (verdict) {
+    case 'create':
+    case 'replace':
+      return { userId: restored.userId, documentId: restored.documentId, writeEpoch: restored.writeEpoch, writerId: restored.writerId, lastDraftSeq, registeredAt: now }
+    case 'raise':
+      return current === undefined ? undefined : { ...current, lastDraftSeq }
+    case 'keep':
+      return undefined
+  }
 }

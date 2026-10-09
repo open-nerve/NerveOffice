@@ -148,9 +148,9 @@ export interface DraftStore {
   /** 删掉这几份文档的墓碑（它们的镜像目录已经不在了）；那一条已经换成活的写入者（又登记了）的不动 */
   readonly dropTombstones: (keys: readonly DraftKey[]) => Promise<StoreDropOutcome>
   /**
-   * 从 OPFS 镜像写回（§3.8，S9）：镜像里校验通过的最新一份。strict 事务里按 decideRestore 判定（审查 A2：只在删库、或者同一个写入者
-   * 而库被悄悄退回时写回）：写回时连同写入者的记录（没有就照它建，就是它就抬高水位），并在同一个事务里留下 restored 提示（时刻是 now）；
-   * 不写回时交回原因。形状不对的记录不写（failed）
+   * 从 OPFS 镜像写回（§3.8，S9）：镜像里校验通过的最新一份。strict 事务里按 decideRestore 判定（审查 A2 与它的订正：按库里写入者的
+   * 高水位与代次）：写回时连同写入者的记录（没有就照它建、库丢了更新的登记就换成它的、就是它就抬高水位、同代或更新的写入者还没写过草稿
+   * 就不动），并在同一个事务里留下 restored 提示（时刻是 now）；不写回时交回原因。形状不对的记录不写（failed）
    */
   readonly restoreDraft: (draft: StoredDraft, options: { readonly now: number }) => Promise<StoreRestoreOutcome>
   /**
@@ -587,7 +587,9 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
             return
           }
           scope.tx.objectStore(DRAFTS_STORE).put(record)
-          scope.tx.objectStore(WRITERS_STORE).put(restoredWriterOf(current, record, verdict.writer, now))
+          const restoredWriter = restoredWriterOf(current, record, verdict.writer, now)
+          if (restoredWriter !== undefined)
+            scope.tx.objectStore(WRITERS_STORE).put(restoredWriter)
           scope.tx.objectStore(NOTICES_STORE).put(noticeOf(record, 'restored', now))
           scope.finish({ kind: 'restored' })
         })

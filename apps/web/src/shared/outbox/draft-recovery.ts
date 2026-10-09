@@ -1,9 +1,10 @@
 // 比对 OPFS 镜像与库（M4-P1 设计 §3.8；审查 A19 从写入管道拆出：写入管道只负责写，比对的策略在这里）。
-// - 谁胜出（审查 A2）：镜像里最新写的那一份（代号最大的合格槽位）只在两种情况下胜过库——库里这份文档既没有写入者也没有草稿（删库），
-//   或者它就是库里当前的写入者写的、比库里的新（库悄悄退回了已提交的写入）。最终的判定在存储的事务里（writer-fence.ts 的 decideRestore，
-//   要看库里当前的写入者，含墓碑）；这里先按库里的草稿与镜像里那一份判断要不要交给存储（reconcileAction），常见的"两边是同一版本"不开读写的事务。
-// - 写回之外：镜像过时（确认删掉、放弃过、超过保留期、库里是墓碑）时截断它；库里的胜出、而本页是写入者（拿着句柄）时补写镜像；两个槽位
-//   都不合格、库里连草稿带写入者都没了时留下 lost 提示，之后截断这两个没用的槽位。
+// - 谁胜出（审查 A2 与它的订正）：镜像里最新写的那一份（代号最大的合格槽位，不按代次）与库里比，判定在存储的事务里（writer-fence.ts 的
+//   decideRestore：按库里写入者的高水位与代次——库里的写入者看过它（序号不大于高水位）就不写回，库丢了更新的那次登记就写回并换成它的写入者，
+//   墓碑挡住写回）；这里先按库里的草稿与镜像里那一份判断要不要交给存储（reconcileAction），常见的"两边是同一版本"不开读写的事务。
+// - 写回之外：库里是墓碑时截断镜像；镜像过时（库里的写入者看过它、超过保留期）而库里有草稿时，本页是写入者就补写（镜像跟上库），不是就截断；
+//   库里没有草稿时截断（不让确认删掉、放弃过的在删库之后复活）；库里的胜出、而本页是写入者（拿着句柄）时补写镜像；两个槽位都不合格、
+//   库里连草稿带写入者都没了时留下 lost 提示，之后截断这两个没用的槽位。
 // - 读草稿、登记时交回哪一份（versionsToOpen，审查 A3）：写回了就是写回的那一份，否则库里的，库用不了时镜像里最新写的；同一个版本在库与
 //   镜像里各有一份时都交回（解不开的那一份换同一版本的另一份），不退回更旧的版本。
 // 依赖经接口注入：发件箱 Worker 里是镜像（draft-mirror.ts：同步访问句柄，能截断、补写）；平台页面（P4 的本机草稿页列出与清理之前先比对，
@@ -131,13 +132,20 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
   const { store, mirror, now } = options
   const noteLost = options.noteLost ?? true
 
-  async function backfill(record: StoredDraft): Promise<void> {
+  /** 补写：拿着句柄（本页是写入者）时为真（写成没写成都算：镜像这一次落后着，下一次写入、登记照常追上） */
+  async function backfill(record: StoredDraft): Promise<boolean> {
     try {
-      await mirror.backfill(record)
+      return await mirror.backfill(record) !== undefined
     }
     catch {
-      // 补写出了意外：镜像这一次落后着，下一次写入、登记照常追上
+      return true
     }
+  }
+
+  /** 截断镜像：里面的不再算数 */
+  async function clear(key: DraftKey): Promise<Reconciled> {
+    await mirror.clear(key)
+    return { mirror: undefined, restored: undefined }
   }
 
   return {
@@ -167,14 +175,15 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
             return { mirror: read, restored: latest }
           if (outcome.kind !== 'kept')
             return { ...kept, problem: outcome }
-          // 镜像过时（确认删掉、放弃过、超过保留期、库里是墓碑）：截断它，里面的不再算数
-          if (outcome.reason === 'seen' || outcome.reason === 'expired' || outcome.reason === 'retired') {
-            await mirror.clear(key)
-            return { mirror: undefined, restored: undefined }
-          }
-          // 库里的胜出（别的写入者的、库里的不比它旧）：本页是写入者时补写
-          if (current.kind === 'draft')
-            await backfill(current.draft)
+          // 库里是墓碑：镜像里的是该删的，截断它
+          if (outcome.reason === 'retired')
+            return clear(key)
+          // 库里的胜出：本页是写入者时补写，镜像跟上库
+          if (current.kind === 'draft' && await backfill(current.draft))
+            return kept
+          // 镜像过时（库里的写入者看过它、超过保留期）：截断它，里面的不再算数——库里没有草稿时不让确认删掉、放弃过的在删库之后复活
+          if (outcome.reason === 'seen' || outcome.reason === 'expired')
+            return clear(key)
           return kept
         }
         case 'lost': {
@@ -184,8 +193,7 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
           if (lost.kind !== 'noted' && lost.kind !== 'kept')
             return { ...kept, problem: lost }
           // 核对过了（留下了 lost，或者草稿是被删掉的）：截断这两个没用的槽位，之后不再重复核对、重复留提示
-          await mirror.clear(key)
-          return { mirror: undefined, restored: undefined }
+          return clear(key)
         }
       }
     },

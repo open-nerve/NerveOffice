@@ -166,6 +166,33 @@ describe('比对一份文档（createDraftRecovery）', () => {
     expect(store.rawDraft(KEY)).toMatchObject({ draftSeq: 8, writerId: WRITER_ID })
   })
 
+  it('库悄悄丢了更新的那次登记与它的写入（UR-034 的变体，审查 A2 的订正）：写回，写入者换成镜像里那一份的', async () => {
+    const store = fakeDraftStore()
+    store.putRaw('drafts', KEY, record(10, { writeEpoch: 5, writerId: OTHER_WRITER_ID }))
+    store.putRaw('writers', KEY, sampleWriter({ ...KEY, writeEpoch: 5, writerId: OTHER_WRITER_ID, lastDraftSeq: 10 }))
+    const read = slots(valid(record(11, { writeEpoch: 6 }), 2), valid(record(10, { writeEpoch: 5, writerId: OTHER_WRITER_ID }), 1))
+    expect(await createDraftRecovery({ store: store.store, mirror: scriptedMirror(read), now: () => NOW }).reconcile(KEY)).toEqual({ mirror: read, restored: record(11, { writeEpoch: 6 }) })
+    expect(store.rawWriter(KEY)).toMatchObject({ writeEpoch: 6, writerId: WRITER_ID, lastDraftSeq: 11 })
+  })
+
+  it('库里是更新的一代、还没写过草稿：写回成别人留下的草稿，写入者与高水位不动', async () => {
+    const store = fakeDraftStore()
+    store.putRaw('writers', KEY, sampleWriter({ ...KEY, writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }))
+    const read = slots(valid(record(8), 2), EMPTY)
+    expect((await createDraftRecovery({ store: store.store, mirror: scriptedMirror(read), now: () => NOW }).reconcile(KEY)).restored).toEqual(record(8))
+    expect(store.rawWriter(KEY)).toMatchObject({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 0 })
+  })
+
+  it('库里的写入者看过镜像里那一份、库里有草稿：本页是写入者时补写（镜像跟上库）；不是时截断（镜像过时）', async () => {
+    const store = fakeDraftStore()
+    store.putRaw('drafts', KEY, record(11, { writeEpoch: 2, writerId: OTHER_WRITER_ID }))
+    store.putRaw('writers', KEY, sampleWriter({ ...KEY, writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 }))
+    const read = slots(valid(record(10, { writeEpoch: 5 }), 4), EMPTY)
+    const notHeld = scriptedMirror(read, false)
+    expect(await createDraftRecovery({ store: store.store, mirror: notHeld, now: () => NOW }).reconcile(KEY)).toEqual({ mirror: undefined, restored: undefined })
+    expect([notHeld.cleared, notHeld.backfilled]).toEqual([[KEY], []])
+  })
+
   it('镜像过时（确认删掉、放弃过、超过保留期）：截断，里面的不再算数', async () => {
     const seen = fakeDraftStore()
     seen.putRaw('writers', KEY, sampleWriter({ ...KEY, lastDraftSeq: 8 }))

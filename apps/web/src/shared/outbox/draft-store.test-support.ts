@@ -245,7 +245,9 @@ export function fakeDraftStore(): FakeDraftStore {
       if (verdict.kind === 'skip')
         return { kind: 'kept', reason: verdict.reason }
       drafts.set(id, structuredClone(draft))
-      writers.set(id, structuredClone(restoredWriterOf(current, draft, verdict.writer, now)))
+      const restoredWriter = restoredWriterOf(current, draft, verdict.writer, now)
+      if (restoredWriter !== undefined)
+        writers.set(id, structuredClone(restoredWriter))
       notices.set(id, notice(draft, 'restored', now))
       return { kind: 'restored' }
     },

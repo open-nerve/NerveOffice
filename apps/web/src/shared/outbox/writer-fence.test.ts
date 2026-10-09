@@ -250,10 +250,14 @@ describe('谁新与从 OPFS 镜像写回（M4-P1 设计 §3.8）', () => {
     { name: '同一个写入者、库里是别人的草稿而高水位已到它：不复活', writer: writer({ lastDraftSeq: 8 }), existing: foreignDraft(), expected: { kind: 'skip', reason: 'seen' } },
     { name: '库里是墓碑（清理删不掉镜像目录时立的，审查 A1、A6）：不写回', writer: TOMBSTONE, existing: undefined, expected: { kind: 'skip', reason: 'retired' } },
     { name: '库里是墓碑、还留着草稿（按用户清理的 pending）：不写回', writer: TOMBSTONE, existing: draft({ draftSeq: 7 }), expected: { kind: 'skip', reason: 'retired' } },
-    { name: '以 force 登记、代次倒退之后的新一代接手写了更新的一份：旧一代的镜像不胜出（审查 A2）', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 11 }), expected: { kind: 'skip', reason: 'foreign' } },
-    { name: '库里是更新的一代、还没写过（删库之后新一代先登记了）：不写回', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'skip', reason: 'foreign' } },
-    { name: '同一代的另一次登记：不写回', writer: writer({ writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'skip', reason: 'foreign' } },
-    { name: '库里的写入者是更早的一代：不写回（库里有当前的写入者）', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 5 }), expected: { kind: 'skip', reason: 'foreign' } },
+    { name: '不同的写入者、序号不大于高水位：库里的写入者看过它（以 force 登记、代次倒退之后旧一代的镜像，审查 A2）——seen', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 11 }), expected: { kind: 'skip', reason: 'seen' } },
+    { name: '不同的写入者、序号不大于高水位、库里没有草稿：seen', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 8 }), existing: undefined, expected: { kind: 'skip', reason: 'seen' } },
+    { name: '库悄悄丢了更新的那次登记与它的写入（UR-034 的变体：库退回了旧一代的写入者与草稿）：写回，写入者换成候选的', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 5 }), expected: { kind: 'restore', writer: 'replace' } },
+    { name: '库丢了更新的登记、草稿也不在：写回，换写入者', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: undefined, expected: { kind: 'restore', writer: 'replace' } },
+    { name: '库里是更新的一代、还没写过草稿（删库之后新一代先登记了）：写回成别人留下的草稿，写入者不动', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
+    { name: '同一代的另一次登记、还没写过草稿：写回成别人留下的草稿，写入者不动', writer: writer({ writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
+    { name: '库里是更新的一代、已有自己的草稿：foreign，不拿镜像里的覆盖它', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 2 }), existing: draft({ writeEpoch: 4, writerId: OTHER_WRITER_ID, draftSeq: 2 }), expected: { kind: 'skip', reason: 'foreign' } },
+    { name: '库里是更新的一代（还没写过）、草稿是候选那个写入者更早的一份：foreign——不按草稿的写入者抬高新一代的高水位（它的写入会变成 stale-seq）', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 7 }), existing: draft({ draftSeq: 7 }), expected: { kind: 'skip', reason: 'foreign' } },
     { name: '库里有草稿、没有写入者：不写回', writer: undefined, existing: draft({ draftSeq: 6 }), expected: { kind: 'skip', reason: 'foreign' } },
     { name: '库里那一条认不出（更新的页面写的）：不动它', writer: undefined, existing: NEWER, expected: { kind: 'skip', reason: 'unrecognized' } },
     { name: '库里那一条形状不对：不动它', writer: writer(), existing: MALFORMED, expected: { kind: 'skip', reason: 'unrecognized' } },
@@ -265,11 +269,14 @@ describe('谁新与从 OPFS 镜像写回（M4-P1 设计 §3.8）', () => {
     })
   }
 
-  it('写回时写入者的记录：删库之后照写回的那一份建出（高水位是它的序号）；就是它时只抬高水位（只增不减）', () => {
+  it('写回时写入者的记录：建出、换成写回的那一份的写入者（高水位不低于它的序号）；就是它时只抬高水位（只增不减）；keep 不动', () => {
     const restored = sampleMeta({ writeEpoch: 3, writerId: WRITER_ID, draftSeq: 8 })
     expect(restoredWriterOf(undefined, restored, 'create', NOW)).toEqual({ userId: restored.userId, documentId: restored.documentId, writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 8, registeredAt: NOW })
+    expect(restoredWriterOf(writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), restored, 'replace', NOW)).toEqual({ userId: restored.userId, documentId: restored.documentId, writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 8, registeredAt: NOW })
     expect(restoredWriterOf(writer({ lastDraftSeq: 6 }), restored, 'raise', NOW)).toEqual(writer({ lastDraftSeq: 8 }))
     expect(restoredWriterOf(writer({ lastDraftSeq: 9 }), restored, 'raise', NOW), '高水位只增不减').toEqual(writer({ lastDraftSeq: 9 }))
+    expect(restoredWriterOf(undefined, restored, 'raise', NOW), '没有写入者时 raise 不建').toBeUndefined()
+    expect(restoredWriterOf(writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID }), restored, 'keep', NOW)).toBeUndefined()
   })
 })
 

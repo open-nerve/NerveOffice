@@ -38,7 +38,7 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     expect(await probeDatabase(page, 'getRaw', 'writers', theirs)).not.toBeNull()
   })
 
-  test('保留期：读得出的更新时间超过 14 天的草稿都删（不论属于谁、不论格式，交回的键标明是哪一种）；读不出更新时间的留着；登记超过 14 天又没有草稿的写入者一并删', async ({ page }) => {
+  test('保留期：读得出的更新时间超过 14 天的草稿都删（不论属于谁、不论格式，交回的键标明是哪一种）；读不出更新时间的留着；登记超过 14 天又没有草稿的写入者换成墓碑（审查 A6：挡住镜像里没截断成的那一份被写回，由合一的清理在镜像目录不在之后删）', async ({ page }) => {
     const user = await createUser('ob-retention')
     const other = await createUser('ob-retention-other')
     await loginThroughApi(page, user)
@@ -90,11 +90,11 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     expect(await probe(page, 'read', freshNewer)).toEqual({ kind: 'newer-format', recordVersion: 2 })
     expect(await probe(page, 'read', timeless), '读不出更新时间：留给 P3、P4 发现之后说明并删').toEqual({ kind: 'malformed' })
 
-    // 写入者：草稿删了的、早已不用的删掉；还有草稿的（高水位要接着用）、刚登记的留着
+    // 写入者：草稿删了的、早已不用的换成墓碑（高水位留着）；还有草稿的（高水位要接着用）、刚登记的照旧
     for (const key of [oldDraft, othersOldDraft, oldNewer, oldBroken, idleWriter])
-      expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).toBeNull()
+      expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).toMatchObject({ writerId: 'retired', writeEpoch: 3 })
     for (const key of [freshDraft, boundaryDraft, freshNewer, timeless, newWriter])
-      expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).not.toBeNull()
+      expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).toMatchObject({ writerId: writer.writerId })
   })
 
   test('列出某人的草稿：只有元数据（不交出密文），认不出的与形状不对的也列出、带上键；用户 id 是别人的前缀时互不相干', async ({ page }) => {
