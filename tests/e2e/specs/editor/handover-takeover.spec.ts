@@ -85,6 +85,21 @@ function holdLeaseRenewals(page: Page, documentId: string) {
   }
 }
 
+/**
+ * 这个页面现在持有这份文档的本机锁（Web Locks 的 nerve-doc:<documentId>）没有：query 只给出各个持有者的 clientId，先拿一把只有它用的锁、从 query
+ * 里认出自己的 clientId 再比。不经页面的模块与测试钩子，生产镜像里同样成立
+ */
+async function holdsDocumentLock(page: Page, documentId: string): Promise<boolean> {
+  return page.evaluate(async (name) => {
+    const probe = `probe-${crypto.randomUUID()}`
+    return navigator.locks.request(probe, async () => {
+      const { held = [] } = await navigator.locks.query()
+      const self = held.find(lock => lock.name === probe)?.clientId
+      return self !== undefined && held.some(lock => lock.name === name && lock.clientId === self)
+    })
+  }, `nerve-doc:${documentId}`)
+}
+
 /** 另存为副本之后的说明里新文档的 id（链接在新标签页打开它） */
 async function copiedDocumentId(page: Page): Promise<string> {
   const link = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' }).getByRole('link', { name: '打开副本（新标签页）', exact: true })
@@ -218,6 +233,8 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
       expect((await takenOver).status()).toBe(409)
       await expect(saveStatus(page)).toHaveText(LOSING)
       await expect(lostNotice(page)).toHaveCount(0)
+      // 前提：A 先从服务端得知、锁还在 A 手里（B 还没抢）
+      expect(await holdsDocumentLock(page, documentId)).toBe(true)
     }
     finally {
       heartbeat.release()
@@ -226,6 +243,7 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
 
     // B 的核对回来、抢锁：A 得知锁被本浏览器的另一个标签页抢走——说那边接手了；副本是 A 的内容
     await waitForEditorAccess(other, 'edit')
+    expect(await holdsDocumentLock(other, documentId)).toBe(true)
     const lost = lostNotice(page)
     await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await waitForEditorAccess(page, 'read')
@@ -357,9 +375,11 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     })
     await page.clock.fastForward(10_000)
     await expect(saveStatus(page)).toHaveText(LOSING)
+    expect(await holdsDocumentLock(page, documentId)).toBe(true)
     await page.clock.fastForward(STEAL_WAIT_MS)
     const lost = lostNotice(page)
     await expect(lost).toContainText('编辑权已失效：你在另一台设备或浏览器上接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+    await expect.poll(async () => holdsDocumentLock(page, documentId)).toBe(false)
     await waitForEditorAccess(page, 'read')
     expect(acquisitions).toEqual([])
     await saves.unblock()

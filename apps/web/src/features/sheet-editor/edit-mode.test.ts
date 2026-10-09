@@ -4782,6 +4782,28 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       expect(lostOf(context.mode).loss).toEqual({ kind: 'taken-over', where: 'elsewhere' })
     })
 
+    it('本页的内容没能取出（捕获出错）时同样等：本浏览器的另一个标签页来抢就说它接手了，没人来抢到时说别处；编辑器留着、不给副本', async () => {
+      for (const stolen of [true, false]) {
+        const context = setup()
+        await editing(context)
+        context.factory.last().edit('甲')
+        // 自动保存的定时捕获先照常做了，之后 SDK 才开始出错：失去编辑权时的捕获出错
+        await context.time.advance(1_000)
+        context.factory.last().failCapture = true
+        loseOnNextHeartbeat(context, TAKEN_OVER)
+        await context.time.advance(HEARTBEAT_MS - 1_000)
+        expect(modeOf(context.mode).kind).toBe('losing')
+        expect(context.browser.holderOf(LOCK)).toBe('this')
+        if (stolen)
+          await stealFromAnotherTab(context)
+        else
+          await context.time.advance(TAKEOVER_STEAL_WAIT_MS)
+        expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'taken-over', where: stolen ? 'this-browser' : 'elsewhere' }, captureFailed: true, unsaved: true })
+        expect(context.factory.last().access).toBe('edit')
+        expect(context.reportError).toHaveBeenCalledOnce()
+      }
+    })
+
     it('保存得知被本人接管（不是心跳）：同一个处理——锁留着等，本浏览器的另一个标签页来抢就说它接手了', async () => {
       const context = setup()
       await editing(context)
