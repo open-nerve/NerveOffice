@@ -9,7 +9,8 @@
 //   结束（SIGKILL）。冻住之后浏览器不再前进，对存储来说等于在冻住的那一刻被结束，读进程表的几十毫秒不落在要测的时机上（"写入之前"的信号一到
 //   就冻住）。之后等全部退出（僵尸算退出）、核对没有幸存者。
 // - 重开（relaunch）：以同一个目录重开。Cookie 不一定已经落盘，走两条确定的路：restore（崩溃之前存下的加回去，模拟已落盘）、clear（清掉，用例
-//   自己重新登录，模拟没落盘）；浏览器实际留下了哪些记成附件（不带值），不断言。
+//   自己重新登录，模拟没落盘）；浏览器实际留下了哪些记下来（不带值），不断言。每次结束与重开的记录在用例结束时记成一个附件 crash-tool.json。本机实测：Chromium、Chrome 与 macOS 的 WebKit 被结束时
+//   会话 Cookie 还没落盘，Linux 的 WebKit（WPE）已经落盘。另有 reopen：正常关闭再打开（浏览器落了盘），给要"浏览器自己留着"前提的用例。
 //
 // 跑法：崩溃用例单独成项目（每个浏览器一个、workers: 1、等全部浏览器项目跑完，playwright.config.ts）。macOS 上认 WebKit 的 WebContent 与 GPU
 // 要求机器上只有这一个 Playwright WebKit 实例，所以崩溃用例不经共用夹具：共用夹具的 context 会起一个共用的浏览器，在 WebKit 上就是第二个实例。
@@ -90,6 +91,8 @@ export interface CrashTool {
   readonly crash: (launch: PersistentLaunch) => Promise<CrashReport>
   /** 以同一个目录重开（上一次必须结束得干净） */
   readonly relaunch: (previous: PersistentLaunch, report: CrashReport, options: { readonly cookies: RelaunchCookies }) => Promise<PersistentLaunch>
+  /** 正常关闭再以同一个目录打开：浏览器把 Cookie 等落了盘（被结束时不一定来得及），用例要"浏览器自己留着"的前提时用 */
+  readonly reopen: (previous: PersistentLaunch) => Promise<PersistentLaunch>
   /** 持久上下文里的 CSP 违规与页面错误：用例结束时断言为空（声明了预期的除外） */
   readonly cspViolations: CspViolations
   readonly pageErrors: PageErrors
@@ -225,9 +228,9 @@ async function verifyExited(spec: InstanceSpec, killed: readonly InstanceProcess
   const after = stillRunning(readProcessTable(spec.platform), spec)
   problems.push(...after.problems)
   const leftovers = after.processes.filter(item => !alive.some(row => row.pid === item.pid))
-  // 一个循环里漏掉的也是这次启动的进程：结束它，仍然算幸存者（报告里要看得到）
-  for (const item of leftovers)
-    send(item.pid, 'SIGKILL', problems)
+  // 等过时限还活着的、一个循环里漏掉的都是这次启动的进程：再结束一次（不把冻住或活着的进程留在机器上），仍然算幸存者（报告里要看得到）
+  for (const row of [...alive, ...leftovers])
+    send(row.pid, 'SIGKILL', problems)
   return [...alive, ...leftovers]
 }
 
@@ -254,9 +257,10 @@ async function crashNow(launch: PersistentLaunch, planned: readonly InstanceProc
   }
 }
 
-/** 一次结束的附件（不带 Cookie 的值） */
-function crashAttachment(report: CrashReport, generation: number): string {
-  return JSON.stringify({
+/** 一次结束的记录（不带 Cookie 的值）：用例结束时与重开的记录一起记成一个附件 crash-tool.json */
+function crashRecord(report: CrashReport, generation: number): Record<string, unknown> {
+  return {
+    kind: 'crash',
     generation,
     platform: report.spec.platform,
     family: report.spec.family,
@@ -269,13 +273,15 @@ function crashAttachment(report: CrashReport, generation: number): string {
     problems: report.problems,
     notes: report.notes,
     cookies: cookieSummary(report.cookies),
-  }, null, 2)
+  }
 }
 
 function createCrashTool(environment: LaunchEnvironment, collectors: Pick<CrashTool, 'cspViolations' | 'pageErrors'>): CrashTool & { readonly dispose: () => Promise<void> } {
   const realProfileDir = (): string => realpathSync(environment.profileDir)
   /** 还开着的那一次启动（结束之后为 undefined）：用例结束时关闭 */
   let live: PersistentLaunch | undefined
+  /** 这条用例里每次结束、重开的记录：用例结束时记成一个附件（几十次结束各记一个附件太散） */
+  const records: Record<string, unknown>[] = []
 
   const prepareCrash = async (launch: PersistentLaunch): Promise<CrashPlan> => {
     if (live !== launch)
@@ -299,7 +305,7 @@ function createCrashTool(environment: LaunchEnvironment, collectors: Pick<CrashT
         used = true
         live = undefined
         const report = await crashNow(launch, processes, holders, cookies, realProfileDir())
-        await environment.testInfo.attach(`crash-${launch.generation}.json`, { body: crashAttachment(report, launch.generation), contentType: 'application/json' })
+        records.push(crashRecord(report, launch.generation))
         return report
       },
     }
@@ -322,17 +328,24 @@ function createCrashTool(environment: LaunchEnvironment, collectors: Pick<CrashT
         throw new Error(`上一次没有结束干净，不能以同一个目录重开：幸存者 ${report.survivors.map(row => row.pid).join('、') || '无'}；${report.problems.join('；')}`)
       const next = await launchPersistent(environment, previous.generation + 1)
       live = next
-      const kept = await next.context.cookies()
-      await environment.testInfo.attach(`relaunch-${next.generation}-cookies.json`, {
-        body: JSON.stringify({ cookies, keptByBrowser: cookieSummary(kept), beforeCrash: cookieSummary(report.cookies) }, null, 2),
-        contentType: 'application/json',
-      })
+      records.push({ kind: 'relaunch', generation: next.generation, cookies, keptByBrowser: cookieSummary(await next.context.cookies()), beforeCrash: cookieSummary(report.cookies) })
       await next.context.clearCookies()
       if (cookies === 'restore')
         await next.context.addCookies([...report.cookies])
       return next
     },
+    reopen: async (previous) => {
+      if (live !== previous)
+        throw new Error('只能重开还开着的、最近的那一次启动')
+      live = undefined
+      await previous.context.close()
+      live = await launchPersistent(environment, previous.generation + 1)
+      records.push({ kind: 'reopen', generation: live.generation })
+      return live
+    },
     dispose: async () => {
+      if (records.length > 0)
+        await environment.testInfo.attach('crash-tool.json', { body: JSON.stringify(records, null, 2), contentType: 'application/json' })
       const launch = live
       live = undefined
       if (launch === undefined)
