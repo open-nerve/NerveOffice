@@ -15,7 +15,7 @@ Chromium 的 IndexedDB 每个来源一个 LevelDB（同一来源的全部库共�
 
 同样的复用日志也在 Chromium 的 localStorage 与 OPFS 的目录库里；它们不是 paranoid 打开，表现不是删库，而是那半条之后、同一个 32 KiB 块里的记录在每一次启动时都被丢掉——之后的 localStorage 改动、OPFS 里用 `createWritable` 改写的文件都悄悄丢失。
 
-- **复现**：不注入时，Google Chrome 154 强制结束 1400 次，删库 5 次；Chrome for Testing 153（macOS）800 次里 7 次，Linux 300 次里 1 次。每一次删库之前，那次结束之后日志结尾都恰好是一个完整的 7 字节记录头、内容 0 字节（15 次前兆对 15 次删库）；写完再结束 300 次，0 次。往日志结尾补 7 字节，就能确定地复现（不需要结束进程，见英文部分）。WebKit（每个库一个 SQLite）强制结束 290 次，0 次。
+- **复现**：不注入时，Google Chrome 154 强制结束 1400 次，删库 5 次；Chrome for Testing 153（macOS）1100 次里 9 次，Linux 300 次里 1 次。每一次删库之前，那次结束之后日志结尾都恰好是一个完整的 7 字节记录头、内容 0 字节（15 次前兆对 15 次删库）；写完再结束 300 次，0 次。往日志结尾补 7 字节，就能确定地复现（不需要结束进程，见英文部分）。WebKit（每个库一个 SQLite）强制结束 290 次，0 次。
 - **对平台的影响**：本机发件箱（M4）把还没同步的修改存在 IndexedDB 里；浏览器在崩溃之后重开时可能把它整个删掉，页面只看到"没有草稿"——"崩溃之后从本机恢复"的承诺在 Chromium 系的浏览器上不总成立，而且是静默的。
 - **平台的规避**（M4-P1 S9，需求方 2026-10-09 决定）：IndexedDB 仍是主存储，每次写成之后同一份记录镜像进 OPFS——只在发件箱的 Worker 里用同步访问句柄改写事先建好的两个槽位文件，不碰 OPFS 的目录库；删库之后从 OPFS 写回，并如实告诉用户。
 - **建议的修法**（供上游参考）：复用日志之前，把它截到最后一条完整记录的末尾；或者读到半截记录时不复用这个日志。
@@ -76,7 +76,7 @@ Persistent profile; the page repeatedly writes one readwrite transaction with `d
 | Browser | Kills | Origin wiped |
 |---|---|---|
 | Google Chrome 154 (macOS) | 1400 | 5 |
-| Chrome for Testing 153 (macOS) | 800 | 7 |
+| Chrome for Testing 153 (macOS) | 1100 | 9 |
 | Chrome for Testing 153 (Linux) | 300 | 1 |
 
 Before every one of the 15 wipes, the log ended with exactly one complete 7-byte record header and no payload after the kill before (one case: the first fragment of a large record was complete and the last fragment's header had no payload). Killing after the write had completed: 0 of 300. A naturally torn tail from Google Chrome 154 (`000012.log`, last 7 bytes): `53 ef aa fb 81 00 01` (checksum 0xfbaaef53, length 129, type 1), nothing after it.
