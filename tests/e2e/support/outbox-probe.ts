@@ -102,6 +102,10 @@ export interface ProbeTransaction {
   readonly durability: string | undefined
 }
 
+export type ProbeLocalKey
+  = | { readonly kind: 'fetched', readonly version: number, readonly extractable: boolean, readonly usages: readonly string[], readonly algorithm: { readonly name: string, readonly length: number }, readonly exportRejected: string }
+    | { readonly kind: 'failed', readonly error: ProbeError & { readonly status?: number, readonly code?: string } }
+
 export interface ProbeStoreOptions {
   readonly blockedTimeoutMs?: number
   readonly factory?: 'browser' | 'missing' | 'throws'
@@ -135,6 +139,12 @@ export interface OutboxProbe {
     readonly openWith: (version: number, blockedTimeoutMs: number) => Promise<string>
     readonly remove: (waitMs: number) => Promise<'deleted' | 'blocked' | ProbeError>
     readonly exists: () => Promise<boolean>
+    readonly holdTransaction: () => Promise<number>
+    readonly releaseTransaction: (held: number) => Promise<void>
+  }
+  readonly localKey: {
+    readonly fetch: () => Promise<ProbeLocalKey>
+    readonly encryptHex: (plainHex: string, ivHex: string) => Promise<string>
   }
   readonly recordTransactions: () => void
   readonly transactions: () => readonly ProbeTransaction[]
@@ -147,8 +157,9 @@ declare global {
   }
 }
 
-type Method = Exclude<keyof OutboxProbe, 'names' | 'database'>
+type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey'>
 type DatabaseMethod = keyof OutboxProbe['database']
+type LocalKeyMethod = keyof OutboxProbe['localKey']
 
 /**
  * 打开编辑器页、等探针挂上（要先登录：编辑器页先确认会话，没登录时整页跳到登录页）。默认打开一份不存在的文档——页面只确认会话、
@@ -177,6 +188,16 @@ export async function probeDatabase<M extends DatabaseMethod>(page: Page, method
       throw new Error('页面里没有发件箱的探针')
     return (target.database[method] as unknown as (...values: unknown[]) => unknown)(...args)
   }, { method, args }) as Promise<Awaited<ReturnType<OutboxProbe['database'][M]>>>
+}
+
+/** 在页面里调探针的本机密钥一侧的方法（经生产的 fetchLocalKey 取、用它加密） */
+export async function probeLocalKey<M extends LocalKeyMethod>(page: Page, method: M, ...args: Parameters<OutboxProbe['localKey'][M]>): Promise<Awaited<ReturnType<OutboxProbe['localKey'][M]>>> {
+  return page.evaluate(async ({ method, args }) => {
+    const target = window.__nerveOutboxProbe
+    if (target === undefined)
+      throw new Error('页面里没有发件箱的探针')
+    return (target.localKey[method] as unknown as (...values: unknown[]) => unknown)(...args)
+  }, { method, args }) as Promise<Awaited<ReturnType<OutboxProbe['localKey'][M]>>>
 }
 
 /** 结果是 kind 这一种（不是就失败，说明里带上整个结果），交回收窄了类型的它：用例里不写条件判断 */

@@ -3,7 +3,10 @@
 // E2E 经 page.evaluate 调用生产的存储（createDraftStore）、编解码与列表索引，在真实的 IndexedDB 上核对事务、栅栏、写满、清理与保留期；
 // 另有直接看库、改库（绕过存储与 AAD）与扮演别的页面（更新的页面升级、挡住升级、删库）的几样。
 // 交回的都是能经 page.evaluate 传回的普通值：字节写成十六进制，错误只带名字与消息；不交出密钥。
-// 只引用编辑器页静态闭包里已有的模块与发件箱自己的模块（M3-P2 复核 B4：不引用只在平台页面里的模块，免得测试构建的分块与生产的不同）
+// 只引用发件箱自己的、不带 zod 的模块：不引用请求层（shared/api）、zod 与带 zod 的契约模块——引用了，测试构建里平台页面与编辑器页的入口分块
+// 就与生产的不同（M3-P2 复核 B4）；S6 实测探针经 local-key.ts 引用请求层时，请求层连同 zod 与契约的结构被拆进一个新的共享分块，
+// 先于关掉 zod 的 JIT（shared/lib/zod-jitless.ts）求值。所以取本机密钥的请求由探针自己发（取会话里的 CSRF 令牌、POST），导入用生产的
+// importLocalKey；请求层的写法（自动带 CSRF、按契约校验）由 local-key.ts 的单元测试覆盖
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { DraftKey, DraftMeta, ReadDraft } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore, ListedDraft, StoreProblem } from '../../../../shared/outbox/draft-store.ts'
@@ -12,6 +15,7 @@ import { browserIndexedDb, DRAFTS_STORE, openOutboxDatabase, OUTBOX_DATABASE_NAM
 import { gunzipBytes, gzipBytes, openDraft, sealDraft } from '../../../../shared/outbox/draft-codec.ts'
 import { draftDocumentIds } from '../../../../shared/outbox/draft-index.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
+import { importLocalKey } from '../../../../shared/outbox/local-key-import.ts'
 
 /** 挂在 window 上的名字（门禁的禁用关键字里登记了它：生产构建里连名字都不能有） */
 export const OUTBOX_PROBE_NAME = '__nerveOutboxProbe'
@@ -60,6 +64,11 @@ export interface ProbeTransaction {
   readonly durability: string | undefined
 }
 
+/** 取本机密钥的结果：版本与导入出的密钥的事实（可不可导出、用途、算法、导出被拒的错误名），或者失败的错误 */
+export type ProbeLocalKey
+  = | { readonly kind: 'fetched', readonly version: number, readonly extractable: boolean, readonly usages: readonly string[], readonly algorithm: { readonly name: string, readonly length: number }, readonly exportRejected: string }
+    | { readonly kind: 'failed', readonly error: ProbeError & { readonly status?: number, readonly code?: string } }
+
 /** 存储的选项：工厂可以换成没有（unsupported）或取的时候抛出（denied） */
 export interface ProbeStoreOptions {
   readonly blockedTimeoutMs?: number
@@ -107,6 +116,19 @@ export interface OutboxProbe {
     readonly remove: (waitMs: number) => Promise<'deleted' | 'blocked' | ProbeError>
     /** 库在不在（indexedDB.databases()） */
     readonly exists: () => Promise<boolean>
+    /**
+     * 开一个两个仓库上的读写事务、用请求循环撑着不让它提交，交回编号：之后建的事务都在它后面、按建的先后排队（确定的交错）。
+     * 要库已经存在
+     */
+    readonly holdTransaction: () => Promise<number>
+    /** 放开撑着的事务，等它提交 */
+    readonly releaseTransaction: (held: number) => Promise<void>
+  }
+  /** 本机密钥：探针自己发请求取（会话里的 CSRF 令牌），用生产的 importLocalKey 导入；只交回事实，不交出密钥 */
+  readonly localKey: {
+    readonly fetch: () => Promise<ProbeLocalKey>
+    /** 用最近一次取到的密钥加密（AES-GCM，不带 AAD）：E2E 用服务端给的原始字节独立解开，核对就是那一把 */
+    readonly encryptHex: (plainHex: string, ivHex: string) => Promise<string>
   }
   /** 从现在起记下每一次开事务（包住 IDBDatabase.prototype.transaction），核对读写的事务都要求 strict */
   readonly recordTransactions: () => void
@@ -161,6 +183,47 @@ async function request<T>(open: () => IDBRequest<T>): Promise<T> {
   })
 }
 
+/** 请求失败：HTTP 状态与错误码 */
+class ProbeHttpError extends Error {
+  override readonly name = 'ProbeHttpError'
+  readonly status: number
+  readonly code: string | undefined
+
+  constructor(status: number, code: string | undefined) {
+    super(`HTTP ${status}${code === undefined ? '' : ` ${code}`}`)
+    this.status = status
+    this.code = code
+  }
+}
+
+async function jsonOf(response: Response): Promise<unknown> {
+  return response.json().catch(() => undefined) as Promise<unknown>
+}
+
+/** 错误响应里的错误码（{ error: { code } }） */
+function errorCodeOf(body: unknown): string | undefined {
+  if (typeof body !== 'object' || body === null || !('error' in body))
+    return undefined
+  const error: unknown = body.error
+  return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : undefined
+}
+
+/** 取本机密钥的请求：先取会话里的 CSRF 令牌，再 POST（与请求层发出的请求相同：同源、带 CSRF 令牌、不带请求体） */
+async function requestLocalKey(): Promise<{ readonly version: number, readonly key: string }> {
+  const session = await fetch('/api/auth/session', { credentials: 'same-origin', headers: { accept: 'application/json' } })
+  const sessionBody = await jsonOf(session)
+  if (!session.ok)
+    throw new ProbeHttpError(session.status, errorCodeOf(sessionBody))
+  const csrfToken = typeof sessionBody === 'object' && sessionBody !== null && 'csrfToken' in sessionBody && typeof sessionBody.csrfToken === 'string' ? sessionBody.csrfToken : ''
+  const response = await fetch('/api/local-key', { method: 'POST', credentials: 'same-origin', headers: { 'accept': 'application/json', 'x-csrf-token': csrfToken } })
+  const body = await jsonOf(response)
+  if (!response.ok)
+    throw new ProbeHttpError(response.status, errorCodeOf(body))
+  if (typeof body !== 'object' || body === null || !('version' in body) || !('key' in body) || typeof body.version !== 'number' || typeof body.key !== 'string')
+    throw new TypeError('POST /api/local-key 的响应不是 { version, key }')
+  return { version: body.version, key: body.key }
+}
+
 /** 不带版本打开（不建库：库不存在时中止升级） */
 async function openExisting(): Promise<IDBDatabase | null> {
   return new Promise((resolve, reject) => {
@@ -200,6 +263,8 @@ export function installOutboxProbe(target: Window): OutboxProbe {
   let store: DraftStore = createDraftStore({ blockedTimeoutMs: 1000 })
   const operations = new Map<number, Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>>()
   const held = new Map<number, IDBDatabase>()
+  const heldTransactions = new Map<number, { readonly release: () => void, readonly done: Promise<void>, readonly db: IDBDatabase }>()
+  let fetchedKey: LocalKeyHandle | undefined
   const recorded: ProbeTransaction[] = []
   let nextId = 1
 
@@ -393,6 +458,56 @@ export function installOutboxProbe(target: Window): OutboxProbe {
         }
       }),
       exists: async () => (await indexedDB.databases()).some(database => database.name === OUTBOX_DATABASE_NAME),
+      holdTransaction: async () => {
+        const db = await openExisting()
+        if (db === null)
+          throw new Error('库不存在：先用存储建出它')
+        const tx = db.transaction([DRAFTS_STORE, WRITERS_STORE], 'readwrite')
+        let released = false
+        const spin = (): void => {
+          if (!released)
+            tx.objectStore(DRAFTS_STORE).count().onsuccess = spin
+        }
+        spin()
+        const done = new Promise<void>((resolve) => {
+          tx.oncomplete = () => resolve()
+          tx.onabort = () => resolve()
+        })
+        const id = nextId++
+        heldTransactions.set(id, { release: () => {
+          released = true
+        }, done, db })
+        return id
+      },
+      releaseTransaction: async (id) => {
+        const holding = heldTransactions.get(id)
+        if (holding === undefined)
+          throw new Error(`没有编号为 ${id} 的事务`)
+        heldTransactions.delete(id)
+        holding.release()
+        await holding.done
+        holding.db.close()
+      },
+    },
+    localKey: {
+      fetch: async () => {
+        try {
+          const handle = await importLocalKey(await requestLocalKey())
+          fetchedKey = handle
+          const exportRejected = await crypto.subtle.exportKey('raw', handle.key).then(() => 'none', (error: unknown) => probeError(error).name)
+          const algorithm = handle.key.algorithm as AesKeyAlgorithm
+          return { kind: 'fetched', version: handle.version, extractable: handle.key.extractable, usages: [...handle.key.usages].sort(), algorithm: { name: algorithm.name, length: algorithm.length }, exportRejected }
+        }
+        catch (error) {
+          const details = error as { readonly status?: unknown, readonly code?: unknown }
+          return { kind: 'failed', error: { ...probeError(error), ...(typeof details.status === 'number' ? { status: details.status } : {}), ...(typeof details.code === 'string' ? { code: details.code } : {}) } }
+        }
+      },
+      encryptHex: async (plainHex, ivHex) => {
+        if (fetchedKey === undefined)
+          throw new Error('还没有取到本机密钥')
+        return hex(new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: fromHex(ivHex) }, fetchedKey.key, fromHex(plainHex))))
+      },
     },
     recordTransactions: () => {
       const original: unknown = Reflect.get(IDBDatabase.prototype, 'transaction')

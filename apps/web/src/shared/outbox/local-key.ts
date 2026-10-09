@@ -1,39 +1,13 @@
-// 本机密钥的客户端（M4-P1 设计 §3.4.9，M4 总设计 §6.5，ADR-019）：取用、导入、清零与保管。
-// - 取用：POST /api/local-key（请求层自动带 CSRF 令牌）→ 按契约校验 → base64 解成恰好 32 字节 → 导入为不可导出的 AES-GCM 密钥、
-//   用途只有加密与解密 → 原始字节在 finally 里清零。响应的 JSON 文字与 atob 交回的中间文字清不掉（JS 的字符串不可变），
-//   与 DEF-068 同一类，写进 ADR。
+// 本机密钥的客户端（M4-P1 设计 §3.4.9，M4 总设计 §6.5，ADR-019）：取用与保管。
+// - 取用：POST /api/local-key（请求层自动带 CSRF 令牌）→ 按契约校验 → 导入（local-key-import.ts：恰好 32 字节、不可导出、
+//   用途只有加密与解密、原始字节清零）。
 // - 保管者：密钥只在内存里；同时只有一个取用在途；会话类失败交给页面确认会话，连着的第一次确认之后立即再取；别的失败按"暂时取不到"退避，
 //   不重试成风暴；心跳带来的版本与手里的不同就停用旧的、重取（P2 接）；退出登录、换人时丢掉。计时一律经注入的时钟。
-// 只在主线程：这里引用带 zod 的契约，发件箱 Worker 不引用这个文件（Worker 拿到的是导入好的 CryptoKey，类型在 draft-codec.ts）
-import type { LocalKey } from '@nerve-office/contracts'
+// 只在主线程：这里引用带 zod 的契约与请求层，发件箱 Worker 不引用这个文件（Worker 拿到的是导入好的 CryptoKey，类型在 draft-codec.ts）
 import type { LocalKeyHandle } from './draft-codec.ts'
-import { LOCAL_KEY_BYTES, localKeySchema } from '@nerve-office/contracts'
-import { ApiError, apiRequest, isAuthenticationError, isCsrfTokenError, ResponseFormatError } from '../api/client.ts'
-
-/** 标准 base64 解成字节（契约已核对过写法） */
-function base64Bytes(text: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(text)
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1)
-    bytes[index] = binary.charCodeAt(index)
-  return bytes
-}
-
-/**
- * 导入取到的密钥：base64 解成恰好 32 字节（契约的写法本来就只认 32 字节；这里再核对一次，写法改了也不会导入成别的长度、
- * 悄悄变成 AES-128）→ 不可导出、用途只有加密与解密 → 原始字节在 finally 里清零
- */
-export async function importLocalKey(local: LocalKey): Promise<LocalKeyHandle> {
-  const raw = base64Bytes(local.key)
-  try {
-    if (raw.byteLength !== LOCAL_KEY_BYTES)
-      throw new ResponseFormatError(`本机密钥不是 ${LOCAL_KEY_BYTES} 字节`)
-    return { version: local.version, key: await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']) }
-  }
-  finally {
-    raw.fill(0)
-  }
-}
+import { localKeySchema } from '@nerve-office/contracts'
+import { ApiError, apiRequest, isAuthenticationError, isCsrfTokenError } from '../api/client.ts'
+import { importLocalKey } from './local-key-import.ts'
 
 /**
  * 取当前的本机密钥（只给本人）：交回版本与导入好的密钥。请求失败时照常抛出（ApiError、NetworkError、ResponseFormatError；

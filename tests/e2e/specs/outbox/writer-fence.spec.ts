@@ -1,12 +1,13 @@
 // 写入栅栏（M4-P1 设计 §3.4.2–§3.4.5，M4 总设计 §6.3）：同一个浏览器的两个标签页（同源，共用一个 IndexedDB）在真实的事务里登记、写入、
-// 重封与确认。确定的交错按先后一步一步走（每一步等上一步的结果）；同时发起的竞争核对结果与某一种先后一致——判定与写入在同一个事务里，
-// 别的标签页插不进来。经测试构建里的探针调用生产的存储，标签 @test-build
+// 重封与确认。先后分明的按步走（每一步等上一步的结果）；同时在途的两个事务用确定的交错（规范 §5）：第三个标签页撑着一个两个仓库上的
+// 读写事务，写入与登记的事务各自建好、按要的先后在它后面排队，再放开——判定与写入在同一个事务里，后执行的那一个看到的是前一个提交之后的
+// 样子，插不进中间。经测试构建里的探针调用生产的存储，标签 @test-build
 import type { Page } from '@playwright/test'
-import type { DraftKey, ProbeDraftInput, ProbeRead, ProbeRegisterOutcome, ProbeWriteOutcome, WriterIdentity } from '../../support/outbox-probe.ts'
+import type { DraftKey, ProbeRead, ProbeRegisterOutcome, ProbeWriteOutcome, WriterIdentity } from '../../support/outbox-probe.ts'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { contentOf, draftFor, NOW, openOutboxProbe, outcomeOf, probe, writerOf } from '../../support/outbox-probe.ts'
+import { contentOf, draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, writerOf } from '../../support/outbox-probe.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
 /** 同一个浏览器里的两个标签页，用同一把密钥（同一个人在这台设备上的本机密钥） */
@@ -32,33 +33,53 @@ function identityOf(read: ProbeRead | { readonly kind: string }): unknown {
   return [draft.meta.writerId, draft.meta.draftSeq, draft.opened]
 }
 
+/** 这个标签页从开始记事务算起建了几个事务 */
+async function transactionsIn(tab: Page): Promise<number> {
+  return (await probe(tab, 'transactions')).length
+}
+
 /**
- * 竞争的一轮：first 写第 seq 份的同时 second 登记了下一代。两种先后都可能，结果要与其中一种一致——写入先提交：登记看到的就是它、
- * 高水位接着它；登记先提交：写入因写入者不是它被拦下，登记看到的不是它。交回是哪一种
+ * 确定的交错：first 已经是写入者（第 3 代）、写过第 1 份；first 写第 2 份与 second 登记第 4 代同时在途，order 决定谁的事务先建。
+ * 第三个标签页撑着一个两个仓库上的读写事务，先建的那一个建好（经 recordTransactions 看到事务确实建了、在后面排队）之后才发起另一个，
+ * 两个都排上之后放开。交回两边的结果
  */
-function orderOf(round: number, seq: number, written: ProbeWriteOutcome, registered: ProbeRegisterOutcome): 'write-first' | 'register-first' {
-  const { existing, lastDraftSeq } = outcomeOf(registered, 'registered')
-  const seenSeq = existing?.kind === 'draft' ? existing.meta.draftSeq : undefined
-  if (written.kind === 'written') {
-    expect([seenSeq, lastDraftSeq], `第 ${round} 轮：写成了却不在登记看到的草稿里`).toEqual([seq, seq])
-    return 'write-first'
+async function interleave(page: Page, order: 'write-first' | 'register-first'): Promise<{ readonly written: ProbeWriteOutcome, readonly registered: ProbeRegisterOutcome, readonly key: DraftKey, readonly older: WriterIdentity, readonly first: Page }> {
+  const { first, second, key } = await twoTabs(page, `ob-${order}`)
+  const older = writerOf(3)
+  const newer = writerOf(4)
+  expect((await register(first, key, older)).kind).toBe('registered')
+  expect(await probe(first, 'write', draftFor(key, older, 1))).toEqual({ kind: 'written' })
+  // second 先读一次：连接打开着，之后登记时立即建事务
+  expect((await probe(second, 'read', key)).kind).toBe('draft')
+  for (const tab of [first, second])
+    await probe(tab, 'recordTransactions')
+  const holder = await page.context().newPage()
+  await openOutboxProbe(holder)
+  const held = await probeDatabase(holder, 'holdTransaction')
+
+  const startWrite = async (): Promise<number> => {
+    const operation = await probe(first, 'startWrite', draftFor(key, older, 2))
+    await expect.poll(async () => transactionsIn(first), { message: '写入的事务建好了、在撑着的事务后面排队' }).toBe(1)
+    return operation
   }
-  expect(written, `第 ${round} 轮`).toEqual({ kind: 'fenced', reason: 'not-writer' })
-  expect(seenSeq, `第 ${round} 轮：被拦下的写入却在登记看到的草稿里`).not.toBe(seq)
-  return 'register-first'
-}
-
-/**
- * 竞争那一轮写的内容：偶数轮约 1.5 MiB 的随机内容（压缩、加密要十几毫秒，登记多半先提交），奇数轮小的（写入多半先提交），
- * 两种先后都走得到
- */
-function raceContent(round: number, writer: WriterIdentity, seq: number): ProbeDraftInput['content'] {
-  return round % 2 === 0 ? { randomBase64Chars: 1_500_000 } : contentOf(writer, seq)
-}
-
-/** 接手库里现在的那一份（有的话）：写入的选项 */
-function adoptionOf(latest: ProbeRead | { readonly kind: string }): { readonly adoptSeq: number } | undefined {
-  return latest.kind === 'draft' ? { adoptSeq: (latest as Extract<ProbeRead, { kind: 'draft' }>).meta.draftSeq } : undefined
+  // 登记在撑着的事务后面等着，它的结果放开之后才有：包一层交出去，不在这里等它
+  const startRegister = async (): Promise<{ readonly outcome: Promise<ProbeRegisterOutcome> }> => {
+    const outcome = register(second, key, newer)
+    await expect.poll(async () => transactionsIn(second), { message: '登记的事务建好了、在撑着的事务后面排队' }).toBe(1)
+    return { outcome }
+  }
+  let operation: number
+  let registering: { readonly outcome: Promise<ProbeRegisterOutcome> }
+  if (order === 'write-first') {
+    operation = await startWrite()
+    registering = await startRegister()
+  }
+  else {
+    registering = await startRegister()
+    operation = await startWrite()
+  }
+  await probeDatabase(holder, 'releaseTransaction', held)
+  return { written: await probe(first, 'settled', operation), registered: await registering.outcome, key, older, first }
 }
 
 test.describe('写入栅栏：两个标签页', { tag: '@test-build' }, () => {
@@ -155,29 +176,20 @@ test.describe('写入栅栏：两个标签页', { tag: '@test-build' }, () => {
     expect(await probe(second, 'remove', key)).toEqual({ kind: 'absent' })
   })
 
-  test('竞争：一个标签页写入的同时另一个登记更大的一代——结果与某一种先后一致：写成了的一定在登记看到的草稿里，被拦下的一定不在', async ({ page }) => {
-    const { first, second, key } = await twoTabs(page, 'ob-race')
-    let epoch = 1
-    let seq = 0
-    let writer = writerOf(epoch)
-    expect((await register(first, key, writer)).kind).toBe('registered')
-    const outcomes: string[] = []
-    for (let round = 0; round < 12; round += 1) {
-      seq += 1
-      // 同时发起：first 写第 seq 份（先压缩、加密，再开事务），second 登记下一代
-      const operation = await probe(first, 'startWrite', draftFor(key, writer, seq, {}, raceContent(round, writer, seq)))
-      const next = writerOf(epoch + 1)
-      const registered = await register(second, key, next)
-      const written = await probe(first, 'settled', operation)
-      outcomes.push(orderOf(round, seq, written, registered))
-      // 下一轮由更新的一代在 first 里写：登记，接手库里现在的那一份（有的话），写下一份
-      epoch += 2
-      writer = writerOf(epoch)
-      expect((await register(first, key, writer)).kind).toBe('registered')
-      seq = Math.max(seq, outcomeOf(registered, 'registered').lastDraftSeq) + 1
-      expect(await probe(first, 'write', draftFor(key, writer, seq), adoptionOf(await probe(first, 'read', key)))).toEqual({ kind: 'written' })
-    }
-    // 记下两种先后各出现了几次（不断言：先后由两个进程的时机决定）
-    test.info().annotations.push({ type: 'race', description: outcomes.join(',') })
+  test('确定的交错：写入的事务先建、登记的后建（同时在途）——写入先提交，登记看到的就是它、高水位接着它', async ({ page }) => {
+    const { written, registered, older } = await interleave(page, 'write-first')
+    expect(written).toEqual({ kind: 'written' })
+    const { lastDraftSeq, existing } = outcomeOf(registered, 'registered')
+    expect(lastDraftSeq).toBe(2)
+    expect(identityOf(existing ?? { kind: 'absent' })).toEqual([older.writerId, 2, { kind: 'opened', content: contentOf(older, 2) }])
+  })
+
+  test('确定的交错：登记的事务先建、写入的后建（同时在途）——登记先提交，写入因写入者不是它被拦下、什么也没写', async ({ page }) => {
+    const { written, registered, older, key, first } = await interleave(page, 'register-first')
+    expect(written).toEqual({ kind: 'fenced', reason: 'not-writer' })
+    const { lastDraftSeq, existing } = outcomeOf(registered, 'registered')
+    expect(lastDraftSeq).toBe(1)
+    expect(identityOf(existing ?? { kind: 'absent' })).toEqual([older.writerId, 1, { kind: 'opened', content: contentOf(older, 1) }])
+    expect(identityOf(await probe(first, 'read', key))).toEqual([older.writerId, 1, { kind: 'opened', content: contentOf(older, 1) }])
   })
 })

@@ -3,7 +3,7 @@ import type { LocalKeyProblem } from './local-key.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../api/client.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../testing/fake-api.test-support.ts'
-import { createLocalKeyKeeper, fetchLocalKey, importLocalKey } from './local-key.ts'
+import { createLocalKeyKeeper, fetchLocalKey } from './local-key.ts'
 
 const PATH = 'POST /api/local-key'
 
@@ -82,16 +82,6 @@ describe('取用本机密钥（M4-P1 设计 §3.4.9，ADR-019）', () => {
       await expect(fetchLocalKey(), JSON.stringify(body)).rejects.toBeInstanceOf(ResponseFormatError)
     }
     expect(importKey).not.toHaveBeenCalled()
-  })
-
-  it('导入时再核对一次长度（纵深防御：契约的写法改了也不会把别的长度导入成更短的密钥）：不是 32 字节就 ResponseFormatError，不导入', async () => {
-    const importKey = vi.spyOn(crypto.subtle, 'importKey')
-    for (const length of [16, 24, 31, 33]) {
-      const key = btoa(String.fromCharCode(...new Uint8Array(length).fill(1)))
-      await expect(importLocalKey({ version: 1, key }), String(length)).rejects.toBeInstanceOf(ResponseFormatError)
-    }
-    expect(importKey).not.toHaveBeenCalled()
-    await expect(importLocalKey({ version: 7, key: RAW_BASE64 })).resolves.toMatchObject({ version: 7 })
   })
 
   it('请求的错误照常抛出：会话类（401、CSRF）是 ApiError，断网是 NetworkError，取消时原样抛出', async () => {
