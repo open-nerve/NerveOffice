@@ -528,3 +528,179 @@ describe('被抢（M3-P6 设计 §3.13）', () => {
     expect(confirm).not.toHaveBeenCalled()
   })
 })
+
+describe('被本人接管之后"在哪"的本机证据（takenHere）', () => {
+  /** 等的时限（从现在算） */
+  const WAIT_MS = 5_000
+
+  it('还拿着：留着等被抢——这期间不是编辑权的锁（held、stolen 为假）、心跳续租成功不做事；被抢交回 true，报被抢（不核对：这一代已经失效），锁归抢的一方', async () => {
+    const context = setup()
+    await context.lock.claim()
+    const located = context.lock.takenHere(context.time.now() + WAIT_MS)
+    expect(context.lock.held()).toBe(false)
+    expect(context.lock.stolen()).toBe(false)
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+    await renewedLater(context)
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+    expect(await settledNow(located)).toBe(false)
+    const taker = await stolenByOther(context)
+    expect(await located).toBe(true)
+    expect(context.confirm).not.toHaveBeenCalled()
+    expect(context.lose).not.toHaveBeenCalled()
+    expect(context.onSuperseded).not.toHaveBeenCalled()
+    expect(context.events.map(event => event.kind)).toEqual(['lock-stolen'])
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(await settledNow(taker.stolen)).toBe(false)
+    // 之后什么也不再做：心跳续租成功不拿回来，放下无害
+    await renewedLater(context)
+    context.lock.release()
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(context.time.pending()).toBe(0)
+  })
+
+  it('还拿着、到时没人来抢：恰好到时才交回 false（之前还在等），随即放开——本浏览器的别的标签页拿得到（不必抢）；之后被抢不算', async () => {
+    const context = setup()
+    await context.lock.claim()
+    const located = context.lock.takenHere(context.time.now() + WAIT_MS)
+    await context.time.advance(WAIT_MS - 1)
+    expect(await settledNow(located)).toBe(false)
+    expect(context.browser.holderOf(LOCK)).toBe('this')
+    await context.time.advance(1)
+    expect(await located).toBe(false)
+    expect(context.browser.holderOf(LOCK)).toBeUndefined()
+    expect(await context.other.tryHold()).toBeDefined()
+    expect(context.events).toEqual([])
+  })
+
+  it('还拿着、等的期间放下（页面关闭、卸载）：交回 false，随即放开；时限的计时撤销', async () => {
+    const context = setup()
+    await context.lock.claim()
+    const located = context.lock.takenHere(context.time.now() + WAIT_MS)
+    expect(context.time.pending()).toBe(1)
+    context.lock.release()
+    expect(await located).toBe(false)
+    await settle()
+    expect(context.browser.holderOf(LOCK)).toBeUndefined()
+    expect(context.time.pending()).toBe(0)
+  })
+
+  it.each([
+    ['核对中', [new Promise<LeaseVerdict>(() => {})]],
+    ['核对不了、等心跳', [{ kind: 'unknown', error: new Error('断网') } as const]],
+    ['这一代自己失效、交给了租约（续上了、等心跳）', [ENDED]],
+    ['得知已被取代', [SUPERSEDED]],
+    ['这一代在本页已经结束（核对交回已经结束、没有原因）', [{ kind: 'ended', loss: undefined } as const]],
+  ] as const)('被抢了、之后没有得知本页仍是当前的（%s）：立即交回 true，不等；之后回来的核对、心跳续租成功都不再算', async (_case, verdicts) => {
+    const context = setup(verdicts)
+    await context.lock.claim()
+    await stolenByOther(context)
+    const superseded = context.onSuperseded.mock.calls.length
+    const lost = context.lose.mock.calls.length
+    expect(await context.lock.takenHere(context.time.now() + WAIT_MS)).toBe(true)
+    expect(context.time.pending()).toBe(0)
+    await renewedLater(context)
+    expect(context.browser.holderOf(LOCK)).toBe('other')
+    expect(context.lock.stolen()).toBe(false)
+    expect(context.onSuperseded).toHaveBeenCalledTimes(superseded)
+    expect(context.lose).toHaveBeenCalledTimes(lost)
+  })
+
+  it('被抢之后核对得知仍是当前的、拿回来了：抢的一方拿着的是旧的批准，不算——照拿着的留着等', async () => {
+    const context = setup([CURRENT])
+    await context.lock.claim()
+    await stolenByOther(context)
+    expect(context.lock.held()).toBe(true)
+    const located = context.lock.takenHere(context.time.now() + WAIT_MS)
+    expect(await settledNow(located)).toBe(false)
+    await context.time.advance(WAIT_MS)
+    expect(await located).toBe(false)
+    expect(context.browser.holderOf(LOCK)).toBeUndefined()
+  })
+
+  it('被抢之后核对得知仍是当前的、正去拿回来（看锁空不空）：不算被抢（抢的一方拿着的是旧的批准），交回 false、不等；不再抢', async () => {
+    const browser = fakeBrowser()
+    const time = fakeLeaseClock()
+    const real = sameBrowserFor(DOCUMENT_ID, browser.tab('this'))
+    const gate = deferred<void>()
+    let gated = false
+    const steal = vi.fn(real.steal)
+    const lock = holdLocalLock({
+      browser: {
+        tryHold: async () => {
+          if (gated)
+            await gate.promise
+          return real.tryHold()
+        },
+        steal,
+      },
+      confirm: async () => CURRENT,
+      lose: vi.fn(),
+      onSuperseded: vi.fn(),
+      clock: time.clock,
+    })
+    expect(await lock.claim()).toEqual({ kind: 'held' })
+    gated = true
+    const stale = await sameBrowserFor(DOCUMENT_ID, browser.tab('other')).steal()
+    await settle()
+    expect(lock.held()).toBe(false)
+    expect(lock.stolen()).toBe(false)
+    expect(await lock.takenHere(time.now() + WAIT_MS)).toBe(false)
+    expect(time.pending()).toBe(0)
+    gate.resolve()
+    await settle()
+    expect(steal).not.toHaveBeenCalled()
+    expect(browser.holderOf(LOCK)).toBe('other')
+    expect(await settledNow(stale.stolen)).toBe(false)
+  })
+
+  it.each([
+    ['还没拿', async (_context: ReturnType<typeof setup>) => {}],
+    ['拿锁时没拿成（被取代）', async (context: ReturnType<typeof setup>) => {
+      await context.other.tryHold()
+      context.confirm.mockResolvedValue(SUPERSEDED)
+      await context.lock.claim()
+    }],
+    ['拿锁时没拿成（核对不了）', async (context: ReturnType<typeof setup>) => {
+      await context.other.tryHold()
+      context.confirm.mockResolvedValue({ kind: 'unknown', error: new Error('断网') })
+      await context.lock.claim()
+    }],
+    ['放下之后', async (context: ReturnType<typeof setup>) => {
+      await context.lock.claim()
+      context.lock.release()
+    }],
+  ] as const)('没拿着（%s）：交回 false，不等', async (_case, arrange) => {
+    const context = setup()
+    await arrange(context)
+    expect(await context.lock.takenHere(context.time.now() + WAIT_MS)).toBe(false)
+    expect(context.time.pending()).toBe(0)
+  })
+
+  it('拿锁还在途时：交回 false，拿到的随即放掉（与放下相同）', async () => {
+    const context = setup()
+    const claiming = context.lock.claim()
+    expect(await context.lock.takenHere(context.time.now() + WAIT_MS)).toBe(false)
+    expect(await claiming).toEqual({ kind: 'released' })
+    await settle()
+    expect(context.browser.holderOf(LOCK)).toBeUndefined()
+  })
+
+  it('重复调用交回同一个结果（不再等一轮）', async () => {
+    const context = setup()
+    await context.lock.claim()
+    const first = context.lock.takenHere(context.time.now() + WAIT_MS)
+    const second = context.lock.takenHere(context.time.now() + WAIT_MS * 2)
+    expect(context.time.pending()).toBe(1)
+    await stolenByOther(context)
+    expect([await first, await second]).toEqual([true, true])
+  })
+
+  it('浏览器没有锁（退化）：句柄从不被抢——等到时交回 false', async () => {
+    const time = fakeLeaseClock()
+    const lock = holdLocalLock({ browser: sameBrowserFor(DOCUMENT_ID, { locks: undefined, openChannel: undefined }), confirm: vi.fn(), lose: vi.fn(), onSuperseded: vi.fn(), clock: time.clock })
+    await lock.claim()
+    const located = lock.takenHere(time.now() + WAIT_MS)
+    await time.advance(WAIT_MS)
+    expect(await located).toBe(false)
+  })
+})
