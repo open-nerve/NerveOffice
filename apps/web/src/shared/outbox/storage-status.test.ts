@@ -45,7 +45,9 @@ describe('本机存储的状态（M4-P1 设计 §3.1、§3.5）：包住 navigat
     await expect(storagePersisted(fakeManager({ persisted: rejecting }))).resolves.toEqual({ kind: 'failed', error: { name: 'InvalidStateError', message: '私密模式里不给' } })
     await expect(requestPersistence(fakeManager({ persist: rejecting }))).resolves.toEqual({ kind: 'failed', error: { name: 'InvalidStateError', message: '私密模式里不给' } })
     await expect(storageEstimate(fakeManager({ estimate: throwing }))).resolves.toEqual({ kind: 'failed', error: { name: 'TypeError', message: '坏了' } })
-    await expect(storagePersisted(fakeManager({ persisted: async () => Promise.reject(new Error('x')) }))).resolves.toMatchObject({ kind: 'failed' })
+    await expect(storagePersisted(fakeManager({ persisted: async () => Promise.reject(new Error('x')) }))).resolves.toEqual({ kind: 'failed', error: { name: 'Error', message: 'x' } })
+    // 拒绝的不是错误对象：名字记作 Error，消息是它的文字
+    await expect(storageEstimate(fakeManager({ estimate: vi.fn<() => Promise<unknown>>().mockRejectedValue('不给') }))).resolves.toEqual({ kind: 'failed', error: { name: 'Error', message: '不给' } })
   })
 
   it('页面里取 navigator.storage；取它本身抛出（沙箱的限制）时当作没有', () => {

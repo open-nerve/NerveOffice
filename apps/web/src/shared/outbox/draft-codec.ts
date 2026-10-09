@@ -14,6 +14,15 @@ export interface LocalKeyHandle {
   readonly key: CryptoKey
 }
 
+/**
+ * 这里能不能封草稿：WebCrypto 的 crypto.subtle 只在安全上下文里有（https 与本机；经 http 打开的部署没有它），没有就封不了、开不了草稿，
+ * 也导入不了本机密钥，发件箱整个用不了——存储按 unsupported 交回，不打开库（draft-store.ts）。scope 是全局对象（页面与 Worker 里都是
+ * globalThis），单元测试换成假的
+ */
+export function canSealDrafts(scope: { readonly crypto?: { readonly subtle?: unknown } }): boolean {
+  return scope.crypto?.subtle !== undefined
+}
+
 /** 一份内容按一个变换流（压缩或解压）走一遍：来源是只入队一次的流，结果逐块读出、拼成一份紧凑的字节 */
 async function transformed(bytes: Uint8Array<ArrayBuffer>, transform: CompressionStream | DecompressionStream): Promise<Uint8Array<ArrayBuffer>> {
   const source = new ReadableStream<Uint8Array<ArrayBuffer>>({
