@@ -1,0 +1,97 @@
+// 确定地造出 Chromium 删库之后，草稿从 OPFS 的镜像写回（M4-P1 设计 §3.8，S9 第 5 项）。删库用崩溃工具的 tearIndexedDbLog：结束之后往这个来源的
+// IndexedDB 日志结尾补一个只有头的记录（模拟被结束在追加一条记录的两次 write 之间），下一次打开一切正常、写一份（新数据接在那半条后面），
+// 再下一次打开时 Chromium 删掉这个来源的全部 IndexedDB（S7 的调查；support/leveldb-log.ts）。删库之后重开，发件箱 Worker 登记之前比对镜像：
+// - restored：镜像里合格的那一份写回库（连同写入者的记录——代次、writerId、高水位），读回的是删库之前最后写成的那一份，同一个写入者接着写照常；
+// - lost：两个槽位都被破坏（探针的 corruptSlot）、库里也没有——留下"本机草稿因浏览器存储损坏丢失"，读回没有。
+// 只在 Chromium 系上跑：WebKit 的 IndexedDB 是 SQLite，没有这个缺陷，日志也补不了（IndexedDB 被删之后的恢复由 specs/outbox/mirror.spec.ts 在
+// 三个浏览器上用删库的接口核对）。标签 @test-build
+import type { CrashReport, CrashTool, PersistentLaunch } from '../../support/browser-crash.ts'
+import type { CrashCheck, CrashSetup } from '../../support/crash-probe.ts'
+import { expect, expectCrashed, test } from '../../support/browser-crash.ts'
+import { CRASH_CONTENT_CHARS, crashSetupFor, openCrashProbe, removeCrashMirror, slotWord } from '../../support/crash-probe.ts'
+import { createUser } from '../../support/database.ts'
+import { loginThroughApi } from '../../support/session.ts'
+
+/** 这条用例还开着的那一次启动上的探针：用例结束时（不论成败）关掉管道、删掉用例用户的镜像目录 */
+let live: CrashCheck | undefined
+
+test.afterEach(async () => {
+  const check = live
+  live = undefined
+  if (check !== undefined && !check.page.isClosed())
+    await removeCrashMirror(check)
+})
+
+/** 结束（空闲时）之后以同一个目录重开、打开探针（登记之前比对镜像） */
+async function crashAndReopen(crashTool: CrashTool, launch: PersistentLaunch, setup: CrashSetup, between?: (report: CrashReport) => void): Promise<{ launch: PersistentLaunch, check: CrashCheck, report: CrashReport }> {
+  live = undefined
+  const report = await crashTool.crash(launch)
+  expectCrashed(report)
+  between?.(report)
+  const next = await crashTool.relaunch(launch, report, { cookies: 'restore' })
+  const check = await openCrashProbe(next, setup)
+  live = check
+  return { launch: next, check, report }
+}
+
+/**
+ * 写完第 1 份 → 结束 → 往日志结尾补只有头的记录 → 重开（数据都在）、写完第 2 份（库与镜像都是它；新数据接在那半条后面）。
+ * 交回第二次启动；它再结束、重开时 Chromium 删库
+ */
+async function poisonedSession(crashTool: CrashTool, prefix: string): Promise<{ launch: PersistentLaunch, check: CrashCheck, setup: CrashSetup }> {
+  const user = await createUser(prefix)
+  const first = await crashTool.launch()
+  await loginThroughApi(first.page, user)
+  const setup = crashSetupFor(user.id, 'worker')
+  const opened = await openCrashProbe(first, setup)
+  live = opened
+  expect(opened.registered.mirror).toBe('mirrored')
+  expect(await opened.write(1)).toBe('written')
+  const { launch, check } = await crashAndReopen(crashTool, first, setup, (report) => {
+    expect(crashTool.tearIndexedDbLog(first, report).tail.status).toBe('torn-payload')
+  })
+  expect(check.registered.peek.existed).toBe(true)
+  expect(await check.read()).toEqual({ kind: 'draft', seq: 1, writerSeq: 1, bytes: CRASH_CONTENT_CHARS, intact: true })
+  expect(await check.write(2)).toBe('written')
+  expect((await check.lastWrite())?.mirror).toBe('mirrored')
+  return { launch, check, setup }
+}
+
+test.describe('Chromium 删库之后从 OPFS 的镜像写回（发件箱 Worker）', { tag: '@test-build' }, () => {
+  test.beforeEach(({ browserName }) => {
+    // eslint-disable-next-line playwright/no-skipped-test -- WebKit 的 IndexedDB 是 SQLite，没有这个缺陷、日志补不了；删库之后的恢复由 specs/outbox/mirror.spec.ts 在三个浏览器上核对
+    test.skip(browserName === 'webkit', 'WebKit 的 IndexedDB 是 SQLite，没有这个缺陷')
+  })
+
+  test('restored：删库之后重开，最后写成的那一份连同写入者从镜像写回，事件如实，同一个写入者接着写照常', async ({ crashTool }) => {
+    const poisoned = await poisonedSession(crashTool, 'crash-restore')
+    const { check, report } = await crashAndReopen(crashTool, poisoned.launch, poisoned.setup)
+    expect(report.indexedDbLogs.map(state => state.tail.status)).toEqual(['corrupt'])
+    // 这次启动之前库没了；登记之前的比对把镜像里的第 2 份写回了库
+    expect(check.registered.peek.existed).toBe(false)
+    expect(check.registered.existing).toBe('draft')
+    expect(check.registered.lastDraftSeq).toBe(2)
+    expect(await check.events()).toEqual([{ kind: 'restored', key: poisoned.setup.key }])
+    expect(await check.read()).toEqual({ kind: 'draft', seq: 2, writerSeq: 2, bytes: CRASH_CONTENT_CHARS, intact: true })
+    // 写回之后高水位是 2：再写第 1 份（不比高水位新）被栅栏拒绝，不会把写回的第 2 份盖掉（写回连同写入者的细节由 specs/outbox/mirror.spec.ts 核对）
+    expect(await check.write(1)).toBe('fenced')
+    expect(await check.write(3)).toBe('written')
+    expect(await check.read()).toEqual({ kind: 'draft', seq: 3, writerSeq: 3, bytes: CRASH_CONTENT_CHARS, intact: true })
+    expect(await check.events()).toEqual([])
+  })
+
+  test('lost：两个槽位都被破坏、删库之后库里也没有——留下"本机草稿因浏览器存储损坏丢失"，读回没有', async ({ crashTool }) => {
+    const poisoned = await poisonedSession(crashTool, 'crash-lost')
+    // 一个写进垃圾、一个截掉一半：两个都校验不过
+    await poisoned.check.corruptSlot(0, { fill: 4096, value: 0xAB })
+    await poisoned.check.corruptSlot(1, { truncate: 100 })
+    expect((await poisoned.check.mirrorSlots()).map(slotWord).map(word => word.split(':')[0])).toEqual(['invalid', 'invalid'])
+    const { check, report } = await crashAndReopen(crashTool, poisoned.launch, poisoned.setup)
+    expect(report.indexedDbLogs.map(state => state.tail.status)).toEqual(['corrupt'])
+    expect(check.registered.peek.existed).toBe(false)
+    expect(check.registered.existing).toBe('none')
+    expect(check.registered.lastDraftSeq).toBe(0)
+    expect(await check.events()).toEqual([{ kind: 'lost', key: poisoned.setup.key }])
+    expect(await check.read()).toEqual({ kind: 'absent', writerSeq: 0 })
+  })
+})
