@@ -1,5 +1,6 @@
 // E2E 的服务（P3 设计 §3.10）：由 Playwright 的 webServer 启动（node support/serve.ts）。
-// 1. 建一个本次运行专用的数据库（名称带 Playwright 主进程的进程号），先清理进程已经不在的遗留库；
+// 1. 建一个本次运行专用的数据库（名称带主机的标识与 Playwright 主进程的进程号），先清理本主机建的、进程已经不在的遗留库
+//    （别的主机建的不动：environment.ts 的 abandonedDatabases）；
 // 2. 执行迁移命令；3. 用初始化命令创建管理员（密码经标准输入）；
 // 4. 启动构建好的后端，托管测试构建（apps/web/dist-e2e）；5. 停止时先停后端，再删除数据库。
 //
@@ -23,7 +24,7 @@ import { dirname } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pg from 'pg'
-import { E2E_ADMIN, E2E_DATABASE_PREFIX, E2E_LOCAL_KEYS_MASTER_KEY, e2eDatabaseUrl, e2eOrigin, e2ePort, maintenanceDatabaseUrl } from './environment.ts'
+import { abandonedDatabases, E2E_ADMIN, E2E_DATABASE_PREFIX, E2E_LOCAL_KEYS_MASTER_KEY, e2eDatabaseUrl, e2eOrigin, e2ePort, hostTag, maintenanceDatabaseUrl } from './environment.ts'
 import { writeServerControl } from './server-control.ts'
 
 const API_DIST = fileURLToPath(new URL('../../../apps/api/dist', import.meta.url))
@@ -80,14 +81,12 @@ function quoted(name: string): string {
   return `"${name}"`
 }
 
+/** 本主机上被强制结束的运行留下的库（服务脚本没来得及删）；别的主机建的不动 */
 async function dropAbandonedDatabases(): Promise<void> {
   await withMaintenance(async (client) => {
-    const { rows } = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE datname LIKE $1', [`${E2E_DATABASE_PREFIX}%`])
-    for (const { datname } of rows) {
-      const pid = Number(datname.slice(E2E_DATABASE_PREFIX.length))
-      if (Number.isInteger(pid) && !isAlive(pid))
-        await client.query(`DROP DATABASE IF EXISTS ${quoted(datname)} WITH (FORCE)`)
-    }
+    const { rows } = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [E2E_DATABASE_PREFIX])
+    for (const datname of abandonedDatabases(rows.map(row => row.datname), hostTag(), isAlive))
+      await client.query(`DROP DATABASE IF EXISTS ${quoted(datname)} WITH (FORCE)`)
   })
 }
 

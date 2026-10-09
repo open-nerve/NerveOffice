@@ -7,16 +7,16 @@
 import type { PlaywrightTestProject } from '@playwright/test'
 import process from 'node:process'
 import { defineConfig } from '@playwright/test'
-import { databaseUrl, E2E_DATABASE_PREFIX, e2eOrigin, pickFreePort } from './support/environment.ts'
+import { databaseUrl, e2eDatabaseName, e2eOrigin, pickFreePort } from './support/environment.ts'
 
 const CI = process.env.CI === 'true'
 const externalBaseUrl = process.env.E2E_BASE_URL
 
 // 配置在主进程与每个工作进程里都会执行一遍：本次运行的端口与测试库只在主进程里定一次，工作进程与服务脚本从环境变量继承。
-// 端口按次挑选（审查 B9）：多个 worktree 同时跑 E2E 时各用各的端口，不会测到别人的服务；库名带主进程的进程号
+// 端口按次挑选（审查 B9）：多个 worktree 同时跑 E2E 时各用各的端口，不会测到别人的服务；库名带主机的标识与主进程的进程号
 if (externalBaseUrl === undefined) {
   process.env.E2E_PORT ??= String(await pickFreePort())
-  process.env.E2E_DATABASE_URL ??= databaseUrl(`${E2E_DATABASE_PREFIX}${process.pid}`)
+  process.env.E2E_DATABASE_URL ??= databaseUrl(e2eDatabaseName(process.pid))
 }
 else if (process.env.E2E_DATABASE_URL === undefined) {
   throw new Error('外部模式（E2E_BASE_URL）必须同时给出 E2E_DATABASE_URL：测试数据直接写被测环境的库')
