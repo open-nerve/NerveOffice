@@ -621,6 +621,11 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
   it('真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：来源在 outbox/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
     expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/outbox-review-probe.ts')).toBe(true)
     expect(checkTestOnlyArtifacts(['assets/outbox-review-probe-Bq1x.js', 'assets/outbox-review-probes.js', 'assets/my-outbox-review-probe-x.js', 'assets/outbox-review-Bq1x.js']).map(v => v.subject)).toEqual(['assets/outbox-review-probe-Bq1x.js'])
+    // 它创建的量 OPFS 镜像的测试 Worker 与量法（M4-P1 S1 补的 OPFS 那一段）：来源同样在 outbox/testing/ 下；产物按名字兜底，名字相近的不算
+    for (const module of ['src/features/sheet-editor/outbox/testing/mirror-review.ts', 'src/features/sheet-editor/outbox/testing/mirror-review.worker.ts'])
+      expect(isTestOnlySource(module), module).toBe(true)
+    expect(checkTestOnlyArtifacts(['assets/mirror-review.worker-B7qL.js', 'assets/mirror-review-Cx2.js', 'assets/mirror-reviews.js', 'assets/my-mirror-review.worker-x.js', 'assets/mirror-review.workers-x.js', 'assets/mirror-Cx2.js']).map(v => v.subject))
+      .toEqual(['assets/mirror-review.worker-B7qL.js', 'assets/mirror-review-Cx2.js'])
   })
 
   it('真实浏览器复核的探针 Worker（M4-P1 S1）：来源在 editor/testing/ 下，按来源认；Worker 的产物按名字兜底，名字相近的不算', () => {

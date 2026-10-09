@@ -570,10 +570,11 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  *   （两个都引用的发件箱模块另成一个共用的分块）；发件箱探针创建的记下事务的测试 Worker（outbox-probe.worker，M4-P1 S5）与看、改 OPFS 镜像
  *   文件的测试 Worker（opfs-probe.worker，M4-P1 S9）各是另一个产物。生产的发件箱 Worker（outbox.worker）不在此列；
  * - 真实浏览器复核的探针 Worker（M4-P1 S1，storage-probe-worker）：自检的场景按 new Worker(new URL(…)) 引入，产物自成一个文件；
- * - 真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：页面自检的挂接用到时动态引入，自成分块。
+ * - 真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：页面自检的挂接用到时动态引入，自成分块；它创建的量 OPFS 镜像的
+ *   测试 Worker（mirror-review.worker）是另一个产物，量法（mirror-review）被两边引用、可能自成分块。
  * 自检结果的格式标识与计时、自动保存的控制、交接日志与两个发件箱探针挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe(?:\.worker)?|opfs-probe\.worker|outbox-review-probe|storage-probe-worker|crash-probe)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe(?:\.worker)?|opfs-probe\.worker|outbox-review-probe|mirror-review(?:\.worker)?|storage-probe-worker|crash-probe)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

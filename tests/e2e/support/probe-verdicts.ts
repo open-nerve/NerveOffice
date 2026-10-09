@@ -1,9 +1,9 @@
 // 真实浏览器的前置复核（M4-P1 设计 §3.6，S1 第一轮）的判定：页面（apps/web/src/editor/testing/selftest-storage.ts、selftest-stall.ts、
-// selftest-cost.ts）只核对"跑完、数据齐"，交回事实（facts）与计时（timings）；每一项是否符合预期在这里判定（纯函数，单元测试覆盖）。
+// selftest-cost.ts、selftest-outbox.ts）只核对"跑完、数据齐"，交回事实（facts）与计时（timings）；每一项是否符合预期在这里判定（纯函数，单元测试覆盖）。
 // 真实 Safari 的驱动脚本（safari/selftest.ts）、Playwright 的校准（specs/editor/selftest.spec.ts：只断言与时间无关的几项）与本机持久上下文里的实测
 // （measure/probe.spec.ts）共用。结论：
 // - pass、fail：有判定标准的项（设计 §3.6 的"判定"一列）；
-// - record：只记录事实的项（第 1、3、12 项）；
+// - record：只记录事实的项（第 1、3、11、12 项）；
 // - unavailable：这次运行做不了（第 4 项写满只在配额被覆盖时做：真实 Safari 没有覆盖配额的接口）；
 // - missing：数据不齐（那一步没交回、缺了事实或计时），列出缺了什么。
 // 计时的分布用最近秩法（./measure-stats.ts），次数少时 p95 就是最大值或次大值，偏保守
@@ -392,9 +392,23 @@ function numbers(values: readonly (number | null | undefined)[]): number[] {
   return values.filter((value): value is number => typeof value === 'number')
 }
 
+/** 复核用户的 OPFS 镜像目录收尾时没删掉（删成了、没有 OPFS 时不写） */
+function cleanupLines(value: SelftestFact | undefined): string[] {
+  return value === undefined || value === 'removed' || value === 'unsupported' ? [] : [`复核用户的 OPFS 镜像目录没删掉（${text(value)}）：这个浏览器里留下了槽位文件`]
+}
+
+/** 生产的发件箱 Worker 写成的那几次里，OPFS 镜像写成了几次：往返含不含镜像写入 */
+function productionMirrorLine(n: number, mirrored: number, others: SelftestFact | undefined): string {
+  if (mirrored === 0)
+    return `这个上下文的 OPFS 镜像没有写成（${text(others)}）：往返不含镜像写入`
+  const rest = others === undefined || others === null ? '' : `，其余 ${text(others)}`
+  return `往返含 OPFS 镜像写入（生产的 Worker 在 IndexedDB 提交之后把同一份记录写进两个槽位之一：截断、内容、头、flush）：${n} 次里 ${mirrored} 次写成了镜像${rest}`
+}
+
 /**
  * 第 9 项的生产部分（DEF-011 的定论）：生产的发件箱 Worker（带空定时器），空闲 ≥ 1 秒的各档。生产的协议不交回 Worker 里各段的计时，
- * 按页面这一侧的往返判：停顿 = 比同档的中位数多出 ≥ STALL_EXCESS_MS；往返 p95 ≤ WORKER_SEGMENT_P95_MS（往返含来回的消息，偏保守）
+ * 按页面这一侧的往返判：停顿 = 比同档的中位数多出 ≥ STALL_EXCESS_MS；往返 p95 ≤ WORKER_SEGMENT_P95_MS（往返含来回的消息，偏保守）。
+ * 有 OPFS 的上下文里往返含镜像写入（M4-P1 设计 §3.8），写明这一次写成了几次（判定不变）
  */
 function productionStall(reports: readonly ProbeReport[]): Verdict {
   const title = 'Worker 的停顿（生产的发件箱 Worker，带空定时器）'
@@ -414,6 +428,13 @@ function productionStall(reports: readonly ProbeReport[]): Verdict {
     return `空闲 ${LEVEL_TEXT[level] ?? `${level} ms`} ${trips.length} 次里 ${excess.length} 次停顿${excess.length > 0 ? `（多出 ${excess.join('、')} ms）` : ''}；往返 ${spread(spreadOf)}`
   })
   const all = distribution(numbers(samples.map(sample => sample.roundTrip)))
+  const facts = entry.report.facts ?? {}
+  const mirrored = number(facts['outbox-stall.mirrored'])
+  if (mirrored !== undefined)
+    lines.push(productionMirrorLine(samples.length, mirrored, facts['outbox-stall.mirror-others']))
+  lines.push(...cleanupLines(facts['outbox-stall.mirror-cleanup']))
+  if (mirrored === undefined)
+    return { item: 9, title, status: 'missing', lines, missing: ['outbox-stall.mirrored'] }
   const p95 = all?.p95 ?? Number.NaN
   const pass = stalls === 0 && p95 <= WORKER_SEGMENT_P95_MS
   lines.push(pass
@@ -424,7 +445,19 @@ function productionStall(reports: readonly ProbeReport[]): Verdict {
 
 const PIPELINE_SIZE_TEXT: Readonly<Record<string, string>> = { '1m': '约 1 MiB', '5m': '约 5 MiB' }
 
-/** 第 11 项：磁盘上的管道各段与恢复路径（生产的存储，进程内）。只作记录，与 M0 内存库上的数对照 */
+/** OPFS 镜像在这个上下文里写成了没有 */
+function pipelineMirrorLine(status: SelftestFact | undefined): string {
+  if (status === 'mirrored')
+    return 'OPFS 镜像：写成了（专用 Worker 里的同步访问句柄，两个槽位轮流写），各档的数见下'
+  if (status === 'not-mirrored:unsupported')
+    return `OPFS 镜像：这个上下文没有 OPFS（${status}），镜像那一段没量`
+  return `OPFS 镜像：没写成（${text(status)}）`
+}
+
+/**
+ * 第 11 项：磁盘上的管道各段与恢复路径（生产的存储，进程内）。只作记录，与 M0 内存库上的数对照。OPFS 的镜像（§3.8）在测试 Worker 里调用
+ * 生产的镜像：登记、写入（其中截断与写、flush 单独列）、读两个槽位并校验、比对
+ */
 function pipelineSegments(reports: readonly ProbeReport[]): Verdict {
   const title = '磁盘上的管道各段与恢复路径（生产的存储，进程内）'
   const entry = reportOf(reports, 'outbox-pipeline')
@@ -435,17 +468,23 @@ function pipelineSegments(reports: readonly ProbeReport[]): Verdict {
   if (sizes.length === 0)
     return { item: 11, title, status: 'missing', lines: [], missing: ['outbox-pipeline.*#*'] }
   const facts = entry.report.facts ?? {}
-  const lines = [`事务的 durability 属性：请求 strict → ${text(facts['outbox-pipeline.strict-attribute'])}，请求 default → ${text(facts['outbox-pipeline.default-attribute'])}`]
+  const lines = [`事务的 durability 属性：请求 strict → ${text(facts['outbox-pipeline.strict-attribute'])}，请求 default → ${text(facts['outbox-pipeline.default-attribute'])}`, pipelineMirrorLine(facts['outbox-pipeline.opfs'])]
   for (const size of sizes) {
     const prefix = `outbox-pipeline.${size}`
     const p50 = (field: string): number | undefined => distribution(fieldOf(timings, prefix, field))?.p50
+    const p95 = (field: string): number | undefined => distribution(fieldOf(timings, prefix, field))?.p95
     const strict = p50('rawStrict')
     const plain = p50('rawDefault')
     lines.push(
       `${PIPELINE_SIZE_TEXT[size] ?? size}（${fieldOf(timings, prefix, 'rawBytes')[0] ?? '—'} 字节）× ${fieldOf(timings, prefix, 'digest').length}：写入一侧 SHA-256 ${ms(p50('digest'))}、gzip ${ms(p50('gzip'))}、封 ${ms(p50('seal'))}、写入（生产的存储，strict）${ms(p50('storeWrite'))}；恢复：读 ${ms(p50('read'))}、解开 ${ms(p50('open'))}、解压 ${ms(p50('gunzip'))}、解析 ${ms(p50('parse'))}（中位数）`,
-      `  直接写入 strict p50 ${ms(strict)}、default p50 ${ms(plain)}，strict 多 ${ms(strict === undefined || plain === undefined ? undefined : strict - plain)}；生产的存储写入 p95 ${ms(distribution(fieldOf(timings, prefix, 'storeWrite'))?.p95)}`,
+      `  直接写入 strict p50 ${ms(strict)}、default p50 ${ms(plain)}，strict 多 ${ms(strict === undefined || plain === undefined ? undefined : strict - plain)}；生产的存储写入 p95 ${ms(p95('storeWrite'))}`,
     )
+    if (fieldOf(timings, prefix, 'mirrorWrite').length > 0)
+      lines.push(`  OPFS 镜像：登记（拿句柄、读两个槽位并校验）${ms(p50('mirrorAttach'))}；写入 ${ms(p50('mirrorWrite'))}（其中截断与写 ${ms(p50('mirrorIo'))}、flush ${ms(p50('mirrorFlush'))}，其余是编码：内容与头的 SHA-256），写入 p95 ${ms(p95('mirrorWrite'))}、flush p95 ${ms(p95('mirrorFlush'))}；读两个槽位并校验（临时拿句柄）${ms(p50('mirrorRead'))}（其中拿句柄 ${ms(p50('mirrorOpen'))}）、比对 ${ms(p50('mirrorCompare'))}（中位数）`)
   }
+  lines.push(...cleanupLines(facts['outbox-pipeline.mirror-cleanup']))
+  if (!('outbox-pipeline.opfs' in facts))
+    return { item: 11, title, status: 'missing', lines, missing: ['outbox-pipeline.opfs'] }
   return { item: 11, title, status: 'record', lines, missing: [] }
 }
 
