@@ -40,9 +40,20 @@ for (const name of browsers) {
 /** 强制结束后端的用例（US-M1-10）：单独一个项目，等全部浏览器项目跑完再执行，不打断别的用例 */
 const RESTART_SPECS = /[\\/]deploy[\\/]restart\.spec\.ts$/
 
-// 重启用例本身用 chromium，与浏览器无关：CI 按浏览器分片之后，只在带 chromium 的那一片里跑一次，不必每片重来
+/**
+ * 结束整棵浏览器进程的崩溃用例（M4-P1 设计 §3.7，support/browser-crash.ts）：每个浏览器一个项目，一个工作进程，等全部浏览器项目跑完再执行——
+ * macOS 上认 WebKit 的 WebContent 与 GPU 要求机器上只有这一个 Playwright WebKit 实例。外部模式（容器 E2E）不跑：测的是浏览器的存储与进程，
+ * 与被测环境的部署无关。只跑崩溃用例：--project=crash-chromium --project=crash-chrome --project=crash-webkit --no-deps
+ */
+const CRASH_SPECS = /[\\/]crash[\\/][^\\/]+\.spec\.ts$/
+const crashProjects = externalBaseUrl === undefined
+  ? browsers.map(name => ({ name: `crash-${name}`, use: BROWSERS[name], testMatch: CRASH_SPECS, dependencies: browsers, workers: 1, timeout: 300_000 }))
+  : []
+
+// 重启用例本身用 chromium，与浏览器无关：CI 按浏览器分片之后，只在带 chromium 的那一片里跑一次，不必每片重来。
+// 它强制结束后端，崩溃用例要用后端：等崩溃项目也跑完再执行，两者不同时跑
 const restartProjects = browsers.includes('chromium')
-  ? [{ name: 'restart', use: { browserName: 'chromium' as const }, testMatch: RESTART_SPECS, dependencies: browsers, timeout: 120_000 }]
+  ? [{ name: 'restart', use: { browserName: 'chromium' as const }, testMatch: RESTART_SPECS, dependencies: [...browsers, ...crashProjects.map(project => project.name)], timeout: 120_000 }]
   : []
 
 export default defineConfig({
@@ -73,7 +84,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    ...browsers.map(name => ({ name, use: BROWSERS[name], testIgnore: RESTART_SPECS })),
+    ...browsers.map(name => ({ name, use: BROWSERS[name], testIgnore: [RESTART_SPECS, CRASH_SPECS] })),
+    ...crashProjects,
     // 只跑重启用例：--project restart --no-deps。命令行的 --grep 不作用于依赖的浏览器项目：它们照样全部执行。
     // 重复运行要加 --workers 1：--repeat-each 的副本会分到几个工作进程并行，互相强制结束同一个后端（复验 RB5）
     // 用例的时限放宽到 2 分钟：强制结束后等后端重新可用最多 1 分钟（support/api-process.ts），慢的机器上还要重新打开编辑器
