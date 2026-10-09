@@ -25,14 +25,15 @@ import {
   cookieSummary,
   currentPlatform,
   filesHeldIn,
+  freezeTargets,
   identifyInstance,
-  isExited,
+  killTargets,
   launchRootIn,
   missingRoles,
-  processStatus,
   readProcessTable,
-  signalOrder,
+  reconcilePlanned,
   stillAlive,
+  stillRunning,
   webkitNetworkingCandidates,
 } from './browser-processes.ts'
 import { chooseAutosave, cspViolationCollector, defaultAutosaveMode, pageErrorCollector } from './fixtures.ts'
@@ -188,37 +189,20 @@ function unionByPid(...lists: readonly (readonly InstanceProcess[])[]): Instance
  */
 function freezeAndKill(spec: InstanceSpec, planned: readonly InstanceProcess[], holders: ReadonlySet<number>, problems: string[]): { readonly frozenAt: number, readonly killed: InstanceProcess[] } {
   const frozenAt = Date.now()
-  let groupStopped = false
-  for (const item of signalOrder(planned)) {
-    if (item.pgid !== spec.rootPid) {
-      send(item.pid, 'SIGSTOP', problems)
-    }
-    else if (!groupStopped) {
-      send(-spec.rootPid, 'SIGSTOP', problems)
-      groupStopped = true
-    }
-  }
-  if (!groupStopped)
-    send(-spec.rootPid, 'SIGSTOP', problems)
+  for (const target of freezeTargets(spec.rootPid, planned))
+    send(target, 'SIGSTOP', problems)
   try {
     const table = readProcessTable(spec.platform)
-    const kept: InstanceProcess[] = []
-    for (const item of planned) {
-      const status = processStatus(table, item)
-      if (status === 'replaced') {
-        send(item.pid, 'SIGCONT', problems)
-        problems.push(`准备时认出的 ${describeProcess(item)} 在冻住时已经换成了别的进程：已经恢复它，这次不算数`)
-      }
-      else if (status === 'same') {
-        kept.push(item)
-      }
+    const { kept, replaced } = reconcilePlanned(table, planned)
+    for (const item of replaced) {
+      send(item.pid, 'SIGCONT', problems)
+      problems.push(`准备时认出的 ${describeProcess(item)} 在冻住时已经换成了别的进程：已经恢复它，这次不算数`)
     }
     const now = identifyInstance(table, spec, holders)
     problems.push(...now.problems)
     const killed = unionByPid(kept, now.processes)
-    send(-spec.rootPid, 'SIGKILL', problems)
-    for (const item of signalOrder(killed))
-      send(item.pid, 'SIGKILL', problems)
+    for (const target of killTargets(spec.rootPid, killed))
+      send(target, 'SIGKILL', problems)
     return { frozenAt, killed }
   }
   catch (error) {
@@ -238,10 +222,9 @@ async function verifyExited(spec: InstanceSpec, killed: readonly InstanceProcess
     await sleep(50)
     alive = stillAlive(readProcessTable(spec.platform), killed)
   }
-  const table = readProcessTable(spec.platform)
-  const after = identifyInstance(table, spec, new Set())
+  const after = stillRunning(readProcessTable(spec.platform), spec)
   problems.push(...after.problems)
-  const leftovers = after.processes.filter(item => !isExited(item) && !alive.some(row => row.pid === item.pid))
+  const leftovers = after.processes.filter(item => !alive.some(row => row.pid === item.pid))
   // 一个循环里漏掉的也是这次启动的进程：结束它，仍然算幸存者（报告里要看得到）
   for (const item of leftovers)
     send(item.pid, 'SIGKILL', problems)

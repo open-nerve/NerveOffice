@@ -8,7 +8,9 @@ import {
   cookieSummary,
   descendantsOf,
   elapsedMs,
+  freezeTargets,
   identifyInstance,
+  killTargets,
   launchRootIn,
   mentionsProfile,
   missingRoles,
@@ -17,9 +19,11 @@ import {
   pidsHoldingFilesIn,
   processStatus,
   procRow,
+  reconcilePlanned,
   roleOf,
   signalOrder,
   stillAlive,
+  stillRunning,
   webkitNetworkingCandidates,
 } from './browser-processes.ts'
 
@@ -442,6 +446,59 @@ describe('冻住与结束的先后（signalOrder）', () => {
   it('承载存储的（WebKit 的网络进程、Chromium 的浏览器与存储服务）在前，其余按原来的顺序', () => {
     const roles: readonly ProcessRole[] = ['renderer', 'networking', 'ui', 'browser', 'gpu', 'storage']
     expect(signalOrder(roles.map((role, index) => proc(index + 1, role))).map(p => p.role)).toEqual(['networking', 'browser', 'storage', 'renderer', 'ui', 'gpu'])
+  })
+})
+
+describe('冻住与结束的目标（freezeTargets、killTargets）', () => {
+  // macOS 的 WebKit：启动脚本与 UI 在根的进程组里，XPC 各自一个进程组
+  const webkit = [
+    proc(6892, 'launcher', { pgid: 6892 }),
+    proc(6898, 'ui', { pgid: 6892 }),
+    proc(6919, 'gpu', { pgid: 6919 }),
+    proc(6921, 'web-content', { pgid: 6921 }),
+    proc(6922, 'networking', { pgid: 6922 }),
+  ]
+  it('冻住：承载存储的网络进程最先（组外，单独），再一次冻住整个进程组，再组外的其余', () => {
+    expect(freezeTargets(6892, webkit)).toEqual([6922, -6892, 6919, 6921])
+  })
+
+  it('Chromium 系的进程都在根的进程组里：一次冻住整个组', () => {
+    const chromium = [proc(5100, 'renderer', { pgid: 5100 }), proc(5101, 'browser', { pgid: 5100 }), proc(5102, 'network', { pgid: 5100 })]
+    expect(freezeTargets(5100, chromium)).toEqual([-5100])
+  })
+
+  it('准备时没认出组里的进程也冻住整个组（组里只可能是这次启动的）', () => {
+    expect(freezeTargets(5100, [proc(5200, 'crashpad', { pgid: 5200 })])).toEqual([5200, -5100])
+    expect(freezeTargets(5100, [])).toEqual([-5100])
+  })
+
+  it('结束：先整个进程组（冻住之后才出现的也在内），再逐个，承载存储的在前', () => {
+    expect(killTargets(6892, webkit)).toEqual([-6892, 6922, 6892, 6898, 6919, 6921])
+  })
+})
+
+describe('冻住之后核对准备时认出的进程（reconcilePlanned）', () => {
+  it('还是同一个的照常结束；进程号换成了别的进程的要恢复、不能结束；已经退出的都不放', () => {
+    const planned = [proc(10, 'browser'), proc(11, 'renderer'), proc(12, 'gpu')]
+    const table = [row({ pid: 10, command: 'browser', state: 'T' }), row({ pid: 12, command: 'someone else', startedAt: LAUNCHED_AT + 30_000 })]
+    const { kept, replaced } = reconcilePlanned(table, planned)
+    expect(kept.map(p => p.pid)).toEqual([10])
+    expect(replaced.map(p => p.pid)).toEqual([12])
+  })
+})
+
+describe('结束之后还在跑的这次启动的进程（stillRunning）', () => {
+  it('根已经不在：进程组里、命令行带资料目录的还活着就算；僵尸、已死的不算；别人的不算', () => {
+    const table = [
+      row({ pid: 5101, ppid: 1, pgid: 5100, command: `${HEADLESS_SHELL} --type=renderer` }),
+      row({ pid: 5102, ppid: 1, pgid: 5100, state: 'Z', command: `${HEADLESS_SHELL} --type=gpu-process` }),
+      row({ pid: 5103, ppid: 1, pgid: 5103, command: `/x/chrome_crashpad_handler --database=${PROFILE}/Crashpad` }),
+      row({ pid: 5104, ppid: 1, pgid: 5104, state: 'X', command: `/x/chrome_crashpad_handler --database=${PROFILE}/Crashpad` }),
+      row({ pid: 40057, ppid: 1, pgid: 40057, command: CHROME }),
+    ]
+    const { processes, problems } = stillRunning(table, spec())
+    expect(problems).toEqual([])
+    expect(processes.map(p => p.pid)).toEqual([5101, 5103])
   })
 })
 

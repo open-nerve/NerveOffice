@@ -357,6 +357,48 @@ export function signalOrder<T extends Pick<InstanceProcess, 'role'>>(processes: 
   return [...processes.filter(process => STORAGE_ROLES.includes(process.role)), ...processes.filter(process => !STORAGE_ROLES.includes(process.role))]
 }
 
+/**
+ * 冻住（SIGSTOP）的目标，按先后：承载存储的在前；进程组里的进程一次冻住整个组（目标写成负的进程组号，同 kill(2)），组外的逐个
+ * （macOS 的 WebKit XPC、两次 fork 的 crashpad）。准备时没认出组里的进程也冻住整个组：组里只可能是这次启动的进程
+ */
+export function freezeTargets(rootPid: number, planned: readonly InstanceProcess[]): number[] {
+  const targets: number[] = []
+  for (const item of signalOrder(planned)) {
+    const target = item.pgid === rootPid ? -rootPid : item.pid
+    if (!targets.includes(target))
+      targets.push(target)
+  }
+  return targets.includes(-rootPid) ? targets : [...targets, -rootPid]
+}
+
+/** 结束（SIGKILL）的目标：先整个进程组（组里冻住之后才出现的也在内），再逐个（承载存储的在前）。都冻住了，先后不影响落盘的结果 */
+export function killTargets(rootPid: number, processes: readonly InstanceProcess[]): number[] {
+  return [-rootPid, ...signalOrder(processes).map(item => item.pid)]
+}
+
+/**
+ * 冻住之后核对准备时认出的进程：还是同一个的照常结束（kept）；进程号被别的进程用了的（准备之后它退出、号又分给了别人）要立即恢复（SIGCONT），
+ * 不能结束（replaced）；已经退出的两边都不放
+ */
+export function reconcilePlanned(table: readonly ProcessRow[], planned: readonly InstanceProcess[]): { readonly kept: InstanceProcess[], readonly replaced: InstanceProcess[] } {
+  const kept: InstanceProcess[] = []
+  const replaced: InstanceProcess[] = []
+  for (const item of planned) {
+    const status = processStatus(table, item)
+    if (status === 'same')
+      kept.push(item)
+    else if (status === 'replaced')
+      replaced.push(item)
+  }
+  return { kept, replaced }
+}
+
+/** 结束之后还在跑的这次启动的进程：在新读的进程表里再认一遍（根已经不在，靠进程组、命令行里的资料目录、macOS 的 WebKit XPC），去掉已经退出的 */
+export function stillRunning(table: readonly ProcessRow[], spec: InstanceSpec): Identified {
+  const { processes, problems } = identifyInstance(table, spec, new Set())
+  return { processes: processes.filter(item => !isExited(item)), problems }
+}
+
 /** 浏览器重开之后留下的 Cookie（只记录、不断言）：名字、域、路径、过期时刻、是不是会话 Cookie，不带值（令牌不进报告与日志，规范 §4） */
 export function cookieSummary(cookies: readonly Cookie[]): { name: string, domain: string, path: string, expires: number, session: boolean }[] {
   return cookies.map(({ name, domain, path, expires }) => ({ name, domain, path, expires, session: expires === -1 }))
