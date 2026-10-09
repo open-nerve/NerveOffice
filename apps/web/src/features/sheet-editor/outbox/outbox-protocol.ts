@@ -5,9 +5,10 @@
 // - 本机密钥两种交法（KeyTransfer）：不可导出的 CryptoKey 经结构化克隆交过去（设计 §3.4.8，真实 Safari 上由 S1 复核）；不行就改为
 //   原始字节转移给 Worker、在 Worker 里导入、用完清零。Worker 两种都认，改交法只动客户端的 keyTransferOf 一处
 import type { OutboxUnavailableReason } from '../../../shared/outbox/database.ts'
+import type { MirrorStatus } from '../../../shared/outbox/draft-mirror.ts'
 import type { DraftKey, Fields, InFlightSave } from '../../../shared/outbox/draft-record.ts'
 import type { FenceReason } from '../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, OpenedRecord, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, OpenedRecord, ReconcileResult, RecoveryEvent, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
 import { isFields, isText, isWhole, readContentFormat, readDraftMeta, readInFlight } from '../../../shared/outbox/draft-record.ts'
@@ -33,6 +34,9 @@ export type OutboxCall
     | { readonly type: 'remove', readonly draft: DraftKey, readonly expectedSeq: number | null }
     | { readonly type: 'set-key', readonly key: KeyTransfer | null }
     | { readonly type: 'seed-digest', readonly draft: DraftKey, readonly seed: DedupeKey | null }
+    | { readonly type: 'release', readonly draft: DraftKey }
+    | { readonly type: 'reconcile', readonly userId: string }
+    | { readonly type: 'take-events' }
 
 export type OutboxCallType = OutboxCall['type']
 
@@ -43,6 +47,12 @@ export type HelloResult = { readonly kind: 'ready' } | { readonly kind: 'failed'
 
 /** 设定去重起点的结果 */
 export type SeedResult = { readonly kind: 'seeded' } | { readonly kind: 'failed', readonly error: FailureDescription }
+
+/** 放开镜像的句柄的结果 */
+export type ReleaseResult = { readonly kind: 'released' } | { readonly kind: 'failed', readonly error: FailureDescription }
+
+/** 取走比对留下的事件的结果 */
+export type EventsResult = { readonly kind: 'events', readonly events: readonly RecoveryEvent[] } | { readonly kind: 'failed', readonly error: FailureDescription }
 
 /** 每种请求的结果（与 DraftWriter 各方法交回的相同） */
 export interface OutboxResults {
@@ -55,6 +65,9 @@ export interface OutboxResults {
   readonly 'remove': RemoveResult
   readonly 'set-key': KeyChange
   readonly 'seed-digest': SeedResult
+  readonly 'release': ReleaseResult
+  readonly 'reconcile': ReconcileResult
+  readonly 'take-events': EventsResult
 }
 
 /** Worker → 主线程：按 id 的回复。ok: false 是这个请求没能处理（认不出、管道之外出的错）；操作本身的失败在 result 里 */
@@ -73,6 +86,7 @@ export type OutboxMessage = OutboxReply | OutboxNotice
 /** 枚举的全部取值：类型上要求列全（少了一个，赋值就过不了） */
 const UNAVAILABLE_REASONS: Readonly<Record<OutboxUnavailableReason, true>> = { 'unsupported': true, 'denied': true, 'newer-version': true, 'blocked': true }
 const FENCE_REASONS: Readonly<Record<FenceReason, true>> = { 'not-writer': true, 'stale-seq': true, 'foreign-draft': true, 'changed': true }
+const MIRROR_SKIPS: Readonly<Record<'busy' | 'quota' | 'unsupported', true>> = { busy: true, quota: true, unsupported: true }
 
 function isOneOf<T extends string>(table: Readonly<Record<T, true>>, value: unknown): value is T {
   return typeof value === 'string' && Object.hasOwn(table, value)
@@ -179,6 +193,12 @@ function readCall(data: Fields): OutboxCall | undefined {
       const seed = readSeed(data.seed)
       return draft !== undefined && seed !== undefined ? { type: 'seed-digest', draft, seed } : undefined
     }
+    case 'release':
+      return draft === undefined ? undefined : { type: 'release', draft }
+    case 'reconcile':
+      return isText(data.userId) ? { type: 'reconcile', userId: data.userId } : undefined
+    case 'take-events':
+      return { type: 'take-events' }
     default:
       return undefined
   }
@@ -215,6 +235,20 @@ export function readOutboxMessage(data: unknown): OutboxMessage | null {
 }
 
 // ---- 结果的核对（主线程一侧）：每种只交回约定的字段 ----
+
+/** OPFS 的镜像写成了没有（§3.8） */
+function readMirrorStatus(value: unknown): MirrorStatus | null {
+  if (!isFields(value))
+    return null
+  if (value.kind === 'mirrored' || value.kind === 'off')
+    return { kind: value.kind }
+  if (value.kind !== 'not-mirrored')
+    return null
+  if (isOneOf(MIRROR_SKIPS, value.reason))
+    return { kind: 'not-mirrored', reason: value.reason }
+  const error = value.reason === 'failed' ? readFailure(value.error) : undefined
+  return error === undefined ? null : { kind: 'not-mirrored', reason: 'failed', error }
+}
 
 function readProblem(value: Fields): WriterProblem | null {
   switch (value.kind) {
@@ -261,12 +295,13 @@ function readHelloResult(value: Fields): HelloResult | null {
 function readRegisterResult(value: Fields): RegisterResult | null {
   switch (value.kind) {
     case 'registered': {
-      if (!isWhole(value.lastDraftSeq, 0))
+      const mirror = readMirrorStatus(value.mirror)
+      if (!isWhole(value.lastDraftSeq, 0) || mirror === null)
         return null
       if (value.existing === undefined)
-        return { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing: undefined }
+        return { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing: undefined, mirror }
       const existing = isFields(value.existing) ? readOpenedRecord(value.existing) : null
-      return existing === null ? null : { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing }
+      return existing === null ? null : { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing, mirror }
     }
     case 'superseded':
       return isWhole(value.currentEpoch, 1) && typeof value.sameEpoch === 'boolean' ? { kind: 'superseded', currentEpoch: value.currentEpoch, sameEpoch: value.sameEpoch } : null
@@ -286,8 +321,10 @@ function readCaptureWritten(value: Fields): CaptureWritten | null {
   if (!isBytes(gzip))
     return null
   switch (kind) {
-    case 'written':
-      return isText(value.digest) ? { kind, gzip, digest: value.digest } : null
+    case 'written': {
+      const mirror = readMirrorStatus(value.mirror)
+      return isText(value.digest) && mirror !== null ? { kind, gzip, digest: value.digest, mirror } : null
+    }
     case 'fenced':
       return isOneOf(FENCE_REASONS, value.reason) ? { kind, reason: value.reason, gzip } : null
     case 'no-key':
@@ -360,6 +397,35 @@ function readSeedResult(value: Fields): SeedResult | null {
   return error === undefined ? null : { kind: 'failed', error }
 }
 
+function readFailed(value: Fields): { readonly kind: 'failed', readonly error: FailureDescription } | null {
+  const error = value.kind === 'failed' ? readFailure(value.error) : undefined
+  return error === undefined ? null : { kind: 'failed', error }
+}
+
+function readReleaseResult(value: Fields): ReleaseResult | null {
+  return value.kind === 'released' ? { kind: 'released' } : readFailed(value)
+}
+
+function readReconcileResult(value: Fields): ReconcileResult | null {
+  if (value.kind === 'reconciled')
+    return isWhole(value.documents, 0) ? { kind: 'reconciled', documents: value.documents } : null
+  return readFailed(value)
+}
+
+function readRecoveryEvent(value: unknown): RecoveryEvent | undefined {
+  if (!isFields(value) || (value.kind !== 'restored' && value.kind !== 'lost'))
+    return undefined
+  const key = readDraftKey(value.key)
+  return key === undefined ? undefined : { kind: value.kind, key }
+}
+
+function readEventsResult(value: Fields): EventsResult | null {
+  if (value.kind !== 'events')
+    return readFailed(value)
+  const events = Array.isArray(value.events) ? (value.events as readonly unknown[]).map(readRecoveryEvent) : undefined
+  return events === undefined || events.includes(undefined) ? null : { kind: 'events', events: events.filter(event => event !== undefined) }
+}
+
 const RESULT_READERS: { readonly [T in OutboxCallType]: (value: Fields) => OutboxResults[T] | null } = {
   'hello': readHelloResult,
   'register': readRegisterResult,
@@ -370,6 +436,9 @@ const RESULT_READERS: { readonly [T in OutboxCallType]: (value: Fields) => Outbo
   'remove': readRemoveResult,
   'set-key': readKeyChange,
   'seed-digest': readSeedResult,
+  'release': readReleaseResult,
+  'reconcile': readReconcileResult,
+  'take-events': readEventsResult,
 }
 
 /** 主线程一侧：按请求的种类核对 Worker 交回的结果；认不出时为 null */
@@ -387,6 +456,9 @@ const FAILED_RESULTS: { readonly [T in OutboxCallType]: (error: FailureDescripti
   'remove': error => ({ kind: 'failed', error }),
   'set-key': error => ({ kind: 'failed', error }),
   'seed-digest': error => ({ kind: 'failed', error }),
+  'release': error => ({ kind: 'failed', error }),
+  'reconcile': error => ({ kind: 'failed', error }),
+  'take-events': error => ({ kind: 'failed', error }),
 }
 
 /** 这种请求没能完成时的结果（Worker 坏了、回复是 ok: false、结果认不出） */

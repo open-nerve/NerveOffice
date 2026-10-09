@@ -291,6 +291,9 @@ describe('Worker 出事时不挂住：在途的全部以失败结束，之后立
     expect(await client.remove(DRAFT)).toMatchObject(failed)
     expect(await client.setKey(await localKey(2))).toMatchObject(failed)
     await expect(client.seedDigest(DRAFT, { digest: 'ab', formulasPending: false })).resolves.toBeUndefined()
+    await expect(client.release(DRAFT)).resolves.toBeUndefined()
+    expect(await client.reconcile(USER_ID)).toMatchObject(failed)
+    expect(await client.takeRecoveryEvents(), '坏了：事件跟着没了').toEqual([])
   })
 
   it('postMessage 抛出（这一条克隆不了）：只有这一个请求失败，客户端照常', async () => {
@@ -331,7 +334,7 @@ describe('连到 Worker 里真的处理：每种方法走完整条路', () => {
     await expect(client.ready()).resolves.toEqual({ kind: 'ready' })
     const key = await localKey(2)
     expect(await client.setKey(key)).toEqual({ kind: 'key-set', notResealed: [] })
-    expect(await client.register(DRAFT, ME, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined })
+    expect(await client.register(DRAFT, ME, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror: { kind: 'off' } })
     const written = await client.write(capture(1, '{"甲":1}'))
     expect(written.kind).toBe('written')
     const gzip = written.kind === 'written' ? written.gzip : new Uint8Array()
@@ -352,6 +355,9 @@ describe('连到 Worker 里真的处理：每种方法走完整条路', () => {
     expect(rekeyed.kind === 'draft' && [rekeyed.draft.keyVersion, rekeyed.draft.baseRevision]).toEqual([3, 13])
     expect(await client.remove(DRAFT, 1)).toEqual({ kind: 'changed' })
     expect(await client.remove(DRAFT, 2)).toEqual({ kind: 'removed' })
+    await expect(client.release(DRAFT)).resolves.toBeUndefined()
+    expect(await client.reconcile(USER_ID), '这个 Worker 没有镜像').toEqual({ kind: 'reconciled', documents: 0 })
+    expect(await client.takeRecoveryEvents()).toEqual([])
     expect(client.broken()).toBeUndefined()
     await settle()
   })
