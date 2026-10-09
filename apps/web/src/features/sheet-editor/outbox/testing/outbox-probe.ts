@@ -212,13 +212,22 @@ function errorCodeOf(body: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string' ? error.code : undefined
 }
 
-/** 取本机密钥的请求：先取会话里的 CSRF 令牌，再 POST（与请求层发出的请求相同：同源、带 CSRF 令牌、不带请求体） */
-async function requestLocalKey(): Promise<{ readonly version: number, readonly key: string }> {
+/** 会话里的 CSRF 令牌（GET /api/auth/session）：取不到时抛出 */
+async function sessionCsrfToken(): Promise<string> {
   const session = await fetch('/api/auth/session', { credentials: 'same-origin', headers: { accept: 'application/json' } })
-  const sessionBody = await jsonOf(session)
+  const body = await jsonOf(session)
   if (!session.ok)
-    throw new ProbeHttpError(session.status, errorCodeOf(sessionBody))
-  const csrfToken = typeof sessionBody === 'object' && sessionBody !== null && 'csrfToken' in sessionBody && typeof sessionBody.csrfToken === 'string' ? sessionBody.csrfToken : ''
+    throw new ProbeHttpError(session.status, errorCodeOf(body))
+  if (typeof body !== 'object' || body === null || !('csrfToken' in body) || typeof body.csrfToken !== 'string')
+    throw new TypeError('GET /api/auth/session 的响应里没有 csrfToken')
+  return body.csrfToken
+}
+
+/**
+ * 取本机密钥的请求（与请求层发出的相同：同源、带 CSRF 令牌、不带请求体）。令牌取一次之后留着（像请求层一样只在内存里）：
+ * 登录之后失效时，这个请求本身就被服务端拒绝（401），而不是在取令牌时就失败
+ */
+async function requestLocalKey(csrfToken: string): Promise<{ readonly version: number, readonly key: string }> {
   const response = await fetch('/api/local-key', { method: 'POST', credentials: 'same-origin', headers: { 'accept': 'application/json', 'x-csrf-token': csrfToken } })
   const body = await jsonOf(response)
   if (!response.ok)
@@ -269,6 +278,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
   const held = new Map<number, IDBDatabase>()
   const heldTransactions = new Map<number, { readonly release: () => void, readonly done: Promise<void>, readonly db: IDBDatabase }>()
   let fetchedKey: LocalKeyHandle | undefined
+  let csrfToken: string | undefined
   let recording = false
   const recorded: ProbeTransaction[] = []
   /** 接下来几次开事务要抛出的错误名 */
@@ -526,7 +536,8 @@ export function installOutboxProbe(target: Window): OutboxProbe {
     localKey: {
       fetch: async () => {
         try {
-          const handle = await importLocalKey(await requestLocalKey())
+          csrfToken ??= await sessionCsrfToken()
+          const handle = await importLocalKey(await requestLocalKey(csrfToken))
           fetchedKey = handle
           const exportRejected = await crypto.subtle.exportKey('raw', handle.key).then(() => 'none', (error: unknown) => probeError(error).name)
           const algorithm = handle.key.algorithm as AesKeyAlgorithm

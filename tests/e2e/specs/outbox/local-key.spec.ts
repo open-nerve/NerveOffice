@@ -64,11 +64,12 @@ test.describe('本机密钥的客户端', { tag: '@test-build' }, () => {
     expect(() => decrypt(first.key, iv, sealed), '吊销了的那一把解不开新的').toThrow()
   })
 
-  test('会话失效时取用失败，如实交回会话类的错误（401），不交回密钥', async ({ page }) => {
+  test('会话失效之后再取：取用的请求本身被拒绝（401），如实交回会话类的错误，不交回密钥', async ({ page }) => {
     const owner = await createUser('lk-client-expired')
     await loginThroughApi(page, owner)
     await openOutboxProbe(page)
     await sessionConfirmed(page)
+    expect(outcomeOf(await probeLocalKey(page, 'fetch'), 'fetched').version).toBe(1)
     await expireSessions(owner)
     const failed = outcomeOf(await probeLocalKey(page, 'fetch'), 'failed')
     expect(failed.error.status).toBe(401)
