@@ -1,7 +1,7 @@
 import type { StoredDraft, WriterRecord } from './draft-record.ts'
 import { describe, expect, it } from 'vitest'
 import { sampleMeta, sampleStoredDraft, sampleWriter } from './draft-record.test-support.ts'
-import { DRAFT_IV_BYTES, DRAFT_RECORD_VERSION, DRAFT_TAG_BYTES, draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { DRAFT_IV_BYTES, DRAFT_RECORD_VERSION, DRAFT_TAG_BYTES, draftMetaOf, readableUpdatedAt, readDraftMeta, readStoredDraft, readWriterRecord } from './draft-record.ts'
 
 /** 把样例的某一项换成别的值（可以是任何东西，模拟库里读出来的） */
 function withField(record: object, field: string, value: unknown): Record<string, unknown> {
@@ -101,6 +101,18 @@ describe('草稿的形状核对（M4-P1 设计 §3.2、§3.4.6）：读出来的
       expect(readStoredDraft(withField(sampleStoredDraft(), 'iv', iv)), `byteOffset ${iv.byteOffset}`).toEqual({ kind: 'malformed' })
     const ciphertext = new Uint8Array(new ArrayBuffer(64)).subarray(8, 40)
     expect(readStoredDraft(sampleStoredDraft({ ciphertext }))).toEqual({ kind: 'malformed' })
+  })
+
+  it('只核对元数据（发件箱 Worker 交回的元数据也经过它）：与记录的同一组核对，交回只带已知字段的一份；格式版本不是本页的为 undefined', () => {
+    const meta = sampleMeta()
+    expect(readDraftMeta({ ...meta, iv: 'ignored', extra: 1 })).toEqual(meta)
+    expect(Object.keys(readDraftMeta({ ...meta, extra: 1 }) ?? {}).sort()).toEqual(Object.keys(meta).sort())
+    expect(readDraftMeta({ ...meta, recordVersion: DRAFT_RECORD_VERSION + 1 })).toBeUndefined()
+    for (const field of Object.keys(meta))
+      expect(readDraftMeta(withoutField(meta, field)), field).toBeUndefined()
+    expect(readDraftMeta(withField(meta, 'inFlight', { ...meta.inFlight, localSeq: 0 }))).toBeUndefined()
+    for (const value of [null, 'meta', [meta]])
+      expect(readDraftMeta(value), String(value)).toBeUndefined()
   })
 
   it('元数据：去掉 IV 与密文（本机草稿页的列表不交出密文）', () => {
