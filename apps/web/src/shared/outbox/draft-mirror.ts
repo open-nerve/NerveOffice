@@ -287,8 +287,9 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
     write,
 
     backfill: async (record) => {
+      // 关掉之后 states 已清空：同样什么也不做
       const held = states.get(idOf(record))
-      if (closed || held?.kind !== 'held')
+      if (held?.kind !== 'held')
         return undefined
       const newest = newestRecord(held.records)
       if (newest !== undefined && compareDrafts(record, newest) <= 0)

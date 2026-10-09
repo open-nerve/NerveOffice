@@ -152,6 +152,13 @@ describe('放弃一份（本机草稿页）：草稿、提示与镜像目录；�
     expect(inMirror(files, B)).toBe(false)
   })
 
+  it('没有 OPFS：只删库里的，没有没清掉的', async () => {
+    const { store, cleanup } = setup(directory => ({ ...directory, removeDocument: async () => ({ kind: 'unsupported' }) }))
+    putRecords(store, A)
+    expect(await cleanup.abandon(A)).toEqual({ kind: 'removed', pending: [] })
+    expect(inStore(store, A)).toEqual([false, true, false])
+  })
+
   it('镜像目录有句柄开着：库里照删，目录留着、交回 pending；库的问题如实交回、镜像不动', async () => {
     const { store, files, cleanup } = setup()
     putRecords(store, A)
@@ -171,20 +178,28 @@ describe('放弃一份（本机草稿页）：草稿、提示与镜像目录；�
 describe('保留期：库里过期的，镜像里没用的目录（两个槽位都空、都超过 14 天没动过），不论属于谁', () => {
   it('删两个槽位都空的、都过期的、只剩空目录的；留下有一个槽位还在用的（含删库之后只在镜像里的）、写一半而刚写过的；句柄开着的交回 pending', async () => {
     const { files, cleanup, advance } = setup()
-    putMirror(files, A, [0, 0])
     putMirror(files, B, [500, 0])
     putMirror(files, C, [500, 300])
     putMirror(files, D, [500, 300])
     putMirror(files, E, [0, 0])
-    putMirror(files, THEIRS, [0, 0])
+    // 别人的：只剩一个空的槽位文件（另一个不在）
+    files.putFile(THEIRS, 0, new Uint8Array(0))
     advance(LOCAL_DRAFT_RETENTION_MS + 1)
-    // C 的一个槽位刚写过：还在用；D 的两个都过期；E 被拿着
+    // A 的两个槽位刚截断过（空的，没过期）；C 的一个槽位刚写过：还在用；D 的两个都过期；E 被拿着
+    putMirror(files, A, [0, 0])
     files.putFile(C, 1, new Uint8Array(300).fill(1))
     files.holdElsewhere(E)
     const outcome = await cleanup.purgeExpired(NOW + LOCAL_DRAFT_RETENTION_MS + 1)
     expect(outcome).toEqual({ kind: 'purged', drafts: [], pending: [E] })
     expect([A, B, C, D, E].map(key => inMirror(files, key))).toEqual([false, false, true, false, true])
     expect(await users(files), '别人的只剩空目录：用户目录一并删').toEqual({ kind: 'listed', userIds: [USER_ID] })
+  })
+
+  it('列出来之后目录已经不在了（别处刚删）：当作删了，用户目录照样回收', async () => {
+    const { files, cleanup } = setup(directory => ({ ...directory, slotFiles: async () => ({ kind: 'absent' }) }))
+    putMirror(files, A, [500, 500])
+    expect(await cleanup.purgeExpired(NOW)).toEqual({ kind: 'purged', drafts: [], pending: [] })
+    expect(await users(files)).toEqual({ kind: 'listed', userIds: [] })
   })
 
   it('改动时刻恰好 14 天前的不算过期；时刻在将来（时钟往回拨过）的不算', async () => {

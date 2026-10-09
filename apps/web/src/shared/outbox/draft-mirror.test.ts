@@ -290,6 +290,9 @@ describe('补写（§3.8）：拿着句柄、并且比两个槽位里合格的�
     expect([fake.operations(KEY, 0), fake.operations(KEY, 1)], '不用补：不写').toEqual([[], []])
     expect(await mirror.backfill(record(3))).toEqual({ kind: 'mirrored' })
     expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq2@5', 'seq3@6'])
+    const written = fake.operations(KEY, 1).length
+    expect(await mirror.backfill(record(3)), '刚补写的那一份记着：不再写').toEqual({ kind: 'mirrored' })
+    expect(fake.operations(KEY, 1)).toHaveLength(written)
     expect(await mirror.backfill(record(3, { updatedAt: 9_999 }))).toEqual({ kind: 'mirrored' })
     expect(await slotOf(fake, 0)).toBe('seq3@7')
   })

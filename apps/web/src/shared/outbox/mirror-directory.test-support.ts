@@ -1,6 +1,6 @@
 // 测试用：照 MirrorDirectory 的接口写的内存里的 OPFS（M4-P1 设计 §3.8）。文件按"用户/文档/槽位"存字节；同步访问句柄同一个文件同一时刻
 // 只有一个（与浏览器一样：再拿交回 busy）；另有别的标签页占着句柄、下一次写入写到一半抛出（写满、出错）或者只写了一部分、没有 OPFS 这几样，
-// 并记下每个槽位文件上改动的操作（截断、写、flush 的先后）
+// 并记下每个槽位文件上改动的操作（截断、写、flush 的先后）。目录（用户、文档）与文件分开记：文件删光了目录还在，删目录才没有
 import type { DraftKey } from './draft-record.ts'
 import type { MirrorDirectory, MirrorProblem, SlotFileInfo, SlotHandle } from './mirror-directory.ts'
 import { SLOT_FILE_NAMES } from './mirror-directory.ts'
@@ -39,6 +39,8 @@ function pathOf(key: DraftKey, slot: 0 | 1): string {
 export function fakeMirrorDirectory(options: { readonly clock?: () => number } = {}): FakeMirrorDirectory {
   const clock = options.clock ?? (() => 0)
   const files = new Map<string, Uint8Array<ArrayBuffer>>()
+  /** 目录："用户" 与 "用户/文档" */
+  const directories = new Set<string>()
   const modified = new Map<string, number>()
   const locked = new Set<string>()
   const elsewhere = new Set<string>()
@@ -55,18 +57,23 @@ export function fakeMirrorDirectory(options: { readonly clock?: () => number } =
   }
 
   function put(path: string, bytes: Uint8Array<ArrayBuffer>): void {
+    const [owner = '', documentId = ''] = path.split('/')
+    directories.add(owner)
+    directories.add(`${owner}/${documentId}`)
     files.set(path, bytes)
     modified.set(path, clock())
   }
 
-  function documentPaths(): Map<string, readonly [string, string]> {
-    const documents = new Map<string, readonly [string, string]>()
-    for (const path of files.keys()) {
-      const [owner, documentId] = path.split('/')
-      if (owner !== undefined && documentId !== undefined)
-        documents.set(`${owner}/${documentId}`, [owner, documentId])
-    }
-    return documents
+  /** 删掉 prefix 这个目录与它下面的一切（有句柄开着时 busy，什么也不删） */
+  function removeTree(prefix: string): { readonly kind: 'removed' } | { readonly kind: 'busy' } {
+    const inside = (path: string): boolean => path === prefix || path.startsWith(`${prefix}/`)
+    if ([...files.keys()].some(path => inside(path) && (locked.has(path) || elsewhere.has(path))))
+      return { kind: 'busy' }
+    for (const path of [...files.keys()].filter(inside))
+      files.delete(path)
+    for (const directory of [...directories].filter(inside))
+      directories.delete(directory)
+    return { kind: 'removed' }
   }
 
   function handleFor(path: string): SlotHandle {
@@ -144,16 +151,13 @@ export function fakeMirrorDirectory(options: { readonly clock?: () => number } =
       return { kind: 'opened', slots: [handleFor(paths[0]), handleFor(paths[1])] }
     },
     listDocuments: async (userId) => {
-      const documents = [...documentPaths().values()].filter(([owner]) => owner === userId).map(([, documentId]) => documentId)
+      const documents = [...directories].filter(directory => directory.startsWith(`${userId}/`)).map(directory => directory.slice(userId.length + 1))
       return { kind: 'listed', documentIds: documents.sort() }
     },
-    listUsers: async () => {
-      const users = new Set([...documentPaths().values()].map(([owner]) => owner))
-      return { kind: 'listed', userIds: [...users].sort() }
-    },
+    listUsers: async () => ({ kind: 'listed', userIds: [...directories].filter(directory => !directory.includes('/')).sort() }),
     slotFiles: async (key) => {
       const paths = [pathOf(key, 0), pathOf(key, 1)] as const
-      if (!paths.some(path => files.has(path)))
+      if (!directories.has(`${key.userId}/${key.documentId}`))
         return { kind: 'absent' }
       // 与浏览器一样（Chromium 系与 WebKit 实测）：别的句柄拿着时 getFile 照样读得出大小与改动时刻，删目录才是 busy
       const info = (path: string): SlotFileInfo | undefined => {
@@ -162,20 +166,8 @@ export function fakeMirrorDirectory(options: { readonly clock?: () => number } =
       }
       return { kind: 'files', files: [info(paths[0]), info(paths[1])] }
     },
-    removeUser: async (userId) => {
-      const paths = [...files.keys()].filter(path => path.startsWith(`${userId}/`))
-      if (paths.some(path => locked.has(path) || elsewhere.has(path)))
-        return { kind: 'busy' }
-      paths.forEach(path => files.delete(path))
-      return { kind: 'removed' }
-    },
-    removeDocument: async (key) => {
-      const paths = [pathOf(key, 0), pathOf(key, 1)]
-      if (paths.some(path => locked.has(path) || elsewhere.has(path)))
-        return { kind: 'busy' }
-      paths.forEach(path => files.delete(path))
-      return { kind: 'removed' }
-    },
+    removeUser: async userId => removeTree(userId),
+    removeDocument: async key => removeTree(`${key.userId}/${key.documentId}`),
   }
 
   return {

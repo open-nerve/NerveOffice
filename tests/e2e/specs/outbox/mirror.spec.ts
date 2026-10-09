@@ -164,7 +164,11 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
     const after = await workerPipeline(page)
     const read = outcomeOf(await probePipeline(page, 'read', after, key), 'draft')
     expect([read.meta.draftSeq, read.gzip.text, read.gzip.sha256]).toEqual([2, 'two', written.gzip.sha256])
-    const [notice] = outcomeOf(await probePipeline(page, 'notices', after, key.userId), 'notices').notices
+    // 别人的提示不列
+    await probeDatabase(page, 'putRaw', 'notices', { userId: randomUUID(), documentId: key.documentId, kind: 'lost', at: Date.now() })
+    const listed = outcomeOf(await probePipeline(page, 'notices', after, key.userId), 'notices').notices
+    expect(listed).toHaveLength(1)
+    const [notice] = listed
     expect(notice).toMatchObject({ ...key, kind: 'restored' })
     expect(await probeDatabase(page, 'getRaw', 'notices', key), '提示存在库里').toMatchObject({ ...key, kind: 'restored', at: notice?.at })
     expect(await probePipeline(page, 'clearNotice', after, key, (notice?.at ?? 0) + 1), '读出之后又留下的新提示不清').toEqual({ kind: 'changed' })
@@ -192,6 +196,23 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
     const after = await workerPipeline(page)
     expect(await probePipeline(page, 'read', after, key)).toEqual({ kind: 'absent' })
     expect(outcomeOf(await probePipeline(page, 'notices', after, key.userId), 'notices').notices).toEqual([expect.objectContaining({ ...key, kind: 'lost' })])
+    expect(await slotsOf(page, key)).toEqual(['empty', 'empty'])
+  })
+
+  test('两个槽位都坏了、库里没有草稿而写入者还在（草稿是被删掉的）：不算丢失、不留提示，没用的槽位截断', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-not-lost')
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    await probePipeline(page, 'register', before, key, writer, false)
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 1, 'one')), 'written')
+    await probePipeline(page, 'dispose', before)
+    expect(await probe(page, 'remove', key)).toEqual({ kind: 'removed' })
+    await probePipeline(page, 'corruptSlot', key, 0, { truncate: 300 })
+    await probePipeline(page, 'corruptSlot', key, 1, { fill: 400, value: 7 })
+
+    const after = await workerPipeline(page)
+    expect(await probePipeline(page, 'read', after, key)).toEqual({ kind: 'absent' })
+    expect(await probePipeline(page, 'notices', after, key.userId)).toEqual({ kind: 'notices', notices: [] })
     expect(await slotsOf(page, key)).toEqual(['empty', 'empty'])
   })
 

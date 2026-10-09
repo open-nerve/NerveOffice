@@ -324,6 +324,16 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
     expect(await wiped.read(KEY)).toEqual({ kind: 'absent' })
     expect(wipedStore.calls.filter(call => call === 'recordLost'), '截断之后不再核对').toHaveLength(1)
 
+    // 库那一侧出了问题（写满）：没核对成，槽位留着，下一次再核对
+    await tear()
+    const failingStore = fakeDraftStore()
+    failingStore.failNext('recordLost', { kind: 'quota' })
+    const failing = await reopen({ store: failingStore })
+    expect(await failing.read(KEY)).toEqual({ kind: 'absent' })
+    expect(await slots(files)).toEqual(['invalid:torn', 'invalid:torn'])
+    expect(await failing.read(KEY)).toEqual({ kind: 'absent' })
+    expect(readRecoveryNotice(failingStore.rawNotice(KEY))?.kind).toBe('lost')
+
     await tear()
     const withWriter = fakeDraftStore()
     withWriter.putRaw('writers', KEY, { ...KEY, ...ME, lastDraftSeq: 1, registeredAt: NOW })
@@ -499,6 +509,23 @@ describe('补写（§3.8）：库里那一份比镜像里最新的合格那一�
     files.failWrite(0, 5, 'QuotaExceededError')
     const full = await reopen()
     expect(await full.register(KEY, ME, false)).toMatchObject({ kind: 'registered', existing: { kind: 'draft', meta: { draftSeq: 2 } }, mirror: { kind: 'not-mirrored', reason: 'quota' } })
+  })
+
+  it('读草稿时两个槽位都不合格、库里有草稿、本页拿着句柄：补写（不核对丢失）；库里是认不出的记录时不核对丢失', async () => {
+    const { store, files, writer } = await setup()
+    await writer.write(capture(1, 'one'))
+    files.failWrite(0, 5, 'QuotaExceededError')
+    await writer.write(capture(2, 'two'))
+    files.putFile(KEY, 0, new Uint8Array(400).fill(7))
+    expect(await slots(files)).toEqual(['invalid:torn', 'invalid:torn'])
+    expect(await writer.read(KEY)).toMatchObject({ kind: 'draft', meta: { draftSeq: 2 } })
+    expect(await slots(files)).toEqual(['invalid:torn', 'seq2'])
+    expect(store.calls).not.toContain('recordLost')
+
+    files.putFile(KEY, 1, new Uint8Array(400).fill(7))
+    store.putRaw('drafts', KEY, { ...KEY, recordVersion: 99 })
+    expect(await writer.read(KEY)).toEqual({ kind: 'newer-format', recordVersion: 99 })
+    expect(store.calls).not.toContain('recordLost')
   })
 
   it('读草稿时本页拿着句柄（写入者）：库里的更新就补写；不是写入者的（打开平台时的比对）不动镜像', async () => {

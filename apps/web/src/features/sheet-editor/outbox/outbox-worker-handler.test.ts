@@ -224,8 +224,8 @@ describe('OPFS 的镜像（M4-P1 设计 §3.8）：镜像交给管道；放开�
     expect(await send({ type: 'reconcile', userId: USER_ID }, 7)).toMatchObject({ ok: true, result: { kind: 'reconciled', documents: 1 } })
     expect(await send({ type: 'notices', userId: USER_ID }, 8)).toEqual({ v: OUTBOX_PROTOCOL_VERSION, id: 8, ok: true, result: { kind: 'notices', notices: [{ ...DRAFT, kind: 'restored', at: NOW }] } })
     expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: NOW + 1 }, 9)).toMatchObject({ ok: true, result: { kind: 'changed' } })
-    expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: NOW }, 10)).toMatchObject({ ok: true, result: { kind: 'cleared' } })
-    expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: null }, 11)).toMatchObject({ ok: true, result: { kind: 'absent' } })
+    expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: null }, 10), '不带时刻：照清').toMatchObject({ ok: true, result: { kind: 'cleared' } })
+    expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: NOW }, 11)).toMatchObject({ ok: true, result: { kind: 'absent' } })
   })
 })
 
