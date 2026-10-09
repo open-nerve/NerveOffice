@@ -69,6 +69,10 @@ export default defineConfig({
         'apps/web/src/shared/outbox/database.ts',
         'apps/web/src/shared/outbox/draft-store.ts',
         'apps/web/src/shared/outbox/draft-index.ts',
+        // OPFS 镜像的目录与同步访问句柄（M4-P1 设计 §3.8）：jsdom 与 Node 都没有 OPFS，同步访问句柄只在浏览器的专用 Worker 里有；由三个浏览器的
+        // 浏览器层用例覆盖（tests/e2e/specs/outbox/mirror.spec.ts，持久化的浏览器目录）。两个槽位轮流写、退避、读与校验在 draft-mirror.ts 与
+        // mirror-slot.ts，单元测试换成内存里的目录
+        'apps/web/src/shared/outbox/mirror-directory.ts',
         // 发件箱 Worker 的入口只做组装（接上处理、存储与空定时器），由浏览器层用例覆盖；处理、客户端与管道在单元测试里测
         'apps/web/src/features/sheet-editor/outbox/outbox.worker.ts',
         // 编辑器页测试构建里的探针：只在测试构建里，浏览器层用例经它调用生产代码

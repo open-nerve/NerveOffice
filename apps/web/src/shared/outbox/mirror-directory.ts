@@ -124,15 +124,27 @@ async function childDirectories(directory: FileSystemDirectoryHandle): Promise<s
 }
 
 /**
- * OPFS 里的镜像目录。root 默认是 navigator.storage.getDirectory()；没有时一律 unsupported。
+ * OPFS 里的镜像目录。root 默认是 navigator.storage.getDirectory()；没有这个接口、或者它拿不到根目录时一律 unsupported：
+ * 拿不到根目录是这个来源在这里没有 OPFS——WebKit 的临时数据存储（Playwright 默认的上下文）报 UnknownError，Firefox 的隐私窗口报
+ * SecurityError；不当作一时的出错去退避再试。
  * 删目录（removeUser、removeDocument）不用同步访问句柄，页面里也能做（P4 的退出登录、保留期在平台页面里）
  */
 export function opfsMirrorDirectory(root: () => Promise<FileSystemDirectoryHandle> | undefined = defaultRoot): MirrorDirectory {
-  async function base(create: boolean): Promise<FileSystemDirectoryHandle | undefined | 'unsupported'> {
+  async function rootDirectory(): Promise<FileSystemDirectoryHandle | 'unsupported'> {
     const opened = root()
     if (opened === undefined)
       return 'unsupported'
-    return directoryIn(await opened, MIRROR_ROOT_NAME, create)
+    try {
+      return await opened
+    }
+    catch {
+      return 'unsupported'
+    }
+  }
+
+  async function base(create: boolean): Promise<FileSystemDirectoryHandle | undefined | 'unsupported'> {
+    const top = await rootDirectory()
+    return top === 'unsupported' ? top : directoryIn(top, MIRROR_ROOT_NAME, create)
   }
 
   async function documentDirectory(key: DraftKey, create: boolean): Promise<FileSystemDirectoryHandle | undefined | 'unsupported'> {

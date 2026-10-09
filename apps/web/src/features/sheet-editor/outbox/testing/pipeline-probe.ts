@@ -5,18 +5,24 @@
 // - recording：记下事务的测试脚本（outbox-probe.worker.ts：先包住 Worker 里的开事务、经 BroadcastChannel 报给这里，再引入生产的入口）；
 // - missing：不存在的脚本（加载失败）。
 // 交回的都是能经 page.evaluate 传回的普通值：gzip 只交回字节数与 SHA-256、解压之后的内容（长的只交回长度与 SHA-256）；不交出密钥。
+// OPFS 的镜像（S9）：放开句柄、比对、取走事件交给管道；槽位文件经测试构建的另一个 Worker（opfs-probe.worker.ts）读出、改坏，在页面里
+// 按生产的格式（mirror-slot.ts）校验；用完按用户删掉镜像的目录（生产的 opfsMirrorDirectory，页面里删）。
 // 不引用编辑器页的时钟模块（它带着请求层与 zod，见 outbox-probe.ts 开头的说明）：看门狗用这里的计时器
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { DraftKey, DraftMeta, InFlightSave } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, DraftWriter, KeyChange, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../../shared/outbox/draft-writer.ts'
+import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, DraftWriter, KeyChange, ReconcileResult, RecoveryEvent, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../../shared/outbox/draft-writer.ts'
+import type { MirrorRemoveOutcome } from '../../../../shared/outbox/mirror-directory.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
 import type { OutboxWorkerFailure, OutboxWorkerReady, WorkerLike } from '../outbox-worker-client.ts'
+import type { OpfsProbeCall, OpfsProbeReply } from './opfs-probe.worker.ts'
 import { gunzipBytes, openDraft, sha256Hex } from '../../../../shared/outbox/draft-codec.ts'
 import { draftMetaOf } from '../../../../shared/outbox/draft-record.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { createDraftWriter } from '../../../../shared/outbox/draft-writer.ts'
 import { describeFailure } from '../../../../shared/outbox/failure.ts'
+import { opfsMirrorDirectory, SLOT_FILE_NAMES } from '../../../../shared/outbox/mirror-directory.ts'
+import { parseSlot } from '../../../../shared/outbox/mirror-slot.ts'
 import { createOutboxWorker, createOutboxWorkerClient } from '../outbox-worker-client.ts'
 
 export type ProbeHost = 'in-process' | 'worker'
@@ -61,6 +67,16 @@ export type ProbeStoredGzip
     | { readonly kind: 'absent' | 'newer-format' | 'malformed' | 'no-key' }
     | WriterProblem
 
+/** 镜像的一个槽位文件：不在、空的、不合格（原因与字节数）、合格（头里的写入者、序号与代号，内容里的元数据） */
+export type ProbeSlot
+  = | { readonly kind: 'missing' }
+    | { readonly kind: 'empty' }
+    | { readonly kind: 'invalid', readonly reason: string, readonly size: number }
+    | { readonly kind: 'valid', readonly generation: number, readonly meta: DraftMeta, readonly size: number }
+
+/** 把槽位改坏：截成 size 字节（写一半）；整个换成 size 个 value（垃圾） */
+export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number }
+
 export interface ProbePipeline {
   /** 建一个管道：交回编号与握手的结果（Worker 等握手；进程内一律 ready） */
   readonly create: (options: ProbePipelineOptions) => Promise<{ readonly id: number, readonly ready: OutboxWorkerReady }>
@@ -85,6 +101,20 @@ export interface ProbePipeline {
   readonly storedGzip: (key: DraftKey) => Promise<ProbeStoredGzip>
   /** 记事务的 Worker 脚本报来的事务（按报来的先后） */
   readonly workerTransactions: (id: number) => readonly ProbeWorkerTransaction[]
+  /** 这一页不再是写入者：放开镜像的句柄（S9） */
+  readonly release: (id: number, key: DraftKey) => Promise<void>
+  /** 打开平台时的比对（S9） */
+  readonly reconcile: (id: number, userId: string) => Promise<ReconcileResult>
+  /** 取走比对留下的事件（S9） */
+  readonly takeEvents: (id: number) => Promise<readonly RecoveryEvent[]>
+  /** 镜像的两个槽位文件（a、b）读出来的样子：要先让发件箱 Worker 放开句柄 */
+  readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
+  /** 把一个槽位改坏（同样要先放开句柄） */
+  readonly corruptSlot: (key: DraftKey, slot: 0 | 1, corruption: ProbeCorruption) => Promise<void>
+  /** 删掉这个用户的镜像目录（用例收尾：WebKit 在 macOS 上把 OPFS 放在共用的目录里）；先 disposeAll 放开句柄 */
+  readonly removeMirror: (userId: string) => Promise<MirrorRemoveOutcome>
+  /** 关掉这一页的全部管道（Worker 随之终止、句柄放开）与 OPFS 的探针 Worker */
+  readonly disposeAll: () => void
 }
 
 /** 探针给管道的：它当前的密钥与存储（storedGzip 用它读库） */
@@ -150,6 +180,49 @@ interface Pipeline {
 export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
   const pipelines = new Map<number, Pipeline>()
   let nextId = 1
+  let opfsWorker: Worker | undefined
+  let opfsRequestId = 0
+  const opfsReplies = new Map<number, (reply: OpfsProbeReply) => void>()
+
+  /** 经测试构建的 OPFS Worker 读、改槽位文件 */
+  async function opfs(request: OpfsProbeCall): Promise<Uint8Array<ArrayBuffer> | null> {
+    if (opfsWorker === undefined) {
+      opfsWorker = new Worker(new URL('./opfs-probe.worker.ts', import.meta.url), { type: 'module', name: 'nerve-opfs-probe' })
+      opfsWorker.addEventListener('message', (event: MessageEvent<OpfsProbeReply>) => {
+        opfsReplies.get(event.data.id)?.(event.data)
+        opfsReplies.delete(event.data.id)
+      })
+    }
+    opfsRequestId += 1
+    const id = opfsRequestId
+    const target = opfsWorker
+    const reply = await new Promise<OpfsProbeReply>((resolve) => {
+      opfsReplies.set(id, resolve)
+      target.postMessage({ ...request, id })
+    })
+    if (!reply.ok)
+      throw new Error(`OPFS 的探针 Worker 出错：${reply.error.name} ${reply.error.message}`)
+    return reply.bytes
+  }
+
+  function pathOf(key: DraftKey, slot: 0 | 1): readonly string[] {
+    return [key.userId, key.documentId, SLOT_FILE_NAMES[slot]]
+  }
+
+  async function slotOf(key: DraftKey, slot: 0 | 1): Promise<ProbeSlot> {
+    const bytes = await opfs({ op: 'read', path: pathOf(key, slot) })
+    if (bytes === null)
+      return { kind: 'missing' }
+    const read = await parseSlot(bytes)
+    switch (read.kind) {
+      case 'empty':
+        return { kind: 'empty' }
+      case 'invalid':
+        return { kind: 'invalid', reason: read.reason, size: bytes.byteLength }
+      case 'valid':
+        return { kind: 'valid', generation: read.header.generation, meta: draftMetaOf(read.record), size: bytes.byteLength }
+    }
+  }
 
   function pipelineOf(id: number): Pipeline {
     const pipeline = pipelines.get(id)
@@ -245,5 +318,22 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
       }
     },
     workerTransactions: id => [...pipelineOf(id).transactions],
+    release: async (id, key) => pipelineOf(id).writer.release(key),
+    reconcile: async (id, userId) => pipelineOf(id).writer.reconcile(userId),
+    takeEvents: async id => pipelineOf(id).writer.takeRecoveryEvents(),
+    mirrorSlots: async key => [await slotOf(key, 0), await slotOf(key, 1)],
+    corruptSlot: async (key, slot, corruption) => {
+      await opfs('truncate' in corruption ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate } : { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value })
+    },
+    removeMirror: async userId => opfsMirrorDirectory().removeUser(userId),
+    disposeAll: () => {
+      for (const pipeline of pipelines.values()) {
+        pipeline.writer.dispose()
+        pipeline.channel?.close()
+      }
+      pipelines.clear()
+      opfsWorker?.terminate()
+      opfsWorker = undefined
+    },
   }
 }

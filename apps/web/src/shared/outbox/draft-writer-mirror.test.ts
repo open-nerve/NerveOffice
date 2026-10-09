@@ -340,6 +340,28 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
       expect(readStoredDraft(wiped.rawDraft(key)).kind).toBe('draft')
   })
 
+  it('库里已经是镜像里那一份或者更新的（打开、读草稿时的常事）：只读地看库，不开读写的事务；库里更旧时才交给存储写回', async () => {
+    const { store, files, writer, key, reopen } = await setup()
+    await writer.register(OTHER_DOCUMENT, ME, false)
+    await writer.write(capture(1, 'one'))
+    await writer.write(capture(1, 'other', { key: OTHER_DOCUMENT }))
+    writer.dispose()
+    const reopened = await reopen()
+    const callsOf = async (action: () => Promise<unknown>): Promise<string[]> => {
+      const before = store.calls.length
+      await action()
+      return store.calls.slice(before)
+    }
+    expect(await callsOf(async () => reopened.read(KEY)), '读草稿：读库一次').toEqual(['readDraft'])
+    expect(await callsOf(async () => reopened.register(KEY, ME, false)), '登记：先只读地比对').toEqual(['readDraft', 'registerWriter'])
+    expect(await callsOf(async () => reopened.reconcile(USER_ID)), '打开平台时的比对').toEqual(['readDraft', 'readDraft'])
+    // 库里的更旧（库丢了已提交的写入）：交给存储在一个事务里判定、写回
+    await reopened.release(KEY)
+    await putSlot(files, KEY, 1, await sealed(key, 'two', { draftSeq: 2 }), 99)
+    expect(await callsOf(async () => reopened.read(KEY))).toEqual(['readDraft', 'restoreDraft'])
+    expect(await reopened.takeRecoveryEvents()).toEqual([{ kind: 'restored', key: KEY }])
+  })
+
   it('没有镜像的宿主：读与比对照旧只看库，结果里是 off', async () => {
     const store = fakeDraftStore()
     const writer = createDraftWriter({ store: store.store, now: () => NOW })

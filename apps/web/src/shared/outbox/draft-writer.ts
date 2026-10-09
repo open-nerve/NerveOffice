@@ -16,7 +16,7 @@ import type { OutboxUnavailable } from './database.ts'
 import type { LocalKeyHandle } from './draft-codec.ts'
 import type { DraftMirror, MirrorRead, MirrorStatus } from './draft-mirror.ts'
 import type { ContentFormat, DraftKey, DraftMeta, InFlightSave, ReadDraft, StoredDraft } from './draft-record.ts'
-import type { DraftStore, FenceReason, StoreProblem } from './draft-store.ts'
+import type { DraftStore, FenceReason, StoreProblem, StoreReadOutcome } from './draft-store.ts'
 import type { FailureDescription } from './failure.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { gzipBytes, openDraft, sealDraft, sha256Hex, unsealFailureOf } from './draft-codec.ts'
@@ -281,16 +281,24 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
   /**
    * 比对这份文档的镜像与库（§3.8）：两个槽位里最新的合格的那一份比库里新时写回（存储按 decideRestore 判定，连同写入者），留下 restored；
    * 镜像过时（那一份被确认删掉、放弃过，或者超过保留期）时截断它；两个槽位都不合格（写一半、对不上）、库里没有草稿也没有写入者
-   * （删库）时留下 lost。交回镜像读出的样子（读草稿、登记时接着用；截断了的交回 undefined）。没有镜像时什么也不做
+   * （删库）时留下 lost。交回镜像读出的样子（读草稿、登记时接着用；截断了的交回 undefined）。没有镜像时什么也不做。
+   * 库里那一份先只读地看（stored：读草稿时已经读了的就用它）：库里已经是镜像里那一份或者更新的（打开、读草稿时的常事）不开读写的事务；
+   * 库里没有、更旧时才交给存储在一个事务里判定、写回；库用不了时不比对（读草稿时交回镜像里的）
    */
-  async function reconcileKey(key: DraftKey): Promise<MirrorRead | undefined> {
+  async function reconcileKey(key: DraftKey, stored?: StoreReadOutcome): Promise<MirrorRead | undefined> {
     if (mirror === undefined)
       return undefined
     const read = await mirror.read(key)
     if (read.kind !== 'slots')
       return read
     const newest = mirroredRecords(read)[0]
+    const torn = read.slots.some(slot => slot.kind === 'invalid' && slot.reason !== 'newer-format')
+    if (newest === undefined && !torn)
+      return read
+    const current = stored ?? await store.readDraft(key)
     if (newest !== undefined) {
+      if (current.kind !== 'absent' && (current.kind !== 'draft' || compareDrafts(current.draft, newest) >= 0))
+        return read
       const outcome = await store.restoreDraft(newest, { now: now() })
       if (outcome.kind === 'restored')
         report('restored', key)
@@ -300,10 +308,9 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       }
       return read
     }
-    if (read.slots.some(slot => slot.kind === 'invalid' && slot.reason !== 'newer-format')) {
-      const draft = await store.readDraft(key)
+    if (current.kind === 'absent') {
       const writer = await store.readWriter(key)
-      if (draft.kind === 'absent' && writer.kind === 'writer' && writer.writer === undefined)
+      if (writer.kind === 'writer' && writer.writer === undefined)
         report('lost', key)
     }
     return read
@@ -566,8 +573,9 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
     }, error => ({ kind: 'failed', error })),
 
     read: async key => enqueue(key, async (): Promise<DraftRead> => {
-      const mirrored = await reconcileKey(key)
+      // 先读库（只读），再拿它比对镜像：写回了的、镜像里更新的都在下面的候选里（写回的就是镜像里那一份）
       const read = await store.readDraft(key)
+      const mirrored = await reconcileKey(key, read)
       if (read.kind === 'quota' || read.kind === 'unavailable' || read.kind === 'failed') {
         // 库用不了：镜像里有合格的就交回它（读得出总比读不出好），没有时如实交回库的问题
         return mirroredRecords(mirrored).length > 0 ? await bestOf(undefined, mirrored) ?? problemOf(read) : problemOf(read)

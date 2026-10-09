@@ -4,11 +4,11 @@
 // 另有只属于 Worker 的：Worker 里读写的事务都要求 strict（记事务的测试脚本）、脚本加载失败与写入途中终止都不挂住。
 // 库里的那一份由探针自己的存储读出、用同一把密钥解开（storedGzip），与管道交回的 gzip 逐字节比较（SHA-256）。标签 @test-build
 import type { Page } from '@playwright/test'
-import type { DraftKey, InFlightSave, PipelineWritten, ProbeCapture, ProbeHost, ProbePipelineOptions, WriterIdentity } from '../../support/outbox-probe.ts'
+import type { DraftKey, InFlightSave, MirrorStatus, PipelineWritten, ProbeCapture, ProbeHost, ProbePipelineOptions, WriterIdentity } from '../../support/outbox-probe.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { contentOf, NOW, openOutboxProbe, outcomeOf, probe, probePipeline, writerOf } from '../../support/outbox-probe.ts'
+import { contentOf, NOW, openOutboxProbe, outcomeOf, probe, probePipeline, removeMirrorOf, writerOf } from '../../support/outbox-probe.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }
@@ -16,6 +16,25 @@ const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-
 const HOSTS: readonly ProbeHost[] = ['in-process', 'worker']
 
 const HOST_LABELS: Readonly<Record<ProbeHost, string>> = { 'in-process': '进程内', 'worker': '发件箱 Worker' }
+
+/**
+ * 镜像（S9）：进程内的宿主不做；发件箱 Worker 里写进 OPFS——这里是默认的上下文，WebKit 的临时数据存储没有 OPFS（拿不到根目录），
+ * 镜像是"用不了"、照样写 IndexedDB。镜像本身的用例在 mirror.spec.ts（持久化的浏览器目录，三个浏览器都有 OPFS）
+ */
+function mirrorOf(host: ProbeHost, browserName: string): MirrorStatus {
+  if (host === 'in-process')
+    return { kind: 'off' }
+  return browserName === 'webkit' ? { kind: 'not-mirrored', reason: 'unsupported' } : { kind: 'mirrored' }
+}
+
+/** 这一个用例的用户：收尾时删掉他的 OPFS 镜像目录 */
+let currentUserId: string | undefined
+
+test.afterEach(async ({ page }) => {
+  if (currentUserId !== undefined)
+    await removeMirrorOf(page, currentUserId)
+  currentUserId = undefined
+})
 
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
@@ -42,6 +61,7 @@ function inFlightOf(localSeq: number): InFlightSave {
 /** 登录、打开探针、选第 version 版的密钥（随机的一把，不可导出）；交回这份文档的键 */
 async function prepare(page: Page, prefix: string, version = 2): Promise<DraftKey> {
   const user = await createUser(prefix)
+  currentUserId = user.id
   await loginThroughApi(page, user)
   await openOutboxProbe(page)
   await probe(page, 'chooseKey', version)
@@ -58,15 +78,17 @@ async function pipelineOn(page: Page, options: ProbePipelineOptions): Promise<nu
 
 for (const host of HOSTS) {
   test.describe(`写入管道（${HOST_LABELS[host]}）`, { tag: '@test-build' }, () => {
-    test('整条管道：写入 → 交回的 gzip 就是库里加密的那一份 → 去重 → 标记在途 → 上传期间又写一份 → 确认改基准 → 再确认删掉；大的内容同样一致', async ({ page }) => {
+    test('整条管道：写入 → 交回的 gzip 就是库里加密的那一份 → 去重 → 标记在途 → 上传期间又写一份 → 确认改基准 → 再确认删掉；大的内容同样一致', async ({ page, browserName }) => {
+      const mirror = mirrorOf(host, browserName)
       const key = await prepare(page, `ob-pipe-${host}`)
       const id = await pipelineOn(page, { host })
       const writer = writerOf(3)
-      expect(await probePipeline(page, 'register', id, key, writer, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined })
+      expect(await probePipeline(page, 'register', id, key, writer, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror })
 
       const first = contentOf(writer, 1)
       const written = outcomeOf(await probePipeline(page, 'write', id, captureOf(key, writer, 1, first)), 'written')
       expect(written.gzip.text, '交回的 gzip 解压之后就是写入的内容').toBe(first)
+      expect(written.mirror, 'Worker 里写进 OPFS 的镜像（S9），进程内的宿主不做镜像').toEqual(mirror)
       expect(written.digest).toBe(sha256(first))
       const stored = outcomeOf(await probePipeline(page, 'storedGzip', key), 'gzip')
       expect(stored.gzip.sha256, '交回的 gzip 与库里解开的逐字节相同').toBe(written.gzip.sha256)
@@ -92,7 +114,7 @@ for (const host of HOSTS) {
       // 第 3 份的确认：删掉；高水位留着
       expect(await probePipeline(page, 'confirm', id, key, writer, 3, 3)).toEqual({ kind: 'deleted' })
       expect(await probePipeline(page, 'storedGzip', key)).toEqual({ kind: 'absent' })
-      expect(await probePipeline(page, 'register', id, key, writer, false)).toEqual({ kind: 'registered', lastDraftSeq: 3, existing: undefined })
+      expect(await probePipeline(page, 'register', id, key, writer, false)).toEqual({ kind: 'registered', lastDraftSeq: 3, existing: undefined, mirror })
 
       // 大的内容（约 2 MiB、几乎压不动）：Worker 转移字节与 gzip，照样一致
       const large = outcomeOf(await probePipeline(page, 'write', id, captureOf(key, writer, 4, { randomBase64Chars: 2 * 1024 * 1024 })), 'written')
