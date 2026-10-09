@@ -40,6 +40,8 @@ export const API_CONTROLLER = 'apps/api/src/modules/health/health.controller.ts'
 export const API_SERVICE = 'apps/api/src/modules/health/application-state.ts'
 export const API_CONFIG = 'apps/api/src/modules/config/config.ts'
 export const INTEGRATION_FILE = 'tests/integration/src/support/api-app.ts'
+/** E2E 与集成测试共用的测试辅助（tests/shared，在根目录的 tsconfig 里，M4-P1 S7） */
+export const TESTS_SHARED_FILE = 'tests/shared/test-databases.ts'
 /** 集成测试专用的入口（包的出口 @nerve-office/api/testing，M2-P6 复验 R-S4） */
 export const API_INTEGRATION_ENTRY = 'apps/api/src/app/integration.test-support.ts'
 

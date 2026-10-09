@@ -1207,6 +1207,8 @@ export default antfu(
         { type: 'tools', pattern: 'tools/src', partialMatch: false },
         { type: 'integration-tests', pattern: 'tests/integration', partialMatch: false },
         { type: 'e2e-tests', pattern: 'tests/e2e', partialMatch: false },
+        // E2E 与集成测试共用的测试辅助（例如测试库的命名，M4-P1 S7）：两边都可以引用它，它不引用两边
+        { type: 'tests-shared', pattern: 'tests/shared', partialMatch: false },
       ],
     },
     rules: {
@@ -1218,9 +1220,10 @@ export default antfu(
         policies: [
           // 同一个元素内部的引用不受限制
           {
-            from: { element: { type: ['contracts', 'web-app', 'web-shared', 'web-editor', 'web-build', 'api-app', 'api-shared', 'api-cli', 'tools', 'integration-tests', 'e2e-tests'] } },
+            from: { element: { type: ['contracts', 'web-app', 'web-shared', 'web-editor', 'web-build', 'api-app', 'api-shared', 'api-cli', 'tools', 'integration-tests', 'e2e-tests', 'tests-shared'] } },
             allow: { to: { element: { type: '{{from.element.type}}' } } },
           },
+          { from: { element: { type: ['integration-tests', 'e2e-tests'] } }, allow: { to: { element: { type: 'tests-shared' } } } },
           { from: { element: { type: 'web-entry' } }, allow: { to: { element: { type: 'web-entry', captured: { entry: '{{from.element.captured.entry}}' } } } } },
           { from: { element: { type: 'web-feature' } }, allow: { to: { element: { type: 'web-feature', captured: { feature: '{{from.element.captured.feature}}' } } } } },
           // 跨元素：contracts、功能模块与编辑器只经公开入口（index.ts）；应用与共享层是被组合的一方，可以直接引用

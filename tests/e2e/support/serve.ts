@@ -1,6 +1,6 @@
 // E2E 的服务（P3 设计 §3.10）：由 Playwright 的 webServer 启动（node support/serve.ts）。
 // 1. 建一个本次运行专用的数据库（名称带主机的标识与 Playwright 主进程的进程号），先清理本主机建的、进程已经不在的遗留库
-//    （别的主机建的不动：environment.ts 的 abandonedDatabases）；
+//    （别的主机建的不动：tests/shared/test-databases.ts）；
 // 2. 执行迁移命令；3. 用初始化命令创建管理员（密码经标准输入）；
 // 4. 启动构建好的后端，托管测试构建（apps/web/dist-e2e）；5. 停止时先停后端，再删除数据库。
 //
@@ -24,7 +24,8 @@ import { dirname } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pg from 'pg'
-import { abandonedDatabases, E2E_ADMIN, E2E_DATABASE_PREFIX, E2E_LOCAL_KEYS_MASTER_KEY, e2eDatabaseUrl, e2eOrigin, e2ePort, hostTag, maintenanceDatabaseUrl } from './environment.ts'
+import { abandonedNames } from '../../shared/test-databases.ts'
+import { E2E_ADMIN, E2E_DATABASE_PREFIX, E2E_LOCAL_KEYS_MASTER_KEY, e2eDatabaseUrl, e2eOrigin, e2ePort, maintenanceDatabaseUrl } from './environment.ts'
 import { writeServerControl } from './server-control.ts'
 
 const API_DIST = fileURLToPath(new URL('../../../apps/api/dist', import.meta.url))
@@ -64,16 +65,6 @@ async function withMaintenance<T>(fn: (client: pg.Client) => Promise<T>): Promis
   }
 }
 
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  }
-  catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
 /** 名称校验后才拼进 DDL：数据库名不能用参数 */
 function quoted(name: string): string {
   if (!/^[a-z0-9_]+$/.test(name))
@@ -85,7 +76,7 @@ function quoted(name: string): string {
 async function dropAbandonedDatabases(): Promise<void> {
   await withMaintenance(async (client) => {
     const { rows } = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [E2E_DATABASE_PREFIX])
-    for (const datname of abandonedDatabases(rows.map(row => row.datname), hostTag(), isAlive))
+    for (const datname of abandonedNames(rows.map(row => row.datname), { prefix: E2E_DATABASE_PREFIX }))
       await client.query(`DROP DATABASE IF EXISTS ${quoted(datname)} WITH (FORCE)`)
   })
 }

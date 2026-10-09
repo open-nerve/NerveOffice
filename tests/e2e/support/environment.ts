@@ -1,9 +1,8 @@
 // E2E 的运行环境（P3 设计 §3.10）：地址、管理员账户、数据库。Playwright 的配置、服务脚本与测试共用。
 import type { AddressInfo } from 'node:net'
-import { createHash } from 'node:crypto'
 import { createServer } from 'node:net'
-import { hostname } from 'node:os'
 import process from 'node:process'
+import { hostScopedName } from '../../shared/test-databases.ts'
 
 /** 服务脚本用初始化命令创建的管理员（US-M1-01 的 E2E 用它登录）。只存在于本次运行的测试库里 */
 export const E2E_ADMIN = { username: 'e2e-admin', displayName: 'E2E 管理员', password: 'e2e admin password 2026' } as const
@@ -53,32 +52,11 @@ const LOCAL_MAINTENANCE_URL = 'postgres://nerve:nerve_dev_only@127.0.0.1:54318/n
 export const E2E_DATABASE_PREFIX = 'nerve_e2e_'
 
 /**
- * 这台主机的标识：主机名的短哈希（8 个小写十六进制字符）。测试库的名字带上它（e2eDatabaseName），服务脚本启动时只清理本主机建的、
- * 按本主机的进程号判断这次运行还在不在（abandonedDatabases）。不带它时，别的主机（Docker 容器、别的机器）连同一个库服务器，
- * 它们的进程号在本主机上看不到，会把对方正在用的库当成遗留删掉（M4-P1 S7：容器里的运行与宿主机上的运行互相删了对方的库）。
- * 容器的主机名是容器的 id，每个容器各不相同
+ * 本次运行的测试库名：nerve_e2e_<主机标识>_<进程号>（Playwright 的主进程，或页面自检的驱动脚本）。服务脚本启动时只清理本主机建的、
+ * 按本主机的进程号判断这次运行还在不在（tests/shared/test-databases.ts，M4-P1 S7 的事故之后）
  */
-export function hostTag(name: string = hostname()): string {
-  return createHash('sha256').update(name).digest('hex').slice(0, 8)
-}
-
-/** 本次运行的测试库名：前缀、主机的标识与进程号（Playwright 的主进程，或页面自检的驱动脚本）。只有小写字母、数字与下划线 */
-export function e2eDatabaseName(pid: number, tag: string = hostTag()): string {
-  return `${E2E_DATABASE_PREFIX}${tag}_${pid}`
-}
-
-/** 测试库名的形状（前缀里只有小写字母与下划线，直接拼进正则） */
-const E2E_DATABASE_NAME = new RegExp(`^${E2E_DATABASE_PREFIX}([0-9a-f]{8})_(\\d+)$`)
-
-/**
- * 遗留的测试库：本主机建的（主机的标识相同）、进程已经不在的。别的主机建的、认不出主机的（改名之前的旧写法 nerve_e2e_<进程号>、
- * 形状不对的）一律不动；isAlive 只问本主机的进程号
- */
-export function abandonedDatabases(names: readonly string[], tag: string, isAlive: (pid: number) => boolean): string[] {
-  return names.filter((name) => {
-    const match = E2E_DATABASE_NAME.exec(name)
-    return match !== null && match[1] === tag && !isAlive(Number(match[2]))
-  })
+export function e2eDatabaseName(pid: number): string {
+  return hostScopedName(E2E_DATABASE_PREFIX, pid)
 }
 
 export function maintenanceDatabaseUrl(): string {

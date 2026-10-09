@@ -5,6 +5,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import process from 'node:process'
 import { readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import pg from 'pg'
+import { abandonedNames, hostScopedName } from '../../../shared/test-databases.ts'
 import { describeViolations, invariantViolations } from './invariants.ts'
 
 /** 本机开发数据库（deploy/dev/compose.yaml）；CI 用环境变量指向服务容器。建库、删库都经它（维护库）执行。 */
@@ -61,39 +62,25 @@ function templateName(): string {
   return `${TEMPLATE_PREFIX}${digest.digest('hex').slice(0, 12)}`
 }
 
-/** 进程还在的测试库属于正在运行的测试文件（可能在别的 worktree 里）；进程已经不在的，是中断的测试运行留下的。 */
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  }
-  catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
-}
-
-/** 测试库的名字：带着进程号，中断的测试运行留下的库可以识别出来。 */
+/**
+ * 测试库的名字：nerve_it_<主机标识>_<进程号>_<随机>。主机标识与进程号让中断的测试运行留下的库认得出来、只由本主机清理
+ * （tests/shared/test-databases.ts，M4-P1 S7 的事故之后）；随机的部分区分同一个进程里的多个库
+ */
 export function testDatabaseName(): string {
-  return `${DATABASE_PREFIX}${process.pid}_${randomBytes(4).toString('hex')}`
+  return `${hostScopedName(DATABASE_PREFIX)}_${randomBytes(4).toString('hex')}`
 }
 
 /**
- * 删除中断的测试运行留下的库（名字里带着创建它的进程号，审查 A15），
- * 以及角色（bootstrap 脚本的测试建的，名字是库名加 _owner、_app）：角色拥有的库先删掉，角色才能删。
+ * 删除中断的测试运行留下的库（审查 A15），以及角色（bootstrap 脚本的测试建的，名字是库名加 _owner、_app）：角色拥有的库先删掉，角色才能删。
+ * 只认本主机建的、按本主机的进程号判断：别的主机（容器、别的机器）连同一个库服务器时，它们正在用的库与角色不动。模板库不在此列
  */
 async function dropAbandoned(client: pg.Client): Promise<void> {
   const databases = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [DATABASE_PREFIX])
-  for (const { datname } of databases.rows) {
-    const pid = /^nerve_it_(\d+)_[\da-f]+$/.exec(datname)?.[1]
-    if (pid !== undefined && !isAlive(Number(pid)))
-      await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(datname)} WITH (FORCE)`)
-  }
+  for (const datname of abandonedNames(databases.rows.map(row => row.datname), { prefix: DATABASE_PREFIX, suffix: '_[0-9a-f]+' }))
+    await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(datname)} WITH (FORCE)`)
   const roles = await client.query<{ rolname: string }>('SELECT rolname FROM pg_roles WHERE starts_with(rolname, $1)', [DATABASE_PREFIX])
-  for (const { rolname } of roles.rows) {
-    const pid = /^nerve_it_(\d+)_[\da-f]+_(?:owner|app)$/.exec(rolname)?.[1]
-    if (pid !== undefined && !isAlive(Number(pid)))
-      await client.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(rolname)}`)
-  }
+  for (const rolname of abandonedNames(roles.rows.map(row => row.rolname), { prefix: DATABASE_PREFIX, suffix: '_[0-9a-f]+_(?:owner|app)' }))
+    await client.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(rolname)}`)
 }
 
 /** 确保当前迁移的模板存在：先用临时名创建并迁移，完成后再改名，半成品永远不会被复用；顺带删除旧模板。 */
