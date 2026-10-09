@@ -50,18 +50,19 @@ function file(bytes: Uint8Array = new Uint8Array(0), lastModified = 1_000): Fake
   return { kind: 'file', bytes, lastModified, locked: false }
 }
 
-/** 这棵树里一个目录的句柄（FileSystemDirectoryHandle 用到的几样）；creates 记下带 create 建出的条目 */
+/** 这棵树里一个目录的句柄（FileSystemDirectoryHandle 用到的几样）；creates 记下带 create 的每一次查找（建没建都算：Chromium 里那样也碰目录库） */
 function directoryHandle(node: FakeDirectory, creates: string[], opened: FakeSync[]): FileSystemDirectoryHandle {
   const lookup = <T extends 'directory' | 'file'>(name: string, kind: T, create: boolean): T extends 'directory' ? FakeDirectory : FakeFile => {
     if (node.failLookup !== undefined)
       throw domError(node.failLookup)
+    if (create)
+      creates.push(name)
     let child = node.children.get(name)
     if (child === undefined) {
       if (!create)
         throw domError('NotFoundError')
       child = kind === 'directory' ? directory() : file()
       node.children.set(name, child)
-      creates.push(name)
     }
     if (child.kind !== kind)
       throw domError('TypeMismatchError')
@@ -288,6 +289,9 @@ describe('列出、看文件、读、删（页面里也能用：不拿同步访�
     const { root, mirror } = tree()
     expect(await mirror.removeDocument(KEY)).toEqual({ kind: 'removed' })
     expect(await mirror.removeUser('user-1')).toEqual({ kind: 'removed' })
+    putDocument(root, { userId: 'user-1', documentId: 'doc-0' })
+    expect(await mirror.removeDocument(KEY), '用户的目录在、这份文档的不在').toEqual({ kind: 'removed' })
+    expect(await mirror.removeUser('user-9'), '根目录在、这个人的不在').toEqual({ kind: 'removed' })
     const a = file()
     putDocument(root, KEY, { a, b: file() })
     putDocument(root, { userId: 'user-1', documentId: 'doc-2' })

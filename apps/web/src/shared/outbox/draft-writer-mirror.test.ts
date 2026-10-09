@@ -434,6 +434,25 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
   })
 })
 
+describe('一份一份地比对（审查 A13）', () => {
+  it('列出这个人在镜像里的文档、比对一份；比对时库出了问题如实交回（之后再比对它），一份出错不拖累别的', async () => {
+    const { writer, reopen } = await setup()
+    await writer.register(OTHER_DOCUMENT, ME, false)
+    await writer.write(capture(1, 'one'))
+    await writer.write(capture(1, 'other', { key: OTHER_DOCUMENT }))
+    writer.dispose()
+    const wiped = fakeDraftStore()
+    const reopened = await reopen({ store: wiped })
+    expect(await reopened.mirroredDocuments(USER_ID)).toEqual({ kind: 'listed', documentIds: [DOCUMENT_ID, OTHER_DOCUMENT.documentId].sort() })
+    wiped.failNext('restoreDraft', { kind: 'quota' })
+    expect(await reopened.reconcile(KEY)).toEqual({ kind: 'quota' })
+    expect(await reconcileAll(reopened, USER_ID)).toEqual({ kind: 'reconciled', documents: 2, failed: [] })
+    expect(readStoredDraft(wiped.rawDraft(KEY)).kind).toBe('draft')
+    reopened.dispose()
+    expect(await reopened.mirroredDocuments(USER_ID)).toMatchObject({ kind: 'failed', error: { name: 'InvalidStateError' } })
+  })
+})
+
 describe('代次倒退之后以 force 登记（审查 A2）：库里有当前的写入者时，镜像里别的写入者的那一份不胜出', () => {
   it('新的一代（代次更小）接手写了更新的一份：读回它，不拿旧一代的镜像换掉；删库之后写回的是最后写的那一份（按代号，不按代次）', async () => {
     const { store, files, writer, reopen } = await setup()

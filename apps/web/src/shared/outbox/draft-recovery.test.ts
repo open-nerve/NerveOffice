@@ -157,6 +157,15 @@ describe('比对一份文档（createDraftRecovery）', () => {
     expect(store.rawNotice(KEY)).toBeUndefined()
   })
 
+  it('库里的草稿是别人的（接手过），镜像里是库里当前的写入者之后写的而库悄悄退回了：交给存储判定，写回', async () => {
+    const store = fakeDraftStore()
+    store.putRaw('drafts', KEY, record(6, { writeEpoch: 2, writerId: OTHER_WRITER_ID }))
+    store.putRaw('writers', KEY, sampleWriter({ ...KEY, lastDraftSeq: 7 }))
+    const read = slots(valid(record(8), 2), EMPTY)
+    expect(await createDraftRecovery({ store: store.store, mirror: scriptedMirror(read), now: () => NOW }).reconcile(KEY)).toEqual({ mirror: read, restored: record(8) })
+    expect(store.rawDraft(KEY)).toMatchObject({ draftSeq: 8, writerId: WRITER_ID })
+  })
+
   it('镜像过时（确认删掉、放弃过、超过保留期）：截断，里面的不再算数', async () => {
     const seen = fakeDraftStore()
     seen.putRaw('writers', KEY, sampleWriter({ ...KEY, lastDraftSeq: 8 }))

@@ -309,6 +309,15 @@ describe('补写（§3.8）：拿着句柄、并且比两个槽位里合格的�
     expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq10@1', 'seq11@2'])
   })
 
+  it('槽位里是别的文档的记录（挪进来的，审查 A4）：拿句柄时不算合格的，读出时是 mismatch，写的时候照常盖掉它', async () => {
+    const { fake, mirror } = setup()
+    fake.putFile(KEY, 0, await fileOf(record(5, { documentId: OTHER.documentId }), 7))
+    fake.putFile(KEY, 1, new Uint8Array(0))
+    expect(await mirror.read(KEY)).toEqual({ kind: 'slots', slots: [{ kind: 'invalid', reason: 'mismatch' }, { kind: 'empty' }] })
+    expect(await mirror.write(record(1))).toEqual({ kind: 'mirrored' })
+    expect([await slotOf(fake, 0), await slotOf(fake, 1)], '最新的一个也没有：写在 a 上，代号从头').toEqual(['seq1@1', 'empty'])
+  })
+
   it('记着两个槽位各存着哪一份：写一半的那一个不算；截断之后都不算', async () => {
     const { fake, mirror } = setup()
     await mirror.write(record(1))

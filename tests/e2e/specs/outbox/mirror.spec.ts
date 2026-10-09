@@ -359,6 +359,7 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
 
     expect(await probePipeline(page, 'cleanupAbandon', held), '发件箱 Worker 拿着句柄').toEqual({ kind: 'removed', pending: [held] })
     expect(await probeDatabase(page, 'getRaw', 'writers', held), '写入者换成墓碑（审查 A6）').toMatchObject({ writerId: 'retired', lastDraftSeq: 1 })
+    expect(await probePipeline(page, 'register', id, held, { writeEpoch: 9, writerId: 'retired' }, true), '墓碑保留的 writerId 不能登记').toMatchObject({ kind: 'failed', error: { name: 'TypeError' } })
     expect(await probePipeline(page, 'write', id, captureOf(held, writer, 2, 'after abandon')), '那一页写不进去，Worker 随之放开句柄').toMatchObject({ kind: 'fenced', reason: 'not-writer' })
     expect(await probePipeline(page, 'read', id, held), '比对：库里是墓碑，镜像里的不写回').toEqual({ kind: 'absent' })
     expect(await slotsOf(page, held)).toEqual(['empty', 'empty'])
@@ -383,7 +384,7 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
     expect(await probe(page, 'draftIds', key.userId), '库里只剩句柄开着的那一份').toEqual([held.documentId])
     expect([await probeDatabase(page, 'getRaw', 'notices', key), await probeDatabase(page, 'getRaw', 'writers', key)]).toEqual([null, null])
     expect(await probeDatabase(page, 'getRaw', 'notices', held), '跳过的那一份：提示也留着').toMatchObject({ kind: 'lost' })
-    expect(await probeDatabase(page, 'getRaw', 'writers', held), '写入者换成墓碑').toMatchObject({ writerId: 'retired', lastDraftSeq: 1 })
+    expect(await probeDatabase(page, 'getRaw', 'writers', held), '写入者换成墓碑：代次照旧（之后的登记照常按代次判定）、高水位留着').toMatchObject({ writerId: 'retired', writeEpoch: 3, lastDraftSeq: 1 })
     expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
     // 那一页（发件箱 Worker 拿着句柄）之后的写入被拦下，库里还是清理之前的那一份
     expect(await probePipeline(page, 'write', id, captureOf(held, writer, 2, 'after logout'))).toMatchObject({ kind: 'fenced', reason: 'not-writer' })
@@ -422,6 +423,7 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
     expect(outcomeOf(purged, 'purged').drafts.filter(draft => draft.key.userId === key.userId)).toEqual([{ key: live, record: 'draft' }])
     expect(await slotsOf(page, live)).toEqual(['missing', 'missing'])
     expect([await probeDatabase(page, 'getRaw', 'writers', live), await probeDatabase(page, 'getRaw', 'notices', live)], '镜像目录没了：写入者换成的墓碑一并删').toEqual([null, null])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key), '镜像目录还在（句柄开着）：过期的写入者换成墓碑留着（审查 A6）').toMatchObject({ writerId: 'retired' })
 
     await probePipeline(page, 'release', id, key)
     expect(await probePipeline(page, 'cleanupExpired', later)).toMatchObject({ kind: 'purged', pending: [], mirror: { kind: 'done' } })
