@@ -1,17 +1,18 @@
 // 写 OPFS 镜像途中结束整棵浏览器进程（M4-P1 设计 §3.8，S9 第 5 项）：发件箱 Worker 里，IndexedDB 提交之后镜像写在"现在不是最新那一份"的槽位上
 // （截断 → 写内容 → 写头 → flush）。写 3.8 MiB 只要几毫秒，比"报到页面、通知测试进程、冻住"还快，按时机冻不到半途；所以每次先写完第 s 份
 // （库与镜像都是它），再开始写第 s+1 份，让崩溃用例的测试 Worker 停在写镜像的某一步之后（mirror-recorder.ts 忙等）、报来，测试进程随即冻住、
-// 结束整棵进程，以同一个目录重开——槽位就停在那一步写完的样子：
+// 结束整棵进程，以同一个目录重开——登记之前先看槽位，它们就停在那一步写完的样子：
 // - 截断之后：一个是第 s 份，另一个是空的；写内容之后：另一个不合格（还没有头）；写头之后、flush 之后：另一个是第 s+1 份（进程被结束时已经写进
 //   文件的还在）——两个槽位读回旧的或新的一份，写一半的那一个落选，合格的那一个始终是第 s 份；
-// - 库里是新的一份（镜像在库提交之后才写）——Chromium 偶尔删库时由镜像写回，读回旧的或新的都算，事件如实（同 write-atomicity.spec.ts）。
+// - 登记之后：库里是新的一份（镜像在库提交之后才写），镜像落后的那几次由登记补写（库比镜像新时补写，§3.8），两个槽位是第 s 份与第 s+1 份；
+//   Chromium 偶尔删库时由镜像写回，读回旧的或新的都算，库里的提示如实（同 write-atomicity.spec.ts）。
 // 三个浏览器都跑（进程内放置没有镜像）。每一步两次；结局记成附件。标签 @test-build
 import type { TestInfo } from '@playwright/test'
 import type { CrashReport } from '../../support/browser-crash.ts'
-import type { CrashCheck, CrashProbeRead, MirrorPausePoint } from '../../support/crash-probe.ts'
-import type { ProbeSlot, RecoveryEvent } from '../../support/outbox-probe.ts'
+import type { CrashCheck, CrashProbeRead, MirrorPausePoint, NoticeWord } from '../../support/crash-probe.ts'
+import type { ProbeSlot } from '../../support/outbox-probe.ts'
 import { expect, expectCrashed, test } from '../../support/browser-crash.ts'
-import { CRASH_CONTENT_CHARS, crashSetupFor, MIRROR_PAUSE_POINTS, openCrashProbe, removeCrashMirror, slotWord } from '../../support/crash-probe.ts'
+import { CRASH_CONTENT_CHARS, crashSetupFor, MIRROR_PAUSE_POINTS, mirrorSlotsOn, openCrashProbe, removeCrashMirror, slotWord } from '../../support/crash-probe.ts'
 import { createUser } from '../../support/database.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
@@ -47,25 +48,31 @@ interface Outcome {
   readonly before: number
   readonly databaseExisted: boolean
   readonly read: CrashProbeRead
-  readonly events: readonly RecoveryEvent[]
-  readonly slots: readonly [ProbeSlot, ProbeSlot]
+  readonly notices: readonly NoticeWord[]
+  /** 重开之后、登记之前的两个槽位（结束时留下的样子） */
+  readonly slotsAtOpen: readonly [ProbeSlot, ProbeSlot]
+  /** 登记、读回之后的两个槽位（落后的镜像已补写） */
+  readonly slotsAfter: readonly [ProbeSlot, ProbeSlot]
 }
 
-/** 两个槽位不是"一个第 s 份、另一个是那一步写完的样子"、库里读回的不是该有的那一份、事件不如实时的说明 */
+/** 结束时留下的两个槽位不是"一个第 s 份、另一个是那一步写完的样子"、登记之后镜像没补上、库里读回的不是该有的那一份、提示不如实时的说明 */
 function problemsOf(outcomes: readonly Outcome[]): string[] {
   return outcomes.flatMap((outcome, index) => {
     const { before, read, point } = outcome
     const label = `第 ${index + 1} 次（停在 ${point}，打开之前库${outcome.databaseExisted ? '在' : '不在'}）`
     const problems: string[] = []
-    const words = outcome.slots.map(slotWord)
+    const words = outcome.slotsAtOpen.map(slotWord)
     const others = words.filter(word => word !== `seq${before}`)
     const expected = EXPECTED_OTHER[point](before + 1)
     if (others.length !== 1 || others[0]?.startsWith(expected) !== true)
-      problems.push(`${label}：两个槽位是 ${JSON.stringify(words)}，应当一个是 seq${before}、另一个是 ${expected}…`)
-    const events = outcome.events.map(event => event.kind)
-    const expectedEvents = outcome.databaseExisted ? [] : ['restored']
-    if (JSON.stringify(events) !== JSON.stringify(expectedEvents))
-      problems.push(`${label}：比对留下的事件是 ${JSON.stringify(events)}，应当是 ${JSON.stringify(expectedEvents)}`)
+      problems.push(`${label}：结束时留下的两个槽位是 ${JSON.stringify(words)}，应当一个是 seq${before}、另一个是 ${expected}…`)
+    const after = outcome.slotsAfter.map(slotWord).toSorted()
+    const caughtUp = [`seq${before}`, `seq${before + 1}`].toSorted()
+    if (outcome.databaseExisted && JSON.stringify(after) !== JSON.stringify(caughtUp))
+      problems.push(`${label}：登记之后两个槽位是 ${JSON.stringify(after)}，应当是 ${JSON.stringify(caughtUp)}（库比镜像新时补写）`)
+    const expectedNotices = outcome.databaseExisted ? [] : ['restored@这份文档']
+    if (JSON.stringify(outcome.notices) !== JSON.stringify(expectedNotices))
+      problems.push(`${label}：库里的提示是 ${JSON.stringify(outcome.notices)}，应当是 ${JSON.stringify(expectedNotices)}`)
     if (read.kind !== 'draft')
       return [...problems, `${label}：没读出能解开的草稿：${JSON.stringify(read)}`]
     // 库在时库里是新的（镜像在库提交之后才写）；库没了时由镜像写回，旧的或新的都算
@@ -86,7 +93,7 @@ function seqAfter(read: CrashProbeRead, previous: number): number {
 }
 
 async function attachOutcomes(testInfo: TestInfo, outcomes: readonly Outcome[]): Promise<void> {
-  const rows = outcomes.map(outcome => ({ point: outcome.point, before: outcome.before, slots: outcome.slots.map(slotWord), read: outcome.read, databaseExisted: outcome.databaseExisted, events: outcome.events.map(event => event.kind) }))
+  const rows = outcomes.map(outcome => ({ point: outcome.point, before: outcome.before, slotsAtOpen: outcome.slotsAtOpen.map(slotWord), slotsAfter: outcome.slotsAfter.map(slotWord), read: outcome.read, databaseExisted: outcome.databaseExisted, notices: outcome.notices }))
   await testInfo.attach('outcomes.json', { body: JSON.stringify(rows, null, 2), contentType: 'application/json' })
 }
 
@@ -117,7 +124,7 @@ async function crashWhenPaused(check: CrashCheck, crash: () => Promise<CrashRepo
 }
 
 test.describe('写 OPFS 镜像途中结束整棵浏览器进程（发件箱 Worker）', { tag: '@test-build' }, () => {
-  test('停在写镜像的每一步之后结束：两个槽位读回旧的或新的一份（写一半的落选），库里读回新的', async ({ crashTool }, testInfo) => {
+  test('停在写镜像的每一步之后结束：两个槽位读回旧的或新的一份（写一半的落选），登记补写落后的镜像，库里读回新的', async ({ crashTool }, testInfo) => {
     const user = await createUser('crash-mirror')
     let launch = await crashTool.launch()
     await loginThroughApi(launch.page, user)
@@ -137,12 +144,18 @@ test.describe('写 OPFS 镜像途中结束整棵浏览器进程（发件箱 Work
       expectCrashed(report)
       live = undefined
       launch = await crashTool.relaunch(launch, report, { cookies: 'restore' })
-      check = await openCrashProbe(launch, setup)
+      let slotsAtOpen: readonly [ProbeSlot, ProbeSlot] | undefined
+      check = await openCrashProbe(launch, setup, {
+        beforeRegister: async (page) => {
+          slotsAtOpen = await mirrorSlotsOn(page, setup.key)
+        },
+        mirrorHeld: true,
+      })
       live = check
       const read = await check.read()
-      const events = await check.events()
-      const slots = await check.mirrorSlots()
-      outcomes.push({ point, before: seq, databaseExisted: check.registered.peek.existed, read, events, slots })
+      const notices = await check.notices()
+      const slotsAfter = await check.mirrorSlots()
+      outcomes.push({ point, before: seq, databaseExisted: check.registered.peek.existed, read, notices, slotsAtOpen: slotsAtOpen ?? [{ kind: 'missing' }, { kind: 'missing' }], slotsAfter })
       seq = seqAfter(read, seq)
     }
     await attachOutcomes(testInfo, outcomes)

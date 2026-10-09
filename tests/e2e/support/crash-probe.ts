@@ -2,14 +2,14 @@
 // （apps/web/src/features/sheet-editor/outbox/testing/crash-probe.ts，地址带 crashProbe 时挂在 window.__nerveCrashProbe 上）。
 // 探针用生产的写入管道写约 5 MiB 的内容，两种放置：进程内（createDraftWriter 配 IndexedDB 的存储，没有镜像）与发件箱 Worker（生产的客户端配
 // 崩溃用例的测试 Worker，带 OPFS 的镜像）；按要求在"写入之前"或"写镜像之前"经这里挂上的绑定函数发信号；读回时经管道解开（Worker 时在库与
-// 两个槽位里取最新的）、解压，按序号逐字节比较，另读写入者的高水位；取走管道比对镜像留下的事件。
+// 两个槽位里取最新的）、解压，按序号逐字节比较，另读写入者的高水位；取走比对镜像留在库里的提示（读出之后清除）。
 // 同一页另挂发件箱的浏览器层探针（地址另带 outboxProbe，support/outbox-probe.ts）：读、改镜像的槽位文件，删用例用户的镜像目录。
 // E2E 这边看不到 web 的类型，这里声明用到的部分（与探针的写法相同）。
 // 打开的是一份不存在的文档：页面只确认会话、说明"内容不存在"，不建编辑器（同 support/outbox-probe.ts），所以要先登录；重开时走 Cookie 的
 // restore（同一次登录接着有效）。用到它的用例打上 @test-build：外部模式测生产镜像，里面没有探针
 import type { Page } from '@playwright/test'
 import type { PersistentLaunch } from './browser-crash.ts'
-import type { DraftKey, ProbeCorruption, ProbeSlot, RecoveryEvent, WriterIdentity } from './outbox-probe.ts'
+import type { DraftKey, ProbeCorruption, ProbeSlot, RecoveryNotice, WriterIdentity } from './outbox-probe.ts'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { expect } from './browser-crash.ts'
 import { probePipeline, removeMirrorOf } from './outbox-probe.ts'
@@ -82,7 +82,7 @@ interface CrashProbe {
   readonly start: (seq: number, signal: CrashSignal) => Promise<void>
   readonly read: () => Promise<CrashProbeRead>
   readonly last: () => CrashProbeWrite | undefined
-  readonly events: () => Promise<readonly RecoveryEvent[]>
+  readonly takeNotices: () => Promise<{ readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | { readonly kind: 'failed', readonly outcome: string }>
   readonly release: () => Promise<void>
   readonly dispose: () => void
 }
@@ -113,8 +113,8 @@ export interface CrashCheck {
   readonly start: (seq: number, options: { readonly signal: CrashSignal }) => Promise<void>
   readonly read: () => Promise<CrashProbeRead>
   readonly lastWrite: () => Promise<CrashProbeWrite | undefined>
-  /** 取走管道比对镜像与库留下的事件 */
-  readonly events: () => Promise<readonly RecoveryEvent[]>
+  /** 取走这个用户的提示（比对镜像与库留在库里的 restored、lost；读出之后清除）：交回种类与文档，读不出、清不掉时用例失败 */
+  readonly notices: () => Promise<readonly NoticeWord[]>
   /** 镜像的两个槽位文件读出来的样子（先放开管道的句柄；下一次写入时管道自己再拿） */
   readonly mirrorSlots: () => Promise<readonly [ProbeSlot, ProbeSlot]>
   /** 把一个槽位改坏（先放开管道的句柄） */
@@ -123,11 +123,22 @@ export interface CrashCheck {
   readonly onSignal: (handler: () => void) => void
 }
 
+/** 打开探针时另要的：登记之前先看一眼（例如结束时留下的槽位，登记会补写落后的镜像）；登记时镜像要拿到句柄（拿不到时隔一会儿再登记） */
+export interface OpenCrashProbeOptions {
+  readonly beforeRegister?: (page: Page) => Promise<void>
+  readonly mirrorHeld?: boolean
+}
+
+/** 登记时镜像没拿到句柄（OPFS 的探针 Worker 刚放开，放开是异步的）之后再登记的次数与间隔 */
+const REGISTER_ATTEMPTS = 5
+const REGISTER_RETRY_MS = 600
+
 /**
  * 在这次启动上挂好信号的绑定函数，打开编辑器页（一份不存在的文档，地址带 crashProbe 与 outboxProbe），等两个探针挂上，交给崩溃探针这次启动用的
- * （建写入管道、登记写入者——登记之前管道先比对镜像，删库之后从镜像写回）。每次启动调用一次（绑定只能注册一次）；要已经登录
+ * （建写入管道、登记写入者——登记之前管道先比对镜像，删库之后从镜像写回；库比镜像新时补写镜像）。每次启动调用一次（绑定只能注册一次）；要已经登录。
+ * 再登记时交回的仍是第一次登记时看到的库（在不在）
  */
-export async function openCrashProbe(launch: PersistentLaunch, setup: CrashSetup): Promise<CrashCheck> {
+export async function openCrashProbe(launch: PersistentLaunch, setup: CrashSetup, options: OpenCrashProbeOptions = {}): Promise<CrashCheck> {
   let handler: (() => void) | undefined
   await launch.context.exposeBinding(setup.signalBinding, () => {
     const current = handler
@@ -137,8 +148,19 @@ export async function openCrashProbe(launch: PersistentLaunch, setup: CrashSetup
   const { page } = launch
   await page.goto(`/documents/${randomUUID()}?crashProbe&outboxProbe`)
   await expect.poll(async () => page.evaluate(name => (window as unknown as ProbeWindow)[name] !== undefined && window.__nerveOutboxProbe !== undefined, CRASH_PROBE_GLOBAL), { message: '页面里没有崩溃用例与发件箱的探针：要跑测试构建（web 的 build:e2e），地址带 crashProbe 与 outboxProbe，并且已经登录' }).toBe(true)
-  const registered = await page.evaluate(async ({ name, setup }) => (window as unknown as ProbeWindow)[name]?.prepare(setup), { name: CRASH_PROBE_GLOBAL, setup })
+  await options.beforeRegister?.(page)
+  const prepare = async (): Promise<CrashProbeRegistered | undefined> => page.evaluate(async ({ name, setup }) => (window as unknown as ProbeWindow)[name]?.prepare(setup), { name: CRASH_PROBE_GLOBAL, setup })
+  let registered = await prepare()
+  const firstPeek = registered?.peek
+  for (let attempt = 1; options.mirrorHeld === true && attempt < REGISTER_ATTEMPTS && registered?.kind === 'registered' && registered.mirror !== 'mirrored'; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, REGISTER_RETRY_MS))
+    registered = await prepare()
+  }
   expect(registered?.kind, `写入者没登记上：${JSON.stringify(registered)}`).toBe('registered')
+  if (options.mirrorHeld === true)
+    expect(registered?.kind === 'registered' ? registered.mirror : undefined, `登记时镜像没拿到句柄：${JSON.stringify(registered)}`).toBe('mirrored')
+  if (registered !== undefined && firstPeek !== undefined)
+    registered = { ...registered, peek: firstPeek }
   const call = async <T>(method: keyof CrashProbe, ...args: unknown[]): Promise<T> => page.evaluate(async ({ name, method, args }) => {
     const probe = (window as unknown as ProbeWindow)[name]
     if (probe === undefined)
@@ -153,7 +175,11 @@ export async function openCrashProbe(launch: PersistentLaunch, setup: CrashSetup
     start: async (seq, { signal }) => call<void>('start', seq, signal),
     read: async () => call<CrashProbeRead>('read'),
     lastWrite: async () => call<CrashProbeWrite | undefined>('last'),
-    events: async () => call<readonly RecoveryEvent[]>('events'),
+    notices: async () => {
+      const taken = await call<Awaited<ReturnType<CrashProbe['takeNotices']>>>('takeNotices')
+      expect(taken.kind, JSON.stringify(taken)).toBe('notices')
+      return taken.kind === 'notices' ? taken.notices.map(notice => noticeWord(notice, setup.key)) : []
+    },
     mirrorSlots: async () => {
       await call<void>('release')
       return probePipeline(page, 'mirrorSlots', setup.key)
@@ -175,6 +201,21 @@ export async function openCrashProbe(launch: PersistentLaunch, setup: CrashSetup
 export async function removeCrashMirror(check: CrashCheck): Promise<void> {
   await check.page.evaluate(name => (window as unknown as ProbeWindow)[name]?.dispose(), CRASH_PROBE_GLOBAL)
   await expect.poll(async () => removeMirrorOf(check.page, check.setup.key.userId), { message: '删掉用例用户的镜像目录', timeout: 10_000 }).toBe('removed')
+}
+
+/** 一条提示写成一个词：种类@这份文档（别的文档时写出它的键） */
+export type NoticeWord = string
+
+function noticeWord(notice: RecoveryNotice, key: DraftKey): NoticeWord {
+  const target = notice.userId === key.userId && notice.documentId === key.documentId ? '这份文档' : `${notice.userId}/${notice.documentId}`
+  return `${notice.kind}@${target}`
+}
+
+/** 经发件箱探针的 OPFS Worker 读这份文档的两个槽位，读完关掉那个 Worker（放开它的句柄）：要没有别的句柄开着（登记之前，或先放开管道的） */
+export async function mirrorSlotsOn(page: Page, key: DraftKey): Promise<readonly [ProbeSlot, ProbeSlot]> {
+  const slots = await probePipeline(page, 'mirrorSlots', key)
+  await probePipeline(page, 'disposeAll')
+  return slots
 }
 
 /** 槽位读出来的样子写成一个词：missing、empty、invalid:原因、seq<序号> */
