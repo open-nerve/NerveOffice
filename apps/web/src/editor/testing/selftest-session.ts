@@ -2,8 +2,9 @@
 // 命令日志的几个查询、内容的差别与页头的按钮。场景在 ./selftest.ts（只读与进入、退出编辑）与 ./selftest-capture.ts（捕获时机的复核）。
 // 只在测试构建里（editor/testing/，随自检的分块动态引入）
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
+import type { OutboxReviewApi } from './outbox-review-api.ts'
 import type { EntryApi, EntryRange, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
-import type { SelftestCheck, SelftestPage, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
+import type { SelftestCheck, SelftestFact, SelftestPage, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import { canonicalJson, contentOf } from './content-compare.ts'
 import { byRole, isVisible, waitFor } from './selftest-dom.ts'
 
@@ -42,6 +43,15 @@ export interface SelftestPageView {
   readonly leaving?: string | undefined
 }
 
+/**
+ * 编辑器页第一次载入（打开即阅读）时容器第一次到 ready（渲染完成，交互屏障撤掉）与 steady 的时刻：performance.now()，页面的导航开始是 0；
+ * 还没到时是 null。首屏的计时（M4-P1 S1 的 perf-baseline，设计 §3.6 第 12 项）：挂接在载入之前就订阅了页面的状态，这两个时刻不靠自检开始之后再装的计时
+ */
+export interface SelftestFirstLoad {
+  readonly ready: number | null
+  readonly steady: number | null
+}
+
 /** 编辑器页交给自检的（挂接在页面开始载入时就收集页面错误与可见性，到 steady 之后才引入自检） */
 export interface SelftestHost {
   readonly documentId: string
@@ -63,6 +73,13 @@ export interface SelftestHost {
   readonly pageErrors: () => readonly string[]
   readonly consoleErrors: () => readonly string[]
   readonly ignoredNotices: () => readonly string[]
+  /** 第一次载入的时刻（见 SelftestFirstLoad） */
+  readonly firstLoad: () => SelftestFirstLoad
+  /**
+   * 生产的发件箱（M4-P1 设计 §3.6 第 9 项的生产 Worker、第 11 项）：挂接动态引入 features 那一侧的实现交给自检（editor/testing 不能引用 features）；
+   * 用到的场景才调用。没有时（单元测试）为 undefined
+   */
+  readonly outboxReview?: (() => Promise<OutboxReviewApi>) | undefined
 }
 
 /**
@@ -163,18 +180,24 @@ export interface Session {
   readonly timings: SelftestTiming[]
   /** 场景的检查最晚做到什么时候（performance.now()）：之后的检查不再做 */
   readonly deadline: number
+  /** 这个场景的总时限（毫秒）：deadline 是开始的时刻加上它；超过时的说明写它（各场景不同：请求编辑、Worker 的停顿更长） */
+  readonly budgetMs: number
   /** 页面被隐藏的时刻（自检开始之后第一次）：之后的检查不再做 */
   hiddenAt?: string
   formulaValues?: Record<string, unknown>
   /** 交接的场景走了哪条路与时间线（M3-P5，selftest-report.ts 的 path、timeline） */
   path?: string
   timeline?: SelftestTimelineEntry[]
+  /** 真实浏览器的前置复核（M4-P1）记下的事实（selftest-report.ts 的 facts）：判定在驱动脚本里 */
+  readonly facts: Record<string, SelftestFact>
+  /** 地址里的运行次数（RUNS_PARAM）；没有带时 undefined，复核的场景用各自最少的次数 */
+  readonly runs: number | undefined
 }
 
 export async function check(session: Session, id: string, run: () => Promise<string>, timeoutMs = CHECK_TIMEOUT_MS): Promise<boolean> {
   const started = performance.now()
   if (started > session.deadline) {
-    session.checks.push({ id, pass: false, detail: `没有做：这个场景的检查超过了总时限（${SCENARIO_BUDGET_MS / 1000} 秒）`, ms: 0 })
+    session.checks.push({ id, pass: false, detail: `没有做：这个场景的检查超过了总时限（${Math.round(session.budgetMs / 1000)} 秒）`, ms: 0 })
     return false
   }
   if (session.hiddenAt !== undefined) {

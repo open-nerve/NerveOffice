@@ -29,9 +29,12 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
  * 要在编辑时跑的场景（地址里 selftest 的值）：M3-P2 起打开即阅读，到了阅读的 steady 之后先进入编辑（与页头的"编辑"同一个入口），
  * 到了编辑的 steady 再跑自检。enter-exit 在阅读时开始，场景里自己点页头的"编辑""退出编辑"（S5），按 host.view 等页面的状态变化。
  * 捕获时机的复核（M3-P4 S1）都在编辑时跑；交接的复核（M3-P5）里正在编辑的 A（takeover-holder）在编辑时跑，另开的 B 与刷新的那一步在阅读时开始；
- * 请求编辑的两条路（M3-P6）里被暂停的持有者（paused-holder）在编辑时跑，请求方（request-waiter）在阅读时开始
+ * 请求编辑的两条路（M3-P6）里被暂停的持有者（paused-holder）在编辑时跑，请求方（request-waiter）在阅读时开始。
+ * 真实浏览器的前置复核（M4-P1 S1）里捕获成本（capture-cost）与公式冻结（perf-baseline）在编辑时跑（生产的捕获与公式计算都在编辑时），
+ * 存储与 Worker 的探针（storage、key-transfer、storage-quota、worker-stall）与生产发件箱的两项（outbox-stall、outbox-pipeline）用不着编辑器，
+ * 在阅读时跑
  */
-const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder', 'takeover-holder-deaf', 'paused-holder'])
+const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder', 'takeover-holder-deaf', 'paused-holder', 'capture-cost', 'perf-baseline'])
 
 /**
  * 交接的复核里收不到交接频道消息的 A（地址里 selftest 的值；与 editor/testing/selftest-report.ts 的 DEAF_HOLDER_SCENARIO 相同——模块边界不让这里
@@ -185,6 +188,8 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
   const log = watchPage(window)
   const allowLeave = allowLeaveForReport(window)
   let started = false
+  // 第一次载入（打开即阅读）时容器第一次到 ready、steady 的时刻（M4-P1 S1 的首屏）：页面的状态每变一次同步通知，订阅在载入之前
+  const firstLoad: { ready: number | null, steady: number | null } = { ready: null, steady: null }
   let unsubscribe: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined
@@ -211,6 +216,9 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       pageErrors: () => log.pageErrors,
       consoleErrors: () => log.consoleErrors,
       ignoredNotices: () => log.ignoredNotices,
+      firstLoad: () => ({ ...firstLoad }),
+      // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（outbox/testing/ 只在测试构建里、只能动态引入）
+      outboxReview: async () => (await import('./outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
     }
     void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => runSelftestAndReport(host))
   }
@@ -219,6 +227,10 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
   let entering: 'no' | 'requested' | 'settled' = EDITING_SCENARIOS.has(new URLSearchParams(window.location.search).get('selftest') ?? '') ? 'no' : 'settled'
   const onChange = (): void => {
     const { load, mode, surface } = page.view()
+    if (firstLoad.ready === null && (surface === 'ready' || surface === 'steady'))
+      firstLoad.ready = performance.now()
+    if (firstLoad.steady === null && surface === 'steady')
+      firstLoad.steady = performance.now()
     if (load.kind === 'ready' && surface === 'steady' && (mode?.kind === 'reading' || mode?.kind === 'editing')) {
       if (mode.kind === 'reading' && entering !== 'settled') {
         if (entering === 'no') {

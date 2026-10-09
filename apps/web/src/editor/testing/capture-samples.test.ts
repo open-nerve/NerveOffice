@@ -1,7 +1,7 @@
-// 捕获时机复核的样本（capture-samples.ts）：公式样本的结构、按定义的核对认得出过期的值、大表的规模
+// 捕获时机复核的样本（capture-samples.ts）：公式样本的结构、按定义的核对认得出过期的值、大表的规模；M4-P1 S1 的明细表（按字节数）与 perf-50k
 import type { FormulaSample, SampleCells } from './capture-samples.ts'
 import { describe, expect, it } from 'vitest'
-import { aggregateValues, BIG_SHEET, bigSheet, cellCount, FORMULA_SAMPLE, formulaSampleSheets, randOf, verifyFormulaSnapshot } from './capture-samples.ts'
+import { aggregateValues, BIG_SHEET, bigSheet, BULK_SAMPLE_BYTES, BULK_SHEET, bulkSheet, cellCount, FORMULA_SAMPLE, formulaCount, formulaSampleSheets, PERF_SAMPLE, perfIncrementalEdit, perfSampleSheets, randOf, verifyFormulaSnapshot } from './capture-samples.ts'
 
 /** 公式样本的快照，公式都按定义填上值（核对应当全部一致）；edit 可以在填值之前改输入 */
 function computedSnapshot(edit: (sheets: Record<string, SampleCells>) => void = () => {}, sample: FormulaSample = FORMULA_SAMPLE): Record<string, { cellData: SampleCells }> {
@@ -167,5 +167,56 @@ describe('大表', () => {
     expect(sheet.cellData[49_999]?.[0]).toEqual({ v: '第 50000 行', t: 1 })
     expect(cellCount(JSON.stringify({ sheets: { [sheet.id]: { cellData: sheet.cellData } } }), sheet.id)).toBe(50_000)
     expect(cellCount('{"sheets":{}}', 'none')).toBe(0)
+  })
+})
+
+describe('按字节数生成的明细表（M4-P1 S1：M0-P3 的 big-1m、big-5m）', () => {
+  it('单元格的 JSON 在目标字节数的 97% 上下（留出工作簿其余部分的余量），每 10 行一个行合计的公式、带按定义算出的缓存值', () => {
+    const sheet = bulkSheet(BULK_SAMPLE_BYTES.small)
+    const bytes = new TextEncoder().encode(JSON.stringify(sheet.cellData)).length
+    expect(bytes).toBeGreaterThanOrEqual(BULK_SAMPLE_BYTES.small * BULK_SHEET.fill)
+    expect(bytes).toBeLessThan(BULK_SAMPLE_BYTES.small)
+    expect([sheet.id, sheet.name, sheet.columnCount]).toEqual([BULK_SHEET.id, '明细', 20])
+    const row = sheet.cellData[10] ?? {}
+    const sum = Math.round(Object.entries(row).filter(([column]) => Number(column) >= 3 && Number(column) <= 18).reduce((total, [, cell]) => total + (cell.v as number), 0) * 100) / 100
+    expect(row[19]).toEqual({ f: '=SUM(D11:S11)', v: sum, t: 2 })
+    expect(sheet.cellData[11]?.[19]?.f).toBeUndefined()
+    expect(sheet.cellData[1]?.[1]).toEqual({ v: '项目-000001', t: 1 })
+  })
+
+  it('同一个目标字节数每次生成的字节相同（固定的种子）；大的一档仍在快照的上限（5 MiB）之内', () => {
+    expect(JSON.stringify(bulkSheet(200_000))).toBe(JSON.stringify(bulkSheet(200_000)))
+    const large = new TextEncoder().encode(JSON.stringify(bulkSheet(BULK_SAMPLE_BYTES.large).cellData)).length
+    expect(large).toBeGreaterThan(4.8 * 1024 * 1024)
+    expect(large).toBeLessThan(5 * 1024 * 1024)
+  })
+})
+
+describe('perf-50k（M4-P1 S1：M0-P3 V10 的性能基线样本）', () => {
+  const sheets = perfSampleSheets()
+  const snapshot = JSON.stringify({ sheets: Object.fromEntries(sheets.map(sheet => [sheet.id, { cellData: sheet.cellData }])) })
+
+  it('数据表 5,001 行 × 10 列（50,010 格，前 600 行的合计是公式）与汇总 716 格（400 个公式与它们的标签、查找的编号）：共 1,000 个公式', () => {
+    expect(sheets.map(sheet => [sheet.id, sheet.name])).toEqual([[PERF_SAMPLE.data.id, '数据表'], [PERF_SAMPLE.summary.id, '汇总']])
+    expect(cellCount(snapshot, PERF_SAMPLE.data.id)).toBe(50_010)
+    expect(formulaCount(snapshot)).toBe(PERF_SAMPLE.formulas)
+    expect(cellCount(snapshot, PERF_SAMPLE.summary.id)).toBe(10 * 5 + 6 * 11 + 300 * 2)
+  })
+
+  it('公式都带按定义算出的缓存值：行合计、分类的条件求和与计数、VLOOKUP 取到的名称', () => {
+    const [data, summary] = sheets
+    const row = data?.cellData[1] ?? {}
+    const sum = Math.round([3, 4, 5, 6, 7, 8].reduce((total, column) => total + (row[column]?.v as number), 0) * 100) / 100
+    expect(row[9]).toEqual({ f: '=SUM(D2:I2)', v: sum, t: 2 })
+    expect(data?.cellData[601]?.[9]?.f).toBeUndefined()
+    const east = Object.values(data?.cellData ?? {}).filter(cells => cells[2]?.v === '华东')
+    expect(summary?.cellData[0]?.[1]?.v).toBeCloseTo(east.reduce((total, cells) => total + (cells[3]?.v as number), 0), 6)
+    expect(summary?.cellData[0]?.[3]?.v).toBe(east.length)
+    expect(summary?.cellData[20]).toEqual({ 0: { v: 1, t: 2 }, 1: { f: '=VLOOKUP(A21,\'数据表\'!$A$2:$J$5001,2,FALSE)', v: '商品-00001', t: 1 } })
+    expect(Object.values(summary?.cellData ?? {}).flatMap(cells => Object.values(cells)).filter(cell => cell.f !== undefined).every(cell => cell.v !== undefined)).toBe(true)
+  })
+
+  it('增量计算改数据表 D 列（M0 的 D2、D3……）', () => {
+    expect([perfIncrementalEdit(0), perfIncrementalEdit(4)]).toEqual([{ sheet: '数据表', cell: 'D2', value: 500 }, { sheet: '数据表', cell: 'D6', value: 504 }])
   })
 })

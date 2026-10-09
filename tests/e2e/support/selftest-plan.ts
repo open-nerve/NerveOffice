@@ -9,24 +9,26 @@
 //   多了一个修订、内容里有改的那一格；自动保存照常运行的几步（M3-P4 S7：formula-timing、auto-height、large-copy、composition）至少保存了
 //   一次，存下的内容另按定义核对（公式、字号与自动行高、复制品、批注）；hidden-save 恰好保存了两次、内容里有隐藏之前与隐藏的那一刻写的两格；
 //   交接的几步（M3-P5 S8）随走的路（A 回应了没有、刷新时停住的那次保存提交了没有）；请求编辑的两条路（M3-P6）同样随走的路。交接的编排与库里的
-//   时间线在 ./selftest-handover.ts，请求编辑的编排（另一方由驱动脚本经接口扮演）与判定在 ./selftest-request.ts。
+//   时间线在 ./selftest-handover.ts，请求编辑的编排（另一方由驱动脚本经接口扮演）与判定在 ./selftest-request.ts；
+// - 真实浏览器的前置复核（M4-P1 S1，设计 §3.6）：首屏与公式冻结、捕获成本、存储、密钥交给 Worker、Worker 的停顿，各一步或几步（运行次数 runs 由
+//   驱动脚本给，进地址）；页面只交回事实与计时，判定在 ./probe-verdicts.ts。写满（storage-quota）不在步骤里：只在 Playwright 的 Chromium 系经 CDP 覆盖配额时做。
 // 这里只有纯函数与读写库的辅助，不起浏览器
-import type { HandoverScenario, RequestScenario, SelftestFormulaMode, SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import type { HandoverScenario, ProbeScenario, RequestScenario, SelftestFormulaMode, SelftestReport, SelftestScenario } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { SnapshotFor, TestUser } from './database.ts'
 import { Buffer } from 'node:buffer'
 import zlib from 'node:zlib'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
-import { BIG_SHEET, cellCount, verifyFormulaSnapshot } from '../../../apps/web/src/editor/testing/capture-samples.ts'
-import { COMPOSITION_NOTE, ENTER_EXIT_EDIT, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, HIDDEN_SAVE_EDITS, NEXT_PARAM, PAUSED_HOLDER_EDITS, REFRESH_SAVE_EDIT, REQUEST_WAITER_EDIT, selftestEditorUrl, selftestPassed, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import { bigSheetFor, formulaSampleFor } from './capture-samples.ts'
+import { BIG_SHEET, BULK_SAMPLE_BYTES, cellCount, verifyFormulaSnapshot } from '../../../apps/web/src/editor/testing/capture-samples.ts'
+import { COMPOSITION_NOTE, ENTER_EXIT_EDIT, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, HIDDEN_SAVE_EDITS, isProbeScenario, NEXT_PARAM, PAUSED_HOLDER_EDITS, REFRESH_SAVE_EDIT, REQUEST_WAITER_EDIT, RUNS_PARAM, selftestEditorUrl, selftestPassed, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { bigSheetFor, bulkSampleFor, formulaSampleFor, perfSampleFor } from './capture-samples.ts'
 import { createDocumentIn, createTeamSpace, createUser, withDatabase } from './database.ts'
 import { readOnlySampleFor, SAMPLE_FORMULAS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from './read-only-sample.ts'
 
 /** 自检的入口页（只在测试构建里，vite.config.ts 的 TEST_ONLY_INPUTS） */
 export const SELFTEST_PAGE = '/selftest.html'
 
-/** 一步用哪份样本 */
-export type SelftestSample = 'read-only' | 'read-only-formulas' | 'without-images' | 'template' | 'formulas' | 'big-sheet'
+/** 一步用哪份样本（M4-P1 S1 另有按字节数生成的明细表 bulk-1m、bulk-5m 与性能基线的 perf-50k） */
+export type SelftestSample = 'read-only' | 'read-only-formulas' | 'without-images' | 'template' | 'formulas' | 'big-sheet' | 'bulk-1m' | 'bulk-5m' | 'perf-50k'
 
 /** 样本怎么生成（写库时换上文档自己的 unitId） */
 const SAMPLES: Readonly<Record<SelftestSample, SnapshotFor>> = {
@@ -36,6 +38,9 @@ const SAMPLES: Readonly<Record<SelftestSample, SnapshotFor>> = {
   'template': sheetSnapshotFor,
   'formulas': formulaSampleFor,
   'big-sheet': bigSheetFor,
+  'bulk-1m': bulkSampleFor(BULK_SAMPLE_BYTES.small),
+  'bulk-5m': bulkSampleFor(BULK_SAMPLE_BYTES.large),
+  'perf-50k': perfSampleFor,
 }
 
 /**
@@ -62,7 +67,11 @@ export interface SelftestStepDefinition {
  * - M3-P5 S8（交接的复核，驱动脚本各开一个新的标签页）：两个标签页的本人接管（A 与 B，同一份文档；再一对里的 A 收不到交接频道的消息）、
  *   刷新时在途的保存；
  * - M3-P6 S5（请求编辑的两条路，DEF-062，驱动脚本各开一个新的标签页、经接口扮演另一方——场景的协作者）：请求方在后台停在交给了我、回到前台才进入
- *   （request-waiter）；持有者被暂停时自动交出走到到期（paused-holder，盖屏，放在最后）
+ *   （request-waiter）；持有者被暂停时自动交出走到到期（paused-holder，盖屏，放在最后）；
+ * - M4-P1 S1（真实浏览器的前置复核，设计 §3.6，都由上一步带过去，放在 hidden-save 之前）：首屏与公式冻结（作者，perf-50k，Worker、主线程、
+ *   再一次 Worker——只选这几步时第一步是这次运行里第一次打开编辑器页，冷的；之后的热），捕获成本（作者，约 1 MiB 与约 5 MiB），存储、密钥交给 Worker、
+ *   Worker 的停顿（查看者，阅读时跑；密钥单独一步：万一停在钥匙串的提示上，别的几项已经交回），以及生产的发件箱（主会话把 S8 的第二轮并进来）：
+ *   生产 Worker 的停顿（outbox-stall）、磁盘上的管道各段与恢复路径（outbox-pipeline）
  */
 export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'read-only', scenario: 'read-only', role: 'viewer', sample: 'read-only' },
@@ -76,6 +85,16 @@ export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'auto-height', scenario: 'auto-height', role: 'author', sample: 'big-sheet' },
   { id: 'large-copy', scenario: 'large-copy', role: 'author', sample: 'big-sheet' },
   { id: 'composition', scenario: 'composition', role: 'author', sample: 'template' },
+  { id: 'perf-worker', scenario: 'perf-baseline', role: 'author', sample: 'perf-50k', formula: 'worker' },
+  { id: 'perf-main', scenario: 'perf-baseline', role: 'author', sample: 'perf-50k', formula: 'main-thread' },
+  { id: 'perf-worker-warm', scenario: 'perf-baseline', role: 'author', sample: 'perf-50k', formula: 'worker' },
+  { id: 'capture-1m', scenario: 'capture-cost', role: 'author', sample: 'bulk-1m' },
+  { id: 'capture-5m', scenario: 'capture-cost', role: 'author', sample: 'bulk-5m' },
+  { id: 'storage', scenario: 'storage', role: 'viewer', sample: 'template' },
+  { id: 'key-transfer', scenario: 'key-transfer', role: 'viewer', sample: 'template' },
+  { id: 'worker-stall', scenario: 'worker-stall', role: 'viewer', sample: 'template' },
+  { id: 'outbox-stall', scenario: 'outbox-stall', role: 'viewer', sample: 'template' },
+  { id: 'outbox-pipeline', scenario: 'outbox-pipeline', role: 'viewer', sample: 'template' },
   { id: 'hidden-save', scenario: 'hidden-save', role: 'author', sample: 'template' },
   { id: 'takeover-holder', scenario: 'takeover-holder', role: 'author', sample: 'template' },
   { id: 'takeover-taker', scenario: 'takeover-taker', role: 'author', sample: 'template', sharesDocumentOf: 'takeover-holder', opens: 'editor' },
@@ -98,6 +117,8 @@ export interface SelftestStep {
   readonly opens?: 'entry' | 'editor' | undefined
   /** 与哪一步共用文档（那一步的 id）；没有时 undefined */
   readonly sharesDocumentOf?: string | undefined
+  /** 运行次数（RUNS_PARAM，M4-P1）：只给真实浏览器的复核（PROBE_SCENARIOS）的步骤；没有时页面用各场景最少的次数 */
+  readonly runs?: number | undefined
 }
 
 /**
@@ -112,9 +133,10 @@ export interface SelftestScene {
 }
 
 /**
- * 定义与造好的文档拼成步骤（documentIds 与 definitions 一一对应；共用文档的那一步在 documentIds 里随便填，取它共用的那一步的文档）
+ * 定义与造好的文档拼成步骤（documentIds 与 definitions 一一对应；共用文档的那一步在 documentIds 里随便填，取它共用的那一步的文档）。
+ * runs 只交给真实浏览器的复核的步骤（别的场景不看它，地址里也不带）
  */
-export function stepsOf(definitions: readonly SelftestStepDefinition[], people: { readonly author: TestUser, readonly viewer: TestUser }, documentIds: readonly string[]): SelftestStep[] {
+export function stepsOf(definitions: readonly SelftestStepDefinition[], people: { readonly author: TestUser, readonly viewer: TestUser }, documentIds: readonly string[], runs?: number): SelftestStep[] {
   if (documentIds.length !== definitions.length)
     throw new Error(`${definitions.length} 步却有 ${documentIds.length} 份文档`)
   const documentOf = (definition: SelftestStepDefinition, index: number): string => {
@@ -133,14 +155,15 @@ export function stepsOf(definitions: readonly SelftestStepDefinition[], people: 
     opens: definition.opens ?? 'entry',
     ...(definition.formula === undefined ? {} : { formula: definition.formula }),
     ...(definition.sharesDocumentOf === undefined ? {} : { sharesDocumentOf: definition.sharesDocumentOf }),
+    ...(runs === undefined || !isProbeScenario(definition.scenario) ? {} : { runs }),
   }))
 }
 
 /**
  * 写库造场景：团队空间与账户（与 support/read-only.ts 的 scene 相同的空间与角色，另加协作者：编辑者，请求编辑的两条路里经接口扮演另一方），
- * 每一步一份文档（作者建的；共用文档的那一步不另建）
+ * 每一步一份文档（作者建的；共用文档的那一步不另建）。runs：真实浏览器的复核的运行次数（驱动脚本给；Playwright 的校准不给）
  */
-export async function selftestScene(prefix: string, definitions: readonly SelftestStepDefinition[] = SELFTEST_STEPS): Promise<SelftestScene> {
+export async function selftestScene(prefix: string, definitions: readonly SelftestStepDefinition[] = SELFTEST_STEPS, runs?: number): Promise<SelftestScene> {
   const admin = await createUser(`${prefix}-admin`, '系统管理员', { systemRole: 'admin' })
   const author = await createUser(`${prefix}-author`, '作者')
   const viewer = await createUser(`${prefix}-viewer`, '查看者')
@@ -149,7 +172,7 @@ export async function selftestScene(prefix: string, definitions: readonly Selfte
   const documentIds: string[] = []
   for (const definition of definitions)
     documentIds.push(definition.sharesDocumentOf === undefined ? await createDocumentIn(space.id, author, `自检 ${definition.id}`, { snapshotFor: SAMPLES[definition.sample] }) : '')
-  return { author, viewer, peer, steps: stepsOf(definitions, { author, viewer }, documentIds) }
+  return { author, viewer, peer, steps: stepsOf(definitions, { author, viewer }, documentIds, runs) }
 }
 
 /**
@@ -159,10 +182,12 @@ export async function selftestScene(prefix: string, definitions: readonly Selfte
  */
 export function selftestPageUrl(origin: string, step: SelftestStep, next: string): string {
   if (step.opens === 'editor')
-    return selftestEditorUrl(origin, step.documentId, step.scenario, next, step.formula)
+    return selftestEditorUrl(origin, step.documentId, step.scenario, next, step.formula, step.runs)
   const fragment = new URLSearchParams({ user: step.account.username, password: step.account.password, document: step.documentId, scenario: step.scenario, [NEXT_PARAM]: next })
   if (step.formula !== undefined)
     fragment.set(FORMULA_MODE_PARAM, FORMULA_MODE_VALUES[step.formula])
+  if (step.runs !== undefined)
+    fragment.set(RUNS_PARAM, String(step.runs))
   return `${new URL(SELFTEST_PAGE, origin).href}#${fragment.toString()}`
 }
 
@@ -377,7 +402,28 @@ function requestExpectation(scenario: RequestScenario, path: string | undefined)
   }
 }
 
+/**
+ * 真实浏览器的前置复核（M4-P1 S1）在服务器上该有的样子：只看不改的（存储、密钥、停顿、捕获成本：捕获只读内存里的快照）还是修订号 1；
+ * 首屏与公式冻结改了数据表的几格、暂停定时的上传——交回结果整页跳走时页面隐藏，自动保存在那一刻上传（发得出去、提交了才多一个修订），所以至少 1
+ */
+function probeExpectation(scenario: ProbeScenario): ServerExpectation {
+  switch (scenario) {
+    case 'perf-baseline':
+      return { revision: { atLeast: 1 }, why: '改了数据表的几格、暂停定时的上传；整页跳走交回结果时页面隐藏，自动保存可能在那一刻上传', cells: [] }
+    case 'storage':
+    case 'key-transfer':
+    case 'storage-quota':
+    case 'worker-stall':
+    case 'capture-cost':
+    case 'outbox-stall':
+    case 'outbox-pipeline':
+      return { revision: 1, why: '没有保存过', cells: [] }
+  }
+}
+
 function serverExpectation(scenario: SelftestScenario, path: string | undefined): ServerExpectation | 'none' | undefined {
+  if (isProbeScenario(scenario))
+    return probeExpectation(scenario)
   switch (scenario) {
     case 'takeover-holder':
     case 'takeover-holder-deaf':

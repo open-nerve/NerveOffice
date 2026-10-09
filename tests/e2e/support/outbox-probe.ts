@@ -244,6 +244,11 @@ export interface OutboxProbe {
     readonly holdTransaction: () => Promise<number>
     readonly releaseTransaction: (held: number) => Promise<void>
   }
+  readonly storage: {
+    readonly persisted: () => Promise<{ readonly kind: 'persisted' | 'not-persisted' | 'unsupported' } | { readonly kind: 'failed', readonly error: ProbeError }>
+    readonly persist: () => Promise<{ readonly kind: 'granted' | 'denied' | 'unsupported' } | { readonly kind: 'failed', readonly error: ProbeError }>
+    readonly estimate: () => Promise<{ readonly kind: 'estimated', readonly usage: number | undefined, readonly quota: number | undefined } | { readonly kind: 'unsupported' } | { readonly kind: 'failed', readonly error: ProbeError }>
+  }
   readonly localKey: {
     readonly fetch: () => Promise<ProbeLocalKey>
     readonly encryptHex: (plainHex: string, ivHex: string) => Promise<string>
@@ -262,9 +267,10 @@ declare global {
   }
 }
 
-type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline'>
+type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline' | 'storage'>
 type DatabaseMethod = keyof OutboxProbe['database']
 type LocalKeyMethod = keyof OutboxProbe['localKey']
+type StorageMethod = keyof OutboxProbe['storage']
 type PipelineMethod = keyof OutboxProbe['pipeline']
 
 /**
@@ -297,6 +303,16 @@ export async function probeDatabase<M extends DatabaseMethod>(page: Page, method
 }
 
 /** 在页面里调探针的本机密钥一侧的方法（经生产的 fetchLocalKey 取、用它加密） */
+/** 在页面里调探针的本机存储状态（生产的 storage-status.ts） */
+export async function probeStorage<M extends StorageMethod>(page: Page, method: M): Promise<Awaited<ReturnType<OutboxProbe['storage'][M]>>> {
+  return page.evaluate(async (name) => {
+    const target = window.__nerveOutboxProbe
+    if (target === undefined)
+      throw new Error('页面里没有发件箱的探针')
+    return (target.storage[name] as unknown as () => unknown)()
+  }, method) as Promise<Awaited<ReturnType<OutboxProbe['storage'][M]>>>
+}
+
 export async function probeLocalKey<M extends LocalKeyMethod>(page: Page, method: M, ...args: Parameters<OutboxProbe['localKey'][M]>): Promise<Awaited<ReturnType<OutboxProbe['localKey'][M]>>> {
   return page.evaluate(async ({ method, args }) => {
     const target = window.__nerveOutboxProbe

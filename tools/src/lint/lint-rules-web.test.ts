@@ -107,8 +107,10 @@ describe('US-M1-11 lint 规则的自测：平台页面的模块边界与入口',
       expect(report.rules, source).toContain('no-restricted-syntax')
       expect(report.messages.join('\n'), source).toContain('页面自检的入口页不用动态 import()')
     }
+    // web 的整组限制：编辑器页的文件只有这一组（平台页面的文件另加了本机发件箱那一条，M4-P1）
+    const webSyntax = restrictedSyntaxSelectors(await configFor('apps/web/src/features/sheet-editor/editor-page.ts'))
     for (const entry of [signIn, 'apps/web/src/entries/selftest/main.ts'])
-      expect(restrictedSyntaxSelectors(await configFor(entry)), entry).toEqual([...restrictedSyntaxSelectors(await configFor(WEB_SHARED_FILE)), 'ImportExpression'])
+      expect(restrictedSyntaxSelectors(await configFor(entry)), entry).toEqual([...webSyntax, 'ImportExpression'])
   })
 
   it('不能借"无主"文件中转绕过边界', async () => {
@@ -649,5 +651,94 @@ describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（fe
     expect(report.messages.join('\n')).toContain('测试与测试辅助')
     // 别的目录里叫 testing 的包名不算（只认路径里的 testing 这一段）
     expect(await rulesFor('import { render } from \'@testing-library/react\'\n\nexport const r = render\n', PAGE)).not.toContain(RULE)
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1 设计 §3.1，计划 S8 第 2 项）', () => {
+  const RULE = 'ts/no-restricted-imports'
+  const SYNTAX = 'no-restricted-syntax'
+  const PLATFORM_MESSAGE = '平台页面对本机发件箱（shared/outbox/）只许按需 import() 列表的标记 draft-index.ts'
+  const ZOD_FREE_MESSAGE = '发件箱 Worker 会用到的文件与测试构建的探针不引用 zod、带 zod 的契约模块与请求层（shared/api/）'
+  const EDITOR_PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
+  const WORKER_SHARED = 'apps/web/src/shared/outbox/writer-fence.ts'
+  const WORKER_FEATURE = ['apps/web/src/features/sheet-editor/outbox/outbox-protocol.ts', 'apps/web/src/features/sheet-editor/outbox/outbox-worker-handler.ts', 'apps/web/src/features/sheet-editor/outbox/outbox.worker.ts']
+  const PROBE = 'apps/web/src/features/sheet-editor/outbox/testing/outbox-probe.ts'
+
+  async function expectBlocked(code: string, file: string, rule: string, message: string): Promise<void> {
+    const report = await lint(code, file)
+    expect(report.rules, `${file}\n${code}`).toContain(rule)
+    expect(report.messages.join('\n'), `${file}\n${code}`).toContain(message)
+  }
+
+  async function expectAllowed(code: string, file: string, message: string): Promise<void> {
+    expect((await lint(code, file)).messages.join('\n'), `${file}\n${code}`).not.toContain(message)
+  }
+
+  it('平台页面：静态引用发件箱的任何文件（含 draft-index.ts、import type、副作用导入与再导出）都报错；应用层、功能、shared 的别的文件、平台页面的入口都一样', async () => {
+    const cases: (readonly [string, string])[] = [
+      [WEB_FILE, 'import { draftDocumentIds } from \'../shared/outbox/draft-index.ts\'\n\nexport const ids = draftDocumentIds\n'],
+      [WEB_FILE, 'import type { DraftStore } from \'../shared/outbox/draft-store.ts\'\n\nexport type S = DraftStore\n'],
+      [WEB_FEATURE_FILE, 'export { draftDocumentIds } from \'../../shared/outbox/draft-index.ts\'\n'],
+      [WEB_SHARED_FILE, 'import { createDraftStore } from \'../outbox/draft-store.ts\'\n\nexport const create = createDraftStore\n'],
+      [PLATFORM_ENTRY, 'import \'../../shared/outbox/draft-index.ts\'\n'],
+    ]
+    for (const [file, code] of cases)
+      await expectBlocked(code, file, RULE, PLATFORM_MESSAGE)
+  })
+
+  it('平台页面：按需 import() 只许列表的标记 draft-index.ts，别的发件箱文件报错', async () => {
+    await expectAllowed(dynamicImport('../../shared/outbox/draft-index.ts'), WEB_FEATURE_FILE, PLATFORM_MESSAGE)
+    await expectAllowed(dynamicImport('../shared/outbox/draft-index.ts'), WEB_FILE, PLATFORM_MESSAGE)
+    for (const [file, path] of [[WEB_FEATURE_FILE, '../../shared/outbox/draft-store.ts'], [WEB_FILE, '../shared/outbox/local-key.ts'], [WEB_SHARED_FILE, '../outbox/storage-status.ts'], [WEB_FEATURE_FILE, '../../shared/outbox/draft-index.ts?raw']] as const)
+      await expectBlocked(dynamicImport(path), file, SYNTAX, PLATFORM_MESSAGE)
+    // 带上的是 web 的整组限制再加这一条（不是只剩这一条）
+    const selectors = restrictedSyntaxSelectors(await configFor(WEB_FEATURE_FILE))
+    expect(selectors).toEqual(expect.arrayContaining(restrictedSyntaxSelectors(await configFor(EDITOR_PAGE))))
+    expect(selectors.length).toBe(restrictedSyntaxSelectors(await configFor(EDITOR_PAGE)).length + 1)
+  })
+
+  it('编辑器页与发件箱自己不受平台页面那一条限制', async () => {
+    await expectAllowed('import { createDraftStore } from \'../../shared/outbox/draft-store.ts\'\n\nexport const create = createDraftStore\n', EDITOR_PAGE, PLATFORM_MESSAGE)
+    await expectAllowed(dynamicImport('../../shared/outbox/local-key.ts'), EDITOR_PAGE, PLATFORM_MESSAGE)
+    await expectAllowed('import { openOutboxDatabase } from \'./database.ts\'\n\nexport const open = openOutboxDatabase\n', 'apps/web/src/shared/outbox/draft-index.ts', PLATFORM_MESSAGE)
+  })
+
+  it('Worker 会用到的文件与探针：引用 zod（含子路径）、请求层、契约里带 zod 的结构都报错；契约里不带 zod 的常量与类型照常', async () => {
+    const blocked = [
+      'import { z } from \'zod\'\n\nexport const s = z.string()\n',
+      'import { z } from \'zod/v4\'\n\nexport const s = z.string()\n',
+      'import { localKeySchema } from \'@nerve-office/contracts\'\n\nexport const schema = localKeySchema\n',
+    ]
+    const apiImport = (file: string): string => `import { apiRequest } from '${file.includes('/features/') ? '../../../shared' : '..'}/api/client.ts'\n\nexport const request = apiRequest\n`
+    for (const file of [WORKER_SHARED, ...WORKER_FEATURE, PROBE]) {
+      for (const code of blocked)
+        await expectBlocked(code, file, RULE, ZOD_FREE_MESSAGE)
+      await expectBlocked(apiImport(file.replace('/testing/', '/')), file, RULE, ZOD_FREE_MESSAGE)
+      await expectAllowed('import { LOCAL_DRAFT_RETENTION_DAYS } from \'@nerve-office/contracts\'\n\nexport const days = LOCAL_DRAFT_RETENTION_DAYS\n', file, ZOD_FREE_MESSAGE)
+      await expectAllowed('import type { LocalKey } from \'@nerve-office/contracts\'\n\nexport type K = LocalKey\n', file, ZOD_FREE_MESSAGE)
+    }
+    await expectBlocked('import { apiRequest } from \'../../../../shared/api/client.ts\'\n\nexport const request = apiRequest\n', PROBE, RULE, ZOD_FREE_MESSAGE)
+  })
+
+  it('只在主线程用的（本机密钥、存储状态、Worker 的客户端）不受这一条限制；同一份限制里仍拦着测试辅助与 sheet-editor 的 testing/', async () => {
+    const code = 'import { localKeySchema } from \'@nerve-office/contracts\'\n\nexport const schema = localKeySchema\n'
+    for (const file of ['apps/web/src/shared/outbox/local-key.ts', 'apps/web/src/shared/outbox/storage-status.ts', 'apps/web/src/features/sheet-editor/outbox/outbox-worker-client.ts'])
+      await expectAllowed(code, file, ZOD_FREE_MESSAGE)
+    await expectBlocked('import { sampleMeta } from \'./draft-record.test-support.ts\'\n\nexport const meta = sampleMeta\n', WORKER_SHARED, RULE, '测试与测试辅助')
+    await expectBlocked('import \'./testing/outbox-probe.ts\'\n\nexport const a = 1\n', WORKER_FEATURE[0] ?? '', RULE, '编辑器页的测试构建探针')
+  })
+
+  it('放行的契约常量都定义在不引用 zod 的模块里（入口里找到定义它的模块，逐个核对）', async () => {
+    const entry = (await configFor(WORKER_SHARED)).rules?.[RULE]
+    const options = (Array.isArray(entry) ? entry[1] : {}) as { readonly paths?: readonly { readonly name: string, readonly allowImportNames?: readonly string[] }[] }
+    const allowed = options.paths?.find(path => path.name === '@nerve-office/contracts')?.allowImportNames ?? []
+    expect(allowed.length).toBeGreaterThan(0)
+    const index = readFileSync(join(REPO_ROOT, 'packages/contracts/src/index.ts'), 'utf8')
+    for (const name of allowed) {
+      const exported = [...index.matchAll(/export \{([^}]*)\} from '(\.\/[^']+)'/g)].find(match => (match[1] ?? '').split(',').map(part => part.trim()).includes(name))
+      expect(exported, `${name} 没有从 contracts 的入口转出`).toBeDefined()
+      const source = readFileSync(join(REPO_ROOT, 'packages/contracts/src', exported?.[2] ?? ''), 'utf8')
+      expect(source, `${name} 定义在 ${exported?.[2]}，它引用了 zod`).not.toMatch(/from 'zod'/)
+    }
   })
 }, LINT_TIMEOUT)
