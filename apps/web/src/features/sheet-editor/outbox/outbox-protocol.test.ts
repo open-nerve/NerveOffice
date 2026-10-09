@@ -54,6 +54,12 @@ function sampleCalls(): readonly OutboxCall[] {
     { type: 'set-key', key: null },
     { type: 'seed-digest', draft: DRAFT, seed: { digest: 'ab'.repeat(32), formulasPending: true } },
     { type: 'seed-digest', draft: DRAFT, seed: null },
+    { type: 'release', draft: DRAFT },
+    { type: 'reconcile', userId: USER_ID },
+    { type: 'notices', userId: USER_ID },
+    { type: 'clear-notice', draft: DRAFT, expectedAt: null },
+    { type: 'clear-notice', draft: DRAFT, expectedAt: 0 },
+    { type: 'clear-notice', draft: DRAFT, expectedAt: 1_700_000_000_000 },
   ]
 }
 
@@ -114,6 +120,17 @@ describe('请求（Worker 一侧认）：带协议版本与 id，参数逐项核
       { type: 'seed-digest', draft: DRAFT },
       { type: 'seed-digest', draft: DRAFT, seed: { digest: '', formulasPending: false } },
       { type: 'seed-digest', draft: DRAFT, seed: { digest: 'ab' } },
+      { type: 'release' },
+      { type: 'release', draft: { documentId: DOCUMENT_ID } },
+      { type: 'reconcile' },
+      { type: 'reconcile', userId: '' },
+      { type: 'notices' },
+      { type: 'notices', userId: 7 },
+      { type: 'clear-notice', draft: DRAFT },
+      { type: 'clear-notice', draft: DRAFT, expectedAt: -1 },
+      { type: 'clear-notice', draft: DRAFT, expectedAt: 1.5 },
+      { type: 'clear-notice', expectedAt: null },
+      { type: 'take-events' },
     ]
     for (const call of broken)
       expect(readOutboxRequest({ ...call, v: OUTBOX_PROTOCOL_VERSION, id: 9 }), JSON.stringify(call)).toEqual({ kind: 'invalid', id: 9 })
@@ -195,6 +212,14 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
   const meta = sampleMeta()
   const gzip = (): Uint8Array<ArrayBuffer> => utf8('gzip bytes')
   const problems = [{ kind: 'quota' }, { kind: 'unavailable', reason: 'blocked' }, { kind: 'failed', error: FAILURE }] as const
+  const mirrors = [
+    { kind: 'mirrored' },
+    { kind: 'off' },
+    { kind: 'not-mirrored', reason: 'busy' },
+    { kind: 'not-mirrored', reason: 'quota' },
+    { kind: 'not-mirrored', reason: 'unsupported' },
+    { kind: 'not-mirrored', reason: 'failed', error: FAILURE },
+  ] as const
   const opened = () => [
     { kind: 'draft', meta, gzip: gzip() },
     { kind: 'unreadable', meta, reason: 'revoked' },
@@ -206,13 +231,14 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
   const valid: { readonly [T in OutboxCallType]: readonly OutboxResults[T][] } = {
     'hello': [{ kind: 'ready' }, { kind: 'failed', error: FAILURE }],
     'register': [
-      { kind: 'registered', lastDraftSeq: 0, existing: undefined },
-      ...opened().map(existing => ({ kind: 'registered', lastDraftSeq: 6, existing }) as const),
+      { kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror: { kind: 'off' } },
+      ...mirrors.map(mirror => ({ kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror }) as const),
+      ...opened().map(existing => ({ kind: 'registered', lastDraftSeq: 6, existing, mirror: { kind: 'mirrored' } }) as const),
       { kind: 'superseded', currentEpoch: 4, sameEpoch: false },
       ...problems,
     ],
     'write': [
-      { kind: 'written', gzip: gzip(), digest: 'ab' },
+      ...mirrors.map(mirror => ({ kind: 'written', gzip: gzip(), digest: 'ab', mirror }) as const),
       { kind: 'unchanged', digest: 'ab' },
       { kind: 'fenced', reason: 'foreign-draft', gzip: gzip() },
       { kind: 'no-key', gzip: gzip() },
@@ -227,6 +253,16 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
     'remove': [{ kind: 'removed' }, { kind: 'changed' }, { kind: 'absent' }, ...problems],
     'set-key': [{ kind: 'key-set', notResealed: [] }, { kind: 'key-set', notResealed: [DRAFT] }, { kind: 'failed', error: FAILURE }],
     'seed-digest': [{ kind: 'seeded' }, { kind: 'failed', error: FAILURE }],
+    'release': [{ kind: 'released' }, { kind: 'failed', error: FAILURE }],
+    'reconcile': [{ kind: 'reconciled', documents: 0 }, { kind: 'reconciled', documents: 3 }, { kind: 'failed', error: FAILURE }],
+    'notices': [
+      { kind: 'notices', notices: [] },
+      { kind: 'notices', notices: [{ ...DRAFT, kind: 'restored', at: 1 }, { ...DRAFT, kind: 'lost', at: 0 }] },
+      { kind: 'quota' },
+      { kind: 'unavailable', reason: 'blocked' },
+      { kind: 'failed', error: FAILURE },
+    ],
+    'clear-notice': [{ kind: 'cleared' }, { kind: 'changed' }, { kind: 'absent' }, { kind: 'quota' }, { kind: 'unavailable', reason: 'denied' }, { kind: 'failed', error: FAILURE }],
   }
 
   it('每种结果的每种样子都认得出（经结构化克隆，多出的字段不带出去）', () => {
@@ -242,8 +278,11 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
     const broken: { readonly [T in OutboxCallType]: readonly unknown[] } = {
       'hello': [null, {}, { kind: 'failed' }, { kind: 'failed', error: { name: 'x' } }],
       'register': [
-        { kind: 'registered', lastDraftSeq: -1, existing: undefined },
-        { kind: 'registered', lastDraftSeq: 1, existing: null },
+        { kind: 'registered', lastDraftSeq: -1, existing: undefined, mirror: { kind: 'off' } },
+        { kind: 'registered', lastDraftSeq: 1, existing: undefined },
+        { kind: 'registered', lastDraftSeq: 1, existing: undefined, mirror: { kind: 'other' } },
+        { kind: 'registered', lastDraftSeq: 1, existing: undefined, mirror: { kind: 'other', reason: 'busy' } },
+        { kind: 'registered', lastDraftSeq: 1, existing: null, mirror: { kind: 'off' } },
         { kind: 'registered', lastDraftSeq: 1, existing: { kind: 'draft', meta, gzip: 'x' } },
         { kind: 'registered', lastDraftSeq: 1, existing: { kind: 'draft', meta: { ...meta, draftSeq: 0 }, gzip: gzip() } },
         { kind: 'registered', lastDraftSeq: 1, existing: { kind: 'unreadable', meta, reason: 'other' } },
@@ -255,8 +294,12 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
         { kind: 'other' },
       ],
       'write': [
-        { kind: 'written', gzip: gzip() },
-        { kind: 'written', gzip: [1], digest: 'ab' },
+        { kind: 'written', gzip: gzip(), mirror: { kind: 'mirrored' } },
+        { kind: 'written', gzip: [1], digest: 'ab', mirror: { kind: 'mirrored' } },
+        { kind: 'written', gzip: gzip(), digest: 'ab' },
+        { kind: 'written', gzip: gzip(), digest: 'ab', mirror: { kind: 'not-mirrored', reason: 'other' } },
+        { kind: 'written', gzip: gzip(), digest: 'ab', mirror: { kind: 'not-mirrored', reason: 'failed' } },
+        { kind: 'written', gzip: gzip(), digest: 'ab', mirror: null },
         { kind: 'unchanged', digest: '' },
         { kind: 'fenced', reason: 'other', gzip: gzip() },
         { kind: 'no-key' },
@@ -272,6 +315,18 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
       'remove': [{ kind: 'deleted' }, { kind: 'failed', error: 'x' }, { kind: 'unavailable', reason: 'x' }],
       'set-key': [{ kind: 'key-set' }, { kind: 'key-set', notResealed: [{ userId: USER_ID }] }, { kind: 'key-set', notResealed: 'x' }, { kind: 'failed' }],
       'seed-digest': [{ kind: 'ready' }, { kind: 'failed', error: { message: 'x' } }],
+      'release': [{ kind: 'seeded' }, { kind: 'failed' }],
+      'reconcile': [{ kind: 'reconciled' }, { kind: 'reconciled', documents: -1 }, { kind: 'failed', error: null }],
+      'notices': [
+        { kind: 'notices' },
+        { kind: 'notices', notices: 'x' },
+        { kind: 'notices', notices: [{ ...DRAFT, kind: 'restored' }] },
+        { kind: 'notices', notices: [{ ...DRAFT, kind: 'gone', at: 1 }] },
+        { kind: 'notices', notices: [{ kind: 'lost', at: 1 }] },
+        { kind: 'events', events: [] },
+        { kind: 'unavailable', reason: 'gone' },
+      ],
+      'clear-notice': [{ kind: 'removed' }, { kind: 'failed', error: null }, { kind: 'other' }],
     }
     for (const [type, results] of Object.entries(broken) as [OutboxCallType, readonly unknown[]][]) {
       expect(readOutboxResult(type, 'not an object'), type).toBeNull()

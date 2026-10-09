@@ -4,9 +4,11 @@
 // 另有故障与交错：下一次某个操作交回指定的问题（写满、库用不了、出错），或者停在开始之前、等测试放行（确定的交错）
 import type { DraftKey, StoredDraft } from './draft-record.ts'
 import type { DraftStore, ListedDraft, PurgedDraft, StoreProblem } from './draft-store.ts'
+import type { RecoveryNotice } from './recovery-notice.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideWrite, isSameWriter, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
+import { readRecoveryNotice } from './recovery-notice.ts'
+import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isSameWriter, restoredWriterOf, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
 
 export type StoreOperation = Exclude<keyof DraftStore, 'close'>
 
@@ -21,8 +23,10 @@ export interface FakeDraftStore {
   /** 库里这份文档的草稿（一份拷贝，没经过形状核对）；没有为 undefined */
   readonly rawDraft: (key: DraftKey) => unknown
   readonly rawWriter: (key: DraftKey) => unknown
+  /** 库里这份文档的提示（S9） */
+  readonly rawNotice: (key: DraftKey) => unknown
   /** 直接改库：模拟别的标签页、别的写入者，或者被改过的记录（undefined 是删掉） */
-  readonly putRaw: (table: 'drafts' | 'writers', key: DraftKey, value: unknown) => void
+  readonly putRaw: (table: 'drafts' | 'writers' | 'notices', key: DraftKey, value: unknown) => void
   /** 每个操作开始时记下名字（按调用的先后） */
   readonly calls: readonly StoreOperation[]
   /** 下一次 operation 交回 problem，不判定、不改库（只一次） */
@@ -44,6 +48,7 @@ function keyOf(record: DraftKey): DraftKey {
 export function fakeDraftStore(): FakeDraftStore {
   const drafts = new Map<string, unknown>()
   const writers = new Map<string, unknown>()
+  const notices = new Map<string, unknown>()
   const calls: StoreOperation[] = []
   const failures = new Map<StoreOperation, StoreProblem>()
   const holds = new Map<StoreOperation, { reached: () => void, released: Promise<void> }>()
@@ -73,6 +78,10 @@ export function fakeDraftStore(): FakeDraftStore {
     if (current !== undefined && isSameWriter(current, identity))
       writers.set(idOf(draft), { ...current, lastDraftSeq: Math.max(current.lastDraftSeq, draft.draftSeq) })
   }
+  const notice = (key: DraftKey, kind: RecoveryNotice['kind'], at: number): RecoveryNotice => ({ ...keyOf(key), kind, at })
+  /** 属于这个用户的键（JSON 的 [userId, documentId]） */
+  const ownedBy = (id: string, userId: string): boolean => (JSON.parse(id) as [string, string])[0] === userId
+  const documentOf = (id: string): string => (JSON.parse(id) as [string, string])[1]
   /** 存进去的一律读得回来：形状不对的不写（与 IndexedDB 的实现同一个约定） */
   const unwritable = (draft: StoredDraft): StoreProblem | undefined =>
     readStoredDraft(draft).kind === 'draft' ? undefined : { kind: 'failed', error: new TypeError('形状不对的草稿不写') }
@@ -168,17 +177,19 @@ export function fakeDraftStore(): FakeDraftStore {
       const verdict = decideRemove(existingOf(id), expectedSeq)
       if (verdict === 'remove') {
         drafts.delete(id)
+        notices.delete(id)
         return { kind: 'removed' }
       }
       return { kind: verdict }
     },
-    async removeUserData(userId) {
+    async removeUserData(userId, options) {
       const problem = await begin('removeUserData')
       if (problem !== undefined)
         return problem
-      for (const table of [drafts, writers]) {
+      const keep = new Set(options?.keepDocumentIds ?? [])
+      for (const table of [drafts, writers, notices]) {
         for (const id of [...table.keys()]) {
-          if ((JSON.parse(id) as [string, string])[0] === userId)
+          if (ownedBy(id, userId) && !keep.has(documentOf(id)))
             table.delete(id)
         }
       }
@@ -201,7 +212,65 @@ export function fakeDraftStore(): FakeDraftStore {
         if (shouldPurgeWriter(readWriterRecord(raw), drafts.has(id), now))
           writers.delete(id)
       }
+      for (const [id, raw] of [...notices]) {
+        const read = readRecoveryNotice(raw)
+        if (read === undefined || isNoticeExpired(read, now))
+          notices.delete(id)
+      }
       return { kind: 'purged', drafts: purged }
+    },
+    async restoreDraft(draft, { now }) {
+      const problem = await begin('restoreDraft') ?? unwritable(draft)
+      if (problem !== undefined)
+        return problem
+      const id = idOf(draft)
+      const current = writerOf(id)
+      const verdict = decideRestore(current, existingOf(id), draft, now)
+      if (verdict.kind === 'skip')
+        return { kind: 'kept', reason: verdict.reason }
+      drafts.set(id, structuredClone(draft))
+      const restoredWriter = restoredWriterOf(current, draft, verdict.writer, now)
+      if (restoredWriter !== undefined)
+        writers.set(id, structuredClone(restoredWriter))
+      notices.set(id, notice(draft, 'restored', now))
+      return { kind: 'restored' }
+    },
+    async recordLost(key, { now }) {
+      const problem = await begin('recordLost')
+      if (problem !== undefined)
+        return problem
+      const id = idOf(key)
+      // 与 IndexedDB 的实现同一个口径：形状不对的写入者当作没有，草稿不论认不认得出都算有
+      if (writerOf(id) !== undefined || drafts.has(id))
+        return { kind: 'kept' }
+      notices.set(id, notice(key, 'lost', now))
+      return { kind: 'noted' }
+    },
+    async listNotices(userId) {
+      const problem = await begin('listNotices')
+      if (problem !== undefined)
+        return problem
+      const listed: RecoveryNotice[] = []
+      for (const [id, raw] of [...notices].sort(([a], [b]) => a.localeCompare(b))) {
+        const read = readRecoveryNotice(structuredClone(raw))
+        if (ownedBy(id, userId) && read !== undefined)
+          listed.push(read)
+      }
+      return { kind: 'notices', notices: listed }
+    },
+    async clearNotice(key, expectedAt) {
+      const problem = await begin('clearNotice')
+      if (problem !== undefined)
+        return problem
+      const id = idOf(key)
+      const raw = notices.get(id)
+      if (raw === undefined)
+        return { kind: 'absent' }
+      const read = readRecoveryNotice(raw)
+      if (expectedAt !== undefined && read !== undefined && read.at !== expectedAt)
+        return { kind: 'changed' }
+      notices.delete(id)
+      return { kind: 'cleared' }
     },
     close() {
       closeCount += 1
@@ -212,8 +281,9 @@ export function fakeDraftStore(): FakeDraftStore {
     store,
     rawDraft: key => structuredClone(drafts.get(idOf(key))),
     rawWriter: key => structuredClone(writers.get(idOf(key))),
+    rawNotice: key => structuredClone(notices.get(idOf(key))),
     putRaw(table, key, value) {
-      const target = table === 'drafts' ? drafts : writers
+      const target = table === 'drafts' ? drafts : table === 'writers' ? writers : notices
       if (value === undefined)
         target.delete(idOf(key))
       else

@@ -7,15 +7,19 @@
 // - 握手里 keepAlive 为 false 时停掉空定时器：只有测试构建的入口给 stopKeepAlive（DEF-011 的对照），生产里停不掉。
 // 存储、时钟与发消息的通道都注入，能在 jsdom 里测。不引用 zod，不依赖 DOM
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
+import type { DraftMirror } from '../../../shared/outbox/draft-mirror.ts'
 import type { DraftStore } from '../../../shared/outbox/draft-store.ts'
 import type { KeyChange } from '../../../shared/outbox/draft-writer.ts'
 import type { KeyTransfer, OutboxMessage, OutboxReply, OutboxRequest } from './outbox-protocol.ts'
-import { createDraftWriter, describeFailure } from '../../../shared/outbox/draft-writer.ts'
+import { createDraftWriter } from '../../../shared/outbox/draft-writer.ts'
+import { describeFailure } from '../../../shared/outbox/failure.ts'
 import { OUTBOX_PROTOCOL_VERSION, readOutboxRequest } from './outbox-protocol.ts'
 
 export interface OutboxWorkerHandlerOptions {
   /** 发件箱的存储（Worker 的入口给 IndexedDB 的实现） */
   readonly store: DraftStore
+  /** OPFS 的镜像（M4-P1 设计 §3.8，Worker 的入口给）；不给时不做镜像 */
+  readonly mirror?: DraftMirror
   /** 墙上时间（毫秒）：记录的更新时间、写入者的登记时刻 */
   readonly now: () => number
   /** 发给主线程（Worker 的 postMessage）；transfer 里是交回的 gzip 的缓冲 */
@@ -56,7 +60,7 @@ function plain(result: unknown): Performed {
 }
 
 export function createOutboxWorkerHandler(options: OutboxWorkerHandlerOptions): OutboxWorkerHandler {
-  const writer = createDraftWriter({ store: options.store, now: options.now })
+  const writer = createDraftWriter({ store: options.store, now: options.now, ...(options.mirror === undefined ? {} : { mirror: options.mirror }) })
   /** 交密钥的关口：上一次交来的密钥装进管道之后完成（不等重封） */
   let keyGate: Promise<void> = Promise.resolve()
 
@@ -123,6 +127,15 @@ export function createOutboxWorkerHandler(options: OutboxWorkerHandlerOptions): 
       case 'seed-digest':
         await writer.seedDigest(request.draft, request.seed ?? undefined)
         return plain({ kind: 'seeded' })
+      case 'release':
+        await writer.release(request.draft)
+        return plain({ kind: 'released' })
+      case 'reconcile':
+        return plain(await writer.reconcile(request.userId))
+      case 'notices':
+        return plain(await writer.notices(request.userId))
+      case 'clear-notice':
+        return plain(await writer.clearNotice(request.draft, request.expectedAt ?? undefined))
     }
   }
 

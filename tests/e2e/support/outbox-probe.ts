@@ -154,8 +154,15 @@ export interface ProbeCapture {
   readonly content: string | { readonly randomBase64Chars: number }
 }
 
+/** OPFS 的镜像写成了没有（S9） */
+export type MirrorStatus
+  = | { readonly kind: 'mirrored' }
+    | { readonly kind: 'off' }
+    | { readonly kind: 'not-mirrored', readonly reason: 'busy' | 'quota' | 'unsupported' }
+    | { readonly kind: 'not-mirrored', readonly reason: 'failed', readonly error: ProbeError }
+
 export type PipelineWritten
-  = | { readonly kind: 'written', readonly gzip: ProbeGzip, readonly digest: string }
+  = | { readonly kind: 'written', readonly gzip: ProbeGzip, readonly digest: string, readonly mirror: MirrorStatus }
     | { readonly kind: 'unchanged', readonly digest: string }
     | { readonly kind: 'fenced', readonly reason: 'not-writer' | 'stale-seq' | 'foreign-draft' | 'changed', readonly gzip: ProbeGzip }
     | { readonly kind: 'no-key', readonly gzip: ProbeGzip }
@@ -171,7 +178,7 @@ export type PipelineOpened
     | { readonly kind: 'malformed' }
 
 export type PipelineRegistered
-  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: PipelineOpened | undefined }
+  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: PipelineOpened | undefined, readonly mirror: MirrorStatus }
     | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean }
     | ProbeProblem
 
@@ -196,6 +203,24 @@ export interface ProbeWorkerTransaction {
   readonly durability: string | undefined
 }
 
+/** 比对镜像与库留下的提示（S9，存在库里） */
+export interface RecoveryNotice extends DraftKey {
+  readonly kind: 'restored' | 'lost'
+  readonly at: number
+}
+
+/** 库那一侧的问题（结果里） */
+export type ProbeStoreProblem = { readonly kind: 'quota' } | { readonly kind: 'unavailable', readonly reason: string } | { readonly kind: 'failed', readonly error: ProbeError }
+
+/** 镜像的一个槽位文件读出来的样子 */
+export type ProbeSlot
+  = | { readonly kind: 'missing' }
+    | { readonly kind: 'empty' }
+    | { readonly kind: 'invalid', readonly reason: string, readonly size: number }
+    | { readonly kind: 'valid', readonly generation: number, readonly meta: DraftMeta, readonly size: number }
+
+export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number }
+
 export interface ProbePipeline {
   readonly create: (options: ProbePipelineOptions) => Promise<{ readonly id: number, readonly ready: OutboxWorkerReady }>
   readonly setKey: (id: number, key: 'probe' | 'none') => Promise<PipelineKeyChange>
@@ -211,6 +236,18 @@ export interface ProbePipeline {
   readonly writeThenDispose: (id: number, capture: ProbeCapture, delayMs: number) => Promise<{ readonly result: PipelineWritten, readonly settledAfterDisposeMs: number, readonly contentSha256: string }>
   readonly storedGzip: (key: DraftKey) => Promise<ProbeStoredGzip>
   readonly workerTransactions: (id: number) => readonly ProbeWorkerTransaction[]
+  readonly release: (id: number, key: DraftKey) => Promise<void>
+  readonly reconcile: (id: number, userId: string) => Promise<{ readonly kind: 'reconciled', readonly documents: number } | { readonly kind: 'failed', readonly error: ProbeError }>
+  readonly notices: (id: number, userId: string) => Promise<{ readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | ProbeStoreProblem>
+  readonly clearNotice: (id: number, key: DraftKey, expectedAt?: number) => Promise<{ readonly kind: 'cleared' | 'changed' | 'absent' } | ProbeStoreProblem>
+  readonly cleanupUser: (userId: string) => Promise<{ readonly kind: 'cleared', readonly pending: readonly DraftKey[] } | ProbeStoreProblem>
+  readonly cleanupAbandon: (key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'absent', readonly pending: readonly DraftKey[] } | { readonly kind: 'changed' } | ProbeStoreProblem>
+  readonly cleanupExpired: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: string }[], readonly pending: readonly DraftKey[] } | ProbeStoreProblem>
+  readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
+  readonly corruptSlot: (key: DraftKey, slot: 0 | 1, corruption: ProbeCorruption) => Promise<void>
+  readonly removeMirror: (userId: string) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>
+  readonly removeMirrorDocument: (key: DraftKey) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>
+  readonly disposeAll: () => void
 }
 
 export interface OutboxProbe {
@@ -330,6 +367,21 @@ export async function probePipeline<M extends PipelineMethod>(page: Page, method
       throw new Error('页面里没有发件箱的探针')
     return (target.pipeline[method] as unknown as (...values: unknown[]) => unknown)(...args)
   }, { method, args }) as Promise<Awaited<ReturnType<OutboxProbe['pipeline'][M]>>>
+}
+
+/**
+ * 用例收尾：关掉这一页的全部管道（Worker 终止、镜像的句柄放开），再删掉这个用户的 OPFS 镜像目录——Playwright 的 WebKit 在 macOS 上
+ * 把持久上下文的 OPFS 放在共用的目录里（~/Library/WebKit/org.webkit.Playwright/，不在资料目录里），不删就一直留着。交回删的结果的种类：
+ * 页面里没有探针时是 no-probe；Worker 刚终止、句柄还没放开时可能是 busy（要删干净的用例再试）；默认的上下文里 WebKit 没有 OPFS，是 unsupported
+ */
+export async function removeMirrorOf(page: Page, userId: string): Promise<string> {
+  return page.evaluate(async (owner) => {
+    const target = window.__nerveOutboxProbe
+    if (target === undefined)
+      return 'no-probe'
+    target.pipeline.disposeAll()
+    return (await target.pipeline.removeMirror(owner)).kind
+  }, userId)
 }
 
 /** 结果是 kind 这一种（不是就失败，说明里带上整个结果），交回收窄了类型的它：用例里不写条件判断 */

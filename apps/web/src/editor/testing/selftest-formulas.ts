@@ -417,12 +417,12 @@ const REBUILD_AFTER_START_MS = 1_200
 const FORCED_ROUND_TIMEOUT_MS = 60_000
 
 /** 强制全量重算（与 SDK 的 FORCED 打开、M0 V07 的基准是同一条 mutation，带 onlyLocal：不算修改，只读时也不被防火墙取消） */
-async function forceRecalculation(probe: EditorProbe): Promise<void> {
+export async function forceRecalculation(probe: EditorProbe): Promise<void> {
   await probe.univerAPI.executeCommand(FORMULA_PROTOCOL.forceTriggerMutationId, { forceCalculation: true }, { onlyLocal: true })
 }
 
 /** 命令日志里 mark 之后第一条开始一轮的 mutation */
-function roundStart(probe: EditorProbe, mark: number): ProbeCommand | undefined {
+export function roundStart(probe: EditorProbe, mark: number): ProbeCommand | undefined {
   return probe.commands(mark).find(command => command.phase === 'executed' && command.id === FORMULA_PROTOCOL.startMutationId)
 }
 

@@ -4,10 +4,13 @@
 // - autosaveFormulaSampleFor：同样的五类场景缩小的一份（US-M3-03 的 E2E，M3-P4 S6）——那些用例 × 两种公式模式 × 四个浏览器，
 //   每条只改几处、看自动保存存下的值，不要自检那样的计算量；核对时把同一个规模交给 verifyFormulaSnapshot；
 // - autosaveStopSampleFor：再加一张 1,020 个带缓存值的 SUMPRODUCT 的"重"表（"计算进行中被 stop"的那一条用）；
-// - bigSheetFor：5 万行的一列文字（自动行高的迟到、大表复制）
+// - bigSheetFor：5 万行的一列文字（自动行高的迟到、大表复制）；
+// - bulkSampleFor（M4-P1 S1 的捕获成本）：按目标字节数生成的明细表（M0-P3 的 big-1m、big-5m）；
+// - perfSampleFor（M4-P1 S1 的性能基线）：perf-50k（5 万格、1,000 个公式，带缓存值）
 import type { FormulaSample, SampleSheet } from '../../../apps/web/src/editor/testing/capture-samples.ts'
+import type { SnapshotFor } from './database.ts'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
-import { bigSheet, FORMULA_SAMPLE, formulaSampleSheets } from '../../../apps/web/src/editor/testing/capture-samples.ts'
+import { bigSheet, bulkSheet, FORMULA_SAMPLE, formulaSampleSheets, perfSampleSheets } from '../../../apps/web/src/editor/testing/capture-samples.ts'
 
 /**
  * US-M3-03 的 E2E 用的公式样本：链 50 层、聚合 2,000 行与 4 个聚合公式、跨表 3 个、SUMPRODUCT 40 个（阈值步长 25，仍覆盖 0–975）、
@@ -68,4 +71,14 @@ export function autosaveFormulaSampleFor(unitId: string): string {
 /** 大表的快照：一张 5 万行的表 */
 export function bigSheetFor(unitId: string): string {
   return workbookWith(unitId, [bigSheet()])
+}
+
+/** 按目标字节数生成的明细表的快照（M0-P3 的 big-1m、big-5m）：一张表 */
+export function bulkSampleFor(targetBytes: number): SnapshotFor {
+  return unitId => workbookWith(unitId, [bulkSheet(targetBytes)])
+}
+
+/** perf-50k 的快照：数据表与汇总两张表，1,000 个公式带缓存值 */
+export function perfSampleFor(unitId: string): string {
+  return workbookWith(unitId, perfSampleSheets())
 }

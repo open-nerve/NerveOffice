@@ -127,12 +127,12 @@ export const ARTIFACT_POLICY: ArtifactPolicy = {
    * 以及编辑器的 E2E 探针挂在 window 上的名字（M2-P3 设计 §3.7）、页面自检结果的格式标识（M3-P2 设计 §3.5，
    * editor/testing/selftest-report.ts 的 SELFTEST_REPORT_FORMAT）与切换的计时挂在 window 上的名字（editor/testing/switch-timing.ts 的
    * SWITCH_TIMING_OPTIONS，M3-P2 复核 B2）、自动保存的控制挂在 window 上的名字与它在 sessionStorage 里的键（editor/testing/autosave-control.ts，
-   * M3-P4 设计 §3.14）、交接日志挂在 window 上的名字（editor/testing/handover-log.ts，M3-P5 设计 §3.13）、发件箱的浏览器层探针挂在 window 上的名字
-   * （features/sheet-editor/outbox/testing/outbox-probe.ts，M4-P1 设计 §3.1）：它们只在测试构建里（dist-e2e），
+   * M3-P4 设计 §3.14）、交接日志挂在 window 上的名字（editor/testing/handover-log.ts，M3-P5 设计 §3.13）、发件箱的浏览器层探针与崩溃用例的探针
+   * 挂在 window 上的名字（features/sheet-editor/outbox/testing/outbox-probe.ts、crash-probe.ts，M4-P1 设计 §3.1、§3.7）：它们只在测试构建里（dist-e2e），
    * 生产构建里连名字都不能有。
    * 测试专用的模块主要按来源认（artifacts.ts 的 TEST_ONLY_SOURCES），这几个名字是兜底
    */
-  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf', '__nerveEditorProbe', 'nerve-office.editor-selftest', '__nerveSwitchTiming', '__nerveAutosaveControl', 'nerve-office.autosave-hold', '__nerveHandoverLog', '__nerveOutboxProbe'],
+  forbiddenKeywords: ['univerjs-pro', 'univer-pro', 'licensekey', 'license-key', 'license_key', 'posthog', 'sentry', 'google-analytics', 'googletagmanager', 'gtag(', 'mixpanel', 'grpc', 'protobuf', '__nerveEditorProbe', 'nerve-office.editor-selftest', '__nerveSwitchTiming', '__nerveAutosaveControl', 'nerve-office.autosave-hold', '__nerveHandoverLog', '__nerveOutboxProbe', '__nerveCrashProbe'],
 }
 
 /** 漏洞扫描的例外：GHSA 编号、原因与到期日（到期后必须重新评审）。 */

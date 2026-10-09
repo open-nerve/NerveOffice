@@ -5,15 +5,19 @@ import { describe, expect, it } from 'vitest'
 import { NOW, OTHER_WRITER_ID, sampleMeta, sampleWriter, WRITER_ID } from './draft-record.test-support.ts'
 import {
   canReplayAsSent,
+  compareDrafts,
   decideConfirm,
   decideRegistration,
   decideRemove,
   decideReplace,
+  decideRestore,
   decideWrite,
   isExpired,
+  isNoticeExpired,
   isSameWriter,
   isWriterExpired,
   LOCAL_DRAFT_RETENTION_MS,
+  restoredWriterOf,
   shouldPurgeDraft,
   shouldPurgeWriter,
 } from './writer-fence.ts'
@@ -177,6 +181,12 @@ describe('保留期（§3.4.6、§3.4.7）：14 天，与契约同源', () => {
     expect(isWriterExpired({ registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }, NOW)).toBe(true)
   })
 
+  it('比对镜像留下的提示按留下的时刻，同样的边界', () => {
+    expect(isNoticeExpired({ at: NOW - LOCAL_DRAFT_RETENTION_MS }, NOW)).toBe(false)
+    expect(isNoticeExpired({ at: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }, NOW)).toBe(true)
+    expect(isNoticeExpired({ at: NOW + DAY_MS }, NOW)).toBe(false)
+  })
+
   it('原样重放：在途的就是这一份，并且发出不满 14 天（服务端修订记录与回执至少留 15 天）', () => {
     const inFlight = { requestId: 'r', clientInstanceId: 'c', localSeq: 7, sentAt: NOW - LOCAL_DRAFT_RETENTION_MS + 1 }
     expect(canReplayAsSent({ draftSeq: 7, inFlight }, NOW)).toBe(true)
@@ -201,5 +211,53 @@ describe('保留期（§3.4.6、§3.4.7）：14 天，与契约同源', () => {
     expect(shouldPurgeWriter(fresh, false, NOW)).toBe(false)
     expect(shouldPurgeWriter(undefined, false, NOW)).toBe(true)
     expect(shouldPurgeWriter(undefined, true, NOW)).toBe(false)
+  })
+})
+
+describe('谁新与从 OPFS 镜像写回（M4-P1 设计 §3.8）', () => {
+  it('两份记录：先比代次，再比草稿序号，最后比更新时间（同一份内容的重封：标记在途、改基准、换密钥）', () => {
+    const base = { writeEpoch: 3, draftSeq: 7, updatedAt: 1_000 }
+    expect(compareDrafts(base, base)).toBe(0)
+    expect(compareDrafts({ ...base, writeEpoch: 4, draftSeq: 1, updatedAt: 1 }, base)).toBeGreaterThan(0)
+    expect(compareDrafts({ ...base, draftSeq: 8, updatedAt: 1 }, base)).toBeGreaterThan(0)
+    expect(compareDrafts({ ...base, updatedAt: 1_001 }, base)).toBeGreaterThan(0)
+    expect(compareDrafts(base, { ...base, writeEpoch: 4 })).toBeLessThan(0)
+    expect(compareDrafts(base, { ...base, draftSeq: 8 })).toBeLessThan(0)
+    expect(compareDrafts(base, { ...base, updatedAt: 1_001 })).toBeLessThan(0)
+  })
+
+  /** 镜像里的那一份：本页（第 3 代、W）写下的第 8 份 */
+  const candidate = sampleMeta({ writeEpoch: 3, writerId: WRITER_ID, draftSeq: 8, updatedAt: NOW })
+  const cases: readonly { readonly name: string, readonly writer: WriterRecord | undefined, readonly existing: ExistingDraft | undefined, readonly candidate?: DraftMeta, readonly expected: ReturnType<typeof decideRestore> }[] = [
+    { name: '删库之后（没有写入者、没有草稿）：写回，建出写入者', writer: undefined, existing: undefined, expected: { kind: 'restore', writer: 'create' } },
+    { name: '库丢了已提交的写入（就是它、高水位比它小）：写回，抬高高水位', writer: writer({ lastDraftSeq: 7 }), existing: draft({ draftSeq: 7 }), expected: { kind: 'restore', writer: 'raise' } },
+    { name: '库丢了已提交的写入、草稿也不在：写回', writer: writer({ lastDraftSeq: 7 }), existing: undefined, expected: { kind: 'restore', writer: 'raise' } },
+    { name: '同一份内容的重封更新（标记在途之后库丢了这次提交）：写回', writer: writer({ lastDraftSeq: 8 }), existing: draft({ draftSeq: 8, updatedAt: NOW - 1 }), expected: { kind: 'restore', writer: 'raise' } },
+    { name: '库里那一份一样新：不写回', writer: writer({ lastDraftSeq: 8 }), existing: draft({ draftSeq: 8, updatedAt: NOW }), expected: { kind: 'skip', reason: 'not-newer' } },
+    { name: '库里更新（镜像没写成）：不写回', writer: writer({ lastDraftSeq: 9 }), existing: draft({ draftSeq: 9 }), expected: { kind: 'skip', reason: 'not-newer' } },
+    { name: '库里是更新的一代写的：不写回', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 9 }), existing: draft({ writeEpoch: 4, writerId: OTHER_WRITER_ID, draftSeq: 2 }), expected: { kind: 'skip', reason: 'not-newer' } },
+    { name: '草稿已被确认删掉或者放弃（高水位到了它的序号）：不复活', writer: writer({ lastDraftSeq: 8 }), existing: undefined, expected: { kind: 'skip', reason: 'seen' } },
+    { name: '同上，高水位更大', writer: writer({ lastDraftSeq: 12 }), existing: undefined, expected: { kind: 'skip', reason: 'seen' } },
+    { name: '库里的写入者是更早的一代（库丢了更新的登记）：写回，换成它的写入者', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: undefined, expected: { kind: 'restore', writer: 'replace' } },
+    { name: '库里的写入者是更早的一代、草稿是它更早的一份：写回，换成它的写入者', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 5 }), expected: { kind: 'restore', writer: 'replace' } },
+    { name: '库里是更新的一代、还没见过它（删库之后新一代先登记了）：写回草稿，写入者不动', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
+    { name: '同一代的另一次登记、还没见过它：写回草稿，写入者不动', writer: writer({ writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
+    { name: '库里那一条认不出（更新的页面写的）：不动它', writer: undefined, existing: NEWER, expected: { kind: 'skip', reason: 'unrecognized' } },
+    { name: '库里那一条形状不对：不动它', writer: undefined, existing: MALFORMED, expected: { kind: 'skip', reason: 'unrecognized' } },
+    { name: '镜像那一份超过保留期：不写回（删库之后也一样）', writer: undefined, existing: undefined, candidate: { ...candidate, updatedAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }, expected: { kind: 'skip', reason: 'expired' } },
+  ]
+  for (const testCase of cases) {
+    it(testCase.name, () => {
+      expect(decideRestore(testCase.writer, testCase.existing, testCase.candidate ?? candidate, NOW)).toEqual(testCase.expected)
+    })
+  }
+
+  it('写回时写入者的记录：建出、换成写回的那一份的写入者（高水位不低于它的序号）；就是它时只抬高水位；更新的一代不动', () => {
+    const restored = sampleMeta({ writeEpoch: 3, writerId: WRITER_ID, draftSeq: 8 })
+    expect(restoredWriterOf(undefined, restored, 'create', NOW)).toEqual({ userId: restored.userId, documentId: restored.documentId, writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 8, registeredAt: NOW })
+    expect(restoredWriterOf(writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 }), restored, 'replace', NOW)).toEqual({ userId: restored.userId, documentId: restored.documentId, writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 11, registeredAt: NOW })
+    expect(restoredWriterOf(writer({ lastDraftSeq: 6 }), restored, 'raise', NOW)).toEqual(writer({ lastDraftSeq: 8 }))
+    expect(restoredWriterOf(writer({ lastDraftSeq: 9 }), restored, 'raise', NOW), '高水位只增不减').toEqual(writer({ lastDraftSeq: 9 }))
+    expect(restoredWriterOf(writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID }), restored, 'keep', NOW)).toBeUndefined()
   })
 })

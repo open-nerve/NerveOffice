@@ -109,6 +109,11 @@ function pastRetention(at: number, now: number): boolean {
   return now - at > LOCAL_DRAFT_RETENTION_MS
 }
 
+/** 比对镜像留下的提示超过保留期（按留下的时刻）：保留期清理时删掉（M4-P1 设计 §3.8） */
+export function isNoticeExpired(notice: { readonly at: number }, now: number): boolean {
+  return pastRetention(notice.at, now)
+}
+
 /** 草稿超过保留期（按更新时间） */
 export function isExpired(meta: Pick<DraftMeta, 'updatedAt'>, now: number): boolean {
   return pastRetention(meta.updatedAt, now)
@@ -147,4 +152,60 @@ export function shouldPurgeDraft(updatedAt: number | undefined, now: number): bo
  */
 export function shouldPurgeWriter(writer: Pick<WriterRecord, 'registeredAt'> | undefined, hasDraft: boolean, now: number): boolean {
   return !hasDraft && (writer === undefined || isWriterExpired(writer, now))
+}
+
+/**
+ * 两份记录谁新（大于 0：a 新；M4-P1 设计 §3.8）：先比代次，再比草稿序号；同一个写入者同一个序号的是同一份内容的重封（标记在途、改基准、
+ * 换密钥），按更新时间（管道让同一份文档重写时的更新时间只增不减）。IndexedDB 与 OPFS 镜像的两个槽位之间取最新的一份用它
+ */
+export function compareDrafts(a: Pick<DraftMeta, 'writeEpoch' | 'draftSeq' | 'updatedAt'>, b: Pick<DraftMeta, 'writeEpoch' | 'draftSeq' | 'updatedAt'>): number {
+  return a.writeEpoch - b.writeEpoch || a.draftSeq - b.draftSeq || a.updatedAt - b.updatedAt
+}
+
+/**
+ * 从 OPFS 镜像写回 IndexedDB 的判定（§3.8）：库里没有或者更旧时写回，并补上写入者的记录（删库时写入者也没了，不补就挡不住旧的写入者）。
+ * - expired：超过保留期，不写回（镜像随之作废，保留期本来就要删它）；
+ * - unrecognized：库里那一条认不出（更新的页面写的、形状不对）：不动它；
+ * - not-newer：库里那一份不比它旧；
+ * - seen：库里没有草稿、而高水位已经到了它的序号——它被确认删掉或者放弃过（删库会连写入者一起删，高水位不会还在），镜像是过时的，
+ *   不复活。
+ * 写回时写入者：库里没有 → create；库里的代次更小（库丢了更新的登记）→ replace；就是它 → raise（高水位抬到它的序号）；库里是更新的
+ * 一代 → keep（不动别人的写入者与高水位：活着的那一页按自己的高水位分配序号，抬高会让它的写入被当作旧序号拒绝；写回的这一份对它是
+ * 别人留下的草稿，由不覆盖别人的草稿护住）
+ */
+export type RestoreVerdict
+  = | { readonly kind: 'restore', readonly writer: 'create' | 'replace' | 'raise' | 'keep' }
+    | { readonly kind: 'skip', readonly reason: 'expired' | 'unrecognized' | 'not-newer' | 'seen' }
+
+export function decideRestore(writer: WriterRecord | undefined, existing: ExistingDraft | undefined, candidate: DraftMeta, now: number): RestoreVerdict {
+  if (isExpired(candidate, now))
+    return { kind: 'skip', reason: 'expired' }
+  if (existing !== undefined && existing.kind !== 'draft')
+    return { kind: 'skip', reason: 'unrecognized' }
+  if (existing !== undefined && compareDrafts(existing.draft, candidate) >= 0)
+    return { kind: 'skip', reason: 'not-newer' }
+  if (existing === undefined && writer !== undefined && candidate.draftSeq <= writer.lastDraftSeq)
+    return { kind: 'skip', reason: 'seen' }
+  if (writer === undefined)
+    return { kind: 'restore', writer: 'create' }
+  if (writer.writeEpoch < candidate.writeEpoch)
+    return { kind: 'restore', writer: 'replace' }
+  return { kind: 'restore', writer: isSameWriter(writer, candidate) ? 'raise' : 'keep' }
+}
+
+/**
+ * 写回时写入者的记录（decideRestore 的 writer）：create、replace 换成写回的那一份的写入者（登记时刻记为 now），高水位不低于它的序号；
+ * raise 只抬高水位；keep 不动（交回 undefined）
+ */
+export function restoredWriterOf(current: WriterRecord | undefined, restored: DraftMeta, verdict: 'create' | 'replace' | 'raise' | 'keep', now: number): WriterRecord | undefined {
+  const lastDraftSeq = Math.max(current?.lastDraftSeq ?? 0, restored.draftSeq)
+  switch (verdict) {
+    case 'create':
+    case 'replace':
+      return { userId: restored.userId, documentId: restored.documentId, writeEpoch: restored.writeEpoch, writerId: restored.writerId, lastDraftSeq, registeredAt: now }
+    case 'raise':
+      return current === undefined ? undefined : { ...current, lastDraftSeq }
+    case 'keep':
+      return undefined
+  }
 }
