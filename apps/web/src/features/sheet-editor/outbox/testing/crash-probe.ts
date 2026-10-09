@@ -2,7 +2,7 @@
 // （start.tsx）在测试构建、地址带 crashProbe 时动态引入它，挂在 window.__nerveCrashProbe 上；生产构建里这个分支与它的分块都被去掉
 // （门禁 artifacts 按来源、分块名与名字核对）。
 // 发件箱的浏览器层探针（outbox-probe.ts）测存储、编解码与镜像的各个操作；这里只做崩溃用例要的：用生产的写入管道反复写一份约 5 MiB 的内容，
-// 测试进程按时机冻住、结束整棵浏览器进程（tests/e2e/support/browser-crash.ts），以同一个目录重开之后读回、取走比对镜像留下的事件。
+// 测试进程按时机冻住、结束整棵浏览器进程（tests/e2e/support/browser-crash.ts），以同一个目录重开之后读回、取走比对镜像留在库里的提示。
 // - 两种放置：
 //   - 进程内：生产的写入管道（draft-writer.ts 的 createDraftWriter）配 IndexedDB 的存储，没有镜像（同步访问句柄只在 Worker 里有）；
 //   - Worker：生产的 Worker 客户端（outbox-worker-client.ts）配崩溃用例的测试 Worker（crash-probe.worker.ts：先包住 Worker 里的开事务与
@@ -19,7 +19,8 @@
 // 交回的都是能经 page.evaluate 传回的普通值；密钥由测试进程给出原始字节（重开之后用同一把），导入成不可导出的。只引用发件箱自己的模块
 import type { DraftKey, WriterRecord } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
-import type { DraftWriter, RecoveryEvent } from '../../../../shared/outbox/draft-writer.ts'
+import type { DraftWriter } from '../../../../shared/outbox/draft-writer.ts'
+import type { RecoveryNotice } from '../../../../shared/outbox/recovery-notice.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
 import type { OutboxWorkerClient } from '../outbox-worker-client.ts'
 import type { MirrorPausePoint, ProbeMirrorOperation, ProbeMirrorPause } from './mirror-recorder.ts'
@@ -77,6 +78,11 @@ export type CrashProbeRead
   /** 解不开（已吊销、已损坏）、更新的页面写的、形状不对、没有密钥、存储的问题：都不算"能解开" */
     | { readonly kind: 'not-readable', readonly outcome: string }
 
+/** 取走的提示；读不出、清不掉时是说明 */
+export type CrashProbeNotices
+  = | { readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] }
+    | { readonly kind: 'failed', readonly outcome: string }
+
 /** 最近一次写入；时刻都从这次写入开始算（毫秒，performance.now；Worker 报来的按报到页面的时刻） */
 export interface CrashProbeWrite {
   readonly seq: number
@@ -105,8 +111,11 @@ export interface CrashProbe {
   readonly start: (seq: number, signal: CrashProbeSignal) => Promise<void>
   readonly read: () => Promise<CrashProbeRead>
   readonly last: () => CrashProbeWrite | undefined
-  /** 取走管道比对镜像与库留下的事件（restored、lost） */
-  readonly events: () => Promise<readonly RecoveryEvent[]>
+  /**
+   * 取走这个用户的提示（比对镜像与库留在库里的 restored、lost，recovery-notice.ts）：读出之后按读出的时刻逐条清除，交回读出的那几条；
+   * 读不出、清不掉时交回说明（不抛出）
+   */
+  readonly takeNotices: () => Promise<CrashProbeNotices>
   /** 放开镜像的句柄（之后才能经发件箱探针的 OPFS Worker 读、改槽位文件）；下一次写入时管道自己再拿 */
   readonly release: () => Promise<void>
   /** 关掉写入管道（Worker 随之终止、句柄放开）：用例收尾删镜像目录之前 */
@@ -394,7 +403,18 @@ export function installCrashProbe(target: Window): CrashProbe {
       return { kind: 'draft', seq: read.meta.draftSeq, writerSeq, bytes: content.byteLength, intact: sameBytes(content, contentOf(read.meta.draftSeq, current.setup.contentChars)) }
     },
     last: () => last,
-    events: async () => ready().writer.takeRecoveryEvents(),
+    takeNotices: async () => {
+      const current = ready()
+      const listed = await current.writer.notices(current.setup.key.userId)
+      if (listed.kind !== 'notices')
+        return { kind: 'failed', outcome: `读不出提示：${JSON.stringify(listed)}` }
+      for (const notice of listed.notices) {
+        const cleared = await current.writer.clearNotice({ userId: notice.userId, documentId: notice.documentId }, notice.at)
+        if (cleared.kind !== 'cleared')
+          return { kind: 'failed', outcome: `清不掉提示：${JSON.stringify(cleared)}` }
+      }
+      return { kind: 'notices', notices: listed.notices }
+    },
     release: async () => {
       const current = ready()
       await current.writer.release(current.setup.key)

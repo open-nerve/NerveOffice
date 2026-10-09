@@ -1,8 +1,10 @@
 // 确定地造出 Chromium 删库之后，草稿从 OPFS 的镜像写回（M4-P1 设计 §3.8，S9 第 5 项）。删库用崩溃工具的 tearIndexedDbLog：结束之后往这个来源的
 // IndexedDB 日志结尾补一个只有头的记录（模拟被结束在追加一条记录的两次 write 之间），下一次打开一切正常、写一份（新数据接在那半条后面），
 // 再下一次打开时 Chromium 删掉这个来源的全部 IndexedDB（S7 的调查；support/leveldb-log.ts）。删库之后重开，发件箱 Worker 登记之前比对镜像：
-// - restored：镜像里合格的那一份写回库（连同写入者的记录——代次、writerId、高水位），读回的是删库之前最后写成的那一份，同一个写入者接着写照常；
-// - lost：两个槽位都被破坏（探针的 corruptSlot）、库里也没有——留下"本机草稿因浏览器存储损坏丢失"，读回没有。
+// - restored：镜像里合格的那一份写回库（连同写入者的记录——代次、writerId、高水位，与提示在同一个事务里），读回的是删库之前最后写成的那一份，
+//   库里恰好一条 restored 的提示，同一个写入者接着写照常；
+// - lost：两个槽位都被破坏（探针的 corruptSlot）、库里也没有——库里恰好一条"本机草稿因浏览器存储损坏丢失"（lost）的提示，读回没有。
+// 提示读出之后清除。
 // 只在 Chromium 系上跑：WebKit 的 IndexedDB 是 SQLite，没有这个缺陷，日志也补不了（IndexedDB 被删之后的恢复由 specs/outbox/mirror.spec.ts 在
 // 三个浏览器上用删库的接口核对）。标签 @test-build
 import type { CrashReport, CrashTool, PersistentLaunch } from '../../support/browser-crash.ts'
@@ -63,7 +65,7 @@ test.describe('Chromium 删库之后从 OPFS 的镜像写回（发件箱 Worker�
     test.skip(browserName === 'webkit', 'WebKit 的 IndexedDB 是 SQLite，没有这个缺陷')
   })
 
-  test('restored：删库之后重开，最后写成的那一份连同写入者从镜像写回，事件如实，同一个写入者接着写照常', async ({ crashTool }) => {
+  test('restored：删库之后重开，最后写成的那一份连同写入者从镜像写回，提示如实，同一个写入者接着写照常', async ({ crashTool }) => {
     const poisoned = await poisonedSession(crashTool, 'crash-restore')
     const { check, report } = await crashAndReopen(crashTool, poisoned.launch, poisoned.setup)
     expect(report.indexedDbLogs.map(state => state.tail.status)).toEqual(['corrupt'])
@@ -71,13 +73,13 @@ test.describe('Chromium 删库之后从 OPFS 的镜像写回（发件箱 Worker�
     expect(check.registered.peek.existed).toBe(false)
     expect(check.registered.existing).toBe('draft')
     expect(check.registered.lastDraftSeq).toBe(2)
-    expect(await check.events()).toEqual([{ kind: 'restored', key: poisoned.setup.key }])
+    expect(await check.notices()).toEqual(['restored@这份文档'])
     expect(await check.read()).toEqual({ kind: 'draft', seq: 2, writerSeq: 2, bytes: CRASH_CONTENT_CHARS, intact: true })
     // 写回之后高水位是 2：再写第 1 份（不比高水位新）被栅栏拒绝，不会把写回的第 2 份盖掉（写回连同写入者的细节由 specs/outbox/mirror.spec.ts 核对）
     expect(await check.write(1)).toBe('fenced')
     expect(await check.write(3)).toBe('written')
     expect(await check.read()).toEqual({ kind: 'draft', seq: 3, writerSeq: 3, bytes: CRASH_CONTENT_CHARS, intact: true })
-    expect(await check.events()).toEqual([])
+    expect(await check.notices()).toEqual([])
   })
 
   test('lost：两个槽位都被破坏、删库之后库里也没有——留下"本机草稿因浏览器存储损坏丢失"，读回没有', async ({ crashTool }) => {
@@ -91,7 +93,7 @@ test.describe('Chromium 删库之后从 OPFS 的镜像写回（发件箱 Worker�
     expect(check.registered.peek.existed).toBe(false)
     expect(check.registered.existing).toBe('none')
     expect(check.registered.lastDraftSeq).toBe(0)
-    expect(await check.events()).toEqual([{ kind: 'lost', key: poisoned.setup.key }])
+    expect(await check.notices()).toEqual(['lost@这份文档'])
     expect(await check.read()).toEqual({ kind: 'absent', writerSeq: 0 })
   })
 })
