@@ -61,6 +61,8 @@ function setup(directory?: MirrorDirectory) {
 const UNSUPPORTED: MirrorDirectory = {
   openSlots: async () => ({ kind: 'unsupported' }),
   listDocuments: async () => ({ kind: 'unsupported' }),
+  listUsers: async () => ({ kind: 'unsupported' }),
+  slotFiles: async () => ({ kind: 'unsupported' }),
   removeUser: async () => ({ kind: 'unsupported' }),
   removeDocument: async () => ({ kind: 'unsupported' }),
 }
