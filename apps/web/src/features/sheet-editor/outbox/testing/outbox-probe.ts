@@ -18,6 +18,7 @@ import { gunzipBytes, gzipBytes, openDraft, sealDraft } from '../../../../shared
 import { draftDocumentIds } from '../../../../shared/outbox/draft-index.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { importLocalKey } from '../../../../shared/outbox/local-key-import.ts'
+import { requestPersistence, storageEstimate, storagePersisted } from '../../../../shared/outbox/storage-status.ts'
 import { createPipelineProbe } from './pipeline-probe.ts'
 
 /** 挂在 window 上的名字（门禁的禁用关键字里登记了它：生产构建里连名字都不能有） */
@@ -128,6 +129,12 @@ export interface OutboxProbe {
     readonly releaseTransaction: (held: number) => Promise<void>
   }
   /** 本机密钥：探针自己发请求取（会话里的 CSRF 令牌），用生产的 importLocalKey 导入；只交回事实，不交出密钥 */
+  /** 本机存储的状态：生产的 storage-status.ts（persisted、persist、estimate），结果原样交回 */
+  readonly storage: {
+    readonly persisted: () => Promise<Awaited<ReturnType<typeof storagePersisted>>>
+    readonly persist: () => Promise<Awaited<ReturnType<typeof requestPersistence>>>
+    readonly estimate: () => Promise<Awaited<ReturnType<typeof storageEstimate>>>
+  }
   readonly localKey: {
     readonly fetch: () => Promise<ProbeLocalKey>
     /** 用最近一次取到的密钥加密（AES-GCM，不带 AAD）：E2E 用服务端给的原始字节独立解开，核对就是那一把 */
@@ -537,6 +544,11 @@ export function installOutboxProbe(target: Window): OutboxProbe {
         await holding.done
         holding.db.close()
       },
+    },
+    storage: {
+      persisted: async () => storagePersisted(),
+      persist: async () => requestPersistence(),
+      estimate: async () => storageEstimate(),
     },
     localKey: {
       fetch: async () => {
