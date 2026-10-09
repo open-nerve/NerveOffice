@@ -40,6 +40,12 @@ function capture(draftSeq: number, content: string, overrides: Partial<CaptureTo
   }
 }
 
+/** 让排着的异步走几轮（借真实的宏任务） */
+async function turns(count: number): Promise<void> {
+  for (let index = 0; index < count; index += 1)
+    await new Promise(resolve => setTimeout(resolve, 0))
+}
+
 async function importRaw(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt'])
 }
@@ -221,15 +227,34 @@ describe('交密钥（§3.4.8）：CryptoKey 原样用；原始字节在 Worker 
     expect(await storedText(fake, { version: 3, key: await importRaw(raw) })).toEqual({ text: 'raw key', keyVersion: 3 })
   })
 
-  it('交密钥之后到的请求等它装好：原始字节的导入是异步的，"先换密钥、再写"的先后不变', async () => {
-    const { fake, send, replyTo } = harness()
-    await send({ type: 'register', draft: DRAFT, writer: ME, force: false }, 1)
-    const { raw } = await keyOf(3)
-    const installing = send({ type: 'set-key', key: { form: 'raw', version: 3, bytes: new Uint8Array(raw) } }, 2)
-    const writing = send({ type: 'write', capture: capture(1, 'after the key') }, 3)
+  it('交密钥之后到的请求等它装好：原始字节的导入是异步的，"先换密钥、再写"的先后不变（导入停住时写入不交给存储）', async () => {
+    const { fake, send, replyTo } = await ready()
+    const next = await keyOf(3)
+    let finishImport: () => void = () => {}
+    const importing = new Promise<void>((resolve) => {
+      finishImport = resolve
+    })
+    const importKey = vi.spyOn(crypto.subtle, 'importKey').mockImplementationOnce(async () => {
+      await importing
+      return next.handle.key
+    })
+    const reachedStore = fake.holdNext('writeDraft')
+    let reached = false
+    void reachedStore.reached.then(() => {
+      reached = true
+    })
+    const installing = send({ type: 'set-key', key: { form: 'raw', version: 3, bytes: new Uint8Array(next.raw) } }, 10)
+    const writing = send({ type: 'write', capture: capture(1, 'after the key') }, 11)
+    // 没有关口时，写入在这几轮里就做完摘要与压缩、用手里旧的第 2 版封好交给存储
+    await turns(50)
+    expect(reached, '密钥还没装好，写入不该交给存储').toBe(false)
+    finishImport()
+    await reachedStore.reached
+    reachedStore.release()
     await Promise.all([installing, writing])
-    expect(replyTo(3), '没等密钥装好就会是 no-key').toMatchObject({ ok: true, result: { kind: 'written' } })
-    expect((await storedText(fake, { version: 3, key: await importRaw(raw) })).keyVersion).toBe(3)
+    importKey.mockRestore()
+    expect(replyTo(11)).toMatchObject({ ok: true, result: { kind: 'written' } })
+    expect((await storedText(fake, next.handle)).keyVersion).toBe(3)
   })
 
   it('写入途中换密钥：那一次按开始时的密钥写下，随后用新密钥重封', async () => {
