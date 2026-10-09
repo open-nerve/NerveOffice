@@ -67,6 +67,15 @@ function brokenError(failure: OutboxWorkerFailure): FailureDescription {
 }
 
 /**
+ * 生产：编辑器页的发件箱 Worker（outbox.worker.ts）。静态的 new Worker(new URL(…), { type: 'module' }) 才会被打包成同源的模块
+ * Worker 脚本（与公式 Worker 同一个写法，editor/sheet-editor.ts）；name 便于在调试工具与真实 Safari 的自检里认出它。
+ * 创建本身可能抛出（被策略拦下），客户端接住、按 load-failed 处理
+ */
+export function createOutboxWorker(): WorkerLike {
+  return new Worker(new URL('./outbox.worker.ts', import.meta.url), { type: 'module', name: 'nerve-outbox' })
+}
+
+/**
  * 本机密钥交给 Worker 的交法（设计 §3.4.8）：不可导出的 CryptoKey 经结构化克隆交过去，不转移。真实 Safari 的复核（S1）如果说不行
  * （弹钥匙串的提示、克隆失败），改为交原始字节（form: 'raw'，放进 transfer；Worker 那边已经认、导入之后清零）——只动这里
  */
