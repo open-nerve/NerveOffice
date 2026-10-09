@@ -98,8 +98,11 @@ export interface CrashTool {
   readonly pageErrors: PageErrors
 }
 
-/** 结束之后等全部退出的时限 */
-const EXIT_TIMEOUT_MS = 10_000
+/**
+ * 结束之后等全部退出的时限：自己结束的进程几十毫秒内就退出，3 秒是负载下的余量。不能放长：macOS 上 UI 进程一死，launchd 约 5 秒之后会替我们
+ * 结束它的 XPC 服务（冻住的也一样），时限不短于这个就会把"一个循环里漏结束了 XPC"掩盖过去（E2E 层的变异验证实测：10 秒、5 秒的时限都没拦住）
+ */
+const EXIT_TIMEOUT_MS = 3_000
 /** 用例结束时正常关闭持久上下文的时限：到了还没关上就整组结束 */
 const CLOSE_TIMEOUT_MS = 30_000
 
