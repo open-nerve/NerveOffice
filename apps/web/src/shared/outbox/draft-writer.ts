@@ -9,23 +9,24 @@
 // - 跨边界不抛异常：结果一律是带 kind 的值，未知的错误折成名字与消息（跨 Worker 时原样传递）。
 // - 交出去的字节归调用方：写成时交回的 gzip 是一份拷贝，管道自己留的那一份不交出去（Worker 的宿主把交回的转移给主线程）。
 // - OPFS 的镜像（§3.8，只在发件箱 Worker 里给）：IndexedDB 写成（写入、重封、改基准）之后同一份记录写进镜像，删掉草稿（确认、放弃）之后
-//   截断镜像，失去写入者身份时放开它的句柄；读与登记之前先比对镜像与库：镜像更新时写回库（连同写入者，同一个事务里留下"已从备份恢复"的
-//   提示），镜像里没有合格的、库里也什么都没有时留下"因浏览器存储损坏丢失"；库里的更新而本页是写入者时补写镜像。提示存在库里
-//   （recovery-notice.ts），由 P3、P4 读出、清除。读时在库与两个槽位里取校验通过、解得开、最新的那一份。镜像没写成不影响库那一份，
-//   写入、登记的结果里带上。
+//   截断镜像，失去写入者身份时放开它的句柄；登记拿到句柄之后，库里那一份不是镜像里最新写的就补写。读与登记之前先比对镜像与库——
+//   比对的策略（谁胜出、写回、截断、lost 的提示、读时交回哪一份）在 draft-recovery.ts，经 options.recovery 注入（审查 A19）。
+//   镜像没写成不影响库那一份，写入、登记的结果里带上。
 // Worker 也引用这个文件：不引用 zod 与带 zod 的契约，不依赖 DOM
 import type { OutboxUnavailable } from './database.ts'
-import type { LocalKeyHandle } from './draft-codec.ts'
-import type { DraftMirror, MirrorRead, MirrorStatus } from './draft-mirror.ts'
-import type { ContentFormat, DraftKey, DraftMeta, InFlightSave, ReadDraft, StoredDraft } from './draft-record.ts'
+import type { LocalKeyHandle, UnsealFailure } from './draft-codec.ts'
+import type { DraftMirror, MirrorStatus } from './draft-mirror.ts'
+import type { ContentFormat, DraftKey, DraftMeta, InFlightSave, StoredDraft } from './draft-record.ts'
+import type { DraftRecovery, Reconciled } from './draft-recovery.ts'
 import type { DraftStore, FenceReason, StoreProblem, StoreReadOutcome } from './draft-store.ts'
 import type { FailureDescription } from './failure.ts'
 import type { RecoveryNotice } from './recovery-notice.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { gzipBytes, openDraft, sealDraft, sha256Hex, unsealFailureOf } from './draft-codec.ts'
 import { DRAFT_RECORD_VERSION, draftMetaOf } from './draft-record.ts'
+import { versionsToOpen } from './draft-recovery.ts'
 import { describeFailure } from './failure.ts'
-import { compareDrafts, isSameWriter } from './writer-fence.ts'
+import { isSameWriter } from './writer-fence.ts'
 
 /** 存储与管道这一侧的问题：写满（整个事务回滚，原记录不变）、库用不了（调用方退化为内存实现）、未知的错误 */
 export type WriterProblem
@@ -82,10 +83,13 @@ export type CaptureWritten
     | (OutboxUnavailable & { readonly gzip: Uint8Array<ArrayBuffer> })
     | { readonly kind: 'failed', readonly error: FailureDescription, readonly gzip: Uint8Array<ArrayBuffer> | null }
 
-/** 库里的一条草稿解开之后：内容、解不开（已吊销、已损坏）、手里没有密钥（只有元数据）、更新的页面写的、形状不对 */
+/**
+ * 库里的一条草稿解开之后：内容、解不开（已吊销、本页的密钥过时——去取新的再试、已损坏，审查 A3）、手里没有密钥（只有元数据）、
+ * 更新的页面写的、形状不对
+ */
 export type OpenedRecord
   = | { readonly kind: 'draft', readonly meta: DraftMeta, readonly gzip: Uint8Array<ArrayBuffer> }
-    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: 'revoked' | 'corrupted' }
+    | { readonly kind: 'unreadable', readonly meta: DraftMeta, readonly reason: UnsealFailure }
     | { readonly kind: 'no-key', readonly meta: DraftMeta }
     | { readonly kind: 'newer-format', readonly recordVersion: number }
     | { readonly kind: 'malformed' }
@@ -125,8 +129,11 @@ export type KeyChange
   = | { readonly kind: 'key-set', readonly notResealed: readonly DraftKey[] }
     | { readonly kind: 'failed', readonly error: FailureDescription }
 
-/** 打开平台时的比对：比对了这个用户在镜像里的几份文档 */
-export type ReconcileResult = { readonly kind: 'reconciled', readonly documents: number } | { readonly kind: 'failed', readonly error: FailureDescription }
+/** 比对一份文档（打开平台时一份一份地来，审查 A13：draft-recovery.ts 的 reconcileAll） */
+export type ReconcileResult = { readonly kind: 'reconciled' } | WriterProblem
+
+/** 这个用户在镜像里有哪些文档（打开平台时的比对先列出）；没有镜像时是空的 */
+export type MirroredDocumentsResult = { readonly kind: 'listed', readonly documentIds: readonly string[] } | { readonly kind: 'failed', readonly error: FailureDescription }
 
 /** 这个用户的提示（比对镜像与库留下的，存在库里：recovery-notice.ts） */
 export type NoticesResult = { readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | WriterProblem
@@ -145,8 +152,10 @@ export interface DraftWriter {
   readonly seedDigest: (key: DraftKey, seed: DedupeKey | undefined) => Promise<void>
   /** 这一页不再是这份文档的写入者（锁被抢、编辑权失效、离开编辑）：放开镜像的句柄，新的写入者才拿得到（§3.8） */
   readonly release: (key: DraftKey) => Promise<void>
-  /** 打开平台时的比对（§3.8）：这个用户在镜像里的每份文档，镜像比库里新的写回库（留下提示）；本页拿着句柄的、库里更新的补写镜像 */
-  readonly reconcile: (userId: string) => Promise<ReconcileResult>
+  /** 这个用户在镜像里有哪些文档（打开平台时的比对先列出，再一份一份地 reconcile） */
+  readonly mirroredDocuments: (userId: string) => Promise<MirroredDocumentsResult>
+  /** 比对一份文档（§3.8，draft-recovery.ts）：镜像胜出时写回库（留下提示）、镜像过时时截断、本页拿着句柄而库里的胜出时补写镜像 */
+  readonly reconcile: (key: DraftKey) => Promise<ReconcileResult>
   /** 这个用户的提示（P3 打开文档时说明"已从备份恢复""因浏览器存储损坏丢失"） */
   readonly notices: (userId: string) => Promise<NoticesResult>
   /** 说明过之后清除这份文档的提示：带 expectedAt（读出的那一条的时刻）时只清那一条 */
@@ -160,6 +169,8 @@ export interface DraftWriterOptions {
   readonly now: () => number
   /** OPFS 的镜像（§3.8）：只在发件箱 Worker 里给（同步访问句柄只在专用 Worker 里有）；不给时不做镜像，结果里是 off */
   readonly mirror?: DraftMirror
+  /** 比对镜像与库的策略（draft-recovery.ts，配同一个镜像）：不给时不比对，只读库 */
+  readonly recovery?: DraftRecovery
 }
 
 /** 确认时库里一直在变（存储一再交回 needs-rebase）：试这么多次之后放弃，不挂住（同一个写入者只有本页，正常一次就成） */
@@ -168,13 +179,6 @@ const CONFIRM_ATTEMPTS = 3
 const CLOSED: FailureDescription = { name: 'InvalidStateError', message: '写入管道已关闭' }
 
 const MIRROR_OFF: MirrorStatus = { kind: 'off' }
-
-/** 镜像读出的两个槽位里校验通过的那几份记录，最新的在前 */
-function mirroredRecords(read: MirrorRead | undefined): StoredDraft[] {
-  if (read?.kind !== 'slots')
-    return []
-  return read.slots.flatMap(slot => (slot.kind === 'valid' ? [slot.record] : [])).sort((a, b) => compareDrafts(b, a))
-}
 
 /** 存储的问题折成管道的：只带约定的字段（跨 Worker 时结构化克隆的就是这一份），错误折成名字与消息 */
 function problemOf(problem: StoreProblem): WriterProblem {
@@ -188,8 +192,8 @@ function problemOf(problem: StoreProblem): WriterProblem {
   }
 }
 
-/** 本页写下的那一份用当前的密钥解不开（密钥换过而没重封成、记录被改过）：重封做不了，不动它 */
-function unreadableOwn(reason: 'revoked' | 'corrupted'): WriterProblem {
+/** 本页写下的那一份用当前的密钥解不开（密钥换过而没重封成、本页的密钥过时、记录被改过）：重封做不了，不动它 */
+function unreadableOwn(reason: UnsealFailure): WriterProblem {
   return { kind: 'failed', error: { name: 'DraftUnreadable', message: `本页写下的草稿用当前的密钥解不开（${reason}）` } }
 }
 
@@ -220,8 +224,10 @@ type Remembered = { readonly kind: 'latest', readonly latest: Latest } | NoKey |
 /** 找本页写下的那一份的结果：另有库里没有、库里不是本页写的 */
 type OwnRecord = Remembered | { readonly kind: 'absent' } | { readonly kind: 'foreign' }
 
+const NOT_RECONCILED: Reconciled = { mirror: undefined, restored: undefined }
+
 export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
-  const { store, now, mirror } = options
+  const { store, now, mirror, recovery } = options
   const documents = new Map<string, DocumentState>()
   let current: LocalKeyHandle | undefined
   let disposed = false
@@ -247,71 +253,37 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
     return run
   }
 
-  /**
-   * 库里读出的一条与镜像里合格的几份放在一起（§3.8）：取最新、解得开的那一份；都解不开时按最新的那一份归类（没有密钥只给元数据）。
-   * 库里是更新的页面写的不动它、不看镜像；都没有时按库里的归类（形状不对），或者没有
-   */
-  async function bestOf(read: ReadDraft | undefined, mirrored: MirrorRead | undefined): Promise<OpenedRecord | undefined> {
-    if (read?.kind === 'newer-format')
-      return { kind: 'newer-format', recordVersion: read.recordVersion }
-    const candidates = [...(read?.kind === 'draft' ? [read.draft] : []), ...mirroredRecords(mirrored)].sort((a, b) => compareDrafts(b, a))
-    const newest = candidates[0]
-    if (newest === undefined)
-      return read?.kind === 'malformed' ? { kind: 'malformed' } : undefined
-    const handle = current
-    if (handle === undefined)
-      return { kind: 'no-key', meta: draftMetaOf(newest) }
-    for (const candidate of candidates) {
-      const result = await openDraft(handle, candidate)
-      if (result.kind === 'opened')
-        return { kind: 'draft', meta: draftMetaOf(candidate), gzip: result.gzip }
-    }
-    return { kind: 'unreadable', meta: draftMetaOf(newest), reason: unsealFailureOf(newest.keyVersion, handle.version) }
+  /** 比对这份文档（没有比对的策略时不比对） */
+  async function reconcileOf(key: DraftKey, stored?: StoreReadOutcome): Promise<Reconciled> {
+    return recovery === undefined ? NOT_RECONCILED : recovery.reconcile(key, stored)
   }
 
   /**
-   * 比对这份文档的镜像与库（§3.8）：
-   * - 两个槽位里最新的合格的那一份比库里新时写回（存储按 decideRestore 判定，连同写入者，同一个事务里留下 restored 提示）；镜像过时
-   *   （那一份被确认删掉、放弃过，或者超过保留期）时截断它；
-   * - 库里的比镜像里最新的合格那一份新（被结束在"库已提交、镜像还没写完"之间）：本页拿着句柄（写入者）时补写镜像，不是写入者的不动；
-   * - 两个槽位都不合格（写一半、对不上）、库里没有草稿：交给存储在一个事务里核对连写入者都没了（删库）才留下 lost 提示；核对过之后截断
-   *   这两个没用的槽位（之后不再重复核对、重复留提示）。
-   * 交回镜像读出的样子（读草稿、登记时接着用；截断了的交回 undefined）。没有镜像时什么也不做。
-   * 库里那一份先只读地看（stored：读草稿时已经读了的就用它）：库里已经是镜像里那一份或者更新的（打开、读草稿时的常事）不开读写的事务；
-   * 库里没有、更旧时才交给存储在一个事务里判定、写回；库用不了时不比对（读草稿时交回镜像里的）
+   * 解开要交回的那一个版本（draft-recovery.ts 的 versionsToOpen：几份拷贝，库里的在前）：哪一份解得开就交回它；都解不开时按这个版本
+   * 归类（审查 A3：不退回更旧的版本）；手里没有密钥只给元数据
    */
-  async function reconcileKey(key: DraftKey, stored?: StoreReadOutcome): Promise<MirrorRead | undefined> {
-    if (mirror === undefined)
-      return undefined
-    const read = await mirror.read(key)
-    if (read.kind !== 'slots')
-      return read
-    const newest = mirroredRecords(read)[0]
-    const torn = read.slots.some(slot => slot.kind === 'invalid' && slot.reason !== 'newer-format')
-    if (newest === undefined && !torn)
-      return read
-    const current = stored ?? await store.readDraft(key)
-    if (current.kind === 'draft' && (newest === undefined || compareDrafts(current.draft, newest) > 0)) {
-      await mirrorBackfill(current.draft)
-      return read
+  async function openVersions(versions: readonly [StoredDraft, ...StoredDraft[]]): Promise<OpenedRecord> {
+    const [primary] = versions
+    const handle = current
+    if (handle === undefined)
+      return { kind: 'no-key', meta: draftMetaOf(primary) }
+    for (const version of versions) {
+      const result = await openDraft(handle, version)
+      if (result.kind === 'opened')
+        return { kind: 'draft', meta: draftMetaOf(version), gzip: result.gzip }
     }
-    if (newest !== undefined) {
-      if (current.kind !== 'absent' && (current.kind !== 'draft' || compareDrafts(current.draft, newest) >= 0))
-        return read
-      const outcome = await store.restoreDraft(newest, { now: now() })
-      if (outcome.kind === 'kept' && (outcome.reason === 'seen' || outcome.reason === 'expired')) {
-        await mirror.clear(key)
-        return undefined
-      }
-      return read
-    }
-    if (current.kind !== 'absent')
-      return read
-    const lost = await store.recordLost(key, { now: now() })
-    if (lost.kind !== 'noted' && lost.kind !== 'kept')
-      return read
-    await mirror.clear(key)
-    return undefined
+    return { kind: 'unreadable', meta: draftMetaOf(primary), reason: unsealFailureOf(primary.keyVersion, handle.version) }
+  }
+
+  /** 库里读出的一条（与比对的结果）交回成什么：要交回的那个版本解开之后；没有时按库里的归类（更新的页面写的、形状不对），或者没有 */
+  async function openedOf(stored: StoreReadOutcome, reconciled: Reconciled): Promise<OpenedRecord | undefined> {
+    const versions = versionsToOpen(stored, reconciled)
+    const [primary, ...copies] = versions
+    if (primary !== undefined)
+      return openVersions([primary, ...copies])
+    if (stored.kind === 'newer-format')
+      return { kind: 'newer-format', recordVersion: stored.recordVersion }
+    return stored.kind === 'malformed' ? { kind: 'malformed' } : undefined
   }
 
   /** IndexedDB 写成之后写镜像；没有镜像时 off。镜像出了意外也只交回"没写成"，不影响库那一份 */
@@ -493,7 +465,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
   return {
     register: async (key, writer, force) => enqueue(key, async (state): Promise<RegisterResult> => {
       // 登记之前先比对镜像（删库之后连写入者一起写回：不补就挡不住旧的写入者）
-      const mirrored = await reconcileKey(key)
+      const reconciled = await reconcileOf(key)
       const outcome = await store.registerWriter(key, writer, { now: now(), force })
       if (outcome.kind === 'superseded') {
         mirror?.detach(key)
@@ -504,10 +476,12 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       // 新的一次登记：手里记着的与去重的起点都作废（现有的草稿可能是别的写入者留下的；恢复之后由 seedDigest 设定起点）
       state.latest = undefined
       state.dedupe = undefined
-      const existing = await bestOf(outcome.existing, mirrored)
+      // 现有的草稿：库里的（比对写回的已经在库里），同一版本在镜像里的拷贝备着
+      const existing = await openedOf(outcome.existing ?? { kind: 'absent' }, { mirror: reconciled.mirror, restored: undefined })
       const attached = mirror === undefined ? MIRROR_OFF : await mirror.attach(key)
-      // 库里那一份比镜像里最新的新（被结束在"库已提交、镜像还没写完"之间）：拿到句柄之后补写，补写没写成时如实交回
-      const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' ? await mirrorBackfill(outcome.existing.draft) : undefined
+      // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回。
+      // 比对没做完（写回时库出了问题）时不补写：还不知道镜像里那一份该不该胜出，不拿库里的盖掉它
+      const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' && reconciled.problem === undefined ? await mirrorBackfill(outcome.existing.draft) : undefined
       return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing, mirror: filled ?? attached }
     }, error => ({ kind: 'failed', error })),
 
@@ -584,14 +558,15 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
     }, error => ({ kind: 'failed', error })),
 
     read: async key => enqueue(key, async (): Promise<DraftRead> => {
-      // 先读库（只读），再拿它比对镜像：写回了的、镜像里更新的都在下面的候选里（写回的就是镜像里那一份）
+      // 先读库（只读），再拿它比对镜像：写回了的就交回写回的那一份；库用不了时交回镜像里最新写的（读得出总比读不出好）
       const read = await store.readDraft(key)
-      const mirrored = await reconcileKey(key, read)
-      if (read.kind === 'quota' || read.kind === 'unavailable' || read.kind === 'failed') {
-        // 库用不了：镜像里有合格的就交回它（读得出总比读不出好），没有时如实交回库的问题
-        return mirroredRecords(mirrored).length > 0 ? await bestOf(undefined, mirrored) ?? problemOf(read) : problemOf(read)
-      }
-      return await bestOf(read.kind === 'absent' ? undefined : read, mirrored) ?? { kind: 'absent' }
+      const reconciled = await reconcileOf(key, read)
+      if (reconciled.problem !== undefined)
+        return problemOf(reconciled.problem)
+      const opened = await openedOf(read, reconciled)
+      if (opened !== undefined)
+        return opened
+      return read.kind === 'quota' || read.kind === 'unavailable' || read.kind === 'failed' ? problemOf(read) : { kind: 'absent' }
     }, error => ({ kind: 'failed', error })),
 
     remove: async (key, expectedSeq) => enqueue(key, async (state): Promise<RemoveResult> => {
@@ -636,24 +611,19 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       }, () => {})
     },
 
-    reconcile: async (userId) => {
+    mirroredDocuments: async (userId) => {
       if (disposed)
         return { kind: 'failed', error: CLOSED }
       if (mirror === undefined)
-        return { kind: 'reconciled', documents: 0 }
+        return { kind: 'listed', documentIds: [] }
       const listed = await mirror.documents(userId)
-      if (listed.kind === 'unsupported')
-        return { kind: 'reconciled', documents: 0 }
-      if (listed.kind === 'failed')
-        return { kind: 'failed', error: listed.error }
-      for (const documentId of listed.documentIds) {
-        const key = { userId, documentId }
-        await enqueue(key, async () => {
-          await reconcileKey(key)
-        }, () => {})
-      }
-      return { kind: 'reconciled', documents: listed.documentIds.length }
+      return listed.kind === 'unsupported' ? { kind: 'listed', documentIds: [] } : listed
     },
+
+    reconcile: async key => enqueue(key, async (): Promise<ReconcileResult> => {
+      const reconciled = await reconcileOf(key)
+      return reconciled.problem === undefined ? { kind: 'reconciled' } : problemOf(reconciled.problem)
+    }, error => ({ kind: 'failed', error })),
 
     notices: async (userId) => {
       if (disposed)

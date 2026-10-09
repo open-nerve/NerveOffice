@@ -5,7 +5,9 @@
 // - 两个槽位轮流写：每次写在"现在不是最新那一份"的槽位上，原地改写：截断 → 写内容 → 写头 → flush（槽位格式见 mirror-slot.ts）。
 //   写一半（被结束、写满、出错）的那一个校验不过、落选，另一个槽位上的上一份还在。
 // - 草稿删掉时两个都截断为 0（clear）；读时两个都读、都校验（read），由写入管道与 IndexedDB 那一份比较、取最新的。
-// - 补写（backfill）：镜像在 IndexedDB 提交之后才写，被结束在两者之间时镜像落后一份；写入者登记时库里那一份比镜像里最新的新，就补写它。
+// - 补写（backfill）：镜像在 IndexedDB 提交之后才写，被结束在两者之间时镜像落后一份；写入者登记时库里那一份不是镜像里最新写的那一份
+//   （别的写入者的、同一个写入者更旧的、没有），就补写它（审查 A2：库里有当前的写入者时库是准的）。
+// - 读出的记录核对是这份文档的（审查 A4）。
 // 跨边界不抛异常：结果都带 kind；未知的错误折成名字与消息。只在发件箱 Worker 里用（同步访问句柄只在专用 Worker 里有）；不引用 zod
 import type { DraftKey, DraftMeta, StoredDraft } from './draft-record.ts'
 import type { FailureDescription } from './failure.ts'
@@ -13,7 +15,7 @@ import type { MirrorDirectory, SlotHandle } from './mirror-directory.ts'
 import type { SlotRead } from './mirror-slot.ts'
 import { describeFailure } from './failure.ts'
 import { encodeSlot, newestSlot, parseSlot, SLOT_HEADER_BYTES } from './mirror-slot.ts'
-import { compareDrafts } from './writer-fence.ts'
+import { compareDrafts, isSameWriter } from './writer-fence.ts'
 
 /**
  * 镜像这一次写成了没有：
@@ -46,8 +48,8 @@ export interface DraftMirror {
   /** IndexedDB 提交之后写镜像：手里没有句柄时先拿（退避期间不拿，交回 busy） */
   readonly write: (record: StoredDraft) => Promise<MirrorStatus>
   /**
-   * 补写：拿着这份文档的句柄（是写入者）、并且 record（库里那一份）比两个槽位里合格的最新一份新（compareDrafts）时写它，否则 mirrored；
-   * 没拿着句柄时什么也不做，交回 undefined（不是写入者的不动）
+   * 补写：拿着这份文档的句柄（是写入者）时，record（库里那一份）不是镜像里最新写的那一份（最新写的是别的写入者的、或者同一个写入者
+   * 更旧的、或者一份合格的也没有）就写它，否则 mirrored；没拿着句柄时什么也不做，交回 undefined（不是写入者的不动）
    */
   readonly backfill: (record: StoredDraft) => Promise<MirrorStatus | undefined>
   /** 草稿删掉之后：两个槽位截断为 0。手里没有句柄时临时拿一下、截断、放开；文件不在时什么也不做 */
@@ -74,10 +76,10 @@ const DEFAULT_RETRY = { initialMs: 500, maxMs: 30_000 }
 
 const CLOSED: FailureDescription = { name: 'InvalidStateError', message: '镜像已关闭' }
 
-/** 比较新旧用的三项（compareDrafts） */
-type Ordering = Pick<DraftMeta, 'writeEpoch' | 'draftSeq' | 'updatedAt'>
+/** 补写时比较用的：写入者（代次与 writerId）与先后（compareDrafts） */
+type Ordering = Pick<DraftMeta, 'writeEpoch' | 'writerId' | 'draftSeq' | 'updatedAt'>
 
-/** 拿着的两个句柄：哪一个是最新写的（都不合格时没有）、代号到了多少，各自存着的合格的那一份（补写时比较；不合格、空的为 undefined） */
+/** 拿着的两个句柄：哪一个是最新写的（都不合格时没有）、代号到了多少，各自存着的合格的那一份的写入者与先后（补写时比较；不合格、空的为 undefined） */
 interface Held {
   readonly kind: 'held'
   readonly slots: readonly [SlotHandle, SlotHandle]
@@ -128,23 +130,13 @@ function readWhole(handle: SlotHandle): Uint8Array<ArrayBuffer> {
 /**
  * 合格的槽位（整个文件都校验，不只看头：头合格、内容却被截掉的槽位当作不合格，写在它上面，不碰另一个合格的）；不合格时没有
  */
-async function validSlotOf(handle: SlotHandle): Promise<Extract<SlotRead, { readonly kind: 'valid' }> | undefined> {
-  const read = await parseSlot(readWhole(handle))
+async function validSlotOf(handle: SlotHandle, key: DraftKey): Promise<Extract<SlotRead, { readonly kind: 'valid' }> | undefined> {
+  const read = await parseSlot(readWhole(handle), key)
   return read.kind === 'valid' ? read : undefined
 }
 
 function orderingOf(record: Ordering): Ordering {
-  return { writeEpoch: record.writeEpoch, draftSeq: record.draftSeq, updatedAt: record.updatedAt }
-}
-
-/** 两个槽位里合格的最新一份（compareDrafts） */
-function newestRecord(records: readonly (Ordering | undefined)[]): Ordering | undefined {
-  let newest: Ordering | undefined
-  for (const record of records) {
-    if (record !== undefined && (newest === undefined || compareDrafts(record, newest) > 0))
-      newest = record
-  }
-  return newest
+  return { writeEpoch: record.writeEpoch, writerId: record.writerId, draftSeq: record.draftSeq, updatedAt: record.updatedAt }
 }
 
 function closeQuietly(slots: readonly SlotHandle[]): void {
@@ -192,7 +184,7 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
           return failed(new DOMException(CLOSED.message, CLOSED.name))
         }
         try {
-          const valid = [await validSlotOf(opened.slots[0]), await validSlotOf(opened.slots[1])] as const
+          const valid = [await validSlotOf(opened.slots[0], key), await validSlotOf(opened.slots[1], key)] as const
           const newest = newestSlot(valid.map(slot => slot?.header))
           states.set(id, {
             kind: 'held',
@@ -291,8 +283,9 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
       const held = states.get(idOf(record))
       if (held?.kind !== 'held')
         return undefined
-      const newest = newestRecord(held.records)
-      if (newest !== undefined && compareDrafts(record, newest) <= 0)
+      // 镜像里最新写的那一份就是这个写入者写的、不比它旧：不用补（更新的那一份由比对写回库，这里不拿库里旧的盖掉它）
+      const latest = held.newest === undefined ? undefined : held.records[held.newest]
+      if (latest !== undefined && isSameWriter(latest, record) && compareDrafts(record, latest) <= 0)
         return { kind: 'mirrored' }
       return write(record)
     },
@@ -326,7 +319,7 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
 
     read: async key => withSlots<MirrorRead>(key, async (slots) => {
       try {
-        return { kind: 'slots', slots: [await parseSlot(readWhole(slots[0])), await parseSlot(readWhole(slots[1]))] }
+        return { kind: 'slots', slots: [await parseSlot(readWhole(slots[0]), key), await parseSlot(readWhole(slots[1]), key)] }
       }
       catch (error) {
         return { kind: 'failed', error: describeFailure(error) }

@@ -49,16 +49,21 @@ describe('槽位的内容：存进 IndexedDB 的那一份记录的序列化（�
   it('往返得到同一份记录（元数据与字节）', () => {
     const draft = record()
     const decoded = decodeRecord(encodeRecord(draft))
-    expect(decoded === undefined ? undefined : plainRecord(decoded)).toEqual(plainRecord(draft))
+    expect(decoded?.kind === 'draft' ? plainRecord(decoded.draft) : decoded).toEqual(plainRecord(draft))
   })
 
   it('不在途、公式待更新、空的密文之外的边界值也往返得了', () => {
     const draft = record({ inFlight: null, formulasPending: true, ciphertext: new Uint8Array(16) })
     const decoded = decodeRecord(encodeRecord(draft))
-    expect(decoded === undefined ? undefined : plainRecord(decoded)).toEqual(plainRecord(draft))
+    expect(decoded?.kind === 'draft' ? plainRecord(decoded.draft) : decoded).toEqual(plainRecord(draft))
   })
 
-  it('认不出的内容：太短、元数据的长度越界、元数据不是 JSON、记录的形状不对（例如在途的序号比草稿的大）', () => {
+  it('更新的页面写的记录（记录的格式版本更新）：newer-format，与库里读出的同一个口径（审查 A10）；记录的形状不对：malformed', () => {
+    expect(decodeRecord(encodeRecord(record({ recordVersion: 2 })))).toEqual({ kind: 'newer-format', recordVersion: 2 })
+    expect(decodeRecord(encodeRecord(record({ inFlight: { requestId: 'r', clientInstanceId: 'c', localSeq: 99, sentAt: 1 } })))).toEqual({ kind: 'malformed' })
+  })
+
+  it('认不出的内容：太短、元数据的长度越界、元数据不是 JSON 或者不是对象', () => {
     const good = encodeRecord(record())
     const metaLength = new DataView(good.buffer).getUint32(0, true)
     const badLength = new Uint8Array(good)
@@ -72,7 +77,13 @@ describe('槽位的内容：存进 IndexedDB 的那一份记录的序列化（�
       ['少了 IV', good.slice(0, 4 + metaLength + DRAFT_IV_BYTES - 1)],
       ['长度越界', badLength],
       ['不是 JSON', notJson],
-      ['形状不对', encodeRecord(record({ inFlight: { requestId: 'r', clientInstanceId: 'c', localSeq: 99, sentAt: 1 } }))],
+      ['元数据是数组', (() => {
+        const meta = new TextEncoder().encode('[1]')
+        const bytes = new Uint8Array(4 + meta.byteLength + DRAFT_IV_BYTES + 16)
+        new DataView(bytes.buffer).setUint32(0, meta.byteLength, true)
+        bytes.set(meta, 4)
+        return bytes
+      })()],
     ]
     for (const [label, bytes] of cases)
       expect(decodeRecord(bytes), label).toBeUndefined()
@@ -230,6 +241,19 @@ describe('读整个槽位（M4-P1 设计 §3.8）：校验都过才算数；写�
     const file = fileOf(await encodeSlot(record(), 3))
     new DataView(file.buffer).setUint16(8, SLOT_FORMAT_VERSION + 1, true)
     expect(await parseSlot(file)).toEqual({ kind: 'invalid', reason: 'newer-format' })
+  })
+
+  it('槽位格式 v1 里装着更新的页面写的记录：newer-format，不算写一半（审查 A10）', async () => {
+    expect(await parseSlot(fileOf(await encodeSlot(record({ recordVersion: 2 }), 3)))).toEqual({ kind: 'invalid', reason: 'newer-format' })
+  })
+
+  it('记录的键与目录的键不一致（别的文档的槽位文件被挪进来）：mismatch（审查 A4）；一致或者不给键时照常', async () => {
+    const draft = record()
+    const file = fileOf(await encodeSlot(draft, 3))
+    expect((await parseSlot(file, { userId: draft.userId, documentId: draft.documentId })).kind).toBe('valid')
+    expect((await parseSlot(file)).kind).toBe('valid')
+    expect(await parseSlot(file, { userId: draft.userId, documentId: 'another-document' })).toEqual({ kind: 'invalid', reason: 'mismatch' })
+    expect(await parseSlot(file, { userId: 'another-user', documentId: draft.documentId })).toEqual({ kind: 'invalid', reason: 'mismatch' })
   })
 })
 

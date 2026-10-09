@@ -95,12 +95,12 @@ describe('封与开（AES-GCM-256，AAD 覆盖全部明文元数据）', () => {
     expect(ivs.size).toBe(64)
   })
 
-  it('改动任何一个明文字段（含 format、inFlight 的每一项）之后解不开：密钥版本变小算"已吊销"，其余算"已损坏"', async () => {
+  it('改动任何一个明文字段（含 format、inFlight 的每一项）之后解不开：密钥版本变小算"已吊销"、变大算"本页的密钥过时"，其余算"已损坏"', async () => {
     const key = await randomKey(sampleMeta().keyVersion)
     const sealed = await sealDraft(key, metaWithoutKeyVersion(), utf8('content'))
     for (const { label, meta } of metaVariants(sampleMeta())) {
       const tampered: StoredDraft = { ...meta, iv: sealed.iv, ciphertext: sealed.ciphertext }
-      const reason = meta.keyVersion < key.version ? 'revoked' : 'corrupted'
+      const reason = meta.keyVersion < key.version ? 'revoked' : meta.keyVersion > key.version ? 'stale-key' : 'corrupted'
       await expect(openDraft(key, tampered), label).resolves.toEqual({ kind: 'unreadable', reason })
     }
   })
@@ -121,18 +121,19 @@ describe('封与开（AES-GCM-256，AAD 覆盖全部明文元数据）', () => {
       await expect(openDraft(key, tampered), label).resolves.toEqual({ kind: 'unreadable', reason: 'corrupted' })
   })
 
-  it('换一把密钥：记录的版本比当前的小 → 已吊销；版本相同或更大（不是这把密钥加密的）→ 已损坏', async () => {
+  it('换一把密钥：记录的版本比当前的小 → 已吊销；更大 → 本页的密钥过时（去取新的再试，不删）；相同（不是这把密钥加密的）→ 已损坏', async () => {
     const sealed = await sealDraft(await randomKey(2), metaWithoutKeyVersion(), utf8('content'))
     await expect(openDraft(await randomKey(3), sealed)).resolves.toEqual({ kind: 'unreadable', reason: 'revoked' })
     await expect(openDraft(await randomKey(2), sealed)).resolves.toEqual({ kind: 'unreadable', reason: 'corrupted' })
-    await expect(openDraft(await randomKey(1), sealed)).resolves.toEqual({ kind: 'unreadable', reason: 'corrupted' })
+    await expect(openDraft(await randomKey(1), sealed)).resolves.toEqual({ kind: 'unreadable', reason: 'stale-key' })
   })
 
-  it('解不开的归类：只看记录的密钥版本与当前版本', () => {
+  it('解不开的归类：只看记录的密钥版本与当前版本（审查 A3）', () => {
     expect(unsealFailureOf(1, 2)).toBe('revoked')
     expect(unsealFailureOf(1, 9)).toBe('revoked')
     expect(unsealFailureOf(2, 2)).toBe('corrupted')
-    expect(unsealFailureOf(3, 2)).toBe('corrupted')
+    expect(unsealFailureOf(3, 2)).toBe('stale-key')
+    expect(unsealFailureOf(9, 1)).toBe('stale-key')
   })
 
   it('不是"解不开"的错误照常抛出（例如密钥没有解密的用途）：那是调用方的错，不能说成记录已损坏', async () => {

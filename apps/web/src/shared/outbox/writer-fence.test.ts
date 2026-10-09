@@ -14,12 +14,15 @@ import {
   decideWrite,
   isExpired,
   isNoticeExpired,
+  isRetired,
   isSameWriter,
   isWriterExpired,
   LOCAL_DRAFT_RETENTION_MS,
   restoredWriterOf,
+  RETIRED_WRITER_ID,
+  retiredWriterOf,
   shouldPurgeDraft,
-  shouldPurgeWriter,
+  writerRetention,
 } from './writer-fence.ts'
 
 /** 本页：第 3 代、这次登记的 W */
@@ -42,6 +45,9 @@ function foreignDraft(overrides: Partial<DraftMeta> = {}): ExistingDraft {
 
 const NEWER: ExistingDraft = { kind: 'newer-format' }
 const MALFORMED: ExistingDraft = { kind: 'malformed' }
+
+/** 墓碑（清理删不掉镜像目录时把本页的写入者换成的，高水位 7） */
+const TOMBSTONE: WriterRecord = writer({ writerId: RETIRED_WRITER_ID })
 
 describe('同一个写入者：代次与 writerId 都相同', () => {
   it('两项都相同才算', () => {
@@ -80,6 +86,8 @@ describe('写入（§3.4.3）：核对写入者、序号单调、不覆盖别的
     { name: '写入者是更大的一代：not-writer', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID }), existing: undefined, incoming: { ...ME, draftSeq: 8 }, expected: 'not-writer' },
     { name: '同一代、另一次登记：not-writer', writer: writer({ writerId: OTHER_WRITER_ID }), existing: undefined, incoming: { ...ME, draftSeq: 8 }, expected: 'not-writer' },
     { name: '写入者是更小的一代（本页没登记就写）：not-writer', writer: writer({ writeEpoch: 2 }), existing: undefined, incoming: { ...ME, draftSeq: 8 }, expected: 'not-writer' },
+    { name: '写入者换成了墓碑（清理删不掉镜像目录，审查 A1）：not-writer', writer: TOMBSTONE, existing: draft(), incoming: { ...ME, draftSeq: 8 }, expected: 'not-writer' },
+    { name: '用墓碑的 writerId 来写（伪造）：照样 not-writer', writer: TOMBSTONE, existing: undefined, incoming: { writeEpoch: 3, writerId: RETIRED_WRITER_ID, draftSeq: 8 }, expected: 'not-writer' },
     { name: '是写入者、序号比高水位大、没有草稿：ok', writer: writer(), existing: undefined, incoming: { ...ME, draftSeq: 8 }, expected: 'ok' },
     { name: '覆盖自己的上一份：ok', writer: writer(), existing: draft(), incoming: { ...ME, draftSeq: 8 }, expected: 'ok' },
     { name: '序号跳过几个（去重留下的空号）：ok', writer: writer(), existing: draft(), incoming: { ...ME, draftSeq: 11 }, expected: 'ok' },
@@ -203,14 +211,15 @@ describe('保留期（§3.4.6、§3.4.7）：14 天，与契约同源', () => {
     expect(shouldPurgeDraft(undefined, NOW), '读不出更新时间').toBe(false)
   })
 
-  it('清理写入者：没有草稿、并且登记超过 14 天才删；形状不对的（undefined）没有草稿时也删', () => {
-    const expired = { registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }
-    const fresh = { registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS }
-    expect(shouldPurgeWriter(expired, false, NOW)).toBe(true)
-    expect(shouldPurgeWriter(expired, true, NOW), '还有草稿：高水位要留着').toBe(false)
-    expect(shouldPurgeWriter(fresh, false, NOW)).toBe(false)
-    expect(shouldPurgeWriter(undefined, false, NOW)).toBe(true)
-    expect(shouldPurgeWriter(undefined, true, NOW)).toBe(false)
+  it('清理写入者（审查 A6）：没有草稿、登记超过 14 天的换成墓碑（不删：挡住镜像里没截断成的那一份被写回）；墓碑留着；形状不对的没有草稿时删；还有草稿时都留着', () => {
+    const expired = writer({ registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 })
+    const fresh = writer({ registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS })
+    expect(writerRetention(expired, false, NOW)).toBe('retire')
+    expect(writerRetention(expired, true, NOW), '还有草稿：高水位要接着用').toBe('keep')
+    expect(writerRetention(fresh, false, NOW)).toBe('keep')
+    expect(writerRetention({ ...TOMBSTONE, registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS * 10 }, false, NOW), '墓碑：由合一的清理在镜像目录不在之后删').toBe('keep')
+    expect(writerRetention(undefined, false, NOW)).toBe('delete')
+    expect(writerRetention(undefined, true, NOW)).toBe('keep')
   })
 })
 
@@ -229,21 +238,29 @@ describe('谁新与从 OPFS 镜像写回（M4-P1 设计 §3.8）', () => {
   /** 镜像里的那一份：本页（第 3 代、W）写下的第 8 份 */
   const candidate = sampleMeta({ writeEpoch: 3, writerId: WRITER_ID, draftSeq: 8, updatedAt: NOW })
   const cases: readonly { readonly name: string, readonly writer: WriterRecord | undefined, readonly existing: ExistingDraft | undefined, readonly candidate?: DraftMeta, readonly expected: ReturnType<typeof decideRestore> }[] = [
-    { name: '删库之后（没有写入者、没有草稿）：写回，建出写入者', writer: undefined, existing: undefined, expected: { kind: 'restore', writer: 'create' } },
-    { name: '库丢了已提交的写入（就是它、高水位比它小）：写回，抬高高水位', writer: writer({ lastDraftSeq: 7 }), existing: draft({ draftSeq: 7 }), expected: { kind: 'restore', writer: 'raise' } },
-    { name: '库丢了已提交的写入、草稿也不在：写回', writer: writer({ lastDraftSeq: 7 }), existing: undefined, expected: { kind: 'restore', writer: 'raise' } },
+    { name: '删库之后（没有写入者、没有草稿）：写回，照它建出写入者', writer: undefined, existing: undefined, expected: { kind: 'restore', writer: 'create' } },
+    { name: '库丢了已提交的写入（同一个写入者、草稿更旧）：写回，抬高高水位', writer: writer({ lastDraftSeq: 7 }), existing: draft({ draftSeq: 7 }), expected: { kind: 'restore', writer: 'raise' } },
+    { name: '库丢了已提交的写入、草稿也不在（高水位比它小）：写回', writer: writer({ lastDraftSeq: 7 }), existing: undefined, expected: { kind: 'restore', writer: 'raise' } },
     { name: '同一份内容的重封更新（标记在途之后库丢了这次提交）：写回', writer: writer({ lastDraftSeq: 8 }), existing: draft({ draftSeq: 8, updatedAt: NOW - 1 }), expected: { kind: 'restore', writer: 'raise' } },
-    { name: '库里那一份一样新：不写回', writer: writer({ lastDraftSeq: 8 }), existing: draft({ draftSeq: 8, updatedAt: NOW }), expected: { kind: 'skip', reason: 'not-newer' } },
-    { name: '库里更新（镜像没写成）：不写回', writer: writer({ lastDraftSeq: 9 }), existing: draft({ draftSeq: 9 }), expected: { kind: 'skip', reason: 'not-newer' } },
-    { name: '库里是更新的一代写的：不写回', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 9 }), existing: draft({ writeEpoch: 4, writerId: OTHER_WRITER_ID, draftSeq: 2 }), expected: { kind: 'skip', reason: 'not-newer' } },
-    { name: '草稿已被确认删掉或者放弃（高水位到了它的序号）：不复活', writer: writer({ lastDraftSeq: 8 }), existing: undefined, expected: { kind: 'skip', reason: 'seen' } },
+    { name: '同一个写入者、库里接手了别人的草稿而丢了自己之后写的：按高水位，写回', writer: writer({ lastDraftSeq: 7 }), existing: foreignDraft(), expected: { kind: 'restore', writer: 'raise' } },
+    { name: '同一个写入者、库里那一份一样新：不写回', writer: writer({ lastDraftSeq: 8 }), existing: draft({ draftSeq: 8, updatedAt: NOW }), expected: { kind: 'skip', reason: 'not-newer' } },
+    { name: '同一个写入者、库里更新（镜像没写成）：不写回', writer: writer({ lastDraftSeq: 9 }), existing: draft({ draftSeq: 9 }), expected: { kind: 'skip', reason: 'not-newer' } },
+    { name: '同一个写入者、草稿已被确认删掉或者放弃（高水位到了它的序号）：不复活', writer: writer({ lastDraftSeq: 8 }), existing: undefined, expected: { kind: 'skip', reason: 'seen' } },
     { name: '同上，高水位更大', writer: writer({ lastDraftSeq: 12 }), existing: undefined, expected: { kind: 'skip', reason: 'seen' } },
-    { name: '库里的写入者是更早的一代（库丢了更新的登记）：写回，换成它的写入者', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: undefined, expected: { kind: 'restore', writer: 'replace' } },
-    { name: '库里的写入者是更早的一代、草稿是它更早的一份：写回，换成它的写入者', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 5 }), expected: { kind: 'restore', writer: 'replace' } },
-    { name: '库里是更新的一代、还没见过它（删库之后新一代先登记了）：写回草稿，写入者不动', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
-    { name: '同一代的另一次登记、还没见过它：写回草稿，写入者不动', writer: writer({ writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
+    { name: '同一个写入者、库里是别人的草稿而高水位已到它：不复活', writer: writer({ lastDraftSeq: 8 }), existing: foreignDraft(), expected: { kind: 'skip', reason: 'seen' } },
+    { name: '库里是墓碑（清理删不掉镜像目录时立的，审查 A1、A6）：不写回', writer: TOMBSTONE, existing: undefined, expected: { kind: 'skip', reason: 'retired' } },
+    { name: '库里是墓碑、还留着草稿（按用户清理的 pending）：不写回', writer: TOMBSTONE, existing: draft({ draftSeq: 7 }), expected: { kind: 'skip', reason: 'retired' } },
+    { name: '不同的写入者、序号不大于高水位：库里的写入者看过它（以 force 登记、代次倒退之后旧一代的镜像，审查 A2）——seen', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 11 }), expected: { kind: 'skip', reason: 'seen' } },
+    { name: '不同的写入者、序号不大于高水位、库里没有草稿：seen', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 8 }), existing: undefined, expected: { kind: 'skip', reason: 'seen' } },
+    { name: '库悄悄丢了更新的那次登记与它的写入（UR-034 的变体：库退回了旧一代的写入者与草稿）：写回，写入者换成候选的', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: draft({ writeEpoch: 2, writerId: OTHER_WRITER_ID, draftSeq: 5 }), expected: { kind: 'restore', writer: 'replace' } },
+    { name: '库丢了更新的登记、草稿也不在：写回，换写入者', writer: writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), existing: undefined, expected: { kind: 'restore', writer: 'replace' } },
+    { name: '库里是更新的一代、还没写过草稿（删库之后新一代先登记了）：写回成别人留下的草稿，写入者不动', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
+    { name: '同一代的另一次登记、还没写过草稿：写回成别人留下的草稿，写入者不动', writer: writer({ writerId: OTHER_WRITER_ID, lastDraftSeq: 0 }), existing: undefined, expected: { kind: 'restore', writer: 'keep' } },
+    { name: '库里是更新的一代、已有自己的草稿：foreign，不拿镜像里的覆盖它', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 2 }), existing: draft({ writeEpoch: 4, writerId: OTHER_WRITER_ID, draftSeq: 2 }), expected: { kind: 'skip', reason: 'foreign' } },
+    { name: '库里是更新的一代（还没写过）、草稿是候选那个写入者更早的一份：foreign——不按草稿的写入者抬高新一代的高水位（它的写入会变成 stale-seq）', writer: writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID, lastDraftSeq: 7 }), existing: draft({ draftSeq: 7 }), expected: { kind: 'skip', reason: 'foreign' } },
+    { name: '库里有草稿、没有写入者：不写回', writer: undefined, existing: draft({ draftSeq: 6 }), expected: { kind: 'skip', reason: 'foreign' } },
     { name: '库里那一条认不出（更新的页面写的）：不动它', writer: undefined, existing: NEWER, expected: { kind: 'skip', reason: 'unrecognized' } },
-    { name: '库里那一条形状不对：不动它', writer: undefined, existing: MALFORMED, expected: { kind: 'skip', reason: 'unrecognized' } },
+    { name: '库里那一条形状不对：不动它', writer: writer(), existing: MALFORMED, expected: { kind: 'skip', reason: 'unrecognized' } },
     { name: '镜像那一份超过保留期：不写回（删库之后也一样）', writer: undefined, existing: undefined, candidate: { ...candidate, updatedAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }, expected: { kind: 'skip', reason: 'expired' } },
   ]
   for (const testCase of cases) {
@@ -252,12 +269,32 @@ describe('谁新与从 OPFS 镜像写回（M4-P1 设计 §3.8）', () => {
     })
   }
 
-  it('写回时写入者的记录：建出、换成写回的那一份的写入者（高水位不低于它的序号）；就是它时只抬高水位；更新的一代不动', () => {
+  it('写回时写入者的记录：建出、换成写回的那一份的写入者（高水位不低于它的序号）；就是它时只抬高水位（只增不减）；keep 不动', () => {
     const restored = sampleMeta({ writeEpoch: 3, writerId: WRITER_ID, draftSeq: 8 })
     expect(restoredWriterOf(undefined, restored, 'create', NOW)).toEqual({ userId: restored.userId, documentId: restored.documentId, writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 8, registeredAt: NOW })
-    expect(restoredWriterOf(writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 }), restored, 'replace', NOW)).toEqual({ userId: restored.userId, documentId: restored.documentId, writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 11, registeredAt: NOW })
+    expect(restoredWriterOf(writer({ writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 5 }), restored, 'replace', NOW)).toEqual({ userId: restored.userId, documentId: restored.documentId, writeEpoch: 3, writerId: WRITER_ID, lastDraftSeq: 8, registeredAt: NOW })
     expect(restoredWriterOf(writer({ lastDraftSeq: 6 }), restored, 'raise', NOW)).toEqual(writer({ lastDraftSeq: 8 }))
     expect(restoredWriterOf(writer({ lastDraftSeq: 9 }), restored, 'raise', NOW), '高水位只增不减').toEqual(writer({ lastDraftSeq: 9 }))
+    expect(restoredWriterOf(undefined, restored, 'raise', NOW), '没有写入者时 raise 不建').toBeUndefined()
     expect(restoredWriterOf(writer({ writeEpoch: 4, writerId: OTHER_WRITER_ID }), restored, 'keep', NOW)).toBeUndefined()
+  })
+})
+
+describe('墓碑（审查 A1、A6）：清理删不掉镜像目录时把写入者换成它', () => {
+  it('代次照旧、writerId 是保留的值、高水位不低于现有草稿的序号、时刻是 now；没有写入者时也立一块', () => {
+    const key = { userId: TOMBSTONE.userId, documentId: TOMBSTONE.documentId }
+    expect(retiredWriterOf(key, writer({ lastDraftSeq: 5 }), draft({ draftSeq: 7 }), NOW)).toEqual({ ...key, writeEpoch: 3, writerId: RETIRED_WRITER_ID, lastDraftSeq: 7, registeredAt: NOW })
+    expect(retiredWriterOf(key, writer({ lastDraftSeq: 9 }), undefined, NOW).lastDraftSeq).toBe(9)
+    expect(retiredWriterOf(key, writer({ lastDraftSeq: 2 }), NEWER, NOW).lastDraftSeq, '认不出的草稿看不出序号').toBe(2)
+    expect(retiredWriterOf(key, undefined, draft({ draftSeq: 4 }), NOW)).toEqual({ ...key, writeEpoch: 1, writerId: RETIRED_WRITER_ID, lastDraftSeq: 4, registeredAt: NOW })
+    expect(isRetired(TOMBSTONE)).toBe(true)
+    expect(isRetired(writer())).toBe(false)
+  })
+
+  it('重封、确认对墓碑一律 not-writer；新的登记照常按代次（高水位接着它）', () => {
+    expect(decideReplace(TOMBSTONE, draft(), { ...ME, expectedSeq: 7 })).toBe('not-writer')
+    expect(decideConfirm(TOMBSTONE, draft(), { ...ME, confirmedSeq: 7 })).toBe('not-writer')
+    expect(decideRegistration(TOMBSTONE, undefined, { writeEpoch: 4, writerId: OTHER_WRITER_ID }, false)).toEqual({ kind: 'register', lastDraftSeq: 7 })
+    expect(decideRegistration(TOMBSTONE, undefined, ME, false), '同一代、不同的 writerId：要经服务端核对之后 force').toEqual({ kind: 'superseded', currentEpoch: 3, sameEpoch: true })
   })
 })

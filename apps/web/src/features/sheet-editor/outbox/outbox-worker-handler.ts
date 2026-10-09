@@ -11,6 +11,7 @@ import type { DraftMirror } from '../../../shared/outbox/draft-mirror.ts'
 import type { DraftStore } from '../../../shared/outbox/draft-store.ts'
 import type { KeyChange } from '../../../shared/outbox/draft-writer.ts'
 import type { KeyTransfer, OutboxMessage, OutboxReply, OutboxRequest } from './outbox-protocol.ts'
+import { createDraftRecovery } from '../../../shared/outbox/draft-recovery.ts'
 import { createDraftWriter } from '../../../shared/outbox/draft-writer.ts'
 import { describeFailure } from '../../../shared/outbox/failure.ts'
 import { OUTBOX_PROTOCOL_VERSION, readOutboxRequest } from './outbox-protocol.ts'
@@ -60,7 +61,12 @@ function plain(result: unknown): Performed {
 }
 
 export function createOutboxWorkerHandler(options: OutboxWorkerHandlerOptions): OutboxWorkerHandler {
-  const writer = createDraftWriter({ store: options.store, now: options.now, ...(options.mirror === undefined ? {} : { mirror: options.mirror }) })
+  // 有镜像时配上比对的策略（同一个镜像、同一个存储，draft-recovery.ts）
+  const writer = createDraftWriter({
+    store: options.store,
+    now: options.now,
+    ...(options.mirror === undefined ? {} : { mirror: options.mirror, recovery: createDraftRecovery({ store: options.store, mirror: options.mirror, now: options.now }) }),
+  })
   /** 交密钥的关口：上一次交来的密钥装进管道之后完成（不等重封） */
   let keyGate: Promise<void> = Promise.resolve()
 
@@ -130,8 +136,10 @@ export function createOutboxWorkerHandler(options: OutboxWorkerHandlerOptions): 
       case 'release':
         await writer.release(request.draft)
         return plain({ kind: 'released' })
+      case 'mirrored-documents':
+        return plain(await writer.mirroredDocuments(request.userId))
       case 'reconcile':
-        return plain(await writer.reconcile(request.userId))
+        return plain(await writer.reconcile(request.draft))
       case 'notices':
         return plain(await writer.notices(request.userId))
       case 'clear-notice':

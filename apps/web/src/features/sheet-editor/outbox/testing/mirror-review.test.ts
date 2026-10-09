@@ -63,6 +63,7 @@ const UNSUPPORTED: MirrorDirectory = {
   listDocuments: async () => ({ kind: 'unsupported' }),
   listUsers: async () => ({ kind: 'unsupported' }),
   slotFiles: async () => ({ kind: 'unsupported' }),
+  readSlots: async () => ({ kind: 'unsupported' }),
   removeUser: async () => ({ kind: 'unsupported' }),
   removeDocument: async () => ({ kind: 'unsupported' }),
 }

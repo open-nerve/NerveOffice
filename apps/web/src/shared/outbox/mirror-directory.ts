@@ -56,6 +56,13 @@ export type SlotFilesOutcome
     | { readonly kind: 'busy' }
     | MirrorProblem
 
+/** 两个槽位文件的内容（不在的那一个是 undefined）；这份文档的目录不在；被占着读不了；问题 */
+export type SlotBytesOutcome
+  = | { readonly kind: 'bytes', readonly files: readonly [Uint8Array<ArrayBuffer> | undefined, Uint8Array<ArrayBuffer> | undefined] }
+    | { readonly kind: 'absent' }
+    | { readonly kind: 'busy' }
+    | MirrorProblem
+
 export interface MirrorDirectory {
   /** 这份文档的两个槽位文件的同步访问句柄：create 为真时没有就建（目录与文件）；拿到一个、另一个拿不到时放开已拿到的 */
   readonly openSlots: (key: DraftKey, create: boolean) => Promise<OpenedSlots>
@@ -65,6 +72,11 @@ export interface MirrorDirectory {
   readonly listUsers: () => Promise<MirrorUsersOutcome>
   /** 两个槽位文件的大小与最后改动的时刻（经 getFile，不拿同步访问句柄、不读内容；页面里也能用） */
   readonly slotFiles: (key: DraftKey) => Promise<SlotFilesOutcome>
+  /**
+   * 两个槽位文件的内容（经 getFile，不拿同步访问句柄；页面里也能用：P4 的本机草稿页列出之前比对，审查 A18）。发件箱 Worker 正写着时
+   * 读到的可能是写一半的，按格式校验落选
+   */
+  readonly readSlots: (key: DraftKey) => Promise<SlotBytesOutcome>
   /** 删掉这个用户的整个目录（退出登录、账户停用）；有句柄开着时是 busy */
   readonly removeUser: (userId: string) => Promise<MirrorRemoveOutcome>
   /** 删掉这份文档的目录（保留期）；有句柄开着时是 busy */
@@ -258,6 +270,24 @@ export function opfsMirrorDirectory(root: () => Promise<FileSystemDirectoryHandl
           files.push(file === undefined ? undefined : { size: file.size, lastModified: file.lastModified })
         }
         return { kind: 'files', files: [files[0], files[1]] }
+      }
+      catch (error) {
+        return isNotFound(error) ? { kind: 'absent' } : problemOf(error)
+      }
+    },
+    readSlots: async (key) => {
+      try {
+        const directory = await documentDirectory(key, false)
+        if (directory === 'unsupported')
+          return { kind: 'unsupported' }
+        if (directory === undefined)
+          return { kind: 'absent' }
+        const files: (Uint8Array<ArrayBuffer> | undefined)[] = []
+        for (const name of SLOT_FILE_NAMES) {
+          const handle = await fileIn(directory, name, false)
+          files.push(handle === undefined ? undefined : new Uint8Array(await (await handle.getFile()).arrayBuffer()))
+        }
+        return { kind: 'bytes', files: [files[0], files[1]] }
       }
       catch (error) {
         return isNotFound(error) ? { kind: 'absent' } : problemOf(error)

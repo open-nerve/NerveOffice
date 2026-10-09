@@ -8,7 +8,7 @@ import type { OutboxUnavailableReason } from '../../../shared/outbox/database.ts
 import type { MirrorStatus } from '../../../shared/outbox/draft-mirror.ts'
 import type { DraftKey, Fields, InFlightSave } from '../../../shared/outbox/draft-record.ts'
 import type { FenceReason } from '../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, KeyChange, NoticesResult, OpenedRecord, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, KeyChange, MirroredDocumentsResult, NoticesResult, OpenedRecord, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
 import { isFields, isText, isWhole, readContentFormat, readDraftMeta, readInFlight } from '../../../shared/outbox/draft-record.ts'
@@ -36,7 +36,8 @@ export type OutboxCall
     | { readonly type: 'set-key', readonly key: KeyTransfer | null }
     | { readonly type: 'seed-digest', readonly draft: DraftKey, readonly seed: DedupeKey | null }
     | { readonly type: 'release', readonly draft: DraftKey }
-    | { readonly type: 'reconcile', readonly userId: string }
+    | { readonly type: 'mirrored-documents', readonly userId: string }
+    | { readonly type: 'reconcile', readonly draft: DraftKey }
     | { readonly type: 'notices', readonly userId: string }
     | { readonly type: 'clear-notice', readonly draft: DraftKey, readonly expectedAt: number | null }
 
@@ -65,6 +66,7 @@ export interface OutboxResults {
   readonly 'set-key': KeyChange
   readonly 'seed-digest': SeedResult
   readonly 'release': ReleaseResult
+  readonly 'mirrored-documents': MirroredDocumentsResult
   readonly 'reconcile': ReconcileResult
   readonly 'notices': NoticesResult
   readonly 'clear-notice': ClearNoticeResult
@@ -195,8 +197,10 @@ function readCall(data: Fields): OutboxCall | undefined {
     }
     case 'release':
       return draft === undefined ? undefined : { type: 'release', draft }
+    case 'mirrored-documents':
+      return isText(data.userId) ? { type: 'mirrored-documents', userId: data.userId } : undefined
     case 'reconcile':
-      return isText(data.userId) ? { type: 'reconcile', userId: data.userId } : undefined
+      return draft === undefined ? undefined : { type: 'reconcile', draft }
     case 'notices':
       return isText(data.userId) ? { type: 'notices', userId: data.userId } : undefined
     case 'clear-notice': {
@@ -281,7 +285,7 @@ function readOpenedRecord(value: Fields): OpenedRecord | null {
     case 'draft':
       return isBytes(value.gzip) ? { kind: 'draft', meta, gzip: value.gzip } : null
     case 'unreadable':
-      return value.reason === 'revoked' || value.reason === 'corrupted' ? { kind: 'unreadable', meta, reason: value.reason } : null
+      return value.reason === 'revoked' || value.reason === 'stale-key' || value.reason === 'corrupted' ? { kind: 'unreadable', meta, reason: value.reason } : null
     case 'no-key':
       return { kind: 'no-key', meta }
     default:
@@ -410,10 +414,15 @@ function readReleaseResult(value: Fields): ReleaseResult | null {
   return value.kind === 'released' ? { kind: 'released' } : readFailed(value)
 }
 
+function readMirroredDocumentsResult(value: Fields): MirroredDocumentsResult | null {
+  if (value.kind !== 'listed')
+    return readFailed(value)
+  const ids = Array.isArray(value.documentIds) ? value.documentIds as readonly unknown[] : undefined
+  return ids === undefined || !ids.every(isText) ? null : { kind: 'listed', documentIds: ids.filter(isText) }
+}
+
 function readReconcileResult(value: Fields): ReconcileResult | null {
-  if (value.kind === 'reconciled')
-    return isWhole(value.documents, 0) ? { kind: 'reconciled', documents: value.documents } : null
-  return readFailed(value)
+  return value.kind === 'reconciled' ? { kind: 'reconciled' } : readProblem(value)
 }
 
 function readNoticesResult(value: Fields): NoticesResult | null {
@@ -445,6 +454,7 @@ const RESULT_READERS: { readonly [T in OutboxCallType]: (value: Fields) => Outbo
   'set-key': readKeyChange,
   'seed-digest': readSeedResult,
   'release': readReleaseResult,
+  'mirrored-documents': readMirroredDocumentsResult,
   'reconcile': readReconcileResult,
   'notices': readNoticesResult,
   'clear-notice': readClearNoticeResult,
@@ -466,6 +476,7 @@ const FAILED_RESULTS: { readonly [T in OutboxCallType]: (error: FailureDescripti
   'set-key': error => ({ kind: 'failed', error }),
   'seed-digest': error => ({ kind: 'failed', error }),
   'release': error => ({ kind: 'failed', error }),
+  'mirrored-documents': error => ({ kind: 'failed', error }),
   'reconcile': error => ({ kind: 'failed', error }),
   'notices': error => ({ kind: 'failed', error }),
   'clear-notice': error => ({ kind: 'failed', error }),

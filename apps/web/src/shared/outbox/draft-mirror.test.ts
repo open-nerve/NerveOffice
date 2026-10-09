@@ -12,6 +12,9 @@ const KEY: DraftKey = { userId: USER_ID, documentId: DOCUMENT_ID }
 const OTHER: DraftKey = { userId: USER_ID, documentId: '0199b0c4-7d3e-7a3b-9c4e-00000000d0c2' }
 const RETRY = { initialMs: 500, maxMs: 4_000 }
 
+/** 别的写入者（另一次登记）的 writerId */
+const OTHER_WRITER = '6f1c2a3b-4d5e-4f60-8172-8394a5b6c7d9'
+
 function record(draftSeq: number, overrides: Partial<StoredDraft> = {}): StoredDraft {
   return sampleStoredDraft({ draftSeq, inFlight: null, updatedAt: 1_000 + draftSeq, ...overrides })
 }
@@ -295,6 +298,24 @@ describe('补写（§3.8）：拿着句柄、并且比两个槽位里合格的�
     expect(fake.operations(KEY, 1)).toHaveLength(written)
     expect(await mirror.backfill(record(3, { updatedAt: 9_999 }))).toEqual({ kind: 'mirrored' })
     expect(await slotOf(fake, 0)).toBe('seq3@7')
+  })
+
+  it('镜像里最新写的那一份是别的写入者的（以 force 登记、代次倒退之后旧一代的）：库里那一份胜出，照写（审查 A2：不按代次比）', async () => {
+    const { fake, mirror } = setup()
+    fake.putFile(KEY, 0, await fileOf(record(10, { writeEpoch: 5, writerId: OTHER_WRITER }), 1))
+    fake.putFile(KEY, 1, new Uint8Array(0))
+    expect(await mirror.attach(KEY)).toEqual({ kind: 'mirrored' })
+    expect(await mirror.backfill(record(11, { writeEpoch: 3 }))).toEqual({ kind: 'mirrored' })
+    expect([await slotOf(fake, 0), await slotOf(fake, 1)]).toEqual(['seq10@1', 'seq11@2'])
+  })
+
+  it('槽位里是别的文档的记录（挪进来的，审查 A4）：拿句柄时不算合格的，读出时是 mismatch，写的时候照常盖掉它', async () => {
+    const { fake, mirror } = setup()
+    fake.putFile(KEY, 0, await fileOf(record(5, { documentId: OTHER.documentId }), 7))
+    fake.putFile(KEY, 1, new Uint8Array(0))
+    expect(await mirror.read(KEY)).toEqual({ kind: 'slots', slots: [{ kind: 'invalid', reason: 'mismatch' }, { kind: 'empty' }] })
+    expect(await mirror.write(record(1))).toEqual({ kind: 'mirrored' })
+    expect([await slotOf(fake, 0), await slotOf(fake, 1)], '最新的一个也没有：写在 a 上，代号从头').toEqual(['seq1@1', 'empty'])
   })
 
   it('记着两个槽位各存着哪一份：写一半的那一个不算；截断之后都不算', async () => {
