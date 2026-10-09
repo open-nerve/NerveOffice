@@ -103,6 +103,30 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
     expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'written' })
   })
 
+  test('连接断了（开事务时 InvalidStateError、Safari 的 UnknownError）：重开一次再试，照常写成；连着两次就如实交回 failed（只重开一次）', async ({ page }) => {
+    const user = await createUser('ob-reconnect')
+    await loginThroughApi(page, user)
+    await openOutboxProbe(page)
+    await probe(page, 'chooseKey', 1)
+    const key = { userId: user.id, documentId: randomUUID() }
+    const writer = writerOf(3)
+    expect((await probe(page, 'register', key, writer, { now: NOW, force: false })).kind).toBe('registered')
+    let seq = 0
+    for (const name of ['InvalidStateError', 'UnknownError']) {
+      seq += 1
+      await probe(page, 'failTransactions', 1, name)
+      expect(await probe(page, 'write', draftFor(key, writer, seq)), name).toEqual({ kind: 'written' })
+      expect(outcomeOf(await probe(page, 'read', key), 'draft').meta.draftSeq, name).toBe(seq)
+      await probe(page, 'failTransactions', 2, name)
+      const failed = outcomeOf(await probe(page, 'write', draftFor(key, writer, seq + 1)), 'failed')
+      expect(failed.error.name, name).toBe(name)
+    }
+    // 别的错误（例如数据错误）不重试，直接交回
+    await probe(page, 'failTransactions', 1, 'DataError')
+    expect(outcomeOf(await probe(page, 'read', key), 'failed').error.name).toBe('DataError')
+    expect(outcomeOf(await probe(page, 'read', key), 'draft').meta.draftSeq).toBe(seq)
+  })
+
   test('用不了时如实交回原因：没有 IndexedDB 是 unsupported，取它时被拒绝是 denied；每个操作都交回同样的值，不抛出', async ({ page }) => {
     const user = await createUser('ob-unavailable')
     await loginThroughApi(page, user)

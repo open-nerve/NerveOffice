@@ -79,6 +79,14 @@ test.describe('发件箱的记录', { tag: '@test-build' }, () => {
     expect(await probe(page, 'write', draftFor(key, writer, seq + 1))).toEqual({ kind: 'written' })
   })
 
+  test('形状不对的草稿不写（存进去的一律要读得回来）：交回 failed（TypeError），库里不变、高水位不变', async ({ page }) => {
+    const { key, writer } = await prepare(page, 'ob-malformed-write')
+    expect(await probe(page, 'write', draftFor(key, writer, 1))).toEqual({ kind: 'written' })
+    expect(outcomeOf(await probe(page, 'writeMalformed', draftFor(key, writer, 2)), 'failed').error.name).toBe('TypeError')
+    expect(outcomeOf(await probe(page, 'read', key), 'draft').opened).toEqual({ kind: 'opened', content: contentOf(writer, 1) })
+    expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'written' })
+  })
+
   test('断网时写读照常：压缩、加密、写入、读回、解开、解压都在内存的字节上做，不经网络', async ({ page }) => {
     const { key, writer, userId } = await prepare(page, 'ob-offline')
     await page.context().setOffline(true)

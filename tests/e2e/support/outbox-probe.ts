@@ -147,6 +147,8 @@ export interface OutboxProbe {
     readonly encryptHex: (plainHex: string, ivHex: string) => Promise<string>
   }
   readonly recordTransactions: () => void
+  readonly failTransactions: (count: number, name: string) => void
+  readonly writeMalformed: (input: ProbeDraftInput) => Promise<ProbeWriteOutcome>
   readonly transactions: () => readonly ProbeTransaction[]
 }
 

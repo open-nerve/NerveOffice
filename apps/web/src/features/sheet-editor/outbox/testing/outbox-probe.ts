@@ -132,6 +132,10 @@ export interface OutboxProbe {
   }
   /** 从现在起记下每一次开事务（包住 IDBDatabase.prototype.transaction），核对读写的事务都要求 strict */
   readonly recordTransactions: () => void
+  /** 接下来的 count 次开事务都抛出名为 name 的 DOMException（例如连接正在关闭时的 InvalidStateError）：核对存储重开一次再试 */
+  readonly failTransactions: (count: number, name: string) => void
+  /** 写一份形状不对的草稿（封好之后把 IV 截成 11 字节）：核对存储不写它 */
+  readonly writeMalformed: (input: ProbeDraftInput) => Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>
   readonly transactions: () => readonly ProbeTransaction[]
 }
 
@@ -265,7 +269,33 @@ export function installOutboxProbe(target: Window): OutboxProbe {
   const held = new Map<number, IDBDatabase>()
   const heldTransactions = new Map<number, { readonly release: () => void, readonly done: Promise<void>, readonly db: IDBDatabase }>()
   let fetchedKey: LocalKeyHandle | undefined
+  let recording = false
   const recorded: ProbeTransaction[] = []
+  /** 接下来几次开事务要抛出的错误名 */
+  const failures: string[] = []
+  let wrapped = false
+
+  /** 包住 IDBDatabase.prototype.transaction（只包一次）：记下每一次开事务、按要求抛出 */
+  function wrapTransactions(): void {
+    if (wrapped)
+      return
+    wrapped = true
+    const original: unknown = Reflect.get(IDBDatabase.prototype, 'transaction')
+    if (typeof original !== 'function')
+      throw new TypeError('IDBDatabase.prototype.transaction 不是函数')
+    Object.defineProperty(IDBDatabase.prototype, 'transaction', {
+      configurable: true,
+      writable: true,
+      value: function transaction(this: IDBDatabase, stores: string | string[], mode?: IDBTransactionMode, options?: IDBTransactionOptions): IDBTransaction {
+        const failure = failures.shift()
+        if (failure !== undefined)
+          throw new DOMException(`探针：开事务时抛出 ${failure}`, failure)
+        if (recording)
+          recorded.push({ stores: typeof stores === 'string' ? [stores] : [...stores], mode: mode ?? 'readonly', durability: options?.durability })
+        return Reflect.apply(original, this, [stores, mode, options]) as IDBTransaction
+      },
+    })
+  }
   let nextId = 1
 
   function currentKey(): LocalKeyHandle {
@@ -324,6 +354,10 @@ export function installOutboxProbe(target: Window): OutboxProbe {
       return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing: outcome.existing === undefined ? undefined : await opened(outcome.existing) }
     },
     write: async (input, options) => plain(await store.writeDraft(await seal(input), options)),
+    writeMalformed: async (input) => {
+      const draft = await seal(input)
+      return plain(await store.writeDraft({ ...draft, iv: draft.iv.slice(0, 11) }))
+    },
     startWrite: (input) => {
       const id = nextId++
       operations.set(id, seal(input).then(async draft => plain(await store.writeDraft(draft))))
@@ -510,17 +544,13 @@ export function installOutboxProbe(target: Window): OutboxProbe {
       },
     },
     recordTransactions: () => {
-      const original: unknown = Reflect.get(IDBDatabase.prototype, 'transaction')
-      if (typeof original !== 'function')
-        throw new TypeError('IDBDatabase.prototype.transaction 不是函数')
-      Object.defineProperty(IDBDatabase.prototype, 'transaction', {
-        configurable: true,
-        writable: true,
-        value: function transaction(this: IDBDatabase, stores: string | string[], mode?: IDBTransactionMode, options?: IDBTransactionOptions): IDBTransaction {
-          recorded.push({ stores: typeof stores === 'string' ? [stores] : [...stores], mode: mode ?? 'readonly', durability: options?.durability })
-          return Reflect.apply(original, this, [stores, mode, options]) as IDBTransaction
-        },
-      })
+      wrapTransactions()
+      recording = true
+    },
+    failTransactions: (count, name) => {
+      wrapTransactions()
+      for (let index = 0; index < count; index += 1)
+        failures.push(name)
     },
     transactions: () => [...recorded],
   }
