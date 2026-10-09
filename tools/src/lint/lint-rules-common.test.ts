@@ -13,6 +13,7 @@ import {
   prepareLint,
   restrictedPatterns,
   severity,
+  TESTS_SHARED_FILE,
   TOOLS_TEST_FILE,
   WEB_FEATURE_FILE,
   WEB_FILE,
@@ -21,7 +22,7 @@ import {
   WEB_TEST_SUPPORT,
 } from './lint-harness.test-support.ts'
 
-const { lint, rulesFor, configFor } = prepareLint({ warmUp: [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE, API_CONTROLLER, INTEGRATION_FILE] })
+const { lint, rulesFor, configFor } = prepareLint({ warmUp: [WEB_FILE, CONTRACTS_FILE, TOOLS_TEST_FILE, E2E_FILE, API_CONTROLLER, INTEGRATION_FILE, TESTS_SHARED_FILE] })
 
 describe('US-M1-11 lint 规则的自测：受限导入', () => {
   it('编辑器之外引用 @univerjs/* 或 Pro 会失败，静态导入、再导出与动态导入都算', async () => {
@@ -168,6 +169,16 @@ describe('US-M1-11 lint 规则的自测：E2E 引用 contracts 只经公开入�
     expect(await rulesFor('import { canonicalLink } from \'../../../../packages/contracts/src/documents/link-address.ts\'\n\nexport const f = canonicalLink\n', E2E_FILE)).toContain('boundaries/dependencies')
     expect(await rulesFor('import { PROFILE_RESOURCES } from \'../../../../packages/contracts/src/documents/profile-resources.ts\'\n\nexport const r = PROFILE_RESOURCES\n', E2E_FILE)).toContain('boundaries/dependencies')
     expect(await rulesFor(cases('../../../../'), INTEGRATION_FILE)).toContain('boundaries/dependencies')
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：E2E 与集成测试共用的测试辅助（tests/shared，M4-P1 S7）', () => {
+  it('E2E 与集成测试可以引用 tests/shared；tests/shared 不引用两边', async () => {
+    const shared = 'import { hostTag } from \'../../../../tests/shared/test-databases.ts\'\n\nexport const tag = hostTag\n'
+    expect(await rulesFor(shared, E2E_FILE)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor(shared, INTEGRATION_FILE)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { e2eDatabaseName } from \'../e2e/support/environment.ts\'\n\nexport const f = e2eDatabaseName\n', TESTS_SHARED_FILE)).toContain('boundaries/dependencies')
+    expect(await rulesFor('import { testDatabaseName } from \'../integration/src/support/database.ts\'\n\nexport const f = testDatabaseName\n', TESTS_SHARED_FILE)).toContain('boundaries/dependencies')
   })
 }, LINT_TIMEOUT)
 

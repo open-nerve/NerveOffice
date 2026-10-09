@@ -2,6 +2,7 @@
 import type { AddressInfo } from 'node:net'
 import { createServer } from 'node:net'
 import process from 'node:process'
+import { hostScopedName } from '../../shared/test-databases.ts'
 
 /** 服务脚本用初始化命令创建的管理员（US-M1-01 的 E2E 用它登录）。只存在于本次运行的测试库里 */
 export const E2E_ADMIN = { username: 'e2e-admin', displayName: 'E2E 管理员', password: 'e2e admin password 2026' } as const
@@ -50,6 +51,14 @@ export function e2eOrigin(): string {
 const LOCAL_MAINTENANCE_URL = 'postgres://nerve:nerve_dev_only@127.0.0.1:54318/nerve_office'
 export const E2E_DATABASE_PREFIX = 'nerve_e2e_'
 
+/**
+ * 本次运行的测试库名：nerve_e2e_<主机标识>_<进程号>（Playwright 的主进程，或页面自检的驱动脚本）。服务脚本启动时只清理本主机建的、
+ * 按本主机的进程号判断这次运行还在不在（tests/shared/test-databases.ts，M4-P1 S7 的事故之后）
+ */
+export function e2eDatabaseName(pid: number): string {
+  return hostScopedName(E2E_DATABASE_PREFIX, pid)
+}
+
 export function maintenanceDatabaseUrl(): string {
   return process.env.NERVE_TEST_DATABASE_URL ?? LOCAL_MAINTENANCE_URL
 }
@@ -60,7 +69,7 @@ export function databaseUrl(name: string): string {
   return url.toString()
 }
 
-/** 本次运行的测试库：Playwright 的配置按主进程的进程号设定，工作进程与服务脚本继承。 */
+/** 本次运行的测试库：Playwright 的配置按主机的标识与主进程的进程号设定（e2eDatabaseName），工作进程与服务脚本继承。 */
 export function e2eDatabaseUrl(): string {
   const url = process.env.E2E_DATABASE_URL
   if (url === undefined)

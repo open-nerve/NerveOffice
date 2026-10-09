@@ -523,7 +523,7 @@ describe('登记写入者（§3.4.2）', () => {
 
   it('没有草稿：existing 为 undefined', async () => {
     const { writer } = await setup({ register: false })
-    expect(await writer.register(KEY, ME, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined })
+    expect(await writer.register(KEY, ME, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror: { kind: 'off' } })
   })
 
   it('现有的草稿解不开、没有密钥、更新的页面写的、形状不对：都归类交回', async () => {

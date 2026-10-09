@@ -7,7 +7,7 @@ import type { DraftKey, DraftMeta, ReadDraft, StoredDraft, WriterRecord } from '
 import type { WriterIdentity } from './writer-fence.ts'
 import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideWrite, isSameWriter, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
+import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isSameWriter, restoredWriterOf, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
 
 /**
  * 存储这一侧的问题：
@@ -71,6 +71,15 @@ export interface PurgedDraft {
 
 export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly PurgedDraft[] } | StoreProblem
 
+/** 从 OPFS 镜像写回（§3.8）：写回了；没写回及原因（writer-fence.ts 的 decideRestore） */
+export type StoreRestoreOutcome
+  = | { readonly kind: 'restored' }
+    | { readonly kind: 'kept', readonly reason: 'expired' | 'unrecognized' | 'not-newer' | 'seen' }
+    | StoreProblem
+
+/** 这份文档的写入者（形状不对的当作没有，与判定同一个口径） */
+export type StoreWriterOutcome = { readonly kind: 'writer', readonly writer: WriterRecord | undefined } | StoreProblem
+
 export interface DraftStore {
   /**
    * 登记写入者（§3.4.2，取得编辑权并拿到本机锁之后）：[drafts, writers] 的 strict 事务里按 decideRegistration 判定；
@@ -105,6 +114,13 @@ export interface DraftStore {
    * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着），以及登记超过 14 天、又没有草稿的写入者
    */
   readonly purgeExpired: (now: number) => Promise<StorePurgeOutcome>
+  /**
+   * 从 OPFS 镜像写回（§3.8，S9）：镜像里校验通过、比库里新的那一份。strict 事务里按 decideRestore 判定：写回时连同写入者的记录
+   * （没有就建、更早的一代就换、就是它就抬高水位，更新的一代不动）；不写回时交回原因。形状不对的记录不写（failed）
+   */
+  readonly restoreDraft: (draft: StoredDraft, options: { readonly now: number }) => Promise<StoreRestoreOutcome>
+  /** 这份文档的写入者（S9：镜像的槽位都不合格时，看库里是不是连写入者也没了——删库——才算丢失） */
+  readonly readWriter: (key: DraftKey) => Promise<StoreWriterOutcome>
   /** 关掉连接（页面离开、Worker 结束）；之后的操作重新打开 */
   readonly close: () => void
 }
@@ -443,6 +459,33 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
             writerCursor.delete()
           writerCursor.continue()
         })
+      })
+    }),
+
+    restoreDraft: async (draft, { now }) => {
+      const checked = readStoredDraft(draft)
+      if (checked.kind !== 'draft')
+        return failed('镜像的那一份形状不对：不写回')
+      const record = checked.draft
+      return run<StoreRestoreOutcome>('readwrite', (scope) => {
+        readCurrent(scope, record, (current, existing) => {
+          const verdict = decideRestore(current, existing, record, now)
+          if (verdict.kind === 'skip') {
+            scope.finish({ kind: 'kept', reason: verdict.reason })
+            return
+          }
+          scope.tx.objectStore(DRAFTS_STORE).put(record)
+          const restoredWriter = restoredWriterOf(current, record, verdict.writer, now)
+          if (restoredWriter !== undefined)
+            scope.tx.objectStore(WRITERS_STORE).put(restoredWriter)
+          scope.finish({ kind: 'restored' })
+        })
+      })
+    },
+
+    readWriter: async key => run<StoreWriterOutcome>('readonly', (scope) => {
+      scope.then(scope.tx.objectStore(WRITERS_STORE).get(draftKeyPath(key)), (value: unknown) => {
+        scope.finish({ kind: 'writer', writer: value === undefined ? undefined : readWriterRecord(value) })
       })
     }),
 

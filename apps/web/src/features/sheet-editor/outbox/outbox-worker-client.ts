@@ -8,10 +8,11 @@
 // - 转移：写入的字节交出去之后归 Worker（调用方那一份随之清空）；交回的 gzip 由 Worker 转移过来。
 // 只在主线程：Worker 不引用这个文件
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
-import type { DraftWriter, FailureDescription } from '../../../shared/outbox/draft-writer.ts'
+import type { DraftWriter } from '../../../shared/outbox/draft-writer.ts'
+import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { LeaseClock } from '../edit-lease.ts'
 import type { KeyTransfer, OutboxCall, OutboxReply, OutboxResults } from './outbox-protocol.ts'
-import { describeFailure } from '../../../shared/outbox/draft-writer.ts'
+import { describeFailure } from '../../../shared/outbox/failure.ts'
 import { failedResult, OUTBOX_PROTOCOL_VERSION, readOutboxMessage, readOutboxResult } from './outbox-protocol.ts'
 
 /**
@@ -221,6 +222,15 @@ export function createOutboxWorkerClient(options: OutboxWorkerClientOptions): Ou
     },
     seedDigest: async (key, seed) => {
       await call({ type: 'seed-digest', draft: key, seed: seed ?? null }, [])
+    },
+    release: async (key) => {
+      await call({ type: 'release', draft: key }, [])
+    },
+    reconcile: async userId => call({ type: 'reconcile', userId }, []),
+    takeRecoveryEvents: async () => {
+      const result = await call({ type: 'take-events' }, [])
+      // Worker 坏了：事件跟着没了（库里写回的照样在，恢复时照常发现）
+      return result.kind === 'events' ? result.events : []
     },
     dispose: () => breakWith('terminated'),
     ready: async () => readiness,

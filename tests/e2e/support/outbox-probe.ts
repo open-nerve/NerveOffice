@@ -154,8 +154,15 @@ export interface ProbeCapture {
   readonly content: string | { readonly randomBase64Chars: number }
 }
 
+/** OPFS 的镜像写成了没有（S9） */
+export type MirrorStatus
+  = | { readonly kind: 'mirrored' }
+    | { readonly kind: 'off' }
+    | { readonly kind: 'not-mirrored', readonly reason: 'busy' | 'quota' | 'unsupported' }
+    | { readonly kind: 'not-mirrored', readonly reason: 'failed', readonly error: ProbeError }
+
 export type PipelineWritten
-  = | { readonly kind: 'written', readonly gzip: ProbeGzip, readonly digest: string }
+  = | { readonly kind: 'written', readonly gzip: ProbeGzip, readonly digest: string, readonly mirror: MirrorStatus }
     | { readonly kind: 'unchanged', readonly digest: string }
     | { readonly kind: 'fenced', readonly reason: 'not-writer' | 'stale-seq' | 'foreign-draft' | 'changed', readonly gzip: ProbeGzip }
     | { readonly kind: 'no-key', readonly gzip: ProbeGzip }
@@ -171,7 +178,7 @@ export type PipelineOpened
     | { readonly kind: 'malformed' }
 
 export type PipelineRegistered
-  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: PipelineOpened | undefined }
+  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: PipelineOpened | undefined, readonly mirror: MirrorStatus }
     | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean }
     | ProbeProblem
 
@@ -196,6 +203,21 @@ export interface ProbeWorkerTransaction {
   readonly durability: string | undefined
 }
 
+/** 比对镜像与库留下的事件（S9） */
+export interface RecoveryEvent {
+  readonly kind: 'restored' | 'lost'
+  readonly key: DraftKey
+}
+
+/** 镜像的一个槽位文件读出来的样子 */
+export type ProbeSlot
+  = | { readonly kind: 'missing' }
+    | { readonly kind: 'empty' }
+    | { readonly kind: 'invalid', readonly reason: string, readonly size: number }
+    | { readonly kind: 'valid', readonly generation: number, readonly meta: DraftMeta, readonly size: number }
+
+export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number }
+
 export interface ProbePipeline {
   readonly create: (options: ProbePipelineOptions) => Promise<{ readonly id: number, readonly ready: OutboxWorkerReady }>
   readonly setKey: (id: number, key: 'probe' | 'none') => Promise<PipelineKeyChange>
@@ -211,6 +233,14 @@ export interface ProbePipeline {
   readonly writeThenDispose: (id: number, capture: ProbeCapture, delayMs: number) => Promise<{ readonly result: PipelineWritten, readonly settledAfterDisposeMs: number, readonly contentSha256: string }>
   readonly storedGzip: (key: DraftKey) => Promise<ProbeStoredGzip>
   readonly workerTransactions: (id: number) => readonly ProbeWorkerTransaction[]
+  readonly release: (id: number, key: DraftKey) => Promise<void>
+  readonly reconcile: (id: number, userId: string) => Promise<{ readonly kind: 'reconciled', readonly documents: number } | { readonly kind: 'failed', readonly error: ProbeError }>
+  readonly takeEvents: (id: number) => Promise<readonly RecoveryEvent[]>
+  readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
+  readonly corruptSlot: (key: DraftKey, slot: 0 | 1, corruption: ProbeCorruption) => Promise<void>
+  readonly removeMirror: (userId: string) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>
+  readonly removeMirrorDocument: (key: DraftKey) => Promise<{ readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: unknown }>
+  readonly disposeAll: () => void
 }
 
 export interface OutboxProbe {
@@ -244,6 +274,11 @@ export interface OutboxProbe {
     readonly holdTransaction: () => Promise<number>
     readonly releaseTransaction: (held: number) => Promise<void>
   }
+  readonly storage: {
+    readonly persisted: () => Promise<{ readonly kind: 'persisted' | 'not-persisted' | 'unsupported' } | { readonly kind: 'failed', readonly error: ProbeError }>
+    readonly persist: () => Promise<{ readonly kind: 'granted' | 'denied' | 'unsupported' } | { readonly kind: 'failed', readonly error: ProbeError }>
+    readonly estimate: () => Promise<{ readonly kind: 'estimated', readonly usage: number | undefined, readonly quota: number | undefined } | { readonly kind: 'unsupported' } | { readonly kind: 'failed', readonly error: ProbeError }>
+  }
   readonly localKey: {
     readonly fetch: () => Promise<ProbeLocalKey>
     readonly encryptHex: (plainHex: string, ivHex: string) => Promise<string>
@@ -262,9 +297,10 @@ declare global {
   }
 }
 
-type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline'>
+type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline' | 'storage'>
 type DatabaseMethod = keyof OutboxProbe['database']
 type LocalKeyMethod = keyof OutboxProbe['localKey']
+type StorageMethod = keyof OutboxProbe['storage']
 type PipelineMethod = keyof OutboxProbe['pipeline']
 
 /**
@@ -297,6 +333,16 @@ export async function probeDatabase<M extends DatabaseMethod>(page: Page, method
 }
 
 /** 在页面里调探针的本机密钥一侧的方法（经生产的 fetchLocalKey 取、用它加密） */
+/** 在页面里调探针的本机存储状态（生产的 storage-status.ts） */
+export async function probeStorage<M extends StorageMethod>(page: Page, method: M): Promise<Awaited<ReturnType<OutboxProbe['storage'][M]>>> {
+  return page.evaluate(async (name) => {
+    const target = window.__nerveOutboxProbe
+    if (target === undefined)
+      throw new Error('页面里没有发件箱的探针')
+    return (target.storage[name] as unknown as () => unknown)()
+  }, method) as Promise<Awaited<ReturnType<OutboxProbe['storage'][M]>>>
+}
+
 export async function probeLocalKey<M extends LocalKeyMethod>(page: Page, method: M, ...args: Parameters<OutboxProbe['localKey'][M]>): Promise<Awaited<ReturnType<OutboxProbe['localKey'][M]>>> {
   return page.evaluate(async ({ method, args }) => {
     const target = window.__nerveOutboxProbe
@@ -314,6 +360,21 @@ export async function probePipeline<M extends PipelineMethod>(page: Page, method
       throw new Error('页面里没有发件箱的探针')
     return (target.pipeline[method] as unknown as (...values: unknown[]) => unknown)(...args)
   }, { method, args }) as Promise<Awaited<ReturnType<OutboxProbe['pipeline'][M]>>>
+}
+
+/**
+ * 用例收尾：关掉这一页的全部管道（Worker 终止、镜像的句柄放开），再删掉这个用户的 OPFS 镜像目录——Playwright 的 WebKit 在 macOS 上
+ * 把持久上下文的 OPFS 放在共用的目录里（~/Library/WebKit/org.webkit.Playwright/，不在资料目录里），不删就一直留着。交回删的结果的种类：
+ * 页面里没有探针时是 no-probe；Worker 刚终止、句柄还没放开时可能是 busy（要删干净的用例再试）；默认的上下文里 WebKit 没有 OPFS，是 unsupported
+ */
+export async function removeMirrorOf(page: Page, userId: string): Promise<string> {
+  return page.evaluate(async (owner) => {
+    const target = window.__nerveOutboxProbe
+    if (target === undefined)
+      return 'no-probe'
+    target.pipeline.disposeAll()
+    return (await target.pipeline.removeMirror(owner)).kind
+  }, userId)
 }
 
 /** 结果是 kind 这一种（不是就失败，说明里带上整个结果），交回收窄了类型的它：用例里不写条件判断 */
