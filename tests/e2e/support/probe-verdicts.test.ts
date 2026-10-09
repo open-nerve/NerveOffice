@@ -299,58 +299,142 @@ describe('输出', () => {
   })
 })
 
-/** 生产的发件箱 Worker 的一次：空闲的档与往返 */
+/** 生产的发件箱 Worker 的一次：空闲的档与往返（OPFS 镜像写成了） */
 function production(index: number, level: number, roundTrip: number): SelftestTiming {
-  return { id: `outbox-stall#${index}`, ms: { level, idle: level + 5, roundTrip } }
+  return { id: `outbox-stall#${index}`, ms: { level, idle: level + 5, roundTrip, mirrored: 1 } }
+}
+
+/** 生产的发件箱 Worker 的那一步交回的镜像事实：n 次都写成了镜像 */
+function mirroredFacts(n: number): Record<string, SelftestFact> {
+  return { 'outbox-stall.mirrored': n, 'outbox-stall.mirror-others': null, 'outbox-stall.mirror-cleanup': 'removed' }
 }
 
 describe('第 9 项的生产部分：生产的发件箱 Worker（outbox-stall 一步，DEF-011 的定论）', () => {
-  it('空闲 ≥ 1 秒的各档 0 次停顿、往返 p95 ≤ 300 ms：通过（保留 Worker 放置）；按档列出次数、停顿与往返', () => {
+  it('空闲 ≥ 1 秒的各档 0 次停顿、往返 p95 ≤ 300 ms：通过（保留 Worker 放置）；按档列出次数、停顿与往返；写明往返含 OPFS 镜像写入', () => {
     const timings = [production(1, 1000, 180), production(2, 1000, 190), production(3, 3000, 185), production(4, 10_000, 200)]
-    const result = verdict([probe('outbox-stall', 'outbox-stall', { 'outbox-stall.payload-bytes': 5_100_000 }, timings)], '9-production')
+    const result = verdict([probe('outbox-stall', 'outbox-stall', { 'outbox-stall.payload-bytes': 5_100_000, ...mirroredFacts(4) }, timings)], '9-production')
     expect(result).toMatchObject({ item: 9, status: 'pass', missing: [] })
     expect(result.lines.join('\n')).toContain('空闲 1–1.5 秒 2 次里 0 次停顿')
     expect(result.lines.join('\n')).toContain('保留 Worker 放置')
+    expect(result.lines.join('\n')).toContain('往返含 OPFS 镜像写入（生产的 Worker 在 IndexedDB 提交之后把同一份记录写进两个槽位之一：截断、内容、头、flush）：4 次里 4 次写成了镜像')
+    expect(result.lines.join('\n')).not.toContain('镜像目录没删掉')
+  })
+
+  it('这个上下文的镜像没有写成（没有 OPFS）：写明往返不含镜像写入；判定照旧按停顿与 p95', () => {
+    const timings = [production(1, 1000, 180), production(2, 1000, 190)]
+    const facts = { 'outbox-stall.mirrored': 0, 'outbox-stall.mirror-others': 'not-mirrored:unsupported×2', 'outbox-stall.mirror-cleanup': 'unsupported' }
+    const result = verdict([probe('outbox-stall', 'outbox-stall', facts, timings)], '9-production')
+    expect(result.status).toBe('pass')
+    expect(result.lines.join('\n')).toContain('这个上下文的 OPFS 镜像没有写成（not-mirrored:unsupported×2）：往返不含镜像写入')
+    expect(result.lines.join('\n')).not.toContain('往返含 OPFS')
+  })
+
+  it('一部分没写成：写成了几次、其余是什么；复核用户的镜像目录没删掉时写出来', () => {
+    const timings = [production(1, 1000, 180), production(2, 1000, 190), production(3, 1000, 185)]
+    const facts = { 'outbox-stall.mirrored': 2, 'outbox-stall.mirror-others': 'not-mirrored:busy×1', 'outbox-stall.mirror-cleanup': 'busy' }
+    const lines = verdict([probe('outbox-stall', 'outbox-stall', facts, timings)], '9-production').lines.join('\n')
+    expect(lines).toContain('3 次里 2 次写成了镜像，其余 not-mirrored:busy×1')
+    expect(lines).toContain('复核用户的 OPFS 镜像目录没删掉（busy）')
   })
 
   it('有一次比同档的中位数多出 ≥ 500 ms（停顿），或者往返 p95 超过 300 ms：不通过（WebKit 改在主线程）', () => {
     const stalled = [production(1, 1000, 180), production(2, 1000, 190), production(3, 1000, 1200)]
-    expect(verdict([probe('outbox-stall', 'outbox-stall', {}, stalled)], '9-production').status).toBe('fail')
+    expect(verdict([probe('outbox-stall', 'outbox-stall', mirroredFacts(3), stalled)], '9-production').status).toBe('fail')
     const slow = [production(1, 3000, 350), production(2, 3000, 360)]
-    expect(verdict([probe('outbox-stall', 'outbox-stall', {}, slow)], '9-production').status).toBe('fail')
+    expect(verdict([probe('outbox-stall', 'outbox-stall', mirroredFacts(2), slow)], '9-production').status).toBe('fail')
   })
 
   it('40 次里只有一次停顿（往返的 p95 不受它影响）：照样不通过——停顿与 p95 是两条各自的条件', () => {
     const timings = [...Array.from({ length: 39 }, (_, index) => production(index + 1, 1000, 180 + (index % 5))), production(40, 1000, 1250)]
-    const result = verdict([probe('outbox-stall', 'outbox-stall', {}, timings)], '9-production')
+    const result = verdict([probe('outbox-stall', 'outbox-stall', mirroredFacts(40), timings)], '9-production')
     expect(result.status).toBe('fail')
     expect(result.lines.join('\n')).toContain('40 次里 1 次停顿')
     expect(result.lines.join('\n')).toMatch(/往返 p95 18\d ms/)
   })
 
-  it('没有这一步、没有计时：missing；探针 Worker 的第 9 项照旧单独一项（id 9）', () => {
+  it('没有这一步、没有计时、缺镜像写成了几次：missing；探针 Worker 的第 9 项照旧单独一项（id 9）', () => {
     expect(verdict([], '9-production').status).toBe('missing')
-    expect(verdict([probe('outbox-stall', 'outbox-stall', {})], '9-production').status).toBe('missing')
+    expect(verdict([probe('outbox-stall', 'outbox-stall', mirroredFacts(1))], '9-production').status).toBe('missing')
+    expect(verdict([probe('outbox-stall', 'outbox-stall', {}, [production(1, 1000, 180)])], '9-production')).toMatchObject({ status: 'missing', missing: ['outbox-stall.mirrored'] })
     expect(verdict([], 9).title).toContain('探针 Worker')
   })
 })
 
-/** 进程内各段的一次 */
-function segments(size: '1m' | '5m', index: number, overrides: Record<string, number> = {}): SelftestTiming {
-  return { id: `outbox-pipeline.${size}#${index}`, ms: { rawBytes: size === '1m' ? 1_050_000 : 5_090_000, gzipBytes: 260_000, digest: 3, gzip: 12, seal: 2, storeWrite: 8, rawStrict: 6, rawDefault: 4, read: 5, open: 2, gunzip: 6, parse: 9, ...overrides } }
+/** 进程内各段的一次（OPFS 镜像写成了：登记、写入、其中截断与写、flush；读、其中拿句柄、比对） */
+function segments(size: '1m' | '5m', index: number, overrides: Record<string, number | null> = {}): SelftestTiming {
+  return {
+    id: `outbox-pipeline.${size}#${index}`,
+    ms: {
+      rawBytes: size === '1m' ? 1_050_000 : 5_090_000,
+      gzipBytes: 260_000,
+      digest: 3,
+      gzip: 12,
+      seal: 2,
+      storeWrite: 8,
+      rawStrict: 6,
+      rawDefault: 4,
+      read: 5,
+      open: 2,
+      gunzip: 6,
+      parse: 9,
+      mirrorAttach: 4,
+      mirrorWrite: 9,
+      mirrorIo: 3,
+      mirrorFlush: 5,
+      mirrorRead: 6,
+      mirrorOpen: 2,
+      mirrorCompare: 0.1,
+      ...overrides,
+    },
+  }
 }
+
+/** 没有 OPFS 的上下文里镜像那几段都是 null */
+const NO_MIRROR = { mirrorAttach: null, mirrorWrite: null, mirrorIo: null, mirrorFlush: null, mirrorRead: null, mirrorOpen: null, mirrorCompare: null }
+
+const PIPELINE_FACTS: Record<string, SelftestFact> = { 'outbox-pipeline.strict-attribute': 'strict', 'outbox-pipeline.default-attribute': 'default', 'outbox-pipeline.opfs': 'mirrored', 'outbox-pipeline.mirror-cleanup': 'removed' }
 
 describe('第 11 项：磁盘上的管道各段与恢复路径（outbox-pipeline 一步，只作记录）', () => {
   it('每档一行写入一侧（SHA-256、gzip、封、写入 strict）与恢复（读、解开、解压、解析）的中位数，另一行直接写入的 strict 与 default（strict 的开销）', () => {
     const timings = [segments('1m', 1), segments('1m', 2, { rawStrict: 8 }), segments('5m', 1, { gzip: 60 }), segments('5m', 2, { gzip: 62 })]
-    const result = verdict([probe('outbox-pipeline', 'outbox-pipeline', { 'outbox-pipeline.strict-attribute': 'strict', 'outbox-pipeline.default-attribute': 'default' }, timings)], 11)
+    const result = verdict([probe('outbox-pipeline', 'outbox-pipeline', PIPELINE_FACTS, timings)], 11)
     expect(result).toMatchObject({ status: 'record', missing: [] })
     expect(result.lines.join('\n')).toContain('约 5 MiB（5090000 字节）× 2：写入一侧 SHA-256 3 ms、gzip 60 ms')
     expect(result.lines.join('\n')).toContain('直接写入 strict p50 6 ms、default p50 4 ms，strict 多 2 ms')
   })
 
-  it('没有这一步或没有计时：missing', () => {
+  it('OPFS 镜像写成了：每档一行登记、写入（其中截断与写、flush 单独列）与 p95、读两个槽位并校验（其中拿句柄）、比对', () => {
+    const timings = [segments('1m', 1), segments('1m', 2, { mirrorWrite: 11, mirrorFlush: 7 }), segments('5m', 1, { mirrorWrite: 30, mirrorIo: 12, mirrorFlush: 15 }), segments('5m', 2, { mirrorWrite: 32, mirrorIo: 13, mirrorFlush: 16, mirrorRead: 20, mirrorOpen: 3 })]
+    const result = verdict([probe('outbox-pipeline', 'outbox-pipeline', PIPELINE_FACTS, timings)], 11)
+    const lines = result.lines.join('\n')
+    expect(result.status).toBe('record')
+    expect(lines).toContain('OPFS 镜像：写成了（专用 Worker 里的同步访问句柄，两个槽位轮流写）')
+    expect(lines).toContain('  OPFS 镜像：登记（拿句柄、读两个槽位并校验）4 ms；写入 9 ms（其中截断与写 3 ms、flush 5 ms，其余是编码：内容与头的 SHA-256），写入 p95 11 ms、flush p95 7 ms；读两个槽位并校验（临时拿句柄）6 ms（其中拿句柄 2 ms）、比对 0.1 ms（中位数）')
+    expect(lines).toContain('写入 30 ms（其中截断与写 12 ms、flush 15 ms，其余是编码：内容与头的 SHA-256），写入 p95 32 ms、flush p95 16 ms；读两个槽位并校验（临时拿句柄）6 ms')
+    expect(lines).not.toContain('镜像目录没删掉')
+  })
+
+  it('这个上下文没有 OPFS（Playwright 的 WebKit 默认上下文）：写明镜像那一段没量，各档不列镜像的数', () => {
+    const timings = [segments('1m', 1, NO_MIRROR)]
+    const facts = { ...PIPELINE_FACTS, 'outbox-pipeline.opfs': 'not-mirrored:unsupported', 'outbox-pipeline.mirror-cleanup': 'unsupported' }
+    const result = verdict([probe('outbox-pipeline', 'outbox-pipeline', facts, timings)], 11)
+    expect(result.status).toBe('record')
+    expect(result.lines.join('\n')).toContain('OPFS 镜像：这个上下文没有 OPFS（not-mirrored:unsupported），镜像那一段没量')
+    expect(result.lines.join('\n')).not.toContain('登记（拿句柄')
+    expect(result.lines.join('\n'), '没有 OPFS 时没有镜像目录可删').not.toContain('镜像目录没删掉')
+  })
+
+  it('镜像没写成的别的原因照写；复核用户的镜像目录没删掉时写出来', () => {
+    const facts = { ...PIPELINE_FACTS, 'outbox-pipeline.opfs': 'not-mirrored:quota', 'outbox-pipeline.mirror-cleanup': 'failed:UnknownError' }
+    const lines = verdict([probe('outbox-pipeline', 'outbox-pipeline', facts, [segments('1m', 1, NO_MIRROR)])], 11).lines.join('\n')
+    expect(lines).toContain('OPFS 镜像：没写成（not-mirrored:quota）')
+    expect(lines).toContain('复核用户的 OPFS 镜像目录没删掉（failed:UnknownError）')
+  })
+
+  it('没有这一步、没有计时、缺 OPFS 镜像的那一条事实：missing', () => {
     expect(verdict([], 11).status).toBe('missing')
-    expect(verdict([probe('outbox-pipeline', 'outbox-pipeline', {})], 11).status).toBe('missing')
+    expect(verdict([probe('outbox-pipeline', 'outbox-pipeline', PIPELINE_FACTS)], 11).status).toBe('missing')
+    const withoutOpfs = { 'outbox-pipeline.strict-attribute': 'strict', 'outbox-pipeline.default-attribute': 'default' }
+    expect(verdict([probe('outbox-pipeline', 'outbox-pipeline', withoutOpfs, [segments('1m', 1)])], 11)).toMatchObject({ status: 'missing', missing: ['outbox-pipeline.opfs'] })
   })
 })
