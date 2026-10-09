@@ -18,7 +18,10 @@ export type HandoverTraceEvent
   /** 开始离开编辑（原因）；离开的结果：回到阅读、留在编辑 */
     | { readonly kind: 'leave', readonly at: number, readonly cause: string }
     | { readonly kind: 'left', readonly at: number, readonly cause: string, readonly outcome: 'reading' | 'stayed' }
-  /** 本机锁被本浏览器的另一个标签页抢走（随即向服务端核对这一代：lock-verdict） */
+  /**
+   * 本机锁被本浏览器的另一个标签页抢走（随即向服务端核对这一代：lock-verdict）；这一代已经失效、服务端说被本人接管、锁留着等被抢时
+   * （local-lock.ts 的 takenHere）也报，不核对
+   */
     | { readonly kind: 'lock-stolen', readonly at: number }
   /**
    * 本机锁的争用由服务端裁决（M3-P6 设计 §3.13，local-lock.ts）：拿锁时被本浏览器的别的标签页占着（claim）、锁被抢之后（stolen）核对这一代的结果——
