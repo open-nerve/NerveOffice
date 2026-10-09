@@ -2,6 +2,7 @@ import type { ConfigIssue, ServerConfig } from './config.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
 import { inspect } from 'node:util'
+import { LOCAL_DRAFT_RETENTION_DAYS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { APP_CONFIG, ConfigModule, LOCAL_KEYS_CONFIG } from './config.module.ts'
 import { ConfigError, loadConfig, loadServerConfig } from './config.ts'
@@ -186,13 +187,16 @@ describe('loadConfig', () => {
     }
   })
 
-  it('修订记录与回执的保留天数至少 15（M3-P3 设计 §3.9）：要长于本机发件箱一条记录的最长留存 14 天，说明里写明理由；上限 3650', () => {
-    for (const value of ['14', '0', '3651', '30.5', 'thirty']) {
+  it('修订记录与回执的保留天数至少比本机草稿的保留期多 1 天（M3-P3 设计 §3.9；M4-P1 设计 §3.3：下限由契约的常量推出），说明里写明理由；上限 3650', () => {
+    // 钉子：数值仍是 14 与 15（部署说明、ADR-011 与 ADR-016 写的就是这两个数）
+    expect([LOCAL_DRAFT_RETENTION_DAYS, LOCAL_DRAFT_RETENTION_DAYS + 1]).toEqual([14, 15])
+    const minimum = LOCAL_DRAFT_RETENTION_DAYS + 1
+    for (const value of [String(LOCAL_DRAFT_RETENTION_DAYS), '0', '3651', '30.5', 'thirty']) {
       const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_REVISION_RETENTION_DAYS: value }))
       expect(issues.map(issue => issue.variable), value).toEqual(['NERVE_REVISION_RETENTION_DAYS'])
-      expect(issues[0]?.problem, value).toBe('必须是 15–3650 之间的整数：保留期要长于本机发件箱一条记录的最长留存（14 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了')
+      expect(issues[0]?.problem, value).toBe(`必须是 ${minimum}–3650 之间的整数：保留期要长于本机发件箱一条记录的最长留存（${LOCAL_DRAFT_RETENTION_DAYS} 天，M4），否则发件箱里结果未知的保存重发时找不到原来的结果、重放不了`)
     }
-    expect(loadConfig({ ...REQUIRED, NERVE_REVISION_RETENTION_DAYS: '15' }).revisions.retentionDays).toBe(15)
+    expect(loadConfig({ ...REQUIRED, NERVE_REVISION_RETENTION_DAYS: String(minimum) }).revisions.retentionDays).toBe(minimum)
     expect(loadConfig({ ...REQUIRED, NERVE_REVISION_RETENTION_DAYS: '3650' }).revisions.retentionDays).toBe(3_650)
   })
 

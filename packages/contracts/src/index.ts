@@ -235,6 +235,7 @@ export type {
 } from './documents/editing.ts'
 export { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './documents/link-address.ts'
 export type { CanonicalLink, CellLinkRule, LinkAddressInvalidReason } from './documents/link-address.ts'
+export { LOCAL_DRAFT_RETENTION_DAYS } from './documents/local-drafts.ts'
 export {
   compareOpenCheckFailures,
   ERROR_NAME_PATTERN,
