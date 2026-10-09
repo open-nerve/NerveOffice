@@ -1,8 +1,8 @@
 // 测试用：照 MirrorDirectory 的接口写的内存里的 OPFS（M4-P1 设计 §3.8）。文件按"用户/文档/槽位"存字节；同步访问句柄同一个文件同一时刻
 // 只有一个（与浏览器一样：再拿交回 busy）；另有别的标签页占着句柄、下一次写入写到一半抛出（写满、出错）或者只写了一部分、没有 OPFS 这几样，
-// 并记下每个槽位文件上改动的操作（截断、写、flush 的先后）
+// 并记下每个槽位文件上改动的操作（截断、写、flush 的先后）。目录（用户、文档）与文件分开记：文件删光了目录还在，删目录才没有
 import type { DraftKey } from './draft-record.ts'
-import type { MirrorDirectory, MirrorProblem, SlotHandle } from './mirror-directory.ts'
+import type { MirrorDirectory, MirrorProblem, SlotFileInfo, SlotHandle } from './mirror-directory.ts'
 import { SLOT_FILE_NAMES } from './mirror-directory.ts'
 
 export interface FakeMirrorDirectory {
@@ -27,14 +27,21 @@ export interface FakeMirrorDirectory {
   readonly flushes: () => number
   /** 这个槽位文件上改动的操作，按先后：truncate@大小、write@偏移、flush */
   readonly operations: (key: DraftKey, slot: 0 | 1) => readonly string[]
+  /** 改一个槽位文件最后改动的时刻（模拟很久以前写的） */
+  readonly touch: (key: DraftKey, slot: 0 | 1, lastModified: number) => void
 }
 
 function pathOf(key: DraftKey, slot: 0 | 1): string {
   return `${key.userId}/${key.documentId}/${SLOT_FILE_NAMES[slot]}`
 }
 
-export function fakeMirrorDirectory(): FakeMirrorDirectory {
+/** clock：文件最后改动的时刻取它（墙上时间；默认一直是 0） */
+export function fakeMirrorDirectory(options: { readonly clock?: () => number } = {}): FakeMirrorDirectory {
+  const clock = options.clock ?? (() => 0)
   const files = new Map<string, Uint8Array<ArrayBuffer>>()
+  /** 目录："用户" 与 "用户/文档" */
+  const directories = new Set<string>()
+  const modified = new Map<string, number>()
   const locked = new Set<string>()
   const elsewhere = new Set<string>()
   /** name 为 undefined 时只写一部分、不抛出 */
@@ -46,6 +53,27 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
 
   function record(path: string, operation: string): void {
     operations.set(path, [...(operations.get(path) ?? []), operation])
+    modified.set(path, clock())
+  }
+
+  function put(path: string, bytes: Uint8Array<ArrayBuffer>): void {
+    const [owner = '', documentId = ''] = path.split('/')
+    directories.add(owner)
+    directories.add(`${owner}/${documentId}`)
+    files.set(path, bytes)
+    modified.set(path, clock())
+  }
+
+  /** 删掉 prefix 这个目录与它下面的一切（有句柄开着时 busy，什么也不删） */
+  function removeTree(prefix: string): { readonly kind: 'removed' } | { readonly kind: 'busy' } {
+    const inside = (path: string): boolean => path === prefix || path.startsWith(`${prefix}/`)
+    if ([...files.keys()].some(path => inside(path) && (locked.has(path) || elsewhere.has(path))))
+      return { kind: 'busy' }
+    for (const path of [...files.keys()].filter(inside))
+      files.delete(path)
+    for (const directory of [...directories].filter(inside))
+      directories.delete(directory)
+    return { kind: 'removed' }
   }
 
   function handleFor(path: string): SlotHandle {
@@ -114,7 +142,7 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
           return { kind: 'absent' }
         for (const path of paths) {
           if (!files.has(path))
-            files.set(path, new Uint8Array(0))
+            put(path, new Uint8Array(0))
         }
       }
       if (paths.some(path => locked.has(path) || elsewhere.has(path)))
@@ -123,28 +151,23 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
       return { kind: 'opened', slots: [handleFor(paths[0]), handleFor(paths[1])] }
     },
     listDocuments: async (userId) => {
-      const documents = new Set<string>()
-      for (const path of files.keys()) {
-        const [owner, documentId] = path.split('/')
-        if (owner === userId && documentId !== undefined)
-          documents.add(documentId)
+      const documents = [...directories].filter(directory => directory.startsWith(`${userId}/`)).map(directory => directory.slice(userId.length + 1))
+      return { kind: 'listed', documentIds: documents.sort() }
+    },
+    listUsers: async () => ({ kind: 'listed', userIds: [...directories].filter(directory => !directory.includes('/')).sort() }),
+    slotFiles: async (key) => {
+      const paths = [pathOf(key, 0), pathOf(key, 1)] as const
+      if (!directories.has(`${key.userId}/${key.documentId}`))
+        return { kind: 'absent' }
+      // 与浏览器一样（Chromium 系与 WebKit 实测）：别的句柄拿着时 getFile 照样读得出大小与改动时刻，删目录才是 busy
+      const info = (path: string): SlotFileInfo | undefined => {
+        const bytes = files.get(path)
+        return bytes === undefined ? undefined : { size: bytes.byteLength, lastModified: modified.get(path) ?? 0 }
       }
-      return { kind: 'listed', documentIds: [...documents].sort() }
+      return { kind: 'files', files: [info(paths[0]), info(paths[1])] }
     },
-    removeUser: async (userId) => {
-      const paths = [...files.keys()].filter(path => path.startsWith(`${userId}/`))
-      if (paths.some(path => locked.has(path) || elsewhere.has(path)))
-        return { kind: 'busy' }
-      paths.forEach(path => files.delete(path))
-      return { kind: 'removed' }
-    },
-    removeDocument: async (key) => {
-      const paths = [pathOf(key, 0), pathOf(key, 1)]
-      if (paths.some(path => locked.has(path) || elsewhere.has(path)))
-        return { kind: 'busy' }
-      paths.forEach(path => files.delete(path))
-      return { kind: 'removed' }
-    },
+    removeUser: async userId => removeTree(userId),
+    removeDocument: async key => removeTree(`${key.userId}/${key.documentId}`),
   }
 
   return {
@@ -157,7 +180,7 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
       if (bytes === undefined)
         files.delete(pathOf(key, slot))
       else
-        files.set(pathOf(key, slot), new Uint8Array(bytes))
+        put(pathOf(key, slot), new Uint8Array(bytes))
     },
     holdElsewhere: (key) => {
       const paths = [pathOf(key, 0), pathOf(key, 1)]
@@ -177,5 +200,8 @@ export function fakeMirrorDirectory(): FakeMirrorDirectory {
     opens: () => opens,
     flushes: () => flushes,
     operations: (key, slot) => [...(operations.get(pathOf(key, slot)) ?? [])],
+    touch: (key, slot, lastModified) => {
+      modified.set(pathOf(key, slot), lastModified)
+    },
   }
 }

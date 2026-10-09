@@ -13,6 +13,7 @@ import {
   decideRestore,
   decideWrite,
   isExpired,
+  isNoticeExpired,
   isSameWriter,
   isWriterExpired,
   LOCAL_DRAFT_RETENTION_MS,
@@ -178,6 +179,12 @@ describe('保留期（§3.4.6、§3.4.7）：14 天，与契约同源', () => {
   it('写入者按登记的时刻，同样的边界', () => {
     expect(isWriterExpired({ registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS }, NOW)).toBe(false)
     expect(isWriterExpired({ registeredAt: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }, NOW)).toBe(true)
+  })
+
+  it('比对镜像留下的提示按留下的时刻，同样的边界', () => {
+    expect(isNoticeExpired({ at: NOW - LOCAL_DRAFT_RETENTION_MS }, NOW)).toBe(false)
+    expect(isNoticeExpired({ at: NOW - LOCAL_DRAFT_RETENTION_MS - 1 }, NOW)).toBe(true)
+    expect(isNoticeExpired({ at: NOW + DAY_MS }, NOW)).toBe(false)
   })
 
   it('原样重放：在途的就是这一份，并且发出不满 14 天（服务端修订记录与回执至少留 15 天）', () => {

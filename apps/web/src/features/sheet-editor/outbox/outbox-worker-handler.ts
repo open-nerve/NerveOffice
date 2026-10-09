@@ -132,8 +132,10 @@ export function createOutboxWorkerHandler(options: OutboxWorkerHandlerOptions): 
         return plain({ kind: 'released' })
       case 'reconcile':
         return plain(await writer.reconcile(request.userId))
-      case 'take-events':
-        return plain({ kind: 'events', events: await writer.takeRecoveryEvents() })
+      case 'notices':
+        return plain(await writer.notices(request.userId))
+      case 'clear-notice':
+        return plain(await writer.clearNotice(request.draft, request.expectedAt ?? undefined))
     }
   }
 

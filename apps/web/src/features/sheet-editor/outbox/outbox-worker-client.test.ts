@@ -293,7 +293,8 @@ describe('Worker 出事时不挂住：在途的全部以失败结束，之后立
     await expect(client.seedDigest(DRAFT, { digest: 'ab', formulasPending: false })).resolves.toBeUndefined()
     await expect(client.release(DRAFT)).resolves.toBeUndefined()
     expect(await client.reconcile(USER_ID)).toMatchObject(failed)
-    expect(await client.takeRecoveryEvents(), '坏了：事件跟着没了').toEqual([])
+    expect(await client.notices(USER_ID)).toMatchObject(failed)
+    expect(await client.clearNotice(DRAFT, 1)).toMatchObject(failed)
   })
 
   it('postMessage 抛出（这一条克隆不了）：只有这一个请求失败，客户端照常', async () => {
@@ -307,8 +308,8 @@ describe('Worker 出事时不挂住：在途的全部以失败结束，之后立
   })
 })
 
-describe('镜像的放开、比对与事件（M4-P1 设计 §3.8）', () => {
-  it('放开句柄、比对、取走事件：各发一条给 Worker，等它回复；结果照它的回复', async () => {
+describe('镜像的放开、比对与提示（M4-P1 设计 §3.8）', () => {
+  it('放开句柄、比对、读出与清除提示：各发一条给 Worker，等它回复；结果照它的回复', async () => {
     const { worker, client } = await scripted()
     const released = client.release(DRAFT)
     expect(worker.posted.findLast(entry => entry.message.type === 'release')?.message).toMatchObject({ draft: DRAFT })
@@ -318,9 +319,16 @@ describe('镜像的放开、比对与事件（M4-P1 设计 §3.8）', () => {
     expect(worker.posted.findLast(entry => entry.message.type === 'reconcile')?.message).toMatchObject({ userId: USER_ID })
     worker.reply(worker.idOf('reconcile'), { kind: 'reconciled', documents: 2 })
     expect(await reconciled).toEqual({ kind: 'reconciled', documents: 2 })
-    const taken = client.takeRecoveryEvents()
-    worker.reply(worker.idOf('take-events'), { kind: 'events', events: [{ kind: 'restored', key: DRAFT }, { kind: 'lost', key: DRAFT }] })
-    expect(await taken).toEqual([{ kind: 'restored', key: DRAFT }, { kind: 'lost', key: DRAFT }])
+    const notices = client.notices(USER_ID)
+    expect(worker.posted.findLast(entry => entry.message.type === 'notices')?.message).toMatchObject({ userId: USER_ID })
+    worker.reply(worker.idOf('notices'), { kind: 'notices', notices: [{ ...DRAFT, kind: 'restored', at: NOW }, { ...DRAFT, kind: 'lost', at: NOW + 1 }] })
+    expect(await notices).toEqual({ kind: 'notices', notices: [{ ...DRAFT, kind: 'restored', at: NOW }, { ...DRAFT, kind: 'lost', at: NOW + 1 }] })
+    const cleared = client.clearNotice(DRAFT, NOW)
+    expect(worker.posted.findLast(entry => entry.message.type === 'clear-notice')?.message).toMatchObject({ draft: DRAFT, expectedAt: NOW })
+    worker.reply(worker.idOf('clear-notice'), { kind: 'cleared' })
+    expect(await cleared).toEqual({ kind: 'cleared' })
+    void client.clearNotice(DRAFT)
+    expect(worker.posted.findLast(entry => entry.message.type === 'clear-notice')?.message).toMatchObject({ draft: DRAFT, expectedAt: null })
   })
 })
 
@@ -374,7 +382,8 @@ describe('连到 Worker 里真的处理：每种方法走完整条路', () => {
     expect(await client.remove(DRAFT, 2)).toEqual({ kind: 'removed' })
     await expect(client.release(DRAFT)).resolves.toBeUndefined()
     expect(await client.reconcile(USER_ID), '这个 Worker 没有镜像').toEqual({ kind: 'reconciled', documents: 0 })
-    expect(await client.takeRecoveryEvents()).toEqual([])
+    expect(await client.notices(USER_ID)).toEqual({ kind: 'notices', notices: [] })
+    expect(await client.clearNotice(DRAFT)).toEqual({ kind: 'absent' })
     expect(client.broken()).toBeUndefined()
     await settle()
   })

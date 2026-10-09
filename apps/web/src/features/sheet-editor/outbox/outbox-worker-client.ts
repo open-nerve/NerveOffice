@@ -227,11 +227,8 @@ export function createOutboxWorkerClient(options: OutboxWorkerClientOptions): Ou
       await call({ type: 'release', draft: key }, [])
     },
     reconcile: async userId => call({ type: 'reconcile', userId }, []),
-    takeRecoveryEvents: async () => {
-      const result = await call({ type: 'take-events' }, [])
-      // Worker 坏了：事件跟着没了（库里写回的照样在，恢复时照常发现）
-      return result.kind === 'events' ? result.events : []
-    },
+    notices: async userId => call({ type: 'notices', userId }, []),
+    clearNotice: async (key, expectedAt) => call({ type: 'clear-notice', draft: key, expectedAt: expectedAt ?? null }, []),
     dispose: () => breakWith('terminated'),
     ready: async () => readiness,
     broken: () => failure,

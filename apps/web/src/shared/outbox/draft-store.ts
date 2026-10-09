@@ -4,10 +4,12 @@
 // 发件箱 Worker 也引用这个文件：不引用 zod，不依赖 DOM
 import type { OutboxConnection, OutboxUnavailable } from './database.ts'
 import type { DraftKey, DraftMeta, ReadDraft, StoredDraft, WriterRecord } from './draft-record.ts'
+import type { RecoveryNotice, RecoveryNoticeKind } from './recovery-notice.ts'
 import type { WriterIdentity } from './writer-fence.ts'
-import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
+import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, NOTICES_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isSameWriter, restoredWriterOf, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
+import { readRecoveryNotice } from './recovery-notice.ts'
+import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isSameWriter, restoredWriterOf, shouldPurgeDraft, shouldPurgeWriter } from './writer-fence.ts'
 
 /**
  * 存储这一侧的问题：
@@ -77,8 +79,13 @@ export type StoreRestoreOutcome
     | { readonly kind: 'kept', readonly reason: 'expired' | 'unrecognized' | 'not-newer' | 'seen' }
     | StoreProblem
 
-/** 这份文档的写入者（形状不对的当作没有，与判定同一个口径） */
-export type StoreWriterOutcome = { readonly kind: 'writer', readonly writer: WriterRecord | undefined } | StoreProblem
+/** 镜像里没有合格的一份可写回时（§3.8）：库里草稿与写入者都没了（删库），留下了 lost；库里还有（草稿被删掉了、正写着）没留 */
+export type StoreLostOutcome = { readonly kind: 'noted' } | { readonly kind: 'kept' } | StoreProblem
+
+export type StoreNoticesOutcome = { readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | StoreProblem
+
+/** 清除一条提示：清了；读出之后又留下了新的一条（时刻不同），没清；没有 */
+export type StoreNoticeClearOutcome = { readonly kind: 'cleared' | 'changed' | 'absent' } | StoreProblem
 
 export interface DraftStore {
   /**
@@ -106,21 +113,36 @@ export interface DraftStore {
   readonly readDraft: (key: DraftKey) => Promise<StoreReadOutcome>
   /** 某个用户在这台设备上的全部草稿（元数据，不交出密文） */
   readonly listDrafts: (userId: string) => Promise<StoreListOutcome>
-  /** 放弃（用户的决定，不核对写入者，§3.4.7）：带 expectedSeq 时只删那一份（decideRemove） */
-  readonly removeDraft: (key: DraftKey, expectedSeq?: number) => Promise<StoreRemoveOutcome>
-  /** 按用户清理（退出登录、账户停用）：草稿与写入者在一个事务里一起删；之后才到的写入因写入者不在而 not-writer */
-  readonly removeUserData: (userId: string) => Promise<StoreClearOutcome>
   /**
-   * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着），以及登记超过 14 天、又没有草稿的写入者
+   * 放弃（用户的决定，不核对写入者，§3.4.7）：带 expectedSeq 时只删那一份（decideRemove）；这份文档的提示一并删（S9）。
+   * 写入者留着：它的高水位挡住镜像里没删掉的那一份被写回（decideRestore 的 seen）
+   */
+  readonly removeDraft: (key: DraftKey, expectedSeq?: number) => Promise<StoreRemoveOutcome>
+  /**
+   * 按用户清理（退出登录、账户停用）：草稿、写入者与提示在一个事务里一起删；之后才到的写入因写入者不在而 not-writer。
+   * keepDocumentIds 里的文档留着（S9：它的镜像目录这一次删不掉，库里的也留着，免得下一次比对时把镜像里的写回来；见 local-cleanup.ts）
+   */
+  readonly removeUserData: (userId: string, options?: { readonly keepDocumentIds?: readonly string[] }) => Promise<StoreClearOutcome>
+  /**
+   * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着），登记超过 14 天、又没有草稿的写入者，
+   * 以及留下超过 14 天、形状不对的提示（S9）
    */
   readonly purgeExpired: (now: number) => Promise<StorePurgeOutcome>
   /**
    * 从 OPFS 镜像写回（§3.8，S9）：镜像里校验通过、比库里新的那一份。strict 事务里按 decideRestore 判定：写回时连同写入者的记录
-   * （没有就建、更早的一代就换、就是它就抬高水位，更新的一代不动）；不写回时交回原因。形状不对的记录不写（failed）
+   * （没有就建、更早的一代就换、就是它就抬高水位，更新的一代不动），并在同一个事务里留下 restored 提示（时刻是 now）；
+   * 不写回时交回原因。形状不对的记录不写（failed）
    */
   readonly restoreDraft: (draft: StoredDraft, options: { readonly now: number }) => Promise<StoreRestoreOutcome>
-  /** 这份文档的写入者（S9：镜像的槽位都不合格时，看库里是不是连写入者也没了——删库——才算丢失） */
-  readonly readWriter: (key: DraftKey) => Promise<StoreWriterOutcome>
+  /**
+   * 镜像的槽位都不合格（写一半、对不上）、没有可写回的（§3.8）：strict 事务里核对库里这份文档的草稿与写入者都没了（删库）才留下 lost
+   * 提示（时刻是 now）；还有任何一样（草稿被确认删掉、放弃过，或者正写着）不留
+   */
+  readonly recordLost: (key: DraftKey, options: { readonly now: number }) => Promise<StoreLostOutcome>
+  /** 这个用户的提示（P3 打开文档时、P4 本机草稿页读出说明）；形状不对的不列 */
+  readonly listNotices: (userId: string) => Promise<StoreNoticesOutcome>
+  /** 说明过之后清除这份文档的提示：带 expectedAt 时只清那一条（读出之后又留下的新提示留着，changed） */
+  readonly clearNotice: (key: DraftKey, expectedAt?: number) => Promise<StoreNoticeClearOutcome>
   /** 关掉连接（页面离开、Worker 结束）；之后的操作重新打开 */
   readonly close: () => void
 }
@@ -167,13 +189,18 @@ function hasSubtleCrypto(): boolean {
   return (globalThis.crypto as { readonly subtle?: SubtleCrypto } | undefined)?.subtle !== undefined
 }
 
+/** 草稿与写入者：登记、写入、重封、确认、读回的事务开在这两个仓库上 */
+const DRAFT_STORES: readonly string[] = [DRAFTS_STORE, WRITERS_STORE]
+
+/** 连同提示（S9）：写回、丢失、按用户清理、保留期 */
+const ALL_STORES: readonly string[] = [DRAFTS_STORE, WRITERS_STORE, NOTICES_STORE]
+
 /**
- * 在 [drafts, writers] 上开一个事务：读写的一律 strict（报告写完之前要求落盘，00 号计划书 §7.5）。body 里只用请求的回调，
+ * 在 stores 上开一个事务：读写的一律 strict（报告写完之前要求落盘，00 号计划书 §7.5）。body 里只用请求的回调，
  * 不 await 别的异步（否则事务自动提交，判定与写入之间就能插进别的标签页）。开事务本身抛出（连接正在关闭）由调用方接住
  */
-async function transact<T>(db: IDBDatabase, mode: IDBTransactionMode, body: (scope: TransactionScope<T>) => void): Promise<Settled<T>> {
-  const stores = [DRAFTS_STORE, WRITERS_STORE]
-  const tx = mode === 'readwrite' ? db.transaction(stores, mode, { durability: 'strict' }) : db.transaction(stores, mode)
+async function transact<T>(db: IDBDatabase, mode: IDBTransactionMode, stores: readonly string[], body: (scope: TransactionScope<T>) => void): Promise<Settled<T>> {
+  const tx = mode === 'readwrite' ? db.transaction([...stores], mode, { durability: 'strict' }) : db.transaction([...stores], mode)
   return new Promise((resolve) => {
     let result: { readonly value: T } | undefined
     let failure: { readonly error: unknown } | undefined
@@ -248,6 +275,10 @@ function failed(message: string): { readonly kind: 'failed', readonly error: unk
   return { kind: 'failed', error: new TypeError(message) }
 }
 
+function noticeOf(key: DraftKey, kind: RecoveryNoticeKind, at: number): RecoveryNotice {
+  return { userId: key.userId, documentId: key.documentId, kind, at }
+}
+
 /**
  * IndexedDB 的发件箱存储：连接按需打开、复用；versionchange 时连接自己关掉（别的标签页升级、删库），下一次操作重新打开。
  * 每个操作一个事务；事务因连接断开而中止时重开一次再试，写满归为 quota，别的错误归为 failed
@@ -271,14 +302,14 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     return opening
   }
 
-  async function run<T>(mode: IDBTransactionMode, body: (scope: TransactionScope<T>) => void): Promise<T | StoreProblem> {
+  async function run<T>(mode: IDBTransactionMode, body: (scope: TransactionScope<T>) => void, stores: readonly string[] = DRAFT_STORES): Promise<T | StoreProblem> {
     for (let attempt = 1; ; attempt += 1) {
       const current = await connect()
       if (current.kind === 'unavailable')
         return current
       let settled: Settled<T>
       try {
-        settled = await transact(current.db, mode, body)
+        settled = await transact(current.db, mode, stores, body)
       }
       catch (error) {
         settled = { kind: 'aborted', error }
@@ -418,17 +449,41 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     removeDraft: async (key, expectedSeq) => run<StoreRemoveOutcome>('readwrite', (scope) => {
       scope.then(scope.tx.objectStore(DRAFTS_STORE).get(draftKeyPath(key)), (value: unknown) => {
         const verdict = decideRemove(value === undefined ? undefined : readStoredDraft(value), expectedSeq)
-        if (verdict === 'remove')
+        if (verdict === 'remove') {
           scope.tx.objectStore(DRAFTS_STORE).delete(draftKeyPath(key))
+          scope.tx.objectStore(NOTICES_STORE).delete(draftKeyPath(key))
+        }
         scope.finish({ kind: verdict === 'remove' ? 'removed' : verdict })
       })
-    }),
+    }, [DRAFTS_STORE, NOTICES_STORE]),
 
-    removeUserData: async userId => run<StoreClearOutcome>('readwrite', (scope) => {
-      scope.tx.objectStore(DRAFTS_STORE).delete(userKeyRange(userId))
-      scope.tx.objectStore(WRITERS_STORE).delete(userKeyRange(userId))
-      scope.finish({ kind: 'cleared' })
-    }),
+    removeUserData: async (userId, removeOptions) => {
+      const keep = new Set(removeOptions?.keepDocumentIds ?? [])
+      return run<StoreClearOutcome>('readwrite', (scope) => {
+        if (keep.size === 0) {
+          for (const name of ALL_STORES)
+            scope.tx.objectStore(name).delete(userKeyRange(userId))
+          scope.finish({ kind: 'cleared' })
+          return
+        }
+        // 留下几份：三个仓库各走一遍这个用户的键，不在 keep 里的删掉；三遍都走完才算清完
+        let walking = ALL_STORES.length
+        for (const name of ALL_STORES) {
+          scope.then(scope.tx.objectStore(name).openCursor(userKeyRange(userId)), (cursor) => {
+            if (cursor === null) {
+              walking -= 1
+              if (walking === 0)
+                scope.finish({ kind: 'cleared' })
+              return
+            }
+            const key = draftKeyOf(cursor.primaryKey)
+            if (key === undefined || !keep.has(key.documentId))
+              cursor.delete()
+            cursor.continue()
+          })
+        }
+      }, ALL_STORES)
+    },
 
     purgeExpired: async now => run<StorePurgeOutcome>('readwrite', (scope) => {
       const purged: PurgedDraft[] = []
@@ -451,7 +506,17 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
         }
         scope.then(scope.tx.objectStore(WRITERS_STORE).openCursor(), (writerCursor) => {
           if (writerCursor === null) {
-            scope.finish({ kind: 'purged', drafts: purged })
+            // 提示：留下超过 14 天的、形状不对的删掉
+            scope.then(scope.tx.objectStore(NOTICES_STORE).openCursor(), (noticeCursor) => {
+              if (noticeCursor === null) {
+                scope.finish({ kind: 'purged', drafts: purged })
+                return
+              }
+              const notice = readRecoveryNotice(noticeCursor.value)
+              if (notice === undefined || isNoticeExpired(notice, now))
+                noticeCursor.delete()
+              noticeCursor.continue()
+            })
             return
           }
           const writerValue: unknown = writerCursor.value
@@ -460,7 +525,7 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
           writerCursor.continue()
         })
       })
-    }),
+    }, ALL_STORES),
 
     restoreDraft: async (draft, { now }) => {
       const checked = readStoredDraft(draft)
@@ -478,16 +543,52 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
           const restoredWriter = restoredWriterOf(current, record, verdict.writer, now)
           if (restoredWriter !== undefined)
             scope.tx.objectStore(WRITERS_STORE).put(restoredWriter)
+          scope.tx.objectStore(NOTICES_STORE).put(noticeOf(record, 'restored', now))
           scope.finish({ kind: 'restored' })
         })
-      })
+      }, ALL_STORES)
     },
 
-    readWriter: async key => run<StoreWriterOutcome>('readonly', (scope) => {
-      scope.then(scope.tx.objectStore(WRITERS_STORE).get(draftKeyPath(key)), (value: unknown) => {
-        scope.finish({ kind: 'writer', writer: value === undefined ? undefined : readWriterRecord(value) })
+    recordLost: async (key, { now }) => run<StoreLostOutcome>('readwrite', (scope) => {
+      readCurrent(scope, key, (current, existing) => {
+        if (current !== undefined || existing !== undefined) {
+          scope.finish({ kind: 'kept' })
+          return
+        }
+        scope.tx.objectStore(NOTICES_STORE).put(noticeOf(key, 'lost', now))
+        scope.finish({ kind: 'noted' })
       })
-    }),
+    }, ALL_STORES),
+
+    listNotices: async userId => run<StoreNoticesOutcome>('readonly', (scope) => {
+      const notices: RecoveryNotice[] = []
+      scope.then(scope.tx.objectStore(NOTICES_STORE).openCursor(userKeyRange(userId)), (cursor) => {
+        if (cursor === null) {
+          scope.finish({ kind: 'notices', notices })
+          return
+        }
+        const notice = readRecoveryNotice(cursor.value)
+        if (notice !== undefined)
+          notices.push(notice)
+        cursor.continue()
+      })
+    }, [NOTICES_STORE]),
+
+    clearNotice: async (key, expectedAt) => run<StoreNoticeClearOutcome>('readwrite', (scope) => {
+      scope.then(scope.tx.objectStore(NOTICES_STORE).get(draftKeyPath(key)), (value: unknown) => {
+        if (value === undefined) {
+          scope.finish({ kind: 'absent' })
+          return
+        }
+        const notice = readRecoveryNotice(value)
+        if (expectedAt !== undefined && notice !== undefined && notice.at !== expectedAt) {
+          scope.finish({ kind: 'changed' })
+          return
+        }
+        scope.tx.objectStore(NOTICES_STORE).delete(draftKeyPath(key))
+        scope.finish({ kind: 'cleared' })
+      })
+    }, [NOTICES_STORE]),
 
     close: () => {
       connection?.close()

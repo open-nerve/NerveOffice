@@ -193,8 +193,8 @@ describe('分派：每种请求交给写入管道，结果原样回复；交回�
   })
 })
 
-describe('OPFS 的镜像（M4-P1 设计 §3.8）：镜像交给管道；放开、比对、取走事件', () => {
-  it('写入的结果带上镜像写成了没有；放开句柄、比对用户的文档、取走事件都交给管道', async () => {
+describe('OPFS 的镜像（M4-P1 设计 §3.8）：镜像交给管道；放开、比对、读出与清除提示', () => {
+  it('写入的结果带上镜像写成了没有；放开句柄、比对用户的文档、读出与清除提示都交给管道', async () => {
     const files = fakeMirrorDirectory()
     const store = fakeDraftStore()
     const posted: OutboxMessage[] = []
@@ -217,13 +217,15 @@ describe('OPFS 的镜像（M4-P1 设计 §3.8）：镜像交给管道；放开�
     expect(await send({ type: 'release', draft: DRAFT }, 4)).toMatchObject({ ok: true, result: { kind: 'released' } })
     expect(files.openHandles()).toBe(0)
     expect(await send({ type: 'reconcile', userId: USER_ID }, 5)).toMatchObject({ ok: true, result: { kind: 'reconciled', documents: 1 } })
-    expect(await send({ type: 'take-events' }, 6)).toMatchObject({ ok: true, result: { kind: 'events', events: [] } })
-    // 库被删（草稿与写入者都没了）：比对时从镜像写回，事件交出一次
+    expect(await send({ type: 'notices', userId: USER_ID }, 6)).toMatchObject({ ok: true, result: { kind: 'notices', notices: [] } })
+    // 库被删（草稿与写入者都没了）：比对时从镜像写回，库里留下提示
     store.putRaw('drafts', DRAFT, undefined)
     store.putRaw('writers', DRAFT, undefined)
     expect(await send({ type: 'reconcile', userId: USER_ID }, 7)).toMatchObject({ ok: true, result: { kind: 'reconciled', documents: 1 } })
-    expect(await send({ type: 'take-events' }, 8)).toEqual({ v: OUTBOX_PROTOCOL_VERSION, id: 8, ok: true, result: { kind: 'events', events: [{ kind: 'restored', key: DRAFT }] } })
-    expect(await send({ type: 'take-events' }, 9)).toMatchObject({ ok: true, result: { kind: 'events', events: [] } })
+    expect(await send({ type: 'notices', userId: USER_ID }, 8)).toEqual({ v: OUTBOX_PROTOCOL_VERSION, id: 8, ok: true, result: { kind: 'notices', notices: [{ ...DRAFT, kind: 'restored', at: NOW }] } })
+    expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: NOW + 1 }, 9)).toMatchObject({ ok: true, result: { kind: 'changed' } })
+    expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: null }, 10), '不带时刻：照清').toMatchObject({ ok: true, result: { kind: 'cleared' } })
+    expect(await send({ type: 'clear-notice', draft: DRAFT, expectedAt: NOW }, 11)).toMatchObject({ ok: true, result: { kind: 'absent' } })
   })
 })
 

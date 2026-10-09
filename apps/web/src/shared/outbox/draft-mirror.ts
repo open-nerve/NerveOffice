@@ -5,13 +5,15 @@
 // - 两个槽位轮流写：每次写在"现在不是最新那一份"的槽位上，原地改写：截断 → 写内容 → 写头 → flush（槽位格式见 mirror-slot.ts）。
 //   写一半（被结束、写满、出错）的那一个校验不过、落选，另一个槽位上的上一份还在。
 // - 草稿删掉时两个都截断为 0（clear）；读时两个都读、都校验（read），由写入管道与 IndexedDB 那一份比较、取最新的。
+// - 补写（backfill）：镜像在 IndexedDB 提交之后才写，被结束在两者之间时镜像落后一份；写入者登记时库里那一份比镜像里最新的新，就补写它。
 // 跨边界不抛异常：结果都带 kind；未知的错误折成名字与消息。只在发件箱 Worker 里用（同步访问句柄只在专用 Worker 里有）；不引用 zod
-import type { DraftKey, StoredDraft } from './draft-record.ts'
+import type { DraftKey, DraftMeta, StoredDraft } from './draft-record.ts'
 import type { FailureDescription } from './failure.ts'
 import type { MirrorDirectory, SlotHandle } from './mirror-directory.ts'
-import type { SlotHeader, SlotRead } from './mirror-slot.ts'
+import type { SlotRead } from './mirror-slot.ts'
 import { describeFailure } from './failure.ts'
 import { encodeSlot, newestSlot, parseSlot, SLOT_HEADER_BYTES } from './mirror-slot.ts'
+import { compareDrafts } from './writer-fence.ts'
 
 /**
  * 镜像这一次写成了没有：
@@ -43,6 +45,11 @@ export interface DraftMirror {
   readonly attach: (key: DraftKey) => Promise<MirrorStatus>
   /** IndexedDB 提交之后写镜像：手里没有句柄时先拿（退避期间不拿，交回 busy） */
   readonly write: (record: StoredDraft) => Promise<MirrorStatus>
+  /**
+   * 补写：拿着这份文档的句柄（是写入者）、并且 record（库里那一份）比两个槽位里合格的最新一份新（compareDrafts）时写它，否则 mirrored；
+   * 没拿着句柄时什么也不做，交回 undefined（不是写入者的不动）
+   */
+  readonly backfill: (record: StoredDraft) => Promise<MirrorStatus | undefined>
   /** 草稿删掉之后：两个槽位截断为 0。手里没有句柄时临时拿一下、截断、放开；文件不在时什么也不做 */
   readonly clear: (key: DraftKey) => Promise<MirrorStatus>
   /** 读两个槽位并校验。手里没有句柄时临时拿一下、读完放开；不建文件 */
@@ -67,12 +74,16 @@ const DEFAULT_RETRY = { initialMs: 500, maxMs: 30_000 }
 
 const CLOSED: FailureDescription = { name: 'InvalidStateError', message: '镜像已关闭' }
 
-/** 拿着的两个句柄：哪一个是最新写的（都不合格时没有）、代号到了多少 */
+/** 比较新旧用的三项（compareDrafts） */
+type Ordering = Pick<DraftMeta, 'writeEpoch' | 'draftSeq' | 'updatedAt'>
+
+/** 拿着的两个句柄：哪一个是最新写的（都不合格时没有）、代号到了多少，各自存着的合格的那一份（补写时比较；不合格、空的为 undefined） */
 interface Held {
   readonly kind: 'held'
   readonly slots: readonly [SlotHandle, SlotHandle]
   newest: 0 | 1 | undefined
   generation: number
+  records: [Ordering | undefined, Ordering | undefined]
 }
 
 /** 上一次没拿到：到 retryAt 之前不再去拿，交回上一次的原因 */
@@ -115,11 +126,25 @@ function readWhole(handle: SlotHandle): Uint8Array<ArrayBuffer> {
 }
 
 /**
- * 合格的槽位的头（整个文件都校验，不只看头：头合格、内容却被截掉的槽位当作不合格，写在它上面，不碰另一个合格的）；不合格时没有
+ * 合格的槽位（整个文件都校验，不只看头：头合格、内容却被截掉的槽位当作不合格，写在它上面，不碰另一个合格的）；不合格时没有
  */
-async function validHeaderOf(handle: SlotHandle): Promise<SlotHeader | undefined> {
+async function validSlotOf(handle: SlotHandle): Promise<Extract<SlotRead, { readonly kind: 'valid' }> | undefined> {
   const read = await parseSlot(readWhole(handle))
-  return read.kind === 'valid' ? read.header : undefined
+  return read.kind === 'valid' ? read : undefined
+}
+
+function orderingOf(record: Ordering): Ordering {
+  return { writeEpoch: record.writeEpoch, draftSeq: record.draftSeq, updatedAt: record.updatedAt }
+}
+
+/** 两个槽位里合格的最新一份（compareDrafts） */
+function newestRecord(records: readonly (Ordering | undefined)[]): Ordering | undefined {
+  let newest: Ordering | undefined
+  for (const record of records) {
+    if (record !== undefined && (newest === undefined || compareDrafts(record, newest) > 0))
+      newest = record
+  }
+  return newest
 }
 
 function closeQuietly(slots: readonly SlotHandle[]): void {
@@ -167,9 +192,15 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
           return failed(new DOMException(CLOSED.message, CLOSED.name))
         }
         try {
-          const headers = [await validHeaderOf(opened.slots[0]), await validHeaderOf(opened.slots[1])]
-          const newest = newestSlot(headers)
-          states.set(id, { kind: 'held', slots: opened.slots, newest: newest === 0 || newest === 1 ? newest : undefined, generation: Math.max(0, ...headers.map(header => header?.generation ?? 0)) })
+          const valid = [await validSlotOf(opened.slots[0]), await validSlotOf(opened.slots[1])] as const
+          const newest = newestSlot(valid.map(slot => slot?.header))
+          states.set(id, {
+            kind: 'held',
+            slots: opened.slots,
+            newest: newest === 0 || newest === 1 ? newest : undefined,
+            generation: Math.max(0, ...valid.map(slot => slot?.header.generation ?? 0)),
+            records: [valid[0] === undefined ? undefined : orderingOf(valid[0].record), valid[1] === undefined ? undefined : orderingOf(valid[1].record)],
+          })
           return { kind: 'mirrored' }
         }
         catch (error) {
@@ -218,37 +249,52 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
     }
   }
 
+  async function write(record: StoredDraft): Promise<MirrorStatus> {
+    const status = await attach(record)
+    const held = states.get(idOf(record))
+    if (status.kind !== 'mirrored' || held?.kind !== 'held')
+      return status
+    const target = held.newest === 0 ? 1 : 0
+    const generation = held.generation + 1
+    let slot: Awaited<ReturnType<typeof encodeSlot>>
+    try {
+      slot = await encodeSlot(record, generation)
+    }
+    catch (error) {
+      return failed(error)
+    }
+    const handle = held.slots[target]
+    try {
+      handle.truncate(0)
+      writeAll(handle, slot.content, SLOT_HEADER_BYTES)
+      writeAll(handle, slot.header, 0)
+      handle.flush()
+    }
+    catch (error) {
+      // 正在写的这个槽位写了一半、落选；最新的那一个不动，下一次照样写在这一个上
+      held.records[target] = undefined
+      return writeFailure(error)
+    }
+    held.newest = target
+    held.generation = generation
+    held.records[target] = orderingOf(record)
+    return { kind: 'mirrored' }
+  }
+
   return {
     attach,
 
-    write: async (record) => {
-      const status = await attach(record)
+    write,
+
+    backfill: async (record) => {
+      // 关掉之后 states 已清空：同样什么也不做
       const held = states.get(idOf(record))
-      if (status.kind !== 'mirrored' || held?.kind !== 'held')
-        return status
-      const target = held.newest === 0 ? 1 : 0
-      const generation = held.generation + 1
-      let slot: Awaited<ReturnType<typeof encodeSlot>>
-      try {
-        slot = await encodeSlot(record, generation)
-      }
-      catch (error) {
-        return failed(error)
-      }
-      const handle = held.slots[target]
-      try {
-        handle.truncate(0)
-        writeAll(handle, slot.content, SLOT_HEADER_BYTES)
-        writeAll(handle, slot.header, 0)
-        handle.flush()
-      }
-      catch (error) {
-        // 正在写的这个槽位写了一半、落选；最新的那一个不动，下一次照样写在这一个上
-        return writeFailure(error)
-      }
-      held.newest = target
-      held.generation = generation
-      return { kind: 'mirrored' }
+      if (held?.kind !== 'held')
+        return undefined
+      const newest = newestRecord(held.records)
+      if (newest !== undefined && compareDrafts(record, newest) <= 0)
+        return { kind: 'mirrored' }
+      return write(record)
     },
 
     clear: async key => withSlots<MirrorStatus>(key, async (slots, held) => {
@@ -261,8 +307,10 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
       catch (error) {
         return writeFailure(error)
       }
-      if (held !== undefined)
+      if (held !== undefined) {
         held.newest = undefined
+        held.records = [undefined, undefined]
+      }
       return { kind: 'mirrored' }
     }, (outcome) => {
       switch (outcome.kind) {

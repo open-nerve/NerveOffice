@@ -109,6 +109,11 @@ function pastRetention(at: number, now: number): boolean {
   return now - at > LOCAL_DRAFT_RETENTION_MS
 }
 
+/** 比对镜像留下的提示超过保留期（按留下的时刻）：保留期清理时删掉（M4-P1 设计 §3.8） */
+export function isNoticeExpired(notice: { readonly at: number }, now: number): boolean {
+  return pastRetention(notice.at, now)
+}
+
 /** 草稿超过保留期（按更新时间） */
 export function isExpired(meta: Pick<DraftMeta, 'updatedAt'>, now: number): boolean {
   return pastRetention(meta.updatedAt, now)

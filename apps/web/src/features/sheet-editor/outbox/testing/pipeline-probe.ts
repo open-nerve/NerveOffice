@@ -5,13 +5,15 @@
 // - recording：记下事务的测试脚本（outbox-probe.worker.ts：先包住 Worker 里的开事务、经 BroadcastChannel 报给这里，再引入生产的入口）；
 // - missing：不存在的脚本（加载失败）。
 // 交回的都是能经 page.evaluate 传回的普通值：gzip 只交回字节数与 SHA-256、解压之后的内容（长的只交回长度与 SHA-256）；不交出密钥。
-// OPFS 的镜像（S9）：放开句柄、比对、取走事件交给管道；槽位文件经测试构建的另一个 Worker（opfs-probe.worker.ts）读出、改坏，在页面里
-// 按生产的格式（mirror-slot.ts）校验；用完按用户删掉镜像的目录（生产的 opfsMirrorDirectory，页面里删）。
+// OPFS 的镜像（S9）：放开句柄、比对、读出与清除提示交给管道；槽位文件经测试构建的另一个 Worker（opfs-probe.worker.ts）读出、改坏，在页面里
+// 按生产的格式（mirror-slot.ts）校验；库与镜像合一的清理（local-cleanup.ts）在页面里调，与 P4 一样；用完按用户删掉镜像的目录。
 // 不引用编辑器页的时钟模块（它带着请求层与 zod，见 outbox-probe.ts 开头的说明）：看门狗用这里的计时器
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { DraftKey, DraftMeta, InFlightSave } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, DraftWriter, KeyChange, ReconcileResult, RecoveryEvent, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../../shared/outbox/draft-writer.ts'
+import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, DraftWriter, KeyChange, NoticesResult, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../../shared/outbox/draft-writer.ts'
+import type { FailureDescription } from '../../../../shared/outbox/failure.ts'
+import type { AbandonOutcome, PurgeOutcome, UserCleanupOutcome } from '../../../../shared/outbox/local-cleanup.ts'
 import type { MirrorRemoveOutcome } from '../../../../shared/outbox/mirror-directory.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
 import type { OutboxWorkerFailure, OutboxWorkerReady, WorkerLike } from '../outbox-worker-client.ts'
@@ -21,6 +23,7 @@ import { draftMetaOf } from '../../../../shared/outbox/draft-record.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { createDraftWriter } from '../../../../shared/outbox/draft-writer.ts'
 import { describeFailure } from '../../../../shared/outbox/failure.ts'
+import { createLocalCleanup } from '../../../../shared/outbox/local-cleanup.ts'
 import { opfsMirrorDirectory, SLOT_FILE_NAMES } from '../../../../shared/outbox/mirror-directory.ts'
 import { parseSlot } from '../../../../shared/outbox/mirror-slot.ts'
 import { createOutboxWorker, createOutboxWorkerClient } from '../outbox-worker-client.ts'
@@ -105,8 +108,14 @@ export interface ProbePipeline {
   readonly release: (id: number, key: DraftKey) => Promise<void>
   /** 打开平台时的比对（S9） */
   readonly reconcile: (id: number, userId: string) => Promise<ReconcileResult>
-  /** 取走比对留下的事件（S9） */
-  readonly takeEvents: (id: number) => Promise<readonly RecoveryEvent[]>
+  /** 这个用户的提示（S9：比对镜像与库留下的，存在库里） */
+  readonly notices: (id: number, userId: string) => Promise<NoticesResult>
+  /** 清除一条提示 */
+  readonly clearNotice: (id: number, key: DraftKey, expectedAt?: number) => Promise<ClearNoticeResult>
+  /** 库与镜像合一的清理（S9，local-cleanup.ts）：在页面里调（与 P4 一样），用探针的存储与生产的镜像目录；出错折成名字与消息 */
+  readonly cleanupUser: (userId: string) => Promise<Plain<UserCleanupOutcome>>
+  readonly cleanupAbandon: (key: DraftKey, expectedSeq?: number) => Promise<Plain<AbandonOutcome>>
+  readonly cleanupExpired: (now: number) => Promise<Plain<PurgeOutcome>>
   /** 镜像的两个槽位文件（a、b）读出来的样子：要先让发件箱 Worker 放开句柄 */
   readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
   /** 把一个槽位改坏（同样要先放开句柄） */
@@ -123,6 +132,13 @@ export interface ProbePipeline {
 export interface PipelineProbeDeps {
   readonly key: () => LocalKeyHandle | undefined
   readonly store: () => DraftStore
+}
+
+/** 清理的结果里库的 failed 带着原样的错误：折成名字与消息，才能经 page.evaluate 交回 */
+export type Plain<T> = T extends { readonly kind: 'failed', readonly error: unknown } ? { readonly kind: 'failed', readonly error: FailureDescription } : T
+
+function plain<T extends { readonly kind: string }>(outcome: T): Plain<T> {
+  return ('error' in outcome && outcome.kind === 'failed' ? { kind: 'failed', error: describeFailure(outcome.error) } : outcome) as Plain<T>
 }
 
 /** 不存在的 Worker 脚本：服务端对带扩展名、找不到的文件统一回 404 */
@@ -180,6 +196,7 @@ interface Pipeline {
 }
 
 export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
+  const localCleanup = () => createLocalCleanup({ store: deps.store(), directory: opfsMirrorDirectory() })
   const pipelines = new Map<number, Pipeline>()
   let nextId = 1
   let opfsWorker: Worker | undefined
@@ -322,7 +339,11 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
     workerTransactions: id => [...pipelineOf(id).transactions],
     release: async (id, key) => pipelineOf(id).writer.release(key),
     reconcile: async (id, userId) => pipelineOf(id).writer.reconcile(userId),
-    takeEvents: async id => pipelineOf(id).writer.takeRecoveryEvents(),
+    notices: async (id, userId) => pipelineOf(id).writer.notices(userId),
+    clearNotice: async (id, key, expectedAt) => pipelineOf(id).writer.clearNotice(key, expectedAt),
+    cleanupUser: async userId => plain(await localCleanup().removeUser(userId)),
+    cleanupAbandon: async (key, expectedSeq) => plain(await localCleanup().abandon(key, expectedSeq)),
+    cleanupExpired: async now => plain(await localCleanup().purgeExpired(now)),
     mirrorSlots: async key => [await slotOf(key, 0), await slotOf(key, 1)],
     corruptSlot: async (key, slot, corruption) => {
       await opfs('truncate' in corruption ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate } : { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value })

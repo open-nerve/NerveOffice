@@ -8,7 +8,7 @@ import { contentOf, draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatab
 import { loginThroughApi } from '../../support/session.ts'
 
 test.describe('发件箱的库', { tag: '@test-build' }, () => {
-  test('第一次用时建出库：版本 1，两个仓库的键路径都是 [userId, documentId]、没有索引；读写的事务一律要求 strict，只读的不带', async ({ page }) => {
+  test('第一次用时建出库：版本 1，三个仓库（草稿、写入者、比对镜像留下的提示）的键路径都是 [userId, documentId]、没有索引；读写的事务一律要求 strict，只读的不带', async ({ page }) => {
     const user = await createUser('ob-create')
     await loginThroughApi(page, user)
     await openOutboxProbe(page)
@@ -36,6 +36,7 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
       version: 1,
       stores: [
         { name: 'drafts', keyPath: ['userId', 'documentId'], indexes: [] },
+        { name: 'notices', keyPath: ['userId', 'documentId'], indexes: [] },
         { name: 'writers', keyPath: ['userId', 'documentId'], indexes: [] },
       ],
     })
