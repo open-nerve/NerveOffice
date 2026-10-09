@@ -90,8 +90,8 @@ export interface DraftStore {
   readonly replaceDraft: (draft: StoredDraft) => Promise<StoreWriteOutcome>
   /**
    * 确认（§3.4.5）：服务端确认了 confirmedSeq。strict 事务里按 decideConfirm 判定：不大于它的删掉；更新的换成 rebased
-   * （管道事先按"草稿是不是更新"准备好的重封那一份：同一个写入者、同一个序号，基准是新的修订号、不在途）——
-   * rebased 不是库里现在这一份时交回 needs-rebase、不改动
+   * （管道事先按"草稿是不是更新"准备好的重封那一份：基准是新的修订号、不在途）——rebased 不是库里现在这一份（同一个写入者、
+   * 同一个序号）时交回 needs-rebase、不改动；形状不对、不是这份文档的交回 failed
    */
   readonly confirmDraft: (key: DraftKey, writer: WriterIdentity, confirmedSeq: number, rebased: StoredDraft | undefined) => Promise<StoreConfirmOutcome>
   readonly readDraft: (key: DraftKey) => Promise<StoreReadOutcome>
@@ -345,9 +345,10 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     confirmDraft: async (key, writer, confirmedSeq, rebased) => {
       let prepared: StoredDraft | undefined
       if (rebased !== undefined) {
+        // 形状不对、不是这份文档的：调用方的错（写进去会落到别的键上），不写
         const checked = readStoredDraft(rebased)
-        if (checked.kind !== 'draft' || checked.draft.userId !== key.userId || checked.draft.documentId !== key.documentId || !isSameWriter(checked.draft, writer))
-          return failed('重封的那一份不是这份文档、这个写入者的（或者形状不对）')
+        if (checked.kind !== 'draft' || checked.draft.userId !== key.userId || checked.draft.documentId !== key.documentId)
+          return failed('重封的那一份形状不对，或者不是这份文档的')
         prepared = checked.draft
       }
       return run<StoreConfirmOutcome>('readwrite', (scope) => {
@@ -359,7 +360,8 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
               scope.finish({ kind: 'deleted' })
               return
             case 'rebase':
-              if (prepared !== undefined && existing?.kind === 'draft' && prepared.draftSeq === existing.draft.draftSeq) {
+              // 交来的重封那一份就是库里现在这一份：同一个写入者（代次与 writerId）、同一个序号（与写入管道的假存储同一个口径）；不是就由管道重做
+              if (prepared !== undefined && existing?.kind === 'draft' && isSameWriter(prepared, existing.draft) && prepared.draftSeq === existing.draft.draftSeq) {
                 scope.tx.objectStore(DRAFTS_STORE).put(prepared)
                 scope.finish({ kind: 'rebased' })
                 return

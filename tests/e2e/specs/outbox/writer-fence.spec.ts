@@ -147,6 +147,8 @@ test.describe('写入栅栏：两个标签页', { tag: '@test-build' }, () => {
     // 第 1 份确认了：草稿是第 2 份，不删；没给重封的那一份时不动、交回 needs-rebase；给了序号不对的也一样
     expect(await probe(first, 'confirm', key, writer, 1)).toEqual({ kind: 'needs-rebase' })
     expect(await probe(first, 'confirm', key, writer, 1, draftFor(key, writer, 1, { baseRevision: 2 }))).toEqual({ kind: 'needs-rebase' })
+    // 序号对得上、却不是同一个写入者重封的：同样不是库里现在这一份
+    expect(await probe(first, 'confirm', key, writer, 1, draftFor(key, writerOf(3), 2, { baseRevision: 2 }))).toEqual({ kind: 'needs-rebase' })
     expect(await probe(first, 'confirm', key, writer, 1, draftFor(key, writer, 2, { baseRevision: 2 }))).toEqual({ kind: 'rebased' })
     const rebased = outcomeOf(await probe(first, 'read', key), 'draft')
     expect([rebased.meta.draftSeq, rebased.meta.baseRevision, rebased.meta.inFlight, rebased.opened]).toEqual([2, 2, null, { kind: 'opened', content: contentOf(writer, 2) }])

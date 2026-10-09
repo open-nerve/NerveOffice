@@ -115,6 +115,19 @@ describe('草稿的形状核对（M4-P1 设计 §3.2、§3.4.6）：读出来的
       expect(readDraftMeta(value), String(value)).toBeUndefined()
   })
 
+  it('在途的序号不大于草稿的序号：反过来的记录（在途的那一次比这一份还新）恢复时会把旧内容当"自己追自己"接到服务端更新的那一版上、静默退回别人已存的修改，读成 malformed', () => {
+    const inFlight = sampleMeta().inFlight ?? undefined
+    for (const localSeq of [7, 6, 1]) {
+      const stored = sampleStoredDraft({ draftSeq: 7, inFlight: { ...inFlight, requestId: 'r', clientInstanceId: 'c', sentAt: 1, localSeq } })
+      expect(readStoredDraft(stored), `localSeq ${localSeq}`).toEqual({ kind: 'draft', draft: stored })
+      expect(readDraftMeta(draftMetaOf(stored)), `localSeq ${localSeq}`).toEqual(draftMetaOf(stored))
+    }
+    const reversed = sampleStoredDraft({ draftSeq: 7, inFlight: { requestId: 'r', clientInstanceId: 'c', sentAt: 1, localSeq: 8 } })
+    expect(readStoredDraft(reversed)).toEqual({ kind: 'malformed' })
+    expect(readDraftMeta(draftMetaOf(reversed))).toBeUndefined()
+    expect(readStoredDraft({ ...reversed, inFlight: null }).kind, '不在途时不受这一条限制').toBe('draft')
+  })
+
   it('元数据：去掉 IV 与密文（本机草稿页的列表不交出密文）', () => {
     const stored: StoredDraft = sampleStoredDraft()
     const meta = draftMetaOf(stored)

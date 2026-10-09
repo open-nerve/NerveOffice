@@ -39,7 +39,7 @@ test.describe('发件箱的记录', { tag: '@test-build' }, () => {
       { label: 'rawBytes', patch: raw => ({ rawBytes: Number(raw.rawBytes) + 1 }), expected: { kind: 'unreadable', reason: 'corrupted' } },
       { label: 'updatedAt', patch: raw => ({ updatedAt: Number(raw.updatedAt) - 1 }), expected: { kind: 'unreadable', reason: 'corrupted' } },
       { label: 'format.clientBuild', patch: raw => ({ format: { ...raw.format as object, clientBuild: '9.9.9' } }), expected: { kind: 'unreadable', reason: 'corrupted' } },
-      { label: 'inFlight.localSeq', patch: raw => ({ inFlight: { ...raw.inFlight as object, localSeq: 99 } }), expected: { kind: 'unreadable', reason: 'corrupted' } },
+      { label: 'inFlight.localSeq', patch: raw => ({ inFlight: { ...raw.inFlight as object, localSeq: Number((raw.inFlight as { localSeq: number }).localSeq) - 1 } }), expected: { kind: 'unreadable', reason: 'corrupted' } },
       { label: 'inFlight（去掉）', patch: () => ({ inFlight: null }), expected: { kind: 'unreadable', reason: 'corrupted' } },
       { label: 'keyVersion（改小）', patch: () => ({ keyVersion: 2 }), expected: { kind: 'unreadable', reason: 'revoked' } },
       { label: 'keyVersion（改大）', patch: () => ({ keyVersion: 4 }), expected: { kind: 'unreadable', reason: 'corrupted' } },
@@ -67,8 +67,11 @@ test.describe('发件箱的记录', { tag: '@test-build' }, () => {
     await probeDatabase(page, 'patchDraft', key, { recordVersion: 2 })
     expect(await probe(page, 'read', key)).toEqual({ kind: 'newer-format', recordVersion: 2 })
     expect(await probe(page, 'write', draftFor(key, writer, seq + 1))).toEqual({ kind: 'fenced', reason: 'foreign-draft' })
+    // 在途的序号比这一份还大（反过来的记录，恢复时会把旧内容当"自己追自己"）：读成形状不对
+    await probeDatabase(page, 'patchDraft', key, { recordVersion: 1, inFlight: { requestId: 'r', clientInstanceId: 'c', localSeq: seq + 1, sentAt: NOW } })
+    expect(await probe(page, 'read', key)).toEqual({ kind: 'malformed' })
     // 形状不对：损坏的记录，同样不覆盖；登记照常（交回它，由恢复决定）
-    await probeDatabase(page, 'patchDraft', key, { recordVersion: 1, draftSeq: 'x' })
+    await probeDatabase(page, 'patchDraft', key, { inFlight: null, draftSeq: 'x' })
     expect(await probe(page, 'read', key)).toEqual({ kind: 'malformed' })
     expect(await probe(page, 'write', draftFor(key, writer, seq + 1))).toEqual({ kind: 'fenced', reason: 'foreign-draft' })
     expect(await probe(page, 'register', key, writer, { now: NOW, force: false })).toEqual({ kind: 'registered', lastDraftSeq: seq, existing: { kind: 'malformed' } })
