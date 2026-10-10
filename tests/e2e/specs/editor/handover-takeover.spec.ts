@@ -3,9 +3,9 @@
 // - 本浏览器的另一个标签页在编辑：请它先保存再交出（交接频道 BroadcastChannel）——它回应之后挡住输入、保存，存上了放弃那一代（不释放，审查 B4）、
 //   放锁、回到阅读；这一页等它做完（锁空了）再以本人接管申请（服务端换代，槽从来不空）。它不回应（冻结、Safari 暂停了后台页面、卡住）就 3 秒之后
 //   以本人接管申请、核对过自己那一代是当前的才抢锁，它得知被抢、核对得知被接管，随即失去编辑权、给副本（M3-P6 设计 §3.13）。它的心跳在这一页
-//   抢锁之前先得知被接管（服务端不说在哪）也一样：它照常失去编辑权、留着锁等这一页来抢，照样说本浏览器的另一个标签页接手了（与两个消息谁先到无关）；
+//   抢锁之前先得知被接管也一样：编辑状态的 sameSession 确认本次登录，立即说明本浏览器的另一个标签页接手了（不等抢锁）；
 // - 不在本浏览器（另一台设备或浏览器、刚关闭或刷新过的页面、载入途中离开留下的孤儿租约）：立即以本人接管申请。另一台设备上的旧页面下一次心跳
-//   得知被接管，失去编辑权、给副本（留着锁等本浏览器里的标签页来抢至多 5 秒，没人来抢才说另一台设备或浏览器）；刷新时有保存在途的（旧页面留下
+//   得知被接管，失去编辑权、给副本（sameSession=false 立即说明另一台设备或浏览器，本机锁后台至多留 5 秒作查询失败的退路）；刷新时有保存在途的（旧页面留下
 //   记号），先等那次保存提交（至多 30 秒）再接手。
 // 两个标签页用同一个浏览器上下文（共用 Cookie、Web Locks、BroadcastChannel 与 Playwright 的时钟）；另一台设备用另一个上下文、同一个人登录。
 // "不响应"只给那一个页面在载入之前吞掉交接频道的消息（support/sheet.ts 的 deafenHandover）；时间用 Playwright 的时钟（打开之前装上，之后照常
@@ -17,12 +17,12 @@
 // 交接成功时旧页的修改由交出前的保存或之前的自动保存存上，都按服务器上的内容断言
 import type { Page, Request } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
-import { holdSaves, setPageHidden } from '../../support/autosave.ts'
+import { advanceUntil, holdSaves, pauseTime, setPageHidden } from '../../support/autosave.ts'
 import { CURRENT_CLIENT } from '../../support/client-format.ts'
 import { createUser, editLeaseEndReason, editLeaseEpoch, editLeaseTakeover } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
-import { blockSaves, cellOf, createSheetThroughApi, deafenHandover, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, saveStatus, statusRegion, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { blockSaves, cellOf, createSheetThroughApi, deafenHandover, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, statusRegion, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -33,8 +33,6 @@ const IN_THIS_BROWSER = '你在本浏览器的另一个标签页里正在编辑�
 const ELSEWHERE = '你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）。点"在此编辑"在这里接着编辑，那边会失去编辑权，没保存的修改可以在那边另存为副本'
 /** 是自己、锁不在本浏览器，刚关闭或刷新的页面还有一次保存在进行（记号在 30 秒内、那次保存还没提交，审查 B §七）时的说明 */
 const JUST_CLOSED = '你刚关闭或刷新的页面还有一次保存在进行。点"在此编辑"会先等它存完（至多 30 秒）再接着编辑'
-/** 失去编辑权的过程中页头的说法（停写、捕获、以只读重建；被本人接管时还在等本浏览器里接手的那一页来抢锁） */
-const LOSING = '编辑权已失效，正在保留本页的内容…'
 /**
  * 服务端说被本人接管、本机锁还在手里时，旧标签页等本浏览器里接手的那一页来抢锁至多这么久（毫秒，apps/web 的 edit-mode.ts 的
  * TAKEOVER_STEAL_WAIT_MS：E2E 不引用页面的模块）
@@ -201,7 +199,7 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     expect([cellOf(saved, 'A1'), cellOf(saved, 'B1')?.v]).toEqual([undefined, 'second tab'])
   })
 
-  test('US-M3-08 旧标签页不响应，B 本人接管之后、抢锁之前 A 的心跳先得知被接管（两个消息的先后反过来，M3 合并之后 CI 的 webkit）：A 照常失去编辑权、留着本机锁等 B 来抢，照样说本浏览器的另一个标签页接手了，不说另一台设备或浏览器', async ({ page, context }) => {
+  test('US-M3-08 B 已本人接管但尚未抢锁，A 心跳先得知失效：sameSession 立即说明本浏览器接手，不等本机证据（DEF-071）', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('takeover-beat-first'))
     const documentId = await createSheetThroughApi(page)
     await page.clock.install()
@@ -218,30 +216,35 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await heartbeat.install()
     await openReader(other, documentId)
     await expect(editingNotice(other)).toHaveText(IN_THIS_BROWSER)
+    await takeOverHereButton(other).focus()
+    await pauseTime(page)
     try {
-      await takeOverHereButton(other).click()
+      // 先让 A 的心跳在途，再推进 B 的 3 秒交接等待；不能在 B 核对已在途时跳过整整 10 秒，那会触发新请求时限。
+      await page.clock.fastForward(10_000)
+      await heartbeat.seen
+      await other.keyboard.press('Enter')
+      // heldHere 是异步的 Web Locks 查询；看到 asking 才能确定 3 秒交接计时器已经排下，不能从按键完成推断。
+      await expect(statusRegion(other)).toHaveText('正在请本浏览器的另一个标签页保存并交出编辑权…')
       await other.clock.fastForward(3_000)
       await confirmation.seen
       expect(await editLeaseTakeover(documentId)).toBe('self')
 
-      // A 的心跳（时钟是上下文级的：两个标签页一起走；已经到过点、扣着的不再多发）：放行，服务端说 A 那一代被本人接管——锁还在 A 手里，A 停写、
-      // 保留本页的内容，等着
-      await page.clock.fastForward(10_000)
-      await heartbeat.seen
+      // 时钟仍暂停：A 的请求只等了 3 秒，B 的核对也没有超时。放行 A，真实编辑状态给出 sameSession=true。
       const takenOver = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === `/api/documents/${documentId}/edit-lease`)
       heartbeat.release()
       expect((await takenOver).status()).toBe(409)
-      await expect(saveStatus(page)).toHaveText(LOSING)
-      await expect(lostNotice(page)).toHaveCount(0)
-      // 前提：A 先从服务端得知、锁还在 A 手里（B 还没抢）
+      await advanceUntil(page, async () => lostNotice(page).isVisible(), '服务端确认本次登录后，A 保留内容并显示接管位置')
+      await expect(lostNotice(page)).toContainText('你在本浏览器的另一个标签页接手了编辑')
+      // 定位已经完成，锁仍在 A 手里（B 的核对还没有放行）：确定答案不依赖本机抢锁。
       expect(await holdsDocumentLock(page, documentId)).toBe(true)
     }
     finally {
       heartbeat.release()
       confirmation.release()
+      await page.clock.resume()
     }
 
-    // B 的核对回来、抢锁：A 得知锁被本浏览器的另一个标签页抢走——说那边接手了；副本是 A 的内容
+    // B 的核对回来、抢锁：A 的定位不变；副本仍是 A 的内容。
     await waitForEditorAccess(other, 'edit')
     expect(await holdsDocumentLock(other, documentId)).toBe(true)
     const lost = lostNotice(page)
@@ -366,21 +369,21 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     expect(takeovers).toEqual(['self'])
     expect(await editLeaseTakeover(documentId)).toBe('self')
 
-    // A 的下一次心跳（至多 10 秒）得知被接管：不再申请（不续上），失去编辑权，副本是 A 的内容。服务端不说在哪：A 先停写、保留本页的内容，
-    // 留着本机锁等本浏览器里接手的那一页来抢（至多 5 秒，edit-mode.ts 的 TAKEOVER_STEAL_WAIT_MS），这期间页头说正在保留本页的内容；
-    // 没人来抢（接手的在另一台设备上），到时才说另一台设备或浏览器（时钟拨过去）
+    // A 的下一次心跳得知被接管：不再申请（不续上），按真实编辑状态 sameSession=false 立即定位；后台本机 5 秒窗口不阻塞说明。
     const acquisitions: Request[] = []
     page.on('request', (request) => {
       if (isLeaseAcquisition(request, documentId))
         acquisitions.push(request)
     })
+    await pauseTime(page)
     await page.clock.fastForward(10_000)
-    await expect(saveStatus(page)).toHaveText(LOSING)
+    const lost = lostNotice(page)
+    await advanceUntil(page, async () => lost.isVisible(), '另一登录的服务端事实立即给出接管位置')
+    await expect(lost).toContainText('编辑权已失效：你在另一台设备或浏览器上接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     expect(await holdsDocumentLock(page, documentId)).toBe(true)
     await page.clock.fastForward(STEAL_WAIT_MS)
-    const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你在另一台设备或浏览器上接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await expect.poll(async () => holdsDocumentLock(page, documentId)).toBe(false)
+    await page.clock.resume()
     await waitForEditorAccess(page, 'read')
     expect(acquisitions).toEqual([])
     await saves.unblock()
