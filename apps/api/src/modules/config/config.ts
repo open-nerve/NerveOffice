@@ -131,6 +131,8 @@ export interface AppConfig {
   readonly clients: {
     /** 最低的客户端构建（x.y.z）；不设时不按构建拦（只按数据格式）。改了要重启：严重缺陷本来就伴随一次修复发布 */
     readonly minimumBuild: string | undefined
+    /** 本机草稿的部署开关：只影响页面新写入，已有草稿不会因关闭而删除 */
+    readonly localDraftsEnabled: boolean
   }
   /**
    * 快照的检查（M3-P3 设计 §3.3，DEF-018）：保存与另存为副本的快照在子进程池里解析、检查与规范化，主进程的事件循环不被阻塞，
@@ -362,6 +364,7 @@ const environmentSchema = z.object({
   NERVE_REVISION_PURGE_BATCH: integer(1, 10_000).default(1_000),
   // 最低客户端构建（M3-P3 设计 §3.5）：运维开关，不设时不按构建拦
   NERVE_MIN_CLIENT_BUILD: minimumBuild.optional(),
+  NERVE_LOCAL_DRAFTS_ENABLED: flag().default(true),
   // 快照的检查（M3-P3 设计 §3.3，DEF-018）：默认 2 个子进程。数字的依据是 DEF-018 的测量（apps/api/scripts/measure-snapshot-inspection.ts）：
   // 5 MiB 以内最费的形状检查一份约 0.6 秒；子进程的堆（老生代）要 96 MiB 才检查得完 5 MiB 的真实形状，数量上限之内最费的形状要 256 MiB。
   // 堆超限时 V8 中止的只是那个子进程（这一份按"过于复杂"拒绝），服务照常：下限 128 保证真实形状的大表格不被误拒，
@@ -529,7 +532,7 @@ function toAppConfig(env: Environment): AppConfig {
       hashConcurrency: env.NERVE_PASSWORD_HASH_CONCURRENCY,
       hashQueue: { maxWaiting: env.NERVE_PASSWORD_HASH_QUEUE_MAX, maxWaitMs: env.NERVE_PASSWORD_HASH_QUEUE_TIMEOUT_MS },
     },
-    clients: { minimumBuild: env.NERVE_MIN_CLIENT_BUILD },
+    clients: { minimumBuild: env.NERVE_MIN_CLIENT_BUILD, localDraftsEnabled: env.NERVE_LOCAL_DRAFTS_ENABLED },
     snapshotInspection: {
       processes: env.NERVE_SNAPSHOT_INSPECTION_PROCESSES,
       queue: { maxWaiting: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX, maxWaitMs: env.NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS },

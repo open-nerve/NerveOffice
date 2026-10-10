@@ -19,6 +19,7 @@ const SESSION: SessionResponse = {
   user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'admin' },
   personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '爱丽丝' },
   csrfToken: 'csrf-1',
+  features: { localDraftsEnabled: true },
 }
 
 /** 另一个人的会话：别的标签页换人登录之后，会话 Cookie 属于他 */

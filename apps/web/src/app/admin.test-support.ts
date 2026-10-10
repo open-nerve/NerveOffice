@@ -11,6 +11,7 @@ export function session(systemRole: 'admin' | 'member', csrfToken = 'csrf-1'): S
     user: { id: ROOT_ID, username: 'root', displayName: '管理员', systemRole },
     personalSpace: { id: '0199a2c4-0000-7000-8000-0000000000aa', name: '管理员' },
     csrfToken,
+    features: { localDraftsEnabled: true },
   }
 }
 

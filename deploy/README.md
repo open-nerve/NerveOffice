@@ -102,6 +102,7 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 | `NERVE_REVISION_PURGE_INTERVAL_MS` | 两轮保留期清理之间的间隔，默认 3600000（1 小时），实际触发时间带 ±10% 的随机抖动 |
 | `NERVE_REVISION_PURGE_BATCH` | 保留期清理一批最多删多少条（修订记录与回执各算），默认 1000：每批一个短事务，一轮删到不满一批为止 |
 | `NERVE_MIN_CLIENT_BUILD` | 最低客户端构建（`x.y.z`，M3-P3）：页面有严重缺陷、修复已经发布时设成修复的版本，还开着的旧页面在保存、另存为副本、申请编辑权与心跳时被拦下（`CLIENT_OUTDATED`），页面提示刷新。不设时不按构建拦——数据格式（Univer 版本、插件档案、平台格式版本）变了的旧页面照样被拦；改了要重启应用 |
+| `NERVE_LOCAL_DRAFTS_ENABLED` | 本机草稿开关，默认 `true`，只认 `true`/`false`（空值沿用未设置的默认值）；敏感部署设为 `false` 后重启应用。会话响应把开关交给页面；关闭时新修改只留页面内存、仍可同步云端，已有草稿保留，不会自动清除。M4-P2 S3 先交付配置与会话能力，页面保存接线在 S4/S5 完成 |
 | `NERVE_SNAPSHOT_INSPECTION_PROCESSES` | 快照检查的子进程数（M3-P3），默认 2，1–64：同时检查的快照数的上限。子进程按需创建，空闲 60 秒之后退出。容器的内存按下面"快照检查的子进程与内存"的规则配 |
 | `NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX` | 等待检查的排队上限，默认 8，0–1000：排满之后再来的保存与另存为副本立即得到 503（带 `Retry-After`），页面过一会儿原样重发。排队的请求各自占着上传的正文（压缩前后各最多 5 MiB），所以它也是内存的上限 |
 | `NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS` | 排队等待的上限（毫秒），默认 10000，100–600000：等不到就 503；`Retry-After` 取它（向上取整到秒，至少 1 秒） |

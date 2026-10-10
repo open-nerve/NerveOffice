@@ -31,6 +31,7 @@ const SESSION: SessionResponse = {
   user: { id: '0199a2c4-0000-7000-8000-000000000001', username: 'root', displayName: LONG_NAME, systemRole: 'admin' },
   personalSpace: { id: '0199a2c4-0000-7000-8000-0000000000aa', name: LONG_NAME },
   csrfToken: 'csrf-1',
+  features: { localDraftsEnabled: true },
 }
 
 describe('页头', () => {

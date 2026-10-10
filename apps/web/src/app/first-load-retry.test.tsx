@@ -17,6 +17,7 @@ const SESSION: SessionResponse = {
   user: { id: '0199a2c4-0000-7000-8000-00000000000a', username: 'amy', displayName: '艾米', systemRole: 'member' },
   personalSpace: { id: '0199a2c4-0000-7000-8000-0000000000a1', name: '艾米' },
   csrfToken: 'csrf-1',
+  features: { localDraftsEnabled: true },
 }
 
 const TEAM_ID = '0199a2c4-0000-7000-8000-0000000000c1'

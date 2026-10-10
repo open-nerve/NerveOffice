@@ -28,6 +28,8 @@ export const sessionResponseSchema = z.object({
     name: z.string(),
   }),
   csrfToken: z.string().min(1),
+  // 老后端没有能力字段：新页面只用内存保存；存在却形状错误时仍按格式错误，不猜测为开启。
+  features: z.object({ localDraftsEnabled: z.boolean() }).default({ localDraftsEnabled: false }),
 })
 
 export type SessionResponse = z.infer<typeof sessionResponseSchema>

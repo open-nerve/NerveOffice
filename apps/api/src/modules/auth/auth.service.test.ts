@@ -73,7 +73,7 @@ function setup(options: { admission?: Admission, check?: CredentialCheck | Error
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   const service = new AuthService(
     users as unknown as UsersService,
-    new SessionResponses(spaces as unknown as SpacesService),
+    new SessionResponses(spaces as unknown as SpacesService, { clients: { minimumBuild: undefined, localDraftsEnabled: true } }),
     sessions as unknown as SessionService,
     throttle as unknown as LoginThrottle,
     audit as unknown as AuditService,
@@ -153,6 +153,7 @@ describe('AuthService.login', () => {
         user: { id: ALICE.id, username: 'alice', displayName: '爱丽丝', systemRole: 'member' },
         personalSpace: SPACE,
         csrfToken: csrfTokenFor(TOKEN),
+        features: { localDraftsEnabled: true },
       },
     })
   })

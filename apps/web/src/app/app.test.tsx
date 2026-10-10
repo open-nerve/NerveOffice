@@ -18,6 +18,7 @@ const SESSION: SessionResponse = {
   user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'member' },
   personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '爱丽丝' },
   csrfToken: 'csrf-1',
+  features: { localDraftsEnabled: true },
 }
 
 /** 另一个人的会话：别的标签页换人登录之后，会话 Cookie 属于他 */
@@ -25,6 +26,7 @@ const OTHER_SESSION: SessionResponse = {
   user: { id: '0199a2c4-1f2e-7a3b-8c4d-000000000002', username: 'bob', displayName: '鲍勃', systemRole: 'member' },
   personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-000000000002', name: '鲍勃' },
   csrfToken: 'csrf-bob',
+  features: { localDraftsEnabled: true },
 }
 
 function document(index: number): DocumentSummary {

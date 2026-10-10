@@ -25,6 +25,22 @@ function issuesOf(action: () => unknown): readonly ConfigIssue[] {
 }
 
 describe('loadConfig', () => {
+  it.each([
+    [undefined, true],
+    ['true', true],
+    ['false', false],
+    ['', true],
+  ])('本机草稿开关 %s：映射冻结的客户端能力 %s（空值沿用未设置规则）', (value, enabled) => {
+    const config = loadConfig({ ...REQUIRED, NERVE_LOCAL_DRAFTS_ENABLED: value })
+    expect(config.clients).toMatchObject({ localDraftsEnabled: enabled })
+    expect(Object.isFrozen(config.clients)).toBe(true)
+  })
+
+  it.each(['yes', 'no', '1', '0', 'TRUE', 'False', ' true', 'false '])('本机草稿开关不接受 %s，启动时明确拒绝', (value) => {
+    expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_LOCAL_DRAFTS_ENABLED: value })))
+      .toEqual([{ variable: 'NERVE_LOCAL_DRAFTS_ENABLED', problem: '必须是 true 或 false' }])
+  })
+
   it('只给必填项时，其余取默认值', () => {
     const { database: { url, ...database }, ...rest } = loadConfig({ ...REQUIRED })
     expect(url.reveal()).toBe(DATABASE_URL)
@@ -62,7 +78,7 @@ describe('loadConfig', () => {
       },
       revisions: { retentionDays: 30 },
       // 页面的版本：默认不按构建拦（只按数据格式，M3-P3 设计 §3.5）
-      clients: { minimumBuild: undefined },
+      clients: { minimumBuild: undefined, localDraftsEnabled: true },
       // 快照的检查：2 个子进程，排队 8 个、等 10 秒，一份 10 秒，每个子进程的堆 512 MiB（DEF-018 的测量）
       snapshotInspection: { processes: 2, queue: { maxWaiting: 8, maxWaitMs: 10_000 }, timeoutMs: 10_000, heapMb: 512 },
     })
@@ -116,6 +132,7 @@ describe('loadConfig', () => {
       NERVE_SNAPSHOT_INSPECTION_TIMEOUT_MS: '20000',
       NERVE_SNAPSHOT_INSPECTION_HEAP_MB: '1024',
       NERVE_MIN_CLIENT_BUILD: '0.2.10',
+      NERVE_LOCAL_DRAFTS_ENABLED: 'false',
     })
     const { url, ...database } = config.database
     expect(url.reveal()).toBe('postgresql://u:p@127.0.0.1:5432/db')
@@ -150,7 +167,7 @@ describe('loadConfig', () => {
     })
     expect(config.revisions).toEqual({ retentionDays: 45 })
     expect(config.snapshotInspection).toEqual({ processes: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
-    expect(config.clients).toEqual({ minimumBuild: '0.2.10' })
+    expect(config.clients).toEqual({ minimumBuild: '0.2.10', localDraftsEnabled: false })
   })
 
   it('最低客户端构建（M3-P3 设计 §3.5）只认 x.y.z：前导零、少一段、多一段、带 + 之后的诊断信息与别的写法都拒绝启动', () => {

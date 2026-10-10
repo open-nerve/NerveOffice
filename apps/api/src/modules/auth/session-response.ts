@@ -1,7 +1,9 @@
 import type { SessionResponse } from '@nerve-office/contracts'
+import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { User } from '../users/index.ts'
-import { Injectable } from '@nestjs/common'
+import { Inject, Injectable } from '@nestjs/common'
+import { APP_CONFIG } from '../config/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { csrfTokenFor } from './session-token.ts'
 
@@ -18,7 +20,10 @@ export interface LoginResult {
  */
 @Injectable()
 export class SessionResponses {
-  constructor(private readonly spaces: SpacesService) {}
+  constructor(
+    private readonly spaces: SpacesService,
+    @Inject(APP_CONFIG) private readonly config: Pick<AppConfig, 'clients'>,
+  ) {}
 
   /** 新建的会话（令牌）的响应：CSRF 令牌由新令牌派生 */
   async forNewSession(user: User, sessionToken: string, transaction: Transaction): Promise<LoginResult> {
@@ -34,6 +39,7 @@ export class SessionResponses {
       user: { id: user.id, username: user.username, displayName: user.displayName, systemRole: user.systemRole },
       personalSpace: { id: space.id, name: space.name },
       csrfToken,
+      features: { localDraftsEnabled: this.config.clients.localDraftsEnabled },
     }
   }
 }
