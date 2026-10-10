@@ -51,6 +51,7 @@ import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { CopyState, EditingNotice, IncomingRequest, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
 import type { EditRequestProgress } from './edit-request.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
+import type { LocalSaveIndicator } from './local-save-indicator.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
 import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
@@ -70,6 +71,7 @@ import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { editorQueryClient } from './editor-query-client.ts'
+import { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
 import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 import { EditorShareEntry } from './share-entry.tsx'
 
@@ -146,6 +148,8 @@ function pausedReasonOf(view: EditorPageView): PausedReason {
 /** 编辑时页头的保存状态的说法：暂停按原因说 */
 function saveStateText(view: EditorPageView, save: SaveView): string {
   const indicator = indicatorOf(view, save)
+  if (view.connection?.problem === 'unresponsive' && (indicator === 'unsaved' || indicator === 'saving' || indicator === 'retrying' || indicator === 'formulas-pending'))
+    return editorMessages.localSave.network
   if (indicator !== 'paused')
     return editorMessages.saveState[indicator]
   switch (pausedReasonOf(view)) {
@@ -238,22 +242,63 @@ function announcementOf(view: EditorPageView): Announcement {
  * 显式写 aria-live（语义不变：role="status" 本来就是 polite，M2-P5 复验第二轮 G1）：保存在后台进行，分享对话框（模态）开着时也会完成或失败；
  * Radix 的模态弹窗打开时把弹窗之外的内容都标为 aria-hidden，只跳过那一刻已经在的、显式写了 aria-live 的元素（aria-hidden 库的 hideOthers）
  */
-function SaveAnnouncer({ view }: { view: EditorPageView }) {
-  const next = announcementOf(view)
-  const [spoken, setSpoken] = useState<Announcement>(() => (next.key === undefined ? { key: undefined, text: '' } : next))
+function SaveAnnouncer({ view, local }: { view: EditorPageView, local: LocalSaveIndicator | undefined }) {
+  const terminal = view.save?.status === 'conflict' || view.save?.status === 'outdated' || view.save?.status === 'too-new'
+  const base = announcementOf(view)
+  const announceLocal = local !== undefined && view.session === 'active' && !view.confirmingSession && !terminal
+  const localKey = announceLocal ? local.announcementKey : undefined
+  const [seen, setSeen] = useState({ base: base.key, local: localKey })
+  const [spoken, setSpoken] = useState(() => [base.key === undefined ? '' : base.text, localKey === undefined ? '' : local?.announcement].filter(Boolean).join(' '))
   const [cleared, setCleared] = useState(false)
+  // 两条事实独立记忆：持续的本机降级不能遮住新的云端失败/恢复；例行输入不重播旧状态。
+  const baseChanged = base.key !== undefined && base.key !== seen.base
+  const localChanged = localKey !== seen.local
   // 渲染中按这一次的结果调整（React 的写法：随即重新渲染，不经 effect 多渲染一轮）
-  if (next.key !== undefined && next.key !== spoken.key) {
-    setSpoken(next)
-    setCleared(false)
+  if (baseChanged || localChanged) {
+    setSeen({ base: base.key ?? seen.base, local: localKey })
+    const updates = [baseChanged ? base.text : '', localChanged && announceLocal ? localKey === undefined ? editorMessages.localSave.recovered : local.announcement : ''].filter(Boolean)
+    if (updates.length > 0) {
+      setSpoken(updates.join(' '))
+      setCleared(false)
+    }
   }
   useEffect(() => {
-    if (cleared || spoken.text === '')
+    if (cleared || spoken === '')
       return
     const timer = setTimeout(setCleared, ANNOUNCEMENT_MS, true)
     return () => clearTimeout(timer)
   }, [spoken, cleared])
-  return <p role="status" aria-live="polite" className="sr-only">{cleared ? '' : spoken.text}</p>
+  return <p role="status" aria-live="polite" className="sr-only">{cleared ? '' : spoken}</p>
+}
+
+/** 只有持续异常的 90 秒边界需要计时，不为每次捕获开计时器。 */
+function useLocalSaveIndicator(view: EditorPageView): LocalSaveIndicator | undefined {
+  const [now, setNow] = useState(Date.now)
+  const since = view.connection?.since
+  useEffect(() => {
+    if (since === undefined)
+      return
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, since + CONNECTION_WARNING_MS - Date.now()))
+    return () => clearTimeout(timer)
+  }, [since])
+  return view.localSave !== undefined && (view.mode?.kind === 'editing' || view.mode?.kind === 'exiting')
+    ? localSaveIndicator(view.localSave, view.connection, now)
+    : undefined
+}
+
+function LocalSaveStatus({ indicator }: { indicator: LocalSaveIndicator }) {
+  const expired = indicator.details.includes(editorMessages.localSave.expired)
+  return (
+    <div data-slot="local-save-status" data-local-save-state={indicator.kind} className="px-3 pb-2 text-xs text-muted-foreground">
+      <details>
+        <summary className="cursor-pointer">{indicator.summary}</summary>
+        <div className="flex flex-col gap-1 pt-1">
+          {indicator.details.filter(detail => detail !== editorMessages.localSave.expired).map(detail => <p key={detail}>{detail}</p>)}
+        </div>
+      </details>
+      {expired && <p data-slot="connection-expiry" className="pt-1">{editorMessages.localSave.expired}</p>}
+    </div>
+  )
 }
 
 /**
@@ -262,22 +307,22 @@ function SaveAnnouncer({ view }: { view: EditorPageView }) {
  * 没有离开成功（保存失败、公式没收齐）时焦点还在原来的按钮上（审查 A2）。leaving 是离开的原因（不在离开时为 undefined）：
  * 只有"退出编辑"的那一种由它说正在退出、标为进行中（空闲释放、交出不是按了它，页头的状态说明在做什么，M3-P5 设计 §3.11）
  */
-function SaveControls({ page, save, confirming, leaving, apple }: { page: EditorPage, save: SaveView, confirming: boolean, leaving: LeaveCause | undefined, apple: boolean }) {
+function SaveControls({ available, page, save, confirming, leaving, apple }: { available: boolean, page: EditorPage, save: SaveView, confirming: boolean, leaving: LeaveCause | undefined, apple: boolean }) {
   const exiting = leaving === 'exit'
   return (
     <>
       <Button
         size="sm"
-        aria-disabled={!save.canSave || confirming || leaving !== undefined}
+        aria-disabled={!available || !save.canSave || confirming || leaving !== undefined}
         aria-busy={confirming}
         aria-keyshortcuts={apple ? 'Meta+S' : 'Control+S'}
         title={editorMessages.saveShortcut(apple ? '⌘S' : 'Ctrl+S')}
-        onClick={() => void page.save()}
+        onClick={() => available && void page.save()}
       >
         {editorMessages.save}
       </Button>
       {/* 退出编辑：先保存（没存上就留在编辑，说明由保存的状态给出），释放编辑权，回到阅读 */}
-      <Button size="sm" variant="outline" aria-disabled={confirming || leaving !== undefined} aria-busy={exiting} onClick={() => void page.exitEditing()}>
+      <Button size="sm" variant="outline" aria-disabled={!available || confirming || leaving !== undefined} aria-busy={exiting} onClick={() => available && void page.exitEditing()}>
         {exiting ? editorMessages.mode.exiting : editorMessages.mode.exit}
       </Button>
     </>
@@ -347,7 +392,7 @@ function offersForceTakeOver(reading: ReadingMode): boolean {
  * 强制接管（M3-P5 设计 §3.8）："请求编辑"旁边的"强制接管"（outline）：点了交给 onForce（先确认）；forcing 是强制接管的进入编辑中——这时只留它，
  * 说正在接管（不可用、进行中），没成功时焦点还在它上面
  */
-function ReadingControls({ page, reading, session, confirming, forcing, forceRef, onForce }: { page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
+function ReadingControls({ available, page, reading, session, confirming, forcing, forceRef, onForce }: { available: boolean, page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
   // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面。打开自检失败（M3-P4）时同样不给：数据不完整的不能编辑
@@ -361,8 +406,10 @@ function ReadingControls({ page, reading, session, confirming, forcing, forceRef
   const blockedByUpdate = update === 'loading' && action !== 'cancel-request'
   // 强制接管：阅读时按条件出现，进入编辑的过程中（forcing）留着；载入最新的版本、确认会话、会话不是本人时不可用
   const forceHolder = reading !== undefined && offersForceTakeOver(reading) ? reading.holder : undefined
-  const forceUnavailable = forcing || confirming || update === 'loading' || session !== 'active'
+  const forceUnavailable = !available || forcing || confirming || update === 'loading' || session !== 'active'
   const run = (): void => {
+    if (!available)
+      return
     switch (action) {
       case 'enter':
         void page.enterEditing()
@@ -388,7 +435,7 @@ function ReadingControls({ page, reading, session, confirming, forcing, forceRef
         </Button>
       )}
       {offersEdit && !forcing && (
-        <Button size="sm" aria-disabled={entering || taking || requestBusy || confirming || blockedByUpdate || session !== 'active'} aria-busy={entering || taking || requestBusy || confirming} onClick={run}>
+        <Button size="sm" aria-disabled={!available || entering || taking || requestBusy || confirming || blockedByUpdate || session !== 'active'} aria-busy={entering || taking || requestBusy || confirming} onClick={run}>
           {enterLabel(reading)}
         </Button>
       )}
@@ -609,7 +656,7 @@ function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>): s
  *   它销毁之后没有新的编辑器接过焦点、落到了 body：交给说明里的第一个按钮（另存为副本、重新加载），没有按钮时（正在核对那次保存）
  *   交给返回链接；焦点在别处时不抢（复验 C2，规范 §2.4）
  */
-function LostNotice({ page, lost, personal, onDiscard, fallbackFocus }: { page: EditorPage, lost: LostMode, personal: boolean, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
+function LostNotice({ available, page, lost, personal, onDiscard, fallbackFocus }: { available: boolean, page: EditorPage, lost: LostMode, personal: boolean, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
   const { loss, unsaved, readable, checking, captureFailed, inputLeft, reopenFailed, copy, reload } = lost
   const copied = copy.kind === 'done' ? copy.document : undefined
   const refused = copy.kind === 'refused' ? copy : undefined
@@ -642,7 +689,7 @@ function LostNotice({ page, lost, personal, onDiscard, fallbackFocus }: { page: 
         {(offersCopy || offersDiscard || offersReload || offersPageReload) && (
           <div className="mt-2 flex flex-wrap gap-2">
             {offersCopy && (
-              <Button variant="outline" size="sm" aria-disabled={copy.kind === 'saving' || reload.kind === 'loading'} onClick={() => void page.saveCopy()}>
+              <Button variant="outline" size="sm" aria-disabled={!available || copy.kind === 'saving' || reload.kind === 'loading'} onClick={() => available && void page.saveCopy()}>
                 {copy.kind === 'saving' ? editorMessages.lost.savingCopy : editorMessages.lost.saveCopy}
               </Button>
             )}
@@ -877,9 +924,9 @@ function readingInfo(reading: ReadingMode | undefined, personal: boolean): React
  * 离开编辑的过程中（leaving：交出、退出、空闲释放）、正在谢绝、正在确认会话时按钮留着、不可用（aria-disabled：焦点不丢），交出时"交出"说正在交出、
  * 谢绝时"继续编辑"标为进行中；上一次交出、谢绝没成时说明原因（没存上的由保存的状态说明）
  */
-function RequestPrompt({ page, request, leaving, handingOver, confirming }: { page: EditorPage, request: IncomingRequest, leaving: boolean, handingOver: boolean, confirming: boolean }) {
+function RequestPrompt({ available, page, request, leaving, handingOver, confirming }: { available: boolean, page: EditorPage, request: IncomingRequest, leaving: boolean, handingOver: boolean, confirming: boolean }) {
   const titleId = useId()
-  const busy = leaving || request.declining || confirming
+  const busy = !available || leaving || request.declining || confirming
   const failure = request.failure
   return (
     <div role="group" aria-labelledby={titleId} data-slot="edit-request-prompt" className="rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground">
@@ -889,10 +936,10 @@ function RequestPrompt({ page, request, leaving, handingOver, confirming }: { pa
         <p>{failure.action === 'handover' ? editorMessages.editing.handOverFailed(describeError(failure.error).message) : editorMessages.editing.declineFailed(describeError(failure.error).message)}</p>
       )}
       <div className="mt-2 flex flex-wrap gap-2">
-        <Button size="sm" aria-disabled={busy} aria-busy={handingOver} onClick={() => void page.handOver()}>
+        <Button size="sm" aria-disabled={busy} aria-busy={handingOver} onClick={() => available && void page.handOver()}>
           {handingOver ? editorMessages.editing.handingOver : editorMessages.editing.handOver}
         </Button>
-        <Button size="sm" variant="outline" aria-disabled={busy} aria-busy={request.declining} onClick={() => void page.keepEditing()}>
+        <Button size="sm" variant="outline" aria-disabled={busy} aria-busy={request.declining} onClick={() => available && void page.keepEditing()}>
           {editorMessages.editing.keepEditing}
         </Button>
       </div>
@@ -992,9 +1039,11 @@ function LoadFailure({ load }: { load: Exclude<EditorPageLoad, { kind: 'loading'
 /** apple：苹果的平台，保存的快捷键是 Cmd+S，其他平台是 Ctrl+S */
 export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean }) {
   const view = useSyncExternalStore(page.subscribe, page.view)
+  const local = useLocalSaveIndicator(view)
+  const available = view.connection?.available !== false
   const [queryClient] = useState(() => editorQueryClient(page))
   /** 确认框（放弃本页的修改、强制接管）：同一时刻至多一个 */
-  const [pending, setPending] = useState<PendingConfirmation>()
+  const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean }>()
   const { load, mode, save } = view
   const ready = load.kind === 'ready' ? load : undefined
   const title = ready?.title
@@ -1039,6 +1088,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   function confirmForceTakeOver(holder: LeaseHolder): void {
     const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
     setPending({
+      requiresConnection: true,
       title: editorMessages.mode.forceTitle,
       description: editorMessages.mode.forceDescription(messages.people.text(holder.holder), lastActive),
       confirmLabel: editorMessages.mode.forceConfirm,
@@ -1048,6 +1098,10 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
       refresh: async () => undefined,
       returnFocus: () => (forceRef.current ?? backRef.current)?.focus(),
     })
+  }
+
+  function confirmationUnavailable(): string | undefined {
+    return pending?.requiresConnection === true && page.view().connection?.available === false ? messages.common.connectionRequired : undefined
   }
 
   /** 放弃本页的修改：先确认（规范 §2.4 的确认框）；放弃之后这个按钮不在了，焦点交给返回链接 */
@@ -1080,14 +1134,16 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
             <div className="ml-auto flex items-center gap-3">
               {/* 分享（M2-P5）：只在能分享时出现 */}
-              {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
+              {ready !== undefined && <EditorShareEntry available={available} page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
               {/* 看得见的状态（不是播报区：例行的变化只改文字）与读屏的播报区（只播有意义的变化） */}
               <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-              <SaveAnnouncer view={view} />
-              {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
-              {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
+              <SaveAnnouncer view={view} local={local} />
+              {(reading !== undefined || entering) && <ReadingControls available={available} page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
+              {editing !== undefined && <SaveControls available={available} page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
             </div>
           </div>
+          {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
+          {local !== undefined && <LocalSaveStatus indicator={local} />}
           {/* 阅读时的一行静态说明（A14，见文件头） */}
           {reading !== undefined && <p data-slot="reading-note" className="px-3 pb-2 text-xs text-muted-foreground">{editorMessages.mode.readingNote}</p>}
         </header>
@@ -1098,7 +1154,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {/* 上一位编辑者异常中断（M3-P5）：进入编辑之后页头下面一条不打断的说明，"知道了"之后、离开编辑时消失 */}
           {interruption !== undefined && <InterruptionNotice interruption={interruption} onDismiss={page.dismissInterruption} />}
           {/* 有人请求编辑（M3-P5）：页头下面的提示，不移动焦点、不挂屏障 */}
-          {incoming !== undefined && <RequestPrompt page={page} request={incoming} leaving={leaving !== undefined} handingOver={leaving?.cause === 'handover-request'} confirming={view.confirmingSession} />}
+          {incoming !== undefined && <RequestPrompt available={available} page={page} request={incoming} leaving={leaving !== undefined} handingOver={leaving?.cause === 'handover-request'} confirming={view.confirmingSession} />}
           {/* 一直渲染（没有问题时什么也不画）：重试成功、说明连同"重试"一起消失时它才能把焦点交给返回链接（DEF-040） */}
           <DetailRefreshProblem
             query={{ isRefetchError: view.detailProblem !== undefined, isRefetching: view.detailRefreshing, error: view.detailProblem, refetch: page.refreshDetail }}
@@ -1114,14 +1170,14 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {reading?.damaged !== undefined && <DamagedNotice failures={reading.damaged} canEdit={reading.canEdit} onReload={page.reload} />}
           {/* 阅读时与服务端不兼容（M3-P3）：打开时就看得出、申请编辑权时得知，或者编辑时得知之后退出了编辑 */}
           {reading?.blocked !== undefined && <IncompatibleNotice kind={reading.blocked} editing={undefined} onReload={page.reload} />}
-          {lost !== undefined && <LostNotice page={page} lost={lost} personal={personal} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
+          {lost !== undefined && <LostNotice available={available} page={page} lost={lost} personal={personal} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
           {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
               读不到了（404）之后没有要做的事，不提登录 */}
           {editing?.conflict === undefined && !(lost !== undefined && !lost.readable) && <SessionNotice view={view} editing={editing !== undefined} />}
           {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} />}
         </div>
       </div>
-      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} />
+      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} unavailable={confirmationUnavailable} />
     </QueryClientProvider>
   )
 }

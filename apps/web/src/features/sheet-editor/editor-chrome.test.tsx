@@ -2,6 +2,7 @@ import type { EditInterruption } from '@nerve-office/contracts'
 import type { AutosaveView } from './autosave.ts'
 import type { LeaseLoss } from './edit-lease.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
+import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -22,6 +23,12 @@ const READY: EditorPageReady = {
   userId: '0199a2c4-0000-7000-8000-00000000000a',
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
+const ONLINE: AutosaveView = { offline: false, paused: false, retrying: false, held: false }
+const DIRTY: SaveView = { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }
+const NETWORK_FAILURE: SaveView = { ...DIRTY, status: 'failed', problem: { kind: 'request', error: new NetworkError('断网') } }
+
+const PAUSED: AutosaveView = { ...ONLINE, paused: true }
+
 const EDITING: EditModeState = { kind: 'editing' }
 const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
@@ -114,6 +121,74 @@ function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
   render(<EditorChrome page={fake.page} apple={apple} />)
   return fake
 }
+
+describe('页头的本机保存事实', () => {
+  const local: LocalSaveView = {
+    draft: { kind: 'working', ref: { sessionId: 'editing', serial: 1, draftSeq: 1, editorSeq: 1, bytes: 10, formulasPending: false }, local: { kind: 'persisted', mirror: { kind: 'mirrored' } }, summary: undefined },
+    storage: { kind: 'persistent', reason: undefined, hostKind: 'worker', mirror: { kind: 'mirrored' }, persistence: { kind: 'granted' } },
+    enabled: true,
+    coversCurrent: true,
+    unsaved: true,
+  }
+  const offline = { browserOnline: false, available: false, problem: 'offline', since: Date.now(), generation: 1 } as const
+
+  it('云端与本机摘要分别显示；新输入撤掉完整保护的说法，不抢焦点或逐次播报', () => {
+    const fake = renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }, localSave: local, connection: offline })
+    expect(headerStatus()).toHaveTextContent('有未保存的修改')
+    expect(screen.getByText('已离线，修改已保存在本机')).toBeVisible()
+    const save = screen.getByRole('button', { name: '保存' })
+    save.focus()
+    const spoken = announcement().textContent
+    fake.set({ localSave: { ...local, coversCurrent: false } })
+    expect(screen.queryByText('已离线，修改已保存在本机')).toBeNull()
+    expect(screen.getByText('较早的修改已落盘，最新输入仍在本页')).toBeVisible()
+    expect(save).toHaveFocus()
+    expect(announcement()).toHaveTextContent(spoken ?? '')
+  })
+
+  it('存储降级及网络无回应有明确说明，云端状态不会冒充本机已保存', () => {
+    const fake = renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }, localSave: { ...local, storage: { ...local.storage, kind: 'memory', reason: 'quota' } } })
+    expect(screen.getByText('本机存储空间不足', { selector: 'summary' })).toBeVisible()
+    fake.set({ connection: { ...offline, browserOnline: true, problem: 'unresponsive' } })
+    expect(headerStatus()).toHaveTextContent('网络没有回应，正在重试')
+    expect(announcement()).toHaveTextContent('本机存储空间不足')
+    fake.set({ localSave: { ...local, enabled: false } })
+    expect(screen.getByText('本部署关闭了本机草稿（浏览器崩溃会丢掉没保存的修改）', { selector: 'summary' })).toBeVisible()
+  })
+
+  it('没有新编辑也在连续异常满 90 秒时提示；重连尝试不重置起点，恢复清掉提示', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-10-11T00:00:00Z'))
+      const connection = { ...offline, since: Date.now() }
+      const fake = renderChrome({ localSave: local, connection })
+      await act(async () => vi.advanceTimersByTime(89_999))
+      expect(screen.queryByText(/编辑权可能已过期/)).toBeNull()
+      fake.set({ connection: { ...connection, browserOnline: true, problem: 'unresponsive' } })
+      await act(async () => vi.advanceTimersByTime(1))
+      expect(screen.getByText(/编辑权可能已过期/, { selector: 'p[data-slot="connection-expiry"]' })).toBeVisible()
+      expect(announcement()).toHaveTextContent('另存为副本')
+      fake.set({ connection: { browserOnline: true, available: true, problem: undefined, since: undefined, generation: 2 } })
+      expect(screen.queryByText(/编辑权可能已过期/, { selector: 'p[data-slot="connection-expiry"]' })).toBeNull()
+    }
+    finally {
+      cleanup()
+      vi.useRealTimers()
+    }
+  })
+
+  it('持续存在的本机降级不能遮住新的云端失败与恢复播报', () => {
+    const fake = renderChrome({ save: CLEAN, autosave: ONLINE, localSave: { ...local, storage: { ...local.storage, kind: 'memory', reason: 'quota' } } })
+    expect(announcement()).toHaveTextContent('本机存储空间不足')
+    fake.set({ save: NETWORK_FAILURE, autosave: { ...ONLINE, retrying: true } })
+    expect(announcement()).toHaveTextContent('保存失败，稍后自动重试')
+    fake.set({ save: { ...NETWORK_FAILURE, status: 'saving' } })
+    expect(announcement()).toHaveTextContent('保存失败，稍后自动重试')
+    fake.set({ save: CLEAN, autosave: ONLINE })
+    expect(announcement()).toHaveTextContent('已保存到云端')
+    expect(screen.getByText('本机存储空间不足', { selector: 'summary' })).toBeVisible()
+  })
+})
 
 describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
   it('就绪：返回文档所在的空间——个人空间回到首页（我的空间），团队空间回到它的空间页并显示名称', () => {
@@ -443,7 +518,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(note.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull()
     expect(note.closest('[aria-hidden="true"], .sr-only')).toBeNull()
     // 只能查看的人同样有；别人在编辑时同样有，谁在编辑的说明照旧在读屏状态区里、不带上这一句
-    fake.set({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 1 } } })
+    fake.set({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 } } })
     expect(screen.getByText(NOTE)).toBe(note)
     expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前）')
 
@@ -520,22 +595,22 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     fake.set({ mode: { ...READING, update: 'loading' } })
     expect(infoRegion()).toBe(region)
     expect(region).toHaveTextContent('正在载入最新的版本…')
-    fake.set({ mode: { ...READING, update: 'available', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } } })
+    fake.set({ mode: { ...READING, update: 'available', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 2 } } })
     expect(region).toHaveTextContent('@amy 艾米 正在编辑这份文档（最后活动 2 分钟前），你现在只能阅读 这份文档有更新的版本')
     fake.set({ mode: READING })
     expect(region).toBeEmptyDOMElement()
   })
 
   it('本页刚退出编辑、没能确认放掉编辑权时读到"自己在别处编辑"：如实说是本页刚退出（审查 A13），不说成另一个标签页或设备；这一页可以直接"在此编辑"', () => {
-    const fake = renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
+    const fake = renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
     expect(infoRegion().textContent).toBe('本页刚退出编辑，编辑权还没能确认放掉：最多 90 秒后自动结束，这期间别人还不能编辑；这一页可以直接点"在此编辑"')
     expect(screen.getByRole('button', { name: '在此编辑' })).toBeInTheDocument()
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: false } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: false } })
     expect(infoRegion()).toHaveTextContent('你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）')
   })
 
   it('与服务端不兼容的阅读（没有"编辑"）读到"自己在别处编辑"：照样说是本页刚退出或在别处，不提"在此编辑"（M3-P3 审查 B8：停住续租之后的那次释放没送到）', () => {
-    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const self = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
     const fake = renderChrome({ mode: { ...READING, blocked: 'client-outdated', holder: self, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
     expect(screen.queryByRole('button', { name: '在此编辑' })).toBeNull()
@@ -550,7 +625,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
     const region = infoRegion()
     expect(region).toBeEmptyDOMElement()
-    fake.set({ load: READY, mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } } })
+    fake.set({ load: READY, mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 3 } } })
     expect(infoRegion()).toBe(region)
     expect(region).toHaveTextContent('@amy 艾米 正在编辑这份文档（最后活动 3 分钟前），你现在只能阅读')
     expect(within(region).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
@@ -564,12 +639,12 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     ['不到 1 分钟', 0, '@amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前），你现在只能阅读'],
     ['服务端没给出回答的时刻', undefined, '@amy 艾米 正在编辑这份文档，你现在只能阅读'],
   ])('最后活动%s', (_case, minutes, text) => {
-    renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: minutes } }, save: undefined })
+    renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: minutes } }, save: undefined })
     expect(infoRegion()).toHaveTextContent(text)
   })
 
   it('是自己（M3-P5 设计 §3.7）：本机锁在本浏览器里有人持有时说在本浏览器的另一个标签页里、点"在此编辑"那边先保存再交出；不在本浏览器时说在另一台设备或浏览器上（也可能是刚关闭、刷新过的页面）、点了那边失去编辑权——不再建议"等 90 秒再点编辑"', () => {
-    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const self = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
     const fake = renderChrome({ mode: { ...READING, holder: self, selfHolder: 'this-browser' }, save: undefined })
     expect(infoRegion().textContent).toBe('你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
     fake.set({ mode: { ...READING, holder: self, selfHolder: 'elsewhere' } })
@@ -578,7 +653,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   })
 
   it('是自己、刚关闭或刷新的页面还有一次保存在进行（审查 B §七）：照实说在等它存完，不提"那边会失去编辑权、另存为副本"；按钮照旧是"在此编辑"；不能编辑时只说只能阅读', () => {
-    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const self = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
     const fake = renderChrome({ mode: { ...READING, holder: self, selfHolder: 'just-closed' }, save: undefined })
     expect(infoRegion().textContent).toBe('你刚关闭或刷新的页面还有一次保存在进行。点"在此编辑"会先等它存完（至多 30 秒）再接着编辑')
     expect(infoRegion()).not.toHaveTextContent('失去编辑权')
@@ -592,7 +667,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   it('是自己：按钮一律换成"在此编辑"（同一个按钮，不是另加一个），点了交给页面的本人接管，不是"编辑"', () => {
     const fake = renderChrome({ mode: READING, save: undefined })
     const enter = screen.getByRole('button', { name: '编辑' })
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'this-browser' } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: true, lastActiveMinutes: 0 }, selfHolder: 'this-browser' } })
     expect(screen.getByRole('button', { name: '在此编辑' })).toBe(enter)
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
     expect(enter).toHaveAttribute('aria-disabled', 'false')
@@ -600,7 +675,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(fake.page.takeOverHere).toHaveBeenCalledOnce()
     expect(fake.page.enterEditing).not.toHaveBeenCalled()
     // 持有者是别人：同一个按钮是"请求编辑"（M3-P5 设计 §3.6）；没人在编辑时回到"编辑"
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 } } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 0 } } })
     expect(screen.getByRole('button', { name: '请求编辑' })).toBe(enter)
     fake.set({ mode: READING })
     expect(screen.getByRole('button', { name: '编辑' })).toBe(enter)
@@ -612,7 +687,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   })
 
   it('只能查看的人（查看者、归档空间）同样看到谁在编辑、最后活动几分钟之前（US-M3-04 的"其他人"），不说"你现在只能阅读"（页头已经说只能查看），没有"编辑"', () => {
-    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 1 } }, save: undefined })
+    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 } }, save: undefined })
     const region = infoRegion()
     expect(region.textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前）')
     expect(within(region).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
@@ -622,7 +697,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   })
 
   it('不能编辑了、读到的持有者还是自己（自己那一代随之失效，还没读到新的编辑状态）：照别人一样说谁在编辑，不提"再点编辑就能编辑"', () => {
-    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, save: undefined })
+    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 } }, save: undefined })
     expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前）')
   })
 
@@ -844,8 +919,8 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     ['编辑权被收回', { kind: 'lease', reason: 'revoked' }, '编辑权已失效：你对这份文档的编辑权被收回了。'],
     ['不认识的原因', { kind: 'lease', reason: undefined }, '编辑权已失效。'],
     ['不能编辑了（403，原因由服务端给出）', { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能编辑') }, '编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。'],
-    ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } }, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。'],
-    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档。'],
+    ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 2 } }, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。'],
+    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档。'],
     ['续上时被占用、详情认不出', { kind: 'held', holder: undefined }, '编辑权已失效：这份文档正在别处编辑。'],
     ['续上时别处保存过更新的版本', { kind: 'newer' }, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。'],
     ['本人在本浏览器的另一个标签页接手了编辑（本机锁被抢，M3-P5）', { kind: 'taken-over', where: 'this-browser' }, '编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
@@ -862,7 +937,7 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
   })
 
   it('续上时别人正在编辑：人名经人名组件（登录名在前，显示名隔离）', () => {
-    renderChrome({ mode: lost({ kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: undefined } }), save: undefined })
+    renderChrome({ mode: lost({ kind: 'held', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: undefined } }), save: undefined })
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('编辑权已失效：@amy 艾米 正在编辑这份文档。本页的修改没有保存')
     expect(within(alert).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
@@ -891,7 +966,7 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
     expect(enter).toHaveAttribute('aria-busy', 'true')
     expect(document.activeElement).toBe(enter)
     // 被别人占着：同一个按钮换成"请求编辑"（M3-P5），焦点还在它上面
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 } } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 0 } } })
     expect(screen.getByRole('button', { name: '请求编辑' })).toBe(enter)
     expect(enter).toHaveAttribute('aria-disabled', 'false')
     expect(document.activeElement).toBe(enter)
@@ -1098,12 +1173,6 @@ describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
   })
 })
 
-const ONLINE: AutosaveView = { offline: false, paused: false, retrying: false, held: false }
-const DIRTY: SaveView = { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }
-const NETWORK_FAILURE: SaveView = { ...DIRTY, status: 'failed', problem: { kind: 'request', error: new NetworkError('断网') } }
-
-const PAUSED: AutosaveView = { ...ONLINE, paused: true }
-
 describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
   it.each<[string, SaveView, AutosaveView, string, Partial<EditorPageView>]>([
     ['已保存到云端', CLEAN, ONLINE, '已保存到云端', {}],
@@ -1112,7 +1181,7 @@ describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
     ['只差公式的结果', { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, ONLINE, '公式结果尚未保存（算完之后自动保存）', {}],
     ['保存失败、会自动重试', NETWORK_FAILURE, { ...ONLINE, retrying: true }, '保存失败，稍后自动重试', {}],
     ['保存失败、要等新内容', NETWORK_FAILURE, ONLINE, '保存失败', {}],
-    ['已离线（M3 没有本机的发件箱：不说已保存在本机）', DIRTY, { ...ONLINE, offline: true }, '已离线：修改还在本页，恢复网络之后自动保存', {}],
+    ['已离线（云端等待，本机状态另列）', DIRTY, { ...ONLINE, offline: true }, '已离线，等待同步', {}],
     ['暂停（没有人登录）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'signed-out' }],
     ['暂停（换了人）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'other-user' }],
     ['暂停（本人在登录中、正在向服务端确认会话：不说"登录回来之后"，审查 A6）', DIRTY, PAUSED, '正在确认登录状态…', {}],
@@ -1166,7 +1235,7 @@ describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
     const fake = renderChrome({ save: DIRTY, autosave: ONLINE })
     const spoken = announcement()
     fake.set({ autosave: { ...ONLINE, offline: true } })
-    expect(spoken).toHaveTextContent('已离线：修改还在本页，恢复网络之后自动保存')
+    expect(spoken).toHaveTextContent('已离线，等待同步')
     fake.set({ autosave: ONLINE, save: { ...DIRTY, status: 'saving' } })
     expect(spoken).toHaveTextContent('已离线')
     fake.set({ save: CLEAN })
@@ -1317,7 +1386,7 @@ describe('打开自检失败的阅读（M3-P4 设计 §3.12，US-M3-15）', () =
 })
 
 describe('本人接管："在此编辑"（M3-P5 设计 §3.7、§3.11，US-M3-08）', () => {
-  const SELF = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+  const SELF = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
   const HERE: ReadingMode = { ...READING, holder: SELF, selfHolder: 'this-browser' }
 
   /** 页头里的按钮：文字、是否可用、是否进行中 */
@@ -1436,7 +1505,7 @@ describe('离开编辑与空闲释放（M3-P5 设计 §3.10、§3.11）', () => 
     expect(screen.getAllByRole('status')).toHaveLength(statusCount)
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
-    fake.set({ mode: { ...READING, notice: { kind: 'idle-released' }, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 }, formulasPending: true } })
+    fake.set({ mode: { ...READING, notice: { kind: 'idle-released' }, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 0 }, formulasPending: true } })
     expect(region.textContent).toBe('10 分钟没有操作，已保存并释放编辑权 @amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前），你现在只能阅读 这份表格的公式结果可能还没更新（上次保存时公式还没算完），进入编辑之后会自动重算并保存')
   })
 
@@ -1454,7 +1523,7 @@ describe('离开编辑与空闲释放（M3-P5 设计 §3.10、§3.11）', () => 
 describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
   const BEN = { id: '0199a2c4-0000-7000-8000-0000000000e2', username: 'ben', displayName: '本' }
   /** 艾米在编辑 */
-  const AMY_HOLDS = { holder: AMY, sameUser: false, lastActiveMinutes: 1 }
+  const AMY_HOLDS = { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 }
   const OTHERS: ReadingMode = { ...READING, holder: AMY_HOLDS }
   /** 持有者这一侧：本在请求编辑 */
   const INCOMING: IncomingRequest = { id: '0199a2c4-0000-7000-8000-0000000000f1', requester: BEN, declining: false, failure: undefined }
@@ -1667,7 +1736,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
 describe('强制接管（M3-P5 设计 §3.8、§3.11，US-M3-09）', () => {
   const BEN = { id: '0199a2c4-0000-7000-8000-0000000000e2', username: 'ben', displayName: '本' }
   /** 艾米在编辑（最后活动 3 分钟前） */
-  const AMY_HOLDS = { holder: AMY, sameUser: false, lastActiveMinutes: 3 }
+  const AMY_HOLDS = { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 3 }
   /** 能强制接管的人在阅读，艾米在编辑 */
   const ADMIN: ReadingMode = { ...READING, canTakeOver: true, holder: AMY_HOLDS }
   /** 团队空间里的文档（能强制接管的是空间管理员） */
@@ -1899,5 +1968,81 @@ describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', ()
     expect(infoRegion().textContent).toBe(OTHERS_TEXT)
     expect(infoRegion()).not.toHaveClass('sr-only')
     expect(document.querySelector('[data-slot="interruption-notice"]')).toBeNull()
+  })
+})
+
+describe('页头联网操作与已开确认框', () => {
+  const offline = { browserOnline: false, available: false, problem: 'offline', since: Date.now(), generation: 1 } as const
+  const online = { browserOnline: true, available: true, problem: undefined, since: undefined, generation: 2 } as const
+
+  it('编辑器分享入口读取同一页头连接事实，离线不会打开弹窗', () => {
+    renderChrome({ load: { ...READY, canShare: true }, connection: offline })
+    const share = screen.getByRole('button', { name: '分享' })
+    expect(share).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(share)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('离线保留焦点并禁用保存、退出及交出；当前内容与本地取消保留', () => {
+    const request: IncomingRequest = { id: 'request', requester: AMY, declining: false, failure: undefined }
+    const fake = renderChrome({ mode: { kind: 'editing', request }, save: DIRTY })
+    const exit = screen.getByRole('button', { name: '退出编辑' })
+    exit.focus()
+    fake.set({ connection: offline })
+    for (const name of ['保存', '退出编辑', '交出', '继续编辑']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(button)
+    }
+    expect(fake.page.save).not.toHaveBeenCalled()
+    expect(fake.page.exitEditing).not.toHaveBeenCalled()
+    expect(fake.page.handOver).not.toHaveBeenCalled()
+    expect(fake.page.keepEditing).not.toHaveBeenCalled()
+    expect(exit).toHaveFocus()
+    expect(screen.getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+  })
+
+  it('阅读的进入、请求和接管入口禁用；本地接管取消与重新读取可用', () => {
+    const fake = renderChrome({ mode: READING, save: undefined, connection: offline })
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    expect(fake.page.enterEditing).not.toHaveBeenCalled()
+    fake.set({ mode: { ...READING, canTakeOver: true, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: undefined } } })
+    fireEvent.click(screen.getByRole('button', { name: '请求编辑' }))
+    fireEvent.click(screen.getByRole('button', { name: '强制接管' }))
+    expect(fake.page.requestEditing).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: undefined }, takeover: { kind: 'failed', reason: 'not-saved' }, update: 'available' } })
+    fireEvent.click(screen.getByRole('button', { name: '仍在此编辑' }))
+    expect(fake.page.takeOverHere).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(fake.page.cancelTakeOver).toHaveBeenCalledOnce()
+  })
+
+  it('在线开强制接管确认框，离线后的确认不执行；恢复后才执行', async () => {
+    const fake = renderChrome({ mode: { ...READING, canTakeOver: true, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: undefined } }, save: undefined, connection: online })
+    fireEvent.click(screen.getByRole('button', { name: '强制接管' }))
+    const dialog = await screen.findByRole('dialog', { name: '强制接管编辑？' })
+    fake.set({ connection: offline })
+    const confirm = within(dialog).getByRole('button', { name: '强制接管' })
+    await act(async () => fireEvent.click(confirm))
+    expect(fake.page.forceTakeOver).not.toHaveBeenCalled()
+    expect(confirm).toHaveAttribute('aria-disabled', 'true')
+    expect(within(dialog).getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+    fake.set({ connection: online })
+    fireEvent.click(confirm)
+    await waitFor(() => expect(fake.page.forceTakeOver).toHaveBeenCalledOnce())
+  })
+
+  it('离线的失效副本不可提交，本地放弃确认仍可取消', async () => {
+    const fake = renderChrome({ mode: lost({ kind: 'newer' }), save: undefined, connection: offline })
+    const copy = screen.getByRole('button', { name: '另存为副本' })
+    expect(copy).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(copy)
+    expect(fake.page.saveCopy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '放弃本页的修改' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('button', { name: '取消' })).not.toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(dialog).not.toBeInTheDocument())
   })
 })

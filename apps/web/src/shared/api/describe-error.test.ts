@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, NetworkError } from './client.ts'
+import { ApiError, NetworkError, RequestTimeoutError } from './client.ts'
 import { describeError } from './describe-error.ts'
 
 describe('describeError', () => {
@@ -36,5 +36,9 @@ describe('describeError', () => {
   it('网络失败与其他异常', () => {
     expect(describeError(new NetworkError('x')).message).toBe('网络连接失败，请检查网络后重试')
     expect(describeError(new Error('x')).message).toBe('出了点问题，请稍后重试')
+  })
+
+  it('请求超过时限：明确尚未收到回应，不声称服务端没有完成', () => {
+    expect(describeError(new RequestTimeoutError(30_000))).toEqual({ message: '网络没有回应，请稍后重试' })
   })
 })

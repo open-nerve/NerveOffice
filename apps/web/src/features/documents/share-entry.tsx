@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useRef, useState } from 'react'
 import { messages } from '../../shared/i18n/index.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
+import { connectionUnavailable, useConnectionState } from '../../shared/lib/use-connection-state.ts'
 import { useLazyChunk } from '../../shared/lib/use-lazy-chunk.ts'
 import { Button, ChunkLoadNotice } from '../../shared/ui/index.ts'
 import { sessionQueryOptions } from '../auth/index.ts'
@@ -35,6 +36,7 @@ interface ShareEntryProps {
 }
 
 export function ShareEntry({ documentId, documentTitle, canShare, onDenied, fallbackFocus }: ShareEntryProps) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const queryClient = useQueryClient()
   const session = useQuery(sessionQueryOptions())
   const entryRef = useRef<HTMLButtonElement>(null)
@@ -60,9 +62,9 @@ export function ShareEntry({ documentId, documentTitle, canShare, onDenied, fall
   const userId = session.data?.user.id
 
   async function openDialog(): Promise<void> {
-    if (loading)
+    if (loading || connectionUnavailable() !== undefined)
       return
-    if (await load() !== undefined)
+    if (await load() !== undefined && connectionUnavailable() === undefined)
       setOpen(true)
   }
 
@@ -71,9 +73,10 @@ export function ShareEntry({ documentId, documentTitle, canShare, onDenied, fall
       {canShare && (
         <>
           {/* 下载中用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13）；重复点击由 openDialog 挡住 */}
-          <Button ref={entryRef} type="button" variant="outline" size="sm" aria-disabled={loading} aria-busy={loading} onClick={() => void openDialog()}>
+          <Button ref={entryRef} type="button" variant="outline" size="sm" aria-disabled={loading || unavailable !== undefined} aria-busy={loading} onClick={() => void openDialog()}>
             {messages.organize.share}
           </Button>
+          {unavailable !== undefined && <p className="text-sm text-muted-foreground">{unavailable}</p>}
           {/* 下载中的状态：随按钮一起出现、一直在的容器，下载时往里填文字，读屏读得到 */}
           <span role="status" className="sr-only">{loading ? messages.lazyFeature.loading(messages.organize.share) : ''}</span>
         </>

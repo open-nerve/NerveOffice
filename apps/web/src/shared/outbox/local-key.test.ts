@@ -1,7 +1,7 @@
 import type { LocalKeyHandle } from './draft-codec.ts'
 import type { LocalKeyProblem } from './local-key.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../api/client.ts'
+import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError, setCsrfToken } from '../api/client.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../testing/fake-api.test-support.ts'
 import { createLocalKeyKeeper, fetchLocalKey } from './local-key.ts'
 
@@ -30,6 +30,68 @@ async function roundTrips(encryptWith: CryptoKey, decryptWith: CryptoKey): Promi
 }
 
 describe('取用本机密钥（M4-P1 设计 §3.4.9，ADR-019）', () => {
+  it.each(['headers', 'body', 'error-body'] as const)('%s 挂住时 10 秒结束；迟到密钥不再导入', async (waiting) => {
+    vi.useFakeTimers()
+    let stream: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>> | undefined
+    let deliver: (response: Response) => void = () => {}
+    const headers = new Promise<Response>((resolve) => {
+      deliver = resolve
+    })
+    const response = new Response(new ReadableStream<Uint8Array<ArrayBuffer>>({
+      start: (controller) => { stream = controller },
+    }), { status: waiting === 'error-body' ? 503 : 200 })
+    let signal: AbortSignal | null | undefined
+    const importKey = vi.spyOn(crypto.subtle, 'importKey')
+    vi.stubGlobal('fetch', vi.fn(async (_path: string, init?: RequestInit) => {
+      signal = init?.signal
+      return waiting === 'headers' ? headers : response
+    }))
+    let outcome: unknown
+    const requesting = fetchLocalKey().catch((error: unknown) => {
+      outcome = error
+    })
+    try {
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(outcome).toBeUndefined()
+      expect(signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(outcome).toBeInstanceOf(RequestTimeoutError)
+      expect(outcome).toMatchObject({ timeoutMs: 10_000 })
+      expect(signal?.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      stream?.enqueue(new TextEncoder().encode(JSON.stringify({ version: 3, key: RAW_BASE64 })))
+      stream?.close()
+      deliver(response)
+      await requesting
+      vi.useRealTimers()
+    }
+    expect(importKey).not.toHaveBeenCalled()
+  })
+
+  it('正文还在路上时调用方取消：保留原原因，撤掉 10 秒计时器', async () => {
+    vi.useFakeTimers()
+    let stream: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>> | undefined
+    const response = new Response(new ReadableStream<Uint8Array<ArrayBuffer>>({
+      start: (controller) => { stream = controller },
+    }))
+    vi.stubGlobal('fetch', vi.fn(async () => response))
+    const controller = new AbortController()
+    const reason = new Error('退出了这次登录')
+    const requesting = fetchLocalKey(controller.signal).catch((error: unknown) => error)
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort(reason)
+      expect(await requesting).toBe(reason)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      stream?.close()
+      vi.useRealTimers()
+    }
+  })
+
   it('POST /api/local-key（带 CSRF 令牌、不带请求体）：交回版本与导入好的密钥——不可导出、AES-GCM-256、用途只有加密与解密，就是服务端给的那一把', async () => {
     setCsrfToken('csrf-lk')
     const api = installFakeApi({ [PATH]: () => json(200, { version: 3, key: RAW_BASE64 }) })
@@ -169,6 +231,23 @@ function keeperWith(fetch: (signal: AbortSignal) => Promise<LocalKeyHandle>, clo
 }
 
 describe('本机密钥的保管者（M4-P1 设计 §3.4.9）', () => {
+  it('暂停持久化时只观察版本：停旧钥、记住新版，下次主动 ensure 才取用', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    const first = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(1))
+    await first
+    keeper.observeVersion(3, false)
+    expect(keeper.current()).toBeUndefined()
+    expect(seen).toEqual([1, undefined])
+    expect(remote.calls).toHaveLength(1)
+    const resumed = keeper.ensure()
+    remote.calls[1]?.resolve(await handleOf(2))
+    await settle()
+    remote.calls[2]?.resolve(await handleOf(3))
+    expect(await resumed).toMatchObject({ version: 3 })
+  })
+
   it('取到之后放在内存里：之后的 ensure 不再发请求；订阅者得知一次', async () => {
     const remote = controllableFetch()
     const { keeper, seen } = keeperWith(remote.fetch)
@@ -337,6 +416,271 @@ describe('本机密钥的保管者（M4-P1 设计 §3.4.9）', () => {
     remote.calls[2]?.resolve(await handleOf(2))
     expect((await pending as LocalKeyHandle).version).toBe(2)
     expect(seen).toEqual([1, undefined, 2])
+  })
+
+  it('取用途中观察到新版：不发布晚到的旧钥，并发 ensure 共用紧接的一次重取', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    const first = keeper.ensure()
+    keeper.observeVersion(2)
+    const joined = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(seen).toEqual([])
+    expect(keeper.current()).toBeUndefined()
+    expect(remote.calls).toHaveLength(2)
+    const latest = keeper.ensure()
+    const handle = await handleOf(2)
+    remote.calls[1]?.resolve(handle)
+    expect(await Promise.all([first, joined, latest])).toEqual([handle, handle, handle])
+    expect(seen).toEqual([2])
+    expect(remote.calls).toHaveLength(2)
+  })
+
+  it('没有密钥时也记住最高数字版本但不取用；旧数字心跳不能降低要求', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    keeper.observeVersion(2)
+    keeper.observeVersion(1)
+    expect(remote.calls).toHaveLength(0)
+    const pending = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(seen).toEqual([])
+    expect(remote.calls).toHaveLength(2)
+    const handle = await handleOf(3)
+    remote.calls[1]?.resolve(handle)
+    expect(await pending).toBe(handle)
+    keeper.observeVersion(2)
+    keeper.observeVersion(1)
+    expect(keeper.current()).toBe(handle)
+    expect(remote.calls).toHaveLength(2)
+    expect(seen).toEqual([3])
+  })
+
+  it('响应比已观察版本更高时可用；旧数字心跳不能停掉已取到的新版', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    const pending = keeper.ensure()
+    keeper.observeVersion(2)
+    const handle = await handleOf(3)
+    remote.calls[0]?.resolve(handle)
+    expect(await pending).toBe(handle)
+    keeper.observeVersion(2)
+    expect(keeper.current()).toBe(handle)
+    expect(seen).toEqual([3])
+    expect(remote.calls).toHaveLength(1)
+  })
+
+  it('连续旧回包每轮只重取一次，仍旧则退避；下一轮沿用版本要求且退避递增', async () => {
+    const remote = controllableFetch()
+    const { keeper, clock, seen } = keeperWith(remote.fetch)
+    keeper.observeVersion(2)
+    for (const [round, delay] of [2_000, 4_000, 8_000].entries()) {
+      const pending = keeper.ensure()
+      remote.calls[round * 2]?.resolve(await handleOf(1))
+      await settle()
+      expect(seen).toEqual([])
+      expect(remote.calls).toHaveLength(round * 2 + 2)
+      remote.calls[round * 2 + 1]?.resolve(await handleOf(1))
+      expect(await pending).toEqual({ kind: 'unavailable', retryAt: clock.now() + delay })
+      expect(keeper.current()).toBeUndefined()
+      await clock.advance(delay - 1)
+      expect(await keeper.ensure()).toEqual({ kind: 'unavailable', retryAt: clock.now() + 1 })
+      expect(remote.calls).toHaveLength(round * 2 + 2)
+      await clock.advance(1)
+    }
+    const pending = keeper.ensure()
+    const handle = await handleOf(2)
+    remote.calls[6]?.resolve(handle)
+    expect(await pending).toBe(handle)
+    expect(seen).toEqual([2])
+  })
+
+  it('取用途中新观察到 null：作废原回包；相同 null 不作废重取，允许取得重新建立的较低版本', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    keeper.observeVersion(5)
+    const pending = keeper.ensure()
+    keeper.observeVersion(null)
+    remote.calls[0]?.resolve(await handleOf(5))
+    await settle()
+    expect(seen).toEqual([])
+    expect(remote.calls).toHaveLength(2)
+    keeper.observeVersion(null)
+    const handle = await handleOf(1)
+    remote.calls[1]?.resolve(handle)
+    expect(await pending).toBe(handle)
+    expect(seen).toEqual([1])
+    expect(remote.calls).toHaveLength(2)
+  })
+
+  it('重取途中再次发生版本清空也不循环取用；只交回退避，连中间曾满足数字要求的旧回包也不发布', async () => {
+    const remote = controllableFetch()
+    const { keeper, clock, seen } = keeperWith(remote.fetch)
+    const pending = keeper.ensure()
+    keeper.observeVersion(null)
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(seen).toEqual([])
+    expect(remote.calls).toHaveLength(2)
+    keeper.observeVersion(2)
+    keeper.observeVersion(null)
+    remote.calls[1]?.resolve(await handleOf(2))
+    expect(await pending).toEqual({ kind: 'unavailable', retryAt: clock.now() + RETRY.initialMs })
+    expect(seen).toEqual([])
+    expect(remote.calls).toHaveLength(2)
+  })
+
+  it('重取仍有完整的时限：到点取消并退避，旧响应晚到不发布', async () => {
+    const remote = controllableFetch()
+    const { keeper, clock, seen } = keeperWith(remote.fetch)
+    const pending = keeper.ensure()
+    await clock.advance(9_000)
+    keeper.observeVersion(2)
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(seen).toEqual([])
+    expect(remote.calls).toHaveLength(2)
+    await clock.advance(TIMEOUT_MS - 1)
+    expect(remote.calls[1]?.signal.aborted).toBe(false)
+    await clock.advance(1)
+    expect(await pending).toEqual({ kind: 'unavailable', retryAt: clock.now() + RETRY.initialMs })
+    expect(remote.calls[1]?.signal.aborted).toBe(true)
+    remote.calls[1]?.resolve(await handleOf(2))
+    await settle()
+    expect(seen).toEqual([])
+    expect(keeper.current()).toBeUndefined()
+  })
+
+  it.each([
+    { error: new ApiError(401, 'SESSION_EXPIRED', '登录已过期'), kind: 'session' },
+    { error: new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙', { retryAfterSeconds: 30 }), kind: 'unavailable' },
+  ])('重取失败保留原有的 $kind 处理', async ({ error, kind }) => {
+    const remote = controllableFetch()
+    const { keeper, clock, seen } = keeperWith(remote.fetch)
+    const pending = keeper.ensure()
+    keeper.observeVersion(2)
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(seen).toEqual([])
+    expect(remote.calls).toHaveLength(2)
+    remote.calls[1]?.reject(error)
+    expect(await pending).toEqual(kind === 'session'
+      ? { kind, error }
+      : { kind, retryAt: clock.now() + 30_000 })
+    expect(seen).toEqual([])
+  })
+
+  it('discard 清掉版本要求；旧重取完成不能解除新登录的 pending 或取消新请求', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    const old = keeper.ensure()
+    keeper.observeVersion(7)
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(seen).toEqual([])
+    expect(remote.calls).toHaveLength(2)
+    keeper.discard()
+    expect(remote.calls[1]?.signal.aborted).toBe(true)
+    const fresh = keeper.ensure()
+    remote.calls[1]?.resolve(await handleOf(7))
+    expect(await old).toEqual({ kind: 'discarded' })
+    const joined = keeper.ensure()
+    expect(remote.calls).toHaveLength(3)
+    const handle = await handleOf(1)
+    remote.calls[2]?.resolve(handle)
+    expect(await Promise.all([fresh, joined])).toEqual([handle, handle])
+    expect(seen).toEqual([1])
+    expect(remote.calls[2]?.signal.aborted).toBe(false)
+  })
+
+  it('停用通知中同步退出登录：observeVersion 不得在 discard 之后自行重新取钥', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    const pending = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(1))
+    await pending
+    keeper.subscribe((handle) => {
+      if (handle === undefined)
+        keeper.discard()
+    })
+    keeper.observeVersion(2)
+    expect(remote.calls).toHaveLength(1)
+    expect(keeper.current()).toBeUndefined()
+    expect(seen).toEqual([1, undefined])
+  })
+
+  it('新钥通知中 discard 并重新 ensure：旧调用 discarded，嵌套通知后不能再给剩余订阅者发旧钥', async () => {
+    const remote = controllableFetch()
+    const { keeper } = keeperWith(remote.fetch)
+    let fresh: Promise<LocalKeyHandle | LocalKeyProblem> | undefined
+    keeper.subscribe((handle) => {
+      if (handle?.version === 7) {
+        keeper.discard()
+        fresh = keeper.ensure()
+      }
+    })
+    const lastSubscriber: (number | undefined)[] = []
+    keeper.subscribe(handle => lastSubscriber.push(handle?.version))
+    const pending = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(7))
+    expect(await pending).toEqual({ kind: 'discarded' })
+    expect(lastSubscriber).toEqual([undefined])
+    expect(remote.calls).toHaveLength(2)
+    const joined = keeper.ensure()
+    expect(remote.calls).toHaveLength(2)
+    const handle = await handleOf(1)
+    remote.calls[1]?.resolve(handle)
+    expect(await Promise.all([fresh, joined])).toEqual([handle, handle])
+    expect(lastSubscriber).toEqual([undefined, 1])
+  })
+
+  it('新钥通知中观察到更新版本：原 ensure 取得新版，不交回已停用的旧钥', async () => {
+    const remote = controllableFetch()
+    const { keeper } = keeperWith(remote.fetch)
+    keeper.subscribe((handle) => {
+      if (handle?.version === 1)
+        keeper.observeVersion(2)
+    })
+    const pending = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(remote.calls).toHaveLength(2)
+    const handle = await handleOf(2)
+    remote.calls[1]?.resolve(handle)
+    expect(await pending).toBe(handle)
+    expect(keeper.current()).toBe(handle)
+  })
+
+  it('新钥通知中连续观察到更新版本：原 ensure 有界重取，不加入自己后交回已停用的旧钥', async () => {
+    const remote = controllableFetch()
+    const { keeper, clock } = keeperWith(remote.fetch)
+    keeper.subscribe((handle) => {
+      if (handle !== undefined)
+        keeper.observeVersion(handle.version + 1)
+    })
+    const lastSubscriber: (number | undefined)[] = []
+    keeper.subscribe(handle => lastSubscriber.push(handle?.version))
+    const pending = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(1))
+    await settle()
+    expect(remote.calls).toHaveLength(2)
+    expect(lastSubscriber).toEqual([undefined])
+    remote.calls[1]?.resolve(await handleOf(2))
+    expect(await pending).toEqual({ kind: 'unavailable', retryAt: clock.now() + RETRY.initialMs })
+    expect(keeper.current()).toBeUndefined()
+    expect(remote.calls).toHaveLength(2)
+    expect(lastSubscriber).toEqual([undefined, undefined])
+    // 通知中已停用的候选不能清掉上一轮退避。
+    await clock.advance(RETRY.initialMs)
+    const next = keeper.ensure()
+    remote.calls[2]?.resolve(await handleOf(3))
+    await settle()
+    expect(remote.calls).toHaveLength(4)
+    remote.calls[3]?.resolve(await handleOf(4))
+    expect(await next).toEqual({ kind: 'unavailable', retryAt: clock.now() + 2 * RETRY.initialMs })
+    expect(remote.calls).toHaveLength(4)
   })
 
   it('丢掉会清掉退避与会话类失败的计数：换了人之后立即可以取', async () => {

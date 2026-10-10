@@ -13,12 +13,14 @@ const SESSION: SessionResponse = {
   user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'zhang.san', displayName: '张三', systemRole: 'member' },
   personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '张三' },
   csrfToken: 'csrf-new',
+  features: { localDraftsEnabled: true },
 }
 /** 别的标签页登录的人 */
 const OTHER_SESSION: SessionResponse = {
   user: { id: '0199a2c4-1f2e-7a3b-8c4d-000000000009', username: 'admin', displayName: '管理员', systemRole: 'admin' },
   personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-000000000009', name: '管理员' },
   csrfToken: 'csrf-admin',
+  features: { localDraftsEnabled: true },
 }
 const INSPECTED = { username: 'zhang.san', displayName: '张三', expiresAt: '2026-10-05T00:00:00.000Z' }
 const NO_DOCUMENTS = { [documentsKey(SESSION)]: () => json(200, { items: [], nextCursor: null }) }

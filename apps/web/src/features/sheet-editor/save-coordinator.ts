@@ -17,7 +17,9 @@
 // 不说"已保存到云端"、离开提示拦下，期间到来的旧的保存确认也不把它说成已保存；写进模型之后由修改序号接着算，到点却没有改动时随之清除。
 import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
 import type { UncommittedInput } from '../../editor/index.ts'
+import type { ContentFormat } from '../../shared/outbox/draft-record.ts'
 import type { Incompatibility } from './client-format.ts'
+import type { DraftCaptureRef, DraftMutation, PreparedDraft, WorkingDraft } from './working-draft.ts'
 import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isNotFoundError } from '../../shared/api/index.ts'
 import { incompatibilityOf } from './client-format.ts'
@@ -35,19 +37,8 @@ export interface SaveEditor {
   readonly onUncommittedInputChange: (listener: () => void) => () => void
 }
 
-/** 一次捕获：保存上传的就是它（snapshot-capture.ts 的 takeSnapshot 给出） */
-export interface SnapshotCapture {
-  /** 捕获时本页的修改序号（与快照在同一个同步段里读出） */
-  readonly seq: number
-  /** 快照的 JSON 文本 */
-  readonly snapshot: string
-  /** 快照的 UTF-8 字节数（与服务端解压后的字节同一个口径） */
-  readonly bytes: number
-  /** "公式待更新"：捕获时公式还没收齐 */
-  readonly formulasPending: boolean
-  /** 快照 UTF-8 字节的 SHA-256（会话内去重的键，连同 formulasPending）：没算或算不出时为 undefined，这一次不去重、确认之后也不留键 */
-  readonly digest: string | undefined
-}
+/** 保存调度只传来源拥有的引用；正文仅由固定上传交给请求层。 */
+export type SnapshotCapture = DraftCaptureRef
 
 /**
  * 准备好的捕获；提交不了正在编辑的单元格时为 'cell-editing'（保存中止，只是提示）；轮到时会话已知不对（令牌失效、正在确认、不是本人）
@@ -76,10 +67,9 @@ export interface SaveRequest {
   readonly baseRevision: number
   readonly requestId: string
   readonly clientInstanceId: string
-  /** 捕获时本页的修改序号 */
+  /** 来源中这份字节的真实内容序号，与编辑器修改计数分开。 */
   readonly localSeq: number
-  /** 捕获的快照 JSON 文本 */
-  readonly snapshot: string
+  readonly format: ContentFormat
   /** "公式待更新"（M3-P3 设计 §3.8）：捕获时公式还没收齐，服务端记在文档上 */
   readonly formulasPending: boolean
 }
@@ -88,7 +78,10 @@ export interface SaveRequest {
 export type CompressSnapshot = (snapshot: string) => Promise<Uint8Array<ArrayBuffer>>
 
 /** 上传压缩后的快照；失败时抛出请求层的错误（ApiError、NetworkError、ResponseFormatError），结果按"确定被拒"或"未知"归类。 */
-export type SendSave = (request: SaveRequest, body: Uint8Array<ArrayBuffer>) => Promise<SaveContentResponse>
+export type SaveSendIntent = 'save' | 'reconcile'
+/** 许可在异步准备后失效：没有发出本次保存，不制造网络故障或新的未知结果。 */
+export type SaveSendResult = SaveContentResponse | { readonly kind: 'not-sent' }
+export type SendSave = (request: SaveRequest, body: Uint8Array<ArrayBuffer>, intent: SaveSendIntent) => Promise<SaveSendResult>
 
 /**
  * 已保存到云端、有未保存的修改、保存中、版本冲突、保存失败；本页与服务端不兼容（M3-P3）：本页的版本过旧，需要刷新（outdated）；
@@ -138,7 +131,7 @@ export type SaveOutcome
   /** 没有成功；发过请求时 requestId 是最后发出的那一个 */
     | { readonly kind: 'failed', readonly failure: SaveFailure, readonly requestId: string | undefined }
   /** 没有做：停住了（stop），或者在终态；轮到时会话已知不对，没有发（session，来源给出） */
-    | { readonly kind: 'skipped', readonly reason: 'stopped' | 'ended' | 'session' }
+    | { readonly kind: 'skipped', readonly reason: 'stopped' | 'ended' | 'session' | 'superseded' }
 
 export interface SaveView {
   readonly status: SaveStatus
@@ -174,8 +167,11 @@ export interface SaveView {
 
 export interface SaveCoordinatorOptions {
   readonly editor: SaveEditor
-  readonly compress: CompressSnapshot
+  readonly draft: WorkingDraft
   readonly send: SendSave
+  readonly now?: () => number
+  /** 本机修改结果单独交回；此前的内容落盘不代表请求标记已落盘。 */
+  readonly onDraftResult?: (result: DraftMutation) => void | Promise<void>
   /** 打开时内容的修订号（ETag） */
   readonly baseRevision: number
   /** 本页这次加载的标识 */
@@ -215,7 +211,7 @@ export interface SaveCoordinator {
    */
   readonly save: (source: CaptureSource, options: SaveOptions) => Promise<SaveOutcome>
   /** 自动保存在保存之外捕获了一次（定时的捕获，autosave.ts）：视图里的大小随之更新，80% 的提示不等上传（US-M3-14） */
-  readonly noteCapture: (capture: SnapshotCapture) => void
+  readonly noteCapture: (capture: Pick<DraftCaptureRef, 'bytes'>) => void
   /**
    * 捕获在保存之外出了意外的错误（自动保存的定时捕获，autosave.ts）：上报，显示保存失败（意外的错误）；下一次保存成功时清掉
    */
@@ -274,7 +270,7 @@ interface CaptureRecord {
 /**
  * 结果未知的保存（网络错误、5xx、回包读不出来）：服务端可能已经提交了。认出"自己追自己"只要序号与捕获的记录，
  * 不留快照本身，断网期间多次保存时内存不随之增长（审查 B9）：
- * - localSeq：请求里的修改序号，冲突的来源按它认。同一个 requestId 的请求不变，一直是第一次发出时的序号；
+ * - localSeq：请求里的实际草稿内容序号，冲突的来源按它认。同一个 requestId 的请求不变，一直是第一次发出时的序号；
  * - capture：内容与这个请求相同的最近一次捕获，认出它已经提交时，按它确认（Codex 评审 CX2）；
  * - adopted：编辑权续上时认出的就是它（adoptOwnRevision）——服务端说期间的那一版正是它，基准已按它确认。
  *   在途时被认出的，它自己的回包随后以结果未知失败，就是提交了、回包丢了（复验 C3）
@@ -321,9 +317,22 @@ function sameKey(a: SnapshotKey | undefined, b: SnapshotKey | undefined): boolea
   return a !== undefined && b !== undefined && a.digest === b.digest && a.formulasPending === b.formulasPending
 }
 
-function recordOf(capture: SnapshotCapture): CaptureRecord {
-  return { seq: capture.seq, formulasPending: capture.formulasPending, key: capture.digest === undefined ? undefined : { digest: capture.digest, formulasPending: capture.formulasPending } }
+function recordOf(capture: PreparedDraft): CaptureRecord {
+  return { seq: capture.ref.editorSeq, formulasPending: capture.formulasPending, key: capture.digest === undefined ? undefined : { digest: capture.digest, formulasPending: capture.formulasPending } }
 }
+
+interface OwnedUpload {
+  readonly prepared: PreparedDraft
+  request: SaveRequest
+  running: boolean
+  confirmedRevision: number | undefined
+  confirmation: Promise<void> | undefined
+}
+
+type ReplayResult
+  = | { readonly kind: 'none' | 'paused' }
+    | { readonly kind: 'committed', readonly request: SaveRequest, readonly capture: CaptureRecord | undefined, readonly ref: DraftCaptureRef }
+    | { readonly kind: 'unknown' | 'not-committed', readonly request: SaveRequest, readonly error: unknown }
 
 export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoordinator {
   const { editor, send, clientInstanceId, newRequestId } = options
@@ -339,6 +348,10 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   /** 保存一个接一个：最后排上的那一次结束时兑现（从不失败） */
   let tail: Promise<void> = Promise.resolve()
   let stopped = false
+  let disposed = false
+  let owned: OwnedUpload | undefined
+  let localTail: Promise<void> = Promise.resolve()
+  let replaying: ReturnType<SaveCoordinator['replayUnknownOutcome']> | undefined
   let problem: SaveProblem | undefined
   let conflict: RevisionConflictDetails | null | undefined
   /** 与服务端不兼容（终态） */
@@ -349,7 +362,8 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   let confirmedKey: SnapshotKey | undefined
   /** 最近一次被拒、再试也一样的内容的键（要等新内容）：去重的保存不再发它；任何一次成功之后清掉 */
   let rejectedKey: SnapshotKey | undefined
-  /** 结果未知的保存，按 requestId：冲突的来源是其中之一时，说明它其实已经提交（自己追自己） */
+  let rejectedRef: DraftCaptureRef | undefined
+  /** 结果未知的保存，按 requestId：冲突的来源是它时，说明它其实已经提交（自己追自己） */
   const unconfirmed = new Map<string, UnconfirmedSave>()
   /** 最近一次结果未知的请求：内容与基准都没变时，重试原样再发它（requestId 与请求的各项都不变） */
   let retryable: SaveRequest | undefined
@@ -415,23 +429,73 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
 
   /** 服务端确认了这次捕获的内容，修订号是 revision */
   function confirm(capture: CaptureRecord, revision: number): void {
-    baseRevision = revision
+    baseRevision = Math.max(baseRevision, revision)
     savedSeq = Math.max(savedSeq, capture.seq)
     formulasPending = capture.formulasPending
     confirmedKey = capture.key
+    rejectedKey = undefined
+    rejectedRef = undefined
     unconfirmed.clear()
     retryable = undefined
   }
 
-  /**
-   * 这次的请求。内容、基准与"公式待更新"都没变：原样再发结果未知的那个请求（服务端按幂等返回原来的结果，或者照常处理）。
-   * 同一个 requestId 的请求不变，序号也不换成这次捕获的：服务端记下的来源是第一次的序号，换了就认不出自己追自己（Codex 评审 CX2）。
-   * 标记不同就是另一个请求（服务端把它算进负载摘要，M3-P3 设计 §3.8）：换新的 requestId，否则同一个 requestId 会被当成冲突
-   */
-  function prepare(capture: SnapshotCapture): SaveRequest {
-    if (retryable !== undefined && retryable.snapshot === capture.snapshot && retryable.baseRevision === baseRevision && retryable.formulasPending === capture.formulasPending)
-      return retryable
-    return { baseRevision, requestId: newRequestId(), clientInstanceId, localSeq: capture.seq, snapshot: capture.snapshot, formulasPending: capture.formulasPending }
+  /** 新上传的固定元数据；重放直接使用原对象，不重新准备标识、格式或序号。 */
+  function prepare(capture: PreparedDraft): SaveRequest {
+    return Object.freeze({ baseRevision, requestId: newRequestId(), clientInstanceId, localSeq: capture.contentSeq, format: capture.format, formulasPending: capture.formulasPending })
+  }
+
+  async function notifyDraft(result: DraftMutation): Promise<void> {
+    if (disposed)
+      return
+    try {
+      await options.onDraftResult?.(result)
+    }
+    catch (error) {
+      options.reportError(error)
+    }
+  }
+
+  function release(target: OwnedUpload): void {
+    if (owned !== target)
+      return
+    options.draft.release(target.prepared)
+    owned = undefined
+  }
+
+  function releaseConfirmed(target: OwnedUpload): void {
+    release(target)
+    if (unconfirmed.get(target.request.requestId)?.adopted === true)
+      unconfirmed.delete(target.request.requestId)
+  }
+
+  async function finishUpload(target: OwnedUpload): Promise<void> {
+    target.running = false
+    if (target.confirmedRevision !== undefined) {
+      await target.confirmation
+      releaseConfirmed(target)
+    }
+  }
+
+  /** 同步接受云端事实；下一次准备和移交等待本机确认链。 */
+  async function confirmLocal(target: OwnedUpload, revision: number): Promise<void> {
+    if (target.confirmedRevision !== undefined && target.confirmedRevision >= revision)
+      return target.confirmation ?? Promise.resolve()
+    target.confirmedRevision = revision
+    const confirmation = localTail.then(async () => {
+      if (!disposed)
+        await notifyDraft(await options.draft.confirm(target.prepared, revision))
+    }).catch((error: unknown) => options.reportError(error)).then(() => {
+      if (!target.running)
+        releaseConfirmed(target)
+    })
+    target.confirmation = confirmation
+    localTail = confirmation
+    return confirmation
+  }
+
+  async function mark(target: OwnedUpload): Promise<void> {
+    const request = target.request
+    await notifyDraft(await options.draft.markInFlight(target.prepared, { requestId: request.requestId, clientInstanceId, localSeq: request.localSeq, sentAt: (options.now ?? Date.now)() }))
   }
 
   /**
@@ -479,39 +543,84 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   /**
    * 原样重发最近一次结果未知的保存（见 SaveCoordinator.replayUnknownOutcome）：先等进行中与排着的保存，交回核对的结果，从不失败
    */
-  async function replay(): Promise<'none' | 'committed' | 'not-committed' | 'unknown'> {
-    await tail
+  async function replayOnce(allowStopped = false): Promise<ReplayResult> {
     const request = retryable
-    if (request === undefined)
-      return 'none'
+    const target = owned
+    if (disposed || request === undefined || target?.request !== request)
+      return { kind: 'none' }
     const record = unconfirmed.get(request.requestId)
-    let body: Uint8Array<ArrayBuffer>
+    target.running = true
     try {
-      body = await options.compress(request.snapshot)
-    }
-    catch (error) {
-      options.reportError(error)
-      return 'unknown'
-    }
-    try {
-      const result = await send(request, body)
-      // 那一次其实已经提交（重放给出原来的结果）：按它的捕获确认，之前"保存失败"的说明随之不再成立
+      await mark(target)
+      if (disposed || (!allowStopped && (stopped || ended())))
+        return { kind: 'none' }
+      const result = await send(request, target.prepared.gzip, allowStopped ? 'reconcile' : 'save')
+      if (disposed)
+        return { kind: 'none' }
+      // 既往已发送的请求仍未知；保留原错误和 pin，不能把未发出当成新失败或提交。
+      if ('kind' in result)
+        return { kind: 'paused' }
       if (record !== undefined)
         confirm(record.capture, result.revision)
+      await confirmLocal(target, result.revision)
+      release(target)
       if (problem?.kind === 'request' && !isDefiniteRejection(problem.error))
         problem = undefined
       update()
-      return 'committed'
+      return { kind: 'committed', request, capture: record?.capture, ref: target.prepared.ref }
     }
     catch (error) {
-      // 读不到了（重放也要求能访问）、登录或令牌的问题（到不了重放那一步）：说不准它有没有提交
+      if (disposed)
+        return { kind: 'none' }
+      if (unconfirmed.get(request.requestId)?.adopted === true && !isDefiniteRejection(error)) {
+        await localTail
+        release(target)
+        return { kind: 'committed', request, capture: record?.capture, ref: target.prepared.ref }
+      }
+      const details = conflictDetails(error)
+      const own = ownUnconfirmedSave(details?.source)
+      if (details !== undefined && details !== null && own?.[0] === request.requestId) {
+        confirm(own[1].capture, details.currentRevision)
+        await confirmLocal(target, details.currentRevision)
+        release(target)
+        problem = undefined
+        update()
+        return { kind: 'committed', request, capture: own[1].capture, ref: target.prepared.ref }
+      }
       if (!isDefiniteRejection(error) || isNotFoundError(error) || isAuthenticationError(error) || isCsrfTokenError(error))
-        return 'unknown'
-      // 别的确定拒绝（编辑权已失效、不能编辑、修订号冲突、本页过旧等）说明它没有提交：提交过的话重放先于这些检查，会给出原来的结果
+        return { kind: 'unknown', request, error }
+      if (classifySaveError(error).kind === 'content') {
+        rejectedKey = record?.capture.key
+        rejectedRef = target.prepared.ref
+      }
       unconfirmed.delete(request.requestId)
       retryable = undefined
+      release(target)
       update()
-      return 'not-committed'
+      return { kind: 'not-committed', request, error }
+    }
+    finally {
+      await finishUpload(target)
+    }
+  }
+
+  /** 外部核对等排着的保存结束；队列内部只调 replayOnce，避免等待自身。 */
+  async function replay(): ReturnType<SaveCoordinator['replayUnknownOutcome']> {
+    if (replaying !== undefined)
+      return replaying
+    const run = tail.then(async () => {
+      await localTail
+      const result = await replayOnce(true)
+      return result.kind === 'paused' ? 'unknown' : result.kind
+    })
+    tail = run.then(() => undefined)
+    replaying = run
+    try {
+      return await run
+    }
+    finally {
+      if (replaying === run)
+        replaying = undefined
     }
   }
 
@@ -540,9 +649,10 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   }
 
   /** 意外的错误（捕获、压缩）：上报，显示保存失败；没有上传 */
-  function unexpected(error: unknown): SaveOutcome {
+  function unexpected(error: unknown, report = true): SaveOutcome {
     problem = { kind: 'unexpected', error }
-    options.reportError(error)
+    if (report)
+      options.reportError(error)
     return { kind: 'failed', failure: { kind: 'unexpected' }, requestId: undefined }
   }
 
@@ -551,26 +661,54 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     return retryable !== undefined || unconfirmed.size > 0
   }
 
-  /** 发出这一次捕获（自己追自己时换上当前修订号重发一次，P4 设计 §3.5.2） */
-  async function upload(capture: SnapshotCapture, record: CaptureRecord, body: Uint8Array<ArrayBuffer>): Promise<SaveOutcome> {
-    let request = prepare(capture)
+  /** 未知时继续持有原 pin，明确结束后释放。 */
+  async function upload(capture: PreparedDraft, record: CaptureRecord): Promise<SaveOutcome> {
+    const target: OwnedUpload = { prepared: capture, request: prepare(capture), running: true, confirmedRevision: undefined, confirmation: undefined }
+    owned = target
+    try {
+      return await uploadOwned(target, record)
+    }
+    finally {
+      await finishUpload(target)
+    }
+  }
+
+  async function uploadOwned(target: OwnedUpload, record: CaptureRecord): Promise<SaveOutcome> {
+    const capture = target.prepared
     let rebased = false
     for (;;) {
+      const request = target.request
       const earlierUnknown = unconfirmed.has(request.requestId)
-      unconfirmed.set(request.requestId, { localSeq: request.localSeq, capture: record, adopted: false })
       try {
-        const result = await send(request, body)
-        // 原样再发的请求，内容与这次捕获的相同：确认到这次捕获的序号
+        await mark(target)
+        if (disposed || stopped || ended()) {
+          release(target)
+          return ended() ? SKIPPED_ENDED : SKIPPED_STOPPED
+        }
+        unconfirmed.set(request.requestId, { localSeq: request.localSeq, capture: record, adopted: false })
+        const result = await send(request, capture.gzip, 'save')
+        if (disposed)
+          return SKIPPED_STOPPED
+        if ('kind' in result) {
+          if (!earlierUnknown) {
+            unconfirmed.delete(request.requestId)
+            release(target)
+          }
+          return SKIPPED_STOPPED
+        }
         confirm(record, result.revision)
+        await confirmLocal(target, result.revision)
+        release(target)
         problem = undefined
         rejectedKey = undefined
         return { kind: 'saved', requestId: request.requestId }
       }
       catch (error) {
-        // 在途时编辑权续上、认出的正是这一次（基准已按它确认）：它自己的回包随后以结果未知失败，就是提交了、回包丢了——
-        // 按成功收尾：不说保存失败，也不留着原样再发（复验 C3）。明确的拒绝照常按失败处理：它说的是这一次没有生效的原因
-        // （会话、权限等），要照常交给页面
+        if (disposed)
+          return SKIPPED_STOPPED
         if (!isDefiniteRejection(error) && unconfirmed.get(request.requestId)?.adopted === true) {
+          await localTail
+          release(target)
           problem = undefined
           rejectedKey = undefined
           return { kind: 'saved', requestId: request.requestId }
@@ -580,71 +718,102 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
         if (own === undefined || details === undefined || details === null) {
           fail(error, request, earlierUnknown)
           const failure = classifySaveError(error)
-          if (failure.kind === 'content')
+          if (failure.kind === 'content') {
             rejectedKey = record.key
+            rejectedRef = capture.ref
+          }
+          if (retryable !== request) {
+            await localTail
+            release(target)
+          }
           return { kind: 'failed', failure, requestId: request.requestId }
         }
-        // 那次保存已经提交：它就是当前修订。换上当前修订号作基准，用新的 requestId 重发这一次的内容
         confirm(own[1].capture, details.currentRevision)
-        request = prepare(capture)
+        await confirmLocal(target, details.currentRevision)
+        target.request = prepare(capture)
+        target.confirmedRevision = undefined
+        target.confirmation = undefined
         rebased = true
       }
     }
   }
 
-  /** 轮到的这一次保存：向来源要捕获，检查体积、去重，压缩，发出 */
   async function attempt(source: CaptureSource, saveOptions: SaveOptions): Promise<SaveOutcome> {
-    if (stopped)
+    if (disposed || stopped)
       return SKIPPED_STOPPED
     if (ended())
       return SKIPPED_ENDED
-    let prepared: PreparedCapture
+    await localTail
+    const replayed = await replayOnce()
+    if (replayed.kind === 'paused')
+      return SKIPPED_STOPPED
+    if (replayed.kind === 'unknown' || replayed.kind === 'not-committed') {
+      fail(replayed.error, replayed.request, replayed.kind === 'unknown')
+      const failure = classifySaveError(replayed.error)
+      if (replayed.kind === 'unknown' || failure.kind !== 'content')
+        return { kind: 'failed', failure, requestId: replayed.request.requestId }
+    }
+    if (disposed || stopped)
+      return SKIPPED_STOPPED
+    if (ended())
+      return SKIPPED_ENDED
+    let capture: PreparedCapture
     try {
-      prepared = await source()
+      capture = await source()
     }
     catch (error) {
-      // 提交编辑、等公式收齐、捕获时出了意外：显示保存失败，而不是悄悄回到"有未保存的修改"（审查 B5）
       return unexpected(error)
     }
-    if (prepared === 'cell-editing') {
+    if (capture === 'cell-editing') {
       problem = { kind: 'cell-editing' }
       return { kind: 'failed', failure: { kind: 'cell-editing' }, requestId: undefined }
     }
-    // 会话已知不对：不发，说明照旧（页面的会话确认在说明）
-    if (prepared === 'session')
+    if (capture === 'session')
       return SKIPPED_SESSION
-    // 准备期间（提交单元格、等公式）停住了或者到了终态：不发
-    if (stopped)
+    if (disposed || stopped)
       return SKIPPED_STOPPED
     if (ended())
       return SKIPPED_ENDED
-    const capture = prepared
     snapshotBytes = capture.bytes
     if (capture.bytes > maxSnapshotBytes) {
       problem = { kind: 'too-large' }
       return { kind: 'failed', failure: { kind: 'content' }, requestId: undefined }
     }
-    const record = recordOf(capture)
-    if (saveOptions.dedupe) {
-      // 服务端已经有一模一样的内容（与标记）：不上传，按这次捕获的序号确认（基准不变）
-      if (sameKey(record.key, confirmedKey) && !outcomePending()) {
-        confirm(record, baseRevision)
-        problem = undefined
-        return DEDUPED
-      }
-      // 同样的内容刚被拒过、再试也一样：不再发，说明照旧
-      if (sameKey(record.key, rejectedKey))
-        return { kind: 'failed', failure: { kind: 'content' }, requestId: undefined }
+    // adoption 可在 source 等待期间新增本机确认；核验最新链与占用 pin 之间不留异步空隙。
+    for (;;) {
+      const confirming = localTail
+      await confirming
+      if (confirming === localTail)
+        break
     }
-    let body: Uint8Array<ArrayBuffer>
-    try {
-      // 压缩是本地的一步：出错按意外的错误处理，不当作结果未知的请求（复验 RB8）
-      body = await options.compress(capture.snapshot)
+    if (disposed || stopped || ended())
+      return ended() ? SKIPPED_ENDED : SKIPPED_STOPPED
+    const prepared = await options.draft.prepare(capture)
+    if (prepared.kind !== 'prepared') {
+      if (prepared.kind === 'superseded')
+        return { kind: 'skipped', reason: 'superseded' }
+      if (prepared.kind !== 'failed')
+        return SKIPPED_STOPPED
+      return unexpected(Object.assign(new Error(prepared.error.message), { name: prepared.error.name }), false)
     }
-    catch (error) {
-      return unexpected(error)
+    if (disposed || stopped || ended()) {
+      options.draft.release(prepared)
+      return ended() ? SKIPPED_ENDED : SKIPPED_STOPPED
     }
-    return upload(capture, record, body)
+    const record = recordOf(prepared)
+    const replayedSame = replayed.kind === 'committed' && (replayed.ref === capture || sameKey(record.key, replayed.capture?.key))
+    if (replayedSame || (saveOptions.dedupe && sameKey(record.key, confirmedKey) && !outcomePending())) {
+      confirm(record, baseRevision)
+      await notifyDraft(await options.draft.confirm(prepared, baseRevision))
+      options.draft.release(prepared)
+      problem = undefined
+      return replayedSame ? { kind: 'saved', requestId: replayed.request.requestId } : DEDUPED
+    }
+    if (saveOptions.dedupe && (capture === rejectedRef || sameKey(record.key, rejectedKey))) {
+      options.draft.release(prepared)
+      return { kind: 'failed', failure: { kind: 'content' }, requestId: undefined }
+    }
+    return upload(prepared, record)
   }
 
   return {
@@ -662,6 +831,8 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
         return false
       const [requestId, save] = own
       confirm(save.capture, revision)
+      if (owned?.request.requestId === requestId)
+        void confirmLocal(owned, revision)
       // 记录留着，记下是认出的：保存先得知编辑权中断时，在途的那一次是按旧的基准发出的，续上之后重发会得到冲突，来源正是它，
       // 照常按自己追自己换上新的基准；认出的正是在途的那一次时，它自己的回包随后以结果未知失败就按成功收尾（复验 C3）。
       // 下一次确认时清掉
@@ -718,9 +889,10 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     settled: async () => {
       await tail
       await verifying
+      await localTail
     },
     hasUnknownOutcome: () => retryable !== undefined,
-    busy: () => pendingSaves > 0 || verifying !== undefined,
+    busy: () => pendingSaves > 0 || verifying !== undefined || replaying !== undefined,
     replayUnknownOutcome: replay,
     hasUnsavedWork: () => conflict !== undefined || pendingSaves > 0 || editor.uncommittedInput() !== 'none' || editor.changeSeq() > savedSeq || formulasPending,
     block: kind => enterBlocked(kind, pendingSaves > 0),
@@ -739,6 +911,14 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       }
     },
     dispose: () => {
+      if (disposed)
+        return
+      disposed = true
+      stopped = true
+      if (owned !== undefined)
+        release(owned)
+      retryable = undefined
+      unconfirmed.clear()
       unsubscribeEditor()
       unsubscribeInput()
       listeners.clear()

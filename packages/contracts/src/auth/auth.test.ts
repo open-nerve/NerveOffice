@@ -16,13 +16,32 @@ describe('登录请求', () => {
 })
 
 describe('会话信息', () => {
+  const identity = {
+    user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'admin', displayName: '管理员', systemRole: 'admin' },
+    personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '管理员' },
+    csrfToken: 'token',
+  }
+
+  it.each([true, false])('服务端给出的本机草稿能力 %s 被保留，未知能力被丢弃', (localDraftsEnabled) => {
+    expect(sessionResponseSchema.parse({ ...identity, features: { localDraftsEnabled, future: true } }))
+      .toEqual({ ...identity, features: { localDraftsEnabled } })
+  })
+
+  it('旧后端没有能力字段时关闭本机草稿，不猜测为开启', () => {
+    expect(sessionResponseSchema.parse(identity)).toEqual({ ...identity, features: { localDraftsEnabled: false } })
+  })
+
+  it.each([null, [], {}, { localDraftsEnabled: 'false' }, { localDraftsEnabled: 0 }, { localDraftsEnabled: null }])('能力形状错误 %j 仍是格式错误', (features) => {
+    expect(sessionResponseSchema.safeParse({ ...identity, features }).success).toBe(false)
+  })
+
   it('账户、个人空间与 CSRF 令牌', () => {
     const session = {
       user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'admin', displayName: '管理员', systemRole: 'admin' },
       personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '管理员' },
       csrfToken: 'token',
     }
-    expect(sessionResponseSchema.parse(session)).toEqual(session)
+    expect(sessionResponseSchema.parse(session)).toEqual({ ...session, features: { localDraftsEnabled: false } })
     expect(sessionResponseSchema.safeParse({ ...session, user: { ...session.user, systemRole: 'root' } }).success).toBe(false)
   })
 
@@ -31,12 +50,13 @@ describe('会话信息', () => {
       user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'admin', displayName: '管理员', systemRole: 'admin', avatar: 'x' },
       personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '管理员', quota: 1 },
       csrfToken: 'token',
-      features: [],
+      features: { localDraftsEnabled: true, future: [] },
     }
     expect(sessionResponseSchema.parse(session)).toEqual({
       user: { id: session.user.id, username: 'admin', displayName: '管理员', systemRole: 'admin' },
       personalSpace: { id: session.personalSpace.id, name: '管理员' },
       csrfToken: 'token',
+      features: { localDraftsEnabled: true },
     })
   })
 })

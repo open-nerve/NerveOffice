@@ -174,6 +174,8 @@ export interface LeaseHolder {
   readonly holder: UserSummary
   /** 持有者就是自己（在别的标签页或设备上） */
   readonly sameUser: boolean
+  /** 服务端租约绑定本次登录（同一浏览器）；位置判定保留这个事实，不从本机锁反推它。 */
+  readonly sameSession: boolean
   /**
    * 服务端回答时，持有者最后一次操作在几分钟之前（向下取整）：按服务端的时间算（回答的时刻减去最后活动时间），
    * 不拿浏览器的时钟去比。服务端没给出回答的时刻（响应头 Date）时为 undefined，页头不说"多久之前"
@@ -191,7 +193,7 @@ export interface LeaseHolder {
  * - taken-over：本人在别处接手了编辑（M3-P5 设计 §3.7）——this-browser 是本浏览器的另一个标签页（本机锁被抢，核对得知这一代已被取代，
  *   M3-P6 设计 §3.13）；
  *   elsewhere 是另一台设备或浏览器（续租或保存得到 taken_over、forced 为假：那边以本人接管申请，服务端结束了这一代）。服务端的这个回答说不了
- *   在哪，租约照它给出 elsewhere；本浏览器里接手的那一页随后会来抢本机锁，页面按本机的证据改说 this-browser（edit-mode.ts 的 locateTakeover）；
+ *   在哪，租约照它给出 elsewhere；页面另读编辑状态的 sameSession 定位，读不到确定的本人持有者时才回退到本机证据（M4-P2 S2、DEF-071）；
  * - forced：空间管理员（个人空间是所有者）强制接管了编辑（M3-P5 设计 §3.8：taken_over、forced 为真）。by 是接管的人：转为阅读之后读一次
  *   编辑状态，正在编辑的是别人就是他（edit-mode.ts 补上；没读到时为 undefined，只说空间管理员强制接管了编辑）；
  * - handed-over：本页这一代已经交给了请求编辑的人（handed_over：交出的回答没有在时限之内收到、留在了编辑，下一次心跳或保存才得知；
@@ -364,6 +366,8 @@ export interface EditLeaseOptions {
    * 第一次续租）。不需要时不给
    */
   readonly onRenewed?: ((sentAt: number) => void) | undefined
+  /** 当前代次、当前会话的有效续租/核对版本；恢复锁之前交回，旧回包不能启用过时密钥。 */
+  readonly onLocalKeyVersion?: ((version: number | null) => void) | undefined
 }
 
 /**
@@ -388,7 +392,7 @@ function minutesBetween(from: number, to: number | undefined): number | undefine
  * 响应头 Date）算，不拿浏览器的时钟去比；没有回答的时刻时不说"多久之前"
  */
 export function leaseHolderOf(editor: DocumentEditor, serverTime: number | undefined): LeaseHolder {
-  return { holder: editor.holder, sameUser: editor.sameUser, lastActiveMinutes: minutesBetween(Date.parse(editor.lastActiveAt), serverTime) }
+  return { holder: editor.holder, sameUser: editor.sameUser, sameSession: editor.sameSession, lastActiveMinutes: minutesBetween(Date.parse(editor.lastActiveAt), serverTime) }
 }
 
 /** 申请被占用（EDIT_LEASE_HELD）时的持有者；别的失败为 undefined。详情认不出时 holder 为 undefined */
@@ -710,6 +714,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
     void api.release(documentId, token).catch(() => undefined)
   }
 
+  function publishKeyVersion(renewed: RenewedEditLease, token: string, round: number): void {
+    if (state === 'holding' && recovery === undefined && credentials.token === token && resumes === round)
+      options.onLocalKeyVersion?.(renewed.localKeyVersion)
+  }
+
   async function renewOnce(): Promise<void> {
     const sentAt = clock.now()
     const round = resumes
@@ -747,6 +756,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
     // 这一代还在用（没有释放、失效、放弃）：心跳带来的请求交给页面，并告诉页面服务端处理这次续租时这一代是当前的、这次续租是什么时候发出的
     // （在 try 之外：页面那边出错不当作续租失败）
     if (renewed !== undefined && !ended()) {
+      publishKeyVersion(renewed, used, round)
+      if (ended())
+        return
       options.onRequest?.(renewed.request)
       options.onRenewed?.(sentAt)
     }
@@ -806,9 +818,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
       if (state === 'paused')
         return { kind: 'unknown', error: undefined }
       const used = credentials.token
+      const round = resumes
+      let renewed: RenewedEditLease | undefined
       let failure: { readonly error: unknown } | undefined
       try {
-        await api.renew(documentId, used, idleSeconds())
+        renewed = await api.renew(documentId, used, idleSeconds())
       }
       catch (error) {
         failure = { error }
@@ -819,8 +833,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
       // 期间续上换了一代（心跳、保存得知失效之后）：这次回答说的是上一代，再核对现在的这一代
       if (used !== credentials.token)
         continue
-      if (failure === undefined)
-        return { kind: 'current' }
+      if (failure === undefined) {
+        if (renewed !== undefined)
+          publishKeyVersion(renewed, used, round)
+        return ended() ? { kind: 'ended', loss: undefined } : { kind: 'current' }
+      }
       const loss = leaseLossOf(failure.error)
       if (loss === undefined)
         return { kind: 'unknown', error: failure.error }

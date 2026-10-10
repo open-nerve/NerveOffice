@@ -10,6 +10,7 @@ import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } fr
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceTrashPath } from '../../shared/lib/space-paths.ts'
+import { connectionUnavailable, useConnectionState } from '../../shared/lib/use-connection-state.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Button, buttonVariants, FieldProblem, Input, Label, RetryButton, Skeleton } from '../../shared/ui/index.ts'
@@ -165,6 +166,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
   readonly onSubmit: (value: string) => void
   readonly onCancel: () => void
 }) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const [value, setValue] = useState(name)
   const inputId = useId()
   const problemId = useId()
@@ -176,7 +178,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
       className="flex flex-wrap items-end gap-2 border-t bg-muted/30 px-4 py-3"
       onSubmit={(event) => {
         event.preventDefault()
-        if (valid && !pending)
+        if (valid && !pending && connectionUnavailable() === undefined)
           onSubmit(value.trim())
       }}
     >
@@ -185,9 +187,10 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
         {/* eslint-disable-next-line jsx-a11y/no-autofocus -- 点了改名才出现的输入框：焦点直接给它，不落到 body */}
         <Input id={inputId} value={value} autoFocus aria-invalid={!valid} aria-describedby={valid ? undefined : problemId} onChange={event => setValue(event.target.value)} />
       </div>
-      <Button type="submit" size="sm" aria-disabled={pending || !valid} aria-describedby={valid ? undefined : problemId}>{pending ? text.saving : text.save}</Button>
+      <Button type="submit" size="sm" aria-disabled={pending || !valid || unavailable !== undefined} aria-describedby={valid ? undefined : problemId}>{pending ? text.saving : text.save}</Button>
       <Button type="button" variant="ghost" size="sm" aria-disabled={pending} onClick={() => !pending && onCancel()}>{text.cancel}</Button>
       <FieldProblem id={problemId} problem={problem} />
+      {unavailable !== undefined && <p className="basis-full text-sm text-muted-foreground">{unavailable}</p>}
       {error !== undefined && (
         <Alert variant="destructive" className="basis-full">
           <AlertDescription>{error}</AlertDescription>
@@ -217,6 +220,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
 export function ItemActions({ panelId, name, validateName, permissions, request, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry, trashReachable = true, goneTexts = SPACE_GONE_TEXTS }: ItemActionsProps) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
   /**
    * 上一次失败之后列表刷新好了没有：留在面板里的说明（改名、复制）据此说"已刷新"还是"没能刷新"（第四批）；
@@ -277,12 +281,14 @@ export function ItemActions({ panelId, name, validateName, permissions, request,
   }, [gone])
 
   function run(attempt: Attempt): void {
-    if (!mutation.isPending)
+    if (!mutation.isPending && connectionUnavailable() === undefined)
       mutation.mutate(attempt)
   }
 
   /** 选一种操作：上一次操作的失败不带进新打开的表单（三种操作共用一个变更，M2-P6 复核 G1） */
   function choose(operation: Exclude<Operation, 'delete'>): void {
+    if (connectionUnavailable() !== undefined)
+      return
     mutation.reset()
     setChosen(operation)
   }
@@ -388,16 +394,16 @@ export function ItemActions({ panelId, name, validateName, permissions, request,
 
   return (
     <div id={panelId} className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-4 py-2">
-      {allows(permissions, operations, 'rename') && <Button type="button" variant="outline" size="sm" onClick={() => choose('rename')}>{text.rename}</Button>}
-      {allows(permissions, operations, 'move') && <Button type="button" variant="outline" size="sm" onClick={() => choose('move')}>{text.move}</Button>}
-      {allows(permissions, operations, 'copy') && <Button type="button" variant="outline" size="sm" onClick={() => choose('copy')}>{text.copy}</Button>}
+      {allows(permissions, operations, 'rename') && <Button type="button" variant="outline" size="sm" aria-disabled={unavailable !== undefined} onClick={() => choose('rename')}>{text.rename}</Button>}
+      {allows(permissions, operations, 'move') && <Button type="button" variant="outline" size="sm" aria-disabled={unavailable !== undefined} onClick={() => choose('move')}>{text.move}</Button>}
+      {allows(permissions, operations, 'copy') && <Button type="button" variant="outline" size="sm" aria-disabled={unavailable !== undefined} onClick={() => choose('copy')}>{text.copy}</Button>}
       {shareEntry?.(() => cancelRef.current?.focus())}
       {permissions.canDelete && (
         <Button
           type="button"
           variant="outline"
           size="sm"
-          aria-disabled={mutation.isPending}
+          aria-disabled={mutation.isPending || unavailable !== undefined}
           onClick={() => run({
             operation: 'delete',
             run: async () => {
@@ -409,6 +415,7 @@ export function ItemActions({ panelId, name, validateName, permissions, request,
           {mutation.isPending ? text.deleting : text.delete}
         </Button>
       )}
+      {unavailable !== undefined && <p className="basis-full text-sm text-muted-foreground">{unavailable}</p>}
       <Button ref={cancelRef} type="button" variant="ghost" size="sm" onClick={onClose}>{text.cancel}</Button>
       {/* 留着之前取到的权限、重新取却失败了（DEF-040：例如再次展开时缓存里有、重新取得到 5xx）：上面列的操作可能已经过时，
           说明没能刷新、给出重试；重试成功、说明随之消失时焦点交给"取消"。排在操作之后：说明晚到时不把正要点的按钮挤开。

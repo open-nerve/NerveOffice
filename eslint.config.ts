@@ -799,10 +799,10 @@ const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
  * 页面自检与 E2E 共用的文件（M3-P2 设计 §3.5，相对编辑器元素的路径）：只读入口的清单与预期、比较口径、自检结果的格式、
  * 模式切换的计时（S5：E2E 的实测与真实 Safari 的自检用同一套）、捕获时机复核的样本（M3-P4 S1：E2E 的生成器写库，自检按它核对）、
  * 测试构建的自动保存控制（M3-P4 设计 §3.14：E2E 用它挂在 window 上的名字、sessionStorage 的键与日志的写法）、交接日志（M3-P5 设计 §3.13 的
- * 观察钩子：E2E 与真实 Safari 的页面自检用它挂在 window 上的名字与记录的写法）。
+ * 观察钩子：E2E 与真实 Safari 的页面自检用它挂在 window 上的名字与记录的写法）、计算中重建的真实准备交错（M4-P2 S4）。
  * 它们在 editor/testing/ 下（只在测试构建里），E2E 经模块边界的例外引用它们，所以它们不引用任何模块（nerve/editor-testing-shared）
  */
-const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts', 'testing/capture-samples.ts', 'testing/autosave-control.ts', 'testing/handover-log.ts']
+const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts', 'testing/capture-samples.ts', 'testing/autosave-control.ts', 'testing/handover-log.ts', 'testing/rebuild-calculation-gate.ts']
 
 /** 链接地址判定的跨引擎用例（M3-P3 设计 §3.2，相对 contracts 元素的路径）：Node 的单元测试与 E2E 共用的测试辅助 */
 const LINK_ADDRESS_CASES_FILE = 'documents/link-address.test-support.ts'

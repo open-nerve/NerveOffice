@@ -237,6 +237,22 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
   let current: LocalKeyHandle | undefined
   let disposed = false
 
+  function closeResources(): void {
+    mirror?.close()
+    store.close()
+  }
+
+  /** dispose 立即关当前资源；已开始的操作可能随后才打开连接，整段实际结束时再收尾（仍在原操作锁内）。 */
+  async function duringLifetime<T>(task: () => Promise<T>): Promise<T> {
+    try {
+      return await task()
+    }
+    finally {
+      if (disposed)
+        closeResources()
+    }
+  }
+
   function stateOf(key: DraftKey): DocumentState {
     const id = JSON.stringify([key.userId, key.documentId])
     let state = documents.get(id)
@@ -252,8 +268,10 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
    * 跨边界不抛异常；队列照样往下走
    */
   async function enqueue<T>(key: DraftKey, task: (state: DocumentState) => Promise<T>, failed: (error: FailureDescription) => T): Promise<T> {
+    if (disposed)
+      return failed(CLOSED)
     const state = stateOf(key)
-    const run = state.tail.then(async () => withOutboxLock(async () => disposed ? failed(CLOSED) : task(state))).catch((error: unknown) => failed(describeFailure(error)))
+    const run = state.tail.then(async () => withOutboxLock(async () => disposed ? failed(CLOSED) : duringLifetime(async () => task(state)))).catch((error: unknown) => failed(describeFailure(error)))
     state.tail = run.then(() => {})
     return run
   }
@@ -629,7 +647,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
         return { kind: 'failed', error: CLOSED }
       if (mirror === undefined)
         return { kind: 'listed', documentIds: [] }
-      const listed = await mirror.documents(userId)
+      const listed = await duringLifetime(async () => mirror.documents(userId))
       return listed.kind === 'unsupported' ? { kind: 'listed', documentIds: [] } : listed
     },
 
@@ -642,7 +660,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       if (disposed)
         return { kind: 'failed', error: CLOSED }
       try {
-        const outcome = await store.listNotices(userId)
+        const outcome = await duringLifetime(async () => store.listNotices(userId))
         return outcome.kind === 'notices' ? { kind: 'notices', notices: outcome.notices } : problemOf(outcome)
       }
       catch (error) {
@@ -670,8 +688,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       disposed = true
       current = undefined
       documents.clear()
-      mirror?.close()
-      store.close()
+      closeResources()
     },
   }
 }

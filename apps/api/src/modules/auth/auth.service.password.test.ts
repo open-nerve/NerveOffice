@@ -74,7 +74,7 @@ function setup(options: { admission?: Admission, currentValid?: boolean, stillCu
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   const service = new AuthService(
     users as unknown as UsersService,
-    new SessionResponses(spaces as unknown as SpacesService),
+    new SessionResponses(spaces as unknown as SpacesService, { clients: { minimumBuild: undefined, localDraftsEnabled: true } }),
     sessions as unknown as SessionService,
     throttle as unknown as LoginThrottle,
     audit as unknown as AuditService,
@@ -117,6 +117,7 @@ describe('AuthService.changePassword（US-M2-02）', () => {
       user: { id: ALICE.id, username: 'alice', displayName: '爱丽丝', systemRole: 'member' },
       personalSpace: { id: PERSONAL_SPACE, name: '爱丽丝' },
       csrfToken: csrfTokenFor(NEW_TOKEN),
+      features: { localDraftsEnabled: true },
     })
     expect(result.session.csrfToken).not.toBe(PRINCIPAL.csrfToken)
     // 审计里没有密码

@@ -11,7 +11,7 @@
 //   再等公式（至多捕获的上限，从按下算）、捕获、上传。显式保存排着还没轮到时再按，并进排着的那一次，同一个结果只记一次账（审查 A2）；
 //   切到后台（可见性变成 hidden）由这里按页面的信号同步捕获（不提交单元格、不等公式，没收齐就带标记）、立刻发起上传——全程不靠计时器
 //   （Safari 约 6 秒之后停计时器）；恢复联网时不等上传的静默；
-// - 会话内去重（设计 §3.7）：上传带上快照的摘要（注入的 digest，生产是 crypto.subtle 的 SHA-256），由保存的状态机比较；显式保存不去重；
+// - 会话内去重（设计 §3.7）：工作草稿来源计算快照的摘要，由保存的状态机比较；显式保存不去重；
 // - 失败（设计 §3.8）：按保存的状态机给的归类——会自动重试的退避（AUTOSAVE_RETRY_INITIAL_MS 起翻倍，至多 AUTOSAVE_RETRY_MAX_MS，
 //   服务端给了 Retry-After 时取两者较大的——Retry-After 至多按 AUTOSAVE_RETRY_AFTER_MAX_MS 算，恢复联网、会话回来与切到后台
 //   都不早于它）；要等新内容的，同一个捕获不再自动上传，有新的捕获才再试；要等会话的同样退避，会话回到本人时连着的第一次立即重试、
@@ -21,8 +21,9 @@
 //   每次捕获与上传经 observe 交出（log）；立即上传的 control 与切到后台同样的规则。
 import type { CaptureLimits, CaptureReason } from './capture-policy.ts'
 import type { LeaseClock } from './edit-lease.ts'
-import type { PreparedCapture, SaveCoordinator, SaveFailure, SaveOutcome, SaveStatus, SnapshotCapture } from './save-coordinator.ts'
+import type { PreparedCapture, SaveCoordinator, SaveFailure, SaveOutcome, SaveStatus } from './save-coordinator.ts'
 import type { CaptureEditor, InputsSettled } from './snapshot-capture.ts'
+import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 import {
   AUTOSAVE_CAPTURE_MAX_MS,
   AUTOSAVE_CAPTURE_QUIET_MS,
@@ -139,7 +140,7 @@ const PREPARED_DEDUPE: Readonly<Record<PreparedReason, boolean>> = {
 export type UploadReason = 'quiet' | 'cap' | 'retry' | 'online'
 
 /** 一次捕获的原因（日志）：规则的三种、切到后台、立即上传 */
-export type CaptureTrigger = CaptureReason | 'hidden' | FlushReason
+export type CaptureTrigger = CaptureReason | 'hidden' | 'retry' | FlushReason
 
 /** 一次上传的原因（日志）：定时的四种、切到后台、立即上传 */
 export type UploadTrigger = UploadReason | 'hidden' | FlushReason
@@ -181,8 +182,8 @@ export interface AutosaveOptions {
   readonly page: AutosavePage
   readonly uploader: AutosaveUploader
   readonly clock: LeaseClock
-  /** 快照 UTF-8 字节的摘要（会话内去重，设计 §3.7）：生产是 crypto.subtle 的 SHA-256（editor-api.ts 的 snapshotDigest）；出错时这一次不去重 */
-  readonly digest: (snapshot: string) => Promise<string>
+  /** 捕获即交给来源，不等联网或上传；调度只留引用。 */
+  readonly draft: WorkingDraft
   /** "公式待更新"的初值（进入编辑时服务端的标记，与保存的状态机的同一个）：带标记时公式收齐就补捕获一次 */
   readonly initialFormulasPending: boolean
   readonly tuning?: AutosaveTuning
@@ -256,11 +257,8 @@ export function retryDelay(attempt: number, limits: Pick<AutosaveLimits, 'retryI
 
 const TERMINAL_STATUSES: ReadonlySet<SaveStatus> = new Set<SaveStatus>(['conflict', 'outdated', 'too-new'])
 
-/** 内存里的一次捕获：serial 按捕获的先后递增；摘要按需算一次 */
-interface SlotCapture extends SnapshotCapture {
-  readonly serial: number
-  digestPromise: Promise<string | undefined> | undefined
-}
+/** 调度持有元数据引用，正文完全归工作草稿来源。 */
+type SlotCapture = DraftCaptureRef
 
 /** 一次交给保存的状态机的上传：started 是轮到了（向来源要了捕获），serial、seq 是上传的那一份的 */
 interface UploadRun {
@@ -308,7 +306,6 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 
   // 最近一次捕获
   let latest: SlotCapture | undefined
-  let serials = 0
   /** 最近一次捕获带"公式待更新"；没捕获过时是进入编辑时的初值 */
   let capturePending = options.initialFormulasPending
   /** 上一次捕获的耗时与结束的时刻（大文档拉长间隔） */
@@ -339,6 +336,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   let lastFailure: SaveFailure['kind'] | undefined
   /** 上传连续出了意外（捕获、压缩）的次数 */
   let unexpectedUploads = 0
+  /** codec 失败的引用不能重新准备；退避时重新捕获，次数仍按原意外重试上限算。 */
+  let retryCapture: DraftCaptureRef | undefined
   /** 刚恢复联网：下一次上传不等静默 */
   let immediate = false
 
@@ -407,10 +406,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   /** 当场捕获进"最近一次捕获"（同步）；出错原样抛出，由调用方处理 */
   function captureNow(trigger: CaptureTrigger, formulasPending: boolean): SlotCapture {
     const startedAt = clock.now()
-    const taken = takeSnapshot(editor, formulasPending)
+    const entry = takeSnapshot(editor, options.draft, { formulasPending, dedupe: trigger !== 'save-button' })
     const endedAt = clock.now()
-    serials += 1
-    const entry: SlotCapture = { ...taken, serial: serials, digestPromise: undefined }
     latest = entry
     capturePending = formulasPending
     lastCaptureTiming = { durationMs: endedAt - startedAt, endedAt }
@@ -420,7 +417,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     captureRetryAt = undefined
     captureBlockedSeq = undefined
     uploader.noteCapture(entry)
-    observe({ kind: 'capture', trigger, at: endedAt, seq: entry.seq, formulasPending, bytes: entry.bytes, durationMs: endedAt - startedAt })
+    observe({ kind: 'capture', trigger, at: endedAt, seq: entry.editorSeq, formulasPending, bytes: entry.bytes, durationMs: endedAt - startedAt })
     return entry
   }
 
@@ -450,7 +447,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     const captureLimits: CaptureLimits = { quietMs: limits.captureQuietMs, maxMs: limits.captureMaxMs, spacingFactor: limits.captureSpacingFactor }
     const decision = decideCapture({
       seq,
-      capturedSeq: latest?.seq ?? 0,
+      capturedSeq: latest?.editorSeq ?? 0,
       firstUncapturedAt,
       lastChangeAt,
       composing: editor.composing(),
@@ -476,7 +473,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   /** 切到后台、测试构建的控制：有没捕获的修改（或带标记而公式收齐了）就当场捕获，不等静默、不等公式、不管组字 */
   function captureIfNeeded(trigger: CaptureTrigger): void {
     const settled = editor.formulasSettled()
-    if (editor.changeSeq() <= (latest?.seq ?? 0) && !(capturePending && settled))
+    if (editor.changeSeq() <= (latest?.editorSeq ?? 0) && !(capturePending && settled))
       return
     try {
       captureNow(trigger, !settled)
@@ -487,20 +484,6 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   }
 
   // ---- 上传 ----
-
-  /** 这一份的摘要（每份只算一次，重试时沿用）：算不出时上报，这一次不去重 */
-  async function digestOf(entry: SlotCapture): Promise<string | undefined> {
-    entry.digestPromise ??= (async () => {
-      try {
-        return await options.digest(entry.snapshot)
-      }
-      catch (error) {
-        options.reportError(error)
-        return undefined
-      }
-    })()
-    return entry.digestPromise
-  }
 
   /** 最近一次捕获还要不要传：没传过、不在等新内容、没有排着或在途的上传会带上它 */
   function uploadPending(): boolean {
@@ -553,10 +536,10 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       if (writableAtStart && !page.sessionWritable())
         return 'session'
       run.serial = entry.serial
-      run.seq = entry.seq
+      run.seq = entry.editorSeq
       // 这一份是此刻最近的捕获，之后的修改不在里面：上传的上限从它们之中的第一处算
       firstUnuploadedAt = firstUncapturedAt
-      return { seq: entry.seq, snapshot: entry.snapshot, bytes: entry.bytes, formulasPending: entry.formulasPending, digest: await digestOf(entry) }
+      return entry
     }, { dedupe, onOutcome: finish })
     const outcome = saving.then((result) => {
       finish(result)
@@ -651,7 +634,10 @@ export function createAutosave(options: AutosaveOptions): Autosave {
         retryAt = undefined
         blockedSerial = serial ?? latest?.serial
         return
-      case 'unexpected':
+      case 'unexpected': {
+        const working = options.draft.view()
+        if (working.kind === 'working' && working.ref === latest && working.summary?.kind === 'failed')
+          retryCapture = working.ref
         unexpectedUploads += 1
         if (unexpectedUploads === 1) {
           retryAt = now + retryDelay(1, limits)
@@ -661,6 +647,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
           blockedSerial = latest?.serial
         }
         return
+      }
       case 'cell-editing':
         return
       case 'terminal':
@@ -680,7 +667,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       return Number.POSITIVE_INFINITY
     const decision = decideUpload({
       seq: editor.changeSeq(),
-      capturedSeq: latest?.seq ?? 0,
+      capturedSeq: latest?.editorSeq ?? 0,
       lastChangeAt,
       firstUnuploadedAt,
       retryAt,
@@ -697,6 +684,10 @@ export function createAutosave(options: AutosaveOptions): Autosave {
   function latestCapture(): SlotCapture {
     if (latest === undefined)
       throw new Error('没有可上传的捕获')
+    if (retryCapture === latest) {
+      retryCapture = undefined
+      return captureNow('retry', !editor.formulasSettled())
+    }
     return latest
   }
 
@@ -793,6 +784,18 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     kick()
   }
 
+  /** 换钥/恢复可以重写同一编辑序号；旧引用已被取代，不能继续拿它反复准备上传。 */
+  function onDraftChange(): void {
+    const working = options.draft.view()
+    if (disposed || ended || latest === undefined || working.kind !== 'working' || working.ref.sessionId !== latest.sessionId || working.ref.editorSeq !== latest.editorSeq || working.ref.serial <= latest.serial)
+      return
+    latest = working.ref
+    capturePending = working.ref.formulasPending
+    retryCapture = undefined
+    uploader.noteCapture(working.ref)
+    kick()
+  }
+
   const unsubscribers = [
     editor.onChange(onEditorChange),
     editor.onFormulaProgress(kick),
@@ -800,6 +803,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     page.onChange(onPageChange),
     uploader.subscribe(onUploaderChange),
     tuning.onChange(onTuningChange),
+    options.draft.subscribe(onDraftChange),
   ]
   // 打开不算修改（与保存的状态机同一个基线 0）：建起来时已经有修改的，按此刻有了修改算
   if (editor.changeSeq() > 0) {

@@ -654,7 +654,7 @@ describe('关闭', () => {
     expect(await writer.setKey(await localKey(3))).toMatchObject({ kind: 'failed' })
     await expect(writer.seedDigest(KEY, undefined)).resolves.toBeUndefined()
     expect(count(fake, 'writeDraft')).toBe(1)
-    expect(fake.closed()).toBe(1)
+    expect(fake.closed(), '立即关闭一次，已开始的操作实际结束后再收尾一次').toBe(2)
   })
 })
 

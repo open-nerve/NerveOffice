@@ -49,7 +49,7 @@ describe('apiRequest', () => {
   it('错误响应不是约定的格式、带着 Retry-After（例如反向代理自己回的 503，审查 A10）：照样读出 Retry-After 与 Date', async () => {
     const date = 'Mon, 05 Oct 2026 08:00:00 GMT'
     installFakeApi({ 'PUT /api/blob': () => new Response('<html>503 Service Unavailable</html>', { status: 503, headers: { 'retry-after': '30', date } }) })
-    await expect(apiFetch('/api/blob', { method: 'PUT' })).rejects.toMatchObject({ status: 503, code: 'UNKNOWN', retryAfterSeconds: 30, serverTime: Date.parse(date) })
+    await expect(apiFetch('/api/blob', { method: 'PUT' }, () => undefined)).rejects.toMatchObject({ status: 503, code: 'UNKNOWN', retryAfterSeconds: 30, serverTime: Date.parse(date) })
   })
 
   it('成功的响应与契约不一致：ResponseFormatError，不交出错的数据', async () => {
@@ -72,26 +72,25 @@ describe('apiRequest', () => {
 })
 
 describe('apiFetch（不是 JSON 的请求与响应）', () => {
-  it('返回成功的响应本身：调用方读正文与响应头；状态变更的请求带 CSRF 令牌与给定的内容类型', async () => {
+  it('作用域内读取正文与响应头并返回数据；状态变更的请求带 CSRF 令牌与给定的内容类型', async () => {
     const api = installFakeApi({ 'PUT /api/blob': () => new Response('ok', { status: 200, headers: { etag: '"3"' } }) })
     setCsrfToken('csrf-2')
-    const response = await apiFetch('/api/blob', { method: 'PUT', body: { contentType: 'application/gzip', data: new Uint8Array([1, 2, 3]) } })
-    expect(response.headers.get('etag')).toBe('"3"')
-    expect(await response.text()).toBe('ok')
+    const result = await apiFetch('/api/blob', { method: 'PUT', body: { contentType: 'application/gzip', data: new Uint8Array([1, 2, 3]) } }, async response => ({ etag: response.headers.get('etag'), text: await response.text() }))
+    expect(result).toEqual({ etag: '"3"', text: 'ok' })
     expect(api.requests[0]?.headers).toMatchObject({ 'content-type': 'application/gzip', 'x-csrf-token': 'csrf-2', 'accept': 'application/json' })
   })
 
   it('错误响应：带上 details（结构按错误码约定）', async () => {
     const details = { currentRevision: 4, source: null }
     installFakeApi({ 'PUT /api/blob': () => json(409, { error: { code: 'DOCUMENT_REVISION_CONFLICT', message: '冲突', requestId: 'req-1', details } }) })
-    await expect(apiFetch('/api/blob', { method: 'PUT' })).rejects.toMatchObject({ status: 409, code: 'DOCUMENT_REVISION_CONFLICT', details })
+    await expect(apiFetch('/api/blob', { method: 'PUT' }, () => undefined)).rejects.toMatchObject({ status: 409, code: 'DOCUMENT_REVISION_CONFLICT', details })
   })
 
   it('网络失败：NetworkError', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => {
       throw new TypeError('Failed to fetch')
     }))
-    await expect(apiFetch('/api/blob')).rejects.toBeInstanceOf(NetworkError)
+    await expect(apiFetch('/api/blob', {}, () => undefined)).rejects.toBeInstanceOf(NetworkError)
   })
 
   it('另外的请求头照样带上，覆盖不了请求层自己的那几个；keepalive 交给 fetch（M3-P1：编辑租约的令牌、关闭页面时的释放）', async () => {
@@ -103,7 +102,7 @@ describe('apiFetch（不是 JSON 的请求与响应）', () => {
       },
     })
     setCsrfToken('csrf-3')
-    await apiFetch('/api/lease', { method: 'DELETE', headers: { 'x-edit-lease': 'token-1', 'x-csrf-token': 'forged', 'accept': 'text/plain' }, keepalive: true })
+    await apiFetch('/api/lease', { method: 'DELETE', headers: { 'x-edit-lease': 'token-1', 'x-csrf-token': 'forged', 'accept': 'text/plain' }, keepalive: true }, () => undefined)
     expect(api.requests[0]?.headers).toMatchObject({ 'x-edit-lease': 'token-1', 'x-csrf-token': 'csrf-3', 'accept': 'application/json' })
     expect(init?.keepalive).toBe(true)
     await apiRequest('/api/lease', { method: 'DELETE', headers: { 'x-edit-lease': 'token-2' }, schema: z.undefined() })
@@ -118,22 +117,22 @@ describe('apiFetch（不是 JSON 的请求与响应）', () => {
       'POST /api/undated': () => json(409, body),
       'POST /api/garbled': () => json(409, body, { date: 'yesterday-ish' }),
     })
-    await expect(apiFetch('/api/dated', { method: 'POST' })).rejects.toMatchObject({ serverTime: Date.UTC(2026, 9, 4, 3, 0, 0) })
-    await expect(apiFetch('/api/undated', { method: 'POST' })).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
-    await expect(apiFetch('/api/garbled', { method: 'POST' })).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
+    await expect(apiFetch('/api/dated', { method: 'POST' }, () => undefined)).rejects.toMatchObject({ serverTime: Date.UTC(2026, 9, 4, 3, 0, 0) })
+    await expect(apiFetch('/api/undated', { method: 'POST' }, () => undefined)).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
+    await expect(apiFetch('/api/garbled', { method: 'POST' }, () => undefined)).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD', serverTime: undefined })
   })
 
   it('条件请求（acceptNotModified，M3-P2 设计 §3.2）：304 原样交回、不算失败；没说接受 304 时照常是失败', async () => {
     const api = installFakeApi({ 'GET /api/content': () => new Response(null, { status: 304, headers: { etag: '"3"' } }) })
-    const response = await apiFetch('/api/content', { headers: { 'if-none-match': '"3"' }, acceptNotModified: true })
-    expect(response.status).toBe(304)
+    const result = await apiFetch('/api/content', { headers: { 'if-none-match': '"3"' }, acceptNotModified: true }, response => response.status)
+    expect(result).toBe(304)
     expect(api.requests[0]?.headers).toMatchObject({ 'if-none-match': '"3"' })
-    await expect(apiFetch('/api/content', { headers: { 'if-none-match': '"3"' } })).rejects.toMatchObject({ status: 304, code: 'UNKNOWN' })
+    await expect(apiFetch('/api/content', { headers: { 'if-none-match': '"3"' } }, () => undefined)).rejects.toMatchObject({ status: 304, code: 'UNKNOWN' })
   })
 
   it('接受 304 只放过 304：别的失败照常抛出', async () => {
     installFakeApi({ 'GET /api/content': () => apiError(404, 'NOT_FOUND') })
-    await expect(apiFetch('/api/content', { acceptNotModified: true })).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' })
+    await expect(apiFetch('/api/content', { acceptNotModified: true }, () => undefined)).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' })
   })
 
   it('成功的响应里服务端回答的时刻（serverTimeOf，编辑状态的最后活动按它算）：读响应头 Date；没有或读不出来时为 undefined', () => {

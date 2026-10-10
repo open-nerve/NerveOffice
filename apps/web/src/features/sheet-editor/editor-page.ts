@@ -17,11 +17,13 @@
 // 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
+import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { AutosavePage, AutosaveView } from './autosave.ts'
 import type { LeaseClock } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
+import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
 import type { HandoverTrace } from './handover-trace.ts'
@@ -72,6 +74,8 @@ export type EditorPageLoad
 export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
 
 export interface EditorPageView {
+  readonly localSave?: LocalSaveView | undefined
+  readonly connection?: ConnectionView | undefined
   readonly load: EditorPageLoad
   /** 阅读还是编辑、编辑权怎样了（载入之后才有） */
   readonly mode: EditModeState | undefined
@@ -106,8 +110,9 @@ export interface EditorPageApi extends EditModeApi {
   readonly document: (documentId: string) => Promise<DocumentDetail>
 }
 
-/** 页面联网与否（navigator.onLine 与 online、offline 事件）：离线时自动保存不发，恢复时立即上传（M3-P4 设计 §3.8） */
+/** 同一连接状态提供浏览器信号与请求事实；online 只唤醒调度，编辑会话独立核对上传许可。 */
 export interface PageNetwork {
+  readonly connection?: EditingSessionOptions['connection']
   readonly online: () => boolean
   /** 联网与否变了；返回退订的函数 */
   readonly onChange: (listener: () => void) => () => void
@@ -131,6 +136,8 @@ export interface EditIntent {
 }
 
 export interface EditorPageOptions {
+  /** 持久宿主/密钥的测试接缝；生产不传。部署开关始终来自实际会话响应。 */
+  readonly localDrafts?: Omit<NonNullable<EditingSessionOptions['localDrafts']>, 'enabled'> | undefined
   /** 地址里的文档 id；地址不是编辑器页的写法时为 undefined，按不存在处理 */
   readonly documentId: string | undefined
   /** Univer 挂载的容器；页面的状态写在它的 data-editor-state 上（loading、ready、steady、failed），E2E 按它等待 */
@@ -159,8 +166,6 @@ export interface EditorPageOptions {
   readonly pendingSave: (documentId: string) => PendingSaveMarker
   /** 这份文档在这一页发出过的请求编辑的记号（M3-P5 审查 B2，按标签页、刷新之后还在） */
   readonly issuedRequest: (documentId: string) => IssuedRequestMarker
-  /** 快照 UTF-8 字节的摘要（自动保存的会话内去重，editor-api.ts 的 snapshotDigest） */
-  readonly digest: (snapshot: string) => Promise<string>
   /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
   readonly autosaveControl?: AutosaveControlHooks | undefined
   /** 测试构建的交接观察钩子（M3-P5 设计 §3.13，start.tsx 只在测试构建里给出）；生产为 undefined */
@@ -253,6 +258,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let load: EditorPageLoad = { kind: 'loading' }
   let session: EditorPageSession = 'active'
   let userId: string | undefined
+  let localDraftsEnabled = false
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
   /** 阅读与编辑（载入之后才有） */
@@ -302,7 +308,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { load, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
   }
 
   /** 页面信号变了：在调用者的同步段里通知（可见性在 visibilitychange 里，切到后台的上传不靠计时器） */
@@ -537,6 +543,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     else if (confirmed.user.id === userId) {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
       setCsrfToken(confirmed.csrfToken)
+      localDraftsEnabled = confirmed.features.localDraftsEnabled
       enterSession('active')
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
       // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存。例外：续租连着第二次起被判会话不对（服务端一直拒绝、
@@ -550,15 +557,22 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
   }
 
+  /** 当前连接只限制主动服务端操作，不参与本机捕获的会话许可。 */
+  function serverAvailable(): boolean {
+    return !disposed && (options.network.connection?.view().available ?? options.network.online())
+  }
+
   /**
    * 要写的操作（保存、进入与退出编辑）之前：确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）就等它结束，按确认的结果决定
    * （复验 RB1）；暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，
    * 广播的消息没有送到。令牌已知失效时一定先确认（复验 VB1）。返回能不能接着做：会话是本人、页面还在、令牌不是已知失效的（复验 UB1）
    */
   async function readyToWrite(): Promise<boolean> {
+    if (!serverAvailable())
+      return false
     if (!confirmedForWrite())
       await confirmForSave(false)
-    return session === 'active' && !disposed && staleAfter === undefined
+    return session === 'active' && serverAvailable() && staleAfter === undefined
   }
 
   /** 不必先向服务端确认就能写：没有确认在途、会话是本人、上一次确认没有失败、令牌不是已知失效的 */
@@ -584,6 +598,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       documentId: id,
       clientInstanceId,
       userId: user,
+      localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled },
+      connection: options.network.connection,
       api,
       createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
       clock,
@@ -606,7 +622,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         writeProblem,
         readProblem: () => void recheckSession(),
       },
-      autosave: { page: autosavePage, digest: options.digest, ...options.autosaveControl },
+      autosave: { page: autosavePage, ...options.autosaveControl },
       sameBrowser,
       pendingSave: options.pendingSave(id),
       issuedRequest: options.issuedRequest(id),
@@ -640,10 +656,18 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       pageWindow.addEventListener('pagehide', onPageHide)
       cleanups.push(() => pageWindow.removeEventListener('pagehide', onPageHide))
       // 自动保存的页面信号：可见性（同步通知）与联网；恢复联网、回到前台时上一次确认会话失败了就再确认（审查 A6）
-      cleanups.push(options.visibility.onChange(signalPage), options.network.onChange(signalPage))
+      let browserOnline = options.network.online()
+      cleanups.push(options.visibility.onChange(signalPage), options.network.onChange(() => {
+        signalPage()
+        update()
+        const next = options.network.online()
+        const returned = next && !browserOnline
+        browserOnline = next
+        // 共享连接也发布请求失败；它不是浏览器恢复在线，不能让会话确认自己触发下一轮。
+        recheckOnReturn(returned)
+      }))
       cleanups.push(
         options.visibility.onChange(() => recheckOnReturn(!options.visibility.hidden())),
-        options.network.onChange(() => recheckOnReturn(options.network.online())),
       )
       setSurface('loading')
       cleanups.push(sessionChannel.subscribe(() => void recheckSession()))
@@ -655,6 +679,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         signedIn = await api.session()
         setCsrfToken(signedIn.csrfToken)
         userId = signedIn.user.id
+        localDraftsEnabled = signedIn.features.localDraftsEnabled
         // 确认会话的回包之前别的标签页登录或退出了：消息当时没法处理，现在补确认一次
         if (checkWhenLoaded)
           void recheckSession()
@@ -681,7 +706,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
       // 阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）：详情说的是它那一版的，与载入的内容是同一版时才用（并行读取之间有人保存过时下一次检查补上）
       const formulasPending = document.formulasPending && document.revision === content.revision
-      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: options.editIntent.requested && canEdit, blocked })
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: options.editIntent.requested && canEdit && serverAvailable(), blocked })
       if (disposed)
         return
       if (outcome.kind === 'load-failed') {
@@ -708,6 +733,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode?.save(readyToWrite)
     },
     enterEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 进入编辑要申请编辑权（写的操作）：与保存、退出编辑同一个会话确认——没有人登录、换了人、令牌已知失效时不申请，
@@ -717,6 +744,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.enter()
     },
     takeOverHere: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 本人接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
@@ -726,6 +755,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     cancelTakeOver: () => mode?.cancelTakeOver(),
     forceTakeOver: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 强制接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
@@ -735,6 +766,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     dismissInterruption: () => mode?.dismissInterruption(),
     requestEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 发出请求是写的操作：与"编辑"同一个会话确认
@@ -743,6 +776,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.requestEdit()
     },
     cancelRequest: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       if (!confirmedForWrite() && !(await readyToWrite()))
@@ -750,6 +785,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.cancelRequest()
     },
     handOver: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'editing')
         return
       // 交出要先保存、带着令牌交出：与退出编辑同一个会话确认（换了人、令牌已知失效时不发，留在编辑）
@@ -757,12 +794,16 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         await mode.handOver()
     },
     keepEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'editing')
         return
       if (await readyToWrite())
         await mode.decline()
     },
     exitEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'editing')
         return
       // 退出要先保存：与按保存同一个会话确认（换了人、令牌已知失效时不发，留在编辑）
@@ -773,6 +814,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode?.refresh()
     },
     saveCopy: async () => {
+      if (!serverAvailable())
+        return
       await mode?.saveCopy()
     },
     discard: async () => {

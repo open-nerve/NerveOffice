@@ -2,7 +2,7 @@
 // 点"编辑"申请编辑权、以可编辑重建，"退出编辑"先保存、再释放编辑权、以只读重建。模式切换一律重建编辑器（需求方 2026-10-04 决定）：
 // - 切换之后编辑真的能编辑、只读真的只读（"进入再退出"之后跑与查看者的只读同一套入口检查，support/read-only-checks.ts）、撤销栈已清空
 //   （新的实例：上一段编辑的撤销不再起作用；先在同一次编辑里核对同一套按键确实能撤销，阳性对照）；销毁旧的编辑器时终止它的公式 Worker，
-//   页面的 Worker 回到 1 个；
+//   阅读时只剩公式 Worker，编辑时另有本机草稿 Worker；退出后回到 1 个（M4-P2）；
 // - 进入、退出没有成功（403、被占用、退出时保存失败）时焦点留在页头：按钮留着或者交给返回链接（审查 A2）；
 // - 以服务端当前的修订为基准：阅读期间别人保存过，点"编辑"先按 If-None-Match 取最新的内容再进入；
 // - 重建之前取出视图状态（当前工作表、左上角可见的行列、主选区），就绪之后恢复（风险表"重建丢掉用户的视图"）；
@@ -29,12 +29,10 @@ import { appendSheet, blockLeaseRenewals, cellOf, createSheetThroughApi, createS
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
-/**
- * 页面的 Worker 回到 1 个（只剩现在这个编辑器的公式 Worker）：重建时销毁旧的编辑器要终止它的 Worker（sheet-editor.ts 的销毁），
- * 漏掉时每切换一次就多一个。Worker 终止之后 Playwright 才把它从列表里去掉，所以等一会儿
- */
-async function expectSingleWorker(page: Page): Promise<void> {
-  await expect.poll(() => page.workers().length, { message: '页面的 Worker 回到 1 个' }).toBe(1)
+/** 模式切换会释放旧资源：阅读只留公式 Worker，编辑另有草稿 Worker；按名称与数量一起检查，不能漏掉泄漏。 */
+async function expectModeWorkers(page: Page, access: 'read' | 'edit'): Promise<void> {
+  const expected = access === 'edit' ? ['formula', 'outbox'] : ['formula']
+  await expect.poll(() => page.workers().map(worker => /\/(formula|outbox)\.worker-[\w-]+\.js$/.exec(worker.url())?.[1] ?? worker.url()).sort(), { message: `${access} 模式只持有当前需要的 Worker` }).toEqual(expected)
 }
 
 /** 这份文档的编辑状态（GET …/edit-lease，用这个页面的会话）：正在编辑的人，没有时为 null */
@@ -58,7 +56,7 @@ function recordWrites(page: Page, documentId: string): string[] {
 }
 
 test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"退出编辑"回到阅读', () => {
-  test('US-M3-01 打开是阅读（没有工具栏，键入被只读的提示拦下、不发保存）；点"编辑"进入编辑，真的能编辑、保存；撤销栈已清空；有修改时"退出编辑"先保存、再释放编辑权（服务端没有人在编辑）、回到阅读，只读真的只读；进入、退出之后页面的 Worker 都回到 1 个', async ({ page }) => {
+  test('US-M3-01 打开是阅读（没有工具栏，键入被只读的提示拦下、不发保存）；点"编辑"进入编辑，真的能编辑、保存；撤销栈已清空；有修改时"退出编辑"先保存、再释放编辑权（服务端没有人在编辑）、回到阅读，只读真的只读；阅读时 1 个 Worker、编辑时 2 个，退出后回到 1 个', async ({ page }) => {
     await loginThroughApi(page, await createUser('read-mode-switch'))
     const documentId = await createSheetThroughApi(page)
     const writes = recordWrites(page, documentId)
@@ -69,7 +67,7 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
     await expect(saveStatus(page)).toHaveText('')
     await expect(saveButton(page)).toHaveCount(0)
     await expect(page.getByRole('toolbar')).toHaveCount(0)
-    await expectSingleWorker(page)
+    await expectModeWorkers(page, 'read')
     // 阅读时的本地改动不提交：键入被只读的提示拦下；按保存的快捷键也不发请求
     await selectCell(page, 'K3')
     await page.keyboard.type('1')
@@ -80,7 +78,7 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
     await enterEditing(page)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await expect(page.getByRole('tab', { name: '开始', exact: true })).toBeVisible()
-    await expectSingleWorker(page)
+    await expectModeWorkers(page, 'edit')
     expect(writes).toEqual(['acquire'])
     // 编辑真的能编辑：键入、保存，服务器上有这一次
     await typeInCell(page, 'A1', 'first')
@@ -121,7 +119,7 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
     await expect(exitEditButton(page)).toHaveCount(0)
     await expect(saveButton(page)).toHaveCount(0)
     await expect(page.getByRole('toolbar')).toHaveCount(0)
-    await expectSingleWorker(page)
+    await expectModeWorkers(page, 'read')
 
     // 只读真的只读：键入被只读的提示拦下，不发保存，服务器上的内容不变
     await selectCell(page, 'K3')
@@ -237,17 +235,17 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
 // "进入再退出"之后的编辑器是重建出来的只读编辑器：与查看者打开时同一套入口检查（M2-P3 的 read-only.spec.ts，抽在 support/read-only-checks.ts），
 // 免得重建漏装只读守卫、漏设权限点。作者（空间管理员）打开只读样本，进入、退出编辑，不做任何修改，然后逐项试
 test.describe('US-M3-01 进入再退出编辑之后只读真的只读（以只读重建；与查看者的只读同一套检查）', { tag: '@test-build' }, () => {
-  test('US-M3-01 M0 的只读入口清单（界面入口 7 项与 Facade 入口）在"进入再退出"之后逐项都无效；进入、退出之后页面的 Worker 都回到 1 个', async ({ page, context, browserName }) => {
+  test('US-M3-01 M0 的只读入口清单（界面入口 7 项与 Facade 入口）在"进入再退出"之后逐项都无效；阅读时 1 个 Worker、编辑时 2 个，退出后回到 1 个', async ({ page, context, browserName }) => {
     // 与查看者的那一份条件一致（P3 审查 B10）
     await grantClipboard(context, browserName)
     const s = await scene('switch-m0')
     await loginThroughApi(page, s.author)
     await openReader(page, s.documentId, OPENED)
-    await expectSingleWorker(page)
+    await expectModeWorkers(page, 'read')
     await enterEditing(page, OPENED)
-    await expectSingleWorker(page)
+    await expectModeWorkers(page, 'edit')
     await exitEditing(page, OPENED)
-    await expectSingleWorker(page)
+    await expectModeWorkers(page, 'read')
     await expect(enterEditButton(page)).toBeVisible()
 
     const watched = watch(page, s.documentId)

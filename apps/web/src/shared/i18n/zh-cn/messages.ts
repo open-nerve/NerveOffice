@@ -162,6 +162,7 @@ export const messages = {
     statusName: (status: UserStatus) => USER_STATUS_NAMES[status],
   },
   common: {
+    connectionRequired: '此操作需要联网，连接恢复后可继续。',
     retry: '重试',
     /** 第一次就没取到、按了"重试"之后：按钮留着、不可用，说正在重试（规范 §2.4：进行中的操作的按钮不卸载，shared/lib/use-first-load-retry.ts） */
     retrying: '正在重试…',
@@ -194,6 +195,7 @@ export const messages = {
   errors: {
     byCode: errorText,
     network: '网络连接失败，请检查网络后重试',
+    timeout: '网络没有回应，请稍后重试',
     unexpected: '出了点问题，请稍后重试',
     tooManyAttempts: (minutes: number) => `尝试次数过多，请 ${minutes} 分钟后再试`,
   },

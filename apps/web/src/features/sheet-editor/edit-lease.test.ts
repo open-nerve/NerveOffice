@@ -3,8 +3,8 @@ import type { Incompatibility } from './client-format.ts'
 import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
 import { EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
-import { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
+import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from '../../shared/api/index.ts'
+import { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseHolderOf, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
@@ -42,9 +42,21 @@ const RECOVERABLE = ['none', 'replaced', 'released', 'stale', 'expired', 'idle',
 /** 结果未知的失败：服务端可能已经处理了 */
 const UNKNOWN_OUTCOMES = [
   ['网络错误', new NetworkError('断网')],
+  ['请求超时', new RequestTimeoutError(10_000)],
   ['5xx', new ApiError(503, 'SERVICE_UNAVAILABLE', '服务暂时不可用')],
   ['回包读不出来', new ResponseFormatError('POST /edit-lease 的响应与契约不一致')],
 ] as const
+
+describe('持有者保留服务端登录位置（DEF-071）', () => {
+  it.each([true, false])('正常编辑状态与申请被占用都传递 sameSession=%s', async (sameSession) => {
+    const holder = { ...SELF_HELD, sameSession }
+    expect(leaseHolderOf(holder, undefined)).toMatchObject({ holder: AMY, sameUser: true, sameSession })
+    const context = setup({ acquire: async () => Promise.reject(heldError(holder)) })
+    const acquiring = acquireEditLease(context.options)
+    await context.time.advance(SAME_USER_RETRIES * SAME_USER_RETRY_DELAY_MS)
+    expect(await acquiring).toMatchObject({ kind: 'held', holder: { sameUser: true, sameSession } })
+  })
+})
 
 /** 由测试决定何时完成的 Promise */
 function deferred<T>() {
@@ -83,6 +95,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
   const onIncompatible = vi.fn<(kind: Incompatibility) => void>()
   const onRequest = vi.fn<NonNullable<EditLeaseOptions['onRequest']>>()
   const onRenewed = vi.fn<NonNullable<EditLeaseOptions['onRenewed']>>()
+  const onLocalKeyVersion = vi.fn<(version: number | null) => void>()
   /** 页面认不认得出期间的那一版是自己的保存：默认认不出（别处保存的） */
   const adopt = vi.fn<EditLeaseOptions['adoptOwnRevision']>(() => false)
   const options: EditLeaseOptions = {
@@ -98,6 +111,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     onIncompatible,
     onRequest,
     onRenewed,
+    onLocalKeyVersion,
   }
   return {
     time,
@@ -107,6 +121,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     onIncompatible,
     onRequest,
     onRenewed,
+    onLocalKeyVersion,
     adopt,
     options,
     calls,
@@ -169,7 +184,7 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
   it('被占用（别人）：给出持有者、不是自己，以及按服务端的时间算的最后活动几分钟之前（向下取整）；不再试', async () => {
     const serverTime = Date.UTC(2026, 9, 4, 3, 10, 0)
     const context = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:06:30.000Z', sameUser: false, sameSession: false, canTakeOver: false, request: null }, serverTime))) })
-    expect(await acquireEditLease(context.options)).toEqual({ kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } })
+    expect(await acquireEditLease(context.options)).toEqual({ kind: 'held', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 3 } })
     expect(context.api.acquire).toHaveBeenCalledOnce()
     expect(context.time.pending()).toBe(0)
   })
@@ -1734,6 +1749,71 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     expect(context.api.acquire).toHaveBeenCalledTimes(2)
     context.api.renew.mockRejectedValueOnce(lostError('replaced'))
     expect(await lease.confirm()).toEqual({ kind: 'superseded', loss: { kind: 'lease', reason: 'replaced' } })
+  })
+})
+
+describe('有效续租的本机密钥版本', () => {
+  it('心跳版本先于恢复锁交回，null 同样传递；申请时不凭空发布版本', async () => {
+    const renew = vi.fn<EditLeaseApi['renew']>().mockResolvedValueOnce({ ...RENEWED, localKeyVersion: 2 }).mockResolvedValueOnce({ ...RENEWED, localKeyVersion: null })
+    const context = setup({ renew })
+    const lease = await held(context)
+    expect(context.onLocalKeyVersion).not.toHaveBeenCalled()
+    await context.time.advance(10_000)
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(2)
+    expect(context.onLocalKeyVersion.mock.invocationCallOrder[0]).toBeLessThan(context.onRenewed.mock.invocationCallOrder[0] ?? 0)
+    await context.time.advance(10_000)
+    expect(context.onLocalKeyVersion.mock.calls).toEqual([[2], [null]])
+    lease.abandon()
+  })
+
+  it('显式核对的有效当前响应也交回版本，但不调用旧 onRenewed', async () => {
+    const context = setup({ renew: vi.fn(async () => ({ ...RENEWED, localKeyVersion: 3 })) })
+    const lease = await held(context)
+    expect(await lease.confirm()).toEqual({ kind: 'current' })
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(3)
+    expect(context.onRenewed).not.toHaveBeenCalled()
+    lease.abandon()
+  })
+
+  it.each(['pause', 'release', 'abandon'] as const)('心跳在途后 %s，旧成功不能发布密钥版本', async (action) => {
+    const reply = deferred<RenewedEditLease>()
+    const context = setup({ renew: vi.fn(async () => reply.promise) })
+    const lease = await held(context)
+    await context.time.advance(10_000)
+    await lease[action]()
+    reply.resolve({ ...RENEWED, localKeyVersion: 9 })
+    await settle()
+    expect(context.onLocalKeyVersion).not.toHaveBeenCalled()
+    lease.abandon()
+  })
+
+  it('心跳在途时已经续上新代次，旧代次晚到的成功不能给新代次发布版本', async () => {
+    const reply = deferred<RenewedEditLease>()
+    const context = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockReturnValueOnce(reply.promise).mockResolvedValue({ ...RENEWED, localKeyVersion: 2 }) })
+    const lease = await held(context)
+    await context.time.advance(10_000)
+    const previous = lease.credentials()
+    expect(await lease.lose({ kind: 'lease', reason: 'expired' }, previous)).toEqual({ kind: 'held' })
+    expect(lease.credentials().token).not.toBe(previous.token)
+    reply.resolve({ ...RENEWED, localKeyVersion: 9 })
+    await settle()
+    expect(context.onLocalKeyVersion).not.toHaveBeenCalled()
+    await context.time.advance(10_000)
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(2)
+    lease.abandon()
+  })
+
+  it('会话暂停又恢复后，只认恢复之后发出的续租版本', async () => {
+    const reply = deferred<RenewedEditLease>()
+    const context = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockReturnValueOnce(reply.promise).mockResolvedValue({ ...RENEWED, localKeyVersion: 2 }) })
+    const lease = await held(context)
+    await context.time.advance(10_000)
+    lease.pause()
+    const resumed = lease.resume()
+    reply.resolve({ ...RENEWED, localKeyVersion: 9 })
+    await resumed
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(2)
+    lease.abandon()
   })
 })
 

@@ -9,7 +9,9 @@ import { useRef, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { SHARED_LIST_QUERY_KEY } from '../../shared/api/shared-list-key.ts'
 import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../../shared/api/write-outcome.ts'
+import { connectionState } from '../../shared/lib/connection-state.ts'
 import { watchAnnouncement } from '../../shared/testing/announcement.test-support.ts'
+import { restoreConnection } from '../../shared/testing/connection.test-support.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { personIn, plainName, shownName } from '../../shared/testing/people.test-support.ts'
 import { ShareDialog } from './share-dialog.tsx'
@@ -521,5 +523,61 @@ describe('US-M2-10 分享对话框：写入成功之后的刷新（Codex 对抗�
     await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull())
     expect(requestsTo(api, GRANTS_KEY)).toBe(3)
     expect(within(dialog).getByRole('button', { name: `取消分享 ${plainName('丹', 'dan')}` })).toBeInTheDocument()
+  })
+})
+
+describe('分享写操作的连接守卫', () => {
+  it('选好同事后离线，已开表单不能添加；online 信号本身不能恢复，成功复核后可提交', async () => {
+    const { api } = renderDialog({
+      [GRANTS_KEY]: () => grants(),
+      [colleaguesKey('dan')]: () => json(200, { items: [DAN] }),
+      [putKey(DAN.id)]: () => json(200, grantOf(DAN)),
+    })
+    const dialog = await openDialog()
+    await within(dialog).findByText('还没有单独分享给任何人。')
+    fireEvent.click(within(await search(dialog, 'dan')).getByRole('button', { name: shownName('丹', 'dan') }))
+    const submit = within(dialog).getByRole('button', { name: '分享' })
+    const form = submit.closest('form')!
+    submit.focus()
+    act(() => connectionState.setBrowserOnline(false))
+    await act(async () => fireEvent.submit(form))
+    expect(requestsTo(api, putKey(DAN.id))).toBe(0)
+    expect(submit).toHaveAttribute('aria-disabled', 'true')
+    expect(submit).toHaveFocus()
+    expect(within(dialog).getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+    act(() => connectionState.setBrowserOnline(true))
+    await act(async () => fireEvent.submit(form))
+    expect(requestsTo(api, putKey(DAN.id))).toBe(0)
+    act(restoreConnection)
+    await act(async () => fireEvent.submit(form))
+    await waitFor(() => expect(requestsTo(api, putKey(DAN.id))).toBe(1))
+  })
+
+  it('在线选好新角色，连接无回应时实际保存被阻断；恢复后沿原选择保存', async () => {
+    const { api } = renderDialog({ [GRANTS_KEY]: () => grants(grantOf(BEN)), [putKey(BEN.id)]: () => json(200, grantOf(BEN, { role: 'editor' })) })
+    const dialog = await openDialog()
+    fireEvent.change(await within(dialog).findByRole('combobox', { name: `${plainName('本', 'ben')} 的角色` }), { target: { value: 'editor' } })
+    const save = within(dialog).getByRole('button', { name: `保存 ${plainName('本', 'ben')} 的角色` })
+    act(() => connectionState.failed(connectionState.beginRequest()))
+    await act(async () => fireEvent.click(save))
+    expect(requestsTo(api, putKey(BEN.id))).toBe(0)
+    expect(save).toHaveAttribute('aria-disabled', 'true')
+    act(restoreConnection)
+    await act(async () => fireEvent.click(save))
+    await waitFor(() => expect(api.requests.find(request => request.key === putKey(BEN.id))?.body).toEqual({ role: 'editor' }))
+  })
+
+  it('在线打开取消分享确认框，离线后确认不能越过守卫；取消仍能关闭', async () => {
+    const { api } = renderDialog({ [GRANTS_KEY]: () => grants(grantOf(BEN)), [deleteKey(BEN.id)]: () => new Response(null, { status: 204 }) })
+    const dialog = await openDialog()
+    fireEvent.click(await within(dialog).findByRole('button', { name: `取消分享 ${plainName('本', 'ben')}` }))
+    const confirm = await screen.findByRole('dialog', { name: `取消分享给 ${plainName('本', 'ben')}？` })
+    act(() => connectionState.setBrowserOnline(false))
+    await act(async () => fireEvent.click(within(confirm).getByRole('button', { name: '取消分享' })))
+    expect(requestsTo(api, deleteKey(BEN.id))).toBe(0)
+    expect(within(confirm).getByRole('button', { name: '取消分享' })).toHaveAttribute('aria-disabled', 'true')
+    expect(within(confirm).getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+    fireEvent.click(within(confirm).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(confirm).not.toBeInTheDocument())
   })
 })

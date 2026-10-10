@@ -6,10 +6,11 @@ import type { SessionResponse } from '@nerve-office/contracts'
 import type { AppRuntime } from './runtime.ts'
 import { MutationObserver } from '@tanstack/react-query'
 import { createMemoryRouter } from 'react-router'
-import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { z } from 'zod'
 import { RENEWS_SESSION, RENEWS_SESSION_AFTER_UNKNOWN, STARTS_SESSION, SYSTEM_ADMIN_ONLY } from '../features/auth/index.ts'
 import { ApiError, apiRequest, NetworkError, setCsrfToken } from '../shared/api/index.ts'
+import { connectionState } from '../shared/lib/connection-state.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { SESSION_CHANGE_TIME_LIMIT_MS } from './query-client.ts'
 import { recordingPage, sessionBus } from './render-app.test-support.tsx'
@@ -19,10 +20,17 @@ const SESSION: SessionResponse = {
   user: { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'admin' },
   personalSpace: { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', name: '爱丽丝' },
   csrfToken: 'csrf-1',
+  features: { localDraftsEnabled: true },
 }
 
 /** 另一个人的会话：别的标签页换人登录之后，会话 Cookie 属于他 */
 const OTHER_SESSION: SessionResponse = { ...SESSION, user: { ...SESSION.user, id: '0199a2c4-1f2e-7a3b-8c4d-000000000002' }, csrfToken: 'csrf-other' }
+
+beforeEach(() => {
+  connectionState.setBrowserOnline(false)
+  connectionState.setBrowserOnline(true)
+  connectionState.succeeded(connectionState.beginRequest())
+})
 
 /** bus：同一个浏览器里各个标签页之间的会话消息，要模拟别的标签页时传入同一条 */
 function runtimeAt(path: string, bus = sessionBus()) {
@@ -77,6 +85,39 @@ async function settle(ms = 20): Promise<void> {
 }
 
 describe('createAppRuntime', () => {
+  it('网络失败后受控复核恢复连接，但不采纳探测得到的另一人/CSRF；dispose 后停止复核', async () => {
+    vi.useFakeTimers()
+    const api = installFakeApi({
+      'GET /api/broken': networkFailure,
+      'GET /api/auth/session': () => json(200, OTHER_SESSION),
+      'POST /api/probe': () => new Response(null, { status: 204 }),
+    })
+    const { runtime, page } = runtimeAt('/')
+    try {
+      runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+      setCsrfToken('csrf-original')
+      await expect(apiRequest('/api/broken', { schema: z.undefined() })).rejects.toBeInstanceOf(NetworkError)
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(api.requests.filter(request => request.key === 'GET /api/auth/session')).toHaveLength(0)
+      expect(connectionState.view().available).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(connectionState.view().available).toBe(true)
+      expect(api.requests.filter(request => request.key === 'GET /api/auth/session')).toHaveLength(1)
+      expect(sessionOf(runtime)).toEqual(SESSION)
+      expect(page.visits).toEqual([])
+      await apiRequest('/api/probe', { method: 'POST', schema: z.undefined() })
+      expect(api.requests.at(-1)?.headers['x-csrf-token']).toBe('csrf-original')
+      runtime.dispose()
+      await expect(apiRequest('/api/broken', { schema: z.undefined() })).rejects.toBeInstanceOf(NetworkError)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(api.requests.filter(request => request.key === 'GET /api/auth/session')).toHaveLength(1)
+    }
+    finally {
+      runtime.dispose()
+      vi.useRealTimers()
+    }
+  })
+
   it('默认用浏览器的路由、整页跳转与 BroadcastChannel', () => {
     const runtime = createAppRuntime()
     onTestFinished(() => runtime.dispose())

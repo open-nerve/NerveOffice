@@ -64,11 +64,11 @@
 
 ## Git
 
-- 主目录始终停在 `main` 分支；需要分支时一律使用 worktree，路径为 `.claude/worktrees/<分支名>/`。
-- 每个 Phase 从 `main` 拉一个新分支，例如 `m0-p1-sdk-baseline`；大的 Phase 可以一个 Step 一个分支。Phase 的提交不直接平铺在 `main` 上。
+- 主目录始终停在 `main` 分支；需要分支时一律使用 worktree。Claude 路径为 `.claude/worktrees/<分支名>/`；Codex 路径为 `.codex/worktress/<分支名>/`（沿用 `worktress` 拼写）。
+- **一个 Phase 只用一个开发分支和 worktree**，从完成上一 Phase 合并后的 `main` 建立。Phase 内各 Step、Task 的实现、修复与审查都在该分支内提交，不再拆小分支；Phase 的提交不直接平铺在 `main` 上。（用户 2026-10-10 明确约定）
 - 设计文档和代码提交在同一个分支上。
 - 提交节奏：每完成一个 Step（测试全绿）提交一次；每次停下来之前，都要提交当前的工作。
-- 合并：审查通过后，在主目录执行 `git merge --no-ff <分支名>` 合并到 `main`，保留分支提交线；合并后删除 worktree 和已合并的分支。
+- 合并：整个 Phase 完成、验证与审查通过后，在主目录执行 `git merge --no-ff <分支名>` 合并到 `main`，保留分支提交线；清理已合并的 worktree 和分支后，再从 `main` 建立下一 Phase 的分支。
 - 推送：只在合并到 `main` 之后推送 `main`；进行中的分支只保留在本地。
 - 每个 M 结束时打 tag，例如 `v0.1-m1`。
 - 提交信息使用中文，不添加 Co-Authored-By 等 AI 署名。
@@ -96,6 +96,7 @@
 | `pnpm --filter @nerve-office/e2e run update:read-only-sample` | 同上，重新生成只读 E2E 用的样本（`tests/e2e/support/read-only-sample.json`：打开与画完每张表之后逐字节不变的形式） |
 | `pnpm --filter @nerve-office/e2e run safari:selftest [--front] [--steps <步骤,…>] [--idle <秒>] [--idle-wait <秒>] [--timeout <秒>] [--runs <次数>]` | 在本机真实 Safari 上跑编辑器的页面自检（测试构建的 `selftest.html`：只读入口、公式、进入与退出编辑，M3-P4 起另有捕获时机——变更检测、公式时序的两种模式、自动行高、大表复制、组合输入、环境与隐藏之后存下，都观察真实的自动保存、核对服务器上的内容；M3-P5 起另有交接——两个标签页的本人接管（另一页照常回应、收不到交接消息）与刷新时在途的保存；M3-P6 起另有请求编辑的两条路 `request-waiter`、`paused-holder`，另一方由驱动脚本经接口扮演；M4-P1 起另有本机发件箱的复核——存储的事实、密钥交给 Worker、Worker 的停顿（探针 Worker 与生产的发件箱 Worker）、写入管道与 OPFS 镜像各段、捕获成本、首屏与公式冻结；共 29 步，一次约 20 分钟，`--steps` 只跑其中几步，整次运行默认限时 1800 秒（`--timeout`），`--runs` 是发件箱复核的运行次数（默认 40）；不进 CI）。Playwright 里的校准是 `specs/editor/selftest.spec.ts`，两种打开状态（暂停与 `E2E_AUTOSAVE=running`）都要通过。开头等用户空闲满 `--idle` 秒（默认 120，最多等 `--idle-wait` 秒，默认 1800），屏幕锁着不跑；跑的时候用户一动这一次就作废（退出码 4）；`paused-holder` 用一个写明用途的窗口盖住屏幕约 3 分钟，按 Esc 或点它中止。Safari 会暂停一开始就在后台打开的页面：窗口要露在外面，`--front` 把 Safari 带到前台；结果在 `tests/e2e/safari-results/`（不在 `test-results/` 里，Playwright 运行不会清掉） |
 | `pnpm --filter @nerve-office/e2e run measure:switch` / `measure:memory` / `measure:probe` | 实测阅读与编辑之间切换的耗时（三个浏览器、三份文档）/ 反复切换的内存（Chromium，CDP 回收之后的堆与 DOM 计数）/ 本机发件箱的复核在三个浏览器的持久上下文（会落盘）里跑足次数（`MEASURE_PROBE_RUNS`，默认 40，每个浏览器约 9 分钟；M4-P1）；`measure:probe -- -g 冷热` 只跑首屏与公式冻结的冷热对照（`MEASURE_WARMUP_ROUNDS` 轮，默认 4，每个浏览器约 3 分钟；`MEASURE_WARMUP_FORMULA=main-thread` 换成主线程公式作对照，DEF-072）；不进常规 E2E 与 CI，机器空闲时跑；结果在 `tests/e2e/measure/test-results/` |
+| `pnpm --filter @nerve-office/e2e run measure:local-save` | M4-P2 的真实本机保存端到端测量：三浏览器、约 1 MiB/5 MiB/perf-50k、在线与离线，默认每组 20 次（`MEASURE_LOCAL_SAVE_ROUNDS`）；使用持久浏览器目录、真实自动保存和 Worker，逐轮解密核对；不进常规 E2E/CI，不与其他检查并行；结果在 `tests/e2e/measure/test-results/local-save/` |
 | 崩溃项目（M4-P1）：在 `tests/e2e` 下 `npx playwright test --project=crash-chromium --project=crash-chrome --project=crash-webkit --no-deps` | 写入中途结束整棵浏览器进程、以同一个持久目录重开（`support/browser-crash.ts`），核对本机发件箱读回旧的或新的一份、Chromium 删库之后从 OPFS 恢复；每个浏览器一个项目、项目里一个工作进程（三个项目之间并行）；macOS 上 crash-webkit 要求机器上没有别的 Playwright WebKit（工具认出时报错）；`pnpm test:e2e` 里也跑（重启后端的项目依赖它） |
 | `node --expose-gc apps/api/scripts/measure-snapshot-inspection.ts` | 实测快照检查的子进程池（耗时、事件循环延迟、内存，DEF-018；先 `pnpm --filter "@nerve-office/api..." run build`；可以在生产镜像里跑，见脚本开头；不进 CI） |
 | `pnpm test:integration` | 集成测试（需要数据库；先构建后端，进程测试用构建产物） |

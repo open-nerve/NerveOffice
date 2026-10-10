@@ -10,6 +10,7 @@ import { describeError, isAccessDenied, isMissingResource, isUnknownOutcome } fr
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { spaceFolderPath, spacePath, spaceTrashPath } from '../../shared/lib/space-paths.ts'
+import { connectionUnavailable, useConnectionState } from '../../shared/lib/use-connection-state.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
@@ -85,6 +86,7 @@ interface NewFolderFormProps {
  * 名称不合法时说明原因（WCAG 3.3.1，M2-P6 复核 S4）。
  */
 function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFolderFormProps) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const refresh = useOrganizeRefresh()
   const refreshAfterUnknown = useOrganizeRefreshChecked()
   const ledger = useRequestIdLedger()
@@ -131,7 +133,7 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFol
       aria-label={text.newFolder}
       onSubmit={(event) => {
         event.preventDefault()
-        if (parsed.success && !mutation.isPending)
+        if (parsed.success && !mutation.isPending && connectionUnavailable() === undefined)
           mutation.mutate(parsed.data)
       }}
     >
@@ -140,7 +142,8 @@ function NewFolderForm({ spaceId, parentId, onDone, onCancel, onDenied }: NewFol
         {/* eslint-disable-next-line jsx-a11y/no-autofocus -- 点了新建才出现的输入框：焦点直接给它，不落到 body */}
         <Input id={inputId} value={name} autoFocus aria-invalid={name !== '' && !parsed.success} aria-describedby={problem === undefined ? undefined : problemId} onChange={event => setName(event.target.value)} />
       </div>
-      <Button type="submit" aria-disabled={mutation.isPending || !parsed.success} aria-describedby={problem === undefined ? undefined : problemId}>{mutation.isPending ? text.creatingFolder : text.newFolder}</Button>
+      <Button type="submit" aria-disabled={mutation.isPending || !parsed.success || unavailable !== undefined} aria-describedby={problem === undefined ? undefined : problemId}>{mutation.isPending ? text.creatingFolder : text.newFolder}</Button>
+      {unavailable !== undefined && <p className="basis-full text-sm text-muted-foreground">{unavailable}</p>}
       <Button type="button" variant="ghost" aria-disabled={mutation.isPending} onClick={() => !mutation.isPending && onCancel()}>{text.cancel}</Button>
       {/* 还什么都没输入时只是说明规则 */}
       <FieldProblem id={problemId} problem={problem} empty={name === ''} />
@@ -184,6 +187,7 @@ function notRetryable(error: unknown): boolean {
  * （规范 §2.4，shared/lib/use-first-load-retry.ts）
  */
 export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleRef }: SpaceContentsProps) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const trail = useFolderTrail(space.id, folderIds)
   const folders = useFirstLoadRetry(trail.children, titleRef, { retryable: notRetryable })
   const [creating, setCreating] = useState(false)
@@ -233,11 +237,12 @@ export function SpaceContents({ space, folderIds, targetSpaces, onDenied, titleR
       <DetailRefreshProblem query={trail.location} detail={text.breadcrumbLabel} fallbackFocus={titleRef} />
       <div className="flex flex-wrap items-center gap-2">
         {space.permissions.canCreateFolders && !creating && (
-          <Button ref={newFolderRef} variant="outline" size="sm" onClick={() => setCreating(true)}>{text.newFolder}</Button>
+          <Button ref={newFolderRef} variant="outline" size="sm" aria-disabled={unavailable !== undefined} onClick={() => connectionUnavailable() === undefined && setCreating(true)}>{text.newFolder}</Button>
         )}
         {/* 看得到空间内容的人都看得到回收站的列表，能不能动由每一条的 permissions 决定（P4-S3 spec §5） */}
         <Link to={spaceTrashPath(space.id)} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{text.trash}</Link>
       </div>
+      {space.permissions.canCreateFolders && !creating && unavailable !== undefined && <p className="text-sm text-muted-foreground">{unavailable}</p>}
       {/* 刷新之后不能在这里新建了（例如空间刚被归档）：表单不再显示（M2-P6 复核 S2） */}
       {creating && space.permissions.canCreateFolders && (
         <NewFolderForm spaceId={space.id} parentId={parentId} onDone={doneCreating} onCancel={() => doneCreating()} onDenied={creationDenied} />

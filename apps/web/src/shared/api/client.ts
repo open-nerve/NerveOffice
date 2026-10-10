@@ -1,54 +1,16 @@
 // 请求层（规范 §2.4，P3 设计 §3.7）：页面经这里访问接口，不在组件里直接 fetch。
 import type { z } from 'zod'
+import type { ApiErrorDetails } from './api-errors.ts'
 import { CSRF_TOKEN_HEADER, errorResponseSchema } from '@nerve-office/contracts'
+import { connectionState } from '../lib/connection-state.ts'
+import { ApiError, NetworkError, ResponseFormatError } from './api-errors.ts'
+import { withinRequestDeadline } from './request-deadline.ts'
 
-export interface ApiErrorDetails {
-  readonly requestId?: string
-  /** 响应头 Retry-After（秒）：429，与服务繁忙的 503（快照检查池满、每个账户 2 份、数据库繁忙，M3-P3）；自动保存按它退避（M3-P4） */
-  readonly retryAfterSeconds?: number
-  /** 错误响应的 details：结构按错误码约定，使用方按错误码用 contracts 里的结构再校验（ADR-006） */
-  readonly details?: Readonly<Record<string, unknown>>
-  /** 服务端回答的时刻（响应头 Date，毫秒时间戳，精确到秒） */
-  readonly serverTime?: number
-}
+export { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from './api-errors.ts'
+export type { ApiErrorDetails } from './api-errors.ts'
 
-/**
- * 服务端按约定返回的错误。code 是错误码：可能是前端还不认识的（服务端比前端新），
- * 为 UNKNOWN 时表示响应不是约定的格式（例如反向代理的错误页）。
- */
-export class ApiError extends Error {
-  override readonly name = 'ApiError'
-  readonly status: number
-  readonly code: string
-  readonly requestId: string | undefined
-  readonly retryAfterSeconds: number | undefined
-  readonly details: Readonly<Record<string, unknown>> | undefined
-  /**
-   * 服务端回答这次请求的时刻（响应头 Date；没有或读不出来时为 undefined）。details 里服务端的时间（例如别人的最后活动时间）
-   * 拿它来比，算出"多久之前"，不拿浏览器的时钟去比：浏览器的时钟可能不准（M3 总设计 §2.1）
-   */
-  readonly serverTime: number | undefined
-
-  constructor(status: number, code: string, message: string, details: ApiErrorDetails = {}) {
-    super(message)
-    this.status = status
-    this.code = code
-    this.requestId = details.requestId
-    this.retryAfterSeconds = details.retryAfterSeconds
-    this.details = details.details
-    this.serverTime = details.serverTime
-  }
-}
-
-/** 请求没能到达服务端，或者没有收到响应（断网、服务不可达）。 */
-export class NetworkError extends Error {
-  override readonly name = 'NetworkError'
-}
-
-/** 成功的响应与契约的结构不一致：前后端版本不一致，或者服务端的缺陷。不渲染出错的数据。 */
-export class ResponseFormatError extends Error {
-  override readonly name = 'ResponseFormatError'
-}
+/** 从发出请求到正文读取及校验结束的默认时限（M4-P2 S2，DEF-041）。 */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 
 const UNSAFE_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 
@@ -67,6 +29,8 @@ export interface RequestOptions<T> {
   /** 另外的请求头（例如编辑租约的令牌）：不能覆盖请求层自己的那几个（接受的类型、内容类型、CSRF 令牌） */
   headers?: Readonly<Record<string, string>>
   signal?: AbortSignal
+  /** 整个请求（含成功/错误正文）的时限，默认 30 秒。 */
+  timeoutMs?: number
   /** 成功响应的结构（契约）；没有响应体的接口用 z.undefined() */
   schema: z.ZodType<T>
 }
@@ -91,6 +55,8 @@ export interface RawRequestOptions {
    */
   acceptNotModified?: boolean
   signal?: AbortSignal
+  /** 整个请求（含成功/错误正文）的时限，默认 30 秒。 */
+  timeoutMs?: number
 }
 
 /** 响应头 Date 的时刻（毫秒时间戳）；没有或读不出来时为 undefined。成功的响应要它时（例如编辑状态里的最后活动时间）也用它 */
@@ -129,10 +95,10 @@ async function errorFrom(response: Response): Promise<ApiError> {
 }
 
 /**
- * 同源请求，返回成功的响应本身：调用方自己读正文与响应头（例如快照的字节与 ETag）。
- * 状态变更的请求带 CSRF 令牌。失败时抛出 ApiError 或 NetworkError；取消（signal）时原样抛出。
+ * 同源请求，在同一时限内读取响应：read 必须消费正文并返回最终数据，不把未读的 Response 交出作用域。
+ * 状态变更的请求带 CSRF 令牌。失败时抛出 ApiError 或 NetworkError（含 RequestTimeoutError）；调用方取消原样抛出。
  */
-export async function apiFetch(path: string, options: RawRequestOptions = {}): Promise<Response> {
+export async function apiFetch<T>(path: string, options: RawRequestOptions, read: (response: Response) => T | Promise<T>): Promise<T> {
   const method = options.method ?? 'GET'
   const headers: Record<string, string> = { ...options.headers, accept: options.accept ?? 'application/json' }
   if (options.body !== undefined)
@@ -140,20 +106,34 @@ export async function apiFetch(path: string, options: RawRequestOptions = {}): P
   if (UNSAFE_METHODS.has(method) && csrfToken !== undefined)
     headers[CSRF_TOKEN_HEADER] = csrfToken
 
-  let response: Response
+  const ticket = connectionState.beginRequest()
+  let result: T
   try {
-    response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, keepalive: options.keepalive, signal: options.signal })
+    result = await withinRequestDeadline({ timeoutMs: options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, signal: options.signal }, async (signal) => {
+      let response: Response
+      try {
+        response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, keepalive: options.keepalive, signal })
+      }
+      catch (error) {
+        signal.throwIfAborted()
+        throw new NetworkError('网络请求失败', { cause: error })
+      }
+      // fetch 的替身或迟到响应可能不理 abort；超时后不再把它交给正文读取方。
+      signal.throwIfAborted()
+      if (!(response.status === 304 && options.acceptNotModified === true) && !response.ok)
+        throw await errorFrom(response)
+      return read(response)
+    })
   }
   catch (error) {
-    if (options.signal?.aborted === true)
-      throw error
-    throw new NetworkError('网络请求失败', { cause: error })
+    // 调用方取消的原因可以是任意对象，不能仅靠 instanceof 将它当作网络故障。
+    if (error instanceof NetworkError && !(options.signal?.aborted === true && error === options.signal.reason))
+      connectionState.failed(ticket)
+    throw error
   }
-  if (response.status === 304 && options.acceptNotModified === true)
-    return response
-  if (!response.ok)
-    throw await errorFrom(response)
-  return response
+  // 放在整个 deadline 之外：读正文/校验未完、超时后的迟到完成都不能发布成功。
+  connectionState.succeeded(ticket)
+  return result
 }
 
 /** 按契约读出成功响应的 JSON 正文；与契约不一致时抛出 ResponseFormatError（label 写进说明，例如"GET /api/x"）。 */
@@ -169,8 +149,7 @@ export async function readJson<T>(response: Response, schema: z.ZodType<T>, labe
 export async function apiRequest<T>(path: string, options: RequestOptions<T>): Promise<T> {
   const method = options.method ?? 'GET'
   const body = options.body === undefined ? undefined : { contentType: 'application/json', data: JSON.stringify(options.body) }
-  const response = await apiFetch(path, { method, body, headers: options.headers, signal: options.signal })
-  return readJson(response, options.schema, `${method} ${path}`)
+  return apiFetch(path, { method, body, headers: options.headers, signal: options.signal, timeoutMs: options.timeoutMs }, async response => readJson(response, options.schema, `${method} ${path}`))
 }
 
 /** 未登录或登录已过期：页面要回到登录页。 */

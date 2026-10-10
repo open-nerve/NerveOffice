@@ -97,6 +97,23 @@ async function open(name = '只打开'): Promise<HTMLElement> {
 }
 
 describe('ConfirmDialog', () => {
+  it('实际确认重读限制；即使按钮尚未重渲染也不能沿旧闭包执行', async () => {
+    let reason: string | undefined
+    const run = vi.fn(async () => {})
+    const close = vi.fn()
+    renderInClient(<ConfirmDialog pending={confirmation({ run })} onClose={close} unavailable={() => reason} />)
+    const dialog = await screen.findByRole('dialog')
+    const submit = within(dialog).getByRole('button', { name: '停用' })
+    expect(submit).toHaveAttribute('aria-disabled', 'false')
+    reason = '需要联网'
+    await act(async () => fireEvent.click(submit))
+    expect(run).not.toHaveBeenCalled()
+    expect(close).not.toHaveBeenCalled()
+    reason = undefined
+    fireEvent.click(submit)
+    await waitFor(() => expect(run).toHaveBeenCalledOnce())
+  })
+
   it('说明后果；确认之后执行，成功就关闭', async () => {
     const run = vi.fn(async () => {})
     renderPage(confirmation({ run }))

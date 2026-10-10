@@ -2,6 +2,7 @@ import type { CaptureEditor } from './snapshot-capture.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { EXPLICIT_SETTLE_TIMEOUT_MS, explicitCaptureSource } from './snapshot-capture.test-support.ts'
 import { captureSettled, settleInputs, takeSnapshot, utf8Length } from './snapshot-capture.ts'
+import { fakeWorkingDraft } from './working-draft.test-support.ts'
 
 /**
  * 假的编辑器：seq 与内容可设；单元格编辑中时提交按 commitResult，提交成功算一处修改。与 SDK 一样，提交在调用的这一刻就关上单元格编辑器
@@ -39,13 +40,14 @@ function fakeEditor(initial: { seq?: number, content?: string, editing?: boolean
       return JSON.stringify({ content: state.content })
     }),
   }
-  return { editor, state, order }
+  const fixture = fakeWorkingDraft()
+  return { editor, state, order, ...fixture }
 }
 
 describe('同步捕获（计划书 §7.2：localSeq 在捕获这一步分配）', () => {
   it('序号与快照在同一个同步段里读出；大小是 UTF-8 字节；摘要另算（undefined）', () => {
-    const { editor, order } = fakeEditor({ seq: 4, content: '甲乙' })
-    expect(takeSnapshot(editor, true)).toEqual({ seq: 4, snapshot: '{"content":"甲乙"}', bytes: 20, formulasPending: true, digest: undefined })
+    const { editor, order, draft } = fakeEditor({ seq: 4, content: '甲乙' })
+    expect(takeSnapshot(editor, draft, { formulasPending: true, dedupe: true })).toMatchObject({ editorSeq: 4, draftSeq: 1, bytes: 20, formulasPending: true })
     expect(order).toEqual(['seq', 'capture'])
     expect(utf8Length('a甲')).toBe(4)
   })
@@ -77,7 +79,7 @@ describe('立即上传在按下这一刻的准备：提交这一刻开着的单�
   })
 
   it('面板的防抖还没到点：等它写进模型之后才兑现（批注里刚键入的字随后在捕获里）', async () => {
-    const { editor, state } = fakeEditor({ content: '甲' })
+    const { editor, state, draft } = fakeEditor({ content: '甲' })
     let land: () => void = () => {}
     vi.mocked(editor.settlePanels).mockImplementationOnce(async () => new Promise<void>((resolve) => {
       land = () => {
@@ -94,7 +96,7 @@ describe('立即上传在按下这一刻的准备：提交这一刻开着的单�
     expect(done).toBe(false)
     land()
     await settling
-    expect(takeSnapshot(editor, false)).toMatchObject({ seq: 1, snapshot: '{"content":"甲乙"}' })
+    expect(takeSnapshot(editor, draft, { formulasPending: false, dedupe: true })).toMatchObject({ editorSeq: 1, bytes: 20 })
   })
 
   it('出错原样抛出（保存的状态机按意外的错误处理）', async () => {
@@ -107,52 +109,52 @@ describe('立即上传在按下这一刻的准备：提交这一刻开着的单�
 
 describe('轮到这一次上传时：等公式（至多到时限），然后捕获', () => {
   it('公式收齐：不带标记；时限在调用时才取（从按下算，排队与准备用掉的不再给公式）', async () => {
-    const { editor, order } = fakeEditor({ seq: 2 })
+    const { editor, order, draft } = fakeEditor({ seq: 2 })
     const remaining = vi.fn(() => {
       order.push('timeout')
       return 1234
     })
-    await expect(captureSettled(editor, { settleTimeoutMs: remaining, take: pending => takeSnapshot(editor, pending) })).resolves.toMatchObject({ seq: 2, formulasPending: false })
+    await expect(captureSettled(editor, { settleTimeoutMs: remaining, take: pending => takeSnapshot(editor, draft, { formulasPending: pending, dedupe: true }) })).resolves.toMatchObject({ editorSeq: 2, formulasPending: false })
     expect(order).toEqual(['timeout', 'settle', 'seq', 'capture'])
     expect(editor.settleFormulas).toHaveBeenCalledWith(1234)
   })
 
   it('公式在时限内没收齐：照常捕获，带上"公式待更新"；算出负数的时限按 0', async () => {
-    const { editor, state } = fakeEditor()
+    const { editor, state, draft } = fakeEditor()
     state.settle = 'timeout'
-    await expect(captureSettled(editor, { settleTimeoutMs: () => -5, take: pending => takeSnapshot(editor, pending) })).resolves.toMatchObject({ formulasPending: true })
+    await expect(captureSettled(editor, { settleTimeoutMs: () => -5, take: pending => takeSnapshot(editor, draft, { formulasPending: pending, dedupe: true }) })).resolves.toMatchObject({ formulasPending: true })
     expect(editor.settleFormulas).toHaveBeenCalledWith(0)
   })
 
   it('交回 take 给出的那一份（自动保存记进"最近一次捕获"的同一个对象）', async () => {
-    const { editor } = fakeEditor({ content: '乙' })
-    const entry = { ...takeSnapshot(editor, false), serial: 7 }
+    const { editor, draft } = fakeEditor({ content: '乙' })
+    const entry = { ...takeSnapshot(editor, draft, { formulasPending: false, dedupe: true }), serial: 7 }
     await expect(captureSettled(editor, { settleTimeoutMs: () => 0, take: () => entry })).resolves.toBe(entry)
   })
 
   it('出错原样抛出（保存的状态机按意外的错误处理）', async () => {
-    const { editor } = fakeEditor()
+    const { editor, draft } = fakeEditor()
     const failure = new Error('SDK 出错')
     vi.mocked(editor.capture).mockImplementationOnce(() => {
       throw failure
     })
-    await expect(captureSettled(editor, { settleTimeoutMs: () => 0, take: pending => takeSnapshot(editor, pending) })).rejects.toBe(failure)
+    await expect(captureSettled(editor, { settleTimeoutMs: () => 0, take: pending => takeSnapshot(editor, draft, { formulasPending: pending, dedupe: true }) })).rejects.toBe(failure)
   })
 })
 
 describe('显式保存的捕获来源（保存的状态机的单元测试用：轮到时整套做完）', () => {
   it('提交单元格、等面板、等公式至多 3 秒（与捕获的上限同一个数）、捕获，不算摘要', async () => {
     expect(EXPLICIT_SETTLE_TIMEOUT_MS).toBe(3000)
-    const { editor, order } = fakeEditor({ seq: 1, editing: true })
-    await expect(explicitCaptureSource(editor)()).resolves.toEqual({ seq: 2, snapshot: '{"content":"甲"}', bytes: 17, formulasPending: false, digest: undefined })
+    const { editor, order, draft } = fakeEditor({ seq: 1, editing: true })
+    await expect(explicitCaptureSource(editor, draft)()).resolves.toMatchObject({ editorSeq: 2, bytes: 17, formulasPending: false })
     expect(order).toEqual(['commit', 'panels', 'settle', 'seq', 'capture'])
     expect(editor.settleFormulas).toHaveBeenCalledWith(3000)
   })
 
   it('提交不了：中止，交回 cell-editing，不等公式、不捕获', async () => {
-    const { editor, state } = fakeEditor({ editing: true })
+    const { editor, state, draft } = fakeEditor({ editing: true })
     state.commitResult = false
-    await expect(explicitCaptureSource(editor)()).resolves.toBe('cell-editing')
+    await expect(explicitCaptureSource(editor, draft)()).resolves.toBe('cell-editing')
     expect(editor.settleFormulas).not.toHaveBeenCalled()
     expect(editor.capture).not.toHaveBeenCalled()
   })

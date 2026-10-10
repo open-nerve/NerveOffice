@@ -15,12 +15,14 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createSheetEditor, SheetEditorLoadError } from '../../editor/index.ts'
 import { requestSession } from '../../shared/api/index.ts'
+import { watchBrowserConnection } from '../../shared/lib/browser-connection.ts'
+import { connectionState } from '../../shared/lib/connection-state.ts'
 import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { browserLeaseClock, trackActivity } from './edit-lease.ts'
-import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest, snapshotDigest } from './editor-api.ts'
+import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { issuedRequestMarker } from './issued-request.ts'
@@ -44,17 +46,11 @@ const browserVisibility: PageVisibility = {
   },
 }
 
-/** 联网与否：navigator.onLine 与 online、offline 事件（自动保存离线时不发，恢复时立即上传） */
+/** 浏览器信号与请求结果共用一份事实；租约确认在 EditingSession，不能直接由 online 放行。 */
 const browserNetwork: PageNetwork = {
-  online: () => navigator.onLine,
-  onChange: (listener) => {
-    window.addEventListener('online', listener)
-    window.addEventListener('offline', listener)
-    return () => {
-      window.removeEventListener('online', listener)
-      window.removeEventListener('offline', listener)
-    }
-  },
+  connection: connectionState,
+  online: () => connectionState.view().browserOnline,
+  onChange: connectionState.subscribe,
 }
 
 /** 本页的键盘、鼠标操作：窗口的捕获阶段（交互屏障挂在它之后），只认可信事件、零位移的移动不算（edit-lease.ts 的 trackActivity） */
@@ -105,6 +101,7 @@ function loadFailureReporter(target: Window): (error: unknown) => void {
 }
 
 export function startSheetEditorPage(elements: SheetEditorPageElements): void {
+  watchBrowserConnection({ state: connectionState, probe: requestSession })
   const reportLoadFailure = loadFailureReporter(window)
   if (import.meta.env.MODE === 'e2e') {
     // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
@@ -150,7 +147,6 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
       content: async documentId => fetchContent(documentId),
       contentIfChanged: async (documentId, revision) => fetchContentIfChanged(documentId, revision),
       editStatus: async documentId => fetchEditStatus(documentId),
-      compress: async snapshot => gzipText(snapshot),
       save: async (documentId, request, body, lease) => saveContent(documentId, request, body, lease),
       conflictCopy: async (documentId, query, body) => saveConflictCopy(documentId, query, body),
       reportOpenCheck: async (documentId, report) => reportOpenCheckFailures(documentId, report),
@@ -179,7 +175,6 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
     // 这一页发出过的请求编辑（审查 B2）：按标签页、刷新之后还在，所以是 sessionStorage；同样每次用时再取
     issuedRequest: documentId => issuedRequestMarker(documentId, { storage: () => window.sessionStorage }),
-    digest: async snapshot => snapshotDigest(snapshot),
     autosaveControl,
     handoverTrace,
     editIntent: editIntentOf(window.location),

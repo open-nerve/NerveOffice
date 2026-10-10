@@ -1,7 +1,7 @@
 import type { ErrorCode } from '@nerve-office/contracts'
 import { ERROR_CODES } from '@nerve-office/contracts'
 import { messages } from '../i18n/index.ts'
-import { ApiError, NetworkError } from './client.ts'
+import { ApiError, NetworkError, RequestTimeoutError } from './client.ts'
 
 function isKnownErrorCode(code: string): code is ErrorCode {
   return Object.hasOwn(ERROR_CODES, code)
@@ -14,6 +14,8 @@ export interface ErrorDescription {
 }
 
 export function describeError(error: unknown): ErrorDescription {
+  if (error instanceof RequestTimeoutError)
+    return { message: messages.errors.timeout }
   if (error instanceof NetworkError)
     return { message: messages.errors.network }
   if (error instanceof ApiError) {

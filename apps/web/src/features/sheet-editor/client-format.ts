@@ -27,12 +27,12 @@ export const PAGE_CLIENT_FORMAT: PageClientFormat = {
 }
 
 /** 同样的四项写成查询参数（保存、另存为副本） */
-export function clientFormatParams(): Record<string, string> {
+export function clientFormatParams(format: PageClientFormat = PAGE_CLIENT_FORMAT): Record<string, string> {
   return {
-    clientBuild: PAGE_CLIENT_FORMAT.clientBuild,
-    univerVersion: PAGE_CLIENT_FORMAT.univerVersion,
-    profile: PAGE_CLIENT_FORMAT.profile,
-    formatVersion: String(PAGE_CLIENT_FORMAT.formatVersion),
+    clientBuild: format.clientBuild,
+    univerVersion: format.univerVersion,
+    profile: format.profile,
+    formatVersion: String(format.formatVersion),
   }
 }
 

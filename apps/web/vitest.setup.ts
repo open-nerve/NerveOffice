@@ -1,6 +1,7 @@
 import { cleanup } from '@testing-library/react'
 import { afterEach, vi } from 'vitest'
 import { fakeOutboxLocks } from './src/shared/outbox/outbox-lock.test-support.ts'
+import { restoreConnection } from './src/shared/testing/connection.test-support.ts'
 import { FakeResizeObserver } from './src/shared/testing/resize.test-support.ts'
 import '@testing-library/jest-dom/vitest'
 
@@ -16,5 +17,6 @@ Object.defineProperty(navigator, 'locks', { configurable: true, value: fakeOutbo
 // 没有开启 Vitest 的 globals，Testing Library 不会自动清理：每个用例之后卸载渲染的组件，恢复被替换的全局对象（fetch）
 afterEach(() => {
   cleanup()
+  restoreConnection()
   vi.unstubAllGlobals()
 })
