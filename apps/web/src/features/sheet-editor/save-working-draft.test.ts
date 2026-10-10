@@ -1,5 +1,5 @@
 import type { SaveContentResponse } from '@nerve-office/contracts'
-import type { SaveRequest } from './save-coordinator.ts'
+import type { SaveRequest, SendSave } from './save-coordinator.ts'
 import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
@@ -19,7 +19,7 @@ const saved = (revision: number): SaveContentResponse => ({ revision, savedAt: '
 function setup(draft: WorkingDraft) {
   let editorSeq = 0
   const sends: { readonly request: SaveRequest, readonly body: Uint8Array<ArrayBuffer>, readonly result: ReturnType<typeof deferred<SaveContentResponse>> }[] = []
-  const send = vi.fn(async (request: SaveRequest, body: Uint8Array<ArrayBuffer>) => {
+  const send = vi.fn<SendSave>(async (request, body) => {
     const result = deferred<SaveContentResponse>()
     sends.push({ request, body, result })
     return result.promise
@@ -62,6 +62,87 @@ async function text(body: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 describe('保存协调与唯一工作草稿整合', () => {
+  it('新请求在实际发送前失去许可：不制造 unknown，释放本次 pin，下一次使用新标识', async () => {
+    const draft = createMemoryWorkingDraft({ ...DRAFT_OPTIONS, reason: 'disabled' })
+    const context = setup(draft)
+    context.send.mockResolvedValueOnce({ kind: 'not-sent' })
+    context.capture('没有发出的 A')
+    expect(await context.coordinator.save(context.latest, EXPLICIT)).toEqual({ kind: 'skipped', reason: 'stopped' })
+    expect(context.coordinator.hasUnknownOutcome()).toBe(false)
+    expect(context.coordinator.view().problem).toBeUndefined()
+    expect(context.sends).toHaveLength(0)
+    const prepared = await draft.prepare(context.latest())
+    expect(prepared.kind).toBe('prepared')
+    if (prepared.kind === 'prepared')
+      draft.release(prepared)
+    context.capture('新的 B')
+    const second = context.coordinator.save(context.latest, EXPLICIT)
+    const call = await context.sent(1)
+    expect(call.request.requestId).toBe('save-2')
+    expect(await text(call.body)).toBe('新的 B')
+    call.result.resolve(saved(8))
+    await second
+    context.coordinator.dispose()
+    draft.dispose()
+  })
+
+  it('旧 unknown 本轮未发出：不覆盖原错误/原字节，不释放 pin；许可恢复后仍先核对 A 再发 B', async () => {
+    const draft = createMemoryWorkingDraft({ ...DRAFT_OPTIONS, reason: 'disabled' })
+    const context = setup(draft)
+    context.capture('原 A')
+    const first = context.coordinator.save(context.latest, EXPLICIT)
+    const original = await context.sent(1)
+    original.result.reject(new NetworkError('之前已经发出，结果未知'))
+    await first
+    const problem = context.coordinator.view().problem
+    context.capture('新 B')
+    context.send.mockResolvedValueOnce({ kind: 'not-sent' })
+    expect(await context.coordinator.save(context.latest, EXPLICIT)).toEqual({ kind: 'skipped', reason: 'stopped' })
+    expect(context.coordinator.hasUnknownOutcome()).toBe(true)
+    expect(context.coordinator.view().problem).toBe(problem)
+    context.send.mockResolvedValueOnce({ kind: 'not-sent' })
+    expect(await context.coordinator.replayUnknownOutcome()).toBe('unknown')
+    expect(context.coordinator.hasUnknownOutcome()).toBe(true)
+    const retry = context.coordinator.save(context.latest, EXPLICIT)
+    const replay = await context.sent(2)
+    expect(replay.request).toEqual(original.request)
+    expect(replay.body).toBe(original.body)
+    replay.result.resolve(saved(8))
+    const latest = await context.sent(3)
+    expect(await text(latest.body)).toBe('新 B')
+    latest.result.resolve(saved(9))
+    await retry
+    expect(context.coordinator.hasUnknownOutcome()).toBe(false)
+    context.coordinator.dispose()
+    draft.dispose()
+  })
+
+  it('普通重放仍需保存许可，停用后的原请求收尾才使用 reconcile 意图', async () => {
+    const draft = createMemoryWorkingDraft({ ...DRAFT_OPTIONS, reason: 'disabled' })
+    const context = setup(draft)
+    context.capture('唯一请求')
+    const first = context.coordinator.save(context.latest, EXPLICIT)
+    const a = await context.sent(1)
+    expect(context.send.mock.calls[0]?.[2]).toBe('save')
+    a.result.reject(new NetworkError('未知'))
+    await first
+    const second = context.coordinator.save(context.latest, EXPLICIT)
+    const b = await context.sent(2)
+    expect(context.send.mock.calls[1]?.[2]).toBe('save')
+    b.result.reject(new NetworkError('仍未知'))
+    await second
+    context.coordinator.stop()
+    const ending = context.coordinator.replayUnknownOutcome()
+    const c = await context.sent(3)
+    expect(context.send.mock.calls[2]?.[2]).toBe('reconcile')
+    expect(c.request).toEqual(a.request)
+    expect(c.body).toBe(a.body)
+    c.result.resolve(saved(8))
+    expect(await ending).toBe('committed')
+    context.coordinator.dispose()
+    draft.dispose()
+  })
+
   it.each([false, true])('本机栅栏裁决回调未完成不能发 HTTP；裁决后停止=%s', async (stopped) => {
     const draft = createMemoryWorkingDraft({ ...DRAFT_OPTIONS, reason: 'disabled' })
     const context = setup(draft)

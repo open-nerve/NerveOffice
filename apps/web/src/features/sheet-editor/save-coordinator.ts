@@ -78,7 +78,10 @@ export interface SaveRequest {
 export type CompressSnapshot = (snapshot: string) => Promise<Uint8Array<ArrayBuffer>>
 
 /** 上传压缩后的快照；失败时抛出请求层的错误（ApiError、NetworkError、ResponseFormatError），结果按"确定被拒"或"未知"归类。 */
-export type SendSave = (request: SaveRequest, body: Uint8Array<ArrayBuffer>) => Promise<SaveContentResponse>
+export type SaveSendIntent = 'save' | 'reconcile'
+/** 许可在异步准备后失效：没有发出本次保存，不制造网络故障或新的未知结果。 */
+export type SaveSendResult = SaveContentResponse | { readonly kind: 'not-sent' }
+export type SendSave = (request: SaveRequest, body: Uint8Array<ArrayBuffer>, intent: SaveSendIntent) => Promise<SaveSendResult>
 
 /**
  * 已保存到云端、有未保存的修改、保存中、版本冲突、保存失败；本页与服务端不兼容（M3-P3）：本页的版本过旧，需要刷新（outdated）；
@@ -327,7 +330,7 @@ interface OwnedUpload {
 }
 
 type ReplayResult
-  = | { readonly kind: 'none' }
+  = | { readonly kind: 'none' | 'paused' }
     | { readonly kind: 'committed', readonly request: SaveRequest, readonly capture: CaptureRecord | undefined, readonly ref: DraftCaptureRef }
     | { readonly kind: 'unknown' | 'not-committed', readonly request: SaveRequest, readonly error: unknown }
 
@@ -348,7 +351,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   let disposed = false
   let owned: OwnedUpload | undefined
   let localTail: Promise<void> = Promise.resolve()
-  let replaying: Promise<ReplayResult['kind']> | undefined
+  let replaying: ReturnType<SaveCoordinator['replayUnknownOutcome']> | undefined
   let problem: SaveProblem | undefined
   let conflict: RevisionConflictDetails | null | undefined
   /** 与服务端不兼容（终态） */
@@ -551,9 +554,12 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       await mark(target)
       if (disposed || (!allowStopped && (stopped || ended())))
         return { kind: 'none' }
-      const result = await send(request, target.prepared.gzip)
+      const result = await send(request, target.prepared.gzip, allowStopped ? 'reconcile' : 'save')
       if (disposed)
         return { kind: 'none' }
+      // 既往已发送的请求仍未知；保留原错误和 pin，不能把未发出当成新失败或提交。
+      if ('kind' in result)
+        return { kind: 'paused' }
       if (record !== undefined)
         confirm(record.capture, result.revision)
       await confirmLocal(target, result.revision)
@@ -599,12 +605,13 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   }
 
   /** 外部核对等排着的保存结束；队列内部只调 replayOnce，避免等待自身。 */
-  async function replay(): Promise<ReplayResult['kind']> {
+  async function replay(): ReturnType<SaveCoordinator['replayUnknownOutcome']> {
     if (replaying !== undefined)
       return replaying
     const run = tail.then(async () => {
       await localTail
-      return (await replayOnce(true)).kind
+      const result = await replayOnce(true)
+      return result.kind === 'paused' ? 'unknown' : result.kind
     })
     tail = run.then(() => undefined)
     replaying = run
@@ -679,9 +686,16 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
           return ended() ? SKIPPED_ENDED : SKIPPED_STOPPED
         }
         unconfirmed.set(request.requestId, { localSeq: request.localSeq, capture: record, adopted: false })
-        const result = await send(request, capture.gzip)
+        const result = await send(request, capture.gzip, 'save')
         if (disposed)
           return SKIPPED_STOPPED
+        if ('kind' in result) {
+          if (!earlierUnknown) {
+            unconfirmed.delete(request.requestId)
+            release(target)
+          }
+          return SKIPPED_STOPPED
+        }
         confirm(record, result.revision)
         await confirmLocal(target, result.revision)
         release(target)
@@ -731,6 +745,8 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
       return SKIPPED_ENDED
     await localTail
     const replayed = await replayOnce()
+    if (replayed.kind === 'paused')
+      return SKIPPED_STOPPED
     if (replayed.kind === 'unknown' || replayed.kind === 'not-committed') {
       fail(replayed.error, replayed.request, replayed.kind === 'unknown')
       const failure = classifySaveError(replayed.error)

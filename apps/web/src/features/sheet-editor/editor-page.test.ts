@@ -14,6 +14,7 @@ import type { SaveRequest } from './save-coordinator.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, setCsrfToken } from '../../shared/api/index.ts'
+import { createConnectionState } from '../../shared/lib/connection-state.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
@@ -222,6 +223,7 @@ interface CreateOptions {
 
 interface Setup {
   readonly localDrafts?: Parameters<typeof createEditorPage>[0]['localDrafts']
+  readonly network?: Parameters<typeof createEditorPage>[0]['network']
   readonly documentId?: string | undefined
   /** 本页这次加载的标识与 requestId 的生成：默认 id-1、id-2……；冲突的详情要按契约解析时换成 UUID 的写法 */
   readonly newId?: () => string
@@ -301,7 +303,7 @@ function setup(options: Setup = {}) {
     sessionChannel: channel,
     clock: time.clock,
     visibility: { hidden: hidden.get, onChange: hidden.onChange },
-    network: { online: online.get, onChange: online.onChange },
+    network: options.network ?? { online: online.get, onChange: online.onChange },
     activity: activity.activity,
     sameBrowser: (documentId) => {
       const opened = sameBrowserFor(documentId, browser.tab('page'))
@@ -352,6 +354,30 @@ function deferred<T>() {
 }
 
 const UNAUTHENTICATED = new ApiError(401, 'UNAUTHENTICATED', '请先登录')
+
+describe('页面、模式与编辑会话共用连接事实', () => {
+  it('页面恢复在线先核对租约，任意成功请求不能使保存绕过在途核对', async () => {
+    const connection = createConnectionState({ online: true, now: Date.now })
+    const checking = deferred<RenewedEditLease>()
+    const t = setup({ network: { connection, online: () => connection.view().browserOnline, onChange: connection.subscribe } })
+    await t.editorPage.load()
+    t.fake.enter('steady')
+    t.editLease.renew.mockReturnValueOnce(checking.promise)
+    connection.setBrowserOnline(false)
+    await t.editorPage.save()
+    expect(t.api.save).not.toHaveBeenCalled()
+    connection.setBrowserOnline(true)
+    await vi.waitFor(() => expect(t.editLease.renew).toHaveBeenCalledOnce())
+    connection.succeeded(connection.beginRequest())
+    await t.editorPage.save()
+    expect(t.api.save).not.toHaveBeenCalled()
+    checking.resolve(RENEWED)
+    await settle()
+    await t.editorPage.save()
+    expect(t.api.save).toHaveBeenCalledOnce()
+    expect(t.api.save.mock.calls[0]![3]).toEqual(CREDENTIALS)
+  })
+})
 
 describe('就绪之前页头之外的交互一律拦下（Codex 评审 CX1，独立复验 N1）', () => {
   /** 在 parent 里的一个元素上派发一次用户输入：返回事件是否被拦下（默认行为取消、元素上的监听收不到） */

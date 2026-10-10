@@ -3558,7 +3558,7 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁；争用�
     expect(modeOf(context.mode).kind).toBe('editing')
   })
 
-  it('编辑时锁被抢走、核对不了（断网）：照常编辑、照常保存，不把自己判为失效、不抢；这期间不持有锁（不回应交接请求）；之后的心跳续租成功就把锁拿回来', async () => {
+  it('编辑时锁被抢走、核对不了：继续编辑但保留修改不上传，不误判失效或回应交接；重新持锁后可保存', async () => {
     const browser = fakeBrowser()
     const context = setup({ browser, tab: 'this' })
     await editing(context)
@@ -3572,16 +3572,19 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁；争用�
     await settle()
     expect(browser.posted(channelNameOf(DOCUMENT_ID))).toHaveLength(1)
     expect(modeOf(context.mode).kind).toBe('editing')
-    // 照常保存（服务端照样是唯一的权威：这一代不是当前的话保存会被拒）
+    // M4-P2：实际发送还须持有本机锁，核对不了时保留当前修改。
     context.factory.last().edit('甲')
     await context.mode.save()
-    expect(context.api.save).toHaveBeenCalledOnce()
+    expect(context.api.save).not.toHaveBeenCalled()
+    expect(context.mode.hasUnsavedWork()).toBe(true)
     // 下一次心跳续租成功：这一代此刻是当前的，把锁拿回来
     await context.time.advance(HEARTBEAT_MS)
     expect(context.editLease.renew).toHaveBeenCalledTimes(2)
     expect(browser.holderOf(LOCK)).toBe('this')
     expect(await settledNow(stale.stolen)).toBe(true)
     expect(modeOf(context.mode).kind).toBe('editing')
+    await context.mode.save()
+    expect(context.api.save).toHaveBeenCalledOnce()
   })
 
   it('编辑时锁被抢走、核对不了，之后的心跳得知被本人接管：失去编辑权——说本浏览器的另一个标签页接手了（抢走锁的正是它，不说另一台设备）', async () => {
@@ -3655,13 +3658,13 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁；争用�
   it('编辑时锁被抢走、核对不了，等心跳期间页面关闭（pagehide，保存在途：不释放、照常心跳）：之后的心跳续租成功也不拿回锁', async () => {
     const context = setup()
     await editing(context)
-    context.editLease.renew.mockRejectedValueOnce(new NetworkError('断网'))
-    await stealFromAnotherTab(context)
     const reply = deferred<SaveContentResponse>()
     context.api.save.mockImplementationOnce(async () => reply.promise)
     context.factory.last().edit('甲')
     const saving = context.mode.save()
-    await settle()
+    await vi.waitFor(() => expect(context.api.save).toHaveBeenCalledOnce())
+    context.editLease.renew.mockRejectedValueOnce(new NetworkError('断网'))
+    await stealFromAnotherTab(context)
     context.mode.releaseOnHide()
     expect(context.editLease.release).not.toHaveBeenCalled()
     await context.time.advance(HEARTBEAT_MS)
@@ -3684,8 +3687,8 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁；争用�
     expect(modeOf(context.mode).kind).toBe('losing')
     reply.reject(leaseLost('replaced'))
     await exiting
-    await settle()
-    expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'taken-over', where: 'this-browser' }, unsaved: true })
+    // 退出流程已被失效流程取代；它不等待后者压缩/读回并重建完成。
+    await vi.waitFor(() => expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'taken-over', where: 'this-browser' }, unsaved: true }))
     expect(context.editLease.release).not.toHaveBeenCalled()
     expect(context.editLease.acquire).toHaveBeenCalledOnce()
   })

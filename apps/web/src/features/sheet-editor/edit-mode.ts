@@ -438,6 +438,7 @@ export interface EditModeOptions {
   readonly clientInstanceId: string
   /** 本页的用户（载入时确认的）：交接频道的请求带上它，回应时只理会同一个人的（M3-P5 设计 §3.7） */
   readonly userId: string
+  readonly connection?: EditingSessionOptions['connection']
   readonly localDrafts?: EditingSessionOptions['localDrafts']
   readonly api: EditModeApi
   readonly createEditor: CreateModeEditor
@@ -687,6 +688,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     documentId,
     userId: options.userId,
     localDrafts: options.localDrafts,
+    connection: options.connection,
     sessionActive: () => session === 'active',
     clientInstanceId: options.clientInstanceId,
     api,

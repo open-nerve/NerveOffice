@@ -107,8 +107,9 @@ export interface EditorPageApi extends EditModeApi {
   readonly document: (documentId: string) => Promise<DocumentDetail>
 }
 
-/** 页面联网与否（navigator.onLine 与 online、offline 事件）：离线时自动保存不发，恢复时立即上传（M3-P4 设计 §3.8） */
+/** 同一连接状态提供浏览器信号与请求事实；online 只唤醒调度，编辑会话独立核对上传许可。 */
 export interface PageNetwork {
+  readonly connection?: EditingSessionOptions['connection']
   readonly online: () => boolean
   /** 联网与否变了；返回退订的函数 */
   readonly onChange: (listener: () => void) => () => void
@@ -588,6 +589,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       clientInstanceId,
       userId: user,
       localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled },
+      connection: options.network.connection,
       api,
       createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
       clock,

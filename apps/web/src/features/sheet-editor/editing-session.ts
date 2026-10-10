@@ -3,6 +3,7 @@
 // 在途保存与结果未知的重放仍要由协调器收尾。已交出/失效时 detachLease，不再次发释放请求。
 import type { PendingEditRequest, SaveContentResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
+import type { ConnectionState } from '../../shared/lib/connection-state.ts'
 import type { Autosave, AutosaveEditor, AutosaveEvent, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
@@ -11,7 +12,7 @@ import type { LeaseCredentials } from './editor-api.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { LocalLock, LockClaim } from './local-lock.ts'
 import type { SameBrowser } from './same-browser.ts'
-import type { SaveCoordinator, SaveEditor, SaveRequest } from './save-coordinator.ts'
+import type { SaveCoordinator, SaveEditor, SaveRequest, SaveSendIntent, SaveSendResult } from './save-coordinator.ts'
 import { ApiError as RequestError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
 import { incompatibilityOf, PAGE_CLIENT_FORMAT } from './client-format.ts'
@@ -28,6 +29,8 @@ export interface EditingSessionOptions {
   readonly userId: string
   /** 是否仍是本页用户；和临时阻止 HTTP 的“会话确认在途”分开。 */
   readonly sessionActive?: (() => boolean) | undefined
+  /** 连接恢复只允许发起核对，不能直接恢复上传。独立使用者可不装浏览器连接适配器。 */
+  readonly connection?: Pick<ConnectionState, 'view' | 'subscribe'> | undefined
   readonly documentId: string
   readonly clientInstanceId: string
   readonly api: {
@@ -112,6 +115,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   let coordinator: SaveCoordinator | undefined
   let autosave: Autosave | undefined
   let savingEditor: EditingSessionEditor | undefined
+  let savingLease: EditLease | undefined
   let draft: EditingDraft | undefined
   let preparation: EditingDraftPreparation | undefined
   let transferDraft: (() => void) | undefined
@@ -124,12 +128,22 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   let stopWatchingAutosave: (() => void) | undefined
   let editingBase = 0
   let disposed = false
+  let connectionView = options.connection?.view()
+  let needsConnectionCheck = connectionView?.available === false
+  let connectionEnded = false
+  let connectionGeneration = 0
+  let checkingConnection = false
+  let checkAgainImmediately = false
+  let connectionAttempts = 0
+  let connectionRetryAt = 0
+  let cancelConnectionRetry: (() => void) | undefined
 
   function baseRevision(): number {
     return coordinator?.baseRevision() ?? editingBase
   }
 
   function releaseLock(): void {
+    invalidateConnection()
     suspendDraft()
     const held = lock
     lock = undefined
@@ -153,6 +167,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   }
 
   function stopSaving(): void {
+    invalidateConnection(coordinator !== undefined)
     draftGeneration += 1
     verifyFence = undefined
     stopCapturing()
@@ -161,6 +176,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     coordinator?.dispose()
     coordinator = undefined
     savingEditor = undefined
+    savingLease = undefined
     preparation?.dispose()
     preparation = undefined
     transferDraft = undefined
@@ -182,16 +198,113 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   }
 
   function syncSaving(): void {
-    if (savingActive && verifyFence === undefined)
+    if (savingActive && verifyFence === undefined && !needsConnectionCheck)
       coordinator?.resume()
     else
       coordinator?.stop()
   }
 
+  function clearConnectionRetry(): void {
+    cancelConnectionRetry?.()
+    cancelConnectionRetry = undefined
+  }
+
+  /** 使旧核对失效，但不断开本机来源、密钥或捕获。 */
+  function invalidateConnection(recheck = true): void {
+    connectionGeneration += 1
+    clearConnectionRetry()
+    if (recheck && options.connection !== undefined)
+      needsConnectionCheck = true
+    syncSaving()
+  }
+
+  function canCheckConnection(): boolean {
+    return options.connection !== undefined && !disposed && !connectionEnded && savingActive
+      && lease !== undefined && lease === savingLease && coordinator !== undefined && lock?.held() === true
+      && options.sessionActive?.() !== false && options.connection.view().browserOnline
+  }
+
+  /** 单飞、受控退避；成功请求与旧心跳只能唤醒此入口，不能给予编辑许可。 */
+  function checkConnection(): void {
+    const held = lease
+    const connection = options.connection
+    if (held === undefined || connection === undefined || !needsConnectionCheck || !canCheckConnection() || checkingConnection || cancelConnectionRetry !== undefined)
+      return
+    const delay = connectionRetryAt - clock.now()
+    if (delay > 0) {
+      cancelConnectionRetry = clock.schedule(() => {
+        cancelConnectionRetry = undefined
+        checkConnection()
+      }, delay)
+      return
+    }
+    const saver = coordinator
+    const source = draft
+    const generation = connectionGeneration
+    const networkGeneration = connection.view().generation
+    const current = (): boolean => canCheckConnection() && lease === held && coordinator === saver && draft === source
+      && connectionGeneration === generation && connection.view().generation === networkGeneration
+    checkingConnection = true
+    checkAgainImmediately = false
+    connectionAttempts += 1
+    void (async () => {
+      try {
+        const verdict = await confirmDraft(held, current)
+        if (!current())
+          return
+        if (verdict.kind === 'superseded') {
+          connectionEnded = true
+          held.abandon()
+          options.onLost(verdict.loss)
+        }
+        else if (verdict.kind === 'ended') {
+          connectionEnded = true
+        }
+        else if (verdict.kind === 'current') {
+          needsConnectionCheck = false
+          connectionAttempts = 0
+          connectionRetryAt = 0
+          syncSaving()
+        }
+      }
+      catch (error) {
+        options.reportError(error)
+      }
+      finally {
+        checkingConnection = false
+        if (needsConnectionCheck && !checkAgainImmediately)
+          connectionRetryAt = clock.now() + Math.min(2_000 * 2 ** Math.min(connectionAttempts - 1, 4), 30_000)
+        checkConnection()
+      }
+    })()
+  }
+
+  const stopWatchingConnection = options.connection?.subscribe(() => {
+    const next = options.connection?.view()
+    if (next === undefined)
+      return
+    const previous = connectionView
+    connectionView = next
+    if (next.generation !== previous?.generation) {
+      const alreadyChecking = needsConnectionCheck
+      invalidateConnection()
+      if (!next.browserOnline || previous?.browserOnline === false) {
+        connectionAttempts = 0
+        connectionRetryAt = clock.now()
+        checkAgainImmediately = next.browserOnline
+      }
+      else if (!alreadyChecking) {
+        connectionAttempts = 0
+        connectionRetryAt = clock.now() + 2_000
+      }
+    }
+    checkConnection()
+  })
+
   /** 本代自己失效仍沿用 M3 的续上；一次续上后必须重新核对，不把申请回包当作当前事实。 */
-  async function confirmDraft(held: EditLease): Promise<LeaseVerdict> {
+  async function confirmDraft(held: EditLease, still: () => boolean = () => true): Promise<LeaseVerdict> {
     const generation = draftGeneration
-    const current = (): boolean => !disposed && lease === held && lock?.held() === true && options.sessionActive?.() !== false && draftGeneration === generation
+    const current = (): boolean => !disposed && lease === held && lock?.held() === true && options.sessionActive?.() !== false && draftGeneration === generation && still()
     const unknown: LeaseVerdict = { kind: 'unknown', error: undefined }
     if (!current())
       return unknown
@@ -219,13 +332,23 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   }
 
   /** 保存时租约已续上就用新凭据重发至多一次；原请求标识和字节不变。 */
-  async function sendSave(held: EditLease, request: SaveRequest, body: Uint8Array<ArrayBuffer>): Promise<SaveContentResponse> {
+  async function sendSave(held: EditLease, request: SaveRequest, body: Uint8Array<ArrayBuffer>, intent: SaveSendIntent, owned: () => boolean): Promise<SaveSendResult> {
     for (let resent = false; ; resent = true) {
+      // mark、排队及 lose 都可能等待。每次实际 HTTP 前重新判定，不能只依赖协调器的 stop。
+      if (disposed || !owned() || !(options.connection?.view().browserOnline ?? options.autosave.page.online()))
+        return { kind: 'not-sent' }
+      if (intent === 'save' && (!savingActive || needsConnectionCheck || verifyFence !== undefined
+        || lease !== held || lock?.held() !== true || options.sessionActive?.() === false)) {
+        return { kind: 'not-sent' }
+      }
       const credentials = held.credentials()
       try {
         return await api.save(documentId, request, body, credentials)
       }
       catch (error) {
+        // 已失效后的固定请求只问此前有没有提交，不能借失败重新申请编辑权。
+        if (intent === 'reconcile')
+          throw error
         if (incompatibilityOf(error) !== undefined) {
           void held.release()
           throw error
@@ -263,6 +386,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       onRequest: options.onRequest,
       onRenewed: (sentAt) => {
         lock?.renewed(sentAt)
+        checkConnection()
         if (verifyFence !== undefined)
           void verifyFence().catch(options.reportError)
         else
@@ -277,6 +401,12 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     acceptLease: (held, revision) => {
       lease = held
       editingBase = revision
+      invalidateConnection(false)
+      connectionEnded = false
+      needsConnectionCheck = options.connection?.view().available === false
+      connectionAttempts = 0
+      connectionRetryAt = 0
+      syncSaving()
     },
     claim: async (held) => {
       const claimed: LocalLock = holdLocalLock({
@@ -292,10 +422,14 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         onHeldChange: (isHeld) => {
           if (disposed || lock !== claimed)
             return
-          if (isHeld)
+          if (isHeld) {
             void resumeDraft().catch(options.reportError)
-          else
+          }
+          else {
+            invalidateConnection()
             suspendDraft()
+          }
+          checkConnection()
         },
         clock,
         trace: options.trace,
@@ -366,15 +500,23 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       transferDraft = undefined
       draft = undefined
       savingEditor = undefined
+      savingLease = undefined
+      invalidateConnection()
       return owned
     },
     suspendDraft,
     resumeDraft,
     setSavingActive: (active) => {
-      savingActive = active
+      if (savingActive !== active) {
+        invalidateConnection()
+        savingActive = active
+        checkConnection()
+      }
       syncSaving()
     },
     discardDraftKey: () => {
+      if (options.sessionActive?.() === false)
+        invalidateConnection()
       suspendDraft()
       if (draft !== undefined && savingEditor !== undefined) {
         try {
@@ -406,6 +548,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       if (source === undefined)
         throw new Error('建立保存前必须先准备工作草稿来源')
       savingEditor = editor
+      savingLease = held
       let saver: SaveCoordinator
       let verifying: { readonly generation: number, readonly promise: Promise<void> } | undefined
       const ownsSaving = (): boolean => !disposed && coordinator === saver && lease === held && draft === source && lock?.held() === true && options.sessionActive?.() !== false
@@ -449,7 +592,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       saver = createSaveCoordinator({
         editor,
         draft: source,
-        send: async (request, body) => sendSave(held, request, body),
+        send: async (request, body, intent) => sendSave(held, request, body, intent, () => coordinator === saver),
         baseRevision: initial.revision,
         clientInstanceId: options.clientInstanceId,
         newRequestId: options.newId,
@@ -487,16 +630,21 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       autosave = scheduler
       stopWatchingAutosave = scheduler.subscribe(options.onChange)
       options.autosave.attach?.(scheduler)
+      checkConnection()
     },
     stopCapturing,
     stopSaving,
-    detachLease: () => { lease = undefined },
+    detachLease: () => {
+      lease = undefined
+      invalidateConnection()
+    },
     releaseLease,
     releaseLock,
     dispose: () => {
       if (disposed)
         return
       disposed = true
+      stopWatchingConnection?.()
       releaseLease()
       stopSaving()
     },

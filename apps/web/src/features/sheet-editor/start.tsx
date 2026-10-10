@@ -46,17 +46,11 @@ const browserVisibility: PageVisibility = {
   },
 }
 
-/** 联网与否：navigator.onLine 与 online、offline 事件（自动保存离线时不发，恢复时立即上传） */
+/** 浏览器信号与请求结果共用一份事实；租约确认在 EditingSession，不能直接由 online 放行。 */
 const browserNetwork: PageNetwork = {
-  online: () => navigator.onLine,
-  onChange: (listener) => {
-    window.addEventListener('online', listener)
-    window.addEventListener('offline', listener)
-    return () => {
-      window.removeEventListener('online', listener)
-      window.removeEventListener('offline', listener)
-    }
-  },
+  connection: connectionState,
+  online: () => connectionState.view().browserOnline,
+  onChange: connectionState.subscribe,
 }
 
 /** 本页的键盘、鼠标操作：窗口的捕获阶段（交互屏障挂在它之后），只认可信事件、零位移的移动不算（edit-lease.ts 的 trackActivity） */
