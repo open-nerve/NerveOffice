@@ -13,6 +13,7 @@ import type { HeldLock, SameBrowser } from './same-browser.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { createConnectionState } from '../../shared/lib/connection-state.ts'
 import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
@@ -313,6 +314,7 @@ function fakeAutosave(held: boolean) {
 
 interface Setup {
   readonly localDrafts?: EditModeOptions['localDrafts']
+  readonly connection?: EditModeOptions['connection']
   readonly api?: Partial<Omit<EditModeApi, 'editLease'>>
   readonly editLease?: Partial<EditLeaseApi>
   readonly now?: () => Date
@@ -379,6 +381,7 @@ function setup(options: Setup = {}) {
     clientInstanceId: options.clientInstanceId ?? PAGE_ID,
     userId: options.userId ?? AMY.id,
     localDrafts: options.localDrafts,
+    connection: options.connection,
     api,
     createEditor: factory.createEditor,
     clock: time.clock,
@@ -6836,6 +6839,144 @@ describe('强制接管（M3-P5 设计 §3.8，US-M3-09）', () => {
     const context = await adminReading({ editLease: { acquire: async () => Promise.reject(HELD_BY_AMY) } })
     await context.mode.forceTakeOver()
     expect(readingOf(context.mode)).toMatchObject({ holder: { holder: AMY, sameUser: false }, notice: undefined })
+  })
+})
+
+describe('重连先确认编辑权已被替换时的失效说明（M4-P2 CI 回归）', () => {
+  const REPLACED = leaseLost('replaced')
+  const LOSS = { kind: 'lease', reason: 'replaced' }
+
+  async function interrupted(options: Setup = {}) {
+    const connection = createConnectionState({ online: true, now: Date.now })
+    const context = setup({ ...options, connection })
+    await editing(context)
+    connection.setBrowserOnline(false)
+    context.factory.last().edit('甲的离线内容')
+    context.editLease.renew.mockRejectedValueOnce(REPLACED)
+    const reads = context.api.editStatus.mock.calls.length
+    return { ...context, connection, reads, reconnect: () => connection.setBrowserOnline(true) }
+  }
+
+  it('连接复核先于心跳与保存得知 replaced：只读查询当前编辑者，保留完整正文与副本，不重新申请或上传', async () => {
+    const context = await interrupted()
+    const rebuilding = context.factory.holdNext()
+    context.api.editStatus.mockResolvedValue(status(4, AMY_EDITING))
+    context.reconnect()
+    await vi.waitFor(() => expect(context.factory.createEditor).toHaveBeenCalledTimes(3))
+    expect(modeOf(context.mode).kind).toBe('losing')
+    expect(context.api.editStatus).toHaveBeenCalledTimes(context.reads + 1)
+    rebuilding.release()
+    await vi.waitFor(() => expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } }, unsaved: true, readable: true }))
+    expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('甲的离线内容') })
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    expect(context.editLease.release).not.toHaveBeenCalled()
+    await context.time.advance(HEARTBEAT_MS)
+    await context.mode.save()
+    expect(context.editLease.renew).toHaveBeenCalledOnce()
+    expect(context.api.save).not.toHaveBeenCalled()
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(new TextDecoder().decode(await gunzipBytes(context.api.conflictCopy.mock.calls[0]![2]))).toBe(snapshotOf('甲的离线内容'))
+    expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied', document: { id: COPY.id } })
+  })
+
+  it('查询迟于只读就绪：不阻塞副本，补说明也不作废正在保存的副本', async () => {
+    const answer = deferred<FetchedEditStatus>()
+    const copy = deferred<CreatedDocument>()
+    const context = await interrupted({ api: { conflictCopy: async () => copy.promise } })
+    context.api.editStatus.mockReturnValueOnce(answer.promise)
+    context.reconnect()
+    await vi.waitFor(() => expect(lostOf(context.mode)).toMatchObject({ loss: LOSS, checking: false }))
+    expect(context.factory.last().access).toBe('read')
+    expect(context.api.editStatus).toHaveBeenCalledTimes(context.reads + 1)
+    const saving = context.mode.saveCopy()
+    await vi.waitFor(() => expect(context.api.conflictCopy).toHaveBeenCalledOnce())
+    answer.resolve(status(4, AMY_EDITING))
+    await vi.waitFor(() => expect(lostOf(context.mode)).toMatchObject({ loss: { kind: 'held', holder: { holder: AMY } }, copy: { kind: 'saving' } }))
+    copy.resolve({ ...COPY, replayed: false })
+    await saving
+    expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied', document: { id: COPY.id } })
+  })
+
+  it.each([
+    ['查询失败', async (): Promise<FetchedEditStatus> => Promise.reject(new NetworkError('断网'))],
+    ['无人持有', async (): Promise<FetchedEditStatus> => status(4)],
+  ])('%s：保留原失效原因，内容与副本仍可用', async (_case, read) => {
+    const context = await interrupted()
+    context.api.editStatus.mockImplementation(read)
+    context.reconnect()
+    await vi.waitFor(() => expect(lostOf(context.mode)).toMatchObject({ loss: LOSS, unsaved: true, checking: false }))
+    expect(context.api.editStatus).toHaveBeenCalledTimes(context.reads + 1)
+    expect(context.factory.last().snapshot).toBe(snapshotOf('甲的离线内容'))
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(context.editLease.acquire).toHaveBeenCalledOnce()
+    expect(context.api.save).not.toHaveBeenCalled()
+  })
+
+  it('持有者是本人时只说明当前被本人占用，不推断本人接管或强制接管', async () => {
+    const context = await interrupted()
+    context.api.editStatus.mockResolvedValue(status(4, SELF_EDITING))
+    context.reconnect()
+    await vi.waitFor(() => expect(lostOf(context.mode).loss).toMatchObject({ kind: 'held', holder: { holder: AMY, sameUser: true, sameSession: false } }))
+  })
+
+  it.each([
+    ['discard', 'loading'],
+    ['discard', 'failed'],
+    ['copy', 'loading'],
+    ['copy', 'failed'],
+  ] as const)('%s 后重载为 %s：旧查询不再更新失效说明', async (action, when) => {
+    const answer = deferred<FetchedEditStatus>()
+    const content = deferred<LoadedContent>()
+    const context = await interrupted({ api: { content: async () => content.promise } })
+    context.api.editStatus.mockReturnValueOnce(answer.promise)
+    context.reconnect()
+    await vi.waitFor(() => expect(modeOf(context.mode).kind).toBe('lost'))
+    expect(context.api.editStatus).toHaveBeenCalledTimes(context.reads + 1)
+    const loading = action === 'discard' ? context.mode.discard() : context.mode.saveCopy()
+    await vi.waitFor(() => expect(lostOf(context.mode).reload.kind).toBe('loading'))
+    if (when === 'failed') {
+      content.reject(new NetworkError('重载失败'))
+      await loading
+    }
+    answer.resolve(status(4, AMY_EDITING))
+    await settle()
+    expect(lostOf(context.mode).loss).toEqual(LOSS)
+    if (when === 'loading') {
+      content.reject(new NetworkError('重载失败'))
+      await loading
+    }
+    expect(lostOf(context.mode)).toMatchObject({ loss: LOSS, reload: { kind: 'failed' } })
+  })
+
+  it.each(['dispose', 'enter', 'lose-again'] as const)('%s 后旧查询返回：不更新新页面或第二次失效', async (action) => {
+    const answer = deferred<FetchedEditStatus>()
+    const context = await interrupted()
+    context.api.editStatus.mockReturnValueOnce(answer.promise)
+    context.reconnect()
+    await vi.waitFor(() => expect(modeOf(context.mode).kind).toBe('lost'))
+    expect(context.api.editStatus).toHaveBeenCalledTimes(context.reads + 1)
+    if (action === 'dispose') {
+      context.mode.dispose()
+    }
+    else {
+      await context.mode.discard()
+      context.connection.succeeded(context.connection.beginRequest())
+      await context.mode.enter()
+      expect(modeOf(context.mode).kind).toBe('editing')
+      if (action === 'lose-again') {
+        context.connection.setBrowserOnline(false)
+        context.editLease.renew.mockRejectedValueOnce(REPLACED)
+        context.connection.setBrowserOnline(true)
+        await vi.waitFor(() => expect(modeOf(context.mode).kind).toBe('lost'))
+      }
+    }
+    const before = modeOf(context.mode)
+    answer.resolve(status(4, AMY_EDITING))
+    await settle()
+    expect(modeOf(context.mode)).toBe(before)
   })
 })
 
