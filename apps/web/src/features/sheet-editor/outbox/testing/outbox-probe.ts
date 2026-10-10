@@ -19,6 +19,7 @@ import { draftDocumentIds } from '../../../../shared/outbox/draft-index.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { importLocalKey } from '../../../../shared/outbox/local-key-import.ts'
 import { requestPersistence, storageEstimate, storagePersisted } from '../../../../shared/outbox/storage-status.ts'
+import { createOutboxSessionProbe } from './outbox-session-probe.ts'
 import { createPipelineProbe } from './pipeline-probe.ts'
 
 /** 挂在 window 上的名字（门禁的禁用关键字里登记了它：生产构建里连名字都不能有） */
@@ -150,6 +151,7 @@ export interface OutboxProbe {
   readonly transactions: () => readonly ProbeTransaction[]
   /** 写入管道：进程内与发件箱 Worker 两种宿主跑同一组操作（pipeline-probe.ts） */
   readonly pipeline: ProbePipeline
+  readonly session: ReturnType<typeof createOutboxSessionProbe>
 }
 
 declare global {
@@ -584,6 +586,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
     },
     transactions: () => [...recorded],
     pipeline: createPipelineProbe({ key: () => key, store: () => store }),
+    session: createOutboxSessionProbe({ key: () => key }),
   }
   target[OUTBOX_PROBE_NAME] = probe
   return probe
