@@ -206,6 +206,75 @@ describe('编辑会话的资源所有权', () => {
     expect(held.release).not.toHaveBeenCalled()
   })
 
+  it.each([
+    { kind: 'current' },
+    { kind: 'superseded', loss: { kind: 'taken-over', where: 'elsewhere' } },
+  ] satisfies LeaseVerdict[])('旧会话的 $kind 核对晚于重新进入：新租约、锁和保存继续有效', async (verdict) => {
+    const { session, options, other, pageListeners, attach } = fixture()
+    const previous = leaseFixture()
+    const previousPage = editorFixture()
+    const pending = deferred<LeaseVerdict>()
+    previous.confirm.mockReturnValue(pending.promise)
+    session.acceptLease(previous, 3)
+    expect(await session.claim(previous)).toEqual({ kind: 'held' })
+    session.startSaving(previousPage.editor, INITIAL)
+
+    const occupied = await other.steal()
+    await settle()
+    expect(previous.confirm).toHaveBeenCalledTimes(1)
+    session.releaseLease()
+    session.stopSaving()
+    occupied.release()
+    await settle()
+    expect(previousPage.listeners()).toBe(0)
+
+    const next = { ...leaseFixture(), credentials: () => ({ token: 'token-2', writeEpoch: 8 }) }
+    next.confirm.mockResolvedValue({ kind: 'unknown', error: undefined })
+    const nextPage = editorFixture()
+    session.acceptLease(next, 9)
+    expect(await session.claim(next)).toEqual({ kind: 'held' })
+    session.startSaving(nextPage.editor, { ...INITIAL, revision: 9 })
+    const saving = session.coordinator
+    const scheduler = session.autosave
+    if (saving === undefined || scheduler === undefined)
+      throw new Error('新会话的保存未建立')
+
+    pending.resolve(verdict)
+    await settle()
+    expect(session.lease).toBe(next)
+    expect(session.coordinator).toBe(saving)
+    expect(session.autosave).toBe(scheduler)
+    expect(session.holdsLock()).toBe(true)
+    expect(options.onLost).not.toHaveBeenCalled()
+    expect(previous.abandon).not.toHaveBeenCalled()
+    expect(next.abandon).not.toHaveBeenCalled()
+    expect(next.release).not.toHaveBeenCalled()
+    expect(next.confirm).not.toHaveBeenCalled()
+    expect(nextPage.listeners()).toBeGreaterThan(0)
+    expect(pageListeners.size).toBe(1)
+
+    vi.mocked(options.api.save).mockResolvedValue({ ...SAVED, revision: 10 })
+    nextPage.edit()
+    expect(await scheduler.flush('save-button')).toEqual({
+      edits: true,
+      formulas: true,
+      outcome: { kind: 'saved', requestId: 'request-1' },
+    })
+    expect(options.api.save).toHaveBeenCalledTimes(1)
+    expect(options.api.save).toHaveBeenCalledWith(DOCUMENT, expect.objectContaining({ baseRevision: 9 }), new TextEncoder().encode('{"v":1}'), next.credentials())
+    expect(session.baseRevision()).toBe(10)
+
+    session.stopSaving()
+    session.stopSaving()
+    session.dispose()
+    session.dispose()
+    expect(previous.release).toHaveBeenCalledTimes(1)
+    expect(next.release).toHaveBeenCalledTimes(1)
+    expect(nextPage.listeners()).toBe(0)
+    expect(pageListeners.size).toBe(0)
+    expect(attach.mock.calls.filter(([scheduler]) => scheduler === undefined)).toHaveLength(2)
+  })
+
   it('销毁期间晚到的核对不能抢锁或通知新的失效', async () => {
     const { session, options, other } = fixture()
     const occupied = await other.tryHold()
