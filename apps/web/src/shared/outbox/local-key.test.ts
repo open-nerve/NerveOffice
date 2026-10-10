@@ -1,7 +1,7 @@
 import type { LocalKeyHandle } from './draft-codec.ts'
 import type { LocalKeyProblem } from './local-key.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../api/client.ts'
+import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError, setCsrfToken } from '../api/client.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../testing/fake-api.test-support.ts'
 import { createLocalKeyKeeper, fetchLocalKey } from './local-key.ts'
 
@@ -30,6 +30,68 @@ async function roundTrips(encryptWith: CryptoKey, decryptWith: CryptoKey): Promi
 }
 
 describe('取用本机密钥（M4-P1 设计 §3.4.9，ADR-019）', () => {
+  it.each(['headers', 'body', 'error-body'] as const)('%s 挂住时 10 秒结束；迟到密钥不再导入', async (waiting) => {
+    vi.useFakeTimers()
+    let stream: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>> | undefined
+    let deliver: (response: Response) => void = () => {}
+    const headers = new Promise<Response>((resolve) => {
+      deliver = resolve
+    })
+    const response = new Response(new ReadableStream<Uint8Array<ArrayBuffer>>({
+      start: (controller) => { stream = controller },
+    }), { status: waiting === 'error-body' ? 503 : 200 })
+    let signal: AbortSignal | null | undefined
+    const importKey = vi.spyOn(crypto.subtle, 'importKey')
+    vi.stubGlobal('fetch', vi.fn(async (_path: string, init?: RequestInit) => {
+      signal = init?.signal
+      return waiting === 'headers' ? headers : response
+    }))
+    let outcome: unknown
+    const requesting = fetchLocalKey().catch((error: unknown) => {
+      outcome = error
+    })
+    try {
+      await vi.advanceTimersByTimeAsync(9_999)
+      expect(outcome).toBeUndefined()
+      expect(signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(outcome).toBeInstanceOf(RequestTimeoutError)
+      expect(outcome).toMatchObject({ timeoutMs: 10_000 })
+      expect(signal?.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      stream?.enqueue(new TextEncoder().encode(JSON.stringify({ version: 3, key: RAW_BASE64 })))
+      stream?.close()
+      deliver(response)
+      await requesting
+      vi.useRealTimers()
+    }
+    expect(importKey).not.toHaveBeenCalled()
+  })
+
+  it('正文还在路上时调用方取消：保留原原因，撤掉 10 秒计时器', async () => {
+    vi.useFakeTimers()
+    let stream: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>> | undefined
+    const response = new Response(new ReadableStream<Uint8Array<ArrayBuffer>>({
+      start: (controller) => { stream = controller },
+    }))
+    vi.stubGlobal('fetch', vi.fn(async () => response))
+    const controller = new AbortController()
+    const reason = new Error('退出了这次登录')
+    const requesting = fetchLocalKey(controller.signal).catch((error: unknown) => error)
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort(reason)
+      expect(await requesting).toBe(reason)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally {
+      stream?.close()
+      vi.useRealTimers()
+    }
+  })
+
   it('POST /api/local-key（带 CSRF 令牌、不带请求体）：交回版本与导入好的密钥——不可导出、AES-GCM-256、用途只有加密与解密，就是服务端给的那一把', async () => {
     setCsrfToken('csrf-lk')
     const api = installFakeApi({ [PATH]: () => json(200, { version: 3, key: RAW_BASE64 }) })

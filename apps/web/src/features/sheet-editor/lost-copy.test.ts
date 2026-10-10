@@ -1,7 +1,7 @@
 // 失去编辑权之后的那一份：上传捕获的内容，标题用失去编辑权的时刻；结果未知之后再试沿用 requestId，确定被拒绝、成功之后换新的。
 import type { ConflictCopyQuery, CreatedDocument } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { ApiError, NetworkError, RequestTimeoutError } from '../../shared/api/index.ts'
 import { conflictCopyLabel, createLostCopy } from './lost-copy.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
@@ -45,9 +45,9 @@ describe('失去编辑权之后的那一份（M3-P2 设计 §3.2、§3.4）', ()
     expect(context.conflictCopy.mock.calls.map(call => call[1].formulasPending)).toEqual([true, true])
   })
 
-  it('结果未知：再试沿用同一个请求（服务端只建一份）；确定被拒绝：下次换新的 requestId；成功之后也换新的', async () => {
+  it.each([new NetworkError('断网'), new RequestTimeoutError(60_000)])('结果未知（%s）：再试沿用同一个请求（服务端只建一份）；确定被拒绝：下次换新的 requestId；成功之后也换新的', async (error) => {
     const context = setup()
-    context.conflictCopy.mockRejectedValueOnce(new NetworkError('断网'))
+    context.conflictCopy.mockRejectedValueOnce(error)
     await expect(context.copy.save()).rejects.toBeInstanceOf(NetworkError)
     context.conflictCopy.mockRejectedValueOnce(new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格'))
     await expect(context.copy.save()).rejects.toBeInstanceOf(ApiError)

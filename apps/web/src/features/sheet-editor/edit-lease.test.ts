@@ -3,7 +3,7 @@ import type { Incompatibility } from './client-format.ts'
 import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
 import { EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
+import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from '../../shared/api/index.ts'
 import { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 
@@ -42,6 +42,7 @@ const RECOVERABLE = ['none', 'replaced', 'released', 'stale', 'expired', 'idle',
 /** 结果未知的失败：服务端可能已经处理了 */
 const UNKNOWN_OUTCOMES = [
   ['网络错误', new NetworkError('断网')],
+  ['请求超时', new RequestTimeoutError(10_000)],
   ['5xx', new ApiError(503, 'SERVICE_UNAVAILABLE', '服务暂时不可用')],
   ['回包读不出来', new ResponseFormatError('POST /edit-lease 的响应与契约不一致')],
 ] as const

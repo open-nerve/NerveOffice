@@ -14,7 +14,7 @@ import { importLocalKey } from './local-key-import.ts'
  * 取消时原样抛出），由保管者归类
  */
 export async function fetchLocalKey(signal?: AbortSignal): Promise<LocalKeyHandle> {
-  return importLocalKey(await apiRequest('/api/local-key', { method: 'POST', schema: localKeySchema, signal }))
+  return importLocalKey(await apiRequest('/api/local-key', { method: 'POST', schema: localKeySchema, signal, timeoutMs: 10_000 }))
 }
 
 /** 取不到时的原因 */

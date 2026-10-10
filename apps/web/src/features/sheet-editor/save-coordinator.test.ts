@@ -2,7 +2,9 @@ import type { SaveContentResponse } from '@nerve-office/contracts'
 import type { PreparedCapture, SaveEditor, SaveFailure, SaveOptions, SaveOutcome, SaveRequest, SnapshotCapture } from './save-coordinator.ts'
 import type { CaptureEditor } from './snapshot-capture.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError, ResponseFormatError } from '../../shared/api/index.ts'
+import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from '../../shared/api/index.ts'
+import { json } from '../../shared/testing/fake-api.test-support.ts'
+import { gzipText, saveContent } from './editor-api.ts'
 import { classifySaveError, createSaveCoordinator } from './save-coordinator.ts'
 import { explicitCaptureSource } from './snapshot-capture.test-support.ts'
 
@@ -1018,6 +1020,80 @@ describe('停止保存与离开', () => {
 })
 
 describe('失去编辑权时核对结果未知的保存（M3-P2 设计 §3.4）', () => {
+  it('真实请求层：保存已提交但正文超过 60 秒；原请求与 gzip 重放，迟到回包不再确认第二次', async () => {
+    const snapshot = '{"content":"甲"}'
+    const compressed = await gzipText(snapshot)
+    vi.useFakeTimers()
+    const { editor, control } = fakeEditor()
+    const requests: { path: string, body: BodyInit | null | undefined }[] = []
+    let stream: ReadableStreamDefaultController<Uint8Array<ArrayBuffer>> | undefined
+    let closed = false
+    const delayed = new Response(new ReadableStream<Uint8Array<ArrayBuffer>>({
+      start: (controller) => { stream = controller },
+    }), { status: 200 })
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      requests.push({ path, body: init?.body })
+      // 服务端第一次已提交修订 5，但成功的正文挂住；第二次按原请求重放修订 5。
+      return requests.length === 1 ? delayed : json(200, saved(5))
+    }))
+    const newId = vi.fn(() => 'request-timeout-1')
+    const coordinator = createSaveCoordinator({
+      editor,
+      compress: async () => new Uint8Array(compressed),
+      send: async (request, body) => saveContent('document-1', request, body, { token: 'T'.repeat(43), writeEpoch: 2 }),
+      baseRevision: 4,
+      clientInstanceId: ME,
+      newRequestId: newId,
+      onUnauthenticated: vi.fn(),
+      onSessionStale: vi.fn(),
+      reportError: vi.fn(),
+    })
+    try {
+      control.edit('甲')
+      const saving = coordinator.save(explicitCaptureSource(editor), EXPLICIT)
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(requests).toHaveLength(1)
+      expect(coordinator.view().status).toBe('saving')
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(coordinator.view().status).toBe('saving')
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(saving).resolves.toMatchObject({ kind: 'failed', failure: { kind: 'retry' }, requestId: 'request-timeout-1' })
+      expect(coordinator.view()).toMatchObject({ status: 'failed', unsaved: true, problem: { kind: 'request' } })
+      const problem = coordinator.view().problem
+      expect(problem?.kind === 'request' && problem.error).toBeInstanceOf(RequestTimeoutError)
+      expect(coordinator.baseRevision()).toBe(4)
+      expect(coordinator.hasUnknownOutcome()).toBe(true)
+
+      await expect(coordinator.replayUnknownOutcome()).resolves.toBe('committed')
+      expect(requests).toHaveLength(2)
+      expect(requests[1]).toEqual(requests[0])
+      expect(requests[1]?.body).toEqual(compressed)
+      const query = new URL(requests[1]?.path ?? '', 'http://localhost').searchParams
+      expect(Object.fromEntries(query)).toMatchObject({ requestId: 'request-timeout-1', clientInstanceId: ME, localSeq: '1', baseRevision: '4', writeEpoch: '2' })
+      expect(newId).toHaveBeenCalledTimes(1)
+      expect(coordinator.baseRevision()).toBe(5)
+      expect(coordinator.hasUnknownOutcome()).toBe(false)
+      expect(coordinator.view()).toMatchObject({ status: 'clean', unsaved: false, problem: undefined })
+
+      const changed = vi.fn()
+      coordinator.subscribe(changed)
+      stream?.enqueue(new TextEncoder().encode(JSON.stringify(saved(5))))
+      stream?.close()
+      closed = true
+      await vi.advanceTimersByTimeAsync(0)
+      expect(changed).not.toHaveBeenCalled()
+      await expect(coordinator.replayUnknownOutcome()).resolves.toBe('none')
+      expect(requests).toHaveLength(2)
+    }
+    finally {
+      if (!closed)
+        stream?.close()
+      coordinator.stop()
+      vi.unstubAllGlobals()
+      vi.useRealTimers()
+    }
+  })
+
   it('settled：等进行中的保存结束；没有在途的保存时立即兑现', async () => {
     const { coordinator, control, calls } = setup()
     await coordinator.settled()

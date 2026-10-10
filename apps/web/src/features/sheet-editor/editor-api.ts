@@ -11,6 +11,10 @@ import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, E
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
 import { clientFormatParams, PAGE_CLIENT_FORMAT } from './client-format.ts'
 
+/** 完整响应的时限（M4-P2 S2）：大快照允许更久；编辑权操作要尽早结束等待。 */
+const SNAPSHOT_REQUEST_TIMEOUT_MS = 60_000
+const LEASE_REQUEST_TIMEOUT_MS = 10_000
+
 /** 内容的原文（浏览器已按 Content-Encoding 解压）与它的修订号（ETag）：修订号是保存的基准。 */
 export interface LoadedContent {
   readonly snapshot: string
@@ -76,7 +80,7 @@ export async function fetchContentIfChanged(documentId: string, revision: number
 
 /** 编辑状态（GET，能读就能看）：修订号、正在编辑的人与调用者现在能不能编辑，连同服务端回答的时刻 */
 export async function fetchEditStatus(documentId: string): Promise<FetchedEditStatus> {
-  return apiFetch(leasePath(documentId), {}, async response => ({ status: await readJson(response, editStatusSchema, `GET ${leasePath(documentId)}`), serverTime: serverTimeOf(response) }))
+  return apiFetch(leasePath(documentId), { timeoutMs: LEASE_REQUEST_TIMEOUT_MS }, async response => ({ status: await readJson(response, editStatusSchema, `GET ${leasePath(documentId)}`), serverTime: serverTimeOf(response) }))
 }
 
 /**
@@ -86,7 +90,7 @@ export async function fetchEditStatus(documentId: string): Promise<FetchedEditSt
 export async function saveConflictCopy(documentId: string, query: ConflictCopyQuery, compressed: Uint8Array<ArrayBuffer>): Promise<CreatedDocument> {
   const search = new URLSearchParams({ requestId: query.requestId, title: query.title, formulasPending: String(query.formulasPending === true), ...clientFormatParams() })
   const path = `${documentPath(documentId)}/conflict-copies?${search.toString()}`
-  return apiFetch(path, { method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`))
+  return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`))
 }
 
 /**
@@ -125,7 +129,7 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
     ...clientFormatParams(),
   })
   const path = `${contentPath(documentId)}?${query.toString()}`
-  return apiFetch(path, { method: 'PUT', headers: leaseHeaders(lease.token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`))
+  return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'PUT', headers: leaseHeaders(lease.token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`))
 }
 
 /**
@@ -138,7 +142,7 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
 export async function acquireEditLease(documentId: string, clientInstanceId: string, options: AcquireOptions = {}): Promise<AcquiredEditLease> {
   const { idleSeconds, takeover } = options
   const body = { clientInstanceId, ...(idleSeconds === undefined ? {} : { idleSeconds }), ...(takeover === undefined ? {} : { takeover }), ...PAGE_CLIENT_FORMAT }
-  return apiRequest(leasePath(documentId), { method: 'POST', body, schema: acquiredEditLeaseSchema })
+  return apiRequest(leasePath(documentId), { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'POST', body, schema: acquiredEditLeaseSchema })
 }
 
 /**
@@ -146,7 +150,7 @@ export async function acquireEditLease(documentId: string, clientInstanceId: str
  * 本页过旧时 CLIENT_OUTDATED（ApiError）
  */
 export async function renewEditLease(documentId: string, token: string, idleSeconds: number): Promise<RenewedEditLease> {
-  return apiRequest(leasePath(documentId), { method: 'PUT', body: { idleSeconds, ...PAGE_CLIENT_FORMAT }, headers: leaseHeaders(token), schema: renewedEditLeaseSchema })
+  return apiRequest(leasePath(documentId), { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'PUT', body: { idleSeconds, ...PAGE_CLIENT_FORMAT }, headers: leaseHeaders(token), schema: renewedEditLeaseSchema })
 }
 
 /**
@@ -163,7 +167,7 @@ export async function reportOpenCheckFailures(documentId: string, report: OpenCh
  * 请求层照常带上 CSRF 令牌（状态变更的请求）。失败时抛出请求层的错误：续上时要知道放掉了没有，结果未知就不申请（审查 B9）
  */
 export async function releaseEditLease(documentId: string, token: string): Promise<void> {
-  await apiFetch(leasePath(documentId), { method: 'DELETE', headers: leaseHeaders(token), keepalive: true }, () => undefined)
+  await apiFetch(leasePath(documentId), { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'DELETE', headers: leaseHeaders(token), keepalive: true }, () => undefined)
 }
 
 function requestPath(documentId: string): string {
@@ -175,12 +179,12 @@ function requestPath(documentId: string): string {
  * 免得编辑权交给一个之后申请不了的页面。交回请求编辑的结果（不会是 gone）；用户的操作，顺延登录
  */
 export async function sendEditRequest(documentId: string): Promise<EditRequestOutcome> {
-  return apiRequest(requestPath(documentId), { method: 'POST', body: { ...PAGE_CLIENT_FORMAT }, schema: editRequestOutcomeSchema })
+  return apiRequest(requestPath(documentId), { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'POST', body: { ...PAGE_CLIENT_FORMAT }, schema: editRequestOutcomeSchema })
 }
 
 /** 请求方续期（PUT，没有请求体，200）：等待中的页面每 5 秒一次，后台请求（服务端不顺延登录）；交回请求的现状（没有本人的请求时是 gone） */
 export async function renewEditRequest(documentId: string): Promise<EditRequestOutcome> {
-  return apiRequest(requestPath(documentId), { method: 'PUT', schema: editRequestOutcomeSchema })
+  return apiRequest(requestPath(documentId), { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'PUT', schema: editRequestOutcomeSchema })
 }
 
 /**
@@ -188,7 +192,7 @@ export async function renewEditRequest(documentId: string): Promise<EditRequestO
  * "取消请求"时等它，失败时抛出请求层的错误
  */
 export async function cancelEditRequest(documentId: string): Promise<void> {
-  await apiFetch(requestPath(documentId), { method: 'DELETE', keepalive: true }, () => undefined)
+  await apiFetch(requestPath(documentId), { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'DELETE', keepalive: true }, () => undefined)
 }
 
 /**
@@ -196,7 +200,7 @@ export async function cancelEditRequest(documentId: string): Promise<void> {
  * 持有者的那一代已失效时抛出 EDIT_LEASE_LOST（ApiError）
  */
 export async function declineEditRequest(documentId: string, token: string, requestId: string): Promise<void> {
-  await apiFetch(`${requestPath(documentId)}/decline`, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) } }, () => undefined)
+  await apiFetch(`${requestPath(documentId)}/decline`, { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) } }, () => undefined)
 }
 
 /**
@@ -206,5 +210,5 @@ export async function declineEditRequest(documentId: string, token: string, requ
  */
 export async function handOverEditLease(documentId: string, token: string, requestId: string): Promise<HandedOverEditLease> {
   const path = `${leasePath(documentId)}/handover`
-  return apiFetch(path, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) }, keepalive: true }, async response => readJson(response, handedOverEditLeaseSchema, `POST ${path}`))
+  return apiFetch(path, { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) }, keepalive: true }, async response => readJson(response, handedOverEditLeaseSchema, `POST ${path}`))
 }
