@@ -2,9 +2,11 @@
 import type { CreatedDocument, DocumentDetail } from '@nerve-office/contracts'
 import type { LostCopyOptions } from './lost-copy.ts'
 import type { CaptureEditor } from './snapshot-capture.ts'
+import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 import { ApiError, isAuthenticationError, isCsrfTokenError } from '../../shared/api/index.ts'
 import { incompatibilityOf } from './client-format.ts'
 import { createLostCopy } from './lost-copy.ts'
+import { takeSnapshot } from './snapshot-capture.ts'
 
 /**
  * 服务端不收本页的这份内容、再试也一样（M3-P3 审查 B3）：
@@ -28,15 +30,15 @@ export type CopyResult
     | { readonly kind: 'done', readonly document: CreatedDocument }
 
 export interface LostContent {
-  readonly snapshot: string | undefined
+  readonly ref: DraftCaptureRef | undefined
   readonly formulasPending: boolean
   /** 单元格提交不了：快照只有已经落进模型的内容，不含仍在输入的部分。 */
   readonly inputLeft: boolean
 }
 
 /** 失效时先保留面板改动与当前输入，再立即捕获；不等待公式，查不出时保守地带待更新标记。 */
-export async function captureLostContent(editor: CaptureEditor | undefined, reportError: (error: unknown) => void): Promise<LostContent> {
-  let snapshot: string | undefined
+export async function captureLostContent(editor: CaptureEditor | undefined, draft: WorkingDraft | undefined, reportError: (error: unknown) => void): Promise<LostContent> {
+  let ref: DraftCaptureRef | undefined
   let inputLeft = false
   let formulasPending = true
   try {
@@ -44,12 +46,13 @@ export async function captureLostContent(editor: CaptureEditor | undefined, repo
     if (editor?.isCellEditing() === true)
       inputLeft = !(await editor.commitCellEditing())
     formulasPending = editor === undefined || (await editor.settleFormulas(0)) !== 'settled'
-    snapshot = editor?.capture()
+    if (editor !== undefined && draft !== undefined)
+      ref = takeSnapshot(editor, draft, { formulasPending, dedupe: false })
   }
   catch (error) {
     reportError(error)
   }
-  return { snapshot, formulasPending, inputLeft }
+  return { ref, formulasPending, inputLeft }
 }
 
 /** 内容与版本的确定拒绝；其他失败仍可重试。 */
@@ -67,12 +70,14 @@ export interface LostCopyFlowOptions extends LostCopyOptions {
 
 export interface LostCopyFlow {
   readonly save: () => Promise<CopyResult>
+  readonly dispose: () => void
 }
 
 /** 请求标识和标题仍由 lost-copy 持有；本模块只归类结果，不决定页面的生命周期。 */
 export function createLostCopyFlow(options: LostCopyFlowOptions): LostCopyFlow {
   const copy = createLostCopy(options)
   return {
+    dispose: copy.dispose,
     save: async () => {
       try {
         return { kind: 'done', document: await copy.save() }

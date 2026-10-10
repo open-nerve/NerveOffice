@@ -64,11 +64,11 @@
 
 ## Git
 
-- 主目录始终停在 `main` 分支；需要分支时一律使用 worktree，路径为 `.claude/worktrees/<分支名>/`。
-- 每个 Phase 从 `main` 拉一个新分支，例如 `m0-p1-sdk-baseline`；大的 Phase 可以一个 Step 一个分支。Phase 的提交不直接平铺在 `main` 上。
+- 主目录始终停在 `main` 分支；需要分支时一律使用 worktree。Claude 路径为 `.claude/worktrees/<分支名>/`；Codex 路径为 `.codex/worktress/<分支名>/`（沿用 `worktress` 拼写）。
+- **一个 Phase 只用一个开发分支和 worktree**，从完成上一 Phase 合并后的 `main` 建立。Phase 内各 Step、Task 的实现、修复与审查都在该分支内提交，不再拆小分支；Phase 的提交不直接平铺在 `main` 上。（用户 2026-10-10 明确约定）
 - 设计文档和代码提交在同一个分支上。
 - 提交节奏：每完成一个 Step（测试全绿）提交一次；每次停下来之前，都要提交当前的工作。
-- 合并：审查通过后，在主目录执行 `git merge --no-ff <分支名>` 合并到 `main`，保留分支提交线；合并后删除 worktree 和已合并的分支。
+- 合并：整个 Phase 完成、验证与审查通过后，在主目录执行 `git merge --no-ff <分支名>` 合并到 `main`，保留分支提交线；清理已合并的 worktree 和分支后，再从 `main` 建立下一 Phase 的分支。
 - 推送：只在合并到 `main` 之后推送 `main`；进行中的分支只保留在本地。
 - 每个 M 结束时打 tag，例如 `v0.1-m1`。
 - 提交信息使用中文，不添加 Co-Authored-By 等 AI 署名。

@@ -11,7 +11,7 @@ import type { LeaseCredentials } from './editor-api.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { LocalLock, LockClaim } from './local-lock.ts'
 import type { SameBrowser } from './same-browser.ts'
-import type { CompressSnapshot, SaveCoordinator, SaveEditor, SaveRequest } from './save-coordinator.ts'
+import type { SaveCoordinator, SaveEditor, SaveRequest } from './save-coordinator.ts'
 import { ApiError as RequestError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
 import { incompatibilityOf, PAGE_CLIENT_FORMAT } from './client-format.ts'
@@ -32,7 +32,6 @@ export interface EditingSessionOptions {
   readonly clientInstanceId: string
   readonly api: {
     readonly editLease: EditLeaseApi
-    readonly compress: CompressSnapshot
     readonly save: (documentId: string, request: SaveRequest, body: Uint8Array<ArrayBuffer>, lease: LeaseCredentials) => Promise<SaveContentResponse>
   }
   readonly clock: LeaseClock
@@ -46,7 +45,6 @@ export interface EditingSessionOptions {
   }
   readonly autosave: {
     readonly page: AutosavePage
-    readonly digest: (snapshot: string) => Promise<string>
     readonly tuning?: AutosaveTuning | undefined
     readonly observe?: ((event: AutosaveEvent) => void) | undefined
     readonly attach?: ((autosave: Autosave | undefined) => void) | undefined

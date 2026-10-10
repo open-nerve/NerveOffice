@@ -356,7 +356,6 @@ function setup(options: Setup = {}) {
     content: vi.fn(overrides.content ?? (async (): Promise<LoadedContent> => ({ snapshot: snapshotOf('最新的'), revision: 9 }))),
     contentIfChanged: vi.fn(overrides.contentIfChanged ?? (async (): Promise<LoadedContent | typeof CONTENT_UNCHANGED> => ({ snapshot: snapshotOf('服务端的'), revision: 5 }))),
     editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => status(3))),
-    compress: vi.fn(overrides.compress ?? (async (snapshot: string) => new TextEncoder().encode(snapshot))),
     save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => SAVED)),
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...COPY, replayed: false }))),
     reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
@@ -389,7 +388,7 @@ function setup(options: Setup = {}) {
     now: options.now ?? (() => new Date(2026, 9, 4, 15, 30, 12)),
     title: () => '周报',
     session: hooks,
-    autosave: { page: autosave.page, digest: async snapshot => `sha:${snapshot}`, tuning: autosave.tuning, attach: autosave.attach },
+    autosave: { page: autosave.page, tuning: autosave.tuning, attach: autosave.attach },
     sameBrowser: options.sameBrowser ?? sameBrowserFor(DOCUMENT_ID, browser.tab(options.tab ?? 'this')),
     pendingSave: marker,
     issuedRequest: issued.marker,
@@ -715,6 +714,102 @@ describe('真实来源进入页面的准备顺序', () => {
     expect(local.hosts[0]!.dispose).toHaveBeenCalledOnce()
     expect(local.keeper.current()).toBeUndefined()
     expect(h.api.save).not.toHaveBeenCalled()
+  })
+})
+
+describe('失效副本接收真实来源（M4-P2 S4）', () => {
+  it.each([false, true])('失效捕获失败仍保留原编辑器供复制，但释放密钥和宿主，不删除已有草稿（原 HTTP 在途：%s）', async (inFlight) => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    const editor = h.factory.last()
+    const reply = deferred<SaveContentResponse>()
+    h.api.save.mockReturnValueOnce(reply.promise)
+    editor.edit('已有草稿 A')
+    const saving = inFlight ? h.mode.save() : undefined
+    if (inFlight)
+      await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledOnce())
+    else
+      await h.time.advance(DEFAULT_AUTOSAVE_LIMITS.captureQuietMs)
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    await vi.waitFor(() => expect(local.store.rawDraft(key)).toBeDefined())
+    const retained = local.store.rawDraft(key)
+    editor.edit('无法捕获的 B')
+    editor.failCapture = true
+    h.editLease.renew.mockRejectedValueOnce(leaseLost('revoked'))
+    await h.mode.resumeLease()
+    await vi.waitFor(() => expect(lostOf(h.mode)).toMatchObject({ captureFailed: true, unsaved: true }))
+    expect(h.factory.last()).toBe(editor)
+    expect(editor.disposed).toBe(false)
+    await h.mode.saveCopy()
+    expect(h.api.conflictCopy).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(local.hosts[0]!.dispose).toHaveBeenCalledOnce())
+    expect(local.keeper.current()).toBeUndefined()
+    expect(local.store.rawDraft(key)).toEqual(retained)
+    reply.resolve(SAVED)
+    await saving
+    expect(h.api.save).toHaveBeenCalledTimes(inFlight ? 1 : 0)
+    expect(h.api.conflictCopy).not.toHaveBeenCalled()
+    expect(local.store.rawDraft(key)).toEqual(retained)
+    expect(h.reportError).toHaveBeenCalledOnce()
+    h.mode.dispose()
+    expect(local.hosts[0]!.dispose).toHaveBeenCalledOnce()
+  })
+
+  it.each(['unknown', 'confirmed'] as const)('旧保存与一次原样核对结束后才交给副本；旧核对 %s 不覆盖新捕获', async (verdict) => {
+    const local = await localDrafts()
+    const first = deferred<SaveContentResponse>()
+    const replay = deferred<SaveContentResponse>()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    h.api.save.mockReturnValueOnce(first.promise).mockReturnValueOnce(replay.promise)
+    h.factory.last().edit('原请求 A')
+    const saving = h.mode.save()
+    await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledOnce())
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    const retained = local.store.rawDraft(key)
+    expect(retained).toBeDefined()
+    const encode = vi.spyOn(TextEncoder.prototype, 'encode')
+    try {
+      h.factory.last().edit('失效捕获 B')
+      h.editLease.renew.mockRejectedValueOnce(leaseLost('revoked'))
+      await h.mode.resumeLease()
+      await vi.waitFor(() => expect(modeOf(h.mode).kind).toBe('losing'))
+      await h.mode.saveCopy()
+      expect(h.api.conflictCopy).not.toHaveBeenCalled()
+      first.reject(new NetworkError('原保存结果未知'))
+      await saving
+      await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledTimes(2))
+      expect(lostOf(h.mode).checking).toBe(true)
+      await h.mode.saveCopy()
+      expect(h.api.conflictCopy).not.toHaveBeenCalled()
+      expect(h.api.save.mock.calls[1]![1]).toBe(h.api.save.mock.calls[0]![1])
+      expect(h.api.save.mock.calls[1]![2]).toBe(h.api.save.mock.calls[0]![2])
+      if (verdict === 'unknown')
+        replay.reject(new NetworkError('原核对仍未知'))
+      else
+        replay.resolve(SAVED)
+      await vi.waitFor(() => expect(lostOf(h.mode)).toMatchObject({ checking: false, unsaved: true }))
+      h.api.content.mockRejectedValue(new NetworkError('副本成功后的重载断网'))
+      await h.mode.saveCopy()
+      expect(h.api.conflictCopy).toHaveBeenCalledOnce()
+      const [, query, bytes] = h.api.conflictCopy.mock.calls[0]!
+      expect(query).toMatchObject({ format: PAGE_CLIENT_FORMAT, formulasPending: false })
+      expect(new TextDecoder().decode(await gunzipBytes(bytes))).toBe(snapshotOf('失效捕获 B'))
+      expect(encode.mock.calls.filter(([text]) => text === snapshotOf('失效捕获 B'))).toHaveLength(1)
+      expect(lostOf(h.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reload: { kind: 'failed' } })
+      if (verdict === 'unknown')
+        expect(local.store.rawDraft(key)).toEqual(retained)
+      // 只保留副本所需正文；失效来源不再持有本机密钥或工作宿主。
+      await vi.waitFor(() => expect(local.hosts[0]!.dispose).toHaveBeenCalledOnce())
+      expect(local.keeper.current()).toBeUndefined()
+      h.mode.dispose()
+      h.mode.dispose()
+      expect(local.hosts[0]!.dispose).toHaveBeenCalledOnce()
+    }
+    finally {
+      encode.mockRestore()
+    }
   })
 })
 
@@ -1423,13 +1518,13 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     await editing(context)
     context.factory.last().edit('本页的')
     const saving = context.mode.save()
-    await settle()
+    await vi.waitFor(() => expect(context.api.save).toHaveBeenCalledOnce())
     loseOnNextHeartbeat(context, DENIED)
     await context.time.advance(HEARTBEAT_MS)
     expect(modeOf(context.mode).kind).toBe('losing')
     reply.resolve(SAVED)
     await saving
-    await settle()
+    await vi.waitFor(() => expect(modeOf(context.mode).kind).toBe('lost'))
     expect(lostOf(context.mode)).toMatchObject({ unsaved: false, checking: false })
     expect(context.mode.hasUnsavedWork()).toBe(false)
   })
@@ -1440,12 +1535,12 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     await editing(context)
     context.factory.last().edit('本页的')
     const saving = context.mode.save()
-    await settle()
+    await vi.waitFor(() => expect(context.api.save).toHaveBeenCalledOnce())
     loseOnNextHeartbeat(context, DENIED)
     await context.time.advance(HEARTBEAT_MS)
     reply.reject(new ApiError(422, 'SNAPSHOT_INVALID', '快照不合格'))
     await saving
-    await settle()
+    await vi.waitFor(() => expect(modeOf(context.mode).kind).toBe('lost'))
     expect(lostOf(context.mode)).toMatchObject({ unsaved: true, checking: false })
   })
 
@@ -1478,7 +1573,7 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     expect(context.mode.hasUnsavedWork()).toBe(true)
     await context.mode.saveCopy()
     expect(context.api.conflictCopy).toHaveBeenCalledOnce()
-    expect(context.api.compress).toHaveBeenLastCalledWith(snapshotOf('本页的'))
+    expect(new TextDecoder().decode(await gunzipBytes(context.api.conflictCopy.mock.calls.at(-1)![2]))).toBe(snapshotOf('本页的'))
     expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied' })
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的'), disposed: false })
   })
@@ -1577,9 +1672,9 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     context.api.editStatus.mockResolvedValue(status(9, null, false))
     await context.mode.saveCopy()
     await settle()
-    expect(context.api.compress).toHaveBeenLastCalledWith(snapshotOf('本页的'))
+    expect(new TextDecoder().decode(await gunzipBytes(context.api.conflictCopy.mock.calls.at(-1)![2]))).toBe(snapshotOf('本页的'))
     // 捕获时公式已经收齐（假的编辑器）：副本不带"公式待更新"（M3-P3）
-    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false }, expect.anything())
+    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, format: PAGE_CLIENT_FORMAT }, expect.anything())
     expect(context.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的') })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: false, notice: { kind: 'copied', document: { ...COPY, replayed: false } } })
@@ -5240,6 +5335,7 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       })
       const taking = b.mode.takeOver()
       await untilPosted(browser, 2)
+      await vi.waitFor(() => expect(a.api.save).toHaveBeenCalledOnce())
       expect(modeOf(a.mode)).toEqual({ kind: 'exiting', cause: 'handover-tab' })
       await b.time.advance(EDIT_TAB_HANDOVER_DONE_MS)
       expect(server.current()).toMatchObject({ epoch: 2, page: TAB_B })
@@ -5251,8 +5347,7 @@ describe('本人接管："在此编辑"（M3-P5 设计 §3.7，US-M3-08）', () 
       await taking
       expect(browser.holderOf(LOCK)).toBe('B')
       save.reject(TAKEN_OVER)
-      await settle()
-      await settle()
+      await vi.waitFor(() => expect(modeOf(a.mode).kind).toBe('lost'))
       expect(lostOf(a.mode)).toMatchObject({ loss: { kind: 'taken-over', where: 'this-browser' }, unsaved: true })
       expect(a.editLease.release).not.toHaveBeenCalled()
       expect(postedTypes(browser)).toEqual(['handover-request', 'handover-ack'])

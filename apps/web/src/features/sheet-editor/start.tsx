@@ -20,7 +20,7 @@ import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { browserLeaseClock, trackActivity } from './edit-lease.ts'
-import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, gzipText, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest, snapshotDigest } from './editor-api.ts'
+import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { issuedRequestMarker } from './issued-request.ts'
@@ -150,7 +150,6 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
       content: async documentId => fetchContent(documentId),
       contentIfChanged: async (documentId, revision) => fetchContentIfChanged(documentId, revision),
       editStatus: async documentId => fetchEditStatus(documentId),
-      compress: async snapshot => gzipText(snapshot),
       save: async (documentId, request, body, lease) => saveContent(documentId, request, body, lease),
       conflictCopy: async (documentId, query, body) => saveConflictCopy(documentId, query, body),
       reportOpenCheck: async (documentId, report) => reportOpenCheckFailures(documentId, report),
@@ -179,7 +178,6 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
     // 这一页发出过的请求编辑（审查 B2）：按标签页、刷新之后还在，所以是 sessionStorage；同样每次用时再取
     issuedRequest: documentId => issuedRequestMarker(documentId, { storage: () => window.sessionStorage }),
-    digest: async snapshot => snapshotDigest(snapshot),
     autosaveControl,
     handoverTrace,
     editIntent: editIntentOf(window.location),

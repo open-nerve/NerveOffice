@@ -18,6 +18,7 @@ import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
@@ -262,7 +263,6 @@ function setup(options: Setup = {}) {
     content: vi.fn(overrides.content ?? (async (): Promise<LoadedContent> => ({ snapshot: '{"id":"unit-1"}', revision: 3 }))),
     contentIfChanged: vi.fn(overrides.contentIfChanged ?? (async (): Promise<LoadedContent | typeof CONTENT_UNCHANGED> => CONTENT_UNCHANGED)),
     editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }))),
-    compress: vi.fn(overrides.compress ?? (async (snapshot: string) => new TextEncoder().encode(snapshot))),
     save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }))),
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...DETAIL, id: COPY_ID, title: '周报（冲突副本 2026-10-04 15:30）', revision: 1, replayed: false }))),
     reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
@@ -312,7 +312,6 @@ function setup(options: Setup = {}) {
     },
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => storage, now: () => Date.UTC(2026, 9, 7, 3, 0, 0) }),
     issuedRequest: () => issued.marker,
-    digest: async snapshot => `sha:${snapshot}`,
     autosaveControl: autosave.hooks,
     ...(options.handoverTrace === undefined ? {} : { handoverTrace: options.handoverTrace }),
     editIntent,
@@ -604,7 +603,6 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(editIntent.clear).not.toHaveBeenCalled()
     expect(editorPage.hasUnsavedWork()).toBe(false)
     await editorPage.save()
-    expect(api.compress).not.toHaveBeenCalled()
     expect(api.save).not.toHaveBeenCalled()
   })
 
@@ -1479,7 +1477,6 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'lost', loss, unsaved: true }, save: undefined })
     expect(editorPage.hasUnsavedWork()).toBe(true)
     await editorPage.save()
-    expect(api.compress).not.toHaveBeenCalled()
     expect(api.save).not.toHaveBeenCalled()
     await time.advance(60_000)
     expect(editLease.renew).toHaveBeenCalledOnce()
@@ -2006,8 +2003,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     expect(blocked(surface)).toBe(true)
     reply.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     await saving
-    await settle()
-    expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: false })
+    await vi.waitFor(() => expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: false }))
     expect(blocked(surface)).toBe(false)
   })
 
@@ -2162,7 +2158,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     await settle()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: true, readable: true })
     await editorPage.saveCopy()
-    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false }, expect.anything())
+    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, format: PAGE_CLIENT_FORMAT }, expect.anything())
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'copied', document: { id: COPY_ID } } })
   })
 

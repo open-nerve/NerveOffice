@@ -120,7 +120,7 @@
 // 不给"编辑"、页头说明；不因检查读到能编辑而恢复，"有更新"重建之后按新内容的结果覆盖。失败的编辑器绝不保存：以可编辑新建的编辑器
 // 先看打开自检、再建保存的状态机与调度——失败时释放编辑权、以只读重建、以 damaged 回到阅读（?edit=new 与"编辑"只能先取得编辑权再按它
 // 选内容，所以是"先取后放"）。失去编辑权之后的重建失败只上报，不改失去编辑权之后的选项（副本是本页的内容，服务端照常检查）。
-import type { ConflictCopyQuery, CreatedDocument, DocumentDetail, EditInterruption, OpenCheckReport, PendingEditRequest, SaveContentResponse, UserSummary } from '@nerve-office/contracts'
+import type { CreatedDocument, DocumentDetail, EditInterruption, OpenCheckReport, PendingEditRequest, SaveContentResponse, UserSummary } from '@nerve-office/contracts'
 import type { OpenCheck, SheetEditor } from '../../editor/index.ts'
 import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
 import type { Incompatibility } from './client-format.ts'
@@ -134,12 +134,14 @@ import type { EditingNotice, IncomingRequest } from './holder-requests.ts'
 import type { IdleWatch } from './idle-watch.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
 import type { CopyState, LostCopyFlow } from './lost-copy-flow.ts'
+import type { ConflictCopyRequest } from './lost-copy.ts'
 import type { OpenCheckContext } from './open-check-report.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { HandoverFailure, SameBrowser } from './same-browser.ts'
-import type { CompressSnapshot, SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
+import type { SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
+import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { incompatibilityOf } from './client-format.ts'
@@ -408,11 +410,10 @@ export interface EditModeApi {
   /** 编辑状态（阅读时每 30 秒一次） */
   readonly editStatus: (documentId: string) => Promise<FetchedEditStatus>
   readonly editLease: EditLeaseApi
-  readonly compress: CompressSnapshot
   /** 保存：带上编辑租约的令牌与代次 */
   readonly save: (documentId: string, request: SaveRequest, body: Uint8Array<ArrayBuffer>, lease: LeaseCredentials) => Promise<SaveContentResponse>
   /** 另存为副本：上传本页的快照，新建一份文档（M3-P2 设计 §3.2） */
-  readonly conflictCopy: (documentId: string, query: ConflictCopyQuery, body: Uint8Array<ArrayBuffer>) => Promise<CreatedDocument>
+  readonly conflictCopy: (documentId: string, query: ConflictCopyRequest, body: Uint8Array<ArrayBuffer>) => Promise<CreatedDocument>
   /** 打开自检失败的上报（M3-P4 设计 §3.13）：204；失败时抛出请求层的错误（这里不看结果、不重试） */
   readonly reportOpenCheck: (documentId: string, report: OpenCheckReport) => Promise<void>
   /** 请求编辑：请求方的发出、续期与取消（M3-P5 设计 §3.6） */
@@ -472,8 +473,6 @@ export interface EditModeOptions {
 export interface EditModeAutosave {
   /** 可见性、联网与会话（confirmedForWrite 的口径）：可见性的变化在 visibilitychange 里同步通知 */
   readonly page: AutosavePage
-  /** 快照 UTF-8 字节的摘要（会话内去重，editor-api.ts 的 snapshotDigest） */
-  readonly digest: (snapshot: string) => Promise<string>
   /** 测试构建的控制（M3-P4 设计 §3.14）：节奏与暂停；生产不给（固定的默认值） */
   readonly tuning?: AutosaveTuning | undefined
   /** 测试构建的控制：每次捕获与上传的日志 */
@@ -1702,6 +1701,23 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   // ---- 失去编辑权 ----
 
+  function disposeLostCopy(): void {
+    lostCopy?.dispose()
+    lostCopy = undefined
+  }
+
+  /** 文本只存在于重建这次调用，不跟随 lose 等待旧 HTTP 或核对结果。 */
+  async function reopenLostDraft(draft: WorkingDraft, ref: DraftCaptureRef, token: number): Promise<SheetEditor | undefined> {
+    const content = await draft.readLatest()
+    if (!still(token))
+      return undefined
+    if (content.kind !== 'snapshot' || content.ref !== ref) {
+      options.reportError(new Error('无法从工作草稿读取失效时的本页内容'))
+      return undefined
+    }
+    return slot.replace('read', content.snapshot)
+  }
+
   /**
    * 失去编辑权（§3.4）：停止保存 → 提交正在编辑的单元格、捕获 → 等在途的保存 → 算出有没有没保存的（销毁可编辑的编辑器之前）→
    * 重建为只读、显示本页的内容（失败时留在这里，说明编辑器没能重新打开）→ 说明，按需核对结果未知的保存。被本人接管而在哪还没定时
@@ -1736,16 +1752,18 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 副本的标题里的时间是失去编辑权的这一刻，不是点"另存为副本"的那一刻
     const lostAt = options.now()
     const saver = editing.coordinator
+    const draft = editing.draft
     const page = slot.editor()
     syncSaving()
-    const { snapshot, inputLeft, formulasPending } = await captureLostContent(page, options.reportError)
+    const { ref, inputLeft } = await captureLostContent(page, draft, options.reportError)
     if (!still(token))
       return
     const readable = loss.kind !== 'not-found'
     const lostMode: LostMode = { kind: 'lost', loss, unsaved: true, readable, checking: false, captureFailed: false, inputLeft, reopenFailed: false, copy: { kind: 'idle' }, reload: { kind: 'idle' } }
-    if (snapshot === undefined) {
+    if (ref === undefined || draft === undefined) {
       // 捕获失败：编辑器留着（用户还能复制出来），不自动重建，不给副本（P2 设计 §7 的风险表）。有没有没保存的修改照保存的状态机说
       // （离开提示随之）
+      draft?.discardKey()
       const located = await location
       if (loss.kind === 'taken-over')
         shownLoss = located
@@ -1760,8 +1778,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return
     // 销毁可编辑的编辑器之前算：销毁之后它正在编辑的单元格一律算没有（审查 A4）
     const unsaved = inputLeft || (saver?.hasUnsavedWork() ?? false)
-    lostCopy = createLostCopyFlow({ documentId, snapshot, lostAt, formulasPending, title: options.title, newId: options.newId, compress: api.compress, conflictCopy: api.conflictCopy, onSessionProblem: hooks.writeProblem })
-    const created = await slot.replace('read', snapshot)
+    const created = await reopenLostDraft(draft, ref, token)
     if (!still(token))
       return
     if (created !== undefined) {
@@ -1777,12 +1794,27 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return
     // 结果未知的保存：还读得到时先原样重发它，核对它其实提交了没有（读不到了时核对不了：重放也要求能访问）
     const checkFirst = readable && saver?.hasUnknownOutcome() === true
+    const handOff = (): void => {
+      const owned = editing.takeDraft()
+      // 唯一来源已经取出；停止原保存只释放它的上传 pin，不再销毁转交的来源。
+      editing.stopSaving()
+      if (owned === undefined)
+        return
+      // 失效后只需要保留正文。结束密钥与旧宿主的生命周期，不删除原文档的持久记录。
+      owned.discardKey()
+      lostCopy = createLostCopyFlow({ documentId, draft: owned, ref, lostAt, title: options.title, newId: options.newId, conflictCopy: api.conflictCopy, onSessionProblem: hooks.writeProblem })
+    }
+    if (!checkFirst)
+      handOff()
     const checkToken = begin({ ...lostMode, loss: shownLoss, unsaved, checking: checkFirst, reopenFailed: created === undefined })
     if (!checkFirst || saver === undefined)
       return
     await saver.replayUnknownOutcome()
-    if (still(checkToken) && mode.kind === 'lost')
-      setMode({ ...mode, checking: false, unsaved: mode.inputLeft || saver.hasUnsavedWork() })
+    if (still(checkToken) && mode.kind === 'lost') {
+      const remaining = mode.inputLeft || saver.hasUnsavedWork()
+      handOff()
+      setMode({ ...mode, checking: false, unsaved: remaining })
+    }
   }
 
   /** 强制接管的人（M3-P5 设计 §3.8）：读一次编辑状态，正在编辑的是别人就是他；读不到、没人在编辑、是自己时为 undefined。从不失败 */
@@ -1816,7 +1848,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       if (isNotFoundError(error) && copied === undefined) {
         editing.stopSaving()
         slot.clear()
-        lostCopy = undefined
+        disposeLostCopy()
         begin({ kind: 'unavailable' })
         return
       }
@@ -1832,14 +1864,18 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return
     if (created === undefined) {
       const error = new Error('按最新的内容重建编辑器失败')
-      if (copied === undefined)
+      if (copied === undefined) {
+        editing.stopSaving()
+        disposeLostCopy()
         fail(error)
-      else
+      }
+      else {
         begin({ ...from, reopenFailed: true, reload: { kind: 'failed', error } })
+      }
       return
     }
     editing.stopSaving()
-    lostCopy = undefined
+    disposeLostCopy()
     const damaged = openCheckOf(created, { access: 'read', trigger: 'reload', revision: content.revision })
     const reading = readingAfter(from.loss, copied === undefined ? undefined : { kind: 'copied', document: copied }, canTakeOver)
     // 续上时被自己占着（另一个标签页或设备）：那个页面在不在本浏览器，与阅读时的检查同一个判断（随后的检查照样更新）
@@ -2137,6 +2173,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       holder.dispose()
       requests.dispose()
       editing.dispose()
+      disposeLostCopy()
       listeners.clear()
       slot.clear()
     },

@@ -97,7 +97,6 @@ function fixture(overrides: Partial<EditingSessionOptions> = {}) {
     clientInstanceId: 'page-1',
     api: {
       editLease: { ...server.api, handOver: async () => { throw new Error('本用例不交出') }, decline: async () => {} },
-      compress: async text => new TextEncoder().encode(text),
       save: vi.fn(async () => SAVED),
     },
     clock: time.clock,
@@ -117,7 +116,6 @@ function fixture(overrides: Partial<EditingSessionOptions> = {}) {
           }
         },
       },
-      digest: async () => 'digest',
       attach,
     },
     reportError: vi.fn(),

@@ -162,8 +162,6 @@ export interface EditorPageOptions {
   readonly pendingSave: (documentId: string) => PendingSaveMarker
   /** 这份文档在这一页发出过的请求编辑的记号（M3-P5 审查 B2，按标签页、刷新之后还在） */
   readonly issuedRequest: (documentId: string) => IssuedRequestMarker
-  /** 快照 UTF-8 字节的摘要（自动保存的会话内去重，editor-api.ts 的 snapshotDigest） */
-  readonly digest: (snapshot: string) => Promise<string>
   /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
   readonly autosaveControl?: AutosaveControlHooks | undefined
   /** 测试构建的交接观察钩子（M3-P5 设计 §3.13，start.tsx 只在测试构建里给出）；生产为 undefined */
@@ -612,7 +610,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         writeProblem,
         readProblem: () => void recheckSession(),
       },
-      autosave: { page: autosavePage, digest: options.digest, ...options.autosaveControl },
+      autosave: { page: autosavePage, ...options.autosaveControl },
       sameBrowser,
       pendingSave: options.pendingSave(id),
       issuedRequest: options.issuedRequest(id),

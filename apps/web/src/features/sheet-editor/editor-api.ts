@@ -4,8 +4,9 @@
 // 保存协议（M3-P3 设计 §3.5、§3.8）：保存、另存为副本、申请编辑权与心跳都带上本页的构建与数据格式（client-format.ts），
 // 保存与另存为副本另带"公式待更新"。打开自检（M3-P4 设计 §3.13）：失败的上报。
 // 请求编辑与交出（M3-P5 设计 §3.4、§3.6）：请求方的发出、续期（后台请求）与取消，持有者的交出与谢绝（带令牌）。
-import type { AcquiredEditLease, ConflictCopyQuery, CreatedDocument, DocumentDetail, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { AcquireOptions } from './edit-lease.ts'
+import type { ConflictCopyRequest } from './lost-copy.ts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editRequestOutcomeSchema, editStatusSchema, handedOverEditLeaseSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
@@ -87,8 +88,8 @@ export async function fetchEditStatus(documentId: string): Promise<FetchedEditSt
  * 另存为副本（M3-P2 设计 §3.2）：上传本页捕获的快照（gzip，与保存同一个读取方式），服务端按它新建一份文档，给出新文档的详情
  * （与复制相同，带 replayed）。requestId 做幂等：结果未知之后用同一个重试只建一份。带上"公式待更新"与本页的构建与数据格式（M3-P3）
  */
-export async function saveConflictCopy(documentId: string, query: ConflictCopyQuery, compressed: Uint8Array<ArrayBuffer>): Promise<CreatedDocument> {
-  const search = new URLSearchParams({ requestId: query.requestId, title: query.title, formulasPending: String(query.formulasPending === true), ...clientFormatParams() })
+export async function saveConflictCopy(documentId: string, query: ConflictCopyRequest, compressed: Uint8Array<ArrayBuffer>): Promise<CreatedDocument> {
+  const search = new URLSearchParams({ requestId: query.requestId, title: query.title, formulasPending: String(query.formulasPending === true), ...clientFormatParams(query.format) })
   const path = `${documentPath(documentId)}/conflict-copies?${search.toString()}`
   return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`))
 }
