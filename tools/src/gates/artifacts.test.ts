@@ -597,6 +597,48 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/formula-mode-Dx1.js', 'assets/formula-D2.js', 'assets/my-formula-mode-x.js']).map(v => v.subject)).toEqual(['assets/formula-mode-Dx1.js'])
   })
 
+  it('发件箱的浏览器层探针（M4-P1 设计 §3.1）：来源在 features/sheet-editor/outbox/testing/ 下，按来源认；单独成块时按名字兜底；发件箱的生产模块与名字相近的都不算', () => {
+    for (const module of ['src/features/sheet-editor/outbox/testing/outbox-probe.ts', 'src/features/sheet-editor/outbox/testing/pipeline-probe.ts', 'src/features/sheet-editor/outbox/testing/outbox-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/opfs-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/transaction-recorder.ts'])
+      expect(isTestOnlySource(module), module).toBe(true)
+    for (const module of ['src/features/sheet-editor/outbox/outbox-worker-client.ts', 'src/features/sheet-editor/outbox/outbox.worker.ts', 'src/shared/outbox/draft-store.ts', 'src/features/sheet-editor/outbox/testing-like.ts', 'src/features/sheet-editor/start.tsx'])
+      expect(isTestOnlySource(module), module).toBe(false)
+    expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/features/sheet-editor/start.tsx', 'src/features/sheet-editor/outbox/testing/outbox-probe.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/outbox-probe-Cx1.js', 'assets/outbox-Cx1.js', 'assets/my-outbox-probe-x.js', 'assets/outbox-probes.js']).map(v => v.subject)).toEqual(['assets/outbox-probe-Cx1.js'])
+    // 探针创建的记下事务的测试 Worker（M4-P1 S5）按名字兜底；生产的发件箱 Worker 不算
+    expect(checkTestOnlyArtifacts(['assets/outbox-probe.worker-q72kaOrf.js', 'assets/outbox.worker-DfsCheLT.js', 'assets/outbox-probe.workers-x.js']).map(v => v.subject)).toEqual(['assets/outbox-probe.worker-q72kaOrf.js'])
+    // 看、改 OPFS 镜像文件的测试 Worker（M4-P1 S9）同样按名字兜底；名字相近的不算
+    expect(checkTestOnlyArtifacts(['assets/opfs-probe.worker-3LVrYFXG.js', 'assets/opfs-probe-3LVr.js', 'assets/my-opfs-probe.worker-x.js', 'assets/opfs-probe.workers-x.js']).map(v => v.subject)).toEqual(['assets/opfs-probe.worker-3LVrYFXG.js'])
+  })
+
+  it('崩溃用例的探针（M4-P1 设计 §3.7）：来源在 features/sheet-editor/outbox/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/crash-probe.ts')).toBe(true)
+    expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/features/sheet-editor/start.tsx', 'src/features/sheet-editor/outbox/testing/crash-probe.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/crash-probe-Cx1.js', 'assets/crash-Cx1.js', 'assets/my-crash-probe-x.js', 'assets/crash-probes.js']).map(v => v.subject)).toEqual(['assets/crash-probe-Cx1.js'])
+    // 崩溃探针创建的测试 Worker（记下事务与镜像的操作，S9 第 5 项）按名字兜底；它的两个记录模块同样在 testing/ 下
+    expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/crash-probe.worker.ts')).toBe(true)
+    expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/mirror-recorder.ts')).toBe(true)
+    expect(checkTestOnlyArtifacts(['assets/crash-probe.worker-Dk2.js', 'assets/crash-probe.workers-x.js', 'assets/outbox.worker-Dk2.js']).map(v => v.subject)).toEqual(['assets/crash-probe.worker-Dk2.js'])
+  })
+
+  it('真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：来源在 outbox/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/features/sheet-editor/outbox/testing/outbox-review-probe.ts')).toBe(true)
+    expect(checkTestOnlyArtifacts(['assets/outbox-review-probe-Bq1x.js', 'assets/outbox-review-probes.js', 'assets/my-outbox-review-probe-x.js', 'assets/outbox-review-Bq1x.js']).map(v => v.subject)).toEqual(['assets/outbox-review-probe-Bq1x.js'])
+    // 它创建的量 OPFS 镜像的测试 Worker 与量法（M4-P1 S1 补的 OPFS 那一段）：来源同样在 outbox/testing/ 下；产物按名字兜底，名字相近的不算
+    for (const module of ['src/features/sheet-editor/outbox/testing/mirror-review.ts', 'src/features/sheet-editor/outbox/testing/mirror-review.worker.ts'])
+      expect(isTestOnlySource(module), module).toBe(true)
+    expect(checkTestOnlyArtifacts(['assets/mirror-review.worker-B7qL.js', 'assets/mirror-review-Cx2.js', 'assets/mirror-reviews.js', 'assets/my-mirror-review.worker-x.js', 'assets/mirror-review.workers-x.js', 'assets/mirror-Cx2.js']).map(v => v.subject))
+      .toEqual(['assets/mirror-review.worker-B7qL.js', 'assets/mirror-review-Cx2.js'])
+  })
+
+  it('真实浏览器复核的探针 Worker（M4-P1 S1）：来源在 editor/testing/ 下，按来源认；Worker 的产物按名字兜底，名字相近的不算', () => {
+    expect(isTestOnlySource('src/editor/testing/storage-probe-worker.ts')).toBe(true)
+    expect(checkTestOnlySources({ 'assets/storage-probe-worker-ChQO.js': { name: 'storage-probe-worker', modules: ['src/editor/testing/storage-probe-worker.ts', 'src/editor/testing/probe-bytes.ts'] } }, ['assets/storage-probe-worker-ChQO.js']).map(v => v.rule))
+      .toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/storage-probe-worker-ChQO0U-n.js', 'assets/storage-probe-workers.js', 'assets/my-storage-probe-worker-x.js', 'assets/outbox.worker-Bx1.js']).map(v => v.subject)).toEqual(['assets/storage-probe-worker-ChQO0U-n.js'])
+  })
+
   it('档案故障开关（M3-P4 设计 §3.14）：来源在 editor/testing/ 下，按来源认；单独成块时按名字兜底，名字相近的不算', () => {
     expect(isTestOnlySource('src/editor/testing/profile-fault.ts')).toBe(true)
     expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/editor/sheet-editor.ts', 'src/editor/testing/profile-fault.ts'] } }, ['assets/editor-a.js']).map(v => v.rule))

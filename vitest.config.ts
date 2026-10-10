@@ -15,8 +15,8 @@ export default defineConfig({
           environment: 'node',
           // api 的装饰器元数据由 Oxc 按 apps/api/tsconfig.json 输出（ADR-004）
           // tests/e2e/support 里的纯函数（例如页面错误里哪些是浏览器的通知）与真实 Safari 自检的驱动脚本（tests/e2e/safari）里的纯函数
-          // 也在这里测，不用起浏览器
-          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts', 'apps/*/build/**/*.test.ts', 'apps/api/src/**/*.test.ts', 'tests/e2e/support/**/*.test.ts', 'tests/e2e/safari/**/*.test.ts'],
+          // 也在这里测，不用起浏览器；E2E 与集成测试共用的测试辅助（tests/shared，例如测试库的命名）同样
+          include: ['packages/*/src/**/*.test.ts', 'tools/src/**/*.test.ts', 'apps/*/build/**/*.test.ts', 'apps/api/src/**/*.test.ts', 'tests/e2e/support/**/*.test.ts', 'tests/e2e/safari/**/*.test.ts', 'tests/shared/**/*.test.ts'],
         },
       },
       {
@@ -63,6 +63,15 @@ export default defineConfig({
         'apps/api/src/db/migrations/**',
         // 编辑器适配层以 E2E 为主（规范 §8.3）
         'apps/web/src/editor/**',
+        // 本机发件箱的 IndexedDB 接线（库的打开与升级、存储的事务、列表的索引）：jsdom 与 Node 都没有 IndexedDB，也不引入 fake-indexeddb
+        // （它模拟不了配额与"事务里 await 别的异步就自动提交"），由三个浏览器的浏览器层用例覆盖（tests/e2e/specs/outbox，M4-P1 设计 §1 偏差 8）；
+        // 判定都是纯函数，在单元测试里测：栅栏、恢复与保留期（writer-fence.ts），记录与提示的读法（draft-record.ts、recovery-notice.ts），
+        // 能不能封草稿（draft-codec.ts 的 canSealDrafts）
+        'apps/web/src/shared/outbox/database.ts',
+        'apps/web/src/shared/outbox/draft-store.ts',
+        'apps/web/src/shared/outbox/draft-index.ts',
+        // 编辑器页测试构建里的探针：只在测试构建里，浏览器层用例经它调用生产代码
+        'apps/web/src/features/sheet-editor/outbox/testing/**',
         // 命令行入口只做参数解析与输出，规则本身在各自的模块里测试
         'tools/src/**/cli.ts',
         'tools/src/**/*-cli.ts',

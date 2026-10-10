@@ -511,7 +511,9 @@ export function classifyArtifact(path: string): ArtifactKind {
  * - 编辑器的 testing/（M2-P3 设计 §3.7、M3-P2 设计 §3.5、M3-P4 设计 §3.14）：E2E 探针（把 Facade 挂在 window 上）与它补上的插件 Facade、
  *   页面自检与它和 E2E 共用的文件（入口清单、比较口径、结果的格式、切换的计时：switch-timing.ts 装上时替换 window.fetch；捕获时机复核的
  *   样本与捕获规则的参考实现）、公式模式的开关（formula-mode.ts：地址参数选主线程模式，生产构建里只有 Worker 模式）；
- * - 页面自检的入口页与编辑器页的挂接（features/sheet-editor/selftest-hook.ts，start.tsx 只在测试构建里动态引入）。
+ * - 页面自检的入口页与编辑器页的挂接（features/sheet-editor/selftest-hook.ts，start.tsx 只在测试构建里动态引入）；
+ * - 发件箱的浏览器层探针与崩溃用例的探针（M4-P1 设计 §3.1、§3.7，features/sheet-editor/outbox/testing/：start.tsx 只在测试构建、
+ *   地址带 outboxProbe、crashProbe 时动态引入）。
  * 按模块的来源认（web 构建写出的模块来源清单，M3-P2 复核 B2）：分块改了名、被并进别的分块、被生产代码直接动态引入成了自己的分块，
  * 都认得出。分块名（TEST_ONLY_ARTIFACTS）与禁用关键字（policy.ts）照旧作兜底
  */
@@ -522,6 +524,7 @@ export const TEST_ONLY_SOURCES: readonly string[] = [
   'src/entries/csp-probe/',
   'src/entries/selftest/',
   'src/features/sheet-editor/selftest-hook.ts',
+  'src/features/sheet-editor/outbox/testing/',
 ]
 
 /** 模块是不是只属于测试构建：按路径认（查询串不算） */
@@ -562,10 +565,17 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  * - 公式模式的开关（formula-mode，M3-P4 设计 §3.14）：createSheetEditor 在测试构建的分支里动态引入它，自成分块；
  * - 档案故障开关（M3-P4 设计 §3.14，profile-fault）：编辑器在注册插件之前动态引入它，自成分块；
  * - 自动保存的控制（M3-P4 设计 §3.14，autosave-control）与交接日志（M3-P5 设计 §3.13，handover-log）：编辑器页的组装处（start.tsx）动态引入它们，
- *   各自成分块。
- * 自检结果的格式标识与计时、自动保存的控制与交接日志挂在 window 上的名字另由禁用关键字核对
+ *   各自成分块；
+ * - 发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox-probe）与崩溃用例的探针（§3.7，crash-probe）：同样由 start.tsx 动态引入，各自成分块
+ *   （两个都引用的发件箱模块另成一个共用的分块）；发件箱探针创建的记下事务的测试 Worker（outbox-probe.worker，M4-P1 S5）与看、改 OPFS 镜像
+ *   文件的测试 Worker（opfs-probe.worker，M4-P1 S9）、崩溃探针创建的记下事务与镜像操作的测试 Worker（crash-probe.worker，S9 第 5 项）各是另一个
+ *   产物。生产的发件箱 Worker（outbox.worker）不在此列；
+ * - 真实浏览器复核的探针 Worker（M4-P1 S1，storage-probe-worker）：自检的场景按 new Worker(new URL(…)) 引入，产物自成一个文件；
+ * - 真实浏览器复核调用生产发件箱的那一块（M4-P1 S1，outbox-review-probe）：页面自检的挂接用到时动态引入，自成分块；它创建的量 OPFS 镜像的
+ *   测试 Worker（mirror-review.worker）是另一个产物，量法（mirror-review）被两边引用、可能自成分块。
+ * 自检结果的格式标识与计时、自动保存的控制、交接日志与两个发件箱探针挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe(?:\.worker)?|opfs-probe\.worker|outbox-review-probe|mirror-review(?:\.worker)?|storage-probe-worker|crash-probe(?:\.worker)?)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

@@ -3,7 +3,7 @@
 import type { SelftestReport } from './selftest-report.ts'
 import { DOCUMENT_PAGE_PATTERN, documentPagePath } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { decodeSelftestReport, encodeSelftestReport, isSelftestScenario, NEXT_PARAM, nextProblem, parseSelftestReport, reportUrl, RESULT_PARAM, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT, selftestEditorUrl, selftestPassed, SelftestReportError } from './selftest-report.ts'
+import { decodeSelftestReport, encodeSelftestReport, isProbeScenario, isSelftestScenario, NEXT_PARAM, nextProblem, parseSelftestReport, PROBE_SCENARIOS, reportUrl, RESULT_PARAM, RUNS_MAX, RUNS_PARAM, runsOfValue, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT, selftestEditorUrl, selftestPassed, SelftestReportError } from './selftest-report.ts'
 
 function report(overrides: Partial<SelftestReport> = {}): SelftestReport {
   return {
@@ -80,8 +80,39 @@ describe('页面自检的结果：编码与解开', () => {
     ['时间线的一条缺了墙上时间', { timeline: [{ kind: 'entered' }] }],
     ['时间线的一条的种类不是字符串', { timeline: [{ kind: 1, wall: 1 }] }],
     ['时间线的墙上时间不是有限的数', { timeline: [{ kind: 'entered', wall: Number.POSITIVE_INFINITY }] }],
+    ['facts 不是对象', { facts: [] }],
+    ['事实的值是对象', { facts: { 'persist.after': { granted: true } } }],
+    ['事实的值是数组', { facts: { 'idb.databases': ['a'] } }],
+    ['事实的值不是有限的数', { facts: { 'quota.bytes': Number.NaN } }],
   ])('字段不对时拒绝：%s', (_case, overrides) => {
     expect(() => parseSelftestReport({ ...report(), ...overrides })).toThrow(SelftestReportError)
+  })
+
+  it('真实浏览器的复核交回的事实（M4-P1）：字符串、有限的数、真假与 null 都可以，编码再解开不变', async () => {
+    const original = report({ scenario: 'storage', facts: { 'persist.after': false, 'quota.bytes': 1_073_741_824, 'durability.attribute': null, 'crypto.tamper': 'OperationError' } })
+    expect(parseSelftestReport(JSON.parse(JSON.stringify(original)))).toEqual(original)
+    expect(await decodeSelftestReport(await encodeSelftestReport(original))).toEqual(original)
+  })
+})
+
+describe('运行次数的地址参数（M4-P1 S1）', () => {
+  it('1 到 RUNS_MAX 的整数；没有时 undefined；别的写法（0、负数、小数、前导零、超过上限、不是数字）是 null', () => {
+    expect([runsOfValue('1'), runsOfValue('40'), runsOfValue(String(RUNS_MAX))]).toEqual([1, 40, RUNS_MAX])
+    expect(runsOfValue(null)).toBeUndefined()
+    for (const value of ['', '0', '-1', '2.5', '040', String(RUNS_MAX + 1), '1e3', 'abc', ' 4'])
+      expect(runsOfValue(value), value).toBeNull()
+  })
+
+  it('编辑器页的地址带上 runs（给了才带），与公式模式可以同时带', () => {
+    const url = new URL(selftestEditorUrl('http://127.0.0.1:4100', 'doc-1', 'perf-baseline', 'http://127.0.0.1:4200/report?step=1', 'main-thread', 5))
+    expect([url.searchParams.get(RUNS_PARAM), url.searchParams.get('formula')]).toEqual(['5', 'main'])
+    expect(new URL(selftestEditorUrl('http://127.0.0.1:4100', 'doc-1', 'storage', 'http://127.0.0.1:4200/')).searchParams.has(RUNS_PARAM)).toBe(false)
+  })
+
+  it('复核的场景都登记了，判断用 isProbeScenario', () => {
+    expect(PROBE_SCENARIOS.every(isSelftestScenario)).toBe(true)
+    expect(PROBE_SCENARIOS.every(isProbeScenario)).toBe(true)
+    expect(isProbeScenario('read-only')).toBe(false)
   })
 })
 

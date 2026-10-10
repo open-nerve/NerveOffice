@@ -1,0 +1,464 @@
+// 崩溃工具（M4-P1 设计 §3.7；P3 的崩溃恢复沿用）：持久化的浏览器目录、结束整棵浏览器进程、以同一个目录重开。认进程的部分在 ./browser-processes.ts。
+//
+// - 启动（launch）：持久上下文，资料目录经 ./persistent-profile.ts 的 profileDirFor 取（test-results/persistent-profiles/ 下，每条用例、每次重复与
+//   重试唯一，只有 ASCII：Linux 上的 WebKit 遇到非 ASCII 的路径起不来）。
+//   持久上下文不经共用夹具的 context，夹具的那几样自己挂上：CSP 违规、页面错误（用例结束时断言，与共用夹具同一套收集）、自动保存的打开状态，
+//   以及 locale、timezoneId、baseURL、ignoreHTTPSErrors。启动之后在进程表里认出根（测试的工作进程的子进程、命令行带资料目录）。
+// - 结束（prepareCrash → crash）：prepare 现取进程表认出这次启动的全部进程（macOS 的 WebKit 另经 lsof 认承载存储的 Networking），核对要求的
+//   角色都在、认得准（macOS 上另有 Playwright WebKit 实例时报错说明），存下 Cookie。crash 是一段同步代码：先冻住（SIGSTOP：承载存储的在前，
+//   再整个进程组，再其余，不到 1 毫秒）——浏览器停在这一刻；再现取进程表（根停住了没死，进程树还在）认出这一刻的全部进程；然后在同一个循环里
+//   结束（SIGKILL）。冻住之后浏览器不再前进，对存储来说等于在冻住的那一刻被结束，读进程表的几十毫秒不落在要测的时机上（"写入之前"的信号一到
+//   就冻住）。之后等全部退出（僵尸算退出）、核对没有幸存者。
+// - 重开（relaunch）：以同一个目录重开。Cookie 不一定已经落盘，走两条确定的路：restore（崩溃之前存下的加回去，模拟已落盘）、clear（清掉，用例
+//   自己重新登录，模拟没落盘）；浏览器实际留下了哪些记下来（不带值），不断言。每次结束与重开的记录在用例结束时记成一个附件 crash-tool.json。本机实测：Chromium、Chrome 与 macOS 的 WebKit 被结束时
+//   会话 Cookie 还没落盘，Linux 的 WebKit（WPE）已经落盘。另有 reopen：正常关闭再打开（浏览器落了盘），给要"浏览器自己留着"前提的用例。
+// - Chromium 系的 IndexedDB 日志（M4-P1 设计 §3.8，./leveldb-log.ts）：每次结束、全部退出之后读各个来源的 LevelDB 日志的结尾，记进报告与附件——
+//   结尾写了一半是之后删库的前兆（S7 的调查）。tearIndexedDbLog：结束之后、重开之前往这个来源的日志结尾补一个只有头的记录，确定地造出删库
+//   （之后的一次会话写过东西，再下一次打开时 Chromium 删掉这个来源的全部 IndexedDB）。
+//
+// 跑法：崩溃用例单独成项目（每个浏览器一个、workers: 1、等全部浏览器项目跑完，playwright.config.ts）。macOS 上认 WebKit 的 WebContent 与 GPU
+// 要求机器上只有这一个 Playwright WebKit 实例，所以崩溃用例不经共用夹具：共用夹具的 context 会起一个共用的浏览器，在 WebKit 上就是第二个实例。
+import type { BrowserContext, BrowserType, Cookie, Page, TestInfo } from '@playwright/test'
+import type { AutosaveMode } from './autosave.ts'
+import type { CrashPlatform, InstanceProcess, InstanceSpec, ProcessRole, ProcessRow } from './browser-processes.ts'
+import type { CspViolations, PageErrors } from './fixtures.ts'
+import type { IndexedDbLogState, TornLog } from './leveldb-log.ts'
+import { realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
+import process from 'node:process'
+import { test as base, expect } from '@playwright/test'
+import {
+  cookieSummary,
+  currentPlatform,
+  filesHeldIn,
+  freezeTargets,
+  identifyInstance,
+  killTargets,
+  launchRootIn,
+  missingRoles,
+  readProcessTable,
+  reconcilePlanned,
+  stillAlive,
+  stillRunning,
+  webkitNetworkingCandidates,
+} from './browser-processes.ts'
+import { chooseAutosave, cspViolationCollector, defaultAutosaveMode, pageErrorCollector } from './fixtures.ts'
+import { indexedDbDirName, indexedDbLogStates, tearIndexedDbLog } from './leveldb-log.ts'
+import { profileDirFor } from './persistent-profile.ts'
+
+/** 一次持久化的启动 */
+export interface PersistentLaunch {
+  readonly context: BrowserContext
+  /** 持久上下文自带的那个页面 */
+  readonly page: Page
+  readonly spec: InstanceSpec
+  /** 第几次启动（0 起，重开一次加一） */
+  readonly generation: number
+}
+
+/** 一次结束的结果 */
+export interface CrashReport {
+  readonly spec: InstanceSpec
+  /** 冻住的时刻（Date.now）：浏览器停在这一刻 */
+  readonly frozenAt: number
+  /** 结束的进程：准备时认出的 ∪ 冻住之后现取进程表认出的 */
+  readonly killed: readonly InstanceProcess[]
+  /** 其中准备之后才出现的（冻住之后认出来，同样结束了） */
+  readonly late: readonly InstanceProcess[]
+  /** 等过时限还活着的这次启动的进程（应当为空） */
+  readonly survivors: readonly ProcessRow[]
+  /** 要求结束的角色里没在结束的进程里出现的（应当为空） */
+  readonly missingRoles: readonly ProcessRole[]
+  /** 认不准、动错了进程这一类问题（应当为空） */
+  readonly problems: readonly string[]
+  /** 只记录的说明：结束之后还打开着资料目录里文件的进程（例如 Spotlight）等 */
+  readonly notes: readonly string[]
+  /** 准备时存下的 Cookie（重开时 restore 用；带值，不写进附件与日志） */
+  readonly cookies: readonly Cookie[]
+  /**
+   * 全部退出之后各个来源的 IndexedDB 日志与结尾的状态（Chromium 系；WebKit 的 IndexedDB 是 SQLite，为空）：torn-* 是删库的前兆，
+   * corrupt 是下一次打开时删库（./leveldb-log.ts）
+   */
+  readonly indexedDbLogs: readonly IndexedDbLogState[]
+}
+
+/** 准备好的一次结束：进程都认出来了，要测的时机一到就调用 crash */
+export interface CrashPlan {
+  readonly launch: PersistentLaunch
+  /** 准备时认出的这次启动的进程 */
+  readonly processes: readonly InstanceProcess[]
+  /** 冻住、现取进程表、结束（同步），之后等退出、核对没有幸存者；只能调用一次 */
+  readonly crash: () => Promise<CrashReport>
+}
+
+/** 重开时的 Cookie：restore 把崩溃之前存下的加回去（模拟已落盘），clear 清掉（模拟没落盘，用例自己重新登录） */
+export type RelaunchCookies = 'restore' | 'clear'
+
+export interface CrashTool {
+  /** 第一次启动（资料目录是空的） */
+  readonly launch: () => Promise<PersistentLaunch>
+  /** 认出这次启动的全部进程，准备结束 */
+  readonly prepareCrash: (launch: PersistentLaunch) => Promise<CrashPlan>
+  /** 准备并立即结束（时机不要紧的时候） */
+  readonly crash: (launch: PersistentLaunch) => Promise<CrashReport>
+  /** 以同一个目录重开（上一次必须结束得干净） */
+  readonly relaunch: (previous: PersistentLaunch, report: CrashReport, options: { readonly cookies: RelaunchCookies }) => Promise<PersistentLaunch>
+  /** 正常关闭再以同一个目录打开：浏览器把 Cookie 等落了盘（被结束时不一定来得及），用例要"浏览器自己留着"的前提时用 */
+  readonly reopen: (previous: PersistentLaunch) => Promise<PersistentLaunch>
+  /**
+   * 结束之后、重开之前，往这个来源（baseURL）的 IndexedDB 日志结尾补一个只有头的记录（Chromium 系；日志原来的结尾要完整）。
+   * declaredLength 默认 64：之后的一次会话写过东西，再下一次打开时删库；比之后写的长时，恢复时把之后写的悄悄丢掉。记进附件
+   */
+  readonly tearIndexedDbLog: (crashed: PersistentLaunch, report: CrashReport, options?: { readonly declaredLength?: number }) => TornLog
+  /** 持久上下文里的 CSP 违规与页面错误：用例结束时断言为空（声明了预期的除外） */
+  readonly cspViolations: CspViolations
+  readonly pageErrors: PageErrors
+}
+
+/**
+ * 结束之后等全部退出的时限：自己结束的进程几十毫秒内就退出，3 秒是负载下的余量。不能放长：macOS 上 UI 进程一死，launchd 约 5 秒之后会替我们
+ * 结束它的 XPC 服务（冻住的也一样），时限不短于这个就会把"一个循环里漏结束了 XPC"掩盖过去（E2E 层的变异验证实测：10 秒、5 秒的时限都没拦住）
+ */
+const EXIT_TIMEOUT_MS = 3_000
+/** 用例结束时正常关闭持久上下文的时限：到了还没关上就整组结束 */
+const CLOSE_TIMEOUT_MS = 30_000
+
+/** 启动持久上下文所需的、一个用例里不变的东西 */
+interface LaunchEnvironment {
+  readonly browserType: BrowserType
+  readonly platform: CrashPlatform
+  readonly family: InstanceSpec['family']
+  readonly profileDir: string
+  readonly webkitInstallDir: string | undefined
+  readonly options: Parameters<BrowserType['launchPersistentContext']>[1]
+  /** 挂上夹具的那几样（CSP 违规、页面错误、自动保存的打开状态） */
+  readonly prepareContext: (context: BrowserContext) => Promise<void>
+  readonly testInfo: TestInfo
+}
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+/** 发信号；进程已经不在（ESRCH）不算错，别的错误（例如没有权限）记进 problems */
+function send(pid: number, signal: NodeJS.Signals, problems: string[]): void {
+  try {
+    process.kill(pid, signal)
+  }
+  catch (error) {
+    const code = (error as { code?: string }).code
+    if (code !== 'ESRCH')
+      problems.push(`向 ${pid} 发 ${signal} 失败：${code ?? String(error)}`)
+  }
+}
+
+/** 进程的简短说明（报告与附件用）：进程号、角色、怎样认出的、命令行的开头 */
+function describeProcess(item: InstanceProcess): string {
+  return `${item.pid} ${item.role}（${item.via}）${item.command.slice(0, 120)}`
+}
+
+/** macOS 的 WebKit：机器上另有 Playwright WebKit 实例时认不准 XPC，不起、不结束（报错说明，不静默跳过） */
+function assertWebkitAlone(environment: LaunchEnvironment, spec?: InstanceSpec): void {
+  if (environment.platform !== 'darwin' || environment.family !== 'webkit')
+    return
+  const table = readProcessTable(environment.platform)
+  const probe: InstanceSpec = spec ?? { platform: environment.platform, family: environment.family, workerPid: process.pid, rootPid: -1, profileDir: environment.profileDir, launchedAt: Date.now(), webkitInstallDir: environment.webkitInstallDir }
+  const { problems } = identifyInstance(table, probe, new Set())
+  if (problems.length > 0)
+    throw new Error(problems.join('；'))
+}
+
+async function launchPersistent(environment: LaunchEnvironment, generation: number): Promise<PersistentLaunch> {
+  assertWebkitAlone(environment)
+  const launchedAt = Date.now()
+  const context = await environment.browserType.launchPersistentContext(environment.profileDir, environment.options)
+  try {
+    const root = launchRootIn(readProcessTable(environment.platform), process.pid, environment.profileDir)
+    if (root.kind !== 'found')
+      throw new Error(root.kind === 'missing' ? '进程表里认不出这次启动的根（测试的工作进程的子进程、命令行带资料目录）' : `这次启动的根不止一个：${root.pids.join('、')}`)
+    const spec: InstanceSpec = { platform: environment.platform, family: environment.family, workerPid: process.pid, rootPid: root.pid, profileDir: environment.profileDir, launchedAt, webkitInstallDir: environment.webkitInstallDir }
+    assertWebkitAlone(environment, spec)
+    await environment.prepareContext(context)
+    const page = context.pages()[0] ?? await context.newPage()
+    return { context, page, spec, generation }
+  }
+  catch (error) {
+    await context.close().catch(() => undefined)
+    throw error
+  }
+}
+
+/** macOS 的 WebKit：安装目录下的 Networking 里打开着资料目录里文件的（承载这个资料目录的 IndexedDB 与 Cookie）；别的情况不用 */
+function storageHolders(table: readonly ProcessRow[], spec: InstanceSpec, realProfileDir: string): Set<number> {
+  if (spec.platform !== 'darwin' || spec.family !== 'webkit')
+    return new Set()
+  return filesHeldIn(realProfileDir, spec.platform, webkitNetworkingCandidates(table, spec).map(row => row.pid))
+}
+
+function unionByPid(...lists: readonly (readonly InstanceProcess[])[]): InstanceProcess[] {
+  const byPid = new Map<number, InstanceProcess>()
+  for (const list of lists) {
+    for (const item of list) {
+      if (!byPid.has(item.pid))
+        byPid.set(item.pid, item)
+    }
+  }
+  return [...byPid.values()]
+}
+
+/**
+ * 同步的一段：冻住（承载存储的在前，进程组整个一次）→ 现取进程表认出这一刻的全部进程 → 同一个循环里结束。
+ * 准备时认出的进程号在冻住之后核对还是不是同一个进程：被别的进程用了（准备之后它退出、号又分给了别人）就立即恢复它、记进 problems
+ */
+function freezeAndKill(spec: InstanceSpec, planned: readonly InstanceProcess[], holders: ReadonlySet<number>, problems: string[]): { readonly frozenAt: number, readonly killed: InstanceProcess[] } {
+  const frozenAt = Date.now()
+  for (const target of freezeTargets(spec.rootPid, planned))
+    send(target, 'SIGSTOP', problems)
+  try {
+    const table = readProcessTable(spec.platform)
+    const { kept, replaced } = reconcilePlanned(table, planned)
+    for (const item of replaced) {
+      send(item.pid, 'SIGCONT', problems)
+      problems.push(`准备时认出的 ${describeProcess(item)} 在冻住时已经换成了别的进程：已经恢复它，这次不算数`)
+    }
+    const now = identifyInstance(table, spec, holders)
+    problems.push(...now.problems)
+    const killed = unionByPid(kept, now.processes)
+    for (const target of killTargets(spec.rootPid, killed))
+      send(target, 'SIGKILL', problems)
+    return { frozenAt, killed }
+  }
+  catch (error) {
+    // 读进程表失败之类：不让冻住的进程留在那里
+    send(-spec.rootPid, 'SIGKILL', problems)
+    for (const item of planned)
+      send(item.pid, 'SIGKILL', problems)
+    throw error
+  }
+}
+
+/** 等结束的进程全部退出（僵尸算退出）；之后再认一遍这次启动还活着的进程（进程组、命令行提到资料目录、macOS 的 WebKit XPC） */
+async function verifyExited(spec: InstanceSpec, killed: readonly InstanceProcess[], problems: string[]): Promise<ProcessRow[]> {
+  const deadline = Date.now() + EXIT_TIMEOUT_MS
+  let alive = stillAlive(readProcessTable(spec.platform), killed)
+  while (alive.length > 0 && Date.now() < deadline) {
+    await sleep(50)
+    alive = stillAlive(readProcessTable(spec.platform), killed)
+  }
+  const after = stillRunning(readProcessTable(spec.platform), spec)
+  problems.push(...after.problems)
+  const leftovers = after.processes.filter(item => !alive.some(row => row.pid === item.pid))
+  // 等过时限还活着的、一个循环里漏掉的都是这次启动的进程：再结束一次（不把冻住或活着的进程留在机器上），仍然算幸存者（报告里要看得到）
+  for (const row of [...alive, ...leftovers])
+    send(row.pid, 'SIGKILL', problems)
+  return [...alive, ...leftovers]
+}
+
+async function crashNow(launch: PersistentLaunch, planned: readonly InstanceProcess[], holders: ReadonlySet<number>, cookies: readonly Cookie[], realProfileDir: string): Promise<CrashReport> {
+  const { spec } = launch
+  const problems: string[] = []
+  const notes: string[] = []
+  const { frozenAt, killed } = freezeAndKill(spec, planned, holders, problems)
+  const survivors = await verifyExited(spec, killed, problems)
+  await launch.context.close().catch(() => undefined)
+  const fileHolders = filesHeldIn(realProfileDir, spec.platform)
+  if (fileHolders.size > 0)
+    notes.push(`结束之后还打开着资料目录里文件的进程（只记录）：${[...fileHolders].join('、')}`)
+  return {
+    spec,
+    frozenAt,
+    killed,
+    late: killed.filter(item => !planned.some(known => known.pid === item.pid)),
+    survivors,
+    missingRoles: missingRoles(killed, spec),
+    problems,
+    notes,
+    cookies,
+    // 全部退出之后读：没有人在写日志
+    indexedDbLogs: indexedDbLogStates(spec.profileDir),
+  }
+}
+
+/** 日志的状态记进附件：不带日志的内容 */
+function logRecord(state: IndexedDbLogState): Record<string, unknown> {
+  return { database: state.database, log: state.log, status: state.tail.status, detail: state.tail.detail, records: state.tail.records, size: state.tail.size }
+}
+
+/** 一次结束的记录（不带 Cookie 的值）：用例结束时与重开的记录一起记成一个附件 crash-tool.json */
+function crashRecord(report: CrashReport, generation: number): Record<string, unknown> {
+  return {
+    kind: 'crash',
+    generation,
+    platform: report.spec.platform,
+    family: report.spec.family,
+    rootPid: report.spec.rootPid,
+    frozenAt: report.frozenAt,
+    killed: report.killed.map(describeProcess),
+    late: report.late.map(describeProcess),
+    survivors: report.survivors.map(row => `${row.pid} ${row.command.slice(0, 120)}`),
+    missingRoles: report.missingRoles,
+    problems: report.problems,
+    notes: report.notes,
+    cookies: cookieSummary(report.cookies),
+    indexedDbLogs: report.indexedDbLogs.map(logRecord),
+  }
+}
+
+function createCrashTool(environment: LaunchEnvironment, collectors: Pick<CrashTool, 'cspViolations' | 'pageErrors'>): CrashTool & { readonly dispose: () => Promise<void> } {
+  const realProfileDir = (): string => realpathSync(environment.profileDir)
+  /** 还开着的那一次启动（结束之后为 undefined）：用例结束时关闭 */
+  let live: PersistentLaunch | undefined
+  /** 这条用例里每次结束、重开的记录：用例结束时记成一个附件（几十次结束各记一个附件太散） */
+  const records: Record<string, unknown>[] = []
+
+  const prepareCrash = async (launch: PersistentLaunch): Promise<CrashPlan> => {
+    if (live !== launch)
+      throw new Error('只能结束还开着的、最近的那一次启动')
+    const cookies = await launch.context.cookies()
+    const table = readProcessTable(launch.spec.platform)
+    const holders = storageHolders(table, launch.spec, realProfileDir())
+    const { processes, problems } = identifyInstance(table, launch.spec, holders)
+    if (problems.length > 0)
+      throw new Error(problems.join('；'))
+    const missing = missingRoles(processes, launch.spec)
+    if (missing.length > 0)
+      throw new Error(`准备结束时没认出这些角色的进程：${missing.join('、')}；认出的是：${processes.map(describeProcess).join('；')}`)
+    let used = false
+    return {
+      launch,
+      processes,
+      crash: async () => {
+        if (used)
+          throw new Error('一次准备只能结束一次')
+        used = true
+        live = undefined
+        const report = await crashNow(launch, processes, holders, cookies, realProfileDir())
+        records.push(crashRecord(report, launch.generation))
+        return report
+      },
+    }
+  }
+
+  return {
+    ...collectors,
+    launch: async () => {
+      if (live !== undefined)
+        throw new Error('已经有一次启动还开着')
+      live = await launchPersistent(environment, 0)
+      return live
+    },
+    prepareCrash,
+    crash: async launch => (await prepareCrash(launch)).crash(),
+    relaunch: async (previous, report, { cookies }) => {
+      if (report.spec.rootPid !== previous.spec.rootPid)
+        throw new Error('结束的报告不是这一次启动的')
+      if (report.survivors.length > 0 || report.problems.length > 0)
+        throw new Error(`上一次没有结束干净，不能以同一个目录重开：幸存者 ${report.survivors.map(row => row.pid).join('、') || '无'}；${report.problems.join('；')}`)
+      const next = await launchPersistent(environment, previous.generation + 1)
+      live = next
+      records.push({ kind: 'relaunch', generation: next.generation, cookies, keptByBrowser: cookieSummary(await next.context.cookies()), beforeCrash: cookieSummary(report.cookies) })
+      await next.context.clearCookies()
+      if (cookies === 'restore')
+        await next.context.addCookies([...report.cookies])
+      return next
+    },
+    reopen: async (previous) => {
+      if (live !== previous)
+        throw new Error('只能重开还开着的、最近的那一次启动')
+      live = undefined
+      await previous.context.close()
+      live = await launchPersistent(environment, previous.generation + 1)
+      records.push({ kind: 'reopen', generation: live.generation })
+      return live
+    },
+    tearIndexedDbLog: (crashed, report, options = {}) => {
+      if (environment.family !== 'chromium')
+        throw new Error('只有 Chromium 系的 IndexedDB 是 LevelDB')
+      if (live !== undefined || report.spec.rootPid !== crashed.spec.rootPid)
+        throw new Error('只能在这一次启动被结束之后、重开之前补')
+      if (report.survivors.length > 0 || report.problems.length > 0)
+        throw new Error('上一次没有结束干净：日志可能还有人在写')
+      const origin = environment.options?.baseURL
+      if (origin === undefined)
+        throw new Error('没有 baseURL，认不出是哪个来源的 IndexedDB')
+      const torn = tearIndexedDbLog(environment.profileDir, origin, options.declaredLength ?? 64)
+      records.push({ kind: 'tear-indexeddb-log', generation: crashed.generation, database: torn.database, log: torn.log, sizeBefore: torn.sizeBefore, record: torn.record, status: torn.tail.status, detail: torn.tail.detail })
+      return torn
+    },
+    dispose: async () => {
+      if (records.length > 0)
+        await environment.testInfo.attach('crash-tool.json', { body: JSON.stringify(records, null, 2), contentType: 'application/json' })
+      const launch = live
+      live = undefined
+      if (launch === undefined)
+        return
+      const closed = await Promise.race([launch.context.close().then(() => true, () => true), sleep(CLOSE_TIMEOUT_MS).then(() => false)])
+      if (!closed) {
+        // 关不上（例如停住的浏览器）：整组结束，再按进程表认一遍
+        const problems: string[] = []
+        const { processes } = identifyInstance(readProcessTable(launch.spec.platform), launch.spec, new Set())
+        send(-launch.spec.rootPid, 'SIGKILL', problems)
+        for (const item of processes)
+          send(item.pid, 'SIGKILL', problems)
+      }
+    },
+  }
+}
+
+/**
+ * 用例依赖 UR-034（docs/upstream/UR-034-chromium-indexeddb-torn-log-wipe.md）的前提——Chromium 的 IndexedDB 是 LevelDB、复用日志，补的半条记录
+ * 之后新写的接在它后面，再下一次打开时删掉整个来源的库——前提不在了时，失败说明以这一句开头；到时的处理写在用到它的用例文件开头
+ */
+export const UR034_PREMISE_GONE = 'UR-034 的前提不在了'
+
+/**
+ * 结束的报告里被测来源（origin，即 baseURL）的那一条 IndexedDB 日志：只看这一个来源（浏览器可能给内建的来源另建 IndexedDB，不算）。
+ * 资料目录里没有这个来源的 LevelDB IndexedDB 时用例失败，说明 UR-034 的前提不在了（浏览器换了后端，例如 Chromium 的 SQLite 后端）
+ */
+export function indexedDbLogOf(report: CrashReport, origin: string | undefined): IndexedDbLogState {
+  expect(origin, '没有 baseURL，认不出被测的来源').toBeDefined()
+  const database = indexedDbDirName(origin ?? '')
+  const state = report.indexedDbLogs.find(item => item.database === database)
+  expect(state, `${UR034_PREMISE_GONE}：资料目录里没有这个来源的 LevelDB IndexedDB（${database}；现有：${report.indexedDbLogs.map(item => item.database).join('、') || '无'}）——浏览器换了 IndexedDB 的后端（例如 Chromium 的 SQLite 后端）`).toBeDefined()
+  return state as IndexedDbLogState
+}
+
+/** 断言一次结束：要求的角色都结束了、没有幸存者、认得准 */
+export function expectCrashed(report: CrashReport): void {
+  expect(report.problems, '结束的过程里认不准或动错了进程').toEqual([])
+  expect(report.missingRoles, `要求结束的角色没有都在结束的进程里（结束的：${report.killed.map(describeProcess).join('；')}）`).toEqual([])
+  expect(report.survivors.map(row => `${row.pid} ${row.command.slice(0, 120)}`), '结束之后还活着的进程').toEqual([])
+}
+
+/** 崩溃用例的 test：不经共用夹具的 context（见文件开头），持久上下文由 crashTool 起 */
+export const test = base.extend<{ autosave: AutosaveMode, crashTool: CrashTool }>({
+  autosave: [defaultAutosaveMode(), { option: true }],
+  crashTool: async ({ playwright, browserName, autosave }, provide, testInfo) => {
+    if (browserName === 'firefox')
+      throw new Error('崩溃工具只支持 Chromium 系与 WebKit')
+    const browserType = playwright[browserName]
+    const { baseURL, ignoreHTTPSErrors, locale, timezoneId, channel } = testInfo.project.use
+    const csp = cspViolationCollector()
+    const errors = pageErrorCollector()
+    const tool = createCrashTool({
+      browserType,
+      platform: currentPlatform(),
+      family: browserName,
+      profileDir: profileDirFor(testInfo, 'crash'),
+      webkitInstallDir: browserName === 'webkit' ? realpathSync(dirname(browserType.executablePath())) : undefined,
+      options: { channel, baseURL, ignoreHTTPSErrors, locale, timezoneId },
+      prepareContext: async (context) => {
+        await csp.cspViolations.watch(context)
+        errors.pageErrors.watch(context)
+        await chooseAutosave(context, autosave)
+      },
+      testInfo,
+    }, { cspViolations: csp.cspViolations, pageErrors: errors.pageErrors })
+    await provide(tool)
+    await tool.dispose()
+    errors.check()
+    csp.check()
+  },
+})
+
+export { expect }

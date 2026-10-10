@@ -22,6 +22,7 @@ function host(): SelftestHost {
     pageErrors: () => [],
     consoleErrors: () => [],
     ignoredNotices: () => [],
+    firstLoad: () => ({ ready: 1200, steady: 4300 }),
   }
 }
 

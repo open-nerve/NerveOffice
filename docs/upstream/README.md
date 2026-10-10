@@ -2,7 +2,7 @@
 
 > 所属：v0.1｜建立：M1-P5（2026-09-28）｜上游仓库：[dream-num/univer](https://github.com/dream-num/univer)
 
-M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，每条一份草稿（`UR-<编号>-<短名>.md`）：
+M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，每条一份草稿（`UR-<编号>-<短名>.md`）；M4 起另有给别的上游的（UR-034 是 Chromium，按它的问题追踪的写法），表里的"提交方式"一栏注明：
 - 开头用中文写摘要、影响与平台的规避，以及出处（M0 的报告与用例、延期登记）；
 - 正文是可以直接提交的英文 issue，按上游的 bug 模板（`bug_report.yml`）组织：复现步骤、期望与实际、根因分析、环境；
 - "已有的上游讨论"写明检索的关键词与日期，找到的相关 issue 与 PR 附链接。
@@ -54,6 +54,7 @@ M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，
 | [UR-031](UR-031-lifecycle-onstage-unhandled-rejection.md) | 两处 `onStage(Ready).then(...)` 没有接住拒绝：Ready 之前销毁实例时没处理的 `LifecycleUnreachableError` | DEF-057 | 只在创建工作簿抛错之后销毁时出现（sheets-drawing-ui 一处；engine-formula 一处在默认插件里没找到落空的路径），平台目前碰不到；没有规避 | 公开 issue | 草稿 | — |
 | [UR-032](UR-032-formula-ast-cache-after-dispose.md) | 公式引擎在本线程运行时，一轮计算中销毁实例，这一轮不停、把 `#NAME?` 的语法树写进模块级缓存，之后同一 unitId 的新实例算出 `#NAME?` | M3-P4 S1 复核 F2；P4 设计 §3.14 | 主线程公式模式（M4 的退路）下"计算中重建"会把 `#NAME?` 存进文档；平台销毁之前先停下这一轮、等结束的通知（`formula-round-stop.ts`，M4 必须保留） | 公开 issue | 草稿 | — |
 | [UR-033](UR-033-panel-debounce-lost-edits.md) | 面板的防抖丢修改：数据验证面板三种更新共用一个防抖、1 秒内先后改两种时前一种被丢；数据验证面板与批注浮层卸载时不 flush | M3-P4 S4；P4 设计 §3.4；`PANEL_DEBOUNCES` | 1 秒内先后改两种设置时前一种丢失（平台无法规避）；销毁之前最后的修改丢失，平台在捕获与销毁之前等 SDK 的防抖到点 | 公开 issue（两部分，可拆成两份） | 草稿 | — |
+| [UR-034](UR-034-chromium-indexeddb-torn-log-wipe.md) | Chromium 的 IndexedDB：进程在 LevelDB 日志写到一半时被结束，再下一次启动时整个来源的 IndexedDB 被删掉（`reuse_logs` 接在半条记录后面写） | M4-P1 S7 的调查；P1 设计 §3.8 | 浏览器崩溃之后重开时本机发件箱可能被整个删掉、页面认不出（Google Chrome 154 不注入 1400 次强制结束里 5 次）；平台把同一份记录镜像进 OPFS（Worker 里的同步访问句柄、两个槽位），删库之后从它写回并如实告知（M4-P1 S9） | Chromium 的公开 issue（不是 Univer） | 草稿 | — |
 
 ## 提交之前要确认的事
 

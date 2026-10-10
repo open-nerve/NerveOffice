@@ -1,6 +1,6 @@
 # 架构总览
 
-> 活文档：每个 Phase 结束时更新｜当前：v1（M3 完成，`v0.1-m3`）｜更新：2026-10-09
+> 活文档：每个 Phase 结束时更新｜当前：v1（M4-P1 本机发件箱的底座）｜更新：2026-10-10
 
 ## 1. 目标形态与当前进度
 
@@ -8,9 +8,9 @@
 
 | 部分 | 当前状态 |
 |---|---|
-| 前端 `apps/web` | 平台页面：登录页、我的空间（个人空间的文档列表、新建表格）、404 与错误页（M1-P3、P4）；修改密码、接受邀请与重置密码的公开页面、管理界面（账户、邀请、审计，按需加载）（M2-P1）；左侧导航与空间页、成员页（按需加载）、管理界面的团队空间与停用者文档的转移（M2-P2）；空间页里的文件夹导航与行内操作（新建、改名、移动、复制、删除）、回收站页与顶栏搜索（各自按需加载）（M2-P4）；表格编辑器页（M1-P4：整页加载，显式保存；M2-P2 起返回文档所在的空间；M2-P3 起查看者的只读加固；M3-P1 起编辑租约，M3-P2 起阅读与编辑、另存为副本，M3-P4 起自动保存与打开自检，M3-P5 起交接规则）；管理界面账户页的吊销本机密钥与状态列的版本（M3-P6） |
+| 前端 `apps/web` | 平台页面：登录页、我的空间（个人空间的文档列表、新建表格）、404 与错误页（M1-P3、P4）；修改密码、接受邀请与重置密码的公开页面、管理界面（账户、邀请、审计，按需加载）（M2-P1）；左侧导航与空间页、成员页（按需加载）、管理界面的团队空间与停用者文档的转移（M2-P2）；空间页里的文件夹导航与行内操作（新建、改名、移动、复制、删除）、回收站页与顶栏搜索（各自按需加载）（M2-P4）；表格编辑器页（M1-P4：整页加载，显式保存；M2-P2 起返回文档所在的空间；M2-P3 起查看者的只读加固；M3-P1 起编辑租约，M3-P2 起阅读与编辑、另存为副本，M3-P4 起自动保存与打开自检，M3-P5 起交接规则）；管理界面账户页的吊销本机密钥与状态列的版本（M3-P6）；本机发件箱的底座（M4-P1，ADR-020：`shared/outbox/` 的 IndexedDB 存储与写入栅栏、加密、写入管道、OPFS 的冗余、本机密钥的客户端、本机存储的状态与合一的清理，`features/sheet-editor/outbox/` 的发件箱 Worker；P2 起接入编辑器页） |
 | 后端 `apps/api` | 横切能力（M1-P2）；账户、个人空间、会话与登录、默认拒绝的认证与 CSRF 防护、文档元数据的列表与读取、命令行初始化管理员、托管前端产物（M1-P3）；新建文档、读取内容、按修订号保存（M1-P4）；修改密码、邀请注册与重置密码的一次性令牌、停用与启用、系统管理员的授予与取消、同事目录、系统管理的接口与审计查询、运维的重置链接命令（M2-P1）；团队空间与成员、有效权限与"可访问文档"、按空间列出与新建、收回写入权的入口、停用者文档的转移（M2-P2，ADR-014）；文件夹、改名移动复制、回收站与恢复、永久删除与 jobs 模块的 30 天自动清理、按标题搜索（M2-P4，ADR-016）；复核之后的加固（M2-P6：登录限流的三个维度与解除锁定、签发人离任作废链接、团队空间名称的判重键、复制在锁下重新判断、数据库繁忙的回答等，见各节）；编辑租约（M3-P1）、另存为副本与条件读取（M3-P2）、保存协议加固（M3-P3）、打开自检失败的上报（M3-P4）、交接规则（M3-P5）、本机密钥（M3-P6：取用、吊销与审计、心跳带版本、主密钥只给应用进程与启动自检） |
-| 共享契约 `packages/contracts` | 错误响应（含可选的 `details`）与错误码、审计动作、健康检查、请求头；账户与空间的规则、登录与会话、文档的列表与元数据、新建与保存、快照的常量、收敛的模板快照、编辑器页的地址；文件夹、文档的整理、回收站与搜索（M2-P4）；名称的空白与判重规则（M2-P6）；编辑租约、编辑状态与交接（M3-P1、P2、P5）、保存协议的信封与链接判定（M3-P3）、本机密钥（M3-P6） |
+| 共享契约 `packages/contracts` | 错误响应（含可选的 `details`）与错误码、审计动作、健康检查、请求头；账户与空间的规则、登录与会话、文档的列表与元数据、新建与保存、快照的常量、收敛的模板快照、编辑器页的地址；文件夹、文档的整理、回收站与搜索（M2-P4）；名称的空白与判重规则（M2-P6）；编辑租约、编辑状态与交接（M3-P1、P2、P5）、保存协议的信封与链接判定（M3-P3）、本机密钥（M3-P6）；本机草稿的保留期（M4-P1） |
 | 数据库 | PostgreSQL 18；`audit_events`、`users`、`spaces`、`auth_sessions`、`auth_login_throttles`、`auth_invitations`、`auth_password_resets`、`space_members`、`folders`、`trash_entries`、`documents`、`document_contents`、`document_revisions`、`document_grants`、`document_edit_leases`、`document_save_receipts`、`user_local_keys`（§7 的表清单）；迁移由单独的命令执行 |
 | 编辑器适配层 | `apps/web/src/editor/`（M1-P4，ADR-010）：插件档案 `sheet@1`、公式 Worker、身份替换（ADR-009）、变更检测、公式收齐、`IMAGE()` 的限制、M5 之前的入口守卫、内部 API 的登记；销毁之后不抛错的语言服务、打开自检的资源守卫与判定、主线程公式模式的档案变体（M3-P4；M3 只给测试构建经 `formula=main` 选用，M4 的退路）、组合输入与面板防抖的观察（`composition-watch`、`panel-debounce-watch`，M3-P4）、还没写进模型的输入合成一个状态（`uncommitted-input`：单元格编辑器与面板的防抖，保存的状态机据此算未保存与离开提示，M3 合并前评审 CX4）、主线程模式下销毁之前停下正在算的一轮（`formula-round-stop`，M3-P4）；能不能编辑在创建时决定，只读守卫与只读的界面（M2-P3，ADR-015） |
 | 部署 | 生产镜像（多阶段构建、非 root、健康检查）；测试环境：应用 + PostgreSQL 18 + Caddy（HTTPS）；迁移是一次性任务；数据库两个角色；容器 E2E（M1-P5，ADR-012，§8） |
@@ -209,10 +209,12 @@ apps/web/src/
                       `editor-slot.ts`（单飞重建）、阅读时的检查在 `reading-checks.ts`、失去编辑权之后的那一份在 `lost-copy.ts`）；
                       交接规则（M3-P5）：同一个浏览器里的锁与交接频道 `same-browser.ts`（先服务端、后本机锁）、这一代的本机锁 `local-lock.ts`（锁的争用以服务端的事实裁决：被占着、被抢都先经租约的 `confirm` 核对，被抢之后核对不了时等心跳的结论，M3 合并前评审 CX2；服务端说被本人接管时"在哪"按本机的证据——锁被抢就是本浏览器，锁还拿着就留着等抢至多 5 秒，`takenHere`，M3 合并之后 main 的 CI）、空闲计时 `idle-watch.ts`、刷新时在途保存的记号 `pending-save-marker.ts`、本人接管的请求方一侧 `self-takeover.ts`、请求方的请求 `edit-request.ts`（只在发出过请求的标签页恢复等待：记号 `issued-request.ts`，等待期间以共享方式持有本机锁 `nerve-office:edit-request:<documentId>` 认出复制出来的标签页）、持有者一侧的请求 `holder-requests.ts`、交接频道的回应与"在此编辑"的编排 `tab-handover.ts`（审查之后从 `edit-mode.ts` 拆出，状态机只留各条转移与作废）、交接的观察事件 `handover-trace.ts`（测试构建的记录器在 `editor/testing/handover-log.ts`）；`edit-mode.ts` 的离开编辑 `leaveEditing(cause)`（退出、空闲释放、交给请求方、交给本浏览器的另一个标签页）与持有者一侧请求的入口（提示的状态、2 分钟计时、交出与谢绝的结果在 `holder-requests.ts`）
                       自动保存（M3-P4，不依赖 Univer 与界面，时钟注入）：调度 `autosave.ts`（两级的节奏、立即上传、去重、退避、离线与会话、连按保存的合并）、捕获的规则 `capture-policy.ts`、捕获 `snapshot-capture.ts`（同步取快照；立即上传按下时提交单元格、轮到时等公式）、页头保存状态的全集 `save-indicator.ts`；保存的状态机 `save-coordinator.ts` 向来源取捕获（未保存只看修改序号与适配层的 `uncommittedInput`，CX4）；打开自检失败的上报 `open-check-report.ts`
+                      发件箱 Worker（M4-P1，ADR-020）：`outbox/` 下的协议（手写守卫）、Worker 里的处理、薄入口 `outbox.worker.ts`（100 ms 空定时器）、主线程的客户端（实现 DraftWriter，看门狗）；`outbox/testing/` 是测试构建的探针（编辑器页的 e2e 分支按地址参数动态引入）
   editor/             编辑器适配层（Univer 的一切，ADR-010）：档案、公式 Worker、身份、变更检测、公式收齐、IMAGE()、入口守卫、internal-api/；
                       只读守卫 read-only/（M2-P3，ADR-015）；视图状态 view-state.ts（M3-P2）；testing/ 是 E2E 的探针与真实 Safari 的页面自检（M3-P2；M3-P4 加自动保存的控制、捕获时机与自动保存的自检、主线程公式模式与档案故障的开关；M3-P5 加交接日志 `handover-log.ts`（含页面关闭时的处理 `page-hide`）与交接的自检 `selftest-handover.ts`——两个标签页的本人接管、收不到交接消息（挂接的 `deafenHandoverChannel`）、刷新时在途的保存，编排与判定在 `tests/e2e/support/selftest-handover.ts`；M3-P6 加请求编辑的自检 `selftest-request.ts`——请求方在后台停在"交给了我"、回到前台才进入，被盖住的持有者两条都认（被暂停走到到期、空闲满 2 分钟自动交出），交接与请求编辑共用的观察 `selftest-timeline.ts`、持有者的前半段 `selftest-holder.ts`，挂接的 `host.subscribe` 与请求方、持有者两侧的进展，编排与判定在 `tests/e2e/support/selftest-request.ts`（另一方经接口扮演），驱动脚本的空闲、锁屏与盖屏在 `tests/e2e/safari/desktop.ts`），只在测试构建里（只能动态引入，lint，M2-P6）
   shared/             请求层（api；M2-P6 加带 requestId 的新建共用的请求标识记账 request-ids）、界面组件（ui，改写后的 shadcn/ui：M2-P1 加弹窗、表格、标签、原生选择框；M2-P6 加人名 PersonName、句子里嵌元素的 Phrase、说明条 Notice、输入的文字说明 FieldProblem；M2-P5 加读屏的状态区 StatusRegion（M3-P6 加可选的 keepFocusInView：长列表上方的状态区变高之后把排在它后面、有焦点的元素滚回可视区域，用 lib 的 use-keep-focus-in-view；账户页、成员页、转移页接上）、空间的呈现 SpaceLabel、按需加载失败的说明 ChunkLoadNotice；Codex 评审之后加列表没能刷新的说明 RefreshProblem（M3-P2 加详情的变体 DetailRefreshProblem 与 fallbackFocus）、M3-P2 加第一次就没取到时的重试按钮 RetryButton、说明里"列表还在刷新"的 StillRefreshing）与主题变量、界面文字（i18n：M2-P6 起按范围分文件，只在按需加载的页面用到的不进首屏）、
                       小工具（lib：登录页与管理界面的地址、整页跳转、延时取值、会话复核、渲染之后移焦点等；M2-P6 加焦点兜底 useFocusRescue（M3-P2 加焦点交接 use-focus-hand-off、第一次就没取到时的重试 use-first-load-retry）、页面标题 useDocumentTitle、输入校验的说明 validation、先取消在路上的请求再刷新、可以要求刷新失败时抛出的 refresh-queries，时限之后后台刷新成功时改回说法的 use-outcome-refresh；Codex 评审之后加成功之后的刷新还在后台的 use-still-refreshing、按确定的写入结果改分页列表缓存的 paged-cache；写操作成功之后的有时限的刷新在 api 的 write-outcome（refreshAfterSuccess）；M3-P6 加有焦点的元素上方的内容变高之后把它滚回可视区域的 use-keep-focus-in-view（ResizeObserver 盯一直在的容器，只在变高时滚；状态区的 keepFocusInView 与转移页"有文档已经不在了"的说明用它））
+  shared/outbox/      本机发件箱的底座（M4-P1，ADR-020；不建桶文件，按文件引用；Worker 一侧的文件只许引用 Worker 一侧的文件与不带 zod 的契约常量、不许引用只在主线程用的模块与页面里才有的全局，lint 的区域规则 `OUTBOX_WORKER_SIDE`、`OUTBOX_MAIN_THREAD_ONLY`）：记录与 AAD、编解码、写入者的判定（纯函数）、IndexedDB 的库与存储（草稿、写入者、恢复的提示）、列表的索引 draft-index.ts（平台页面只许按需引用它）、与放置无关的写入管道 draft-writer.ts（DraftWriter）、OPFS 的镜像（mirror-slot.ts 的槽位格式、mirror-directory.ts、draft-mirror.ts）与比对 draft-recovery.ts（谁胜出按库里写入者的高水位与代次，清理删不掉镜像目录时立墓碑）、恢复的提示、本机密钥的客户端 local-key.ts 与不带 zod 的导入 local-key-import.ts、本机存储的状态 storage-status.ts、库与镜像合一的清理 local-cleanup.ts
 ```
 
 - React Router 8（数据路由的库模式）、TanStack Query 5、Tailwind CSS 4 与 shadcn/ui 的 Radix 版本（ADR-008）。
@@ -229,6 +231,7 @@ apps/web/src/
   - 只读（M2-P3，ADR-015）：查看者与归档空间里的文档一开始就以只读创建。授权服务只允许查看与复制；只读守卫分三步装上（创建工作簿之前：防火墙与撤销拦截；工作簿创建之后：工作表的权限点与图片；渲染完成时 `applyRenderedGuards`：冻结线与编辑栏，这两处的控制器那时才注册），取消本文档的修改（与变更检测同一个判定）、撤销与重做，关掉工作表的权限点，图片与冻结线拖不动，替换、"搜索功能"面板与快速求和不开放（后两个 M2-P6），批注浮层与编辑栏不能输入；全部已注册的快捷键有只读的回归用例（M2-P6）；界面没有工具栏、右键菜单、底栏菜单与新增工作表按钮，权限提示是只读的说法；页头显示"只能查看"，没有保存。写入的边界仍在服务端；
   - 保存：显式保存（按钮、Ctrl/Cmd+S），状态机见 ADR-011，只在编辑时有；有未保存的修改时离开由浏览器提示（失去编辑权、另存为副本之前同样提示）；M3-P4 起自动保存（P4 设计 §3.1–§3.10）：修改停 1 秒（持续编辑至多 3 秒）捕获进内存里的最近一次捕获，停 2 秒（至多 15 秒）上传，同时一个在途；保存按钮与快捷键是立即上传（不去重，按下的那一刻提交单元格），退出编辑、切到后台立即上传；公式没收齐的带"公式待更新"，收齐之后补存，下一个进入编辑的人强制重算；会话内去重、退避与 `Retry-After`、离线与会话暂停；页头的保存状态 11 种，读屏只播有意义的变化；页面关闭时有在途的保存不释放编辑权（ADR-018 的补充）；
   - 打开自检（M3-P4，计划书 §8.2，ADR-010）：创建时以资源守卫换掉资源管理服务，认出解析抛错、非空被吞成空值、加载抛错与序列化抛错，创建工作簿刚返回时比较资源、就绪之后复核 hook 集合；失败的文档只能阅读（说明"文档数据不完整"），以编辑方式打开时先取得编辑权、失败立即释放，失败的编辑器绝不保存；失败上报给服务端（只带种类与资源名）；
+  - 本机发件箱（M4-P1，ADR-020；P2 起接入）：IndexedDB 的库 `nerve-office-outbox`（草稿、写入者、恢复的提示三个仓库，键 `[userId, documentId]`），写入栅栏按服务端的代次排先后（写入者存代次与每次登记的随机 `writerId`，不存租约令牌）、草稿序号与只删到已确认的序号、AES-GCM 加密与覆盖全部明文元数据的 AAD、存字节不存 Blob；写入管道 `DraftWriter` 一个接口两种宿主（进程内、发件箱 Worker）；Chromium 崩溃重开时可能删掉整个来源的 IndexedDB（UR-034），所以 Worker 里把同一份记录镜像进 OPFS（同步访问句柄改写两个槽位），读时取最新、删库之后写回并留下提示；14 天保留期按读得出的更新时间。`outbox-lock.ts` 的同源短期 Web Lock 串行化完整写入、恢复、登记与清理；锁不可用明确失败。主线程退路也先做只读镜像恢复。按用户清理先对三个仓库的文档并集立墓碑，再删镜像、最后清库。更新格式的镜像不覆盖、不截断、不误报 lost。
   - 会话：载入之后一律不整页跳转、不自动重新加载（本页可能有未保存的修改）。登录已过期或在别处退出：暂停保存，提示在新标签页中登录，本人登录回来之后恢复；别的标签页登录了另一个人：不能再保存，原来的人回来之后恢复。M3-P4：确认会话失败（网络等）时页面在恢复联网、回到前台时与定时再确认，暂停按原因说；保存与续租遇到连着的会话类失败（服务端一直拒绝而确认照常成功）只有第一次在确认之后立即重试，之后按退避或心跳（ADR-018 的补充）。
 - 首屏 JS 预算（gzip，门禁 `budgets` 检查）：平台页面 180 KiB；编辑器页 2350 KiB；公式 Worker 800 KiB。管理界面与成员页是单独的动态分块，不计入平台页面的首屏；弹窗不经 shared/ui 的桶文件导出，确认弹窗与弹窗文件本身（`shared/ui/dialog.tsx`）只由按需加载的功能引用（M2-P1：首屏 156.4 KiB；M2-P2：161.6 KiB；M2-P4：168.3 KiB；M2-P6 第 5 片之后 170.6 KiB、2 个文件：只给按需加载页面用的文案按功能拆出首屏；门禁同时限定平台页面的首屏文件数不超过 2 个；M2-P5 之后 172.0 KiB、2 个文件，编辑器页 2020.4 KiB；Codex 评审之后 173.0 KiB、2 个文件——首屏的列表接上刷新失败与还在刷新的共用做法，编辑器页 2021.0 KiB；M3-P2 之后 174.7 KiB、2 个文件，编辑器页 2032.3 KiB；M3-P4 之后 175.6 KiB、2 个文件，编辑器页 2045.6 KiB，公式 Worker 677.6 KiB；M3-P5 之后 175.8 KiB、2 个文件，编辑器页 2057.6 KiB，公式 Worker 677.6 KiB）。
 
@@ -290,7 +293,9 @@ A01 等检查（`pnpm gate <名称>`）：
 | `budgets` | 各入口首屏 JS 的体积（入口块加上静态引用的块，gzip）不超过预算；入口创建的 Worker 另列一项（按构建清单里块的 `assets` 找到 Worker 的产物，连同它静态引用的块）；入口能加载到的块创建了没有预算的 Worker（含 `?worker` 的写法与动态加载的块）、一个预算匹配到多个同名的 Worker、构建清单里有没有预算的入口、产物里有没有归属的脚本（例如 Worker 里再创建的 Worker）、构建清单里的块引用了清单里没有的块时报违规；平台页面的首屏文件数超过上限（2 个）时报 `budgets/too-many-files`（M2-P6） |
 | `audit` | 生产依赖没有高危及以上的漏洞；例外有原因与到期日；没有被配置藏起来的漏洞 |
 
-覆盖率下限（单元与集成测试合计）：contracts 90%，api 80%，web（编辑器适配层以外）70%，tools 80%。
+覆盖率下限（单元与集成测试合计）：contracts 90%，api 80%，web（编辑器适配层以外）70%，tools 80%。本机发件箱里只能在真实浏览器里测的 IndexedDB 接线与测试构建的探针不计入单元覆盖率（理由同编辑器适配层），由三个浏览器的浏览器层用例覆盖（M4-P1）；Worker 的薄入口计入单元覆盖率，同时保留真实 Worker 的浏览器层验证。
+
+崩溃项目（M4-P1）：持久化的浏览器目录、按角色认出并结束这次启动的整棵浏览器进程（Linux 读 /proc；macOS 上 WebKit 的 XPC 服务另认，要求机器上只有这一个 Playwright WebKit）、以同一个目录重开（`tests/e2e/support/browser-crash.ts`）；每个浏览器一个项目、`workers: 1`，重启后端的项目依赖它；另能读、补 Chromium 的 IndexedDB 日志结尾（`leveldb-log.ts`，确定地造出删库）。E2E 与集成测试的测试库按主机标识命名、只清理本主机建的（`tests/shared/test-databases.ts`），集成测试建模板时只删没人在用的旧模板。
 
 ## 7. 数据库
 
@@ -362,3 +367,4 @@ A01 等检查（`pnpm gate <名称>`）：
 | 2026-10-08 | M3-P6 | 本机密钥（ADR-019；ADR-007、012、014、017、018 的补充，计划书 r19，迁移 0026）：local-keys 模块——主密钥环（HKDF 派生、AES-256-GCM 包装、KAT）、取用 `POST /api/local-key`（第一次取用时生成）、吊销（擦掉被吊销那一版的材料、同一个事务里生成下一版，吊销的时刻取执行时）与审计、心跳带版本、启动自检；主密钥只给应用进程（`ConfigModule.forServer`、`LOCAL_KEYS_CONFIG` 与 lint，严格格式、HTTPS 时拒绝可读的主密钥）；应用全局关掉 Express 自动算的 ETag；账户页的吊销（自己、别人、停用的三版确认框）与状态列的版本；容器 E2E 的拒绝启动核对与日志扫描；登录页的说明与错误分开（DEF-048）、选目标位置之后的焦点（DEF-049）、编辑器页阅读时的说明（A14）；真实 Safari 的请求编辑两条路（DEF-062 关闭，DEF-069）；登记 DEF-065–070 |
 | 2026-10-09 | M3 合并前评审（Codex） | 释放与交出先锁文档行、明确结束在类型上凭锁下的租约行（CX1）；本机锁的争用以服务端的事实裁决（`local-lock.ts`、租约的 `confirm`，CX2）；吊销的响应分成结果与现状（CX3）；还没写进模型的输入合成一个状态（`uncommitted-input`，CX4）；页头与 CI 一节订正 |
 | 2026-10-09 | M3 合并之后 main 的 CI | 被本人接管"在哪"按本机的证据定，与服务端的回答、本机锁被抢谁先到无关（`local-lock.ts` 的 `takenHere`、`edit-mode.ts` 的 `locateTakeover`；ADR-018 的补充） |
+| 2026-10-10 | M4-P1 | 本机发件箱的底座（ADR-020）：`shared/outbox/`（存储与写入栅栏、加密、写入管道、OPFS 的冗余与恢复的提示、本机密钥的客户端、本机存储的状态、合一的清理）与发件箱 Worker；lint 的区域规则；崩溃项目与工具；测试库按主机标识命名；Chromium 的 IndexedDB 删库（UR-034） |

@@ -1,7 +1,7 @@
 // 页面自检的入口页（M3-P2 设计 §3.5，只在测试构建里）：从地址的 # 片段读测试账户与要跑的场景，同源登录，再整页跳到编辑器页，
 // 带上 selftest=<场景> 与 next=<自检结束之后跳去的地址>（驱动脚本起的收集端，tests/e2e/safari/selftest.ts）。
 // 片段的写法（URLSearchParams）：user、password、document（文档 id）、scenario（场景）、next，可选的 formula（公式模式，
-// 测试构建的开关：main 是主线程模式，M3-P4 设计 §3.14；原样带到编辑器页的地址上）。
+// 测试构建的开关：main 是主线程模式，M3-P4 设计 §3.14）与 runs（运行次数，M4-P1 S1 的真实浏览器复核）——这两项原样带到编辑器页的地址上。
 // 片段不发给服务器、不进访问日志；读完马上用 replaceState 从地址栏与会话历史里去掉。
 // 跳到编辑器页之前在 sessionStorage 里暂停定时的自动保存（SELFTEST_AUTOSAVE_HOLD，M3-P4 S7 审查 B1）。
 // next 只能是本机的地址（nextProblem，M3-P2 复核 B7）：不是时不登录、不跳转，原因写在页面上。
@@ -10,7 +10,7 @@
 // 引用了，那些模块在测试构建里成了三个入口共用的，分块的拆法随之改变，平台页面与编辑器页的入口块就与生产构建的不同，
 // E2E 测的不再是生产的样子。只引用结果的格式（editor/testing/selftest-report.ts，它不引用任何模块；lint 只放行它）
 import type { SelftestReport } from '../../editor/testing/selftest-report.ts'
-import { encodeSelftestReport, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, formulaModeOfValue, NEXT_PARAM, nextProblem, reportUrl, SELFTEST_AUTOSAVE_HOLD, SELFTEST_REPORT_FORMAT, selftestEditorUrl } from '../../editor/testing/selftest-report.ts'
+import { encodeSelftestReport, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, formulaModeOfValue, NEXT_PARAM, nextProblem, reportUrl, RUNS_MAX, RUNS_PARAM, runsOfValue, SELFTEST_AUTOSAVE_HOLD, SELFTEST_REPORT_FORMAT, selftestEditorUrl } from '../../editor/testing/selftest-report.ts'
 
 function show(text: string): void {
   const status = document.getElementById('status')
@@ -72,6 +72,7 @@ async function main(): Promise<void> {
   const documentId = fragment.get('document') ?? ''
   const scenario = fragment.get('scenario') ?? ''
   const formula = formulaModeOfValue(fragment.get(FORMULA_MODE_PARAM))
+  const runs = runsOfValue(fragment.get(RUNS_PARAM))
   const next = fragment.get(NEXT_PARAM)
   if (next === null) {
     show('地址的 # 片段里没有 next：不知道结果交给谁')
@@ -87,6 +88,8 @@ async function main(): Promise<void> {
       throw new Error('地址的 # 片段不全：要有 user、password、document、scenario 与 next')
     if (formula === null)
       throw new Error(`地址的 # 片段里 ${FORMULA_MODE_PARAM} 只能是 ${Object.values(FORMULA_MODE_VALUES).join(' 或 ')}`)
+    if (runs === null)
+      throw new Error(`地址的 # 片段里 ${RUNS_PARAM} 只能是 1 到 ${RUNS_MAX} 的整数`)
     show(`以 ${user} 登录…`)
     await signIn(user, password)
   }
@@ -96,7 +99,7 @@ async function main(): Promise<void> {
     window.location.replace(reportUrl(next, await encodeSelftestReport(failureReport(scenario, documentId, startedAt, failure))))
     return
   }
-  const target = selftestEditorUrl(window.location.origin, documentId, scenario, next, formula ?? undefined)
+  const target = selftestEditorUrl(window.location.origin, documentId, scenario, next, formula ?? undefined, runs ?? undefined)
   holdTimedAutosave()
   show(`打开 ${new URL(target).pathname}…`)
   window.location.replace(target)

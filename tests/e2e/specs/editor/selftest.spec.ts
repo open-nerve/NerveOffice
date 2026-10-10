@@ -27,10 +27,20 @@
 //   只是服务端听不到它），协作者请求、续期，持有者那一代按时间到期（真等一个有效期）之后接手；放开、模拟回到前台之后持有者得知失去编辑权、另存为副本；
 //   没被暂停——只模拟隐藏，心跳照常带来请求，进入编辑之后空闲满 2 分钟（真等）先保存再自动交出，协作者续期得到 reserved 之后接手（2026-10-08 真实 Safari
 //   上被盖住的编辑器页就是这样：持有 Web Lock、开着 Worker 与 BroadcastChannel 的页面被挡住时 Safari 不暂停）
+// 真实浏览器的前置复核（M4-P1 S1，设计 §3.6）的几步同样各成一条用例：地址不带运行次数（runs），每项最少的次数、小样本——只核对探针本身
+// （页面上的检查都通过、数据齐），另按 support/probe-verdicts.ts 判定与时间无关的几项（回滚、IndexedDB、密钥交给 Worker、Web Locks）都通过；
+// 与时间有关的（写入耗时、Worker 停顿、捕获成本、首屏与公式冻结）只要求数据齐，不在 CI 的慢机器上判——大样本与足够的次数在真实 Safari 与本机的持久
+// 上下文里跑（measure/probe.spec.ts）。约 5 MiB 的捕获（capture-5m）与再一次的 Worker 模式（perf-worker-warm）不在这里：场景与 capture-1m、
+// perf-worker 相同，只是样本更大、或者为了首屏的热，CI 只跑小样本。写满（storage-quota）单独一条：持久上下文里经 CDP 把配额覆盖成 12 MiB
+// （Chromium 系）；WebKit 没有这个接口，核对探针写到上限（64 MiB）就停、不往真实的配额里一直写。生产发件箱的两步另核对 OPFS 镜像（设计 §3.8）：
+// Chromium 系的默认上下文（无痕式，OPFS 在内存里）每一次都写成了镜像、收尾时删掉了复核用户的镜像目录；Playwright 的 WebKit 默认上下文没有 OPFS
+// （生产的代码按 unsupported 处理），探针照样跑完、记下这一条——镜像那一段的数在持久上下文与真实 Safari 上量。
 // 用到测试构建（自检的入口页与编辑器页里的自检）：标签 @test-build，外部模式测生产镜像时排除
-import type { Page, Route } from '@playwright/test'
+import type { BrowserContext, Page, Route } from '@playwright/test'
 import type { SelftestReport } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { TestUser } from '../../support/database.ts'
+import type { ReleaseOverride } from '../../support/persistent-profile.ts'
+import type { ItemVerdict } from '../../support/probe-verdicts.ts'
 import type { Judgement } from '../../support/selftest-handover.ts'
 import type { SelftestStep, SelftestStepDefinition } from '../../support/selftest-plan.ts'
 import type { RequestRun, RequestStage } from '../../support/selftest-request.ts'
@@ -39,9 +49,12 @@ import { decodeSelftestReport, HANDOVER_SCENARIOS, REQUEST_SCENARIOS, RESULT_PAR
 import { revisionOf } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { firstPage, launchPersistentProfile, overrideQuota } from '../../support/persistent-profile.ts'
+import { probeVerdicts } from '../../support/probe-verdicts.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../../support/selftest-handover.ts'
-import { problemsOf, SELFTEST_STEPS, selftestPageUrl, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
+import { problemsOf, SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
 import { runPausedHolder, runWaiter } from '../../support/selftest-request.ts'
+import { REPORT_TIMEOUT_MS, reportOf, startSelftest } from '../../support/selftest-run.ts'
 import { EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -49,33 +62,6 @@ test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 // 打开编辑器页时暂停定时的自动保存（与入口页写的相同）；E2E_AUTOSAVE=running 时照常，核对自检不依赖打开时的状态（见文件开头）
 test.use({ autosave: process.env.E2E_AUTOSAVE === 'running' ? 'running' : 'held' })
-
-/** 结果交回的地址：本机的源（被测站点自己的源）加一个没有的路径，导航由这里拦下、不会发到后端 */
-function collector(): string {
-  return `${e2eOrigin()}/selftest-collector`
-}
-
-/** 自检要等编辑器到 steady（渲染完成后 3 秒）再逐项检查，场景的总时限 180 秒：给足时限，失败时看附件里的页面 */
-const REPORT_TIMEOUT_MS = 200_000
-
-/** 打开入口页，交回的结果由这里拦下：返回已经交回的地址（解开用 reportOf） */
-async function startSelftest(page: Page, step: SelftestStep): Promise<string[]> {
-  const delivered: string[] = []
-  await page.route(`${collector()}/**`, async (route) => {
-    delivered.push(route.request().url())
-    await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: '自检的结果已收到' })
-  })
-  await page.goto(selftestPageUrl(e2eOrigin(), step, `${collector()}/report?step=${step.id}`))
-  return delivered
-}
-
-/** 等结果交回，解开 */
-async function reportOf(delivered: readonly string[]): Promise<SelftestReport> {
-  await expect.poll(() => delivered.length, { message: '等自检把结果交回', timeout: REPORT_TIMEOUT_MS }).toBe(1)
-  const encoded = new URL(delivered[0] ?? '').searchParams.get(RESULT_PARAM)
-  expect(encoded, '交回的地址里有结果').not.toBeNull()
-  return decodeSelftestReport(encoded ?? '')
-}
 
 /** 造这一步的样本与账户（账户名前缀：用户名最长 32 个字符，后面还要加角色与随机后缀） */
 async function stepOf(definition: SelftestStepDefinition): Promise<SelftestStep> {
@@ -101,9 +87,9 @@ async function summaryOf(report: SelftestReport, step: SelftestStep, path?: stri
 
 /**
  * 只读打开的场景（查看者，与作者的 enter-exit：它从阅读开始，自己点"编辑""退出编辑"；交接里另开的 B 与刷新的那一步也从阅读开始；请求编辑的请求方
- * 也从阅读开始）
+ * 也从阅读开始；M4-P1 的存储、密钥、写满与 Worker 停顿的探针用不着编辑器，在阅读时跑）
  */
-const READ_ONLY_SCENARIOS: ReadonlySet<string> = new Set(['read-only', 'read-only-formulas', 'enter-exit', 'takeover-taker', 'refresh-save', 'request-waiter'])
+const READ_ONLY_SCENARIOS: ReadonlySet<string> = new Set(['read-only', 'read-only-formulas', 'enter-exit', 'takeover-taker', 'refresh-save', 'request-waiter', 'storage', 'key-transfer', 'storage-quota', 'worker-stall', 'outbox-stall', 'outbox-pipeline'])
 
 function passed(step: SelftestStep): unknown {
   return { scenario: step.scenario, page: { state: 'ready', readOnly: READ_ONLY_SCENARIOS.has(step.scenario) }, hasChecks: true, problems: [], server: [] }
@@ -112,8 +98,92 @@ function passed(step: SelftestStep): unknown {
 /** hidden-save（Playwright 里模拟隐藏，单独一条用例） */
 const HIDDEN_SAVE = SELFTEST_STEPS.filter(item => item.scenario === 'hidden-save')
 
+/**
+ * 真实浏览器复核里 CI 不校准的几步（见文件开头）：约 5 MiB 的捕获与再一次的 Worker 模式——场景与 capture-1m、perf-worker 相同，
+ * 只是样本更大（CI 只跑小样本）、或者只为首屏的热
+ */
+const LOCAL_ONLY_STEPS: ReadonlySet<string> = new Set(['capture-5m', 'perf-worker-warm'])
+
 /** 照常一步一条用例的（hidden-save、交接与请求编辑的几步另有编排） */
-const PLAIN_STEPS = SELFTEST_STEPS.filter(item => item.scenario !== 'hidden-save' && !([...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS] as readonly string[]).includes(item.scenario))
+const PLAIN_STEPS = SELFTEST_STEPS.filter(item => item.scenario !== 'hidden-save' && !([...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS] as readonly string[]).includes(item.scenario) && !LOCAL_ONLY_STEPS.has(item.id))
+
+/**
+ * 真实浏览器复核的一步在 CI 里该有的判定（support/probe-verdicts.ts）：这一步负责的各项数据都齐（不是 missing）；与时间无关的几项（回滚、
+ * IndexedDB 的基本行为、密钥交给 Worker、Web Locks）通过。与时间有关的项与持久保存、配额（非持久的上下文里 IndexedDB 在内存里）只要求数据齐
+ */
+const PROBE_ITEMS: Readonly<Record<string, readonly string[]>> = {
+  'storage': ['1', '2', '3', '5', '6', '8'],
+  'key-transfer': ['7'],
+  'worker-stall': ['9'],
+  'outbox-stall': ['9-production'],
+  'capture-cost': ['10'],
+  'outbox-pipeline': ['11'],
+  'perf-baseline': ['12'],
+}
+
+const SEMANTIC_ITEMS: ReadonlySet<string> = new Set(['5', '6', '7', '8'])
+
+/** 一步的判定的要点：各项的结论（与时间无关的几项）或者数据齐不齐 */
+function probeSummary(step: SelftestStep, report: SelftestReport): unknown {
+  const verdicts = probeVerdicts([{ stepId: step.id, report, cold: true }])
+  const statusOf = (verdict: ItemVerdict): string => SEMANTIC_ITEMS.has(verdict.id) || verdict.status === 'missing' ? verdict.status : 'complete'
+  return (PROBE_ITEMS[step.scenario] ?? []).map((id) => {
+    const verdict = verdicts.find(entry => entry.id === id)
+    return verdict === undefined
+      ? { id, status: '没有这一项', missing: [], lines: [] }
+      : { id, status: statusOf(verdict), missing: verdict.missing, lines: verdict.status === 'fail' || verdict.status === 'missing' ? verdict.lines : [] }
+  })
+}
+
+function probePassed(step: SelftestStep): unknown {
+  return (PROBE_ITEMS[step.scenario] ?? []).map(id => ({ id, status: SEMANTIC_ITEMS.has(id) ? 'pass' : 'complete', missing: [], lines: [] }))
+}
+
+/** OPFS 镜像在生产发件箱的两步里的样子（别的步骤为 null）：登记时、各次写入、收尾时删镜像目录 */
+function opfsSummary(step: SelftestStep, report: SelftestReport): unknown {
+  const facts = report.facts ?? {}
+  if (step.scenario === 'outbox-stall')
+    return { registerMirror: facts['outbox-stall.register-mirror'], everyWrite: facts['outbox-stall.mirrored'] === facts['outbox-stall.iterations'], cleanup: facts['outbox-stall.mirror-cleanup'] }
+  if (step.scenario === 'outbox-pipeline')
+    return { opfs: facts['outbox-pipeline.opfs'], cleanup: facts['outbox-pipeline.mirror-cleanup'] }
+  return null
+}
+
+/** Chromium 系的默认上下文有 OPFS（在内存里）：都写成了、删掉了；Playwright 的 WebKit 默认上下文没有：unsupported、写成了 0 次 */
+function opfsExpected(step: SelftestStep, browserName: string): unknown {
+  const mirrored = browserName === 'chromium'
+  if (step.scenario === 'outbox-stall')
+    return mirrored ? { registerMirror: 'mirrored', everyWrite: true, cleanup: 'removed' } : { registerMirror: 'not-mirrored:unsupported', everyWrite: false, cleanup: 'unsupported' }
+  if (step.scenario === 'outbox-pipeline')
+    return mirrored ? { opfs: 'mirrored', cleanup: 'removed' } : { opfs: 'not-mirrored:unsupported', cleanup: 'unsupported' }
+  return null
+}
+
+/** 写满（M4-P1 §3.6 第 4 项）：不在真实 Safari 的步骤里，这一条用例自己的一步 */
+const QUOTA_STEP: SelftestStepDefinition = { id: 'storage-quota', scenario: 'storage-quota', role: 'viewer', sample: 'template' }
+
+/** Chromium 系经 CDP 把配额覆盖成多少（设计 §3.6 第 4 项：8–16 MiB） */
+const QUOTA_OVERRIDE_BYTES = 12 * 1024 * 1024
+
+/** 写满的准备：Chromium 系（chromium、chrome，CI 另有 msedge）经 CDP 覆盖这个源的配额（交回撤掉的办法）；WebKit 没有这个接口，什么也不做 */
+async function prepareQuota(context: BrowserContext, page: Page, browserName: string): Promise<ReleaseOverride> {
+  return browserName === 'chromium' ? overrideQuota(context, page, e2eOrigin(), QUOTA_OVERRIDE_BYTES) : async () => {}
+}
+
+/**
+ * 写满的判定的要点：结论、不通过时的说明，写满之前写进去了多少（覆盖成 12 MiB 时不到 12 MiB：确实是覆盖的配额，不是真实的；页面看不出覆盖了没有，
+ * estimate() 照旧报真实的配额）
+ */
+function quotaSummary(report: SelftestReport): unknown {
+  const verdict = probeVerdicts([{ stepId: QUOTA_STEP.id, report, cold: true }]).find(entry => entry.id === '4')
+  const records = report.facts?.['quota.records']
+  return { status: verdict?.status, lines: verdict?.status === 'fail' ? verdict.lines : [], withinOverride: typeof records === 'number' && records * 1024 * 1024 < QUOTA_OVERRIDE_BYTES }
+}
+
+/** Chromium 系在覆盖的配额以内写满、各项都对；WebKit 写到上限都没写满（这次做不了） */
+function quotaExpected(browserName: string): unknown {
+  return browserName === 'chromium' ? { status: 'pass', lines: [], withinOverride: true } : { status: 'unavailable', lines: [], withinOverride: false }
+}
 
 /** 定义里的一步 */
 function definitionOf(id: string): SelftestStepDefinition {
@@ -256,13 +326,33 @@ async function holdHolderBack(route: Route): Promise<void> {
 
 test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 的浏览器里每项都通过', { tag: '@test-build' }, () => {
   for (const definition of PLAIN_STEPS) {
-    test(`步骤 ${definition.id}`, async ({ page }, testInfo) => {
+    test(`步骤 ${definition.id}`, async ({ page, browserName }, testInfo) => {
       const step = await stepOf(definition)
       const report = await reportOf(await startSelftest(page, step))
       await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
       expect(await summaryOf(report, step)).toEqual(passed(step))
+      // 真实浏览器复核的几步另按判定核对、生产发件箱的两步另核对 OPFS 镜像（别的步骤这两边都是空的）
+      expect(probeSummary(step, report)).toEqual(probePassed(step))
+      expect(opfsSummary(step, report)).toEqual(opfsExpected(step, browserName))
     })
   }
+
+  test('步骤 storage-quota（M4-P1 设计 §3.6 第 4 项）：持久上下文里——Chromium 系经 CDP 把配额覆盖成 12 MiB，一条一条地加 1 MiB 到 QuotaExceededError，失败的那一条不在，拿更大的一份覆盖已有的一条同样 QuotaExceededError、原记录不变能解开；WebKit 没有覆盖配额的接口，探针写到上限（64 MiB）都没写满就停、删掉', async ({ playwright, browserName, cspViolations, pageErrors }, testInfo) => {
+    const step = await stepOf(QUOTA_STEP)
+    const context = await launchPersistentProfile(playwright[browserName], testInfo, 'profile', { cspViolations, pageErrors })
+    try {
+      const page = await firstPage(context)
+      const release = await prepareQuota(context, page, browserName)
+      const report = await reportOf(await startSelftest(page, step))
+      await release()
+      await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
+      expect(await summaryOf(report, step)).toEqual(passed(step))
+      expect(quotaSummary(report)).toEqual(quotaExpected(browserName))
+    }
+    finally {
+      await context.close()
+    }
+  })
 
   for (const definition of HIDDEN_SAVE) {
     test(`步骤 ${definition.id}：第一次上传之后页面变成隐藏（这里模拟），自动保存在隐藏的那一刻捕获、上传留着的第二格，服务器上有两次保存`, async ({ page }, testInfo) => {

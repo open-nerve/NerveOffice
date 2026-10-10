@@ -4,7 +4,9 @@
 //   依赖链、大范围聚合、跨表、SUMPRODUCT 的慢计算、易变函数；公式不带缓存值（打开时 SDK 只算没有结果的公式，打开即全部算一遍）。
 //   规模按自检的时限缩放（FORMULA_SAMPLE 的注释）；生成与核对都可以另给一个规模（FormulaSample：US-M3-03 的 E2E 用更小的一份，
 //   tests/e2e/support/capture-samples.ts 的 AUTOSAVE_FORMULA_SAMPLE），"重"表的公式个数为 0 时不生成它；
-// - 大表：5 万行的一列文字（自动行高的迟到、大表复制）。
+// - 大表：5 万行的一列文字（自动行高的迟到、大表复制）；
+// - 真实浏览器的前置复核（M4-P1 S1，设计 §3.6 第 9、10、12 项）：按字节数生成的明细表（M0-P3 的 big-1m、big-5m：捕获成本与
+//   Worker 停顿的负载），与性能基线的 perf-50k（5 万格、1,000 个公式，带缓存值：与保存过的文档一样，打开时不算）。
 // 这个文件不引用任何模块：E2E 经模块边界的例外引用它（eslint.config.ts 的 SELFTEST_SHARED_FILES），Playwright 的进程里不能带进 Univer。
 
 /** 快照里的单元格（只写用到的字段）：v 值、t 类型（1 文字、2 数值）、f 公式 */
@@ -288,4 +290,195 @@ export function bigSheet(): SampleSheet {
 export function cellCount(snapshotText: string, sheetId: string): number {
   const snapshot = JSON.parse(snapshotText) as SnapshotCells
   return Object.values(snapshot.sheets[sheetId]?.cellData ?? {}).reduce((count, row) => count + Object.keys(row).length, 0)
+}
+
+// ---- 按字节数生成的明细表（M4-P1 S1）----
+
+/** 明细表与 perf-50k 的类别（M0-P3 的 CATEGORIES） */
+const CATEGORIES = ['华东', '华南', '华北', '西南', '西北', '东北', '华中', '海外', '线上', '其他'] as const
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+/** 从 0 开始的列号的字母写法（只用到 A–Z） */
+function columnLetter(index: number): string {
+  return String.fromCharCode(65 + index)
+}
+
+/** 明细表（M0-P3 的 big-1m、big-5m）：工作表的 id 与名称、20 列，按目标的字节数生成行，留出工作簿其余部分的余量 */
+export const BULK_SHEET = { id: 'bulk', name: '明细', columns: 20, fill: 0.97 } as const
+
+/**
+ * 按目标的字节数生成明细表（M0-P3 的 buildBig，同样的种子与列，按 JSON 文字的字节数估算）：表头一行；之后每行编号、名称、类别、
+ * 16 个两位小数的数值，最后一列每 10 行一个行合计的公式（带缓存值，打开时不算），其余是数值。捕获成本（capture-cost）按它的大小
+ * 分两档（约 1 MiB 与约 5 MiB）；worker-stall 拿同一个生成器在页面里造约 5 MiB 的负载（类表格的 JSON，gzip 之后约四分之一，与快照相近）
+ */
+export function bulkSheet(targetBytes: number): SampleSheet {
+  const random = mulberry32(20_260_924)
+  const { columns } = BULK_SHEET
+  const last = columns - 1
+  const cellData: SampleCells = {}
+  const header: Record<number, SampleCell> = {}
+  ;['编号', '名称', '类别', ...Array.from({ length: columns - 4 }, (_, index) => `指标${index + 1}`), '合计'].forEach((text, column) => {
+    header[column] = { v: text, t: TEXT }
+  })
+  cellData[0] = header
+  const encoder = new TextEncoder()
+  let bytes = encoder.encode(JSON.stringify(cellData)).length
+  let row = 1
+  while (bytes < targetBytes * BULK_SHEET.fill) {
+    const cells: Record<number, SampleCell> = {
+      0: { v: row, t: NUMBER },
+      1: { v: `项目-${String(row).padStart(6, '0')}`, t: TEXT },
+      2: { v: CATEGORIES[Math.floor(random() * CATEGORIES.length)] ?? CATEGORIES[0], t: TEXT },
+    }
+    let total = 0
+    for (let column = 3; column < last; column += 1) {
+      const value = round2(random() * 10_000)
+      cells[column] = { v: value, t: NUMBER }
+      total += value
+    }
+    cells[last] = row % 10 === 0
+      ? { f: `=SUM(D${row + 1}:${columnLetter(last - 1)}${row + 1})`, v: round2(total), t: NUMBER }
+      : { v: round2(random() * 10_000), t: NUMBER }
+    cellData[row] = cells
+    bytes += encoder.encode(JSON.stringify(cells)).length + String(row).length + 4
+    row += 1
+  }
+  return { id: BULK_SHEET.id, name: BULK_SHEET.name, rowCount: row + 100, columnCount: columns, cellData }
+}
+
+/** 捕获成本的两档样本的目标字节数（M0-P3：1 MiB 与 5 MiB；5 MiB 一档仍在快照的上限之内，见 BULK_SHEET.fill） */
+export const BULK_SAMPLE_BYTES = { small: 1024 * 1024, large: 5 * 1024 * 1024 } as const
+
+// ---- perf-50k（M4-P1 S1 的性能基线，M0-P3 V10）----
+
+/**
+ * 性能基线的样本（M0-P3 的 buildPerf50k，00 号计划书 §12.1 的表格样本）："数据表"表头加 5,000 行 × 10 列（50,010 格，前 600 行的合计是公式）
+ * 与"汇总"400 个公式（分类统计 40、列统计 60、VLOOKUP 300，连同标签与查找的编号 716 格），共 1,000 个公式。公式带缓存值（与保存过的文档一样，打开时不算）；
+ * 增量计算改数据表的 D 列（incrementalCell）：牵动约 320 个公式——这一行的合计、D 列的分类与列统计、300 个 VLOOKUP（范围含 D 列）
+ */
+export const PERF_SAMPLE = {
+  data: { id: 'perf-data', name: '数据表', rows: 5_000, formulaRows: 600 },
+  summary: { id: 'perf-summary', name: '汇总', lookups: 300 },
+  formulas: 1_000,
+} as const
+
+/** 增量计算的第 index 次改哪一格（数据表 D 列，从第 2 行起，M0 的 D2、D3……）与写什么 */
+export function perfIncrementalEdit(index: number): { readonly sheet: string, readonly cell: string, readonly value: number } {
+  return { sheet: PERF_SAMPLE.data.name, cell: `D${index + 2}`, value: 500 + index }
+}
+
+function median(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  return sorted.length % 2 === 1 ? sorted[middle] ?? 0 : ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
+}
+
+/** 样本标准差（STDEV） */
+function sampleStdev(values: readonly number[]): number {
+  const mean = values.reduce((total, value) => total + value, 0) / values.length
+  return Math.sqrt(values.reduce((total, value) => total + (value - mean) ** 2, 0) / (values.length - 1))
+}
+
+/** 列统计的十个函数（M0 的顺序）：PRODUCT 只取前 10 行，免得溢出 */
+const COLUMN_FUNCTIONS = ['SUM', 'AVERAGE', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'STDEV', 'SUMSQ', 'COUNTA', 'PRODUCT'] as const
+
+function columnStat(name: (typeof COLUMN_FUNCTIONS)[number], values: readonly number[]): number {
+  switch (name) {
+    case 'SUM':
+      return values.reduce((total, value) => total + value, 0)
+    case 'AVERAGE':
+      return values.reduce((total, value) => total + value, 0) / values.length
+    case 'MAX':
+      return Math.max(...values)
+    case 'MIN':
+      return Math.min(...values)
+    case 'COUNT':
+    case 'COUNTA':
+      return values.length
+    case 'MEDIAN':
+      return median(values)
+    case 'STDEV':
+      return sampleStdev(values)
+    case 'SUMSQ':
+      return values.reduce((total, value) => total + value * value, 0)
+    case 'PRODUCT':
+      return values.slice(0, 10).reduce((total, value) => total * value, 1)
+  }
+}
+
+/** perf-50k 的两张表（公式带按定义算出的缓存值） */
+export function perfSampleSheets(): SampleSheet[] {
+  const { data, summary } = PERF_SAMPLE
+  const random = mulberry32(12)
+  const dataCells: SampleCells = {}
+  const header: Record<number, SampleCell> = {}
+  ;['编号', '名称', '类别', '销量', '单价', '成本', '费用', '退货', '库存', '合计'].forEach((text, column) => {
+    header[column] = { v: text, t: TEXT }
+  })
+  dataCells[0] = header
+  /** 每一行的类别与 D–I 列的值（汇总的缓存值按它们算） */
+  const rows: { readonly name: string, readonly category: string, readonly values: readonly number[] }[] = []
+  for (let row = 1; row <= data.rows; row += 1) {
+    const name = `商品-${String(row).padStart(5, '0')}`
+    const category = CATEGORIES[row % CATEGORIES.length] ?? CATEGORIES[0]
+    const cells: Record<number, SampleCell> = { 0: { v: row, t: NUMBER }, 1: { v: name, t: TEXT }, 2: { v: category, t: TEXT } }
+    const values: number[] = []
+    for (let column = 3; column <= 8; column += 1) {
+      const value = round2(random() * 1000)
+      cells[column] = { v: value, t: NUMBER }
+      values.push(value)
+    }
+    cells[9] = row <= data.formulaRows
+      ? { f: `=SUM(D${row + 1}:I${row + 1})`, v: round2(values.reduce((total, value) => total + value, 0)), t: NUMBER }
+      : { v: round2(random() * 6000), t: NUMBER }
+    dataCells[row] = cells
+    rows.push({ name, category, values })
+  }
+
+  const last = data.rows + 1
+  const ref = (column: string): string => `'${data.name}'!$${column}$2:$${column}$${last}`
+  const summaryCells: SampleCells = {}
+  CATEGORIES.forEach((category, index) => {
+    const matching = rows.filter(row => row.category === category)
+    const sales = matching.map(row => row.values[0] ?? 0)
+    const prices = matching.map(row => row.values[1] ?? 0)
+    const costs = matching.map(row => row.values[2] ?? 0)
+    summaryCells[index] = {
+      0: { v: category, t: TEXT },
+      1: { f: `=SUMIF(${ref('C')},A${index + 1},${ref('D')})`, v: sales.reduce((total, value) => total + value, 0), t: NUMBER },
+      2: { f: `=AVERAGEIF(${ref('C')},A${index + 1},${ref('E')})`, v: prices.reduce((total, value) => total + value, 0) / prices.length, t: NUMBER },
+      3: { f: `=COUNTIF(${ref('C')},A${index + 1})`, v: matching.length, t: NUMBER },
+      4: { f: `=MAXIFS(${ref('F')},${ref('C')},A${index + 1})`, v: Math.max(...costs), t: NUMBER },
+    }
+  })
+  ;['D', 'E', 'F', 'G', 'H', 'I'].forEach((column, offset) => {
+    const values = rows.map(row => row.values[offset] ?? 0)
+    const cells: Record<number, SampleCell> = { 0: { v: `列 ${column}`, t: TEXT } }
+    COLUMN_FUNCTIONS.forEach((name, index) => {
+      const formula = name === 'PRODUCT' ? `=PRODUCT('${data.name}'!$${column}$2:$${column}$11)` : `=${name}(${ref(column)})`
+      cells[index + 1] = { f: formula, v: columnStat(name, values), t: NUMBER }
+    })
+    summaryCells[12 + offset] = cells
+  })
+  for (let index = 0; index < summary.lookups; index += 1) {
+    const id = 1 + ((index * 16) % data.rows)
+    summaryCells[20 + index] = {
+      0: { v: id, t: NUMBER },
+      1: { f: `=VLOOKUP(A${21 + index},'${data.name}'!$A$2:$J$${last},2,FALSE)`, v: rows[id - 1]?.name ?? '', t: TEXT },
+    }
+  }
+  return [
+    { id: data.id, name: data.name, rowCount: data.rows + 200, columnCount: 12, cellData: dataCells },
+    { id: summary.id, name: summary.name, rowCount: 400, columnCount: 12, cellData: summaryCells },
+  ]
+}
+
+/** 快照里一张表的公式个数（perf-50k 的核对：1,000 个） */
+export function formulaCount(snapshotText: string): number {
+  const snapshot = JSON.parse(snapshotText) as SnapshotCells
+  return Object.values(snapshot.sheets).reduce((count, sheet) => count + Object.values(sheet?.cellData ?? {})
+    .reduce((rowCount, row) => rowCount + Object.values(row).filter(cell => typeof cell.f === 'string').length, 0), 0)
 }

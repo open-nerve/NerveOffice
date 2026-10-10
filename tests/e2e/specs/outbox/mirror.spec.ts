@@ -1,0 +1,658 @@
+// OPFS 的镜像（M4-P1 设计 §3.8，S9）：在真实的浏览器里经测试构建的探针跑生产的发件箱 Worker——IndexedDB 写成之后同一份记录写进
+// nerve-office-outbox/<userId>/<documentId>/ 的两个槽位文件（同步访问句柄、轮流原地改写），删掉草稿时截断，IndexedDB 被删之后读回并写回、
+// 在库里留下提示，库比镜像新时登记补写镜像；库与镜像合一的清理（local-cleanup.ts）在页面里调。槽位文件经测试构建的另一个 Worker
+// 读出（页面里按生产的格式校验）、改坏。
+// 每个用例一个持久化的浏览器目录（三个浏览器同样）：WebKit 默认的上下文是临时的数据存储，没有 OPFS（拿不到根目录，默认上下文里的管道用例
+// 核对的正是"用不了"）；Chromium 默认的无痕式上下文里 OPFS 在内存里，配额的覆盖也管不到同步访问句柄。
+// Playwright 的 WebKit 在 macOS 上把持久上下文的 OPFS 放在共用的目录里（不在资料目录里）：每个用例用自己的用户，收尾时删掉他的镜像目录。
+// "合一的清理·保留期"一条以 15 天之后的时刻清，会回收这个来源下所有用户的镜像目录：这个文件里的用例串行（不开 fullyParallel），
+// 别的文件不在持久上下文里碰 OPFS；以后要并行，先把那一条挪到单独的项目里（审查 B14）。
+// dispose 之后发件箱 Worker 的句柄是异步放开的：要读、改槽位文件之前先等它放开（waitForRelease）。
+// 标签 @test-build
+import type { BrowserContext, Page } from '@playwright/test'
+import type { DraftKey, InFlightSave, ProbeCapture, ProbeSlot, WriterIdentity } from '../../support/outbox-probe.ts'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { createUser } from '../../support/database.ts'
+import { test as base, expect } from '../../support/fixtures.ts'
+import { draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, probePipeline, removeMirrorOf, writerOf } from '../../support/outbox-probe.ts'
+import { firstPage, launchPersistentProfile, overrideQuota } from '../../support/persistent-profile.ts'
+import { loginThroughApi } from '../../support/session.ts'
+
+const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }
+
+function captureOf(key: DraftKey, writer: WriterIdentity, draftSeq: number, content: ProbeCapture['content'], overrides: Partial<ProbeCapture> = {}): ProbeCapture {
+  return { key, writer, draftSeq, baseRevision: 1, writtenBy: `instance-${writer.writerId}`, format: FORMAT, formulasPending: false, inFlight: null, dedupe: false, content, ...overrides }
+}
+
+function inFlightOf(localSeq: number): InFlightSave {
+  return { requestId: randomUUID(), clientInstanceId: 'instance-in-flight', localSeq, sentAt: NOW }
+}
+
+/** 槽位读出来的样子：空的、不合格、合格的那一份的序号与代号 */
+function summaryOf(slot: ProbeSlot): string {
+  switch (slot.kind) {
+    case 'missing':
+    case 'empty':
+      return slot.kind
+    case 'invalid':
+      return `invalid:${slot.reason}`
+    case 'valid':
+      return `seq${slot.meta.draftSeq}@${slot.generation}`
+  }
+}
+
+/** 这一个用例的用户：收尾时删掉他的 OPFS 镜像目录 */
+let currentUserId: string | undefined
+
+interface Profile {
+  readonly context: BrowserContext
+  readonly page: Page
+}
+
+/**
+ * profile：这个用例的持久上下文（沿用项目的浏览器与 channel，挂上 CSP 违规与页面错误的收集）与它的第一页。收尾时关掉别的标签页、
+ * 在第一页里关掉全部管道并删掉用例用户的镜像目录（Worker 终止之后句柄是异步放开的：删到成功为止），再关上下文
+ */
+const test = base.extend<{ profile: Profile }>({
+  profile: async ({ playwright, browserName, cspViolations, pageErrors }, provide, testInfo) => {
+    const context = await launchPersistentProfile(playwright[browserName], testInfo, 'profile', { cspViolations, pageErrors })
+    const page = await firstPage(context)
+    await provide({ context, page })
+    for (const other of context.pages().filter(other => other !== page))
+      await other.close()
+    const owner = currentUserId
+    currentUserId = undefined
+    if (owner !== undefined)
+      await expect.poll(async () => removeMirrorOf(page, owner), { message: '删掉用例用户的镜像目录', timeout: 10_000 }).toBe('removed')
+    await context.close()
+  },
+})
+
+/** 登录、打开探针、选一把第 2 版的密钥（rawHex 给出时用它：几个标签页用同一把）；交回这份文档的键 */
+async function prepare(page: Page, prefix: string): Promise<{ readonly key: DraftKey, readonly rawKey: string }> {
+  const user = await createUser(prefix)
+  currentUserId = user.id
+  await loginThroughApi(page, user)
+  await openOutboxProbe(page)
+  const rawKey = randomBytes(32).toString('hex')
+  await probe(page, 'chooseKey', 2, rawKey)
+  return { key: { userId: user.id, documentId: randomUUID() }, rawKey }
+}
+
+/** 发件箱 Worker 的管道（生产的脚本，带镜像）：握手成功、交给它探针当前的密钥 */
+async function workerPipeline(page: Page): Promise<number> {
+  const { id, ready } = await probePipeline(page, 'create', { host: 'worker' })
+  expect(ready).toEqual({ kind: 'ready' })
+  expect(await probePipeline(page, 'setKey', id, 'probe')).toEqual({ kind: 'key-set', notResealed: [] })
+  return id
+}
+
+async function slotsOf(page: Page, key: DraftKey): Promise<string[]> {
+  return (await probePipeline(page, 'mirrorSlots', key)).map(summaryOf)
+}
+
+/** dispose 之后等发件箱 Worker 放开这份文档的句柄（异步放开：读得出槽位文件为止，审查 B14） */
+async function waitForRelease(page: Page, key: DraftKey): Promise<void> {
+  await expect.poll(async () => probePipeline(page, 'mirrorSlots', key).then(() => 'released', () => 'busy'), { message: '等发件箱 Worker 放开句柄', timeout: 10_000 }).toBe('released')
+}
+
+/** 页面暂持生产用的短期锁，让真实 Worker/主线程的操作排队；只在这个测试页面挂释放函数。 */
+async function holdOperations(page: Page): Promise<void> {
+  await page.evaluate(async () => new Promise<void>((resolve, reject) => {
+    navigator.locks.request('nerve-office-outbox-operation', async () => new Promise<void>((release) => {
+      (globalThis as unknown as { releaseOutboxOperation: () => void }).releaseOutboxOperation = release
+      resolve()
+    })).catch(reject)
+  }))
+}
+
+async function releaseOperations(page: Page): Promise<void> {
+  await page.evaluate(() => (globalThis as unknown as { releaseOutboxOperation: () => void }).releaseOutboxOperation())
+}
+
+async function pendingOperations(page: Page): Promise<number> {
+  return page.evaluate(async () => (await navigator.locks.query()).pending?.filter(lock => lock.name === 'nerve-office-outbox-operation').length ?? 0)
+}
+
+async function rollBackDraft(page: Page, key: DraftKey, existing: 'absent' | 'older', older: Record<string, unknown> | null): Promise<void> {
+  await probe(page, 'remove', key)
+  if (existing === 'older') {
+    await probeDatabase(page, 'putRaw', 'drafts', { ...older })
+    await probeDatabase(page, 'patchDraft', key, { iv: (older?.iv as { hex: string }).hex, ciphertext: (older?.ciphertext as { hex: string }).hex })
+  }
+}
+
+test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
+  for (const host of ['worker', 'in-process'] as const) {
+    test(`跨宿主的短期互斥（${host}）：登记和清理都等待页面持有的同一把锁`, async ({ profile: { page } }) => {
+      const { key } = await prepare(page, 'ob-lock')
+      const writer = writerOf(3)
+      const { id } = await probePipeline(page, 'create', { host })
+      await probePipeline(page, 'setKey', id, 'probe')
+      await holdOperations(page)
+      const registering = probePipeline(page, 'register', id, key, writer, false)
+      try {
+        await expect.poll(async () => pendingOperations(page)).toBe(1)
+        expect(await probeDatabase(page, 'exists')).toBe(false)
+      }
+      finally {
+        await releaseOperations(page)
+      }
+      expect(await registering).toMatchObject({ kind: 'registered' })
+      outcomeOf(await probePipeline(page, 'write', id, captureOf(key, writer, 1, 'one')), 'written')
+      await probePipeline(page, 'release', id, key)
+      await holdOperations(page)
+      const cleaning = probePipeline(page, 'cleanupUser', key.userId)
+      try {
+        await expect.poll(async () => pendingOperations(page)).toBe(1)
+        expect(await probeDatabase(page, 'getRaw', 'drafts', key)).not.toBeNull()
+      }
+      finally {
+        await releaseOperations(page)
+      }
+      expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })
+      expect(await probePipeline(page, 'read', id, key)).toEqual({ kind: 'absent' })
+    })
+  }
+
+  test('主线程退路不写镜像，也必须先恢复镜像再登记，不能复用尚未读过的草稿序号', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-fallback-restore')
+    const first = await workerPipeline(page)
+    const writer = writerOf(3)
+    await probePipeline(page, 'register', first, key, writer, false)
+    outcomeOf(await probePipeline(page, 'write', first, captureOf(key, writer, 11, 'eleven')), 'written')
+    await probePipeline(page, 'dispose', first)
+    await waitForRelease(page, key)
+    expect(await probeDatabase(page, 'remove', 5_000)).toBe('deleted')
+    const { id } = await probePipeline(page, 'create', { host: 'in-process' })
+    await probePipeline(page, 'setKey', id, 'probe')
+    expect(await probePipeline(page, 'register', id, key, writerOf(4), false)).toMatchObject({ kind: 'registered', lastDraftSeq: 11, existing: { kind: 'draft', meta: { draftSeq: 11 } }, mirror: { kind: 'off' } })
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toMatchObject({ kind: 'restored' })
+    expect(await slotsOf(page, key)).toEqual(['seq11@1', 'empty'])
+  })
+
+  test('写读：登记时建好两个空槽位；写成之后镜像里是库里那一份，两个槽位轮流写、代号往上；标记在途跟着重封；确认删掉之后两个都截断为 0', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-rw')
+    const id = await workerPipeline(page)
+    const writer = writerOf(3)
+    expect(await probePipeline(page, 'register', id, key, writer, false)).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror: { kind: 'mirrored' } })
+    // 看槽位之前先放开句柄（同一时刻一个文件只有一个句柄）；之后的操作再拿
+    await probePipeline(page, 'release', id, key)
+    expect(await slotsOf(page, key)).toEqual(['empty', 'empty'])
+
+    expect((await probePipeline(page, 'write', id, captureOf(key, writer, 1, 'one'))).kind).toBe('written')
+    const second = outcomeOf(await probePipeline(page, 'write', id, captureOf(key, writer, 2, 'two')), 'written')
+    expect(second.mirror).toEqual({ kind: 'mirrored' })
+    await probePipeline(page, 'release', id, key)
+    expect(await slotsOf(page, key)).toEqual(['seq1@1', 'seq2@2'])
+    const [, newest] = await probePipeline(page, 'mirrorSlots', key)
+    const stored = outcomeOf(await probePipeline(page, 'storedGzip', key), 'gzip')
+    expect(newest.kind === 'valid' && newest.meta, '镜像里就是库里那一份（元数据相同）').toEqual(stored.meta)
+
+    expect(await probePipeline(page, 'markInFlight', id, key, writer, inFlightOf(2))).toEqual({ kind: 'resealed' })
+    await probePipeline(page, 'release', id, key)
+    const resealed = await probePipeline(page, 'mirrorSlots', key)
+    expect(resealed.map(summaryOf)).toEqual(['seq2@3', 'seq2@2'])
+    expect(resealed[0].kind === 'valid' && resealed[0].meta.inFlight?.localSeq).toBe(2)
+
+    expect(await probePipeline(page, 'confirm', id, key, writer, 2, 2)).toEqual({ kind: 'deleted' })
+    await probePipeline(page, 'release', id, key)
+    expect(await slotsOf(page, key)).toEqual(['empty', 'empty'])
+  })
+
+  test('两个标签页争同一个文件的句柄：新的写入者拿不到时照样写 IndexedDB、结果带 busy；旧的被栅栏拒绝后放开，新的退避之后拿到', async ({ profile: { context, page } }) => {
+    const { key, rawKey } = await prepare(page, 'ob-mirror-handles')
+    const older = writerOf(3)
+    const first = await workerPipeline(page)
+    expect((await probePipeline(page, 'register', first, key, older, false)).kind).toBe('registered')
+    expect(outcomeOf(await probePipeline(page, 'write', first, captureOf(key, older, 1, 'older 1')), 'written').mirror).toEqual({ kind: 'mirrored' })
+
+    const second = await context.newPage()
+    await openOutboxProbe(second)
+    await probe(second, 'chooseKey', 2, rawKey)
+    const newer = writerOf(4)
+    const takeover = await workerPipeline(second)
+    expect(await probePipeline(second, 'register', takeover, key, newer, false)).toMatchObject({ kind: 'registered', lastDraftSeq: 1, mirror: { kind: 'not-mirrored', reason: 'busy' } })
+    const blocked = outcomeOf(await probePipeline(second, 'write', takeover, captureOf(key, newer, 2, 'newer 2', { adoptSeq: 1 })), 'written')
+    expect(blocked.mirror, '句柄被第一页拿着：照样写进 IndexedDB').toEqual({ kind: 'not-mirrored', reason: 'busy' })
+    expect(outcomeOf(await probePipeline(second, 'storedGzip', key), 'gzip').gzip.text).toBe('newer 2')
+
+    // 第一页再写：被栅栏拒绝（不再是写入者），随即放开句柄
+    expect(await probePipeline(page, 'write', first, captureOf(key, older, 3, 'older 3'))).toMatchObject({ kind: 'fenced', reason: 'not-writer' })
+    // 新的写入者按退避再拿：接着写，直到镜像写成（每次一份新的）
+    let seq = 2
+    await expect.poll(async () => {
+      seq += 1
+      const result = await probePipeline(second, 'write', takeover, captureOf(key, newer, seq, `newer ${seq}`))
+      return result.kind === 'written' ? result.mirror.kind : result.kind
+    }, { message: '新的写入者退避之后拿到句柄、镜像写成', timeout: 15_000, intervals: [250] }).toBe('mirrored')
+    await probePipeline(second, 'release', takeover, key)
+    const slots = await probePipeline(second, 'mirrorSlots', key)
+    expect(slots.some(slot => slot.kind === 'valid' && slot.meta.writeEpoch === 4), '镜像里有新的写入者写的').toBe(true)
+  })
+
+  test('IndexedDB 被删之后（Chromium 崩溃重开时会删整个来源的库）：读回镜像里的那一份并写回库（连同写入者），库里留下"已从备份恢复"的提示（读出、清除）；之后登记新的一代时它是现有的草稿', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-restore')
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    await probePipeline(page, 'register', before, key, writer, false)
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 1, 'one')), 'written')
+    const written = outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 2, 'two')), 'written')
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+
+    expect(await probeDatabase(page, 'remove', 5_000)).toBe('deleted')
+    expect(await probeDatabase(page, 'exists')).toBe(false)
+
+    const after = await workerPipeline(page)
+    const read = outcomeOf(await probePipeline(page, 'read', after, key), 'draft')
+    expect([read.meta.draftSeq, read.gzip.text, read.gzip.sha256]).toEqual([2, 'two', written.gzip.sha256])
+    // 别人的提示不列
+    await probeDatabase(page, 'putRaw', 'notices', { userId: randomUUID(), documentId: key.documentId, kind: 'lost', at: Date.now() })
+    const listed = outcomeOf(await probePipeline(page, 'notices', after, key.userId), 'notices').notices
+    expect(listed).toHaveLength(1)
+    const [notice] = listed
+    expect(notice).toMatchObject({ ...key, kind: 'restored' })
+    expect(await probeDatabase(page, 'getRaw', 'notices', key), '提示存在库里').toMatchObject({ ...key, kind: 'restored', at: notice?.at })
+    expect(await probePipeline(page, 'clearNotice', after, key, (notice?.at ?? 0) + 1), '读出之后又留下的新提示不清').toEqual({ kind: 'changed' })
+    expect(await probePipeline(page, 'clearNotice', after, key, notice?.at)).toEqual({ kind: 'cleared' })
+    expect(await probePipeline(page, 'notices', after, key.userId)).toEqual({ kind: 'notices', notices: [] })
+    // 写回了库：草稿与写入者（代次、writerId、高水位）
+    expect(outcomeOf(await probePipeline(page, 'storedGzip', key), 'gzip').meta.draftSeq).toBe(2)
+    expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ writeEpoch: 3, writerId: writer.writerId, lastDraftSeq: 2 })
+    expect(await probePipeline(page, 'register', after, key, writerOf(4), false)).toMatchObject({ kind: 'registered', lastDraftSeq: 2, existing: { kind: 'draft', meta: { draftSeq: 2, writerId: writer.writerId } } })
+  })
+
+  test('IndexedDB 被删、两个槽位都坏了：读不回，库里留下"本机草稿因浏览器存储损坏丢失"的提示，两个没用的槽位截断', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-lost')
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    await probePipeline(page, 'register', before, key, writer, false)
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 1, 'one')), 'written')
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 2, 'two')), 'written')
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+    await probePipeline(page, 'corruptSlot', key, 0, { truncate: 300 })
+    await probePipeline(page, 'corruptSlot', key, 1, { fill: 400, value: 7 })
+    expect(await slotsOf(page, key)).toEqual(['invalid:torn', 'invalid:torn'])
+    expect(await probeDatabase(page, 'remove', 5_000)).toBe('deleted')
+
+    const after = await workerPipeline(page)
+    expect(await probePipeline(page, 'read', after, key)).toEqual({ kind: 'absent' })
+    expect(outcomeOf(await probePipeline(page, 'notices', after, key.userId), 'notices').notices).toEqual([expect.objectContaining({ ...key, kind: 'lost' })])
+    expect(await slotsOf(page, key)).toEqual(['empty', 'empty'])
+  })
+
+  test('两个槽位都坏了、库里没有草稿而写入者还在（草稿是被删掉的）：不算丢失、不留提示，没用的槽位截断', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-not-lost')
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    await probePipeline(page, 'register', before, key, writer, false)
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 1, 'one')), 'written')
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+    expect(await probe(page, 'remove', key)).toEqual({ kind: 'removed' })
+    await probePipeline(page, 'corruptSlot', key, 0, { truncate: 300 })
+    await probePipeline(page, 'corruptSlot', key, 1, { fill: 400, value: 7 })
+
+    const after = await workerPipeline(page)
+    expect(await probePipeline(page, 'read', after, key)).toEqual({ kind: 'absent' })
+    expect(await probePipeline(page, 'notices', after, key.userId)).toEqual({ kind: 'notices', notices: [] })
+    expect(await slotsOf(page, key)).toEqual(['empty', 'empty'])
+  })
+
+  test('放弃过、确认删掉过的不复活：库里的草稿删掉了而镜像里留着那一份（当时没截断成）——比对时按写入者的高水位认出，截断镜像，读不回、没有提示', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-stale')
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    await probePipeline(page, 'register', before, key, writer, false)
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 1, 'one')), 'written')
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+    // 绕过管道直接从库里删掉草稿（写入者与它的高水位留着）：镜像没跟着截断
+    expect(await probe(page, 'remove', key)).toEqual({ kind: 'removed' })
+    expect(await slotsOf(page, key)).toEqual(['seq1@1', 'empty'])
+
+    const after = await workerPipeline(page)
+    expect(await probePipeline(page, 'read', after, key)).toEqual({ kind: 'absent' })
+    expect(await probePipeline(page, 'notices', after, key.userId)).toEqual({ kind: 'notices', notices: [] })
+    expect(await probePipeline(page, 'storedGzip', key)).toEqual({ kind: 'absent' })
+    await probePipeline(page, 'release', after, key)
+    expect(await slotsOf(page, key)).toEqual(['empty', 'empty'])
+  })
+
+  test('打开平台时的比对：IndexedDB 被删之后，这个用户在镜像里的每份文档都写回库、各留一条"已从备份恢复"的提示', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-reconcile')
+    const other = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    for (const target of [key, other]) {
+      await probePipeline(page, 'register', before, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', before, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+    }
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+    await waitForRelease(page, other)
+    expect(await probeDatabase(page, 'remove', 5_000)).toBe('deleted')
+
+    const after = await workerPipeline(page)
+    expect(await probePipeline(page, 'reconcile', after, key.userId), '一份一份地比对（审查 A13）').toEqual({ kind: 'reconciled', documents: 2, failed: [] })
+    expect(outcomeOf(await probePipeline(page, 'notices', after, key.userId), 'notices').notices.map(notice => [notice.kind, notice.documentId]).sort()).toEqual([['restored', key.documentId], ['restored', other.documentId]].sort())
+    expect(await probe(page, 'draftIds', key.userId)).toEqual([key.documentId, other.documentId].sort())
+  })
+
+  test('库比镜像新（被结束在"库已提交、镜像还没写完"之间，这里把存着最新一份的槽位改坏）：登记时用库里那一份补写镜像；之后删库，读回的是最后一次提交的那一份', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-backfill')
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    await probePipeline(page, 'register', before, key, writer, false)
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 1, 'one')), 'written')
+    const second = outcomeOf(await probePipeline(page, 'write', before, captureOf(key, writer, 2, 'two')), 'written')
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+    await probePipeline(page, 'corruptSlot', key, 1, { truncate: 300 })
+    expect(await slotsOf(page, key)).toEqual(['seq1@1', 'invalid:torn'])
+
+    const after = await workerPipeline(page)
+    expect(await probePipeline(page, 'register', after, key, writerOf(4), false)).toMatchObject({ kind: 'registered', existing: { kind: 'draft', meta: { draftSeq: 2 } }, mirror: { kind: 'mirrored' } })
+    await probePipeline(page, 'release', after, key)
+    expect(await slotsOf(page, key), '照常轮流：写在不是最新的那个槽位上').toEqual(['seq1@1', 'seq2@2'])
+    await probePipeline(page, 'dispose', after)
+    await waitForRelease(page, key)
+    expect(await probeDatabase(page, 'remove', 5_000)).toBe('deleted')
+
+    const restored = await workerPipeline(page)
+    const read = outcomeOf(await probePipeline(page, 'read', restored, key), 'draft')
+    expect([read.meta.draftSeq, read.gzip.sha256]).toEqual([2, second.gzip.sha256])
+  })
+
+  test('代次倒退之后以 force 登记（审查 A2）：新的一代接手写了更新的一份，旧一代的镜像不胜出——读回新的、写入者不变、没有提示；删库之后写回的是最后写的那一份', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-rollback')
+    const older = writerOf(5)
+    const before = await workerPipeline(page)
+    await probePipeline(page, 'register', before, key, older, false)
+    outcomeOf(await probePipeline(page, 'write', before, captureOf(key, older, 10, 'ten')), 'written')
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+
+    const rolledBack = writerOf(3)
+    const taker = await workerPipeline(page)
+    expect(await probePipeline(page, 'register', taker, key, rolledBack, true)).toMatchObject({ kind: 'registered', lastDraftSeq: 10, existing: { kind: 'draft', meta: { draftSeq: 10, writeEpoch: 5 } }, mirror: { kind: 'mirrored' } })
+    outcomeOf(await probePipeline(page, 'write', taker, captureOf(key, rolledBack, 11, 'eleven', { adoptSeq: 10 })), 'written')
+    const read = outcomeOf(await probePipeline(page, 'read', taker, key), 'draft')
+    expect([read.meta.writeEpoch, read.meta.draftSeq, read.gzip.text]).toEqual([3, 11, 'eleven'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ writeEpoch: 3, writerId: rolledBack.writerId, lastDraftSeq: 11 })
+    expect(await probePipeline(page, 'notices', taker, key.userId)).toEqual({ kind: 'notices', notices: [] })
+    outcomeOf(await probePipeline(page, 'write', taker, captureOf(key, rolledBack, 12, 'twelve')), 'written')
+    await probePipeline(page, 'dispose', taker)
+    await waitForRelease(page, key)
+    expect(await probeDatabase(page, 'remove', 5_000)).toBe('deleted')
+
+    const restored = await workerPipeline(page)
+    const afterWipe = outcomeOf(await probePipeline(page, 'read', restored, key), 'draft')
+    expect([afterWipe.meta.writeEpoch, afterWipe.meta.draftSeq, afterWipe.gzip.text]).toEqual([3, 12, 'twelve'])
+  })
+
+  test('高水位先于代次：旧 Worker 持有镜像时 force 接手并写入，滞留的较大代次镜像不能覆盖库里的较新序号', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-highwater')
+    const older = writerOf(5)
+    const first = await workerPipeline(page)
+    await probePipeline(page, 'register', first, key, older, false)
+    outcomeOf(await probePipeline(page, 'write', first, captureOf(key, older, 10, 'ten')), 'written')
+    const current = writerOf(3)
+    const taker = await workerPipeline(page)
+    expect(await probePipeline(page, 'register', taker, key, current, true)).toMatchObject({ kind: 'registered', lastDraftSeq: 10, mirror: { kind: 'not-mirrored', reason: 'busy' } })
+    expect(await probePipeline(page, 'write', taker, captureOf(key, current, 11, 'eleven', { adoptSeq: 10 }))).toMatchObject({ kind: 'written', mirror: { kind: 'not-mirrored', reason: 'busy' } })
+    await probePipeline(page, 'dispose', first)
+    await probePipeline(page, 'dispose', taker)
+    await waitForRelease(page, key)
+    expect(await slotsOf(page, key)).toEqual(['seq10@1', 'empty'])
+
+    const reader = await workerPipeline(page)
+    const read = outcomeOf(await probePipeline(page, 'read', reader, key), 'draft')
+    expect([read.meta.writeEpoch, read.meta.draftSeq, read.gzip.text]).toEqual([3, 11, 'eleven'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ ...current, lastDraftSeq: 11 })
+    expect(await probePipeline(page, 'notices', reader, key.userId)).toEqual({ kind: 'notices', notices: [] })
+  })
+
+  for (const existing of ['absent', 'older'] as const) {
+    test(`保留现有写入者的恢复（${existing}）：写回镜像里的较新草稿并留下 restored，写入者与高水位不变`, async ({ profile: { page } }) => {
+      const { key } = await prepare(page, 'ob-mirror-keep')
+      const previous = writerOf(3)
+      const first = await workerPipeline(page)
+      await probePipeline(page, 'register', first, key, previous, false)
+      outcomeOf(await probePipeline(page, 'write', first, captureOf(key, previous, 10, 'ten')), 'written')
+      const older = await probeDatabase(page, 'getRaw', 'drafts', key)
+      outcomeOf(await probePipeline(page, 'write', first, captureOf(key, previous, 11, 'eleven')), 'written')
+      await probePipeline(page, 'dispose', first)
+      await waitForRelease(page, key)
+      await rollBackDraft(page, key, existing, older)
+      const current = writerOf(4)
+      await probeDatabase(page, 'putRaw', 'writers', { ...key, ...current, lastDraftSeq: 10, registeredAt: Date.now() })
+
+      const reader = await workerPipeline(page)
+      const read = outcomeOf(await probePipeline(page, 'read', reader, key), 'draft')
+      expect([read.meta.writeEpoch, read.meta.draftSeq, read.gzip.text]).toEqual([3, 11, 'eleven'])
+      expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ ...current, lastDraftSeq: 10 })
+      expect(await probeDatabase(page, 'getRaw', 'notices', key)).toMatchObject({ kind: 'restored' })
+      expect(await slotsOf(page, key)).toEqual(['seq10@1', 'seq11@2'])
+    })
+  }
+
+  test('未见过的冲突镜像：平台比对不留 lost；Worker 留一次提示，保留库和镜像各自的草稿', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-unseen')
+    const previous = writerOf(3)
+    const first = await workerPipeline(page)
+    await probePipeline(page, 'register', first, key, previous, false)
+    outcomeOf(await probePipeline(page, 'write', first, captureOf(key, previous, 12, 'unseen')), 'written')
+    await probePipeline(page, 'dispose', first)
+    await waitForRelease(page, key)
+    await probe(page, 'remove', key)
+    const current = writerOf(4)
+    await probeDatabase(page, 'putRaw', 'writers', { ...key, ...current, lastDraftSeq: 9, registeredAt: Date.now() })
+    expect(await probe(page, 'write', draftFor(key, current, 10))).toEqual({ kind: 'written' })
+
+    expect(await probePipeline(page, 'pageReconcile', key.userId)).toEqual({ kind: 'reconciled', documents: 1, failed: [] })
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toBeNull()
+    const reader = await workerPipeline(page)
+    expect(await probePipeline(page, 'read', reader, key)).toMatchObject({ kind: 'draft', meta: { draftSeq: 10, ...current } })
+    const notice = await probeDatabase(page, 'getRaw', 'notices', key)
+    expect(notice).toMatchObject({ kind: 'lost' })
+    await probePipeline(page, 'read', reader, key)
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toEqual(notice)
+    expect(await slotsOf(page, key)).toEqual(['seq12@1', 'empty'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ ...current, lastDraftSeq: 10 })
+  })
+
+  test('库悄悄丢了更新的那次登记与它的写入（UR-034 的变体，审查 A2 的订正）：库退回了旧一代的写入者与草稿，比对时从镜像写回更新的一代写的那一份，写入者换成它的', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-regloss')
+    const w5 = writerOf(5)
+    const first = await workerPipeline(page)
+    await probePipeline(page, 'register', first, key, w5, false)
+    outcomeOf(await probePipeline(page, 'write', first, captureOf(key, w5, 10, 'ten')), 'written')
+    await probePipeline(page, 'dispose', first)
+    await waitForRelease(page, key)
+
+    const w6 = writerOf(6)
+    const second = await workerPipeline(page)
+    expect(await probePipeline(page, 'register', second, key, w6, false)).toMatchObject({ kind: 'registered', lastDraftSeq: 10 })
+    outcomeOf(await probePipeline(page, 'write', second, captureOf(key, w6, 11, 'eleven', { adoptSeq: 10 })), 'written')
+    await probePipeline(page, 'dispose', second)
+    await waitForRelease(page, key)
+
+    // 库悄悄退回：新一代的登记与它写的第 11 份都没了，又是旧一代 W5 与它的第 10 份
+    expect(await probe(page, 'remove', key)).toEqual({ kind: 'removed' })
+    await probeDatabase(page, 'putRaw', 'writers', { ...key, writeEpoch: 5, writerId: w5.writerId, lastDraftSeq: 9, registeredAt: Date.now() })
+    expect(await probe(page, 'write', draftFor(key, w5, 10))).toEqual({ kind: 'written' })
+    expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ writeEpoch: 5, lastDraftSeq: 10 })
+
+    const after = await workerPipeline(page)
+    const read = outcomeOf(await probePipeline(page, 'read', after, key), 'draft')
+    expect([read.meta.writeEpoch, read.meta.draftSeq, read.gzip.text]).toEqual([6, 11, 'eleven'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key), '写入者换成镜像里那一份的，高水位是它的序号').toMatchObject({ writeEpoch: 6, writerId: w6.writerId, lastDraftSeq: 11 })
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toMatchObject({ kind: 'restored' })
+  })
+
+  test('平台页面里的比对（P4 的本机草稿页列出与清理之前，审查 A18）：删库之后只在镜像里的草稿，不经发件箱 Worker 写回库，列出来就有、提示照留', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-page')
+    const other = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const before = await workerPipeline(page)
+    for (const target of [key, other]) {
+      await probePipeline(page, 'register', before, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', before, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+    }
+    await probePipeline(page, 'dispose', before)
+    await waitForRelease(page, key)
+    await waitForRelease(page, other)
+    expect(await probeDatabase(page, 'remove', 5_000)).toBe('deleted')
+    expect(await probe(page, 'draftIds', key.userId), '还没比对：列表里没有').toEqual([])
+
+    expect(await probePipeline(page, 'pageReconcile', key.userId)).toEqual({ kind: 'reconciled', documents: 2, failed: [] })
+    expect(await probe(page, 'draftIds', key.userId)).toEqual([key.documentId, other.documentId].sort())
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toMatchObject({ kind: 'restored' })
+    expect(await slotsOf(page, key), '页面里不截断、不补写').toEqual(['seq1@1', 'empty'])
+  })
+
+  test('合一的清理·放弃（本机草稿页）：删掉草稿、提示与镜像目录，写入者留着；镜像目录有句柄开着时库里照删、写入者换成墓碑（那一页写不进去）、交回 pending，比对时截断它，不复活；之后再清连墓碑一起删', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-cleanup-abandon')
+    const held = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const id = await workerPipeline(page)
+    for (const target of [key, held]) {
+      await probePipeline(page, 'register', id, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', id, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+    }
+    await probePipeline(page, 'release', id, key)
+    await probeDatabase(page, 'putRaw', 'notices', { ...key, kind: 'restored', at: Date.now() })
+    expect(await probePipeline(page, 'cleanupAbandon', key, 1)).toEqual({ kind: 'removed', pending: [] })
+    expect(await probePipeline(page, 'storedGzip', key)).toEqual({ kind: 'absent' })
+    expect(await probeDatabase(page, 'getRaw', 'notices', key), '提示一并删').toBeNull()
+    expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key), '写入者留着').toMatchObject({ lastDraftSeq: 1 })
+
+    expect(await probePipeline(page, 'cleanupAbandon', held), '发件箱 Worker 拿着句柄').toEqual({ kind: 'removed', pending: [held] })
+    expect(await probeDatabase(page, 'getRaw', 'writers', held), '写入者换成墓碑（审查 A6）').toMatchObject({ writerId: 'retired', lastDraftSeq: 1 })
+    expect(await probePipeline(page, 'register', id, held, { writeEpoch: 9, writerId: 'retired' }, true), '墓碑保留的 writerId 不能登记').toMatchObject({ kind: 'failed', error: { name: 'TypeError' } })
+    expect(await probePipeline(page, 'write', id, captureOf(held, writer, 2, 'after abandon')), '那一页写不进去，Worker 随之放开句柄').toMatchObject({ kind: 'fenced', reason: 'not-writer' })
+    expect(await probePipeline(page, 'read', id, held), '比对：库里是墓碑，镜像里的不写回').toEqual({ kind: 'absent' })
+    expect(await slotsOf(page, held)).toEqual(['empty', 'empty'])
+    expect(await probePipeline(page, 'cleanupAbandon', held), '镜像目录删得掉了：目录与墓碑一并删').toEqual({ kind: 'absent', pending: [] })
+    expect(await slotsOf(page, held)).toEqual(['missing', 'missing'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', held)).toBeNull()
+  })
+
+  test('合一的清理·按用户（退出登录）：句柄开着的那一份跳过——草稿与提示留着、写入者换成墓碑，那一页之后写不进去（审查 A1）——交回 pending，放开之后再调就清完；库与镜像里这个人的都不剩', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-cleanup-user')
+    const held = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const id = await workerPipeline(page)
+    for (const target of [key, held]) {
+      await probePipeline(page, 'register', id, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', id, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+    }
+    await probePipeline(page, 'release', id, key)
+    for (const target of [key, held])
+      await probeDatabase(page, 'putRaw', 'notices', { ...target, kind: 'lost', at: Date.now() })
+    expect(await probePipeline(page, 'cleanupUser', key.userId)).toEqual({ kind: 'cleared', pending: [held] })
+    expect(await probe(page, 'draftIds', key.userId), '库里只剩句柄开着的那一份').toEqual([held.documentId])
+    expect([await probeDatabase(page, 'getRaw', 'notices', key), await probeDatabase(page, 'getRaw', 'writers', key)]).toEqual([null, null])
+    expect(await probeDatabase(page, 'getRaw', 'notices', held), '跳过的那一份：提示也留着').toMatchObject({ kind: 'lost' })
+    expect(await probeDatabase(page, 'getRaw', 'writers', held), '写入者换成墓碑：代次照旧（之后的登记照常按代次判定）、高水位留着').toMatchObject({ writerId: 'retired', writeEpoch: 3, lastDraftSeq: 1 })
+    expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
+    // 那一页（发件箱 Worker 拿着句柄）之后的写入被拦下，库里还是清理之前的那一份
+    expect(await probePipeline(page, 'write', id, captureOf(held, writer, 2, 'after logout'))).toMatchObject({ kind: 'fenced', reason: 'not-writer' })
+    expect(outcomeOf(await probePipeline(page, 'storedGzip', held), 'gzip').meta.draftSeq).toBe(1)
+    expect(await slotsOf(page, held), '被拦下之后 Worker 放开了句柄').toEqual(['seq1@1', 'empty'])
+    expect(await probePipeline(page, 'cleanupUser', key.userId)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await probe(page, 'draftIds', key.userId)).toEqual([])
+    expect(await slotsOf(page, held)).toEqual(['missing', 'missing'])
+    expect([await probeDatabase(page, 'getRaw', 'writers', held), await probeDatabase(page, 'getRaw', 'notices', held)]).toEqual([null, null])
+  })
+
+  test('合一的清理·保留期：刚截断的空目录留给下一次编辑（审查 A9）；按 15 天之后的时刻清，库里过期的草稿与没用的镜像目录、墓碑都删掉，句柄开着的这一次跳过、交回 pending', async ({ profile: { page } }) => {
+    // 以 15 天之后的时刻清，会回收这个来源下所有用户的镜像目录：这个文件里的用例串行，不开 fullyParallel（审查 B14）
+    const { key } = await prepare(page, 'ob-cleanup-purge')
+    const live = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const id = await workerPipeline(page)
+    for (const target of [key, live]) {
+      await probePipeline(page, 'register', id, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', id, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+    }
+    expect(await probePipeline(page, 'confirm', id, key, writer, 1, 2)).toEqual({ kind: 'deleted' })
+    await probePipeline(page, 'release', id, live)
+    await probeDatabase(page, 'putRaw', 'notices', { ...live, kind: 'restored', at: Date.now() })
+    expect(await probePipeline(page, 'cleanupExpired', Date.now())).toEqual({ kind: 'purged', drafts: [], pending: [], mirror: { kind: 'done' } })
+    expect(await probeDatabase(page, 'getRaw', 'notices', live), '提示没过期：留着').toMatchObject({ kind: 'restored' })
+    await probePipeline(page, 'release', id, key)
+    expect(await slotsOf(page, key), '两个槽位都空而刚截断过：留着').toEqual(['empty', 'empty'])
+    expect(await slotsOf(page, live)).toEqual(['seq1@1', 'empty'])
+
+    const later = Date.now() + 15 * 24 * 60 * 60 * 1000
+    // 发件箱 Worker 又拿着 key 的句柄（登记）：这一次删不掉，交回 pending；live 的过期了，库里与镜像里都删掉
+    expect((await probePipeline(page, 'register', id, key, writer, false)).kind).toBe('registered')
+    const purged = await probePipeline(page, 'cleanupExpired', later)
+    expect(purged).toMatchObject({ kind: 'purged', pending: [key], mirror: { kind: 'done' } })
+    expect(outcomeOf(purged, 'purged').drafts.filter(draft => draft.key.userId === key.userId)).toEqual([{ key: live, record: 'draft' }])
+    expect(await slotsOf(page, live)).toEqual(['missing', 'missing'])
+    expect([await probeDatabase(page, 'getRaw', 'writers', live), await probeDatabase(page, 'getRaw', 'notices', live)], '镜像目录没了：写入者换成的墓碑一并删').toEqual([null, null])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key), '镜像目录还在（句柄开着）：过期的写入者换成墓碑留着（审查 A6）').toMatchObject({ writerId: 'retired' })
+
+    await probePipeline(page, 'release', id, key)
+    expect(await probePipeline(page, 'cleanupExpired', later)).toMatchObject({ kind: 'purged', pending: [], mirror: { kind: 'done' } })
+    expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
+    expect(await probeDatabase(page, 'getRaw', 'writers', key)).toBeNull()
+  })
+
+  test('删目录（P4 的保留期、按用户清理用，页面里调）：句柄开着时 busy；放开之后删掉这份文档的目录，别的文档不动；按用户删掉整个目录', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-mirror-remove')
+    const other = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const id = await workerPipeline(page)
+    for (const target of [key, other]) {
+      await probePipeline(page, 'register', id, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', id, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+    }
+    expect(await probePipeline(page, 'removeMirrorDocument', key), '发件箱 Worker 拿着句柄').toEqual({ kind: 'busy' })
+    await probePipeline(page, 'release', id, key)
+    expect(await probePipeline(page, 'removeMirrorDocument', key)).toEqual({ kind: 'removed' })
+    expect(await probePipeline(page, 'removeMirrorDocument', key), '已经不在').toEqual({ kind: 'removed' })
+    expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
+    expect(await probePipeline(page, 'reconcile', id, key.userId), '只剩另一份').toEqual({ kind: 'reconciled', documents: 1, failed: [] })
+    expect(await probePipeline(page, 'removeMirror', key.userId), '另一份的句柄还开着').toEqual({ kind: 'busy' })
+    await probePipeline(page, 'release', id, other)
+    expect(await probePipeline(page, 'removeMirror', key.userId)).toEqual({ kind: 'removed' })
+    expect(await probePipeline(page, 'reconcile', id, key.userId)).toEqual({ kind: 'reconciled', documents: 0, failed: [] })
+  })
+
+  test('写满（Chromium 内核经 CDP 把配额设小）：IndexedDB 写成、镜像写满，结果带 quota；库里那一份完好、镜像里没有合格的半截', async ({ browserName, profile: { context, page } }, testInfo) => {
+    // eslint-disable-next-line playwright/no-skipped-test -- WebKit 没有覆盖配额的接口（CDP 的 Storage.overrideQuotaForOrigin 只在 Chromium 内核里有），写满在 Playwright 的 WebKit 上造不出来
+    test.skip(browserName === 'webkit', 'WebKit 没有覆盖配额的接口（CDP 只在 Chromium 内核里有）')
+    // 配额要在本站第一次写 IndexedDB 与 OPFS 之前设（持久化的浏览器目录：默认的无痕式上下文里覆盖管不到同步访问句柄，实测写 32 MiB 照样写成）
+    const release = await overrideQuota(context, page, new URL(testInfo.project.use.baseURL ?? '').origin, 8 * 1024 * 1024)
+    try {
+      const { key } = await prepare(page, 'ob-mirror-quota')
+      const writer = writerOf(3)
+      const id = await workerPipeline(page)
+      expect(await probePipeline(page, 'register', id, key, writer, false)).toMatchObject({ kind: 'registered', mirror: { kind: 'mirrored' } })
+      // 先在另一份文档的槽位里放 4 MiB 压舱的字节，再写一份 gzip 约 2.6 MiB 的记录（3.5 MiB 随机内容）：IndexedDB 写得下（4 + 2.6 < 8），
+      // 镜像再写同样大小就超过 8 MiB（4 + 2.6 + 2.6 > 8），两边各留 1 MiB 以上的余量。实测 Chromium 给同步访问句柄批空间是整块地批、
+      // 按来源的总用量（IndexedDB 也算在内）核对：压舱放 5、6 MiB 时它自己就写满，所以压舱正好 4 MiB
+      const ballast = { userId: key.userId, documentId: randomUUID() }
+      expect((await probePipeline(page, 'register', id, ballast, writer, false)).kind).toBe('registered')
+      await probePipeline(page, 'release', id, ballast)
+      await probePipeline(page, 'corruptSlot', ballast, 0, { fill: 4 * 1024 * 1024, value: 1 })
+      const written = outcomeOf(await probePipeline(page, 'write', id, captureOf(key, writer, 1, { randomBase64Chars: 3.5 * 1024 * 1024 })), 'written')
+      expect(written.mirror).toEqual({ kind: 'not-mirrored', reason: 'quota' })
+      const stored = outcomeOf(await probePipeline(page, 'storedGzip', key), 'gzip')
+      expect(stored.gzip.sha256, '库里那一份完好').toBe(written.gzip.sha256)
+      await probePipeline(page, 'release', id, key)
+      const slots = await slotsOf(page, key)
+      expect(slots.every(slot => slot === 'empty' || slot.startsWith('invalid:')), `镜像里没有合格的一份：${slots.join(', ')}`).toBe(true)
+    }
+    finally {
+      await release()
+    }
+  })
+})
