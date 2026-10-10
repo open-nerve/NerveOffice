@@ -326,13 +326,14 @@ describe('US-M1-11 产物门禁的装配', () => {
 })
 
 describe('US-M1-11 体积预算门禁的装配', () => {
-  /** 两个入口与编辑器页创建的公式 Worker */
+  /** 两个入口与编辑器页创建的公式、本机草稿 Worker。与当前生产入口的预算登记一致。 */
   function dist(indexContent: string): string {
     return writeDist({
-      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true, assets: ['assets/formula.worker-a1b2c3d4.js'] } }),
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true, assets: ['assets/formula.worker-a1b2c3d4.js', 'assets/outbox.worker-b2c3d4e5.js'] } }),
       'assets/index.js': indexContent,
-      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`})',
+      'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`});new Worker(new URL(`/assets/outbox.worker-b2c3d4e5.js`,``+import.meta.url),{type:`module`})',
       'assets/formula.worker-a1b2c3d4.js': 'self.onmessage=()=>{}',
+      'assets/outbox.worker-b2c3d4e5.js': 'self.onmessage=()=>{}',
     })
   }
 
@@ -343,13 +344,16 @@ describe('US-M1-11 体积预算门禁的装配', () => {
     expect(budgetsGate(dist(random)).violations.map(v => v.rule)).toEqual(['budgets/exceeded'])
   })
 
-  it('编辑器页的入口没有引用公式 Worker：违规', () => {
+  it('编辑器页的入口没有引用应登记的 Worker：公式与本机草稿分别违规', () => {
     const noWorker = writeDist({
       '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true } }),
       'assets/index.js': 'console.log(1)',
       'assets/editor.js': 'console.log(2)',
     })
-    expect(budgetsGate(noWorker).violations.map(v => v.rule)).toEqual(['budgets/missing-worker'])
+    expect(budgetsGate(noWorker).violations.map(({ rule, subject }) => ({ rule, subject }))).toEqual([
+      { rule: 'budgets/missing-worker', subject: 'formula.worker' },
+      { rule: 'budgets/missing-worker', subject: 'outbox.worker' },
+    ])
   })
 
   it('违规：没有构建清单', () => {

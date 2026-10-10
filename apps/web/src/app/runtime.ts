@@ -12,6 +12,8 @@ import { isOneTimeLinkPage } from '../features/account/index.ts'
 import { sessionQueryOptions } from '../features/auth/index.ts'
 import { isAuthenticationError, requestSession, setCsrfToken } from '../shared/api/index.ts'
 import { createRequestIdLedger } from '../shared/api/request-ids.ts'
+import { watchBrowserConnection } from '../shared/lib/browser-connection.ts'
+import { connectionState } from '../shared/lib/connection-state.ts'
 import { isLoginPage, LOGIN_PATH, loginPath } from '../shared/lib/login-path.ts'
 import { browserPageLocation } from '../shared/lib/page-location.ts'
 import { openSessionChannel } from '../shared/lib/session-channel.ts'
@@ -69,6 +71,7 @@ export interface AppRuntimeOptions {
  * P4 的编辑器页是另一个入口，会话结束时同样只能整页转到登录页。
  */
 export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
+  const stopConnection = watchBrowserConnection({ state: connectionState, probe: requestSession })
   const router = (options.createRouter ?? createBrowserRouter)(appRoutes)
   const page = options.page ?? browserPageLocation
   const channel = options.sessionChannel ?? openSessionChannel()
@@ -286,6 +289,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     adoptRenewedSession,
     requestIds: createRequestIdLedger(),
     dispose: () => {
+      stopConnection()
       unsubscribe()
       unsubscribeRouter()
       channel.close()

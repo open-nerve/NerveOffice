@@ -15,6 +15,8 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createSheetEditor, SheetEditorLoadError } from '../../editor/index.ts'
 import { requestSession } from '../../shared/api/index.ts'
+import { watchBrowserConnection } from '../../shared/lib/browser-connection.ts'
+import { connectionState } from '../../shared/lib/connection-state.ts'
 import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
@@ -105,6 +107,7 @@ function loadFailureReporter(target: Window): (error: unknown) => void {
 }
 
 export function startSheetEditorPage(elements: SheetEditorPageElements): void {
+  watchBrowserConnection({ state: connectionState, probe: requestSession })
   const reportLoadFailure = loadFailureReporter(window)
   if (import.meta.env.MODE === 'e2e') {
     // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，

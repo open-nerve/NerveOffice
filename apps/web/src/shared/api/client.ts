@@ -2,6 +2,7 @@
 import type { z } from 'zod'
 import type { ApiErrorDetails } from './api-errors.ts'
 import { CSRF_TOKEN_HEADER, errorResponseSchema } from '@nerve-office/contracts'
+import { connectionState } from '../lib/connection-state.ts'
 import { ApiError, NetworkError, ResponseFormatError } from './api-errors.ts'
 import { withinRequestDeadline } from './request-deadline.ts'
 
@@ -105,21 +106,34 @@ export async function apiFetch<T>(path: string, options: RawRequestOptions, read
   if (UNSAFE_METHODS.has(method) && csrfToken !== undefined)
     headers[CSRF_TOKEN_HEADER] = csrfToken
 
-  return withinRequestDeadline({ timeoutMs: options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, signal: options.signal }, async (signal) => {
-    let response: Response
-    try {
-      response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, keepalive: options.keepalive, signal })
-    }
-    catch (error) {
+  const ticket = connectionState.beginRequest()
+  let result: T
+  try {
+    result = await withinRequestDeadline({ timeoutMs: options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, signal: options.signal }, async (signal) => {
+      let response: Response
+      try {
+        response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, keepalive: options.keepalive, signal })
+      }
+      catch (error) {
+        signal.throwIfAborted()
+        throw new NetworkError('网络请求失败', { cause: error })
+      }
+      // fetch 的替身或迟到响应可能不理 abort；超时后不再把它交给正文读取方。
       signal.throwIfAborted()
-      throw new NetworkError('网络请求失败', { cause: error })
-    }
-    // fetch 的替身或迟到响应可能不理 abort；超时后不再把它交给正文读取方。
-    signal.throwIfAborted()
-    if (!(response.status === 304 && options.acceptNotModified === true) && !response.ok)
-      throw await errorFrom(response)
-    return read(response)
-  })
+      if (!(response.status === 304 && options.acceptNotModified === true) && !response.ok)
+        throw await errorFrom(response)
+      return read(response)
+    })
+  }
+  catch (error) {
+    // 调用方取消的原因可以是任意对象，不能仅靠 instanceof 将它当作网络故障。
+    if (error instanceof NetworkError && !(options.signal?.aborted === true && error === options.signal.reason))
+      connectionState.failed(ticket)
+    throw error
+  }
+  // 放在整个 deadline 之外：读正文/校验未完、超时后的迟到完成都不能发布成功。
+  connectionState.succeeded(ticket)
+  return result
 }
 
 /** 按契约读出成功响应的 JSON 正文；与契约不一致时抛出 ResponseFormatError（label 写进说明，例如"GET /api/x"）。 */
