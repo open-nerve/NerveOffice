@@ -1726,7 +1726,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 重建为只读、显示本页的内容（失败时留在这里，说明编辑器没能重新打开）→ 说明，按需核对结果未知的保存。被本人接管而在哪还没定时
    * （locateTakeover）与上面这些同时进行，说明等它
    */
-  async function lose(loss: LeaseLoss): Promise<void> {
+  async function lose(reported: LeaseLoss): Promise<void> {
+    // 说明查询跟随本次失效；即使上游复用原因对象，也不能把旧查询带到下一次失效。
+    const loss = { ...reported }
     const token = begin({ kind: 'losing', loss })
     editing.suspendDraft()
     editing.detachLease()
@@ -1738,18 +1740,17 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 请求编辑的提示随之消失（这一代不在了，交不出了）；异常中断的提醒同样消失
     holder.clear()
     interruption = undefined
-    // 强制接管（M3-P5 设计 §3.8）：接管的人从编辑状态读（这时那边已经取得了新的一代），与捕获、重建同时进行；失去编辑权的说明出来之前读到了就
-    // 一起出来，之后才读到就随即补上（说明还是这一次失去编辑权的）
+    // 强制接管的人、连接复核先得知 replaced 时的当前持有者，都只读编辑状态补充；不重新申请，不阻塞捕获与副本就绪。
+    // 失效说明出来之后才读到仍可补上（保存副本期间也一样）；开始重载或离开本次失效后，旧查询不再更新页面。
     let shownLoss = loss
-    if (loss.kind === 'forced' && loss.by === undefined) {
-      void forcedBy().then((by) => {
-        if (by === undefined || disposed)
-          return
-        shownLoss = { kind: 'forced', by }
-        if (mode.kind === 'lost' && mode.loss === loss)
-          setMode({ ...mode, loss: shownLoss })
-      })
-    }
+    void describeLostEditor(loss).then((described) => {
+      if (described === loss || disposed)
+        return
+      if (mode.kind === 'losing' && still(token))
+        shownLoss = described
+      else if (mode.kind === 'lost' && mode.loss === loss && mode.reload.kind === 'idle')
+        setMode({ ...mode, loss: described })
+    })
     // 自动保存立即停下（在途的那一次由保存的状态机收尾）：捕获本页的内容时不再起一次上传
     editing.stopCapturing()
     // 副本的标题里的时间是失去编辑权的这一刻，不是点"另存为副本"的那一刻
@@ -1820,14 +1821,20 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
   }
 
-  /** 强制接管的人（M3-P5 设计 §3.8）：读一次编辑状态，正在编辑的是别人就是他；读不到、没人在编辑、是自己时为 undefined。从不失败 */
-  async function forcedBy(): Promise<UserSummary | undefined> {
+  /** 只补服务端当前持有者的事实；replaced 本身不能推断强制接管、本人接管或新版本。查询失败时保留原原因。 */
+  async function describeLostEditor(loss: LeaseLoss): Promise<LeaseLoss> {
+    if (!(loss.kind === 'forced' && loss.by === undefined) && !(loss.kind === 'lease' && loss.reason === 'replaced'))
+      return loss
     try {
-      const { status } = await api.editStatus(documentId)
-      return status.editor === null || status.editor.sameUser ? undefined : status.editor.holder
+      const { status, serverTime } = await api.editStatus(documentId)
+      if (status.editor === null)
+        return loss
+      if (loss.kind === 'forced')
+        return status.editor.sameUser ? loss : { kind: 'forced', by: status.editor.holder }
+      return { kind: 'held', holder: leaseHolderOf(status.editor, serverTime) }
     }
     catch {
-      return undefined
+      return loss
     }
   }
 
