@@ -36,8 +36,12 @@ export interface OutboxSession {
   readonly confirm: (confirmedSeq: number, revision: number) => Promise<ConfirmResult>
   /** 暂停仍可临时读回内容给内存退路；resume 会关闭旧宿主，调用方须先完成需要的读取。 */
   readonly read: () => Promise<DraftRead>
+  /** 宿主失效时临时建一只读宿主；不登记/force、不改变写入资格，读完即关。内容身份仍由来源核对。 */
+  readonly readRecovered: () => Promise<DraftRead>
   readonly seedDigest: (seed: DedupeKey | undefined) => Promise<void>
   readonly setKey: (key: LocalKeyHandle | undefined) => Promise<KeyChange>
+  /** 原写入资格仍有效时在原宿主取新钥，保留其重封缓存；没有可续用宿主才交回 no-host。 */
+  readonly refreshKey: () => Promise<KeyChange | { readonly kind: 'no-host' }>
   readonly suspend: () => void
   /** 每次调用至多准备一次，不自行重试；并发调用共用正在进行的准备。 */
   readonly resume: () => Promise<OutboxPreparation>
@@ -104,6 +108,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   let persistence: PersistOutcome | undefined
   let initial: Promise<OutboxPreparation>
   const closed = new WeakSet<OutboxHost>()
+  const recoveries = new Map<AbortController, OutboxHost | undefined>()
 
   function close(host: OutboxHost | undefined): void {
     if (host === undefined || closed.has(host))
@@ -286,6 +291,11 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     stop({ kind: 'disposed' })
     close(active?.host)
     active = undefined
+    for (const [controller, host] of recoveries) {
+      controller.abort()
+      close(host)
+    }
+    recoveries.clear()
   }
 
   const session: OutboxSession = {
@@ -319,6 +329,36 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
         return { kind: 'failed', error: INACTIVE }
       return active.host.writer.read(options.key)
     },
+    readRecovered: async () => {
+      if (!live() || !options.enabled || !(options.supported ?? supported)())
+        return { kind: 'failed', error: INACTIVE }
+      const controller = new AbortController()
+      recoveries.set(controller, undefined)
+      let host: OutboxHost | undefined
+      try {
+        const key = options.keeper.current() ?? await options.keeper.ensure()
+        if (!live() || controller.signal.aborted || 'kind' in key || options.keeper.current() !== key)
+          return { kind: 'failed', error: INACTIVE }
+        host = await (options.host ?? (async signal => createOutboxHost({ signal })))(controller.signal)
+        if (!live() || controller.signal.aborted || options.keeper.current() !== key)
+          return { kind: 'failed', error: INACTIVE }
+        recoveries.set(controller, host)
+        const installed = await host.writer.setKey(key)
+        if (!live() || controller.signal.aborted || options.keeper.current() !== key)
+          return { kind: 'failed', error: INACTIVE }
+        if (installed.kind === 'failed')
+          return installed
+        const result = await host.writer.read(options.key)
+        return !live() || controller.signal.aborted || options.keeper.current() !== key ? { kind: 'failed', error: INACTIVE } : result
+      }
+      catch (error) {
+        return { kind: 'failed', error: !live() ? INACTIVE : describeFailure(error) }
+      }
+      finally {
+        recoveries.delete(controller)
+        close(host)
+      }
+    },
     seedDigest: async (seed) => {
       const target = writable()
       if (target !== undefined)
@@ -337,6 +377,19 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       if (result.kind === 'key-set')
         target.installedKey = handle
       return result
+    },
+    refreshKey: async () => {
+      if (!live())
+        return { kind: 'failed', error: INACTIVE }
+      if (suspended || state.kind !== 'ready' || active === undefined || active.host.broken())
+        return { kind: 'no-host' }
+      const target = active
+      const started = generation
+      const change = keyChange
+      const key = await options.keeper.ensure()
+      if (!live() || suspended || generation !== started || keyChange !== change || active !== target || target.host.broken() || 'kind' in key || options.keeper.current() !== key)
+        return { kind: 'failed', error: INACTIVE }
+      return session.setKey(key)
     },
     suspend: () => {
       if (disposed || suspended)

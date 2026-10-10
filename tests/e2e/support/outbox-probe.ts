@@ -4,6 +4,7 @@
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
 import type { Page } from '@playwright/test'
 import type { OutboxSessionProbe } from './outbox-session-probe.ts'
+import type { WorkingDraftProbe } from './working-draft-probe.ts'
 import { randomUUID } from 'node:crypto'
 import { expect } from './fixtures.ts'
 
@@ -262,6 +263,7 @@ export interface ProbePipeline {
 
 export interface OutboxProbe {
   readonly session: OutboxSessionProbe
+  readonly working: WorkingDraftProbe
   readonly names: { readonly database: string, readonly version: number, readonly drafts: string, readonly writers: string }
   readonly chooseKey: (version: number, rawHex?: string) => Promise<void>
   readonly resetStore: (options?: ProbeStoreOptions) => void
@@ -316,7 +318,7 @@ declare global {
   }
 }
 
-type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline' | 'storage' | 'session'>
+type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline' | 'storage' | 'session' | 'working'>
 type DatabaseMethod = keyof OutboxProbe['database']
 type LocalKeyMethod = keyof OutboxProbe['localKey']
 type StorageMethod = keyof OutboxProbe['storage']

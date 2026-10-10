@@ -1,4 +1,4 @@
-// S3：生产宿主与资格准备在真实 Worker/IDB 上的接缝。两种 WorkingDraft 来源的故事随后在同文件补齐。
+// S3：生产宿主、资格准备与两种内容来源在真实 Worker/IDB 上的契约。
 import type { Page } from '@playwright/test'
 import { createHash, randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
@@ -6,13 +6,107 @@ import { expect, test } from '../../support/fixtures.ts'
 import { openOutboxProbe, probe, probeDatabase, removeMirrorOf } from '../../support/outbox-probe.ts'
 import { probeSession } from '../../support/outbox-session-probe.ts'
 import { loginThroughApi } from '../../support/session.ts'
+import { probeWorking } from '../../support/working-draft-probe.ts'
 
 let ownerId: string | undefined
 
 test.afterEach(async ({ page }) => {
   if (ownerId !== undefined)
+    await probeWorking(page, 'disposeAll')
+  if (ownerId !== undefined)
     await removeMirrorOf(page, ownerId)
   ownerId = undefined
+})
+
+test.describe('工作草稿来源的浏览器契约', { tag: '@test-build' }, () => {
+  for (const mode of ['worker', 'initial-failure', 'memory'] as const) {
+    test(`${mode} 同步序号 → 固定上传 → 新捕获带未知请求 → 旧确认 → 释放后上传新内容`, async ({ page }) => {
+      const draft = await prepare(page)
+      const { id } = await probeWorking(page, 'create', { draft, mode })
+      const first = await probeWorking(page, 'capture', id, '原上传 😀', 90)
+      expect(first).toMatchObject({ serial: 1, draftSeq: 1, editorSeq: 90 })
+      expect(await probeWorking(page, 'ready', id, first.serial)).toMatchObject({ kind: 'ready', local: { kind: mode === 'memory' ? 'memory' : 'persisted' } })
+      const upload = await probeWorking(page, 'prepare', id, first.serial)
+      expect(upload).toMatchObject({ kind: 'prepared', contentSeq: 1, baseRevision: 7, text: '原上传 😀' })
+      const inFlight = { requestId: randomUUID(), clientInstanceId: randomUUID(), localSeq: 1, sentAt: Date.now() }
+      expect(await probeWorking(page, 'markInFlight', id, inFlight)).toMatchObject({ kind: mode === 'memory' ? 'memory' : 'resealed' })
+      const second = await probeWorking(page, 'capture', id, '原上传 😀', 0)
+      expect(await probeWorking(page, 'ready', id, second.serial)).toMatchObject({ contentSeq: 2 })
+      expect(await probe(page, 'read', draft)).toMatchObject(mode === 'memory' ? { kind: 'absent' } : { meta: { draftSeq: 2, inFlight } })
+      const latest = await probeWorking(page, 'capture', id, '继续编辑的内容', 1)
+      await probeWorking(page, 'ready', id, latest.serial)
+      expect(await probeWorking(page, 'prepare', id, first.serial)).toEqual(upload)
+      expect(await probeWorking(page, 'confirm', id, 8)).toMatchObject({ kind: mode === 'memory' ? 'memory' : 'rebased' })
+      expect(await probeWorking(page, 'readLatest', id)).toMatchObject({ ref: latest, snapshot: '继续编辑的内容' })
+      await probeWorking(page, 'release', id)
+      expect(await probeWorking(page, 'prepare', id, latest.serial)).toMatchObject({ contentSeq: 3, baseRevision: 8, text: '继续编辑的内容' })
+      expect(await probeWorking(page, 'confirm', id, 9)).toMatchObject({ kind: mode === 'memory' ? 'memory' : 'deleted' })
+      await probeWorking(page, 'release', id)
+      expect(await probeWorking(page, 'readLatest', id)).toMatchObject({ snapshot: '继续编辑的内容' })
+      expect(await probeWorking(page, 'counts', id)).toEqual({ keys: mode === 'memory' ? 0 : 1, hosts: mode === 'memory' ? 0 : 1, confirmations: 0 })
+    })
+  }
+
+  test('Worker 去重使用旧内容序号，确认删除后相同内容必须重新落盘', async ({ page }) => {
+    const draft = await prepare(page)
+    const { id } = await probeWorking(page, 'create', { draft, mode: 'worker' })
+    const first = await probeWorking(page, 'capture', id, '相同内容', 2)
+    await probeWorking(page, 'ready', id, first.serial)
+    const same = await probeWorking(page, 'capture', id, '相同内容', 3)
+    expect(await probeWorking(page, 'ready', id, same.serial)).toMatchObject({ contentSeq: 1 })
+    expect(await probeWorking(page, 'prepare', id, same.serial)).toMatchObject({ contentSeq: 1, ref: { draftSeq: 2 }, text: '相同内容' })
+    expect(await probeWorking(page, 'confirm', id, 8)).toEqual({ kind: 'deleted' })
+    await probeWorking(page, 'release', id)
+    expect(await probeWorking(page, 'readLatest', id)).toMatchObject({ snapshot: '相同内容' })
+    const next = await probeWorking(page, 'capture', id, '相同内容', 4)
+    expect(await probeWorking(page, 'ready', id, next.serial)).toMatchObject({ contentSeq: 3, local: { kind: 'persisted' } })
+    expect(await probe(page, 'read', draft)).toMatchObject({ meta: { draftSeq: 3, baseRevision: 8 } })
+  })
+
+  test('无钥保留内存，换钥重写当前内容；暂停后恢复不覆盖已有草稿', async ({ page }) => {
+    const draft = await prepare(page)
+    const { id } = await probeWorking(page, 'create', { draft, mode: 'worker' })
+    const first = await probeWorking(page, 'capture', id, '旧钥内容', 1)
+    await probeWorking(page, 'ready', id, first.serial)
+    expect(await probeWorking(page, 'setKey', id, 'none')).toMatchObject({ kind: 'key-set' })
+    const missing = await probeWorking(page, 'capture', id, '无钥的新编辑', 2)
+    expect(await probeWorking(page, 'ready', id, missing.serial)).toMatchObject({ local: { kind: 'memory', reason: 'no-key' } })
+    await probe(page, 'chooseKey', 2)
+    expect(await probeWorking(page, 'setKey', id, 'probe')).toMatchObject({ kind: 'key-set' })
+    expect(await probe(page, 'read', draft)).toMatchObject({ opened: { content: '无钥的新编辑' }, meta: { keyVersion: 2, draftSeq: 3 } })
+    await probeWorking(page, 'suspend', id)
+    const paused = await probeWorking(page, 'capture', id, '暂停的新编辑', 3)
+    expect(await probeWorking(page, 'ready', id, paused.serial)).toMatchObject({ local: { kind: 'memory', reason: 'paused' } })
+    expect(await probeWorking(page, 'resume', id)).toMatchObject({ kind: 'memory', reason: 'existing-draft' })
+    expect(await probeWorking(page, 'readLatest', id)).toMatchObject({ ref: paused, snapshot: '暂停的新编辑' })
+    expect(await probe(page, 'read', draft)).toMatchObject({ opened: { content: '无钥的新编辑' }, meta: { draftSeq: 3 } })
+  })
+
+  test('进程内退路遇 IDB 写满，原文仍可上传且不声称落盘，下一次新捕获恢复', async ({ page }) => {
+    const draft = await prepare(page)
+    const { id } = await probeWorking(page, 'create', { draft, mode: 'initial-failure' })
+    await probe(page, 'failTransactions', 1, 'QuotaExceededError')
+    const failed = await probeWorking(page, 'capture', id, '写满时的内容', 1)
+    expect(await probeWorking(page, 'ready', id, failed.serial)).toMatchObject({ local: { kind: 'memory', reason: 'quota' } })
+    expect(await probeWorking(page, 'prepare', id, failed.serial)).toMatchObject({ text: '写满时的内容', digest: undefined })
+    await probeWorking(page, 'release', id)
+    const next = await probeWorking(page, 'capture', id, '下一次编辑', 2)
+    expect(await probeWorking(page, 'ready', id, next.serial)).toMatchObject({ local: { kind: 'persisted' } })
+  })
+
+  test('Worker 运行中终止，当前内容经有界只读恢复读回，不重新登记或恢复写入', async ({ page }) => {
+    const draft = await prepare(page)
+    const { id } = await probeWorking(page, 'create', { draft, mode: 'worker' })
+    const ref = await probeWorking(page, 'capture', id, '终止后仍能读回', 1)
+    await probeWorking(page, 'ready', id, ref.serial)
+    await page.clock.install()
+    await probeWorking(page, 'terminate', id)
+    await probeWorking(page, 'startRead', id)
+    await page.clock.fastForward(15_000)
+    expect(await probeWorking(page, 'readResult', id)).toMatchObject({ ref, snapshot: '终止后仍能读回' })
+    expect(await probeWorking(page, 'counts', id)).toMatchObject({ hosts: 2, confirmations: 0 })
+    expect(await probe(page, 'read', draft)).toMatchObject({ opened: { content: '终止后仍能读回' }, meta: { draftSeq: 1 } })
+  })
 })
 
 async function prepare(page: Page) {
