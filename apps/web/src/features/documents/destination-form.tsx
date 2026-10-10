@@ -7,6 +7,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
+import { connectionUnavailable, useConnectionState } from '../../shared/lib/use-connection-state.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { focusIsLost } from '../../shared/lib/use-focus-hand-off.ts'
@@ -115,6 +116,7 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
   const spaces = targets.items ?? []
   const spaceId = choice !== undefined && selectable(action, spaces, current, choice.spaceId) ? choice.spaceId : defaultSpaceOf(action, spaces, current)
   const crumbs = choice !== undefined && choice.spaceId === spaceId ? choice.crumbs : []
+  const unavailable = connectionUnavailable(useConnectionState())
   const parentId = crumbs.at(-1)?.id ?? null
   // 没有目标空间（复制的候选还没取到、取不到、一个也没有）时不取目录：键里的空间是占位，不发请求
   const children = useQuery({ ...folderChildrenQueryOptions(spaceId ?? '', parentId), enabled: spaceId !== undefined })
@@ -149,7 +151,7 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
       aria-label={action === 'move' ? text.move : text.copy}
       onSubmit={(event) => {
         event.preventDefault()
-        if (!blocked)
+        if (!blocked && connectionUnavailable() === undefined)
           onSubmit(destination, label)
       }}
     >
@@ -205,7 +207,7 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
           )}
       <div className="flex flex-wrap items-center gap-2">
         {/* 进行中与不能提交都用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（M2-P1 审查 B13） */}
-        <Button type="submit" size="sm" aria-disabled={blocked}>
+        <Button type="submit" size="sm" aria-disabled={blocked || unavailable !== undefined}>
           {pending
             ? (action === 'move' ? text.moving : text.copying)
             : (action === 'move' ? text.moveHere : text.copyHere)}
@@ -213,6 +215,7 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
         <Button ref={cancelRef} type="button" variant="ghost" size="sm" aria-disabled={pending} onClick={() => !pending && onCancel()}>{text.cancel}</Button>
         {unchanged && <span className="text-sm text-muted-foreground">{text.sameLocation}</span>}
       </div>
+      {unavailable !== undefined && <p className="text-sm text-muted-foreground">{unavailable}</p>}
       {error !== undefined && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>

@@ -557,15 +557,22 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
   }
 
+  /** 当前连接只限制主动服务端操作，不参与本机捕获的会话许可。 */
+  function serverAvailable(): boolean {
+    return !disposed && (options.network.connection?.view().available ?? options.network.online())
+  }
+
   /**
    * 要写的操作（保存、进入与退出编辑）之前：确认会话进行中（别的标签页的消息、保存得到未登录或 CSRF 失效触发的）就等它结束，按确认的结果决定
    * （复验 RB1）；暂停或停止保存时、上一次确认失败时（令牌可能没有换成，复验 TB1）先向服务端确认一次：本页的用户可能已经在别处重新登录，
    * 广播的消息没有送到。令牌已知失效时一定先确认（复验 VB1）。返回能不能接着做：会话是本人、页面还在、令牌不是已知失效的（复验 UB1）
    */
   async function readyToWrite(): Promise<boolean> {
+    if (!serverAvailable())
+      return false
     if (!confirmedForWrite())
       await confirmForSave(false)
-    return session === 'active' && !disposed && staleAfter === undefined
+    return session === 'active' && serverAvailable() && staleAfter === undefined
   }
 
   /** 不必先向服务端确认就能写：没有确认在途、会话是本人、上一次确认没有失败、令牌不是已知失效的 */
@@ -694,7 +701,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
       // 阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）：详情说的是它那一版的，与载入的内容是同一版时才用（并行读取之间有人保存过时下一次检查补上）
       const formulasPending = document.formulasPending && document.revision === content.revision
-      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: options.editIntent.requested && canEdit, blocked })
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: options.editIntent.requested && canEdit && serverAvailable(), blocked })
       if (disposed)
         return
       if (outcome.kind === 'load-failed') {
@@ -721,6 +728,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode?.save(readyToWrite)
     },
     enterEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 进入编辑要申请编辑权（写的操作）：与保存、退出编辑同一个会话确认——没有人登录、换了人、令牌已知失效时不申请，
@@ -730,6 +739,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.enter()
     },
     takeOverHere: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 本人接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
@@ -739,6 +750,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     cancelTakeOver: () => mode?.cancelTakeOver(),
     forceTakeOver: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 强制接管要申请编辑权（写的操作）：与"编辑"同一个会话确认
@@ -748,6 +761,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     dismissInterruption: () => mode?.dismissInterruption(),
     requestEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       // 发出请求是写的操作：与"编辑"同一个会话确认
@@ -756,6 +771,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.requestEdit()
     },
     cancelRequest: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'reading')
         return
       if (!confirmedForWrite() && !(await readyToWrite()))
@@ -763,6 +780,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.cancelRequest()
     },
     handOver: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'editing')
         return
       // 交出要先保存、带着令牌交出：与退出编辑同一个会话确认（换了人、令牌已知失效时不发，留在编辑）
@@ -770,12 +789,16 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         await mode.handOver()
     },
     keepEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'editing')
         return
       if (await readyToWrite())
         await mode.decline()
     },
     exitEditing: async () => {
+      if (!serverAvailable())
+        return
       if (mode?.view().mode.kind !== 'editing')
         return
       // 退出要先保存：与按保存同一个会话确认（换了人、令牌已知失效时不发，留在编辑）
@@ -786,6 +809,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode?.refresh()
     },
     saveCopy: async () => {
+      if (!serverAvailable())
+        return
       await mode?.saveCopy()
     },
     discard: async () => {

@@ -63,6 +63,8 @@ interface ConfirmDialogProps {
   readonly onClose: () => void
   /** 执行时请求缓存的元数据：管理界面标明只给系统管理员（SYSTEM_ADMIN_ONLY） */
   readonly meta?: MutationMeta
+  /** 显示原因并在按确认时重读；调用方负责订阅相关事实，旧闭包不能放行。 */
+  readonly unavailable?: () => string | undefined
 }
 
 /**
@@ -81,7 +83,8 @@ interface ConfirmDialogProps {
  * 不给的话焦点落在 body，交回的说明也就不是在焦点交还之后写的（M2-P5 复验第二轮 G6）。
  * 带着 Radix Dialog：只由按需加载的页面引用，不进首屏（ADR-008）。
  */
-export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
+export function ConfirmDialog({ pending, onClose, meta, unavailable }: ConfirmDialogProps) {
+  const unavailableReason = unavailable?.()
   /** 上一次失败是结果未知、而且页面已经刷新好了：说明据此说"已刷新"还是"没能刷新"（第三批 G-a）；晚到的刷新随后改过来（第五批 G4） */
   const { refreshed, refreshAfterFailure } = useOutcomeRefresh()
   /** run 交回的、等弹窗关掉之后才做的事（M2-P5 复验 S1）：弹窗关掉时（closed）执行并清掉 */
@@ -105,7 +108,7 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
    * 组件在时观察者一直挂在这次操作上（进行中不 reset、不再 mutate），结果总会以成功或失败二者之一通知到（回调本身出错也一样），
    * 标记不会一直留着、弹窗不会再也关不掉——前提是 run 会结束：写入之后要等的刷新都有时限，成功之后的经 refreshAfterSuccess
    * （Codex 对抗评审 CX4：原来成功之后 await 的刷新没有时限，刷新的请求一直不回来时弹窗就一直关不掉），失败之后的经
-   * refreshIfUnknown（第三批 S-a），都在 shared/api/write-outcome.ts。写操作的请求本身没有应用层的时限，靠浏览器与网络的超时结束
+   * refreshIfUnknown（第三批 S-a），都在 shared/api/write-outcome.ts。写操作受请求层的完整请求时限约束，刷新也有独立的等待上限
    */
   const confirmingRef = useRef(false)
   const mutation = useMutation({
@@ -123,7 +126,7 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
   }
 
   function confirm(): void {
-    if (pending === undefined || confirmingRef.current)
+    if (pending === undefined || confirmingRef.current || unavailable?.() !== undefined)
       return
     confirmingRef.current = true
     closedRef.current = false
@@ -174,10 +177,11 @@ export function ConfirmDialog({ pending, onClose, meta }: ConfirmDialogProps) {
             <DialogClose asChild>
               <Button variant="outline" aria-disabled={mutation.isPending}>{messages.common.cancel}</Button>
             </DialogClose>
-            <Button variant={pending.destructive === true ? 'destructive' : 'default'} aria-disabled={mutation.isPending} onClick={confirm}>
+            <Button variant={pending.destructive === true ? 'destructive' : 'default'} aria-disabled={mutation.isPending || unavailableReason !== undefined} onClick={confirm}>
               {mutation.isPending ? messages.common.working : pending.confirmLabel}
             </Button>
           </DialogFooter>
+          {unavailableReason !== undefined && <p className="text-sm text-muted-foreground">{unavailableReason}</p>}
         </DialogContent>
       )}
     </Dialog>

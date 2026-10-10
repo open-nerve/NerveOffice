@@ -9,6 +9,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { newDocumentPagePath } from '../../shared/lib/edit-intent.ts'
 import { usePageLocation } from '../../shared/lib/page-location.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
+import { connectionUnavailable, useConnectionState } from '../../shared/lib/use-connection-state.ts'
 import { useFocusAfterRender } from '../../shared/lib/use-focus-after-render.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Alert, AlertDescription, Button, buttonVariants, Notice } from '../../shared/ui/index.ts'
@@ -59,6 +60,7 @@ function failureOf(error: unknown, ledger: RequestIdLedger, refreshed: boolean):
  * 服务端在同一个事务里判断它并写进去，不存在"建好了却没能移进来"的中间状态。
  */
 export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetButtonProps) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const page = usePageLocation()
   const ledger = useRequestIdLedger()
   const refresh = useOrganizeRefresh()
@@ -93,7 +95,7 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
   const replayed = mutation.isSuccess && mutation.data.document.replayed ? mutation.data : undefined
 
   function create(): void {
-    if (!busy)
+    if (!busy && connectionUnavailable() === undefined)
       mutation.mutate()
   }
 
@@ -108,10 +110,11 @@ export function NewSheetButton({ spaceId, folderId = null, onDenied }: NewSheetB
   return (
     <div className="flex flex-col items-end gap-2">
       {/* 进行中用 aria-disabled：按钮变成 disabled 时焦点会丢（审查 B13）；重复点击由 create 挡住 */}
-      <Button ref={buttonRef} aria-disabled={busy} onClick={create}>
+      <Button ref={buttonRef} aria-disabled={busy || unavailable !== undefined} onClick={create}>
         <FilePlus2 aria-hidden="true" />
         {busy ? messages.documents.creating : messages.documents.create}
       </Button>
+      {unavailable !== undefined && <p className="text-sm text-muted-foreground">{unavailable}</p>}
       {replayed !== undefined && (
         <Notice
           focusKey={replayed}

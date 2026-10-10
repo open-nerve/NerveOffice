@@ -4,6 +4,8 @@ import type { DocumentDetail, DocumentSummary, Folder, SessionResponse, SpaceVie
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
+import { connectionState } from '../shared/lib/connection-state.ts'
+import { restoreConnection } from '../shared/testing/connection.test-support.ts'
 import { apiError, installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
 import { currentPath, renderApp } from './render-app.test-support.tsx'
@@ -791,5 +793,76 @@ describe('US-M2-07 整理：写入成功之后的刷新（Codex 对抗评审 CX4
     expect(await within(form).findByRole('button', { name: '进入 二季度' })).toBeInTheDocument()
     expect(within(form).queryByText('目标位置没能刷新，显示的还是之前的内容')).toBeNull()
     await waitFor(() => expect(document.activeElement).toBe(within(form).getByText('目标位置：')))
+  })
+})
+
+describe('离线时的文档操作', () => {
+  it.each(['改名', '移动', '复制'] as const)('在线打开%s表单，离线后仍可输入和取消，但实际提交零请求；恢复后可提交', async (action) => {
+    const key = action === '改名' ? `PATCH /api/documents/${WEEKLY_ID}` : `POST /api/documents/${WEEKLY_ID}/${action === '移动' ? 'move' : 'copy'}`
+    const api = loggedIn({
+      [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()),
+      [foldersKey(SPACE_ID)]: folderPage([folder(PLAN_ID, '方案')]),
+      [foldersKey(SPACE_ID, PLAN_ID)]: noFolders(),
+      [key]: () => json(200, { ...detail({ title: '修改后的标题', folderId: PLAN_ID }), replayed: false }),
+    })
+    renderApp('/')
+    await openActions('周报')
+    fireEvent.click(await screen.findByRole('button', { name: action }))
+    let form: HTMLElement
+    if (action === '改名') {
+      const input = screen.getByLabelText('周报 的新名称')
+      fireEvent.change(input, { target: { value: '修改后的标题' } })
+      form = input.closest('form')!
+    }
+    else {
+      form = screen.getByRole('form', { name: action })
+      fireEvent.click(await within(form).findByRole('button', { name: '进入 方案' }))
+    }
+    const submit = within(form).getByRole('button', { name: action === '改名' ? '保存' : `${action}到这里` })
+    submit.focus()
+    act(() => connectionState.setBrowserOnline(false))
+    expect(submit).toHaveAttribute('aria-disabled', 'true')
+    expect(submit).toHaveFocus()
+    expect(within(form).getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+    expect(within(form).getByRole('button', { name: '取消' })).not.toHaveAttribute('aria-disabled', 'true')
+    await act(async () => fireEvent.submit(form))
+    expect(api.requests.filter(request => request.key === key)).toHaveLength(0)
+    act(() => connectionState.setBrowserOnline(true))
+    await act(async () => fireEvent.submit(form))
+    expect(api.requests.filter(request => request.key === key)).toHaveLength(0)
+    act(restoreConnection)
+    await act(async () => fireEvent.submit(form))
+    await waitFor(() => expect(api.requests.filter(request => request.key === key)).toHaveLength(1))
+  })
+
+  it('离线禁用新建、分享和整理入口；已展开的删除也不发请求，取消可收起', async () => {
+    const api = loggedIn({ [`GET /api/documents/${WEEKLY_ID}`]: () => json(200, detail()) })
+    renderApp('/')
+    await openActions('周报')
+    await screen.findByRole('button', { name: '删除' })
+    act(() => connectionState.failed(connectionState.beginRequest()))
+    for (const name of ['新建表格', '新建文件夹', '分享', '改名', '移动', '复制', '删除']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      await act(async () => fireEvent.click(button))
+    }
+    expect(api.requests.filter(request => !request.key.startsWith('GET '))).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('button', { name: '删除' })).toBeNull()
+  })
+
+  it('已打开的新建文件夹表单离线不能提交，名称继续输入，恢复后提交一次', async () => {
+    const api = loggedIn({ 'POST /api/folders': () => json(201, { ...folder(PLAN_ID, '离线后输入'), replayed: false }) })
+    renderApp('/')
+    fireEvent.click(await screen.findByRole('button', { name: '新建文件夹' }))
+    const form = screen.getByRole('form', { name: '新建文件夹' })
+    act(() => connectionState.setBrowserOnline(false))
+    fireEvent.change(within(form).getByLabelText('文件夹名称'), { target: { value: '离线后输入' } })
+    await act(async () => fireEvent.submit(form))
+    expect(api.requests.filter(request => request.key === 'POST /api/folders')).toHaveLength(0)
+    expect(within(form).getByRole('button', { name: '新建文件夹' })).toHaveAttribute('aria-disabled', 'true')
+    act(restoreConnection)
+    await act(async () => fireEvent.submit(form))
+    await waitFor(() => expect(lastBody(api, 'POST /api/folders')).toMatchObject({ name: '离线后输入' }))
   })
 })

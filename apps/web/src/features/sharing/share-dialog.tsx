@@ -12,6 +12,7 @@ import { messages } from '../../shared/i18n/index.ts'
 import { sharingMessages } from '../../shared/i18n/zh-cn/sharing.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
+import { connectionUnavailable, useConnectionState } from '../../shared/lib/use-connection-state.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useOutcomeRefresh } from '../../shared/lib/use-outcome-refresh.ts'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
@@ -99,6 +100,7 @@ interface AddGrantFormProps {
  * 再点也只会得到同样的结果（按状态幂等）
  */
 function AddGrantForm({ documentId, exclude, refresh, onAdded }: AddGrantFormProps) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const [user, setUser] = useState<UserSummary>()
   const [role, setRole] = useState<GrantRole>('viewer')
   // 分享成功之后换一个 key，同事选择整个重新开始：关键词与上一次的候选都清掉
@@ -124,7 +126,7 @@ function AddGrantForm({ documentId, exclude, refresh, onAdded }: AddGrantFormPro
       className="flex flex-wrap items-end gap-3"
       onSubmit={(event) => {
         event.preventDefault()
-        if (user !== undefined && !mutation.isPending)
+        if (user !== undefined && !mutation.isPending && connectionUnavailable() === undefined)
           mutation.mutate({ user, role })
       }}
     >
@@ -138,7 +140,7 @@ function AddGrantForm({ documentId, exclude, refresh, onAdded }: AddGrantFormPro
         </NativeSelect>
       </div>
       {/* 还不能提交时说明原因：aria-disabled 的按钮读屏软件读出"不可用"，却不知道为什么 */}
-      <Button type="submit" aria-disabled={user === undefined || mutation.isPending} aria-describedby={user === undefined ? hintId : undefined}>
+      <Button type="submit" aria-disabled={user === undefined || mutation.isPending || unavailable !== undefined} aria-describedby={user === undefined ? hintId : undefined}>
         {mutation.isPending ? text.adding : text.add}
       </Button>
       {user === undefined && <p id={hintId} className="m-0 basis-full text-sm text-muted-foreground">{text.pickColleague}</p>}
@@ -170,6 +172,7 @@ interface GrantRowProps {
  * M2-P5 设计 §3.2；授权保留，取消照样可以，M2-P5 审查 B 的 S3）——不给一个注定失败的操作
  */
 function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const noteId = useId()
   const unsavedId = useId()
   const selectRef = useRef<HTMLSelectElement>(null)
@@ -205,7 +208,7 @@ function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps)
   }
 
   function save(): void {
-    if (busy || pending === undefined)
+    if (busy || pending === undefined || connectionUnavailable() !== undefined)
       return
     // "保存"随之收起：焦点先回到这一行的选择框
     selectRef.current?.focus()
@@ -234,10 +237,10 @@ function GrantRow({ documentId, grant, self, refresh, onRevoke }: GrantRowProps)
                 <NativeSelect ref={selectRef} className="w-28" aria-label={text.roleOf(name)} aria-describedby={describedBy === '' ? undefined : describedBy} value={saving ?? pending ?? grant.role} onChange={event => choose(event.target.value as GrantRole)}>
                   {ROLE_OPTIONS.map(value => <option key={value} value={value}>{text.roleName(value)}</option>)}
                 </NativeSelect>
-                {unsaved && <Button type="button" variant="outline" size="sm" aria-label={text.saveRoleOf(name)} onClick={save}>{text.saveRole}</Button>}
+                {unsaved && <Button type="button" variant="outline" size="sm" aria-label={text.saveRoleOf(name)} aria-disabled={unavailable !== undefined} onClick={save}>{text.saveRole}</Button>}
               </>
             )}
-        <Button type="button" variant="ghost" size="sm" aria-label={messages.common.actionOn(text.revoke, name)} onClick={onRevoke}>{text.revoke}</Button>
+        <Button type="button" variant="ghost" size="sm" aria-label={messages.common.actionOn(text.revoke, name)} aria-disabled={unavailable !== undefined} onClick={() => connectionUnavailable() === undefined && onRevoke()}>{text.revoke}</Button>
       </div>
       {self && <span className="text-xs text-muted-foreground">{text.ownGrant}</span>}
       {!self && disabled && <span className="text-xs text-muted-foreground">{text.disabledGrant}</span>}
@@ -326,6 +329,7 @@ function notRetryable(error: unknown): boolean {
  * 留着之前的列表、刷新却失败了的"没能刷新"重试成功之后，焦点交给"已分享给"
  */
 function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshDocument, entry, fallbackFocus }: Omit<ShareDialogProps, 'open' | 'onOpenChange'>) {
+  const unavailable = connectionUnavailable(useConnectionState())
   const grants = useQuery(grantsQueryOptions(documentId))
   const refresh = useShareRefresh(documentId, refreshDocument)
   const [pending, setPending] = useState<PendingConfirmation>()
@@ -345,6 +349,8 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
   }, [denied])
 
   function confirmRevoke(grant: DocumentGrant): void {
+    if (connectionUnavailable() !== undefined)
+      return
     const self = grant.user.id === currentUserId
     setNotice(undefined)
     setPending({
@@ -436,8 +442,9 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
       </DialogHeader>
       {/* 做完一件事的说明：状态区一直在无障碍树里（空的时候只做视觉隐藏、不占位置），内容变化时往里填，读屏软件才会播报 */}
       <StatusRegion className="m-0 rounded-lg border p-2 text-sm">{notice}</StatusRegion>
+      {unavailable !== undefined && <p className="text-sm text-muted-foreground">{unavailable}</p>}
       {body}
-      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} />
+      <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} unavailable={connectionUnavailable} />
     </DialogContent>
   )
 }

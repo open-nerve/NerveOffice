@@ -5,6 +5,7 @@
 import type { AdminSpace, DocumentDetail, DocumentSummary, Folder, SessionResponse, SpaceMember, SpaceView, TrashEntry } from '@nerve-office/contracts'
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { requestSession } from '../shared/api/index.ts'
 import { OUTCOME_REFRESH_TIME_LIMIT_MS } from '../shared/api/write-outcome.ts'
 import { apiError, installFakeApi, inTurn, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey, foldersKey, noFolders, personalSpaceOf, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
@@ -328,6 +329,11 @@ describe('空间页：新建与整理之后的刷新（第四批）', () => {
     await refreshFails(documents, before)
     expect(await screen.findByText(`没能确认表格是否已经建好（${NETWORK}）。${NOT_REFRESHED}；再点"新建表格"不会重复新建。`)).toBeInTheDocument()
 
+    expect(screen.getByRole('button', { name: '新建表格' })).toHaveAttribute('aria-disabled', 'true')
+    // S5：明确成功的连接复核之后才能重试，原来的结果未知/请求标识断言保持。
+    await act(async () => {
+      await requestSession()
+    })
     documents.set('hang')
     const again = documents.calls()
     fireEvent.click(screen.getByRole('button', { name: '新建表格' }))
@@ -356,6 +362,11 @@ describe('空间页：新建与整理之后的刷新（第四批）', () => {
     await refreshFails(folders, before)
     expect(await within(form).findByText(`没能确认文件夹是否已经建好（${NETWORK}）。${NOT_REFRESHED}；原样再提交一次不会重复新建。`)).toBeInTheDocument()
 
+    expect(within(form).getByRole('button', { name: '新建文件夹' })).toHaveAttribute('aria-disabled', 'true')
+    // S5：明确成功的连接复核之后才能重试，原来的结果未知/请求标识断言保持。
+    await act(async () => {
+      await requestSession()
+    })
     fireEvent.change(within(form).getByLabelText('文件夹名称'), { target: { value: '方案二' } })
     folders.set('hang')
     const again = folders.calls()
@@ -379,6 +390,10 @@ describe('空间页：新建与整理之后的刷新（第四批）', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await refreshFails(documents, before)
     expect(await screen.findByText(`没能确认是否已经改好（${NETWORK}）。${NOT_REFRESHED}；可以再保存一次。`)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'true')
+    await act(async () => {
+      await requestSession()
+    })
     expect(screen.getByRole('button', { name: '保存' })).toHaveAttribute('aria-disabled', 'false')
   })
 

@@ -2677,3 +2677,93 @@ describe('强制接管、异常中断的提醒与观察钩子（M3-P5 设计 §3
     expect(events[0]).toMatchObject({ trigger: 'open', takeover: null })
   })
 })
+
+describe('编辑器服务端操作的连接守卫', () => {
+  function connectedSetup(options: Setup = {}) {
+    const connection = createConnectionState({ online: true, now: Date.now })
+    const t = setup({ ...options, network: { connection, online: () => connection.view().browserOnline, onChange: connection.subscribe } })
+    return { ...t, connection, reconnect: () => {
+      connection.setBrowserOnline(true)
+      connection.succeeded(connection.beginRequest())
+    } }
+  }
+
+  it.each(['enterEditing', 'takeOverHere', 'forceTakeOver', 'requestEditing'] as const)('%s 点击时检查最新连接事实，online 还未确认时零请求', async (action) => {
+    const holder = action === 'enterEditing' ? null : action === 'takeOverHere' ? { ...BOB_EDITING, holder: ALICE.user, sameUser: true } : BOB_EDITING
+    const t = connectedSetup({ editIntent: false, api: { editStatus: async () => ({ status: { revision: 3, editor: holder, canEdit: true, canTakeOver: true, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }) } })
+    await t.editorPage.load()
+    await vi.waitFor(() => expect(modeOf(t.editorPage)?.kind).toBe('reading'))
+    t.connection.setBrowserOnline(false)
+    await t.editorPage[action]()
+    expect(t.editLease.acquire).not.toHaveBeenCalled()
+    expect(t.api.editRequest.send).not.toHaveBeenCalled()
+    t.connection.setBrowserOnline(true)
+    await t.editorPage[action]()
+    expect(t.editLease.acquire).not.toHaveBeenCalled()
+    expect(t.api.editRequest.send).not.toHaveBeenCalled()
+    t.reconnect()
+    await t.editorPage[action]()
+    if (action === 'requestEditing')
+      expect(t.api.editRequest.send).toHaveBeenCalledOnce()
+    else
+      expect(t.editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('进入编辑等会话确认时才断网，确认晚到不能继续申请', async () => {
+    const t = connectedSetup({ editIntent: false })
+    await t.editorPage.load()
+    const check = deferred<SessionResponse>()
+    t.api.session.mockImplementationOnce(async () => check.promise)
+    t.fromOtherTab()
+    const entering = t.editorPage.enterEditing()
+    t.connection.setBrowserOnline(false)
+    check.resolve(ALICE)
+    await entering
+    expect(t.editLease.acquire).not.toHaveBeenCalled()
+    expect(modeOf(t.editorPage)?.kind).toBe('reading')
+  })
+
+  it('打开期间已离线，不因新建文档的自动编辑意图申请编辑权', async () => {
+    const t = connectedSetup()
+    t.connection.setBrowserOnline(false)
+    await t.editorPage.load()
+    expect(t.editLease.acquire).not.toHaveBeenCalled()
+    expect(modeOf(t.editorPage)?.kind).toBe('reading')
+  })
+
+  it.each(['exitEditing', 'handOver', 'keepEditing'] as const)('%s 离线不调用服务端，仍留在可输入的编辑会话', async (action) => {
+    const incoming = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000f1', requester: BOB_EDITING.holder, requestedAt: '2026-09-27T03:01:00.000Z' }
+    const t = connectedSetup({ editLease: { renew: async () => ({ ...RENEWED, request: incoming }) } })
+    await t.editorPage.load()
+    t.activity.fire()
+    await t.time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(t.editorPage)).toMatchObject({ kind: 'editing', request: { id: incoming.id } }))
+    t.connection.setBrowserOnline(false)
+    await t.editorPage[action]()
+    expect(t.editLease.release).not.toHaveBeenCalled()
+    expect(t.editLease.handOver).not.toHaveBeenCalled()
+    expect(t.editLease.decline).not.toHaveBeenCalled()
+    expect(modeOf(t.editorPage)?.kind).toBe('editing')
+    Object.assign(t.fake.editor, { changeSeq: () => 1 })
+    t.fake.changeListeners.forEach(listener => listener())
+    expect(t.editorPage.hasUnsavedWork()).toBe(true)
+  })
+
+  it('失效后另存副本同样检查最新连接，恢复后沿原内容提交', async () => {
+    const t = connectedSetup({ editLease: { renew: async () => {
+      throw new ApiError(403, 'PERMISSION_DENIED', '只能查看')
+    } } })
+    await t.editorPage.load()
+    Object.assign(t.fake.editor, { changeSeq: () => 1 })
+    t.fake.changeListeners.forEach(listener => listener())
+    await t.time.advance(10_000)
+    await vi.waitFor(() => expect(modeOf(t.editorPage)).toMatchObject({ kind: 'lost', unsaved: true, readable: true }))
+    t.connection.failed(t.connection.beginRequest())
+    await t.editorPage.saveCopy()
+    expect(t.api.conflictCopy).not.toHaveBeenCalled()
+    expect(modeOf(t.editorPage)?.kind).toBe('lost')
+    t.reconnect()
+    await t.editorPage.saveCopy()
+    expect(t.api.conflictCopy).toHaveBeenCalledOnce()
+  })
+})

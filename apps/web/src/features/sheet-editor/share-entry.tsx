@@ -15,6 +15,7 @@ import { Button } from '../../shared/ui/index.ts'
 import { ShareDialog } from '../sharing/index.ts'
 
 interface EditorShareEntryProps {
+  readonly available: boolean
   readonly page: EditorPage
   readonly ready: EditorPageReady
   /** 关闭对话框之后入口已经不在了（随新的权限消失）时焦点交给谁：页头的返回链接 */
@@ -25,12 +26,12 @@ interface EditorShareEntryProps {
  * 页头里的"分享"与对话框：能分享时才有按钮；对话框打开着的时候不随它关掉（里面正说明被拒绝的原因）。
  * 对话框里的写操作结果未知或被拒绝之后，页头重新取文档详情（能不能分享、标题、所在的空间）。请求缓存由 EditorChrome 提供
  */
-export function EditorShareEntry({ page, ready, fallbackFocus }: EditorShareEntryProps) {
+export function EditorShareEntry({ available, page, ready, fallbackFocus }: EditorShareEntryProps) {
   const [open, setOpen] = useState(false)
   const entryRef = useRef<HTMLButtonElement>(null)
   return (
     <>
-      {ready.canShare && <Button ref={entryRef} type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>{messages.organize.share}</Button>}
+      {ready.canShare && <Button ref={entryRef} type="button" variant="outline" size="sm" aria-disabled={!available} onClick={() => page.view().connection?.available !== false && setOpen(true)}>{messages.organize.share}</Button>}
       <ShareDialog
         documentId={ready.documentId}
         documentTitle={ready.title}

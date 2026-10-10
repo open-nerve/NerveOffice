@@ -162,6 +162,7 @@ export const messages = {
     statusName: (status: UserStatus) => USER_STATUS_NAMES[status],
   },
   common: {
+    connectionRequired: '此操作需要联网，连接恢复后可继续。',
     retry: '重试',
     /** 第一次就没取到、按了"重试"之后：按钮留着、不可用，说正在重试（规范 §2.4：进行中的操作的按钮不卸载，shared/lib/use-first-load-retry.ts） */
     retrying: '正在重试…',

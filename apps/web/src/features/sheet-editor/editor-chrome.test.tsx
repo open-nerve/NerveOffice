@@ -1970,3 +1970,79 @@ describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', ()
     expect(document.querySelector('[data-slot="interruption-notice"]')).toBeNull()
   })
 })
+
+describe('页头联网操作与已开确认框', () => {
+  const offline = { browserOnline: false, available: false, problem: 'offline', since: Date.now(), generation: 1 } as const
+  const online = { browserOnline: true, available: true, problem: undefined, since: undefined, generation: 2 } as const
+
+  it('编辑器分享入口读取同一页头连接事实，离线不会打开弹窗', () => {
+    renderChrome({ load: { ...READY, canShare: true }, connection: offline })
+    const share = screen.getByRole('button', { name: '分享' })
+    expect(share).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(share)
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('离线保留焦点并禁用保存、退出及交出；当前内容与本地取消保留', () => {
+    const request: IncomingRequest = { id: 'request', requester: AMY, declining: false, failure: undefined }
+    const fake = renderChrome({ mode: { kind: 'editing', request }, save: DIRTY })
+    const exit = screen.getByRole('button', { name: '退出编辑' })
+    exit.focus()
+    fake.set({ connection: offline })
+    for (const name of ['保存', '退出编辑', '交出', '继续编辑']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(button)
+    }
+    expect(fake.page.save).not.toHaveBeenCalled()
+    expect(fake.page.exitEditing).not.toHaveBeenCalled()
+    expect(fake.page.handOver).not.toHaveBeenCalled()
+    expect(fake.page.keepEditing).not.toHaveBeenCalled()
+    expect(exit).toHaveFocus()
+    expect(screen.getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+  })
+
+  it('阅读的进入、请求和接管入口禁用；本地接管取消与重新读取可用', () => {
+    const fake = renderChrome({ mode: READING, save: undefined, connection: offline })
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    expect(fake.page.enterEditing).not.toHaveBeenCalled()
+    fake.set({ mode: { ...READING, canTakeOver: true, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: undefined } } })
+    fireEvent.click(screen.getByRole('button', { name: '请求编辑' }))
+    fireEvent.click(screen.getByRole('button', { name: '强制接管' }))
+    expect(fake.page.requestEditing).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: undefined }, takeover: { kind: 'failed', reason: 'not-saved' }, update: 'available' } })
+    fireEvent.click(screen.getByRole('button', { name: '仍在此编辑' }))
+    expect(fake.page.takeOverHere).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(fake.page.cancelTakeOver).toHaveBeenCalledOnce()
+  })
+
+  it('在线开强制接管确认框，离线后的确认不执行；恢复后才执行', async () => {
+    const fake = renderChrome({ mode: { ...READING, canTakeOver: true, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: undefined } }, save: undefined, connection: online })
+    fireEvent.click(screen.getByRole('button', { name: '强制接管' }))
+    const dialog = await screen.findByRole('dialog', { name: '强制接管编辑？' })
+    fake.set({ connection: offline })
+    const confirm = within(dialog).getByRole('button', { name: '强制接管' })
+    await act(async () => fireEvent.click(confirm))
+    expect(fake.page.forceTakeOver).not.toHaveBeenCalled()
+    expect(confirm).toHaveAttribute('aria-disabled', 'true')
+    expect(within(dialog).getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+    fake.set({ connection: online })
+    fireEvent.click(confirm)
+    await waitFor(() => expect(fake.page.forceTakeOver).toHaveBeenCalledOnce())
+  })
+
+  it('离线的失效副本不可提交，本地放弃确认仍可取消', async () => {
+    const fake = renderChrome({ mode: lost({ kind: 'newer' }), save: undefined, connection: offline })
+    const copy = screen.getByRole('button', { name: '另存为副本' })
+    expect(copy).toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(copy)
+    expect(fake.page.saveCopy).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '放弃本页的修改' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByRole('button', { name: '取消' })).not.toHaveAttribute('aria-disabled', 'true')
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(dialog).not.toBeInTheDocument())
+  })
+})
