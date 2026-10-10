@@ -63,7 +63,7 @@ async function loadedFrom(response: Response, documentId: string): Promise<Loade
 
 /** 读内容的全文（打开、放弃本页的修改时） */
 export async function fetchContent(documentId: string): Promise<LoadedContent> {
-  return loadedFrom(await apiFetch(contentPath(documentId)), documentId)
+  return apiFetch(contentPath(documentId), {}, async response => loadedFrom(response, documentId))
 }
 
 /**
@@ -71,14 +71,12 @@ export async function fetchContent(documentId: string): Promise<LoadedContent> {
  * 不传内容；有更新的才读全文。权限照常判断（看不到与不存在一致，404）。阅读者的"有更新"、进入编辑时修订号变了都用它
  */
 export async function fetchContentIfChanged(documentId: string, revision: number): Promise<LoadedContent | typeof CONTENT_UNCHANGED> {
-  const response = await apiFetch(contentPath(documentId), { headers: { 'if-none-match': revisionEtag(revision) }, acceptNotModified: true })
-  return response.status === 304 ? CONTENT_UNCHANGED : loadedFrom(response, documentId)
+  return apiFetch(contentPath(documentId), { headers: { 'if-none-match': revisionEtag(revision) }, acceptNotModified: true }, async response => response.status === 304 ? CONTENT_UNCHANGED : loadedFrom(response, documentId))
 }
 
 /** 编辑状态（GET，能读就能看）：修订号、正在编辑的人与调用者现在能不能编辑，连同服务端回答的时刻 */
 export async function fetchEditStatus(documentId: string): Promise<FetchedEditStatus> {
-  const response = await apiFetch(leasePath(documentId))
-  return { status: await readJson(response, editStatusSchema, `GET ${leasePath(documentId)}`), serverTime: serverTimeOf(response) }
+  return apiFetch(leasePath(documentId), {}, async response => ({ status: await readJson(response, editStatusSchema, `GET ${leasePath(documentId)}`), serverTime: serverTimeOf(response) }))
 }
 
 /**
@@ -88,8 +86,7 @@ export async function fetchEditStatus(documentId: string): Promise<FetchedEditSt
 export async function saveConflictCopy(documentId: string, query: ConflictCopyQuery, compressed: Uint8Array<ArrayBuffer>): Promise<CreatedDocument> {
   const search = new URLSearchParams({ requestId: query.requestId, title: query.title, formulasPending: String(query.formulasPending === true), ...clientFormatParams() })
   const path = `${documentPath(documentId)}/conflict-copies?${search.toString()}`
-  const response = await apiFetch(path, { method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } })
-  return readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`)
+  return apiFetch(path, { method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`))
 }
 
 /**
@@ -128,8 +125,7 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
     ...clientFormatParams(),
   })
   const path = `${contentPath(documentId)}?${query.toString()}`
-  const response = await apiFetch(path, { method: 'PUT', headers: leaseHeaders(lease.token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } })
-  return readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`)
+  return apiFetch(path, { method: 'PUT', headers: leaseHeaders(lease.token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`))
 }
 
 /**
@@ -159,7 +155,7 @@ export async function renewEditLease(documentId: string, token: string, idleSeco
  * 失败时抛出请求层的错误（调用方不看结果、不重试）
  */
 export async function reportOpenCheckFailures(documentId: string, report: OpenCheckReport): Promise<void> {
-  await apiFetch(`${documentPath(documentId)}/open-check-failures`, { method: 'POST', body: { contentType: 'application/json', data: JSON.stringify(report) } })
+  await apiFetch(`${documentPath(documentId)}/open-check-failures`, { method: 'POST', body: { contentType: 'application/json', data: JSON.stringify(report) } }, () => undefined)
 }
 
 /**
@@ -167,7 +163,7 @@ export async function reportOpenCheckFailures(documentId: string, report: OpenCh
  * 请求层照常带上 CSRF 令牌（状态变更的请求）。失败时抛出请求层的错误：续上时要知道放掉了没有，结果未知就不申请（审查 B9）
  */
 export async function releaseEditLease(documentId: string, token: string): Promise<void> {
-  await apiFetch(leasePath(documentId), { method: 'DELETE', headers: leaseHeaders(token), keepalive: true })
+  await apiFetch(leasePath(documentId), { method: 'DELETE', headers: leaseHeaders(token), keepalive: true }, () => undefined)
 }
 
 function requestPath(documentId: string): string {
@@ -192,7 +188,7 @@ export async function renewEditRequest(documentId: string): Promise<EditRequestO
  * "取消请求"时等它，失败时抛出请求层的错误
  */
 export async function cancelEditRequest(documentId: string): Promise<void> {
-  await apiFetch(requestPath(documentId), { method: 'DELETE', keepalive: true })
+  await apiFetch(requestPath(documentId), { method: 'DELETE', keepalive: true }, () => undefined)
 }
 
 /**
@@ -200,7 +196,7 @@ export async function cancelEditRequest(documentId: string): Promise<void> {
  * 持有者的那一代已失效时抛出 EDIT_LEASE_LOST（ApiError）
  */
 export async function declineEditRequest(documentId: string, token: string, requestId: string): Promise<void> {
-  await apiFetch(`${requestPath(documentId)}/decline`, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) } })
+  await apiFetch(`${requestPath(documentId)}/decline`, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) } }, () => undefined)
 }
 
 /**
@@ -210,6 +206,5 @@ export async function declineEditRequest(documentId: string, token: string, requ
  */
 export async function handOverEditLease(documentId: string, token: string, requestId: string): Promise<HandedOverEditLease> {
   const path = `${leasePath(documentId)}/handover`
-  const response = await apiFetch(path, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) }, keepalive: true })
-  return readJson(response, handedOverEditLeaseSchema, `POST ${path}`)
+  return apiFetch(path, { method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) }, keepalive: true }, async response => readJson(response, handedOverEditLeaseSchema, `POST ${path}`))
 }

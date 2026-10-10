@@ -194,6 +194,7 @@ export const messages = {
   errors: {
     byCode: errorText,
     network: '网络连接失败，请检查网络后重试',
+    timeout: '网络没有回应，请稍后重试',
     unexpected: '出了点问题，请稍后重试',
     tooManyAttempts: (minutes: number) => `尝试次数过多，请 ${minutes} 分钟后再试`,
   },

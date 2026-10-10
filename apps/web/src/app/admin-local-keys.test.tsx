@@ -81,20 +81,30 @@ function keyServer(initial: readonly AdminUser[]) {
 
 /**
  * 在路上的请求（复验 C1）：收到请求那一刻按服务端当时的样子算好回答（它在随后的写操作生效之前就读了库），由用例决定什么时候交回。
- * 交回之后等页面读完它的正文、再等随后的渲染走完（settle）：页面按它该做的都已经做完，之后的断言不是"现在还没变"的瞬时断言
+ * 交回之后等页面读完正文或已经取消请求、再等随后的渲染走完（settle）：页面按它该做的都已经做完，之后的断言不是"现在还没变"的瞬时断言。
+ * M4-P2 S2 起请求层不会消费已经取消的迟到响应；取消之后读正文反而是缺陷，也在这里核对
  */
 function inFlight(answer: () => Response) {
   let deliver: (() => void) | undefined
-  let markRead: () => void = () => {}
-  const read = new Promise<void>((resolve) => {
-    markRead = resolve
+  let signal: AbortSignal | null | undefined
+  let parsed = false
+  let markSettled: () => void = () => {}
+  const settled = new Promise<void>((resolve) => {
+    markSettled = resolve
   })
-  const handler: Handler = async () => {
+  const handler: Handler = async (init) => {
+    signal = init?.signal
+    if (signal?.aborted === true)
+      markSettled()
+    else
+      signal?.addEventListener('abort', markSettled, { once: true })
     const response = answer()
     const parse = response.json.bind(response)
     response.json = async () => {
       const body: unknown = await parse()
-      markRead()
+      parsed = true
+      signal?.removeEventListener('abort', markSettled)
+      markSettled()
       return body
     }
     return new Promise<Response>((resolve) => {
@@ -105,13 +115,14 @@ function inFlight(answer: () => Response) {
     handler,
     /** 已经发出、还在路上 */
     sent: (): boolean => deliver !== undefined,
-    /** 交回发出那一刻的回答，等页面读完它的正文、随后的渲染走完 */
+    /** 交回发出那一刻的回答，等读取或取消、随后的渲染走完；取消的迟到响应不读正文 */
     deliver: async (): Promise<void> => {
       if (deliver === undefined)
         throw new Error('这个请求还没发出')
       deliver()
-      await read
+      await settled
       await settle()
+      expect(parsed).toBe(signal?.aborted !== true)
     },
   }
 }
