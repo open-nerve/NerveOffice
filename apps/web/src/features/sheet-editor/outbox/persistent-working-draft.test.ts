@@ -21,6 +21,82 @@ async function textOf(result: PreparedDraft): Promise<string> {
 }
 
 describe('持久工作草稿：内容、真实序号与失败退路', () => {
+  it('确认删除回包丢失后的同一内容 absent 是清理证据，解除未核实而不复活本机正文', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    const upload = prepared(await source.prepare(source.capture(capture('已上云'))))
+    const original = h.writer.confirm.bind(h.writer)
+    vi.spyOn(h.writer, 'confirm').mockImplementationOnce(async (...args) => {
+      expect(await original(...args)).toEqual({ kind: 'deleted' })
+      return { kind: 'failed', error: { name: 'Error', message: '回包丢失' } }
+    })
+    expect(await source.confirm(upload, 8)).toMatchObject({ kind: 'failed' })
+    expect(source.view()).toMatchObject({ metadataIssue: { operation: 'confirm', reason: 'unavailable' } })
+    expect(await source.confirm(upload, 8)).toEqual({ kind: 'absent' })
+    expect(source.view()).toMatchObject({ local: { kind: 'confirmed', revision: 8 } })
+    expect(source.view()).not.toHaveProperty('metadataIssue')
+    expect(await source.readLatest()).toMatchObject({ snapshot: '已上云' })
+    source.dispose()
+  })
+
+  it('正文已落盘后在途标记写满：保留正文事实，发布重放保障降级，同内容新捕获真正补写后恢复', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    const ref = source.capture(capture('已有正文'))
+    const upload = prepared(await source.prepare(ref))
+    const disk = h.store.rawDraft(DRAFT_KEY)
+    const changed = vi.fn()
+    source.subscribe(changed)
+    const inFlight = { requestId: 'mark-quota', clientInstanceId: CLIENT_INSTANCE_ID, localSeq: upload.contentSeq, sentAt: 1_000 }
+    h.store.failNext('replaceDraft', { kind: 'quota' })
+    expect(await source.markInFlight(upload, inFlight)).toEqual({ kind: 'quota' })
+    expect(h.store.rawDraft(DRAFT_KEY)).toEqual(disk)
+    expect(source.view()).toMatchObject({ ref, local: { kind: 'persisted' }, metadataIssue: { operation: 'mark', reason: 'quota' } })
+    expect(changed).toHaveBeenCalled()
+    const next = source.capture(capture('已有正文', 2))
+    expect(await source.ready(next)).toMatchObject({ contentSeq: next.draftSeq, local: { kind: 'persisted' } })
+    expect(h.store.rawDraft(DRAFT_KEY)).toMatchObject({ draftSeq: next.draftSeq, inFlight })
+    expect(source.view()).not.toHaveProperty('metadataIssue')
+    source.dispose()
+  })
+
+  it.each(['no-key', 'unavailable', 'failed'] as const)('正文已落盘后 mark 的 %s 也发布元数据限制，而不抹掉正文', async (kind) => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    const ref = source.capture(capture('保留正文'))
+    const upload = prepared(await source.prepare(ref))
+    const failure = kind === 'failed'
+      ? { kind, error: { name: 'Error', message: '重封回包丢失' } } as const
+      : kind === 'unavailable' ? { kind, reason: 'blocked' } as const : { kind } as const
+    vi.spyOn(h.writer, 'markInFlight').mockResolvedValueOnce(failure)
+    expect(await source.markInFlight(upload, { requestId: 'fault', clientInstanceId: CLIENT_INSTANCE_ID, localSeq: upload.contentSeq, sentAt: 1_000 })).toMatchObject({ kind })
+    expect(source.view()).toMatchObject({ ref, local: { kind: 'persisted' }, metadataIssue: { operation: 'mark', reason: kind === 'failed' ? 'unavailable' : kind } })
+    source.dispose()
+  })
+
+  it('A 已被云端确认而 B 重封失败：B 正文保留，标记重试不能掩盖陈旧基准，下一次捕获修复', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    const upload = prepared(await source.prepare(source.capture(capture('A'))))
+    const inFlight = { requestId: 'upload-a', clientInstanceId: CLIENT_INSTANCE_ID, localSeq: upload.contentSeq, sentAt: 1_000 }
+    await source.markInFlight(upload, inFlight)
+    const ref = source.capture(capture('B', 2))
+    await source.ready(ref)
+    h.store.failNext('confirmDraft', { kind: 'quota' })
+    expect(await source.confirm(upload, 8)).toEqual({ kind: 'quota' })
+    expect(source.view()).toMatchObject({ ref, local: { kind: 'persisted' }, metadataIssue: { operation: 'confirm', reason: 'quota' }, summary: { baseRevision: 8 } })
+    expect(h.store.rawDraft(DRAFT_KEY)).toMatchObject({ draftSeq: ref.draftSeq, baseRevision: 7, inFlight })
+    source.release(upload)
+    const nextUpload = prepared(await source.prepare(ref))
+    expect(await source.markInFlight(nextUpload, { ...inFlight, requestId: 'upload-b', localSeq: nextUpload.contentSeq })).toEqual({ kind: 'resealed' })
+    expect(source.view()).toMatchObject({ metadataIssue: { operation: 'confirm', reason: 'quota' } })
+    const repaired = source.capture(capture('B', 3))
+    await source.ready(repaired)
+    expect(source.view()).not.toHaveProperty('metadataIssue')
+    expect(h.store.rawDraft(DRAFT_KEY)).toMatchObject({ draftSeq: repaired.draftSeq, baseRevision: 8 })
+    source.dispose()
+  })
+
   it.each(['failed', 'throw'] as const)('确认已删除但宿主 %s 丢掉回包，释放上传后仍拥有云端已确认的当前正文', async (failure) => {
     const h = await persistentHarness()
     const source = createPersistentWorkingDraft(h.options)

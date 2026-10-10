@@ -25,6 +25,71 @@ function valueAt(text: string, cell = 'A1'): unknown {
 }
 
 test.describe('US-M4-01/02/10/11/15 本地优先的真实页面链路', { tag: '@test-build' }, () => {
+  test('正文写成但在途标记写满：页面公开同步进度限制，仍上传原正文，确认后解除', async ({ page }) => {
+    await observeLocalSaveOrder(page)
+    await page.route('**/assets/outbox.worker-*.js', async (route) => {
+      const response = await route.fetch()
+      const fault = `const put = IDBObjectStore.prototype.put; let failed = false; IDBObjectStore.prototype.put = function (...args) { if (!failed && this.name === 'drafts' && args[0]?.inFlight != null) { failed = true; throw new DOMException('测试在途标记写满', 'QuotaExceededError'); } return Reflect.apply(put, this, args); };`
+      await route.fulfill({ response, body: `${fault}\n${await response.text()}` })
+    })
+    const { documentId, key } = await openLocalSheet(page, 'local-mark-quota')
+    const secret = await currentLocalKey(page)
+    const held = await holdSaves(page)
+    try {
+      await setCellValue(page, 'A1', '正文已经落盘')
+      await saveButton(page).click()
+      await expect.poll(held.held).toBe(1)
+      expect(await localSaveOrder(page)).toContain('mark-in-flight:quota')
+      const disk = (await readLocalDisk(page, key)).draft!
+      expect(disk.inFlight).toBeNull()
+      expect(valueAt(diskSnapshot(disk, secret))).toBe('正文已经落盘')
+      const local = page.locator('[data-slot="local-save-status"]')
+      await expect(local.locator('summary')).toHaveText('已保存在本机（等待同步）')
+      await local.locator('summary').click()
+      await expect(local.getByText('本机存储空间不足，同步进度未能写入本机。', { exact: true })).toBeVisible()
+      held.release()
+      await expect(saveStatus(page)).toHaveText('已保存到云端')
+      await expect(local).not.toContainText('同步进度未能')
+      expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('正文已经落盘')
+    }
+    finally {
+      held.release()
+    }
+  })
+
+  test('A 确认时 B 的同步进度重封写满：保留 B 的正文并显示限制，新保存真正重写后解除', async ({ page }) => {
+    await page.route('**/assets/outbox.worker-*.js', async (route) => {
+      const response = await route.fetch()
+      const fault = `const put = IDBObjectStore.prototype.put; let failed = false; IDBObjectStore.prototype.put = function (...args) { if (!failed && this.name === 'drafts' && args[0]?.baseRevision > 1 && args[0]?.inFlight === null) { failed = true; throw new DOMException('测试确认重封写满', 'QuotaExceededError'); } return Reflect.apply(put, this, args); };`
+      await route.fulfill({ response, body: `${fault}\n${await response.text()}` })
+    })
+    const { documentId, key } = await openLocalSheet(page, 'local-confirm-quota')
+    const secret = await currentLocalKey(page)
+    const held = await holdSaves(page)
+    try {
+      await setCellValue(page, 'A1', '上传 A')
+      await saveButton(page).click()
+      await expect.poll(held.held).toBe(1)
+      const first = (await readLocalDisk(page, key)).draft!
+      await setCellValue(page, 'A1', '新输入 B')
+      await expect.poll(async () => (await readLocalDisk(page, key)).draft?.draftSeq).toBeGreaterThan(first.draftSeq)
+      held.release()
+      const local = page.locator('[data-slot="local-save-status"]')
+      await local.locator('summary').click()
+      await expect(local.getByText('本机存储空间不足，同步进度未能写入本机。', { exact: true })).toBeVisible()
+      await expect(local.locator('summary')).toHaveText('已保存在本机（等待同步）')
+      const disk = (await readLocalDisk(page, key)).draft!
+      expect(disk).toMatchObject({ baseRevision: 1, inFlight: first.inFlight })
+      expect(valueAt(diskSnapshot(disk, secret))).toBe('新输入 B')
+      await saveAndWait(page)
+      await expect(local).not.toContainText('同步进度未能')
+      expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('新输入 B')
+    }
+    finally {
+      held.release()
+    }
+  })
+
   test('先落盘和标记在途再发 HTTP；上传 A 时捕获 B，A 回包只改 B 的基准，不删新行', async ({ page }) => {
     await observeLocalSaveOrder(page)
     const workers: string[] = []

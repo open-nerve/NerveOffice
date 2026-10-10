@@ -1,7 +1,7 @@
 // 内容所有权与串行调度：普通捕获只有执行中和最新待处理两格；另允许一份同步固定的上传。
 // 后端只处理字节和存储，不能缓存另一份页面正文。所有长期 Promise 的结果除 prepare 外都只有元数据。
 import type { InFlightSave } from '../../shared/outbox/draft-record.ts'
-import type { DraftCapture, DraftCaptureRef, DraftFailure, DraftLocalFact, DraftMemoryReason, DraftMutation, DraftPreparation, DraftReadLatest, DraftReady, DraftSummary, PreparedDraft, WorkingDraft, WorkingDraftOptions, WorkingDraftView } from './working-draft.ts'
+import type { DraftCapture, DraftCaptureRef, DraftFailure, DraftLocalFact, DraftMemoryReason, DraftMetadataIssue, DraftMutation, DraftPreparation, DraftReadLatest, DraftReady, DraftSummary, PreparedDraft, WorkingDraft, WorkingDraftOptions, WorkingDraftView } from './working-draft.ts'
 import { gunzipBytes, gzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { describeFailure } from '../../shared/outbox/failure.ts'
 
@@ -81,6 +81,7 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
   let inFlight: InFlightSave | null = null
   let inFlightGeneration = 0
   let needsMetadataWrite = false
+  let metadataIssue: DraftMetadataIssue | undefined
   let disposed = false
   let running = false
   let executing: Entry | undefined
@@ -165,8 +166,13 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
       const gzip = result.gzip ?? (entry.retainBody && kept(entry) && entry.snapshot !== undefined ? await gzipBytes(new TextEncoder().encode(entry.snapshot)) : undefined)
       if (disposed)
         return
-      if (result.local.kind === 'persisted' && metadataGeneration === inFlightGeneration)
+      if (result.local.kind === 'persisted' && metadataGeneration === inFlightGeneration) {
         needsMetadataWrite = false
+        if (metadataIssue !== undefined) {
+          metadataIssue = undefined
+          publish()
+        }
+      }
       entry.summary = { kind: 'ready', ref: entry.ref, contentSeq: result.contentSeq, digest: result.digest, baseRevision, format, local: result.local, confirmedRevision: undefined }
       entry.retainBody ||= result.retainBody
       if (kept(entry) && (entry.retainBody || pin?.entry === entry || reading?.entry === entry))
@@ -251,7 +257,27 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
     return { kind: 'failed', error: { name: 'InvalidPreparedDraft', message: '上传已释放、不是当前固定上传，或来源已销毁' } }
   }
 
-  async function mutate(prepared: PreparedDraft, task: (entry: Entry) => Promise<DraftMutation>): Promise<DraftMutation> {
+  function noteMetadata(operation: DraftMetadataIssue['operation'], result: DraftMutation): void {
+    const reason = result.kind === 'failed'
+      ? 'unavailable'
+      : result.kind === 'quota' || result.kind === 'unavailable' || result.kind === 'no-key' ? result.kind : undefined
+    if (reason !== undefined) {
+      // 下一次捕获必须真正写入当前基准/在途状态；同正文去重不能修复这些元数据。
+      needsMetadataWrite = true
+      // 新 mark 写成也不能修复前一次 confirm 失败留下的旧基准。
+      if (operation === 'confirm' || metadataIssue?.operation !== 'confirm')
+        metadataIssue = { operation, reason }
+      publish()
+    }
+    else if (metadataIssue !== undefined && (result.kind === 'deleted' || result.kind === 'rebased'
+      || (result.kind === 'absent' && latest?.summary?.local.kind === 'confirmed')
+      || (result.kind === 'resealed' && metadataIssue.operation === 'mark'))) {
+      metadataIssue = undefined
+      publish()
+    }
+  }
+
+  async function mutate(prepared: PreparedDraft, operation: DraftMetadataIssue['operation'], task: (entry: Entry) => Promise<DraftMutation>): Promise<DraftMutation> {
     const target = pin
     if (disposed || target?.prepared !== prepared)
       return Promise.resolve(invalidUpload())
@@ -274,12 +300,18 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
           return
         }
         try {
-          finish(await task(target.entry))
+          const result = await task(target.entry)
+          if (!disposed && pin === target)
+            noteMetadata(operation, result)
+          finish(result)
         }
         catch (error) {
           if (!disposed)
             report(error)
-          finish({ kind: 'failed', error: describeFailure(error) })
+          const result = { kind: 'failed', error: describeFailure(error) } as const
+          if (!disposed && pin === target)
+            noteMetadata(operation, result)
+          finish(result)
         }
       })
       pump()
@@ -291,7 +323,7 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
       return { kind: 'disposed' }
     if (latest === undefined)
       return { kind: 'empty' }
-    return { kind: 'working', ref: latest.ref, local: latest.summary?.local ?? (latest.result?.kind === 'failed' ? { kind: 'memory', reason: 'unavailable' } : { kind: 'writing' }), summary: latest.summary ?? latest.result }
+    return { kind: 'working', ref: latest.ref, local: latest.summary?.local ?? (latest.result?.kind === 'failed' ? { kind: 'memory', reason: 'unavailable' } : { kind: 'writing' }), summary: latest.summary ?? latest.result, ...(metadataIssue === undefined ? {} : { metadataIssue }) }
   }
 
   return {
@@ -434,7 +466,7 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
     markInFlight: async (prepared, next) => {
       if (disposed || pin?.prepared !== prepared || next.localSeq !== prepared.contentSeq)
         return Promise.resolve(invalidUpload())
-      return mutate(prepared, async (entry) => {
+      return mutate(prepared, 'mark', async (entry) => {
         if (entry.summary === undefined)
           return invalidUpload()
         inFlight = { ...next }
@@ -445,7 +477,7 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
     confirm: async (prepared, revision) => {
       if (disposed || pin?.prepared !== prepared || !Number.isSafeInteger(revision) || revision < 1)
         return Promise.resolve(invalidUpload())
-      return mutate(prepared, async (entry) => {
+      return mutate(prepared, 'confirm', async (entry) => {
         if (entry.summary === undefined)
           return invalidUpload()
         let outcome: DraftMutation
@@ -470,7 +502,7 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
           if (same) {
             latest.gzip = prepared.gzip
             latest.retainBody = true
-            if (outcome.kind === 'deleted')
+            if (outcome.kind === 'deleted' || outcome.kind === 'absent')
               latest.summary = { ...latest.summary, local: { kind: 'confirmed', revision } }
           }
           publish()

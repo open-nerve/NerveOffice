@@ -62,6 +62,11 @@ export interface PreparedDraft {
 
 export type DraftPreparation = PreparedDraft | DraftFailure
 export type DraftMutation = ResealResult | ConfirmResult | { readonly kind: 'memory', readonly reason: DraftMemoryReason }
+/** 正文的落盘事实与同步元数据分别记录；失败不能抹掉已存正文，也不能假装留有重放证据。 */
+export interface DraftMetadataIssue {
+  readonly operation: 'mark' | 'confirm'
+  readonly reason: 'quota' | 'unavailable' | 'no-key'
+}
 export type DraftReadLatest
   = | { readonly kind: 'snapshot', readonly ref: DraftCaptureRef, readonly snapshot: string }
     | { readonly kind: 'empty' | 'disposed' }
@@ -69,7 +74,7 @@ export type DraftReadLatest
 
 export type WorkingDraftView
   = | { readonly kind: 'empty' | 'disposed' }
-    | { readonly kind: 'working', readonly ref: DraftCaptureRef, readonly local: DraftLocalFact, readonly summary: DraftReady | undefined }
+    | { readonly kind: 'working', readonly ref: DraftCaptureRef, readonly local: DraftLocalFact, readonly summary: DraftReady | undefined, readonly metadataIssue?: DraftMetadataIssue }
 
 export interface WorkingDraft {
   /** 同步编码、分配序号；销毁或序号越界时抛出，不返回半有效引用。 */

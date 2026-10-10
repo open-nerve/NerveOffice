@@ -165,7 +165,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     const previous = localSnapshot?.draft
     // WorkingDraft 的 view 是临时只读对象；按引用和完成结果比较，保持页面快照稳定。
     const unchanged = previous?.kind === observed.kind && (observed.kind !== 'working'
-      || (previous.kind === 'working' && previous.ref === observed.ref && previous.summary === observed.summary && previous.local.kind === observed.local.kind))
+      || (previous.kind === 'working' && previous.ref === observed.ref && previous.summary === observed.summary && previous.local.kind === observed.local.kind && previous.metadataIssue === observed.metadataIssue))
     const content = unchanged && previous !== undefined ? previous : observed
     const next: LocalSaveView = {
       draft: content,

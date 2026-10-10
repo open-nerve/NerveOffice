@@ -40,6 +40,31 @@ async function connected(persistent = false) {
 }
 
 describe('重连必须重新确认当前编辑权', () => {
+  it('本机同步元数据失败与恢复不被编辑会话的快照缓存吞掉', async () => {
+    const t = await connected(true)
+    t.session.stopCapturing()
+    t.page.edit()
+    const draft = t.session.draft!
+    const ref = draft.capture({ editorSeq: t.page.editor.changeSeq(), snapshot: t.page.editor.capture(), formulasPending: false, dedupe: false })
+    await draft.ready(ref)
+    const before = t.session.localSave()
+    expect(before).toMatchObject({ coversCurrent: true, draft: { local: { kind: 'persisted' } } })
+    const reply = deferred<Awaited<ReturnType<typeof t.options.api.save>>>()
+    vi.mocked(t.options.api.save).mockReturnValueOnce(reply.promise)
+    t.local!.store.failNext('replaceDraft', { kind: 'quota' })
+    const saving = t.session.coordinator!.save(() => ref, { dedupe: false })
+    try {
+      await vi.waitFor(() => expect(t.options.api.save).toHaveBeenCalledOnce())
+      expect(t.session.localSave()).not.toBe(before)
+      expect(t.session.localSave()).toMatchObject({ coversCurrent: true, draft: { ref, local: { kind: 'persisted' }, metadataIssue: { operation: 'mark', reason: 'quota' } } })
+    }
+    finally {
+      reply.resolve({ revision: 2, savedAt: '2026-10-11T00:00:00.000Z', unchanged: false })
+      await saving
+    }
+    expect(t.session.localSave()?.draft).not.toHaveProperty('metadataIssue')
+  })
+
   it('断网仍自动捕获并落盘，online 与成功请求都不能替代租约确认', async () => {
     const t = await connected(true)
     const checking = deferred<LeaseVerdict>()

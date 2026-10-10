@@ -62,6 +62,31 @@ async function text(body: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 describe('保存协调与唯一工作草稿整合', () => {
+  it('正文写成但在途标记写满：HTTP 仍按原文发送，来源在请求未知期间公开重放限制', async () => {
+    const h = await persistentHarness()
+    const draft = createPersistentWorkingDraft(h.options)
+    const context = setup(draft)
+    const ref = context.capture('已经落盘的正文')
+    await draft.ready(ref)
+    h.store.failNext('replaceDraft', { kind: 'quota' })
+    const saving = context.coordinator.save(() => ref, EXPLICIT)
+    const call = await context.sent(1)
+    try {
+      expect(await text(call.body)).toBe('已经落盘的正文')
+      expect(h.store.rawDraft(DRAFT_KEY)).toMatchObject({ draftSeq: ref.draftSeq, inFlight: null })
+      expect(draft.view()).toMatchObject({ local: { kind: 'persisted' }, metadataIssue: { operation: 'mark', reason: 'quota' } })
+      call.result.reject(new NetworkError())
+      expect(await saving).toMatchObject({ kind: 'failed' })
+      expect(draft.view()).toMatchObject({ metadataIssue: { operation: 'mark', reason: 'quota' } })
+    }
+    finally {
+      call.result.resolve(saved(8))
+      await saving
+      context.coordinator.dispose()
+      draft.dispose()
+    }
+  })
+
   it('新请求在实际发送前失去许可：不制造 unknown，释放本次 pin，下一次使用新标识', async () => {
     const draft = createMemoryWorkingDraft({ ...DRAFT_OPTIONS, reason: 'disabled' })
     const context = setup(draft)

@@ -20,11 +20,17 @@ export function localSaveIndicator(local: LocalSaveView, connection: ConnectionV
   const reason = !local.enabled ? 'disabled' : storage.reason ?? (storage.kind === 'inactive' ? 'paused' : undefined)
   const memoryMessage = reason === 'disabled' && local.enabled ? text.disabledForSession : reason === undefined ? undefined : text.memory[reason]
   const fact = draft.kind === 'working' ? draft.local : undefined
+  const metadataIssue = draft.kind === 'working' ? draft.metadataIssue : undefined
+  const capturedConfirmed = draft.kind === 'working' && draft.summary?.kind === 'ready' && draft.summary.confirmedRevision !== undefined
   let kind: LocalSaveIndicator['kind']
   let summary: string
   if (memoryMessage !== undefined) {
     kind = 'memory'
     summary = memoryMessage
+  }
+  else if (metadataIssue?.operation === 'confirm' && capturedConfirmed) {
+    kind = local.coversCurrent ? 'confirmed' : 'partial'
+    summary = local.coversCurrent ? text.confirmedUnverified : text.confirmedPartial
   }
   else if (fact?.kind === 'persisted') {
     kind = local.coversCurrent ? 'saved' : 'partial'
@@ -48,6 +54,11 @@ export function localSaveIndicator(local: LocalSaveView, connection: ConnectionV
   function issue(key: string, message: string): void {
     keys.push(key)
     announcements.push(message)
+  }
+  if (metadataIssue !== undefined) {
+    const message = text.metadata[metadataIssue.reason]
+    details.push(message, text.metadataRecovery)
+    issue(`metadata:${metadataIssue.operation}:${metadataIssue.reason}`, message)
   }
   if (connection?.problem !== undefined) {
     const message = connection.problem === 'offline' ? text.offline : text.network

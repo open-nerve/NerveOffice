@@ -2,6 +2,7 @@ import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { LocalSaveView } from './editing-session.ts'
 import type { DraftMemoryReason } from './working-draft.ts'
 import { describe, expect, it } from 'vitest'
+import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { localSaveIndicator } from './local-save-indicator.ts'
 
 const ONLINE: ConnectionView = { browserOnline: true, available: true, problem: undefined, since: undefined, generation: 0 }
@@ -15,6 +16,34 @@ const LOCAL: LocalSaveView = {
 }
 
 describe('本机事实与连接提示', () => {
+  it('当前正文已云端确认但删除回包丢失：不再宣称仍有本机记录，也不宣称已清除', () => {
+    if (LOCAL.draft.kind !== 'working')
+      throw new Error('夹具必须有草稿')
+    const draft = { ...LOCAL.draft, summary: { kind: 'ready' as const, ref: LOCAL.draft.ref, contentSeq: 1, digest: undefined, baseRevision: 8, format: sampleMeta().format, local: LOCAL.draft.local, confirmedRevision: 8 }, metadataIssue: { operation: 'confirm' as const, reason: 'unavailable' as const } }
+    const result = localSaveIndicator({ ...LOCAL, unsaved: false, draft }, ONLINE, 1_000)
+    expect(result.kind).toBe('confirmed')
+    expect(result.summary).toBe('已同步到云端，本机草稿状态暂未确认')
+    expect(result.details.join('')).toContain('同步进度')
+    expect(result.announcementKey).toContain('metadata:confirm:unavailable')
+    const newer = localSaveIndicator({ ...LOCAL, coversCurrent: false, draft }, ONLINE, 1_000)
+    expect(newer.kind).toBe('partial')
+    expect(newer.summary).toBe('较早的修改已同步到云端，最新输入仍在本页')
+    expect(newer.summary).not.toContain('已落盘')
+  })
+
+  it.each(['quota', 'unavailable', 'no-key'] as const)('同步元数据 %s 未落盘时，保留正文的本机确认但明确限制与播报', (reason) => {
+    if (LOCAL.draft.kind !== 'working')
+      throw new Error('夹具必须有草稿')
+    const draft = { ...LOCAL.draft, metadataIssue: { operation: 'mark' as const, reason } }
+    const result = localSaveIndicator({ ...LOCAL, draft }, ONLINE, 1_000)
+    expect(result.summary).toBe('已保存在本机（等待同步）')
+    expect(result.details.join('')).toContain('同步进度')
+    expect(result.details.join('')).toContain('另存为副本')
+    expect(result.announcementKey).toContain(`metadata:mark:${reason}`)
+    expect(result.announcement).toContain('同步进度')
+    expect(result.details.join('')).not.toContain('尚未落盘的修改只在当前页面')
+  })
+
   it('只有当前修改完整落盘才显示指定的本机保存文案，云端仍未同步', () => {
     expect(localSaveIndicator(LOCAL, ONLINE, 1_000)).toMatchObject({ kind: 'saved', summary: '已保存在本机（等待同步）' })
     expect(localSaveIndicator(LOCAL, OFFLINE, 1_000)).toMatchObject({ kind: 'saved', summary: '已离线，修改已保存在本机' })
