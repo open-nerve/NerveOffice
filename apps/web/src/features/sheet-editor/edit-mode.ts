@@ -50,9 +50,9 @@
 //   照旧给副本与放弃；仍是当前的就把锁拿回来、照常编辑；这一代自己失效了（令牌仍是服务端这一行的，抢锁的一方拿着更旧的批准）交给租约已有的
 //   失效处理（与心跳、保存得知时同一条路：能续上就续上，续不上的按服务端的原因说，复验 E2）；核对不了、交给了租约的都照常编辑、不持有锁，由之后
 //   的心跳给出结论（被抢之后发出的续租成功就拿回锁，复验 E1；失效照心跳已有的处理）。
-//   被本人接管"在哪"按本机的证据定，与服务端的回答、锁被抢谁先到无关（locateTakeover）：服务端只说被本人接管、不说在哪，而本浏览器里接手的
-//   那一页一定来拿这把锁——锁被抢了（之后没有得知本页仍是当前的）就是本浏览器的另一个标签页；服务端的回答先到（那一页已经取得新的一代、还差
-//   一次核对才来抢）时失去编辑权照常（停写、捕获、等在途的保存、以只读重建），锁留着等它来抢，至多 TAKEOVER_STEAL_WAIT_MS，到时没有就是别处；
+//   被本人接管"在哪"优先读服务端编辑状态的 sameSession（M4-P2 S2、DEF-071）；本机锁的证据同时收集，只在查询失败、持有者消失或变为他人时
+//   使用。锁还拿着时至多留 TAKEOVER_STEAL_WAIT_MS 等接手页来抢；停写、捕获、等在途保存、以只读重建照常进行。位置查询不持有或释放资源，
+//   迟到结果只在本次页面代次仍有效时显示；
 // - 离开编辑一律先挡住输入再保存：begin(exiting) 的那一刻页面挂上交互屏障，然后挂起调度、等面板、flush（P4：提交哪一次单元格编辑
 //   在调用的那一刻定）；
 // - 空闲释放（idle-watch.ts）：编辑时 max(最后一次操作, 进入编辑的时刻) 起 10 分钟没有操作——会话可写、联网时（不主动向服务端确认会话）
@@ -71,8 +71,8 @@
 // - 交接请求的回应在 tab-handover.ts（answerTabs）：编辑时它同步回 ack，再经回调让这里离开编辑（handover-tab：屏障 → 挂起 → 等面板 →
 //   flush('handover') → 存上就放弃这一代（停心跳、不释放：那边以本人接管换代，槽从来不空，审查 B4）→ 放锁 → done → 以只读重建 → 阅读，
 //   说明已交给本浏览器的另一个标签页；没存上发 failed、留在编辑）；离开编辑有了结果时经它告诉回应过 ack 的请求；
-// - 跨设备被接管：续租或保存得到 taken_over（forced 为假）→ 不续上，失去编辑权（taken-over、elsewhere），副本照常。服务端的这个回答说不了
-//   在哪：锁还在本页手里时先等本浏览器里接手的那一页来抢（见上面的交接规则），没人来抢才说另一台设备或浏览器。
+// - 跨设备被接管：续租或保存得到 taken_over（forced 为假）→ 不续上，失去编辑权，副本照常。失效响应本身没有位置，另读编辑状态的 sameSession
+//   定位；读不到确定的本人持有者时才使用本机证据（见上面的交接规则）。
 //
 // 强制接管（M3-P5 设计 §3.8，US-M3-09）：
 // - 空间管理员（个人空间是所有者；canTakeOver）在阅读时、别人在编辑时"请求编辑"旁边另有"强制接管"（与请求编辑、"在此编辑"互斥）：页面先确认
@@ -153,6 +153,7 @@ import { captureLostContent, createLostCopyFlow } from './lost-copy-flow.ts'
 import { openCheckReportOf } from './open-check-report.ts'
 import { createReadingChecks } from './reading-checks.ts'
 import { answerTabs, handoverFailureOf, takeOverHere } from './tab-handover.ts'
+import { resolveTakeoverLoss } from './takeover-location.ts'
 
 export type { CopyRefusal, CopyState } from './lost-copy-flow.ts'
 
@@ -168,12 +169,8 @@ export type { EditingNotice, IncomingRequest, TakeoverProgress }
 export const EXIT_RELEASE_WAIT_MS = 5_000
 
 /**
- * 服务端说本页这一代被本人接管、本机锁还在本页手里时，等本浏览器里接手的那一页来抢锁至多这么久（"在哪"的本机证据，locateTakeover）。依据：
- * 那一页的本人接管先在服务端提交，本页这次请求（心跳、保存……）在它之后才被处理，两边的回包差不多同时到；那一页拿锁时锁被本页占着，
- * 先核对一次（续租一次）、是当前的就抢——抢锁之前只差这一次核对的往返（加上几次本机锁的操作）。核对与退出编辑时的释放是同一类请求（一次编辑权的
- * 请求），用同一个上限 EXIT_RELEASE_WAIT_MS：正常几十毫秒，5 秒是给慢网络、慢服务端的余量。核对与申请都还没有应用层的时限（DEF-041）：比这更慢时
- * 说成另一台设备或浏览器（只是说法不对，副本与放弃照常）；DEF-041 给核对加上时限之后按那个时限。代价：真是别处接手时，失去编辑权的说明
- * 至多晚这么久出来（这期间已经停写、挡着输入，页头说编辑权已失效、正在保留本页的内容）
+ * 本人接管时收集本机后备证据的窗口：本机锁还拿着时，等接手页来抢至多 5 秒。与服务端位置查询同时开始；sameSession 有确定答案就立即采用，
+ * 不等这个窗口。服务端查询由请求层限在 10 秒内，失败或持有者变化时才回退到已收集的本机证据（DEF-041、DEF-071）；停写和保留内容不等查询。
  */
 export const TAKEOVER_STEAL_WAIT_MS = EXIT_RELEASE_WAIT_MS
 
@@ -586,9 +583,6 @@ function reservedNoticeOf(error: unknown, forced: boolean): ReadingNotice | unde
     return undefined
   return { kind: 'reserved', reservedFor: details.data.reservedFor, reservedUntil: details.data.reservedUntil, ...(forced ? { forced } : {}) }
 }
-
-/** 本人在本浏览器的另一个标签页接手了编辑 */
-const TAKEN_OVER_HERE: LeaseLoss = { kind: 'taken-over', where: 'this-browser' }
 
 /** 错误的错误码（观察钩子里的写法）：不是服务端的错误（网络等）时为 null */
 function codeOf(error: unknown): string | null {
@@ -1259,9 +1253,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /**
    * 编辑权失效（续租或保存得知，续上没有成功；本机锁被抢或拿锁时核对得知已被取代，或者这一代自己失效、交给租约之后续不上）。编辑、退出编辑时
    * 转入失去编辑权；进入编辑还在申请、拿锁、取内容（只读的编辑器还在）时放弃进入、留在阅读；正在新建可编辑的编辑器时等它建好、进入编辑之后再处理
-   * （与 P1 一样：建好之后随即停住）。本机锁被抢之后还没有结论时（核对中、等心跳）得知被本人接管的，抢走锁的正是本浏览器的另一个标签页，
-   * 按 supersededLoss 说；别的照服务端说（M3-P6 设计 §3.13，复验 E2）——只是服务端的被本人接管不说在哪：锁还没被抢时按本机的证据定
-   * （locateTakeover，失去编辑权、没能进入编辑的说明等它）
+   * （与 P1 一样：建好之后随即停住）。本机证据先保留作退路；被本人接管的位置以另读的服务端 sameSession 为准（locateTakeover），
+   * 失去编辑权、没能进入编辑的说明等定位；强制接管等其他失效保持原原因。
    */
   function lost(reported: LeaseLoss): void {
     if (disposed)
@@ -1279,17 +1272,23 @@ export function createEditMode(options: EditModeOptions): EditMode {
       void lose(loss.kind === 'handed-over' && loss.to === undefined && incoming !== undefined ? { kind: 'handed-over', to: incoming.requester } : loss)
     }
     else if (mode.kind === 'entering' && slot.editor() !== undefined) {
-      // 进入的这一次随即作废（仍挡着输入）；在哪定了（本人接管、锁还拿着时至多等 TAKEOVER_STEAL_WAIT_MS）再回到阅读、说明没能进入编辑
+      // 进入的这一次随即作废（仍挡着输入）；位置定了再回到阅读、说明没能进入编辑
       editing.detachLease()
       const token = begin({ ...mode })
-      void editing.locateTakeover(loss, TAKEOVER_STEAL_WAIT_MS).then((here) => {
+      void locateTakeover(loss).then((located) => {
         if (still(token))
-          begin({ ...readingBefore, notice: { kind: 'enter-lost', loss: here ? TAKEN_OVER_HERE : loss } })
+          begin({ ...readingBefore, notice: { kind: 'enter-lost', loss: located } })
       })
     }
     else if (mode.kind === 'entering' || mode.kind === 'opening') {
       pendingLoss = loss
     }
+  }
+
+  /** 先捕获本次旧锁的证据工作，再并行问服务端；迟到定位从不触碰新会话的资源。 */
+  async function locateTakeover(loss: LeaseLoss): Promise<LeaseLoss> {
+    const local = editing.locateTakeover(loss, TAKEOVER_STEAL_WAIT_MS)
+    return resolveTakeoverLoss(loss, async () => api.editStatus(documentId), local)
   }
 
   /**
@@ -1484,7 +1483,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
     if (started === 'lost') {
       // 这一代自己失效、续不上：照常以只读打开，说明没能进入编辑（编辑权已失效、服务端的原因）
-      readingBefore = readingAfterLostClaim()
+      const reading = await readingAfterLostClaim()
+      if (!still(token))
+        return { kind: 'opened', entered: false, damaged: false }
+      readingBefore = reading
       return undefined
     }
     if (mode.kind === 'failed')
@@ -1497,10 +1499,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 拿锁时核对得知这一代自己失效了、交给租约之后续不上（startEditing 交回 lost，复验 E2）：回到阅读、说明没能进入编辑（编辑权已失效，服务端的原因）。
    * 租约已经通知过：直接进入编辑的打开记在 pendingLoss（这里取走）；进入编辑时页面已经由 lost() 回到阅读、开始了别的事，走不到这里
    */
-  function readingAfterLostClaim(): SettledReading {
+  async function readingAfterLostClaim(): Promise<SettledReading> {
+    const reading = readingBefore
     const loss = pendingLoss
     pendingLoss = undefined
-    return { ...readingBefore, interruption: undefined, releaseUnconfirmed: false, notice: loss === undefined ? undefined : { kind: 'enter-lost', loss } }
+    const located = loss === undefined ? undefined : await locateTakeover(loss)
+    return { ...reading, interruption: undefined, releaseUnconfirmed: false, notice: located === undefined ? undefined : { kind: 'enter-lost', loss: located } }
   }
 
   /**
@@ -1612,8 +1616,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
     if (started === 'superseded' && still(token))
       begin({ ...readingBefore, interruption: undefined, releaseUnconfirmed: false })
     // 这一代自己失效、续不上（复验 E2）：页面多半已经由租约的通知回到阅读；还在进入时同样说明没能进入编辑
-    if (started === 'lost' && still(token))
-      begin(readingAfterLostClaim())
+    if (started === 'lost' && still(token)) {
+      const reading = await readingAfterLostClaim()
+      if (still(token))
+        begin(reading)
+    }
     return started === 'entered'
   }
 
@@ -1676,8 +1683,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
   async function lose(loss: LeaseLoss): Promise<void> {
     const token = begin({ kind: 'losing', loss })
     editing.detachLease()
-    // 放下本机锁；服务端说被本人接管时先按本机的证据定在哪（锁还拿着就留着等本浏览器里接手的那一页来抢，至多 TAKEOVER_STEAL_WAIT_MS）
-    const here = editing.locateTakeover(loss, TAKEOVER_STEAL_WAIT_MS)
+    // 本机证据收集负责旧锁的收尾；位置优先取服务端 sameSession，查询与保留内容同时进行。
+    const location = locateTakeover(loss)
     // 离开编辑的途中失去编辑权：等着接手的标签页以锁空了为信号（放下了、或者留着等的那一会儿之后），不再另外告诉它们
     tabs.forget()
     stopWatchingIdle()
@@ -1711,8 +1718,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
     if (snapshot === undefined) {
       // 捕获失败：编辑器留着（用户还能复制出来），不自动重建，不给副本（P2 设计 §7 的风险表）。有没有没保存的修改照保存的状态机说
       // （离开提示随之）
-      if (await here)
-        shownLoss = TAKEN_OVER_HERE
+      const located = await location
+      if (loss.kind === 'taken-over')
+        shownLoss = located
       if (!still(token))
         return
       begin({ ...lostMode, loss: shownLoss, unsaved: saver?.hasUnsavedWork() ?? false, captureFailed: true })
@@ -1733,9 +1741,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
       openCheckOf(created, { access: 'read', trigger: 'lost', revision: saver?.baseRevision() ?? editing.baseRevision() })
       slot.attach(created)
     }
-    // 在哪定了才给说明（真是别处接手时至多晚 TAKEOVER_STEAL_WAIT_MS：这期间以只读显示本页的内容，页头说正在保留本页的内容）
-    if (await here)
-      shownLoss = TAKEN_OVER_HERE
+    // 在哪定了才给说明；这期间以只读显示本页的内容，页头说正在保留本页的内容。
+    const located = await location
+    if (loss.kind === 'taken-over')
+      shownLoss = located
     if (!still(token))
       return
     // 结果未知的保存：还读得到时先原样重发它，核对它其实提交了没有（读不到了时核对不了：重放也要求能访问）

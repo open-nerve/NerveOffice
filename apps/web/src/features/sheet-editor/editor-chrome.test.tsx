@@ -443,7 +443,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(note.closest('[role="status"], [role="alert"], [aria-live]')).toBeNull()
     expect(note.closest('[aria-hidden="true"], .sr-only')).toBeNull()
     // 只能查看的人同样有；别人在编辑时同样有，谁在编辑的说明照旧在读屏状态区里、不带上这一句
-    fake.set({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 1 } } })
+    fake.set({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 } } })
     expect(screen.getByText(NOTE)).toBe(note)
     expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前）')
 
@@ -520,22 +520,22 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     fake.set({ mode: { ...READING, update: 'loading' } })
     expect(infoRegion()).toBe(region)
     expect(region).toHaveTextContent('正在载入最新的版本…')
-    fake.set({ mode: { ...READING, update: 'available', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } } })
+    fake.set({ mode: { ...READING, update: 'available', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 2 } } })
     expect(region).toHaveTextContent('@amy 艾米 正在编辑这份文档（最后活动 2 分钟前），你现在只能阅读 这份文档有更新的版本')
     fake.set({ mode: READING })
     expect(region).toBeEmptyDOMElement()
   })
 
   it('本页刚退出编辑、没能确认放掉编辑权时读到"自己在别处编辑"：如实说是本页刚退出（审查 A13），不说成另一个标签页或设备；这一页可以直接"在此编辑"', () => {
-    const fake = renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
+    const fake = renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
     expect(infoRegion().textContent).toBe('本页刚退出编辑，编辑权还没能确认放掉：最多 90 秒后自动结束，这期间别人还不能编辑；这一页可以直接点"在此编辑"')
     expect(screen.getByRole('button', { name: '在此编辑' })).toBeInTheDocument()
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: false } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }, selfHolder: 'elsewhere', releaseUnconfirmed: false } })
     expect(infoRegion()).toHaveTextContent('你在另一台设备或浏览器上正在编辑这份文档（也可能是刚关闭、刷新过的页面）')
   })
 
   it('与服务端不兼容的阅读（没有"编辑"）读到"自己在别处编辑"：照样说是本页刚退出或在别处，不提"在此编辑"（M3-P3 审查 B8：停住续租之后的那次释放没送到）', () => {
-    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const self = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
     const fake = renderChrome({ mode: { ...READING, blocked: 'client-outdated', holder: self, selfHolder: 'elsewhere', releaseUnconfirmed: true }, save: undefined })
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
     expect(screen.queryByRole('button', { name: '在此编辑' })).toBeNull()
@@ -550,7 +550,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     const fake = renderChrome({ load: { kind: 'loading' }, mode: undefined, save: undefined })
     const region = infoRegion()
     expect(region).toBeEmptyDOMElement()
-    fake.set({ load: READY, mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } } })
+    fake.set({ load: READY, mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 3 } } })
     expect(infoRegion()).toBe(region)
     expect(region).toHaveTextContent('@amy 艾米 正在编辑这份文档（最后活动 3 分钟前），你现在只能阅读')
     expect(within(region).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
@@ -564,12 +564,12 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     ['不到 1 分钟', 0, '@amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前），你现在只能阅读'],
     ['服务端没给出回答的时刻', undefined, '@amy 艾米 正在编辑这份文档，你现在只能阅读'],
   ])('最后活动%s', (_case, minutes, text) => {
-    renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: minutes } }, save: undefined })
+    renderChrome({ mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: minutes } }, save: undefined })
     expect(infoRegion()).toHaveTextContent(text)
   })
 
   it('是自己（M3-P5 设计 §3.7）：本机锁在本浏览器里有人持有时说在本浏览器的另一个标签页里、点"在此编辑"那边先保存再交出；不在本浏览器时说在另一台设备或浏览器上（也可能是刚关闭、刷新过的页面）、点了那边失去编辑权——不再建议"等 90 秒再点编辑"', () => {
-    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const self = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
     const fake = renderChrome({ mode: { ...READING, holder: self, selfHolder: 'this-browser' }, save: undefined })
     expect(infoRegion().textContent).toBe('你在本浏览器的另一个标签页里正在编辑这份文档。点"在此编辑"，那个标签页会先保存，再把编辑权交给这里')
     fake.set({ mode: { ...READING, holder: self, selfHolder: 'elsewhere' } })
@@ -578,7 +578,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   })
 
   it('是自己、刚关闭或刷新的页面还有一次保存在进行（审查 B §七）：照实说在等它存完，不提"那边会失去编辑权、另存为副本"；按钮照旧是"在此编辑"；不能编辑时只说只能阅读', () => {
-    const self = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+    const self = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
     const fake = renderChrome({ mode: { ...READING, holder: self, selfHolder: 'just-closed' }, save: undefined })
     expect(infoRegion().textContent).toBe('你刚关闭或刷新的页面还有一次保存在进行。点"在此编辑"会先等它存完（至多 30 秒）再接着编辑')
     expect(infoRegion()).not.toHaveTextContent('失去编辑权')
@@ -592,7 +592,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   it('是自己：按钮一律换成"在此编辑"（同一个按钮，不是另加一个），点了交给页面的本人接管，不是"编辑"', () => {
     const fake = renderChrome({ mode: READING, save: undefined })
     const enter = screen.getByRole('button', { name: '编辑' })
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 }, selfHolder: 'this-browser' } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: true, sameSession: true, lastActiveMinutes: 0 }, selfHolder: 'this-browser' } })
     expect(screen.getByRole('button', { name: '在此编辑' })).toBe(enter)
     expect(screen.queryByRole('button', { name: '编辑' })).toBeNull()
     expect(enter).toHaveAttribute('aria-disabled', 'false')
@@ -600,7 +600,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(fake.page.takeOverHere).toHaveBeenCalledOnce()
     expect(fake.page.enterEditing).not.toHaveBeenCalled()
     // 持有者是别人：同一个按钮是"请求编辑"（M3-P5 设计 §3.6）；没人在编辑时回到"编辑"
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 } } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 0 } } })
     expect(screen.getByRole('button', { name: '请求编辑' })).toBe(enter)
     fake.set({ mode: READING })
     expect(screen.getByRole('button', { name: '编辑' })).toBe(enter)
@@ -612,7 +612,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   })
 
   it('只能查看的人（查看者、归档空间）同样看到谁在编辑、最后活动几分钟之前（US-M3-04 的"其他人"），不说"你现在只能阅读"（页头已经说只能查看），没有"编辑"', () => {
-    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 1 } }, save: undefined })
+    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 } }, save: undefined })
     const region = infoRegion()
     expect(region.textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前）')
     expect(within(region).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
@@ -622,7 +622,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
   })
 
   it('不能编辑了、读到的持有者还是自己（自己那一代随之失效，还没读到新的编辑状态）：照别人一样说谁在编辑，不提"再点编辑就能编辑"', () => {
-    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, save: undefined })
+    renderChrome({ mode: { ...READING, canEdit: false, holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 } }, save: undefined })
     expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前）')
   })
 
@@ -844,8 +844,8 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     ['编辑权被收回', { kind: 'lease', reason: 'revoked' }, '编辑权已失效：你对这份文档的编辑权被收回了。'],
     ['不认识的原因', { kind: 'lease', reason: undefined }, '编辑权已失效。'],
     ['不能编辑了（403，原因由服务端给出）', { kind: 'denied', error: new ApiError(403, 'PERMISSION_DENIED', '只能查看这份文档，不能编辑') }, '编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。'],
-    ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 2 } }, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。'],
-    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档。'],
+    ['续上时别人正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 2 } }, '编辑权已失效：@amy 艾米 正在编辑这份文档（最后活动 2 分钟前）。'],
+    ['续上时自己在别处正在编辑', { kind: 'held', holder: { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 } }, '编辑权已失效：你在另一个标签页或设备上正在编辑这份文档。'],
     ['续上时被占用、详情认不出', { kind: 'held', holder: undefined }, '编辑权已失效：这份文档正在别处编辑。'],
     ['续上时别处保存过更新的版本', { kind: 'newer' }, '编辑权已失效：编辑权中断期间，别处保存了更新的版本，本页不能再覆盖它。'],
     ['本人在本浏览器的另一个标签页接手了编辑（本机锁被抢，M3-P5）', { kind: 'taken-over', where: 'this-browser' }, '编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。'],
@@ -862,7 +862,7 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
   })
 
   it('续上时别人正在编辑：人名经人名组件（登录名在前，显示名隔离）', () => {
-    renderChrome({ mode: lost({ kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: undefined } }), save: undefined })
+    renderChrome({ mode: lost({ kind: 'held', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: undefined } }), save: undefined })
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('编辑权已失效：@amy 艾米 正在编辑这份文档。本页的修改没有保存')
     expect(within(alert).getByText('@amy')).toHaveAttribute('data-slot', 'person-username')
@@ -891,7 +891,7 @@ describe('模式切换与按钮消失时的焦点（审查 A2，规范 §2.4）'
     expect(enter).toHaveAttribute('aria-busy', 'true')
     expect(document.activeElement).toBe(enter)
     // 被别人占着：同一个按钮换成"请求编辑"（M3-P5），焦点还在它上面
-    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 } } })
+    fake.set({ mode: { ...READING, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 0 } } })
     expect(screen.getByRole('button', { name: '请求编辑' })).toBe(enter)
     expect(enter).toHaveAttribute('aria-disabled', 'false')
     expect(document.activeElement).toBe(enter)
@@ -1317,7 +1317,7 @@ describe('打开自检失败的阅读（M3-P4 设计 §3.12，US-M3-15）', () =
 })
 
 describe('本人接管："在此编辑"（M3-P5 设计 §3.7、§3.11，US-M3-08）', () => {
-  const SELF = { holder: AMY, sameUser: true, lastActiveMinutes: 0 }
+  const SELF = { holder: AMY, sameUser: true, sameSession: false, lastActiveMinutes: 0 }
   const HERE: ReadingMode = { ...READING, holder: SELF, selfHolder: 'this-browser' }
 
   /** 页头里的按钮：文字、是否可用、是否进行中 */
@@ -1436,7 +1436,7 @@ describe('离开编辑与空闲释放（M3-P5 设计 §3.10、§3.11）', () => 
     expect(screen.getAllByRole('status')).toHaveLength(statusCount)
     expect(screen.queryByRole('alert')).toBeNull()
     expect(screen.getByRole('button', { name: '编辑' })).toBeInTheDocument()
-    fake.set({ mode: { ...READING, notice: { kind: 'idle-released' }, holder: { holder: AMY, sameUser: false, lastActiveMinutes: 0 }, formulasPending: true } })
+    fake.set({ mode: { ...READING, notice: { kind: 'idle-released' }, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 0 }, formulasPending: true } })
     expect(region.textContent).toBe('10 分钟没有操作，已保存并释放编辑权 @amy 艾米 正在编辑这份文档（最后活动不到 1 分钟前），你现在只能阅读 这份表格的公式结果可能还没更新（上次保存时公式还没算完），进入编辑之后会自动重算并保存')
   })
 
@@ -1454,7 +1454,7 @@ describe('离开编辑与空闲释放（M3-P5 设计 §3.10、§3.11）', () => 
 describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
   const BEN = { id: '0199a2c4-0000-7000-8000-0000000000e2', username: 'ben', displayName: '本' }
   /** 艾米在编辑 */
-  const AMY_HOLDS = { holder: AMY, sameUser: false, lastActiveMinutes: 1 }
+  const AMY_HOLDS = { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 }
   const OTHERS: ReadingMode = { ...READING, holder: AMY_HOLDS }
   /** 持有者这一侧：本在请求编辑 */
   const INCOMING: IncomingRequest = { id: '0199a2c4-0000-7000-8000-0000000000f1', requester: BEN, declining: false, failure: undefined }
@@ -1667,7 +1667,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
 describe('强制接管（M3-P5 设计 §3.8、§3.11，US-M3-09）', () => {
   const BEN = { id: '0199a2c4-0000-7000-8000-0000000000e2', username: 'ben', displayName: '本' }
   /** 艾米在编辑（最后活动 3 分钟前） */
-  const AMY_HOLDS = { holder: AMY, sameUser: false, lastActiveMinutes: 3 }
+  const AMY_HOLDS = { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 3 }
   /** 能强制接管的人在阅读，艾米在编辑 */
   const ADMIN: ReadingMode = { ...READING, canTakeOver: true, holder: AMY_HOLDS }
   /** 团队空间里的文档（能强制接管的是空间管理员） */

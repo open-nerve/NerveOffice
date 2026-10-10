@@ -4,7 +4,7 @@ import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
 import { EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from '../../shared/api/index.ts'
-import { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
+import { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseHolderOf, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
@@ -46,6 +46,17 @@ const UNKNOWN_OUTCOMES = [
   ['5xx', new ApiError(503, 'SERVICE_UNAVAILABLE', '服务暂时不可用')],
   ['回包读不出来', new ResponseFormatError('POST /edit-lease 的响应与契约不一致')],
 ] as const
+
+describe('持有者保留服务端登录位置（DEF-071）', () => {
+  it.each([true, false])('正常编辑状态与申请被占用都传递 sameSession=%s', async (sameSession) => {
+    const holder = { ...SELF_HELD, sameSession }
+    expect(leaseHolderOf(holder, undefined)).toMatchObject({ holder: AMY, sameUser: true, sameSession })
+    const context = setup({ acquire: async () => Promise.reject(heldError(holder)) })
+    const acquiring = acquireEditLease(context.options)
+    await context.time.advance(SAME_USER_RETRIES * SAME_USER_RETRY_DELAY_MS)
+    expect(await acquiring).toMatchObject({ kind: 'held', holder: { sameUser: true, sameSession } })
+  })
+})
 
 /** 由测试决定何时完成的 Promise */
 function deferred<T>() {
@@ -170,7 +181,7 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
   it('被占用（别人）：给出持有者、不是自己，以及按服务端的时间算的最后活动几分钟之前（向下取整）；不再试', async () => {
     const serverTime = Date.UTC(2026, 9, 4, 3, 10, 0)
     const context = setup({ acquire: vi.fn(async () => Promise.reject(heldError({ holder: AMY, lastActiveAt: '2026-10-04T03:06:30.000Z', sameUser: false, sameSession: false, canTakeOver: false, request: null }, serverTime))) })
-    expect(await acquireEditLease(context.options)).toEqual({ kind: 'held', holder: { holder: AMY, sameUser: false, lastActiveMinutes: 3 } })
+    expect(await acquireEditLease(context.options)).toEqual({ kind: 'held', holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 3 } })
     expect(context.api.acquire).toHaveBeenCalledOnce()
     expect(context.time.pending()).toBe(0)
   })
