@@ -42,6 +42,19 @@ export async function withClient<T>(fn: (client: pg.Client) => Promise<T>, conne
   }
 }
 
+/** 准备模板、清理和复制共用这把锁；造模板的夹具也要等持有连接建立后再放锁，避免准备到一半被清理。 */
+export async function withTemplateLock<T>(fn: (client: pg.Client) => Promise<T>): Promise<T> {
+  return withClient(async (client) => {
+    await client.query(TEMPLATE_LOCK)
+    try {
+      return await fn(client)
+    }
+    finally {
+      await client.query(TEMPLATE_UNLOCK)
+    }
+  })
+}
+
 export interface TestDatabase {
   readonly name: string
   readonly url: string
@@ -175,18 +188,12 @@ async function sweepInvariants(url: string): Promise<string | undefined> {
  */
 export async function createTestDatabase(options: { migrated?: boolean } = {}): Promise<TestDatabase> {
   const name = testDatabaseName()
-  await withClient(async (client) => {
-    await client.query(TEMPLATE_LOCK)
-    try {
-      await dropAbandoned(client)
-      const template = options.migrated === false ? undefined : await ensureTemplate(client)
-      await client.query(template === undefined
-        ? `CREATE DATABASE ${pg.escapeIdentifier(name)}`
-        : `CREATE DATABASE ${pg.escapeIdentifier(name)} TEMPLATE ${pg.escapeIdentifier(template)}`)
-    }
-    finally {
-      await client.query(TEMPLATE_UNLOCK)
-    }
+  await withTemplateLock(async (client) => {
+    await dropAbandoned(client)
+    const template = options.migrated === false ? undefined : await ensureTemplate(client)
+    await client.query(template === undefined
+      ? `CREATE DATABASE ${pg.escapeIdentifier(name)}`
+      : `CREATE DATABASE ${pg.escapeIdentifier(name)} TEMPLATE ${pg.escapeIdentifier(template)}`)
   })
   const url = databaseUrl(name)
   return {

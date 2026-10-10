@@ -133,7 +133,9 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）：只有应用进程�
       const ready = await api.waitForLog(entry => entry.msg === '本机密钥的主密钥已就绪')
       expect(ready).toMatchObject({ level: 'info', masterKeyId: expect.stringMatching(/^[\da-f]{32}$/) as unknown, currentKeys: 0 })
       api.kill('SIGTERM')
-      expect((await api.exited).code).toBe(0)
+      expect(await api.exited).toEqual({ code: 0, signal: null })
+      await api.waitForLog(entry => entry.msg === '开始退出' && entry.reason === 'SIGTERM')
+      await api.waitForLog(entry => entry.msg === '已退出' && entry.result === 'graceful')
       expect(api.output()).not.toContain(key)
     }
     finally {
