@@ -22,6 +22,7 @@ import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { AutosavePage, AutosaveView } from './autosave.ts'
 import type { LeaseClock } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
+import type { EditingSessionOptions } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
 import type { HandoverTrace } from './handover-trace.ts'
@@ -131,6 +132,8 @@ export interface EditIntent {
 }
 
 export interface EditorPageOptions {
+  /** 持久宿主/密钥的测试接缝；生产不传。部署开关始终来自实际会话响应。 */
+  readonly localDrafts?: Omit<NonNullable<EditingSessionOptions['localDrafts']>, 'enabled'> | undefined
   /** 地址里的文档 id；地址不是编辑器页的写法时为 undefined，按不存在处理 */
   readonly documentId: string | undefined
   /** Univer 挂载的容器；页面的状态写在它的 data-editor-state 上（loading、ready、steady、failed），E2E 按它等待 */
@@ -253,6 +256,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let load: EditorPageLoad = { kind: 'loading' }
   let session: EditorPageSession = 'active'
   let userId: string | undefined
+  let localDraftsEnabled = false
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
   /** 阅读与编辑（载入之后才有） */
@@ -537,6 +541,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     else if (confirmed.user.id === userId) {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
       setCsrfToken(confirmed.csrfToken)
+      localDraftsEnabled = confirmed.features.localDraftsEnabled
       enterSession('active')
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
       // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存。例外：续租连着第二次起被判会话不对（服务端一直拒绝、
@@ -584,6 +589,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       documentId: id,
       clientInstanceId,
       userId: user,
+      localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled },
       api,
       createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
       clock,
@@ -655,6 +661,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         signedIn = await api.session()
         setCsrfToken(signedIn.csrfToken)
         userId = signedIn.user.id
+        localDraftsEnabled = signedIn.features.localDraftsEnabled
         // 确认会话的回包之前别的标签页登录或退出了：消息当时没法处理，现在补确认一次
         if (checkWhenLoaded)
           void recheckSession()

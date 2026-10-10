@@ -47,6 +47,8 @@ export interface LocalLockOptions {
   readonly lose: (loss: LeaseLoss) => Promise<LeaseOutcome>
   /** 锁被抢之后核对得知这一代已被别的一代取代：页面放弃这一代、失去编辑权（loss 是服务端说的原因） */
   readonly onSuperseded: (loss: LeaseLoss) => void
+  /** 写入资格变化先同步通知；被抢时先停本机写入，再向服务端核对。 */
+  readonly onHeldChange?: ((held: boolean) => void) | undefined
   /** 被抢的时刻、观察钩子的时刻（编辑模式的单调时钟，与租约的同一个） */
   readonly clock: LeaseClock
   /** 测试构建的观察钩子（handover-trace.ts）：锁被抢、核对的裁决；生产不给 */
@@ -94,6 +96,7 @@ const RELEASED: LockClaim = { kind: 'released' }
 export function holdLocalLock(options: LocalLockOptions): LocalLock {
   const { browser, clock } = options
   let phase: Phase = 'idle'
+  let notifiedHeld = false
   let handle: HeldLock | undefined
   /** 最近一次被抢的时刻：之后发出的续租成功才说明得了现在 */
   let stolenAt = Number.NEGATIVE_INFINITY
@@ -109,11 +112,20 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
     return phase
   }
 
+  function notifyHeld(): void {
+    const held = now() === 'held'
+    if (held === notifiedHeld)
+      return
+    notifiedHeld = held
+    options.onHeldChange?.(held)
+  }
+
   /** 放下（见 LocalLock 的 release）：拿着的随即放开；留着锁等被抢的随即以 false 结束 */
   function release(): void {
     phase = 'released'
     const taken = handle
     handle = undefined
+    notifyHeld()
     taken?.release()
     finishYield?.(false)
   }
@@ -125,6 +137,9 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
   async function yieldUntil(until: number): Promise<boolean> {
     const kept = handle
     phase = 'yielding'
+    notifyHeld()
+    if (now() === 'released')
+      return false
     return new Promise<boolean>((resolve) => {
       let cancel: () => void = () => {}
       const finish = (taken: boolean): void => {
@@ -177,7 +192,8 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
     phase = 'held'
     handle = taken
     void taken.stolen.then(async () => stolen(taken))
-    return true
+    notifyHeld()
+    return now() === 'held' && handle === taken
   }
 
   /**
@@ -201,6 +217,9 @@ export function holdLocalLock(options: LocalLockOptions): LocalLock {
     handle = undefined
     phase = 'verifying'
     stolenAt = clock.now()
+    notifyHeld()
+    if (now() !== 'verifying')
+      return
     options.trace?.({ kind: 'lock-stolen', at: stolenAt })
     const verdict = await options.confirm()
     if (now() !== 'verifying')

@@ -62,6 +62,34 @@ async function text(body: Uint8Array<ArrayBuffer>): Promise<string> {
 }
 
 describe('保存协调与唯一工作草稿整合', () => {
+  it.each([false, true])('本机栅栏裁决回调未完成不能发 HTTP；裁决后停止=%s', async (stopped) => {
+    const draft = createMemoryWorkingDraft({ ...DRAFT_OPTIONS, reason: 'disabled' })
+    const context = setup(draft)
+    vi.spyOn(draft, 'markInFlight').mockResolvedValueOnce({ kind: 'fenced', reason: 'not-writer' })
+    const verdict = deferred<void>()
+    context.onDraftResult.mockImplementationOnce(async () => {
+      await verdict.promise
+      if (stopped)
+        context.coordinator.stop()
+    })
+    context.capture('等待裁决的内容')
+    const saving = context.coordinator.save(context.latest, EXPLICIT)
+    await vi.waitFor(() => expect(context.onDraftResult).toHaveBeenCalledOnce())
+    expect(context.sends).toHaveLength(0)
+    verdict.resolve()
+    if (stopped) {
+      expect(await saving).toMatchObject({ kind: 'skipped', reason: 'stopped' })
+      expect(context.sends).toHaveLength(0)
+    }
+    else {
+      const call = await context.sent(1)
+      call.result.resolve(saved(8))
+      expect(await saving).toMatchObject({ kind: 'saved' })
+    }
+    context.coordinator.dispose()
+    draft.dispose()
+  })
+
   it('未知 HTTP 已结束后才认出已提交，后续保存等本机确认并释放旧 pin', async () => {
     const h = await persistentHarness()
     const draft = createPersistentWorkingDraft(h.options)

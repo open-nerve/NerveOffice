@@ -3,7 +3,7 @@ import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { DraftKey } from '../../../shared/outbox/draft-record.ts'
 import type { CaptureWritten, KeyChange, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
-import type { DraftWriteInput, WrittenDraftContent } from '../working-draft-source.ts'
+import type { DraftRetention, DraftWriteInput, WrittenDraftContent } from '../working-draft-source.ts'
 import type { DraftCaptureRef, DraftMemoryReason, WorkingDraft, WorkingDraftOptions } from '../working-draft.ts'
 import type { OutboxPreparation, OutboxSession, OutboxSessionState } from './outbox-session.ts'
 import { gzipBytes } from '../../../shared/outbox/draft-codec.ts'
@@ -20,6 +20,8 @@ export interface PersistentWorkingDraft extends WorkingDraft {
   readonly suspend: () => void
   readonly resume: () => Promise<OutboxPreparation>
   readonly setKey: (key: LocalKeyHandle | undefined) => Promise<KeyChange>
+  /** 先同步停写/取钥，保留正文后关闭旧宿主；保留失败也必须释放旧钥。 */
+  readonly discardKey: () => Promise<DraftRetention>
 }
 
 interface StoredContent {
@@ -230,6 +232,22 @@ export function createPersistentWorkingDraft(options: PersistentWorkingDraftOpti
       session.suspend()
       // 内部保留只交回元数据，已完成的 Promise 不另持有正文。
       void source.retainLatest('paused')
+    },
+    discardKey: async () => {
+      if (disposed)
+        return { kind: 'disposed' }
+      generation += 1
+      paused = true
+      changingKey = false
+      last = undefined
+      const finish = session.beginKeyDiscard()
+      try {
+        return await source.retainLatest('paused')
+      }
+      finally {
+        // 即使保留失败、销毁或开始了新一代，仍须关闭这个旧宿主；finish 绑定身份，不能碰新宿主。
+        finish()
+      }
     },
     resume: async () => {
       if (disposed)

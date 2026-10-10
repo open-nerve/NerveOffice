@@ -43,6 +43,8 @@ export interface OutboxSession {
   /** 原写入资格仍有效时在原宿主取新钥，保留其重封缓存；没有可续用宿主才交回 no-host。 */
   readonly refreshKey: () => Promise<KeyChange | { readonly kind: 'no-host' }>
   readonly suspend: () => void
+  /** 同步停准备、写入和 recovery；保留原宿主供最后读回。返回的幂等收尾只关闭这个旧宿主，不能影响之后 resume 的宿主。 */
+  readonly beginKeyDiscard: () => () => void
   /** 每次调用至多准备一次，不自行重试；并发调用共用正在进行的准备。 */
   readonly resume: () => Promise<OutboxPreparation>
   readonly dispose: () => void
@@ -51,7 +53,7 @@ export interface OutboxSession {
 export interface OutboxSessionOptions {
   readonly enabled: boolean
   readonly key: DraftKey
-  readonly writeEpoch: number
+  readonly writeEpoch: number | (() => number)
   readonly newWriterId: () => string
   readonly keeper: LocalKeyKeeper
   readonly confirm: () => Promise<LeaseVerdict>
@@ -69,6 +71,7 @@ interface PreparedHost {
 }
 
 interface PreparationRun {
+  readonly writeEpoch: number
   readonly generation: number
   readonly controller: AbortController
   readonly promise: Promise<OutboxPreparation>
@@ -104,6 +107,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   let keyChange = 0
   let disposed = false
   let suspended = false
+  let recoveringAllowed = true
   let persistenceRequested = false
   let persistence: PersistOutcome | undefined
   let initial: Promise<OutboxPreparation>
@@ -123,8 +127,27 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     return !disposed
   }
 
+  function writeEpoch(): number {
+    return typeof options.writeEpoch === 'number' ? options.writeEpoch : options.writeEpoch()
+  }
+
+  /** 新租约不能沿用旧宿主的登记；旧宿主仅留给临时读回，恢复时再核对并登记。 */
+  function checkEpoch(): void {
+    if (!live())
+      return
+    const epoch = writeEpoch()
+    if ((pending !== undefined && pending.writeEpoch !== epoch) || (state.kind === 'ready' && active !== undefined && active.writer.writeEpoch !== epoch)) {
+      const lastDraftSeq = state.kind === 'ready' || state.kind === 'memory' ? state.lastDraftSeq : undefined
+      suspended = true
+      stop({ kind: 'memory', reason: 'fenced', ...(lastDraftSeq === undefined ? {} : { lastDraftSeq }) })
+    }
+  }
+
   function current(run: PreparationRun): boolean {
-    return live() && !suspended && generation === run.generation
+    if (!live() || generation !== run.generation)
+      return false
+    checkEpoch()
+    return !suspended && generation === run.generation
   }
 
   function finish(run: PreparationRun, result: OutboxPreparation, prepared?: PreparedHost): OutboxPreparation {
@@ -210,7 +233,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
         return finish(run, { kind: 'memory', reason: 'no-key' })
       if (set.kind === 'failed')
         return finish(run, { kind: 'memory', reason: host.broken() ? 'worker-failed' : 'unavailable', problem: set })
-      let writer: WriterIdentity = { writeEpoch: options.writeEpoch, writerId: options.newWriterId() }
+      let writer: WriterIdentity = { writeEpoch: run.writeEpoch, writerId: options.newWriterId() }
       let registered = await host.writer.register(options.key, writer, false)
       if (!current(run))
         return finish(run, { kind: 'disposed' })
@@ -225,7 +248,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
           return finish(run, stopped)
         if (options.keeper.current() !== key)
           return finish(run, { kind: 'memory', reason: 'no-key' })
-        writer = { writeEpoch: options.writeEpoch, writerId: options.newWriterId() }
+        writer = { writeEpoch: run.writeEpoch, writerId: options.newWriterId() }
         registered = await host.writer.register(options.key, writer, true)
         if (!current(run))
           return finish(run, { kind: 'disposed' })
@@ -252,13 +275,14 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     close(active?.host)
     active = undefined
     suspended = false
+    recoveringAllowed = true
     state = { kind: 'preparing' }
     generation += 1
     let resolve!: (result: OutboxPreparation) => void
     const promise = new Promise<OutboxPreparation>((done) => {
       resolve = done
     })
-    const run: PreparationRun = { generation, controller: new AbortController(), promise, host: undefined, stopped: undefined }
+    const run: PreparationRun = { writeEpoch: writeEpoch(), generation, controller: new AbortController(), promise, host: undefined, stopped: undefined }
     pending = run
     void prepare(run, verify).then(resolve)
     void promise.finally(() => {
@@ -269,6 +293,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   }
 
   function writable(): PreparedHost | undefined {
+    checkEpoch()
     if (!live() || suspended || state.kind !== 'ready' || active?.host.broken() !== false || active.installedKey === undefined || active.installedKey !== options.keeper.current())
       return undefined
     return active
@@ -284,13 +309,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     return result
   }
 
-  function dispose(): void {
-    if (disposed)
-      return
-    disposed = true
-    stop({ kind: 'disposed' })
-    close(active?.host)
-    active = undefined
+  function closeRecoveries(): void {
     for (const [controller, host] of recoveries) {
       controller.abort()
       close(host)
@@ -298,11 +317,22 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     recoveries.clear()
   }
 
+  function dispose(): void {
+    if (disposed)
+      return
+    disposed = true
+    stop({ kind: 'disposed' })
+    close(active?.host)
+    active = undefined
+    closeRecoveries()
+  }
+
   const session: OutboxSession = {
     ready: async () => initial,
     view: () => {
       if (!live())
         return { kind: 'disposed' }
+      checkEpoch()
       if (state.kind === 'ready') {
         if (active?.host.broken() !== false)
           return { kind: 'memory', reason: 'worker-failed' }
@@ -330,7 +360,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       return active.host.writer.read(options.key)
     },
     readRecovered: async () => {
-      if (!live() || !options.enabled || !(options.supported ?? supported)())
+      if (!live() || !recoveringAllowed || !options.enabled || !(options.supported ?? supported)())
         return { kind: 'failed', error: INACTIVE }
       const controller = new AbortController()
       recoveries.set(controller, undefined)
@@ -365,6 +395,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
         await target.host.writer.seedDigest(options.key, seed)
     },
     setKey: async (handle) => {
+      checkEpoch()
       if (!live() || suspended || state.kind !== 'ready' || active === undefined || active.host.broken() || (handle !== undefined && handle !== options.keeper.current()))
         return { kind: 'failed', error: INACTIVE }
       const target = active
@@ -372,6 +403,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       const change = ++keyChange
       target.installedKey = undefined
       const result = await target.host.writer.setKey(handle)
+      checkEpoch()
       if (!live() || suspended || generation !== started || active !== target || keyChange !== change || (handle !== undefined && handle !== options.keeper.current()))
         return { kind: 'failed', error: INACTIVE }
       if (result.kind === 'key-set')
@@ -381,12 +413,14 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     refreshKey: async () => {
       if (!live())
         return { kind: 'failed', error: INACTIVE }
+      checkEpoch()
       if (suspended || state.kind !== 'ready' || active === undefined || active.host.broken())
         return { kind: 'no-host' }
       const target = active
       const started = generation
       const change = keyChange
       const key = await options.keeper.ensure()
+      checkEpoch()
       if (!live() || suspended || generation !== started || keyChange !== change || active !== target || target.host.broken() || 'kind' in key || options.keeper.current() !== key)
         return { kind: 'failed', error: INACTIVE }
       return session.setKey(key)
@@ -397,9 +431,23 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       suspended = true
       stop({ kind: 'memory', reason: 'paused' })
     },
+    beginKeyDiscard: () => {
+      session.suspend()
+      recoveringAllowed = false
+      closeRecoveries()
+      const target = active
+      if (target !== undefined)
+        target.installedKey = undefined
+      return () => {
+        close(target?.host)
+        if (active === target)
+          active = undefined
+      }
+    },
     resume: async () => {
       if (!live())
         return { kind: 'disposed' }
+      checkEpoch()
       if (pending !== undefined)
         return pending.promise
       if (writable() !== undefined && state.kind === 'ready')

@@ -82,6 +82,65 @@ async function renewedLater(context: { readonly time: ReturnType<typeof fakeLeas
   await settle()
 }
 
+describe('工作草稿观察本机锁资格', () => {
+  it('被抢后先同步通知停写再核对；未知期间不恢复，更新的心跳才可拿回', async () => {
+    const events: string[] = []
+    const answer = deferred<LeaseVerdict>()
+    const context = setup([], { onHeldChange: held => events.push(`held:${held}`) })
+    context.confirm.mockImplementationOnce(async () => {
+      events.push('confirm')
+      return answer.promise
+    })
+    await context.lock.claim()
+    expect(events).toEqual(['held:true'])
+    await stolenByOther(context)
+    expect(events).toEqual(['held:true', 'held:false', 'confirm'])
+    answer.resolve({ kind: 'unknown', error: undefined })
+    await settle()
+    expect(context.lock.held()).toBe(false)
+    context.lock.renewed(context.time.now())
+    await settle()
+    expect(events).toHaveLength(3)
+    await renewedLater(context)
+    expect(events).toEqual(['held:true', 'held:false', 'confirm', 'held:true'])
+    context.lock.release()
+    context.lock.release()
+    expect(events).toEqual(['held:true', 'held:false', 'confirm', 'held:true', 'held:false'])
+  })
+
+  it('失效后等接管位置时已不具备写入资格，即使底层锁仍留着', async () => {
+    const changes = vi.fn()
+    const context = setup([], { onHeldChange: changes })
+    await context.lock.claim()
+    const locating = context.lock.takenHere(context.time.now() + 100)
+    expect(changes.mock.calls).toEqual([[true], [false]])
+    expect(context.lock.held()).toBe(false)
+    await context.time.advance(100)
+    expect(await locating).toBe(false)
+    expect(changes.mock.calls).toEqual([[true], [false]])
+  })
+
+  it('持有通知同步释放时，claim 不返回已经失效的 held', async () => {
+    const context = setup([], { onHeldChange: (held) => {
+      if (held)
+        context.lock.release()
+    } })
+    expect(await context.lock.claim()).toEqual({ kind: 'released' })
+    expect(context.lock.held()).toBe(false)
+  })
+
+  it('停写通知同步销毁后不再开始核对', async () => {
+    const context = setup([], { onHeldChange: (held) => {
+      if (!held)
+        context.lock.release()
+    } })
+    await context.lock.claim()
+    await stolenByOther(context)
+    expect(context.confirm).not.toHaveBeenCalled()
+    expect(context.lock.held()).toBe(false)
+  })
+})
+
 describe('拿锁（服务端批准之后，M3-P6 设计 §3.13）', () => {
   it('锁空着：直接拿，不核对', async () => {
     const context = setup()

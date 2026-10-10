@@ -126,6 +126,7 @@ import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveVie
 import type { Incompatibility } from './client-format.ts'
 import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit-request.ts'
+import type { EditingSessionOptions } from './editing-session.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
@@ -436,6 +437,7 @@ export interface EditModeOptions {
   readonly clientInstanceId: string
   /** 本页的用户（载入时确认的）：交接频道的请求带上它，回应时只理会同一个人的（M3-P5 设计 §3.7） */
   readonly userId: string
+  readonly localDrafts?: EditingSessionOptions['localDrafts']
   readonly api: EditModeApi
   readonly createEditor: CreateModeEditor
   /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查、退出时等释放的上限 */
@@ -684,6 +686,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
       }
   const editing = createEditingSession({
     documentId,
+    userId: options.userId,
+    localDrafts: options.localDrafts,
+    sessionActive: () => session === 'active',
     clientInstanceId: options.clientInstanceId,
     api,
     clock,
@@ -897,10 +902,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /** 换了人、失去编辑权时停住保存；没有人登录时不停（按保存会先向服务端确认，本人在别处登录了就照常保存） */
   function syncSaving(): void {
-    if (session === 'other-user' || mode.kind === 'losing' || mode.kind === 'lost')
-      editing.coordinator?.stop()
-    else
-      editing.coordinator?.resume()
+    editing.setSavingActive(session !== 'other-user' && mode.kind !== 'losing' && mode.kind !== 'lost')
   }
 
   /**
@@ -1327,6 +1329,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     interruption = undefined
     const blocked = pendingBlock
     pendingBlock = undefined
+    editing.stopSaving()
     editing.releaseLease()
     const fallback = await slot.replace('read', content.snapshot)
     if (!still(token))
@@ -1403,11 +1406,35 @@ export function createEditMode(options: EditModeOptions): EditMode {
         content = fetched
       editing.setBaseRevision(content.revision)
     }
+    if (session !== 'active' || !editing.holdsLock())
+      return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
+    const prepared = await editing.prepareDraft({ revision: content.revision })
+    if (!still(token)) {
+      if (prepared.kind === 'ready')
+        prepared.draft.dispose()
+      return 'not-entered'
+    }
+    if (prepared.kind === 'lost') {
+      editing.stopSaving()
+      held.abandon()
+      editing.detachLease()
+      editing.releaseLock()
+      if (prepared.verdict.kind === 'superseded')
+        return 'superseded'
+      pendingLoss = prepared.verdict.loss
+      return 'lost'
+    }
+    if (prepared.kind === 'disposed')
+      return 'not-entered'
+    if (session !== 'active' || !editing.holdsLock())
+      return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
     // 申请时服务端说这份文档"公式待更新"（选定的内容就是申请时的那一版）：强制全量重算，收齐之后由自动保存补存（服务端随之清掉标记）
     const created = await slot.replace('edit', content.snapshot, { recalculate: formulasPending })
     if (!still(token))
       return 'not-entered'
     const formulasShown = formulasPendingOf(content.revision)
+    if (session !== 'active')
+      return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
     if (created === undefined) {
       // 只读的也没完整载入时不说"可以再试"（没有"编辑"）：页头说明数据不完整
       return backToReading(token, content, damaged => ({ ...readingBefore, update: 'none', notice: damaged === undefined ? { kind: 'editor-failed' } : undefined, formulasPending: formulasShown, damaged }))
@@ -1682,6 +1709,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
    */
   async function lose(loss: LeaseLoss): Promise<void> {
     const token = begin({ kind: 'losing', loss })
+    editing.suspendDraft()
     editing.detachLease()
     // 本机证据收集负责旧锁的收尾；位置优先取服务端 sameSession，查询与保留内容同时进行。
     const location = locateTakeover(loss)
@@ -2026,7 +2054,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
       const previous = session
       session = next
       syncSaving()
+      if (next === 'active' && options.localDrafts?.enabled() === false)
+        editing.discardDraftKey()
       if (next !== 'active') {
+        editing.discardDraftKey()
         // 请求方这一侧：会话不是本人时不续期（M3-P5）
         requests.setActive(false)
         editing.lease?.pause()
@@ -2046,6 +2077,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
     resumeLease: async () => {
       await editing.lease?.resume()
+      await editing.resumeDraft()
     },
 
     updateCanEdit: (canEdit) => {

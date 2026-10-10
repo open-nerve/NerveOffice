@@ -95,6 +95,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
   const onIncompatible = vi.fn<(kind: Incompatibility) => void>()
   const onRequest = vi.fn<NonNullable<EditLeaseOptions['onRequest']>>()
   const onRenewed = vi.fn<NonNullable<EditLeaseOptions['onRenewed']>>()
+  const onLocalKeyVersion = vi.fn<(version: number | null) => void>()
   /** 页面认不认得出期间的那一版是自己的保存：默认认不出（别处保存的） */
   const adopt = vi.fn<EditLeaseOptions['adoptOwnRevision']>(() => false)
   const options: EditLeaseOptions = {
@@ -110,6 +111,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     onIncompatible,
     onRequest,
     onRenewed,
+    onLocalKeyVersion,
   }
   return {
     time,
@@ -119,6 +121,7 @@ function setup(api: Partial<EditLeaseApi> = {}) {
     onIncompatible,
     onRequest,
     onRenewed,
+    onLocalKeyVersion,
     adopt,
     options,
     calls,
@@ -1746,6 +1749,71 @@ describe('核对这一代此刻是不是服务端当前的（confirm，M3-P6 设
     expect(context.api.acquire).toHaveBeenCalledTimes(2)
     context.api.renew.mockRejectedValueOnce(lostError('replaced'))
     expect(await lease.confirm()).toEqual({ kind: 'superseded', loss: { kind: 'lease', reason: 'replaced' } })
+  })
+})
+
+describe('有效续租的本机密钥版本', () => {
+  it('心跳版本先于恢复锁交回，null 同样传递；申请时不凭空发布版本', async () => {
+    const renew = vi.fn<EditLeaseApi['renew']>().mockResolvedValueOnce({ ...RENEWED, localKeyVersion: 2 }).mockResolvedValueOnce({ ...RENEWED, localKeyVersion: null })
+    const context = setup({ renew })
+    const lease = await held(context)
+    expect(context.onLocalKeyVersion).not.toHaveBeenCalled()
+    await context.time.advance(10_000)
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(2)
+    expect(context.onLocalKeyVersion.mock.invocationCallOrder[0]).toBeLessThan(context.onRenewed.mock.invocationCallOrder[0] ?? 0)
+    await context.time.advance(10_000)
+    expect(context.onLocalKeyVersion.mock.calls).toEqual([[2], [null]])
+    lease.abandon()
+  })
+
+  it('显式核对的有效当前响应也交回版本，但不调用旧 onRenewed', async () => {
+    const context = setup({ renew: vi.fn(async () => ({ ...RENEWED, localKeyVersion: 3 })) })
+    const lease = await held(context)
+    expect(await lease.confirm()).toEqual({ kind: 'current' })
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(3)
+    expect(context.onRenewed).not.toHaveBeenCalled()
+    lease.abandon()
+  })
+
+  it.each(['pause', 'release', 'abandon'] as const)('心跳在途后 %s，旧成功不能发布密钥版本', async (action) => {
+    const reply = deferred<RenewedEditLease>()
+    const context = setup({ renew: vi.fn(async () => reply.promise) })
+    const lease = await held(context)
+    await context.time.advance(10_000)
+    await lease[action]()
+    reply.resolve({ ...RENEWED, localKeyVersion: 9 })
+    await settle()
+    expect(context.onLocalKeyVersion).not.toHaveBeenCalled()
+    lease.abandon()
+  })
+
+  it('心跳在途时已经续上新代次，旧代次晚到的成功不能给新代次发布版本', async () => {
+    const reply = deferred<RenewedEditLease>()
+    const context = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockReturnValueOnce(reply.promise).mockResolvedValue({ ...RENEWED, localKeyVersion: 2 }) })
+    const lease = await held(context)
+    await context.time.advance(10_000)
+    const previous = lease.credentials()
+    expect(await lease.lose({ kind: 'lease', reason: 'expired' }, previous)).toEqual({ kind: 'held' })
+    expect(lease.credentials().token).not.toBe(previous.token)
+    reply.resolve({ ...RENEWED, localKeyVersion: 9 })
+    await settle()
+    expect(context.onLocalKeyVersion).not.toHaveBeenCalled()
+    await context.time.advance(10_000)
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(2)
+    lease.abandon()
+  })
+
+  it('会话暂停又恢复后，只认恢复之后发出的续租版本', async () => {
+    const reply = deferred<RenewedEditLease>()
+    const context = setup({ renew: vi.fn<EditLeaseApi['renew']>().mockReturnValueOnce(reply.promise).mockResolvedValue({ ...RENEWED, localKeyVersion: 2 }) })
+    const lease = await held(context)
+    await context.time.advance(10_000)
+    lease.pause()
+    const resumed = lease.resume()
+    reply.resolve({ ...RENEWED, localKeyVersion: 9 })
+    await resumed
+    expect(context.onLocalKeyVersion).toHaveBeenCalledExactlyOnceWith(2)
+    lease.abandon()
   })
 })
 

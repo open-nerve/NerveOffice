@@ -168,7 +168,7 @@ export interface SaveCoordinatorOptions {
   readonly send: SendSave
   readonly now?: () => number
   /** 本机修改结果单独交回；此前的内容落盘不代表请求标记已落盘。 */
-  readonly onDraftResult?: (result: DraftMutation) => void
+  readonly onDraftResult?: (result: DraftMutation) => void | Promise<void>
   /** 打开时内容的修订号（ETag） */
   readonly baseRevision: number
   /** 本页这次加载的标识 */
@@ -441,11 +441,11 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     return Object.freeze({ baseRevision, requestId: newRequestId(), clientInstanceId, localSeq: capture.contentSeq, format: capture.format, formulasPending: capture.formulasPending })
   }
 
-  function notifyDraft(result: DraftMutation): void {
+  async function notifyDraft(result: DraftMutation): Promise<void> {
     if (disposed)
       return
     try {
-      options.onDraftResult?.(result)
+      await options.onDraftResult?.(result)
     }
     catch (error) {
       options.reportError(error)
@@ -480,7 +480,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     target.confirmedRevision = revision
     const confirmation = localTail.then(async () => {
       if (!disposed)
-        notifyDraft(await options.draft.confirm(target.prepared, revision))
+        await notifyDraft(await options.draft.confirm(target.prepared, revision))
     }).catch((error: unknown) => options.reportError(error)).then(() => {
       if (!target.running)
         releaseConfirmed(target)
@@ -492,7 +492,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
 
   async function mark(target: OwnedUpload): Promise<void> {
     const request = target.request
-    notifyDraft(await options.draft.markInFlight(target.prepared, { requestId: request.requestId, clientInstanceId, localSeq: request.localSeq, sentAt: (options.now ?? Date.now)() }))
+    await notifyDraft(await options.draft.markInFlight(target.prepared, { requestId: request.requestId, clientInstanceId, localSeq: request.localSeq, sentAt: (options.now ?? Date.now)() }))
   }
 
   /**
@@ -788,7 +788,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     const replayedSame = replayed.kind === 'committed' && (replayed.ref === capture || sameKey(record.key, replayed.capture?.key))
     if (replayedSame || (saveOptions.dedupe && sameKey(record.key, confirmedKey) && !outcomePending())) {
       confirm(record, baseRevision)
-      notifyDraft(await options.draft.confirm(prepared, baseRevision))
+      await notifyDraft(await options.draft.confirm(prepared, baseRevision))
       options.draft.release(prepared)
       problem = undefined
       return replayedSame ? { kind: 'saved', requestId: replayed.request.requestId } : DEDUPED

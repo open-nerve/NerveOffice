@@ -6,6 +6,7 @@ import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, R
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { FakeLeaseServer } from './lease-server.test-support.ts'
+import type { OutboxHost } from './outbox/outbox-host.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
@@ -13,6 +14,9 @@ import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
+import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
+import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
+import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
@@ -21,6 +25,7 @@ import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { fakeLeaseServer, servedToken } from './lease-server.test-support.ts'
+import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { channelNameOf, issuedRequestLockNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
@@ -307,6 +312,7 @@ function fakeAutosave(held: boolean) {
 }
 
 interface Setup {
+  readonly localDrafts?: EditModeOptions['localDrafts']
   readonly api?: Partial<Omit<EditModeApi, 'editLease'>>
   readonly editLease?: Partial<EditLeaseApi>
   readonly now?: () => Date
@@ -373,6 +379,7 @@ function setup(options: Setup = {}) {
     documentId: DOCUMENT_ID,
     clientInstanceId: options.clientInstanceId ?? PAGE_ID,
     userId: options.userId ?? AMY.id,
+    localDrafts: options.localDrafts,
     api,
     createEditor: factory.createEditor,
     clock: time.clock,
@@ -452,6 +459,264 @@ async function editing(context: ReturnType<typeof setup>): Promise<void> {
   await context.mode.enter()
   expect(modeOf(context.mode).kind).toBe('editing')
 }
+
+async function localDrafts() {
+  const key = await newKey(1)
+  const fetch = vi.fn(async () => key)
+  const keeper = createLocalKeyKeeper({ fetch, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
+  const store = fakeDraftStore()
+  const hosts: OutboxHost[] = []
+  const host = vi.fn(async () => {
+    const writer = createDraftWriter({ store: store.store, now: Date.now })
+    let broken = false
+    const instance: OutboxHost = { kind: 'in-process', writer, broken: () => broken, dispose: vi.fn(() => {
+      broken = true
+      writer.dispose()
+    }) }
+    hosts.push(instance)
+    return instance
+  })
+  return { key, fetch, keeper, store, hosts, host, options: { enabled: () => true, keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) } }
+}
+
+describe('真实来源进入页面的准备顺序', () => {
+  it('初次打开准备来源时确认编辑权被收回，保留原失效原因且不建可交互编辑器', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => {
+      throw leaseLost('revoked')
+    } } })
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    local.store.putRaw('writers', key, { ...key, writeEpoch: 8, writerId: 'another-writer', lastDraftSeq: 0, registeredAt: 1 })
+    await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true })
+    expect(readingOf(h.mode).notice).toEqual({ kind: 'enter-lost', loss: { kind: 'lease', reason: 'revoked' } })
+    expect(h.factory.createEditor.mock.calls.every(([options]) => options.access === 'read')).toBe(true)
+    expect(h.mode.view().save).toBeUndefined()
+    const renewed = h.editLease.renew.mock.calls.length
+    await h.time.advance(HEARTBEAT_MS * 2)
+    expect(h.editLease.renew).toHaveBeenCalledTimes(renewed)
+  })
+
+  it('重新登录后的来源核对暂时未知，后续有效心跳重试恢复持久化', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    h.mode.setSession('signed-out')
+    await vi.waitFor(() => expect(local.hosts[0]!.broken()).toBe(true))
+    h.mode.setSession('active')
+    h.editLease.renew.mockResolvedValueOnce({ ...RENEWED, localKeyVersion: 1 }).mockRejectedValueOnce(new NetworkError('来源核对暂时失败'))
+    await h.mode.resumeLease()
+    expect(local.host).toHaveBeenCalledOnce()
+    await h.time.advance(HEARTBEAT_MS)
+    await vi.waitFor(() => expect(local.host).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(local.store.rawDraft({ userId: AMY.id, documentId: DOCUMENT_ID })).toBeDefined())
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('磁盘栅栏触发的核对不算本机锁被抢，服务端 elsewhere 且位置查询失败时仍显示别处接管', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    local.store.putRaw('writers', key, { ...local.store.rawWriter(key) as object, writeEpoch: 8 })
+    h.editLease.renew.mockRejectedValueOnce(new ApiError(409, 'EDIT_LEASE_LOST', '编辑权已失效', { details: { reason: 'taken_over', forced: false } }))
+    h.api.editStatus.mockRejectedValue(new NetworkError('位置核对失败'))
+    h.factory.last().edit('被别处接手前的正文')
+    await h.mode.save()
+    await h.time.advance(TAKEOVER_STEAL_WAIT_MS)
+    await vi.waitFor(() => expect(modeOf(h.mode).kind).toBe('lost'))
+    expect(lostOf(h.mode).loss).toEqual({ kind: 'taken-over', where: 'elsewhere' })
+  })
+
+  it('栅栏核对未知后关闭本地草稿，心跳可恢复云端保存但不重新取钥或建宿主', async () => {
+    const local = await localDrafts()
+    let enabled = true
+    const h = setup({ localDrafts: { ...local.options, enabled: () => enabled }, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    local.store.putRaw('writers', key, { ...local.store.rawWriter(key) as object, writeEpoch: 8 })
+    h.editLease.renew.mockRejectedValueOnce(new NetworkError('核对断网'))
+    h.factory.last().edit('暂停时的内容')
+    await h.mode.save()
+    expect(h.mode.view().save?.canSave).toBe(false)
+    enabled = false
+    h.mode.setSession('active')
+    await vi.waitFor(() => expect(local.hosts[0]!.broken()).toBe(true))
+    await h.time.advance(HEARTBEAT_MS)
+    await vi.waitFor(() => expect(h.mode.view().save?.canSave).toBe(true))
+    await h.mode.save()
+    expect(h.api.save).toHaveBeenCalledOnce()
+    expect(local.fetch).toHaveBeenCalledOnce()
+    expect(local.host).toHaveBeenCalledOnce()
+    expect(local.store.rawDraft(key)).toBeUndefined()
+  })
+
+  it('栅栏核对 current 后发现已有旧草稿：保留旧记录，并允许当前内存内容上传', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    h.factory.last().edit('已经落盘的 A')
+    await h.time.advance(DEFAULT_AUTOSAVE_LIMITS.captureQuietMs)
+    await vi.waitFor(() => expect(local.store.rawDraft(key)).toBeDefined())
+    const retained = local.store.rawDraft(key)
+    local.store.putRaw('writers', key, { ...local.store.rawWriter(key) as object, writeEpoch: 8 })
+    h.factory.last().edit('遇到栅栏的 B')
+    await h.mode.save()
+    expect(h.api.save).toHaveBeenCalledOnce()
+    expect(new TextDecoder().decode(await gunzipBytes(h.api.save.mock.calls[0]![2]))).toBe(snapshotOf('遇到栅栏的 B'))
+    expect(local.store.rawDraft(key)).toEqual(retained)
+  })
+
+  it('栅栏核对未知时继续捕获而不上传，普通页面确认不能解锁；新心跳核对成功后上传最新内容', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options, autosave: 'running', editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    local.store.putRaw('writers', key, { ...local.store.rawWriter(key) as object, writeEpoch: 8 })
+    h.editLease.renew.mockRejectedValueOnce(new NetworkError('核对断网'))
+    h.factory.last().edit('栅栏前的内容')
+    await h.mode.save()
+    expect(h.mode.view().save?.canSave).toBe(false)
+    h.mode.setSession('active')
+    expect(h.mode.view().save?.canSave).toBe(false)
+    h.factory.last().edit('核对未知期间的新内容')
+    await h.time.advance(HEARTBEAT_MS - 1)
+    expect(h.api.save).not.toHaveBeenCalled()
+    await h.time.advance(1)
+    await vi.waitFor(() => expect(h.mode.view().save?.canSave).toBe(true))
+    await h.mode.save()
+    const sent = h.api.save.mock.calls.at(-1)![2]
+    expect(new TextDecoder().decode(await gunzipBytes(sent))).toBe(snapshotOf('核对未知期间的新内容'))
+  })
+
+  it('栅栏核对期间换人再回来，旧的成功回包不能恢复上传；重新确认当前登录后才能恢复', async () => {
+    const local = await localDrafts()
+    const check = deferred<RenewedEditLease>()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    local.store.putRaw('writers', key, { ...local.store.rawWriter(key) as object, writeEpoch: 8 })
+    h.editLease.renew.mockReturnValueOnce(check.promise)
+    h.factory.last().edit('等待核对的内容')
+    const saving = h.mode.save()
+    await vi.waitFor(() => expect(h.editLease.renew).toHaveBeenCalledOnce())
+    h.mode.setSession('other-user')
+    h.mode.setSession('active')
+    check.resolve({ ...RENEWED, localKeyVersion: 1 })
+    await saving
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.mode.view().save?.canSave).toBe(false)
+    await h.mode.resumeLease()
+    expect(h.mode.view().save?.canSave).toBe(true)
+    await h.mode.save()
+    expect(h.api.save).toHaveBeenCalledOnce()
+  })
+
+  it.each(['current', 'unknown', 'superseded'] as const)('本机写入被栅栏拒绝后先等服务端裁决 %s，不能直接发保存', async (verdict) => {
+    const local = await localDrafts()
+    const check = deferred<RenewedEditLease>()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+    local.store.putRaw('writers', key, { ...local.store.rawWriter(key) as object, writeEpoch: 8 })
+    h.editLease.renew.mockReturnValueOnce(check.promise)
+    h.factory.last().edit('遇到栅栏的内容')
+    const saving = h.mode.save()
+    await vi.waitFor(() => expect(h.editLease.renew).toHaveBeenCalledOnce())
+    expect(h.api.save).not.toHaveBeenCalled()
+    if (verdict === 'current')
+      check.resolve({ ...RENEWED, localKeyVersion: 1 })
+    else
+      check.reject(verdict === 'unknown' ? new NetworkError('未确认') : leaseLost('replaced'))
+    await saving
+    if (verdict === 'current') {
+      expect(h.api.save).toHaveBeenCalledOnce()
+    }
+    else {
+      expect(h.api.save).not.toHaveBeenCalled()
+      if (verdict === 'superseded')
+        await vi.waitFor(() => expect(modeOf(h.mode).kind).toBe('lost'))
+      else
+        expect(modeOf(h.mode).kind).toBe('editing')
+    }
+  })
+
+  it('重新登录的会话确认仍在途时，租约核对成功已可恢复持久草稿，不被上传门槛挡死', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    await editing(h)
+    h.factory.last().edit('退出后仍在的内容')
+    h.autosave.setPage({ writable: false })
+    h.mode.setSession('signed-out')
+    await vi.waitFor(() => expect(local.hosts[0]!.broken()).toBe(true))
+    h.mode.setSession('active')
+    await h.mode.resumeLease()
+    expect(local.hosts).toHaveLength(2)
+    const read = await local.hosts[1]!.writer.read({ userId: AMY.id, documentId: DOCUMENT_ID })
+    expect(read).toMatchObject({ kind: 'draft' })
+    if (read.kind === 'draft')
+      expect(new TextDecoder().decode(await gunzipBytes(read.gzip))).toBe(snapshotOf('退出后仍在的内容'))
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('阅读不取钥；申请服务端并拿本机锁、准备宿主之后才建可交互编辑器', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options })
+    await opened(h)
+    expect(local.fetch).not.toHaveBeenCalled()
+    const key = deferred<typeof local.key>()
+    local.fetch.mockReturnValueOnce(key.promise)
+    const entering = h.mode.enter()
+    await settle()
+    expect(h.editLease.acquire).toHaveBeenCalledOnce()
+    expect(h.browser.holderOf(LOCK)).toBe('this')
+    expect(local.fetch).toHaveBeenCalledOnce()
+    expect(h.factory.created.map(item => item.access)).toEqual(['read'])
+    expect(h.autosave.current()).toBeUndefined()
+    key.resolve(local.key)
+    await entering
+    expect(modeOf(h.mode).kind).toBe('editing')
+    expect(local.host).toHaveBeenCalledOnce()
+    expect(h.factory.last().access).toBe('edit')
+    h.factory.last().edit('真实页面内容')
+    await h.mode.save()
+    expect(h.api.save).toHaveBeenCalledOnce()
+  })
+
+  it.each(['signed-out', 'other-user', 'dispose'] as const)('取钥期间 %s：旧准备不建编辑器或保存，宿主最终释放', async (action) => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options })
+    await opened(h)
+    const key = deferred<typeof local.key>()
+    local.fetch.mockReturnValueOnce(key.promise)
+    const entering = h.mode.enter()
+    await settle()
+    if (action === 'dispose')
+      h.mode.dispose()
+    else
+      h.mode.setSession(action)
+    key.resolve(local.key)
+    await entering
+    expect(h.factory.created.some(item => item.access === 'edit')).toBe(false)
+    expect(h.autosave.current()).toBeUndefined()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(local.host).not.toHaveBeenCalled()
+    expect(local.keeper.current()).toBeUndefined()
+  })
+
+  it('编辑器打开自检失败，已准备的宿主、密钥和写入资格全部释放', async () => {
+    const local = await localDrafts()
+    const h = setup({ localDrafts: local.options })
+    await opened(h)
+    h.factory.checkWith(({ access }) => access === 'edit' ? { ok: false, failures: [{ kind: 'profile-missing-hook', resource: 'SHEET_NOTE_PLUGIN' }] } : { ok: true })
+    await h.mode.enter()
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.autosave.current()).toBeUndefined()
+    expect(local.hosts[0]!.dispose).toHaveBeenCalledOnce()
+    expect(local.keeper.current()).toBeUndefined()
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+})
 
 describe('打开（M3-P2 设计 §3.4：打开即阅读）', () => {
   it('以只读创建、显示载入的内容，进入阅读（能编辑时有"编辑"）；进入阅读时立即读一次编辑状态', async () => {
@@ -4188,7 +4453,8 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
 
   it('空闲释放的过程中失去编辑权（续租得知被收回）：转入失去编辑权，不再接着释放', async () => {
     const reply = deferred<SaveContentResponse>()
-    const context = setup({ activity: 'manual', editLease: { renew: async () => Promise.reject(leaseLost('revoked')) } })
+    const renewal = deferred<RenewedEditLease>()
+    const context = setup({ activity: 'manual', editLease: { renew: async () => renewal.promise } })
     await editing(context)
     context.api.save.mockImplementationOnce(async () => reply.promise)
     context.factory.last().edit('甲')
@@ -4197,12 +4463,12 @@ describe('离开编辑（leaveEditing）：退出照旧，空闲释放（US-M3-0
     context.time.elapse(IDLE_MS)
     context.page.set(false)
     expect(modeOf(context.mode)).toEqual({ kind: 'exiting', cause: 'idle' })
+    await vi.waitFor(() => expect(context.api.save).toHaveBeenCalledOnce())
     await context.time.advance(0)
-    await settle()
-    expect(modeOf(context.mode).kind).toBe('losing')
+    renewal.reject(leaseLost('revoked'))
+    await vi.waitFor(() => expect(modeOf(context.mode).kind).toBe('losing'))
     reply.reject(leaseLost('revoked'))
-    await settle()
-    await settle()
+    await vi.waitFor(() => expect(modeOf(context.mode).kind).toBe('lost'))
     expect(lostOf(context.mode).loss).toEqual({ kind: 'lease', reason: 'revoked' })
     expect(context.editLease.release).not.toHaveBeenCalled()
   })

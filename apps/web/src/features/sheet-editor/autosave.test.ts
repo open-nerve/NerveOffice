@@ -217,10 +217,33 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
   })
   const captures = () => events.filter(event => event.kind === 'capture')
   const uploads = () => events.filter(event => event.kind === 'upload')
-  return { time, editor, control, calls, send, compress, reportError, onUnauthenticated, coordinator, page, tuning, events, captures, uploads, digest, autosave }
+  return { time, editor, control, calls, send, compress, reportError, onUnauthenticated, coordinator, page, tuning, events, captures, uploads, digest, autosave, draft }
 }
 
 type Context = ReturnType<typeof setup>
+
+describe('来源生命周期重写后的引用', () => {
+  it('编辑序号没有变化时换钥重写产生的新引用，下一次自动上传使用最新内容序号', async () => {
+    const context = setup()
+    context.control.edit('待保存')
+    await context.time.advance(1_000)
+    const original = context.draft.view()
+    if (original.kind !== 'working')
+      throw new Error('需要已捕获内容')
+    const ref = context.draft.capture({ snapshot: JSON.stringify({ content: '待保存' }), editorSeq: original.ref.editorSeq, formulasPending: false, dedupe: false })
+    await context.draft.ready(ref)
+    await context.time.advance(1_000)
+    const call = await sent(context, 1)
+    expect(call.request.localSeq).toBe(ref.draftSeq)
+    expect(call.request.localSeq).toBeGreaterThan(original.ref.draftSeq)
+    call.resolve(saved(2))
+    await drain(context)
+    expect(context.coordinator.view()).toMatchObject({ unsavedEdits: false })
+    context.autosave.dispose()
+    context.coordinator.dispose()
+    context.draft.dispose()
+  })
+})
 
 /** 第 n 个请求（不拨假时钟，只等排着的 Promise） */
 async function sent(context: Context, n: number): Promise<PendingSend> {

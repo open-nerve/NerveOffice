@@ -14,11 +14,15 @@ import type { SaveRequest } from './save-coordinator.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, setCsrfToken } from '../../shared/api/index.ts'
+import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
+import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
+import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
+import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { lockNameOf, sameBrowserFor } from './same-browser.ts'
@@ -216,6 +220,7 @@ interface CreateOptions {
 }
 
 interface Setup {
+  readonly localDrafts?: Parameters<typeof createEditorPage>[0]['localDrafts']
   readonly documentId?: string | undefined
   /** 本页这次加载的标识与 requestId 的生成：默认 id-1、id-2……；冲突的详情要按契约解析时换成 UUID 的写法 */
   readonly newId?: () => string
@@ -286,6 +291,7 @@ function setup(options: Setup = {}) {
   const sameBrowsers: SameBrowser[] = []
   let id = 0
   const editorPage = createEditorPage({
+    localDrafts: options.localDrafts ?? { supported: () => false },
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
     surface,
     chrome,
@@ -451,6 +457,40 @@ describe('就绪之前页头之外的交互一律拦下（Codex 评审 CX1，独
 })
 
 describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
+  it.each([true, false])('页面使用会话返回的 localDraftsEnabled=%s；阅读不取钥，只有开启时进入编辑才准备本机来源', async (enabled) => {
+    const key = await newKey(1)
+    const fetch = vi.fn(async () => key)
+    const keeper = createLocalKeyKeeper({ fetch, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
+    const writer = createDraftWriter({ store: fakeDraftStore().store, now: Date.now })
+    const dispose = vi.fn(() => writer.dispose())
+    const host = vi.fn(async () => ({ kind: 'in-process' as const, writer, broken: () => false, dispose }))
+    const { editorPage, api, fromOtherTab } = setup({
+      editIntent: false,
+      api: { session: async () => ({ ...ALICE, features: { localDraftsEnabled: enabled } }) },
+      editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) },
+      localDrafts: { keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' }) },
+    })
+    await editorPage.load()
+    expect(fetch).not.toHaveBeenCalled()
+    await editorPage.enterEditing()
+    expect(editorPage.view().mode?.kind).toBe('editing')
+    expect(fetch).toHaveBeenCalledTimes(enabled ? 1 : 0)
+    expect(host).toHaveBeenCalledTimes(enabled ? 1 : 0)
+    if (enabled) {
+      api.session.mockResolvedValueOnce({ ...ALICE, features: { localDraftsEnabled: false } })
+      fromOtherTab()
+      await vi.waitFor(() => expect(keeper.current()).toBeUndefined())
+      await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce())
+    }
+    await editorPage.save()
+    expect(api.save).toHaveBeenCalledOnce()
+    expect(fetch).toHaveBeenCalledTimes(enabled ? 1 : 0)
+    editorPage.dispose()
+    expect(dispose).toHaveBeenCalledTimes(enabled ? 1 : 0)
+    if (!enabled)
+      writer.dispose()
+  })
+
   it('打开即阅读（M3-P2 设计 §3.4）：先确认会话，再读取元数据与内容，以只读创建编辑器；能编辑时进入阅读、有"编辑"，不申请编辑权', async () => {
     const { editorPage, surface, api, createEditor, fake, editLease, editIntent, chrome } = setup({ editIntent: false })
     expect(surface.dataset.editorState).toBeUndefined()
@@ -1103,7 +1143,7 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(api.save).not.toHaveBeenCalled()
   })
 
-  it('创建编辑器期间别的标签页换了人：保存状态机一建好就停住（复验 RB3）', async () => {
+  it('创建编辑器期间别的标签页换了人：撤销进入，回到阅读且不建立保存（复验 RB3、M4-P2）', async () => {
     const creating = deferred<SheetEditor>()
     const { editorPage, api, fake, fromOtherTab } = setup({ createEditor: async () => creating.promise })
     const loading = editorPage.load()
@@ -1113,7 +1153,9 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     await vi.waitFor(() => expect(editorPage.view().session).toBe('other-user'))
     creating.resolve(fake.editor)
     await loading
-    expect(editorPage.view().save?.canSave).toBe(false)
+    expect(editorPage.view()).toMatchObject({ session: 'other-user', mode: { kind: 'reading' } })
+    expect(editorPage.view().save).toBeUndefined()
+    expect(api.save).not.toHaveBeenCalled()
   })
 
   it('换了人之后另一个人也退出了：按没有人登录处理，提示在新标签页中登录（复验 RB7）', async () => {
@@ -1741,7 +1783,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(api.save).toHaveBeenLastCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), NEXT_CREDENTIALS)
   })
 
-  it('申请期间别的标签页换了人：取得之后先暂停续租（不带着别人的登录续租）；原来的人回来时恢复（审查 B6）', async () => {
+  it('申请期间别的标签页换了人：撤销旧申请且不续租；原来的人回来可重新进入（审查 B6、M4-P2）', async () => {
     const acquiring = deferred<AcquiredEditLease>()
     const { editorPage, api, editLease, fromOtherTab, time } = setup({ editLease: { acquire: vi.fn(async () => acquiring.promise) } })
     const loading = editorPage.load()
@@ -1755,7 +1797,12 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     expect(editLease.renew).not.toHaveBeenCalled()
     vi.mocked(api.session).mockResolvedValueOnce(ALICE)
     fromOtherTab()
-    await vi.waitFor(() => expect(editLease.renew).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(editorPage.view()).toMatchObject({ session: 'active', mode: { kind: 'reading' } }))
+    expect(editLease.renew).not.toHaveBeenCalled()
+    // 换人之后不带着别人的登录发释放；本页结束旧租约，服务端沿用到期回收。
+    expect(editLease.release).not.toHaveBeenCalled()
+    await editorPage.enterEditing()
+    expect(editLease.acquire).toHaveBeenCalledTimes(2)
     expect(editorPage.view()).toMatchObject({ session: 'active', mode: { kind: 'editing' }, save: { canSave: true } })
   })
 

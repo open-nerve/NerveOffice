@@ -366,6 +366,8 @@ export interface EditLeaseOptions {
    * 第一次续租）。不需要时不给
    */
   readonly onRenewed?: ((sentAt: number) => void) | undefined
+  /** 当前代次、当前会话的有效续租/核对版本；恢复锁之前交回，旧回包不能启用过时密钥。 */
+  readonly onLocalKeyVersion?: ((version: number | null) => void) | undefined
 }
 
 /**
@@ -712,6 +714,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
     void api.release(documentId, token).catch(() => undefined)
   }
 
+  function publishKeyVersion(renewed: RenewedEditLease, token: string, round: number): void {
+    if (state === 'holding' && recovery === undefined && credentials.token === token && resumes === round)
+      options.onLocalKeyVersion?.(renewed.localKeyVersion)
+  }
+
   async function renewOnce(): Promise<void> {
     const sentAt = clock.now()
     const round = resumes
@@ -749,6 +756,9 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
     // 这一代还在用（没有释放、失效、放弃）：心跳带来的请求交给页面，并告诉页面服务端处理这次续租时这一代是当前的、这次续租是什么时候发出的
     // （在 try 之外：页面那边出错不当作续租失败）
     if (renewed !== undefined && !ended()) {
+      publishKeyVersion(renewed, used, round)
+      if (ended())
+        return
       options.onRequest?.(renewed.request)
       options.onRenewed?.(sentAt)
     }
@@ -808,9 +818,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
       if (state === 'paused')
         return { kind: 'unknown', error: undefined }
       const used = credentials.token
+      const round = resumes
+      let renewed: RenewedEditLease | undefined
       let failure: { readonly error: unknown } | undefined
       try {
-        await api.renew(documentId, used, idleSeconds())
+        renewed = await api.renew(documentId, used, idleSeconds())
       }
       catch (error) {
         failure = { error }
@@ -821,8 +833,11 @@ function holdEditLease(options: EditLeaseOptions, acquired: AcquiredEditLease, a
       // 期间续上换了一代（心跳、保存得知失效之后）：这次回答说的是上一代，再核对现在的这一代
       if (used !== credentials.token)
         continue
-      if (failure === undefined)
-        return { kind: 'current' }
+      if (failure === undefined) {
+        if (renewed !== undefined)
+          publishKeyVersion(renewed, used, round)
+        return ended() ? { kind: 'ended', loss: undefined } : { kind: 'current' }
+      }
       const loss = leaseLossOf(failure.error)
       if (loss === undefined)
         return { kind: 'unknown', error: failure.error }

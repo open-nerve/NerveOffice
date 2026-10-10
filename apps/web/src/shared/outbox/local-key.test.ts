@@ -231,6 +231,23 @@ function keeperWith(fetch: (signal: AbortSignal) => Promise<LocalKeyHandle>, clo
 }
 
 describe('本机密钥的保管者（M4-P1 设计 §3.4.9）', () => {
+  it('暂停持久化时只观察版本：停旧钥、记住新版，下次主动 ensure 才取用', async () => {
+    const remote = controllableFetch()
+    const { keeper, seen } = keeperWith(remote.fetch)
+    const first = keeper.ensure()
+    remote.calls[0]?.resolve(await handleOf(1))
+    await first
+    keeper.observeVersion(3, false)
+    expect(keeper.current()).toBeUndefined()
+    expect(seen).toEqual([1, undefined])
+    expect(remote.calls).toHaveLength(1)
+    const resumed = keeper.ensure()
+    remote.calls[1]?.resolve(await handleOf(2))
+    await settle()
+    remote.calls[2]?.resolve(await handleOf(3))
+    expect(await resumed).toMatchObject({ version: 3 })
+  })
+
   it('取到之后放在内存里：之后的 ensure 不再发请求；订阅者得知一次', async () => {
     const remote = controllableFetch()
     const { keeper, seen } = keeperWith(remote.fetch)

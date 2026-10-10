@@ -784,6 +784,18 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     kick()
   }
 
+  /** 换钥/恢复可以重写同一编辑序号；旧引用已被取代，不能继续拿它反复准备上传。 */
+  function onDraftChange(): void {
+    const working = options.draft.view()
+    if (disposed || ended || latest === undefined || working.kind !== 'working' || working.ref.sessionId !== latest.sessionId || working.ref.editorSeq !== latest.editorSeq || working.ref.serial <= latest.serial)
+      return
+    latest = working.ref
+    capturePending = working.ref.formulasPending
+    retryCapture = undefined
+    uploader.noteCapture(working.ref)
+    kick()
+  }
+
   const unsubscribers = [
     editor.onChange(onEditorChange),
     editor.onFormulaProgress(kick),
@@ -791,6 +803,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     page.onChange(onPageChange),
     uploader.subscribe(onUploaderChange),
     tuning.onChange(onTuningChange),
+    options.draft.subscribe(onDraftChange),
   ]
   // 打开不算修改（与保存的状态机同一个基线 0）：建起来时已经有修改的，按此刻有了修改算
   if (editor.changeSeq() > 0) {

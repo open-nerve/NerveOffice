@@ -3,9 +3,13 @@ import type { EditLease, LeaseVerdict } from './edit-lease.ts'
 import type { EditingSessionEditor, EditingSessionOptions } from './editing-session.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
+import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
+import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
+import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { createEditingSession } from './editing-session.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { fakeLeaseServer } from './lease-server.test-support.ts'
+import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { sameBrowserFor } from './same-browser.ts'
 
@@ -79,7 +83,7 @@ function leaseFixture() {
   } satisfies EditLease
 }
 
-function fixture() {
+function fixture(overrides: Partial<EditingSessionOptions> = {}) {
   const time = fakeLeaseClock()
   const browser = fakeBrowser()
   const sameBrowser = sameBrowserFor(DOCUMENT, browser.tab('page-1'))
@@ -88,6 +92,7 @@ function fixture() {
   const pageListeners = new Set<() => void>()
   const attach = vi.fn<(scheduler: Autosave | undefined) => void>()
   const options: EditingSessionOptions = {
+    userId: USER.id,
     documentId: DOCUMENT,
     clientInstanceId: 'page-1',
     api: {
@@ -120,6 +125,7 @@ function fixture() {
     onIncompatible: vi.fn(),
     onRequest: vi.fn(),
     onChange: vi.fn(),
+    ...overrides,
   }
   const session = createEditingSession(options)
   cleanup.push(sameBrowser.close, other.close, session.dispose)
@@ -128,7 +134,139 @@ function fixture() {
 
 const INITIAL = { revision: 3, snapshotBytes: 7, formulasPending: false, blocked: undefined }
 
+async function prepare(session: ReturnType<typeof createEditingSession>, held = leaseFixture(), revision = INITIAL.revision) {
+  session.acceptLease(held, revision)
+  await session.claim(held)
+  return session.prepareDraft({ revision })
+}
+
+async function localDrafts() {
+  const key = await newKey(1)
+  const store = fakeDraftStore()
+  const keeper = createLocalKeyKeeper({ fetch: async () => key, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
+  const host = vi.fn(async () => {
+    const writer = createDraftWriter({ store: store.store, now: Date.now })
+    let broken = false
+    return { kind: 'in-process' as const, writer, broken: () => broken, dispose: () => {
+      broken = true
+      writer.dispose()
+    } }
+  })
+  return { store, host, options: { enabled: () => true, keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) } }
+}
+
+describe('草稿恢复沿用租约的失效与续上规则', () => {
+  it('续上后新核对再次失效时结束本轮恢复，不循环申请也不绕过租约通知失效', async () => {
+    const local = await localDrafts()
+    const { session, options } = fixture({ localDrafts: local.options })
+    const held = leaseFixture()
+    await prepare(session, held)
+    held.confirm.mockResolvedValue({ kind: 'ended', loss: { kind: 'lease', reason: 'expired' } })
+    session.suspendDraft()
+    await session.resumeDraft()
+    expect(held.lose).toHaveBeenCalledOnce()
+    expect(held.confirm).toHaveBeenCalledTimes(2)
+    expect(options.onLost).not.toHaveBeenCalled()
+    expect(local.host).toHaveBeenCalledOnce()
+  })
+
+  it.each(['expired', 'session'] as const)('恢复核对 %s 先交租约续上，随后必须另核对 current 才恢复写入', async (reason) => {
+    const local = await localDrafts()
+    const { session, options } = fixture({ localDrafts: local.options })
+    const held = leaseFixture()
+    await prepare(session, held)
+    const recheck = deferred<LeaseVerdict>()
+    const loss = { kind: 'lease' as const, reason }
+    held.confirm.mockResolvedValueOnce({ kind: 'ended', loss }).mockReturnValueOnce(recheck.promise)
+    session.suspendDraft()
+    const resuming = session.resumeDraft()
+    await vi.waitFor(() => expect(held.lose).toHaveBeenCalledExactlyOnceWith(loss, held.credentials()))
+    expect(held.confirm).toHaveBeenCalledTimes(2)
+    expect(local.host).toHaveBeenCalledOnce()
+    expect(options.onLost).not.toHaveBeenCalled()
+    recheck.resolve({ kind: 'current' })
+    await resuming
+    const draft = session.draft!
+    const ref = draft.capture({ editorSeq: 1, snapshot: '续上后的正文', formulasPending: false, dedupe: false })
+    expect(await draft.ready(ref)).toMatchObject({ kind: 'ready', local: { kind: 'persisted' } })
+    expect(options.onLost).not.toHaveBeenCalled()
+  })
+
+  it('初次登记遇栅栏且本代到期时也走续上，不直接放弃仍可恢复的租约', async () => {
+    const local = await localDrafts()
+    const { session, options } = fixture({ localDrafts: local.options })
+    const held = leaseFixture()
+    local.store.putRaw('writers', { userId: USER.id, documentId: DOCUMENT }, { userId: USER.id, documentId: DOCUMENT, writeEpoch: 8, writerId: 'other', lastDraftSeq: 0, registeredAt: 1 })
+    held.confirm.mockResolvedValueOnce({ kind: 'ended', loss: { kind: 'lease', reason: 'expired' } })
+    expect(await prepare(session, held)).toMatchObject({ kind: 'ready' })
+    expect(held.lose).toHaveBeenCalledOnce()
+    expect(held.confirm).toHaveBeenCalledTimes(2)
+    expect(options.onLost).not.toHaveBeenCalled()
+  })
+
+  it('核对期间换人，旧 ended 回包不能续上或通知新流程', async () => {
+    const local = await localDrafts()
+    let active = true
+    const { session, options } = fixture({ localDrafts: local.options, sessionActive: () => active })
+    const held = leaseFixture()
+    await prepare(session, held)
+    const checking = deferred<LeaseVerdict>()
+    held.confirm.mockReturnValueOnce(checking.promise)
+    session.suspendDraft()
+    const resuming = session.resumeDraft()
+    await vi.waitFor(() => expect(held.confirm).toHaveBeenCalledOnce())
+    active = false
+    session.discardDraftKey()
+    active = true
+    checking.resolve({ kind: 'ended', loss: { kind: 'lease', reason: 'expired' } })
+    await resuming
+    expect(held.lose).not.toHaveBeenCalled()
+    expect(options.onLost).not.toHaveBeenCalled()
+  })
+})
+
 describe('编辑会话的资源所有权', () => {
+  it('退出清钥前同步捕获编辑器的当前内容，不依赖自动捕获是否已经到点', async () => {
+    const { session } = fixture()
+    const page = editorFixture()
+    await prepare(session)
+    session.startSaving(page.editor, INITIAL)
+    page.edit()
+    session.discardDraftKey()
+    expect(await session.draft!.readLatest()).toMatchObject({ snapshot: '{"v":1}', ref: { editorSeq: 1 } })
+  })
+
+  it('没有租约、本机锁或就绪来源时不能建保存；来源准备完成才接上捕获', async () => {
+    const { session } = fixture()
+    const page = editorFixture()
+    await expect(session.prepareDraft(INITIAL)).rejects.toThrow('租约')
+    session.acceptLease(leaseFixture(), 3)
+    await expect(session.prepareDraft(INITIAL)).rejects.toThrow('本机锁')
+    expect(() => session.startSaving(page.editor, INITIAL)).toThrow('来源')
+    expect(session.autosave).toBeUndefined()
+    expect(page.listeners()).toBe(0)
+    await session.claim(session.lease!)
+    expect(await session.prepareDraft(INITIAL)).toMatchObject({ kind: 'ready' })
+    session.startSaving(page.editor, INITIAL)
+    expect(page.listeners()).toBeGreaterThan(0)
+  })
+
+  it('来源唯一转交后原会话停止/销毁不再碰它；接收者可读并负责销毁', async () => {
+    const { session } = fixture()
+    await prepare(session)
+    const source = session.draft!
+    const ref = source.capture({ snapshot: '待转交的内容', editorSeq: 1, formulasPending: false, dedupe: true })
+    await source.ready(ref)
+    expect(session.takeDraft()).toBe(source)
+    expect(session.takeDraft()).toBeUndefined()
+    expect(session.draft).toBeUndefined()
+    session.stopSaving()
+    session.dispose()
+    expect(await source.readLatest()).toMatchObject({ ref, snapshot: '待转交的内容' })
+    source.dispose()
+    expect(source.view()).toEqual({ kind: 'disposed' })
+  })
+
   it('申请与接纳分开：准备阶段的基准进入租约，销毁释放实际持有的那一代', async () => {
     const { session } = fixture()
     session.setBaseRevision(3)
@@ -145,10 +283,10 @@ describe('编辑会话的资源所有权', () => {
     expect(session.holdsLock()).toBe(false)
   })
 
-  it('观察者 attach 时协调器与调度都已可读；重复停止会清净订阅且只分离一次', () => {
+  it('观察者 attach 时协调器与调度都已可读；重复停止会清净订阅且只分离一次', async () => {
     const { session, options, pageListeners, attach } = fixture()
     const page = editorFixture()
-    session.acceptLease(leaseFixture(), 3)
+    await prepare(session)
     attach.mockImplementation((scheduler) => {
       if (scheduler !== undefined) {
         expect(session.coordinator).toBeDefined()
@@ -175,7 +313,7 @@ describe('编辑会话的资源所有权', () => {
     const page = editorFixture()
     const pending = deferred<typeof SAVED>()
     vi.mocked(options.api.save).mockReturnValue(pending.promise)
-    session.acceptLease(leaseFixture(), 3)
+    await prepare(session)
     session.startSaving(page.editor, INITIAL)
     page.edit()
     const saving = session.coordinator
@@ -221,6 +359,7 @@ describe('编辑会话的资源所有权', () => {
     previous.confirm.mockReturnValue(pending.promise)
     session.acceptLease(previous, 3)
     expect(await session.claim(previous)).toEqual({ kind: 'held' })
+    await session.prepareDraft(INITIAL)
     session.startSaving(previousPage.editor, INITIAL)
 
     const occupied = await other.steal()
@@ -237,6 +376,7 @@ describe('编辑会话的资源所有权', () => {
     const nextPage = editorFixture()
     session.acceptLease(next, 9)
     expect(await session.claim(next)).toEqual({ kind: 'held' })
+    await session.prepareDraft({ revision: 9 })
     session.startSaving(nextPage.editor, { ...INITIAL, revision: 9 })
     const saving = session.coordinator
     const scheduler = session.autosave

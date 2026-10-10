@@ -31,8 +31,8 @@ export interface LocalKeyKeeper {
   readonly current: () => LocalKeyHandle | undefined
   /** 有就交回手里的；没有就取（同时只有一个取用在途，并发的调用共用它）；退避期间不发请求、交回 unavailable */
   readonly ensure: () => Promise<LocalKeyHandle | LocalKeyProblem>
-  /** 心跳带来的版本：新版或 null 先停用旧钥；手里没有时只记录，不启动取用。旧数字通知不能降版 */
-  readonly observeVersion: (version: number | null) => void
+  /** 心跳带来的版本：新版或 null 先停用旧钥。refresh=false 只记版本与停钥，由会话恢复后主动 ensure；旧数字通知不能降版。 */
+  readonly observeVersion: (version: number | null, refresh?: boolean) => void
   /** 退出登录、换人：丢掉手里的、取消在途的请求，退避与会话类失败的计数从头算 */
   readonly discard: () => void
   /** 手里的密钥换了（取到新的、停用、丢掉）时得知；交回退订的函数 */
@@ -173,7 +173,7 @@ export function createLocalKeyKeeper(options: LocalKeyKeeperOptions): LocalKeyKe
       })
       return current
     },
-    observeVersion: (version) => {
+    observeVersion: (version, refresh = true) => {
       if (version === observedVersion || (typeof observedVersion === 'number' && version !== null && version < observedVersion))
         return
       if (version === null)
@@ -184,7 +184,7 @@ export function createLocalKeyKeeper(options: LocalKeyKeeperOptions): LocalKeyKe
       // 服务端说当前有新版或已清空：先停用旧的（订阅者随即换下它），再重取。
       const stopped = generation
       publish(undefined)
-      if (generation === stopped)
+      if (refresh && generation === stopped)
         void keeper.ensure()
     },
     discard: () => {
