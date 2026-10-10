@@ -118,7 +118,8 @@ test.describe('US-M1-10 API 重启后已确认的数据不丢', () => {
     await expect.poll(async () => sessionsAlive(waiting), { timeout: 15_000 }).toBe(0)
 
     // 要么完整提交、要么没有提交：修订号、修订记录与内容都没有变
-    await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
+    // 保存与续租被主动断开，P2 按实际连接故障说明；HTTP 502 本身不冒充浏览器离线。
+    await expect(saveStatus(page)).toHaveText('网络没有回应，正在重试')
     const afterInterruption = await savedContent(page, documentId)
     expect(afterInterruption.revision).toBe(before.revision)
     expect(afterInterruption.text).toBe(before.text)

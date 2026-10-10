@@ -24,7 +24,7 @@ function valueAt(text: string, cell = 'A1'): unknown {
   return cellOf(JSON.parse(text) as Workbook, cell)?.v
 }
 
-test.describe('US-M4-01/02/10/11/15 本地优先的真实页面链路', { tag: '@test-build' }, () => {
+test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build' }, () => {
   test('正文写成但在途标记写满：页面公开同步进度限制，仍上传原正文，确认后解除', async ({ page }) => {
     await observeLocalSaveOrder(page)
     await page.route('**/assets/outbox.worker-*.js', async (route) => {
@@ -131,7 +131,7 @@ test.describe('US-M4-01/02/10/11/15 本地优先的真实页面链路', { tag: '
     }
   })
 
-  test('断网仍捕获并加密落盘，恢复联网后的显式保存使用该来源且确认删除', async ({ page }) => {
+  test('US-M4-02 断网仍捕获并加密落盘，恢复联网后的显式保存使用该来源且确认删除', async ({ page }) => {
     const { documentId, key } = await openLocalSheet(page, 'local-first-offline')
     const secret = await currentLocalKey(page)
     const writes = recordWrites(page, documentId)
@@ -233,7 +233,7 @@ test.describe('US-M4-01/02/10/11/15 本地优先的真实页面链路', { tag: '
     }
   })
 
-  test('有效心跳发现吊销后换钥重写当前内容，无新编辑也使用新密钥与更高序号', async ({ page, anotherDevice }) => {
+  test('US-M4-10 有效心跳发现吊销后换钥重写当前内容，无新编辑也使用新密钥与更高序号', async ({ page, anotherDevice }) => {
     await page.clock.install()
     const { owner, documentId, key } = await openLocalSheet(page, 'local-first-rekey')
     const oldKey = await currentLocalKey(page)
@@ -255,7 +255,7 @@ test.describe('US-M4-01/02/10/11/15 本地优先的真实页面链路', { tag: '
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('换钥保住的内容')
   })
 
-  test('会话的部署开关关闭时不取钥、不启动发件箱 Worker、不写库，仍能云端保存', async ({ page }) => {
+  test('US-M4-15 会话的部署开关关闭时不取钥、不启动发件箱 Worker、不写库，仍能云端保存', async ({ page }) => {
     const keys: Request[] = []
     const workers: string[] = []
     page.on('request', (request) => {
@@ -279,7 +279,7 @@ test.describe('US-M4-01/02/10/11/15 本地优先的真实页面链路', { tag: '
   })
 
   for (const failure of ['quota', 'unavailable'] as const) {
-    test(`真实 Worker 内存储 ${failure}，页面保持内存退路并上传完整正文`, async ({ page }) => {
+    test(`US-M4-11 真实 Worker 内存储 ${failure}，页面保持内存退路并上传完整正文`, async ({ page }) => {
       await observeLocalSaveOrder(page)
       let injected = false
       await page.route('**/assets/outbox.worker-*.js', async (route) => {

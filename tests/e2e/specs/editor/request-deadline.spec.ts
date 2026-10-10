@@ -1,5 +1,6 @@
 // M4-P2 S2、DEF-041：真实 HTTP 响应头/正文悬挂；保存已经提交仍按未知结果重放。
 // 使用测试构建暂停定时自动保存，按钮驱动的两次上传可逐一比较；页面时钟只加快等待，不替换网络或正文流。
+import { renewedEditLeaseSchema } from '@nerve-office/contracts'
 import { advanceUntil, pauseTime } from '../../support/autosave.ts'
 import { createUser, editLeaseEndReason, revisionOf } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -27,9 +28,42 @@ test.describe('完整请求时限与未知结果', { tag: '@test-build' }, () =>
         await advanceUntil(page, async () => stalled.received(), '真实后端完整回答后暂停响应')
         expect(stalled.status()).toBe(200)
         expect(await revisionOf(documentId)).toBe(2)
+        let heartbeat: { readonly status: number, readonly body: unknown } | undefined
+        await page.exposeFunction('heartbeatConsumed', (status: number, body: unknown) => {
+          heartbeat = { status, body }
+        })
+        await page.evaluate((id) => {
+          const observed = window as typeof window & { heartbeatConsumed: (status: number, body: unknown) => Promise<void> }
+          const fetch = window.fetch.bind(window)
+          let first = true
+          window.fetch = async (input, init) => {
+            const response = await fetch(input, init)
+            if (first && input === `/api/documents/${id}/edit-lease` && init?.method === 'PUT') {
+              first = false
+              const json = response.json.bind(response)
+              response.json = async () => {
+                const body: unknown = await json()
+                // 保留真实读取；下一任务通知之前，契约校验与连接事实发布的微任务已结算。
+                setTimeout(() => {
+                  void observed.heartbeatConsumed(response.status, body)
+                }, 0)
+                return body
+              }
+            }
+            return response
+          }
+        }, documentId)
         await page.clock.fastForward(30_000)
         await expect(saveStatus(page)).toHaveText('保存中…')
         expect(stalled.closed()).toBe(false)
+        // 只扣住保存回包：先让这次真实续租完整成功，再跳时间，避免顺带使它的 10 秒时限到期。
+        // 较新的成功心跳确认连接仍可用，较早的保存超时只改变保存结果，不倒退连接事实。
+        await expect.poll(async () => {
+          // Playwright 在快进中创建的零延时任务排到下一毫秒；只执行当前 tick 会一直错过通知。
+          await page.clock.runFor(1)
+          return heartbeat?.status
+        }, { message: '30 秒处的真实心跳已被页面完整消费' }).toBe(200)
+        expect(renewedEditLeaseSchema.safeParse(heartbeat?.body).success).toBe(true)
         await page.clock.fastForward(31_000)
         await expect(saveStatus(page)).toHaveText('保存失败，稍后自动重试')
         await expect(page.getByRole('alert')).toHaveText('保存失败：网络没有回应，请稍后重试')

@@ -2264,15 +2264,27 @@ describe('编辑时的保存与编辑权（M3-P1 的接入，原在编辑器页�
   it('离开提示：退出编辑中还在保存时有；保存完、等释放与重建的时候没有（内容都已存上，审查 A7）', async () => {
     const reply = deferred<SaveContentResponse>()
     const answer = deferred<undefined>()
-    const context = setup({ api: { save: async () => reply.promise }, editLease: { release: async () => answer.promise } })
+    const saving = deferred<undefined>()
+    const releasing = deferred<undefined>()
+    const context = setup({
+      api: { save: async () => {
+        saving.resolve(undefined)
+        return reply.promise
+      } },
+      editLease: { release: async () => {
+        releasing.resolve(undefined)
+        return answer.promise
+      } },
+    })
     await editing(context)
     context.factory.last().edit('甲')
     const exiting = context.mode.exit()
-    await settle()
+    // gzip 与摘要不保证一个宏任务就完成；等真实保存请求进入，再控制回包与释放的先后。
+    await saving.promise
     expect(modeOf(context.mode).kind).toBe('exiting')
     expect(context.mode.hasUnsavedWork()).toBe(true)
     reply.resolve(SAVED)
-    await settle()
+    await releasing.promise
     expect(context.editLease.release).toHaveBeenCalledOnce()
     expect(modeOf(context.mode).kind).toBe('exiting')
     expect(context.mode.hasUnsavedWork()).toBe(false)

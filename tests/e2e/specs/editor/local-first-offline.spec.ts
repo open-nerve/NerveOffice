@@ -58,7 +58,7 @@ async function holdLeaseReplies(page: Page, documentId: string) {
   } }
 }
 
-test.describe('US-M4-01/02/11 离线保存与联网复核', { tag: '@test-build' }, () => {
+test.describe('US-M4-02 离线保存与联网复核', { tag: '@test-build' }, () => {
   test('真实离线连续输入十分钟仍落盘；数据库租约过期后先续上再确认，确认之前零上传', async ({ page, context }) => {
     await page.clock.install()
     const { documentId, key } = await openLocalSheet(page, 'offline-ten-minutes')
@@ -200,7 +200,7 @@ test.describe('US-M4-01/02/11 离线保存与联网复核', { tag: '@test-build'
     }
   })
 
-  test('A 已落盘时新的未提交输入 B 仍只在本页，离开保护继续生效', async ({ page, context }) => {
+  test('US-M4-01 A 已落盘时新的未提交输入 B 仍只在本页，离开保护继续生效', async ({ page, context }) => {
     const { key } = await openLocalSheet(page, 'offline-current-input')
     try {
       await context.setOffline(true)

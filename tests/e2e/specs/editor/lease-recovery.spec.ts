@@ -93,7 +93,7 @@ async function saveWithLostReply(page: Page, documentId: string): Promise<number
 /**
  * 在 cell 键入 text、不回车，按 Ctrl/Cmd+S（按下的这一刻提交它，等同回车）：回包丢了的就是这一次——单元格编辑器开着时自动保存捕获不到
  * 这一处，生产构建里也不会先有一次自动保存（否则它拿走回包丢了的那一次，按的保存排在后面、原样重发认出已提交，页头一次也不说失败）。
- * 页头说过"保存失败，稍后自动重试"：看读屏播报区记下的话，不看此刻的状态——生产构建里自动保存 2 秒之后就原样重发、认出已提交，
+ * 页头说过"网络没有回应，正在重试"（M4-P2 的连接事实）：看读屏播报区记下的话，不看此刻的状态——生产构建里自动保存 2 秒之后就原样重发、认出已提交，
  * 看得见的状态一闪而过；测试构建里一直是它（M3-P4 审查 A7 的核对：时间窗压缩之后的 WebKit）。之后不要马上点画布：生产构建里
  * 重发成功时失败的提示条随之消失、画布跟着上移，点下去的那一刻布局在变会点错格（按快捷键，焦点留在表格里，接着键入就在下一格）
  */
@@ -101,13 +101,13 @@ async function saveTypedWithLostReply(page: Page, cell: string, text: string): P
   await recordStatusWrites(headerAnnouncement(page))
   await typeInCell(page, cell, text, false)
   await page.keyboard.press('ControlOrMeta+s')
-  await expect.poll(async () => (await spokenWrites(page)).map(write => write.text)).toContain('保存失败，稍后自动重试')
+  await expect.poll(async () => (await spokenWrites(page)).filter(write => !write.hidden).map(write => write.text)).toContainEqual(expect.stringContaining('网络没有回应，正在重试'))
 }
 
 test.describe('US-M3-13 没收到保存的确认，这期间编辑权到期：续上时认出期间的那一版是本页自己的，不误判为别处保存过', () => {
   // 只在测试构建里（@test-build）：要那次结果未知的保存一直悬着、由心跳先得知编辑权到期，而且之后页头回到"有未保存的修改"——
   // 生产构建里自动保存 2 秒之后就原样重发、认出它已提交，走不到"续上时认出"这一步；断开保存让它悬着的话，自动保存的重试一直失败，
-  // 页头说的是"保存失败，稍后自动重试"。生产构建里的这条路由下一条（保存先得知，断开这一页）覆盖
+  // 页头说的是网络异常。生产构建里的这条路由下一条（保存先得知，断开这一页）覆盖
   test('US-M3-13 心跳先得知编辑权到期：续上新的一代，以本页那次保存的修订为基准，"保存失败"随之消失；接着保存，服务器上的内容正确（审查 B1）', { tag: '@test-build' }, async ({ page }) => {
     await loginThroughApi(page, await createUser('recover-own-heartbeat'))
     const documentId = await createSheetThroughApi(page)

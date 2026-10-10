@@ -4,9 +4,9 @@
 // 这一行"状态"列里的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时状态区不在可视区域里，明眼人看这一行；说明写进状态区、下面的内容下移之后，页面把焦点所在的按钮滚回可视区域；窄屏时它排成一行，复验 C7），
 // 焦点回到这一行的按钮；审计页按动作找得到（操作者、对象、明细里被吊销的那一版）。
 // 这个人另一台设备上正在编辑的页面经心跳得知新版本，M4-P2 页面会自己重新取钥；当前没有未同步草稿时不打断编辑：下一次心跳的响应里版本加一，
-// 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。"没有可见的反应"以确定的界核对（审查 B3）：得知第 2 版之后再等下一次心跳回来
+// 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。换钥完成后的编辑界面以确定的界核对（审查 B3）：得知第 2 版之后再等下一次心跳回来
 // （它是处理完上一次之后才排的），标签页的标题、对话框、body 里画布之外的文字（复验 C3：门户里的提示条挂在 #editor-chrome 之外）与吊销之前相同、
-// 读屏状态区一句话也没写过、没有 alert、仍在编辑；键入、保存之后再核对一遍。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
+// 读屏仅允许换钥期间如实说明本机保障与浏览器限制，没有 alert、仍在编辑；键入、保存之后再核对一遍。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
 // 不真等：编辑的那一页装 Playwright 的时钟（打开之前装上，之后照常流动），要它的下一次心跳时拨 10 秒。
 // 容器 E2E 也跑（不带 @test-build：只用公开的接口与界面）
 import type { LocalKey } from '@nerve-office/contracts'
@@ -108,7 +108,7 @@ async function editorPageLook(page: Page): Promise<EditorPageLook> {
 }
 
 /**
- * 编辑器页对吊销没有可见的反应（审查 B3、复验 C3）：仍在编辑（可编辑的编辑器就绪）；标签页的标题、对话框的个数、body 里画布之外的文字
+ * 换钥结束后的编辑器页（审查 B3、复验 C3）：仍在编辑（可编辑的编辑器就绪）；标签页的标题、对话框的个数、body 里画布之外的文字
  * 都与吊销之前记下的相同；没有 alert、没有失去编辑权的说明。在确定的界之后调用（得知新版本之后的下一次心跳回来、保存之后），
  * 不当作"现在还没出现"的瞬时断言用
  */
@@ -134,6 +134,9 @@ async function lineCountOf(text: Locator): Promise<number> {
 }
 
 test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
+  // 换钥会把当前内容用新钥重写；沿生产节奏自动同步，才能比较前后均已同步的页面（容器里本来如此）。
+  test.use({ autosave: 'running' })
+
   test('US-M3-17 系统管理员在账户页吊销某人的本机密钥（键盘操作）：确认框说清楚用途与后果；状态区说明吊销了哪一版、换成了第几版，这一行的本机密钥随之换成新的一版、焦点回到这个按钮；审计页按动作找得到；他另一台设备上正在编辑的页面下一次心跳得知新的版本，照常编辑、保存；再取得到新的一把', async ({ page, anotherDevice }) => {
     const admin = await createUser('lk-admin', '吊销的管理员', { systemRole: 'admin' })
     const owner = await createUser('lk-owner', '丢了设备的人')
@@ -152,6 +155,10 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await openAndEnterEditing(anotherDevice, documentId)
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(1)
     expect(pageKeyRequests).toHaveLength(1)
+    // 吊销前后都比较“已编辑并同步完”的页面，不能把未编辑的“草稿已就绪”当作后续保存完成时应保持的状态。
+    await typeInCell(anotherDevice, 'A1', 'before revocation')
+    await saveAndWait(anotherDevice)
+    await expect(anotherDevice.locator('[data-slot="local-save-status"]')).toHaveAttribute('data-local-save-state', 'confirmed')
     // 吊销之前编辑器页上的样子（审查 B3、复验 C3）：已保存到云端，记下标签页的标题、对话框的个数（没有）与 body 里画布之外的文字；
     // 从这里起记下两个读屏状态区（页头里的播报区、页头之外的状态区）写进去的每一句话
     await expect(saveStatus(anotherDevice)).toHaveText('已保存到云端')
@@ -206,16 +213,29 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     const changedKey = await pageKeyRequests[1]!.response()
     expect(changedKey?.status()).toBe(200)
     expect((await changedKey!.json() as { readonly version: number }).version).toBe(2)
-    // 页面上没有可见的反应（审查 B3）：以再下一次心跳回来为界——它是页面处理完得知第 2 版的那一次之后才排的，之后才出现的反应也认得出。
-    // 标签页的标题、对话框、body 里画布之外的文字与吊销之前相同（复验 C3），读屏状态区一句话也没写过（说过又撤掉的也算），没有 alert、
-    // 没有失去编辑权的说明，仍在编辑
+    // 换钥完成后恢复原编辑界面（审查 B3）：以再下一次心跳回来为界——它是页面处理完得知第 2 版的那一次之后才排的。
+    // 标签页的标题、对话框、body 里画布之外的文字与吊销之前相同（复验 C3），没有 alert、没有失去编辑权的说明，仍在编辑。
+    // M4-P2 允许换钥期间的本机保障变化被如实播报；只接受已定义的密钥、镜像支持与持久保存提示，写进去的那一刻必须读得到。
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(2)
+    await expect(anotherDevice.locator('[data-slot="local-save-status"]')).toHaveAttribute('data-local-save-state', 'confirmed')
     await expectNoVisibleReaction(anotherDevice, quiet)
-    expect(await spokenWrites(anotherDevice), '读屏状态区里说了话（页面对吊销有了反应）').toEqual([])
+    const allowedNotices = new Set([
+      '暂未取得本机加密密钥，修改暂留在本页',
+      '此浏览器不支持本机额外备份，已完成的本机写入不受影响。',
+      '浏览器未授予持久保存，浏览器仍可能清理本机草稿。',
+      '无法确认持久保存许可，浏览器仍可能清理本机草稿。',
+      '连接和本机保存的限制提示已解除，云端同步状态见保存提示。',
+    ])
+    for (const write of await spokenWrites(anotherDevice)) {
+      expect(write.hidden, `换钥期间的说明写入时不可访问：${write.text}`).toBe(false)
+      for (const notice of write.text.split(' '))
+        expect(allowedNotices.has(notice), `换钥期间出现了预期之外的说明：${notice}`).toBe(true)
+    }
     // 照常编辑、保存
     await typeInCell(anotherDevice, 'A1', 'after revocation')
     await saveAndWait(anotherDevice)
     expect(cellOf((await savedContent(anotherDevice, documentId)).snapshot, 'A1')?.v).toBe('after revocation')
+    await expect(anotherDevice.locator('[data-slot="local-save-status"]')).toHaveAttribute('data-local-save-state', 'confirmed')
     // 用例最后（键入、保存之后）再核对一遍
     await expectNoVisibleReaction(anotherDevice, quiet)
 

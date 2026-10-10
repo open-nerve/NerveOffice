@@ -292,7 +292,7 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
   })
 })
 
-test('US-M4-11 在线打开改名表单后断网：输入保留、提交零请求；恢复后可保存', async ({ page, context }) => {
+test('US-M4-02 在线打开改名表单后断网：输入保留、提交零请求；恢复后可保存', async ({ page, context }) => {
   const owner = await createUser('offline-rename')
   const id = await createDocument(owner, '断网前打开')
   await loginThroughApi(page, owner)
