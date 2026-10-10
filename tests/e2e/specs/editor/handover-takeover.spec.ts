@@ -263,7 +263,8 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await openAndEnterEditing(editor, documentId)
     // 旧页面离开：放锁、发释放——释放送不到服务端（拦下）；之后再关时不再发（已经释放过一次）
     await editor.route('**/api/documents/*/edit-lease', async route => route.request().method() === 'DELETE' ? route.abort('internetdisconnected') : route.continue())
-    const release = editor.waitForRequest(request => request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+    // route.abort 完成、请求确实失败之后才关页，否则保活的释放仍可能送到服务端。
+    const release = editor.waitForEvent('requestfailed', request => request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
     await editor.evaluate(() => window.dispatchEvent(new Event('pagehide')))
     await release
     await editor.close()
