@@ -14,7 +14,8 @@
     "safari:selftest": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" node safari/selftest.ts",
     "measure:switch": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.measure.config.ts switch.spec.ts && NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" node measure/summarize.ts",
     "measure:memory": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.measure.config.ts memory.spec.ts",
-    "measure:probe": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.measure.config.ts probe.spec.ts"
+    "measure:probe": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.measure.config.ts probe.spec.ts",
+    "measure:local-save": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && NODE_OPTIONS=\"${NODE_OPTIONS:-} --conditions=@nerve-office/source\" playwright test -c playwright.measure.config.ts local-save.spec.ts"
   },
   "devDependencies": {
     "@nerve-office/contracts": "workspace:*",
