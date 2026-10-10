@@ -229,18 +229,18 @@ describe('OPFS 的镜像（M4-P1 设计 §3.8）：镜像交给管道；放开�
   })
 })
 
-describe('按文档排队（管道）：同一份文档按收到的先后；另一份文档不等', () => {
-  it('第一份文档的写入停在存储里时，第二份文档的写入先回复；第一份的两次按先后回复', async () => {
+describe('按文档排队（管道）：同一份文档按收到的先后，任务体再经过来源内的互斥', () => {
+  it('第一份文档完整写完才轮到其他任务；第一份的两次仍按先后回复', async () => {
     const { fake, send, posted, key } = await ready()
     const held = fake.holdNext('writeDraft')
     const first = send({ type: 'write', capture: capture(1, 'first') }, 10)
     const second = send({ type: 'write', capture: capture(2, 'second') }, 11)
     await held.reached
-    await send({ type: 'write', capture: capture(1, 'other', { key: OTHER_DRAFT }) }, 12)
+    const other = send({ type: 'write', capture: capture(1, 'other', { key: OTHER_DRAFT }) }, 12)
     held.release()
-    await Promise.all([first, second])
+    await Promise.all([first, second, other])
     const order = posted.map(entry => ('id' in entry.received ? entry.received.id : -1)).filter(id => id >= 10)
-    expect(order).toEqual([12, 10, 11])
+    expect(order).toEqual([10, 12, 11])
     expect((await storedText(fake, key)).text).toBe('second')
     expect((await storedText(fake, key, OTHER_DRAFT)).text).toBe('other')
   })

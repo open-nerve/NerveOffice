@@ -158,7 +158,7 @@ export interface ProbeCapture {
 export type MirrorStatus
   = | { readonly kind: 'mirrored' }
     | { readonly kind: 'off' }
-    | { readonly kind: 'not-mirrored', readonly reason: 'busy' | 'quota' | 'unsupported' }
+    | { readonly kind: 'not-mirrored', readonly reason: 'busy' | 'quota' | 'unsupported' | 'newer-format' }
     | { readonly kind: 'not-mirrored', readonly reason: 'failed', readonly error: ProbeError }
 
 export type PipelineWritten
@@ -273,6 +273,7 @@ export interface OutboxProbe {
   readonly list: (userId: string) => Promise<{ readonly kind: 'listed', readonly drafts: readonly ListedDraft[] } | ProbeProblem>
   readonly remove: (key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'changed' | 'absent' } | ProbeProblem>
   readonly removeUser: (userId: string) => Promise<{ readonly kind: 'cleared' } | ProbeProblem>
+  readonly retireUser: (userId: string, now: number) => Promise<{ readonly kind: 'retired' } | ProbeProblem>
   readonly purge: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: 'draft' | 'newer-format' | 'malformed' }[] } | ProbeProblem>
   readonly close: () => void
   readonly draftIds: (userId: string) => Promise<readonly string[]>

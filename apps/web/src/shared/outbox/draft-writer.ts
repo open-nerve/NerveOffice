@@ -1,17 +1,17 @@
-// 写入管道（M4-P1 设计 §3.1、§3.2、§3.4.3–§3.4.7）：与放置无关——同一份管道在发件箱 Worker 里跑（features/sheet-editor/outbox/），
-// 真实 Safari 的复核如果要求 WebKit 改在主线程放置（DEF-011），就在主线程跑；编辑器页（P2）只依赖 DraftWriter 这个接口，
+// 写入管道（M4-P1 设计 §3.1、§3.2、§3.4.3–§3.4.7）：与放置无关——三个浏览器都在发件箱 Worker 里跑它（features/sheet-editor/outbox/，
+// DEF-011 的定论，ADR-020）；进程内放置（没有镜像）只作 Worker 起不来时的退路。编辑器页（P2）只依赖 DraftWriter 这个接口，
 // Worker 的客户端实现同一个接口。
 // - 写入：去重（内容的 SHA-256 连同"公式待更新"与上次写入的相同、并且允许去重 → unchanged）→ gzip → 加密 → 交给存储。
 //   先封好再交给存储：压缩与加密都在存储的事务之外（事务里 await 别的异步会让它自动提交，draft-store.ts）。
-// - 同一份文档的操作排成一队、按调用的先后一个接一个（写入、重封、确认、读回、放弃）；不同文档互不等待。
+// - 同一份文档按调用顺序排队；任务体共用来源内的短期互斥，保证主库与镜像两段不会被登记、恢复或清理插入。
 // - 重封（标记在途、换密钥、确认之后改基准）：明文元数据变了就要换 AAD，按新的 AAD 与新的 IV 重新加密，再比较并交换（存储核对库里
 //   仍是那一份、写入者仍是它）。管道记着本页写下的每份文档最新的一份（元数据与 gzip），手里没有时先解开库里的。
 // - 跨边界不抛异常：结果一律是带 kind 的值，未知的错误折成名字与消息（跨 Worker 时原样传递）。
 // - 交出去的字节归调用方：写成时交回的 gzip 是一份拷贝，管道自己留的那一份不交出去（Worker 的宿主把交回的转移给主线程）。
 // - OPFS 的镜像（§3.8，只在发件箱 Worker 里给）：IndexedDB 写成（写入、重封、改基准）之后同一份记录写进镜像，删掉草稿（确认、放弃）之后
 //   截断镜像，失去写入者身份时放开它的句柄；登记拿到句柄之后，库里那一份不是镜像里最新写的就补写。读与登记之前先比对镜像与库——
-//   比对的策略（谁胜出、写回、截断、lost 的提示、读时交回哪一份）在 draft-recovery.ts，经 options.recovery 注入（审查 A19）。
-//   镜像没写成不影响库那一份，写入、登记的结果里带上。
+//   比对的策略（谁胜出、写回、截断、lost 的提示、读时交回哪一份）在 draft-recovery.ts，经 options.recovery 注入（审查 A19）；
+//   比对没做完时不登记（复验 C1，见 register）。镜像没写成不影响库那一份，写入、登记的结果里带上。
 // Worker 也引用这个文件：不引用 zod 与带 zod 的契约，不依赖 DOM
 import type { OutboxUnavailable } from './database.ts'
 import type { LocalKeyHandle, UnsealFailure } from './draft-codec.ts'
@@ -24,8 +24,10 @@ import type { RecoveryNotice } from './recovery-notice.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { gzipBytes, openDraft, sealDraft, sha256Hex, unsealFailureOf } from './draft-codec.ts'
 import { DRAFT_RECORD_VERSION, draftMetaOf } from './draft-record.ts'
-import { versionsToOpen } from './draft-recovery.ts'
+import { createDraftRecovery, pageMirror, unfinishedOf, versionsToOpen } from './draft-recovery.ts'
 import { describeFailure } from './failure.ts'
+import { opfsMirrorDirectory } from './mirror-directory.ts'
+import { withOutboxLock } from './outbox-lock.ts'
 import { isSameWriter } from './writer-fence.ts'
 
 /** 存储与管道这一侧的问题：写满（整个事务回滚，原记录不变）、库用不了（调用方退化为内存实现）、未知的错误 */
@@ -103,6 +105,7 @@ export type RegisterResult
    */
   = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: OpenedRecord | undefined, readonly mirror: MirrorStatus }
     | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean }
+  /** 没登记：登记之前的比对没做完（库的问题照原样；读不出镜像是 failed，名字是 MirrorUnreadable，复验 C1），由 P2 决定稍后重试或放弃本机草稿 */
     | WriterProblem
 
 /** 重封（标记在途）的结果 */
@@ -154,7 +157,10 @@ export interface DraftWriter {
   readonly release: (key: DraftKey) => Promise<void>
   /** 这个用户在镜像里有哪些文档（打开平台时的比对先列出，再一份一份地 reconcile） */
   readonly mirroredDocuments: (userId: string) => Promise<MirroredDocumentsResult>
-  /** 比对一份文档（§3.8，draft-recovery.ts）：镜像胜出时写回库（留下提示）、镜像过时时截断、本页拿着句柄而库里的胜出时补写镜像 */
+  /**
+   * 比对一份文档（§3.8，draft-recovery.ts）：镜像胜出时写回库（留下提示）、镜像过时时截断、本页拿着句柄而库里的胜出时补写镜像；
+   * 比对没做完时交回问题（之后再比对它）
+   */
   readonly reconcile: (key: DraftKey) => Promise<ReconcileResult>
   /** 这个用户的提示（P3 打开文档时说明"已从备份恢复""因浏览器存储损坏丢失"） */
   readonly notices: (userId: string) => Promise<NoticesResult>
@@ -169,7 +175,7 @@ export interface DraftWriterOptions {
   readonly now: () => number
   /** OPFS 的镜像（§3.8）：只在发件箱 Worker 里给（同步访问句柄只在专用 Worker 里有）；不给时不做镜像，结果里是 off */
   readonly mirror?: DraftMirror
-  /** 比对镜像与库的策略（draft-recovery.ts，配同一个镜像）：不给时不比对，只读库 */
+  /** 比对镜像与库的策略（Worker 配同一个镜像）；默认从页面可用的只读镜像恢复，主线程退路也不能跳过恢复。 */
   readonly recovery?: DraftRecovery
 }
 
@@ -224,10 +230,9 @@ type Remembered = { readonly kind: 'latest', readonly latest: Latest } | NoKey |
 /** 找本页写下的那一份的结果：另有库里没有、库里不是本页写的 */
 type OwnRecord = Remembered | { readonly kind: 'absent' } | { readonly kind: 'foreign' }
 
-const NOT_RECONCILED: Reconciled = { mirror: undefined, restored: undefined }
-
 export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
-  const { store, now, mirror, recovery } = options
+  const { store, now, mirror } = options
+  const recovery = options.recovery ?? createDraftRecovery({ store, now, mirror: pageMirror(opfsMirrorDirectory()), noteLost: false })
   const documents = new Map<string, DocumentState>()
   let current: LocalKeyHandle | undefined
   let disposed = false
@@ -248,14 +253,14 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
    */
   async function enqueue<T>(key: DraftKey, task: (state: DocumentState) => Promise<T>, failed: (error: FailureDescription) => T): Promise<T> {
     const state = stateOf(key)
-    const run = state.tail.then(async () => disposed ? failed(CLOSED) : task(state)).catch((error: unknown) => failed(describeFailure(error)))
+    const run = state.tail.then(async () => withOutboxLock(async () => disposed ? failed(CLOSED) : task(state))).catch((error: unknown) => failed(describeFailure(error)))
     state.tail = run.then(() => {})
     return run
   }
 
-  /** 比对这份文档（没有比对的策略时不比对） */
+  /** 比对这份文档；只在持有短期互斥锁的文档任务里调用。 */
   async function reconcileOf(key: DraftKey, stored?: StoreReadOutcome): Promise<Reconciled> {
-    return recovery === undefined ? NOT_RECONCILED : recovery.reconcile(key, stored)
+    return recovery.reconcile(key, stored)
   }
 
   /**
@@ -464,8 +469,17 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
 
   return {
     register: async (key, writer, force) => enqueue(key, async (state): Promise<RegisterResult> => {
-      // 登记之前先比对镜像（删库之后连写入者一起写回：不补就挡不住旧的写入者）
+      // 登记之前先比对镜像（删库之后连写入者一起写回：不补就挡不住旧的写入者）。比对没做完（写回、核对丢失时库出了问题，读库出了问题
+      // 而镜像里有要比对的，读镜像出错）就不登记，交回这个问题（复验 C1，与读草稿一样由 P2 稍后再试）：新登记的写入者继承的高水位
+      // 没看过镜像里那一份，草稿序号这条线就分叉了——本页之后轮流写槽位，第二次就把它盖掉，之后的比对也判不对。
+      // 同源短期互斥锁覆盖 enqueue 整个任务：别的 Worker 的临时读/恢复、主库+镜像写入已经完整结束，才轮到本次登记。
+      // 此时 busy 只可能是空闲 Worker 保留的长期句柄；它在完整恢复之后登记，之后只在主库提交后写镜像，故可继续登记。
+      // 主线程退路也先做只读恢复。不能没有互斥就放行 busy：临时读者还没恢复时，新页可能先写出同号草稿，误把旧镜像判为 seen。
+      // 不在"之后第一次拿到句柄时"再比对：那时本页可能已写了自己的序号，与镜像里那一份撞上，会被误判为 seen
       const reconciled = await reconcileOf(key)
+      const unfinished = unfinishedOf(reconciled)
+      if (unfinished !== undefined)
+        return problemOf(unfinished)
       const outcome = await store.registerWriter(key, writer, { now: now(), force })
       if (outcome.kind === 'superseded') {
         mirror?.detach(key)
@@ -479,9 +493,8 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       // 现有的草稿：库里的（比对写回的已经在库里），同一版本在镜像里的拷贝备着
       const existing = await openedOf(outcome.existing ?? { kind: 'absent' }, { mirror: reconciled.mirror, restored: undefined })
       const attached = mirror === undefined ? MIRROR_OFF : await mirror.attach(key)
-      // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回。
-      // 比对没做完（写回时库出了问题）时不补写：还不知道镜像里那一份该不该胜出，不拿库里的盖掉它
-      const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' && reconciled.problem === undefined ? await mirrorBackfill(outcome.existing.draft) : undefined
+      // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回
+      const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' ? await mirrorBackfill(outcome.existing.draft) : undefined
       return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing, mirror: filled ?? attached }
     }, error => ({ kind: 'failed', error })),
 
@@ -621,8 +634,8 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
     },
 
     reconcile: async key => enqueue(key, async (): Promise<ReconcileResult> => {
-      const reconciled = await reconcileOf(key)
-      return reconciled.problem === undefined ? { kind: 'reconciled' } : problemOf(reconciled.problem)
+      const unfinished = unfinishedOf(await reconcileOf(key))
+      return unfinished === undefined ? { kind: 'reconciled' } : problemOf(unfinished)
     }, error => ({ kind: 'failed', error })),
 
     notices: async (userId) => {

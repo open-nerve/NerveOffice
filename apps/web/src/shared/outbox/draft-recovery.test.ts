@@ -89,6 +89,11 @@ describe('比对要做什么（只看库里的草稿与镜像里最新写的那�
 describe('读草稿、登记时交回哪一个版本（审查 A3）', () => {
   const seven = record(7)
   const eight = record(8)
+  it('库读取失败、镜像混有更新格式与有效旧份：不能退回旧份', () => {
+    const mirror = slots(NEWER_FORMAT, valid(record(9), 1))
+    expect(versionsToOpen({ kind: 'failed', error: new Error('read failed') }, { mirror, restored: undefined })).toEqual([])
+  })
+
   it('写回了：写回的那一份，同一版本在镜像里的另一份跟在后面；不交回更旧的版本', () => {
     const copy = { ...eight, iv: new Uint8Array(12) }
     const read = slots(valid(eight, 4), valid(copy, 3))
@@ -113,6 +118,17 @@ describe('读草稿、登记时交回哪一个版本（审查 A3）', () => {
 })
 
 describe('比对一份文档（createDraftRecovery）', () => {
+  it('写入者缺失而主库已有另一方草稿：foreign 镜像留着，读者不截断、不补写', async () => {
+    const store = fakeDraftStore()
+    store.putRaw('drafts', KEY, record(8, { writerId: OTHER_WRITER_ID }))
+    const read = slots(valid(record(9), 1), { kind: 'empty' })
+    const mirror = scriptedMirror(read, false)
+    expect(await createDraftRecovery({ store: store.store, mirror, now: () => NOW }).reconcile(KEY)).toEqual({ mirror: read, restored: undefined })
+    expect(mirror.cleared).toEqual([])
+    expect(mirror.backfilled).toEqual([])
+    expect(store.rawNotice(KEY)).toBeUndefined()
+  })
+
   it('镜像里什么也没有（空的槽位、文件不在、被占着、用不了）：不读库', async () => {
     for (const read of [slots(EMPTY, EMPTY), slots(NEWER_FORMAT, EMPTY), { kind: 'absent' } as const, { kind: 'busy' } as const, { kind: 'unsupported' } as const]) {
       const store = fakeDraftStore()

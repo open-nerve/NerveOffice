@@ -7,6 +7,9 @@
 //   库里连草稿带写入者都没了时留下 lost 提示，之后截断这两个没用的槽位。
 // - 读草稿、登记时交回哪一份（versionsToOpen，审查 A3）：写回了就是写回的那一份，否则库里的，库用不了时镜像里最新写的；同一个版本在库与
 //   镜像里各有一份时都交回（解不开的那一份换同一版本的另一份），不退回更旧的版本。
+// - 槽位里有更新的页面写的（部署回滚之后，复验 C2）：整个镜像按认不出处理——不写回、不留 lost、不截断、不补写，读时也不拿它顶替库。
+// - 比对没做完（unfinishedOf，复验 C1）：写回、核对丢失时库出了问题，读库出了问题而镜像里有要比对的，读镜像出错。登记与比对一份时
+//   如实交回、不往下做（draft-writer.ts）；读草稿照旧交回能读出的那一份。
 // 依赖经接口注入：发件箱 Worker 里是镜像（draft-mirror.ts：同步访问句柄，能截断、补写）；平台页面（P4 的本机草稿页列出与清理之前先比对，
 // 审查 A18）是只读的镜像（pageMirror：经 getFile 读，不截断、不补写——截断留给编辑器页的比对，没用的目录由保留期回收），只写回、不留
 // lost（截断不了槽位，留了之后每次比对都会再留一遍；lost 由编辑器页的发件箱 Worker 留下）。
@@ -17,7 +20,8 @@ import type { DraftStore, StoreProblem, StoreReadOutcome } from './draft-store.t
 import type { FailureDescription } from './failure.ts'
 import type { MirrorDirectory } from './mirror-directory.ts'
 import { describeFailure } from './failure.ts'
-import { parseSlot } from './mirror-slot.ts'
+import { hasNewerFormatSlot, parseSlot } from './mirror-slot.ts'
+import { withOutboxLock } from './outbox-lock.ts'
 import { compareDrafts, isSameWriter } from './writer-fence.ts'
 
 /** 比对用到的镜像：读两个槽位（记录核对是这份文档的）、截断、补写（拿着句柄时；没拿着交回 undefined） */
@@ -32,12 +36,14 @@ export type RecoveryStore = Pick<DraftStore, 'readDraft' | 'restoreDraft' | 'rec
 
 /**
  * 比对之后：镜像读出的样子（截断了的为 undefined：里面的不再算数）、写回库的那一份（没写回为 undefined）；写回、核对丢失时库出了问题
- * （写满、用不了）时带上它——读草稿如实交回，不拿镜像里的那一份顶替（它胜不胜出要库里的写入者来定）
+ * （写满、用不了）时带上它——读草稿如实交回，不拿镜像里的那一份顶替（它胜不胜出要库里的写入者来定）；读库出了问题、镜像里却有要比对的
+ * 时带上 unread（读草稿交回镜像里最新写的那一份顶替：读得出总比读不出好；登记、比对一份时算没做完）
  */
 export interface Reconciled {
   readonly mirror: MirrorRead | undefined
   readonly restored: StoredDraft | undefined
   readonly problem?: StoreProblem
+  readonly unread?: StoreProblem
 }
 
 export interface DraftRecovery {
@@ -50,13 +56,13 @@ export interface DraftRecoveryOptions {
   readonly mirror: RecoveryMirror
   /** 墙上时间（毫秒）：保留期、提示的时刻 */
   readonly now: () => number
-  /** 两个槽位都不合格、库里什么都没有时留不留 lost（默认留；平台页面里截断不了槽位，不留） */
+  /** 无法恢复时留不留 lost（默认留；平台页面只读比对，不留） */
   readonly noteLost?: boolean
 }
 
-/** 两个槽位里合格的记录，最新写的（代号大的）在前 */
+/** 两个槽位里合格的记录，最新写的（代号大的）在前；有更新的页面写的槽位时没有（整个镜像认不出：不拿更旧的顶替，复验 C2） */
 export function mirroredRecords(read: MirrorRead | undefined): readonly StoredDraft[] {
-  if (read?.kind !== 'slots')
+  if (read?.kind !== 'slots' || hasNewerFormatSlot(read.slots))
     return []
   return read.slots
     .flatMap(slot => (slot.kind === 'valid' ? [slot] : []))
@@ -64,7 +70,7 @@ export function mirroredRecords(read: MirrorRead | undefined): readonly StoredDr
     .map(slot => slot.record)
 }
 
-/** 有没有写一半、对不上的槽位（更新的页面写的不算：审查 A8、A10） */
+/** 有没有写一半、对不上的槽位（更新的页面写的不算：审查 A8、A10；有它时整个镜像认不出，比对之前就交回了） */
 function hasTornSlot(read: Extract<MirrorRead, { readonly kind: 'slots' }>): boolean {
   return read.slots.some(slot => slot.kind === 'invalid' && slot.reason !== 'newer-format')
 }
@@ -110,9 +116,23 @@ export function reconcileAction(stored: StoreReadOutcome, latest: StoredDraft | 
 }
 
 /**
- * 读草稿、登记时交回哪一个版本的几份拷贝（审查 A3）：写回了就是写回的那一份；否则库里的草稿；库用不了时镜像里最新写的那一份。
- * 同一个版本在库与镜像里各有一份时都交回，库里的在前（解不开的那一份换同一版本的另一份）；不交回更旧的版本。空的就是没有
+ * 比对没做完（复验 C1）：写回、核对丢失时库出了问题；读库出了问题而镜像里有要比对的；读镜像出错（交回 MirrorUnreadable，名字与
+ * 消息里带着原来的错误）。没做完时登记不往下做——新登记的写入者继承的高水位没看过镜像里那一份，草稿序号这条线就分叉了；比对一份也
+ * 如实交回（之后再比对它）。镜像被占着（busy）、不在、用不了不算：见 draft-writer.ts 的 register
  */
+export function unfinishedOf(reconciled: Reconciled): StoreProblem | undefined {
+  if (reconciled.problem !== undefined)
+    return reconciled.problem
+  if (reconciled.unread !== undefined)
+    return reconciled.unread
+  if (reconciled.mirror?.kind === 'failed') {
+    const { name, message } = reconciled.mirror.error
+    return { kind: 'failed', error: { name: 'MirrorUnreadable', message: `读不出镜像（${name}：${message}）` } }
+  }
+  return undefined
+}
+
+/** 只打开选定版本：恢复成功的优先，否则库里的优先；同一版本的镜像可补主库坏掉的密文，不退回旧版本。 */
 export function versionsToOpen(stored: StoreReadOutcome, reconciled: Reconciled): readonly StoredDraft[] {
   const mirrored = mirroredRecords(reconciled.mirror)
   let primary: StoredDraft | undefined
@@ -153,12 +173,17 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
       const read = await mirror.read(key)
       if (read.kind !== 'slots')
         return { mirror: read, restored: undefined }
+      // 更新的页面写的槽位（复验 C2）：整个镜像认不出，不动它（不读库）
+      if (hasNewerFormatSlot(read.slots))
+        return { mirror: read, restored: undefined }
       const latest = mirroredRecords(read)[0]
       const torn = hasTornSlot(read)
       // 镜像里什么也没有（空的槽位）：不读库
       if (latest === undefined && !torn)
         return { mirror: read, restored: undefined }
       const current = stored ?? await store.readDraft(key)
+      if (current.kind === 'quota' || current.kind === 'unavailable' || current.kind === 'failed')
+        return { mirror: read, restored: undefined, unread: current }
       const kept: Reconciled = { mirror: read, restored: undefined }
       switch (reconcileAction(current, latest, torn)) {
         case 'none':
@@ -170,7 +195,7 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
         case 'restore': {
           if (latest === undefined)
             return kept
-          const outcome = await store.restoreDraft(latest, { now: now() })
+          const outcome = await store.restoreDraft(latest, { now: now(), noteLost })
           if (outcome.kind === 'restored')
             return { mirror: read, restored: latest }
           if (outcome.kind !== 'kept')
@@ -181,7 +206,8 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
           // 库里的胜出：本页是写入者时补写，镜像跟上库
           if (current.kind === 'draft' && await backfill(current.draft))
             return kept
-          // 镜像过时（库里的写入者看过它、超过保留期）：截断它，里面的不再算数——库里没有草稿时不让确认删掉、放弃过的在删库之后复活
+          // 镜像过时（库里的写入者看过它、超过保留期）：截断它，里面的不再算数——库里没有草稿时不让确认删掉、放弃过的在删库之后复活。
+          // 别的（foreign、unseen——库里已留下 lost 提示——、not-newer）不截断：镜像里那一份留给库里的写入者写镜像时盖掉
           if (outcome.reason === 'seen' || outcome.reason === 'expired')
             return clear(key)
           return kept
@@ -260,7 +286,8 @@ export async function reconcileAll(source: MirroredDocuments, userId: string): P
 }
 
 /**
- * 平台页面里的比对来源（P4）：存储与只读的镜像组成的比对（pageMirror），列出用镜像的目录。比对时出的意外折成 failed，不抛出
+ * 平台页面里的比对来源（P4）：存储与只读的镜像组成的比对（pageMirror），列出用镜像的目录。比对没做完（unfinishedOf）的那一份算出错，
+ * 比对时出的意外折成 failed，不抛出
  */
 export function pageReconciliation(options: { readonly store: RecoveryStore, readonly directory: MirrorDirectory, readonly now: () => number }): MirroredDocuments {
   const recovery = createDraftRecovery({ store: options.store, mirror: pageMirror(options.directory), now: options.now, noteLost: false })
@@ -280,8 +307,7 @@ export function pageReconciliation(options: { readonly store: RecoveryStore, rea
     },
     reconcile: async (key) => {
       try {
-        const reconciled = await recovery.reconcile(key)
-        return reconciled.problem ?? { kind: 'reconciled' }
+        return await withOutboxLock(async () => unfinishedOf(await recovery.reconcile(key)) ?? { kind: 'reconciled' })
       }
       catch (error) {
         return { kind: 'failed', error: describeFailure(error) }

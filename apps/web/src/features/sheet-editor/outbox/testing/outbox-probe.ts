@@ -96,6 +96,7 @@ export interface OutboxProbe {
   readonly list: (userId: string) => Promise<{ readonly kind: 'listed', readonly drafts: readonly ListedDraft[] } | Plain<StoreProblem>>
   readonly remove: (key: DraftKey, expectedSeq?: number) => Promise<Plain<Awaited<ReturnType<DraftStore['removeDraft']>>>>
   readonly removeUser: (userId: string) => Promise<Plain<Awaited<ReturnType<DraftStore['removeUserData']>>>>
+  readonly retireUser: (userId: string, now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['retireUser']>>>>
   readonly purge: (now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['purgeExpired']>>>>
   readonly close: () => void
   /** 列表的标记（draft-index.ts） */
@@ -411,6 +412,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
     list: async userId => plain(await store.listDrafts(userId)),
     remove: async (draftKey, expectedSeq) => plain(await store.removeDraft(draftKey, expectedSeq)),
     removeUser: async userId => plain(await store.removeUserData(userId)),
+    retireUser: async (userId, now) => plain(await store.retireUser(userId, { now })),
     purge: async now => plain(await store.purgeExpired(now)),
     close: () => store.close(),
     draftIds: async userId => [...await draftDocumentIds(userId)].sort(),

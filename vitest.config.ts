@@ -70,8 +70,6 @@ export default defineConfig({
         'apps/web/src/shared/outbox/database.ts',
         'apps/web/src/shared/outbox/draft-store.ts',
         'apps/web/src/shared/outbox/draft-index.ts',
-        // 发件箱 Worker 的入口只做组装（接上处理、存储与空定时器），由浏览器层用例覆盖；处理、客户端与管道在单元测试里测
-        'apps/web/src/features/sheet-editor/outbox/outbox.worker.ts',
         // 编辑器页测试构建里的探针：只在测试构建里，浏览器层用例经它调用生产代码
         'apps/web/src/features/sheet-editor/outbox/testing/**',
         // 命令行入口只做参数解析与输出，规则本身在各自的模块里测试

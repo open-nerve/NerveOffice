@@ -1,6 +1,6 @@
 // 草稿的编解码（M4-P1 设计 §3.3、§3.4.3、§3.4.6，00 号计划书 §7.6）：gzip 与 gunzip、SHA-256、AES-GCM-256 的封与开、解不开的归类。
 // 压缩全程在内存的字节上做，不经 Blob：WebKit 读 Blob 要经它的网络进程，离线时读不出来（M1-P4）；M0 原型经 Blob 的写法不能照搬。
-// 发件箱 Worker 与主线程（WebKit 改在主线程放置时，DEF-011）都用这里：不引用 zod，不依赖 DOM
+// 发件箱 Worker 与主线程（页面里解开本页的草稿；Worker 起不来时进程内放置的退路）都用这里：不引用 zod，不依赖 DOM
 import type { DraftMeta, StoredDraft } from './draft-record.ts'
 import { draftAad } from './draft-aad.ts'
 import { DRAFT_IV_BYTES, DRAFT_TAG_BYTES } from './draft-record.ts'

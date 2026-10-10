@@ -88,7 +88,9 @@ export type OutboxMessage = OutboxReply | OutboxNotice
 /** 枚举的全部取值：类型上要求列全（少了一个，赋值就过不了） */
 const UNAVAILABLE_REASONS: Readonly<Record<OutboxUnavailableReason, true>> = { 'unsupported': true, 'denied': true, 'newer-version': true, 'blocked': true }
 const FENCE_REASONS: Readonly<Record<FenceReason, true>> = { 'not-writer': true, 'stale-seq': true, 'foreign-draft': true, 'changed': true }
-const MIRROR_SKIPS: Readonly<Record<'busy' | 'quota' | 'unsupported', true>> = { busy: true, quota: true, unsupported: true }
+/** 镜像没写成、不带错误的原因（复验 C2 加了 newer-format） */
+type MirrorSkip = Exclude<Extract<MirrorStatus, { readonly kind: 'not-mirrored' }>['reason'], 'failed'>
+const MIRROR_SKIPS: Readonly<Record<MirrorSkip, true>> = { 'busy': true, 'quota': true, 'unsupported': true, 'newer-format': true }
 
 function isOneOf<T extends string>(table: Readonly<Record<T, true>>, value: unknown): value is T {
   return typeof value === 'string' && Object.hasOwn(table, value)

@@ -1,5 +1,5 @@
 // 发件箱 Worker 的客户端（M4-P1 设计 §3.1、§3.4.8）：主线程这一侧，实现 DraftWriter——编辑器页（P2）只依赖那个接口，不知道管道在 Worker 里
-// （WebKit 改在主线程放置时换成进程内的 createDraftWriter，DEF-011）。
+// （三个浏览器都用 Worker 放置，DEF-011 的定论；Worker 起不来时的退路是进程内的 createDraftWriter，没有镜像）。
 // - 握手：一创建就发 hello（带协议版本与空定时器的开关）；ready() 交回握手的结果。
 // - 按 id 对应：回复可以乱序；结果按请求的种类核对之后才交出去。每个请求有看门狗时限：IndexedDB 在 Safari 上偶尔挂住，Worker 不回应也不能
 //   挂住页面（M0 审查 S5）。

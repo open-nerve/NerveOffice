@@ -11,6 +11,38 @@ import { loginThroughApi } from '../../support/session.ts'
 const RETENTION_MS = 14 * DAY_MS
 
 test.describe('发件箱的清理', { tag: '@test-build' }, () => {
+  test('清理前立墓碑：单个 strict 事务覆盖只有草稿、只有提示、只有写入者的文档，保留内容与提示，其他用户不变', async ({ page }) => {
+    const user = await createUser('ob-retire')
+    await loginThroughApi(page, user)
+    await openOutboxProbe(page)
+    await probe(page, 'chooseKey', 1)
+    const writer = writerOf(3)
+    const draftOnly = { userId: user.id, documentId: randomUUID() }
+    const noticeOnly = { userId: user.id, documentId: randomUUID() }
+    const writerOnly = { userId: user.id, documentId: randomUUID() }
+    const other = { userId: `${user.id}0`, documentId: randomUUID() }
+    await probe(page, 'register', other, writer, { now: NOW, force: false })
+    expect(await probe(page, 'write', draftFor(other, writer, 7))).toEqual({ kind: 'written' })
+    const raw = await probeDatabase(page, 'getRaw', 'drafts', other)
+    const draft = { ...raw, ...draftOnly }
+    await probeDatabase(page, 'putRaw', 'drafts', draft)
+    await probeDatabase(page, 'patchDraft', draftOnly, { iv: (raw?.iv as { hex: string }).hex, ciphertext: (raw?.ciphertext as { hex: string }).hex })
+    const notice = { ...noticeOnly, kind: 'lost', at: NOW }
+    await probeDatabase(page, 'putRaw', 'notices', notice)
+    await probe(page, 'register', writerOnly, writer, { now: NOW, force: false })
+
+    await probe(page, 'recordTransactions')
+    expect(await probe(page, 'retireUser', user.id, NOW + 1)).toEqual({ kind: 'retired' })
+    expect(await probe(page, 'transactions')).toEqual([{ stores: ['drafts', 'writers', 'notices'], mode: 'readwrite', durability: 'strict' }])
+    for (const key of [draftOnly, noticeOnly, writerOnly])
+      expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ ...key, writerId: 'retired', registeredAt: NOW + 1 })
+    expect(await probeDatabase(page, 'getRaw', 'writers', draftOnly)).toMatchObject({ writeEpoch: 1, lastDraftSeq: 7 })
+    expect(await probeDatabase(page, 'getRaw', 'drafts', draftOnly)).toEqual(draft)
+    expect(await probeDatabase(page, 'getRaw', 'notices', noticeOnly)).toEqual(notice)
+    expect(await probeDatabase(page, 'getRaw', 'writers', other)).toMatchObject({ ...writer, lastDraftSeq: 7 })
+    expect(await probe(page, 'write', draftFor(writerOnly, writer, 1))).toEqual({ kind: 'fenced', reason: 'not-writer' })
+  })
+
   test('按用户清理：这个人的草稿与写入者一起删，别人的不动；之后迟到的写入因写入者不在而被拦下', async ({ page }) => {
     const user = await createUser('ob-clear')
     const other = await createUser('ob-clear-other')

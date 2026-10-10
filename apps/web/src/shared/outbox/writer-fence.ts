@@ -207,8 +207,9 @@ export function compareDrafts(a: Pick<DraftMeta, 'writeEpoch' | 'draftSeq' | 'up
 }
 
 /**
- * 从 OPFS 镜像写回 IndexedDB 的判定（§3.8，审查 A2 与它的订正）。草稿序号是一份文档一条线，登记时高水位取 max 继承下来——
- * 候选的序号不大于库里写入者的高水位，就说明库里的写入者看过它。
+ * 从 OPFS 镜像写回 IndexedDB 的判定（§3.8，审查 A2 与它的订正，复验 C1 细化了第 4 条）。草稿序号是一份文档一条线，登记时高水位取 max
+ * 继承下来——候选的序号不大于库里写入者的高水位，就说明库里的写入者看过它。这条线不分叉的前提是每一次登记之前比对都做完了
+ * （draft-writer.ts 的 register：没做完就不登记）。
  * - expired：超过保留期（镜像随之作废，保留期本来就要删它）；
  * - unrecognized：库里那一条认不出（更新的页面写的、形状不对）：不动它；
  * - 库里没有写入者：没有草稿（删库）→ 写回，写入者照它建（create）；有草稿 → foreign，不拿镜像换掉库里的；
@@ -220,11 +221,15 @@ export function compareDrafts(a: Pick<DraftMeta, 'writeEpoch' | 'draftSeq' | 'up
  *   2. 候选的代次更大 → 写回，写入者换成候选的（replace：库悄悄丢了更新的那次登记与它的写入——UR-034 的变体）；
  *   3. 库里没有草稿 → 写回成别人留下的草稿，写入者与高水位不动（keep：库里的写入者同代或更新、还没写过草稿；活着的那一页按自己
  *      交回的高水位分配序号，抬高会让它的写入变成 stale-seq；不覆盖别人的草稿护住它，P3 给副本）；
- *   4. 否则 → foreign（库里的写入者同代或更新、已有自己的草稿，不拿镜像里的覆盖它）
+ *   4. 库里的草稿就是候选那个写入者更早的一份 → 同样 keep：换掉那份草稿，写入者与高水位不动——不覆盖任何人的修改；活着的那一页下一次
+ *      带着旧的 adoptSeq 写入得到 foreign-draft，由 P3 重新决定。库里那一份不比它旧 → not-newer；
+ *   5. 否则（库里是库里写入者自己的、或者别人的草稿）→ unseen：不写回，候选却没被看过（序号大于高水位）——存储留下 lost 提示
+ *      （如实告知：这一份不会再恢复），比对不截断槽位。已知限制：服务端代次倒退之后以 force 登记的那一次（代次更小）连同它的写入被库
+ *      丢掉时，候选的代次比库里的小，认不出它更新，落在这里（ADR-020）
  */
 export type RestoreVerdict
   = | { readonly kind: 'restore', readonly writer: 'create' | 'replace' | 'raise' | 'keep' }
-    | { readonly kind: 'skip', readonly reason: 'expired' | 'unrecognized' | 'retired' | 'foreign' | 'not-newer' | 'seen' }
+    | { readonly kind: 'skip', readonly reason: 'expired' | 'unrecognized' | 'retired' | 'foreign' | 'not-newer' | 'seen' | 'unseen' }
 
 export function decideRestore(writer: WriterRecord | undefined, existing: ExistingDraft | undefined, candidate: DraftMeta, now: number): RestoreVerdict {
   if (isExpired(candidate, now))
@@ -243,12 +248,16 @@ export function decideRestore(writer: WriterRecord | undefined, existing: Existi
     return { kind: 'restore', writer: 'raise' }
   if (candidate.writeEpoch > writer.writeEpoch)
     return { kind: 'restore', writer: 'replace' }
-  return existing === undefined ? { kind: 'restore', writer: 'keep' } : { kind: 'skip', reason: 'foreign' }
+  if (existing === undefined)
+    return { kind: 'restore', writer: 'keep' }
+  if (isSameWriter(existing.draft, candidate))
+    return compareDrafts(existing.draft, candidate) < 0 ? { kind: 'restore', writer: 'keep' } : { kind: 'skip', reason: 'not-newer' }
+  return { kind: 'skip', reason: 'unseen' }
 }
 
 /**
  * 写回时写入者的记录（decideRestore 的 writer）：create、replace 换成写回的那一份的写入者（登记时刻记为 now），高水位不低于它的序号；
- * raise 只抬高水位；keep 不动（交回 undefined，不写写入者）
+ * raise 只抬高水位；keep 不动（交回 undefined，不写写入者：库里写入者的高水位可能比写回的那一份的序号小，活着的那一页照它分配序号）
  */
 export function restoredWriterOf(current: WriterRecord | undefined, restored: DraftMeta, verdict: 'create' | 'replace' | 'raise' | 'keep', now: number): WriterRecord | undefined {
   const lastDraftSeq = Math.max(current?.lastDraftSeq ?? 0, restored.draftSeq)

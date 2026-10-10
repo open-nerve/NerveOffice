@@ -7,8 +7,10 @@
 // 镜像目录有句柄开着（编辑器页的发件箱 Worker 正写着这份文档）时删不了，也可能一时出错：这一次跳过它，结果里的 pending 列出没清掉的文档。
 // 跳过的那几份把写入者换成墓碑（审查 A1、A6，writer-fence.ts 的 RETIRED_WRITER_ID）：高水位留着，那一页之后的写入、重封、确认一律
 // not-writer（它的 Worker 随之放开句柄、页面经服务端核对再决定），比对时库里有墓碑就不从镜像写回。
-// - 按用户清理：跳过的那几份草稿与提示留着、写入者换成墓碑；之后再调 removeUser 接着清（连墓碑一起删）——只在这个人仍是退出的时候
-//   （同一个人又登录了就不再清，他的草稿照常用）。
+// - 按用户清理：先在库里把这个人每份文档的写入者换成墓碑（一个事务，复验 C5）——之后那一页写不进去、它的发件箱 Worker 不再写镜像，
+//   删镜像目录与清库之间不会把目录重建出来；再列出、删掉他的镜像目录；最后清库，跳过的那几份草稿、提示与墓碑留着。之后再调 removeUser
+//   接着清（连墓碑一起删）——只在这个人仍是退出的时候（同一个人又登录了就不再清，他的草稿照常用；清理途中他在别的标签页重新登记也不在
+//   这里防）。
 // - 放弃：库里的草稿与提示照删，写入者换成墓碑；不必再调 abandon（再调会删掉那一页之后新写的）：镜像在下一次比对时被截断（墓碑挡住写回），
 //   目录与墓碑由保留期回收。
 // - 保留期：只回收没用的目录（两个槽位都超过 14 天没动过，或者文件不在：审查 A9，刚截断的空目录留给下一次编辑，平时不碰 OPFS 的目录库），
@@ -17,6 +19,7 @@
 import type { DraftKey } from './draft-record.ts'
 import type { DraftStore, PurgedDraft, StoreProblem } from './draft-store.ts'
 import type { MirrorDirectory, MirrorProblem, SlotFileInfo } from './mirror-directory.ts'
+import { withOutboxLock } from './outbox-lock.ts'
 import { LOCAL_DRAFT_RETENTION_MS } from './writer-fence.ts'
 
 /** 按用户清理：pending 是这一次没清掉的文档（草稿与提示留着、写入者换成了墓碑），之后再调接着清；空的就是清完了 */
@@ -45,7 +48,7 @@ export interface PurgeReport {
 export type PurgeOutcome = PurgeReport | StoreProblem
 
 export interface LocalCleanup {
-  /** 按用户清理（退出登录、账户停用）：这个人的草稿、写入者（含墓碑）、提示与镜像目录 */
+  /** 按用户清理（退出登录、账户停用）：这个人的草稿、写入者（含墓碑）、提示与镜像目录；先立墓碑、再删镜像目录、最后清库 */
   readonly removeUser: (userId: string) => Promise<UserCleanupOutcome>
   /** 放弃一份（本机草稿页，用户的决定）：带 expectedSeq 时只删那一份；草稿、提示与镜像目录（写入者留着，镜像目录删不掉时换成墓碑） */
   readonly abandon: (key: DraftKey, expectedSeq?: number) => Promise<AbandonOutcome>
@@ -82,6 +85,15 @@ function idOf(key: DraftKey): string {
 
 export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
   const { store, directory, now } = options
+
+  async function exclusive<T>(task: () => Promise<T>): Promise<T | StoreProblem> {
+    try {
+      return await withOutboxLock(task)
+    }
+    catch (error) {
+      return { kind: 'failed', error }
+    }
+  }
 
   /** 删掉这份文档的镜像目录：删了（或者本来就不在、没有 OPFS）为真；句柄开着、出错为假（这一次跳过） */
   async function removeMirror(key: DraftKey): Promise<boolean> {
@@ -131,7 +143,11 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
   }
 
   return {
-    removeUser: async (userId) => {
+    removeUser: async userId => exclusive(async (): Promise<UserCleanupOutcome> => {
+      // 短期锁先等已经提交但尚未镜像的写入结束；墓碑再拦住后续旧页面的写入，镜像暂时删不掉时保留它。
+      const retired = await store.retireUser(userId, { now: now() })
+      if (retired.kind !== 'retired')
+        return retired
       const listed = await directory.listDocuments(userId)
       if (listed.kind === 'quota' || listed.kind === 'failed')
         return listingFailed(listed)
@@ -141,16 +157,16 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
         if (!await removeMirror(key))
           pending.push(key)
       }
-      // 镜像目录删不掉的那几份：草稿与提示留着、写入者换成墓碑（那一页之后写不进去，比对时也不从镜像写回）
+      // 镜像目录删不掉的那几份：草稿与提示留着、写入者是墓碑（那一页之后写不进去，比对时也不从镜像写回）
       const cleared = await store.removeUserData(userId, { retire: pending.map(key => key.documentId), now: now() })
       if (cleared.kind !== 'cleared')
         return cleared
       if (pending.length === 0)
         await directory.removeUser(userId)
       return { kind: 'cleared', pending }
-    },
+    }),
 
-    abandon: async (key, expectedSeq) => {
+    abandon: async (key, expectedSeq) => exclusive(async (): Promise<AbandonOutcome> => {
       const removed = await store.removeDraft(key, expectedSeq)
       switch (removed.kind) {
         case 'changed':
@@ -171,9 +187,9 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
         case 'failed':
           return removed
       }
-    },
+    }),
 
-    purgeExpired: async (at) => {
+    purgeExpired: async at => exclusive(async (): Promise<PurgeOutcome> => {
       const purged = await store.purgeExpired(at)
       if (purged.kind !== 'purged')
         return purged
@@ -190,6 +206,6 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
       if (dropped.kind !== 'dropped')
         return { kind: 'purged', drafts: purged.drafts, pending, mirror: { kind: 'failed', error: dropped.kind === 'failed' ? dropped.error : dropped } }
       return { kind: 'purged', drafts: purged.drafts, pending, mirror: { kind: 'done' } }
-    },
+    }),
   }
 }

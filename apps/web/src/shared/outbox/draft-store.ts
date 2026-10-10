@@ -74,7 +74,7 @@ export interface PurgedDraft {
 
 export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly PurgedDraft[] } | StoreProblem
 
-/** 从 OPFS 镜像写回（§3.8）：写回了；没写回及原因（writer-fence.ts 的 decideRestore） */
+/** 从 OPFS 镜像写回（§3.8）：写回了；没写回及原因（writer-fence.ts 的 decideRestore；unseen 时库里留下了 lost 提示） */
 export type StoreRestoreOutcome
   = | { readonly kind: 'restored' }
     | { readonly kind: 'kept', readonly reason: Extract<RestoreVerdict, { readonly kind: 'skip' }>['reason'] }
@@ -128,6 +128,12 @@ export interface DraftStore {
    */
   readonly removeDraft: (key: DraftKey, expectedSeq?: number) => Promise<StoreRemoveOutcome>
   /**
+   * 按用户清理的第一步（退出登录、账户停用，复验 C5）：这个人每份文档的写入者在一个事务里换成墓碑（高水位不低于草稿的序号），草稿与
+   * 提示不动。之后那一页的写入、重封、确认一律 not-writer——它的发件箱 Worker 随之放开句柄、不再写镜像，删镜像目录与清库之间不会把
+   * 目录重建出来（local-cleanup.ts 先立墓碑、再删镜像目录、最后清库）
+   */
+  readonly retireUser: (userId: string, options: { readonly now: number }) => Promise<StoreRetireOutcome>
+  /**
    * 按用户清理（退出登录、账户停用）：草稿、写入者（含墓碑）与提示在一个事务里一起删；之后才到的写入因写入者不在而 not-writer。
    * retire 里的文档（它的镜像目录这一次删不掉：编辑器页的发件箱 Worker 正拿着句柄，见 local-cleanup.ts）草稿与提示留着、写入者换成墓碑
    * （审查 A1：之后那一页的写入一律 not-writer；比对时不从镜像写回），之后再清时一起删
@@ -150,9 +156,11 @@ export interface DraftStore {
   /**
    * 从 OPFS 镜像写回（§3.8，S9）：镜像里校验通过的最新一份。strict 事务里按 decideRestore 判定（审查 A2 与它的订正：按库里写入者的
    * 高水位与代次）：写回时连同写入者的记录（没有就照它建、库丢了更新的登记就换成它的、就是它就抬高水位、同代或更新的写入者还没写过草稿
-   * 就不动），并在同一个事务里留下 restored 提示（时刻是 now）；不写回时交回原因。形状不对的记录不写（failed）
+   * 或者库里是它那个写入者更早的一份就不动），并在同一个事务里留下 restored 提示（时刻是 now）；不写回时交回原因。unseen（库里的写入者
+   * 没看过它、库里却是别的写入者的草稿，复验 C1）在同一个事务里留下 lost 提示——库里已经是一条 lost 提示时不动它（比对一再遇到同一份，
+   * 时刻不变，P3 按读出的时刻清除照样清得掉）。形状不对的记录不写（failed）
    */
-  readonly restoreDraft: (draft: StoredDraft, options: { readonly now: number }) => Promise<StoreRestoreOutcome>
+  readonly restoreDraft: (draft: StoredDraft, options: { readonly now: number, readonly noteLost?: boolean }) => Promise<StoreRestoreOutcome>
   /**
    * 镜像的槽位都不合格（写一半、对不上）、没有可写回的（§3.8）：strict 事务里核对库里这份文档的草稿与写入者都没了（删库）才留下 lost
    * 提示（时刻是 now）；还有任何一样（草稿被确认删掉、放弃过，或者正写着）不留
@@ -472,6 +480,48 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
       })
     }, [DRAFTS_STORE, NOTICES_STORE]),
 
+    retireUser: async (userId, { now }) => run<StoreRetireOutcome>('readwrite', (scope) => {
+      // 三个仓库的文档取并集：只有草稿或提示的也立墓碑，防止清理途中镜像被另一个页面写回。
+      const existing = new Map<string, ExistingDraft>()
+      const documents = new Set<string>()
+      scope.then(scope.tx.objectStore(DRAFTS_STORE).openCursor(userKeyRange(userId)), (cursor) => {
+        if (cursor !== null) {
+          const key = draftKeyOf(cursor.primaryKey)
+          if (key !== undefined) {
+            existing.set(key.documentId, readStoredDraft(cursor.value))
+            documents.add(key.documentId)
+          }
+          cursor.continue()
+          return
+        }
+        scope.then(scope.tx.objectStore(NOTICES_STORE).openKeyCursor(userKeyRange(userId)), (noticeCursor) => {
+          if (noticeCursor !== null) {
+            const key = draftKeyOf(noticeCursor.primaryKey)
+            if (key !== undefined)
+              documents.add(key.documentId)
+            noticeCursor.continue()
+            return
+          }
+          scope.then(scope.tx.objectStore(WRITERS_STORE).openCursor(userKeyRange(userId)), (writerCursor) => {
+            if (writerCursor === null) {
+              for (const documentId of documents) {
+                const key = { userId, documentId }
+                scope.tx.objectStore(WRITERS_STORE).put(retiredWriterOf(key, undefined, existing.get(documentId), now))
+              }
+              scope.finish({ kind: 'retired' })
+              return
+            }
+            const key = draftKeyOf(writerCursor.primaryKey)
+            if (key !== undefined) {
+              writerCursor.update(retiredWriterOf(key, readWriterRecord(writerCursor.value), existing.get(key.documentId), now))
+              documents.delete(key.documentId)
+            }
+            writerCursor.continue()
+          })
+        })
+      })
+    }, ALL_STORES),
+
     removeUserData: async (userId, removeOptions) => {
       const retire = new Set(removeOptions?.retire ?? [])
       const now = removeOptions?.now ?? 0
@@ -574,7 +624,7 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
       })
     }, ALL_STORES),
 
-    restoreDraft: async (draft, { now }) => {
+    restoreDraft: async (draft, { now, noteLost = true }) => {
       const checked = readStoredDraft(draft)
       if (checked.kind !== 'draft')
         return failed('镜像的那一份形状不对：不写回')
@@ -583,6 +633,13 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
         readCurrent(scope, record, (current, existing) => {
           const verdict = decideRestore(current, existing, record, now)
           if (verdict.kind === 'skip') {
+            // 库里的写入者没看过它、又不能写回：留下 lost 提示（已经是一条 lost 提示就不动它，时刻不变）
+            if (verdict.reason === 'unseen' && noteLost) {
+              scope.then(scope.tx.objectStore(NOTICES_STORE).get(draftKeyPath(record)), (value: unknown) => {
+                if (readRecoveryNotice(value)?.kind !== 'lost')
+                  scope.tx.objectStore(NOTICES_STORE).put(noticeOf(record, 'lost', now))
+              })
+            }
             scope.finish({ kind: 'kept', reason: verdict.reason })
             return
           }

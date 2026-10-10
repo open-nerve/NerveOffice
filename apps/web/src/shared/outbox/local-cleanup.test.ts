@@ -75,6 +75,39 @@ function retired(store: FakeDraftStore, key: DraftKey): boolean {
 }
 
 describe('按用户清理（退出登录、账户停用）：库与镜像一起清', () => {
+  it('清库之前，为只有草稿、只有提示、只有写入者的文档都立墓碑，别人的不动', async () => {
+    const { store, cleanup } = setup()
+    store.putRaw('drafts', A, sampleStoredDraft({ ...A }))
+    store.putRaw('notices', B, { ...B, kind: 'restored', at: NOW })
+    store.putRaw('writers', C, sampleWriter({ ...C }))
+    putRecords(store, THEIRS)
+    const held = store.holdNext('removeUserData')
+    const cleaning = cleanup.removeUser(USER_ID)
+    await held.reached
+    try {
+      expect([A, B, C].map(key => retired(store, key))).toEqual([true, true, true])
+      expect(readWriterRecord(store.rawWriter(A))?.lastDraftSeq).toBe(7)
+      expect(retired(store, THEIRS)).toBe(false)
+    }
+    finally {
+      held.release()
+      await cleaning
+    }
+    expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })
+  })
+
+  it('立墓碑失败时不删镜像；稍后重试可以清完', async () => {
+    const { store, files, cleanup } = setup()
+    putRecords(store, A)
+    putMirror(files, A)
+    store.failNext('retireUser', { kind: 'quota' })
+    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'quota' })
+    expect(retired(store, A)).toBe(false)
+    expect(await hasMirror(files, A)).toBe(true)
+    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await hasMirror(files, A)).toBe(false)
+  })
+
   it('这个人的草稿、写入者、提示与镜像目录都删掉（只在镜像里的、只在库里的也一样），别人的不动；他的用户目录一并删', async () => {
     const { store, files, cleanup } = setup()
     putRecords(store, A)
@@ -214,6 +247,25 @@ describe('放弃一份（本机草稿页）：草稿、提示与镜像目录；�
 })
 
 describe('保留期：库里过期的，镜像里没用的目录（两个槽位都超过 14 天没动过、或者不在），墓碑，不论属于谁', () => {
+  it('槽位一时读不出时保留墓碑，防止已放弃的镜像复活；能读之后继续清理', async () => {
+    let unreadable = true
+    const { store, files, cleanup } = setup(directory => ({
+      ...directory,
+      slotFiles: async key => unreadable ? { kind: 'failed', error: new TypeError('暂时读不出') } : directory.slotFiles(key),
+    }))
+    store.putRaw('writers', A, sampleWriter({ ...A, writerId: RETIRED_WRITER_ID }))
+    putMirror(files, A)
+    files.touch(A, 0, NOW - LOCAL_DRAFT_RETENTION_MS - 1)
+    files.touch(A, 1, NOW - LOCAL_DRAFT_RETENTION_MS - 1)
+    expect(await cleanup.purgeExpired(NOW)).toMatchObject({ kind: 'purged', pending: [A] })
+    expect(retired(store, A)).toBe(true)
+    expect(await hasMirror(files, A)).toBe(true)
+    unreadable = false
+    expect(await cleanup.purgeExpired(NOW)).toMatchObject({ kind: 'purged', pending: [] })
+    expect(store.rawWriter(A)).toBeUndefined()
+    expect(await hasMirror(files, A)).toBe(false)
+  })
+
   it('回收两个槽位都过期的（空的也好、有内容也好）与只剩过期文件的；留下刚截断的空目录（审查 A9）、还在用的、刚写一半的；句柄开着的交回 pending；什么也不剩的用户目录一并删', async () => {
     const { files, cleanup, advance } = setup()
     putMirror(files, A, [0, 0])
@@ -238,7 +290,7 @@ describe('保留期：库里过期的，镜像里没用的目录（两个槽位�
     files.touch(A, 0, NOW - LOCAL_DRAFT_RETENTION_MS)
     files.touch(A, 1, NOW - LOCAL_DRAFT_RETENTION_MS - 1)
     putMirror(files, B, [500, 500])
-    files.touch(B, 0, NOW + 60_000)
+    files.touch(B, 0, NOW + LOCAL_DRAFT_RETENTION_MS + 1)
     files.touch(B, 1, NOW - LOCAL_DRAFT_RETENTION_MS - 1)
     expect(await cleanup.purgeExpired(NOW)).toEqual({ kind: 'purged', drafts: [], pending: [], mirror: { kind: 'done' } })
     expect([await hasMirror(files, A), await hasMirror(files, B)]).toEqual([true, true])

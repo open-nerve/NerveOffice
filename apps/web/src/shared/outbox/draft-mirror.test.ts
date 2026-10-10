@@ -197,6 +197,19 @@ describe('写：两个槽位轮流原地改写（截断 → 内容 → 头 → f
 })
 
 describe('截断、读、放开', () => {
+  it('未登记时临时打开的槽位里有更新格式：拒绝截断，两个槽位逐字节保留', async () => {
+    const { fake, mirror } = setup()
+    const newer = await fileOf(record(2), 2)
+    new DataView(newer.buffer).setUint16(8, 2, true)
+    const older = await fileOf(record(1), 1)
+    fake.putFile(KEY, 0, newer)
+    fake.putFile(KEY, 1, older)
+
+    expect(await mirror.clear(KEY)).toEqual({ kind: 'not-mirrored', reason: 'newer-format' })
+    expect(fake.file(KEY, 0)).toEqual(newer)
+    expect(fake.file(KEY, 1)).toEqual(older)
+  })
+
   it('截断：拿着句柄时两个都截断为 0；之后从 a 开始写（截断之前最新的是哪一个都一样），代号照样往上', async () => {
     const { fake, mirror } = setup()
     await mirror.write(record(1))

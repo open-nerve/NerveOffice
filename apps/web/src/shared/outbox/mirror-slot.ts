@@ -215,6 +215,14 @@ export async function parseSlot(file: Uint8Array, key?: DraftKey): Promise<SlotR
   return { kind: 'valid', header, record }
 }
 
+/**
+ * 有没有更新的页面写的槽位（槽位或记录的格式更新，部署回滚之后）：有就整个镜像按认不出处理（复验 C2）——不写回、不留 lost、不截断、
+ * 不往里写，与库里认不出的记录一样不动它
+ */
+export function hasNewerFormatSlot(slots: readonly SlotRead[]): boolean {
+  return slots.some(slot => slot.kind === 'invalid' && slot.reason === 'newer-format')
+}
+
 /** 两个槽位里最新写的那一个（代号大的）；都不合格时为 undefined */
 export function newestSlot(headers: readonly (Pick<SlotHeader, 'generation'> | undefined)[]): number | undefined {
   let newest: number | undefined

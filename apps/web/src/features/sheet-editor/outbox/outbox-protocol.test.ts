@@ -222,6 +222,7 @@ describe('结果（主线程一侧）：按请求的种类核对，只交回约�
     { kind: 'not-mirrored', reason: 'busy' },
     { kind: 'not-mirrored', reason: 'quota' },
     { kind: 'not-mirrored', reason: 'unsupported' },
+    { kind: 'not-mirrored', reason: 'newer-format' },
     { kind: 'not-mirrored', reason: 'failed', error: FAILURE },
   ] as const
   const opened = () => [

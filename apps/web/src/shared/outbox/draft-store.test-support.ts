@@ -182,6 +182,16 @@ export function fakeDraftStore(): FakeDraftStore {
       }
       return { kind: verdict }
     },
+    async retireUser(userId, { now }) {
+      const problem = await begin('retireUser')
+      if (problem !== undefined)
+        return problem
+      for (const id of new Set([...writers.keys(), ...drafts.keys(), ...notices.keys()])) {
+        if (ownedBy(id, userId))
+          writers.set(id, retiredWriterOf({ userId, documentId: documentOf(id) }, writerOf(id), existingOf(id), now))
+      }
+      return { kind: 'retired' }
+    },
     async removeUserData(userId, options) {
       const problem = await begin('removeUserData')
       if (problem !== undefined)
@@ -235,15 +245,19 @@ export function fakeDraftStore(): FakeDraftStore {
       }
       return { kind: 'purged', drafts: purged }
     },
-    async restoreDraft(draft, { now }) {
+    async restoreDraft(draft, { now, noteLost = true }) {
       const problem = await begin('restoreDraft') ?? unwritable(draft)
       if (problem !== undefined)
         return problem
       const id = idOf(draft)
       const current = writerOf(id)
       const verdict = decideRestore(current, existingOf(id), draft, now)
-      if (verdict.kind === 'skip')
+      if (verdict.kind === 'skip') {
+        // 与 IndexedDB 的实现同一个口径：unseen 留下 lost 提示，已经是一条 lost 提示就不动它
+        if (verdict.reason === 'unseen' && noteLost && readRecoveryNotice(notices.get(id))?.kind !== 'lost')
+          notices.set(id, notice(draft, 'lost', now))
         return { kind: 'kept', reason: verdict.reason }
+      }
       drafts.set(id, structuredClone(draft))
       const restoredWriter = restoredWriterOf(current, draft, verdict.writer, now)
       if (restoredWriter !== undefined)

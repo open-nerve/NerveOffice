@@ -249,19 +249,20 @@ describe('写入（M4-P1 设计 §3.4.3）：去重 → gzip → 加密 → 交�
   })
 })
 
-describe('同一份文档的操作排成一队，按调用的先后；不同文档互不等待', () => {
-  it('前一次写入还在存储里时，同一份文档的下一次写入不交给存储；另一份文档照常写完', async () => {
+describe('同一份文档按调用顺序排队；不同文档共用来源内的短期互斥', () => {
+  it('前一次写入还在存储里时，后续同文档和其他文档的任务都等待完整写入结束', async () => {
     const { fake, writer, key } = await setup()
     expect(await writer.register(OTHER_DOCUMENT, ME, false)).toMatchObject({ kind: 'registered' })
     const held = fake.holdNext('writeDraft')
     const first = writer.write(capture(1, 'first'))
     const second = writer.write(capture(2, 'second'))
     await held.reached
-    expect(await writer.write(capture(1, 'other document', { key: OTHER_DOCUMENT }))).toMatchObject({ kind: 'written' })
-    expect(count(fake, 'writeDraft'), '第二次还排着').toBe(2)
+    const other = writer.write(capture(1, 'other document', { key: OTHER_DOCUMENT }))
+    expect(count(fake, 'writeDraft'), '后两次还排着').toBe(1)
     held.release()
     expect(await first).toMatchObject({ kind: 'written' })
     expect(await second).toMatchObject({ kind: 'written' })
+    expect(await other).toMatchObject({ kind: 'written' })
     expect((await stored(fake, key)).text).toBe('second')
     expect((await stored(fake, key, OTHER_DOCUMENT)).text).toBe('other document')
   })

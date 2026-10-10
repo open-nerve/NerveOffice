@@ -8,25 +8,28 @@
 // - 补写（backfill）：镜像在 IndexedDB 提交之后才写，被结束在两者之间时镜像落后一份；写入者登记时库里那一份不是镜像里最新写的那一份
 //   （别的写入者的、同一个写入者更旧的、没有），就补写它（审查 A2：库里有当前的写入者时库是准的）。
 // - 读出的记录核对是这份文档的（审查 A4）。
+// - 槽位里有更新的页面写的（槽位或记录的格式更新：部署回滚之后，复验 C2）：这一页认不出，这份文档不写、不补写、不截断镜像，
+//   结果如实带上 newer-format，不盖掉更新的页面写的那一份（放开句柄之后再登记时重新看）。
 // 跨边界不抛异常：结果都带 kind；未知的错误折成名字与消息。只在发件箱 Worker 里用（同步访问句柄只在专用 Worker 里有）；不引用 zod
 import type { DraftKey, DraftMeta, StoredDraft } from './draft-record.ts'
 import type { FailureDescription } from './failure.ts'
 import type { MirrorDirectory, SlotHandle } from './mirror-directory.ts'
 import type { SlotRead } from './mirror-slot.ts'
 import { describeFailure } from './failure.ts'
-import { encodeSlot, newestSlot, parseSlot, SLOT_HEADER_BYTES } from './mirror-slot.ts'
+import { encodeSlot, hasNewerFormatSlot, newestSlot, parseSlot, SLOT_HEADER_BYTES } from './mirror-slot.ts'
 import { compareDrafts, isSameWriter } from './writer-fence.ts'
 
 /**
  * 镜像这一次写成了没有：
  * - mirrored：写成了（截断也算）；
- * - off：这个宿主不做镜像（主线程放置，设计 §3.8 的"放置"一条）；
- * - not-mirrored：别的标签页占着句柄（busy）、写满、OPFS 用不了、出错——IndexedDB 那一份不受影响
+ * - off：这个宿主不做镜像（进程内放置：Worker 起不来时的退路，设计 §3.8 的"放置"一条）；
+ * - not-mirrored：别的标签页占着句柄（busy）、写满、OPFS 用不了、槽位里有更新的页面写的（newer-format：这一页不动它，复验 C2）、
+ *   出错——IndexedDB 那一份不受影响
  */
 export type MirrorStatus
   = | { readonly kind: 'mirrored' }
     | { readonly kind: 'off' }
-    | { readonly kind: 'not-mirrored', readonly reason: 'busy' | 'quota' | 'unsupported' }
+    | { readonly kind: 'not-mirrored', readonly reason: 'busy' | 'quota' | 'unsupported' | 'newer-format' }
     | { readonly kind: 'not-mirrored', readonly reason: 'failed', readonly error: FailureDescription }
 
 /** 读出的两个槽位；文件不在；别的标签页占着；OPFS 用不了；出错 */
@@ -43,16 +46,23 @@ export type MirrorDocuments
     | { readonly kind: 'failed', readonly error: FailureDescription }
 
 export interface DraftMirror {
-  /** 这份文档的写入者登记了：建好两个槽位文件、拿着句柄；读出两个头，记下哪一个是最新写的、代号到了多少 */
+  /**
+   * 这份文档的写入者登记了：建好两个槽位文件、拿着句柄；读出两个槽位，记下哪一个是最新写的、代号到了多少。槽位里有更新的页面写的：
+   * 放开句柄、记下，之后这份文档不写（newer-format）
+   */
   readonly attach: (key: DraftKey) => Promise<MirrorStatus>
   /** IndexedDB 提交之后写镜像：手里没有句柄时先拿（退避期间不拿，交回 busy） */
   readonly write: (record: StoredDraft) => Promise<MirrorStatus>
   /**
    * 补写：拿着这份文档的句柄（是写入者）时，record（库里那一份）不是镜像里最新写的那一份（最新写的是别的写入者的、或者同一个写入者
-   * 更旧的、或者一份合格的也没有）就写它，否则 mirrored；没拿着句柄时什么也不做，交回 undefined（不是写入者的不动）
+   * 更旧的、或者一份合格的也没有）就写它，否则 mirrored；没拿着句柄时什么也不做，交回 undefined（不是写入者的不动）；
+   * 登记时看出槽位里有更新的页面写的：不写，交回 newer-format
    */
   readonly backfill: (record: StoredDraft) => Promise<MirrorStatus | undefined>
-  /** 草稿删掉之后：两个槽位截断为 0。手里没有句柄时临时拿一下、截断、放开；文件不在时什么也不做 */
+  /**
+   * 草稿删掉之后：两个槽位截断为 0。手里没有句柄时临时拿一下、截断、放开；文件不在时什么也不做；槽位里有更新的页面写的时不截断
+   * （newer-format）
+   */
   readonly clear: (key: DraftKey) => Promise<MirrorStatus>
   /** 读两个槽位并校验。手里没有句柄时临时拿一下、读完放开；不建文件 */
   readonly read: (key: DraftKey) => Promise<MirrorRead>
@@ -96,6 +106,13 @@ interface Waiting {
   readonly status: MirrorStatus
 }
 
+/** 登记时看出槽位里有更新的页面写的（复验 C2）：句柄已放开，这份文档不写、不补写、不截断，直到 detach 之后再登记时重新看 */
+interface Newer {
+  readonly kind: 'newer'
+}
+
+const NEWER_FORMAT: MirrorStatus = { kind: 'not-mirrored', reason: 'newer-format' }
+
 function idOf(key: DraftKey): string {
   return JSON.stringify([key.userId, key.documentId])
 }
@@ -128,11 +145,10 @@ function readWhole(handle: SlotHandle): Uint8Array<ArrayBuffer> {
 }
 
 /**
- * 合格的槽位（整个文件都校验，不只看头：头合格、内容却被截掉的槽位当作不合格，写在它上面，不碰另一个合格的）；不合格时没有
+ * 读出两个槽位并校验（整个文件都校验，不只看头：头合格、内容却被截掉的槽位当作不合格，写在它上面，不碰另一个合格的）
  */
-async function validSlotOf(handle: SlotHandle, key: DraftKey): Promise<Extract<SlotRead, { readonly kind: 'valid' }> | undefined> {
-  const read = await parseSlot(readWhole(handle), key)
-  return read.kind === 'valid' ? read : undefined
+async function readSlots(slots: readonly [SlotHandle, SlotHandle], key: DraftKey): Promise<readonly [SlotRead, SlotRead]> {
+  return [await parseSlot(readWhole(slots[0]), key), await parseSlot(readWhole(slots[1]), key)]
 }
 
 function orderingOf(record: Ordering): Ordering {
@@ -153,7 +169,7 @@ function closeQuietly(slots: readonly SlotHandle[]): void {
 export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
   const { directory, clock } = options
   const retry = options.retry ?? DEFAULT_RETRY
-  const states = new Map<string, Held | Waiting>()
+  const states = new Map<string, Held | Waiting | Newer>()
   let unsupported = false
   let closed = false
 
@@ -174,6 +190,8 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
     const state = states.get(id)
     if (state?.kind === 'held')
       return { kind: 'mirrored' }
+    if (state?.kind === 'newer')
+      return NEWER_FORMAT
     if (state?.kind === 'waiting' && clock.now() < state.retryAt)
       return state.status
     const opened = await directory.openSlots(key, true)
@@ -184,7 +202,14 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
           return failed(new DOMException(CLOSED.message, CLOSED.name))
         }
         try {
-          const valid = [await validSlotOf(opened.slots[0], key), await validSlotOf(opened.slots[1], key)] as const
+          const reads = await readSlots(opened.slots, key)
+          // 更新的页面写的：不盖掉它（放开句柄，这份文档不写）
+          if (hasNewerFormatSlot(reads)) {
+            closeQuietly(opened.slots)
+            states.set(id, { kind: 'newer' })
+            return NEWER_FORMAT
+          }
+          const valid = reads.map(read => (read.kind === 'valid' ? read : undefined))
           const newest = newestSlot(valid.map(slot => slot?.header))
           states.set(id, {
             kind: 'held',
@@ -281,6 +306,8 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
     backfill: async (record) => {
       // 关掉之后 states 已清空：同样什么也不做
       const held = states.get(idOf(record))
+      if (held?.kind === 'newer')
+        return NEWER_FORMAT
       if (held?.kind !== 'held')
         return undefined
       // 镜像里最新写的那一份就是这个写入者写的、不比它旧：不用补（更新的那一份由比对写回库，这里不拿库里旧的盖掉它）
@@ -290,36 +317,41 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
       return write(record)
     },
 
-    clear: async key => withSlots<MirrorStatus>(key, async (slots, held) => {
-      try {
-        for (const handle of slots) {
-          handle.truncate(0)
-          handle.flush()
-        }
-      }
-      catch (error) {
-        return writeFailure(error)
-      }
-      if (held !== undefined) {
-        held.newest = undefined
-        held.records = [undefined, undefined]
-      }
-      return { kind: 'mirrored' }
-    }, (outcome) => {
-      switch (outcome.kind) {
-        case 'absent':
+    clear: async key => states.get(idOf(key))?.kind === 'newer'
+      ? NEWER_FORMAT
+      : withSlots<MirrorStatus>(key, async (slots, held) => {
+          try {
+            // 临时拿到的句柄：槽位里有更新的页面写的就不动它（拿着的句柄登记时已经看过）
+            if (held === undefined && hasNewerFormatSlot(await readSlots(slots, key)))
+              return NEWER_FORMAT
+            for (const handle of slots) {
+              handle.truncate(0)
+              handle.flush()
+            }
+          }
+          catch (error) {
+            return writeFailure(error)
+          }
+          if (held !== undefined) {
+            held.newest = undefined
+            held.records = [undefined, undefined]
+          }
           return { kind: 'mirrored' }
-        case 'busy':
-        case 'unsupported':
-          return { kind: 'not-mirrored', reason: outcome.kind }
-        case 'failed':
-          return { kind: 'not-mirrored', reason: 'failed', error: outcome.error }
-      }
-    }),
+        }, (outcome) => {
+          switch (outcome.kind) {
+            case 'absent':
+              return { kind: 'mirrored' }
+            case 'busy':
+            case 'unsupported':
+              return { kind: 'not-mirrored', reason: outcome.kind }
+            case 'failed':
+              return { kind: 'not-mirrored', reason: 'failed', error: outcome.error }
+          }
+        }),
 
     read: async key => withSlots<MirrorRead>(key, async (slots) => {
       try {
-        return { kind: 'slots', slots: [await parseSlot(readWhole(slots[0]), key), await parseSlot(readWhole(slots[1]), key)] }
+        return { kind: 'slots', slots: await readSlots(slots, key) }
       }
       catch (error) {
         return { kind: 'failed', error: describeFailure(error) }
