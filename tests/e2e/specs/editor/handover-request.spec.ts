@@ -484,7 +484,8 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     // R1 离开：撤回送不到服务端（拦下），请求还在；页面随即关掉（与"旧页已关、它的释放没送到"同一个做法：关页时的 keepalive 拦不住）
     const requestPath = `/api/documents/${documentId}/edit-lease/request`
     await anotherDevice.route(`**${requestPath}`, async route => route.request().method() === 'DELETE' ? route.abort('internetdisconnected') : route.continue())
-    const withdrawn = anotherDevice.waitForRequest(request => request.method() === 'DELETE' && new URL(request.url()).pathname === requestPath)
+    // 等请求确实失败再关页；仅等 request 事件会早于 route.abort，关页时 keepalive 可能仍送到服务端。
+    const withdrawn = anotherDevice.waitForEvent('requestfailed', request => request.method() === 'DELETE' && new URL(request.url()).pathname === requestPath)
     await anotherDevice.evaluate(() => window.dispatchEvent(new Event('pagehide')))
     await withdrawn
     const context = anotherDevice.context()
