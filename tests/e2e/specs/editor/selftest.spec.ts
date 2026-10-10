@@ -40,7 +40,6 @@ import type { BrowserContext, Page, Route } from '@playwright/test'
 import type { SelftestReport } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { TestUser } from '../../support/database.ts'
 import type { ReleaseOverride } from '../../support/persistent-profile.ts'
-import type { ItemVerdict } from '../../support/probe-verdicts.ts'
 import type { Judgement } from '../../support/selftest-handover.ts'
 import type { SelftestStep, SelftestStepDefinition } from '../../support/selftest-plan.ts'
 import type { RequestRun, RequestStage } from '../../support/selftest-request.ts'
@@ -50,6 +49,7 @@ import { revisionOf } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { firstPage, launchPersistentProfile, overrideQuota } from '../../support/persistent-profile.ts'
+import { probeCalibrationPassed, probeCalibrationSummary } from '../../support/probe-calibration.ts'
 import { probeVerdicts } from '../../support/probe-verdicts.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../../support/selftest-handover.ts'
 import { problemsOf, SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
@@ -106,38 +106,6 @@ const LOCAL_ONLY_STEPS: ReadonlySet<string> = new Set(['capture-5m', 'perf-worke
 
 /** 照常一步一条用例的（hidden-save、交接与请求编辑的几步另有编排） */
 const PLAIN_STEPS = SELFTEST_STEPS.filter(item => item.scenario !== 'hidden-save' && !([...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS] as readonly string[]).includes(item.scenario) && !LOCAL_ONLY_STEPS.has(item.id))
-
-/**
- * 真实浏览器复核的一步在 CI 里该有的判定（support/probe-verdicts.ts）：这一步负责的各项数据都齐（不是 missing）；与时间无关的几项（回滚、
- * IndexedDB 的基本行为、密钥交给 Worker、Web Locks）通过。与时间有关的项与持久保存、配额（非持久的上下文里 IndexedDB 在内存里）只要求数据齐
- */
-const PROBE_ITEMS: Readonly<Record<string, readonly string[]>> = {
-  'storage': ['1', '2', '3', '5', '6', '8'],
-  'key-transfer': ['7'],
-  'worker-stall': ['9'],
-  'outbox-stall': ['9-production'],
-  'capture-cost': ['10'],
-  'outbox-pipeline': ['11'],
-  'perf-baseline': ['12'],
-}
-
-const SEMANTIC_ITEMS: ReadonlySet<string> = new Set(['5', '6', '7', '8'])
-
-/** 一步的判定的要点：各项的结论（与时间无关的几项）或者数据齐不齐 */
-function probeSummary(step: SelftestStep, report: SelftestReport): unknown {
-  const verdicts = probeVerdicts([{ stepId: step.id, report, cold: true }])
-  const statusOf = (verdict: ItemVerdict): string => SEMANTIC_ITEMS.has(verdict.id) || verdict.status === 'missing' ? verdict.status : 'complete'
-  return (PROBE_ITEMS[step.scenario] ?? []).map((id) => {
-    const verdict = verdicts.find(entry => entry.id === id)
-    return verdict === undefined
-      ? { id, status: '没有这一项', missing: [], lines: [] }
-      : { id, status: statusOf(verdict), missing: verdict.missing, lines: verdict.status === 'fail' || verdict.status === 'missing' ? verdict.lines : [] }
-  })
-}
-
-function probePassed(step: SelftestStep): unknown {
-  return (PROBE_ITEMS[step.scenario] ?? []).map(id => ({ id, status: SEMANTIC_ITEMS.has(id) ? 'pass' : 'complete', missing: [], lines: [] }))
-}
 
 /** OPFS 镜像在生产发件箱的两步里的样子（别的步骤为 null）：登记时、各次写入、收尾时删镜像目录 */
 function opfsSummary(step: SelftestStep, report: SelftestReport): unknown {
@@ -332,7 +300,7 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
       await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
       expect(await summaryOf(report, step)).toEqual(passed(step))
       // 真实浏览器复核的几步另按判定核对、生产发件箱的两步另核对 OPFS 镜像（别的步骤这两边都是空的）
-      expect(probeSummary(step, report)).toEqual(probePassed(step))
+      expect(probeCalibrationSummary(step.scenario, probeVerdicts([{ stepId: step.id, report, cold: true }]))).toEqual(probeCalibrationPassed(step.scenario))
       expect(opfsSummary(step, report)).toEqual(opfsExpected(step, browserName))
     })
   }
