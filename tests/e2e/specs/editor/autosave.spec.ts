@@ -313,7 +313,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect(await revisionOf(documentId)).toBe(2)
   })
 
-  test('US-M3-02 离线：页头说已离线（修改还在本页），过了静默也不发请求；恢复联网立即上传最近一次捕获（不等静默），之后的修改照常', async ({ page, context }) => {
+  test('US-M3-02 离线：页头说等待同步，过了静默也不发请求；恢复联网先确认编辑权，再上传最近一次捕获（不等静默），之后的修改照常', async ({ page, context }) => {
     await page.clock.install()
     const documentId = await openNewSheet(page, 'autosave-offline')
     const writes = recordWrites(page, documentId)
@@ -321,14 +321,14 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     const start = await pauseTime(page)
     await context.setOffline(true)
     await typeInCell(page, 'A1', 'offline')
-    await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
+    await expect(saveStatus(page)).toHaveText('已离线，等待同步')
     // 照常捕获（修改之后 1 秒），过了上传的静默也不上传
     await page.clock.runFor(1_000)
     await skipAhead(page, 4_000)
     await expect.poll(async () => capturesOf(await logNow(page))).toMatchObject([{ trigger: 'quiet', at: start + 1_000, seq: 1 }])
     expect(writes.saves).toHaveLength(0)
     expect(uploadsOf(await autosaveLog(page))).toEqual([])
-    await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
+    await expect(saveStatus(page)).toHaveText('已离线，等待同步')
     // 离线时又改了一处（start + 5000），0.5 秒之后恢复联网：不等这一处的静默，立即上传最近一次捕获（第一处）
     await typeInCell(page, 'A2', 'later')
     await skipAhead(page, 500)
@@ -609,6 +609,8 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await typeInCell(page, 'A1', 'in flight')
     await saveButton(page).click()
     await expect(saveStatus(page)).toHaveText('保存中…')
+    // 页头在本机准备时已经显示保存中；本故事要求正文 HTTP 确实在途，不能在 Worker mark 前触发关闭。
+    await expect.poll(() => writes.saves.length).toBe(1)
     await page.evaluate(() => window.dispatchEvent(new Event('pagehide')))
     // 让释放有机会发出（它是同步发起的 keepalive 请求）：没有发
     await expect(saveStatus(page)).toHaveText('保存中…')

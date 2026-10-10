@@ -656,13 +656,18 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       pageWindow.addEventListener('pagehide', onPageHide)
       cleanups.push(() => pageWindow.removeEventListener('pagehide', onPageHide))
       // 自动保存的页面信号：可见性（同步通知）与联网；恢复联网、回到前台时上一次确认会话失败了就再确认（审查 A6）
+      let browserOnline = options.network.online()
       cleanups.push(options.visibility.onChange(signalPage), options.network.onChange(() => {
         signalPage()
         update()
+        const next = options.network.online()
+        const returned = next && !browserOnline
+        browserOnline = next
+        // 共享连接也发布请求失败；它不是浏览器恢复在线，不能让会话确认自己触发下一轮。
+        recheckOnReturn(returned)
       }))
       cleanups.push(
         options.visibility.onChange(() => recheckOnReturn(!options.visibility.hidden())),
-        options.network.onChange(() => recheckOnReturn(options.network.online())),
       )
       setSurface('loading')
       cleanups.push(sessionChannel.subscribe(() => void recheckSession()))

@@ -100,6 +100,8 @@ export interface EditingSession {
   readonly takeDraft: () => EditingDraft | undefined
   readonly suspendDraft: () => void
   readonly resumeDraft: () => Promise<void>
+  /** 登录确认后的恢复链：草稿栅栏与当前连接许可都确认之后才交还保存入口。 */
+  readonly resumeLease: () => Promise<void>
   /** 页面许可与本机栅栏核对分别约束上传，页面恢复不能跳过尚未完成的核对。 */
   readonly setSavingActive: (active: boolean) => void
   readonly discardDraftKey: () => void
@@ -145,11 +147,12 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   let needsConnectionCheck = connectionView?.available === false
   let connectionEnded = false
   let connectionGeneration = 0
-  let checkingConnection = false
+  let checkingConnection: { readonly generation: number, readonly draftGeneration: number, readonly promise: Promise<void> } | undefined
   let checkAgainImmediately = false
   let connectionAttempts = 0
   let connectionRetryAt = 0
   let cancelConnectionRetry: (() => void) | undefined
+  let resumeConnectionImmediately = false
 
   function baseRevision(): number {
     return coordinator?.baseRevision() ?? editingBase
@@ -225,10 +228,10 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   }
 
   async function resumeDraft(): Promise<void> {
-    if (!disposed && lock?.held() === true && lease !== undefined && options.sessionActive?.() !== false && options.localDrafts?.enabled() === true) {
+    if (!disposed && lock?.held() === true && lease !== undefined && options.sessionActive?.() !== false) {
       if (verifyFence !== undefined)
         await verifyFence()
-      else
+      else if (options.localDrafts?.enabled() === true)
         await preparation?.resume()
     }
   }
@@ -266,16 +269,18 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   }
 
   /** 单飞、受控退避；成功请求与旧心跳只能唤醒此入口，不能给予编辑许可。 */
-  function checkConnection(): void {
+  function checkConnection(): Promise<void> | undefined {
+    if (checkingConnection !== undefined)
+      return checkingConnection.promise
     const held = lease
     const connection = options.connection
-    if (held === undefined || connection === undefined || !needsConnectionCheck || !canCheckConnection() || checkingConnection || cancelConnectionRetry !== undefined)
+    if (held === undefined || connection === undefined || !needsConnectionCheck || !canCheckConnection() || cancelConnectionRetry !== undefined)
       return
     const delay = connectionRetryAt - clock.now()
     if (delay > 0) {
       cancelConnectionRetry = clock.schedule(() => {
         cancelConnectionRetry = undefined
-        checkConnection()
+        void checkConnection()
       }, delay)
       return
     }
@@ -285,10 +290,10 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     const networkGeneration = connection.view().generation
     const current = (): boolean => canCheckConnection() && lease === held && coordinator === saver && draft === source
       && connectionGeneration === generation && connection.view().generation === networkGeneration
-    checkingConnection = true
     checkAgainImmediately = false
     connectionAttempts += 1
-    void (async () => {
+    // 先登记单飞再发请求：请求替身或连接观察者可以在 confirm 的同步段里重入。
+    const promise = Promise.resolve().then(async () => {
       try {
         const verdict = await confirmDraft(held, current)
         if (!current())
@@ -312,12 +317,14 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         options.reportError(error)
       }
       finally {
-        checkingConnection = false
+        checkingConnection = undefined
         if (needsConnectionCheck && !checkAgainImmediately)
           connectionRetryAt = clock.now() + Math.min(2_000 * 2 ** Math.min(connectionAttempts - 1, 4), 30_000)
-        checkConnection()
+        void checkConnection()
       }
-    })()
+    })
+    checkingConnection = { generation, draftGeneration, promise }
+    return promise
   }
 
   const stopWatchingConnection = options.connection?.subscribe(() => {
@@ -339,7 +346,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         connectionRetryAt = clock.now() + 2_000
       }
     }
-    checkConnection()
+    void checkConnection()
   })
 
   /** 本代自己失效仍沿用 M3 的续上；一次续上后必须重新核对，不把申请回包当作当前事实。 */
@@ -428,11 +435,8 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       onRequest: options.onRequest,
       onRenewed: (sentAt) => {
         lock?.renewed(sentAt)
-        checkConnection()
-        if (verifyFence !== undefined)
-          void verifyFence().catch(options.reportError)
-        else
-          void resumeDraft().catch(options.reportError)
+        // 栅栏恢复会改变 draftGeneration；先完成它，避免把刚发出的连接核对立即作废。
+        void resumeDraft().then(checkConnection).catch(options.reportError)
       },
       onLocalKeyVersion: (version) => {
         keyVersion = version
@@ -471,7 +475,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
             invalidateConnection()
             suspendDraft()
           }
-          checkConnection()
+          void checkConnection()
         },
         clock,
         trace: options.trace,
@@ -549,17 +553,47 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     },
     suspendDraft,
     resumeDraft,
+    resumeLease: async () => {
+      const held = lease
+      const saver = coordinator
+      const source = draft
+      const returnedSession = resumeConnectionImmediately
+      resumeConnectionImmediately = false
+      const current = (): boolean => !disposed && lease === held && coordinator === saver && draft === source
+        && options.sessionActive?.() !== false
+      await held?.resume()
+      if (!current())
+        return
+      await resumeDraft()
+      if (!current() || !needsConnectionCheck)
+        return
+      const pending = checkingConnection
+      if (pending !== undefined && (pending.generation !== connectionGeneration || pending.draftGeneration !== draftGeneration)) {
+        await pending.promise
+        if (!current() || !needsConnectionCheck)
+          return
+      }
+      // 从未登录/换人恢复只消费一次立即尝试；同一会话反复收到 CSRF 拒绝不能靠确认会话清掉退避。
+      // 本轮未知仍由 checkConnection 排下一次，不在这里循环等到联网；上传自身的 Retry-After 不变。
+      if (returnedSession) {
+        clearConnectionRetry()
+        connectionRetryAt = clock.now()
+      }
+      await checkConnection()
+    },
     setSavingActive: (active) => {
       if (savingActive !== active) {
         invalidateConnection()
         savingActive = active
-        checkConnection()
+        void checkConnection()
       }
       syncSaving()
     },
     discardDraftKey: () => {
-      if (options.sessionActive?.() === false)
+      if (options.sessionActive?.() === false) {
         invalidateConnection()
+        resumeConnectionImmediately = true
+      }
       suspendDraft()
       if (draft !== undefined && savingEditor !== undefined) {
         try {
@@ -675,7 +709,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       autosave = scheduler
       stopWatchingAutosave = scheduler.subscribe(options.onChange)
       options.autosave.attach?.(scheduler)
-      checkConnection()
+      void checkConnection()
     },
     stopCapturing,
     stopSaving,

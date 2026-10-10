@@ -2114,10 +2114,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       }
     },
 
-    resumeLease: async () => {
-      await editing.lease?.resume()
-      await editing.resumeDraft()
-    },
+    resumeLease: editing.resumeLease,
 
     updateCanEdit: (canEdit) => {
       if (mode.kind === 'reading' && !mode.gone && mode.canEdit !== canEdit)

@@ -1,7 +1,7 @@
 // 保存到云端，看到真实的保存状态（US-M1-05，P4 设计 §3.7.2、§3.10）。
 import type { Page } from '@playwright/test'
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
-import { uploadedText } from '../../support/autosave.ts'
+import { recordWrites, uploadedText } from '../../support/autosave.ts'
 import { createDocument, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
@@ -197,17 +197,21 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'A3')?.v, cellOf(saved, 'A4')?.v]).toEqual(['one', 'abcd', 'keep me'])
   })
 
-  test('断网时保存：页头说已离线（修改还在本页，不说已保存在本机），说明保存失败与原因，内容仍算未保存；恢复之后再保存成功', async ({ page, context }) => {
+  test('断网时阻止云端保存，本机仍落盘且保留离开提示；恢复并确认编辑权后保存成功', async ({ page, context }) => {
     const documentId = await openNewSheet(page, 'save-offline')
+    const writes = recordWrites(page, documentId)
     await typeInCell(page, 'A1', 'offline')
+    await saveButton(page).focus()
     await context.setOffline(true)
-    await saveButton(page).click()
-    // 离线（navigator.onLine 为假）时页头说已离线（M3-P4 设计 §3.8、§3.9）；按下的那一次照样发出、失败的原因照旧说明
-    await expect(saveStatus(page)).toHaveText('已离线：修改还在本页，恢复网络之后自动保存')
-    await expect(page.getByRole('alert')).toHaveText('保存失败：网络连接失败，请检查网络后重试')
+    await expect(saveButton(page)).toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect(saveStatus(page)).toHaveText('已离线，等待同步')
+    await expect(page.locator('[data-slot="local-save-status"] summary')).toHaveText('已离线，修改已保存在本机')
+    expect(writes.saves).toHaveLength(0)
+    expect(await wouldPromptOnLeave(page)).toBe(true)
+    await expect(page.getByRole('alert')).toHaveCount(0)
     await context.setOffline(false)
     await saveAndWait(page)
-    await expect(page.getByRole('alert')).toBeHidden()
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('offline')
   })
 

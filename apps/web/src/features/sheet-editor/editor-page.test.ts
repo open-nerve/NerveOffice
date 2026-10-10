@@ -13,8 +13,8 @@ import type { SameBrowser } from './same-browser.ts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError, setCsrfToken } from '../../shared/api/index.ts'
-import { createConnectionState } from '../../shared/lib/connection-state.ts'
+import { ApiError, NetworkError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
+import { connectionState, createConnectionState } from '../../shared/lib/connection-state.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
@@ -828,6 +828,91 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(api.session).toHaveBeenCalledTimes(checks + 1)
   })
 
+  it('共享连接收到会话请求失败不算恢复联网，确认仍按 2、4 秒退避而不热循环', async () => {
+    const pending: ReturnType<typeof deferred<Response>>[] = []
+    const fetch = vi.fn().mockImplementation(async () => {
+      const reply = deferred<Response>()
+      pending.push(reply)
+      return reply.promise
+    }).mockResolvedValueOnce(Response.json(ALICE))
+    vi.stubGlobal('fetch', fetch)
+    const t = setup({
+      api: { session: requestSession },
+      network: { connection: connectionState, online: () => connectionState.view().browserOnline, onChange: connectionState.subscribe },
+    })
+    try {
+      await t.editorPage.load()
+      t.fromOtherTab()
+      await vi.waitFor(() => expect(pending).toHaveLength(1))
+      pending[0]!.reject(new TypeError('网络中断'))
+      await expect(t.api.session.mock.results.at(-1)!.value).rejects.toBeInstanceOf(NetworkError)
+      await vi.waitFor(() => expect(t.editorPage.view().sessionProblem).toBeInstanceOf(NetworkError))
+      await t.time.advance(1999)
+      expect(pending).toHaveLength(1)
+      await t.time.advance(1)
+      expect(pending).toHaveLength(2)
+      pending[1]!.reject(new TypeError('仍未恢复'))
+      await expect(t.api.session.mock.results.at(-1)!.value).rejects.toBeInstanceOf(NetworkError)
+      await settle()
+      expect(connectionState.view().browserOnline).toBe(true)
+      expect(pending).toHaveLength(2)
+      await t.time.advance(3999)
+      expect(pending).toHaveLength(2)
+      await t.time.advance(1)
+      expect(pending).toHaveLength(3)
+      pending[2]!.resolve(Response.json(ALICE))
+      await vi.waitFor(() => expect(t.editorPage.view().sessionProblem).toBeUndefined())
+    }
+    finally {
+      t.editorPage.dispose()
+      pending.forEach(reply => reply.resolve(Response.json(ALICE)))
+    }
+  })
+
+  it.each(['explicit', 'automatic'] as const)('登录换代后 %s 保存等待新的编辑权确认，网络一直健康也能恢复上传', async (trigger) => {
+    const connection = createConnectionState({ online: true, now: Date.now })
+    const t = setup({ network: { connection, online: () => connection.view().browserOnline, onChange: connection.subscribe } })
+    const check = deferred<SessionResponse>()
+    const confirmed = deferred<RenewedEditLease>()
+    try {
+      await t.editorPage.load()
+      t.fake.enter('steady')
+      t.api.session.mockRejectedValueOnce(UNAUTHENTICATED)
+      t.fromOtherTab()
+      await vi.waitFor(() => expect(t.editorPage.view().session).toBe('signed-out'))
+      vi.spyOn(t.fake.editor, 'changeSeq').mockReturnValue(1)
+      vi.spyOn(t.fake.editor, 'capture').mockReturnValue('{"id":"unit-1","kept":true}')
+      t.fake.changeListeners.forEach(listener => listener())
+      if (trigger === 'automatic') {
+        t.autosave.release()
+        await t.time.advance(2000)
+      }
+      t.api.session.mockReturnValueOnce(check.promise)
+      t.editLease.renew.mockRejectedValueOnce(leaseLost('session')).mockReturnValueOnce(confirmed.promise)
+      t.editLease.acquire.mockResolvedValueOnce(NEXT_LEASE)
+      t.fromOtherTab()
+      const saving = trigger === 'explicit' ? t.editorPage.save() : undefined
+      check.resolve(ALICE)
+      await vi.waitFor(() => expect(t.editLease.renew).toHaveBeenCalledTimes(2))
+      expect(t.api.save).not.toHaveBeenCalled()
+      expect(connection.view().available).toBe(true)
+      confirmed.resolve(RENEWED)
+      await saving
+      if (trigger === 'automatic') {
+        await vi.waitFor(() => expect(t.editorPage.view().autosave?.paused).toBe(false))
+        // 自动上传由页面时钟排零延迟任务；不增加等待时间、不产生新输入。
+        await t.time.advance(0)
+      }
+      await vi.waitFor(() => expect(t.api.save).toHaveBeenCalledOnce())
+      expect(t.api.save.mock.calls[0]![3]).toEqual(NEXT_CREDENTIALS)
+      await vi.waitFor(() => expect(t.editorPage.view().save?.status).toBe('clean'))
+    }
+    finally {
+      check.resolve(ALICE)
+      confirmed.resolve(RENEWED)
+    }
+  })
+
   it('续租一直得到令牌失效（例如网关剥掉了 CSRF 的请求头）、确认会话一直是本人（复验 C1）：只有第一次确认之后立即续租，之后按心跳的节奏——续租与确认都不按网络往返的速度连着发', async () => {
     const csrf = new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')
     const { editorPage, api, editLease, time } = setup()
@@ -850,6 +935,29 @@ describe('编辑器页的会话（P4 设计 §3.7.3，审查 B1）', () => {
     expect(renewedAt.map(at => at - start)).toEqual([10_000, 10_100, 20_200])
     expect(confirmedAt.map(at => at - start)).toEqual([10_050, 10_150, 20_250])
     expect(editorPage.view()).toMatchObject({ session: 'active', mode: { kind: 'editing' } })
+  })
+
+  it('重连复核持续收到 CSRF 拒绝、会话始终本人：重复会话确认不能清掉连接退避', async () => {
+    const connection = createConnectionState({ online: true, now: Date.now })
+    const t = setup({ network: { connection, online: () => connection.view().browserOnline, onChange: connection.subscribe } })
+    await t.editorPage.load()
+    const renewedAt: number[] = []
+    t.editLease.renew.mockImplementation(async () => {
+      renewedAt.push(t.time.now())
+      return new Promise<RenewedEditLease>((_resolve, reject) => t.time.clock.schedule(() => reject(new ApiError(403, 'CSRF_TOKEN_INVALID', '请求已失效')), 50))
+    })
+    t.api.session.mockImplementation(async () => new Promise<SessionResponse>(resolve => t.time.clock.schedule(() => resolve(ALICE), 50)))
+    const start = t.time.now()
+    connection.setBrowserOnline(false)
+    connection.setBrowserOnline(true)
+    await t.time.advance(500)
+    // 初次核对及旧协议允许的两次续租；之后必须等待连接退避，不能按 50ms 往返热循环。
+    expect(renewedAt.map(at => at - start)).toEqual([0, 100, 200])
+    await t.time.advance(1499)
+    expect(renewedAt).toHaveLength(3)
+    await t.time.advance(51)
+    expect(renewedAt.map(at => at - start)).toEqual([0, 100, 200, 2050])
+    expect(t.api.save).not.toHaveBeenCalled()
   })
 
   it('保存得到 CSRF_TOKEN_INVALID：向服务端确认会话，换了人就停止保存', async () => {

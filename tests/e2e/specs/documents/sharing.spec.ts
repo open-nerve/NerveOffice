@@ -385,3 +385,45 @@ test.describe('US-M2-10 单独分享', () => {
     await fresh.close()
   })
 })
+
+test('US-M4-11 已打开的取消分享确认框离线不能执行，取消可用；恢复后正常撤销', async ({ page, context }) => {
+  const owner = await createUser('offline-share-owner')
+  const colleague = await createUser('offline-share-reader')
+  const documentId = await createDocument(owner, '离线分享确认')
+  await grantDocument(documentId, colleague, 'viewer', owner)
+  await loginThroughApi(page, owner)
+  await page.goto('/')
+  await openActions(page, '离线分享确认')
+  const dialog = await openShareDialog(page, '离线分享确认')
+  const revoke = dialog.getByRole('button', { name: `取消分享 ${plainName(colleague)}`, exact: true })
+  // 焦点恢复的前提是入口已经获得键盘焦点；WebKit 的鼠标点击不保证聚焦按钮。
+  await revoke.focus()
+  await page.keyboard.press('Enter')
+  const confirmation = page.getByRole('dialog', { name: `取消分享给 ${plainName(colleague)}？` })
+  const confirm = confirmation.getByRole('button', { name: '取消分享', exact: true })
+  await confirm.focus()
+  const writes: string[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'DELETE' && new URL(request.url()).pathname === `/api/documents/${documentId}/grants/${colleague.id}`)
+      writes.push(request.url())
+  })
+  try {
+    await context.setOffline(true)
+    await expect(confirm).toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('Enter')
+    await expect(confirmation.getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+    expect(writes).toHaveLength(0)
+    expect(await grantsOn(documentId)).toEqual({ [colleague.username]: 'viewer' })
+    await confirmation.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(confirmation).toHaveCount(0)
+    await expect(revoke).toBeFocused()
+  }
+  finally {
+    await context.setOffline(false)
+  }
+  await expect(revoke).toHaveAttribute('aria-disabled', 'false')
+  await revoke.click()
+  await confirmation.getByRole('button', { name: '取消分享', exact: true }).click()
+  await expect.poll(async () => grantsOn(documentId)).toEqual({})
+  expect(writes).toHaveLength(1)
+})

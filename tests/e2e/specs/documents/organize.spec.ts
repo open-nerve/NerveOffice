@@ -291,3 +291,37 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
       await expect(page.getByRole('button', { name: action, exact: true })).toHaveCount(0)
   })
 })
+
+test('US-M4-11 在线打开改名表单后断网：输入保留、提交零请求；恢复后可保存', async ({ page, context }) => {
+  const owner = await createUser('offline-rename')
+  const id = await createDocument(owner, '断网前打开')
+  await loginThroughApi(page, owner)
+  await page.goto('/')
+  await openActions(page, '断网前打开')
+  await page.getByRole('button', { name: '改名', exact: true }).click()
+  const name = page.getByLabel('断网前打开 的新名称', { exact: true })
+  const writes: Request[] = []
+  page.on('request', (request) => {
+    if (request.method() === 'PATCH' && new URL(request.url()).pathname === `/api/documents/${id}`)
+      writes.push(request)
+  })
+  try {
+    await context.setOffline(true)
+    await name.fill('离线期间输入的名称')
+    const form = name.locator('xpath=ancestor::form')
+    await expect(form.getByText('此操作需要联网，连接恢复后可继续。')).toBeVisible()
+    await expect(form.getByRole('button', { name: '保存', exact: true })).toHaveAttribute('aria-disabled', 'true')
+    // 键盘提交绕过按钮的样式层，核对实际提交守卫。
+    await name.press('Enter')
+    await expect(name).toHaveValue('离线期间输入的名称')
+    expect(writes).toHaveLength(0)
+  }
+  finally {
+    await context.setOffline(false)
+  }
+  const save = page.getByRole('button', { name: '保存', exact: true })
+  await expect(save).toHaveAttribute('aria-disabled', 'false')
+  await save.click()
+  await expect(page.getByRole('list', { name: '文档列表' })).toContainText('离线期间输入的名称')
+  expect(writes).toHaveLength(1)
+})
