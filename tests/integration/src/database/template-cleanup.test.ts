@@ -5,7 +5,7 @@ import { randomBytes } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import pg from 'pg'
 import { afterAll, describe, expect, it } from 'vitest'
-import { createTestDatabase, databaseUrl, withClient } from '../support/database.ts'
+import { createTestDatabase, databaseUrl, withClient, withTemplateLock } from '../support/database.ts'
 
 const inUse = `nerve_it_tpl_${randomBytes(6).toString('hex')}`
 const unused = `nerve_it_tpl_${randomBytes(6).toString('hex')}`
@@ -33,13 +33,14 @@ afterAll(async () => {
 
 describe('建模板时别的迁移的模板', () => {
   it('有连接在用的不删、连接断开之后下一次建库时删掉；没人用的删掉', async () => {
-    await withClient(async (client) => {
-      for (const name of [inUse, unused])
-        await client.query(`CREATE DATABASE ${pg.escapeIdentifier(name)}`)
-    })
     const holder = new pg.Client({ connectionString: databaseUrl(inUse) })
-    await holder.connect()
     try {
+      await withTemplateLock(async (client) => {
+        for (const name of [inUse, unused])
+          await client.query(`CREATE DATABASE ${pg.escapeIdentifier(name)}`)
+        // 有连接之后才允许其他测试清理模板；建库到连接之间尚不能算“没人用”。
+        await holder.connect()
+      })
       const first = await createTestDatabase()
       await first.drop()
       expect(await remaining()).toEqual([inUse])
