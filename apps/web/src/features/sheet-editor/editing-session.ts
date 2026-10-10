@@ -7,12 +7,13 @@ import type { ConnectionState } from '../../shared/lib/connection-state.ts'
 import type { Autosave, AutosaveEditor, AutosaveEvent, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { Incompatibility } from './client-format.ts'
 import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
-import type { EditingDraft, EditingDraftOptions, EditingDraftPreparation, EditingDraftReady } from './editing-draft.ts'
+import type { DraftStorageView, EditingDraft, EditingDraftOptions, EditingDraftPreparation, EditingDraftReady } from './editing-draft.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { LocalLock, LockClaim } from './local-lock.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveCoordinator, SaveEditor, SaveRequest, SaveSendIntent, SaveSendResult } from './save-coordinator.ts'
+import type { WorkingDraftView } from './working-draft.ts'
 import { ApiError as RequestError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
 import { incompatibilityOf, PAGE_CLIENT_FORMAT } from './client-format.ts'
@@ -69,11 +70,21 @@ export interface InitialSaving {
   readonly blocked: Incompatibility | undefined
 }
 
+export interface LocalSaveView {
+  readonly draft: WorkingDraftView
+  readonly storage: DraftStorageView
+  /** 本份捕获是否覆盖当前模型和未提交输入；不是持久保存成功的同义词。 */
+  readonly coversCurrent: boolean
+  readonly unsaved: boolean
+  readonly enabled: boolean
+}
+
 export interface EditingSession {
   readonly lease: EditLease | undefined
   readonly coordinator: SaveCoordinator | undefined
   readonly autosave: Autosave | undefined
   readonly draft: EditingDraft | undefined
+  readonly localSave: () => LocalSaveView | undefined
   readonly baseRevision: () => number
   readonly setBaseRevision: (revision: number) => void
   readonly acquire: (intent?: AcquireIntent) => Promise<LeaseAcquisition>
@@ -126,6 +137,8 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   let verifyFence: (() => Promise<void>) | undefined
   let stopWatchingCoordinator: (() => void) | undefined
   let stopWatchingAutosave: (() => void) | undefined
+  const localWatchers: (() => void)[] = []
+  let localSnapshot: LocalSaveView | undefined
   let editingBase = 0
   let disposed = false
   let connectionView = options.connection?.view()
@@ -140,6 +153,33 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
 
   function baseRevision(): number {
     return coordinator?.baseRevision() ?? editingBase
+  }
+
+  function localSave(): LocalSaveView | undefined {
+    if (draft === undefined || savingEditor === undefined)
+      return undefined
+    const observed = draft.view()
+    const previous = localSnapshot?.draft
+    // WorkingDraft 的 view 是临时只读对象；按引用和完成结果比较，保持页面快照稳定。
+    const unchanged = previous?.kind === observed.kind && (observed.kind !== 'working'
+      || (previous.kind === 'working' && previous.ref === observed.ref && previous.summary === observed.summary && previous.local.kind === observed.local.kind))
+    const content = unchanged && previous !== undefined ? previous : observed
+    const next: LocalSaveView = {
+      draft: content,
+      storage: draft.storage(),
+      coversCurrent: content.kind === 'working' && content.ref.editorSeq === savingEditor.changeSeq() && savingEditor.uncommittedInput() === 'none',
+      unsaved: coordinator?.hasUnsavedWork() ?? false,
+      enabled: options.localDrafts?.enabled() === true,
+    }
+    if (localSnapshot === undefined || (Object.keys(next) as (keyof LocalSaveView)[]).some(key => next[key] !== localSnapshot?.[key]))
+      localSnapshot = next
+    return localSnapshot
+  }
+
+  function stopWatchingLocal(): void {
+    for (const stop of localWatchers.splice(0))
+      stop()
+    localSnapshot = undefined
   }
 
   function releaseLock(): void {
@@ -167,6 +207,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   }
 
   function stopSaving(): void {
+    stopWatchingLocal()
     invalidateConnection(coordinator !== undefined)
     draftGeneration += 1
     verifyFence = undefined
@@ -370,6 +411,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     get coordinator() { return coordinator },
     get autosave() { return autosave },
     get draft() { return draft },
+    localSave,
     baseRevision,
     setBaseRevision: (revision) => { editingBase = revision },
     acquire: async (intent = {}) => acquireEditLease({
@@ -496,6 +538,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       if (owned === undefined)
         return undefined
       transferDraft?.()
+      stopWatchingLocal()
       preparation = undefined
       transferDraft = undefined
       draft = undefined
@@ -616,6 +659,8 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       if (initial.blocked !== undefined)
         saver.block(initial.blocked)
       stopWatchingCoordinator = saver.subscribe(options.onChange)
+      // save.unsaved 可能一直为 true；每次新编辑/输入仍须立即撤掉“已完整落盘”的说法。
+      localWatchers.push(source.subscribe(options.onChange), editor.onChange(options.onChange), editor.onUncommittedInputChange(options.onChange))
       const scheduler = createAutosave({
         editor,
         page: options.autosave.page,

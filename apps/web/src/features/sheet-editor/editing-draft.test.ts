@@ -95,6 +95,7 @@ describe('进入编辑准备唯一内容来源', () => {
   it.each(['disabled', 'unsupported'] as const)('%s 使用内存，不取钥、不建宿主，生命周期调用也不偷偷启用', async (reason) => {
     const h = await fixture()
     const draft = await h.ready({ enabled: reason !== 'disabled', supported: () => reason !== 'unsupported' })
+    expect(draft.storage()).toEqual({ kind: 'memory', reason, hostKind: undefined, mirror: undefined, persistence: undefined })
     const ref = draft.capture(capture('内存内容'))
     expect(await draft.ready(ref)).toMatchObject({ local: { kind: 'memory', reason } })
     draft.observeVersion(2)
@@ -104,6 +105,65 @@ describe('进入编辑准备唯一内容来源', () => {
     expect(await draft.readLatest()).toMatchObject({ snapshot: '内存内容' })
     expect(h.fetch).not.toHaveBeenCalled()
     expect(h.host).not.toHaveBeenCalled()
+    expect(draft.storage()).toMatchObject({ kind: 'memory', reason })
+  })
+
+  it('存储元数据不含正文或钥，申请迟到通过原 subscribe 通知，读取未变化事实返回同一快照', async () => {
+    const h = await fixture()
+    const persistence = deferred<{ kind: 'denied' }>()
+    const persist = vi.fn(async () => persistence.promise)
+    const draft = await h.ready({ persist })
+    const before = draft.storage()
+    expect(before).toEqual({ kind: 'persistent', reason: undefined, hostKind: 'in-process', mirror: { kind: 'off' }, persistence: undefined })
+    expect(draft.storage()).toBe(before)
+    const changes = vi.fn(() => draft.storage())
+    const stop = draft.subscribe(changes)
+    persistence.resolve({ kind: 'denied' })
+    await settle()
+    expect(changes).toHaveLastReturnedWith({ ...before, persistence: { kind: 'denied' } })
+    expect(persist).toHaveBeenCalledOnce()
+    const ref = draft.capture(capture('不可进入元数据的正文'))
+    await draft.ready(ref)
+    expect(JSON.stringify(draft.storage())).not.toContain('不可进入元数据')
+    stop()
+    const count = changes.mock.calls.length
+    draft.dispose()
+    expect(changes).toHaveBeenCalledTimes(count)
+    expect(draft.storage().kind).toBe('inactive')
+  })
+
+  it('当前写入配额失败时元数据说明内存退路，不继续沿用准备成功的事实', async () => {
+    const h = await fixture()
+    const draft = await h.ready()
+    h.store.failNext('writeDraft', { kind: 'quota' })
+    const ref = draft.capture(capture('写满时的修改'))
+    expect(await draft.ready(ref)).toMatchObject({ local: { kind: 'memory', reason: 'quota' } })
+    expect(draft.storage()).toMatchObject({ kind: 'memory', reason: 'quota', hostKind: 'in-process' })
+  })
+
+  it('新捕获写入期间保留最近的镜像事实，不退回宿主初次登记的镜像状态', async () => {
+    const h = await fixture()
+    const draft = await h.ready()
+    const writer = h.hosts[0]!.writer
+    const write = writer.write
+    vi.spyOn(writer, 'write').mockImplementationOnce(async (...args) => {
+      const result = await write(...args)
+      return result.kind === 'written' ? { ...result, mirror: { kind: 'not-mirrored', reason: 'quota' } } : result
+    })
+    const first = draft.capture(capture('A'))
+    await draft.ready(first)
+    expect(draft.storage().mirror).toEqual({ kind: 'not-mirrored', reason: 'quota' })
+    const writing = h.store.holdNext('writeDraft')
+    const next = draft.capture(capture('B', 2))
+    try {
+      await writing.reached
+      expect(draft.storage().mirror).toEqual({ kind: 'not-mirrored', reason: 'quota' })
+    }
+    finally {
+      writing.release()
+      await draft.ready(next)
+    }
+    expect(draft.storage().mirror).toEqual({ kind: 'off' })
   })
 
   it('登记就绪后才交来源，捕获使用真实持久 writer；所有权始终是同一个对象', async () => {
@@ -196,6 +256,7 @@ describe('进入编辑准备唯一内容来源', () => {
     const ref = next.capture(capture('重新打开的云端内容', 0))
     expect(ref.draftSeq).toBe(2)
     expect(await next.ready(ref)).toMatchObject({ local: { kind: 'memory', reason: 'existing-draft' } })
+    expect(next.storage()).toMatchObject({ kind: 'memory', reason: 'existing-draft' })
     next.observeVersion(2)
     await next.resume()
     expect(h.store.rawDraft(KEY)).toEqual(before)

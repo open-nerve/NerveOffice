@@ -2,6 +2,7 @@ import type { EditInterruption } from '@nerve-office/contracts'
 import type { AutosaveView } from './autosave.ts'
 import type { LeaseLoss } from './edit-lease.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
+import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -22,6 +23,12 @@ const READY: EditorPageReady = {
   userId: '0199a2c4-0000-7000-8000-00000000000a',
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
+const ONLINE: AutosaveView = { offline: false, paused: false, retrying: false, held: false }
+const DIRTY: SaveView = { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }
+const NETWORK_FAILURE: SaveView = { ...DIRTY, status: 'failed', problem: { kind: 'request', error: new NetworkError('断网') } }
+
+const PAUSED: AutosaveView = { ...ONLINE, paused: true }
+
 const EDITING: EditModeState = { kind: 'editing' }
 const READING: ReadingMode = { kind: 'reading', canEdit: true, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver: false, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked: undefined, formulasPending: false, damaged: undefined }
 const AMY = { id: '0199a2c4-0000-7000-8000-0000000000e1', username: 'amy', displayName: '艾米' }
@@ -114,6 +121,74 @@ function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
   render(<EditorChrome page={fake.page} apple={apple} />)
   return fake
 }
+
+describe('页头的本机保存事实', () => {
+  const local: LocalSaveView = {
+    draft: { kind: 'working', ref: { sessionId: 'editing', serial: 1, draftSeq: 1, editorSeq: 1, bytes: 10, formulasPending: false }, local: { kind: 'persisted', mirror: { kind: 'mirrored' } }, summary: undefined },
+    storage: { kind: 'persistent', reason: undefined, hostKind: 'worker', mirror: { kind: 'mirrored' }, persistence: { kind: 'granted' } },
+    enabled: true,
+    coversCurrent: true,
+    unsaved: true,
+  }
+  const offline = { browserOnline: false, available: false, problem: 'offline', since: Date.now(), generation: 1 } as const
+
+  it('云端与本机摘要分别显示；新输入撤掉完整保护的说法，不抢焦点或逐次播报', () => {
+    const fake = renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }, localSave: local, connection: offline })
+    expect(headerStatus()).toHaveTextContent('有未保存的修改')
+    expect(screen.getByText('已离线，修改已保存在本机')).toBeVisible()
+    const save = screen.getByRole('button', { name: '保存' })
+    save.focus()
+    const spoken = announcement().textContent
+    fake.set({ localSave: { ...local, coversCurrent: false } })
+    expect(screen.queryByText('已离线，修改已保存在本机')).toBeNull()
+    expect(screen.getByText('较早的修改已落盘，最新输入仍在本页')).toBeVisible()
+    expect(save).toHaveFocus()
+    expect(announcement()).toHaveTextContent(spoken ?? '')
+  })
+
+  it('存储降级及网络无回应有明确说明，云端状态不会冒充本机已保存', () => {
+    const fake = renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }, localSave: { ...local, storage: { ...local.storage, kind: 'memory', reason: 'quota' } } })
+    expect(screen.getByText('本机存储空间不足', { selector: 'summary' })).toBeVisible()
+    fake.set({ connection: { ...offline, browserOnline: true, problem: 'unresponsive' } })
+    expect(headerStatus()).toHaveTextContent('网络没有回应，正在重试')
+    expect(announcement()).toHaveTextContent('本机存储空间不足')
+    fake.set({ localSave: { ...local, enabled: false } })
+    expect(screen.getByText('本部署关闭了本机草稿（浏览器崩溃会丢掉没保存的修改）', { selector: 'summary' })).toBeVisible()
+  })
+
+  it('没有新编辑也在连续异常满 90 秒时提示；重连尝试不重置起点，恢复清掉提示', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-10-11T00:00:00Z'))
+      const connection = { ...offline, since: Date.now() }
+      const fake = renderChrome({ localSave: local, connection })
+      await act(async () => vi.advanceTimersByTime(89_999))
+      expect(screen.queryByText(/编辑权可能已过期/)).toBeNull()
+      fake.set({ connection: { ...connection, browserOnline: true, problem: 'unresponsive' } })
+      await act(async () => vi.advanceTimersByTime(1))
+      expect(screen.getByText(/编辑权可能已过期/, { selector: 'p[data-slot="connection-expiry"]' })).toBeVisible()
+      expect(announcement()).toHaveTextContent('另存为副本')
+      fake.set({ connection: { browserOnline: true, available: true, problem: undefined, since: undefined, generation: 2 } })
+      expect(screen.queryByText(/编辑权可能已过期/, { selector: 'p[data-slot="connection-expiry"]' })).toBeNull()
+    }
+    finally {
+      cleanup()
+      vi.useRealTimers()
+    }
+  })
+
+  it('持续存在的本机降级不能遮住新的云端失败与恢复播报', () => {
+    const fake = renderChrome({ save: CLEAN, autosave: ONLINE, localSave: { ...local, storage: { ...local.storage, kind: 'memory', reason: 'quota' } } })
+    expect(announcement()).toHaveTextContent('本机存储空间不足')
+    fake.set({ save: NETWORK_FAILURE, autosave: { ...ONLINE, retrying: true } })
+    expect(announcement()).toHaveTextContent('保存失败，稍后自动重试')
+    fake.set({ save: { ...NETWORK_FAILURE, status: 'saving' } })
+    expect(announcement()).toHaveTextContent('保存失败，稍后自动重试')
+    fake.set({ save: CLEAN, autosave: ONLINE })
+    expect(announcement()).toHaveTextContent('已保存到云端')
+    expect(screen.getByText('本机存储空间不足', { selector: 'summary' })).toBeVisible()
+  })
+})
 
 describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
   it('就绪：返回文档所在的空间——个人空间回到首页（我的空间），团队空间回到它的空间页并显示名称', () => {
@@ -1098,12 +1173,6 @@ describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
   })
 })
 
-const ONLINE: AutosaveView = { offline: false, paused: false, retrying: false, held: false }
-const DIRTY: SaveView = { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }
-const NETWORK_FAILURE: SaveView = { ...DIRTY, status: 'failed', problem: { kind: 'request', error: new NetworkError('断网') } }
-
-const PAUSED: AutosaveView = { ...ONLINE, paused: true }
-
 describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
   it.each<[string, SaveView, AutosaveView, string, Partial<EditorPageView>]>([
     ['已保存到云端', CLEAN, ONLINE, '已保存到云端', {}],
@@ -1112,7 +1181,7 @@ describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
     ['只差公式的结果', { ...CLEAN, status: 'dirty', formulasPending: true, unsaved: true }, ONLINE, '公式结果尚未保存（算完之后自动保存）', {}],
     ['保存失败、会自动重试', NETWORK_FAILURE, { ...ONLINE, retrying: true }, '保存失败，稍后自动重试', {}],
     ['保存失败、要等新内容', NETWORK_FAILURE, ONLINE, '保存失败', {}],
-    ['已离线（M3 没有本机的发件箱：不说已保存在本机）', DIRTY, { ...ONLINE, offline: true }, '已离线：修改还在本页，恢复网络之后自动保存', {}],
+    ['已离线（云端等待，本机状态另列）', DIRTY, { ...ONLINE, offline: true }, '已离线，等待同步', {}],
     ['暂停（没有人登录）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'signed-out' }],
     ['暂停（换了人）', DIRTY, PAUSED, '暂停保存：登录回来之后自动保存', { session: 'other-user' }],
     ['暂停（本人在登录中、正在向服务端确认会话：不说"登录回来之后"，审查 A6）', DIRTY, PAUSED, '正在确认登录状态…', {}],
@@ -1166,7 +1235,7 @@ describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
     const fake = renderChrome({ save: DIRTY, autosave: ONLINE })
     const spoken = announcement()
     fake.set({ autosave: { ...ONLINE, offline: true } })
-    expect(spoken).toHaveTextContent('已离线：修改还在本页，恢复网络之后自动保存')
+    expect(spoken).toHaveTextContent('已离线，等待同步')
     fake.set({ autosave: ONLINE, save: { ...DIRTY, status: 'saving' } })
     expect(spoken).toHaveTextContent('已离线')
     fake.set({ save: CLEAN })

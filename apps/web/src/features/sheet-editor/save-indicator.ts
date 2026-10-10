@@ -11,7 +11,7 @@ import type { SaveView } from './save-coordinator.ts'
  * - formulas-pending：修改都已存上，只差公式的结果（算完之后自动保存）；
  * - retrying：保存失败，稍后自动重试（原因在 SaveView.problem）；
  * - failed：保存失败，要等新的内容或用户的操作（快照不合格、超过上限、意外的错误连着出现、自动保存没接上时的任何失败）；
- * - offline：已离线——修改还在本页（没有存到本机），恢复网络之后自动保存；
+ * - offline：已离线——云端同步等待网络，本机事实由 LocalSaveIndicator 单独展示；
  * - paused：暂停——登录回来之后自动保存；
  * - conflict、outdated、too-new：终态（版本冲突、需要刷新、不能保存），照旧
  */

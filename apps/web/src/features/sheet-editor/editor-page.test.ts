@@ -356,6 +356,22 @@ function deferred<T>() {
 const UNAUTHENTICATED = new ApiError(401, 'UNAUTHENTICATED', '请先登录')
 
 describe('页面、模式与编辑会话共用连接事实', () => {
+  it('页头读取同一来源的本机元数据，后续编辑立即撤销旧捕获的完整覆盖', async () => {
+    const t = setup()
+    await t.editorPage.load()
+    t.fake.enter('steady')
+    expect(t.editorPage.view().localSave).toMatchObject({ storage: { kind: 'memory', reason: 'unsupported' } })
+    await t.editorPage.save()
+    expect(t.editorPage.view().localSave).toMatchObject({ coversCurrent: true })
+    const changed = vi.fn()
+    const stop = t.editorPage.subscribe(changed)
+    vi.spyOn(t.fake.editor, 'changeSeq').mockReturnValue(2)
+    t.fake.changeListeners.forEach(listener => listener())
+    expect(changed).toHaveBeenCalled()
+    expect(t.editorPage.view().localSave).toMatchObject({ coversCurrent: false, unsaved: true })
+    stop()
+  })
+
   it('页面恢复在线先核对租约，任意成功请求不能使保存绕过在途核对', async () => {
     const connection = createConnectionState({ online: true, now: Date.now })
     const checking = deferred<RenewedEditLease>()

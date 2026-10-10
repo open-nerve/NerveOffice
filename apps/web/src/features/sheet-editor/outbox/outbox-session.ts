@@ -31,6 +31,7 @@ export interface OutboxSession {
   readonly ready: () => Promise<OutboxPreparation>
   readonly view: () => OutboxSessionState
   readonly persistence: () => PersistOutcome | undefined
+  readonly subscribe: (listener: () => void) => () => void
   readonly write: (capture: SessionCapture) => Promise<CaptureWritten>
   readonly markInFlight: (inFlight: InFlightSave) => Promise<ResealResult>
   readonly confirm: (confirmedSeq: number, revision: number) => Promise<ConfirmResult>
@@ -113,6 +114,12 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   let initial: Promise<OutboxPreparation>
   const closed = new WeakSet<OutboxHost>()
   const recoveries = new Map<AbortController, OutboxHost | undefined>()
+  const listeners = new Set<() => void>()
+
+  function notify(): void {
+    for (const listener of [...listeners])
+      listener()
+  }
 
   function close(host: OutboxHost | undefined): void {
     if (host === undefined || closed.has(host))
@@ -159,6 +166,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       close(run.host)
     active = prepared
     state = result
+    notify()
     return result
   }
 
@@ -168,13 +176,17 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     persistenceRequested = true
     // 用户决定可能迟迟不回来，不能挡住编辑；只记事实，不参与写入资格。
     const failed = (error: unknown) => {
-      if (live())
+      if (live()) {
         persistence = { kind: 'failed', error: describeFailure(error) }
+        notify()
+      }
     }
     try {
       void (options.persist ?? requestPersistence)().then((outcome) => {
-        if (live())
+        if (live()) {
           persistence = outcome
+          notify()
+        }
       }, failed)
     }
     catch (error) {
@@ -192,6 +204,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       pending = undefined
     }
     state = result
+    notify()
   }
 
   async function prepare(run: PreparationRun, verify: boolean): Promise<OutboxPreparation> {
@@ -284,6 +297,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     })
     const run: PreparationRun = { writeEpoch: writeEpoch(), generation, controller: new AbortController(), promise, host: undefined, stopped: undefined }
     pending = run
+    notify()
     void prepare(run, verify).then(resolve)
     void promise.finally(() => {
       if (pending === run)
@@ -325,6 +339,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     close(active?.host)
     active = undefined
     closeRecoveries()
+    listeners.clear()
   }
 
   const session: OutboxSession = {
@@ -342,6 +357,11 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       return state
     },
     persistence: () => persistence,
+    subscribe: (listener) => {
+      if (!disposed)
+        listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
     write: async (capture) => {
       const target = writable()
       return target === undefined ? { kind: 'failed', error: INACTIVE, gzip: null } : withFence(target, async () => target.host.writer.write({ ...capture, key: options.key, writer: target.writer }))
@@ -402,12 +422,14 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       const started = generation
       const change = ++keyChange
       target.installedKey = undefined
+      notify()
       const result = await target.host.writer.setKey(handle)
       checkEpoch()
       if (!live() || suspended || generation !== started || active !== target || keyChange !== change || (handle !== undefined && handle !== options.keeper.current()))
         return { kind: 'failed', error: INACTIVE }
       if (result.kind === 'key-set')
         target.installedKey = handle
+      notify()
       return result
     },
     refreshKey: async () => {

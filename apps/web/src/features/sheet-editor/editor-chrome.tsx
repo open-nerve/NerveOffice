@@ -51,6 +51,7 @@ import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { CopyState, EditingNotice, IncomingRequest, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
 import type { EditRequestProgress } from './edit-request.ts'
 import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
+import type { LocalSaveIndicator } from './local-save-indicator.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
 import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
@@ -70,6 +71,7 @@ import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { editorQueryClient } from './editor-query-client.ts'
+import { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
 import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 import { EditorShareEntry } from './share-entry.tsx'
 
@@ -146,6 +148,8 @@ function pausedReasonOf(view: EditorPageView): PausedReason {
 /** 编辑时页头的保存状态的说法：暂停按原因说 */
 function saveStateText(view: EditorPageView, save: SaveView): string {
   const indicator = indicatorOf(view, save)
+  if (view.connection?.problem === 'unresponsive' && (indicator === 'unsaved' || indicator === 'saving' || indicator === 'retrying' || indicator === 'formulas-pending'))
+    return editorMessages.localSave.network
   if (indicator !== 'paused')
     return editorMessages.saveState[indicator]
   switch (pausedReasonOf(view)) {
@@ -238,22 +242,63 @@ function announcementOf(view: EditorPageView): Announcement {
  * 显式写 aria-live（语义不变：role="status" 本来就是 polite，M2-P5 复验第二轮 G1）：保存在后台进行，分享对话框（模态）开着时也会完成或失败；
  * Radix 的模态弹窗打开时把弹窗之外的内容都标为 aria-hidden，只跳过那一刻已经在的、显式写了 aria-live 的元素（aria-hidden 库的 hideOthers）
  */
-function SaveAnnouncer({ view }: { view: EditorPageView }) {
-  const next = announcementOf(view)
-  const [spoken, setSpoken] = useState<Announcement>(() => (next.key === undefined ? { key: undefined, text: '' } : next))
+function SaveAnnouncer({ view, local }: { view: EditorPageView, local: LocalSaveIndicator | undefined }) {
+  const terminal = view.save?.status === 'conflict' || view.save?.status === 'outdated' || view.save?.status === 'too-new'
+  const base = announcementOf(view)
+  const announceLocal = local !== undefined && view.session === 'active' && !view.confirmingSession && !terminal
+  const localKey = announceLocal ? local.announcementKey : undefined
+  const [seen, setSeen] = useState({ base: base.key, local: localKey })
+  const [spoken, setSpoken] = useState(() => [base.key === undefined ? '' : base.text, localKey === undefined ? '' : local?.announcement].filter(Boolean).join(' '))
   const [cleared, setCleared] = useState(false)
+  // 两条事实独立记忆：持续的本机降级不能遮住新的云端失败/恢复；例行输入不重播旧状态。
+  const baseChanged = base.key !== undefined && base.key !== seen.base
+  const localChanged = localKey !== seen.local
   // 渲染中按这一次的结果调整（React 的写法：随即重新渲染，不经 effect 多渲染一轮）
-  if (next.key !== undefined && next.key !== spoken.key) {
-    setSpoken(next)
-    setCleared(false)
+  if (baseChanged || localChanged) {
+    setSeen({ base: base.key ?? seen.base, local: localKey })
+    const updates = [baseChanged ? base.text : '', localChanged && announceLocal ? localKey === undefined ? editorMessages.localSave.recovered : local.announcement : ''].filter(Boolean)
+    if (updates.length > 0) {
+      setSpoken(updates.join(' '))
+      setCleared(false)
+    }
   }
   useEffect(() => {
-    if (cleared || spoken.text === '')
+    if (cleared || spoken === '')
       return
     const timer = setTimeout(setCleared, ANNOUNCEMENT_MS, true)
     return () => clearTimeout(timer)
   }, [spoken, cleared])
-  return <p role="status" aria-live="polite" className="sr-only">{cleared ? '' : spoken.text}</p>
+  return <p role="status" aria-live="polite" className="sr-only">{cleared ? '' : spoken}</p>
+}
+
+/** 只有持续异常的 90 秒边界需要计时，不为每次捕获开计时器。 */
+function useLocalSaveIndicator(view: EditorPageView): LocalSaveIndicator | undefined {
+  const [now, setNow] = useState(Date.now)
+  const since = view.connection?.since
+  useEffect(() => {
+    if (since === undefined)
+      return
+    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, since + CONNECTION_WARNING_MS - Date.now()))
+    return () => clearTimeout(timer)
+  }, [since])
+  return view.localSave !== undefined && (view.mode?.kind === 'editing' || view.mode?.kind === 'exiting')
+    ? localSaveIndicator(view.localSave, view.connection, now)
+    : undefined
+}
+
+function LocalSaveStatus({ indicator }: { indicator: LocalSaveIndicator }) {
+  const expired = indicator.details.includes(editorMessages.localSave.expired)
+  return (
+    <div data-slot="local-save-status" data-local-save-state={indicator.kind} className="px-3 pb-2 text-xs text-muted-foreground">
+      <details>
+        <summary className="cursor-pointer">{indicator.summary}</summary>
+        <div className="flex flex-col gap-1 pt-1">
+          {indicator.details.filter(detail => detail !== editorMessages.localSave.expired).map(detail => <p key={detail}>{detail}</p>)}
+        </div>
+      </details>
+      {expired && <p data-slot="connection-expiry" className="pt-1">{editorMessages.localSave.expired}</p>}
+    </div>
+  )
 }
 
 /**
@@ -992,6 +1037,7 @@ function LoadFailure({ load }: { load: Exclude<EditorPageLoad, { kind: 'loading'
 /** apple：苹果的平台，保存的快捷键是 Cmd+S，其他平台是 Ctrl+S */
 export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean }) {
   const view = useSyncExternalStore(page.subscribe, page.view)
+  const local = useLocalSaveIndicator(view)
   const [queryClient] = useState(() => editorQueryClient(page))
   /** 确认框（放弃本页的修改、强制接管）：同一时刻至多一个 */
   const [pending, setPending] = useState<PendingConfirmation>()
@@ -1083,11 +1129,12 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               {ready !== undefined && <EditorShareEntry page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
               {/* 看得见的状态（不是播报区：例行的变化只改文字）与读屏的播报区（只播有意义的变化） */}
               <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-              <SaveAnnouncer view={view} />
+              <SaveAnnouncer view={view} local={local} />
               {(reading !== undefined || entering) && <ReadingControls page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
               {editing !== undefined && <SaveControls page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
             </div>
           </div>
+          {local !== undefined && <LocalSaveStatus indicator={local} />}
           {/* 阅读时的一行静态说明（A14，见文件头） */}
           {reading !== undefined && <p data-slot="reading-note" className="px-3 pb-2 text-xs text-muted-foreground">{editorMessages.mode.readingNote}</p>}
         </header>

@@ -17,12 +17,13 @@
 // 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SessionResponse } from '@nerve-office/contracts'
 import type { ApiError } from '../../shared/api/index.ts'
+import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { AutosavePage, AutosaveView } from './autosave.ts'
 import type { LeaseClock } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
-import type { EditingSessionOptions } from './editing-session.ts'
+import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
 import type { HandoverTrace } from './handover-trace.ts'
@@ -73,6 +74,8 @@ export type EditorPageLoad
 export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
 
 export interface EditorPageView {
+  readonly localSave?: LocalSaveView | undefined
+  readonly connection?: ConnectionView | undefined
   readonly load: EditorPageLoad
   /** 阅读还是编辑、编辑权怎样了（载入之后才有） */
   readonly mode: EditModeState | undefined
@@ -305,7 +308,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { load, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
   }
 
   /** 页面信号变了：在调用者的同步段里通知（可见性在 visibilitychange 里，切到后台的上传不靠计时器） */
@@ -646,7 +649,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       pageWindow.addEventListener('pagehide', onPageHide)
       cleanups.push(() => pageWindow.removeEventListener('pagehide', onPageHide))
       // 自动保存的页面信号：可见性（同步通知）与联网；恢复联网、回到前台时上一次确认会话失败了就再确认（审查 A6）
-      cleanups.push(options.visibility.onChange(signalPage), options.network.onChange(signalPage))
+      cleanups.push(options.visibility.onChange(signalPage), options.network.onChange(() => {
+        signalPage()
+        update()
+      }))
       cleanups.push(
         options.visibility.onChange(() => recheckOnReturn(!options.visibility.hidden())),
         options.network.onChange(() => recheckOnReturn(options.network.online())),

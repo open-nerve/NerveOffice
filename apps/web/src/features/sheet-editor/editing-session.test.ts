@@ -6,6 +6,66 @@ import { settle } from './fake-lease-clock.test-support.ts'
 
 afterEach(disposeSessions)
 
+describe('本机状态跟随当前编辑和输入', () => {
+  it('A 落盘晚于 B 的编辑不能覆盖 B；输入未提交时也不能声称全部已落盘', async () => {
+    const local = await localDrafts()
+    const { session, options } = fixture({ localDrafts: local.options })
+    const page = editorFixture()
+    await prepare(session)
+    session.startSaving(page.editor, INITIAL)
+    session.stopCapturing()
+    page.edit()
+    const writing = local.store.holdNext('writeDraft')
+    const a = session.draft!.capture({ editorSeq: 1, snapshot: 'A', formulasPending: false, dedupe: false })
+    await writing.reached
+    try {
+      vi.mocked(options.onChange).mockClear()
+      page.edit()
+      expect(options.onChange).toHaveBeenCalled()
+    }
+    finally {
+      writing.release()
+      await session.draft!.ready(a)
+    }
+    expect(session.localSave()).toMatchObject({ draft: { local: { kind: 'persisted' }, ref: { editorSeq: 1 } }, coversCurrent: false, unsaved: true })
+    const b = session.draft!.capture({ editorSeq: 2, snapshot: 'B', formulasPending: false, dedupe: false })
+    await session.draft!.ready(b)
+    const saved = session.localSave()
+    expect(saved).toMatchObject({ coversCurrent: true })
+    expect(session.localSave()).toBe(saved)
+    vi.mocked(options.onChange).mockClear()
+    page.setInput('pending')
+    expect(options.onChange).toHaveBeenCalled()
+    expect(session.localSave()).toMatchObject({ coversCurrent: false })
+    page.setInput('none')
+    expect(session.localSave()).toMatchObject({ coversCurrent: true })
+  })
+
+  it('来源转交后不再通知旧会话；新所有者仍可订阅存储和内容，旧会话销毁不影响它', async () => {
+    const local = await localDrafts()
+    const { session, options } = fixture({ localDrafts: local.options })
+    const page = editorFixture()
+    await prepare(session)
+    session.startSaving(page.editor, INITIAL)
+    session.stopCapturing()
+    session.coordinator!.dispose()
+    const draft = session.takeDraft()!
+    session.stopSaving()
+    session.dispose()
+    expect(session.localSave()).toBeUndefined()
+    vi.mocked(options.onChange).mockClear()
+    const changed = vi.fn()
+    const stop = draft.subscribe(changed)
+    const ref = draft.capture({ editorSeq: 1, snapshot: '转交后', formulasPending: false, dedupe: false })
+    await draft.ready(ref)
+    expect(changed).toHaveBeenCalled()
+    expect(options.onChange).not.toHaveBeenCalled()
+    expect(page.listeners()).toBe(0)
+    stop()
+    draft.dispose()
+  })
+})
+
 describe('草稿恢复沿用租约的失效与续上规则', () => {
   it('续上后新核对再次失效时结束本轮恢复，不循环申请也不绕过租约通知失效', async () => {
     const local = await localDrafts()

@@ -126,7 +126,7 @@ import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveVie
 import type { Incompatibility } from './client-format.ts'
 import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit-request.ts'
-import type { EditingSessionOptions } from './editing-session.ts'
+import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
 import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
@@ -394,6 +394,7 @@ export type EditModeState
     | { readonly kind: 'unavailable' }
 
 export interface EditModeView {
+  readonly localSave: LocalSaveView | undefined
   readonly mode: EditModeState
   /** 编辑时（与退出编辑的过程中）才有：保存的状态 */
   readonly save: SaveView | undefined
@@ -780,12 +781,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 保存的状态只在编辑与退出编辑的过程中给出：失去编辑权之后保存的状态机还留着（核对结果未知的保存），但它的说明不再成立 */
   function computeView(): EditModeView {
     const saving = mode.kind === 'editing' || mode.kind === 'exiting'
-    return { mode, save: saving ? editing.coordinator?.view() : undefined, autosave: saving ? editing.autosave?.view() : undefined, surface: slot.surface() }
+    return { mode, localSave: saving ? editing.localSave() : undefined, save: saving ? editing.coordinator?.view() : undefined, autosave: saving ? editing.autosave?.view() : undefined, surface: slot.surface() }
   }
 
   function notify(): void {
     const next = computeView()
-    if (next.mode === current.mode && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface)
+    if (next.mode === current.mode && next.localSave === current.localSave && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface)
       return
     current = next
     for (const listener of [...listeners])

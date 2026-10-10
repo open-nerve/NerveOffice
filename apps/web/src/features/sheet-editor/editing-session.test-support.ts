@@ -33,6 +33,7 @@ export function deferred<T>() {
 
 export function editorFixture() {
   let seq = 0
+  let inputState: ReturnType<EditingSessionEditor['uncommittedInput']> = 'none'
   const changes = new Set<() => void>()
   const input = new Set<() => void>()
   const formulas = new Set<() => void>()
@@ -46,7 +47,7 @@ export function editorFixture() {
   const editor: EditingSessionEditor = {
     changeSeq: () => seq,
     onChange: listen(changes),
-    uncommittedInput: () => 'none',
+    uncommittedInput: () => inputState,
     onUncommittedInputChange: listen(input),
     formulasSettled: () => true,
     onFormulaProgress: listen(formulas),
@@ -63,6 +64,10 @@ export function editorFixture() {
     edit: () => {
       seq += 1
       changes.forEach(listener => listener())
+    },
+    setInput: (next: typeof inputState) => {
+      inputState = next
+      input.forEach(listener => listener())
     },
     listeners: () => changes.size + input.size + formulas.size + composition.size,
   }

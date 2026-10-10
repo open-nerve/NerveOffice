@@ -80,6 +80,47 @@ function capture() {
   return { draftSeq: 38, baseRevision: 12, writtenBy: CLIENT_INSTANCE_ID, format: sampleMeta().format, formulasPending: false, inFlight: null, bytes: new TextEncoder().encode('snapshot'), dedupe: true }
 }
 
+describe('存储事实订阅', () => {
+  it('准备和持久保存申请分别通知；申请迟到不阻挡 ready，也不重复申请', async () => {
+    const h = await harness()
+    const persistence = deferred<PersistOutcome>()
+    h.persist.mockReturnValue(persistence.promise)
+    const session = h.start()
+    const changes = vi.fn(() => ({ state: session.view(), persistence: session.persistence() }))
+    const stop = session.subscribe(changes)
+    await session.ready()
+    expect(changes.mock.results.at(-1)?.value).toMatchObject({ state: { kind: 'ready', hostKind: 'worker' }, persistence: undefined })
+    persistence.resolve({ kind: 'denied' })
+    await settle()
+    expect(changes.mock.results.at(-1)?.value).toMatchObject({ state: { kind: 'ready' }, persistence: { kind: 'denied' } })
+    expect(h.persist).toHaveBeenCalledOnce()
+    stop()
+    const count = changes.mock.calls.length
+    session.suspend()
+    session.dispose()
+    expect(changes).toHaveBeenCalledTimes(count)
+  })
+
+  it('销毁通知之后清理监听，迟到的持久保存申请不能复活状态', async () => {
+    const h = await harness()
+    const persistence = deferred<PersistOutcome>()
+    h.persist.mockReturnValue(persistence.promise)
+    const session = h.start()
+    await session.ready()
+    const changes = vi.fn(() => session.view())
+    session.subscribe(changes)
+    session.suspend()
+    expect(changes).toHaveLastReturnedWith({ kind: 'memory', reason: 'paused' })
+    session.dispose()
+    expect(changes).toHaveLastReturnedWith({ kind: 'disposed' })
+    const count = changes.mock.calls.length
+    persistence.resolve({ kind: 'granted' })
+    await settle()
+    expect(changes).toHaveBeenCalledTimes(count)
+    expect(session.persistence()).toBeUndefined()
+  })
+})
+
 describe('会话清钥的两段收尾', () => {
   it('同步停写与取钥退路，允许原宿主完成临时读回，收尾只关闭宿主不删盘', async () => {
     const h = await harness()

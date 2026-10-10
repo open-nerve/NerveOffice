@@ -1,10 +1,12 @@
 // 一次编辑的来源与密钥所有权。准备句柄立即返回；宿主准备/换钥中也能停写、清钥和销毁。
 import type { LocalKeyHandle } from '../../shared/outbox/draft-codec.ts'
+import type { MirrorStatus } from '../../shared/outbox/draft-mirror.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../shared/outbox/local-key.ts'
+import type { PersistOutcome } from '../../shared/outbox/storage-status.ts'
 import type { LeaseClock, LeaseVerdict } from './edit-lease.ts'
 import type { OutboxPreparation, OutboxSession, OutboxSessionOptions } from './outbox/outbox-session.ts'
 import type { PersistentWorkingDraft } from './outbox/persistent-working-draft.ts'
-import type { WorkingDraft, WorkingDraftOptions } from './working-draft.ts'
+import type { DraftMemoryReason, WorkingDraft, WorkingDraftOptions } from './working-draft.ts'
 import { createLocalKeyKeeper, fetchLocalKey } from '../../shared/outbox/local-key.ts'
 import { createMemoryWorkingDraft } from './memory-working-draft.ts'
 import { prepareOutboxSession } from './outbox/outbox-session.ts'
@@ -19,7 +21,18 @@ interface DraftLifecycle {
   readonly dispose: () => void
 }
 
-export interface EditingDraft extends WorkingDraft, DraftLifecycle {}
+/** 仅含存储事实；不传宿主、正文、身份、密钥或准备失败的原始对象。 */
+export interface DraftStorageView {
+  readonly kind: 'persistent' | 'memory' | 'preparing' | 'inactive'
+  readonly reason: DraftMemoryReason | undefined
+  readonly hostKind: 'worker' | 'in-process' | undefined
+  readonly mirror: MirrorStatus | undefined
+  readonly persistence: PersistOutcome | undefined
+}
+
+export interface EditingDraft extends WorkingDraft, DraftLifecycle {
+  readonly storage: () => DraftStorageView
+}
 
 export type EditingDraftReady
   = | { readonly kind: 'ready', readonly draft: EditingDraft }
@@ -43,6 +56,11 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
   const hostChanges = new Map<number, number>()
   let source: WorkingDraft | undefined
   let persistent: PersistentWorkingDraft | undefined
+  let initialMemory: DraftMemoryReason | undefined
+  let storageSnapshot: DraftStorageView | undefined
+  let lastHostKind: DraftStorageView['hostKind']
+  let lastMirror: MirrorStatus | undefined
+  let observedHost: Extract<OutboxPreparation, { readonly kind: 'ready' }> | undefined
   let unsubscribe: () => void = () => {}
   let discarding: Promise<unknown> | undefined
   let resuming: { readonly generation: number, readonly promise: Promise<boolean> } | undefined
@@ -212,6 +230,30 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
     dispose,
   }
 
+  function storage(): DraftStorageView {
+    const state = session.view()
+    const content = source?.view()
+    const local = content?.kind === 'working' ? content.local : undefined
+    if (state.kind === 'ready' && state !== observedHost) {
+      observedHost = state
+      lastHostKind = state.hostKind
+      lastMirror = state.mirror
+    }
+    if (local?.kind === 'persisted')
+      lastMirror = local.mirror
+    // 新写入尚未完成时保留上次降级原因，不能在重试一开始就宣称恢复。
+    const reason = initialMemory ?? (state.kind === 'memory'
+      ? state.reason
+      : local?.kind === 'memory' ? local.reason : local?.kind === 'writing' ? storageSnapshot?.reason : undefined)
+    const kind = disposed || (initialMemory === undefined && (state.kind === 'disposed' || state.kind === 'lost'))
+      ? 'inactive'
+      : reason !== undefined ? 'memory' : state.kind === 'preparing' ? 'preparing' : 'persistent'
+    const next: DraftStorageView = { kind, reason, hostKind: lastHostKind, mirror: lastMirror, persistence: session.persistence() }
+    if (storageSnapshot === undefined || (Object.keys(next) as (keyof DraftStorageView)[]).some(key => next[key] !== storageSnapshot?.[key]))
+      storageSnapshot = next
+    return storageSnapshot
+  }
+
   async function buildReady(): Promise<EditingDraftReady> {
     const prepared = await session.ready()
     if (!live())
@@ -222,6 +264,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
     }
     const initialDraftSeq = prepared.lastDraftSeq ?? 0
     if (prepared.kind === 'memory' && (prepared.reason === 'disabled' || prepared.reason === 'unsupported' || prepared.reason === 'existing-draft')) {
+      initialMemory = prepared.reason
       source = createMemoryWorkingDraft({ ...options, initialDraftSeq, reason: prepared.reason })
       session.dispose()
       keeper.discard()
@@ -232,7 +275,20 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
       if (paused)
         persistent.suspend()
     }
-    return { kind: 'ready', draft: { ...source, ...lifecycle } }
+    const working = source
+    return { kind: 'ready', draft: {
+      ...working,
+      ...lifecycle,
+      storage,
+      subscribe: (listener) => {
+        const stopContent = working.subscribe(listener)
+        const stopStorage = session.subscribe(listener)
+        return () => {
+          stopContent()
+          stopStorage()
+        }
+      },
+    } }
   }
 
   return { ...lifecycle, ready: async () => ready }
