@@ -2,6 +2,7 @@ import type { Autosave } from './autosave.ts'
 import type { EditLease, LeaseVerdict } from './edit-lease.ts'
 import type { EditingSessionEditor, EditingSessionOptions } from './editing-session.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { createEditingSession } from './editing-session.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { fakeLeaseServer } from './lease-server.test-support.ts'
@@ -180,9 +181,12 @@ describe('编辑会话的资源所有权', () => {
     const saving = session.coordinator
     if (saving === undefined)
       throw new Error('保存协调未建立')
-    const outcome = saving.save(() => ({ seq: 1, snapshot: '{"v":1}', bytes: 7, formulasPending: false, digest: undefined }), { dedupe: false })
-    await settle()
-    expect(options.api.save).toHaveBeenCalledTimes(1)
+    const draft = session.draft
+    if (draft === undefined)
+      throw new Error('工作草稿未建立')
+    const ref = draft.capture({ editorSeq: 1, snapshot: '{"v":1}', formulasPending: false, dedupe: false })
+    const outcome = saving.save(() => ref, { dedupe: false })
+    await vi.waitFor(() => expect(options.api.save).toHaveBeenCalledTimes(1))
     session.stopCapturing()
     expect(session.coordinator).toBe(saving)
     expect(session.autosave).toBeUndefined()
@@ -261,7 +265,9 @@ describe('编辑会话的资源所有权', () => {
       outcome: { kind: 'saved', requestId: 'request-1' },
     })
     expect(options.api.save).toHaveBeenCalledTimes(1)
-    expect(options.api.save).toHaveBeenCalledWith(DOCUMENT, expect.objectContaining({ baseRevision: 9 }), new TextEncoder().encode('{"v":1}'), next.credentials())
+    expect(options.api.save).toHaveBeenCalledWith(DOCUMENT, expect.objectContaining({ baseRevision: 9 }), expect.any(Uint8Array), next.credentials())
+    const body = vi.mocked(options.api.save).mock.calls[0]![2]
+    expect(new TextDecoder().decode(await gunzipBytes(body))).toBe('{"v":1}')
     expect(session.baseRevision()).toBe(10)
 
     session.stopSaving()

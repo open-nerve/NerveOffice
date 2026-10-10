@@ -1608,12 +1608,13 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     Object.assign(fake.editor, { changeSeq: () => 1 })
     fake.changeListeners.forEach(listener => listener())
     await editorPage.save()
-    Object.assign(fake.editor, { changeSeq: () => 2 })
+    Object.assign(fake.editor, { changeSeq: () => 2, capture: () => '{"id":"unit-1","v":"新内容"}' })
     fake.changeListeners.forEach(listener => listener())
     editLease.acquire.mockResolvedValueOnce({ ...NEXT_LEASE, revision: 4, source: own })
     await editorPage.save()
     expect(save).toHaveBeenCalledTimes(4)
-    // 第三次是用新的一代重发第二次（同一个请求），第四次换上新的基准、新的 requestId
+    // 第二次先核对旧请求；第三次用新租约再发原请求，认出已提交后第四次发送新内容。
+    expect(save.mock.calls[1]?.[1]).toBe(save.mock.calls[0]?.[1])
     expect(save.mock.calls[2]?.[1]).toEqual(save.mock.calls[1]?.[1])
     expect(save.mock.calls[2]?.[3]).toEqual(NEXT_CREDENTIALS)
     expect(save.mock.calls[3]?.[1]).toMatchObject({ baseRevision: 4, localSeq: 2 })

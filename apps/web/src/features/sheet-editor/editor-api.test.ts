@@ -74,9 +74,19 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
   it('保存：查询参数带上代次、"公式待更新"与本页的构建与数据格式（M3-P3），请求头带上令牌；内容相同（unchanged）照样读出', async () => {
     const api = installFakeApi()
     api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-1&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2&formulasPending=true&${FORMAT_QUERY}`, () => json(200, { revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: true }))
-    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, snapshot: '{}', formulasPending: true }
+    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, format: PAGE_CLIENT_FORMAT, formulasPending: true }
     await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).resolves.toEqual({ revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: true })
     expect(api.requests[0]?.headers).toMatchObject({ 'x-edit-lease': TOKEN, 'content-type': 'application/gzip' })
+  })
+
+  it('保存使用固定上传的格式，不拿页面当前格式替换旧请求', async () => {
+    const format = { ...PAGE_CLIENT_FORMAT, clientBuild: 'frozen-build', formatVersion: 2 }
+    const formatQuery = new URLSearchParams(Object.entries(format).map(([name, value]) => [name, String(value)])).toString()
+    const api = installFakeApi()
+    api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-frozen&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2&formulasPending=false&${formatQuery}`, () => json(200, { revision: 5, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }))
+    const request = { baseRevision: 4, requestId: 'req-frozen', clientInstanceId: PAGE_ID, localSeq: 3, format, formulasPending: false }
+    await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).resolves.toMatchObject({ revision: 5 })
+    expect(api.requests).toHaveLength(1)
   })
 
   it('本页过旧、文档比服务端新（M3-P3）：保存、申请、续租照常抛出 CLIENT_OUTDATED、DOCUMENT_TOO_NEW（ApiError，带原因）', async () => {
@@ -85,7 +95,7 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
     await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID)).rejects.toMatchObject({ status: 409, code: 'DOCUMENT_TOO_NEW' })
     await expect(renewEditLease(DOCUMENT_ID, TOKEN, 0)).rejects.toMatchObject({ status: 409, code: 'CLIENT_OUTDATED', details: { reason: 'build' } })
     api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-1&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2&formulasPending=false&${FORMAT_QUERY}`, () => outdated('format'))
-    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, snapshot: '{}', formulasPending: false }
+    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, format: PAGE_CLIENT_FORMAT, formulasPending: false }
     await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).rejects.toMatchObject({ code: 'CLIENT_OUTDATED', details: { reason: 'format' } })
   })
 })

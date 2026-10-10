@@ -11,10 +11,12 @@ import type { HandoverTrace } from './handover-trace.ts'
 import type { LocalLock, LockClaim } from './local-lock.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { CompressSnapshot, SaveCoordinator, SaveEditor, SaveRequest } from './save-coordinator.ts'
+import type { WorkingDraft } from './working-draft.ts'
 import { createAutosave } from './autosave.ts'
-import { incompatibilityOf } from './client-format.ts'
+import { incompatibilityOf, PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { acquireEditLease, leaseLossOf } from './edit-lease.ts'
 import { holdLocalLock } from './local-lock.ts'
+import { createMemoryWorkingDraft } from './memory-working-draft.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
 
 /** 只需要捕获与保存能力，不持有或销毁编辑器的 UI。 */
@@ -63,6 +65,7 @@ export interface EditingSession {
   readonly lease: EditLease | undefined
   readonly coordinator: SaveCoordinator | undefined
   readonly autosave: Autosave | undefined
+  readonly draft: WorkingDraft | undefined
   readonly baseRevision: () => number
   readonly setBaseRevision: (revision: number) => void
   readonly acquire: (intent?: AcquireIntent) => Promise<LeaseAcquisition>
@@ -95,6 +98,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   let lock: LocalLock | undefined
   let coordinator: SaveCoordinator | undefined
   let autosave: Autosave | undefined
+  let draft: WorkingDraft | undefined
   let stopWatchingCoordinator: (() => void) | undefined
   let stopWatchingAutosave: (() => void) | undefined
   let editingBase = 0
@@ -132,6 +136,8 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     stopWatchingCoordinator = undefined
     coordinator?.dispose()
     coordinator = undefined
+    draft?.dispose()
+    draft = undefined
   }
 
   /** 保存时租约已续上就用新凭据重发至多一次；原请求标识和字节不变。 */
@@ -162,6 +168,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     get lease() { return lease },
     get coordinator() { return coordinator },
     get autosave() { return autosave },
+    get draft() { return draft },
     baseRevision,
     setBaseRevision: (revision) => { editingBase = revision },
     acquire: async (intent = {}) => acquireEditLease({
@@ -216,9 +223,11 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       const held = lease
       if (held === undefined)
         throw new Error('建立保存前必须先接纳编辑租约')
+      const source = createMemoryWorkingDraft({ sessionId: `${options.clientInstanceId}:${held.credentials().writeEpoch}`, initialDraftSeq: 0, baseRevision: initial.revision, format: PAGE_CLIENT_FORMAT, writtenBy: options.clientInstanceId, reportError: options.reportError, reason: 'disabled' })
+      draft = source
       const saver = createSaveCoordinator({
         editor,
-        compress: api.compress,
+        draft: source,
         send: async (request, body) => sendSave(held, request, body),
         baseRevision: initial.revision,
         clientInstanceId: options.clientInstanceId,
@@ -238,7 +247,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         page: options.autosave.page,
         uploader: saver,
         clock,
-        digest: options.autosave.digest,
+        draft: source,
         initialFormulasPending: initial.formulasPending,
         tuning: options.autosave.tuning,
         observe: options.autosave.observe,

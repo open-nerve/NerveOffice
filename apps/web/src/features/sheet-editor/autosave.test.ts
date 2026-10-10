@@ -7,6 +7,7 @@ import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createAutosave, decideUpload, DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
 import { fakeLeaseClock } from './fake-lease-clock.test-support.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
+import { fakeWorkingDraft, requestWithSnapshot } from './working-draft.test-support.ts'
 
 const ME = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 /** 假时钟的起点（毫秒） */
@@ -159,6 +160,7 @@ function fakeTuning() {
 
 interface PendingSend {
   readonly request: SaveRequest
+  readonly body: Uint8Array<ArrayBuffer>
   /** 发出时假时钟的时刻 */
   readonly at: number
   resolve: (response: SaveContentResponse) => void
@@ -176,16 +178,18 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
   const time = fakeLeaseClock(T0)
   const { editor, control } = fakeEditor(time.elapse, { settled: options.settled, seq: options.seq })
   const calls: PendingSend[] = []
-  const send = vi.fn(async (request: SaveRequest) => new Promise<SaveContentResponse>((resolve, reject) => {
-    calls.push({ request, at: time.now(), resolve, reject })
+  const send = vi.fn(async (request: SaveRequest, body: Uint8Array<ArrayBuffer>) => new Promise<SaveContentResponse>((resolve, reject) => {
+    calls.push({ request, body, at: time.now(), resolve, reject })
   }))
   const compress = vi.fn(async (snapshot: string) => new TextEncoder().encode(snapshot))
   const reportError = vi.fn()
   const onUnauthenticated = vi.fn()
   const page = fakePage()
+  const digest = vi.fn(async (snapshot: string) => `sha256:${snapshot}`)
+  const { draft } = fakeWorkingDraft({ compress, digest, reportError })
   const coordinator = createSaveCoordinator({
     editor,
-    compress,
+    draft,
     send,
     baseRevision: 1,
     clientInstanceId: ME,
@@ -200,13 +204,12 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
   })
   const tuning = fakeTuning()
   const events: AutosaveEvent[] = []
-  const digest = vi.fn(async (snapshot: string) => `sha256:${snapshot}`)
   const autosave = createAutosave({
     editor,
     page: page.page,
     uploader: coordinator,
     clock: time.clock,
-    digest,
+    draft,
     initialFormulasPending: options.initialFormulasPending ?? false,
     tuning: tuning.tuning,
     observe: event => events.push(event),
@@ -279,7 +282,7 @@ describe('节奏（设计 §3.2、§3.3）', () => {
     expect(context.calls).toHaveLength(0)
     await time.advance(1)
     const call = await sent(context, 1)
-    expect(call).toMatchObject({ at: T0 + 2000, request: { localSeq: 1, snapshot: '{"content":"甲"}', formulasPending: false } })
+    expect(requestWithSnapshot(call)).toMatchObject({ at: T0 + 2000, request: { localSeq: 1, snapshot: '{"content":"甲"}', formulasPending: false } })
     expect(context.coordinator.view().status).toBe('saving')
     call.resolve(saved(2))
     await drain(context)
@@ -303,7 +306,7 @@ describe('节奏（设计 §3.2、§3.3）', () => {
     await context.time.advance(999)
     expect(context.calls).toHaveLength(0)
     await context.time.advance(1)
-    expect((await sent(context, 1)).request.localSeq).toBe(2)
+    expect((await sent(context, 1)).request.localSeq).toBe(1)
   })
 
   it('持续编辑（每 0.5 秒改一处）：每 3 秒捕获一次（上限），从第一处没上传的修改算起 15 秒上传一次；停下之后按静默再传', async () => {
@@ -315,13 +318,13 @@ describe('节奏（设计 §3.2、§3.3）', () => {
     // 现在是 T0 + 16 秒：第一处修改之后 15 秒传过一次（最近一次捕获是那一刻的，序号 30），之后没有
     expect(context.captures().map(event => [event.trigger, event.at])).toEqual([3000, 6000, 9000, 12_000, 15_000].map(offset => ['cap', T0 + offset]))
     expect(context.calls).toHaveLength(1)
-    expect(context.calls[0]).toMatchObject({ at: T0 + 15_000, request: { localSeq: 30 } })
+    expect(context.calls[0]).toMatchObject({ at: T0 + 15_000, request: { localSeq: 5 } })
     context.calls[0]?.resolve(saved(2))
     // 最后一处在 T0 + 15.5 秒：16.5 秒静默捕获，17.5 秒上传
     await context.time.advance(1499)
     expect(context.calls).toHaveLength(1)
     await context.time.advance(1)
-    expect(await sent(context, 2)).toMatchObject({ at: T0 + 17_500, request: { localSeq: 32 } })
+    expect(await sent(context, 2)).toMatchObject({ at: T0 + 17_500, request: { localSeq: 6 } })
   })
 
   it('同时至多一个在途：在途时到了上限也不再发；期间照常捕获，回包之后按规则立即再传（A08：确认只到在途那一份的序号）', async () => {
@@ -376,7 +379,7 @@ describe('节奏（设计 §3.2、§3.3）', () => {
     await context.time.advance(1)
     expect(context.captures()).toEqual([expect.objectContaining({ trigger: 'quiet', at: T0 + 1000, seq: 2 })])
     await context.time.advance(1000)
-    expect(await sent(context, 1)).toMatchObject({ at: T0 + 2000, request: { localSeq: 2 } })
+    expect(await sent(context, 1)).toMatchObject({ at: T0 + 2000, request: { localSeq: 1 } })
   })
 
   it('打开之后不改：不捕获、不上传', async () => {
@@ -403,7 +406,7 @@ describe('A08：确认只到上传的那一份捕获的序号——捕获之后�
     expect(capturedAt).toEqual([3000, 6500, 10_000, 13_500])
     const first = await sent(context, 1)
     expect(first.at - T0).toBe(15_000)
-    expect(first.request.localSeq).toBe(20)
+    expect(first.request.localSeq).toBe(4)
     expect(context.captures().at(-1)).toMatchObject({ seq: 20 })
     first.resolve(saved(2))
     await drain(context)
@@ -425,13 +428,13 @@ describe('A08：确认只到上传的那一份捕获的序号——捕获之后�
     context.control.edit('甲乙')
     await context.time.advance(500)
     const retry = await sent(context, 2)
-    expect(retry.request).toMatchObject({ localSeq: 1, snapshot: '{"content":"甲"}' })
+    expect(requestWithSnapshot(retry).request).toMatchObject({ localSeq: 1, snapshot: '{"content":"甲"}' })
     retry.resolve(saved(2))
     await drain(context)
     expect(context.coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
     expect(context.autosave.saved().edits).toBe(false)
     await context.time.advance(1500)
-    expect((await sent(context, 3)).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(requestWithSnapshot((await sent(context, 3))).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
   })
 
   it('排在在途后面的切到后台的上传：轮到时上传的是切走时的那一份，之后迟到的修改（例如空闲任务里的行高）不算已确认', async () => {
@@ -445,7 +448,7 @@ describe('A08：确认只到上传的那一份捕获的序号——捕获之后�
     context.control.edit('甲乙（迟到的行高）')
     inFlight.resolve(saved(2))
     const queued = await sent(context, 2)
-    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(requestWithSnapshot(queued).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
     queued.resolve(saved(3))
     await drain(context)
     expect(context.coordinator.view()).toMatchObject({ unsavedEdits: true })
@@ -473,7 +476,7 @@ describe('公式（设计 §3.2、§3.5：超过上限带"公式待更新"，收
     await drain(context)
     expect(context.captures()[1]).toMatchObject({ trigger: 'formulas', formulasPending: false, seq: 1 })
     const recapture = await sent(context, 2)
-    expect(recapture.request).toMatchObject({ localSeq: 1, formulasPending: false })
+    expect(recapture.request).toMatchObject({ localSeq: 2, formulasPending: false })
     recapture.resolve(saved(2, true))
     await drain(context)
     expect(context.coordinator.view()).toMatchObject({ status: 'clean', formulasPending: false })
@@ -497,7 +500,7 @@ describe('公式（设计 §3.2、§3.5：超过上限带"公式待更新"，收
     context.control.settle(true)
     await drain(context)
     const recapture = await sent(context, 1)
-    expect(recapture.request).toMatchObject({ localSeq: 0, formulasPending: false })
+    expect(recapture.request).toMatchObject({ localSeq: 1, formulasPending: false })
     recapture.resolve(saved(2))
     await drain(context)
     expect(context.autosave.saved()).toEqual({ edits: true, formulas: true })
@@ -573,7 +576,7 @@ describe('面板里防抖中的输入（Codex 评审 CX4，M3-P6 设计 §3.13�
     expect(context.coordinator.view().status).toBe('dirty')
     await context.time.advance(1000)
     const call = await sent(context, 1)
-    expect(call).toMatchObject({ at: T0 + 32_000, request: { localSeq: 1, snapshot: '{"content":"面板里改的"}' } })
+    expect(requestWithSnapshot(call)).toMatchObject({ at: T0 + 32_000, request: { localSeq: 1, snapshot: '{"content":"面板里改的"}' } })
     call.resolve(saved(2))
     await drain(context)
     expect(context.coordinator.view()).toMatchObject({ status: 'clean', unsavedEdits: false })
@@ -600,7 +603,7 @@ describe('立即上传（设计 §3.4）', () => {
     const first = await sent(context, 1)
     expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
     expect(context.editor.settleFormulas).toHaveBeenCalledWith(3000)
-    expect(first.request).toMatchObject({ localSeq: 1, snapshot: '{"content":"编辑中"}' })
+    expect(requestWithSnapshot(first).request).toMatchObject({ localSeq: 1, snapshot: '{"content":"编辑中"}' })
     expect(context.captures()).toEqual([expect.objectContaining({ trigger: 'save-button', seq: 1 })])
     first.resolve(saved(2))
     await expect(flushing).resolves.toEqual({ edits: true, formulas: true, outcome: { kind: 'saved', requestId: first.request.requestId } })
@@ -621,7 +624,7 @@ describe('立即上传（设计 §3.4）', () => {
     inFlight.resolve(saved(2))
     const queued = await sent(context, 2)
     expect(context.editor.settleFormulas).toHaveBeenLastCalledWith(1800)
-    expect(queued.request).toMatchObject({ baseRevision: 2, localSeq: 2 })
+    expect(queued.request).toMatchObject({ baseRevision: 2, localSeq: 3 })
     queued.resolve(saved(3))
     await expect(flushing).resolves.toMatchObject({ edits: true, outcome: { kind: 'saved' } })
   })
@@ -708,7 +711,7 @@ describe('立即上传在按下的这一刻定下要提交的单元格编辑（�
     inFlight.resolve(saved(2))
     const queued = await sent(context, 2)
     // 轮到时不再提交：上传的是按下时的内容，之后的输入留在单元格编辑器里（没有被当成回车提交、选区不动）
-    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(requestWithSnapshot(queued).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
     expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
     expect(context.control.state()).toMatchObject({ editing: true, cellInput: '之后才开始' })
     queued.resolve(saved(3))
@@ -727,7 +730,7 @@ describe('立即上传在按下的这一刻定下要提交的单元格编辑（�
     context.control.startCellEditing('等面板时才开始')
     panels.resolve(undefined)
     const call = await sent(context, 1)
-    expect(call.request).toMatchObject({ localSeq: 1, snapshot: '{"content":"甲"}' })
+    expect(requestWithSnapshot(call).request).toMatchObject({ localSeq: 1, snapshot: '{"content":"甲"}' })
     expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
     call.resolve(saved(2))
     await flushing
@@ -747,7 +750,7 @@ describe('立即上传在按下的这一刻定下要提交的单元格编辑（�
     context.control.startCellEditing('确认时才开始')
     confirmation.resolve(true)
     const call = await sent(context, 1)
-    expect(call.request.snapshot).toBe('{"content":"甲"}')
+    expect(new TextDecoder().decode(call.body)).toBe('{"content":"甲"}')
     expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
     call.resolve(saved(2))
     await flushing
@@ -785,7 +788,7 @@ describe('立即上传在按下的这一刻定下要提交的单元格编辑（�
     cancelled.control.cancelCellEditing()
     inFlight.resolve(saved(2))
     const queued = await sent(cancelled, 2)
-    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(requestWithSnapshot(queued).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
     queued.resolve(saved(3))
     await expect(saving).resolves.toMatchObject({ edits: true, outcome: { kind: 'saved' } })
   })
@@ -802,7 +805,7 @@ describe('立即上传在按下的这一刻定下要提交的单元格编辑（�
       context.control.startCellEditing('之后才开始')
       inFlight.resolve(saved(2))
       const queued = await sent(context, 2)
-      expect(queued.request.snapshot).toBe('{"content":"甲乙"}')
+      expect(new TextDecoder().decode(queued.body)).toBe('{"content":"甲乙"}')
       queued.resolve(saved(3))
       await flushing
       expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
@@ -865,7 +868,7 @@ describe('在途时连按保存：并进排着的那一次，同一个结果只�
     await drain(context)
     expect(context.autosave.view().retrying).toBe(true)
     await context.time.advance(2000)
-    expect((await sent(context, 2)).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(requestWithSnapshot((await sent(context, 2))).request).toMatchObject({ localSeq: 3, snapshot: '{"content":"甲乙"}' })
   })
 
   it.each([1, 2, 5])('按 %i 次、显式保存得到 422（要等新内容）：挡住的只是那一份，之后新的捕获照常自动上传', async (presses) => {
@@ -898,7 +901,7 @@ describe('在途时连按保存：并进排着的那一次，同一个结果只�
     ;(await sent(context, 2)).resolve(saved(3))
     await expect(first).resolves.toMatchObject({ outcome: { kind: 'saved' } })
     const again = await sent(context, 3)
-    expect(again.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(requestWithSnapshot(again).request).toMatchObject({ localSeq: 3, snapshot: '{"content":"甲乙"}' })
     again.resolve(saved(4))
     await expect(second).resolves.toMatchObject({ edits: true, outcome: { kind: 'saved' } })
   })
@@ -920,7 +923,7 @@ describe('在途时连按保存：并进排着的那一次，同一个结果只�
     expect(context.calls).toHaveLength(1)
     panels.resolve(undefined)
     const queued = await sent(context, 2)
-    expect(queued.request).toMatchObject({ localSeq: 2, snapshot: '{"content":"批注里刚键入的"}' })
+    expect(requestWithSnapshot(queued).request).toMatchObject({ localSeq: 2, snapshot: '{"content":"批注里刚键入的"}' })
     queued.resolve(saved(3))
     const results = await Promise.all([first, second])
     expect(results.map(result => result.outcome)).toEqual([{ kind: 'saved', requestId: queued.request.requestId }, { kind: 'saved', requestId: queued.request.requestId }])
@@ -970,7 +973,7 @@ describe('切到后台（设计 §3.4：不等公式、不提交单元格，全�
     const call = await sent(context, 1)
     expect(context.time.now()).toBe(T0)
     // 单元格里还没回车的"甲乙"不提交、不在快照里
-    expect(call.request).toMatchObject({ localSeq: 1, formulasPending: true, snapshot: '{"content":"甲"}' })
+    expect(requestWithSnapshot(call).request).toMatchObject({ localSeq: 1, formulasPending: true, snapshot: '{"content":"甲"}' })
     expect(context.editor.commitCellEditing).not.toHaveBeenCalled()
     call.resolve(saved(2))
     context.page.set({ visible: true })
@@ -1026,7 +1029,7 @@ describe('切到后台（设计 §3.4：不等公式、不提交单元格，全�
     await context.time.advance(28_999)
     expect(context.calls).toHaveLength(1)
     await context.time.advance(1)
-    expect(await sent(context, 2)).toMatchObject({ at: T0 + 32_000, request: { localSeq: 2 } })
+    expect(await sent(context, 2)).toMatchObject({ at: T0 + 32_000, request: { localSeq: 1 } })
   })
 
   it('退避期内切到后台（网络错误之后的退避）：不立即重发，到点照常重试；不在退避期时切到后台照常立即上传', async () => {
@@ -1135,7 +1138,7 @@ describe('失败与重试（设计 §3.8）', () => {
     expect(seen.filter(([status]) => status === 'failed')).toEqual([['failed', false]])
   })
 
-  it('重试之前又改了：重试的是新的捕获（新的请求）', async () => {
+  it('重试之前又改了：先核对旧请求，确认后上传最新捕获', async () => {
     const context = setup()
     context.control.edit('甲')
     await context.time.advance(2000)
@@ -1145,8 +1148,15 @@ describe('失败与重试（设计 §3.8）', () => {
     context.control.edit('甲乙')
     await context.time.advance(2000)
     const retry = await sent(context, 2)
-    expect(retry.request.requestId).not.toBe(first.request.requestId)
-    expect(retry.request.localSeq).toBe(2)
+    expect(retry.request).toBe(first.request)
+    retry.resolve(saved(2))
+    const latest = await sent(context, 3)
+    expect(latest.request.requestId).not.toBe(first.request.requestId)
+    expect(latest.request).toMatchObject({ localSeq: 2, baseRevision: 2 })
+    expect(new TextDecoder().decode(latest.body)).toBe('{"content":"甲乙"}')
+    latest.resolve(saved(3))
+    await drain(context)
+    expect(context.coordinator.view().unsaved).toBe(false)
   })
 
   it.each([
@@ -1267,7 +1277,7 @@ describe('失败与重试（设计 §3.8）', () => {
     expect(context.calls).toHaveLength(0)
     context.control.edit('甲乙')
     await context.time.advance(2000)
-    expect((await sent(context, 1)).request.localSeq).toBe(2)
+    expect((await sent(context, 1)).request.localSeq).toBe(3)
   })
 
   it('摘要算不出：上报，这一次照常上传（不去重）', async () => {
@@ -1384,9 +1394,10 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     const { editor, control } = fakeEditor(time.elapse)
     const page = fakePage()
     const sends: number[] = []
+    const { draft } = fakeWorkingDraft({ digest: async snapshot => snapshot })
     const coordinator = createSaveCoordinator({
       editor,
-      compress: async snapshot => new TextEncoder().encode(snapshot),
+      draft,
       send: async () => {
         sends.push(time.now() - T0)
         return send(sends.length)
@@ -1407,7 +1418,7 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
       },
       reportError: vi.fn(),
     })
-    createAutosave({ editor, page: page.page, uploader: coordinator, clock: time.clock, digest: async snapshot => snapshot, initialFormulasPending: false, reportError: vi.fn() })
+    createAutosave({ editor, page: page.page, uploader: coordinator, clock: time.clock, draft, initialFormulasPending: false, reportError: vi.fn() })
     return { time, control, sends }
   }
 
@@ -1456,7 +1467,7 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     expect(context.captures().at(-1)).toMatchObject({ trigger: 'save-button', seq: 2 })
     context.page.set({ writable: true })
     await drain(context)
-    expect(await sent(context, 2)).toMatchObject({ at: T0 + 2000, request: { localSeq: 2, snapshot: '{"content":"甲乙"}' } })
+    expect(requestWithSnapshot(await sent(context, 2))).toMatchObject({ at: T0 + 2000, request: { localSeq: 2, snapshot: '{"content":"甲乙"}' } })
   })
 
   it('503 带 Retry-After 之后、到点之前按保存得到令牌失效：会话回来时不等退避，但服务端给的 Retry-After 照旧（复验 C7）', async () => {
@@ -1477,7 +1488,7 @@ describe('离线与会话（设计 §3.3 第 5 条、§3.8）', () => {
     await context.time.advance(26_999)
     expect(context.calls).toHaveLength(2)
     await context.time.advance(1)
-    expect(await sent(context, 3)).toMatchObject({ at: T0 + 32_000, request: { localSeq: 2 } })
+    expect(await sent(context, 3)).toMatchObject({ at: T0 + 32_000, request: { localSeq: 1 } })
   })
 
   it('保存得到 401、会话却一直显示可写：照样按退避再试，不连着发', async () => {
@@ -1545,9 +1556,10 @@ describe('测试构建的控制的注入点（设计 §3.14：hold、setLimits�
     const time = fakeLeaseClock(T0)
     const { editor, control } = fakeEditor(time.elapse)
     const reportError = vi.fn()
-    const coordinator = createSaveCoordinator({ editor, compress: async snapshot => new TextEncoder().encode(snapshot), send: async () => saved(2), baseRevision: 1, clientInstanceId: ME, newRequestId: () => 'request-observer', onUnauthenticated: vi.fn(), onSessionStale: vi.fn(), reportError })
+    const { draft } = fakeWorkingDraft({ digest: async snapshot => snapshot })
+    const coordinator = createSaveCoordinator({ editor, draft, send: async () => saved(2), baseRevision: 1, clientInstanceId: ME, newRequestId: () => 'request-observer', onUnauthenticated: vi.fn(), onSessionStale: vi.fn(), reportError })
     const failure = new Error('日志写不进去')
-    createAutosave({ editor, page: fakePage().page, uploader: coordinator, clock: time.clock, digest: async snapshot => snapshot, initialFormulasPending: false, observe: () => {
+    createAutosave({ editor, page: fakePage().page, uploader: coordinator, clock: time.clock, draft, initialFormulasPending: false, observe: () => {
       throw failure
     }, reportError })
     control.edit('甲')

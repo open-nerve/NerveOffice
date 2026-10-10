@@ -4,9 +4,9 @@
 // - 立即上传（保存按钮、退出编辑、交出与空闲释放）要的"先让输入落进模型、再等公式"分两段：
 //   - settleInputs 在调用（按下）的这一刻做：提交这一刻开着的单元格编辑（等同回车，提交不了就中止，只是提示），再等面板里防抖中的改动
 //     写进模型（批注浮层、数据验证面板，适配层的 settlePanels，S4）——要提交哪一次编辑在按下时定，不等轮到这一次上传（审查 A1）；
-//   - captureSettled 在轮到这一次上传时做：等公式收齐（至多到时限，没收齐就带上"公式待更新"），然后捕获（去重用的摘要由调用方另算）。
+//   - captureSettled 在轮到这一次上传时做：等公式收齐（至多到时限，没收齐就带上"公式待更新"），然后捕获（编码和摘要交给工作草稿来源）。
 // 何时捕获由捕获的规则（capture-policy.ts）与调度（autosave.ts）决定，这里只管怎么捕获。
-import type { SnapshotCapture } from './save-coordinator.ts'
+import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 
 /** 捕获用到的编辑器能力（SheetEditor 的子集） */
 export interface CaptureEditor {
@@ -29,11 +29,11 @@ export function utf8Length(text: string): number {
   return UTF8.encode(text).byteLength
 }
 
-/** 同步捕获：序号与快照在同一个同步段里读出，其间不会有别的修改。去重用的摘要另算（异步），这里为 undefined */
-export function takeSnapshot(editor: Pick<CaptureEditor, 'changeSeq' | 'capture'>, formulasPending: boolean): SnapshotCapture {
-  const seq = editor.changeSeq()
+/** 同一个同步段中捕获并交给唯一来源编码，大小由引用给出。 */
+export function takeSnapshot(editor: Pick<CaptureEditor, 'changeSeq' | 'capture'>, draft: WorkingDraft, options: { readonly formulasPending: boolean, readonly dedupe: boolean }): DraftCaptureRef {
+  const editorSeq = editor.changeSeq()
   const snapshot = editor.capture()
-  return { seq, snapshot, bytes: utf8Length(snapshot), formulasPending, digest: undefined }
+  return draft.capture({ editorSeq, snapshot, ...options })
 }
 
 /** 按下这一刻的准备的结果：输入都已落进模型（settled）；或者正在编辑的单元格提交不了（cell-editing：保存中止，只是提示） */
@@ -51,7 +51,7 @@ export async function settleInputs(editor: CaptureEditor): Promise<InputsSettled
   return committed ? 'settled' : 'cell-editing'
 }
 
-export interface SettledCaptureOptions<T extends SnapshotCapture> {
+export interface SettledCaptureOptions<T> {
   /**
    * 等公式收齐的时限（毫秒；0 是按此刻的状态，不等）：轮到这一次时才取——时限从按下算（P4 设计 §3.4），排队、等面板与提交单元格
    * 用掉的不再给公式
@@ -62,7 +62,7 @@ export interface SettledCaptureOptions<T extends SnapshotCapture> {
 }
 
 /** 轮到这一次上传时：等公式收齐（至多 settleTimeoutMs，没收齐就带上"公式待更新"），然后捕获。出错原样抛出（保存的状态机按意外的错误处理） */
-export async function captureSettled<T extends SnapshotCapture>(editor: CaptureEditor, options: SettledCaptureOptions<T>): Promise<T> {
+export async function captureSettled<T>(editor: CaptureEditor, options: SettledCaptureOptions<T>): Promise<T> {
   const settled = (await editor.settleFormulas(Math.max(0, options.settleTimeoutMs()))) === 'settled'
   return options.take(!settled)
 }

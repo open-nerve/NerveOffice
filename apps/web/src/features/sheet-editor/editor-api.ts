@@ -126,7 +126,7 @@ export async function saveContent(documentId: string, request: SaveRequest, comp
     localSeq: String(request.localSeq),
     writeEpoch: String(lease.writeEpoch),
     formulasPending: String(request.formulasPending),
-    ...clientFormatParams(),
+    ...clientFormatParams(request.format),
   })
   const path = `${contentPath(documentId)}?${query.toString()}`
   return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'PUT', headers: leaseHeaders(lease.token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`))

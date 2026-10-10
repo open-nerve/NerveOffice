@@ -1,13 +1,14 @@
-// 各编辑请求的应用时限：真实请求层与 Response 流，只暂停传输，不替换时限模块。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isDefiniteRejection, isTransientError, isUnknownOutcome, RequestTimeoutError } from '../../shared/api/index.ts'
+// 各编辑请求的应用时限：真实请求层与 Response 流，只暂停传输，不替换时限模块。
+import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const TOKEN = 'T'.repeat(43)
 const QUERY = { requestId: 'request-1', title: '周报' }
-const SAVE = { requestId: 'request-1', clientInstanceId: PAGE_ID, localSeq: 2, baseRevision: 4, snapshot: '{}', formulasPending: false }
+const SAVE = { requestId: 'request-1', clientInstanceId: PAGE_ID, localSeq: 2, baseRevision: 4, format: PAGE_CLIENT_FORMAT, formulasPending: false }
 const GZIP = new Uint8Array([31, 139, 8])
 const cleanup: (() => void)[] = []
 

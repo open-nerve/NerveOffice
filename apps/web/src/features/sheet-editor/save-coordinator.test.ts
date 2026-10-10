@@ -1,12 +1,17 @@
 import type { SaveContentResponse } from '@nerve-office/contracts'
-import type { PreparedCapture, SaveEditor, SaveFailure, SaveOptions, SaveOutcome, SaveRequest, SnapshotCapture } from './save-coordinator.ts'
+import type { SaveEditor, SaveFailure, SaveOptions, SaveOutcome, SaveRequest } from './save-coordinator.ts'
 import type { CaptureEditor } from './snapshot-capture.ts'
+import type { TestCapture as SnapshotCapture } from './working-draft.test-support.ts'
+import type { DraftCaptureRef } from './working-draft.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from '../../shared/api/index.ts'
 import { json } from '../../shared/testing/fake-api.test-support.ts'
 import { gzipText, saveContent } from './editor-api.ts'
 import { classifySaveError, createSaveCoordinator } from './save-coordinator.ts'
 import { explicitCaptureSource } from './snapshot-capture.test-support.ts'
+import { fakeWorkingDraft, requestWithSnapshot } from './working-draft.test-support.ts'
+
+type PreparedCapture = SnapshotCapture | DraftCaptureRef | 'cell-editing' | 'session'
 
 const ME = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const OTHER_TAB = '0199a2c4-1f2e-4a3b-8c4d-00000000bbbb'
@@ -125,9 +130,11 @@ function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number, in
   const reportError = vi.fn()
   // 每次新建：模块级的 fakeCompress 是同一个 mock，包一层的调用次数会跨用例累计
   const compress = vi.fn(async (snapshot: string) => new TextEncoder().encode(snapshot))
-  const real = createSaveCoordinator({
+  const fixture = fakeWorkingDraft({ compress, digest: async snapshot => `sha256:${snapshot}`, reportError, baseRevision: overrides.baseRevision ?? 1 })
+  const { draft } = fixture
+  const raw = createSaveCoordinator({
     editor,
-    compress,
+    draft,
     send,
     baseRevision: overrides.baseRevision ?? 1,
     clientInstanceId: ME,
@@ -141,10 +148,15 @@ function setup(overrides: { baseRevision?: number, maxSnapshotBytes?: number, in
     maxSnapshotBytes: overrides.maxSnapshotBytes,
     initialFormulasPending: overrides.initialFormulasPending,
   })
+  // 旧故事的声明式捕获夹具在来源里登记，协调器实际收到的始终是身份引用。
+  const real = { ...raw, save: async (source: () => PreparedCapture | Promise<PreparedCapture>, options: SaveOptions) => raw.save(async () => {
+    const capture = await source()
+    return typeof capture === 'string' || !('snapshot' in capture) ? capture : fixture.capture(capture)
+  }, options) }
   // 下面的用例大多按"按一次保存"写：coordinator.save() 是显式保存——先提交单元格、等公式至多 3 秒再捕获（snapshot-capture.ts 的来源），
   // 一律上传。M3-P4 起保存的状态机不自己捕获，捕获由来源给出（设计 §3.1），新入口的用例直接用 real.save(来源, 选项)
-  const coordinator = { ...real, save: async () => real.save(explicitCaptureSource(editor), EXPLICIT) }
-  return { coordinator, real, editor, control, compress, send, calls, onUnauthenticated, onSessionStale, reportError }
+  const coordinator = { ...real, save: async () => real.save(explicitCaptureSource(editor, draft), EXPLICIT) }
+  return { coordinator, real, editor, control, draft, compress, send, calls, onUnauthenticated, onSessionStale, reportError }
 }
 
 /** 等保存流程走到发出请求（提交编辑、等公式收齐都是异步的） */
@@ -175,7 +187,7 @@ describe('保存状态', () => {
     // 保存中仍可以再按（排一次，M3-P4 设计 §3.9：保存按钮不再随"保存中"变灰）
     expect(coordinator.view()).toMatchObject({ status: 'saving', canSave: true })
     const first = await sent(calls, 1)
-    expect(first.request).toMatchObject({ baseRevision: 4, clientInstanceId: ME, localSeq: 1, snapshot: '{"content":"甲"}' })
+    expect(requestWithSnapshot(first).request).toMatchObject({ baseRevision: 4, clientInstanceId: ME, localSeq: 1, snapshot: '{"content":"甲"}' })
     first.resolve(saved(5))
     await saving
     expect(coordinator.view()).toMatchObject({ status: 'clean', canSave: true, problem: undefined })
@@ -202,7 +214,7 @@ describe('保存状态', () => {
     first.resolve(saved(2))
     await saving
     const second = await sent(calls, 2)
-    expect(second.request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(requestWithSnapshot(second).request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲乙"}' })
     expect(coordinator.view().status).toBe('saving')
     second.resolve(saved(3))
     await expect(again).resolves.toEqual({ kind: 'saved', requestId: second.request.requestId })
@@ -228,7 +240,7 @@ describe('保存状态', () => {
     const saving = coordinator.save()
     ;(await sent(calls, 1)).resolve(saved(2))
     await saving
-    expect(calls[0]?.request.localSeq).toBe(0)
+    expect(calls[0]?.request.localSeq).toBe(1)
     expect(coordinator.view().status).toBe('clean')
   })
 
@@ -371,7 +383,7 @@ describe('面板里还没写进模型的输入（Codex 评审 CX4，M3-P6 设计
     expect(coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
     expect(coordinator.hasUnsavedWork()).toBe(true)
     const saving = coordinator.save()
-    expect((await sent(calls, 1)).request).toMatchObject({ localSeq: 1, snapshot: '{"content":"面板里改的"}' })
+    expect(requestWithSnapshot((await sent(calls, 1))).request).toMatchObject({ localSeq: 1, snapshot: '{"content":"面板里改的"}' })
     calls[0]?.resolve(saved(2))
     await saving
     expect(coordinator.view()).toMatchObject({ status: 'clean', unsaved: false, unsavedEdits: false })
@@ -405,7 +417,7 @@ describe('面板里还没写进模型的输入（Codex 评审 CX4，M3-P6 设计
     control.panelSettled('甲与面板里改的')
     expect(coordinator.view().status).toBe('dirty')
     const again = coordinator.save()
-    expect((await sent(calls, 2)).request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲与面板里改的"}' })
+    expect(requestWithSnapshot((await sent(calls, 2))).request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲与面板里改的"}' })
     calls[1]?.resolve(saved(3))
     await again
     expect(coordinator.view().status).toBe('clean')
@@ -432,7 +444,7 @@ describe('保存之前：提交正在编辑的单元格、等公式收齐、检�
     const saving = coordinator.save()
     const request = await sent(calls, 1)
     expect(editor.commitCellEditing).toHaveBeenCalledOnce()
-    expect(request.request).toMatchObject({ localSeq: 1, snapshot: '{"content":"编辑中的值"}' })
+    expect(requestWithSnapshot(request).request).toMatchObject({ localSeq: 1, snapshot: '{"content":"编辑中的值"}' })
     request.resolve(saved(2))
     await saving
     expect(coordinator.view().status).toBe('clean')
@@ -521,11 +533,11 @@ describe('版本冲突', () => {
     control.edit('甲乙')
     const second = coordinator.save()
     const stale = await sent(calls, 2)
-    expect(stale.request).toMatchObject({ baseRevision: 1, localSeq: 2 })
+    expect(stale.request).toMatchObject({ baseRevision: 1, localSeq: 1 })
     stale.reject(conflictError(2, { clientInstanceId: ME, localSeq: 1 }))
     const resent = await sent(calls, 3)
-    expect(resent.request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲乙"}' })
-    expect(new Set(calls.map(call => call.request.requestId)).size).toBe(3)
+    expect(requestWithSnapshot(resent).request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    expect(new Set(calls.map(call => call.request.requestId)).size).toBe(2)
     resent.resolve(saved(3))
     await second
     expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined })
@@ -560,7 +572,7 @@ describe('版本冲突', () => {
     const third = coordinator.save()
     ;(await sent(calls, 3)).reject(conflictError(2, { clientInstanceId: ME, localSeq: 1 }))
     const resent = await sent(calls, 4)
-    expect(resent.request).toMatchObject({ baseRevision: 2, localSeq: 3 })
+    expect(resent.request).toMatchObject({ baseRevision: 2, localSeq: 2 })
     resent.resolve(saved(3))
     await third
     expect(coordinator.view().status).toBe('clean')
@@ -610,14 +622,15 @@ describe('编辑权续上时认出期间的那一版是本页自己的保存（a
     expect(coordinator.hasUnsavedWork()).toBe(false)
   })
 
-  it('之后又有一次保存被明确拒绝（例如快照不合格）：认出之后照样显示那次的失败——它说的是之后的内容，与认出的那一次无关', async () => {
+  it('核对旧版后新内容被明确拒绝：旧版不能再次采纳或清掉新内容的失败', async () => {
     const { coordinator, control, calls } = await unknownSave()
     control.edit('甲乙')
     const saving = coordinator.save()
     const invalid = new ApiError(422, 'SNAPSHOT_INVALID', '表格内容的格式不正确')
-    ;(await sent(calls, 2)).reject(invalid)
+    ;(await sent(calls, 2)).resolve(saved(5))
+    ;(await sent(calls, 3)).reject(invalid)
     await saving
-    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(false)
     expect(coordinator.view()).toMatchObject({ status: 'failed', problem: { kind: 'request', error: invalid } })
   })
 
@@ -683,7 +696,7 @@ describe('编辑权续上时认出期间的那一版是本页自己的保存（a
     // 再按保存（内容没变也照常上传）：以认出的那一版为基准的新请求，不是原样再发旧基准的那一个
     const again = coordinator.save()
     const next = await sent(calls, 2)
-    expect(next.request).toMatchObject({ baseRevision: 5, localSeq: 1 })
+    expect(next.request).toMatchObject({ baseRevision: 5, localSeq: 2 })
     expect(next.request.requestId).not.toBe(inFlight.request.requestId)
     next.resolve(saved(6))
     await again
@@ -709,12 +722,13 @@ describe('编辑权续上时认出期间的那一版是本页自己的保存（a
     expect(onUnauthenticated).toHaveBeenCalledExactlyOnceWith(expired)
   })
 
-  it('认出的是更早的那一次、在途的这一次内容更新：它的回包以结果未知失败时照常是保存失败（认出那一次不说明这一次）', async () => {
+  it('旧版已核对，新内容在途：不能再采纳旧版，新的网络失败仍有未保存修改', async () => {
     const { coordinator, control, calls } = await unknownSave()
     control.edit('甲乙')
     const saving = coordinator.save()
-    const inFlight = await sent(calls, 2)
-    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(true)
+    ;(await sent(calls, 2)).resolve(saved(5))
+    const inFlight = await sent(calls, 3)
+    expect(coordinator.adoptOwnRevision(5, { clientInstanceId: ME, localSeq: 1 })).toBe(false)
     const offline = new NetworkError('断网')
     inFlight.reject(offline)
     await saving
@@ -762,10 +776,10 @@ describe('重试原样再发结果未知的请求（Codex 评审 CX2）', () => 
     control.edit('甲丙')
     const third = coordinator.save()
     const stale = await sent(calls, 3)
-    expect(stale.request).toMatchObject({ baseRevision: 1, localSeq: 4 })
+    expect(stale.request).toMatchObject({ baseRevision: 1, localSeq: 1 })
     stale.reject(conflictError(2, { clientInstanceId: ME, localSeq: 1 }))
     const resent = await sent(calls, 4)
-    expect(resent.request).toMatchObject({ baseRevision: 2, localSeq: 4, snapshot: '{"content":"甲丙"}' })
+    expect(requestWithSnapshot(resent).request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲丙"}' })
     resent.resolve(saved(3))
     await third
     expect(coordinator.view()).toMatchObject({ status: 'clean', conflict: undefined })
@@ -817,7 +831,7 @@ describe('重试原样再发结果未知的请求（Codex 评审 CX2）', () => 
     const again = coordinator.save()
     const third = await sent(calls, 3)
     expect(third.request.requestId).not.toBe(first.requestId)
-    expect(third.request).toMatchObject({ baseRevision: 1, localSeq: 1, snapshot: first.snapshot })
+    expect(third.request).toMatchObject({ baseRevision: 1, localSeq: 2, format: first.format })
     third.resolve(saved(2))
     await again
   })
@@ -846,8 +860,12 @@ describe('保存失败', () => {
     control.edit('甲乙')
     const changed = coordinator.save()
     const third = await sent(calls, 3)
-    expect(third.request.requestId).not.toBe(calls[0]?.request.requestId)
+    expect(third.request).toBe(calls[0]?.request)
     third.resolve(saved(2))
+    const latest = await sent(calls, 4)
+    expect(latest.request.requestId).not.toBe(third.request.requestId)
+    expect(requestWithSnapshot(latest).request).toMatchObject({ baseRevision: 2, localSeq: 2, snapshot: '{"content":"甲乙"}' })
+    latest.resolve(saved(3))
     await changed
     expect(coordinator.view()).toMatchObject({ status: 'clean', problem: undefined })
   })
@@ -936,7 +954,7 @@ describe('保存流程本身出错（审查 B5）', () => {
     expect(reportError).toHaveBeenCalledWith(failure)
     const saving = coordinator.save()
     const call = await sent(calls, 1)
-    expect(new TextDecoder().decode(call.body)).toBe(call.request.snapshot)
+    expect(new TextDecoder().decode(call.body)).toBe('{"content":"甲"}')
     call.resolve(saved(2))
     await saving
     expect(coordinator.view().status).toBe('clean')
@@ -1036,10 +1054,11 @@ describe('失去编辑权时核对结果未知的保存（M3-P2 设计 §3.4）'
       // 服务端第一次已提交修订 5，但成功的正文挂住；第二次按原请求重放修订 5。
       return requests.length === 1 ? delayed : json(200, saved(5))
     }))
+    const { draft } = fakeWorkingDraft({ compress: async () => new Uint8Array(compressed), baseRevision: 4 })
     const newId = vi.fn(() => 'request-timeout-1')
     const coordinator = createSaveCoordinator({
       editor,
-      compress: async () => new Uint8Array(compressed),
+      draft,
       send: async (request, body) => saveContent('document-1', request, body, { token: 'T'.repeat(43), writeEpoch: 2 }),
       baseRevision: 4,
       clientInstanceId: ME,
@@ -1050,7 +1069,7 @@ describe('失去编辑权时核对结果未知的保存（M3-P2 设计 §3.4）'
     })
     try {
       control.edit('甲')
-      const saving = coordinator.save(explicitCaptureSource(editor), EXPLICIT)
+      const saving = coordinator.save(explicitCaptureSource(editor, draft), EXPLICIT)
       await vi.advanceTimersByTimeAsync(30_000)
       expect(requests).toHaveLength(1)
       expect(coordinator.view().status).toBe('saving')
@@ -1245,9 +1264,13 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
     control.settle = 'settled'
     const changed = coordinator.save()
     const third = await sent(calls, 3)
-    expect(third.request.formulasPending).toBe(false)
-    expect(third.request.requestId).not.toBe(calls[0]?.request.requestId)
+    expect(third.request.formulasPending).toBe(true)
+    expect(third.request).toBe(calls[0]?.request)
     third.resolve(saved(2))
+    const latest = await sent(calls, 4)
+    expect(latest.request.requestId).not.toBe(third.request.requestId)
+    expect(requestWithSnapshot(latest).request).toMatchObject({ baseRevision: 2, localSeq: 2, formulasPending: false, snapshot: '{"content":"甲"}' })
+    latest.resolve(saved(3))
     await changed
   })
 
@@ -1354,18 +1377,19 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
       expect(context.calls).toHaveLength(2)
     })
 
-    it('保存自己得知过旧（这一次的内容与结果未知的那次不同）：照样原样重发那一次；它提交了，这一次的修改仍没保存', async () => {
+    it('旧请求核对已提交后，新内容保存得知过旧：旧版确认不回退，新修改仍没保存', async () => {
       const context = setup({ baseRevision: 3 })
       const first = await unknownSave(context)
       context.control.edit('乙')
       const saving = context.coordinator.save()
-      const second = await sent(context.calls, 2)
+      const replay = await sent(context.calls, 2)
+      expect(replay.request).toBe(first.request)
+      replay.resolve(saved(4))
+      const second = await sent(context.calls, 3)
       expect(second.request.requestId).not.toBe(first.request.requestId)
       second.reject(OUTDATED)
       await saving
-      const replay = await sent(context.calls, 3)
-      expect(replay.request).toEqual(first.request)
-      replay.resolve(saved(4))
+      expect(context.calls).toHaveLength(3)
       await context.coordinator.settled()
       expect(context.coordinator.view()).toMatchObject({ status: 'outdated', checking: false, unsaved: true, unsavedEdits: true })
       expect(context.coordinator.baseRevision()).toBe(4)
@@ -1477,9 +1501,10 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
   it('最近一次捕获的大小（与服务端解压后的字节同一个口径）：第一次保存之前是载入的内容的大小，捕获之后换成捕获的；超过上限的照样记下', async () => {
     const { editor, control } = fakeEditor()
     const { send, calls } = fakeSend()
+    const { draft } = fakeWorkingDraft({ compress: fakeCompress })
     const coordinator = createSaveCoordinator({
       editor,
-      compress: fakeCompress,
+      draft,
       send,
       baseRevision: 1,
       clientInstanceId: ME,
@@ -1492,13 +1517,13 @@ describe('保存协议加固（M3-P3 设计 §3.7、§3.8、§3.10）', () => {
     })
     expect(coordinator.view().snapshotBytes).toBe(4_200_000)
     control.edit('甲乙')
-    const saving = coordinator.save(explicitCaptureSource(editor), EXPLICIT)
+    const saving = coordinator.save(explicitCaptureSource(editor, draft), EXPLICIT)
     ;(await sent(calls, 1)).resolve(saved(2))
     await saving
     // {"content":"甲乙"}：14 个 ASCII 字符加两个汉字各 3 字节
     expect(coordinator.view().snapshotBytes).toBe(20)
     control.edit('很长的内容超过了上限的字节数')
-    await coordinator.save(explicitCaptureSource(editor), EXPLICIT)
+    await coordinator.save(explicitCaptureSource(editor, draft), EXPLICIT)
     expect(coordinator.view()).toMatchObject({ problem: { kind: 'too-large' }, snapshotBytes: new TextEncoder().encode('{"content":"很长的内容超过了上限的字节数"}').byteLength })
   })
 })
@@ -1524,7 +1549,7 @@ describe('上传给定的捕获（M3-P4 设计 §3.1：保存的状态机不自�
     control.edit('甲乙')
     const saving = real.save(given(captureOf(1, '甲', { formulasPending: true })), AUTO)
     const request = await sent(calls, 1)
-    expect(request.request).toMatchObject({ baseRevision: 3, localSeq: 1, snapshot: '{"content":"甲"}', formulasPending: true })
+    expect(requestWithSnapshot(request).request).toMatchObject({ baseRevision: 3, localSeq: 1, snapshot: '{"content":"甲"}', formulasPending: true })
     expect(editor.capture).not.toHaveBeenCalled()
     request.resolve(saved(4))
     await expect(saving).resolves.toEqual({ kind: 'saved', requestId: request.request.requestId })
@@ -1581,11 +1606,11 @@ describe('上传给定的捕获（M3-P4 设计 §3.1：保存的状态机不自�
     expect(real.view()).toMatchObject({ status: 'clean', problem: { kind: 'cell-editing' } })
   })
 
-  it('捕获超过上限：不压缩、不上传，提示容量上限；归为要等新内容', async () => {
+  it('捕获超过上限：来源照常处理本机正文，不上传，提示容量上限；归为要等新内容', async () => {
     const { real, control, compress, send } = setup({ maxSnapshotBytes: 10 })
     control.edit('超过十个字节的内容')
     await expect(real.save(given(captureOf(1, '超过十个字节的内容')), AUTO)).resolves.toEqual({ kind: 'failed', failure: { kind: 'content' }, requestId: undefined })
-    expect(compress).not.toHaveBeenCalled()
+    expect(compress).toHaveBeenCalledOnce()
     expect(send).not.toHaveBeenCalled()
     expect(real.view()).toMatchObject({ status: 'failed', problem: { kind: 'too-large' } })
   })
@@ -1750,14 +1775,14 @@ describe('会话内去重（M3-P4 设计 §3.7：键是快照字节的摘要连�
     expect((await sent(calls, 1)).request.localSeq).toBe(1)
   })
 
-  it('改了又撤销（内容与最近一次确认过的相同）：不压缩、不上传，按这次捕获的序号确认，基准不变', async () => {
+  it('改了又撤销（内容与最近一次确认过的相同）：来源完成本机捕获，不上传，按这次捕获的序号确认，基准不变', async () => {
     const { real, control, calls, compress } = await confirmedOnce()
     control.edit('甲乙')
     control.edit('甲')
     expect(real.view().status).toBe('dirty')
     await expect(real.save(given(captureOf(3, '甲')), AUTO)).resolves.toEqual({ kind: 'deduped' })
     expect(calls).toHaveLength(1)
-    expect(compress).toHaveBeenCalledOnce()
+    expect(compress).toHaveBeenCalledTimes(2)
     expect(real.view()).toMatchObject({ status: 'clean', unsaved: false, problem: undefined })
     expect(real.baseRevision()).toBe(2)
   })
@@ -1767,7 +1792,7 @@ describe('会话内去重（M3-P4 设计 §3.7：键是快照字节的摘要连�
     expect(real.view()).toMatchObject({ formulasPending: true, unsaved: true })
     const saving = real.save(given(captureOf(1, '甲')), AUTO)
     const recapture = await sent(calls, 2)
-    expect(recapture.request).toMatchObject({ localSeq: 1, formulasPending: false })
+    expect(recapture.request).toMatchObject({ localSeq: 2, formulasPending: false })
     recapture.resolve({ revision: 2, savedAt: '2026-09-27T08:00:00.000Z', unchanged: true })
     await saving
     expect(real.view()).toMatchObject({ status: 'clean', formulasPending: false })
@@ -1801,7 +1826,8 @@ describe('会话内去重（M3-P4 设计 §3.7：键是快照字节的摘要连�
     control.edit('甲')
     const undo = real.save(given(captureOf(3, '甲')), AUTO)
     const stale = await sent(calls, 3)
-    expect(stale.request).toMatchObject({ baseRevision: 2, localSeq: 3, snapshot: '{"content":"甲"}' })
+    expect(stale.request).toBe(unknown.request)
+    expect(new TextDecoder().decode(stale.body)).toBe('{"content":"甲乙"}')
     stale.reject(conflictError(3, { clientInstanceId: ME, localSeq: 2 }))
     const rebased = await sent(calls, 4)
     expect(rebased.request).toMatchObject({ baseRevision: 3, localSeq: 3 })
@@ -1868,7 +1894,7 @@ describe('"公式待更新"的初值（M3-P4 设计 §3.5：进入编辑时申�
     expect(real.hasUnsavedWork()).toBe(true)
     const saving = real.save(given(captureOf(0, '重算之后')), AUTO)
     const recapture = await sent(calls, 1)
-    expect(recapture.request).toMatchObject({ localSeq: 0, formulasPending: false })
+    expect(recapture.request).toMatchObject({ localSeq: 1, formulasPending: false })
     recapture.resolve(saved(2))
     await saving
     expect(real.view()).toMatchObject({ status: 'clean', formulasPending: false, unsaved: false })

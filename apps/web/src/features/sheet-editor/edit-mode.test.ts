@@ -12,6 +12,7 @@ import type { HeldLock, SameBrowser } from './same-browser.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
@@ -597,7 +598,8 @@ describe('进入编辑（M3-P2 设计 §3.4）', () => {
     expect(context.mode.view()).toMatchObject({ mode: { kind: 'editing' }, save: { status: 'clean' } })
     writer.edit('甲')
     await context.mode.save()
-    expect(context.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ baseRevision: 3, clientInstanceId: PAGE_ID, snapshot: snapshotOf('甲') }), expect.anything(), { token: TOKEN, writeEpoch: 7 })
+    expect(context.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ baseRevision: 3, clientInstanceId: PAGE_ID }), expect.anything(), { token: TOKEN, writeEpoch: 7 })
+    expect(await savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('甲') }])
   })
 
   it('申请到、修订号与本页的不同：按条件读取（If-None-Match 是本页的修订号）取服务端的内容，以它重建，它是保存的基准', async () => {
@@ -2038,8 +2040,8 @@ describe('与服务端不兼容（M3-P3 设计 §3.5、§3.10）', () => {
 })
 
 /** 保存请求里的那一项（api.save 的第二个参数） */
-function savedRequests(context: ReturnType<typeof setup>) {
-  return context.api.save.mock.calls.map(([, request]) => request)
+async function savedRequests(context: ReturnType<typeof setup>) {
+  return Promise.all(context.api.save.mock.calls.map(async ([, request, body]) => ({ ...request, snapshot: new TextDecoder().decode(await gunzipBytes(body)) })))
 }
 
 describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
@@ -2066,7 +2068,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     expect(context.api.save).not.toHaveBeenCalled()
     await context.time.advance(1)
     await settle()
-    expect(savedRequests(context)).toMatchObject([{ baseRevision: 3, localSeq: 1, snapshot: snapshotOf('甲'), formulasPending: false }])
+    expect((await savedRequests(context))).toMatchObject([{ baseRevision: 3, localSeq: 1, snapshot: snapshotOf('甲'), formulasPending: false }])
     expect(context.mode.view().save?.status).toBe('clean')
   })
 
@@ -2077,7 +2079,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     await context.time.advance(20_000)
     expect(context.api.save).not.toHaveBeenCalled()
     await context.mode.save()
-    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('甲') }])
+    expect((await savedRequests(context))).toMatchObject([{ snapshot: snapshotOf('甲') }])
   })
 
   it('保存按钮不去重：内容与确认过的相同也上传（给用户一个"强制同步"，服务端只写回执）', async () => {
@@ -2086,7 +2088,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     context.factory.last().edit('甲')
     await context.mode.save()
     await context.mode.save()
-    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('甲')])
+    expect((await savedRequests(context)).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('甲')])
   })
 
   it('保存中再按：在途的结束之后立即再存一次，连按只排一次', async () => {
@@ -2103,7 +2105,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     const third = context.mode.save()
     reply.resolve(SAVED)
     await Promise.all([first, second, third])
-    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('乙')])
+    expect((await savedRequests(context)).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('乙')])
   })
 
   it('按保存要先确认会话，确认期间开始了退出（复验 C4）：确认之后这次按下不另外上传——退出自己存', async () => {
@@ -2121,7 +2123,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     await settle()
     reply.resolve(SAVED)
     await Promise.all([saving, exiting])
-    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲')])
+    expect((await savedRequests(context)).map(request => request?.snapshot)).toEqual([snapshotOf('甲')])
   })
 
   it('带"公式待更新"进入编辑（申请的响应）：以强制全量重算重建；保存的状态机以它起步（离开会提示）；公式收齐之后补存，请求不带标记', async () => {
@@ -2140,7 +2142,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     writer.settle(true)
     await context.time.advance(0)
     await settle()
-    expect(savedRequests(context)).toMatchObject([{ baseRevision: 3, localSeq: 0, formulasPending: false }])
+    expect((await savedRequests(context))).toMatchObject([{ baseRevision: 3, localSeq: 1, formulasPending: false }])
     expect(context.mode.view().save).toMatchObject({ status: 'clean', formulasPending: false, unsaved: false })
     expect(context.mode.hasUnsavedWork()).toBe(false)
   })
@@ -2194,7 +2196,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     writer.edit('甲')
     await context.mode.exit()
     expect(vi.mocked(writer.editor.settlePanels)).toHaveBeenCalled()
-    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('甲'), formulasPending: false }])
+    expect((await savedRequests(context))).toMatchObject([{ snapshot: snapshotOf('甲'), formulasPending: false }])
     expect(readingOf(context.mode)).toMatchObject({ canEdit: true, formulasPending: false })
     expect(context.editLease.release).toHaveBeenCalledOnce()
   })
@@ -2208,7 +2210,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
       writer.edit('批注')
     })
     await context.mode.exit()
-    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('批注') }])
+    expect((await savedRequests(context))).toMatchObject([{ snapshot: snapshotOf('批注') }])
     expect(modeOf(context.mode).kind).toBe('reading')
   })
 
@@ -2221,7 +2223,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     writer.edit('乙')
     writer.edit('甲')
     await context.mode.exit()
-    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲')])
+    expect((await savedRequests(context)).map(request => request?.snapshot)).toEqual([snapshotOf('甲')])
     expect(modeOf(context.mode).kind).toBe('reading')
   })
 
@@ -2233,13 +2235,13 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     writer.formulasSettled = false
     await context.mode.exit()
     expect(modeOf(context.mode).kind).toBe('editing')
-    expect(savedRequests(context)).toMatchObject([{ snapshot: snapshotOf('甲'), formulasPending: true }])
+    expect((await savedRequests(context))).toMatchObject([{ snapshot: snapshotOf('甲'), formulasPending: true }])
     expect(context.editLease.release).not.toHaveBeenCalled()
     writer.settle(true)
     // 补捕获之后照上传的规则：距最后一次修改满 2 秒才传
     await context.time.advance(2_000)
     await settle()
-    expect(savedRequests(context)).toMatchObject([{ formulasPending: true }, { snapshot: snapshotOf('甲'), formulasPending: false }])
+    expect((await savedRequests(context))).toMatchObject([{ formulasPending: true }, { snapshot: snapshotOf('甲'), formulasPending: false }])
     expect(context.mode.view().save?.formulasPending).toBe(false)
   })
 
@@ -2263,7 +2265,7 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     expect(modeOf(context.mode).kind).toBe('editing')
     await context.time.advance(2_000)
     await settle()
-    expect(savedRequests(context).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('甲乙')])
+    expect((await savedRequests(context)).map(request => request?.snapshot)).toEqual([snapshotOf('甲'), snapshotOf('甲乙')])
   })
 
   it('退出的过程中（立即上传在途）切到后台：调度挂起，不另起一次上传', async () => {
@@ -2341,7 +2343,7 @@ describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () =
     await context.mode.enter()
     await context.time.advance(0)
     await settle()
-    expect(savedRequests(context)).toMatchObject([{ formulasPending: false }])
+    expect((await savedRequests(context))).toMatchObject([{ formulasPending: false }])
     // 检查要等一会儿才回来：退出之后的阅读先按本页的结果说
     context.api.editStatus.mockImplementation(async () => new Promise(() => {}))
     await context.mode.exit()
@@ -2356,7 +2358,7 @@ describe('阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）', () =
     // 公式收齐（假的编辑器一开始就收齐）：补捕获、上传，服务端清掉标记、修订号 4
     await context.time.advance(0)
     await settle()
-    expect(savedRequests(context)).toMatchObject([{ formulasPending: false }])
+    expect((await savedRequests(context))).toMatchObject([{ formulasPending: false }])
     context.api.editStatus.mockResolvedValue(flagged(4, false))
     await context.mode.exit()
     expect(readingOf(context.mode).formulasPending).toBe(false)
@@ -3316,7 +3318,7 @@ describe('本机锁（M3-P5 设计 §3.1：先服务端、后本机锁；争用�
     context.api.save.mockImplementationOnce(async () => reply.promise)
     context.factory.last().edit('甲')
     const exiting = context.mode.exit()
-    await settle()
+    await vi.waitFor(() => expect(context.api.save).toHaveBeenCalledOnce())
     expect(modeOf(context.mode)).toEqual({ kind: 'exiting', cause: 'exit' })
     await takenOverByAnotherTab(context)
     expect(modeOf(context.mode).kind).toBe('losing')
@@ -3684,7 +3686,8 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
     expect(await settledNow(old.stolen)).toBe(true)
     // 照常保存，带的是续上的第 2 代
     await a.mode.save()
-    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(2), writeEpoch: 2 })
+    expect(await savedRequests(a)).toMatchObject([{ snapshot: snapshotOf('甲') }])
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), { token: servedToken(2), writeEpoch: 2 })
     expect(modeOf(a.mode).kind).toBe('editing')
   })
 
@@ -3739,7 +3742,8 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
     expect(a.editLease.release).not.toHaveBeenCalled()
     expect(server.current()).toMatchObject({ epoch: 2, page: TAB_A, released: false })
     await a.mode.save()
-    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(2), writeEpoch: 2 })
+    expect(await savedRequests(a)).toMatchObject([{ snapshot: snapshotOf('甲') }])
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), { token: servedToken(2), writeEpoch: 2 })
   })
 
   it('同上，续上的回包丢了（服务端已经提交了第 2 代，本页只看到断网）：这次的 replaced 说不准是不是本页自己改写的——不当作被取代，当作这一代自己失效交给租约：再续上（同一个页面的重试，第 3 代）、留在编辑，新的一代续租成功时把锁拿回来（复验 E8）', async () => {
@@ -3818,7 +3822,8 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
     expect(await settledNow(old.stolen)).toBe(true)
     expect(modeOf(a.mode).kind).toBe('editing')
     await a.mode.save()
-    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining({ snapshot: snapshotOf('甲') }), expect.anything(), { token: servedToken(3), writeEpoch: 3 })
+    expect(await savedRequests(a)).toMatchObject([{ snapshot: snapshotOf('甲') }])
+    expect(a.api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.anything(), expect.anything(), { token: servedToken(3), writeEpoch: 3 })
   })
 
   it.each([
