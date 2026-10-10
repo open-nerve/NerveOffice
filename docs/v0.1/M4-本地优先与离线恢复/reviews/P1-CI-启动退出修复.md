@@ -24,7 +24,7 @@
 | 完整基础门禁（最终源码、独立 PostgreSQL） | `pnpm verify --ci --scope=no-e2e --keep-going` 全部通过；464 文件、12,091 项单元与集成测试通过；含覆盖率、lint、类型、静态检查、构建及产物/体积/漏洞门禁 |
 | 生产容器验证 | `CI=true pnpm test:e2e:container` 239/239 通过（3.0 分钟），零失败、零重试、零跳过；重启、部署与密钥检查通过，四个容器的日志无主密钥，测试环境已清理 |
 | 独立审查 | 原修复、最终静态入口回归及模板夹具锁修复均通过，无 Critical / Important / Minor 发现 |
-| 修复后的六项 CI | 待合并推送后核对 |
+| 修复后的六项 CI | 合并提交 `a8d2e0d6daa1a388e15f4583e2d554c4c660c736`，[CI 38026702701](https://github.com/open-nerve/NerveOffice/actions/runs/38026702701) 六项全部通过（基础、容器与四浏览器） |
 
 日志在 `.superpowers/sdd/P1-CI-启动退出/`，完整备份连同覆盖率和容器报告位于主目录 `.codex/handoffs/m4-p1-20261010/ci-startup-final/`；原 CI 日志保存在主目录 `.codex/handoffs/m4-p1-20261010/ci-38023436931/verify.log`。正式源码不包含临时停顿。
 

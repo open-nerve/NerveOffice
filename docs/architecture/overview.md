@@ -369,3 +369,4 @@ A01 等检查（`pnpm gate <名称>`）：
 | 2026-10-09 | M3 合并前评审（Codex） | 释放与交出先锁文档行、明确结束在类型上凭锁下的租约行（CX1）；本机锁的争用以服务端的事实裁决（`local-lock.ts`、租约的 `confirm`，CX2）；吊销的响应分成结果与现状（CX3）；还没写进模型的输入合成一个状态（`uncommitted-input`，CX4）；页头与 CI 一节订正 |
 | 2026-10-09 | M3 合并之后 main 的 CI | 被本人接管"在哪"按本机的证据定，与服务端的回答、本机锁被抢谁先到无关（`local-lock.ts` 的 `takenHere`、`edit-mode.ts` 的 `locateTakeover`；ADR-018 的补充） |
 | 2026-10-10 | M4-P1 | 本机发件箱的底座（ADR-020）：`shared/outbox/`（存储与写入栅栏、加密、写入管道、OPFS 的冗余与恢复的提示、本机密钥的客户端、本机存储的状态、合一的清理）与发件箱 Worker；lint 的区域规则；崩溃项目与工具；测试库按主机标识命名；Chromium 的 IndexedDB 删库（UR-034） |
+| 2026-10-10 | M4-P1 接续收尾 | D1–D3 恢复/清理并发修复、关页等待、探针校准和启动信号顺序经本机门禁及独立审查；最终 main `a8d2e0d6` 的六项 [CI](https://github.com/open-nerve/NerveOffice/actions/runs/38026702701) 全绿，P1 关闭。P2 仍在实施 |
