@@ -1426,6 +1426,19 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     expect(readingOf(context.mode).notice).toMatchObject({ kind: 'copied' })
   })
 
+  it('副本建好之后原文档返回 404：保留成功链接，不再上传副本，离开不提示未保存', async () => {
+    const context = await lostWithChanges({ api: { content: async () => Promise.reject(GONE) } })
+    await context.mode.saveCopy()
+    expect(lostOf(context.mode)).toMatchObject({
+      copy: { kind: 'done', document: { id: COPY.id } },
+      reload: { kind: 'failed', error: GONE },
+    })
+    expect(context.mode.hasUnsavedWork()).toBe(false)
+    await context.mode.saveCopy()
+    expect(context.api.conflictCopy).toHaveBeenCalledOnce()
+    expect(lostOf(context.mode).copy).toMatchObject({ kind: 'done', document: { id: COPY.id } })
+  })
+
   it('副本建好之后按最新的内容重建失败（复验 C1）：留在这里——副本的说明与链接照旧，编辑器没能重新打开（没有编辑器），可以重新加载；再失败照样留着，建得起来时回到阅读、说明已另存为副本', async () => {
     const context = await lostWithChanges()
     context.factory.failNext()

@@ -1,9 +1,10 @@
 // 阅读与编辑（M3-P2 设计 §3.1、§3.4）：编辑器页里"现在是阅读还是编辑、编辑权怎样了"的状态机。不依赖 Univer 与界面：编辑器经工厂创建，
 // 接口、时钟与页面的可见性都可注入，用假的做单元测试（edit-mode.test.ts）。这里只留各条转移（打开、进入、退出、失去编辑权、刷新、
-// 另存为副本与放弃）与它们之间的作废；持有编辑租约（edit-lease.ts）与保存的状态机（save-coordinator.ts）。分出去的三样：
+// 另存为副本与放弃）与它们之间的作废。分出去的资源与流程：
+// - 编辑会话（editing-session.ts）：编辑租约、本机锁、保存的状态机与自动保存的建立、停止和释放；
 // - 编辑器槽位（editor-slot.ts）：当前的编辑器、surface 与在途的那一次创建，单飞的重建——同一个容器里至多一个编辑器（审查 A1）；
 // - 阅读时的检查（reading-checks.ts）：计时、暂停与恢复，只认最新发出的那一次检查（审查 A9）；
-// - 失去编辑权之后的那一份（lost-copy.ts）：捕获的内容、失去的时刻与副本的请求，每失去一次编辑权一个。
+// - 失去编辑权之后的那一份（lost-copy-flow.ts）：捕获、保存副本和结果归类，每失去一次编辑权一个；页面管理重建和迟到结果。
 // 载入、会话与页头的编排在 editor-page.ts。
 //
 // 模式切换一律重建（§3.1，需求方 2026-10-04 决定）：进入编辑、退出编辑、失去编辑权、"有更新，点击刷新"、放弃本页的修改，都先取出
@@ -131,7 +132,7 @@ import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handov
 import type { EditingNotice, IncomingRequest } from './holder-requests.ts'
 import type { IdleWatch } from './idle-watch.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
-import type { LostCopy } from './lost-copy.ts'
+import type { CopyState, LostCopyFlow } from './lost-copy-flow.ts'
 import type { OpenCheckContext } from './open-check-report.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
@@ -148,10 +149,12 @@ import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
 import { createHolderRequests } from './holder-requests.ts'
 import { createIdleWatch } from './idle-watch.ts'
-import { createLostCopy } from './lost-copy.ts'
+import { captureLostContent, createLostCopyFlow } from './lost-copy-flow.ts'
 import { openCheckReportOf } from './open-check-report.ts'
 import { createReadingChecks } from './reading-checks.ts'
 import { answerTabs, handoverFailureOf, takeOverHere } from './tab-handover.ts'
+
+export type { CopyRefusal, CopyState } from './lost-copy-flow.ts'
 
 /** 状态里带着的：持有者这一侧的请求与说明（编辑、离开编辑，holder-requests.ts）；"在此编辑"的进展（阅读，tab-handover.ts） */
 export type { EditingNotice, IncomingRequest, TakeoverProgress }
@@ -335,24 +338,6 @@ export interface ReadingMode {
    */
   readonly damaged: OpenCheckFailures | undefined
 }
-
-/**
- * 服务端不收本页的这份内容、再试也一样（M3-P3 审查 B3）：
- * - outdated：本页的版本过旧（CLIENT_OUTDATED）——服务端对副本同样拦旧页面（设计 §3.5），要重新加载页面，本页的内容先复制出来；
- * - content：内容本身不合规则（SNAPSHOT_INVALID，规则在错误的详情里）或者超过容量上限（PAYLOAD_TOO_LARGE）——失去编辑权时捕获的内容
- *   不会再变
- */
-export type CopyRefusal = 'outdated' | 'content'
-
-/** 另存为副本的进展 */
-export type CopyState
-  = | { readonly kind: 'idle' }
-    | { readonly kind: 'saving' }
-  /** 没有成功、可以再试（网络、服务端出错、登录的问题、读不到、请求标识被占用等）：内容一律留着 */
-    | { readonly kind: 'failed', readonly error: unknown }
-  /** 被拒、再试也一样（refusal）：不再给"另存为副本"，内容照样留着（离开照样提示） */
-    | { readonly kind: 'refused', readonly refusal: CopyRefusal, readonly error: ApiError }
-    | { readonly kind: 'done', readonly document: DocumentDetail }
 
 /** 按服务端的最新内容重建为阅读（放弃本页的修改、重新加载、另存为副本之后）的进展 */
 export type ReloadState
@@ -610,15 +595,6 @@ function codeOf(error: unknown): string | null {
   return error instanceof ApiError ? error.code : null
 }
 
-/** 副本的失败是不是"再试也一样"（见 CopyRefusal）：是的话给出是哪一种与那次的错误 */
-function copyRefusalOf(error: unknown): { readonly refusal: CopyRefusal, readonly error: ApiError } | undefined {
-  if (!(error instanceof ApiError))
-    return undefined
-  if (incompatibilityOf(error) === 'client-outdated')
-    return { refusal: 'outdated', error }
-  return error.code === 'SNAPSHOT_INVALID' || error.code === 'PAYLOAD_TOO_LARGE' ? { refusal: 'content', error } : undefined
-}
-
 /** 保存的状态里的不兼容（终态）：退出编辑之后的阅读照样带着它 */
 function blockedBy(status: SaveStatus | undefined): Incompatibility | undefined {
   if (status === 'outdated')
@@ -672,7 +648,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 最近一次知道的"能不能强制接管"（打开时的详情、阅读时的编辑状态）：离开编辑、失去编辑权之后回到阅读时带上 */
   let canTakeOver = false
   /** 失去编辑权之后的那一份（捕获的内容、失去的时刻与副本的请求）：按最新的内容回到阅读之后丢掉 */
-  let lostCopy: LostCopy | undefined
+  let lostCopy: LostCopyFlow | undefined
   /** 正在新建可编辑的编辑器（进入编辑、直接进入编辑的打开）：这期间得知的失效等编辑器建好、进入编辑之后再处理 */
   let pendingLoss: LeaseLoss | undefined
   /** 同上：这期间续租得知的与服务端不兼容（M3-P3），保存的状态机建好之后交给它 */
@@ -1727,22 +1703,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const saver = editing.coordinator
     const page = slot.editor()
     syncSaving()
-    let snapshot: string | undefined
-    let inputLeft = false
-    // 副本的"公式待更新"（M3-P3 设计 §3.8）：捕获时公式还没收齐就带上标记（这里不等，按此刻的状态）；查不出时保守地带上
-    let formulasPending = true
-    try {
-      // 面板里防抖中的改动先写进模型（批注浮层、数据验证面板，M3-P4 设计 §3.4），副本里才有它
-      await page?.settlePanels()
-      // 提交不了（SDK 提交之后仍在编辑）：这次输入不在捕获里，照实说明（审查 A4）
-      if (page?.isCellEditing() === true)
-        inputLeft = !(await page.commitCellEditing())
-      formulasPending = page === undefined || (await page.settleFormulas(0)) !== 'settled'
-      snapshot = page?.capture()
-    }
-    catch (error) {
-      options.reportError(error)
-    }
+    const { snapshot, inputLeft, formulasPending } = await captureLostContent(page, options.reportError)
     if (!still(token))
       return
     const readable = loss.kind !== 'not-found'
@@ -1763,7 +1724,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return
     // 销毁可编辑的编辑器之前算：销毁之后它正在编辑的单元格一律算没有（审查 A4）
     const unsaved = inputLeft || (saver?.hasUnsavedWork() ?? false)
-    lostCopy = createLostCopy({ documentId, snapshot, lostAt, formulasPending, title: options.title, newId: options.newId, compress: api.compress, conflictCopy: api.conflictCopy })
+    lostCopy = createLostCopyFlow({ documentId, snapshot, lostAt, formulasPending, title: options.title, newId: options.newId, compress: api.compress, conflictCopy: api.conflictCopy, onSessionProblem: hooks.writeProblem })
     const created = await slot.replace('read', snapshot)
     if (!still(token))
       return
@@ -2016,25 +1977,15 @@ export function createEditMode(options: EditModeOptions): EditMode {
       }
       const copy = lostCopy
       const token = begin({ ...mode, copy: { kind: 'saving' } })
-      let created: CreatedDocument
-      try {
-        created = await copy.save()
-      }
-      catch (error) {
-        // 内容一律留着。再试也一样的（本页过旧、内容不合规则或太大，审查 B3）不再给副本，页面说明先把内容复制出来；
-        // 别的可以再试（读不到时也是：可能只是取锁之前被移到了别的空间，再试会成功）
-        if (isAuthenticationError(error) || isCsrfTokenError(error))
-          hooks.writeProblem(error)
-        if (still(token) && mode.kind === 'lost') {
-          const refused = copyRefusalOf(error)
-          begin({ ...mode, copy: refused === undefined ? { kind: 'failed', error } : { kind: 'refused', ...refused } })
-        }
-        return
-      }
+      const result = await copy.save()
       if (!still(token) || mode.kind !== 'lost')
         return
+      if (result.kind !== 'done') {
+        begin({ ...mode, copy: result })
+        return
+      }
       // 内容已经保住：本页按服务端的最新内容重建为阅读，说明已另存为副本（取不到最新的版本时留在这里，说明之后可以重新加载）
-      await reloadLatest({ ...mode, copy: { kind: 'done', document: created } })
+      await reloadLatest({ ...mode, copy: result })
     },
 
     discard: async () => {
