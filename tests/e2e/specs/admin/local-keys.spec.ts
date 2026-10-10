@@ -3,7 +3,7 @@
 // （Codex 评审 CX3：说法来自响应里这一次的结果，不从账户的现状推断；确认框关掉、焦点交还之后才写，读屏读得到），
 // 这一行"状态"列里的本机密钥随之换成新的一版（审查 B2：在列表靠下的一行吊销时状态区不在可视区域里，明眼人看这一行；说明写进状态区、下面的内容下移之后，页面把焦点所在的按钮滚回可视区域；窄屏时它排成一行，复验 C7），
 // 焦点回到这一行的按钮；审计页按动作找得到（操作者、对象、明细里被吊销的那一版）。
-// 这个人另一台设备上正在编辑的页面经心跳得知（M3 落在协议层：心跳的响应带着他当前的版本，页面上没有可见的反应）：下一次心跳的响应里版本加一，
+// 这个人另一台设备上正在编辑的页面经心跳得知新版本，M4-P2 页面会自己重新取钥；当前没有未同步草稿时不打断编辑：下一次心跳的响应里版本加一，
 // 页面照常编辑、保存；他再经接口取，得到新的一版、字节不同。"没有可见的反应"以确定的界核对（审查 B3）：得知第 2 版之后再等下一次心跳回来
 // （它是处理完上一次之后才排的），标签页的标题、对话框、body 里画布之外的文字（复验 C3：门户里的提示条挂在 #editor-chrome 之外）与吊销之前相同、
 // 读屏状态区一句话也没写过、没有 alert、仍在编辑；键入、保存之后再核对一遍。取用的响应不缓存（容器 E2E 经 Caddy 的 HTTPS 同样核对代理没有改掉 no-store）。
@@ -138,6 +138,11 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     const admin = await createUser('lk-admin', '吊销的管理员', { systemRole: 'admin' })
     const owner = await createUser('lk-owner', '丢了设备的人')
     const documentId = await createDocument(owner, '设备上的表')
+    const pageKeyRequests: Request[] = []
+    anotherDevice.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/local-key')
+        pageKeyRequests.push(request)
+    })
 
     // 他先在另一台设备上取一次本机密钥（第一次取，生成第 1 版），打开文档、进入编辑：心跳的响应里是第 1 版
     await loginThroughApi(anotherDevice, owner)
@@ -146,6 +151,7 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
     await anotherDevice.clock.install()
     await openAndEnterEditing(anotherDevice, documentId)
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(1)
+    expect(pageKeyRequests).toHaveLength(1)
     // 吊销之前编辑器页上的样子（审查 B3、复验 C3）：已保存到云端，记下标签页的标题、对话框的个数（没有）与 body 里画布之外的文字；
     // 从这里起记下两个读屏状态区（页头里的播报区、页头之外的状态区）写进去的每一句话
     await expect(saveStatus(anotherDevice)).toHaveText('已保存到云端')
@@ -195,6 +201,11 @@ test.describe('US-M3-17 系统管理员吊销本机密钥', () => {
 
     // 他另一台设备上正在编辑的页面：下一次心跳的响应里是第 2 版
     expect(await nextHeartbeatVersion(anotherDevice, documentId)).toBe(2)
+    // M4-P2：由实际页面主动换钥；下面另经接口取钥的断言不能代替这个行为。
+    await expect.poll(() => pageKeyRequests.length).toBe(2)
+    const changedKey = await pageKeyRequests[1]!.response()
+    expect(changedKey?.status()).toBe(200)
+    expect((await changedKey!.json() as { readonly version: number }).version).toBe(2)
     // 页面上没有可见的反应（审查 B3）：以再下一次心跳回来为界——它是页面处理完得知第 2 版的那一次之后才排的，之后才出现的反应也认得出。
     // 标签页的标题、对话框、body 里画布之外的文字与吊销之前相同（复验 C3），读屏状态区一句话也没写过（说过又撤掉的也算），没有 alert、
     // 没有失去编辑权的说明，仍在编辑

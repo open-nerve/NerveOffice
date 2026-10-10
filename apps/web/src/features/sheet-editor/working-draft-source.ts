@@ -350,6 +350,11 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
           }
           catch (error) {
             if (!disposed) {
+              // 清钥时新捕获可先接住当前正文并关闭旧宿主；旧读取的失败不再属于当前内容。
+              if (latest !== entry) {
+                finish({ kind: 'superseded', ref: entry.ref })
+                return
+              }
               report(error)
               finish(failed(entry.ref, error))
             }

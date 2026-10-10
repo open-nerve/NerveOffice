@@ -158,9 +158,10 @@ export const ENTRY_BUDGETS: readonly EntryBudget[] = [
   { entry: 'editor.html', label: '表格编辑器页', maxGzipBytes: 2350 * 1024, reason: 'M1-P4：生产档案 sheet@1 实测 1991 KiB（Univer 约占九成，与 M0 候选档案的 1.93–1.96 MiB 相当），预算比实测多约 18%' },
 ]
 
-/** 入口在启动时就创建的 Worker（P4 设计 §3.9）：Worker 脚本随页面加载下载，另列一项。 */
+/** 入口能创建的 Worker：各自的脚本与静态依赖另列预算，包含按需启动的本机草稿 Worker。 */
 export const WORKER_BUDGETS: readonly WorkerBudget[] = [
   { entry: 'editor.html', worker: 'formula.worker', label: '公式 Worker', maxGzipBytes: 800 * 1024, reason: 'M1-P4：实测 673 KiB，预算比实测多约 19%' },
+  { entry: 'editor.html', worker: 'outbox.worker', label: '本机草稿 Worker', maxGzipBytes: 15 * 1024, reason: 'M4-P2 §3.9：沿用 P1 验证的 15 KiB gzip 完整闭包预算；P2-S4 正式接入编辑器，包含所有静态依赖' },
 ]
 
 /** 平台页面的入口：它的产物（含与编辑器页共用的块）里的地址只按具体地址放行 */

@@ -106,6 +106,38 @@ describe('工作草稿内容所有权与后端顺序', () => {
     expect(h.reportError).not.toHaveBeenCalled()
   })
 
+  it('保留旧正文时新捕获取代它，旧宿主关闭后的读回失败只表示已被替代，不上报页面异常', async () => {
+    const h = harness()
+    const ref = h.source.capture(capture('旧正文'))
+    await h.source.ready(ref)
+    await settle()
+    const held = deferred<Uint8Array<ArrayBuffer>>()
+    h.read.mockReturnValueOnce(held.promise)
+    const retaining = h.source.retainLatest('paused')
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledOnce())
+    const next = h.source.capture(capture('退出登录时重新捕获的正文'))
+    held.reject(new Error('旧宿主已经清钥并关闭'))
+    expect(await retaining).toEqual({ kind: 'superseded', ref })
+    await h.source.ready(next)
+    expect(h.reportError).not.toHaveBeenCalled()
+    expect(h.source.view()).toMatchObject({ ref: next, local: { kind: 'persisted' } })
+    expect(await h.source.readLatest()).toEqual({ kind: 'snapshot', ref: next, snapshot: '退出登录时重新捕获的正文' })
+    h.source.dispose()
+  })
+
+  it('当前正文没有被替换时，保留失败仍交回失败并上报一次', async () => {
+    const h = harness()
+    const ref = h.source.capture(capture('仍是当前正文'))
+    await h.source.ready(ref)
+    await settle()
+    const error = new Error('当前正文读回失败')
+    h.read.mockRejectedValueOnce(error)
+    expect(await h.source.retainLatest('paused')).toMatchObject({ kind: 'failed', ref, error: { name: 'Error', message: error.message } })
+    expect(h.reportError).toHaveBeenCalledExactlyOnceWith(error)
+    expect(h.source.view()).toMatchObject({ ref })
+    h.source.dispose()
+  })
+
   it('prepare 同步预留读回位置；读 A 没结束前，后来的 B 不能覆盖单行存储', async () => {
     const h = harness()
     const first = h.source.capture(capture('A'))

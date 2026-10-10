@@ -210,7 +210,8 @@ test.describe('US-M3-04 同一个人在多个标签页：打开、刷新与关�
     await expect(saveButton(editor)).toBeVisible()
     expect(await editLeaseEndReason(documentId)).toBeNull()
 
-    await editor.close()
+    // 模拟用户关闭，执行卸载处理；默认 close 是测试驱动的强制关闭。此选项不等待关完，先订阅 close。
+    await Promise.all([editor.waitForEvent('close'), editor.close({ runBeforeUnload: true })])
     await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
     await openAndEnterEditing(page, documentId)
     await expect(saveButton(page)).toBeVisible()

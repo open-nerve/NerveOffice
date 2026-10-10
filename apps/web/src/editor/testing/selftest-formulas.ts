@@ -6,7 +6,7 @@
 // 另取内容，不带"公式待更新"的都对；捕获的时刻不早于规则的下限；每项交回时间线（各轮的开始、stop、结果、写回、收齐、捕获、上传）。
 // 最后一项"计算进行中重建"（主会话 2026-10-05 追加。S1 核实成立：主线程模式下 Univer 实例销毁时正在算的那一轮会继续跑完，把只会得出
 // #NAME? 的语法树写进 engine-formula 模块级的缓存 FORMULA_AST_CACHE，之后同一页里新建的实例打开同一份文档会命中它们；S5 规避：
-// 主线程模式下销毁之前先停下这一轮、等它结束，formula-round-stop.ts）：退出编辑，阅读时强制重算，这一轮还在算时点"编辑"重建，
+// 主线程模式下销毁之前先停下这一轮、等它结束，formula-round-stop.ts）：退出编辑，进入准备完成后强制重算，收到本轮实际进度后放行登记并重建，
 // 新的编辑器里再强制重算一遍，全部公式按定义核对——两种模式都要求全部正确。Worker 模式是对照（缓存在 Worker 里，重建时 Worker 随旧的编辑器终止）
 import type { AutosaveControlLimits } from './autosave-control.ts'
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
@@ -14,6 +14,7 @@ import type { CaptureEntry, UploadEntry } from './selftest-autosave.ts'
 import type { Session } from './selftest-session.ts'
 import { FORMULA_PROTOCOL } from '../internal-api/index.ts'
 import { FORMULA_SAMPLE, randOf, verifyFormulaSnapshot } from './capture-samples.ts'
+import { installRebuildCalculationGate } from './rebuild-calculation-gate.ts'
 import { autosaveControl, autosaveTimeline, capturesIn, captureTimingProblems, detectedChanges, triggerText, untilUploaded, uploadFlagged, uploadsIn, watchCaptures } from './selftest-autosave.ts'
 import { checkEditing, round, sheetNamed, sleep } from './selftest-capture-common.ts'
 import { waitFor } from './selftest-dom.ts'
@@ -404,15 +405,6 @@ export async function formulaTimingScenario(session: Session): Promise<void> {
 
 // ---- 计算进行中重建 ----
 
-/**
- * 阅读时强制重算开始之后多久才点"编辑"：sheets-formula 收到一轮开始的通知（stage 为 START 的进度通知）时设一个 1 秒的进度计时器
- * （到点调 LocaleService.t），旧的编辑器在它到点之前销毁，到点就是一条"[LocaleService]: Locale not initialized"的页面异常——那是另一个
- * 问题，main 的 f755729 已修，而写这一项时 S1 的分支（基于 b547644）还没有它。所以从这一轮第一条进度通知在主线程上执行的时刻算起
- * （Worker 模式下它比开始的 mutation 晚，WebKit 里晚得更多），计时器按到期的先后执行：自检的轮询看到已经过了 1.2 秒时，那个 1 秒的
- * 计时器已经执行过了；这里只看语法树缓存这一件事。合并进有 f755729 的分支之后，这层等待可以缩短（点"编辑"越早，旧的一轮剩得越多）
- */
-const REBUILD_AFTER_START_MS = 1_200
-
 /** 强制重算一轮最多等多久（811 个公式，其中 600 个 1 万行的 SUMPRODUCT：本机 2–5 秒，CI 慢几倍） */
 const FORCED_ROUND_TIMEOUT_MS = 60_000
 
@@ -443,28 +435,42 @@ async function rebuildDuringCalculation(session: Session): Promise<void> {
     await untilSwitched(session, 'reading', 'exiting')
     adoptEditor(session, editingBefore)
     const reading = session.probe
-    // 2. 阅读时强制重算；这一轮开始 1.2 秒之后、还没算完时点"编辑"（进入编辑一律重建：旧的编辑器在计算中销毁）
+    // 2. 进入编辑的真实准备完成后开始重算，收到本轮实际进度才原样放行登记回包。
+    // 主线程与 Worker 都不依赖网络/IDB 比计算更快；不再保留 f755729 已修问题的 1.2 秒等待。
     const mark = lastSeq(reading)
-    const roundBefore = reading.formulaProgress().round
-    await forceRecalculation(reading)
-    if (!await waitFor(() => roundNotified(reading, mark) !== undefined, SIGNAL_TIMEOUT_MS, 5))
-      fail(`阅读时强制重算没有开始（没有等到这一轮的进度通知）；轮数 ${roundBefore} → ${reading.formulaProgress().round}`)
-    const startAt = roundNotified(reading, mark)?.at ?? 0
-    const running = (): boolean => !reading.formulaProgress().completed
-    if (!await waitFor(() => !running() || performance.now() - startAt >= REBUILD_AFTER_START_MS, FORCED_ROUND_TIMEOUT_MS, 10) || !running())
-      fail(`阅读时的这一轮在 ${round(performance.now() - startAt)} ms 时已经算完，没能在计算中重建：样本要加大`)
     const enter = chromeButton(session, '编辑')
     if (enter === undefined)
       fail(`页头没有"编辑"（${describeView(session)}）`)
+    const gate = installRebuildCalculationGate(session.host.documentId, 'enter', reading)
     const clickedAt = performance.now()
-    enter.click()
-    await untilSwitched(session, 'editing', 'entering')
+    let boundaryAt: number
+    let notifiedAt: number
+    let releasedAt: number
+    try {
+      enter.click()
+      await untilSwitched(session, 'editing', 'entering')
+      const result = gate.result()
+      if (result?.kind !== 'released')
+        fail(`没有在准备完成时建立计算中重建的交错：${result?.reason ?? '未收到当前文档的写入者登记回包'}`)
+      ;({ boundaryAt, notifiedAt, releasedAt } = result)
+    }
+    finally {
+      gate.dispose()
+    }
     adoptEditor(session, reading)
     const steadyAt = performance.now()
+    const startAt = roundNotified(reading, mark)?.at
+    if (startAt === undefined)
+      fail('旧编辑器的这一轮没有实际进度通知')
     // 旧的编辑器销毁之前这一轮没有算完：它的命令日志里这一轮开始之后没有结果（销毁时探针随之退订，日志留着）
     const oldResults = reading.commands(mark).filter(command => command.phase === 'executed' && command.id === FORMULA_PROTOCOL.resultMutationId)
     if (oldResults.length > 0)
       fail(`阅读的编辑器销毁之前这一轮已经有了结果（+${round((oldResults[0]?.at ?? startAt) - startAt)} ms）：没有在计算中重建`)
+    if (reading.formulaMode === 'main-thread') {
+      const stop = reading.commands(mark).find(command => command.phase === 'executed' && command.id === FORMULA_PROTOCOL.stopMutationId)
+      if (stop === undefined || !reading.commands(stop.seq).some(command => command.phase === 'executed' && command.id === FORMULA_PROTOCOL.notificationMutationId))
+        fail('主线程重建之前没有停止这一轮并收到结束通知')
+    }
     // 3. 新的编辑器：等打开时的计算（易变函数）收齐，再强制重算一遍，全部公式按定义核对
     const editing = session.probe
     if (!await waitFor(() => editing.formulasSettled(), FORCED_ROUND_TIMEOUT_MS, 50))
@@ -478,12 +484,12 @@ async function rebuildDuringCalculation(session: Session): Promise<void> {
     const verdict = verifyFormulaSnapshot(editing.snapshot())
     session.timings.push({
       id: 'formula.rebuild-during-calc',
-      ms: { clickAfterStart: round(clickedAt - startAt), enterSteady: round(steadyAt - clickedAt), recalculation: round(doneAt - steadyAt) },
+      ms: { prepare: round(boundaryAt - clickedAt), progressAfterPrepare: round(notifiedAt - boundaryAt), releaseAfterProgress: round(releasedAt - notifiedAt), enterSteady: round(steadyAt - clickedAt), recalculation: round(doneAt - steadyAt) },
     })
     if (verdict.staleCount > 0) {
       const errors = Object.entries(verdict.errors).map(([value, count]) => `${value} ×${count}`).join('、')
       fail(`在计算中重建之后，新的编辑器里强制重算，${verdict.staleCount}/${verdict.checked} 个与定义不同${errors === '' ? '' : `（其中 ${errors}）`}：${verdict.stale.join('、')}（${JSON.stringify(verdict.byKind)}）`)
     }
-    return `退出编辑（先保存）；阅读时强制重算，这一轮开始之后 +${round(clickedAt - startAt)} ms 点"编辑"、还没算完（旧的编辑器的日志里没有结果）；进入编辑 ${round(steadyAt - clickedAt)} ms 到 steady；新的编辑器里强制重算 ${round(doneAt - steadyAt)} ms，${verdict.checked} 个公式与按定义算出的一致`
+    return `退出编辑（先保存）；点"编辑"后 ${round(boundaryAt - clickedAt)} ms 准备完成，强制重算出现实际进度后放行登记，计算中重建（旧日志没有结果，主线程先停下）；进入编辑 ${round(steadyAt - clickedAt)} ms 到 steady；新的编辑器里强制重算 ${round(doneAt - steadyAt)} ms，${verdict.checked} 个公式与按定义算出的一致`
   }, SWITCH_TIMEOUT_MS * 2 + FORCED_ROUND_TIMEOUT_MS * 2 + CHECK_TIMEOUT_MS)
 }
