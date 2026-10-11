@@ -9,7 +9,7 @@
 // 容器 E2E 也跑（生产镜像里定时的自动保存照常运行）：持有者的修改由交出前的保存或之前的自动保存存上，断言只看结果（服务器上的内容、租约怎样结束）
 import type { Page, Request } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
-import { setPageHidden } from '../../support/autosave.ts'
+import { pauseTime, setPageHidden } from '../../support/autosave.ts'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, editLeaseEpoch, editLeaseReservation, editLeaseTakeover, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { shownName } from '../../support/people.ts'
@@ -372,21 +372,32 @@ test.describe('US-M3-06 请求编辑与交出', () => {
       await route.continue()
     })
     const takeovers = recordAcquisitions(other, documentId)
-    await takeOverHereButton(other).click()
-    // A 交给了标签页：回到阅读，说明已交给本浏览器的另一个标签页（不断言那边接着编辑了）；A 那一代没有释放
+    // A/B 共用时钟：冻结后等到 B 真正发出 POST，说明 A 已放锁并交接完成；不把 A 的 SDK 重建耗时算进申请的 10 秒截止。
+    await pauseTime(other)
+    try {
+      const acquireStarted = other.waitForRequest(request => isAcquisition(request, documentId))
+      await takeOverHereButton(other).click()
+      await acquireStarted
+      expect(await editLeaseEndReason(documentId)).toBeNull()
+      // 乙的下一次续期：A 那一代还在——照旧在等，不进入编辑（槽从来不空）。乙在另一个上下文，时钟独立。
+      const requestPath = `/api/documents/${documentId}/edit-lease/request`
+      const renewed = anotherDevice.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === requestPath)
+      await nextRenewal(anotherDevice)
+      expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
+      await expect(statusRegion(anotherDevice)).toHaveText(waitingFor(holder))
+      expect(acquisitions).toEqual([])
+
+      // B 的申请这时才到：以本人接管换代。先等真实批准，再恢复时钟让 A/B 的编辑器重建。
+      const acquired = other.waitForResponse(response => isAcquisition(response.request(), documentId))
+      releaseAcquire()
+      expect((await acquired).status()).toBe(201)
+    }
+    finally {
+      releaseAcquire()
+      await other.clock.resume()
+    }
     await waitForEditorAccess(page, 'read')
     await expect(statusRegion(page)).toContainText('已交给本浏览器的另一个标签页')
-    expect(await editLeaseEndReason(documentId)).toBeNull()
-    // 乙的下一次续期：A 那一代还在——照旧在等，不进入编辑（修之前这里得到"没人在编辑"、抢先进入，B 随后被乙占用）
-    const requestPath = `/api/documents/${documentId}/edit-lease/request`
-    const renewed = anotherDevice.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === requestPath)
-    await nextRenewal(anotherDevice)
-    expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
-    await expect(statusRegion(anotherDevice)).toHaveText(waitingFor(holder))
-    expect(acquisitions).toEqual([])
-
-    // B 的申请这时才到：以本人接管换代，进入编辑
-    releaseAcquire()
     await waitForEditorAccess(other, 'edit')
     expect(takeovers).toEqual(['self'])
     expect(await editLeaseTakeover(documentId)).toBe('self')

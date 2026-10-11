@@ -13,8 +13,9 @@ import type { Page } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser, grantDocument, grantsOn, revisionOf, revokeGrant } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { withSaveFirst } from '../../support/save-before-heartbeat.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, EDITOR_TEST_TIMEOUT, editorSurface, openAndEnterEditing, openReader, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, editorSurface, openReader, saveButton, saveStatus, typeInCell, waitForEditor } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -114,25 +115,28 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     const documentId = await createDocument(owner, '会被降级的表')
     await grantDocument(documentId, me, 'editor', owner)
     await loginThroughApi(page, me)
-    await openAndEnterEditing(page, documentId)
-    await expect(saveButton(page)).toBeVisible()
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      await expect(saveButton(page)).toBeVisible()
 
-    // 先降级、再改（拦下心跳，免得它先一步得知）：修改自动保存（M3-P4），先改的话生产构建里停 2 秒就存上了
-    await blockLeaseRenewals(page)
-    await loginThroughApi(anotherDevice, owner)
-    await actAs(anotherDevice, 'PUT', `/api/documents/${documentId}/grants/${me.id}`, { role: 'viewer' })
-    expect(await grantsOn(documentId)).toEqual({ [me.username]: 'viewer' })
-    await typeInCell(page, 'A1', '降级之后写的')
+      // 先降级、再改（固定保存先于心跳的顺序）：修改自动保存（M3-P4），先改的话生产构建里停 2 秒就存上了
+      await loginThroughApi(anotherDevice, owner)
+      await actAs(anotherDevice, 'PUT', `/api/documents/${documentId}/grants/${me.id}`, { role: 'viewer' })
+      expect(await grantsOn(documentId)).toEqual({ [me.username]: 'viewer' })
+      await typeInCell(page, 'A1', '降级之后写的')
 
-    // 保存（或者自动保存的上传先一步）得知失去编辑权（403）：编辑权失效，说的是服务端给的原因，本页的修改没有保存
-    await page.keyboard.press('ControlOrMeta+s')
-    await expect(saveStatus(page)).toHaveText('编辑权已失效')
-    await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
-    expect(await revisionOf(documentId)).toBe(1)
+      // 保存（或者自动保存的上传先一步）得知失去编辑权（403）：编辑权失效，说的是服务端给的原因，本页的修改没有保存
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(403)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      await expect(saveStatus(page)).toHaveText('编辑权已失效')
+      await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+      expect(await revisionOf(documentId)).toBe(1)
 
-    await openReader(page, documentId)
-    await expect(saveStatus(page)).toHaveText('只能查看')
-    await expect(saveButton(page)).toHaveCount(0)
+      await openReader(page, documentId)
+      await expect(saveStatus(page)).toHaveText('只能查看')
+      await expect(saveButton(page)).toHaveCount(0)
+    })
   })
 
   test('US-M2-14 移出空间后访问：已经打开的编辑器页保存被拒；空间从导航里消失、空间页与不存在的相同；另有授权的那一份改由"与我共享"打开，只能查看、不显示所在位置', async ({ page, anotherDevice }) => {
@@ -148,38 +152,40 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     await loginThroughApi(page, me)
     await page.goto(`/spaces/${space.id}`)
     await expect(page.getByText('我的角色：编辑者')).toBeVisible()
-    await openAndEnterEditing(page, workingId)
+    await withSaveFirst(page, workingId, async (saveFirst) => {
+      // 空间管理员在另一台设备上把我移出；之后才改（固定保存先于心跳的顺序）
+      await loginThroughApi(anotherDevice, lead)
+      await actAs(anotherDevice, 'DELETE', `/api/spaces/${space.id}/members/${me.id}`)
+      await typeInCell(page, 'A1', '移出之后写的')
 
-    // 空间管理员在另一台设备上把我移出；之后才改（拦下心跳，免得它先一步得知）
-    await blockLeaseRenewals(page)
-    await loginThroughApi(anotherDevice, lead)
-    await actAs(anotherDevice, 'DELETE', `/api/spaces/${space.id}/members/${me.id}`)
-    await typeInCell(page, 'A1', '移出之后写的')
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(404)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      await expect(saveStatus(page)).toHaveText('编辑权已失效')
+      await expect(page.getByRole('alert')).toContainText(GONE)
+      await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
+      expect(await revisionOf(workingId)).toBe(1)
 
-    await page.keyboard.press('ControlOrMeta+s')
-    await expect(saveStatus(page)).toHaveText('编辑权已失效')
-    await expect(page.getByRole('alert')).toContainText(GONE)
-    await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
-    expect(await revisionOf(workingId)).toBe(1)
+      // 空间页与不存在的空间逐字相同；导航里没有这个空间了
+      const hiddenSpace = await notFoundSpace(page, space.id)
+      await expect(page.getByRole('navigation', { name: '空间' }).getByRole('link', { name: space.name })).toHaveCount(0)
+      expect(await notFoundSpace(page, randomUUID())).toBe(hiddenSpace)
 
-    // 空间页与不存在的空间逐字相同；导航里没有这个空间了
-    const hiddenSpace = await notFoundSpace(page, space.id)
-    await expect(page.getByRole('navigation', { name: '空间' }).getByRole('link', { name: space.name })).toHaveCount(0)
-    expect(await notFoundSpace(page, randomUUID())).toBe(hiddenSpace)
-
-    // 另有单独授权的那一份：在"与我共享"里，打开只能查看，页头回"与我共享"、不显示所在的文件夹
-    await page.goto('/shared')
-    const item = page.getByRole('list', { name: '分享给我的文档' }).getByRole('listitem').filter({ hasText: '另外分享给我的表' })
-    await expect(item).toContainText(`${space.name} · 只能查看`)
-    await expect(page.getByText('部门目录')).toHaveCount(0)
-    await item.getByRole('link').click()
-    await expect(page).toHaveURL(new RegExp(`/documents/${sharedId}$`))
-    await waitForEditor(page)
-    const header = page.locator('#editor-chrome').getByRole('banner')
-    await expect(saveStatus(page)).toHaveText('只能查看')
-    await expect(header.getByRole('link', { name: '与我共享', exact: true })).toHaveAttribute('href', '/shared')
-    await expect(header).not.toContainText('部门目录')
-    await expect(saveButton(page)).toHaveCount(0)
+      // 另有单独授权的那一份：在"与我共享"里，打开只能查看，页头回"与我共享"、不显示所在的文件夹
+      await page.goto('/shared')
+      const item = page.getByRole('list', { name: '分享给我的文档' }).getByRole('listitem').filter({ hasText: '另外分享给我的表' })
+      await expect(item).toContainText(`${space.name} · 只能查看`)
+      await expect(page.getByText('部门目录')).toHaveCount(0)
+      await item.getByRole('link').click()
+      await expect(page).toHaveURL(new RegExp(`/documents/${sharedId}$`))
+      await waitForEditor(page)
+      const header = page.locator('#editor-chrome').getByRole('banner')
+      await expect(saveStatus(page)).toHaveText('只能查看')
+      await expect(header.getByRole('link', { name: '与我共享', exact: true })).toHaveAttribute('href', '/shared')
+      await expect(header).not.toContainText('部门目录')
+      await expect(saveButton(page)).toHaveCount(0)
+    })
   })
 
   test('US-M2-14 停用后访问：停用的人被退出——已经打开的编辑器页保存时说明登录已失效，平台页面的下一次请求回到登录页，原来的密码登录不了', async ({ page, anotherDevice }) => {
@@ -189,28 +195,30 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
     const documentId = await createDocument(owner, '停用之前分享的表')
     await grantDocument(documentId, me, 'editor', owner)
     await loginThroughApi(page, me)
-    await openAndEnterEditing(page, documentId)
-    await expect(saveButton(page)).toBeVisible()
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      await expect(saveButton(page)).toBeVisible()
 
-    // 系统管理员在另一台设备上停用我；之后才改（拦下心跳，免得它先一步得知）
-    await blockLeaseRenewals(page)
-    await loginThroughApi(anotherDevice, admin)
-    await actAs(anotherDevice, 'POST', `/api/admin/users/${me.id}/disable`)
-    await typeInCell(page, 'A1', '停用之后写的')
+      // 系统管理员在另一台设备上停用我；之后才改（固定保存先于心跳的顺序）
+      await loginThroughApi(anotherDevice, admin)
+      await actAs(anotherDevice, 'POST', `/api/admin/users/${me.id}/disable`)
+      await typeInCell(page, 'A1', '停用之后写的')
 
-    // 编辑器页：会话已经撤销，说明登录已失效、本页的修改还在（不整页跳走），什么也没存进去。
-    // 保存与心跳续租都会得知（M3-P1）；两条路最后都是没有人登录了：自动保存暂停，页头说登录回来之后自动保存（M3-P4 设计 §3.9）
-    await page.keyboard.press('ControlOrMeta+s')
-    await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
-    await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
-    expect(await revisionOf(documentId)).toBe(1)
+      // 编辑器页：会话已经撤销，说明登录已失效、本页的修改还在（不整页跳走），什么也没存进去。
+      // 保存与心跳续租都会得知（M3-P1）；两条路最后都是没有人登录了：自动保存暂停，页头说登录回来之后自动保存（M3-P4 设计 §3.9）
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(401)
+      await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
+      await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
+      await saveFirst.resume()
+      expect(await revisionOf(documentId)).toBe(1)
 
-    // 平台页面：下一次请求回到登录页；原来的密码登录不了，说法与密码错误相同
-    await page.goto('/shared')
-    await expect(page).toHaveURL(/\/login/)
-    await loginThroughUi(page, me)
-    await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
-    // 授权还在：停用可以撤回，启用之后照常生效（documents/sharing.test.ts 的集成用例）
-    expect(await grantsOn(documentId)).toEqual({ [me.username]: 'editor' })
+      // 平台页面：下一次请求回到登录页；原来的密码登录不了，说法与密码错误相同
+      await page.goto('/shared')
+      await expect(page).toHaveURL(/\/login/)
+      await loginThroughUi(page, me)
+      await expect(page.getByRole('alert')).toHaveText('用户名或密码错误')
+      // 授权还在：停用可以撤回，启用之后照常生效（documents/sharing.test.ts 的集成用例）
+      expect(await grantsOn(documentId)).toEqual({ [me.username]: 'editor' })
+    })
   })
 })

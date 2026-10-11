@@ -13,7 +13,7 @@ import { createDocument, createDocumentIn, createTeamSpace, createUser, editLeas
 import { expect, test } from '../../support/fixtures.ts'
 import { plainName, shownName } from '../../support/people.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
-import { backLink, cellOf, disconnectTab, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, focusPlace, forceTakeOverButton, lostNotice, openAndEnterEditing, openReader, requestEditButton, requestPrompt, saveAndWait, saveButton, savedContent, saveStatus, statusRegion, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { backLink, cellOf, disconnectTab, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, focusPlace, forceTakeOverButton, lostNotice, openAndEnterEditing, openReader, requestEditButton, requestPrompt, saveAndWait, saveButton, savedContent, saveStatus, statusRegion, typeInCell, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -62,6 +62,7 @@ async function forceWithKeyboard(page: Page): Promise<void> {
 
 /** 另存为副本之后的说明里新文档的 id（链接在新标签页打开它） */
 async function copiedDocumentId(page: Page): Promise<string> {
+  await waitForLostToReading(page)
   const link = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' }).getByRole('link', { name: '打开副本（新标签页）', exact: true })
   await expect(link).toBeVisible()
   return (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''

@@ -23,8 +23,9 @@ import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
 import { ALERT, closePermissionAlert, OPENED, scene, watch } from '../../support/read-only.ts'
+import { withSaveFirst } from '../../support/save-before-heartbeat.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { appendSheet, blockLeaseRenewals, cellOf, createSheetThroughApi, createSheetThroughUi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, READING_NOTE, readingNote, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { appendSheet, cellOf, createSheetThroughApi, createSheetThroughUi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, openReader, READING_NOTE, readingNote, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, selectCell, sheetTab, typeInCell, waitForEditorAccess, waitForLostToReading, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -373,43 +374,46 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     const space = await createTeamSpace('会被归档', lead, [[lead, 'admin'], [editor, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
-    await openAndEnterEditing(page, documentId)
-    // 先归档、再改（拦下心跳，免得它先一步得知）：修改自动保存（M3-P4），先改的话生产构建里停 2 秒就存上了
-    await blockLeaseRenewals(page)
-    await archiveSpace(space.id)
-    await typeInCell(page, 'A1', '本页的修改')
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      // 先归档、再改（固定保存先于心跳的顺序）：修改自动保存（M3-P4），先改的话生产构建里停 2 秒就存上了
+      await archiveSpace(space.id)
+      await typeInCell(page, 'A1', '本页的修改')
 
-    // 保存得知不能编辑了（403；自动保存的上传先发出也一样）：本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"
-    await page.keyboard.press('ControlOrMeta+s')
-    const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
-    await waitForEditorAccess(page, 'read')
+      // 保存得知不能编辑了（403；自动保存的上传先发出也一样）：本页换成只读、显示本页的内容，给"另存为副本"与"放弃本页的修改"
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(403)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      const lost = lostNotice(page)
+      await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+      await waitForEditorAccess(page, 'read')
 
-    // 另存为副本：成功之后本页按服务器上的最新版本回到阅读（只能查看），读屏状态区说明已另存为副本，链接在新标签页打开它
-    await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
-    await expect(lostNotice(page)).toHaveCount(0)
-    const notice = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })
-    await expect(notice).toContainText(/已另存为副本《共同的表（冲突副本 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）》。/)
-    await expect(saveStatus(page)).toHaveText('只能查看')
-    await waitForEditorAccess(page, 'read')
-    const link = notice.getByRole('link', { name: '打开副本（新标签页）', exact: true })
-    await expect(link).toHaveAttribute('target', '_blank')
-    const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
-    expect(copyId).toMatch(/^[\da-f-]{36}$/)
+      // 另存为副本：成功之后本页按服务器上的最新版本回到阅读（只能查看），读屏状态区说明已另存为副本，链接在新标签页打开它
+      await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
+      await waitForLostToReading(page)
+      const notice = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })
+      await expect(notice).toContainText(/已另存为副本《共同的表（冲突副本 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）》。/)
+      await expect(saveStatus(page)).toHaveText('只能查看')
+      await waitForEditorAccess(page, 'read')
+      const link = notice.getByRole('link', { name: '打开副本（新标签页）', exact: true })
+      await expect(link).toHaveAttribute('target', '_blank')
+      const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
+      expect(copyId).toMatch(/^[\da-f-]{36}$/)
 
-    // 副本：本页的内容，在自己的个人空间（归档的空间里不能新建）；原文档没有变
-    expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('本页的修改')
-    const placed = await withDatabase(async client => (await client.query<{ space_id: string, title: string }>('SELECT space_id, title FROM documents WHERE id = $1', [copyId])).rows[0])
-    expect(placed?.space_id).toBe(editor.personalSpaceId)
-    expect(placed?.title).toMatch(/^共同的表（冲突副本 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）$/)
-    const original = await savedContent(page, documentId)
-    expect([original.revision, cellOf(original.snapshot, 'A1')]).toEqual([1, undefined])
+      // 副本：本页的内容，在自己的个人空间（归档的空间里不能新建）；原文档没有变
+      expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('本页的修改')
+      const placed = await withDatabase(async client => (await client.query<{ space_id: string, title: string }>('SELECT space_id, title FROM documents WHERE id = $1', [copyId])).rows[0])
+      expect(placed?.space_id).toBe(editor.personalSpaceId)
+      expect(placed?.title).toMatch(/^共同的表（冲突副本 \d{4}-\d{2}-\d{2} \d{2}:\d{2}）$/)
+      const original = await savedContent(page, documentId)
+      expect([original.revision, cellOf(original.snapshot, 'A1')]).toEqual([1, undefined])
 
-    // 链接打开副本：自己的文档，能编辑
-    const [opened] = await Promise.all([page.context().waitForEvent('page'), link.click()])
-    await waitForEditorAccess(opened, 'read')
-    await enterEditing(opened)
-    await expect(saveStatus(opened)).toHaveText('已保存到云端')
+      // 链接打开副本：自己的文档，能编辑
+      const [opened] = await Promise.all([page.context().waitForEvent('page'), link.click()])
+      await waitForEditorAccess(opened, 'read')
+      await enterEditing(opened)
+      await expect(saveStatus(opened)).toHaveText('已保存到云端')
+    })
   })
 
   test('US-M3-12 失去编辑权时编辑器没能重新打开（公式 Worker 的脚本加载不了，审查 A3）：留在失去编辑权，焦点从销毁的编辑器交给"另存为副本"（复验 C2）；Worker 仍起不来时另存为副本，副本建好、说明与链接照旧，不是整页的"编辑器加载失败"（复验 C1）；Worker 恢复之后重新加载，回到阅读', async ({ page, pageErrors }) => {
@@ -450,7 +454,7 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     // Worker 恢复：重新加载，按服务器上的最新版本回到阅读（只能查看），读屏状态区说明已另存为副本
     await page.unroute(workerScript)
     await lost.getByRole('button', { name: '重新加载', exact: true }).click()
-    await expect(lostNotice(page)).toHaveCount(0)
+    await waitForLostToReading(page)
     await waitForEditorAccess(page, 'read')
     await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })).toBeVisible()

@@ -18,7 +18,7 @@ import { createDocumentIn, createFolderIn, createTeamSpace, createUser, expireEd
 import { expect, test } from '../../support/fixtures.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
 import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -246,7 +246,7 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
 
     // 另存为副本：副本是甲的内容；甲在这个空间能新建，放进原文档所在的文件夹；标题是原标题加失效时的时间（页面所在的时区，写到分钟）
     await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
-    await expect(lostNotice(page)).toHaveCount(0)
+    await waitForLostToReading(page)
     const notice = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })
     const link = notice.getByRole('link', { name: '打开副本（新标签页）', exact: true })
     await expect(link).toBeVisible()

@@ -15,8 +15,9 @@ import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, create
 import { shownCell } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { installSaveFirstClock, withSaveFirst } from '../../support/save-before-heartbeat.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { blockLeaseRenewals, cellOf, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, expectFoundOnce, lostNotice, openAndEnterEditing, recordLeaseReleases, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, expectFoundOnce, lostNotice, openAndEnterEditing, recordLeaseReleases, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditor, waitForEditorAccess, waitForLostToReading, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -68,15 +69,18 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const owner = await createUser('save-gone')
     const documentId = await createDocument(owner, '要被删的表')
     await loginThroughApi(page, owner)
-    await openAndEnterEditing(page, documentId)
-    await blockLeaseRenewals(page)
-    await deleteThroughApi(page, documentId)
-    await typeInCell(page, 'A1', '还没保存的内容')
-    await page.keyboard.press('ControlOrMeta+s')
-    await expect(saveStatus(page)).toHaveText('编辑权已失效')
-    await expect(page.getByRole('alert')).toContainText(GONE)
-    await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
-    await expect(saveButton(page)).toHaveCount(0)
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      await deleteThroughApi(page, documentId)
+      await typeInCell(page, 'A1', '还没保存的内容')
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(404)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      await expect(saveStatus(page)).toHaveText('编辑权已失效')
+      await expect(page.getByRole('alert')).toContainText(GONE)
+      await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
+      await expect(saveButton(page)).toHaveCount(0)
+    })
   })
 
   test('US-M2-09 文档已被删除、本页没有未保存的修改（心跳先得知）：只说本页的修改都已保存，不提供、也不承诺重新加载——重新加载只会显示"内容不存在"（审查 B2）', async ({ page }) => {
@@ -101,14 +105,17 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const space = await createTeamSpace('会被移出', lead, [[lead, 'admin'], [editor, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
-    await openAndEnterEditing(page, documentId)
-    await blockLeaseRenewals(page)
-    await removeMember(space.id, editor)
-    await typeInCell(page, 'A1', '还没保存的内容')
-    await page.keyboard.press('ControlOrMeta+s')
-    await expect(saveStatus(page)).toHaveText('编辑权已失效')
-    await expect(page.getByRole('alert')).toContainText(GONE)
-    await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      await removeMember(space.id, editor)
+      await typeInCell(page, 'A1', '还没保存的内容')
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(404)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      await expect(saveStatus(page)).toHaveText('编辑权已失效')
+      await expect(page.getByRole('alert')).toContainText(GONE)
+      await expect(page.getByRole('alert').getByRole('button')).toHaveCount(0)
+    })
   })
 
   test('空间刚被归档（能看却不能改了）：用服务端说的原因，并说明本页的修改没有保存', async ({ page }) => {
@@ -117,27 +124,32 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
     const space = await createTeamSpace('会被归档', lead, [[lead, 'admin'], [editor, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, editor)
-    await openAndEnterEditing(page, documentId)
-    await blockLeaseRenewals(page)
-    await archiveSpace(space.id)
-    await typeInCell(page, 'A1', '还没保存的内容')
-    await page.keyboard.press('ControlOrMeta+s')
-    await expect(saveStatus(page)).toHaveText('编辑权已失效')
-    await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
-    await expect(page.getByText('你没有执行这个操作的权限')).toHaveCount(0)
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      await archiveSpace(space.id)
+      await typeInCell(page, 'A1', '还没保存的内容')
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(403)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      await expect(saveStatus(page)).toHaveText('编辑权已失效')
+      await expect(page.getByRole('alert')).toContainText('编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+      await expect(page.getByText('你没有执行这个操作的权限')).toHaveCount(0)
+    })
   })
 
   test('US-M2-09 空间刚被归档、本页没有修改：心跳先得知与按了保存才得知，说法一样——本页的修改都已保存，重新加载能以只读看到最新的版本（审查 B3）', async ({ page }) => {
     const lead = await createUser('archived-clean-lead')
     const editor = await createUser('archived-clean-editor')
     await loginThroughApi(page, editor)
+    await installSaveFirstClock(page)
     const archived = '编辑权已失效：你已没有编辑这份文档的权限（空间已归档，只能查看）。本页的修改都已保存，重新加载可以看到最新的版本。'
     /** 新建一个团队空间与其中的一份表，打开它（没有任何修改）；返回空间 */
-    const openUntouched = async (name: string): Promise<{ id: string }> => {
+    const openUntouched = async (name: string): Promise<{ id: string, documentId: string }> => {
       const space = await createTeamSpace(name, lead, [[lead, 'admin'], [editor, 'editor']])
-      await openAndEnterEditing(page, await createDocumentIn(space.id, lead, '没改过的表'))
+      const documentId = await createDocumentIn(space.id, lead, '没改过的表')
+      await openAndEnterEditing(page, documentId)
       await expect(saveStatus(page)).toHaveText('已保存到云端')
-      return space
+      return { id: space.id, documentId }
     }
 
     // 心跳先得知：每 10 秒一次，下一次就得知不能编辑了
@@ -149,19 +161,23 @@ test.describe('US-M2-09 A14 编辑器页：打开之后文档被删除、移走�
 
     // 按了保存（例如习惯性地按 Ctrl+S）、保存先得知：拦下心跳，免得它先一步
     const saved = await openUntouched('没改过就归档（保存）')
-    await blockLeaseRenewals(page)
-    await archiveSpace(saved.id)
-    await saveButton(page).click()
-    await expect(saveStatus(page)).toHaveText('编辑权已失效')
-    await expect(page.getByRole('alert')).toContainText(archived)
-    await expect(page.getByRole('alert')).toHaveText(heartbeatFirst, { useInnerText: true })
+    await withSaveFirst(page, saved.documentId, async (saveFirst) => {
+      await archiveSpace(saved.id)
+      await saveButton(page).click()
+      await saveFirst.expectResponse(403)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      await expect(saveStatus(page)).toHaveText('编辑权已失效')
+      await expect(page.getByRole('alert')).toContainText(archived)
+      await expect(page.getByRole('alert')).toHaveText(heartbeatFirst, { useInnerText: true })
 
-    // 重新加载：按服务器上的版本重建为阅读（只能查看）
-    await page.getByRole('alert').getByRole('button', { name: '重新加载' }).click()
-    await expect(lostNotice(page)).toHaveCount(0)
-    await waitForEditorAccess(page, 'read')
-    await expect(saveStatus(page)).toHaveText('只能查看')
-    await expect(saveButton(page)).toHaveCount(0)
+      // 重新加载：按服务器上的版本重建为阅读（只能查看）
+      await page.getByRole('alert').getByRole('button', { name: '重新加载' }).click()
+      await waitForLostToReading(page)
+      await waitForEditorAccess(page, 'read')
+      await expect(saveStatus(page)).toHaveText('只能查看')
+      await expect(saveButton(page)).toHaveCount(0)
+    }, true)
   })
 })
 
@@ -172,33 +188,36 @@ test.describe('US-M3-12 编辑中被降为查看者：还读得到，没保存�
     const space = await createTeamSpace('会被降级', lead, [[lead, 'admin'], [me, 'editor']])
     const documentId = await createDocumentIn(space.id, lead, '共同的表')
     await loginThroughApi(page, me)
-    await openAndEnterEditing(page, documentId)
-    await typeInCell(page, 'B1', '本页的修改')
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      await typeInCell(page, 'B1', '本页的修改')
 
-    // 空间管理员在另一台设备上把我降为查看者（收回写入权：我的编辑权随之结束）；我按保存
-    await blockLeaseRenewals(page)
-    await loginThroughApi(anotherDevice, lead)
-    await actAs(anotherDevice, 'PUT', `/api/spaces/${space.id}/members/${me.id}`, { role: 'viewer' })
-    await saveButton(page).click()
-    const lost = lostNotice(page)
-    await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
-    await expect(lost.getByRole('button', { name: '另存为副本', exact: true })).toBeVisible()
-    await waitForEditorAccess(page, 'read')
-    await expect(saveButton(page)).toHaveCount(0)
-    await expect.poll(async () => shownCell(page, 'B1')).toBe('本页的修改')
-    expect(await revisionOf(documentId)).toBe(1)
-    expect(await wouldPromptOnLeave(page)).toBe(true)
+      // 空间管理员在另一台设备上把我降为查看者（收回写入权：我的编辑权随之结束）；我按保存
+      await loginThroughApi(anotherDevice, lead)
+      await actAs(anotherDevice, 'PUT', `/api/spaces/${space.id}/members/${me.id}`, { role: 'viewer' })
+      await saveButton(page).click()
+      await saveFirst.expectResponse(403)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      const lost = lostNotice(page)
+      await expect(lost).toContainText('编辑权已失效：你已没有编辑这份文档的权限（只能查看这份文档，不能编辑）。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+      await expect(lost.getByRole('button', { name: '另存为副本', exact: true })).toBeVisible()
+      await waitForEditorAccess(page, 'read')
+      await expect(saveButton(page)).toHaveCount(0)
+      await expect.poll(async () => shownCell(page, 'B1')).toBe('本页的修改')
+      expect(await revisionOf(documentId)).toBe(1)
+      expect(await wouldPromptOnLeave(page)).toBe(true)
 
-    // 放弃（先确认）：按服务器上的最新版本以只读重建，没有本页的修改；只能查看，没有"编辑"；没有要保存的了，离开不再提示
-    await lost.getByRole('button', { name: '放弃本页的修改', exact: true }).click()
-    await page.getByRole('dialog', { name: '放弃本页的修改？' }).getByRole('button', { name: '放弃修改', exact: true }).click()
-    await expect(lostNotice(page)).toHaveCount(0)
-    await expect.poll(async () => shownCell(page, 'B1')).toBeNull()
-    await waitForEditorAccess(page, 'read')
-    await expect(saveStatus(page)).toHaveText('只能查看')
-    await expect(enterEditButton(page)).toHaveCount(0)
-    expect(await wouldPromptOnLeave(page)).toBe(false)
-    expect(await revisionOf(documentId)).toBe(1)
+      // 放弃（先确认）：按服务器上的最新版本以只读重建，没有本页的修改；只能查看，没有"编辑"；没有要保存的了，离开不再提示
+      await lost.getByRole('button', { name: '放弃本页的修改', exact: true }).click()
+      await page.getByRole('dialog', { name: '放弃本页的修改？' }).getByRole('button', { name: '放弃修改', exact: true }).click()
+      await waitForLostToReading(page)
+      await expect.poll(async () => shownCell(page, 'B1')).toBeNull()
+      await waitForEditorAccess(page, 'read')
+      await expect(saveStatus(page)).toHaveText('只能查看')
+      await expect(enterEditButton(page)).toHaveCount(0)
+      expect(await wouldPromptOnLeave(page)).toBe(false)
+      expect(await revisionOf(documentId)).toBe(1)
+    })
   })
 })
 
@@ -216,21 +235,24 @@ test.describe('US-M3-12 编辑中失去访问或被移走：读不到了就说�
       const documentId = await createDocument(owner, '会读不到的表')
       await grantDocument(documentId, me, 'editor', owner)
       await loginThroughApi(page, me)
-      await openAndEnterEditing(page, documentId)
-      await blockLeaseRenewals(page)
-      await loginThroughApi(anotherDevice, owner)
-      await revocation.revoke(anotherDevice, documentId, me)
-      await typeInCell(page, 'B1', '本页的修改')
-      await page.keyboard.press('ControlOrMeta+s')
-      const lost = lostNotice(page)
-      await expect(lost).toHaveText(GONE)
-      await expect(lost.getByRole('button')).toHaveCount(0)
-      await waitForEditorAccess(page, 'read')
-      await expect(saveButton(page)).toHaveCount(0)
-      await expect(saveStatus(page)).toHaveText('编辑权已失效')
-      // 本页的内容还在（以只读重建、显示捕获的内容），需要的话可以复制出来；服务器上什么也没存进去
-      await expectFoundOnce(page, '本页的修改')
-      expect(await revisionOf(documentId)).toBe(1)
+      await withSaveFirst(page, documentId, async (saveFirst) => {
+        await loginThroughApi(anotherDevice, owner)
+        await revocation.revoke(anotherDevice, documentId, me)
+        await typeInCell(page, 'B1', '本页的修改')
+        await page.keyboard.press('ControlOrMeta+s')
+        await saveFirst.expectResponse(404)
+        await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+        await saveFirst.resume()
+        const lost = lostNotice(page)
+        await expect(lost).toHaveText(GONE)
+        await expect(lost.getByRole('button')).toHaveCount(0)
+        await waitForEditorAccess(page, 'read')
+        await expect(saveButton(page)).toHaveCount(0)
+        await expect(saveStatus(page)).toHaveText('编辑权已失效')
+        // 本页的内容还在（以只读重建、显示捕获的内容），需要的话可以复制出来；服务器上什么也没存进去
+        await expectFoundOnce(page, '本页的修改')
+        expect(await revisionOf(documentId)).toBe(1)
+      })
     })
   }
 

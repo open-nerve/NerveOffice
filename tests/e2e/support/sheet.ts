@@ -172,6 +172,15 @@ export async function waitForEditorAccess(page: Page, access: 'read' | 'edit', s
 }
 
 /**
+ * 失去编辑权之后，另存副本或重新加载成功，按最新内容回到阅读。lost 中原来的编辑器已经是 read/ready，不能用它判断重建完成；
+ * 先等失效说明消失（页面已完成 lost → reading），再核对新的只读编辑器。沿用编辑器重建的 30 秒时限。
+ */
+export async function waitForLostToReading(page: Page): Promise<void> {
+  await expect(lostNotice(page)).toHaveCount(0, { timeout: 30_000 })
+  await waitForEditorAccess(page, 'read')
+}
+
+/**
  * 点"编辑"，等可编辑的编辑器就绪（M3-P2：申请编辑权、以可编辑重建）。点下去的那个事件里页面就挂上交互屏障
  * （data-editor-state 变成 loading），所以之后等到的就绪是新建的那一个；进不去（被占用、不能编辑了）时等不到 edit，用例失败
  */
@@ -408,7 +417,7 @@ export function recordLeaseReleases(page: Page, documentId: string): string[] {
 }
 
 /**
- * 拦下这个页面的心跳续租（M3-P1）：续租一律按断网处理——页面照常隔 10 秒重试，编辑权的状态不变；unblock 之后照常。
+ * 拦下这个页面的心跳续租（M3-P1）：续租一律按断网处理——页面照常隔 10 秒重试；M4-P2 起连接变成 unresponsive，暂停向云端保存。
  * 核对保存那一步的用例用它：心跳也会得知失去访问、登录失效，赶在保存之前说明编辑权已失效（页面这样做是对的，
  * 但那就不是这条用例要核对的那一步了，结果还取决于心跳恰好落在哪里）。申请与释放照常
  */
