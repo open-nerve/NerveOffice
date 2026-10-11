@@ -525,6 +525,7 @@ export const TEST_ONLY_SOURCES: readonly string[] = [
   'src/entries/selftest/',
   'src/features/sheet-editor/selftest-hook.ts',
   'src/features/sheet-editor/outbox/testing/',
+  'src/features/sheet-editor/recovery/testing/',
 ]
 
 /** 模块是不是只属于测试构建：按路径认（查询串不算） */
@@ -575,7 +576,7 @@ export function checkTestOnlySources(sources: ModuleSources, files: readonly str
  *   测试 Worker（mirror-review.worker）是另一个产物，量法（mirror-review）被两边引用、可能自成分块。
  * 自检结果的格式标识与计时、自动保存的控制、交接日志与两个发件箱探针挂在 window 上的名字另由禁用关键字核对
  */
-export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe(?:\.worker)?|opfs-probe\.worker|outbox-review-probe|mirror-review(?:\.worker)?|storage-probe-worker|crash-probe(?:\.worker)?)-[^/]*$/]
+export const TEST_ONLY_ARTIFACTS: readonly RegExp[] = [/^(?:csp-probe|selftest)\.html$/, /^assets\/(?:csp-probe|probe-worker|e2e-probe|probe-facades|selftest|read-only-entries|content-compare|switch-timing|capture-samples|formula-mode|profile-fault|autosave-control|handover-log|outbox-probe(?:\.worker)?|opfs-probe\.worker|outbox-review-probe|mirror-review(?:\.worker)?|storage-probe-worker|crash-probe(?:\.worker)?|reload-diagnostics|reload-diagnostic-format)-[^/]*$/]
 
 export function checkTestOnlyArtifacts(paths: readonly string[]): Violation[] {
   return paths

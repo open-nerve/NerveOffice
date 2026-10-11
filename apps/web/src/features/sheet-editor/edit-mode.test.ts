@@ -6008,9 +6008,10 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.api.save).not.toHaveBeenCalled()
       context.autosave.setPage({ writable: true })
       await context.time.advance(HEARTBEAT_MS)
-      await settle()
+      expect(seen).toContainEqual(expect.objectContaining({ kind: 'exiting', cause: 'handover-request' }))
+      // 这一次心跳已经启动退出；真实 gzip/摘要不受假时钟或一轮宏任务约束，等保存及交接的实际终态。
+      await vi.waitFor(() => expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true }))
       expect(context.editLease.handOver).toHaveBeenCalledOnce()
-      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
     })
 
     it('空闲的起点取进入编辑的时刻：打开很久之后才进入编辑、请求随即到了也不交出（显示提示）；从进入的那一刻起满 2 分钟才交出', async () => {

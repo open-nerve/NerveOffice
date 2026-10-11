@@ -802,7 +802,7 @@ const WEB_TEST_CODE = ['**/*.test.{ts,tsx}', '**/*.test-support.{ts,tsx}']
  * 观察钩子：E2E 与真实 Safari 的页面自检用它挂在 window 上的名字与记录的写法）、计算中重建的真实准备交错（M4-P2 S4）。
  * 它们在 editor/testing/ 下（只在测试构建里），E2E 经模块边界的例外引用它们，所以它们不引用任何模块（nerve/editor-testing-shared）
  */
-const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts', 'testing/capture-samples.ts', 'testing/autosave-control.ts', 'testing/handover-log.ts', 'testing/rebuild-calculation-gate.ts']
+const SELFTEST_SHARED_FILES = ['testing/read-only-entries.ts', 'testing/content-compare.ts', 'testing/selftest-report.ts', 'testing/switch-timing.ts', 'testing/capture-samples.ts', 'testing/autosave-control.ts', 'testing/handover-log.ts', 'testing/rebuild-calculation-gate.ts', 'testing/selftest-reload-diagnostics.ts']
 
 /** 链接地址判定的跨引擎用例（M3-P3 设计 §3.2，相对 contracts 元素的路径）：Node 的单元测试与 E2E 共用的测试辅助 */
 const LINK_ADDRESS_CASES_FILE = 'documents/link-address.test-support.ts'
@@ -1464,6 +1464,8 @@ export default antfu(
           // 自检的入口页（entries/selftest）引用结果的格式（登录失败时同样交出结果）；
           // 编辑器页的挂接（sheet-editor 的 selftest-hook.ts，start.tsx 只在测试构建里动态引入它）动态引入自检模块
           { from: { element: { type: 'e2e-tests' } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: SELFTEST_SHARED_FILES } } } },
+          // 清理前只读观测只引用零依赖的诊断格式，不把编辑器页实现带进 Node 驱动。
+          { from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'recovery/testing/reload-diagnostics.ts' } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest-reload-diagnostics.ts' } } } },
           { from: { element: { type: 'web-entry', captured: { entry: 'selftest' } } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest-report.ts' } } } },
           {
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['selftest-hook.ts', 'selftest-hook.test.ts'] } },

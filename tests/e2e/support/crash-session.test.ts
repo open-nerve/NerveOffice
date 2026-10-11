@@ -32,6 +32,70 @@ function observing() {
   return session
 }
 
+function diagnostic(bootId = BEFORE, stage = 'boot') {
+  const point = () => ({ navigation: { timeOrigin: 100, type: 'navigate', discarded: 'unsupported', key: BEFORE, id: CLIENT, activation: 'replace', fromKey: null, fromId: null }, storage: { status: 'available', markers: [], invalid: 0, truncated: false } })
+  return { ...boot(bootId), kind: 'diagnostic', stage, facts: { initial: point(), current: point(), events: [], truncated: false } }
+}
+
+describe('崩溃只读诊断不授予产品恢复或测试信号资格', () => {
+  it('独立留档清理前后事实，不能把准备推进为就绪或触发信号', () => {
+    const session = setup()
+    session.receive(boot(), 10)
+    const message = diagnostic()
+    expect(session.receive(message, 11)).toEqual({ kind: 'wait' })
+    message.facts.initial.navigation.key = AFTER
+    expect(session.snapshot()).toMatchObject({ phase: 'preparing', diagnostics: [{ stage: 'boot', facts: { initial: { navigation: { key: BEFORE } } } }] })
+    expect(session.signaled(12)).toBe(false)
+    expect(session.receive(ready(), 20)).toEqual({ kind: 'wait' })
+  })
+
+  it('恢复页诊断只追加证据，不能替代恢复报告或服务端核对', () => {
+    const session = observing()
+    expect(session.receive(diagnostic(AFTER), 41)).toEqual({ kind: 'wait' })
+    expect(session.receive(diagnostic(AFTER, 'failed'), 42)).toEqual({ kind: 'wait' })
+    expect(session.snapshot()).toMatchObject({ phase: 'observing', diagnostics: [{ bootId: AFTER }, { stage: 'failed' }] })
+    expect(session.finish(server(), 50).length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    { bootId: AFTER },
+    { stage: 'unknown' },
+    { secret: 'not-for-report' },
+    { facts: { ...diagnostic().facts, secret: 'not-for-report' } },
+    { facts: { ...diagnostic().facts, current: { ...diagnostic().facts.current, storage: { status: 'available', markers: [{ token: 'not-for-report' }], invalid: 0, truncated: false } } } },
+  ])('不接受无关页面、未知阶段或额外敏感字段：%j', (change) => {
+    const session = setup()
+    session.receive(boot(), 10)
+    expect(session.receive({ ...diagnostic(), ...change }, 11)).toEqual({ kind: 'stop' })
+    expect(JSON.stringify(session.snapshot())).not.toContain('not-for-report')
+  })
+
+  it('快照不能反向改写证据，重复阶段和信号后的旧页诊断均拒绝', () => {
+    const session = setup()
+    session.receive(boot(), 10)
+    session.receive(diagnostic(), 11)
+    const snapshot = session.snapshot()
+    snapshot.diagnostics.splice(0)
+    expect(session.snapshot().diagnostics).toHaveLength(1)
+    expect(session.receive(diagnostic(), 12)).toEqual({ kind: 'stop' })
+    const signaled = prepared()
+    signaled.signaled(30)
+    expect(signaled.receive(diagnostic(BEFORE, 'failed'), 31)).toEqual({ kind: 'stop' })
+  })
+
+  it.each([
+    { ...diagnostic().facts, events: Array.from({ length: 9 }, () => ({ kind: 'lock', clientInstanceId: CLIENT, result: 'held' })) },
+    { ...diagnostic().facts, events: [{ kind: 'match', clientInstanceId: CLIENT, result: 'match', token: 'not-for-report' }] },
+    { ...diagnostic().facts, current: { ...diagnostic().facts.current, navigation: { ...diagnostic().facts.current.navigation, url: 'not-for-report' } } },
+    { ...diagnostic().facts, current: { ...diagnostic().facts.current, navigation: { ...diagnostic().facts.current.navigation, type: 'not-for-report' } } },
+  ])('嵌套元数据超限或带额外内容时不留档', (facts) => {
+    const session = setup()
+    session.receive(boot(), 10)
+    expect(session.receive({ ...diagnostic(), facts }, 11)).toEqual({ kind: 'stop' })
+    expect(session.snapshot().diagnostics).toEqual([])
+  })
+})
+
 describe('真实 Safari 崩溃会话：只在真实就绪、结束与新页面之间推进', () => {
   it('普通刷新校准不能被标记成真实进程崩溃', () => {
     const options = { runId: RUN, documentId: DOCUMENT, userId: USER, contentHash: HASH, deadline: 1000 }

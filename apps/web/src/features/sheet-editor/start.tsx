@@ -123,12 +123,16 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     // 引入失败：照常组装，没有那一样，不上报——用到它的 E2E 自己会失败（控制、日志不在）。这两块在页面一开始就引入，整页跳转可能在入口的
     // 脚本还没执行、还没开始听 beforeunload 时就已开始，随后取消它们（WebKit 报"Importing a module script failed."），分不清是不是跳转取消的
     // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）
-    void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts')]).then(([control, log]) => {
+    const crash = new URLSearchParams(window.location.search).get('selftest') === 'crash-recovery'
+    void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('./recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)]).then(([control, log, diagnostics]) => {
+      const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadIdentity(reloadIdentitySelector) : undefined
       assemble(
         elements,
         reportLoadFailure,
         control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
         log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
+        observed?.selector,
+        observed?.snapshot,
       )
     })
     return
@@ -136,11 +140,11 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
   assemble(elements, reportLoadFailure, undefined, undefined)
 }
 
-function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined): void {
+function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, identitySelector = reloadIdentitySelector, reloadDiagnostics?: () => unknown): void {
   const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
   const reloadNavigation = { type: navigation?.type, wasDiscarded: 'wasDiscarded' in document && document.wasDiscarded === true }
   const page = createEditorPage({
-    reloadIdentity: reloadIdentitySelector({ navigation: reloadNavigation, storage: () => window.sessionStorage, locks: browserSameBrowserApis.locks }),
+    reloadIdentity: identitySelector({ navigation: reloadNavigation, storage: () => window.sessionStorage, locks: browserSameBrowserApis.locks }),
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
     surface: elements.surface,
@@ -203,7 +207,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
   // 引入失败照常载入（自检随之没有结果，错误交给浏览器的错误报告）。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
   if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
     void import('./selftest-hook.ts').then(
-      ({ watchForSelftest }): void | Promise<void> => watchForSelftest(page, elements),
+      ({ watchForSelftest }): void | Promise<void> => watchForSelftest(page, elements, reloadDiagnostics),
       (error: unknown) => reportLoadFailure(error),
     ).then(async () => page.load())
     return

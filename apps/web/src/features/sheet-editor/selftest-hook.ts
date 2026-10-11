@@ -215,7 +215,7 @@ function watchReloadSaves(documentId: string): NonNullable<SelftestHost['reloadS
 }
 
 /** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
-export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements): void | Promise<void> {
+export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements, reloadDiagnostics?: () => unknown): void | Promise<void> {
   const startedAt = new Date().toISOString()
   const documentId = documentIdFromPagePath(window.location.pathname)
   if (new URLSearchParams(window.location.search).get('selftest') === DEAF_HOLDER_SCENARIO)
@@ -230,6 +230,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       pageErrors: () => [...log.pageErrors, ...log.consoleErrors],
       recovered: () => page.view().recovery?.stage === 'restored',
       subscribe: listener => page.subscribe(listener),
+      diagnostics: reloadDiagnostics,
     }))
   }
   const allowLeave = allowLeaveForReport(window)

@@ -88,6 +88,9 @@ for (const autosave of ['held', 'running'] as const) {
       await testInfo.attach('crash-page-ready', { body: JSON.stringify(session.snapshot()), contentType: 'application/json' })
       expect(session.snapshot()).toMatchObject({ phase: 'ready' })
       const ready = session.snapshot().ready!
+      const readyDiagnostic = session.snapshot().diagnostics.find(item => item.stage === 'ready')
+      expect(readyDiagnostic?.facts.initial.storage.markers).toEqual([])
+      expect(readyDiagnostic?.facts.current.storage.markers).toEqual([expect.objectContaining({ userId: owner.id, documentId, clientInstanceId: ready.clientInstanceId, writerId: ready.writerId })])
       const key = { userId: owner.id, documentId }
       const disk = (await readLocalDisk(page, key)).draft!
       const snapshot = diskSnapshot(disk, await currentLocalKey(page))
@@ -111,6 +114,12 @@ for (const autosave of ['held', 'running'] as const) {
       await expect.poll(() => ['restored', 'failed'].includes(session.snapshot().phase), { timeout: 90_000 }).toBe(true)
       await testInfo.attach('crash-page-restored', { body: JSON.stringify(session.snapshot()), contentType: 'application/json' })
       expect(session.snapshot()).toMatchObject({ phase: 'restored' })
+      const diagnostics = session.snapshot().diagnostics
+      expect(diagnostics.map(item => item.stage)).toEqual(['boot', 'ready', 'boot', 'restored'])
+      const reload = diagnostics[2]!
+      expect(reload.facts.initial.navigation).toMatchObject({ type: 'reload' })
+      expect(reload.facts.initial.storage.markers).toEqual([expect.objectContaining({ clientInstanceId: ready.clientInstanceId })])
+      expect(diagnostics[3]!.facts.events).toEqual(expect.arrayContaining([{ kind: 'lock', clientInstanceId: ready.clientInstanceId, result: 'held' }, { kind: 'match', clientInstanceId: ready.clientInstanceId, result: 'match' }, { kind: 'selected', clientInstanceId: ready.clientInstanceId, candidate: true }]))
       const { acquires, saves } = await requestEvidence(requests)
       const cloud = await savedContent(page, documentId)
       const value = cellOf(cloud.snapshot, 'A1')?.v

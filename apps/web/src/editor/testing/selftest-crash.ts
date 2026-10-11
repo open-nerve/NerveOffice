@@ -18,6 +18,7 @@ export interface CrashSelftestHost {
   readonly pageErrors: () => readonly string[]
   readonly recovered: () => boolean
   readonly subscribe: (listener: () => void) => () => void
+  readonly diagnostics?: () => unknown
 }
 
 export function crashControlFrom(href: string): { readonly endpoint: string, readonly runId: string } | undefined {
@@ -139,6 +140,14 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
   const command = await post('boot')
   if (command.kind !== 'prepare' && command.kind !== 'observe')
     throw new Error('驱动没有允许本页继续自检')
+  const diagnostic = async (stage: 'boot' | 'ready' | 'restored' | 'failed'): Promise<void> => {
+    if (host.diagnostics === undefined)
+      throw new Error('测试构建没有安装清理前只读诊断')
+    const result = await post('diagnostic', { stage, facts: host.diagnostics() })
+    if (result.kind !== 'wait')
+      throw new Error('只读诊断没有被驱动接受')
+  }
+  await diagnostic('boot')
   const writes = observeWrites()
   const autosave = autosaveControl()
   // 只暂停初页的定时云端上传。重载页放开测试暂停，产品的 reload 记号和身份不读写。
@@ -182,6 +191,7 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
       const value = crashCellValue(text)
       if (value !== CRASH_SELFTEST_TEXT)
         throw new Error('独立解密读到的正文不符')
+      await diagnostic('ready')
       await post('ready', { userId: session.user.id, clientInstanceId: draft.writtenBy, writerId: draft.writerId, draftSeq: draft.draftSeq, baseRevision: draft.baseRevision, contentHash: await sha256(value), snapshotHash: await sha256(text), workerWrites: writes(), inFlight: draft.inFlight !== null, visible: document.visibilityState === 'visible', pageErrors: host.pageErrors().length })
     }
     else {
@@ -195,11 +205,13 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
       }
       const snapshot = window.__nerveEditorProbe?.snapshot()
       const value = snapshot === undefined ? undefined : crashCellValue(snapshot)
+      await diagnostic('restored')
       await post('restored', { contentHash: await sha256(typeof value === 'string' ? value : ''), mode: host.view().mode, recoveredNotice: recovered, draftRemaining: draft !== undefined, visible: document.visibilityState === 'visible', pageErrors: host.pageErrors().length })
     }
   }
   // page.load 在挂接返回后才开始。自检在后台等状态，失败仍向驱动交回，不能静默等到整轮超时。
   void withTimeout(run(), TIMEOUT).catch(async () => {
+    await diagnostic('failed').catch(() => {})
     await post('failed').catch(() => {})
   }).finally(() => {
     unsubscribe()

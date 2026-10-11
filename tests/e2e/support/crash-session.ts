@@ -1,11 +1,20 @@
 // 真实 Safari 与 Playwright 校准共用的驱动状态机。只接收非敏感事实；不操作页面、系统进程或数据库。
 // 页面启动标识仅关联测试报告，不写入产品的原页身份、恢复记号或导航类型。
+import type { ReloadDiagnostics } from '../../../apps/web/src/editor/testing/selftest-reload-diagnostics.ts'
+import { isReloadDiagnostics } from '../../../apps/web/src/editor/testing/selftest-reload-diagnostics.ts'
 
 interface Boot {
   readonly kind: 'boot'
   readonly runId: string
   readonly documentId: string
   readonly bootId: string
+}
+
+interface CrashDiagnostic extends Omit<Boot, 'kind'> {
+  readonly kind: 'diagnostic'
+  readonly stage: 'boot' | 'ready' | 'restored' | 'failed'
+  readonly facts: ReloadDiagnostics
+  readonly receivedAt: number
 }
 
 export interface CrashReady extends Omit<Boot, 'kind'> {
@@ -99,6 +108,7 @@ export function createCrashSession(options: CrashOptions) {
   let restored: CrashRestored | undefined
   let lastAt = 0
   const problems: string[] = []
+  const diagnostics: CrashDiagnostic[] = []
 
   const fail = (reason: string): Command => {
     if (phase !== 'failed' && phase !== 'passed') {
@@ -128,6 +138,18 @@ export function createCrashSession(options: CrashOptions) {
         return { kind: 'stop' }
       if (!object(message) || message.runId !== config.runId || message.documentId !== config.documentId || !uuid(message.bootId))
         return fail('页面报告的测试身份无效')
+      if (message.kind === 'diagnostic') {
+        const first = phase === 'preparing' && message.bootId === firstBoot
+        const next = phase === 'observing' && message.bootId === nextBoot
+        const stages = first ? ['boot', 'ready', 'failed'] : next ? ['boot', 'restored', 'failed'] : []
+        if (!exactKeys(message, [...BOOT_KEYS, 'stage', 'facts']) || !stages.includes(message.stage as string)
+          || !isReloadDiagnostics(message.facts) || diagnostics.length >= 6
+          || diagnostics.some(item => item.bootId === message.bootId && item.stage === message.stage)) {
+          return fail('只读诊断的页面、字段或到达时序不符')
+        }
+        diagnostics.push(structuredClone({ ...message, receivedAt: now }) as CrashDiagnostic)
+        return { kind: 'wait' }
+      }
       if (message.kind === 'boot' && exactKeys(message, BOOT_KEYS)) {
         if (phase === 'waiting') {
           firstBoot = message.bootId
@@ -207,6 +229,6 @@ export function createCrashSession(options: CrashOptions) {
       phase = problems.length === 0 ? 'passed' : 'failed'
       return [...problems]
     },
-    snapshot: () => ({ mode: config.mode, phase, ready, restored, problems: [...problems] }),
+    snapshot: () => ({ mode: config.mode, phase, ready, restored, diagnostics: structuredClone(diagnostics), problems: [...problems] }),
   }
 }
