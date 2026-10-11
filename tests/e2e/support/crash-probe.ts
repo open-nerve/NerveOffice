@@ -5,8 +5,8 @@
 // 两个槽位里取最新的）、解压，按序号逐字节比较，另读写入者的高水位；取走比对镜像留在库里的提示（读出之后清除）。
 // 同一页另挂发件箱的浏览器层探针（地址另带 outboxProbe，support/outbox-probe.ts）：读、改镜像的槽位文件，删用例用户的镜像目录。
 // E2E 这边看不到 web 的类型，这里声明用到的部分（与探针的写法相同）。
-// 打开的是一份不存在的文档：页面只确认会话、说明"内容不存在"，不建编辑器（同 support/outbox-probe.ts），所以要先登录；重开时走 Cookie 的
-// restore（同一次登录接着有效）。用到它的用例打上 @test-build：外部模式测生产镜像，里面没有探针
+// 打开不带文档身份的编辑器入口（同 support/outbox-probe.ts），只挂探针，不启动文档恢复读取。真实文档的 404 在 P3 会打开本机库，
+// 抢先消耗删库观察，不能再当空白页。调用前登录，重开时走 Cookie restore（同一次登录接着有效）。用例打上 @test-build：生产镜像没有探针
 import type { Page } from '@playwright/test'
 import type { PersistentLaunch } from './browser-crash.ts'
 import type { DraftKey, ProbeCorruption, ProbeSlot, RecoveryNotice, WriterIdentity } from './outbox-probe.ts'
@@ -134,7 +134,7 @@ const REGISTER_ATTEMPTS = 5
 const REGISTER_RETRY_MS = 600
 
 /**
- * 在这次启动上挂好信号的绑定函数，打开编辑器页（一份不存在的文档，地址带 crashProbe 与 outboxProbe），等两个探针挂上，交给崩溃探针这次启动用的
+ * 在这次启动上挂好信号的绑定函数，打开无文档身份的编辑器入口（地址带 crashProbe 与 outboxProbe），等两个探针挂上，交给崩溃探针这次启动用的
  * （建写入管道、登记写入者——登记之前管道先比对镜像，删库之后从镜像写回；库比镜像新时补写镜像）。每次启动调用一次（绑定只能注册一次）；要已经登录。
  * 再登记时交回的仍是第一次登记时看到的库（在不在）
  */
@@ -146,7 +146,7 @@ export async function openCrashProbe(launch: PersistentLaunch, setup: CrashSetup
     current?.()
   })
   const { page } = launch
-  await page.goto(`/documents/${randomUUID()}?crashProbe&outboxProbe`)
+  await page.goto('/editor.html?crashProbe&outboxProbe')
   await expect.poll(async () => page.evaluate(name => (window as unknown as ProbeWindow)[name] !== undefined && window.__nerveOutboxProbe !== undefined, CRASH_PROBE_GLOBAL), { message: '页面里没有崩溃用例与发件箱的探针：要跑测试构建（web 的 build:e2e），地址带 crashProbe 与 outboxProbe，并且已经登录' }).toBe(true)
   await options.beforeRegister?.(page)
   const prepare = async (): Promise<CrashProbeRegistered | undefined> => page.evaluate(async ({ name, setup }) => (window as unknown as ProbeWindow)[name]?.prepare(setup), { name: CRASH_PROBE_GLOBAL, setup })
