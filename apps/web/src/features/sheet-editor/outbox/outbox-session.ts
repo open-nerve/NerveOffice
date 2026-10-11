@@ -1,8 +1,9 @@
 // 一次编辑会话的持久写入资格。宿主只管放置；此处唯一负责暂停、核对租约和登记，调用方拿不到绕过资格检查的 DraftWriter。
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { MirrorStatus } from '../../../shared/outbox/draft-mirror.ts'
+import type { DraftObservation } from '../../../shared/outbox/draft-observation.ts'
 import type { DraftKey, InFlightSave } from '../../../shared/outbox/draft-record.ts'
-import type { CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, OpenedRecord, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { AdoptionCapture, CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, ObservedRemoveResult, ObserveResult, OpenedRecord, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../../shared/outbox/local-key.ts'
 import type { PersistOutcome } from '../../../shared/outbox/storage-status.ts'
@@ -12,6 +13,7 @@ import type { DraftMemoryReason } from '../working-draft.ts'
 import type { OutboxHost } from './outbox-host.ts'
 import { describeFailure } from '../../../shared/outbox/failure.ts'
 import { requestPersistence } from '../../../shared/outbox/storage-status.ts'
+import { isSameWriter } from '../../../shared/outbox/writer-fence.ts'
 import { createOutboxHost } from './outbox-host.ts'
 
 /** 准备结果只保留事实；登记暂时读出的正文交还 GC，不能留在 state 或已完成的 ready Promise 里。 */
@@ -25,6 +27,7 @@ export type OutboxPreparation
 
 export type OutboxSessionState = OutboxPreparation | { readonly kind: 'preparing' }
 export type SessionCapture = Omit<CaptureToWrite, 'key' | 'writer' | 'adoptSeq'>
+export type SessionAdoption = Omit<AdoptionCapture, 'key' | 'writer'>
 
 export interface OutboxSession {
   /** 初次准备的结果；对象同步返回，使准备过程也可暂停/销毁。 */
@@ -39,6 +42,11 @@ export interface OutboxSession {
   readonly read: () => Promise<DraftRead>
   /** 宿主失效时临时建一只读宿主；不登记/force、不改变写入资格，读完即关。内容身份仍由来源核对。 */
   readonly readRecovered: () => Promise<DraftRead>
+  /** 显式恢复模式在登记后观察，普通写入仍关闭。凭证只属于本次会话/宿主，不接受复制字段。 */
+  readonly observeRecovery: () => Promise<ObserveResult>
+  readonly adopt: (observation: DraftObservation, capture: SessionAdoption) => Promise<CaptureWritten>
+  /** 旧请求已确认、放弃等决定后的条件清理；成功后登记已成墓碑，需重新准备才能编辑。 */
+  readonly removeRecovery: (observation: DraftObservation) => Promise<ObservedRemoveResult>
   readonly seedDigest: (seed: DedupeKey | undefined) => Promise<void>
   readonly setKey: (key: LocalKeyHandle | undefined) => Promise<KeyChange>
   /** 原写入资格仍有效时在原宿主取新钥，保留其重封缓存；没有可续用宿主才交回 no-host。 */
@@ -53,6 +61,7 @@ export interface OutboxSession {
 
 export interface OutboxSessionOptions {
   readonly enabled: boolean
+  readonly recoverExisting?: boolean
   readonly key: DraftKey
   readonly writeEpoch: number | (() => number)
   readonly newWriterId: () => string
@@ -69,6 +78,7 @@ interface PreparedHost {
   readonly host: OutboxHost
   readonly writer: WriterIdentity
   installedKey: LocalKeyHandle | undefined
+  recovering?: boolean
 }
 
 interface PreparationRun {
@@ -111,6 +121,9 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   let recoveringAllowed = true
   let persistenceRequested = false
   let persistence: PersistOutcome | undefined
+  let recoveryObservation: DraftObservation | undefined
+  let recoverySerial = 0
+  let recoveryBusy: PreparedHost | undefined
   let initial: Promise<OutboxPreparation>
   const closed = new WeakSet<OutboxHost>()
   const recoveries = new Map<AbortController, OutboxHost | undefined>()
@@ -143,7 +156,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     if (!live())
       return
     const epoch = writeEpoch()
-    if ((pending !== undefined && pending.writeEpoch !== epoch) || (state.kind === 'ready' && active !== undefined && active.writer.writeEpoch !== epoch)) {
+    if ((pending !== undefined && pending.writeEpoch !== epoch) || ((state.kind === 'ready' || active?.recovering === true) && active !== undefined && active.writer.writeEpoch !== epoch)) {
       const lastDraftSeq = state.kind === 'ready' || state.kind === 'memory' ? state.lastDraftSeq : undefined
       suspended = true
       stop({ kind: 'memory', reason: 'fenced', ...(lastDraftSeq === undefined ? {} : { lastDraftSeq }) })
@@ -197,6 +210,14 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   function stop(result: OutboxPreparation): void {
     generation += 1
     keyChange += 1
+    recoveryObservation = undefined
+    recoverySerial += 1
+    recoveryBusy = undefined
+    // 恢复尚未成为普通内容来源，原件仍在库里。关掉宿主并作废观察，避免暂停后排队的接手才开始提交。
+    if (active?.recovering === true) {
+      close(active.host)
+      active = undefined
+    }
     if (pending !== undefined) {
       pending.stopped = result
       pending.controller.abort()
@@ -271,7 +292,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       if (registered.kind === 'registered') {
         if (registered.existing !== undefined) {
           const existing = registered.existing.kind === 'draft' ? { kind: 'draft' as const, meta: registered.existing.meta } : registered.existing
-          return finish(run, { kind: 'memory', reason: 'existing-draft', existing, lastDraftSeq: registered.lastDraftSeq })
+          return finish(run, { kind: 'memory', reason: 'existing-draft', existing, lastDraftSeq: registered.lastDraftSeq }, options.recoverExisting === true ? { host, writer, installedKey: key, recovering: true } : undefined)
         }
         return finish(run, { kind: 'ready', writer, lastDraftSeq: registered.lastDraftSeq, mirror: registered.mirror, hostKind: host.kind }, { host, writer, installedKey: key })
       }
@@ -287,6 +308,9 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   async function begin(verify: boolean): Promise<OutboxPreparation> {
     close(active?.host)
     active = undefined
+    recoveryObservation = undefined
+    recoverySerial += 1
+    recoveryBusy = undefined
     suspended = false
     recoveringAllowed = true
     state = { kind: 'preparing' }
@@ -311,6 +335,27 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     if (!live() || suspended || state.kind !== 'ready' || active?.host.broken() !== false || active.installedKey === undefined || active.installedKey !== options.keeper.current())
       return undefined
     return active
+  }
+
+  function recoveryTarget(): PreparedHost | undefined {
+    checkEpoch()
+    if (!live() || suspended || options.recoverExisting !== true || state.kind !== 'memory' || state.reason !== 'existing-draft' || active?.recovering !== true)
+      return undefined
+    if (active.host.broken() || active.installedKey === undefined || active.installedKey !== options.keeper.current()) {
+      const reason = active.host.broken() ? 'worker-failed' : 'no-key'
+      stop({ kind: 'memory', reason })
+      return undefined
+    }
+    return active
+  }
+
+  function claimRecovery(observation: DraftObservation): PreparedHost | undefined {
+    const target = recoveryTarget()
+    if (target === undefined || recoveryBusy !== undefined || recoveryObservation !== observation)
+      return undefined
+    recoveryObservation = undefined
+    recoveryBusy = target
+    return target
   }
 
   async function withFence<T extends { readonly kind: string }>(target: PreparedHost, work: () => Promise<T>): Promise<T> {
@@ -378,6 +423,67 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       if (!live() || active === undefined || active.host.broken())
         return { kind: 'failed', error: INACTIVE }
       return active.host.writer.read(options.key)
+    },
+    observeRecovery: async () => {
+      const target = recoveryTarget()
+      if (target === undefined || recoveryBusy !== undefined)
+        return { kind: 'failed', error: INACTIVE }
+      recoveryObservation = undefined
+      const serial = ++recoverySerial
+      const started = generation
+      const result = await target.host.writer.observe(options.key)
+      if (serial !== recoverySerial || started !== generation || recoveryTarget() !== target)
+        return { kind: 'failed', error: INACTIVE }
+      if (result.kind === 'observed') {
+        if (result.writer === undefined || !isSameWriter(result.writer, target.writer) || result.observation.key.userId !== options.key.userId || result.observation.key.documentId !== options.key.documentId) {
+          stop({ kind: 'memory', reason: 'fenced' })
+          return { kind: 'failed', error: INACTIVE }
+        }
+        recoveryObservation = Object.freeze({ id: result.observation.id, key: Object.freeze({ ...result.observation.key }) })
+        return { ...result, observation: recoveryObservation }
+      }
+      return result
+    },
+    adopt: async (observation, capture) => {
+      const target = claimRecovery(observation)
+      if (target === undefined)
+        return { kind: 'failed', error: INACTIVE, gzip: null }
+      const started = generation
+      const result = await target.host.writer.adopt(observation, { ...capture, key: options.key, writer: target.writer })
+      if (recoveryBusy === target)
+        recoveryBusy = undefined
+      if (started !== generation || recoveryTarget() !== target)
+        return { kind: 'failed', error: INACTIVE, gzip: 'gzip' in result ? result.gzip : null }
+      if (result.kind === 'written') {
+        target.recovering = false
+        state = { kind: 'ready', writer: target.writer, lastDraftSeq: capture.draftSeq, mirror: result.mirror, hostKind: target.host.kind }
+        notify()
+      }
+      else if (result.kind === 'fenced') {
+        stop({ kind: 'memory', reason: 'fenced' })
+      }
+      else {
+        // 未提交的配额/临时失败没有消费原观察；内存退路在真实云端确认后仍须条件清理那份原件。
+        recoveryObservation = observation
+      }
+      return result
+    },
+    removeRecovery: async (observation) => {
+      const target = claimRecovery(observation)
+      if (target === undefined)
+        return { kind: 'failed', error: INACTIVE }
+      const started = generation
+      const result = await target.host.writer.removeObserved(observation)
+      if (recoveryBusy === target)
+        recoveryBusy = undefined
+      if (started === generation && recoveryTarget() === target) {
+        if (result.kind === 'removed' || result.kind === 'absent' || result.kind === 'changed')
+          stop({ kind: 'memory', reason: 'fenced' })
+        else
+          recoveryObservation = observation
+      }
+      // 库已删除的事实不因之后会话失效而改成“未删除”；页面仍按自己的恢复代次忽略旧结果。
+      return result
     },
     readRecovered: async () => {
       if (!live() || !recoveringAllowed || !options.enabled || !(options.supported ?? supported)())

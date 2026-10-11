@@ -1,6 +1,6 @@
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { InFlightSave } from '../../../shared/outbox/draft-record.ts'
-import type { KeyChange, OpenedRecord, RegisterResult } from '../../../shared/outbox/draft-writer.ts'
+import type { CaptureWritten, KeyChange, ObservedRemoveResult, ObserveResult, OpenedRecord, RegisterResult } from '../../../shared/outbox/draft-writer.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../../shared/outbox/local-key.ts'
 import type { PersistOutcome } from '../../../shared/outbox/storage-status.ts'
 import type { LeaseVerdict } from '../edit-lease.ts'
@@ -14,7 +14,7 @@ import { settle } from '../fake-lease-clock.test-support.ts'
 import { prepareOutboxSession } from './outbox-session.ts'
 
 const DRAFT = { userId: USER_ID, documentId: DOCUMENT_ID }
-const REGISTERED: RegisterResult = { kind: 'registered', lastDraftSeq: 37, existing: undefined, mirror: { kind: 'off' } }
+const REGISTERED: Extract<RegisterResult, { kind: 'registered' }> = { kind: 'registered', lastDraftSeq: 37, existing: undefined, mirror: { kind: 'off' } }
 const SUPERSEDED: RegisterResult = { kind: 'superseded', currentEpoch: 9, sameEpoch: false }
 const KEY_SET: KeyChange = { kind: 'key-set', notResealed: [] }
 const IN_FLIGHT: InFlightSave = { requestId: WRITER_ID, clientInstanceId: CLIENT_INSTANCE_ID, localSeq: 38, sentAt: NOW }
@@ -35,12 +35,14 @@ function fakeHost() {
   const markInFlight = vi.spyOn(writer, 'markInFlight').mockResolvedValue({ kind: 'resealed' })
   const confirm = vi.spyOn(writer, 'confirm').mockResolvedValue({ kind: 'deleted' })
   const read = vi.spyOn(writer, 'read').mockResolvedValue({ kind: 'absent' })
+  const observe = vi.spyOn(writer, 'observe')
+  const adopt = vi.spyOn(writer, 'adopt').mockResolvedValue({ kind: 'written', digest: 'restored', gzip: new Uint8Array([1]), mirror: { kind: 'off' } })
   const seedDigest = vi.spyOn(writer, 'seedDigest').mockResolvedValue(undefined)
   const remove = vi.spyOn(writer, 'remove')
   const dispose = vi.spyOn(writer, 'dispose')
   let broken = false
   const host: OutboxHost = { kind: 'worker', writer, broken: () => broken, dispose: () => writer.dispose() }
-  return { host, register, setKey, write, markInFlight, confirm, read, seedDigest, remove, dispose, break: () => {
+  return { host, register, setKey, write, markInFlight, confirm, read, observe, adopt, seedDigest, remove, dispose, break: () => {
     broken = true
   } }
 }
@@ -79,6 +81,187 @@ async function harness() {
 function capture() {
   return { draftSeq: 38, baseRevision: 12, writtenBy: CLIENT_INSTANCE_ID, format: sampleMeta().format, formulasPending: false, inFlight: null, bytes: new TextEncoder().encode('snapshot'), dedupe: true }
 }
+
+describe('恢复会话的显式接手资格', () => {
+  const existing: OpenedRecord = { kind: 'draft', meta: sampleMeta(), gzip: new Uint8Array([1]) }
+  const observation = { key: DRAFT, id: 'observed-in-host' }
+  const observed: ObserveResult = { kind: 'observed', observation, record: existing, writer: { ...DRAFT, writeEpoch: 3, writerId: `${WRITER_ID}-1`, lastDraftSeq: 37, registeredAt: NOW } }
+  const adoption = () => {
+    const { inFlight: _inFlight, dedupe: _dedupe, ...rest } = capture()
+    return rest
+  }
+
+  async function recovery(overrides: Partial<OutboxSessionOptions> = {}) {
+    const h = await harness()
+    h.local.register.mockResolvedValue({ ...REGISTERED, existing })
+    h.local.observe.mockResolvedValue(observed)
+    const session = h.start({ recoverExisting: true, ...overrides })
+    expect(await session.ready()).toMatchObject({ kind: 'memory', reason: 'existing-draft' })
+    return { h, session }
+  }
+
+  it('显式恢复保留宿主但不开放普通写入；实际接手成功之后才进入 ready', async () => {
+    const { h, session } = await recovery()
+    expect(h.local.dispose).not.toHaveBeenCalled()
+    expect(await session.write(capture())).toMatchObject({ kind: 'failed' })
+    expect(await session.markInFlight(IN_FLIGHT)).toMatchObject({ kind: 'failed' })
+    expect(await session.confirm(37, 13)).toMatchObject({ kind: 'failed' })
+    expect(h.local.write).not.toHaveBeenCalled()
+    const result = await session.observeRecovery()
+    if (result.kind !== 'observed')
+      throw new Error('缺少观察')
+    expect(Object.isFrozen(result.observation)).toBe(true)
+    expect(Object.isFrozen(result.observation.key)).toBe(true)
+    expect(await session.adopt(result.observation, adoption())).toMatchObject({ kind: 'written' })
+    expect(h.local.adopt).toHaveBeenCalledWith(result.observation, { ...adoption(), key: DRAFT, writer: { writeEpoch: 3, writerId: `${WRITER_ID}-1` } })
+    expect(session.view()).toMatchObject({ kind: 'ready', lastDraftSeq: 38 })
+    expect(await session.write({ ...capture(), draftSeq: 39 })).toMatchObject({ kind: 'written' })
+    expect(h.local.write).toHaveBeenCalledTimes(1)
+  })
+
+  it('没有显式模式、没有观察、复制或重用凭证都不能接手', async () => {
+    const { h, session } = await recovery()
+    expect(await session.adopt(observation, adoption())).toMatchObject({ kind: 'failed' })
+    const result = await session.observeRecovery()
+    if (result.kind !== 'observed')
+      throw new Error('缺少观察')
+    expect(await session.adopt({ ...result.observation }, adoption())).toMatchObject({ kind: 'failed' })
+    expect(h.local.adopt).not.toHaveBeenCalled()
+    expect(await session.adopt(result.observation, adoption())).toMatchObject({ kind: 'written' })
+    expect(await session.adopt(result.observation, adoption())).toMatchObject({ kind: 'failed' })
+    const ordinary = await recovery({ recoverExisting: false })
+    expect(ordinary.h.local.dispose).toHaveBeenCalledTimes(1)
+    expect(await ordinary.session.observeRecovery()).toMatchObject({ kind: 'failed' })
+  })
+
+  it.each(['pause', 'dispose', 'key', 'epoch', 'ended', 'broken'] as const)('观察尚未回来时发生 %s：旧结果不再交出操作资格', async (change) => {
+    let epoch = 3
+    const { h, session } = await recovery({ writeEpoch: () => epoch })
+    const delayed = deferred<ObserveResult>()
+    h.local.observe.mockReturnValue(delayed.promise)
+    const result = session.observeRecovery()
+    if (change === 'pause')
+      session.suspend()
+    if (change === 'dispose')
+      session.dispose()
+    if (change === 'key')
+      h.changeKey(undefined)
+    if (change === 'epoch')
+      epoch = 4
+    if (change === 'ended')
+      h.end()
+    if (change === 'broken')
+      h.local.break()
+    delayed.resolve(observed)
+    expect(await result).toMatchObject({ kind: 'failed' })
+    expect(session.view().kind).not.toBe('ready')
+    expect(await session.adopt(observation, adoption())).toMatchObject({ kind: 'failed' })
+    expect(h.local.adopt).not.toHaveBeenCalled()
+    expect(h.local.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['pause', 'dispose', 'key', 'epoch', 'ended', 'broken'] as const)('接手尚未回来时发生 %s：迟到的 written 不开放编辑资格', async (change) => {
+    let epoch = 3
+    const { h, session } = await recovery({ writeEpoch: () => epoch })
+    const original = await session.observeRecovery()
+    if (original.kind !== 'observed')
+      throw new Error('缺少观察')
+    const delayed = deferred<CaptureWritten>()
+    h.local.adopt.mockReturnValue(delayed.promise)
+    const result = session.adopt(original.observation, adoption())
+    expect(await session.adopt(original.observation, adoption())).toMatchObject({ kind: 'failed' })
+    if (change === 'pause')
+      session.suspend()
+    if (change === 'dispose')
+      session.dispose()
+    if (change === 'key')
+      h.changeKey(undefined)
+    if (change === 'epoch')
+      epoch = 4
+    if (change === 'ended')
+      h.end()
+    if (change === 'broken')
+      h.local.break()
+    delayed.resolve({ kind: 'written', gzip: new Uint8Array([1]), digest: 'body', mirror: { kind: 'off' } })
+    expect(await result).toMatchObject({ kind: 'failed' })
+    expect(session.view().kind).not.toBe('ready')
+    expect(h.local.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('较新的观察使晚到的旧观察失效，外来写入者不能取得本会话接手资格', async () => {
+    const { h, session } = await recovery()
+    const delayed = deferred<ObserveResult>()
+    h.local.observe.mockReturnValueOnce(delayed.promise)
+    const old = session.observeRecovery()
+    const latest = await session.observeRecovery()
+    delayed.resolve(observed)
+    expect(await old).toMatchObject({ kind: 'failed' })
+    if (latest.kind !== 'observed')
+      throw new Error('缺少新观察')
+    expect(await session.adopt(latest.observation, adoption())).toMatchObject({ kind: 'written' })
+    const other = await recovery()
+    other.h.local.observe.mockResolvedValue({ ...observed, writer: { ...DRAFT, writeEpoch: 4, writerId: 'other', lastDraftSeq: 37, registeredAt: NOW } })
+    expect(await other.session.observeRecovery()).toMatchObject({ kind: 'failed' })
+    expect(other.session.view()).toMatchObject({ kind: 'memory', reason: 'fenced' })
+  })
+
+  it.each(['quota', 'no-key', 'fenced'] as const)('接手失败 %s 保留原件路径，不自动重试、force 或开放普通写入', async (kind) => {
+    const { h, session } = await recovery()
+    const result = await session.observeRecovery()
+    if (result.kind !== 'observed')
+      throw new Error('缺少观察')
+    h.local.adopt.mockResolvedValue(kind === 'fenced' ? { kind, reason: 'changed', gzip: new Uint8Array([1]) } : { kind, gzip: new Uint8Array([1]) })
+    expect(await session.adopt(result.observation, adoption())).toMatchObject({ kind })
+    expect(session.view().kind).not.toBe('ready')
+    expect(await session.write(capture())).toMatchObject({ kind: 'failed' })
+    expect(h.local.adopt).toHaveBeenCalledTimes(1)
+    expect(h.local.register).toHaveBeenCalledTimes(1)
+  })
+
+  it.each<ObservedRemoveResult>([{ kind: 'quota' }, { kind: 'unavailable', reason: 'denied' }, { kind: 'failed', error: { name: 'AbortError', message: 'aborted' } }])('条件清理临时失败后原凭证可以重试：$kind', async (failure) => {
+    const { h, session } = await recovery()
+    const result = await session.observeRecovery()
+    if (result.kind !== 'observed')
+      throw new Error('缺少观察')
+    const remove = vi.spyOn(h.local.host.writer, 'removeObserved').mockResolvedValueOnce(failure).mockResolvedValue({ kind: 'removed', mirror: { kind: 'removed' } })
+    expect(await session.removeRecovery(result.observation)).toEqual(failure)
+    expect(await session.removeRecovery(result.observation)).toEqual({ kind: 'removed', mirror: { kind: 'removed' } })
+    expect(remove).toHaveBeenCalledTimes(2)
+  })
+
+  it('清理失败晚于暂停/新会话时不恢复旧凭证', async () => {
+    const { h, session } = await recovery()
+    const result = await session.observeRecovery()
+    if (result.kind !== 'observed')
+      throw new Error('缺少观察')
+    const pending = deferred<ObservedRemoveResult>()
+    const remove = vi.spyOn(h.local.host.writer, 'removeObserved').mockReturnValue(pending.promise)
+    const clearing = session.removeRecovery(result.observation)
+    session.suspend()
+    await session.resume()
+    pending.resolve({ kind: 'quota' })
+    expect(await clearing).toEqual({ kind: 'quota' })
+    expect(await session.removeRecovery(result.observation)).toMatchObject({ kind: 'failed', error: { name: 'OutboxSessionInactive' } })
+    expect(remove).toHaveBeenCalledOnce()
+  })
+
+  it('临时接手失败后仍可凭原观察条件清理；已删除事实包含镜像失败，普通写入资格关闭', async () => {
+    const { h, session } = await recovery()
+    const result = await session.observeRecovery()
+    if (result.kind !== 'observed')
+      throw new Error('缺少观察')
+    h.local.adopt.mockResolvedValue({ kind: 'quota', gzip: new Uint8Array([1]) })
+    expect(await session.adopt(result.observation, adoption())).toMatchObject({ kind: 'quota' })
+    const remove = vi.spyOn(h.local.host.writer, 'removeObserved').mockResolvedValue({ kind: 'removed', mirror: { kind: 'busy' } })
+    expect(await session.removeRecovery({ ...result.observation })).toMatchObject({ kind: 'failed' })
+    expect(remove).not.toHaveBeenCalled()
+    expect(await session.removeRecovery(result.observation)).toEqual({ kind: 'removed', mirror: { kind: 'busy' } })
+    expect(session.view()).toMatchObject({ kind: 'memory', reason: 'fenced' })
+    expect(h.local.dispose).toHaveBeenCalledTimes(1)
+    expect(await session.removeRecovery(result.observation)).toMatchObject({ kind: 'failed' })
+    expect(remove).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('存储事实订阅', () => {
   it('准备和持久保存申请分别通知；申请迟到不阻挡 ready，也不重复申请', async () => {

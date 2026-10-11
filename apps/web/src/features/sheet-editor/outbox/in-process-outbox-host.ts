@@ -54,6 +54,9 @@ export function createInProcessOutboxHost(writer: DraftWriter, clock: Pick<Lease
     markInFlight: async (...args) => call('mark-in-flight', async () => writer.markInFlight(...args)),
     confirm: async (...args) => call('confirm', async () => writer.confirm(...args)),
     read: async (...args) => call('read', async () => writer.read(...args)),
+    observe: async (...args) => call('observe', async () => writer.observe(...args)),
+    adopt: async (...args) => call('adopt', async () => writer.adopt(...args)),
+    removeObserved: async (...args) => call('remove-observed', async () => writer.removeObserved(...args)),
     remove: async (...args) => call('remove', async () => writer.remove(...args)),
     setKey: async (...args) => call('set-key', async () => writer.setKey(...args)),
     seedDigest: async (...args) => {

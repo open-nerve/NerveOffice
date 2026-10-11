@@ -4,13 +4,14 @@ import { createWorkingDraftSource } from './working-draft-source.ts'
 
 export function createMemoryWorkingDraft(options: WorkingDraftOptions & { readonly reason: DraftMemoryReason }): WorkingDraft {
   const local = { kind: 'memory' as const, reason: options.reason }
+  const reportError = options.reportError
   let disposed = false
   return createWorkingDraftSource(options, {
     write: async ({ ref, bytes }) => {
       const digest = sha256Hex(bytes).catch((error: unknown) => {
         try {
           if (!disposed)
-            options.reportError(error)
+            reportError(error)
         }
         catch {
           // 摘要和上报失败均不妨碍已有的 gzip 上传。

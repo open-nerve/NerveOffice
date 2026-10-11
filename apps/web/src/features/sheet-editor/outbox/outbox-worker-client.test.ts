@@ -137,6 +137,58 @@ function loopback(): { readonly client: OutboxWorkerClient, readonly fake: FakeD
   return { client: createOutboxWorkerClient({ create: () => worker, clock: fakeLeaseClock().clock, requestTimeoutMs: TIMEOUT_MS }), fake }
 }
 
+describe('恢复操作经过真实处理器与结构化转移', () => {
+  it('观察正文转移不破坏内部凭证；接手捕获转移、新序号落盘与条件删除走完整链路', async () => {
+    const { client, fake } = loopback()
+    await client.ready()
+    await client.setKey(await localKey(2))
+    await client.register(DRAFT, ME, false)
+    expect(await client.write(capture(7, 'old body'))).toMatchObject({ kind: 'written' })
+    const nextWriter = { writeEpoch: 4, writerId: 'next-writer' }
+    expect(await client.register(DRAFT, nextWriter, false)).toMatchObject({ kind: 'registered' })
+    const observed = await client.observe(DRAFT)
+    if (observed.kind !== 'observed' || observed.record.kind !== 'draft')
+      throw new Error('缺少可读观察')
+    expect(textOf(await gunzipBytes(observed.record.gzip))).toBe('old body')
+    structuredClone(observed.record.gzip, { transfer: [observed.record.gzip.buffer] })
+    expect(observed.record.gzip.byteLength).toBe(0)
+    const { inFlight: _inFlight, dedupe: _dedupe, adoptSeq: _adoptSeq, ...adoption } = capture(8, 'recovered body', { writer: nextWriter })
+    const adopting = client.adopt(observed.observation, adoption)
+    await settle()
+    expect(adoption.bytes.byteLength).toBe(0)
+    const result = await adopting
+    expect(result).toMatchObject({ kind: 'written' })
+    if (result.kind !== 'written')
+      throw new Error('缺少接手结果')
+    expect(textOf(await gunzipBytes(result.gzip))).toBe('recovered body')
+    expect(fake.rawWriter(DRAFT)).toMatchObject({ ...nextWriter, lastDraftSeq: 8 })
+    expect(await client.removeObserved(observed.observation)).toEqual({ kind: 'changed' })
+    const current = await client.observe(DRAFT)
+    if (current.kind !== 'observed')
+      throw new Error('缺少当前观察')
+    expect(await client.removeObserved(current.observation)).toEqual({ kind: 'removed', mirror: { kind: 'unsupported' } })
+    expect(fake.rawDraft(DRAFT)).toBeUndefined()
+    client.dispose()
+  })
+
+  it.each(['timeout', 'dispose'] as const)('恢复请求在 %s 后全部结束，迟到回复不能复活宿主', async (stop) => {
+    const { worker, client, time } = await scripted()
+    const observation = { key: DRAFT, id: 'observation' }
+    const { inFlight: _inFlight, dedupe: _dedupe, adoptSeq: _adoptSeq, ...adoption } = capture(8, 'body')
+    const requests = [client.observe(DRAFT), client.adopt(observation, adoption), client.removeObserved(observation)]
+    await settle()
+    if (stop === 'timeout')
+      await time.advance(TIMEOUT_MS)
+    else
+      client.dispose()
+    for (const result of await Promise.all(requests))
+      expect(result).toMatchObject({ kind: 'failed' })
+    worker.reply(worker.idOf('remove-observed'), { kind: 'removed', mirror: { kind: 'removed' } })
+    expect(await client.observe(DRAFT)).toMatchObject({ kind: 'failed' })
+    expect(worker.terminated).toBe(1)
+  })
+})
+
 describe('握手（M4-P1 设计 §3.4.8）', () => {
   it('一创建就发 hello（带协议版本；空定时器默认开着）；回 ready 之后 ready() 交回 ready', async () => {
     const { worker, client } = await scripted()

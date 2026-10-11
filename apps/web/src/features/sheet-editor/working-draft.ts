@@ -98,4 +98,6 @@ export interface WorkingDraftOptions {
   readonly format: ContentFormat
   readonly writtenBy: string
   readonly reportError: (error: unknown) => void
+  /** 经恢复判定/打开自检后的初值；由来源自己创建未确认引用，不继承旧请求或 SDK 的持久序号。 */
+  readonly initialCapture?: Omit<DraftCapture, 'dedupe'>
 }

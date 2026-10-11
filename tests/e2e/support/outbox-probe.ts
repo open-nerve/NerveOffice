@@ -13,6 +13,20 @@ export interface DraftKey {
   readonly documentId: string
 }
 
+export interface DraftObservation {
+  readonly key: DraftKey
+  readonly id: string
+}
+
+export interface ProbeWriterRecord extends DraftKey, WriterIdentity {
+  readonly lastDraftSeq: number
+  readonly registeredAt: number
+}
+
+export type ProbeObserved = { readonly kind: 'observed', readonly observation: DraftObservation, readonly record: ProbeRead | { readonly kind: 'absent' }, readonly writer: ProbeWriterRecord | undefined } | ProbeProblem
+export type PipelineObserved = { readonly kind: 'observed', readonly observation: DraftObservation, readonly record: PipelineOpened | { readonly kind: 'absent' }, readonly writer: ProbeWriterRecord | undefined } | ProbeProblem
+export type ProbeAdoption = Omit<ProbeCapture, 'inFlight' | 'dedupe' | 'adoptSeq'>
+
 export interface ContentFormat {
   readonly clientBuild: string
   readonly univerVersion: string
@@ -233,6 +247,9 @@ export interface ProbePipeline {
   readonly setKey: (id: number, key: 'probe' | 'none') => Promise<PipelineKeyChange>
   readonly register: (id: number, key: DraftKey, writer: WriterIdentity, force: boolean) => Promise<PipelineRegistered>
   readonly write: (id: number, capture: ProbeCapture) => Promise<PipelineWritten>
+  readonly observe: (id: number, key: DraftKey) => Promise<PipelineObserved>
+  readonly adopt: (id: number, observation: DraftObservation, capture: ProbeAdoption) => Promise<PipelineWritten>
+  readonly removeObserved: (id: number, observation: DraftObservation) => Promise<{ readonly kind: 'removed', readonly mirror: { readonly kind: 'removed' | 'busy' | 'unsupported' | 'quota' } | { readonly kind: 'failed', readonly error: ProbeError } } | { readonly kind: 'changed' | 'absent' } | ProbeProblem>
   readonly markInFlight: (id: number, key: DraftKey, writer: WriterIdentity, inFlight: InFlightSave) => Promise<PipelineResealed>
   readonly confirm: (id: number, key: DraftKey, writer: WriterIdentity, confirmedSeq: number, revision: number) => Promise<PipelineConfirmed>
   readonly read: (id: number, key: DraftKey) => Promise<PipelineOpened | { readonly kind: 'absent' } | ProbeProblem>
@@ -270,6 +287,11 @@ export interface OutboxProbe {
   readonly register: (key: DraftKey, writer: WriterIdentity, options: { readonly now: number, readonly force: boolean }) => Promise<ProbeRegisterOutcome>
   readonly write: (input: ProbeDraftInput, options?: { readonly adoptSeq?: number }) => Promise<ProbeWriteOutcome>
   readonly startWrite: (input: ProbeDraftInput) => number
+  readonly observe: (key: DraftKey) => Promise<ProbeObserved>
+  readonly adopt: (observation: DraftObservation, input: ProbeDraftInput) => Promise<ProbeWriteOutcome>
+  readonly startAdopt: (observation: DraftObservation, input: ProbeDraftInput) => number
+  readonly removeObserved: (observation: DraftObservation, now: number) => Promise<{ readonly kind: 'removed' | 'changed' | 'absent' } | ProbeProblem>
+  readonly abortNextDraftDelete: () => void
   readonly settled: (operation: number) => Promise<ProbeWriteOutcome>
   readonly replace: (input: ProbeDraftInput) => Promise<ProbeWriteOutcome>
   readonly confirm: (key: DraftKey, writer: WriterIdentity, confirmedSeq: number, rebased?: ProbeDraftInput) => Promise<ProbeConfirmOutcome>
