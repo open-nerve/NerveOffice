@@ -19,7 +19,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { sampleWithoutImagesFor } from '../../support/read-only-sample.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, reloadAndEnterEditing, resourceOf, ribbon, saveAndCapture, saveButton, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditButton, exitEditing, isSaveRequest, lostNotice, openAndEnterEditing, reloadAndEnterEditing, resourceOf, ribbon, saveAndCapture, saveButton, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess, waitForLostToReading, wouldPromptOnLeave } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -322,6 +322,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await context.setOffline(true)
     await typeInCell(page, 'A1', 'offline')
     await expect(saveStatus(page)).toHaveText('已离线，等待同步')
+    await expect(saveButton(page)).toBeDisabled()
     // 照常捕获（修改之后 1 秒），过了上传的静默也不上传
     await page.clock.runFor(1_000)
     await skipAhead(page, 4_000)
@@ -333,6 +334,8 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     await typeInCell(page, 'A2', 'later')
     await skipAhead(page, 500)
     await context.setOffline(false)
+    // 先在冻结时钟外等真实编辑许可恢复、自动保存任务排好，再运行原时刻的计时器；避免续租回包落在 runFor(0) 内，把新任务排到下一毫秒。
+    await expect(saveButton(page)).toBeEnabled()
     await expect.poll(async () => uploadsOf(await logNow(page))).toMatchObject([{ trigger: 'online', startedAt: start + 5_500, seq: 1, outcome: { kind: 'saved' } }])
     // 后来的那一处照常：停 1 秒捕获、2 秒上传
     await skipAhead(page, 500)
@@ -559,6 +562,7 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     expect(writes.saves).toHaveLength(2)
     // 副本照常：是本页的内容（两处都在）
     await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
+    await waitForLostToReading(page)
     const notice = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })
     const link = notice.getByRole('link', { name: '打开副本（新标签页）', exact: true })
     await expect(link).toBeVisible()

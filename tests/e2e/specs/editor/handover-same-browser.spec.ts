@@ -12,7 +12,7 @@ import type { APIResponse, Page, Response } from '@playwright/test'
 import { createUser, editLeaseEpoch, editLeaseTakeover, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, takeOverHereButton, typeInCell, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -162,6 +162,7 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
 
     // 前一个的修改另存为副本：副本是它的内容
     await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
+    await waitForLostToReading(page)
     const copied = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })
     const link = copied.getByRole('link', { name: '打开副本（新标签页）', exact: true })
     await expect(link).toBeVisible()

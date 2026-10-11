@@ -8,7 +8,7 @@ import { setCellValue } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { currentLocalKey, diskSnapshot, localSaveOrder, observeLocalSaveOrder, readLocalDisk } from '../../support/local-draft.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -342,6 +342,7 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     await expect(lostNotice(page)).toContainText('没能另存为副本')
     expect(firstStatus).toBe(201)
     await button.click()
+    await waitForLostToReading(page)
     const notice = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })
     await expect(notice).toBeVisible()
     expect(copies).toHaveLength(2)

@@ -17,12 +17,12 @@
 // 交接成功时旧页的修改由交出前的保存或之前的自动保存存上，都按服务器上的内容断言
 import type { Page, Request } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
-import { advanceUntil, holdSaves, pauseTime, setPageHidden } from '../../support/autosave.ts'
+import { advanceTo, advanceUntil, holdSaves, pausedNow, pauseTime, setPageHidden } from '../../support/autosave.ts'
 import { CURRENT_CLIENT } from '../../support/client-format.ts'
 import { createUser, editLeaseEndReason, editLeaseEpoch, editLeaseTakeover } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
-import { blockSaves, cellOf, createSheetThroughApi, deafenHandover, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, statusRegion, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { blockSaves, cellOf, createSheetThroughApi, deafenHandover, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, statusRegion, takeOverHereButton, typeInCell, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -100,6 +100,7 @@ async function holdsDocumentLock(page: Page, documentId: string): Promise<boolea
 
 /** 另存为副本之后的说明里新文档的 id（链接在新标签页打开它） */
 async function copiedDocumentId(page: Page): Promise<string> {
+  await waitForLostToReading(page)
   const link = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' }).getByRole('link', { name: '打开副本（新标签页）', exact: true })
   await expect(link).toBeVisible()
   return (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
@@ -356,34 +357,65 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await loginThroughApi(page, person)
     const documentId = await createSheetThroughApi(page)
     await page.clock.install()
+    // 新文档的本机锁为空，首次进入编辑不需要续租确认；从打开前就扣住 PUT，避免已有心跳跨过 B 接管才回来。
+    const heartbeat = holdLeaseRenewals(page, documentId)
+    let heartbeatPending = false
+    void heartbeat.seen.then(() => {
+      heartbeatPending = true
+    })
+    await heartbeat.install()
     await openAndEnterEditing(page, documentId)
     const saves = await blockSaves(page)
     await typeInCell(page, 'A1', 'only on the first device')
 
-    await loginThroughApi(anotherDevice, person)
-    await openReader(anotherDevice, documentId)
-    await expect(editingNotice(anotherDevice)).toHaveText(ELSEWHERE)
-    const takeovers = recordTakeovers(anotherDevice, documentId)
-    await takeOverHereButton(anotherDevice).click()
-    await waitForEditorAccess(anotherDevice, 'edit')
-    expect(takeovers).toEqual(['self'])
-    expect(await editLeaseTakeover(documentId)).toBe('self')
-
-    // A 的下一次心跳得知被接管：不再申请（不续上），按真实编辑状态 sameSession=false 立即定位；后台本机 5 秒窗口不阻塞说明。
     const acquisitions: Request[] = []
     page.on('request', (request) => {
       if (isLeaseAcquisition(request, documentId))
         acquisitions.push(request)
     })
     await pauseTime(page)
-    await page.clock.fastForward(10_000)
     const lost = lostNotice(page)
-    await advanceUntil(page, async () => lost.isVisible(), '另一登录的服务端事实立即给出接管位置')
-    await expect(lost).toContainText('编辑权已失效：你在另一台设备或浏览器上接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
-    expect(await holdsDocumentLock(page, documentId)).toBe(true)
-    await page.clock.fastForward(STEAL_WAIT_MS)
-    await expect.poll(async () => holdsDocumentLock(page, documentId)).toBe(false)
-    await page.clock.resume()
+    try {
+      // 先在冻结的 A 上走到下一次心跳。已在途就不拨时间；逐段到点，避免一跳 10 秒让已扣住的请求超时。
+      await expect.poll(async () => {
+        if (!heartbeatPending)
+          await page.clock.fastForward(500)
+        return heartbeatPending
+      }, { message: 'A 的下一次心跳已扣住，等待 B 接管', intervals: [50] }).toBe(true)
+
+      // B 属于另一个上下文，它的载入、接管和重建不会推进 A 的时钟。
+      await loginThroughApi(anotherDevice, person)
+      await openReader(anotherDevice, documentId)
+      await expect(editingNotice(anotherDevice)).toHaveText(ELSEWHERE)
+      const takeovers = recordTakeovers(anotherDevice, documentId)
+      await takeOverHereButton(anotherDevice).click()
+      await waitForEditorAccess(anotherDevice, 'edit')
+      expect(takeovers).toEqual(['self'])
+      expect(await editLeaseTakeover(documentId)).toBe('self')
+
+      // A 以真实 409 得知被接管；保持冻结，直到定位 GET 发出，5 秒留锁窗口确定从这个时刻开始。
+      const takenOver = page.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+      const locating = page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+      const lostAt = await pausedNow(page)
+      heartbeat.release()
+      expect((await takenOver).status()).toBe(409)
+      await locating
+      expect(await pausedNow(page)).toBe(lostAt)
+      await advanceUntil(page, async () => {
+        expect(await pausedNow(page), '失效说明必须在 5 秒留锁窗口内出现').toBeLessThan(lostAt + STEAL_WAIT_MS)
+        return lost.isVisible()
+      }, '另一登录的服务端事实立即给出接管位置')
+      await expect(lost).toContainText('编辑权已失效：你在另一台设备或浏览器上接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
+      expect(await holdsDocumentLock(page, documentId)).toBe(true)
+      await advanceTo(page, lostAt + STEAL_WAIT_MS - 1)
+      expect(await holdsDocumentLock(page, documentId)).toBe(true)
+      await page.clock.runFor(1)
+      await expect.poll(async () => holdsDocumentLock(page, documentId)).toBe(false)
+    }
+    finally {
+      heartbeat.release()
+      await page.clock.resume()
+    }
     await waitForEditorAccess(page, 'read')
     expect(acquisitions).toEqual([])
     await saves.unblock()
