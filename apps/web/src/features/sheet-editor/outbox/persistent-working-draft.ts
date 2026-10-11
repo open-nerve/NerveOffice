@@ -261,9 +261,12 @@ export function createPersistentWorkingDraft(configuration: PersistentWorkingDra
       generation += 1
       paused = true
       changingKey = false
-      session.suspend()
-      // 内部保留只交回元数据，已完成的 Promise 不另持有正文。
-      void source.retainLatest('paused')
+      const finish = session.suspend()
+      // 接住唯一正文后释放原宿主/镜像；保留失败仍留读回退路，旧收尾不会关闭新准备的宿主。
+      void source.retainLatest('paused').then((kept) => {
+        if (kept.kind !== 'failed')
+          finish()
+      })
     },
     discardKey: async () => {
       if (disposed)

@@ -45,7 +45,7 @@ export async function observeLocalSaveOrder(page: Page): Promise<void> {
             return
           const type = this.calls.get(reply.id)
           this.calls.delete(reply.id)
-          if (type === 'register' || type === 'write' || type === 'mark-in-flight')
+          if (type === 'register' || type === 'write' || type === 'adopt' || type === 'mark-in-flight')
             events.push(`${type}:${reply.ok === true ? reply.result?.kind : 'failed'}`)
         })
       }
@@ -114,7 +114,7 @@ export async function currentLocalKey(page: Page): Promise<LocalKey> {
   return localKeySchema.parse(await response.json())
 }
 
-export function diskSnapshot(draft: DiskDraft, key: LocalKey): string {
+export function diskGzip(draft: DiskDraft, key: LocalKey): Buffer {
   const format = draft.format
   const request = draft.inFlight
   // 协议金标准顺序；独立于生产 draftAad 实现，包含所有明文元数据。
@@ -123,6 +123,9 @@ export function diskSnapshot(draft: DiskDraft, key: LocalKey): string {
   const decipher = createDecipheriv('aes-256-gcm', Buffer.from(key.key, 'base64'), Buffer.from(draft.ivHex, 'hex'), { authTagLength: 16 })
   decipher.setAAD(Buffer.from(JSON.stringify(aad)))
   decipher.setAuthTag(sealed.subarray(-16))
-  const gzip = Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()])
-  return gunzipSync(gzip).toString('utf8')
+  return Buffer.concat([decipher.update(sealed.subarray(0, -16)), decipher.final()])
+}
+
+export function diskSnapshot(draft: DiskDraft, key: LocalKey): string {
+  return gunzipSync(diskGzip(draft, key)).toString('utf8')
 }

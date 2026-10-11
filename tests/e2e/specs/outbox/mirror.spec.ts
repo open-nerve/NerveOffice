@@ -12,11 +12,15 @@
 import type { BrowserContext, Page } from '@playwright/test'
 import type { DraftKey, InFlightSave, ProbeCapture, ProbeSlot, WriterIdentity } from '../../support/outbox-probe.ts'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { createUser } from '../../support/database.ts'
-import { test as base, expect } from '../../support/fixtures.ts'
+import { recordWrites } from '../../support/autosave.ts'
+import { createUser, revisionOf } from '../../support/database.ts'
+import { test as base, chooseAutosave, expect } from '../../support/fixtures.ts'
+import { readLocalDisk } from '../../support/local-draft.ts'
+import { mirrorRecovery, recoverySnapshot, seedRecovery } from '../../support/local-recovery.ts'
 import { draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, probePipeline, removeMirrorOf, writerOf } from '../../support/outbox-probe.ts'
 import { firstPage, launchPersistentProfile, overrideQuota } from '../../support/persistent-profile.ts'
 import { loginThroughApi } from '../../support/session.ts'
+import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, openReader, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }
 
@@ -62,9 +66,17 @@ const test = base.extend<{ profile: Profile }>({
       await other.close()
     const owner = currentUserId
     currentUserId = undefined
-    if (owner !== undefined)
-      await expect.poll(async () => removeMirrorOf(page, owner), { message: '删掉用例用户的镜像目录', timeout: 10_000 }).toBe('removed')
-    await context.close()
+    try {
+      if (owner !== undefined) {
+        // 恢复场景最后停在编辑器；先离开它释放宿主，再回探针执行原清理。
+        if (!await page.evaluate(() => window.__nerveOutboxProbe !== undefined))
+          await openOutboxProbe(page)
+        await expect.poll(async () => removeMirrorOf(page, owner), { message: '删掉用例用户的镜像目录', timeout: 10_000 }).toBe('removed')
+      }
+    }
+    finally {
+      await context.close()
+    }
   },
 })
 
@@ -122,7 +134,70 @@ async function rollBackDraft(page: Page, key: DraftKey, existing: 'absent' | 'ol
   }
 }
 
+type RecoveryFailure = 'newer-mirror' | 'fallback-newer' | 'denied' | 'partial-mirror'
+
+/** 构造存储故障；测试本身始终核对同一组保护行为。 */
+async function failMirrorRecovery(page: Page, key: DraftKey, failure: RecoveryFailure): Promise<boolean> {
+  const newer = failure === 'newer-mirror' || failure === 'fallback-newer'
+  if (newer) {
+    const slots = await probePipeline(page, 'mirrorSlots', key)
+    const slot = slots[0].kind === 'valid' ? 0 : 1
+    await probePipeline(page, 'corruptSlot', key, slot, { at: 8, bytes: [99, 0] })
+    expect(await probe(page, 'remove', key, 37)).toEqual({ kind: 'removed' })
+    expect((await readLocalDisk(page, key)).draft).toBeNull()
+  }
+  let faults = 0
+  if (failure === 'fallback-newer') {
+    await page.route('**/assets/outbox.worker-*.js', async route => route.abort('failed'))
+  }
+  else if (!newer) {
+    await page.route('**/assets/outbox.worker-*.js', async (route) => {
+      const response = await route.fetch()
+      const fault = failure === 'partial-mirror' && faults === 0
+        ? `const originalRead = FileSystemSyncAccessHandle.prototype.read; let readCalls = 0; FileSystemSyncAccessHandle.prototype.read = function (...args) { if (++readCalls === 2) throw new DOMException('第二槽读取失败', 'UnknownError'); return Reflect.apply(originalRead, this, args); };`
+        : `IDBFactory.prototype.open = function () { throw new DOMException('测试禁止存储', 'SecurityError'); }; ${failure === 'partial-mirror' ? `navigator.storage.getDirectory = async function () { throw new DOMException('测试禁止镜像', 'SecurityError'); };` : ''}`
+      faults += 1
+      await route.fulfill({ response, body: `${fault}\n${await response.text()}` })
+    })
+  }
+  return newer
+}
+
 test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
+  for (const failure of ['newer-mirror', 'fallback-newer', 'denied', 'partial-mirror'] as const) {
+    test(`镜像已见原件，${failure} 不能让普通编辑绕过恢复`, async ({ profile: { page, context } }) => {
+      test.setTimeout(EDITOR_TEST_TIMEOUT)
+      await chooseAutosave(context, 'running')
+      const owner = await createUser('r-mirror')
+      currentUserId = owner.id
+      await loginThroughApi(page, owner)
+      const documentId = await createSheetThroughApi(page)
+      const h = { documentId, key: { userId: owner.id, documentId }, cloud: await savedContent(page, documentId) }
+      const recoveryNotice = page.locator('[data-slot="recovery-notice"]')
+      const seeded = await seedRecovery(page, h.key, recoverySnapshot(h.cloud.text, '仍待恢复的镜像原件'))
+      await mirrorRecovery(page, h.key, seeded)
+      const newer = await failMirrorRecovery(page, h.key, failure)
+      const writes = recordWrites(page, h.documentId)
+      await openReader(page, h.documentId)
+      await expect(recoveryNotice.getByText('暂时无法读取本机草稿，可以稍后重新检查')).toBeVisible()
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await enterEditButton(page).click()
+        await waitForEditorAccess(page, 'read', 'steady')
+        await expect(enterEditButton(page)).toBeEnabled()
+      }
+      expect(await revisionOf(h.documentId)).toBe(1)
+      expect(writes.saves).toHaveLength(0)
+      expect((await readLocalDisk(page, h.key)).draft).toEqual(newer ? null : seeded.disk)
+      const inspector = await context.newPage()
+      await openOutboxProbe(inspector)
+      const remaining = await probePipeline(inspector, 'mirrorSlots', h.key)
+      expect(remaining).toContainEqual(newer
+        ? expect.objectContaining({ kind: 'invalid', reason: 'newer-format' })
+        : expect.objectContaining({ kind: 'valid', meta: expect.objectContaining({ draftSeq: 37, writerId: seeded.input.meta.writerId }) }))
+      await inspector.close()
+    })
+  }
+
   for (const host of ['worker', 'in-process'] as const) {
     test(`跨宿主的短期互斥（${host}）：登记和清理都等待页面持有的同一把锁`, async ({ profile: { page } }) => {
       const { key } = await prepare(page, 'ob-lock')

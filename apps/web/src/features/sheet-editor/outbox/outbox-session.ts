@@ -3,7 +3,7 @@ import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { MirrorStatus } from '../../../shared/outbox/draft-mirror.ts'
 import type { DraftObservation } from '../../../shared/outbox/draft-observation.ts'
 import type { DraftKey, InFlightSave } from '../../../shared/outbox/draft-record.ts'
-import type { AdoptionCapture, CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, ObservedRemoveResult, ObserveResult, OpenedRecord, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { AdoptionCapture, CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, ObservedRemoveResult, ObserveResult, OpenedRecord, RecoveryProblem, ResealResult } from '../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../../shared/outbox/local-key.ts'
 import type { PersistOutcome } from '../../../shared/outbox/storage-status.ts'
@@ -21,7 +21,7 @@ export type ExistingDraftSummary = Exclude<OpenedRecord, { readonly kind: 'draft
 
 export type OutboxPreparation
   = | { readonly kind: 'ready', readonly writer: WriterIdentity, readonly lastDraftSeq: number, readonly mirror: MirrorStatus, readonly hostKind: OutboxHost['kind'] }
-    | { readonly kind: 'memory', readonly reason: DraftMemoryReason, readonly existing?: ExistingDraftSummary, readonly lastDraftSeq?: number, readonly keyProblem?: LocalKeyProblem, readonly problem?: WriterProblem, readonly verdict?: LeaseVerdict }
+    | { readonly kind: 'memory', readonly reason: DraftMemoryReason, readonly existing?: ExistingDraftSummary, readonly lastDraftSeq?: number, readonly keyProblem?: LocalKeyProblem, readonly problem?: RecoveryProblem, readonly verdict?: LeaseVerdict, readonly recordKnown?: true }
     | { readonly kind: 'lost', readonly verdict: Extract<LeaseVerdict, { readonly kind: 'ended' | 'superseded' }> }
     | { readonly kind: 'disposed' }
 
@@ -51,7 +51,8 @@ export interface OutboxSession {
   readonly setKey: (key: LocalKeyHandle | undefined) => Promise<KeyChange>
   /** 原写入资格仍有效时在原宿主取新钥，保留其重封缓存；没有可续用宿主才交回 no-host。 */
   readonly refreshKey: () => Promise<KeyChange | { readonly kind: 'no-host' }>
-  readonly suspend: () => void
+  /** 同步停写，返回只绑定原宿主的收尾；来源读回正文之后才调用，不影响新一轮宿主。 */
+  readonly suspend: () => () => void
   /** 同步停准备、写入和 recovery；保留原宿主供最后读回。返回的幂等收尾只关闭这个旧宿主，不能影响之后 resume 的宿主。 */
   readonly beginKeyDiscard: () => () => void
   /** 每次调用至多准备一次，不自行重试；并发调用共用正在进行的准备。 */
@@ -88,6 +89,8 @@ interface PreparationRun {
   readonly promise: Promise<OutboxPreparation>
   host: OutboxHost | undefined
   stopped: OutboxPreparation | undefined
+  /** 本轮中途已见原件；后续换钥/重登失败不抹去，不含旧钥、正文或观察凭证。 */
+  recordKnown: boolean
 }
 
 const INACTIVE: FailureDescription = { name: 'OutboxSessionInactive', message: '本机草稿写入资格已暂停、失效或尚未准备好' }
@@ -177,6 +180,8 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     }
     if (prepared === undefined)
       close(run.host)
+    if (result.kind === 'memory' && run.recordKnown)
+      result = { ...result, recordKnown: true }
     active = prepared
     state = result
     notify()
@@ -271,6 +276,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       let registered = await host.writer.register(options.key, writer, false)
       if (!current(run))
         return finish(run, { kind: 'disposed' })
+      run.recordKnown ||= registered.recordKnown === true || (registered.kind === 'registered' && registered.existing !== undefined)
       if (options.keeper.current() !== key)
         return finish(run, { kind: 'memory', reason: 'no-key' })
       if (registered.kind === 'superseded') {
@@ -286,12 +292,14 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
         registered = await host.writer.register(options.key, writer, true)
         if (!current(run))
           return finish(run, { kind: 'disposed' })
+        run.recordKnown ||= registered.recordKnown === true || (registered.kind === 'registered' && registered.existing !== undefined)
         if (options.keeper.current() !== key)
           return finish(run, { kind: 'memory', reason: 'no-key' })
       }
       if (registered.kind === 'registered') {
-        if (registered.existing !== undefined) {
-          const existing = registered.existing.kind === 'draft' ? { kind: 'draft' as const, meta: registered.existing.meta } : registered.existing
+        // 显式恢复不能把“只有新版镜像”当成空草稿；保留端口重新核对，普通登记语义不变。
+        if (registered.existing !== undefined || (options.recoverExisting === true && run.recordKnown)) {
+          const existing = registered.existing?.kind === 'draft' ? { kind: 'draft' as const, meta: registered.existing.meta } : registered.existing
           return finish(run, { kind: 'memory', reason: 'existing-draft', existing, lastDraftSeq: registered.lastDraftSeq }, options.recoverExisting === true ? { host, writer, installedKey: key, recovering: true } : undefined)
         }
         return finish(run, { kind: 'ready', writer, lastDraftSeq: registered.lastDraftSeq, mirror: registered.mirror, hostKind: host.kind }, { host, writer, installedKey: key })
@@ -319,7 +327,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     const promise = new Promise<OutboxPreparation>((done) => {
       resolve = done
     })
-    const run: PreparationRun = { writeEpoch: writeEpoch(), generation, controller: new AbortController(), promise, host: undefined, stopped: undefined }
+    const run: PreparationRun = { writeEpoch: writeEpoch(), generation, controller: new AbortController(), promise, host: undefined, stopped: undefined, recordKnown: false }
     pending = run
     notify()
     void prepare(run, verify).then(resolve)
@@ -554,23 +562,24 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       return session.setKey(key)
     },
     suspend: () => {
-      if (disposed || suspended)
-        return
-      suspended = true
-      stop({ kind: 'memory', reason: 'paused' })
-    },
-    beginKeyDiscard: () => {
-      session.suspend()
-      recoveringAllowed = false
-      closeRecoveries()
       const target = active
-      if (target !== undefined)
-        target.installedKey = undefined
+      if (!disposed && !suspended) {
+        suspended = true
+        stop({ kind: 'memory', reason: 'paused' })
+      }
       return () => {
         close(target?.host)
         if (active === target)
           active = undefined
       }
+    },
+    beginKeyDiscard: () => {
+      const finish = session.suspend()
+      recoveringAllowed = false
+      closeRecoveries()
+      if (active !== undefined)
+        active.installedKey = undefined
+      return finish
     },
     resume: async () => {
       if (!live())

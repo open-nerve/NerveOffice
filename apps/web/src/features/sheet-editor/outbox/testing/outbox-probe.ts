@@ -188,7 +188,7 @@ function probeError(error: unknown): ProbeError {
 
 function plain<T extends { readonly kind: string }>(outcome: T): Plain<T> {
   if (outcome.kind === 'failed' && 'error' in outcome)
-    return { kind: 'failed', error: probeError(outcome.error) } as Plain<T>
+    return { ...outcome, error: probeError(outcome.error) } as Plain<T>
   return outcome as Plain<T>
 }
 
@@ -385,7 +385,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
       const outcome = await store.registerWriter(draftKey, writer, options)
       if (outcome.kind !== 'registered')
         return plain(outcome)
-      return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing: outcome.existing === undefined ? undefined : await opened(outcome.existing) }
+      return { ...outcome, existing: outcome.existing === undefined ? undefined : await opened(outcome.existing) }
     },
     write: async (input, options) => plain(await store.writeDraft(await seal(input), options)),
     writeMalformed: async (input) => {

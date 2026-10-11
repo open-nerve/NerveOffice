@@ -8,13 +8,16 @@ import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { FakeLeaseServer } from './lease-server.test-support.ts'
 import type { OutboxHost } from './outbox/outbox-host.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
+import type { DocumentRecovery } from './recovery/document-recovery.ts'
+import type { RecoveryReader } from './recovery/recovery-reader.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createConnectionState } from '../../shared/lib/connection-state.ts'
-import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
+import { gunzipBytes, gzipBytes, sealDraft } from '../../shared/outbox/draft-codec.ts'
+import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
@@ -28,6 +31,7 @@ import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { fakeLeaseServer, servedToken } from './lease-server.test-support.ts'
 import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
+import { createDocumentRecovery } from './recovery/document-recovery.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { channelNameOf, issuedRequestLockNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
 import { PENDING_SAVE_POLL_MS, TAB_HANDOVER_BUSY_RETRY_MS } from './self-takeover.ts'
@@ -97,6 +101,7 @@ function fakeFactory() {
   /** 下一次创建的结果：默认立即成功；hold 时由测试放行，fail 时失败 */
   let next: 'ok' | 'fail' | { readonly gate: Promise<void> } = 'ok'
   let checkOf: CheckOf = () => ({ ok: true })
+  let configure: (editor: FakeEditor) => void = () => {}
   const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined, recalculate?: boolean }) => {
     const plan = next
     next = 'ok'
@@ -178,6 +183,7 @@ function fakeFactory() {
       },
     }
     created.push(fake)
+    configure(fake)
     return fake.editor
   })
   return {
@@ -202,6 +208,9 @@ function fakeFactory() {
     /** 之后新建的编辑器的打开自检按它给出（M3-P4） */
     checkWith: (next: CheckOf) => {
       checkOf = next
+    },
+    configureWith: (next: (editor: FakeEditor) => void) => {
+      configure = next
     },
   }
 }
@@ -313,6 +322,7 @@ function fakeAutosave(held: boolean) {
 }
 
 interface Setup {
+  readonly recovery?: DocumentRecovery
   readonly localDrafts?: EditModeOptions['localDrafts']
   readonly connection?: EditModeOptions['connection']
   readonly api?: Partial<Omit<EditModeApi, 'editLease'>>
@@ -340,6 +350,7 @@ interface Setup {
 }
 
 const modes: EditMode[] = []
+const recoveries: DocumentRecovery[] = []
 
 function setup(options: Setup = {}) {
   const factory = fakeFactory()
@@ -381,6 +392,7 @@ function setup(options: Setup = {}) {
     clientInstanceId: options.clientInstanceId ?? PAGE_ID,
     userId: options.userId ?? AMY.id,
     localDrafts: options.localDrafts,
+    recovery: options.recovery,
     connection: options.connection,
     api,
     createEditor: factory.createEditor,
@@ -429,6 +441,8 @@ const ISSUED_LOCK = issuedRequestLockNameOf(DOCUMENT_ID)
 afterEach(() => {
   for (const mode of modes.splice(0))
     mode.dispose()
+  for (const recovery of recoveries.splice(0))
+    recovery.dispose()
 })
 
 function modeOf(mode: EditMode): EditModeState {
@@ -480,6 +494,266 @@ async function localDrafts() {
   })
   return { key, fetch, keeper, store, hosts, host, options: { enabled: () => true, keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) } }
 }
+
+async function recoverySetup(options: Setup = {}, pending = false) {
+  const key = { userId: AMY.id, documentId: DOCUMENT_ID }
+  const snapshot = snapshotOf('待恢复的')
+  const meta = sampleMeta({ ...key, baseRevision: 3, draftSeq: 37, writeEpoch: 6, updatedAt: Date.now(), rawBytes: new TextEncoder().encode(snapshot).byteLength, inFlight: null, format: PAGE_CLIENT_FORMAT, formulasPending: pending })
+  const gzip = await gzipBytes(new TextEncoder().encode(snapshot))
+  const observe = vi.fn<RecoveryReader['observe']>().mockResolvedValue({ kind: 'observed', observation: { key, id: 'before-register' }, record: { kind: 'draft', meta, gzip }, writer: undefined })
+  const remove = vi.fn<RecoveryReader['remove']>().mockResolvedValue({ kind: 'removed', mirror: { kind: 'removed' } })
+  const reader: RecoveryReader = { observe, remove, refreshKey: async () => observe(), notices: async () => ({ kind: 'notices', notices: [] }), clearNotice: async () => ({ kind: 'absent' }), dispose: vi.fn() }
+  const replay = vi.fn(async () => SAVED)
+  const recovery = createDocumentRecovery({ key, pageFormat: PAGE_CLIENT_FORMAT, writtenBy: PAGE_ID, clock: fakeLeaseClock().clock, now: Date.now, still: () => true, facts: async () => ({ access: 'editable', online: true, current: { revision: 3, source: null, occupied: false } }), reader: () => reader, replay, refreshCloud: async () => {}, conflictCopy: async () => ({ ...COPY, replayed: false }), title: () => COPY.title, newId: () => 'copy-id', onSessionProblem: vi.fn(), reportError: vi.fn() })
+  recoveries.push(recovery)
+  const h = setup({ ...options, recovery })
+  return { ...h, recovery, observe, remove, replay, meta, gzip, key, snapshot }
+}
+
+describe('本机恢复通过真实编辑准备入口', () => {
+  it.each(['persistent', 'memory'] as const)('%s 恢复暂停后以新上传身份保存，确认事实生效但旧清理不复活', async (kind) => {
+    const local = await localDrafts()
+    const h = await recoverySetup(kind === 'persistent' ? { localDrafts: local.options } : {})
+    if (kind === 'persistent')
+      local.store.putRaw('drafts', h.key, await sealDraft(local.key, h.meta, h.gzip))
+    await opened(h)
+    await h.mode.enter()
+    h.mode.setSession('other-user')
+    h.mode.setSession('active')
+    await h.mode.resumeLease()
+    await settle()
+    h.factory.last().edit('重登后继续的内容')
+    await h.mode.save()
+    expect(h.api.save).toHaveBeenCalled()
+    expect(h.recovery.view()).toMatchObject({ saved: true })
+    expect(h.remove).not.toHaveBeenCalled()
+    await h.mode.exit()
+    expect(h.recovery.view()).toMatchObject({ saved: true })
+  })
+  it.each(['persistent', 'memory'] as const)('%s 恢复的云端确认是持续事实，正常退出后仍保留', async (kind) => {
+    const local = await localDrafts()
+    const h = await recoverySetup(kind === 'persistent' ? { localDrafts: local.options } : {})
+    if (kind === 'persistent')
+      local.store.putRaw('drafts', h.key, await sealDraft(local.key, h.meta, h.gzip))
+    await opened(h)
+    await h.mode.enter()
+    await h.mode.save()
+    expect(h.recovery.view()).toMatchObject({ saved: true })
+    await h.mode.exit()
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.recovery.view()).toMatchObject({ saved: true })
+    if (kind === 'persistent')
+      expect(h.remove).not.toHaveBeenCalled()
+  })
+  it.each(['observe', 'replay'] as const)('安装 SDK 前等待 %s 时换人，回到阅读且原身份回来可再次进入', async (waiting) => {
+    const h = await recoverySetup()
+    const observed = await h.observe()
+    h.observe.mockClear()
+    const read = deferred<Awaited<ReturnType<RecoveryReader['observe']>>>()
+    const replayed = deferred<typeof SAVED>()
+    if (waiting === 'observe') {
+      h.observe.mockReturnValueOnce(read.promise)
+    }
+    else {
+      h.observe.mockResolvedValueOnce({ kind: 'observed', observation: { key: h.key, id: 'old-save' }, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'pending', clientInstanceId: 'old-page', localSeq: 37, sentAt: Date.now() } }, gzip: h.gzip }, writer: undefined })
+      h.replay.mockReturnValueOnce(replayed.promise)
+    }
+    await opened(h)
+    const entering = h.mode.enter()
+    await vi.waitFor(() => expect(waiting === 'observe' ? h.observe : h.replay).toHaveBeenCalledOnce())
+    expect(h.factory.createEditor).toHaveBeenCalledOnce()
+    h.mode.setSession('other-user')
+    read.resolve(observed)
+    replayed.resolve(SAVED)
+    await entering
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.mode.view().surface).toBe('rendered')
+    expect(h.factory.last().access).toBe('read')
+    expect(h.mode.view().save).toBeUndefined()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+    h.mode.setSession('active')
+    await h.mode.enter()
+    expect(modeOf(h.mode).kind).toBe('editing')
+    expect(h.factory.last().snapshot).toBe(h.snapshot)
+  })
+  it.each(['takeover', 'request'] as const)('%s 入口同样恢复原件，不能直接拿云端正文进入', async (entry) => {
+    const h = await recoverySetup({ api: { editStatus: async () => status(3, entry === 'takeover' ? SELF_EDITING : AMY_EDITING) } })
+    await opened(h)
+    if (entry === 'takeover') {
+      await h.mode.takeOver()
+    }
+    else {
+      h.api.editRequest.send.mockResolvedValueOnce({ kind: 'reserved', reservedUntil: RESERVED_UNTIL })
+      await h.mode.requestEdit()
+      await vi.waitFor(() => expect(modeOf(h.mode).kind).toBe('editing'))
+    }
+    expect(modeOf(h.mode).kind).toBe('editing')
+    expect(h.factory.last().snapshot).toBe(h.snapshot)
+    expect(h.mode.view().save?.unsavedEdits).toBe(true)
+  })
+
+  it('取内容期间云端又前进一版时，不能套用租约响应上一版的 source', async () => {
+    const h = await recoverySetup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision: 5, source: { clientInstanceId: 'old-page', localSeq: 36 } }) }, api: { contentIfChanged: async () => ({ snapshot: snapshotOf('后来别处保存'), revision: 6 }) } })
+    h.observe.mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'newer-capture' }, record: { kind: 'draft', meta: { ...h.meta, baseRevision: 5, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 36, sentAt: Date.now() } }, gzip: h.gzip }, writer: undefined })
+    await opened(h)
+    await h.mode.enter()
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.recovery.view().decision).toEqual({ kind: 'preserve', reason: 'server' })
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('普通编辑发现旧内容时安装恢复初值；零次额外输入也自动上传原文', async () => {
+    const h = await recoverySetup({ autosave: 'running' })
+    await editing(h)
+    expect(h.factory.last().snapshot).toBe(h.snapshot)
+    expect(h.mode.view().save).toMatchObject({ unsavedEdits: true })
+    expect(h.recovery.view().stage).toBe('restored')
+    await h.time.advance(DEFAULT_AUTOSAVE_LIMITS.uploadQuietMs)
+    await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledOnce())
+    expect(new TextDecoder().decode(await gunzipBytes(h.api.save.mock.calls[0]![2]))).toBe(h.snapshot)
+    expect(h.api.save.mock.calls[0]![1]).toMatchObject({ baseRevision: 3, localSeq: 38, formulasPending: false })
+    expect(h.factory.last().editor.changeSeq()).toBe(0)
+  })
+
+  it('真实登记之后观察与采用，持久序号高于旧记录且清掉旧 inFlight', async () => {
+    const local = await localDrafts()
+    const h = await recoverySetup({ localDrafts: local.options })
+    local.store.putRaw('drafts', h.key, await sealDraft(local.key, h.meta, h.gzip))
+    await editing(h)
+    expect(h.factory.last().snapshot).toBe(h.snapshot)
+    expect(h.observe).not.toHaveBeenCalled()
+    expect(local.store.rawDraft(h.key)).toMatchObject({ draftSeq: 38, writeEpoch: 7, inFlight: null, baseRevision: 3 })
+  })
+
+  it.each([true, false])('新租约 source 严格追自己=%s；不把不匹配来源覆盖为本页内容', async (own) => {
+    const source = { clientInstanceId: own ? 'old-page' : 'another-page', localSeq: 36 }
+    const h = await recoverySetup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision: 4, source }) }, api: { contentIfChanged: async () => ({ snapshot: snapshotOf('已保存的旧捕获'), revision: 4 }) } })
+    h.observe.mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'old-flight-newer-capture' }, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 36, sentAt: Date.now() } }, gzip: h.gzip }, writer: undefined })
+    await opened(h)
+    await h.mode.enter()
+    expect(modeOf(h.mode).kind).toBe(own ? 'editing' : 'reading')
+    expect(h.replay).not.toHaveBeenCalled()
+    if (own) {
+      await h.mode.save()
+      expect(h.api.save.mock.calls[0]![1].baseRevision).toBe(4)
+    }
+    else {
+      expect(h.api.save).not.toHaveBeenCalled()
+      expect(h.recovery.view().decision).toEqual({ kind: 'copy', reason: 'conflict' })
+    }
+  })
+
+  it('旧请求确认后重新取最新云端，并重新准备来源，不装入回执旧正文', async () => {
+    const h = await recoverySetup()
+    h.observe.mockResolvedValueOnce({ kind: 'observed', observation: { key: h.key, id: 'old-flight' }, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: Date.now() } }, gzip: h.gzip }, writer: undefined }).mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'after-cleanup' }, record: { kind: 'absent' }, writer: undefined })
+    await editing(h)
+    expect(h.replay).toHaveBeenCalledOnce()
+    expect(h.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+    expect(h.factory.last().snapshot).toBe(snapshotOf('最新的'))
+    expect(h.mode.view().save).toMatchObject({ unsavedEdits: false })
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('公式屏障内保持原件，收齐之后才采用完整重算内容', async () => {
+    const local = await localDrafts()
+    const h = await recoverySetup({ localDrafts: local.options }, true)
+    local.store.putRaw('drafts', h.key, await sealDraft(local.key, h.meta, h.gzip))
+    const before = local.store.rawDraft(h.key)
+    const formulas = deferred<'settled' | 'timeout'>()
+    h.factory.configureWith((fake) => {
+      if (fake.access !== 'edit')
+        return
+      vi.mocked(fake.editor.settleFormulas).mockReturnValue(formulas.promise)
+      vi.mocked(fake.editor.capture).mockReturnValue(snapshotOf('完整重算的'))
+    })
+    await opened(h)
+    const entering = h.mode.enter()
+    await vi.waitFor(() => expect(h.factory.last().access).toBe('edit'))
+    expect(h.factory.last().recalculate).toBe(true)
+    expect(local.store.rawDraft(h.key)).toEqual(before)
+    expect(h.mode.view().save).toBeUndefined()
+    expect(h.mode.view().surface).toBe('creating')
+    formulas.resolve('settled')
+    await entering
+    expect(h.factory.last().editor.settleFormulas).toHaveBeenCalledWith(10_000)
+    await h.mode.save()
+    expect(new TextDecoder().decode(await gunzipBytes(h.api.save.mock.calls[0]![2]))).toBe(snapshotOf('完整重算的'))
+  })
+
+  it.each(['open-check', 'formulas', 'changed'] as const)('%s 失败不保存也不覆盖原件，回到云端阅读', async (failure) => {
+    const local = await localDrafts()
+    const h = await recoverySetup({ localDrafts: local.options }, true)
+    const encoded = await sealDraft(local.key, h.meta, h.gzip)
+    const nextMeta = { ...h.meta, draftSeq: h.meta.draftSeq + 1, updatedAt: h.meta.updatedAt + 1 }
+    const next = await sealDraft(local.key, nextMeta, h.gzip)
+    local.store.putRaw('drafts', h.key, encoded)
+    const before = local.store.rawDraft(h.key)
+    let retained = before
+    if (failure === 'open-check')
+      h.factory.checkWith(({ access }) => access === 'edit' ? { ok: false, failures: [{ kind: 'profile-missing-hook', resource: 'SHEET_DRAWING_PLUGIN' }] } : { ok: true })
+    h.factory.configureWith((fake) => {
+      if (fake.access !== 'edit')
+        return
+      if (failure === 'formulas')
+        fake.formulasSettled = false
+      if (failure === 'changed') {
+        local.store.putRaw('drafts', h.key, next)
+        retained = local.store.rawDraft(h.key)
+        h.observe.mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'new-content' }, record: { kind: 'draft', meta: nextMeta, gzip: h.gzip }, writer: undefined })
+      }
+    })
+    await opened(h)
+    await h.mode.enter()
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.factory.last().snapshot).toBe(LOADED.snapshot)
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(local.store.rawDraft(h.key)).toEqual(retained)
+    if (failure === 'changed') {
+      await vi.waitFor(() => expect(h.recovery.view().updatedAt).toBe(nextMeta.updatedAt))
+      expect(h.observe).toHaveBeenCalledOnce()
+      expect(h.recovery.view().decision?.kind).toBe('restore')
+      expect(h.remove).not.toHaveBeenCalled()
+    }
+  })
+
+  it.each(['session', 'lock', 'dispose', 'lease'] as const)('安装等待中 %s 失效，迟到 SDK 不采用或启用保存', async (reason) => {
+    const local = await localDrafts()
+    const h = await recoverySetup({ localDrafts: local.options })
+    local.store.putRaw('drafts', h.key, await sealDraft(local.key, h.meta, h.gzip))
+    const before = local.store.rawDraft(h.key)
+    await opened(h)
+    const held = h.factory.holdNext()
+    const entering = h.mode.enter()
+    await vi.waitFor(() => expect(h.factory.createEditor).toHaveBeenCalledTimes(2))
+    if (reason === 'session') {
+      h.mode.setSession('other-user')
+    }
+    else if (reason === 'lock') {
+      h.mode.releaseOnHide()
+    }
+    else if (reason === 'dispose') {
+      h.mode.dispose()
+    }
+    else {
+      h.editLease.renew.mockRejectedValue(leaseLost('revoked'))
+      await h.time.advance(HEARTBEAT_MS)
+    }
+    held.release()
+    await entering
+    expect(h.mode.view().save).toBeUndefined()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(local.store.rawDraft(h.key)).toEqual(before)
+    if (reason !== 'dispose') {
+      expect(modeOf(h.mode).kind).toBe('reading')
+      expect(h.mode.view().surface).toBe('rendered')
+      expect(h.factory.last().access).toBe('read')
+      expect(h.factory.created.filter(fake => fake.access === 'edit').every(fake => fake.disposed)).toBe(true)
+      if (reason === 'lease')
+        expect(readingOf(h.mode).notice).toMatchObject({ kind: 'enter-lost', loss: { kind: 'lease', reason: 'revoked' } })
+    }
+  })
+})
 
 describe('真实来源进入页面的准备顺序', () => {
   it('初次打开准备来源时确认编辑权被收回，保留原失效原因且不建可交互编辑器', async () => {

@@ -40,6 +40,25 @@ describe('恢复凭证的 Worker 协议', () => {
       expect(readOutboxResult('observe', { ...OBSERVED, record, writer: undefined })).toEqual({ ...OBSERVED, record, writer: undefined })
   })
 
+  it.each([{ kind: 'unavailable', reason: 'denied' }, { kind: 'quota' }, { kind: 'failed', error: { name: 'ReadFailed', message: 'test' } }])('观察失败 $kind 只带存在事实，不夹带可操作凭证', (failure) => {
+    expect(readOutboxResult('observe', { ...failure, recordKnown: true, observation: OBSERVATION, record: OBSERVED.record })).toEqual({ ...failure, recordKnown: true })
+    expect(readOutboxResult('observe', failure)).toEqual(failure)
+  })
+
+  it.each([false, 1, 'true', null])('存在事实不是字面 true 时不接受：%j', (recordKnown) => {
+    expect(readOutboxResult('observe', { kind: 'unavailable', reason: 'denied', recordKnown })).toBeNull()
+  })
+
+  it('登记返回的存在事实独立于写镜像能力；登记未完成也保留，但不给操作凭证', () => {
+    const registered = { kind: 'registered', lastDraftSeq: 0, existing: undefined, mirror: { kind: 'off' }, recordKnown: true }
+    expect(readOutboxResult('register', registered)).toEqual(registered)
+    const failed = { kind: 'unavailable', reason: 'denied', recordKnown: true }
+    expect(readOutboxResult('register', { ...failed, observation: OBSERVATION })).toEqual(failed)
+    const superseded = { kind: 'superseded', currentEpoch: 3, sameEpoch: true, recordKnown: true }
+    expect(readOutboxResult('register', { ...superseded, observation: OBSERVATION })).toEqual(superseded)
+    expect(readOutboxResult('register', { ...registered, recordKnown: false })).toBeNull()
+  })
+
   it.each([
     { observation: null },
     { record: null },

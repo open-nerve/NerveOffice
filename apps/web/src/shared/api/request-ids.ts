@@ -15,7 +15,7 @@ function isSessionRejection(error: unknown): boolean {
  * 同名、REQUEST_ID_CONFLICT……）。结果未知（网络、5xx、回包读不出来）、服务端忙（503，这一次确定没有生效，更早那一次却可能生效了）
  * 与会话类的拒绝都不算：沿用同一个，再试时服务端照样只做一次
  */
-function concludes(error: unknown): boolean {
+export function concludesRequest(error: unknown): boolean {
   return isDefiniteRejection(error) && !isSessionRejection(error)
 }
 
@@ -73,7 +73,7 @@ export function createRequestIdLedger(newId: () => string = () => crypto.randomU
         if (isUnknownOutcome(error)) {
           entry.unknown = true
         }
-        else if (concludes(error)) {
+        else if (concludesRequest(error)) {
           if (entry.unknown && isRequestIdConflict(error))
             doneEarlier.add(error)
           conclude(key, entry)

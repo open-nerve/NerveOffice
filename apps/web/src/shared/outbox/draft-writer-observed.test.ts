@@ -113,9 +113,122 @@ describe('恢复观察与原子接手的写入管道', () => {
   it('比对或存储读取失败时不给可操作观察', async () => {
     const h = await setup()
     h.fake.failNext('observeDraft', { kind: 'quota' })
-    expect(await h.writer.observe(KEY)).toEqual({ kind: 'quota' })
+    expect(await h.writer.observe(KEY)).toEqual({ kind: 'quota', recordKnown: true })
     const writer = createDraftWriter({ store: h.fake.store, now: () => NOW, recovery: { reconcile: async () => ({ mirror: { kind: 'failed', error: { name: 'ReadError', message: 'test' } }, restored: undefined }) } })
     expect(await writer.observe(KEY)).toMatchObject({ kind: 'failed', error: { name: 'MirrorUnreadable' } })
+  })
+
+  it.each(['readDraft', 'observeDraft'] as const)('镜像已经发现记录，%s 被禁止不能把存在事实折成普通不可用', async (operation) => {
+    const h = await setup({ register: false })
+    const slot = await encodeSlot(h.record, 1)
+    const bytes = new Uint8Array([...slot.header, ...slot.content])
+    h.files.putFile(KEY, 0, bytes)
+    h.files.putFile(KEY, 1, new Uint8Array(0))
+    h.fake.failNext(operation, { kind: 'unavailable', reason: 'denied' })
+    expect(await h.writer.observe(KEY)).toEqual({ kind: 'unavailable', reason: 'denied', recordKnown: true })
+    expect(h.fake.rawDraft(KEY)).toEqual(structuredClone(h.record))
+    expect(h.files.file(KEY, 0)).toEqual(bytes)
+    expect(h.fake.calls).not.toContain('registerWriter')
+    h.writer.dispose()
+  })
+
+  it('登记中途已见镜像后主库被拒绝，同样保留存在事实且不改变写入者', async () => {
+    const h = await setup({ register: false })
+    const slot = await encodeSlot(h.record, 1)
+    h.files.putFile(KEY, 0, new Uint8Array([...slot.header, ...slot.content]))
+    h.files.putFile(KEY, 1, new Uint8Array(0))
+    const before = h.fake.rawWriter(KEY)
+    h.fake.failNext('readDraft', { kind: 'unavailable', reason: 'denied' })
+    expect(await h.writer.register(KEY, NEXT_WRITER, false)).toEqual({ kind: 'unavailable', reason: 'denied', recordKnown: true })
+    expect(h.fake.rawWriter(KEY)).toEqual(before)
+    h.writer.dispose()
+  })
+
+  it('空镜像之后主库不可用不虚构已见记录', async () => {
+    const h = await setup({ register: false })
+    h.files.putFile(KEY, 0, new Uint8Array(0))
+    h.files.putFile(KEY, 1, new Uint8Array(0))
+    h.fake.failNext('observeDraft', { kind: 'unavailable', reason: 'denied' })
+    expect(await h.writer.observe(KEY)).toEqual({ kind: 'unavailable', reason: 'denied' })
+    h.writer.dispose()
+  })
+
+  it('已见原件后登记被栅栏拒绝，裁决保留存在事实但不带可操作凭证', async () => {
+    const h = await setup({ register: false })
+    const slot = await encodeSlot(h.record, 1)
+    const bytes = new Uint8Array([...slot.header, ...slot.content])
+    h.files.putFile(KEY, 0, bytes)
+    h.files.putFile(KEY, 1, new Uint8Array(0))
+    const before = h.fake.rawWriter(KEY)
+    const result = await h.writer.register(KEY, { writeEpoch: META.writeEpoch, writerId: 'other-writer' }, false)
+    expect(result).toEqual({ kind: 'superseded', currentEpoch: META.writeEpoch, sameEpoch: true, recordKnown: true })
+    expect(result).not.toHaveProperty('observation')
+    expect(h.fake.rawDraft(KEY)).toEqual(structuredClone(h.record))
+    expect(h.fake.rawWriter(KEY)).toEqual(before)
+    expect(h.files.file(KEY, 0)).toEqual(bytes)
+    expect(h.files.openHandles()).toBe(0)
+    h.writer.dispose()
+  })
+
+  it.each([false, true])('没有镜像时主库登记被拒绝，存在事实只来自实际原件：%s', async (present) => {
+    const h = await setup({ register: false, mirror: false })
+    if (!present)
+      h.fake.putRaw('drafts', KEY, undefined)
+    const before = h.fake.rawDraft(KEY)
+    const result = await h.writer.register(KEY, { writeEpoch: META.writeEpoch, writerId: 'other-writer' }, false)
+    expect(result).toEqual({ kind: 'superseded', currentEpoch: META.writeEpoch, sameEpoch: true, ...(present ? { recordKnown: true } : {}) })
+    expect(h.fake.rawDraft(KEY)).toEqual(before)
+    h.writer.dispose()
+  })
+
+  it.each(['register', 'observe'] as const)('无镜像的 %s 不丢掉主库失败前已读到原件的事实', async (operation) => {
+    const h = await setup({ register: false, mirror: false })
+    const problem = { kind: 'failed', error: new DOMException('读完后事务中止', 'AbortError'), recordKnown: true } as const
+    vi.spyOn(h.fake.store, 'registerWriter').mockResolvedValue(problem)
+    vi.spyOn(h.fake.store, 'observeDraft').mockResolvedValue(problem)
+    const result = operation === 'register' ? await h.writer.register(KEY, NEXT_WRITER, false) : await h.writer.observe(KEY)
+    expect(result).toMatchObject({ kind: 'failed', recordKnown: true, error: { name: 'AbortError' } })
+    expect(result).not.toHaveProperty('observation')
+    h.writer.dispose()
+  })
+
+  it.each([false, true])('第二槽读取失败时只保留实际已读非空第一槽的事实：存在=%s', async (present) => {
+    const h = await setup({ register: false })
+    const slot = await encodeSlot(h.record, 1)
+    const bytes = present ? new Uint8Array([...slot.header, ...slot.content]) : new Uint8Array(0)
+    h.files.putFile(KEY, 0, bytes)
+    h.files.putFile(KEY, 1, new Uint8Array(0))
+    const open = h.files.directory.openSlots
+    vi.spyOn(h.files.directory, 'openSlots').mockImplementation(async (...args) => {
+      const opened = await open(...args)
+      if (opened.kind === 'opened')
+        vi.spyOn(opened.slots[1], 'read').mockImplementation(() => { throw new DOMException('第二槽读失败', 'UnknownError') })
+      return opened
+    })
+    const result = await h.writer.observe(KEY)
+    expect(result).toMatchObject({ kind: 'failed', error: { name: 'MirrorUnreadable' } })
+    if (present)
+      expect(result).toHaveProperty('recordKnown', true)
+    else
+      expect(result).not.toHaveProperty('recordKnown')
+    expect(result).not.toHaveProperty('observation')
+    expect(h.fake.calls).not.toContain('observeDraft')
+    expect(h.files.file(KEY, 0)).toEqual(bytes)
+    expect(h.files.openHandles()).toBe(0)
+    h.writer.dispose()
+  })
+
+  it('比对清掉过时镜像后主库观察失败，仍保留比对期间读到的主库记录存在事实', async () => {
+    const h = await setup({ register: false })
+    const slot = await encodeSlot({ ...h.record, writerId: 'old-writer' }, 1)
+    h.files.putFile(KEY, 0, new Uint8Array([...slot.header, ...slot.content]))
+    h.files.putFile(KEY, 1, new Uint8Array(0))
+    vi.spyOn(h.fake.store, 'restoreDraft').mockResolvedValue({ kind: 'kept', reason: 'seen' })
+    h.fake.failNext('observeDraft', { kind: 'unavailable', reason: 'denied' })
+    expect(await h.writer.observe(KEY)).toEqual({ kind: 'unavailable', reason: 'denied', recordKnown: true })
+    expect(h.fake.rawDraft(KEY)).toEqual(structuredClone(h.record))
+    expect(h.files.file(KEY, 0)).toHaveLength(0)
+    h.writer.dispose()
   })
 
   it.each(['busy', 'newer-format'] as const)('镜像不能完整核对时不给凭证，也不改旧主库或镜像：%s', async (reason) => {

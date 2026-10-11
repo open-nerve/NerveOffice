@@ -145,7 +145,7 @@ export function fakeDraftStore(): FakeDraftStore {
       const existing = existingOf(id)
       const verdict = decideRegistration(writerOf(id), existing, writer, options.force)
       if (verdict.kind === 'superseded')
-        return verdict
+        return existing === undefined ? verdict : { ...verdict, recordKnown: true }
       writers.set(id, { ...keyOf(key), writeEpoch: writer.writeEpoch, writerId: writer.writerId, lastDraftSeq: verdict.lastDraftSeq, registeredAt: options.now })
       return { kind: 'registered', lastDraftSeq: verdict.lastDraftSeq, existing }
     },

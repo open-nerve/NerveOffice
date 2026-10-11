@@ -100,7 +100,7 @@ test.describe('写入栅栏：两个标签页', { tag: '@test-build' }, () => {
     expect(await probe(first, 'write', draftFor(key, older, 2))).toEqual({ kind: 'fenced', reason: 'not-writer' })
     expect(await probe(first, 'replace', draftFor(key, older, 1, { inFlight: { requestId: randomUUID(), clientInstanceId: 'c', localSeq: 1, sentAt: NOW } }))).toEqual({ kind: 'fenced', reason: 'not-writer' })
     expect(await probe(first, 'confirm', key, older, 1)).toEqual({ kind: 'fenced', reason: 'not-writer' })
-    expect(await register(first, key, older)).toEqual({ kind: 'superseded', currentEpoch: 4, sameEpoch: false })
+    expect(await register(first, key, older)).toEqual({ kind: 'superseded', currentEpoch: 4, sameEpoch: false, recordKnown: true })
 
     // 新的一代：不带接手的序号不覆盖旧的草稿；带错了也不行；带上看过的那一份的序号才写
     expect(await probe(second, 'write', draftFor(key, newer, 2))).toEqual({ kind: 'fenced', reason: 'foreign-draft' })
@@ -121,12 +121,12 @@ test.describe('写入栅栏：两个标签页', { tag: '@test-build' }, () => {
     expect(await probe(first, 'write', draftFor(key, before, 1))).toEqual({ kind: 'written' })
 
     const rebuilt = { writeEpoch: 5, writerId: randomUUID() }
-    expect(await register(second, key, rebuilt)).toEqual({ kind: 'superseded', currentEpoch: 5, sameEpoch: true })
+    expect(await register(second, key, rebuilt)).toEqual({ kind: 'superseded', currentEpoch: 5, sameEpoch: true, recordKnown: true })
     expect(outcomeOf(await register(second, key, rebuilt, true), 'registered').lastDraftSeq).toBe(1)
     expect(await probe(first, 'write', draftFor(key, before, 2))).toEqual({ kind: 'fenced', reason: 'not-writer' })
 
     const restored = writerOf(2)
-    expect(await register(first, key, restored)).toEqual({ kind: 'superseded', currentEpoch: 5, sameEpoch: false })
+    expect(await register(first, key, restored)).toEqual({ kind: 'superseded', currentEpoch: 5, sameEpoch: false, recordKnown: true })
     expect(outcomeOf(await register(first, key, restored, true), 'registered').lastDraftSeq).toBe(1)
     expect(await probe(second, 'write', draftFor(key, rebuilt, 2), { adoptSeq: 1 })).toEqual({ kind: 'fenced', reason: 'not-writer' })
   })

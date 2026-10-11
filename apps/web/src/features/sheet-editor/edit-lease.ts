@@ -377,7 +377,7 @@ export interface EditLeaseOptions {
  * 或被占用（认不出服务端给的详情时 holder 为 undefined）
  */
 export type LeaseAcquisition
-  = | { readonly kind: 'acquired', readonly lease: EditLease, readonly revision: number, readonly formulasPending: boolean, readonly interruption: EditInterruption | undefined }
+  = | { readonly kind: 'acquired', readonly lease: EditLease, readonly revision: number, readonly source: RevisionSource | null, readonly formulasPending: boolean, readonly interruption: EditInterruption | undefined }
     | { readonly kind: 'held', readonly holder: LeaseHolder | undefined }
 
 /** 服务端的两个时刻相隔几分钟（向下取整，不小于 0）；缺一个时为 undefined */
@@ -455,7 +455,7 @@ export async function acquireEditLease(options: EditLeaseOptions, intent: Acquir
     }
     // 之前有过结果未知的尝试：被放弃的那一次服务端可能晚于这一次才处理（同一个页面的重试，换成本页不知道的新一代，复验 E11）——取得的这一代
     // 一开始就带着"结果未知"的记号（与续上的记号同一个含义、同样在续上换了一代时清掉）
-    return { kind: 'acquired', lease: holdEditLease(options, acquired, unknownRetries > 0), revision: acquired.revision, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
+    return { kind: 'acquired', lease: holdEditLease(options, acquired, unknownRetries > 0), revision: acquired.revision, source: acquired.source, formulasPending: acquired.formulasPending, interruption: noticeOf(acquired.interruption) }
   }
 }
 

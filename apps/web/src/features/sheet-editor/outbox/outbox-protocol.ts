@@ -337,20 +337,25 @@ function readHelloResult(value: Fields): HelloResult | null {
 }
 
 function readRegisterResult(value: Fields): RegisterResult | null {
+  if (value.recordKnown !== undefined && value.recordKnown !== true)
+    return null
+  const known = value.recordKnown === true ? { recordKnown: true as const } : {}
   switch (value.kind) {
     case 'registered': {
       const mirror = readMirrorStatus(value.mirror)
       if (!isWhole(value.lastDraftSeq, 0) || mirror === null)
         return null
       if (value.existing === undefined)
-        return { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing: undefined, mirror }
+        return { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing: undefined, mirror, ...known }
       const existing = isFields(value.existing) ? readOpenedRecord(value.existing) : null
-      return existing === null ? null : { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing, mirror }
+      return existing === null ? null : { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing, mirror, ...known }
     }
     case 'superseded':
-      return isWhole(value.currentEpoch, 1) && typeof value.sameEpoch === 'boolean' ? { kind: 'superseded', currentEpoch: value.currentEpoch, sameEpoch: value.sameEpoch } : null
-    default:
-      return readProblem(value)
+      return isWhole(value.currentEpoch, 1) && typeof value.sameEpoch === 'boolean' ? { kind: 'superseded', currentEpoch: value.currentEpoch, sameEpoch: value.sameEpoch, ...known } : null
+    default: {
+      const problem = readProblem(value)
+      return problem === null ? null : { ...problem, ...known }
+    }
   }
 }
 
@@ -484,8 +489,12 @@ function sameKey(a: DraftKey, b: DraftKey): boolean {
 }
 
 function readObserveResult(value: Fields): ObserveResult | null {
-  if (value.kind !== 'observed')
-    return readProblem(value)
+  if (value.kind !== 'observed') {
+    const problem = readProblem(value)
+    if (problem === null || (value.recordKnown !== undefined && value.recordKnown !== true))
+      return null
+    return value.recordKnown === true ? { ...problem, recordKnown: true } : problem
+  }
   const observation = readObservation(value.observation)
   const record = isFields(value.record) ? value.record.kind === 'absent' ? { kind: 'absent' as const } : readOpenedRecord(value.record) : null
   const writer = readWriterRecord(value.writer)

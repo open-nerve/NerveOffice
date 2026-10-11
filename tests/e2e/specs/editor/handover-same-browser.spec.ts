@@ -167,11 +167,12 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
     const link = copied.getByRole('link', { name: '打开副本（新标签页）', exact: true })
     await expect(link).toBeVisible()
     const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
-    expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('only in the first tab')
+    const copiedContent = (await savedContent(page, copyId)).snapshot
+    expect([cellOf(copiedContent, 'A1')?.v, cellOf(copiedContent, 'B1')]).toEqual(['only in the first tab', undefined])
 
-    // 后一个一直在编辑；服务器上没有前一个的修改
+    // 后一个一直在编辑；M4-P3 的统一准备入口接上本机草稿，保存同时包含恢复内容与新页输入
     await expect(saveButton(other)).toBeVisible()
     const saved = (await savedContent(other, documentId)).snapshot
-    expect([cellOf(saved, 'A1'), cellOf(saved, 'B1')?.v]).toEqual([undefined, 'second tab'])
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v]).toEqual(['only in the first tab', 'second tab'])
   })
 })

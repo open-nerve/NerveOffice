@@ -181,6 +181,9 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await leaveEditor(other, documentId)
     await other.close()
 
+    // S3 普通编辑也先恢复同用户的本机草稿，B1 已随新页保存上云；只在旧页继续输入的 D1 才应被本次放弃。
+    await typeInCell(page, 'D1', '只在旧页的新输入')
+
     // 这一页回来：另一个标签页抢走本机锁时它断着网、核对不了，照常留在编辑（M3-P6 设计 §3.13）；M4-P2 等真实续租裁决，下一次心跳得知
     // 那一代已被换掉，续上时发现别处保存过更新的版本——不覆盖它，说明之后给"另存为副本"与"放弃本页的修改"。
     // 放弃（先确认）：按服务器上的最新版本重建为阅读，不重新加载整页（不出现离开的提示）；之后点"编辑"照常编辑、保存
@@ -202,7 +205,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await typeInCell(page, 'C1', 'after discard')
     await saveAndWait(page)
     const saved = (await savedContent(page, documentId)).snapshot
-    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1'), cellOf(saved, 'C1')?.v]).toEqual(['newer', undefined, 'after discard'])
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v, cellOf(saved, 'C1')?.v, cellOf(saved, 'D1')]).toEqual(['newer', 'older page', 'after discard', undefined])
   })
 })
 

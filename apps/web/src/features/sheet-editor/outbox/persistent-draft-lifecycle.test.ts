@@ -81,6 +81,42 @@ describe('清钥仍保留当前工作内容', () => {
 })
 
 describe('持久草稿的暂停、换钥与恢复', () => {
+  it('暂停等唯一来源接住磁盘正文后释放旧宿主，让新页能核对镜像', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    const ref = source.capture(capture('失锁前已落盘'))
+    await source.ready(ref)
+    await settle()
+    const before = h.store.rawDraft(DRAFT_KEY)
+    const original = await h.writer.read(DRAFT_KEY)
+    const held = deferred<typeof original>()
+    vi.spyOn(h.session, 'read').mockReturnValueOnce(held.promise)
+    source.suspend()
+    await settle()
+    expect(h.hosts[0]!.host.broken()).toBe(false)
+    held.resolve(original)
+    await vi.waitFor(() => expect(h.hosts[0]!.host.broken()).toBe(true))
+    expect(await source.readLatest()).toMatchObject({ ref, snapshot: '失锁前已落盘' })
+    expect(h.store.rawDraft(DRAFT_KEY)).toEqual(before)
+    expect(h.host).toHaveBeenCalledOnce()
+    source.dispose()
+  })
+
+  it('普通暂停保留失败时留下原宿主供重试，不套用清钥必须关机的规则', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    await source.ready(source.capture(capture('待重试的正文')))
+    await settle()
+    vi.spyOn(h.session, 'read').mockResolvedValueOnce({ kind: 'absent' })
+    source.suspend()
+    await vi.waitFor(() => expect(h.reportError).toHaveBeenCalledOnce())
+    expect(h.hosts[0]!.host.broken()).toBe(false)
+    source.suspend()
+    await vi.waitFor(() => expect(h.hosts[0]!.host.broken()).toBe(true))
+    expect(await source.readLatest()).toMatchObject({ snapshot: '待重试的正文' })
+    source.dispose()
+  })
+
   it('暂停发生在 unchanged 返回前，存储暂时读不了时仍用该捕获的临时正文保留真实内容序号', async () => {
     const h = await persistentHarness()
     const source = createPersistentWorkingDraft(h.options)

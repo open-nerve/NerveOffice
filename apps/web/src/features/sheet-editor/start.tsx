@@ -22,7 +22,7 @@ import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { browserLeaseClock, trackActivity } from './edit-lease.ts'
-import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
+import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, replayContent, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { issuedRequestMarker } from './issued-request.ts'
@@ -148,6 +148,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
       contentIfChanged: async (documentId, revision) => fetchContentIfChanged(documentId, revision),
       editStatus: async documentId => fetchEditStatus(documentId),
       save: async (documentId, request, body, lease) => saveContent(documentId, request, body, lease),
+      replay: async (documentId, request, body) => replayContent(documentId, request.request, body, request.writeEpoch),
       conflictCopy: async (documentId, query, body) => saveConflictCopy(documentId, query, body),
       reportOpenCheck: async (documentId, report) => reportOpenCheckFailures(documentId, report),
       editLease: {

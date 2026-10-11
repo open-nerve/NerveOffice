@@ -6,7 +6,8 @@ import type { PersistOutcome } from '../../shared/outbox/storage-status.ts'
 import type { LeaseClock, LeaseVerdict } from './edit-lease.ts'
 import type { OutboxPreparation, OutboxSession, OutboxSessionOptions } from './outbox/outbox-session.ts'
 import type { PersistentWorkingDraft } from './outbox/persistent-working-draft.ts'
-import type { DraftMemoryReason, WorkingDraft, WorkingDraftOptions } from './working-draft.ts'
+import type { RecoveryBlockedReason, RecoveryInitialization, RecoveryInitializer } from './recovery/recovery-initializer.ts'
+import type { DraftMemoryReason, PreparedDraft, WorkingDraft, WorkingDraftOptions } from './working-draft.ts'
 import { createLocalKeyKeeper, fetchLocalKey } from '../../shared/outbox/local-key.ts'
 import { createMemoryWorkingDraft } from './memory-working-draft.ts'
 import { prepareOutboxSession } from './outbox/outbox-session.ts'
@@ -35,7 +36,8 @@ export interface EditingDraft extends WorkingDraft, DraftLifecycle {
 }
 
 export type EditingDraftReady
-  = | { readonly kind: 'ready', readonly draft: EditingDraft }
+  = | { readonly kind: 'ready', readonly draft: EditingDraft, readonly restored?: true }
+    | { readonly kind: 'blocked', readonly reason: RecoveryBlockedReason }
     | Extract<OutboxPreparation, { readonly kind: 'lost' | 'disposed' }>
 
 export interface EditingDraftPreparation extends DraftLifecycle {
@@ -47,9 +49,58 @@ export interface EditingDraftOptions extends Omit<WorkingDraftOptions, 'initialD
   readonly keeper?: LocalKeyKeeper
   readonly onSessionProblem: (error: unknown) => void
   readonly onLost: (verdict: Extract<LeaseVerdict, { readonly kind: 'ended' | 'superseded' }>) => void
+  readonly recover?: RecoveryInitializer
 }
 
-export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftPreparation {
+/** 独立作用域只保留上传身份与回调，不让初始化快照随包装器长驻。 */
+function withRecoveryConfirmation(working: WorkingDraft, options: {
+  readonly onConfirmed: (() => Promise<void>) | undefined
+  readonly onSaved: (() => void) | undefined
+  readonly generation: () => number
+  readonly active: (run: number) => boolean
+  readonly cleanupActive: () => boolean
+  readonly report: (error: unknown) => void
+}): WorkingDraft {
+  let pin: { readonly prepared: PreparedDraft, readonly generation: number } | undefined
+  return {
+    ...working,
+    prepare: async (ref) => {
+      const generation = options.generation()
+      const result = await working.prepare(ref)
+      if (result.kind === 'prepared')
+        pin = { prepared: result, generation }
+      return result
+    },
+    release: (prepared) => {
+      if (pin?.prepared === prepared)
+        pin = undefined
+      working.release(prepared)
+    },
+    confirm: async (prepared, revision) => {
+      const upload = pin
+      const accepted = upload?.prepared === prepared && Number.isSafeInteger(revision) && revision > 0
+      const result = await working.confirm(prepared, revision)
+      if (accepted && options.active(upload.generation) && pin === upload) {
+        try {
+          options.onSaved?.()
+          if (options.cleanupActive())
+            await options.onConfirmed?.()
+        }
+        catch (error) {
+          options.report(error)
+        }
+      }
+      return result
+    },
+    dispose: () => {
+      pin = undefined
+      working.dispose()
+    },
+  }
+}
+
+export function prepareEditingDraft(configuration: EditingDraftOptions): EditingDraftPreparation {
+  const { initialCapture, recover, ...options } = configuration
   let disposed = false
   let paused = false
   let generation = 0
@@ -57,6 +108,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
   let source: WorkingDraft | undefined
   let persistent: PersistentWorkingDraft | undefined
   let initialMemory: DraftMemoryReason | undefined
+  let recoveryInMemory = false
   let storageSnapshot: DraftStorageView | undefined
   let lastHostKind: DraftStorageView['hostKind']
   let lastMirror: MirrorStatus | undefined
@@ -64,6 +116,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
   let unsubscribe: () => void = () => {}
   let discarding: Promise<unknown> | undefined
   let resuming: { readonly generation: number, readonly promise: Promise<boolean> } | undefined
+  let releaseRecovery: (() => void) | undefined
   const keeper = options.keeper ?? createLocalKeyKeeper({ fetch: fetchLocalKey, clock: options.clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
 
   function report(error: unknown): void {
@@ -73,6 +126,17 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
     }
     catch {
       // 错误上报不能打断资源收尾。
+    }
+  }
+
+  function closeRecovery(): void {
+    const release = releaseRecovery
+    releaseRecovery = undefined
+    try {
+      release?.()
+    }
+    catch (error) {
+      report(error)
     }
   }
 
@@ -92,6 +156,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
 
   const outbox = prepareOutboxSession({
     ...options,
+    recoverExisting: recover !== undefined || options.recoverExisting === true,
     keeper: { ...keeper, ensure },
     still: () => !disposed && options.still(),
   })
@@ -136,6 +201,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
     disposed = true
     generation += 1
     unsubscribe()
+    closeRecovery()
     source?.dispose()
     session.dispose()
     keeper.discard()
@@ -168,6 +234,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
         return
       generation += 1
       paused = true
+      closeRecovery()
       if (persistent === undefined)
         session.suspend()
       else
@@ -187,7 +254,8 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
         await discarding
         if (!current(run))
           return false
-        if (persistent === undefined) {
+        if (persistent === undefined || recoveryInMemory) {
+          // 采用未提交后的正文已经固定在内存；恢复页面使用权不恢复原持久资格或已经作废的观察。
           paused = false
           return source !== undefined
         }
@@ -218,6 +286,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
         return
       generation += 1
       paused = true
+      closeRecovery()
       if (persistent === undefined) {
         session.beginKeyDiscard()()
       }
@@ -255,6 +324,7 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
   }
 
   async function buildReady(): Promise<EditingDraftReady> {
+    const started = generation
     const prepared = await session.ready()
     if (!live())
       return { kind: 'disposed' }
@@ -262,21 +332,69 @@ export function prepareEditingDraft(options: EditingDraftOptions): EditingDraftP
       dispose()
       return prepared
     }
-    const initialDraftSeq = prepared.lastDraftSeq ?? 0
-    if (prepared.kind === 'memory' && (prepared.reason === 'disabled' || prepared.reason === 'unsupported' || prepared.reason === 'existing-draft')) {
-      initialMemory = prepared.reason
-      source = createMemoryWorkingDraft({ ...options, initialDraftSeq, reason: prepared.reason })
+    let initialDraftSeq = prepared.lastDraftSeq ?? 0
+    let recovered: RecoveryInitialization = { kind: 'none' }
+    if (recover !== undefined) {
+      try {
+        recovered = await recover(prepared.kind === 'ready'
+          ? { kind: 'empty', highWater: initialDraftSeq }
+          : prepared.reason === 'existing-draft'
+            ? { kind: 'existing', highWater: initialDraftSeq, observe: session.observeRecovery, remove: session.removeRecovery, retire: session.dispose }
+            : { kind: 'memory', highWater: initialDraftSeq, reason: prepared.reason, ...(prepared.recordKnown === true ? { recordKnown: true } : {}) })
+      }
+      catch (error) {
+        report(error)
+        recovered = { kind: 'blocked', reason: 'preserved' }
+      }
+      if (recovered.kind === 'restore')
+        releaseRecovery = recovered.dispose
+      if (!current(started) || paused) {
+        dispose()
+        // dispose 可能已在回调在途时执行；这时新交回的资源仍要单独释放。
+        closeRecovery()
+        return { kind: 'disposed' }
+      }
+      if (recovered.kind === 'blocked' || (prepared.kind === 'memory' && prepared.reason === 'existing-draft' && (recovered.kind !== 'restore' || recovered.recoveryObservation === undefined))) {
+        dispose()
+        return recovered.kind === 'blocked' ? recovered : { kind: 'blocked', reason: 'preserved' }
+      }
+    }
+    const restored = recovered.kind === 'restore' ? recovered : undefined
+    initialDraftSeq = Math.max(initialDraftSeq, restored?.highWater ?? 0)
+    const sourceOptions = { ...options, initialDraftSeq, baseRevision: restored?.baseRevision ?? options.baseRevision, initialCapture: restored?.capture ?? initialCapture }
+    if (recovered.kind === 'memory' || (restored !== undefined && restored.recoveryObservation === undefined) || (prepared.kind === 'memory' && (prepared.reason === 'disabled' || prepared.reason === 'unsupported' || (prepared.reason === 'existing-draft' && restored === undefined)))) {
+      initialMemory = recovered.kind === 'memory' ? recovered.reason : prepared.kind === 'memory' ? prepared.reason : 'existing-draft'
+      source = createMemoryWorkingDraft({ ...sourceOptions, reason: initialMemory })
       session.dispose()
       keeper.discard()
     }
     else {
-      persistent = createPersistentWorkingDraft({ ...options, initialDraftSeq, session })
+      persistent = createPersistentWorkingDraft({ ...sourceOptions, session, recoveryObservation: restored?.recoveryObservation })
       source = persistent
       if (paused)
         persistent.suspend()
     }
+    if (restored !== undefined) {
+      const view = source.view()
+      const initial = view.kind === 'working' ? await source.ready(view.ref) : undefined
+      if (!current(started) || paused) {
+        dispose()
+        return { kind: 'disposed' }
+      }
+      if (initial?.kind !== 'ready' || (initial.local.kind === 'memory' && initial.local.reason === 'fenced')) {
+        dispose()
+        return { kind: 'blocked', reason: 'changed' }
+      }
+      if (initial.local.kind === 'memory') {
+        recoveryInMemory = true
+        initialMemory = initial.local.reason
+      }
+      if (restored.onSaved !== undefined || (initial.local.kind !== 'persisted' && restored.onConfirmed !== undefined))
+        // 部署关闭时本机写入保持暂停，但新上传的云端确认仍有效；清理资格仍严格绑定原轮次且未暂停。
+        source = withRecoveryConfirmation(source, { onConfirmed: initial.local.kind === 'persisted' ? undefined : restored.onConfirmed, onSaved: restored.onSaved, generation: () => generation, active: current, cleanupActive: () => current(started) && !paused, report })
+    }
     const working = source
-    return { kind: 'ready', draft: {
+    return { kind: 'ready', ...(restored === undefined ? {} : { restored: true as const }), draft: {
       ...working,
       ...lifecycle,
       storage,

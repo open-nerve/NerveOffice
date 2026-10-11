@@ -61,7 +61,7 @@ export type SlotBytesOutcome
   = | { readonly kind: 'bytes', readonly files: readonly [Uint8Array<ArrayBuffer> | undefined, Uint8Array<ArrayBuffer> | undefined] }
     | { readonly kind: 'absent' }
     | { readonly kind: 'busy' }
-    | MirrorProblem
+    | (MirrorProblem & { readonly recordKnown?: true })
 
 export interface MirrorDirectory {
   /** 这份文档的两个槽位文件的同步访问句柄：create 为真时没有就建（目录与文件）；拿到一个、另一个拿不到时放开已拿到的 */
@@ -276,6 +276,7 @@ export function opfsMirrorDirectory(root: () => Promise<FileSystemDirectoryHandl
       }
     },
     readSlots: async (key) => {
+      let recordKnown = false
       try {
         const directory = await documentDirectory(key, false)
         if (directory === 'unsupported')
@@ -285,11 +286,15 @@ export function opfsMirrorDirectory(root: () => Promise<FileSystemDirectoryHandl
         const files: (Uint8Array<ArrayBuffer> | undefined)[] = []
         for (const name of SLOT_FILE_NAMES) {
           const handle = await fileIn(directory, name, false)
-          files.push(handle === undefined ? undefined : new Uint8Array(await (await handle.getFile()).arrayBuffer()))
+          const bytes = handle === undefined ? undefined : new Uint8Array(await (await handle.getFile()).arrayBuffer())
+          recordKnown ||= bytes !== undefined && bytes.byteLength > 0
+          files.push(bytes)
         }
         return { kind: 'bytes', files: [files[0], files[1]] }
       }
       catch (error) {
+        if (recordKnown)
+          return { kind: 'failed', error, recordKnown: true }
         return isNotFound(error) ? { kind: 'absent' } : problemOf(error)
       }
     },

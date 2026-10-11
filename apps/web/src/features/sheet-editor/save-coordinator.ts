@@ -192,6 +192,8 @@ export interface SaveCoordinatorOptions {
    * 服务端随之清掉标记；在那之前页头说公式结果尚未保存，离开会提示
    */
   readonly initialFormulasPending?: boolean
+  /** 经恢复入口装入的初值尚未在云端确认，即使 SDK 的修改序号仍是 0。 */
+  readonly initialUnsaved?: boolean
 }
 
 export interface SaveCoordinator {
@@ -341,7 +343,7 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
 
   let baseRevision = options.baseRevision
   /** 服务端确认过的最大修改序号：打开时是 0（打开不算修改） */
-  let savedSeq = 0
+  let savedSeq = options.initialUnsaved ? -1 : 0
   let formulasPending = options.initialFormulasPending ?? false
   /** 排着与进行中的保存的个数：大于 0 时是"保存中" */
   let pendingSaves = 0

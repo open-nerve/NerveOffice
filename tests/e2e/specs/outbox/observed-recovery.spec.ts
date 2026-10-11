@@ -32,6 +32,67 @@ async function observe(page: Page, key: DraftKey) {
   return outcomeOf(await probe(page, 'observe', key), 'observed')
 }
 
+const PRESENCE_FAILURES = { 'superseded': 'superseded', 'quota': 'quota', 'read-abort': 'failed', 'observe-abort': 'failed', 'register-retry-denied': 'unavailable', 'read-retry-denied': 'unavailable', 'observe-retry-denied': 'unavailable' } as const
+type PresenceFailure = keyof typeof PRESENCE_FAILURES
+
+async function seedPresence(page: Page, key: DraftKey, writer: WriterIdentity, present: boolean) {
+  await register(page, key, writer)
+  if (present)
+    expect(await probe(page, 'write', draftFor(key, writer, 41))).toEqual({ kind: 'written' })
+}
+
+async function failPresence(page: Page, key: DraftKey, failure: PresenceFailure) {
+  if (failure === 'superseded')
+    return register(page, key, writerOf(3))
+  if (failure === 'quota') {
+    await page.evaluate(() => {
+      const original: typeof IDBObjectStore.prototype.put = Reflect.get(IDBObjectStore.prototype, 'put')
+      IDBObjectStore.prototype.put = function (...args) {
+        if (this.name === 'writers') {
+          IDBObjectStore.prototype.put = original
+          throw new DOMException('读完原件后写入者登记配额失败', 'QuotaExceededError')
+        }
+        return Reflect.apply(original, this, args)
+      }
+    })
+    return register(page, key, writerOf(4))
+  }
+  await page.evaluate((retryDenied) => {
+    const original: typeof IDBObjectStore.prototype.get = Reflect.get(IDBObjectStore.prototype, 'get')
+    IDBObjectStore.prototype.get = function (...args) {
+      const request = Reflect.apply(original, this, args) as IDBRequest<unknown>
+      if (this.name === 'drafts') {
+        IDBObjectStore.prototype.get = original
+        const transaction = this.transaction
+        let handler: ((event: Event) => void) | null = null
+        Object.defineProperty(request, 'onsuccess', {
+          configurable: true,
+          get: () => handler,
+          set: (callback: ((event: Event) => void) | null) => {
+            handler = callback
+            request.addEventListener('success', (event) => {
+              callback?.call(request, event)
+              if (retryDenied) {
+                Object.defineProperty(transaction, 'error', { value: new DOMException('读完后连接失效', 'UnknownError') })
+                const open: typeof IDBFactory.prototype.open = Reflect.get(IDBFactory.prototype, 'open')
+                IDBFactory.prototype.open = function () {
+                  IDBFactory.prototype.open = open
+                  throw new DOMException('重开时存储被禁止', 'SecurityError')
+                }
+              }
+              transaction.abort()
+            }, { once: true })
+          },
+        })
+      }
+      return request
+    }
+  }, failure.endsWith('retry-denied'))
+  if (failure.startsWith('register'))
+    return register(page, key, writerOf(4))
+  return failure.startsWith('read') ? probe(page, 'read', key) : probe(page, 'observe', key)
+}
+
 async function schedule(order: 'adopt-first' | 'register-first', startAdopt: () => Promise<number>, startRegister: () => Promise<{ readonly outcome: Promise<ProbeRegisterOutcome> }>) {
   if (order === 'adopt-first') {
     const operation = await startAdopt()
@@ -55,6 +116,27 @@ async function replaceDamaged(page: Page, key: DraftKey, replacement: 'draft' | 
 }
 
 test.describe('观察之后的恢复动作', { tag: '@test-build' }, () => {
+  for (const present of [false, true]) {
+    for (const failure of Object.keys(PRESENCE_FAILURES) as PresenceFailure[]) {
+      test(`主库存在事实：原件=${present}，${failure} 只保留实际读到的记录`, async ({ page }) => {
+        const user = await createUser('store-known')
+        await loginThroughApi(page, user)
+        await openOutboxProbe(page)
+        await probe(page, 'chooseKey', 1, randomBytes(32).toString('hex'))
+        const key = { userId: user.id, documentId: randomUUID() }
+        await seedPresence(page, key, writerOf(3), present)
+        const original = await probeDatabase(page, 'getRaw', 'drafts', key)
+        const writer = await probeDatabase(page, 'getRaw', 'writers', key)
+        const result = await failPresence(page, key, failure)
+        expect(result.kind).toBe(PRESENCE_FAILURES[failure])
+        expect(Reflect.get(result, 'recordKnown')).toBe(present ? true : undefined)
+        expect(result).not.toHaveProperty('observation')
+        expect(await probeDatabase(page, 'getRaw', 'drafts', key)).toEqual(original)
+        expect(await probeDatabase(page, 'getRaw', 'writers', key)).toEqual(writer)
+      })
+    }
+  }
+
   for (const order of ['adopt-first', 'register-first'] as const) {
     test(`三页确定交错：${order}，比较与采用在同一个 strict 事务`, async ({ page }) => {
       const { key, writer, second } = await setup(page)

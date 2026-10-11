@@ -174,7 +174,7 @@ function saved(revision: number, unchanged = false): SaveContentResponse {
 let idSequence = 0
 
 /** onSessionStale：保存得到令牌失效时页面做的（编辑器页：令牌已知失效、不可写，随即确认会话） */
-function setup(options: { initialFormulasPending?: boolean, settled?: boolean, seq?: number, onSessionStale?: (page: ReturnType<typeof fakePage>) => void } = {}) {
+function setup(options: { initialUnsaved?: boolean, initialFormulasPending?: boolean, settled?: boolean, seq?: number, onSessionStale?: (page: ReturnType<typeof fakePage>) => void } = {}) {
   const time = fakeLeaseClock(T0)
   const { editor, control } = fakeEditor(time.elapse, { settled: options.settled, seq: options.seq })
   const calls: PendingSend[] = []
@@ -187,6 +187,8 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
   const page = fakePage()
   const digest = vi.fn(async (snapshot: string) => `sha256:${snapshot}`)
   const { draft } = fakeWorkingDraft({ compress, digest, reportError })
+  if (options.initialUnsaved)
+    draft.capture({ snapshot: JSON.stringify({ content: '恢复初值' }), editorSeq: 0, formulasPending: false, dedupe: false })
   const coordinator = createSaveCoordinator({
     editor,
     draft,
@@ -201,6 +203,7 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
     onSessionStale: () => options.onSessionStale?.(page),
     reportError,
     initialFormulasPending: options.initialFormulasPending,
+    initialUnsaved: options.initialUnsaved,
   })
   const tuning = fakeTuning()
   const events: AutosaveEvent[] = []
@@ -211,6 +214,7 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
     clock: time.clock,
     draft,
     initialFormulasPending: options.initialFormulasPending ?? false,
+    initialUnsaved: options.initialUnsaved,
     tuning: tuning.tuning,
     observe: event => events.push(event),
     reportError,
@@ -221,6 +225,49 @@ function setup(options: { initialFormulasPending?: boolean, settled?: boolean, s
 }
 
 type Context = ReturnType<typeof setup>
+
+describe('恢复初值的自动上传', () => {
+  it('编辑序号为零的初值直接进入调度，不要求 SDK 额外修改或重新捕获', async () => {
+    const context = setup({ initialUnsaved: true })
+    expect(context.coordinator.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
+    expect(context.autosave.saved().edits).toBe(false)
+    await context.time.advance(DEFAULT_AUTOSAVE_LIMITS.uploadQuietMs)
+    const call = await sent(context, 1)
+    expect(requestWithSnapshot(call).request.snapshot).toBe(JSON.stringify({ content: '恢复初值' }))
+    expect(context.editor.capture).not.toHaveBeenCalled()
+    call.resolve(saved(2))
+    await drain(context)
+    expect(context.coordinator.view()).toMatchObject({ status: 'clean', unsavedEdits: false })
+    expect(context.autosave.saved().edits).toBe(true)
+    context.autosave.dispose()
+  })
+
+  it('恢复初值尚在上传时用户继续输入，旧确认不能抹掉新修改', async () => {
+    const context = setup({ initialUnsaved: true })
+    await context.time.advance(DEFAULT_AUTOSAVE_LIMITS.uploadQuietMs)
+    const old = await sent(context, 1)
+    context.control.edit('恢复之后的新输入')
+    old.resolve(saved(2))
+    await drain(context)
+    expect(context.coordinator.view()).toMatchObject({ unsavedEdits: true })
+    await context.time.advance(DEFAULT_AUTOSAVE_LIMITS.uploadQuietMs)
+    const next = await sent(context, 2)
+    expect(requestWithSnapshot(next).request.snapshot).toBe(JSON.stringify({ content: '恢复之后的新输入' }))
+    expect(next.request.localSeq).toBeGreaterThan(old.request.localSeq)
+    next.resolve(saved(3))
+    await drain(context)
+    expect(context.autosave.saved().edits).toBe(true)
+    context.autosave.dispose()
+  })
+
+  it('普通打开仍是干净状态，不启动初值上传', async () => {
+    const context = setup()
+    await context.time.advance(DEFAULT_AUTOSAVE_LIMITS.uploadMaxMs)
+    expect(context.coordinator.view()).toMatchObject({ status: 'clean', unsavedEdits: false })
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.dispose()
+  })
+})
 
 describe('来源生命周期重写后的引用', () => {
   it('编辑序号没有变化时换钥重写产生的新引用，下一次自动上传使用最新内容序号', async () => {

@@ -1,6 +1,6 @@
 // 发件箱的浏览器层探针（M4-P1 设计 §3.1、§4；apps/web/src/features/sheet-editor/outbox/testing/outbox-probe.ts）：只在测试构建里，
 // 编辑器页的地址带 outboxProbe 时挂在 window.__nerveOutboxProbe 上。E2E 这边看不到 web 的类型，这里声明用到的部分（与探针的写法相同）。
-// 打开的是一份不存在的文档：页面只确认会话（拿到 CSRF 令牌）、说明"内容不存在"，不建编辑器——探针不依赖编辑器，用例快。
+// 打开不带文档身份的入口，不建编辑器或触发恢复发现；需要密钥的探针自行确认会话并取 CSRF 令牌。
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
 import type { Page } from '@playwright/test'
 import type { OutboxSessionProbe } from './outbox-session-probe.ts'
@@ -240,7 +240,7 @@ export type ProbeSlot
     | { readonly kind: 'invalid', readonly reason: string, readonly size: number }
     | { readonly kind: 'valid', readonly generation: number, readonly meta: DraftMeta, readonly size: number }
 
-export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number }
+export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number } | { readonly at: number, readonly bytes: readonly number[] }
 
 export interface ProbePipeline {
   readonly create: (options: ProbePipelineOptions) => Promise<{ readonly id: number, readonly ready: OutboxWorkerReady }>
@@ -347,11 +347,11 @@ type StorageMethod = keyof OutboxProbe['storage']
 type PipelineMethod = keyof OutboxProbe['pipeline']
 
 /**
- * 打开编辑器页、等探针挂上（要先登录：编辑器页先确认会话，没登录时整页跳到登录页）。默认打开一份不存在的文档——页面只确认会话、
- * 说明"内容不存在"，不建编辑器
+ * 打开不带文档身份的编辑器入口，只挂接探针，不创建编辑器或发现草稿。真实文档的 404 在 P3 会触发撤权清理与恢复读取，不能作为空白探针页。
+ * 需要 HTTP 的用例先登录；密钥探针自己确认会话并取 CSRF，存储探针不依赖页面载入。
  */
-export async function openOutboxProbe(page: Page, documentId: string = randomUUID()): Promise<void> {
-  await page.goto(`/documents/${documentId}?outboxProbe`)
+export async function openOutboxProbe(page: Page): Promise<void> {
+  await page.goto('/editor.html?outboxProbe')
   await expect.poll(async () => page.evaluate(() => window.__nerveOutboxProbe !== undefined), { message: '页面里没有发件箱的探针：要跑测试构建（web 的 build:e2e），地址带 outboxProbe' }).toBe(true)
 }
 

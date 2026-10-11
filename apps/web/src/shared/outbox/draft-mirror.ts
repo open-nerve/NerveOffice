@@ -38,7 +38,7 @@ export type MirrorRead
     | { readonly kind: 'absent' }
     | { readonly kind: 'busy' }
     | { readonly kind: 'unsupported' }
-    | { readonly kind: 'failed', readonly error: FailureDescription }
+    | { readonly kind: 'failed', readonly error: FailureDescription, readonly recordKnown?: true }
 
 export type MirrorDocuments
   = | { readonly kind: 'listed', readonly documentIds: readonly string[] }
@@ -147,8 +147,14 @@ function readWhole(handle: SlotHandle): Uint8Array<ArrayBuffer> {
 /**
  * 读出两个槽位并校验（整个文件都校验，不只看头：头合格、内容却被截掉的槽位当作不合格，写在它上面，不碰另一个合格的）
  */
-async function readSlots(slots: readonly [SlotHandle, SlotHandle], key: DraftKey): Promise<readonly [SlotRead, SlotRead]> {
-  return [await parseSlot(readWhole(slots[0]), key), await parseSlot(readWhole(slots[1]), key)]
+async function readSlots(slots: readonly [SlotHandle, SlotHandle], key: DraftKey, found?: () => void): Promise<readonly [SlotRead, SlotRead]> {
+  const read = async (handle: SlotHandle): Promise<SlotRead> => {
+    const bytes = readWhole(handle)
+    if (bytes.byteLength > 0)
+      found?.()
+    return parseSlot(bytes, key)
+  }
+  return [await read(slots[0]), await read(slots[1])]
 }
 
 function orderingOf(record: Ordering): Ordering {
@@ -350,11 +356,14 @@ export function createDraftMirror(options: DraftMirrorOptions): DraftMirror {
         }),
 
     read: async key => withSlots<MirrorRead>(key, async (slots) => {
+      let recordKnown = false
       try {
-        return { kind: 'slots', slots: await readSlots(slots, key) }
+        return { kind: 'slots', slots: await readSlots(slots, key, () => {
+          recordKnown = true
+        }) }
       }
       catch (error) {
-        return { kind: 'failed', error: describeFailure(error) }
+        return { kind: 'failed', error: describeFailure(error), ...(recordKnown ? { recordKnown: true } : {}) }
       }
     }, outcome => outcome),
 

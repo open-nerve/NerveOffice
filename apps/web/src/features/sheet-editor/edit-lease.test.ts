@@ -4,8 +4,10 @@ import type { EditLeaseApi, EditLeaseOptions, LeaseLoss } from './edit-lease.ts'
 import { EDIT_ACQUIRE_IDLE_SECONDS_MAX, EDIT_IDLE_SECONDS_MAX, EDIT_LEASE_HEARTBEAT_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from '../../shared/api/index.ts'
+import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseHolderOf, leaseLossOf, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, trackActivity, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { decideDraftRecovery } from './recovery/recovery-decision.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
@@ -145,6 +147,22 @@ async function held(context: ReturnType<typeof setup>) {
 }
 
 describe('申请（M3-P1 设计 §3.4.7）', () => {
+  it.each([
+    { source: { clientInstanceId: 'original-page', localSeq: 11 }, decision: 'restore' },
+    { source: { clientInstanceId: 'other-page', localSeq: 11 }, decision: 'copy' },
+    { source: { clientInstanceId: 'original-page', localSeq: 10 }, decision: 'copy' },
+    { source: null, decision: 'copy' },
+  ])('当前修订和来源一起透传，恢复严格核对自己的旧请求：$source', async ({ source, decision }) => {
+    const context = setup({ acquire: async () => ({ ...ACQUIRED, source }) })
+    const acquired = await acquireEditLease(context.options)
+    expect(acquired).toMatchObject({ kind: 'acquired', revision: 5, source })
+    if (acquired.kind !== 'acquired')
+      throw new Error('需要已取得的编辑权')
+    const meta = sampleMeta({ baseRevision: 4, draftSeq: 12, inFlight: { requestId: 'old-save', clientInstanceId: 'original-page', localSeq: 11, sentAt: 1_000 }, updatedAt: 1_000 })
+    expect(decideDraftRecovery({ key: { userId: meta.userId, documentId: meta.documentId }, record: { kind: 'draft', meta }, access: 'editable', online: true, current: { revision: acquired.revision, source: acquired.source, occupied: false }, pageFormat: meta.format, replay: { kind: 'unchecked' }, now: 1_001 })).toMatchObject({ kind: decision })
+    acquired.lease.abandon()
+  })
+
   it('文档带着"公式待更新"（M3-P4 设计 §3.5）：申请的结果交回它（进入编辑时强制重算、收齐之后补存）', async () => {
     const context = setup({ acquire: async () => ({ ...ACQUIRED, formulasPending: true }) })
     expect(await acquireEditLease(context.options)).toMatchObject({ kind: 'acquired', revision: 5, formulasPending: true })

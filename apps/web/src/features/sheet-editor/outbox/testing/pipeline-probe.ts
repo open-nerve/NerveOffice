@@ -81,7 +81,7 @@ export type ProbeSlot
     | { readonly kind: 'valid', readonly generation: number, readonly meta: DraftMeta, readonly size: number }
 
 /** 把槽位改坏：截成 size 字节（写一半）；整个换成 size 个 value（垃圾） */
-export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number }
+export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number } | { readonly at: number, readonly bytes: readonly number[] }
 
 export interface ProbePipeline {
   /** 建一个管道：交回编号与握手的结果（Worker 等握手；进程内一律 ready） */
@@ -375,7 +375,11 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
     cleanupExpired: async now => plainPurge(await localCleanup().purgeExpired(now)),
     mirrorSlots: async key => [await slotOf(key, 0), await slotOf(key, 1)],
     corruptSlot: async (key, slot, corruption) => {
-      await opfs('truncate' in corruption ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate } : { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value })
+      await opfs('truncate' in corruption
+        ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate }
+        : 'fill' in corruption
+          ? { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value }
+          : { op: 'patch', path: pathOf(key, slot), ...corruption })
     },
     removeMirror: async userId => opfsMirrorDirectory().removeUser(userId),
     removeMirrorDocument: async key => opfsMirrorDirectory().removeDocument(key),

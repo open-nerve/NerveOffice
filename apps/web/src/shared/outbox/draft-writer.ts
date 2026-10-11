@@ -39,6 +39,9 @@ export type WriterProblem
     | OutboxUnavailable
     | { readonly kind: 'failed', readonly error: FailureDescription }
 
+/** 读取/登记中途已见原件；失败不附带可操作的观察凭证。 */
+export type RecoveryProblem = WriterProblem & { readonly recordKnown?: true }
+
 /** 手里没有本机密钥（还没取到、取不到、已丢掉）：加密与解开都做不了 */
 export interface NoKey {
   readonly kind: 'no-key'
@@ -104,7 +107,8 @@ export type DraftRead = OpenedRecord | { readonly kind: 'absent' } | WriterProbl
 /** 原始观察只留密文；正文交给调用方，操作凭证仍归这个宿主。 */
 export type ObserveResult
   = | { readonly kind: 'observed', readonly observation: DraftObservation, readonly record: OpenedRecord | { readonly kind: 'absent' }, readonly writer: WriterRecord | undefined }
-    | WriterProblem
+    /** 本轮已见记录但未完成观察：仅保留存在事实，不提供读取/清理凭证，也不能据此退成无旧稿的内存编辑。 */
+    | RecoveryProblem
 
 /** 恢复后首次捕获；不得带旧请求、弱序号接手或去重选项。 */
 export type AdoptionCapture = Omit<CaptureToWrite, 'inFlight' | 'dedupe' | 'adoptSeq'>
@@ -121,10 +125,10 @@ export type RegisterResult
    * 登记了：lastDraftSeq 是高水位；existing 是现有的草稿（库与镜像里最新、解得开的那一份，已解开或归类；有就由恢复决定，P3）；
    * mirror 是镜像的两个槽位建好、拿到句柄了没有，以及库里那一份比镜像新时补写成了没有
    */
-  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: OpenedRecord | undefined, readonly mirror: MirrorStatus }
-    | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean }
+  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: OpenedRecord | undefined, readonly mirror: MirrorStatus, readonly recordKnown?: true }
+    | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean, readonly recordKnown?: true }
   /** 没登记：登记之前的比对没做完（库的问题照原样；读不出镜像是 failed，名字是 MirrorUnreadable，复验 C1），由 P2 决定稍后重试或放弃本机草稿 */
-    | WriterProblem
+    | RecoveryProblem
 
 /** 重封（标记在途）的结果 */
 export type ResealResult
@@ -223,7 +227,7 @@ function problemOf(problem: StoreProblem): WriterProblem {
 
 /** 本页写下的那一份用当前的密钥解不开（密钥换过而没重封成、本页的密钥过时、记录被改过）：重封做不了，不动它 */
 function unreadableOwn(reason: UnsealFailure): WriterProblem {
-  return { kind: 'failed', error: { name: 'DraftUnreadable', message: `本页写下的草稿用当前的密钥解不开（${reason}）` } }
+  return { kind: 'failed', error: { name: 'DraftUnreadable', message: `本页草稿解密失败：${reason}` } }
 }
 
 /** 重封、改基准时去掉密钥版本：由这次的密钥给出 */
@@ -303,6 +307,13 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
   /** 比对这份文档；只在持有短期互斥锁的文档任务里调用。 */
   async function reconcileOf(key: DraftKey, stored?: StoreReadOutcome): Promise<Reconciled> {
     return recovery.reconcile(key, stored)
+  }
+
+  function hasRecord(reconciled: Reconciled): boolean {
+    return reconciled.recordKnown === true
+      || reconciled.problem?.recordKnown === true || reconciled.unread?.recordKnown === true
+      || (reconciled.mirror?.kind === 'slots' && reconciled.mirror.slots.some(slot => slot.kind !== 'empty'))
+      || (reconciled.mirror?.kind === 'failed' && reconciled.mirror.recordKnown === true)
   }
 
   /**
@@ -512,7 +523,10 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
   }
 
   return {
-    register: async (key, writer, force) => enqueue(key, async (state): Promise<RegisterResult> => {
+    register: async (key, writer, force) => {
+      let recordKnown = false
+      const failed = (problem: WriterProblem): RecoveryProblem => recordKnown ? { ...problem, recordKnown: true } : problem
+      return enqueue(key, async (state): Promise<RegisterResult> => {
       // 登记之前先比对镜像（删库之后连写入者一起写回：不补就挡不住旧的写入者）。比对没做完（写回、核对丢失时库出了问题，读库出了问题
       // 而镜像里有要比对的，读镜像出错）就不登记，交回这个问题（复验 C1，与读草稿一样由 P2 稍后再试）：新登记的写入者继承的高水位
       // 没看过镜像里那一份，草稿序号这条线就分叉了——本页之后轮流写槽位，第二次就把它盖掉，之后的比对也判不对。
@@ -520,32 +534,35 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       // 此时 busy 只可能是空闲 Worker 保留的长期句柄；它在完整恢复之后登记，之后只在主库提交后写镜像，故可继续登记。
       // 主线程退路也先做只读恢复。不能没有互斥就放行 busy：临时读者还没恢复时，新页可能先写出同号草稿，误把旧镜像判为 seen。
       // 不在"之后第一次拿到句柄时"再比对：那时本页可能已写了自己的序号，与镜像里那一份撞上，会被误判为 seen
-      const reconciled = await reconcileOf(key)
-      const unfinished = unfinishedOf(reconciled)
-      if (unfinished !== undefined)
-        return problemOf(unfinished)
-      const outcome = await store.registerWriter(key, writer, { now: now(), force })
-      if (outcome.kind === 'superseded') {
-        mirror?.detach(key)
-        return { kind: 'superseded', currentEpoch: outcome.currentEpoch, sameEpoch: outcome.sameEpoch }
-      }
-      if (outcome.kind !== 'registered')
-        return problemOf(outcome)
-      // 新的一次登记：手里记着的与去重的起点都作废（现有的草稿可能是别的写入者留下的；恢复之后由 seedDigest 设定起点）
-      state.latest = undefined
-      state.dedupe = undefined
-      // 现有的草稿：库里的（比对写回的已经在库里），同一版本在镜像里的拷贝备着
-      const existing = await openedOf(outcome.existing ?? { kind: 'absent' }, { mirror: reconciled.mirror, restored: undefined })
-      const attached = mirror === undefined ? MIRROR_OFF : await mirror.attach(key)
-      // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回
-      const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' ? await mirrorBackfill(outcome.existing.draft) : undefined
-      return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing, mirror: filled ?? attached }
-    }, error => ({ kind: 'failed', error })),
+        const reconciled = await reconcileOf(key)
+        recordKnown = hasRecord(reconciled)
+        const unfinished = unfinishedOf(reconciled)
+        if (unfinished !== undefined)
+          return failed(problemOf(unfinished))
+        const outcome = await store.registerWriter(key, writer, { now: now(), force })
+        recordKnown ||= outcome.recordKnown === true || (outcome.kind === 'registered' && outcome.existing !== undefined)
+        if (outcome.kind === 'superseded') {
+          mirror?.detach(key)
+          return { kind: 'superseded', currentEpoch: outcome.currentEpoch, sameEpoch: outcome.sameEpoch, ...(recordKnown ? { recordKnown: true } : {}) }
+        }
+        if (outcome.kind !== 'registered')
+          return failed(problemOf(outcome))
+        // 新的一次登记：手里记着的与去重的起点都作废（现有的草稿可能是别的写入者留下的；恢复之后由 seedDigest 设定起点）
+        state.latest = undefined
+        state.dedupe = undefined
+        // 现有的草稿：库里的（比对写回的已经在库里），同一版本在镜像里的拷贝备着
+        const existing = await openedOf(outcome.existing ?? { kind: 'absent' }, { mirror: reconciled.mirror, restored: undefined })
+        const attached = mirror === undefined ? MIRROR_OFF : await mirror.attach(key)
+        // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回
+        const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' ? await mirrorBackfill(outcome.existing.draft) : undefined
+        return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing, mirror: filled ?? attached, ...(existing === undefined && recordKnown ? { recordKnown: true } : {}) }
+      }, error => failed({ kind: 'failed', error }))
+    },
 
     write: async capture => enqueue(capture.key, async (state): Promise<CaptureWritten> => {
       const { inFlight } = capture
       if (inFlight !== null && inFlight.localSeq > capture.draftSeq)
-        return { kind: 'failed', error: { name: 'InvalidCapture', message: `在途的保存（序号 ${inFlight.localSeq}）比这一份（序号 ${capture.draftSeq}）新` }, gzip: null }
+        return { kind: 'failed', error: { name: 'InvalidCapture', message: `在途序号 ${inFlight.localSeq} 超过草稿 ${capture.draftSeq}` }, gzip: null }
       const digest = await sha256Hex(capture.bytes)
       const last = state.dedupe
       if (capture.dedupe && last !== undefined && last.digest === digest && last.formulasPending === capture.formulasPending)
@@ -625,7 +642,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
             return problemOf(outcome)
         }
       }
-      return { kind: 'failed', error: { name: 'ConfirmRace', message: `确认时库里的草稿一直在变（试了 ${CONFIRM_ATTEMPTS} 次）` } }
+      return { kind: 'failed', error: { name: 'ConfirmRace', message: `草稿确认冲突：${CONFIRM_ATTEMPTS} 次` } }
     }, error => ({ kind: 'failed', error })),
 
     read: async key => enqueue(key, async (): Promise<DraftRead> => {
@@ -640,19 +657,27 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       return read.kind === 'quota' || read.kind === 'unavailable' || read.kind === 'failed' ? problemOf(read) : { kind: 'absent' }
     }, error => ({ kind: 'failed', error })),
 
-    observe: async key => enqueue(key, async (): Promise<ObserveResult> => {
-      const reconciled = await reconcileOf(key)
-      const unfinished = unfinishedOf(reconciled)
-      if (unfinished !== undefined)
-        return problemOf(unfinished)
-      if (reconciled.mirror?.kind === 'busy' || (reconciled.mirror?.kind === 'slots' && hasNewerFormatSlot(reconciled.mirror.slots)))
-        return { kind: 'failed', error: { name: 'MirrorUnverified', message: '镜像被占用或格式较新，尚不能核对恢复原件' } }
-      const observed = await store.observeDraft(key)
-      if (observed.kind !== 'observed')
-        return problemOf(observed)
-      const record = await openedOf(observed.record, { mirror: reconciled.mirror, restored: undefined })
-      return { kind: 'observed', observation: observed.observation, record: record ?? { kind: 'absent' }, writer: observed.writer }
-    }, error => ({ kind: 'failed', error })),
+    observe: async (key) => {
+      let recordKnown = false
+      const failed = (problem: WriterProblem): ObserveResult => recordKnown ? { ...problem, recordKnown: true } : problem
+      return enqueue(key, async (): Promise<ObserveResult> => {
+        const reconciled = await reconcileOf(key)
+        recordKnown = hasRecord(reconciled)
+        const unfinished = unfinishedOf(reconciled)
+        if (unfinished !== undefined)
+          return failed(problemOf(unfinished))
+        if (reconciled.mirror?.kind === 'busy' || (reconciled.mirror?.kind === 'slots' && hasNewerFormatSlot(reconciled.mirror.slots)))
+          return failed({ kind: 'failed', error: { name: 'MirrorUnverified', message: '镜像占用或格式较新，无法核对' } })
+        const observed = await store.observeDraft(key)
+        if (observed.kind !== 'observed') {
+          recordKnown ||= observed.recordKnown === true
+          return failed(problemOf(observed))
+        }
+        recordKnown ||= observed.record.kind !== 'absent'
+        const record = await openedOf(observed.record, { mirror: reconciled.mirror, restored: undefined })
+        return { kind: 'observed', observation: observed.observation, record: record ?? { kind: 'absent' }, writer: observed.writer }
+      }, error => failed({ kind: 'failed', error }))
+    },
 
     removeObserved: async observation => enqueue(observation.key, async (state): Promise<ObservedRemoveResult> => {
       const outcome = await store.removeObserved(observation, now())

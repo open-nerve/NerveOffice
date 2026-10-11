@@ -72,6 +72,7 @@ import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { editorQueryClient } from './editor-query-client.ts'
 import { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
+import { RecoveryNotice } from './recovery/recovery-notice.tsx'
 import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 import { EditorShareEntry } from './share-entry.tsx'
 
@@ -1006,7 +1007,7 @@ function SessionNotice({ view, editing }: { view: EditorPageView, editing: boole
   return null
 }
 
-function LoadFailure({ load }: { load: Exclude<EditorPageLoad, { kind: 'loading' | 'ready' }> }) {
+function LoadFailure({ load, backRef }: { load: Exclude<EditorPageLoad, { kind: 'loading' | 'ready' }>, backRef?: RefObject<HTMLAnchorElement | null> }) {
   let text: string
   let requestId: string | undefined
   if (load.kind === 'not-found') {
@@ -1031,7 +1032,7 @@ function LoadFailure({ load }: { load: Exclude<EditorPageLoad, { kind: 'loading'
           {requestId !== undefined && <p>{messages.common.requestId(requestId)}</p>}
         </AlertDescription>
       </Alert>
-      <a href={HOME_PATH} className={buttonVariants({ variant: 'outline' })}>{editorMessages.back}</a>
+      <a ref={backRef} href={HOME_PATH} className={buttonVariants({ variant: 'outline' })}>{editorMessages.back}</a>
     </main>
   )
 }
@@ -1043,7 +1044,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   const available = view.connection?.available !== false
   const [queryClient] = useState(() => editorQueryClient(page))
   /** 确认框（放弃本页的修改、强制接管）：同一时刻至多一个 */
-  const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean }>()
+  const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean, readonly requiresRecovery?: boolean }>()
   const { load, mode, save } = view
   const ready = load.kind === 'ready' ? load : undefined
   const title = ready?.title
@@ -1059,9 +1060,6 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     if (title !== undefined)
       document.title = messages.app.pageTitle(title)
   }, [title])
-
-  if (load.kind !== 'loading' && load.kind !== 'ready')
-    return <LoadFailure load={load} />
 
   const reading = ready !== undefined && mode?.kind === 'reading' ? mode : undefined
   const entering = ready !== undefined && mode?.kind === 'entering'
@@ -1101,7 +1099,29 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   }
 
   function confirmationUnavailable(): string | undefined {
-    return pending?.requiresConnection === true && page.view().connection?.available === false ? messages.common.connectionRequired : undefined
+    const current = page.view()
+    if (pending?.requiresConnection === true && current.connection?.available === false)
+      return messages.common.connectionRequired
+    if (pending?.requiresRecovery === true && (current.session !== 'active' || current.confirmingSession || current.sessionProblem !== undefined || (current.mode !== undefined && current.mode.kind !== 'reading')))
+      return editorMessages.recovery.preserve.session
+    return undefined
+  }
+
+  function confirmDiscardRecovery(): void {
+    const intent = page.beginDiscardRecovery()
+    if (intent === undefined)
+      return
+    setPending({
+      requiresConnection: true,
+      requiresRecovery: true,
+      title: editorMessages.recovery.discardTitle,
+      description: editorMessages.recovery.discardDescription,
+      confirmLabel: editorMessages.recovery.discardConfirm,
+      destructive: true,
+      run: async () => () => void page.discardRecovery(intent),
+      refresh: async () => undefined,
+      returnFocus: () => backRef.current?.focus(),
+    })
   }
 
   /** 放弃本页的修改：先确认（规范 §2.4 的确认框）；放弃之后这个按钮不在了，焦点交给返回链接 */
@@ -1118,6 +1138,36 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
       refresh: async () => undefined,
       returnFocus: () => backRef.current?.focus(),
     })
+  }
+
+  const recoveryNotice = (
+    <RecoveryNotice
+      view={view.recovery}
+      available={available}
+      active={view.session === 'active' && !view.confirmingSession && view.sessionProblem === undefined}
+      reading={reading !== undefined || mode === undefined}
+      entering={entering}
+      canRestore={reading?.canEdit === true && !reading.gone && reading.blocked === undefined && reading.damaged === undefined && reading.holder === undefined && reading.request === undefined && reading.takeover === undefined}
+      onRestore={() => void page.enterEditing()}
+      onCopy={() => void page.copyRecovery()}
+      onRetry={() => void page.retryRecovery()}
+      onDiscard={confirmDiscardRecovery}
+      onRetryCleanup={() => void page.retryRecoveryCleanup()}
+      onAcknowledge={at => void page.acknowledgeRecovery(at)}
+      onReload={page.reload}
+    />
+  )
+
+  if (load.kind !== 'loading' && load.kind !== 'ready') {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <div ref={rescueFocus} className="contents">
+          <LoadFailure load={load} backRef={backRef} />
+          {recoveryNotice}
+        </div>
+        <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} unavailable={confirmationUnavailable} />
+      </QueryClientProvider>
+    )
   }
 
   return (
@@ -1150,6 +1200,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
         {/* 一直在的读屏状态区：阅读时谁在编辑、有更新、请求编辑的进展等；编辑时有人请求编辑的那一句（只有它时视觉隐藏）、请求方取消了、
             快照接近容量上限的说明（不打断，M3-P3、M3-P5） */}
         <StatusRegion className={info?.announcementOnly === true ? 'sr-only' : 'mx-3 mt-2 rounded-lg border bg-card px-2.5 py-2 text-sm text-card-foreground'}>{readingInfo(reading, personal) ?? info?.content}</StatusRegion>
+        {recoveryNotice}
         <div className="flex flex-col gap-2 px-3 empty:hidden [&:not(:empty)]:py-2">
           {/* 上一位编辑者异常中断（M3-P5）：进入编辑之后页头下面一条不打断的说明，"知道了"之后、离开编辑时消失 */}
           {interruption !== undefined && <InterruptionNotice interruption={interruption} onDismiss={page.dismissInterruption} />}

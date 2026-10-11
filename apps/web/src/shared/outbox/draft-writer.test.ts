@@ -521,7 +521,7 @@ describe('登记写入者（§3.4.2）', () => {
     expect(registered).toMatchObject({ kind: 'registered', lastDraftSeq: 6, existing: { kind: 'draft', meta: { writerId: OTHER_WRITER_ID, draftSeq: 6 } } })
     expect(registered.kind === 'registered' && registered.existing?.kind === 'draft' && textOf(await gunzipBytes(registered.existing.gzip))).toBe('left behind')
     fake.putRaw('writers', KEY, { ...KEY, writeEpoch: 9, writerId: OTHER_WRITER_ID, lastDraftSeq: 6, registeredAt: NOW })
-    expect(await writer.register(KEY, ME, false)).toEqual({ kind: 'superseded', currentEpoch: 9, sameEpoch: false })
+    expect(await writer.register(KEY, ME, false)).toEqual({ kind: 'superseded', currentEpoch: 9, sameEpoch: false, recordKnown: true })
     expect(await writer.register(KEY, ME, true)).toMatchObject({ kind: 'registered', lastDraftSeq: 6 })
   })
 

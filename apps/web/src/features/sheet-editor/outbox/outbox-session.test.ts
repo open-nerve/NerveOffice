@@ -264,6 +264,21 @@ describe('恢复会话的显式接手资格', () => {
 })
 
 describe('存储事实订阅', () => {
+  it('暂停返回的旧宿主收尾晚于新准备时，不关闭新宿主或改变新写入资格', async () => {
+    const h = await harness()
+    const session = h.start()
+    await session.ready()
+    const finish = session.suspend()
+    const next = fakeHost()
+    h.host.mockResolvedValueOnce(next.host)
+    expect(await session.resume()).toMatchObject({ kind: 'ready' })
+    finish()
+    expect(h.local.dispose).toHaveBeenCalledOnce()
+    expect(next.dispose).not.toHaveBeenCalled()
+    expect(await session.write(capture())).toMatchObject({ kind: 'written' })
+    session.dispose()
+  })
+
   it('准备和持久保存申请分别通知；申请迟到不阻挡 ready，也不重复申请', async () => {
     const h = await harness()
     const persistence = deferred<PersistOutcome>()
@@ -608,8 +623,8 @@ describe('发件箱写入资格准备', () => {
     h.local.register.mockResolvedValue({ kind: 'registered', lastDraftSeq: 37, existing, mirror: { kind: 'off' } })
     const session = h.start()
     const summary = existing.kind === 'draft' ? { kind: 'draft', meta: existing.meta } : existing
-    expect(await session.ready()).toEqual({ kind: 'memory', reason: 'existing-draft', existing: summary, lastDraftSeq: 37 })
-    expect(session.view()).toEqual({ kind: 'memory', reason: 'existing-draft', existing: summary, lastDraftSeq: 37 })
+    expect(await session.ready()).toEqual({ kind: 'memory', reason: 'existing-draft', existing: summary, lastDraftSeq: 37, recordKnown: true })
+    expect(session.view()).toEqual({ kind: 'memory', reason: 'existing-draft', existing: summary, lastDraftSeq: 37, recordKnown: true })
     expect(h.local.dispose).toHaveBeenCalledTimes(1)
     expect(h.local.write).not.toHaveBeenCalled()
     expect(h.local.remove).not.toHaveBeenCalled()
@@ -705,7 +720,7 @@ describe('暂停和销毁不被晚到准备复活', () => {
       key.resolve(h.key)
       host.resolve(h.local.host)
       setKey.resolve(KEY_SET)
-      register.resolve(REGISTERED)
+      register.resolve({ ...REGISTERED, recordKnown: true })
       confirm.resolve({ kind: 'current' })
       expect(await session.ready()).toEqual(action === 'suspend' ? { kind: 'memory', reason: 'paused' } : { kind: 'disposed' })
       expect(session.view()).toEqual(action === 'suspend' ? { kind: 'memory', reason: 'paused' } : { kind: 'disposed' })

@@ -16,7 +16,7 @@
 // 打开平台时一份一份地比对（reconcileAll，审查 A13）：每份一个请求，一份出错不拖累别的。发件箱 Worker 也引用这个文件：不引用 zod
 import type { MirrorRead, MirrorStatus } from './draft-mirror.ts'
 import type { DraftKey, StoredDraft } from './draft-record.ts'
-import type { DraftStore, StoreProblem, StoreReadOutcome } from './draft-store.ts'
+import type { DraftStore, StoreProblem, StoreReadOutcome, StoreRecoveryProblem } from './draft-store.ts'
 import type { FailureDescription } from './failure.ts'
 import type { MirrorDirectory } from './mirror-directory.ts'
 import { describeFailure } from './failure.ts'
@@ -42,8 +42,10 @@ export type RecoveryStore = Pick<DraftStore, 'readDraft' | 'restoreDraft' | 'rec
 export interface Reconciled {
   readonly mirror: MirrorRead | undefined
   readonly restored: StoredDraft | undefined
-  readonly problem?: StoreProblem
-  readonly unread?: StoreProblem
+  /** 旧镜像被截断后，已读到的主库记录仍存在；不能因不再返回镜像而丢掉这个事实。 */
+  readonly recordKnown?: true
+  readonly problem?: StoreRecoveryProblem
+  readonly unread?: StoreRecoveryProblem
 }
 
 export interface DraftRecovery {
@@ -163,9 +165,9 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
   }
 
   /** 截断镜像：里面的不再算数 */
-  async function clear(key: DraftKey): Promise<Reconciled> {
+  async function clear(key: DraftKey, recordKnown = false): Promise<Reconciled> {
     await mirror.clear(key)
-    return { mirror: undefined, restored: undefined }
+    return { mirror: undefined, restored: undefined, ...(recordKnown ? { recordKnown: true as const } : {}) }
   }
 
   return {
@@ -202,14 +204,14 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
             return { ...kept, problem: outcome }
           // 库里是墓碑：镜像里的是该删的，截断它
           if (outcome.reason === 'retired')
-            return clear(key)
+            return clear(key, current.kind !== 'absent')
           // 库里的胜出：本页是写入者时补写，镜像跟上库
           if (current.kind === 'draft' && await backfill(current.draft))
             return kept
           // 镜像过时（库里的写入者看过它、超过保留期）：截断它，里面的不再算数——库里没有草稿时不让确认删掉、放弃过的在删库之后复活。
           // 别的（foreign、unseen——库里已留下 lost 提示——、not-newer）不截断：镜像里那一份留给库里的写入者写镜像时盖掉
           if (outcome.reason === 'seen' || outcome.reason === 'expired')
-            return clear(key)
+            return clear(key, current.kind !== 'absent')
           return kept
         }
         case 'lost': {
@@ -246,7 +248,7 @@ export function pageMirror(directory: MirrorDirectory): RecoveryMirror {
         case 'quota':
           return { kind: 'failed', error: { name: 'QuotaExceededError', message: '读镜像时写满' } }
         case 'failed':
-          return { kind: 'failed', error: describeFailure(outcome.error) }
+          return { kind: 'failed', error: describeFailure(outcome.error), ...(outcome.recordKnown === true ? { recordKnown: true } : {}) }
       }
     },
     clear: async () => ({ kind: 'not-mirrored', reason: 'unsupported' }),

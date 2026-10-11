@@ -189,15 +189,18 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await waitForEditorAccess(page, 'read')
     await saves.unblock()
-    await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
-    const copyId = await copiedDocumentId(page)
-    expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('only in the deaf tab')
 
-    // B 照常编辑、保存；原文档里没有 A 没存上的修改
+    // M4-P3 的统一准备入口接上本机草稿；B 在恢复内容上继续编辑并保存
     await typeInCell(other, 'B1', 'second tab')
     await saveAndWait(other)
+    await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
+    const copyId = await copiedDocumentId(page)
+    const copiedContent = (await savedContent(page, copyId)).snapshot
+    expect([cellOf(copiedContent, 'A1')?.v, cellOf(copiedContent, 'B1')]).toEqual(['only in the deaf tab', undefined])
+
+    // A 的副本保持旧页内容；原文档同时保留 B 恢复的内容与 B 后来的输入
     const saved = (await savedContent(other, documentId)).snapshot
-    expect([cellOf(saved, 'A1'), cellOf(saved, 'B1')?.v]).toEqual([undefined, 'second tab'])
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v]).toEqual(['only in the deaf tab', 'second tab'])
   })
 
   test('US-M3-08 B 已本人接管但尚未抢锁，A 心跳先得知失效：sameSession 立即说明本浏览器接手，不等本机证据（DEF-071）', async ({ page, context }) => {
