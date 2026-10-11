@@ -203,7 +203,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
   // 引入失败照常载入（自检随之没有结果，错误交给浏览器的错误报告）。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
   if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
     void import('./selftest-hook.ts').then(
-      ({ watchForSelftest }) => watchForSelftest(page, elements),
+      ({ watchForSelftest }): void | Promise<void> => watchForSelftest(page, elements),
       (error: unknown) => reportLoadFailure(error),
     ).then(async () => page.load())
     return

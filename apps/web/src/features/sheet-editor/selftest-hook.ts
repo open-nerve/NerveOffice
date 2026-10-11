@@ -215,13 +215,23 @@ function watchReloadSaves(documentId: string): NonNullable<SelftestHost['reloadS
 }
 
 /** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
-export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements): void {
+export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements): void | Promise<void> {
   const startedAt = new Date().toISOString()
   const documentId = documentIdFromPagePath(window.location.pathname)
   if (new URLSearchParams(window.location.search).get('selftest') === DEAF_HOLDER_SCENARIO)
     deafenHandoverChannel()
   const reloadSaves = documentId !== undefined && new URLSearchParams(window.location.search).get('selftest') === 'refresh-save' ? watchReloadSaves(documentId) : undefined
   const log = watchPage(window)
+  if (new URLSearchParams(window.location.search).get('selftest') === 'crash-recovery') {
+    return import('../../editor/testing/selftest.ts').then(async ({ watchCrashSelftest }) => watchCrashSelftest({
+      documentId: documentId ?? '',
+      chrome: elements.chrome,
+      view: () => ({ mode: page.view().mode?.kind, surface: page.view().surface, save: page.view().save?.status }),
+      pageErrors: () => [...log.pageErrors, ...log.consoleErrors],
+      recovered: () => page.view().recovery?.stage === 'restored',
+      subscribe: listener => page.subscribe(listener),
+    }))
+  }
   const allowLeave = allowLeaveForReport(window)
   let started = false
   // 第一次载入（打开即阅读）时容器第一次到 ready、steady 的时刻（M4-P1 S1 的首屏）：页面的状态每变一次同步通知，订阅在载入之前

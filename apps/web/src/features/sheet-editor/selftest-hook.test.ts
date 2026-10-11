@@ -74,7 +74,7 @@ describe('页面自检的挂接', () => {
     const response = new Response('{}', { status: 200 })
     const original = vi.spyOn(window, 'fetch').mockResolvedValue(response)
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     const body = new Uint8Array([1, 2, 3])
     const url = `/api/documents/${DOCUMENT_ID}/content?requestId=original&writeEpoch=1`
     const init: RequestInit = { method: 'PUT', body, headers: { [EDIT_LEASE_HEADER]: 'secret-never-recorded' } }
@@ -92,7 +92,7 @@ describe('页面自检的挂接', () => {
 
   it('到 steady 才跑自检，只跑一次：带上文档 id、按只读打开、两个挂载点', async () => {
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     set(ready('ready'))
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(run).not.toHaveBeenCalled()
@@ -112,7 +112,7 @@ describe('页面自检的挂接', () => {
     enterEditing.mockImplementationOnce(async () => new Promise<void>((resolve) => {
       entered = resolve
     }))
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     set(ready('steady'))
     set(ready('steady'))
     expect(enterEditing).toHaveBeenCalledOnce()
@@ -129,7 +129,7 @@ describe('页面自检的挂接', () => {
   it('要在编辑时跑的场景进不去编辑（例如别处正在编辑、不能编辑）：进入有了结果、还在阅读时照样跑，按只读打开说明', async () => {
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=edit-chrome`)
     const { page, set, enterEditing } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     set(ready('steady'))
     expect(enterEditing).toHaveBeenCalledOnce()
     expect((await hostOfFirstRun()).page).toEqual({ state: 'ready', readOnly: true })
@@ -138,7 +138,7 @@ describe('页面自检的挂接', () => {
   it('进入、退出编辑的场景（enter-exit）在阅读时开始，不先进入编辑；交给自检的 view 随页面的状态变化（场景里点了"编辑"之后按它等）', async () => {
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=enter-exit`)
     const { page, set, enterEditing } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     set(ready('steady'))
     const host = await hostOfFirstRun()
     expect(enterEditing).not.toHaveBeenCalled()
@@ -154,14 +154,14 @@ describe('页面自检的挂接', () => {
     for (const scenario of ['takeover-holder', 'takeover-holder-deaf']) {
       window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
       const holder = fakePage()
-      watchForSelftest(holder.page, elements)
+      await watchForSelftest(holder.page, elements)
       holder.set(ready('steady'))
       expect(holder.enterEditing).toHaveBeenCalledOnce()
     }
     for (const scenario of ['takeover-taker', 'refresh-save']) {
       window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
       const other = fakePage()
-      watchForSelftest(other.page, elements)
+      await watchForSelftest(other.page, elements)
       other.set(ready('steady'))
       expect(other.enterEditing).not.toHaveBeenCalled()
     }
@@ -170,7 +170,7 @@ describe('页面自检的挂接', () => {
   it('交给自检的 view 另带交接的复核要看的（M3-P5）：阅读时"在此编辑"的进展、持有者是自己时在哪里、说明；失去编辑权时的原因（被接管的带在哪里）、有没有没保存的修改、副本的进展与建好的副本', async () => {
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=takeover-taker`)
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     set(ready('steady'))
     const host = await hostOfFirstRun()
     const reading = ready('steady').mode as Extract<EditModeState, { kind: 'reading' }>
@@ -195,14 +195,14 @@ describe('页面自检的挂接', () => {
     for (const scenario of ['capture-cost', 'perf-baseline']) {
       window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
       const editing = fakePage()
-      watchForSelftest(editing.page, elements)
+      await watchForSelftest(editing.page, elements)
       editing.set(ready('steady'))
       expect(editing.enterEditing, scenario).toHaveBeenCalledOnce()
     }
     for (const scenario of ['storage', 'key-transfer', 'storage-quota', 'worker-stall', 'outbox-stall', 'outbox-pipeline']) {
       window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
       const reading = fakePage()
-      watchForSelftest(reading.page, elements)
+      await watchForSelftest(reading.page, elements)
       reading.set(ready('steady'))
       expect(reading.enterEditing, scenario).not.toHaveBeenCalled()
     }
@@ -212,7 +212,7 @@ describe('页面自检的挂接', () => {
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=perf-baseline`)
     const now = vi.spyOn(performance, 'now')
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     now.mockReturnValue(1200)
     set(ready('ready'))
     now.mockReturnValue(4300)
@@ -231,12 +231,12 @@ describe('页面自检的挂接', () => {
   it('请求编辑的两条路（M3-P6）：被暂停的持有者（paused-holder）先进入编辑；请求方（request-waiter）在阅读时开始', async () => {
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=paused-holder`)
     const holder = fakePage()
-    watchForSelftest(holder.page, elements)
+    await watchForSelftest(holder.page, elements)
     holder.set(ready('steady'))
     expect(holder.enterEditing).toHaveBeenCalledOnce()
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=request-waiter`)
     const waiter = fakePage()
-    watchForSelftest(waiter.page, elements)
+    await watchForSelftest(waiter.page, elements)
     waiter.set(ready('steady'))
     expect(waiter.enterEditing).not.toHaveBeenCalled()
   })
@@ -244,7 +244,7 @@ describe('页面自检的挂接', () => {
   it('交给自检的 view 另带请求编辑的复核要看的（M3-P6）：阅读时请求方这一侧的进展与 granted 在等什么；编辑、离开编辑时在等回应的请求是谁发的、离开的原因；续上时别处在编辑的是谁。subscribe 转给编辑器页', async () => {
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=request-waiter`)
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     set(ready('steady'))
     const host = await hostOfFirstRun()
     const reading = ready('steady').mode as Extract<EditModeState, { kind: 'reading' }>
@@ -298,7 +298,7 @@ describe('页面自检的挂接', () => {
 
   it('载入失败时同样交给自检，说明失败的原因', async () => {
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     set({ load: { kind: 'editor-failed', error: new TypeError('画不出来') }, surface: 'failed' })
     expect((await hostOfFirstRun()).page).toEqual({ state: 'failed', detail: 'editor-failed：TypeError: 画不出来' })
   })
@@ -306,7 +306,7 @@ describe('页面自检的挂接', () => {
   it('90 秒内没有到 steady：按超时交给自检', async () => {
     vi.useFakeTimers()
     const { page } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     await vi.advanceTimersByTimeAsync(90_000)
     vi.useRealTimers()
     expect((await hostOfFirstRun()).page).toEqual({ state: 'timeout', detail: '90 秒内没有到 steady（loading）' })
@@ -316,7 +316,7 @@ describe('页面自检的挂接', () => {
     vi.useFakeTimers()
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     await vi.advanceTimersByTimeAsync(2_000)
     set(ready('steady'))
     vi.useRealTimers()
@@ -330,7 +330,7 @@ describe('页面自检的挂接', () => {
     vi.useFakeTimers()
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     visibility.mockReturnValue('visible')
     await vi.advanceTimersByTimeAsync(2_000)
     set(ready('steady'))
@@ -340,7 +340,7 @@ describe('页面自检的挂接', () => {
 
   it('从挂上起收集：没接住的异常、没处理的拒绝、console.error（照常转给原来的），ResizeObserver 的通知另记', async () => {
     const { page, set } = fakePage()
-    watchForSelftest(page, elements)
+    await watchForSelftest(page, elements)
     window.dispatchEvent(new ErrorEvent('error', { message: 'boom', error: new TypeError('boom') }))
     window.dispatchEvent(new ErrorEvent('error', { message: 'ResizeObserver loop completed with undelivered notifications.' }))
     window.dispatchEvent(Object.assign(new Event('unhandledrejection'), { reason: new RangeError('拒绝了') }))
@@ -361,7 +361,7 @@ describe('页面自检的挂接', () => {
     window.addEventListener('beforeunload', guard)
     try {
       const { page, set } = fakePage()
-      watchForSelftest(page, elements)
+      await watchForSelftest(page, elements)
       set(ready('steady'))
       const host = await hostOfFirstRun()
       const before = new Event('beforeunload', { cancelable: true })
