@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isDefiniteRejection, isTransientError, isUnknownOutcome, RequestTimeoutError } from '../../shared/api/index.ts'
 // 各编辑请求的应用时限：真实请求层与 Response 流，只暂停传输，不替换时限模块。
 import { PAGE_CLIENT_FORMAT } from './client-format.ts'
-import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
+import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, replayContent, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
@@ -59,6 +59,7 @@ afterEach(() => {
 
 const cases = [
   { name: '保存', limit: 60_000, body: true, run: async () => saveContent(DOCUMENT_ID, SAVE, GZIP, { token: TOKEN, writeEpoch: 2 }) },
+  { name: '恢复时核对旧回执', limit: 60_000, body: true, run: async () => replayContent(DOCUMENT_ID, SAVE, GZIP, 2) },
   { name: '另存副本', limit: 60_000, body: true, run: async () => saveConflictCopy(DOCUMENT_ID, QUERY, GZIP) },
   { name: '申请租约', limit: 10_000, body: true, run: async () => acquireEditLease(DOCUMENT_ID, PAGE_ID) },
   { name: '续上租约', limit: 10_000, body: true, run: async () => acquireEditLease(DOCUMENT_ID, PAGE_ID, { idleSeconds: 5 }) },
