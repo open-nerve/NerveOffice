@@ -179,12 +179,48 @@ export function handoverViewOf(mode: EditModeState | undefined): Partial<Selftes
   }
 }
 
+/** 刷新恢复发生在 steady 前；从 load 前观察，不等待指纹计算、不读取令牌、不改变请求。 */
+function watchReloadSaves(documentId: string): NonNullable<SelftestHost['reloadSaves']> {
+  const marks: ReturnType<NonNullable<SelftestHost['reloadSaves']>>[number][] = []
+  const originalFetch = window.fetch.bind(window)
+  window.fetch = async (input, init) => {
+    const request = input instanceof Request ? input : undefined
+    const url = new URL(request?.url ?? String(input), location.href)
+    if ((init?.method ?? request?.method ?? 'GET').toUpperCase() !== 'PUT' || url.pathname !== `/api/documents/${documentId}/content`)
+      return originalFetch(input, init)
+    let bodyHash: Promise<string>
+    try {
+      const bytes = init?.body === undefined && request !== undefined ? request.clone().arrayBuffer() : new Response(init?.body).arrayBuffer()
+      bodyHash = bytes.then(async bytes => crypto.subtle.digest('SHA-256', bytes))
+        .then(hash => [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join(''))
+        .catch(() => 'unavailable')
+    }
+    catch {
+      bodyHash = Promise.resolve('unavailable')
+    }
+    // 测试构建不引入 editing 契约的运行时代码，避免分块重复初始化 zod；单测以契约常量验证头名。
+    const mark: (typeof marks)[number] = { wall: Date.now(), query: url.searchParams.toString(), bodyHash, hasLease: new Headers(init?.headers ?? request?.headers).has('x-edit-lease') }
+    marks.push(mark)
+    try {
+      const response = await originalFetch(input, init)
+      mark.status = response.status
+      return response
+    }
+    catch (error) {
+      mark.status = 'failed'
+      throw error
+    }
+  }
+  return () => marks
+}
+
 /** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
 export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements): void {
   const startedAt = new Date().toISOString()
   const documentId = documentIdFromPagePath(window.location.pathname)
   if (new URLSearchParams(window.location.search).get('selftest') === DEAF_HOLDER_SCENARIO)
     deafenHandoverChannel()
+  const reloadSaves = documentId !== undefined && new URLSearchParams(window.location.search).get('selftest') === 'refresh-save' ? watchReloadSaves(documentId) : undefined
   const log = watchPage(window)
   const allowLeave = allowLeaveForReport(window)
   let started = false
@@ -217,6 +253,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       consoleErrors: () => log.consoleErrors,
       ignoredNotices: () => log.ignoredNotices,
       firstLoad: () => ({ ...firstLoad }),
+      reloadSaves,
       // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（outbox/testing/ 只在测试构建里、只能动态引入）
       outboxReview: async () => (await import('./outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
     }

@@ -33,6 +33,7 @@ import type { PageVisibility } from './reading-checks.ts'
 import type { DocumentRecovery, RecoveryAccessFacts, RecoveryDiscard, RecoveryView } from './recovery/document-recovery.ts'
 import type { DraftReplayRequest } from './recovery/recovery-decision.ts'
 import type { RecoveryReader } from './recovery/recovery-reader.ts'
+import type { ReloadIdentity, ReloadIdentityOptions } from './recovery/reload-identity.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
@@ -44,6 +45,7 @@ import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 import { createDocumentRecovery } from './recovery/document-recovery.ts'
 import { createRecoveryReader } from './recovery/recovery-reader.ts'
+import { matchesReloadDraft } from './recovery/reload-recovery.ts'
 
 /**
  * 就绪时页头要的东西：标题与所在的空间（返回链接）、看得到它的途径（只凭授权时返回"与我共享"，M2-P5）、能不能分享（分享的入口）、
@@ -144,6 +146,8 @@ export interface EditIntent {
 }
 
 export interface EditorPageOptions {
+  /** 浏览器导航/记号/严格实例锁由入口组装；此处仅在确认文档和用户后提供只读原件预检。 */
+  readonly reloadIdentity?: ((options: Omit<ReloadIdentityOptions, 'navigation' | 'marker' | 'locks'>) => Promise<ReloadIdentity>) | undefined
   /** 独立 Reader 的测试接缝，不共享编辑会话的密钥所有权。 */
   readonly recoveryReader?: (() => RecoveryReader) | undefined
   /** 持久宿主/密钥的测试接缝；生产不传。部署开关始终来自实际会话响应。 */
@@ -276,7 +280,12 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let userId: string | undefined
   let localDraftsEnabled = false
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
-  const clientInstanceId = options.newId()
+  let clientInstanceId = options.newId()
+  let reloadIdentity: ReloadIdentity | undefined
+  let reloadGeneration = 0
+  let reloadSelecting: number | undefined
+  let reloadCanEdit = false
+  let hiding = false
   /** 阅读与编辑（载入之后才有） */
   let mode: EditMode | undefined
   let recovery: DocumentRecovery | undefined
@@ -313,6 +322,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let confirmingSession = false
   /** 在途的重新取页头文档详情的次数（DEF-045：大于 0 时"重试"说正在重试） */
   let detailRefreshes = 0
+  let detailRound = 0
   /** 自动保存要的页面信号（可见性、联网、confirmedForWrite）变了：通知编辑模式里的调度 */
   const pageSignalListeners = new Set<() => void>()
   /** 上一次通知时的 confirmedForWrite()：变了才通知 */
@@ -347,8 +357,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     if (next === writable)
       return
     writable = next
-    if (!next)
+    if (!next) {
       recovery?.suspend()
+      if (reloadSelecting !== undefined)
+        reloadGeneration += 1
+    }
     signalPage()
   }
 
@@ -394,6 +407,12 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     const view = mode?.view()
     if (view === undefined || disposed)
       return
+    if (view.mode.kind === 'reading')
+      reloadCanEdit = view.mode.canEdit && !view.mode.gone
+    else if (view.mode.kind === 'losing' || view.mode.kind === 'lost' || view.mode.kind === 'unavailable')
+      reloadCanEdit = false
+    if (!hiding && !leaving && (view.mode.kind === 'reading' || view.mode.kind === 'losing' || view.mode.kind === 'lost' || view.mode.kind === 'unavailable' || view.mode.kind === 'failed'))
+      reloadIdentity?.clear()
     if (view.mode.kind === 'failed') {
       if (load.kind !== 'editor-failed')
         finish({ kind: 'editor-failed', error: view.mode.error })
@@ -434,8 +453,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function enterSession(next: EditorPageSession): void {
     session = next
-    if (next !== 'active')
+    if (next !== 'active') {
+      reloadGeneration += 1
+      reloadIdentity?.clear()
+      reloadIdentity?.dispose()
+      reloadIdentity = undefined
       recovery?.suspend()
+    }
     mode?.setSession(next)
     update()
   }
@@ -567,6 +591,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       setCsrfToken(confirmed.csrfToken)
       localDraftsEnabled = confirmed.features.localDraftsEnabled
       enterSession('active')
+      if (mode !== undefined && reloadIdentity === undefined && documentId !== undefined && userId !== undefined)
+        await prepareReloadIdentity(documentId, userId, false)
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
       // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存。例外：续租连着第二次起被判会话不对（服务端一直拒绝、
       // 确认却照常是本人）时只按心跳排下一次，立即兑现（ADR-018 的补充，复验 C1）——保存时服务端照样核对编辑权，失效了会被拒、经续上再判断
@@ -611,6 +637,52 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       pageSignalListeners.add(listener)
       return () => pageSignalListeners.delete(listener)
     },
+  }
+
+  async function prepareReloadIdentity(id: string, user: string, automatic: boolean): Promise<void> {
+    if (options.reloadIdentity === undefined)
+      return
+    const generation = ++reloadGeneration
+    // 会话确认暂停只取消自动候选；新实例补锁由明确换人/退出、隐藏或销毁作废，重复同用户确认不丢锁。
+    reloadSelecting = automatic ? generation : undefined
+    let selecting = true
+    const key = { documentId: id, userId: user }
+    const still = (): boolean => !disposed && !leaving && !hiding && reloadGeneration === generation && userId === user && session === 'active'
+      && (!selecting || !automatic || confirmedForWrite())
+    try {
+      const selected = await options.reloadIdentity({
+        key,
+        freshId: clientInstanceId,
+        still,
+        matches: async expected => automatic && still() && serverAvailable() && matchesReloadDraft({
+          expected,
+          key,
+          pageFormat: PAGE_CLIENT_FORMAT,
+          now: () => options.now().getTime(),
+          still,
+          reader: options.recoveryReader?.() ?? createRecoveryReader({ key, clock, still, host: options.localDrafts?.host, onSessionProblem: (error) => {
+            if (still() && (isAuthenticationError(error) || isCsrfTokenError(error)))
+              writeProblem(error)
+          } }),
+        }),
+      })
+      if (!still() || (mode !== undefined && selected.clientInstanceId !== clientInstanceId)) {
+        selected.clear()
+        selected.dispose()
+        return
+      }
+      reloadIdentity?.dispose()
+      reloadIdentity = selected
+      clientInstanceId = selected.clientInstanceId
+    }
+    catch (error) {
+      options.reportError(error)
+    }
+    finally {
+      selecting = false
+      if (reloadSelecting === generation)
+        reloadSelecting = undefined
+    }
   }
 
   function prepareRecovery(id: string, user: string): void {
@@ -692,6 +764,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       clientInstanceId,
       userId: user,
       localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled },
+      onPersisted: (writer) => {
+        const kind = mode?.view().mode.kind
+        if (!disposed && !leaving && !hiding && reloadCanEdit && session === 'active' && (kind === 'opening' || kind === 'entering' || kind === 'editing' || kind === 'exiting'))
+          reloadIdentity?.remember(writer)
+      },
       recovery,
       connection: options.network.connection,
       api,
@@ -753,6 +830,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }))
       // 关闭时有保存在途不释放（edit-mode.ts 的 releaseOnHide，M3-P4 设计 §3.4）
       const onPageHide = (): void => {
+        hiding = true
+        reloadGeneration += 1
         recovery?.suspend()
         mode?.releaseOnHide()
       }
@@ -786,7 +865,6 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         setCsrfToken(signedIn.csrfToken)
         userId = signedIn.user.id
         localDraftsEnabled = signedIn.features.localDraftsEnabled
-        prepareRecovery(documentId, userId)
         // 确认会话的回包之前别的标签页登录或退出了：消息当时没法处理，现在补确认一次
         if (checkWhenLoaded)
           void recheckSession()
@@ -796,6 +874,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       catch (error) {
         if (!disposed) {
           if (isMissingResource(error) && userId !== undefined && readRound === checksStarted && confirmedForWrite()) {
+            await prepareReloadIdentity(documentId, userId, false)
+            prepareRecovery(documentId, userId)
             earlyUnreadableRound = readRound
             try {
               await recovery?.discover()
@@ -812,20 +892,32 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       if (disposed)
         return
       if (!isKnownFormat(document)) {
+        await prepareReloadIdentity(documentId, signedIn.user.id, false)
+        if (disposed)
+          return
         finish({ kind: 'unsupported' })
         return
       }
       heading = headingOf(document, signedIn.user.id)
+      const canEdit = document.permissions.canEdit
+      reloadCanEdit = canEdit
+      // 新于本页的内容只能阅读；不具备自动资格仍为后续明确编辑尝试取得新实例锁。
+      const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
+      await prepareReloadIdentity(documentId, signedIn.user.id, canEdit && blocked === undefined && serverAvailable() && confirmedForWrite())
+      // 同用户重新确认可能取消初次选择，且确认结束时 Mode 尚未创建；仅补当前新身份的锁，不重新启用本轮自动恢复。
+      if (!disposed && reloadIdentity === undefined && confirmedForWrite())
+        await prepareReloadIdentity(documentId, signedIn.user.id, false)
+      if (disposed)
+        return
+      prepareRecovery(documentId, signedIn.user.id)
       const opened = createMode(documentId, signedIn.user.id)
       mode = opened
       // 载入期间别的标签页换了人或者退出了：按确认的结果开始（不是本人时不续租、不检查）
       opened.setSession(session)
-      const canEdit = document.permissions.canEdit
-      // 这份文档由比本页新的版本写过（服务端回滚之后，M3-P3 设计 §3.5）：一开始就只能阅读、说明，不直接进入编辑
-      const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
       // 阅读页的"公式待更新"（M3-P4 设计 §3.5 第 4 条）：详情说的是它那一版的，与载入的内容是同一版时才用（并行读取之间有人保存过时下一次检查补上）
       const formulasPending = document.formulasPending && document.revision === content.revision
-      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: options.editIntent.requested && canEdit && serverAvailable(), blocked })
+      const reload = reloadIdentity?.candidate
+      const outcome = await opened.open({ snapshot: content.snapshot, revision: content.revision, canEdit, formulasPending, canTakeOver: document.permissions.canTakeOver }, { enterEdit: (options.editIntent.requested || reload !== undefined) && canEdit && serverAvailable() && confirmedForWrite(), blocked, reload })
       if (disposed)
         return
       if (outcome.kind === 'load-failed') {
@@ -947,6 +1039,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     refreshDetail: async () => {
       if (documentId === undefined || heading === undefined || disposed)
         return
+      const round = ++detailRound
       detailRefreshes += 1
       update()
       let document: DocumentDetail
@@ -957,9 +1050,15 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         detailRefreshes -= 1
         if (disposed || heading === undefined)
           return
+        if (round !== detailRound) {
+          update()
+          return
+        }
         // 看不到了（已经删除、移走，或者自己被移出、授权被取消）：不再能分享。未登录交给会话的确认（页头随之说明）；
         // 别的失败：页头留着之前的信息，说明没能刷新、可以重试（DEF-040，与列表的"没能刷新"同一个说法）
         if (isMissingResource(error)) {
+          reloadCanEdit = false
+          reloadIdentity?.clear()
           heading = { ...heading, canShare: false }
           detailProblem = undefined
         }
@@ -979,7 +1078,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       detailRefreshes -= 1
       if (disposed || heading === undefined)
         return
+      if (round !== detailRound) {
+        update()
+        return
+      }
       heading = headingOf(document, heading.userId)
+      reloadCanEdit = document.permissions.canEdit
+      if (!document.permissions.canEdit)
+        reloadIdentity?.clear()
       detailProblem = undefined
       mode?.updateCanEdit(document.permissions.canEdit)
       if (load.kind === 'ready')
@@ -989,6 +1095,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     recheckSession,
     dispose: () => {
       disposed = true
+      reloadGeneration += 1
+      reloadIdentity?.dispose()
       recovery?.dispose()
       cancelRecheck?.()
       cancelRecheck = undefined

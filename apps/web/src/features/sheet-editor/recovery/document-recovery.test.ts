@@ -64,6 +64,42 @@ async function fixture() {
 }
 
 describe('文档恢复的发现与条件动作', () => {
+  it('自动重载遇到登记后的 empty 不能退成普通云端编辑', async () => {
+    const h = await fixture()
+    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
+    expect(await h.recovery.prepare({ kind: 'empty', highWater: 0 }, FACTS, h.install, expected)).toEqual({ kind: 'blocked', reason: 'changed' })
+    expect(h.install).not.toHaveBeenCalled()
+  })
+
+  it.each(['absent', 'denied', 'unsupported'] as const)('自动重载第二次读取 %s，不能借空记录或固定内存退路自动进入', async (kind) => {
+    const h = await fixture()
+    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
+    h.observe.mockResolvedValue(kind === 'absent' ? { ...h.original, record: { kind } } : { kind: 'unavailable', reason: kind })
+    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install, expected)).toMatchObject({ kind: 'blocked' })
+    expect(h.install).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it.each(['writtenBy', 'writeEpoch', 'writerId'] as const)('预检后原件的 %s 被替换：自动不采用；之后显式操作仍可恢复', async (field) => {
+    const h = await fixture()
+    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
+    const meta = { ...h.meta, [field]: field === 'writeEpoch' ? h.meta.writeEpoch + 1 : 'replacement' }
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta, gzip: h.original.record.kind === 'draft' ? h.original.record.gzip : new Uint8Array() } })
+    const context = { kind: 'memory', reason: 'disabled', highWater: 0 } as const
+    expect(await h.recovery.prepare(context, FACTS, h.install, expected)).toMatchObject({ kind: 'blocked' })
+    expect(h.install).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+    expect(await h.recovery.prepare(context, FACTS, h.install)).toMatchObject({ kind: 'restore' })
+    expect(h.install).toHaveBeenCalledOnce()
+  })
+
+  it('部署关闭但认证原件匹配且可恢复，自动尝试沿统一内存恢复入口采用', async () => {
+    const h = await fixture()
+    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
+    expect(await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install, expected)).toMatchObject({ kind: 'restore', baseRevision: 7 })
+    expect(h.install).toHaveBeenCalledExactlyOnceWith(BODY, false)
+  })
+
   it.each(['denied', 'unsupported'] as const)('浏览器明确 %s 且从未发现旧记录时，只准固定内存编辑云端内容', async (reason) => {
     const h = await fixture()
     h.observe.mockResolvedValue({ kind: 'unavailable', reason })

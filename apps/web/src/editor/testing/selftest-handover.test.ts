@@ -2,9 +2,8 @@
 // 刷新之前离开时的观察判读成先后与问题（真实 Safari 复核要回答的：WebKit 是不是先取消在途的保存、之后才派发 pagehide）。
 import type { SelftestTimelineEntry } from './selftest-report.ts'
 import type { LogEntry } from './selftest-timeline.ts'
-import { EDIT_PENDING_SAVE_WAIT_MS } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { leavingSummary, PENDING_SAVE_WAIT_MS, pendingSaveKeyOf, summarizeHolder, summarizeTaker } from './selftest-handover.ts'
+import { leavingSummary, pendingSaveKeyOf, summarizeHolder, summarizeTaker } from './selftest-handover.ts'
 
 /** 一条日志：at 是本页的单调时钟，墙上时间取 1000 + at */
 function entry(kind: string, at: number, fields: Readonly<Record<string, unknown>> = {}): LogEntry {
@@ -154,12 +153,6 @@ describe('刷新之前离开时的观察（leavingSummary）', () => {
       '编辑器页处理 pagehide 之后 localStorage 里没有记号',
     ])
     expect(leavingSummary([seen('reload', 1_000), seen('after-pagehide', 1_013, { marker: MARKER })]).problems).toEqual(['编辑器页没有报页面关闭（pagehide）时的处理'])
-  })
-})
-
-describe('等刷新之前在途的保存的时限', () => {
-  it('与 contracts 的 EDIT_PENDING_SAVE_WAIT_MS 相同（这里另写一份，不引用 contracts）', () => {
-    expect(PENDING_SAVE_WAIT_MS).toBe(EDIT_PENDING_SAVE_WAIT_MS)
   })
 })
 

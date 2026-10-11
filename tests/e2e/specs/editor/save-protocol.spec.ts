@@ -77,7 +77,7 @@ function nearCapacitySheetFor(unitId: string): string {
 }
 
 test.describe('US-M3-16 旧版页面不能把文档写回旧格式', () => {
-  test('伪造的旧版本保存：服务端回答 CLIENT_OUTDATED，页头"需要刷新"，说明本页的修改没有保存、先复制出来再重新加载；不能再保存，编辑权放掉；重新加载之后照常编辑', async ({ page }) => {
+  test('US-M4-04 伪造的旧版本保存被 CLIENT_OUTDATED 拒绝并释放编辑权；重新加载后自动恢复兼容的本机修改，再照常编辑保存', async ({ page }) => {
     await loginThroughApi(page, await createUser('outdated-save'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
@@ -91,12 +91,16 @@ test.describe('US-M3-16 旧版页面不能把文档写回旧格式', () => {
     await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
     expect(await revisionOf(documentId)).toBe(1)
 
-    // 重新加载：新的页面（撤掉改写）照常进入编辑、保存。本页还有没保存的修改，离开的确认里选择离开
+    // 夹具只篡改 HTTP 版本，本机原件仍是当前可读格式。刷新后原实例普通申请并自动恢复（M4-P3 S4）；
+    // 先核对未覆盖的旧修改真的能存上，随后再改 A1，不能只证明新输入能保存。
     await restore()
     page.once('dialog', dialog => void dialog.accept())
     await outdatedNotice(page).getByRole('button', { name: '重新加载' }).click()
-    await waitForEditorAccess(page, 'read')
-    await enterEditing(page)
+    await waitForEditorAccess(page, 'edit')
+    await saveAndWait(page)
+    const recovered = await savedContent(page, documentId)
+    expect(recovered.revision).toBe(2)
+    expect(cellOf(recovered.snapshot, 'A1')?.v).toBe('旧页面的修改')
     await typeInCell(page, 'A1', '新页面的修改')
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('新页面的修改')

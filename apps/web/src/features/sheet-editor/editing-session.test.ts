@@ -6,6 +6,23 @@ import { settle } from './fake-lease-clock.test-support.ts'
 
 afterEach(disposeSessions)
 
+describe('编辑会话只通知自己当前来源的持久身份', () => {
+  it('本机写成才通知；来源转交之后的真实写入不能再给旧会话更新记号', async () => {
+    const local = await localDrafts()
+    const onPersisted = vi.fn()
+    const { session } = fixture({ localDrafts: local.options, onPersisted })
+    await prepare(session)
+    expect(onPersisted).not.toHaveBeenCalled()
+    const source = session.draft!
+    await source.ready(source.capture({ snapshot: '仍归本页', editorSeq: 1, formulasPending: false, dedupe: false }))
+    expect(onPersisted).toHaveBeenCalledOnce()
+    const transferred = session.takeDraft()!
+    await transferred.ready(transferred.capture({ snapshot: '已转交', editorSeq: 2, formulasPending: false, dedupe: false }))
+    expect(onPersisted).toHaveBeenCalledOnce()
+    transferred.dispose()
+  })
+})
+
 describe('恢复来源接入现有保存会话', () => {
   it('准备回调与初值状态完整透传，序号零无需额外输入就自动上传恢复正文', async () => {
     const { session, options, time } = fixture()

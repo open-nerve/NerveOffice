@@ -62,6 +62,7 @@ export interface EditingSessionOptions {
   readonly trace?: HandoverTrace | undefined
   /** 页面传服务端实际开关；未配置的独立使用者保持内存来源。 */
   readonly localDrafts?: ({ readonly enabled: () => boolean } & Pick<EditingDraftOptions, 'keeper' | 'host' | 'supported' | 'persist'>) | undefined
+  readonly onPersisted?: EditingDraftOptions['onPersisted']
 }
 
 export interface InitialSaving {
@@ -509,6 +510,10 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         confirm: async () => confirmDraft(held),
         still: () => !disposed || transferred,
         reportError: options.reportError,
+        onPersisted: (writer) => {
+          if (!disposed && !transferred && preparation === prepared && lease === held && lock?.held() === true && options.sessionActive?.() !== false)
+            options.onPersisted?.(writer)
+        },
         onSessionProblem: (error) => {
           if (error instanceof RequestError)
             options.session.writeProblem(error)

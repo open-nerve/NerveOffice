@@ -3,6 +3,7 @@
 import type { SelftestHost } from '../../editor/testing/selftest.ts'
 import type { EditModeState } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
+import { EDIT_LEASE_HEADER } from '@nerve-office/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deafenHandoverChannel, handoverViewOf, watchForSelftest } from './selftest-hook.ts'
 
@@ -68,6 +69,27 @@ async function hostOfFirstRun(): Promise<SelftestHost> {
 }
 
 describe('页面自检的挂接', () => {
+  it('refresh-save 在载入前被动记录保存指纹，steady 前的自动重放也可核对且不改原请求或结果', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=refresh-save`)
+    const response = new Response('{}', { status: 200 })
+    const original = vi.spyOn(window, 'fetch').mockResolvedValue(response)
+    const { page, set } = fakePage()
+    watchForSelftest(page, elements)
+    const body = new Uint8Array([1, 2, 3])
+    const url = `/api/documents/${DOCUMENT_ID}/content?requestId=original&writeEpoch=1`
+    const init: RequestInit = { method: 'PUT', body, headers: { [EDIT_LEASE_HEADER]: 'secret-never-recorded' } }
+    expect(await window.fetch(url, init)).toBe(response)
+    expect(original).toHaveBeenCalledExactlyOnceWith(url, init)
+    set(ready('steady'))
+    const host = await hostOfFirstRun()
+    const marks = host.reloadSaves?.()
+    expect(marks).toHaveLength(1)
+    expect(marks?.[0]).toMatchObject({ query: 'requestId=original&writeEpoch=1', hasLease: true, status: 200 })
+    expect(await marks?.[0]?.bodyHash).toBe('039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81')
+    expect(JSON.stringify(marks)).not.toContain('secret-never-recorded')
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+
   it('到 steady 才跑自检，只跑一次：带上文档 id、按只读打开、两个挂载点', async () => {
     const { page, set } = fakePage()
     watchForSelftest(page, elements)

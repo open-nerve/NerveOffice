@@ -10,6 +10,7 @@ import type { DraftCapture } from '../working-draft.ts'
 import type { DraftReplayRequest, RecoveryDecision, RecoveryFacts } from './recovery-decision.ts'
 import type { RecoveryBlockedReason, RecoveryContext, RecoveryInitialization } from './recovery-initializer.ts'
 import type { RecoveryReader } from './recovery-reader.ts'
+import type { ReloadMarker } from './reload-marker.ts'
 import type { ResolvedRecovery } from './resolve-recovery.ts'
 import { isAuthenticationError, isCsrfTokenError } from '../../../shared/api/index.ts'
 import { draftAad } from '../../../shared/outbox/draft-aad.ts'
@@ -17,6 +18,7 @@ import { sha256Hex } from '../../../shared/outbox/draft-codec.ts'
 import { createLostCopyFlow } from '../lost-copy-flow.ts'
 import { createMemoryWorkingDraft } from '../memory-working-draft.ts'
 import { createRecoveryReader } from './recovery-reader.ts'
+import { matchesReloadRecord } from './reload-recovery.ts'
 import { decodeRecovery, resolveRecovery } from './resolve-recovery.ts'
 
 export type RecoveryAccessFacts = Pick<RecoveryFacts, 'access' | 'online' | 'current'>
@@ -50,7 +52,7 @@ export interface DocumentRecovery {
   readonly view: () => RecoveryView
   readonly subscribe: (listener: () => void) => () => void
   readonly discover: () => Promise<void>
-  readonly prepare: (context: RecoveryContext, facts: RecoveryAccessFacts, install: RecoveryInstall) => Promise<RecoveryInitialization>
+  readonly prepare: (context: RecoveryContext, facts: RecoveryAccessFacts, install: RecoveryInstall, expected?: ReloadMarker) => Promise<RecoveryInitialization>
   /** 编辑器已经通过初值采用、保存调度及安装屏障之后才通知。 */
   readonly restored: () => void
   readonly copy: () => Promise<void>
@@ -408,7 +410,7 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
       if (current(started))
         closeIdleReader(source)
     }, undefined),
-    prepare: async (context, facts, install) => {
+    prepare: async (context, facts, install, expected) => {
       const queued = generation
       const waiting = action !== undefined
       await action?.done
@@ -425,7 +427,7 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
           presence += 1
           closeReader()
           retireCopy()
-          return { kind: 'none' }
+          return expected === undefined ? { kind: 'none' } : { kind: 'blocked', reason: 'changed' }
         }
         let port: ReadPort
         let ownedReader: RecoveryReader | undefined
@@ -447,11 +449,11 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
         if (!current(started))
           return { kind: 'blocked', reason: 'cancelled' }
         if (checked?.decision.kind === 'none')
-          return context.kind === 'existing' ? { kind: 'blocked', reason: 'changed' } : { kind: 'none' }
+          return context.kind === 'existing' || expected !== undefined ? { kind: 'blocked', reason: 'changed' } : { kind: 'none' }
         if (checked?.decision.kind === 'confirmed' || checked?.decision.kind === 'remove')
           return { kind: 'blocked', reason: 'refresh-cloud' }
         // 浏览器明确禁止/缺少存储能力时，保留 P2 的内存编辑退路。镜像忙等未知失败不属于此许可。
-        if (context.kind === 'memory' && !recordKnown && facts.access === 'editable' && facts.online && facts.current?.occupied === false
+        if (expected === undefined && context.kind === 'memory' && !recordKnown && facts.access === 'editable' && facts.online && facts.current?.occupied === false
           && checked?.observed.kind === 'unavailable' && (checked.observed.reason === 'denied' || checked.observed.reason === 'unsupported')) {
           return { kind: 'memory', reason: context.reason }
         }
@@ -460,6 +462,8 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
           return blocked(context, started, facts, checked, 'preserved')
         if (checked?.decision.kind !== 'restore' || checked.observed.kind !== 'observed' || checked.observed.record.kind !== 'draft' || checked.snapshot === undefined)
           return blocked(context, started, facts, checked, 'preserved')
+        if (expected !== undefined && !matchesReloadRecord(checked.observed.record.meta, expected))
+          return blocked(context, started, facts, checked, 'changed')
         const original = candidate ?? target(port, checked.observed.observation, started)
         const installed = await install(checked.snapshot, checked.decision.formulasPending)
         if (!current(started))

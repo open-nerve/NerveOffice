@@ -224,6 +224,14 @@ async function request(locks: LockApi, name: string, options: LockRequestOptions
   return outcome
 }
 
+/** 严格的实例存活证明：仅尝试独占，忙或 API 失败都没有句柄；不能使用文档锁的 UNTRACKED 退路。 */
+export async function tryHoldExclusive(locks: LockApi | undefined, name: string): Promise<HeldLock | undefined> {
+  if (locks === undefined)
+    return undefined
+  const outcome = await request(locks, name, { mode: 'exclusive', ifAvailable: true })
+  return typeof outcome === 'string' ? undefined : outcome
+}
+
 /** 本浏览器里有没有标签页持有这把锁（query：别的浏览器、配置文件、无痕窗口与设备都看不到）。浏览器没有锁、查不出时为 false */
 async function heldInBrowser(locks: LockApi | undefined, name: string): Promise<boolean> {
   if (locks === undefined)

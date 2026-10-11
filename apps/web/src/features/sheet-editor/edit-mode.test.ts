@@ -511,6 +511,40 @@ async function recoverySetup(options: Setup = {}, pending = false) {
 }
 
 describe('本机恢复通过真实编辑准备入口', () => {
+  it('自动重载确认旧请求后刷新云端并回阅读，不能再次以空来源进入；之后显式编辑仍可进入', async () => {
+    const h = await recoverySetup()
+    const reload = { ...h.key, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
+    h.observe.mockResolvedValueOnce({ kind: 'observed', observation: { key: h.key, id: 'old-flight' }, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: Date.now() } }, gzip: h.gzip }, writer: undefined }).mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'after-cleanup' }, record: { kind: 'absent' }, writer: undefined })
+    const result = await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true, reload })
+    expect(result).toMatchObject({ kind: 'opened', entered: false })
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.replay).toHaveBeenCalledOnce()
+    expect(h.observe).toHaveBeenCalledOnce()
+    expect(h.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
+    expect(h.factory.last().snapshot).toBe(snapshotOf('最新的'))
+    expect(h.api.save).not.toHaveBeenCalled()
+    await h.mode.enter()
+    expect(modeOf(h.mode).kind).toBe('editing')
+  })
+
+  it('自动重载需要恢复协调器；缺少时仅阅读，不能以云端初值自动申请编辑', async () => {
+    const h = setup()
+    const meta = sampleMeta()
+    const reload = { userId: AMY.id, documentId: DOCUMENT_ID, clientInstanceId: meta.writtenBy, writeEpoch: meta.writeEpoch, writerId: meta.writerId }
+    expect(await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true, reload })).toMatchObject({ kind: 'opened', entered: false })
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('匹配的自动重载仍经过打开与恢复准备，原件直接快进且无需额外输入可保存', async () => {
+    const h = await recoverySetup()
+    const reload = { ...h.key, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
+    expect(await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true, reload })).toMatchObject({ kind: 'opened', entered: true })
+    expect(h.factory.last().snapshot).toBe(h.snapshot)
+    await h.mode.save()
+    expect(h.api.save).toHaveBeenCalledOnce()
+  })
+
   it.each(['persistent', 'memory'] as const)('%s 恢复暂停后以新上传身份保存，确认事实生效但旧清理不复活', async (kind) => {
     const local = await localDrafts()
     const h = await recoverySetup(kind === 'persistent' ? { localDrafts: local.options } : {})

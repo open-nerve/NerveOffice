@@ -107,14 +107,70 @@ describe('请正在编辑的标签页交出（M3-P5 设计 §3.7，交接协议�
     expect(tabs.browser.holderOf(LOCK)).toBeUndefined()
   })
 
-  it('回应了、却一直没做完：从回应起 20 秒按没有回应处理（回应之后 3 秒的时限不再算）', async () => {
+  it('第 2 秒才回应 ack：首次请求起恰好 20 秒结束，不从回应重新计时', async () => {
     const tabs = await twoTabs()
-    await tabs.time.advance(EDIT_TAB_HANDOVER_ACK_MS - 1_000)
+    await tabs.time.advance(2_000)
     tabs.reply({ type: 'handover-ack', state: 'exiting' })
-    await tabs.time.advance(EDIT_TAB_HANDOVER_DONE_MS - 1)
+    await tabs.time.advance(EDIT_TAB_HANDOVER_DONE_MS - 2_001)
     expect(tabs.outcome()).toBeUndefined()
     await tabs.time.advance(1)
     expect(tabs.outcome()).toEqual({ kind: 'silent' })
+    expect(tabs.time.pending()).toBe(0)
+  })
+
+  it('接近总截止时重复 ack 不延长交接，结束之后的 done 也不改变结果', async () => {
+    const tabs = await twoTabs()
+    tabs.reply({ type: 'handover-ack', state: 'editing' })
+    await tabs.time.advance(EDIT_TAB_HANDOVER_DONE_MS - 1_000)
+    tabs.reply({ type: 'handover-ack', state: 'exiting' })
+    await tabs.time.advance(999)
+    expect(tabs.outcome()).toBeUndefined()
+    await tabs.time.advance(1)
+    expect(tabs.outcome()).toEqual({ kind: 'silent' })
+    tabs.reply({ type: 'handover-done' })
+    tabs.lock.release()
+    await settle()
+    expect(await tabs.asked).toEqual({ kind: 'silent' })
+    expect(tabs.time.pending()).toBe(0)
+    expect(tabs.browser.holderOf(LOCK)).toBeUndefined()
+  })
+
+  it.each(['done', 'failed', 'lock-free'] as const)('总截止已到而计时器尚未执行：迟到的 %s 不能延长等待或改判成功', async (late) => {
+    const tabs = await twoTabs()
+    tabs.reply({ type: 'handover-ack', state: 'editing' })
+    await settle()
+    // 同步工作拖迟了计时器；频道回包或锁回调先得到执行机会。
+    tabs.time.elapse(EDIT_TAB_HANDOVER_DONE_MS)
+    if (late === 'done')
+      tabs.reply({ type: 'handover-done' })
+    else if (late === 'failed')
+      tabs.reply({ type: 'handover-failed', reason: 'not-saved' })
+    else
+      tabs.lock.release()
+    await settle()
+    expect(tabs.outcome()).toEqual({ kind: 'silent' })
+    expect(tabs.time.pending()).toBe(0)
+    tabs.lock.release()
+    await settle()
+    expect(tabs.browser.holderOf(LOCK)).toBeUndefined()
+    expect(await tabs.asked).toEqual({ kind: 'silent' })
+  })
+
+  it.each(['ack', 'silent'] as const)('busy 重试到第 19 秒再 %s：总截止仍是第 20 秒', async (last) => {
+    const tabs = await twoTabs()
+    for (let round = 0; round < 19; round += 1) {
+      tabs.reply({ type: 'handover-busy' })
+      await tabs.time.advance(TAB_HANDOVER_BUSY_RETRY_MS)
+    }
+    expect(tabs.requests).toHaveLength(20)
+    if (last === 'ack')
+      tabs.reply({ type: 'handover-ack', state: 'editing' })
+    await tabs.time.advance(999)
+    expect(tabs.outcome()).toBeUndefined()
+    await tabs.time.advance(1)
+    expect(tabs.outcome()).toEqual({ kind: 'silent' })
+    expect(tabs.requests).toHaveLength(20)
+    expect(tabs.time.pending()).toBe(0)
   })
 
   it('别的请求的回应、请求本身不算：3 秒的时限照常', async () => {
@@ -145,15 +201,16 @@ describe('请正在编辑的标签页交出（M3-P5 设计 §3.7，交接协议�
     expect(tabs.outcome()).toEqual({ kind: 'finished' })
   })
 
-  it('一直 busy：从第一次 busy 起 20 秒按没有回应处理', async () => {
+  it('一直 busy：首次请求起第 20 秒结束，截止时不再发第 21 次请求', async () => {
     const tabs = await twoTabs()
-    for (let round = 0; round < 25 && tabs.outcome() === undefined; round += 1) {
+    for (let round = 0; round < 20; round += 1) {
       tabs.reply({ type: 'handover-busy' })
       await tabs.time.advance(TAB_HANDOVER_BUSY_RETRY_MS)
     }
     expect(tabs.outcome()).toEqual({ kind: 'silent' })
-    expect(tabs.requests.length).toBeLessThanOrEqual(EDIT_TAB_HANDOVER_DONE_MS / TAB_HANDOVER_BUSY_RETRY_MS + 1)
-    expect(tabs.time.now() - 1_000).toBeLessThanOrEqual(EDIT_TAB_HANDOVER_DONE_MS + TAB_HANDOVER_BUSY_RETRY_MS)
+    expect(tabs.requests).toHaveLength(20)
+    expect(tabs.time.now() - 1_000).toBe(EDIT_TAB_HANDOVER_DONE_MS)
+    expect(tabs.time.pending()).toBe(0)
   })
 
   it('还没回应锁就空了（那边已经关了、刷新了、失去了编辑权）：立即算做完', async () => {

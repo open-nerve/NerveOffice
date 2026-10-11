@@ -17,6 +17,8 @@ export interface PersistentWorkingDraftOptions extends WorkingDraftOptions {
   readonly session: OutboxSession
   /** 与 initialCapture 配套：首份写入必须原子接手，失败后由恢复流程重新观察，不自动续普通资格。 */
   readonly recoveryObservation?: DraftObservation
+  /** 实际写成/采用成功的非敏感身份；登记、纯内存和迟到旧来源不通知。 */
+  readonly onPersisted?: (writer: WriterIdentity) => void
 }
 
 export interface PersistentWorkingDraft extends WorkingDraft {
@@ -105,15 +107,29 @@ export function createPersistentWorkingDraft(configuration: PersistentWorkingDra
     return highWater
   }
 
-  function persisted(input: DraftWriteInput, result: Extract<CaptureWritten, { readonly kind: 'written' }>, writer: WriterIdentity): WrittenDraftContent {
+  function persisted(input: DraftWriteInput, result: Extract<CaptureWritten, { readonly kind: 'written' }>, writer: WriterIdentity, run: number): WrittenDraftContent {
     const record: StoredContent = { writer, contentSeq: input.ref.draftSeq, digest: result.digest, baseRevision: input.baseRevision, formulasPending: input.ref.formulasPending, local: { kind: 'persisted', mirror: result.mirror } }
     last = record
     stored.set(input.ref, record)
     highWater = Math.max(highWater, record.contentSeq)
+    if (current(run) && currentWriter(record)) {
+      try {
+        options.onPersisted?.({ writeEpoch: writer.writeEpoch, writerId: writer.writerId })
+      }
+      catch (error) {
+        try {
+          options.reportError(error)
+        }
+        catch {
+          // 观察者与上报都不能改写已提交的持久事实。
+        }
+      }
+    }
     return { contentSeq: record.contentSeq, digest: result.digest, local: record.local, gzip: result.gzip, retainBody: false }
   }
 
   async function adoptInitial(input: DraftWriteInput): Promise<WrittenDraftContent> {
+    const run = generation
     const observation = recoveryObservation
     recoveryObservation = undefined
     if (observation === undefined || paused || changingKey || input.inFlight !== null)
@@ -124,7 +140,7 @@ export function createPersistentWorkingDraft(configuration: PersistentWorkingDra
     const state = session.view()
     if (result.kind === 'written' && state.kind === 'ready' && !paused && !changingKey) {
       awaitingRecovery = false
-      return persisted(input, result, state.writer)
+      return persisted(input, result, state.writer, run)
     }
     if (result.kind === 'written' || result.kind === 'unchanged')
       return memory(input, reasonOf(state), result.kind === 'written' ? result.gzip : undefined)
@@ -134,6 +150,7 @@ export function createPersistentWorkingDraft(configuration: PersistentWorkingDra
   const source = createWorkingDraftSource({ ...options, initialDraftSeq: Math.max(options.initialDraftSeq, highWater), ...(initialCapture === undefined ? {} : { initialCapture }) }, {
     sequenceFloor,
     write: async (input) => {
+      const run = generation
       if (awaitingRecovery)
         return adoptInitial(input)
       if (paused || changingKey)
@@ -166,7 +183,7 @@ export function createPersistentWorkingDraft(configuration: PersistentWorkingDra
       if (disposed)
         throw problem('InvalidStateError', '工作草稿来源已销毁')
       if (result.kind === 'written') {
-        return persisted(input, result, state.writer)
+        return persisted(input, result, state.writer, run)
       }
       if (result.kind === 'unchanged') {
         if (!dedupe || previous === undefined || previous.digest !== result.digest || previous.formulasPending !== input.ref.formulasPending)

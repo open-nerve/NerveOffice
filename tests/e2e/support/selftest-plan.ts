@@ -209,7 +209,7 @@ export const HANDOVER_PATHS: Readonly<Partial<Record<SelftestScenario, readonly 
   // 收不到交接频道的消息：只会失去编辑权
   'takeover-holder-deaf': ['lost'],
   'takeover-taker': ['answered', 'silent'],
-  'refresh-save': ['committed', 'expired'],
+  'refresh-save': ['confirmed-reading'],
   'request-waiter': ['entered-on-return'],
   'paused-holder': ['lost-after-pause', 'handed-over'],
 }
@@ -359,11 +359,11 @@ interface ServerExpectation {
 }
 
 /**
- * 交接的复核（M3-P5）在服务器上该有的样子，随走的路而定（path 是 B 的 answered、silent，refresh-save 的 committed、expired）：
+ * 交接的复核（M3-P5）在服务器上该有的样子，随走的路而定（path 是 B 的 answered、silent，refresh-save 的 confirmed-reading）：
  * - takeover-holder 与 takeover-holder-deaf（A 的文档）：A 回应了（answered）——第一格、隐藏时上传的第二格、交出之前存上的第三格，修订号 4；
  *   没有回应（silent）——前两格，修订号 3，第三格不在（只在 A 另存的副本里）；
  * - takeover-taker：与 A 同一份文档，随 A 那一步核对（这里没有要求）；
- * - refresh-save：刷新时停在服务端的那一次保存提交了，修订号 2、内容里有那一格（committed）；等满 30 秒（expired）说明那次保存没有提交，算问题。
+ * - refresh-save：刷新时停在服务端的那一次保存提交了，修订号 2、内容里有那一格（confirmed-reading：原实例自动确认后回阅读）。
  * 认不出路的交回 undefined（算问题：不知道该是什么样子）
  */
 function handoverExpectation(scenario: HandoverScenario, path: string | undefined): ServerExpectation | 'none' | undefined {
@@ -378,7 +378,7 @@ function handoverExpectation(scenario: HandoverScenario, path: string | undefine
     case 'takeover-taker':
       return 'none'
     case 'refresh-save':
-      return path === 'committed' ? { revision: 2, why: '刷新时停在服务端的那一次保存提交了', cells: [REFRESH_SAVE_EDIT] } : undefined
+      return path === 'confirmed-reading' ? { revision: 2, why: '刷新时停在服务端的那一次保存提交了', cells: [REFRESH_SAVE_EDIT] } : undefined
   }
 }
 

@@ -19,7 +19,7 @@
 //   交接频道的消息（takeover-holder-deaf：编辑器页的挂接装上吞消息的频道，与 S6 的 E2E 的 deafenHandover 同一个办法），模拟被暂停、冻结的 A：
 //   B 3 秒之后本人接管并抢锁（silent），A 失去编辑权、另存为副本（lost）。两条都按库里的时间线与后端日志核对租约的变化；
 // - refresh-save：先让这份文档的保存在服务端停 10 秒（support/selftest-handover.ts 的 slowDownSave：改写内容行时 pg_sleep）再打开，页面自己刷新、
-//   接手。location.reload 时三个浏览器都先取消在途的请求、再派发 pagehide（结果未知；S6 用 Playwright 的 page.reload 时 Chromium 系 pagehide 时
+//   以原实例普通申请、精确核对旧回执后回阅读。location.reload 时三个浏览器都先取消在途的请求、再派发 pagehide（结果未知；S6 用 Playwright 的 page.reload 时 Chromium 系 pagehide 时
 //   还在途）——两种都不释放、留下记号（7a759da），页面交回的时间线里看得出是哪一种
 // 请求编辑的两条路（M3-P6 设计 §3.10，DEF-062）照驱动脚本的编排（support/selftest-request.ts，共用）：作者在浏览器里，协作者经接口扮演另一方——
 // - request-waiter（路 1）：协作者编辑、心跳带来请求之后这里模拟请求方隐藏、协作者交出；请求方在"后台"停在交给了我、不申请，模拟回到前台之后才进入；
@@ -360,12 +360,12 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
     expect(judgement.problems).toEqual([])
   })
 
-  test('步骤 refresh-save（M3-P5 设计 §3.7 的 R1，7a759da）：保存停在服务端时页面刷新——不释放、留下记号；刷新之后"在此编辑"先等，那次保存提交了才以本人接管进入编辑；服务器上有那次保存，接手之前没有释放的请求', async ({ page }, testInfo) => {
+  test('步骤 refresh-save（US-M4-04、US-M4-05）：保存停在服务端时刷新，不释放旧代次；原实例普通申请、精确核对旧回执后回阅读，不建立空编辑来源', async ({ page }, testInfo) => {
     const step = await refreshStep()
     const { report, judgement, evidence } = await runRefreshSave(page, step)
     await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
     await testInfo.attach('refresh-evidence', { body: JSON.stringify({ judgement, ...evidence }, null, 2), contentType: 'application/json' })
-    expect(report.path).toBe('committed')
+    expect(report.path).toBe('confirmed-reading')
     expect(await summaryOf(report, step, report.path)).toEqual(passed(step))
     expect(judgement.problems).toEqual([])
   })

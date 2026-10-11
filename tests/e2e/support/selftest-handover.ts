@@ -25,8 +25,8 @@ const SERVER_LOG = fileURLToPath(new URL('../test-results/e2e-server.log', impor
 const POLL_MS = 100
 
 /**
- * refresh-save：保存在服务端停多久（改写内容行之前 pg_sleep）。页面发出保存 1.5 秒之后刷新，刷新之后的那一次到阅读的 steady（渲染完成之后
- * 3 秒）才点"在此编辑"——那次保存提交时它已经在等（waiting-save），远早于记号的 30 秒；不超过后端的 statement_timeout（15 秒）
+ * refresh-save：改写内容行之前 pg_sleep。页面发出保存 1.5 秒之后刷新，以原实例普通申请，再精确核对旧回执并回阅读。
+ * 10 秒足以让真实刷新撞上在途保存，且不超过后端的 statement_timeout（15 秒）；不依赖手动接管或 30 秒记号。
  */
 export const REFRESH_SLOW_SAVE_SECONDS = 10
 
@@ -395,11 +395,7 @@ export interface RefreshEvidence {
   readonly finishedAt: number | undefined
 }
 
-/**
- * 刷新时在途的保存（纯函数）：保存停在了服务端；页面交回 committed（那次保存提交了才接手），而且库里修订号前进在接手之前；刷新之前那一代
- * 从没被释放（没有明确结束），下一代记着本人接管（self：接手时那一代还有效）；服务端日志里接手之前没有这份文档的释放（DELETE …/edit-lease）。
- * 证据另说那次保存的请求在服务端是完成还是中断（刷新时浏览器取消了它）、修订号什么时候前进
- */
+/** 原实例自动申请、精确回执已确认后回阅读；HTTP 时序补足数据库低频采样看不到的新代次活跃期。 */
 export function refreshJudgement(evidence: RefreshEvidence): Judgement {
   const { report, states, requests, blockedAt, finishedAt } = evidence
   const origin = blockedAt ?? states[0]?.at ?? 0
@@ -408,34 +404,41 @@ export function refreshJudgement(evidence: RefreshEvidence): Judgement {
     problems.push('保存没有停在服务端（没有看到它在改写内容行时停着）')
   if (report === undefined)
     problems.push('刷新之后的那一次没有交回结果')
-  else if (report.path === 'expired')
-    problems.push('页面等满了 30 秒才接手：停在服务端的那次保存没有提交？')
+  else if (report.path !== 'confirmed-reading' || report.page.readOnly !== true)
+    problems.push('页面没有证明原实例自动核对后回到阅读')
   const epoch = firstEpoch(states)
-  const ofEpoch = states.filter(state => state.epoch === epoch)
-  const released = ofEpoch.find(state => state.endReason !== null)
+  const before = states.find(state => state.epoch === epoch)
+  const released = states.find(state => state.epoch === epoch && state.endReason !== null)
   const next = states.find(state => epoch !== undefined && state.epoch !== null && state.epoch > epoch)
   if (epoch === undefined)
     problems.push('库里没有看到刷新之前那一代的编辑租约')
-  else if (released !== undefined)
-    problems.push(`刷新之前那一代（第 ${epoch} 代）明确结束了（${released.endReason ?? ''}，${relative(released.at, origin)}）：页面关闭时不应释放`)
-  else if (next === undefined)
-    problems.push(`库里没有看到第 ${epoch} 代之后的新一代（没有接手）`)
-  else if (next.takeover !== 'self')
-    problems.push(`新一代的接管方式是 ${next.takeover ?? '空'}（应当是本人接管：接手时刷新之前那一代还有效）`)
-  const takeoverAt = next?.at ?? Number.POSITIVE_INFINITY
-  const advanced = states.find(item => item.revision !== null && item.revision > (states[0]?.revision ?? 0))
-  if (report?.path === 'committed' && next !== undefined && (advanced === undefined || advanced.at > takeoverAt))
-    problems.push(`页面说那次保存提交了才接手，库里修订号却${advanced === undefined ? '没有前进' : `在接手之后（${relative(advanced.at, origin)}）才前进`}`)
-  const releases = requests.filter(request => request.method === 'DELETE' && (request.route ?? '').endsWith('/edit-lease') && request.time < takeoverAt)
-  if (releases.length > 0)
-    problems.push(`接手之前服务端收到了释放：${releases.map(request => describeRequest(request, origin)).join('、')}`)
+  if (released !== undefined)
+    problems.push('刷新之前那一代明确结束：页面关闭时不应释放')
+  if (next === undefined)
+    problems.push('库里没有看到刷新后的新一代')
+  else if (next.takeover !== null || before?.clientInstanceId === null || next.clientInstanceId !== before?.clientInstanceId)
+    problems.push('新一代没有以原 clientInstanceId 普通申请')
+  const baseRevision = states[0]?.revision
+  const revisions = states.map(state => state.revision).filter((revision): revision is number => revision !== null)
+  if (baseRevision === null || baseRevision === undefined || Math.max(...revisions) !== baseRevision + 1)
+    problems.push('云端修订号没有恰好前进一次')
+  const acquired = requests.find(request => isAcquire(request) && request.time >= origin)
+  if (acquired === undefined)
+    problems.push('服务端没有确认刷新后的普通申请')
   const saves = requests.filter(request => request.method === 'PUT' && (request.route ?? '').endsWith('/content'))
+  const replay = saves.find(request => acquired !== undefined && request.durationMs !== undefined && request.time - request.durationMs >= acquired.time && request.statusCode === 200)
+  if (replay === undefined)
+    problems.push('普通申请之后没有成功核对旧保存回执')
+  const releases = requests.filter(request => request.method === 'DELETE' && (request.route ?? '').endsWith('/edit-lease'))
+  const early = releases.filter(request => request.durationMs === undefined || request.time - request.durationMs < Math.max(acquired?.time ?? Number.POSITIVE_INFINITY, replay?.time ?? Number.POSITIVE_INFINITY))
+  if (early.length > 0)
+    problems.push('服务端收到过早释放：原实例申请与旧回执确认尚未完成')
   const parts = [
     `保存停在服务端${blockedAt === undefined ? '：没有' : ''}，${finishedAt === undefined ? '没有停完' : `${relative(finishedAt, origin)} 停完`}`,
     `保存的请求在服务端：${saves.length === 0 ? '日志里没有' : saves.map(request => describeRequest(request, origin)).join('、')}`,
     `修订号 ${revisionSteps(states, origin)}`,
-    `第 ${epoch ?? '?'} 代${released === undefined ? '没有明确结束' : `明确结束（${released.endReason ?? ''}）`}；${next === undefined ? '没有新一代' : `${relative(next.at, origin)} 第 ${next.epoch ?? '?'} 代，接管方式 ${next.takeover ?? '空'}`}`,
-    `接手之前的释放 ${releases.length} 个；页面交回的路 ${report?.path ?? '没有'}`,
+    `第 ${epoch ?? '?'} 代${released === undefined ? '没有明确结束' : '明确结束'}；${next === undefined ? '没有新一代' : `${relative(next.at, origin)} 采样到第 ${next.epoch ?? '?'} 代，接管方式 ${next.takeover ?? '空（普通申请）'}`}`,
+    `过早释放 ${early.length} 个；页面交回的路 ${report?.path ?? '没有'}`,
   ]
   return { problems, evidence: `（相对保存停在服务端）${parts.join('；')}` }
 }

@@ -15,10 +15,8 @@
 //   记下回应用了多久、多久进入编辑；核对服务器上 A 的修改（前两格一定在，第三格只在 answered 时在）；
 // - refresh-save（作者，阅读时开始，跨两次载入）：第一次——点"编辑"，写一格，经控制的 flush 发出保存（驱动脚本让这份文档的保存在服务端停
 //   10 秒），1.5 秒之后还在途就刷新（location.reload）；离开时看到了什么（保存的请求什么时候失败、pagehide 时保存的状态、页面的处理之后 localStorage
-//   里有没有记号、有没有发释放或交出）同步记进 sessionStorage。第二次（刷新之后）——这些交回；阅读时说明"你刚关闭或刷新的页面还有一次保存
-//   在进行"（持有者是自己、锁不在本浏览器、记号在 30 秒内而那次保存还没提交：just-closed，审查 B §七）；记号在；点"在此编辑"先等（waiting-save，
-//   "上一个页面的保存还在进行，稍后接手…"），那次保存提交了（在服务端停完）才以本人接管申请、进入编辑（committed），或者等满 30 秒（expired，
-//   从记号的时刻算）；服务器上有那次保存，记号清掉。
+//   里有没有记号、有没有发释放或交出）同步记进 sessionStorage。第二次（刷新之后）——以原 clientInstanceId 普通申请，
+//   不带旧租约精确重放原请求和字节；旧回执已确认后显示最新云端并回阅读，不再次建立空编辑来源。数据库和请求日志独立核对代次与释放顺序。
 // 与请求编辑的场景（./selftest-request.ts）共用的观察（交接日志、时间线、可见性、页头的文字、内容里的格）在 ./selftest-timeline.ts，A 的前半段
 // （第一格存上、隐藏的那一刻上传第二格、隐藏之后写第三格）在 ./selftest-holder.ts。
 import type { HandoverScenario, SelftestCheck, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
@@ -35,9 +33,6 @@ import { cellOf, cellsIn, editingSteady, firstOf, handoverLog, lostNoticeText, o
 /** 页头里"在此编辑"的说法（与编辑器页的文案相同；这里不引用编辑器页的模块） */
 const TAKE_OVER_HERE = '在此编辑'
 
-/** 刷新之后、刷新之前那次保存还没提交时的阅读说明（与编辑器页的文案相同，审查 B §七） */
-const JUST_CLOSED = `你刚关闭或刷新的页面还有一次保存在进行。点"${TAKE_OVER_HERE}"会先等它存完（至多 30 秒）再接着编辑`
-
 /**
  * A 隐藏之后等结果最多多久：B 载入、等 8 秒、请 A 交出（至多 3 秒回应、20 秒做完）、进入编辑、交回结果、关掉标签页之后 A 才回到前台——
  * A 被暂停时它自己的计时器也停着，回到前台之后才接着看
@@ -49,17 +44,6 @@ const TAKER_ENTER_WAIT_MS = 60_000
 
 /** refresh-save：发出保存之后等多久再看它还在不在途（驱动脚本让它在服务端停 10 秒，这时还没有结果） */
 const SAVE_HELD_CONFIRM_MS = 1_500
-
-/** refresh-save：点了"在此编辑"之后等进入编辑最多多久：记号的 30 秒 + 申请与重建、到 steady */
-const REFRESH_ENTER_WAIT_MS = 60_000
-
-/**
- * 刷新之前在途的保存最多等多久（从记号的时刻算，contracts 的 EDIT_PENDING_SAVE_WAIT_MS）与等的时候读编辑状态的间隔（编辑器页 self-takeover.ts 的
- * PENDING_SAVE_POLL_MS）。这里不引用 contracts 与编辑器页的模块（引用 contracts 会改变测试构建的分块：测试构建里多出一次 zod 的 eval 探测，
- * CSP 违规），另写一份，单元测试核对与 contracts 的相同
- */
-export const PENDING_SAVE_WAIT_MS = 30_000
-const PENDING_SAVE_POLL_MS = 2_000
 
 /** refresh-save：刷新之后的那次载入要的（同一个标签页的 sessionStorage，刷新之后还在） */
 const REFRESH_CARRY_KEY = 'nerve-office.selftest.refresh-save'
@@ -341,6 +325,7 @@ interface RefreshCarry {
   readonly timings: SelftestTiming[]
   readonly timeline: SelftestTimelineEntry[]
   baseRevision: number
+  original?: { readonly query: string, readonly bodyHash: string }
 }
 
 function readCarry(documentId: string): RefreshCarry | undefined {
@@ -466,6 +451,11 @@ async function refreshBeforeReload(session: Session): Promise<void> {
     const request = saveRequests().at(-1)
     if (request === undefined || request.status !== undefined)
       fail(`没有在途的保存请求（${request === undefined ? '没有发出' : `状态 ${String(request.status)}`}）`)
+    const observed = session.host.reloadSaves?.().at(-1)
+    const bodyHash = await observed?.bodyHash
+    if (observed === undefined || !observed.hasLease || bodyHash === undefined || !/^[a-f0-9]{64}$/.test(bodyHash))
+      fail('载入前的请求观察没有留下原保存的查询参数与字节指纹')
+    carry.original = { query: observed.query, bodyHash }
     if (session.host.view().save !== 'saving')
       fail(`保存状态是 ${session.host.view().save ?? '没有'}（应当是 saving）`)
     return `写下 ${REFRESH_SAVE_EDIT.cell}，经控制的 flush 发出保存（基准修订号 ${revision}）；${SAVE_HELD_CONFIRM_MS} ms 之后它还在途（保存状态 saving）：停在服务端`
@@ -486,7 +476,7 @@ async function refreshBeforeReload(session: Session): Promise<void> {
   clearCarry()
 }
 
-/** 刷新之后的那一次：交回第一次的结果与离开时的观察，再看阅读的样子、记号与"在此编辑" */
+/** 刷新之后交回离开时的观察，核对自动申请、原请求重放与最终阅读。 */
 async function refreshAfterReload(session: Session, carry: RefreshCarry): Promise<void> {
   clearCarry()
   session.checks.push(...carry.checks)
@@ -539,101 +529,40 @@ async function refreshSteps(session: Session, carry: RefreshCarry, observations:
       fail(`${summary.problems.join('；')}（${summary.text}）`)
     return summary.text
   })
-  const reading = await check(session, 'refresh.reading', async () => {
-    if (session.host.page.readOnly !== true)
-      fail('刷新之后页面没有按阅读打开')
-    // 刷新之前那一代还在、本机锁随页面放开了，而那次保存还在服务端停着（记号在 30 秒内、修订号没前进）：是刚关闭或刷新的页面
-    if (!await waitFor(() => session.host.view().selfHolder === 'just-closed', SIGNAL_TIMEOUT_MS * 2, 100))
-      fail(`持有者不是"刚关闭或刷新的页面"（${describeView(session)}，selfHolder ${session.host.view().selfHolder ?? '没有'}）：刷新之前那一代被释放了，还是记号不在、那次保存已经提交了？`)
-    const said = statusTexts(session).find(text => text.includes('你刚关闭或刷新的页面')) ?? ''
-    if (said !== JUST_CLOSED)
-      fail(`说明是"${said}"（应当是"${JUST_CLOSED}"）`)
-    if (chromeButton(session, TAKE_OVER_HERE) === undefined)
-      fail(`页头没有"${TAKE_OVER_HERE}"`)
-    return `阅读：说明"${said}"，页头有"${TAKE_OVER_HERE}"（刷新之前那一代还在、本机锁随页面放开了，那次保存还没提交）`
-  })
-  if (!reading)
-    return
-  let markerAt: number | undefined
-  await check(session, 'refresh.marker', async () => {
-    let raw: string | null = null
-    try {
-      raw = localStorage.getItem(pendingSaveKeyOf(session.host.documentId))
-    }
-    catch (error) {
-      fail(`读不了 localStorage：${describe(error)}`)
-    }
-    if (raw === null)
-      fail('localStorage 里没有记号')
-    const marker = JSON.parse(raw) as { readonly v?: unknown, readonly at?: unknown, readonly revision?: unknown }
-    if (marker.v !== 1 || typeof marker.at !== 'number' || marker.revision !== carry.baseRevision)
-      fail(`记号是 ${raw}（应当是版本 1、带时刻、基准修订号 ${carry.baseRevision}）`)
-    markerAt = marker.at
-    const age = Date.now() - marker.at
-    return `记号 ${raw}：${round(age)} ms 之前记下，基准修订号 ${carry.baseRevision}`
-  })
-  let clickWall = 0
-  const tookOver = await check(session, 'refresh.take-over', async () => {
-    const button = chromeButton(session, TAKE_OVER_HERE)
-    if (button === undefined)
-      fail(`页头没有"${TAKE_OVER_HERE}"`)
-    const previous = session.probe
-    let waitingSeen: number | undefined
-    let waitingSaid = ''
-    const look = (): boolean => {
-      const view = session.host.view()
-      if (view.takeover === 'waiting-save' && waitingSeen === undefined) {
-        waitingSeen = Date.now()
-        waitingSaid = statusRegionText(session)
-        observations.push(observation('waiting-save', { said: waitingSaid }))
-      }
-      return editingSteady(session) || (view.mode === 'reading' && view.takeover === undefined && view.notice !== undefined)
-    }
-    clickWall = Date.now()
-    observations.push(observation('click'))
-    button.click()
-    if (!await waitFor(look, REFRESH_ENTER_WAIT_MS, 50))
-      fail(`${REFRESH_ENTER_WAIT_MS / 1000} 秒内没有进入编辑（${describeView(session)}，进展 ${session.host.view().takeover ?? '没有'}）`)
-    if (!editingSteady(session))
-      fail(`没有进入编辑（${describeView(session)}，说明 ${session.host.view().notice ?? '没有'}）`)
-    observations.push(observation('entered'))
-    adoptEditor(session, previous)
-    if (waitingSeen === undefined)
-      fail('"在此编辑"没有先等上一个页面的保存（进展里没有 waiting-save）')
-    if (!waitingSaid.includes('上一个页面的保存还在进行，稍后接手'))
-      fail(`等的时候读屏状态区说"${waitingSaid}"（应当说上一个页面的保存还在进行，稍后接手…）`)
-    const log = handoverLog().log().filter(entry => entry.wall >= clickWall)
-    const locate = firstOf(log, 'takeover-locate')
-    const acquire = firstOf(log, 'acquire')
+  const recovered = await check(session, 'refresh.automatic', async () => {
+    const log = handoverLog().log()
+    const acquires = log.filter(entry => entry.kind === 'acquire')
     const result = firstOf(log, 'acquire-result')
-    const entered = firstOf(log, 'entered')
-    if (locate?.here !== false || acquire?.takeover !== 'self' || result?.result !== 'acquired' || entered === undefined)
-      fail(`交接日志不对：锁在本浏览器 ${JSON.stringify(locate?.here) ?? '没有'}、申请的接管方式 ${JSON.stringify(acquire?.takeover) ?? '没有申请'}、结果 ${String(result?.result ?? '没有')}、${entered === undefined ? '没有' : '有'}进入编辑（应当是锁不在本浏览器、以本人接管申请、取得、进入）`)
-    // 等到了 30 秒（从记号的时刻算）才申请就是 expired；之前申请的是读到了修订号前进（那次保存提交了）
-    const waited = acquire.wall - waitingSeen
-    session.path = markerAt !== undefined && acquire.wall >= markerAt + PENDING_SAVE_WAIT_MS - PENDING_SAVE_POLL_MS / 2 ? 'expired' : 'committed'
-    const ms = { waitingSave: waitingSeen - clickWall, waited, acquire: acquire.wall - clickWall, entered: entered.wall - clickWall }
-    session.timings.push({ id: 'refresh.take-over', ms })
-    return `点"${TAKE_OVER_HERE}"之后 +${ms.waitingSave} ms 开始等（"${waitingSaid}"），等了 ${waited} ms（${session.path === 'committed' ? '那次保存提交了' : '等满了 30 秒'}）以本人接管申请，+${ms.entered} ms 进入编辑`
-  }, REFRESH_ENTER_WAIT_MS + CHECK_TIMEOUT_MS)
-  if (!tookOver)
+    if (acquires.length !== 1 || acquires[0]?.trigger !== 'open' || acquires[0]?.takeover !== null || result?.result !== 'acquired')
+      fail('刷新后没有唯一一次打开时的普通申请并取得编辑权')
+    if (log.some(entry => entry.kind === 'takeover-start' || entry.kind === 'entered'))
+      fail('自动核对不应走手动接管，也不应在旧回执确认后空白进入编辑')
+    if (session.host.page.readOnly !== true || session.host.view().mode !== 'reading' || session.host.surface.getAttribute('data-editor-access') !== 'read')
+      fail(`旧回执确认后没有保持阅读（${describeView(session)}）`)
+    const original = carry.original
+    const replay = session.host.reloadSaves?.() ?? []
+    const mark = replay[0]
+    if (original === undefined || mark === undefined || replay.length !== 1)
+      fail(`原请求指纹缺失或新页面不止一次重放（${replay.length} 次）`)
+    if (mark.query !== original.query || await mark.bodyHash !== original.bodyHash || mark.hasLease || mark.status !== 200)
+      fail('重放没有使用原请求参数和原字节，或携带了租约，或未取得成功回执')
+    session.facts.originalQuery = original.query
+    session.facts.originalBodyHash = original.bodyHash
+    session.facts.replayHasLease = mark.hasLease
+    session.facts.replayStatus = mark.status
+    observations.push(observation('confirmed-reading', { query: mark.query, bodyHash: original.bodyHash, replayAt: mark.wall }))
+    session.path = 'confirmed-reading'
+    return '原实例打开时普通申请，原请求/原字节不带租约核对成功；显示云端并保持阅读，没有手动接管或空编辑来源'
+  })
+  if (!recovered)
     return
   await check(session, 'refresh.server', async () => {
     const { revision } = await fetchServerDocument(session.host.documentId)
     const stored = cellOf(await fetchServerContent(session.host.documentId), REFRESH_SAVE_EDIT)
     const shown = cellOf(session.probe.snapshot(), REFRESH_SAVE_EDIT)
-    if (session.path === 'committed' && (revision !== carry.baseRevision + 1 || stored !== REFRESH_SAVE_EDIT.value || shown !== REFRESH_SAVE_EDIT.value))
-      fail(`服务器上修订号 ${revision}、${REFRESH_SAVE_EDIT.cell} 是 ${JSON.stringify(stored) ?? '空'}，编辑器里是 ${JSON.stringify(shown) ?? '空'}（那次保存提交了：应当是修订号 ${carry.baseRevision + 1}、两边都是写下的值）`)
-    let marker: string | null = null
-    try {
-      marker = localStorage.getItem(pendingSaveKeyOf(session.host.documentId))
-    }
-    catch {
-      // 读不了：当作没有
-    }
-    if (marker !== null)
-      fail(`接手之后记号还在：${marker}`)
-    return `服务器上修订号 ${revision}、${REFRESH_SAVE_EDIT.cell} 是 ${JSON.stringify(stored) ?? '空'}，进入编辑之后的编辑器里是 ${JSON.stringify(shown) ?? '空'}；接手之后记号清掉了`
+    if (revision !== carry.baseRevision + 1 || stored !== REFRESH_SAVE_EDIT.value || shown !== REFRESH_SAVE_EDIT.value)
+      fail(`服务器修订号 ${revision}、正文 ${JSON.stringify(stored)}、阅读正文 ${JSON.stringify(shown)}：应当只前进一次并保留那次保存`)
+    return `服务器只前进到修订号 ${revision}，原保存的正文在云端和阅读页一致`
   })
 }
 
