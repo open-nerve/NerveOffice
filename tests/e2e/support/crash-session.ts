@@ -12,7 +12,7 @@ interface Boot {
 
 interface CrashDiagnostic extends Omit<Boot, 'kind'> {
   readonly kind: 'diagnostic'
-  readonly stage: 'boot' | 'ready' | 'restored' | 'failed'
+  readonly stage: 'boot' | 'ready' | 'awaiting-confirmation' | 'restored' | 'failed'
   readonly facts: ReloadDiagnostics
   readonly receivedAt: number
 }
@@ -30,6 +30,18 @@ export interface CrashReady extends Omit<Boot, 'kind'> {
   readonly inFlight: false
   readonly visible: true
   readonly pageErrors: 0
+}
+
+export interface CrashAwaitingConfirmation extends Omit<CrashReady, 'kind' | 'workerWrites'> {
+  readonly kind: 'awaiting-confirmation'
+  readonly mode: 'reading'
+  readonly entry: 'restore' | 'takeover-self'
+}
+
+/** 驱动在交付确认许可的瞬间提供当前请求数，在途请求也必须计入；不来自页面 JSON。 */
+export interface CrashTraffic {
+  readonly acquires: number
+  readonly saves: number
 }
 
 export interface CrashRestored extends Omit<Boot, 'kind'> {
@@ -59,12 +71,13 @@ interface CrashOptions {
   readonly deadline: number
 }
 
-type Phase = 'waiting' | 'preparing' | 'ready' | 'signaled' | 'observing' | 'restored' | 'passed' | 'failed'
-interface Command { readonly kind: 'prepare' | 'observe' | 'wait' | 'stop' }
+type Phase = 'waiting' | 'preparing' | 'ready' | 'signaled' | 'observing' | 'awaiting-confirmation' | 'authorized' | 'recovering' | 'restored' | 'passed' | 'failed'
+interface Command { readonly kind: 'prepare' | 'observe' | 'confirm' | 'wait' | 'stop' }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HASH = /^[0-9a-f]{64}$/
 const BOOT_KEYS = ['kind', 'runId', 'documentId', 'bootId']
 const READY_KEYS = [...BOOT_KEYS, 'userId', 'clientInstanceId', 'writerId', 'draftSeq', 'baseRevision', 'contentHash', 'snapshotHash', 'workerWrites', 'inFlight', 'visible', 'pageErrors']
+const AWAITING_KEYS = [...READY_KEYS.filter(key => key !== 'workerWrites'), 'mode', 'entry']
 const RESTORED_KEYS = [...BOOT_KEYS, 'contentHash', 'mode', 'recoveredNotice', 'draftRemaining', 'visible', 'pageErrors']
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -97,6 +110,16 @@ function isRestored(value: Record<string, unknown>, options: CrashOptions): valu
     && value.draftRemaining === false && value.visible === true && value.pageErrors === 0
 }
 
+function isAwaitingConfirmation(value: Record<string, unknown>, ready: CrashReady | undefined): value is Record<string, unknown> & CrashAwaitingConfirmation {
+  return ready !== undefined && exactKeys(value, AWAITING_KEYS) && value.kind === 'awaiting-confirmation'
+    && value.mode === 'reading' && ['restore', 'takeover-self'].includes(value.entry as string)
+    && READY_KEYS.filter(key => !BOOT_KEYS.includes(key) && key !== 'workerWrites').every(key => value[key] === (ready as unknown as Record<string, unknown>)[key])
+}
+
+function noTraffic(traffic: CrashTraffic | undefined): boolean {
+  return traffic?.acquires === 0 && traffic.saves === 0
+}
+
 export function createCrashSession(options: CrashOptions) {
   if (!['process-kill', 'reload-calibration'].includes(options.mode) || ![options.runId, options.documentId, options.userId].every(uuid) || !HASH.test(options.contentHash) || !positiveInteger(options.deadline))
     throw new Error('崩溃会话的测试身份、正文指纹或时限无效')
@@ -106,6 +129,8 @@ export function createCrashSession(options: CrashOptions) {
   let nextBoot: string | undefined
   let ready: CrashReady | undefined
   let restored: CrashRestored | undefined
+  let awaiting: CrashAwaitingConfirmation | undefined
+  let confirmation: { readonly authorizedAt: number, readonly consumedAt?: number, readonly before: CrashServerEvidence } | undefined
   let lastAt = 0
   const problems: string[] = []
   const diagnostics: CrashDiagnostic[] = []
@@ -133,15 +158,15 @@ export function createCrashSession(options: CrashOptions) {
   }
 
   return {
-    receive(message: unknown, now: number): Command {
+    receive(message: unknown, now: number, traffic?: CrashTraffic): Command {
       if (!live(now))
         return { kind: 'stop' }
       if (!object(message) || message.runId !== config.runId || message.documentId !== config.documentId || !uuid(message.bootId))
         return fail('页面报告的测试身份无效')
       if (message.kind === 'diagnostic') {
         const first = phase === 'preparing' && message.bootId === firstBoot
-        const next = phase === 'observing' && message.bootId === nextBoot
-        const stages = first ? ['boot', 'ready', 'failed'] : next ? ['boot', 'restored', 'failed'] : []
+        const next = ['observing', 'awaiting-confirmation', 'authorized', 'recovering'].includes(phase) && message.bootId === nextBoot
+        const stages = first ? ['boot', 'ready', 'failed'] : next ? phase === 'observing' ? ['boot', 'awaiting-confirmation', 'failed'] : phase === 'recovering' ? ['restored', 'failed'] : ['failed'] : []
         if (!exactKeys(message, [...BOOT_KEYS, 'stage', 'facts']) || !stages.includes(message.stage as string)
           || !isReloadDiagnostics(message.facts) || diagnostics.length >= 6
           || diagnostics.some(item => item.bootId === message.bootId && item.stage === message.stage)) {
@@ -178,14 +203,32 @@ export function createCrashSession(options: CrashOptions) {
         phase = 'ready'
         return { kind: 'wait' }
       }
-      if (message.kind === 'restored' && message.bootId === nextBoot && isRestored(message, config)) {
+      if (message.kind === 'awaiting-confirmation' && message.bootId === nextBoot && isAwaitingConfirmation(message, ready)) {
         if (phase !== 'observing')
-          return fail('恢复报告到达时序不符')
+          return fail('确认前阅读报告到达时序不符')
+        awaiting = Object.freeze({ ...message })
+        phase = 'awaiting-confirmation'
+        return { kind: 'wait' }
+      }
+      if (message.kind === 'confirm' && message.bootId === nextBoot && exactKeys(message, BOOT_KEYS)) {
+        if (phase === 'awaiting-confirmation')
+          return { kind: 'wait' }
+        if (phase !== 'authorized' || confirmation === undefined)
+          return fail('确认许可只能向当前恢复页面交付一次')
+        if (!noTraffic(traffic))
+          return fail('交付确认前已发出编辑权申请或保存，或缺少独立 HTTP 观察')
+        confirmation = { ...confirmation, consumedAt: now }
+        phase = 'recovering'
+        return { kind: 'confirm' }
+      }
+      if (message.kind === 'restored' && message.bootId === nextBoot && isRestored(message, config)) {
+        if (phase !== 'recovering')
+          return fail('恢复报告到达时序不符或尚未明确确认')
         restored = Object.freeze({ ...message })
         phase = 'restored'
         return { kind: 'wait' }
       }
-      return fail('页面证据不满足真实持久或自动恢复前提')
+      return fail('页面证据不满足真实持久或明确恢复前提')
     },
     /** 只能由已确认实际发送信号的驱动调用，HTTP 控制路径没有这个操作。 */
     signaled(now: number): boolean {
@@ -209,26 +252,45 @@ export function createCrashSession(options: CrashOptions) {
       phase = 'signaled'
       return true
     },
+    /** 只有驱动能许可；页面控制通道不能调用。云端与全部已发请求均来自独立观察。 */
+    authorizeConfirmation(server: CrashServerEvidence, now: number): boolean {
+      if (!live(now))
+        return false
+      if (phase !== 'awaiting-confirmation' || awaiting === undefined) {
+        fail('缺少确认前的阅读、原件与入口报告')
+        return false
+      }
+      if (server.revision !== 1 || !HASH.test(server.contentHash) || server.contentHash === config.contentHash
+        || server.acquires.length !== 0 || server.saves.length !== 0) {
+        fail('确认前云端已变化或已发出编辑权申请/保存')
+        return false
+      }
+      confirmation = { authorizedAt: now, before: structuredClone(server) }
+      phase = 'authorized'
+      return true
+    },
     cancel(reason: string): void {
       fail(reason)
     },
     finish(server: CrashServerEvidence, now: number): readonly string[] {
       if (!live(now))
         return [...problems]
-      if (phase !== 'restored' || ready === undefined) {
+      if (phase !== 'restored' || ready === undefined || awaiting === undefined || confirmation?.consumedAt === undefined) {
         fail('缺少完整的崩溃后页面恢复报告')
         return [...problems]
       }
       if (server.revision !== 2 || server.contentHash !== config.contentHash)
         problems.push('服务端正文或修订号不符，应当只新增一次修订')
       const acquire = server.acquires[0]
-      if (server.acquires.length !== 1 || acquire?.clientInstanceId !== ready.clientInstanceId || acquire.takeover !== null || acquire.status !== 201)
-        problems.push('重载后没有以原 clientInstanceId 恰好普通申请一次')
+      if (server.acquires.length !== 1 || !uuid(acquire?.clientInstanceId) || acquire.clientInstanceId === ready.clientInstanceId
+        || acquire.takeover !== (awaiting.entry === 'restore' ? null : 'self') || acquire.status !== 201) {
+        problems.push('明确确认后没有以新 clientInstanceId 沿对应入口恰好申请一次')
+      }
       if (server.saves.length !== 1 || server.saves[0]?.status !== 200)
         problems.push('重载后没有恰好完成一次真实保存')
       phase = problems.length === 0 ? 'passed' : 'failed'
       return [...problems]
     },
-    snapshot: () => ({ mode: config.mode, phase, ready, restored, diagnostics: structuredClone(diagnostics), problems: [...problems] }),
+    snapshot: () => ({ mode: config.mode, recovery: 'explicit-confirmation' as const, phase, ready, awaiting, restored, confirmation: structuredClone(confirmation), diagnostics: structuredClone(diagnostics), problems: [...problems] }),
   }
 }

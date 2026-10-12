@@ -64,46 +64,97 @@ async function fixture() {
 }
 
 describe('文档恢复的发现与条件动作', () => {
-  it('自动重载遇到登记后的 empty 不能退成普通云端编辑', async () => {
+  it.each(['writerId', 'writtenBy', 'writeEpoch'] as const)('点击后原件 %s 改变，在旧回执核对或自动清理之前停止', async (field) => {
     const h = await fixture()
-    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
-    expect(await h.recovery.prepare({ kind: 'empty', highWater: 0 }, FACTS, h.install, expected)).toEqual({ kind: 'blocked', reason: 'changed' })
+    await h.recovery.discover()
+    const prepare = h.recovery.beginRestore()
+    const meta = { ...h.meta, [field]: field === 'writeEpoch' ? h.meta.writeEpoch + 1 : 'replacement', inFlight: { requestId: 'new-request', clientInstanceId: 'new-page', localSeq: 37, sentAt: NOW - 1000 } }
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta, gzip: new Uint8Array([1, 2, 3]) } })
+    expect(await prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'changed' })
+    expect(h.replay).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
     expect(h.install).not.toHaveBeenCalled()
   })
 
-  it.each(['absent', 'denied', 'unsupported'] as const)('自动重载第二次读取 %s，不能借空记录或固定内存退路自动进入', async (kind) => {
+  it('点击后同一写入者继续落盘，采用最新正文与序号；登记后的新 writer 不改变原件来源', async () => {
     const h = await fixture()
-    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
-    h.observe.mockResolvedValue(kind === 'absent' ? { ...h.original, record: { kind } } : { kind: 'unavailable', reason: kind })
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install, expected)).toMatchObject({ kind: 'blocked' })
-    expect(h.install).not.toHaveBeenCalled()
-    expect(h.remove).not.toHaveBeenCalled()
+    await h.recovery.discover()
+    const prepare = h.recovery.beginRestore()
+    const snapshot = '{"body":"交接期间的最后一次落盘"}'
+    const bytes = new TextEncoder().encode(snapshot)
+    const meta = { ...h.meta, draftSeq: 38, rawBytes: bytes.byteLength, updatedAt: NOW + 1 }
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta, gzip: await gzipBytes(bytes) }, writer: { ...KEY, writeEpoch: 99, writerId: 'registered-new-writer', lastDraftSeq: 38, registeredAt: NOW + 2 } })
+    expect(await prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toMatchObject({ kind: 'restore', capture: { snapshot }, highWater: 38 })
+    expect(h.install).toHaveBeenCalledExactlyOnceWith(snapshot, false)
   })
 
-  it.each(['writtenBy', 'writeEpoch', 'writerId'] as const)('预检后原件的 %s 被替换：自动不采用；之后显式操作仍可恢复', async (field) => {
+  it.each(['same', 'different'] as const)('点击后的旧钥刷新得到 %s 认证来源，才决定是否允许采用', async (source) => {
     const h = await fixture()
-    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
-    const meta = { ...h.meta, [field]: field === 'writeEpoch' ? h.meta.writeEpoch + 1 : 'replacement' }
-    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta, gzip: h.original.record.kind === 'draft' ? h.original.record.gzip : new Uint8Array() } })
-    const context = { kind: 'memory', reason: 'disabled', highWater: 0 } as const
-    expect(await h.recovery.prepare(context, FACTS, h.install, expected)).toMatchObject({ kind: 'blocked' })
-    expect(h.install).not.toHaveBeenCalled()
+    await h.recovery.discover()
+    const prepare = h.recovery.beginRestore()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'unreadable', meta: h.meta, reason: 'stale-key' } })
+    const meta = { ...h.meta, writerId: source === 'same' ? h.meta.writerId : 'new-writer' }
+    h.refreshKey.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } })
+    const result = await prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
+    expect(result).toMatchObject(source === 'same' ? { kind: 'restore' } : { kind: 'blocked', reason: 'changed' })
+    expect(h.refreshKey).toHaveBeenCalledOnce()
     expect(h.remove).not.toHaveBeenCalled()
-    expect(await h.recovery.prepare(context, FACTS, h.install)).toMatchObject({ kind: 'restore' })
+    expect(h.install).toHaveBeenCalledTimes(source === 'same' ? 1 : 0)
+  })
+
+  it('明确放弃当前原件成功后，普通编辑不再绑定已结束的旧来源', async () => {
+    const h = await fixture()
+    await h.recovery.discover()
+    const discard = h.recovery.beginDiscard()
+    expect(discard).toBeDefined()
+    await h.recovery.discard(discard!)
+    expect(h.recovery.view().stage).toBe('finished')
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writerId: 'new-writer' }, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toMatchObject({ kind: 'restore' })
     expect(h.install).toHaveBeenCalledOnce()
   })
 
-  it('部署关闭但认证原件匹配且可恢复，自动尝试沿统一内存恢复入口采用', async () => {
+  it('旧原件清理迟到不能清掉已展示新原件的来源绑定', async () => {
     const h = await fixture()
-    const expected = { ...KEY, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install, expected)).toMatchObject({ kind: 'restore', baseRevision: 7 })
+    const prepared = await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
+    if (prepared.kind !== 'restore')
+      throw new Error('需要初值')
+    const removed = deferred<Awaited<ReturnType<RecoveryReader['remove']>>>()
+    h.remove.mockReturnValueOnce(removed.promise)
+    const confirmation = prepared.onConfirmed?.()
+    await vi.waitFor(() => expect(h.remove).toHaveBeenCalledOnce())
+    const gzip = await gzipBytes(new TextEncoder().encode(BODY))
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writerId: 'writer-b' }, gzip } })
+    await h.recovery.discover()
+    removed.resolve({ kind: 'removed', mirror: { kind: 'removed' } })
+    await confirmation
+    const prepare = h.recovery.beginRestore()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writerId: 'writer-c' }, gzip } })
+    expect(await prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'changed' })
+    expect(h.install).toHaveBeenCalledOnce()
+  })
+
+  it('暂停使旧点击失效，之后发现同一原件也不能复活旧安装器', async () => {
+    const h = await fixture()
+    await h.recovery.discover()
+    const prepare = h.recovery.beginRestore()
+    h.recovery.suspend()
+    await h.recovery.discover()
+    expect(await prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'cancelled' })
+    expect(h.install).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it('部署关闭时明确恢复沿统一内存入口采用已认证原件', async () => {
+    const h = await fixture()
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toMatchObject({ kind: 'restore', baseRevision: 7 })
     expect(h.install).toHaveBeenCalledExactlyOnceWith(BODY, false)
   })
 
   it.each(['denied', 'unsupported'] as const)('浏览器明确 %s 且从未发现旧记录时，只准固定内存编辑云端内容', async (reason) => {
     const h = await fixture()
     h.observe.mockResolvedValue({ kind: 'unavailable', reason })
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'memory', reason: 'unavailable' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'memory', reason: 'unavailable' })
     expect(h.recovery.view().decision).toEqual({ kind: 'preserve', reason: 'storage' })
     expect(h.install).not.toHaveBeenCalled()
     expect(h.remove).not.toHaveBeenCalled()
@@ -118,7 +169,7 @@ describe('文档恢复的发现与条件动作', () => {
   ] as const)('未知存储问题 %j 不能借内存退路跳过恢复', async (failure) => {
     const h = await fixture()
     h.observe.mockResolvedValue(failure)
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
     expect(h.install).not.toHaveBeenCalled()
     expect(h.remove).not.toHaveBeenCalled()
   })
@@ -128,20 +179,20 @@ describe('文档恢复的发现与条件动作', () => {
     await h.recovery.discover()
     h.observe.mockResolvedValue({ kind: 'unavailable', reason: 'denied' })
     for (let attempt = 0; attempt < 2; attempt++)
-      expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+      expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
     expect(h.install).not.toHaveBeenCalled()
     expect(h.remove).not.toHaveBeenCalled()
     h.observe.mockResolvedValue({ ...h.original, record: { kind: 'absent' } })
     await h.recovery.discover()
     h.observe.mockResolvedValue({ kind: 'unavailable', reason: 'denied' })
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'memory', reason: 'unavailable' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'memory', reason: 'unavailable' })
   })
 
   it('existing 端口本身已证明有旧记录，后续观察均被禁止也不能退成固定内存编辑', async () => {
     const h = await fixture()
     h.observe.mockResolvedValue({ kind: 'unavailable', reason: 'denied' })
-    expect(await h.recovery.prepare({ kind: 'existing', highWater: 37, observe: h.observe, remove: h.remove, retire: vi.fn() }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+    expect(await h.recovery.beginRestore()({ kind: 'existing', highWater: 37, observe: h.observe, remove: h.remove, retire: vi.fn() }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
     expect(h.install).not.toHaveBeenCalled()
   })
 
@@ -153,7 +204,7 @@ describe('文档恢复的发现与条件动作', () => {
     h.observe.mockResolvedValueOnce(first).mockResolvedValue({ kind: 'unavailable', reason: 'denied' })
     await h.recovery.discover()
     for (let attempt = 0; attempt < 2; attempt++)
-      expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+      expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
     expect(h.install).not.toHaveBeenCalled()
     expect(h.remove).not.toHaveBeenCalled()
   })
@@ -161,7 +212,7 @@ describe('文档恢复的发现与条件动作', () => {
   it('登记失败已经发现原件，即使独立 Reader 从一开始就被禁止也不能进入内存编辑', async () => {
     const h = await fixture()
     h.observe.mockResolvedValue({ kind: 'unavailable', reason: 'denied' })
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0, recordKnown: true }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0, recordKnown: true }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
     expect(h.install).not.toHaveBeenCalled()
     expect(h.remove).not.toHaveBeenCalled()
   })
@@ -256,7 +307,7 @@ describe('文档恢复的发现与条件动作', () => {
     const h = await fixture()
     h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: NOW - 1000 } }, gzip: new Uint8Array([1]) } })
     h.replay.mockRejectedValue(new NetworkError('回包未知'))
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
     expect(h.install).not.toHaveBeenCalled()
     expect(h.remove).not.toHaveBeenCalled()
   })
@@ -268,7 +319,7 @@ describe('文档恢复的发现与条件动作', () => {
     const observe = vi.fn(async () => fresh)
     const remove = vi.fn<RecoveryReader['remove']>().mockResolvedValue({ kind: 'absent' })
     h.install.mockResolvedValue({ kind: 'installed', capture: { snapshot: '重算后内容', editorSeq: 0, formulasPending: false } })
-    const result = await h.recovery.prepare({ kind: 'existing', highWater: 92, observe, remove, retire: vi.fn() }, FACTS, h.install)
+    const result = await h.recovery.beginRestore()({ kind: 'existing', highWater: 92, observe, remove, retire: vi.fn() }, FACTS, h.install)
     expect(result).toMatchObject({ kind: 'restore', capture: { snapshot: '重算后内容' }, highWater: 92, recoveryObservation: fresh.observation })
     expect(h.install).toHaveBeenCalledWith(BODY, false)
     expect(observe).toHaveBeenCalledOnce()
@@ -283,7 +334,7 @@ describe('文档恢复的发现与条件动作', () => {
   it.each(['open-check', 'formulas'] as const)('%s 屏障失败不交初值、不清理，允许再次发现', async (reason) => {
     const h = await fixture()
     h.install.mockResolvedValue({ kind: 'blocked', reason })
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason })
     expect(h.recovery.view()).toMatchObject({ problem: reason })
     expect(h.remove).not.toHaveBeenCalled()
   })
@@ -297,7 +348,7 @@ describe('文档恢复的发现与条件动作', () => {
     const retire = vi.fn()
     // Worker 原来源持有 OPFS 句柄：独立 Reader 必须在其释放之后才能读到可验证的观察。
     h.observe.mockImplementation(async () => retire.mock.calls.length === 0 ? { kind: 'failed', error: { name: 'MirrorUnverified', message: '镜像句柄仍被原来源占用' } } : h.original)
-    expect(await h.recovery.prepare({ kind: 'existing', highWater: 37, observe: async () => existing, remove: oldRemove, retire }, facts, h.install)).toEqual({ kind: 'blocked', reason })
+    expect(await h.recovery.beginRestore()({ kind: 'existing', highWater: 37, observe: async () => existing, remove: oldRemove, retire }, facts, h.install)).toEqual({ kind: 'blocked', reason })
     expect(retire).toHaveBeenCalledOnce()
     expect(h.recovery.view().problem).toBe(reason === 'preserved' ? undefined : reason)
     const intent = h.recovery.beginDiscard()
@@ -313,7 +364,7 @@ describe('文档恢复的发现与条件动作', () => {
     const observed = { ...h.original, record: { kind: 'draft' as const, meta: { ...h.meta, inFlight: { requestId: 'old', clientInstanceId: 'old-page', localSeq: 36, sentAt: NOW } }, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } }
     h.observe.mockResolvedValue(observed)
     const verified = { ...FACTS, current: { revision: 8, source, occupied: false } }
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, verified, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, verified, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
     h.facts.mockResolvedValue({ ...verified, current: { ...verified.current, source: undefined } })
     await h.recovery.copy()
     expect(h.conflictCopy).toHaveBeenCalledOnce()
@@ -324,7 +375,7 @@ describe('文档恢复的发现与条件动作', () => {
     const h = await fixture()
     h.install.mockResolvedValue({ kind: 'blocked', reason: 'open-check' })
     h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, baseRevision: 6 }, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } })
-    expect(await h.recovery.prepare({ kind: 'existing', highWater: 37, observe: async () => h.original, remove: h.remove, retire: vi.fn() }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'changed' })
+    expect(await h.recovery.beginRestore()({ kind: 'existing', highWater: 37, observe: async () => h.original, remove: h.remove, retire: vi.fn() }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'changed' })
     expect(h.recovery.view()).toMatchObject({ decision: { kind: 'copy', reason: 'conflict' }, problem: undefined })
   })
 
@@ -332,7 +383,7 @@ describe('文档恢复的发现与条件动作', () => {
     const h = await fixture()
     h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'old', clientInstanceId: 'old-page', localSeq: 36, sentAt: NOW } }, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } })
     const verified = { ...FACTS, current: { revision: 8, source: null, occupied: false } }
-    await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, verified, h.install)
+    await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, verified, h.install)
     if (change === 'suspend')
       h.recovery.suspend()
     if (change === 'revision') {
@@ -349,12 +400,12 @@ describe('文档恢复的发现与条件动作', () => {
     const h = await fixture()
     const delayed = deferred<Awaited<ReturnType<RecoveryInstall>>>()
     h.install.mockReturnValue(delayed.promise)
-    const preparing = h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
+    const preparing = h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
     await vi.waitFor(() => expect(h.install).toHaveBeenCalledOnce())
     h.recovery.suspend()
     delayed.resolve({ kind: 'installed', capture: { snapshot: '迟到', editorSeq: 0, formulasPending: false } })
     expect(await preparing).toEqual({ kind: 'blocked', reason: 'cancelled' })
-    const current = await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, async () => ({ kind: 'installed', capture: { snapshot: BODY, editorSeq: 0, formulasPending: false } }))
+    const current = await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, async () => ({ kind: 'installed', capture: { snapshot: BODY, editorSeq: 0, formulasPending: false } }))
     if (current.kind !== 'restore')
       throw new Error('需要初值')
     const reads = h.observe.mock.calls.length
@@ -366,7 +417,7 @@ describe('文档恢复的发现与条件动作', () => {
 
   it('旧确认的清理回包晚于新发现时，不能把新草稿标成已处理', async () => {
     const h = await fixture()
-    const prepared = await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
+    const prepared = await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
     if (prepared.kind !== 'restore')
       throw new Error('需要初值')
     const removed = deferred<Awaited<ReturnType<RecoveryReader['remove']>>>()
@@ -382,7 +433,7 @@ describe('文档恢复的发现与条件动作', () => {
 
   it('已读到新原件但仍在核对旧请求时，前一份清理迟到不能抹掉新原件存在的事实', async () => {
     const h = await fixture()
-    const prepared = await h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
+    const prepared = await h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
     if (prepared.kind !== 'restore')
       throw new Error('需要初值')
     const removed = deferred<Awaited<ReturnType<RecoveryReader['remove']>>>()
@@ -398,7 +449,7 @@ describe('文档恢复的发现与条件动作', () => {
     replayed.reject(new NetworkError('核对未知'))
     await discovering
     h.observe.mockResolvedValue({ kind: 'unavailable', reason: 'denied' })
-    expect(await h.recovery.prepare({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
+    expect(await h.recovery.beginRestore()({ kind: 'memory', reason: 'unavailable', highWater: 0 }, FACTS, h.install)).toEqual({ kind: 'blocked', reason: 'preserved' })
   })
 
   it('暂停唤醒排队的旧 prepare 时，不能重新观察或调用旧安装器', async () => {
@@ -407,7 +458,7 @@ describe('文档恢复的发现与条件动作', () => {
     h.facts.mockReturnValueOnce(pending.promise)
     const discovering = h.recovery.discover()
     await settle()
-    const preparing = h.recovery.prepare({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
+    const preparing = h.recovery.beginRestore()({ kind: 'memory', reason: 'disabled', highWater: 0 }, FACTS, h.install)
     h.recovery.suspend()
     expect(await preparing).toEqual({ kind: 'blocked', reason: 'cancelled' })
     expect(h.makeReader).not.toHaveBeenCalled()
@@ -420,7 +471,7 @@ describe('文档恢复的发现与条件动作', () => {
     const h = await fixture()
     const removed = deferred<Awaited<ReturnType<RecoveryReader['remove']>>>()
     const oldRemove = vi.fn<RecoveryReader['remove']>().mockReturnValue(removed.promise)
-    const prepared = await h.recovery.prepare({ kind: 'existing', highWater: 0, observe: async () => h.original, remove: oldRemove, retire: vi.fn() }, FACTS, h.install)
+    const prepared = await h.recovery.beginRestore()({ kind: 'existing', highWater: 0, observe: async () => h.original, remove: oldRemove, retire: vi.fn() }, FACTS, h.install)
     if (prepared.kind !== 'restore')
       throw new Error('需要初值')
     const confirmation = prepared.onConfirmed?.()
@@ -489,7 +540,7 @@ describe('恢复副本的唯一请求与清理', () => {
     await h.recovery.discover()
     await h.recovery.discard(h.recovery.beginDiscard()!)
     expect(h.recovery.view().copy).toEqual({ kind: 'idle' })
-    expect(await h.recovery.prepare({ kind: 'empty', highWater: 37 }, FACTS, h.install)).toEqual({ kind: 'none' })
+    expect(await h.recovery.beginRestore()({ kind: 'empty', highWater: 37 }, FACTS, h.install)).toEqual({ kind: 'none' })
     expect(h.conflictCopy).toHaveBeenCalledOnce()
   })
 
@@ -502,7 +553,7 @@ describe('恢复副本的唯一请求与清理', () => {
     expect(h.recovery.view().copy.kind).toBe('failed')
     await h.recovery.retryCleanup()
     expect(h.recovery.view().copy.kind).toBe('idle')
-    expect(await h.recovery.prepare({ kind: 'empty', highWater: 37 }, FACTS, h.install)).toEqual({ kind: 'none' })
+    expect(await h.recovery.beginRestore()({ kind: 'empty', highWater: 37 }, FACTS, h.install)).toEqual({ kind: 'none' })
   })
 
   it('成功复制 A 但清理 changed，重查真正的新 B 后保留 A 链接并允许处理 B', async () => {
@@ -559,7 +610,7 @@ describe('恢复副本的唯一请求与清理', () => {
       const nextBody = BODY.replace('原本机', '新本机')
       h.observe.mockResolvedValue({ ...h.original, observation: { key: KEY, id: 'new-record' }, record: { kind: 'draft', meta: h.meta, gzip: await gzipBytes(new TextEncoder().encode(nextBody)) } })
     }
-    const result = await h.recovery.prepare(kind === 'empty' ? { kind: 'empty', highWater: 37 } : { kind: 'existing', highWater: 37, observe: h.observe, remove: h.remove, retire: vi.fn() }, FACTS, h.install)
+    const result = await h.recovery.beginRestore()(kind === 'empty' ? { kind: 'empty', highWater: 37 } : { kind: 'existing', highWater: 37, observe: h.observe, remove: h.remove, retire: vi.fn() }, FACTS, h.install)
     expect(result.kind).toBe(kind === 'empty' ? 'none' : kind === 'new' ? 'restore' : 'blocked')
     expect(h.recovery.view().copy.kind).toBe(kind === 'same' ? 'refused' : 'idle')
     expect(h.conflictCopy).toHaveBeenCalledOnce()

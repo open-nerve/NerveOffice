@@ -1,10 +1,11 @@
 // M4-P3 S5：真实 Safari 崩溃的页面侧。控制通道只选测试阶段，不授予产品恢复资格。
-// 初次经编辑器 Facade 写正文，等生产 Worker 实际写成并独立解密核对；重载后只观察，不点击编辑、不补写身份。
+// 初次经编辑器 Facade 写正文，等生产 Worker 实际写成并独立解密核对；重载后先只读取证，驱动许可后点击一次真实恢复入口。
 import type { StoredDraft } from '../../shared/outbox/draft-record.ts'
 import type { SelftestPageView } from './selftest-session.ts'
 import { AUTOSAVE_HOLD_STORAGE_KEY } from './autosave-control.ts'
 import { autosaveControl } from './selftest-autosave.ts'
 import { byRole, isVisible, waitFor } from './selftest-dom.ts'
+import { readSelftestDraft } from './selftest-local-draft.ts'
 import { withTimeout } from './selftest-session.ts'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -50,31 +51,6 @@ export function crashCellValue(text: string): unknown {
 async function sha256(text: string): Promise<string> {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
-async function readDraft(userId: string, documentId: string): Promise<StoredDraft | undefined> {
-  return new Promise((resolve, reject) => {
-    const open = indexedDB.open('nerve-office-outbox')
-    let absent = false
-    open.onupgradeneeded = () => {
-      absent = true
-      open.transaction?.abort()
-    }
-    open.onerror = () => absent ? resolve(undefined) : reject(open.error)
-    open.onsuccess = () => {
-      const db = open.result
-      const tx = db.transaction('drafts', 'readonly')
-      const get: IDBRequest<unknown> = tx.objectStore('drafts').get([userId, documentId])
-      tx.onabort = () => {
-        db.close()
-        reject(tx.error)
-      }
-      tx.oncomplete = () => {
-        db.close()
-        resolve(get.result as StoredDraft | undefined)
-      }
-    }
-  })
 }
 
 /** 只在页面内取测试用户的真实密钥；不把密钥、令牌或密文交到控制通道。 */
@@ -124,6 +100,21 @@ function observeWrites(): () => number {
   return () => written
 }
 
+function recoveryEntry(chrome: HTMLElement): { readonly kind: 'restore' | 'takeover-self', readonly button: HTMLElement } | undefined {
+  const enabled = (button: HTMLElement): boolean => isVisible(button) && !button.hasAttribute('disabled') && button.getAttribute('aria-disabled') !== 'true'
+  const notice = chrome.querySelector<HTMLElement>('[data-slot="recovery-notice"]')
+  if (notice === null)
+    return undefined
+  const restore = byRole('button', { name: '恢复并编辑', root: notice }).filter(enabled)
+  const takeover = byRole('button', { name: '在此编辑', root: chrome }).filter(enabled)
+  const copy = byRole('button', { name: '另存为副本', root: notice }).filter(enabled)
+  if (restore.length === 1 && restore[0] !== undefined && takeover.length === 0)
+    return { kind: 'restore', button: restore[0] }
+  if (takeover.length === 1 && takeover[0] !== undefined && restore.length === 0 && copy.length === 1)
+    return { kind: 'takeover-self', button: takeover[0] }
+  return undefined
+}
+
 /** 必须在 page.load 前等待它完成：只安装观测与设置测试上传暂停，不提前操作编辑器。 */
 export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void> {
   const control = crashControlFrom(location.href)
@@ -140,7 +131,7 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
   const command = await post('boot')
   if (command.kind !== 'prepare' && command.kind !== 'observe')
     throw new Error('驱动没有允许本页继续自检')
-  const diagnostic = async (stage: 'boot' | 'ready' | 'restored' | 'failed'): Promise<void> => {
+  const diagnostic = async (stage: 'boot' | 'ready' | 'awaiting-confirmation' | 'restored' | 'failed'): Promise<void> => {
     if (host.diagnostics === undefined)
       throw new Error('测试构建没有安装清理前只读诊断')
     const result = await post('diagnostic', { stage, facts: host.diagnostics() })
@@ -150,7 +141,7 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
   await diagnostic('boot')
   const writes = observeWrites()
   const autosave = autosaveControl()
-  // 只暂停初页的定时云端上传。重载页放开测试暂停，产品的 reload 记号和身份不读写。
+  // 只暂停初页的定时云端上传。重载页放开测试暂停，不读写产品身份。
   sessionStorage.removeItem(AUTOSAVE_HOLD_STORAGE_KEY)
   if (command.kind === 'prepare')
     autosave.hold()
@@ -184,7 +175,7 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
       const api = window.__nerveEditorProbe?.univerAPI as unknown as { getActiveWorkbook: () => { getActiveSheet: () => { getRange: (cell: string) => { setValue: (value: string) => unknown } } } }
       api.getActiveWorkbook().getActiveSheet().getRange('A1').setValue(CRASH_SELFTEST_TEXT)
       await until(() => writes() > 0)
-      const draft = await readDraft(session.user.id, host.documentId)
+      const draft = await readSelftestDraft(session.user.id, host.documentId)
       if (draft === undefined)
         throw new Error('成功回包之后没有磁盘正文')
       const text = await persistedText(draft, session.csrfToken)
@@ -195,13 +186,42 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
       await post('ready', { userId: session.user.id, clientInstanceId: draft.writtenBy, writerId: draft.writerId, draftSeq: draft.draftSeq, baseRevision: draft.baseRevision, contentHash: await sha256(value), snapshotHash: await sha256(text), workerWrites: writes(), inFlight: draft.inFlight !== null, visible: document.visibilityState === 'visible', pageErrors: host.pageErrors().length })
     }
     else {
-      // 这里没有 enterEditing、写正文或 flush；只等产品自己的原页恢复与自动保存。
+      if (host.view().mode !== 'reading')
+        throw new Error('恢复页未经确认已经进入编辑')
+      await until(() => recoveryEntry(host.chrome) !== undefined)
+      const entry = recoveryEntry(host.chrome)
+      if (entry === undefined)
+        throw new Error('确认前恢复入口已变化')
+      const original = await readSelftestDraft(session.user.id, host.documentId)
+      if (original === undefined)
+        throw new Error('确认前本机原件已丢失')
+      const originalText = await persistedText(original, session.csrfToken)
+      const originalValue = crashCellValue(originalText)
+      if (originalValue !== CRASH_SELFTEST_TEXT)
+        throw new Error('确认前独立解密的正文不符')
+      await diagnostic('awaiting-confirmation')
+      const waiting = await post('awaiting-confirmation', { userId: session.user.id, clientInstanceId: original.writtenBy, writerId: original.writerId, draftSeq: original.draftSeq, baseRevision: original.baseRevision, contentHash: await sha256(originalValue), snapshotHash: await sha256(originalText), inFlight: original.inFlight !== null, mode: host.view().mode, entry: entry.kind, visible: document.visibilityState === 'visible', pageErrors: host.pageErrors().length })
+      if (waiting.kind !== 'wait')
+        throw new Error('驱动未接受确认前证据')
+      for (;;) {
+        const permission = await post('confirm')
+        if (permission.kind === 'confirm')
+          break
+        if (permission.kind !== 'wait')
+          throw new Error('驱动拒绝明确恢复许可')
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      const currentEntry = recoveryEntry(host.chrome)
+      if (currentEntry?.kind !== entry.kind || host.view().mode !== 'reading' || host.view().surface !== 'steady' || document.visibilityState !== 'visible' || host.pageErrors().length !== 0)
+        throw new Error('确认许可交付后页面或恢复入口已经变化')
+      // 明确的合成 UI 点击；不调用产品恢复方法、不写正文、不补写 clientInstanceId 或导航事实。
+      currentEntry.button.click()
       await until(() => host.view().mode === 'editing' && host.view().save === 'clean')
-      let draft = await readDraft(session.user.id, host.documentId)
+      let draft = await readSelftestDraft(session.user.id, host.documentId)
       const untilClean = Date.now() + 10_000
       while (draft !== undefined && Date.now() < untilClean) {
         await new Promise(resolve => setTimeout(resolve, 50))
-        draft = await readDraft(session.user.id, host.documentId)
+        draft = await readSelftestDraft(session.user.id, host.documentId)
       }
       const snapshot = window.__nerveEditorProbe?.snapshot()
       const value = snapshot === undefined ? undefined : crashCellValue(snapshot)

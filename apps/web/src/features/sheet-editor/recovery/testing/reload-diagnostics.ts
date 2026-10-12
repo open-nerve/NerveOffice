@@ -1,7 +1,4 @@
-/* eslint-disable ts/promise-function-async -- 只读包装必须原样交回 Promise 与同步异常；async 会改变此契约。 */
-import type { DiagnosticEvent, DiagnosticMarker, DiagnosticNavigation, DiagnosticPoint, ReloadDiagnostics } from '../../../../editor/testing/selftest-reload-diagnostics.ts'
-import type { LockApi } from '../../same-browser.ts'
-import type { reloadIdentitySelector } from '../reload-identity.ts'
+import type { DiagnosticMarker, DiagnosticNavigation, DiagnosticPoint, ReloadDiagnostics } from '../../../../editor/testing/selftest-reload-diagnostics.ts'
 import type { ReloadStorage } from '../reload-marker.ts'
 import { diagnosticObject, diagnosticUuid, isDiagnosticMarker } from '../../../../editor/testing/selftest-reload-diagnostics.ts'
 
@@ -71,81 +68,18 @@ function browserNavigation(target: Window): DiagnosticNavigation | null {
   }
 }
 
-/** 仅测试构建调用。真实工厂仍决定何时清记号、取锁、匹配与选身份。 */
-export function observeReloadIdentity(factory: typeof reloadIdentitySelector, navigation: () => DiagnosticNavigation | null = () => browserNavigation(window)): { readonly selector: typeof reloadIdentitySelector, readonly snapshot: () => ReloadDiagnostics } {
-  let storage: (() => ReloadStorage) | undefined
-  let initial: DiagnosticPoint | undefined
-  const events: DiagnosticEvent[] = []
-  let truncated = false
-  const record = (event: DiagnosticEvent): void => {
-    if (!diagnosticUuid(event.clientInstanceId))
-      return
-    if (events.length < 8)
-      events.push(event)
-    else
-      truncated = true
-  }
+/** 仅测试构建调用；只观察启动前后的导航与旧记号，不参与产品身份选择。 */
+export function observeReloadStart(storage: () => ReloadStorage, navigation: () => DiagnosticNavigation | null = () => browserNavigation(window)): { readonly snapshot: () => ReloadDiagnostics } {
   const point = (): DiagnosticPoint => {
     let captured: DiagnosticNavigation | null = null
     try {
       captured = navigation()
     }
     catch {
-      // 诊断读取失败不能影响原选择器。
+      // 诊断读取失败不能影响页面启动。
     }
-    return { navigation: captured, storage: storage === undefined ? unavailable() : readMarkers(storage) }
+    return { navigation: captured, storage: readMarkers(storage) }
   }
-  const observeLocks = (locks: LockApi | undefined): LockApi | undefined => locks === undefined
-    ? undefined
-    : {
-        request: (name, options, callback) => {
-          const parts = name.split(':')
-          const clientInstanceId = parts.length === 5 && parts[0] === 'nerve-office' && parts[1] === 'instance' && parts.slice(2).every(diagnosticUuid) ? parts[4] : undefined
-          const result = (value: 'held' | 'busy' | 'error'): void => {
-            if (clientInstanceId !== undefined)
-              record({ kind: 'lock', clientInstanceId, result: value })
-          }
-          try {
-            // 保留原 receiver、options、回调的 Promise 与原 request 的 Promise；旁路观察拒绝。
-            const pending = locks.request(name, options, (lock) => {
-              result(lock === null ? 'busy' : 'held')
-              return callback(lock)
-            })
-            void pending.catch(() => result('error'))
-            return pending
-          }
-          catch (error) {
-            result('error')
-            throw error
-          }
-        },
-        query: () => locks.query(),
-      }
-  return {
-    selector: (options) => {
-      storage = options.storage
-      initial = structuredClone(point())
-      const select = factory({ ...options, locks: observeLocks(options.locks) })
-      return async (input) => {
-        const identity = await select({
-          ...input,
-          matches: (candidate) => {
-            const recordMatch = (result: 'match' | 'miss' | 'error'): void => record({ kind: 'match', clientInstanceId: candidate.clientInstanceId, result })
-            try {
-              const pending = input.matches(candidate)
-              void pending.then(value => recordMatch(value ? 'match' : 'miss'), () => recordMatch('error'))
-              return pending
-            }
-            catch (error) {
-              recordMatch('error')
-              throw error
-            }
-          },
-        })
-        record({ kind: 'selected', clientInstanceId: identity.clientInstanceId, candidate: identity.candidate !== undefined })
-        return identity
-      }
-    },
-    snapshot: () => structuredClone({ initial: initial ?? point(), current: point(), events, truncated }),
-  }
+  const initial = structuredClone(point())
+  return { snapshot: () => structuredClone({ initial, current: point(), events: [], truncated: false }) }
 }

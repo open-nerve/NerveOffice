@@ -28,7 +28,7 @@ import { createEditorPage } from './editor-page.ts'
 import { issuedRequestMarker } from './issued-request.ts'
 import { installPageGuards, isApplePlatform } from './page-guards.ts'
 import { pendingSaveMarker } from './pending-save-marker.ts'
-import { reloadIdentitySelector } from './recovery/reload-identity.ts'
+import { clearInheritedReloadMarkers } from './recovery/reload-marker.ts'
 import { sameBrowserFor } from './same-browser.ts'
 
 export interface SheetEditorPageElements {
@@ -125,13 +125,12 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）
     const crash = new URLSearchParams(window.location.search).get('selftest') === 'crash-recovery'
     void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('./recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)]).then(([control, log, diagnostics]) => {
-      const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadIdentity(reloadIdentitySelector) : undefined
+      const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadStart(() => window.sessionStorage) : undefined
       assemble(
         elements,
         reportLoadFailure,
         control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
         log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
-        observed?.selector,
         observed?.snapshot,
       )
     })
@@ -140,11 +139,9 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
   assemble(elements, reportLoadFailure, undefined, undefined)
 }
 
-function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, identitySelector = reloadIdentitySelector, reloadDiagnostics?: () => unknown): void {
-  const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
-  const reloadNavigation = { type: navigation?.type, wasDiscarded: 'wasDiscarded' in document && document.wasDiscarded === true }
+function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics?: () => unknown): void {
+  clearInheritedReloadMarkers(() => window.sessionStorage)
   const page = createEditorPage({
-    reloadIdentity: identitySelector({ navigation: reloadNavigation, storage: () => window.sessionStorage, locks: browserSameBrowserApis.locks }),
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
     surface: elements.surface,
@@ -182,7 +179,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
     sameBrowser: documentId => sameBrowserFor(documentId, browserSameBrowserApis),
     // 访问 localStorage 本身就可能抛出（被禁用、沙箱）：每次用时再取，记号自己接住
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
-    // 这一页发出过的请求编辑（审查 B2）：按标签页、刷新之后还在，所以是 sessionStorage；同样每次用时再取
+    // 每次装配新的内存意图；sessionStorage 只用于清理旧版本记号，不恢复页面身份
     issuedRequest: documentId => issuedRequestMarker(documentId, { storage: () => window.sessionStorage }),
     autosaveControl,
     handoverTrace,

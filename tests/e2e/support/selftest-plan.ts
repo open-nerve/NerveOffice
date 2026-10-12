@@ -363,7 +363,7 @@ interface ServerExpectation {
  * - takeover-holder 与 takeover-holder-deaf（A 的文档）：A 回应了（answered）——第一格、隐藏时上传的第二格、交出之前存上的第三格，修订号 4；
  *   没有回应（silent）——前两格，修订号 3，第三格不在（只在 A 另存的副本里）；
  * - takeover-taker：与 A 同一份文档，随 A 那一步核对（这里没有要求）；
- * - refresh-save：刷新时停在服务端的那一次保存提交了，修订号 2、内容里有那一格（confirmed-reading：原实例自动确认后回阅读）。
+ * - refresh-save：刷新时停在服务端的那一次保存提交了，修订号 2、内容里有那一格（confirmed-reading：新页面零申请核对旧回执；首次繁忙则明确重查一次，成功后保持阅读）。
  * 认不出路的交回 undefined（算问题：不知道该是什么样子）
  */
 function handoverExpectation(scenario: HandoverScenario, path: string | undefined): ServerExpectation | 'none' | undefined {

@@ -1,5 +1,5 @@
-// M4-P3 S4：真实页面落盘/刷新与浏览器实例锁；夹具只为少见的原件分支准备合法密文。
-import type { Dialog, Page } from '@playwright/test'
+// M4-P3 S5：新页面先阅读，明确恢复采用新身份。旧版记号仅作为迁移/副本隔离反例夹具。
+import type { BrowserContext, Dialog, Locator, Page, Request, Route } from '@playwright/test'
 import type { DiskDraft } from '../../support/local-draft.ts'
 import type { DraftKey } from '../../support/outbox-probe.ts'
 import type { Workbook } from '../../support/sheet.ts'
@@ -15,7 +15,7 @@ import { currentLocalKey, diskSnapshot, readLocalDisk } from '../../support/loca
 import { recoverySnapshot, seedRecovery } from '../../support/local-recovery.ts'
 import { openOutboxProbe, probe } from '../../support/outbox-probe.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -34,7 +34,7 @@ async function markerOf(page: Page, key: DraftKey): Promise<Marker | null> {
   return page.evaluate(key => JSON.parse(sessionStorage.getItem(key) ?? 'null') as Marker | null, markerKey(key))
 }
 
-function recordAcquires(page: Page, documentId: string) {
+function recordAcquires(page: Page | BrowserContext, documentId: string) {
   const requests: { readonly clientInstanceId: string, readonly takeover?: string }[] = []
   page.on('request', (request) => {
     if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
@@ -73,12 +73,13 @@ async function actualDraft(page: Page, prefix: string) {
     return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'A1')?.v
   }).toBe('刷新前真正落盘的修改')
   const disk = (await readLocalDisk(page, h.key)).draft!
-  await expect.poll(async () => markerOf(page, h.key)).toEqual({ v: 1, ...h.key, clientInstanceId: disk.writtenBy, writeEpoch: disk.writeEpoch, writerId: disk.writerId })
+  expect(await markerOf(page, h.key)).toBeNull()
   expect(await revisionOf(h.documentId)).toBe(1)
-  return { ...h, disk, marker: (await markerOf(page, h.key))! }
+  const marker: Marker = { v: 1, ...h.key, clientInstanceId: disk.writtenBy, writeEpoch: disk.writeEpoch, writerId: disk.writerId }
+  return { ...h, disk, marker }
 }
 
-/** 罕见原件的断点夹具：历史地址设为目标，随后真正 reload；不伪造 navigation.type 或跳过页面恢复入口。 */
+/** 旧版本遗留记号夹具：历史地址设为目标，随后真实导航；不伪造 navigation.type 或跳过恢复入口。 */
 async function readySeededReload(page: Page, key: DraftKey, disk: DiskDraft, changes: Partial<Marker> = {}): Promise<void> {
   const marker: Marker = { v: 1, ...key, clientInstanceId: disk.writtenBy, writeEpoch: disk.writeEpoch, writerId: disk.writerId, ...changes }
   await page.evaluate(({ storageKey, marker, documentId }) => {
@@ -87,11 +88,33 @@ async function readySeededReload(page: Page, key: DraftKey, disk: DiskDraft, cha
   }, { storageKey: markerKey(key), marker, documentId: key.documentId })
 }
 
-test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () => {
+/** 只选界面实际提供的明确入口；持久恢复仍经过原有租约与文档锁。 */
+async function confirmRecovery(page: Page): Promise<'restore' | 'takeover-self'> {
+  const restore = page.locator('[data-slot="recovery-notice"]').getByRole('button', { name: '恢复并编辑', exact: true })
+  const takeover = takeOverHereButton(page)
+  const enabled = async (button: Locator): Promise<boolean> => await button.isVisible() && await button.isEnabled()
+  await expect.poll(async () => await enabled(restore) || await enabled(takeover)).toBe(true)
+  if (await enabled(restore)) {
+    await restore.click()
+    return 'restore'
+  }
+  await expect(page.locator('[data-slot="recovery-notice"]').getByRole('button', { name: '另存为副本', exact: true })).toBeEnabled()
+  await takeover.click()
+  return 'takeover-self'
+}
+
+async function blockedNavigation(page: Page, documentId: string, navigation: 'reload' | 'navigate'): Promise<void> {
+  if (navigation === 'reload')
+    await page.reload({ waitUntil: 'commit' })
+  else
+    await page.goto(`/documents/${documentId}`, { waitUntil: 'commit' })
+}
+
+test.describe('US-M4-04 新页面明确恢复与副本隔离', { tag: '@test-build' }, () => {
   test.use({ autosave: 'running' })
 
   for (const disabled of [false, true]) {
-    test(`真实刷新以原实例普通申请，零次额外输入恢复正文并同步（本机能力关闭：${disabled}）`, async ({ page }) => {
+    test(`真实刷新先阅读，确认后以新身份恢复正文并同步（本机能力关闭：${disabled}）`, async ({ page }) => {
       const h = await actualDraft(page, `reload-real-${disabled}`)
       await page.route('**/api/auth/session', async (route) => {
         if (disabled) {
@@ -106,13 +129,18 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
       const acquires = recordAcquires(page, h.documentId)
       const writes = recordWrites(page, h.documentId)
       await reload(page)
+      await waitForEditorAccess(page, 'read', 'steady')
+      expect(acquires).toHaveLength(0)
+      expect(writes.saves).toHaveLength(0)
+      expect((await readLocalDisk(page, h.key)).draft).toEqual(h.disk)
+      const entry = await confirmRecovery(page)
       await waitForEditorAccess(page, 'edit')
       await expect(saveStatus(page)).toHaveText('已保存到云端')
       expect(acquires).toHaveLength(1)
-      expect(acquires[0]?.clientInstanceId).toBe(h.marker.clientInstanceId)
-      expect(acquires[0]?.takeover).toBeUndefined()
+      expect(acquires[0]?.clientInstanceId).not.toBe(h.disk.writtenBy)
+      expect(acquires[0]?.takeover).toBe(entry === 'restore' ? undefined : 'self')
       expect(writes.saves).toHaveLength(1)
-      expect(saveParam(writes.saves[0], 'clientInstanceId')).toBe(h.marker.clientInstanceId)
+      expect(saveParam(writes.saves[0], 'clientInstanceId')).toBe(acquires[0]?.clientInstanceId)
       const cloud = await savedContent(page, h.documentId)
       expect(cloud.revision).toBe(2)
       expect(cellOf(cloud.snapshot, 'A1')?.v).toBe('刷新前真正落盘的修改')
@@ -125,6 +153,7 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     await page.locator('#editor-chrome').getByRole('button', { name: '保存', exact: true }).click()
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     await expect.poll(async () => (await readLocalDisk(page, h.key)).draft).toBeNull()
+    await readySeededReload(page, h.key, h.disk)
     const acquires = recordAcquires(page, h.documentId)
     await reload(page)
     await waitForEditorAccess(page, 'read', 'steady')
@@ -134,8 +163,9 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
   })
 
   for (const failedNavigation of [false, true]) {
-    test(`真实复制标签页先普通导航（正文失败：${failedNavigation}），原页关闭后刷新也不冒充`, async ({ page, context }) => {
+    test(`真实 opener 副本继承旧版记号后先普通导航（正文失败：${failedNavigation}），原页关闭后刷新也不冒充`, async ({ page, context }) => {
       const h = await actualDraft(page, `reload-clone-${failedNavigation}`)
+      await readySeededReload(page, h.key, h.disk)
       let gotContent = false
       await context.route(`**/api/documents/${h.documentId}/content`, async (route) => {
         if (failedNavigation && route.request().method() === 'GET')
@@ -172,7 +202,80 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     })
   }
 
-  test('另一活页仍持实例锁，带同一候选刷新也不自动申请或偷锁', async ({ page, context }) => {
+  for (const navigation of ['reload', 'navigate'] as const) {
+    test(`副本首段产品脚本尚未运行，原页关闭后 ${navigation} 仍先阅读，明确恢复才申请`, async ({ page, context }, testInfo) => {
+      const h = await actualDraft(page, `clone-before-${navigation}`)
+      await readySeededReload(page, h.key, h.disk)
+      const acquires = recordAcquires(context, h.documentId)
+      const saves: Request[] = []
+      context.on('request', (request) => {
+        if (request.method() === 'PUT' && new URL(request.url()).pathname === `/api/documents/${h.documentId}/content`)
+          saves.push(request)
+      })
+      let generation = 0
+      let allowed = false
+      const held: { readonly route: Route, readonly generation: number }[] = []
+      await context.route('**/*', async (route) => {
+        const request = route.request()
+        // 首个导航请求到达时 frame 尚未创建；先数 Document 导航，仅脚本请求读取所属页面。
+        if (request.isNavigationRequest()) {
+          if (new URL(request.url()).pathname === `/documents/${h.documentId}`)
+            generation += 1
+          await route.continue()
+          return
+        }
+        if (request.resourceType() === 'script' && request.frame().page() !== page && !allowed) {
+          held.push({ route, generation })
+          return
+        }
+        await route.continue()
+      })
+      try {
+        const popup = page.waitForEvent('popup')
+        await page.evaluate(() => {
+          window.open(location.href, '_blank')
+        })
+        const copy = await popup
+        await expect.poll(() => held.some(item => item.generation === 1)).toBe(true)
+        expect(await copy.evaluate(() => window.__nerveEditorProbe === undefined)).toBe(true)
+        expect(await markerOf(copy, h.key)).toEqual(h.marker)
+        await page.close()
+        await blockedNavigation(copy, h.documentId, navigation)
+        await expect.poll(() => held.some(item => item.generation === 2)).toBe(true)
+        expect(generation).toBe(2)
+        expect(await copy.evaluate(() => window.__nerveEditorProbe === undefined)).toBe(true)
+        expect(await markerOf(copy, h.key)).toEqual(h.marker)
+        const facts = await copy.evaluate(() => ({ type: (performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming).type, opener: window.opener !== null }))
+        expect(facts.type).toBe(navigation)
+        await testInfo.attach('copy-before-first-product-script', { body: JSON.stringify({ navigation: facts, originalClosed: page.isClosed(), inheritedLegacyMarker: h.marker, heldScripts: held.map(item => ({ generation: item.generation })) }), contentType: 'application/json' })
+        // 仅第二个 Document 的脚本放行，旧请求从未获得脚本正文。
+        allowed = true
+        for (const item of held.filter(item => item.generation === 2))
+          await item.route.continue()
+        await waitForEditorAccess(copy, 'read', 'steady')
+        expect(acquires).toHaveLength(0)
+        expect(saves).toHaveLength(0)
+        expect(await revisionOf(h.documentId)).toBe(1)
+        expect((await readLocalDisk(copy, h.key)).draft).toEqual(h.disk)
+        expect(await markerOf(copy, h.key)).toBeNull()
+        const entry = await confirmRecovery(copy)
+        await waitForEditorAccess(copy, 'edit')
+        await expect(saveStatus(copy)).toHaveText('已保存到云端')
+        expect(acquires).toHaveLength(1)
+        expect(acquires[0]?.clientInstanceId).not.toBe(h.disk.writtenBy)
+        expect(acquires[0]?.takeover).toBe(entry === 'restore' ? undefined : 'self')
+        expect(saves).toHaveLength(1)
+        const cloud = await savedContent(copy, h.documentId)
+        expect(cloud.revision).toBe(2)
+        expect(cellOf(cloud.snapshot, 'A1')?.v).toBe('刷新前真正落盘的修改')
+      }
+      finally {
+        await Promise.allSettled(held.filter(item => item.generation === 1).map(async item => item.route.abort('aborted')))
+      }
+    })
+  }
+
+  test('另一活页仍在编辑，继承同一旧记号刷新也不自动申请或抢文档锁', async ({ page, context }) => {
     const h = await actualDraft(page, 'reload-live-instance')
     const other = await context.newPage()
     await other.goto(`/documents/${h.documentId}`)
@@ -202,7 +305,7 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     })
   }
 
-  test('预检旧钥只刷新后再确认，新钥原件自动恢复', async ({ page, anotherDevice }) => {
+  test('阅读发现旧钥时刷新密钥，明确确认后恢复新钥原件', async ({ page, anotherDevice }) => {
     const h = await documentFor(page, 'reload-stale-key')
     const stale = await currentLocalKey(page)
     await loginThroughApi(anotherDevice, await createUser('reload-key-admin', '密钥管理员', { systemRole: 'admin' }))
@@ -219,16 +322,19 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     })
     const acquires = recordAcquires(page, h.documentId)
     await reload(page)
+    await waitForEditorAccess(page, 'read', 'steady')
+    expect(acquires).toHaveLength(0)
+    await confirmRecovery(page)
     await waitForEditorAccess(page, 'edit')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(keys).toBeGreaterThanOrEqual(2)
     expect(acquires).toHaveLength(1)
-    expect(acquires[0]?.clientInstanceId).toBe(seeded.disk.writtenBy)
+    expect(acquires[0]?.clientInstanceId).not.toBe(seeded.disk.writtenBy)
     expect(acquires[0]?.takeover).toBeUndefined()
     expect(cellOf((await savedContent(page, h.documentId)).snapshot, 'A1')?.v).toBe('新钥的重载原件')
   })
 
-  test('预检之后原件被另一写入者替换，第二次核对阻止自动进入且保留新原件', async ({ page, context }) => {
+  test('明确申请期间原件被另一写入者替换，恢复核对阻止进入且保留新原件', async ({ page, context }) => {
     const h = await documentFor(page, 'reload-replaced')
     const seeded = await seedRecovery(page, h.key, recoverySnapshot(h.cloud.text, '原候选正文'))
     await readySeededReload(page, h.key, seeded.disk)
@@ -250,6 +356,9 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     const writes = recordWrites(page, h.documentId)
     await reload(page)
     await waitForEditorAccess(page, 'read', 'steady')
+    expect(acquires).toHaveLength(0)
+    await confirmRecovery(page)
+    await waitForEditorAccess(page, 'read', 'steady')
     expect(acquires).toHaveLength(1)
     expect(acquires[0]?.takeover).toBeUndefined()
     expect(writes.saves).toHaveLength(0)
@@ -258,7 +367,7 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     expect((await readLocalDisk(page, h.key)).draft).toEqual(replacement)
   })
 
-  test('US-M4-05 旧请求已成功但回执丢失，自动核对后显示最新云端并回阅读，不再次空白进入', async ({ page }) => {
+  test('US-M4-05 旧请求已成功但回执丢失，阅读时核对回执与最新云端，不申请编辑或新增修订', async ({ page }) => {
     const h = await documentFor(page, 'reload-confirmed')
     const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
     const headers = { 'origin': e2eOrigin(), 'x-csrf-token': csrfToken }
@@ -278,16 +387,15 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     const writes = recordWrites(page, h.documentId)
     await reload(page)
     await waitForEditorAccess(page, 'read', 'steady')
-    expect(acquires).toHaveLength(1)
-    expect(acquires[0]?.takeover).toBeUndefined()
-    expect(await shownCell(page, 'A1')).toBe('后来的云端内容')
+    expect(acquires).toHaveLength(0)
+    await expect.poll(async () => shownCell(page, 'A1')).toBe('后来的云端内容')
     expect(writes.saves).toHaveLength(1)
     expect(saveParam(writes.saves[0], 'requestId')).toBe(inFlight.requestId)
     expect(await revisionOf(h.documentId)).toBe(3)
     await expect.poll(async () => (await readLocalDisk(page, h.key)).draft).toBeNull()
   })
 
-  test('US-M4-14 回收事实以测试注入校准：普通导航带 wasDiscarded 才保留合格原身份（不替代崩溃证据）', async ({ page }) => {
+  test('US-M4-14 回收标志的否定校准：注入 wasDiscarded 也不能自动沿用旧身份（不替代崩溃证据）', async ({ page }) => {
     const h = await documentFor(page, 'reload-discarded-fact')
     const seeded = await seedRecovery(page, h.key, recoverySnapshot(h.cloud.text, '回收前的原件'))
     await readySeededReload(page, h.key, seeded.disk)
@@ -296,15 +404,19 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     })
     const acquires = recordAcquires(page, h.documentId)
     await page.goto(`/documents/${h.documentId}`)
+    await waitForEditorAccess(page, 'read', 'steady')
+    expect(acquires).toHaveLength(0)
+    expect((await readLocalDisk(page, h.key)).draft).toEqual(seeded.disk)
+    await confirmRecovery(page)
     await waitForEditorAccess(page, 'edit')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(acquires).toHaveLength(1)
-    expect(acquires[0]?.clientInstanceId).toBe(seeded.disk.writtenBy)
+    expect(acquires[0]?.clientInstanceId).not.toBe(seeded.disk.writtenBy)
     expect(acquires[0]?.takeover).toBeUndefined()
     expect(cellOf((await savedContent(page, h.documentId)).snapshot, 'A1')?.v).toBe('回收前的原件')
   })
 
-  test('自动申请成功回包尚在途时换人，迟到结果不启用编辑、不清原用户原件', async ({ page, context }) => {
+  test('明确申请成功回包尚在途时换人，迟到结果不启用编辑、不清原用户原件', async ({ page, context }) => {
     const h = await documentFor(page, 'reload-late-acquire')
     const seeded = await seedRecovery(page, h.key, recoverySnapshot(h.cloud.text, '原用户尚未同步'))
     await readySeededReload(page, h.key, seeded.disk)
@@ -331,6 +443,8 @@ test.describe('US-M4-04 原标签页自动重载', { tag: '@test-build' }, () =>
     const writes = recordWrites(page, h.documentId)
     try {
       await reload(page)
+      await waitForEditorAccess(page, 'read', 'steady')
+      await confirmRecovery(page)
       await expect.poll(() => received).toBe(true)
       // 平台页预先就绪；沿真实时钟提交表单，并确认扣住的同一申请收到 201、没有先超时。
       await other.keyboard.press('Enter')

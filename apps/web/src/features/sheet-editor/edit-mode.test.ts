@@ -511,35 +511,60 @@ async function recoverySetup(options: Setup = {}, pending = false) {
 }
 
 describe('本机恢复通过真实编辑准备入口', () => {
-  it('自动重载确认旧请求后刷新云端并回阅读，不能再次以空来源进入；之后显式编辑仍可进入', async () => {
-    const h = await recoverySetup()
-    const reload = { ...h.key, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
-    h.observe.mockResolvedValueOnce({ kind: 'observed', observation: { key: h.key, id: 'old-flight' }, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: Date.now() } }, gzip: h.gzip }, writer: undefined }).mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'after-cleanup' }, record: { kind: 'absent' }, writer: undefined })
-    const result = await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true, reload })
-    expect(result).toMatchObject({ kind: 'opened', entered: false })
+  it('明确点击后申请在途换原件来源，并发发现新候选也不能把旧点击用于新原件', async () => {
+    const acquired = deferred<AcquiredEditLease>()
+    const h = await recoverySetup({ editLease: { acquire: async () => acquired.promise } })
+    await opened(h)
+    await h.recovery.discover()
+    const entering = h.mode.enter()
+    await vi.waitFor(() => expect(h.editLease.acquire).toHaveBeenCalledOnce())
+    h.observe.mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'new-writer' }, record: { kind: 'draft', meta: { ...h.meta, writerId: 'replacement-writer' }, gzip: h.gzip }, writer: undefined })
+    await h.recovery.discover()
+    acquired.resolve(ACQUIRED)
+    await entering
     expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.factory.createEditor.mock.calls.every(call => call[0].access === 'read')).toBe(true)
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it('本人接手等待在途保存期间换原件来源，握手结束不能把旧点击转给新原件', async () => {
+    const h = await recoverySetup({ api: { editStatus: async () => status(3, SELF_EDITING) } })
+    h.marker.read.mockReturnValue({ at: new Date(2026, 9, 4, 15, 30, 12).getTime() - 10_000, revision: 3 })
+    await opened(h)
+    await h.recovery.discover()
+    const taking = h.mode.takeOver()
+    await settle()
+    expect(readingOf(h.mode).takeover).toEqual({ kind: 'waiting-save' })
+    h.observe.mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'new-writer' }, record: { kind: 'draft', meta: { ...h.meta, writerId: 'replacement-writer' }, gzip: h.gzip }, writer: undefined })
+    await h.recovery.discover()
+    await h.time.advance(EDIT_PENDING_SAVE_WAIT_MS - 10_000)
+    await taking
+    expect(h.editLease.acquire).toHaveBeenCalledOnce()
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it('明确进入时确认旧请求，清理后重取最新云端再进入，不重传旧正文', async () => {
+    const h = await recoverySetup()
+    h.observe.mockResolvedValueOnce({ kind: 'observed', observation: { key: h.key, id: 'old-flight' }, record: { kind: 'draft', meta: { ...h.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: Date.now() } }, gzip: h.gzip }, writer: undefined }).mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'after-cleanup' }, record: { kind: 'absent' }, writer: undefined })
+    expect(await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })).toMatchObject({ kind: 'opened', entered: false })
+    expect(h.replay).not.toHaveBeenCalled()
+    await h.mode.enter()
+    expect(modeOf(h.mode).kind).toBe('editing')
     expect(h.replay).toHaveBeenCalledOnce()
-    expect(h.observe).toHaveBeenCalledOnce()
+    expect(h.observe).toHaveBeenCalledTimes(2)
     expect(h.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
     expect(h.factory.last().snapshot).toBe(snapshotOf('最新的'))
     expect(h.api.save).not.toHaveBeenCalled()
-    await h.mode.enter()
-    expect(modeOf(h.mode).kind).toBe('editing')
   })
 
-  it('自动重载需要恢复协调器；缺少时仅阅读，不能以云端初值自动申请编辑', async () => {
-    const h = setup()
-    const meta = sampleMeta()
-    const reload = { userId: AMY.id, documentId: DOCUMENT_ID, clientInstanceId: meta.writtenBy, writeEpoch: meta.writeEpoch, writerId: meta.writerId }
-    expect(await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true, reload })).toMatchObject({ kind: 'opened', entered: false })
-    expect(modeOf(h.mode).kind).toBe('reading')
-    expect(h.api.save).not.toHaveBeenCalled()
-  })
-
-  it('匹配的自动重载仍经过打开与恢复准备，原件直接快进且无需额外输入可保存', async () => {
+  it('明确恢复经过打开与恢复准备，原件快进后无需额外输入可保存', async () => {
     const h = await recoverySetup()
-    const reload = { ...h.key, clientInstanceId: h.meta.writtenBy, writeEpoch: h.meta.writeEpoch, writerId: h.meta.writerId }
-    expect(await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: true, reload })).toMatchObject({ kind: 'opened', entered: true })
+    expect(await h.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })).toMatchObject({ kind: 'opened', entered: false })
+    expect(h.observe).not.toHaveBeenCalled()
+    await h.mode.enter()
     expect(h.factory.last().snapshot).toBe(h.snapshot)
     await h.mode.save()
     expect(h.api.save).toHaveBeenCalledOnce()
@@ -6784,7 +6809,27 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(context.api.editRequest.renew).toHaveBeenCalledOnce()
     })
 
-    it('刷新之后恢复等待：编辑状态里有本人的请求而本页没在等，这一页发出过它（记号对得上，刷新时撤回没送到）——不另发出，直接等待、立即续期', async () => {
+    it.each(['pending', 'reserved'] as const)('旧页面已消失，遗留 %s 请求记号不能让新页面续期或申请，必须明确操作', async (kind) => {
+      const context = setup({ api: { editStatus: async () => kind === 'pending' ? statusWithMyRequest() : statusWithMyReservation() } })
+      context.issued.items.set(`nerve-office:edit-request:${DOCUMENT_ID}`, JSON.stringify({ v: 1, requestedAt: MY_REQUESTED_AT }))
+      await opened(context)
+      await settle()
+      await context.time.advance(READING_CHECK_INTERVAL_MS)
+      await settle()
+      expect(readingOf(context.mode).request).toBeUndefined()
+      expect(context.api.editRequest.renew).not.toHaveBeenCalled()
+      expect(context.api.editRequest.send).not.toHaveBeenCalled()
+      expect(context.editLease.acquire).not.toHaveBeenCalled()
+      expect(context.issued.marker.read()).toBeUndefined()
+      context.api.editRequest.send.mockResolvedValue({ kind: 'free' })
+      await context.mode.requestEdit()
+      await settle()
+      expect(context.api.editRequest.send).toHaveBeenCalledOnce()
+      expect(context.editLease.acquire).toHaveBeenCalledOnce()
+      expect(modeOf(context.mode).kind).toBe('editing')
+    })
+
+    it('当前 Document 内存中发出过的请求仍可续接：不另发出，直接等待、立即续期', async () => {
       const context = setup({ api: { editStatus: async () => statusWithMyRequest() } })
       context.issued.marker.write(MY_REQUESTED_AT)
       await opened(context)
@@ -6811,7 +6856,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(readingOf(viewer.mode).request).toBeUndefined()
     })
 
-    it('发出（等待）时在这一页记下它（服务端给的发出时刻）；请求结束（取消）时清掉，撤回（页面关闭）时不清（刷新之后照它恢复）', async () => {
+    it('发出（等待）时在这一页记下它（服务端给的发出时刻）；请求结束（取消）时清掉，撤回（页面关闭）时不清（本 Document 继续等待）', async () => {
       const context = setup({ api: amyEdits })
       await readingWhileAmyEdits(context)
       await context.mode.requestEdit()
@@ -6904,7 +6949,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       expect(browser.sharedHoldersOf(ISSUED_LOCK)).toEqual(['R1', 'R2'])
     })
 
-    it('浏览器没有 Web Locks（复验 C2）：退回只看记号——记号对得上就恢复等待', async () => {
+    it('浏览器没有 Web Locks：只认本 Document 的内存意图，仍可续接当前页请求', async () => {
       const context = setup({ sameBrowser: sameBrowserFor(DOCUMENT_ID, { locks: undefined, openChannel: undefined }), api: { editStatus: async () => statusWithMyRequest() } })
       context.issued.marker.write(MY_REQUESTED_AT)
       await opened(context)

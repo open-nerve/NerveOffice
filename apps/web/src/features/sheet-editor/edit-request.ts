@@ -14,15 +14,10 @@
 //   免得编辑权交给他之后空占。每次续期之前判断；回到前台时（可见性的通知里，同步）按隐藏之前的操作判断（Safari 隐藏时计时器停了）；
 // - 取消（"取消请求"）：DELETE（同时清掉留给本人的保留）。没取消成就回到等待、说明原因（可以再按），照常续期——请求还在服务端；
 // - 撤回（withdraw：页面关闭、编辑器建不起来）：尽力 DELETE（keepalive，不等结果），不说明；
-// - 这一页发出过的请求（M3-P5 审查 B2，issued-request.ts）：发出之后（在等待，或者编辑权交给了本页）在这一页记下它（服务端给的发出时刻），请求结束、
-//   进入编辑时清掉——撤回时不清：刷新时撤回没送到的话，刷新之后照记号恢复。记下的同时以共享方式持有"发出过请求"的本机锁（issuerLock，
-//   same-browser.ts 的 holdIssuedRequest；M3-P5 复验 C2），请求结束、进入编辑、撤回、停下时放开（页面卸载时浏览器替它放开）；
-// - 恢复（resume）：编辑状态里有本人的请求而本页没有请求时，状态机先问 whose——只有这一页发出过它（记号对得上）、而且本浏览器里没有页面持有
-//   "发出过请求"的锁时才恢复：不另发出，直接等待（持有锁）、立即续期一次。锁有人持有说明发出它的那一页还在，这一页是"复制标签页"复制出来的
-//   （sessionStorage 连同记号一起复制，复验 C2），与本人在别的页面、设备上发出的一样不恢复（不续期、不撤回、不空闲取消、不自动进入：不然这一页
-//   关掉、空闲就把那边正在等的请求撤掉，服务端的取消按人清），清掉记号，状态机在阅读里说一句。刷新时原来那一页的锁随页面卸载放开，新页面检查时
-//   通常已经放开；还没放开就按别处处理（宁可不恢复，用户再点"请求编辑"即可）。这一页再点"请求编辑"照常发出（服务端只续期），随之成为发出过的
-//   页面、也持有锁——锁是共享的，同一个人在两页都点了"请求编辑"时两页都等；没有 Web Locks 的浏览器退回只看记号；
+// - 这一页发出过的请求（issued-request.ts）：send 之后仅在当前 Document 内存中记下服务端给的时刻；请求结束、进入编辑或销毁时清掉。
+//   保留当前活页的共享 issuerLock 与恢复协调；锁空闲本身不证明页面身份。新 Document 没有本页意图，不能只凭服务端 mine 恢复等待。
+// - 恢复（resume）：本页内存意图对得上且没有其他等待页时续接当前页面的等待。重载/副本的旧 sessionStorage 不会进入此路径；
+//   用户可以重新点“请求编辑”（服务端对同一个人只续期）或“编辑”。同一活页在后台已明确请求的，仍等待前台再进入。
 // - 会话不是本人时不续期（不带着别人的登录发），回到本人时立即续期一次；续期、取消遇到会话类失败（未登录、令牌失效）交给页面确认会话、照常等。
 //   连着的会话类失败（续期、取消得到未登录或令牌失效，中间没有成功过）只有第一次之后回到本人时立即续期，之后按续期的节奏（5 秒）再续——服务端
 //   一直拒绝（例如网关剥掉了 CSRF 的请求头）而页面的确认照常是本人时，立即续期只会再被拒、再要页面确认一次，续期与确认会话就按网络往返的速度
@@ -108,7 +103,7 @@ export interface EditRequestsOptions {
   readonly enter: () => boolean
   /** 请求结束了（见 EditRequestEnd） */
   readonly onEnd: (end: EditRequestEnd) => void
-  /** 这一页发出过的请求的记号（issued-request.ts，按标签页、刷新之后还在）：只有发出过它的那一页恢复等待（审查 B2） */
+  /** 当前 Document 明确发出过的请求意图（issued-request.ts，仅内存），新 Document 不能继承 */
   readonly issued: IssuedRequestMarker
   /**
    * 以共享方式拿"发出过请求"的本机锁（same-browser.ts 的 holdIssuedRequest，复验 C2）：这一页成了发出过请求的页面（记下记号、恢复等待）时拿，
@@ -141,12 +136,11 @@ export interface EditRequests {
   /** "请求编辑"：发出（已经有请求时什么也不做） */
   readonly send: () => Promise<void>
   /**
-   * 编辑状态里本人的请求（本页没有请求时，阅读时的检查读到的）是谁发出的（见 RequestOwner、issued-request.ts）。issuerHeld：同一次检查里看到的
-   * 本浏览器里有没有页面持有"发出过请求"的锁（same-browser.ts 的 issuedRequestHeld；本页这时没有请求，不持有它）——有就是原来那页还在，这一页是
-   * 复制出来的（复验 C2）。不是这一页的（记号对不上：这一页发出的那一次已经不在了；或者是复制出来的）、没有本人的请求时清掉记号
+   * 本 Document 内存中的明确意图与服务端请求是否对应；issuerHeld 只排除其他仍在等待的页面，
+   * 不证明本页身份。新 Document 的内存意图始终为空；对不上或服务端已无对应请求时清掉。
    */
   readonly whose: (mine: MineRequest, issuerHeld: boolean) => RequestOwner
-  /** 恢复（编辑状态里有这一页发出过的请求：刷新之后）：不另发出，开始等待、立即续期一次（已经有请求时什么也不做） */
+  /** 续接当前活页的请求（只认本 Document 内存意图）：不另发出，开始等待、立即续期一次（已经有请求时什么也不做） */
   readonly resume: (holder: UserSummary | undefined) => void
   /** "取消请求"（等待中、granted 时） */
   readonly cancel: () => Promise<void>
@@ -410,7 +404,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
         return
       options.trace?.({ kind: 'request-sent', at: clock.now(), outcome: outcome.kind })
       // 这一页发出过它（审查 B2）：在等待就记下服务端给的发出时刻（同一个人在别的页面先发出过时只是续期，时刻是那一次的）；编辑权交给了本页
-      // （reserved、free）就记下没有时刻的（进入不了、留在 granted 时刷新之后照记号恢复）。记下的同时持有"发出过请求"的锁（复验 C2）：
+      // （reserved、free）就记下没有时刻的（本页进入不了时留在 granted）。记下的同时持有"发出过请求"的锁（复验 C2）：
       // 随即进入了编辑的，进入时放开
       if (outcome.kind === 'pending') {
         options.issued.write(outcome.requestedAt)
@@ -427,8 +421,8 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     },
 
     whose: (mine, issuerHeld) => {
-      // 记号对得上、而且本浏览器里没有页面持有"发出过请求"的锁（原来那页已经刷新或关掉）才是这一页的；锁有人持有，这一页就是复制出来的标签页
-      // （复验 C2）：与别处发出的一样，清掉复制来的记号
+      // 当前 Document 内存中的意图对得上、且没有别的等待页才续接。新对象从未读取旧 sessionStorage，
+      // 不能把原页锁已释放当作当前页曾经发出请求的证明
       if (!issuerHeld && issuedHere(options.issued.read(), mine))
         return 'here'
       options.issued.clear()
@@ -496,7 +490,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
     withdraw: () => {
       if (disposed || progress === undefined)
         return
-      // 记号不清：刷新时这一次撤回没送到的话，刷新之后照记号恢复等待（送到了就读不到本人的请求，到时清掉）。锁放开：这一页不再等了
+      // 当前活页暂留内存意图以处理撤回未送达；新 Document 从不继承。锁放开：这一页不再等了
       // （编辑器建不起来时页面还在；关页时浏览器本来也会放开）
       void api.cancel(documentId).catch(() => undefined)
       rounds += 1
@@ -509,6 +503,7 @@ export function createEditRequests(options: EditRequestsOptions): EditRequests {
       if (disposed)
         return
       disposed = true
+      options.issued.clear()
       rounds += 1
       stopTimer()
       releaseIssuer()

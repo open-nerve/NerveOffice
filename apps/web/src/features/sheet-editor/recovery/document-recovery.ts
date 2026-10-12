@@ -1,6 +1,6 @@
 // 文档恢复只保留视图事实与条件操作资格；正文只在一次判定/安装期间借用，副本接收唯一 WorkingDraft。
 import type { DocumentDetail, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
-import type { ContentFormat, DraftKey } from '../../../shared/outbox/draft-record.ts'
+import type { ContentFormat, DraftKey, DraftMeta } from '../../../shared/outbox/draft-record.ts'
 import type { ObservedRemoveResult, ObserveResult } from '../../../shared/outbox/draft-writer.ts'
 import type { RecoveryNotice } from '../../../shared/outbox/recovery-notice.ts'
 import type { LeaseClock } from '../edit-lease.ts'
@@ -10,7 +10,6 @@ import type { DraftCapture } from '../working-draft.ts'
 import type { DraftReplayRequest, RecoveryDecision, RecoveryFacts } from './recovery-decision.ts'
 import type { RecoveryBlockedReason, RecoveryContext, RecoveryInitialization } from './recovery-initializer.ts'
 import type { RecoveryReader } from './recovery-reader.ts'
-import type { ReloadMarker } from './reload-marker.ts'
 import type { ResolvedRecovery } from './resolve-recovery.ts'
 import { isAuthenticationError, isCsrfTokenError } from '../../../shared/api/index.ts'
 import { draftAad } from '../../../shared/outbox/draft-aad.ts'
@@ -18,7 +17,6 @@ import { sha256Hex } from '../../../shared/outbox/draft-codec.ts'
 import { createLostCopyFlow } from '../lost-copy-flow.ts'
 import { createMemoryWorkingDraft } from '../memory-working-draft.ts'
 import { createRecoveryReader } from './recovery-reader.ts'
-import { matchesReloadRecord } from './reload-recovery.ts'
 import { decodeRecovery, resolveRecovery } from './resolve-recovery.ts'
 
 export type RecoveryAccessFacts = Pick<RecoveryFacts, 'access' | 'online' | 'current'>
@@ -43,6 +41,9 @@ export type RecoveryInstall = (snapshot: string, formulasPending: boolean) => Pr
   | { readonly kind: 'blocked', readonly reason: RecoveryBlockedReason }
 >
 
+/** 在点击的同步段固定已认证来源；等待会话、交接与租约期间不能换成新候选。 */
+export type RecoveryPreparation = (context: RecoveryContext, facts: RecoveryAccessFacts, install: RecoveryInstall) => Promise<RecoveryInitialization>
+
 /** 确认框只持有这个不透明对象；确认期间的新发现不能替换其目标。 */
 export interface RecoveryDiscard {
   readonly updatedAt: number | undefined
@@ -52,7 +53,7 @@ export interface DocumentRecovery {
   readonly view: () => RecoveryView
   readonly subscribe: (listener: () => void) => () => void
   readonly discover: () => Promise<void>
-  readonly prepare: (context: RecoveryContext, facts: RecoveryAccessFacts, install: RecoveryInstall, expected?: ReloadMarker) => Promise<RecoveryInitialization>
+  readonly beginRestore: () => RecoveryPreparation
   /** 编辑器已经通过初值采用、保存调度及安装屏障之后才通知。 */
   readonly restored: () => void
   readonly copy: () => Promise<void>
@@ -89,6 +90,16 @@ interface ReadPort {
   readonly refreshKey?: RecoveryReader['refreshKey']
 }
 
+type RecoveryOrigin = Pick<DraftMeta, 'userId' | 'documentId' | 'writeEpoch' | 'writerId' | 'writtenBy'>
+
+function originOf({ userId, documentId, writeEpoch, writerId, writtenBy }: DraftMeta): RecoveryOrigin {
+  return { userId, documentId, writeEpoch, writerId, writtenBy }
+}
+
+function sameOrigin(a: RecoveryOrigin, b: RecoveryOrigin): boolean {
+  return a.userId === b.userId && a.documentId === b.documentId && a.writeEpoch === b.writeEpoch && a.writerId === b.writerId && a.writtenBy === b.writtenBy
+}
+
 interface CleanupTarget {
   readonly generation: number
   readonly presence: number
@@ -98,6 +109,7 @@ interface CleanupTarget {
 }
 
 interface Checked extends ResolvedRecovery {
+  readonly originChanged?: true
   readonly snapshot?: string
   readonly recordId?: string
 }
@@ -122,6 +134,8 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
   let presence = 0
   let knownSource: { readonly revision: number, readonly source: RevisionSource | null } | undefined
   let reader: RecoveryReader | undefined
+  // 视图中已认证的来源独立于短期 Reader；会话确认会关闭 Reader，但不能让旧提示的点击改选新来源。
+  let shownOrigin: RecoveryOrigin | undefined
   let candidate: CleanupTarget | undefined
   let cleanup: CleanupTarget | undefined
   let ownedCopy: RecoveryCopy | undefined
@@ -248,6 +262,7 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
       if (candidate === target) {
         if (gone && target.presence === presence) {
           recordKnown = false
+          shownOrigin = undefined
           presence += 1
         }
         candidate = undefined
@@ -270,7 +285,17 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
     }
   }
 
-  async function check(started: number, facts: RecoveryAccessFacts, port: ReadPort): Promise<Checked | undefined> {
+  function changedOrigin(observed: ObserveResult, expected: RecoveryOrigin | undefined): Checked | undefined {
+    if (expected === undefined || observed.kind !== 'observed' || observed.record.kind === 'absent')
+      return undefined
+    if (observed.record.kind === 'draft' && sameOrigin(expected, observed.record.meta))
+      return undefined
+    // 新原件属于下一次明确选择，不能原样重放、条件清理或安装；重新发现也不能改写本次闭包。
+    publish({ problem: 'changed' })
+    return { observed, decision: { kind: 'preserve', reason: 'storage' }, originChanged: true }
+  }
+
+  async function check(started: number, facts: RecoveryAccessFacts, port: ReadPort, expected?: RecoveryOrigin): Promise<Checked | undefined> {
     if (!current(started))
       return undefined
     if (facts.access === 'unknown') {
@@ -282,6 +307,16 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
     if (!current(started))
       return undefined
     rememberPresence(observed)
+    // 旧密钥不能证明来源。先重取密钥并认证，再判断是否仍是点击时的写入者；不借明文元数据授权。
+    if (expected !== undefined && observed.kind === 'observed' && observed.record.kind === 'unreadable' && observed.record.reason === 'stale-key' && port.refreshKey !== undefined) {
+      observed = await port.refreshKey(observed.record.meta.keyVersion)
+      if (!current(started))
+        return undefined
+      rememberPresence(observed)
+    }
+    const changed = changedOrigin(observed, expected)
+    if (changed !== undefined)
+      return changed
     // 阅读状态不带 source。已核实的同修订来源可继续使用，权限与占用始终来自本次请求。
     let server = facts.current
     if (server !== undefined) {
@@ -302,6 +337,9 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
         if (!current(started))
           return undefined
         rememberPresence(observed)
+        const changed = changedOrigin(observed, expected)
+        if (changed !== undefined)
+          return changed
         resolved = await resolveRecovery({ observed, facts: inputs, replay: options.replay })
         if (!current(started))
           return undefined
@@ -330,6 +368,7 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
       : undefined
     if (!current(started))
       return undefined
+    shownOrigin = observed.kind === 'observed' && observed.record.kind === 'draft' ? originOf(observed.record.meta) : undefined
     candidate = observed.kind === 'observed' && observed.record.kind !== 'absent' ? target(port, observed.observation, started, recordId) : undefined
     if ((ownedCopy?.result?.kind === 'done' || ownedCopy?.result?.kind === 'refused') && ((observed.kind === 'observed' && observed.record.kind === 'absent') || (recordId !== undefined && recordId !== ownedCopy.cleanup.recordId)))
       retireCopy()
@@ -343,13 +382,15 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
   }
 
   /** 未采用的编辑来源随 blocked 结果关闭；阅读动作须先换成独立观察，不能续用该来源的清理凭证。 */
-  async function blocked(context: RecoveryContext, started: number, facts: RecoveryAccessFacts, checked: Checked | undefined, reason: RecoveryBlockedReason): Promise<RecoveryInitialization> {
+  async function blocked(context: RecoveryContext, started: number, facts: RecoveryAccessFacts, checked: Checked | undefined, reason: RecoveryBlockedReason, expected?: RecoveryOrigin): Promise<RecoveryInitialization> {
     if (context.kind === 'existing' && reason !== 'cancelled') {
       candidate = undefined
       context.retire()
-      const fresh = await check(started, facts, getReader())
+      const fresh = await check(started, facts, getReader(), expected)
       if (!current(started))
         return { kind: 'blocked', reason: 'cancelled' }
+      if (fresh?.originChanged === true)
+        return { kind: 'blocked', reason: 'changed' }
       if (fresh?.decision.kind === 'confirmed' || fresh?.decision.kind === 'remove')
         return { kind: 'blocked', reason: 'refresh-cloud' }
       if (fresh?.decision.kind === 'none' || ((reason === 'open-check' || reason === 'formulas') && (fresh?.decision.kind !== 'restore' || fresh.snapshot !== checked?.snapshot)))
@@ -383,6 +424,81 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
     }
   }
 
+  async function prepare(context: RecoveryContext, facts: RecoveryAccessFacts, install: RecoveryInstall, queued: number, expected: RecoveryOrigin | undefined): Promise<RecoveryInitialization> {
+    if (!current(queued))
+      return { kind: 'blocked', reason: 'cancelled' }
+    const waiting = action !== undefined
+    await action?.done
+    if (!current(queued))
+      return { kind: 'blocked', reason: 'cancelled' }
+    // 排队期间旧回执确认了：阅读刷新可能因已经开始进入编辑而跳过，即使记录已删也必须重取云端。
+    if (waiting && state.decision?.kind === 'confirmed')
+      return { kind: 'blocked', reason: 'refresh-cloud' }
+    if (ownedCopy !== undefined && ownedCopy.result?.kind !== 'done' && ownedCopy.result?.kind !== 'refused')
+      return { kind: 'blocked', reason: 'preserved' }
+    return run<RecoveryInitialization>('prepare', async (started) => {
+      if (context.kind === 'empty') {
+        recordKnown = false
+        shownOrigin = undefined
+        presence += 1
+        closeReader()
+        retireCopy()
+        return { kind: 'none' }
+      }
+      let port: ReadPort
+      let ownedReader: RecoveryReader | undefined
+      if (context.kind === 'existing') {
+        recordKnown = true
+        presence += 1
+        closeReader()
+        port = context
+      }
+      else {
+        if (context.recordKnown === true) {
+          recordKnown = true
+          presence += 1
+        }
+        ownedReader = getReader()
+        port = ownedReader
+      }
+      const checked = await check(started, facts, port, expected)
+      if (!current(started))
+        return { kind: 'blocked', reason: 'cancelled' }
+      if (checked?.originChanged === true)
+        return { kind: 'blocked', reason: 'changed' }
+      if (checked?.decision.kind === 'none')
+        return context.kind === 'existing' ? { kind: 'blocked', reason: 'changed' } : { kind: 'none' }
+      if (checked?.decision.kind === 'confirmed' || checked?.decision.kind === 'remove')
+        return { kind: 'blocked', reason: 'refresh-cloud' }
+      // 浏览器明确禁止/缺少存储能力时，保留 P2 的内存编辑退路。镜像忙等未知失败不属于此许可。
+      if (context.kind === 'memory' && !recordKnown && facts.access === 'editable' && facts.online && facts.current?.occupied === false
+        && checked?.observed.kind === 'unavailable' && (checked.observed.reason === 'denied' || checked.observed.reason === 'unsupported')) {
+        return { kind: 'memory', reason: context.reason }
+      }
+      // 明确拒绝不挡住发现新原件；仍是同一原件时，保留拒绝，交给用户明确处理。
+      if (ownedCopy?.result?.kind === 'refused')
+        return blocked(context, started, facts, checked, 'preserved', expected)
+      if (checked?.decision.kind !== 'restore' || checked.observed.kind !== 'observed' || checked.observed.record.kind !== 'draft' || checked.snapshot === undefined)
+        return blocked(context, started, facts, checked, 'preserved', expected)
+      const original = candidate ?? target(port, checked.observed.observation, started)
+      const installed = await install(checked.snapshot, checked.decision.formulasPending)
+      if (!current(started))
+        return { kind: 'blocked', reason: 'cancelled' }
+      if (installed.kind === 'blocked')
+        return blocked(context, started, facts, checked, installed.reason, expected)
+      return {
+        kind: 'restore',
+        capture: installed.capture,
+        baseRevision: checked.decision.baseRevision,
+        highWater: Math.max(context.highWater, checked.observed.writer?.lastDraftSeq ?? 0, checked.observed.record.meta.draftSeq),
+        ...(context.kind === 'existing' ? { recoveryObservation: checked.observed.observation } : {}),
+        onConfirmed: confirmation(original),
+        onSaved: saved(++restoration),
+        ...(ownedReader === undefined ? {} : { dispose: releaseReader(ownedReader) }),
+      }
+    }, { kind: 'blocked', reason: 'preserved' })
+  }
+
   const recovery: DocumentRecovery = {
     view: () => state,
     subscribe: (listener) => {
@@ -410,77 +526,10 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
       if (current(started))
         closeIdleReader(source)
     }, undefined),
-    prepare: async (context, facts, install, expected) => {
+    beginRestore: () => {
       const queued = generation
-      const waiting = action !== undefined
-      await action?.done
-      if (!current(queued))
-        return { kind: 'blocked', reason: 'cancelled' }
-      // 排队期间旧回执确认了：阅读刷新可能因已经开始进入编辑而跳过，即使记录已删也必须重取云端。
-      if (waiting && state.decision?.kind === 'confirmed')
-        return { kind: 'blocked', reason: 'refresh-cloud' }
-      if (ownedCopy !== undefined && ownedCopy.result?.kind !== 'done' && ownedCopy.result?.kind !== 'refused')
-        return { kind: 'blocked', reason: 'preserved' }
-      return run<RecoveryInitialization>('prepare', async (started) => {
-        if (context.kind === 'empty') {
-          recordKnown = false
-          presence += 1
-          closeReader()
-          retireCopy()
-          return expected === undefined ? { kind: 'none' } : { kind: 'blocked', reason: 'changed' }
-        }
-        let port: ReadPort
-        let ownedReader: RecoveryReader | undefined
-        if (context.kind === 'existing') {
-          recordKnown = true
-          presence += 1
-          closeReader()
-          port = context
-        }
-        else {
-          if (context.recordKnown === true) {
-            recordKnown = true
-            presence += 1
-          }
-          ownedReader = getReader()
-          port = ownedReader
-        }
-        const checked = await check(started, facts, port)
-        if (!current(started))
-          return { kind: 'blocked', reason: 'cancelled' }
-        if (checked?.decision.kind === 'none')
-          return context.kind === 'existing' || expected !== undefined ? { kind: 'blocked', reason: 'changed' } : { kind: 'none' }
-        if (checked?.decision.kind === 'confirmed' || checked?.decision.kind === 'remove')
-          return { kind: 'blocked', reason: 'refresh-cloud' }
-        // 浏览器明确禁止/缺少存储能力时，保留 P2 的内存编辑退路。镜像忙等未知失败不属于此许可。
-        if (expected === undefined && context.kind === 'memory' && !recordKnown && facts.access === 'editable' && facts.online && facts.current?.occupied === false
-          && checked?.observed.kind === 'unavailable' && (checked.observed.reason === 'denied' || checked.observed.reason === 'unsupported')) {
-          return { kind: 'memory', reason: context.reason }
-        }
-        // 明确拒绝不挡住发现新原件；仍是同一原件时，保留拒绝，交给用户明确处理。
-        if (ownedCopy?.result?.kind === 'refused')
-          return blocked(context, started, facts, checked, 'preserved')
-        if (checked?.decision.kind !== 'restore' || checked.observed.kind !== 'observed' || checked.observed.record.kind !== 'draft' || checked.snapshot === undefined)
-          return blocked(context, started, facts, checked, 'preserved')
-        if (expected !== undefined && !matchesReloadRecord(checked.observed.record.meta, expected))
-          return blocked(context, started, facts, checked, 'changed')
-        const original = candidate ?? target(port, checked.observed.observation, started)
-        const installed = await install(checked.snapshot, checked.decision.formulasPending)
-        if (!current(started))
-          return { kind: 'blocked', reason: 'cancelled' }
-        if (installed.kind === 'blocked')
-          return blocked(context, started, facts, checked, installed.reason)
-        return {
-          kind: 'restore',
-          capture: installed.capture,
-          baseRevision: checked.decision.baseRevision,
-          highWater: Math.max(context.highWater, checked.observed.writer?.lastDraftSeq ?? 0, checked.observed.record.meta.draftSeq),
-          ...(context.kind === 'existing' ? { recoveryObservation: checked.observed.observation } : {}),
-          onConfirmed: confirmation(original),
-          onSaved: saved(++restoration),
-          ...(ownedReader === undefined ? {} : { dispose: releaseReader(ownedReader) }),
-        }
-      }, { kind: 'blocked', reason: 'preserved' })
+      const expected = shownOrigin
+      return async (context, facts, install) => prepare(context, facts, install, queued, expected)
     },
     restored: () => {
       if (live())

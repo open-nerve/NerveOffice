@@ -98,47 +98,62 @@ describe('两个标签页的本人接管（takeoverJudgement）', () => {
   })
 })
 
-describe('刷新在途保存：原实例自动核对后回阅读（refreshJudgement）', () => {
+describe('刷新在途保存：新页面只核对原回执（refreshJudgement）', () => {
   const instance = 'original-instance'
-  // 100ms 采样可能一次看到新代次及其释放；顺序必须依据真实请求，不能把采样时刻当申请时刻。
-  const STATES: readonly DocumentState[] = [state(0), state(200, { epoch: 1, clientInstanceId: instance }), state(15_100, { revision: 2, epoch: 2, clientInstanceId: instance, endReason: 'released' })]
+  const STATES: readonly DocumentState[] = [state(0), state(200, { epoch: 1, clientInstanceId: instance }), state(15_100, { revision: 2, epoch: 1, clientInstanceId: instance })]
   const SAVE: ServerRequest = { time: 2_600, method: 'PUT', route: '/api/documents/:id/content', statusCode: undefined, aborted: true, durationMs: 1_600 }
   const ACQUIRE: ServerRequest = { time: 15_000, method: 'POST', route: '/api/documents/:id/edit-lease', statusCode: 201, aborted: false, durationMs: 20 }
   const REPLAY: ServerRequest = { time: 15_040, method: 'PUT', route: '/api/documents/:id/content', statusCode: 200, aborted: false, durationMs: 20 }
   const RELEASE: ServerRequest = { time: 15_080, method: 'DELETE', route: '/api/documents/:id/edit-lease', statusCode: 204, aborted: false, durationMs: 10 }
-  const baseline = { report: report('refresh-save', 'confirmed-reading'), states: STATES, requests: [SAVE, ACQUIRE, REPLAY, RELEASE], blockedAt: 1_000, finishedAt: 13_000 }
+  const baseline = { report: { ...report('refresh-save', 'confirmed-reading'), facts: { receiptPath: 'direct', replayAttempts: 1, receiptRetryAt: null } }, states: STATES, requests: [SAVE, REPLAY], blockedAt: 1_000, finishedAt: 13_000 }
 
-  it('原实例普通申请，精确回执确认后释放并阅读；采样没看到新代次活跃时刻也通过', () => {
+  it('新页面仅核对原保存回执，零申请零释放且不产生新租约代次', () => {
     const judgement = refreshJudgement(baseline)
     expect(judgement.problems).toEqual([])
     expect(judgement.evidence).toContain('confirmed-reading')
     expect(judgement.evidence).toContain('中断')
   })
 
-  it.each(['committed', 'expired', undefined])('旧手动路径 %s 不再充当自动恢复证据', (path) => {
-    expect(refreshJudgement({ ...baseline, report: report('refresh-save', path) }).problems).toContain('页面没有证明原实例自动核对后回到阅读')
+  it('繁忙后只允许明确重查一次，页面路径与独立 HTTP 次序必须相符', () => {
+    const busy: ServerRequest = { ...REPLAY, time: 7_000, durationMs: 5_000, statusCode: 503 }
+    const retried = { ...baseline, report: { ...baseline.report, facts: { receiptPath: 'explicit-recheck', replayAttempts: 2, receiptRetryAt: 14_000 } }, requests: [SAVE, busy, REPLAY] }
+    expect(refreshJudgement(retried).problems).toEqual([])
+    expect(refreshJudgement({ ...retried, report: baseline.report }).problems).toContain('核对请求次序与页面明确重查证据不符')
+    expect(refreshJudgement({ ...retried, requests: [SAVE, { ...busy, statusCode: 409 }, REPLAY] }).problems).toContain('核对请求次序与页面明确重查证据不符')
+    expect(refreshJudgement({ ...retried, report: { ...retried.report, facts: { ...retried.report.facts, receiptRetryAt: 15_030 } } }).problems).toContain('成功核对早于明确重查，或缺少重查时刻')
+    expect(refreshJudgement({ ...retried, requests: [SAVE, busy, busy, REPLAY] }).problems).toContain('核对请求次序与页面明确重查证据不符')
   })
 
-  it('另一个实例或 self 接管都不能充当原实例普通申请', () => {
-    for (const changes of [{ clientInstanceId: 'someone-else' }, { takeover: 'self' as const }]) {
-      const states = STATES.map(row => row.epoch === 2 ? { ...row, ...changes } : row)
-      expect(refreshJudgement({ ...baseline, states }).problems).toContain('新一代没有以原 clientInstanceId 普通申请')
-    }
+  it.each(['committed', 'expired', undefined])('没有证明确认后阅读的路径 %s 不通过', (path) => {
+    expect(refreshJudgement({ ...baseline, report: report('refresh-save', path) }).problems).toContain('页面没有证明仅核对原保存回执并保持阅读')
   })
 
-  it('离开时释放旧代次、确认前提前释放都不通过；采用请求开始时刻而非结束或数据库采样时刻', () => {
-    const states = [STATES[0]!, STATES[1]!, state(2_700, { epoch: 1, endReason: 'released', clientInstanceId: instance }), STATES[2]!]
+  it.each([{ clientInstanceId: instance }, { clientInstanceId: 'someone-else' }, { takeover: 'self' as const }])('任何新租约代次都不通过：%j', (fields) => {
+    const states = [...STATES, state(15_200, { revision: 2, epoch: 2, ...fields })]
+    expect(refreshJudgement({ ...baseline, states }).problems).toContain('只核对旧回执不应产生新的编辑租约代次')
+  })
+
+  it.each([ACQUIRE, { ...ACQUIRE, statusCode: 409 }, { ...ACQUIRE, statusCode: undefined, aborted: true }, { ...ACQUIRE, durationMs: undefined }])('请求日志里的任何申请都不通过，不能只看数据库代次：%j', (acquire) => {
+    expect(refreshJudgement({ ...baseline, requests: [SAVE, acquire, REPLAY] }).problems).toContain('核对旧回执期间不应申请编辑权（包括失败或中断的申请）')
+  })
+
+  it('初次进入编辑发生在保存之前：用请求开始时刻判断，不把晚到的日志当刷新后申请', () => {
+    const initial = { ...ACQUIRE, time: 1_200, durationMs: 1_000 }
+    expect(refreshJudgement({ ...baseline, requests: [initial, SAVE, REPLAY] }).problems).toEqual([])
+  })
+
+  it('离开或核对期间都不释放旧代次；核对完仍不得释放', () => {
+    const states = [...STATES, state(15_200, { revision: 2, epoch: 1, endReason: 'released', clientInstanceId: instance })]
     expect(refreshJudgement({ ...baseline, states }).problems).toContain('刷新之前那一代明确结束：页面关闭时不应释放')
-    const early = { ...RELEASE, time: 15_090, durationMs: 100 }
-    expect(refreshJudgement({ ...baseline, requests: [SAVE, ACQUIRE, REPLAY, early] }).problems).toContain('服务端收到过早释放：原实例申请与旧回执确认尚未完成')
+    expect(refreshJudgement({ ...baseline, requests: [SAVE, REPLAY, RELEASE] }).problems).toContain('核对旧回执期间不应释放编辑权')
   })
 
-  it('没有真实申请、确认回执，或者租约/修订号证据缺失都不通过', () => {
-    expect(refreshJudgement({ ...baseline, requests: [SAVE, REPLAY, RELEASE] }).problems).toContain('服务端没有确认刷新后的普通申请')
-    expect(refreshJudgement({ ...baseline, requests: [SAVE, ACQUIRE, RELEASE] }).problems).toContain('普通申请之后没有成功核对旧保存回执')
-    expect(refreshJudgement({ ...baseline, states: STATES.slice(0, 2) }).problems).toContain('库里没有看到刷新后的新一代')
+  it('没有唯一确认回执，或者租约/修订号证据缺失都不通过', () => {
+    expect(refreshJudgement({ ...baseline, requests: [SAVE] }).problems).toContain('刷新后应当恰好一次成功核对旧保存回执')
+    expect(refreshJudgement({ ...baseline, requests: [SAVE, REPLAY, REPLAY] }).problems).toContain('刷新后应当恰好一次成功核对旧保存回执')
+    expect(refreshJudgement({ ...baseline, states: [state(0), state(15_100, { revision: 2 })] }).problems).toContain('库里没有看到刷新之前那一代的编辑租约')
     expect(refreshJudgement({ ...baseline, states: STATES.map(row => ({ ...row, revision: 1 })) }).problems).toContain('云端修订号没有恰好前进一次')
-    expect(refreshJudgement({ ...baseline, states: STATES.map(row => row.epoch === 2 ? { ...row, revision: 3 } : row) }).problems).toContain('云端修订号没有恰好前进一次')
+    expect(refreshJudgement({ ...baseline, states: [...STATES, state(15_200, { revision: 3, epoch: 1 })] }).problems).toContain('云端修订号没有恰好前进一次')
   })
 
   it('保存没停住、没交回结果都会说明缺失', () => {

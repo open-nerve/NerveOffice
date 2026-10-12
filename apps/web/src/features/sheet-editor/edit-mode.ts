@@ -139,9 +139,8 @@ import type { ConflictCopyRequest } from './lost-copy.ts'
 import type { OpenCheckContext } from './open-check-report.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
-import type { DocumentRecovery } from './recovery/document-recovery.ts'
+import type { DocumentRecovery, RecoveryPreparation } from './recovery/document-recovery.ts'
 import type { RecoveryInitializer } from './recovery/recovery-initializer.ts'
-import type { ReloadMarker } from './recovery/reload-marker.ts'
 import type { HandoverFailure, SameBrowser } from './same-browser.ts'
 import type { SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
 import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
@@ -445,7 +444,6 @@ export interface EditModeOptions {
   readonly userId: string
   readonly connection?: EditingSessionOptions['connection']
   readonly localDrafts?: EditingSessionOptions['localDrafts']
-  readonly onPersisted?: EditingSessionOptions['onPersisted']
   readonly recovery?: DocumentRecovery | undefined
   readonly api: EditModeApi
   readonly createEditor: CreateModeEditor
@@ -507,9 +505,9 @@ export interface EditMode {
    * 读不到了（404）、未登录按载入失败。blocked（打开时就看得出与服务端不兼容，M3-P3）：只能阅读，不直接进入编辑。
    * 新建的编辑器打开自检失败（M3-P4）：只能阅读（damaged）；直接进入编辑时已经取得的编辑权随即释放（先取后放），结果的 damaged 为真
    */
-  readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean, readonly formulasPending?: boolean, readonly canTakeOver?: boolean }, options: { readonly enterEdit: boolean, readonly blocked?: Incompatibility | undefined, readonly reload?: ReloadMarker }) => Promise<OpenOutcome>
+  readonly open: (initial: { readonly snapshot: string, readonly revision: number, readonly canEdit: boolean, readonly formulasPending?: boolean, readonly canTakeOver?: boolean }, options: { readonly enterEdit: boolean, readonly blocked?: Incompatibility | undefined }) => Promise<OpenOutcome>
   /** 进入编辑（阅读、能编辑、没有在按新的版本重建、没有在接手、没有请求时；"编辑"按钮，会话由页面先确认） */
-  readonly enter: () => Promise<void>
+  readonly enter: (prepare?: RecoveryPreparation) => Promise<void>
   /**
    * "请求编辑"（M3-P5 设计 §3.6，US-M3-06；会话由页面先确认）：阅读、能编辑、没有在按新的版本重建、没有在接手、没有请求时发出；之后的等待、
    * 进入编辑与说明见文件头
@@ -525,14 +523,14 @@ export interface EditMode {
    * "在此编辑"（M3-P5 设计 §3.7，US-M3-08；会话由页面先确认）：本人接管自己在别的标签页或设备上的编辑权。阅读、能编辑、没有在按新的版本重建、
    * 没有在接手时；那边没能交出（takeover 是 failed）时再按就是"仍在此编辑"——本人接管并抢锁，不再请它交出
    */
-  readonly takeOver: () => Promise<void>
+  readonly takeOver: (prepare?: RecoveryPreparation) => Promise<void>
   /** "在此编辑"那边没能交出之后选"取消"（接手的过程中也可以）：不再接手，回到阅读 */
   readonly cancelTakeOver: () => void
   /**
    * "强制接管"（M3-P5 设计 §3.8，US-M3-09；确认与会话由页面先做）：阅读、能编辑、能强制接管、没有在按新的版本重建、没有在接手、没有请求、
    * 正在编辑的不是自己时，以 takeover: 'force' 申请并进入编辑（见文件头）
    */
-  readonly forceTakeOver: () => Promise<void>
+  readonly forceTakeOver: (prepare?: RecoveryPreparation) => Promise<void>
   /** 异常中断的说明里的"知道了"（编辑、离开编辑的过程中）：说明消失 */
   readonly dismissInterruption: () => void
   /** 退出编辑（"退出编辑"按钮，会话由页面先确认）：离开编辑的 exit（公式没收齐就留在编辑） */
@@ -696,7 +694,6 @@ export function createEditMode(options: EditModeOptions): EditMode {
     documentId,
     userId: options.userId,
     localDrafts: options.localDrafts,
-    onPersisted: options.onPersisted,
     connection: options.connection,
     sessionActive: () => session === 'active',
     clientInstanceId: options.clientInstanceId,
@@ -894,7 +891,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         // 本人在别的页面、设备上发出、正在等的请求（不是这一页发出的）：说一句，不恢复（审查 B2）
         requestedElsewhere: owner === 'elsewhere',
       })
-      // 这一页发出过的请求而本页没在等（刷新之前发出、刷新时撤回没送到）：恢复等待（M3-P5 设计 §3.6）。"在此编辑"进行中、不能进入编辑的阅读不恢复
+      // 当前 Document 曾明确请求而暂未在等（撤回未送达）：续接等待；刷新/副本的新内存意图为空（M3-P5 设计 §3.6）。"在此编辑"进行中、不能进入编辑的阅读不恢复
       if (owner === 'here' && status.canEdit && mode.kind === 'reading' && mode.takeover === undefined && mode.blocked === undefined && mode.damaged === undefined)
         requests.resume(status.editor?.holder)
     }
@@ -1368,7 +1365,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 交回 lost（调用方按失效说明，readingAfterLostClaim）；核对不了、读取失败时已经释放编辑权，交回错误（调用方按它说明）；重建失败、打开自检失败时
    * （失败的编辑器绝不保存：保存的状态机根本不建）释放编辑权、以只读重建选定的那一份内容、回到阅读并说明（backToReading）
    */
-  async function startEditing(token: number, held: EditLease, acquired: Pick<Extract<LeaseAcquisition, { kind: 'acquired' }>, 'revision' | 'source' | 'formulasPending' | 'interruption'>, reload?: ReloadMarker): Promise<'entered' | 'not-entered' | 'superseded' | 'lost' | { readonly error: unknown }> {
+  async function startEditing(token: number, held: EditLease, acquired: Pick<Extract<LeaseAcquisition, { kind: 'acquired' }>, 'revision' | 'source' | 'formulasPending' | 'interruption'>, prepare: RecoveryPreparation | undefined): Promise<'entered' | 'not-entered' | 'superseded' | 'lost' | { readonly error: unknown }> {
     const { revision, formulasPending } = acquired
     editing.acceptLease(held, revision)
     // 新的一代：之前的请求、说明不再算（之后的心跳带来的才算）；异常中断的提醒是这一次申请带回的（用户发起的申请才经这里，续上不经过）
@@ -1430,12 +1427,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
     let restoredEditor: SheetEditor | undefined
     let restoredBase: number | undefined
     const recovery = options.recovery
-    const recover: RecoveryInitializer | undefined = recovery === undefined
+    const recover: RecoveryInitializer | undefined = prepare === undefined
       ? undefined
       : async (context) => {
         if (!recoveryCurrent())
           return { kind: 'blocked', reason: 'cancelled' }
-        const initialized = await recovery.prepare(context, { access: 'editable', online: options.autosave.page.online(), current: { revision: content.revision, source: content.revision === acquired.revision ? acquired.source : undefined, occupied: false } }, async (snapshot, pending) => {
+        const initialized = await prepare(context, { access: 'editable', online: options.autosave.page.online(), current: { revision: content.revision, source: content.revision === acquired.revision ? acquired.source : undefined, occupied: false } }, async (snapshot, pending) => {
           if (!recoveryCurrent())
             return { kind: 'blocked', reason: 'cancelled' }
           const created = await slot.replace('edit', snapshot, { recalculate: pending })
@@ -1451,7 +1448,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
           const capture = created.capture()
           restoredEditor = created
           return { kind: 'installed', capture: { snapshot: capture, editorSeq, formulasPending: false } }
-        }, reload)
+        })
         if (!recoveryCurrent())
           return { kind: 'blocked', reason: 'cancelled' }
         if (initialized.kind === 'restore')
@@ -1476,9 +1473,6 @@ export function createEditMode(options: EditModeOptions): EditMode {
       if (!recoveryCurrent())
         return still(token) ? backToReading(token, content, damaged => ({ ...readingBefore, damaged })) : 'not-entered'
       editing.setBaseRevision(content.revision)
-      // 自动尝试只接上已证明的本机原件；确认已提交后显示最新云端，不能第二次以空来源自动进入。
-      if (reload !== undefined)
-        return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
       preparingRecovery = recovery !== undefined
       prepared = await editing.prepareDraft({ revision: content.revision, recover })
       preparingRecovery = false
@@ -1564,7 +1558,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * ?edit=new 的打开：直接申请、以可编辑创建。进入了、编辑器建不起来、载入失败、页面卸载时交回打开的结果；
    * 没有进入、要照常以只读打开时交回 undefined（readingBefore 已经带上原因）
    */
-  async function enterOnOpen(token: number, reload?: ReloadMarker): Promise<OpenOutcome | undefined> {
+  async function enterOnOpen(token: number): Promise<OpenOutcome | undefined> {
+    const prepare = options.recovery?.beginRestore()
     let acquisition: LeaseAcquisition
     trace({ kind: 'acquire', at: clock.now(), trigger: 'open', takeover: null })
     try {
@@ -1587,7 +1582,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       readingBefore = { ...readingBefore, holder: acquisition.holder, selfHolder }
       return undefined
     }
-    const started = await startEditing(token, acquisition.lease, acquisition, reload)
+    const started = await startEditing(token, acquisition.lease, acquisition, prepare)
     if (started === 'entered')
       return { kind: 'opened', entered: true, damaged: false }
     if (typeof started === 'object')
@@ -1697,7 +1692,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 交互屏障；强制接管时进入的状态带 forced）→ 申请 → 取得了就拿锁、以可编辑重建；被占用回到阅读（持有者是自己时看那个页面在不在本浏览器）；
    * 拿锁时核对得知这一代已被取代也回到阅读（M3-P6 设计 §3.13）；请求失败、核对不了按原因回到阅读（强制接管另有说法）。交回进入了没有
    */
-  async function acquireAndEnter(trigger: AcquireTrigger, intent: AcquireIntent): Promise<boolean> {
+  async function acquireAndEnter(trigger: AcquireTrigger, intent: AcquireIntent, prepare = options.recovery?.beginRestore()): Promise<boolean> {
     const forced = intent.takeover === 'force'
     const token = begin(forced ? { kind: 'entering', forced } : { kind: 'entering' })
     let acquisition: LeaseAcquisition
@@ -1724,7 +1719,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         begin({ ...readingBefore, holder: acquisition.holder, selfHolder, interruption: undefined, releaseUnconfirmed: false })
       return false
     }
-    const started = await startEditing(token, acquisition.lease, acquisition)
+    const started = await startEditing(token, acquisition.lease, acquisition, prepare)
     if (typeof started === 'object' && still(token))
       begin(readingAfterFailure(started.error, forced))
     // 这一代已被取代（服务端批准之后、回包到达之前又换了代，M3-P6 设计 §3.13）：回到阅读，随即读的编辑状态说明现在谁在编辑（本浏览器的另一个
@@ -1744,7 +1739,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * "在此编辑"（见文件头）：阅读、能编辑、没有在按新的版本重建、没有请求编辑时；接手进行中不再开始一次，那边没能交出（failed）时再按就是"仍在此编辑"
    * （anyway：本人接管、拿锁时抢，不再请它交出）。这里开始这一件事（阅读里带上进展、作废之前的），编排交给 tab-handover.ts 的 takeOverHere
    */
-  async function startTakeover(): Promise<void> {
+  async function startTakeover(prepare = options.recovery?.beginRestore()): Promise<void> {
     if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading' || mode.request !== undefined || slot.editor() === undefined || disposed)
       return
     const anyway = mode.takeover?.kind === 'failed'
@@ -1776,7 +1771,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
             return false
           if (mode.update !== 'loading')
             readingBefore = { ...mode, update: mode.update, notice: undefined, takeover: undefined }
-          return acquireAndEnter('take-over', { takeover: 'self' })
+          return acquireAndEnter('take-over', { takeover: 'self' }, prepare)
         },
         trace: traced,
       })
@@ -2034,15 +2029,15 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return () => listeners.delete(listener)
     },
 
-    open: async (initial, { enterEdit, blocked, reload }) => {
+    open: async (initial, { enterEdit, blocked }) => {
       shown = { snapshot: initial.snapshot, revision: initial.revision }
       const formulasPending = initial.formulasPending === true
       latestFlag = { revision: initial.revision, formulasPending }
       canTakeOver = initial.canTakeOver === true
       readingBefore = { kind: 'reading', canEdit: initial.canEdit, holder: undefined, selfHolder: undefined, takeover: undefined, request: undefined, requestedElsewhere: false, canTakeOver, interruption: undefined, update: 'none', gone: false, notice: undefined, releaseUnconfirmed: false, blocked, formulasPending, damaged: undefined }
       const token = generation
-      if (enterEdit && initial.canEdit && blocked === undefined && (reload === undefined || options.recovery !== undefined)) {
-        const outcome = await enterOnOpen(token, reload)
+      if (enterEdit && initial.canEdit && blocked === undefined) {
+        const outcome = await enterOnOpen(token)
         if (outcome !== undefined)
           return outcome
       }
@@ -2059,7 +2054,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return { kind: 'opened', entered: false, damaged: damaged !== undefined }
     },
 
-    enter: async () => {
+    enter: async (prepare) => {
       // 正在按新的版本取内容、重建（update 为 loading）时不进入：两次重建会叠在一起，而回到阅读时也说不清显示的是哪一版（审查 A1）。
       // 阅读时一定有接上的编辑器，没有就是还在换。打开自检失败的阅读不进入（M3-P4 设计 §3.12）；"在此编辑"进行中（或者等人选）、请求编辑进行中
       // 时不进入（M3-P5）
@@ -2067,7 +2062,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         return
       readingBefore = { ...mode, update: mode.update, notice: undefined }
       // 被自己占着、本机锁在本浏览器里有人持有时不再试，随即换成"在此编辑"（M3-P5 设计 §3.7）
-      await acquireAndEnter('enter', {})
+      await acquireAndEnter('enter', {}, prepare)
     },
 
     // 与"编辑"同样的前提；接手进行中时不再开始一次，那边没能交出（failed）时再按就是"仍在此编辑"；请求编辑进行中不开始（互斥）
@@ -2104,14 +2099,14 @@ export function createEditMode(options: EditModeOptions): EditMode {
       begin({ ...mode, takeover: undefined })
     },
 
-    forceTakeOver: async () => {
+    forceTakeOver: async (prepare) => {
       // 与"编辑"同样的前提，另要能强制接管；与请求编辑、"在此编辑"互斥；正在编辑的是自己时走"在此编辑"（同一个浏览器里先请那边交出），这里不做
       if (mode.kind !== 'reading' || !mode.canEdit || !mode.canTakeOver || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading'
         || mode.takeover !== undefined || mode.request !== undefined || mode.holder?.sameUser === true || slot.editor() === undefined || disposed) {
         return
       }
       readingBefore = { ...mode, update: mode.update, notice: undefined }
-      await acquireAndEnter('force', { takeover: 'force' })
+      await acquireAndEnter('force', { takeover: 'force' }, prepare)
     },
 
     dismissInterruption: () => {

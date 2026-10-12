@@ -96,20 +96,6 @@ async function fixture() {
   }
 }
 
-describe('编辑来源的持久身份通知', () => {
-  it.each([true, false])('持久开关 %s：只在实际持久捕获时通知，暂停后的内存写入不通知', async (enabled) => {
-    const h = await fixture()
-    const onPersisted = vi.fn()
-    const source = await h.ready({ enabled, onPersisted })
-    expect(onPersisted).not.toHaveBeenCalled()
-    await source.ready(source.capture({ snapshot: '持久身份', editorSeq: 1, formulasPending: false, dedupe: false }))
-    expect(onPersisted).toHaveBeenCalledTimes(enabled ? 1 : 0)
-    source.suspend()
-    await source.ready(source.capture({ snapshot: '暂停之后', editorSeq: 2, formulasPending: false, dedupe: false }))
-    expect(onPersisted).toHaveBeenCalledTimes(enabled ? 1 : 0)
-  })
-})
-
 describe('进入编辑准备唯一内容来源', () => {
   it.each(['disabled', 'unsupported'] as const)('%s 使用内存，不取钥、不建宿主，生命周期调用也不偷偷启用', async (reason) => {
     const h = await fixture()
@@ -536,7 +522,7 @@ describe('恢复入口准备来源', () => {
     })
     cleanups.push(recovery.dispose)
     const install = vi.fn(async () => ({ kind: 'blocked', reason: 'open-check' } as const))
-    const pending = h.start({ recover: async context => recovery.prepare(context, facts, install) })
+    const pending = h.start({ recover: async context => recovery.beginRestore()(context, facts, install) })
     if (scenario.startsWith('key-')) {
       await reached.promise
       pending.observeVersion(2)

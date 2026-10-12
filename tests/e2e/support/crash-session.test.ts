@@ -12,7 +12,7 @@ const HASH = 'a'.repeat(64)
 const boot = (bootId = BEFORE) => ({ kind: 'boot', runId: RUN, documentId: DOCUMENT, bootId })
 const ready = () => ({ ...boot(), kind: 'ready', userId: USER, clientInstanceId: CLIENT, writerId: BEFORE, draftSeq: 1, baseRevision: 1, contentHash: HASH, snapshotHash: 'b'.repeat(64), workerWrites: 1, inFlight: false, visible: true, pageErrors: 0 })
 const restored = () => ({ ...boot(AFTER), kind: 'restored', contentHash: HASH, mode: 'editing', recoveredNotice: true, draftRemaining: false, visible: true, pageErrors: 0 })
-const server = () => ({ revision: 2, contentHash: HASH, acquires: [{ clientInstanceId: CLIENT, takeover: null, status: 201 }], saves: [{ status: 200 }] })
+const server = () => ({ revision: 2, contentHash: HASH, acquires: [{ clientInstanceId: AFTER, takeover: null, status: 201 }], saves: [{ status: 200 }] })
 
 function setup() {
   return createCrashSession({ mode: 'process-kill', runId: RUN, documentId: DOCUMENT, userId: USER, contentHash: HASH, deadline: 1000 })
@@ -110,15 +110,15 @@ describe('真实 Safari 崩溃会话：只在真实就绪、结束与新页面�
     expect(calibration.reloadedForCalibration(30)).toBe(true)
     expect(calibration.snapshot().mode).toBe('reload-calibration')
   })
-  it('实际持久正文、原实例普通申请、一次修订与清理全部成立才通过', () => {
-    const session = observing()
+  it('实际持久正文、明确确认、新实例普通申请、一次修订与清理全部成立才通过', () => {
+    const session = confirmed()
     expect(session.receive(restored(), 50)).toEqual({ kind: 'wait' })
     expect(session.finish(server(), 60)).toEqual([])
     expect(session.snapshot().phase).toBe('passed')
   })
 
   it('通过后迟到取消、报告与重复核对不再改写终态', () => {
-    const session = observing()
+    const session = confirmed()
     session.receive(restored(), 50)
     expect(session.finish(server(), 60)).toEqual([])
     session.cancel('迟到的用户活动回调')
@@ -188,7 +188,7 @@ describe('真实 Safari 崩溃会话：只在真实就绪、结束与新页面�
 
   it.each(['contentHash', 'mode', 'recoveredNotice', 'draftRemaining', 'visible', 'pageErrors'] as const)('恢复的 %s 反例不会通过', (field) => {
     const values = { contentHash: 'c'.repeat(64), mode: 'reading', recoveredNotice: false, draftRemaining: true, visible: false, pageErrors: 1 }
-    const session = observing()
+    const session = confirmed()
     expect(session.receive({ ...restored(), [field]: values[field] }, 50)).toEqual({ kind: 'stop' })
     expect(session.finish(server(), 60).length).toBeGreaterThan(0)
   })
@@ -198,7 +198,7 @@ describe('真实 Safari 崩溃会话：只在真实就绪、结束与新页面�
     { contentHash: 'c'.repeat(64) },
     { acquires: [] },
     { acquires: [{ clientInstanceId: CLIENT, takeover: null, status: 200 }] },
-    { acquires: [{ clientInstanceId: AFTER, takeover: null, status: 201 }] },
+    { acquires: [{ clientInstanceId: CLIENT, takeover: null, status: 201 }] },
     { acquires: [{ clientInstanceId: CLIENT, takeover: 'self', status: 201 }] },
     { acquires: [{ clientInstanceId: CLIENT, takeover: null, status: 409 }] },
     { acquires: [...server().acquires, ...server().acquires] },
@@ -206,7 +206,7 @@ describe('真实 Safari 崩溃会话：只在真实就绪、结束与新页面�
     { saves: [{ status: 500 }] },
     { saves: [{ status: 200 }, { status: 200 }] },
   ])('独立服务端证据的反例会失败：%j', (change) => {
-    const session = observing()
+    const session = confirmed()
     session.receive(restored(), 50)
     expect(session.finish({ ...server(), ...change }, 60).length).toBeGreaterThan(0)
     expect(session.snapshot().phase).toBe('failed')
@@ -233,5 +233,93 @@ describe('真实 Safari 崩溃会话：只在真实就绪、结束与新页面�
     message.clientInstanceId = AFTER
     expect(session.snapshot().ready?.clientInstanceId).toBe(CLIENT)
     expect(session.finish(server(), 30).length).toBeGreaterThan(0)
+  })
+})
+
+function awaitingConfirmation(entry: 'restore' | 'takeover-self' = 'restore') {
+  const { workerWrites: _writes, ...draft } = ready()
+  return { ...draft, ...boot(AFTER), kind: 'awaiting-confirmation', mode: 'reading', entry }
+}
+const beforeConfirmation = () => ({ revision: 1, contentHash: 'c'.repeat(64), acquires: [], saves: [] })
+const emptyTraffic = { acquires: 0, saves: 0 }
+
+function confirmed() {
+  const session = observing()
+  expect(session.receive(awaitingConfirmation(), 45)).toEqual({ kind: 'wait' })
+  expect(session.authorizeConfirmation(beforeConfirmation(), 46)).toBe(true)
+  expect(session.receive({ ...boot(AFTER), kind: 'confirm' }, 47, emptyTraffic)).toEqual({ kind: 'confirm' })
+  return session
+}
+
+describe('明确恢复许可只能来自驱动的独立核对', () => {
+  it.each(['restore', 'takeover-self'] as const)('%s：先阅读等待，独立核对后只许可一次真实点击，新身份才可提交', (entry) => {
+    const session = observing()
+    expect(session.receive(awaitingConfirmation(entry), 45)).toEqual({ kind: 'wait' })
+    expect(session.receive({ ...boot(AFTER), kind: 'confirm' }, 46, emptyTraffic)).toEqual({ kind: 'wait' })
+    expect(session.snapshot().phase).toBe('awaiting-confirmation')
+    expect(session.authorizeConfirmation(beforeConfirmation(), 47)).toBe(true)
+    expect(session.receive({ ...boot(AFTER), kind: 'confirm' }, 48, emptyTraffic)).toEqual({ kind: 'confirm' })
+    expect(session.receive(restored(), 50)).toEqual({ kind: 'wait' })
+    expect(session.finish({ ...server(), acquires: [{ clientInstanceId: AFTER, takeover: entry === 'restore' ? null : 'self', status: 201 }] }, 60)).toEqual([])
+    expect(session.snapshot()).toMatchObject({ phase: 'passed', recovery: 'explicit-confirmation', confirmation: { authorizedAt: 47, consumedAt: 48 } })
+  })
+
+  it('没有等待证据不能提前许可，页面也不能通过 HTTP 自行授权', () => {
+    const session = observing()
+    expect(session.authorizeConfirmation(beforeConfirmation(), 45)).toBe(false)
+    const forged = observing()
+    expect(forged.receive({ ...boot(AFTER), kind: 'authorize-confirmation' }, 45)).toEqual({ kind: 'stop' })
+    const automatic = observing()
+    expect(automatic.receive(restored(), 45)).toEqual({ kind: 'stop' })
+  })
+
+  it.each([
+    { bootId: BEFORE },
+    { mode: 'editing' },
+    { entry: 'force' },
+    { pageErrors: 1 },
+    { contentHash: 'c'.repeat(64) },
+    { snapshotHash: 'd'.repeat(64) },
+    { clientInstanceId: AFTER },
+    { draftSeq: 2 },
+    { writerId: AFTER },
+    { inFlight: true },
+    { visible: false },
+    { secret: 'never-export' },
+  ])('确认前原件或页面事实变化不能继续：%j', (change) => {
+    const session = observing()
+    expect(session.receive({ ...awaitingConfirmation(), ...change }, 45)).toEqual({ kind: 'stop' })
+    expect(JSON.stringify(session.snapshot())).not.toContain('never-export')
+  })
+
+  it.each([
+    { acquires: [{ clientInstanceId: AFTER, takeover: null, status: 0 }] },
+    { acquires: [{ clientInstanceId: AFTER, takeover: null, status: 201 }] },
+    { saves: [{ status: 0 }] },
+    { saves: [{ status: 200 }] },
+    { revision: 2 },
+  ])('独立核对发现确认前已发请求（包括在途）或云端已变，拒绝许可：%j', (change) => {
+    const session = observing()
+    session.receive(awaitingConfirmation(), 45)
+    expect(session.authorizeConfirmation({ ...beforeConfirmation(), ...change }, 46)).toBe(false)
+    expect(session.receive({ ...boot(AFTER), kind: 'confirm' }, 47, emptyTraffic)).toEqual({ kind: 'stop' })
+  })
+
+  it.each([undefined, { acquires: 1, saves: 0 }, { acquires: 0, saves: 1 }])('发放许可瞬间再次核对请求；缺失或已发请求不能钻核对后的空隙', (traffic) => {
+    const session = observing()
+    session.receive(awaitingConfirmation(), 45)
+    session.authorizeConfirmation(beforeConfirmation(), 46)
+    expect(session.receive({ ...boot(AFTER), kind: 'confirm' }, 47, traffic)).toEqual({ kind: 'stop' })
+  })
+
+  it.each(['repeat', 'wrong-boot', 'cancel', 'timeout'] as const)('许可 %s 时不能再次交付或继续恢复', (ending) => {
+    const session = observing()
+    session.receive(awaitingConfirmation(), 45)
+    session.authorizeConfirmation(beforeConfirmation(), 46)
+    if (ending === 'repeat')
+      expect(session.receive({ ...boot(AFTER), kind: 'confirm' }, 47, emptyTraffic)).toEqual({ kind: 'confirm' })
+    if (ending === 'cancel')
+      session.cancel('用户返回')
+    expect(session.receive({ ...boot(ending === 'wrong-boot' ? BEFORE : AFTER), kind: 'confirm' }, ending === 'timeout' ? 1000 : 48, emptyTraffic)).toEqual({ kind: 'stop' })
   })
 })

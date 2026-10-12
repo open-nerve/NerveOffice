@@ -15,17 +15,18 @@
 //   记下回应用了多久、多久进入编辑；核对服务器上 A 的修改（前两格一定在，第三格只在 answered 时在）；
 // - refresh-save（作者，阅读时开始，跨两次载入）：第一次——点"编辑"，写一格，经控制的 flush 发出保存（驱动脚本让这份文档的保存在服务端停
 //   10 秒），1.5 秒之后还在途就刷新（location.reload）；离开时看到了什么（保存的请求什么时候失败、pagehide 时保存的状态、页面的处理之后 localStorage
-//   里有没有记号、有没有发释放或交出）同步记进 sessionStorage。第二次（刷新之后）——以原 clientInstanceId 普通申请，
-//   不带旧租约精确重放原请求和字节；旧回执已确认后显示最新云端并回阅读，不再次建立空编辑来源。数据库和请求日志独立核对代次与释放顺序。
+//   里有没有记号、有没有发释放或交出）同步记进 sessionStorage。第二次（刷新之后）——新页面不申请编辑权，
+//   不带旧租约精确核对原请求和字节；首次遇 503 时证明原件保留，等原保存提交后点一次重新检查。成功后显示最新云端并保持阅读。数据库和请求日志独立核对零申请、零释放和唯一修订。
 // 与请求编辑的场景（./selftest-request.ts）共用的观察（交接日志、时间线、可见性、页头的文字、内容里的格）在 ./selftest-timeline.ts，A 的前半段
 // （第一格存上、隐藏的那一刻上传第二格、隐藏之后写第三格）在 ./selftest-holder.ts。
 import type { HandoverScenario, SelftestCheck, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
-import type { Session } from './selftest-session.ts'
+import type { SelftestReloadSave, Session } from './selftest-session.ts'
 import type { LogEntry, VisibilityWatch } from './selftest-timeline.ts'
 import { autosaveControl, prepareAutosave, saveRequests } from './selftest-autosave.ts'
 import { facade, round, sleep } from './selftest-capture-common.ts'
 import { waitFor } from './selftest-dom.ts'
 import { holderPrelude, NO_TIMED_CAPTURE_MS } from './selftest-holder.ts'
+import { readSelftestDraft, selftestDraftHash } from './selftest-local-draft.ts'
 import { REFRESH_SAVE_EDIT, TAKEOVER_EDITS, TAKEOVER_TAKER_DELAY_MS } from './selftest-report.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeView, fail, fetchServerContent, fetchServerDocument, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, untilSwitched } from './selftest-session.ts'
 import { cellOf, cellsIn, editingSteady, firstOf, handoverLog, lostNoticeText, observation, since, statusRegionText, statusTexts, timelineWith, watchVisibility } from './selftest-timeline.ts'
@@ -325,7 +326,7 @@ interface RefreshCarry {
   readonly timings: SelftestTiming[]
   readonly timeline: SelftestTimelineEntry[]
   baseRevision: number
-  original?: { readonly query: string, readonly bodyHash: string }
+  original?: { readonly query: string, readonly bodyHash: string, readonly userId: string, readonly draftHash: string }
 }
 
 function readCarry(documentId: string): RefreshCarry | undefined {
@@ -455,7 +456,15 @@ async function refreshBeforeReload(session: Session): Promise<void> {
     const bodyHash = await observed?.bodyHash
     if (observed === undefined || !observed.hasLease || bodyHash === undefined || !/^[a-f0-9]{64}$/.test(bodyHash))
       fail('载入前的请求观察没有留下原保存的查询参数与字节指纹')
-    carry.original = { query: observed.query, bodyHash }
+    const response = await fetch('/api/auth/session', { credentials: 'same-origin' })
+    const auth = await response.json() as { user?: { id?: string } }
+    const userId = auth.user?.id
+    if (!response.ok || userId === undefined)
+      fail('未能独立确认刷新夹具的用户')
+    const draft = await readSelftestDraft(userId, session.host.documentId)
+    if (draft?.inFlight === null || draft?.inFlight === undefined)
+      fail('保存在途时磁盘没有原请求')
+    carry.original = { query: observed.query, bodyHash, userId, draftHash: await selftestDraftHash(draft) }
     if (session.host.view().save !== 'saving')
       fail(`保存状态是 ${session.host.view().save ?? '没有'}（应当是 saving）`)
     return `写下 ${REFRESH_SAVE_EDIT.cell}，经控制的 flush 发出保存（基准修订号 ${revision}）；${SAVE_HELD_CONFIRM_MS} ms 之后它还在途（保存状态 saving）：停在服务端`
@@ -476,7 +485,7 @@ async function refreshBeforeReload(session: Session): Promise<void> {
   clearCarry()
 }
 
-/** 刷新之后交回离开时的观察，核对自动申请、原请求重放与最终阅读。 */
+/** 刷新之后交回离开时的观察，核对零申请、未知结果下的明确重查与最终阅读。 */
 async function refreshAfterReload(session: Session, carry: RefreshCarry): Promise<void> {
   clearCarry()
   session.checks.push(...carry.checks)
@@ -522,6 +531,22 @@ export function leavingSummary(timeline: readonly SelftestTimelineEntry[]): { re
   return { problems, text }
 }
 
+/** 核对每次真实请求，不能用第二次成功掩盖换字节、租约或未许可的额外重试。 */
+export async function refreshReceiptProblem(original: { readonly query: string, readonly bodyHash: string } | undefined, attempts: readonly SelftestReloadSave[], retryAt?: number): Promise<string | undefined> {
+  if (original === undefined || attempts.length !== (retryAt === undefined ? 1 : 2))
+    return '原请求指纹缺失或核对次数不符'
+  for (const attempt of attempts) {
+    if (attempt.query !== original.query || await attempt.bodyHash !== original.bodyHash || attempt.hasLease)
+      return '核对没有使用原请求参数和原字节，或携带了租约'
+  }
+  if (attempts.at(-1)?.status !== 200)
+    return '最后一次核对没有取得成功回执'
+  const retried = attempts[1]
+  if (retryAt !== undefined && (attempts[0]?.status !== 503 || retried === undefined || retried.wall < retryAt))
+    return '繁忙后核对必须由本次明确重查发起，且只允许 503 后的一次 200'
+  return undefined
+}
+
 async function refreshSteps(session: Session, carry: RefreshCarry, observations: SelftestTimelineEntry[]): Promise<void> {
   await check(session, 'refresh.pagehide', async () => {
     const summary = leavingSummary(carry.timeline)
@@ -529,31 +554,87 @@ async function refreshSteps(session: Session, carry: RefreshCarry, observations:
       fail(`${summary.problems.join('；')}（${summary.text}）`)
     return summary.text
   })
-  const recovered = await check(session, 'refresh.automatic', async () => {
+  const recovered = await check(session, 'refresh.receipt', async () => {
+    const previous = session.probe
+    const original = carry.original
+    if (original === undefined)
+      fail('刷新前未保留原请求与磁盘指纹')
+    if (!await waitFor(() => session.host.reloadSaves?.()[0]?.status !== undefined, CHECK_TIMEOUT_MS, 50))
+      fail('首次旧回执核对没有结束')
+    let retryAt: number | undefined
+    if (session.host.reloadSaves?.()[0]?.status === 503) {
+      const retry = (): HTMLElement | undefined => {
+        const button = chromeButton(session, '重新检查本机修改')
+        return button?.hasAttribute('disabled') === false ? button : undefined
+      }
+      if (!await waitFor(() => retry() !== undefined, SIGNAL_TIMEOUT_MS))
+        fail('核对繁忙后没有可用的重新检查入口')
+      if (session.host.view().mode !== 'reading' || !session.host.chrome.textContent?.includes('中断前的保存结果尚未确认，本机修改仍保留'))
+        fail('首次核对繁忙后没有保持阅读并说明原件保留')
+      const disk = await readSelftestDraft(original.userId, session.host.documentId)
+      if (disk === undefined || await selftestDraftHash(disk) !== original.draftHash)
+        fail('首次核对繁忙后原件已经变化或被清理')
+      observations.push(observation('receipt-unknown', { status: 503, draftHash: original.draftHash }))
+      // 保留驱动的 10 秒数据库阻塞：独立观察原保存真正提交，随后才点击一次可见重查。
+      const deadline = performance.now() + CHECK_TIMEOUT_MS
+      for (;;) {
+        const { revision } = await fetchServerDocument(session.host.documentId)
+        if (revision === carry.baseRevision + 1)
+          break
+        if (revision !== carry.baseRevision || performance.now() >= deadline)
+          fail(`原保存没有按预期提交：修订号 ${revision}`)
+        await sleep(100)
+      }
+      if (session.host.reloadSaves?.().length !== 1 || handoverLog().log().some(entry => entry.kind === 'acquire'))
+        fail('明确重查前出现隐式重试或申请')
+      const preserved = await readSelftestDraft(original.userId, session.host.documentId)
+      if (preserved === undefined || await selftestDraftHash(preserved) !== original.draftHash)
+        fail('等待原保存期间磁盘原件发生变化')
+      const button = retry()
+      if (button === undefined || button.hasAttribute('disabled'))
+        fail('原保存提交后重新检查入口不可用')
+      retryAt = Date.now()
+      observations.push(observation('receipt-recheck', { retryAt }))
+      button.click()
+    }
+    const settled = (): boolean => {
+      const probe = window.__nerveEditorProbe
+      return session.host.reloadSaves?.().at(-1)?.status === 200
+        && session.host.view().mode === 'reading' && session.host.view().surface === 'steady'
+        && probe !== undefined && cellOf(probe.snapshot(), REFRESH_SAVE_EDIT) === REFRESH_SAVE_EDIT.value
+    }
+    if (!await waitFor(settled, CHECK_TIMEOUT_MS, 50))
+      fail(`旧回执或最新阅读正文没有就绪（${describeView(session)}）`)
+    if (window.__nerveEditorProbe !== previous)
+      adoptEditor(session, previous)
     const log = handoverLog().log()
     const acquires = log.filter(entry => entry.kind === 'acquire')
-    const result = firstOf(log, 'acquire-result')
-    if (acquires.length !== 1 || acquires[0]?.trigger !== 'open' || acquires[0]?.takeover !== null || result?.result !== 'acquired')
-      fail('刷新后没有唯一一次打开时的普通申请并取得编辑权')
+    if (acquires.length !== 0 || log.some(entry => entry.kind === 'acquire-result'))
+      fail('仅核对旧回执的新页面不应申请编辑权')
     if (log.some(entry => entry.kind === 'takeover-start' || entry.kind === 'entered'))
       fail('自动核对不应走手动接管，也不应在旧回执确认后空白进入编辑')
     if (session.host.page.readOnly !== true || session.host.view().mode !== 'reading' || session.host.surface.getAttribute('data-editor-access') !== 'read')
       fail(`旧回执确认后没有保持阅读（${describeView(session)}）`)
-    const original = carry.original
     const replay = session.host.reloadSaves?.() ?? []
-    const mark = replay[0]
-    if (original === undefined || mark === undefined || replay.length !== 1)
-      fail(`原请求指纹缺失或新页面不止一次重放（${replay.length} 次）`)
-    if (mark.query !== original.query || await mark.bodyHash !== original.bodyHash || mark.hasLease || mark.status !== 200)
-      fail('重放没有使用原请求参数和原字节，或携带了租约，或未取得成功回执')
+    const problem = await refreshReceiptProblem(original, replay, retryAt)
+    if (problem !== undefined)
+      fail(problem)
+    if (await readSelftestDraft(original.userId, session.host.documentId) !== undefined)
+      fail('旧回执确认后没有条件清理原件')
+    const mark = replay.at(-1)
+    if (mark === undefined)
+      fail('没有成功核对的请求')
     session.facts.originalQuery = original.query
     session.facts.originalBodyHash = original.bodyHash
     session.facts.replayHasLease = mark.hasLease
-    session.facts.replayStatus = mark.status
+    session.facts.replayStatus = mark.status ?? 'pending'
+    session.facts.receiptPath = retryAt === undefined ? 'direct' : 'explicit-recheck'
+    session.facts.replayAttempts = replay.length
+    session.facts.receiptRetryAt = retryAt ?? null
     observations.push(observation('confirmed-reading', { query: mark.query, bodyHash: original.bodyHash, replayAt: mark.wall }))
     session.path = 'confirmed-reading'
-    return '原实例打开时普通申请，原请求/原字节不带租约核对成功；显示云端并保持阅读，没有手动接管或空编辑来源'
-  })
+    return '新页面零申请；原请求/原字节不带租约核对成功，显示云端并保持阅读，没有手动接管或空编辑来源'
+  }, CHECK_TIMEOUT_MS * 3 + SIGNAL_TIMEOUT_MS)
   if (!recovered)
     return
   await check(session, 'refresh.server', async () => {

@@ -77,7 +77,7 @@ async function main(): Promise<void> {
   let ledger = parseOwnedPages(JSON.parse(ledgerBytes.toString('utf8')))
   const continuity = createProfileContinuity(profile, ledger)
   const runId = randomUUID()
-  const report: Record<string, unknown> = { kind: 'real-safari-page-crash', runId, startedAt, profileProofSha256: sha256(proofBytes), ownedPagesSha256: sha256(ledgerBytes), profile, killRequested: values['kill-owned-page'], outcome: 'unverified', signalAttempted: false, signalsSent: 0 }
+  const report: Record<string, unknown> = { kind: 'real-safari-page-crash', recovery: 'explicit-confirmation', runId, startedAt, profileProofSha256: sha256(proofBytes), ownedPagesSha256: sha256(ledgerBytes), profile, killRequested: values['kill-owned-page'], outcome: 'unverified', signalAttempted: false, signalsSent: 0 }
   // 先证实报告可写且不覆盖旧原件；失败时还没有启动任何资源。
   mkdirSync(dirname(output), { recursive: true })
   writeFileSync(output, `${JSON.stringify(report, null, 2)}\n`, { flag: 'wx', mode: 0o600 })
@@ -161,7 +161,11 @@ async function main(): Promise<void> {
     const controlUrl = `${proxy.origin}${proxy.controlPath}`
     session = createCrashSession({ mode: 'process-kill', runId, documentId, userId: owner.id, contentHash: sha256(CONTENT), deadline })
     const currentSession = session
-    proxy.configure({ documentId, entryFragment: new URLSearchParams({ user: owner.username, password: owner.password, document: documentId, scenario: 'crash-recovery', next: controlUrl }).toString(), receive: (message, now) => currentSession.receive(message, now) })
+    const currentProxy = proxy
+    proxy.configure({ documentId, entryFragment: new URLSearchParams({ user: owner.username, password: owner.password, document: documentId, scenario: 'crash-recovery', next: controlUrl }).toString(), receive: (message, now) => {
+      const http = currentProxy.evidence()
+      return currentSession.receive(message, now, { acquires: http.acquires.length, saves: http.saves.length })
+    } })
     report.documentId = documentId
     report.userId = owner.id
     const context: ProfilePageContext = { url: selftestEditorUrl(proxy.origin, documentId, 'crash-recovery', controlUrl), uid: process.getuid(), mainPid, profile, deadline }
@@ -264,7 +268,7 @@ async function main(): Promise<void> {
     if (!session.signaled(result.receipt.sentAt))
       throw new CheckError('实际信号收据未能进入恢复阶段')
     proxy.observeRecovery()
-    say(`已结束专用测试页 PID ${target.pid}，等待 Safari 自行重载和恢复`)
+    say(`已结束专用测试页 PID ${target.pid}，等待 Safari 自行重载，再核对明确恢复`)
     stage = '确认旧页面进程退出'
     const exitDeadline = Date.now() + 5000
     while (readProfileIdentities(binary, [target.pid]).some(current => current.startedAtUs === target.startedAtUs)) {
@@ -274,12 +278,27 @@ async function main(): Promise<void> {
       await delay(50)
     }
     report.oldProcessGoneAt = Date.now()
-    stage = '观察 Safari 自动重载恢复'
+    stage = '观察 Safari 重载后的阅读与明确恢复'
     const recoveryDeadline = Date.now() + 120_000
     while (session.snapshot().phase !== 'restored') {
       guard()
       if (Date.now() >= recoveryDeadline)
-        throw new CheckError('Safari 未在两分钟内自行重载并完成恢复')
+        throw new CheckError('Safari 未在两分钟内重载并完成明确恢复')
+      if (session.snapshot().phase === 'awaiting-confirmation') {
+        const reading = capture()
+        const replacement = identifyProfilePage(context, reading, Date.now())
+        if (replacement.kind !== 'identified' || replacement.target.startedAtUs === target.startedAtUs)
+          throw new CheckError('确认前尚未取得原标签页的新进程身份')
+        const cloud = await cloudState(documentId)
+        guard()
+        const http = proxy.evidence()
+        report.beforeConfirmation = { at: Date.now(), reading, cloud, http }
+        if (http.problems.length > 0 || cloud.contentHash !== cloudBefore.contentHash)
+          throw new CheckError('确认前 HTTP 观察不完整或云端正文发生变化')
+        if (!session.authorizeConfirmation({ ...cloud, ...http }, Date.now()))
+          throw new CheckError('确认前的阅读、原件、零申请/保存或云端事实不符')
+        say('确认前阅读、原件与零写请求已核对；许可测试页点击一次恢复入口')
+      }
       await delay(100)
     }
     guard()
@@ -301,10 +320,10 @@ async function main(): Promise<void> {
     if (http.problems.length > 0)
       throw new CheckError('真实 HTTP 观察不完整')
     if (session.finish({ ...cloud, ...http }, Date.now()).length > 0)
-      throw new CheckError('原身份普通申请、正文或单次修订核对失败')
+      throw new CheckError('明确确认后的新身份、对应申请入口、正文或单次修订核对失败')
     guard()
     report.outcome = 'passed'
-    say('真实进程崩溃、自动恢复、原身份普通申请与唯一一次保存全部通过')
+    say('真实进程崩溃、确认前隔离、明确恢复、新身份与唯一一次保存全部通过')
   }
   catch (error) {
     report.failure = { stage, reason: error instanceof CheckError ? error.message : '底层操作失败，未取得完整验证证据', errorType: error instanceof Error ? error.name : 'unknown' }

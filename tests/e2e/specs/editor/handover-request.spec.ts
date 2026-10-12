@@ -9,6 +9,7 @@
 // 容器 E2E 也跑（生产镜像里定时的自动保存照常运行）：持有者的修改由交出前的保存或之前的自动保存存上，断言只看结果（服务器上的内容、租约怎样结束）
 import type { Page, Request } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
+import { editStatusSchema } from '@nerve-office/contracts'
 import { pauseTime, setPageHidden } from '../../support/autosave.ts'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, editLeaseEpoch, editLeaseReservation, editLeaseTakeover, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -35,6 +36,15 @@ async function sharedDocument(prefix: string): Promise<{ readonly holder: TestUs
   const space = await createTeamSpace(prefix, lead, [[lead, 'admin'], [holder, 'editor'], [requester, 'editor'], [third, 'editor']])
   const documentId = await createDocumentIn(space.id, lead, '共同的表')
   return { holder, requester, third, documentId }
+}
+
+/** 旧版会话记号反例：根据实际服务端请求造出旧格式，新版页面自身不再写入它。 */
+async function legacyRequestMarker(page: Page, documentId: string): Promise<string> {
+  const response = await page.request.get(`/api/documents/${documentId}/edit-lease`)
+  expect(response.status()).toBe(200)
+  const status = editStatusSchema.parse(await response.json())
+  expect(status.request?.mine).toBe(true)
+  return JSON.stringify({ v: 1, requestedAt: status.request?.requestedAt })
 }
 
 /** 写进正则的一段原文 */
@@ -442,16 +452,16 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     await expect(requestPrompt(page)).toBeVisible()
   })
 
-  test('US-M3-06 复制标签页不接手正在等的请求（复验 C2）：乙在 R1 请求编辑、在等；复制 R1 得到的 R2 带着同样的"发出过请求"的记号（sessionStorage 随之复制），而 R1 还持有"发出过请求"的锁——R2 只说"你已在别处请求编辑这份文档"，不进入等待，清掉复制来的记号；R2 关掉不撤回请求——R1 照旧在等，甲的提示照旧', async ({ page, anotherDevice }) => {
+  test('US-M3-06 继承合法旧请求记号也不接手正在等的请求：原页存活，副本保持阅读、不续期、不撤回；清掉旧记号', async ({ page, anotherDevice }) => {
     const { holder, requester, documentId } = await sharedDocument('rq-dup')
     await holderEditing(page, holder, documentId)
     await requesterWaiting(anotherDevice, requester, holder, documentId)
     await prompted(page, requester, documentId)
 
-    // 复制标签页（Playwright 没有这个操作）：同一个浏览器上下文里新开一页，载入之前把 R1 的记号原样放进它的 sessionStorage
+    // 旧版记号夹具，不宣称原生 Duplicate：新页载入前注入兼容的旧值，新版原页从未写入。
     const key = `nerve-office:edit-request:${documentId}`
-    const marker = await anotherDevice.evaluate(name => sessionStorage.getItem(name), key)
-    expect(marker).not.toBeNull()
+    expect(await anotherDevice.evaluate(name => sessionStorage.getItem(name), key)).toBeNull()
+    const marker = await legacyRequestMarker(anotherDevice, documentId)
     const second = await anotherDevice.context().newPage()
     await second.addInitScript(([name, value]) => {
       if (sessionStorage.getItem(name) === null)
@@ -484,13 +494,13 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     await expect(requestPrompt(page)).toBeVisible()
   })
 
-  test('US-M3-06 发出过请求的那一页已经不在（关掉时撤回没送到，"发出过请求"的锁随页面放开）：带着它的记号的页面恢复等待（审查 B2、复验 C2）——不另发出，照常续期', async ({ page, anotherDevice }) => {
+  test('US-M3-06 原请求页已消失且撤回未送达：继承旧记号的新页零续期零申请，明确点请求编辑后才继续等待并交接', async ({ page, anotherDevice }) => {
     const { holder, requester, documentId } = await sharedDocument('rq-gone')
     await holderEditing(page, holder, documentId)
     await requesterWaiting(anotherDevice, requester, holder, documentId)
     const key = `nerve-office:edit-request:${documentId}`
-    const marker = await anotherDevice.evaluate(name => sessionStorage.getItem(name), key)
-    expect(marker).not.toBeNull()
+    expect(await anotherDevice.evaluate(name => sessionStorage.getItem(name), key)).toBeNull()
+    const marker = await legacyRequestMarker(anotherDevice, documentId)
 
     // R1 离开：撤回送不到服务端（拦下），请求还在；页面随即关掉（与"旧页已关、它的释放没送到"同一个做法：关页时的 keepalive 拦不住）
     const requestPath = `/api/documents/${documentId}/edit-lease/request`
@@ -502,7 +512,7 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     const context = anotherDevice.context()
     await anotherDevice.close()
 
-    // 同一个标签页刷新之后（sessionStorage 还在）：载入之前把记号放回去
+    // 遗留记号夹具模拟旧页消失后的载入；新页不得把空闲锁当成原页证明。
     const reopened = await context.newPage()
     await reopened.addInitScript(([name, value]) => {
       if (sessionStorage.getItem(name) === null)
@@ -513,16 +523,23 @@ test.describe('US-M3-06 请求编辑与交出', () => {
       if (new URL(request.url()).pathname === requestPath)
         sent.push(request.method())
     })
-    const renewed = reopened.waitForResponse(response => response.request().method() === 'PUT' && new URL(response.url()).pathname === requestPath)
-    // 打开即恢复等待：页头是"取消请求"（不是 openReader 等的"请求编辑"）
-    await reopened.goto(`/documents/${documentId}`)
-    await waitForEditorAccess(reopened, 'read')
+    const acquisitions = recordAcquisitions(reopened, documentId)
+    await openReader(reopened, documentId)
+    await expect(statusRegion(reopened)).toContainText('你已在别处请求编辑这份文档')
+    await expect(cancelRequestButton(reopened)).toHaveCount(0)
+    expect(await reopened.evaluate(name => sessionStorage.getItem(name), key)).toBeNull()
+    expect(sent).toEqual([])
+    expect(acquisitions).toEqual([])
+
+    const sentAgain = reopened.waitForResponse(response => response.request().method() === 'POST' && new URL(response.url()).pathname === requestPath)
+    await requestEditButton(reopened).click()
+    expect(((await (await sentAgain).json()) as { readonly kind: string }).kind).toBe('pending')
     await expect(cancelRequestButton(reopened)).toBeVisible()
-    // 只看在等谁：持有者的修改由定时的自动保存存上（容器 E2E 与 E2E_AUTOSAVE=running），晚于这一页载入时状态区另有"有更新"的一句
     await expect(statusRegion(reopened)).toContainText(waitingFor(holder))
-    await expect(statusRegion(reopened)).not.toContainText('你已在别处请求编辑这份文档')
-    expect(((await (await renewed).json()) as { readonly kind: string }).kind).toBe('pending')
-    expect(sent).not.toContain('POST')
+    await prompted(page, requester, documentId)
+    await requestPrompt(page).getByRole('button', { name: '交出', exact: true }).click()
+    await waitForEditorAccess(reopened, 'edit')
+    expect(acquisitions).toEqual([null])
   })
 
   test('US-M3-06 请求方的续期一直得到 CSRF_TOKEN_INVALID（例如网关剥掉了请求头）、确认会话照常是本人：续期与确认会话按续期的节奏，不按网络往返的速度连着发（审查 B1）', async ({ page, anotherDevice }) => {

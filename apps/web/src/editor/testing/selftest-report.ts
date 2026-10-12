@@ -249,7 +249,7 @@ export interface SelftestReport {
   readonly timings?: readonly SelftestTiming[] | undefined
   /**
    * 交接的场景（M3-P5）走了哪条路：takeover-taker 是 answered（A 回应了、先保存再交出）或 silent（3 秒没有回应、本人接管并抢锁）；
-   * takeover-holder 是 handed-over（交出、回到阅读）或 lost（失去编辑权）；refresh-save 是 confirmed-reading（原实例自动核对原请求后显示云端、回阅读）。
+   * takeover-holder 是 handed-over（交出、回到阅读）或 lost（失去编辑权）；refresh-save 是 confirmed-reading（新页面零申请核对原请求后显示云端、保持阅读）。
    * 请求编辑的两条路（M3-P6）：request-waiter 是 entered-on-return（在后台停在交给了我、回到前台才进入）或别的（./selftest-request.ts 的 WaiterPath）；
    * paused-holder 是 lost-after-pause（被暂停，回到前台才得知失去编辑权）、handed-over（没被暂停，空闲满 2 分钟自动交出）或别的（PausedHolderPath）
    */

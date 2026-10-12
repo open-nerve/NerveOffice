@@ -1,9 +1,10 @@
+import type { SelftestTimelineEntry } from './selftest-report.ts'
 // 交接的页面自检（selftest-handover.ts）里的判读：B 的交接日志判读成一条路（answered、silent）与各段的用时，A 的日志判读成一句话，
 // 刷新之前离开时的观察判读成先后与问题（真实 Safari 复核要回答的：WebKit 是不是先取消在途的保存、之后才派发 pagehide）。
-import type { SelftestTimelineEntry } from './selftest-report.ts'
+import type { SelftestReloadSave } from './selftest-session.ts'
 import type { LogEntry } from './selftest-timeline.ts'
 import { describe, expect, it } from 'vitest'
-import { leavingSummary, pendingSaveKeyOf, summarizeHolder, summarizeTaker } from './selftest-handover.ts'
+import { leavingSummary, pendingSaveKeyOf, refreshReceiptProblem, summarizeHolder, summarizeTaker } from './selftest-handover.ts'
 
 /** 一条日志：at 是本页的单调时钟，墙上时间取 1000 + at */
 function entry(kind: string, at: number, fields: Readonly<Record<string, unknown>> = {}): LogEntry {
@@ -159,5 +160,28 @@ describe('刷新之前离开时的观察（leavingSummary）', () => {
 describe('记号的键', () => {
   it('与编辑器页的 pending-save-marker.ts 相同（那边的单元测试钉着同一个写法）：nerve-office:pending-save:<文档 id>', () => {
     expect(pendingSaveKeyOf('d1')).toBe('nerve-office:pending-save:d1')
+  })
+})
+
+describe('刷新旧回执的直接确认与明确重查', () => {
+  const original = { query: 'original-query', bodyHash: 'original-gzip-hash' }
+  const attempt = (patch: Partial<SelftestReloadSave> = {}): SelftestReloadSave => ({ wall: 10, query: original.query, bodyHash: Promise.resolve(original.bodyHash), hasLease: false, status: 200, ...patch })
+
+  it('首次直接成功，或繁忙后明确重查一次；所有核对都保持原请求与无租约', async () => {
+    expect(await refreshReceiptProblem(original, [attempt()])).toBeUndefined()
+    expect(await refreshReceiptProblem(original, [attempt({ status: 503 }), attempt({ wall: 30 })], 20)).toBeUndefined()
+  })
+
+  it.each(['query', 'bytes', 'lease'] as const)('第二次成功也不能掩盖第一次核对改变 %s', async (change) => {
+    const bad = attempt({ status: 503, ...(change === 'query' ? { query: 'changed' } : change === 'bytes' ? { bodyHash: Promise.resolve('changed') } : { hasLease: true }) })
+    expect(await refreshReceiptProblem(original, [bad, attempt({ wall: 30 })], 20)).toBeDefined()
+  })
+
+  it('没有明确点击、点击之前重试或多次核对均不算通过', async () => {
+    const first = attempt({ status: 503 })
+    expect(await refreshReceiptProblem(original, [first, attempt({ wall: 30 })])).toBeDefined()
+    expect(await refreshReceiptProblem(original, [first, attempt({ wall: 19 })], 20)).toBeDefined()
+    expect(await refreshReceiptProblem(original, [first, attempt({ wall: 30 }), attempt({ wall: 31 })], 20)).toBeDefined()
+    expect(await refreshReceiptProblem(original, [attempt(), attempt({ wall: 30 })], 20)).toBeDefined()
   })
 })

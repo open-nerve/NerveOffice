@@ -10,7 +10,6 @@ import type { EditorPage, EditorPageApi } from './editor-page.ts'
 import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { MarkerStorage } from './pending-save-marker.ts'
 import type { RecoveryReader } from './recovery/recovery-reader.ts'
-import type { ReloadIdentity, ReloadIdentityOptions } from './recovery/reload-identity.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
@@ -30,9 +29,6 @@ import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
-import { reloadIdentitySelector, reloadInstanceLock, selectReloadIdentity } from './recovery/reload-identity.ts'
-import { reloadStorage } from './recovery/reload-marker.test-support.ts'
-import { reloadMarker } from './recovery/reload-marker.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { lockNameOf, sameBrowserFor } from './same-browser.ts'
 
@@ -229,7 +225,6 @@ interface CreateOptions {
 }
 
 interface Setup {
-  readonly reloadIdentity?: Parameters<typeof createEditorPage>[0]['reloadIdentity']
   readonly recoveryReader?: () => RecoveryReader
   readonly localDrafts?: Parameters<typeof createEditorPage>[0]['localDrafts']
   readonly network?: Parameters<typeof createEditorPage>[0]['network']
@@ -303,7 +298,6 @@ function setup(options: Setup = {}) {
   const sameBrowsers: SameBrowser[] = []
   let id = 0
   const editorPage = createEditorPage({
-    reloadIdentity: options.reloadIdentity,
     localDrafts: options.localDrafts ?? { supported: () => false },
     recoveryReader: options.recoveryReader ?? (() => ({ observe: async () => ({ kind: 'observed', observation: { key: { userId: ALICE.user.id, documentId: DOCUMENT_ID }, id: 'absent' }, record: { kind: 'absent' }, writer: undefined }), refreshKey: async () => ({ kind: 'failed', error: { name: 'UnexpectedRefresh', message: '无草稿不需刷新密钥' } }), remove: async () => ({ kind: 'absent' }), notices: async () => ({ kind: 'notices', notices: [] }), clearNotice: async () => ({ kind: 'absent' }), dispose: () => {} })),
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
@@ -362,236 +356,90 @@ async function recoveryReader() {
   return { reader, observe, remove, notices, clearNotice, original, snapshot }
 }
 
-async function reloadedPage(type = 'reload', overrides: Setup = {}) {
+/** 模拟旧版本会话记号尚未清理；页面协调器自身也不得把它当成新页身份。 */
+async function pageWithLegacyMarker(overrides: Setup = {}) {
   const r = await recoveryReader()
   const meta = r.original.record.meta
-  const key = { userId: meta.userId, documentId: meta.documentId }
-  const expected = { ...key, clientInstanceId: meta.writtenBy, writeEpoch: meta.writeEpoch, writerId: meta.writerId }
-  const storage = reloadStorage()
-  const marker = reloadMarker(key, { storage: () => storage })
-  marker.write(expected)
-  const browser = fakeBrowser()
-  const identities: ReloadIdentity[] = []
-  const selection = reloadIdentitySelector({ navigation: { type, wasDiscarded: false }, storage: () => storage, locks: browser.tab('reloaded').locks })
-  const select = vi.fn(async (input: Omit<ReloadIdentityOptions, 'navigation' | 'marker' | 'locks'>) => {
-    const identity = await selection(input)
-    identities.push(identity)
-    return identity
-  })
-  const h = setup({ editIntent: false, newId: () => '0199a2c4-1f2e-4a3b-8c4d-0000000000ff', reloadIdentity: select, recoveryReader: () => r.reader, ...overrides })
+  const markerKey = `nerve-office:reload:${meta.userId}:${meta.documentId}`
+  window.sessionStorage.setItem(markerKey, JSON.stringify({ v: 1, userId: meta.userId, documentId: meta.documentId, clientInstanceId: meta.writtenBy, writeEpoch: meta.writeEpoch, writerId: meta.writerId }))
+  pages.push({ dispose: () => window.sessionStorage.removeItem(markerKey) })
+  const h = setup({ editIntent: false, newId: () => '0199a2c4-1f2e-4a3b-8c4d-0000000000ff', recoveryReader: () => r.reader, ...overrides })
   vi.spyOn(h.fake.editor, 'capture').mockReturnValue(r.snapshot)
-  return { ...h, r, key, expected, marker, browser, identities, select }
+  return { ...h, r }
 }
 
-async function persistentPageDrafts() {
-  const key = await newKey(1)
-  const store = fakeDraftStore()
-  const keeper = createLocalKeyKeeper({ fetch: async () => key, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
-  const host = async () => {
-    const writer = createDraftWriter({ store: store.store, now: Date.now })
-    let broken = false
-    return { kind: 'in-process' as const, writer, broken: () => broken, dispose: () => {
-      broken = true
-      writer.dispose()
-    } }
-  }
-  let serial = 0
-  const options = { localDrafts: { keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) }, newId: () => `0199a2c4-1f2e-4a3b-8c4d-${String(++serial).padStart(12, '0')}` }
-  return { store, options }
-}
-
-describe('页面自动重载身份与实际恢复', () => {
-  it('先确认会话/内容、释放短期 Reader，再以旧实例普通申请；正文仍走统一恢复准备', async () => {
-    const h = await reloadedPage()
-    h.editLease.acquire.mockImplementation(async () => {
-      expect(h.api.session).toHaveBeenCalledOnce()
-      expect(h.api.document).toHaveBeenCalledOnce()
-      expect(h.api.content).toHaveBeenCalledOnce()
-      expect(h.r.reader.dispose).toHaveBeenCalledOnce()
-      return ACQUIRED
-    })
+describe('新页面身份与明确恢复', () => {
+  it('继承合法旧记号仍先阅读，明确恢复才用本页新身份申请与恢复正文', async () => {
+    const h = await pageWithLegacyMarker()
     await h.editorPage.load()
-    expect(h.select).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.decision?.kind).toBe('restore'))
+    expect(h.editorPage.view().mode?.kind).toBe('reading')
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.r.remove).not.toHaveBeenCalled()
+    await h.editorPage.enterEditing()
+    expect(h.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, '0199a2c4-1f2e-4a3b-8c4d-0000000000ff')
+    expect(h.editLease.acquire.mock.calls[0]?.[1]).not.toBe(h.r.original.record.meta.writtenBy)
     expect(h.editorPage.view().mode?.kind).toBe('editing')
-    expect(h.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, h.expected.clientInstanceId)
-    expect(h.r.observe).toHaveBeenCalledTimes(2)
-    expect(h.createEditor).toHaveBeenCalledWith(expect.objectContaining({ access: 'edit', snapshot: h.r.snapshot }))
+    expect(h.createEditor.mock.calls.at(-1)?.[0].snapshot).toBe(h.r.snapshot)
     await h.editorPage.save()
     expect(h.api.save).toHaveBeenCalledOnce()
   })
 
-  it.each(['navigate', 'back_forward'])('普通 %s 不自动申请并清掉继承记号，用户显式编辑仍可恢复', async (type) => {
-    const h = await reloadedPage(type)
+  it('恢复点击等待会话确认时换了原件来源，仍须重新确认，不能改选随后发现的新候选', async () => {
+    const h = await pageWithLegacyMarker()
     await h.editorPage.load()
-    expect(h.editorPage.view().mode?.kind).toBe('reading')
-    expect(h.marker.read()).toBeUndefined()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.decision?.kind).toBe('restore'))
+    h.api.session.mockRejectedValueOnce(new NetworkError('断网'))
+    await h.editorPage.recheckSession()
+    const answer = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(answer.promise)
+    const entering = h.editorPage.enterEditing()
+    await settle()
     expect(h.editLease.acquire).not.toHaveBeenCalled()
-    await h.editorPage.enterEditing()
-    expect(h.editLease.acquire.mock.calls[0]?.[1]).not.toBe(h.expected.clientInstanceId)
-    expect(h.editorPage.view().mode?.kind).toBe('editing')
+    const original = h.r.original
+    h.r.observe.mockResolvedValue({ ...original, observation: { ...original.observation, id: 'new-writer' }, record: { ...original.record, meta: { ...original.record.meta, writerId: 'new-writer' } } })
+    answer.resolve(ALICE)
+    await entering
+    expect(h.editorPage.view().mode?.kind).toBe('reading')
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.r.remove).not.toHaveBeenCalled()
+    expect(h.createEditor.mock.calls.some(call => call[0].access === 'edit')).toBe(false)
   })
 
-  it.each(['session', 'document', 'content'] as const)('复制页首次 %s 请求失败也先失效继承资格，原页关闭后刷新不能冒充原实例', async (request) => {
-    const h = await reloadedPage('navigate')
+  it.each(['session', 'document', 'content'] as const)('首次 %s 请求失败、之后重新打开，也不以旧记号自动申请', async (request) => {
+    const h = await pageWithLegacyMarker()
     h.api[request].mockRejectedValueOnce(new NetworkError())
     await h.editorPage.load()
     expect(h.editLease.acquire).not.toHaveBeenCalled()
-    expect(h.marker.read()).toBeUndefined()
+    expect(h.r.remove).not.toHaveBeenCalled()
     h.editorPage.dispose()
-    const refreshed = setup({ editIntent: false, reloadIdentity: async input => selectReloadIdentity({ ...input, navigation: { type: 'reload', wasDiscarded: false }, marker: h.marker, locks: h.browser.tab('refreshed-copy').locks }), recoveryReader: () => h.r.reader })
+    const refreshed = setup({ editIntent: false, recoveryReader: () => h.r.reader })
     await refreshed.editorPage.load()
     expect(refreshed.editLease.acquire).not.toHaveBeenCalled()
     expect(refreshed.editorPage.view().mode?.kind).toBe('reading')
   })
 
-  it.each(['exit', 'revoked', 'revoked-late-detail'] as const)('页面只在当前来源真正写成本机后记新 writer；%s 后迟到捕获不能复活记号', async (ending) => {
-    const { store, options } = await persistentPageDrafts()
-    const h = await reloadedPage('navigate', options)
+  it('恢复后退出未保存成功仍保留正文，隐藏与 pagehide 不删除原件', async () => {
+    const h = await pageWithLegacyMarker()
     await h.editorPage.load()
     await h.editorPage.enterEditing()
-    expect(h.marker.read()).toBeUndefined()
-    const editor = h.fakes.at(-1)!
-    vi.spyOn(editor.editor, 'changeSeq').mockReturnValue(1)
-    editor.changeListeners.forEach(listener => listener())
-    const receipt = deferred<SaveContentResponse>()
-    h.api.save.mockImplementationOnce(async () => receipt.promise)
-    const saving = h.editorPage.save()
-    await vi.waitFor(() => expect(h.marker.read()).toBeDefined())
-    const recorded = h.marker.read()!
-    expect(recorded.clientInstanceId).toBe(h.editLease.acquire.mock.calls[0]?.[1])
-    expect(recorded.writeEpoch).toBe(ACQUIRED.writeEpoch)
-    expect(store.rawDraft(h.key)).toMatchObject({ writtenBy: recorded.clientInstanceId, writeEpoch: recorded.writeEpoch, writerId: recorded.writerId })
-    receipt.resolve({ revision: 4, savedAt: '2026-10-11T09:00:00.000Z', unchanged: false })
-    await saving
-    if (ending === 'exit') {
-      await h.editorPage.exitEditing()
-      expect(h.editorPage.view().mode?.kind).toBe('reading')
-    }
-    else {
-      vi.mocked(editor.editor.changeSeq).mockReturnValue(2)
-      editor.changeListeners.forEach(listener => listener())
-      const writing = store.holdNext('writeDraft')
-      h.api.save.mockResolvedValueOnce({ revision: 5, savedAt: '2026-10-11T09:01:00.000Z', unchanged: false })
-      const late = h.editorPage.save()
-      await writing.reached
-      const oldDetail = deferred<DocumentDetail>()
-      if (ending === 'revoked-late-detail')
-        h.api.document.mockReturnValueOnce(oldDetail.promise)
-      const oldRefresh = ending === 'revoked-late-detail' ? h.editorPage.refreshDetail() : undefined
-      const newDetail = deferred<DocumentDetail>()
-      h.api.document.mockReturnValueOnce(newDetail.promise)
-      const newRefresh = h.editorPage.refreshDetail()
-      newDetail.resolve({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } })
-      await newRefresh
-      expect(h.marker.read()).toBeUndefined()
-      oldDetail.resolve(DETAIL)
-      await oldRefresh
-      writing.release()
-      await late
-    }
-    expect(h.marker.read()).toBeUndefined()
-    if (ending === 'revoked-late-detail') {
-      h.api.document.mockResolvedValueOnce(DETAIL)
-      await h.editorPage.refreshDetail()
-      vi.mocked(editor.editor.changeSeq).mockReturnValue(3)
-      editor.changeListeners.forEach(listener => listener())
-      h.api.save.mockResolvedValueOnce({ revision: 6, savedAt: '2026-10-11T09:02:00.000Z', unchanged: false })
-      await h.editorPage.save()
-      expect(h.marker.read()).toBeDefined()
-    }
-  })
-
-  it.each([false, true])('初次预检被同用户确认取消后保持阅读（补锁期间再次确认：%s），明确进入后的真实持久写仍持有新实例锁并记身份', async (repeated) => {
-    const { options } = await persistentPageDrafts()
-    const h = await reloadedPage('reload', options)
-    const selected = deferred<void>()
-    const held = deferred<void>()
-    const select = h.select.getMockImplementation()!
-    let selections = 0
-    h.select.mockImplementation(async (input) => {
-      selections += 1
-      const identity = await select(input)
-      if (repeated && selections === 2) {
-        selected.resolve()
-        await held.promise
-      }
-      return identity
-    })
-    const pending = deferred<Awaited<ReturnType<RecoveryReader['observe']>>>()
-    h.r.observe.mockReturnValueOnce(pending.promise)
-    const loading = h.editorPage.load()
-    await vi.waitFor(() => expect(h.r.observe).toHaveBeenCalledOnce())
-    await h.editorPage.recheckSession()
-    pending.resolve(h.r.original)
-    if (repeated) {
-      await selected.promise
-      await h.editorPage.recheckSession()
-      held.resolve()
-    }
-    await loading
-    expect(h.editLease.acquire).not.toHaveBeenCalled()
-    expect(h.editorPage.view().mode?.kind).toBe('reading')
-    await h.editorPage.enterEditing()
-    const fresh = h.editLease.acquire.mock.calls[0]?.[1]
-    expect(fresh).toBeDefined()
-    expect(fresh).not.toBe(h.expected.clientInstanceId)
-    const editor = h.fakes.at(-1)!
-    vi.spyOn(editor.editor, 'changeSeq').mockReturnValue(1)
-    editor.changeListeners.forEach(listener => listener())
-    await h.editorPage.save()
-    expect(h.browser.holderOf(reloadInstanceLock(h.key, fresh!))).toBe('reloaded')
-    expect(h.marker.read()?.clientInstanceId).toBe(fresh)
-  })
-
-  it.each(['exit', 'revoked', 'other-user', 'read-only'] as const)('%s 是明确失效，清除记号；换人同时释放实例锁', async (reason) => {
-    const h = await reloadedPage()
-    await h.editorPage.load()
-    expect(h.marker.read()).toEqual(h.expected)
-    if (reason === 'exit')
-      await h.editorPage.exitEditing()
-    if (reason === 'revoked') {
-      h.api.save.mockRejectedValue(leaseLost('revoked'))
-      await h.editorPage.save()
-      await vi.waitFor(() => expect(h.editorPage.view().mode?.kind).toBe('lost'))
-    }
-    if (reason === 'other-user') {
-      h.api.session.mockResolvedValue(BOB)
-      await h.editorPage.recheckSession()
-    }
-    if (reason === 'read-only') {
-      h.api.document.mockResolvedValue({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } })
-      await h.editorPage.refreshDetail()
-    }
-    expect(h.marker.read()).toBeUndefined()
-    if (reason === 'other-user') {
-      await settle()
-      expect(h.browser.holderOf(reloadInstanceLock(h.key, h.expected.clientInstanceId))).toBeUndefined()
-    }
-  })
-
-  it('退出未保存成功仍在编辑，临时网络失败/隐藏不清资格；pagehide 保留记号，销毁才放实例锁', async () => {
-    const h = await reloadedPage()
-    await h.editorPage.load()
     h.api.save.mockRejectedValue(new NetworkError())
     await h.editorPage.exitEditing()
     expect(h.editorPage.view().mode?.kind).toBe('editing')
     h.hidden.set(true)
-    expect(h.marker.read()).toEqual(h.expected)
     window.dispatchEvent(new Event('pagehide'))
     await settle()
-    expect(h.marker.read()).toEqual(h.expected)
-    expect(h.browser.holderOf(reloadInstanceLock(h.key, h.expected.clientInstanceId))).toBe('reloaded')
+    expect(h.r.remove).not.toHaveBeenCalled()
     h.editorPage.dispose()
-    await settle()
-    expect(h.marker.read()).toEqual(h.expected)
-    expect(h.browser.holderOf(reloadInstanceLock(h.key, h.expected.clientInstanceId))).toBeUndefined()
+    expect(h.r.remove).not.toHaveBeenCalled()
   })
 
-  it.each(['dispose', 'switch', 'unconfirmed'] as const)('预检在途发生 %s，迟到成功不能复用旧身份或自动申请', async (ending) => {
-    const h = await reloadedPage()
+  it.each(['dispose', 'switch', 'unconfirmed'] as const)('发现原件在途发生 %s，迟到成功不能自动申请、保存或删除原件', async (ending) => {
+    const h = await pageWithLegacyMarker()
     const pending = deferred<Awaited<ReturnType<RecoveryReader['observe']>>>()
     h.r.observe.mockReturnValueOnce(pending.promise)
-    const loading = h.editorPage.load()
+    await h.editorPage.load()
     await vi.waitFor(() => expect(h.r.observe).toHaveBeenCalledOnce())
     if (ending === 'dispose') {
       h.editorPage.dispose()
@@ -605,11 +453,10 @@ describe('页面自动重载身份与实际恢复', () => {
       await h.editorPage.recheckSession()
     }
     pending.resolve(h.r.original)
-    await loading
     await settle()
     expect(h.editLease.acquire).not.toHaveBeenCalled()
-    expect(h.marker.read()).toBeUndefined()
-    expect(h.browser.holderOf(reloadInstanceLock(h.key, h.expected.clientInstanceId))).toBeUndefined()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.r.remove).not.toHaveBeenCalled()
   })
 })
 

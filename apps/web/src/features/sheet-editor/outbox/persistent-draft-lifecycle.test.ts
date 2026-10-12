@@ -1,6 +1,6 @@
 import type { LeaseVerdict } from '../edit-lease.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { gunzipBytes, gzipBytes } from '../../../shared/outbox/draft-codec.ts'
+import { gunzipBytes } from '../../../shared/outbox/draft-codec.ts'
 import { CLIENT_INSTANCE_ID } from '../../../shared/outbox/draft-record.test-support.ts'
 import { deferred } from '../../../shared/outbox/outbox-lock.test-support.ts'
 import { settle } from '../fake-lease-clock.test-support.ts'
@@ -10,51 +10,29 @@ import { createPersistentWorkingDraft } from './persistent-working-draft.ts'
 afterEach(() => vi.restoreAllMocks())
 const capture = (snapshot: string) => ({ snapshot, editorSeq: 1, formulasPending: false, dedupe: true })
 
-describe('实际持久写入才通知恢复身份', () => {
-  it('登记不通知、实际写成才交出 writer；纯内存捕获不更新', async () => {
+describe('实际持久写入与暂停的事实', () => {
+  it('登记不产生正文；实际写成后可读，暂停后的捕获只留内存', async () => {
     const h = await persistentHarness()
-    const onPersisted = vi.fn()
-    const source = createPersistentWorkingDraft({ ...h.options, onPersisted })
-    expect(onPersisted).not.toHaveBeenCalled()
+    const source = createPersistentWorkingDraft(h.options)
+    expect(h.store.rawDraft(DRAFT_KEY)).toBeUndefined()
     const writing = h.store.holdNext('writeDraft')
     const ref = source.capture(capture('真正写到本机'))
     await writing.reached
-    expect(onPersisted).not.toHaveBeenCalled()
+    expect(h.store.rawDraft(DRAFT_KEY)).toBeUndefined()
     writing.release()
     expect(await source.ready(ref)).toMatchObject({ local: { kind: 'persisted' } })
-    const current = h.session.view()
-    expect(current.kind).toBe('ready')
-    expect(onPersisted).toHaveBeenCalledExactlyOnceWith(current.kind === 'ready' ? current.writer : undefined)
+    expect(await source.readLatest()).toMatchObject({ ref, snapshot: '真正写到本机' })
+    const persisted = h.store.rawDraft(DRAFT_KEY)
+    expect(persisted).toBeDefined()
     source.suspend()
-    await source.ready(source.capture(capture('暂停后只留内存')))
-    expect(onPersisted).toHaveBeenCalledOnce()
+    expect(await source.ready(source.capture(capture('暂停后只留内存')))).toMatchObject({ local: { kind: 'memory', reason: 'paused' } })
+    expect(h.store.rawDraft(DRAFT_KEY)).toEqual(persisted)
     source.dispose()
   })
 
-  it('写入失败不通知；通知或上报抛错都不能把已经写成的事实变成失败', async () => {
+  it('成功回包迟于来源暂停：已提交正文保留，后续捕获不再写盘', async () => {
     const h = await persistentHarness()
-    const fault = new Error('observer failed')
-    const onPersisted = vi.fn(() => {
-      throw fault
-    })
-    const source = createPersistentWorkingDraft({ ...h.options, onPersisted })
-    vi.spyOn(h.session, 'write').mockResolvedValueOnce({ kind: 'quota', gzip: await gzipBytes(new TextEncoder().encode('配额失败')) })
-    expect(await source.ready(source.capture(capture('配额失败')))).toMatchObject({ local: { kind: 'memory' } })
-    expect(onPersisted).not.toHaveBeenCalled()
-    h.reportError.mockImplementation(() => {
-      throw new Error('report failed')
-    })
-    expect(await source.ready(source.capture(capture('已经提交本机')))).toMatchObject({ local: { kind: 'persisted' } })
-    expect(onPersisted).toHaveBeenCalledOnce()
-    expect(h.reportError).toHaveBeenCalledExactlyOnceWith(fault)
-    expect(await source.readLatest()).toMatchObject({ snapshot: '已经提交本机' })
-    source.dispose()
-  })
-
-  it('成功回包迟于来源暂停：保留实际写入事实，但不重新授予记号资格', async () => {
-    const h = await persistentHarness()
-    const onPersisted = vi.fn()
-    const source = createPersistentWorkingDraft({ ...h.options, onPersisted })
+    const source = createPersistentWorkingDraft(h.options)
     const original = h.session.write
     const reached = deferred<void>()
     const release = deferred<void>()
@@ -66,10 +44,13 @@ describe('实际持久写入才通知恢复身份', () => {
     })
     const ref = source.capture(capture('暂停前正在提交'))
     await reached.promise
+    const persisted = h.store.rawDraft(DRAFT_KEY)
+    expect(persisted).toBeDefined()
     source.suspend()
     release.resolve()
     await source.ready(ref)
-    expect(onPersisted).not.toHaveBeenCalled()
+    expect(await source.ready(source.capture(capture('暂停后只留内存')))).toMatchObject({ local: { kind: 'memory', reason: 'paused' } })
+    expect(h.store.rawDraft(DRAFT_KEY)).toEqual(persisted)
     source.dispose()
   })
 })

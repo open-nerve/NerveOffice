@@ -5,7 +5,7 @@ import type { LocalKeyKeeper, LocalKeyProblem } from '../../shared/outbox/local-
 import type { PersistOutcome } from '../../shared/outbox/storage-status.ts'
 import type { LeaseClock, LeaseVerdict } from './edit-lease.ts'
 import type { OutboxPreparation, OutboxSession, OutboxSessionOptions } from './outbox/outbox-session.ts'
-import type { PersistentWorkingDraft, PersistentWorkingDraftOptions } from './outbox/persistent-working-draft.ts'
+import type { PersistentWorkingDraft } from './outbox/persistent-working-draft.ts'
 import type { RecoveryBlockedReason, RecoveryInitialization, RecoveryInitializer } from './recovery/recovery-initializer.ts'
 import type { DraftMemoryReason, PreparedDraft, WorkingDraft, WorkingDraftOptions } from './working-draft.ts'
 import { createLocalKeyKeeper, fetchLocalKey } from '../../shared/outbox/local-key.ts'
@@ -50,7 +50,6 @@ export interface EditingDraftOptions extends Omit<WorkingDraftOptions, 'initialD
   readonly onSessionProblem: (error: unknown) => void
   readonly onLost: (verdict: Extract<LeaseVerdict, { readonly kind: 'ended' | 'superseded' }>) => void
   readonly recover?: RecoveryInitializer
-  readonly onPersisted?: PersistentWorkingDraftOptions['onPersisted']
 }
 
 /** 独立作用域只保留上传身份与回调，不让初始化快照随包装器长驻。 */
@@ -370,10 +369,7 @@ export function prepareEditingDraft(configuration: EditingDraftOptions): Editing
       keeper.discard()
     }
     else {
-      persistent = createPersistentWorkingDraft({ ...sourceOptions, session, recoveryObservation: restored?.recoveryObservation, onPersisted: (writer) => {
-        if (live() && !paused)
-          options.onPersisted?.(writer)
-      } })
+      persistent = createPersistentWorkingDraft({ ...sourceOptions, session, recoveryObservation: restored?.recoveryObservation })
       source = persistent
       if (paused)
         persistent.suspend()

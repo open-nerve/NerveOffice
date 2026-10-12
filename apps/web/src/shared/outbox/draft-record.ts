@@ -55,7 +55,7 @@ export interface DraftMeta extends DraftKey {
   readonly writeEpoch: number
   /** 写下它的那次登记 */
   readonly writerId: string
-  /** 写下它的客户端实例：同一标签页意外重新载入时认"是不是上一个实例写的"（P3） */
+  /** 写下它的客户端实例：认证原件来源与旧请求核对使用；不证明新 Document 就是原页（M4-P3） */
   readonly writtenBy: string
   readonly format: ContentFormat
   readonly formulasPending: boolean

@@ -72,14 +72,19 @@ for (const autosave of ['held', 'running'] as const) {
   test.describe(`崩溃自检页面校准，初始自动保存 ${autosave}`, () => {
     test.use({ autosave })
 
-    test('US-M4-04 真实持久后原页重载：仅观察自动恢复，不补写身份或点击编辑', { tag: '@test-build' }, async ({ page }, testInfo) => {
+    test('US-M4-04 真实持久后原页重载：先独立核对阅读，再许可一次明确恢复', { tag: '@test-build' }, async ({ page }, testInfo) => {
       const owner = await createUser('safari-crash')
       const documentId = await createDocument(owner, 'Safari 崩溃自检校准')
       const runId = randomUUID()
       const endpoint = `${e2eOrigin()}/__nerve-crash/${runId}`
       const session = createCrashSession({ mode: 'reload-calibration', runId, documentId, userId: owner.id, contentHash: digest(CONTENT), deadline: Date.now() + EDITOR_TEST_TIMEOUT })
+      const requests: Request[] = []
+      let waitingPolls = 0
       await page.route(endpoint, async (route) => {
-        const result = session.receive(route.request().postDataJSON(), Date.now())
+        const message = route.request().postDataJSON() as { kind: string }
+        if (message.kind === 'confirm' && session.snapshot().phase === 'awaiting-confirmation')
+          waitingPolls += 1
+        const result = session.receive(message, Date.now(), { acquires: requests.filter(request => request.method() === 'POST').length, saves: requests.filter(request => request.method() === 'PUT').length })
         await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(result) })
       })
       const fragment = new URLSearchParams({ user: owner.username, password: owner.password, document: documentId, scenario: 'crash-recovery', next: endpoint })
@@ -90,14 +95,13 @@ for (const autosave of ['held', 'running'] as const) {
       const ready = session.snapshot().ready!
       const readyDiagnostic = session.snapshot().diagnostics.find(item => item.stage === 'ready')
       expect(readyDiagnostic?.facts.initial.storage.markers).toEqual([])
-      expect(readyDiagnostic?.facts.current.storage.markers).toEqual([expect.objectContaining({ userId: owner.id, documentId, clientInstanceId: ready.clientInstanceId, writerId: ready.writerId })])
+      expect(readyDiagnostic?.facts.current.storage.markers).toEqual([])
       const key = { userId: owner.id, documentId }
       const disk = (await readLocalDisk(page, key)).draft!
       const snapshot = diskSnapshot(disk, await currentLocalKey(page))
       expect(ready.snapshotHash).toBe(digest(snapshot))
       expect(ready.clientInstanceId).toBe(disk.writtenBy)
       expect(await revisionOf(documentId)).toBe(1)
-      const requests: Request[] = []
       let reloading = false
       page.on('request', (request) => {
         const path = new URL(request.url()).pathname
@@ -111,15 +115,24 @@ for (const autosave of ['held', 'running'] as const) {
         await route.continue()
       }, { times: 1 })
       await page.reload()
+      await expect.poll(() => ['awaiting-confirmation', 'failed'].includes(session.snapshot().phase), { timeout: 90_000 }).toBe(true)
+      expect(session.snapshot().phase).toBe('awaiting-confirmation')
+      await expect.poll(() => waitingPolls).toBeGreaterThan(0)
+      expect(requests).toEqual([])
+      expect((await readLocalDisk(page, key)).draft).toEqual(disk)
+      const before = await savedContent(page, documentId)
+      const beforeValue = cellOf(before.snapshot, 'A1')?.v
+      expect(before.revision).toBe(1)
+      expect(session.authorizeConfirmation({ revision: before.revision, contentHash: digest(typeof beforeValue === 'string' ? beforeValue : ''), ...await requestEvidence(requests) }, Date.now())).toBe(true)
       await expect.poll(() => ['restored', 'failed'].includes(session.snapshot().phase), { timeout: 90_000 }).toBe(true)
       await testInfo.attach('crash-page-restored', { body: JSON.stringify(session.snapshot()), contentType: 'application/json' })
       expect(session.snapshot()).toMatchObject({ phase: 'restored' })
       const diagnostics = session.snapshot().diagnostics
-      expect(diagnostics.map(item => item.stage)).toEqual(['boot', 'ready', 'boot', 'restored'])
+      expect(diagnostics.map(item => item.stage)).toEqual(['boot', 'ready', 'boot', 'awaiting-confirmation', 'restored'])
       const reload = diagnostics[2]!
       expect(reload.facts.initial.navigation).toMatchObject({ type: 'reload' })
-      expect(reload.facts.initial.storage.markers).toEqual([expect.objectContaining({ clientInstanceId: ready.clientInstanceId })])
-      expect(diagnostics[3]!.facts.events).toEqual(expect.arrayContaining([{ kind: 'lock', clientInstanceId: ready.clientInstanceId, result: 'held' }, { kind: 'match', clientInstanceId: ready.clientInstanceId, result: 'match' }, { kind: 'selected', clientInstanceId: ready.clientInstanceId, candidate: true }]))
+      expect(reload.facts.initial.storage.markers).toEqual([])
+      expect(diagnostics.every(item => item.facts.events.length === 0)).toBe(true)
       const { acquires, saves } = await requestEvidence(requests)
       const cloud = await savedContent(page, documentId)
       const value = cellOf(cloud.snapshot, 'A1')?.v

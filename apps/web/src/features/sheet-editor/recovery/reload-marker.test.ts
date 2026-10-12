@@ -1,77 +1,50 @@
-import type { MarkerStorage } from '../pending-save-marker.ts'
-import { describe, expect, it } from 'vitest'
-import { FRESH_INSTANCE, RELOAD_KEY, RELOAD_MARKER, reloadStorage } from './reload-marker.test-support.ts'
-import { reloadMarker, reloadMarkerKey } from './reload-marker.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { RELOAD_MARKER, RELOAD_STORAGE_KEY, reloadStorage } from './reload-marker.test-support.ts'
+import { clearInheritedReloadMarkers } from './reload-marker.ts'
 
-describe('自动重载的非敏感身份记号', () => {
-  it('URL 中合法的大写 UUID 与小写指向同一记号，写读往返归一化', () => {
-    const storage = reloadStorage()
-    const upper = { userId: RELOAD_KEY.userId.toUpperCase(), documentId: RELOAD_KEY.documentId.toUpperCase() }
-    const marker = reloadMarker(upper, { storage: () => storage })
-    marker.write({ ...RELOAD_MARKER, clientInstanceId: RELOAD_MARKER.clientInstanceId.toUpperCase(), writerId: RELOAD_MARKER.writerId.toUpperCase() })
-    expect(marker.read()).toEqual(RELOAD_MARKER)
-    expect(reloadMarker(RELOAD_KEY, { storage: () => storage }).read()).toEqual(RELOAD_MARKER)
-    marker.clear()
-    expect(storage.items.size).toBe(0)
+describe('旧版恢复记号的迁移清理', () => {
+  it('同步清掉所有旧记号，包括合法、损坏和不同文档；保留其他命名空间', () => {
+    const storage = reloadStorage(new Map([
+      [RELOAD_STORAGE_KEY, JSON.stringify({ v: 1, ...RELOAD_MARKER })],
+      ['nerve-office:reload:another-user:another-document', '{'],
+      ['nerve-office:reload:unknown-version', 'v2'],
+      ['nerve-office:pending-save:document', '待确认请求'],
+      ['nerve-office:issued-request:document', '编辑请求'],
+      ['nerve-office:reload-other', '无关值'],
+    ]))
+    const read = vi.spyOn(storage, 'getItem')
+    clearInheritedReloadMarkers(() => storage)
+    expect([...storage.items]).toEqual([
+      ['nerve-office:pending-save:document', '待确认请求'],
+      ['nerve-office:issued-request:document', '编辑请求'],
+      ['nerve-office:reload-other', '无关值'],
+    ])
+    expect(read).not.toHaveBeenCalled()
   })
 
-  it('只写版本、用户、文档、实例与写入者身份；每个用户/文档隔离，清除只影响当前键', () => {
-    const storage = reloadStorage()
-    const marker = reloadMarker(RELOAD_KEY, { storage: () => storage })
-    const otherKey = { ...RELOAD_KEY, documentId: FRESH_INSTANCE }
-    const other = reloadMarker(otherKey, { storage: () => storage })
-    const otherUser = reloadMarker({ ...RELOAD_KEY, userId: FRESH_INSTANCE }, { storage: () => storage })
-    expect(marker.read()).toBeUndefined()
-    // 即使调用者对象附带内部值，写入也必须投影到非敏感字段。
-    const internal = { ...RELOAD_MARKER, token: '不能入库', key: '不能入库', body: '不能入库' }
-    marker.write(internal)
-    expect(JSON.parse(storage.items.get(reloadMarkerKey(RELOAD_KEY)) ?? 'null')).toEqual({ v: 1, ...RELOAD_MARKER })
-    expect(marker.read()).toEqual(RELOAD_MARKER)
-    expect(other.read()).toBeUndefined()
-    expect(otherUser.read()).toBeUndefined()
-    other.write(RELOAD_MARKER)
-    otherUser.write(RELOAD_MARKER)
-    marker.clear()
-    expect(marker.read()).toBeUndefined()
-    expect(other.read()).toEqual({ ...RELOAD_MARKER, ...otherKey })
-    expect(otherUser.read()).toEqual({ ...RELOAD_MARKER, userId: FRESH_INSTANCE })
-    expect(storage.items.size).toBe(2)
+  it('只清本标签页，复制的会话存储互不影响', () => {
+    const original = reloadStorage(new Map([[RELOAD_STORAGE_KEY, JSON.stringify({ v: 1, ...RELOAD_MARKER })]]))
+    const copy = reloadStorage(original.items)
+    clearInheritedReloadMarkers(() => copy)
+    expect(copy.items.size).toBe(0)
+    expect(original.items.size).toBe(1)
+    clearInheritedReloadMarkers(() => copy)
+    expect(copy.items.size).toBe(0)
   })
 
-  it.each([
-    ['损坏 JSON', '{'],
-    ['null', 'null'],
-    ['数组', '[]'],
-    ['未知版本', JSON.stringify({ v: 2, ...RELOAD_MARKER })],
-    ['缺少字段', JSON.stringify({ v: 1, ...RELOAD_MARKER, writerId: undefined })],
-    ['额外字段', JSON.stringify({ v: 1, ...RELOAD_MARKER, token: '多余' })],
-    ...['userId', 'documentId', 'clientInstanceId', 'writerId'].map(field => [`错误 UUID ${field}`, JSON.stringify({ v: 1, ...RELOAD_MARKER, [field]: 'broken' })]),
-    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '7'].map(epoch => [`错误代次 ${epoch}`, JSON.stringify({ v: 1, ...RELOAD_MARKER, writeEpoch: epoch })]),
-    ['不属于当前用户', JSON.stringify({ v: 1, ...RELOAD_MARKER, userId: FRESH_INSTANCE })],
-    ['不属于当前文档', JSON.stringify({ v: 1, ...RELOAD_MARKER, documentId: FRESH_INSTANCE })],
-  ])('%s 不能授予资格', (_case, raw) => {
-    const storage = reloadStorage()
-    storage.setItem(reloadMarkerKey(RELOAD_KEY), raw ?? '')
-    expect(reloadMarker(RELOAD_KEY, { storage: () => storage }).read()).toBeUndefined()
-  })
-
-  it('UUID 统一为小写，新的持久身份替换旧身份；拒绝写入不合法的代次', () => {
-    const storage = reloadStorage()
-    const marker = reloadMarker(RELOAD_KEY, { storage: () => storage })
-    marker.write({ ...RELOAD_MARKER, clientInstanceId: FRESH_INSTANCE.toUpperCase(), writeEpoch: 8 })
-    expect(marker.read()).toEqual({ ...RELOAD_MARKER, clientInstanceId: FRESH_INSTANCE, writeEpoch: 8 })
-    marker.write({ ...RELOAD_MARKER, writeEpoch: Number.POSITIVE_INFINITY })
-    expect(marker.read()).toEqual({ ...RELOAD_MARKER, clientInstanceId: FRESH_INSTANCE, writeEpoch: 8 })
-  })
-
-  it.each(['access', 'operations'] as const)('存储 %s 抛错时不抛到页面、不返回身份', (failure) => {
+  it.each(['access', 'length', 'key', 'remove'] as const)('存储 %s 被拒绝时不阻断页面，也不读取旧身份', (failure) => {
     const fail = (): never => {
-      throw new Error('storage unavailable')
+      throw new Error('storage denied')
     }
-    const broken: MarkerStorage = { getItem: fail, setItem: fail, removeItem: fail }
-    const marker = reloadMarker(RELOAD_KEY, { storage: failure === 'access' ? fail : () => broken })
-    expect(marker.read()).toBeUndefined()
-    expect(() => marker.write(RELOAD_MARKER)).not.toThrow()
-    expect(() => marker.clear()).not.toThrow()
+    const storage = reloadStorage(new Map([[RELOAD_STORAGE_KEY, '{}']]))
+    const read = vi.spyOn(storage, 'getItem')
+    if (failure === 'length')
+      Object.defineProperty(storage, 'length', { get: fail })
+    if (failure === 'key')
+      storage.key = fail
+    if (failure === 'remove')
+      Object.defineProperty(storage, 'removeItem', { value: fail })
+    expect(() => clearInheritedReloadMarkers(failure === 'access' ? fail : () => storage)).not.toThrow()
+    expect(read).not.toHaveBeenCalled()
   })
 })

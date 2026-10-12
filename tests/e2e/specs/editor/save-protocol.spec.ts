@@ -8,13 +8,16 @@
 // - 内容没变的保存：修订号不增加，页面照"已保存"处理（回答 unchanged），改了再保存照常加一。
 // 服务端的各种版本组合、每条规则与回执的重放由集成测试覆盖（tests/integration/src/documents/save-protocol.test.ts）
 import type { Locator, Page, Route } from '@playwright/test'
+import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { sheetSnapshotFor, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
+import { recordWrites, saveParam } from '../../support/autosave.ts'
 import { CURRENT_CLIENT } from '../../support/client-format.ts'
 import { createDocument, createUser, editLeaseEndReason, editLeaseEpoch, revisionOf, withDatabase } from '../../support/database.ts'
 import { runFacade } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { currentLocalKey, diskGzip, readLocalDisk } from '../../support/local-draft.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, openAndEnterEditing, openReader, saveAndCapture, saveAndWait, saveButton, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
@@ -77,8 +80,9 @@ function nearCapacitySheetFor(unitId: string): string {
 }
 
 test.describe('US-M3-16 旧版页面不能把文档写回旧格式', () => {
-  test('US-M4-04 伪造的旧版本保存被 CLIENT_OUTDATED 拒绝并释放编辑权；重新加载后自动恢复兼容的本机修改，再照常编辑保存', async ({ page }) => {
-    await loginThroughApi(page, await createUser('outdated-save'))
+  test('US-M4-04 伪造的旧版本保存被 CLIENT_OUTDATED 拒绝并释放编辑权；重新加载先阅读，明确恢复本机修改后照常编辑保存', async ({ page }) => {
+    const owner = await createUser('outdated-save')
+    await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', '旧页面的修改')
@@ -91,16 +95,53 @@ test.describe('US-M3-16 旧版页面不能把文档写回旧格式', () => {
     await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
     expect(await revisionOf(documentId)).toBe(1)
 
-    // 夹具只篡改 HTTP 版本，本机原件仍是当前可读格式。刷新后原实例普通申请并自动恢复（M4-P3 S4）；
+    // 夹具只篡改 HTTP 版本，本机原件仍是当前可读格式。刷新保持阅读，明确恢复后才申请；
     // 先核对未覆盖的旧修改真的能存上，随后再改 A1，不能只证明新输入能保存。
     await restore()
+    const key = { userId: owner.id, documentId }
+    const disk = (await readLocalDisk(page, key)).draft
+    expect(disk?.inFlight).not.toBeNull()
+    assert(disk !== null && disk.inFlight !== null, '被拒绝的保存应保留带原请求的本机原件')
+    const originalGzip = diskGzip(disk, await currentLocalKey(page))
+    const { saves } = recordWrites(page, documentId)
+    const acquires: string[] = []
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === `/api/documents/${documentId}/edit-lease`)
+        acquires.push(request.url())
+    })
     page.once('dialog', dialog => void dialog.accept())
     await outdatedNotice(page).getByRole('button', { name: '重新加载' }).click()
+    await waitForEditorAccess(page, 'read', 'steady')
+    const recover = page.locator('[data-slot="recovery-notice"]').getByRole('button', { name: '恢复并编辑', exact: true })
+    await expect(recover).toBeEnabled()
+    expect(acquires).toHaveLength(0)
+    // 没有成功旧回执：Reader 只原样核对，服务端因无租约返回 none，不能增加修订或改变原件。
+    expect(saves).toHaveLength(1)
+    const replay = saves[0]
+    const receipt = await replay?.response()
+    expect(receipt?.status()).toBe(409)
+    expect(await receipt?.json()).toMatchObject({ error: { code: 'EDIT_LEASE_LOST', details: { reason: 'none' } } })
+    for (const request of saves) {
+      expect(request.headers()['x-edit-lease']).toBeUndefined()
+      expect(request.postDataBuffer()).toEqual(originalGzip)
+      expect(Object.fromEntries(new URL(request.url()).searchParams)).toEqual({ ...disk.format, formatVersion: String(disk.format.formatVersion), baseRevision: String(disk.baseRevision), writeEpoch: String(disk.writeEpoch), requestId: disk.inFlight.requestId, clientInstanceId: disk.inFlight.clientInstanceId, localSeq: String(disk.inFlight.localSeq), formulasPending: String(disk.formulasPending) })
+    }
+    expect((await readLocalDisk(page, key)).draft).toEqual(disk)
+    expect(await revisionOf(documentId)).toBe(1)
+    await recover.click()
     await waitForEditorAccess(page, 'edit')
     await saveAndWait(page)
     const recovered = await savedContent(page, documentId)
     expect(recovered.revision).toBe(2)
     expect(cellOf(recovered.snapshot, 'A1')?.v).toBe('旧页面的修改')
+    expect(acquires).toHaveLength(1)
+    const uploaded = saves.filter(request => request.headers()['x-edit-lease'] !== undefined)
+    expect(uploaded).toHaveLength(1)
+    expect(saveParam(uploaded[0], 'clientInstanceId')).not.toBe(disk.inFlight.clientInstanceId)
+    for (const request of saves.filter(request => request.headers()['x-edit-lease'] === undefined)) {
+      expect(request.postDataBuffer()).toEqual(originalGzip)
+      expect(saveParam(request, 'requestId')).toBe(disk.inFlight.requestId)
+    }
     await typeInCell(page, 'A1', '新页面的修改')
     await saveAndWait(page)
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('新页面的修改')

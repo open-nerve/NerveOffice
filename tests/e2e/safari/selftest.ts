@@ -19,8 +19,8 @@
 //      上传第二格；B 等 8 秒点"在此编辑"、进入编辑、交回之后去关掉自己的页（CLOSE_PATH），Safari 回到 A，A 交回（交不回只记下）。
 //      期间每 100 毫秒记下库里的修订号与编辑租约；按 B 走的路判定服务器上的内容与租约的变化（support/selftest-handover.ts 的 takeoverJudgement）；
 //    · refresh-save：先让这份文档的保存在服务端停 10 秒（support/selftest-handover.ts 的 slowDownSave：改写内容行之前 pg_sleep），再另开它；
-//      页面发出保存、1.5 秒之后刷新，以原实例普通申请并精确核对原回执后回阅读；按页面、库里的时间线与后端日志判定
-//      （refreshJudgement：旧代次没被释放、原实例普通申请、修订号只前进一次、申请与回执确认前没有释放）；
+//      页面发出保存、1.5 秒之后刷新，新页面零申请，精确核对原回执并保持阅读；按页面、库里的时间线与后端日志判定
+//      （refreshJudgement：旧代次没被释放、新页面零申请零释放、修订号只前进一次）；
 //    最后是请求编辑的两条路（M3-P6 设计 §3.10，DEF-062；support/selftest-request.ts 的编排，与 Playwright 的校准共用）：被复核的一方（作者）在 Safari 里，
 //    另一方（场景的协作者）由这里经接口扮演——
 //    · request-waiter（路 1）：协作者申请编辑权、心跳；另开作者的页面，点"请求编辑"；协作者的心跳带来请求之后另开遮住它的标签页（SHADE_PATH）、
