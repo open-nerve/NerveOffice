@@ -88,7 +88,9 @@ jobs:
   e2e:
     name: pnpm verify --ci --scope=e2e（${{ matrix.browser }}）
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # M4-P3：Linux WebKit 的普通项目已需约 43.5 分钟，之后还要串行跑崩溃项目。
+    # 为整片的安装、构建、全部用例与报告上传留出时间；各用例的时限仍由 Playwright 配置约束。
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

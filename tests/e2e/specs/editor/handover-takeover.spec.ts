@@ -114,21 +114,45 @@ async function handoverLog(page: Page): Promise<HandoverLogEntry[]> {
   return page.evaluate(name => (window as unknown as Record<string, HandoverLog | undefined>)[name]?.log() ?? [], HANDOVER_LOG_GLOBAL)
 }
 
+interface HandoverAckWindow extends Window {
+  __handoverAckGate?: {
+    queued: () => number
+    release: () => void
+    discard: () => void
+  }
+}
+
 test.describe('US-M3-08 本人接管："在此编辑"', () => {
-  test('US-M4-06 回应 ack 但保存挂起：首次请求起固定 20 秒裁决，再接上 A1、保存 B1；旧页迟到保存与副本不覆盖新正文', { tag: '@test-build' }, async ({ page, context }) => {
+  test('US-M4-06 回应 ack 但保存挂起：首次请求起固定 20 秒裁决，再接上 A1、保存 B1；旧页迟到保存与副本不覆盖新正文', { tag: '@test-build' }, async ({ page, context }, testInfo) => {
     const owner = await createUser('takeover-twenty-seconds')
     await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     const key = { userId: owner.id, documentId }
     await page.clock.install()
-    // 只延迟真实交接 ack 的运输；旧实现若从 ack 重新计 20 秒，会在首次请求第 20 秒仍不申请。
+    // 扣住真实交接 ack，等两个页面的时钟都推进后再交给原生频道。Playwright 的 context clock 在各页面并发推进，
+    // 若在发送页的 2 秒计时器里放行，消息可能先到接收页、接收页时钟才推进（CI Edge 曾记成第 10 ms）。
+    // 仍严格核对第 2 秒收到 ack、首次请求第 20 秒裁决；旧实现若从 ack 重新计时，在第 20 秒仍不会申请。
     await page.addInitScript(() => {
       const NativeChannel = BroadcastChannel
+      let released = false
+      let pending: (() => void)[] = []
+      Object.assign(window, {
+        __handoverAckGate: {
+          queued: () => pending.length,
+          release: () => {
+            released = true
+            const messages = pending
+            pending = []
+            for (const send of messages)
+              send()
+          },
+          discard: () => { pending = [] },
+        },
+      })
       globalThis.BroadcastChannel = class extends NativeChannel {
         override postMessage(message: unknown): void {
-          if (this.name.startsWith('nerve-office:doc:') && (message as { type?: string }).type === 'handover-ack') {
-            Object.assign(window, { __queuedHandoverAck: true })
-            setTimeout(() => super.postMessage(message), 2_000)
+          if (!released && this.name.startsWith('nerve-office:doc:') && (message as { type?: string }).type === 'handover-ack') {
+            pending.push(() => super.postMessage(message))
           }
           else {
             super.postMessage(message)
@@ -142,35 +166,41 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     const secret = await currentLocalKey(page)
     const oldWrites = recordWrites(page, documentId)
     const saves = await holdSaves(page)
-    await typeInCell(page, 'A1', '交接截止前已落盘的 A1')
-    await page.keyboard.press('ControlOrMeta+s')
-    await expect.poll(() => saves.held()).toBeGreaterThan(0)
-    await expect.poll(async () => {
-      const draft = (await readLocalDisk(page, key)).draft
-      return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'A1')?.v
-    }).toBe('交接截止前已落盘的 A1')
-    const takeovers = recordTakeovers(other, documentId)
-    await takeOverHereButton(other).focus()
-    await pauseTime(page)
     try {
-      await other.keyboard.press('Enter')
-      await expect.poll(async () => page.evaluate(() => (window as typeof window & { __queuedHandoverAck?: boolean }).__queuedHandoverAck ?? false)).toBe(true)
-      const asked = (await handoverLog(other)).find(entry => entry.kind === 'handover-request')!
-      await advanceTo(other, asked.at + 2_000)
-      await expect.poll(async () => (await handoverLog(other)).some(entry => entry.kind === 'handover-reply' && entry.reply === 'ack')).toBe(true)
-      expect((await handoverLog(other)).find(entry => entry.kind === 'handover-reply' && entry.reply === 'ack')!.at - asked.at).toBe(2_000)
-      await advanceTo(other, asked.at + 19_999)
-      expect(takeovers).toEqual([])
-      expect((await handoverLog(other)).some(entry => entry.kind === 'handover-silent')).toBe(false)
-      await advanceTo(other, asked.at + 20_000)
-      await expect.poll(() => takeovers).toEqual(['self'])
-      const silent = (await handoverLog(other)).find(entry => entry.kind === 'handover-silent')!
-      expect(silent.at - asked.at).toBe(20_000)
-    }
-    finally {
-      await page.clock.resume()
-    }
-    try {
+      await typeInCell(page, 'A1', '交接截止前已落盘的 A1')
+      await page.keyboard.press('ControlOrMeta+s')
+      await expect.poll(() => saves.held()).toBeGreaterThan(0)
+      await expect.poll(async () => {
+        const draft = (await readLocalDisk(page, key)).draft
+        return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'A1')?.v
+      }).toBe('交接截止前已落盘的 A1')
+      const takeovers = recordTakeovers(other, documentId)
+      await takeOverHereButton(other).focus()
+      await pauseTime(page)
+      try {
+        await other.keyboard.press('Enter')
+        await expect.poll(async () => page.evaluate(() => (window as HandoverAckWindow).__handoverAckGate?.queued() ?? 0)).toBe(1)
+        const asked = (await handoverLog(other)).find(entry => entry.kind === 'handover-request')!
+        await advanceTo(other, asked.at + 2_000)
+        expect((await handoverLog(other)).some(entry => entry.kind === 'handover-reply' && entry.reply === 'ack')).toBe(false)
+        await page.evaluate(() => (window as HandoverAckWindow).__handoverAckGate?.release())
+        await expect.poll(async () => (await handoverLog(other)).some(entry => entry.kind === 'handover-reply' && entry.reply === 'ack')).toBe(true)
+        expect((await handoverLog(other)).find(entry => entry.kind === 'handover-reply' && entry.reply === 'ack')!.at - asked.at).toBe(2_000)
+        await advanceTo(other, asked.at + 19_999)
+        expect(takeovers).toEqual([])
+        expect((await handoverLog(other)).some(entry => entry.kind === 'handover-silent')).toBe(false)
+        await advanceTo(other, asked.at + 20_000)
+        await expect.poll(() => takeovers).toEqual(['self'])
+        const silent = (await handoverLog(other)).find(entry => entry.kind === 'handover-silent')!
+        expect(silent.at - asked.at).toBe(20_000)
+        await testInfo.attach('handover-deadline-clock', {
+          body: JSON.stringify({ requestedAt: asked.at, receiver: await handoverLog(other) }),
+          contentType: 'application/json',
+        })
+      }
+      finally {
+        await page.clock.resume()
+      }
       await waitForEditorAccess(other, 'edit')
       const log = await handoverLog(other)
       expect(log.findIndex(entry => entry.kind === 'lock-verdict' && entry.when === 'claim' && entry.verdict === 'current')).toBeGreaterThan(log.findIndex(entry => entry.kind === 'acquire-result' && entry.result === 'acquired'))
@@ -195,6 +225,7 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     }
     finally {
       saves.release()
+      await page.evaluate(() => (window as HandoverAckWindow).__handoverAckGate?.discard())
     }
   })
 
