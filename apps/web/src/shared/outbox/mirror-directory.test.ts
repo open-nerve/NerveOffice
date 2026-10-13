@@ -285,6 +285,14 @@ describe('列出、看文件、读、删（页面里也能用：不拿同步访�
     expect(await mirror.readSlots(KEY)).toEqual({ kind: 'busy' })
   })
 
+  it.each(['UnknownError', 'NotFoundError', 'SecurityError'])('主线程读完非空第一槽后第二槽 %s，不谎报空目录或遗忘存在事实', async (name) => {
+    const { root, mirror } = tree()
+    const a = file(new Uint8Array([1, 2, 3]))
+    putDocument(root, KEY, { a, b: { ...file(), failRead: name } })
+    expect(await mirror.readSlots(KEY)).toMatchObject({ kind: 'failed', recordKnown: true, error: { name } })
+    expect(a.bytes).toEqual(new Uint8Array([1, 2, 3]))
+  })
+
   it('删文档、删用户：整个目录删掉；本来就不在算删了；有句柄开着时是 busy（不删）', async () => {
     const { root, mirror } = tree()
     expect(await mirror.removeDocument(KEY)).toEqual({ kind: 'removed' })

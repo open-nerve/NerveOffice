@@ -11,6 +11,7 @@ import type { DraftStorageView, EditingDraft, EditingDraftOptions, EditingDraftP
 import type { LeaseCredentials } from './editor-api.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { LocalLock, LockClaim } from './local-lock.ts'
+import type { RecoveryInitializer } from './recovery/recovery-initializer.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveCoordinator, SaveEditor, SaveRequest, SaveSendIntent, SaveSendResult } from './save-coordinator.ts'
 import type { WorkingDraftView } from './working-draft.ts'
@@ -68,6 +69,7 @@ export interface InitialSaving {
   readonly snapshotBytes: number
   readonly formulasPending: boolean
   readonly blocked: Incompatibility | undefined
+  readonly initialUnsaved?: boolean
 }
 
 export interface LocalSaveView {
@@ -95,7 +97,7 @@ export interface EditingSession {
   /** 已失效之后的定位：等待期间不再把这把锁当作编辑权，完成后放锁。 */
   readonly locateTakeover: (loss: LeaseLoss, waitMs: number) => Promise<boolean>
   readonly startSaving: (editor: EditingSessionEditor, initial: InitialSaving) => void
-  readonly prepareDraft: (initial: Pick<InitialSaving, 'revision'>) => Promise<EditingDraftReady>
+  readonly prepareDraft: (initial: Pick<InitialSaving, 'revision'> & { readonly recover?: RecoveryInitializer }) => Promise<EditingDraftReady>
   /** 转交之后原会话不再销毁来源；调用方须先结束保存协调的上传所有权。 */
   readonly takeDraft: () => EditingDraft | undefined
   readonly suspendDraft: () => void
@@ -498,6 +500,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         key: { userId: options.userId, documentId },
         sessionId: `${options.clientInstanceId}:${held.credentials().writeEpoch}:${++sourceSerial}`,
         baseRevision: initial.revision,
+        recover: initial.recover,
         format: PAGE_CLIENT_FORMAT,
         writtenBy: options.clientInstanceId,
         clock,
@@ -687,6 +690,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         reportError: options.reportError,
         initialSnapshotBytes: initial.snapshotBytes,
         initialFormulasPending: initial.formulasPending,
+        initialUnsaved: initial.initialUnsaved,
       })
       coordinator = saver
       syncSaving()
@@ -702,6 +706,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         clock,
         draft: source,
         initialFormulasPending: initial.formulasPending,
+        initialUnsaved: initial.initialUnsaved,
         tuning: options.autosave.tuning,
         observe: options.autosave.observe,
         reportError: options.reportError,

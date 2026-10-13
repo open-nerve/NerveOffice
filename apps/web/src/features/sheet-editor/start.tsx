@@ -22,12 +22,13 @@ import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { browserLeaseClock, trackActivity } from './edit-lease.ts'
-import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
+import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, replayContent, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
 import { issuedRequestMarker } from './issued-request.ts'
 import { installPageGuards, isApplePlatform } from './page-guards.ts'
 import { pendingSaveMarker } from './pending-save-marker.ts'
+import { clearInheritedReloadMarkers } from './recovery/reload-marker.ts'
 import { sameBrowserFor } from './same-browser.ts'
 
 export interface SheetEditorPageElements {
@@ -122,12 +123,15 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     // 引入失败：照常组装，没有那一样，不上报——用到它的 E2E 自己会失败（控制、日志不在）。这两块在页面一开始就引入，整页跳转可能在入口的
     // 脚本还没执行、还没开始听 beforeunload 时就已开始，随后取消它们（WebKit 报"Importing a module script failed."），分不清是不是跳转取消的
     // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）
-    void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts')]).then(([control, log]) => {
+    const crash = new URLSearchParams(window.location.search).get('selftest') === 'crash-recovery'
+    void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('./recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)]).then(([control, log, diagnostics]) => {
+      const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadStart(() => window.sessionStorage) : undefined
       assemble(
         elements,
         reportLoadFailure,
         control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
         log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
+        observed?.snapshot,
       )
     })
     return
@@ -135,7 +139,8 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
   assemble(elements, reportLoadFailure, undefined, undefined)
 }
 
-function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined): void {
+function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics?: () => unknown): void {
+  clearInheritedReloadMarkers(() => window.sessionStorage)
   const page = createEditorPage({
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
@@ -148,6 +153,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
       contentIfChanged: async (documentId, revision) => fetchContentIfChanged(documentId, revision),
       editStatus: async documentId => fetchEditStatus(documentId),
       save: async (documentId, request, body, lease) => saveContent(documentId, request, body, lease),
+      replay: async (documentId, request, body) => replayContent(documentId, request.request, body, request.writeEpoch),
       conflictCopy: async (documentId, query, body) => saveConflictCopy(documentId, query, body),
       reportOpenCheck: async (documentId, report) => reportOpenCheckFailures(documentId, report),
       editLease: {
@@ -173,7 +179,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
     sameBrowser: documentId => sameBrowserFor(documentId, browserSameBrowserApis),
     // 访问 localStorage 本身就可能抛出（被禁用、沙箱）：每次用时再取，记号自己接住
     pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
-    // 这一页发出过的请求编辑（审查 B2）：按标签页、刷新之后还在，所以是 sessionStorage；同样每次用时再取
+    // 每次装配新的内存意图；sessionStorage 只用于清理旧版本记号，不恢复页面身份
     issuedRequest: documentId => issuedRequestMarker(documentId, { storage: () => window.sessionStorage }),
     autosaveControl,
     handoverTrace,
@@ -198,7 +204,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
   // 引入失败照常载入（自检随之没有结果，错误交给浏览器的错误报告）。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
   if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
     void import('./selftest-hook.ts').then(
-      ({ watchForSelftest }) => watchForSelftest(page, elements),
+      ({ watchForSelftest }): void | Promise<void> => watchForSelftest(page, elements, reloadDiagnostics),
       (error: unknown) => reportLoadFailure(error),
     ).then(async () => page.load())
     return

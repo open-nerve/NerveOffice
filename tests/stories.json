@@ -51,10 +51,10 @@
     "US-M3-17": { "phase": "P6", "status": "active", "verification": ["integration", "e2e"] },
     "US-M4-01": { "phase": "P2", "status": "active", "verification": ["e2e"] },
     "US-M4-02": { "phase": "P2", "status": "active", "verification": ["e2e"] },
-    "US-M4-03": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
-    "US-M4-04": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
-    "US-M4-05": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
-    "US-M4-06": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M4-03": { "phase": "P3", "status": "active", "verification": ["e2e"] },
+    "US-M4-04": { "phase": "P3", "status": "active", "verification": ["e2e"] },
+    "US-M4-05": { "phase": "P3", "status": "active", "verification": ["e2e"] },
+    "US-M4-06": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M4-07": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M4-08": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M4-09": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
@@ -62,7 +62,7 @@
     "US-M4-11": { "phase": "P2", "status": "active", "verification": ["e2e"] },
     "US-M4-12": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M4-13": { "phase": "P5", "status": "planned", "verification": ["e2e"] },
-    "US-M4-14": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
-    "US-M4-15": { "phase": "P3", "status": "planned", "verification": ["integration", "e2e"] }
+    "US-M4-14": { "phase": "P3", "status": "active", "verification": ["e2e"] },
+    "US-M4-15": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] }
   }
 }

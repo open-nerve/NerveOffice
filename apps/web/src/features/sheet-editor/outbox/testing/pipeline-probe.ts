@@ -9,10 +9,11 @@
 // 按生产的格式（mirror-slot.ts）校验；库与镜像合一的清理（local-cleanup.ts）在页面里调，与 P4 一样；用完按用户删掉镜像的目录。
 // 不引用编辑器页的时钟模块（它带着请求层与 zod，见 outbox-probe.ts 开头的说明）：看门狗用这里的计时器
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
+import type { DraftObservation } from '../../../../shared/outbox/draft-observation.ts'
 import type { DraftKey, DraftMeta, InFlightSave } from '../../../../shared/outbox/draft-record.ts'
 import type { ReconcileAllOutcome } from '../../../../shared/outbox/draft-recovery.ts'
 import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, DraftWriter, KeyChange, NoticesResult, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../../shared/outbox/draft-writer.ts'
+import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, DraftWriter, KeyChange, NoticesResult, ObservedRemoveResult, ObserveResult, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../../shared/outbox/failure.ts'
 import type { AbandonOutcome, PurgeOutcome, UserCleanupOutcome } from '../../../../shared/outbox/local-cleanup.ts'
 import type { MirrorRemoveOutcome } from '../../../../shared/outbox/mirror-directory.ts'
@@ -80,7 +81,7 @@ export type ProbeSlot
     | { readonly kind: 'valid', readonly generation: number, readonly meta: DraftMeta, readonly size: number }
 
 /** 把槽位改坏：截成 size 字节（写一半）；整个换成 size 个 value（垃圾） */
-export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number }
+export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number } | { readonly at: number, readonly bytes: readonly number[] }
 
 export interface ProbePipeline {
   /** 建一个管道：交回编号与握手的结果（Worker 等握手；进程内一律 ready） */
@@ -89,6 +90,9 @@ export interface ProbePipeline {
   readonly setKey: (id: number, key: 'probe' | 'none') => Promise<Summarized<KeyChange>>
   readonly register: (id: number, key: DraftKey, writer: WriterIdentity, force: boolean) => Promise<Summarized<RegisterResult>>
   readonly write: (id: number, capture: ProbeCapture) => Promise<Summarized<CaptureWritten>>
+  readonly observe: (id: number, key: DraftKey) => Promise<Summarized<ObserveResult>>
+  readonly adopt: (id: number, observation: DraftObservation, capture: Omit<ProbeCapture, 'inFlight' | 'dedupe' | 'adoptSeq'>) => Promise<Summarized<CaptureWritten>>
+  readonly removeObserved: (id: number, observation: DraftObservation) => Promise<ObservedRemoveResult>
   readonly markInFlight: (id: number, key: DraftKey, writer: WriterIdentity, inFlight: InFlightSave) => Promise<ResealResult>
   readonly confirm: (id: number, key: DraftKey, writer: WriterIdentity, confirmedSeq: number, revision: number) => Promise<ConfirmResult>
   readonly read: (id: number, key: DraftKey) => Promise<Summarized<DraftRead>>
@@ -306,6 +310,12 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
     },
     register: async (id, key, writer, force) => summarize(await pipelineOf(id).writer.register(key, writer, force)),
     write: async (id, capture) => summarize(await pipelineOf(id).writer.write(captureOf(capture))),
+    observe: async (id, key) => summarize(await pipelineOf(id).writer.observe(key)),
+    adopt: async (id, observation, capture) => {
+      const { inFlight: _inFlight, dedupe: _dedupe, ...input } = captureOf({ ...capture, inFlight: null, dedupe: false })
+      return summarize(await pipelineOf(id).writer.adopt(observation, input))
+    },
+    removeObserved: async (id, observation) => pipelineOf(id).writer.removeObserved(observation),
     markInFlight: async (id, key, writer, inFlight) => pipelineOf(id).writer.markInFlight(key, writer, inFlight),
     confirm: async (id, key, writer, confirmedSeq, revision) => pipelineOf(id).writer.confirm(key, writer, confirmedSeq, revision),
     read: async (id, key) => summarize(await pipelineOf(id).writer.read(key)),
@@ -365,7 +375,11 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
     cleanupExpired: async now => plainPurge(await localCleanup().purgeExpired(now)),
     mirrorSlots: async key => [await slotOf(key, 0), await slotOf(key, 1)],
     corruptSlot: async (key, slot, corruption) => {
-      await opfs('truncate' in corruption ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate } : { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value })
+      await opfs('truncate' in corruption
+        ? { op: 'truncate', path: pathOf(key, slot), size: corruption.truncate }
+        : 'fill' in corruption
+          ? { op: 'fill', path: pathOf(key, slot), size: corruption.fill, value: corruption.value }
+          : { op: 'patch', path: pathOf(key, slot), ...corruption })
     },
     removeMirror: async userId => opfsMirrorDirectory().removeUser(userId),
     removeMirrorDocument: async key => opfsMirrorDirectory().removeDocument(key),

@@ -9,6 +9,7 @@ export type OpfsProbeCall
   = | { readonly op: 'read', readonly path: readonly string[] }
     | { readonly op: 'truncate', readonly path: readonly string[], readonly size: number }
     | { readonly op: 'fill', readonly path: readonly string[], readonly size: number, readonly value: number }
+    | { readonly op: 'patch', readonly path: readonly string[], readonly at: number, readonly bytes: readonly number[] }
 
 export type OpfsProbeRequest = OpfsProbeCall & { readonly id: number }
 
@@ -54,6 +55,10 @@ async function handle(request: OpfsProbeRequest): Promise<Uint8Array<ArrayBuffer
       }
       case 'truncate':
         file.truncate(request.size)
+        file.flush()
+        return null
+      case 'patch':
+        file.write(new Uint8Array(request.bytes), { at: request.at })
         file.flush()
         return null
       case 'fill':

@@ -98,34 +98,67 @@ describe('两个标签页的本人接管（takeoverJudgement）', () => {
   })
 })
 
-describe('刷新时在途的保存（refreshJudgement）', () => {
-  /** 刷新之前第 1 代；保存在 1000 停在服务端，13000 停完、13050 修订号前进，15000 本人接管第 2 代 */
-  const STATES: readonly DocumentState[] = [state(0), state(200, { epoch: 1 }), state(13_050, { revision: 2, epoch: 1 }), state(15_000, { revision: 2, epoch: 2, takeover: 'self' }), state(20_000, { revision: 2, epoch: 2, takeover: 'self', endReason: 'released' })]
+describe('刷新在途保存：新页面只核对原回执（refreshJudgement）', () => {
+  const instance = 'original-instance'
+  const STATES: readonly DocumentState[] = [state(0), state(200, { epoch: 1, clientInstanceId: instance }), state(15_100, { revision: 2, epoch: 1, clientInstanceId: instance })]
   const SAVE: ServerRequest = { time: 2_600, method: 'PUT', route: '/api/documents/:id/content', statusCode: undefined, aborted: true, durationMs: 1_600 }
-  const TAKE: ServerRequest = { time: 15_000, method: 'POST', route: '/api/documents/:id/edit-lease', statusCode: 201, aborted: false, durationMs: 20 }
-  const LATER_RELEASE: ServerRequest = { time: 20_000, method: 'DELETE', route: '/api/documents/:id/edit-lease', statusCode: 204, aborted: false, durationMs: 5 }
+  const ACQUIRE: ServerRequest = { time: 15_000, method: 'POST', route: '/api/documents/:id/edit-lease', statusCode: 201, aborted: false, durationMs: 20 }
+  const REPLAY: ServerRequest = { time: 15_040, method: 'PUT', route: '/api/documents/:id/content', statusCode: 200, aborted: false, durationMs: 20 }
+  const RELEASE: ServerRequest = { time: 15_080, method: 'DELETE', route: '/api/documents/:id/edit-lease', statusCode: 204, aborted: false, durationMs: 10 }
+  const baseline = { report: { ...report('refresh-save', 'confirmed-reading'), facts: { receiptPath: 'direct', replayAttempts: 1, receiptRetryAt: null } }, states: STATES, requests: [SAVE, REPLAY], blockedAt: 1_000, finishedAt: 13_000 }
 
-  it('committed、刷新之前那一代没有明确结束、新一代本人接管、接手之前没有释放（接手之后交回结果时的释放不算）：没有问题；证据说那次保存的请求在服务端中断', () => {
-    const judgement = refreshJudgement({ report: report('refresh-save', 'committed'), states: STATES, requests: [SAVE, TAKE, LATER_RELEASE], blockedAt: 1_000, finishedAt: 13_000 })
+  it('新页面仅核对原保存回执，零申请零释放且不产生新租约代次', () => {
+    const judgement = refreshJudgement(baseline)
     expect(judgement.problems).toEqual([])
-    expect(judgement.evidence).toBe('（相对保存停在服务端）保存停在服务端，+12000 ms 停完；保存的请求在服务端：PUT /api/documents/:id/content 中断（结束于 +1600 ms，用时 1600 ms）；修订号 1（开始时） → 2（+12050 ms）；第 1 代没有明确结束；+14000 ms 第 2 代，接管方式 self；接手之前的释放 0 个；页面交回的路 committed')
+    expect(judgement.evidence).toContain('confirmed-reading')
+    expect(judgement.evidence).toContain('中断')
   })
 
-  it('保存没停住、没交回、等满了 30 秒、刷新之前那一代被释放、接手之前收到释放、新一代不是本人接管、修订号没在接手之前前进、没有新一代：都算问题', () => {
-    expect(refreshJudgement({ report: undefined, states: STATES, requests: [], blockedAt: undefined, finishedAt: 0 }).problems).toEqual(['保存没有停在服务端（没有看到它在改写内容行时停着）', '刷新之后的那一次没有交回结果'])
-    expect(refreshJudgement({ report: report('refresh-save', 'expired'), states: STATES, requests: [], blockedAt: 1_000, finishedAt: 13_000 }).problems).toEqual(['页面等满了 30 秒才接手：停在服务端的那次保存没有提交？'])
-    const released = [state(0), state(200, { epoch: 1 }), state(2_700, { epoch: 1, endReason: 'released' }), state(15_000, { revision: 2, epoch: 2 })]
-    const early: ServerRequest = { ...LATER_RELEASE, time: 2_650 }
-    expect(refreshJudgement({ report: report('refresh-save', 'committed'), states: released, requests: [SAVE, early], blockedAt: 1_000, finishedAt: 13_000 }).problems).toEqual([
-      '刷新之前那一代（第 1 代）明确结束了（released，+1700 ms）：页面关闭时不应释放',
-      '接手之前服务端收到了释放：DELETE /api/documents/:id/edit-lease 204（结束于 +1650 ms，用时 5 ms）',
-    ])
-    expect(refreshJudgement({ report: report('refresh-save', 'committed'), states: [state(0), state(200, { epoch: 1 }), state(15_000, { epoch: 2 })], requests: [], blockedAt: 1_000, finishedAt: 13_000 }).problems).toEqual([
-      '新一代的接管方式是 空（应当是本人接管：接手时刷新之前那一代还有效）',
-      '页面说那次保存提交了才接手，库里修订号却没有前进',
-    ])
-    expect(refreshJudgement({ report: report('refresh-save', 'committed'), states: [state(0), state(200, { epoch: 1 }), state(15_000, { epoch: 2, takeover: 'self' }), state(16_000, { revision: 2, epoch: 2, takeover: 'self' })], requests: [], blockedAt: 1_000, finishedAt: 13_000 }).problems).toEqual(['页面说那次保存提交了才接手，库里修订号却在接手之后（+15000 ms）才前进'])
-    expect(refreshJudgement({ report: report('refresh-save', 'committed'), states: [state(0), state(200, { epoch: 1 })], requests: [], blockedAt: 1_000, finishedAt: 13_000 }).problems).toEqual(['库里没有看到第 1 代之后的新一代（没有接手）'])
-    expect(refreshJudgement({ report: report('refresh-save', 'committed'), states: [state(0)], requests: [], blockedAt: 1_000, finishedAt: 13_000 }).problems).toEqual(['库里没有看到刷新之前那一代的编辑租约'])
+  it('繁忙后只允许明确重查一次，页面路径与独立 HTTP 次序必须相符', () => {
+    const busy: ServerRequest = { ...REPLAY, time: 7_000, durationMs: 5_000, statusCode: 503 }
+    const retried = { ...baseline, report: { ...baseline.report, facts: { receiptPath: 'explicit-recheck', replayAttempts: 2, receiptRetryAt: 14_000 } }, requests: [SAVE, busy, REPLAY] }
+    expect(refreshJudgement(retried).problems).toEqual([])
+    expect(refreshJudgement({ ...retried, report: baseline.report }).problems).toContain('核对请求次序与页面明确重查证据不符')
+    expect(refreshJudgement({ ...retried, requests: [SAVE, { ...busy, statusCode: 409 }, REPLAY] }).problems).toContain('核对请求次序与页面明确重查证据不符')
+    expect(refreshJudgement({ ...retried, report: { ...retried.report, facts: { ...retried.report.facts, receiptRetryAt: 15_030 } } }).problems).toContain('成功核对早于明确重查，或缺少重查时刻')
+    expect(refreshJudgement({ ...retried, requests: [SAVE, busy, busy, REPLAY] }).problems).toContain('核对请求次序与页面明确重查证据不符')
+  })
+
+  it.each(['committed', 'expired', undefined])('没有证明确认后阅读的路径 %s 不通过', (path) => {
+    expect(refreshJudgement({ ...baseline, report: report('refresh-save', path) }).problems).toContain('页面没有证明仅核对原保存回执并保持阅读')
+  })
+
+  it.each([{ clientInstanceId: instance }, { clientInstanceId: 'someone-else' }, { takeover: 'self' as const }])('任何新租约代次都不通过：%j', (fields) => {
+    const states = [...STATES, state(15_200, { revision: 2, epoch: 2, ...fields })]
+    expect(refreshJudgement({ ...baseline, states }).problems).toContain('只核对旧回执不应产生新的编辑租约代次')
+  })
+
+  it.each([ACQUIRE, { ...ACQUIRE, statusCode: 409 }, { ...ACQUIRE, statusCode: undefined, aborted: true }, { ...ACQUIRE, durationMs: undefined }])('请求日志里的任何申请都不通过，不能只看数据库代次：%j', (acquire) => {
+    expect(refreshJudgement({ ...baseline, requests: [SAVE, acquire, REPLAY] }).problems).toContain('核对旧回执期间不应申请编辑权（包括失败或中断的申请）')
+  })
+
+  it('初次进入编辑发生在保存之前：用请求开始时刻判断，不把晚到的日志当刷新后申请', () => {
+    const initial = { ...ACQUIRE, time: 1_200, durationMs: 1_000 }
+    expect(refreshJudgement({ ...baseline, requests: [initial, SAVE, REPLAY] }).problems).toEqual([])
+  })
+
+  it('离开或核对期间都不释放旧代次；核对完仍不得释放', () => {
+    const states = [...STATES, state(15_200, { revision: 2, epoch: 1, endReason: 'released', clientInstanceId: instance })]
+    expect(refreshJudgement({ ...baseline, states }).problems).toContain('刷新之前那一代明确结束：页面关闭时不应释放')
+    expect(refreshJudgement({ ...baseline, requests: [SAVE, REPLAY, RELEASE] }).problems).toContain('核对旧回执期间不应释放编辑权')
+  })
+
+  it('没有唯一确认回执，或者租约/修订号证据缺失都不通过', () => {
+    expect(refreshJudgement({ ...baseline, requests: [SAVE] }).problems).toContain('刷新后应当恰好一次成功核对旧保存回执')
+    expect(refreshJudgement({ ...baseline, requests: [SAVE, REPLAY, REPLAY] }).problems).toContain('刷新后应当恰好一次成功核对旧保存回执')
+    expect(refreshJudgement({ ...baseline, states: [state(0), state(15_100, { revision: 2 })] }).problems).toContain('库里没有看到刷新之前那一代的编辑租约')
+    expect(refreshJudgement({ ...baseline, states: STATES.map(row => ({ ...row, revision: 1 })) }).problems).toContain('云端修订号没有恰好前进一次')
+    expect(refreshJudgement({ ...baseline, states: [...STATES, state(15_200, { revision: 3, epoch: 1 })] }).problems).toContain('云端修订号没有恰好前进一次')
+  })
+
+  it('保存没停住、没交回结果都会说明缺失', () => {
+    const problems = refreshJudgement({ ...baseline, report: undefined, blockedAt: undefined }).problems
+    expect(problems).toContain('保存没有停在服务端（没有看到它在改写内容行时停着）')
+    expect(problems).toContain('刷新之后的那一次没有交回结果')
   })
 })

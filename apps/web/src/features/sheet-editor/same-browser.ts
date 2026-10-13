@@ -8,8 +8,8 @@
 //   untilFree 等它空着（排队、轮到即放开，只当信号）：同一个浏览器里的交接以它为"那边做完了"的信号；
 // - 锁 nerve-office:edit-request:<documentId>（M3-P5 复验 C2）：发出过请求编辑的标签页在等待（含编辑权交给了本页、还没进入的 granted）期间
 //   以共享方式持有它（holdIssuedRequest；同一个人在两页都点了"请求编辑"时两页都持有）。issuedRequestHeld 看本浏览器里有没有标签页持有它：
-//   "复制标签页"会连同 sessionStorage 里"发出过请求"的记号（issued-request.ts）一起复制，记号对得上而这把锁有人持有，说明原来那页还在、
-//   自己是复制出来的；没人持有说明原来那页已经刷新或关掉（浏览器在页面卸载时替它放开）；
+//   当前 Document 的请求意图只存在内存（issued-request.ts），此锁只协调仍活着的等待页，空闲不能证明原页身份；
+//   新 Document 不凭旧 sessionStorage 与空闲锁自动接手请求；
 // - 交接频道 nerve-office:doc:<documentId>（BroadcastChannel）：同一个浏览器里本人接管时的请求与回应（设计 §3.7；请求方一侧在 self-takeover.ts，
 //   回应的一侧在 tab-handover.ts）。
 //   消息带版本（v）：两个标签页可能载入了不同版本的页面，版本不同的、解析不出的、请求里的文档不是这一份的一律忽略（对方按没有回应处理）。
@@ -222,6 +222,14 @@ async function request(locks: LockApi, name: string, options: LockRequestOptions
     },
   )
   return outcome
+}
+
+/** 严格的实例存活证明：仅尝试独占，忙或 API 失败都没有句柄；不能使用文档锁的 UNTRACKED 退路。 */
+export async function tryHoldExclusive(locks: LockApi | undefined, name: string): Promise<HeldLock | undefined> {
+  if (locks === undefined)
+    return undefined
+  const outcome = await request(locks, name, { mode: 'exclusive', ifAvailable: true })
+  return typeof outcome === 'string' ? undefined : outcome
 }
 
 /** 本浏览器里有没有标签页持有这把锁（query：别的浏览器、配置文件、无痕窗口与设备都看不到）。浏览器没有锁、查不出时为 false */

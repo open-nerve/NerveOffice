@@ -6,6 +6,39 @@ import { settle } from './fake-lease-clock.test-support.ts'
 
 afterEach(disposeSessions)
 
+describe('恢复来源接入现有保存会话', () => {
+  it('准备回调与初值状态完整透传，序号零无需额外输入就自动上传恢复正文', async () => {
+    const { session, options, time } = fixture()
+    const held = leaseFixture()
+    session.acceptLease(held, INITIAL.revision)
+    await session.claim(held)
+    const result = await session.prepareDraft({ revision: INITIAL.revision, recover: async (context) => {
+      expect(context.kind).toBe('memory')
+      return { kind: 'restore', capture: { snapshot: '{"v":"恢复"}', editorSeq: 0, formulasPending: false }, baseRevision: INITIAL.revision, highWater: 72 }
+    } })
+    expect(result).toMatchObject({ kind: 'ready', restored: true })
+    session.startSaving(editorFixture().editor, { ...INITIAL, initialUnsaved: true })
+    expect(session.coordinator!.view()).toMatchObject({ status: 'dirty', unsavedEdits: true })
+    await time.advance(2_000)
+    await vi.waitFor(() => expect(options.api.save).toHaveBeenCalledTimes(1))
+    const sent = vi.mocked(options.api.save).mock.calls[0]!
+    expect(sent[1]).toMatchObject({ localSeq: 73, baseRevision: INITIAL.revision })
+    expect(new TextDecoder().decode(await gunzipBytes(sent[2]))).toBe('{"v":"恢复"}')
+    await vi.waitFor(() => expect(session.coordinator!.view()).toMatchObject({ unsavedEdits: false }))
+  })
+
+  it('恢复被打开屏障拒绝时没有就绪来源，不能启动保存', async () => {
+    const { session, options } = fixture()
+    const held = leaseFixture()
+    session.acceptLease(held, INITIAL.revision)
+    await session.claim(held)
+    expect(await session.prepareDraft({ revision: INITIAL.revision, recover: async () => ({ kind: 'blocked', reason: 'formulas' }) })).toEqual({ kind: 'blocked', reason: 'formulas' })
+    expect(session.draft).toBeUndefined()
+    expect(() => session.startSaving(editorFixture().editor, INITIAL)).toThrow()
+    expect(options.api.save).not.toHaveBeenCalled()
+  })
+})
+
 describe('本机状态跟随当前编辑和输入', () => {
   it('A 落盘晚于 B 的编辑不能覆盖 B；输入未提交时也不能声称全部已落盘', async () => {
     const local = await localDrafts()

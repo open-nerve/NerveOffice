@@ -4,7 +4,7 @@ import type { ConflictCopyQuery, CreatedDocument } from '@nerve-office/contracts
 import type { ContentFormat } from '../../shared/outbox/draft-record.ts'
 import type { DraftCaptureRef, DraftFailure, PreparedDraft, WorkingDraft } from './working-draft.ts'
 import { conflictCopyTitle } from '@nerve-office/contracts'
-import { isDefiniteRejection } from '../../shared/api/index.ts'
+import { concludesRequest } from '../../shared/api/request-ids.ts'
 
 /** 另存为副本的标题里的时间：页面所在的时区，写到分钟，例如"2026-10-04 15:30" */
 export function conflictCopyLabel(at: Date): string {
@@ -105,7 +105,7 @@ export function createLostCopy(options: LostCopyOptions): LostCopy {
       return created
     }
     catch (error) {
-      if (isDefiniteRejection(error))
+      if (concludesRequest(error))
         release()
       throw error
     }

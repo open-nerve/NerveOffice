@@ -597,6 +597,11 @@ describe('US-M1-09 生产构建里没有测试构建的模块：按来源认（M
     expect(checkTestOnlyArtifacts(['assets/formula-mode-Dx1.js', 'assets/formula-D2.js', 'assets/my-formula-mode-x.js']).map(v => v.subject)).toEqual(['assets/formula-mode-Dx1.js'])
   })
 
+  it('恢复身份诊断的源码合入生产块或独立成块均拒绝', () => {
+    expect(checkTestOnlySources({ 'assets/editor-a.js': { name: 'editor', modules: ['src/features/sheet-editor/recovery/testing/reload-diagnostics.ts'] } }, ['assets/editor-a.js']).map(v => v.rule)).toEqual(['artifacts/test-only-source'])
+    expect(checkTestOnlyArtifacts(['assets/reload-diagnostics-a.js']).map(v => v.rule)).toEqual(['artifacts/test-only'])
+  })
+
   it('发件箱的浏览器层探针（M4-P1 设计 §3.1）：来源在 features/sheet-editor/outbox/testing/ 下，按来源认；单独成块时按名字兜底；发件箱的生产模块与名字相近的都不算', () => {
     for (const module of ['src/features/sheet-editor/outbox/testing/outbox-probe.ts', 'src/features/sheet-editor/outbox/testing/pipeline-probe.ts', 'src/features/sheet-editor/outbox/testing/outbox-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/opfs-probe.worker.ts', 'src/features/sheet-editor/outbox/testing/transaction-recorder.ts'])
       expect(isTestOnlySource(module), module).toBe(true)

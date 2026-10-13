@@ -13,9 +13,11 @@
 // 两个人（US-M3-11）：甲断网、编辑权到期，乙接手并保存；甲回来之后的保存一定被拒，甲的内容另存为副本（服务端按快照新建，
 // 放在哪里按甲在原文档所在空间的新建权限，标题带上失效时的时间）。期间没人保存过时自动续上的情形在 lease-recovery.spec.ts
 import type { Page, Request } from '@playwright/test'
+import type { Workbook } from '../../support/sheet.ts'
 import { EDIT_LEASE_HEARTBEAT_SECONDS } from '@nerve-office/contracts'
 import { createDocumentIn, createFolderIn, createTeamSpace, createUser, expireEditLease, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { currentLocalKey, diskSnapshot, readLocalDisk } from '../../support/local-draft.ts'
 import { shownName } from '../../support/people.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, expectFoundOnce, headerAnnouncement, isSaveRequest, leaveEditor, lostNotice, openAndEnterEditing, openReader, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
@@ -162,13 +164,21 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
   })
 
   test('编辑权失效之后放弃本页的修改：看到服务器上的最新版本，点"编辑"可以继续编辑保存', async ({ page, context }) => {
-    await loginThroughApi(page, await createUser('conflict-reload'))
+    const owner = await createUser('conflict-reload')
+    await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     await page.clock.install()
     await openAndEnterEditing(page, documentId)
     // 这一页断网、休眠（拦下心跳与保存）之后改了一处：这一处存不上
     const asleep = await disconnectTab(page)
     await typeInCell(page, 'B1', 'older page')
+    // 接手只采用已经落盘的草稿；按下 Enter 尚未经过捕获静默，不能把页面加载耗时当成持久化前提。
+    const key = { userId: owner.id, documentId }
+    const secret = await currentLocalKey(page)
+    await expect.poll(async () => {
+      const draft = (await readLocalDisk(page, key)).draft
+      return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'B1')?.v
+    }).toBe('older page')
 
     // 编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
     // 等释放到了服务端再往下：这一页重新加载时要取得编辑权，释放晚到时它只能阅读（P1 设计 §7 第一条，P5 用 Web Locks 解决）
@@ -178,8 +188,13 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await expect(saveButton(other)).toBeVisible()
     await typeInCell(other, 'A1', 'newer')
     await saveAndWait(other)
+    const handedOver = (await savedContent(other, documentId)).snapshot
+    expect([cellOf(handedOver, 'A1')?.v, cellOf(handedOver, 'B1')?.v]).toEqual(['newer', 'older page'])
     await leaveEditor(other, documentId)
     await other.close()
+
+    // S3 普通编辑也先恢复同用户的本机草稿，B1 已随新页保存上云；只在旧页继续输入的 D1 才应被本次放弃。
+    await typeInCell(page, 'D1', '只在旧页的新输入')
 
     // 这一页回来：另一个标签页抢走本机锁时它断着网、核对不了，照常留在编辑（M3-P6 设计 §3.13）；M4-P2 等真实续租裁决，下一次心跳得知
     // 那一代已被换掉，续上时发现别处保存过更新的版本——不覆盖它，说明之后给"另存为副本"与"放弃本页的修改"。
@@ -202,7 +217,7 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
     await typeInCell(page, 'C1', 'after discard')
     await saveAndWait(page)
     const saved = (await savedContent(page, documentId)).snapshot
-    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1'), cellOf(saved, 'C1')?.v]).toEqual(['newer', undefined, 'after discard'])
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v, cellOf(saved, 'C1')?.v, cellOf(saved, 'D1')]).toEqual(['newer', 'older page', 'after discard', undefined])
   })
 })
 

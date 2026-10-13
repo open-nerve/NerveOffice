@@ -692,7 +692,7 @@ describe('这一页发出过的请求（审查 B2，issued-request.ts）', () =>
     expect(cancelled.issued.read()).toBeUndefined()
   })
 
-  it('发出时编辑权就交给了本页（reserved、free）：页面看得见就进入（随之清掉）；在后台时留在 granted，记号在（不带时刻），刷新之后照它恢复', async () => {
+  it('发出时编辑权就交给了本页（reserved、free）：页面看得见就进入（随之清掉）；在后台时留在 granted，记号在（不带时刻），本 Document 继续等待', async () => {
     const visible = setup({ send: async () => RESERVED })
     await visible.requests.send()
     expect(visible.enter).toHaveBeenCalledOnce()
@@ -705,7 +705,7 @@ describe('这一页发出过的请求（审查 B2，issued-request.ts）', () =>
     expect(hidden.issued.read()).toEqual({ requestedAt: undefined })
   })
 
-  it('撤回（页面关闭）时不清：刷新时那次撤回没送到的话，刷新之后照记号恢复等待', async () => {
+  it('撤回（页面关闭）时不清：当前活页的撤回未送达时仍可续接，Document 销毁后失效', async () => {
     const context = setup()
     await waiting(context)
     context.requests.withdraw()
@@ -799,7 +799,7 @@ describe('"发出过请求"的锁（复验 C2：复制标签页连同记号一�
     expect(hidden.issuers()).toEqual([])
   })
 
-  it('恢复等待时持有它；撤回（页面关闭、编辑器建不起来）、停下（卸载）时放开——记号照旧留着（刷新之后照它恢复，原来那页的锁那时已经放开）', async () => {
+  it('续接当前页请求时持锁；撤回时放锁保留活页内存意图，销毁时放锁并清空意图', async () => {
     const context = setup()
     context.issued.write(PENDING.kind === 'pending' ? PENDING.requestedAt : '')
     context.requests.resume(AMY)
@@ -816,6 +816,7 @@ describe('"发出过请求"的锁（复验 C2：复制标签页连同记号一�
     disposed.requests.dispose()
     await settle()
     expect(disposed.issuers()).toEqual([])
+    expect(disposed.issued.read()).toBeUndefined()
   })
 
   it('拿锁还没回来时请求就结束了（或者停下了）：之后才拿到的锁随即放开，不留着', async () => {

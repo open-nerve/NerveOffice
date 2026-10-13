@@ -16,11 +16,15 @@
 // 容器 E2E 也跑（生产镜像里定时的自动保存照常运行）：要"修改没存上"的在修改之前拦下那一页的保存（blockSaves），断言只看结果；
 // 交接成功时旧页的修改由交出前的保存或之前的自动保存存上，都按服务器上的内容断言
 import type { Page, Request } from '@playwright/test'
+import type { HandoverLog, HandoverLogEntry } from '../../../../apps/web/src/editor/testing/handover-log.ts'
+import type { Workbook } from '../../support/sheet.ts'
 import { randomUUID } from 'node:crypto'
-import { advanceTo, advanceUntil, holdSaves, pausedNow, pauseTime, setPageHidden } from '../../support/autosave.ts'
+import { HANDOVER_LOG_GLOBAL } from '../../../../apps/web/src/editor/testing/handover-log.ts'
+import { advanceTo, advanceUntil, holdSaves, pausedNow, pauseTime, recordWrites, setPageHidden } from '../../support/autosave.ts'
 import { CURRENT_CLIENT } from '../../support/client-format.ts'
 import { createUser, editLeaseEndReason, editLeaseEpoch, editLeaseTakeover } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { currentLocalKey, diskSnapshot, readLocalDisk } from '../../support/local-draft.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
 import { blockSaves, cellOf, createSheetThroughApi, deafenHandover, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, isSaveRequest, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, statusRegion, takeOverHereButton, typeInCell, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
 
@@ -106,7 +110,94 @@ async function copiedDocumentId(page: Page): Promise<string> {
   return (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
 }
 
+async function handoverLog(page: Page): Promise<HandoverLogEntry[]> {
+  return page.evaluate(name => (window as unknown as Record<string, HandoverLog | undefined>)[name]?.log() ?? [], HANDOVER_LOG_GLOBAL)
+}
+
 test.describe('US-M3-08 本人接管："在此编辑"', () => {
+  test('US-M4-06 回应 ack 但保存挂起：首次请求起固定 20 秒裁决，再接上 A1、保存 B1；旧页迟到保存与副本不覆盖新正文', { tag: '@test-build' }, async ({ page, context }) => {
+    const owner = await createUser('takeover-twenty-seconds')
+    await loginThroughApi(page, owner)
+    const documentId = await createSheetThroughApi(page)
+    const key = { userId: owner.id, documentId }
+    await page.clock.install()
+    // 只延迟真实交接 ack 的运输；旧实现若从 ack 重新计 20 秒，会在首次请求第 20 秒仍不申请。
+    await page.addInitScript(() => {
+      const NativeChannel = BroadcastChannel
+      globalThis.BroadcastChannel = class extends NativeChannel {
+        override postMessage(message: unknown): void {
+          if (this.name.startsWith('nerve-office:doc:') && (message as { type?: string }).type === 'handover-ack') {
+            Object.assign(window, { __queuedHandoverAck: true })
+            setTimeout(() => super.postMessage(message), 2_000)
+          }
+          else {
+            super.postMessage(message)
+          }
+        }
+      }
+    })
+    await openAndEnterEditing(page, documentId)
+    const other = await context.newPage()
+    await openReader(other, documentId)
+    const secret = await currentLocalKey(page)
+    const oldWrites = recordWrites(page, documentId)
+    const saves = await holdSaves(page)
+    await typeInCell(page, 'A1', '交接截止前已落盘的 A1')
+    await page.keyboard.press('ControlOrMeta+s')
+    await expect.poll(() => saves.held()).toBeGreaterThan(0)
+    await expect.poll(async () => {
+      const draft = (await readLocalDisk(page, key)).draft
+      return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'A1')?.v
+    }).toBe('交接截止前已落盘的 A1')
+    const takeovers = recordTakeovers(other, documentId)
+    await takeOverHereButton(other).focus()
+    await pauseTime(page)
+    try {
+      await other.keyboard.press('Enter')
+      await expect.poll(async () => page.evaluate(() => (window as typeof window & { __queuedHandoverAck?: boolean }).__queuedHandoverAck ?? false)).toBe(true)
+      const asked = (await handoverLog(other)).find(entry => entry.kind === 'handover-request')!
+      await advanceTo(other, asked.at + 2_000)
+      await expect.poll(async () => (await handoverLog(other)).some(entry => entry.kind === 'handover-reply' && entry.reply === 'ack')).toBe(true)
+      expect((await handoverLog(other)).find(entry => entry.kind === 'handover-reply' && entry.reply === 'ack')!.at - asked.at).toBe(2_000)
+      await advanceTo(other, asked.at + 19_999)
+      expect(takeovers).toEqual([])
+      expect((await handoverLog(other)).some(entry => entry.kind === 'handover-silent')).toBe(false)
+      await advanceTo(other, asked.at + 20_000)
+      await expect.poll(() => takeovers).toEqual(['self'])
+      const silent = (await handoverLog(other)).find(entry => entry.kind === 'handover-silent')!
+      expect(silent.at - asked.at).toBe(20_000)
+    }
+    finally {
+      await page.clock.resume()
+    }
+    try {
+      await waitForEditorAccess(other, 'edit')
+      const log = await handoverLog(other)
+      expect(log.findIndex(entry => entry.kind === 'lock-verdict' && entry.when === 'claim' && entry.verdict === 'current')).toBeGreaterThan(log.findIndex(entry => entry.kind === 'acquire-result' && entry.result === 'acquired'))
+      expect(await editLeaseTakeover(documentId)).toBe('self')
+      await typeInCell(other, 'B1', '接手后新增的 B1')
+      await saveAndWait(other)
+      const original = oldWrites.saves[0]!
+      const refused = page.waitForResponse(response => response.request() === original)
+      saves.release()
+      const rejection = await refused
+      expect(rejection.status()).toBe(409)
+      expect(rejection.request().url()).toBe(original.url())
+      expect(rejection.request().postDataBuffer()).toEqual(original.postDataBuffer())
+      expect(await rejection.json()).toMatchObject({ error: { code: 'EDIT_LEASE_LOST', details: { reason: 'taken_over', forced: false } } })
+      await expect(lostNotice(page)).toContainText('本浏览器的另一个标签页接手了编辑')
+      await waitForEditorAccess(page, 'read')
+      await lostNotice(page).getByRole('button', { name: '另存为副本', exact: true }).click()
+      const copy = (await savedContent(page, await copiedDocumentId(page))).snapshot
+      expect([cellOf(copy, 'A1')?.v, cellOf(copy, 'B1')]).toEqual(['交接截止前已落盘的 A1', undefined])
+      const cloud = (await savedContent(other, documentId)).snapshot
+      expect([cellOf(cloud, 'A1')?.v, cellOf(cloud, 'B1')?.v]).toEqual(['交接截止前已落盘的 A1', '接手后新增的 B1'])
+    }
+    finally {
+      saves.release()
+    }
+  })
+
   test('US-M3-08 同一个浏览器的两个标签页：B 点"在此编辑"，A 先保存再交出（不释放，审查 B4）、回到阅读并说明；B 等 A 做完才以本人接管申请，以服务器上包括 A 的修改的内容进入编辑——任何时候只有一个标签页在编辑', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('takeover-tabs'))
     const documentId = await createSheetThroughApi(page)
@@ -189,15 +280,18 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
     await expect(lost).toContainText('编辑权已失效：你在本浏览器的另一个标签页接手了编辑。本页的修改没有保存：可以另存为副本，或者放弃这些修改。')
     await waitForEditorAccess(page, 'read')
     await saves.unblock()
-    await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
-    const copyId = await copiedDocumentId(page)
-    expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('only in the deaf tab')
 
-    // B 照常编辑、保存；原文档里没有 A 没存上的修改
+    // M4-P3 的统一准备入口接上本机草稿；B 在恢复内容上继续编辑并保存
     await typeInCell(other, 'B1', 'second tab')
     await saveAndWait(other)
+    await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
+    const copyId = await copiedDocumentId(page)
+    const copiedContent = (await savedContent(page, copyId)).snapshot
+    expect([cellOf(copiedContent, 'A1')?.v, cellOf(copiedContent, 'B1')]).toEqual(['only in the deaf tab', undefined])
+
+    // A 的副本保持旧页内容；原文档同时保留 B 恢复的内容与 B 后来的输入
     const saved = (await savedContent(other, documentId)).snapshot
-    expect([cellOf(saved, 'A1'), cellOf(saved, 'B1')?.v]).toEqual([undefined, 'second tab'])
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v]).toEqual(['only in the deaf tab', 'second tab'])
   })
 
   test('US-M3-08 B 已本人接管但尚未抢锁，A 心跳先得知失效：sameSession 立即说明本浏览器接手，不等本机证据（DEF-071）', async ({ page, context }) => {

@@ -172,7 +172,7 @@ describe('失效副本的保存结果', () => {
     expect(onSessionProblem).toHaveBeenCalledExactlyOnceWith(failure)
     expect(await copy.save()).toEqual({ kind: 'done', document: CREATED })
     expect(onSessionProblem).toHaveBeenCalledTimes(1)
-    expect(conflictCopy.mock.calls.map(call => call[1].requestId)).toEqual(['copy-1', 'copy-2'])
+    expect(conflictCopy.mock.calls.map(call => call[1].requestId)).toEqual(['copy-1', 'copy-1'])
   })
 
   it.each([

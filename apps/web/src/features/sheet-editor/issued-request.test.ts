@@ -22,17 +22,27 @@ function memoryStorage(): MarkerStorage & { readonly items: Map<string, string> 
 }
 
 describe('这一页发出过的请求编辑的记号（M3-P5 审查 B2）', () => {
-  it('写下之后读得到（发出的时刻，或者不带时刻），键是 nerve-office:edit-request:<documentId>；清掉之后没有；每份文档各自一个', () => {
+  it('新 Document 不继承合法旧请求记号，原页消失也不能据此续期或接手', () => {
+    const storage = memoryStorage()
+    storage.items.set(issuedRequestKeyOf(DOCUMENT_ID), JSON.stringify({ v: 1, requestedAt: AT }))
+    const page = issuedRequestMarker(DOCUMENT_ID, { storage: () => storage })
+    expect(page.read()).toBeUndefined()
+    expect(storage.items.has(issuedRequestKeyOf(DOCUMENT_ID))).toBe(false)
+    page.write(AT)
+    expect(page.read()).toEqual({ requestedAt: AT })
+    expect(issuedRequestMarker(DOCUMENT_ID, { storage: () => storage }).read()).toBeUndefined()
+  })
+  it('本页写下后读得到，清掉后没有；不同页面/文档各自独立，存储中不留下记号', () => {
     const storage = memoryStorage()
     const marker = issuedRequestMarker(DOCUMENT_ID, { storage: () => storage })
     expect(marker.read()).toBeUndefined()
     marker.write(AT)
     expect(issuedRequestKeyOf(DOCUMENT_ID)).toBe(`nerve-office:edit-request:${DOCUMENT_ID}`)
-    expect(JSON.parse(storage.items.get(issuedRequestKeyOf(DOCUMENT_ID)) ?? 'null')).toEqual({ v: 1, requestedAt: AT })
+    expect(storage.items.size).toBe(0)
     expect(marker.read()).toEqual({ requestedAt: AT })
     expect(issuedRequestMarker(OTHER_ID, { storage: () => storage }).read()).toBeUndefined()
     marker.write(undefined)
-    expect(JSON.parse(storage.items.get(issuedRequestKeyOf(DOCUMENT_ID)) ?? 'null')).toEqual({ v: 1 })
+    expect(storage.items.size).toBe(0)
     expect(marker.read()).toEqual({ requestedAt: undefined })
     marker.clear()
     expect(marker.read()).toBeUndefined()
@@ -49,14 +59,14 @@ describe('这一页发出过的请求编辑的记号（M3-P5 审查 B2）', () =
     expect(issuedRequestMarker(DOCUMENT_ID, { storage: () => storage }).read()).toBeUndefined()
   })
 
-  it('存储不可用：取它就抛出（被禁用、沙箱）、读写抛出——读出来是没有，写与清什么也不做，不抛出', () => {
+  it('存储不可用或清理失败不影响本页明确操作，新的对象仍不继承', () => {
     const unavailable = issuedRequestMarker(DOCUMENT_ID, {
       storage: () => {
         throw new DOMException('The operation is insecure.', 'SecurityError')
       },
     })
     expect(() => unavailable.write(AT)).not.toThrow()
-    expect(unavailable.read()).toBeUndefined()
+    expect(unavailable.read()).toEqual({ requestedAt: AT })
     expect(() => unavailable.clear()).not.toThrow()
     const failing: MarkerStorage = {
       getItem: () => {
@@ -71,8 +81,10 @@ describe('这一页发出过的请求编辑的记号（M3-P5 审查 B2）', () =
     }
     const broken = issuedRequestMarker(DOCUMENT_ID, { storage: () => failing })
     expect(() => broken.write(AT)).not.toThrow()
-    expect(broken.read()).toBeUndefined()
+    expect(broken.read()).toEqual({ requestedAt: AT })
     expect(() => broken.clear()).not.toThrow()
+    expect(broken.read()).toBeUndefined()
+    expect(issuedRequestMarker(DOCUMENT_ID, { storage: () => failing }).read()).toBeUndefined()
   })
 
   it('认（issuedHere）：本人待回应的请求要发出时刻对得上；留给本人的保留有记号就算；没有记号、没有本人的请求都不是', () => {

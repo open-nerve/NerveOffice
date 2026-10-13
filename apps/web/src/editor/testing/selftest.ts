@@ -41,6 +41,7 @@ import { productionStallBudgetMs, STALL_SCENARIO_RUNNERS, stallBudgetMs } from '
 import { STORAGE_SCENARIO_RUNNERS } from './selftest-storage.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
+export { watchCrashSelftest } from './selftest-crash.ts'
 export type { SelftestHost, SelftestPageView } from './selftest-session.ts'
 
 /** 公式在 Worker 里算出结果最多等多久（Worker 的启动与第一次计算） */

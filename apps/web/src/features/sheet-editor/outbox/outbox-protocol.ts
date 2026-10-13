@@ -6,12 +6,13 @@
 //   原始字节转移给 Worker、在 Worker 里导入、用完清零。Worker 两种都认，改交法只动客户端的 keyTransferOf 一处
 import type { OutboxUnavailableReason } from '../../../shared/outbox/database.ts'
 import type { MirrorStatus } from '../../../shared/outbox/draft-mirror.ts'
+import type { DraftObservation } from '../../../shared/outbox/draft-observation.ts'
 import type { DraftKey, Fields, InFlightSave } from '../../../shared/outbox/draft-record.ts'
 import type { FenceReason } from '../../../shared/outbox/draft-store.ts'
-import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, KeyChange, MirroredDocumentsResult, NoticesResult, OpenedRecord, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
+import type { AdoptionCapture, CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, DedupeKey, DraftRead, KeyChange, MirrorCleanup, MirroredDocumentsResult, NoticesResult, ObservedRemoveResult, ObserveResult, OpenedRecord, ReconcileResult, RegisterResult, RemoveResult, ResealResult, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
-import { isFields, isText, isWhole, readContentFormat, readDraftMeta, readInFlight } from '../../../shared/outbox/draft-record.ts'
+import { isFields, isText, isWhole, readContentFormat, readDraftMeta, readInFlight, readWriterRecord } from '../../../shared/outbox/draft-record.ts'
 import { readRecoveryNotice } from '../../../shared/outbox/recovery-notice.ts'
 
 export const OUTBOX_PROTOCOL_VERSION = 1
@@ -32,6 +33,9 @@ export type OutboxCall
     | { readonly type: 'mark-in-flight', readonly draft: DraftKey, readonly writer: WriterIdentity, readonly inFlight: InFlightSave }
     | { readonly type: 'confirm', readonly draft: DraftKey, readonly writer: WriterIdentity, readonly confirmedSeq: number, readonly revision: number }
     | { readonly type: 'read', readonly draft: DraftKey }
+    | { readonly type: 'observe', readonly draft: DraftKey }
+    | { readonly type: 'adopt', readonly observation: DraftObservation, readonly capture: AdoptionCapture }
+    | { readonly type: 'remove-observed', readonly observation: DraftObservation }
     | { readonly type: 'remove', readonly draft: DraftKey, readonly expectedSeq: number | null }
     | { readonly type: 'set-key', readonly key: KeyTransfer | null }
     | { readonly type: 'seed-digest', readonly draft: DraftKey, readonly seed: DedupeKey | null }
@@ -62,6 +66,9 @@ export interface OutboxResults {
   readonly 'mark-in-flight': ResealResult
   readonly 'confirm': ConfirmResult
   readonly 'read': DraftRead
+  readonly 'observe': ObserveResult
+  readonly 'adopt': CaptureWritten
+  readonly 'remove-observed': ObservedRemoveResult
   readonly 'remove': RemoveResult
   readonly 'set-key': KeyChange
   readonly 'seed-digest': SeedResult
@@ -139,6 +146,23 @@ function readCapture(value: unknown): CaptureToWrite | undefined {
   return { key, writer, draftSeq, baseRevision, writtenBy, format, formulasPending, inFlight, bytes, dedupe, ...(adoptSeq === undefined ? {} : { adoptSeq }) }
 }
 
+function readObservation(value: unknown): DraftObservation | undefined {
+  if (!isFields(value) || !isText(value.id))
+    return undefined
+  const key = readDraftKey(value.key)
+  return key === undefined ? undefined : { key, id: value.id }
+}
+
+function readAdoptionCapture(value: unknown): AdoptionCapture | undefined {
+  if (!isFields(value) || 'inFlight' in value || 'dedupe' in value || 'adoptSeq' in value)
+    return undefined
+  const capture = readCapture({ ...value, inFlight: null, dedupe: false })
+  if (capture === undefined)
+    return undefined
+  const { inFlight: _inFlight, dedupe: _dedupe, adoptSeq: _adoptSeq, ...adoption } = capture
+  return adoption
+}
+
 /** 去重的起点：null（清空）照样交回 null；形状不对时为 undefined */
 function readSeed(value: unknown): DedupeKey | null | undefined {
   if (value === null)
@@ -184,7 +208,17 @@ function readCall(data: Fields): OutboxCall | undefined {
         ? { type: 'confirm', draft, writer, confirmedSeq: data.confirmedSeq, revision: data.revision }
         : undefined
     case 'read':
-      return draft === undefined ? undefined : { type: 'read', draft }
+    case 'observe':
+      return draft === undefined ? undefined : { type: data.type, draft }
+    case 'adopt': {
+      const observation = readObservation(data.observation)
+      const capture = readAdoptionCapture(data.capture)
+      return observation === undefined || capture === undefined ? undefined : { type: 'adopt', observation, capture }
+    }
+    case 'remove-observed': {
+      const observation = readObservation(data.observation)
+      return observation === undefined ? undefined : { type: 'remove-observed', observation }
+    }
     case 'remove': {
       const { expectedSeq } = data
       return draft !== undefined && (expectedSeq === null || isWhole(expectedSeq, 1)) ? { type: 'remove', draft, expectedSeq } : undefined
@@ -303,20 +337,25 @@ function readHelloResult(value: Fields): HelloResult | null {
 }
 
 function readRegisterResult(value: Fields): RegisterResult | null {
+  if (value.recordKnown !== undefined && value.recordKnown !== true)
+    return null
+  const known = value.recordKnown === true ? { recordKnown: true as const } : {}
   switch (value.kind) {
     case 'registered': {
       const mirror = readMirrorStatus(value.mirror)
       if (!isWhole(value.lastDraftSeq, 0) || mirror === null)
         return null
       if (value.existing === undefined)
-        return { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing: undefined, mirror }
+        return { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing: undefined, mirror, ...known }
       const existing = isFields(value.existing) ? readOpenedRecord(value.existing) : null
-      return existing === null ? null : { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing, mirror }
+      return existing === null ? null : { kind: 'registered', lastDraftSeq: value.lastDraftSeq, existing, mirror, ...known }
     }
     case 'superseded':
-      return isWhole(value.currentEpoch, 1) && typeof value.sameEpoch === 'boolean' ? { kind: 'superseded', currentEpoch: value.currentEpoch, sameEpoch: value.sameEpoch } : null
-    default:
-      return readProblem(value)
+      return isWhole(value.currentEpoch, 1) && typeof value.sameEpoch === 'boolean' ? { kind: 'superseded', currentEpoch: value.currentEpoch, sameEpoch: value.sameEpoch, ...known } : null
+    default: {
+      const problem = readProblem(value)
+      return problem === null ? null : { ...problem, ...known }
+    }
   }
 }
 
@@ -445,6 +484,45 @@ function readClearNoticeResult(value: Fields): ClearNoticeResult | null {
   }
 }
 
+function sameKey(a: DraftKey, b: DraftKey): boolean {
+  return a.userId === b.userId && a.documentId === b.documentId
+}
+
+function readObserveResult(value: Fields): ObserveResult | null {
+  if (value.kind !== 'observed') {
+    const problem = readProblem(value)
+    if (problem === null || (value.recordKnown !== undefined && value.recordKnown !== true))
+      return null
+    return value.recordKnown === true ? { ...problem, recordKnown: true } : problem
+  }
+  const observation = readObservation(value.observation)
+  const record = isFields(value.record) ? value.record.kind === 'absent' ? { kind: 'absent' as const } : readOpenedRecord(value.record) : null
+  const writer = readWriterRecord(value.writer)
+  if (observation === undefined || record === null || (value.writer !== undefined && writer === undefined))
+    return null
+  if ((writer !== undefined && !sameKey(writer, observation.key)) || ('meta' in record && !sameKey(record.meta, observation.key)))
+    return null
+  return { kind: 'observed', observation, record, writer }
+}
+
+function readMirrorCleanup(value: unknown): MirrorCleanup | null {
+  if (!isFields(value))
+    return null
+  if (value.kind === 'removed' || value.kind === 'busy' || value.kind === 'quota' || value.kind === 'unsupported')
+    return { kind: value.kind }
+  const error = value.kind === 'failed' ? readFailure(value.error) : undefined
+  return error === undefined ? null : { kind: 'failed', error }
+}
+
+function readObservedRemoveResult(value: Fields): ObservedRemoveResult | null {
+  if (value.kind === 'changed' || value.kind === 'absent')
+    return { kind: value.kind }
+  if (value.kind !== 'removed')
+    return readProblem(value)
+  const mirror = readMirrorCleanup(value.mirror)
+  return mirror === null ? null : { kind: 'removed', mirror }
+}
+
 const RESULT_READERS: { readonly [T in OutboxCallType]: (value: Fields) => OutboxResults[T] | null } = {
   'hello': readHelloResult,
   'register': readRegisterResult,
@@ -452,6 +530,9 @@ const RESULT_READERS: { readonly [T in OutboxCallType]: (value: Fields) => Outbo
   'mark-in-flight': readResealResult,
   'confirm': readConfirmResult,
   'read': readDraftRead,
+  'observe': readObserveResult,
+  'adopt': readCaptureWritten,
+  'remove-observed': readObservedRemoveResult,
   'remove': readRemoveResult,
   'set-key': readKeyChange,
   'seed-digest': readSeedResult,
@@ -474,6 +555,9 @@ const FAILED_RESULTS: { readonly [T in OutboxCallType]: (error: FailureDescripti
   'mark-in-flight': error => ({ kind: 'failed', error }),
   'confirm': error => ({ kind: 'failed', error }),
   'read': error => ({ kind: 'failed', error }),
+  'observe': error => ({ kind: 'failed', error }),
+  'adopt': error => ({ kind: 'failed', error, gzip: null }),
+  'remove-observed': error => ({ kind: 'failed', error }),
   'remove': error => ({ kind: 'failed', error }),
   'set-key': error => ({ kind: 'failed', error }),
   'seed-digest': error => ({ kind: 'failed', error }),

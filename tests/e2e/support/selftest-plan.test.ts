@@ -158,11 +158,11 @@ describe('页面自检的结果有什么问题', () => {
     expect(problemsOf(report({ checks: [] }))).toEqual(['没有通过（没有检查）'])
   })
 
-  it('交接的场景另核对交回了认得的路（M3-P5）：A handed-over 或 lost，B answered 或 silent，refresh-save committed 或 expired', () => {
+  it('交接的场景另核对交回了认得的路（M3-P5）：A handed-over 或 lost，B answered 或 silent，refresh-save confirmed-reading', () => {
     const base = { page: { state: 'ready', readOnly: false } } as const
     expect(problemsOf(report({ ...base, scenario: 'takeover-taker', path: 'silent' }))).toEqual([])
     expect(problemsOf(report({ ...base, scenario: 'takeover-holder', path: 'lost' }))).toEqual([])
-    expect(problemsOf(report({ ...base, scenario: 'refresh-save', path: 'committed' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'refresh-save', path: 'confirmed-reading' }))).toEqual([])
     expect(problemsOf(report({ ...base, scenario: 'takeover-taker' }))).toEqual(['交回的路是 没有（应当是 answered、silent 之一）'])
     expect(problemsOf(report({ ...base, scenario: 'takeover-holder', path: 'silent' }))).toEqual(['交回的路是 silent（应当是 handed-over、lost 之一）'])
     // 收不到交接频道消息的 A 只会失去编辑权
@@ -261,7 +261,7 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
     expect(storedProblems(step('read-only'), stored({ formulasPending: true }))).toEqual(['服务器上的文档是"公式待更新"'])
   })
 
-  it('交接（M3-P5）随走的路：A 回应了（answered）三格、修订号 4；没有回应（silent）前两格、修订号 3、第三格不在；B 随 A 那一步核对；refresh-save 提交了（committed）修订号 2、有那一格；认不出路算问题', () => {
+  it('交接（M3-P5）随走的路：A 回应了（answered）三格、修订号 4；没有回应（silent）前两格、修订号 3、第三格不在；B 随 A 那一步核对；refresh-save 自动确认后回阅读（confirmed-reading）修订号 2、有那一格；认不出路算问题', () => {
     const [first, second, third] = TAKEOVER_EDITS
     const all = templateWith(TAKEOVER_EDITS)
     const two = templateWith([first, second])
@@ -272,8 +272,8 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
     expect(storedProblems(step('takeover-holder'), stored({ revision: 3, revisions: 3, snapshot: two }))).toEqual(['文档 takeover-holder-doc：不知道走了哪条路（没有交回），说不出服务器上该是什么样子（修订号 3）'])
     expect(storedProblems(step('takeover-taker'), undefined, 'silent')).toEqual([])
     expect(storedProblems(step('takeover-holder-deaf'), stored({ revision: 3, revisions: 3, snapshot: two }), 'silent')).toEqual([])
-    expect(storedProblems(step('refresh-save'), stored({ revision: 2, revisions: 2, snapshot: templateWith([REFRESH_SAVE_EDIT]) }), 'committed')).toEqual([])
-    expect(storedProblems(step('refresh-save'), stored(), 'committed')).toHaveLength(2)
+    expect(storedProblems(step('refresh-save'), stored({ revision: 2, revisions: 2, snapshot: templateWith([REFRESH_SAVE_EDIT]) }), 'confirmed-reading')).toEqual([])
+    expect(storedProblems(step('refresh-save'), stored(), 'confirmed-reading')).toHaveLength(2)
     expect(storedProblems(step('refresh-save'), stored(), 'expired')).toHaveLength(1)
   })
 

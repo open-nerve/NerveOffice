@@ -205,7 +205,7 @@ describe('比对一份文档（createDraftRecovery）', () => {
     store.putRaw('writers', KEY, sampleWriter({ ...KEY, writeEpoch: 2, writerId: OTHER_WRITER_ID, lastDraftSeq: 11 }))
     const read = slots(valid(record(10, { writeEpoch: 5 }), 4), EMPTY)
     const notHeld = scriptedMirror(read, false)
-    expect(await createDraftRecovery({ store: store.store, mirror: notHeld, now: () => NOW }).reconcile(KEY)).toEqual({ mirror: undefined, restored: undefined })
+    expect(await createDraftRecovery({ store: store.store, mirror: notHeld, now: () => NOW }).reconcile(KEY)).toEqual({ mirror: undefined, restored: undefined, recordKnown: true })
     expect([notHeld.cleared, notHeld.backfilled]).toEqual([[KEY], []])
   })
 

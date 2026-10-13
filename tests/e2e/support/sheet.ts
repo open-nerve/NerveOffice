@@ -149,7 +149,7 @@ export function requestPrompt(page: Page): Locator {
 
 /** 页头之外一直在的读屏状态区（M3-P2 起阅读时的说明都在这里：谁在编辑、空闲释放与交出之后、"在此编辑"与请求编辑的进展） */
 export function statusRegion(page: Page): Locator {
-  return chrome(page).locator('[data-slot="status-region"]')
+  return chrome(page).locator('[data-slot="status-region"]').first()
 }
 
 /** 阅读时页头里的一行静态说明（M3-P6，A14：已知限制"阅读者看到的是已保存的版本"在产品中可见） */
@@ -365,7 +365,7 @@ export async function saveAndCapture(page: Page): Promise<SaveExchange> {
 
 /** 页头之外说明谁在编辑的读屏状态区（M3-P1；M3-P2 起阅读时随编辑状态更新）：别处正在编辑这份文档时有内容 */
 export function editingNotice(page: Page): Locator {
-  return chrome(page).getByRole('status').filter({ hasText: '正在编辑这份文档' })
+  return statusRegion(page).filter({ hasText: '正在编辑这份文档' })
 }
 
 /** 写进正则的一段原文 */

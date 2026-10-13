@@ -45,7 +45,7 @@ const { heavy: HEAVY } = AUTOSAVE_STOP_SAMPLE
 
 /** 阅读页一直在的读屏状态区（"公式待更新"的说明在这里） */
 function statusRegion(page: Page) {
-  return page.locator('#editor-chrome [data-slot="status-region"]')
+  return page.locator('#editor-chrome [data-slot="status-region"]').first()
 }
 
 /** 能编辑的人与查看者看到的说明（i18n 的 mode.formulasPending） */

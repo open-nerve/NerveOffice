@@ -72,7 +72,9 @@ function failed(ref: DraftCaptureRef, error: unknown): DraftFailure {
 }
 
 /** 公共接口没有原始后端，调用方不能绕过引用、固定上传或队列。 */
-export function createWorkingDraftSource(options: WorkingDraftOptions, backend: WorkingDraftBackend): ControlledWorkingDraft {
+export function createWorkingDraftSource(configuration: WorkingDraftOptions, backend: WorkingDraftBackend): ControlledWorkingDraft {
+  // 长期闭包只保存不含正文的配置；恢复初值交给下面唯一的 Entry，不能留在 options 里永久保留旧正文。
+  const { initialCapture, ...options } = configuration
   if (!Number.isSafeInteger(options.initialDraftSeq) || options.initialDraftSeq < 0)
     throw new RangeError('工作草稿的序号起点必须是非负安全整数')
   let draftSeq = options.initialDraftSeq
@@ -183,6 +185,11 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
     }
     catch (error) {
       if (!disposed) {
+        // 新捕获已替代且没有上传/读取持有的旧项可以释放正文；旧宿主的迟到失败只结束这次旧任务。
+        if (!kept(entry)) {
+          settle(entry, { kind: 'superseded', ref: entry.ref })
+          return
+        }
         report(error)
         settle(entry, failed(entry.ref, error))
       }
@@ -326,7 +333,7 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
     return { kind: 'working', ref: latest.ref, local: latest.summary?.local ?? (latest.result?.kind === 'failed' ? { kind: 'memory', reason: 'unavailable' } : { kind: 'writing' }), summary: latest.summary ?? latest.result, ...(metadataIssue === undefined ? {} : { metadataIssue }) }
   }
 
-  return {
+  const source: ControlledWorkingDraft = {
     retainLatest: async (reason) => {
       if (disposed)
         return { kind: 'disposed' }
@@ -584,4 +591,7 @@ export function createWorkingDraftSource(options: WorkingDraftOptions, backend: 
         void control().catch(report)
     },
   }
+  if (initialCapture !== undefined)
+    source.capture({ ...initialCapture, dedupe: false })
+  return source
 }

@@ -120,17 +120,30 @@ export async function snapshotDigest(text: string): Promise<string> {
 
 /** 保存（带上编辑租约的代次与令牌、"公式待更新"、本页的构建与数据格式）：内容与当前相同时服务端回答 unchanged，照"已保存"处理 */
 export async function saveContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, lease: LeaseCredentials): Promise<SaveContentResponse> {
+  return putContent(documentId, request, compressed, lease.writeEpoch, lease.token)
+}
+
+/**
+ * 恢复时只核对旧保存的回执（M4-P3）：原身份、代次、字节、基准、格式与公式标记不改，但不带租约令牌。
+ * 服务端重放先于租约校验，已提交且仍可访问时返回原结果；未提交则不能借当前租约变成新保存。
+ * 失败照原请求层抛出，网络/超时仍是未知结果；这里不申请租约、不换请求或隐式重试。
+ */
+export async function replayContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, writeEpoch: number): Promise<SaveContentResponse> {
+  return putContent(documentId, request, compressed, writeEpoch)
+}
+
+async function putContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, writeEpoch: number, token?: string): Promise<SaveContentResponse> {
   const query = new URLSearchParams({
     baseRevision: String(request.baseRevision),
     requestId: request.requestId,
     clientInstanceId: request.clientInstanceId,
     localSeq: String(request.localSeq),
-    writeEpoch: String(lease.writeEpoch),
+    writeEpoch: String(writeEpoch),
     formulasPending: String(request.formulasPending),
     ...clientFormatParams(request.format),
   })
   const path = `${contentPath(documentId)}?${query.toString()}`
-  return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'PUT', headers: leaseHeaders(lease.token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`))
+  return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'PUT', headers: token === undefined ? {} : leaseHeaders(token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`))
 }
 
 /**

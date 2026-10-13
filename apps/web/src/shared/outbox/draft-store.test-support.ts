@@ -6,9 +6,10 @@ import type { DraftKey, StoredDraft } from './draft-record.ts'
 import type { DraftStore, ListedDraft, PurgedDraft, StoreProblem } from './draft-store.ts'
 import type { RecoveryNotice } from './recovery-notice.ts'
 import type { WriterIdentity } from './writer-fence.ts'
+import { createDraftObservations } from './draft-observation.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
+import { decideConfirm, decideObservedAdoption, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
 
 export type StoreOperation = Exclude<keyof DraftStore, 'close'>
 
@@ -46,6 +47,7 @@ function keyOf(record: DraftKey): DraftKey {
 }
 
 export function fakeDraftStore(): FakeDraftStore {
+  const observations = createDraftObservations()
   const drafts = new Map<string, unknown>()
   const writers = new Map<string, unknown>()
   const notices = new Map<string, unknown>()
@@ -87,6 +89,54 @@ export function fakeDraftStore(): FakeDraftStore {
     readStoredDraft(draft).kind === 'draft' ? undefined : { kind: 'failed', error: new TypeError('形状不对的草稿不写') }
 
   const store: DraftStore = {
+    async observeDraft(key) {
+      const problem = await begin('observeDraft')
+      if (problem !== undefined)
+        return problem
+      const id = idOf(key)
+      return {
+        kind: 'observed',
+        observation: observations.remember(key, { draft: drafts.get(id), writer: writers.get(id), notice: notices.get(id) }),
+        record: existingOf(id) ?? { kind: 'absent' },
+        writer: writerOf(id),
+      }
+    },
+    async adoptObserved(observation, draft) {
+      const problem = await begin('adoptObserved') ?? unwritable(draft)
+      if (problem !== undefined)
+        return problem
+      const id = idOf(observation.key)
+      if (idOf(draft) !== id || !observations.matches(observation, drafts.get(id), writers.get(id)))
+        return { kind: 'fenced', reason: 'changed' }
+      const verdict = decideObservedAdoption(writerOf(id), existingOf(id), draft)
+      if (verdict !== 'ok')
+        return { kind: 'fenced', reason: verdict }
+      const checked = readStoredDraft(draft)
+      if (checked.kind !== 'draft')
+        throw new Error('unwritable 应已拒绝形状不对的草稿')
+      drafts.set(id, structuredClone(checked.draft))
+      raiseHighWater(draft, draft)
+      observations.forget(observation)
+      return { kind: 'written' }
+    },
+    async removeObserved(observation, now) {
+      const problem = await begin('removeObserved')
+      if (problem !== undefined)
+        return problem
+      const id = idOf(observation.key)
+      if (!observations.matches(observation, drafts.get(id), writers.get(id)))
+        return { kind: 'changed' }
+      if (!drafts.has(id)) {
+        observations.forget(observation)
+        return { kind: 'absent' }
+      }
+      writers.set(id, retiredWriterOf(observation.key, writerOf(id), existingOf(id), now))
+      drafts.delete(id)
+      if (observations.sameNotice(observation, notices.get(id)))
+        notices.delete(id)
+      observations.forget(observation)
+      return { kind: 'removed' }
+    },
     async registerWriter(key, writer, options) {
       const problem = await begin('registerWriter') ?? (isRetired(writer) ? { kind: 'failed', error: new TypeError('墓碑保留的 writerId 不能登记') } as const : undefined)
       if (problem !== undefined)
@@ -95,7 +145,7 @@ export function fakeDraftStore(): FakeDraftStore {
       const existing = existingOf(id)
       const verdict = decideRegistration(writerOf(id), existing, writer, options.force)
       if (verdict.kind === 'superseded')
-        return verdict
+        return existing === undefined ? verdict : { ...verdict, recordKnown: true }
       writers.set(id, { ...keyOf(key), writeEpoch: writer.writeEpoch, writerId: writer.writerId, lastDraftSeq: verdict.lastDraftSeq, registeredAt: options.now })
       return { kind: 'registered', lastDraftSeq: verdict.lastDraftSeq, existing }
     },
@@ -335,6 +385,7 @@ export function fakeDraftStore(): FakeDraftStore {
       return { kind: 'cleared' }
     },
     close() {
+      observations.clear()
       closeCount += 1
     },
   }

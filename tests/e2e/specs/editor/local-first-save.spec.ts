@@ -255,14 +255,14 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('换钥保住的内容')
   })
 
-  test('US-M4-15 会话的部署开关关闭时不取钥、不启动发件箱 Worker、不写库，仍能云端保存', async ({ page }) => {
+  test('US-M4-15 部署开关关闭且无旧草稿时不取钥、不登记写入者、不写草稿，仍能云端保存', async ({ page }) => {
+    // S3 阅读恢复需要独立 Worker 查看既有记录；开关仍禁止新写入来源，空记录也不触发取钥。
+    await observeLocalSaveOrder(page)
     const keys: Request[] = []
-    const workers: string[] = []
     page.on('request', (request) => {
       if (new URL(request.url()).pathname === '/api/local-key')
         keys.push(request)
     })
-    page.on('worker', worker => workers.push(worker.url()))
     await page.route('**/api/auth/session', async (route) => {
       const response = await route.fetch()
       const body = await response.json() as { readonly features?: object }
@@ -273,7 +273,7 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     await setCellValue(page, 'A1', '关闭草稿也能保存')
     await saveAndWait(page)
     expect(keys).toHaveLength(0)
-    expect(workers.filter(url => /outbox\.worker-/.test(url))).toHaveLength(0)
+    expect((await localSaveOrder(page)).filter(event => event !== 'http:save')).toEqual([])
     expect(await readLocalDisk(page, key)).toEqual({ draft: null, writer: null })
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('关闭草稿也能保存')
   })

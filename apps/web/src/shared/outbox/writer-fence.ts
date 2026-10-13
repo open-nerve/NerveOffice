@@ -100,6 +100,15 @@ export function decideWrite(writer: WriterRecord | undefined, existing: Existing
   return isSameWriter(existing.draft, incoming) || incoming.adoptSeq === existing.draft.draftSeq ? 'ok' : 'foreign-draft'
 }
 
+/** 原子观察已经比对相同后，接手仍须是当前写入者和严格递增的新序号；不能走普通写入的 duplicate。 */
+export function decideObservedAdoption(writer: WriterRecord | undefined, existing: ExistingDraft | undefined, incoming: WriterIdentity & { readonly draftSeq: number }): 'ok' | 'not-writer' | 'stale-seq' | 'foreign-draft' {
+  if (!isCurrentWriter(writer, incoming))
+    return 'not-writer'
+  if (incoming.draftSeq <= writer.lastDraftSeq)
+    return 'stale-seq'
+  return existing?.kind === 'draft' ? 'ok' : 'foreign-draft'
+}
+
 /**
  * 重封的判定（标记在途、换密钥、确认之后改基准，§3.4.4）：比较并交换——写入者仍是它、库里仍是它写下的 expectedSeq 那一份才写；
  * 期间又写了新的、草稿不在了、或者是别的写入者写的，都是 changed

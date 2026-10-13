@@ -64,6 +64,21 @@ describe('失去编辑权之后的那一份（M3-P2 设计 §3.2、§3.4）', ()
     expect(h.compress).toHaveBeenCalledOnce()
   })
 
+  it.each(['UNAUTHENTICATED', 'SESSION_EXPIRED', 'CSRF_TOKEN_INVALID', 'ORIGIN_NOT_ALLOWED'])('未知副本后 %s 没有核对旧回执，下一次仍沿原请求和 gzip', async (code) => {
+    const h = setup()
+    h.conflictCopy.mockRejectedValueOnce(new NetworkError('旧回包丢失'))
+    await expect(h.copy.save()).rejects.toBeInstanceOf(NetworkError)
+    const rejection = new ApiError(code === 'UNAUTHENTICATED' || code === 'SESSION_EXPIRED' ? 401 : 403, code, '会话尚未确认')
+    h.conflictCopy.mockRejectedValueOnce(rejection)
+    await expect(h.copy.save()).rejects.toBe(rejection)
+    await h.copy.save()
+    const first = h.conflictCopy.mock.calls[0]!
+    for (const call of h.conflictCopy.mock.calls.slice(1)) {
+      expect(call[1]).toBe(first[1])
+      expect(call[2]).toBe(first[2])
+    }
+  })
+
   it('并发按下只准备和发送同一份副本，成功不确认原文档的修订', async () => {
     const h = setup()
     const answer = deferred<CreatedDocument>()

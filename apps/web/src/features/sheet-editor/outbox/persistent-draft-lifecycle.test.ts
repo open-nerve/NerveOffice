@@ -10,6 +10,51 @@ import { createPersistentWorkingDraft } from './persistent-working-draft.ts'
 afterEach(() => vi.restoreAllMocks())
 const capture = (snapshot: string) => ({ snapshot, editorSeq: 1, formulasPending: false, dedupe: true })
 
+describe('实际持久写入与暂停的事实', () => {
+  it('登记不产生正文；实际写成后可读，暂停后的捕获只留内存', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    expect(h.store.rawDraft(DRAFT_KEY)).toBeUndefined()
+    const writing = h.store.holdNext('writeDraft')
+    const ref = source.capture(capture('真正写到本机'))
+    await writing.reached
+    expect(h.store.rawDraft(DRAFT_KEY)).toBeUndefined()
+    writing.release()
+    expect(await source.ready(ref)).toMatchObject({ local: { kind: 'persisted' } })
+    expect(await source.readLatest()).toMatchObject({ ref, snapshot: '真正写到本机' })
+    const persisted = h.store.rawDraft(DRAFT_KEY)
+    expect(persisted).toBeDefined()
+    source.suspend()
+    expect(await source.ready(source.capture(capture('暂停后只留内存')))).toMatchObject({ local: { kind: 'memory', reason: 'paused' } })
+    expect(h.store.rawDraft(DRAFT_KEY)).toEqual(persisted)
+    source.dispose()
+  })
+
+  it('成功回包迟于来源暂停：已提交正文保留，后续捕获不再写盘', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    const original = h.session.write
+    const reached = deferred<void>()
+    const release = deferred<void>()
+    vi.spyOn(h.session, 'write').mockImplementationOnce(async (input) => {
+      const result = await original(input)
+      reached.resolve()
+      await release.promise
+      return result
+    })
+    const ref = source.capture(capture('暂停前正在提交'))
+    await reached.promise
+    const persisted = h.store.rawDraft(DRAFT_KEY)
+    expect(persisted).toBeDefined()
+    source.suspend()
+    release.resolve()
+    await source.ready(ref)
+    expect(await source.ready(source.capture(capture('暂停后只留内存')))).toMatchObject({ local: { kind: 'memory', reason: 'paused' } })
+    expect(h.store.rawDraft(DRAFT_KEY)).toEqual(persisted)
+    source.dispose()
+  })
+})
+
 describe('清钥仍保留当前工作内容', () => {
   it('清钥先读回当前正文，再关闭原宿主；暂停期间新捕获留内存', async () => {
     const h = await persistentHarness()
@@ -81,6 +126,42 @@ describe('清钥仍保留当前工作内容', () => {
 })
 
 describe('持久草稿的暂停、换钥与恢复', () => {
+  it('暂停等唯一来源接住磁盘正文后释放旧宿主，让新页能核对镜像', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    const ref = source.capture(capture('失锁前已落盘'))
+    await source.ready(ref)
+    await settle()
+    const before = h.store.rawDraft(DRAFT_KEY)
+    const original = await h.writer.read(DRAFT_KEY)
+    const held = deferred<typeof original>()
+    vi.spyOn(h.session, 'read').mockReturnValueOnce(held.promise)
+    source.suspend()
+    await settle()
+    expect(h.hosts[0]!.host.broken()).toBe(false)
+    held.resolve(original)
+    await vi.waitFor(() => expect(h.hosts[0]!.host.broken()).toBe(true))
+    expect(await source.readLatest()).toMatchObject({ ref, snapshot: '失锁前已落盘' })
+    expect(h.store.rawDraft(DRAFT_KEY)).toEqual(before)
+    expect(h.host).toHaveBeenCalledOnce()
+    source.dispose()
+  })
+
+  it('普通暂停保留失败时留下原宿主供重试，不套用清钥必须关机的规则', async () => {
+    const h = await persistentHarness()
+    const source = createPersistentWorkingDraft(h.options)
+    await source.ready(source.capture(capture('待重试的正文')))
+    await settle()
+    vi.spyOn(h.session, 'read').mockResolvedValueOnce({ kind: 'absent' })
+    source.suspend()
+    await vi.waitFor(() => expect(h.reportError).toHaveBeenCalledOnce())
+    expect(h.hosts[0]!.host.broken()).toBe(false)
+    source.suspend()
+    await vi.waitFor(() => expect(h.hosts[0]!.host.broken()).toBe(true))
+    expect(await source.readLatest()).toMatchObject({ snapshot: '待重试的正文' })
+    source.dispose()
+  })
+
   it('暂停发生在 unchanged 返回前，存储暂时读不了时仍用该捕获的临时正文保留真实内容序号', async () => {
     const h = await persistentHarness()
     const source = createPersistentWorkingDraft(h.options)

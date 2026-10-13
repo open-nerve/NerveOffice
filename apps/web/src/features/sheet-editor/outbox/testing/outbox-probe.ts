@@ -9,7 +9,8 @@
 // importLocalKey；请求层的写法（自动带 CSRF、按契约校验）由 local-key.ts 的单元测试覆盖。
 // 写入管道（进程内与发件箱 Worker 两种宿主）的那一部分在 pipeline-probe.ts，挂在 pipeline 上
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
-import type { DraftKey, DraftMeta, ReadDraft } from '../../../../shared/outbox/draft-record.ts'
+import type { DraftObservation } from '../../../../shared/outbox/draft-observation.ts'
+import type { DraftKey, DraftMeta, ReadDraft, WriterRecord } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore, ListedDraft, StoreProblem } from '../../../../shared/outbox/draft-store.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
 import type { ProbePipeline } from './pipeline-probe.ts'
@@ -91,6 +92,12 @@ export interface OutboxProbe {
   readonly write: (input: ProbeDraftInput, options?: { readonly adoptSeq?: number }) => Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>
   /** 开始一次写入、不等它：交回编号，之后经 settled 取结果（两个标签页的竞争） */
   readonly startWrite: (input: ProbeDraftInput) => number
+  readonly observe: (key: DraftKey) => Promise<{ readonly kind: 'observed', readonly observation: DraftObservation, readonly record: ProbeRead | { readonly kind: 'absent' }, readonly writer: WriterRecord | undefined } | Plain<StoreProblem>>
+  readonly adopt: (observation: DraftObservation, input: ProbeDraftInput) => Promise<Plain<Awaited<ReturnType<DraftStore['adoptObserved']>>>>
+  readonly startAdopt: (observation: DraftObservation, input: ProbeDraftInput) => number
+  readonly removeObserved: (observation: DraftObservation, now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['removeObserved']>>>>
+  /** 下一次草稿 delete 成功之后中止整个事务，核对删除与墓碑没有部分提交。 */
+  readonly abortNextDraftDelete: () => void
   readonly settled: (operation: number) => Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>
   readonly replace: (input: ProbeDraftInput) => Promise<Plain<Awaited<ReturnType<DraftStore['replaceDraft']>>>>
   readonly confirm: (key: DraftKey, writer: WriterIdentity, confirmedSeq: number, rebased?: ProbeDraftInput) => Promise<Plain<Awaited<ReturnType<DraftStore['confirmDraft']>>>>
@@ -181,7 +188,7 @@ function probeError(error: unknown): ProbeError {
 
 function plain<T extends { readonly kind: string }>(outcome: T): Plain<T> {
   if (outcome.kind === 'failed' && 'error' in outcome)
-    return { kind: 'failed', error: probeError(outcome.error) } as Plain<T>
+    return { ...outcome, error: probeError(outcome.error) } as Plain<T>
   return outcome as Plain<T>
 }
 
@@ -378,7 +385,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
       const outcome = await store.registerWriter(draftKey, writer, options)
       if (outcome.kind !== 'registered')
         return plain(outcome)
-      return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing: outcome.existing === undefined ? undefined : await opened(outcome.existing) }
+      return { ...outcome, existing: outcome.existing === undefined ? undefined : await opened(outcome.existing) }
     },
     write: async (input, options) => plain(await store.writeDraft(await seal(input), options)),
     writeMalformed: async (input) => {
@@ -389,6 +396,32 @@ export function installOutboxProbe(target: Window): OutboxProbe {
       const id = nextId++
       operations.set(id, seal(input).then(async draft => plain(await store.writeDraft(draft))))
       return id
+    },
+    observe: async (draftKey) => {
+      const result = await store.observeDraft(draftKey)
+      if (result.kind !== 'observed')
+        return plain(result)
+      return { ...result, record: result.record.kind === 'absent' ? result.record : await opened(result.record) }
+    },
+    adopt: async (observation, input) => plain(await store.adoptObserved(observation, await seal(input))),
+    startAdopt: (observation, input) => {
+      const id = nextId++
+      operations.set(id, seal(input).then(async draft => plain(await store.adoptObserved(observation, draft))))
+      return id
+    },
+    removeObserved: async (observation, now) => plain(await store.removeObserved(observation, now)),
+    abortNextDraftDelete: () => {
+      const original: unknown = Reflect.get(IDBObjectStore.prototype, 'delete')
+      if (typeof original !== 'function')
+        throw new TypeError('IDBObjectStore.prototype.delete 不是函数')
+      IDBObjectStore.prototype.delete = function remove(key) {
+        const request = Reflect.apply(original, this, [key]) as IDBRequest<undefined>
+        if (this.name === DRAFTS_STORE) {
+          Object.defineProperty(IDBObjectStore.prototype, 'delete', { value: original, configurable: true, writable: true })
+          request.addEventListener('success', () => this.transaction.abort(), { once: true })
+        }
+        return request
+      }
     },
     settled: async (operation) => {
       const pending = operations.get(operation)

@@ -213,6 +213,9 @@ export function createOutboxWorkerClient(options: OutboxWorkerClientOptions): Ou
     markInFlight: async (key, writer, inFlight) => call({ type: 'mark-in-flight', draft: key, writer, inFlight }, []),
     confirm: async (key, writer, confirmedSeq, revision) => call({ type: 'confirm', draft: key, writer, confirmedSeq, revision }, []),
     read: async key => call({ type: 'read', draft: key }, []),
+    observe: async key => call({ type: 'observe', draft: key }, []),
+    adopt: async (observation, capture) => call({ type: 'adopt', observation, capture }, [capture.bytes.buffer]),
+    removeObserved: async observation => call({ type: 'remove-observed', observation }, []),
     remove: async (key, expectedSeq) => call({ type: 'remove', draft: key, expectedSeq: expectedSeq ?? null }, []),
     setKey: async (handle) => {
       if (handle === undefined)

@@ -1,14 +1,14 @@
-// 测试用：这一页发出过的请求编辑的记号（issued-request.ts），存在内存里的"sessionStorage"上（每个标签页一份）
+// 测试用：当前 Document 内存意图，以及只用于旧版本迁移反例的 sessionStorage。
 import type { IssuedRequestMarker } from './issued-request.ts'
 import { issuedRequestMarker } from './issued-request.ts'
 
 export interface MemoryIssuedRequest {
   readonly marker: IssuedRequestMarker
-  /** 存储里的键与值（看写下了什么、模拟别的版本写的值） */
+  /** 遗留存储里的键与值（当前意图不会写入这里） */
   readonly items: Map<string, string>
 }
 
-/** 一个标签页的记号：内存里的存储，接口与 sessionStorage 相同 */
+/** 一个新 Document 的内存意图；假存储用于旧记号清理 */
 export function memoryIssuedRequest(documentId: string): MemoryIssuedRequest {
   const items = new Map<string, string>()
   const storage = {

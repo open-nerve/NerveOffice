@@ -3,9 +3,9 @@
 // - 同一个浏览器里请正在编辑的标签页先保存再交出（交接协议的请求方一侧，回应的一侧在 tab-handover.ts）：经交接频道发 handover-request，同时等
 //   这份文档的本机锁空着（same-browser.ts 的 untilFree）——那边存上、放弃那一代（不释放，审查 B4）之后才放锁，关闭、刷新、崩溃时浏览器替它放，
 //   所以"锁空了"在任何阶段都算那边做完了（收到 done 也是）：
-//   · EDIT_TAB_HANDOVER_ACK_MS（3 秒）内回应 ack：等它做完，至多 EDIT_TAB_HANDOVER_DONE_MS（20 秒，从回应算）；
+//   · EDIT_TAB_HANDOVER_ACK_MS（3 秒）内回应 ack：等它做完；总截止固定为首次请求起 EDIT_TAB_HANDOVER_DONE_MS（20 秒，M4-P3）；
 //   · 回应 failed：那边没能保存、留在编辑（原因）——交给页面让人选"仍在此编辑"或"取消"；
-//   · 回应 busy（那边正在进入编辑）：隔 TAB_HANDOVER_BUSY_RETRY_MS 再请求一次，从第一次 busy 起至多 20 秒；
+//   · 回应 busy（那边正在进入编辑）：隔 TAB_HANDOVER_BUSY_RETRY_MS 再请求一次；重试与重复 ack 都不延长总截止；
 //   · 没有回应（冻结、Safari 暂停了后台页面、页面卡住、载入的是不认识这个版本的协议的页面），或者回应了、到时限没做完：按没有回应处理
 //     （页面以本人接管申请，成功之后拿锁——锁被占着时先核对本页这一代是当前的才抢，M3-P6 设计 §3.13）。只认这一次请求的回应（requestId）。
 //   时限按注入的时钟排（页面上是 setTimeout，E2E 的 page.clock 拨得动；AbortSignal.timeout 走真实的时间，拨不动），到点撤销等锁；
@@ -68,11 +68,11 @@ export async function askTabToHandOver(options: TabHandoverOptions): Promise<Tab
   /** 等锁：结束时（不论结果）撤销 */
   const waiting = new AbortController()
   return new Promise<TabHandoverOutcome>((resolve) => {
+    // 首次请求在本轮同步发出；后续回应和换请求标识都不重置这份总预算。
+    const deadline = clock.now() + EDIT_TAB_HANDOVER_DONE_MS
     let settled = false
     let cancelTimer: (() => void) | undefined
     let stopListening: (() => void) | undefined
-    /** 第一次回应 busy 的时刻：从它起至多 EDIT_TAB_HANDOVER_DONE_MS */
-    let busySince: number | undefined
 
     function finish(outcome: TabHandoverOutcome): void {
       if (settled)
@@ -89,10 +89,22 @@ export async function askTabToHandOver(options: TabHandoverOptions): Promise<Tab
       finish(ABORTED)
     }
 
-    /** 换一个时限：到点时 then */
+    /** 阶段等待不能越过总截止；到总截止只结束，不再执行重试请求。 */
     function within(delayMs: number, then: () => void): void {
+      if (settled)
+        return
       cancelTimer?.()
-      cancelTimer = clock.schedule(then, delayMs)
+      const remaining = deadline - clock.now()
+      if (remaining <= 0) {
+        silent()
+        return
+      }
+      cancelTimer = clock.schedule(() => {
+        if (clock.now() >= deadline)
+          silent()
+        else
+          then()
+      }, Math.min(delayMs, remaining))
     }
 
     /** 发一次请求，只收它的回应；EDIT_TAB_HANDOVER_ACK_MS 内没有回应就按没有回应处理 */
@@ -107,30 +119,31 @@ export async function askTabToHandOver(options: TabHandoverOptions): Promise<Tab
 
     /** 到了时限：没有回应，或者回应了、没做完 */
     function silent(): void {
+      if (settled)
+        return
       options.trace?.({ kind: 'handover-silent', at: clock.now() })
       finish(SILENT)
     }
 
     function answered(reply: HandoverReply): void {
+      if (settled)
+        return
+      if (clock.now() >= deadline) {
+        silent()
+        return
+      }
       options.trace?.({ kind: 'handover-reply', at: clock.now(), requestId: reply.requestId, reply: replyKindOf(reply), detail: reply.type === 'handover-ack' ? reply.state : (reply.type === 'handover-failed' ? reply.reason : null) })
       switch (reply.type) {
         case 'handover-ack':
           // 回应了：等它做完（锁空了、done、failed），到时限没做完按没有回应处理
           within(EDIT_TAB_HANDOVER_DONE_MS, silent)
           return
-        case 'handover-busy': {
-          busySince ??= clock.now()
-          const left = busySince + EDIT_TAB_HANDOVER_DONE_MS - clock.now()
-          if (left <= 0) {
-            silent()
-            return
-          }
+        case 'handover-busy':
           // 不再收这一次的回应：隔一会儿换一个请求再问
           stopListening?.()
           stopListening = undefined
-          within(Math.min(TAB_HANDOVER_BUSY_RETRY_MS, left), ask)
+          within(TAB_HANDOVER_BUSY_RETRY_MS, ask)
           return
-        }
         case 'handover-done':
           finish(FINISHED)
           return
@@ -144,6 +157,10 @@ export async function askTabToHandOver(options: TabHandoverOptions): Promise<Tab
     void browser.untilFree(waiting.signal).then((free) => {
       if (!free || settled)
         return
+      if (clock.now() >= deadline) {
+        silent()
+        return
+      }
       options.trace?.({ kind: 'handover-lock-free', at: clock.now() })
       finish(FINISHED)
     })

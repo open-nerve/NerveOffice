@@ -1,5 +1,6 @@
 // P1 写入结果适配为公共内容来源。这里只留身份/序号/摘要，不另存 gzip；所有正文归 working-draft-source 的当前项或固定上传。
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
+import type { DraftObservation } from '../../../shared/outbox/draft-observation.ts'
 import type { DraftKey } from '../../../shared/outbox/draft-record.ts'
 import type { CaptureWritten, KeyChange, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
@@ -14,6 +15,8 @@ export interface PersistentWorkingDraftOptions extends WorkingDraftOptions {
   readonly key: DraftKey
   /** 初次 ready 已结束；之后由这个来源独占文档的写入/读回顺序。 */
   readonly session: OutboxSession
+  /** 与 initialCapture 配套：首份写入必须原子接手，失败后由恢复流程重新观察，不自动续普通资格。 */
+  readonly recoveryObservation?: DraftObservation
 }
 
 export interface PersistentWorkingDraft extends WorkingDraft {
@@ -55,8 +58,11 @@ function writeProblem(result: CaptureWritten): WriterProblem | undefined {
 
 const RETRYABLE: ReadonlySet<DraftMemoryReason> = new Set(['no-key', 'quota', 'unavailable', 'fenced', 'worker-failed'])
 
-export function createPersistentWorkingDraft(options: PersistentWorkingDraftOptions): PersistentWorkingDraft {
+export function createPersistentWorkingDraft(configuration: PersistentWorkingDraftOptions): PersistentWorkingDraft {
+  const { initialCapture, ...options } = configuration
   const { session } = options
+  if (options.recoveryObservation !== undefined && initialCapture === undefined)
+    throw problem('InvalidRecoveryInitial', '接手资格必须与来源的恢复初值一起交入')
   if (!Number.isSafeInteger(options.initialDraftSeq) || options.initialDraftSeq < 0)
     throw new RangeError('工作草稿的序号起点必须是非负安全整数')
   const initial = session.view()
@@ -70,6 +76,8 @@ export function createPersistentWorkingDraft(options: PersistentWorkingDraftOpti
   let highWater = initial.kind === 'ready' || initial.kind === 'memory' ? initial.lastDraftSeq ?? 0 : 0
   let last: StoredContent | undefined
   const stored = new WeakMap<DraftCaptureRef, StoredContent>()
+  let recoveryObservation = options.recoveryObservation
+  let awaitingRecovery = recoveryObservation !== undefined
 
   async function memory(input: DraftWriteInput, reason: DraftMemoryReason, gzip?: Uint8Array<ArrayBuffer>, storageProblem?: WriterProblem): Promise<WrittenDraftContent> {
     if (gzip === undefined) {
@@ -97,9 +105,37 @@ export function createPersistentWorkingDraft(options: PersistentWorkingDraftOpti
     return highWater
   }
 
-  const source = createWorkingDraftSource({ ...options, initialDraftSeq: Math.max(options.initialDraftSeq, highWater) }, {
+  function persisted(input: DraftWriteInput, result: Extract<CaptureWritten, { readonly kind: 'written' }>, writer: WriterIdentity): WrittenDraftContent {
+    const record: StoredContent = { writer, contentSeq: input.ref.draftSeq, digest: result.digest, baseRevision: input.baseRevision, formulasPending: input.ref.formulasPending, local: { kind: 'persisted', mirror: result.mirror } }
+    last = record
+    stored.set(input.ref, record)
+    highWater = Math.max(highWater, record.contentSeq)
+    return { contentSeq: record.contentSeq, digest: result.digest, local: record.local, gzip: result.gzip, retainBody: false }
+  }
+
+  async function adoptInitial(input: DraftWriteInput): Promise<WrittenDraftContent> {
+    const observation = recoveryObservation
+    recoveryObservation = undefined
+    if (observation === undefined || paused || changingKey || input.inFlight !== null)
+      return memory(input, paused ? 'paused' : changingKey ? 'no-key' : reasonOf(session.view()))
+    const result = await session.adopt(observation, { draftSeq: input.ref.draftSeq, baseRevision: input.baseRevision, writtenBy: options.writtenBy, format: options.format, formulasPending: input.ref.formulasPending, bytes: input.bytes })
+    if (disposed)
+      throw problem('InvalidStateError', '恢复来源已销毁')
+    const state = session.view()
+    if (result.kind === 'written' && state.kind === 'ready' && !paused && !changingKey) {
+      awaitingRecovery = false
+      return persisted(input, result, state.writer)
+    }
+    if (result.kind === 'written' || result.kind === 'unchanged')
+      return memory(input, reasonOf(state), result.kind === 'written' ? result.gzip : undefined)
+    return memory(input, result.kind === 'failed' ? reasonOf(state) : result.kind, result.gzip ?? undefined, writeProblem(result))
+  }
+
+  const source = createWorkingDraftSource({ ...options, initialDraftSeq: Math.max(options.initialDraftSeq, highWater), ...(initialCapture === undefined ? {} : { initialCapture }) }, {
     sequenceFloor,
     write: async (input) => {
+      if (awaitingRecovery)
+        return adoptInitial(input)
       if (paused || changingKey)
         return memory(input, paused ? 'paused' : 'no-key')
       let state = session.view()
@@ -130,11 +166,7 @@ export function createPersistentWorkingDraft(options: PersistentWorkingDraftOpti
       if (disposed)
         throw problem('InvalidStateError', '工作草稿来源已销毁')
       if (result.kind === 'written') {
-        const record: StoredContent = { writer: state.writer, contentSeq: input.ref.draftSeq, digest: result.digest, baseRevision: input.baseRevision, formulasPending: input.ref.formulasPending, local: { kind: 'persisted', mirror: result.mirror } }
-        last = record
-        stored.set(input.ref, record)
-        highWater = Math.max(highWater, record.contentSeq)
-        return { contentSeq: record.contentSeq, digest: result.digest, local: record.local, gzip: result.gzip, retainBody: false }
+        return persisted(input, result, state.writer)
       }
       if (result.kind === 'unchanged') {
         if (!dedupe || previous === undefined || previous.digest !== result.digest || previous.formulasPending !== input.ref.formulasPending)
@@ -229,9 +261,12 @@ export function createPersistentWorkingDraft(options: PersistentWorkingDraftOpti
       generation += 1
       paused = true
       changingKey = false
-      session.suspend()
-      // 内部保留只交回元数据，已完成的 Promise 不另持有正文。
-      void source.retainLatest('paused')
+      const finish = session.suspend()
+      // 接住唯一正文后释放原宿主/镜像；保留失败仍留读回退路，旧收尾不会关闭新准备的宿主。
+      void source.retainLatest('paused').then((kept) => {
+        if (kept.kind !== 'failed')
+          finish()
+      })
     },
     discardKey: async () => {
       if (disposed)
@@ -252,6 +287,8 @@ export function createPersistentWorkingDraft(options: PersistentWorkingDraftOpti
     resume: async () => {
       if (disposed)
         return { kind: 'disposed' }
+      if (awaitingRecovery)
+        return stopped()
       if (resuming?.generation === generation)
         return resuming.promise
       const run = ++generation

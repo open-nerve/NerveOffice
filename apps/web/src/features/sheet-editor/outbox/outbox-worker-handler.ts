@@ -118,6 +118,10 @@ export function createOutboxWorkerHandler(options: OutboxWorkerHandlerOptions): 
         const result = await writer.write(request.capture)
         return { result, transfer: 'gzip' in result && result.gzip !== null ? [result.gzip.buffer] : [] }
       }
+      case 'adopt': {
+        const result = await writer.adopt(request.observation, request.capture)
+        return { result, transfer: 'gzip' in result && result.gzip !== null ? [result.gzip.buffer] : [] }
+      }
       case 'mark-in-flight':
         return plain(await writer.markInFlight(request.draft, request.writer, request.inFlight))
       case 'confirm':
@@ -128,6 +132,12 @@ export function createOutboxWorkerHandler(options: OutboxWorkerHandlerOptions): 
       }
       case 'remove':
         return plain(await writer.remove(request.draft, request.expectedSeq ?? undefined))
+      case 'observe': {
+        const result = await writer.observe(request.draft)
+        return { result, transfer: result.kind === 'observed' && result.record.kind === 'draft' ? [result.record.gzip.buffer] : [] }
+      }
+      case 'remove-observed':
+        return plain(await writer.removeObserved(request.observation))
       case 'set-key':
         return plain(await installKey(request.key))
       case 'seed-digest':

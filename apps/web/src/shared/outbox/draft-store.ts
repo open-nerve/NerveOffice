@@ -3,14 +3,16 @@
 // 跨边界不抛异常：每个操作的结果都是带 kind 的值，写满、库用不了、未知的错误各有一种。
 // 发件箱 Worker 也引用这个文件：不引用 zod，不依赖 DOM
 import type { OutboxConnection, OutboxUnavailable } from './database.ts'
+import type { DraftObservation, ObservedValues } from './draft-observation.ts'
 import type { DraftKey, DraftMeta, ReadDraft, StoredDraft, WriterRecord } from './draft-record.ts'
 import type { RecoveryNotice, RecoveryNoticeKind } from './recovery-notice.ts'
 import type { ExistingDraft, RestoreVerdict, WriterIdentity } from './writer-fence.ts'
 import { browserIndexedDb, draftKeyPath, DRAFTS_STORE, NOTICES_STORE, openOutboxDatabase, userKeyRange, WRITERS_STORE } from './database.ts'
 import { canSealDrafts } from './draft-codec.ts'
+import { createDraftObservations } from './draft-observation.ts'
 import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
-import { decideConfirm, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
+import { decideConfirm, decideObservedAdoption, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
 
 /**
  * 存储这一侧的问题：
@@ -23,15 +25,18 @@ export type StoreProblem
     | OutboxUnavailable
     | { readonly kind: 'failed', readonly error: unknown }
 
+/** 恢复读取已经见到原件后，事务失败仍保留事实；不包含未提交的观察凭证。 */
+export type StoreRecoveryProblem = StoreProblem & { readonly recordKnown?: true }
+
 /** 栅栏拒绝的原因（writer-fence.ts 的判定）：not-writer、stale-seq、foreign-draft 来自写入，changed 来自重封 */
 export type FenceReason = 'not-writer' | 'stale-seq' | 'foreign-draft' | 'changed'
 
 export type StoreRegisterOutcome
   /** 登记了：lastDraftSeq 是高水位（主线程从它往上分配序号），existing 是现有的草稿（有就由恢复决定，P3） */
-  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: ReadDraft | undefined }
+  = | { readonly kind: 'registered', readonly lastDraftSeq: number, readonly existing: ReadDraft | undefined, readonly recordKnown?: true }
   /** 现有的写入者代次更大，或者同一代的另一次登记：由调用方向服务端核对，确实是当前的一代就以 force 重新登记 */
-    | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean }
-    | StoreProblem
+    | { readonly kind: 'superseded', readonly currentEpoch: number, readonly sameEpoch: boolean, readonly recordKnown?: true }
+    | StoreRecoveryProblem
 
 export type StoreWriteOutcome
   = | { readonly kind: 'written' }
@@ -52,7 +57,11 @@ export type StoreConfirmOutcome
     | StoreProblem
 
 /** 读回：认得出的草稿、更新的页面写的、形状不对的、没有 */
-export type StoreReadOutcome = ReadDraft | { readonly kind: 'absent' } | StoreProblem
+export type StoreReadOutcome = ReadDraft | { readonly kind: 'absent' } | StoreRecoveryProblem
+
+export type StoreObservedOutcome
+  = | { readonly kind: 'observed', readonly observation: DraftObservation, readonly record: ReadDraft | { readonly kind: 'absent' }, readonly writer: WriterRecord | undefined }
+    | StoreRecoveryProblem
 
 /** 列表里的一条：元数据，不交出密文；认不出的也列出来（本机草稿页要说明它们，P4） */
 export type ListedDraft
@@ -120,6 +129,12 @@ export interface DraftStore {
    */
   readonly confirmDraft: (key: DraftKey, writer: WriterIdentity, confirmedSeq: number, rebased: StoredDraft | undefined) => Promise<StoreConfirmOutcome>
   readonly readDraft: (key: DraftKey) => Promise<StoreReadOutcome>
+  /** 一次只读事务观察草稿、写入者及提示；每个文档只保留最新凭证，关闭后不能续用。 */
+  readonly observeDraft: (key: DraftKey) => Promise<StoreObservedOutcome>
+  /** 同一 strict 事务比较完整原件和写入者，只有当前写入者以新序号接手；凭证与记录的键必须一致。 */
+  readonly adoptObserved: (observation: DraftObservation, draft: StoredDraft) => Promise<StoreWriteOutcome>
+  /** 同一 strict 事务条件删除并立墓碑；未变化的原提示一并清理，新提示保留。 */
+  readonly removeObserved: (observation: DraftObservation, now: number) => Promise<StoreRemoveOutcome>
   /** 某个用户在这台设备上的全部草稿（元数据，不交出密文） */
   readonly listDrafts: (userId: string) => Promise<StoreListOutcome>
   /**
@@ -235,7 +250,7 @@ async function transact<T>(db: IDBDatabase, mode: IDBTransactionMode, stores: re
         // 事务已经结束（提交或中止过了）：结局由 complete 或 abort 交回
       }
     }
-    tx.oncomplete = () => resolve(result === undefined ? { kind: 'aborted', error: new Error('事务提交了，却没有给出结果') } : { kind: 'committed', value: result.value })
+    tx.oncomplete = () => resolve(result === undefined ? { kind: 'aborted', error: new Error('事务提交无结果') } : { kind: 'committed', value: result.value })
     tx.onabort = () => resolve({ kind: 'aborted', error: failure?.error ?? tx.error ?? new DOMException('事务被中止', 'AbortError') })
     const scope: TransactionScope<T> = {
       tx,
@@ -265,12 +280,20 @@ async function transact<T>(db: IDBDatabase, mode: IDBTransactionMode, stores: re
 /**
  * 同一个事务里读出这份文档的写入者与草稿：请求按发出的顺序完成，草稿的回调里两个都有了。形状不对的写入者当作没有（readWriterRecord）
  */
-function readCurrent<T>(scope: TransactionScope<T>, key: DraftKey, then: (writer: WriterRecord | undefined, existing: ReadDraft | undefined) => void): void {
+function readCurrent<T>(scope: TransactionScope<T>, key: DraftKey, then: (writer: WriterRecord | undefined, existing: ReadDraft | undefined) => void, seen?: (draft: unknown) => void): void {
+  readRawCurrent(scope, key, (draftValue, writerValue) => {
+    then(writerValue === undefined ? undefined : readWriterRecord(writerValue), draftValue === undefined ? undefined : readStoredDraft(draftValue))
+  }, seen)
+}
+
+/** 恢复凭证比较原始值，不能把两份不同的 malformed 折成同一种结果。 */
+function readRawCurrent<T>(scope: TransactionScope<T>, key: DraftKey, then: (draft: unknown, writer: unknown) => void, seen?: (draft: unknown) => void): void {
   const path = draftKeyPath(key)
   const writerRequest = scope.tx.objectStore(WRITERS_STORE).get(path)
   scope.then(scope.tx.objectStore(DRAFTS_STORE).get(path), (draftValue: unknown) => {
+    seen?.(draftValue)
     const writerValue: unknown = writerRequest.result
-    then(writerValue === undefined ? undefined : readWriterRecord(writerValue), draftValue === undefined ? undefined : readStoredDraft(draftValue))
+    then(draftValue, writerValue)
   })
 }
 
@@ -297,6 +320,10 @@ function failed(message: string): { readonly kind: 'failed', readonly error: unk
   return { kind: 'failed', error: new TypeError(message) }
 }
 
+function withRecordPresence<T extends { readonly kind: string }>(result: T, recordKnown: boolean): T & { readonly recordKnown?: true } {
+  return recordKnown ? { ...result, recordKnown: true } : result
+}
+
 function noticeOf(key: DraftKey, kind: RecoveryNoticeKind, at: number): RecoveryNotice {
   return { userId: key.userId, documentId: key.documentId, kind, at }
 }
@@ -307,6 +334,8 @@ function noticeOf(key: DraftKey, kind: RecoveryNoticeKind, at: number): Recovery
  */
 export function createDraftStore(options: DraftStoreOptions): DraftStore {
   const factory = options.factory ?? browserIndexedDb
+  const observations = createDraftObservations()
+  let observationGeneration = 0
   let connection: OutboxConnection | undefined
   let opening: Promise<OutboxConnection | OutboxUnavailable> | undefined
 
@@ -353,8 +382,9 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     registerWriter: async (key, writer, { now, force }) => {
       const record: WriterRecord = { userId: key.userId, documentId: key.documentId, writeEpoch: writer.writeEpoch, writerId: writer.writerId, lastDraftSeq: 0, registeredAt: now }
       if (readWriterRecord(record) === undefined || isRetired(writer))
-        return failed('写入者的形状不对（或者用了墓碑保留的 writerId）：不登记')
-      return run<StoreRegisterOutcome>('readwrite', (scope) => {
+        return failed('写入者无效或已退役')
+      let recordKnown = false
+      const result = await run<StoreRegisterOutcome>('readwrite', (scope) => {
         readCurrent(scope, key, (current, existing) => {
           const verdict = decideRegistration(current, existing, writer, force)
           if (verdict.kind === 'superseded') {
@@ -363,14 +393,15 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
           }
           scope.tx.objectStore(WRITERS_STORE).put({ ...record, lastDraftSeq: verdict.lastDraftSeq })
           scope.finish({ kind: 'registered', lastDraftSeq: verdict.lastDraftSeq, existing })
-        })
+        }, (draft) => { recordKnown ||= draft !== undefined })
       })
+      return result.kind === 'registered' && result.existing !== undefined ? result : withRecordPresence(result, recordKnown)
     },
 
     writeDraft: async (draft, writeOptions) => {
       const checked = readStoredDraft(draft)
       if (checked.kind !== 'draft')
-        return failed('草稿的形状不对：不写（存进去的一律要读得回来）')
+        return failed('草稿格式无效')
       const record = checked.draft
       return run<StoreWriteOutcome>('readwrite', (scope) => {
         readCurrent(scope, record, (current, existing) => {
@@ -397,7 +428,7 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     replaceDraft: async (draft) => {
       const checked = readStoredDraft(draft)
       if (checked.kind !== 'draft')
-        return failed('草稿的形状不对：不写（存进去的一律要读得回来）')
+        return failed('草稿格式无效')
       const record = checked.draft
       return run<StoreWriteOutcome>('readwrite', (scope) => {
         readCurrent(scope, record, (current, existing) => {
@@ -418,7 +449,7 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
         // 形状不对、不是这份文档的：调用方的错（写进去会落到别的键上），不写
         const checked = readStoredDraft(rebased)
         if (checked.kind !== 'draft' || checked.draft.userId !== key.userId || checked.draft.documentId !== key.documentId)
-          return failed('重封的那一份形状不对，或者不是这份文档的')
+          return failed('重封草稿格式或文档不符')
         prepared = checked.draft
       }
       return run<StoreConfirmOutcome>('readwrite', (scope) => {
@@ -449,11 +480,99 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
       })
     },
 
-    readDraft: async key => run<StoreReadOutcome>('readonly', (scope) => {
-      scope.then(scope.tx.objectStore(DRAFTS_STORE).get(draftKeyPath(key)), (value: unknown) => {
-        scope.finish(value === undefined ? { kind: 'absent' } : readStoredDraft(value))
+    readDraft: async (key) => {
+      let recordKnown = false
+      const result = await run<StoreReadOutcome>('readonly', (scope) => {
+        scope.then(scope.tx.objectStore(DRAFTS_STORE).get(draftKeyPath(key)), (value: unknown) => {
+          recordKnown ||= value !== undefined
+          scope.finish(value === undefined ? { kind: 'absent' } : readStoredDraft(value))
+        })
       })
-    }),
+      return result.kind === 'quota' || result.kind === 'unavailable' || result.kind === 'failed' ? withRecordPresence(result, recordKnown) : result
+    },
+
+    observeDraft: async (key) => {
+      const generation = observationGeneration
+      let recordKnown = false
+      const result = await run<ObservedValues & { readonly kind: 'snapshot' }>('readonly', (scope) => {
+        const notice = scope.tx.objectStore(NOTICES_STORE).get(draftKeyPath(key))
+        readRawCurrent(scope, key, (draft, writer) => scope.finish({ kind: 'snapshot', draft, writer, notice: notice.result as unknown }), (draft) => {
+          recordKnown ||= draft !== undefined
+        })
+      }, ALL_STORES)
+      if (result.kind !== 'snapshot')
+        return withRecordPresence(result, recordKnown)
+      if (generation !== observationGeneration)
+        return withRecordPresence(failed('观察期间存储已关闭：凭证失效'), recordKnown)
+      try {
+        return {
+          kind: 'observed',
+          observation: observations.remember(key, result),
+          record: result.draft === undefined ? { kind: 'absent' } : readStoredDraft(result.draft),
+          writer: readWriterRecord(result.writer),
+        }
+      }
+      catch (error) {
+        return withRecordPresence({ kind: 'failed' as const, error }, recordKnown)
+      }
+    },
+
+    adoptObserved: async (observation, draft) => {
+      const checked = readStoredDraft(draft)
+      if (checked.kind !== 'draft')
+        return failed('接手草稿格式无效')
+      const record = checked.draft
+      if (record.userId !== observation.key.userId || record.documentId !== observation.key.documentId)
+        return { kind: 'fenced', reason: 'changed' }
+      const result = await run<StoreWriteOutcome>('readwrite', (scope) => {
+        readRawCurrent(scope, observation.key, (rawDraft, rawWriter) => {
+          if (!observations.matches(observation, rawDraft, rawWriter)) {
+            scope.finish({ kind: 'fenced', reason: 'changed' })
+            return
+          }
+          const writer = readWriterRecord(rawWriter)
+          const existing = rawDraft === undefined ? undefined : readStoredDraft(rawDraft)
+          const verdict = decideObservedAdoption(writer, existing, record)
+          if (verdict !== 'ok' || writer === undefined) {
+            scope.finish({ kind: 'fenced', reason: verdict === 'ok' ? 'not-writer' : verdict })
+            return
+          }
+          scope.tx.objectStore(DRAFTS_STORE).put(record)
+          scope.tx.objectStore(WRITERS_STORE).put({ ...writer, lastDraftSeq: record.draftSeq })
+          scope.finish({ kind: 'written' })
+        })
+      })
+      // 只有事务成功提交才消费；配额/连接中止可使用原观察重新尝试。
+      if (result.kind === 'written')
+        observations.forget(observation)
+      return result
+    },
+
+    removeObserved: async (observation, now) => {
+      const result = await run<StoreRemoveOutcome>('readwrite', (scope) => {
+        const path = draftKeyPath(observation.key)
+        const notice = scope.tx.objectStore(NOTICES_STORE).get(path)
+        readRawCurrent(scope, observation.key, (rawDraft, rawWriter) => {
+          if (!observations.matches(observation, rawDraft, rawWriter)) {
+            scope.finish({ kind: 'changed' })
+            return
+          }
+          if (rawDraft === undefined) {
+            scope.finish({ kind: 'absent' })
+            return
+          }
+          // 墓碑与删除同时落盘，镜像清理失败或此后崩溃也不会复活旧记录。
+          scope.tx.objectStore(WRITERS_STORE).put(retiredWriterOf(observation.key, readWriterRecord(rawWriter), readStoredDraft(rawDraft), now))
+          scope.tx.objectStore(DRAFTS_STORE).delete(path)
+          if (observations.sameNotice(observation, notice.result))
+            scope.tx.objectStore(NOTICES_STORE).delete(path)
+          scope.finish({ kind: 'removed' })
+        })
+      }, ALL_STORES)
+      if (result.kind === 'removed' || result.kind === 'absent')
+        observations.forget(observation)
+      return result
+    },
 
     listDrafts: async userId => run<StoreListOutcome>('readonly', (scope) => {
       const drafts: ListedDraft[] = []
@@ -627,7 +746,7 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     restoreDraft: async (draft, { now, noteLost = true }) => {
       const checked = readStoredDraft(draft)
       if (checked.kind !== 'draft')
-        return failed('镜像的那一份形状不对：不写回')
+        return failed('镜像草稿格式无效')
       const record = checked.draft
       return run<StoreRestoreOutcome>('readwrite', (scope) => {
         readCurrent(scope, record, (current, existing) => {
@@ -735,6 +854,8 @@ export function createDraftStore(options: DraftStoreOptions): DraftStore {
     }, [NOTICES_STORE]),
 
     close: () => {
+      observationGeneration += 1
+      observations.clear()
       connection?.close()
       connection = undefined
     },

@@ -186,6 +186,8 @@ export interface AutosaveOptions {
   readonly draft: WorkingDraft
   /** "公式待更新"的初值（进入编辑时服务端的标记，与保存的状态机的同一个）：带标记时公式收齐就补捕获一次 */
   readonly initialFormulasPending: boolean
+  /** 来源已经持有恢复初值；沿这个引用上传，不为启动调度伪造 SDK 修改。 */
+  readonly initialUnsaved?: boolean
   readonly tuning?: AutosaveTuning
   /** 每次捕获与上传（测试构建的控制记下来） */
   readonly observe?: (event: AutosaveEvent) => void
@@ -796,6 +798,9 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     kick()
   }
 
+  const initial = options.initialUnsaved ? options.draft.view() : undefined
+  if (initial !== undefined && initial.kind !== 'working')
+    throw new Error('恢复调度必须从已有的工作草稿初值开始')
   const unsubscribers = [
     editor.onChange(onEditorChange),
     editor.onFormulaProgress(kick),
@@ -805,11 +810,16 @@ export function createAutosave(options: AutosaveOptions): Autosave {
     tuning.onChange(onTuningChange),
     options.draft.subscribe(onDraftChange),
   ]
-  // 打开不算修改（与保存的状态机同一个基线 0）：建起来时已经有修改的，按此刻有了修改算
-  if (editor.changeSeq() > 0) {
+  if (initial?.kind === 'working') {
+    latest = initial.ref
+    capturePending = initial.ref.formulasPending
+    uploader.noteCapture(initial.ref)
+  }
+  // 普通打开仍以 0 为已存基线；恢复初值已捕获，但还需要启动上传静默与最长等待计时。
+  if (editor.changeSeq() > 0 || options.initialUnsaved) {
     const now = clock.now()
     lastChangeAt = now
-    firstUncapturedAt = now
+    firstUncapturedAt = editor.changeSeq() > (latest?.editorSeq ?? 0) ? now : undefined
     firstUnuploadedAt = now
   }
   if (TERMINAL_STATUSES.has(uploader.view().status))

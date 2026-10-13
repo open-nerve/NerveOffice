@@ -234,7 +234,7 @@ describe('写镜像（M4-P1 设计 §3.8）：IndexedDB 写成之后同一份记
     }
     expect(await fencedOn(async writer => writer.markInFlight(KEY, ME, inFlight(1)))).toEqual({ result: { kind: 'fenced', reason: 'not-writer' }, handles: 0 })
     expect(await fencedOn(async writer => writer.confirm(KEY, ME, 1, 13))).toEqual({ result: { kind: 'fenced', reason: 'not-writer' }, handles: 0 })
-    expect(await fencedOn(async writer => writer.register(KEY, ME, false))).toEqual({ result: { kind: 'superseded', currentEpoch: 4, sameEpoch: false }, handles: 0 })
+    expect(await fencedOn(async writer => writer.register(KEY, ME, false))).toEqual({ result: { kind: 'superseded', currentEpoch: 4, sameEpoch: false, recordKnown: true }, handles: 0 })
   })
 })
 

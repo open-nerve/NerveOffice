@@ -4,6 +4,7 @@ import type { LeaseLoss } from './edit-lease.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
 import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
+import type { RecoveryView } from './recovery/document-recovery.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -60,6 +61,12 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
+    retryRecovery: vi.fn(async () => {}),
+    copyRecovery: vi.fn(async () => {}),
+    beginDiscardRecovery: vi.fn(() => ({ updatedAt: 123 })),
+    discardRecovery: vi.fn(async () => {}),
+    retryRecoveryCleanup: vi.fn(async () => {}),
+    acknowledgeRecovery: vi.fn(async () => {}),
     view: () => view,
     subscribe: (listener) => {
       listeners.add(listener)
@@ -121,6 +128,107 @@ function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
   render(<EditorChrome page={fake.page} apple={apple} />)
   return fake
 }
+
+describe('页头的本机恢复操作', () => {
+  const recovery: RecoveryView = { stage: 'ready', decision: { kind: 'restore', baseRevision: 3, formulasPending: false, reason: 'fast-forward' }, updatedAt: new Date(2026, 9, 4, 15, 30).getTime(), operation: undefined, cleanup: undefined, copy: { kind: 'idle' }, notice: undefined, problem: undefined }
+
+  it('恢复仍走统一编辑入口，副本与重查交给原文档协调器', () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery })
+    fireEvent.click(screen.getByRole('button', { name: '恢复并编辑' }))
+    fireEvent.click(screen.getByRole('button', { name: '另存为副本' }))
+    expect(f.page.enterEditing).toHaveBeenCalledOnce()
+    expect(f.page.copyRecovery).toHaveBeenCalledOnce()
+    f.set({ recovery: { ...recovery, decision: { kind: 'preserve', reason: 'replay' } } })
+    fireEvent.click(screen.getByRole('button', { name: '重新检查本机修改' }))
+    expect(f.page.retryRecovery).toHaveBeenCalledOnce()
+  })
+
+  it('放弃先确认，取消不删除；确认始终使用打开时的原意图', async () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery })
+    const intent = Object.freeze({ updatedAt: recovery.updatedAt })
+    vi.mocked(f.page.beginDiscardRecovery).mockReturnValue(intent)
+    fireEvent.click(screen.getByRole('button', { name: '放弃本机修改' }))
+    const first = await screen.findByRole('dialog', { name: '放弃这份本机修改？' })
+    expect(f.page.discardRecovery).not.toHaveBeenCalled()
+    fireEvent.click(within(first).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(f.page.discardRecovery).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '放弃本机修改' }))
+    const second = await screen.findByRole('dialog', { name: '放弃这份本机修改？' })
+    f.set({ recovery: { ...recovery, updatedAt: recovery.updatedAt! + 1 } })
+    fireEvent.click(within(second).getByRole('button', { name: '确认放弃' }))
+    await waitFor(() => expect(f.page.discardRecovery).toHaveBeenCalledExactlyOnceWith(intent))
+  })
+
+  it('确认框关闭、无障碍屏障解除并交还焦点后才发布本机放弃结果', async () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery })
+    const discard = screen.getByRole('button', { name: '放弃本机修改' })
+    const seen: { dialog: boolean, hidden: boolean, focused: boolean }[] = []
+    vi.mocked(f.page.discardRecovery).mockImplementation(async () => {
+      seen.push({ dialog: screen.queryByRole('dialog') !== null, hidden: discard.closest('[aria-hidden="true"]') !== null, focused: document.activeElement !== document.body })
+    })
+    discard.focus()
+    fireEvent.click(discard)
+    fireEvent.click(within(await screen.findByRole('dialog', { name: '放弃这份本机修改？' })).getByRole('button', { name: '确认放弃' }))
+    await waitFor(() => expect(seen).toEqual([{ dialog: false, hidden: false, focused: true }]))
+  })
+
+  it('确认框打开后会话换人，确认不提交；原件留给原身份', async () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery })
+    fireEvent.click(screen.getByRole('button', { name: '放弃本机修改' }))
+    const dialog = await screen.findByRole('dialog', { name: '放弃这份本机修改？' })
+    f.set({ session: 'other-user' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认放弃' }))
+    expect(within(dialog).getByText('暂时无法确认登录状态，本机修改仍保留')).toBeVisible()
+    expect(f.page.discardRecovery).not.toHaveBeenCalled()
+  })
+
+  it('副本成功但清理失败时保留链接，消失按钮的焦点交还返回链接', async () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery })
+    screen.getByRole('button', { name: '另存为副本' }).focus()
+    f.set({ recovery: { ...recovery, copy: { kind: 'done', document: COPY }, cleanup: { kind: 'quota' } } })
+    expect(screen.getByRole('link', { name: '打开副本（新标签页）' })).toHaveAttribute('href', `/documents/${COPY.id}`)
+    expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
+    await waitFor(() => expect(within(screen.getByRole('banner')).getByRole('link')).toHaveFocus())
+    fireEvent.click(screen.getByRole('button', { name: '重试清理' }))
+    expect(f.page.retryRecoveryCleanup).toHaveBeenCalledOnce()
+  })
+
+  it('进入期间保留恢复按钮但禁用，保存确认后不再说等待保存', () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery })
+    const restore = screen.getByRole('button', { name: '恢复并编辑' })
+    f.set({ mode: { kind: 'entering' }, recovery: { ...recovery, operation: 'prepare' } })
+    expect(screen.getByRole('button', { name: '恢复并编辑' })).toBe(restore)
+    expect(restore).toBeDisabled()
+    f.set({ mode: EDITING, save: DIRTY, recovery: { ...recovery, stage: 'restored' } })
+    expect(screen.getByText('已恢复 15:30 的本机修改，等待保存到云端')).toBeVisible()
+    f.set({ save: CLEAN, recovery: { ...recovery, stage: 'restored', saved: true } })
+    expect(screen.getByText('恢复的修改已保存到云端')).toBeVisible()
+    f.set({ mode: READING, save: undefined })
+    expect(screen.getByText('恢复的修改已保存到云端')).toBeVisible()
+  })
+
+  it('读取文档早期 404 也显示条件清理失败和重试，不提供恢复覆盖', () => {
+    const f = renderChrome({ load: { kind: 'not-found' }, mode: undefined, save: undefined, recovery: { ...recovery, decision: { kind: 'remove', reason: 'unreadable' }, cleanup: { kind: 'quota' } } })
+    expect(screen.getByText('本机存储空间不足，尚未完成草稿清理，可以重试')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '重试清理' }))
+    expect(f.page.retryRecoveryCleanup).toHaveBeenCalledOnce()
+    expect(screen.queryByRole('button', { name: '恢复并编辑' })).toBeNull()
+  })
+
+  it('早期失败后权限恢复的新观察可以明确确认放弃，失败页也有同一确认框', async () => {
+    const f = renderChrome({ load: { kind: 'not-found' }, mode: undefined, save: undefined, recovery })
+    fireEvent.click(screen.getByRole('button', { name: '放弃本机修改' }))
+    fireEvent.click(within(await screen.findByRole('dialog', { name: '放弃这份本机修改？' })).getByRole('button', { name: '确认放弃' }))
+    await waitFor(() => expect(f.page.discardRecovery).toHaveBeenCalledOnce())
+  })
+
+  it('原 restored/lost 通知由明确的知道了动作清除', () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery: { ...recovery, decision: { kind: 'none' }, notice: { kind: 'lost', at: 456, userId: READY.userId, documentId: READY.documentId } } })
+    fireEvent.click(screen.getByRole('button', { name: '知道了' }))
+    expect(f.page.acknowledgeRecovery).toHaveBeenCalledExactlyOnceWith(456)
+  })
+})
 
 describe('页头的本机保存事实', () => {
   const local: LocalSaveView = {

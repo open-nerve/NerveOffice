@@ -9,8 +9,10 @@
 // 跨设备在 handover-takeover.spec.ts（设计 §3.7）。
 // 容器 E2E 也跑：修改在断开之后才做，两种构建里都存不上；另存为副本不经保存的那条路（断开只拦保存与心跳）
 import type { APIResponse, Page, Response } from '@playwright/test'
+import type { Workbook } from '../../support/sheet.ts'
 import { createUser, editLeaseEpoch, editLeaseTakeover, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { currentLocalKey, diskSnapshot, readLocalDisk } from '../../support/local-draft.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, disconnectTab, editingNotice, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, lostNotice, openAndEnterEditing, openReader, saveAndWait, saveButton, savedContent, takeOverHereButton, typeInCell, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
 
@@ -119,7 +121,8 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
   })
 
   test('US-M3-08 锁被抢时前一个断网（核对不了）：不判自己失效、不抢回锁，照常留在编辑（但不持有锁）；连上之后由心跳给出结论——那一代被换掉、续上时被本浏览器的另一个标签页占着，失去编辑权，本页没保存的修改另存为副本', async ({ page, context }) => {
-    await loginThroughApi(page, await createUser('same-browser-lock'))
+    const owner = await createUser('same-browser-lock')
+    await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
     // Playwright 的时钟是上下文级的：两个标签页一起走，之后拨它让前一个的心跳到点
     await page.clock.install()
@@ -127,6 +130,13 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
     // 前一个"断网、休眠"之后改了一处：存不上，它也从服务端得知不了任何事
     const asleep = await disconnectTab(page)
     await typeInCell(page, 'A1', 'only in the first tab')
+    // M4-P3 的接续只采用已落盘的草稿；键入完成不等于捕获落盘，先独立解密确认这一前提。
+    const key = { userId: owner.id, documentId }
+    const secret = await currentLocalKey(page)
+    await expect.poll(async () => {
+      const draft = (await readLocalDisk(page, key)).draft
+      return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'A1')?.v
+    }).toBe('only in the first tab')
     await expireEditLease(documentId)
 
     // 后一个：打开、点"编辑"，取得新的一代；锁被前一个占着，核对过这一代是当前的才抢
@@ -167,11 +177,12 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
     const link = copied.getByRole('link', { name: '打开副本（新标签页）', exact: true })
     await expect(link).toBeVisible()
     const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
-    expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('only in the first tab')
+    const copiedContent = (await savedContent(page, copyId)).snapshot
+    expect([cellOf(copiedContent, 'A1')?.v, cellOf(copiedContent, 'B1')]).toEqual(['only in the first tab', undefined])
 
-    // 后一个一直在编辑；服务器上没有前一个的修改
+    // 后一个一直在编辑；M4-P3 的统一准备入口接上本机草稿，保存同时包含恢复内容与新页输入
     await expect(saveButton(other)).toBeVisible()
     const saved = (await savedContent(other, documentId)).snapshot
-    expect([cellOf(saved, 'A1'), cellOf(saved, 'B1')?.v]).toEqual([undefined, 'second tab'])
+    expect([cellOf(saved, 'A1')?.v, cellOf(saved, 'B1')?.v]).toEqual(['only in the first tab', 'second tab'])
   })
 })

@@ -9,12 +9,15 @@ import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { EditorPage, EditorPageApi } from './editor-page.ts'
 import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { MarkerStorage } from './pending-save-marker.ts'
+import type { RecoveryReader } from './recovery/recovery-reader.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveRequest } from './save-coordinator.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
 import { connectionState, createConnectionState } from '../../shared/lib/connection-state.ts'
+import { gzipBytes } from '../../shared/outbox/draft-codec.ts'
+import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
@@ -222,6 +225,7 @@ interface CreateOptions {
 }
 
 interface Setup {
+  readonly recoveryReader?: () => RecoveryReader
   readonly localDrafts?: Parameters<typeof createEditorPage>[0]['localDrafts']
   readonly network?: Parameters<typeof createEditorPage>[0]['network']
   readonly documentId?: string | undefined
@@ -266,6 +270,7 @@ function setup(options: Setup = {}) {
     contentIfChanged: vi.fn(overrides.contentIfChanged ?? (async (): Promise<LoadedContent | typeof CONTENT_UNCHANGED> => CONTENT_UNCHANGED)),
     editStatus: vi.fn(overrides.editStatus ?? (async (): Promise<FetchedEditStatus> => ({ status: { revision: 3, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }))),
     save: vi.fn(overrides.save ?? (async (): Promise<SaveContentResponse> => ({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false }))),
+    replay: overrides.replay,
     conflictCopy: vi.fn(overrides.conflictCopy ?? (async (): Promise<CreatedDocument> => ({ ...DETAIL, id: COPY_ID, title: '周报（冲突副本 2026-10-04 15:30）', revision: 1, replayed: false }))),
     reportOpenCheck: vi.fn(overrides.reportOpenCheck ?? (async (): Promise<void> => {})),
     editLease,
@@ -294,6 +299,7 @@ function setup(options: Setup = {}) {
   let id = 0
   const editorPage = createEditorPage({
     localDrafts: options.localDrafts ?? { supported: () => false },
+    recoveryReader: options.recoveryReader ?? (() => ({ observe: async () => ({ kind: 'observed', observation: { key: { userId: ALICE.user.id, documentId: DOCUMENT_ID }, id: 'absent' }, record: { kind: 'absent' }, writer: undefined }), refreshKey: async () => ({ kind: 'failed', error: { name: 'UnexpectedRefresh', message: '无草稿不需刷新密钥' } }), remove: async () => ({ kind: 'absent' }), notices: async () => ({ kind: 'notices', notices: [] }), clearNotice: async () => ({ kind: 'absent' }), dispose: () => {} })),
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
     surface,
     chrome,
@@ -335,6 +341,300 @@ async function VIEWER_STATUS(): Promise<FetchedEditStatus> {
 function modeOf(editorPage: EditorPage): EditModeState | undefined {
   return editorPage.view().mode
 }
+
+async function recoveryReader() {
+  const key = { userId: ALICE.user.id, documentId: DOCUMENT_ID }
+  const snapshot = '{"id":"unit-1","restored":"本机修改"}'
+  const meta = sampleMeta({ ...key, format: PAGE_CLIENT_FORMAT, baseRevision: 3, writeEpoch: 6, draftSeq: 37, inFlight: null, updatedAt: new Date(2026, 9, 4, 15, 0).getTime(), rawBytes: new TextEncoder().encode(snapshot).byteLength })
+  const gzip = await gzipBytes(new TextEncoder().encode(snapshot))
+  const original = { kind: 'observed' as const, observation: { key, id: 'original' }, record: { kind: 'draft' as const, meta, gzip }, writer: undefined }
+  const observe = vi.fn<RecoveryReader['observe']>().mockResolvedValue(original)
+  const remove = vi.fn<RecoveryReader['remove']>().mockResolvedValue({ kind: 'removed', mirror: { kind: 'removed' } })
+  const notices = vi.fn<RecoveryReader['notices']>().mockResolvedValue({ kind: 'notices', notices: [] })
+  const clearNotice = vi.fn<RecoveryReader['clearNotice']>().mockResolvedValue({ kind: 'cleared' })
+  const reader: RecoveryReader = { observe, remove, notices, clearNotice, refreshKey: async () => observe(), dispose: vi.fn() }
+  return { reader, observe, remove, notices, clearNotice, original, snapshot }
+}
+
+/** 模拟旧版本会话记号尚未清理；页面协调器自身也不得把它当成新页身份。 */
+async function pageWithLegacyMarker(overrides: Setup = {}) {
+  const r = await recoveryReader()
+  const meta = r.original.record.meta
+  const markerKey = `nerve-office:reload:${meta.userId}:${meta.documentId}`
+  window.sessionStorage.setItem(markerKey, JSON.stringify({ v: 1, userId: meta.userId, documentId: meta.documentId, clientInstanceId: meta.writtenBy, writeEpoch: meta.writeEpoch, writerId: meta.writerId }))
+  pages.push({ dispose: () => window.sessionStorage.removeItem(markerKey) })
+  const h = setup({ editIntent: false, newId: () => '0199a2c4-1f2e-4a3b-8c4d-0000000000ff', recoveryReader: () => r.reader, ...overrides })
+  vi.spyOn(h.fake.editor, 'capture').mockReturnValue(r.snapshot)
+  return { ...h, r }
+}
+
+describe('新页面身份与明确恢复', () => {
+  it('继承合法旧记号仍先阅读，明确恢复才用本页新身份申请与恢复正文', async () => {
+    const h = await pageWithLegacyMarker()
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.decision?.kind).toBe('restore'))
+    expect(h.editorPage.view().mode?.kind).toBe('reading')
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.r.remove).not.toHaveBeenCalled()
+    await h.editorPage.enterEditing()
+    expect(h.editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, '0199a2c4-1f2e-4a3b-8c4d-0000000000ff')
+    expect(h.editLease.acquire.mock.calls[0]?.[1]).not.toBe(h.r.original.record.meta.writtenBy)
+    expect(h.editorPage.view().mode?.kind).toBe('editing')
+    expect(h.createEditor.mock.calls.at(-1)?.[0].snapshot).toBe(h.r.snapshot)
+    await h.editorPage.save()
+    expect(h.api.save).toHaveBeenCalledOnce()
+  })
+
+  it('恢复点击等待会话确认时换了原件来源，仍须重新确认，不能改选随后发现的新候选', async () => {
+    const h = await pageWithLegacyMarker()
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.decision?.kind).toBe('restore'))
+    h.api.session.mockRejectedValueOnce(new NetworkError('断网'))
+    await h.editorPage.recheckSession()
+    const answer = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(answer.promise)
+    const entering = h.editorPage.enterEditing()
+    await settle()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    const original = h.r.original
+    h.r.observe.mockResolvedValue({ ...original, observation: { ...original.observation, id: 'new-writer' }, record: { ...original.record, meta: { ...original.record.meta, writerId: 'new-writer' } } })
+    answer.resolve(ALICE)
+    await entering
+    expect(h.editorPage.view().mode?.kind).toBe('reading')
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.r.remove).not.toHaveBeenCalled()
+    expect(h.createEditor.mock.calls.some(call => call[0].access === 'edit')).toBe(false)
+  })
+
+  it.each(['session', 'document', 'content'] as const)('首次 %s 请求失败、之后重新打开，也不以旧记号自动申请', async (request) => {
+    const h = await pageWithLegacyMarker()
+    h.api[request].mockRejectedValueOnce(new NetworkError())
+    await h.editorPage.load()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.r.remove).not.toHaveBeenCalled()
+    h.editorPage.dispose()
+    const refreshed = setup({ editIntent: false, recoveryReader: () => h.r.reader })
+    await refreshed.editorPage.load()
+    expect(refreshed.editLease.acquire).not.toHaveBeenCalled()
+    expect(refreshed.editorPage.view().mode?.kind).toBe('reading')
+  })
+
+  it('恢复后退出未保存成功仍保留正文，隐藏与 pagehide 不删除原件', async () => {
+    const h = await pageWithLegacyMarker()
+    await h.editorPage.load()
+    await h.editorPage.enterEditing()
+    h.api.save.mockRejectedValue(new NetworkError())
+    await h.editorPage.exitEditing()
+    expect(h.editorPage.view().mode?.kind).toBe('editing')
+    h.hidden.set(true)
+    window.dispatchEvent(new Event('pagehide'))
+    await settle()
+    expect(h.r.remove).not.toHaveBeenCalled()
+    h.editorPage.dispose()
+    expect(h.r.remove).not.toHaveBeenCalled()
+  })
+
+  it.each(['dispose', 'switch', 'unconfirmed'] as const)('发现原件在途发生 %s，迟到成功不能自动申请、保存或删除原件', async (ending) => {
+    const h = await pageWithLegacyMarker()
+    const pending = deferred<Awaited<ReturnType<RecoveryReader['observe']>>>()
+    h.r.observe.mockReturnValueOnce(pending.promise)
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.r.observe).toHaveBeenCalledOnce())
+    if (ending === 'dispose') {
+      h.editorPage.dispose()
+    }
+    else {
+      h.api.session.mockImplementation(async () => {
+        if (ending === 'unconfirmed')
+          throw new NetworkError()
+        return BOB
+      })
+      await h.editorPage.recheckSession()
+    }
+    pending.resolve(h.r.original)
+    await settle()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.r.remove).not.toHaveBeenCalled()
+  })
+})
+
+describe('文档页本机恢复的身份与早期错误', () => {
+  it('阅读先显示本机修改；恢复沿原编辑入口，部署关闭仍能读并在内存继续', async () => {
+    const r = await recoveryReader()
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { session: async () => ({ ...ALICE, features: { localDraftsEnabled: false } }) } })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.decision).toMatchObject({ kind: 'restore' }))
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    await h.editorPage.enterEditing()
+    expect(modeOf(h.editorPage)?.kind).toBe('editing')
+    expect(h.createEditor.mock.calls.at(-1)?.[0].snapshot).toBe(r.snapshot)
+    expect(h.editorPage.view().save?.unsavedEdits).toBe(true)
+    expect(h.editorPage.view().localSave?.storage).toBeDefined()
+  })
+
+  it.each(['document', 'content'] as const)('认证后 %s 的早期 404 也条件清理；不依赖 EditMode 已创建', async (endpoint) => {
+    const r = await recoveryReader()
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { [endpoint]: async () => {
+      throw new ApiError(404, 'NOT_FOUND', '已删除')
+    } } })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(r.remove).toHaveBeenCalledExactlyOnceWith(r.original.observation))
+    expect(h.editorPage.view().load.kind).toBe('not-found')
+    expect(h.createEditor).not.toHaveBeenCalled()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+  })
+
+  it('早期 404 清理失败后重新获得读取权限，重试必须检查当前权限并保留可恢复内容', async () => {
+    const r = await recoveryReader()
+    r.remove.mockResolvedValueOnce({ kind: 'quota' })
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { document: async () => {
+      throw new ApiError(404, 'NOT_FOUND', '暂时失权')
+    } } })
+    await h.editorPage.load()
+    expect(r.remove).toHaveBeenCalledOnce()
+    await h.editorPage.retryRecovery()
+    expect(h.api.editStatus).toHaveBeenCalledOnce()
+    expect(r.remove).toHaveBeenCalledOnce()
+    expect(h.editorPage.view().recovery?.decision?.kind).toBe('restore')
+    const intent = h.editorPage.beginDiscardRecovery()
+    expect(intent).toBeDefined()
+    if (intent === undefined)
+      throw new Error('新观察应可明确放弃')
+    await h.editorPage.discardRecovery(intent)
+    expect(r.remove).toHaveBeenCalledTimes(2)
+  })
+
+  it('初次文档请求在途时换人又换回，旧 404 不能借新的会话清理', async () => {
+    const r = await recoveryReader()
+    const pending = deferred<DocumentDetail>()
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { document: async () => pending.promise } })
+    const loading = h.editorPage.load()
+    await vi.waitFor(() => expect(h.api.document).toHaveBeenCalledOnce())
+    h.api.session.mockResolvedValueOnce(BOB)
+    await h.editorPage.recheckSession()
+    h.api.session.mockResolvedValueOnce(ALICE)
+    await h.editorPage.recheckSession()
+    pending.reject(new ApiError(404, 'NOT_FOUND', '旧会话的结果'))
+    await loading
+    expect(r.remove).not.toHaveBeenCalled()
+    expect(r.observe).not.toHaveBeenCalled()
+  })
+
+  it.each(['401', 'other-user', 'unknown'] as const)('早期读取期间会话 %s，不能清理原用户的本机记录', async (reason) => {
+    const r = await recoveryReader()
+    const pending = deferred<DocumentDetail>()
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { document: async () => pending.promise } })
+    const loading = h.editorPage.load()
+    await vi.waitFor(() => expect(h.api.document).toHaveBeenCalledOnce())
+    if (reason !== '401') {
+      if (reason === 'other-user')
+        h.api.session.mockResolvedValueOnce(BOB)
+      else
+        h.api.session.mockRejectedValueOnce(new NetworkError('会话未知'))
+      await h.editorPage.recheckSession()
+    }
+    pending.reject(new ApiError(reason === '401' ? 401 : 404, reason === '401' ? 'UNAUTHENTICATED' : 'NOT_FOUND', '读取失败'))
+    await loading
+    await settle()
+    expect(r.remove).not.toHaveBeenCalled()
+    expect(r.observe).not.toHaveBeenCalled()
+  })
+
+  it('阅读核对旧回执成功后取完整最新云端，而不是安装原本机正文', async () => {
+    const r = await recoveryReader()
+    r.observe.mockResolvedValue({ ...r.original, record: { ...r.original.record, meta: { ...r.original.record.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: r.original.record.meta.updatedAt } } } })
+    const replay = vi.fn(async (): Promise<SaveContentResponse> => ({ revision: 4, unchanged: false, savedAt: DETAIL.updatedAt }))
+    let contents = 0
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { replay, content: async () => ({ snapshot: contents++ === 0 ? '{"old":3}' : '{"latest":9}', revision: contents === 1 ? 3 : 9 }) } })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.createEditor.mock.calls.at(-1)?.[0].snapshot).toBe('{"latest":9}'))
+    expect(replay).toHaveBeenCalledOnce()
+    expect(vi.mocked(h.api.replay)!.mock.calls[0]?.[0]).toBe(DOCUMENT_ID)
+    expect(vi.mocked(h.api.replay)!.mock.calls[0]?.[1]).toMatchObject({ writeEpoch: 6, request: { requestId: 'old-request', localSeq: 37 } })
+    expect(vi.mocked(h.api.replay)!.mock.calls[0]?.[2]).toEqual(r.original.record.gzip)
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('没有原样核对端口时保留未知请求，普通编辑也不能绕过', async () => {
+    const r = await recoveryReader()
+    r.observe.mockResolvedValue({ ...r.original, record: { ...r.original.record, meta: { ...r.original.record.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: r.original.record.meta.updatedAt } } } })
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.decision).toEqual({ kind: 'preserve', reason: 'replay' }))
+    await h.editorPage.enterEditing()
+    expect(modeOf(h.editorPage)?.kind).toBe('reading')
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(r.remove).not.toHaveBeenCalled()
+  })
+
+  it('点击编辑排队等待发现时，迟到旧回执确认后仍必须重新取当前云端', async () => {
+    const r = await recoveryReader()
+    r.observe.mockResolvedValue({ ...r.original, record: { ...r.original.record, meta: { ...r.original.record.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: r.original.record.meta.updatedAt } } } })
+    r.remove.mockImplementation(async () => {
+      r.observe.mockResolvedValue({ ...r.original, record: { kind: 'absent' } })
+      return { kind: 'removed', mirror: { kind: 'removed' } }
+    })
+    const saved = deferred<SaveContentResponse>()
+    const replay = vi.fn(async () => saved.promise)
+    let contents = 0
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { replay, content: async () => ({ snapshot: contents++ === 0 ? '{"old":3}' : '{"latest":9}', revision: contents === 1 ? 3 : 9 }) } })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce())
+    const entering = h.editorPage.enterEditing()
+    await vi.waitFor(() => expect(h.editLease.acquire).toHaveBeenCalledOnce())
+    saved.resolve({ revision: 4, unchanged: false, savedAt: DETAIL.updatedAt })
+    await entering
+    expect(modeOf(h.editorPage)?.kind).toBe('editing')
+    expect(h.createEditor.mock.calls.at(-1)?.[0].snapshot).toBe('{"latest":9}')
+    expect(h.api.content).toHaveBeenCalledTimes(2)
+  })
+
+  it('原样核对的认证失败也进入页面会话确认，换人后不安装、不清理', async () => {
+    const r = await recoveryReader()
+    r.observe.mockResolvedValue({ ...r.original, record: { ...r.original.record, meta: { ...r.original.record.meta, inFlight: { requestId: 'old-request', clientInstanceId: 'old-page', localSeq: 37, sentAt: r.original.record.meta.updatedAt } } } })
+    let sessions = 0
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader, api: { session: async () => sessions++ === 0 ? ALICE : BOB, replay: async () => {
+      throw new ApiError(403, 'CSRF_TOKEN_INVALID', '会话已换人')
+    } } })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.editorPage.view().session).toBe('other-user'))
+    expect(r.remove).not.toHaveBeenCalled()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+  })
+
+  it('内存恢复已经进入编辑时，确认后的清理失败仍可以用原凭证重试', async () => {
+    const r = await recoveryReader()
+    r.remove.mockResolvedValueOnce({ kind: 'quota' })
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.decision?.kind).toBe('restore'))
+    await h.editorPage.enterEditing()
+    await h.editorPage.save()
+    expect(h.editorPage.view().recovery?.cleanup).toEqual({ kind: 'quota' })
+    await h.editorPage.retryRecoveryCleanup()
+    expect(r.remove).toHaveBeenCalledTimes(2)
+    expect(r.remove).toHaveBeenLastCalledWith(r.original.observation)
+  })
+
+  it('确认放弃前不删除；会话变更后旧确认及提示都不能清理', async () => {
+    const r = await recoveryReader()
+    r.notices.mockResolvedValue({ kind: 'notices', notices: [{ ...r.original.observation.key, kind: 'restored', at: 123 }] })
+    const h = setup({ editIntent: false, recoveryReader: () => r.reader })
+    await h.editorPage.load()
+    await vi.waitFor(() => expect(h.editorPage.view().recovery?.notice?.at).toBe(123))
+    const intent = h.editorPage.beginDiscardRecovery()
+    expect(intent).toBeDefined()
+    expect(r.remove).not.toHaveBeenCalled()
+    h.api.session.mockResolvedValue(BOB)
+    await h.editorPage.recheckSession()
+    await h.editorPage.discardRecovery(intent!)
+    await h.editorPage.acknowledgeRecovery(123)
+    expect(r.remove).not.toHaveBeenCalled()
+    expect(r.clearNotice).not.toHaveBeenCalled()
+  })
+})
 
 afterEach(() => {
   for (const page of pages.splice(0))
