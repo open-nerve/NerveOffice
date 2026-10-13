@@ -266,6 +266,10 @@ export class FakeStore {
   readonly repositories = {
     documents: {
       findById: vi.fn(async (id: string) => this.activeDocument(id)),
+      findManyWithGrants: vi.fn(async (userId: string, ids: readonly string[], _transaction: Transaction): Promise<GrantedDocumentRow[]> => ids.flatMap((id) => {
+        const row = this.activeDocument(id)
+        return row === undefined ? [] : [{ ...row, grantRole: this.grantOf(id, userId)?.role ?? null }]
+      })),
       lockById: vi.fn(async (id: string) => this.activeDocument(id)),
       /** 共享锁持住（复制的源文档）：假仓储里与 findById 相同，用例据此核对取锁的顺序 */
       holdById: vi.fn(async (id: string) => this.activeDocument(id)),
@@ -438,6 +442,7 @@ export class FakeStore {
       }),
     },
     revisions: {
+      findCurrentOf: vi.fn(async (ids: readonly string[], _transaction: Transaction) => this.revisions.filter(row => ids.includes(row.documentId) && this.documents.get(row.documentId)?.revision === row.revision)),
       /** requestId 的锁（RequestLedger 经它取）：只记下取过哪些 requestId，用例据此核对取锁的先后 */
       lockRequest: vi.fn(async (_requestId: string) => {}),
       findByRequestId: vi.fn(async (requestId: string) => this.revisions.find(revision => revision.requestId === requestId)),
@@ -682,6 +687,7 @@ export class FakeStore {
    * SQL 本身由语句的核对（edit-lease-statements.test.ts）与集成测试覆盖
    */
   readonly leases = {
+    findByDocuments: vi.fn(async (ids: readonly string[], _transaction: Transaction) => ids.flatMap(id => this.observedLease(id) ?? [])),
     findByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
     lockByDocument: vi.fn(async (documentId: string) => this.observedLease(documentId)),
     lockUnder: vi.fn(async (document: DocumentRowLock) => this.lockedLease(document.id)),

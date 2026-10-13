@@ -14,6 +14,7 @@ import { DocumentContentService } from './document-content.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentCopyService } from './document-copy.service.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
+import { DocumentDraftFactsService } from './document-draft-facts.service.ts'
 import { DocumentGrantsRepository } from './document-grants.repository.ts'
 import { DocumentGrantsService } from './document-grants.service.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
@@ -67,6 +68,7 @@ import { WriteAccessRevocation } from './write-access.ts'
     // 请求编辑与交出（M3-P5）：发出、续期、取消、谢绝与交出的服务，同样给 workspace 的接口编排
     EditRequestService,
     DocumentsService,
+    DocumentDraftFactsService,
     DocumentCreationService,
     DocumentContentService,
     DocumentOrganizingService,

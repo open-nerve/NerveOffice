@@ -36,12 +36,12 @@ export class AuthController {
     @RequestOrigin() origin: HttpOrigin,
     @SessionCookieJar() cookie: SessionCookie,
   ): Promise<void> {
-    const outcome = await this.auth.logout(principal, cookie.token, origin)
+    const outcome = await this.auth.logout(principal, origin)
     // 会话在认证之后已经结束（M2-P6）：换了令牌时不清除 Cookie——这个浏览器已经拿到了新的，清除会把它删掉（与会话守卫的例外相同）
-    if (outcome !== 'rotated')
+    if (outcome.kind === 'ended' || outcome.details.reason !== 'replaced')
       cookie.clear()
-    if (outcome !== 'ended')
-      throw new AppError('SESSION_EXPIRED')
+    if (outcome.kind === 'expired')
+      throw new AppError('SESSION_EXPIRED', undefined, { details: outcome.details })
   }
 
   @Get('session')

@@ -50,6 +50,7 @@ function setup(options: { admission?: Admission, currentValid?: boolean, stillCu
     replacePassword: vi.fn(async (_credentials: VerifiedCredentials, _hash: string, _transaction: Transaction) => options.stillCurrent ?? true),
   }
   const sessions = {
+    expiredDetails: vi.fn(async (_sessionId: string, _transaction: Transaction) => ({ reason: 'logout' as const, userId: ALICE.id })),
     revokeForPasswordChange: vi.fn(async (_userId: string, _currentSessionId: string, _transaction: Transaction) => options.sessionActive ?? true),
     create: vi.fn(async (_userId: string, _transaction?: Transaction) => {
       if (options.createFails !== undefined)

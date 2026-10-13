@@ -4,7 +4,7 @@ import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, eq, lt, sql } from 'drizzle-orm'
 import { documentRevisions, documents } from '../../db/schema/documents/index.ts'
-import { DATABASE, executorOf } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray } from '../database/index.ts'
 
 /** 保存的来源：编辑器页的实例与捕获时的本地修改序号。 */
 export interface RevisionSource {
@@ -94,6 +94,16 @@ export class DocumentRevisionsRepository {
   async findByRevision(documentId: string, revision: number, transaction: Transaction): Promise<RevisionRow | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(r).where(and(eq(r.documentId, documentId), eq(r.revision, revision)))
     return row === undefined ? undefined : toRevision(row)
+  }
+
+  /** 当前修订与文档行在同一个快照中联读，不扫描历史，也不读取正文。 */
+  async findCurrentOf(ids: readonly string[], transaction: Transaction): Promise<RevisionRow[]> {
+    const rows = await executorOf(this.db, transaction)
+      .select(COLUMNS)
+      .from(r)
+      .innerJoin(documents, and(eq(documents.id, r.documentId), eq(documents.revision, r.revision)))
+      .where(inIdArray(r.documentId, ids))
+    return rows.map(toRevision)
   }
 
   /**

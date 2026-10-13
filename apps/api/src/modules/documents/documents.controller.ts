@@ -1,8 +1,8 @@
-import type { ConflictCopyQuery, CopyDocumentRequest, CreatedDocument, CreateDocumentRequest, DocumentDetail, DocumentListQuery, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
+import type { ConflictCopyQuery, CopyDocumentRequest, CreatedDocument, CreateDocumentRequest, DocumentDetail, DocumentDraftFactsQuery, DocumentDraftFactsResponse, DocumentListQuery, DocumentListResponse, MoveDocumentRequest, UpdateDocumentRequest } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import type { GzipBody } from '../security/index.ts'
-import { conflictCopyQuerySchema, copyDocumentRequestSchema, createDocumentRequestSchema, documentIdSchema, documentListQuerySchema, moveDocumentRequestSchema, updateDocumentRequestSchema } from '@nerve-office/contracts'
+import { conflictCopyQuerySchema, copyDocumentRequestSchema, createDocumentRequestSchema, documentDraftFactsQuerySchema, documentIdSchema, documentListQuerySchema, moveDocumentRequestSchema, updateDocumentRequestSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, HttpCode, Param, Patch, Post, Query, UseInterceptors } from '@nestjs/common'
 import { RequestOrigin } from '../audit/index.ts'
 import { CurrentPrincipal } from '../auth/index.ts'
@@ -10,6 +10,7 @@ import { accessActorOf } from './document-access-policy.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { DocumentCopyService } from './document-copy.service.ts'
 import { DocumentCreationService } from './document-creation.service.ts'
+import { DocumentDraftFactsService } from './document-draft-facts.service.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentsService } from './documents.service.ts'
 import { SnapshotUpload, SnapshotUploadInterceptor } from './snapshot-upload.ts'
@@ -28,6 +29,7 @@ export class DocumentsController {
     private readonly organizing: DocumentOrganizingService,
     private readonly copying: DocumentCopyService,
     private readonly conflictCopying: DocumentConflictCopyService,
+    private readonly draftFacts: DocumentDraftFactsService,
   ) {}
 
   /**
@@ -49,6 +51,14 @@ export class DocumentsController {
     @Query({ schema: documentListQuerySchema }) query: DocumentListQuery,
   ): Promise<DocumentListResponse> {
     return this.documents.list(accessActorOf(principal), query)
+  }
+
+  @Get('draft-facts')
+  async getDraftFacts(
+    @CurrentPrincipal() principal: Principal,
+    @Query({ schema: documentDraftFactsQuerySchema }) query: DocumentDraftFactsQuery,
+  ): Promise<DocumentDraftFactsResponse> {
+    return this.draftFacts.get(principal.user.id, query.ids)
   }
 
   @Get(':id')

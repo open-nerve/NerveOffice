@@ -139,7 +139,7 @@ export class EffectiveAccessPolicy extends DocumentAccessPolicy {
 
 /** 不存在的对象也照样判断一次权限：用一个不存在的空间。两条路径做同样的查询，响应时间不暴露对象是否存在（M1-P3 审查 A4）。 */
 const MISSING_ID = '00000000-0000-0000-0000-000000000000'
-const MISSING_DOCUMENT: AccessTarget = { id: MISSING_ID, spaceId: MISSING_ID, createdBy: MISSING_ID }
+export const MISSING_DOCUMENT: AccessTarget = { id: MISSING_ID, spaceId: MISSING_ID, createdBy: MISSING_ID }
 
 /** 能访问的文档与调用者的权限。 */
 export interface Accessible<T extends AccessTarget> {

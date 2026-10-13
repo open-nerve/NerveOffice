@@ -52,7 +52,10 @@ describe('RequestIdentities：每个请求一份会话守卫判断过的身份�
 /** user：快照里读到的账户；sessionActive：快照里那条会话是不是仍然有效（没有撤销、没有过期） */
 function checkWith(user: User | undefined, sessionActive = true) {
   const identities = new RequestIdentities()
-  const sessions = { isActive: vi.fn(async (_sessionId: string, _transaction: Transaction) => sessionActive) }
+  const sessions = { requireActive: vi.fn(async (_sessionId: string, _transaction: Transaction) => {
+    if (!sessionActive)
+      throw new AppError('SESSION_EXPIRED')
+  }) }
   const users = { findById: vi.fn(async (_id: string, _transaction?: Transaction) => user) }
   const transactions = { registerSnapshotOpening: vi.fn() }
   const check = new SnapshotIdentityCheck(identities, sessions as unknown as SessionService, users as unknown as UsersService, transactions as unknown as TransactionRunner)
@@ -84,16 +87,16 @@ describe('SnapshotIdentityCheck：只读快照的开场核对（M2 Codex 评审 
       identities.record(aliceAs(false))
       await opening(SNAPSHOT)
     })
-    expect(sessions.isActive).toHaveBeenCalledExactlyOnceWith(SESSION_ID, SNAPSHOT)
+    expect(sessions.requireActive).toHaveBeenCalledExactlyOnceWith(SESSION_ID, SNAPSHOT)
     expect(users.findById).toHaveBeenCalledExactlyOnceWith(ALICE.id, SNAPSHOT)
   })
 
   it('会话与账户都仍然有效：通过；都在快照的事务里读，先会话（第一条语句，确定快照的时刻）、后账户', async () => {
     const { code, sessions, users } = await recheckAs(ALICE, aliceAs(false))
     expect(code).toBeUndefined()
-    expect(sessions.isActive).toHaveBeenCalledExactlyOnceWith(SESSION_ID, SNAPSHOT)
+    expect(sessions.requireActive).toHaveBeenCalledExactlyOnceWith(SESSION_ID, SNAPSHOT)
     expect(users.findById).toHaveBeenCalledExactlyOnceWith(ALICE.id, SNAPSHOT)
-    expect(sessions.isActive.mock.invocationCallOrder[0]).toBeLessThan(users.findById.mock.invocationCallOrder[0] ?? 0)
+    expect(sessions.requireActive.mock.invocationCallOrder[0]).toBeLessThan(users.findById.mock.invocationCallOrder[0] ?? 0)
   })
 
   it('守卫之后会话被撤销或过期（退出、签发重置撤销全部会话、换令牌），账户仍然有效：SESSION_EXPIRED，不再读账户（M2 Codex 评审复验的建议 3）', async () => {
@@ -111,6 +114,16 @@ describe('SnapshotIdentityCheck：只读快照的开场核对（M2 Codex 评审 
     expect((await recheckAs({ ...ALICE, systemRole: 'admin', status: 'disabled' }, aliceAs(true))).code).toBe('SESSION_EXPIRED')
   })
 
+  it('只对明确停用的账户表达 account_disabled；账户缺失不能猜测成停用', async () => {
+    for (const [user, reason] of [[{ ...ALICE, status: 'disabled' as const }, 'account_disabled'], [undefined, 'expired']] as const) {
+      const { identities, check } = checkWith(user)
+      await inRequest(identities, async () => {
+        identities.record(aliceAs(false))
+        await expect(check.recheck(SNAPSHOT)).rejects.toMatchObject({ code: 'SESSION_EXPIRED', details: { reason, userId: ALICE.id } })
+      })
+    }
+  })
+
   it('守卫读到是系统管理员、快照里已经不是：PERMISSION_DENIED（只给系统管理员的接口与没有加入的系统管理员看团队空间的成员都靠它）', async () => {
     expect((await recheckAs(ALICE, aliceAs(true))).code).toBe('PERMISSION_DENIED')
     expect((await recheckAs({ ...ALICE, systemRole: 'admin' }, aliceAs(true))).code).toBeUndefined()
@@ -123,11 +136,11 @@ describe('SnapshotIdentityCheck：只读快照的开场核对（M2 Codex 评审 
   it('守卫没有记下身份（公开的接口）、不在请求里（命令行、定时任务）：什么也不查', async () => {
     const { code, sessions, users } = await recheckAs(ALICE, undefined)
     expect(code).toBeUndefined()
-    expect(sessions.isActive).not.toHaveBeenCalled()
+    expect(sessions.requireActive).not.toHaveBeenCalled()
     expect(users.findById).not.toHaveBeenCalled()
     const outside = checkWith(ALICE)
     await outside.check.recheck(SNAPSHOT)
-    expect(outside.sessions.isActive).not.toHaveBeenCalled()
+    expect(outside.sessions.requireActive).not.toHaveBeenCalled()
     expect(outside.users.findById).not.toHaveBeenCalled()
   })
 })
