@@ -64,6 +64,20 @@ async function fixture() {
 }
 
 describe('文档恢复的发现与条件动作', () => {
+  it('现有宿主等待观察期间换了认证来源：不安装、重放或清理新原件', async () => {
+    const h = await fixture()
+    await h.recovery.discover()
+    const prepare = h.recovery.beginRestore()
+    const delayed = deferred<ObserveResult>()
+    const result = prepare({ kind: 'existing', highWater: 37, observe: async () => delayed.promise, remove: h.remove, retire: vi.fn() }, FACTS, h.install)
+    await settle()
+    delayed.resolve({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writerId: 'another-writer', inFlight: { requestId: 'another-save', clientInstanceId: 'another-page', localSeq: 37, sentAt: NOW } }, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } })
+    expect(await result).toEqual({ kind: 'blocked', reason: 'changed' })
+    expect(h.install).not.toHaveBeenCalled()
+    expect(h.replay).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
   it.each(['writerId', 'writtenBy', 'writeEpoch'] as const)('点击后原件 %s 改变，在旧回执核对或自动清理之前停止', async (field) => {
     const h = await fixture()
     await h.recovery.discover()

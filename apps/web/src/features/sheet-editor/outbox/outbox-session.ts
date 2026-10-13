@@ -8,7 +8,7 @@ import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../../shared/outbox/local-key.ts'
 import type { PersistOutcome } from '../../../shared/outbox/storage-status.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
-import type { LeaseVerdict } from '../edit-lease.ts'
+import type { LeaseClock, LeaseVerdict } from '../edit-lease.ts'
 import type { DraftMemoryReason } from '../working-draft.ts'
 import type { OutboxHost } from './outbox-host.ts'
 import { describeFailure } from '../../../shared/outbox/failure.ts'
@@ -63,6 +63,7 @@ export interface OutboxSession {
 export interface OutboxSessionOptions {
   readonly enabled: boolean
   readonly recoverExisting?: boolean
+  readonly clock?: LeaseClock
   readonly key: DraftKey
   readonly writeEpoch: number | (() => number)
   readonly newWriterId: () => string
@@ -94,6 +95,17 @@ interface PreparationRun {
 }
 
 const INACTIVE: FailureDescription = { name: 'OutboxSessionInactive', message: '本机草稿写入资格已暂停、失效或尚未准备好' }
+/** 旧页失锁后须先读回正文再关闭镜像句柄；只等待这种短暂交接，不延长本人交接/单请求看门狗。 */
+const RECOVERY_MIRROR_WAIT_MS = 2_000
+const RECOVERY_MIRROR_RECHECK_MS = 500
+// 发件箱也被独立探针引用；不能运行时引入租约/API/zod，打乱入口关闭 JIT 的顺序。
+const recoveryClock: LeaseClock = {
+  now: () => performance.now(),
+  schedule: (callback, delayMs) => {
+    const timer = setTimeout(callback, delayMs)
+    return () => clearTimeout(timer)
+  },
+}
 
 function supported(): boolean {
   try {
@@ -114,6 +126,7 @@ function verdictResult(verdict: LeaseVerdict): OutboxPreparation | undefined {
 }
 
 export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSession {
+  const clock = options.clock ?? recoveryClock
   let state: OutboxSessionState = { kind: 'preparing' }
   let active: PreparedHost | undefined
   let pending: PreparationRun | undefined
@@ -126,6 +139,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   let persistence: PersistOutcome | undefined
   let recoveryObservation: DraftObservation | undefined
   let recoverySerial = 0
+  let cancelObservation: (() => void) | undefined
   let recoveryBusy: PreparedHost | undefined
   let initial: Promise<OutboxPreparation>
   const closed = new WeakSet<OutboxHost>()
@@ -212,11 +226,17 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     }
   }
 
+  function invalidateObservation(): void {
+    recoveryObservation = undefined
+    recoverySerial += 1
+    cancelObservation?.()
+    cancelObservation = undefined
+  }
+
   function stop(result: OutboxPreparation): void {
     generation += 1
     keyChange += 1
-    recoveryObservation = undefined
-    recoverySerial += 1
+    invalidateObservation()
     recoveryBusy = undefined
     // 恢复尚未成为普通内容来源，原件仍在库里。关掉宿主并作废观察，避免暂停后排队的接手才开始提交。
     if (active?.recovering === true) {
@@ -316,8 +336,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   async function begin(verify: boolean): Promise<OutboxPreparation> {
     close(active?.host)
     active = undefined
-    recoveryObservation = undefined
-    recoverySerial += 1
+    invalidateObservation()
     recoveryBusy = undefined
     suspended = false
     recoveringAllowed = true
@@ -364,6 +383,55 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     recoveryObservation = undefined
     recoveryBusy = target
     return target
+  }
+
+  /** 每次观察已放开存储互斥才等待；到期只交回占用，不让迟到回包获得安装、重放或清理资格。 */
+  async function observeDuringHandover(target: PreparedHost, serial: number, started: number): Promise<ObserveResult> {
+    const inactive: ObserveResult = { kind: 'failed', error: INACTIVE }
+    const valid = (): boolean => serial === recoverySerial && started === generation && recoveryTarget() === target
+    let cancel!: () => void
+    const cancelled = new Promise<ObserveResult>((resolve) => {
+      cancel = () => resolve(inactive)
+    })
+    cancelObservation = cancel
+    let cancelDelay: (() => void) | undefined
+    let cancelDeadline: (() => void) | undefined
+    try {
+      let result = await Promise.race([target.host.writer.observe(options.key), cancelled])
+      if (!valid() || result.kind !== 'failed' || result.error.name !== 'MirrorBusy')
+        return valid() ? result : inactive
+      const firstBusy = result
+      const until = clock.now() + RECOVERY_MIRROR_WAIT_MS
+      const deadline = new Promise<ObserveResult>((resolve) => {
+        cancelDeadline = clock.schedule(() => resolve(firstBusy), RECOVERY_MIRROR_WAIT_MS)
+      })
+      while (valid() && result.kind === 'failed' && result.error.name === 'MirrorBusy') {
+        const busy = result
+        if (clock.now() >= until)
+          return busy
+        const delayMs = Math.min(RECOVERY_MIRROR_RECHECK_MS, until - clock.now())
+        const delay = new Promise<ObserveResult>((resolve) => {
+          cancelDelay = clock.schedule(() => resolve(busy), delayMs)
+        })
+        await Promise.race([delay, cancelled, deadline])
+        cancelDelay?.()
+        cancelDelay = undefined
+        if (!valid())
+          return inactive
+        if (clock.now() >= until)
+          return busy
+        result = await Promise.race([target.host.writer.observe(options.key), cancelled, deadline])
+        if (clock.now() >= until)
+          return busy
+      }
+      return valid() ? result : inactive
+    }
+    finally {
+      cancelDelay?.()
+      cancelDeadline?.()
+      if (cancelObservation === cancel)
+        cancelObservation = undefined
+    }
   }
 
   async function withFence<T extends { readonly kind: string }>(target: PreparedHost, work: () => Promise<T>): Promise<T> {
@@ -436,10 +504,10 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       const target = recoveryTarget()
       if (target === undefined || recoveryBusy !== undefined)
         return { kind: 'failed', error: INACTIVE }
-      recoveryObservation = undefined
-      const serial = ++recoverySerial
+      invalidateObservation()
+      const serial = recoverySerial
       const started = generation
-      const result = await target.host.writer.observe(options.key)
+      const result = await observeDuringHandover(target, serial, started)
       if (serial !== recoverySerial || started !== generation || recoveryTarget() !== target)
         return { kind: 'failed', error: INACTIVE }
       if (result.kind === 'observed') {

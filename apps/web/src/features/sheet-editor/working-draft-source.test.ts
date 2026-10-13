@@ -37,6 +37,43 @@ async function upload(source: ReturnType<typeof harness>['source'], text: string
 }
 
 describe('工作草稿内容所有权与后端顺序', () => {
+  it.each(['latest', 'pin'] as const)('%s 仍拥有的正文写入失败，交回真实失败并上报一次', async (owner) => {
+    const h = harness()
+    const held = deferred<never>()
+    h.write.mockReturnValueOnce(held.promise)
+    const ref = h.source.capture(capture('仍有所有者的正文'))
+    const result = owner === 'pin' ? h.source.prepare(ref) : h.source.ready(ref)
+    const next = owner === 'latest' ? undefined : h.source.capture(capture('下一份正文'))
+    const error = new Error('当前仍需使用的正文写入失败')
+    held.reject(error)
+    expect(await result).toMatchObject({ kind: 'failed', ref, error: { name: 'Error', message: error.message } })
+    expect(h.reportError).toHaveBeenCalledExactlyOnceWith(error)
+    if (next !== undefined) {
+      await h.source.ready(next)
+      expect(await h.source.readLatest()).toEqual({ kind: 'snapshot', ref: next, snapshot: '下一份正文' })
+    }
+    h.source.dispose()
+  })
+
+  it('读取仍持有的旧正文失败，即使出现新捕获也交回真实失败并上报一次', async () => {
+    const h = harness()
+    const ref = h.source.capture(capture('读取持有的正文'))
+    await h.source.ready(ref)
+    await settle()
+    const held = deferred<Uint8Array<ArrayBuffer>>()
+    h.read.mockReturnValueOnce(held.promise)
+    const reading = h.source.readLatest()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledOnce())
+    const next = h.source.capture(capture('下一份正文'))
+    const error = new Error('仍在读取的正文失败')
+    held.reject(error)
+    expect(await reading).toMatchObject({ kind: 'failed', ref, error: { name: 'Error', message: error.message } })
+    expect(h.reportError).toHaveBeenCalledExactlyOnceWith(error)
+    await h.source.ready(next)
+    expect(await h.source.readLatest()).toEqual({ kind: 'snapshot', ref: next, snapshot: '下一份正文' })
+    h.source.dispose()
+  })
+
   it('release 时旧标记仍有一次写入在途，其晚到成功不能解除下一次清标记的强制写入', async () => {
     const h = harness()
     const first = await upload(h.source, 'A')

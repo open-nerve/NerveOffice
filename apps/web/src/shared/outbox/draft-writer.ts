@@ -667,7 +667,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
         if (unfinished !== undefined)
           return failed(problemOf(unfinished))
         if (reconciled.mirror?.kind === 'busy' || (reconciled.mirror?.kind === 'slots' && hasNewerFormatSlot(reconciled.mirror.slots)))
-          return failed({ kind: 'failed', error: { name: 'MirrorUnverified', message: '镜像占用或格式较新，无法核对' } })
+          return failed({ kind: 'failed', error: { name: reconciled.mirror.kind === 'busy' ? 'MirrorBusy' : 'MirrorUnverified', message: '镜像占用或格式较新，无法核对' } })
         const observed = await store.observeDraft(key)
         if (observed.kind !== 'observed') {
           recordKnown ||= observed.recordKnown === true

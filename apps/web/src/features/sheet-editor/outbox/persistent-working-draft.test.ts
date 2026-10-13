@@ -268,6 +268,29 @@ describe('持久工作草稿：内容、真实序号与失败退路', () => {
     source.dispose()
   })
 
+  it('Worker 接收字节后旧捕获已被取代，迟到失败只结清旧项，新正文照常保存且不上报页面异常', async () => {
+    const h = await persistentHarness()
+    const started = deferred<void>()
+    const finished = deferred<Awaited<ReturnType<typeof h.writer.write>>>()
+    vi.spyOn(h.writer, 'write').mockImplementationOnce(async (input) => {
+      structuredClone(input.bytes, { transfer: [input.bytes.buffer] })
+      expect(input.bytes.byteLength).toBe(0)
+      started.resolve()
+      return finished.promise
+    })
+    const source = createPersistentWorkingDraft(h.options)
+    const first = source.capture(capture('已转移的旧捕获'))
+    const oldReady = source.ready(first)
+    await started.promise
+    const second = source.capture(capture('退出登录时重新捕获的正文', 2))
+    finished.resolve({ kind: 'failed', gzip: null, error: { name: 'OutboxWorkerError', message: '旧宿主已关闭' } })
+    expect(await oldReady).toEqual({ kind: 'superseded', ref: first })
+    expect(await source.ready(second)).toMatchObject({ ref: second, local: { kind: 'persisted' } })
+    expect(await source.readLatest()).toEqual({ kind: 'snapshot', ref: second, snapshot: '退出登录时重新捕获的正文' })
+    expect(h.reportError).not.toHaveBeenCalled()
+    source.dispose()
+  })
+
   it('Worker 接收转移字节后失败，只用对应引用的临时文本恢复，不能拿新内容顶替固定上传', async () => {
     const h = await persistentHarness()
     const finished = deferred<Awaited<ReturnType<typeof h.writer.write>>>()
@@ -286,6 +309,7 @@ describe('持久工作草稿：内容、真实序号与失败退路', () => {
     expect(await source.ready(first)).toMatchObject({ local: { kind: 'memory' } })
     await source.ready(second)
     expect(await source.readLatest()).toMatchObject({ ref: second, snapshot: '新的编辑' })
+    expect(h.reportError).not.toHaveBeenCalled()
     source.dispose()
   })
 

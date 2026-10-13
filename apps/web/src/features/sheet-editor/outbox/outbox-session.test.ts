@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CLIENT_INSTANCE_ID, DOCUMENT_ID, NOW, sampleMeta, USER_ID, WRITER_ID } from '../../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../../shared/outbox/draft-writer.ts'
-import { settle } from '../fake-lease-clock.test-support.ts'
+import { fakeLeaseClock, settle } from '../fake-lease-clock.test-support.ts'
 import { prepareOutboxSession } from './outbox-session.ts'
 
 const DRAFT = { userId: USER_ID, documentId: DOCUMENT_ID }
@@ -99,6 +99,162 @@ describe('恢复会话的显式接手资格', () => {
     expect(await session.ready()).toMatchObject({ kind: 'memory', reason: 'existing-draft' })
     return { h, session }
   }
+
+  const busy: ObserveResult = { kind: 'failed', error: { name: 'MirrorBusy', message: '镜像仍由旧页读取' }, recordKnown: true }
+
+  it('旧页短暂占用镜像：同一次准备等待新观察，不重登、不先开放普通写入', async () => {
+    const timer = fakeLeaseClock()
+    const { h, session } = await recovery({ clock: timer.clock })
+    h.local.observe.mockResolvedValueOnce(busy)
+    const result = session.observeRecovery()
+    await settle()
+    expect(await session.write(capture())).toMatchObject({ kind: 'failed' })
+    expect(h.local.write).not.toHaveBeenCalled()
+    await timer.advance(500)
+    const ready = await result
+    expect(ready).toMatchObject({ kind: 'observed', record: existing })
+    expect(h.local.register).toHaveBeenCalledOnce()
+    expect(h.local.setKey).toHaveBeenCalledOnce()
+    expect(timer.pending()).toBe(0)
+    if (ready.kind !== 'observed')
+      throw new Error('需要重新观察的资格')
+    expect(await session.adopt(ready.observation, adoption())).toMatchObject({ kind: 'written' })
+    expect(session.view()).toMatchObject({ kind: 'ready' })
+  })
+
+  it('持续占用从首次 busy 起最多等两秒，重复 busy 不续期，之后不再观察或采用', async () => {
+    const timer = fakeLeaseClock()
+    const { h, session } = await recovery({ clock: timer.clock })
+    h.local.observe.mockResolvedValue(busy)
+    let finished = false
+    const result = session.observeRecovery().then((value) => {
+      finished = true
+      return value
+    })
+    await timer.advance(1_999)
+    expect(finished).toBe(false)
+    await timer.advance(1)
+    expect(await result).toEqual(busy)
+    const attempts = h.local.observe.mock.calls.length
+    await timer.advance(10_000)
+    expect(h.local.observe).toHaveBeenCalledTimes(attempts)
+    expect(timer.pending()).toBe(0)
+    expect(await session.adopt(observation, adoption())).toMatchObject({ kind: 'failed' })
+    expect(h.local.adopt).not.toHaveBeenCalled()
+  })
+
+  it('重观察挂起不能越过固定截止，之后迟到的真实成功不产生采用资格', async () => {
+    const timer = fakeLeaseClock()
+    const { h, session } = await recovery({ clock: timer.clock })
+    const delayed = deferred<ObserveResult>()
+    h.local.observe.mockResolvedValueOnce(busy).mockReturnValueOnce(delayed.promise)
+    const result = session.observeRecovery()
+    await timer.advance(500)
+    expect(h.local.observe).toHaveBeenCalledTimes(2)
+    await timer.advance(1_500)
+    expect(await result).toEqual(busy)
+    delayed.resolve(observed)
+    await settle()
+    expect(await session.adopt(observation, adoption())).toMatchObject({ kind: 'failed' })
+    expect(h.local.adopt).not.toHaveBeenCalled()
+    expect(session.view().kind).not.toBe('ready')
+    expect(timer.pending()).toBe(0)
+  })
+
+  it.each([
+    { kind: 'failed', error: { name: 'MirrorUnverified', message: '镜像有较新格式' }, recordKnown: true },
+    { kind: 'failed', error: { name: 'MirrorUnreadable', message: '读取失败' }, recordKnown: true },
+    { kind: 'quota', recordKnown: true },
+    { kind: 'unavailable', reason: 'denied', recordKnown: true },
+  ] as const)('非暂时占用 $kind 立即保留原结果，不重查或采用', async (problem) => {
+    const timer = fakeLeaseClock()
+    const { h, session } = await recovery({ clock: timer.clock })
+    h.local.observe.mockResolvedValue(problem)
+    expect(await session.observeRecovery()).toEqual(problem)
+    await timer.advance(10_000)
+    expect(h.local.observe).toHaveBeenCalledOnce()
+    expect(h.local.adopt).not.toHaveBeenCalled()
+    expect(timer.pending()).toBe(0)
+  })
+
+  it.each(['pause', 'dispose', 'key', 'epoch', 'ended', 'broken'] as const)('占用等待期间 %s，下一步不再发观察，旧结果不能接手', async (change) => {
+    const timer = fakeLeaseClock()
+    let epoch = 3
+    const { h, session } = await recovery({ clock: timer.clock, writeEpoch: () => epoch })
+    h.local.observe.mockResolvedValueOnce(busy)
+    const result = session.observeRecovery()
+    await settle()
+    if (change === 'pause')
+      session.suspend()
+    if (change === 'dispose')
+      session.dispose()
+    if (change === 'key')
+      h.changeKey(undefined)
+    if (change === 'epoch')
+      epoch = 4
+    if (change === 'ended')
+      h.end()
+    if (change === 'broken')
+      h.local.break()
+    await timer.advance(500)
+    expect(await result).toMatchObject({ kind: 'failed', error: { name: 'OutboxSessionInactive' } })
+    expect(h.local.observe).toHaveBeenCalledOnce()
+    expect(await session.adopt(observation, adoption())).toMatchObject({ kind: 'failed' })
+    expect(h.local.adopt).not.toHaveBeenCalled()
+    expect(timer.pending()).toBe(0)
+  })
+
+  it.each(['waiting', 'observing'] as const)('新观察取代占用 %s：旧调用立即结束，不能作废新调用的凭证', async (stage) => {
+    const timer = fakeLeaseClock()
+    const { h, session } = await recovery({ clock: timer.clock })
+    h.local.observe.mockResolvedValueOnce(busy)
+    const delayed = deferred<ObserveResult>()
+    if (stage === 'observing')
+      h.local.observe.mockReturnValueOnce(delayed.promise)
+    const first = session.observeRecovery()
+    await settle()
+    if (stage === 'observing')
+      await timer.advance(500)
+    const second = await session.observeRecovery()
+    expect(second.kind).toBe('observed')
+    expect(await first).toMatchObject({ kind: 'failed', error: { name: 'OutboxSessionInactive' } })
+    delayed.resolve(observed)
+    await timer.advance(10_000)
+    expect(h.local.observe).toHaveBeenCalledTimes(stage === 'observing' ? 3 : 2)
+    if (second.kind !== 'observed')
+      throw new Error('需要新观察')
+    expect(await session.adopt(second.observation, adoption())).toMatchObject({ kind: 'written' })
+    expect(timer.pending()).toBe(0)
+  })
+
+  it('重观察回包挂起时暂停立即结束等待，迟到成功不能复活资格', async () => {
+    const timer = fakeLeaseClock()
+    const { h, session } = await recovery({ clock: timer.clock })
+    const delayed = deferred<ObserveResult>()
+    h.local.observe.mockResolvedValueOnce(busy).mockReturnValueOnce(delayed.promise)
+    const result = session.observeRecovery()
+    await timer.advance(500)
+    expect(h.local.observe).toHaveBeenCalledTimes(2)
+    session.suspend()
+    expect(await result).toMatchObject({ kind: 'failed', error: { name: 'OutboxSessionInactive' } })
+    expect(timer.pending()).toBe(0)
+    delayed.resolve(observed)
+    await settle()
+    expect(await session.adopt(observation, adoption())).toMatchObject({ kind: 'failed' })
+    expect(h.local.adopt).not.toHaveBeenCalled()
+    expect(h.local.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('占用消失但登记 writer 已换，不能把新原件作为本轮恢复资格', async () => {
+    const timer = fakeLeaseClock()
+    const { h, session } = await recovery({ clock: timer.clock })
+    h.local.observe.mockResolvedValueOnce(busy).mockResolvedValueOnce({ ...observed, writer: { ...observed.writer!, writerId: 'another-writer' } })
+    const result = session.observeRecovery()
+    await timer.advance(500)
+    expect(await result).toMatchObject({ kind: 'failed', error: { name: 'OutboxSessionInactive' } })
+    expect(session.view()).toMatchObject({ kind: 'memory', reason: 'fenced' })
+    expect(h.local.adopt).not.toHaveBeenCalled()
+  })
 
   it('显式恢复保留宿主但不开放普通写入；实际接手成功之后才进入 ready', async () => {
     const { h, session } = await recovery()

@@ -241,7 +241,7 @@ describe('恢复观察与原子接手的写入管道', () => {
     h.files.putFile(KEY, 1, new Uint8Array(0))
     const release = reason === 'busy' ? h.files.holdElsewhere(KEY) : () => {}
     expect((await h.mirror.read(KEY)).kind).toBe(reason === 'busy' ? 'busy' : 'slots')
-    expect(await h.writer.observe(KEY)).toMatchObject({ kind: 'failed', error: { name: 'MirrorUnverified' } })
+    expect(await h.writer.observe(KEY)).toMatchObject({ kind: 'failed', error: { name: reason === 'busy' ? 'MirrorBusy' : 'MirrorUnverified' } })
     expect(h.fake.calls).not.toContain('observeDraft')
     expect(h.fake.rawDraft(KEY)).toEqual(structuredClone(h.record))
     expect(h.files.file(KEY, 0)).toEqual(bytes)

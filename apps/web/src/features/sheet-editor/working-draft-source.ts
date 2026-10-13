@@ -185,6 +185,11 @@ export function createWorkingDraftSource(configuration: WorkingDraftOptions, bac
     }
     catch (error) {
       if (!disposed) {
+        // 新捕获已替代且没有上传/读取持有的旧项可以释放正文；旧宿主的迟到失败只结束这次旧任务。
+        if (!kept(entry)) {
+          settle(entry, { kind: 'superseded', ref: entry.ref })
+          return
+        }
         report(error)
         settle(entry, failed(entry.ref, error))
       }

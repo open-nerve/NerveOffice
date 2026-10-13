@@ -15,12 +15,13 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { recordWrites } from '../../support/autosave.ts'
 import { createUser, revisionOf } from '../../support/database.ts'
 import { test as base, chooseAutosave, expect } from '../../support/fixtures.ts'
+import { handoverRecovery } from '../../support/handover-recovery.ts'
 import { readLocalDisk } from '../../support/local-draft.ts'
 import { mirrorRecovery, recoverySnapshot, seedRecovery } from '../../support/local-recovery.ts'
 import { draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, probePipeline, removeMirrorOf, writerOf } from '../../support/outbox-probe.ts'
 import { firstPage, launchPersistentProfile, overrideQuota } from '../../support/persistent-profile.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, openReader, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, openReader, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }
 
@@ -164,6 +165,18 @@ async function failMirrorRecovery(page: Page, key: DraftKey, failure: RecoveryFa
 }
 
 test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
+  for (const ordering of ['before', 'after'] as const) {
+    test(`US-M4-06 持久镜像交接 ${ordering}：旧 Worker 读回正文再关闭，新页一次编辑接上草稿`, async ({ profile: { page, context }, autosave }, testInfo) => {
+      test.setTimeout(EDITOR_TEST_TIMEOUT)
+      await chooseAutosave(context, autosave)
+      const owner = await createUser(`mirror-handover-${ordering}`)
+      currentUserId = owner.id
+      const { cloud, copy } = await handoverRecovery({ page, context, owner, ordering, mirrored: true }, testInfo)
+      expect([cellOf(cloud, 'A1')?.v, cellOf(cloud, 'B1')?.v]).toEqual(['旧页已经落盘的 A1', '新页的 B1'])
+      expect([cellOf(copy, 'A1')?.v, cellOf(copy, 'B1')]).toEqual(['旧页已经落盘的 A1', undefined])
+    })
+  }
+
   for (const failure of ['newer-mirror', 'fallback-newer', 'denied', 'partial-mirror'] as const) {
     test(`镜像已见原件，${failure} 不能让普通编辑绕过恢复`, async ({ profile: { page, context } }) => {
       test.setTimeout(EDITOR_TEST_TIMEOUT)
