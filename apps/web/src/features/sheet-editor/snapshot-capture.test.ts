@@ -1,8 +1,8 @@
 import type { CaptureEditor } from './snapshot-capture.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { fakeWorkingDraft } from '../../shared/local-drafts/working-draft.test-support.ts'
 import { EXPLICIT_SETTLE_TIMEOUT_MS, explicitCaptureSource } from './snapshot-capture.test-support.ts'
 import { captureSettled, settleInputs, takeSnapshot, utf8Length } from './snapshot-capture.ts'
-import { fakeWorkingDraft } from './working-draft.test-support.ts'
 
 /**
  * 假的编辑器：seq 与内容可设；单元格编辑中时提交按 commitResult，提交成功算一处修改。与 SDK 一样，提交在调用的这一刻就关上单元格编辑器

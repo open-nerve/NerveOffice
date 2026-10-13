@@ -1,6 +1,6 @@
 import type { IdleWatch } from './idle-watch.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fakeLeaseClock } from './fake-lease-clock.test-support.ts'
+import { fakeLeaseClock } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createIdleWatch } from './idle-watch.ts'
 
 const MINUTE = 60_000

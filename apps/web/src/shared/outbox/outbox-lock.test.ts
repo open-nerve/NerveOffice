@@ -7,6 +7,7 @@ import { createLocalCleanup } from './local-cleanup.ts'
 import { fakeMirrorDirectory } from './mirror-directory.test-support.ts'
 import { deferred, fakeOutboxLocks } from './outbox-lock.test-support.ts'
 import { OUTBOX_LOCK_WAIT_MS, withOutboxLock } from './outbox-lock.ts'
+import { testCleanupPermit, testCleanupSessions } from './session-fence.test-support.ts'
 
 afterEach(() => vi.useRealTimers())
 
@@ -53,8 +54,8 @@ describe('发件箱的短期互斥', () => {
     const writer = createDraftWriter({ store: store.store, now: () => NOW })
     expect(await writer.register(key, { writerId: WRITER_ID, writeEpoch: 1 }, false)).toMatchObject({ kind: 'failed', error: { name: 'NotSupportedError' } })
     expect(await pageReconciliation({ store: store.store, directory: files.directory, now: () => NOW }).reconcile(key)).toMatchObject({ kind: 'failed', error: { name: 'NotSupportedError' } })
-    const cleanup = createLocalCleanup({ store: store.store, directory: files.directory, now: () => NOW })
-    expect(await cleanup.removeUser(USER_ID)).toMatchObject({ kind: 'failed', error: { name: 'NotSupportedError' } })
+    const cleanup = createLocalCleanup({ sessions: testCleanupSessions(), store: store.store, directory: files.directory, now: () => NOW })
+    expect(await cleanup.removeUser(testCleanupPermit())).toMatchObject({ kind: 'failed', error: { name: 'NotSupportedError' } })
     expect(await cleanup.abandon(key)).toMatchObject({ kind: 'failed', error: { name: 'NotSupportedError' } })
     expect(await cleanup.purgeExpired(NOW)).toMatchObject({ kind: 'failed', error: { name: 'NotSupportedError' } })
     expect(store.calls).toEqual([])

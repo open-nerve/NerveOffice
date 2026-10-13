@@ -1,15 +1,15 @@
+import type { DraftRetention, DraftWriteInput, WrittenDraftContent } from '../../../shared/local-drafts/working-draft-source.ts'
+import type { DraftCaptureRef, DraftMemoryReason, WorkingDraft, WorkingDraftOptions } from '../../../shared/local-drafts/working-draft.ts'
 // P1 写入结果适配为公共内容来源。这里只留身份/序号/摘要，不另存 gzip；所有正文归 working-draft-source 的当前项或固定上传。
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { DraftObservation } from '../../../shared/outbox/draft-observation.ts'
 import type { DraftKey } from '../../../shared/outbox/draft-record.ts'
 import type { CaptureWritten, KeyChange, WriterProblem } from '../../../shared/outbox/draft-writer.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
-import type { DraftRetention, DraftWriteInput, WrittenDraftContent } from '../working-draft-source.ts'
-import type { DraftCaptureRef, DraftMemoryReason, WorkingDraft, WorkingDraftOptions } from '../working-draft.ts'
 import type { OutboxPreparation, OutboxSession, OutboxSessionState } from './outbox-session.ts'
+import { createWorkingDraftSource } from '../../../shared/local-drafts/working-draft-source.ts'
 import { gzipBytes } from '../../../shared/outbox/draft-codec.ts'
 import { isSameWriter } from '../../../shared/outbox/writer-fence.ts'
-import { createWorkingDraftSource } from '../working-draft-source.ts'
 
 export interface PersistentWorkingDraftOptions extends WorkingDraftOptions {
   readonly key: DraftKey
@@ -49,6 +49,7 @@ function writeProblem(result: CaptureWritten): WriterProblem | undefined {
     case 'failed': return { kind: 'failed', error: result.error }
     case 'unavailable': return { kind: 'unavailable', reason: result.reason }
     case 'quota': return { kind: 'quota' }
+    case 'session-invalid': return { kind: 'session-invalid' }
     case 'no-key':
     case 'fenced':
     case 'written':

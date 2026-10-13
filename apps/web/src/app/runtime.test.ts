@@ -101,6 +101,7 @@ describe('createAppRuntime', () => {
       expect(api.requests.filter(request => request.key === 'GET /api/auth/session')).toHaveLength(0)
       expect(connectionState.view().available).toBe(false)
       await vi.advanceTimersByTimeAsync(1)
+      await vi.dynamicImportSettled()
       expect(connectionState.view().available).toBe(true)
       expect(api.requests.filter(request => request.key === 'GET /api/auth/session')).toHaveLength(1)
       expect(sessionOf(runtime)).toEqual(SESSION)
@@ -175,6 +176,7 @@ describe('会话复核（M2-P1 审查 B3、B4）', () => {
     })
     await Promise.resolve()
     expect(settled).toBe(false)
+    await vi.waitFor(() => expect(api.requests).toHaveLength(1))
     const second = deferredResponse()
     api.on('GET /api/auth/session', second.handler)
     first.resolve(json(200, { ...SESSION, csrfToken: 'csrf-2' }))
@@ -686,6 +688,7 @@ describe('本页的登录、修改密码还在进行：向服务端确认之前�
       expect(api.requests).toHaveLength(1)
       // 修改密码还挂着，但已经超过上限：这一轮不再等，确认的请求随消息立即发出
       otherTab.announce()
+      await vi.dynamicImportSettled()
       expect(api.requests).toHaveLength(2)
       expect(page.visits).toEqual([])
     })

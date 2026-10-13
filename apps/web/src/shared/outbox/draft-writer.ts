@@ -23,6 +23,7 @@ import type { DraftStore, FenceReason, StoreProblem, StoreReadOutcome } from './
 import type { FailureDescription } from './failure.ts'
 import type { MirrorDirectory, MirrorRemoveOutcome } from './mirror-directory.ts'
 import type { RecoveryNotice } from './recovery-notice.ts'
+import type { DraftSessionPermit } from './session-fence.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { gzipBytes, openDraft, sealDraft, sha256Hex, unsealFailureOf } from './draft-codec.ts'
 import { DRAFT_RECORD_VERSION, draftMetaOf } from './draft-record.ts'
@@ -31,11 +32,13 @@ import { describeFailure } from './failure.ts'
 import { opfsMirrorDirectory } from './mirror-directory.ts'
 import { hasNewerFormatSlot } from './mirror-slot.ts'
 import { withOutboxLock } from './outbox-lock.ts'
+import { isStoreProblem } from './store-transaction.ts'
 import { isSameWriter } from './writer-fence.ts'
 
 /** 存储与管道这一侧的问题：写满（整个事务回滚，原记录不变）、库用不了（调用方退化为内存实现）、未知的错误 */
 export type WriterProblem
   = | { readonly kind: 'quota' }
+    | { readonly kind: 'session-invalid' }
     | OutboxUnavailable
     | { readonly kind: 'failed', readonly error: FailureDescription }
 
@@ -87,9 +90,7 @@ export type CaptureWritten
     | { readonly kind: 'unchanged', readonly digest: string }
     | { readonly kind: 'fenced', readonly reason: FenceReason, readonly gzip: Uint8Array<ArrayBuffer> }
     | { readonly kind: 'no-key', readonly gzip: Uint8Array<ArrayBuffer> }
-    | { readonly kind: 'quota', readonly gzip: Uint8Array<ArrayBuffer> }
-    | (OutboxUnavailable & { readonly gzip: Uint8Array<ArrayBuffer> })
-    | { readonly kind: 'failed', readonly error: FailureDescription, readonly gzip: Uint8Array<ArrayBuffer> | null }
+    | (WriterProblem & { readonly gzip: Uint8Array<ArrayBuffer> | null })
 
 /**
  * 库里的一条草稿解开之后：内容、解不开（已吊销、本页的密钥过时——去取新的再试、已损坏，审查 A3）、手里没有密钥（只有元数据）、
@@ -158,7 +159,9 @@ export type KeyChange
 export type ReconcileResult = { readonly kind: 'reconciled' } | WriterProblem
 
 /** 这个用户在镜像里有哪些文档（打开平台时的比对先列出）；没有镜像时是空的 */
-export type MirroredDocumentsResult = { readonly kind: 'listed', readonly documentIds: readonly string[] } | { readonly kind: 'failed', readonly error: FailureDescription }
+export type MirroredDocumentsResult = { readonly kind: 'listed', readonly documentIds: readonly string[] } | WriterProblem
+
+export type BindSessionResult = { readonly kind: 'bound' } | WriterProblem
 
 /** 这个用户的提示（比对镜像与库留下的，存在库里：recovery-notice.ts） */
 export type NoticesResult = { readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | WriterProblem
@@ -167,6 +170,7 @@ export type NoticesResult = { readonly kind: 'notices', readonly notices: readon
 export type ClearNoticeResult = { readonly kind: 'cleared' | 'changed' | 'absent' } | WriterProblem
 
 export interface DraftWriter {
+  readonly bindSession: (permit: DraftSessionPermit) => Promise<BindSessionResult>
   readonly register: (key: DraftKey, writer: WriterIdentity, force: boolean) => Promise<RegisterResult>
   readonly write: (capture: CaptureToWrite) => Promise<CaptureWritten>
   readonly markInFlight: (key: DraftKey, writer: WriterIdentity, inFlight: InFlightSave) => Promise<ResealResult>
@@ -218,6 +222,8 @@ function problemOf(problem: StoreProblem): WriterProblem {
   switch (problem.kind) {
     case 'quota':
       return { kind: 'quota' }
+    case 'session-invalid':
+      return { kind: 'session-invalid' }
     case 'unavailable':
       return { kind: 'unavailable', reason: problem.reason }
     case 'failed':
@@ -295,11 +301,32 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
    * 排进这份文档的队：前一个结束（不论结果）才开始，关掉之后不再开始。task 抛出（存储没按约定交回、编解码出了意外）时以 failed 交回——
    * 跨边界不抛异常；队列照样往下走
    */
-  async function enqueue<T>(key: DraftKey, task: (state: DocumentState) => Promise<T>, failed: (error: FailureDescription) => T): Promise<T> {
+  async function exclusive<T>(task: () => Promise<T>, refused: (problem: WriterProblem) => T, userId?: string): Promise<T> {
+    try {
+      return await withOutboxLock(async () => {
+        if (disposed)
+          return refused({ kind: 'failed', error: CLOSED })
+        return duringLifetime(async () => {
+          if (userId !== undefined) {
+            const checked = await store.checkSession(userId)
+            if (checked.kind !== 'bound')
+              return refused(problemOf(checked))
+          }
+          return disposed ? refused({ kind: 'failed', error: CLOSED }) : task()
+        })
+      })
+    }
+    catch (error) {
+      return refused({ kind: 'failed', error: describeFailure(error) })
+    }
+  }
+
+  async function enqueue<T>(key: DraftKey, task: (state: DocumentState) => Promise<T>, refused: (problem: WriterProblem) => T, releasing = false): Promise<T> {
     if (disposed)
-      return failed(CLOSED)
+      return refused({ kind: 'failed', error: CLOSED })
     const state = stateOf(key)
-    const run = state.tail.then(async () => withOutboxLock(async () => disposed ? failed(CLOSED) : duringLifetime(async () => task(state)))).catch((error: unknown) => failed(describeFailure(error)))
+    // 资格核对和缓存、主库、镜像操作同在锁内；只有释放旧句柄不要求仍有使用资格。
+    const run = state.tail.then(async () => exclusive(async () => task(state), refused, releasing ? undefined : key.userId))
     state.tail = run.then(() => {})
     return run
   }
@@ -403,7 +430,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
     const read = await store.readDraft(state.key)
     if (read.kind === 'absent')
       return { kind: 'absent' }
-    if (read.kind === 'quota' || read.kind === 'unavailable' || read.kind === 'failed')
+    if (isStoreProblem(read))
       return problemOf(read)
     if (read.kind !== 'draft' || !isSameWriter(read.draft, writer))
       return { kind: 'foreign' }
@@ -428,6 +455,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
           mirror?.detach(state.key)
         return { kind: 'fenced', reason: outcome.reason === 'not-writer' ? 'not-writer' : 'changed' }
       case 'quota':
+      case 'session-invalid':
       case 'unavailable':
       case 'failed':
         return problemOf(outcome)
@@ -470,6 +498,8 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
         return { kind: 'fenced', reason: outcome.reason, gzip }
       case 'quota':
         return { kind: 'quota', gzip }
+      case 'session-invalid':
+        return { kind: 'session-invalid', gzip }
       case 'unavailable':
         return { kind: 'unavailable', reason: outcome.reason, gzip }
       case 'failed':
@@ -485,7 +515,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
     if (latest === undefined) {
       // 手里没有：先看库里的元数据，比确认的新才要解开（只是删不需要密钥）
       const read = await store.readDraft(state.key)
-      if (read.kind === 'quota' || read.kind === 'unavailable' || read.kind === 'failed')
+      if (isStoreProblem(read))
         return problemOf(read)
       if (read.kind !== 'draft' || !isSameWriter(read.draft, writer) || read.draft.draftSeq <= confirmedSeq)
         return { kind: 'prepared', rebased: undefined }
@@ -523,6 +553,14 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
   }
 
   return {
+    bindSession: async (permit) => {
+      const fixed = { ...permit }
+      return exclusive(async () => {
+        const result = await store.bindSession(fixed)
+        return result.kind === 'bound' ? result : problemOf(result)
+      }, problem => problem)
+    },
+
     register: async (key, writer, force) => {
       let recordKnown = false
       const failed = (problem: WriterProblem): RecoveryProblem => recordKnown ? { ...problem, recordKnown: true } : problem
@@ -556,7 +594,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
         // 库里那一份不是镜像里最新写的（被结束在"库已提交、镜像还没写完"之间、以 force 登记之后）：拿到句柄之后补写，补写没写成时如实交回
         const filled = attached.kind === 'mirrored' && outcome.existing?.kind === 'draft' ? await mirrorBackfill(outcome.existing.draft) : undefined
         return { kind: 'registered', lastDraftSeq: outcome.lastDraftSeq, existing, mirror: filled ?? attached, ...(existing === undefined && recordKnown ? { recordKnown: true } : {}) }
-      }, error => failed({ kind: 'failed', error }))
+      }, failed)
     },
 
     write: async capture => enqueue(capture.key, async (state): Promise<CaptureWritten> => {
@@ -577,7 +615,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       catch (error) {
         return { kind: 'failed', error: describeFailure(error), gzip }
       }
-    }, error => ({ kind: 'failed', error, gzip: null })),
+    }, problem => ({ ...problem, gzip: null })),
 
     adopt: async (observation, capture) => enqueue(capture.key, async (state): Promise<CaptureWritten> => {
       if ('inFlight' in capture || 'dedupe' in capture || 'adoptSeq' in capture)
@@ -591,7 +629,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       catch (error) {
         return { kind: 'failed', error: describeFailure(error), gzip }
       }
-    }, error => ({ kind: 'failed', error, gzip: null })),
+    }, problem => ({ ...problem, gzip: null })),
 
     markInFlight: async (key, writer, inFlight) => enqueue(key, async (state): Promise<ResealResult> => {
       const found = await ownRecord(state, writer)
@@ -603,7 +641,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       if (found.latest.meta.draftSeq < inFlight.localSeq)
         return { kind: 'absent' }
       return reseal(state, { ...found.latest.meta, inFlight, updatedAt: rewrittenAt(found.latest.meta) }, found.latest.gzip)
-    }, error => ({ kind: 'failed', error })),
+    }, problem => problem),
 
     confirm: async (key, writer, confirmedSeq, revision) => enqueue(key, async (state): Promise<ConfirmResult> => {
       for (let attempt = 0; attempt < CONFIRM_ATTEMPTS; attempt += 1) {
@@ -637,13 +675,14 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
               mirror?.detach(key)
             return { kind: 'fenced', reason: outcome.reason }
           case 'quota':
+          case 'session-invalid':
           case 'unavailable':
           case 'failed':
             return problemOf(outcome)
         }
       }
       return { kind: 'failed', error: { name: 'ConfirmRace', message: `草稿确认冲突：${CONFIRM_ATTEMPTS} 次` } }
-    }, error => ({ kind: 'failed', error })),
+    }, problem => problem),
 
     read: async key => enqueue(key, async (): Promise<DraftRead> => {
       // 先读库（只读），再拿它比对镜像：写回了的就交回写回的那一份；库用不了时交回镜像里最新写的（读得出总比读不出好）
@@ -654,8 +693,8 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       const opened = await openedOf(read, reconciled)
       if (opened !== undefined)
         return opened
-      return read.kind === 'quota' || read.kind === 'unavailable' || read.kind === 'failed' ? problemOf(read) : { kind: 'absent' }
-    }, error => ({ kind: 'failed', error })),
+      return isStoreProblem(read) ? problemOf(read) : { kind: 'absent' }
+    }, problem => problem),
 
     observe: async (key) => {
       let recordKnown = false
@@ -676,12 +715,12 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
         recordKnown ||= observed.record.kind !== 'absent'
         const record = await openedOf(observed.record, { mirror: reconciled.mirror, restored: undefined })
         return { kind: 'observed', observation: observed.observation, record: record ?? { kind: 'absent' }, writer: observed.writer }
-      }, error => failed({ kind: 'failed', error }))
+      }, failed)
     },
 
     removeObserved: async observation => enqueue(observation.key, async (state): Promise<ObservedRemoveResult> => {
       const outcome = await store.removeObserved(observation, now())
-      if (outcome.kind === 'failed' || outcome.kind === 'quota' || outcome.kind === 'unavailable')
+      if (isStoreProblem(outcome))
         return problemOf(outcome)
       if (outcome.kind !== 'removed')
         return { kind: outcome.kind }
@@ -696,7 +735,7 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
       catch (error) {
         return { kind: 'removed', mirror: { kind: 'failed', error: describeFailure(error) } }
       }
-    }, error => ({ kind: 'failed', error })),
+    }, problem => problem),
 
     remove: async (key, expectedSeq) => enqueue(key, async (state): Promise<RemoveResult> => {
       const outcome = await store.removeDraft(key, expectedSeq)
@@ -710,11 +749,12 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
         case 'changed':
           return { kind: 'changed' }
         case 'quota':
+        case 'session-invalid':
         case 'unavailable':
         case 'failed':
           return problemOf(outcome)
       }
-    }, error => ({ kind: 'failed', error })),
+    }, problem => problem),
 
     setKey: async (handle) => {
       if (disposed)
@@ -737,34 +777,25 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
     release: async (key) => {
       await enqueue(key, async () => {
         mirror?.detach(key)
-      }, () => {})
+      }, () => {}, true)
     },
 
-    mirroredDocuments: async (userId) => {
-      if (disposed)
-        return { kind: 'failed', error: CLOSED }
+    mirroredDocuments: async userId => exclusive(async (): Promise<MirroredDocumentsResult> => {
       if (mirror === undefined)
         return { kind: 'listed', documentIds: [] }
-      const listed = await duringLifetime(async () => mirror.documents(userId))
+      const listed = await mirror.documents(userId)
       return listed.kind === 'unsupported' ? { kind: 'listed', documentIds: [] } : listed
-    },
+    }, problem => problem, userId),
 
     reconcile: async key => enqueue(key, async (): Promise<ReconcileResult> => {
       const unfinished = unfinishedOf(await reconcileOf(key))
       return unfinished === undefined ? { kind: 'reconciled' } : problemOf(unfinished)
-    }, error => ({ kind: 'failed', error })),
+    }, problem => problem),
 
-    notices: async (userId) => {
-      if (disposed)
-        return { kind: 'failed', error: CLOSED }
-      try {
-        const outcome = await duringLifetime(async () => store.listNotices(userId))
-        return outcome.kind === 'notices' ? { kind: 'notices', notices: outcome.notices } : problemOf(outcome)
-      }
-      catch (error) {
-        return { kind: 'failed', error: describeFailure(error) }
-      }
-    },
+    notices: async userId => exclusive(async (): Promise<NoticesResult> => {
+      const outcome = await store.listNotices(userId)
+      return outcome.kind === 'notices' ? { kind: 'notices', notices: outcome.notices } : problemOf(outcome)
+    }, problem => problem, userId),
 
     clearNotice: async (key, expectedAt) => enqueue(key, async (): Promise<ClearNoticeResult> => {
       const outcome = await store.clearNotice(key, expectedAt)
@@ -774,11 +805,12 @@ export function createDraftWriter(options: DraftWriterOptions): DraftWriter {
         case 'absent':
           return { kind: outcome.kind }
         case 'quota':
+        case 'session-invalid':
         case 'unavailable':
         case 'failed':
           return problemOf(outcome)
       }
-    }, error => ({ kind: 'failed', error })),
+    }, problem => problem),
 
     dispose: () => {
       if (disposed)

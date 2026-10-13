@@ -413,13 +413,13 @@ describe('读与恢复（§3.8）：先比对镜像与库，镜像更新时写�
       await action()
       return store.calls.slice(before)
     }
-    expect(await callsOf(async () => reopened.read(KEY)), '读草稿：读库一次').toEqual(['readDraft'])
-    expect(await callsOf(async () => reopened.register(KEY, ME, false)), '登记：先只读地比对').toEqual(['readDraft', 'registerWriter'])
-    expect(await callsOf(async () => reconcileAll(reopened, USER_ID)), '打开平台时的比对').toEqual(['readDraft', 'readDraft'])
+    expect(await callsOf(async () => reopened.read(KEY)), '读草稿：资格与正文各一次只读').toEqual(['checkSession', 'readDraft'])
+    expect(await callsOf(async () => reopened.register(KEY, ME, false)), '登记：先核资格再只读地比对').toEqual(['checkSession', 'readDraft', 'registerWriter'])
+    expect(await callsOf(async () => reconcileAll(reopened, USER_ID)), '打开平台时的比对').toEqual(['checkSession', 'checkSession', 'readDraft', 'checkSession', 'readDraft'])
     // 库里的更旧（库丢了已提交的写入）：交给存储在一个事务里判定、写回
     await reopened.release(KEY)
     await putSlot(files, KEY, 1, await sealed(key, 'two', { draftSeq: 2 }), 99)
-    expect(await callsOf(async () => reopened.read(KEY))).toEqual(['readDraft', 'restoreDraft'])
+    expect(await callsOf(async () => reopened.read(KEY))).toEqual(['checkSession', 'readDraft', 'restoreDraft'])
     expect(readRecoveryNotice(store.rawNotice(KEY))?.kind).toBe('restored')
   })
 

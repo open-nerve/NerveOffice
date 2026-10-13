@@ -2,6 +2,7 @@
 // 不另写一套；每个操作在一段同步代码里读、判定、写（与事务里不 await 别的异步同一个样子）。记录按结构化克隆存取：库里存的是一份拷贝，
 // 读出的是另一份；写进去之前照样过形状核对（形状不对的不写）。
 // 另有故障与交错：下一次某个操作交回指定的问题（写满、库用不了、出错），或者停在开始之前、等测试放行（确定的交错）
+import type { DraftMaintenanceStore } from './draft-maintenance-store.ts'
 import type { DraftKey, StoredDraft } from './draft-record.ts'
 import type { DraftStore, ListedDraft, PurgedDraft, StoreProblem } from './draft-store.ts'
 import type { RecoveryNotice } from './recovery-notice.ts'
@@ -11,7 +12,8 @@ import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } fro
 import { readRecoveryNotice } from './recovery-notice.ts'
 import { decideConfirm, decideObservedAdoption, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
 
-export type StoreOperation = Exclude<keyof DraftStore, 'close'>
+type TestDraftStore = DraftStore & DraftMaintenanceStore
+export type StoreOperation = Exclude<keyof TestDraftStore, 'close'>
 
 export interface HeldOperation {
   /** 操作已经开始、停在判定之前 */
@@ -20,7 +22,7 @@ export interface HeldOperation {
 }
 
 export interface FakeDraftStore {
-  readonly store: DraftStore
+  readonly store: TestDraftStore
   /** 库里这份文档的草稿（一份拷贝，没经过形状核对）；没有为 undefined */
   readonly rawDraft: (key: DraftKey) => unknown
   readonly rawWriter: (key: DraftKey) => unknown
@@ -88,7 +90,10 @@ export function fakeDraftStore(): FakeDraftStore {
   const unwritable = (draft: StoredDraft): StoreProblem | undefined =>
     readStoredDraft(draft).kind === 'draft' ? undefined : { kind: 'failed', error: new TypeError('形状不对的草稿不写') }
 
-  const store: DraftStore = {
+  const store: TestDraftStore = {
+    // 本夹具默认模拟可用会话；真实代次/IDB 守卫由浏览器验证，这两个端口可单独停顿或失败。
+    bindSession: async () => await begin('bindSession') ?? { kind: 'bound' },
+    checkSession: async () => await begin('checkSession') ?? { kind: 'bound' },
     async observeDraft(key) {
       const problem = await begin('observeDraft')
       if (problem !== undefined)
@@ -232,7 +237,7 @@ export function fakeDraftStore(): FakeDraftStore {
       }
       return { kind: verdict }
     },
-    async retireUser(userId, { now }) {
+    async retireUser({ userId }, { now }) {
       const problem = await begin('retireUser')
       if (problem !== undefined)
         return problem
@@ -242,7 +247,7 @@ export function fakeDraftStore(): FakeDraftStore {
       }
       return { kind: 'retired' }
     },
-    async removeUserData(userId, options) {
+    async removeUserData({ userId }, options) {
       const problem = await begin('removeUserData')
       if (problem !== undefined)
         return problem

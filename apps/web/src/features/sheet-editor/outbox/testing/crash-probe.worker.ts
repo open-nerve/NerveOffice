@@ -3,4 +3,4 @@
 // 再引入生产的入口——管道、存储、OPFS 的镜像、处理与空定时器都是生产的。模块按引入的先后求值：包住在先，生产的入口求值时不开事务、不碰 OPFS
 import './transaction-recorder.ts'
 import './mirror-recorder.ts'
-import '../outbox.worker.ts'
+import '../../../../shared/outbox/outbox.worker.ts'

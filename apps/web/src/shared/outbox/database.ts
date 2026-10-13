@@ -1,5 +1,6 @@
-// 本机发件箱的库（M4-P1 设计 §3.3、§3.4.1、§3.8）：IndexedDB 的库 nerve-office-outbox，三个对象仓库（草稿、写入者、比对镜像留下的提示），
-// 键路径都是 ['userId', 'documentId']，没有索引。某个用户的全部记录用键范围 [userId] 到 [userId, []] 取（IndexedDB 的键序里数组排在字符串之后）。
+// 本机发件箱的库（M4-P1 设计 §3.3、§3.4.1、§3.8）：IndexedDB 的库 nerve-office-outbox。
+// 草稿、写入者、恢复提示的键路径都是 ['userId', 'documentId']，没有索引；P4 v2 另加以 slot 为键的单记录会话仓库。
+// 某个用户的全部记录用键范围 [userId] 到 [userId, []] 取（IndexedDB 的键序里数组排在字符串之后）。
 // 结构以后有变，只做加法的升级（加仓库、加索引），旧的页面打开更新过的库得到 VersionError，按"不可用"退化。
 // 连接上 versionchange 时立即关掉，让别的标签页的升级与删库继续（M0 审查 S5：打开着的页面挡住了升级）；被浏览器断开时记下，
 // 之后由调用方重新打开（draft-store.ts）。
@@ -9,7 +10,7 @@ import type { DraftKey } from './draft-record.ts'
 export const OUTBOX_DATABASE_NAME = 'nerve-office-outbox'
 
 /** 库的版本：结构有变时加一，升级只做加法 */
-export const OUTBOX_DATABASE_VERSION = 1
+export const OUTBOX_DATABASE_VERSION = 2
 
 /** 草稿：StoredDraft */
 export const DRAFTS_STORE = 'drafts'
@@ -22,6 +23,10 @@ export const WRITERS_STORE = 'writers'
  * 不另升级（开发时浏览器里留着没有它的旧库的，清掉站点数据）
  */
 export const NOTICES_STORE = 'notices'
+
+/** 当前同源会话的持久代次；不随草稿清理或保留期回收。 */
+export const SESSIONS_STORE = 'sessions'
+export const SESSION_SLOT = 'current'
 
 /** 三个仓库共用的键路径：记录里的 userId 与 documentId 就是它的键 */
 export const OUTBOX_KEY_PATH: readonly (keyof DraftKey)[] = ['userId', 'documentId']
@@ -87,12 +92,14 @@ function connectionOf(db: IDBDatabase): OutboxConnection {
   return { kind: 'connected', db, isClosed: () => closed, close }
 }
 
-/** 只做加法的升级：补上缺的仓库（v1 是三个仓库，键路径相同，没有索引）。按"有没有"判断，不按旧版本号：以后的版本照样只补缺的 */
+/** 只做加法：v1 的记录、键路径与索引均不动，v2 增加会话仓库。按“有没有”补缺的仓库。 */
 function upgrade(db: IDBDatabase): void {
   for (const name of [DRAFTS_STORE, WRITERS_STORE, NOTICES_STORE]) {
     if (!db.objectStoreNames.contains(name))
       db.createObjectStore(name, { keyPath: [...OUTBOX_KEY_PATH] })
   }
+  if (!db.objectStoreNames.contains(SESSIONS_STORE))
+    db.createObjectStore(SESSIONS_STORE, { keyPath: 'slot' })
 }
 
 /**

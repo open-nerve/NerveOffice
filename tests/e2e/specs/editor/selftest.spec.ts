@@ -52,6 +52,7 @@ import { firstPage, launchPersistentProfile, overrideQuota } from '../../support
 import { probeCalibrationPassed, probeCalibrationSummary } from '../../support/probe-calibration.ts'
 import { probeVerdicts } from '../../support/probe-verdicts.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../../support/selftest-handover.ts'
+import { preserveUnrelatedDraft } from '../../support/selftest-outbox.ts'
 import { problemsOf, SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
 import { runPausedHolder, runWaiter } from '../../support/selftest-request.ts'
 import { REPORT_TIMEOUT_MS, reportOf, startSelftest } from '../../support/selftest-run.ts'
@@ -296,12 +297,14 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
   for (const definition of PLAIN_STEPS) {
     test(`步骤 ${definition.id}`, async ({ page, browserName }, testInfo) => {
       const step = await stepOf(definition)
+      const verifyUnrelatedDraft = await preserveUnrelatedDraft(page, step)
       const report = await reportOf(await startSelftest(page, step))
       await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
       expect(await summaryOf(report, step)).toEqual(passed(step))
       // 真实浏览器复核的几步另按判定核对、生产发件箱的两步另核对 OPFS 镜像（别的步骤这两边都是空的）
       expect(probeCalibrationSummary(step.scenario, probeVerdicts([{ stepId: step.id, report, cold: true }]))).toEqual(probeCalibrationPassed(step.scenario))
       expect(opfsSummary(step, report)).toEqual(opfsExpected(step, browserName))
+      await verifyUnrelatedDraft()
     })
   }
 

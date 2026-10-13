@@ -174,9 +174,13 @@ test.describe('发件箱 Worker', { tag: '@test-build' }, () => {
     const written = outcomeOf(await probePipeline(page, 'write', id, captureOf(key, writer, 1, 'strict')), 'written')
     expect(outcomeOf(await probePipeline(page, 'read', id, key), 'draft').gzip.sha256).toBe(written.gzip.sha256)
     await expect.poll(async () => (await probePipeline(page, 'workerTransactions', id)).map(tx => [tx.stores, tx.mode, tx.durability])).toEqual([
-      [['drafts', 'writers'], 'readwrite', 'strict'],
-      [['drafts', 'writers'], 'readwrite', 'strict'],
-      [['drafts', 'writers'], 'readonly', undefined],
+      [['sessions'], 'readonly', undefined], // 一次绑定
+      [['sessions'], 'readonly', undefined], // 登记前核对整段操作
+      [['drafts', 'writers', 'sessions'], 'readwrite', 'strict'],
+      [['sessions'], 'readonly', undefined], // 捕获前核对（含缓存）
+      [['drafts', 'writers', 'sessions'], 'readwrite', 'strict'],
+      [['sessions'], 'readonly', undefined], // 读镜像前核对
+      [['drafts', 'writers', 'sessions'], 'readonly', undefined],
     ])
     // 页面里用同一把密钥（探针选的那一把）解开 Worker 封的记录
     expect(outcomeOf(await probePipeline(page, 'storedGzip', key), 'gzip').gzip.text).toBe('strict')

@@ -1,5 +1,5 @@
 // 只展示恢复事实并转交意图；正文、清理凭证与副本请求均由 DocumentRecovery 持有。
-import type { RecoveryView } from './document-recovery.ts'
+import type { RecoveryView } from '../../../shared/local-drafts/document-recovery.ts'
 import { documentPagePath } from '@nerve-office/contracts'
 import { describeError } from '../../../shared/api/index.ts'
 import { concludesRequest } from '../../../shared/api/request-ids.ts'
@@ -58,6 +58,7 @@ function recoveryText(view: RecoveryView): string | undefined {
 
 function cleanupText(view: RecoveryView): string | undefined {
   switch (view.cleanup?.kind) {
+    case 'session-invalid': return words.preserve.session
     case 'changed': return words.changed
     case 'quota': return words.cleanupQuota
     case 'failed': return view.problem === 'invalidated' ? words.invalidated : words.cleanupFailed

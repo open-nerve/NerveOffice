@@ -17,12 +17,12 @@
 // 不说"已保存到云端"、离开提示拦下，期间到来的旧的保存确认也不把它说成已保存；写进模型之后由修改序号接着算，到点却没有改动时随之清除。
 import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
 import type { UncommittedInput } from '../../editor/index.ts'
-import type { ContentFormat } from '../../shared/outbox/draft-record.ts'
-import type { Incompatibility } from './client-format.ts'
-import type { DraftCaptureRef, DraftMutation, PreparedDraft, WorkingDraft } from './working-draft.ts'
+import type { Incompatibility } from '../../shared/api/client-format.ts'
+import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
+import type { DraftCaptureRef, DraftMutation, PreparedDraft, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
 import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-office/contracts'
+import { incompatibilityOf } from '../../shared/api/client-format.ts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isNotFoundError } from '../../shared/api/index.ts'
-import { incompatibilityOf } from './client-format.ts'
 
 /** 保存用到的编辑器能力（SheetEditor 的子集）：只用来说"有没有服务端还没确认的内容"，捕获由来源给出 */
 export interface SaveEditor {
@@ -61,17 +61,6 @@ export interface SaveOptions {
    * 停住、终态时直接交回的结果（skipped）不调用（调用方等 save 兑现再处理）；抛出的错误上报，不影响保存
    */
   readonly onOutcome?: ((outcome: SaveOutcome) => void) | undefined
-}
-
-export interface SaveRequest {
-  readonly baseRevision: number
-  readonly requestId: string
-  readonly clientInstanceId: string
-  /** 来源中这份字节的真实内容序号，与编辑器修改计数分开。 */
-  readonly localSeq: number
-  readonly format: ContentFormat
-  /** "公式待更新"（M3-P3 设计 §3.8）：捕获时公式还没收齐，服务端记在文档上 */
-  readonly formulasPending: boolean
 }
 
 /** 压缩快照（gzip）：本地的一步，出错是意外的错误（复验 RB8） */

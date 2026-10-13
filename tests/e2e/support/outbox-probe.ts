@@ -4,6 +4,7 @@
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
 import type { Page } from '@playwright/test'
 import type { OutboxSessionProbe } from './outbox-session-probe.ts'
+import type { CleanupPermit, SessionFenceProbe, SessionPermit } from './session-fence-probe.ts'
 import type { WorkingDraftProbe } from './working-draft-probe.ts'
 import { randomUUID } from 'node:crypto'
 import { expect } from './fixtures.ts'
@@ -69,6 +70,7 @@ export interface ProbeError {
 /** 存储这一侧的问题（错误只带名字与消息） */
 export type ProbeProblem
   = | { readonly kind: 'quota' }
+    | { readonly kind: 'session-invalid' }
     | { readonly kind: 'unavailable', readonly reason: 'unsupported' | 'denied' | 'newer-version' | 'blocked' }
     | { readonly kind: 'failed', readonly error: ProbeError }
 
@@ -182,9 +184,7 @@ export type PipelineWritten
     | { readonly kind: 'unchanged', readonly digest: string }
     | { readonly kind: 'fenced', readonly reason: 'not-writer' | 'stale-seq' | 'foreign-draft' | 'changed', readonly gzip: ProbeGzip }
     | { readonly kind: 'no-key', readonly gzip: ProbeGzip }
-    | { readonly kind: 'quota', readonly gzip: ProbeGzip }
-    | { readonly kind: 'unavailable', readonly reason: 'unsupported' | 'denied' | 'newer-version' | 'blocked', readonly gzip: ProbeGzip }
-    | { readonly kind: 'failed', readonly error: ProbeError, readonly gzip: ProbeGzip | null }
+    | (ProbeProblem & { readonly gzip: ProbeGzip | null })
 
 export type PipelineOpened
   = | { readonly kind: 'draft', readonly meta: DraftMeta, readonly gzip: ProbeGzip }
@@ -243,6 +243,7 @@ export type ProbeSlot
 export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number } | { readonly at: number, readonly bytes: readonly number[] }
 
 export interface ProbePipeline {
+  readonly bindSession: (id: number, permit: SessionPermit) => Promise<{ readonly kind: 'bound' } | ProbeProblem>
   readonly create: (options: ProbePipelineOptions) => Promise<{ readonly id: number, readonly ready: OutboxWorkerReady }>
   readonly setKey: (id: number, key: 'probe' | 'none') => Promise<PipelineKeyChange>
   readonly register: (id: number, key: DraftKey, writer: WriterIdentity, force: boolean) => Promise<PipelineRegistered>
@@ -268,7 +269,11 @@ export interface ProbePipeline {
   readonly pageReconcile: (userId: string) => Promise<ProbeReconcileAll>
   readonly notices: (id: number, userId: string) => Promise<{ readonly kind: 'notices', readonly notices: readonly RecoveryNotice[] } | ProbeStoreProblem>
   readonly clearNotice: (id: number, key: DraftKey, expectedAt?: number) => Promise<{ readonly kind: 'cleared' | 'changed' | 'absent' } | ProbeStoreProblem>
-  readonly cleanupUser: (userId: string) => Promise<{ readonly kind: 'cleared', readonly pending: readonly DraftKey[] } | ProbeStoreProblem>
+  readonly beginCleanup: (cause: CleanupPermit['cause']) => Promise<{ readonly kind: 'clearing', readonly permit: CleanupPermit } | ProbeStoreProblem>
+  readonly cleanupUser: (permit: CleanupPermit) => Promise<{ readonly kind: 'cleared' | 'pending', readonly pending: readonly DraftKey[] } | { readonly kind: 'invalidated' } | ProbeStoreProblem>
+  readonly pauseCleanup: () => void
+  readonly cleanupPaused: () => boolean
+  readonly resumeCleanup: () => void
   readonly cleanupAbandon: (key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'absent', readonly pending: readonly DraftKey[] } | { readonly kind: 'changed' } | ProbeStoreProblem>
   readonly cleanupExpired: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: string }[], readonly pending: readonly DraftKey[], readonly mirror: { readonly kind: 'done' } | { readonly kind: 'failed', readonly error: ProbeError } } | ProbeStoreProblem>
   readonly mirrorSlots: (key: DraftKey) => Promise<readonly [ProbeSlot, ProbeSlot]>
@@ -279,11 +284,19 @@ export interface ProbePipeline {
 }
 
 export interface OutboxProbe {
+  readonly fence: SessionFenceProbe
   readonly session: OutboxSessionProbe
   readonly working: WorkingDraftProbe
   readonly names: { readonly database: string, readonly version: number, readonly drafts: string, readonly writers: string }
   readonly chooseKey: (version: number, rawHex?: string) => Promise<void>
-  readonly resetStore: (options?: ProbeStoreOptions) => void
+  readonly resetStore: (options?: ProbeStoreOptions) => Promise<void>
+  readonly authorizeSession: () => Promise<{ readonly kind: 'bound' } | ProbeProblem>
+  readonly bindSession: (permit: SessionPermit) => Promise<{ readonly kind: 'bound' } | ProbeProblem>
+  readonly restore: (input: ProbeDraftInput, now: number) => Promise<{ readonly kind: 'restored' | 'kept' } | ProbeProblem>
+  readonly retire: (key: DraftKey, now: number) => Promise<{ readonly kind: 'retired' } | ProbeProblem>
+  readonly recordLost: (key: DraftKey, now: number) => Promise<{ readonly kind: 'noted' | 'kept' } | ProbeProblem>
+  readonly listNotices: (userId: string) => Promise<{ readonly kind: 'notices', readonly notices: readonly unknown[] } | ProbeProblem>
+  readonly clearNotice: (key: DraftKey, expectedAt?: number) => Promise<{ readonly kind: 'cleared' | 'changed' | 'absent' } | ProbeProblem>
   readonly register: (key: DraftKey, writer: WriterIdentity, options: { readonly now: number, readonly force: boolean }) => Promise<ProbeRegisterOutcome>
   readonly write: (input: ProbeDraftInput, options?: { readonly adoptSeq?: number }) => Promise<ProbeWriteOutcome>
   readonly startWrite: (input: ProbeDraftInput) => number
@@ -298,14 +311,16 @@ export interface OutboxProbe {
   readonly read: (key: DraftKey) => Promise<ProbeRead | { readonly kind: 'absent' } | ProbeProblem>
   readonly list: (userId: string) => Promise<{ readonly kind: 'listed', readonly drafts: readonly ListedDraft[] } | ProbeProblem>
   readonly remove: (key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'changed' | 'absent' } | ProbeProblem>
-  readonly removeUser: (userId: string) => Promise<{ readonly kind: 'cleared' } | ProbeProblem>
-  readonly retireUser: (userId: string, now: number) => Promise<{ readonly kind: 'retired' } | ProbeProblem>
+  readonly removeUser: (permit: CleanupPermit) => Promise<{ readonly kind: 'cleared' } | ProbeProblem>
+  readonly retireUser: (permit: CleanupPermit, now: number) => Promise<{ readonly kind: 'retired' } | ProbeProblem>
   readonly purge: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: 'draft' | 'newer-format' | 'malformed' }[] } | ProbeProblem>
   readonly close: () => void
   readonly draftIds: (userId: string) => Promise<readonly string[]>
   readonly database: {
+    readonly seedDraft: (input: ProbeDraftInput) => Promise<void>
+    readonly seedVersionOne: (input: ProbeDraftInput) => Promise<void>
     readonly describe: () => Promise<ProbeDatabaseShape | null>
-    readonly getRaw: (store: string, key: DraftKey) => Promise<Record<string, unknown> | null>
+    readonly getRaw: (store: string, key: DraftKey | string) => Promise<Record<string, unknown> | null>
     readonly patchDraft: (key: DraftKey, patch: Readonly<Record<string, unknown>>) => Promise<void>
     readonly putRaw: (store: string, value: Readonly<Record<string, unknown>>) => Promise<void>
     readonly upgrade: (version: number, waitMs: number) => Promise<'upgraded' | 'blocked' | ProbeError>
@@ -340,7 +355,7 @@ declare global {
   }
 }
 
-type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline' | 'storage' | 'session' | 'working'>
+type Method = Exclude<keyof OutboxProbe, 'names' | 'database' | 'localKey' | 'pipeline' | 'storage' | 'session' | 'working' | 'fence'>
 type DatabaseMethod = keyof OutboxProbe['database']
 type LocalKeyMethod = keyof OutboxProbe['localKey']
 type StorageMethod = keyof OutboxProbe['storage']
@@ -348,11 +363,13 @@ type PipelineMethod = keyof OutboxProbe['pipeline']
 
 /**
  * 打开不带文档身份的编辑器入口，只挂接探针，不创建编辑器或发现草稿。真实文档的 404 在 P3 会触发撤权清理与恢复读取，不能作为空白探针页。
- * 需要 HTTP 的用例先登录；密钥探针自己确认会话并取 CSRF，存储探针不依赖页面载入。
+ * 默认先经真实查询取得一次固定许可；迁移、未绑定与失败反例显式 authorize:false，不在读取时补资格。
  */
-export async function openOutboxProbe(page: Page): Promise<void> {
+export async function openOutboxProbe(page: Page, options: { readonly authorize?: boolean } = {}): Promise<void> {
   await page.goto('/editor.html?outboxProbe')
   await expect.poll(async () => page.evaluate(() => window.__nerveOutboxProbe !== undefined), { message: '页面里没有发件箱的探针：要跑测试构建（web 的 build:e2e），地址带 outboxProbe' }).toBe(true)
+  if (options.authorize !== false)
+    expect(await probe(page, 'authorizeSession'), '真实会话查询应给予本机测试许可').toEqual({ kind: 'bound' })
 }
 
 /** 在页面里调探针的一个方法（参数与结果经 page.evaluate 序列化） */

@@ -22,6 +22,7 @@ import type { MirrorDirectory } from './mirror-directory.ts'
 import { describeFailure } from './failure.ts'
 import { hasNewerFormatSlot, parseSlot } from './mirror-slot.ts'
 import { withOutboxLock } from './outbox-lock.ts'
+import { isStoreProblem } from './store-transaction.ts'
 import { compareDrafts, isSameWriter } from './writer-fence.ts'
 
 /** 比对用到的镜像：读两个槽位（记录核对是这份文档的）、截断、补写（拿着句柄时；没拿着交回 undefined） */
@@ -95,6 +96,7 @@ export type ReconcileAction = 'none' | 'restore' | 'backfill' | 'lost'
 export function reconcileAction(stored: StoreReadOutcome, latest: StoredDraft | undefined, torn: boolean): ReconcileAction {
   switch (stored.kind) {
     case 'quota':
+    case 'session-invalid':
     case 'unavailable':
     case 'failed':
     case 'newer-format':
@@ -136,6 +138,8 @@ export function unfinishedOf(reconciled: Reconciled): StoreProblem | undefined {
 
 /** 只打开选定版本：恢复成功的优先，否则库里的优先；同一版本的镜像可补主库坏掉的密文，不退回旧版本。 */
 export function versionsToOpen(stored: StoreReadOutcome, reconciled: Reconciled): readonly StoredDraft[] {
+  if (stored.kind === 'session-invalid')
+    return []
   const mirrored = mirroredRecords(reconciled.mirror)
   let primary: StoredDraft | undefined
   if (reconciled.restored !== undefined)
@@ -184,7 +188,7 @@ export function createDraftRecovery(options: DraftRecoveryOptions): DraftRecover
       if (latest === undefined && !torn)
         return { mirror: read, restored: undefined }
       const current = stored ?? await store.readDraft(key)
-      if (current.kind === 'quota' || current.kind === 'unavailable' || current.kind === 'failed')
+      if (isStoreProblem(current))
         return { mirror: read, restored: undefined, unread: current }
       const kept: Reconciled = { mirror: read, restored: undefined }
       switch (reconcileAction(current, latest, torn)) {
@@ -260,15 +264,20 @@ export function pageMirror(directory: MirrorDirectory): RecoveryMirror {
  * 一份一份地比对：列出这个人在镜像里的文档、比对一份（DraftWriter 就是一个；发件箱 Worker 的客户端里各是一个请求）。
  * 比对的结果不是 reconciled 的都算这一份出了错（写满、库用不了、出错）
  */
+export type MirroredDocumentsResult
+  = | { readonly kind: 'listed', readonly documentIds: readonly string[] }
+    | Exclude<StoreProblem, { readonly kind: 'failed' }>
+    | { readonly kind: 'failed', readonly error: FailureDescription }
+
 export interface MirroredDocuments {
-  readonly mirroredDocuments: (userId: string) => Promise<{ readonly kind: 'listed', readonly documentIds: readonly string[] } | { readonly kind: 'failed', readonly error: FailureDescription }>
+  readonly mirroredDocuments: (userId: string) => Promise<MirroredDocumentsResult>
   readonly reconcile: (key: DraftKey) => Promise<{ readonly kind: string }>
 }
 
 /** 比对了几份；哪几份出了错（一份出错不拖累别的，之后再比对它们）；列不出镜像里的文档时是 failed */
 export type ReconcileAllOutcome
   = | { readonly kind: 'reconciled', readonly documents: number, readonly failed: readonly DraftKey[] }
-    | { readonly kind: 'failed', readonly error: FailureDescription }
+    | Exclude<MirroredDocumentsResult, { readonly kind: 'listed' }>
 
 /**
  * 打开平台、本机草稿页列出之前，比对这个人在镜像里的每份文档（审查 A13）：一份一份地来，每份一个请求（各有各的看门狗时限），
@@ -276,7 +285,7 @@ export type ReconcileAllOutcome
  */
 export async function reconcileAll(source: MirroredDocuments, userId: string): Promise<ReconcileAllOutcome> {
   const listed = await source.mirroredDocuments(userId)
-  if (listed.kind === 'failed')
+  if (listed.kind !== 'listed')
     return listed
   const failed: DraftKey[] = []
   for (const documentId of listed.documentIds) {
@@ -291,10 +300,23 @@ export async function reconcileAll(source: MirroredDocuments, userId: string): P
  * 平台页面里的比对来源（P4）：存储与只读的镜像组成的比对（pageMirror），列出用镜像的目录。比对没做完（unfinishedOf）的那一份算出错，
  * 比对时出的意外折成 failed，不抛出
  */
-export function pageReconciliation(options: { readonly store: RecoveryStore, readonly directory: MirrorDirectory, readonly now: () => number }): MirroredDocuments {
+export function pageReconciliation(options: { readonly store: RecoveryStore & Pick<DraftStore, 'checkSession'>, readonly directory: MirrorDirectory, readonly now: () => number }): MirroredDocuments {
   const recovery = createDraftRecovery({ store: options.store, mirror: pageMirror(options.directory), now: options.now, noteLost: false })
+  async function qualified<T>(userId: string, task: () => Promise<T>): Promise<T | Exclude<MirroredDocumentsResult, { readonly kind: 'listed' }>> {
+    try {
+      return await withOutboxLock(async () => {
+        const checked = await options.store.checkSession(userId)
+        if (checked.kind === 'failed')
+          return { kind: 'failed', error: describeFailure(checked.error) }
+        return checked.kind === 'bound' ? task() : checked
+      })
+    }
+    catch (error) {
+      return { kind: 'failed', error: describeFailure(error) }
+    }
+  }
   return {
-    mirroredDocuments: async (userId) => {
+    mirroredDocuments: async userId => qualified(userId, async (): Promise<MirroredDocumentsResult> => {
       const listed = await options.directory.listDocuments(userId)
       switch (listed.kind) {
         case 'listed':
@@ -306,14 +328,7 @@ export function pageReconciliation(options: { readonly store: RecoveryStore, rea
         case 'failed':
           return { kind: 'failed', error: describeFailure(listed.error) }
       }
-    },
-    reconcile: async (key) => {
-      try {
-        return await withOutboxLock(async () => unfinishedOf(await recovery.reconcile(key)) ?? { kind: 'reconciled' })
-      }
-      catch (error) {
-        return { kind: 'failed', error: describeFailure(error) }
-      }
-    },
+    }),
+    reconcile: async key => qualified(key.userId, async () => unfinishedOf(await recovery.reconcile(key)) ?? { kind: 'reconciled' }),
   }
 }

@@ -1,3 +1,17 @@
+import type { DraftKey, WriterRecord } from '../../../../shared/outbox/draft-record.ts'
+import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
+import type { DraftWriter } from '../../../../shared/outbox/draft-writer.ts'
+import type { OutboxWorkerClient } from '../../../../shared/outbox/outbox-worker-client.ts'
+import type { RecoveryNotice } from '../../../../shared/outbox/recovery-notice.ts'
+import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
+import type { MirrorPausePoint, ProbeMirrorOperation, ProbeMirrorPause } from './mirror-recorder.ts'
+import type { ProbeWorkerTransaction } from './pipeline-probe.ts'
+import { draftKeyPath, DRAFTS_STORE, OUTBOX_DATABASE_NAME, WRITERS_STORE } from '../../../../shared/outbox/database.ts'
+import { gunzipBytes } from '../../../../shared/outbox/draft-codec.ts'
+import { readWriterRecord } from '../../../../shared/outbox/draft-record.ts'
+import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
+import { createDraftWriter } from '../../../../shared/outbox/draft-writer.ts'
+import { createOutboxWorkerClient } from '../../../../shared/outbox/outbox-worker-client.ts'
 // 写入中途结束整棵浏览器进程时的原子性（M4-P1 设计 §3.7、§3.8，S7 与 S9 第 5 项）接到生产代码的探针：只在测试构建里。编辑器页的组装处
 // （start.tsx）在测试构建、地址带 crashProbe 时动态引入它，挂在 window.__nerveCrashProbe 上；生产构建里这个分支与它的分块都被去掉
 // （门禁 artifacts 按来源、分块名与名字核对）。
@@ -17,20 +31,7 @@
 //   里取最新、解得开的那一份）、解压，按记录的序号重新生成、逐字节比较；写入者的高水位另从库里直接读（与草稿在同一个事务里写、
 //   从镜像写回时连同写入者），两个仓库是否一致一眼看得出。
 // 交回的都是能经 page.evaluate 传回的普通值；密钥由测试进程给出原始字节（重开之后用同一把），导入成不可导出的。只引用发件箱自己的模块
-import type { DraftKey, WriterRecord } from '../../../../shared/outbox/draft-record.ts'
-import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
-import type { DraftWriter } from '../../../../shared/outbox/draft-writer.ts'
-import type { RecoveryNotice } from '../../../../shared/outbox/recovery-notice.ts'
-import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
-import type { OutboxWorkerClient } from '../outbox-worker-client.ts'
-import type { MirrorPausePoint, ProbeMirrorOperation, ProbeMirrorPause } from './mirror-recorder.ts'
-import type { ProbeWorkerTransaction } from './pipeline-probe.ts'
-import { draftKeyPath, DRAFTS_STORE, OUTBOX_DATABASE_NAME, WRITERS_STORE } from '../../../../shared/outbox/database.ts'
-import { gunzipBytes } from '../../../../shared/outbox/draft-codec.ts'
-import { readWriterRecord } from '../../../../shared/outbox/draft-record.ts'
-import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
-import { createDraftWriter } from '../../../../shared/outbox/draft-writer.ts'
-import { createOutboxWorkerClient } from '../outbox-worker-client.ts'
+import { requestProbeSessionPermit } from './probe-session.ts'
 
 /** 挂在 window 上的名字（门禁的禁用关键字里登记了它：生产构建里连名字都不能有） */
 export const CRASH_PROBE_NAME = '__nerveCrashProbe'
@@ -361,6 +362,7 @@ export function installCrashProbe(target: Window): CrashProbe {
       setup = next
       last = undefined
       const peek = await peekDatabase()
+      const permit = await requestProbeSessionPermit()
       const raw = fromHex(next.localKey.rawHex)
       const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt'])
       raw.fill(0)
@@ -377,6 +379,9 @@ export function installCrashProbe(target: Window): CrashProbe {
         pipeline = createDraftWriter({ store: signalling(createDraftStore({ blockedTimeoutMs: 1000 })), now: () => Date.now() })
         writer = pipeline
       }
+      const bound = await pipeline.bindSession(permit)
+      if (bound.kind !== 'bound')
+        return { kind: 'not-registered', outcome: JSON.stringify(bound), peek }
       const change = await pipeline.setKey({ version: next.localKey.version, key })
       const registered = await pipeline.register(next.key, next.writer, false)
       if (registered.kind !== 'registered')

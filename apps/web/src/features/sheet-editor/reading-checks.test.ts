@@ -3,7 +3,7 @@ import type { FetchedEditStatus } from './editor-api.ts'
 import type { ReadingCheckResult } from './reading-checks.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { NetworkError } from '../../shared/api/index.ts'
-import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
+import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createReadingChecks, READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
 
 function status(revision: number): FetchedEditStatus {

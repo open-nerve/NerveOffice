@@ -273,7 +273,8 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     await setCellValue(page, 'A1', '关闭草稿也能保存')
     await saveAndWait(page)
     expect(keys).toHaveLength(0)
-    expect((await localSaveOrder(page)).filter(event => event !== 'http:save')).toEqual([])
+    // 关闭保存后仍会发现旧草稿：两个恢复读者只绑定资格，没有登记或写入。
+    expect((await localSaveOrder(page)).filter(event => event !== 'http:save')).toEqual(['bind-session:bound', 'bind-session:bound'])
     expect(await readLocalDisk(page, key)).toEqual({ draft: null, writer: null })
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('关闭草稿也能保存')
   })
@@ -299,7 +300,7 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
         await expect.poll(held.held).toBe(1)
         expect(injected).toBe(true)
         await expect(page.locator('[data-slot="local-save-status"] summary')).toHaveText(failure === 'quota' ? '本机存储空间不足' : '本机存储不可用，修改暂留在本页')
-        expect(await localSaveOrder(page)).toContain(failure === 'quota' ? 'write:quota' : 'register:unavailable')
+        expect(await localSaveOrder(page)).toContain(failure === 'quota' ? 'write:quota' : 'bind-session:unavailable')
         expect((await readLocalDisk(page, key)).draft).toBeNull()
         held.release()
         await expect(saveStatus(page)).toHaveText('已保存到云端')

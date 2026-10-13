@@ -5,12 +5,12 @@
 // 保存与另存为副本另带"公式待更新"。打开自检（M3-P4 设计 §3.13）：失败的上报。
 // 请求编辑与交出（M3-P5 设计 §3.4、§3.6）：请求方的发出、续期（后台请求）与取消，持有者的交出与谢绝（带令牌）。
 import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { ConflictCopyRequest } from '../../shared/local-drafts/lost-copy.ts'
+import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
 import type { AcquireOptions } from './edit-lease.ts'
-import type { ConflictCopyRequest } from './lost-copy.ts'
-import type { SaveRequest } from './save-coordinator.ts'
 import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editRequestOutcomeSchema, editStatusSchema, handedOverEditLeaseSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
+import { clientFormatParams, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
-import { clientFormatParams, PAGE_CLIENT_FORMAT } from './client-format.ts'
 
 /** 完整响应的时限（M4-P2 S2）：大快照允许更久；编辑权操作要尽早结束等待。 */
 const SNAPSHOT_REQUEST_TIMEOUT_MS = 60_000

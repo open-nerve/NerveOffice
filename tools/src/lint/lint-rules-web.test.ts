@@ -654,6 +654,28 @@ describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（fe
   })
 }, LINT_TIMEOUT)
 
+describe('US-M4-07 共享草稿能力的边界', () => {
+  it('共享恢复能直接使用发件箱，普通平台模块仍只能按需使用', async () => {
+    const code = 'import { createDraftWriter } from \'../outbox/draft-writer.ts\'\n\nexport const create = createDraftWriter\n'
+    expect((await lintAtProbe(code, PROBE_FILES.localDrafts)).rules).toEqual([])
+    expect(await rulesFor(code, WEB_SHARED_FILE)).toContain('ts/no-restricted-imports')
+  })
+
+  it('平台首屏不得静态引入共享草稿协调；动态引入保持可用', async () => {
+    const path = `../../shared/local-drafts/${PROBE}.ts`
+    const code = `import { probe } from '${path}'\n\nexport const value = probe\n`
+    expect(await rulesFor(code, WEB_FEATURE_FILE)).toContain('ts/no-restricted-imports')
+    expect((await lint(dynamicImport(path), WEB_FEATURE_FILE)).rules).toEqual([])
+  })
+
+  it('共享恢复不能反向引用编辑器功能或 SDK 适配层', async () => {
+    for (const path of [`../../features/sheet-editor/${PROBE}-part.ts`, `../../editor/${PROBE}/editor-part.ts`]) {
+      const report = await lintAtProbe(`import { probe } from '${path}'\n\nexport const value = probe\n`, PROBE_FILES.localDrafts)
+      expect(report.rules).toContain('boundaries/dependencies')
+    }
+  })
+}, LINT_TIMEOUT)
+
 describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1 设计 §3.1，计划 S8 第 2 项；P1 审查 A7、B10）', () => {
   const RULE = 'ts/no-restricted-imports'
   const SYNTAX = 'no-restricted-syntax'
@@ -670,14 +692,14 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
   const OUTBOX_SHARED = 'apps/web/src/shared/outbox'
   const OUTBOX_FEATURE = 'apps/web/src/features/sheet-editor/outbox'
   const WORKER_SHARED = `${OUTBOX_SHARED}/writer-fence.ts`
-  const WORKER_FEATURE = [`${OUTBOX_FEATURE}/outbox-protocol.ts`, `${OUTBOX_FEATURE}/outbox-worker-handler.ts`, `${OUTBOX_FEATURE}/outbox.worker.ts`]
+  const WORKER_IMPLEMENTATION = [`${OUTBOX_SHARED}/outbox-protocol.ts`, `${OUTBOX_SHARED}/outbox-worker-handler.ts`, `${OUTBOX_SHARED}/outbox.worker.ts`]
   const WORKER_TESTING = [`${OUTBOX_FEATURE}/testing/transaction-recorder.ts`, `${OUTBOX_FEATURE}/testing/mirror-review.ts`, `${OUTBOX_FEATURE}/testing/outbox-probe.worker.ts`]
-  const WORKER_FILES = [WORKER_SHARED, ...WORKER_FEATURE, ...WORKER_TESTING]
-  /** 三个目录各一个：逐条核对的写法多，每个目录挑一个 */
-  const WORKER_SAMPLES = [WORKER_SHARED, `${OUTBOX_FEATURE}/outbox.worker.ts`, `${OUTBOX_FEATURE}/testing/outbox-probe.worker.ts`]
+  const WORKER_FILES = [WORKER_SHARED, ...WORKER_IMPLEMENTATION, ...WORKER_TESTING]
+  /** 存储、生产 Worker 与探针各一个：逐条核对的写法多，每类挑一个 */
+  const WORKER_SAMPLES = [WORKER_SHARED, `${OUTBOX_SHARED}/outbox.worker.ts`, `${OUTBOX_FEATURE}/testing/outbox-probe.worker.ts`]
   const PROBE = `${OUTBOX_FEATURE}/testing/outbox-probe.ts`
   /** 只在主线程用的（不在 Worker 一侧）：本机密钥、存储状态、合一的清理、Worker 的客户端、页面一侧的探针 */
-  const MAIN_THREAD_FILES = [`${OUTBOX_SHARED}/local-key.ts`, `${OUTBOX_SHARED}/storage-status.ts`, `${OUTBOX_SHARED}/local-cleanup.ts`, `${OUTBOX_FEATURE}/outbox-worker-client.ts`, PROBE]
+  const MAIN_THREAD_FILES = ['local-key.ts', 'storage-status.ts', 'local-cleanup.ts', 'draft-maintenance-store.ts', 'session-store.ts', 'outbox-worker-client.ts', 'outbox-host.ts', 'in-process-outbox-host.ts'].map(name => `${OUTBOX_SHARED}/${name}`).concat(PROBE)
 
   /** 从 file 引用 shared/outbox 里的 name 的写法 */
   const sharedOutbox = (file: string, name: string): string => `${file.includes('/testing/') ? '../../../../shared/outbox/' : file.includes('/features/') ? '../../../shared/outbox/' : './'}${name}`
@@ -749,12 +771,12 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
   })
 
   it('本机密钥与 Worker 的客户端不受不引用 zod 那一条与 Worker 一侧的限制；Worker 一侧的同一份限制里仍拦着测试辅助与 sheet-editor 的 testing/', async () => {
-    for (const file of [`${OUTBOX_SHARED}/local-key.ts`, `${OUTBOX_FEATURE}/outbox-worker-client.ts`])
+    for (const file of [`${OUTBOX_SHARED}/local-key.ts`, `${OUTBOX_SHARED}/outbox-worker-client.ts`])
       await expectAllowed(`import { localKeySchema } from '@nerve-office/contracts'\nimport { apiRequest } from '${apiClient(file)}'\n\nexport const schema = [localKeySchema, apiRequest]\n`, file, ZOD_FREE_MESSAGE, WORKER_AREA_MESSAGE, MAIN_THREAD_MESSAGE)
     await expectBlocked('import { sampleMeta } from \'./draft-record.test-support.ts\'\n\nexport const meta = sampleMeta\n', WORKER_SHARED, RULE, '测试与测试辅助')
     await expectBlocked('import { sample } from \'./pipeline.test-support.ts\'\n\nexport const s = sample\n', WORKER_TESTING[0] ?? '', RULE, '测试与测试辅助')
-    await expectBlocked('import \'./testing/outbox-probe.ts\'\n\nexport const a = 1\n', WORKER_FEATURE[0] ?? '', RULE, '编辑器页的测试构建探针')
-    await expectBlocked('import type { ProbePipeline } from \'./testing/pipeline-probe.ts\'\n\nexport type P = ProbePipeline\n', WORKER_FEATURE[1] ?? '', RULE, '编辑器页的测试构建探针')
+    await expectBlocked('import \'../../features/sheet-editor/outbox/testing/outbox-probe.ts\'\n\nexport const a = 1\n', WORKER_IMPLEMENTATION[0] ?? '', RULE, WORKER_AREA_MESSAGE)
+    await expectBlocked('import type { ProbePipeline } from \'../../features/sheet-editor/outbox/testing/pipeline-probe.ts\'\n\nexport type P = ProbePipeline\n', WORKER_IMPLEMENTATION[1] ?? '', RULE, WORKER_AREA_MESSAGE)
   })
 
   it('Worker 一侧（直接）：引用只在主线程用的模块报错——三个目录、值、副作用导入与再导出都算，每处只报这一条；类型照常', async () => {
@@ -764,14 +786,14 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
       expect(report.messages.filter(message => message.includes(MAIN_THREAD_MESSAGE)), `${file}\n${code}`).toHaveLength(count)
       expect(report.messages.join('\n'), `${file}\n${code}`).not.toContain(WORKER_AREA_MESSAGE)
     }
-    const shared = ['local-key.ts', 'storage-status.ts', 'local-cleanup.ts']
+    const shared = ['local-key.ts', 'storage-status.ts', 'local-cleanup.ts', 'draft-maintenance-store.ts', 'session-store.ts', 'outbox-worker-client.ts', 'outbox-host.ts', 'in-process-outbox-host.ts']
     for (const file of WORKER_FILES)
-      await expectMainThread(`${shared.map((name, index) => `import { a${index} } from '${sharedOutbox(file, name)}'`).join('\n')}\n\nexport const b = [a0, a1, a2]\n`, file, shared.length)
-    for (const file of WORKER_FEATURE)
+      await expectMainThread(`${shared.map((name, index) => `import { a${index} } from '${sharedOutbox(file, name)}'`).join('\n')}\n\nexport const b = [${shared.map((_, index) => `a${index}`).join(', ')}]\n`, file, shared.length)
+    for (const file of WORKER_IMPLEMENTATION)
       await expectMainThread('import \'./outbox-worker-client.ts\'\n\nexport const a = 1\n', file, 1)
     const probes = ['outbox-probe.ts', 'crash-probe.ts', 'outbox-review-probe.ts']
     for (const file of WORKER_TESTING)
-      await expectMainThread(`export { createPipelineProbe } from './pipeline-probe.ts'\n${probes.map((name, index) => `import { a${index} } from './${name}'`).join('\n')}\nimport { createOutboxWorkerClient } from '../outbox-worker-client.ts'\n\nexport const b = [a0, a1, a2, createOutboxWorkerClient]\n`, file, probes.length + 2)
+      await expectMainThread(`export { createPipelineProbe } from './pipeline-probe.ts'\n${probes.map((name, index) => `import { a${index} } from './${name}'`).join('\n')}\nimport { createOutboxWorkerClient } from '../../../../shared/outbox/outbox-worker-client.ts'\n\nexport const b = [a0, a1, a2, createOutboxWorkerClient]\n`, file, probes.length + 2)
     // 类型照常：import type 编译之后就没有了（探针 Worker 记事务用页面一侧探针的类型）
     await expectAllowed('import type { LocalKeyOutcome } from \'./local-key.ts\'\n\nexport type K = LocalKeyOutcome\n', WORKER_SHARED, MAIN_THREAD_MESSAGE, WORKER_AREA_MESSAGE)
     await expectAllowed('import type { ProbeWorkerTransaction } from \'./pipeline-probe.ts\'\n\nexport type T = ProbeWorkerTransaction\n', WORKER_TESTING[0] ?? '', MAIN_THREAD_MESSAGE, WORKER_AREA_MESSAGE)
@@ -780,21 +802,21 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
   it('Worker 一侧（间接）：区域之外的一律报错——没列进 Worker 一侧的文件、编辑器页与 shared 的别的模块、别的包、换了写法或带查询的路径、区域之外的类型、动态 import()；中转的文件只能在 Worker 一侧，它自己同样受约束', async () => {
     const outside: (readonly [string, string])[] = [
       // 页面一侧的模块经中转进 Worker：Worker 的客户端引用的编辑权、同一目录里没列进 Worker 一侧的文件（可能是页面一侧的）
-      [WORKER_FEATURE[1] ?? '', 'import { a } from \'../edit-lease.ts\'\n\nexport const b = a\n'],
-      [WORKER_FEATURE[1] ?? '', 'import { a } from \'./outbox-session.ts\'\n\nexport const b = a\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import { a } from \'../../features/sheet-editor/edit-lease.ts\'\n\nexport const b = a\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import { a } from \'../../features/sheet-editor/outbox/outbox-session.ts\'\n\nexport const b = a\n'],
       [WORKER_TESTING[0] ?? '', 'import { a } from \'./probe-helper.ts\'\n\nexport const b = a\n'],
       [WORKER_TESTING[0] ?? '', 'import { a } from \'../outbox-session.ts\'\n\nexport const b = a\n'],
       [WORKER_TESTING[0] ?? '', 'import { a } from \'../../edit-lease.ts\'\n\nexport const b = a\n'],
       // 别的目录、别的包
       [WORKER_SHARED, 'import { a } from \'../lib/format.ts\'\n\nexport const b = a\n'],
-      [WORKER_FEATURE[0] ?? '', 'import { useState } from \'react\'\n\nexport const use = useState\n'],
-      [WORKER_FEATURE[0] ?? '', 'import { a } from \'../../../editor/sheet-editor.ts\'\n\nexport const b = a\n'],
+      [WORKER_IMPLEMENTATION[0] ?? '', 'import { useState } from \'react\'\n\nexport const use = useState\n'],
+      [WORKER_IMPLEMENTATION[0] ?? '', 'import { a } from \'../../editor/sheet-editor.ts\'\n\nexport const b = a\n'],
       // 换了写法、带查询（?worker 会另起一个 Worker）
       [WORKER_SHARED, 'import { a } from \'../outbox/draft-record.ts\'\n\nexport const b = a\n'],
       [WORKER_SHARED, 'import { a } from \'./draft-record\'\n\nexport const b = a\n'],
-      [WORKER_FEATURE[1] ?? '', 'import OutboxWorker from \'./outbox.worker.ts?worker\'\n\nexport const W = OutboxWorker\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import OutboxWorker from \'./outbox.worker.ts?worker\'\n\nexport const W = OutboxWorker\n'],
       // 区域之外的类型也不放行（放行类型的只有只在主线程用的那几个模块的确切写法）
-      [WORKER_FEATURE[1] ?? '', 'import type { EditLease } from \'../edit-lease.ts\'\n\nexport type L = EditLease\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import type { EditLease } from \'../../features/sheet-editor/edit-lease.ts\'\n\nexport type L = EditLease\n'],
     ]
     for (const [file, code] of outside)
       await expectBlocked(code, file, RULE, WORKER_AREA_MESSAGE)
@@ -803,9 +825,9 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
     // 区域之内照常：同一目录与别的发件箱目录里 Worker 一侧的文件
     const inside: (readonly [string, string])[] = [
       [WORKER_SHARED, 'import { readDraftMeta } from \'./draft-record.ts\'\n\nexport const read = readDraftMeta\n'],
-      [WORKER_FEATURE[1] ?? '', 'import { createDraftStore } from \'../../../shared/outbox/draft-store.ts\'\nimport { a } from \'./outbox-protocol.ts\'\n\nexport const b = [createDraftStore, a]\n'],
-      [WORKER_TESTING[2] ?? '', 'import \'./transaction-recorder.ts\'\nimport \'../outbox.worker.ts\'\n'],
-      [WORKER_TESTING[1] ?? '', 'import { a } from \'../../../../shared/outbox/mirror-directory.ts\'\nimport { b } from \'../outbox-protocol.ts\'\n\nexport const c = [a, b]\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import { createDraftStore } from \'./draft-store.ts\'\nimport { a } from \'./outbox-protocol.ts\'\n\nexport const b = [createDraftStore, a]\n'],
+      [WORKER_TESTING[2] ?? '', 'import \'./transaction-recorder.ts\'\nimport \'../../../../shared/outbox/outbox.worker.ts\'\n'],
+      [WORKER_TESTING[1] ?? '', 'import { a } from \'../../../../shared/outbox/mirror-directory.ts\'\nimport { b } from \'../../../../shared/outbox/outbox-protocol.ts\'\n\nexport const c = [a, b]\n'],
     ]
     for (const [file, code] of inside)
       await expectAllowed(code, file, WORKER_AREA_MESSAGE, MAIN_THREAD_MESSAGE)
@@ -896,7 +918,7 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
           entries.push(posix.join(dir, match[1] ?? ''))
       }
     }
-    expect(entries).toContain(`${OUTBOX_FEATURE}/outbox.worker.ts`)
+    expect(entries).toContain(`${OUTBOX_SHARED}/outbox.worker.ts`)
     expect(entries.length).toBeGreaterThan(1)
     for (const entry of entries) {
       const config = await configFor(entry)

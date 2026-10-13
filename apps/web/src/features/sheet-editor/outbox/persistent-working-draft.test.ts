@@ -1,9 +1,9 @@
-import type { DraftPreparation, PreparedDraft } from '../working-draft.ts'
+import type { DraftPreparation, PreparedDraft } from '../../../shared/local-drafts/working-draft.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { gunzipBytes } from '../../../shared/outbox/draft-codec.ts'
 import { CLIENT_INSTANCE_ID, OTHER_WRITER_ID } from '../../../shared/outbox/draft-record.test-support.ts'
+import { settle } from '../../../shared/outbox/fake-lease-clock.test-support.ts'
 import { deferred } from '../../../shared/outbox/outbox-lock.test-support.ts'
-import { settle } from '../fake-lease-clock.test-support.ts'
 import { DRAFT_KEY, persistentHarness } from './persistent-working-draft.test-support.ts'
 import { createPersistentWorkingDraft } from './persistent-working-draft.ts'
 
@@ -21,6 +21,22 @@ async function textOf(result: PreparedDraft): Promise<string> {
 }
 
 describe('持久工作草稿：内容、真实序号与失败退路', () => {
+  it('会话资格在压缩前失效时，仍能以同一次捕获建立内存上传，不伪报持久化', async () => {
+    const h = await persistentHarness()
+    const write = vi.spyOn(h.writer, 'write')
+    const source = createPersistentWorkingDraft(h.options)
+    h.store.failNext('checkSession', { kind: 'session-invalid' })
+    const ref = source.capture(capture('资格变化前已捕获的内容'))
+    expect(await source.ready(ref)).toMatchObject({ local: { kind: 'memory', reason: 'session-invalid' }, ref })
+    expect(await write.mock.results[0]?.value).toEqual({ kind: 'session-invalid', gzip: null })
+    const upload = prepared(await source.prepare(ref))
+    expect(await textOf(upload)).toBe('资格变化前已捕获的内容')
+    expect(await source.prepare(ref)).toBe(upload)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(h.store.rawDraft(DRAFT_KEY)).toBeUndefined()
+    source.dispose()
+  })
+
   it('确认删除回包丢失后的同一内容 absent 是清理证据，解除未核实而不复活本机正文', async () => {
     const h = await persistentHarness()
     const source = createPersistentWorkingDraft(h.options)

@@ -16,7 +16,8 @@
 //   请求（那时只记下、没有计时）按请求刚到处理（审查 B3），离开的过程中换了一个请求的同样（原来的计时属于前一个请求，丢弃，复验 C3）；
 //   离开了、失去编辑权时清掉（clear），换了一代（进入编辑）时重新开始（reset）。
 import type { PendingEditRequest, UserSummary } from '@nerve-office/contracts'
-import type { EditLease, EditLeaseApi, LeaseClock, LeaseLoss } from './edit-lease.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
+import type { EditLease, EditLeaseApi, LeaseLoss } from './edit-lease.ts'
 import type { IdleWatch } from './idle-watch.ts'
 import type { PageVisibility } from './reading-checks.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS } from '@nerve-office/contracts'

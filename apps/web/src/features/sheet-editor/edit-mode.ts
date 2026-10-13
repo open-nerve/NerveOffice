@@ -122,9 +122,16 @@
 // 选内容，所以是"先取后放"）。失去编辑权之后的重建失败只上报，不改失去编辑权之后的选项（副本是本页的内容，服务端照常检查）。
 import type { CreatedDocument, DocumentDetail, EditInterruption, OpenCheckReport, PendingEditRequest, SaveContentResponse, UserSummary } from '@nerve-office/contracts'
 import type { OpenCheck, SheetEditor } from '../../editor/index.ts'
+import type { Incompatibility } from '../../shared/api/client-format.ts'
+import type { CopyState, LostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
+import type { DocumentRecovery, RecoveryPreparation } from '../../shared/local-drafts/document-recovery.ts'
+import type { ConflictCopyRequest } from '../../shared/local-drafts/lost-copy.ts'
+import type { RecoveryInitializer } from '../../shared/local-drafts/recovery-initializer.ts'
+import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
+import type { DraftCaptureRef, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
-import type { Incompatibility } from './client-format.ts'
-import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseHolder, LeaseLoss } from './edit-lease.ts'
+import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit-request.ts'
 import type { EditingDraftReady } from './editing-draft.ts'
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
@@ -134,20 +141,16 @@ import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handov
 import type { EditingNotice, IncomingRequest } from './holder-requests.ts'
 import type { IdleWatch } from './idle-watch.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
-import type { CopyState, LostCopyFlow } from './lost-copy-flow.ts'
-import type { ConflictCopyRequest } from './lost-copy.ts'
 import type { OpenCheckContext } from './open-check-report.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
-import type { DocumentRecovery, RecoveryPreparation } from './recovery/document-recovery.ts'
-import type { RecoveryInitializer } from './recovery/recovery-initializer.ts'
 import type { HandoverFailure, SameBrowser } from './same-browser.ts'
-import type { SaveCoordinator, SaveRequest, SaveStatus, SaveView } from './save-coordinator.ts'
+import type { SaveCoordinator, SaveStatus, SaveView } from './save-coordinator.ts'
 import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
-import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
+import { incompatibilityOf } from '../../shared/api/client-format.ts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
-import { incompatibilityOf } from './client-format.ts'
+import { createLostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
 import { HEARTBEAT_MS, leaseHolderOf, within } from './edit-lease.ts'
 import { createEditRequests } from './edit-request.ts'
 import { createEditingSession } from './editing-session.ts'
@@ -155,13 +158,13 @@ import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
 import { createHolderRequests } from './holder-requests.ts'
 import { createIdleWatch } from './idle-watch.ts'
-import { captureLostContent, createLostCopyFlow } from './lost-copy-flow.ts'
+import { captureLostContent } from './lost-copy-flow.ts'
 import { openCheckReportOf } from './open-check-report.ts'
 import { createReadingChecks } from './reading-checks.ts'
 import { answerTabs, handoverFailureOf, takeOverHere } from './tab-handover.ts'
 import { resolveTakeoverLoss } from './takeover-location.ts'
 
-export type { CopyRefusal, CopyState } from './lost-copy-flow.ts'
+export type { CopyRefusal, CopyState } from '../../shared/local-drafts/copy-flow.ts'
 
 /** 状态里带着的：持有者这一侧的请求与说明（编辑、离开编辑，holder-requests.ts）；"在此编辑"的进展（阅读，tab-handover.ts） */
 export type { EditingNotice, IncomingRequest, TakeoverProgress }
@@ -676,6 +679,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let editingSince = 0
   let generation = 0
   let session: 'active' | 'signed-out' | 'other-user' = 'active'
+  let localGeneration = options.localDrafts?.permit?.()?.generation
   let disposed = false
   const slot = createEditorSlot({ createEditor: options.createEditor, onChange: () => notify(), reportError: options.reportError })
   /** 测试构建的观察钩子（M3-P5 设计 §3.13）：没有时什么也不记；观察者出错不影响交接（上报） */
@@ -2179,10 +2183,15 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     setSession: (next) => {
+      const nextGeneration = options.localDrafts?.permit?.()?.generation
+      const localChanged = localGeneration !== nextGeneration
+      localGeneration = nextGeneration
       const previous = session
       session = next
       syncSaving()
-      if (next === 'active' && options.localDrafts?.enabled() === false)
+      if (localChanged)
+        options.recovery?.suspend()
+      if (next === 'active' && (options.localDrafts?.enabled() === false || localChanged))
         editing.discardDraftKey()
       if (next !== 'active') {
         options.recovery?.suspend()

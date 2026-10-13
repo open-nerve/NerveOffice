@@ -66,6 +66,7 @@ describe('比对要做什么（只看库里的草稿与镜像里最新写的那�
   const cases: readonly { readonly name: string, readonly stored: StoreReadOutcome, readonly latest: StoredDraft | undefined, readonly torn: boolean, readonly expected: ReturnType<typeof reconcileAction> }[] = [
     { name: '库用不了：不比对', stored: { kind: 'unavailable', reason: 'blocked' }, latest, torn: false, expected: 'none' },
     { name: '库里写满：不比对', stored: { kind: 'quota' }, latest, torn: false, expected: 'none' },
+    { name: '会话失效：不比对', stored: { kind: 'session-invalid' }, latest, torn: false, expected: 'none' },
     { name: '库里出错：不比对', stored: { kind: 'failed', error: new TypeError('x') }, latest, torn: false, expected: 'none' },
     { name: '库里是更新的页面写的：不动它', stored: { kind: 'newer-format', recordVersion: 2 }, latest, torn: false, expected: 'none' },
     { name: '库里那一条形状不对：不动它', stored: { kind: 'malformed' }, latest, torn: false, expected: 'none' },
@@ -92,6 +93,12 @@ describe('读草稿、登记时交回哪一个版本（审查 A3）', () => {
   it('库读取失败、镜像混有更新格式与有效旧份：不能退回旧份', () => {
     const mirror = slots(NEWER_FORMAT, valid(record(9), 1))
     expect(versionsToOpen({ kind: 'failed', error: new Error('read failed') }, { mirror, restored: undefined })).toEqual([])
+  })
+
+  it('会话失效时不借镜像或此前写回结果返回正文', () => {
+    const mirror = slots(valid(eight, 2), valid(seven, 1))
+    for (const restored of [undefined, eight])
+      expect(versionsToOpen({ kind: 'session-invalid' }, { mirror, restored })).toEqual([])
   })
 
   it('写回了：写回的那一份，同一版本在镜像里的另一份跟在后面；不交回更旧的版本', () => {

@@ -44,9 +44,9 @@
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { EditInterruption, SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
+import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
-import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { CopyState, EditingNotice, IncomingRequest, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
 import type { EditRequestProgress } from './edit-request.ts'

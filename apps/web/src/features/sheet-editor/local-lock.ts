@@ -19,7 +19,8 @@
 // - 被本人接管之后"在哪"的本机证据（takenHere，edit-mode.ts）：服务端只说这一代被本人接管、不说在哪；本浏览器里接手的那一页取得新的一代之后
 //   一定来拿这把锁，锁还在本页手里就得抢（抢之前核对过它那一代是当前的）。所以被抢了（之后没有得知本页仍是当前的）就是本浏览器的另一个标签页；
 //   服务端的回答先到、锁还拿着时留着它等一会儿（不再当作编辑权的锁），等到被抢也是，到时还没有就是别处——与两个消息谁先到无关。
-import type { LeaseClock, LeaseLoss, LeaseOutcome, LeaseVerdict } from './edit-lease.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
+import type { LeaseLoss, LeaseOutcome, LeaseVerdict } from './edit-lease.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
 

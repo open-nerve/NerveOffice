@@ -1,7 +1,10 @@
 import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, HandedOverEditLease, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { MockInstance } from 'vitest'
 import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
+import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
+import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
 import type { Autosave, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditModeState } from './edit-mode.ts'
@@ -9,23 +12,23 @@ import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { EditorPage, EditorPageApi } from './editor-page.ts'
 import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { MarkerStorage } from './pending-save-marker.ts'
-import type { RecoveryReader } from './recovery/recovery-reader.ts'
 import type { SameBrowser } from './same-browser.ts'
-import type { SaveRequest } from './save-coordinator.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
+import { rememberSessionPermit } from '../../shared/api/session-association.ts'
 import { connectionState, createConnectionState } from '../../shared/lib/connection-state.ts'
 import { gzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
+import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
+import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
-import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
-import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
@@ -41,6 +44,11 @@ const ALICE: SessionResponse = {
   features: { localDraftsEnabled: true },
 }
 const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f2e-7a3b-8c4d-00000000000b', username: 'bob' }, csrfToken: 'csrf-bob' }
+
+function permitted(response: SessionResponse, generation = testSessionPermit().generation): SessionResponse {
+  rememberSessionPermit(response, { userId: response.user.id, generation })
+  return response
+}
 
 /** 申请到的编辑租约：修订号与载入的内容相同（3） */
 const TOKEN = 'L'.repeat(43)
@@ -807,7 +815,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     const host = vi.fn(async () => ({ kind: 'in-process' as const, writer, broken: () => false, dispose }))
     const { editorPage, api, fromOtherTab } = setup({
       editIntent: false,
-      api: { session: async () => ({ ...ALICE, features: { localDraftsEnabled: enabled } }) },
+      api: { session: async () => permitted({ ...ALICE, features: { localDraftsEnabled: enabled } }) },
       editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) },
       localDrafts: { keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' }) },
     })
@@ -3173,5 +3181,52 @@ describe('编辑器服务端操作的连接守卫', () => {
     t.reconnect()
     await t.editorPage.saveCopy()
     expect(t.api.conflictCopy).toHaveBeenCalledOnce()
+  })
+})
+
+describe('编辑页消费原会话响应的本机许可', () => {
+  it('网络登录正常但本机资格缺失时仍可进入编辑与云端保存，不建持久宿主', async () => {
+    const fetch = vi.fn(async () => newKey(1))
+    const keeper = createLocalKeyKeeper({ fetch, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
+    const host = vi.fn(async () => {
+      throw new Error('缺少本机许可不应创建宿主')
+    })
+    const h = setup({ api: { session: async () => ({ ...ALICE }) }, localDrafts: { keeper, host, supported: () => true } })
+    await h.editorPage.load()
+    expect(h.editorPage.view().mode?.kind).toBe('editing')
+    await h.editorPage.save()
+    expect(h.api.save).toHaveBeenCalledOnce()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(host).not.toHaveBeenCalled()
+    h.editorPage.dispose()
+  })
+
+  it('同一人换会话后关闭旧宿主，再按新回包的许可恢复，原宿主不换绑', async () => {
+    const key = await newKey(1)
+    const fetch = vi.fn(async () => key)
+    const keeper = createLocalKeyKeeper({ fetch, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
+    const store = fakeDraftStore()
+    const hosts: { bind: MockInstance<ReturnType<typeof createDraftWriter>['bindSession']>, dispose: ReturnType<typeof vi.fn> }[] = []
+    const host = vi.fn(async () => {
+      const writer = createDraftWriter({ store: store.store, now: Date.now })
+      const bind = vi.spyOn(writer, 'bindSession')
+      const dispose = vi.fn(() => writer.dispose())
+      hosts.push({ bind, dispose })
+      return { kind: 'in-process' as const, writer, broken: () => false, dispose }
+    })
+    const initial = permitted({ ...ALICE })
+    const next = permitted({ ...ALICE, csrfToken: 'new-login' }, '0199b0c4-7d3e-7a3b-9c4e-000000000002')
+    const h = setup({ api: { session: async () => initial }, localDrafts: { keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' }) } })
+    await h.editorPage.load()
+    expect(hosts).toHaveLength(1)
+    expect(hosts[0]?.bind).toHaveBeenCalledExactlyOnceWith(testSessionPermit(ALICE.user.id))
+    h.api.session.mockResolvedValueOnce(next)
+    h.fromOtherTab()
+    await vi.waitFor(() => expect(hosts).toHaveLength(2))
+    await vi.waitFor(() => expect(hosts[1]?.bind).toHaveBeenCalledExactlyOnceWith({ userId: ALICE.user.id, generation: '0199b0c4-7d3e-7a3b-9c4e-000000000002' }))
+    expect(hosts[0]?.bind).toHaveBeenCalledTimes(1)
+    expect(hosts[0]?.dispose).toHaveBeenCalledTimes(1)
+    expect(fetch).toHaveBeenCalledTimes(2)
+    h.editorPage.dispose()
   })
 })

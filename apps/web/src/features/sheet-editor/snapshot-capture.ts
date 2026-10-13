@@ -6,7 +6,7 @@
 //     写进模型（批注浮层、数据验证面板，适配层的 settlePanels，S4）——要提交哪一次编辑在按下时定，不等轮到这一次上传（审查 A1）；
 //   - captureSettled 在轮到这一次上传时做：等公式收齐（至多到时限，没收齐就带上"公式待更新"），然后捕获（编码和摘要交给工作草稿来源）。
 // 何时捕获由捕获的规则（capture-policy.ts）与调度（autosave.ts）决定，这里只管怎么捕获。
-import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
+import type { DraftCaptureRef, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
 
 /** 捕获用到的编辑器能力（SheetEditor 的子集） */
 export interface CaptureEditor {

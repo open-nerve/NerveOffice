@@ -1,6 +1,6 @@
 import type { HandoverMessage, LockApi } from './same-browser.ts'
 import { describe, expect, it, vi } from 'vitest'
-import { settle } from './fake-lease-clock.test-support.ts'
+import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { channelNameOf, HANDOVER_MESSAGE_VERSION, issuedRequestLockNameOf, lockNameOf, onReply, onRequest, parseHandoverMessage, sameBrowserFor } from './same-browser.ts'
 

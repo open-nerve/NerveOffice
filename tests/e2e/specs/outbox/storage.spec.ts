@@ -8,14 +8,15 @@ import { contentOf, draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatab
 import { loginThroughApi } from '../../support/session.ts'
 
 test.describe('发件箱的库', { tag: '@test-build' }, () => {
-  test('第一次用时建出库：版本 1，三个仓库（草稿、写入者、比对镜像留下的提示）的键路径都是 [userId, documentId]、没有索引；读写的事务一律要求 strict，只读的不带', async ({ page }) => {
+  test('第一次用时建出 v2 库：三个原仓库保留文档键，会话仓库使用 slot；读写事务要求 strict，只读的不带', async ({ page }) => {
     const user = await createUser('ob-create')
     await loginThroughApi(page, user)
-    await openOutboxProbe(page)
+    await openOutboxProbe(page, { authorize: false })
     // 打开探针、看库都不建库
     expect(await probeDatabase(page, 'describe')).toBeNull()
     expect(await probeDatabase(page, 'exists')).toBe(false)
 
+    expect(await probe(page, 'authorizeSession')).toEqual({ kind: 'bound' })
     await probe(page, 'recordTransactions')
     await probe(page, 'chooseKey', 1)
     const key = { userId: user.id, documentId: randomUUID() }
@@ -23,20 +24,21 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
     expect(await probe(page, 'register', key, writer, { now: NOW, force: false })).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined })
     expect(await probe(page, 'write', draftFor(key, writer, 1))).toEqual({ kind: 'written' })
     expect(outcomeOf(await probe(page, 'read', key), 'draft').opened).toEqual({ kind: 'opened', content: contentOf(writer, 1) })
-    // 存储开的事务（登记、写入是读写的，读回是只读的）都在两个仓库上；读写的要求 strict（报告写完之前要求落盘）
+    // 存储开的事务（登记、写入是读写的，读回是只读的）同时包含会话仓库；读写的要求 strict（报告写完之前要求落盘）
     const transactions = await probe(page, 'transactions')
     expect(transactions.map(tx => [tx.stores, tx.mode, tx.durability])).toEqual([
-      [['drafts', 'writers'], 'readwrite', 'strict'],
-      [['drafts', 'writers'], 'readwrite', 'strict'],
-      [['drafts', 'writers'], 'readonly', undefined],
+      [['drafts', 'writers', 'sessions'], 'readwrite', 'strict'],
+      [['drafts', 'writers', 'sessions'], 'readwrite', 'strict'],
+      [['drafts', 'writers', 'sessions'], 'readonly', undefined],
     ])
 
     expect(await probeDatabase(page, 'exists')).toBe(true)
     expect(await probeDatabase(page, 'describe')).toEqual({
-      version: 1,
+      version: 2,
       stores: [
         { name: 'drafts', keyPath: ['userId', 'documentId'], indexes: [] },
         { name: 'notices', keyPath: ['userId', 'documentId'], indexes: [] },
+        { name: 'sessions', keyPath: 'slot', indexes: [] },
         { name: 'writers', keyPath: ['userId', 'documentId'], indexes: [] },
       ],
     })
@@ -52,13 +54,13 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
     await probe(page, 'register', key, writer, { now: NOW, force: false })
     expect(await probe(page, 'write', draftFor(key, writer, 1))).toEqual({ kind: 'written' })
 
-    // 另一个标签页扮演更新的页面：以版本 2 打开（加一个仓库）。本页的连接一直开着，不关就会挡住它
+    // 另一个标签页扮演更新的页面：以版本 3 打开（加一个仓库）。本页的连接一直开着，不关就会挡住它
     const newer = await page.context().newPage()
     await openOutboxProbe(newer)
-    expect(await probeDatabase(newer, 'upgrade', 2, 5_000)).toBe('upgraded')
-    expect((await probeDatabase(newer, 'describe'))?.version).toBe(2)
+    expect(await probeDatabase(newer, 'upgrade', 3, 5_000)).toBe('upgraded')
+    expect((await probeDatabase(newer, 'describe'))?.version).toBe(3)
 
-    // 本页再用：重新打开版本 1 得到 VersionError，按"不可用（库比本页新）"交回，不写
+    // 本页再用：重新打开版本 2 得到 VersionError，按"不可用（库比本页新）"交回，不写
     expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'unavailable', reason: 'newer-version' })
     expect(await probe(page, 'read', key)).toEqual({ kind: 'unavailable', reason: 'newer-version' })
     // 列表的标记不带版本打开、只读键：照样读得出
@@ -68,12 +70,12 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
   test('升级被不理会 versionchange 的旧连接挡住：等过时限交回 blocked；挡住的连接放开之后，再打开就成了', async ({ page }) => {
     const user = await createUser('ob-blocked')
     await loginThroughApi(page, user)
-    await openOutboxProbe(page)
+    await openOutboxProbe(page, { authorize: false })
     // 一个不理会 versionchange 的旧连接（例如被冻结的旧页面）一直开着版本 1
     const held = await probeDatabase(page, 'hold', 1)
 
     const other = await page.context().newPage()
-    await openOutboxProbe(other)
+    await openOutboxProbe(other, { authorize: false })
     const started = Date.now()
     expect(await probeDatabase(other, 'openWith', 2, 300)).toBe('blocked')
     expect(Date.now() - started, '按时限交回 blocked，不一直等').toBeLessThan(10_000)
@@ -84,7 +86,7 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
     expect(await probeDatabase(other, 'openWith', 2, 300)).toBe('connected')
   })
 
-  test('删库（清除站点数据）：本页的连接让开、删除不被挡住；之后的操作重新打开，从空的库接着用（写入者也不在了，要重新登记）', async ({ page }) => {
+  test('删库（清除站点数据）：本页的连接让开、删除不被挡住；之后的操作重新打开，旧会话立即拒绝，只有新查询与新存储绑定后才能重新登记', async ({ page }) => {
     const user = await createUser('ob-deleted')
     await loginThroughApi(page, user)
     await openOutboxProbe(page)
@@ -98,8 +100,10 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
     await openOutboxProbe(other)
     expect(await probeDatabase(other, 'remove', 5_000)).toBe('deleted')
 
-    expect(await probe(page, 'read', key)).toEqual({ kind: 'absent' })
-    expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'fenced', reason: 'not-writer' })
+    expect(await probe(page, 'read', key)).toEqual({ kind: 'session-invalid' })
+    expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'session-invalid' })
+    await openOutboxProbe(page)
+    await probe(page, 'chooseKey', 1)
     expect(await probe(page, 'register', key, writer, { now: NOW, force: false })).toEqual({ kind: 'registered', lastDraftSeq: 0, existing: undefined })
     expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'written' })
   })
@@ -131,13 +135,14 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
   test('用不了时如实交回原因：没有 IndexedDB 是 unsupported，取它时被拒绝是 denied；每个操作都交回同样的值，不抛出', async ({ page }) => {
     const user = await createUser('ob-unavailable')
     await loginThroughApi(page, user)
-    await openOutboxProbe(page)
+    await openOutboxProbe(page, { authorize: false })
     await probe(page, 'chooseKey', 1)
     const key = { userId: user.id, documentId: randomUUID() }
     const writer = writerOf(3)
     for (const [factory, reason] of [['missing', 'unsupported'], ['throws', 'denied']] as const) {
       await probe(page, 'resetStore', { factory })
       const unavailable = { kind: 'unavailable', reason }
+      expect(await probe(page, 'bindSession', { userId: user.id, generation: randomUUID() })).toEqual(unavailable)
       expect(await probe(page, 'register', key, writer, { now: NOW, force: false }), factory).toEqual(unavailable)
       expect(await probe(page, 'write', draftFor(key, writer, 1)), factory).toEqual(unavailable)
       expect(await probe(page, 'read', key), factory).toEqual(unavailable)
@@ -152,18 +157,21 @@ test.describe('发件箱的库', { tag: '@test-build' }, () => {
     const user = await createUser('ob-index')
     const other = await createUser('ob-index-other')
     await loginThroughApi(page, user)
-    await openOutboxProbe(page)
+    await openOutboxProbe(page, { authorize: false })
     expect(await probe(page, 'draftIds', user.id)).toEqual([])
     expect(await probeDatabase(page, 'exists'), '列表的标记不建库').toBe(false)
 
+    expect(await probe(page, 'authorizeSession')).toEqual({ kind: 'bound' })
     await probe(page, 'chooseKey', 1)
     const writer = writerOf(3)
     const documents = [randomUUID(), randomUUID()].sort()
-    for (const [userId, documentId] of [[user.id, documents[0] ?? ''], [user.id, documents[1] ?? ''], [other.id, randomUUID()]] as const) {
-      const key = { userId, documentId }
+    for (const documentId of documents) {
+      const key = { userId: user.id, documentId }
       await probe(page, 'register', key, writer, { now: NOW, force: false })
       expect(await probe(page, 'write', draftFor(key, writer, 1))).toEqual({ kind: 'written' })
     }
+    // 他人的既有原件用显式夹具播种；生产存储不会给当前会话另一个用户的写入资格。
+    await probeDatabase(page, 'seedDraft', draftFor({ userId: other.id, documentId: randomUUID() }, writer, 1))
     expect(await probe(page, 'draftIds', user.id)).toEqual(documents)
   })
 })

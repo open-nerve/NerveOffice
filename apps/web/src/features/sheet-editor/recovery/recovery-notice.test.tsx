@@ -1,4 +1,4 @@
-import type { RecoveryView } from './document-recovery.ts'
+import type { RecoveryView } from '../../../shared/local-drafts/document-recovery.ts'
 import type { RecoveryNoticeProps } from './recovery-notice.tsx'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -12,6 +12,12 @@ function props(view: RecoveryView | undefined = VIEW): RecoveryNoticeProps {
 }
 
 describe('本机恢复提示', () => {
+  it('原清理许可失效时显示需要确认登录，不伪报已清除', () => {
+    render(<RecoveryNotice {...props({ ...VIEW, stage: 'restored', cleanup: { kind: 'session-invalid' } })} />)
+    expect(screen.getByText('暂时无法确认登录状态，本机修改仍保留')).toBeVisible()
+    expect(screen.queryByText('这份本机草稿已清除')).not.toBeInTheDocument()
+  })
+
   it('副本被明确拒绝不承诺重复同一次请求；进行中说明当前操作', () => {
     const p = props({ ...VIEW, copy: { kind: 'failed', error: new ApiError(403, 'FORBIDDEN', '没有访问权限') } })
     const rendered = render(<RecoveryNotice {...p} />)

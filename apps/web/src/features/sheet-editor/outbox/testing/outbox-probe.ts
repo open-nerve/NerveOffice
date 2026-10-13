@@ -9,32 +9,32 @@
 // importLocalKey；请求层的写法（自动带 CSRF、按契约校验）由 local-key.ts 的单元测试覆盖。
 // 写入管道（进程内与发件箱 Worker 两种宿主）的那一部分在 pipeline-probe.ts，挂在 pipeline 上
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
+import type { DraftMaintenanceStore } from '../../../../shared/outbox/draft-maintenance-store.ts'
 import type { DraftObservation } from '../../../../shared/outbox/draft-observation.ts'
 import type { DraftKey, DraftMeta, ReadDraft, WriterRecord } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore, ListedDraft, StoreProblem } from '../../../../shared/outbox/draft-store.ts'
+import type { DraftSessionPermit, UserCleanupPermit } from '../../../../shared/outbox/session-fence.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
 import type { ProbePipeline } from './pipeline-probe.ts'
-import { browserIndexedDb, DRAFTS_STORE, openOutboxDatabase, OUTBOX_DATABASE_NAME, OUTBOX_DATABASE_VERSION, OUTBOX_KEY_PATH, WRITERS_STORE } from '../../../../shared/outbox/database.ts'
+import type { Plain, ProbeError } from './probe-result.ts'
+import { browserIndexedDb, DRAFTS_STORE, NOTICES_STORE, openOutboxDatabase, OUTBOX_DATABASE_NAME, OUTBOX_DATABASE_VERSION, OUTBOX_KEY_PATH, WRITERS_STORE } from '../../../../shared/outbox/database.ts'
 import { gunzipBytes, gzipBytes, openDraft, sealDraft } from '../../../../shared/outbox/draft-codec.ts'
 import { draftDocumentIds } from '../../../../shared/outbox/draft-index.ts'
+import { createDraftMaintenanceStore } from '../../../../shared/outbox/draft-maintenance-store.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { importLocalKey } from '../../../../shared/outbox/local-key-import.ts'
 import { requestPersistence, storageEstimate, storagePersisted } from '../../../../shared/outbox/storage-status.ts'
 import { createOutboxSessionProbe } from './outbox-session-probe.ts'
 import { createPipelineProbe } from './pipeline-probe.ts'
+import { plain, probeError } from './probe-result.ts'
+import { requestProbeSessionPermit } from './probe-session.ts'
+import { createSessionFenceProbe } from './session-fence-probe.ts'
 import { createWorkingDraftProbe } from './working-draft-probe.ts'
 
 /** 挂在 window 上的名字（门禁的禁用关键字里登记了它：生产构建里连名字都不能有） */
 export const OUTBOX_PROBE_NAME = '__nerveOutboxProbe'
 
-/** 错误只带名字与消息 */
-export interface ProbeError {
-  readonly name: string
-  readonly message: string
-}
-
-/** 存储的结果里的错误换成 ProbeError（failed 的 error） */
-export type Plain<T> = T extends { readonly kind: 'failed', readonly error: unknown } ? { readonly kind: 'failed', readonly error: ProbeError } : T
+export type { Plain, ProbeError } from './probe-result.ts'
 
 /** 要写的一份：元数据（密钥版本取自探针当前的密钥，解压后的字节数按内容算）与内容；内容可以是随机的 base64（写满的用例，几乎压不动） */
 export interface ProbeDraftInput {
@@ -83,11 +83,19 @@ export interface ProbeStoreOptions {
 }
 
 export interface OutboxProbe {
+  readonly fence: ReturnType<typeof createSessionFenceProbe>
   readonly names: { readonly database: string, readonly version: number, readonly drafts: string, readonly writers: string }
   /** 这个标签页之后封、开草稿用的密钥：rawHex（32 字节的十六进制）给出时导入它，否则随机生成一把；都不可导出 */
   readonly chooseKey: (version: number, rawHex?: string) => Promise<void>
   /** 换一个新的存储（关掉原来的连接） */
-  readonly resetStore: (options?: ProbeStoreOptions) => void
+  readonly resetStore: (options?: ProbeStoreOptions) => Promise<void>
+  readonly authorizeSession: () => Promise<Plain<Awaited<ReturnType<DraftStore['bindSession']>>>>
+  readonly bindSession: (permit: DraftSessionPermit) => Promise<Plain<Awaited<ReturnType<DraftStore['bindSession']>>>>
+  readonly restore: (input: ProbeDraftInput, now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['restoreDraft']>>>>
+  readonly retire: (key: DraftKey, now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['retireWriter']>>>>
+  readonly recordLost: (key: DraftKey, now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['recordLost']>>>>
+  readonly listNotices: (userId: string) => Promise<Plain<Awaited<ReturnType<DraftStore['listNotices']>>>>
+  readonly clearNotice: (key: DraftKey, expectedAt?: number) => Promise<Plain<Awaited<ReturnType<DraftStore['clearNotice']>>>>
   readonly register: (key: DraftKey, writer: WriterIdentity, options: { readonly now: number, readonly force: boolean }) => Promise<ProbeRegisterOutcome>
   readonly write: (input: ProbeDraftInput, options?: { readonly adoptSeq?: number }) => Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>
   /** 开始一次写入、不等它：交回编号，之后经 settled 取结果（两个标签页的竞争） */
@@ -104,17 +112,20 @@ export interface OutboxProbe {
   readonly read: (key: DraftKey) => Promise<ProbeRead | { readonly kind: 'absent' } | Plain<StoreProblem>>
   readonly list: (userId: string) => Promise<{ readonly kind: 'listed', readonly drafts: readonly ListedDraft[] } | Plain<StoreProblem>>
   readonly remove: (key: DraftKey, expectedSeq?: number) => Promise<Plain<Awaited<ReturnType<DraftStore['removeDraft']>>>>
-  readonly removeUser: (userId: string) => Promise<Plain<Awaited<ReturnType<DraftStore['removeUserData']>>>>
-  readonly retireUser: (userId: string, now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['retireUser']>>>>
-  readonly purge: (now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['purgeExpired']>>>>
+  readonly removeUser: (permit: UserCleanupPermit) => Promise<Plain<Awaited<ReturnType<DraftMaintenanceStore['removeUserData']>>>>
+  readonly retireUser: (permit: UserCleanupPermit, now: number) => Promise<Plain<Awaited<ReturnType<DraftMaintenanceStore['retireUser']>>>>
+  readonly purge: (now: number) => Promise<Plain<Awaited<ReturnType<DraftMaintenanceStore['purgeExpired']>>>>
   readonly close: () => void
   /** 列表的标记（draft-index.ts） */
   readonly draftIds: (userId: string) => Promise<readonly string[]>
   /** 直接看库、改库，扮演别的页面 */
   readonly database: {
+    /** 显式创建旧 v1 三仓库并存下真实密文、写入者与提示，不经过当前版本的打开器。 */
+    readonly seedDraft: (input: ProbeDraftInput) => Promise<void>
+    readonly seedVersionOne: (input: ProbeDraftInput) => Promise<void>
     readonly describe: () => Promise<ProbeDatabaseShape | null>
     /** 库里的原样记录（字节写成十六进制）；没有时为 null */
-    readonly getRaw: (store: string, key: DraftKey) => Promise<Record<string, unknown> | null>
+    readonly getRaw: (store: string, key: DraftKey | string) => Promise<Record<string, unknown> | null>
     /** 绕过存储与 AAD，直接改一条草稿的字段（字段值原样写进去；iv、ciphertext 按十六进制给出） */
     readonly patchDraft: (key: DraftKey, patch: Readonly<Record<string, unknown>>) => Promise<void>
     /** 直接写一条原样的记录（形状不对、更新的格式） */
@@ -178,18 +189,6 @@ function fromHex(text: string): Uint8Array<ArrayBuffer> {
   for (let index = 0; index < bytes.length; index += 1)
     bytes[index] = Number.parseInt(text.slice(index * 2, index * 2 + 2), 16)
   return bytes
-}
-
-function probeError(error: unknown): ProbeError {
-  if (typeof error === 'object' && error !== null && 'name' in error && 'message' in error)
-    return { name: String(error.name), message: String(error.message) }
-  return { name: 'Error', message: String(error) }
-}
-
-function plain<T extends { readonly kind: string }>(outcome: T): Plain<T> {
-  if (outcome.kind === 'failed' && 'error' in outcome)
-    return { ...outcome, error: probeError(outcome.error) } as Plain<T>
-  return outcome as Plain<T>
 }
 
 /** 随机的 base64 文字：几乎压不动，写满的用例按它估算大小。getRandomValues 一次最多 65536 字节，分段取 */
@@ -298,6 +297,8 @@ function rawOf(value: unknown): Record<string, unknown> | null {
 export function installOutboxProbe(target: Window): OutboxProbe {
   let key: LocalKeyHandle | undefined
   let store: DraftStore = createDraftStore({ blockedTimeoutMs: 1000 })
+  let fixturePermit: DraftSessionPermit | undefined
+  let maintenance = createDraftMaintenanceStore({ blockedTimeoutMs: 1000 })
   const operations = new Map<number, Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>>()
   const held = new Map<number, IDBDatabase>()
   const heldTransactions = new Map<number, { readonly release: () => void, readonly done: Promise<void>, readonly db: IDBDatabase }>()
@@ -371,15 +372,27 @@ export function installOutboxProbe(target: Window): OutboxProbe {
   }
 
   const probe: OutboxProbe = {
+    fence: createSessionFenceProbe(),
     names: { database: OUTBOX_DATABASE_NAME, version: OUTBOX_DATABASE_VERSION, drafts: DRAFTS_STORE, writers: WRITERS_STORE },
     chooseKey: async (version, rawHex) => {
       const raw = rawHex === undefined ? crypto.getRandomValues(new Uint8Array(32)) : fromHex(rawHex)
       key = { version, key: await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']) }
       raw.fill(0)
     },
-    resetStore: (options = {}) => {
+    authorizeSession: async () => {
+      const permit = await requestProbeSessionPermit()
+      const bound = await store.bindSession(permit)
+      if (bound.kind === 'bound')
+        fixturePermit = permit
+      return plain(bound)
+    },
+    resetStore: async (options = {}) => {
       store.close()
+      maintenance.close()
+      maintenance = createDraftMaintenanceStore({ blockedTimeoutMs: options.blockedTimeoutMs ?? 1000, factory: factoryOf(options.factory) })
       store = createDraftStore({ blockedTimeoutMs: options.blockedTimeoutMs ?? 1000, factory: factoryOf(options.factory) })
+      if (fixturePermit !== undefined)
+        await store.bindSession(fixturePermit)
     },
     register: async (draftKey, writer, options) => {
       const outcome = await store.registerWriter(draftKey, writer, options)
@@ -430,6 +443,12 @@ export function installOutboxProbe(target: Window): OutboxProbe {
       operations.delete(operation)
       return pending
     },
+    bindSession: async permit => plain(await store.bindSession(permit)),
+    restore: async (input, now) => plain(await store.restoreDraft(await seal(input), { now })),
+    retire: async (draftKey, now) => plain(await store.retireWriter(draftKey, { now })),
+    recordLost: async (draftKey, now) => plain(await store.recordLost(draftKey, { now })),
+    listNotices: async userId => plain(await store.listNotices(userId)),
+    clearNotice: async (draftKey, expectedAt) => plain(await store.clearNotice(draftKey, expectedAt)),
     replace: async input => plain(await store.replaceDraft(await seal(input))),
     confirm: async (draftKey, writer, confirmedSeq, rebased) => plain(await store.confirmDraft(draftKey, writer, confirmedSeq, rebased === undefined ? undefined : await seal(rebased))),
     read: async (draftKey) => {
@@ -441,6 +460,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
           return opened(outcome)
         case 'absent':
         case 'quota':
+        case 'session-invalid':
         case 'unavailable':
         case 'failed':
           return plain(outcome)
@@ -448,12 +468,50 @@ export function installOutboxProbe(target: Window): OutboxProbe {
     },
     list: async userId => plain(await store.listDrafts(userId)),
     remove: async (draftKey, expectedSeq) => plain(await store.removeDraft(draftKey, expectedSeq)),
-    removeUser: async userId => plain(await store.removeUserData(userId)),
-    retireUser: async (userId, now) => plain(await store.retireUser(userId, { now })),
-    purge: async now => plain(await store.purgeExpired(now)),
-    close: () => store.close(),
+    removeUser: async userId => plain(await maintenance.removeUserData(userId)),
+    retireUser: async (userId, now) => plain(await maintenance.retireUser(userId, { now })),
+    purge: async now => plain(await maintenance.purgeExpired(now)),
+    close: () => {
+      store.close()
+      maintenance.close()
+    },
     draftIds: async userId => [...await draftDocumentIds(userId)].sort(),
     database: {
+      seedDraft: async (input) => {
+        const draft = await seal(input)
+        await withExisting(async db => new Promise<void>((resolve, reject) => {
+          const tx = db.transaction([DRAFTS_STORE, WRITERS_STORE], 'readwrite', { durability: 'strict' })
+          tx.oncomplete = () => resolve()
+          tx.onabort = () => reject(tx.error ?? new Error('测试原件写入失败'))
+          tx.objectStore(DRAFTS_STORE).put(draft)
+          tx.objectStore(WRITERS_STORE).put({ userId: draft.userId, documentId: draft.documentId, writeEpoch: draft.writeEpoch, writerId: draft.writerId, lastDraftSeq: draft.draftSeq, registeredAt: draft.updatedAt })
+        }))
+      },
+      seedVersionOne: async (input) => {
+        const draft = await seal(input)
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const pending = indexedDB.open(OUTBOX_DATABASE_NAME, 1)
+          pending.onupgradeneeded = () => {
+            for (const name of [DRAFTS_STORE, WRITERS_STORE, NOTICES_STORE])
+              pending.result.createObjectStore(name, { keyPath: [...OUTBOX_KEY_PATH] })
+          }
+          pending.onsuccess = () => resolve(pending.result)
+          pending.onerror = () => reject(pending.error ?? new Error('建旧库失败'))
+        })
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction([DRAFTS_STORE, WRITERS_STORE, NOTICES_STORE], 'readwrite', { durability: 'strict' })
+            tx.oncomplete = () => resolve()
+            tx.onabort = () => reject(tx.error ?? new Error('旧记录写入失败'))
+            tx.objectStore(DRAFTS_STORE).put(draft)
+            tx.objectStore(WRITERS_STORE).put({ userId: draft.userId, documentId: draft.documentId, writeEpoch: draft.writeEpoch, writerId: draft.writerId, lastDraftSeq: draft.draftSeq, registeredAt: draft.updatedAt })
+            tx.objectStore(NOTICES_STORE).put({ userId: draft.userId, documentId: draft.documentId, kind: 'restored', at: draft.updatedAt })
+          })
+        }
+        finally {
+          db.close()
+        }
+      },
       describe: async () => {
         const db = await openExisting()
         if (db === null)
@@ -475,7 +533,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
         }
       },
       getRaw: async (store, draftKey) => withExisting(async (db) => {
-        const value: unknown = await request(() => db.transaction(store, 'readonly').objectStore(store).get([draftKey.userId, draftKey.documentId]))
+        const value: unknown = await request(() => db.transaction(store, 'readonly').objectStore(store).get(typeof draftKey === 'string' ? draftKey : [draftKey.userId, draftKey.documentId]))
         return rawOf(value)
       }),
       patchDraft: async (draftKey, patch) => withExisting(async (db) => {
@@ -620,9 +678,9 @@ export function installOutboxProbe(target: Window): OutboxProbe {
         failures.push(name)
     },
     transactions: () => [...recorded],
-    pipeline: createPipelineProbe({ key: () => key, store: () => store }),
-    session: createOutboxSessionProbe({ key: () => key }),
-    working: createWorkingDraftProbe({ key: () => key }),
+    pipeline: createPipelineProbe({ permit: () => fixturePermit, key: () => key, store: () => ({ ...store, ...maintenance }) }),
+    session: createOutboxSessionProbe({ permit: () => fixturePermit, key: () => key }),
+    working: createWorkingDraftProbe({ permit: () => fixturePermit, key: () => key }),
   }
   target[OUTBOX_PROBE_NAME] = probe
   return probe

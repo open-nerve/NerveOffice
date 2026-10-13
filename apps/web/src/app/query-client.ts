@@ -1,5 +1,6 @@
 import type { ExpiredReason } from '../shared/lib/login-path.ts'
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
+import { SESSION_QUERY_KEY } from '../features/auth/index.ts'
 import { isAuthenticationError, isCsrfTokenError, isPermissionDeniedError } from '../shared/api/index.ts'
 import { QUERY_CLIENT_DEFAULTS } from '../shared/api/query-defaults.ts'
 
@@ -143,7 +144,7 @@ export function createQueryClient(events: SessionEvents): QueryClient {
     else if (isAuthenticationError(error) && !handlesAuthentication(meta))
       events.unauthenticated()
   }
-  return new QueryClient({
+  const client = new QueryClient({
     queryCache: new QueryCache({ onSuccess: () => events.requestSucceeded(), onError: (error, query) => onRequestError(error, query.meta) }),
     mutationCache: new MutationCache({
       onSuccess: (_data, _variables, _context, mutation) => {
@@ -165,4 +166,7 @@ export function createQueryClient(events: SessionEvents): QueryClient {
     // 重试与断网时的行为与编辑器页给分享对话框用的请求缓存相同（shared/api/query-defaults.ts）
     defaultOptions: QUERY_CLIENT_DEFAULTS,
   })
+  // 接受邀请/登录可能先写缓存、后挂查询；这条路径同样要保留经过确认的原会话响应。
+  client.setQueryDefaults(SESSION_QUERY_KEY, { structuralSharing: false })
+  return client
 }

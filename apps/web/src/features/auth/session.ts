@@ -4,7 +4,7 @@ import type { AdoptRenewedSession } from '../../shared/lib/renewed-session.ts'
 import { sessionResponseSchema } from '@nerve-office/contracts'
 import { queryOptions } from '@tanstack/react-query'
 import { z } from 'zod'
-import { apiRequest, isAuthenticationError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
+import { apiRequest, isAuthenticationError, requestSession, requestWithLocalSession, setCsrfToken } from '../../shared/api/index.ts'
 
 export const SESSION_QUERY_KEY = ['auth', 'session'] as const
 
@@ -58,6 +58,8 @@ export function sessionQueryOptions() {
   return queryOptions({
     queryKey: SESSION_QUERY_KEY,
     queryFn: async ({ signal }) => fetchSession(signal),
+    // 本机资格关联原响应对象；深层复用会丢失新许可，或在字段相同时沿用旧响应的许可。
+    structuralSharing: false,
     // 会话在一个标签页里长期有效：过期时任何请求都会得到 401，由全局处理回到登录页；别的标签页换了人时由全局处理重新确认（app/runtime.ts）。
     // 失败的重试与其他查询相同：网络与 5xx 重试一次，未登录不重试（审查 B20）
     staleTime: Infinity,
@@ -68,7 +70,7 @@ export function sessionQueryOptions() {
 }
 
 export async function login(request: LoginRequest): Promise<SessionResponse> {
-  const session = await apiRequest('/api/auth/login', { method: 'POST', body: request, schema: sessionResponseSchema })
+  const session = await requestWithLocalSession('mutation', async () => apiRequest('/api/auth/login', { method: 'POST', body: request, schema: sessionResponseSchema }))
   setCsrfToken(session.csrfToken)
   return session
 }

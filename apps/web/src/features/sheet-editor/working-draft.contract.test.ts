@@ -1,10 +1,10 @@
-import type { DraftPreparation, PreparedDraft, WorkingDraftOptions } from './working-draft.ts'
+import type { DraftPreparation, PreparedDraft, WorkingDraftOptions } from '../../shared/local-drafts/working-draft.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createMemoryWorkingDraft } from '../../shared/local-drafts/memory-working-draft.ts'
 import * as codec from '../../shared/outbox/draft-codec.ts'
 import { CLIENT_INSTANCE_ID, sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
+import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { deferred } from '../../shared/outbox/outbox-lock.test-support.ts'
-import { settle } from './fake-lease-clock.test-support.ts'
-import { createMemoryWorkingDraft } from './memory-working-draft.ts'
 import { persistentHarness } from './outbox/persistent-working-draft.test-support.ts'
 import { createPersistentWorkingDraft } from './outbox/persistent-working-draft.ts'
 

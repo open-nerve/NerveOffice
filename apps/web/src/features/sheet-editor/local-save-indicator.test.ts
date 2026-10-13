@@ -1,6 +1,6 @@
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
+import type { DraftMemoryReason } from '../../shared/local-drafts/working-draft.ts'
 import type { LocalSaveView } from './editing-session.ts'
-import type { DraftMemoryReason } from './working-draft.ts'
 import { describe, expect, it } from 'vitest'
 import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { localSaveIndicator } from './local-save-indicator.ts'
@@ -76,6 +76,7 @@ describe('本机事实与连接提示', () => {
     ['no-key', '密钥'],
     ['unsupported', '不支持'],
     ['unavailable', '存储不可用'],
+    ['session-invalid', '登录状态需要重新确认'],
     ['existing-draft', '已有草稿'],
     ['worker-failed', '后台保存'],
     ['fenced', '写入资格'],

@@ -626,6 +626,7 @@ describe('多个标签页（审查 B6）', () => {
     const pending = deferred()
     api.on('GET /api/auth/session', pending.handler)
     otherTab.announce()
+    await waitFor(() => expect(requestCount(api, 'GET /api/auth/session')).toBe(2))
     api.on('GET /api/auth/session', () => json(200, OTHER_SESSION))
     otherTab.announce()
     pending.resolve(json(200, SESSION))

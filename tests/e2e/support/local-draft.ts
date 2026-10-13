@@ -45,7 +45,7 @@ export async function observeLocalSaveOrder(page: Page): Promise<void> {
             return
           const type = this.calls.get(reply.id)
           this.calls.delete(reply.id)
-          if (type === 'register' || type === 'write' || type === 'adopt' || type === 'mark-in-flight')
+          if (type === 'bind-session' || type === 'register' || type === 'write' || type === 'adopt' || type === 'mark-in-flight')
             events.push(`${type}:${reply.ok === true ? reply.result?.kind : 'failed'}`)
         })
       }

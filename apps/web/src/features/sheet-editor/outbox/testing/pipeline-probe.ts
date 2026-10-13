@@ -9,6 +9,7 @@
 // 按生产的格式（mirror-slot.ts）校验；库与镜像合一的清理（local-cleanup.ts）在页面里调，与 P4 一样；用完按用户删掉镜像的目录。
 // 不引用编辑器页的时钟模块（它带着请求层与 zod，见 outbox-probe.ts 开头的说明）：看门狗用这里的计时器
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
+import type { DraftMaintenanceStore } from '../../../../shared/outbox/draft-maintenance-store.ts'
 import type { DraftObservation } from '../../../../shared/outbox/draft-observation.ts'
 import type { DraftKey, DraftMeta, InFlightSave } from '../../../../shared/outbox/draft-record.ts'
 import type { ReconcileAllOutcome } from '../../../../shared/outbox/draft-recovery.ts'
@@ -17,8 +18,9 @@ import type { CaptureToWrite, CaptureWritten, ClearNoticeResult, ConfirmResult, 
 import type { FailureDescription } from '../../../../shared/outbox/failure.ts'
 import type { AbandonOutcome, PurgeOutcome, UserCleanupOutcome } from '../../../../shared/outbox/local-cleanup.ts'
 import type { MirrorRemoveOutcome } from '../../../../shared/outbox/mirror-directory.ts'
+import type { OutboxWorkerFailure, OutboxWorkerReady, WorkerLike } from '../../../../shared/outbox/outbox-worker-client.ts'
+import type { DraftSessionPermit, UserCleanupCause, UserCleanupPermit } from '../../../../shared/outbox/session-fence.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
-import type { OutboxWorkerFailure, OutboxWorkerReady, WorkerLike } from '../outbox-worker-client.ts'
 import type { OpfsProbeCall, OpfsProbeReply } from './opfs-probe.worker.ts'
 import { gunzipBytes, openDraft, sha256Hex } from '../../../../shared/outbox/draft-codec.ts'
 import { draftMetaOf } from '../../../../shared/outbox/draft-record.ts'
@@ -29,7 +31,8 @@ import { describeFailure } from '../../../../shared/outbox/failure.ts'
 import { createLocalCleanup } from '../../../../shared/outbox/local-cleanup.ts'
 import { opfsMirrorDirectory, SLOT_FILE_NAMES } from '../../../../shared/outbox/mirror-directory.ts'
 import { parseSlot } from '../../../../shared/outbox/mirror-slot.ts'
-import { createOutboxWorker, createOutboxWorkerClient } from '../outbox-worker-client.ts'
+import { createOutboxWorker, createOutboxWorkerClient } from '../../../../shared/outbox/outbox-worker-client.ts'
+import { createSessionStore } from '../../../../shared/outbox/session-store.ts'
 
 export type ProbeHost = 'in-process' | 'worker'
 export type ProbeWorkerScript = 'production' | 'recording' | 'missing'
@@ -84,6 +87,7 @@ export type ProbeSlot
 export type ProbeCorruption = { readonly truncate: number } | { readonly fill: number, readonly value: number } | { readonly at: number, readonly bytes: readonly number[] }
 
 export interface ProbePipeline {
+  readonly bindSession: (id: number, permit: DraftSessionPermit) => ReturnType<DraftWriter['bindSession']>
   /** 建一个管道：交回编号与握手的结果（Worker 等握手；进程内一律 ready） */
   readonly create: (options: ProbePipelineOptions) => Promise<{ readonly id: number, readonly ready: OutboxWorkerReady }>
   /** 交给管道的密钥：探针当前的密钥（chooseKey 选的那一把；Worker 经结构化克隆拿到它），或者 none（丢掉密钥） */
@@ -123,7 +127,12 @@ export interface ProbePipeline {
   /** 清除一条提示 */
   readonly clearNotice: (id: number, key: DraftKey, expectedAt?: number) => Promise<ClearNoticeResult>
   /** 库与镜像合一的清理（S9，local-cleanup.ts）：在页面里调（与 P4 一样），用探针的存储与生产的镜像目录；出错折成名字与消息 */
-  readonly cleanupUser: (userId: string) => Promise<Plain<UserCleanupOutcome>>
+  readonly beginCleanup: (cause: UserCleanupCause) => Promise<Plain<Awaited<ReturnType<ReturnType<typeof createLocalCleanup>['beginUser']>>>>
+  readonly cleanupUser: (permit: UserCleanupPermit) => Promise<Plain<UserCleanupOutcome>>
+  /** 只暂停真实镜像删除前的测试时序，不替代许可检查或磁盘操作。 */
+  readonly pauseCleanup: () => void
+  readonly cleanupPaused: () => boolean
+  readonly resumeCleanup: () => void
   readonly cleanupAbandon: (key: DraftKey, expectedSeq?: number) => Promise<Plain<AbandonOutcome>>
   readonly cleanupExpired: (now: number) => Promise<PlainPurge>
   /** 镜像的两个槽位文件（a、b）读出来的样子：要先让发件箱 Worker 放开句柄 */
@@ -140,8 +149,9 @@ export interface ProbePipeline {
 
 /** 探针给管道的：它当前的密钥与存储（storedGzip 用它读库） */
 export interface PipelineProbeDeps {
+  readonly permit: () => DraftSessionPermit | undefined
   readonly key: () => LocalKeyHandle | undefined
-  readonly store: () => DraftStore
+  readonly store: () => DraftStore & DraftMaintenanceStore
 }
 
 /** 清理的结果里库的 failed 带着原样的错误：折成名字与消息，才能经 page.evaluate 交回 */
@@ -217,7 +227,25 @@ interface Pipeline {
 }
 
 export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
-  const localCleanup = () => createLocalCleanup({ store: deps.store(), directory: opfsMirrorDirectory(), now: () => Date.now() })
+  const sessions = createSessionStore({ blockedTimeoutMs: 1000 })
+  let cleanupWait: { readonly promise: Promise<void>, readonly release: () => void, entered: boolean } | undefined
+  const directory = opfsMirrorDirectory()
+  const localCleanup = () => createLocalCleanup({
+    sessions,
+    store: deps.store(),
+    directory: {
+      ...directory,
+      removeDocument: async (key) => {
+        const held = cleanupWait
+        if (held !== undefined) {
+          held.entered = true
+          await held.promise
+        }
+        return directory.removeDocument(key)
+      },
+    },
+    now: () => Date.now(),
+  })
   const pipelines = new Map<number, Pipeline>()
   let nextId = 1
   let opfsWorker: Worker | undefined
@@ -283,11 +311,17 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
   }
 
   return {
+    bindSession: async (id, permit) => pipelineOf(id).writer.bindSession(permit),
     create: async (options) => {
+      const permit = deps.permit()
       const id = nextId
       nextId += 1
       if (options.host === 'in-process') {
         const writer = createDraftWriter({ store: createDraftStore({ blockedTimeoutMs: 3_000 }), now: () => Date.now() })
+        if (permit !== undefined && (await writer.bindSession(permit)).kind !== 'bound') {
+          writer.dispose()
+          throw new Error('探针宿主绑定失败')
+        }
         pipelines.set(id, { writer, broken: () => undefined, transactions: [], channel: undefined })
         return { id, ready: { kind: 'ready' } }
       }
@@ -300,7 +334,12 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
         channel.onmessage = event => transactions.push(event.data as ProbeWorkerTransaction)
       const client = createOutboxWorkerClient({ create: workerFor(script, name), clock: pageClock, requestTimeoutMs: options.requestTimeoutMs ?? 15_000, keepAlive: options.keepAlive ?? true })
       pipelines.set(id, { writer: client, broken: client.broken, transactions, channel })
-      return { id, ready: await client.ready() }
+      const ready = await client.ready()
+      if (ready.kind === 'ready' && permit !== undefined && (await client.bindSession(permit)).kind !== 'bound') {
+        client.dispose()
+        throw new Error('探针 Worker 绑定失败')
+      }
+      return { id, ready }
     },
     setKey: async (id, choice) => {
       const key = choice === 'probe' ? deps.key() : undefined
@@ -349,6 +388,8 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
           return { kind: read.kind }
         case 'quota':
           return { kind: 'quota' }
+        case 'session-invalid':
+          return { kind: 'session-invalid' }
         case 'unavailable':
           return { kind: 'unavailable', reason: read.reason }
         case 'failed':
@@ -370,7 +411,25 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
     pageReconcile: async userId => reconcileAll(pageReconciliation({ store: deps.store(), directory: opfsMirrorDirectory(), now: () => Date.now() }), userId),
     notices: async (id, userId) => pipelineOf(id).writer.notices(userId),
     clearNotice: async (id, key, expectedAt) => pipelineOf(id).writer.clearNotice(key, expectedAt),
-    cleanupUser: async userId => plain(await localCleanup().removeUser(userId)),
+    beginCleanup: async (cause) => {
+      const permit = deps.permit()
+      return permit === undefined ? { kind: 'session-invalid' } : plain(await localCleanup().beginUser(permit, cause))
+    },
+    cleanupUser: async permit => plain(await localCleanup().removeUser(permit)),
+    pauseCleanup: () => {
+      if (cleanupWait !== undefined)
+        throw new Error('已有暂停的清理')
+      let release!: () => void
+      const promise = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      cleanupWait = { promise, release, entered: false }
+    },
+    cleanupPaused: () => cleanupWait?.entered ?? false,
+    resumeCleanup: () => {
+      cleanupWait?.release()
+      cleanupWait = undefined
+    },
     cleanupAbandon: async (key, expectedSeq) => plain(await localCleanup().abandon(key, expectedSeq)),
     cleanupExpired: async now => plainPurge(await localCleanup().purgeExpired(now)),
     mirrorSlots: async key => [await slotOf(key, 0), await slotOf(key, 1)],
@@ -389,6 +448,9 @@ export function createPipelineProbe(deps: PipelineProbeDeps): ProbePipeline {
         pipeline.channel?.close()
       }
       pipelines.clear()
+      sessions.close()
+      cleanupWait?.release()
+      cleanupWait = undefined
       opfsWorker?.terminate()
       opfsWorker = undefined
     },

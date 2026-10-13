@@ -9,6 +9,7 @@ import { readWriterRecord } from './draft-record.ts'
 import { fakeDraftStore } from './draft-store.test-support.ts'
 import { createLocalCleanup } from './local-cleanup.ts'
 import { fakeMirrorDirectory } from './mirror-directory.test-support.ts'
+import { testCleanupPermit, testCleanupSessions } from './session-fence.test-support.ts'
 import { decideRestore, decideWrite, isRetired, LOCAL_DRAFT_RETENTION_MS, RETIRED_WRITER_ID } from './writer-fence.ts'
 
 const A: DraftKey = { userId: USER_ID, documentId: DOCUMENT_ID }
@@ -34,7 +35,7 @@ function setup(override: (directory: MirrorDirectory) => MirrorDirectory = direc
   return {
     store,
     files,
-    cleanup: createLocalCleanup({ store: store.store, directory: override(files.directory), now: () => wall }),
+    cleanup: createLocalCleanup({ sessions: testCleanupSessions(), store: store.store, directory: override(files.directory), now: () => wall }),
     advance: (ms) => {
       wall += ms
     },
@@ -82,7 +83,7 @@ describe('按用户清理（退出登录、账户停用）：库与镜像一起�
     store.putRaw('writers', C, sampleWriter({ ...C }))
     putRecords(store, THEIRS)
     const held = store.holdNext('removeUserData')
-    const cleaning = cleanup.removeUser(USER_ID)
+    const cleaning = cleanup.removeUser(testCleanupPermit())
     await held.reached
     try {
       expect([A, B, C].map(key => retired(store, key))).toEqual([true, true, true])
@@ -101,10 +102,10 @@ describe('按用户清理（退出登录、账户停用）：库与镜像一起�
     putRecords(store, A)
     putMirror(files, A)
     store.failNext('retireUser', { kind: 'quota' })
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'quota' })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'quota' })
     expect(retired(store, A)).toBe(false)
     expect(await hasMirror(files, A)).toBe(true)
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'cleared', pending: [] })
     expect(await hasMirror(files, A)).toBe(false)
   })
 
@@ -116,7 +117,7 @@ describe('按用户清理（退出登录、账户停用）：库与镜像一起�
     putRecords(store, C)
     putRecords(store, THEIRS)
     putMirror(files, THEIRS)
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'cleared', pending: [] })
     for (const key of [A, B, C]) {
       expect(inStore(store, key), JSON.stringify(key)).toEqual([false, false, false])
       expect(await hasMirror(files, key), JSON.stringify(key)).toBe(false)
@@ -134,7 +135,7 @@ describe('按用户清理（退出登录、账户停用）：库与镜像一起�
     putMirror(files, B)
     const release = files.holdElsewhere(A)
     advance(1_000)
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [A] })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'pending', pending: [A] })
     expect(inStore(store, A)).toEqual([true, true, true])
     expect(readWriterRecord(store.rawWriter(A))).toEqual({ ...A, writeEpoch: 3, writerId: RETIRED_WRITER_ID, lastDraftSeq: 7, registeredAt: NOW + 1_000 })
     expect(await hasMirror(files, A)).toBe(true)
@@ -146,7 +147,7 @@ describe('按用户清理（退出登录、账户停用）：库与镜像一起�
     expect(decideRestore(tombstone, undefined, sampleMeta({ ...A, draftSeq: 8 }), NOW)).toEqual({ kind: 'skip', reason: 'retired' })
 
     release()
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'cleared', pending: [] })
     expect(inStore(store, A)).toEqual([false, false, false])
     expect(await users(files)).toEqual({ kind: 'listed', userIds: [] })
   })
@@ -156,20 +157,20 @@ describe('按用户清理（退出登录、账户停用）：库与镜像一起�
     store.putRaw('drafts', A, sampleStoredDraft({ ...A, draftSeq: 5, inFlight: null }))
     putMirror(files, A)
     files.holdElsewhere(A)
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [A] })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'pending', pending: [A] })
     expect(readWriterRecord(store.rawWriter(A))).toMatchObject({ writerId: RETIRED_WRITER_ID, lastDraftSeq: 5, writeEpoch: 1 })
   })
 
   it('没有 OPFS：只清库；列不出镜像的目录：什么也不动，如实交回', async () => {
     const unsupported = setup(directory => ({ ...directory, listDocuments: async () => ({ kind: 'unsupported' }), removeUser: async () => ({ kind: 'unsupported' }) }))
     putRecords(unsupported.store, A)
-    expect(await unsupported.cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await unsupported.cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'cleared', pending: [] })
     expect(inStore(unsupported.store, A)).toEqual([false, false, false])
 
     const failing = setup(directory => ({ ...directory, listDocuments: async () => ({ kind: 'failed', error: new TypeError('坏了') }) }))
     putRecords(failing.store, A)
     putMirror(failing.files, A)
-    expect(await failing.cleanup.removeUser(USER_ID)).toMatchObject({ kind: 'failed', error: { name: 'TypeError' } })
+    expect(await failing.cleanup.removeUser(testCleanupPermit())).toMatchObject({ kind: 'failed', error: { name: 'TypeError' } })
     expect(inStore(failing.store, A)).toEqual([true, true, true])
     expect(await hasMirror(failing.files, A)).toBe(true)
   })
@@ -179,9 +180,9 @@ describe('按用户清理（退出登录、账户停用）：库与镜像一起�
     putRecords(store, A)
     putMirror(files, A)
     store.failNext('removeUserData', { kind: 'quota' })
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'quota' })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'quota' })
     expect(inStore(store, A)).toEqual([true, true, true])
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'cleared', pending: [] })
     expect(inStore(store, A)).toEqual([false, false, false])
   })
 })

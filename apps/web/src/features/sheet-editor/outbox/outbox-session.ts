@@ -1,3 +1,5 @@
+import type { DraftMemoryReason } from '../../../shared/local-drafts/working-draft.ts'
+import type { LeaseClock } from '../../../shared/outbox/clock.ts'
 // 一次编辑会话的持久写入资格。宿主只管放置；此处唯一负责暂停、核对租约和登记，调用方拿不到绕过资格检查的 DraftWriter。
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { MirrorStatus } from '../../../shared/outbox/draft-mirror.ts'
@@ -6,15 +8,16 @@ import type { DraftKey, InFlightSave } from '../../../shared/outbox/draft-record
 import type { AdoptionCapture, CaptureToWrite, CaptureWritten, ConfirmResult, DedupeKey, DraftRead, KeyChange, ObservedRemoveResult, ObserveResult, OpenedRecord, RecoveryProblem, ResealResult } from '../../../shared/outbox/draft-writer.ts'
 import type { FailureDescription } from '../../../shared/outbox/failure.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../../shared/outbox/local-key.ts'
+import type { OutboxHost } from '../../../shared/outbox/outbox-host.ts'
+import type { DraftSessionPermit } from '../../../shared/outbox/session-fence.ts'
 import type { PersistOutcome } from '../../../shared/outbox/storage-status.ts'
 import type { WriterIdentity } from '../../../shared/outbox/writer-fence.ts'
-import type { LeaseClock, LeaseVerdict } from '../edit-lease.ts'
-import type { DraftMemoryReason } from '../working-draft.ts'
-import type { OutboxHost } from './outbox-host.ts'
+import type { LeaseVerdict } from '../edit-lease.ts'
 import { describeFailure } from '../../../shared/outbox/failure.ts'
+import { createOutboxHost } from '../../../shared/outbox/outbox-host.ts'
+import { readDraftSessionPermit } from '../../../shared/outbox/session-fence.ts'
 import { requestPersistence } from '../../../shared/outbox/storage-status.ts'
 import { isSameWriter } from '../../../shared/outbox/writer-fence.ts'
-import { createOutboxHost } from './outbox-host.ts'
 
 /** 准备结果只保留事实；登记暂时读出的正文交还 GC，不能留在 state 或已完成的 ready Promise 里。 */
 export type ExistingDraftSummary = Exclude<OpenedRecord, { readonly kind: 'draft' }> | Omit<Extract<OpenedRecord, { readonly kind: 'draft' }>, 'gzip'>
@@ -61,6 +64,7 @@ export interface OutboxSession {
 }
 
 export interface OutboxSessionOptions {
+  readonly permit: () => DraftSessionPermit | undefined
   readonly enabled: boolean
   readonly recoverExisting?: boolean
   readonly clock?: LeaseClock
@@ -84,6 +88,7 @@ interface PreparedHost {
 }
 
 interface PreparationRun {
+  readonly permit: DraftSessionPermit | undefined
   readonly writeEpoch: number
   readonly generation: number
   readonly controller: AbortController
@@ -128,6 +133,7 @@ function verdictResult(verdict: LeaseVerdict): OutboxPreparation | undefined {
 export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSession {
   const clock = options.clock ?? recoveryClock
   let state: OutboxSessionState = { kind: 'preparing' }
+  let preparedPermit: DraftSessionPermit | undefined
   let active: PreparedHost | undefined
   let pending: PreparationRun | undefined
   let generation = 0
@@ -261,6 +267,8 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
         return finish(run, { kind: 'memory', reason: 'disabled' })
       if (!(options.supported ?? supported)())
         return finish(run, { kind: 'memory', reason: 'unsupported' })
+      if (run.permit === undefined || run.permit.userId !== options.key.userId)
+        return finish(run, { kind: 'memory', reason: 'session-invalid' })
       requestPersistOnce()
       if (verify) {
         const verdict = await options.confirm()
@@ -283,6 +291,13 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
         return finish(run, { kind: 'disposed' })
       if (host.broken())
         return finish(run, { kind: 'memory', reason: 'worker-failed' })
+      if (options.keeper.current() !== key)
+        return finish(run, { kind: 'memory', reason: 'no-key' })
+      const bound = await host.writer.bindSession(run.permit)
+      if (!current(run))
+        return finish(run, { kind: 'disposed' })
+      if (bound.kind !== 'bound')
+        return finish(run, { kind: 'memory', reason: bound.kind === 'session-invalid' ? 'session-invalid' : bound.kind === 'quota' ? 'quota' : 'unavailable', problem: bound })
       if (options.keeper.current() !== key)
         return finish(run, { kind: 'memory', reason: 'no-key' })
       const set = await host.writer.setKey(key)
@@ -326,7 +341,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       }
       if (registered.kind === 'superseded')
         return finish(run, { kind: 'memory', reason: 'fenced' })
-      return finish(run, { kind: 'memory', reason: host.broken() ? 'worker-failed' : registered.kind === 'quota' ? 'quota' : 'unavailable', problem: registered })
+      return finish(run, { kind: 'memory', reason: host.broken() ? 'worker-failed' : registered.kind === 'quota' ? 'quota' : registered.kind === 'session-invalid' ? 'session-invalid' : 'unavailable', problem: registered })
     }
     catch (error) {
       return finish(run, { kind: 'memory', reason: 'unavailable', problem: { kind: 'failed', error: describeFailure(error) } })
@@ -334,6 +349,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   }
 
   async function begin(verify: boolean): Promise<OutboxPreparation> {
+    preparedPermit = readDraftSessionPermit(options.permit())
     close(active?.host)
     active = undefined
     invalidateObservation()
@@ -346,7 +362,7 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
     const promise = new Promise<OutboxPreparation>((done) => {
       resolve = done
     })
-    const run: PreparationRun = { writeEpoch: writeEpoch(), generation, controller: new AbortController(), promise, host: undefined, stopped: undefined, recordKnown: false }
+    const run: PreparationRun = { permit: preparedPermit, writeEpoch: writeEpoch(), generation, controller: new AbortController(), promise, host: undefined, stopped: undefined, recordKnown: false }
     pending = run
     notify()
     void prepare(run, verify).then(resolve)
@@ -437,9 +453,9 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
   async function withFence<T extends { readonly kind: string }>(target: PreparedHost, work: () => Promise<T>): Promise<T> {
     const started = generation
     const result = await work()
-    if (result.kind === 'fenced' && generation === started && active === target && live()) {
+    if ((result.kind === 'fenced' || result.kind === 'session-invalid') && generation === started && active === target && live()) {
       suspended = true
-      stop({ kind: 'memory', reason: 'fenced' })
+      stop({ kind: 'memory', reason: result.kind })
     }
     return result
   }
@@ -562,6 +578,9 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
       return result
     },
     readRecovered: async () => {
+      const permit = preparedPermit
+      if (permit === undefined || permit.userId !== options.key.userId)
+        return { kind: 'session-invalid' }
       if (!live() || !recoveringAllowed || !options.enabled || !(options.supported ?? supported)())
         return { kind: 'failed', error: INACTIVE }
       const controller = new AbortController()
@@ -575,6 +594,11 @@ export function prepareOutboxSession(options: OutboxSessionOptions): OutboxSessi
         if (!live() || controller.signal.aborted || options.keeper.current() !== key)
           return { kind: 'failed', error: INACTIVE }
         recoveries.set(controller, host)
+        const bound = await host.writer.bindSession(permit)
+        if (!live() || controller.signal.aborted || options.keeper.current() !== key)
+          return { kind: 'failed', error: INACTIVE }
+        if (bound.kind !== 'bound')
+          return bound
         const installed = await host.writer.setKey(key)
         if (!live() || controller.signal.aborted || options.keeper.current() !== key)
           return { kind: 'failed', error: INACTIVE }

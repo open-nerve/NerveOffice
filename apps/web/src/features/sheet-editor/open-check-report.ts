@@ -7,7 +7,7 @@
 import type { OpenCheckFailure, OpenCheckFailureKind, OpenCheckReport } from '@nerve-office/contracts'
 import type { OpenCheck } from '../../editor/index.ts'
 import { ERROR_NAME_PATTERN, OPEN_CHECK_FAILURES_MAX, RESOURCE_NAME_PATTERN, THROWN_FAILURE_KINDS } from '@nerve-office/contracts'
-import { PAGE_CLIENT_FORMAT } from './client-format.ts'
+import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 
 /** 这一次创建的打开方式（read、edit）、起因（open、enter、refresh、exit、lost、reload）与载入的内容的修订号 */
 export type OpenCheckContext = Pick<OpenCheckReport, 'access' | 'trigger' | 'revision'>

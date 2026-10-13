@@ -862,6 +862,11 @@ const OUTBOX_FROM_PLATFORM = {
   regex: String.raw`(?:^|/)outbox/`,
   message: '平台页面对本机发件箱（shared/outbox/）只许按需 import() 列表的标记 draft-index.ts：静态引用（含 import type 与再导出）会把发件箱带进平台页面的首屏（首屏只剩约 4 KiB，M4-P1 设计 §3.1）',
 }
+/** P4：共享恢复与副本协调只按需进入平台，避免本机草稿能力进入首屏。 */
+const LOCAL_DRAFTS_FROM_PLATFORM = {
+  regex: String.raw`(?:^|/)local-drafts/`,
+  message: '平台页面对共享草稿协调（shared/local-drafts/）只许按需 import()：静态引用（含 import type 与再导出）会把恢复能力带进平台首屏（M4-P4 S2）',
+}
 const OUTBOX_DYNAMIC_FROM_PLATFORM = {
   selector: String.raw`ImportExpression[source.value=/(?:^|\x2F)outbox\x2F(?!draft-index\.ts$)/]`,
   message: '平台页面对本机发件箱（shared/outbox/）只许按需 import() 列表的标记 draft-index.ts：别的文件（存储、编解码、本机密钥……）只给编辑器页与按需加载的本机草稿页（P4 另行放行）用（M4-P1 设计 §3.1）',
@@ -909,13 +914,13 @@ type OutboxDir = keyof typeof OUTBOX_DIRS
  * 合一的清理（页面调它；Worker 放弃草稿走 DraftWriter.remove）、Worker 的客户端（创建 Worker、引用编辑权）、测试构建里页面一侧的探针
  */
 const OUTBOX_MAIN_THREAD_ONLY: Readonly<Record<OutboxDir, readonly string[]>> = {
-  shared: ['local-key.ts', 'storage-status.ts', 'local-cleanup.ts'],
-  feature: ['outbox-worker-client.ts'],
+  shared: ['local-key.ts', 'storage-status.ts', 'local-cleanup.ts', 'draft-maintenance-store.ts', 'session-store.ts', 'outbox-worker-client.ts', 'outbox-host.ts', 'in-process-outbox-host.ts'],
+  feature: [],
   testing: ['outbox-probe.ts', 'pipeline-probe.ts', 'crash-probe.ts', 'outbox-review-probe.ts'],
 }
 /** 编辑器页 outbox/ 与 testing/ 里 Worker 一侧的文件（* 通配一段）；shared/outbox 里只在主线程用的之外都是 */
 const OUTBOX_WORKER_SIDE: Readonly<Record<Exclude<OutboxDir, 'shared'>, readonly string[]>> = {
-  feature: ['outbox-protocol.ts', 'outbox-worker-handler.ts', '*.worker.ts'],
+  feature: ['*.worker.ts'],
   testing: ['*.worker.ts', 'transaction-recorder.ts', 'mirror-recorder.ts', 'mirror-review.ts'],
 }
 /** Worker 一侧的文件引用发件箱各目录的文件时路径的前缀：shared 不引用编辑器页（模块边界），编辑器页的 outbox/ 不引用 testing/（只许动态引入） */
@@ -957,7 +962,7 @@ function outboxWorkerImports(from: OutboxDir): Linter.RuleEntry {
   const prefixes = OUTBOX_IMPORT_PREFIXES[from]
   const prefixRegex = (prefix: string): string => prefix.replaceAll('.', String.raw`\.`)
   const known = prefixes.map(([dir, prefix]) => prefixRegex(prefix) + (dir === 'shared' ? OUTBOX_ANY_FILE : outboxNamesRegex([...OUTBOX_WORKER_SIDE[dir], ...OUTBOX_MAIN_THREAD_ONLY[dir]])))
-  const mainThread = prefixes.map(([dir, prefix]) => prefixRegex(prefix) + outboxNamesRegex(OUTBOX_MAIN_THREAD_ONLY[dir]))
+  const mainThread = prefixes.filter(([dir]) => OUTBOX_MAIN_THREAD_ONLY[dir].length > 0).map(([dir, prefix]) => prefixRegex(prefix) + outboxNamesRegex(OUTBOX_MAIN_THREAD_ONLY[dir]))
   return ['error', {
     paths: [OUTBOX_ZOD_FREE_CONTRACTS],
     patterns: [
@@ -1191,12 +1196,12 @@ export default antfu(
   },
   {
     // 平台页面对本机发件箱只许按需引用列表的标记（M4-P1 设计 §3.1）：静态的引用一律不许。编辑器页（入口、sheet-editor 与编辑器）不受限，
-    // 发件箱内部不受限；测试代码不受限。同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上（页面自检的入口页另有更严的一块，在后面）
+    // 发件箱与共享恢复内部不受限；测试代码不受限。P4 共享恢复同样只按需加载。同名规则后者整体覆盖前者：测试限制一并带上
     name: 'nerve/web-outbox-platform-static',
     files: ['apps/web/src/**/*.{ts,tsx}'],
-    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**'],
     rules: {
-      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, OUTBOX_FROM_PLATFORM] }],
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, OUTBOX_FROM_PLATFORM, LOCAL_DRAFTS_FROM_PLATFORM] }],
     },
   },
   {
@@ -1204,7 +1209,7 @@ export default antfu(
     // 弹窗的文件与应用的入口另有自己的整组（入口只写副作用导入，本来就没有动态 import()），不在这一块里
     name: 'nerve/web-outbox-platform-dynamic',
     files: ['apps/web/src/**/*.{ts,tsx}'],
-    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/ui/dialog.tsx', 'apps/web/src/entries/*/main.{ts,tsx}'],
+    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**', 'apps/web/src/shared/ui/dialog.tsx', 'apps/web/src/entries/*/main.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX, OUTBOX_DYNAMIC_FROM_PLATFORM],
     },
@@ -1214,7 +1219,7 @@ export default antfu(
     // 被测试构建的探针引用，同样不引用。Worker 一侧的文件由下一块整体覆盖（更严的区域限制）
     name: 'nerve/web-outbox-zod-free',
     files: [`${OUTBOX_DIRS.shared}/**`],
-    ignores: [...TEST_CODE, `${OUTBOX_DIRS.shared}/local-key.ts`],
+    ignores: [...TEST_CODE, `${OUTBOX_DIRS.shared}/local-key.ts`, `${OUTBOX_DIRS.shared}/outbox-worker-client.ts`],
     rules: {
       'ts/no-restricted-imports': ['error', { paths: OUTBOX_ZOD_FREE_PATHS, patterns: [TEST_MODULES, ...OUTBOX_ZOD_FREE_PATTERNS] }],
     },
@@ -1227,7 +1232,7 @@ export default antfu(
     rules: { 'ts/no-restricted-imports': outboxWorkerImports('shared') },
   },
   {
-    // 编辑器页 outbox/ 里 Worker 一侧的文件：协议、Worker 里的处理、Worker 的入口（主线程的客户端不在此列）。
+    // 编辑器页 outbox/ 里新增的 Worker 入口仍自动受限；既有协议、处理器和入口已在 P4 移入 shared/outbox。
     // 上面 sheet-editor 那一块的限制（testing/ 只许动态引入）一并带上
     name: 'nerve/web-outbox-worker-feature',
     files: OUTBOX_WORKER_FILES.feature,

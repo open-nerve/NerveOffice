@@ -2,12 +2,13 @@
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { DraftKey, InFlightSave } from '../../../../shared/outbox/draft-record.ts'
 import type { LocalKeyKeeper } from '../../../../shared/outbox/local-key.ts'
+import type { WorkerLike } from '../../../../shared/outbox/outbox-worker-client.ts'
+import type { DraftSessionPermit } from '../../../../shared/outbox/session-fence.ts'
 import type { OutboxPreparation, OutboxSession, OutboxSessionState } from '../outbox-session.ts'
-import type { WorkerLike } from '../outbox-worker-client.ts'
 import { gunzipBytes } from '../../../../shared/outbox/draft-codec.ts'
-import { createOutboxHost } from '../outbox-host.ts'
+import { createOutboxHost } from '../../../../shared/outbox/outbox-host.ts'
+import { createOutboxWorker } from '../../../../shared/outbox/outbox-worker-client.ts'
 import { prepareOutboxSession } from '../outbox-session.ts'
-import { createOutboxWorker } from '../outbox-worker-client.ts'
 
 interface Options {
   readonly draft: DraftKey
@@ -34,7 +35,7 @@ interface Entry {
 
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }
 
-export function createOutboxSessionProbe(options: { readonly key: () => LocalKeyHandle | undefined }) {
+export function createOutboxSessionProbe(options: { readonly permit: () => DraftSessionPermit | undefined, readonly key: () => LocalKeyHandle | undefined }) {
   const entries = new Map<number, Entry>()
   const reads = new Map<number, Promise<Fact>>()
   let nextId = 0
@@ -69,6 +70,7 @@ export function createOutboxSessionProbe(options: { readonly key: () => LocalKey
         subscribe: () => () => {},
       }
       const session = prepareOutboxSession({
+        permit: options.permit,
         enabled: input.mode !== 'disabled',
         key: input.draft,
         writeEpoch: input.epoch,

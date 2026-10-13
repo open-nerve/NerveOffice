@@ -1,3 +1,5 @@
+import type { DraftCaptureRef, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
 // 自动保存的调度（00 号计划书 §7.2、§7.3，M3-P4 设计 §3.1–§3.8）：两级——捕获进内存里的"最近一次捕获"（一格，只留最新的；M4 换成发件箱），
 // 上传取它交给保存的状态机（save-coordinator.ts）。不依赖 Univer 与界面；时钟、编辑器、页面与保存的状态机都可注入，用假的做单元测试
 // （autosave.test.ts）。生命周期与保存的状态机相同（编辑模式进入编辑时建、去掉保存的状态机时去掉，设计 §3.10）。
@@ -20,10 +22,8 @@
 // - 测试构建的控制（设计 §3.14，S4 实现）：节奏与暂停经 AutosaveTuning 注入（hold 时定时触发的上传不发，立即上传照常；setLimits 换上限），
 //   每次捕获与上传经 observe 交出（log）；立即上传的 control 与切到后台同样的规则。
 import type { CaptureLimits, CaptureReason } from './capture-policy.ts'
-import type { LeaseClock } from './edit-lease.ts'
 import type { PreparedCapture, SaveCoordinator, SaveFailure, SaveOutcome, SaveStatus } from './save-coordinator.ts'
 import type { CaptureEditor, InputsSettled } from './snapshot-capture.ts'
-import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 import {
   AUTOSAVE_CAPTURE_MAX_MS,
   AUTOSAVE_CAPTURE_QUIET_MS,

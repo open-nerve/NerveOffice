@@ -108,12 +108,13 @@ test.describe('发件箱的记录', { tag: '@test-build' }, () => {
     test.skip(browserName === 'webkit', 'WebKit 没有覆盖配额的接口：Safari 上由真实 Safari 的复核以事务 abort 的回滚补上（P1 设计 §3.6 第 5 项）')
     const user = await createUser('ob-quota')
     await loginThroughApi(page, user)
-    await openOutboxProbe(page)
+    await openOutboxProbe(page, { authorize: false })
     // 配额要在本站第一次写 IndexedDB 之前设（M0 审查 S3）：探针挂上时还没有打开库
     expect(await probeDatabase(page, 'exists')).toBe(false)
     const cdp = await page.context().newCDPSession(page)
     const origin = new URL(page.url()).origin
     await cdp.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 8 * 1024 * 1024 })
+    expect(await probe(page, 'authorizeSession')).toEqual({ kind: 'bound' })
     await probe(page, 'chooseKey', 1)
     const key = { userId: user.id, documentId: randomUUID() }
     const writer = writerOf(3)

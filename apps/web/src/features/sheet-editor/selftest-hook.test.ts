@@ -55,7 +55,9 @@ beforeEach(() => {
   window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=read-only`)
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // 部分场景只核对进入编辑的触发；退出夹具前也要等它启动的动态自检结束，不能把模块载入遗留到环境销毁以后。
+  await vi.dynamicImportSettled()
   vi.restoreAllMocks()
   vi.useRealTimers()
 })

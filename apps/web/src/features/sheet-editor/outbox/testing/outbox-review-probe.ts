@@ -7,26 +7,27 @@
 //   接着 OPFS 的镜像（同步访问句柄只在专用 Worker 里有：经测试 Worker ./mirror-review.worker.ts 调用生产的镜像，flush 单独计），另把同一份记录
 //   直接写进同一个库各一次 strict、default（只差 durability，看 strict 的开销）；恢复：读（存储）、解开、解压、解析，镜像那边读两个槽位并
 //   与库里那一份比对。各次写同一份文档（登记一次，序号递增：编辑时的样子，库与镜像都是改写）。
-// 不改甲、乙的探针（outbox-probe.ts、pipeline-probe.ts、opfs-probe.worker.ts），只引用生产模块。用自己的用户与文档（随机），收尾时按用户删掉
-// 库里的与 OPFS 里的镜像目录。交回的都是普通的值（毫秒、字节数、种类），不交出密钥与内容。
+// 用真实会话绑定生产存储与 Worker；只创建随机测试文档，收尾仅删除自己记录的文档键，不能按当前用户批量清理。交回的都是普通的值（毫秒、字节数、种类），不交出密钥与内容。
 // 不引用编辑器页的时钟模块（它带着请求层与 zod，见 outbox-probe.ts 开头的说明）：看门狗用这里的计时器
 import type { OutboxConnection } from '../../../../shared/outbox/database.ts'
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { ContentFormat, DraftKey, DraftMeta, StoredDraft } from '../../../../shared/outbox/draft-record.ts'
 import type { DraftStore } from '../../../../shared/outbox/draft-store.ts'
 import type { CaptureToWrite } from '../../../../shared/outbox/draft-writer.ts'
+import type { DraftSessionPermit } from '../../../../shared/outbox/session-fence.ts'
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
 import type { MirrorReadTimes, MirrorWriteTimes } from './mirror-review.ts'
 import type { MirrorReviewCall, MirrorReviewReply, MirrorReviewRequest } from './mirror-review.worker.ts'
-import { browserIndexedDb, DRAFTS_STORE, openOutboxDatabase } from '../../../../shared/outbox/database.ts'
+import { browserIndexedDb, DRAFTS_STORE, NOTICES_STORE, openOutboxDatabase, WRITERS_STORE } from '../../../../shared/outbox/database.ts'
 import { gunzipBytes, gzipBytes, openDraft, sealDraft, sha256Hex } from '../../../../shared/outbox/draft-codec.ts'
 import { DRAFT_RECORD_VERSION } from '../../../../shared/outbox/draft-record.ts'
 import { createDraftStore } from '../../../../shared/outbox/draft-store.ts'
 import { describeFailure } from '../../../../shared/outbox/failure.ts'
 import { importLocalKey } from '../../../../shared/outbox/local-key-import.ts'
 import { opfsMirrorDirectory } from '../../../../shared/outbox/mirror-directory.ts'
-import { createOutboxWorker, createOutboxWorkerClient } from '../outbox-worker-client.ts'
+import { createOutboxWorker, createOutboxWorkerClient } from '../../../../shared/outbox/outbox-worker-client.ts'
 import { mirrorProblemOf, statusText } from './mirror-review.ts'
+import { requestProbeSessionPermit } from './probe-session.ts'
 
 /**
  * 生产的发件箱 Worker 的一次写入：结果的种类、页面这一侧的往返（毫秒）、交回的 gzip 的字节数（没有时 null）、OPFS 的镜像
@@ -92,7 +93,7 @@ export interface OutboxReview {
   /** 进程内走一遍（字节在这一侧用完，不转移） */
   readonly segments: (bytes: Uint8Array<ArrayBuffer>) => Promise<ReviewSegments>
   /**
-   * 收尾：关掉各个 Worker，删掉这个用户在 OPFS 里的镜像目录与库里的全部（草稿与写入者），关掉连接。交回镜像目录删成了没有：
+   * 收尾：关掉各个 Worker，只删这次测试文档的镜像、草稿、写入者与提示，关掉连接。交回镜像目录删成了没有：
    * removed；这个上下文没有 OPFS 时 unsupported；到点还被占着时 busy
    */
   readonly cleanup: () => Promise<string>
@@ -237,14 +238,14 @@ function startMirrorWorker(): MirrorWorker {
   }
 }
 
-/** 删掉这个用户的镜像目录（页面里删，不用同步访问句柄）：被占着（Worker 刚终止、句柄还没放开）时隔一会儿再删，至多 MIRROR_REMOVE_TIMEOUT_MS */
-async function removeMirrorOf(userId: string): Promise<string> {
+/** 删掉这份测试文档的镜像目录（页面里删，不用同步访问句柄）：被占着（Worker 刚终止、句柄还没放开）时隔一会儿再删，至多 MIRROR_REMOVE_TIMEOUT_MS */
+async function removeMirrorOf(key: DraftKey): Promise<string> {
   const directory = opfsMirrorDirectory()
   const deadline = performance.now() + MIRROR_REMOVE_TIMEOUT_MS
-  let removed = await directory.removeUser(userId)
+  let removed = await directory.removeDocument(key)
   while (removed.kind !== 'removed' && removed.kind !== 'unsupported' && performance.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, MIRROR_REMOVE_RETRY_MS))
-    removed = await directory.removeUser(userId)
+    removed = await directory.removeDocument(key)
   }
   return removed.kind === 'failed' ? `failed:${describeFailure(removed.error).name}` : removed.kind
 }
@@ -257,10 +258,20 @@ interface SegmentsDocument {
 }
 
 export function createOutboxReview(): OutboxReview {
-  const userId = `selftest-review-${crypto.randomUUID()}`
+  let permit: Promise<DraftSessionPermit> | undefined
+  const permitOnce = async (): Promise<DraftSessionPermit> => {
+    permit ??= requestProbeSessionPermit()
+    return permit
+  }
+  const documents = new Map<string, DraftKey>()
+  const documentKeyOf = (userId: string, documentId: string): DraftKey => {
+    const key = { userId, documentId }
+    documents.set(JSON.stringify([userId, documentId]), key)
+    return key
+  }
   const workers: ReviewWorker[] = []
   let key: Promise<LocalKeyHandle> | undefined
-  let store: DraftStore | undefined
+  let store: Promise<DraftStore> | undefined
   let connection: OutboxConnection | undefined
   let segmentsDocument: Promise<SegmentsDocument> | undefined
   let mirror: MirrorWorker | undefined
@@ -268,8 +279,16 @@ export function createOutboxReview(): OutboxReview {
     key ??= reviewKey()
     return key
   }
-  const storeOnce = (): DraftStore => {
-    store ??= createDraftStore({ blockedTimeoutMs: 3_000 })
+  const storeOnce = async (): Promise<DraftStore> => {
+    store ??= (async () => {
+      const created = createDraftStore({ blockedTimeoutMs: 3_000 })
+      const bound = await created.bindSession(await permitOnce())
+      if (bound.kind !== 'bound') {
+        created.close()
+        throw new Error(`复核存储绑定失败：${bound.kind}`)
+      }
+      return created
+    })()
     return store
   }
   const connectionOnce = async (): Promise<OutboxConnection> => {
@@ -284,9 +303,9 @@ export function createOutboxReview(): OutboxReview {
   /** 登记没成时序号从 0 起，写入被栅栏拒绝，按"没走完"交回 */
   const segmentsDocumentOnce = async (): Promise<SegmentsDocument> => {
     segmentsDocument ??= (async () => {
-      const documentKey: DraftKey = { userId, documentId: `segments-${crypto.randomUUID()}` }
+      const documentKey = documentKeyOf((await permitOnce()).userId, `segments-${crypto.randomUUID()}`)
       const writer: WriterIdentity = { writeEpoch: 1, writerId: crypto.randomUUID() }
-      const registered = await storeOnce().registerWriter(documentKey, writer, { now: Date.now(), force: false })
+      const registered = await (await storeOnce()).registerWriter(documentKey, writer, { now: Date.now(), force: false })
       return { key: documentKey, writer, seq: registered.kind === 'registered' ? registered.lastDraftSeq : 0 }
     })()
     return segmentsDocument
@@ -298,13 +317,19 @@ export function createOutboxReview(): OutboxReview {
 
   return {
     startWorker: async () => {
+      const fixed = await permitOnce()
       const client = createOutboxWorkerClient({ create: createOutboxWorker, clock: pageClock, requestTimeoutMs: REQUEST_TIMEOUT_MS, keepAlive: true })
       const ready = await client.ready()
-      const documentKey: DraftKey = { userId, documentId: `worker-${crypto.randomUUID()}` }
+      const documentKey = documentKeyOf(fixed.userId, `worker-${crypto.randomUUID()}`)
       const writer: WriterIdentity = { writeEpoch: 1, writerId: crypto.randomUUID() }
       let draftSeq = 0
       let registerMirror: string | null = null
       if (ready.kind === 'ready') {
+        const bound = await client.bindSession(fixed)
+        if (bound.kind !== 'bound') {
+          client.dispose()
+          throw new Error(`复核 Worker 绑定失败：${bound.kind}`)
+        }
         await client.setKey(await keyOnce())
         const registered = await client.register(documentKey, writer, false)
         draftSeq = registered.kind === 'registered' ? registered.lastDraftSeq : 0
@@ -329,7 +354,7 @@ export function createOutboxReview(): OutboxReview {
     },
     segments: async (bytes) => {
       const handle = await keyOnce()
-      const drafts = storeOnce()
+      const drafts = await storeOnce()
       const document = await segmentsDocumentOnce()
       document.seq += 1
       const t0 = performance.now()
@@ -347,8 +372,8 @@ export function createOutboxReview(): OutboxReview {
         ? await mirrorWorker.write(sealed)
         : { status: 'not-written', attachMs: null, writeMs: null, ioMs: null, flushMs: null }
       const database = await connectionOnce()
-      const rawStrict = await putRaw(database, { ...sealed, documentId: `${document.key.documentId}-strict` }, 'strict')
-      const rawDefault = await putRaw(database, { ...sealed, documentId: `${document.key.documentId}-default` }, 'default')
+      const rawStrict = await putRaw(database, { ...sealed, ...documentKeyOf(document.key.userId, `${document.key.documentId}-strict`) }, 'strict')
+      const rawDefault = await putRaw(database, { ...sealed, ...documentKeyOf(document.key.userId, `${document.key.documentId}-default`) }, 'default')
       const r0 = performance.now()
       const read = await drafts.readDraft(document.key)
       const r1 = performance.now()
@@ -405,12 +430,35 @@ export function createOutboxReview(): OutboxReview {
         worker.dispose()
       await mirror?.close()
       mirror = undefined
-      // 句柄都放开之后才删得掉镜像目录；直接写进库的两条（-strict、-default）没有写入者，按用户删照样删掉
-      const removed = await removeMirrorOf(userId)
-      await storeOnce().removeUserData(userId)
-      store?.close()
-      connection?.close()
-      return removed
+      try {
+        // 只清理本次生成的键；同一用户的其他草稿与镜像必须保留，包括两个裸事务对照之外的数据。
+        let removed = 'removed'
+        for (const key of documents.values()) {
+          const outcome = await removeMirrorOf(key)
+          if (outcome !== 'removed' && (removed === 'removed' || removed === 'unsupported'))
+            removed = outcome
+        }
+        if (documents.size > 0) {
+          const database = await connectionOnce()
+          await new Promise<void>((resolve, reject) => {
+            const names = [DRAFTS_STORE, WRITERS_STORE, NOTICES_STORE]
+            const tx = database.db.transaction(names, 'readwrite', { durability: 'strict' })
+            tx.oncomplete = () => resolve()
+            tx.onabort = () => reject(tx.error ?? new Error('测试原件清理失败'))
+            for (const key of documents.values()) {
+              for (const name of names)
+                tx.objectStore(name).delete([key.userId, key.documentId])
+            }
+          })
+        }
+        if (removed === 'removed' || removed === 'unsupported')
+          documents.clear()
+        return removed
+      }
+      finally {
+        await store?.then(value => value.close(), () => {})
+        connection?.close()
+      }
     },
   }
 }

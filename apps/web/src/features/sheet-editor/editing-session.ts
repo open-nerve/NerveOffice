@@ -2,22 +2,24 @@
 // 页面管理模式和编辑器槽位，这里管理资源的建立与释放。停捕获不等于销毁保存协调：失去编辑权时，
 // 在途保存与结果未知的重放仍要由协调器收尾。已交出/失效时 detachLease，不再次发释放请求。
 import type { PendingEditRequest, SaveContentResponse } from '@nerve-office/contracts'
+import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { ConnectionState } from '../../shared/lib/connection-state.ts'
+import type { RecoveryInitializer } from '../../shared/local-drafts/recovery-initializer.ts'
+import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
+import type { WorkingDraftView } from '../../shared/local-drafts/working-draft.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { Autosave, AutosaveEditor, AutosaveEvent, AutosavePage, AutosaveTuning } from './autosave.ts'
-import type { Incompatibility } from './client-format.ts'
-import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseClock, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
+import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
 import type { DraftStorageView, EditingDraft, EditingDraftOptions, EditingDraftPreparation, EditingDraftReady } from './editing-draft.ts'
 import type { LeaseCredentials } from './editor-api.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { LocalLock, LockClaim } from './local-lock.ts'
-import type { RecoveryInitializer } from './recovery/recovery-initializer.ts'
 import type { SameBrowser } from './same-browser.ts'
-import type { SaveCoordinator, SaveEditor, SaveRequest, SaveSendIntent, SaveSendResult } from './save-coordinator.ts'
-import type { WorkingDraftView } from './working-draft.ts'
+import type { SaveCoordinator, SaveEditor, SaveSendIntent, SaveSendResult } from './save-coordinator.ts'
+import { incompatibilityOf, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError as RequestError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
-import { incompatibilityOf, PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { acquireEditLease, leaseLossOf } from './edit-lease.ts'
 import { prepareEditingDraft } from './editing-draft.ts'
 import { holdLocalLock } from './local-lock.ts'
@@ -61,7 +63,7 @@ export interface EditingSessionOptions {
   readonly onChange: () => void
   readonly trace?: HandoverTrace | undefined
   /** 页面传服务端实际开关；未配置的独立使用者保持内存来源。 */
-  readonly localDrafts?: ({ readonly enabled: () => boolean } & Pick<EditingDraftOptions, 'keeper' | 'host' | 'supported' | 'persist'>) | undefined
+  readonly localDrafts?: ({ readonly enabled: () => boolean, readonly permit?: EditingDraftOptions['permit'] } & Pick<EditingDraftOptions, 'keeper' | 'host' | 'supported' | 'persist'>) | undefined
 }
 
 export interface InitialSaving {
@@ -496,6 +498,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       let transferred = false
       const prepared = prepareEditingDraft({
         ...options.localDrafts,
+        permit: options.localDrafts?.permit ?? (() => undefined),
         enabled: options.localDrafts?.enabled() === true,
         key: { userId: options.userId, documentId },
         sessionId: `${options.clientInstanceId}:${held.credentials().writeEpoch}:${++sourceSerial}`,

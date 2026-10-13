@@ -201,6 +201,7 @@ export const editorMessages = {
       'no-key': '暂未取得本机加密密钥，修改暂留在本页',
       'quota': '本机存储空间不足',
       'unavailable': '本机存储不可用，修改暂留在本页',
+      'session-invalid': '登录状态需要重新确认，修改暂留在本页',
       'fenced': '本机草稿写入资格待确认，修改暂留在本页',
       'worker-failed': '后台保存暂不可用，修改暂留在本页',
       'paused': '本机草稿写入已暂停，修改暂留在本页',

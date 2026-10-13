@@ -3,7 +3,7 @@ import type { LeaseLoss } from './edit-lease.ts'
 import type { FetchedEditStatus } from './editor-api.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { NetworkError } from '../../shared/api/index.ts'
-import { settle } from './fake-lease-clock.test-support.ts'
+import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { resolveTakeoverLoss } from './takeover-location.ts'
 
 const ELSEWHERE: LeaseLoss = { kind: 'taken-over', where: 'elsewhere' }

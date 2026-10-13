@@ -1,23 +1,24 @@
+import type { RecoveryContext, RecoveryInitialization } from '../../shared/local-drafts/recovery-initializer.ts'
 import type { LocalKeyHandle } from '../../shared/outbox/draft-codec.ts'
 import type { LocalKeyProblem } from '../../shared/outbox/local-key.ts'
+import type { OutboxHost } from '../../shared/outbox/outbox-host.ts'
 import type { LeaseVerdict } from './edit-lease.ts'
 import type { EditingDraft, EditingDraftOptions } from './editing-draft.ts'
-import type { OutboxHost } from './outbox/outbox-host.ts'
-import type { RecoveryContext, RecoveryInitialization } from './recovery/recovery-initializer.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../shared/api/index.ts'
+import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
 import { createDraftMirror } from '../../shared/outbox/draft-mirror.ts'
 import { CLIENT_INSTANCE_ID, DOCUMENT_ID, NOW, sampleMeta, sampleStoredDraft, USER_ID } from '../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
+import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { fakeMirrorDirectory } from '../../shared/outbox/mirror-directory.test-support.ts'
 import { encodeSlot } from '../../shared/outbox/mirror-slot.ts'
 import { deferred } from '../../shared/outbox/outbox-lock.test-support.ts'
+import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
 import { prepareEditingDraft } from './editing-draft.ts'
-import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { newKey } from './outbox/persistent-working-draft.test-support.ts'
-import { createDocumentRecovery } from './recovery/document-recovery.ts'
 
 const KEY = { userId: USER_ID, documentId: DOCUMENT_ID }
 const cleanups: (() => void)[] = []
@@ -49,6 +50,7 @@ async function fixture() {
   let serial = 0
   let epoch = 3
   const options: EditingDraftOptions = {
+    permit: testSessionPermit,
     enabled: true,
     key: KEY,
     sessionId: 'editing-1',

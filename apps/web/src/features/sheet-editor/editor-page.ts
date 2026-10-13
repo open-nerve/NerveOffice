@@ -20,8 +20,12 @@ import type { ApiError } from '../../shared/api/index.ts'
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
+import type { DocumentRecovery, RecoveryAccessFacts, RecoveryDiscard, RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
+import type { DraftReplayRequest } from '../../shared/local-drafts/recovery-decision.ts'
+import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
+import type { DraftSessionPermit } from '../../shared/outbox/session-fence.ts'
 import type { AutosavePage, AutosaveView } from './autosave.ts'
-import type { LeaseClock } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
@@ -30,20 +34,18 @@ import type { HandoverTrace } from './handover-trace.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility } from './reading-checks.ts'
-import type { DocumentRecovery, RecoveryAccessFacts, RecoveryDiscard, RecoveryView } from './recovery/document-recovery.ts'
-import type { DraftReplayRequest } from './recovery/recovery-decision.ts'
-import type { RecoveryReader } from './recovery/recovery-reader.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
+import { documentIsNewer, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { isAuthenticationError, isCsrfTokenError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
+import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
+import { createRecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
+import { draftSessionPermitOf } from '../../shared/local-drafts/session-activation.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
-import { documentIsNewer, PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
-import { createDocumentRecovery } from './recovery/document-recovery.ts'
-import { createRecoveryReader } from './recovery/recovery-reader.ts'
 
 /**
  * 就绪时页头要的东西：标题与所在的空间（返回链接）、看得到它的途径（只凭授权时返回"与我共享"，M2-P5）、能不能分享（分享的入口）、
@@ -275,6 +277,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let session: EditorPageSession = 'active'
   let userId: string | undefined
   let localDraftsEnabled = false
+  let localPermit: DraftSessionPermit | undefined
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
   /** 阅读与编辑（载入之后才有） */
@@ -435,8 +438,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function enterSession(next: EditorPageSession): void {
     session = next
-    if (next !== 'active')
+    if (next !== 'active') {
+      localPermit = undefined
       recovery?.suspend()
+    }
     mode?.setSession(next)
     update()
   }
@@ -567,6 +572,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
       setCsrfToken(confirmed.csrfToken)
       localDraftsEnabled = confirmed.features.localDraftsEnabled
+      localPermit = draftSessionPermitOf(confirmed)
       enterSession('active')
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
       // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存。例外：续租连着第二次起被判会话不对（服务端一直拒绝、
@@ -659,7 +665,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       now: () => options.now().getTime(),
       still,
       facts,
-      reader: options.recoveryReader ?? (() => createRecoveryReader({ key, clock, still, host: options.localDrafts?.host, onSessionProblem: sessionFailure })),
+      reader: options.recoveryReader ?? (() => createRecoveryReader({ permit: localPermit, key, clock, still, host: options.localDrafts?.host, onSessionProblem: sessionFailure })),
       replay: async (request, gzip) => {
         if (api.replay === undefined)
           throw new Error('当前页面无法核对原保存请求')
@@ -692,7 +698,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       documentId: id,
       clientInstanceId,
       userId: user,
-      localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled },
+      localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled, permit: () => localPermit },
       recovery,
       connection: options.network.connection,
       api,
@@ -787,6 +793,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         setCsrfToken(signedIn.csrfToken)
         userId = signedIn.user.id
         localDraftsEnabled = signedIn.features.localDraftsEnabled
+        localPermit = draftSessionPermitOf(signedIn)
         // 确认会话的回包之前别的标签页登录或退出了：消息当时没法处理，现在补确认一次
         if (checkWhenLoaded)
           void recheckSession()
