@@ -200,6 +200,8 @@ export const messages = {
     tooManyAttempts: (minutes: number) => `尝试次数过多，请 ${minutes} 分钟后再试`,
   },
   auth: {
+    localDrafts: '本机草稿',
+    localDraftsNewTab: '本机草稿（新标签页）',
     loginTitle: '登录',
     loginDescription: '用你的用户名和密码登录',
     username: '用户名',
@@ -306,6 +308,7 @@ export const messages = {
     renameDenied: (reason: string) => `没能改名：${reason}`,
   },
   documents: {
+    localDraft: '本机有未同步修改',
     title: '我的空间',
     listLabel: '文档列表',
     empty: '这里还没有文档',

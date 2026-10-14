@@ -130,6 +130,14 @@ function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
 }
 
 describe('页头的本机恢复操作', () => {
+  it('编辑器始终提供本机草稿入口；新标签页打开以保留当前编辑现场', () => {
+    renderChrome()
+    const entry = screen.getByRole('link', { name: '本机草稿（新标签页）' })
+    expect(entry).toHaveAttribute('href', '/local-drafts')
+    expect(entry).toHaveAttribute('target', '_blank')
+    expect(entry).toHaveAttribute('rel', 'noopener')
+  })
+
   const recovery: RecoveryView = { stage: 'ready', decision: { kind: 'restore', baseRevision: 3, formulasPending: false, reason: 'fast-forward' }, updatedAt: new Date(2026, 9, 4, 15, 30).getTime(), operation: undefined, cleanup: undefined, copy: { kind: 'idle' }, notice: undefined, problem: undefined }
 
   it('恢复仍走统一编辑入口，副本与重查交给原文档协调器', () => {
@@ -189,7 +197,7 @@ describe('页头的本机恢复操作', () => {
     f.set({ recovery: { ...recovery, copy: { kind: 'done', document: COPY }, cleanup: { kind: 'quota' } } })
     expect(screen.getByRole('link', { name: '打开副本（新标签页）' })).toHaveAttribute('href', `/documents/${COPY.id}`)
     expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
-    await waitFor(() => expect(within(screen.getByRole('banner')).getByRole('link')).toHaveFocus())
+    await waitFor(() => expect(within(screen.getByRole('banner')).getByRole('link', { name: '我的空间' })).toHaveFocus())
     fireEvent.click(screen.getByRole('button', { name: '重试清理' }))
     expect(f.page.retryRecoveryCleanup).toHaveBeenCalledOnce()
   })

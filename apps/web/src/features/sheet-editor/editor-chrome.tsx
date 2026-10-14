@@ -62,6 +62,7 @@ import { ApiError, describeError, isAuthenticationError, isCsrfTokenError } from
 import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 import { formatClockTime, formatRecentClockTime } from '../../shared/lib/format.ts'
+import { LOCAL_DRAFTS_PATH } from '../../shared/lib/local-drafts-path.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { focusIsLost } from '../../shared/lib/use-focus-hand-off.ts'
@@ -1182,6 +1183,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               {back.label}
             </a>
             {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
+            <a href={LOCAL_DRAFTS_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'ghost', size: 'sm' })} aria-label={messages.auth.localDraftsNewTab}>{messages.auth.localDrafts}</a>
             <div className="ml-auto flex items-center gap-3">
               {/* 分享（M2-P5）：只在能分享时出现 */}
               {ready !== undefined && <EditorShareEntry available={available} page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}

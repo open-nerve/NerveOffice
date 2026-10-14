@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { FileClock } from 'lucide-react'
 import { describeError, isAuthenticationError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { cn } from '../../shared/lib/cn.ts'
+import { LOCAL_DRAFTS_PATH } from '../../shared/lib/local-drafts-path.ts'
 import { useAdoptRenewedSession } from '../../shared/lib/renewed-session.ts'
-import { Button, PersonName } from '../../shared/ui/index.ts'
+import { Button, buttonVariants, PersonName } from '../../shared/ui/index.ts'
 import { ENDS_SESSION, logout, sessionQueryOptions } from './session.ts'
 
 /**
@@ -40,6 +42,10 @@ export function UserMenu({ children, className }: { readonly children?: ReactNod
         </span>
       )}
       {children}
+      <a href={LOCAL_DRAFTS_PATH} title={messages.auth.localDrafts} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
+        <FileClock aria-hidden="true" className="sm:hidden" />
+        <span className="max-sm:sr-only">{messages.auth.localDrafts}</span>
+      </a>
       {/* 退出失败的说明同样可以收窄（读屏照常读出全文），窄屏时不把页头撑破 */}
       {failure !== undefined && <span role="alert" className="min-w-0 truncate text-sm text-destructive" title={messages.auth.logoutFailed(failure)}>{messages.auth.logoutFailed(failure)}</span>}
       {/* 进行中用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（审查 B13）；重复点击由 leaving 挡住 */}

@@ -122,6 +122,7 @@ function DocumentPanel({ panelId, documentId, title, spaceId, targetSpaces, onDo
 export interface DocumentRowProps extends DocumentPanelProps {
   /** 标题下面的一行（类型、所属的空间、更新时间等），由列表给出 */
   readonly details: ReactNode
+  readonly hasDraft: boolean
   readonly open: boolean
   /** 记下被点的那个"操作"按钮：面板收起之后页面把焦点还给它（organize-panels.ts） */
   readonly openTriggerRef: RefObject<HTMLButtonElement | null>
@@ -131,7 +132,7 @@ export interface DocumentRowProps extends DocumentPanelProps {
 /**
  * 列表里的一份文档：标题是打开编辑器页的链接（另一个入口，整页打开，P4 设计 §3.7.4），右边是"操作 <标题>"，展开时在下面显示操作面板
  */
-export function DocumentRow({ details, open, openTriggerRef, onToggle, ...panel }: DocumentRowProps) {
+export function DocumentRow({ details, hasDraft, open, openTriggerRef, onToggle, ...panel }: DocumentRowProps) {
   const panelId = useId()
   return (
     <li>
@@ -141,6 +142,7 @@ export function DocumentRow({ details, open, openTriggerRef, onToggle, ...panel 
           <span className="flex min-w-0 flex-col">
             <span className="truncate font-medium">{panel.title}</span>
             <span className="text-xs text-muted-foreground">{details}</span>
+            {hasDraft && <span className="text-xs text-primary">{messages.documents.localDraft}</span>}
           </span>
         </a>
         <Button

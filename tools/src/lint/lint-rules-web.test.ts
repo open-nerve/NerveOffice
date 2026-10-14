@@ -145,6 +145,29 @@ describe('US-M1-11 lint 规则的自测：平台页面的模块边界与入口',
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页面的首屏', () => {
+  it('本机草稿页只有路由动态公开入口；内部可用共享能力和确认框，普通平台仍受限', async () => {
+    expect(await rulesFor(dynamicImport('../features/local-drafts/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+    for (const [code, file] of [
+      ['import { LocalDraftsPage } from \'../features/local-drafts/index.ts\'\nexport const page = LocalDraftsPage\n', ROUTES_FILE],
+      [dynamicImport('../features/local-drafts/local-drafts-page.tsx'), ROUTES_FILE],
+      [dynamicImport('../features/local-drafts/index.ts'), WEB_FILE],
+      [dynamicImport('../local-drafts/index.ts'), WEB_FEATURE_FILE],
+    ] as const) {
+      expect(await rulesFor(code, file), `${file}: ${code}`).toContain('boundaries/dependencies')
+    }
+    const page = 'apps/web/src/features/local-drafts/local-drafts-page.tsx'
+    for (const code of [
+      'import { createDraftCatalog } from \'../../shared/local-drafts/draft-catalog.ts\'\nexport const create = createDraftCatalog\n',
+      'import { storagePersisted } from \'../../shared/outbox/storage-status.ts\'\nexport const read = storagePersisted\n',
+      'import { ConfirmDialog } from \'../confirmation/index.ts\'\nexport const dialog = ConfirmDialog\n',
+    ]) {
+      const report = await rulesFor(code, page)
+      expect(report).not.toContain('boundaries/dependencies')
+      expect(report).not.toContain('ts/no-restricted-imports')
+      expect(await rulesFor(code, 'apps/web/src/features/spaces/space-page.tsx')).toEqual(expect.arrayContaining([expect.stringMatching(/boundaries\/dependencies|ts\/no-restricted-imports/)]))
+    }
+  }, LINT_TIMEOUT)
+
   describe('管理界面按需加载（M2-P1 审查 B2）', () => {
     it('只有路由表能动态 import() 它的公开入口；静态引用、类型引用、再导出、别处的动态引用都不行', async () => {
       expect(await rulesFor(dynamicImport('../features/admin/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')

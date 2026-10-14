@@ -55,7 +55,7 @@
     "US-M4-04": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M4-05": { "phase": "P3", "status": "active", "verification": ["e2e"] },
     "US-M4-06": { "phase": "P3", "status": "active", "verification": ["e2e"] },
-    "US-M4-07": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
+    "US-M4-07": { "phase": "P4", "status": "active", "verification": ["e2e"] },
     "US-M4-08": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M4-09": { "phase": "P4", "status": "planned", "verification": ["e2e"] },
     "US-M4-10": { "phase": "P4", "status": "planned", "verification": ["e2e"] },

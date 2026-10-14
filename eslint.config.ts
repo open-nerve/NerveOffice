@@ -789,6 +789,7 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
   { file: 'search.ts', feature: 'search' },
   { file: 'sharing.ts', feature: 'sharing' },
   { file: 'shared-with-me.ts', feature: 'shared-with-me' },
+  { file: 'local-drafts.ts', feature: 'local-drafts' },
   { file: 'editor.ts', feature: 'sheet-editor' },
 ]
 
@@ -1199,7 +1200,7 @@ export default antfu(
     // 发件箱与共享恢复内部不受限；测试代码不受限。P4 共享恢复同样只按需加载。同名规则后者整体覆盖前者：测试限制一并带上
     name: 'nerve/web-outbox-platform-static',
     files: ['apps/web/src/**/*.{ts,tsx}'],
-    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**'],
+    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/features/local-drafts/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**'],
     rules: {
       'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, OUTBOX_FROM_PLATFORM, LOCAL_DRAFTS_FROM_PLATFORM] }],
     },
@@ -1209,7 +1210,7 @@ export default antfu(
     // 弹窗的文件与应用的入口另有自己的整组（入口只写副作用导入，本来就没有动态 import()），不在这一块里
     name: 'nerve/web-outbox-platform-dynamic',
     files: ['apps/web/src/**/*.{ts,tsx}'],
-    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**', 'apps/web/src/shared/ui/dialog.tsx', 'apps/web/src/entries/*/main.{ts,tsx}'],
+    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/features/local-drafts/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**', 'apps/web/src/shared/ui/dialog.tsx', 'apps/web/src/entries/*/main.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX, OUTBOX_DYNAMIC_FROM_PLATFORM],
     },
@@ -1672,6 +1673,23 @@ export default antfu(
               dependency: { nodeKind: 'dynamic-import' },
             },
           },
+          // 本机草稿页只在路由按需加载；完整目录和恢复能力不进入平台首屏。
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'local-drafts' } } } },
+            message: '本机草稿页（features/local-drafts）只有 app/routes.ts 可以动态 import() 它的公开入口（M4-P4）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'local-drafts' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
           // 确认的弹窗带着 Radix Dialog（约 12 KiB gzip）：只由按需加载的功能（管理界面、成员页）引用，
           // 首屏的页面、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 设计 §3.10）。
           // 下面三条都只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，有自己的预算（M2-P2 复验）
@@ -1679,7 +1697,7 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor,local-drafts}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
             message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/sharing）引用，不进平台页面的首屏（ADR-008）',
@@ -1690,7 +1708,7 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,confirmation,sharing,sheet-editor}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,confirmation,sharing,sheet-editor,local-drafts}' } } },
             ],
             disallow: { to: { element: { type: 'web-shared', fileInternalPath: 'ui/dialog.tsx' } } },
             message: '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/confirmation、features/sharing）引用：首屏的功能、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 审查 B8）',
@@ -1716,6 +1734,10 @@ export default antfu(
             disallow: { to: { element: { type: 'web-shared', fileInternalPath: `i18n/zh-cn/${file}` } } },
             message: `这份文案（shared/i18n/zh-cn/${file}）只由按需加载的 features/${feature} 引用：别处引用（包括经 shared/i18n/index.ts 转出）会把它带进平台页面的首屏（M2-P6 复核第二批）`,
           })),
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'local-drafts' } } },
+            allow: { to: { element: { type: 'web-shared', fileInternalPath: 'i18n/zh-cn/editor.ts' } } },
+          },
           {
             from: { element: { type: ['web-app', 'web-entry', 'web-feature', 'web-shared', 'web-editor'], fileInternalPath: WEB_TEST_CODE } },
             allow: { to: { element: { type: 'web-shared', fileInternalPath: LAZY_TEXTS.map(({ file }) => `i18n/zh-cn/${file}`) } } },

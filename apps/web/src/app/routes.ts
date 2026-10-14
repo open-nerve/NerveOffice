@@ -5,6 +5,7 @@ import { LoginPage, RequireSession, SessionCheck } from '../features/auth/index.
 import { HomePage, SpacePage } from '../features/spaces/index.ts'
 import { ADMIN_PATH, ADMIN_PATHS, ADMIN_USER_DOCUMENTS_ROUTE } from '../shared/lib/admin-paths.ts'
 import { loadChunk } from '../shared/lib/chunk-load.ts'
+import { LOCAL_DRAFTS_PATH } from '../shared/lib/local-drafts-path.ts'
 import { LOGIN_PATH } from '../shared/lib/login-path.ts'
 import { SEARCH_PATH, SHARED_PATH, SPACE_FOLDER_ROUTE, SPACE_MEMBERS_ROUTE, SPACE_ROUTE, SPACE_TRASH_ROUTE } from '../shared/lib/space-paths.ts'
 import { AppShell } from './layout/app-shell.tsx'
@@ -39,6 +40,10 @@ async function sharedWithMePages() {
   return loadChunk(async () => import('../features/shared-with-me/index.ts'))
 }
 
+async function localDraftsPages() {
+  return loadChunk(async () => import('../features/local-drafts/index.ts'))
+}
+
 /** 平台页面的路由（P3 设计 §3.7）。编辑器页在 P4 另起入口，整页加载。 */
 export const appRoutes: RouteObject[] = [
   { path: LOGIN_PATH, Component: LoginPage, ErrorBoundary: ErrorPage },
@@ -66,6 +71,7 @@ export const appRoutes: RouteObject[] = [
             { path: SPACE_TRASH_ROUTE, lazy: async () => ({ Component: (await trashPages()).TrashPage }) },
             { path: SEARCH_PATH, lazy: async () => ({ Component: (await searchPages()).SearchPage }) },
             { path: SHARED_PATH, lazy: async () => ({ Component: (await sharedWithMePages()).SharedWithMePage }) },
+            { path: LOCAL_DRAFTS_PATH, lazy: async () => ({ Component: (await localDraftsPages()).LocalDraftsPage }) },
             { path: CHANGE_PASSWORD_PATH, Component: ChangePasswordPage },
             {
               path: ADMIN_PATH,

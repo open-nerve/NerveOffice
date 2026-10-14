@@ -39,8 +39,8 @@ export function AppShell() {
           </div>
           {/* 搜索框（M2-P4）：只带着关键词跳到按需加载的结果页，首屏里只有这个框 */}
           <SearchBox />
-          {/* 窄屏时占满第一行余下的宽度（基准为 0，不会被挤到下一行），名字在里面收窄，各项贴着右边 */}
-          <UserMenu className="max-sm:flex-1 max-sm:justify-end">
+          {/* 窄屏时账户入口单独一行，名字可收窄，所有入口与退出按钮均可到达。 */}
+          <UserMenu className="max-sm:flex-1 max-sm:basis-full max-sm:justify-end">
             <Link to={CHANGE_PASSWORD_PATH} title={messages.account.changePassword} className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
               <KeyRound aria-hidden="true" className="sm:hidden" />
               <span className="max-sm:sr-only">{messages.account.changePassword}</span>

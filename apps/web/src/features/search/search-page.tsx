@@ -12,6 +12,7 @@ import { cn } from '../../shared/lib/cn.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { SEARCH_QUERY_PARAM } from '../../shared/lib/space-paths.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useDraftMarkers } from '../../shared/lib/use-draft-markers.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { Alert, AlertDescription, Button, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
@@ -32,7 +33,7 @@ const LIST_SELECTOR = '[data-search-results]'
  * 别人的个人空间（凭单独授权命中，M2-P5）按所有者的人名呈现（人名组件），不用个人空间存的名称（规范 §2.4）；
  * 后面是从空间根目录到它所在文件夹的路径（凭授权命中的一条没有：看不到空间的目录结构）
  */
-function ResultItem({ result, viewerId }: { readonly result: SearchResult, readonly viewerId: string | undefined }) {
+function ResultItem({ result, viewerId, hasDraft }: { readonly result: SearchResult, readonly viewerId: string | undefined, readonly hasDraft: boolean }) {
   return (
     <li>
       {/* 编辑器页是另一个入口：普通的链接，整页打开 */}
@@ -46,6 +47,7 @@ function ResultItem({ result, viewerId }: { readonly result: SearchResult, reado
             {' · '}
             <time dateTime={result.updatedAt}>{messages.documents.updatedAt(formatDateTime(result.updatedAt))}</time>
           </span>
+          {hasDraft && <span className="text-xs text-primary">{messages.documents.localDraft}</span>}
         </span>
       </a>
     </li>
@@ -61,6 +63,7 @@ function ResultItem({ result, viewerId }: { readonly result: SearchResult, reado
 function Results({ keyword }: { readonly keyword: string }) {
   const query = useInfiniteQuery(searchQueryOptions(keyword))
   const session = useQuery(sessionQueryOptions())
+  const drafts = useDraftMarkers(session.data?.user.id)
   const results = query.data?.pages.flatMap(page => page.items) ?? []
   /** 有结果时的外层：没能刷新的说明与列表本身都在它里面 */
   const dataRef = useRef<HTMLDivElement>(null)
@@ -126,7 +129,7 @@ function Results({ keyword }: { readonly keyword: string }) {
         : (
             <>
               <ul ref={listRef} data-search-results="" tabIndex={-1} aria-label={text.listLabel} className={cn('divide-y rounded-lg border', FOCUS_RING)}>
-                {results.map(result => <ResultItem key={result.id} result={result} viewerId={session.data?.user.id} />)}
+                {results.map(result => <ResultItem key={result.id} result={result} viewerId={session.data?.user.id} hasDraft={drafts.has(result.id)} />)}
               </ul>
               {query.isFetchNextPageError && (
                 <Alert variant="destructive">

@@ -1,14 +1,16 @@
 import type { RefObject } from 'react'
 import type { OrganizeNotice } from './item-actions.tsx'
 import type { TargetSpaces } from './target-spaces.ts'
-import { useInfiniteQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { describeError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
+import { useDraftMarkers } from '../../shared/lib/use-draft-markers.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { Alert, AlertDescription, Button, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
+import { sessionQueryOptions } from '../auth/index.ts'
 import { DocumentRow } from './document-row.tsx'
 import { folderDocumentsQueryOptions } from './documents-api.ts'
 
@@ -51,6 +53,8 @@ interface DocumentListProps {
  */
 export function DocumentList({ spaceId, folderId, targetSpaces, openId, openTriggerRef, onToggle, onDone, onDenied, hasFolders, titleRef }: DocumentListProps) {
   const query = useInfiniteQuery(folderDocumentsQueryOptions(spaceId, folderId))
+  const session = useQuery(sessionQueryOptions())
+  const drafts = useDraftMarkers(session.data?.user.id)
   const firstLoad = useFirstLoadRetry(query, titleRef)
   const documents = query.data?.pages.flatMap(page => page.items) ?? []
   // 加载更多时已有的条数：新的一页到了之后，焦点移到第一个新条目。按钮可能随之消失（没有下一页了），焦点不能留在它身上（审查 B13）
@@ -109,6 +113,7 @@ export function DocumentList({ spaceId, folderId, targetSpaces, openId, openTrig
           <DocumentRow
             key={document.id}
             documentId={document.id}
+            hasDraft={drafts.has(document.id)}
             title={document.title}
             details={(
               <>

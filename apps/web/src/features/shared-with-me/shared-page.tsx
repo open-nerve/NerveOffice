@@ -11,6 +11,7 @@ import { sharedWithMeMessages } from '../../shared/i18n/zh-cn/shared-with-me.ts'
 import { formatDateTime } from '../../shared/lib/format.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
+import { useDraftMarkers } from '../../shared/lib/use-draft-markers.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { Alert, AlertDescription, Button, RetryButton, Skeleton } from '../../shared/ui/index.ts'
@@ -56,6 +57,7 @@ function SharedList({ titleRef }: { readonly titleRef: RefObject<HTMLHeadingElem
   const query = useInfiniteQuery(sharedListQueryOptions())
   const firstLoad = useFirstLoadRetry(query, titleRef)
   const session = useQuery(sessionQueryOptions())
+  const drafts = useDraftMarkers(session.data?.user.id)
   // 导航已经请求过"我能看到的空间"：复制的目标候选直接用它（服务端给的 canCreateDocuments），共用同一份缓存，
   // 连同取到了没有：还没取到、取不到时复制的目标说明加载中、没能加载（可以重试），不回落到看不到的源空间（M2 Codex 评审复验的一般 1）；
   // refetchOnMount 关掉的理由与空间页相同（features/spaces/space-page.tsx）
@@ -130,6 +132,7 @@ function SharedList({ titleRef }: { readonly titleRef: RefObject<HTMLHeadingElem
                 <DocumentRow
                   key={document.id}
                   documentId={document.id}
+                  hasDraft={drafts.has(document.id)}
                   title={document.title}
                   details={<SharedDetails document={document} viewerId={session.data?.user.id} />}
                   spaceId={document.space.id}
