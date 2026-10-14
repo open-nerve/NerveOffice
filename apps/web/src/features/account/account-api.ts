@@ -1,7 +1,7 @@
 // 本人的账户（M2-P1 设计 §3.8）：修改密码。
 import type { ChangePasswordRequest, ChangePasswordResponse } from '@nerve-office/contracts'
 import { changePasswordResponseSchema } from '@nerve-office/contracts'
-import { apiRequest, requestWithLocalSession, setCsrfToken } from '../../shared/api/index.ts'
+import { apiRequest, requestWithLocalSession, setApiSession } from '../../shared/api/index.ts'
 
 /**
  * 修改密码：成功时服务端撤销本人的全部会话（包括当前这个），为当前页面新建一个并写回 Cookie（M2-P6 复核 B1）。
@@ -9,6 +9,6 @@ import { apiRequest, requestWithLocalSession, setCsrfToken } from '../../shared/
  */
 export async function changePassword(request: ChangePasswordRequest): Promise<ChangePasswordResponse> {
   const session = await requestWithLocalSession('mutation', async () => apiRequest('/api/auth/password', { method: 'PUT', body: request, schema: changePasswordResponseSchema }))
-  setCsrfToken(session.csrfToken)
+  setApiSession(session)
   return session
 }

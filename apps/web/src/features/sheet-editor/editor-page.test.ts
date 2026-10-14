@@ -19,6 +19,7 @@ import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
 import { rememberSessionPermit } from '../../shared/api/session-association.ts'
 import { connectionState, createConnectionState } from '../../shared/lib/connection-state.ts'
+import { publishLocalSession } from '../../shared/local-drafts/session-events.ts'
 import { gzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
@@ -44,6 +45,19 @@ const ALICE: SessionResponse = {
   features: { localDraftsEnabled: true },
 }
 const BOB: SessionResponse = { ...ALICE, user: { ...ALICE.user, id: '0199a2c4-1f2e-7a3b-8c4d-00000000000b', username: 'bob' }, csrfToken: 'csrf-bob' }
+
+describe('已打开编辑器的停用说明沿实际账户事实', () => {
+  it.each([ALICE.user.id, BOB.user.id])('停用详情属于 %s，只说明本页账户；新登录后移除旧原因', async (userId) => {
+    const h = setup()
+    await h.editorPage.load()
+    h.api.session.mockRejectedValueOnce(new ApiError(401, 'SESSION_EXPIRED', '账户停用', { details: { reason: 'account_disabled', userId } }))
+    await h.editorPage.recheckSession()
+    expect(h.editorPage.view()).toMatchObject({ session: 'signed-out', sessionEndedReason: userId === ALICE.user.id ? 'account_disabled' : undefined })
+    h.api.session.mockResolvedValueOnce(BOB)
+    await h.editorPage.recheckSession()
+    expect(h.editorPage.view()).toMatchObject({ session: 'other-user', sessionEndedReason: undefined })
+  })
+})
 
 function permitted(response: SessionResponse, generation = testSessionPermit().generation): SessionResponse {
   rememberSessionPermit(response, { userId: response.user.id, generation })
@@ -3185,6 +3199,35 @@ describe('编辑器服务端操作的连接守卫', () => {
 })
 
 describe('编辑页消费原会话响应的本机许可', () => {
+  it('本页原许可停写立即释放密钥与宿主，旧许可通知不能关闭新来源', async () => {
+    const fetch = vi.fn(async () => newKey(1))
+    const keeper = createLocalKeyKeeper({ fetch, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
+    const store = fakeDraftStore()
+    const dispose = vi.fn()
+    const host = vi.fn(async () => {
+      const writer = createDraftWriter({ store: store.store, now: Date.now })
+      return { kind: 'in-process' as const, writer, broken: () => false, dispose: () => {
+        dispose()
+        writer.dispose()
+      } }
+    })
+    const initial = permitted({ ...ALICE })
+    const h = setup({ api: { session: async () => initial }, localDrafts: { keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' }) } })
+    await h.editorPage.load()
+    expect(host).toHaveBeenCalledOnce()
+    expect(keeper.current()).toBeDefined()
+    publishLocalSession({ kind: 'stopped', previous: { userId: ALICE.user.id, generation: '0199b0c4-7d3e-7a3b-9c4e-000000000099' }, cleanup: undefined })
+    expect(dispose).not.toHaveBeenCalled()
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce())
+    expect(keeper.current()).toBeUndefined()
+    expect(h.editorPage.view().session).toBe('active')
+    expect(h.editorPage.view().mode?.kind).toBe('editing')
+    expect(h.api.session).toHaveBeenCalledOnce()
+    expect(host).toHaveBeenCalledOnce()
+    h.editorPage.dispose()
+  })
+
   it('网络登录正常但本机资格缺失时仍可进入编辑与云端保存，不建持久宿主', async () => {
     const fetch = vi.fn(async () => newKey(1))
     const keeper = createLocalKeyKeeper({ fetch, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })

@@ -17,9 +17,11 @@ import { createSheetEditor, SheetEditorLoadError } from '../../editor/index.ts'
 import { requestSession } from '../../shared/api/index.ts'
 import { watchBrowserConnection } from '../../shared/lib/browser-connection.ts'
 import { connectionState } from '../../shared/lib/connection-state.ts'
+import { startDraftMaintenance } from '../../shared/lib/draft-maintenance.ts'
 import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
+import { LocalDataNotice } from '../local-data/notice.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
 import { browserLeaseClock, trackActivity } from './edit-lease.ts'
 import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, replayContent, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
@@ -140,6 +142,7 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
 }
 
 function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics?: () => unknown): void {
+  startDraftMaintenance()
   clearInheritedReloadMarkers(() => window.sessionStorage)
   const page = createEditorPage({
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
@@ -195,6 +198,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
   installPageGuards(window, page, apple)
   createRoot(elements.chrome).render(
     <StrictMode>
+      <LocalDataNotice />
       <EditorChrome page={page} apple={apple} />
     </StrictMode>,
   )

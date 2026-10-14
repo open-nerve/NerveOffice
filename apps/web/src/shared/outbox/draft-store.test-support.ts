@@ -8,7 +8,7 @@ import type { DraftStore, ListedDraft, PurgedDraft, StoreProblem } from './draft
 import type { RecoveryNotice } from './recovery-notice.ts'
 import type { WriterIdentity } from './writer-fence.ts'
 import { createDraftObservations } from './draft-observation.ts'
-import { draftMetaOf, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { draftMetaOf, isWhole, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
 import { decideConfirm, decideObservedAdoption, decideRegistration, decideRemove, decideReplace, decideRestore, decideWrite, isNoticeExpired, isRetired, isSameWriter, restoredWriterOf, retiredWriterOf, shouldPurgeDraft, writerRetention } from './writer-fence.ts'
 
@@ -269,14 +269,19 @@ export function fakeDraftStore(): FakeDraftStore {
       const problem = await begin('purgeExpired')
       if (problem !== undefined)
         return problem
-      // 与 IndexedDB 的实现同一个口径：按记录里读得出的更新时间，不论格式；交回的键标明是哪一种
+      // 与 IndexedDB 的实现同一口径：较新格式不动，已知旧记录与提示在同一步变更。
       const purged: PurgedDraft[] = []
+      const retained: DraftKey[] = []
       for (const [id, raw] of [...drafts]) {
-        if (shouldPurgeDraft(readableUpdatedAt(raw), now)) {
+        const [userId, documentId] = JSON.parse(id) as [string, string]
+        const key = { userId, documentId }
+        const record = readStoredDraft(structuredClone(raw))
+        if (record.kind !== 'newer-format' && shouldPurgeDraft(readableUpdatedAt(raw), now)) {
           drafts.delete(id)
-          const [userId, documentId] = JSON.parse(id) as [string, string]
-          purged.push({ key: { userId, documentId }, record: readStoredDraft(structuredClone(raw)).kind })
+          purged.push({ key, record: record.kind })
+          notices.set(id, notice(key, 'expired', now))
         }
+        else { retained.push(key) }
       }
       for (const [id, raw] of [...writers]) {
         const writer = readWriterRecord(raw)
@@ -298,7 +303,16 @@ export function fakeDraftStore(): FakeDraftStore {
         if (read === undefined || isNoticeExpired(read, now))
           notices.delete(id)
       }
-      return { kind: 'purged', drafts: purged }
+      return { kind: 'purged', drafts: purged, retained }
+    },
+    async recordExpiredMirror(key, now) {
+      const problem = await begin('recordExpiredMirror')
+      if (problem !== undefined)
+        return problem
+      if (drafts.has(idOf(key)) || !isWhole(now, 0))
+        return { kind: 'skipped' }
+      notices.set(idOf(key), notice(key, 'expired', now))
+      return { kind: 'recorded' }
     },
     async restoreDraft(draft, { now, noteLost = true }) {
       const problem = await begin('restoreDraft') ?? unwritable(draft)

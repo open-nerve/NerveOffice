@@ -232,7 +232,7 @@ test.describe('US-M4-03 手动恢复与冲突处理', { tag: '@test-build' }, ()
       await probeDatabase(page, 'patchDraft', h.key, state === 'corrupted' ? { updatedAt: seeded.input.meta.updatedAt + 1 } : state === 'newer-format' ? { recordVersion: 2 } : {})
       const before = (await readLocalDisk(page, h.key)).draft
       await openReader(page, h.documentId)
-      await expect(notice(page).getByText(state === 'expired' ? '超过保留期的本机草稿已清除' : state === 'corrupted' ? '损坏的本机草稿已清除' : /本机修改由更新版本写入/)).toBeVisible()
+      await expect(notice(page).getByText(state === 'expired' ? /(?:超过保留期的本机草稿已清除|本机草稿超过 14 天保留期，已清理)/ : state === 'corrupted' ? '损坏的本机草稿已清除' : /本机修改由更新版本写入/)).toBeVisible()
       expect((await readLocalDisk(page, h.key)).draft).toEqual(state === 'newer-format' ? before : null)
       expect(await revisionOf(h.documentId)).toBe(1)
     })
@@ -322,6 +322,10 @@ test.describe('US-M4-03 手动恢复与冲突处理', { tag: '@test-build' }, ()
   })
 
   test('换人登录后旧请求成功回包迟到，不清理原用户草稿或启用编辑', async ({ page, context }) => {
+    // 先留下真实登录表单；原用户随后经接口准备原件，不产生界面登录广播。
+    const other = await context.newPage()
+    await other.goto('/login')
+    await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
     const h = await receiptFor(page, 'r-late-receipt')
     const someoneElse = await createUser('r-next-account')
     let release!: () => void
@@ -341,10 +345,7 @@ test.describe('US-M4-03 手动恢复与冲突处理', { tag: '@test-build' }, ()
     try {
       await openReader(page, h.documentId)
       await expect.poll(() => received).toBe(true)
-      const other = await context.newPage()
-      await other.goto('/')
-      await other.getByRole('button', { name: '退出', exact: true }).click()
-      await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
+      // 本例验证换人后旧回包；明确退出会主动删除原件，直接真实登录并由产品广播触发复核。
       await loginThroughUi(other, someoneElse)
       await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
       await expect(page.getByRole('alert').filter({ hasText: '别的标签页登录了另一个账户。原来的账户重新登录之后，这一页可以接着使用' })).toBeVisible()

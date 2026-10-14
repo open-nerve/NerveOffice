@@ -12,6 +12,21 @@ const inventory = vi.hoisted(() => ({
 }))
 vi.mock('./draft-inventory.ts', () => ({ createDraftInventory: () => inventory }))
 
+it('后台跳过前台拥有的记录：不发文档事实、取钥或重放请求，也不产生清理结果', async () => {
+  inventory.check.mockReset().mockResolvedValue('active')
+  inventory.load.mockResolvedValue({ kind: 'listed', entries: [{ documentId: DOCUMENT_ID, updatedAt: 1, mirrorOnly: false }], incomplete: false })
+  const api = installFakeApi({})
+  const catalog = createBrowserDraftCatalog({ permit: testSessionPermit(USER_ID), still: () => true, include: () => false, onSessionProblem: vi.fn(), reportError: vi.fn() })
+  try {
+    await catalog.refresh()
+    expect(catalog.view()).toMatchObject({ checked: true, rows: [], problem: undefined })
+    expect(api.requests).toEqual([])
+  }
+  finally {
+    catalog.dispose()
+  }
+})
+
 it('批量 HTTP 在途换了会话：持久资格复核拒绝整个旧页面，迟到标题也不显示', async () => {
   inventory.check.mockResolvedValueOnce('active').mockResolvedValue('session')
   inventory.load.mockResolvedValue({ kind: 'listed', entries: [{ documentId: DOCUMENT_ID, updatedAt: 1, mirrorOnly: false }], incomplete: false })

@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { logoutThroughUi } from '../../support/logout.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditing, hoverCell, leaveEditor, openAndEnterEditing, reloadAndEnterEditing, resourceOf, saveAndCapture, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
@@ -64,7 +65,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await openAndEnterEditing(page, documentId)
     const saved = await editAndSave(page, documentId)
     await page.getByRole('link', { name: '我的空间' }).click()
-    await page.getByRole('button', { name: '退出', exact: true }).click()
+    await logoutThroughUi(page)
     await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
     await loginThroughUi(page, owner)
     await page.getByRole('list', { name: '文档列表' }).getByRole('link').first().click()

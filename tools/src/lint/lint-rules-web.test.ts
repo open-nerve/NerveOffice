@@ -145,6 +145,20 @@ describe('US-M1-11 lint 规则的自测：平台页面的模块边界与入口',
 }, LINT_TIMEOUT)
 
 describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页面的首屏', () => {
+  it('退出与维护能力只从指定入口引入，普通平台不能静态引用', async () => {
+    expect(await rulesFor(dynamicImport('../features/local-data/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor(dynamicImport('../features/local-data/notice.ts'), 'apps/web/src/app/local-data-notice.tsx')).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { LocalDataNotice } from \'../local-data/notice.ts\'\nexport const notice = LocalDataNotice\n', 'apps/web/src/features/sheet-editor/start.tsx')).not.toContain('boundaries/dependencies')
+    for (const [code, file] of [
+      ['import { LogoutPage } from \'../features/local-data/index.ts\'\nexport const page = LogoutPage\n', ROUTES_FILE],
+      [dynamicImport('../features/local-data/logout-page.tsx'), ROUTES_FILE],
+      [dynamicImport('../features/local-data/index.ts'), WEB_FILE],
+      [dynamicImport('../local-data/index.ts'), WEB_FEATURE_FILE],
+      [dynamicImport('../local-data/index.ts'), 'apps/web/src/features/sheet-editor/start.tsx'],
+    ] as const)
+      expect(await rulesFor(code, file)).toContain('boundaries/dependencies')
+  }, LINT_TIMEOUT)
+
   it('本机草稿页只有路由动态公开入口；内部可用共享能力和确认框，普通平台仍受限', async () => {
     expect(await rulesFor(dynamicImport('../features/local-drafts/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
     for (const [code, file] of [

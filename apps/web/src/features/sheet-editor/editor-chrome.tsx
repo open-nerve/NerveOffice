@@ -985,7 +985,8 @@ function SessionNotice({ view, editing }: { view: EditorPageView, editing: boole
     return (
       <Alert variant="destructive">
         <AlertDescription>
-          <p>{editing ? editorMessages.signedOut : editorMessages.signedOutReadOnly}</p>
+          <p>{view.sessionEndedReason === 'account_disabled' ? messages.auth.accountDisabled : editing ? editorMessages.signedOut : editorMessages.signedOutReadOnly}</p>
+          {view.sessionEndedReason === 'account_disabled' && editing && <p>{editorMessages.disabledMemory}</p>}
           <SessionCheckProblem problem={view.sessionProblem} />
           {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复 */}
           <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>

@@ -11,7 +11,7 @@ export async function requestProbeSessionPermit(): Promise<DraftSessionPermit> {
       throw new Error(`探针会话查询失败：${result.status}`)
     // 测试服务器仍走真实会话契约；资格模块再次核对用户与来源，不在探针里伪造激活。
     return await result.json() as SessionResponse
-  })
+  }, undefined, async () => { /* 探针只接受成功响应；失败直接结束测试，不分类生产 API 错误。 */ })
   const permit = draftSessionPermitOf(response)
   if (permit === undefined)
     throw new Error('探针没有取得本机会话许可')

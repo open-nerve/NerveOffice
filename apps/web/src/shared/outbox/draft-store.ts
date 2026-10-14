@@ -76,7 +76,7 @@ export interface PurgedDraft {
   readonly record: ReadDraft['kind']
 }
 
-export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly PurgedDraft[] } | StoreProblem
+export type StorePurgeOutcome = { readonly kind: 'purged', readonly drafts: readonly PurgedDraft[], readonly retained: readonly DraftKey[] } | StoreProblem
 
 /** 从 OPFS 镜像写回（§3.8）：写回了；没写回及原因（writer-fence.ts 的 decideRestore；unseen 时库里留下了 lost 提示） */
 export type StoreRestoreOutcome

@@ -2,7 +2,7 @@ import type { RefObject } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useRef } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router'
-import { describeError, isAuthenticationError } from '../../shared/api/index.ts'
+import { describeError, disabledSessionUserId, isAuthenticationError } from '../../shared/api/index.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
 import { useFirstLoadRetry } from '../../shared/lib/use-first-load-retry.ts'
@@ -36,7 +36,7 @@ export function RequireSession() {
   const firstLoad = useFirstLoadRetry(session, pageStartRef, { retryable: notRetryable, hidesDataOnError: true })
   if (session.isError && isAuthenticationError(session.error)) {
     const from = `${location.pathname}${location.search}`
-    return <Navigate to={loginPath(from, session.error.code === 'SESSION_EXPIRED' ? 'expired' : 'required')} replace />
+    return <Navigate to={loginPath(from, disabledSessionUserId(session.error) !== undefined ? 'account_disabled_confirmed' : session.error.code === 'SESSION_EXPIRED' ? 'expired' : 'required')} replace />
   }
   if (firstLoad.failed) {
     // 重试期间上一次的原因不再给（请求缓存已经清掉了它）

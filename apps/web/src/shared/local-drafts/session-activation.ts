@@ -12,6 +12,7 @@ export interface SessionActivationOptions {
   readonly store: Pick<SessionStore, 'beginSessionCheck' | 'acceptSessionCheck' | 'failSessionChange'>
   readonly exclusive: <T>(work: () => Promise<T>) => Promise<T>
   readonly source: (response: SessionResponse) => Promise<SessionSource>
+  readonly rejected: (error: unknown, ticket: SessionCheckTicket) => Promise<void>
 }
 
 export function draftSessionPermitOf(response: object) {
@@ -35,7 +36,7 @@ export function createSessionActivation(options: SessionActivationOptions) {
   }
 
   return {
-    track: async <T extends SessionResponse>(kind: SessionCheckTicket['kind'], request: () => Promise<T>): Promise<T> => {
+    track: async <T extends SessionResponse>(kind: SessionCheckTicket['kind'], request: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
       const started = await local(async () => options.store.beginSessionCheck(kind))
       const ticket = started?.kind === 'ticket' ? started.ticket : undefined
       let response: T
@@ -45,6 +46,12 @@ export function createSessionActivation(options: SessionActivationOptions) {
       catch (error) {
         if (ticket?.kind === 'mutation')
           await local(async () => options.store.failSessionChange(ticket))
+        if (ticket?.kind === 'query' && !(signal?.aborted === true && error === signal.reason)) {
+          try {
+            await options.rejected(error, ticket)
+          }
+          catch { /* 失效处理失败也只能抛原错误，不重发请求。 */ }
+        }
         throw error
       }
       rememberSessionPermit(response, undefined)
@@ -65,5 +72,9 @@ export function createSessionActivation(options: SessionActivationOptions) {
   }
 }
 
-const activation = createSessionActivation({ store: createSessionStore({ blockedTimeoutMs: 3_000 }), exclusive: withOutboxLock, source: sessionSourceOf })
-export const trackSessionRequest = activation.track
+const store = createSessionStore({ blockedTimeoutMs: 3_000 })
+
+/** 请求层传入自己的错误处理端口；资格模块与探针不静态引入契约校验或反向引用请求层。 */
+export async function trackSessionRequest<T extends SessionResponse>(kind: SessionCheckTicket['kind'], request: () => Promise<T>, signal: AbortSignal | undefined, rejected: SessionActivationOptions['rejected']): Promise<T> {
+  return createSessionActivation({ store, exclusive: withOutboxLock, source: sessionSourceOf, rejected }).track(kind, request, signal)
+}

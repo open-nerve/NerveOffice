@@ -1,13 +1,13 @@
-// 比对 OPFS 镜像与库留下的提示（M4-P1 设计 §3.8）：本机草稿从备份恢复了（restored），或者因浏览器存储损坏丢失了（lost）。
+// 本机草稿提示：从备份恢复（restored）、存储损坏未能找回（lost）、超过保留期清理（expired）。
 // 存进库的 notices 仓库，键 [userId, documentId]，一份文档一条（后来的盖掉先前的）。restored 与写回草稿、写入者在同一个 strict 事务里写下；
 // lost 有两处：两个槽位都不合格、库里什么都没有时另一个事务（recordLost），镜像里那一份没被库里的写入者看过、又不能写回时与写回的判定
 // 同一个事务（unseen，复验 C1；已经是 lost 时不动它）（draft-store.ts）。P3（打开文档时）、P4（本机草稿页）读出、说明之后清除；放弃、
-// 按用户清理与保留期一并清掉。
+// 按用户清理一并清掉；提示本身也保留 14 天。expired 与主库删除同事务；只有镜像的草稿在目录删除后条件记录。
 // 发件箱 Worker 也引用这个文件：不引用 zod
 import type { DraftKey } from './draft-record.ts'
 import { isFields, isText, isWhole } from './draft-record.ts'
 
-export type RecoveryNoticeKind = 'restored' | 'lost'
+export type RecoveryNoticeKind = 'restored' | 'lost' | 'expired'
 
 export interface RecoveryNotice extends DraftKey {
   readonly kind: RecoveryNoticeKind
@@ -20,7 +20,7 @@ export function readRecoveryNotice(value: unknown): RecoveryNotice | undefined {
   if (!isFields(value))
     return undefined
   const { userId, documentId, kind, at } = value
-  if (!isText(userId) || !isText(documentId) || (kind !== 'restored' && kind !== 'lost') || !isWhole(at, 0))
+  if (!isText(userId) || !isText(documentId) || (kind !== 'restored' && kind !== 'lost' && kind !== 'expired') || !isWhole(at, 0))
     return undefined
   return { userId, documentId, kind, at }
 }

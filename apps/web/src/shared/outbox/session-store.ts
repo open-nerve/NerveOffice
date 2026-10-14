@@ -1,8 +1,8 @@
 // 持久会话状态的接口。状态转移由调用方放在完整的同源发件箱操作锁内；网络不持锁。
-import type { DraftSessionPermit, LocalSessionState, SessionCheckTicket, SessionSource, UserCleanupCause, UserCleanupPermit } from './session-fence.ts'
+import type { DraftSessionPermit, LocalSessionState, SessionCheckFailure, SessionCheckTicket, SessionRejectionResult, SessionSource, UserCleanupCause, UserCleanupPermit } from './session-fence.ts'
 import type { SessionInvalid, StoreOptions, StoreProblem } from './store-transaction.ts'
 import { SESSION_SLOT, SESSIONS_STORE } from './database.ts'
-import { acceptSessionCheck, beginSessionChange, beginUserCleanup, createUnconfirmedSession, expireSessionChange, failSessionChange, finishUserCleanup, sessionCheckTicket, suspendSession } from './session-fence.ts'
+import { acceptSessionCheck, beginSessionChange, beginUserCleanup, createUnconfirmedSession, expireSessionChange, failSessionChange, finishUserCleanup, rejectSessionCheck, sessionCheckTicket, suspendSession } from './session-fence.ts'
 import { readStoredSession, sessionRecord } from './session-record.ts'
 import { createStoreTransactions } from './store-transaction.ts'
 
@@ -13,6 +13,7 @@ export interface SessionStore {
   readonly beginSessionCheck: (kind: SessionCheckTicket['kind']) => SessionStoreResult<{ readonly kind: 'ticket', readonly ticket: SessionCheckTicket }>
   readonly acceptSessionCheck: (ticket: SessionCheckTicket, source: SessionSource) => SessionStoreResult<{ readonly kind: 'active', readonly permit: DraftSessionPermit }>
   readonly failSessionChange: (ticket: SessionCheckTicket) => SessionStoreResult<{ readonly kind: 'released' }>
+  readonly rejectSessionCheck: (ticket: SessionCheckTicket, failure: SessionCheckFailure) => SessionStoreResult<SessionRejectionResult | { readonly kind: 'invalidated' }>
   readonly suspendSession: (permit: DraftSessionPermit) => SessionStoreResult<{ readonly kind: 'suspended' }>
   readonly beginUserCleanup: (permit: DraftSessionPermit, cause: UserCleanupCause) => SessionStoreResult<{ readonly kind: 'clearing', readonly permit: UserCleanupPermit }>
   readonly finishUserCleanup: (permit: UserCleanupPermit) => SessionStoreResult<{ readonly kind: 'cleared' }>
@@ -82,6 +83,13 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
       const next = suspendSession(state, permit, newGeneration())
       return next === undefined ? undefined : { state: next, value: { kind: 'suspended' } }
     }),
+    rejectSessionCheck: async (ticket, failure) => {
+      const result = await transition((state) => {
+        const next = rejectSessionCheck(state, ticket, failure, newGeneration())
+        return next === undefined ? undefined : { state: next.state, value: next.result }
+      })
+      return result.kind === 'session-invalid' ? { kind: 'invalidated' } : result
+    },
     beginUserCleanup: async (permit, cause) => transition((state) => {
       const next = beginUserCleanup(state, permit, cause, newGeneration())
       return next === undefined ? undefined : { state: next.state, value: { kind: 'clearing', permit: next.permit } }

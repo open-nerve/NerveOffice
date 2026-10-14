@@ -2,7 +2,7 @@
 // 接受邀请、完成重置之后已登录：与登录一样把 CSRF 令牌交给请求层。
 import type { AcceptInvitationRequest, CompletePasswordResetRequest, InspectLinkResponse, OneTimeLinkPurpose, SessionResponse } from '@nerve-office/contracts'
 import { inspectLinkResponseSchema, sessionResponseSchema } from '@nerve-office/contracts'
-import { apiRequest, requestWithLocalSession, setCsrfToken } from '../../shared/api/index.ts'
+import { apiRequest, requestWithLocalSession, setApiSession } from '../../shared/api/index.ts'
 
 const INSPECT_PATHS: Readonly<Record<OneTimeLinkPurpose, string>> = {
   invitation: '/api/auth/invitations/inspect',
@@ -15,12 +15,12 @@ export async function inspectLink(purpose: OneTimeLinkPurpose, token: string, si
 
 export async function acceptInvitation(request: AcceptInvitationRequest): Promise<SessionResponse> {
   const session = await requestWithLocalSession('mutation', async () => apiRequest('/api/auth/invitations/accept', { method: 'POST', body: request, schema: sessionResponseSchema }))
-  setCsrfToken(session.csrfToken)
+  setApiSession(session)
   return session
 }
 
 export async function completePasswordReset(request: CompletePasswordResetRequest): Promise<SessionResponse> {
   const session = await requestWithLocalSession('mutation', async () => apiRequest('/api/auth/password-resets/complete', { method: 'POST', body: request, schema: sessionResponseSchema }))
-  setCsrfToken(session.csrfToken)
+  setApiSession(session)
   return session
 }

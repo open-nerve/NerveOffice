@@ -106,6 +106,8 @@ export interface OutboxProbe {
   readonly removeObserved: (observation: DraftObservation, now: number) => Promise<Plain<Awaited<ReturnType<DraftStore['removeObserved']>>>>
   /** 下一次草稿 delete 成功之后中止整个事务，核对删除与墓碑没有部分提交。 */
   readonly abortNextDraftDelete: () => void
+  /** 保留期提示写入成功后中止，核对草稿删除与 expired 不会部分提交。 */
+  readonly abortNextExpiredNotice: () => void
   readonly settled: (operation: number) => Promise<Plain<Awaited<ReturnType<DraftStore['writeDraft']>>>>
   readonly replace: (input: ProbeDraftInput) => Promise<Plain<Awaited<ReturnType<DraftStore['replaceDraft']>>>>
   readonly confirm: (key: DraftKey, writer: WriterIdentity, confirmedSeq: number, rebased?: ProbeDraftInput) => Promise<Plain<Awaited<ReturnType<DraftStore['confirmDraft']>>>>
@@ -115,6 +117,7 @@ export interface OutboxProbe {
   readonly removeUser: (permit: UserCleanupPermit) => Promise<Plain<Awaited<ReturnType<DraftMaintenanceStore['removeUserData']>>>>
   readonly retireUser: (permit: UserCleanupPermit, now: number) => Promise<Plain<Awaited<ReturnType<DraftMaintenanceStore['retireUser']>>>>
   readonly purge: (now: number) => Promise<Plain<Awaited<ReturnType<DraftMaintenanceStore['purgeExpired']>>>>
+  readonly recordExpiredMirror: (key: DraftKey, now: number) => Promise<Plain<Awaited<ReturnType<DraftMaintenanceStore['recordExpiredMirror']>>>>
   readonly close: () => void
   /** 列表的标记（draft-index.ts） */
   readonly draftIds: (userId: string) => Promise<readonly string[]>
@@ -436,6 +439,19 @@ export function installOutboxProbe(target: Window): OutboxProbe {
         return request
       }
     },
+    abortNextExpiredNotice: () => {
+      const original: unknown = Reflect.get(IDBObjectStore.prototype, 'put')
+      if (typeof original !== 'function')
+        throw new TypeError('IDBObjectStore.prototype.put 不是函数')
+      IDBObjectStore.prototype.put = function put(value, key) {
+        const request = Reflect.apply(original, this, key === undefined ? [value] : [value, key]) as IDBRequest<IDBValidKey>
+        if (this.name === NOTICES_STORE && typeof value === 'object' && value !== null && Reflect.get(value, 'kind') === 'expired') {
+          Object.defineProperty(IDBObjectStore.prototype, 'put', { value: original, configurable: true, writable: true })
+          request.addEventListener('success', () => this.transaction.abort(), { once: true })
+        }
+        return request
+      }
+    },
     settled: async (operation) => {
       const pending = operations.get(operation)
       if (pending === undefined)
@@ -471,6 +487,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
     removeUser: async userId => plain(await maintenance.removeUserData(userId)),
     retireUser: async (userId, now) => plain(await maintenance.retireUser(userId, { now })),
     purge: async now => plain(await maintenance.purgeExpired(now)),
+    recordExpiredMirror: async (key, now) => plain(await maintenance.recordExpiredMirror(key, now)),
     close: () => {
       store.close()
       maintenance.close()

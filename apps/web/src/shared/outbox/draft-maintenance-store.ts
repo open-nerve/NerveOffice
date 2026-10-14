@@ -5,7 +5,7 @@ import type { UserCleanupPermit } from './session-fence.ts'
 import type { StoreOptions as DraftStoreOptions, StoreProblem, TransactionScope } from './store-transaction.ts'
 import type { ExistingDraft } from './writer-fence.ts'
 import { draftKeyPath, DRAFTS_STORE, NOTICES_STORE, SESSION_SLOT, SESSIONS_STORE, userKeyRange, WRITERS_STORE } from './database.ts'
-import { readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
+import { isWhole, readableUpdatedAt, readStoredDraft, readWriterRecord } from './draft-record.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
 import { canCleanUserSession, readUserCleanupPermit } from './session-fence.ts'
 import { readStoredSession } from './session-record.ts'
@@ -30,11 +30,14 @@ export interface DraftMaintenanceStore {
   readonly removeUserData: (permit: UserCleanupPermit, options?: { readonly retire: readonly string[], readonly now: number }) => Promise<StoreClearOutcome>
 
   /**
-   * 保留期（§3.4.7）：删掉读得出的更新时间超过 14 天的草稿（不论属于谁、不论格式；读不出的留着）；写入者按 writerRetention——登记超过 14 天、
+   * 保留期（§3.4.7）：删掉已知格式、更新时间超过 14 天的草稿并在同事务留下 expired（不论属于谁；较新格式、时间读不出的留着）；写入者按 writerRetention——登记超过 14 天、
    * 又没有草稿的换成墓碑（审查 A6），形状不对、又没有草稿的删掉，墓碑留着（由合一的清理在镜像目录不在之后删）；以及留下超过 14 天、
    * 形状不对的提示（S9）
    */
   readonly purgeExpired: (now: number) => Promise<StorePurgeOutcome>
+
+  /** 镜像独有的到期草稿已删除后留提示；事务内仍有主库原件时跳过，不覆盖重新写入的草稿。 */
+  readonly recordExpiredMirror: (key: DraftKey, now: number) => Promise<{ readonly kind: 'recorded' | 'skipped' } | StoreProblem>
 
   /**
    * 把这份文档的写入者换成墓碑（审查 A1、A6：放弃时镜像目录删不掉）：高水位不低于现有草稿的序号；没有写入者时也立一块。草稿与提示不动
@@ -163,19 +166,25 @@ export function createDraftMaintenanceStore(options: DraftStoreOptions): DraftMa
 
     purgeExpired: async now => run<StorePurgeOutcome>('readwrite', (scope) => {
       const purged: PurgedDraft[] = []
+      const retained: DraftKey[] = []
       /** 留下来的草稿的键（JSON）：还有草稿的写入者不删，高水位要接着用 */
       const remaining = new Set<string>()
       scope.then(scope.tx.objectStore(DRAFTS_STORE).openCursor(), (cursor) => {
         if (cursor !== null) {
           const value: unknown = cursor.value
           const key = draftKeyOf(cursor.primaryKey)
-          if (shouldPurgeDraft(readableUpdatedAt(value), now)) {
+          const record = readStoredDraft(value)
+          if (record.kind !== 'newer-format' && shouldPurgeDraft(readableUpdatedAt(value), now)) {
             cursor.delete()
-            if (key !== undefined)
-              purged.push({ key, record: readStoredDraft(value).kind })
+            if (key !== undefined) {
+              purged.push({ key, record: record.kind })
+              scope.tx.objectStore(NOTICES_STORE).put({ ...key, kind: 'expired', at: now })
+            }
           }
           else {
             remaining.add(JSON.stringify(cursor.primaryKey))
+            if (key !== undefined)
+              retained.push(key)
           }
           cursor.continue()
           return
@@ -185,7 +194,7 @@ export function createDraftMaintenanceStore(options: DraftStoreOptions): DraftMa
             // 提示：留下超过 14 天的、形状不对的删掉
             scope.then(scope.tx.objectStore(NOTICES_STORE).openCursor(), (noticeCursor) => {
               if (noticeCursor === null) {
-                scope.finish({ kind: 'purged', drafts: purged })
+                scope.finish({ kind: 'purged', drafts: purged, retained })
                 return
               }
               const notice = readRecoveryNotice(noticeCursor.value)
@@ -212,6 +221,17 @@ export function createDraftMaintenanceStore(options: DraftStoreOptions): DraftMa
         })
       })
     }, ALL_STORES),
+
+    recordExpiredMirror: async (key, now) => run<{ readonly kind: 'recorded' | 'skipped' }>('readwrite', (scope) => {
+      scope.then(scope.tx.objectStore(DRAFTS_STORE).get(draftKeyPath(key)) as IDBRequest<unknown>, (current) => {
+        if (current !== undefined || !isWhole(now, 0)) {
+          scope.finish({ kind: 'skipped' })
+          return
+        }
+        scope.tx.objectStore(NOTICES_STORE).put({ ...key, kind: 'expired', at: now })
+        scope.finish({ kind: 'recorded' })
+      })
+    }, [DRAFTS_STORE, NOTICES_STORE]),
 
     retireWriter: async (key, { now }) => run<StoreRetireOutcome>('readwrite', scope => retireDocument(scope, key, now)),
 

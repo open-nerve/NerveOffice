@@ -6,6 +6,7 @@ import { DOCUMENT_LIST_DEFAULT_LIMIT } from '@nerve-office/contracts'
 import { createDocument, createDocuments, createUser, expireSessions } from '../../support/database.ts'
 import { E2E_ADMIN } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { logoutThroughUi, openLogoutPreview } from '../../support/logout.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 
 /** 会话的确认（需要登录的页面打开时向服务端确认登录状态） */
@@ -205,7 +206,7 @@ test.describe('US-M1-02 登录与退出', () => {
     await page.goto('/?view=list')
     await expect(page.getByText('退出前能看到的文档')).toBeVisible()
 
-    await page.getByRole('button', { name: '退出', exact: true }).click()
+    await logoutThroughUi(page)
     await expect(page).toHaveURL(/\/login$/)
     // 退出是整页换成登录页（location.replace）：地址变了只说明新文档已经提交，还在加载。等登录页能用了再后退——
     // 加载还没完就后退，WebKit 偶发"WebKit encountered an internal error"（M2 收尾合并之后的 CI）
@@ -269,17 +270,16 @@ test.describe('US-M1-02 断网（审查 B4）', () => {
     await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })
 
-  test('断网时退出：提示网络错误，不会一直停在"正在退出"；恢复后再点退出即可退出，会话随之失效', async ({ page, context }) => {
+  test('预览后断网时退出：明确显示服务器结果未知；恢复后重试原操作即可退出', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('offline-logout'))
-    await page.goto('/')
-    await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
+    await openLogoutPreview(page)
     await context.setOffline(true)
-    await page.getByRole('button', { name: '退出', exact: true }).click()
-    await expect(page.getByRole('alert')).toHaveText('退出失败：网络连接失败，请检查网络后重试')
-    await expect(page.getByRole('button', { name: '退出', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '清理本机草稿并退出' }).click()
+    await expect(page.getByText('尚未确认服务器上的登录是否结束，请检查网络后重试。')).toBeVisible()
+    await expect(page.getByRole('button', { name: '重试未完成步骤' })).toHaveAttribute('aria-disabled', 'false')
     await context.setOffline(false)
-    await page.getByRole('button', { name: '退出', exact: true }).click()
-    await expect(page).toHaveURL(/\/login$/)
+    await page.getByRole('button', { name: '重试未完成步骤' }).click()
+    await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
     expect((await page.request.get('/api/documents')).status()).toBe(401)
   })
 })
@@ -297,7 +297,7 @@ test.describe('US-M1-02 多个标签页（审查 B6）', () => {
     await tabB.goto('/')
     await expect(tabB.getByText('先登录的人的文档')).toBeVisible()
 
-    await tabA.getByRole('button', { name: '退出', exact: true }).click()
+    await logoutThroughUi(tabA)
     await expect(tabA).toHaveURL(/\/login$/)
     await expect(tabB).toHaveURL(/\/login$/)
     await expect(tabB.getByText('先登录的人的文档')).toBeHidden()
@@ -307,39 +307,28 @@ test.describe('US-M1-02 多个标签页（审查 B6）', () => {
     await expect(tabB.getByText('后登录的人的文档')).toBeVisible()
     await expect(tabB.getByText('后登录的人', { exact: true })).toBeVisible()
 
-    await tabB.getByRole('button', { name: '退出', exact: true }).click()
+    await logoutThroughUi(tabB)
     await expect(tabB).toHaveURL(/\/login$/)
     await expect(tabA).toHaveURL(/\/login$/)
   })
 
-  test('会话在别处被换掉而本页没有收到消息：退出得到"令牌已过时"，随后本页重新加载，显示现在登录的人', async ({ context }) => {
+  test('会话在别处被换掉而本页没有收到消息：退出入口实际确认当前账户，重新明确确认才退出', async ({ context }) => {
     const first = await createUser('stale-first', '原来的人')
     const second = await createUser('stale-second', '现在的人')
     await createDocument(first, '原来的人的文档')
-    await createDocument(second, '现在的人的文档')
     const page = await context.newPage()
     await loginThroughApi(page, first)
     await page.goto('/')
     await expect(page.getByText('原来的人的文档')).toBeVisible()
-
-    // 直接调登录接口换人：Cookie 变了，但没有标签页发出消息（例如消息没有送达）
     await loginThroughApi(page, second)
-    // 页面随后向服务端确认会话：先挂起这个请求，看清失败的提示，再放行
-    let release: () => void = () => {}
-    const released = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    await page.route('**/api/auth/session', async (route) => {
-      await released
-      await route.continue()
-    })
+    const requests = recordApiRequests(page)
     await page.getByRole('button', { name: '退出', exact: true }).click()
-    // 不叫人刷新（M2-P6 复核 G3）：全局处理随即确认会话，换了人就整页重新加载
-    await expect(page.getByRole('alert')).toHaveText('退出失败：登录状态刚刚更新，这次操作没有完成，请再试一次')
-    release()
-    await expect(page.getByText('现在的人的文档')).toBeVisible()
+    await expect(page.getByText('现在的人', { exact: true })).toBeVisible()
     await expect(page.getByText('原来的人的文档')).toBeHidden()
-    await page.getByRole('button', { name: '退出', exact: true }).click()
-    await expect(page).toHaveURL(/\/login$/)
+    expect(requests.filter(request => request === 'POST /api/auth/logout')).toHaveLength(0)
+    expect((await page.request.get('/api/auth/session')).status()).toBe(200)
+    await page.getByRole('button', { name: '清理本机草稿并退出' }).click()
+    await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+    expect(requests.filter(request => request === 'POST /api/auth/logout')).toHaveLength(1)
   })
 })

@@ -17,6 +17,10 @@ export interface UserCleanupPermit extends DraftSessionPermit { readonly cause: 
 export interface SessionActivation { readonly state: LocalSessionState, readonly permit: DraftSessionPermit }
 export interface SessionChange { readonly state: LocalSessionState, readonly ticket: SessionCheckTicket }
 export interface UserCleanupStart { readonly state: LocalSessionState, readonly permit: UserCleanupPermit }
+export type SessionCheckFailure = { readonly kind: 'disabled', readonly userId: string } | { readonly kind: 'preserve' }
+export type SessionRejectionResult
+  = | { readonly kind: 'stopped', readonly previous: DraftSessionPermit }
+    | { readonly kind: 'clearing', readonly previous: DraftSessionPermit, readonly permit: UserCleanupPermit }
 
 function isUuid(value: unknown): value is string {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -185,6 +189,26 @@ export function suspendSession(state: LocalSessionState, permit: DraftSessionPer
   if (state.phase !== 'active' || !canUseDraftSession(state, permit, permit.userId))
     return undefined
   return { phase: 'suspended', generation: nextGeneration(generation, state.generation), source: state.source }
+}
+
+/** 失败只认请求前的原代次；activatedFrom 的成功共享规则不适用于失效和删除。 */
+export function rejectSessionCheck(state: LocalSessionState, ticket: SessionCheckTicket, failure: SessionCheckFailure, generation: string): { readonly state: LocalSessionState, readonly result: SessionRejectionResult } | undefined {
+  if (readSessionCheckTicket(ticket) === undefined || ticket.kind !== 'query' || state.generation !== ticket.generation
+    || state.source === undefined || retiredSource(state)
+    || (state.phase === 'unconfirmed' && state.changing !== false)
+    || (failure.kind === 'disabled' && failure.userId !== state.source.userId)) {
+    return undefined
+  }
+  const previous = { userId: state.source.userId, generation: state.generation }
+  if (failure.kind === 'disabled') {
+    const next: LocalSessionState = { phase: 'clearing', generation: nextGeneration(generation, state.generation), source: state.source, cause: 'account_disabled' }
+    return { state: next, result: { kind: 'clearing', previous, permit: { userId: next.source.userId, generation: next.generation, cause: 'account_disabled' } } }
+  }
+  // 已暂停的来源没有新的停写事实；重复通知会让本页/其它页继续查询并再次通知。
+  // 后续确证停用仍走上面的 clearing 分支，不把暂停误当作已清理。
+  if (failure.kind !== 'preserve' || state.phase === 'suspended')
+    return undefined
+  return { state: { phase: 'suspended', generation: nextGeneration(generation, state.generation), source: state.source }, result: { kind: 'stopped', previous } }
 }
 
 export function beginUserCleanup(state: LocalSessionState, permit: DraftSessionPermit, cause: UserCleanupCause, generation: string): UserCleanupStart | undefined {

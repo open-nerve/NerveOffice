@@ -1,10 +1,8 @@
 // 会话（P3 设计 §3.7）：当前会话的查询、登录与退出；CSRF 令牌随会话交给请求层。
 import type { LoginRequest, SessionResponse } from '@nerve-office/contracts'
-import type { AdoptRenewedSession } from '../../shared/lib/renewed-session.ts'
 import { sessionResponseSchema } from '@nerve-office/contracts'
 import { queryOptions } from '@tanstack/react-query'
-import { z } from 'zod'
-import { apiRequest, isAuthenticationError, requestSession, requestWithLocalSession, setCsrfToken } from '../../shared/api/index.ts'
+import { apiRequest, requestSession, requestWithLocalSession, setApiSession } from '../../shared/api/index.ts'
 
 export const SESSION_QUERY_KEY = ['auth', 'session'] as const
 
@@ -19,8 +17,6 @@ export const SESSION_QUERY_KEY = ['auth', 'session'] as const
 export const HANDLES_AUTHENTICATION = { handlesAuthentication: true } as const
 /** 登录 */
 export const STARTS_SESSION = { handlesAuthentication: true, session: 'starts' } as const
-/** 退出：成功，或者会话本来就不在了（401），都算退出了 */
-export const ENDS_SESSION = { session: 'ends' } as const
 /**
  * 修改密码：成功时当前页面换成了新的会话（M2-P6 复核 B1），通知其他标签页——同一个浏览器共用 Cookie，
  * 它们拿着的 CSRF 令牌随旧会话一起过时了。得到"未登录"时照常回到登录页（不像 STARTS_SESSION 那样自己处理）
@@ -50,7 +46,7 @@ export const OWN_DISABLE_AFTER_UNKNOWN = { systemAdminOnly: true, expiredReason:
 /** 会话查询用：拿到会话就把它的 CSRF 令牌交给请求层。 */
 export async function fetchSession(signal?: AbortSignal): Promise<SessionResponse> {
   const session = await requestSession(signal)
-  setCsrfToken(session.csrfToken)
+  setApiSession(session)
   return session
 }
 
@@ -71,29 +67,6 @@ export function sessionQueryOptions() {
 
 export async function login(request: LoginRequest): Promise<SessionResponse> {
   const session = await requestWithLocalSession('mutation', async () => apiRequest('/api/auth/login', { method: 'POST', body: request, schema: sessionResponseSchema }))
-  setCsrfToken(session.csrfToken)
+  setApiSession(session)
   return session
-}
-
-/**
- * 退出。得到"登录已过期"时先确认一次（M2-P6 复验 一般-4）：这次带的可能是换令牌之前的旧 Cookie——同一个浏览器里修改密码
- * 或重新登录与退出同时发生、退出晚于换令牌处理，服务端回 401 而不清除 Cookie，浏览器里的新会话仍然有效；照原样当作已经退出，
- * 登录页又会认出新会话、把人送回应用。浏览器里还是同一个人（adoptRenewedSession 换上了新的会话与 CSRF 令牌）：带着新的令牌再退出一次；
- * 没有会话、换了人：按原来的结果（这个会话已经不在了）处理，不替别人退出。
- * 只确认一次，不循环：再退出的结果照常处理——成功或 401 都算退出了，网络等其他失败显示出来、可以重试；确认本身失败同样显示出来
- */
-export async function logout(adoptRenewedSession: AdoptRenewedSession): Promise<void> {
-  try {
-    await requestLogout()
-  }
-  catch (error) {
-    if (!isAuthenticationError(error) || error.code !== 'SESSION_EXPIRED' || !await adoptRenewedSession())
-      throw error
-    await requestLogout()
-  }
-  setCsrfToken(undefined)
-}
-
-async function requestLogout(): Promise<void> {
-  await apiRequest('/api/auth/logout', { method: 'POST', schema: z.undefined() })
 }

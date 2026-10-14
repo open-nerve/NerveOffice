@@ -221,7 +221,7 @@ export interface ProbeWorkerTransaction {
 
 /** 比对镜像与库留下的提示（S9，存在库里） */
 export interface RecoveryNotice extends DraftKey {
-  readonly kind: 'restored' | 'lost'
+  readonly kind: 'restored' | 'lost' | 'expired'
   readonly at: number
 }
 
@@ -305,6 +305,7 @@ export interface OutboxProbe {
   readonly startAdopt: (observation: DraftObservation, input: ProbeDraftInput) => number
   readonly removeObserved: (observation: DraftObservation, now: number) => Promise<{ readonly kind: 'removed' | 'changed' | 'absent' } | ProbeProblem>
   readonly abortNextDraftDelete: () => void
+  readonly abortNextExpiredNotice: () => void
   readonly settled: (operation: number) => Promise<ProbeWriteOutcome>
   readonly replace: (input: ProbeDraftInput) => Promise<ProbeWriteOutcome>
   readonly confirm: (key: DraftKey, writer: WriterIdentity, confirmedSeq: number, rebased?: ProbeDraftInput) => Promise<ProbeConfirmOutcome>
@@ -313,7 +314,8 @@ export interface OutboxProbe {
   readonly remove: (key: DraftKey, expectedSeq?: number) => Promise<{ readonly kind: 'removed' | 'changed' | 'absent' } | ProbeProblem>
   readonly removeUser: (permit: CleanupPermit) => Promise<{ readonly kind: 'cleared' } | ProbeProblem>
   readonly retireUser: (permit: CleanupPermit, now: number) => Promise<{ readonly kind: 'retired' } | ProbeProblem>
-  readonly purge: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: 'draft' | 'newer-format' | 'malformed' }[] } | ProbeProblem>
+  readonly purge: (now: number) => Promise<{ readonly kind: 'purged', readonly drafts: readonly { readonly key: DraftKey, readonly record: 'draft' | 'newer-format' | 'malformed' }[], readonly retained: readonly DraftKey[] } | ProbeProblem>
+  readonly recordExpiredMirror: (key: DraftKey, now: number) => Promise<{ readonly kind: 'recorded' | 'skipped' } | ProbeProblem>
   readonly close: () => void
   readonly draftIds: (userId: string) => Promise<readonly string[]>
   readonly database: {

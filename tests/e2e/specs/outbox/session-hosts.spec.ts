@@ -1,15 +1,17 @@
 // 真实登录入口与真实 Worker/IDB 的交错：请求发出前退役，迟到查询不借新代次。
 import type { Page } from '@playwright/test'
 import type { ProbeCapture } from '../../support/outbox-probe.ts'
+import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
-import { createUser } from '../../support/database.ts'
+import { CURRENT_CLIENT } from '../../support/client-format.ts'
+import { createUser, revisionOf } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { currentLocalKey } from '../../support/local-draft.ts'
+import { recoverySnapshot } from '../../support/local-recovery.ts'
 import { openOutboxProbe, outcomeOf, probe, probeDatabase, probePipeline, removeMirrorOf, writerOf } from '../../support/outbox-probe.ts'
 import { fence } from '../../support/session-fence-probe.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-
-const RAW_KEY = '12'.repeat(32)
-const EXPECTED_READ = { 'same-user': { kind: 'draft', gzip: { text: 'same captured text' } }, 'other-user': { kind: 'session-invalid' } }
+import { createSheetThroughApi, savedContent } from '../../support/sheet.ts'
 
 async function nextLogin(change: string, user: Awaited<ReturnType<typeof createUser>>) {
   return change === 'same-user' ? user : createUser('ob-host-next')
@@ -37,16 +39,21 @@ test.describe('真实请求与宿主会话资格', { tag: '@test-build' }, () =>
         const user = await createUser('ob-host-old')
         const nextUser = await nextLogin(change, user)
         await loginThroughApi(page, user)
+        // 登录后的真实维护会检查权限与密文；保留用例必须属于可读文档并使用服务端密钥，不能用不存在的随机文档。
+        const documentId = await createSheetThroughApi(page)
+        const snapshot = recoverySnapshot((await savedContent(page, documentId)).text, 'same captured text')
+        const secret = await currentLocalKey(page)
+        const keyHex = Buffer.from(secret.key, 'base64').toString('hex')
         await openOutboxProbe(page)
-        await probe(page, 'chooseKey', 1, RAW_KEY)
+        await probe(page, 'chooseKey', secret.version, keyHex)
         const oldPermit = await activePermit(page)
         const created = await probePipeline(page, 'create', { host })
         expect(created.ready.kind).toBe('ready')
         await probePipeline(page, 'setKey', created.id, 'probe')
-        const key = { userId: user.id, documentId: randomUUID() }
+        const key = { userId: user.id, documentId }
         const writer = writerOf(4)
         expect((await probePipeline(page, 'register', created.id, key, writer, false)).kind).toBe('registered')
-        const capture: ProbeCapture = { key, writer, draftSeq: 1, baseRevision: 1, writtenBy: randomUUID(), format: { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }, formulasPending: false, inFlight: null, content: 'same captured text', dedupe: true }
+        const capture: ProbeCapture = { key, writer, draftSeq: 1, baseRevision: 1, writtenBy: randomUUID(), format: CURRENT_CLIENT, formulasPending: false, inFlight: null, content: snapshot, dedupe: true }
         expect((await probePipeline(page, 'write', created.id, capture)).kind).toBe('written')
         const observed = outcomeOf(await probePipeline(page, 'observe', created.id, key), 'observed')
         const before = await Promise.all(['drafts', 'writers'].map(async name => probeDatabase(page, 'getRaw', name, key)))
@@ -83,11 +90,12 @@ test.describe('真实请求与宿主会话资格', { tag: '@test-build' }, () =>
           expect(await probePipeline(page, 'bindSession', created.id, nextPermit)).toEqual({ kind: 'session-invalid' })
           await probePipeline(page, 'release', created.id, key)
           await openOutboxProbe(login)
-          await probe(login, 'chooseKey', 1, RAW_KEY)
+          await probe(login, 'chooseKey', secret.version, keyHex)
           const fresh = await probePipeline(login, 'create', { host })
           await probePipeline(login, 'setKey', fresh.id, 'probe')
           const read = await probePipeline(login, 'read', fresh.id, key)
-          expect(read).toMatchObject(EXPECTED_READ[change])
+          expect(read).toMatchObject(change === 'same-user' ? { kind: 'draft', gzip: { text: snapshot } } : { kind: 'session-invalid' })
+          expect(await revisionOf(documentId)).toBe(1)
           await probePipeline(login, 'disposeAll')
         }
         finally {

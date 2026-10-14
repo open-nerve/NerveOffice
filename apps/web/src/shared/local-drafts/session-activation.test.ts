@@ -1,6 +1,7 @@
 import type { SessionResponse } from '@nerve-office/contracts'
 import type { SessionStore } from '../outbox/session-store.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../api/api-errors.ts'
 import { rememberSessionPermit } from '../api/session-association.ts'
 import { deferred, fakeOutboxLocks } from '../outbox/outbox-lock.test-support.ts'
 import { withOutboxLock } from '../outbox/outbox-lock.ts'
@@ -67,10 +68,34 @@ function fixture() {
     trace.push('network')
     return result
   })
-  return { ...createSessionActivation({ store, exclusive, source }), store, lockEntry, source, request, result, trace }
+  const rejected = vi.fn(async (_error: unknown, _ticket: { readonly kind: 'query' | 'mutation', readonly generation: string }) => {
+    expect(locked).toBe(false)
+  })
+  return { ...createSessionActivation({ store, exclusive, source, rejected }), store, lockEntry, source, request, result, trace, rejected }
 }
 
 describe('真实请求前固定本机票据', () => {
+  it('初查主动取消携带旧 ApiError 时原样抛出，不视为新的服务端停用证据', async () => {
+    const t = fixture()
+    const controller = new AbortController()
+    const reason = new ApiError(401, 'SESSION_EXPIRED', '旧错误', { details: { reason: 'account_disabled', userId: USER } })
+    controller.abort(reason)
+    t.request.mockRejectedValue(reason)
+    await expect(t.track('query', t.request, controller.signal)).rejects.toBe(reason)
+    expect(t.rejected).not.toHaveBeenCalled()
+  })
+
+  it('初次会话查询失败把原票据交给失效处理，不在响应后另取许可；处理失败仍只抛原网络错误', async () => {
+    const t = fixture()
+    const error = new ApiError(401, 'SESSION_EXPIRED', '账户已停用', { details: { reason: 'account_disabled', userId: USER } })
+    t.request.mockRejectedValue(error)
+    t.rejected.mockRejectedValue(new Error('存储失败'))
+    await expect(t.track('query', t.request)).rejects.toBe(error)
+    expect(t.rejected).toHaveBeenCalledExactlyOnceWith(error, { kind: 'query', generation: INITIAL })
+    expect(t.store.beginSessionCheck).toHaveBeenCalledTimes(1)
+    expect(t.request).toHaveBeenCalledTimes(1)
+  })
+
   it.each(['query', 'mutation'] as const)('%s 的票据先于网络，摘要在锁外，接受后只关联原响应对象', async (kind) => {
     const t = fixture()
     const fields = Object.keys(t.result)

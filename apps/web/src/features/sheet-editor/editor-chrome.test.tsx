@@ -486,6 +486,14 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     expect(link).toHaveAttribute('target', '_blank')
   })
 
+  it('已确认停用与普通过期分别说明，不声称本机已经清完，页内修改仍保留', () => {
+    renderChrome({ session: 'signed-out', sessionEndedReason: 'account_disabled', save: { ...CLEAN, unsaved: true } })
+    expect(screen.getByRole('alert')).toHaveTextContent('你的账户已被停用。请联系系统管理员确认账户状态。')
+    expect(screen.getByRole('alert')).toHaveTextContent('本页的修改仍留在内存中，关闭页面会丢失。')
+    expect(screen.queryByText(/登录已过期或已在别处退出/)).toBeNull()
+    expect(screen.queryByText(/本机草稿已清理/)).toBeNull()
+  })
+
   it('会话不是本人时，不再重复"登录已过期""请求已失效"这类失败的说明（复验 RB2）', () => {
     renderChrome({ session: 'signed-out', save: { ...CLEAN, status: 'failed', problem: { kind: 'request', error: new ApiError(401, 'SESSION_EXPIRED', 'x') } } })
     expect(screen.getAllByRole('alert')).toHaveLength(1)

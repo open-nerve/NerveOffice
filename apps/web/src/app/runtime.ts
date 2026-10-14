@@ -4,17 +4,18 @@ import type { DataRouter, RouteObject } from 'react-router'
 import type { RequestIdLedger } from '../shared/api/request-ids.ts'
 import type { ExpiredReason, LoginReason } from '../shared/lib/login-path.ts'
 import type { PageLocation } from '../shared/lib/page-location.ts'
-import type { AdoptRenewedSession } from '../shared/lib/renewed-session.ts'
 import type { SessionChannel } from '../shared/lib/session-channel.ts'
 import type { SessionRecheck } from '../shared/lib/session-recheck.ts'
 import { createBrowserRouter } from 'react-router'
 import { isOneTimeLinkPage } from '../features/account/index.ts'
 import { sessionQueryOptions } from '../features/auth/index.ts'
-import { isAuthenticationError, requestSession, setCsrfToken } from '../shared/api/index.ts'
+import { disabledSessionUserId, isAuthenticationError, requestSession, setApiSession, setCsrfToken } from '../shared/api/index.ts'
 import { createRequestIdLedger } from '../shared/api/request-ids.ts'
 import { watchBrowserConnection } from '../shared/lib/browser-connection.ts'
 import { connectionState } from '../shared/lib/connection-state.ts'
+import { startDraftMaintenance } from '../shared/lib/draft-maintenance.ts'
 import { isLoginPage, LOGIN_PATH, loginPath } from '../shared/lib/login-path.ts'
+import { isLogoutPage } from '../shared/lib/logout-path.ts'
 import { browserPageLocation } from '../shared/lib/page-location.ts'
 import { openSessionChannel } from '../shared/lib/session-channel.ts'
 import { createQueryClient, sessionChangesPending, sessionChangesSettled } from './query-client.ts'
@@ -30,8 +31,6 @@ export interface AppRuntime {
    * 带着原因（ifEnded）时，确认下来已经没有会话就按它回到登录页（为自己生成重置链接的结果未知之后，M2-P6 复核第三批 R-1）
    */
   readonly recheckSession: SessionRecheck
-  /** 请求得到"登录已过期"之后，换上浏览器里同一个人的新会话：退出经 AdoptRenewedSessionContext 取用（M2-P6 复验 一般-4） */
-  readonly adoptRenewedSession: AdoptRenewedSession
   /**
    * 带 requestId 的新建共用的记账（新建表格、新建文件夹、复制，M2-P6 复核 M1）：页面一份，组件经 RequestIdLedgerContext 取用。
    * 组件随导航卸载、再回来时，结果未知的那件事仍沿用原来的 requestId
@@ -59,8 +58,7 @@ export interface AppRuntimeOptions {
  *   已经没有会话，才按原来的原因（已过期）整页回到登录页。发出请求的组件照常显示它的错误，不自动重试；
  * - 每一轮向服务端确认之前，本页还在进行的登录、修改密码先等它结束（有上限，见 sessionChangesSettled）：它的响应带着新的 Cookie，
  *   结束之前确认，带的多半还是旧的（M2-P6 复验 一般-1）；
- * - 退出成功（或者会话本来就不在了）：通知其他标签页，整页回到登录页；登录成功：通知其他标签页。
- *   退出得到"登录已过期"时由退出自己先确认一次（features/auth 的 logout 经 adoptRenewedSession，M2-P6 复验 一般-4）；
+ * - 登录成功通知其他标签页；明确退出由独立公开结果页持有固定来源，两侧结果由其自行处理。
  * - 别的标签页登录或退出了，状态变更的请求得到 CSRF_TOKEN_INVALID，只给系统管理员的请求得到 PERMISSION_DENIED，
  *   或者组件改了本人的账户：向服务端确认现在是谁（审查 B6，M2-P1 审查 B4）。
  *   还是同一个人，换上新的会话与 CSRF 令牌，页面不动；换了人或者已经退出，整页重新加载。
@@ -71,6 +69,7 @@ export interface AppRuntimeOptions {
  * P4 的编辑器页是另一个入口，会话结束时同样只能整页转到登录页。
  */
 export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
+  const stopMaintenance = startDraftMaintenance()
   const stopConnection = watchBrowserConnection({ state: connectionState, probe: requestSession })
   const router = (options.createRouter ?? createBrowserRouter)(appRoutes)
   const page = options.page ?? browserPageLocation
@@ -122,7 +121,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   // 公开页面接受或完成之后单页进入个人空间：跳过的复核这时补上。例如接受的响应写入了新账户的 Cookie，
   // 随后别的标签页又登录了另一个人，页面显示的与 Cookie 不是同一个人，要整页重新加载（复验 N6）
   const unsubscribeRouter = router.subscribe((state) => {
-    if (deferredRecheck && !isOneTimeLinkPage(state.location.pathname)) {
+    if (deferredRecheck && !isOneTimeLinkPage(state.location.pathname) && !isLogoutPage(state.location.pathname)) {
       deferredRecheck = false
       void recheckSession()
     }
@@ -148,7 +147,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   /** 整页回到登录页，登录后回到现在的地址；已经在登录页时不动 */
   function leaveToLogin(reason: LoginReason): void {
     const { pathname, search } = router.state.location
-    if (!isLoginPage(pathname))
+    if (!isLoginPage(pathname) && !isLogoutPage(pathname))
       leave(loginPath(`${pathname}${search}`, reason))
   }
 
@@ -163,32 +162,13 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
    */
   async function confirmSessionEnded(reason: ExpiredReason): Promise<void> {
     const earlier = expired?.reason
-    expired = { reason: earlier === undefined || earlier === 'expired' ? reason : earlier, after: checksStarted }
+    expired = { reason: reason === 'account_disabled_confirmed' || earlier === undefined || earlier === 'expired' ? reason : earlier, after: checksStarted }
     return recheckSession()
-  }
-
-  /**
-   * 请求得到"登录已过期"之后，浏览器里是不是已经换成了同一个人的新会话（M2-P6 复验 一般-4，features/auth 的退出经
-   * AdoptRenewedSessionContext 调用）：先等本页的登录、修改密码结束，再向服务端要一次会话。还是页面上的这个人：换上新的会话与
-   * CSRF 令牌，兑现为 true；没有会话、换了人、页面已经在离开：兑现为 false，不跳转、不重新加载，由调用方按原来的结果处理。
-   * 网络等失败原样抛出。不经 recheckSession：确认的结果交给调用方，不合并进别的确认
-   */
-  async function adoptRenewedSession(): Promise<boolean> {
-    await sessionChangesSettled(queryClient)
-    if (leaving)
-      return false
-    const { queryKey } = sessionQueryOptions()
-    const shown = queryClient.getQueryData(queryKey)
-    const current = await currentSession()
-    if (leaving || current === undefined || current.user.id !== shown?.user.id)
-      return false
-    adopt(current)
-    return true
   }
 
   /** 还是同一个人：换上新的会话与 CSRF 令牌，页面不动 */
   function adopt(current: SessionResponse): void {
-    setCsrfToken(current.csrfToken)
+    setApiSession(current)
     queryClient.setQueryData(sessionQueryOptions().queryKey, current)
   }
 
@@ -198,6 +178,10 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
       return await requestSession()
     }
     catch (error) {
+      if (disabledSessionUserId(error) !== undefined) {
+        // 这是本轮实际查询的事实；更晚发生的失效仍保持其轮次，旧查询不能替它提前下结论。
+        expired = { reason: 'account_disabled_confirmed', after: expired?.after ?? checksStarted - 1 }
+      }
       if (isAuthenticationError(error))
         return undefined
       throw error
@@ -231,7 +215,7 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
   async function checkSessionOnce(): Promise<void> {
     // 一次性链接的公开页面：没有显示任何人的数据，也不拿 CSRF 令牌，别的标签页换了人与它无关。
     // 令牌读出之后已经从地址里去掉，重新加载只能显示"链接无效"（M2-P1 审查 B3）。离开这个页面时再补上（复验 N6）
-    if (isOneTimeLinkPage(router.state.location.pathname)) {
+    if (isOneTimeLinkPage(router.state.location.pathname) || isLogoutPage(router.state.location.pathname)) {
       deferredRecheck = true
       return
     }
@@ -286,9 +270,9 @@ export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
     queryClient,
     page,
     recheckSession: async ifEnded => (ifEnded === undefined ? recheckSession() : confirmSessionEnded(ifEnded)),
-    adoptRenewedSession,
     requestIds: createRequestIdLedger(),
     dispose: () => {
+      stopMaintenance()
       stopConnection()
       unsubscribe()
       unsubscribeRouter()

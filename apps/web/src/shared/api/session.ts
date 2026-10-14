@@ -6,5 +6,5 @@ import { requestWithLocalSession } from './session-tracking.ts'
 
 /** 向服务端要现在的会话，不改动请求层的 CSRF 令牌：调用方确认是同一个人之后才用它的令牌（复验 S2）。 */
 export async function requestSession(signal?: AbortSignal): Promise<SessionResponse> {
-  return requestWithLocalSession('query', async () => apiRequest('/api/auth/session', { schema: sessionResponseSchema, signal }))
+  return requestWithLocalSession('query', async () => apiRequest('/api/auth/session', { schema: sessionResponseSchema, signal }), signal)
 }

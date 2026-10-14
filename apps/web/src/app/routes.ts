@@ -7,6 +7,7 @@ import { ADMIN_PATH, ADMIN_PATHS, ADMIN_USER_DOCUMENTS_ROUTE } from '../shared/l
 import { loadChunk } from '../shared/lib/chunk-load.ts'
 import { LOCAL_DRAFTS_PATH } from '../shared/lib/local-drafts-path.ts'
 import { LOGIN_PATH } from '../shared/lib/login-path.ts'
+import { LOGOUT_PATH } from '../shared/lib/logout-path.ts'
 import { SEARCH_PATH, SHARED_PATH, SPACE_FOLDER_ROUTE, SPACE_MEMBERS_ROUTE, SPACE_ROUTE, SPACE_TRASH_ROUTE } from '../shared/lib/space-paths.ts'
 import { AppShell } from './layout/app-shell.tsx'
 import { ErrorPage, RouteErrorBoundary } from './pages/error-page.tsx'
@@ -44,8 +45,13 @@ async function localDraftsPages() {
   return loadChunk(async () => import('../features/local-drafts/index.ts'))
 }
 
+async function localDataPages() {
+  return loadChunk(async () => import('../features/local-data/index.ts'))
+}
+
 /** 平台页面的路由（P3 设计 §3.7）。编辑器页在 P4 另起入口，整页加载。 */
 export const appRoutes: RouteObject[] = [
+  { path: LOGOUT_PATH, lazy: async () => ({ Component: (await localDataPages()).LogoutPage }), ErrorBoundary: ErrorPage, HydrateFallback: SessionCheck },
   { path: LOGIN_PATH, Component: LoginPage, ErrorBoundary: ErrorPage },
   // 一次性链接的公开页面（M2-P1）：不需要登录；令牌在链接的 # 之后
   { path: ONE_TIME_LINK_PAGE_PATHS.invitation, Component: InvitationPage, ErrorBoundary: ErrorPage },

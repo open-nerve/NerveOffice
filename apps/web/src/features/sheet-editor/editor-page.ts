@@ -38,11 +38,12 @@ import type { SameBrowser } from './same-browser.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { documentIsNewer, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
-import { isAuthenticationError, isCsrfTokenError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
+import { disabledSessionUserId, isAuthenticationError, isCsrfTokenError, isMissingResource, setApiSession, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
 import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
 import { createRecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
 import { draftSessionPermitOf } from '../../shared/local-drafts/session-activation.ts'
+import { subscribeLocalSession } from '../../shared/local-drafts/session-events.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
 import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
@@ -92,6 +93,8 @@ export interface EditorPageView {
   /** 同上：自动保存这一侧的状态（联网、会话、会不会自动重试），页头连同 save 给出保存状态的全集（save-indicator.ts） */
   readonly autosave: AutosaveView | undefined
   readonly session: EditorPageSession
+  /** 本页账户的实际停用事实；重新确认新登录后清除，不代表本机清理已完成。 */
+  readonly sessionEndedReason?: 'account_disabled' | undefined
   /**
    * 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示在会话的提示里（复验 RB7）；
    * 是 active、而保存因为令牌失效或未登录失败时显示在保存失败的说明里：令牌没有换成，不能说"再保存一次"就好（复验 TB1）
@@ -307,6 +310,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
    */
   let staleAfter: number | undefined
   let sessionProblem: unknown
+  let sessionEndedReason: EditorPageView['sessionEndedReason']
   /**
    * 确认会话失败（sessionProblem，网络等）之后的再确认（审查 A6）：确认有结果之前自动保存暂停，人其实多半一直在登录中——恢复联网、
    * 回到前台时立即再确认，另按自动保存的退避（2、4……秒，至多 60 秒）定时再确认。确认有了结果（成功、未登录、换了人）就停
@@ -322,6 +326,17 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   /** 上一次通知时的 confirmedForWrite()：变了才通知 */
   let writable = true
   const cleanups: (() => void)[] = []
+  cleanups.push(subscribeLocalSession((event) => {
+    if (disposed || event.kind !== 'stopped' || localPermit?.userId !== event.previous.userId || localPermit.generation !== event.previous.generation)
+      return
+    if (event.cleanup?.cause === 'account_disabled')
+      sessionEndedReason = 'account_disabled'
+    localPermit = undefined
+    recovery?.suspend()
+    // 沿已有代次变化路径暂停捕获、关闭本机宿主和释放密钥；服务器状态仍由真实会话请求确认。
+    mode?.setSession(session)
+    update()
+  }))
   /** 交互屏障：撤掉它的函数 */
   let releaseBarrier: (() => void) | undefined
   /** 编辑器容器的状态（写在容器的 data-editor-state 上） */
@@ -330,7 +345,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, recovery: recovery?.view(), localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { load, recovery: recovery?.view(), localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
   }
 
   /** 页面信号变了：在调用者的同步段里通知（可见性在 visibilitychange 里，切到后台的上传不靠计时器） */
@@ -423,7 +438,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       return
     leaving = true
     setCsrfToken(undefined)
-    page.replace(loginPath(options.currentPath(), error.code === 'SESSION_EXPIRED' ? 'expired' : 'required'))
+    page.replace(loginPath(options.currentPath(), disabledSessionUserId(error) !== undefined ? 'account_disabled_confirmed' : error.code === 'SESSION_EXPIRED' ? 'expired' : 'required'))
   }
 
   function loadFailed(error: unknown): void {
@@ -437,6 +452,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   function enterSession(next: EditorPageSession): void {
+    if (next !== 'signed-out')
+      sessionEndedReason = undefined
     session = next
     if (next !== 'active') {
       localPermit = undefined
@@ -448,6 +465,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   /** 编辑权与另存为副本的请求得到未登录或令牌失效：向服务端确认现在是谁（不显示"正在确认"：不是用户按了保存） */
   function writeProblem(error: ApiError): void {
+    if (userId !== undefined && disabledSessionUserId(error) === userId)
+      sessionEndedReason = 'account_disabled'
     if (isAuthenticationError(error))
       unauthenticatedPending = true
     else
@@ -555,6 +574,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         }
         return
       }
+      if (userId !== undefined && disabledSessionUserId(error) === userId)
+        sessionEndedReason = 'account_disabled'
     }
     if (disposed)
       return
@@ -570,7 +591,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
     else if (confirmed.user.id === userId) {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
-      setCsrfToken(confirmed.csrfToken)
+      setApiSession(confirmed)
       localDraftsEnabled = confirmed.features.localDraftsEnabled
       localPermit = draftSessionPermitOf(confirmed)
       enterSession('active')
@@ -790,7 +811,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         signedIn = await api.session()
         if (disposed)
           return
-        setCsrfToken(signedIn.csrfToken)
+        setApiSession(signedIn)
         userId = signedIn.user.id
         localDraftsEnabled = signedIn.features.localDraftsEnabled
         localPermit = draftSessionPermitOf(signedIn)

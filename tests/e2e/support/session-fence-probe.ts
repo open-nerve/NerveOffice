@@ -12,6 +12,7 @@ export interface SessionFenceProbe {
   readonly begin: (kind: SessionTicket['kind']) => Result<{ readonly kind: 'ticket', readonly ticket: SessionTicket }>
   readonly accept: (ticket: SessionTicket, source: SessionSource) => Result<{ readonly kind: 'active', readonly permit: SessionPermit }>
   readonly fail: (ticket: SessionTicket) => Result<{ readonly kind: 'released' }>
+  readonly reject: (ticket: SessionTicket, failure: { readonly kind: 'disabled', readonly userId: string } | { readonly kind: 'preserve' }) => Result<{ readonly kind: 'invalidated' } | { readonly kind: 'stopped', readonly previous: SessionPermit } | { readonly kind: 'clearing', readonly previous: SessionPermit, readonly permit: CleanupPermit }>
   readonly suspend: (permit: SessionPermit) => Result<{ readonly kind: 'suspended' }>
   readonly beginCleanup: (permit: SessionPermit, cause: CleanupPermit['cause']) => Result<{ readonly kind: 'clearing', readonly permit: CleanupPermit }>
   readonly finishCleanup: (permit: CleanupPermit) => Result<{ readonly kind: 'cleared' }>

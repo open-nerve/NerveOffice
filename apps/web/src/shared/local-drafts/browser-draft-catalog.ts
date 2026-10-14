@@ -14,6 +14,8 @@ interface BrowserDraftCatalogOptions {
   readonly still: () => boolean
   readonly onSessionProblem: (error: unknown) => void
   readonly reportError: (error: unknown) => void
+  /** 后台目录可把当前页已有前台所有者的文档交给前台，避免重复取钥、回执核对和清理。 */
+  readonly include?: (documentId: string) => boolean
 }
 
 /** 这里只组装浏览器能力；资格、恢复判定和页面渲染各自独立。 */
@@ -39,7 +41,15 @@ export function createBrowserDraftCatalog(options: BrowserDraftCatalogOptions): 
   }
   return createDraftCatalog({
     still,
-    inventory,
+    inventory: {
+      load: async () => {
+        const result = await inventory.load()
+        return result.kind === 'listed' && options.include !== undefined
+          ? { ...result, entries: result.entries.filter(entry => options.include?.(entry.documentId)) }
+          : result
+      },
+      dispose: inventory.dispose,
+    },
     onSessionProblem: options.onSessionProblem,
     readFacts: async (ids) => {
       await confirm()

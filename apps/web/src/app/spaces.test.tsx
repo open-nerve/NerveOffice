@@ -111,10 +111,10 @@ describe('US-M2-05 左侧导航', () => {
     loggedIn(team(), { 'GET /api/spaces': list.handler, [`GET /api/spaces/${TEAM_ID}`]: header.handler })
     renderApp(`/spaces/${TEAM_ID}`)
     expect(await screen.findByRole('status', { name: '正在加载空间列表…' })).toBeInTheDocument()
-    expect(screen.getByRole('status', { name: '正在加载空间…' })).toBeInTheDocument()
+    expect(within(screen.getByRole('main')).getByRole('status', { name: '正在加载空间…' })).toBeInTheDocument()
     list.resolve(json(200, { items: [personalSpaceOf(SESSION), team()] }))
     expect(await within(spaceNav()).findByRole('link', { name: '市场部' })).toBeInTheDocument()
-    expect(screen.getByRole('status', { name: '正在加载空间…' })).toBeInTheDocument()
+    expect(within(screen.getByRole('main')).getByRole('status', { name: '正在加载空间…' })).toBeInTheDocument()
     header.resolve(json(200, team()))
     expect(await screen.findByRole('heading', { name: '市场部' })).toBeInTheDocument()
   })
@@ -632,7 +632,7 @@ describe('US-M2-06 成员页', () => {
       await act(async () => vi.advanceTimersByTimeAsync(OUTCOME_REFRESH_TIME_LIMIT_MS))
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
       const notice = await waitFor(() => {
-        const found = screen.getAllByRole('status').find(status => status.textContent.includes('成员列表还在刷新'))
+        const found = within(screen.getByRole('main')).getAllByRole('status').find(status => status.textContent.includes('成员列表还在刷新'))
         expect(found).toBeDefined()
         return found!
       })
@@ -686,7 +686,7 @@ describe('US-M2-06 成员页', () => {
     renderApp(MEMBERS_PATH)
     const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
     // 说明的容器一开始就在（空的），之后往里填文字，读屏软件才会播报
-    const statuses = screen.getAllByRole('status')
+    const statuses = within(screen.getByRole('main')).getAllByRole('status')
     remove.focus()
     fireEvent.click(remove)
     const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
@@ -1068,7 +1068,7 @@ describe('US-M2-06 成员页与导航：写入成功之后的刷新（Codex 对�
       renderApp(MEMBERS_PATH)
       const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
       // 说明的容器一开始就在（空的）
-      const statuses = screen.getAllByRole('status')
+      const statuses = within(screen.getByRole('main')).getAllByRole('status')
       remove.focus()
       fireEvent.click(remove)
       const dialog = await screen.findByRole('dialog', { name: `把 ${plainName('凯特', 'cat')} 移出这个空间？` })
@@ -1110,7 +1110,7 @@ describe('US-M2-06 成员页与导航：写入成功之后的刷新（Codex 对�
     })
     renderApp(MEMBERS_PATH)
     const remove = await screen.findByRole('button', { name: `移出 ${plainName('凯特', 'cat')}` })
-    const statuses = screen.getAllByRole('status')
+    const statuses = within(screen.getByRole('main')).getAllByRole('status')
     fireEvent.click(remove)
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '移出' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())

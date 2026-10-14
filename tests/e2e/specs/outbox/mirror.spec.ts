@@ -718,13 +718,37 @@ test.describe('OPFS 的镜像', { tag: '@test-build' }, () => {
     expect(purged).toMatchObject({ kind: 'purged', pending: [key], mirror: { kind: 'done' } })
     expect(outcomeOf(purged, 'purged').drafts.filter(draft => draft.key.userId === key.userId)).toEqual([{ key: live, record: 'draft' }])
     expect(await slotsOf(page, live)).toEqual(['missing', 'missing'])
-    expect([await probeDatabase(page, 'getRaw', 'writers', live), await probeDatabase(page, 'getRaw', 'notices', live)], '镜像目录没了：写入者换成的墓碑一并删').toEqual([null, null])
+    expect(await probeDatabase(page, 'getRaw', 'writers', live), '镜像目录没了：写入者换成的墓碑一并删').toBeNull()
+    expect(await probeDatabase(page, 'getRaw', 'notices', live)).toEqual({ ...live, kind: 'expired', at: later })
     expect(await probeDatabase(page, 'getRaw', 'writers', key), '镜像目录还在（句柄开着）：过期的写入者换成墓碑留着（审查 A6）').toMatchObject({ writerId: 'retired' })
 
     await probePipeline(page, 'release', id, key)
     expect(await probePipeline(page, 'cleanupExpired', later)).toMatchObject({ kind: 'purged', pending: [], mirror: { kind: 'done' } })
     expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
     expect(await probeDatabase(page, 'getRaw', 'writers', key)).toBeNull()
+  })
+
+  test('镜像独有的到期草稿留下提示；主库较新格式保护同一目录的旧镜像原件', async ({ profile: { page } }) => {
+    const { key } = await prepare(page, 'ob-exp-mirror')
+    const kept = { userId: key.userId, documentId: randomUUID() }
+    const writer = writerOf(3)
+    const id = await workerPipeline(page)
+    for (const target of [key, kept]) {
+      await probePipeline(page, 'register', id, target, writer, false)
+      outcomeOf(await probePipeline(page, 'write', id, captureOf(target, writer, 1, `content of ${target.documentId}`)), 'written')
+      await probePipeline(page, 'release', id, target)
+    }
+    expect(await probe(page, 'remove', key)).toEqual({ kind: 'removed' })
+    await probeDatabase(page, 'patchDraft', kept, { recordVersion: 2 })
+    const original = await probeDatabase(page, 'getRaw', 'drafts', kept)
+    const later = Date.now() + 15 * 24 * 60 * 60 * 1000
+    const purged = outcomeOf(await probePipeline(page, 'cleanupExpired', later), 'purged')
+    expect(purged.drafts.filter(draft => draft.key.userId === key.userId)).toEqual([{ key, record: 'draft' }])
+    expect(await slotsOf(page, key)).toEqual(['missing', 'missing'])
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toEqual({ ...key, kind: 'expired', at: later })
+    expect(await probeDatabase(page, 'getRaw', 'drafts', kept)).toEqual(original)
+    expect(await slotsOf(page, kept)).toEqual(['seq1@1', 'empty'])
+    expect(await probeDatabase(page, 'getRaw', 'notices', kept)).toBeNull()
   })
 
   test('删目录（P4 的保留期、按用户清理用，页面里调）：句柄开着时 busy；放开之后删掉这份文档的目录，别的文档不动；按用户删掉整个目录', async ({ profile: { page } }) => {

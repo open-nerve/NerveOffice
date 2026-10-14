@@ -1,7 +1,8 @@
-export { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isMissingResource, isNotFoundError, isPermissionDeniedError, isTransientError, isUnknownOutcome, NetworkError, readJson, RequestTimeoutError, ResponseFormatError, serverTimeOf, setCsrfToken } from './client.ts'
+export { ApiError, apiFetch, apiRequest, isAccessDenied, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isMissingResource, isNotFoundError, isPermissionDeniedError, isTransientError, isUnknownOutcome, NetworkError, readJson, RequestTimeoutError, ResponseFormatError, serverTimeOf, setApiSession, setCsrfToken } from './client.ts'
 export type { HttpMethod, RawRequestOptions, RequestOptions } from './client.ts'
 export { describeError } from './describe-error.ts'
 export type { ErrorDescription } from './describe-error.ts'
+export { disabledSessionUserId } from './session-failure-facts.ts'
 export { requestWithLocalSession } from './session-tracking.ts'
 export { requestSession } from './session.ts'
 // 只给平台页面用的两个模块不经这里转出，用到的地方按路径引用：request-ids.ts（带 requestId 的新建的记账）、write-outcome.ts（写操作结果未知之后的共用做法）。

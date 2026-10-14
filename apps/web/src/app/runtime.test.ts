@@ -1,7 +1,7 @@
 // 运行时的组装：默认用浏览器的实现；与会话无关的请求不触发会话的全局处理；会话复核给组件用；
 // 请求得到"登录已过期"时先确认会话（复验 N3），本页的登录、修改密码先等它结束（有上限，M2-P6 复验 一般-1、一般-2）；
 // 带原因的确认因网络失败没有结论时，下一个请求成功就再确认一次（M2-P6 复核第五批 G9）；
-// 退出用的"换上同一个人的新会话"（M2-P6 复验 一般-4）。流程见 app.test.tsx。
+// 明确退出页自己持有原确认；运行时不为它重新采纳登录。
 import type { SessionResponse } from '@nerve-office/contracts'
 import type { AppRuntime } from './runtime.ts'
 import { MutationObserver } from '@tanstack/react-query'
@@ -224,6 +224,31 @@ describe('会话复核（M2-P1 审查 B3、B4）', () => {
 })
 
 describe('请求得到"登录已过期"：先向服务端确认会话（复验 N3）', () => {
+  it.each([false, true])('普通请求确证停用后仍先确认当前登录；新登录存在：%s', async (renewed) => {
+    installFakeApi({ 'GET /api/auth/session': () => renewed ? json(200, { ...SESSION, csrfToken: 'new-session' }) : apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    const error = new ApiError(401, 'SESSION_EXPIRED', '账户停用', { details: { reason: 'account_disabled', userId: SESSION.user.id } })
+    await expect(new MutationObserver(runtime.queryClient, { mutationFn: async () => {
+      throw error
+    } }).mutate()).rejects.toBe(error)
+    if (renewed) {
+      await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('new-session'))
+      expect(page.visits).toEqual([])
+    }
+    else {
+      await vi.waitFor(() => expect(page.visits).toEqual(['/login?reason=account_disabled_confirmed']))
+    }
+  })
+
+  it('广播后的实际会话查询确证停用，也保留原因再离开', async () => {
+    installFakeApi({ 'GET /api/auth/session': () => json(401, { error: { code: 'SESSION_EXPIRED', message: '账户停用', requestId: 'req-disabled', details: { reason: 'account_disabled', userId: SESSION.user.id } } }) })
+    const { runtime, page } = runtimeAt('/')
+    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    await runtime.recheckSession()
+    expect(page.visits).toEqual(['/login?reason=account_disabled_confirmed'])
+  })
+
   it('还是同一个人（本页或别的标签页刚换了令牌）：换上新的会话与 CSRF 令牌，页面不动；这个请求照常失败，不自动重试', async () => {
     const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-2' }), 'POST /api/probe': () => new Response(null, { status: 204 }) })
     const { runtime, page } = runtimeAt('/')
@@ -711,74 +736,12 @@ describe('本页的登录、修改密码还在进行：向服务端确认之前�
   })
 })
 
-describe('换上浏览器里同一个人的新会话（退出用，M2-P6 复验 一般-4）', () => {
-  it('还是页面上的这个人：换上新的会话与 CSRF 令牌，兑现为 true；页面不动', async () => {
-    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-2' }), 'POST /api/probe': () => new Response(null, { status: 204 }) })
-    const { runtime, page } = runtimeAt('/')
-    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
-    await expect(runtime.adoptRenewedSession()).resolves.toBe(true)
-    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-2')
-    await apiRequest('/api/probe', { method: 'POST', schema: z.undefined() })
-    expect(api.requests.find(entry => entry.key === 'POST /api/probe')?.headers['x-csrf-token']).toBe('csrf-2')
-    expect(page.visits).toEqual([])
-  })
-
-  it.each([
-    ['已经没有会话', () => apiError(401, 'UNAUTHENTICATED')],
-    ['会话也失效了', () => apiError(401, 'SESSION_EXPIRED')],
-    ['换了人', () => json(200, OTHER_SESSION)],
-  ])('%s：兑现为 false，不换令牌、不跳转、不重新加载（由调用方按原来的结果处理）', async (_name, response) => {
-    const api = installFakeApi({ 'GET /api/auth/session': response, 'POST /api/probe': () => new Response(null, { status: 204 }) })
-    const { runtime, page } = runtimeAt('/')
-    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
-    setCsrfToken('csrf-1')
-    await expect(runtime.adoptRenewedSession()).resolves.toBe(false)
-    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-1')
-    await apiRequest('/api/probe', { method: 'POST', schema: z.undefined() })
-    expect(api.requests.find(entry => entry.key === 'POST /api/probe')?.headers['x-csrf-token']).toBe('csrf-1')
-    expect(page.visits).toEqual([])
-  })
-
-  it('网络失败：原样抛出，页面不动', async () => {
-    installFakeApi({ 'GET /api/auth/session': networkFailure })
-    const { runtime, page } = runtimeAt('/')
-    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
-    await expect(runtime.adoptRenewedSession()).rejects.toBeInstanceOf(NetworkError)
-    expect(page.visits).toEqual([])
-  })
-
-  it('本页的修改密码还在进行：等它结束再向服务端要会话', async () => {
-    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, { ...SESSION, csrfToken: 'csrf-renewed' }) })
-    const { runtime } = runtimeAt('/settings/password')
-    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
-    const renewal = sessionChangeInProgress(runtime, RENEWS_SESSION)
-    const adopted = runtime.adoptRenewedSession()
-    await settle()
+describe('固定确认的公开退出结果页', () => {
+  it.each(['/logout', '/logout/'])('在 %s 收到会话广播不查询或跳转，由退出页结束旧确认', async (path) => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, OTHER_SESSION) })
+    const { runtime, page } = runtimeAt(path)
+    await runtime.recheckSession()
     expect(api.requests).toEqual([])
-    renewal.succeed({ ...SESSION, csrfToken: 'csrf-renewed' })
-    await expect(adopted).resolves.toBe(true)
-    expect(api.requests.map(entry => entry.key)).toEqual(['GET /api/auth/session'])
-  })
-
-  it('页面已经在离开：兑现为 false，不再向服务端要会话', async () => {
-    const api = installFakeApi({ 'GET /api/auth/session': () => json(200, SESSION) })
-    const { runtime, page } = runtimeAt('/')
-    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
-    await failWith(runtime, 'UNAUTHENTICATED')
-    await expect(runtime.adoptRenewedSession()).resolves.toBe(false)
-    expect(api.requests).toEqual([])
-    expect(page.visits).toEqual(['/login'])
-  })
-
-  it('确认期间页面开始离开（别的请求得到未登录）：兑现为 false，不换上新的令牌', async () => {
-    const pending = deferredResponse()
-    installFakeApi({ 'GET /api/auth/session': pending.handler })
-    const { runtime } = runtimeAt('/')
-    runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
-    const adopted = runtime.adoptRenewedSession()
-    await failWith(runtime, 'UNAUTHENTICATED')
-    pending.resolve(json(200, { ...SESSION, csrfToken: 'csrf-2' }))
-    await expect(adopted).resolves.toBe(false)
-    expect(sessionOf(runtime)?.csrfToken).toBe('csrf-1')
+    expect(page.visits).toEqual([])
   })
 })
