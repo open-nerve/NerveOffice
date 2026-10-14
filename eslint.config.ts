@@ -91,6 +91,7 @@ const UNIVER_INTERNAL_SYMBOLS = [
       'FOCUSING_FX_BAR_EDITOR',
       'IAuthzIoService',
       'IContextService',
+      'ILocalStorageService',
       'ILogService',
       'IPermissionService',
       'IResourceHook',

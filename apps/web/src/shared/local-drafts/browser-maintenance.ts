@@ -1,21 +1,23 @@
 import type { DraftSessionPermit } from '../outbox/session-fence.ts'
 import { openSessionChannel } from '../lib/session-channel.ts'
-import { createDraftMaintenanceStore } from '../outbox/draft-maintenance-store.ts'
-import { createDraftStore } from '../outbox/draft-store.ts'
-import { createLocalCleanup } from '../outbox/local-cleanup.ts'
-import { opfsMirrorDirectory } from '../outbox/mirror-directory.ts'
 import { withOutboxLock } from '../outbox/outbox-lock.ts'
 import { canUseDraftSession, cleanupPermitOf } from '../outbox/session-fence.ts'
 import { createSessionStore } from '../outbox/session-store.ts'
+import { createBrowserCleanup } from './browser-cleanup.ts'
 import { createDraftMaintenance } from './draft-maintenance.ts'
+import { clearLegacySessionMarkers } from './legacy-storage.ts'
 import { maintenanceIncludes } from './maintenance-page.ts'
 import { watchMaintenanceSignals } from './maintenance-signals.ts'
 import { publishLocalSession } from './session-events.ts'
 
 function createBrowserMaintenance() {
+  try {
+    clearLegacySessionMarkers(window.sessionStorage)
+  }
+  catch { /* 普通启动不因退役记号清理失败阻断阅读；明确退出仍报告存储失败。 */ }
   const storeOptions = { blockedTimeoutMs: 3_000 }
   const sessions = createSessionStore(storeOptions)
-  const cleanup = createLocalCleanup({ sessions, store: { ...createDraftStore(storeOptions), ...createDraftMaintenanceStore(storeOptions) }, directory: opfsMirrorDirectory(), now: Date.now })
+  const cleanup = createBrowserCleanup(sessions, storeOptions)
   const readState = async () => withOutboxLock(async () => sessions.readState())
   async function check(permit: DraftSessionPermit): Promise<'active' | 'session' | 'storage'> {
     try {

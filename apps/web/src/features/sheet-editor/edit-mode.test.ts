@@ -4584,6 +4584,35 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
 })
 
 describe('页面关闭（pagehide）时的本机锁与记号（M3-P5 设计 §3.1、§3.7 的 R1）', () => {
+  it.each(['signed-out', 'other-user'] as const)('已确认 %s 后离开不重建保存中记号，即使旧保存结果未知', async (state) => {
+    const context = setup()
+    await editing(context)
+    context.api.save.mockRejectedValueOnce(new NetworkError('请求被取消'))
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    await settle()
+    context.mode.setSession(state)
+    context.mode.releaseOnHide()
+    await settle()
+    expect(context.marker.write).not.toHaveBeenCalled()
+  })
+
+  it('清理通知已经收回本机许可而服务端确认尚未回来时，pagehide 不重建旧记号', async () => {
+    const local = await localDrafts()
+    let permit: ReturnType<typeof local.options.permit> | undefined = local.options.permit()
+    const context = setup({ localDrafts: { ...local.options, permit: () => permit } })
+    await editing(context)
+    context.api.save.mockRejectedValueOnce(new NetworkError('请求被取消'))
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    await settle()
+    permit = undefined
+    context.mode.setSession('active')
+    context.mode.releaseOnHide()
+    await settle()
+    expect(context.marker.write).not.toHaveBeenCalled()
+  })
+
   it('有保存在途：放锁，不释放编辑权（M3-P4），记下记号——基准是本页确认过的最新修订', async () => {
     const reply = deferred<SaveContentResponse>()
     const context = setup()

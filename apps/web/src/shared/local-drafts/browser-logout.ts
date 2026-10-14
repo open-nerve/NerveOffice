@@ -2,13 +2,10 @@ import type { SessionResponse } from '@nerve-office/contracts'
 import { setCsrfToken } from '../api/client.ts'
 import { associatedSessionPermit } from '../api/session-association.ts'
 import { openSessionChannel } from '../lib/session-channel.ts'
-import { createDraftMaintenanceStore } from '../outbox/draft-maintenance-store.ts'
-import { createDraftStore } from '../outbox/draft-store.ts'
-import { createLocalCleanup } from '../outbox/local-cleanup.ts'
-import { opfsMirrorDirectory } from '../outbox/mirror-directory.ts'
 import { withOutboxLock } from '../outbox/outbox-lock.ts'
 import { readDraftSessionPermit } from '../outbox/session-fence.ts'
 import { createSessionStore } from '../outbox/session-store.ts'
+import { createBrowserCleanup } from './browser-cleanup.ts'
 import { readDraftFacts } from './draft-facts-api.ts'
 import { createDraftInventory } from './draft-inventory.ts'
 import { requestLogout } from './logout-api.ts'
@@ -24,7 +21,7 @@ export function createBrowserLogout(session: SessionResponse, clearCache: () => 
   const permit = candidate?.userId === session.user.id ? candidate : undefined
   const storeOptions = { blockedTimeoutMs: 3_000 }
   const sessions = createSessionStore(storeOptions)
-  const cleanup = createLocalCleanup({ sessions, store: { ...createDraftStore(storeOptions), ...createDraftMaintenanceStore(storeOptions) }, directory: opfsMirrorDirectory(), now: Date.now })
+  const cleanup = createBrowserCleanup(sessions, storeOptions)
   const channel = openSessionChannel()
   let alive = true
   let ended = false

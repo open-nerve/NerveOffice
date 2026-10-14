@@ -41,6 +41,7 @@ import { UniverSheetsSortPlugin } from '@univerjs/sheets-sort'
 import { UniverSheetsSortUIPlugin } from '@univerjs/sheets-sort-ui'
 import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui'
 import { UniverUIPlugin } from '@univerjs/ui'
+import { memoryLocalStorageOverride } from '../internal-api/index.ts'
 import { sheetMenuConfig } from './menu-config.ts'
 import { pluginEntry } from './plugin-entry.ts'
 
@@ -112,7 +113,8 @@ type SheetsUIConfig = ConstructorParameters<typeof UniverSheetsUIPlugin>[0]
  */
 function uiConfig(container: HTMLElement, access: EditorAccess): UIConfig {
   const menu = sheetMenuConfig(access)
-  return access === 'read' ? { container, menu, toolbar: false, contextMenu: false } : { container, menu }
+  const override = memoryLocalStorageOverride()
+  return access === 'read' ? { container, menu, override, toolbar: false, contextMenu: false } : { container, menu, override }
 }
 
 /**

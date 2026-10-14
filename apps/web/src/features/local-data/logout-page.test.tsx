@@ -62,7 +62,7 @@ describe('明确退出预览与两种结果', () => {
     await act(async () => t.flow.preview())
     fireEvent.click(screen.getByRole('button', { name: '清理本机草稿并退出' }))
     expect(await screen.findByText('服务器上的登录已结束。')).toBeInTheDocument()
-    expect(screen.getByText(/本机草稿尚未全部清理/)).toBeInTheDocument()
+    expect(screen.getByText(/本机数据尚未全部清理/)).toBeInTheDocument()
     expect(t.page.replace).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '重试未完成步骤' }))
     await waitFor(() => expect(t.page.replace).toHaveBeenCalledWith('/login'))
@@ -76,7 +76,7 @@ describe('明确退出预览与两种结果', () => {
     await act(async () => t.flow.preview())
     fireEvent.click(screen.getByRole('button', { name: '清理本机草稿并退出' }))
     expect(await screen.findByText(/尚未确认服务器上的登录是否结束/)).toBeInTheDocument()
-    expect(screen.getByText('本机草稿已清理。')).toBeInTheDocument()
+    expect(screen.getByText('本机数据已清理。')).toBeInTheDocument()
     expect(t.page.replace).not.toHaveBeenCalled()
   })
   it('不能列完整时明确提醒可能还有草稿；失效即隐藏旧账户和标题，只能重新预览', async () => {

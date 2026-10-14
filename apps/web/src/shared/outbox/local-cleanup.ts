@@ -29,6 +29,9 @@ import { LOCAL_DRAFT_RETENTION_MS, shouldPurgeDraft } from './writer-fence.ts'
 /** 按用户清理：pending 列出未清掉的文档；用户目录仍忙时也可能为空。只有 kind 为 cleared 才表示全部完成。 */
 export type UserCleanupOutcome = { readonly kind: 'cleared' | 'pending', readonly pending: readonly DraftKey[] } | { readonly kind: 'invalidated' } | Exclude<StoreProblem, { readonly kind: 'session-invalid' }>
 
+/** 浏览器附加清单的结果；旧 SDK 库占用不等于清理完成。 */
+export type MetadataCleanupOutcome = { readonly kind: 'cleared' } | { readonly kind: 'pending' } | { readonly kind: 'failed', readonly error: unknown }
+
 /**
  * 放弃一份：库里删了（或者本来就没有）；pending 里有它时是镜像目录这一次没删掉（写入者换成了墓碑，不必再调，见文件开头）；
  * changed 是库里已经不是那一份
@@ -69,6 +72,8 @@ export interface LocalCleanupOptions {
   readonly store: Pick<DraftStore, 'removeDraft'> & DraftMaintenanceStore
   readonly sessions: Pick<SessionStore, 'beginUserCleanup' | 'finishUserCleanup'>
   readonly directory: MirrorDirectory
+  /** 原清理许可核对后、同源锁内清理浏览器附加清单；未完成不能提交 cleared。 */
+  readonly clearMetadata?: (userId: string) => Promise<MetadataCleanupOutcome>
   /** 墙上时间（毫秒）：墓碑的时刻 */
   readonly now: () => number
 }
@@ -187,6 +192,13 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
     const retired = await store.retireUser(permit, { now: now() })
     if (retired.kind !== 'retired')
       return retired
+    let metadata: MetadataCleanupOutcome = { kind: 'cleared' }
+    try {
+      metadata = await options.clearMetadata?.(userId) ?? metadata
+    }
+    catch (error) {
+      metadata = { kind: 'failed', error }
+    }
     const listed = await directory.listDocuments(userId)
     if (listed.kind === 'quota' || listed.kind === 'failed')
       return listingFailed(listed)
@@ -200,12 +212,14 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
     if (cleared.kind !== 'cleared')
       return cleared
     if (pending.length > 0)
-      return { kind: 'pending', pending }
+      return metadata.kind === 'failed' ? metadata : { kind: 'pending', pending }
     const removed = await directory.removeUser(userId)
     if (removed.kind === 'busy')
-      return { kind: 'pending', pending: [] }
+      return metadata.kind === 'failed' ? metadata : { kind: 'pending', pending: [] }
     if (removed.kind !== 'removed' && removed.kind !== 'unsupported')
       return removed
+    if (metadata.kind !== 'cleared')
+      return metadata.kind === 'pending' ? { kind: 'pending', pending: [] } : metadata
     const finished = await options.sessions.finishUserCleanup(permit)
     return finished.kind === 'cleared' ? { kind: 'cleared', pending: [] } : finished
   }

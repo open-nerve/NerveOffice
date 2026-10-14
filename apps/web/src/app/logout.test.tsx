@@ -18,7 +18,7 @@ describe('公开退出页的真实请求组装', () => {
     fireEvent.click(confirm)
     expect(await screen.findByText('服务器上的登录已结束。')).toBeInTheDocument()
     await waitFor(() => expect(app.queryClient.getQueryData(['old-workspace'])).toBeUndefined())
-    expect(screen.getByText(/未能确认本机草稿的清理资格/)).toBeInTheDocument()
+    expect(screen.getByText(/未能确认本机数据的清理资格/)).toBeInTheDocument()
     expect(screen.queryByText(/@alice/)).not.toBeInTheDocument()
     expect(app.page.visits).toEqual([])
     expect(api.requests.find(request => request.key === 'POST /api/auth/logout')?.headers['x-csrf-token']).toBe('original-token')

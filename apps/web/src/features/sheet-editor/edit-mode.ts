@@ -680,6 +680,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let generation = 0
   let session: 'active' | 'signed-out' | 'other-user' = 'active'
   let localGeneration = options.localDrafts?.permit?.()?.generation
+  let markerStopped = false
   let disposed = false
   const slot = createEditorSlot({ createEditor: options.createEditor, onChange: () => notify(), reportError: options.reportError })
   /** 测试构建的观察钩子（M3-P5 设计 §3.13）：没有时什么也不记；观察者出错不影响交接（上报） */
@@ -2185,6 +2186,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     setSession: (next) => {
       const nextGeneration = options.localDrafts?.permit?.()?.generation
       const localChanged = localGeneration !== nextGeneration
+      if (localChanged)
+        markerStopped = nextGeneration === undefined
       localGeneration = nextGeneration
       const previous = session
       session = next
@@ -2238,7 +2241,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
       const unknown = editing.coordinator?.hasUnknownOutcome() === true
       const lostRights = mode.kind === 'losing' || mode.kind === 'lost'
       if (editing.coordinator !== undefined && !lostRights && (busy || unknown)) {
-        options.pendingSave.write(editing.coordinator.baseRevision())
+        // 已知退出/换人/清理后不能在离开时重建旧记号；未知保存仍不提前释放编辑权。
+        if (session === 'active' && !markerStopped)
+          options.pendingSave.write(editing.coordinator.baseRevision())
         trace({ kind: 'page-hide', at: clock.now(), action: 'kept', busy, unknown })
         return
       }

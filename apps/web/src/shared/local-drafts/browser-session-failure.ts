@@ -1,16 +1,13 @@
 import { openSessionChannel } from '../lib/session-channel.ts'
-import { createDraftMaintenanceStore } from '../outbox/draft-maintenance-store.ts'
-import { createDraftStore } from '../outbox/draft-store.ts'
-import { createLocalCleanup } from '../outbox/local-cleanup.ts'
-import { opfsMirrorDirectory } from '../outbox/mirror-directory.ts'
 import { withOutboxLock } from '../outbox/outbox-lock.ts'
 import { createSessionStore } from '../outbox/session-store.ts'
+import { createBrowserCleanup } from './browser-cleanup.ts'
 import { publishLocalSession } from './session-events.ts'
 import { createSessionFailure } from './session-failure.ts'
 
 const options = { blockedTimeoutMs: 3_000 }
 const sessions = createSessionStore(options)
-const cleanup = createLocalCleanup({ sessions, store: { ...createDraftStore(options), ...createDraftMaintenanceStore(options) }, directory: opfsMirrorDirectory(), now: Date.now })
+const cleanup = createBrowserCleanup(sessions, options)
 const failure = createSessionFailure({
   sessions,
   exclusive: withOutboxLock,

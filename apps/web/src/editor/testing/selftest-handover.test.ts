@@ -158,8 +158,9 @@ describe('刷新之前离开时的观察（leavingSummary）', () => {
 })
 
 describe('记号的键', () => {
-  it('与编辑器页的 pending-save-marker.ts 相同（那边的单元测试钉着同一个写法）：nerve-office:pending-save:<文档 id>', () => {
-    expect(pendingSaveKeyOf('d1')).toBe('nerve-office:pending-save:d1')
+  it('独立观察已确认账户的记号，不读取另一个账户的同文档记号', () => {
+    expect(pendingSaveKeyOf('u1', 'd1')).toBe('nerve-office:pending-save:u1:d1')
+    expect(pendingSaveKeyOf('u2', 'd1')).toBe('nerve-office:pending-save:u2:d1')
   })
 })
 

@@ -174,14 +174,14 @@ describe('插件档案 sheet@1：界面的配置按打开方式（插件档案 v
 
   it('能编辑：界面插件挂到给定的容器，菜单只隐藏两种方式都隐藏的；工具栏、右键菜单与底栏都用默认配置', () => {
     const entries = sheetPluginEntries({ container, formula, access: 'edit' })
-    expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toStrictEqual({ container, menu: sheetMenuConfig('edit') })
+    expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toMatchObject({ container, menu: sheetMenuConfig('edit') })
     expect(configOf(entries, 'SHEET_UI_PLUGIN')).toBeUndefined()
     expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN'])).toEqual([])
   })
 
   it('只读：关掉工具栏与右键菜单，保留编辑栏（header 不写，用默认的显示）；菜单另外隐藏工作表标签的 5 项', () => {
     const entries = sheetPluginEntries({ container, formula, access: 'read' })
-    expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toStrictEqual({ container, menu: sheetMenuConfig('read'), toolbar: false, contextMenu: false })
+    expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toMatchObject({ container, menu: sheetMenuConfig('read'), toolbar: false, contextMenu: false })
   })
 
   it('只读：底栏只关掉菜单（网格线开关会写进快照）与新增工作表按钮，工作表标签、统计栏与缩放保持默认', () => {

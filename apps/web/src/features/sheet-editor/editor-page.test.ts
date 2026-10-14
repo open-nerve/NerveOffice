@@ -340,7 +340,7 @@ function setup(options: Setup = {}) {
       sameBrowsers.push(tracked)
       return tracked
     },
-    pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => storage, now: () => Date.UTC(2026, 9, 7, 3, 0, 0) }),
+    pendingSave: (userId, documentId) => pendingSaveMarker(userId, documentId, { storage: () => storage, now: () => Date.UTC(2026, 9, 7, 3, 0, 0) }),
     issuedRequest: () => issued.marker,
     autosaveControl: autosave.hooks,
     ...(options.handoverTrace === undefined ? {} : { handoverTrace: options.handoverTrace }),
@@ -2916,7 +2916,7 @@ describe('交接规则的页面接线（M3-P5 设计 §3.1、§3.7、§3.9）', 
     await settle()
     expect(browser.holderOf(lockNameOf(DOCUMENT_ID))).toBeUndefined()
     expect(editLease.release).not.toHaveBeenCalled()
-    expect(JSON.parse(storage.items.get(keyOf(DOCUMENT_ID)) ?? 'null')).toEqual({ v: 1, at: Date.UTC(2026, 9, 7, 3, 0, 0), revision: 3 })
+    expect(JSON.parse(storage.items.get(keyOf(ALICE.user.id, DOCUMENT_ID)) ?? 'null')).toEqual({ v: 1, at: Date.UTC(2026, 9, 7, 3, 0, 0), revision: 3 })
     pending.resolve({ revision: 4, savedAt: '2026-09-27T03:00:00.000Z', unchanged: false })
     await saving
     storage.items.clear()

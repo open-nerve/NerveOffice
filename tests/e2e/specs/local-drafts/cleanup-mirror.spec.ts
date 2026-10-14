@@ -31,7 +31,7 @@ async function pendingLogout(page: Page, rootOnly = false) {
   })
   await page.getByRole('button', { name: '清理本机草稿并退出' }).click()
   await expect(page.getByText('服务器上的登录已结束。', { exact: true })).toBeVisible()
-  await expect(page.getByText('本机草稿尚未全部清理。请关闭其它正在使用本站的标签页后重试。')).toBeVisible()
+  await expect(page.getByText('本机数据尚未全部清理。请关闭其它正在使用本站的标签页后重试。')).toBeVisible()
   await expect(page.getByRole('button', { name: '重试未完成步骤' })).toHaveAttribute('aria-disabled', 'false')
   // 用户清理先退役写入者；镜像未删的记录保留到原资格补清，不把单条放弃的顺序套在用户清理上。
   expect((await readLocalDisk(page, key)).draft).toEqual(rootOnly ? null : seeded.disk)
@@ -49,7 +49,7 @@ test.describe('公开退出页与持久待清理资格', { tag: '@test-build' },
     try {
       const h = await pendingLogout(page, true)
       await expect(page).toHaveURL(/\/logout$/)
-      await expect(page.getByText('本机草稿已清理。', { exact: true })).toHaveCount(0)
+      await expect(page.getByText('本机数据已清理。', { exact: true })).toHaveCount(0)
       await h.release()
       await page.getByRole('button', { name: '重试未完成步骤' }).click()
       await expect(page.getByRole('form', { name: '登录' })).toBeVisible()

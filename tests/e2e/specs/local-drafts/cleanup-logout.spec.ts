@@ -68,7 +68,7 @@ test('退出回包丢失分别显示两侧结果；只用原 CSRF 重试，原�
   await page.getByRole('button', { name: '清理本机草稿并退出' }).focus()
   await page.keyboard.press('Enter')
   await expect(page.getByText('尚未确认服务器上的登录是否结束，请检查网络后重试。')).toBeVisible()
-  await expect(page.getByText('本机草稿已清理。', { exact: true })).toBeVisible()
+  await expect(page.getByText('本机数据已清理。', { exact: true })).toBeVisible()
   await expect(page.getByText(h.title, { exact: true })).toHaveCount(0)
   await expect(page.getByRole('heading', { name: '退出登录' })).toBeFocused()
   expect(await readLocalDisk(page, h.key)).toEqual({ draft: null, writer: null })

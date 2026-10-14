@@ -9,7 +9,7 @@
 import type { Page, Request } from '@playwright/test'
 import { createUser, expireSessions } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { logoutThroughUi } from '../../support/logout.ts'
+import { logoutWithOpenEditor } from '../../support/logout.ts'
 import { openBeforeSave } from '../../support/save-before-heartbeat.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 import { blockLeaseRenewals, cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, isSaveRequest, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, typeInCell } from '../../support/sheet.ts'
@@ -236,7 +236,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
 
     const other = await context.newPage()
     await other.goto('/')
-    await logoutThroughUi(other)
+    await logoutWithOpenEditor(other)
     await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
     await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
     // 没有人登录时改的：不上传（修改自动保存，在这之前改的话生产构建里停 2 秒就存上了），一直是没存上的修改
@@ -250,7 +250,7 @@ test.describe('US-M1-05 登录状态变化时，本页的修改不丢', () => {
     // 换了人：自动保存暂停（M3-P4 设计 §3.9）
     await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
 
-    await logoutThroughUi(other)
+    await logoutWithOpenEditor(other)
     await loginThroughUi(other, owner)
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
     await expect(page.getByRole('alert')).toHaveCount(0)

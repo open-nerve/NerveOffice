@@ -1,3 +1,4 @@
+import type { LocalCleanupOptions, MetadataCleanupOutcome } from './local-cleanup.ts'
 import type { DraftSessionPermit, UserCleanupPermit } from './session-fence.ts'
 import type { SessionStore } from './session-store.ts'
 import { describe, expect, it, vi } from 'vitest'
@@ -12,7 +13,7 @@ import { testSessionPermit } from './session-fence.test-support.ts'
 const KEY = { userId: USER_ID, documentId: DOCUMENT_ID }
 const PERMIT: UserCleanupPermit = { ...testSessionPermit(), cause: 'logout' }
 
-function setup() {
+function setup(clearMetadata?: LocalCleanupOptions['clearMetadata']) {
   const store = fakeDraftStore()
   const files = fakeMirrorDirectory()
   const sessions = {
@@ -20,7 +21,7 @@ function setup() {
     finishUserCleanup: vi.fn<SessionStore['finishUserCleanup']>(async () => ({ kind: 'cleared' })),
   }
   const retire = vi.fn(store.store.retireUser)
-  const cleanup = createLocalCleanup({ store: { ...store.store, retireUser: retire }, sessions, directory: files.directory, now: () => NOW })
+  const cleanup = createLocalCleanup({ store: { ...store.store, retireUser: retire }, sessions, directory: files.directory, now: () => NOW, ...(clearMetadata === undefined ? {} : { clearMetadata }) })
   return { store, files, sessions, retire, cleanup }
 }
 
@@ -102,5 +103,74 @@ describe('清理资格的完整操作边界', () => {
     sessions.finishUserCleanup.mockResolvedValueOnce({ kind: 'session-invalid' })
     expect(await cleanup.removeUser(PERMIT)).toEqual({ kind: 'invalidated' })
     expect(await cleanup.removeUser(PERMIT)).toEqual({ kind: 'cleared', pending: [] })
+  })
+})
+
+describe('完整清单在原清理许可内完成', () => {
+  it.each(['pending', 'failed', 'throw'] as const)('附加清单 %s 仍清理草稿，但不完成 clearing；同许可重试才能结束', async (kind) => {
+    let result: MetadataCleanupOutcome = kind === 'pending' ? { kind: 'pending' } : { kind: 'failed', error: new Error('storage') }
+    let throws = kind === 'throw'
+    const t = setup(async () => {
+      if (throws)
+        throw new Error('storage')
+      return result
+    })
+    t.store.putRaw('drafts', KEY, sampleStoredDraft())
+    t.files.putFile(KEY, 0, new Uint8Array([1]))
+    expect(await t.cleanup.removeUser(PERMIT)).toMatchObject({ kind: kind === 'pending' ? 'pending' : 'failed' })
+    expect(t.store.rawDraft(KEY)).toBeUndefined()
+    expect(await t.files.directory.listDocuments(USER_ID)).toEqual({ kind: 'listed', documentIds: [] })
+    expect(t.sessions.finishUserCleanup).not.toHaveBeenCalled()
+    result = { kind: 'cleared' }
+    throws = false
+    expect(await t.cleanup.removeUser(PERMIT)).toEqual({ kind: 'cleared', pending: [] })
+    expect(t.sessions.finishUserCleanup).toHaveBeenCalledExactlyOnceWith(PERMIT)
+  })
+
+  it('已换代的旧重试不碰同用户的新记号；有效原许可会清本人并保留其他账户', async () => {
+    const keys = new Map([[USER_ID, 'new-session'], ['another-user', 'other']])
+    const t = setup(async (userId) => {
+      keys.delete(userId)
+      return { kind: 'cleared' }
+    })
+    t.store.failNext('retireUser', { kind: 'session-invalid' })
+    expect(await t.cleanup.removeUser(PERMIT)).toEqual({ kind: 'invalidated' })
+    expect([...keys]).toEqual([[USER_ID, 'new-session'], ['another-user', 'other']])
+    expect(await t.cleanup.removeUser(PERMIT)).toEqual({ kind: 'cleared', pending: [] })
+    expect([...keys]).toEqual([['another-user', 'other']])
+  })
+
+  it('镜像仍忙也执行附加清单，不能把旧记号留到镜像不忙才清', async () => {
+    let metadata = 'old'
+    const t = setup(async () => {
+      metadata = ''
+      return { kind: 'cleared' }
+    })
+    t.files.putFile(KEY, 0, new Uint8Array([1]))
+    t.files.holdElsewhere(KEY)
+    expect(await t.cleanup.removeUser(PERMIT)).toEqual({ kind: 'pending', pending: [KEY] })
+    expect(metadata).toBe('')
+    expect(t.sessions.finishUserCleanup).not.toHaveBeenCalled()
+  })
+
+  it('附加清理尚未结束时新登录的互斥任务不能越过它，完成后才激活', async () => {
+    const entered = deferred<void>()
+    const release = deferred<MetadataCleanupOutcome>()
+    const t = setup(async () => {
+      entered.resolve()
+      return release.promise
+    })
+    const cleaning = t.cleanup.removeUser(PERMIT)
+    await entered.promise
+    let activated = false
+    const activate = withOutboxLock(async () => {
+      activated = true
+    })
+    await Promise.resolve()
+    expect(activated).toBe(false)
+    release.resolve({ kind: 'cleared' })
+    expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })
+    await activate
+    expect(activated).toBe(true)
   })
 })

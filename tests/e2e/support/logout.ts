@@ -23,3 +23,14 @@ export async function logoutThroughUi(page: Page): Promise<void> {
   }
   await expect(login).toBeVisible()
 }
+
+/** 故意保留编辑器页时，SDK 模块仍占用旧库：分别核对服务器退出和本机待清理，再由用户前往登录。 */
+export async function logoutWithOpenEditor(page: Page): Promise<void> {
+  await page.getByRole('button', { name: '退出', exact: true }).click()
+  await page.getByRole('button', { name: '清理本机草稿并退出', exact: true }).click()
+  await expect(page.getByText('服务器上的登录已结束。', { exact: true })).toBeVisible()
+  await expect(page.getByText('本机数据尚未全部清理。请关闭其它正在使用本站的标签页后重试。', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试未完成步骤', exact: true })).toHaveAttribute('aria-disabled', 'false')
+  await page.getByRole('link', { name: '前往登录', exact: true }).click()
+  await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+}

@@ -178,7 +178,7 @@ export interface EditorPageOptions {
   /** 这份文档在同一个浏览器里的锁与交接频道（M3-P5 设计 §3.1、§3.7）：载入之后按文档建一次，卸载时关掉 */
   readonly sameBrowser: (documentId: string) => SameBrowser
   /** 这份文档的"刷新时在途的保存"的记号（M3-P5 设计 §3.7 的 R1） */
-  readonly pendingSave: (documentId: string) => PendingSaveMarker
+  readonly pendingSave: (userId: string, documentId: string) => PendingSaveMarker
   /** 这份文档在这一页发出过的请求编辑的记号（M3-P5 审查 B2，按标签页、刷新之后还在） */
   readonly issuedRequest: (documentId: string) => IssuedRequestMarker
   /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
@@ -746,7 +746,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       },
       autosave: { page: autosavePage, ...options.autosaveControl },
       sameBrowser,
-      pendingSave: options.pendingSave(id),
+      pendingSave: options.pendingSave(user, id),
       issuedRequest: options.issuedRequest(id),
       reportError: options.reportError,
       trace: options.handoverTrace,

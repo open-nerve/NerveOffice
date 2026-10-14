@@ -181,7 +181,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
     activity: browserActivity,
     sameBrowser: documentId => sameBrowserFor(documentId, browserSameBrowserApis),
     // 访问 localStorage 本身就可能抛出（被禁用、沙箱）：每次用时再取，记号自己接住
-    pendingSave: documentId => pendingSaveMarker(documentId, { storage: () => window.localStorage, now: () => Date.now() }),
+    pendingSave: (userId, documentId) => pendingSaveMarker(userId, documentId, { storage: () => window.localStorage, now: () => Date.now() }),
     // 每次装配新的内存意图；sessionStorage 只用于清理旧版本记号，不恢复页面身份
     issuedRequest: documentId => issuedRequestMarker(documentId, { storage: () => window.sessionStorage }),
     autosaveControl,

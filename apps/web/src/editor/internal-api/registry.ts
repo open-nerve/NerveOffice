@@ -180,6 +180,14 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     regression: `单元测试 identity/editor-authz-io.service.test.ts；E2E tests/e2e/specs/editor/features.spec.ts（增删工作表、排序与筛选、条件格式与数据验证、批注与查找替换，经界面操作、按服务器上的快照核对），template.spec.ts（新建文档的快照与模板逐字节相同，资源里没有 SHEET_AuthzIoMockService_PLUGIN）；只读时：${READ_ONLY_E2E}`,
   },
   {
+    name: 'memoryLocalStorageOverride',
+    origin: '@univerjs/core 的 ILocalStorageService 与 DependencyOverride；平台的每编辑器内存实现',
+    sdk: { '@univerjs/core': ['DependencyOverride', 'ILocalStorageService'] },
+    purpose: '在 UniverUIPlugin 配置中覆盖本机存储，读写克隆且每个注入器独立，销毁清空并拒绝迟到回调留下数据；偏好不跨重建/页面保存',
+    evidence: '1.0.1 ui/lib/es/index.js:26796–27015（全局浏览器驱动）、:28660–28678（UI 插件注册并应用 override）；core/lib/es/index.js:26444（只替换已声明依赖）、:28631（销毁注入器）；M4-P4 S5 规格 §2.1',
+    regression: 'internal-api/memory-local-storage.test.ts 经真实档案注册 UI 插件后核对全接口、实例隔离与销毁；E2E local-drafts/cleanup-storage.spec.ts 真实 SDK 偏好与清理清单',
+  },
+  {
     name: 'disposalSafeLocaleOverride',
     origin: '@univerjs/core 的语言服务 LocaleService（Facade 之外）与 new Univer({ override }) 的依赖替换（DependencyOverride）；平台的封装（locale-service.ts 的 DisposalSafeLocaleService）',
     sdk: { '@univerjs/core': ['DependencyOverride', 'LocaleService'] },
