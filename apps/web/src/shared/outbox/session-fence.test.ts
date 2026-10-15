@@ -41,6 +41,7 @@ describe('本机会话状态的持久形状', () => {
     { phase: 'unconfirmed', generation: G2, changing: false, source: A, retired: true },
     ACTIVE,
     { phase: 'suspended', generation: G2, source: A },
+    { phase: 'suspended', generation: G2, source: A, suspendedFrom: G1 },
     CLEARING,
     CLEARED,
     { ...CLEARED, cause: 'account_disabled' },
@@ -220,7 +221,7 @@ describe('宿主资格、暂停和用户清理', () => {
 
   it('只有当前宿主可暂停，不删除数据，不给旧宿主再次登记的资格', () => {
     const suspended = suspendSession(ACTIVE, PERMIT, G2)
-    expect(suspended).toEqual({ phase: 'suspended', generation: G2, source: A })
+    expect(suspended).toEqual({ phase: 'suspended', generation: G2, source: A, suspendedFrom: G1 })
     expect(canUseDraftSession(suspended, PERMIT, A.userId)).toBe(false)
     expect(suspendSession(ACTIVE, { ...PERMIT, generation: G0 }, G2)).toBeUndefined()
     expect(suspendSession(CLEARING, PERMIT, G3)).toBeUndefined()

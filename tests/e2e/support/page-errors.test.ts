@@ -15,8 +15,38 @@ function asPageError(text: string): { name: string, message: string } {
 /** 2026-10-02 CI 的 WebKit 上原样出现过的两种（地址换成这里的页面同源） */
 const CI_FETCH = 'Fetch API cannot load http://127.0.0.1:41997/api/documents/01a0fb60-a504-7c95-8bdf-8aeaec893aaf due to access control checks.'
 const CI_WORKER = 'Cannot load http://127.0.0.1:41997/assets/formula.worker-BJbyZyJk.js due to access control checks.'
+/** 2026-10-15 WebKit：平台页导航取消 OPFS File.arrayBuffer()，应用已有 catch，浏览器仍报告内部 Blob 的取消。 */
+const OPFS_BLOB = 'Cannot load blob:http://127.0.0.1:41997/2bc74b73-be6b-4af9-be35-08b8b144ab47 due to access control checks.'
 
 describe('E2E 的页面错误：浏览器的通知', () => {
+  it('WebKit 导航取消同源 OPFS Blob 读取的原始诊断：只识别严格的 HTTP(S) 同源对象地址', () => {
+    expect(isBrowserNotice(asPageError(OPFS_BLOB), PAGE)).toBe(true)
+    expect(isBrowserNotice(asPageError(OPFS_BLOB.replace('http://127.0.0.1:41997', 'https://localhost:8443')), 'https://localhost:8443/')).toBe(true)
+  })
+
+  it('Blob 的异源、未知来源、畸形地址、其它加载器和真实拒绝仍算错误', () => {
+    for (const text of [
+      OPFS_BLOB.replace(':41997', ':9999'),
+      OPFS_BLOB.replace('127.0.0.1:41997', 'evil.example'),
+      OPFS_BLOB.replace('blob:http:', 'blob:https:'),
+      OPFS_BLOB.replace('blob:http://127.0.0.1:41997', 'blob:null'),
+      OPFS_BLOB.replace('/2bc74b73-be6b-4af9-be35-08b8b144ab47', '/not-an-object-url'),
+      OPFS_BLOB.replace('127.0.0.1:41997', 'user@127.0.0.1:41997'),
+      OPFS_BLOB.replace(' due to', '?query=1 due to'),
+      OPFS_BLOB.replace(' due to', '#fragment due to'),
+      OPFS_BLOB.replace('Cannot load', 'Fetch API cannot load'),
+      OPFS_BLOB.replace('access control checks.', 'a network error.'),
+      `${OPFS_BLOB} Extra`,
+      `Unhandled Promise Rejection: TypeError: ${OPFS_BLOB}`,
+    ]) {
+      expect(isBrowserNotice(asPageError(text), PAGE), text).toBe(false)
+    }
+    expect(isBrowserNotice(asPageError(OPFS_BLOB), undefined)).toBe(false)
+    expect(isBrowserNotice(asPageError(OPFS_BLOB), 'about:blank')).toBe(false)
+    expect(isBrowserNotice(asPageError(OPFS_BLOB), `blob:${PAGE}`)).toBe(false)
+    expect(isBrowserNotice({ name: 'TypeError', message: OPFS_BLOB }, PAGE)).toBe(false)
+  })
+
   it('WebKit 在整页跳转时取消同源加载的诊断：fetch 的"Fetch API cannot load"与子资源的"Cannot load"都排除', () => {
     expect(isBrowserNotice(asPageError(CI_FETCH), PAGE)).toBe(true)
     expect(isBrowserNotice(asPageError(CI_WORKER), PAGE)).toBe(true)
@@ -86,5 +116,16 @@ describe('E2E 的页面错误：按浏览器上下文收集的接线', () => {
     watchPageErrors(context, error => reported.push(error), () => {})
     emit(asPageError(CI_FETCH), null)
     expect(reported).toEqual(['Fetch API cannot load http: /127.0.0.1:41997/api/documents/01a0fb60-a504-7c95-8bdf-8aeaec893aaf due to access control checks.（页面已关闭）'])
+  })
+
+  it('同源 Blob 浏览器通知原文保留，真正没接住的拒绝仍交给 report', () => {
+    const { context, emit } = fakeContext()
+    const reported: string[] = []
+    const ignored: string[] = []
+    watchPageErrors(context, error => reported.push(error), notice => ignored.push(notice))
+    emit(asPageError(OPFS_BLOB), PAGE)
+    emit(asPageError(`Unhandled Promise Rejection: TypeError: ${OPFS_BLOB}`), PAGE)
+    expect(ignored).toEqual([`Cannot load blob: ttp://127.0.0.1:41997/2bc74b73-be6b-4af9-be35-08b8b144ab47 due to access control checks.（${PAGE}）`])
+    expect(reported).toEqual([`Unhandled Promise Rejection: TypeError: ${OPFS_BLOB}（${PAGE}）`])
   })
 })

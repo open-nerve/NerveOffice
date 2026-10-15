@@ -33,8 +33,8 @@
 // 上下文里跑（measure/probe.spec.ts）。约 5 MiB 的捕获（capture-5m）与再一次的 Worker 模式（perf-worker-warm）不在这里：场景与 capture-1m、
 // perf-worker 相同，只是样本更大、或者为了首屏的热，CI 只跑小样本。写满（storage-quota）单独一条：持久上下文里经 CDP 把配额覆盖成 12 MiB
 // （Chromium 系）；WebKit 没有这个接口，核对探针写到上限（64 MiB）就停、不往真实的配额里一直写。生产发件箱的两步另核对 OPFS 镜像（设计 §3.8）：
-// Chromium 系的默认上下文（无痕式，OPFS 在内存里）每一次都写成了镜像、收尾时删掉了复核用户的镜像目录；Playwright 的 WebKit 默认上下文没有 OPFS
-// （生产的代码按 unsupported 处理），探针照样跑完、记下这一条——镜像那一段的数在持久上下文与真实 Safari 上量。
+// Chromium 系与 WebKit 的正常存储均须每次写成镜像、收尾删除。WebKit 使用独占的持久上下文；
+// macOS 的 OPFS 目录隔离只用于功能校准，真实性能测量仍在不装路由的原生持久上下文与真实 Safari 上进行。
 // 用到测试构建（自检的入口页与编辑器页里的自检）：标签 @test-build，外部模式测生产镜像时排除
 import type { BrowserContext, Page, Route } from '@playwright/test'
 import type { SelftestReport } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
@@ -118,13 +118,12 @@ function opfsSummary(step: SelftestStep, report: SelftestReport): unknown {
   return null
 }
 
-/** Chromium 系的默认上下文有 OPFS（在内存里）：都写成了、删掉了；Playwright 的 WebKit 默认上下文没有：unsupported、写成了 0 次 */
-function opfsExpected(step: SelftestStep, browserName: string): unknown {
-  const mirrored = browserName === 'chromium'
+/** 三浏览器的正常存储都必须写成镜像并清理，不再将根目录读取失败解释为无镜像。 */
+function opfsExpected(step: SelftestStep): unknown {
   if (step.scenario === 'outbox-stall')
-    return mirrored ? { registerMirror: 'mirrored', everyWrite: true, cleanup: 'removed' } : { registerMirror: 'not-mirrored:unsupported', everyWrite: false, cleanup: 'unsupported' }
+    return { registerMirror: 'mirrored', everyWrite: true, cleanup: 'removed' }
   if (step.scenario === 'outbox-pipeline')
-    return mirrored ? { opfs: 'mirrored', cleanup: 'removed' } : { opfs: 'not-mirrored:unsupported', cleanup: 'unsupported' }
+    return { opfs: 'mirrored', cleanup: 'removed' }
   return null
 }
 
@@ -295,7 +294,7 @@ async function holdHolderBack(route: Route): Promise<void> {
 
 test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 的浏览器里每项都通过', { tag: '@test-build' }, () => {
   for (const definition of PLAIN_STEPS) {
-    test(`步骤 ${definition.id}`, async ({ page, browserName }, testInfo) => {
+    test(`步骤 ${definition.id}`, async ({ page }, testInfo) => {
       const step = await stepOf(definition)
       const verifyUnrelatedDraft = await preserveUnrelatedDraft(page, step)
       const report = await reportOf(await startSelftest(page, step))
@@ -303,7 +302,7 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
       expect(await summaryOf(report, step)).toEqual(passed(step))
       // 真实浏览器复核的几步另按判定核对、生产发件箱的两步另核对 OPFS 镜像（别的步骤这两边都是空的）
       expect(probeCalibrationSummary(step.scenario, probeVerdicts([{ stepId: step.id, report, cold: true }]))).toEqual(probeCalibrationPassed(step.scenario))
-      expect(opfsSummary(step, report)).toEqual(opfsExpected(step, browserName))
+      expect(opfsSummary(step, report)).toEqual(opfsExpected(step))
       await verifyUnrelatedDraft()
     })
   }

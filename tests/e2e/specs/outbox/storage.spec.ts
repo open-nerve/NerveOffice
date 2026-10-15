@@ -1,6 +1,6 @@
 // 发件箱的库（M4-P1 设计 §3.3、§3.4.1）：在真实的 IndexedDB 上核对库的建立、读写事务的持久性、升级与 versionchange、
 // 升级被挡住、删库之后重开、用不了时的原因、列表的标记。经测试构建里的探针调用生产的存储（support/outbox-probe.ts），标签 @test-build。
-// 逻辑类的用例，用 Playwright 默认的（不落盘的）浏览器上下文；落盘、耗时、原子性在持久化的上下文里另测（S1、S7）
+// 逻辑用例使用项目功能夹具（WebKit 为持久上下文及独占 OPFS 目录）；落盘、耗时、原子性另用原生持久上下文测量（S1、S7）。
 import { randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'

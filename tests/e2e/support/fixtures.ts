@@ -21,6 +21,8 @@ import process from 'node:process'
 import { test as base, expect } from '@playwright/test'
 import { applyAutosaveMode, autosaveModeScript } from './autosave.ts'
 import { watchPageErrors } from './page-errors.ts'
+import { profileDirFor } from './persistent-profile.ts'
+import { isolateWebkitStorage } from './webkit-storage.ts'
 
 export interface CspViolation {
   /** 违反的指令，例如 script-src、connect-src */
@@ -152,7 +154,26 @@ export async function chooseAutosave(context: BrowserContext, mode: AutosaveMode
  */
 export type NewDevice = () => Promise<Page>
 
-export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page, newDevice: NewDevice, autosave: AutosaveMode, autosaveMode: void }>({
+export const test = base.extend<{ cspViolations: CspViolations, pageErrors: PageErrors, anotherDevice: Page, newDevice: NewDevice, autosave: AutosaveMode, autosaveMode: void, webkitStorage: 'persistent' | 'temporary' }>({
+  // WebKit 临时上下文的 OPFS 根会报 UnknownError，不能代表正常浏览资料目录，更不能证明镜像为空。
+  // 常规故事使用每例独占的持久目录；存储不可读故事明确选择 temporary，保留保守失败边界。
+  webkitStorage: ['persistent', { option: true }],
+  context: async ({ context, playwright, browserName, webkitStorage }, provide, testInfo) => {
+    if (browserName !== 'webkit' || webkitStorage === 'temporary') {
+      await provide(context)
+      return
+    }
+    const { baseURL, ignoreHTTPSErrors, locale, timezoneId } = testInfo.project.use
+    const profile = profileDirFor(testInfo, 'standard-webkit')
+    const persistent = await playwright.webkit.launchPersistentContext(profile, { baseURL, ignoreHTTPSErrors, locale, timezoneId })
+    await isolateWebkitStorage(persistent, profile, testInfo)
+    try {
+      await provide(persistent)
+    }
+    finally {
+      await persistent.close()
+    }
+  },
   /** 打开时定时的自动保存暂停（held，默认）还是照常（running），见 defaultAutosaveMode */
   autosave: [defaultAutosaveMode(), { option: true }],
   autosaveMode: [async ({ context, autosave }, use) => {
@@ -169,11 +190,17 @@ export const test = base.extend<{ cspViolations: CspViolations, pageErrors: Page
     await provide(await newDevice())
   },
   /** 再开一台设备（见 NewDevice）：每次调用一个新的浏览器上下文，用例结束时一起关闭 */
-  newDevice: async ({ browser, cspViolations, pageErrors, autosave }, provide, testInfo) => {
+  newDevice: async ({ browser, browserName, playwright, webkitStorage, cspViolations, pageErrors, autosave }, provide, testInfo) => {
     const { baseURL, ignoreHTTPSErrors, locale, timezoneId } = testInfo.project.use
     const contexts: BrowserContext[] = []
     await provide(async () => {
-      const context = await browser.newContext({ baseURL, ignoreHTTPSErrors, locale, timezoneId })
+      const options = { baseURL, ignoreHTTPSErrors, locale, timezoneId }
+      const profile = browserName === 'webkit' && webkitStorage === 'persistent' ? profileDirFor(testInfo, `device-${contexts.length}`) : undefined
+      const context = profile !== undefined
+        ? await playwright.webkit.launchPersistentContext(profile, options)
+        : await browser.newContext(options)
+      if (profile !== undefined)
+        await isolateWebkitStorage(context, profile, testInfo)
       contexts.push(context)
       await cspViolations.watch(context)
       pageErrors.watch(context)

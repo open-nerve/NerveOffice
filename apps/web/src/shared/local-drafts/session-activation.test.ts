@@ -71,7 +71,7 @@ function fixture() {
   const rejected = vi.fn(async (_error: unknown, _ticket: { readonly kind: 'query' | 'mutation', readonly generation: string }) => {
     expect(locked).toBe(false)
   })
-  return { ...createSessionActivation({ store, exclusive, source, rejected }), store, lockEntry, source, request, result, trace, rejected }
+  return { ...createSessionActivation({ store, exclusive, source, rejected }), store, locks, lockEntry, source, request, result, trace, rejected }
 }
 
 describe('真实请求前固定本机票据', () => {
@@ -83,6 +83,105 @@ describe('真实请求前固定本机票据', () => {
     t.request.mockRejectedValue(reason)
     await expect(t.track('query', t.request, controller.signal)).rejects.toBe(reason)
     expect(t.rejected).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('HTTP 已成功后取消（前置票据可用：%s），不继续本机激活或返回响应', async (available) => {
+    const t = fixture()
+    const controller = new AbortController()
+    const reason = new Error('查询已取消')
+    if (!available)
+      t.store.beginSessionCheck.mockResolvedValueOnce({ kind: 'unavailable', reason: 'denied' })
+    t.request.mockImplementationOnce(async () => {
+      controller.abort(reason)
+      return t.result
+    })
+    await expect(t.track('query', t.request, controller.signal)).rejects.toBe(reason)
+    expect(t.request).toHaveBeenCalledTimes(1)
+    expect(t.source).not.toHaveBeenCalled()
+    expect(t.store.acceptSessionCheck).not.toHaveBeenCalled()
+    expect(t.rejected).not.toHaveBeenCalled()
+    expect(draftSessionPermitOf(t.result)).toBeUndefined()
+  })
+
+  it.each([true, false])('摘要等待期间取消（摘要成功：%s），本机故障降级不能吞掉原取消原因', async (succeeds) => {
+    const t = fixture()
+    const controller = new AbortController()
+    const reason = new ApiError(401, 'SESSION_EXPIRED', '只用作主动取消原因', { details: { reason: 'account_disabled', userId: USER } })
+    const entered = deferred<void>()
+    const source = deferred<typeof SOURCE>()
+    t.source.mockImplementationOnce(async () => {
+      entered.resolve()
+      return source.promise
+    })
+    const waiting = t.track('query', t.request, controller.signal)
+    const rejected = expect(waiting).rejects.toBe(reason)
+    await entered.promise
+    controller.abort(reason)
+    if (succeeds)
+      source.resolve(SOURCE)
+    else
+      source.reject(new Error('摘要失败'))
+    await rejected
+    expect(t.request).toHaveBeenCalledTimes(1)
+    expect(t.store.acceptSessionCheck).not.toHaveBeenCalled()
+    expect(t.store.failSessionChange).not.toHaveBeenCalled()
+    expect(t.rejected).not.toHaveBeenCalled()
+    expect(draftSessionPermitOf(t.result)).toBeUndefined()
+  })
+
+  it('摘要已完成、接受票据正在排同源锁时取消，进入锁后仍不能建立许可', async () => {
+    const t = fixture()
+    const controller = new AbortController()
+    const reason = new Error('排锁期间取消')
+    const sourceEntered = deferred<void>()
+    const sourceReady = deferred<typeof SOURCE>()
+    t.source.mockImplementationOnce(async () => {
+      sourceEntered.resolve()
+      return sourceReady.promise
+    })
+    const waiting = t.track('query', t.request, controller.signal)
+    const rejected = expect(waiting).rejects.toBe(reason)
+    await sourceEntered.promise
+    const locked = deferred<void>()
+    const unlock = deferred<void>()
+    const blocking = withOutboxLock(async () => {
+      locked.resolve()
+      await unlock.promise
+    }, t.locks)
+    await locked.promise
+    sourceReady.resolve(SOURCE)
+    await vi.waitFor(() => expect(t.lockEntry).toHaveBeenCalledTimes(2))
+    expect(t.store.acceptSessionCheck).not.toHaveBeenCalled()
+    controller.abort(reason)
+    unlock.resolve()
+    await blocking
+    await rejected
+    expect(t.store.acceptSessionCheck).not.toHaveBeenCalled()
+    expect(t.rejected).not.toHaveBeenCalled()
+    expect(draftSessionPermitOf(t.result)).toBeUndefined()
+  })
+
+  it('接受事务已开始后取消，不将稍后完成的原许可关联或返回给已取消的调用方', async () => {
+    const t = fixture()
+    const controller = new AbortController()
+    const reason = new Error('等待事务期间取消')
+    const entered = deferred<void>()
+    const finish = deferred<void>()
+    t.store.acceptSessionCheck.mockImplementationOnce(async () => {
+      entered.resolve()
+      await finish.promise
+      return { kind: 'active', permit: PERMIT }
+    })
+    const waiting = t.track('query', t.request, controller.signal)
+    const rejected = expect(waiting).rejects.toBe(reason)
+    await entered.promise
+    controller.abort(reason)
+    finish.resolve()
+    await rejected
+    expect(t.store.acceptSessionCheck).toHaveBeenCalledExactlyOnceWith({ kind: 'query', generation: INITIAL }, SOURCE)
+    expect(t.store.failSessionChange).not.toHaveBeenCalled()
+    expect(t.rejected).not.toHaveBeenCalled()
+    expect(draftSessionPermitOf(t.result)).toBeUndefined()
   })
 
   it('初次会话查询失败把原票据交给失效处理，不在响应后另取许可；处理失败仍只抛原网络错误', async () => {

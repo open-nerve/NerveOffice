@@ -54,6 +54,7 @@ function fixture() {
     trace,
     leave: () => { alive = false },
     replace: () => { qualified = 'invalidated' },
+    qualifyAs: (value: LogoutQualification) => { qualified = value },
   }
 }
 
@@ -250,6 +251,70 @@ describe('退出确认固定原来源，本机与服务器分别报告', () => {
     await t.flow.retry()
     expect(t.cleanup.removeUser).toHaveBeenCalledTimes(1)
     expect(t.flow.view()).toMatchObject({ local: { kind: 'cleared' }, canRetry: false })
+  })
+
+  it.each(['confirm', 'retry'] as const)('%s 已核对 clearing 后背景凭原许可清完，本次删除被拒绝仍结束原服务器会话', async (action) => {
+    const t = fixture()
+    await t.flow.preview()
+    if (action === 'retry') {
+      t.cleanup.removeUser.mockResolvedValueOnce({ kind: 'pending', pending: [] })
+      await t.flow.confirm()
+    }
+    const entered = deferred<void>()
+    const completed = deferred<void>()
+    t.cleanup.removeUser.mockImplementationOnce(async (permit) => {
+      expect(permit).toEqual(CLEANUP)
+      entered.resolve()
+      await completed.promise
+      return { kind: 'invalidated' }
+    })
+    const running = t.flow[action]()
+    await entered.promise
+    expect(await t.qualify(CLEANUP)).toBe('clearing')
+    // 背景维护先完成同一次清理，前台持有的删除许可已经结束。
+    t.qualifyAs('cleared')
+    completed.resolve()
+    await running
+    expect(t.flow.view()).toMatchObject({ stage: 'result', local: { kind: 'cleared' }, server: { kind: 'ended' }, canRetry: false })
+    expect(t.cleanup.beginUser).toHaveBeenCalledExactlyOnceWith(PERMIT, 'logout')
+    expect(t.requestLogout).toHaveBeenCalledExactlyOnceWith(SESSION)
+    expect(t.clearCache).toHaveBeenCalledTimes(1)
+    const removals = action === 'confirm' ? 1 : 2
+    expect(t.cleanup.removeUser).toHaveBeenCalledTimes(removals)
+    await t.flow.retry()
+    expect(t.cleanup.removeUser).toHaveBeenCalledTimes(removals)
+    expect(t.requestLogout).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['clearing', 'unavailable'] as const)('删除被拒绝后复核为 %s，保留未清完结果并继续原服务器退出，不能伪报来源变化', async (qualification) => {
+    const t = fixture()
+    await t.flow.preview()
+    t.cleanup.removeUser.mockImplementationOnce(async () => {
+      t.qualifyAs(qualification)
+      return { kind: 'invalidated' }
+    })
+    await t.flow.confirm()
+    expect(t.flow.view()).toMatchObject({ stage: 'result', local: { kind: 'pending' }, server: { kind: 'ended' }, canRetry: true })
+    expect(t.requestLogout).toHaveBeenCalledExactlyOnceWith(SESSION)
+    expect(t.cleanup.beginUser).toHaveBeenCalledTimes(1)
+    t.qualifyAs('cleared')
+    await t.flow.retry()
+    expect(t.flow.view()).toMatchObject({ local: { kind: 'cleared' }, canRetry: false })
+    expect(t.cleanup.removeUser).toHaveBeenCalledExactlyOnceWith(CLEANUP)
+  })
+
+  it('删除被拒绝后复核确实换代，旧确认不得继续退出或获取新的删除许可', async () => {
+    const t = fixture()
+    await t.flow.preview()
+    t.cleanup.removeUser.mockImplementationOnce(async () => {
+      t.replace()
+      return { kind: 'invalidated' }
+    })
+    await t.flow.confirm()
+    expect(t.flow.view()).toMatchObject({ stage: 'invalidated', local: { kind: 'invalidated' }, canRetry: false })
+    expect(t.requestLogout).not.toHaveBeenCalled()
+    expect(t.clearCache).not.toHaveBeenCalled()
+    expect(t.cleanup.beginUser).toHaveBeenCalledExactlyOnceWith(PERMIT, 'logout')
   })
 
   it('CSRF 已被新登录替换时结束旧流程，不自动改用新令牌、不清新缓存', async () => {

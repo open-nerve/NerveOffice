@@ -280,14 +280,22 @@ test.describe('US-M3-08 本人接管："在此编辑"', () => {
   })
 
   test('US-M3-08 旧标签页不响应（收不到交接请求：冻结、暂停、卡住）：B 说正在请它交出，3 秒没有回应就以本人接管申请、抢锁；A 随即失去编辑权（本人在本浏览器的另一个标签页接手了），没保存的修改另存为副本', async ({ page, context }) => {
-    await loginThroughApi(page, await createUser('takeover-deaf'))
+    const owner = await createUser('takeover-deaf')
+    await loginThroughApi(page, owner)
     const documentId = await createSheetThroughApi(page)
+    const key = { userId: owner.id, documentId }
+    const secret = await currentLocalKey(page)
     await page.clock.install()
     await deafenHandover(page)
     await openAndEnterEditing(page, documentId)
     // A 的修改存不上（两种构建里都一样）
     const saves = await blockSaves(page)
     await typeInCell(page, 'A1', 'only in the deaf tab')
+    // B 能恢复的是已经持久化的草稿。拨过接管期限会同时推进两页的计时器，不能替代异步落盘完成的证据。
+    await expect.poll(async () => {
+      const draft = (await readLocalDisk(page, key)).draft
+      return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'A1')?.v
+    }).toBe('only in the deaf tab')
 
     const other = await context.newPage()
     await openReader(other, documentId)

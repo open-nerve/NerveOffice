@@ -42,7 +42,7 @@ describe('启动维护串行、按原资格清理并隔离当前账户结果', (
     expect(t.calls).toEqual(['cleanup', 'expiry'])
     expect(t.removeUser).toHaveBeenCalledExactlyOnceWith(CLEARING)
     expect(t.makeCatalog).not.toHaveBeenCalled()
-    expect(t.maintenance.view()).toEqual({ busy: false, cleanup: 'cleared', retention: 'done', catalog: undefined, problem: undefined })
+    expect(t.maintenance.view()).toEqual({ busy: false, cleanup: 'cleared', retention: 'done', catalog: undefined, problem: undefined, completed: [] })
     expect(JSON.stringify(t.maintenance.view())).not.toContain(USER)
   })
 

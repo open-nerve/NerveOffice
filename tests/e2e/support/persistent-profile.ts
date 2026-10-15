@@ -5,10 +5,12 @@
 // 资料目录的路径里不能有非 ASCII 的字符：Linux 上 Playwright 的 WebKit（WPE 的 MiniBrowser）解析命令行时遇到就起不来（"Cannot parse arguments:
 // Invalid byte sequence in conversion input"，与区域设置无关：官方镜像的 C.UTF-8 下一样，P1 审查 B1 复现）——testInfo.outputPath 带着中文的
 // 用例标题，所以持久上下文一律不用它
+// 项目功能夹具从 M4-P4 起也为 WebKit 选择持久上下文；macOS 的功能目录适配不用于原生性能或崩溃测量。
 import type { BrowserContext, BrowserType, Page, TestInfo } from '@playwright/test'
 import type { CspViolations, PageErrors } from './fixtures.ts'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { isolateWebkitStorage } from './webkit-storage.ts'
 
 /** 用例的夹具：另开的上下文同样挂上 CSP 违规与页面错误的收集 */
 export interface ProfileWatchers {
@@ -47,9 +49,12 @@ export function profileDirFor(testInfo: TestInfo, name: string): string {
  * 以 profileDirFor(testInfo, name) 为资料目录，开一个持久上下文：沿用这个项目的浏览器（channel）、基础地址、语言与时区、证书设置
  * （与夹具的上下文相同）
  */
-export async function launchPersistentProfile(browserType: BrowserType, testInfo: TestInfo, name: string, watchers: ProfileWatchers): Promise<BrowserContext> {
+export async function launchPersistentProfile(browserType: BrowserType, testInfo: TestInfo, name: string, watchers: ProfileWatchers, nativeStorage = false): Promise<BrowserContext> {
   const { baseURL, locale, timezoneId, ignoreHTTPSErrors, channel } = testInfo.project.use
-  const context = await browserType.launchPersistentContext(profileDirFor(testInfo, name), { channel, baseURL, locale, timezoneId, ignoreHTTPSErrors })
+  const profile = profileDirFor(testInfo, name)
+  const context = await browserType.launchPersistentContext(profile, { channel, baseURL, locale, timezoneId, ignoreHTTPSErrors })
+  if (!nativeStorage)
+    await isolateWebkitStorage(context, profile, testInfo)
   await watchers.cspViolations.watch(context)
   watchers.pageErrors.watch(context)
   return context

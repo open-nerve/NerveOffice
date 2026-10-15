@@ -46,3 +46,87 @@ export async function failMirrorRemoval(page: Page, onlyName?: string): Promise<
     (window as unknown as { __cleanupMirrorBlocked: boolean }).__cleanupMirrorBlocked = false
   })
 }
+
+/** 已有真实镜像之后才安装：只让当前 Document 根目录读取失败，其他页仍可独立核对磁盘。 */
+export async function failMirrorRoot(page: Page, name: 'UnknownError' | 'SecurityError'): Promise<() => Promise<void>> {
+  await page.evaluate((name) => {
+    const prototype = Object.getPrototypeOf(navigator.storage) as StorageManager
+    const original: typeof navigator.storage.getDirectory = Reflect.get(prototype, 'getDirectory')
+    Object.assign(window, { __cleanupMirrorRootFailed: true })
+    prototype.getDirectory = async function () {
+      if ((window as unknown as { __cleanupMirrorRootFailed: boolean }).__cleanupMirrorRootFailed)
+        throw new DOMException('测试读取已有镜像根目录失败', name)
+      return Reflect.apply(original, this, [])
+    }
+  }, name)
+  const observed = await page.evaluate(async () => {
+    try {
+      await navigator.storage.getDirectory()
+      return 'opened'
+    }
+    catch (error) {
+      return error instanceof DOMException ? error.name : 'other-error'
+    }
+  })
+  if (observed !== name)
+    throw new Error(`根目录故障未生效：预期 ${name}，实际 ${observed}`)
+  return async () => page.evaluate(() => {
+    (window as unknown as { __cleanupMirrorRootFailed: boolean }).__cleanupMirrorRootFailed = false
+  })
+}
+
+/** 延迟前台 beginUser 的返回，但真实存储锁已经释放，让后台实际清完同一次原许可。 */
+export async function pauseLogoutAfterBegin(page: Page): Promise<() => Promise<void>> {
+  await page.evaluate(() => {
+    const original = navigator.locks.request.bind(navigator.locks)
+    const gate = { paused: false, committedKind: undefined as string | undefined, resume: (): void => {} }
+    Object.assign(window, { __logoutAfterBegin: gate })
+    let armed = true
+    navigator.locks.request = async function (...args: unknown[]) {
+      const result: unknown = await Reflect.apply(original, navigator.locks, args)
+      if (armed && args[0] === 'nerve-office-outbox-operation' && result !== null && typeof result === 'object' && Reflect.get(result, 'kind') === 'clearing') {
+        armed = false
+        // 记录已提交事务的真实返回值；存储锁已释放，同页维护此后也可能立刻清完。
+        gate.committedKind = String(Reflect.get(result, 'kind'))
+        gate.paused = true
+        await new Promise<void>((resolve) => {
+          gate.resume = resolve
+        })
+      }
+      return result
+    }
+  })
+  return async () => {
+    if (!page.isClosed()) {
+      await page.evaluate(() => {
+        (window as unknown as { __logoutAfterBegin?: { readonly resume: () => void } }).__logoutAfterBegin?.resume()
+      })
+    }
+  }
+}
+
+/** 仅返回持久状态名，独立于应用内的流程状态和界面文字。 */
+export async function localSessionSummary(page: Page) {
+  return page.evaluate(async () => new Promise<{ phase?: string, generation?: string, activatedFrom?: string, suspendedFrom?: string } | undefined>((resolve, reject) => {
+    const opened = indexedDB.open('nerve-office-outbox')
+    opened.onerror = () => reject(opened.error)
+    opened.onsuccess = () => {
+      const db = opened.result
+      const tx = db.transaction('sessions', 'readonly')
+      const request = tx.objectStore('sessions').get('current') as IDBRequest<{ readonly state?: { readonly phase?: string, readonly generation?: string, readonly activatedFrom?: string, readonly suspendedFrom?: string } } | undefined>
+      tx.oncomplete = () => {
+        db.close()
+        const state = request.result?.state
+        resolve(state === undefined ? undefined : { phase: state.phase, generation: state.generation, activatedFrom: state.activatedFrom, suspendedFrom: state.suspendedFrom })
+      }
+      tx.onabort = () => {
+        db.close()
+        reject(tx.error)
+      }
+    }
+  }))
+}
+
+export async function localSessionPhase(page: Page): Promise<string | undefined> {
+  return (await localSessionSummary(page))?.phase
+}

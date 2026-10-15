@@ -11,7 +11,7 @@
 import type { Page } from '@playwright/test'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEpoch, expireEditLease, revisionOf, withDatabase } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { logoutThroughUi } from '../../support/logout.ts'
+import { logoutWithOpenEditor } from '../../support/logout.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, disconnectTab, EDITOR_TEST_TIMEOUT, expectFoundOnce, headerAnnouncement, isSaveRequest, lostNotice, openAndEnterEditing, recordLeaseReleases, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess, wouldPromptOnLeave } from '../../support/sheet.ts'
 import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts'
@@ -52,7 +52,7 @@ test.describe('US-M3-11 编辑权中断、期间没人保存过：自动续上�
 
     const other = await context.newPage()
     await other.goto('/')
-    await logoutThroughUi(other)
+    await logoutWithOpenEditor(other)
     await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
     await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
     await loginThroughUi(other, owner)

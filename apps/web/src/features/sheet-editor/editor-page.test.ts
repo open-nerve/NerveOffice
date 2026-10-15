@@ -57,6 +57,64 @@ describe('已打开编辑器的停用说明沿实际账户事实', () => {
     await h.editorPage.recheckSession()
     expect(h.editorPage.view()).toMatchObject({ session: 'other-user', sessionEndedReason: undefined })
   })
+
+  for (const source of ['save', 'read'] as const) {
+    it.each([ALICE.user.id, BOB.user.id])(`${source} 原响应确证 %s 停用，随后查询仅未登录：保留本页原因，真实登录后清掉`, async (userId) => {
+      const h = setup({ editIntent: source === 'save', api: {
+        editStatus: async () => ({ status: { revision: 5, editor: null, canEdit: true, canTakeOver: false, formulasPending: false, request: null, reservation: null, interruption: null }, serverTime: undefined }),
+      } })
+      await h.editorPage.load()
+      await settle()
+      const failure = new ApiError(401, 'SESSION_EXPIRED', '账户停用', { details: { reason: 'account_disabled', userId } })
+      h.api.session.mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '请先登录'))
+      if (source === 'save') {
+        h.api.save.mockRejectedValueOnce(failure)
+        await h.editorPage.save()
+        expect(h.api.save).toHaveBeenCalledOnce()
+      }
+      else {
+        expect(modeOf(h.editorPage)).toMatchObject({ kind: 'reading', update: 'available' })
+        h.api.contentIfChanged.mockRejectedValueOnce(failure)
+        await h.editorPage.refreshUpdate()
+        expect(h.api.contentIfChanged).toHaveBeenCalledOnce()
+      }
+      await vi.waitFor(() => expect(h.editorPage.view().session).toBe('signed-out'))
+      expect(h.editorPage.view().sessionEndedReason).toBe(userId === ALICE.user.id ? 'account_disabled' : undefined)
+      expect(h.page.visits).toEqual([])
+      h.api.session.mockResolvedValueOnce(source === 'save' ? BOB : { ...ALICE, csrfToken: 'csrf-fresh' })
+      await h.editorPage.recheckSession()
+      expect(h.editorPage.view()).toMatchObject({ session: source === 'save' ? 'other-user' : 'active', sessionEndedReason: undefined })
+    })
+  }
+
+  it('普通停写先撤掉本机许可，原保存的确证停用仍保留页面原因', async () => {
+    const initial = permitted({ ...ALICE })
+    const h = setup({ api: { session: async () => initial } })
+    await h.editorPage.load()
+    h.api.save.mockImplementationOnce(async () => {
+      publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+      throw new ApiError(401, 'SESSION_EXPIRED', '账户停用', { details: { reason: 'account_disabled', userId: ALICE.user.id } })
+    })
+    h.api.session.mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '请先登录'))
+    await h.editorPage.save()
+    await vi.waitFor(() => expect(h.editorPage.view().session).toBe('signed-out'))
+    expect(h.editorPage.view().sessionEndedReason).toBe('account_disabled')
+    expect(h.page.visits).toEqual([])
+  })
+
+  it.each([ALICE, BOB])('旧保存迟到的停用回包，重新确认是 $user.username 的有效登录：不沿用旧原因', async (confirmed) => {
+    const pending = deferred<SaveContentResponse>()
+    const h = setup({ api: { save: async () => pending.promise } })
+    await h.editorPage.load()
+    const saving = h.editorPage.save()
+    await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledOnce())
+    h.api.session.mockResolvedValueOnce({ ...confirmed, csrfToken: 'csrf-fresh' })
+    pending.reject(new ApiError(401, 'SESSION_EXPIRED', '旧账户停用', { details: { reason: 'account_disabled', userId: ALICE.user.id } }))
+    await saving
+    await vi.waitFor(() => expect(h.api.session).toHaveBeenCalledTimes(2))
+    expect(h.editorPage.view()).toMatchObject({ session: confirmed.user.id === ALICE.user.id ? 'active' : 'other-user', sessionEndedReason: undefined })
+    expect(h.page.visits).toEqual([])
+  })
 })
 
 function permitted(response: SessionResponse, generation = testSessionPermit().generation): SessionResponse {

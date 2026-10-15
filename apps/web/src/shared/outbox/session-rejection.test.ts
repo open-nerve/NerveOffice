@@ -23,7 +23,7 @@ describe('失败会话查询只作用于自己的原票据', () => {
 
   it('其他认证失败仅暂停原代次，不建立删除资格', () => {
     expect(rejectSessionCheck(ACTIVE, TICKET, { kind: 'preserve' }, G2)).toEqual({
-      state: { phase: 'suspended', generation: G2, source: SOURCE },
+      state: { phase: 'suspended', generation: G2, source: SOURCE, suspendedFrom: G1 },
       result: { kind: 'stopped', previous: { userId: USER, generation: G1 } },
     })
   })

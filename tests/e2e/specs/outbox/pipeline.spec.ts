@@ -17,14 +17,9 @@ const HOSTS: readonly ProbeHost[] = ['in-process', 'worker']
 
 const HOST_LABELS: Readonly<Record<ProbeHost, string>> = { 'in-process': '进程内', 'worker': '发件箱 Worker' }
 
-/**
- * 镜像（S9）：进程内的宿主不做；发件箱 Worker 里写进 OPFS——这里是默认的上下文，WebKit 的临时数据存储没有 OPFS（拿不到根目录），
- * 镜像是"用不了"、照样写 IndexedDB。镜像本身的用例在 mirror.spec.ts（持久化的浏览器目录，三个浏览器都有 OPFS）
- */
-function mirrorOf(host: ProbeHost, browserName: string): MirrorStatus {
-  if (host === 'in-process')
-    return { kind: 'off' }
-  return browserName === 'webkit' ? { kind: 'not-mirrored', reason: 'unsupported' } : { kind: 'mirrored' }
+/** 进程内宿主不写镜像；三浏览器的正常存储中，Worker 均须实际写入 OPFS。 */
+function mirrorOf(host: ProbeHost): MirrorStatus {
+  return host === 'in-process' ? { kind: 'off' } : { kind: 'mirrored' }
 }
 
 /** 这一个用例的用户：收尾时删掉他的 OPFS 镜像目录 */
@@ -78,8 +73,8 @@ async function pipelineOn(page: Page, options: ProbePipelineOptions): Promise<nu
 
 for (const host of HOSTS) {
   test.describe(`写入管道（${HOST_LABELS[host]}）`, { tag: '@test-build' }, () => {
-    test('整条管道：写入 → 交回的 gzip 就是库里加密的那一份 → 去重 → 标记在途 → 上传期间又写一份 → 确认改基准 → 再确认删掉；大的内容同样一致', async ({ page, browserName }) => {
-      const mirror = mirrorOf(host, browserName)
+    test('整条管道：写入 → 交回的 gzip 就是库里加密的那一份 → 去重 → 标记在途 → 上传期间又写一份 → 确认改基准 → 再确认删掉；大的内容同样一致', async ({ page }) => {
+      const mirror = mirrorOf(host)
       const key = await prepare(page, `ob-pipe-${host}`)
       const id = await pipelineOn(page, { host })
       const writer = writerOf(3)

@@ -8,6 +8,7 @@ import { openOutboxProbe, probe, removeMirrorOf } from '../../support/outbox-pro
 import { firstPage, launchPersistentProfile } from '../../support/persistent-profile.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, savedContent } from '../../support/sheet.ts'
+import { namespaceWorkerScript } from '../../support/webkit-storage.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -47,7 +48,7 @@ test('US-M4-07 先恢复仅存于镜像的原件；放弃遇到备份清理失�
     await page.route('**/assets/outbox.worker-*.js', async (route) => {
       const response = await route.fetch()
       const failure = `FileSystemDirectoryHandle.prototype.removeEntry = async function() { throw new DOMException('测试清理阶段备份占用', 'NoModificationAllowedError'); };`
-      await route.fulfill({ response, body: `${failure}\n${await response.text()}` })
+      await route.fulfill({ response, body: namespaceWorkerScript(context, `${failure}\n${await response.text()}`) })
     })
     await openDraftCatalog(page)
     const row = draftRow(page, documentId)

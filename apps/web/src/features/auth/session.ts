@@ -46,6 +46,7 @@ export const OWN_DISABLE_AFTER_UNKNOWN = { systemAdminOnly: true, expiredReason:
 /** 会话查询用：拿到会话就把它的 CSRF 令牌交给请求层。 */
 export async function fetchSession(signal?: AbortSignal): Promise<SessionResponse> {
   const session = await requestSession(signal)
+  signal?.throwIfAborted()
   setApiSession(session)
   return session
 }

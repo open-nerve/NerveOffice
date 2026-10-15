@@ -52,6 +52,14 @@ async function invalidate(page: Page, other: Page, h: Awaited<ReturnType<typeof 
   }
 }
 
+async function expectClearedMarker(page: Page, entry: 'platform' | 'editor', cause: 'unreadable' | 'revoked' | 'corrupted'): Promise<void> {
+  if (entry !== 'platform' || cause === 'unreadable')
+    return
+  const listed = page.getByRole('link', { name: /需要启动时核对的草稿/ })
+  await expect(listed).toBeVisible()
+  await expect(listed.getByText('本机有未同步修改')).toHaveCount(0)
+}
+
 test.describe('启动维护在部署关闭新草稿后仍处理既有原件', { tag: '@test-build' }, () => {
   for (const entry of ['platform', 'editor'] as const) {
     for (const cause of ['unreadable', 'revoked', 'corrupted'] as const) {
@@ -62,7 +70,14 @@ test.describe('启动维护在部署关闭新草稿后仍处理既有原件', { 
         await disableNewDrafts(page)
         await startEntry(page, entry, landing)
         await expect.poll(async () => (await readLocalDisk(page, h.key)).draft === null).toBe(true)
-        await expect(page.getByText({ unreadable: '已无法访问这份文档，对应的本机草稿已清除', revoked: '密钥失效的本机草稿已清除', corrupted: '损坏的本机草稿已清除' }[cause], { exact: true })).toBeVisible()
+        const notice = page.getByText({ unreadable: '已无法访问这份文档，对应的本机草稿已清除', revoked: '密钥失效的本机草稿已清除', corrupted: '损坏的本机草稿已清除' }[cause], { exact: true })
+        await expect(notice).toBeVisible()
+        await expectClearedMarker(page, entry, cause)
+        // 当前目录已经空，再检查仍应解释刚完成的清理，而不是把完成事实抹掉。
+        const retry = page.getByRole('button', { name: '重试本机维护' })
+        await retry.click()
+        await expect(retry).toHaveAttribute('aria-disabled', 'false')
+        await expect(notice).toBeVisible()
         expect(await revisionOf(h.documentId)).toBe(1)
         expect(await revisionOf(landing)).toBe(1)
       })

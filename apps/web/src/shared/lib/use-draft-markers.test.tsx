@@ -4,9 +4,17 @@ import { draftDocumentIds } from '../outbox/draft-index.ts'
 import { deferred } from '../outbox/outbox-lock.test-support.ts'
 import { useDraftMarkers } from './use-draft-markers.ts'
 
+const maintenance = vi.hoisted(() => ({ idle: undefined as (() => void) | undefined }))
+vi.mock('./draft-maintenance.ts', () => ({ startDraftMaintenance: (onIdle?: () => void) => {
+  maintenance.idle = onIdle
+  return () => {
+    maintenance.idle = undefined
+  }
+} }))
 vi.mock('../outbox/draft-index.ts', () => ({ draftDocumentIds: vi.fn() }))
 beforeEach(() => {
   vi.mocked(draftDocumentIds).mockReset()
+  maintenance.idle = undefined
 })
 
 describe('本人列表标记的轻量索引', () => {
@@ -55,6 +63,27 @@ describe('本人列表标记的轻量索引', () => {
     const h = renderHook(() => useDraftMarkers('amy'))
     await waitFor(() => expect(h.result.current.has('draft')).toBe(true))
     await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(h.result.current.size).toBe(0)
+  })
+
+  it('后台维护已清理原件时重读索引，移除列表的过期标记；卸载不再观察维护', async () => {
+    vi.mocked(draftDocumentIds).mockResolvedValueOnce(new Set(['removed'])).mockResolvedValue(new Set())
+    const h = renderHook(() => useDraftMarkers('amy'))
+    await waitFor(() => expect(h.result.current.has('removed')).toBe(true))
+    await act(async () => maintenance.idle?.())
+    await waitFor(() => expect(h.result.current.size).toBe(0))
+    h.unmount()
+    expect(maintenance.idle).toBeUndefined()
+  })
+
+  it('维护完成前发出的旧索引迟到，不能重新挂上已删除原件的标记', async () => {
+    const earlier = deferred<ReadonlySet<string>>()
+    vi.mocked(draftDocumentIds).mockReturnValueOnce(earlier.promise).mockResolvedValue(new Set())
+    const h = renderHook(() => useDraftMarkers('amy'))
+    await waitFor(() => expect(draftDocumentIds).toHaveBeenCalledOnce())
+    await act(async () => maintenance.idle?.())
+    await waitFor(() => expect(draftDocumentIds).toHaveBeenCalledTimes(2))
+    await act(async () => earlier.resolve(new Set(['removed'])))
     expect(h.result.current.size).toBe(0)
   })
 })

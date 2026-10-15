@@ -10,16 +10,8 @@ export function maintenanceMessage(state: DraftMaintenanceView): string | undefi
   const rows = state.catalog?.rows ?? []
   if (rows.some(row => row.recovery?.notice?.kind === 'expired'))
     return text.maintenanceExpired
-  const removed = new Set(rows.flatMap((row) => {
-    const recovery = row.recovery
-    if (recovery?.stage !== 'finished')
-      return []
-    if (recovery.decision?.kind === 'remove')
-      return [text.maintenanceRemoved[recovery.decision.reason]]
-    return recovery.decision?.kind === 'confirmed' ? [text.maintenanceConfirmed] : []
-  }))
-  if (removed.size > 0)
-    return [...removed].join('；')
+  if (state.completed.length > 0)
+    return state.completed.map(reason => reason === 'confirmed' ? text.maintenanceConfirmed : text.maintenanceRemoved[reason]).join('；')
   if (rows.some(row => row.recovery?.notice !== undefined || row.recovery?.stage === 'finished'))
     return text.maintenanceChanged
   return undefined

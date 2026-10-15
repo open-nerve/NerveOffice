@@ -44,7 +44,8 @@ describe('本机草稿的入口和全站标记', () => {
     await waitFor(() => expect(within(row).getByText('本机有未同步修改')).toBeInTheDocument())
     const clean = screen.getByRole('link', { name: new RegExp(CLEAN.title) }).closest('li')!
     expect(within(clean).queryByText('本机有未同步修改')).not.toBeInTheDocument()
-    expect(draftDocumentIds).toHaveBeenCalledExactlyOnceWith(SESSION.user.id)
+    // 维护完成会再次读取轻量索引；每次都只能读取当前本人，不靠取钥或文档事实刷新标记。
+    expect(new Set(vi.mocked(draftDocumentIds).mock.calls.map(([userId]) => userId))).toEqual(new Set([SESSION.user.id]))
     expect(http.requests.some(request => /local-key|draft-facts/.test(request.key))).toBe(false)
   })
 })

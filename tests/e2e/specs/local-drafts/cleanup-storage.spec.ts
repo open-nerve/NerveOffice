@@ -60,7 +60,7 @@ test('US-M4-08 SDK 数字格式偏好仅在本次编辑器内保留，重建后�
 })
 
 test('US-M4-08 确认退出清理本人草稿、镜像、旧库和全部记号，保留他人新键及无关数据库', async ({ playwright, browserName, cspViolations, pageErrors, autosave }, testInfo) => {
-  // WebKit 临时上下文没有 OPFS；完整镜像清单必须在真正落盘的上下文中验证。
+  // WebKit 临时上下文的 OPFS 根可能不可读；完整镜像清单在真正落盘的上下文中验证。
   const context = await launchPersistentProfile(playwright[browserName], testInfo, 'logout-all-storage', { cspViolations, pageErrors })
   await chooseAutosave(context, autosave)
   const page = await firstPage(context)

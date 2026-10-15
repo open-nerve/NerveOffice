@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { startDraftMaintenance } from './draft-maintenance.ts'
 
 const EMPTY: ReadonlySet<string> = new Set()
 
@@ -31,11 +32,15 @@ export function useDraftMarkers(userId: string | undefined): ReadonlySet<string>
         void read()
     }
     void read()
+    const stopMaintenance = startDraftMaintenance(() => {
+      void read()
+    })
     window.addEventListener('focus', visible)
     window.addEventListener('pageshow', visible)
     document.addEventListener('visibilitychange', visible)
     return () => {
       alive = false
+      stopMaintenance()
       window.removeEventListener('focus', visible)
       window.removeEventListener('pageshow', visible)
       document.removeEventListener('visibilitychange', visible)

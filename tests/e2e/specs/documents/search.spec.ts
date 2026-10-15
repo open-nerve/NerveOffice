@@ -11,10 +11,9 @@ import { loginThroughApi } from '../../support/session.ts'
 const NAME_MIN_WIDTH = 48
 
 /**
- * 系统管理员的页头在各个宽度下，名字是不是只给读屏（第五批 G7）：320px 宽时余下不到 3rem（原来只剩"@…"）；480px 及更宽时看得见。
- * 360px 取决于各浏览器的字宽，两种都可以（不在表里）
+ * P4 增加本机草稿入口后，窄屏账户组独占一行；管理员名字在这些断点都应至少显示登录名的头几个字。
  */
-const ADMIN_NAME_HIDDEN: ReadonlyMap<number, boolean> = new Map([[320, true], [480, false], [639, false], [640, false], [768, false]])
+const ADMIN_NAME_HIDDEN: ReadonlyMap<number, boolean> = new Map([[320, false], [360, false], [480, false], [639, false], [640, false], [767, false], [768, false]])
 
 /** 量一个元素在页面上的位置；量不到（没渲染出来）就让用例失败 */
 async function boxOf(locator: Locator): Promise<{ readonly x: number, readonly width: number }> {
@@ -111,8 +110,12 @@ test.describe('US-M2-12 按标题搜索', () => {
     const brand = await boxOf(page.getByRole('link', { name: 'NerveOffice', exact: true }))
     const searchBox = await boxOf(page.getByRole('search'))
     const signOut = await boxOf(page.getByRole('button', { name: '退出', exact: true }))
+    const account = await boxOf(page.getByRole('button', { name: '退出', exact: true }).locator('..'))
     expect(Math.abs(signOut.x + signOut.width - (viewportWidth(page) - brand.x))).toBeLessThanOrEqual(2)
-    expect(searchBox.x - (brand.x + brand.width)).toBeGreaterThan(100)
+    const beforeSearch = searchBox.x - (brand.x + brand.width)
+    const afterSearch = account.x - (searchBox.x + searchBox.width)
+    expect(beforeSearch).toBeGreaterThanOrEqual(12)
+    expect(Math.abs(beforeSearch - afterSearch)).toBeLessThanOrEqual(2)
 
     // 先把根目录下那一份删掉：回收站里的不该被搜到
     await page.getByRole('button', { name: '操作 年度预算表', exact: true }).click()
@@ -136,7 +139,7 @@ test.describe('US-M2-12 按标题搜索', () => {
     await expect(page).toHaveURL(`/documents/${draftId}`)
   })
 
-  test('窄屏：页头各项互不重叠、不溢出——搜索框折到第二行，宽一些时回到中间、名字收窄；余下的宽度连登录名的头几个字都放不下时名字只给读屏（M2-P6 复核第三批 G-e、第五批 G7，M2-P1 审查 B11）', async ({ page }) => {
+  test('窄屏：页头品牌、搜索、账户及本机草稿入口互不重叠、不溢出；名字仍放得下登录名的头几个字（M2-P1 审查 B11、M4-P4）', async ({ page }) => {
     // 系统管理员（页头多一个"管理"）、显示名很长：最挤的情形
     const admin = await createUser('narrow-header', '一个很长很长很长很长很长很长很长很长的显示名', { systemRole: 'admin' })
     await loginThroughApi(page, admin)
@@ -150,13 +153,13 @@ test.describe('US-M2-12 按标题搜索', () => {
       'name': header.locator('[data-slot="person-name"]'),
       // 窄屏时只留图标，可读名称不变
       'change-password': header.getByRole('link', { name: '修改密码', exact: true }),
+      'local-drafts': header.getByRole('link', { name: '本机草稿', exact: true }),
       'sign-out': header.getByRole('button', { name: '退出', exact: true }),
     }
-    for (const width of [320, 360, 480, 639, 640, 768]) {
+    for (const width of [320, 360, 480, 639, 640, 767, 768]) {
       await page.setViewportSize({ width, height: 700 })
       await expect(page.getByRole('heading', { level: 1, name: '我的空间' })).toBeVisible()
-      // 名字：320px 宽时系统管理员的页头只剩不到 3rem，名字只给读屏（原来只剩"@…"，第五批 G7）；宽一些时放得下登录名的头几个字。
-      // 只给读屏的名字不参与下面的出界与重叠的检查
+      // 全部入口都必须参与碰撞检查；换行不能以把名字挤成“@…”为代价。
       const hidden = await checkHeaderName(parts.name, admin, width, ADMIN_NAME_HIDDEN.get(width))
       const shownParts = Object.entries(parts).filter(([part]) => !hidden || part !== 'name')
       const boxes = await Promise.all(shownParts.map(async ([part, locator]) => {

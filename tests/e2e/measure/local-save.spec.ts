@@ -22,6 +22,9 @@ import { firstPage, launchPersistentProfile } from '../support/persistent-profil
 import { loginThroughApi } from '../support/session.ts'
 import { cellOf, openAndEnterEditing, savedContent, saveStatus } from '../support/sheet.ts'
 
+// 性能测量保持原生存储与 HTTP 缓存；实际测量目录由下方显式建立。
+test.use({ webkitStorage: 'temporary' })
+
 const ROUNDS = Number(process.env.MEASURE_LOCAL_SAVE_ROUNDS ?? '20')
 const RESULTS_DIR = join(import.meta.dirname, 'test-results', 'local-save')
 const DOCUMENTS: readonly { readonly id: string, readonly snapshotFor: SnapshotFor, readonly formula: boolean }[] = [
@@ -85,7 +88,7 @@ for (const document of DOCUMENTS) {
       const samples: Sample[] = []
       const startedAt = new Date().toISOString()
       const loadBefore = loadavg()
-      const context = await launchPersistentProfile(playwright[browserName], testInfo, `local-${document.id}-${network}`, { cspViolations, pageErrors })
+      const context = await launchPersistentProfile(playwright[browserName], testInfo, `local-${document.id}-${network}`, { cspViolations, pageErrors }, true)
       await chooseAutosave(context, 'running')
       const page = await firstPage(context)
       let workers = 0

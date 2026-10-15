@@ -12,7 +12,7 @@ const text = messages.searchBox
  * 结果页按需加载（features/search），所以首屏里只有这个框；关键词放在地址的查询参数里，
  * 刷新、前进后退与分享地址都拿得到同一批结果。
  * 排布（M2-P6 复核第三批 G-e）：宽屏时占住页头中间的空当，最窄也留够输入框与"搜索"按钮的位置（min-w-40），再窄就由当前用户的名字收窄——
- * 原来可以收窄到 0，"搜索"按钮（不收窄）就挤出框外、盖到人名上；窄屏（sm 以下）时折到页头的第二行、占满整行：
+ * 原来可以收窄到 0，"搜索"按钮（不收窄）就挤出框外、盖到人名上；窄屏（sm 以下）时折到页头的最后一行、占满整行：
  * 一行放不下产品名称、"管理"、搜索框与当前用户那一组（页头不溢出，M2-P1 审查 B11）
  */
 export function SearchBox() {
@@ -31,7 +31,7 @@ export function SearchBox() {
   return (
     <form
       role="search"
-      // 窄屏：排在最后（第二行）、占满整行；sm 起：占住页头中间的空当，在 10rem 与 20rem 之间随宽度伸缩
+      // 窄屏排在最后、占满整行；sm 起与品牌同行，在 10rem 与 20rem 之间随宽度伸缩
       className="order-last flex w-full items-center gap-1 sm:order-none sm:w-auto sm:max-w-xs sm:min-w-40 sm:flex-1"
       onSubmit={(event) => {
         event.preventDefault()

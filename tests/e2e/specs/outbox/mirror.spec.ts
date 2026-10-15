@@ -2,11 +2,9 @@
 // nerve-office-outbox/<userId>/<documentId>/ 的两个槽位文件（同步访问句柄、轮流原地改写），删掉草稿时截断，IndexedDB 被删之后读回并写回、
 // 在库里留下提示，库比镜像新时登记补写镜像；库与镜像合一的清理（local-cleanup.ts）在页面里调。槽位文件经测试构建的另一个 Worker
 // 读出（页面里按生产的格式校验）、改坏。
-// 每个用例一个持久化的浏览器目录（三个浏览器同样）：WebKit 默认的上下文是临时的数据存储，没有 OPFS（拿不到根目录，默认上下文里的管道用例
-// 核对的正是"用不了"）；Chromium 默认的无痕式上下文里 OPFS 在内存里，配额的覆盖也管不到同步访问句柄。
-// Playwright 的 WebKit 在 macOS 上把持久上下文的 OPFS 放在共用的目录里（不在资料目录里）：每个用例用自己的用户，收尾时删掉他的镜像目录。
-// "合一的清理·保留期"一条以 15 天之后的时刻清，会回收这个来源下所有用户的镜像目录：这个文件里的用例串行（不开 fullyParallel），
-// 别的文件不在持久上下文里碰 OPFS；以后要并行，先把那一条挪到单独的项目里（审查 B14）。
+// 每个用例一个持久化的浏览器目录（三个浏览器同样）。macOS WebKit 的原生 OPFS 根跨资料目录共享，功能夹具将 Window/Worker
+// 一致重定向到本例独占的真实子目录，关闭前归档并清理；故障注入的 Worker 同样复用此前缀。性能与原生崩溃项目不使用该适配。
+// 本文件继续串行；保留期回收仅作用于本例的根目录，不触碰其他测试的镜像。
 // dispose 之后发件箱 Worker 的句柄是异步放开的：要读、改槽位文件之前先等它放开（waitForRelease）。
 // 标签 @test-build
 import type { BrowserContext, Page } from '@playwright/test'
@@ -22,6 +20,7 @@ import { draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, probeP
 import { firstPage, launchPersistentProfile, overrideQuota } from '../../support/persistent-profile.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, openReader, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
+import { namespaceWorkerScript } from '../../support/webkit-storage.ts'
 
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }
 
@@ -161,7 +160,7 @@ async function failMirrorRecovery(page: Page, key: DraftKey, failure: RecoveryFa
           ? `const transaction = IDBDatabase.prototype.transaction; IDBDatabase.prototype.transaction = function (stores, ...args) { if (Array.from(typeof stores === 'string' ? [stores] : stores).includes('drafts')) throw new DOMException('测试禁止草稿事务', 'SecurityError'); return Reflect.apply(transaction, this, [stores, ...args]); };`
           : `IDBFactory.prototype.open = function () { throw new DOMException('测试禁止存储', 'SecurityError'); }; navigator.storage.getDirectory = async function () { throw new DOMException('测试禁止镜像', 'SecurityError'); };`
       faults += 1
-      await route.fulfill({ response, body: `${fault}\n${await response.text()}` })
+      await route.fulfill({ response, body: namespaceWorkerScript(page.context(), `${fault}\n${await response.text()}`) })
     })
   }
   return newer

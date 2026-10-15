@@ -35,6 +35,9 @@ import { startResultCollector } from '../support/selftest-collector.ts'
 import { SELFTEST_STEPS, selftestScene } from '../support/selftest-plan.ts'
 import { runSelftestStep } from '../support/selftest-run.ts'
 
+// 性能测量保持原生存储与 HTTP 缓存；实际测量目录由下方显式建立。
+test.use({ webkitStorage: 'temporary' })
+
 const RUNS = Number(process.env.MEASURE_PROBE_RUNS ?? '40')
 const RESULTS_DIR = join(import.meta.dirname, 'test-results', 'probe')
 
@@ -116,7 +119,7 @@ async function runQuota(context: BrowserContext, page: Page, step: SelftestStep,
 async function runWarmup(browserType: BrowserType, testInfo: TestInfo, watchers: ProfileWatchers, steps: readonly SelftestStep[], collector: ResultCollector): Promise<ProbeReport[]> {
   const reports: ProbeReport[] = []
   for (let round = 1; round <= WARMUP_ROUNDS; round += 1) {
-    const profile = await launchPersistentProfile(browserType, testInfo, `warmup-${round}`, watchers)
+    const profile = await launchPersistentProfile(browserType, testInfo, `warmup-${round}`, watchers, true)
     try {
       const page = await firstPage(profile)
       for (const kind of WARMUP_KINDS) {
@@ -181,14 +184,14 @@ test(`真实浏览器的前置复核（M4-P1 §3.6）：持久上下文里跑首
   const collector = await startResultCollector()
   let reports: ProbeReport[]
   try {
-    const profile = await launchPersistentProfile(playwright[browserName], testInfo, 'profile', watchers)
+    const profile = await launchPersistentProfile(playwright[browserName], testInfo, 'profile', watchers, true)
     try {
       reports = await runInProfile(profile, await firstPage(profile), scene.steps, browserName, collector)
     }
     finally {
       await profile.close()
     }
-    const quotaProfile = await launchPersistentProfile(playwright[browserName], testInfo, 'quota-profile', watchers)
+    const quotaProfile = await launchPersistentProfile(playwright[browserName], testInfo, 'quota-profile', watchers, true)
     try {
       reports.push(await runQuota(quotaProfile, await firstPage(quotaProfile), stepNamed(scene.steps, QUOTA.id), browserName, collector))
     }

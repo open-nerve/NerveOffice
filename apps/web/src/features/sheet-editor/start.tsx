@@ -107,25 +107,30 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
   watchBrowserConnection({ state: connectionState, probe: requestSession })
   const reportLoadFailure = loadFailureReporter(window)
   if (import.meta.env.MODE === 'e2e') {
+    const parameters = new URLSearchParams(window.location.search)
     // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
     // 与组装各走各的；引入失败同样不上报（理由见下），用到它的 E2E 等不到探针、自己会失败
-    if (new URLSearchParams(window.location.search).has('outboxProbe')) {
+    if (parameters.has('outboxProbe')) {
       void Promise.allSettled([import('./outbox/testing/outbox-probe.ts')]).then(([probe]) => {
         if (probe.status === 'fulfilled')
           probe.value.installOutboxProbe(window)
       })
     }
     // 地址带 crashProbe 时：写入中途结束整棵浏览器进程的原子性用例的探针（M4-P1 设计 §3.7，outbox/testing/crash-probe.ts），同上
-    if (new URLSearchParams(window.location.search).has('crashProbe')) {
+    if (parameters.has('crashProbe')) {
       void Promise.allSettled([import('./outbox/testing/crash-probe.ts')]).then(([probe]) => {
         if (probe.status === 'fulfilled')
           probe.value.installCrashProbe(window)
       })
     }
+    // 独立存储/崩溃探针没有文档身份，只安装探针。后台维护会提前建库或修复原件，破坏首次读取、升级和原子性用例的前提。
+    // 真正的文档页即使带探针参数，也必须照常装配页面和维护。
+    if (documentIdFromPagePath(window.location.pathname) === undefined && (parameters.has('outboxProbe') || parameters.has('crashProbe')))
+      return
     // 引入失败：照常组装，没有那一样，不上报——用到它的 E2E 自己会失败（控制、日志不在）。这两块在页面一开始就引入，整页跳转可能在入口的
     // 脚本还没执行、还没开始听 beforeunload 时就已开始，随后取消它们（WebKit 报"Importing a module script failed."），分不清是不是跳转取消的
     // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）
-    const crash = new URLSearchParams(window.location.search).get('selftest') === 'crash-recovery'
+    const crash = parameters.get('selftest') === 'crash-recovery'
     void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('./recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)]).then(([control, log, diagnostics]) => {
       const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadStart(() => window.sessionStorage) : undefined
       assemble(

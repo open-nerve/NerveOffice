@@ -19,8 +19,9 @@ import type { ProbeCommand } from '../../support/editor-probe.ts'
 import { revisionEtag, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, withDatabase } from '../../support/database.ts'
 import { commandMark, editorView, probeCommands, runFacade, scrollAndSelect } from '../../support/editor-probe.ts'
-import { expect, test } from '../../support/fixtures.ts'
+import { chooseAutosave, expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
+import { firstPage, launchPersistentProfile } from '../../support/persistent-profile.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
 import { ALERT, closePermissionAlert, OPENED, scene, watch } from '../../support/read-only.ts'
 import { withSaveFirst } from '../../support/save-before-heartbeat.ts'
@@ -132,19 +133,32 @@ test.describe('US-M3-01 打开文档先阅读，点"编辑"进入编辑，点"�
     expect((await savedContent(page, documentId)).revision).toBe(exited.revision)
   })
 
-  test('US-M3-01 刚新建的表格直接进入编辑，地址里的 ?edit=new 随之去掉；刷新之后是阅读（不再自动进入编辑）', async ({ page }) => {
-    await loginThroughApi(page, await createUser('read-mode-new'))
-    // 列表里新建：跳到带 ?edit=new 的地址，直接以可编辑创建；进入之后地址里没有这个参数（createSheetThroughUi 核对）
-    const documentId = await createSheetThroughUi(page)
-    await expect(saveStatus(page)).toHaveText('已保存到云端')
-    await expect(exitEditButton(page)).toBeVisible()
-    await expect(enterEditButton(page)).toHaveCount(0)
+  test('US-M3-01 刚新建的表格直接进入编辑，地址里的 ?edit=new 随之去掉；刷新之后是阅读（不再自动进入编辑）', async ({ playwright, browserName, cspViolations, pageErrors, autosave }, testInfo) => {
+    // 此例同时核对刷新时的尽力释放，必须没有路由；macOS WebKit 的功能存储隔离会安装 Worker 路由。
+    // 原生独立资料目录不改传输、缓存或 OPFS，保持原“编辑”按钮断言；本例不写入单元格。
+    const context = await launchPersistentProfile(playwright[browserName], testInfo, 'native-refresh', { cspViolations, pageErrors }, true)
+    try {
+      await chooseAutosave(context, autosave)
+      const page = await firstPage(context)
+      await loginThroughApi(page, await createUser('read-mode-new'))
+      // 列表里新建：直接以可编辑创建；进入之后地址里没有 ?edit=new（createSheetThroughUi 核对）。
+      const documentId = await createSheetThroughUi(page)
+      await expect(saveStatus(page)).toHaveText('已保存到云端')
+      await expect(exitEditButton(page)).toBeVisible()
+      await expect(enterEditButton(page)).toHaveCount(0)
+      const writes = recordWrites(page, documentId)
 
-    await page.reload()
-    await waitForEditorAccess(page, 'read')
-    await expect(page).toHaveURL(new RegExp(`/documents/${documentId}$`))
-    await expect(enterEditButton(page)).toBeVisible()
-    await expect(saveButton(page)).toHaveCount(0)
+      await page.reload()
+      await waitForEditorAccess(page, 'read')
+      await expect(page).toHaveURL(new RegExp(`/documents/${documentId}$`))
+      await expect(enterEditButton(page)).toBeVisible()
+      await expect(saveButton(page)).toHaveCount(0)
+      await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
+      expect(writes).not.toContain('acquire')
+    }
+    finally {
+      await context.close()
+    }
   })
 
   test('US-M3-01 查看者与归档空间里的文档：打开是阅读，只能查看、没有"编辑"（对照：归档之前空间管理员有"编辑"）', async ({ page, anotherDevice }) => {

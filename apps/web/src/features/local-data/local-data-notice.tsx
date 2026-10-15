@@ -4,7 +4,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { LOCAL_DRAFTS_PATH } from '../../shared/lib/local-drafts-path.ts'
 import { Button, buttonVariants } from '../../shared/ui/index.ts'
 
-const EMPTY: DraftMaintenanceView = { busy: false, cleanup: 'idle', retention: 'idle', problem: undefined, catalog: undefined }
+const EMPTY: DraftMaintenanceView = { busy: false, cleanup: 'idle', retention: 'idle', problem: undefined, catalog: undefined, completed: [] }
 const idleView = () => EMPTY
 const idleSubscribe = () => () => {}
 

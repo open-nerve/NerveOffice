@@ -732,7 +732,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       title: () => heading?.title ?? '',
       session: {
         // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
-        saveUnauthenticated: () => {
+        saveUnauthenticated: (error) => {
+          if (userId !== undefined && disabledSessionUserId(error) === userId)
+            sessionEndedReason = 'account_disabled'
           unauthenticatedPending = true
           void confirmForSave(true)
         },
@@ -742,7 +744,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           void confirmForSave(true)
         },
         writeProblem,
-        readProblem: () => void recheckSession(),
+        readProblem: (error) => {
+          if (userId !== undefined && disabledSessionUserId(error) === userId)
+            sessionEndedReason = 'account_disabled'
+          void recheckSession()
+        },
       },
       autosave: { page: autosavePage, ...options.autosaveControl },
       sameBrowser,

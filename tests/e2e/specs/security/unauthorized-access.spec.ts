@@ -203,11 +203,11 @@ test.describe('US-M2-14 越权访问一律被拒绝：关键路径', () => {
       await actAs(anotherDevice, 'POST', `/api/admin/users/${me.id}/disable`)
       await typeInCell(page, 'A1', '停用之后写的')
 
-      // 编辑器页：会话已经撤销，说明登录已失效、本页的修改还在（不整页跳走），什么也没存进去。
-      // 保存与心跳续租都会得知（M3-P1）；两条路最后都是没有人登录了：自动保存暂停，页头说登录回来之后自动保存（M3-P4 设计 §3.9）
+      // 编辑器页消费明确停用事实，给停用专用说明；本页内存修改保留、不整页跳走，也不上传。
       await page.keyboard.press('ControlOrMeta+s')
       await saveFirst.expectResponse(401)
-      await expect(page.getByRole('alert').filter({ hasText: '本页的修改还在' })).toBeVisible()
+      await expect(page.getByRole('alert').filter({ hasText: '你的账户已被停用。请联系系统管理员确认账户状态。' })).toBeVisible()
+      await expect(page.getByText('本页的修改仍留在内存中，关闭页面会丢失。账户重新启用并登录后才能继续保存。')).toBeVisible()
       await expect(saveStatus(page)).toHaveText('暂停保存：登录回来之后自动保存')
       await saveFirst.resume()
       expect(await revisionOf(documentId)).toBe(1)

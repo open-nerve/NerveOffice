@@ -153,10 +153,16 @@ export function createLogoutFlow(options: LogoutFlowOptions) {
     }
     if (!live())
       return
-    if (result.kind === 'invalidated')
-      invalidate()
-    else
+    if (result.kind === 'invalidated') {
+      // 另一页可能已凭同一个许可清完；删除资格结束不等于换了登录来源。
+      // 只复核原来源，不 beginUser 或借新许可。无法确认完成时保留 pending。
+      const current = await qualify()
+      if (live())
+        publish({ local: { kind: current === 'cleared' ? 'cleared' : 'pending', pending: [] } })
+    }
+    else {
       publish({ local: result })
+    }
   }
 
   async function endSession(): Promise<void> {

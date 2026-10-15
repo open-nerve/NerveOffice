@@ -1,7 +1,8 @@
 // 崩溃工具的 IndexedDB 日志（M4-P1 设计 §3.8，S9 第 5 项要用；support/leveldb-log.ts）：每次结束之后记下日志结尾的状态；往结尾补一个只有头的
 // 记录，确定地造出 Chromium 删库——S7 的调查查明的缺陷：被结束在追加一条记录的两次 write 之间时结尾只剩记录头，下一次打开时这半条被悄悄丢掉、
 // 数据都在，但新数据接在它后面写（reuse_logs）；再下一次打开时校验和不符，Chromium 删掉这个来源的全部 IndexedDB。
-// 用页面里裸的 IndexedDB（两个库：同一个来源的全部库都会被删），不经应用的代码；登录页是同源的页面，平台不在那里用 IndexedDB。只看被测来源
+// 用页面里裸的 IndexedDB（两个库：同一个来源的全部库都会被删），不经应用的代码；只给同源空白夹具页返回静态 HTML。登录页已有本机维护，
+// 会提前建库或消耗损坏后的首次打开，不能再用作空白页。这里不拦截存储或改写任何浏览器 API。只看被测来源
 // （baseURL）的那一条日志：浏览器可能给内建的来源另建 IndexedDB。
 // UR-034 的前提（docs/upstream/UR-034-chromium-indexeddb-torn-log-wipe.md）：Chromium 的 IndexedDB 是 LevelDB、复用日志，补的半条记录之后新写的
 // 接在它后面，再下一次打开时删掉整个来源的库。CI 装的是当时最新的稳定版 Chrome 与 Edge，前提哪天不在了，这里的用例会失败，说明以
@@ -14,6 +15,15 @@
 import type { Page } from '@playwright/test'
 import type { CrashReport, CrashTool, PersistentLaunch } from '../../support/browser-crash.ts'
 import { expect, expectCrashed, indexedDbLogOf, test, UR034_PREMISE_GONE } from '../../support/browser-crash.ts'
+
+/** 只隔离应用启动；来源、持久资料目录及 IndexedDB/LevelDB 仍完全由真实浏览器管理。 */
+async function openStoragePage(page: Page): Promise<void> {
+  await page.route('**/__crash-indexeddb-fixture__', async route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><title>IndexedDB crash fixture</title>',
+  }))
+  await page.goto('/__crash-indexeddb-fixture__')
+}
 
 /** 往库里写几条（strict，等提交） */
 async function put(page: Page, database: string, entries: Record<string, string>): Promise<void> {
@@ -53,12 +63,21 @@ async function contents(page: Page): Promise<{ readonly errors: readonly string[
             opening.onerror = () => reject(opening.error ?? new Error('打不开库'))
             opening.onsuccess = () => {
               const db = opening.result
-              const keys = db.transaction('s').objectStore('s').getAllKeys()
-              keys.onsuccess = () => {
-                db.close()
-                resolve((keys.result as string[]).sort())
+              try {
+                const keys = db.transaction('s').objectStore('s').getAllKeys()
+                keys.onsuccess = () => {
+                  db.close()
+                  resolve((keys.result as string[]).sort())
+                }
+                keys.onerror = () => {
+                  db.close()
+                  reject(keys.error ?? new Error('读不出'))
+                }
               }
-              keys.onerror = () => reject(keys.error ?? new Error('读不出'))
+              catch (error) {
+                db.close()
+                reject(error)
+              }
             }
           })
         }
@@ -73,17 +92,17 @@ async function contents(page: Page): Promise<{ readonly errors: readonly string[
   throw new Error(`三次都读不出：${errors.join('；')}`)
 }
 
-/** 以同一个目录重开、打开同源的登录页 */
+/** 以同一个目录重开、打开同源空白夹具页 */
 async function relaunched(crashTool: CrashTool, launch: PersistentLaunch, report: CrashReport): Promise<PersistentLaunch> {
   const next = await crashTool.relaunch(launch, report, { cookies: 'restore' })
-  await next.page.goto('/login')
+  await openStoragePage(next.page)
   return next
 }
 
 /** 起一次、写一条、空闲时结束 */
 async function crashAfterWrite(crashTool: CrashTool): Promise<{ readonly launch: PersistentLaunch, readonly report: CrashReport }> {
   const launch = await crashTool.launch()
-  await launch.page.goto('/login')
+  await openStoragePage(launch.page)
   await put(launch.page, 'nerve-crash-log-a', { k1: 'one' })
   const report = await crashTool.crash(launch)
   expectCrashed(report)
@@ -110,7 +129,7 @@ test.describe('崩溃工具：IndexedDB 的日志', () => {
     // eslint-disable-next-line playwright/no-skipped-test -- WebKit 的 IndexedDB 是 SQLite，没有这个缺陷（S7 的调查：290 次强制结束没有丢失）
     test.skip(browserName === 'webkit', 'WebKit 的 IndexedDB 是 SQLite，没有这个缺陷')
     let launch = await crashTool.launch()
-    await launch.page.goto('/login')
+    await openStoragePage(launch.page)
     await put(launch.page, 'nerve-crash-log-a', { k1: 'one', k2: 'two' })
     await put(launch.page, 'nerve-crash-log-b', { other: 'kept?' })
     let report = await crashTool.crash(launch)

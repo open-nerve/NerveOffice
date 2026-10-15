@@ -9,7 +9,7 @@ export interface SessionChangeWindow { readonly startedAt: number, readonly unti
 export type LocalSessionState
   = | { readonly phase: 'unconfirmed', readonly generation: string, readonly changing: false | SessionChangeWindow, readonly source?: SessionSource, readonly retired?: true }
     | { readonly phase: 'active', readonly generation: string, readonly source: SessionSource, readonly activatedFrom: string }
-    | { readonly phase: 'suspended', readonly generation: string, readonly source: SessionSource }
+    | { readonly phase: 'suspended', readonly generation: string, readonly source: SessionSource, readonly suspendedFrom?: string }
     | { readonly phase: 'clearing' | 'cleared', readonly generation: string, readonly source: SessionSource, readonly cause: UserCleanupCause }
 export interface SessionCheckTicket { readonly kind: 'query' | 'mutation', readonly generation: string }
 export interface DraftSessionPermit { readonly userId: string, readonly generation: string }
@@ -96,8 +96,10 @@ export function readLocalSessionState(value: unknown): LocalSessionState | undef
   }
   if (source === undefined)
     return undefined
-  if (value.phase === 'suspended' && onlyFields(value, ['phase', 'generation', 'source']))
-    return { phase: 'suspended', generation, source }
+  if (value.phase === 'suspended' && onlyFields(value, ['phase', 'generation', 'source', 'suspendedFrom'])
+    && (value.suspendedFrom === undefined || (isUuid(value.suspendedFrom) && value.suspendedFrom !== generation))) {
+    return { phase: 'suspended', generation, source, ...(value.suspendedFrom === undefined ? {} : { suspendedFrom: value.suspendedFrom }) }
+  }
   if ((value.phase === 'clearing' || value.phase === 'cleared') && onlyFields(value, ['phase', 'generation', 'source', 'cause']) && isCleanupCause(value.cause))
     return { phase: value.phase, generation, source, cause: value.cause }
   return undefined
@@ -188,18 +190,24 @@ export function canUseDraftSession(state: LocalSessionState | undefined, permit:
 export function suspendSession(state: LocalSessionState, permit: DraftSessionPermit, generation: string): LocalSessionState | undefined {
   if (state.phase !== 'active' || !canUseDraftSession(state, permit, permit.userId))
     return undefined
-  return { phase: 'suspended', generation: nextGeneration(generation, state.generation), source: state.source }
+  return { phase: 'suspended', generation: nextGeneration(generation, state.generation), source: state.source, suspendedFrom: state.generation }
 }
 
-/** 失败只认请求前的原代次；activatedFrom 的成功共享规则不适用于失效和删除。 */
+/** 仅确证停用可以沿紧邻的暂停追溯原代次；写入、退出及任何重新激活都不能借这条记录取得资格。 */
+function suspendedFrom(state: LocalSessionState, generation: string): boolean {
+  return state.phase === 'suspended' && state.suspendedFrom === generation
+}
+
+/** 失败认原代次；普通失效先暂停不能吞掉同轮停用事实，activatedFrom 的成功共享仍不适用于删除。 */
 export function rejectSessionCheck(state: LocalSessionState, ticket: SessionCheckTicket, failure: SessionCheckFailure, generation: string): { readonly state: LocalSessionState, readonly result: SessionRejectionResult } | undefined {
-  if (readSessionCheckTicket(ticket) === undefined || ticket.kind !== 'query' || state.generation !== ticket.generation
+  if (readSessionCheckTicket(ticket) === undefined || ticket.kind !== 'query'
+    || (state.generation !== ticket.generation && !(failure.kind === 'disabled' && suspendedFrom(state, ticket.generation)))
     || state.source === undefined || retiredSource(state)
     || (state.phase === 'unconfirmed' && state.changing !== false)
     || (failure.kind === 'disabled' && failure.userId !== state.source.userId)) {
     return undefined
   }
-  const previous = { userId: state.source.userId, generation: state.generation }
+  const previous = { userId: state.source.userId, generation: ticket.generation }
   if (failure.kind === 'disabled') {
     const next: LocalSessionState = { phase: 'clearing', generation: nextGeneration(generation, state.generation), source: state.source, cause: 'account_disabled' }
     return { state: next, result: { kind: 'clearing', previous, permit: { userId: next.source.userId, generation: next.generation, cause: 'account_disabled' } } }
@@ -208,11 +216,12 @@ export function rejectSessionCheck(state: LocalSessionState, ticket: SessionChec
   // 后续确证停用仍走上面的 clearing 分支，不把暂停误当作已清理。
   if (failure.kind !== 'preserve' || state.phase === 'suspended')
     return undefined
-  return { state: { phase: 'suspended', generation: nextGeneration(generation, state.generation), source: state.source }, result: { kind: 'stopped', previous } }
+  return { state: { phase: 'suspended', generation: nextGeneration(generation, state.generation), source: state.source, suspendedFrom: state.generation }, result: { kind: 'stopped', previous } }
 }
 
 export function beginUserCleanup(state: LocalSessionState, permit: DraftSessionPermit, cause: UserCleanupCause, generation: string): UserCleanupStart | undefined {
-  if (state.phase !== 'active' || !canUseDraftSession(state, permit, permit.userId) || !isCleanupCause(cause))
+  const disabledAfterPause = cause === 'account_disabled' && suspendedFrom(state, permit.generation) && state.source?.userId === permit.userId
+  if (!isCleanupCause(cause) || (!canUseDraftSession(state, permit, permit.userId) && !disabledAfterPause) || state.source === undefined)
     return undefined
   const next: LocalSessionState = { phase: 'clearing', generation: nextGeneration(generation, state.generation), source: state.source, cause }
   return { state: next, permit: { userId: next.source.userId, generation: next.generation, cause } }

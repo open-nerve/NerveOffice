@@ -2,7 +2,7 @@
 // 取真的服务端给的密钥（请求层的写法——自动带 CSRF、按契约校验——由 local-key.ts 的单元测试覆盖）——导入出的密钥不可导出、
 // 是 AES-GCM-256、版本与服务端的一致，并且就是服务端给的那一把（探针用它加密，E2E 用服务端给的原始字节在 Node 里独立解开）；
 // 系统管理员吊销之后再取得到新的一版（吊销经管理接口，照 US-M3-17 的做法由管理员在另一台设备上操作）；会话失效时如实交回会话类的错误。
-// 打开的是一份不存在的文档：页面确认会话、拿到 CSRF 令牌之后说明"内容不存在"，探针在这之后取。标签 @test-build
+// 使用独立探针页：openOutboxProbe 经真实会话请求确认本机许可；取钥探针再取得该会话的 CSRF，不依赖编辑器错误页的提示。标签 @test-build
 import type { LocalKey } from '@nerve-office/contracts'
 import type { Page } from '@playwright/test'
 import { Buffer } from 'node:buffer'
@@ -13,11 +13,6 @@ import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { openOutboxProbe, outcomeOf, probeLocalKey } from '../../support/outbox-probe.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
-
-/** 页面确认过会话（拿到了 CSRF 令牌）：不存在的文档的说明出来了 */
-async function sessionConfirmed(page: Page): Promise<void> {
-  await expect(page.getByText('内容不存在，或者你没有访问权限')).toBeVisible()
-}
 
 /** 测试这边经接口取同一个人当前的本机密钥（服务端的事实）：版本与原始字节 */
 async function serverKey(page: Page): Promise<LocalKey> {
@@ -43,7 +38,6 @@ test.describe('本机密钥的客户端', { tag: '@test-build' }, () => {
     const admin = await createUser('lk-client-admin', '吊销的管理员', { systemRole: 'admin' })
     await loginThroughApi(page, owner)
     await openOutboxProbe(page)
-    await sessionConfirmed(page)
 
     // 第一次取：服务端生成第 1 版
     expect(await probeLocalKey(page, 'fetch')).toEqual({ kind: 'fetched', version: 1, extractable: false, usages: ['decrypt', 'encrypt'], algorithm: { name: 'AES-GCM', length: 256 }, exportRejected: 'InvalidAccessError' })
@@ -69,7 +63,6 @@ test.describe('本机密钥的客户端', { tag: '@test-build' }, () => {
     const owner = await createUser('lk-client-expired')
     await loginThroughApi(page, owner)
     await openOutboxProbe(page)
-    await sessionConfirmed(page)
     expect(outcomeOf(await probeLocalKey(page, 'fetch'), 'fetched').version).toBe(1)
     await expireSessions(owner)
     const failed = outcomeOf(await probeLocalKey(page, 'fetch'), 'failed')

@@ -1,5 +1,5 @@
 // 只调整真实 Worker 消息的送达顺序：不占存储互斥，不伪造回包，不通过第二次点击绕开交接准备。
-// 默认上下文与 mirror.spec.ts 的串行持久上下文共用完整正文链路；前者的 WebKit 是无 OPFS 对照，后者才验证真实 MirrorBusy。
+// 常规上下文与 mirror.spec.ts 的持久上下文共用完整正文链路；三种浏览器都验证真实镜像交错。
 import type { BrowserContext, Page, TestInfo } from '@playwright/test'
 import type { TestUser } from './database.ts'
 import type { Workbook } from './sheet.ts'

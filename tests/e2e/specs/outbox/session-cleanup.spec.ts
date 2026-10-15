@@ -1,5 +1,6 @@
 import type { BrowserContext, Page } from '@playwright/test'
 import type { ProbeCapture } from '../../support/outbox-probe.ts'
+import type { SessionPermit, SessionTicket } from '../../support/session-fence-probe.ts'
 import { randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { test as base, expect } from '../../support/fixtures.ts'
@@ -43,7 +44,42 @@ async function setup(page: Page) {
   return { user, key, writer, id, capture }
 }
 
+async function lateDisabled(page: Page, late: 'request' | 'query', original: SessionPermit, ticket: SessionTicket) {
+  return late === 'request'
+    ? fence(page, 'beginCleanup', original, 'account_disabled')
+    : fence(page, 'reject', ticket, { kind: 'disabled', userId: original.userId })
+}
+
 test.describe('持久清理资格与真实镜像', { tag: '@test-build' }, () => {
+  for (const late of ['request', 'query'] as const) {
+    test(`普通查询失效先暂停后，原 ${late} 的停用事实仍清除真实草稿与镜像`, async ({ profile: { page } }) => {
+      const h = await setup(page)
+      try {
+        const ticket = outcomeOf(await fence(page, 'begin', 'query'), 'ticket').ticket
+        const original = { userId: h.user.id, generation: ticket.generation }
+        const stopped = await fence(page, 'reject', ticket, { kind: 'preserve' })
+        expect(stopped).toEqual({ kind: 'stopped', previous: original })
+        const state = outcomeOf(await fence(page, 'read'), 'state').state
+        expect(state).toMatchObject({ phase: 'suspended' })
+        expect(state?.generation).not.toBe(original.generation)
+        // 暂停已经撤销写入；这里不能靠迟到事实恢复旧 Worker。
+        expect((await probePipeline(page, 'write', h.id, { ...h.capture, draftSeq: 2 })).kind).toBe('session-invalid')
+        await probePipeline(page, 'release', h.id, h.key)
+        const result = await lateDisabled(page, late, original, ticket)
+        expect(result.kind).toBe('clearing')
+        const permit = outcomeOf(result, 'clearing').permit
+        expect(await probePipeline(page, 'cleanupUser', permit)).toEqual({ kind: 'cleared', pending: [] })
+        expect(await probeDatabase(page, 'getRaw', 'drafts', h.key)).toBeNull()
+        expect(await probeDatabase(page, 'getRaw', 'writers', h.key)).toBeNull()
+        expect(await probePipeline(page, 'mirrorSlots', h.key)).toEqual([{ kind: 'missing' }, { kind: 'missing' }])
+      }
+      finally {
+        await probePipeline(page, 'release', h.id, h.key)
+        await expect.poll(async () => removeMirrorOf(page, h.user.id)).toBe('removed')
+      }
+    })
+  }
+
   test('镜像忙保留 clearing；同人重登后旧 pending、旧批量删除和旧墓碑均不能碰新原件', async ({ profile: { page, context } }) => {
     const h = await setup(page)
     const next = await context.newPage()

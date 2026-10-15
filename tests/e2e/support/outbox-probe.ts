@@ -430,7 +430,7 @@ export async function probePipeline<M extends PipelineMethod>(page: Page, method
 /**
  * 用例收尾：关掉这一页的全部管道（Worker 终止、镜像的句柄放开），再删掉这个用户的 OPFS 镜像目录——Playwright 的 WebKit 在 macOS 上
  * 把持久上下文的 OPFS 放在共用的目录里（~/Library/WebKit/org.webkit.Playwright/，不在资料目录里），不删就一直留着。交回删的结果的种类：
- * 页面里没有探针时是 no-probe；Worker 刚终止、句柄还没放开时可能是 busy（要删干净的用例再试）；默认的上下文里 WebKit 没有 OPFS，是 unsupported
+ * 页面里没有探针时是 no-probe；Worker 刚终止、句柄还没放开时可能是 busy（要删干净的用例再试）；API 确实缺失才是 unsupported；根目录读取失败是 failed，不能当作已清理
  */
 export async function removeMirrorOf(page: Page, userId: string): Promise<string> {
   return page.evaluate(async (owner) => {

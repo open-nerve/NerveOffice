@@ -37,11 +37,14 @@ export function createSessionActivation(options: SessionActivationOptions) {
 
   return {
     track: async <T extends SessionResponse>(kind: SessionCheckTicket['kind'], request: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
+      signal?.throwIfAborted()
       const started = await local(async () => options.store.beginSessionCheck(kind))
       const ticket = started?.kind === 'ticket' ? started.ticket : undefined
       let response: T
       try {
+        signal?.throwIfAborted()
         response = await request()
+        signal?.throwIfAborted()
       }
       catch (error) {
         if (ticket?.kind === 'mutation')
@@ -62,9 +65,17 @@ export function createSessionActivation(options: SessionActivationOptions) {
         source = await options.source(response)
       }
       catch {
+        signal?.throwIfAborted()
         return response
       }
-      const accepted = await local(async () => options.store.acceptSessionCheck(ticket, source))
+      signal?.throwIfAborted()
+      const accepted = await local(async () => {
+        // 等锁期间也可能取消；检查必须位于真正开始接受原票据之前。
+        signal?.throwIfAborted()
+        return options.store.acceptSessionCheck(ticket, source)
+      })
+      // local 只降级存储故障；取消不能随它一起被吞掉或变成成功响应。
+      signal?.throwIfAborted()
       if (accepted?.kind === 'active')
         rememberSessionPermit(response, Object.freeze({ ...accepted.permit }))
       return response

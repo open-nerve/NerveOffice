@@ -6,7 +6,7 @@ import { LocalDataStatus } from './local-data-notice.tsx'
 import { maintenanceMessage } from './notice-runtime.ts'
 
 function fixture(patch: Partial<DraftMaintenanceView> = {}) {
-  let state: DraftMaintenanceView = { busy: false, cleanup: 'none', retention: 'done', catalog: undefined, problem: undefined, ...patch }
+  let state: DraftMaintenanceView = { busy: false, cleanup: 'none', retention: 'done', catalog: undefined, problem: undefined, completed: [], ...patch }
   const listeners = new Set<() => void>()
   const model: DraftMaintenance = { view: () => state, subscribe: (listener) => {
     listeners.add(listener)
@@ -29,7 +29,7 @@ describe('后台维护提示不会抢编辑焦点', () => {
     ['revoked', '密钥失效的本机草稿已清除'],
     ['corrupted', '损坏的本机草稿已清除'],
   ] as const)('后台已清理 %s 时在当前页直接解释，不让人到已经空的目录找原因', (reason, message) => {
-    fixture({ catalog: {
+    fixture({ completed: [reason], catalog: {
       checked: true,
       completedCopies: [],
       uncertainCopies: [],

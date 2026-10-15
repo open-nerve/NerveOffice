@@ -9,6 +9,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { currentLocalKey, diskSnapshot, localSaveOrder, observeLocalSaveOrder, readLocalDisk } from '../../support/local-draft.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, lostNotice, openAndEnterEditing, saveAndWait, saveButton, savedContent, saveStatus, waitForEditorAccess, waitForLostToReading } from '../../support/sheet.ts'
+import { namespaceWorkerScript } from '../../support/webkit-storage.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -30,7 +31,7 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     await page.route('**/assets/outbox.worker-*.js', async (route) => {
       const response = await route.fetch()
       const fault = `const put = IDBObjectStore.prototype.put; let failed = false; IDBObjectStore.prototype.put = function (...args) { if (!failed && this.name === 'drafts' && args[0]?.inFlight != null) { failed = true; throw new DOMException('测试在途标记写满', 'QuotaExceededError'); } return Reflect.apply(put, this, args); };`
-      await route.fulfill({ response, body: `${fault}\n${await response.text()}` })
+      await route.fulfill({ response, body: namespaceWorkerScript(page.context(), `${fault}\n${await response.text()}`) })
     })
     const { documentId, key } = await openLocalSheet(page, 'local-mark-quota')
     const secret = await currentLocalKey(page)
@@ -61,7 +62,7 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     await page.route('**/assets/outbox.worker-*.js', async (route) => {
       const response = await route.fetch()
       const fault = `const put = IDBObjectStore.prototype.put; let failed = false; IDBObjectStore.prototype.put = function (...args) { if (!failed && this.name === 'drafts' && args[0]?.baseRevision > 1 && args[0]?.inFlight === null) { failed = true; throw new DOMException('测试确认重封写满', 'QuotaExceededError'); } return Reflect.apply(put, this, args); };`
-      await route.fulfill({ response, body: `${fault}\n${await response.text()}` })
+      await route.fulfill({ response, body: namespaceWorkerScript(page.context(), `${fault}\n${await response.text()}`) })
     })
     const { documentId, key } = await openLocalSheet(page, 'local-confirm-quota')
     const secret = await currentLocalKey(page)
@@ -289,7 +290,7 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
         const fault = failure === 'quota'
           ? `const put = IDBObjectStore.prototype.put; IDBObjectStore.prototype.put = function (...args) { if (this.name === 'drafts') throw new DOMException('测试写满', 'QuotaExceededError'); return Reflect.apply(put, this, args); };`
           : `IDBFactory.prototype.open = function () { throw new DOMException('测试禁止存储', 'SecurityError'); };`
-        await route.fulfill({ response, body: `${fault}\n${await response.text()}` })
+        await route.fulfill({ response, body: namespaceWorkerScript(page.context(), `${fault}\n${await response.text()}`) })
         injected = true
       })
       const { documentId, key } = await openLocalSheet(page, `local-first-${failure}`)
