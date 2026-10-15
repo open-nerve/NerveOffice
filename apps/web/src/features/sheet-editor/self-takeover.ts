@@ -12,7 +12,7 @@
 // - 刷新时在途的保存（设计 §3.7 的 R1）：上一个页面关闭时保存忙、留下了记号（pending-save-marker.ts），30 秒还没过——本人接管会结束那一代，
 //   那次保存还在服务端检查快照、等锁的话会被挡掉，所以先等它：立即、之后每 PENDING_SAVE_POLL_MS（2 秒）读一次编辑状态，修订号比记号里的新
 //   （那次保存提交了）就不再等；到了 30 秒（从记号的时刻算）也不再等。读失败的那一次不算，接着等。
-import type { LeaseClock } from './edit-lease.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { PendingSave } from './pending-save-marker.ts'
 import type { HandoverFailure, HandoverReply, SameBrowser } from './same-browser.ts'

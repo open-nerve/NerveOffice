@@ -93,11 +93,10 @@ export class SnapshotIdentityCheck implements OnModuleInit {
     const identity = this.identities.current()
     if (identity === undefined)
       return
-    if (!await this.sessions.isActive(identity.sessionId, transaction))
-      throw new AppError('SESSION_EXPIRED')
+    await this.sessions.requireActive(identity.sessionId, transaction)
     const user = await this.users.findById(identity.userId, transaction)
     if (user?.status !== 'active')
-      throw new AppError('SESSION_EXPIRED')
+      throw new AppError('SESSION_EXPIRED', undefined, { details: { reason: user?.status === 'disabled' ? 'account_disabled' : 'expired', userId: identity.userId } })
     if (identity.systemAdmin && user.systemRole !== 'admin')
       throw new AppError('PERMISSION_DENIED')
   }

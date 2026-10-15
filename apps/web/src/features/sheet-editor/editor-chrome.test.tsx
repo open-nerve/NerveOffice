@@ -1,10 +1,10 @@
 import type { EditInterruption } from '@nerve-office/contracts'
+import type { RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
 import type { AutosaveView } from './autosave.ts'
 import type { LeaseLoss } from './edit-lease.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
 import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
-import type { RecoveryView } from './recovery/document-recovery.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -130,6 +130,14 @@ function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
 }
 
 describe('页头的本机恢复操作', () => {
+  it('编辑器始终提供本机草稿入口；新标签页打开以保留当前编辑现场', () => {
+    renderChrome()
+    const entry = screen.getByRole('link', { name: '本机草稿（新标签页）' })
+    expect(entry).toHaveAttribute('href', '/local-drafts')
+    expect(entry).toHaveAttribute('target', '_blank')
+    expect(entry).toHaveAttribute('rel', 'noopener')
+  })
+
   const recovery: RecoveryView = { stage: 'ready', decision: { kind: 'restore', baseRevision: 3, formulasPending: false, reason: 'fast-forward' }, updatedAt: new Date(2026, 9, 4, 15, 30).getTime(), operation: undefined, cleanup: undefined, copy: { kind: 'idle' }, notice: undefined, problem: undefined }
 
   it('恢复仍走统一编辑入口，副本与重查交给原文档协调器', () => {
@@ -189,7 +197,7 @@ describe('页头的本机恢复操作', () => {
     f.set({ recovery: { ...recovery, copy: { kind: 'done', document: COPY }, cleanup: { kind: 'quota' } } })
     expect(screen.getByRole('link', { name: '打开副本（新标签页）' })).toHaveAttribute('href', `/documents/${COPY.id}`)
     expect(screen.queryByRole('button', { name: '另存为副本' })).toBeNull()
-    await waitFor(() => expect(within(screen.getByRole('banner')).getByRole('link')).toHaveFocus())
+    await waitFor(() => expect(within(screen.getByRole('banner')).getByRole('link', { name: '我的空间' })).toHaveFocus())
     fireEvent.click(screen.getByRole('button', { name: '重试清理' }))
     expect(f.page.retryRecoveryCleanup).toHaveBeenCalledOnce()
   })
@@ -476,6 +484,14 @@ describe('编辑器页的页头（P4 设计 §3.7.3）', () => {
     const link = screen.getByRole('link', { name: '在新标签页中登录' })
     expect(link).toHaveAttribute('href', '/login')
     expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('已确认停用与普通过期分别说明，不声称本机已经清完，页内修改仍保留', () => {
+    renderChrome({ session: 'signed-out', sessionEndedReason: 'account_disabled', save: { ...CLEAN, unsaved: true } })
+    expect(screen.getByRole('alert')).toHaveTextContent('你的账户已被停用。请联系系统管理员确认账户状态。')
+    expect(screen.getByRole('alert')).toHaveTextContent('本页的修改仍留在内存中，关闭页面会丢失。')
+    expect(screen.queryByText(/登录已过期或已在别处退出/)).toBeNull()
+    expect(screen.queryByText(/本机草稿已清理/)).toBeNull()
   })
 
   it('会话不是本人时，不再重复"登录已过期""请求已失效"这类失败的说明（复验 RB2）', () => {

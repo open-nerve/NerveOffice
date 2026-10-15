@@ -1,4 +1,4 @@
-import type { ChangePasswordRequest, LoginRequest, SessionResponse } from '@nerve-office/contracts'
+import type { ChangePasswordRequest, LoginRequest, SessionExpiredDetails, SessionResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { CredentialCheck, User } from '../users/index.ts'
 import type { LoginTicket } from './login-throttle.ts'
@@ -19,18 +19,17 @@ import { SessionService } from './session.service.ts'
 type HttpOrigin = Extract<AuditOrigin, { source: 'http' }>
 
 /**
- * 退出的结果（M2-P6）：ended——这次结束了会话；认证通过之后、撤销之前会话已经结束时，rotated——同一个浏览器刚修改了密码
- * 或重新登录，换成了新的会话（控制器不清除 Cookie，前端确认之后带新令牌再退出一次）；gone——别的原因（另一个标签页先退出了等）
+ * 退出的结果：这次结束会话，或者守卫之后它已经失效。详情在原事务里读取；replaced 的控制器响应不清除新 Cookie。
  */
-export type LogoutOutcome = 'ended' | 'rotated' | 'gone'
+export type LogoutOutcome = { readonly kind: 'ended' } | { readonly kind: 'expired', readonly details: SessionExpiredDetails }
 
 /**
  * 修改密码的事务里发现当前的会话已经结束（M2-P6）：回滚用，事务之外退回名额之后照原样抛出（"登录已过期"）。
  * 是 AppError：事务运行器只把以 AppError 结束的事务的连接放回池里，别的错误会丢弃连接（第三轮复验 一般-A）
  */
 class SessionEndedDuringRequest extends AppError {
-  constructor() {
-    super('SESSION_EXPIRED')
+  constructor(details: SessionExpiredDetails) {
+    super('SESSION_EXPIRED', undefined, { details })
   }
 }
 
@@ -181,7 +180,7 @@ export class AuthService {
         // 限流计数在会话行之前（ADR-007 的锁顺序）；下面回滚时这一步一并撤回
         await ticket.succeeded(transaction)
         if (!await this.sessions.revokeForPasswordChange(user.id, principal.sessionId, transaction))
-          throw new SessionEndedDuringRequest()
+          throw new SessionEndedDuringRequest(await this.sessions.expiredDetails(principal.sessionId, transaction))
         const session = await this.sessions.create(user.id, transaction)
         await this.audit.record({ action: 'users.password_changed', actor: { type: 'user', id: user.id }, target: { type: 'user', id: user.id }, origin }, { transaction })
         return this.responses.forNewSession(user, session.token, transaction)
@@ -218,13 +217,13 @@ export class AuthService {
    * 同一个浏览器刚修改了密码或重新登录时，退出的请求带的是换令牌之前的旧令牌，新会话还在——由前端确认之后带新令牌再退出一次。
    * 原因在同一个事务里问：提交之后不再访问数据库（M2-P6 第 3 片复验）
    */
-  async logout(principal: Principal, sessionToken: string | undefined, origin: HttpOrigin): Promise<LogoutOutcome> {
+  async logout(principal: Principal, origin: HttpOrigin): Promise<LogoutOutcome> {
     return this.transactions.run(async (transaction) => {
       if (await this.sessions.revoke(principal.sessionId, 'logout', transaction)) {
         await this.audit.record({ action: 'auth.logout', actor: { type: 'user', id: principal.user.id }, origin }, { transaction })
-        return 'ended'
+        return { kind: 'ended' }
       }
-      return sessionToken !== undefined && await this.sessions.invalidatedByRotation(sessionToken, transaction) ? 'rotated' : 'gone'
+      return { kind: 'expired', details: await this.sessions.expiredDetails(principal.sessionId, transaction) }
     })
   }
 

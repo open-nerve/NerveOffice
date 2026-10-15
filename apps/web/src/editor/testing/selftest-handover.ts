@@ -50,8 +50,8 @@ const SAVE_HELD_CONFIRM_MS = 1_500
 const REFRESH_CARRY_KEY = 'nerve-office.selftest.refresh-save'
 
 /** 刷新时在途的保存的记号（编辑器页的 pending-save-marker.ts 的键；这里不引用编辑器页的模块，另写一份） */
-export function pendingSaveKeyOf(documentId: string): string {
-  return `nerve-office:pending-save:${documentId}`
+export function pendingSaveKeyOf(userId: string, documentId: string): string {
+  return `nerve-office:pending-save:${userId}:${documentId}`
 }
 
 // ---- 交接日志的判读（纯函数，单元测试覆盖） ----
@@ -409,7 +409,8 @@ function watchLeaving(session: Session, carry: RefreshCarry): void {
   window.addEventListener('pagehide', () => {
     let marker: string | null = null
     try {
-      marker = localStorage.getItem(pendingSaveKeyOf(session.host.documentId))
+      if (carry.original !== undefined)
+        marker = localStorage.getItem(pendingSaveKeyOf(carry.original.userId, session.host.documentId))
     }
     catch {
       // 读不了：当作没有

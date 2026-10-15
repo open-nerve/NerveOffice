@@ -1,12 +1,13 @@
+import type { WorkingDraftOptions } from '../../../shared/local-drafts/working-draft.ts'
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../../shared/outbox/local-key.ts'
+import type { OutboxHost } from '../../../shared/outbox/outbox-host.ts'
 import type { LeaseVerdict } from '../edit-lease.ts'
-import type { WorkingDraftOptions } from '../working-draft.ts'
-import type { OutboxHost } from './outbox-host.ts'
 import { vi } from 'vitest'
 import { CLIENT_INSTANCE_ID, DOCUMENT_ID, NOW, sampleMeta, USER_ID, WRITER_ID } from '../../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../../shared/outbox/draft-writer.ts'
+import { testSessionPermit } from '../../../shared/outbox/session-fence.test-support.ts'
 import { prepareOutboxSession } from './outbox-session.ts'
 
 export const DRAFT_KEY = { userId: USER_ID, documentId: DOCUMENT_ID }
@@ -39,7 +40,7 @@ export async function persistentHarness() {
   })
   const confirm = vi.fn(async (): Promise<LeaseVerdict> => ({ kind: 'current' }))
   let serial = 0
-  const session = prepareOutboxSession({ enabled: true, key: DRAFT_KEY, writeEpoch: 3, newWriterId: () => `${WRITER_ID}-${++serial}`, keeper, confirm, host, persist: async () => ({ kind: 'denied' }), supported: () => true, still: () => true })
+  const session = prepareOutboxSession({ permit: testSessionPermit, enabled: true, key: DRAFT_KEY, writeEpoch: 3, newWriterId: () => `${WRITER_ID}-${++serial}`, keeper, confirm, host, persist: async () => ({ kind: 'denied' }), supported: () => true, still: () => true })
   const result = await session.ready()
   if (result.kind !== 'ready')
     throw new Error('测试需要首次持久准备成功')

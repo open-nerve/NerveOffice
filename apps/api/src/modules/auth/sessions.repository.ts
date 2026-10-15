@@ -2,7 +2,7 @@ import type { Buffer } from 'node:buffer'
 import type { SessionRevokeReason } from '../../db/schema/auth/index.ts'
 import type { Database, Transaction } from '../database/index.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { and, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm'
 import { authSessions } from '../../db/schema/auth/index.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
 
@@ -19,6 +19,17 @@ export interface ActiveSession {
   /** 距上次记录活动已超过顺延的间隔 */
   readonly stale: boolean
 }
+
+/** 同一行的有效性与最初撤销原因，避免写事务在两次读取之间取得矛盾事实。 */
+export interface SessionState {
+  readonly userId: string
+  readonly revokedReason: SessionRevokeReason | null
+  readonly active: boolean
+}
+
+const s = authSessions
+const ACTIVE = sql<boolean>`${s.revokedAt} IS NULL AND ${s.idleExpiresAt} > now() AND ${s.absoluteExpiresAt} > now()`
+const STATE_COLUMNS = { userId: s.userId, revokedReason: s.revokedReason, active: ACTIVE }
 
 /** 活动顺延的最小间隔：不必每个请求都写一次库。 */
 const TOUCH_INTERVAL = sql`interval '1 minute'`
@@ -48,37 +59,41 @@ export class SessionsRepository {
 
   /** 没有撤销、没有超过空闲过期与绝对过期的会话。 */
   async findActive(tokenHash: Buffer): Promise<ActiveSession | undefined> {
-    const s = authSessions
     const [row] = await this.db
       .select({ id: s.id, userId: s.userId, stale: sql<boolean>`${s.lastSeenAt} < now() - ${TOUCH_INTERVAL}` })
       .from(s)
-      .where(and(eq(s.tokenHash, tokenHash), isNull(s.revokedAt), gt(s.idleExpiresAt, sql`now()`), gt(s.absoluteExpiresAt, sql`now()`)))
+      .where(and(eq(s.tokenHash, tokenHash), ACTIVE))
     return row
   }
 
   /**
    * 这条会话（按 id，主键）仍然有效：没有撤销、没有超过空闲过期与绝对过期，条件与 findActive 相同。
-   * 只读快照的开场核对在快照里问（传快照的事务，M2 Codex 评审复验的建议 3）：守卫之后撤销的会话在快照里看得到
+   * 租约与请求编辑的规则在所在快照/事务中询问；当前请求的开场复核经 stateById 同时取得失效原因。
    */
   async isActiveById(id: string, transaction: Transaction): Promise<boolean> {
-    const s = authSessions
     const [row] = await executorOf(this.db, transaction)
       .select({ id: s.id })
       .from(s)
-      .where(and(eq(s.id, id), isNull(s.revokedAt), gt(s.idleExpiresAt, sql`now()`), gt(s.absoluteExpiresAt, sql`now()`)))
+      .where(and(eq(s.id, id), ACTIVE))
     return row !== undefined
   }
 
-  /**
-   * 这个摘要的会话是不是因为 reasons 之一被撤销的；没有这条会话（从没有过、已被清理）、还没撤销（只是过期了）时为假。
-   * 会话守卫只在"会话无效"时经 SessionService 问（复验 N3），按摘要的唯一索引查一次；退出时在退出的事务里问
-   */
-  async revokedFor(tokenHash: Buffer, reasons: readonly SessionRevokeReason[], transaction?: Transaction): Promise<boolean> {
+  /** 已认证的请求在原快照/写事务里复核，失效原因与有效性来自同一条语句。 */
+  async stateById(id: string, transaction: Transaction): Promise<SessionState | undefined> {
     const [row] = await executorOf(this.db, transaction)
-      .select({ id: authSessions.id })
-      .from(authSessions)
-      .where(and(eq(authSessions.tokenHash, tokenHash), inArray(authSessions.revokedReason, [...reasons])))
-    return row !== undefined
+      .select(STATE_COLUMNS)
+      .from(s)
+      .where(eq(s.id, id))
+    return row
+  }
+
+  /** 只按真正持有的令牌摘要识别；不通过用户名推测已失效的会话。 */
+  async stateByTokenHash(tokenHash: Buffer, transaction?: Transaction): Promise<SessionState | undefined> {
+    const [row] = await executorOf(this.db, transaction)
+      .select(STATE_COLUMNS)
+      .from(s)
+      .where(eq(s.tokenHash, tokenHash))
+    return row
   }
 
   /** 记录活动，空闲过期顺延，但不超过绝对过期。 */

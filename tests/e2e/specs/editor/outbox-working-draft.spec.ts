@@ -143,7 +143,7 @@ test.describe('工作草稿的宿主与资格准备', { tag: '@test-build' }, ()
     test(`${mode} 不建立宿主，已有记录原样保留`, async ({ page }) => {
       const draft = await prepare(page)
       const existing = { ...draft, recordVersion: 99, marker: '不可覆盖' }
-      expect(await probeDatabase(page, 'openWith', 1, 3_000)).toBe('connected')
+      expect(await probeDatabase(page, 'openWith', 2, 3_000)).toBe('connected')
       await probeDatabase(page, 'putRaw', 'drafts', existing)
       const { id, result } = await probeSession(page, 'create', { draft, epoch: 3, mode })
       expect(result).toMatchObject({ kind: 'memory', reason: mode === 'no-locks' ? 'unsupported' : mode })

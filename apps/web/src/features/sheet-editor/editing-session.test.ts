@@ -1,8 +1,8 @@
 import type { LeaseVerdict } from './edit-lease.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
+import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { deferred, disposeSessions, DOCUMENT, editorFixture, fixture, INITIAL, leaseFixture, localDrafts, prepare, SAVED, USER } from './editing-session.test-support.ts'
-import { settle } from './fake-lease-clock.test-support.ts'
 
 afterEach(disposeSessions)
 

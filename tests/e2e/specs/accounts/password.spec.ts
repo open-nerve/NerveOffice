@@ -1,6 +1,6 @@
 // 修改密码（M2-P1，US-M2-02）：改完之后其他地方的登录被退出、这里保持登录；旧密码不对时的提示；
 // 当前页面的会话令牌也换掉，旧的令牌不再有效（M2-P6 复核 B1）；换令牌之前发出、之后才到的请求不删掉新 Cookie，
-// 别的设备上的旧 Cookie 照常清除（复验 N3，M2-P6 复验 一般-3）；与退出同时发生时退出照样生效（M2-P6 复验 一般-4）。
+// 别的设备上的旧 Cookie 照常清除（复验 N3，M2-P6 复验 一般-3）；与退出同时发生时停止旧确认，不能自动退出新令牌（M4-P4 接续一般-4）。
 import type { Cookie, Page, Route } from '@playwright/test'
 import { DOCUMENT_LIST_DEFAULT_LIMIT } from '@nerve-office/contracts'
 import { createDocuments, createUser } from '../../support/database.ts'
@@ -173,7 +173,7 @@ test.describe('US-M2-02 修改密码', () => {
     await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
   })
 
-  test('同一个浏览器里退出与修改密码同时发生、退出晚于换令牌处理：先确认会话，带着新的令牌再退出一次，停在登录页，浏览器里不再有登录（M2-P6 复验 一般-4）', async ({ page }) => {
+  test('同一个浏览器里退出与修改密码同时发生：旧退出停止，新会话保留；重新预览并确认才能退出（M4-P4）', async ({ page }) => {
     const user = await createUser('pw-logout-race', '同时退出的人')
     await loginThroughApi(page, user)
     const before = await sessionCookieOf(page)
@@ -183,7 +183,8 @@ test.describe('US-M2-02 修改密码', () => {
 
     // 本页的退出先扣住：它是修改密码之前发出的
     const held = await holdFirstRequest(page, url => url.pathname === '/api/auth/logout')
-    await page.getByRole('button', { name: '退出' }).click()
+    await page.getByRole('button', { name: '退出', exact: true }).click()
+    await page.getByRole('button', { name: '清理本机草稿并退出' }).click()
     const route = await held.route
 
     const other = await changePasswordInAnotherTab(page, user.password, NEW_PASSWORD)
@@ -194,8 +195,14 @@ test.describe('US-M2-02 修改密码', () => {
     expect(late.status()).toBe(401)
     expect((await late.json() as { error: { code: string } }).error.code).toBe('SESSION_EXPIRED')
 
-    // 本页先确认：还是同一个人，带着新的令牌再退出一次，然后回到登录页，停在那里（不被登录页送回应用）
-    await expect(page).toHaveURL(/\/login$/)
+    await expect(page.getByText('登录状态已经变化，这次退出已停止。请重新预览当前账户后再确认。')).toBeVisible()
+    expect(logouts).toHaveLength(1)
+    expect(await hasSessionCookie(page)).toBe(true)
+    expect((await page.request.get('/api/auth/session')).status()).toBe(200)
+    await other.reload()
+    await expect(other.getByRole('heading', { name: '修改密码' })).toBeVisible()
+    await page.getByRole('button', { name: '重新预览当前账户' }).click()
+    await page.getByRole('button', { name: '清理本机草稿并退出' }).click()
     await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
     expect(logouts).toHaveLength(2)
     expect(await hasSessionCookie(page)).toBe(false)

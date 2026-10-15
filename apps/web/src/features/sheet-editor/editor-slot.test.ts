@@ -2,8 +2,8 @@
 // 销毁可能要等（M3-P4 设计 §3.14：主线程模式下先停下正在算的一轮）：旧的销毁完才新建，同一个容器里不同时有两个实例。
 import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createEditorSlot } from './editor-slot.ts'
-import { settle } from './fake-lease-clock.test-support.ts'
 
 interface FakeEditor {
   readonly editor: SheetEditor

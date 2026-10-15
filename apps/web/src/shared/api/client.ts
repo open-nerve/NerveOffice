@@ -1,3 +1,4 @@
+import type { SessionResponse } from '@nerve-office/contracts'
 // 请求层（规范 §2.4，P3 设计 §3.7）：页面经这里访问接口，不在组件里直接 fetch。
 import type { z } from 'zod'
 import type { ApiErrorDetails } from './api-errors.ts'
@@ -5,6 +6,9 @@ import { CSRF_TOKEN_HEADER, errorResponseSchema } from '@nerve-office/contracts'
 import { connectionState } from '../lib/connection-state.ts'
 import { ApiError, NetworkError, ResponseFormatError } from './api-errors.ts'
 import { withinRequestDeadline } from './request-deadline.ts'
+import { associatedSessionPermit } from './session-association.ts'
+import { recordApiSession } from './session-context.ts'
+import { reportRequestSessionFailure } from './session-tracking.ts'
 
 export { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from './api-errors.ts'
 export type { ApiErrorDetails } from './api-errors.ts'
@@ -16,15 +20,27 @@ const UNSAFE_METHODS: ReadonlySet<string> = new Set(['POST', 'PUT', 'PATCH', 'DE
 
 /** 由登录与会话接口给出；状态变更的请求带上它。只放在内存里，刷新页面后由会话接口重新给出 */
 let csrfToken: string | undefined
+let sessionPermit: unknown
 
 export function setCsrfToken(token: string | undefined): void {
   csrfToken = token
+  sessionPermit = undefined
+  recordApiSession(undefined)
+}
+
+/** 只能采纳真实原响应；复制/拼出的对象没有本机许可，不继承上一次来源。 */
+export function setApiSession(response: SessionResponse): void {
+  csrfToken = response.csrfToken
+  sessionPermit = associatedSessionPermit(response)
+  recordApiSession(response)
 }
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 export interface RequestOptions<T> {
   method?: HttpMethod
+  /** 明确确认绑定的原会话（退出流程）；不读取或修改页面后来采纳的来源。 */
+  session?: SessionResponse
   body?: unknown
   /** 另外的请求头（例如编辑租约的令牌）：不能覆盖请求层自己的那几个（接受的类型、内容类型、CSRF 令牌） */
   headers?: Readonly<Record<string, string>>
@@ -38,6 +54,8 @@ export interface RequestOptions<T> {
 /** 不是 JSON 的请求与响应（例如表格快照的上传与读取）。 */
 export interface RawRequestOptions {
   method?: HttpMethod
+  /** 明确确认绑定的原会话；请求头与失效处理都沿用这个来源。 */
+  session?: SessionResponse
   /** 请求体与它的内容类型 */
   body?: { readonly contentType: string, readonly data: Uint8Array<ArrayBuffer> | string }
   /** 期望的响应类型，默认 JSON */
@@ -99,12 +117,14 @@ async function errorFrom(response: Response): Promise<ApiError> {
  * 状态变更的请求带 CSRF 令牌。失败时抛出 ApiError 或 NetworkError（含 RequestTimeoutError）；调用方取消原样抛出。
  */
 export async function apiFetch<T>(path: string, options: RawRequestOptions, read: (response: Response) => T | Promise<T>): Promise<T> {
+  const originalPermit = options.session === undefined ? sessionPermit : associatedSessionPermit(options.session)
+  const token = options.session === undefined ? csrfToken : options.session.csrfToken
   const method = options.method ?? 'GET'
   const headers: Record<string, string> = { ...options.headers, accept: options.accept ?? 'application/json' }
   if (options.body !== undefined)
     headers['content-type'] = options.body.contentType
-  if (UNSAFE_METHODS.has(method) && csrfToken !== undefined)
-    headers[CSRF_TOKEN_HEADER] = csrfToken
+  if (UNSAFE_METHODS.has(method) && token !== undefined)
+    headers[CSRF_TOKEN_HEADER] = token
 
   const ticket = connectionState.beginRequest()
   let result: T
@@ -129,6 +149,11 @@ export async function apiFetch<T>(path: string, options: RawRequestOptions, read
     // 调用方取消的原因可以是任意对象，不能仅靠 instanceof 将它当作网络故障。
     if (error instanceof NetworkError && !(options.signal?.aborted === true && error === options.signal.reason))
       connectionState.failed(ticket)
+    if (originalPermit !== undefined && !(options.signal?.aborted === true && error === options.signal.reason)
+      && (isAuthenticationError(error) || isCsrfTokenError(error))) {
+      // 请求来源已在发出前固定；本机副作用不会延长原请求时限或替换原错误。
+      void Promise.resolve().then(async () => reportRequestSessionFailure(error, originalPermit)).catch(() => {})
+    }
     throw error
   }
   // 放在整个 deadline 之外：读正文/校验未完、超时后的迟到完成都不能发布成功。
@@ -149,7 +174,7 @@ export async function readJson<T>(response: Response, schema: z.ZodType<T>, labe
 export async function apiRequest<T>(path: string, options: RequestOptions<T>): Promise<T> {
   const method = options.method ?? 'GET'
   const body = options.body === undefined ? undefined : { contentType: 'application/json', data: JSON.stringify(options.body) }
-  return apiFetch(path, { method, body, headers: options.headers, signal: options.signal, timeoutMs: options.timeoutMs }, async response => readJson(response, options.schema, `${method} ${path}`))
+  return apiFetch(path, { method, session: options.session, body, headers: options.headers, signal: options.signal, timeoutMs: options.timeoutMs }, async response => readJson(response, options.schema, `${method} ${path}`))
 }
 
 /** 未登录或登录已过期：页面要回到登录页。 */

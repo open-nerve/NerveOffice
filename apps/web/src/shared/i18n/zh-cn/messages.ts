@@ -200,6 +200,8 @@ export const messages = {
     tooManyAttempts: (minutes: number) => `尝试次数过多，请 ${minutes} 分钟后再试`,
   },
   auth: {
+    localDrafts: '本机草稿',
+    localDraftsNewTab: '本机草稿（新标签页）',
     loginTitle: '登录',
     loginDescription: '用你的用户名和密码登录',
     username: '用户名',
@@ -213,6 +215,7 @@ export const messages = {
     passwordMaybeReset: '刚才为自己生成重置链接时没能确认结果，随后登录失效了：你的密码可能已经失效，那条链接也已经找不回来。请联系另一位系统管理员为你生成新的重置链接。',
     // 停用自己的结果未知、随后登录失效了：多半是已经停用，会话随之撤销了（M2-P6 复核第五批 G1）
     accountMaybeDisabled: '刚才停用自己的账户时没能确认结果，随后登录失效了：你的账户可能已经被停用。需要继续使用的话，请联系另一位系统管理员重新启用。',
+    accountDisabled: '你的账户已被停用。请联系系统管理员确认账户状态。',
     checkingSession: '正在确认登录状态…',
     /** 确认登录状态的请求失败了（网络、服务不可用）：整页说明，可以重试（features/auth 的 RequireSession） */
     sessionCheckFailed: '没能确认登录状态',
@@ -306,6 +309,7 @@ export const messages = {
     renameDenied: (reason: string) => `没能改名：${reason}`,
   },
   documents: {
+    localDraft: '本机有未同步修改',
     title: '我的空间',
     listLabel: '文档列表',
     empty: '这里还没有文档',

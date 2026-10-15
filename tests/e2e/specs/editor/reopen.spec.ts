@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { logoutThroughUi } from '../../support/logout.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, editorSurface, enterEditing, hoverCell, leaveEditor, openAndEnterEditing, reloadAndEnterEditing, resourceOf, saveAndCapture, saveAndWait, savedContent, saveStatus, selectCell, sheetCanvas, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
@@ -64,7 +65,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await openAndEnterEditing(page, documentId)
     const saved = await editAndSave(page, documentId)
     await page.getByRole('link', { name: '我的空间' }).click()
-    await page.getByRole('button', { name: '退出', exact: true }).click()
+    await logoutThroughUi(page)
     await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
     await loginThroughUi(page, owner)
     await page.getByRole('list', { name: '文档列表' }).getByRole('link').first().click()
@@ -105,7 +106,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     expect(await note()).toMatchObject({ 'sheet-1': { 3: { 3: { note: 'original' } } } })
 
     // 拦住公式 Worker 的脚本再重开：表格画出来了，编辑器停在载入中。
-    // 先离开、等编辑权释放之后再装拦截（M3-P1）：WebKit 装了 page.route 之后，导航离开、刷新时的释放发不出去，重开的页面就只能阅读（support/sheet.ts 的 leaveEditor）
+    // 先经公开退出编辑释放，再离开并装拦截；不把 WebKit 路由下的卸载 keepalive 当作就绪前提。
     await leaveEditor(page, documentId)
     let release: () => void = () => {}
     const released = new Promise<void>((resolve) => {
@@ -149,7 +150,7 @@ test.describe('US-M1-06 重开看到最后一次保存的内容', () => {
     await typeInCell(page, 'B1', 'keep')
     await saveAndWait(page)
 
-    // 先离开、等编辑权释放之后再装拦截（M3-P1）：WebKit 装了 page.route 之后，导航离开、刷新时的释放发不出去，重开的页面就只能阅读（support/sheet.ts 的 leaveEditor）
+    // 先经公开退出编辑释放，再离开并装拦截；不把 WebKit 路由下的卸载 keepalive 当作就绪前提。
     await leaveEditor(page, documentId)
     let release: () => void = () => {}
     const released = new Promise<void>((resolve) => {

@@ -20,8 +20,12 @@ import type { ApiError } from '../../shared/api/index.ts'
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
+import type { DocumentRecovery, RecoveryAccessFacts, RecoveryDiscard, RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
+import type { DraftReplayRequest } from '../../shared/local-drafts/recovery-decision.ts'
+import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
+import type { DraftSessionPermit } from '../../shared/outbox/session-fence.ts'
 import type { AutosavePage, AutosaveView } from './autosave.ts'
-import type { LeaseClock } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
@@ -30,20 +34,19 @@ import type { HandoverTrace } from './handover-trace.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility } from './reading-checks.ts'
-import type { DocumentRecovery, RecoveryAccessFacts, RecoveryDiscard, RecoveryView } from './recovery/document-recovery.ts'
-import type { DraftReplayRequest } from './recovery/recovery-decision.ts'
-import type { RecoveryReader } from './recovery/recovery-reader.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
-import { isAuthenticationError, isCsrfTokenError, isMissingResource, setCsrfToken } from '../../shared/api/index.ts'
+import { documentIsNewer, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { disabledSessionUserId, isAuthenticationError, isCsrfTokenError, isMissingResource, setApiSession, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
+import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
+import { createRecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
+import { draftSessionPermitOf } from '../../shared/local-drafts/session-activation.ts'
+import { subscribeLocalSession } from '../../shared/local-drafts/session-events.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
-import { documentIsNewer, PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { createEditMode } from './edit-mode.ts'
 import { blockInteractions } from './interaction-barrier.ts'
-import { createDocumentRecovery } from './recovery/document-recovery.ts'
-import { createRecoveryReader } from './recovery/recovery-reader.ts'
 
 /**
  * 就绪时页头要的东西：标题与所在的空间（返回链接）、看得到它的途径（只凭授权时返回"与我共享"，M2-P5）、能不能分享（分享的入口）、
@@ -90,6 +93,8 @@ export interface EditorPageView {
   /** 同上：自动保存这一侧的状态（联网、会话、会不会自动重试），页头连同 save 给出保存状态的全集（save-indicator.ts） */
   readonly autosave: AutosaveView | undefined
   readonly session: EditorPageSession
+  /** 本页账户的实际停用事实；重新确认新登录后清除，不代表本机清理已完成。 */
+  readonly sessionEndedReason?: 'account_disabled' | undefined
   /**
    * 最近一次向服务端确认会话失败的原因（网络错误等）；确认成功之后清掉。会话不是 active 时显示在会话的提示里（复验 RB7）；
    * 是 active、而保存因为令牌失效或未登录失败时显示在保存失败的说明里：令牌没有换成，不能说"再保存一次"就好（复验 TB1）
@@ -173,7 +178,7 @@ export interface EditorPageOptions {
   /** 这份文档在同一个浏览器里的锁与交接频道（M3-P5 设计 §3.1、§3.7）：载入之后按文档建一次，卸载时关掉 */
   readonly sameBrowser: (documentId: string) => SameBrowser
   /** 这份文档的"刷新时在途的保存"的记号（M3-P5 设计 §3.7 的 R1） */
-  readonly pendingSave: (documentId: string) => PendingSaveMarker
+  readonly pendingSave: (userId: string, documentId: string) => PendingSaveMarker
   /** 这份文档在这一页发出过的请求编辑的记号（M3-P5 审查 B2，按标签页、刷新之后还在） */
   readonly issuedRequest: (documentId: string) => IssuedRequestMarker
   /** 测试构建的自动保存控制（start.tsx 只在测试构建里给出）；生产为 undefined */
@@ -275,6 +280,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let session: EditorPageSession = 'active'
   let userId: string | undefined
   let localDraftsEnabled = false
+  let localPermit: DraftSessionPermit | undefined
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
   /** 阅读与编辑（载入之后才有） */
@@ -304,6 +310,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
    */
   let staleAfter: number | undefined
   let sessionProblem: unknown
+  let sessionEndedReason: EditorPageView['sessionEndedReason']
   /**
    * 确认会话失败（sessionProblem，网络等）之后的再确认（审查 A6）：确认有结果之前自动保存暂停，人其实多半一直在登录中——恢复联网、
    * 回到前台时立即再确认，另按自动保存的退避（2、4……秒，至多 60 秒）定时再确认。确认有了结果（成功、未登录、换了人）就停
@@ -319,6 +326,17 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   /** 上一次通知时的 confirmedForWrite()：变了才通知 */
   let writable = true
   const cleanups: (() => void)[] = []
+  cleanups.push(subscribeLocalSession((event) => {
+    if (disposed || event.kind !== 'stopped' || localPermit?.userId !== event.previous.userId || localPermit.generation !== event.previous.generation)
+      return
+    if (event.cleanup?.cause === 'account_disabled')
+      sessionEndedReason = 'account_disabled'
+    localPermit = undefined
+    recovery?.suspend()
+    // 沿已有代次变化路径暂停捕获、关闭本机宿主和释放密钥；服务器状态仍由真实会话请求确认。
+    mode?.setSession(session)
+    update()
+  }))
   /** 交互屏障：撤掉它的函数 */
   let releaseBarrier: (() => void) | undefined
   /** 编辑器容器的状态（写在容器的 data-editor-state 上） */
@@ -327,7 +345,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, recovery: recovery?.view(), localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { load, recovery: recovery?.view(), localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
   }
 
   /** 页面信号变了：在调用者的同步段里通知（可见性在 visibilitychange 里，切到后台的上传不靠计时器） */
@@ -420,7 +438,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       return
     leaving = true
     setCsrfToken(undefined)
-    page.replace(loginPath(options.currentPath(), error.code === 'SESSION_EXPIRED' ? 'expired' : 'required'))
+    page.replace(loginPath(options.currentPath(), disabledSessionUserId(error) !== undefined ? 'account_disabled_confirmed' : error.code === 'SESSION_EXPIRED' ? 'expired' : 'required'))
   }
 
   function loadFailed(error: unknown): void {
@@ -434,15 +452,21 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   function enterSession(next: EditorPageSession): void {
+    if (next !== 'signed-out')
+      sessionEndedReason = undefined
     session = next
-    if (next !== 'active')
+    if (next !== 'active') {
+      localPermit = undefined
       recovery?.suspend()
+    }
     mode?.setSession(next)
     update()
   }
 
   /** 编辑权与另存为副本的请求得到未登录或令牌失效：向服务端确认现在是谁（不显示"正在确认"：不是用户按了保存） */
   function writeProblem(error: ApiError): void {
+    if (userId !== undefined && disabledSessionUserId(error) === userId)
+      sessionEndedReason = 'account_disabled'
     if (isAuthenticationError(error))
       unauthenticatedPending = true
     else
@@ -550,6 +574,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         }
         return
       }
+      if (userId !== undefined && disabledSessionUserId(error) === userId)
+        sessionEndedReason = 'account_disabled'
     }
     if (disposed)
       return
@@ -565,8 +591,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
     else if (confirmed.user.id === userId) {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
-      setCsrfToken(confirmed.csrfToken)
+      setApiSession(confirmed)
       localDraftsEnabled = confirmed.features.localDraftsEnabled
+      localPermit = draftSessionPermitOf(confirmed)
       enterSession('active')
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
       // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存。例外：续租连着第二次起被判会话不对（服务端一直拒绝、
@@ -659,7 +686,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       now: () => options.now().getTime(),
       still,
       facts,
-      reader: options.recoveryReader ?? (() => createRecoveryReader({ key, clock, still, host: options.localDrafts?.host, onSessionProblem: sessionFailure })),
+      reader: options.recoveryReader ?? (() => createRecoveryReader({ permit: localPermit, key, clock, still, host: options.localDrafts?.host, onSessionProblem: sessionFailure })),
       replay: async (request, gzip) => {
         if (api.replay === undefined)
           throw new Error('当前页面无法核对原保存请求')
@@ -692,7 +719,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       documentId: id,
       clientInstanceId,
       userId: user,
-      localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled },
+      localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled, permit: () => localPermit },
       recovery,
       connection: options.network.connection,
       api,
@@ -705,7 +732,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       title: () => heading?.title ?? '',
       session: {
         // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
-        saveUnauthenticated: () => {
+        saveUnauthenticated: (error) => {
+          if (userId !== undefined && disabledSessionUserId(error) === userId)
+            sessionEndedReason = 'account_disabled'
           unauthenticatedPending = true
           void confirmForSave(true)
         },
@@ -715,11 +744,15 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           void confirmForSave(true)
         },
         writeProblem,
-        readProblem: () => void recheckSession(),
+        readProblem: (error) => {
+          if (userId !== undefined && disabledSessionUserId(error) === userId)
+            sessionEndedReason = 'account_disabled'
+          void recheckSession()
+        },
       },
       autosave: { page: autosavePage, ...options.autosaveControl },
       sameBrowser,
-      pendingSave: options.pendingSave(id),
+      pendingSave: options.pendingSave(user, id),
       issuedRequest: options.issuedRequest(id),
       reportError: options.reportError,
       trace: options.handoverTrace,
@@ -784,9 +817,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         signedIn = await api.session()
         if (disposed)
           return
-        setCsrfToken(signedIn.csrfToken)
+        setApiSession(signedIn)
         userId = signedIn.user.id
         localDraftsEnabled = signedIn.features.localDraftsEnabled
+        localPermit = draftSessionPermitOf(signedIn)
         // 确认会话的回包之前别的标签页登录或退出了：消息当时没法处理，现在补确认一次
         if (checkWhenLoaded)
           void recheckSession()

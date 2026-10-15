@@ -265,6 +265,14 @@ export class DocumentsRepository {
     return row
   }
 
+  /** 草稿页按 id 批量取正常文档及调用者的授权；是否可读仍由访问策略判断。 */
+  async findManyWithGrants(userId: string, ids: readonly string[], transaction: Transaction): Promise<GrantedDocumentRow[]> {
+    return executorOf(this.db, transaction)
+      .select({ ...COLUMNS, grantRole: grantRoleOf(d.id, userId) })
+      .from(d)
+      .where(and(eq(d.status, 'active'), inIdArray(d.id, ids)))
+  }
+
   /**
    * 锁住文档行（FOR UPDATE）：同一份文档的保存按到达的顺序逐个执行，修订号的判断与加一之间不会插进别的保存。
    * 返回的行带着持锁的凭据（LockedDocumentRow）；只认正常状态的：等锁期间进了回收站或被永久删除时返回 undefined，什么也没锁住

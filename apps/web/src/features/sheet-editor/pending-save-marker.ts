@@ -2,13 +2,14 @@
 // 会立即结束旧的一代，那次保存要是还在服务端检查快照、等锁，就会被挡掉，旧页面已经没了，修改无声丢失。所以那时在 localStorage 记下这份文档
 // 有一次保存可能还在服务端处理（何时、它的基准修订号）；同一个浏览器里新载入的页面本人接管之前看到 30 秒内的记号就先等它（S6），接手之后清掉。
 // 记号只在同一个浏览器里起作用，正好覆盖这个情形（跨设备的旧页面还在，被接管之后自己给副本）。
-// - 键 nerve-office:pending-save:<documentId>；值带版本，读出来认不出（别的版本的页面写的、被改过）就当作没有；
+// - 键 nerve-office:pending-save:<userId>:<documentId>；用户来自确认过的会话，旧单段键不读、不迁移；值无法识别时当作没有；
 // - 时刻用墙上时间（Date.now）：要在另一个页面里比较，performance.now 各页面各算各的；
 // - localStorage 不可用（隐私模式、被禁用、访问它就抛出、配额满）时什么也不做：退回立即接手（已知限制，设计 §7）。
 // 不依赖 Univer 与界面；存储与时钟注入（组装处给出 localStorage 与 Date.now），用假的做单元测试。
 import { z } from 'zod'
+import { pendingSaveKey } from '../../shared/lib/editor-storage-keys.ts'
 
-const KEY_PREFIX = 'nerve-office:pending-save:'
+export { pendingSaveKey as keyOf } from '../../shared/lib/editor-storage-keys.ts'
 
 /** 记号的版本：认不出别的版本写的值时当作没有 */
 const MARKER_VERSION = 1
@@ -50,10 +51,6 @@ const storedSchema = z.object({
   revision: z.number().int().min(1),
 })
 
-export function keyOf(documentId: string): string {
-  return `${KEY_PREFIX}${documentId}`
-}
-
 /** 读出来的值认不出时当作没有（JSON 坏了、版本不同、字段不对） */
 function parse(raw: string | null): PendingSave | undefined {
   if (raw === null)
@@ -69,8 +66,8 @@ function parse(raw: string | null): PendingSave | undefined {
   return parsed.success ? { at: parsed.data.at, revision: parsed.data.revision } : undefined
 }
 
-export function pendingSaveMarker(documentId: string, options: PendingSaveMarkerOptions): PendingSaveMarker {
-  const key = keyOf(documentId)
+export function pendingSaveMarker(userId: string, documentId: string, options: PendingSaveMarkerOptions): PendingSaveMarker {
+  const key = pendingSaveKey(userId, documentId)
   return {
     write: (revision) => {
       try {

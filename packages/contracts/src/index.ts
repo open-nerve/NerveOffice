@@ -85,6 +85,8 @@ export type {
   LinkInvalidReason,
   OneTimeLinkPurpose,
 } from './auth/links.ts'
+export { SESSION_EXPIRED_REASONS, sessionExpiredDetailsSchema } from './auth/session-expiration.ts'
+export type { SessionExpiredDetails, SessionExpiredReason } from './auth/session-expiration.ts'
 export { isPlatformAssetAddress } from './documents/asset-address.ts'
 export {
   AUTOSAVE_CAPTURE_MAX_MS,
@@ -171,6 +173,8 @@ export type {
   PlatformFormatVersion,
   UpdateDocumentRequest,
 } from './documents/documents.ts'
+export { documentDraftFactSchema, documentDraftFactsQuerySchema, documentDraftFactsResponseSchema, DRAFT_FACTS_MAX_IDS } from './documents/draft-facts.ts'
+export type { DocumentDraftFact, DocumentDraftFactsQuery, DocumentDraftFactsResponse } from './documents/draft-facts.ts'
 export {
   acquiredEditInterruptionSchema,
   acquiredEditLeaseSchema,

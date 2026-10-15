@@ -20,6 +20,7 @@ import { fakeMirrorDirectory } from './mirror-directory.test-support.ts'
 import { encodeSlot, parseSlot, SLOT_HEADER_BYTES } from './mirror-slot.ts'
 import { deferred } from './outbox-lock.test-support.ts'
 import { readRecoveryNotice } from './recovery-notice.ts'
+import { testCleanupPermit, testCleanupSessions } from './session-fence.test-support.ts'
 import { decideRestore } from './writer-fence.ts'
 
 const KEY: DraftKey = { userId: USER_ID, documentId: DOCUMENT_ID }
@@ -233,16 +234,16 @@ describe('清理过程中不允许旧页面重建镜像（复验 C5）', () => {
     await page.release(KEY)
     const writing = page.write(capture(W1, 1, 'one'))
     await committed.promise
-    const cleanup = createLocalCleanup({ store: w.store.store, directory: w.files.directory, now: () => NOW })
-    const cleaning = cleanup.removeUser(USER_ID)
+    const cleanup = createLocalCleanup({ sessions: testCleanupSessions(), store: w.store.store, directory: w.files.directory, now: () => NOW })
+    const cleaning = cleanup.removeUser(testCleanupPermit())
     await new Promise(resolve => setTimeout(resolve, 0))
     resume.resolve()
     await writing
     const first = await cleaning
     // 已结束写入的 Worker 仍保留句柄时清理交回 pending，墓碑不能提前删。
-    expect(first).toEqual({ kind: 'cleared', pending: [KEY] })
+    expect(first).toEqual({ kind: 'pending', pending: [KEY] })
     await page.release(KEY)
-    expect(await cleanup.removeUser(USER_ID)).toEqual({ kind: 'cleared', pending: [] })
+    expect(await cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'cleared', pending: [] })
     expect(await slots(w.files)).toEqual(['missing', 'missing'])
     const reader = await w.open()
     expect(await reader.read(KEY)).toEqual({ kind: 'absent' })
@@ -254,9 +255,9 @@ describe('清理过程中不允许旧页面重建镜像（复验 C5）', () => {
     expect(await page.register(KEY, W1, false)).toMatchObject({ kind: 'registered' })
     expect(await page.write(capture(W1, 1, 'one'))).toMatchObject({ kind: 'written', mirror: { kind: 'mirrored' } })
     await page.release(KEY)
-    const cleanup = createLocalCleanup({ store: w.store.store, directory: w.files.directory, now: () => NOW })
+    const cleanup = createLocalCleanup({ sessions: testCleanupSessions(), store: w.store.store, directory: w.files.directory, now: () => NOW })
     const held = w.store.holdNext('removeUserData')
-    const cleaning = cleanup.removeUser(USER_ID)
+    const cleaning = cleanup.removeUser(testCleanupPermit())
     await held.reached
     const writing = page.write(capture(W1, 2, 'two'))
     try {

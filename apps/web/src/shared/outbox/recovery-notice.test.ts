@@ -5,9 +5,10 @@ import { readRecoveryNotice } from './recovery-notice.ts'
 const NOTICE = { userId: USER_ID, documentId: DOCUMENT_ID, kind: 'restored', at: NOW } as const
 
 describe('比对镜像留下的提示：库里读出的一条（M4-P1 设计 §3.8）', () => {
-  it('两种提示都认得；只交回约定的字段', () => {
+  it('三种提示都认得；只交回约定的字段', () => {
     expect(readRecoveryNotice(NOTICE)).toEqual(NOTICE)
     expect(readRecoveryNotice({ ...NOTICE, kind: 'lost', at: 0 })).toEqual({ ...NOTICE, kind: 'lost', at: 0 })
+    expect(readRecoveryNotice({ ...NOTICE, kind: 'expired' })).toEqual({ ...NOTICE, kind: 'expired' })
     expect(readRecoveryNotice({ ...NOTICE, extra: 1 })).toEqual(NOTICE)
   })
 

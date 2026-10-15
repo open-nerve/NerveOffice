@@ -1,16 +1,17 @@
+import type { DraftCaptureRef, DraftReadLatest, PreparedDraft, WorkingDraft } from '../../../../shared/local-drafts/working-draft.ts'
 // 仅测试构建使用：保留生产来源的引用身份，跨页面边界只交回元数据和测试用的解压文本。
 import type { LocalKeyHandle } from '../../../../shared/outbox/draft-codec.ts'
 import type { DraftKey, InFlightSave } from '../../../../shared/outbox/draft-record.ts'
 import type { LocalKeyKeeper } from '../../../../shared/outbox/local-key.ts'
-import type { DraftCaptureRef, DraftReadLatest, PreparedDraft, WorkingDraft } from '../../working-draft.ts'
+import type { WorkerLike } from '../../../../shared/outbox/outbox-worker-client.ts'
+import type { DraftSessionPermit } from '../../../../shared/outbox/session-fence.ts'
 import type { OutboxSession } from '../outbox-session.ts'
-import type { WorkerLike } from '../outbox-worker-client.ts'
 import type { PersistentWorkingDraft } from '../persistent-working-draft.ts'
+import { createMemoryWorkingDraft } from '../../../../shared/local-drafts/memory-working-draft.ts'
 import { gunzipBytes, sha256Hex } from '../../../../shared/outbox/draft-codec.ts'
-import { createMemoryWorkingDraft } from '../../memory-working-draft.ts'
-import { createOutboxHost } from '../outbox-host.ts'
+import { createOutboxHost } from '../../../../shared/outbox/outbox-host.ts'
+import { createOutboxWorker } from '../../../../shared/outbox/outbox-worker-client.ts'
 import { prepareOutboxSession } from '../outbox-session.ts'
-import { createOutboxWorker } from '../outbox-worker-client.ts'
 import { createPersistentWorkingDraft } from '../persistent-working-draft.ts'
 
 interface Entry {
@@ -26,7 +27,7 @@ interface Entry {
 
 const FORMAT = { clientBuild: '0.1.0', univerVersion: '0.12.4', profile: 'sheet-v1', formatVersion: 1 }
 
-export function createWorkingDraftProbe(options: { readonly key: () => LocalKeyHandle | undefined }) {
+export function createWorkingDraftProbe(options: { readonly permit: () => DraftSessionPermit | undefined, readonly key: () => LocalKeyHandle | undefined }) {
   const entries = new Map<number, Entry>()
   const reads = new Map<number, Promise<DraftReadLatest>>()
   let serial = 0
@@ -70,6 +71,7 @@ export function createWorkingDraftProbe(options: { readonly key: () => LocalKeyH
         subscribe: () => () => {},
       }
       const session = prepareOutboxSession({
+        permit: options.permit,
         enabled: input.mode !== 'memory',
         key: input.draft,
         writeEpoch: 3,

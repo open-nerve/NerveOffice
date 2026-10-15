@@ -19,6 +19,7 @@ const LOGIN_NOTICES: ReadonlyMap<string, string> = new Map([
   ['password_changed', messages.auth.passwordMaybeChanged],
   ['password_reset', messages.auth.passwordMaybeReset],
   ['account_disabled', messages.auth.accountMaybeDisabled],
+  ['account_disabled_confirmed', messages.auth.accountDisabled],
 ])
 
 /** 登录后要去的是编辑器页：它是另一个入口，要整页打开，不能在平台页面的路由里切换（P4 设计 §3.8）。 */

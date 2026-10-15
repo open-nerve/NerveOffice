@@ -18,7 +18,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import http from 'node:http'
 import { setTimeout as delay } from 'node:timers/promises'
 import zlib from 'node:zlib'
-import { acquiredEditLeaseSchema, CSRF_TOKEN_HEADER, EDIT_LEASE_HEADER, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, CSRF_TOKEN_HEADER, EDIT_LEASE_HEADER, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp, TEST_PUBLIC_ORIGIN } from '../support/api-app.ts'
@@ -177,6 +177,7 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
         expect(await activeSessionsOf(account.id)).toBe(0)
       },
     })
+    expect(errorResponseSchema.parse(await saved.clone().json()).error.details).toEqual({ reason: 'logout', userId: account.id })
     expect(await outcomeOf(saved)).toBe('401 SESSION_EXPIRED')
     expect(await writesOf(document.id)).toEqual(UNTOUCHED)
   })
@@ -190,6 +191,7 @@ describe('US-M3-09 登录被撤销之后，已经过了会话守卫的在途请�
       request: async () => saveContent(app.baseUrl, session, document.id, snapshotOf(document, '强制结束编辑之后才写进来的'), { baseRevision: 1, lease }),
       change: async () => issueReset(account),
     })
+    expect(errorResponseSchema.parse(await saved.clone().json()).error.details).toEqual({ reason: 'password_reset', userId: account.id })
     expect(await outcomeOf(saved)).toBe('401 SESSION_EXPIRED')
     expect(await writesOf(document.id)).toEqual(UNTOUCHED)
   })

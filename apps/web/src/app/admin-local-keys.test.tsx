@@ -159,7 +159,7 @@ function keyLine(row: HTMLElement): HTMLElement | null {
 
 /** 账户页顶部的状态区（共用的 StatusRegion）：弹窗开着时它在 aria-hidden 之下，也找得到 */
 function statusRegion(): HTMLElement {
-  const region = screen.getAllByRole('status', { hidden: true }).find(element => element.getAttribute('data-slot') === 'status-region')
+  const region = within(screen.getByRole('main')).getAllByRole('status', { hidden: true }).find(element => element.getAttribute('data-slot') === 'status-region')
   if (region === undefined)
     throw new Error('账户页没有状态区')
   return region

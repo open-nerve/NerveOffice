@@ -149,7 +149,7 @@ describe('管理界面：审计', () => {
     renderApp('/admin/audit')
     await screen.findByRole('table', { name: '审计事件' })
     // 状态容器一直在，内容变化时往里填文字：读屏才会播报（M2-P2 复验）
-    const status = screen.getByRole('status', { name: '' })
+    const status = within(screen.getByRole('main')).getByRole('status', { name: '' })
     expect(status).toBeEmptyDOMElement()
     fireEvent.change(screen.getByLabelText('按名字找操作者'), { target: { value: '管' } })
     // 输入停下 300 毫秒之后才查找

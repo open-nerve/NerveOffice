@@ -10,7 +10,9 @@
 import type { Page } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
 import { createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, editLeaseEpoch } from '../../support/database.ts'
-import { expect, test } from '../../support/fixtures.ts'
+import { chooseAutosave, expect, test } from '../../support/fixtures.ts'
+import { logoutThroughUi } from '../../support/logout.ts'
+import { firstPage, launchPersistentProfile } from '../../support/persistent-profile.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, editingBy, editingNotice, EDITOR_TEST_TIMEOUT, editorSurface, enterEditButton, exitEditing, openAndEnterEditing, openReader, reloadAndEnterEditing, requestEditButton, saveAndWait, saveButton, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
@@ -202,37 +204,59 @@ test.describe('US-M3-04 同一个人在多个标签页：打开、刷新与关�
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('after retry')
   })
 
-  test('US-M3-04 关闭标签页：编辑权随即释放（keepalive 送到），之后打开的页面立即能编辑', async ({ page, context }) => {
-    await loginThroughApi(page, await createUser('close-releases'))
-    const documentId = await createSheetThroughApi(page)
-    const editor = await context.newPage()
-    await openAndEnterEditing(editor, documentId)
-    await expect(saveButton(editor)).toBeVisible()
-    expect(await editLeaseEndReason(documentId)).toBeNull()
+  test('US-M3-04 关闭标签页：编辑权随即释放（keepalive 送到），之后打开的页面立即能编辑', async ({ playwright, browserName, cspViolations, pageErrors, autosave }, testInfo) => {
+    // 原生 keepalive 故事不安装功能夹具的 Worker 路由，否则 WebKit 的导航传输会被改变。
+    const context = await launchPersistentProfile(playwright[browserName], testInfo, 'native-close', { cspViolations, pageErrors }, true)
+    try {
+      await chooseAutosave(context, autosave)
+      const page = await firstPage(context)
+      await loginThroughApi(page, await createUser('close-releases'))
+      const documentId = await createSheetThroughApi(page)
+      const editor = await context.newPage()
+      await openAndEnterEditing(editor, documentId)
+      await expect(saveButton(editor)).toBeVisible()
+      expect(await editLeaseEndReason(documentId)).toBeNull()
 
-    // 模拟用户关闭，执行卸载处理；默认 close 是测试驱动的强制关闭。此选项不等待关完，先订阅 close。
-    await Promise.all([editor.waitForEvent('close'), editor.close({ runBeforeUnload: true })])
-    await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
-    await openAndEnterEditing(page, documentId)
-    await expect(saveButton(page)).toBeVisible()
-    await expect(editingNotice(page)).toHaveCount(0)
-  })
-
-  test('US-M3-04 刷新：刷新出来的页面点"编辑"立即能编辑，每次是新的一代（旧页面的释放晚到时，新页面隔一小会儿再试，P1 设计 §7 第一条）', async ({ page }) => {
-    await loginThroughApi(page, await createUser('reload-keeps-editing'))
-    const documentId = await createSheetThroughApi(page)
-    await openAndEnterEditing(page, documentId)
-    let epoch = await editLeaseEpoch(documentId) ?? 0
-    for (let round = 0; round < 3; round += 1) {
-      await reloadAndEnterEditing(page)
+      // 模拟用户关闭，执行卸载处理；默认 close 是测试驱动的强制关闭。此选项不等待关完，先订阅 close。
+      await Promise.all([editor.waitForEvent('close'), editor.close({ runBeforeUnload: true })])
+      await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
+      await openAndEnterEditing(page, documentId)
       await expect(saveButton(page)).toBeVisible()
       await expect(editingNotice(page)).toHaveCount(0)
-      const next = await editLeaseEpoch(documentId) ?? 0
-      expect(next).toBeGreaterThan(epoch)
-      epoch = next
+      // 原生 OPFS 不做目录适配；成功后由公开退出只清理本例账户，失败时保留现场。
+      await page.goto('/')
+      await logoutThroughUi(page)
     }
-    await typeInCell(page, 'A1', 'after reloads')
-    await saveAndWait(page)
-    expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('after reloads')
+    finally {
+      await context.close()
+    }
+  })
+
+  test('US-M3-04 刷新：刷新出来的页面点"编辑"立即能编辑，每次是新的一代（旧页面的释放晚到时，新页面隔一小会儿再试，P1 设计 §7 第一条）', async ({ playwright, browserName, cspViolations, pageErrors, autosave }, testInfo) => {
+    const context = await launchPersistentProfile(playwright[browserName], testInfo, 'native-reloads', { cspViolations, pageErrors }, true)
+    try {
+      await chooseAutosave(context, autosave)
+      const page = await firstPage(context)
+      await loginThroughApi(page, await createUser('reload-keeps-editing'))
+      const documentId = await createSheetThroughApi(page)
+      await openAndEnterEditing(page, documentId)
+      let epoch = await editLeaseEpoch(documentId) ?? 0
+      for (let round = 0; round < 3; round += 1) {
+        await reloadAndEnterEditing(page)
+        await expect(saveButton(page)).toBeVisible()
+        await expect(editingNotice(page)).toHaveCount(0)
+        const next = await editLeaseEpoch(documentId) ?? 0
+        expect(next).toBeGreaterThan(epoch)
+        epoch = next
+      }
+      await typeInCell(page, 'A1', 'after reloads')
+      await saveAndWait(page)
+      expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('after reloads')
+      await page.goto('/')
+      await logoutThroughUi(page)
+    }
+    finally {
+      await context.close()
+    }
   })
 })

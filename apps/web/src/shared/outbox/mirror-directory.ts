@@ -24,7 +24,7 @@ export interface SlotHandle {
   readonly close: () => void
 }
 
-/** OPFS 用不了（没有接口、不是专用 Worker、被策略禁止）、写满、别的错误 */
+/** OPFS 没有对应接口（例如不在专用 Worker）、写满、访问或其他错误 */
 export type MirrorProblem
   = | { readonly kind: 'unsupported' }
     | { readonly kind: 'quota' }
@@ -96,18 +96,25 @@ function errorName(error: unknown): string | undefined {
   return typeof error === 'object' && error !== null && 'name' in error && typeof error.name === 'string' ? error.name : undefined
 }
 
+/** 根目录无法读取不同于子目录明确不存在；保留原错误，避免 NotFoundError 被下游当作空库。 */
+class RootReadError extends Error {
+  constructor(cause: unknown) {
+    super('无法读取 OPFS 根目录', { cause })
+  }
+}
+
 /**
  * 错误归类：NotFoundError 由调用处认（不在）；被别的句柄或可写流占着（Chromium 是 NoModificationAllowedError，WebKit 是 InvalidStateError）
- * 是 busy；写满；被策略禁止（SecurityError）当作用不了；别的照原样
+ * 是 busy；写满；访问被拒绝或其他错误照原样。访问失败不能证明旧镜像不存在。
  */
 function problemOf(error: unknown): { readonly kind: 'busy' } | MirrorProblem {
+  if (error instanceof RootReadError)
+    return { kind: 'failed', error: error.cause }
   const name = errorName(error)
   if (name === 'NoModificationAllowedError' || name === 'InvalidStateError')
     return { kind: 'busy' }
   if (name === 'QuotaExceededError')
     return { kind: 'quota' }
-  if (name === 'SecurityError')
-    return { kind: 'unsupported' }
   return { kind: 'failed', error }
 }
 
@@ -155,21 +162,18 @@ async function childDirectories(directory: FileSystemDirectoryHandle): Promise<s
 }
 
 /**
- * OPFS 里的镜像目录。root 默认是 navigator.storage.getDirectory()；没有这个接口、或者它拿不到根目录时一律 unsupported：
- * 拿不到根目录是这个来源在这里没有 OPFS——WebKit 的临时数据存储（Playwright 默认的上下文）报 UnknownError，Firefox 的隐私窗口报
- * SecurityError；不当作一时的出错去退避再试。
+ * OPFS 里的镜像目录。root 默认是 navigator.storage.getDirectory()；只有没有这个接口才是 unsupported。
+ * WebKit 临时上下文也可能报 UnknownError，但这一错误不能证明旧镜像不存在；读取、枚举和删除均如实保留 failed。
  * 删目录（removeUser、removeDocument）不用同步访问句柄，页面里也能做（P4 的退出登录、保留期在平台页面里）
  */
 export function opfsMirrorDirectory(root: () => Promise<FileSystemDirectoryHandle> | undefined = defaultRoot): MirrorDirectory {
   async function rootDirectory(): Promise<FileSystemDirectoryHandle | 'unsupported'> {
-    const opened = root()
-    if (opened === undefined)
-      return 'unsupported'
     try {
-      return await opened
+      const opened = root()
+      return opened === undefined ? 'unsupported' : await opened
     }
-    catch {
-      return 'unsupported'
+    catch (error) {
+      throw new RootReadError(error)
     }
   }
 

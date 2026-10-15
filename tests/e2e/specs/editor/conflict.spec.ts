@@ -180,8 +180,8 @@ test.describe('US-M1-07 两个标签页，旧页面的保存不覆盖新内容',
       return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'B1')?.v
     }).toBe('older page')
 
-    // 编辑权到期；另一个标签页接手、保存，然后离开（关闭页面时释放编辑权）。
-    // 等释放到了服务端再往下：这一页重新加载时要取得编辑权，释放晚到时它只能阅读（P1 设计 §7 第一条，P5 用 Web Locks 解决）
+    // 编辑权到期；另一个标签页接手、保存，然后通过公开退出编辑释放并离开。
+    // 等服务端确认释放后再往下，固定“旧页重新加载时没有人占用”的前提；卸载尽力释放另有独立故事。
     await expireEditLease(documentId)
     const other = await context.newPage()
     await openAndEnterEditing(other, documentId)

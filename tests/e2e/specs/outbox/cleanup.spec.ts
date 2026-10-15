@@ -4,7 +4,7 @@ import type { DraftKey } from '../../support/outbox-probe.ts'
 import { randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
-import { DAY_MS, draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, writerOf } from '../../support/outbox-probe.ts'
+import { DAY_MS, draftFor, NOW, openOutboxProbe, outcomeOf, probe, probeDatabase, probePipeline, writerOf } from '../../support/outbox-probe.ts'
 import { loginThroughApi } from '../../support/session.ts'
 
 /** 保留期（契约的 LOCAL_DRAFT_RETENTION_DAYS） */
@@ -21,8 +21,7 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     const noticeOnly = { userId: user.id, documentId: randomUUID() }
     const writerOnly = { userId: user.id, documentId: randomUUID() }
     const other = { userId: `${user.id}0`, documentId: randomUUID() }
-    await probe(page, 'register', other, writer, { now: NOW, force: false })
-    expect(await probe(page, 'write', draftFor(other, writer, 7))).toEqual({ kind: 'written' })
+    await probeDatabase(page, 'seedDraft', draftFor(other, writer, 7))
     const raw = await probeDatabase(page, 'getRaw', 'drafts', other)
     const draft = { ...raw, ...draftOnly }
     await probeDatabase(page, 'putRaw', 'drafts', draft)
@@ -31,19 +30,20 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     await probeDatabase(page, 'putRaw', 'notices', notice)
     await probe(page, 'register', writerOnly, writer, { now: NOW, force: false })
 
+    const permit = outcomeOf(await probePipeline(page, 'beginCleanup', 'logout'), 'clearing').permit
     await probe(page, 'recordTransactions')
-    expect(await probe(page, 'retireUser', user.id, NOW + 1)).toEqual({ kind: 'retired' })
-    expect(await probe(page, 'transactions')).toEqual([{ stores: ['drafts', 'writers', 'notices'], mode: 'readwrite', durability: 'strict' }])
+    expect(await probe(page, 'retireUser', permit, NOW + 1)).toEqual({ kind: 'retired' })
+    expect(await probe(page, 'transactions')).toEqual([{ stores: ['drafts', 'writers', 'notices', 'sessions'], mode: 'readwrite', durability: 'strict' }])
     for (const key of [draftOnly, noticeOnly, writerOnly])
       expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ ...key, writerId: 'retired', registeredAt: NOW + 1 })
     expect(await probeDatabase(page, 'getRaw', 'writers', draftOnly)).toMatchObject({ writeEpoch: 1, lastDraftSeq: 7 })
     expect(await probeDatabase(page, 'getRaw', 'drafts', draftOnly)).toEqual(draft)
     expect(await probeDatabase(page, 'getRaw', 'notices', noticeOnly)).toEqual(notice)
     expect(await probeDatabase(page, 'getRaw', 'writers', other)).toMatchObject({ ...writer, lastDraftSeq: 7 })
-    expect(await probe(page, 'write', draftFor(writerOnly, writer, 1))).toEqual({ kind: 'fenced', reason: 'not-writer' })
+    expect(await probe(page, 'write', draftFor(writerOnly, writer, 1))).toEqual({ kind: 'session-invalid' })
   })
 
-  test('按用户清理：这个人的草稿与写入者一起删，别人的不动；之后迟到的写入因写入者不在而被拦下', async ({ page }) => {
+  test('按用户清理：这个人的草稿与写入者一起删，别人的不动；之后迟到的写入因会话资格失效而被拦下', async ({ page }) => {
     const user = await createUser('ob-clear')
     const other = await createUser('ob-clear-other')
     await loginThroughApi(page, user)
@@ -52,25 +52,29 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     const writer = writerOf(3)
     const mine = [{ userId: user.id, documentId: randomUUID() }, { userId: user.id, documentId: randomUUID() }]
     const theirs = { userId: other.id, documentId: randomUUID() }
-    for (const key of [...mine, theirs]) {
+    for (const key of mine) {
       await probe(page, 'register', key, writer, { now: NOW, force: false })
       expect(await probe(page, 'write', draftFor(key, writer, 1))).toEqual({ kind: 'written' })
     }
 
-    expect(await probe(page, 'removeUser', user.id)).toEqual({ kind: 'cleared' })
+    await probeDatabase(page, 'seedDraft', draftFor(theirs, writer, 1))
+    const otherOriginal = await probeDatabase(page, 'getRaw', 'drafts', theirs)
+    const permit = outcomeOf(await probePipeline(page, 'beginCleanup', 'logout'), 'clearing').permit
+    expect(await probe(page, 'removeUser', permit)).toEqual({ kind: 'cleared' })
     for (const key of mine) {
-      expect(await probe(page, 'read', key)).toEqual({ kind: 'absent' })
+      expect(await probe(page, 'read', key)).toEqual({ kind: 'session-invalid' })
+      expect(await probeDatabase(page, 'getRaw', 'drafts', key)).toBeNull()
       expect(await probeDatabase(page, 'getRaw', 'writers', key)).toBeNull()
-      // 清理之后才到的写入（另一个标签页还在写）：写入者不在了，被拦下
-      expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'fenced', reason: 'not-writer' })
+      // 清理之后才到的写入（另一个标签页还在写）：会话已进入清理状态，被拦下
+      expect(await probe(page, 'write', draftFor(key, writer, 2))).toEqual({ kind: 'session-invalid' })
     }
-    expect(await probe(page, 'list', user.id)).toEqual({ kind: 'listed', drafts: [] })
+    expect(await probe(page, 'list', user.id)).toEqual({ kind: 'session-invalid' })
     expect(await probe(page, 'draftIds', user.id)).toEqual([])
-    expect(outcomeOf(await probe(page, 'read', theirs), 'draft').meta.draftSeq).toBe(1)
+    expect(await probeDatabase(page, 'getRaw', 'drafts', theirs)).toEqual(otherOriginal)
     expect(await probeDatabase(page, 'getRaw', 'writers', theirs)).not.toBeNull()
   })
 
-  test('保留期：读得出的更新时间超过 14 天的草稿都删（不论属于谁、不论格式，交回的键标明是哪一种）；读不出更新时间的留着；登记超过 14 天又没有草稿的写入者换成墓碑（审查 A6：挡住镜像里没截断成的那一份被写回，由合一的清理在镜像目录不在之后删）', async ({ page }) => {
+  test('保留期：严格超过 14 天的已知格式清理并留到期提示；较新格式、未来或未知时间保留，事务返回保留键保护镜像', async ({ page }) => {
     const user = await createUser('ob-retention')
     const other = await createUser('ob-retention-other')
     await loginThroughApi(page, user)
@@ -86,16 +90,18 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     const freshNewer = keyOf(user.id)
     const oldBroken = keyOf(user.id)
     const timeless = keyOf(user.id)
+    const future = keyOf(user.id)
     const idleWriter = keyOf(user.id)
     const newWriter = keyOf(user.id)
     const longAgo = NOW - RETENTION_MS - 1
 
     // 写入者都在很久以前登记；草稿按各自的更新时间
-    const drafts = [[oldDraft, longAgo], [freshDraft, NOW - DAY_MS], [othersOldDraft, longAgo], [boundaryDraft, NOW - RETENTION_MS], [oldNewer, longAgo], [freshNewer, NOW - DAY_MS], [oldBroken, longAgo], [timeless, longAgo]] as const
+    const drafts = [[oldDraft, longAgo], [freshDraft, NOW - DAY_MS], [boundaryDraft, NOW - RETENTION_MS], [oldNewer, longAgo], [freshNewer, NOW - DAY_MS], [oldBroken, longAgo], [timeless, longAgo], [future, NOW + DAY_MS]] as const
     for (const [key, updatedAt] of drafts) {
       await probe(page, 'register', key, writer, { now: longAgo, force: false })
       expect(await probe(page, 'write', draftFor(key, writer, 1, { updatedAt }))).toEqual({ kind: 'written' })
     }
+    await probeDatabase(page, 'seedDraft', draftFor(othersOldDraft, writer, 1, { updatedAt: longAgo }))
     // 更新的页面写的（部署回滚之后旧页面认不出）：更新时间照样读得出
     for (const key of [oldNewer, freshNewer])
       await probeDatabase(page, 'patchDraft', key, { recordVersion: 2 })
@@ -106,27 +112,74 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     await probe(page, 'register', idleWriter, writer, { now: longAgo, force: false })
     await probe(page, 'register', newWriter, writer, { now: NOW - DAY_MS, force: false })
 
-    const removed = outcomeOf(await probe(page, 'purge', NOW), 'purged').drafts
+    const newerOriginal = await probeDatabase(page, 'getRaw', 'drafts', oldNewer)
+    await probe(page, 'recordTransactions')
+    const purged = outcomeOf(await probe(page, 'purge', NOW), 'purged')
+    expect(await probe(page, 'transactions')).toEqual([{ stores: ['drafts', 'writers', 'notices'], mode: 'readwrite', durability: 'strict' }])
+    const removed = purged.drafts
     const byDocument = (a: { readonly key: DraftKey }, b: { readonly key: DraftKey }) => a.key.documentId.localeCompare(b.key.documentId)
     expect([...removed].sort(byDocument)).toEqual([
       { key: oldDraft, record: 'draft' },
       { key: othersOldDraft, record: 'draft' },
-      { key: oldNewer, record: 'newer-format' },
       { key: oldBroken, record: 'malformed' },
     ].sort(byDocument))
 
-    for (const key of [oldDraft, othersOldDraft, oldNewer, oldBroken])
-      expect(await probe(page, 'read', key), key.documentId).toEqual({ kind: 'absent' })
-    for (const key of [freshDraft, boundaryDraft])
+    for (const key of [oldDraft, othersOldDraft, oldBroken]) {
+      expect(await probeDatabase(page, 'getRaw', 'drafts', key), key.documentId).toBeNull()
+      expect(await probeDatabase(page, 'getRaw', 'notices', key)).toEqual({ ...key, kind: 'expired', at: NOW })
+    }
+    expect(await probeDatabase(page, 'getRaw', 'drafts', oldNewer)).toEqual(newerOriginal)
+    expect(purged.retained.map(key => key.documentId).sort()).toEqual([freshDraft, boundaryDraft, oldNewer, freshNewer, timeless, future].map(key => key.documentId).sort())
+    for (const key of [freshDraft, boundaryDraft, future])
       expect((await probe(page, 'read', key)).kind, '没超过 14 天（恰好 14 天不算）').toBe('draft')
     expect(await probe(page, 'read', freshNewer)).toEqual({ kind: 'newer-format', recordVersion: 2 })
     expect(await probe(page, 'read', timeless), '读不出更新时间：留给 P3、P4 发现之后说明并删').toEqual({ kind: 'malformed' })
 
     // 写入者：草稿删了的、早已不用的换成墓碑（高水位留着）；还有草稿的（高水位要接着用）、刚登记的照旧
-    for (const key of [oldDraft, othersOldDraft, oldNewer, oldBroken, idleWriter])
+    for (const key of [oldDraft, othersOldDraft, oldBroken, idleWriter])
       expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).toMatchObject({ writerId: 'retired', writeEpoch: 3 })
-    for (const key of [freshDraft, boundaryDraft, freshNewer, timeless, newWriter])
+    for (const key of [freshDraft, boundaryDraft, oldNewer, freshNewer, timeless, future, newWriter])
       expect(await probeDatabase(page, 'getRaw', 'writers', key), key.documentId).toMatchObject({ writerId: writer.writerId })
+    expect(outcomeOf(await probe(page, 'listNotices', user.id), 'notices').notices).toHaveLength(2)
+    await loginThroughApi(page, other)
+    await openOutboxProbe(page)
+    expect(await probe(page, 'listNotices', other.id)).toEqual({ kind: 'notices', notices: [{ ...othersOldDraft, kind: 'expired', at: NOW }] })
+  })
+
+  test('保留期删除与到期提示在同一 strict 事务：中止后原件和原提示都不变', async ({ page }) => {
+    const user = await createUser('ob-retention-atomic')
+    await loginThroughApi(page, user)
+    await openOutboxProbe(page)
+    await probe(page, 'chooseKey', 1)
+    const key = { userId: user.id, documentId: randomUUID() }
+    const old = NOW - RETENTION_MS - 1
+    await probeDatabase(page, 'seedDraft', draftFor(key, writerOf(3), 1, { updatedAt: old }))
+    const original = await probeDatabase(page, 'getRaw', 'drafts', key)
+    const notice = { ...key, kind: 'restored', at: NOW - 1 }
+    await probeDatabase(page, 'putRaw', 'notices', notice)
+    await probe(page, 'abortNextExpiredNotice')
+    expect(await probe(page, 'purge', NOW)).toMatchObject({ kind: 'failed' })
+    expect(await probeDatabase(page, 'getRaw', 'drafts', key)).toEqual(original)
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toEqual(notice)
+    expect(await probe(page, 'purge', NOW)).toMatchObject({ kind: 'purged', drafts: [{ key, record: 'draft' }] })
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toEqual({ ...key, kind: 'expired', at: NOW })
+  })
+
+  test('镜像到期提示只在主库仍为空时记录；新原件和原提示不被迟到操作覆盖', async ({ page }) => {
+    const user = await createUser('ob-expired-notice')
+    await loginThroughApi(page, user)
+    await openOutboxProbe(page)
+    await probe(page, 'chooseKey', 1)
+    const key = { userId: user.id, documentId: randomUUID() }
+    await probe(page, 'recordTransactions')
+    expect(await probe(page, 'recordExpiredMirror', key, NOW)).toEqual({ kind: 'recorded' })
+    expect(await probe(page, 'transactions')).toEqual([{ stores: ['drafts', 'notices'], mode: 'readwrite', durability: 'strict' }])
+    expect(await probe(page, 'listNotices', user.id)).toEqual({ kind: 'notices', notices: [{ ...key, kind: 'expired', at: NOW }] })
+    await probeDatabase(page, 'seedDraft', draftFor(key, writerOf(3), 1))
+    const original = await probeDatabase(page, 'getRaw', 'drafts', key)
+    expect(await probe(page, 'recordExpiredMirror', key, NOW + 1)).toEqual({ kind: 'skipped' })
+    expect(await probeDatabase(page, 'getRaw', 'drafts', key)).toEqual(original)
+    expect(await probeDatabase(page, 'getRaw', 'notices', key)).toEqual({ ...key, kind: 'expired', at: NOW })
   })
 
   test('列出某人的草稿：只有元数据（不交出密文），认不出的与形状不对的也列出、带上键；用户 id 是别人的前缀时互不相干', async ({ page }) => {
@@ -139,10 +192,11 @@ test.describe('发件箱的清理', { tag: '@test-build' }, () => {
     const [plain, newer, broken] = documents.map(documentId => ({ userId: user.id, documentId })) as [DraftKey, DraftKey, DraftKey]
     // 别人的 id 以这个人的 id 开头（键范围 [userId] 到 [userId, []] 只认完全相同的 userId）
     const prefixed = { userId: `${user.id}0`, documentId: randomUUID() }
-    for (const key of [plain, newer, broken, prefixed]) {
+    for (const key of [plain, newer, broken]) {
       await probe(page, 'register', key, writer, { now: NOW, force: false })
       expect(await probe(page, 'write', draftFor(key, writer, 1))).toEqual({ kind: 'written' })
     }
+    await probeDatabase(page, 'seedDraft', draftFor(prefixed, writer, 1))
     await probeDatabase(page, 'patchDraft', newer, { recordVersion: 2 })
     await probeDatabase(page, 'patchDraft', broken, { iv: 'abcd' })
 

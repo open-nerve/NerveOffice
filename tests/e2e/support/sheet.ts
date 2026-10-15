@@ -392,15 +392,14 @@ export function isSaveRequest(request: Request): boolean {
 }
 
 /**
- * 离开编辑器页（到空白页），等本页的编辑权释放到了服务端（M3-P1）：之后重开的页面能立即取得编辑权。
- * 释放在页面隐藏时经 keepalive 发出、结果不管；平时它早于重开的页面申请到达（晚到时重开的页面先再试几次，P1 设计 §7 第一条）。
- * 要在重开之前拦截请求（page.route）的用例先用它离开：WebKit 装了 page.route 之后，导航离开、刷新时的 keepalive 请求送不到
- * （本机实测：服务端收不到释放，重开的页面只能阅读，要等 90 秒到期；关闭页面时照常送到，Chromium 与 Chrome 都照常，审查者 B 的 R1），
- * 所以先放掉编辑权、再装拦截
+ * 重开用例的准备：通过公开“退出编辑”保存并释放，核对服务端后再到空白页，保证下一次 ?edit=new 能取得编辑权。
+ * macOS WebKit 的 OPFS 隔离也安装路由，导航 keepalive 因此不能保证送达；准备步骤不再依赖卸载请求。
+ * 原生刷新与关闭的尽力释放仍由 edit-mode/lease-acquire 的独立故事核对。
  */
 export async function leaveEditor(page: Page, documentId: string): Promise<void> {
-  await page.goto('about:blank')
+  await exitEditing(page)
   await expect.poll(async () => editLeaseEndReason(documentId)).toBe('released')
+  await page.goto('about:blank')
 }
 
 /**

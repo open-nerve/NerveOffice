@@ -700,6 +700,7 @@ describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M
       change: revokeSession(here, 'replaced'),
     })
     expect(response.status).toBe(401)
+    expect(errorResponseSchema.parse(await response.clone().json()).error.details).toEqual({ reason: 'replaced', userId: kaz.id })
     expect(await codeOf(response)).toBe('SESSION_EXPIRED')
     expect(sessionSetCookie(response)).toBeUndefined()
     expect(await logoutAudits(response)).toBe(0)
@@ -715,6 +716,7 @@ describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M
       change: revokeSession(here, 'logout'),
     })
     expect(response.status).toBe(401)
+    expect(errorResponseSchema.parse(await response.clone().json()).error.details).toEqual({ reason: 'logout', userId: lee.id })
     expect(await codeOf(response)).toBe('SESSION_EXPIRED')
     expect(sessionSetCookie(response)).toMatch(/Expires=Thu, 01 Jan 1970/)
     expect(await logoutAudits(response)).toBe(0)
@@ -734,6 +736,7 @@ describe('US-M2-02 退出、修改密码进行中，这条会话先结束了（M
       },
     })
     expect(response.status).toBe(401)
+    expect(errorResponseSchema.parse(await response.clone().json()).error.details).toEqual({ reason: 'logout', userId: max.id })
     expect(await codeOf(response)).toBe('SESSION_EXPIRED')
     expect(sessionSetCookie(response)).toBeUndefined()
     // 整个事务回滚：密码没变、没有新的会话、没有审计；旧密码照常能登录

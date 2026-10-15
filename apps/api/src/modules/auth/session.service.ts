@@ -1,18 +1,19 @@
+import type { SessionExpiredDetails } from '@nerve-office/contracts'
 import type { AppConfig } from '../config/index.ts'
 import type { Transaction } from '../database/index.ts'
+import type { SessionState } from './sessions.repository.ts'
 import { Inject, Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { APP_CONFIG } from '../config/index.ts'
 import { generateSessionToken, isWellFormedSessionToken, sessionTokenDigest } from './session-token.ts'
 import { SessionsRepository } from './sessions.repository.ts'
 
-/**
- * 换令牌时撤销的原因（复验 N3）：只有 replaced——同一个浏览器重新登录、修改密码时，这个浏览器原来的会话换成了新的，
- * 它随即拿到新的 Cookie，还带着旧 Cookie 的是换令牌之前就发出的请求。
- * 修改密码时本人的其余会话（别的设备上的）按 password_changed 撤销：那些设备不会有新的 Cookie，照常清除，
- * 免得它们在 Cookie 到期之前每次打开都提示"登录已过期"、每个请求多查一次库（M2-P6 复验 一般-3）
- */
-const ROTATION_REASONS = ['replaced'] as const
+/** 只表达这条会话最初的撤销原因；未识别的令牌不带账户事实。 */
+function expiredDetailsOf(state: SessionState | undefined): SessionExpiredDetails {
+  if (state === undefined)
+    return { reason: 'expired' }
+  return { reason: state.revokedReason === 'disabled' ? 'account_disabled' : state.revokedReason ?? 'expired', userId: state.userId }
+}
 
 export interface CreatedSession {
   readonly id: string
@@ -59,35 +60,36 @@ export class SessionService {
   }
 
   /**
-   * 守卫认证过的这条会话现在仍然有效（没有撤销、没有过期）：只读快照的开场核对在快照里问（M2 Codex 评审复验的建议 3），
-   * 守卫之后到快照开始之间撤销的会话（退出、签发重置撤销全部会话、换令牌）在快照里看得到
+   * 租约持有者或请求编辑者的登录是否仍有效；调用方只需要布尔事实时使用。
+   * 当前请求的登录复核使用 requireActive，让失效响应同时带出同一行的原因。
    */
   async isActive(sessionId: string, transaction: Transaction): Promise<boolean> {
     return this.repository.isActiveById(sessionId, transaction)
   }
 
   /**
-   * 写事务里再核对这次登录（M3-P1 审查 A1，ADR-017、ADR-018）：会话守卫在处理器之前判断过，之后到这一步还隔着上传正文、等锁、取连接，
+   * 读快照开场或写事务里再核对这次登录（M3-P1 审查 A1，ADR-017、ADR-018）：会话守卫在处理器之前判断过，之后到这一步还隔着上传正文、等锁、取连接，
    * 这期间退出、签发重置（撤销这个人的全部登录）、停用（同一事务撤销全部登录）、换令牌、别处修改密码都不经调用方锁的行，挡不住在途的请求。
    * 在调用方的事务里按主键查一条：撤销提交之后才做的核对一定看得到它，剩下"核对之后、提交之前"的几毫秒按"请求先于撤销"线性化。
    * 失效时 401 SESSION_EXPIRED，不动 Cookie（与只读快照的开场核对同一个说法），下一个请求经守卫处理。
    * 持有者自己的请求（documents 的申请、心跳、保存、交出、谢绝）与本机密钥的取用（M3-P6 设计 §3.5）共用这一个口径
    */
   async requireActive(sessionId: string, transaction: Transaction): Promise<void> {
-    if (!await this.isActive(sessionId, transaction))
-      throw new AppError('SESSION_EXPIRED')
+    const state = await this.repository.stateById(sessionId, transaction)
+    if (state?.active !== true)
+      throw new AppError('SESSION_EXPIRED', undefined, { details: expiredDetailsOf(state) })
   }
 
-  /**
-   * 这条令牌是不是因为换令牌（ROTATION_REASONS）而失效的（复验 N3）。会话守卫在会话无效时问它：是的话仍回"登录已过期"，
-   * 但不清除 Cookie——换令牌之前发出、之后才处理的请求，响应晚于新 Cookie 到达时，清除会把新的删掉，本人随即掉线。
-   * 退出、过期、停用、重置密码、修改密码时别的设备上的会话等其他原因照旧清除。令牌格式不对时不查库。
-   * 退出时在退出的事务里问（传入事务）：提交之后不再访问数据库（M2-P6 第 3 片复验）
-   */
-  async invalidatedByRotation(token: string, transaction?: Transaction): Promise<boolean> {
-    if (!isWellFormedSessionToken(token))
-      return false
-    return this.repository.revokedFor(sessionTokenDigest(token), ROTATION_REASONS, transaction)
+  /** 已经确认失效的请求在原事务内取详情，退出/改密提交或回滚后不再查库。 */
+  async expiredDetails(sessionId: string, transaction: Transaction): Promise<SessionExpiredDetails> {
+    return expiredDetailsOf(await this.repository.stateById(sessionId, transaction))
+  }
+
+  /** 守卫的失效响应与 Cookie 处理共用同一事实；replaced 不清除浏览器可能已有的新 Cookie。 */
+  async expiredDetailsForToken(token: string | undefined, transaction?: Transaction): Promise<SessionExpiredDetails> {
+    if (token === undefined || !isWellFormedSessionToken(token))
+      return { reason: 'expired' }
+    return expiredDetailsOf(await this.repository.stateByTokenHash(sessionTokenDigest(token), transaction))
   }
 
   /** 距上次记录超过 1 分钟时顺延空闲过期（不超过绝对过期） */
@@ -117,7 +119,7 @@ export class SessionService {
   /**
    * 修改密码时撤销本人的全部会话（M2-P1 设计 §3.5），调用方随后为当前页面新建一个（M2-P6 复核 B1：换掉令牌，偷到的 Cookie 随之失效）：
    * - 当前这条按 replaced 撤销：它换成了新的，发出修改密码的浏览器随即拿到新的 Cookie。同一个浏览器里（包括别的标签页，
-   *   它们用的是同一条会话）换令牌之前发出、之后才处理的请求不清除 Cookie（invalidatedByRotation）；
+   *   它们用的是同一条会话）换令牌之前发出、之后才处理的请求不清除 Cookie（reason=replaced）；
    * - 其余的按 password_changed 撤销：别的设备上的 Cookie 照常清除（M2-P6 复验 一般-3）。
    * 先当前、后其余：反过来的话，当前这条会被后者一并记成 password_changed。与重新登录"先作废原来的、再新建"同一个顺序，
    * 都在调用方的事务里，账户的行已经锁住（UsersService.replacePassword）；锁的顺序见 ADR-007。

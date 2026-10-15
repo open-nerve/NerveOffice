@@ -432,7 +432,7 @@ describe('US-M2-04 转移停用者的文档', () => {
     expect(submit).not.toHaveAccessibleDescription()
 
     // 结果的说明：容器一开始就在（空的），结果出来时往里填文字，读屏软件才会播报
-    const result = screen.getByRole('status')
+    const result = within(screen.getByRole('main')).getByRole('status')
     expect(result).toBeEmptyDOMElement()
     // WebKit 点按钮时不聚焦按钮：打开之前的焦点记不下来
     ;(document.activeElement as HTMLElement | null)?.blur()

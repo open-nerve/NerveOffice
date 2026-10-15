@@ -1,3 +1,4 @@
+import type { SessionExpiredDetails } from '@nerve-office/contracts'
 import type { ExecutionContext } from '@nestjs/common'
 import type { Reflector } from '@nestjs/core'
 import type { Request, Response } from 'express'
@@ -18,14 +19,16 @@ import { SessionGuard } from './session.guard.ts'
 const ALICE: User = { id: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d', username: 'alice', displayName: '爱丽丝', systemRole: 'member', status: 'active' }
 const SESSION: AuthenticatedSession = { id: '0199a2c4-2a3b-7c4d-9e5f-6a7b8c9d0e1f', userId: ALICE.id, stale: true }
 
-function setup(options: { isPublic?: boolean, adminOnly?: boolean, background?: boolean, session?: AuthenticatedSession, user?: User, rotated?: boolean } = {}) {
+function setup(options: { isPublic?: boolean, adminOnly?: boolean, background?: boolean, session?: AuthenticatedSession, user?: User, rotated?: boolean, expiration?: SessionExpiredDetails } = {}) {
   const metadata: Readonly<Record<string, boolean | undefined>> = { [PUBLIC_ROUTE]: options.isPublic, [SYSTEM_ADMIN_ROUTE]: options.adminOnly, [BACKGROUND_REQUEST_ROUTE]: options.background }
   const reflector = { getAllAndOverride: vi.fn((key: string) => metadata[key]) }
   const sessions = {
     authenticate: vi.fn(async (_token: string) => options.session),
     keepAlive: vi.fn(async (_session: AuthenticatedSession) => {}),
     revoke: vi.fn(async (_id: string, _reason: string) => {}),
-    invalidatedByRotation: vi.fn(async (_token: string) => options.rotated ?? false),
+    expiredDetailsForToken: vi.fn(async (_token: string): Promise<SessionExpiredDetails> => options.expiration ?? (options.session !== undefined && options.user === undefined
+      ? { reason: 'account_disabled', userId: ALICE.id }
+      : options.rotated === true ? { reason: 'replaced', userId: ALICE.id } : { reason: 'expired' })),
   }
   const users = { findActiveById: vi.fn(async (_id: string) => options.user) }
   const cookie = new SessionCookieSettings('http://127.0.0.1:4100', 60_000)
@@ -85,7 +88,7 @@ describe('SessionGuard', () => {
     expect(await codeOf(guard.canActivate(context))).toBe('SESSION_EXPIRED')
     expect(response.clearCookie).toHaveBeenCalledWith('nerve_session', expect.objectContaining({ httpOnly: true, path: '/' }))
     expect(sessions.authenticate).not.toHaveBeenCalled()
-    expect(sessions.invalidatedByRotation).not.toHaveBeenCalled()
+    expect(sessions.expiredDetailsForToken).not.toHaveBeenCalled()
   })
 
   it('会话无效（过期、撤销），不是因为换令牌：SESSION_EXPIRED 并清除', async () => {
@@ -94,7 +97,7 @@ describe('SessionGuard', () => {
     const { context, response } = exchange(`nerve_session=${token}`)
     expect(await codeOf(guard.canActivate(context))).toBe('SESSION_EXPIRED')
     expect(response.clearCookie).toHaveBeenCalledWith('nerve_session', expect.objectContaining({ httpOnly: true, path: '/' }))
-    expect(sessions.invalidatedByRotation).toHaveBeenCalledWith(token)
+    expect(sessions.expiredDetailsForToken).toHaveBeenCalledWith(token)
     expect(users.findActiveById).not.toHaveBeenCalled()
   })
 
@@ -103,12 +106,12 @@ describe('SessionGuard', () => {
     const { guard, sessions } = setup({ session: undefined, user: ALICE, rotated: true })
     const { context, response } = exchange(`nerve_session=${token}`)
     expect(await codeOf(guard.canActivate(context))).toBe('SESSION_EXPIRED')
-    expect(sessions.invalidatedByRotation).toHaveBeenCalledWith(token)
+    expect(sessions.expiredDetailsForToken).toHaveBeenCalledWith(token)
     expect(response.clearCookie).not.toHaveBeenCalled()
     expect(response.cookie).not.toHaveBeenCalled()
   })
 
-  it('会话有效但账户已不可用（停用或删除）：SESSION_EXPIRED 并清除；会话一并撤销、不顺延（审查 A1）；不问撤销的原因', async () => {
+  it('会话有效但账户已不可用（停用或删除）：SESSION_EXPIRED 并清除；会话一并撤销、不顺延（审查 A1）；错误详情取实际撤销原因', async () => {
     const { guard, users, sessions } = setup({ session: SESSION, user: undefined, rotated: true })
     const { context, response } = exchange(`nerve_session=${generateSessionToken()}`)
     expect(await codeOf(guard.canActivate(context))).toBe('SESSION_EXPIRED')
@@ -116,7 +119,7 @@ describe('SessionGuard', () => {
     expect(response.clearCookie).toHaveBeenCalled()
     expect(sessions.revoke).toHaveBeenCalledWith(SESSION.id, 'disabled')
     expect(sessions.keepAlive).not.toHaveBeenCalled()
-    expect(sessions.invalidatedByRotation).not.toHaveBeenCalled()
+    expect(sessions.expiredDetailsForToken).toHaveBeenCalled()
   })
 
   it('有效：挂上当前用户、会话与派生的 CSRF 令牌，请求日志带上 userId；身份（账户、认证过的会话、系统角色）记进请求级的记录（只读快照的开场核对用，M2 Codex 评审 CX1）', async () => {
@@ -128,7 +131,7 @@ describe('SessionGuard', () => {
     expect(sessions.authenticate).toHaveBeenCalledWith(token)
     expect(sessions.keepAlive).toHaveBeenCalledWith(SESSION)
     expect(sessions.revoke).not.toHaveBeenCalled()
-    expect(sessions.invalidatedByRotation).not.toHaveBeenCalled()
+    expect(sessions.expiredDetailsForToken).not.toHaveBeenCalled()
     expect(principalOf(request)).toEqual({ user: ALICE, sessionId: SESSION.id, csrfToken: csrfTokenFor(token) })
     expect(requestUserId(request)).toBe(ALICE.id)
     expect(logChild).toHaveBeenCalledWith({ userId: ALICE.id })

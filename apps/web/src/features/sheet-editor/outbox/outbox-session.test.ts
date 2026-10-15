@@ -2,15 +2,16 @@ import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { InFlightSave } from '../../../shared/outbox/draft-record.ts'
 import type { CaptureWritten, KeyChange, ObservedRemoveResult, ObserveResult, OpenedRecord, RegisterResult } from '../../../shared/outbox/draft-writer.ts'
 import type { LocalKeyKeeper, LocalKeyProblem } from '../../../shared/outbox/local-key.ts'
+import type { OutboxHost } from '../../../shared/outbox/outbox-host.ts'
 import type { PersistOutcome } from '../../../shared/outbox/storage-status.ts'
 import type { LeaseVerdict } from '../edit-lease.ts'
-import type { OutboxHost } from './outbox-host.ts'
 import type { OutboxSession, OutboxSessionOptions } from './outbox-session.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { CLIENT_INSTANCE_ID, DOCUMENT_ID, NOW, sampleMeta, USER_ID, WRITER_ID } from '../../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../../shared/outbox/draft-writer.ts'
-import { fakeLeaseClock, settle } from '../fake-lease-clock.test-support.ts'
+import { fakeLeaseClock, settle } from '../../../shared/outbox/fake-lease-clock.test-support.ts'
+import { testSessionPermit } from '../../../shared/outbox/session-fence.test-support.ts'
 import { prepareOutboxSession } from './outbox-session.ts'
 
 const DRAFT = { userId: USER_ID, documentId: DOCUMENT_ID }
@@ -29,6 +30,7 @@ function deferred<T>() {
 
 function fakeHost() {
   const writer = createDraftWriter({ store: fakeDraftStore().store, now: () => NOW })
+  const bind = vi.spyOn(writer, 'bindSession')
   const register = vi.spyOn(writer, 'register').mockResolvedValue(REGISTERED)
   const setKey = vi.spyOn(writer, 'setKey').mockResolvedValue(KEY_SET)
   const write = vi.spyOn(writer, 'write').mockResolvedValue({ kind: 'written', digest: 'digest', gzip: new Uint8Array([1]), mirror: { kind: 'off' } })
@@ -42,7 +44,7 @@ function fakeHost() {
   const dispose = vi.spyOn(writer, 'dispose')
   let broken = false
   const host: OutboxHost = { kind: 'worker', writer, broken: () => broken, dispose: () => writer.dispose() }
-  return { host, register, setKey, write, markInFlight, confirm, read, observe, adopt, seedDigest, remove, dispose, break: () => {
+  return { host, bind, register, setKey, write, markInFlight, confirm, read, observe, adopt, seedDigest, remove, dispose, break: () => {
     broken = true
   } }
 }
@@ -61,7 +63,7 @@ async function harness() {
   const confirm = vi.fn(async (): Promise<LeaseVerdict> => ({ kind: 'current' }))
   const persist = vi.fn(async (): Promise<PersistOutcome> => ({ kind: 'granted' }))
   const newWriterId = vi.fn(() => `${WRITER_ID}-${++writerSerial}`)
-  const options: OutboxSessionOptions = { enabled: true, key: DRAFT, writeEpoch: 3, newWriterId, keeper, confirm, host, persist, supported: () => true, still: () => alive }
+  const options: OutboxSessionOptions = { permit: testSessionPermit, enabled: true, key: DRAFT, writeEpoch: 3, newWriterId, keeper, confirm, host, persist, supported: () => true, still: () => alive }
   return {
     key,
     keeper,
@@ -1199,6 +1201,74 @@ describe('运行中的栅栏拒绝立即停用写入资格', () => {
     held.resolve(h.key)
     expect(await refreshed).toMatchObject({ kind: 'failed' })
     expect(h.local.setKey).toHaveBeenCalledTimes(1)
+    session.dispose()
+  })
+})
+
+describe('异步编辑准备不借后来登录的许可', () => {
+  it('缺少许可时停在内存状态，不取钥、不登记', async () => {
+    const h = await harness()
+    const session = h.start({ permit: () => undefined })
+    expect(await session.ready()).toMatchObject({ kind: 'memory', reason: 'session-invalid' })
+    expect(h.host).not.toHaveBeenCalled()
+    expect(h.ensure).not.toHaveBeenCalled()
+    expect(h.local.register).not.toHaveBeenCalled()
+    session.dispose()
+  })
+
+  it('准备开始即捕获许可；取钥期间换人不会重新读取许可 getter', async () => {
+    const h = await harness()
+    const original = { ...testSessionPermit() }
+    const expected = { ...original }
+    const getter = vi.fn(() => original)
+    const waiting = deferred<LocalKeyHandle | LocalKeyProblem>()
+    h.ensure.mockReturnValue(waiting.promise)
+    const session = h.start({ permit: getter })
+    original.generation = '0199b0c4-7d3e-7a3b-9c4e-000000000002'
+    h.local.bind.mockResolvedValue({ kind: 'session-invalid' })
+    waiting.resolve(h.key)
+    expect(await session.ready()).toMatchObject({ kind: 'memory', reason: 'session-invalid', problem: { kind: 'session-invalid' } })
+    expect(getter).toHaveBeenCalledTimes(1)
+    expect(h.local.bind).toHaveBeenCalledExactlyOnceWith(expected)
+    expect(h.local.setKey).not.toHaveBeenCalled()
+    expect(h.local.register).not.toHaveBeenCalled()
+    expect(h.local.dispose).toHaveBeenCalledTimes(1)
+    session.dispose()
+  })
+
+  it('已明确恢复的新一轮可以拿新许可，但各宿主只绑定各自开始时的一份', async () => {
+    const h = await harness()
+    let permit = testSessionPermit()
+    const old = { ...permit }
+    const session = h.start({ permit: () => permit })
+    expect((await session.ready()).kind).toBe('ready')
+    session.suspend()()
+    const next = fakeHost()
+    h.host.mockResolvedValue(next.host)
+    permit = { ...old, generation: '0199b0c4-7d3e-7a3b-9c4e-000000000002' }
+    expect((await session.resume()).kind).toBe('ready')
+    expect(h.local.bind).toHaveBeenCalledExactlyOnceWith(old)
+    expect(next.bind).toHaveBeenCalledExactlyOnceWith(permit)
+    expect(next.bind.mock.invocationCallOrder[0]).toBeLessThan(next.setKey.mock.invocationCallOrder[0] ?? 0)
+    session.dispose()
+  })
+
+  it('只读重开也沿用原准备的许可，不从新登录借资格', async () => {
+    const h = await harness()
+    let permit = testSessionPermit()
+    const old = { ...permit }
+    const session = h.start({ permit: () => permit })
+    expect((await session.ready()).kind).toBe('ready')
+    h.local.break()
+    permit = { ...old, generation: '0199b0c4-7d3e-7a3b-9c4e-000000000002' }
+    const next = fakeHost()
+    next.bind.mockResolvedValue({ kind: 'session-invalid' })
+    h.host.mockResolvedValue(next.host)
+    expect(await session.readRecovered()).toEqual({ kind: 'session-invalid' })
+    expect(next.bind).toHaveBeenCalledExactlyOnceWith(old)
+    expect(next.setKey).not.toHaveBeenCalled()
+    expect(next.read).not.toHaveBeenCalled()
+    expect(next.dispose).toHaveBeenCalledTimes(1)
     session.dispose()
   })
 })

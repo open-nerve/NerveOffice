@@ -4,7 +4,7 @@ import type { OpenCheckFailure } from '@nerve-office/contracts'
 import type { OpenCheck } from '../../editor/index.ts'
 import { OPEN_CHECK_FAILURES_MAX, openCheckReportSchema } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { PAGE_CLIENT_FORMAT } from './client-format.ts'
+import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { openCheckReportOf } from './open-check-report.ts'
 
 const CONTEXT = { revision: 7, access: 'edit', trigger: 'enter' } as const

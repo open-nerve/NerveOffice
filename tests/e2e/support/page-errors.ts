@@ -25,6 +25,27 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
 const WEBKIT_CANCELLED_LOAD = /^\/([^/\s]+)(?:\/\S*)? due to access control checks\.$/
 const WEBKIT_LOADERS = ['Fetch API cannot load', 'Cannot load'] as const
 
+/**
+ * OPFS File.arrayBuffer() 在整页跳转时被取消，WebKit 也会报告内部 Blob 的同类诊断（2026-10-15 原始 trace）。
+ * 应用的读取已有 catch；Playwright 在 blob: 后多跳过一字符，http(s) 的 h 丢失。只识别已观察到的加载器、
+ * HTTP(S) 同源 UUID 对象地址与精确后缀；真实的 Unhandled Promise Rejection、异源和未知地址仍算错误。
+ */
+const WEBKIT_CANCELLED_BLOB_LOAD = /^(ttps?:\/\/[^/\s]+\/[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}) due to access control checks\.$/
+
+function isCancelledSameOriginBlobLoad(error: Pick<Error, 'name' | 'message'>, pageUrl: string | undefined): boolean {
+  if (error.name !== 'Cannot load blob' || pageUrl === undefined || !URL.canParse(pageUrl))
+    return false
+  const page = new URL(pageUrl)
+  if (page.protocol !== 'http:' && page.protocol !== 'https:')
+    return false
+  const match = WEBKIT_CANCELLED_BLOB_LOAD.exec(error.message)
+  if (match === null || !URL.canParse(`h${match[1]}`))
+    return false
+  const source = new URL(`h${match[1]}`)
+  return source.origin === page.origin
+    && source.username === '' && source.password === '' && source.search === '' && source.hash === ''
+}
+
 /** WebKit 取消同源加载的诊断（见 WEBKIT_CANCELLED_LOAD）；不知道页面的地址时不排除 */
 function isCancelledSameOriginLoad(error: Pick<Error, 'name' | 'message'>, pageUrl: string | undefined): boolean {
   if (pageUrl === undefined || !URL.canParse(pageUrl))
@@ -41,7 +62,7 @@ function isCancelledSameOriginLoad(error: Pick<Error, 'name' | 'message'>, pageU
  * pageUrl 是报告时页面的地址，用来判断取消的加载是不是同源的
  */
 export function isBrowserNotice(error: Pick<Error, 'name' | 'message'>, pageUrl: string | undefined): boolean {
-  return RESIZE_OBSERVER_LOOP_NOTICE.test(error.message) || isCancelledSameOriginLoad(error, pageUrl)
+  return RESIZE_OBSERVER_LOOP_NOTICE.test(error.message) || isCancelledSameOriginLoad(error, pageUrl) || isCancelledSameOriginBlobLoad(error, pageUrl)
 }
 
 /**

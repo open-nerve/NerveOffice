@@ -1,6 +1,5 @@
 import type { CanActivate, ExecutionContext } from '@nestjs/common'
 import type { Request, Response } from 'express'
-import type { AuthenticatedSession } from './session.service.ts'
 import { Injectable } from '@nestjs/common'
 import { Reflector } from '@nestjs/core'
 import { BACKGROUND_REQUEST_ROUTE } from '../../shared/background-request.ts'
@@ -58,9 +57,10 @@ export class SessionGuard implements CanActivate {
       // 会话还在、账户却不可用（停用）：撤销它，不顺延，启用之后它也不能再用（M2-P1 审查 A1 的纵深防御）
       if (session !== undefined)
         await this.sessions.revoke(session.id, 'disabled')
-      if (!await this.rotatedAway(token, session))
+      const details = token === undefined ? { reason: 'expired' } as const : await this.sessions.expiredDetailsForToken(token)
+      if (details.reason !== 'replaced')
         this.cookie.clear(response)
-      throw new AppError('SESSION_EXPIRED')
+      throw new AppError('SESSION_EXPIRED', undefined, { details })
     }
     // 页面在后台定时发的请求不顺延空闲过期（DEF-043），之后的检查照旧
     if (this.reflector.getAllAndOverride<boolean | undefined>(BACKGROUND_REQUEST_ROUTE, [context.getHandler(), context.getClass()]) !== true)
@@ -72,13 +72,5 @@ export class SessionGuard implements CanActivate {
     if (this.reflector.getAllAndOverride<boolean | undefined>(SYSTEM_ADMIN_ROUTE, [context.getHandler(), context.getClass()]) === true && user.systemRole !== 'admin')
       throw new AppError('PERMISSION_DENIED')
     return true
-  }
-
-  /**
-   * 带来的令牌是不是因为换令牌而失效的（复验 N3）：只在找不到有效的会话时问（令牌格式不对、账户不可用时都不问）。
-   * 是的话这个浏览器多半已经拿到了新的 Cookie，不清除
-   */
-  private async rotatedAway(token: string | undefined, session: AuthenticatedSession | undefined): Promise<boolean> {
-    return token !== undefined && session === undefined && await this.sessions.invalidatedByRotation(token)
   }
 }

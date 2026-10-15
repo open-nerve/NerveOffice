@@ -1,8 +1,8 @@
-import type { CaptureSource } from './save-coordinator.ts'
-import type { CaptureEditor } from './snapshot-capture.ts'
 // 测试用：显式保存的捕获来源（保存的状态机的单元测试直接驱动上传，不经自动保存）。生产里立即上传的捕获由自动保存的 flush 给出
 // （autosave.ts：按下的这一刻提交单元格、等面板，轮到时等公式至多捕获的上限〔从按下算〕再捕获）
-import type { WorkingDraft } from './working-draft.ts'
+import type { WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
+import type { CaptureSource } from './save-coordinator.ts'
+import type { CaptureEditor } from './snapshot-capture.ts'
 import { AUTOSAVE_CAPTURE_MAX_MS } from '@nerve-office/contracts'
 import { captureSettled, settleInputs, takeSnapshot } from './snapshot-capture.ts'
 

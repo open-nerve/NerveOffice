@@ -4,16 +4,13 @@
 // 保存协议（M3-P3 设计 §3.5、§3.8）：保存、另存为副本、申请编辑权与心跳都带上本页的构建与数据格式（client-format.ts），
 // 保存与另存为副本另带"公式待更新"。打开自检（M3-P4 设计 §3.13）：失败的上报。
 // 请求编辑与交出（M3-P5 设计 §3.4、§3.6）：请求方的发出、续期（后台请求）与取消，持有者的交出与谢绝（带令牌）。
-import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckReport, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
+import type { AcquiredEditLease, DocumentDetail, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckReport, RenewedEditLease } from '@nerve-office/contracts'
 import type { AcquireOptions } from './edit-lease.ts'
-import type { ConflictCopyRequest } from './lost-copy.ts'
-import type { SaveRequest } from './save-coordinator.ts'
-import { acquiredEditLeaseSchema, createdDocumentSchema, documentDetailSchema, EDIT_LEASE_HEADER, editRequestOutcomeSchema, editStatusSchema, handedOverEditLeaseSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag, saveContentResponseSchema, SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
+import { acquiredEditLeaseSchema, documentDetailSchema, EDIT_LEASE_HEADER, editRequestOutcomeSchema, editStatusSchema, handedOverEditLeaseSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag } from '@nerve-office/contracts'
+import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { apiFetch, apiRequest, readJson, ResponseFormatError, serverTimeOf } from '../../shared/api/index.ts'
-import { clientFormatParams, PAGE_CLIENT_FORMAT } from './client-format.ts'
 
-/** 完整响应的时限（M4-P2 S2）：大快照允许更久；编辑权操作要尽早结束等待。 */
-const SNAPSHOT_REQUEST_TIMEOUT_MS = 60_000
+/** 编辑权操作要尽早结束等待（M4-P2 S2）。 */
 const LEASE_REQUEST_TIMEOUT_MS = 10_000
 
 /** 内容的原文（浏览器已按 Content-Encoding 解压）与它的修订号（ETag）：修订号是保存的基准。 */
@@ -29,12 +26,6 @@ export const CONTENT_UNCHANGED = 'unchanged'
 export interface FetchedEditStatus {
   readonly status: EditStatus
   readonly serverTime: number | undefined
-}
-
-/** 保存带上的编辑租约：令牌经请求头、代次经查询参数（M3-P1 设计 §3.4.4），出自同一次申请 */
-export interface LeaseCredentials {
-  readonly token: string
-  readonly writeEpoch: number
 }
 
 function documentPath(documentId: string): string {
@@ -85,16 +76,6 @@ export async function fetchEditStatus(documentId: string): Promise<FetchedEditSt
 }
 
 /**
- * 另存为副本（M3-P2 设计 §3.2）：上传本页捕获的快照（gzip，与保存同一个读取方式），服务端按它新建一份文档，给出新文档的详情
- * （与复制相同，带 replayed）。requestId 做幂等：结果未知之后用同一个重试只建一份。带上"公式待更新"与本页的构建与数据格式（M3-P3）
- */
-export async function saveConflictCopy(documentId: string, query: ConflictCopyRequest, compressed: Uint8Array<ArrayBuffer>): Promise<CreatedDocument> {
-  const search = new URLSearchParams({ requestId: query.requestId, title: query.title, formulasPending: String(query.formulasPending === true), ...clientFormatParams(query.format) })
-  const path = `${documentPath(documentId)}/conflict-copies?${search.toString()}`
-  return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`))
-}
-
-/**
  * 快照压缩成 gzip（CompressionStream，主线程；5 MiB 时阻塞接近 100 ms，放进 Worker 是 M4 发件箱的设计）。
  * 全程在内存的字节上做，不经 Blob：WebKit 读取 Blob 要经它的网络进程（离线时读不出来，测试工具也看不到这样的请求体）。
  */
@@ -116,34 +97,6 @@ export async function gzipText(text: string): Promise<Uint8Array<ArrayBuffer>> {
 export async function snapshotDigest(text: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
   return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
-/** 保存（带上编辑租约的代次与令牌、"公式待更新"、本页的构建与数据格式）：内容与当前相同时服务端回答 unchanged，照"已保存"处理 */
-export async function saveContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, lease: LeaseCredentials): Promise<SaveContentResponse> {
-  return putContent(documentId, request, compressed, lease.writeEpoch, lease.token)
-}
-
-/**
- * 恢复时只核对旧保存的回执（M4-P3）：原身份、代次、字节、基准、格式与公式标记不改，但不带租约令牌。
- * 服务端重放先于租约校验，已提交且仍可访问时返回原结果；未提交则不能借当前租约变成新保存。
- * 失败照原请求层抛出，网络/超时仍是未知结果；这里不申请租约、不换请求或隐式重试。
- */
-export async function replayContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, writeEpoch: number): Promise<SaveContentResponse> {
-  return putContent(documentId, request, compressed, writeEpoch)
-}
-
-async function putContent(documentId: string, request: SaveRequest, compressed: Uint8Array<ArrayBuffer>, writeEpoch: number, token?: string): Promise<SaveContentResponse> {
-  const query = new URLSearchParams({
-    baseRevision: String(request.baseRevision),
-    requestId: request.requestId,
-    clientInstanceId: request.clientInstanceId,
-    localSeq: String(request.localSeq),
-    writeEpoch: String(writeEpoch),
-    formulasPending: String(request.formulasPending),
-    ...clientFormatParams(request.format),
-  })
-  const path = `${contentPath(documentId)}?${query.toString()}`
-  return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'PUT', headers: token === undefined ? {} : leaseHeaders(token), body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, saveContentResponseSchema, `PUT ${contentPath(documentId)}`))
 }
 
 /**
@@ -226,3 +179,7 @@ export async function handOverEditLease(documentId: string, token: string, reque
   const path = `${leasePath(documentId)}/handover`
   return apiFetch(path, { timeoutMs: LEASE_REQUEST_TIMEOUT_MS, method: 'POST', headers: leaseHeaders(token), body: { contentType: 'application/json', data: JSON.stringify({ requestId }) }, keepalive: true }, async response => readJson(response, handedOverEditLeaseSchema, `POST ${path}`))
 }
+
+// 保持编辑器使用方的公开入口；平台草稿页直接依赖 SDK 无关的共享传输。
+export type { LeaseCredentials } from '../../shared/local-drafts/content-api.ts'
+export { replayContent, saveConflictCopy, saveContent } from '../../shared/local-drafts/content-api.ts'

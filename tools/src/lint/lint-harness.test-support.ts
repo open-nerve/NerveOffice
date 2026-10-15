@@ -23,6 +23,8 @@ export const PROBE_FILES = {
   sheetEditor: `apps/web/src/features/sheet-editor/${PROBE}.ts`,
   // 编辑器页里被引用的文件
   sheetEditorPart: `apps/web/src/features/sheet-editor/${PROBE}-part.ts`,
+  // P4：按需加载的无 SDK 恢复能力，验证它可以用存储、不能反向引用编辑器。
+  localDrafts: `apps/web/src/shared/local-drafts/${PROBE}.ts`,
 }
 
 export const WEB_FILE = 'apps/web/src/app/app.tsx'

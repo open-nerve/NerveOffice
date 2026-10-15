@@ -44,9 +44,9 @@
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 import type { EditInterruption, SnapshotRule } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
+import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
-import type { Incompatibility } from './client-format.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { CopyState, EditingNotice, IncomingRequest, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
 import type { EditRequestProgress } from './edit-request.ts'
@@ -62,6 +62,7 @@ import { ApiError, describeError, isAuthenticationError, isCsrfTokenError } from
 import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 import { formatClockTime, formatRecentClockTime } from '../../shared/lib/format.ts'
+import { LOCAL_DRAFTS_PATH } from '../../shared/lib/local-drafts-path.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
 import { focusIsLost } from '../../shared/lib/use-focus-hand-off.ts'
@@ -984,7 +985,8 @@ function SessionNotice({ view, editing }: { view: EditorPageView, editing: boole
     return (
       <Alert variant="destructive">
         <AlertDescription>
-          <p>{editing ? editorMessages.signedOut : editorMessages.signedOutReadOnly}</p>
+          <p>{view.sessionEndedReason === 'account_disabled' ? messages.auth.accountDisabled : editing ? editorMessages.signedOut : editorMessages.signedOutReadOnly}</p>
+          {view.sessionEndedReason === 'account_disabled' && editing && <p>{editorMessages.disabledMemory}</p>}
           <SessionCheckProblem problem={view.sessionProblem} />
           {/* 在新标签页登录：本页不离开，修改留着；那边登录之后，本页收到消息恢复 */}
           <a href={LOGIN_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline', size: 'sm', className: 'mt-2' })}>
@@ -1182,6 +1184,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               {back.label}
             </a>
             {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
+            <a href={LOCAL_DRAFTS_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'ghost', size: 'sm' })} aria-label={messages.auth.localDraftsNewTab}>{messages.auth.localDrafts}</a>
             <div className="ml-auto flex items-center gap-3">
               {/* 分享（M2-P5）：只在能分享时出现 */}
               {ready !== undefined && <EditorShareEntry available={available} page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}

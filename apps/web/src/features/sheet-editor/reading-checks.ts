@@ -4,7 +4,7 @@
 // 每一次检查都记着它发出时的轮次：立即读一次（checkNow）与停下（stop）都开始新的一轮，更早发出的那次回来时结果丢弃、也不再排下一次
 // （审查 A9：阅读时有一次检查在途，进入编辑又退出，回到阅读时立即读的那一次与它并行，它的持有者、能不能编辑已经过时）。
 // 所以同一时刻至多一个计时器，只有最新的那一次的结果有效。
-import type { LeaseClock } from './edit-lease.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { FetchedEditStatus } from './editor-api.ts'
 
 /** 阅读时读编辑状态的间隔（M3 总设计 §2.1、US-M3-05）：30 秒 */

@@ -28,8 +28,11 @@ const LEAVE_TIMEOUT_MS = 30_000
 export async function startSelftest(page: Page, step: SelftestStep): Promise<string[]> {
   const delivered: string[] = []
   await page.route(`${selftestCollector()}/**`, async (route) => {
-    delivered.push(route.request().url())
+    const url = route.request().url()
     await route.fulfill({ status: 200, contentType: 'text/plain; charset=utf-8', body: '自检的结果已收到' })
+    // 收到请求还不代表页面已离开编辑器；下一步必须等本次导航完成，避免两个 goto 互相打断。
+    await page.waitForURL(url, { timeout: LEAVE_TIMEOUT_MS })
+    delivered.push(url)
   })
   await page.goto(selftestPageUrl(e2eOrigin(), step, `${selftestCollector()}/report?step=${step.id}`))
   return delivered

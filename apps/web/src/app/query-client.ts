@@ -1,6 +1,7 @@
 import type { ExpiredReason } from '../shared/lib/login-path.ts'
 import { MutationCache, QueryCache, QueryClient } from '@tanstack/react-query'
-import { isAuthenticationError, isCsrfTokenError, isPermissionDeniedError } from '../shared/api/index.ts'
+import { SESSION_QUERY_KEY } from '../features/auth/index.ts'
+import { disabledSessionUserId, isAuthenticationError, isCsrfTokenError, isPermissionDeniedError } from '../shared/api/index.ts'
 import { QUERY_CLIENT_DEFAULTS } from '../shared/api/query-defaults.ts'
 
 /** 请求缓存从请求结果里看出的会话变化，由 app/runtime.ts 统一处理。 */
@@ -41,7 +42,7 @@ function systemAdminOnly(meta: Meta): boolean {
 
 /**
  * 这个变更开始（登录）、换掉（修改密码）还是结束（退出）会话；元数据由 features/auth 的 STARTS_SESSION、RENEWS_SESSION、
- * ENDS_SESSION 给出
+ * 显式的 session 元数据给出；退出清理页直接持有协调结果，不经全局变更事件跳转
  */
 function sessionTransition(meta: Meta): 'starts' | 'renews' | 'ends' | undefined {
   const transition = meta?.session
@@ -54,7 +55,9 @@ function sessionTransition(meta: Meta): 'starts' | 'renews' | 'ends' | undefined
  * （features/auth 的 OWN_RESET_AFTER_UNKNOWN，M2-P6 复核 S1）；停用自己的结果未知之后再试时是 account_disabled
  * （features/auth 的 OWN_DISABLE_AFTER_UNKNOWN，第五批 G1）
  */
-function expiredReason(meta: Meta): ExpiredReason {
+function expiredReason(meta: Meta, error: unknown): ExpiredReason {
+  if (disabledSessionUserId(error) !== undefined)
+    return 'account_disabled_confirmed'
   const reason = meta?.expiredReason
   return reason === 'password_changed' || reason === 'password_reset' || reason === 'account_disabled' ? reason : 'expired'
 }
@@ -139,11 +142,11 @@ export function createQueryClient(events: SessionEvents): QueryClient {
     if (isCsrfTokenError(error) || (isPermissionDeniedError(error) && systemAdminOnly(meta)))
       events.sessionStale()
     else if (isAuthenticationError(error) && !handlesAuthentication(meta) && error.code === 'SESSION_EXPIRED')
-      events.sessionExpired(expiredReason(meta))
+      events.sessionExpired(expiredReason(meta, error))
     else if (isAuthenticationError(error) && !handlesAuthentication(meta))
       events.unauthenticated()
   }
-  return new QueryClient({
+  const client = new QueryClient({
     queryCache: new QueryCache({ onSuccess: () => events.requestSucceeded(), onError: (error, query) => onRequestError(error, query.meta) }),
     mutationCache: new MutationCache({
       onSuccess: (_data, _variables, _context, mutation) => {
@@ -165,4 +168,7 @@ export function createQueryClient(events: SessionEvents): QueryClient {
     // 重试与断网时的行为与编辑器页给分享对话框用的请求缓存相同（shared/api/query-defaults.ts）
     defaultOptions: QUERY_CLIENT_DEFAULTS,
   })
+  // 接受邀请/登录可能先写缓存、后挂查询；这条路径同样要保留经过确认的原会话响应。
+  client.setQueryDefaults(SESSION_QUERY_KEY, { structuralSharing: false })
+  return client
 }

@@ -2,7 +2,7 @@
 // 分开说，"重试"整页重新加载；不自动整页重新加载（页面上可能有用户正在做的事），页面的其余部分照常可用；下载与判断中读屏读得到。
 // 分享对话框的模块在这个文件里一律加载失败（相当于断网或者旧的分块已经不在）。路由级的见 route-chunk.test.tsx。
 import type { DocumentDetail, DocumentSummary, SessionResponse } from '@nerve-office/contracts'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { installFakeApi, json } from '../shared/testing/fake-api.test-support.ts'
 import { documentsKey, spaceRoutes } from '../shared/testing/spaces.test-support.ts'
@@ -115,7 +115,7 @@ describe('US-M2-10 分享对话框的代码没能下载下来（组件级的按�
     }) })
     renderApp('/')
     const entry = await share()
-    await waitFor(() => expect(screen.getByRole('status', { name: '' })).toHaveTextContent('正在打开分享…'))
+    await waitFor(() => expect(within(screen.getByRole('main')).getByRole('status', { name: '' })).toHaveTextContent('正在打开分享…'))
     expect(entry).toHaveAttribute('aria-busy', 'true')
     expect(entry).toHaveAttribute('aria-disabled', 'true')
     answer(entryPage('/assets/index-x.js')())

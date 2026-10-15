@@ -1,13 +1,14 @@
 import type { SaveContentResponse } from '@nerve-office/contracts'
+import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
 import type { AutosaveEditor, AutosaveEvent, AutosaveLimits, AutosavePage, AutosaveTuning, UploadState } from './autosave.ts'
-import type { SaveEditor, SaveRequest } from './save-coordinator.ts'
+import type { SaveEditor } from './save-coordinator.ts'
 import { AUTOSAVE_RETRY_AFTER_MAX_MS } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { fakeWorkingDraft, requestWithSnapshot } from '../../shared/local-drafts/working-draft.test-support.ts'
+import { fakeLeaseClock } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createAutosave, decideUpload, DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
-import { fakeLeaseClock } from './fake-lease-clock.test-support.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
-import { fakeWorkingDraft, requestWithSnapshot } from './working-draft.test-support.ts'
 
 const ME = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 /** 假时钟的起点（毫秒） */

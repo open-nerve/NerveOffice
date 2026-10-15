@@ -147,7 +147,7 @@ export function decideRemove(existing: ExistingDraft | undefined, expectedSeq?: 
 
 /** 超过保留期：恰好 14 天不算；时刻在将来（时钟往回拨过）不算 */
 function pastRetention(at: number, now: number): boolean {
-  return now - at > LOCAL_DRAFT_RETENTION_MS
+  return Number.isSafeInteger(now) && now >= 0 && now - at > LOCAL_DRAFT_RETENTION_MS
 }
 
 /** 比对镜像留下的提示超过保留期（按留下的时刻）：保留期清理时删掉（M4-P1 设计 §3.8） */
@@ -179,9 +179,8 @@ export function canReplayAsSent(meta: Pick<DraftMeta, 'draftSeq' | 'inFlight'>, 
 }
 
 /**
- * 保留期清理时这条草稿要不要删（§3.4.7）：按记录里读得出的更新时间（draft-record.ts 的 readableUpdatedAt），不论格式、不论属于谁
- * （别人的本来就解不开）——形状不对的、更新的页面写的，读得出更新时间并且超过 14 天同样删（部署回滚之后旧页面永远认不出新格式的记录，
- * 计划书 §7.6：单条记录最长保留 14 天）；读不出才留着，由 P3 打开文档时、P4 本机草稿页发现之后说明并删
+ * 可识别格式的保留期：按读得出的更新时间，不论属于谁；调用方先排除较新格式（旧页面不能解释其时间含义）。
+ * 当前格式形状损坏但时间可判断的仍清理；无法判断时间的保留，由恢复流程核对。
  */
 export function shouldPurgeDraft(updatedAt: number | undefined, now: number): boolean {
   return updatedAt !== undefined && pastRetention(updatedAt, now)

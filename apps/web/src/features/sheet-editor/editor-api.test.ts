@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
-import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { acquireEditLease, cancelEditRequest, CONTENT_UNCHANGED, declineEditRequest, fetchContent, fetchContentIfChanged, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, saveConflictCopy, saveContent, sendEditRequest, snapshotDigest } from './editor-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'

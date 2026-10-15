@@ -257,6 +257,11 @@ export class EditLeasesRepository {
     return row
   }
 
+  /** 草稿页批量观察租约；有效性、旧代次的续上机会和预留仍交给既有规则判断。 */
+  async findByDocuments(ids: readonly string[], transaction: Transaction): Promise<ObservedEditLease[]> {
+    return executorOf(this.db, transaction).select(COLUMNS).from(l).where(inIdArray(l.documentId, ids))
+  }
+
   /**
    * 只锁这份文档的租约行（FOR UPDATE），没有时为 undefined：心跳与请求编辑（发出、续期、取消、谢绝）用——它们都不让租约失效（见类的注释）。
    * 要让租约失效的申请、释放与交出用 lockUnder，先锁文档行

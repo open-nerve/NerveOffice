@@ -25,7 +25,7 @@
 //   （setActive(false)）也清零——会话问题是真的，回到本人时立即续期（复核 D1）；
 // - 续期得到不能编辑了（403）、读不到了（404）就结束（状态机按原因说明），别的失败（网络、5xx、回包读不出来）下一次照常再试。
 import type { EditRequestOutcome, UserSummary } from '@nerve-office/contracts'
-import type { LeaseClock } from './edit-lease.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { IssuedRequestMarker, MineRequest } from './issued-request.ts'
 import type { PageVisibility } from './reading-checks.ts'

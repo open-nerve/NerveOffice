@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createConnectionState } from '../../shared/lib/connection-state.ts'
 import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
+import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { deferred } from '../../shared/outbox/outbox-lock.test-support.ts'
 import { disposeSessions, DOCUMENT, editorFixture, fixture, INITIAL, leaseFixture, localDrafts, prepare } from './editing-session.test-support.ts'
-import { settle } from './fake-lease-clock.test-support.ts'
 
 afterEach(disposeSessions)
 

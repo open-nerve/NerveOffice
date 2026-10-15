@@ -5,15 +5,16 @@ import type { EditingSessionEditor, EditingSessionOptions } from './editing-sess
 import { vi } from 'vitest'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
+import { fakeLeaseClock } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
+import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
 import { createEditingSession } from './editing-session.ts'
-import { fakeLeaseClock } from './fake-lease-clock.test-support.ts'
 import { fakeLeaseServer } from './lease-server.test-support.ts'
 import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { sameBrowserFor } from './same-browser.ts'
 
-export const USER = { id: 'user-1', username: 'amy', displayName: '艾米' }
+export const USER = { id: '0199b0c4-7d3e-7a3b-9c4e-00000000000a', username: 'amy', displayName: '艾米' }
 export const DOCUMENT = 'document-1'
 export const SAVED = { revision: 4, savedAt: '2026-10-10T03:00:00.000Z', unchanged: false }
 const cleanup: (() => void)[] = []
@@ -155,5 +156,5 @@ export async function localDrafts() {
       writer.dispose()
     } }
   })
-  return { store, host, options: { enabled: () => true, keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) } }
+  return { store, host, options: { permit: () => testSessionPermit(USER.id), enabled: () => true, keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) } }
 }

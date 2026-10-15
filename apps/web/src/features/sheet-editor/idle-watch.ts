@@ -6,7 +6,7 @@
 //   通知里，同步）立即判断。隐藏期间不会有操作，这一刻的"最后一次操作"就是隐藏之前的那一次：回来时的第一下鼠标移动还没到，不会把它冲掉
 //   （之后照样停在暂停里的计时器恢复时再到点，这时已经交出或者重排过了，不会交出两次）；
 // - "有操作"由页面记下（edit-lease.ts 的 trackActivity：只认可信事件，零位移的移动不算）。
-import type { LeaseClock } from './edit-lease.ts'
+import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { PageVisibility } from './reading-checks.ts'
 
 export interface IdleWatchOptions {

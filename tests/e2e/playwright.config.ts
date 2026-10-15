@@ -84,7 +84,14 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    ...browsers.map(name => ({ name, use: BROWSERS[name], testIgnore: [RESTART_SPECS, CRASH_SPECS] })),
+    ...browsers.map(name => ({
+      name,
+      use: BROWSERS[name],
+      testIgnore: [RESTART_SPECS, CRASH_SPECS],
+      // macOS 的独立持久资料目录仍共享原生 OPFS 根。跨进程删目录与 IDB 配额遍历相撞会让 NetworkProcess
+      // 原生崩溃；命名空间只隔离数据，不能隔离遍历。独立用例排队，用例内的多页/多设备并发仍照常执行。
+      ...(process.platform === 'darwin' && name === 'webkit' ? { workers: 1 } : {}),
+    })),
     ...crashProjects,
     // 只跑重启用例：--project restart --no-deps。命令行的 --grep 不作用于依赖的浏览器项目：它们照样全部执行。
     // 重复运行要加 --workers 1：--repeat-each 的副本会分到几个工作进程并行，互相强制结束同一个后端（复验 RB5）

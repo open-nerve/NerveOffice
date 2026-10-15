@@ -1,4 +1,4 @@
-import type { SaveRequest } from '../save-coordinator.ts'
+import type { SaveRequest } from '../../../shared/local-drafts/save-request.ts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { NetworkError, ResponseFormatError, setCsrfToken } from '../../../shared/api/index.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../../../shared/testing/fake-api.test-support.ts'

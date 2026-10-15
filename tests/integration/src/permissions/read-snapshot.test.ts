@@ -18,7 +18,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import zlib from 'node:zlib'
 import { TransactionRunner } from '@nerve-office/api'
 import { DocumentContentsRepository, DocumentsRepository } from '@nerve-office/api/testing'
-import { errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { documentDraftFactsResponseSchema, errorResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -137,6 +137,31 @@ async function expectNoLaterContent(response: Response, marker: string): Promise
 }
 
 describe('判断完权限、读数据之前撤权：在途的读请求不带出撤权之后的数据（M2 Codex 评审 CX1）', () => {
+  it('批量草稿事实快照开始后撤销授权、改名并保存：不混入撤权后的标题或修订', async () => {
+    const { account: viewer, session } = await newPerson()
+    const document = await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '批量草稿：撤权前' })
+    expect((await asUser(app.baseUrl, ownerSession, `/api/documents/${document.id}/grants/${viewer.id}`, { method: 'PUT', body: { role: 'viewer' } })).status).toBe(200)
+    const absent = randomUUID()
+    const path = `/api/documents/draft-facts?ids=${document.id},${absent}`
+    const marker = `批量草稿：撤权后 ${randomUUID()}`
+    const response = await whilePaused(app.runtime.get(DocumentsRepository), 'findManyWithGrants', (userId, ids) => userId === viewer.id && Array.isArray(ids) && ids[0] === document.id, async () => asUser(app.baseUrl, session, path), async () => {
+      expect((await asUser(app.baseUrl, ownerSession, `/api/documents/${document.id}/grants/${viewer.id}`, { method: 'DELETE' })).status).toBe(204)
+      const fresh = await asUser(app.baseUrl, session, path)
+      expect(fresh.status).toBe(200)
+      expect(documentDraftFactsResponseSchema.parse(await fresh.json())).toEqual({ items: [{ id: document.id, status: 'unavailable' }, { id: absent, status: 'unavailable' }] })
+      expect((await asUser(app.baseUrl, ownerSession, `/api/documents/${document.id}`, { method: 'PATCH', body: { title: marker } })).status).toBe(200)
+      expect((await saveMarker(document.id, document.unitId, marker)).status).toBe(200)
+      const latest = await asUser(app.baseUrl, ownerSession, path)
+      expect(latest.status).toBe(200)
+      expect(documentDraftFactsResponseSchema.parse(await latest.json()).items[0]).toMatchObject({ title: marker, revision: 2 })
+    })
+    expect(response.status).toBe(200)
+    expect(documentDraftFactsResponseSchema.parse(await response.json())).toEqual({ items: [
+      { status: 'accessible', id: document.id, title: '批量草稿：撤权前', type: 'sheet', canEdit: false, revision: 1, revisionSource: null, occupied: false },
+      { status: 'unavailable', id: absent },
+    ] })
+  })
+
   it('读正文时被取消单独授权，所有者随即保存：拿到的是取消之前那一刻的内容（修订号 1），或者被拒绝', async () => {
     const { account: viewer, session } = await newPerson()
     const document = await seedDocument(database, { spaceId: owner.personalSpaceId, createdBy: owner.id, title: '快照：单独授权' })
@@ -201,10 +226,10 @@ describe('守卫之后、快照之前撤权：开场核对在快照里再查一�
     return whilePaused(app.runtime.get(TransactionRunner), 'readSnapshot', () => true, request, change)
   }
 
-  async function errorCodeOf(response: Response): Promise<{ status: number, code: string | undefined, body: string }> {
+  async function errorCodeOf(response: Response): Promise<{ status: number, code: string | undefined, body: string, details: unknown }> {
     const body = await response.text()
     const parsed = errorResponseSchema.safeParse(body === '' ? undefined : JSON.parse(body))
-    return { status: response.status, code: parsed.success ? parsed.data.error.code : undefined, body }
+    return { status: response.status, code: parsed.success ? parsed.data.error.code : undefined, body, details: parsed.success ? parsed.data.error.details : undefined }
   }
 
   it('读正文时账户被停用，所有者随即保存（授权还在）：登录已过期（401 SESSION_EXPIRED），不返回停用之后保存的内容', async () => {
@@ -221,6 +246,7 @@ describe('守卫之后、快照之前撤权：开场核对在快照里再查一�
     const outcome = await errorCodeOf(response)
     expect(outcome.body.includes(marker), '响应里有停用之后才保存的内容').toBe(false)
     expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
+    expect(outcome.details).toEqual({ reason: 'account_disabled', userId: viewer.id })
   })
 
   /** 账户的状态（直接查库）：撤销会话的用例据此自证账户仍然有效，拒绝只能来自会话的核对 */
@@ -243,6 +269,7 @@ describe('守卫之后、快照之前撤权：开场核对在快照里再查一�
     const outcome = await errorCodeOf(response)
     expect(outcome.body.includes(marker), '响应里有撤销之后才保存的内容').toBe(false)
     expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
+    expect(outcome.details).toEqual({ reason: 'password_reset', userId: viewer.id })
   })
 
   it('读正文时本人退出了这条会话（同一个 Cookie），所有者随即保存：401 SESSION_EXPIRED，不返回退出之后保存的内容', async () => {
@@ -259,6 +286,7 @@ describe('守卫之后、快照之前撤权：开场核对在快照里再查一�
     const outcome = await errorCodeOf(response)
     expect(outcome.body.includes(marker), '响应里有退出之后才保存的内容').toBe(false)
     expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
+    expect(outcome.details).toEqual({ reason: 'logout', userId: viewer.id })
   })
 
   /** 这条会话在库里按 Cookie 的摘要找（库里只存摘要） */
@@ -299,6 +327,7 @@ describe('守卫之后、快照之前撤权：开场核对在快照里再查一�
     const outcome = await errorCodeOf(response)
     expect(outcome.body.includes(marker), '响应里有过期之后才保存的内容').toBe(false)
     expect([outcome.status, outcome.code]).toEqual([401, 'SESSION_EXPIRED'])
+    expect(outcome.details).toEqual({ reason: 'expired', userId: viewer.id })
   })
 
   it('管理界面读账户时被取消系统管理员：没有权限（403 PERMISSION_DENIED），不返回取消之后的数据', async () => {

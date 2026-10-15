@@ -1,13 +1,14 @@
+import type { WorkingDraft } from '../../../shared/local-drafts/working-draft.ts'
 import type { LocalKeyHandle } from '../../../shared/outbox/draft-codec.ts'
 import type { LocalKeyKeeper } from '../../../shared/outbox/local-key.ts'
-import type { WorkingDraft } from '../working-draft.ts'
-import type { OutboxHost } from './outbox-host.ts'
+import type { OutboxHost } from '../../../shared/outbox/outbox-host.ts'
 import { describe, expect, it, vi } from 'vitest'
+import { createMemoryWorkingDraft } from '../../../shared/local-drafts/memory-working-draft.ts'
 import { gunzipBytes } from '../../../shared/outbox/draft-codec.ts'
 import { NOW } from '../../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../../shared/outbox/draft-writer.ts'
-import { createMemoryWorkingDraft } from '../memory-working-draft.ts'
+import { testSessionPermit } from '../../../shared/outbox/session-fence.test-support.ts'
 import { prepareOutboxSession } from './outbox-session.ts'
 import { DRAFT_KEY, DRAFT_OPTIONS, newKey } from './persistent-working-draft.test-support.ts'
 import { createPersistentWorkingDraft } from './persistent-working-draft.ts'
@@ -43,7 +44,7 @@ async function recovery(enabled = true) {
   const writer = createDraftWriter({ store: fake.store, now: () => NOW + 1 })
   const hostValue: OutboxHost = { kind: 'in-process', writer, broken: () => false, dispose: () => writer.dispose() }
   const host = vi.fn(async () => hostValue)
-  const session = prepareOutboxSession({ enabled, recoverExisting: true, key: DRAFT_KEY, writeEpoch: 3, newWriterId: () => 'recovery-writer', keeper, confirm: async () => ({ kind: 'current' }), host, persist: async () => ({ kind: 'denied' }), supported: () => true, still: () => true })
+  const session = prepareOutboxSession({ permit: testSessionPermit, enabled, recoverExisting: true, key: DRAFT_KEY, writeEpoch: 3, newWriterId: () => 'recovery-writer', keeper, confirm: async () => ({ kind: 'current' }), host, persist: async () => ({ kind: 'denied' }), supported: () => true, still: () => true })
   expect(await session.ready()).toMatchObject({ kind: 'memory', reason: enabled ? 'existing-draft' : 'disabled' })
   return { fake, key, old, writer, host, session, options: { ...DRAFT_OPTIONS, baseRevision: 8, initialDraftSeq: 0, initialCapture: INITIAL, key: DRAFT_KEY, session } }
 }

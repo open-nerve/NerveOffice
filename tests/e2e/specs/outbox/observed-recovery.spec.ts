@@ -167,7 +167,7 @@ test.describe('观察之后的恢复动作', { tag: '@test-build' }, () => {
       expect(registered.lastDraftSeq).toBe(order === 'adopt-first' ? 42 : 41)
       const stored = outcomeOf(await probe(page, 'read', key), 'draft')
       expect(stored.opened).toEqual({ kind: 'opened', content: contentOf(order === 'adopt-first' ? adopter : writer, order === 'adopt-first' ? 42 : 41) })
-      expect((await probe(page, 'transactions'))[0]).toEqual({ stores: ['drafts', 'writers'], mode: 'readwrite', durability: 'strict' })
+      expect((await probe(page, 'transactions'))[0]).toEqual({ stores: ['drafts', 'writers', 'sessions'], mode: 'readwrite', durability: 'strict' })
     })
   }
 
@@ -202,7 +202,7 @@ test.describe('观察之后的恢复动作', { tag: '@test-build' }, () => {
     await probeDatabase(page, 'putRaw', 'notices', { ...key, kind: 'restored', at: NOW })
     await probe(page, 'recordTransactions')
     const before = await observe(page, key)
-    expect((await probe(page, 'transactions'))[0]).toEqual({ stores: ['drafts', 'writers', 'notices'], mode: 'readonly', durability: undefined })
+    expect((await probe(page, 'transactions'))[0]).toEqual({ stores: ['drafts', 'writers', 'notices', 'sessions'], mode: 'readonly', durability: undefined })
     const notice = { ...key, kind: 'lost', at: NOW + 1 }
     await probeDatabase(page, 'putRaw', 'notices', notice)
     expect(await probe(page, 'removeObserved', before.observation, NOW + 2)).toEqual({ kind: 'removed' })
@@ -210,7 +210,7 @@ test.describe('观察之后的恢复动作', { tag: '@test-build' }, () => {
     expect(await probeDatabase(page, 'getRaw', 'writers', key)).toMatchObject({ lastDraftSeq: 41, writerId: 'retired', writeEpoch: writer.writeEpoch, registeredAt: NOW + 2 })
     expect(await probeDatabase(page, 'getRaw', 'notices', key)).toEqual(notice)
     expect(await probe(page, 'write', draftFor(key, writer, 42))).toEqual({ kind: 'fenced', reason: 'not-writer' })
-    expect(await probe(page, 'transactions')).toContainEqual({ stores: ['drafts', 'writers', 'notices'], mode: 'readwrite', durability: 'strict' })
+    expect(await probe(page, 'transactions')).toContainEqual({ stores: ['drafts', 'writers', 'notices', 'sessions'], mode: 'readwrite', durability: 'strict' })
     expect(outcomeOf(await register(page, key, writerOf(4)), 'registered').lastDraftSeq).toBe(41)
   })
 

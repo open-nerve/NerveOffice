@@ -1,6 +1,11 @@
 import type { DraftKey } from './draft-record.ts'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { DOCUMENT_ID, NOW, sampleStoredDraft, sampleWriter, USER_ID } from './draft-record.test-support.ts'
+import { fakeDraftStore } from './draft-store.test-support.ts'
+import { createLocalCleanup } from './local-cleanup.ts'
 import { MIRROR_ROOT_NAME, opfsMirrorDirectory } from './mirror-directory.ts'
+import { testCleanupPermit, testCleanupSessions } from './session-fence.test-support.ts'
+import { RETIRED_WRITER_ID } from './writer-fence.ts'
 
 // OPFS 的一层（审查 B4）：根目录注入一棵内存里的假句柄树——找目录与文件、建、同步访问句柄、getFile、列出、删，以及浏览器会抛出的几种错误。
 // 浏览器里的行为（Chromium 系与 WebKit）另由镜像的浏览器层用例核对
@@ -215,7 +220,7 @@ describe('打开两个槽位：先不带 create 找，找不到才建；拿到�
   })
 
   it('拿句柄时出错：写满、被策略禁止、别的错误各自归类，已拿到的放开；文件句柄没有同步访问（不是专用 Worker）：unsupported', async () => {
-    for (const [name, expected] of [['QuotaExceededError', { kind: 'quota' }], ['SecurityError', { kind: 'unsupported' }], ['UnknownError', { kind: 'failed' }]] as const) {
+    for (const [name, expected] of [['QuotaExceededError', { kind: 'quota' }], ['SecurityError', { kind: 'failed' }], ['UnknownError', { kind: 'failed' }]] as const) {
       const { root, mirror } = tree()
       const a = file()
       const b = file()
@@ -231,15 +236,15 @@ describe('打开两个槽位：先不带 create 找，找不到才建；拿到�
     expect(a.locked).toBe(false)
   })
 
-  it('找目录时出错：被策略禁止是 unsupported，别的照原样；没有 OPFS（拿不到根目录、根目录拿不到）一律 unsupported', async () => {
+  it('找目录时被策略禁止是 failed；只有 API 缺失才是 unsupported，不能据访问失败证明不存在', async () => {
     const { root, mirror } = tree()
     root.failLookup = 'SecurityError'
-    expect(await mirror.openSlots(KEY, true)).toEqual({ kind: 'unsupported' })
+    expect(await mirror.openSlots(KEY, true)).toMatchObject({ kind: 'failed', error: { name: 'SecurityError' } })
     root.failLookup = 'NoModificationAllowedError'
     expect(await mirror.openSlots(KEY, true)).toEqual({ kind: 'busy' })
     root.failLookup = 'TypeError'
     expect(await mirror.openSlots(KEY, true)).toMatchObject({ kind: 'failed' })
-    for (const unavailable of [opfsMirrorDirectory(() => undefined), opfsMirrorDirectory(async () => Promise.reject(domError('UnknownError')))]) {
+    for (const unavailable of [opfsMirrorDirectory(() => undefined)]) {
       expect(await unavailable.openSlots(KEY, true)).toEqual({ kind: 'unsupported' })
       expect(await unavailable.listUsers()).toEqual({ kind: 'unsupported' })
       expect(await unavailable.listDocuments('user-1')).toEqual({ kind: 'unsupported' })
@@ -248,6 +253,101 @@ describe('打开两个槽位：先不带 create 找，找不到才建；拿到�
       expect(await unavailable.removeUser('user-1')).toEqual({ kind: 'unsupported' })
       expect(await unavailable.removeDocument(KEY)).toEqual({ kind: 'unsupported' })
     }
+  })
+
+  it.each(['UnknownError', 'SecurityError', 'NotFoundError'])('根目录 %s 只证明读取失败，任何接口都不能推断没有镜像', async (name) => {
+    const error = domError(name)
+    for (const root of [async () => Promise.reject(error), () => {
+      throw error
+    }]) {
+      const mirror = opfsMirrorDirectory(root)
+      const failed = { kind: 'failed', error }
+      expect(await mirror.openSlots(KEY, true)).toEqual(failed)
+      expect(await mirror.openSlots(KEY, false)).toEqual(failed)
+      expect(await mirror.listUsers()).toEqual(failed)
+      expect(await mirror.listDocuments(KEY.userId)).toEqual(failed)
+      expect(await mirror.slotFiles(KEY)).toEqual(failed)
+      expect(await mirror.readSlots(KEY)).toEqual(failed)
+      expect(await mirror.removeUser(KEY.userId)).toEqual(failed)
+      expect(await mirror.removeDocument(KEY)).toEqual(failed)
+    }
+  })
+
+  it('子目录 SecurityError 同样不能折成 unsupported，读取/枚举/删除均保留不确定事实', async () => {
+    const { root, mirror } = tree()
+    putDocument(root, KEY, { a: file(new Uint8Array([1, 2, 3])) })
+    root.failLookup = 'SecurityError'
+    const failed = { kind: 'failed', error: { name: 'SecurityError' } }
+    expect(await mirror.listUsers()).toMatchObject(failed)
+    expect(await mirror.listDocuments(KEY.userId)).toMatchObject(failed)
+    expect(await mirror.slotFiles(KEY)).toMatchObject(failed)
+    expect(await mirror.readSlots(KEY)).toMatchObject(failed)
+    expect(await mirror.removeUser(KEY.userId)).toMatchObject(failed)
+    expect(await mirror.removeDocument(KEY)).toMatchObject(failed)
+    delete root.failLookup
+    expect(await mirror.readSlots(KEY)).toMatchObject({ kind: 'bytes', files: [new Uint8Array([1, 2, 3]), undefined] })
+  })
+})
+
+describe('真实目录分类进入完整清理与保留期', () => {
+  const key = { userId: USER_ID, documentId: DOCUMENT_ID }
+
+  function cleanupTree() {
+    const t = tree()
+    const store = fakeDraftStore()
+    let fault: string | undefined
+    const mirror = opfsMirrorDirectory(async () => {
+      if (fault !== undefined)
+        throw domError(fault)
+      return directoryHandle(t.root, t.creates, t.opened)
+    })
+    const sessions = { ...testCleanupSessions(), finishUserCleanup: vi.fn(testCleanupSessions().finishUserCleanup) }
+    const cleanup = createLocalCleanup({ store: store.store, sessions, directory: mirror, now: () => NOW })
+    const bytes = new Uint8Array([10, 20, 30])
+    putDocument(t.root, key, { a: file(bytes, NOW), b: file() })
+    return {
+      ...t,
+      store,
+      mirror,
+      sessions,
+      cleanup,
+      bytes,
+      fail: (name: string | undefined) => { fault = name },
+    }
+  }
+
+  it.each(['UnknownError', 'SecurityError'])('非空镜像的根 %s：不清主库/墓碑、不提交 cleared；原许可在故障解除后可补清', async (name) => {
+    const t = cleanupTree()
+    t.store.putRaw('drafts', key, sampleStoredDraft())
+    t.store.putRaw('writers', key, sampleWriter())
+    expect(await t.mirror.readSlots(key)).toMatchObject({ kind: 'bytes', files: [t.bytes, new Uint8Array()] })
+    const original = t.store.rawDraft(key)
+    t.fail(name)
+    expect(await t.cleanup.removeUser(testCleanupPermit())).toMatchObject({ kind: 'failed', error: { name } })
+    expect(t.store.rawDraft(key)).toEqual(original)
+    expect(t.store.rawWriter(key)).toMatchObject({ writerId: RETIRED_WRITER_ID })
+    expect(t.sessions.finishUserCleanup).not.toHaveBeenCalled()
+    t.fail(undefined)
+    expect(await t.mirror.readSlots(key)).toMatchObject({ kind: 'bytes', files: [t.bytes, new Uint8Array()] })
+    expect(await t.cleanup.removeUser(testCleanupPermit())).toEqual({ kind: 'cleared', pending: [] })
+    expect(t.sessions.finishUserCleanup).toHaveBeenCalledExactlyOnceWith(testCleanupPermit())
+    expect(t.store.rawDraft(key)).toBeUndefined()
+    expect(t.store.rawWriter(key)).toBeUndefined()
+    expect(await t.mirror.readSlots(key)).toEqual({ kind: 'absent' })
+  })
+
+  it.each(['UnknownError', 'SecurityError'])('保留期遇到根 %s：不得把镜像当作空集合丢弃墓碑', async (name) => {
+    const t = cleanupTree()
+    t.store.putRaw('writers', key, sampleWriter({ writerId: RETIRED_WRITER_ID }))
+    const original = t.store.rawWriter(key)
+    expect(await t.mirror.readSlots(key)).toMatchObject({ kind: 'bytes', files: [t.bytes, new Uint8Array()] })
+    t.fail(name)
+    expect(await t.cleanup.purgeExpired(NOW)).toMatchObject({ kind: 'purged', mirror: { kind: 'failed', error: { name } } })
+    expect(t.store.rawWriter(key)).toEqual(original)
+    t.fail(undefined)
+    expect(await t.cleanup.purgeExpired(NOW)).toMatchObject({ kind: 'purged', mirror: { kind: 'done' } })
+    expect(t.store.rawWriter(key)).toEqual(original)
+    expect(await t.mirror.readSlots(key)).toMatchObject({ kind: 'bytes', files: [t.bytes, new Uint8Array()] })
   })
 })
 

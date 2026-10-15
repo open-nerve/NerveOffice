@@ -14,7 +14,7 @@ import { expect, test } from '../../support/fixtures.ts'
 import { currentLocalKey, diskSnapshot, readLocalDisk } from '../../support/local-draft.ts'
 import { recoverySnapshot, seedRecovery } from '../../support/local-recovery.ts'
 import { openOutboxProbe, probe } from '../../support/outbox-probe.ts'
-import { actAs, loginThroughApi } from '../../support/session.ts'
+import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, savedContent, saveStatus, takeOverHereButton, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -417,13 +417,14 @@ test.describe('US-M4-04 新页面明确恢复与副本隔离', { tag: '@test-bui
   })
 
   test('明确申请成功回包尚在途时换人，迟到结果不启用编辑、不清原用户原件', async ({ page, context }) => {
+    // 保留真实登录表单，稍后由实际登录产生跨页通知；不通过明确退出删除待核对原件。
+    const other = await context.newPage()
+    await other.goto('/login')
+    await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
     const h = await documentFor(page, 'reload-late-acquire')
     const seeded = await seedRecovery(page, h.key, recoverySnapshot(h.cloud.text, '原用户尚未同步'))
     await readySeededReload(page, h.key, seeded.disk)
     const someoneElse = await createUser('reload-next-user')
-    const other = await context.newPage()
-    await other.goto('/')
-    await other.getByRole('button', { name: '退出', exact: true }).focus()
     let release!: () => void
     let received = false
     const held = new Promise<void>((resolve) => {
@@ -446,12 +447,7 @@ test.describe('US-M4-04 新页面明确恢复与副本隔离', { tag: '@test-bui
       await waitForEditorAccess(page, 'read', 'steady')
       await confirmRecovery(page)
       await expect.poll(() => received).toBe(true)
-      // 平台页预先就绪；沿真实时钟提交表单，并确认扣住的同一申请收到 201、没有先超时。
-      await other.keyboard.press('Enter')
-      await expect(other.getByRole('form', { name: '登录' })).toBeVisible()
-      await other.getByLabel('用户名').fill(someoneElse.username)
-      await other.getByLabel('密码').fill(someoneElse.password)
-      await other.getByLabel('密码').press('Enter')
+      await loginThroughUi(other, someoneElse)
       await expect(other.getByRole('heading', { name: '我的空间' })).toBeVisible()
       await expect(page.getByRole('alert').filter({ hasText: '别的标签页登录了另一个账户' })).toBeVisible()
       const delivered = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith(`/api/documents/${h.documentId}/edit-lease`))

@@ -1,37 +1,38 @@
 import type { AcquiredEditInterruption, AcquiredEditLease, CreatedDocument, DocumentEditor, EditInterruption, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckFailure, PendingEditRequest, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
 import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { DocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
+import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
+import type { OutboxHost } from '../../shared/outbox/outbox-host.ts'
 import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { EditLeaseApi } from './edit-lease.ts'
 import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
 import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { FakeLeaseServer } from './lease-server.test-support.ts'
-import type { OutboxHost } from './outbox/outbox-host.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
-import type { DocumentRecovery } from './recovery/document-recovery.ts'
-import type { RecoveryReader } from './recovery/recovery-reader.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createConnectionState } from '../../shared/lib/connection-state.ts'
+import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
 import { gunzipBytes, gzipBytes, sealDraft } from '../../shared/outbox/draft-codec.ts'
 import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
+import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
+import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
-import { PAGE_CLIENT_FORMAT } from './client-format.ts'
 import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS, TAKEOVER_STEAL_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
-import { fakeLeaseClock, settle } from './fake-lease-clock.test-support.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { fakeLeaseServer, servedToken } from './lease-server.test-support.ts'
 import { newKey } from './outbox/persistent-working-draft.test-support.ts'
 import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
-import { createDocumentRecovery } from './recovery/document-recovery.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { channelNameOf, issuedRequestLockNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
 import { PENDING_SAVE_POLL_MS, TAB_HANDOVER_BUSY_RETRY_MS } from './self-takeover.ts'
@@ -492,7 +493,7 @@ async function localDrafts() {
     hosts.push(instance)
     return instance
   })
-  return { key, fetch, keeper, store, hosts, host, options: { enabled: () => true, keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) } }
+  return { key, fetch, keeper, store, hosts, host, options: { permit: () => testSessionPermit(AMY.id), enabled: () => true, keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' as const }) } }
 }
 
 async function recoverySetup(options: Setup = {}, pending = false) {
@@ -4583,6 +4584,35 @@ describe('本机锁的争用由服务端裁决：回包乱序（M3-P6 设计 §3
 })
 
 describe('页面关闭（pagehide）时的本机锁与记号（M3-P5 设计 §3.1、§3.7 的 R1）', () => {
+  it.each(['signed-out', 'other-user'] as const)('已确认 %s 后离开不重建保存中记号，即使旧保存结果未知', async (state) => {
+    const context = setup()
+    await editing(context)
+    context.api.save.mockRejectedValueOnce(new NetworkError('请求被取消'))
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    await settle()
+    context.mode.setSession(state)
+    context.mode.releaseOnHide()
+    await settle()
+    expect(context.marker.write).not.toHaveBeenCalled()
+  })
+
+  it('清理通知已经收回本机许可而服务端确认尚未回来时，pagehide 不重建旧记号', async () => {
+    const local = await localDrafts()
+    let permit: ReturnType<typeof local.options.permit> | undefined = local.options.permit()
+    const context = setup({ localDrafts: { ...local.options, permit: () => permit } })
+    await editing(context)
+    context.api.save.mockRejectedValueOnce(new NetworkError('请求被取消'))
+    context.factory.last().edit('甲')
+    await context.mode.save()
+    await settle()
+    permit = undefined
+    context.mode.setSession('active')
+    context.mode.releaseOnHide()
+    await settle()
+    expect(context.marker.write).not.toHaveBeenCalled()
+  })
+
   it('有保存在途：放锁，不释放编辑权（M3-P4），记下记号——基准是本页确认过的最新修订', async () => {
     const reply = deferred<SaveContentResponse>()
     const context = setup()
