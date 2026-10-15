@@ -9,8 +9,10 @@ import { createMemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { z } from 'zod'
 import { RENEWS_SESSION, RENEWS_SESSION_AFTER_UNKNOWN, STARTS_SESSION, SYSTEM_ADMIN_ONLY } from '../features/auth/index.ts'
-import { ApiError, apiRequest, NetworkError, setCsrfToken } from '../shared/api/index.ts'
+import { ApiError, apiRequest, NetworkError, setApiSession, setCsrfToken } from '../shared/api/index.ts'
+import { rememberSessionPermit } from '../shared/api/session-association.ts'
 import { connectionState } from '../shared/lib/connection-state.ts'
+import { publishLocalSession } from '../shared/local-drafts/session-events.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../shared/testing/fake-api.test-support.ts'
 import { SESSION_CHANGE_TIME_LIMIT_MS } from './query-client.ts'
 import { recordingPage, sessionBus } from './render-app.test-support.tsx'
@@ -224,6 +226,67 @@ describe('会话复核（M2-P1 审查 B3、B4）', () => {
 })
 
 describe('请求得到"登录已过期"：先向服务端确认会话（复验 N3）', () => {
+  const generation = '00000000-0000-4000-8000-000000000011'
+  const nextGeneration = '00000000-0000-4000-8000-000000000012'
+  const previous = { userId: SESSION.user.id, generation }
+  const cleanup = { userId: SESSION.user.id, generation: nextGeneration, cause: 'account_disabled' as const }
+  async function showQualifiedSession(runtime: AppRuntime, userId = SESSION.user.id, sourceGeneration = generation): Promise<void> {
+    const original = { ...SESSION, user: { ...SESSION.user, id: userId } }
+    rememberSessionPermit(original, { userId, generation: sourceGeneration })
+    setApiSession(original)
+    runtime.queryClient.setQueryData(['auth', 'session'], original)
+    await vi.dynamicImportSettled()
+  }
+
+  it.each([false, true])('后台原会话确证停用后，平台保留原因并重新确认；新登录存在：%s', async (renewed) => {
+    installFakeApi({ 'GET /api/auth/session': () => renewed ? json(200, { ...SESSION, csrfToken: 'renewed-after-background' }) : apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/')
+    await showQualifiedSession(runtime)
+    publishLocalSession({ kind: 'stopped', previous, cleanup })
+    if (renewed) {
+      await vi.waitFor(() => expect(sessionOf(runtime)?.csrfToken).toBe('renewed-after-background'))
+      expect(page.visits).toEqual([])
+    }
+    else {
+      await vi.waitFor(() => expect(page.visits).toEqual(['/login?reason=account_disabled_confirmed']))
+    }
+  })
+
+  it('后台停用确认未结束时，前台后到的普通未登录不能盖掉原停用原因', async () => {
+    const pending = deferredResponse()
+    installFakeApi({ 'GET /api/auth/session': pending.handler })
+    const { runtime, page } = runtimeAt('/')
+    await showQualifiedSession(runtime)
+    publishLocalSession({ kind: 'stopped', previous, cleanup })
+    await failWith(runtime, 'UNAUTHENTICATED')
+    expect(page.visits).toEqual(['/login?reason=account_disabled_confirmed'])
+    pending.resolve(apiError(401, 'UNAUTHENTICATED'))
+    await settle()
+    expect(page.visits).toHaveLength(1)
+  })
+
+  it.each(['new-generation', 'other-user', 'unqualified', 'disposed', 'ordinary-stop', 'cleanup-result'] as const)('后台停用事件不能借用无关来源或生命周期：%s', async (scenario) => {
+    const api = installFakeApi({ 'GET /api/auth/session': () => apiError(401, 'UNAUTHENTICATED') })
+    const { runtime, page } = runtimeAt('/')
+    if (scenario === 'unqualified') {
+      setApiSession(SESSION)
+      runtime.queryClient.setQueryData(['auth', 'session'], SESSION)
+    }
+    else {
+      await showQualifiedSession(runtime, scenario === 'other-user' ? OTHER_SESSION.user.id : SESSION.user.id, scenario === 'new-generation' ? nextGeneration : generation)
+    }
+    await vi.dynamicImportSettled()
+    if (scenario === 'disposed')
+      runtime.dispose()
+    if (scenario === 'cleanup-result')
+      publishLocalSession({ kind: 'cleanup', permit: cleanup, outcome: { kind: 'cleared', pending: [] } })
+    else
+      publishLocalSession({ kind: 'stopped', previous, cleanup: scenario === 'ordinary-stop' ? undefined : cleanup })
+    await settle()
+    expect(api.requests).toHaveLength(0)
+    expect(page.visits).toEqual([])
+  })
+
   it.each([false, true])('普通请求确证停用后仍先确认当前登录；新登录存在：%s', async (renewed) => {
     installFakeApi({ 'GET /api/auth/session': () => renewed ? json(200, { ...SESSION, csrfToken: 'new-session' }) : apiError(401, 'UNAUTHENTICATED') })
     const { runtime, page } = runtimeAt('/')
