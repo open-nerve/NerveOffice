@@ -48,6 +48,21 @@ async function adminFor(page: Page) {
   await loginThroughApi(page, await createUser('cleanup-admin', '清理验证管理员', { systemRole: 'admin' }))
 }
 
+/** 只安排真实请求的发送顺序；不替换响应、Cookie 或应用的认证处理。 */
+async function holdRequests(page: Page, paths: readonly string[]) {
+  let release: () => void = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let held = 0
+  await page.route(url => paths.includes(url.pathname), async (route) => {
+    held += 1
+    await released
+    await route.continue()
+  })
+  return { release, held: () => held }
+}
+
 for (const { name, reason, invalidate } of [
   { name: '普通登录过期', reason: 'expired', invalidate: async (h: Draft, _page: Page) => expireSessions(h.owner) },
   { name: '管理员重置密码', reason: 'password_reset', invalidate: async (h: Draft, page: Page) => {
@@ -80,28 +95,70 @@ async function triggerRejectedRequest(page: Page, trigger: 'query' | 'request' |
   if (trigger === 'editor-query')
     await page.goto(`/documents/${documentId}`)
   else if (trigger === 'query')
-    await page.reload()
+    await page.goto('/')
   else
     await page.getByRole('button', { name: '加载更多' }).click()
+}
+
+async function prepareRejectedRequest(page: Page, trigger: 'query' | 'request' | 'editor-query', h: Draft) {
+  if (trigger !== 'request') {
+    await page.goto('/reset-password')
+    return undefined
+  }
+  const background = await holdRequests(page, ['/api/documents/draft-facts', '/api/local-key'])
+  await createDocuments(h.owner, '用于下一页请求', DOCUMENT_LIST_DEFAULT_LIMIT)
+  await page.goto('/?view=list')
+  await expect(page.getByRole('button', { name: '加载更多' })).toBeVisible()
+  return background
 }
 
 for (const trigger of ['query', 'request', 'editor-query'] as const) {
   test(`US-M4-09 账户明确停用（${trigger}）：原请求确证停用后删除本人草稿和写入者，云端不变`, async ({ page, anotherDevice }) => {
     const h = await actualLocalDraft(page, '停用后应清理的本机内容')
-    await createDocuments(h.owner, '用于下一页请求', DOCUMENT_LIST_DEFAULT_LIMIT)
-    await page.goto('/?view=list')
-    await expect(page.getByRole('button', { name: '加载更多' })).toBeVisible()
-    expect((await readLocalDisk(page, h.key)).draft).not.toBeNull()
+    // 初查从公开页开始；普通请求则让指定入口先收到停用。后台先收到的相反顺序另有真实故事。
+    const background = await prepareRejectedRequest(page, trigger, h)
+    try {
+      expect((await readLocalDisk(page, h.key)).draft).not.toBeNull()
+      const rejected = await captureRejection(page, trigger === 'request' ? '/api/documents' : '/api/auth/session')
+      await adminFor(anotherDevice)
+      await actAs(anotherDevice, 'POST', `/api/admin/users/${h.owner.id}/disable`)
+      await triggerRejectedRequest(page, trigger, h.documentId)
+      await expect.poll(rejected).toMatchObject({ status: 401, body: { error: { code: 'SESSION_EXPIRED', details: { reason: 'account_disabled', userId: h.owner.id } } } })
+      background?.release()
+      await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+      expect(new URL(page.url()).searchParams.get('reason')).toBe('account_disabled_confirmed')
+      await expect(page.getByText('你的账户已被停用。请联系系统管理员确认账户状态。')).toBeVisible()
+      await expect.poll(async () => readLocalDisk(page, h.key)).toEqual({ draft: null, writer: null })
+      expect(await revisionOf(h.documentId)).toBe(1)
+    }
+    finally {
+      background?.release()
+    }
+  })
+}
+
+for (const pathname of ['/api/documents/draft-facts', '/api/local-key']) {
+  test(`US-M4-09 后台请求首先确证账户停用（${pathname}）：平台说明原因并清理，云端不变`, async ({ page, anotherDevice }, testInfo) => {
+    const h = await actualLocalDraft(page, '后台首先得知停用也不能漏掉原因')
     await adminFor(anotherDevice)
-    await actAs(anotherDevice, 'POST', `/api/admin/users/${h.owner.id}/disable`)
-    const rejected = await captureRejection(page, trigger === 'request' ? '/api/documents' : '/api/auth/session')
-    await triggerRejectedRequest(page, trigger, h.documentId)
-    await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
-    expect(rejected()).toMatchObject({ status: 401, body: { error: { code: 'SESSION_EXPIRED', details: { reason: 'account_disabled', userId: h.owner.id } } } })
-    expect(new URL(page.url()).searchParams.get('reason')).toBe('account_disabled_confirmed')
-    await expect(page.getByText('你的账户已被停用。请联系系统管理员确认账户状态。')).toBeVisible()
-    await expect.poll(async () => readLocalDisk(page, h.key)).toEqual({ draft: null, writer: null })
-    expect(await revisionOf(h.documentId)).toBe(1)
+    const rejected = await captureRejection(page, pathname)
+    const background = await holdRequests(page, [pathname])
+    try {
+      await page.goto('/?view=list')
+      await expect.poll(background.held).toBe(1)
+      await actAs(anotherDevice, 'POST', `/api/admin/users/${h.owner.id}/disable`)
+      background.release()
+      await expect.poll(rejected).toMatchObject({ status: 401, body: { error: { code: 'SESSION_EXPIRED', details: { reason: 'account_disabled', userId: h.owner.id } } } })
+      await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+      expect(new URL(page.url()).searchParams.get('reason')).toBe('account_disabled_confirmed')
+      await expect(page.getByText('你的账户已被停用。请联系系统管理员确认账户状态。')).toBeVisible()
+      await expect.poll(async () => readLocalDisk(page, h.key)).toEqual({ draft: null, writer: null })
+      expect(await revisionOf(h.documentId)).toBe(1)
+    }
+    finally {
+      background.release()
+      await testInfo.attach('local-session-after-background-disabled', { body: JSON.stringify(await localSessionSummary(page)), contentType: 'application/json' })
+    }
   })
 }
 

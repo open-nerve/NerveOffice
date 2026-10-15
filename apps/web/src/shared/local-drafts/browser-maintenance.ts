@@ -1,14 +1,16 @@
 import type { DraftSessionPermit } from '../outbox/session-fence.ts'
+import { associatedSessionPermit } from '../api/session-association.ts'
+import { currentApiSession } from '../api/session-context.ts'
 import { openSessionChannel } from '../lib/session-channel.ts'
 import { withOutboxLock } from '../outbox/outbox-lock.ts'
-import { canUseDraftSession, cleanupPermitOf } from '../outbox/session-fence.ts'
+import { canUseDraftSession, cleanupPermitOf, readDraftSessionPermit } from '../outbox/session-fence.ts'
 import { createSessionStore } from '../outbox/session-store.ts'
 import { createBrowserCleanup } from './browser-cleanup.ts'
 import { createDraftMaintenance } from './draft-maintenance.ts'
 import { clearLegacySessionMarkers } from './legacy-storage.ts'
 import { maintenanceIncludes } from './maintenance-page.ts'
 import { watchMaintenanceSignals } from './maintenance-signals.ts'
-import { publishLocalSession } from './session-events.ts'
+import { publishLocalSession, subscribeLocalSession } from './session-events.ts'
 
 function createBrowserMaintenance() {
   try {
@@ -70,16 +72,29 @@ function createBrowserMaintenance() {
 let shared: { readonly runtime: ReturnType<typeof createBrowserMaintenance>, users: number } | undefined
 
 /** 入口与按需状态组件共用一份运行时；最后一个使用者离开才释放。 */
-export function mountBrowserMaintenance() {
+export function mountBrowserMaintenance(onSessionDisabled?: () => void) {
   const owner = shared ??= { runtime: createBrowserMaintenance(), users: 0 }
   owner.users += 1
   let disposed = false
+  const unsubscribe = onSessionDisabled === undefined
+    ? undefined
+    : subscribeLocalSession((event) => {
+        if (event.kind !== 'stopped' || event.cleanup?.cause !== 'account_disabled')
+          return
+        const current = currentApiSession()
+        const permit = current === undefined ? undefined : readDraftSessionPermit(associatedSessionPermit(current))
+        // 后台请求不经过 QueryCache；只有本页仍采纳原代次时，才把已确证的原因交给页面复核。
+        // 这只是说明通知，不向界面授予清理资格，也不把身份放进跨页广播。
+        if (permit?.userId === event.previous.userId && permit.generation === event.previous.generation)
+          onSessionDisabled()
+      })
   return {
     model: owner.runtime.model,
     dispose: () => {
       if (disposed)
         return
       disposed = true
+      unsubscribe?.()
       owner.users -= 1
       if (owner.users === 0) {
         owner.runtime.dispose()

@@ -69,7 +69,7 @@ export interface AppRuntimeOptions {
  * P4 的编辑器页是另一个入口，会话结束时同样只能整页转到登录页。
  */
 export function createAppRuntime(options: AppRuntimeOptions = {}): AppRuntime {
-  const stopMaintenance = startDraftMaintenance()
+  const stopMaintenance = startDraftMaintenance(undefined, () => void confirmSessionEnded('account_disabled_confirmed'))
   const stopConnection = watchBrowserConnection({ state: connectionState, probe: requestSession })
   const router = (options.createRouter ?? createBrowserRouter)(appRoutes)
   const page = options.page ?? browserPageLocation
