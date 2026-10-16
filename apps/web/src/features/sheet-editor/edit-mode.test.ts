@@ -1,5 +1,5 @@
 import type { AcquiredEditInterruption, AcquiredEditLease, CreatedDocument, DocumentEditor, EditInterruption, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckFailure, PendingEditRequest, RenewedEditLease, SaveContentResponse } from '@nerve-office/contracts'
-import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { EditorAccess, FormulaMode, FormulaWorkerFailure, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { DocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
 import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
 import type { OutboxHost } from '../../shared/outbox/outbox-host.ts'
@@ -14,6 +14,7 @@ import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { FormulaWorkerError } from '../../editor/index.ts'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createConnectionState } from '../../shared/lib/connection-state.ts'
@@ -36,6 +37,10 @@ import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { channelNameOf, issuedRequestLockNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
 import { PENDING_SAVE_POLL_MS, TAB_HANDOVER_BUSY_RETRY_MS } from './self-takeover.ts'
+
+vi.hoisted(() => {
+  globalThis.Path2D ??= class {} as unknown as typeof Path2D
+})
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-7a3b-8c4d-00000000aaaa'
@@ -87,6 +92,8 @@ interface FakeEditor {
   enter: (stage: SheetEditorLifecycle) => void
   /** 公式收齐与否变了（发出公式进度的信号） */
   settle: (settled: boolean) => void
+  failWorker: () => void
+  compose: (composing: boolean) => void
 }
 
 /** 第 n 个编辑器给出的视图状态：重建时交给下一个 */
@@ -103,7 +110,7 @@ function fakeFactory() {
   let next: 'ok' | 'fail' | { readonly gate: Promise<void> } = 'ok'
   let checkOf: CheckOf = () => ({ ok: true })
   let configure: (editor: FakeEditor) => void = () => {}
-  const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined, recalculate?: boolean }) => {
+  const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined, recalculate?: boolean, formulaMode?: FormulaMode }) => {
     const plan = next
     next = 'ok'
     if (plan === 'fail')
@@ -113,9 +120,13 @@ function fakeFactory() {
     let value = (JSON.parse(options.snapshot) as { v: string }).v
     let seq = 0
     let stage: SheetEditorLifecycle = 'rendered'
+    let failure: FormulaWorkerFailure | undefined
+    let composing = false
     const changeListeners = new Set<() => void>()
     const lifecycleListeners = new Set<(stage: SheetEditorLifecycle) => void>()
     const progressListeners = new Set<() => void>()
+    const failureListeners = new Set<(failure: FormulaWorkerFailure) => void>()
+    const compositionListeners = new Set<() => void>()
     const fake: FakeEditor = {
       access: options.access,
       snapshot: options.snapshot,
@@ -128,6 +139,12 @@ function fakeFactory() {
       formulasSettled: true,
       editor: {
         unitId: 'unit-1',
+        formulaMode: options.formulaMode ?? 'worker',
+        workerFailure: () => failure,
+        onWorkerFailure: (listener) => {
+          failureListeners.add(listener)
+          return () => failureListeners.delete(listener)
+        },
         changeSeq: () => seq,
         onChange: (listener) => {
           changeListeners.add(listener)
@@ -155,8 +172,11 @@ function fakeFactory() {
           progressListeners.add(listener)
           return () => progressListeners.delete(listener)
         },
-        composing: () => false,
-        onCompositionChange: () => () => {},
+        composing: () => composing,
+        onCompositionChange: (listener) => {
+          compositionListeners.add(listener)
+          return () => compositionListeners.delete(listener)
+        },
         settlePanels: vi.fn(async () => {}),
         capture: vi.fn(() => {
           if (fake.failCapture)
@@ -181,6 +201,15 @@ function fakeFactory() {
       settle: (settled) => {
         fake.formulasSettled = settled
         progressListeners.forEach(listener => listener())
+      },
+      failWorker: () => {
+        failure = 'error-after-ready'
+        fake.settle(false)
+        failureListeners.forEach(listener => listener('error-after-ready'))
+      },
+      compose: (next) => {
+        composing = next
+        compositionListeners.forEach(listener => listener())
       },
     }
     created.push(fake)
@@ -476,6 +505,430 @@ async function editing(context: ReturnType<typeof setup>): Promise<void> {
   await context.mode.enter()
   expect(modeOf(context.mode).kind).toBe('editing')
 }
+
+describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
+  it('打开创建失败只报一次真实修订，之后进入/退出不重复；异常内容不传输', async () => {
+    const h = setup()
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create', { cause: new Error('机密正文') }))
+    await opened(h)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'create', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    await h.mode.enter()
+    await h.mode.exit()
+    expect(h.api.reportOpenCheck).toHaveBeenCalledOnce()
+    expect(JSON.stringify(h.api.reportOpenCheck.mock.calls)).not.toContain('机密正文')
+  })
+
+  it('刷新创建失败报告实际新修订，不能把仍显示的旧修订当成本次输入', async () => {
+    const h = setup({ api: { content: async () => ({ snapshot: snapshotOf('新修订'), revision: 8 }) } })
+    await opened(h)
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('ready-timeout'))
+    await h.mode.refresh(true)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'ready-timeout', revision: 8, access: 'read', trigger: 'refresh', ...PAGE_CLIENT_FORMAT })
+    expect(readingOf(h.mode).damaged).toBeUndefined()
+  })
+
+  it('进入编辑取得新修订，报告 edit/enter 及实际修订', async () => {
+    const h = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision: 5 }) } })
+    await opened(h)
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('error-before-ready'))
+    await h.mode.enter()
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-before-ready', revision: 5, access: 'edit', trigger: 'enter', ...PAGE_CLIENT_FORMAT })
+    expect(modeOf(h.mode).kind).toBe('editing')
+  })
+
+  it('主线程重试同样失败仍诊断首个 Worker 原因；普通加载失败不报', async () => {
+    const h = setup()
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('image-policy')).mockRejectedValueOnce(new Error('主线程失败'))
+    await opened(h)
+    expect(modeOf(h.mode).kind).toBe('failed')
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'image-policy', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    const ordinary = setup()
+    ordinary.factory.failNext()
+    await opened(ordinary)
+    expect(ordinary.api.reportOpenCheck).not.toHaveBeenCalled()
+  })
+
+  it.each(['read', 'edit'] as const)('运行中 %s 故障在等待组字时即报告，重复事件和重试不重报；上报失败不影响恢复', async (access) => {
+    const h = setup({ api: { reportOpenCheck: async () => {
+      throw new Error('诊断网络失败')
+    } } })
+    if (access === 'edit')
+      await editing(h)
+    else
+      await opened(h)
+    const old = h.factory.last()
+    old.compose(true)
+    old.failWorker()
+    await h.time.advance(0)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access, trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT })
+    old.failWorker()
+    old.compose(false)
+    await h.time.advance(0)
+    h.mode.retryFormulaRecovery()
+    await h.time.advance(0)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledOnce()
+    expect(h.mode.view().formulaRecovery?.phase).toBe('ready')
+  })
+
+  it('恢复的新模型自检失败独立报告，不把故障视为资源损坏，不接纳不完整模型', async () => {
+    const h = setup()
+    await editing(h)
+    h.factory.checkWith(() => ({ ok: false, failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }] }))
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    expect(h.api.reportOpenCheck.mock.calls.map(([, report]) => report)).toEqual([
+      { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
+      { failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }], revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
+    ])
+    expect(h.mode.view().formulaRecovery?.problem).toBe('open-check')
+    expect(h.factory.last().disposed).toBe(true)
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it.each(['signed-out', 'other-user', 'dispose', 'hide'] as const)('创建故障后的迟到结果不在 %s 状态上报', async (cause) => {
+    const h = setup()
+    const creating = h.factory.holdNext()
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create'))
+    const opening = opened(h)
+    await settle()
+    expect(h.factory.createEditor).toHaveBeenCalledTimes(2)
+    if (cause === 'dispose')
+      h.mode.dispose()
+    else if (cause === 'hide')
+      h.mode.releaseOnHide()
+    else
+      h.mode.setSession(cause)
+    creating.release()
+    await opening
+    expect(h.api.reportOpenCheck).not.toHaveBeenCalled()
+  })
+})
+
+describe('公式故障经过真实页面模式与保存会话', () => {
+  it('创建 Worker 失败后以同一内容主线程打开，之后进入编辑强制重算并补存', async () => {
+    const h = setup({ autosave: 'running' })
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create'))
+    await opened(h)
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.factory.createEditor).toHaveBeenCalledTimes(2)
+    expect(h.factory.last().editor.formulaMode).toBe('main-thread')
+    expect(h.factory.last().snapshot).toBe(LOADED.snapshot)
+    h.factory.configureWith(fake => fake.settle(false))
+    await h.mode.enter()
+    expect(h.factory.last().recalculate).toBe(true)
+    expect(h.factory.last().editor.formulaMode).toBe('main-thread')
+    expect(h.mode.view().save?.formulasPending).toBe(true)
+    h.factory.last().settle(true)
+    await h.time.advance(2_000)
+    await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledOnce())
+    expect(h.api.save.mock.calls[0]![1].formulasPending).toBe(false)
+    expect(h.editLease.acquire).toHaveBeenCalledOnce()
+  })
+
+  it('阅读运行期恢复保持权限和视图；恢复期间不进入编辑或刷新', async () => {
+    const h = setup()
+    await opened(h)
+    const previous = h.factory.last()
+    const creating = h.factory.holdNext()
+    previous.failWorker()
+    await h.time.advance(0)
+    await h.mode.enter()
+    await h.mode.refresh(true)
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.api.content).not.toHaveBeenCalled()
+    expect(h.factory.createEditor).toHaveBeenCalledTimes(2)
+    creating.release()
+    await h.time.advance(0)
+    expect(h.factory.last()).toMatchObject({ access: 'read', snapshot: LOADED.snapshot, viewState: viewStateOf(previous.index) })
+    expect(h.mode.view()).toMatchObject({ mode: { kind: 'reading' }, formulaRecovery: { phase: 'ready' } })
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('编辑运行期恢复，原稿有修改=%s：原租约不变且无须后续输入就补存', async (changed) => {
+    const h = setup({ autosave: 'running' })
+    await editing(h)
+    const previous = h.factory.last()
+    if (changed)
+      previous.edit('尚未上传的')
+    h.factory.configureWith(fake => fake.settle(false))
+    previous.failWorker()
+    await h.time.advance(0)
+    expect(h.factory.last().snapshot).toBe(changed ? snapshotOf('尚未上传的') : LOADED.snapshot)
+    expect(h.mode.view()).toMatchObject({ mode: { kind: 'editing' }, formulaRecovery: { phase: 'ready' }, save: { formulasPending: true } })
+    expect(h.editLease.acquire).toHaveBeenCalledOnce()
+    expect(h.editLease.release).not.toHaveBeenCalled()
+    if (!changed) {
+      // 原来没有输入静默期：恢复调度后可先上传带待更新标记的冻结稿，重算后再补存。
+      await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledOnce())
+      expect(h.api.save.mock.calls[0]![1].formulasPending).toBe(true)
+    }
+    h.factory.last().settle(true)
+    await h.time.advance(2_000)
+    await vi.waitFor(() => expect(h.mode.hasUnsavedWork()).toBe(false))
+    expect(h.api.save).toHaveBeenCalledTimes(changed ? 1 : 2)
+    const [, request, bytes, credentials] = h.api.save.mock.calls.at(-1)!
+    expect(request.formulasPending).toBe(false)
+    expect(credentials).toEqual({ token: TOKEN, writeEpoch: 7 })
+    expect(new TextDecoder().decode(await gunzipBytes(bytes))).toBe(h.factory.last().snapshot)
+  })
+
+  it('旧保存 ACK 到达不能抹掉本轮公式补存，原请求字节不变', async () => {
+    const response = deferred<SaveContentResponse>()
+    const h = setup({ autosave: 'running', api: { save: async () => response.promise } })
+    await editing(h)
+    const original = h.factory.last()
+    original.edit('旧请求内容')
+    const saving = h.mode.save()
+    await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledOnce())
+    const [, request, bytes] = h.api.save.mock.calls[0]!
+    const raw = [...bytes]
+    original.edit('恢复原稿')
+    h.factory.configureWith(fake => fake.settle(false))
+    original.failWorker()
+    await h.time.advance(0)
+    expect(h.factory.last().snapshot).toBe(snapshotOf('恢复原稿'))
+    response.resolve(SAVED)
+    await saving
+    expect(h.mode.view().save?.formulasPending).toBe(true)
+    expect(h.mode.hasUnsavedWork()).toBe(true)
+    expect([...bytes]).toEqual(raw)
+    expect(request.formulasPending).toBe(false)
+    h.factory.last().settle(true)
+    await h.time.advance(2_000)
+    await vi.waitFor(() => expect(h.api.save).toHaveBeenCalledTimes(2))
+    const next = h.api.save.mock.calls[1]!
+    expect(next[1].baseRevision).toBe(4)
+    expect(new TextDecoder().decode(await gunzipBytes(next[2]))).toBe(snapshotOf('恢复原稿'))
+  })
+
+  it('等待组字期间拒绝保存、退出和交接；输入完成后再重建', async () => {
+    const h = setup()
+    await editing(h)
+    const original = h.factory.last()
+    original.compose(true)
+    original.failWorker()
+    await h.time.advance(0)
+    expect(h.mode.view()).toMatchObject({ formulaRecovery: { phase: 'waiting-input', blocksInput: false } })
+    await h.mode.save()
+    await h.mode.exit()
+    await h.mode.handOver()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(h.editLease.release).not.toHaveBeenCalled()
+    expect(h.factory.created).toHaveLength(2)
+    original.edit('最终组字')
+    original.compose(false)
+    expect(original.disposed).toBe(false)
+    await h.time.advance(0)
+    expect(h.factory.last().snapshot).toBe(snapshotOf('最终组字'))
+    expect(h.mode.view()).toMatchObject({ formulaRecovery: { phase: 'ready' } })
+  })
+
+  it('保存等待会话确认期间故障，旧确认返回也不能穿过恢复屏障上传', async () => {
+    const h = setup()
+    await editing(h)
+    const ready = deferred<boolean>()
+    const confirming = vi.fn(async () => ready.promise)
+    const saving = h.mode.save(confirming)
+    await vi.waitFor(() => expect(confirming).toHaveBeenCalledOnce())
+    const creating = h.factory.holdNext()
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    ready.resolve(true)
+    await saving
+    expect(h.api.save).not.toHaveBeenCalled()
+    creating.release()
+    await h.time.advance(0)
+    expect(h.mode.view()).toMatchObject({ formulaRecovery: { phase: 'ready' } })
+  })
+
+  it('重建在途失权仍从稳定入口取得原稿，迟到的可编辑实例不接纳', async () => {
+    const h = setup()
+    await editing(h)
+    const original = h.factory.last()
+    original.edit('失权前完整原稿')
+    const creating = h.factory.holdNext()
+    original.failWorker()
+    await h.time.advance(0)
+    original.failCapture = true
+    loseOnNextHeartbeat(h, DENIED)
+    await h.time.advance(HEARTBEAT_MS)
+    expect(modeOf(h.mode).kind).toBe('losing')
+    creating.release()
+    await h.time.advance(0)
+    await vi.waitFor(() => expect(modeOf(h.mode).kind).toBe('lost'))
+    expect(h.factory.created[2]!.disposed).toBe(true)
+    expect(h.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('失权前完整原稿') })
+    expect(lostOf(h.mode)).toMatchObject({ unsaved: true, captureFailed: false })
+    await h.mode.saveCopy()
+    expect(h.api.conflictCopy).toHaveBeenCalledOnce()
+  })
+
+  it.each(['session', 'dispose'] as const)('重建在途发生 %s，迟到实例不能接纳', async (cause) => {
+    const h = setup()
+    await editing(h)
+    const creating = h.factory.holdNext()
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    expect(h.factory.createEditor).toHaveBeenCalledTimes(3)
+    if (cause === 'session')
+      h.mode.setSession('other-user')
+    else
+      h.mode.dispose()
+    creating.release()
+    await h.time.advance(0)
+    expect(h.factory.last().disposed).toBe(true)
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('新主线程实例自检失败保持原稿，明确重试后接纳完整实例', async () => {
+    const h = setup()
+    await editing(h)
+    const original = h.factory.last()
+    original.edit('不能损失的正文')
+    h.factory.checkWith(() => ({ ok: false, failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }] }))
+    original.failWorker()
+    await h.time.advance(0)
+    expect(h.mode.view()).toMatchObject({ formulaRecovery: { phase: 'failed', problem: 'open-check', blocksInput: true } })
+    expect(h.factory.last().disposed).toBe(true)
+    expect(h.factory.last().editor.capture).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
+    original.failCapture = true
+    h.factory.checkWith(() => ({ ok: true }))
+    h.mode.retryFormulaRecovery()
+    await h.time.advance(0)
+    expect(h.factory.last().snapshot).toBe(snapshotOf('不能损失的正文'))
+    expect(h.mode.view()).toMatchObject({ formulaRecovery: { phase: 'ready' } })
+  })
+
+  it('刷新已在途时只设置主线程偏好，不对旧内容另起一次恢复', async () => {
+    const content = deferred<LoadedContent>()
+    const h = setup({ api: { content: async () => content.promise } })
+    await opened(h)
+    const original = h.factory.last()
+    const refreshing = h.mode.refresh(true)
+    original.failWorker()
+    await h.time.advance(0)
+    expect(h.factory.createEditor).toHaveBeenCalledOnce()
+    content.resolve({ snapshot: snapshotOf('刷新所得'), revision: 8 })
+    await refreshing
+    expect(h.factory.createEditor).toHaveBeenCalledTimes(2)
+    expect(h.factory.last()).toMatchObject({ snapshot: snapshotOf('刷新所得'), access: 'read' })
+    expect(h.factory.last().editor.formulaMode).toBe('main-thread')
+  })
+
+  it('真实保存输入准备未结束时不冻结；旧面板等待不能落到新实例', async () => {
+    const h = setup()
+    await editing(h)
+    const original = h.factory.last()
+    const commit = deferred<boolean>()
+    const panels = deferred<void>()
+    original.cellEditing = true
+    vi.mocked(original.editor.commitCellEditing).mockImplementationOnce(async () => {
+      original.cellEditing = false
+      original.edit('提交进模型的输入')
+      return commit.promise
+    })
+    vi.mocked(original.editor.settlePanels).mockReturnValueOnce(panels.promise)
+    const saving = h.mode.save(async () => false)
+    original.failWorker()
+    await h.time.advance(0)
+    expect(original.disposed).toBe(false)
+    expect(original.editor.capture).not.toHaveBeenCalled()
+    commit.resolve(true)
+    await h.time.advance(0)
+    expect(original.editor.settlePanels).toHaveBeenCalledOnce()
+    expect(original.disposed).toBe(false)
+    panels.resolve()
+    await saving
+    await h.time.advance(0)
+    expect(h.factory.last().snapshot).toBe(snapshotOf('提交进模型的输入'))
+    expect(h.factory.last().editor.settlePanels).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('恢复期间实际标签页请求得到 busy，没有 ACK，也不释放编辑权', async () => {
+    const h = setup()
+    await editing(h)
+    h.factory.last().compose(true)
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    const other = sameBrowserFor(DOCUMENT_ID, h.browser.tab('other'))
+    try {
+      other.post({ type: 'handover-request', requestId: '0199a2c4-1f2e-4a3b-8c4d-000000000001', documentId: DOCUMENT_ID, from: '0199a2c4-1f2e-4a3b-8c4d-000000000002', userId: AMY.id })
+      await settle()
+      const messages = h.browser.posted(channelNameOf(DOCUMENT_ID))
+      expect(messages).toHaveLength(2)
+      expect(messages[1]).toMatchObject({ type: 'handover-busy' })
+      expect(h.editLease.release).not.toHaveBeenCalled()
+      expect(h.api.save).not.toHaveBeenCalled()
+    }
+    finally {
+      other.close()
+    }
+  })
+
+  it('退出已在途时记录故障偏好，由原退出流程唯一地重建只读实例', async () => {
+    const h = setup()
+    await editing(h)
+    const original = h.factory.last()
+    const panels = deferred<void>()
+    vi.mocked(original.editor.settlePanels).mockReturnValueOnce(panels.promise)
+    const leaving = h.mode.exit()
+    expect(modeOf(h.mode).kind).toBe('exiting')
+    original.failWorker()
+    await h.time.advance(0)
+    expect(h.factory.created).toHaveLength(2)
+    panels.resolve()
+    await leaving
+    expect(h.factory.created).toHaveLength(3)
+    expect(modeOf(h.mode).kind).toBe('reading')
+    expect(h.factory.last().editor.formulaMode).toBe('main-thread')
+    expect(h.editLease.release).toHaveBeenCalledOnce()
+  })
+
+  it('页面隐藏优先作废重建，迟到实例不接纳或恢复调度', async () => {
+    const h = setup()
+    await editing(h)
+    const creating = h.factory.holdNext()
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    h.mode.releaseOnHide()
+    creating.release()
+    await h.time.advance(0)
+    expect(h.factory.last().disposed).toBe(true)
+    expect(h.mode.view().formulaRecovery?.phase).toBe('paused')
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it('阅读重建不会把后来撤销的可编辑权限改回去', async () => {
+    const h = setup()
+    await opened(h)
+    const creating = h.factory.holdNext()
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    h.api.editStatus.mockResolvedValue(status(3, null, false))
+    h.mode.updateCanEdit(false)
+    creating.release()
+    await h.time.advance(0)
+    expect(modeOf(h.mode)).toMatchObject({ kind: 'reading', canEdit: false })
+    await h.mode.enter()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.factory.last().access).toBe('read')
+  })
+
+  it('恢复期间请求接管，不提前消耗本机草稿的明确恢复意图', async () => {
+    const h = await recoverySetup()
+    await opened(h)
+    const begin = vi.spyOn(h.recovery, 'beginRestore')
+    const creating = h.factory.holdNext()
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    await h.mode.takeOver()
+    expect(begin).not.toHaveBeenCalled()
+    creating.release()
+    await h.time.advance(0)
+  })
+})
 
 async function localDrafts() {
   const key = await newKey(1)

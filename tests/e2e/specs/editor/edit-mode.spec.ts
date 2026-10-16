@@ -20,6 +20,7 @@ import { revisionEtag, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, withDatabase } from '../../support/database.ts'
 import { commandMark, editorView, probeCommands, runFacade, scrollAndSelect } from '../../support/editor-probe.ts'
 import { chooseAutosave, expect, test } from '../../support/fixtures.ts'
+import { blockFormulaWorker, formulaRecoveryNotice } from '../../support/formula-worker-fault.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { firstPage, launchPersistentProfile } from '../../support/persistent-profile.ts'
 import { expectEntriesUnchanged, grantClipboard, OTHER_READ_ONLY_ENTRIES, PROBE_FACADE_ENTRIES, UI_ENTRIES } from '../../support/read-only-checks.ts'
@@ -430,7 +431,7 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     })
   })
 
-  test('US-M3-12 失去编辑权时编辑器没能重新打开（公式 Worker 的脚本加载不了，审查 A3）：留在失去编辑权，焦点从销毁的编辑器交给"另存为副本"（复验 C2）；Worker 仍起不来时另存为副本，副本建好、说明与链接照旧，不是整页的"编辑器加载失败"（复验 C1）；Worker 恢复之后重新加载，回到阅读', async ({ page, pageErrors }) => {
+  test('US-M3-12 失去编辑权时编辑器没能重新打开（新 Canvas 的绘图上下文不可用，审查 A3）：留在失去编辑权，焦点从销毁的编辑器交给"另存为副本"（复验 C2）；绘图仍不可用时另存为副本，副本建好、说明与链接照旧，不是整页的"编辑器加载失败"（复验 C1）；绘图恢复之后重新加载，回到阅读', async ({ page, pageErrors, browserName }, testInfo) => {
     pageErrors.expectErrors()
     const lead = await createUser('reopen-failed-lead')
     const editor = await createUser('reopen-failed-editor')
@@ -440,15 +441,37 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     await openAndEnterEditing(page, documentId)
     await typeInCell(page, 'A1', '本页的修改')
 
-    // 从现在起公式 Worker 的脚本加载不了（路由让浏览器的缓存失效，每次新建都去取）：以只读重建、按最新的内容重建都会失败
-    const workerScript = '**/assets/formula.worker-*.js'
-    await page.route(workerScript, async route => route.abort())
+    // M4-P5 会把 Worker 加载失败恢复为主线程。这里仍须覆盖整个编辑器确实建不起来：
+    // 在新 Canvas 的公开 getContext 入口抛错，旧实例已经取得的绘图上下文照常可用。
+    // 不返回 null：SDK 的测量与绘图路径会各自再解引用，错误类型取决于当时走到哪条路径。
+    const faultMessage = 'E2E：新 Canvas 绘图上下文创建失败'
+    const drawing = await page.evaluateHandle((message) => {
+      const descriptor: TypedPropertyDescriptor<HTMLCanvasElement['getContext']> | undefined = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'getContext')
+      const original = descriptor?.value
+      if (descriptor === undefined || original === undefined)
+        throw new Error('浏览器没有 Canvas getContext 方法，无法建立故障对照')
+      const existing = new WeakSet(document.querySelectorAll('canvas'))
+      let denied = 0
+      HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, ...args: Parameters<typeof original>) {
+        if (!existing.has(this)) {
+          denied += 1
+          throw new Error(message)
+        }
+        return original.apply(this, args)
+      } as typeof original
+      return {
+        denied: () => denied,
+        restore: () => { Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', descriptor) },
+      }
+    }, faultMessage)
     await archiveSpace(space.id)
 
     // 心跳得知不能编辑了（403）：留在失去编辑权，说明编辑器没能重新打开；焦点原在单元格里，交给"另存为副本"
     const lost = lostNotice(page)
     await expect(lost).toContainText('编辑器没能重新打开，表格暂时显示不出来；本页的修改已经取出，另存为副本照常可用', { timeout: 30_000 })
     await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'failed')
+    const firstDenied = await drawing.evaluate(control => control.denied())
+    expect(firstDenied).toBeGreaterThan(0)
     const saveCopy = lost.getByRole('button', { name: '另存为副本', exact: true })
     await expect(saveCopy).toBeFocused()
     expect(await wouldPromptOnLeave(page)).toBe(true)
@@ -459,22 +482,72 @@ test.describe('US-M3-12 失去编辑权之后另存为副本（M3-P2 设计 §3.
     await expect(lost).toContainText('没能载入最新的版本')
     await expect(page.getByText('编辑器加载失败，请刷新页面重试')).toHaveCount(0)
     await expect(editorSurface(page)).toHaveAttribute('data-editor-state', 'failed')
+    expect(await drawing.evaluate(control => control.denied())).toBeGreaterThan(firstDenied)
     const link = lost.getByRole('link', { name: '打开副本（新标签页）', exact: true })
     await expect(link).toHaveAttribute('target', '_blank')
     expect(await wouldPromptOnLeave(page)).toBe(false)
     const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
     expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('本页的修改')
 
-    // Worker 恢复：重新加载，按服务器上的最新版本回到阅读（只能查看），读屏状态区说明已另存为副本
-    await page.unroute(workerScript)
+    // 绘图恢复：重新加载，按服务器上的最新版本回到阅读（只能查看），读屏状态区说明已另存为副本
+    await drawing.evaluate(control => control.restore())
     await lost.getByRole('button', { name: '重新加载', exact: true }).click()
     await waitForLostToReading(page)
     await waitForEditorAccess(page, 'read')
     await expect(saveStatus(page)).toHaveText('只能查看')
     await expect(page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })).toBeVisible()
-    // 页面错误只有编辑器建不起来的那两次（以只读重建、按最新的内容重建）——页面没有开始离开，加载失败照常立即上报（M3-P5 收尾 E1；
-    // wouldPromptOnLeave 派发的 beforeunload 不可信，不算开始离开）
-    expect(pageErrors.list()).toEqual([expect.stringMatching(/^SheetEditorLoadError: 公式 Worker 起不来/), expect.stringMatching(/^SheetEditorLoadError: 公式 Worker 起不来/)])
+    // Canvas 拒绝次数与浏览器送出的 SDK 错误数不保证一一对应；只接受本页的这类诊断，
+    // 数量不能超过实际拒绝次数。两次重建各须报告一次没有完成渲染，不能混入其他错误。
+    const denied = await drawing.evaluate(control => control.denied())
+    const errors = pageErrors.list()
+    await testInfo.attach('reopen-failure-diagnostics', { body: JSON.stringify({ firstDenied, denied, errors }), contentType: 'application/json' })
+    const contextError = `Error: ${faultMessage}（${page.url()}）`
+    const drawingErrors = errors.filter(message => message === contextError || (browserName === 'webkit' && message === `Unhandled Promise Rejection: ${contextError}`))
+    expect(drawingErrors.length).toBeGreaterThan(0)
+    expect(drawingErrors.length).toBeLessThanOrEqual(denied)
+    expect(errors.filter(message => !drawingErrors.includes(message))).toEqual([
+      expect.stringMatching(/^Error: 工作簿 [\da-f-]+ 还没有渲染：冻结线的拦截要在渲染完成之后装上/),
+      expect.stringMatching(/^Error: 工作簿 [\da-f-]+ 还没有渲染：冻结线的拦截要在渲染完成之后装上/),
+    ])
+  })
+
+  test('US-M4-13 失去编辑权时 Worker 脚本加载失败：自动以主线程阅读本页内容，另存副本保全正文，随后回到服务器版本且不重取编辑权', async ({ page }) => {
+    const lead = await createUser('lost-fallback-lead')
+    const editor = await createUser('lost-fallback-editor')
+    const space = await createTeamSpace('失权后公式退路', lead, [[lead, 'admin'], [editor, 'editor']])
+    const documentId = await createDocumentIn(space.id, lead, '共同的表')
+    await loginThroughApi(page, editor)
+    const writes = recordWrites(page, documentId)
+    await withSaveFirst(page, documentId, async (saveFirst) => {
+      const fault = await blockFormulaWorker(page)
+      await archiveSpace(space.id)
+      await typeInCell(page, 'A1', '失权时保留的正文')
+      await page.keyboard.press('ControlOrMeta+s')
+      await saveFirst.expectResponse(403)
+      await expect(saveStatus(page)).toHaveText(/^编辑权已失效/)
+      await saveFirst.resume()
+      const lost = lostNotice(page)
+      await waitForEditorAccess(page, 'read')
+      // 失权阶段仍由原有失权说明主导；恢复阅读后再显示公式模式提示。
+      await expect(formulaRecoveryNotice(page)).toHaveCount(0)
+      await expect(lost).not.toContainText('编辑器没能重新打开')
+      expect(fault.attempts()).toBe(1)
+      expect(page.workers().filter(worker => /\/formula\.worker-/.test(new URL(worker.url()).pathname))).toHaveLength(0)
+      expect(await wouldPromptOnLeave(page)).toBe(true)
+      await lost.getByRole('button', { name: '另存为副本', exact: true }).click()
+      await waitForLostToReading(page)
+      await waitForEditorAccess(page, 'read')
+      await expect(saveStatus(page)).toHaveText('只能查看')
+      await expect(formulaRecoveryNotice(page)).toHaveText('公式已改用当前页面计算，大表格可能暂时卡顿。')
+      const link = page.locator('#editor-chrome').getByRole('link', { name: '打开副本（新标签页）', exact: true })
+      const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
+      expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('失权时保留的正文')
+      const original = await savedContent(page, documentId)
+      expect([original.revision, cellOf(original.snapshot, 'A1')]).toEqual([1, undefined])
+      expect(await wouldPromptOnLeave(page)).toBe(false)
+      expect(writes.filter(write => write === 'acquire')).toHaveLength(1)
+      expect(fault.attempts()).toBe(1)
+    })
   })
 })
 

@@ -7,7 +7,7 @@ import type { ApiError } from '../../shared/api/index.ts'
 import type { ConnectionState } from '../../shared/lib/connection-state.ts'
 import type { RecoveryInitializer } from '../../shared/local-drafts/recovery-initializer.ts'
 import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
-import type { WorkingDraftView } from '../../shared/local-drafts/working-draft.ts'
+import type { DraftCaptureRef, WorkingDraftView } from '../../shared/local-drafts/working-draft.ts'
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { Autosave, AutosaveEditor, AutosaveEvent, AutosavePage, AutosaveTuning } from './autosave.ts'
 import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
@@ -17,6 +17,7 @@ import type { HandoverTrace } from './handover-trace.ts'
 import type { LocalLock, LockClaim } from './local-lock.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveCoordinator, SaveEditor, SaveSendIntent, SaveSendResult } from './save-coordinator.ts'
+import type { SavingEditorBinding } from './saving-editor.ts'
 import { incompatibilityOf, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError as RequestError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
@@ -24,6 +25,7 @@ import { acquireEditLease, leaseLossOf } from './edit-lease.ts'
 import { prepareEditingDraft } from './editing-draft.ts'
 import { holdLocalLock } from './local-lock.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
+import { createSavingEditor } from './saving-editor.ts'
 import { takeSnapshot } from './snapshot-capture.ts'
 
 /** 只需要捕获与保存能力，不持有或销毁编辑器的 UI。 */
@@ -99,6 +101,12 @@ export interface EditingSession {
   /** 已失效之后的定位：等待期间不再把这把锁当作编辑权，完成后放锁。 */
   readonly locateTakeover: (loss: LeaseLoss, waitMs: number) => Promise<boolean>
   readonly startSaving: (editor: EditingSessionEditor, initial: InitialSaving) => void
+  /** 稳定捕获入口；停止自动捕获后仍供失权流程读取，具体实例销毁不影响已冻结的正文。 */
+  readonly captureEditor: () => EditingSessionEditor | undefined
+  /** 输入完成后固定重建正文并登记原来源的公式恢复捕获；失败保留原实例。 */
+  readonly freezeEditor: () => DraftCaptureRef | undefined
+  /** 页面确认新实例自检和权限后接上；不改变保存资源、权限或调度挂起状态。 */
+  readonly replaceEditor: (editor: EditingSessionEditor) => boolean
   readonly prepareDraft: (initial: Pick<InitialSaving, 'revision'> & { readonly recover?: RecoveryInitializer }) => Promise<EditingDraftReady>
   /** 转交之后原会话不再销毁来源；调用方须先结束保存协调的上传所有权。 */
   readonly takeDraft: () => EditingDraft | undefined
@@ -132,6 +140,9 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
   let coordinator: SaveCoordinator | undefined
   let autosave: Autosave | undefined
   let savingEditor: EditingSessionEditor | undefined
+  let savingBinding: SavingEditorBinding | undefined
+  let concreteEditor: EditingSessionEditor | undefined
+  let recoveryCapture: DraftCaptureRef | undefined
   let savingLease: EditLease | undefined
   let draft: EditingDraft | undefined
   let preparation: EditingDraftPreparation | undefined
@@ -223,12 +234,44 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
     stopWatchingCoordinator = undefined
     coordinator?.dispose()
     coordinator = undefined
+    savingBinding?.dispose()
+    savingBinding = undefined
+    concreteEditor = undefined
+    recoveryCapture = undefined
     savingEditor = undefined
     savingLease = undefined
     preparation?.dispose()
     preparation = undefined
     transferDraft = undefined
     draft = undefined
+  }
+
+  function ownsSavingEditor(): boolean {
+    return !disposed && savingLease !== undefined && savingLease === lease && lock?.held() === true
+      && options.sessionActive?.() !== false && coordinator !== undefined && autosave !== undefined && draft !== undefined
+  }
+
+  function freezeEditor(): DraftCaptureRef | undefined {
+    const binding = savingBinding
+    const previous = concreteEditor
+    const scheduler = autosave
+    if (!ownsSavingEditor() || binding === undefined || previous === undefined || scheduler === undefined)
+      return undefined
+    if (recoveryCapture !== undefined)
+      return recoveryCapture
+    binding.freeze()
+    try {
+      const captured = scheduler.captureForFormulaRecovery()
+      if (captured === undefined)
+        binding.bind(previous)
+      recoveryCapture = captured
+      return captured
+    }
+    catch (error) {
+      // 来源的同步捕获未成功，不销毁仍有完整正文的具体实例。
+      binding.bind(previous)
+      throw error
+    }
   }
 
   async function resumeDraft(): Promise<void> {
@@ -623,13 +666,18 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         lock = undefined
       return here
     },
-    startSaving: (editor, initial) => {
+    startSaving: (created, initial) => {
       const held = lease
       if (held === undefined)
         throw new Error('建立保存前必须先接纳编辑租约')
       const source = draft
       if (source === undefined)
         throw new Error('建立保存前必须先准备工作草稿来源')
+      const binding = createSavingEditor(created, options.reportError)
+      const editor = binding.editor
+      savingBinding = binding
+      concreteEditor = created
+      recoveryCapture = undefined
       savingEditor = editor
       savingLease = held
       let saver: SaveCoordinator
@@ -718,6 +766,16 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
       stopWatchingAutosave = scheduler.subscribe(options.onChange)
       options.autosave.attach?.(scheduler)
       void checkConnection()
+    },
+    captureEditor: () => savingEditor,
+    freezeEditor,
+    replaceEditor: (created) => {
+      if (!ownsSavingEditor() || savingBinding === undefined || recoveryCapture === undefined)
+        return false
+      savingBinding.bind(created)
+      concreteEditor = created
+      recoveryCapture = undefined
+      return true
     },
     stopCapturing,
     stopSaving,

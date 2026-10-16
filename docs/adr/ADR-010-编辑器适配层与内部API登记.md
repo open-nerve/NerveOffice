@@ -72,6 +72,44 @@ createSheetEditor({ container, snapshot, access, viewState? }): Promise<SheetEdi
 - **捕获时机的接线**（M3-P4 S4）：`SheetEditor` 加公式进度（`onFormulaProgress`）、组合输入（`composing`、`onCompositionChange`——只认 DOM 事件，在 document 的捕获阶段、页头以外，不认 SDK 的 DOM 标记，批注的输入框也盖得到）与面板的防抖（`settlePanels`，登记 `PANEL_DEBOUNCES`：批注浮层 300 ms、数据验证详情面板 1 秒，两者卸载时都不清、不 flush；M3 合并前评审 CX4 起另交出"防抖中"的状态与开始、到点的通知，并进 `uncommittedInput`，`settlePanels` 等调用这一刻的到点、只给捕获之前的等待用）。进入编辑时带"公式待更新"的文档以公开配置 `UniverSheetsFormulaPlugin({ initialFormulaComputing: CalculationMode.FORCED })` 创建（白名单加 `CalculationMode`）；收齐的跟踪器加兜底：没看到带 `forceCalculation === true` 的触发命令之前不算收齐（`FORMULA_PROTOCOL.forceCalculationParam`，`FormulaProgress.awaitingForcedRound`）。**DEF-020 的结论**：变更检测、公式收齐与捕获时机不按 `trigger` 区分来源——变更检测只看类型、执行选项、`unitId` 与排除名单；收齐判断调用 SDK 的 `shouldTrigger` 时读的是同一个 params 对象，`trigger` 被串改不会让两边不一致；回归在 `change-classifier`、`formula-settle-tracker`、`calculation-trigger` 的单元测试。测试构建的自动保存控制在 `editor/testing/autosave-control.ts`（`window.__nerveAutosaveControl`），门禁按来源认出。
 - **编辑器适配层引用的 contracts 模块不能带 zod 的结构**：适配层引用带 zod 结构的模块时，构建把 zod 与 contracts 的几个模块拆进一个新的共享分块，它在 `zod-jitless` 之前执行，三个浏览器的编辑器页都出现一条 eval 的 CSP 违规。打开自检的失败种类与写法因此放在不引用 zod 的 `open-check-failures.ts`，请求体的结构（`open-check.ts`）只给服务端。
 
+## M4-P5 S1 的补充：公式执行模式与 Worker 故障事实（2026-10-16）
+
+`createSheetEditor` 接受显式 `formulaMode: 'worker' | 'main-thread'`，不给时生产仍默认 Worker。显式选择优先于测试构建的查询参数，生产不会载入测试模式开关。主线程沿用同一档案、相同 IMAGE 限制与内存存储覆盖；计算中先停下再销毁的 30 秒规避不变。
+
+返回的 `SheetEditor` 增加 `formulaMode`、`workerFailure()` 与 `onWorkerFailure(listener)`。后两者是首错 getter 和不回放的通知；调用方先订阅、再读 getter，避免漏掉接线前的故障。`FormulaWorkerError` 是既有 `SheetEditorLoadError` 的子类，只新增有限 `failure` 分类；构造抛错、握手前后 error/messageerror、Worker IMAGE 安装失败及 20 秒握手超时可区分，浏览器不能证明的加载/脚本原因不再细分。主线程 IMAGE 与渲染失败保留原普通错误。
+
+`worker-image-policy.ts` 的监听活到实例销毁，首错之后的回报不能覆盖结果；握手成功不代表整个编辑器已渲染，挂载等待同时观察运行期错误，不能将这段间隙的 Worker 故障误报成渲染超时。所有退出都清理启动期限与监听；捕获调用方看到的公式收齐状态在 Worker 失败后为 false，公式进度订阅也会获知变化。只接住自身 Worker 的错误事件，不添加全局异常忽略。
+
+此处是 P5 的基础接口；保存入口由下面的 S2 接线，页面重建、页头与诊断仍在后续 Step。S1 本身不宣称自动退化已完成，不修改保存协议或重新申请编辑权。
+
+## M4-P5 S2 的补充：替换实例时保留保存会话（2026-10-16）
+
+`features/sheet-editor/saving-editor.ts` 只拥有保存层订阅，不拥有 SDK。`EditingSession.startSaving` 创建稳定入口，原保存协调器、自动保存与本机保存视图始终引用它；替换具体实例不重建草稿、锁或租约。旧实例的逻辑修改序号在重新绑定时保留，新实例后续修改按偏移继续计数，不用公式计算伪造用户修改。
+
+输入全部落入模型后才允许冻结：无组字、无打开的单元格编辑器、无未提交输入。捕获成功才释放旧实例订阅；冻结期间读固定快照，公式未收齐，排队保存不能读取已销毁模型。旧回调由绑定代次隔离，旧公式等待结束时重看当前实例状态；SDK 的创建、销毁和打开自检仍由页面与槽位负责。
+
+`Autosave.captureForFormulaRecovery()` 沿原同步捕获路径登记 `formulasPending: true`，可在挂起调度时调用。`SaveCoordinator.noteFormulaRecovery(ref)` 使用原 WorkingDraft 的 sessionId/serial 建立确认边界：只有同会话、更晚 serial、公式已收齐的捕获获确认或通过原摘要去重，才能清掉待更新状态；旧 ACK、未知请求重放与认领都不能清它。最近边界在确认后保留，重复或更早登记也不会重新标脏。无新增持久序号、请求字段或正文来源。
+
+`EditingSession.captureEditor/freezeEditor/replaceEditor` 供 S3 使用。冻结捕获失败时回到旧源；失去原租约、本机锁或本人会话后拒绝接纳新实例。停止自动捕获后仍可读取冻结正文，结束保存后才释放绑定；来源转交的原所有权规则不变。这一步尚未使页面自动重建，不能当作整个 US-M4-13 的验收。
+
+## M4-P5 S3 的补充：页面组织公式恢复（2026-10-16）
+
+`formula-fallback` 包装原创建工厂，只有结构化 Worker 故障才选择本页主线程偏好并以同一内容重试一次，后续打开保持强制重算。`formula-recovery` 只组织输入等待、冻结、槽位替换、自检和资格检查，不申请编辑权，不创建第二份草稿。槽位新增按待接纳实例身份比对的 discard，迟到结果不得清空后来任务。
+
+自动保存分别登记已有输入准备与 HTTP；恢复先等待前者，避免旧提交 await 后读到新实例面板，不等待网络。组合输入结束后才挂完整屏障，提交单元格、等待面板各自结束后都复核资格。冻结之后失败继续保留完整正文；新实例通过自检、原页面代次/账户/协调器/调度/租约/本机锁检查后，才在同步段绑定并接纳。
+
+保存、退出、交出、接管、刷新及确认后的续行按恢复状态受控；实际标签页回应原 busy 消息，不增加协议状态。失权通过稳定 captureEditor 取正文，换人、pagehide 和销毁优先。初次主线程退路进入编辑时登记公式补存，零用户修改也能清掉待更新标记；旧请求和 ACK 沿 S2 规则收尾。S4 继续页头和诊断接线，S5 验证真实浏览器与生产快照，S3 的单元与构建结果不能代替 A18。
+
+## M4-P5 S4 的补充：恢复说明与有限诊断（2026-10-17）
+
+沿原 `POST /documents/:id/open-check-failures` 兼容旧报告，新增严格的 `kind: formula-worker` 变体。只有 S1 七种 failure、revision/access/trigger 与四项页面构建/格式元数据；不接收正文、公式、资源内容、Worker URL 或异常原文。Worker 枚举放在 contracts 的无 Zod 事实模块，适配层继续导出同一类型；浏览器构建器不引入 schema 的求值。
+
+服务端先按原只读事务校验可读权限，再与资源自检共用去重和每账户 10 分钟 20 条配额，保持 10,000 键上限。日志 event 为 `formula-worker-failed`，只说页面尝试改用主线程，不宣称已恢复或禁止编辑；旧 event 与旧请求体兼容。不落库、不记审计，后台请求仍受会话、CSRF、Origin 与体积限制。
+
+页面本轮创建显式携带 revision/access/trigger，避免刷新时从旧 shown 误取修订。首错先锁存上报标记，再发一次后台请求，不因网络错误重试或改变恢复流程。运行期与恢复后资源自检分别报告，新增 `formula-recovery` 起因；后者仍阻止不完整模型进入保存。
+
+页头单独说明等待输入、重建、暂停、失败和主线程成功。失败时同一页面有明确重试，当前会话、模式与保存终态限制动作；重建本身不要求联网。公式、云端保存、本机保存的读屏事实独立记忆。按钮、既有接管/放弃本机修改确认框按 S3 恢复状态保护，取消和会话/失权出口保持可用。此步通过单元/相关集成与原构建门槛，真实浏览器、生产快照和性能仍由 S5 验收。
+
 ## M4-P4 的补充：SDK 偏好按编辑器实例留在内存（2026-10-14）
 
 `editor/internal-api/memory-local-storage.ts` 实现锁定 SDK 的 `ILocalStorageService` 全部异步接口，每个注入器独立 Map，读、写和遍历克隆值；销毁清空，迟到写入不能复活数据。内部 API 登记、统一出口及 lint 限制同时更新，平台功能不引用 SDK。
@@ -79,3 +117,17 @@ createSheetEditor({ container, snapshot, access, viewState? }): Promise<SheetEdi
 覆盖必须传给实际注册服务的 `UniverUIPlugin` 的 `override` 配置。核心 `Univer` 的 override 只替换该层声明的依赖，把这个 token 放在那里不会替换 UI 服务。实际 Render/UI 档案测试核对阅读/编辑实例隔离，真实浏览器通过数字格式界面核对当前实例偏好、重建后不继承、旧库/键不再新增。
 
 SDK 模块加载仍会打开模块私有的 `UniverLocalStorage/kv`（v1）连接，`Univer.dispose()` 不能关闭它，因此不能承诺数据库永不出现或保留编辑器时可立即删库。本项目不修改 SDK、不拦截全局 IndexedDB；旧库删除 blocked/超时交回 pending，提示关闭本站编辑器后重试。此空库不承载本项目新写的偏好，也不改变发件箱加密/清理规则。产物门禁继续保证平台和公式 Worker 不因这个实现引入 UI 依赖，原资源预算不扩大。
+
+## M4-P5 S5 的补充：Worker 让出间隔（2026-10-17）
+
+公式 Worker 的 `UniverFormulaEnginePlugin` 显式使用 `intervalCount: 20`，主线程既有 20 保持。独立串行实测在同一 1,020 重型公式样本上比较原默认 500 与 20/50/100，每候选每浏览器 10 轮，共 120 轮；逐轮核对实际进度间隔、计算中 STOP、被停轮无结果和重算正确性。20 的整轮计算中位数相对原默认增加约 0.8%–4.4%，三个浏览器所观察的 stop 最大值分别从 1823.0/1826.8/799.0 ms 降至 13.3/14.6/12.0 ms。选择 20 的依据是停止响应与整轮成本，不是最快单轮。
+
+这些数值只描述本机和该样本；停止计时从第一条实际计算进度后发命令到结束通知，包含消息往返，不代表单个长公式、依赖构建或任意停止时点的上界。完整分布、环境、源码/产物散列和复现入口见 [P5-S5 自审记录](../v0.1/M4-本地优先与离线恢复/reviews/P5-S5-自审记录.md)。
+
+DEF-072 在原间隔 500 与最终间隔 20 分别做计时器 off/on 对照，每种 12 次真实冷热打开。按既有 500 ms 停顿口径，分别从 10/12、7/12 降为 0/12、0/12；每次缓存前提成立。最终采用公式 Worker 入口的 100 ms 空计时器，随 Worker 终止而结束；不修改 SDK、不增加页面消息或持久化状态。这个代价是 Worker 存活期间增加计时唤醒，以避免空闲后首次增量额外约一秒的等待。最终组合另跑三个浏览器各 10 轮，stop 最大值为 15.9/13.2/12.0 ms；整轮中位数为 4134.6/4209.5/1962.0 ms，比早先默认批次高约 8.4%/11.4%/16.3%。这不是同时期交替对照，不能把差值全归因于计时器；上文 0.8%–4.4% 仅属于间隔实验，不能概括最终组合。采用结论接受本次观察到的计算成本，不承诺所有工作簿吞吐或电量收益。
+
+真实 Safari 27.0 的间隔 20 off/on 各三个页面（Worker 冷/热及主线程对照）均通过。Worker 首次额外时长 off=-2/+6 ms、on=+12/-3 ms，本轮未复现基线停顿，结论限于实际浏览器回归；因果改善来自上述两套 WebKit 对照，不将少量 Safari 样本描述成保证。
+
+## M4-P5 S6 的补充：排队恢复前复核组字（2026-10-17）
+
+独立审查 I1 证明：上一轮 `compositionend` 到恢复宏任务之间可能开始下一轮组字。恢复必须在实际任务开始、挂完整输入屏障之前再次读取组字状态；仍在组字就回到原有等待与订阅流程，不提交、捕获或销毁。否则窗口捕获屏障可能吞掉下一轮结束事件，导致冻结失败。此检查不改变保存资源身份，也不引入额外定时器或队列。连续两次重新组字的控制器反例及真实 DOM 屏障反例均已 RED→GREEN，相关 3,166 单元和三个浏览器 21 项回归通过；整 Phase 门禁仍在 S6 验收。

@@ -107,6 +107,19 @@ const DAMAGED_RESOURCE_PHRASES: Readonly<Record<ProfileResourceName<'sheet@1'>, 
 }
 
 export const editorMessages = {
+  formulaRecovery: {
+    waiting: '请先完成当前输入，页面随后恢复公式计算。',
+    working: '正在恢复公式计算，请稍候。',
+    paused: '公式恢复已暂停，请先处理页面中的其他提示。',
+    session: '公式恢复已暂停，请使用原账户登录后回到本页。',
+    input: '当前输入尚未完成，请完成输入后重试公式恢复。',
+    capture: '暂时无法保留完整内容，页面尚未重建。请重试公式恢复。',
+    create: '公式计算暂时无法恢复，重建前的内容仍保留在本页。',
+    openCheck: '重建后的表格未完整载入，原内容仍保留在本页。',
+    ready: '公式已改用当前页面计算，大表格可能暂时卡顿。',
+    retry: '重试公式恢复',
+    actionBlocked: '请先完成公式恢复，再继续此操作。',
+  },
   recovery: {
     found: (time: string | undefined): string => time === undefined ? '发现本机未同步的修改' : `发现 ${time} 未同步的修改`,
     restored: (time: string | undefined): string => time === undefined ? '已恢复本机修改，等待保存到云端' : `已恢复 ${time} 的本机修改，等待保存到云端`,

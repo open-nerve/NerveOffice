@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { OPEN_CHECK_FAILURE_KINDS, OPEN_CHECK_FAILURES_MAX, THROWN_FAILURE_KINDS } from './open-check-failures.ts'
-import { openCheckFailureSchema, openCheckReportSchema } from './open-check.ts'
+import { editorDiagnosticReportSchema, formulaWorkerReportSchema, openCheckFailureSchema, openCheckReportSchema } from './open-check.ts'
 
 /** 一次合法的上报：页面的构建与数据格式都带上 */
 const REPORT = {
@@ -80,5 +80,43 @@ describe('打开自检失败的上报（请求体，严格）', () => {
   it.each(['revision', 'access', 'trigger', 'failures', 'clientBuild', 'univerVersion', 'profile', 'formatVersion'])('缺 %s 不合法（版本四项必填：上报只作诊断，要分得出是哪个版本的页面报的）', (field) => {
     const { [field as keyof typeof REPORT]: _omitted, ...rest } = REPORT
     expect(openCheckReportSchema.safeParse(rest).success).toBe(false)
+  })
+})
+
+describe('US-M4-13 公式 Worker 诊断：有限变体与旧体兼容', () => {
+  const { failures: _failures, ...metadata } = REPORT
+  const worker = { ...metadata, kind: 'formula-worker', failure: 'create' } as const
+
+  it('旧报告和七种 Worker 故障原样解析；运行期恢复有自己的起因', () => {
+    expect(editorDiagnosticReportSchema.parse(REPORT)).toEqual(REPORT)
+    for (const failure of ['create', 'error-before-ready', 'messageerror-before-ready', 'ready-timeout', 'image-policy', 'error-after-ready', 'messageerror-after-ready']) {
+      const body = { ...worker, failure, trigger: 'formula-recovery' }
+      expect(formulaWorkerReportSchema.parse(body)).toEqual(body)
+      expect(editorDiagnosticReportSchema.parse(body)).toEqual(body)
+    }
+    expect(openCheckReportSchema.parse({ ...REPORT, trigger: 'formula-recovery' }).trigger).toBe('formula-recovery')
+  })
+
+  it.each(['kind', 'failure', 'revision', 'access', 'trigger', 'clientBuild', 'univerVersion', 'profile', 'formatVersion'])('缺少 %s 拒绝', (key) => {
+    const { [key as keyof typeof worker]: _omitted, ...rest } = worker
+    expect(editorDiagnosticReportSchema.safeParse(rest).success).toBe(false)
+  })
+
+  it.each([
+    { kind: 'worker' },
+    { failure: 'crash' },
+    { failure: { message: '机密正文' } },
+    { revision: 0 },
+    { revision: 1.5 },
+    { revision: 2_147_483_648 },
+    { access: 'write' },
+    { trigger: 'save' },
+    { clientBuild: 'invalid build' },
+    { univerVersion: 'invalid version' },
+    { profile: '' },
+    { formatVersion: 0 },
+    ...['message', 'stack', 'snapshot', 'formula', 'workerUrl', 'resource', 'error', 'failures'].map(key => ({ [key]: '机密正文' })),
+  ])('非法值或额外字段拒绝：%j', (overrides) => {
+    expect(editorDiagnosticReportSchema.safeParse({ ...worker, ...overrides }).success).toBe(false)
   })
 })

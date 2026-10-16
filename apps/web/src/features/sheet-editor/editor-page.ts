@@ -30,6 +30,7 @@ import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './e
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
+import type { FormulaRecoveryView } from './formula-recovery.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
@@ -82,6 +83,7 @@ export type EditorPageLoad
 export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
 
 export interface EditorPageView {
+  readonly formulaRecovery?: FormulaRecoveryView | undefined
   readonly recovery?: RecoveryView | undefined
   readonly localSave?: LocalSaveView | undefined
   readonly connection?: ConnectionView | undefined
@@ -196,6 +198,7 @@ export interface EditorPageOptions {
 }
 
 export interface EditorPage {
+  readonly retryFormulaRecovery: () => void
   readonly retryRecovery: () => Promise<void>
   readonly copyRecovery: () => Promise<void>
   readonly beginDiscardRecovery: () => RecoveryDiscard | undefined
@@ -345,7 +348,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, recovery: recovery?.view(), localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { load, recovery: recovery?.view(), formulaRecovery: modeView?.formulaRecovery, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+  }
+
+  function formulaBusy(): boolean {
+    return mode?.view().formulaRecovery?.blocksActions === true
   }
 
   /** 页面信号变了：在调用者的同步段里通知（可见性在 visibilitychange 里，切到后台的上传不靠计时器） */
@@ -423,7 +430,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         finish({ kind: 'not-found' })
       return
     }
-    if (switching(view.mode) || view.surface === 'creating')
+    if (switching(view.mode) || view.surface === 'creating' || view.formulaRecovery?.blocksInput === true)
       setSurface('loading')
     else if (view.surface === 'none')
       setSurface('failed')
@@ -879,6 +886,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       if (mode.view().mode.kind === 'reading')
         void recovery?.discover()
     },
+    retryFormulaRecovery: () => mode?.retryFormulaRecovery(),
     save: async () => {
       const view = mode?.view()
       if (view?.mode.kind !== 'editing' || view.save === undefined)
@@ -890,6 +898,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode?.save(readyToWrite)
     },
     enterEditing: async () => {
+      if (formulaBusy())
+        return
       if (!serverAvailable())
         return
       if (mode?.view().mode.kind !== 'reading')
@@ -902,6 +912,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.enter(prepare)
     },
     takeOverHere: async () => {
+      if (formulaBusy())
+        return
       if (!serverAvailable())
         return
       if (mode?.view().mode.kind !== 'reading')
@@ -914,6 +926,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     cancelTakeOver: () => mode?.cancelTakeOver(),
     forceTakeOver: async () => {
+      if (formulaBusy())
+        return
       if (!serverAvailable())
         return
       if (mode?.view().mode.kind !== 'reading')
@@ -926,6 +940,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     dismissInterruption: () => mode?.dismissInterruption(),
     requestEditing: async () => {
+      if (formulaBusy())
+        return
       if (!serverAvailable())
         return
       if (mode?.view().mode.kind !== 'reading')
@@ -945,6 +961,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.cancelRequest()
     },
     handOver: async () => {
+      if (formulaBusy())
+        return
       if (!serverAvailable())
         return
       if (mode?.view().mode.kind !== 'editing')
@@ -954,6 +972,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         await mode.handOver()
     },
     keepEditing: async () => {
+      if (formulaBusy())
+        return
       if (!serverAvailable())
         return
       if (mode?.view().mode.kind !== 'editing')
@@ -962,6 +982,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         await mode.decline()
     },
     exitEditing: async () => {
+      if (formulaBusy())
+        return
       if (!serverAvailable())
         return
       if (mode?.view().mode.kind !== 'editing')

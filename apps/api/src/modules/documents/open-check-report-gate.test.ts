@@ -1,6 +1,6 @@
 import type { OpenCheckFailure } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { normalizedFailures, OPEN_CHECK_REPORT_WINDOW_MS, OPEN_CHECK_REPORTS_PER_ACCOUNT, OpenCheckReportGate, openCheckReportKey } from './open-check-report-gate.ts'
+import { formulaWorkerReportKey, normalizedFailures, OPEN_CHECK_REPORT_WINDOW_MS, OPEN_CHECK_REPORTS_PER_ACCOUNT, OpenCheckReportGate, openCheckReportKey } from './open-check-report-gate.ts'
 
 /** 假的单调时钟：用例拨动它 */
 function clock(): { readonly now: () => number, readonly advance: (ms: number) => void } {
@@ -120,5 +120,28 @@ describe('进程内的去重与按账户限量（M3-P4 设计 §3.13）', () => 
     const gate = new OpenCheckReportGate()
     expect(gate.decide('amy', 'k')).toBe('accept')
     expect(gate.decide('amy', 'k')).toBe('duplicate')
+  })
+})
+
+describe('US-M4-13 Worker 与旧自检共用去重门禁', () => {
+  it('新签名四项各自生效，与旧报告不碰撞；相同报告去重且不多占共享配额', () => {
+    const key = formulaWorkerReportKey('d1', 3, '0.1.0', 'create')
+    expect(formulaWorkerReportKey('d1', 3, '0.1.0', 'create')).toBe(key)
+    for (const other of [
+      formulaWorkerReportKey('d2', 3, '0.1.0', 'create'),
+      formulaWorkerReportKey('d1', 4, '0.1.0', 'create'),
+      formulaWorkerReportKey('d1', 3, '0.1.1', 'create'),
+      formulaWorkerReportKey('d1', 3, '0.1.0', 'ready-timeout'),
+      openCheckReportKey('d1', 3, '0.1.0', [PARSE]),
+    ])
+      expect(other).not.toBe(key)
+    const time = clock()
+    const gate = new OpenCheckReportGate({ now: time.now, perAccount: 2 })
+    expect(gate.decide('amy', key)).toBe('accept')
+    expect(gate.decide('bob', key)).toBe('duplicate')
+    expect(gate.decide('amy', openCheckReportKey('d1', 3, '0.1.0', [PARSE]))).toBe('accept')
+    expect(gate.decide('amy', formulaWorkerReportKey('d1', 4, '0.1.0', 'create'))).toBe('throttled-first')
+    time.advance(OPEN_CHECK_REPORT_WINDOW_MS)
+    expect(gate.decide('amy', key)).toBe('accept')
   })
 })

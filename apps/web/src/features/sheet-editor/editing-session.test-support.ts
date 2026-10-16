@@ -32,8 +32,10 @@ export function deferred<T>() {
   return { promise, resolve }
 }
 
-export function editorFixture() {
-  let seq = 0
+export function editorFixture(initial: { seq?: number, settled?: boolean, snapshot?: string } = {}) {
+  let seq = initial.seq ?? 0
+  let snapshot = initial.snapshot ?? `{"v":${seq}}`
+  let settled = initial.settled ?? true
   let inputState: ReturnType<EditingSessionEditor['uncommittedInput']> = 'none'
   const changes = new Set<() => void>()
   const input = new Set<() => void>()
@@ -50,21 +52,27 @@ export function editorFixture() {
     onChange: listen(changes),
     uncommittedInput: () => inputState,
     onUncommittedInputChange: listen(input),
-    formulasSettled: () => true,
+    formulasSettled: () => settled,
     onFormulaProgress: listen(formulas),
     composing: () => false,
     onCompositionChange: listen(composition),
     isCellEditing: () => false,
     commitCellEditing: async () => true,
     settlePanels: async () => {},
-    settleFormulas: async () => 'settled',
-    capture: () => `{"v":${seq}}`,
+    settleFormulas: async () => settled ? 'settled' : 'timeout',
+    capture: () => snapshot,
   }
   return {
     editor,
     edit: () => {
       seq += 1
+      snapshot = `{"v":${seq}}`
       changes.forEach(listener => listener())
+    },
+    finishFormulas: (result: string) => {
+      snapshot = result
+      settled = true
+      formulas.forEach(listener => listener())
     },
     setInput: (next: typeof inputState) => {
       inputState = next

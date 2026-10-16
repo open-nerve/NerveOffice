@@ -227,6 +227,161 @@ function setup(options: { initialUnsaved?: boolean, initialFormulasPending?: boo
 
 type Context = ReturnType<typeof setup>
 
+describe('公式重建捕获', () => {
+  it('重建等待已有提交和面板准备完成，不重新提交输入', async () => {
+    const context = setup()
+    const committing = deferred<void>()
+    const panels = deferred<void>()
+    const original = vi.mocked(context.editor.commitCellEditing).getMockImplementation()!
+    vi.mocked(context.editor.commitCellEditing).mockImplementationOnce(async () => {
+      const result = original()
+      await committing.promise
+      return result
+    })
+    vi.mocked(context.editor.settlePanels).mockReturnValueOnce(panels.promise)
+    context.control.startCellEditing('提交这次输入')
+    const flushing = context.autosave.flush('save-button', { ready: async () => false })
+    let done = false
+    const waiting = context.autosave.settleInputPreparations().then(() => {
+      done = true
+    })
+    await drain(context)
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    expect(context.editor.settlePanels).not.toHaveBeenCalled()
+    expect(done).toBe(false)
+    committing.resolve()
+    await drain(context)
+    expect(context.editor.settlePanels).toHaveBeenCalledOnce()
+    expect(done).toBe(false)
+    panels.resolve()
+    await waiting
+    expect(done).toBe(true)
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    await flushing
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.dispose()
+  })
+
+  it('准备失败交回原错误，完成后释放；不留下永远失败的等待', async () => {
+    const context = setup()
+    const gate = deferred<void>()
+    const failure = new Error('面板提交失败')
+    vi.mocked(context.editor.settlePanels).mockImplementationOnce(async () => {
+      await gate.promise
+      throw failure
+    })
+    const flushing = context.autosave.flush('save-button', { ready: async () => false })
+    const waiting = expect(context.autosave.settleInputPreparations()).rejects.toBe(failure)
+    gate.resolve()
+    await waiting
+    await flushing
+    await expect(context.autosave.settleInputPreparations()).resolves.toBeUndefined()
+    expect(context.editor.settlePanels).toHaveBeenCalledOnce()
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.dispose()
+  })
+
+  it('输入已完成但 HTTP 仍在途，重建等待立即结束', async () => {
+    const context = setup()
+    const flushing = context.autosave.flush('save-button')
+    const request = await sent(context, 1)
+    expect(context.coordinator.busy()).toBe(true)
+    await context.autosave.settleInputPreparations()
+    expect(context.coordinator.busy()).toBe(true)
+    expect(context.editor.capture).toHaveBeenCalledOnce()
+    request.resolve(saved(2))
+    await flushing
+    context.autosave.dispose()
+  })
+
+  it('只等调用时已有准备，不把后来输入加入旧等待', async () => {
+    const context = setup()
+    const first = deferred<void>()
+    const later = deferred<void>()
+    vi.mocked(context.editor.settlePanels).mockReturnValueOnce(first.promise).mockReturnValueOnce(later.promise)
+    const firstFlush = context.autosave.flush('save-button', { ready: async () => false })
+    const waiting = context.autosave.settleInputPreparations()
+    const laterFlush = context.autosave.flush('save-button', { ready: async () => false })
+    first.resolve()
+    await waiting
+    let laterDone = false
+    const waitingLater = context.autosave.settleInputPreparations().then(() => {
+      laterDone = true
+    })
+    await drain(context)
+    expect(laterDone).toBe(false)
+    later.resolve()
+    await waitingLater
+    await Promise.all([firstFlush, laterFlush])
+    expect(context.editor.settlePanels).toHaveBeenCalledTimes(2)
+    context.autosave.dispose()
+  })
+
+  it('零修改序号可在挂起时捕获；恢复调度后先保留 pending，无新输入也补存收齐结果', async () => {
+    const context = setup({ settled: false })
+    context.autosave.suspend()
+    const ref = context.autosave.captureForFormulaRecovery()
+    expect(ref).toMatchObject({ editorSeq: 0, formulasPending: true })
+    expect(context.captures()).toEqual([expect.objectContaining({ trigger: 'formula-recovery', seq: 0, formulasPending: true })])
+    expect(context.coordinator.view()).toMatchObject({ formulasPending: true, unsavedEdits: false })
+    expect(context.autosave.saved()).toEqual({ edits: true, formulas: false })
+    await context.time.advance(DEFAULT_AUTOSAVE_LIMITS.uploadMaxMs)
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.resume()
+    await drain(context)
+    const pending = await sent(context, 1)
+    expect(pending.request.formulasPending).toBe(true)
+    expect(requestWithSnapshot(pending).request.snapshot).toBe('{"content":"初始"}')
+    pending.resolve(saved(2))
+    await drain(context)
+    expect(context.autosave.saved()).toEqual({ edits: true, formulas: false })
+    context.control.settle(true)
+    await drain(context)
+    const complete = await sent(context, 2)
+    expect(complete.request.formulasPending).toBe(false)
+    expect(context.editor.changeSeq()).toBe(0)
+    complete.resolve(saved(3))
+    await drain(context)
+    expect(context.autosave.saved()).toEqual({ edits: true, formulas: true })
+    context.autosave.dispose()
+    context.coordinator.dispose()
+    context.draft.dispose()
+  })
+
+  it('捕获失败原样抛出，不采用已有草稿或冒充成功登记', async () => {
+    const context = setup()
+    const old = context.draft.capture({ snapshot: '{"old":true}', editorSeq: 0, formulasPending: false, dedupe: true })
+    const error = new Error('模型无法读取')
+    vi.mocked(context.editor.capture).mockImplementation(() => {
+      throw error
+    })
+    expect(() => context.autosave.captureForFormulaRecovery()).toThrow(error)
+    expect(context.draft.view()).toMatchObject({ ref: old })
+    expect(context.coordinator.view()).toMatchObject({ formulasPending: false, unsavedEdits: false })
+    expect(context.captures()).toEqual([])
+    await drain(context)
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.dispose()
+    context.coordinator.dispose()
+    context.draft.dispose()
+  })
+
+  it.each(['ended', 'disposed'] as const)('%s 之后不捕获或登记', (state) => {
+    const context = setup()
+    if (state === 'ended')
+      context.coordinator.block('client-outdated')
+    else
+      context.autosave.dispose()
+    expect(context.autosave.captureForFormulaRecovery()).toBeUndefined()
+    expect(context.editor.capture).not.toHaveBeenCalled()
+    expect(context.captures()).toEqual([])
+    expect(context.coordinator.view().formulasPending).toBe(false)
+    context.autosave.dispose()
+    context.coordinator.dispose()
+    context.draft.dispose()
+  })
+})
+
 describe('恢复初值的自动上传', () => {
   it('编辑序号为零的初值直接进入调度，不要求 SDK 额外修改或重新捕获', async () => {
     const context = setup({ initialUnsaved: true })

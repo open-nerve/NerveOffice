@@ -72,6 +72,7 @@ import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { editorQueryClient } from './editor-query-client.ts'
+import { formulaRecoveryNotice } from './formula-recovery-ui.ts'
 import { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
 import { RecoveryNotice } from './recovery/recovery-notice.tsx'
 import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
@@ -244,21 +245,22 @@ function announcementOf(view: EditorPageView): Announcement {
  * 显式写 aria-live（语义不变：role="status" 本来就是 polite，M2-P5 复验第二轮 G1）：保存在后台进行，分享对话框（模态）开着时也会完成或失败；
  * Radix 的模态弹窗打开时把弹窗之外的内容都标为 aria-hidden，只跳过那一刻已经在的、显式写了 aria-live 的元素（aria-hidden 库的 hideOthers）
  */
-function SaveAnnouncer({ view, local }: { view: EditorPageView, local: LocalSaveIndicator | undefined }) {
+function SaveAnnouncer({ view, local, formula }: { view: EditorPageView, local: LocalSaveIndicator | undefined, formula: string | undefined }) {
   const terminal = view.save?.status === 'conflict' || view.save?.status === 'outdated' || view.save?.status === 'too-new'
   const base = announcementOf(view)
   const announceLocal = local !== undefined && view.session === 'active' && !view.confirmingSession && !terminal
   const localKey = announceLocal ? local.announcementKey : undefined
-  const [seen, setSeen] = useState({ base: base.key, local: localKey })
-  const [spoken, setSpoken] = useState(() => [base.key === undefined ? '' : base.text, localKey === undefined ? '' : local?.announcement].filter(Boolean).join(' '))
+  const [seen, setSeen] = useState({ base: base.key, local: localKey, formula })
+  const [spoken, setSpoken] = useState(() => [base.key === undefined ? '' : base.text, localKey === undefined ? '' : local?.announcement, formula].filter(Boolean).join(' '))
   const [cleared, setCleared] = useState(false)
-  // 两条事实独立记忆：持续的本机降级不能遮住新的云端失败/恢复；例行输入不重播旧状态。
+  // 三条事实独立记忆：本机降级与公式退路不能遮住新的云端失败/恢复；例行输入不重播旧状态。
   const baseChanged = base.key !== undefined && base.key !== seen.base
   const localChanged = localKey !== seen.local
+  const formulaChanged = formula !== seen.formula
   // 渲染中按这一次的结果调整（React 的写法：随即重新渲染，不经 effect 多渲染一轮）
-  if (baseChanged || localChanged) {
-    setSeen({ base: base.key ?? seen.base, local: localKey })
-    const updates = [baseChanged ? base.text : '', localChanged && announceLocal ? localKey === undefined ? editorMessages.localSave.recovered : local.announcement : ''].filter(Boolean)
+  if (baseChanged || localChanged || formulaChanged) {
+    setSeen({ base: base.key ?? seen.base, local: localKey, formula })
+    const updates = [baseChanged ? base.text : '', localChanged && announceLocal ? localKey === undefined ? editorMessages.localSave.recovered : local.announcement : '', formulaChanged ? formula : ''].filter(Boolean)
     if (updates.length > 0) {
       setSpoken(updates.join(' '))
       setCleared(false)
@@ -394,7 +396,7 @@ function offersForceTakeOver(reading: ReadingMode): boolean {
  * 强制接管（M3-P5 设计 §3.8）："请求编辑"旁边的"强制接管"（outline）：点了交给 onForce（先确认）；forcing 是强制接管的进入编辑中——这时只留它，
  * 说正在接管（不可用、进行中），没成功时焦点还在它上面
  */
-function ReadingControls({ available, page, reading, session, confirming, forcing, forceRef, onForce }: { available: boolean, page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
+function ReadingControls({ available, recovering, page, reading, session, confirming, forcing, forceRef, onForce }: { available: boolean, recovering: boolean, page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
   // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面。打开自检失败（M3-P4）时同样不给：数据不完整的不能编辑
@@ -405,12 +407,12 @@ function ReadingControls({ available, page, reading, session, confirming, forcin
   const requestBusy = reading?.request?.kind === 'sending' || reading?.request?.kind === 'cancelling'
   const action = enterActionOf(reading)
   // 取消请求不受"正在载入最新的版本"影响（与重建无关）
-  const blockedByUpdate = update === 'loading' && action !== 'cancel-request'
+  const blockedByUpdate = (update === 'loading' || recovering) && action !== 'cancel-request'
   // 强制接管：阅读时按条件出现，进入编辑的过程中（forcing）留着；载入最新的版本、确认会话、会话不是本人时不可用
   const forceHolder = reading !== undefined && offersForceTakeOver(reading) ? reading.holder : undefined
-  const forceUnavailable = !available || forcing || confirming || update === 'loading' || session !== 'active'
+  const forceUnavailable = !available || recovering || forcing || confirming || update === 'loading' || session !== 'active'
   const run = (): void => {
-    if (!available)
+    if (!available || (recovering && action !== 'cancel-request'))
       return
     switch (action) {
       case 'enter':
@@ -432,7 +434,7 @@ function ReadingControls({ available, page, reading, session, confirming, forcin
   return (
     <>
       {update !== 'none' && (
-        <Button size="sm" variant="outline" aria-disabled={update === 'loading' || taking} onClick={() => void page.refreshUpdate()}>
+        <Button size="sm" variant="outline" aria-disabled={update === 'loading' || taking || recovering} onClick={() => !recovering && void page.refreshUpdate()}>
           {update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.update}
         </Button>
       )}
@@ -1043,10 +1045,12 @@ function LoadFailure({ load, backRef }: { load: Exclude<EditorPageLoad, { kind: 
 export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean }) {
   const view = useSyncExternalStore(page.subscribe, page.view)
   const local = useLocalSaveIndicator(view)
+  const formula = formulaRecoveryNotice(view)
+  const formulaBlocked = view.formulaRecovery?.blocksActions === true
   const available = view.connection?.available !== false
   const [queryClient] = useState(() => editorQueryClient(page))
   /** 确认框（放弃本页的修改、强制接管）：同一时刻至多一个 */
-  const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean, readonly requiresRecovery?: boolean }>()
+  const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean, readonly requiresRecovery?: boolean, readonly requiresFormula?: boolean }>()
   const { load, mode, save } = view
   const ready = load.kind === 'ready' ? load : undefined
   const title = ready?.title
@@ -1089,6 +1093,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
     setPending({
       requiresConnection: true,
+      requiresFormula: true,
       title: editorMessages.mode.forceTitle,
       description: editorMessages.mode.forceDescription(messages.people.text(holder.holder), lastActive),
       confirmLabel: editorMessages.mode.forceConfirm,
@@ -1102,6 +1107,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
 
   function confirmationUnavailable(): string | undefined {
     const current = page.view()
+    if (pending?.requiresFormula === true && current.formulaRecovery?.blocksActions === true)
+      return editorMessages.formulaRecovery.actionBlocked
     if (pending?.requiresConnection === true && current.connection?.available === false)
       return messages.common.connectionRequired
     if (pending?.requiresRecovery === true && (current.session !== 'active' || current.confirmingSession || current.sessionProblem !== undefined || (current.mode !== undefined && current.mode.kind !== 'reading')))
@@ -1110,12 +1117,15 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   }
 
   function confirmDiscardRecovery(): void {
+    if (page.view().formulaRecovery?.blocksActions === true)
+      return
     const intent = page.beginDiscardRecovery()
     if (intent === undefined)
       return
     setPending({
       requiresConnection: true,
       requiresRecovery: true,
+      requiresFormula: true,
       title: editorMessages.recovery.discardTitle,
       description: editorMessages.recovery.discardDescription,
       confirmLabel: editorMessages.recovery.discardConfirm,
@@ -1146,10 +1156,10 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     <RecoveryNotice
       view={view.recovery}
       available={available}
-      active={view.session === 'active' && !view.confirmingSession && view.sessionProblem === undefined}
+      active={view.session === 'active' && !view.confirmingSession && view.sessionProblem === undefined && !formulaBlocked}
       reading={reading !== undefined || mode === undefined}
       entering={entering}
-      canRestore={reading?.canEdit === true && !reading.gone && reading.blocked === undefined && reading.damaged === undefined && reading.holder === undefined && reading.request === undefined && reading.takeover === undefined}
+      canRestore={!formulaBlocked && reading?.canEdit === true && !reading.gone && reading.blocked === undefined && reading.damaged === undefined && reading.holder === undefined && reading.request === undefined && reading.takeover === undefined}
       onRestore={() => void page.enterEditing()}
       onCopy={() => void page.copyRecovery()}
       onRetry={() => void page.retryRecovery()}
@@ -1190,13 +1200,23 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               {ready !== undefined && <EditorShareEntry available={available} page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
               {/* 看得见的状态（不是播报区：例行的变化只改文字）与读屏的播报区（只播有意义的变化） */}
               <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-              <SaveAnnouncer view={view} local={local} />
-              {(reading !== undefined || entering) && <ReadingControls available={available} page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
-              {editing !== undefined && <SaveControls available={available} page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
+              <SaveAnnouncer view={view} local={local} formula={formula?.text} />
+              {(reading !== undefined || entering) && <ReadingControls available={available} recovering={formulaBlocked} page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
+              {editing !== undefined && <SaveControls available={available && !formulaBlocked} page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
             </div>
           </div>
           {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
           {local !== undefined && <LocalSaveStatus indicator={local} />}
+          {formula !== undefined && (
+            <div data-slot="formula-recovery" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-sm text-muted-foreground">
+              <p>{formula.text}</p>
+              {view.formulaRecovery?.phase === 'failed' && (
+                <Button size="sm" variant="outline" aria-disabled={!formula.canRetry} onClick={() => formulaRecoveryNotice(page.view())?.canRetry && page.retryFormulaRecovery()}>
+                  {editorMessages.formulaRecovery.retry}
+                </Button>
+              )}
+            </div>
+          )}
           {/* 阅读时的一行静态说明（A14，见文件头） */}
           {reading !== undefined && <p data-slot="reading-note" className="px-3 pb-2 text-xs text-muted-foreground">{editorMessages.mode.readingNote}</p>}
         </header>
@@ -1208,7 +1228,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {/* 上一位编辑者异常中断（M3-P5）：进入编辑之后页头下面一条不打断的说明，"知道了"之后、离开编辑时消失 */}
           {interruption !== undefined && <InterruptionNotice interruption={interruption} onDismiss={page.dismissInterruption} />}
           {/* 有人请求编辑（M3-P5）：页头下面的提示，不移动焦点、不挂屏障 */}
-          {incoming !== undefined && <RequestPrompt available={available} page={page} request={incoming} leaving={leaving !== undefined} handingOver={leaving?.cause === 'handover-request'} confirming={view.confirmingSession} />}
+          {incoming !== undefined && <RequestPrompt available={available && !formulaBlocked} page={page} request={incoming} leaving={leaving !== undefined} handingOver={leaving?.cause === 'handover-request'} confirming={view.confirmingSession} />}
           {/* 一直渲染（没有问题时什么也不画）：重试成功、说明连同"重试"一起消失时它才能把焦点交给返回链接（DEF-040） */}
           <DetailRefreshProblem
             query={{ isRefetchError: view.detailProblem !== undefined, isRefetching: view.detailRefreshing, error: view.detailProblem, refetch: page.refreshDetail }}

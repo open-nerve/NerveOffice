@@ -244,6 +244,7 @@ export {
   compareOpenCheckFailures,
   ERROR_NAME_PATTERN,
   errorNameOf,
+  FORMULA_WORKER_FAILURE_KINDS,
   isProfileFailure,
   OPEN_CHECK_ACCESS,
   OPEN_CHECK_FAILURE_KINDS,
@@ -253,9 +254,9 @@ export {
   RESOURCE_NAME_PATTERN,
   THROWN_FAILURE_KINDS,
 } from './documents/open-check-failures.ts'
-export type { OpenCheckFailure, OpenCheckFailureKind } from './documents/open-check-failures.ts'
-export { openCheckFailureSchema, openCheckReportSchema } from './documents/open-check.ts'
-export type { OpenCheckReport } from './documents/open-check.ts'
+export type { FormulaWorkerFailure, OpenCheckFailure, OpenCheckFailureKind } from './documents/open-check-failures.ts'
+export { editorDiagnosticReportSchema, formulaWorkerReportSchema, openCheckFailureSchema, openCheckReportSchema } from './documents/open-check.ts'
+export type { EditorDiagnosticReport, FormulaWorkerReport, OpenCheckReport } from './documents/open-check.ts'
 export { checkResources, hasResourceContent, isDeepEmpty, lostResources, nonEmptyResourceNames, PROFILE_RESOURCES, profileResourceNames, shrunkResources } from './documents/profile-resources.ts'
 export type { LostResources, ProfileResourceName, ResourceCheck, ResourceEntryKind, ResourceOutput, ResourceRule, ResourceRuleId } from './documents/profile-resources.ts'
 export { SHEET_TEMPLATE, SHEET_TEMPLATE_UNIT_ID, sheetSnapshotFor } from './documents/sheet-template.ts'

@@ -5,7 +5,7 @@
 // 状态只在这个进程的内存里（单实例首发，ADR-012）：每个进程各自计数，重启清零。时间用进程自己的单调时钟（performance.now()）：
 // 这是进程内的计时，不是业务里的时间判断（规范 §5"与时间有关的判断用数据库时间"管的是落库、跨进程的判断），墙上时钟被调整时也不受影响。
 // 键的数量有上限：先清掉过期的，仍超出时丢最旧的（最坏只是多记一条日志）
-import type { OpenCheckFailure } from '@nerve-office/contracts'
+import type { FormulaWorkerFailure, OpenCheckFailure } from '@nerve-office/contracts'
 import { performance } from 'node:perf_hooks'
 import { compareOpenCheckFailures } from '@nerve-office/contracts'
 
@@ -48,6 +48,11 @@ export function normalizedFailures(failures: readonly OpenCheckFailure[]): OpenC
 /** 去重键：文档、修订号、页面构建与失败的签名（规范形式），写成 JSON 数组（各段里有什么字符都不会串到别的段） */
 export function openCheckReportKey(documentId: string, revision: number, clientBuild: string, failures: readonly OpenCheckFailure[]): string {
   return JSON.stringify([documentId, revision, clientBuild, normalizedFailures(failures).map(failure => [failure.kind, failure.resource, failure.error ?? null])])
+}
+
+/** Worker 故障独立签名，共用同一个 gate 的窗口与账户限量。 */
+export function formulaWorkerReportKey(documentId: string, revision: number, clientBuild: string, failure: FormulaWorkerFailure): string {
+  return JSON.stringify(['formula-worker', documentId, revision, clientBuild, failure])
 }
 
 export class OpenCheckReportGate {

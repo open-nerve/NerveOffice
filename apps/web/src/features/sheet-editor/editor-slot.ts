@@ -12,7 +12,7 @@
 // 新建的编辑器先交回调用方（还没接上：surface 仍是 creating，页面的交互屏障挂着）：可编辑时调用方先建好保存的状态机，再 attach
 // （之后 surface 随编辑器的生命周期，就绪时页面撤掉屏障，Codex 评审 CX1）。交回之后、接上之前被新的 replace 或 clear 取代的，
 // 由这里销毁。
-import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { EditorAccess, FormulaMode, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 
 /** 当前编辑器的进展：creating 是正在新建（含等旧的销毁完、建好还没接上；页面的交互屏障挡着），之后随编辑器的生命周期；没有编辑器时为 none */
 export type EditorSurface = 'none' | 'creating' | SheetEditorLifecycle
@@ -21,12 +21,13 @@ export type EditorSurface = 'none' | 'creating' | SheetEditorLifecycle
  * 新建编辑器的工厂：容器由页面绑定。recalculate：打开时强制全量重算（带"公式待更新"的文档进入编辑，M3-P4 设计 §3.5；适配层的
  * createSheetEditor 的同名参数）
  */
-export type CreateModeEditor = (options: { readonly snapshot: string, readonly access: EditorAccess, readonly viewState?: SheetViewState | undefined, readonly recalculate?: boolean }) => Promise<SheetEditor>
+export type CreateModeEditor = (options: { readonly snapshot: string, readonly access: EditorAccess, readonly viewState?: SheetViewState | undefined, readonly recalculate?: boolean, readonly formulaMode?: FormulaMode }) => Promise<SheetEditor>
 
 /** 这一次新建的选项 */
 export interface ReplaceOptions {
   /** 打开时强制全量重算（M3-P4 设计 §3.5：带"公式待更新"的文档进入编辑）；默认不 */
   readonly recalculate?: boolean
+  readonly formulaMode?: FormulaMode
 }
 
 export interface EditorSlotOptions {
@@ -49,6 +50,8 @@ export interface EditorSlot {
   readonly replace: (access: EditorAccess, snapshot: string, options?: ReplaceOptions) => Promise<SheetEditor | undefined>
   /** 接上 replace 交回的编辑器：之后 surface 随它的生命周期。不是最近一次交回、还没接上的那一个（已被取代、已销毁）时什么也不做 */
   readonly attach: (created: SheetEditor) => void
+  /** 只丢弃当前交出但未接纳的那个实例；旧结果不得清空后来任务。 */
+  readonly discard: (created: SheetEditor) => void
   /**
    * 销毁现在的编辑器，在途的创建作废（建好之后销毁）；surface 为 none（读不到了、页面卸载）。销毁本身可能还要等一会儿：
    * 之后的 replace 照样等它销毁完再新建
@@ -125,7 +128,13 @@ export function createEditorSlot(options: EditorSlotOptions): EditorSlot {
         await retiring
         if (mine !== ticket)
           return undefined
-        const created = await options.createEditor(replaceOptions.recalculate === true ? { snapshot, access, viewState, recalculate: true } : { snapshot, access, viewState })
+        const created = await options.createEditor({
+          snapshot,
+          access,
+          viewState,
+          ...(replaceOptions.recalculate === true ? { recalculate: true } : {}),
+          ...(replaceOptions.formulaMode === undefined ? {} : { formulaMode: replaceOptions.formulaMode }),
+        })
         if (mine !== ticket) {
           retire(created)
           return undefined
@@ -153,6 +162,14 @@ export function createEditorSlot(options: EditorSlotOptions): EditorSlot {
       handedOut = undefined
       attached = { editor: created, unwatch: created.onLifecycle(setSurface) }
       setSurface(created.lifecycle())
+    },
+
+    discard: (created) => {
+      if (handedOut !== created)
+        return
+      handedOut = undefined
+      retire(created)
+      setSurface('none')
     },
 
     clear: () => {

@@ -5,6 +5,7 @@ import type { LeaseLoss } from './edit-lease.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
 import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
+import type { FormulaRecoveryView } from './formula-recovery.ts'
 import type { SaveView } from './save-coordinator.ts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -61,6 +62,7 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
+    retryFormulaRecovery: vi.fn(),
     retryRecovery: vi.fn(async () => {}),
     copyRecovery: vi.fn(async () => {}),
     beginDiscardRecovery: vi.fn(() => ({ updatedAt: 123 })),
@@ -129,6 +131,133 @@ function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
   return fake
 }
 
+const FORMULA_FAILURE: FormulaRecoveryView = { failure: 'error-after-ready', phase: 'failed', problem: 'create', blocksActions: true, blocksInput: true }
+const FORMULA_READY = '公式已改用当前页面计算，大表格可能暂时卡顿。'
+
+function formulaNotice(): HTMLElement {
+  const notice = screen.getByRole('banner').querySelector<HTMLElement>('[data-slot="formula-recovery"]')
+  if (notice === null)
+    throw new Error('没有公式恢复说明')
+  return notice
+}
+
+describe('US-M4-13 页头公式恢复说明与动作', () => {
+  it('等待输入与重建有说明，沿用同一个读屏区；不覆盖保存事实、不抢焦点', () => {
+    const f = renderChrome({ save: DIRTY, autosave: ONLINE })
+    const save = screen.getByRole('button', { name: '保存' })
+    save.focus()
+    const spoken = announcement()
+    const statuses = screen.getAllByRole('status').length
+    f.set({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'waiting-input', blocksInput: false, problem: undefined } })
+    expect(formulaNotice()).toHaveTextContent('请先完成当前输入，页面随后恢复公式计算。')
+    expect(headerStatus()).toHaveTextContent('有未保存的修改')
+    expect(save).toHaveFocus()
+    expect(spoken).toHaveTextContent('请先完成当前输入')
+    f.set({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'preparing', problem: undefined } })
+    expect(formulaNotice()).toHaveTextContent('正在恢复公式计算，请稍候。')
+    const working = spoken.textContent
+    f.set({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'rebuilding', problem: undefined } })
+    expect(announcement()).toBe(spoken)
+    expect(spoken.textContent).toBe(working)
+    expect(screen.getAllByRole('status')).toHaveLength(statuses)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('恢复期间保存/退出/交出/继续编辑不可用，键盘激活和鼠标都不发动作', () => {
+    const request: IncomingRequest = { id: 'request', requester: AMY, declining: false, failure: undefined }
+    const f = renderChrome({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'rebuilding' }, mode: { kind: 'editing', request } })
+    for (const name of ['保存', '退出编辑', '交出', '继续编辑']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      button.focus()
+      fireEvent.keyDown(button, { key: 'Enter' })
+      fireEvent.click(button, { detail: 0 })
+      fireEvent.click(button)
+    }
+    expect(f.page.save).not.toHaveBeenCalled()
+    expect(f.page.exitEditing).not.toHaveBeenCalled()
+    expect(f.page.handOver).not.toHaveBeenCalled()
+    expect(f.page.keepEditing).not.toHaveBeenCalled()
+  })
+
+  it('阅读恢复阻止刷新/进入/请求/强制接管，同时允许取消既有请求', () => {
+    const f = renderChrome({ formulaRecovery: FORMULA_FAILURE, mode: { ...READING, update: 'available' }, save: undefined })
+    for (const name of ['编辑', '有更新，点击刷新']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(button)
+    }
+    expect(f.page.enterEditing).not.toHaveBeenCalled()
+    expect(f.page.refreshUpdate).not.toHaveBeenCalled()
+    const holder = { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 }
+    f.set({ mode: { ...READING, holder, canTakeOver: true } })
+    for (const name of ['请求编辑', '强制接管']) {
+      expect(screen.getByRole('button', { name })).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(screen.getByRole('button', { name }))
+    }
+    expect(f.page.requestEditing).not.toHaveBeenCalled()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    f.set({ mode: { ...READING, holder, request: { kind: 'waiting', holder: AMY, cancelFailure: undefined } } })
+    const cancel = screen.getByRole('button', { name: '取消请求' })
+    expect(cancel).toHaveAttribute('aria-disabled', 'false')
+    fireEvent.click(cancel)
+    expect(f.page.cancelRequest).toHaveBeenCalledOnce()
+  })
+
+  it('已打开的强制接管确认框在公式恢复开始后不能继续，取消仍可用', async () => {
+    const f = renderChrome({ mode: { ...READING, canTakeOver: true, holder: { holder: AMY, sameUser: false, sameSession: false, lastActiveMinutes: 1 } }, save: undefined })
+    fireEvent.click(screen.getByRole('button', { name: '强制接管' }))
+    const dialog = await screen.findByRole('dialog')
+    f.set({ formulaRecovery: FORMULA_FAILURE })
+    expect(within(dialog).getByRole('button', { name: '强制接管' })).toHaveAttribute('aria-disabled', 'true')
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: '强制接管' })))
+    expect(dialog).toBeInTheDocument()
+    expect(f.page.forceTakeOver).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('失败有明确重试；离线照样可重建，按钮消失后焦点回到返回链接', async () => {
+    const f = renderChrome({ formulaRecovery: FORMULA_FAILURE, save: DIRTY, connection: { browserOnline: false, available: false, problem: 'offline', since: Date.now(), generation: 1 } })
+    expect(formulaNotice()).toHaveTextContent('重建前的内容仍保留在本页')
+    const retry = screen.getByRole('button', { name: '重试公式恢复' })
+    retry.focus()
+    fireEvent.click(retry)
+    expect(f.page.retryFormulaRecovery).toHaveBeenCalledOnce()
+    f.set({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'rebuilding', problem: undefined } })
+    await waitFor(() => expect(screen.getByRole('link', { name: '我的空间' })).toHaveFocus())
+    f.set({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'ready', blocksActions: false, blocksInput: false, problem: undefined } })
+    expect(formulaNotice()).toHaveTextContent(FORMULA_READY)
+    expect(headerStatus()).not.toHaveTextContent('已保存')
+  })
+
+  it('换人/确认会话/终态时不触发重试，原会话入口仍可见', () => {
+    const f = renderChrome({ formulaRecovery: FORMULA_FAILURE, session: 'signed-out' })
+    expect(screen.getByRole('link', { name: '在新标签页中登录' })).toBeInTheDocument()
+    for (const next of [{ session: 'signed-out' as const }, { session: 'other-user' as const }, { session: 'active' as const, confirmingSession: true }, { confirmingSession: false, save: { ...CLEAN, status: 'conflict' as const, conflict: null } }]) {
+      f.set(next)
+      const retry = screen.getByRole('button', { name: '重试公式恢复' })
+      expect(retry).toHaveAttribute('aria-disabled', 'true')
+      fireEvent.click(retry)
+    }
+    expect(f.page.retryFormulaRecovery).not.toHaveBeenCalled()
+  })
+
+  it('成功提示不会遮住新的云端失败/恢复，例行保存也不重播公式提示', () => {
+    const f = renderChrome({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'ready', blocksActions: false, blocksInput: false, problem: undefined }, save: DIRTY, autosave: ONLINE })
+    expect(announcement()).toHaveTextContent(FORMULA_READY)
+    f.set({ save: NETWORK_FAILURE, autosave: { ...ONLINE, retrying: true } })
+    expect(announcement()).toHaveTextContent('保存失败，稍后自动重试')
+    expect(announcement()).not.toHaveTextContent(FORMULA_READY)
+    expect(formulaNotice()).toHaveTextContent(FORMULA_READY)
+    f.set({ save: { ...DIRTY, status: 'saving' } })
+    expect(announcement()).toHaveTextContent('保存失败，稍后自动重试')
+    f.set({ save: CLEAN, autosave: ONLINE })
+    expect(announcement()).toHaveTextContent('已保存到云端')
+    expect(announcement()).not.toHaveTextContent(FORMULA_READY)
+  })
+})
+
 describe('页头的本机恢复操作', () => {
   it('编辑器始终提供本机草稿入口；新标签页打开以保留当前编辑现场', () => {
     renderChrome()
@@ -139,6 +268,25 @@ describe('页头的本机恢复操作', () => {
   })
 
   const recovery: RecoveryView = { stage: 'ready', decision: { kind: 'restore', baseRevision: 3, formulasPending: false, reason: 'fast-forward' }, updatedAt: new Date(2026, 9, 4, 15, 30).getTime(), operation: undefined, cleanup: undefined, copy: { kind: 'idle' }, notice: undefined, problem: undefined }
+
+  it('公式恢复期间不启动本机恢复/丢弃，已经打开的放弃确认也不能继续', async () => {
+    const f = renderChrome({ mode: READING, save: undefined, recovery })
+    fireEvent.click(screen.getByRole('button', { name: '放弃本机修改' }))
+    const dialog = await screen.findByRole('dialog', { name: '放弃这份本机修改？' })
+    f.set({ formulaRecovery: FORMULA_FAILURE })
+    expect(within(dialog).getByRole('button', { name: '确认放弃' })).toHaveAttribute('aria-disabled', 'true')
+    await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: '确认放弃' })))
+    expect(f.page.discardRecovery).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    for (const name of ['恢复并编辑', '放弃本机修改']) {
+      const button = screen.getByRole('button', { name })
+      expect(button).toBeDisabled()
+      fireEvent.click(button)
+    }
+    expect(f.page.enterEditing).not.toHaveBeenCalled()
+    expect(f.page.beginDiscardRecovery).toHaveBeenCalledOnce()
+  })
 
   it('恢复仍走统一编辑入口，副本与重查交给原文档协调器', () => {
     const f = renderChrome({ mode: READING, save: undefined, recovery })
@@ -247,6 +395,17 @@ describe('页头的本机保存事实', () => {
     unsaved: true,
   }
   const offline = { browserOnline: false, available: false, problem: 'offline', since: Date.now(), generation: 1 } as const
+
+  it('公式提示与本机存储降级独立；新的本机事实仍播报，不把公式成功当成落盘', () => {
+    const fake = renderChrome({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'ready', blocksActions: false, blocksInput: false, problem: undefined }, save: DIRTY, autosave: ONLINE, localSave: { ...local, storage: { ...local.storage, kind: 'memory', reason: 'quota' } } })
+    expect(announcement()).toHaveTextContent(FORMULA_READY)
+    expect(announcement()).toHaveTextContent('本机存储空间不足')
+    expect(headerStatus()).toHaveTextContent('有未保存的修改')
+    fake.set({ localSave: { ...local, enabled: false } })
+    expect(announcement()).toHaveTextContent('本部署关闭了本机草稿')
+    expect(announcement()).not.toHaveTextContent(FORMULA_READY)
+    expect(formulaNotice()).toHaveTextContent(FORMULA_READY)
+  })
 
   it('云端与本机摘要分别显示；新输入撤掉完整保护的说法，不抢焦点或逐次播报', () => {
     const fake = renderChrome({ save: { ...CLEAN, status: 'dirty', unsaved: true, unsavedEdits: true }, localSave: local, connection: offline })

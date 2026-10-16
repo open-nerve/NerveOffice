@@ -4,7 +4,7 @@
 // 保存协议（M3-P3 设计 §3.5、§3.8）：保存、另存为副本、申请编辑权与心跳都带上本页的构建与数据格式（client-format.ts），
 // 保存与另存为副本另带"公式待更新"。打开自检（M3-P4 设计 §3.13）：失败的上报。
 // 请求编辑与交出（M3-P5 设计 §3.4、§3.6）：请求方的发出、续期（后台请求）与取消，持有者的交出与谢绝（带令牌）。
-import type { AcquiredEditLease, DocumentDetail, EditRequestOutcome, EditStatus, HandedOverEditLease, OpenCheckReport, RenewedEditLease } from '@nerve-office/contracts'
+import type { AcquiredEditLease, DocumentDetail, EditorDiagnosticReport, EditRequestOutcome, EditStatus, HandedOverEditLease, RenewedEditLease } from '@nerve-office/contracts'
 import type { AcquireOptions } from './edit-lease.ts'
 import { acquiredEditLeaseSchema, documentDetailSchema, EDIT_LEASE_HEADER, editRequestOutcomeSchema, editStatusSchema, handedOverEditLeaseSchema, renewedEditLeaseSchema, revisionEtag, revisionFromEtag } from '@nerve-office/contracts'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
@@ -125,7 +125,7 @@ export async function renewEditLease(documentId: string, token: string, idleSeco
  * 这个接口没有响应体，也不引用带 zod 的 openCheckReportSchema）。能读这份文档就能报；服务端去重、按账户限量，标为后台请求（不顺延登录）。
  * 失败时抛出请求层的错误（调用方不看结果、不重试）
  */
-export async function reportOpenCheckFailures(documentId: string, report: OpenCheckReport): Promise<void> {
+export async function reportOpenCheckFailures(documentId: string, report: EditorDiagnosticReport): Promise<void> {
   await apiFetch(`${documentPath(documentId)}/open-check-failures`, { method: 'POST', body: { contentType: 'application/json', data: JSON.stringify(report) } }, () => undefined)
 }
 

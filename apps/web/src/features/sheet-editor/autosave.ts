@@ -63,7 +63,7 @@ export interface AutosavePage {
 }
 
 /** 保存的状态机一侧（save-coordinator.ts） */
-export type AutosaveUploader = Pick<SaveCoordinator, 'save' | 'view' | 'subscribe' | 'noteCapture' | 'captureFailed'>
+export type AutosaveUploader = Pick<SaveCoordinator, 'save' | 'view' | 'subscribe' | 'noteCapture' | 'noteFormulaRecovery' | 'captureFailed'>
 
 /** 节奏（contracts 的 AUTOSAVE_*；测试构建的控制可以换） */
 export interface AutosaveLimits {
@@ -140,7 +140,7 @@ const PREPARED_DEDUPE: Readonly<Record<PreparedReason, boolean>> = {
 export type UploadReason = 'quiet' | 'cap' | 'retry' | 'online'
 
 /** 一次捕获的原因（日志）：规则的三种、切到后台、立即上传 */
-export type CaptureTrigger = CaptureReason | 'hidden' | 'retry' | FlushReason
+export type CaptureTrigger = CaptureReason | 'hidden' | 'retry' | 'formula-recovery' | FlushReason
 
 /** 一次上传的原因（日志）：定时的四种、切到后台、立即上传 */
 export type UploadTrigger = UploadReason | 'hidden' | FlushReason
@@ -202,6 +202,10 @@ export interface Autosave {
   readonly flush: (reason: FlushReason, options?: FlushOptions) => Promise<FlushResult>
   /** 全部存上了没有（此刻） */
   readonly saved: () => SavedState
+  /** 为公式重建同步保留正文；允许挂起时调用，不主动上传，失败原样抛出。 */
+  readonly captureForFormulaRecovery: () => DraftCaptureRef | undefined
+  /** 只等调用时已有的输入准备；不等待公式或上传，也不开始新的提交。 */
+  readonly settleInputPreparations: () => Promise<void>
   /** 挂起定时的捕获与上传、切到后台的上传（开始退出编辑，设计 §3.10）；立即上传照常 */
   readonly suspend: () => void
   /** 恢复（退出编辑没有成功、留在编辑）：立即再看 */
@@ -319,6 +323,8 @@ export function createAutosave(options: AutosaveOptions): Autosave {
 
   // 上传
   const runs = new Set<UploadRun>()
+  /** 输入准备与网络请求分开；重建只等待前者，避免旧 await 之后访问新实例。 */
+  const preparingInputs = new Set<Promise<InputsSettled>>()
   /** 排着、还没轮到的那一次显式保存：再按并进它；它开始了或者结束了就不再并进 */
   let queuedExplicit: QueuedExplicit | undefined
   /** 上传成功（确认或去重）了的最新捕获 */
@@ -560,7 +566,11 @@ export function createAutosave(options: AutosaveOptions): Autosave {
    */
   function prepareNow(): Prepared {
     const inputs = settleInputs(editor)
-    inputs.catch(() => undefined)
+    preparingInputs.add(inputs)
+    const finished = (): void => {
+      preparingInputs.delete(inputs)
+    }
+    void inputs.then(finished, finished)
     return { inputs: [inputs], deadline: clock.now() + tuning.limits().captureMaxMs }
   }
 
@@ -854,6 +864,16 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       return { ...savedState(), outcome }
     },
     saved: savedState,
+    settleInputPreparations: async () => {
+      await Promise.all([...preparingInputs])
+    },
+    captureForFormulaRecovery: () => {
+      if (disposed || ended)
+        return undefined
+      const ref = captureNow('formula-recovery', true)
+      uploader.noteFormulaRecovery(ref)
+      return ref
+    },
     suspend: () => {
       suspended = true
       cancelTimer()
@@ -867,6 +887,7 @@ export function createAutosave(options: AutosaveOptions): Autosave {
         return
       disposed = true
       cancelTimer()
+      preparingInputs.clear()
       for (const unsubscribe of unsubscribers.splice(0))
         unsubscribe()
       listeners.clear()

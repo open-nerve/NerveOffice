@@ -10,7 +10,7 @@ import type { ActorName, CellOptions, MatrixOperation, MatrixTable, MatrixWorld,
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
 import { createTestDatabase } from '../support/database.ts'
-import { openCheckReport, postOpenCheckReport } from '../support/open-check.ts'
+import { formulaWorkerReport, openCheckReport, postOpenCheckReport } from '../support/open-check.ts'
 import { buildMatrixWorld, cellsOf, closeWorld, expectCell } from './matrix-world.ts'
 
 let database: TestDatabase
@@ -87,5 +87,26 @@ const CELLS = cellsOf(MATRIX)
 describe('US-M3-15 权限矩阵：打开自检失败的上报（能读就能报，回收站里的不存在）', () => {
   it.each(CELLS)('US-M3-15 $operation：$actor 对 $target → $expected', async (cell) => {
     await expectCell(world, OPERATIONS[cell.operation], cell, { verify: VERIFY })
+  })
+})
+
+// 复用同一张明确预期矩阵，正文变体改变不能放宽访问权。每个角色用独立修订，避免去重遮蔽日志验证。
+function workerReportOf(actor: ActorName): Record<string, unknown> {
+  return formulaWorkerReport({ revision: Object.keys(world.actors).indexOf(actor) + 1 })
+}
+
+const WORKER_OPERATIONS: Readonly<Record<Operation, MatrixOperation>> = {
+  report: async (actor, target) => postOpenCheckReport(app.baseUrl, actor.session, world.documents[target].id, workerReportOf(actorNameOf(actor.id))),
+  reportTrashed: async (actor, target) => postOpenCheckReport(app.baseUrl, actor.session, world.trashedDocuments[target].id, workerReportOf(actorNameOf(actor.id))),
+}
+
+describe('US-M4-13 权限矩阵：Worker 诊断只需可读，越权/不存在/回收站均拒绝', () => {
+  it.each(CELLS)('US-M4-13 $operation：$actor 对 $target → $expected', async (cell) => {
+    await expectCell(world, WORKER_OPERATIONS[cell.operation], cell, { verify: async (response, target, actor) => {
+      expect(await response.text()).toBe('')
+      const documentId = world.documents[target].id
+      const logged = app.logs.entries().filter(entry => entry.event === 'formula-worker-failed' && entry.documentId === documentId && entry.userId === world.actors[actor].id)
+      expect(logged).toEqual([expect.objectContaining({ failure: 'create', revision: workerReportOf(actor).revision })])
+    } })
   })
 })

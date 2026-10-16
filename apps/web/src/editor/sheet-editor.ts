@@ -18,7 +18,7 @@
 // 能编辑的文档从创建起就是可编辑的（授权服务一律允许），就绪之前的输入只能靠屏障拦住。
 // 测试构建（vite build --mode e2e）另在就绪之后装上 E2E 的探针（testing/e2e-probe.ts），注册插件之前看档案故障开关
 // （testing/profile-fault.ts，地址带 profileFault=<组> 时不注册这几组），地址参数还可以选主线程的公式模式（testing/formula-mode.ts）
-// （M3-P4 设计 §3.14）；生产构建里没有这几步与开关，只有 Worker 模式。
+// （M3-P4 设计 §3.14）；生产构建里没有这几步与 URL 开关。M4-P5 起页面可显式选择主线程模式作为退路。
 // 模式切换一律重建（M3-P2 设计 §3.1）：编辑器页销毁旧的、以目标的 access 新建一个；重建之前取出视图状态（viewState），
 // 新建时交回来，就绪之后恢复（view-state.ts）。容器上写着这一个编辑器的打开方式（data-editor-access，读 / 写），销毁时去掉。
 // M3-P4（设计 §3.2、§3.4–§3.6、§3.10）：自动保存要的信号——公式的进度（变更检测的跟踪器）、组合输入（composition-watch.ts）、
@@ -36,6 +36,7 @@ import type { CleanupStack } from './cleanup-stack.ts'
 import type { CompositionWatch } from './composition-watch.ts'
 import type { EditorAccess } from './editor-access.ts'
 import type { FormulaRound } from './formula-round-stop.ts'
+import type { FormulaWorkerFailure } from './formula-worker-failure.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
@@ -46,12 +47,13 @@ import type { WorkbookSnapshot } from './workbook-snapshot.ts'
 import { LocaleType, LogLevel, Univer } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { defaultTheme } from '@univerjs/themes'
-import { pollUntil, withDeadline } from './async-tools.ts'
+import { deferred, pollUntil, withDeadline } from './async-tools.ts'
 import { watchCellEditing } from './cell-editing-watch.ts'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { createCleanupStack } from './cleanup-stack.ts'
 import { watchComposition } from './composition-watch.ts'
 import { ROUND_STOP_TIMEOUT_MS, stopRunningRound } from './formula-round-stop.ts'
+import { FormulaWorkerError } from './formula-worker-failure.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
@@ -75,6 +77,12 @@ import './profile/styles.ts'
 
 export interface SheetEditor {
   readonly unitId: string
+  /** 本实例在哪里计算；运行中不能原地切换，页面须按原权限重建。 */
+  readonly formulaMode: FormulaMode
+  /** 本实例 Worker 的首个故障；主线程模式一直为 undefined。订阅后读取，补齐接线前的窗口。 */
+  readonly workerFailure: () => FormulaWorkerFailure | undefined
+  /** 首错发生时通知，不回放；销毁后不再通知。 */
+  readonly onWorkerFailure: (listener: (failure: FormulaWorkerFailure) => void) => () => void
   /** 本地修改序号：检测到本文档的修改时加一（P4 设计 §3.6.5） */
   readonly changeSeq: () => number
   readonly onChange: (listener: () => void) => () => void
@@ -148,6 +156,8 @@ export interface CreateSheetEditorOptions {
    * 装上只读守卫，界面没有工具栏、右键菜单、底栏菜单与新增工作表按钮（M2-P3 设计 §3.2–§3.4）
    */
   readonly access: EditorAccess
+  /** M4-P5 的生产退路；不给时默认 Worker（测试构建保留原 URL 选择）。显式参数优先，不读取生产 URL。 */
+  readonly formulaMode?: FormulaMode
   /** 重建之前的编辑器给出的视图状态：就绪之后恢复；恢复不了（工作表已经不在等）就是默认视图，不影响编辑器可用 */
   readonly viewState?: SheetViewState | undefined
   /**
@@ -167,7 +177,7 @@ export interface CreateSheetEditorOptions {
  */
 export const EDITOR_ACCESS_ATTRIBUTE = 'data-editor-access'
 
-/** 就绪的时限：Worker 20 秒没有回报 IMAGE() 的安装结果就失败（P4 设计 §3.6.7）；渲染与主线程的安装在同一个时限内 */
+/** 渲染与主线程 IMAGE 安装的原有时限；Worker 的 20 秒握手由其完整生命周期监听器单独识别。 */
 const READY_TIMEOUT_MS = 20_000
 
 /** 公式收齐每 20 ms 判断一次（P4 设计 §3.6.6） */
@@ -220,6 +230,7 @@ interface MountedEditor {
   readonly openCheck: OpenCheck
   /** 公式在哪里计算（测试构建的探针报告它，页面自检据此核对选中的模式确实生效） */
   readonly formulaMode: FormulaMode
+  readonly formula: FormulaHost
 }
 
 /** 公式由谁执行，以及就绪要等的那一方：Worker 模式等 Worker 回报装好了 IMAGE() 的限制，主线程模式没有 Worker、不用等 */
@@ -227,21 +238,27 @@ interface FormulaHost {
   readonly execution: FormulaExecution
   /** Worker 那边装好了 IMAGE() 的限制（主线程模式立即完成；主线程的那一份由生命周期的监听装，两种模式相同） */
   readonly ready: Promise<void>
-  /** 就绪之后不再需要 Worker 回报的监听 */
-  readonly settle: () => void
+  readonly failure: () => FormulaWorkerFailure | undefined
+  readonly onFailure: (listener: (failure: FormulaWorkerFailure) => void) => () => void
 }
 
 /** 按公式的模式准备执行公式的一方；创建的东西在 cleanup 里登记销毁 */
 function createFormulaHost(mode: FormulaMode, cleanup: CleanupStack): FormulaHost {
   if (mode === 'main-thread')
-    return { execution: { kind: 'main-thread' }, ready: Promise.resolve(), settle: () => {} }
+    return { execution: { kind: 'main-thread' }, ready: Promise.resolve(), failure: () => undefined, onFailure: () => () => {} }
   // 静态的 new Worker(new URL(...)) 才会被打包成同源的 Worker 脚本；传地址给插件会建出经典 Worker（rpc/src/plugin.ts:86）
-  const worker = new Worker(new URL('./workers/formula.worker.ts', import.meta.url), { type: 'module', name: 'nerve-formula' })
+  let worker: Worker
+  try {
+    worker = new Worker(new URL('./workers/formula.worker.ts', import.meta.url), { type: 'module', name: 'nerve-formula' })
+  }
+  catch (cause) {
+    throw new FormulaWorkerError('create', { cause })
+  }
   // 传入的 Worker 由我们终止（插件只终止它自己创建的，rpc/src/plugin.ts:71-78）
   cleanup.defer(() => worker.terminate())
   const imagePolicy = watchWorkerImagePolicy(worker)
   cleanup.defer(imagePolicy.dispose)
-  return { execution: { kind: 'worker', worker }, ready: imagePolicy.installed, settle: imagePolicy.dispose }
+  return { execution: { kind: 'worker', worker }, ready: imagePolicy.installed, failure: imagePolicy.failure, onFailure: imagePolicy.onFailure }
 }
 
 /**
@@ -376,22 +393,32 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   })
   // 工作表的权限点在创建工作簿时由 SDK 加入（初值允许），所以在这之后设
   readOnly?.applyWorksheetPoints()
-  await withDeadline(
-    Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, formula.ready]),
-    READY_TIMEOUT_MS,
-    () => new SheetEditorLoadError('ready-timeout', `${READY_TIMEOUT_MS / 1000} 秒内没有全部就绪（渲染、主线程与 Worker 的 IMAGE() 限制）`),
-  )
-  // 就绪之后不再需要 Worker 回报的监听：Worker 之后出错按 M4 的设计处理（M1 里公式收齐会超时，页面提示公式结果尚未保存）
-  formula.settle()
+  // Worker 的成功回报比整个编辑器就绪早；在这段间隙报错时，已兑现的 ready 不会再失败，必须另等故障信号。
+  const failed = deferred<never>()
+  const stopWatchingFailure = formula.onFailure(reason => failed.reject(new FormulaWorkerError(reason)))
+  const observedFailure = formula.failure()
+  if (observedFailure !== undefined)
+    failed.reject(new FormulaWorkerError(observedFailure))
+  try {
+    await withDeadline(
+      Promise.race([Promise.all([lifecycle.rendered, lifecycle.imagePolicyInstalled, formula.ready]), failed.promise]),
+      READY_TIMEOUT_MS,
+      () => new SheetEditorLoadError('ready-timeout', `${READY_TIMEOUT_MS / 1000} 秒内没有全部就绪（渲染、主线程与 Worker 的 IMAGE() 限制）`),
+    )
+  }
+  finally {
+    stopWatchingFailure()
+  }
+  // M4-P5：成功之后继续监听 Worker 错误，随整个实例销毁，不能在握手成功时撤掉。
   readOnly?.applyRenderedGuards()
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
-  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode }
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode, formula }
 }
 
 /**
- * 公式在哪里计算：生产构建只有 Worker 模式。测试构建里地址参数可以选主线程模式（testing/formula-mode.ts，M3-P4 设计 §3.14，
+ * 未显式给定时的公式模式：生产默认 Worker。测试构建里地址参数可以选主线程模式（testing/formula-mode.ts，M3-P4 设计 §3.14，
  * US-M3-03 的两种模式）：生产构建里 MODE 是 production，这个分支与开关的分块都被去掉（门禁 artifacts 按模块来源核对）
  */
 async function formulaModeOf(): Promise<FormulaMode> {
@@ -405,8 +432,8 @@ async function formulaModeOf(): Promise<FormulaMode> {
 export async function createSheetEditor(options: CreateSheetEditorOptions): Promise<SheetEditor> {
   const snapshot = parseWorkbookSnapshot(options.snapshot)
   // 在开始挂载之前定下（测试构建里要等开关的分块载入）：挂载的同步部分不被拆开，测试构建的切换计时照旧（switch-timing.ts 的 sync-end）。
-  // 生产构建里不等：这个表达式只剩 'worker'
-  const formulaMode = import.meta.env.MODE === 'e2e' ? await formulaModeOf() : 'worker'
+  // 显式选择优先；生产默认不等，也不引入测试构建的 URL 开关。
+  const formulaMode = options.formulaMode ?? (import.meta.env.MODE === 'e2e' ? await formulaModeOf() : 'worker')
   const cleanup = createCleanupStack()
   const rounds: FormulaRoundRef = { round: undefined }
   let mounted: MountedEditor
@@ -422,12 +449,16 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       const { installEditorProbe } = await importTesting(async () => import('./testing/e2e-probe.ts'))
       cleanup.defer(installEditorProbe(mounted))
     }
+    // Worker 已握手之后、恢复视图或载入测试探针期间仍可能失败；不能把已经失效的实例交给页面。
+    const failure = mounted.formula.failure()
+    if (failure !== undefined)
+      throw new FormulaWorkerError(failure)
   }
   catch (error) {
     await tearDown(cleanup, rounds.round)
     throw error
   }
-  const { workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck } = mounted
+  const { workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
 
   let disposed = false
   /** 这一次销毁（第一次调用 dispose 时开始）：重复调用等的都是它，不再销毁一次 */
@@ -447,6 +478,9 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
 
   return {
     unitId: snapshot.unitId,
+    formulaMode,
+    workerFailure: formula.failure,
+    onWorkerFailure: formula.onFailure,
     changeSeq: changes.changeSeq,
     onChange: changes.onChange,
     // 就绪时一定已经渲染完成
@@ -470,11 +504,20 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     },
     async settleFormulas(timeoutMs) {
       usable()
-      const settled = await pollUntil(changes.formulasSettled, { timeoutMs, intervalMs: SETTLE_POLL_INTERVAL_MS })
-      return settled ? 'settled' : 'timeout'
+      const settled = await pollUntil(() => formula.failure() !== undefined || changes.formulasSettled(), { timeoutMs, intervalMs: SETTLE_POLL_INTERVAL_MS })
+      return settled && formula.failure() === undefined ? 'settled' : 'timeout'
     },
-    formulasSettled: () => !disposed && changes.formulasSettled(),
-    onFormulaProgress: changes.onFormulaProgress,
+    formulasSettled: () => !disposed && formula.failure() === undefined && changes.formulasSettled(),
+    onFormulaProgress(listener) {
+      if (disposed)
+        return () => {}
+      const stopProgress = changes.onFormulaProgress(listener)
+      const stopFailure = formula.onFailure(listener)
+      return () => {
+        stopProgress()
+        stopFailure()
+      }
+    },
     composing: () => !disposed && composition.composing(),
     onCompositionChange: composition.onChange,
     settlePanels: async () => panels.settled(),

@@ -177,6 +177,102 @@ function conflictError(currentRevision: number, source: { clientInstanceId: stri
   return new ApiError(409, 'DOCUMENT_REVISION_CONFLICT', '别处保存了更新的版本', { details: { currentRevision, source } })
 }
 
+describe('公式重建的确认边界', () => {
+  function capture(draft: ReturnType<typeof setup>['draft'], formulasPending: boolean) {
+    return draft.capture({ snapshot: '{"v":1}', editorSeq: 0, formulasPending, dedupe: true })
+  }
+
+  it('同序号的旧 ACK、新 pending ACK 都不能清标记，之后的收齐 ACK 才能清', async () => {
+    const { real, draft, calls } = setup()
+    const old = capture(draft, false)
+    const saving = real.save(() => old, EXPLICIT)
+    const first = await sent(calls, 1)
+    const recovery = capture(draft, true)
+    real.noteFormulaRecovery(recovery)
+    expect(real.view()).toMatchObject({ formulasPending: true, unsavedEdits: false })
+    first.resolve(saved(2))
+    await saving
+    expect(real.view()).toMatchObject({ formulasPending: true, unsavedEdits: false })
+    expect(real.hasUnsavedWork()).toBe(true)
+
+    const pending = capture(draft, true)
+    const savingPending = real.save(() => pending, EXPLICIT)
+    const second = await sent(calls, 2)
+    expect(second.request).toMatchObject({ formulasPending: true, baseRevision: 2 })
+    second.resolve(saved(3))
+    await savingPending
+    expect(real.view().formulasPending).toBe(true)
+
+    const complete = capture(draft, false)
+    const savingComplete = real.save(() => complete, EXPLICIT)
+    const third = await sent(calls, 3)
+    expect(third.request.formulasPending).toBe(false)
+    third.resolve(saved(4))
+    await savingComplete
+    expect(real.view()).toMatchObject({ formulasPending: false, unsavedEdits: false })
+    expect(real.hasUnsavedWork()).toBe(false)
+    real.dispose()
+    draft.dispose()
+  })
+
+  it('重复或更早的恢复记录不能倒退边界；晚于最新边界的收齐摘要去重可以确认', async () => {
+    const { real, draft, calls } = setup()
+    const first = capture(draft, true)
+    real.noteFormulaRecovery(first)
+    const intermediate = capture(draft, false)
+    const saving = real.save(() => intermediate, EXPLICIT)
+    const request = await sent(calls, 1)
+    const last = capture(draft, true)
+    real.noteFormulaRecovery(last)
+    real.noteFormulaRecovery(last)
+    real.noteFormulaRecovery(first)
+    request.resolve(saved(2))
+    await saving
+    expect(real.view().formulasPending).toBe(true)
+    const complete = capture(draft, false)
+    await expect(real.save(() => complete, { dedupe: true })).resolves.toEqual({ kind: 'deduped' })
+    expect(calls).toHaveLength(1)
+    expect(real.view().formulasPending).toBe(false)
+    expect(real.hasUnsavedWork()).toBe(false)
+    real.noteFormulaRecovery(first)
+    real.noteFormulaRecovery(last)
+    expect(real.view().formulasPending).toBe(false)
+    real.dispose()
+    draft.dispose()
+  })
+
+  it.each(['replay', 'adopt'] as const)('旧未知结果经 %s 确认也保留恢复标记和原请求字节', async (method) => {
+    const { real, draft, calls } = setup()
+    const old = capture(draft, false)
+    const saving = real.save(() => old, EXPLICIT)
+    const request = await sent(calls, 1)
+    const original = { ...request.request }
+    const body = [...request.body]
+    request.reject(new NetworkError('响应丢失'))
+    await saving
+    expect(real.hasUnknownOutcome()).toBe(true)
+    real.noteFormulaRecovery(capture(draft, true))
+    if (method === 'replay') {
+      const replaying = real.replayUnknownOutcome()
+      const replay = await sent(calls, 2)
+      expect(replay.request).toEqual(original)
+      expect([...replay.body]).toEqual(body)
+      replay.resolve(saved(2))
+      await expect(replaying).resolves.toBe('committed')
+    }
+    else {
+      expect(real.adoptOwnRevision(2, { clientInstanceId: ME, localSeq: original.localSeq })).toBe(true)
+      expect(calls).toHaveLength(1)
+    }
+    expect(request.request).toEqual(original)
+    expect([...request.body]).toEqual(body)
+    expect(real.view()).toMatchObject({ formulasPending: true, unsavedEdits: false })
+    expect(real.hasUnsavedWork()).toBe(true)
+    real.dispose()
+    draft.dispose()
+  })
+})
+
 describe('保存状态', () => {
   it('打开时已保存；修改之后有未保存的修改；保存中；成功后已保存到云端，基准修订号前进', async () => {
     const { coordinator, control, calls } = setup({ baseRevision: 4 })

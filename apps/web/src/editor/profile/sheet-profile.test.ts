@@ -228,7 +228,7 @@ describe('公式 Worker 的插件（与官方 Worker preset 相同）', () => {
   it('Sheets（只注册公式相关的 mutation）、FormulaEngine、RPCWorkerThread、RemoteSheetsFormula、SheetsFilter', () => {
     const entries = formulaWorkerPluginEntries()
     expect(names(entries)).toEqual(['SHEET_PLUGIN', 'UNIVER_ENGINE_FORMULA_PLUGIN', 'UNIVER_RPC_WORKER_THREAD_PLUGIN', 'SHEET_FORMULA_REMOTE_PLUGIN', 'SHEET_FILTER_PLUGIN'])
-    expect(entries.map(entry => entry.config)).toEqual([{ onlyRegisterFormulaRelatedMutations: true }, undefined, undefined, undefined, undefined])
+    expect(entries.map(entry => entry.config)).toEqual([{ onlyRegisterFormulaRelatedMutations: true }, { intervalCount: 20 }, undefined, undefined, undefined])
   })
 })
 

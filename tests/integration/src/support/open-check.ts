@@ -26,3 +26,8 @@ export function openCheckPath(documentId: string): string {
 export async function postOpenCheckReport(baseUrl: string, user: LoggedIn, documentId: string, body: unknown = openCheckReport()): Promise<Response> {
   return asUser(baseUrl, user, openCheckPath(documentId), { method: 'POST', body })
 }
+
+/** 可恢复的 Worker 故障；不伪造资源缺失。 */
+export function formulaWorkerReport(overrides: Readonly<Record<string, unknown>> = {}): Record<string, unknown> {
+  return { revision: 1, access: 'read', trigger: 'open', kind: 'formula-worker', failure: 'create', ...CURRENT_CLIENT, ...overrides }
+}
