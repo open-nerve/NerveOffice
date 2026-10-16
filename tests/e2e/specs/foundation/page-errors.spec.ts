@@ -32,7 +32,15 @@ test.describe('E2E 的页面错误夹具', () => {
       const reached = pending<Request>()
       const released = pending<void>()
       const finished = pending<void>()
+      let held = false
+      // 保留拦截到本例的上下文关闭，后续同类请求直接放行。times: 1 会在旧页请求结束时撤销最后一个拦截，
+      // Chromium 153 的 Fetch.disable 此时可能丢失新页的模块请求：https://github.com/microsoft/playwright/issues/41802
       await page.route(resource, async (route) => {
+        if (held) {
+          await route.continue()
+          return
+        }
+        held = true
         reached.resolve(route.request())
         await released.promise
         try {
@@ -41,7 +49,7 @@ test.describe('E2E 的页面错误夹具', () => {
         finally {
           finished.resolve()
         }
-      }, { times: 1 })
+      })
       try {
         await page.goto(`/documents/${id}`, { waitUntil: 'domcontentloaded' })
         const request = await reached.promise
