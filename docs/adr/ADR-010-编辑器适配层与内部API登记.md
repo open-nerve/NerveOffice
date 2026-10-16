@@ -72,6 +72,16 @@ createSheetEditor({ container, snapshot, access, viewState? }): Promise<SheetEdi
 - **捕获时机的接线**（M3-P4 S4）：`SheetEditor` 加公式进度（`onFormulaProgress`）、组合输入（`composing`、`onCompositionChange`——只认 DOM 事件，在 document 的捕获阶段、页头以外，不认 SDK 的 DOM 标记，批注的输入框也盖得到）与面板的防抖（`settlePanels`，登记 `PANEL_DEBOUNCES`：批注浮层 300 ms、数据验证详情面板 1 秒，两者卸载时都不清、不 flush；M3 合并前评审 CX4 起另交出"防抖中"的状态与开始、到点的通知，并进 `uncommittedInput`，`settlePanels` 等调用这一刻的到点、只给捕获之前的等待用）。进入编辑时带"公式待更新"的文档以公开配置 `UniverSheetsFormulaPlugin({ initialFormulaComputing: CalculationMode.FORCED })` 创建（白名单加 `CalculationMode`）；收齐的跟踪器加兜底：没看到带 `forceCalculation === true` 的触发命令之前不算收齐（`FORMULA_PROTOCOL.forceCalculationParam`，`FormulaProgress.awaitingForcedRound`）。**DEF-020 的结论**：变更检测、公式收齐与捕获时机不按 `trigger` 区分来源——变更检测只看类型、执行选项、`unitId` 与排除名单；收齐判断调用 SDK 的 `shouldTrigger` 时读的是同一个 params 对象，`trigger` 被串改不会让两边不一致；回归在 `change-classifier`、`formula-settle-tracker`、`calculation-trigger` 的单元测试。测试构建的自动保存控制在 `editor/testing/autosave-control.ts`（`window.__nerveAutosaveControl`），门禁按来源认出。
 - **编辑器适配层引用的 contracts 模块不能带 zod 的结构**：适配层引用带 zod 结构的模块时，构建把 zod 与 contracts 的几个模块拆进一个新的共享分块，它在 `zod-jitless` 之前执行，三个浏览器的编辑器页都出现一条 eval 的 CSP 违规。打开自检的失败种类与写法因此放在不引用 zod 的 `open-check-failures.ts`，请求体的结构（`open-check.ts`）只给服务端。
 
+## M4-P5 S1 的补充：公式执行模式与 Worker 故障事实（2026-10-16）
+
+`createSheetEditor` 接受显式 `formulaMode: 'worker' | 'main-thread'`，不给时生产仍默认 Worker。显式选择优先于测试构建的查询参数，生产不会载入测试模式开关。主线程沿用同一档案、相同 IMAGE 限制与内存存储覆盖；计算中先停下再销毁的 30 秒规避不变。
+
+返回的 `SheetEditor` 增加 `formulaMode`、`workerFailure()` 与 `onWorkerFailure(listener)`。后两者是首错 getter 和不回放的通知；调用方先订阅、再读 getter，避免漏掉接线前的故障。`FormulaWorkerError` 是既有 `SheetEditorLoadError` 的子类，只新增有限 `failure` 分类；构造抛错、握手前后 error/messageerror、Worker IMAGE 安装失败及 20 秒握手超时可区分，浏览器不能证明的加载/脚本原因不再细分。主线程 IMAGE 与渲染失败保留原普通错误。
+
+`worker-image-policy.ts` 的监听活到实例销毁，首错之后的回报不能覆盖结果；握手成功不代表整个编辑器已渲染，挂载等待同时观察运行期错误，不能将这段间隙的 Worker 故障误报成渲染超时。所有退出都清理启动期限与监听；捕获调用方看到的公式收齐状态在 Worker 失败后为 false，公式进度订阅也会获知变化。只接住自身 Worker 的错误事件，不添加全局异常忽略。
+
+此处是 P5 的基础接口；页面何时保留输入并重建、稳定保存入口、页头与诊断在后续 Step 接线。S1 本身不宣称自动退化已完成，不修改保存协议或重新申请编辑权。
+
 ## M4-P4 的补充：SDK 偏好按编辑器实例留在内存（2026-10-14）
 
 `editor/internal-api/memory-local-storage.ts` 实现锁定 SDK 的 `ILocalStorageService` 全部异步接口，每个注入器独立 Map，读、写和遍历克隆值；销毁清空，迟到写入不能复活数据。内部 API 登记、统一出口及 lint 限制同时更新，平台功能不引用 SDK。

@@ -5,7 +5,7 @@
 // （写错名字类型检查不通过），单元测试核对各组声明的合起来等于白名单。
 // 插件按组注册，组内与组间的顺序按官方 preset；不注册 @univerjs/network、评论、水印、table、十字高亮等，不注册任何遥测实现。
 // 界面的配置按这次的打开方式（EditorAccess）组合：只读时一开始就以只读的界面创建（插件档案 v1 §5.2 的"销毁重建"一栏，M2-P3 设计 §3.4）。
-// 公式由谁执行按 FormulaExecution 组合（M3-P4 设计 §3.14）：生产用公式 Worker；主线程模式是同一份档案的变体（M4 的退路，M3 只给测试构建用）
+// 公式由谁执行按 FormulaExecution 组合（M3-P4 设计 §3.14）：默认公式 Worker；主线程是同一份档案的变体（M4-P5 的生产退路）
 import type { DocumentProfile, ProfileResourceName } from '@nerve-office/contracts'
 import type { EditorAccess } from '../editor-access.ts'
 import type { PluginEntry } from './plugin-entry.ts'

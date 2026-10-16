@@ -70,6 +70,9 @@ function fakeFactory() {
       finishDispose: () => finish(),
       editor: {
         unitId: 'unit-1',
+        formulaMode: 'worker',
+        workerFailure: () => undefined,
+        onWorkerFailure: () => () => {},
         changeSeq: () => 0,
         onChange: () => () => {},
         lifecycle: () => stage,

@@ -18,6 +18,8 @@ import { KeyCode } from '@univerjs/ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { ROUND_STOP_TIMEOUT_MS } from './formula-round-stop.ts'
+import { FormulaWorkerError } from './formula-worker-failure.ts'
+import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { imagePolicyReport } from './image-function/worker-report.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
 import { dataPluginEntries, snapshotWithResources } from './profile/data-plugins.test-support.ts'
@@ -562,14 +564,20 @@ describe('自动保存要的信号与强制全量重算（M3-P4 设计 §3.2、�
     container.remove()
   })
 
-  it('公式进度的信号就是变更检测的跟踪器的', async () => {
+  it('公式进度转交变更检测的真实信号，退订之后不再通知', async () => {
     const facade = steppingFacade([], 'unit-p4')
     vi.mocked(sheetPluginEntries).mockReturnValue([])
     const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-p4'), access: 'edit' })
     await reachReady(facade)
     const editor = await creating
-    const tracker = vi.mocked(createChangeTracker).mock.results[0]?.value as ReturnType<typeof createChangeTracker>
-    expect(editor.onFormulaProgress).toBe(tracker.onFormulaProgress)
+    const progress = vi.fn()
+    const unwatch = editor.onFormulaProgress(progress)
+    facade.fire({ id: FORMULA_PROTOCOL.startMutationId, type: CommandType.MUTATION, params: {}, options: { onlyLocal: true } })
+    expect(progress).toHaveBeenCalledOnce()
+    expect(editor.formulasSettled()).toBe(false)
+    unwatch()
+    facade.fire({ id: FORMULA_PROTOCOL.notificationMutationId, type: CommandType.MUTATION, params: { functionsExecutedState: FORMULA_PROTOCOL.completedStates[1] }, options: { onlyLocal: true } })
+    expect(progress).toHaveBeenCalledOnce()
     await editor.dispose()
     expect(editor.formulasSettled()).toBe(false)
   })
@@ -727,6 +735,220 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
     await expect(createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-oc'), access: 'edit' })).rejects.toBe(failure)
     expect(univerDispose).toHaveBeenCalledOnce()
     expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+  })
+})
+
+describe('公式 Worker 的完整生命周期（M4-P5 S1）', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllEnvs()
+    history.replaceState(null, '', '/')
+    delete window.__nerveEditorProbe
+  })
+
+  it('Worker 构造抛错：给出 create 原因，未创建 Univer，撤掉容器标记', async () => {
+    const cause = new Error('系统拒绝创建 Worker')
+    vi.stubGlobal('Worker', class {
+      constructor() {
+        throw cause
+      }
+    })
+    const container = document.createElement('div')
+    const createUniver = vi.spyOn(FUniver, 'newAPI')
+    const error: unknown = await createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' }).catch((error: unknown) => error)
+    expect(error).toMatchObject({ reason: 'worker-failed', failure: 'create', cause })
+    expect(error).toBeInstanceOf(FormulaWorkerError)
+    expect(createUniver).not.toHaveBeenCalled()
+    expect(container.hasAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe(false)
+  })
+
+  it.each(['production', 'e2e'])('%s：显式主线程参数优先于 URL，完全不创建 Worker', async (mode) => {
+    vi.stubEnv('MODE', mode)
+    history.replaceState(null, '', '/documents/doc-1?formula=worker')
+    const log: string[] = []
+    const facade = steppingFacade(log, 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit', formulaMode: 'main-thread' })
+    await vi.waitFor(() => expect(log).toEqual(['createWorkbook']))
+    await reachReady(facade)
+    const editor = await creating
+    try {
+      expect(FakeWorker.created).toHaveLength(0)
+      expect(editor.formulaMode).toBe('main-thread')
+      expect(vi.mocked(sheetPluginEntries)).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ formula: { kind: 'main-thread' } }))
+      expect(editor.workerFailure()).toBeUndefined()
+      const failed = vi.fn()
+      const unwatch = editor.onWorkerFailure(failed)
+      unwatch()
+      expect(failed).not.toHaveBeenCalled()
+    }
+    finally {
+      await editor.dispose()
+    }
+  })
+
+  it.each(['error', 'messageerror'] as const)('已经返回编辑器后收到 %s：公式不算收齐，故障与进度订阅都通知一次', async (type) => {
+    const facade = steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    try {
+      expect(editor.formulasSettled()).toBe(true)
+      const progress = vi.fn()
+      const stopProgress = editor.onFormulaProgress(progress)
+      const failure = vi.fn()
+      editor.onWorkerFailure(failure)
+      FakeWorker.created[0]?.dispatchEvent(new Event(type, { cancelable: true }))
+      expect(editor.formulasSettled()).toBe(false)
+      expect(await editor.settleFormulas(0)).toBe('timeout')
+      expect(editor.formulaMode).toBe('worker')
+      expect(editor.workerFailure()).toBe(`${type}-after-ready`)
+      expect(progress).toHaveBeenCalledOnce()
+      expect(failure).toHaveBeenCalledExactlyOnceWith(`${type}-after-ready`)
+      const late = vi.fn()
+      editor.onWorkerFailure(late)
+      FakeWorker.created[0]?.dispatchEvent(new Event(type, { cancelable: true }))
+      expect(late).not.toHaveBeenCalled()
+      expect(progress).toHaveBeenCalledOnce()
+      stopProgress()
+    }
+    finally {
+      await editor.dispose()
+    }
+  })
+
+  it('故障及进度订阅均可取消，不能靠销毁恰好清理来掩盖退订遗漏', async () => {
+    const facade = steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    const failure = vi.fn()
+    const progress = vi.fn()
+    const stopFailure = editor.onWorkerFailure(failure)
+    const stopProgress = editor.onFormulaProgress(progress)
+    stopFailure()
+    stopProgress()
+    FakeWorker.created[0]?.dispatchEvent(new Event('error', { cancelable: true }))
+    expect(editor.workerFailure()).toBe('error-after-ready')
+    expect(failure).not.toHaveBeenCalled()
+    expect(progress).not.toHaveBeenCalled()
+    await editor.dispose()
+  })
+
+  it('正常销毁后旧 Worker 不能报告新的故障', async () => {
+    const facade = steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' })
+    await reachReady(facade)
+    const editor = await creating
+    const failure = vi.fn()
+    editor.onWorkerFailure(failure)
+    await editor.dispose()
+    FakeWorker.created[0]?.dispatchEvent(new Event('error', { cancelable: true }))
+    expect(editor.workerFailure()).toBeUndefined()
+    expect(failure).not.toHaveBeenCalled()
+  })
+
+  it('Worker 已握手但 create 返回前出错：失败并清理，不能交出健康实例', async () => {
+    const facade = steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    vi.mocked(restoreViewState).mockImplementationOnce(() => {
+      FakeWorker.created[0]?.dispatchEvent(new Event('error', { cancelable: true }))
+      return 'restored'
+    })
+    const container = document.createElement('div')
+    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-f5'), access: 'edit', viewState: { sheetId: 'sheet-1', topLeft: { row: 0, column: 0 }, selection: undefined } }).then(async (editor) => {
+      await editor.dispose()
+      return { kind: 'unexpectedly-created' }
+    }, (error: unknown) => error)
+    await reachReady(facade)
+    expect(await creating).toMatchObject({ failure: 'error-after-ready', reason: 'worker-failed' })
+    expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+    expect(container.hasAttribute(EDITOR_ACCESS_ATTRIBUTE)).toBe(false)
+  })
+
+  it('Worker 握手后、主线程尚未渲染时出错：立即给出 Worker 原因，不能等成普通渲染超时', async () => {
+    vi.useFakeTimers()
+    steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    let failure: unknown
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' }).catch((error: unknown) => {
+      failure = error
+    })
+    FakeWorker.created[0]?.dispatchEvent(new MessageEvent('message', { data: imagePolicyReport(true) }))
+    FakeWorker.created[0]?.dispatchEvent(new Event('error', { cancelable: true }))
+    await vi.advanceTimersByTimeAsync(0)
+    try {
+      expect(failure).toMatchObject({ reason: 'worker-failed', failure: 'error-after-ready' })
+      expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+    }
+    finally {
+      await vi.advanceTimersByTimeAsync(20_000)
+      await creating
+    }
+  })
+
+  it('握手超时的结构化原因穿过挂载，20 秒后终止 Worker 并销毁实例', async () => {
+    vi.useFakeTimers()
+    const facade = steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const dispose = vi.spyOn(Univer.prototype, 'dispose')
+    let failure: unknown
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' }).catch((error: unknown) => {
+      failure = error
+    })
+    facade.reach(LifecycleStages.Ready)
+    facade.reach(LifecycleStages.Rendered)
+    await vi.advanceTimersByTimeAsync(19_999)
+    expect(failure).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1)
+    await creating
+    expect(failure).toMatchObject({ reason: 'worker-failed', failure: 'ready-timeout' })
+    expect(dispose).toHaveBeenCalledOnce()
+    expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('Worker 已成功、主线程没有渲染：保持普通 ready-timeout，不错误选择 Worker 退路', async () => {
+    vi.useFakeTimers()
+    const facade = steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' }).catch((error: unknown) => error)
+    facade.reach(LifecycleStages.Ready)
+    FakeWorker.created[0]?.dispatchEvent(new MessageEvent('message', { data: imagePolicyReport(true) }))
+    await vi.advanceTimersByTimeAsync(20_000)
+    const error = await creating
+    expect(error).toMatchObject({ reason: 'ready-timeout' })
+    expect(error).not.toBeInstanceOf(FormulaWorkerError)
+  })
+
+  it('主线程 IMAGE 安装失败仍是普通加载失败，不能被 Worker 退路掩盖', async () => {
+    const facade = steppingFacade([], 'unit-f5')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    vi.mocked(installRestrictedImageFunction).mockResolvedValueOnce(false)
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' }).catch((error: unknown) => error)
+    await reachReady(facade)
+    const error = await creating
+    expect(error).toMatchObject({ reason: 'image-policy-failed' })
+    expect(error).not.toBeInstanceOf(FormulaWorkerError)
+  })
+
+  it('插件同步抛错且 Worker 同时失败：原异常不被替换，也不遗留启动期限', async () => {
+    vi.useFakeTimers()
+    const original = new Error('插件注册失败')
+    const entry = failingEntry(original)
+    vi.mocked(sheetPluginEntries).mockReturnValue([{
+      ...entry,
+      register: () => {
+        FakeWorker.created[0]?.dispatchEvent(new Event('error', { cancelable: true }))
+        entry.register({} as Univer)
+      },
+    }])
+    await expect(createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-f5'), access: 'edit' })).rejects.toBe(original)
+    expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

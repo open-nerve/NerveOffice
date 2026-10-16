@@ -2,7 +2,7 @@
 // （同一份档案的变体，profile/sheet-profile.ts 的 FormulaExecution：不注册 RPC、三处 notExecuteFormula 为假、让出间隔 20——
 // M0 推荐、M4 要用的退路），带 formula=worker 或者不带时照常用公式 Worker。
 // 只在测试构建里：createSheetEditor 在 import.meta.env.MODE === 'e2e' 的分支里动态引入它，生产构建里那个分支与这个分块都被去掉，
-// 门禁 artifacts 按模块来源核对（src/editor/testing/ 只属于测试构建）。生产构建里没有开关，只有 Worker 模式。
+// 门禁 artifacts 按模块来源核对（src/editor/testing/ 只属于测试构建）。生产没有 URL 开关；M4-P5 的页面用显式参数选择主线程退路。
 // 同一页里每次重建编辑器（进入、退出编辑，"有更新"）都读同一个地址，模式不变。参数的名字与取值在 ./selftest-report.ts
 // （页面自检的入口页拼编辑器页的地址要用，那个文件不引用任何模块）
 import type { FormulaMode } from '../profile/sheet-profile.ts'

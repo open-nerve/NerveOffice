@@ -128,6 +128,9 @@ function fakeFactory() {
       formulasSettled: true,
       editor: {
         unitId: 'unit-1',
+        formulaMode: 'worker',
+        workerFailure: () => undefined,
+        onWorkerFailure: () => () => {},
         changeSeq: () => seq,
         onChange: (listener) => {
           changeListeners.add(listener)

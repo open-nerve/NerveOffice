@@ -169,6 +169,9 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
   const changeListeners = new Set<() => void>()
   const editor: SheetEditor = {
     unitId: 'unit-1',
+    formulaMode: 'worker',
+    workerFailure: () => undefined,
+    onWorkerFailure: () => () => {},
     changeSeq: () => 0,
     onChange: (listener) => {
       changeListeners.add(listener)
