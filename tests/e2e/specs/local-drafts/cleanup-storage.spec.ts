@@ -1,6 +1,7 @@
 // 完整清单使用真实存储/SDK 界面，不依赖测试构建探针；容器和生产节奏也运行。
 import type { Page } from '@playwright/test'
 import type { TestUser } from '../../support/database.ts'
+import { captureRejection } from '../../support/auth-rejection.ts'
 import { mirrorDigests } from '../../support/cleanup-fault.ts'
 import { createUser, revisionOf } from '../../support/database.ts'
 import { actualLocalDraft } from '../../support/draft-catalog.ts'
@@ -151,14 +152,21 @@ for (const { name, nextUser } of [
 
 test('US-M4-09 确证账户停用使用完整旧数据清单，仍保留其他账户的记号', async ({ page, anotherDevice }) => {
   const h = await actualLocalDraft(page, '停用完整清单')
-  await page.goto('/')
-  await expect(page.getByRole('heading', { name: '我的空间' })).toBeVisible()
+  // 从公开页布置清单，避免旧页后台取钥在刷新时先清 Cookie、却来不及交回停用正文。
+  // 这条故事要求新页实际消费确证停用的响应；后台先得知的同页路径由 cleanup-auth 覆盖。
+  await page.goto('/reset-password')
   await seedLegacyKeys(page, h.owner.id)
   await seedLegacyDatabase(page)
+  const rejected = await captureRejection(page, '/api/auth/session')
   await loginThroughApi(anotherDevice, await createUser('legacy-admin', '管理员', { systemRole: 'admin' }))
   await actAs(anotherDevice, 'POST', `/api/admin/users/${h.owner.id}/disable`)
-  await page.reload()
+  await page.goto('/')
+  await expect.poll(rejected).toMatchObject({
+    status: 401,
+    body: { error: { code: 'SESSION_EXPIRED', details: { reason: 'account_disabled', userId: h.owner.id } } },
+  })
   await expect(page.getByRole('form', { name: '登录' })).toBeVisible()
+  expect(new URL(page.url()).searchParams.get('reason')).toBe('account_disabled_confirmed')
   await expect(page.getByText('你的账户已被停用。请联系系统管理员确认账户状态。')).toBeVisible()
   await expect.poll(async () => readLocalDisk(page, h.key)).toEqual({ draft: null, writer: null })
   expect(await remainingLegacyKeys(page)).toEqual(REMAINING)

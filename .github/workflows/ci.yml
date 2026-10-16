@@ -140,6 +140,25 @@ jobs:
       - name: pnpm verify --ci --scope=e2e
         run: pnpm verify --ci --keep-going --scope=e2e
 
+      # 持久资料里的相同构建资源跨用例重复，逐文件 ZIP 无法跨文件压缩，曾令上传超出 job 时限。
+      # 保留所有文件并在替代上传前与原目录逐项比较；原目录始终保留，失败时上传它。
+      - name: 无损归档浏览器持久资料
+        id: profile-archive
+        if: always()
+        shell: bash
+        run: |
+          profiles=tests/e2e/test-results/persistent-profiles
+          if [[ -d "$profiles" ]]; then
+            archive="${profiles}.tar.zst"
+            test ! -e "$archive"
+            trap 'rm -f -- "$archive.partial"' EXIT
+            tar --sort=name --use-compress-program='zstd -T2 --long=27 -3' \
+              --create --file="$archive.partial" --directory=tests/e2e/test-results persistent-profiles
+            tar --use-compress-program='zstd --long=27 -d' \
+              --compare --file="$archive.partial" --directory=tests/e2e/test-results
+            mv -- "$archive.partial" "$archive"
+          fi
+
       # 总是上传：重试后通过的用例也要能查到报告（规范 §8.4，出现重试即记为不稳定）
       - name: 上传测试报告
         if: always()
@@ -149,6 +168,7 @@ jobs:
           path: |
             tests/e2e/playwright-report/
             tests/e2e/test-results/
+            ${{ steps.profile-archive.outcome == 'success' && '!tests/e2e/test-results/persistent-profiles/**' || '' }}
           retention-days: 14
 
   # 容器 E2E（P5 设计 §3.7）：用生产镜像起测试环境（应用 + PostgreSQL + Caddy 的 HTTPS，应用以受限的数据库角色运行），
