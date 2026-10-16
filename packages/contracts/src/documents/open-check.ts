@@ -5,7 +5,7 @@ import type { OpenCheckFailureKind } from './open-check-failures.ts'
 import { z } from 'zod'
 import { clientFormatRequiredBodyShape } from './client-format.ts'
 import { REVISION_MAX } from './content.ts'
-import { ERROR_NAME_PATTERN, OPEN_CHECK_ACCESS, OPEN_CHECK_FAILURE_KINDS, OPEN_CHECK_FAILURES_MAX, OPEN_CHECK_TRIGGERS, RESOURCE_NAME_PATTERN, THROWN_FAILURE_KINDS } from './open-check-failures.ts'
+import { ERROR_NAME_PATTERN, FORMULA_WORKER_FAILURE_KINDS, OPEN_CHECK_ACCESS, OPEN_CHECK_FAILURE_KINDS, OPEN_CHECK_FAILURES_MAX, OPEN_CHECK_TRIGGERS, RESOURCE_NAME_PATTERN, THROWN_FAILURE_KINDS } from './open-check-failures.ts'
 
 /** 一项失败（请求里，严格）：资源名与构造器名按写法；只有抛错的三种能带构造器名 */
 export const openCheckFailureSchema = z.strictObject({
@@ -33,3 +33,17 @@ export const openCheckReportSchema = z.strictObject({
 })
 
 export type OpenCheckReport = z.infer<typeof openCheckReportSchema>
+
+/** 可恢复的公式 Worker 诊断：没有资源清单、原异常或内容；旧报告保持原结构。 */
+export const formulaWorkerReportSchema = z.strictObject({
+  kind: z.literal('formula-worker'),
+  failure: z.enum(FORMULA_WORKER_FAILURE_KINDS),
+  revision: z.number().int().min(1).max(REVISION_MAX),
+  access: z.enum(OPEN_CHECK_ACCESS),
+  trigger: z.enum(OPEN_CHECK_TRIGGERS),
+  ...clientFormatRequiredBodyShape,
+})
+export type FormulaWorkerReport = z.infer<typeof formulaWorkerReportSchema>
+
+export const editorDiagnosticReportSchema = z.union([openCheckReportSchema, formulaWorkerReportSchema])
+export type EditorDiagnosticReport = z.infer<typeof editorDiagnosticReportSchema>

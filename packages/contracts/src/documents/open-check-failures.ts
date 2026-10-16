@@ -88,6 +88,18 @@ export const OPEN_CHECK_ACCESS = ['read', 'edit'] as const
 
 /**
  * 这一次创建编辑器的起因：open 打开页面；enter 进入编辑（含新建之后直接进入）；refresh 阅读时"有更新"之后重建；
- * exit 退出编辑之后以只读重建；lost 失去编辑权之后以只读重建；reload 放弃修改、另存为副本之后重新载入
+ * exit 退出编辑之后以只读重建；lost 失去编辑权之后以只读重建；reload 放弃修改、另存为副本之后重新载入；formula-recovery 运行期公式故障后的重建
  */
-export const OPEN_CHECK_TRIGGERS = ['open', 'enter', 'refresh', 'exit', 'lost', 'reload'] as const
+export const OPEN_CHECK_TRIGGERS = ['open', 'enter', 'refresh', 'exit', 'lost', 'reload', 'formula-recovery'] as const
+
+/** Worker 首个故障：不猜测浏览器不能区分的加载/执行细因，不带异常原文。 */
+export const FORMULA_WORKER_FAILURE_KINDS = [
+  'create',
+  'error-before-ready',
+  'messageerror-before-ready',
+  'ready-timeout',
+  'image-policy',
+  'error-after-ready',
+  'messageerror-after-ready',
+] as const
+export type FormulaWorkerFailure = (typeof FORMULA_WORKER_FAILURE_KINDS)[number]

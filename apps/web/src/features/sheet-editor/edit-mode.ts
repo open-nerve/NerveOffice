@@ -120,7 +120,7 @@
 // 不给"编辑"、页头说明；不因检查读到能编辑而恢复，"有更新"重建之后按新内容的结果覆盖。失败的编辑器绝不保存：以可编辑新建的编辑器
 // 先看打开自检、再建保存的状态机与调度——失败时释放编辑权、以只读重建、以 damaged 回到阅读（?edit=new 与"编辑"只能先取得编辑权再按它
 // 选内容，所以是"先取后放"）。失去编辑权之后的重建失败只上报，不改失去编辑权之后的选项（副本是本页的内容，服务端照常检查）。
-import type { CreatedDocument, DocumentDetail, EditInterruption, OpenCheckReport, PendingEditRequest, SaveContentResponse, UserSummary } from '@nerve-office/contracts'
+import type { CreatedDocument, DocumentDetail, EditInterruption, EditorDiagnosticReport, PendingEditRequest, SaveContentResponse, UserSummary } from '@nerve-office/contracts'
 import type { OpenCheck, SheetEditor } from '../../editor/index.ts'
 import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { CopyState, LostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
@@ -136,7 +136,7 @@ import type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit
 import type { EditingDraftReady } from './editing-draft.ts'
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
-import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
+import type { CreateModeEditor, EditorSurface, ReplaceOptions } from './editor-slot.ts'
 import type { FormulaRecovery, FormulaRecoveryView } from './formula-recovery.ts'
 import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { EditingNotice, IncomingRequest } from './holder-requests.ts'
@@ -159,6 +159,7 @@ import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
 import { createFormulaFallback } from './formula-fallback.ts'
 import { createFormulaRecovery } from './formula-recovery.ts'
+import { formulaWorkerReportOf } from './formula-worker-report.ts'
 import { createHolderRequests } from './holder-requests.ts'
 import { createIdleWatch } from './idle-watch.ts'
 import { captureLostContent } from './lost-copy-flow.ts'
@@ -426,7 +427,7 @@ export interface EditModeApi {
   /** 另存为副本：上传本页的快照，新建一份文档（M3-P2 设计 §3.2） */
   readonly conflictCopy: (documentId: string, query: ConflictCopyRequest, body: Uint8Array<ArrayBuffer>) => Promise<CreatedDocument>
   /** 打开自检失败的上报（M3-P4 设计 §3.13）：204；失败时抛出请求层的错误（这里不看结果、不重试） */
-  readonly reportOpenCheck: (documentId: string, report: OpenCheckReport) => Promise<void>
+  readonly reportOpenCheck: (documentId: string, report: EditorDiagnosticReport) => Promise<void>
   /** 请求编辑：请求方的发出、续期与取消（M3-P5 设计 §3.6） */
   readonly editRequest: EditRequestApi
 }
@@ -688,6 +689,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let markerStopped = false
   let disposed = false
   let hidden = false
+  let formulaReported = false
   const formulaFallback = createFormulaFallback({ createEditor: options.createEditor, onChange: () => notify() })
   const slot = createEditorSlot({ createEditor: formulaFallback.createEditor, onChange: () => notify(), reportError: options.reportError })
   /** 测试构建的观察钩子（M3-P5 设计 §3.13）：没有时什么也不记；观察者出错不影响交接（上报） */
@@ -805,8 +807,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       allowed: !disposed && !hidden && (mode.kind === 'editing' ? editing.coordinator !== undefined && !saveEnded(editing.coordinator.view().status) : mode.kind === 'reading' && !mode.gone),
       revision: mode.kind === 'editing' ? editing.baseRevision() : shown.revision,
     }),
-    // S4 为恢复增加准确的诊断起因；此处先以真实自检阻止不完整模型进入保存层。
-    check: created => created.openCheck.ok,
+    check: (created, access, revision) => openCheckOf(created, { access, revision, trigger: 'formula-recovery' }) === undefined,
     onChange: () => {
       notify()
       if (formulaRecovery?.view()?.phase === 'ready')
@@ -829,6 +830,11 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   function notify(): void {
     formulaRecovery?.sync()
+    // 过渡流程仍由实际创建入口报告；稳定模式下的运行期故障才能用本页当前修订。
+    if (mode.kind === 'editing')
+      reportFormulaFault({ access: 'edit', trigger: 'formula-recovery', revision: editing.baseRevision() })
+    else if (mode.kind === 'reading' && mode.update !== 'loading' && mode.takeover === undefined && !mode.gone)
+      reportFormulaFault({ access: 'read', trigger: 'formula-recovery', revision: shown.revision })
     const next = computeView()
     if (next.mode === current.mode && next.localSave === current.localSave && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface && next.formulaRecovery === current.formulaRecovery)
       return
@@ -883,6 +889,27 @@ export function createEditMode(options: EditModeOptions): EditMode {
     if (report !== undefined)
       api.reportOpenCheck(documentId, report).catch(() => undefined)
     return check.failures
+  }
+
+  /** 本页首错最多一次；后台诊断失败不影响恢复，不携带异常对象，也不重试。 */
+  function reportFormulaFault(context: OpenCheckContext): void {
+    const failure = formulaFallback.failure()
+    if (formulaReported || failure === undefined || session !== 'active' || disposed || hidden)
+      return
+    const report = formulaWorkerReportOf(failure, context)
+    if (report === undefined)
+      return
+    formulaReported = true
+    api.reportOpenCheck(documentId, report).catch(() => undefined)
+  }
+
+  /** 修订和起因取本次创建输入，不能从尚未更新的 shown 或中途模式猜测。 */
+  async function replaceEditor(snapshot: string, context: OpenCheckContext, options?: ReplaceOptions): Promise<SheetEditor | undefined> {
+    const token = generation
+    const created = await slot.replace(context.access, snapshot, options)
+    if (still(token))
+      reportFormulaFault(context)
+    return created
   }
 
   /** 接上只读的编辑器（撤掉屏障），进入阅读（随即检查一次） */
@@ -1258,7 +1285,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const blocked = blockedBy(saver.view().status)
     // 空闲释放、交出可以带着"公式待更新"离开：这一版的标记就是本页最后一次存上的（服务端记在文档上）
     const formulasLeft = unattended && saver.view().formulasPending
-    const created = await slot.replace('read', snapshot)
+    const created = await replaceEditor(snapshot, { access: 'read', trigger: 'exit', revision })
     if (!still(token))
       return
     // 保存的状态机留到换好编辑器才去掉：离开的整个过程页头的"保存""正在退出编辑…"都在（审查 A2），这时它说的是已保存
@@ -1385,7 +1412,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     pendingBlock = undefined
     editing.stopSaving()
     editing.releaseLease()
-    const fallback = await slot.replace('read', content.snapshot)
+    const fallback = await replaceEditor(content.snapshot, { access: 'read', trigger: 'enter', revision: content.revision })
     if (!still(token))
       return 'not-entered'
     if (fallback === undefined) {
@@ -1478,7 +1505,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         const initialized = await prepare(context, { access: 'editable', online: options.autosave.page.online(), current: { revision: content.revision, source: content.revision === acquired.revision ? acquired.source : undefined, occupied: false } }, async (snapshot, pending) => {
           if (!recoveryCurrent())
             return { kind: 'blocked', reason: 'cancelled' }
-          const created = await slot.replace('edit', snapshot, { recalculate: pending })
+          const created = await replaceEditor(snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, { recalculate: pending })
           if (!recoveryCurrent())
             return { kind: 'blocked', reason: 'cancelled' }
           if (created === undefined || openCheckOf(created, { access: 'edit', trigger: 'enter', revision: content.revision }) !== undefined)
@@ -1551,7 +1578,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
     // 申请时服务端说这份文档"公式待更新"（选定的内容就是申请时的那一版）：强制全量重算，收齐之后由自动保存补存（服务端随之清掉标记）
     const restored = prepared.restored === true
-    const created = restored ? restoredEditor : await slot.replace('edit', content.snapshot, { recalculate: formulasPending })
+    const created = restored ? restoredEditor : await replaceEditor(content.snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, { recalculate: formulasPending })
     if (!still(token))
       return 'not-entered'
     const formulasShown = formulasPendingOf(content.revision)
@@ -1846,7 +1873,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       options.reportError(new Error('无法从工作草稿读取失效时的本页内容'))
       return undefined
     }
-    return slot.replace('read', content.snapshot)
+    return replaceEditor(content.snapshot, { access: 'read', trigger: 'lost', revision: editing.baseRevision() })
   }
 
   /**
@@ -1997,7 +2024,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     }
     if (!still(token))
       return
-    const created = await slot.replace('read', content.snapshot)
+    const created = await replaceEditor(content.snapshot, { access: 'read', trigger: 'reload', revision: content.revision })
     if (!still(token))
       return
     if (created === undefined) {
@@ -2056,7 +2083,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       begin({ ...mode, update: 'none' })
       return
     }
-    const created = await slot.replace('read', fetched.snapshot)
+    const created = await replaceEditor(fetched.snapshot, { access: 'read', trigger: 'refresh', revision: fetched.revision })
     if (!still(token) || mode.kind !== 'reading')
       return
     if (created === undefined) {
@@ -2090,7 +2117,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         if (outcome !== undefined)
           return outcome
       }
-      const created = await slot.replace('read', shown.snapshot)
+      const created = await replaceEditor(shown.snapshot, { access: 'read', trigger: 'open', revision: shown.revision })
       if (!still(token))
         return { kind: 'opened', entered: false, damaged: false }
       if (created === undefined) {

@@ -17,7 +17,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { setGrant } from '../support/grants.ts'
-import { openCheckPath, openCheckReport, postOpenCheckReport } from '../support/open-check.ts'
+import { formulaWorkerReport, openCheckPath, openCheckReport, postOpenCheckReport } from '../support/open-check.ts'
 import { asUser, login } from '../support/session-client.ts'
 import { captureStatements } from '../support/statement-capture.ts'
 
@@ -214,5 +214,92 @@ describe('US-M3-15 按账户限量（每 10 分钟 20 条被采纳）', () => {
     expect((await postOpenCheckReport(app.baseUrl, other.session, other.documentId)).status).toBe(204)
     expect(failureLogs(other.documentId)).toHaveLength(1)
     expect(throttledLogs(other.account.id)).toEqual([])
+  })
+})
+
+function workerLogs(documentId: string): LogEntry[] {
+  return app.logs.entries().filter(entry => entry.event === 'formula-worker-failed' && entry.documentId === documentId)
+}
+
+describe('US-M4-13 公式 Worker 诊断与旧上报共用通道', () => {
+  it('只记有限字段；后台只读事务，无审计；不声称禁止编辑或恢复已经成功', async () => {
+    const { account, session, documentId } = await fresh('worker-logged')
+    const capture = captureStatements(database.name)
+    try {
+      const { result, statements } = await capture.during(async () => postOpenCheckReport(app.baseUrl, session, documentId, formulaWorkerReport({ revision: 3, access: 'edit', trigger: 'formula-recovery', failure: 'error-after-ready' })))
+      expect(result.status, await result.clone().text()).toBe(204)
+      expect(await result.text()).toBe('')
+      const lowered = statements.map(statement => statement.toLowerCase())
+      expect(lowered).toContain('begin isolation level repeatable read read only')
+      expect(lowered.filter(statement => /^(?:insert|update|delete)\b/.test(statement) && !statement.includes('auth_sessions'))).toEqual([])
+    }
+    finally {
+      capture.restore()
+    }
+    const entries = workerLogs(documentId)
+    expect(entries).toEqual([expect.objectContaining({ level: 'warn', event: 'formula-worker-failed', userId: account.id, documentId, revision: 3, currentRevision: 1, documentProfile: 'sheet@1', access: 'edit', trigger: 'formula-recovery', failure: 'error-after-ready', clientBuild: CLIENT_BUILD, univerVersion: '1.0.1', profile: 'sheet@1', formatVersion: 1 })])
+    expect(Object.keys(entries[0] ?? {}).filter(key => !COMMON_FIELDS.includes(key)).sort()).toEqual([...LOGGED_FIELDS.filter(key => key !== 'failures'), 'failure'].sort())
+    expect(failureLogs(documentId)).toEqual([])
+    const audits = await database.query(async client => (await client.query<{ count: string }>('SELECT count(*) FROM audit_events WHERE target_id = $1', [documentId])).rows[0]?.count)
+    expect(audits).toBe('0')
+  })
+
+  it('每种额外正文与未知故障 400，不写入日志、不占配额；CSRF 仍校验', async () => {
+    const { session, documentId } = await fresh('worker-invalid')
+    const secret = 'Worker机密正文片段'
+    for (const key of ['message', 'stack', 'snapshot', 'formula', 'workerUrl', 'resource', 'error', 'failures']) {
+      const response = await postOpenCheckReport(app.baseUrl, session, documentId, formulaWorkerReport({ [key]: secret }))
+      expect(response.status, key).toBe(400)
+      expect(parseExact(errorResponseSchema, await response.json()).error.code).toBe('REQUEST_INVALID')
+    }
+    expect((await postOpenCheckReport(app.baseUrl, session, documentId, formulaWorkerReport({ failure: secret }))).status).toBe(400)
+    const csrf = await asUser(app.baseUrl, session, openCheckPath(documentId), { method: 'POST', body: formulaWorkerReport(), headers: { [CSRF_TOKEN_HEADER]: undefined } })
+    expect([csrf.status, parseExact(errorResponseSchema, await csrf.json()).error.code]).toEqual([403, 'CSRF_TOKEN_INVALID'])
+    expect(workerLogs(documentId)).toEqual([])
+    expect(app.logs.text()).not.toContain(secret)
+    expect((await postOpenCheckReport(app.baseUrl, session, documentId, formulaWorkerReport())).status).toBe(204)
+    expect(workerLogs(documentId)).toHaveLength(1)
+  })
+
+  it('文档/修订/构建/故障签名去重，打开方式、起因和报告人不同也只记一次', async () => {
+    const { account, session, documentId } = await fresh('worker-dedupe')
+    const viewer = await createAccount(database, { username: 'worker-dedupe-viewer' })
+    const viewerSession = await login(app.baseUrl, viewer.username, viewer.password)
+    await setGrant(database, { documentId, userId: viewer.id, role: 'viewer', grantedBy: account.id })
+    for (const [who, overrides] of [[session, {}], [session, {}], [viewerSession, { access: 'edit', trigger: 'formula-recovery' }]] as const)
+      expect((await postOpenCheckReport(app.baseUrl, who, documentId, formulaWorkerReport(overrides))).status).toBe(204)
+    expect(workerLogs(documentId)).toHaveLength(1)
+    for (const overrides of [{ revision: 2 }, { clientBuild: '0.1.0+other' }, { failure: 'ready-timeout' }])
+      expect((await postOpenCheckReport(app.baseUrl, session, documentId, formulaWorkerReport(overrides))).status).toBe(204)
+    expect(workerLogs(documentId)).toHaveLength(4)
+    expect((await postOpenCheckReport(app.baseUrl, session, documentId)).status).toBe(204)
+    expect(failureLogs(documentId)).toHaveLength(1)
+  })
+
+  it('两类报告合计每账户 20 条，第 21 条起只记一次限量；别的账户不受影响', async () => {
+    const { account, session, documentId } = await fresh('worker-limit')
+    for (let revision = 1; revision <= 24; revision += 1) {
+      const body = revision % 2 === 0 ? formulaWorkerReport({ revision }) : openCheckReport({ revision })
+      expect((await postOpenCheckReport(app.baseUrl, session, documentId, body)).status).toBe(204)
+    }
+    expect(failureLogs(documentId)).toHaveLength(10)
+    expect(workerLogs(documentId)).toHaveLength(10)
+    expect(throttledLogs(account.id)).toEqual([expect.objectContaining({ limit: 20, windowMinutes: 10 })])
+    const other = await fresh('worker-limit-other')
+    expect((await postOpenCheckReport(app.baseUrl, other.session, other.documentId, formulaWorkerReport())).status).toBe(204)
+    expect(workerLogs(other.documentId)).toHaveLength(1)
+  })
+
+  it('先可读权限后去重和配额，21 次越权不影响合法报告', async () => {
+    const owner = await fresh('worker-permission')
+    const outsider = await fresh('worker-outsider')
+    for (let revision = 1; revision <= 21; revision += 1)
+      expect((await postOpenCheckReport(app.baseUrl, outsider.session, owner.documentId, formulaWorkerReport({ revision }))).status).toBe(404)
+    expect(workerLogs(owner.documentId)).toEqual([])
+    expect((await postOpenCheckReport(app.baseUrl, owner.session, owner.documentId, formulaWorkerReport())).status).toBe(204)
+    expect(workerLogs(owner.documentId)).toHaveLength(1)
+    expect((await postOpenCheckReport(app.baseUrl, outsider.session, outsider.documentId, formulaWorkerReport())).status).toBe(204)
+    expect(workerLogs(outsider.documentId)).toHaveLength(1)
+    expect(throttledLogs(outsider.account.id)).toEqual([])
   })
 })

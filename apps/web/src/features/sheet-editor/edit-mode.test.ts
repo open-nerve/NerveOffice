@@ -506,6 +506,104 @@ async function editing(context: ReturnType<typeof setup>): Promise<void> {
   expect(modeOf(context.mode).kind).toBe('editing')
 }
 
+describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
+  it('打开创建失败只报一次真实修订，之后进入/退出不重复；异常内容不传输', async () => {
+    const h = setup()
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create', { cause: new Error('机密正文') }))
+    await opened(h)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'create', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    await h.mode.enter()
+    await h.mode.exit()
+    expect(h.api.reportOpenCheck).toHaveBeenCalledOnce()
+    expect(JSON.stringify(h.api.reportOpenCheck.mock.calls)).not.toContain('机密正文')
+  })
+
+  it('刷新创建失败报告实际新修订，不能把仍显示的旧修订当成本次输入', async () => {
+    const h = setup({ api: { content: async () => ({ snapshot: snapshotOf('新修订'), revision: 8 }) } })
+    await opened(h)
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('ready-timeout'))
+    await h.mode.refresh(true)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'ready-timeout', revision: 8, access: 'read', trigger: 'refresh', ...PAGE_CLIENT_FORMAT })
+    expect(readingOf(h.mode).damaged).toBeUndefined()
+  })
+
+  it('进入编辑取得新修订，报告 edit/enter 及实际修订', async () => {
+    const h = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision: 5 }) } })
+    await opened(h)
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('error-before-ready'))
+    await h.mode.enter()
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-before-ready', revision: 5, access: 'edit', trigger: 'enter', ...PAGE_CLIENT_FORMAT })
+    expect(modeOf(h.mode).kind).toBe('editing')
+  })
+
+  it('主线程重试同样失败仍诊断首个 Worker 原因；普通加载失败不报', async () => {
+    const h = setup()
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('image-policy')).mockRejectedValueOnce(new Error('主线程失败'))
+    await opened(h)
+    expect(modeOf(h.mode).kind).toBe('failed')
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'image-policy', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    const ordinary = setup()
+    ordinary.factory.failNext()
+    await opened(ordinary)
+    expect(ordinary.api.reportOpenCheck).not.toHaveBeenCalled()
+  })
+
+  it.each(['read', 'edit'] as const)('运行中 %s 故障在等待组字时即报告，重复事件和重试不重报；上报失败不影响恢复', async (access) => {
+    const h = setup({ api: { reportOpenCheck: async () => {
+      throw new Error('诊断网络失败')
+    } } })
+    if (access === 'edit')
+      await editing(h)
+    else
+      await opened(h)
+    const old = h.factory.last()
+    old.compose(true)
+    old.failWorker()
+    await h.time.advance(0)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access, trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT })
+    old.failWorker()
+    old.compose(false)
+    await h.time.advance(0)
+    h.mode.retryFormulaRecovery()
+    await h.time.advance(0)
+    expect(h.api.reportOpenCheck).toHaveBeenCalledOnce()
+    expect(h.mode.view().formulaRecovery?.phase).toBe('ready')
+  })
+
+  it('恢复的新模型自检失败独立报告，不把故障视为资源损坏，不接纳不完整模型', async () => {
+    const h = setup()
+    await editing(h)
+    h.factory.checkWith(() => ({ ok: false, failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }] }))
+    h.factory.last().failWorker()
+    await h.time.advance(0)
+    expect(h.api.reportOpenCheck.mock.calls.map(([, report]) => report)).toEqual([
+      { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
+      { failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }], revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
+    ])
+    expect(h.mode.view().formulaRecovery?.problem).toBe('open-check')
+    expect(h.factory.last().disposed).toBe(true)
+    expect(h.api.save).not.toHaveBeenCalled()
+  })
+
+  it.each(['signed-out', 'other-user', 'dispose', 'hide'] as const)('创建故障后的迟到结果不在 %s 状态上报', async (cause) => {
+    const h = setup()
+    const creating = h.factory.holdNext()
+    h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create'))
+    const opening = opened(h)
+    await settle()
+    expect(h.factory.createEditor).toHaveBeenCalledTimes(2)
+    if (cause === 'dispose')
+      h.mode.dispose()
+    else if (cause === 'hide')
+      h.mode.releaseOnHide()
+    else
+      h.mode.setSession(cause)
+    creating.release()
+    await opening
+    expect(h.api.reportOpenCheck).not.toHaveBeenCalled()
+  })
+})
+
 describe('公式故障经过真实页面模式与保存会话', () => {
   it('创建 Worker 失败后以同一内容主线程打开，之后进入编辑强制重算并补存', async () => {
     const h = setup({ autosave: 'running' })

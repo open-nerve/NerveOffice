@@ -1,6 +1,6 @@
-import type { OpenCheckReport } from '@nerve-office/contracts'
+import type { EditorDiagnosticReport } from '@nerve-office/contracts'
 import type { Principal } from '../auth/index.ts'
-import { documentIdSchema, openCheckReportSchema } from '@nerve-office/contracts'
+import { documentIdSchema, editorDiagnosticReportSchema } from '@nerve-office/contracts'
 import { Body, Controller, HttpCode, Param, Post } from '@nestjs/common'
 import { BackgroundRequest } from '../../shared/background-request.ts'
 import { CurrentPrincipal } from '../auth/index.ts'
@@ -20,7 +20,7 @@ export class OpenCheckReportsController {
   async report(
     @CurrentPrincipal() principal: Principal,
     @Param('id', { schema: documentIdSchema }) id: string,
-    @Body({ schema: openCheckReportSchema }) body: OpenCheckReport,
+    @Body({ schema: editorDiagnosticReportSchema }) body: EditorDiagnosticReport,
   ): Promise<void> {
     await this.reports.report(principal.user.id, id, body)
   }

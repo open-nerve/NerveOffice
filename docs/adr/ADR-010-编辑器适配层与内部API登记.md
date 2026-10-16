@@ -100,6 +100,16 @@ createSheetEditor({ container, snapshot, access, viewState? }): Promise<SheetEdi
 
 保存、退出、交出、接管、刷新及确认后的续行按恢复状态受控；实际标签页回应原 busy 消息，不增加协议状态。失权通过稳定 captureEditor 取正文，换人、pagehide 和销毁优先。初次主线程退路进入编辑时登记公式补存，零用户修改也能清掉待更新标记；旧请求和 ACK 沿 S2 规则收尾。S4 继续页头和诊断接线，S5 验证真实浏览器与生产快照，S3 的单元与构建结果不能代替 A18。
 
+## M4-P5 S4 的补充：恢复说明与有限诊断（2026-10-17）
+
+沿原 `POST /documents/:id/open-check-failures` 兼容旧报告，新增严格的 `kind: formula-worker` 变体。只有 S1 七种 failure、revision/access/trigger 与四项页面构建/格式元数据；不接收正文、公式、资源内容、Worker URL 或异常原文。Worker 枚举放在 contracts 的无 Zod 事实模块，适配层继续导出同一类型；浏览器构建器不引入 schema 的求值。
+
+服务端先按原只读事务校验可读权限，再与资源自检共用去重和每账户 10 分钟 20 条配额，保持 10,000 键上限。日志 event 为 `formula-worker-failed`，只说页面尝试改用主线程，不宣称已恢复或禁止编辑；旧 event 与旧请求体兼容。不落库、不记审计，后台请求仍受会话、CSRF、Origin 与体积限制。
+
+页面本轮创建显式携带 revision/access/trigger，避免刷新时从旧 shown 误取修订。首错先锁存上报标记，再发一次后台请求，不因网络错误重试或改变恢复流程。运行期与恢复后资源自检分别报告，新增 `formula-recovery` 起因；后者仍阻止不完整模型进入保存。
+
+页头单独说明等待输入、重建、暂停、失败和主线程成功。失败时同一页面有明确重试，当前会话、模式与保存终态限制动作；重建本身不要求联网。公式、云端保存、本机保存的读屏事实独立记忆。按钮、既有接管/放弃本机修改确认框按 S3 恢复状态保护，取消和会话/失权出口保持可用。此步通过单元/相关集成与原构建门槛，真实浏览器、生产快照和性能仍由 S5 验收。
+
 ## M4-P4 的补充：SDK 偏好按编辑器实例留在内存（2026-10-14）
 
 `editor/internal-api/memory-local-storage.ts` 实现锁定 SDK 的 `ILocalStorageService` 全部异步接口，每个注入器独立 Map，读、写和遍历克隆值；销毁清空，迟到写入不能复活数据。内部 API 登记、统一出口及 lint 限制同时更新，平台功能不引用 SDK。
