@@ -209,6 +209,41 @@ function troubleIn(log: readonly AutosaveLogEntry[]): string | undefined {
   return bad === undefined ? undefined : `自动保存出了问题：${entryText(bad)}`
 }
 
+/**
+ * 首笔确认之后，驱动可能已按数据库提交让页面隐藏。按两笔操作的序号与原因核对这段前置，
+ * 不能把“数据库已有第一格”当作“浏览器已处理第一格确认”：隐藏会同步捕获第二格并排入保存。
+ */
+export function hiddenSavePreludeProblem(log: readonly AutosaveLogEntry[], state: {
+  readonly firstSeq: number
+  readonly secondSeq: number
+  readonly hiddenAt: number | undefined
+  readonly save: string | undefined
+}): string | undefined {
+  const { firstSeq, secondSeq, hiddenAt, save } = state
+  const trouble = troubleIn(log)
+  if (trouble !== undefined)
+    return trouble
+  if (secondSeq <= firstSeq)
+    return '写第二格没有被检测为修改'
+  const captures = capturesIn(log)
+  const uploads = uploadsIn(log)
+  if (captures[0]?.trigger !== 'control' || captures[0].seq !== firstSeq || uploads[0]?.trigger !== 'control' || uploads[0].seq !== firstSeq || uploads[0].outcome.kind !== 'saved')
+    return `第一格必须由控制的 flush 捕获并确认上传（序号 ${firstSeq}）`
+  if (hiddenAt === undefined) {
+    if (captures.length !== 1 || uploads.length !== 1)
+      return '隐藏之前应当只有第一格的控制捕获与上传'
+    return save === 'dirty' ? undefined : `第一格存上、尚未隐藏时保存状态是 ${save ?? '没有'}（应当是 dirty：第二格还没上传）`
+  }
+  const hiddenCapture = captures[1]
+  if (captures.length !== 2 || hiddenCapture?.trigger !== 'hidden' || hiddenCapture.seq !== secondSeq || hiddenCapture.at < hiddenAt || captures[0].at > hiddenAt)
+    return `隐藏的那一刻必须只捕获第二格（序号 ${secondSeq}），不能有额外捕获或提前捕获`
+  const hiddenUpload = uploads[1]
+  if (uploads.length > 2 || (hiddenUpload !== undefined && (hiddenUpload.trigger !== 'hidden' || hiddenUpload.seq !== secondSeq || hiddenUpload.startedAt < hiddenAt || hiddenUpload.outcome.kind !== 'saved')))
+    return `第一格之后只能是隐藏触发的第二格上传（序号 ${secondSeq}）`
+  const expected = hiddenUpload === undefined ? 'saving' : 'clean'
+  return save === expected ? undefined : `隐藏保存${hiddenUpload === undefined ? '还在途' : '已确认'}，保存状态是 ${save ?? '没有'}（应当是 ${expected}）`
+}
+
 // ---- 捕获的内容：同步的订阅 ----
 
 /** 调度的一次捕获，与同一时刻另取的内存快照、公式收齐与否 */

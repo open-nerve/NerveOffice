@@ -7,7 +7,7 @@
 import type { SelftestTimelineEntry } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'
 import type { VisibilityWatch } from './selftest-timeline.ts'
-import { autosaveControl, capturesIn, describeAutosave, requestOf, triggerText, untilUploaded } from './selftest-autosave.ts'
+import { autosaveControl, capturesIn, describeAutosave, hiddenSavePreludeProblem, requestOf, triggerText, untilUploaded } from './selftest-autosave.ts'
 import { checkEditing, facade, round } from './selftest-capture-common.ts'
 import { waitFor } from './selftest-dom.ts'
 import { check, CHECK_TIMEOUT_MS, fail } from './selftest-session.ts'
@@ -61,16 +61,18 @@ export async function holderPrelude(session: Session, visibility: VisibilityWatc
     const started = performance.now()
     const flushing = control.flush()
     sheet.getRange(second.cell).setValue(second.value)
+    const secondSeq = session.probe.changeSeq()
     const result = await flushing
     if (result?.outcome?.kind !== 'saved')
       fail(`控制的 flush 没有存上：${JSON.stringify(result) ?? '没有当前的调度'}；${describeAutosave(session)}`)
     const request = requestOf(result.outcome.requestId)
     if (request?.status !== 200 || request.localSeq !== String(firstSeq))
       fail(`第一格的保存请求：状态 ${String(request?.status)}、修改序号 ${String(request?.localSeq)}（应当是 200、${firstSeq}）`)
-    if (session.host.view().save !== 'dirty')
-      fail(`第一格存上之后保存状态是 ${session.host.view().save ?? '没有'}（应当是 dirty：第二格还没上传）`)
+    const problem = hiddenSavePreludeProblem(control.log(), { firstSeq, secondSeq, hiddenAt: visibility.hiddenAt(), save: session.host.view().save })
+    if (problem !== undefined)
+      fail(`${problem}；${describeAutosave(session)}`)
     observations.push(observation('first-saved'))
-    return `第一格（${first.cell}）经控制的 flush 存上（${round(performance.now() - started)} ms），第二格（${second.cell}）留着；${prelude.afterSave}`
+    return `第一格（${first.cell}）经控制的 flush 存上（${round(performance.now() - started)} ms），第二格（${second.cell}）${visibility.hiddenAt() === undefined ? '留着' : '已经由隐藏事件捕获，继续核对该次上传'}；${prelude.afterSave}`
   })
   if (!saved)
     return false
