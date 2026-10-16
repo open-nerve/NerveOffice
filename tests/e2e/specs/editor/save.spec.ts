@@ -237,24 +237,37 @@ test.describe('US-M1-05 保存到云端，看到真实的保存状态', () => {
     expect(cellOf((await savedContent(page, documentId)).snapshot, 'C3')?.v).toBe('typing')
   })
 
-  test('有未保存的修改时离开：浏览器提示；保存之后离开不提示', async ({ page, context }) => {
-    await openNewSheet(page, 'save-leave')
-    await typeInCell(page, 'A1', 'unsaved')
-    const dialogs: string[] = []
-    page.on('dialog', (dialog) => {
-      dialogs.push(dialog.type())
-      void dialog.dismiss()
-    })
-    await page.close({ runBeforeUnload: true })
-    await expect.poll(() => dialogs).toEqual(['beforeunload'])
-    expect(page.isClosed()).toBe(false)
+  test('有未保存的修改时离开：浏览器提示；保存之后离开不提示', async ({ page }) => {
+    const documentId = await openNewSheet(page, 'save-leave')
+    const editorUrl = page.url()
+    // 自动保存照常运行时，也让这一刻确实仍有未确认的修改；只延迟真实上传，不替换回包。
+    const release = await holdSaves(page)
+    try {
+      await typeInCell(page, 'A1', 'unsaved')
+      const dialogs: string[] = []
+      let dismissal = Promise.resolve()
+      page.on('dialog', (dialog) => {
+        dialogs.push(dialog.type())
+        dismissal = dialog.dismiss()
+      })
+      // WebKit 的 tryClose 只有 50 ms IPC 宽限，慢机器上即使 beforeunload 已 preventDefault 也会强关。
+      // 用真实整页导航验证同一个原生离页提示：取消后原编辑页仍在，保存确认后才正常离开。
+      await page.evaluate(() => window.location.assign('/'))
+      await expect.poll(() => dialogs).toEqual(['beforeunload'])
+      await dismissal
+      await expect(page).toHaveURL(editorUrl)
+      expect(page.isClosed()).toBe(false)
 
-    await saveAndWait(page)
-    const closed = new Promise<void>(resolve => page.once('close', () => resolve()))
-    await page.close({ runBeforeUnload: true })
-    await closed
-    expect(dialogs).toEqual(['beforeunload'])
-    expect(context.pages()).not.toContain(page)
+      release()
+      await saveAndWait(page)
+      expect(cellOf((await savedContent(page, documentId)).snapshot, 'A1')?.v).toBe('unsaved')
+      await page.goto('/')
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+      expect(dialogs).toEqual(['beforeunload'])
+    }
+    finally {
+      release()
+    }
   })
 
   test('改了公式的依赖立即保存：服务器上公式的缓存值与按定义算出的一致', async ({ page }) => {

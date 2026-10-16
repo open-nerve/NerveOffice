@@ -25,7 +25,7 @@ import type { Session } from './selftest-session.ts'
 import { FORMULA_PROTOCOL, NOTE_TEXTAREA_SELECTOR } from '../internal-api/index.ts'
 import { BIG_SHEET, cellCount } from './capture-samples.ts'
 import { sameContent } from './content-compare.ts'
-import { autosaveControl, autosaveTimeline, capturesIn, captureTimingProblems, confirmed, describeAutosave, detectedChanges, requestOf, triggerText, untilCaughtUp, untilUploaded, uploadsIn, watchCaptures } from './selftest-autosave.ts'
+import { autosaveControl, autosaveTimeline, capturesIn, captureTimingProblems, confirmed, describeAutosave, detectedChanges, hiddenSavePreludeProblem, requestOf, triggerText, untilCaughtUp, untilUploaded, uploadsIn, watchCaptures } from './selftest-autosave.ts'
 import { changesAfter, checkEditing, facade, round, sheetNamed, sleep } from './selftest-capture-common.ts'
 import { isVisible, nextFrames, waitFor } from './selftest-dom.ts'
 import { formulaTimingScenario } from './selftest-formulas.ts'
@@ -634,21 +634,13 @@ async function hiddenSaveScenario(session: Session): Promise<void> {
       const result = await flushing
       if (result?.outcome?.kind !== 'saved')
         fail(`控制的 flush 没有存上：${JSON.stringify(result) ?? '没有当前的调度'}；${describeAutosave(session)}`)
-      const log = control.log()
-      const captures = capturesIn(log)
-      const uploads = uploadsIn(log)
-      if (captures.length !== 1 || captures[0]?.trigger !== 'control' || captures[0].seq !== firstSeq)
-        fail(`捕获应当只有控制的那一次（序号 ${firstSeq}）：${autosaveTimeline(log, started)}`)
-      if (uploads.length !== 1 || uploads[0]?.seq !== firstSeq)
-        fail(`上传应当只有控制的那一次（序号 ${firstSeq}）：${autosaveTimeline(log, started)}`)
       const request = requestOf(result.outcome.requestId)
       if (request?.status !== 200 || request.localSeq !== String(firstSeq))
         fail(`第一格的保存请求：状态 ${String(request?.status)}、修改序号 ${String(request?.localSeq)}（应当是 200、${firstSeq}）`)
-      if (secondSeq <= firstSeq)
-        fail('写第二格没有被检测为修改')
-      if (session.host.view().save !== 'dirty')
-        fail(`第一格存上之后保存状态是 ${session.host.view().save ?? '没有'}（应当是 dirty：第二格还没上传）`)
-      return `第一格（${first.cell}）经控制的 flush 捕获、上传、存上（${round(performance.now() - started)} ms）；第二格（${second.cell}）在它上传时写下，留着没捕获（捕获的静默与上限是一小时）、没上传（定时的上传暂停）；之后等页面变成隐藏（驱动脚本另开标签页）`
+      const problem = hiddenSavePreludeProblem(control.log(), { firstSeq, secondSeq, hiddenAt: state.hiddenAt, save: session.host.view().save })
+      if (problem !== undefined)
+        fail(`${problem}；${describeAutosave(session)}`)
+      return `第一格（${first.cell}）经控制的 flush 捕获、上传、存上（${round(performance.now() - started)} ms）；第二格（${second.cell}）在它上传时写下，${state.hiddenAt === undefined ? '留着没捕获、没上传，之后等页面变成隐藏' : '已经由隐藏事件捕获，继续核对该次上传'}（捕获的静默与上限是一小时、定时的上传暂停）`
     })
     if (!firstSaved)
       return

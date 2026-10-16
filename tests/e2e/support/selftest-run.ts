@@ -38,6 +38,27 @@ export async function startSelftest(page: Page, step: SelftestStep): Promise<str
   return delivered
 }
 
+/** 第一笔保存真实提交，回包等调用方放行：校准数据库已提交、页面隐藏、浏览器才收到确认的交错。 */
+export async function holdFirstSaveReply(page: Page, documentId: string): Promise<() => void> {
+  let release: () => void = () => {}
+  const released = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  let intercepted = false
+  await page.route(`**/api/documents/${documentId}/content**`, async (route) => {
+    if (route.request().method() !== 'PUT' || intercepted) {
+      await route.fallback()
+      return
+    }
+    intercepted = true
+    const response = await route.fetch()
+    expect(response.status(), '第一笔保存真实提交').toBe(200)
+    await released
+    await route.fulfill({ response })
+  })
+  return release
+}
+
 /** 交回的地址里的结果解开 */
 async function decodeDelivered(url: string): Promise<SelftestReport> {
   const encoded = new URL(url).searchParams.get(RESULT_PARAM)

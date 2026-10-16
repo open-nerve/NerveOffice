@@ -55,7 +55,7 @@ import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDown
 import { preserveUnrelatedDraft } from '../../support/selftest-outbox.ts'
 import { problemsOf, SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../../support/selftest-plan.ts'
 import { runPausedHolder, runWaiter } from '../../support/selftest-request.ts'
-import { REPORT_TIMEOUT_MS, reportOf, startSelftest } from '../../support/selftest-run.ts'
+import { holdFirstSaveReply, REPORT_TIMEOUT_MS, reportOf, startSelftest } from '../../support/selftest-run.ts'
 import { EDITOR_TEST_TIMEOUT } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
@@ -327,16 +327,24 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
   for (const definition of HIDDEN_SAVE) {
     test(`步骤 ${definition.id}：第一次上传之后页面变成隐藏（这里模拟），自动保存在隐藏的那一刻捕获、上传留着的第二格，服务器上有两次保存`, async ({ page }, testInfo) => {
       const step = await stepOf(definition)
-      const delivered = await startSelftest(page, step)
-      await expect.poll(async () => revisionOf(step.documentId), { message: '等第一次上传', timeout: REPORT_TIMEOUT_MS }).toBe(2)
-      // Playwright 的页面一直可见（无头浏览器另开标签页也不变）：与 reading-updates.spec.ts 同一个办法模拟可见性变成 hidden
-      await page.evaluate(() => {
-        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
-        document.dispatchEvent(new Event('visibilitychange'))
-      })
-      const report = await reportOf(delivered)
-      await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
-      expect(await summaryOf(report, step)).toEqual(passed(step))
+      const releaseReply = await holdFirstSaveReply(page, step.documentId)
+      try {
+        const delivered = await startSelftest(page, step)
+        await expect.poll(async () => revisionOf(step.documentId), { message: '等第一次上传', timeout: REPORT_TIMEOUT_MS }).toBe(2)
+        // Playwright 的页面一直可见（无头浏览器另开标签页也不变）：与 reading-updates.spec.ts 同一个办法模拟可见性变成 hidden
+        await page.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+          document.dispatchEvent(new Event('visibilitychange'))
+        })
+        // 库里的首笔提交已经可见，页面收到它的确认之前，隐藏已触发第二笔保存。
+        releaseReply()
+        const report = await reportOf(delivered)
+        await testInfo.attach('selftest-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' })
+        expect(await summaryOf(report, step)).toEqual(passed(step))
+      }
+      finally {
+        releaseReply()
+      }
     })
   }
 
@@ -394,6 +402,7 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
     // 真等一个有效期（90 秒）再加打开、接手与另存为副本
     test.setTimeout(EDITOR_TEST_TIMEOUT + 180_000)
     const { step, author, peer } = await requestScene('st-paused', 'paused-holder')
+    const releaseReply = await holdFirstSaveReply(page, step.documentId)
     const pattern = `**/api/documents/${step.documentId}/edit-lease**`
     let delivered: string[] = []
     const stage: RequestStage = {
@@ -403,6 +412,7 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
       hide: async () => {
         await setVisibility(page, 'hidden')
         await page.route(pattern, holdHolderBack)
+        releaseReply()
       },
       show: async () => {
         // 先回到前台、再放开：放开之后的第一次心跳才得知失去编辑权（与真实 Safari 一样在回来之后）
@@ -411,11 +421,16 @@ test.describe('US-M2-11 页面自检（真实 Safari 复核用）在 Playwright 
       },
       report: async deadline => reportBefore(delivered, deadline),
     }
-    const run = await runPausedHolder({ origin: e2eOrigin(), documentId: step.documentId, holder: author, requester: peer, stage, deadline: Date.now() + REPORT_TIMEOUT_MS + 120_000, expectSuspended: false })
-    await attachRun(testInfo, run)
-    expect(run.report?.path).toBe('lost-after-pause')
-    expect(run.report === undefined ? undefined : await summaryOf(run.report, step, run.report.path)).toEqual(passed(step))
-    expect(run.judgement.problems).toEqual([])
+    try {
+      const run = await runPausedHolder({ origin: e2eOrigin(), documentId: step.documentId, holder: author, requester: peer, stage, deadline: Date.now() + REPORT_TIMEOUT_MS + 120_000, expectSuspended: false })
+      await attachRun(testInfo, run)
+      expect(run.report?.path).toBe('lost-after-pause')
+      expect(run.report === undefined ? undefined : await summaryOf(run.report, step, run.report.path)).toEqual(passed(step))
+      expect(run.judgement.problems).toEqual([])
+    }
+    finally {
+      releaseReply()
+    }
   })
 
   test('步骤 paused-holder 没被暂停（M3-P6 设计 §3.10，DEF-062 路 2 的另一条）：作者编辑、存上第一格之后页面隐藏（这里模拟），心跳照常；空闲满 2 分钟之后协作者请求，作者的心跳带来请求的同一步就先保存第三格再自动交出、回到阅读；协作者续期得到 reserved 之后接手；库里作者那一代结束为 handed_over', async ({ page }, testInfo) => {
