@@ -137,6 +137,7 @@ import type { EditingDraftReady } from './editing-draft.ts'
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor, EditorSurface } from './editor-slot.ts'
+import type { FormulaRecovery, FormulaRecoveryView } from './formula-recovery.ts'
 import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { EditingNotice, IncomingRequest } from './holder-requests.ts'
 import type { IdleWatch } from './idle-watch.ts'
@@ -156,6 +157,8 @@ import { createEditRequests } from './edit-request.ts'
 import { createEditingSession } from './editing-session.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
+import { createFormulaFallback } from './formula-fallback.ts'
+import { createFormulaRecovery } from './formula-recovery.ts'
 import { createHolderRequests } from './holder-requests.ts'
 import { createIdleWatch } from './idle-watch.ts'
 import { captureLostContent } from './lost-copy-flow.ts'
@@ -400,6 +403,7 @@ export type EditModeState
     | { readonly kind: 'unavailable' }
 
 export interface EditModeView {
+  readonly formulaRecovery: FormulaRecoveryView | undefined
   readonly localSave: LocalSaveView | undefined
   readonly mode: EditModeState
   /** 编辑时（与退出编辑的过程中）才有：保存的状态 */
@@ -502,6 +506,7 @@ export type OpenOutcome
 export interface EditMode {
   readonly view: () => EditModeView
   readonly subscribe: (listener: () => void) => () => void
+  readonly retryFormulaRecovery: () => void
   /**
    * 打开（载入之后）：以只读创建，进入阅读。enterEdit（地址带 ?edit=new、而且能编辑）时直接申请编辑权、以可编辑创建
    * （新建的表格不必先阅读，M3 总设计 §2.1 的细化）；被占用、不能编辑了或请求失败就照常阅读、说明原因（与"编辑"相同，审查 A11），
@@ -682,7 +687,9 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let localGeneration = options.localDrafts?.permit?.()?.generation
   let markerStopped = false
   let disposed = false
-  const slot = createEditorSlot({ createEditor: options.createEditor, onChange: () => notify(), reportError: options.reportError })
+  let hidden = false
+  const formulaFallback = createFormulaFallback({ createEditor: options.createEditor, onChange: () => notify() })
+  const slot = createEditorSlot({ createEditor: formulaFallback.createEditor, onChange: () => notify(), reportError: options.reportError })
   /** 测试构建的观察钩子（M3-P5 设计 §3.13）：没有时什么也不记；观察者出错不影响交接（上报） */
   const observer = options.trace
   const traced: HandoverTrace | undefined = observer === undefined
@@ -782,21 +789,48 @@ export function createEditMode(options: EditModeOptions): EditMode {
     userId: options.userId,
     clock,
     holdsLock: editing.holdsLock,
-    phase: () => tabPhaseOf(mode),
+    phase: () => recoveryBusy() ? 'recovering' : tabPhaseOf(mode),
     leave: () => void leaveEditing('handover-tab'),
     trace: traced,
   })
+  const formulaRecovery: FormulaRecovery = createFormulaRecovery({
+    fallback: formulaFallback,
+    slot,
+    editing,
+    clock,
+    context: () => ({
+      generation,
+      access: mode.kind === 'editing' ? 'edit' : mode.kind === 'reading' && mode.update !== 'loading' && mode.takeover === undefined ? 'read' : undefined,
+      active: session === 'active',
+      allowed: !disposed && !hidden && (mode.kind === 'editing' ? editing.coordinator !== undefined && !saveEnded(editing.coordinator.view().status) : mode.kind === 'reading' && !mode.gone),
+      revision: mode.kind === 'editing' ? editing.baseRevision() : shown.revision,
+    }),
+    // S4 为恢复增加准确的诊断起因；此处先以真实自检阻止不完整模型进入保存层。
+    check: created => created.openCheck.ok,
+    onChange: () => {
+      notify()
+      if (formulaRecovery?.view()?.phase === 'ready')
+        requests.retry()
+    },
+    reportError: options.reportError,
+  })
   let current = computeView()
+
+  function recoveryBusy(): boolean {
+    return (mode.kind === 'editing' || (mode.kind === 'reading' && mode.update !== 'loading'))
+      && formulaRecovery?.view()?.blocksActions === true
+  }
 
   /** 保存的状态只在编辑与退出编辑的过程中给出：失去编辑权之后保存的状态机还留着（核对结果未知的保存），但它的说明不再成立 */
   function computeView(): EditModeView {
     const saving = mode.kind === 'editing' || mode.kind === 'exiting'
-    return { mode, localSave: saving ? editing.localSave() : undefined, save: saving ? editing.coordinator?.view() : undefined, autosave: saving ? editing.autosave?.view() : undefined, surface: slot.surface() }
+    return { mode, localSave: saving ? editing.localSave() : undefined, save: saving ? editing.coordinator?.view() : undefined, autosave: saving ? editing.autosave?.view() : undefined, surface: slot.surface(), formulaRecovery: formulaRecovery?.view() }
   }
 
   function notify(): void {
+    formulaRecovery?.sync()
     const next = computeView()
-    if (next.mode === current.mode && next.localSave === current.localSave && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface)
+    if (next.mode === current.mode && next.localSave === current.localSave && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface && next.formulaRecovery === current.formulaRecovery)
       return
     current = next
     for (const listener of [...listeners])
@@ -941,7 +975,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /** 不由用户发起的写的门槛（空闲释放）：会话可写（confirmedForWrite 的口径，不主动向服务端确认）、联网 */
   function writableUnprompted(): boolean {
-    return options.autosave.page.sessionWritable() && options.autosave.page.online()
+    return !recoveryBusy() && options.autosave.page.sessionWritable() && options.autosave.page.online()
   }
 
   /** 开始空闲释放的计时（进入编辑的那一刻起算） */
@@ -1019,6 +1053,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 尽力取消（清掉留给本页的保留，别人不必等它过期）
    */
   function enterGranted(): boolean {
+    if (recoveryBusy())
+      return false
     if (disposed || mode.kind !== 'reading' || session !== 'active' || mode.update === 'loading' || mode.takeover !== undefined || slot.editor() === undefined)
       return false
     if (!mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined) {
@@ -1097,6 +1133,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 过一个心跳周期再看（再也存不上的不再试），别的照截止时刻
    */
   async function leaveEditing(cause: LeaveCause, auto = false): Promise<void> {
+    if (recoveryBusy())
+      return
     const saver = editing.coordinator
     const scheduler = editing.autosave
     const held = editing.lease
@@ -1535,7 +1573,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     editing.startSaving(created, {
       revision: restoredBase ?? content.revision,
       snapshotBytes: source.kind === 'working' ? source.ref.bytes : UTF8.encode(content.snapshot).byteLength,
-      formulasPending: restored ? false : formulasPending,
+      formulasPending: restored ? false : formulasPending || formulaFallback.failure() !== undefined,
       initialUnsaved: restored,
       blocked: pendingBlock,
     })
@@ -1744,12 +1782,15 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * "在此编辑"（见文件头）：阅读、能编辑、没有在按新的版本重建、没有请求编辑时；接手进行中不再开始一次，那边没能交出（failed）时再按就是"仍在此编辑"
    * （anyway：本人接管、拿锁时抢，不再请它交出）。这里开始这一件事（阅读里带上进展、作废之前的），编排交给 tab-handover.ts 的 takeOverHere
    */
-  async function startTakeover(prepare = options.recovery?.beginRestore()): Promise<void> {
+  async function startTakeover(prepare?: RecoveryPreparation): Promise<void> {
+    if (recoveryBusy())
+      return
     if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading' || mode.request !== undefined || slot.editor() === undefined || disposed)
       return
     const anyway = mode.takeover?.kind === 'failed'
     if (mode.takeover !== undefined && !anyway)
       return
+    prepare ??= options.recovery?.beginRestore()
     readingBefore = { ...mode, update: mode.update, notice: undefined, takeover: undefined }
     takeoverAbort?.abort()
     const abort = new AbortController()
@@ -1844,7 +1885,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const lostAt = options.now()
     const saver = editing.coordinator
     const draft = editing.draft
-    const page = slot.editor()
+    const page = editing.captureEditor()
     syncSaving()
     const { ref, inputLeft } = await captureLostContent(page, draft, options.reportError)
     if (!still(token))
@@ -1984,6 +2025,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /** "有更新，点击刷新"：按条件读取取最新的内容，重建为阅读（保留视图） */
   async function refreshUpdate(latest = false): Promise<void> {
+    if (recoveryBusy())
+      return
     // "在此编辑"进行中不刷新：开始新的一件事会让接手的那一次作废，进展却留在阅读里（等人选"仍在此编辑"或"取消"时可以）
     if (mode.kind !== 'reading' || mode.update === 'loading' || (!latest && mode.update !== 'available') || (mode.takeover !== undefined && mode.takeover.kind !== 'failed') || disposed)
       return
@@ -2029,6 +2072,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   return {
     view: () => current,
+    retryFormulaRecovery: () => formulaRecovery?.retry(),
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -2060,6 +2104,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     enter: async (prepare) => {
+      if (recoveryBusy())
+        return
       // 正在按新的版本取内容、重建（update 为 loading）时不进入：两次重建会叠在一起，而回到阅读时也说不清显示的是哪一版（审查 A1）。
       // 阅读时一定有接上的编辑器，没有就是还在换。打开自检失败的阅读不进入（M3-P4 设计 §3.12）；"在此编辑"进行中（或者等人选）、请求编辑进行中
       // 时不进入（M3-P5）
@@ -2074,6 +2120,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     takeOver: startTakeover,
 
     requestEdit: async () => {
+      if (recoveryBusy())
+        return
       // 与"编辑"同样的前提；"在此编辑"进行中、已经有请求时不再发出
       if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading' || mode.takeover !== undefined || mode.request !== undefined || slot.editor() === undefined || disposed)
         return
@@ -2091,6 +2139,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     decline: async () => {
+      if (recoveryBusy())
+        return
       const held = editing.lease
       if (mode.kind === 'editing' && held !== undefined)
         await holder.decline(held)
@@ -2105,6 +2155,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     forceTakeOver: async (prepare) => {
+      if (recoveryBusy())
+        return
       // 与"编辑"同样的前提，另要能强制接管；与请求编辑、"在此编辑"互斥；正在编辑的是自己时走"在此编辑"（同一个浏览器里先请那边交出），这里不做
       if (mode.kind !== 'reading' || !mode.canEdit || !mode.canTakeOver || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading'
         || mode.takeover !== undefined || mode.request !== undefined || mode.holder?.sameUser === true || slot.editor() === undefined || disposed) {
@@ -2127,10 +2179,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
     exit: async () => leaveEditing('exit'),
 
     save: async (ready) => {
-      if (mode.kind !== 'editing' || editing.autosave === undefined)
+      if (recoveryBusy() || mode.kind !== 'editing' || editing.autosave === undefined)
         return
       // 等会话确认的期间开始了退出、失去了编辑权：不再上传（退出自己存；失去编辑权时调度已经去掉）
-      const stillEditing = (): boolean => mode.kind === 'editing'
+      const stillEditing = (): boolean => mode.kind === 'editing' && !recoveryBusy()
       await editing.autosave.flush('save-button', { ready: async () => (ready === undefined || await ready()) && stillEditing() })
     },
 
@@ -2191,7 +2243,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
       localGeneration = nextGeneration
       const previous = session
       session = next
+      if (previous !== next || localChanged)
+        formulaRecovery?.cancel()
       syncSaving()
+      notify()
       if (localChanged)
         options.recovery?.suspend()
       if (next === 'active' && (options.localDrafts?.enabled() === false || localChanged))
@@ -2226,6 +2281,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
     noteActivity: () => editing.lease?.noteActivity(),
 
     releaseOnHide: () => {
+      hidden = true
+      formulaRecovery?.cancel()
       options.recovery?.suspend()
       // 离开页面一律放下本机锁（M3-P5 设计 §3.1）：进往返缓存时浏览器不替页面放（编辑器页恢复时反正整页重新加载）。之后也不再拿——拿锁时正在核对、
       // 被抢之后在核对或等心跳的，结论回来时都不算（M3-P6 设计 §3.13）
@@ -2265,6 +2322,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       if (disposed)
         return
       disposed = true
+      formulaRecovery?.dispose()
       options.recovery?.suspend()
       generation += 1
       checks.dispose()

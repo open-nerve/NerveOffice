@@ -61,6 +61,7 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
+    retryFormulaRecovery: vi.fn(),
     retryRecovery: vi.fn(async () => {}),
     copyRecovery: vi.fn(async () => {}),
     beginDiscardRecovery: vi.fn(() => ({ updatedAt: 123 })),

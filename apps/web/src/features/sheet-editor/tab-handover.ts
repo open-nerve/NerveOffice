@@ -35,9 +35,9 @@ export type TakeoverProgress
 
 /**
  * 收到交接请求时本页在做什么（状态机按自己的状态给出）：editing 在编辑；exiting 正在离开编辑（退出、空闲释放、交出）；opening、entering 正在进入编辑
- * （?edit=new、"编辑"等：已经拿到锁、编辑器还没建好）；none 不在编辑（这时本页不持有锁，走不到）
+ * （?edit=new、"编辑"等：已经拿到锁、编辑器还没建好）；recovering 正在保留输入或重建公式实例；none 不在编辑（这时本页不持有锁，走不到）
  */
-export type TabAnswerPhase = 'editing' | 'exiting' | 'opening' | 'entering' | 'none'
+export type TabAnswerPhase = 'editing' | 'exiting' | 'opening' | 'entering' | 'recovering' | 'none'
 
 /** 离开编辑的结果（告诉回应过 ack 的交接请求）：done 是存上、放了锁；failed 是没能交出、留在编辑（原因） */
 export type TabHandoverResult = { readonly kind: 'done' } | { readonly kind: 'failed', readonly reason: HandoverFailure }
@@ -111,7 +111,8 @@ export function answerTabs(options: TabAnswersOptions): TabAnswers {
         return
       case 'opening':
       case 'entering':
-        // 正在进入编辑（已经拿到锁、编辑器还没建好）：它稍后再请求
+      case 'recovering':
+        // 进入编辑或公式恢复期间仍持有锁，由请求方稍后再请求。
         browser.post({ type: 'handover-busy', requestId, from })
         options.trace?.({ kind: 'handover-answer', at: clock.now(), requestId, answer: 'busy', state: phase })
         break

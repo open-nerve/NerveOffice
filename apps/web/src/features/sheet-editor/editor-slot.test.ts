@@ -152,6 +152,66 @@ async function replaced(context: ReturnType<typeof setup>, access: EditorAccess,
 }
 
 describe('编辑器槽位（审查 A1）', () => {
+  it('显式公式模式和强制重算一起交给原工厂', async () => {
+    const context = setup()
+    const replacing = context.slot.replace('edit', 'A', { formulaMode: 'main-thread', recalculate: true })
+    await settle()
+    context.factory.gate(0).release()
+    const created = await replacing
+    expect(context.factory.createEditor).toHaveBeenCalledExactlyOnceWith({ snapshot: 'A', access: 'edit', viewState: undefined, formulaMode: 'main-thread', recalculate: true })
+    context.slot.discard(created!)
+  })
+
+  it('只丢弃待接纳结果；下一次创建等待其异步销毁并保留原视图', async () => {
+    const context = setup()
+    await replaced(context, 'read', '原内容')
+    const replacing = context.slot.replace('edit', '重建内容')
+    await settle()
+    context.factory.gate(1).release()
+    const created = await replacing
+    expect(created).toBeDefined()
+    const rejected = context.factory.created[1]!
+    rejected.holdDispose()
+    context.slot.discard(created!)
+    expect([rejected.disposed, rejected.gone]).toEqual([true, false])
+    expect([context.slot.surface(), context.slot.editor()]).toEqual(['none', undefined])
+    const retrying = context.slot.replace('edit', '保留的内容')
+    context.slot.discard(created!)
+    await settle()
+    expect(context.factory.createEditor).toHaveBeenCalledTimes(2)
+    expect(context.slot.surface()).toBe('creating')
+    rejected.finishDispose()
+    await settle()
+    context.factory.gate(2).release()
+    const retried = await retrying
+    expect(retried).toBeDefined()
+    context.slot.attach(retried!)
+    expect(context.factory.created[2]!.viewState).toEqual(viewStateOf(0))
+    expect(context.factory.aliveAtCreate()).toEqual([0, 0, 0])
+    context.slot.clear()
+  })
+
+  it('丢弃已接纳或旧结果不影响后来创建的实例或 ticket', async () => {
+    const context = setup()
+    const old = await replaced(context, 'read', 'A')
+    context.slot.discard(old.editor)
+    expect(old.disposed).toBe(false)
+    expect(context.slot.editor()).toBe(old.editor)
+    const replacing = context.slot.replace('edit', 'B')
+    await settle()
+    context.slot.discard(old.editor)
+    context.factory.gate(1).release()
+    const created = await replacing
+    expect(created).toBeDefined()
+    context.slot.discard(old.editor)
+    expect(context.factory.created[1]!.disposed).toBe(false)
+    context.slot.attach(created!)
+    context.slot.discard(created!)
+    expect(context.slot.editor()).toBe(created)
+    expect(context.factory.created[1]!.disposed).toBe(false)
+    context.slot.clear()
+  })
+
   it('换编辑器：新建期间是 creating（还没有接上的编辑器）；建好交回、接上之后随它的生命周期；再换时先取出视图状态、销毁旧的', async () => {
     const context = setup()
     expect([context.slot.surface(), context.slot.editor()]).toEqual(['none', undefined])

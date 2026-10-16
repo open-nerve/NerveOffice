@@ -94,9 +94,9 @@ describe('回应交接请求（answerTabs）', () => {
     expect(context.replies.at(-1)).toEqual({ type: 'handover-failed', requestId: REQUEST_ID, from: TAB_A, reason: 'conflict' })
   })
 
-  it('正在进入编辑时回 busy（那边稍后再请求），不记下；离开的途中失去编辑权（forget）之后不再告诉它们', async () => {
+  it.each(['entering', 'recovering'] as const)('%s 时回 busy（那边稍后再请求），不记下；离开的途中失去编辑权（forget）之后不再告诉它们', async (phase) => {
     const context = answering()
-    context.state.phase = 'entering'
+    context.state.phase = phase
     await context.ask()
     expect(context.replies).toEqual([{ type: 'handover-busy', requestId: REQUEST_ID, from: TAB_A }])
     context.tabs.finish({ kind: 'done' })

@@ -1,6 +1,6 @@
 import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, HandedOverEditLease, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { MockInstance } from 'vitest'
-import type { EditorAccess, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { EditorAccess, FormulaMode, FormulaWorkerFailure, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
@@ -32,9 +32,14 @@ import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
 import { newKey } from './outbox/persistent-working-draft.test-support.ts'
+import { installPageGuards } from './page-guards.ts'
 import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
 import { fakeBrowser } from './same-browser.test-support.ts'
 import { lockNameOf, sameBrowserFor } from './same-browser.ts'
+
+vi.hoisted(() => {
+  globalThis.Path2D ??= class {} as unknown as typeof Path2D
+})
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 
@@ -163,15 +168,22 @@ const DETAIL: DocumentDetail = {
 }
 
 /** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现；记下谁在订阅修改（每次新建都是新的一个，第一个由用例先拿到） */
-function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
+function fakeEditor(stage: SheetEditorLifecycle = 'rendered', formulaMode: FormulaMode = 'worker') {
   let current = stage
+  let failure: FormulaWorkerFailure | undefined
+  let composing = false
   const lifecycleListeners = new Set<(stage: SheetEditorLifecycle) => void>()
   const changeListeners = new Set<() => void>()
+  const failures = new Set<(failure: FormulaWorkerFailure) => void>()
+  const compositions = new Set<() => void>()
   const editor: SheetEditor = {
     unitId: 'unit-1',
-    formulaMode: 'worker',
-    workerFailure: () => undefined,
-    onWorkerFailure: () => () => {},
+    formulaMode,
+    workerFailure: () => failure,
+    onWorkerFailure: (listener) => {
+      failures.add(listener)
+      return () => failures.delete(listener)
+    },
     changeSeq: () => 0,
     onChange: (listener) => {
       changeListeners.add(listener)
@@ -187,10 +199,13 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
     onUncommittedInputChange: () => () => {},
     commitCellEditing: async () => true,
     settleFormulas: async () => 'settled',
-    formulasSettled: () => true,
+    formulasSettled: () => failure === undefined,
     onFormulaProgress: () => () => {},
-    composing: () => false,
-    onCompositionChange: () => () => {},
+    composing: () => composing,
+    onCompositionChange: (listener) => {
+      compositions.add(listener)
+      return () => compositions.delete(listener)
+    },
     settlePanels: async () => {},
     capture: () => '{"id":"unit-1"}',
     viewState: () => undefined,
@@ -200,6 +215,14 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered') {
   return {
     editor,
     changeListeners,
+    failWorker: () => {
+      failure = 'error-after-ready'
+      failures.forEach(listener => listener('error-after-ready'))
+    },
+    compose: (next: boolean) => {
+      composing = next
+      compositions.forEach(listener => listener())
+    },
     enter(next: SheetEditorLifecycle): void {
       current = next
       lifecycleListeners.forEach(listener => listener(next))
@@ -304,6 +327,7 @@ interface CreateOptions {
   readonly access: EditorAccess
   readonly viewState?: SheetViewState | undefined
   readonly recalculate?: boolean
+  readonly formulaMode?: FormulaMode
   readonly pageUi: Node
 }
 
@@ -363,8 +387,9 @@ function setup(options: Setup = {}) {
       cancel: vi.fn(overrides.editRequest?.cancel ?? (async (): Promise<void> => {})),
     },
   } satisfies EditorPageApi
-  const createEditor = vi.fn(options.createEditor ?? (async () => {
+  const createEditor = vi.fn(options.createEditor ?? (async (input: CreateOptions) => {
     const next = fakes.length === 0 ? fake : fakeEditor()
+    Object.assign(next.editor, { formulaMode: input.formulaMode ?? 'worker' })
     fakes.push(next)
     return next.editor
   }))
@@ -414,6 +439,93 @@ function setup(options: Setup = {}) {
   pages.push(editorPage)
   return { editorPage, surface, chrome, fake, fakes, page, api, editLease, time, createEditor, fromOtherTab, listeners, editIntent, hidden, online, autosave, activity, browser, storage, issued, sameBrowsers }
 }
+
+describe('公式恢复的真实页面交互屏障', () => {
+  afterEach(() => {
+    document.body.replaceChildren()
+  })
+
+  function blocked(target: HTMLElement): boolean {
+    const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    target.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+
+  it('组字结束事件能到达原输入，准备和重建时才拦输入，完成后放开', async () => {
+    const h = setup()
+    document.body.append(h.chrome, h.surface)
+    await h.editorPage.load()
+    const creation = deferred<void>()
+    const next = fakeEditor('rendered', 'main-thread')
+    h.createEditor.mockImplementationOnce(async () => {
+      await creation.promise
+      return next.editor
+    })
+    let snapshot = '{"id":"unit-1","v":"组字前"}'
+    const capture = vi.spyOn(h.fake.editor, 'capture').mockImplementation(() => snapshot)
+    const finished = vi.fn(() => {
+      snapshot = '{"id":"unit-1","v":"最终组字"}'
+      h.fake.compose(false)
+    })
+    h.surface.addEventListener('compositionstart', () => h.fake.compose(true))
+    h.surface.addEventListener('compositionend', finished)
+    pages.push({ dispose: installPageGuards(window, h.editorPage, true) })
+    h.surface.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    h.fake.failWorker()
+    await h.time.advance(0)
+    expect(h.editorPage.view()).toMatchObject({ formulaRecovery: { phase: 'waiting-input' }, surface: 'ready' })
+    expect(blocked(h.surface)).toBe(false)
+    await h.editorPage.save()
+    const shortcut = new KeyboardEvent('keydown', { key: 's', metaKey: true, bubbles: true, cancelable: true })
+    h.chrome.dispatchEvent(shortcut)
+    await settle()
+    expect(shortcut.defaultPrevented).toBe(true)
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(capture).not.toHaveBeenCalled()
+    h.surface.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }))
+    expect(finished).toHaveBeenCalledOnce()
+    expect(capture).not.toHaveBeenCalled()
+    await h.time.advance(0)
+    expect(h.editorPage.view()).toMatchObject({ formulaRecovery: { phase: 'rebuilding' }, surface: 'loading' })
+    expect(blocked(h.surface)).toBe(true)
+    expect(blocked(h.chrome)).toBe(false)
+    expect(h.createEditor).toHaveBeenLastCalledWith(expect.objectContaining({ snapshot, access: 'edit', formulaMode: 'main-thread', recalculate: true }))
+    creation.resolve()
+    await h.time.advance(0)
+    expect(h.editorPage.view()).toMatchObject({ formulaRecovery: { phase: 'ready' }, surface: 'ready' })
+    expect(blocked(h.surface)).toBe(false)
+  })
+
+  it('面板尚未落地就挂屏障；新实例自检失败保持屏障，重试通过后才放开', async () => {
+    const h = setup()
+    document.body.append(h.chrome, h.surface)
+    await h.editorPage.load()
+    const panel = deferred<void>()
+    const barriers: boolean[] = []
+    vi.spyOn(h.fake.editor, 'settlePanels').mockImplementationOnce(async () => {
+      barriers.push(blocked(h.surface))
+      await panel.promise
+    })
+    const broken = fakeEditor('rendered', 'main-thread')
+    Object.assign(broken.editor, { openCheck: NOTE_MISSING })
+    h.createEditor.mockResolvedValueOnce(broken.editor)
+    h.fake.failWorker()
+    await h.time.advance(0)
+    expect(barriers).toEqual([true])
+    expect(h.fake.editor.dispose).not.toHaveBeenCalled()
+    panel.resolve()
+    await h.time.advance(0)
+    expect(h.editorPage.view()).toMatchObject({ formulaRecovery: { phase: 'failed', problem: 'open-check' }, surface: 'loading' })
+    expect(broken.editor.dispose).toHaveBeenCalledOnce()
+    expect(blocked(h.surface)).toBe(true)
+    await h.editorPage.exitEditing()
+    expect(h.editLease.release).not.toHaveBeenCalled()
+    h.editorPage.retryFormulaRecovery()
+    await h.time.advance(0)
+    expect(h.editorPage.view()).toMatchObject({ formulaRecovery: { phase: 'ready' }, surface: 'ready' })
+    expect(blocked(h.surface)).toBe(false)
+  })
+})
 
 /** 查看者读到的编辑状态：不能编辑 */
 async function VIEWER_STATUS(): Promise<FetchedEditStatus> {

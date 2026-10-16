@@ -228,6 +228,95 @@ function setup(options: { initialUnsaved?: boolean, initialFormulasPending?: boo
 type Context = ReturnType<typeof setup>
 
 describe('公式重建捕获', () => {
+  it('重建等待已有提交和面板准备完成，不重新提交输入', async () => {
+    const context = setup()
+    const committing = deferred<void>()
+    const panels = deferred<void>()
+    const original = vi.mocked(context.editor.commitCellEditing).getMockImplementation()!
+    vi.mocked(context.editor.commitCellEditing).mockImplementationOnce(async () => {
+      const result = original()
+      await committing.promise
+      return result
+    })
+    vi.mocked(context.editor.settlePanels).mockReturnValueOnce(panels.promise)
+    context.control.startCellEditing('提交这次输入')
+    const flushing = context.autosave.flush('save-button', { ready: async () => false })
+    let done = false
+    const waiting = context.autosave.settleInputPreparations().then(() => {
+      done = true
+    })
+    await drain(context)
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    expect(context.editor.settlePanels).not.toHaveBeenCalled()
+    expect(done).toBe(false)
+    committing.resolve()
+    await drain(context)
+    expect(context.editor.settlePanels).toHaveBeenCalledOnce()
+    expect(done).toBe(false)
+    panels.resolve()
+    await waiting
+    expect(done).toBe(true)
+    expect(context.editor.commitCellEditing).toHaveBeenCalledOnce()
+    await flushing
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.dispose()
+  })
+
+  it('准备失败交回原错误，完成后释放；不留下永远失败的等待', async () => {
+    const context = setup()
+    const gate = deferred<void>()
+    const failure = new Error('面板提交失败')
+    vi.mocked(context.editor.settlePanels).mockImplementationOnce(async () => {
+      await gate.promise
+      throw failure
+    })
+    const flushing = context.autosave.flush('save-button', { ready: async () => false })
+    const waiting = expect(context.autosave.settleInputPreparations()).rejects.toBe(failure)
+    gate.resolve()
+    await waiting
+    await flushing
+    await expect(context.autosave.settleInputPreparations()).resolves.toBeUndefined()
+    expect(context.editor.settlePanels).toHaveBeenCalledOnce()
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.dispose()
+  })
+
+  it('输入已完成但 HTTP 仍在途，重建等待立即结束', async () => {
+    const context = setup()
+    const flushing = context.autosave.flush('save-button')
+    const request = await sent(context, 1)
+    expect(context.coordinator.busy()).toBe(true)
+    await context.autosave.settleInputPreparations()
+    expect(context.coordinator.busy()).toBe(true)
+    expect(context.editor.capture).toHaveBeenCalledOnce()
+    request.resolve(saved(2))
+    await flushing
+    context.autosave.dispose()
+  })
+
+  it('只等调用时已有准备，不把后来输入加入旧等待', async () => {
+    const context = setup()
+    const first = deferred<void>()
+    const later = deferred<void>()
+    vi.mocked(context.editor.settlePanels).mockReturnValueOnce(first.promise).mockReturnValueOnce(later.promise)
+    const firstFlush = context.autosave.flush('save-button', { ready: async () => false })
+    const waiting = context.autosave.settleInputPreparations()
+    const laterFlush = context.autosave.flush('save-button', { ready: async () => false })
+    first.resolve()
+    await waiting
+    let laterDone = false
+    const waitingLater = context.autosave.settleInputPreparations().then(() => {
+      laterDone = true
+    })
+    await drain(context)
+    expect(laterDone).toBe(false)
+    later.resolve()
+    await waitingLater
+    await Promise.all([firstFlush, laterFlush])
+    expect(context.editor.settlePanels).toHaveBeenCalledTimes(2)
+    context.autosave.dispose()
+  })
+
   it('零修改序号可在挂起时捕获；恢复调度后先保留 pending，无新输入也补存收齐结果', async () => {
     const context = setup({ settled: false })
     context.autosave.suspend()
