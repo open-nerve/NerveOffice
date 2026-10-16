@@ -1,5 +1,5 @@
-// 主线程公式模式下在计算中重建（M3-P4 设计 §3.14，S1 真实 Safari 复核的 F2；S5 的规避）。主线程模式（M4 的退路，M3 里只有测试构建
-// 经地址参数选它）下，编辑器在一轮公式计算进行中被销毁（阅读与编辑之间一律重建）时，这一轮不会自己停下：运行时销毁时把停止标记复位，
+// 主线程公式模式下在计算中重建（M3-P4 设计 §3.14，UR-032；M4-P5 加入实际 Worker 脚本失败后自动退化的路径）。
+// 显式主线程与自动退化两条入口共用停止顺序和最终公式的验收；编辑器在一轮公式计算进行中被销毁（阅读与编辑之间一律重建）时，这一轮不会自己停下：运行时销毁时把停止标记复位，
 // 旧的循环在让出点之后接着跑，用已经清空的函数表把只会得出 #NAME? 的语法树写进 engine-formula 模块级的缓存，之后同一页里新建的编辑器
 // 算到这些格时命中它们（S1 实测 110–350 个公式得出 #NAME?）。规避：销毁之前先执行停止的 mutation、等这一轮结束的通知再销毁
 // （apps/web/src/editor/formula-round-stop.ts），编辑器槽位等它销毁完才新建。
@@ -17,8 +17,9 @@ import { formulaSampleFor } from '../../support/capture-samples.ts'
 import { createDocument, createUser, revisionOf } from '../../support/database.ts'
 import { commandMark, probeCommands, probeFormulaMode, probeFormulasSettled, probeSnapshot, runFacade } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { blockFormulaWorker, formulaRecoveryNotice } from '../../support/formula-worker-fault.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditing, waitForEditorAccess } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditing, saveAndWait, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -95,8 +96,29 @@ function stoppedMidRound(executed: readonly ProbeCommand[], what: string): numbe
   return Math.round((ended?.at ?? 0) - (stop?.at ?? 0))
 }
 
+/** 两条入口共用真实的计算中重建；自动退化故事在进入后另外核对补存。 */
+async function rebuildAndCheck(page: Page, documentId: string, afterEnter: () => Promise<void> = async () => undefined): Promise<void> {
+  const entering = await rebuildDuringRound(page, documentId, 'enter', async () => enterEditing(page, 'steady'))
+  const enterStopMs = stoppedMidRound(entering, '点"编辑"')
+  expect(await probeFormulaMode(page)).toBe('main-thread')
+  await untilSettled(page, '进入编辑之后打开时的那一轮')
+  await afterEnter()
+  const exiting = await rebuildDuringRound(page, documentId, 'exit', async () => exitEditing(page, 'steady'))
+  const exitStopMs = stoppedMidRound(exiting, '点"退出编辑"')
+  await untilSettled(page, '退出编辑之后打开时的那一轮')
+  // 同一页里再强制重算：旧轮若未停下，坏掉的语法树缓存会让新一轮得出 #NAME?。
+  const mark = await commandMark(page)
+  await recalculateAll(page)
+  await expect.poll(async () => executedAfter(await probeCommands(page, mark), mark).some(command => command.id === CALCULATION_START), { message: '最后一遍强制重算开始了', timeout: ROUND_TIMEOUT_MS }).toBe(true)
+  await untilSettled(page, '最后一遍强制重算')
+  const verdict = verifyFormulaSnapshot(await probeSnapshot(page))
+  await test.info().attach('formula-rebuild', { body: JSON.stringify({ enterStopMs, exitStopMs, verdict }, null, 2), contentType: 'application/json' })
+  expect(verdict.checked).toBeGreaterThan(800)
+  expect({ staleCount: verdict.staleCount, stale: verdict.stale, errors: verdict.errors }).toEqual({ staleCount: 0, stale: [], errors: {} })
+}
+
 test.describe('US-M3-03 主线程公式模式下在计算中重建（M3-P4 设计 §3.14）', { tag: '@test-build' }, () => {
-  test('US-M3-03 进入与退出编辑准备完成时强制重算：两次都在计算中重建（销毁之前先停下这一轮）；之后在同一页里再强制重算，全部公式与按定义算出的一致，没有 #NAME?；没有保存', async ({ page }, testInfo) => {
+  test('US-M3-03 显式主线程：进入与退出编辑准备完成时强制重算，两次都在计算中先停下再销毁，最后重算无 #NAME?；没有保存', async ({ page }) => {
     const owner = await createUser('rebuild-main')
     const documentId = await createDocument(owner, '主线程计算中重建', formulaSampleFor)
     await loginThroughApi(page, owner)
@@ -105,25 +127,28 @@ test.describe('US-M3-03 主线程公式模式下在计算中重建（M3-P4 设�
     await expect(enterEditButton(page)).toBeVisible()
     expect(await probeFormulaMode(page)).toBe('main-thread')
     await untilSettled(page, '打开时算没有缓存值的公式')
-
-    const entering = await rebuildDuringRound(page, documentId, 'enter', async () => enterEditing(page, 'steady'))
-    const enterStopMs = stoppedMidRound(entering, '点"编辑"')
-    expect(await probeFormulaMode(page)).toBe('main-thread')
-    await untilSettled(page, '进入编辑之后打开时的那一轮')
-
-    const exiting = await rebuildDuringRound(page, documentId, 'exit', async () => exitEditing(page, 'steady'))
-    const exitStopMs = stoppedMidRound(exiting, '点"退出编辑"')
-    await untilSettled(page, '退出编辑之后打开时的那一轮')
-
-    // 同一页里再强制重算一遍：前两次销毁时的那一轮若没停下，坏掉的语法树就在缓存里，这一遍算到它们得出 #NAME?
-    const mark = await commandMark(page)
-    await recalculateAll(page)
-    await expect.poll(async () => executedAfter(await probeCommands(page, mark), mark).some(command => command.id === CALCULATION_START), { message: '最后一遍强制重算开始了', timeout: ROUND_TIMEOUT_MS }).toBe(true)
-    await untilSettled(page, '最后一遍强制重算')
-    const verdict = verifyFormulaSnapshot(await probeSnapshot(page))
-    await testInfo.attach('formula-rebuild', { body: JSON.stringify({ enterStopMs, exitStopMs, verdict }, null, 2), contentType: 'application/json' })
-    expect(verdict.checked).toBeGreaterThan(800)
-    expect({ staleCount: verdict.staleCount, stale: verdict.stale, errors: verdict.errors }).toEqual({ staleCount: 0, stale: [], errors: {} })
+    await rebuildAndCheck(page, documentId)
     expect(await revisionOf(documentId), '只是打开、进入与退出编辑，没有修改，不保存').toBe(1)
+  })
+
+  test('US-M4-13 实际 Worker 失败后自动退化：进入与退出时计算中先停下再销毁，补存与最后重算无 #NAME?', async ({ page }) => {
+    const owner = await createUser('rebuild-fallback')
+    const documentId = await createDocument(owner, '自动退化后计算中重建', formulaSampleFor)
+    await loginThroughApi(page, owner)
+    const fault = await blockFormulaWorker(page)
+    await page.goto(`/documents/${documentId}`)
+    await waitForEditorAccess(page, 'read', 'steady')
+    await expect(enterEditButton(page)).toBeVisible()
+    expect(await probeFormulaMode(page)).toBe('main-thread')
+    expect(fault.attempts()).toBe(1)
+    await expect(formulaRecoveryNotice(page)).toHaveText('公式已改用当前页面计算，大表格可能暂时卡顿。')
+    await untilSettled(page, '自动退化强制重算')
+    await rebuildAndCheck(page, documentId, async () => {
+      await saveAndWait(page)
+      const saved = verifyFormulaSnapshot((await savedContent(page, documentId)).text)
+      expect({ staleCount: saved.staleCount, errors: saved.errors }).toEqual({ staleCount: 0, errors: {} })
+    })
+    expect(fault.attempts(), '模式切换沿用退化选择，不再起公式 Worker').toBe(1)
+    expect(await revisionOf(documentId), '故障恢复的公式结果已补存').toBeGreaterThan(1)
   })
 })

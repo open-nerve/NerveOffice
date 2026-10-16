@@ -12,7 +12,8 @@ import { pluginEntry } from './plugin-entry.ts'
 export function formulaWorkerPluginEntries(): PluginEntry[] {
   return [
     pluginEntry(UniverSheetsPlugin, { onlyRegisterFormulaRelatedMutations: true }),
-    pluginEntry(UniverFormulaEnginePlugin),
+    // M4-P5 的三浏览器对照：缩短 stop 等待，整轮计算中位数增加约 0.8%–4.4%（ADR-010）。
+    pluginEntry(UniverFormulaEnginePlugin, { intervalCount: 20 }),
     pluginEntry(UniverRPCWorkerThreadPlugin),
     pluginEntry(UniverRemoteSheetsFormulaPlugin),
     pluginEntry(UniverSheetsFilterPlugin),
