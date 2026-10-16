@@ -136,6 +136,9 @@ export function createFormulaRecovery(options: FormulaRecoveryOptions): FormulaR
       if (!current(mine))
         return
       if (retained === undefined) {
+        // 结束事件到排队任务之间可能开始下一轮组字；finally 的 sync 会重新订阅并等待。
+        if (target.editor.composing())
+          return
         show('preparing', true)
         if (target.access === 'edit') {
           const scheduler = target.scheduler

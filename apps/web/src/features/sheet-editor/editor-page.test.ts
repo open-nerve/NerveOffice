@@ -496,6 +496,41 @@ describe('公式恢复的真实页面交互屏障', () => {
     expect(blocked(h.surface)).toBe(false)
   })
 
+  it('恢复任务前再次组字，第二轮结束事件仍到达原输入并保全最终内容', async () => {
+    const h = setup()
+    document.body.append(h.chrome, h.surface)
+    await h.editorPage.load()
+    const preparation = deferred<void>()
+    vi.spyOn(h.autosave.current()!, 'settleInputPreparations').mockReturnValueOnce(preparation.promise)
+    let snapshot = '{"id":"unit-1","v":"组字前"}'
+    const capture = vi.spyOn(h.fake.editor, 'capture').mockImplementation(() => snapshot)
+    const finished = vi.fn((event: CompositionEvent) => {
+      snapshot = JSON.stringify({ id: 'unit-1', v: event.data })
+      h.fake.compose(false)
+    })
+    h.surface.addEventListener('compositionstart', () => h.fake.compose(true))
+    h.surface.addEventListener('compositionend', finished)
+    h.surface.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    h.fake.failWorker()
+    await h.time.advance(0)
+    h.surface.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '第一轮' }))
+    h.surface.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    await h.time.advance(0)
+    const duringSecondComposition = h.editorPage.view()
+    const blockedDuringSecondComposition = blocked(h.surface)
+    const capturesBeforeEnd = capture.mock.calls.length
+    h.surface.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '第二轮最终输入' }))
+    preparation.resolve()
+    await h.time.advance(0)
+    expect(finished).toHaveBeenCalledTimes(2)
+    expect(duringSecondComposition).toMatchObject({ formulaRecovery: { phase: 'waiting-input' }, surface: 'ready' })
+    expect(blockedDuringSecondComposition).toBe(false)
+    expect(capturesBeforeEnd).toBe(0)
+    expect(h.createEditor).toHaveBeenLastCalledWith(expect.objectContaining({ snapshot: '{"id":"unit-1","v":"第二轮最终输入"}', access: 'edit', formulaMode: 'main-thread', recalculate: true }))
+    expect(h.editorPage.view()).toMatchObject({ formulaRecovery: { phase: 'ready' }, surface: 'ready' })
+    expect(blocked(h.surface)).toBe(false)
+  })
+
   it('面板尚未落地就挂屏障；新实例自检失败保持屏障，重试通过后才放开', async () => {
     const h = setup()
     document.body.append(h.chrome, h.surface)

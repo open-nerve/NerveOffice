@@ -88,6 +88,40 @@ describe('运行中的公式 Worker 恢复', () => {
     expect(h.original.compositionListeners()).toBe(0)
   })
 
+  it('每次恢复任务排队后又开始组字，都继续等到最后一轮输入结束', async () => {
+    const h = await fixture('edit')
+    const coordinator = h.session.coordinator
+    const scheduler = h.session.autosave
+    const draft = h.session.draft
+    h.original.compose(true)
+    h.original.fail()
+    const waitingListeners = h.original.compositionListeners()
+    h.original.beginInput()
+    for (let round = 0; round < 2; round++) {
+      h.original.compose(false)
+      h.original.compose(true)
+      await h.time.advance(0)
+      expect(h.recovery.view()).toMatchObject({ phase: 'waiting-input', blocksInput: false, blocksActions: true })
+      expect(h.original.editor.commitCellEditing).not.toHaveBeenCalled()
+      expect(h.original.editor.capture).not.toHaveBeenCalled()
+      expect(h.original.disposed()).toBe(false)
+      expect(h.original.compositionListeners()).toBe(waitingListeners)
+      expect(h.createEditor).toHaveBeenCalledOnce()
+    }
+    h.original.compose(false)
+    await h.time.advance(0)
+    expect(h.recovery.view()?.phase).toBe('ready')
+    expect(h.original.editor.commitCellEditing).toHaveBeenCalledOnce()
+    expect(h.createEditor).toHaveBeenCalledTimes(2)
+    expect(h.createEditor.mock.calls[1]![0].snapshot).toBe('{"v":"已提交的输入"}')
+    expect(h.original.compositionListeners()).toBe(0)
+    expect(h.session.coordinator).toBe(coordinator)
+    expect(h.session.autosave).toBe(scheduler)
+    expect(h.session.draft).toBe(draft)
+    expect(h.session.lease).toBe(h.held)
+    expect(h.held.release).not.toHaveBeenCalled()
+  })
+
   it('等完旧保存的提交与面板准备，旧 await 不会读到新实例面板', async () => {
     const h = await fixture('edit')
     const commit = deferred<void>()
