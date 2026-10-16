@@ -42,13 +42,12 @@ const RESTART_SPECS = /[\\/]deploy[\\/]restart\.spec\.ts$/
 
 /**
  * 结束整棵浏览器进程的崩溃用例（M4-P1 设计 §3.7，support/browser-crash.ts）：每个浏览器一个项目，一个工作进程，等全部浏览器项目跑完再执行——
- * macOS 上认 WebKit 的 WebContent 与 GPU 要求机器上只有这一个 Playwright WebKit 实例。外部模式（容器 E2E）不跑：测的是浏览器的存储与进程，
- * 与被测环境的部署无关。只跑崩溃用例：--project=crash-chromium --project=crash-chrome --project=crash-webkit --no-deps
+ * macOS 上认 WebKit 的 WebContent 与 GPU 要求机器上只有这一个 Playwright WebKit 实例。外部模式（容器 E2E）只选通过公开产品流程
+ * 写入与恢复的 production-recovery，不包含测试构建的底层探针。只跑崩溃用例：--project=crash-chromium --project=crash-chrome --project=crash-webkit --no-deps
  */
 const CRASH_SPECS = /[\\/]crash[\\/][^\\/]+\.spec\.ts$/
-const crashProjects = externalBaseUrl === undefined
-  ? browsers.map(name => ({ name: `crash-${name}`, use: BROWSERS[name], testMatch: CRASH_SPECS, dependencies: browsers, workers: 1, timeout: 300_000 }))
-  : []
+const PRODUCTION_CRASH_SPECS = /[\\/]crash[\\/]production-recovery\.spec\.ts$/
+const crashProjects = browsers.map(name => ({ name: `crash-${name}`, use: BROWSERS[name], testMatch: externalBaseUrl === undefined ? CRASH_SPECS : PRODUCTION_CRASH_SPECS, dependencies: browsers, workers: 1, timeout: 300_000 }))
 
 // 重启用例本身用 chromium，与浏览器无关：CI 按浏览器分片之后，只在带 chromium 的那一片里跑一次，不必每片重来。
 // 它强制结束后端，崩溃用例要用后端：等崩溃项目也跑完再执行，两者不同时跑

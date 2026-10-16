@@ -15,6 +15,7 @@ import type { DraftCapture } from './working-draft.ts'
 import { isAuthenticationError, isCsrfTokenError } from '../api/index.ts'
 import { draftAad } from '../outbox/draft-aad.ts'
 import { sha256Hex } from '../outbox/draft-codec.ts'
+import { isSameWriter } from '../outbox/writer-fence.ts'
 import { createLostCopyFlow } from './copy-flow.ts'
 import { createMemoryWorkingDraft } from './memory-working-draft.ts'
 import { createRecoveryReader } from './recovery-reader.ts'
@@ -58,6 +59,8 @@ export interface DocumentRecovery {
   /** 编辑器已经通过初值采用、保存调度及安装屏障之后才通知。 */
   readonly restored: () => void
   readonly copy: () => Promise<void>
+  /** 当前页末次捕获已另存成功；只条件清理本页、本编辑代次且不晚于该捕获的认证记录。 */
+  readonly cleanupCurrentCopy: (source: { readonly writeEpoch: number, readonly draftSeq: number }) => Promise<void>
   readonly beginDiscard: () => RecoveryDiscard | undefined
   readonly discard: (intent: RecoveryDiscard) => Promise<void>
   readonly retryCleanup: () => Promise<void>
@@ -596,6 +599,44 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
         options.onSessionProblem(result.error)
       if (result.kind === 'done')
         await remove(owned.cleanup)
+    }, undefined),
+    cleanupCurrentCopy: async source => run('cleanup', async (started) => {
+      const { writeEpoch, draftSeq } = source
+      // 副本 revision 不属于原文档。这条入口只借独立 Reader 观察，不恢复旧写入资格。
+      closeReader()
+      cleanup = undefined
+      publish({ stage: 'ready', decision: undefined, cleanup: undefined, saved: false })
+      const port = getReader()
+      const observed = await port.observe()
+      if (!current(started))
+        return
+      rememberPresence(observed)
+      if (observed.kind !== 'observed') {
+        publish({ problem: 'storage' })
+        return
+      }
+      const record = observed.record
+      if (record.kind === 'absent') {
+        publish({ stage: 'finished', decision: undefined, cleanup: { kind: 'absent' } })
+        return
+      }
+      if (record.kind !== 'draft') {
+        // 未经解密认证的明文字段不能授予删除资格。
+        publish({ problem: 'storage' })
+        return
+      }
+      const meta = record.meta
+      if (meta.userId !== key.userId || meta.documentId !== key.documentId || meta.writtenBy !== options.writtenBy
+        || meta.writeEpoch !== writeEpoch || meta.draftSeq > draftSeq
+        || (observed.writer !== undefined && (!isSameWriter(observed.writer, meta) || observed.writer.lastDraftSeq > draftSeq))) {
+        publish({ cleanup: { kind: 'changed' }, problem: 'changed' })
+        return
+      }
+      const original = target(port, observed.observation, started)
+      candidate = original
+      publish({ stage: 'ready', decision: undefined, updatedAt: meta.updatedAt, cleanup: undefined })
+      // 观察之后有任何写入/换人/换钥，仍由原宿主条件删除拒绝；重试也只重试这份观察。
+      await remove(original)
     }, undefined),
     beginDiscard: () => {
       if (!live() || candidate === undefined || action !== undefined)
