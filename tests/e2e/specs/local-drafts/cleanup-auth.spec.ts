@@ -2,6 +2,7 @@
 import type { Page } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { DOCUMENT_LIST_DEFAULT_LIMIT } from '@nerve-office/contracts'
+import { captureRejection } from '../../support/auth-rejection.ts'
 import { localSessionSummary } from '../../support/cleanup-fault.ts'
 import { createDocuments, createUser, expireSessions, revisionOf } from '../../support/database.ts'
 import { actualLocalDraft } from '../../support/draft-catalog.ts'
@@ -12,37 +13,6 @@ import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, expectFoundOnce, op
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 type Draft = Awaited<ReturnType<typeof actualLocalDraft>>
-
-interface RejectedResponse { readonly status: number, readonly body: unknown }
-
-/** 观察应用对原响应的真实读取；在交回 JSON 前完成取证，避免整页跳转销毁 CDP 的 Response。 */
-function observeRejection(pathname: string): void {
-  const observed = window as typeof window & { __recordAuthRejection: (response: RejectedResponse) => Promise<void> }
-  const fetch = window.fetch.bind(window)
-  window.fetch = async (input, init) => {
-    const response = await fetch(input, init)
-    if (response.status === 401 && new URL(response.url).pathname === pathname) {
-      const json = response.json.bind(response)
-      response.json = async () => {
-        const body: unknown = await json()
-        await observed.__recordAuthRejection({ status: response.status, body })
-        return body
-      }
-    }
-    return response
-  }
-}
-
-async function captureRejection(page: Page, pathname: string): Promise<() => RejectedResponse | undefined> {
-  let first: RejectedResponse | undefined
-  await page.exposeFunction('__recordAuthRejection', (response: RejectedResponse) => {
-    first ??= response
-  })
-  await page.addInitScript(observeRejection, pathname)
-  // “加载更多”消费当前 Document，其余场景导航后由 init script 安装。保留原 fetch/Response/Cookie，不补发请求。
-  await page.evaluate(observeRejection, pathname)
-  return () => first
-}
 
 async function adminFor(page: Page) {
   await loginThroughApi(page, await createUser('cleanup-admin', '清理验证管理员', { systemRole: 'admin' }))
