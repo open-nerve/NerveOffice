@@ -6,6 +6,165 @@ import { deferred, disposeSessions, DOCUMENT, editorFixture, fixture, INITIAL, l
 
 afterEach(disposeSessions)
 
+describe('替换编辑器仍沿用保存会话', () => {
+  it('资源身份不变、序号连续，不重新申请或释放租约；新编辑可上传原来源', async () => {
+    const { session, options, time, attach } = fixture()
+    const held = leaseFixture()
+    const acquire = vi.spyOn(options.api.editLease, 'acquire')
+    const old = editorFixture({ seq: 7 })
+    const next = editorFixture({ seq: 3, settled: false, snapshot: '{"v":7}' })
+    await prepare(session, held)
+    session.startSaving(old.editor, INITIAL)
+    const coordinator = session.coordinator!
+    const scheduler = session.autosave!
+    const draft = session.draft!
+    const stable = session.captureEditor()!
+    scheduler.suspend()
+    const ref = session.freezeEditor()
+    expect(ref).toMatchObject({ editorSeq: 7, formulasPending: true })
+    expect(session.freezeEditor()).toBe(ref)
+    expect(await draft.readLatest()).toMatchObject({ snapshot: '{"v":7}', ref })
+    expect(session.replaceEditor(next.editor)).toBe(true)
+    expect(session.replaceEditor(next.editor)).toBe(false)
+    expect(session.captureEditor()).toBe(stable)
+    expect(stable.changeSeq()).toBe(7)
+    expect(session.coordinator).toBe(coordinator)
+    expect(session.autosave).toBe(scheduler)
+    expect(session.draft).toBe(draft)
+    expect(session.lease).toBe(held)
+    expect(session.holdsLock()).toBe(true)
+    expect(acquire).not.toHaveBeenCalled()
+    expect(held.release).not.toHaveBeenCalled()
+    expect(attach).toHaveBeenCalledOnce()
+    old.edit()
+    expect(stable.changeSeq()).toBe(7)
+    next.edit()
+    expect(stable.changeSeq()).toBe(8)
+    next.finishFormulas('{"v":4,"formula":42}')
+    await time.advance(15_000)
+    expect(options.api.save).not.toHaveBeenCalled()
+    scheduler.resume()
+    await time.advance(0)
+    await vi.waitFor(() => expect(options.api.save).toHaveBeenCalledTimes(1))
+    const request = vi.mocked(options.api.save).mock.calls[0]!
+    expect(request[1].formulasPending).toBe(false)
+    expect(new TextDecoder().decode(await gunzipBytes(request[2]))).toBe('{"v":4,"formula":42}')
+    await vi.waitFor(() => expect(coordinator.hasUnsavedWork()).toBe(false))
+    expect(await draft.readLatest()).toMatchObject({ ref: { sessionId: ref!.sessionId, editorSeq: 8 } })
+  })
+
+  it('冻结后停自动捕获仍能保留失权正文；来源转交后旧会话不再拥有它', async () => {
+    const { session, options } = fixture()
+    const old = editorFixture()
+    await prepare(session)
+    session.startSaving(old.editor, INITIAL)
+    old.edit()
+    const stable = session.captureEditor()!
+    const ref = session.freezeEditor()
+    expect(ref).toBeDefined()
+    session.stopCapturing()
+    vi.spyOn(old.editor, 'capture').mockImplementation(() => {
+      throw new Error('旧模型已销毁')
+    })
+    expect(session.captureEditor()).toBe(stable)
+    expect(stable.capture()).toBe('{"v":1}')
+    expect(stable.changeSeq()).toBe(1)
+    expect(session.coordinator!.view().formulasPending).toBe(true)
+    expect(session.replaceEditor(editorFixture().editor)).toBe(false)
+    expect(session.freezeEditor()).toBeUndefined()
+    session.coordinator!.dispose()
+    const draft = session.takeDraft()!
+    session.stopSaving()
+    expect(session.captureEditor()).toBeUndefined()
+    expect(old.listeners()).toBe(0)
+    vi.mocked(options.onChange).mockClear()
+    expect(await draft.readLatest()).toMatchObject({ snapshot: '{"v":1}', ref })
+    const next = draft.capture({ editorSeq: 1, snapshot: '转交后的正文', formulasPending: true, dedupe: false })
+    await draft.ready(next)
+    expect(options.onChange).not.toHaveBeenCalled()
+    expect(await draft.readLatest()).toMatchObject({ snapshot: '转交后的正文' })
+    draft.dispose()
+  })
+
+  it('来源同步拒绝捕获时退回旧源，之后的新输入仍被捕获', async () => {
+    const { session } = fixture()
+    const old = editorFixture()
+    await prepare(session)
+    session.startSaving(old.editor, INITIAL)
+    session.autosave!.suspend()
+    const error = new Error('来源同步编码失败')
+    vi.spyOn(session.draft!, 'capture').mockImplementationOnce(() => {
+      throw error
+    })
+    expect(() => session.freezeEditor()).toThrow(error)
+    expect(session.replaceEditor(editorFixture().editor)).toBe(false)
+    old.edit()
+    expect(session.captureEditor()!.changeSeq()).toBe(1)
+    expect(session.captureEditor()!.capture()).toBe('{"v":1}')
+    expect(session.coordinator!.view()).toMatchObject({ formulasPending: false, unsavedEdits: true })
+    expect(session.freezeEditor()).toMatchObject({ editorSeq: 1, formulasPending: true })
+  })
+
+  it('零修改下旧 ACK 不清恢复标记，重算后原调度自动补存新结果', async () => {
+    const { session, options, time } = fixture()
+    const pending = deferred<typeof SAVED>()
+    vi.mocked(options.api.save).mockReturnValueOnce(pending.promise)
+    const old = editorFixture()
+    const next = editorFixture({ seq: 3, settled: false, snapshot: '{"v":0}' })
+    await prepare(session)
+    session.startSaving(old.editor, INITIAL)
+    const scheduler = session.autosave!
+    scheduler.suspend()
+    const saving = scheduler.flush('save-button')
+    await vi.waitFor(() => expect(options.api.save).toHaveBeenCalledTimes(1))
+    expect(session.freezeEditor()).toMatchObject({ editorSeq: 0, formulasPending: true })
+    pending.resolve(SAVED)
+    expect(await saving).toMatchObject({ edits: true, formulas: false })
+    expect(session.replaceEditor(next.editor)).toBe(true)
+    next.finishFormulas('{"v":0,"formula":42}')
+    scheduler.resume()
+    await time.advance(2_000)
+    await vi.waitFor(() => expect(options.api.save).toHaveBeenCalledTimes(2))
+    const request = vi.mocked(options.api.save).mock.calls[1]!
+    expect(request[1].formulasPending).toBe(false)
+    expect(new TextDecoder().decode(await gunzipBytes(request[2]))).toBe('{"v":0,"formula":42}')
+    await vi.waitFor(() => expect(scheduler.saved()).toEqual({ edits: true, formulas: true }))
+    expect(session.captureEditor()!.changeSeq()).toBe(0)
+  })
+
+  it.each(['detach', 'replace-lease', 'lock', 'session', 'stop'] as const)('%s 后不能开始或接纳恢复，冻结正文仍归原会话', async (cause) => {
+    let active = true
+    const { session, other } = fixture({ sessionActive: () => active })
+    const held = leaseFixture()
+    await prepare(session, held)
+    session.startSaving(editorFixture().editor, INITIAL)
+    expect(session.freezeEditor()).toBeDefined()
+    if (cause === 'detach') {
+      session.detachLease()
+    }
+    else if (cause === 'replace-lease') {
+      session.acceptLease(leaseFixture(), 9)
+    }
+    else if (cause === 'lock') {
+      held.confirm.mockResolvedValue({ kind: 'superseded', loss: { kind: 'taken-over', where: 'this-browser' } })
+      const taken = await other.steal()
+      await settle()
+      expect(session.holdsLock()).toBe(false)
+      taken.release()
+    }
+    else if (cause === 'session') {
+      active = false
+    }
+    else {
+      session.stopSaving()
+    }
+    expect(session.replaceEditor(editorFixture().editor)).toBe(false)
+    expect(session.freezeEditor()).toBeUndefined()
+    if (cause !== 'stop')
+      expect(session.captureEditor()!.capture()).toBe('{"v":0}')
+  })
+})
+
 describe('恢复来源接入现有保存会话', () => {
   it('准备回调与初值状态完整透传，序号零无需额外输入就自动上传恢复正文', async () => {
     const { session, options, time } = fixture()

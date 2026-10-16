@@ -63,7 +63,7 @@ export interface AutosavePage {
 }
 
 /** 保存的状态机一侧（save-coordinator.ts） */
-export type AutosaveUploader = Pick<SaveCoordinator, 'save' | 'view' | 'subscribe' | 'noteCapture' | 'captureFailed'>
+export type AutosaveUploader = Pick<SaveCoordinator, 'save' | 'view' | 'subscribe' | 'noteCapture' | 'noteFormulaRecovery' | 'captureFailed'>
 
 /** 节奏（contracts 的 AUTOSAVE_*；测试构建的控制可以换） */
 export interface AutosaveLimits {
@@ -140,7 +140,7 @@ const PREPARED_DEDUPE: Readonly<Record<PreparedReason, boolean>> = {
 export type UploadReason = 'quiet' | 'cap' | 'retry' | 'online'
 
 /** 一次捕获的原因（日志）：规则的三种、切到后台、立即上传 */
-export type CaptureTrigger = CaptureReason | 'hidden' | 'retry' | FlushReason
+export type CaptureTrigger = CaptureReason | 'hidden' | 'retry' | 'formula-recovery' | FlushReason
 
 /** 一次上传的原因（日志）：定时的四种、切到后台、立即上传 */
 export type UploadTrigger = UploadReason | 'hidden' | FlushReason
@@ -202,6 +202,8 @@ export interface Autosave {
   readonly flush: (reason: FlushReason, options?: FlushOptions) => Promise<FlushResult>
   /** 全部存上了没有（此刻） */
   readonly saved: () => SavedState
+  /** 为公式重建同步保留正文；允许挂起时调用，不主动上传，失败原样抛出。 */
+  readonly captureForFormulaRecovery: () => DraftCaptureRef | undefined
   /** 挂起定时的捕获与上传、切到后台的上传（开始退出编辑，设计 §3.10）；立即上传照常 */
   readonly suspend: () => void
   /** 恢复（退出编辑没有成功、留在编辑）：立即再看 */
@@ -854,6 +856,13 @@ export function createAutosave(options: AutosaveOptions): Autosave {
       return { ...savedState(), outcome }
     },
     saved: savedState,
+    captureForFormulaRecovery: () => {
+      if (disposed || ended)
+        return undefined
+      const ref = captureNow('formula-recovery', true)
+      uploader.noteFormulaRecovery(ref)
+      return ref
+    },
     suspend: () => {
       suspended = true
       cancelTimer()

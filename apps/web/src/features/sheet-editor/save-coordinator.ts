@@ -203,6 +203,8 @@ export interface SaveCoordinator {
   readonly save: (source: CaptureSource, options: SaveOptions) => Promise<SaveOutcome>
   /** 自动保存在保存之外捕获了一次（定时的捕获，autosave.ts）：视图里的大小随之更新，80% 的提示不等上传（US-M3-14） */
   readonly noteCapture: (capture: Pick<DraftCaptureRef, 'bytes'>) => void
+  /** 公式重建的捕获边界；只有它之后收齐的同源捕获获确认才能清掉。 */
+  readonly noteFormulaRecovery: (capture: DraftCaptureRef) => void
   /**
    * 捕获在保存之外出了意外的错误（自动保存的定时捕获，autosave.ts）：上报，显示保存失败（意外的错误）；下一次保存成功时清掉
    */
@@ -254,6 +256,8 @@ interface SnapshotKey {
 /** 一次捕获里确认时要记下的：修改序号、"公式待更新"与去重的键（没有摘要时为 undefined） */
 interface CaptureRecord {
   readonly seq: number
+  readonly sessionId: string
+  readonly serial: number
   readonly formulasPending: boolean
   readonly key: SnapshotKey | undefined
 }
@@ -309,7 +313,7 @@ function sameKey(a: SnapshotKey | undefined, b: SnapshotKey | undefined): boolea
 }
 
 function recordOf(capture: PreparedDraft): CaptureRecord {
-  return { seq: capture.ref.editorSeq, formulasPending: capture.formulasPending, key: capture.digest === undefined ? undefined : { digest: capture.digest, formulasPending: capture.formulasPending } }
+  return { seq: capture.ref.editorSeq, sessionId: capture.ref.sessionId, serial: capture.ref.serial, formulasPending: capture.formulasPending, key: capture.digest === undefined ? undefined : { digest: capture.digest, formulasPending: capture.formulasPending } }
 }
 
 interface OwnedUpload {
@@ -334,6 +338,8 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   /** 服务端确认过的最大修改序号：打开时是 0（打开不算修改） */
   let savedSeq = options.initialUnsaved ? -1 : 0
   let formulasPending = options.initialFormulasPending ?? false
+  // 留住最近的边界（确认后也不丢），防止重复或迟到登记重新打开已确认的恢复。
+  let formulaRecovery: { readonly sessionId: string, readonly serial: number, readonly pending: boolean } | undefined
   /** 排着与进行中的保存的个数：大于 0 时是"保存中" */
   let pendingSaves = 0
   /** 保存一个接一个：最后排上的那一次结束时兑现（从不失败） */
@@ -422,7 +428,9 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
   function confirm(capture: CaptureRecord, revision: number): void {
     baseRevision = Math.max(baseRevision, revision)
     savedSeq = Math.max(savedSeq, capture.seq)
-    formulasPending = capture.formulasPending
+    if (formulaRecovery?.pending && capture.sessionId === formulaRecovery.sessionId && capture.serial > formulaRecovery.serial && !capture.formulasPending)
+      formulaRecovery = { ...formulaRecovery, pending: false }
+    formulasPending = capture.formulasPending || formulaRecovery?.pending === true
     confirmedKey = capture.key
     rejectedKey = undefined
     rejectedRef = undefined
@@ -868,6 +876,15 @@ export function createSaveCoordinator(options: SaveCoordinatorOptions): SaveCoor
     },
     noteCapture: (capture) => {
       snapshotBytes = capture.bytes
+      update()
+    },
+    noteFormulaRecovery: (capture) => {
+      if (disposed || ended())
+        return
+      if (formulaRecovery?.sessionId === capture.sessionId && capture.serial <= formulaRecovery.serial)
+        return
+      formulaRecovery = { sessionId: capture.sessionId, serial: capture.serial, pending: true }
+      formulasPending = true
       update()
     },
     captureFailed: (error) => {

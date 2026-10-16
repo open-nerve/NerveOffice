@@ -227,6 +227,72 @@ function setup(options: { initialUnsaved?: boolean, initialFormulasPending?: boo
 
 type Context = ReturnType<typeof setup>
 
+describe('公式重建捕获', () => {
+  it('零修改序号可在挂起时捕获；恢复调度后先保留 pending，无新输入也补存收齐结果', async () => {
+    const context = setup({ settled: false })
+    context.autosave.suspend()
+    const ref = context.autosave.captureForFormulaRecovery()
+    expect(ref).toMatchObject({ editorSeq: 0, formulasPending: true })
+    expect(context.captures()).toEqual([expect.objectContaining({ trigger: 'formula-recovery', seq: 0, formulasPending: true })])
+    expect(context.coordinator.view()).toMatchObject({ formulasPending: true, unsavedEdits: false })
+    expect(context.autosave.saved()).toEqual({ edits: true, formulas: false })
+    await context.time.advance(DEFAULT_AUTOSAVE_LIMITS.uploadMaxMs)
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.resume()
+    await drain(context)
+    const pending = await sent(context, 1)
+    expect(pending.request.formulasPending).toBe(true)
+    expect(requestWithSnapshot(pending).request.snapshot).toBe('{"content":"初始"}')
+    pending.resolve(saved(2))
+    await drain(context)
+    expect(context.autosave.saved()).toEqual({ edits: true, formulas: false })
+    context.control.settle(true)
+    await drain(context)
+    const complete = await sent(context, 2)
+    expect(complete.request.formulasPending).toBe(false)
+    expect(context.editor.changeSeq()).toBe(0)
+    complete.resolve(saved(3))
+    await drain(context)
+    expect(context.autosave.saved()).toEqual({ edits: true, formulas: true })
+    context.autosave.dispose()
+    context.coordinator.dispose()
+    context.draft.dispose()
+  })
+
+  it('捕获失败原样抛出，不采用已有草稿或冒充成功登记', async () => {
+    const context = setup()
+    const old = context.draft.capture({ snapshot: '{"old":true}', editorSeq: 0, formulasPending: false, dedupe: true })
+    const error = new Error('模型无法读取')
+    vi.mocked(context.editor.capture).mockImplementation(() => {
+      throw error
+    })
+    expect(() => context.autosave.captureForFormulaRecovery()).toThrow(error)
+    expect(context.draft.view()).toMatchObject({ ref: old })
+    expect(context.coordinator.view()).toMatchObject({ formulasPending: false, unsavedEdits: false })
+    expect(context.captures()).toEqual([])
+    await drain(context)
+    expect(context.send).not.toHaveBeenCalled()
+    context.autosave.dispose()
+    context.coordinator.dispose()
+    context.draft.dispose()
+  })
+
+  it.each(['ended', 'disposed'] as const)('%s 之后不捕获或登记', (state) => {
+    const context = setup()
+    if (state === 'ended')
+      context.coordinator.block('client-outdated')
+    else
+      context.autosave.dispose()
+    expect(context.autosave.captureForFormulaRecovery()).toBeUndefined()
+    expect(context.editor.capture).not.toHaveBeenCalled()
+    expect(context.captures()).toEqual([])
+    expect(context.coordinator.view().formulasPending).toBe(false)
+    context.autosave.dispose()
+    context.coordinator.dispose()
+    context.draft.dispose()
+  })
+})
+
 describe('恢复初值的自动上传', () => {
   it('编辑序号为零的初值直接进入调度，不要求 SDK 额外修改或重新捕获', async () => {
     const context = setup({ initialUnsaved: true })
