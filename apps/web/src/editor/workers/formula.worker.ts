@@ -11,6 +11,10 @@ import { imagePolicyReport } from '../image-function/worker-report.ts'
 import { injectorOf, LifecycleService } from '../internal-api/index.ts'
 import { formulaWorkerPluginEntries } from '../profile/formula-worker-profile.ts'
 
+// DEF-072：WebKit 对照中，空闲后首次增量额外约 1 秒；保持 100 ms 计时活动消除该停顿（ADR-010）。
+// 只属于这个 Worker；实例清理时 Worker.terminate() 会一并结束计时器。
+globalThis.setInterval(() => {}, 100)
+
 const univer = new Univer({ locale: LocaleType.ZH_CN, logLevel: LogLevel.WARN })
 for (const entry of formulaWorkerPluginEntries())
   entry.register(univer)
