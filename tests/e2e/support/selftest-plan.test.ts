@@ -81,8 +81,8 @@ describe('页面自检的步骤', () => {
     expect(new Set(STEPS.map(step => step.documentId)).size).toBe(STEPS.length - 2)
     expect(STEPS.filter(step => step.sharesDocumentOf === undefined).every(step => step.opens === 'entry')).toBe(true)
     expect(new Set(STEPS.map(step => step.id)).size).toBe(STEPS.length)
-    // 写满、原生暂停及 S3 长等待分别选择，不混进默认 29 步。
-    expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual(SELFTEST_SCENARIOS.filter(scenario => !['storage-quota', 'paused-local-holder', ...S3_WAITER_STEPS.map(step => step.scenario)].includes(scenario)).sort())
+    // 写满、原生暂停、S3 长等待及 S4 性能测量分别选择，不混进默认 29 步。
+    expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual(SELFTEST_SCENARIOS.filter(scenario => !['storage-quota', 'paused-local-holder', 'local-save-online', 'local-save-offline', ...S3_WAITER_STEPS.map(step => step.scenario)].includes(scenario)).sort())
     expect(CAPTURE_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
     expect(HANDOVER_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
     expect(() => stepsOf(SELFTEST_STEPS, PEOPLE, ['one'])).toThrow('步却有 1 份文档')

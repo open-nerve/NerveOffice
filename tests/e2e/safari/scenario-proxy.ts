@@ -13,6 +13,15 @@ interface Scenario {
   readonly receive: (message: unknown, now: number) => { readonly kind: string }
 }
 
+export interface ScenarioApiRequest {
+  readonly method: string
+  readonly path: string
+  readonly startedAt: number
+  completedAt: number | null
+  status: number | null
+  readonly forwarded: boolean
+}
+
 function reply(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
   response.end(JSON.stringify(value))
@@ -32,14 +41,14 @@ async function smallBody(request: IncomingMessage, limit: number): Promise<Buffe
   })
 }
 
-export async function startScenarioProxy(options: { readonly purpose: 'crash' | 'pause', readonly runId: string, readonly backendOrigin: string }) {
+export async function startScenarioProxy(options: { readonly purpose: 'crash' | 'pause' | 'local-save', readonly runId: string, readonly backendOrigin: string }) {
   if (!/^[0-9a-f-]{36}$/i.test(options.runId))
     throw new Error('无效的崩溃运行标识')
   const backend = new URL(options.backendOrigin)
   if (backend.origin !== options.backendOrigin || backend.protocol !== 'http:' || backend.hostname !== '127.0.0.1' || Number(backend.port) < 1024)
     throw new Error('后端必须是本次自有的本机端口')
   const prefix = `/__nerve-${options.purpose}`
-  const title = options.purpose === 'crash' ? '崩溃验证' : '暂停恢复验证'
+  const title = options.purpose === 'crash' ? '崩溃验证' : options.purpose === 'pause' ? '暂停恢复验证' : '本机保存测量'
   const controlLimit = options.purpose === 'crash' ? 8192 : 65_536
   const controlPath = `${prefix}/${options.runId}`
   const startPath = `${prefix}-start/${options.runId}`
@@ -55,6 +64,9 @@ export async function startScenarioProxy(options: { readonly purpose: 'crash' | 
   const saves: { status: number }[] = []
   const problems: string[] = []
   const upstreams = new Set<ClientRequest>()
+  const apiUpstreams = new Set<ClientRequest>()
+  const apiRequests: ScenarioApiRequest[] = []
+  let cutAt: number | null = null
   let clientAborts = 0
 
   const control = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
@@ -100,6 +112,17 @@ export async function startScenarioProxy(options: { readonly purpose: 'crash' | 
       }
     }
     const path = new URL(request.url ?? '/', origin).pathname
+    const api = options.purpose === 'local-save' && (path === '/api' || path.startsWith('/api/'))
+    const trace: ScenarioApiRequest | undefined = api ? { method: request.method ?? '', path, startedAt: Date.now(), completedAt: null, status: null, forwarded: cutAt === null } : undefined
+    if (trace !== undefined) {
+      apiRequests.push(trace)
+      if (cutAt !== null) {
+        trace.completedAt = Date.now()
+        // 断开真实传输；不能用假成功或业务错误响应冒充离线。
+        response.destroy()
+        return
+      }
+    }
     const acquire = observing && request.method === 'POST' && path === `/api/documents/${scenario?.documentId}/edit-lease`
     const save = observing && request.method === 'PUT' && path === `/api/documents/${scenario?.documentId}/content`
     const item = acquire ? { clientInstanceId: '', takeover: null as string | null, status: 0 } : undefined
@@ -136,6 +159,8 @@ export async function startScenarioProxy(options: { readonly purpose: 'crash' | 
     const upstream = backendRequest({ hostname: backend.hostname, port: backend.port, path: request.url, method: request.method, headers: request.headers }, (result) => {
       response.writeHead(result.statusCode ?? 502, result.headers)
       result.on('end', () => {
+        if (trace !== undefined)
+          trace.status = result.statusCode ?? 0
         if (item !== undefined)
           item.status = result.statusCode ?? 0
         if (saved !== undefined)
@@ -148,7 +173,14 @@ export async function startScenarioProxy(options: { readonly purpose: 'crash' | 
       result.pipe(response)
     })
     upstreams.add(upstream)
-    upstream.once('close', () => upstreams.delete(upstream))
+    if (api)
+      apiUpstreams.add(upstream)
+    upstream.once('close', () => {
+      upstreams.delete(upstream)
+      apiUpstreams.delete(upstream)
+      if (trace !== undefined)
+        trace.completedAt = Date.now()
+    })
     upstream.on('error', () => {
       failUpstream()
       if (!response.headersSent)
@@ -197,7 +229,7 @@ export async function startScenarioProxy(options: { readonly purpose: 'crash' | 
       response.writeHead(302, { 'location': `/selftest.html#${scenario.entryFragment}`, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer' })
       response.end()
     }
-    else if (/^\/__nerve-(?:crash|pause)/.test(request.url)) {
+    else if (/^\/__nerve-(?:crash|pause|local-save)/.test(request.url)) {
       reply(response, 404, { kind: 'stop' })
     }
     else {
@@ -227,6 +259,16 @@ export async function startScenarioProxy(options: { readonly purpose: 'crash' | 
         throw new Error('崩溃场景未配置或已启动')
       armed = true
     },
+    /** 只供测量宿主调用；页面的控制消息没有传输开关。 */
+    cutApi(): number {
+      if (options.purpose !== 'local-save' || !armed || cutAt !== null)
+        throw new Error('应用 API 切断前提不符或已经切断')
+      if (apiUpstreams.size !== 0)
+        throw new Error('仍有在途应用 API，拒绝切断')
+      cutAt = Date.now()
+      return cutAt
+    },
+    network: () => ({ cutAt, inFlight: apiUpstreams.size, requests: apiRequests.map(item => ({ ...item })) }),
     observeRecovery(): void {
       if (observing)
         throw new Error('不能重复标记真实崩溃')

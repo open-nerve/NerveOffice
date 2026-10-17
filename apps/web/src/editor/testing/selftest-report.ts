@@ -122,7 +122,7 @@ export function isProbeScenario(value: string): value is ProbeScenario {
  */
 export const QUOTA_PROBE_MAX_BYTES = 64 * 1024 * 1024
 
-export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS, ...PROBE_SCENARIOS] as const
+export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', 'local-save-online', 'local-save-offline', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS, ...PROBE_SCENARIOS] as const
 
 export type SelftestScenario = (typeof SELFTEST_SCENARIOS)[number]
 

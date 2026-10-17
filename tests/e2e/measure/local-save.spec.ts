@@ -92,6 +92,7 @@ for (const document of DOCUMENTS) {
       await chooseAutosave(context, 'running')
       const page = await firstPage(context)
       let workers = 0
+      let activeWorkers = 0
       page.on('worker', (worker) => {
         if (worker.url().includes('outbox.worker'))
           workers += 1
@@ -106,7 +107,9 @@ for (const document of DOCUMENTS) {
         version = await page.evaluate(() => navigator.userAgent)
         const secret = await currentLocalKey(page)
         await expect.poll(async () => (await readLocalDisk(page, key)).writer !== null).toBe(true)
-        expect(workers, '测的是实际发件箱 Worker').toBe(1)
+        // P3 的只读恢复检查会创建并关闭临时 Worker；本轮必须有且只有一个仍存活的生产写入 Worker。
+        activeWorkers = page.workers().filter(worker => worker.url().includes('outbox.worker')).length
+        expect(activeWorkers, '测量开始时只有一个存活的实际发件箱 Worker').toBe(1)
         const writes = recordWrites(page, documentId)
         await context.setOffline(network === 'offline')
         let lastSeq = (await readLocalDisk(page, key)).writer?.lastDraftSeq ?? 0
@@ -133,6 +136,7 @@ for (const document of DOCUMENTS) {
         const report = {
           format: 'nerve-office.local-save-measure.v1',
           browser: { project: testInfo.project.name, userAgent: version },
+          workers: { created: workers, activeBeforeMeasurement: activeWorkers },
           host: { platform: platform(), release: release(), arch: arch(), cpu: cpus()[0]?.model, cores: cpus().length, memoryBytes: totalmem(), node: process.version },
           document: { id: document.id, templateBytes: Buffer.byteLength(document.snapshotFor('measure-unit')), formula: document.formula },
           network,

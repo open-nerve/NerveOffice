@@ -438,6 +438,10 @@ function serverExpectation(scenario: SelftestScenario, path: string | undefined)
   if (isProbeScenario(scenario))
     return probeExpectation(scenario)
   switch (scenario) {
+    case 'local-save-online':
+    case 'local-save-offline':
+      // 必须由 local-save-session/driver 逐轮核对；旧通用汇总不能替代专用验收。
+      return undefined
     case 'takeover-holder':
     case 'takeover-holder-deaf':
     case 'takeover-taker':

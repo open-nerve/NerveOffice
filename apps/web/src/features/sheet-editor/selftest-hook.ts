@@ -34,7 +34,7 @@ const RESIZE_OBSERVER_LOOP_NOTICE = /^ResizeObserver loop (?:completed with unde
  * 存储与 Worker 的探针（storage、key-transfer、storage-quota、worker-stall）与生产发件箱的两项（outbox-stall、outbox-pipeline）用不着编辑器，
  * 在阅读时跑
  */
-const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder', 'takeover-holder-deaf', 'paused-holder', 'paused-local-holder', 'capture-cost', 'perf-baseline'])
+const EDITING_SCENARIOS: ReadonlySet<string> = new Set(['edit-chrome', 'environment', 'change-detection', 'formula-timing', 'auto-height', 'large-copy', 'composition', 'hidden-save', 'takeover-holder', 'takeover-holder-deaf', 'paused-holder', 'paused-local-holder', 'capture-cost', 'perf-baseline', 'local-save-online', 'local-save-offline'])
 
 /**
  * 交接的复核里收不到交接频道消息的 A（地址里 selftest 的值；与 editor/testing/selftest-report.ts 的 DEAF_HOLDER_SCENARIO 相同——模块边界不让这里
@@ -233,11 +233,16 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
       diagnostics: reloadDiagnostics,
     }))
   }
-  const watch = (localPause?: SelftestHost['localPause']): void => watchScenario(page, elements, { startedAt, documentId, log, reloadSaves, localPause })
+  const watch = (localPause?: SelftestHost['localPause'], localSave?: SelftestHost['localSave']): void => watchScenario(page, elements, { startedAt, documentId, log, reloadSaves, localPause, localSave })
   if (new URLSearchParams(window.location.search).get('selftest') === 'paused-local-holder') {
     return import('../../editor/testing/selftest.ts').then(async ({ prepareLocalPauseSelftest }) => {
       const localPause = await prepareLocalPauseSelftest(documentId ?? '')
       watch(localPause)
+    })
+  }
+  if (['local-save-online', 'local-save-offline'].includes(new URLSearchParams(window.location.search).get('selftest') ?? '')) {
+    return import('../../editor/testing/selftest.ts').then(async ({ prepareLocalSaveSelftest }) => {
+      watch(undefined, await prepareLocalSaveSelftest(documentId ?? ''))
     })
   }
   watch()
@@ -249,8 +254,9 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
   readonly log: ReturnType<typeof watchPage>
   readonly reloadSaves: ReturnType<typeof watchReloadSaves> | undefined
   readonly localPause: SelftestHost['localPause']
+  readonly localSave: SelftestHost['localSave']
 }): void {
-  const { startedAt, documentId, log, reloadSaves, localPause } = setup
+  const { startedAt, documentId, log, reloadSaves, localPause, localSave } = setup
   const allowLeave = allowLeaveForReport(window)
   let started = false
   // 第一次载入（打开即阅读）时容器第一次到 ready、steady 的时刻（M4-P1 S1 的首屏）：页面的状态每变一次同步通知，订阅在载入之前
@@ -284,6 +290,7 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
       firstLoad: () => ({ ...firstLoad }),
       reloadSaves,
       localPause,
+      localSave,
       // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（outbox/testing/ 只在测试构建里、只能动态引入）
       outboxReview: async () => (await import('./outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
     }

@@ -43,6 +43,7 @@ import { requestBudgetMs } from './selftest-waiter-variants.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
 export { watchCrashSelftest } from './selftest-crash.ts'
+export { prepareLocalSaveSelftest } from './selftest-local-save.ts'
 export { prepareLocalPauseSelftest } from './selftest-pause.ts'
 export type { SelftestHost, SelftestPageView } from './selftest-session.ts'
 
@@ -650,6 +651,16 @@ const SCENARIOS: Readonly<Record<SelftestScenario, (session: Session) => Promise
   'read-only-formulas': formulasScenario,
   'edit-chrome': editChromeScenario,
   'enter-exit': enterExitScenario,
+  'local-save-online': async (session) => {
+    if (session.host.localSave === undefined)
+      throw new Error('缺少本机保存测量准备')
+    await session.host.localSave.run(session)
+  },
+  'local-save-offline': async (session) => {
+    if (session.host.localSave === undefined)
+      throw new Error('缺少本机保存测量准备')
+    await session.host.localSave.run(session)
+  },
   ...CAPTURE_SCENARIO_RUNNERS,
   ...HANDOVER_SCENARIO_RUNNERS,
   ...REQUEST_SCENARIO_RUNNERS,
@@ -670,6 +681,8 @@ const EXPECTS_HIDDEN: ReadonlySet<string> = new Set([...CAPTURE_EXPECTS_HIDDEN, 
  * （runs 是 40 时约 5 分钟的空闲），别的是 SCENARIO_BUDGET_MS
  */
 function budgetOf(scenario: SelftestScenario, runs: number | undefined): number {
+  if (scenario === 'local-save-online' || scenario === 'local-save-offline')
+    return 15 * 60_000
   if (scenario === 'worker-stall')
     return stallBudgetMs(runs)
   if (scenario === 'outbox-stall')
@@ -775,6 +788,12 @@ export async function runSelftestAndReport(host: SelftestHost): Promise<Selftest
   const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '', runsOfValue(params.get(RUNS_PARAM)))
   if (host.localPause !== undefined) {
     await host.localPause.report(report)
+    return report
+  }
+  if (host.localSave !== undefined) {
+    await host.localSave.report(report)
+    // 本轮独立报告已交回；允许宿主随后导航这个专用测试页，离线草稿仍保留在本轮来源。
+    host.allowLeave()
     return report
   }
   if (next !== null) {

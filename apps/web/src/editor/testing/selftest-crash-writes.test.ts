@@ -7,6 +7,25 @@ const request = () => ({ id: 7, type: 'write', capture: { key: { userId: 'user',
 const reply = () => ({ id: 7, ok: true, result: { kind: 'written', digest: HASH, mirror: { kind: 'mirrored' } } })
 
 describe('崩溃自检只以对应生产 Worker 的实际镜像完成作为证据', () => {
+  it('逐轮 Worker 计时必须属于同一调用、身份及摘要，错 Worker 不能结束', () => {
+    let now = 100
+    const observer = createCrashWriteEvidence(() => now)
+    const worker = {}
+    observer.sent(worker, request())
+    now = 120
+    observer.received({}, reply())
+    expect(observer.timingFor(identity, HASH)).toBeUndefined()
+    now = 155
+    observer.received(worker, reply())
+    expect(observer.timingFor(identity, HASH)).toEqual({ sentAt: 100, receivedAt: 155 })
+    expect(observer.timingFor({ ...identity, draftSeq: 4 }, HASH)).toBeUndefined()
+    expect(observer.timingFor({ ...identity, writerId: 'other' }, HASH)).toBeUndefined()
+    expect(observer.timingFor(identity, 'b'.repeat(64))).toBeUndefined()
+    now = 200
+    observer.received(worker, reply())
+    expect(observer.timingFor(identity, HASH)).toEqual({ sentAt: 100, receivedAt: 155 })
+  })
+
   it('具体草稿的写成证据独立于镜像，必须匹配同一 Worker、调用和解密摘要', () => {
     const observer = createCrashWriteEvidence()
     const worker = {}

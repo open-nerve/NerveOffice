@@ -24,9 +24,9 @@ function keyOf(value: Identity): string {
 }
 
 /** 只保留身份和摘要；生产 Worker 已 await 镜像 flush 后的回包才能形成镜像证据。 */
-export function createCrashWriteEvidence() {
-  const calls = new WeakMap<object, Map<number, Identity>>()
-  const snapshots = new Map<string, string>()
+export function createCrashWriteEvidence(now: () => number = () => performance.now()) {
+  const calls = new WeakMap<object, Map<number, { readonly identity: Identity, readonly sentAt: number }>>()
+  const snapshots = new Map<string, { readonly digest: string, readonly sentAt: number, readonly receivedAt: number }>()
   const mirrors = new Map<string, string>()
   let written = 0
   return {
@@ -41,14 +41,14 @@ export function createCrashWriteEvidence() {
         pending = new Map()
         calls.set(worker, pending)
       }
-      pending.set(message.id, identity)
+      pending.set(message.id, { identity, sentAt: now() })
     },
     received(worker: object, message: unknown): void {
       if (!object(message) || !callId(message.id))
         return
       const pending = calls.get(worker)
-      const identity = pending?.get(message.id)
-      if (identity === undefined)
+      const call = pending?.get(message.id)
+      if (call === undefined)
         return
       pending?.delete(message.id)
       if (message.ok !== true || !object(message.result) || message.result.kind !== 'written')
@@ -56,13 +56,17 @@ export function createCrashWriteEvidence() {
       written += 1
       const { mirror, digest } = message.result
       if (typeof digest === 'string' && /^[0-9a-f]{64}$/.test(digest)) {
-        snapshots.set(keyOf(identity), digest)
+        snapshots.set(keyOf(call.identity), { digest, sentAt: call.sentAt, receivedAt: now() })
         if (object(mirror) && mirror.kind === 'mirrored')
-          mirrors.set(keyOf(identity), digest)
+          mirrors.set(keyOf(call.identity), digest)
       }
     },
     count: () => written,
-    writtenFor: (draft: Identity, snapshotHash: string): boolean => snapshots.get(keyOf(draft)) === snapshotHash,
+    writtenFor: (draft: Identity, snapshotHash: string): boolean => snapshots.get(keyOf(draft))?.digest === snapshotHash,
+    timingFor(draft: Identity, snapshotHash: string): { readonly sentAt: number, readonly receivedAt: number } | undefined {
+      const entry = snapshots.get(keyOf(draft))
+      return entry?.digest === snapshotHash ? { sentAt: entry.sentAt, receivedAt: entry.receivedAt } : undefined
+    },
     mirrorFor(draft: Identity, snapshotHash: string): { readonly draftSeq: number, readonly snapshotHash: string } | undefined {
       return mirrors.get(keyOf(draft)) === snapshotHash ? { draftSeq: draft.draftSeq, snapshotHash } : undefined
     },

@@ -4,6 +4,7 @@
 import type { EditorProbe, ProbeCommand } from './e2e-probe.ts'
 import type { OutboxReviewApi } from './outbox-review-api.ts'
 import type { EntryApi, EntryRange, EntrySheet, EntryWorkbook } from './read-only-entries.ts'
+import type { LocalSaveSelftest } from './selftest-local-save.ts'
 import type { LocalPauseSelftest } from './selftest-pause.ts'
 import type { SelftestCheck, SelftestFact, SelftestPage, SelftestTimelineEntry, SelftestTiming } from './selftest-report.ts'
 import { canonicalJson, contentOf } from './content-compare.ts'
@@ -88,6 +89,7 @@ export interface SelftestHost {
   readonly reloadSaves?: (() => readonly SelftestReloadSave[]) | undefined
   /** 仅新的持久暂停场景：在 page.load 之前安装的真实 Worker 观察与同源阶段报告。 */
   readonly localPause?: LocalPauseSelftest | undefined
+  readonly localSave?: LocalSaveSelftest | undefined
   /**
    * 生产的发件箱（M4-P1 设计 §3.6 第 9 项的生产 Worker、第 11 项）：挂接动态引入 features 那一侧的实现交给自检（editor/testing 不能引用 features）；
    * 用到的场景才调用。没有时（单元测试）为 undefined
