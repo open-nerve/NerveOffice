@@ -5,6 +5,7 @@ import type { Page, Request } from '@playwright/test'
 import { createDocument, createDocumentIn, createFolderIn, createTeamSpace, createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { loginThroughApi } from '../../support/session.ts'
+import { waitForEditorAccess } from '../../support/sheet.ts'
 
 const FOLDER_URL = /\/spaces\/[\da-f-]{36}\/folders\/[\da-f-]{36}$/
 
@@ -56,6 +57,8 @@ test.describe('US-M2-07 文件夹与文档的整理', () => {
     // 建好之后整页打开编辑器页，回到文件夹时它就在这一层
     const writes = watchDocumentWrites(page)
     await page.getByRole('button', { name: '新建表格', exact: true }).click()
+    // 新建意图在编辑器完成打开后才清除：先等就绪，再核对最终地址。
+    await waitForEditorAccess(page, 'edit')
     await expect(page).toHaveURL(/\/documents\/[\da-f-]{36}$/)
     expect(writes.paths).toEqual(['/api/documents'])
     writes.stop()
