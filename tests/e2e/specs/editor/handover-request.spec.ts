@@ -273,9 +273,10 @@ test.describe('US-M3-06 请求编辑与交出', () => {
     await typeInCell(anotherDevice, 'B1', 'from requester')
     await saveAndWait(anotherDevice)
 
-    // 持有者恢复：下一次心跳得知编辑权不在了（续上时被请求方占着），失去编辑权，本页的修改给副本
+    // 恢复后由真实的心跳、连接复核或保存发现失效；等界面就绪，不再拨页面时钟：
+    // 状态查询可能已经在途，快进10秒会连同它的请求截止时间一起触发，抹掉本来能取得的编辑者说明。
     await asleep.reconnect()
-    await page.clock.fastForward(HEARTBEAT_MS)
+    await lostNotice(page).waitFor()
     await expect(lostNotice(page)).toContainText(`编辑权已失效：${shownName(requester)} 正在编辑这份文档`)
     await waitForEditorAccess(page, 'read')
     expect(await savedCells(anotherDevice, documentId)).toEqual(['from holder', 'from requester'])
