@@ -658,7 +658,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 最近一次知道的"能不能强制接管"（打开时的详情、阅读时的编辑状态）：离开编辑、失去编辑权之后回到阅读时带上 */
   let canTakeOver = false
   /** 失去编辑权之后的那一份（捕获的内容、失去的时刻与副本的请求）：按最新的内容回到阅读之后丢掉 */
-  let lostCopy: LostCopyFlow | undefined
+  let lostCopy: (LostCopyFlow & { readonly cleanup: () => Promise<void> }) | undefined
   /** 正在新建可编辑的编辑器（进入编辑、直接进入编辑的打开）：这期间得知的失效等编辑器建好、进入编辑之后再处理 */
   let pendingLoss: LeaseLoss | undefined
   let preparingRecovery = false
@@ -1885,6 +1885,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 说明查询跟随本次失效；即使上游复用原因对象，也不能把旧查询带到下一次失效。
     const loss = { ...reported }
     const token = begin({ kind: 'losing', loss })
+    const writeEpoch = editing.lease?.credentials().writeEpoch
     editing.suspendDraft()
     editing.detachLease()
     // 本机证据收集负责旧锁的收尾；位置优先取服务端 sameSession，查询与保留内容同时进行。
@@ -1961,7 +1962,13 @@ export function createEditMode(options: EditModeOptions): EditMode {
         return
       // 失效后只需要保留正文。结束密钥与旧宿主的生命周期，不删除原文档的持久记录。
       owned.discardKey()
-      lostCopy = createLostCopyFlow({ documentId, draft: owned, ref, lostAt, title: options.title, newId: options.newId, conflictCopy: api.conflictCopy, onSessionProblem: hooks.writeProblem })
+      lostCopy = {
+        ...createLostCopyFlow({ documentId, draft: owned, ref, lostAt, title: options.title, newId: options.newId, conflictCopy: api.conflictCopy, onSessionProblem: hooks.writeProblem }),
+        cleanup: async () => {
+          if (writeEpoch !== undefined)
+            await options.recovery?.cleanupCurrentCopy({ writeEpoch, draftSeq: ref.draftSeq })
+        },
+      }
     }
     if (!checkFirst)
       handOff()
@@ -2233,6 +2240,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
         begin({ ...mode, copy: result })
         return
       }
+      // 只有已创建副本的当前动作能清旧草稿；清理失败由恢复提示承接，不抹去副本成功。
+      await copy.cleanup()
+      if (!still(token) || mode.kind !== 'lost')
+        return
       // 内容已经保住：本页按服务端的最新内容重建为阅读，说明已另存为副本（取不到最新的版本时留在这里，说明之后可以重新加载）
       await reloadLatest({ ...mode, copy: result })
     },

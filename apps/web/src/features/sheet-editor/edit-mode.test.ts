@@ -21,6 +21,7 @@ import { createConnectionState } from '../../shared/lib/connection-state.ts'
 import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
 import { gunzipBytes, gzipBytes, sealDraft } from '../../shared/outbox/draft-codec.ts'
 import { sampleMeta } from '../../shared/outbox/draft-record.test-support.ts'
+import { readDraftMeta } from '../../shared/outbox/draft-record.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
@@ -1508,6 +1509,41 @@ describe('真实来源进入页面的准备顺序', () => {
 })
 
 describe('失效副本接收真实来源（M4-P2 S4）', () => {
+  it.each(['saved', 'failed', 'cleanup-failed'] as const)('当前页面失效副本 %s：只有副本成功才条件清理本轮持久草稿', async (outcome) => {
+    const local = await localDrafts()
+    const h = await recoverySetup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
+    h.observe.mockResolvedValue({ kind: 'observed', observation: { key: h.key, id: 'empty' }, record: { kind: 'absent' }, writer: undefined })
+    await editing(h)
+    h.factory.last().edit('已经保存在本机的修改')
+    await h.time.advance(DEFAULT_AUTOSAVE_LIMITS.captureQuietMs)
+    await vi.waitFor(() => expect(local.store.rawDraft(h.key)).toBeDefined())
+    const meta = readDraftMeta(local.store.rawDraft(h.key))!
+    expect(meta).toBeDefined()
+    const observation = { key: h.key, id: 'current-page' }
+    h.observe.mockResolvedValue({ kind: 'observed', observation, record: { kind: 'draft', meta, gzip: await gzipBytes(new TextEncoder().encode(snapshotOf('已经保存在本机的修改'))) }, writer: undefined })
+    h.editLease.renew.mockRejectedValueOnce(leaseLost('revoked'))
+    await h.mode.resumeLease()
+    await vi.waitFor(() => expect(lostOf(h.mode)).toMatchObject({ checking: false, unsaved: true }))
+    expect(h.remove).not.toHaveBeenCalled()
+    if (outcome === 'failed')
+      h.api.conflictCopy.mockRejectedValueOnce(new NetworkError('副本结果未知'))
+    if (outcome === 'cleanup-failed')
+      h.remove.mockResolvedValueOnce({ kind: 'quota' })
+    await h.mode.saveCopy()
+    expect(h.api.conflictCopy).toHaveBeenCalledOnce()
+    if (outcome !== 'failed') {
+      expect(h.remove).toHaveBeenCalledExactlyOnceWith(observation)
+      expect(readingOf(h.mode)).toMatchObject({ notice: { kind: 'copied', document: { id: COPY.id } } })
+      if (outcome === 'cleanup-failed')
+        expect(h.recovery.view().cleanup).toEqual({ kind: 'quota' })
+    }
+    else {
+      expect(h.remove).not.toHaveBeenCalled()
+      expect(lostOf(h.mode).copy.kind).toBe('failed')
+    }
+    expect(h.reportError).not.toHaveBeenCalled()
+  })
+
   it.each([false, true])('失效捕获失败仍保留原编辑器供复制，但释放密钥和宿主，不删除已有草稿（原 HTTP 在途：%s）', async (inFlight) => {
     const local = await localDrafts()
     const h = setup({ localDrafts: local.options, editLease: { renew: async () => ({ ...RENEWED, localKeyVersion: 1 }) } })
@@ -3438,7 +3474,8 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     context.api.save.mockImplementationOnce(async () => reply.promise)
     writer.edit('甲')
     const exiting = context.mode.exit()
-    await settle()
+    // 真实 gzip/SHA 不保证在一次宏任务后完成；故事的前提是请求确已在途。
+    await vi.waitFor(() => expect(context.api.save).toHaveBeenCalledOnce())
     writer.edit('甲乙')
     context.autosave.setPage({ visible: false })
     await settle()

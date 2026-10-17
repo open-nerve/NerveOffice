@@ -30,6 +30,35 @@ async function requestEvidence(requests: readonly Request[]) {
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
+test('US-M4-04 VM 准备校准：真实 Worker 的镜像完成必须对应独立解密的同一草稿', { tag: '@test-build' }, async ({ page }, testInfo) => {
+  const owner = await createUser('vm-mirror-prepare')
+  const documentId = await createDocument(owner, 'VM 镜像准备校准')
+  const runId = randomUUID()
+  const endpoint = `${e2eOrigin()}/__nerve-crash/${runId}`
+  const reports: Record<string, unknown>[] = []
+  // 只校准准备页面；此处没有 VM 身份、信号或重启证明，也不推进恢复阶段。
+  await page.route(endpoint, async (route) => {
+    const message = route.request().postDataJSON() as Record<string, unknown>
+    reports.push(message)
+    const command = message.kind === 'boot' ? { kind: 'prepare', mirrorRequired: true } : { kind: 'wait' }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(command) })
+  })
+  const fragment = new URLSearchParams({ user: owner.username, password: owner.password, document: documentId, scenario: 'crash-recovery', next: endpoint })
+  await page.goto(`${e2eOrigin()}/selftest.html#${fragment}`)
+  await expect.poll(() => reports.some(message => message.kind === 'ready' || message.kind === 'failed'), { timeout: 90_000 }).toBe(true)
+  const ready = reports.find(message => message.kind === 'ready')
+  await testInfo.attach('vm-mirror-prepare-calibration', { body: JSON.stringify({ kind: 'page-calibration', storagePowerCut: false, reports }), contentType: 'application/json' })
+  expect(ready).toBeDefined()
+  expect(ready).toMatchObject({ inFlight: false, visible: true, pageErrors: 0 })
+  const draft = (await readLocalDisk(page, { userId: owner.id, documentId })).draft!
+  const snapshot = diskSnapshot(draft, await currentLocalKey(page))
+  expect(ready?.mirror).toEqual({ draftSeq: draft.draftSeq, snapshotHash: digest(snapshot) })
+  expect(ready?.snapshotHash).toBe(digest(snapshot))
+  expect(ready?.clientInstanceId).toBe(draft.writtenBy)
+  expect(cellOf(JSON.parse(snapshot) as Parameters<typeof cellOf>[0], 'A1')?.v).toBe(CONTENT)
+  expect(await revisionOf(documentId)).toBe(1)
+})
+
 test('US-M4-04 初页出错但真实写盘成功时不得进入崩溃就绪', { tag: '@test-build' }, async ({ page }, testInfo) => {
   const owner = await createUser('crash-error')
   const documentId = await createDocument(owner, '崩溃自检初页错误反例')

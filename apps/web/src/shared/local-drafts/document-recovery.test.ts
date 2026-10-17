@@ -63,6 +63,83 @@ async function fixture() {
   }
 }
 
+describe('当前页面副本成功后的条件清理', () => {
+  it('清理同一页同一编辑代次的较早落盘；仅使用该次观察，不重放或确认原文档', async () => {
+    const h = await fixture()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writtenBy: 'new-page' }, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } })
+    await h.recovery.cleanupCurrentCopy({ writeEpoch: h.meta.writeEpoch, draftSeq: h.meta.draftSeq + 1 })
+    expect(h.remove).toHaveBeenCalledExactlyOnceWith(h.original.observation)
+    expect(h.recovery.view()).toMatchObject({ stage: 'finished', cleanup: { kind: 'removed' } })
+    expect(h.replay).not.toHaveBeenCalled()
+    expect(h.conflictCopy).not.toHaveBeenCalled()
+    expect(h.reader.dispose).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    { writtenBy: 'another-page' },
+    { writeEpoch: 4 },
+    { draftSeq: 39 },
+    { userId: 'another-user' },
+    { documentId: 'another-document' },
+  ])('不能用已保存的当前副本清理其他来源或更新内容：%j', async (replacement) => {
+    const h = await fixture()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writtenBy: 'new-page', ...replacement }, gzip: new Uint8Array([1]) } })
+    await h.recovery.cleanupCurrentCopy({ writeEpoch: 3, draftSeq: 38 })
+    expect(h.remove).not.toHaveBeenCalled()
+    expect(h.recovery.view()).toMatchObject({ cleanup: { kind: 'changed' }, problem: 'changed' })
+    await h.recovery.retryCleanup()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it('读取期间会话暂停：迟到观察不取得清理资格', async () => {
+    const h = await fixture()
+    const observed = deferred<ObserveResult>()
+    h.observe.mockReturnValueOnce(observed.promise)
+    const clearing = h.recovery.cleanupCurrentCopy({ writeEpoch: 3, draftSeq: 38 })
+    await settle()
+    h.recovery.suspend()
+    observed.resolve({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writtenBy: 'new-page' }, gzip: new Uint8Array([1]) } })
+    await clearing
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it.each(['same-epoch', 'new-epoch'] as const)('另一页已登记 %s 写入者、尚未替换旧正文：保留其写入资格与原件', async (kind) => {
+    const h = await fixture()
+    h.observe.mockResolvedValue({
+      ...h.original,
+      record: { kind: 'draft', meta: { ...h.meta, writtenBy: 'new-page' }, gzip: new Uint8Array([1]) },
+      writer: { ...KEY, writeEpoch: h.meta.writeEpoch + (kind === 'new-epoch' ? 1 : 0), writerId: 'newly-registered-writer', lastDraftSeq: h.meta.draftSeq, registeredAt: NOW },
+    })
+    await h.recovery.cleanupCurrentCopy({ writeEpoch: 3, draftSeq: 38 })
+    expect(h.remove).not.toHaveBeenCalled()
+    expect(h.recovery.view()).toMatchObject({ cleanup: { kind: 'changed' }, problem: 'changed' })
+  })
+
+  it('清理失败可沿原观察重试；期间换成新记录也不重新选目标', async () => {
+    const h = await fixture()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writtenBy: 'new-page' }, gzip: new Uint8Array([1]) } })
+    h.remove.mockResolvedValueOnce({ kind: 'quota' })
+    await h.recovery.cleanupCurrentCopy({ writeEpoch: 3, draftSeq: 38 })
+    expect(h.recovery.view()).toMatchObject({ stage: 'ready', cleanup: { kind: 'quota' } })
+    h.observe.mockResolvedValue({ ...h.original, observation: { ...h.original.observation, id: 'later' } })
+    h.remove.mockResolvedValueOnce({ kind: 'changed' })
+    await h.recovery.retryCleanup()
+    expect(h.observe).toHaveBeenCalledOnce()
+    expect(h.remove.mock.calls).toEqual([[h.original.observation], [h.original.observation]])
+    expect(h.recovery.view().cleanup).toEqual({ kind: 'changed' })
+    await h.recovery.retryCleanup()
+    expect(h.remove).toHaveBeenCalledTimes(2)
+  })
+
+  it('不能解密认证的记录即使明文归属相同也不得删除', async () => {
+    const h = await fixture()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'unreadable', meta: { ...h.meta, writtenBy: 'new-page' }, reason: 'stale-key' } })
+    await h.recovery.cleanupCurrentCopy({ writeEpoch: 3, draftSeq: 38 })
+    expect(h.remove).not.toHaveBeenCalled()
+    expect(h.recovery.view().problem).toBe('storage')
+  })
+})
+
 describe('文档恢复的发现与条件动作', () => {
   it('现有宿主等待观察期间换了认证来源：不安装、重放或清理新原件', async () => {
     const h = await fixture()

@@ -17,6 +17,7 @@
 import type { RequestScenario, SelftestTimelineEntry } from './selftest-report.ts'
 import type { Session } from './selftest-session.ts'
 import type { VisibilityWatch } from './selftest-timeline.ts'
+import type { WaiterScenario } from './selftest-waiter-variants.ts'
 import { autosaveControl, prepareAutosave, requestOf } from './selftest-autosave.ts'
 import { facade, round } from './selftest-capture-common.ts'
 import { waitFor } from './selftest-dom.ts'
@@ -24,6 +25,7 @@ import { holderPrelude } from './selftest-holder.ts'
 import { PAUSED_HOLDER_EDITS, REQUEST_WAITER_EDIT } from './selftest-report.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describeView, fail, fetchServerContent, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS } from './selftest-session.ts'
 import { cellOf, cellsIn, editingSteady, lostNoticeText, observation, statusRegionText, statusTexts, timelineWith, watchVisibility } from './selftest-timeline.ts'
+import { summarizeCancelledWaiter, waiterShownWaitMs } from './selftest-waiter-variants.ts'
 
 /** 页头的按钮（与编辑器页的文案相同；这里不引用编辑器页的模块） */
 const REQUEST_EDIT = '请求编辑'
@@ -32,9 +34,6 @@ const SAVE_AS_COPY = '另存为副本'
 
 /** request-waiter：点了"请求编辑"之后等驱动脚本让这一页隐藏最多多久（它从另一方的心跳里看到请求，2 秒一次） */
 const WAITER_HIDDEN_WAIT_MS = 120_000
-
-/** request-waiter：隐藏之后等回到前台最多多久（另一方交出、这一页在后台续期得知、停够了才让它回来；Safari 压低后台标签页的计时器） */
-const WAITER_SHOWN_WAIT_MS = 240_000
 
 /** request-waiter：回到前台之后等进入编辑（申请、以可编辑重建、到 steady）最多多久 */
 const WAITER_ENTER_WAIT_MS = 60_000
@@ -63,13 +62,13 @@ const TICK_GAP_LIMIT = 100
 function watchStates(session: Session, observations: SelftestTimelineEntry[]): () => void {
   let last = ''
   const record = (): void => {
-    const { mode, request, requestUntil, incoming, leaving, loss } = session.host.view()
-    const fields = { mode, request, requestUntil, incoming, leaving, loss }
+    const { mode, request, requestUntil, incoming, leaving, loss, notice } = session.host.view()
+    const fields = { mode, request, requestUntil, incoming, leaving, loss, notice }
     const signature = JSON.stringify(fields)
     if (signature === last)
       return
     last = signature
-    observations.push(observation('state', Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined))))
+    observations.push(observation('state', { ...Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined)), visible: document.visibilityState === 'visible' }))
   }
   record()
   return session.host.subscribe(record)
@@ -204,7 +203,7 @@ export const HANDOVER_IDLE_MS = 120_000
  * - lost-after-pause：页面被暂停（计时器、请求都停了）——空闲满 2 分钟的自动交出走不到，编辑权按时间到期、另一方接手；回到前台之后才得知失去编辑权
  *   （设计 §3.10 的路 2；Playwright 里拦住心跳与交出模拟）；
  * - handed-over：页面没有被暂停（照常心跳，心跳带来请求）——空闲满 2 分钟就先保存再自动交出（第三格也存上）、回到阅读（2026-10-08 本机 Safari 27.0：
- *   持有 Web Lock、开着 Worker 或 BroadcastChannel 的页面被挡住时不暂停，编辑器页三样都有）；
+ *   实测编辑器页仍继续运行；它持有 Web Lock、Worker 和 BroadcastChannel，但具体调度原因尚未证明）；
  * 别的说明哪里不对：not-hidden（一直没有隐藏）、not-shown（一直没回到前台，也没交出）、not-lost（回到前台之后既没失去编辑权、也没交出）、
  * lost-while-hidden（还在后台就得知失去编辑权：没被暂停，却也没在空闲满 2 分钟时交出）
  */
@@ -292,13 +291,13 @@ export function summarizePausedHolder(timeline: readonly SelftestTimelineEntry[]
 
 // ---- request-waiter（路 1） ----
 
-async function requestWaiterScenario(session: Session): Promise<void> {
+async function requestWaiterScenario(session: Session, scenario: WaiterScenario = 'request-waiter'): Promise<void> {
   const observations: SelftestTimelineEntry[] = []
   const visibility = watchVisibility(observations)
   const unsubscribe = watchStates(session, observations)
   const ticks = watchTicks(observations)
   try {
-    await waiterSteps(session, visibility, observations)
+    await waiterSteps(session, visibility, observations, scenario)
   }
   finally {
     ticks.dispose()
@@ -308,7 +307,8 @@ async function requestWaiterScenario(session: Session): Promise<void> {
   }
 }
 
-async function waiterSteps(session: Session, visibility: VisibilityWatch, observations: SelftestTimelineEntry[]): Promise<void> {
+async function waiterSteps(session: Session, visibility: VisibilityWatch, observations: SelftestTimelineEntry[], scenario: WaiterScenario): Promise<void> {
+  const shownWaitMs = waiterShownWaitMs(scenario)
   const reading = await check(session, 'request.waiter.reading', async () => {
     if (session.host.page.readOnly !== true)
       fail('页面没有按阅读打开')
@@ -339,13 +339,29 @@ async function waiterSteps(session: Session, visibility: VisibilityWatch, observ
     if (!await waitFor(() => visibility.hiddenAt() !== undefined, WAITER_HIDDEN_WAIT_MS, 100))
       fail(`${WAITER_HIDDEN_WAIT_MS / 1000} 秒内页面没有变成隐藏（驱动脚本没有从另一方的心跳里看到请求、另开标签页？）`)
     // 在后台：续期得知交给了这一页，停在 granted、不申请；驱动脚本停够了才让它回来（这里只等回来，先后由时间线判读）
-    if (!await waitFor(() => visibility.shownAt() !== undefined, WAITER_SHOWN_WAIT_MS, 100))
-      fail(`隐藏之后 ${WAITER_SHOWN_WAIT_MS / 1000} 秒内没有回到前台（进展 ${session.host.view().request ?? '没有'}，${describeView(session)}）`)
+    if (!await waitFor(() => visibility.shownAt() !== undefined, shownWaitMs, 100))
+      fail(`隐藏之后 ${shownWaitMs / 1000} 秒内没有回到前台（进展 ${session.host.view().request ?? '没有'}，${describeView(session)}）`)
     const away = round((visibility.shownAt() ?? 0) - (visibility.hiddenAt() ?? 0))
     return `隐藏了 ${(away / 1000).toFixed(1)} 秒之后回到前台（进展 ${session.host.view().request ?? '没有'}${session.host.view().requestUntil === undefined ? '' : `，在等 ${session.host.view().requestUntil ?? ''}`}，${describeView(session)}）`
-  }, WAITER_HIDDEN_WAIT_MS + WAITER_SHOWN_WAIT_MS + CHECK_TIMEOUT_MS)
+  }, WAITER_HIDDEN_WAIT_MS + shownWaitMs + CHECK_TIMEOUT_MS)
   if (!returned)
     return
+  if (scenario === 'request-waiter-cancelled') {
+    await check(session, 'request.waiter.cancelled', async () => {
+      if (!await waitFor(() => session.host.view().notice === 'request-idle', SIGNAL_TIMEOUT_MS, 100))
+        fail(`回到前台没有空闲取消说明（${describeView(session)}）`)
+      const view = session.host.view()
+      if (view.mode !== 'reading' || view.request !== undefined || chromeButton(session, CANCEL_REQUEST) !== undefined || !statusRegionText(session).includes('你 10 分钟没有操作，已取消编辑请求'))
+        fail('空闲取消之后没有保持阅读、清掉等待并显示完整说明')
+      const summary = summarizeCancelledWaiter(timelineWith(observations))
+      session.path = summary.path
+      session.timings.push({ id: 'request.waiter.cancelled', ms: summary.ms })
+      if (summary.problems.length > 0)
+        fail(summary.problems.join('；'))
+      return summary.text
+    })
+    return
+  }
   const entered = await check(session, 'request.waiter.entered', async () => {
     const previous = session.probe
     const gaveUp = (): boolean => {
@@ -416,8 +432,11 @@ async function pausedHolderSteps(session: Session, visibility: VisibilityWatch, 
     notHidden: '驱动脚本没有盖屏？',
     // 第三格只在这一页：这一页被暂停、编辑权到期时失去编辑权之后另存为副本；没被暂停时空闲满 2 分钟先存上它再交出
     afterWrite: '之后另一方经接口请求编辑；这一页被暂停时编辑权到期、另一方接手，移走盖屏之后得知失去编辑权；没被暂停时空闲满 2 分钟自动交出',
+    beforeThird: session.host.localPause?.beforeThird,
   })
   if (!prelude)
+    return
+  if (session.host.localPause !== undefined && !await session.host.localPause.persist(session))
     return
   let path: PausedHolderPath | undefined
   await check(session, 'request.holder.outcome', async () => {
@@ -465,7 +484,9 @@ async function pausedHolderSteps(session: Session, visibility: VisibilityWatch, 
   }
   if (path !== 'lost-after-pause')
     return
-  await check(session, 'request.holder.copy', async () => {
+  if (session.host.localPause !== undefined && !await session.host.localPause.rejected(session))
+    return
+  const copiedSuccessfully = await check(session, 'request.holder.copy', async () => {
     const button = chromeButton(session, SAVE_AS_COPY)
     if (button === undefined)
       fail(`没有"${SAVE_AS_COPY}"`)
@@ -486,14 +507,25 @@ async function pausedHolderSteps(session: Session, visibility: VisibilityWatch, 
     if (copied.wrong.length > 0 || original.wrong.length > 0)
       fail(`副本里 ${copied.text}（三格都应当在），原文档里 ${original.text}（只有前两格）`)
     observations.push(observation('copied', { copyId }))
+    if (session.host.localPause !== undefined)
+      session.facts.copyDocumentId = copyId
     return `另存为副本：副本里 ${copied.text}；原文档里 ${original.text}（第三格只在副本里）`
   }, SWITCH_TIMEOUT_MS + CHECK_TIMEOUT_MS)
+  if (copiedSuccessfully && session.host.localPause !== undefined)
+    await session.host.localPause.cleaned(session)
 }
 
 /** 请求编辑的两个场景（场景名在 ./selftest-report.ts 的 REQUEST_SCENARIOS） */
 export const REQUEST_SCENARIO_RUNNERS = {
   'request-waiter': requestWaiterScenario,
+  'request-waiter-expired': async session => requestWaiterScenario(session, 'request-waiter-expired'),
+  'request-waiter-cancelled': async session => requestWaiterScenario(session, 'request-waiter-cancelled'),
   'paused-holder': pausedHolderScenario,
+  'paused-local-holder': async (session) => {
+    if (session.host.localPause === undefined)
+      fail('本机持久暂停场景没有在载入之前安装 Worker 观察')
+    await pausedHolderScenario(session)
+  },
 } as const satisfies Readonly<Record<RequestScenario, (session: Session) => Promise<void>>>
 
 /** 这两个场景都要求页面在中途变成隐藏（不按"页面被隐藏，余下的检查不做"处理） */

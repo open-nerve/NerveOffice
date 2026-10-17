@@ -79,6 +79,35 @@ describe('真实 Safari 崩溃同源代理', () => {
     expect(forwarded).toEqual([])
   })
 
+  it('只有驱动确认重启后可再登录一次，公开请求不能续发入口', async () => {
+    const enter = async () => fetch(`${proxy.origin}${proxy.entryPath}`, { redirect: 'manual', headers: { referer: proxy.startUrl } })
+    proxy.arm()
+    expect((await enter()).status).toBe(302)
+    proxy.observeRecovery()
+    await post(proxy.commandPath, JSON.stringify({ kind: 'allow-recovery-entry' }))
+    expect((await enter()).status).toBe(403)
+    proxy.allowRecoveryEntry()
+    expect((await fetch(`${proxy.origin}${proxy.entryPath}`, { redirect: 'manual' })).status).toBe(403)
+    expect((await post(proxy.entryPath, '{}')).status).toBe(403)
+    const recovery = await enter()
+    expect(recovery.status).toBe(302)
+    expect(recovery.headers.get('location')).toBe('/selftest.html#user=test-user&password=test-only&document=test-document')
+    expect((await enter()).status).toBe(403)
+    expect(() => proxy.allowRecoveryEntry()).toThrow()
+    expect(forwarded).toEqual([])
+  })
+
+  it('不能在初次登录和恢复观察开始前续发入口，也不能堆积许可', async () => {
+    expect(() => proxy.allowRecoveryEntry()).toThrow()
+    proxy.arm()
+    expect(() => proxy.allowRecoveryEntry()).toThrow()
+    expect((await fetch(`${proxy.origin}${proxy.entryPath}`, { redirect: 'manual', headers: { referer: proxy.startUrl } })).status).toBe(302)
+    expect(() => proxy.allowRecoveryEntry()).toThrow()
+    proxy.observeRecovery()
+    proxy.allowRecoveryEntry()
+    expect(() => proxy.allowRecoveryEntry()).toThrow()
+  })
+
   it.each([
     { name: '异源', body: '{}', origin: 'http://localhost:1234', type: 'application/json', status: 403 },
     { name: '错误媒体类型', body: '{}', origin: undefined, type: 'text/plain', status: 415 },

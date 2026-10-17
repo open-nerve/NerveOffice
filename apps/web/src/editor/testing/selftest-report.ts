@@ -86,7 +86,7 @@ export type HandoverScenario = (typeof HANDOVER_SCENARIOS)[number]
  *   第三格另存为副本（lost-after-pause）；没被暂停时空闲满 2 分钟先保存再自动交出（handed-over）。真实 Safari 走哪一条正是要复核的
  *   （探索 B 的空白页约 50 秒就被暂停；2026-10-08 本机 Safari 27.0 上编辑器页没有被暂停）
  */
-export const REQUEST_SCENARIOS = ['request-waiter', 'paused-holder'] as const
+export const REQUEST_SCENARIOS = ['request-waiter', 'request-waiter-expired', 'request-waiter-cancelled', 'paused-holder', 'paused-local-holder'] as const
 
 export type RequestScenario = (typeof REQUEST_SCENARIOS)[number]
 
@@ -122,7 +122,7 @@ export function isProbeScenario(value: string): value is ProbeScenario {
  */
 export const QUOTA_PROBE_MAX_BYTES = 64 * 1024 * 1024
 
-export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS, ...PROBE_SCENARIOS] as const
+export const SELFTEST_SCENARIOS = ['read-only', 'read-only-formulas', 'edit-chrome', 'enter-exit', 'local-save-online', 'local-save-offline', ...CAPTURE_SCENARIOS, ...HANDOVER_SCENARIOS, ...REQUEST_SCENARIOS, ...PROBE_SCENARIOS] as const
 
 export type SelftestScenario = (typeof SELFTEST_SCENARIOS)[number]
 

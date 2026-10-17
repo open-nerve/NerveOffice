@@ -231,9 +231,16 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
     const documentId = await createDocumentIn(space.id, lead, '共同的表', { folderId })
     await loginThroughApi(page, first)
     await openAndEnterEditing(page, documentId)
+    const localKey = { userId: first.id, documentId }
+    const secret = await currentLocalKey(page)
     // 甲断网、休眠（拦下心跳与保存）之后改了一处：这一处存不上
     const asleep = await disconnectTab(page)
     await typeInCell(page, 'A1', 'from first')
+    // M4-P6：生产冲突链路必须保住实际本机草稿，不能仅凭仍在内存中的正文通过。
+    await expect.poll(async () => {
+      const draft = (await readLocalDisk(page, localKey)).draft
+      return draft === null ? undefined : cellOf(JSON.parse(diskSnapshot(draft, secret)) as Workbook, 'A1')?.v
+    }).toBe('from first')
 
     // 甲的编辑权到期（改写租约行的时间，不等真实的 90 秒）；乙打开、点"编辑"接手，保存
     await expireEditLease(documentId)
@@ -268,6 +275,7 @@ test.describe('US-M3-11 过期的会话不能覆盖别人的保存：编辑权�
     const copyId = (await link.getAttribute('href') ?? '').split('/').at(-1) ?? ''
     const copy = await savedContent(page, copyId)
     expect([copy.revision, cellOf(copy.snapshot, 'A1')?.v, cellOf(copy.snapshot, 'B1')]).toEqual([1, 'from first', undefined])
+    await expect.poll(async () => (await readLocalDisk(page, localKey)).draft).toBeNull()
     const placed = await withDatabase(async client => (await client.query<{ space_id: string, folder_id: string | null, title: string }>('SELECT space_id, folder_id, title FROM documents WHERE id = $1', [copyId])).rows[0])
     expect([placed?.space_id, placed?.folder_id]).toEqual([space.id, folderId])
     const timeZone = testInfo.project.use.timezoneId ?? ''
