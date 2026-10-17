@@ -23,6 +23,7 @@ import { startOwnedVm } from '../support/owned-vm-process.ts'
 import { connectVmGuest } from '../support/vm-guest.ts'
 import { freezeVmJournal } from '../support/vm-journal-barrier.ts'
 import { createVmJournal } from '../support/vm-probe-server.ts'
+import { prepareVmProductBrowser } from '../support/vm-product-startup.ts'
 
 const CONTENT = 'Safari 页面崩溃前已持久保存的正文'
 const digest = (value: string): string => createHash('sha256').update(value).digest('hex')
@@ -132,6 +133,7 @@ async function main(): Promise<void> {
         } })
         evidence = { ...evidence, documentId, userId: owner.id, url: proxy.startUrl }
         stage = 'prepare'
+        evidence = { ...evidence, preparationBefore: await prepareVmProductBrowser({ kind: resource.kind, browser, run: guest.run }) }
         tunnel = await guest.forward(proxy.startUrl, join(directory, 'ssh-before.log'))
         proxy.arm()
         await guest.open(browser, proxy.startUrl)
@@ -165,6 +167,8 @@ async function main(): Promise<void> {
         assert(session.vmRestarted(proof, Date.now()), '原磁盘重启证明不符合产品会话')
         await journal.append({ kind: 'vm-restarted', proof, at: Date.now() })
         evidence = { ...evidence, after: boot }
+        stage = 'recovery-window-preparation'
+        evidence = { ...evidence, preparationAfter: await prepareVmProductBrowser({ kind: resource.kind, browser, run: guest.run }) }
         proxy.observeRecovery()
         proxy.allowRecoveryEntry()
         tunnel = await guest.forward(proxy.startUrl, join(directory, 'ssh-after.log'))
