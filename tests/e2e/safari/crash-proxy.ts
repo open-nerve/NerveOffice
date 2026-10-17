@@ -46,6 +46,7 @@ export async function startCrashProxy(options: { readonly runId: string, readonl
   let scenario: Scenario | undefined
   let armed = false
   let entryUsed = false
+  let recoveryEntryGranted = false
   let observing = false
   const acquires: { clientInstanceId: string, takeover: string | null, status: number }[] = []
   const saves: { status: number }[] = []
@@ -227,6 +228,13 @@ export async function startCrashProxy(options: { readonly runId: string, readonl
       if (observing)
         throw new Error('不能重复标记真实崩溃')
       observing = true
+    },
+    /** 仅宿主驱动在核对 VM 重启之后调用；网页没有对应控制命令。 */
+    allowRecoveryEntry(): void {
+      if (!armed || !entryUsed || !observing || recoveryEntryGranted)
+        throw new Error('恢复登录入口尚未满足前提或已续发')
+      recoveryEntryGranted = true
+      entryUsed = false
     },
     evidence: (): Pick<CrashServerEvidence, 'acquires' | 'saves'> & { problems: string[], clientAborts: number } => ({ acquires: acquires.map(item => ({ ...item })), saves: saves.map(item => ({ ...item })), problems: [...problems], clientAborts }),
     close: async (): Promise<void> => {

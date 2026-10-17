@@ -1,7 +1,10 @@
 // 真实 Safari 与 Playwright 校准共用的驱动状态机。只接收非敏感事实；不操作页面、系统进程或数据库。
 // 页面启动标识仅关联测试报告，不写入产品的原页身份、恢复记号或导航类型。
 import type { ReloadDiagnostics } from '../../../apps/web/src/editor/testing/selftest-reload-diagnostics.ts'
+import type { VmBoot } from './vm-durability.ts'
+import type { VmRebootProof } from './vm-reboot.ts'
 import { isReloadDiagnostics } from '../../../apps/web/src/editor/testing/selftest-reload-diagnostics.ts'
+import { isVmBoot, isVmRebootProof } from './vm-reboot.ts'
 
 interface Boot {
   readonly kind: 'boot'
@@ -27,12 +30,13 @@ export interface CrashReady extends Omit<Boot, 'kind'> {
   readonly contentHash: string
   readonly snapshotHash: string
   readonly workerWrites: number
+  readonly mirror?: { readonly draftSeq: number, readonly snapshotHash: string }
   readonly inFlight: false
   readonly visible: true
   readonly pageErrors: 0
 }
 
-export interface CrashAwaitingConfirmation extends Omit<CrashReady, 'kind' | 'workerWrites'> {
+export interface CrashAwaitingConfirmation extends Omit<CrashReady, 'kind' | 'workerWrites' | 'mirror'> {
   readonly kind: 'awaiting-confirmation'
   readonly mode: 'reading'
   readonly entry: 'restore' | 'takeover-self'
@@ -63,7 +67,8 @@ export interface CrashServerEvidence {
 }
 
 interface CrashOptions {
-  readonly mode: 'process-kill' | 'reload-calibration'
+  readonly mode: 'process-kill' | 'reload-calibration' | 'vm-power-cut'
+  readonly beforeVm?: VmBoot
   readonly runId: string
   readonly documentId: string
   readonly userId: string
@@ -72,7 +77,7 @@ interface CrashOptions {
 }
 
 type Phase = 'waiting' | 'preparing' | 'ready' | 'signaled' | 'observing' | 'awaiting-confirmation' | 'authorized' | 'recovering' | 'restored' | 'passed' | 'failed'
-interface Command { readonly kind: 'prepare' | 'observe' | 'confirm' | 'wait' | 'stop' }
+interface Command { readonly kind: 'prepare' | 'observe' | 'confirm' | 'wait' | 'stop', readonly mirrorRequired?: true }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const HASH = /^[0-9a-f]{64}$/
 const BOOT_KEYS = ['kind', 'runId', 'documentId', 'bootId']
@@ -97,11 +102,14 @@ function positiveInteger(value: unknown): value is number {
 }
 
 function isReady(value: Record<string, unknown>, options: CrashOptions): value is Record<string, unknown> & CrashReady {
-  return exactKeys(value, READY_KEYS) && value.kind === 'ready'
+  const vm = options.mode === 'vm-power-cut'
+  const mirror = value.mirror
+  return exactKeys(value, vm ? [...READY_KEYS, 'mirror'] : READY_KEYS) && value.kind === 'ready'
     && value.userId === options.userId && uuid(value.clientInstanceId) && uuid(value.writerId)
     && positiveInteger(value.draftSeq) && value.baseRevision === 1 && positiveInteger(value.workerWrites)
     && value.contentHash === options.contentHash && typeof value.snapshotHash === 'string' && HASH.test(value.snapshotHash)
     && value.inFlight === false && value.visible === true && value.pageErrors === 0
+    && (!vm || (object(mirror) && exactKeys(mirror, ['draftSeq', 'snapshotHash']) && mirror.draftSeq === value.draftSeq && mirror.snapshotHash === value.snapshotHash))
 }
 
 function isRestored(value: Record<string, unknown>, options: CrashOptions): value is Record<string, unknown> & CrashRestored {
@@ -121,9 +129,13 @@ function noTraffic(traffic: CrashTraffic | undefined): boolean {
 }
 
 export function createCrashSession(options: CrashOptions) {
-  if (!['process-kill', 'reload-calibration'].includes(options.mode) || ![options.runId, options.documentId, options.userId].every(uuid) || !HASH.test(options.contentHash) || !positiveInteger(options.deadline))
+  if (!['process-kill', 'reload-calibration', 'vm-power-cut'].includes(options.mode) || ![options.runId, options.documentId, options.userId].every(uuid) || !HASH.test(options.contentHash) || !positiveInteger(options.deadline)
+    || (options.mode === 'vm-power-cut' && !isVmBoot(options.beforeVm))) {
     throw new Error('崩溃会话的测试身份、正文指纹或时限无效')
-  const config = { ...options }
+  }
+  const config = structuredClone(options)
+  const prepare: Command = config.mode === 'vm-power-cut' ? { kind: 'prepare', mirrorRequired: true } : { kind: 'prepare' }
+  let vmReboot: VmRebootProof | undefined
   let phase: Phase = 'waiting'
   let firstBoot: string | undefined
   let nextBoot: string | undefined
@@ -179,10 +191,10 @@ export function createCrashSession(options: CrashOptions) {
         if (phase === 'waiting') {
           firstBoot = message.bootId
           phase = 'preparing'
-          return { kind: 'prepare' }
+          return { ...prepare }
         }
         if (phase === 'preparing' && message.bootId === firstBoot)
-          return { kind: 'prepare' }
+          return { ...prepare }
         if (phase === 'ready' && message.bootId === firstBoot)
           return { kind: 'wait' }
         if (phase === 'signaled' && message.bootId !== firstBoot) {
@@ -199,7 +211,7 @@ export function createCrashSession(options: CrashOptions) {
           return { kind: 'wait' }
         if (phase !== 'preparing')
           return fail('持久就绪报告到达时序不符')
-        ready = Object.freeze({ ...message })
+        ready = Object.freeze(structuredClone(message))
         phase = 'ready'
         return { kind: 'wait' }
       }
@@ -252,6 +264,18 @@ export function createCrashSession(options: CrashOptions) {
       phase = 'signaled'
       return true
     },
+    /** 只由宿主在确认 VM 突停、同磁盘重新开机后调用；页面不能提供这个证明。 */
+    vmRestarted(proof: unknown, now: number): boolean {
+      if (!live(now) || phase !== 'ready')
+        return false
+      if (config.mode !== 'vm-power-cut' || config.beforeVm === undefined || !isVmRebootProof(proof, config.beforeVm)) {
+        fail('缺少同一 VM 原磁盘突停后重新启动的完整证明')
+        return false
+      }
+      vmReboot = structuredClone(proof)
+      phase = 'signaled'
+      return true
+    },
     /** 只有驱动能许可；页面控制通道不能调用。云端与全部已发请求均来自独立观察。 */
     authorizeConfirmation(server: CrashServerEvidence, now: number): boolean {
       if (!live(now))
@@ -291,6 +315,6 @@ export function createCrashSession(options: CrashOptions) {
       phase = problems.length === 0 ? 'passed' : 'failed'
       return [...problems]
     },
-    snapshot: () => ({ mode: config.mode, recovery: 'explicit-confirmation' as const, phase, ready, awaiting, restored, confirmation: structuredClone(confirmation), diagnostics: structuredClone(diagnostics), problems: [...problems] }),
+    snapshot: () => ({ mode: config.mode, recovery: 'explicit-confirmation' as const, phase, ready: structuredClone(ready), awaiting, restored, vmReboot: structuredClone(vmReboot), confirmation: structuredClone(confirmation), diagnostics: structuredClone(diagnostics), problems: [...problems] }),
   }
 }

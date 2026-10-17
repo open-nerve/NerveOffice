@@ -4,6 +4,7 @@ import type { StoredDraft } from '../../shared/outbox/draft-record.ts'
 import type { SelftestPageView } from './selftest-session.ts'
 import { AUTOSAVE_HOLD_STORAGE_KEY } from './autosave-control.ts'
 import { autosaveControl } from './selftest-autosave.ts'
+import { createCrashWriteEvidence } from './selftest-crash-writes.ts'
 import { byRole, isVisible, waitFor } from './selftest-dom.ts'
 import { readSelftestDraft } from './selftest-local-draft.ts'
 import { withTimeout } from './selftest-session.ts'
@@ -71,33 +72,31 @@ async function persistedText(draft: StoredDraft, csrfToken: string): Promise<str
 }
 
 /** 只观察生产 Worker 成功回包。调用参数、密钥与保存正文都不进入观测结果。 */
-function observeWrites(): () => number {
-  let written = 0
+function observeWrites(): ReturnType<typeof createCrashWriteEvidence> {
+  const evidence = createCrashWriteEvidence()
   const NativeWorker = window.Worker
   window.Worker = class extends NativeWorker {
-    readonly calls = new Set<number>()
     readonly outbox: boolean
 
     constructor(url: string | URL, options?: WorkerOptions) {
       super(url, options)
       this.outbox = options?.name === 'nerve-outbox'
-      this.addEventListener('message', (event: MessageEvent<{ id: number, ok: boolean, result?: { kind?: string } }>) => {
-        if (this.calls.delete(event.data.id) && event.data.ok && event.data.result?.kind === 'written')
-          written += 1
+      this.addEventListener('message', (event: MessageEvent<unknown>) => {
+        if (this.outbox)
+          evidence.received(this, event.data)
       })
     }
 
     override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions): void {
-      const call = message as { id?: number, type?: string }
-      if (this.outbox && call.type === 'write' && typeof call.id === 'number')
-        this.calls.add(call.id)
+      if (this.outbox)
+        evidence.sent(this, message)
       if (Array.isArray(options))
         super.postMessage(message, options)
       else
         super.postMessage(message, options)
     }
   }
-  return () => written
+  return evidence
 }
 
 function recoveryEntry(chrome: HTMLElement): { readonly kind: 'restore' | 'takeover-self', readonly button: HTMLElement } | undefined {
@@ -122,11 +121,11 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
     throw new Error('崩溃自检没有合法的同源控制入口')
   const bootId = crypto.randomUUID()
   const common = { runId: control.runId, documentId: host.documentId, bootId }
-  const post = async (kind: string, facts: Record<string, unknown> = {}): Promise<{ kind: string }> => {
+  const post = async (kind: string, facts: Record<string, unknown> = {}): Promise<{ kind: string, mirrorRequired?: boolean }> => {
     const response = await fetch(control.endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind, ...common, ...facts }), signal: AbortSignal.timeout(10_000) })
     if (!response.ok)
       throw new Error(`崩溃控制通道失败：${response.status}`)
-    return response.json() as Promise<{ kind: string }>
+    return response.json() as Promise<{ kind: string, mirrorRequired?: boolean }>
   }
   const command = await post('boot')
   if (command.kind !== 'prepare' && command.kind !== 'observe')
@@ -174,7 +173,7 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
       await until(() => host.view().mode === 'editing' && host.view().surface === 'steady')
       const api = window.__nerveEditorProbe?.univerAPI as unknown as { getActiveWorkbook: () => { getActiveSheet: () => { getRange: (cell: string) => { setValue: (value: string) => unknown } } } }
       api.getActiveWorkbook().getActiveSheet().getRange('A1').setValue(CRASH_SELFTEST_TEXT)
-      await until(() => writes() > 0)
+      await until(() => writes.count() > 0)
       const draft = await readSelftestDraft(session.user.id, host.documentId)
       if (draft === undefined)
         throw new Error('成功回包之后没有磁盘正文')
@@ -182,8 +181,12 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
       const value = crashCellValue(text)
       if (value !== CRASH_SELFTEST_TEXT)
         throw new Error('独立解密读到的正文不符')
+      const snapshotHash = await sha256(text)
+      const mirror = writes.mirrorFor(draft, snapshotHash)
+      if (command.mirrorRequired === true && mirror === undefined)
+        throw new Error('生产 Worker 没有证明这份磁盘草稿的 OPFS 镜像已写成')
       await diagnostic('ready')
-      await post('ready', { userId: session.user.id, clientInstanceId: draft.writtenBy, writerId: draft.writerId, draftSeq: draft.draftSeq, baseRevision: draft.baseRevision, contentHash: await sha256(value), snapshotHash: await sha256(text), workerWrites: writes(), inFlight: draft.inFlight !== null, visible: document.visibilityState === 'visible', pageErrors: host.pageErrors().length })
+      await post('ready', { userId: session.user.id, clientInstanceId: draft.writtenBy, writerId: draft.writerId, draftSeq: draft.draftSeq, baseRevision: draft.baseRevision, contentHash: await sha256(value), snapshotHash, workerWrites: writes.count(), inFlight: draft.inFlight !== null, visible: document.visibilityState === 'visible', pageErrors: host.pageErrors().length, ...(command.mirrorRequired === true ? { mirror } : {}) })
     }
     else {
       if (host.view().mode !== 'reading')
