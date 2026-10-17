@@ -313,13 +313,15 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     })
   }
 
-  test('失效后副本继承真实来源；副本回包丢失原样重试，成功不删除原文档的草稿', async ({ page }) => {
+  test('失效后副本继承真实来源；副本回包丢失原样重试，确认成功才条件清理原草稿', async ({ page }) => {
     const owner = await createUser('local-first-copy')
     const space = await createTeamSpace('副本来源', owner, [[owner, 'admin']])
     const documentId = await createDocumentIn(space.id, owner, '失效来源')
     const key = { userId: owner.id, documentId }
     await loginThroughApi(page, owner)
     await openAndEnterEditing(page, documentId)
+    const original = await savedContent(page, documentId)
+    const secret = await currentLocalKey(page)
     await setCellValue(page, 'A1', '副本中的本页内容')
     await archiveSpace(space.id)
     await saveButton(page).click()
@@ -327,6 +329,7 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     await waitForEditorAccess(page, 'read')
     const retained = (await readLocalDisk(page, key)).draft!
     expect(retained).not.toBeNull()
+    expect(valueAt(diskSnapshot(retained, secret))).toBe('副本中的本页内容')
     const copies: Request[] = []
     let firstStatus: number | undefined
     await page.route(`**/api/documents/${documentId}/conflict-copies?*`, async (route) => {
@@ -343,6 +346,8 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     await button.click()
     await expect(lostNotice(page)).toContainText('没能另存为副本')
     expect(firstStatus).toBe(201)
+    // 服务端已创建副本，但本页没有收到确认，不能提前清理原草稿。
+    expect((await readLocalDisk(page, key)).draft).toEqual(retained)
     await button.click()
     await waitForLostToReading(page)
     const notice = page.locator('#editor-chrome').getByRole('status').filter({ hasText: '已另存为副本' })
@@ -354,6 +359,9 @@ test.describe('US-M4-01 本地优先的真实页面链路', { tag: '@test-build'
     const copyId = (await notice.getByRole('link').getAttribute('href'))!.split('/').at(-1)!
     expect(cellOf((await savedContent(page, copyId)).snapshot, 'A1')?.v).toBe('副本中的本页内容')
     expect(await revisionOf(documentId)).toBe(1)
-    expect((await readLocalDisk(page, key)).draft).toEqual(retained)
+    expect((await savedContent(page, documentId)).snapshot).toEqual(original.snapshot)
+    // P6-S5 接入独立条件清理：同一来源且没有后来 writer/正文时才删除；
+    // 副本修订仍不能作为原文档的保存确认，以上原文档与请求断言保持。
+    await expect.poll(async () => (await readLocalDisk(page, key)).draft).toBeNull()
   })
 })

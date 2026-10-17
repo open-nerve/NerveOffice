@@ -69,7 +69,6 @@ export async function startOwnedVm(resource: VmResource, options: { readonly hel
     env: { ...process.env, ...config.environment },
     stdio: ['ignore', fd, fd],
   })
-  closeSync(fd)
   function native(mode: string, target?: VmNativeIdentity): unknown {
     const observedAt = Date.now()
     return JSON.parse(execFileSync(helper, target ? [mode] : ['read', String(child.pid)], {
@@ -91,27 +90,6 @@ export async function startOwnedVm(resource: VmResource, options: { readonly hel
   // spawn 失败的拒绝由启动者处理，后台退出 Promise 不产生未处理拒绝。
   void exit.catch(() => {})
   child.once('error', error => rejectExit(error))
-  await once(child, 'spawn')
-  const identity = native('read') as VmNativeIdentity
-  if (identity.pid !== child.pid || identity.ppid !== process.pid || identity.uid !== process.getuid?.()
-    || identity.executable !== executable || !/^\d+$/.test(identity.startedAtUs)) {
-    throw new Error('本次 VM 子进程内核身份不匹配')
-  }
-  const command = execFileSync('/bin/ps', ['-ww', '-p', String(identity.pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 }).trim()
-  const ownerPath = join(directory, `owned-${randomUUID()}.json`)
-  writeFileSync(ownerPath, `${JSON.stringify({ config, identity, disk, command })}\n`, { flag: 'wx', mode: 0o600 })
-  const ownerSha256 = sha256(readFileSync(ownerPath))
-  let boot: VmBoot | undefined
-  let guard: ReturnType<typeof createVmKillGuard> | undefined
-  function capture() {
-    return {
-      running: settled === undefined && child.exitCode === null && child.signalCode === null,
-      identity: native('read') as VmNativeIdentity,
-      disk: diskIdentity(config.disk),
-      command: execFileSync('/bin/ps', ['-ww', '-p', String(identity.pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 }).trim(),
-      ownerSha256: sha256(readFileSync(ownerPath)),
-    }
-  }
   async function waitForExit(timeout = 10000): Promise<Exit> {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -121,6 +99,52 @@ export async function startOwnedVm(resource: VmResource, options: { readonly hel
     }
     finally {
       clearTimeout(timer)
+    }
+  }
+  let identity: VmNativeIdentity
+  let command: string
+  let ownerPath: string
+  let ownerSha256: string
+  try {
+    closeSync(fd)
+    await once(child, 'spawn')
+    identity = native('read') as VmNativeIdentity
+    if (identity.pid !== child.pid || identity.ppid !== process.pid || identity.uid !== process.getuid?.()
+      || identity.executable !== executable || !/^\d+$/.test(identity.startedAtUs)) {
+      throw new Error('本次 VM 子进程内核身份不匹配')
+    }
+    command = execFileSync('/bin/ps', ['-ww', '-p', String(identity.pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 }).trim()
+    ownerPath = join(directory, `owned-${randomUUID()}.json`)
+    writeFileSync(ownerPath, `${JSON.stringify({ config, identity, disk, command })}\n`, { flag: 'wx', mode: 0o600 })
+    ownerSha256 = sha256(readFileSync(ownerPath))
+  }
+  catch (error) {
+    try {
+      // 启动资格检查和这里的发送之间没有 await：只用尚未观察到退出的本次
+      // ChildProcess 句柄，不采用失败 helper 回报的 PID，也不复用外部进程号。
+      // 正常清理不是实验 SIGKILL；即使失败也不追加强杀或生成突停证明。
+      if (child.pid !== undefined && settled === undefined && child.exitCode === null && child.signalCode === null) {
+        if (!child.kill('SIGINT'))
+          throw new Error('本次 VM 子进程没有接受启动清理信号')
+        await waitForExit(30000)
+      }
+    }
+    catch (cleanupError) {
+      const failures = [error, cleanupError]
+      const details = failures.map(failure => failure instanceof Error ? failure.message : String(failure))
+      throw new AggregateError(failures, `VM 启动失败且未证实清理完成：${details.join('；')}；保留资源身份 ${JSON.stringify({ resourceId: config.resourceId, pid: child.pid, executable, directory })}`)
+    }
+    throw error
+  }
+  let boot: VmBoot | undefined
+  let guard: ReturnType<typeof createVmKillGuard> | undefined
+  function capture() {
+    return {
+      running: settled === undefined && child.exitCode === null && child.signalCode === null,
+      identity: native('read') as VmNativeIdentity,
+      disk: diskIdentity(config.disk),
+      command: execFileSync('/bin/ps', ['-ww', '-p', String(identity.pid), '-o', 'command='], { encoding: 'utf8', timeout: 5000 }).trim(),
+      ownerSha256: sha256(readFileSync(ownerPath)),
     }
   }
   return {
