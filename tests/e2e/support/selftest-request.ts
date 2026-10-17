@@ -199,6 +199,8 @@ export interface RequestStage {
   readonly open: () => Promise<void>
   /** 路 1：让请求方的那一页隐藏（Safari：另开遮住它的标签页；Playwright：模拟可见性）。路 2：盖屏（Safari：osascript 的窗口；Playwright：模拟隐藏、拦住心跳与交出） */
   readonly hide: () => Promise<void>
+  /** 新持久暂停变体：第二次保存确认之后，由调用方核对草稿并取得实际暂停证据；旧场景仍观察自然心跳。 */
+  readonly pause?: () => Promise<void>
   /** 让它回到前台（Safari：遮住它的标签页关掉自己、移走盖屏；Playwright：模拟可见性、放开心跳与交出） */
   readonly show: () => Promise<void>
   /** 等它交回结果（到 deadline），交回解开的结果；交不回时 undefined */
@@ -440,14 +442,23 @@ export async function runPausedHolder(options: PausedHolderOptions): Promise<Req
           marks.hiddenSavedAt = second
         // 先看持有者会不会被暂停：库里它那一代的续租停下 HEARTBEAT_QUIET_MS 就是被暂停了，这时再请求（请求带不到它，空闲满 2 分钟的自动交出走不到）；
         // 等满 suspendWaitMs 还在续租就是没被暂停，照样请求（它已空闲满 2 分钟，心跳带来请求的同一步就交出）
-        const suspendWaitMs = options.suspendWaitMs ?? SUSPEND_WAIT_MS
-        say(`路 2：盖屏了，等持有者的心跳停下（最多 ${suspendWaitMs / 1000} 秒），之后协作者请求编辑`)
-        const quiet = await untilHeartbeatsQuiet(watch, Math.min(deadline, marks.coveredAt + suspendWaitMs), voided)
-        marks.lastRenewalSeenAt = quiet.lastChangeSeenAt
-        if (quiet.quiet)
-          marks.quietAt = Date.now()
-        else if (voided() === undefined)
-          notes.push(`盖屏之后 ${suspendWaitMs / 1000} 秒持有者一直在续租（没有被暂停），照样请求编辑`)
+        if (stage.pause !== undefined) {
+          if (second === undefined)
+            throw new Error('隐藏保存尚未确认，不能进入持久暂停')
+          await stage.pause()
+          marks.pausedAt = Date.now()
+          say('路 2：调用方已确认本次暂停证据，协作者开始请求编辑')
+        }
+        else {
+          const suspendWaitMs = options.suspendWaitMs ?? SUSPEND_WAIT_MS
+          say(`路 2：盖屏了，等持有者的心跳停下（最多 ${suspendWaitMs / 1000} 秒），之后协作者请求编辑`)
+          const quiet = await untilHeartbeatsQuiet(watch, Math.min(deadline, marks.coveredAt + suspendWaitMs), voided)
+          marks.lastRenewalSeenAt = quiet.lastChangeSeenAt
+          if (quiet.quiet)
+            marks.quietAt = Date.now()
+          else if (voided() === undefined)
+            notes.push(`盖屏之后 ${suspendWaitMs / 1000} 秒持有者一直在续租（没有被暂停），照样请求编辑`)
+        }
         if (voided() === undefined) {
           token = await requestUntilGranted(peer, documentId, deadline, voided, marks, notes, say)
           beating = token === undefined ? undefined : keepBeating(peer, documentId, token)

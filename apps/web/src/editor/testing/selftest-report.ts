@@ -86,7 +86,7 @@ export type HandoverScenario = (typeof HANDOVER_SCENARIOS)[number]
  *   第三格另存为副本（lost-after-pause）；没被暂停时空闲满 2 分钟先保存再自动交出（handed-over）。真实 Safari 走哪一条正是要复核的
  *   （探索 B 的空白页约 50 秒就被暂停；2026-10-08 本机 Safari 27.0 上编辑器页没有被暂停）
  */
-export const REQUEST_SCENARIOS = ['request-waiter', 'paused-holder'] as const
+export const REQUEST_SCENARIOS = ['request-waiter', 'request-waiter-expired', 'request-waiter-cancelled', 'paused-holder', 'paused-local-holder'] as const
 
 export type RequestScenario = (typeof REQUEST_SCENARIOS)[number]
 

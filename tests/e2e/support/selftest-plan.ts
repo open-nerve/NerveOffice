@@ -105,6 +105,12 @@ export const SELFTEST_STEPS: readonly SelftestStepDefinition[] = [
   { id: 'paused-holder', scenario: 'paused-holder', role: 'author', sample: 'template' },
 ]
 
+/** P6-S3 的长等待独立选择；不增加默认 29 步的时长。 */
+export const S3_WAITER_STEPS: readonly SelftestStepDefinition[] = [
+  { id: 'request-waiter-expired', scenario: 'request-waiter-expired', role: 'author', sample: 'template' },
+  { id: 'request-waiter-cancelled', scenario: 'request-waiter-cancelled', role: 'author', sample: 'template' },
+]
+
 /** 跑一步自检要的：用谁登录、打开哪份文档、跑哪个场景（与公式模式）、怎样打开（入口页或者直接打开编辑器页） */
 export interface SelftestStep {
   /** 这一步的标识（结果交回时带着，按它对上） */
@@ -211,7 +217,10 @@ export const HANDOVER_PATHS: Readonly<Partial<Record<SelftestScenario, readonly 
   'takeover-taker': ['answered', 'silent'],
   'refresh-save': ['confirmed-reading'],
   'request-waiter': ['entered-on-return'],
+  'request-waiter-expired': ['entered-on-return'],
+  'request-waiter-cancelled': ['cancelled-after-idle'],
   'paused-holder': ['lost-after-pause', 'handed-over'],
+  'paused-local-holder': ['lost-after-pause'],
 }
 
 /**
@@ -392,11 +401,15 @@ function handoverExpectation(scenario: HandoverScenario, path: string | undefine
 function requestExpectation(scenario: RequestScenario, path: string | undefined): ServerExpectation | undefined {
   switch (scenario) {
     case 'request-waiter':
+    case 'request-waiter-expired':
       return path === 'entered-on-return' ? { revision: 2, why: '回到前台、进入编辑之后存上一格（另一方没有保存过）', cells: [REQUEST_WAITER_EDIT] } : undefined
+    case 'request-waiter-cancelled':
+      return path === 'cancelled-after-idle' ? { revision: 1, why: '后台空闲取消请求，始终没有申请编辑或保存', cells: [], absent: [REQUEST_WAITER_EDIT] } : undefined
     case 'paused-holder':
+    case 'paused-local-holder':
       if (path === 'lost-after-pause')
         return { revision: 3, why: '控制的 flush、盖屏（隐藏）的那一刻各上传一次，第三格没有存上', cells: PAUSED_HOLDER_EDITS.slice(0, 2), absent: PAUSED_HOLDER_EDITS.slice(2) }
-      if (path === 'handed-over')
+      if (scenario === 'paused-holder' && path === 'handed-over')
         return { revision: 4, why: '控制的 flush、盖屏（隐藏）的那一刻、自动交出之前各上传一次', cells: PAUSED_HOLDER_EDITS }
       return undefined
   }
@@ -431,7 +444,10 @@ function serverExpectation(scenario: SelftestScenario, path: string | undefined)
     case 'refresh-save':
       return handoverExpectation(scenario, path)
     case 'request-waiter':
+    case 'request-waiter-expired':
+    case 'request-waiter-cancelled':
     case 'paused-holder':
+    case 'paused-local-holder':
       return requestExpectation(scenario, path)
     case 'enter-exit':
       return { revision: 2, why: '退出编辑时保存了一次', cells: [ENTER_EXIT_EDIT] }

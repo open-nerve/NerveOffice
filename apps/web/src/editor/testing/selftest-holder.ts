@@ -43,6 +43,8 @@ export interface HolderPrelude {
   readonly notHidden: string
   /** 第三格写下之后等什么（例如"之后等 B 的'在此编辑'"） */
   readonly afterWrite: string
+  /** 自然 Space 场景等原生窗口过渡完成；不更改页面可见性或产品保存行为。 */
+  readonly beforeThird?: (() => Promise<void>) | undefined
 }
 
 /** 跑前半段：编辑时的准备与三项检查，都通过时交回 true（之后由场景接着等结果） */
@@ -94,6 +96,8 @@ export async function holderPrelude(session: Session, visibility: VisibilityWatc
   if (!uploaded)
     return false
   return check(session, `${prelude.prefix}.holder.after-hidden-edit`, async () => {
+    if (prelude.beforeThird !== undefined)
+      await prelude.beforeThird()
     // 隐藏之后再写一格：模拟切走之前最后一刻没被捕获的修改（真实的用户在隐藏的页面里不会键入）。捕获的静默与上限是一小时、定时的上传暂停
     sheet.getRange(third.cell).setValue(third.value)
     if (session.host.view().save !== 'dirty')

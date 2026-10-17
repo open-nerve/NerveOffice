@@ -55,6 +55,7 @@ import type { TestUser } from '../support/database.ts'
 import type { DocumentState, Judgement, ServerRequest } from '../support/selftest-handover.ts'
 import type { SelftestStep } from '../support/selftest-plan.ts'
 import type { RequestRun, RequestStage } from '../support/selftest-request.ts'
+import type { WaiterVariantRun } from '../support/selftest-waiter-variants.ts'
 import type { ActivityWatch, Cover, CoverOutcome } from './desktop.ts'
 import type { ChainLink, Received, StepOutcome } from './run-plan.ts'
 import { execFileSync, spawn } from 'node:child_process'
@@ -68,8 +69,9 @@ import { revisionOf } from '../support/database.ts'
 import { databaseUrl, e2eDatabaseName, pickFreePort } from '../support/environment.ts'
 import { probeVerdicts, verdictLines } from '../support/probe-verdicts.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../support/selftest-handover.ts'
-import { SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
+import { S3_WAITER_STEPS, SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
 import { runPausedHolder, runWaiter } from '../support/selftest-request.ts'
+import { runWaiterVariant, waiterVariantReceipt } from '../support/selftest-waiter-variants.ts'
 import { hidIdleSeconds, processAlive, screenLocked, startCover, waitForIdle, watchActivity } from './desktop.ts'
 import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outcomeOf, parseReportRequest, probeReportsOf, resultFileName, selectSteps, serverJudgedOutcome, SHADE_COMMAND_PATH, SHADE_PAGE, SHADE_PATH, timingLines, VOIDED_EXIT_CODE } from './run-plan.ts'
 
@@ -456,7 +458,7 @@ let activeCover: Cover | undefined
 /**
  * 编排 request-waiter（路 1，见文件头）：作者的页面另开；遮住它的标签页（SHADE_PATH）另开在它右边，叫它关掉时 Safari 回到作者的那一页
  */
-async function driveWaiter(collector: Collector, index: number, context: RequestContext, deadline: number): Promise<RequestRun> {
+async function driveWaiter(collector: Collector, index: number, context: RequestContext, deadline: number): Promise<RequestRun | WaiterVariantRun> {
   const link = collector.chain[index]
   if (link === undefined)
     throw new SetupError('没有 request-waiter 这一步')
@@ -476,7 +478,10 @@ async function driveWaiter(collector: Collector, index: number, context: Request
     voided: context.returned,
     say,
   }
-  return runWaiter({ origin: context.origin, documentId: link.step.documentId, holder: context.peer, waiter: context.author, stage, deadline })
+  const options = { origin: context.origin, documentId: link.step.documentId, holder: context.peer, waiter: context.author, stage, deadline }
+  return link.step.scenario === 'request-waiter-expired' || link.step.scenario === 'request-waiter-cancelled'
+    ? runWaiterVariant(options, link.step.scenario, { mode: 'native' })
+    : runWaiter(options)
 }
 
 /** 路 2 编排完的样子：另带盖屏怎样结束的、跑完之后 osascript 还在不在（应当不在） */
@@ -579,7 +584,7 @@ async function main(): Promise<number> {
   const runs = runsOfValue(values.runs)
   if (runs === null || runs === undefined)
     throw new SetupError(`--runs 要是 1 到 ${RUNS_MAX} 的整数：${values.runs}`)
-  const selection = selectSteps(SELFTEST_STEPS, values.steps)
+  const selection = selectSteps(values.steps === undefined ? SELFTEST_STEPS : [...SELFTEST_STEPS, ...S3_WAITER_STEPS], values.steps)
   if ('error' in selection)
     throw new SetupError(selection.error)
   if (!existsSync(SELFTEST_PAGE))
@@ -618,9 +623,22 @@ async function main(): Promise<number> {
     say(`用户已空闲 ${(hidIdleSeconds() ?? 0).toFixed(0)} 秒，开始（之后用户一回来这一次就作废）`)
     const watching = watchActivity()
     activity = watching
+    let desktopProblem: string | undefined
+    let desktopCheckedAt = 0
     const returned = (): string | undefined => {
+      // 长请求场景期间也检查锁屏与监测失效，问题一旦出现就保留，随后解锁不能把本轮变回有效。
+      if (Date.now() - desktopCheckedAt >= 1000) {
+        desktopCheckedAt = Date.now()
+        try {
+          if (screenLocked())
+            desktopProblem ??= '运行期间屏幕锁定或离开控制台'
+          if (hidIdleSeconds() === undefined)
+            desktopProblem ??= '运行期间无法读取桌面活动'
+        }
+        catch { desktopProblem ??= '运行期间桌面状态监测失败' }
+      }
       const at = watching.returnedAt()
-      return at === undefined ? undefined : `用户在 ${new Date(at).toISOString()} 回来了（键盘、鼠标有了操作）`
+      return desktopProblem ?? (at === undefined ? undefined : `用户在 ${new Date(at).toISOString()} 回来了（键盘、鼠标有了操作）`)
     }
     // 由上一步带过去的第一步（只选了交接的几步时没有：它们由下面的编排各自另开）
     const first = collector.chain.find(link => !link.opened)
@@ -651,7 +669,12 @@ async function main(): Promise<number> {
     // 请求编辑的两条路（M3-P6）：路 1 先、路 2（盖屏）最后；用户已经回来了就不再盖屏
     const context: RequestContext = { origin, author: scene.author, peer: scene.peer, returned }
     const waiterIndex = steps.findIndex(step => step.scenario === 'request-waiter')
-    const waiter = waiterIndex >= 0 ? await driveWaiter(collector, waiterIndex, context, deadline) : undefined
+    const waiters = new Map<number, RequestRun | WaiterVariantRun>()
+    for (const [index, step] of steps.entries()) {
+      if (['request-waiter', 'request-waiter-expired', 'request-waiter-cancelled'].includes(step.scenario) && returned() === undefined)
+        waiters.set(index, await driveWaiter(collector, index, context, deadline))
+    }
+    const waiter = waiters.get(waiterIndex)
     const pausedIndex = steps.findIndex(step => step.scenario === 'paused-holder')
     if (pausedIndex >= 0 && returned() !== undefined)
       say(`没有跑 paused-holder（不盖屏）：${returned() ?? ''}`)
@@ -666,7 +689,7 @@ async function main(): Promise<number> {
     }
     const stored = await checkServer(steps, pathOf)
     const storedOf = (step: SelftestStep): string[] => stored.problems.filter(problem => problem.startsWith(`${step.id}：`))
-    const requestRuns = new Map<number, RequestRun>([...(waiter === undefined ? [] : [[waiterIndex, waiter] as const]), ...(paused === undefined ? [] : [[pausedIndex, paused] as const])])
+    const requestRuns = new Map<number, RequestRun>([...waiters, ...(paused === undefined ? [] : [[pausedIndex, paused] as const])])
     const outcomes = steps.map((step, index) => {
       if (index === hiddenIndex)
         return serverJudgedOutcome(step, received.get(index), storedOf(step), evidence ?? '')
@@ -681,7 +704,7 @@ async function main(): Promise<number> {
       return outcomeOf(step, received.get(index))
     })
     // 作废：用户回来了（任何一步跑的时候）、在盖屏的窗口上按了 Esc 或点了它、盖屏到了时限；跑完之后盖屏的 osascript 还在也说出来
-    const voided = returned() ?? waiter?.voided ?? paused?.voided
+    const voided = returned() ?? [...waiters.values()].find(run => run.voided !== undefined)?.voided ?? paused?.voided
     if (paused?.coverLeft === true)
       stored.problems.push('盖屏的 osascript 跑完之后还在')
     const exitCode = voided === undefined ? exitCodeOf(outcomes, stored.problems) : VOIDED_EXIT_CODE
@@ -690,7 +713,7 @@ async function main(): Promise<number> {
     const verdicts = probeReports.length === 0 ? undefined : probeVerdicts(probeReports)
     mkdirSync(RESULTS_DIR, { recursive: true })
     const file = `${RESULTS_DIR}${resultFileName(startedAt)}`
-    const requestSummary = (run: RequestRun | undefined): unknown => run === undefined ? undefined : { states: run.states, requests: run.requests, calls: run.calls, marks: run.marks, notes: run.notes, voided: run.voided }
+    const requestSummary = (run: RequestRun | undefined): unknown => run === undefined ? undefined : { states: run.states, requests: run.requests, calls: run.calls.map(({ body: _body, ...call }) => call), marks: run.marks, notes: run.notes, voided: run.voided }
     writeFileSync(file, `${JSON.stringify({
       tool: 'tests/e2e/safari/selftest.ts',
       startedAt: startedAt.toISOString(),
@@ -710,6 +733,7 @@ async function main(): Promise<number> {
       // 请求编辑的两条路（M3-P6）：库里的时间线、后端日志里这份文档的请求、协作者的调用、各步的时刻；路 2 另有盖屏怎样结束的
       request: {
         waiter: requestSummary(waiter),
+        variants: Object.fromEntries([...waiters].flatMap(([index, run]) => 'boundaries' in run ? [[steps[index]!.id, waiterVariantReceipt(run)]] : [])),
         paused: paused === undefined ? undefined : { ...requestSummary(paused) as object, cover: paused.cover, coverLeft: paused.coverLeft },
       },
       // M4-P1 S1 的复核：运行次数与逐项的判定（support/probe-verdicts.ts）；原始的事实与计时在 steps 各步的 report 里

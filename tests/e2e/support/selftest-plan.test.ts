@@ -8,7 +8,7 @@ import { BIG_SHEET } from '../../../apps/web/src/editor/testing/capture-samples.
 import { CAPTURE_SCENARIOS, COMPOSITION_NOTE, ENTER_EXIT_EDIT, HANDOVER_SCENARIOS, HIDDEN_SAVE_EDITS, PAUSED_HOLDER_EDITS, REFRESH_SAVE_EDIT, REQUEST_SCENARIOS, REQUEST_WAITER_EDIT, SELFTEST_REPORT_FORMAT, SELFTEST_SCENARIOS, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { bigSheetFor, formulaSampleFor } from './capture-samples.ts'
 import { SAMPLE_FORMULAS } from './read-only-sample.ts'
-import { problemsOf, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, stepsOf, storedProblems } from './selftest-plan.ts'
+import { problemsOf, S3_WAITER_STEPS, SELFTEST_PAGE, SELFTEST_STEPS, selftestPageUrl, stepsOf, storedProblems } from './selftest-plan.ts'
 
 function user(username: string): TestUser {
   return { id: `${username}-id`, username, displayName: username, password: `${username} 的密码 &=#`, personalSpaceId: 'space' }
@@ -70,7 +70,7 @@ describe('页面自检的步骤', () => {
       ['request-waiter', 'request-waiter', 'author', '—'],
       ['paused-holder', 'paused-holder', 'author', '—'],
     ])
-    expect(REQUEST_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author' && definition.sharesDocumentOf === undefined))).toBe(true)
+    expect(REQUEST_SCENARIOS.filter(scenario => scenario !== 'paused-local-holder').every(scenario => [...SELFTEST_STEPS, ...S3_WAITER_STEPS].some(definition => definition.scenario === scenario && definition.role === 'author' && definition.sharesDocumentOf === undefined))).toBe(true)
   })
 
   it('每一步自己一份文档（有的步骤会保存），只有另开的 B 与它的 A 共用（A 正在编辑的那一份）；每个场景至少一步，公式时序两种模式各一步', () => {
@@ -81,8 +81,8 @@ describe('页面自检的步骤', () => {
     expect(new Set(STEPS.map(step => step.documentId)).size).toBe(STEPS.length - 2)
     expect(STEPS.filter(step => step.sharesDocumentOf === undefined).every(step => step.opens === 'entry')).toBe(true)
     expect(new Set(STEPS.map(step => step.id)).size).toBe(STEPS.length)
-    // 写满（storage-quota）不在步骤里：只在 Playwright 的 Chromium 系经 CDP 覆盖配额时做（真实 Safari 没有覆盖配额的接口）
-    expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual(SELFTEST_SCENARIOS.filter(scenario => scenario !== 'storage-quota').sort())
+    // 写满、原生暂停及 S3 长等待分别选择，不混进默认 29 步。
+    expect([...new Set(STEPS.map(step => step.scenario))].sort()).toEqual(SELFTEST_SCENARIOS.filter(scenario => !['storage-quota', 'paused-local-holder', ...S3_WAITER_STEPS.map(step => step.scenario)].includes(scenario)).sort())
     expect(CAPTURE_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
     expect(HANDOVER_SCENARIOS.every(scenario => SELFTEST_STEPS.some(definition => definition.scenario === scenario && definition.role === 'author'))).toBe(true)
     expect(() => stepsOf(SELFTEST_STEPS, PEOPLE, ['one'])).toThrow('步却有 1 份文档')
@@ -176,6 +176,8 @@ describe('页面自检的结果有什么问题', () => {
     expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'lost-after-pause' }))).toEqual([])
     expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'handed-over' }))).toEqual([])
     expect(problemsOf(report({ ...base, scenario: 'paused-holder', path: 'lost-while-hidden' }))).toEqual(['交回的路是 lost-while-hidden（应当是 lost-after-pause、handed-over 之一）'])
+    expect(problemsOf(report({ ...base, scenario: 'paused-local-holder', path: 'lost-after-pause' }))).toEqual([])
+    expect(problemsOf(report({ ...base, scenario: 'paused-local-holder', path: 'handed-over' }))).toHaveLength(1)
   })
 
   it('进入、退出编辑的场景另核对交回了两次切换的耗时（到 ready 与 steady 都有）', () => {
@@ -296,6 +298,27 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
       `服务器上 ${third.cell} 是 空（应当是 ${JSON.stringify(third.value)}）`,
     ])
     expect(storedProblems(step('paused-holder'), stored({ revision: 4, revisions: 4 }), 'not-lost')).toHaveLength(1)
+  })
+
+  it('持久草稿暂停只接受原文档两格且修订号 3，第三格已上传或走到自动交出均失败', () => {
+    const local = { scenario: 'paused-local-holder', documentId: 'local-doc' } as const
+    const two = stored({ revision: 3, revisions: 3, snapshot: templateWith(PAUSED_HOLDER_EDITS.slice(0, 2)) })
+    expect(storedProblems(local, two, 'lost-after-pause')).toEqual([])
+    expect(storedProblems(local, stored({ revision: 4, revisions: 4, snapshot: templateWith(PAUSED_HOLDER_EDITS) }), 'lost-after-pause')).toHaveLength(2)
+    expect(storedProblems(local, two, 'handed-over')).toHaveLength(1)
+  })
+
+  it('S3 长等待分开选择；过期返回要保存一格，空闲取消必须零保存', () => {
+    expect(S3_WAITER_STEPS.map(step => step.scenario)).toEqual(['request-waiter-expired', 'request-waiter-cancelled'])
+    expect(SELFTEST_STEPS).toHaveLength(29)
+    const expired = { scenario: 'request-waiter-expired', documentId: 'expired-doc' } as const
+    const cancelled = { scenario: 'request-waiter-cancelled', documentId: 'cancelled-doc' } as const
+    const saved = stored({ revision: 2, revisions: 2, snapshot: templateWith([REQUEST_WAITER_EDIT]) })
+    expect(storedProblems(expired, saved, 'entered-on-return')).toEqual([])
+    expect(storedProblems(expired, stored(), 'entered-on-return')).toHaveLength(2)
+    expect(storedProblems(cancelled, stored(), 'cancelled-after-idle')).toEqual([])
+    expect(storedProblems(cancelled, saved, 'cancelled-after-idle')).toHaveLength(2)
+    expect(storedProblems(cancelled, stored(), 'entered-on-return')).toHaveLength(1)
   })
 })
 

@@ -35,13 +35,15 @@ import { accessibleName, byExactText, byRole, centerOf, clickAt, dialogTitled, i
 import { HANDOVER_EXPECTS_HIDDEN, HANDOVER_SCENARIO_RUNNERS } from './selftest-handover.ts'
 import { OUTBOX_SCENARIO_RUNNERS } from './selftest-outbox.ts'
 import { encodeSelftestReport, ENTER_EXIT_EDIT, isSelftestScenario, NEXT_PARAM, nextProblem, reportUrl, RUNS_MAX, RUNS_PARAM, runsOfValue, SELFTEST_PARAM, SELFTEST_REPORT_FORMAT } from './selftest-report.ts'
-import { REQUEST_EXPECTS_HIDDEN, REQUEST_SCENARIO_BUDGET_MS, REQUEST_SCENARIO_RUNNERS } from './selftest-request.ts'
+import { REQUEST_EXPECTS_HIDDEN, REQUEST_SCENARIO_RUNNERS } from './selftest-request.ts'
 import { adoptEditor, check, CHECK_TIMEOUT_MS, chromeButton, describe, describeCommand, describeView, differences, fail, fetchServerContent, has, lastSeq, SCENARIO_BUDGET_MS, seenSince, SIGNAL_TIMEOUT_MS, SWITCH_TIMEOUT_MS, truncate, untilSwitched } from './selftest-session.ts'
 import { productionStallBudgetMs, STALL_SCENARIO_RUNNERS, stallBudgetMs } from './selftest-stall.ts'
 import { STORAGE_SCENARIO_RUNNERS } from './selftest-storage.ts'
+import { requestBudgetMs } from './selftest-waiter-variants.ts'
 import { installSwitchTiming, summarizeSwitch, SWITCH_TIMING_OPTIONS, switchDurations } from './switch-timing.ts'
 
 export { watchCrashSelftest } from './selftest-crash.ts'
+export { prepareLocalPauseSelftest } from './selftest-pause.ts'
 export type { SelftestHost, SelftestPageView } from './selftest-session.ts'
 
 /** 公式在 Worker 里算出结果最多等多久（Worker 的启动与第一次计算） */
@@ -672,7 +674,7 @@ function budgetOf(scenario: SelftestScenario, runs: number | undefined): number 
     return stallBudgetMs(runs)
   if (scenario === 'outbox-stall')
     return productionStallBudgetMs(runs)
-  return REQUEST_EXPECTS_HIDDEN.has(scenario) ? REQUEST_SCENARIO_BUDGET_MS : SCENARIO_BUDGET_MS
+  return REQUEST_EXPECTS_HIDDEN.has(scenario) ? requestBudgetMs(scenario) : SCENARIO_BUDGET_MS
 }
 
 /**
@@ -771,6 +773,10 @@ export async function runSelftestAndReport(host: SelftestHost): Promise<Selftest
     return undefined
   }
   const report = await runEditorSelftest(host, params.get(SELFTEST_PARAM) ?? '', runsOfValue(params.get(RUNS_PARAM)))
+  if (host.localPause !== undefined) {
+    await host.localPause.report(report)
+    return report
+  }
   if (next !== null) {
     const url = reportUrl(next, await encodeSelftestReport(report))
     host.allowLeave()

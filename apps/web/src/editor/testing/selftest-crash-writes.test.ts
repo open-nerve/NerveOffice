@@ -7,6 +7,34 @@ const request = () => ({ id: 7, type: 'write', capture: { key: { userId: 'user',
 const reply = () => ({ id: 7, ok: true, result: { kind: 'written', digest: HASH, mirror: { kind: 'mirrored' } } })
 
 describe('崩溃自检只以对应生产 Worker 的实际镜像完成作为证据', () => {
+  it('具体草稿的写成证据独立于镜像，必须匹配同一 Worker、调用和解密摘要', () => {
+    const observer = createCrashWriteEvidence()
+    const worker = {}
+    observer.sent(worker, request())
+    const written = { ...reply(), result: { kind: 'written', digest: HASH, mirror: { kind: 'off' } } }
+    observer.received({}, written)
+    expect(observer.writtenFor(identity, HASH)).toBe(false)
+    observer.received(worker, { ...written, id: 8 })
+    expect(observer.writtenFor(identity, HASH)).toBe(false)
+    observer.received(worker, written)
+    expect(observer.writtenFor(identity, HASH)).toBe(true)
+    expect(observer.writtenFor(identity, 'b'.repeat(64))).toBe(false)
+    expect(observer.mirrorFor(identity, HASH)).toBeUndefined()
+  })
+
+  it.each([
+    { ...reply(), ok: false },
+    { ...reply(), result: { kind: 'unchanged', digest: HASH } },
+    { ...reply(), result: { kind: 'written' } },
+    { ...reply(), result: { kind: 'written', digest: 'invalid' } },
+  ])('失败、去重或缺少真实摘要不能证明具体草稿写成：%j', (message) => {
+    const observer = createCrashWriteEvidence()
+    const worker = {}
+    observer.sent(worker, request())
+    observer.received(worker, message)
+    expect(observer.writtenFor(identity, HASH)).toBe(false)
+  })
+
   it('协议允许编号 0，不能遗漏其真实写入回包', () => {
     const observer = createCrashWriteEvidence()
     const worker = {}
@@ -59,6 +87,7 @@ describe('崩溃自检只以对应生产 Worker 的实际镜像完成作为证�
     observer.sent(worker, request())
     observer.received(worker, reply())
     expect(observer.mirrorFor({ ...identity, ...change }, HASH)).toBeUndefined()
+    expect(observer.writtenFor({ ...identity, ...change }, HASH)).toBe(false)
   })
 
   it('只有 write 请求参与，取消或损坏的请求不能靠回包补出身份', () => {

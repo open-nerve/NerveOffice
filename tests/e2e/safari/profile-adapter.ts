@@ -31,7 +31,7 @@ export function parseProfileProof(value: unknown): SafariProfileProof {
 
 /** 构建本仓库受审的原生源码；输出路径必须属于本次驱动自己的临时目录。 */
 export function compileProfileNative(output: string): void {
-  execFileSync('swiftc', [fileURLToPath(new URL('./profile-native.swift', import.meta.url)), '-o', output], { timeout: 60_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
+  execFileSync('swiftc', [fileURLToPath(new URL('./profile-native-core.swift', import.meta.url)), fileURLToPath(new URL('./profile-native.swift', import.meta.url)), '-o', output], { timeout: 60_000, maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] })
 }
 
 export function readProfileIdentities(binary: string, pids: readonly number[]): readonly ProfileProcessIdentity[] {

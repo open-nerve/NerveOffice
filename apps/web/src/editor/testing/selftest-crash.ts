@@ -1,12 +1,11 @@
 // M4-P3 S5：真实 Safari 崩溃的页面侧。控制通道只选测试阶段，不授予产品恢复资格。
 // 初次经编辑器 Facade 写正文，等生产 Worker 实际写成并独立解密核对；重载后先只读取证，驱动许可后点击一次真实恢复入口。
-import type { StoredDraft } from '../../shared/outbox/draft-record.ts'
 import type { SelftestPageView } from './selftest-session.ts'
 import { AUTOSAVE_HOLD_STORAGE_KEY } from './autosave-control.ts'
 import { autosaveControl } from './selftest-autosave.ts'
-import { createCrashWriteEvidence } from './selftest-crash-writes.ts'
 import { byRole, isVisible, waitFor } from './selftest-dom.ts'
 import { readSelftestDraft } from './selftest-local-draft.ts'
+import { observeSelftestWrites as observeWrites, decryptSelftestDraft as persistedText, selftestSha256 as sha256 } from './selftest-persistence.ts'
 import { withTimeout } from './selftest-session.ts'
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
@@ -47,56 +46,6 @@ export function crashCellValue(text: string): unknown {
   const book = (envelope.snapshot ?? parsed) as { sheetOrder?: string[], sheets?: Record<string, { cellData?: Record<string, Record<string, { v?: unknown }>> }> }
   const first = book.sheetOrder?.[0]
   return first === undefined ? undefined : book.sheets?.[first]?.cellData?.[0]?.[0]?.v
-}
-
-async function sha256(text: string): Promise<string> {
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
-  return [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
-/** 只在页面内取测试用户的真实密钥；不把密钥、令牌或密文交到控制通道。 */
-async function persistedText(draft: StoredDraft, csrfToken: string): Promise<string> {
-  const response = await fetch('/api/local-key', { method: 'POST', headers: { 'x-csrf-token': csrfToken }, signal: AbortSignal.timeout(10_000) })
-  if (!response.ok)
-    throw new Error('无法独立取得本机密钥')
-  const local = await response.json() as { version: number, key: string }
-  if (local.version !== draft.keyVersion)
-    throw new Error('磁盘密钥版本与服务端不同')
-  const key = await crypto.subtle.importKey('raw', Uint8Array.from(atob(local.key), char => char.charCodeAt(0)), 'AES-GCM', false, ['decrypt'])
-  const f = draft.format
-  const flight = draft.inFlight
-  // AAD 金标准字段顺序，独立于产品 draftAad/openDraft，和测试进程 local-draft.ts 的核对口径一致。
-  const aad = ['nerve-office/outbox-draft/v1', draft.userId, draft.documentId, draft.recordVersion, draft.draftSeq, draft.baseRevision, draft.writeEpoch, draft.writerId, draft.writtenBy, [f.clientBuild, f.univerVersion, f.profile, f.formatVersion], draft.formulasPending, draft.keyVersion, flight === null ? null : [flight.requestId, flight.clientInstanceId, flight.localSeq, flight.sentAt], draft.rawBytes, draft.updatedAt]
-  const gzip = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: draft.iv, additionalData: new TextEncoder().encode(JSON.stringify(aad)), tagLength: 128 }, key, draft.ciphertext)
-  return new Response(new Blob([gzip]).stream().pipeThrough(new DecompressionStream('gzip'))).text()
-}
-
-/** 只观察生产 Worker 成功回包。调用参数、密钥与保存正文都不进入观测结果。 */
-function observeWrites(): ReturnType<typeof createCrashWriteEvidence> {
-  const evidence = createCrashWriteEvidence()
-  const NativeWorker = window.Worker
-  window.Worker = class extends NativeWorker {
-    readonly outbox: boolean
-
-    constructor(url: string | URL, options?: WorkerOptions) {
-      super(url, options)
-      this.outbox = options?.name === 'nerve-outbox'
-      this.addEventListener('message', (event: MessageEvent<unknown>) => {
-        if (this.outbox)
-          evidence.received(this, event.data)
-      })
-    }
-
-    override postMessage(message: unknown, options?: Transferable[] | StructuredSerializeOptions): void {
-      if (this.outbox)
-        evidence.sent(this, message)
-      if (Array.isArray(options))
-        super.postMessage(message, options)
-      else
-        super.postMessage(message, options)
-    }
-  }
-  return evidence
 }
 
 function recoveryEntry(chrome: HTMLElement): { readonly kind: 'restore' | 'takeover-self', readonly button: HTMLElement } | undefined {
@@ -239,5 +188,6 @@ export async function watchCrashSelftest(host: CrashSelftestHost): Promise<void>
   }).finally(() => {
     unsubscribe()
     notices.disconnect()
+    writes.dispose()
   })
 }
