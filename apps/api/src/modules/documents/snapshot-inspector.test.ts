@@ -1,6 +1,7 @@
 import type { FakeTask } from '../../shared/process-pool-fakes.test-support.ts'
 import type { SnapshotInspectionSettings } from './snapshot-inspector.ts'
 import { Buffer } from 'node:buffer'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -70,6 +71,22 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('SnapshotInspector：在子进程里检查（源码运行：入口是 .ts，按源码条件解析 contracts）', SPAWNING, () => {
+  it('接近5MiB且十万个不同图片地址：真实子进程完整提取并通过IPC返回，不受SQL参数数量限制', async () => {
+    const { inspector } = setup({ processes: 1 })
+    const ids = Array.from({ length: 100_000 }, (_, index) => `0199a2c4-0000-7000-8000-${index.toString(16).padStart(12, '0')}`)
+    const raw = Buffer.from(JSON.stringify({ ...JSON.parse(sheetSnapshotFor(UNIT_ID)) as object, images: ids.map(id => `/api/assets/${id}`) }))
+    expect(raw.byteLength).toBeGreaterThan(4.8 * MIB)
+    expect(raw.byteLength).toBeLessThanOrEqual(5 * MIB)
+    const result = await inspector.inspect(raw, 'sheet@1', AMY)
+    expect(result.ok).toBe(true)
+    if (!result.ok)
+      throw new Error(`大集合被拒绝：${result.rule}`)
+    expect(result.assetIds).toHaveLength(ids.length)
+    const digest = (value: readonly string[]): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+    expect(digest(result.assetIds)).toBe(digest(ids))
+    expect(result.rawBytes).toBe(raw.byteLength)
+  })
+
   it('模板通过，结果与在主进程里检查的相同（哈希是 32 字节的 Uint8Array）；子进程按需创建', async () => {
     const { inspector } = setup()
     expect(inspector.liveProcesses).toBe(0)

@@ -1,5 +1,5 @@
 // 快照检查的子进程入口（M3-P3 设计 §3.3，DEF-018）：SnapshotInspector 经子进程池交来解压之后的字节与档案，
-// 这里解码、解析、检查、规范化、算哈希（inspectSnapshot），只把小结果回给主进程；解析出的对象留在子进程里回收。
+// 这里解码、解析、检查、规范化、算哈希和提取图片标识（inspectSnapshot），只回传元数据与标识；解析出的正文留在子进程里回收。
 // 由 SnapshotInspector 按自己的扩展名加载：源码运行（单元测试、集成测试）时是这个 .ts，构建产物与镜像里是 .js
 import type { InspectionTask, SnapshotInspection } from './snapshot-inspection.ts'
 import { serveProcessTasks } from '../../shared/process-task.ts'

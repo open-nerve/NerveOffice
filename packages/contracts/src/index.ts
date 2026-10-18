@@ -90,6 +90,7 @@ export type {
 export { SESSION_EXPIRED_REASONS, sessionExpiredDetailsSchema } from './auth/session-expiration.ts'
 export type { SessionExpiredDetails, SessionExpiredReason } from './auth/session-expiration.ts'
 export { isPlatformAssetAddress } from './documents/asset-address.ts'
+export { extractAssetIds } from './documents/asset-references.ts'
 export {
   AUTOSAVE_CAPTURE_MAX_MS,
   AUTOSAVE_CAPTURE_QUIET_MS,
