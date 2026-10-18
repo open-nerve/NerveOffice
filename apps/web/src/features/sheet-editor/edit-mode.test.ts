@@ -6765,8 +6765,12 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       await prompted(context)
       context.factory.last().edit('甲')
       await context.time.advance(HANDOVER_MS)
-      await settle()
-      expect(context.mode.view().save?.status).toBe('conflict')
+      // 真实 gzip/摘要不受假时钟或一轮宏任务约束；等保存冲突已处理、交出流程已退回编辑，再观察后续心跳。
+      await vi.waitFor(() => {
+        expect(context.mode.view().save?.status).toBe('conflict')
+        expect(modeOf(context.mode).kind).toBe('editing')
+      })
+      expect(context.api.save).toHaveBeenCalledOnce()
       const saves = context.api.save.mock.calls.length
       const seen = recordModes(context)
       await context.time.advance(HEARTBEAT_MS * 3)
