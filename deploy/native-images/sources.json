@@ -121,7 +121,8 @@
       "kind": "source",
       "url": "https://gitlab.com/libtiff/libtiff/-/archive/v4.7.2/libtiff-v4.7.2.tar.gz",
       "sha256": "62b15f44c10106065211efa22a2dc77937bd97ee1f6e3afd2c9659010de112eb",
-      "bytes": 2616788
+      "bytes": 2616788,
+      "vendoredPath": "inputs/native/tiff"
     },
     {
       "path": "native/highway",
@@ -156,7 +157,8 @@
       "kind": "source",
       "url": "https://gitlab.freedesktop.org/fontconfig/fontconfig/-/archive/2.18.3/fontconfig-2.18.3.tar.gz",
       "sha256": "9ae01e1d53acdef56010c5451cd34aa41d325b2faccd8606448d8fa01b2496b3",
-      "bytes": 666753
+      "bytes": 666753,
+      "vendoredPath": "inputs/native/fontconfig"
     },
     {
       "path": "native/harfbuzz",
