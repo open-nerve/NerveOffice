@@ -32,7 +32,7 @@ def save_case(name, data, kind, status='accept', reason=None, large=False, exact
                 delays.append(image.info.get('duration', 0))
             expected.update(width=dimensions[0], height=dimensions[1], frames=frames, points=points)
             if frames > 1:
-                expected.update(delay=delays, loop=image.info.get('loop', 0))
+                expected.update(delay=delays, loop=image.info.get('loop'))
             if exact:
                 expected['rgbaSha256'] = hashes
     (root / file).write_bytes(data)
@@ -70,14 +70,61 @@ save_case('animated', gif, 'gif', exact=True)
 save_case('animated', webp, 'webp')
 cases[-1]['id'] = 'animated-webp'
 cases[-2]['id'] = 'animated-gif'
+# Preserve explicit duplicate frames: Pillow's encoder would merge them, so
+# repeat a valid ANMF chunk in our own generated WebP container, then decode it
+# independently with Pillow. This is a container fixture, not a codec.
+webp_chunks = []
+position = 12
+while position < len(webp):
+    length = struct.unpack_from('<I', webp, position + 4)[0]
+    end = position + 8 + length + length % 2
+    webp_chunks.append(webp[position:end])
+    position = end
+first_frame = next(chunk for chunk in webp_chunks if chunk[:4] == b'ANMF')
+duplicate_chunks, inserted = [], False
+for chunk in webp_chunks:
+    duplicate_chunks.append(chunk)
+    if not inserted and chunk[:4] == b'ANMF':
+        duplicate_chunks.append(first_frame)
+        inserted = True
+body = b'WEBP' + b''.join(duplicate_chunks)
+save_case('duplicate-webp', b'RIFF' + struct.pack('<I', len(body)) + body, 'webp', exact=True)
+save_case('zero-delay-webp', encoded(frames[0], 'WEBP', save_all=True, append_images=frames[1:], duration=[0, 10, 30], loop=1, lossless=True), 'webp', exact=True)
+save_case('zero-delay-gif', encoded(frames[0], 'GIF', save_all=True, append_images=frames[1:], duration=[0, 10, 30], loop=1), 'gif', exact=True)
+transparent_frames = [Image.new('RGBA', (48, 32), (0, 0, 0, 0)) for _ in range(3)]
+for i, frame in enumerate(transparent_frames):
+    ImageDraw.Draw(frame).rectangle((i * 12, 0, i * 12 + 11, 15), fill=(255, 0, 0, 255))
+transparent_webp = bytearray(encoded(transparent_frames[0], 'WEBP', save_all=True, append_images=transparent_frames[1:], duration=[80, 160, 240], loop=2, lossless=True))
+# Pillow optimizes each opaque red subrectangle, leaving the canvas transparent
+# but omitting VP8X's alpha flag. Explicitly declare our intended RGBA canvas so
+# independent decoders agree; preserve the earlier ambiguous fixture evidence.
+assert transparent_webp[12:16] == b'VP8X'
+transparent_webp[20] |= 16
+save_case('transparent-webp', transparent_webp, 'webp', exact=True)
+save_case('no-loop-gif', encoded(frames[0], 'GIF', save_all=True, append_images=frames[1:], duration=[80, 160, 240]), 'gif', exact=True)
 save_case('single', encoded(frames[0], 'GIF'), 'gif', exact=True)
+palette_noise = Image.frombytes('P', (256, 256), bytes(v & 127 for v in random.Random(20261018).randbytes(256 * 256)))
+palette_noise.putpalette([v for i in range(256) for v in (i % 128 * 2,) * 3])
+save_case('interlaced-dictionary', encoded(palette_noise, 'GIF', interlace=True), 'gif')
 for kind, data in [('png', png), ('jpeg', jpeg), ('webp', webp), ('gif', gif)]:
     save_case('truncated-' + kind, data[:len(data) * 3 // 4], kind, 'reject', 'invalid')
 save_case('missing-iend', png[:-12], 'png', 'reject', 'invalid')
 save_case('missing-eoi', jpeg[:-2], 'jpeg', 'reject', 'invalid')
+bad_crc = bytearray(png); bad_crc[29] ^= 1
+save_case('bad-crc', bad_crc, 'png', 'reject', 'invalid')
+save_case('broken-jpeg-scan', jpeg[:len(jpeg) * 3 // 4] + b'\xff\xd9', 'jpeg', 'reject', 'invalid')
+# Complete RIFF/chunk headers with a 1x1 VP8L header but no coded pixels.
+bad_webp_body = b'WEBPVP8L' + struct.pack('<I', 5) + b'\x2f\x00\x00\x00\x00\x00'
+save_case('broken-webp-pixels', b'RIFF' + struct.pack('<I', len(bad_webp_body)) + bad_webp_body, 'webp', 'reject', 'invalid')
 save_case('missing-gif-trailer', gif[:-1], 'gif', 'reject', 'invalid')
 save_case('riff-length', webp[:-1], 'webp', 'reject', 'invalid')
 save_case('apng', encoded(frames[0], 'PNG', save_all=True, append_images=frames[1:], duration=[80, 160, 240], loop=2), 'png', 'reject', 'animation')
+# A complete GIF container whose LZW stream yields too few pixels or lacks EOI.
+# These bytes are self-generated format fixtures, not a downloaded exploit.
+gif_header = b'GIF89a' + struct.pack('<HH', 2, 1) + b'\x80\x00\x00' + b'\x00\x00\x00\xff\x00\x00'
+gif_frame = b'\x2c' + struct.pack('<HHHH', 0, 0, 2, 1) + b'\x00'
+save_case('short-raster', gif_header + gif_frame + b'\x02\x02\x44\x01\x00\x3b', 'gif', 'reject', 'invalid')
+save_case('missing-lzw-end', gif_header + gif_frame + b'\x02\x02\x44\x00\x00\x3b', 'gif', 'reject', 'invalid')
 save_case('html-disguised', b'<html><body>controlled non-image</body></html>', 'png', 'reject', 'type')
 save_case('svg-disguised', b'<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>', 'png', 'reject', 'type')
 save_case('wrong-mime', png, 'jpeg', 'reject', 'type')
@@ -86,11 +133,14 @@ save_case('zero-width', bad, 'png', 'reject', 'invalid')
 save_case('above-side', encoded(Image.new('RGB', (8193, 1)), 'PNG'), 'png', 'reject', 'dimensions')
 save_case('above-pixels', encoded(Image.new('RGB', (4001, 4000)), 'PNG'), 'png', 'reject', 'pixels', large=True)
 save_case('at-pixels', encoded(Image.new('RGB', (4000, 4000), (40, 100, 160)), 'PNG'), 'png', large=True)
+save_case('at-pixels-progressive', encoded(Image.new('RGB', (4000, 4000), (40, 100, 160)), 'JPEG', progressive=True, quality=90), 'jpeg', large=True)
+save_case('at-pixels-webp', encoded(Image.new('RGB', (4000, 4000), (40, 100, 160)), 'WEBP', lossless=True), 'webp', large=True)
 many = [Image.new('RGB', (64, 64), (i * 2, 40, 80)) for i in range(101)]
 save_case('above-frames', encoded(many[0], 'GIF', save_all=True, append_images=many[1:], duration=40, loop=0), 'gif', 'reject', 'frames', large=True)
 total = [Image.new('RGB', (800, 800), (i * 4, 100, 80)) for i in range(51)]
 save_case('above-total-pixels', encoded(total[0], 'GIF', save_all=True, append_images=total[1:], duration=40, loop=0), 'gif', 'reject', 'pixels', large=True)
 save_case('near-total-pixels', encoded(total[0], 'GIF', save_all=True, append_images=total[1:50], duration=40, loop=0), 'gif', large=True)
+save_case('near-total-webp', encoded(total[0], 'WEBP', save_all=True, append_images=total[1:50], duration=40, loop=0, lossless=True), 'webp', large=True)
 noise = Image.frombytes('RGB', (2800, 2800), random.Random(20261018).randbytes(2800 * 2800 * 3))
 save_case('output-growth', encoded(noise, 'JPEG', quality=65), 'jpeg', 'reject', 'output', large=True)
 save_case('above-input', png + bytes(5 * 1024 * 1024 + 1 - len(png)), 'png', 'reject', 'bytes', large=True)
