@@ -12,14 +12,22 @@ export const PNPM_POLICY = {
 /** 生产依赖允许的许可；其他许可逐个评审后才能加入。 */
 export const PRODUCTION_LICENSES: readonly string[] = ['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', '0BSD']
 
-/** 许可例外：包名、它声明的许可与接受的原因。 */
+/** 许可例外：包名、许可与原因；原生分发材料绑定版本时必须指定精确 version。 */
 export interface LicenseException {
   name: string
+  version?: string
   license: string
   reason: string
 }
 
-export const LICENSE_EXCEPTIONS: readonly LicenseException[] = []
+export const LICENSE_EXCEPTIONS: readonly LicenseException[] = [
+  ...['darwin-arm64', 'linux-arm64', 'linux-x64'].map(platform => ({
+    name: `@img/sharp-libvips-${platform}`,
+    version: '1.3.4',
+    license: 'LGPL-3.0-or-later',
+    reason: 'ADR-021：图片子进程经可替换共享库调用 libvips 8.18.7；逐包许可全文与声明见 apps/api/third-party-licenses，对应源码/补丁/构建清单见 deploy/native-images。其他版本或平台重新核对，不全局放行 LGPL。',
+  })),
+]
 
 /**
  * Univer 的版本基线（00 号计划书 §3.2）：协调发布的包同一个版本，独立发版的包按清单核对。
