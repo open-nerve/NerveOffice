@@ -62,6 +62,8 @@ import {
   staleRuns,
   staleTemporaryDirectories,
 } from './container-e2e.ts'
+import { assetMountProblems, assetRuntimeProblems, nativeRuntimeProblems } from './container-image-checks.ts'
+import { loadNativeMaterials } from './native-image-materials.ts'
 
 const LOG_DIR = join(REPO_ROOT, 'tests/e2e/test-results/container')
 const SERVICES = ['db', 'migrate', 'app', 'caddy'] as const
@@ -256,7 +258,26 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
 /** 随镜像分发的许可文件都在、都不是空的：在运行着的应用容器里量（DISTRIBUTED_LICENSE_FILES） */
 function checkDistributedFiles(settings: ContainerE2eSettings): string[] {
   const sizes = capture('docker', composeArgs(settings, 'exec', '-T', 'app', 'node', '-e', FILE_SIZES_SCRIPT, ...DISTRIBUTED_LICENSE_FILES))
-  return distributedFileProblems(DISTRIBUTED_LICENSE_FILES, sizes.status, sizes.stdout)
+  const native = capture('docker', composeArgs(settings, 'exec', '-T', 'app', 'node', 'native-verification/native-image-verify-cli.js', '--bundle', '/app/licenses/native-images', '--api-package', '/app/apps/api/package.json'))
+  const { manifest } = loadNativeMaterials(REPO_ROOT)
+  const expected = { sharp: manifest.sharp, sharpLibvips: manifest.sharpLibvips, libvips: manifest.libvips, sourceFiles: manifest.sources.length, sourceBytes: manifest.sources.reduce((sum, source) => sum + source.bytes, 0), distributedFiles: manifest.sources.length + 4 }
+  log(`原生图片材料回执：${native.stdout.trim() || native.stderr.trim()}`)
+  return [...distributedFileProblems(DISTRIBUTED_LICENSE_FILES, sizes.status, sizes.stdout), ...nativeRuntimeProblems(native.status, native.stdout, expected)]
+}
+
+/** 在实际运行容器中核对：卷不共享给代理/迁移，应用非 root，私有根真实可写，Linux 限制工具可执行。 */
+function checkAssetDeployment(settings: ContainerE2eSettings): string[] {
+  const runtime = capture('docker', composeArgs(settings, 'exec', '-T', 'app', 'node', 'native-verification/asset-deployment-cli.js'))
+  log(`私有图片卷回执：${runtime.stdout.trim() || runtime.stderr.trim()}`)
+  const problems = assetRuntimeProblems(runtime.status, runtime.stdout)
+  for (const service of ['app', 'db', 'migrate', 'caddy']) {
+    const id = capture('docker', composeArgs(settings, 'ps', '-a', '-q', service))
+    const observed = id.status === 0 && id.stdout.trim() !== ''
+      ? capture('docker', ['inspect', '--format', '{"mounts":{{json .Mounts}},"readonly":{{json .HostConfig.ReadonlyRootfs}}}', id.stdout.trim()])
+      : { status: 1, stdout: '' }
+    problems.push(...assetMountProblems(service, `${settings.project}_assets`, observed.status, observed.stdout))
+  }
+  return problems
 }
 
 /**
@@ -446,7 +467,7 @@ async function exercise(settings: ContainerE2eSettings, options: { version: stri
       log(`${LIVE_TIMEOUT_MS / 1000} 秒内经 Caddy 的存活探针没有通过`)
     return 1
   }
-  const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings), ...checkDistributedFiles(settings), ...await checkMasterKeyRefusal(settings)]
+  const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings), ...checkDistributedFiles(settings), ...checkAssetDeployment(settings), ...await checkMasterKeyRefusal(settings)]
   if (interruption.interrupted())
     return 1
   if (problems.length > 0) {

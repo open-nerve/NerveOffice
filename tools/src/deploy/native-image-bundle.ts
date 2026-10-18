@@ -181,7 +181,7 @@ export async function bundleNativeImages(input: NativeMaterials, options: Bundle
       }
       catch (error) {
         failed = true
-        throw error
+        throw new Error(`材料收集失败（${source.path}）：${error instanceof Error ? error.message : '未知原因'}`, { cause: error })
       }
     }
   })

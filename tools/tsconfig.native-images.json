@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src/deploy",
+    "noEmit": false,
+    "outDir": "dist/native-images"
+  },
+  "include": ["src/deploy/native-image-verify-cli.ts", "src/deploy/asset-deployment-cli.ts"]
+}

@@ -44,6 +44,13 @@ function fixture() {
 }
 
 describe('原生图片源码的有界收集与离线复核', () => {
+  it('下载失败保留具体材料路径与原始原因，构建日志能定位哪份原件失败', async () => {
+    const f = fixture()
+    const cause = new Error('download timed out')
+    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(cause)
+    await expect(bundleNativeImages(f.input, { output: f.output, cache: f.cache, fetcher })).rejects.toMatchObject({ message: '材料收集失败（native/source）：download timed out', cause })
+  })
+
   it('缺失或损坏仓库补件、缺少构建说明时，在收集前拒绝', async () => {
     const f = fixture()
     await expect(bundleNativeImages({ ...f.input, readme: Buffer.alloc(0) }, { output: f.output, cache: f.cache })).rejects.toThrow(/说明/u)

@@ -33,6 +33,22 @@ function variables(text: string): Map<string, string> {
 const containerEnvFile = variables(renderEnvFile(createSettings({ pid: 1, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 })))
 
 describe('测试环境的编排与变量（deploy/test，M3-P6 设计 §3.9）', () => {
+  it('图片仅给应用挂私有持久卷，迁移/数据库/代理没有图片卷；只读根和非 Web 资源位置保持', () => {
+    const { 'x-nerve-environment': shared, services } = compose()
+    const app = services.app
+    expect(app?.environment?.NERVE_ASSET_ROOT).toBe('/var/lib/nerve-office/assets')
+    expect(shared).not.toHaveProperty('NERVE_ASSET_ROOT')
+    expect(app?.volumes).toContain('assets:/var/lib/nerve-office/assets')
+    expect(app?.read_only).toBe(true)
+    expect(app?.mem_limit).toBe('4g')
+    expect(app?.environment?.NERVE_ASSET_QUOTA_BYTES).toBe(`\${NERVE_ASSET_QUOTA_BYTES:-10737418240}`)
+    expect(app?.environment?.NERVE_ASSET_QUOTA_COUNT).toBe(`\${NERVE_ASSET_QUOTA_COUNT:-100000}`)
+    for (const name of ['db', 'migrate', 'caddy']) {
+      const volumes = z.array(z.string()).parse(services[name]?.volumes ?? [])
+      expect(volumes.some(volume => volume.startsWith('assets:')), name).toBe(false)
+    }
+  })
+
   it('本机密钥的主密钥只在应用容器的配置里，而且必填（没给时编排直接报错）：迁移、共用的配置、数据库与代理都没有', () => {
     const { 'x-nerve-environment': shared, services } = compose()
     expect(services.app?.environment?.[MASTER_KEY_VARIABLE]).toMatch(new RegExp(`^\\$\\{${MASTER_KEY_VARIABLE}:\\?[^}]+\\}$`))

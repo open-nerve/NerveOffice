@@ -13,7 +13,11 @@
 .git
 .github
 .claude
+.codex
+.superpowers
 refer
 spikes
 docs
-deploy
+deploy/*
+!deploy/native-images/
+!deploy/native-images/**
