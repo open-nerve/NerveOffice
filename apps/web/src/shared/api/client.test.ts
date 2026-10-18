@@ -72,6 +72,19 @@ describe('apiRequest', () => {
 })
 
 describe('apiFetch（不是 JSON 的请求与响应）', () => {
+  it('仅显式图片读取选项禁用缓存和重定向；普通请求仍采用原默认值', async () => {
+    const inits: (RequestInit | undefined)[] = []
+    installFakeApi({ 'GET /api/image': (init) => {
+      inits.push(init)
+      return new Response('ok')
+    } })
+    await apiFetch('/api/image', { cache: 'no-store', redirect: 'error' }, async response => response.text())
+    await apiFetch('/api/image', {}, async response => response.text())
+    expect(inits[0]).toMatchObject({ cache: 'no-store', redirect: 'error' })
+    expect(inits[1]?.cache).toBeUndefined()
+    expect(inits[1]?.redirect).toBeUndefined()
+  })
+
   it('作用域内读取正文与响应头并返回数据；状态变更的请求带 CSRF 令牌与给定的内容类型', async () => {
     const api = installFakeApi({ 'PUT /api/blob': () => new Response('ok', { status: 200, headers: { etag: '"3"' } }) })
     setCsrfToken('csrf-2')

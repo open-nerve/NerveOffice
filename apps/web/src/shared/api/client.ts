@@ -72,6 +72,10 @@ export interface RawRequestOptions {
    * （M3-P2 设计 §3.2，内容的读取）
    */
   acceptNotModified?: boolean
+  /** 图片每次实际读取须重新鉴权；未给出时保持 fetch 默认缓存行为。 */
+  cache?: 'no-store'
+  /** 图片资源不允许跳转到另一个地址；普通 API 保留既有默认行为。 */
+  redirect?: 'error'
   signal?: AbortSignal
   /** 整个请求（含成功/错误正文）的时限，默认 30 秒。 */
   timeoutMs?: number
@@ -132,7 +136,7 @@ export async function apiFetch<T>(path: string, options: RawRequestOptions, read
     result = await withinRequestDeadline({ timeoutMs: options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS, signal: options.signal }, async (signal) => {
       let response: Response
       try {
-        response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, keepalive: options.keepalive, signal })
+        response = await fetch(path, { method, headers, credentials: 'same-origin', body: options.body?.data, keepalive: options.keepalive, cache: options.cache, redirect: options.redirect, signal })
       }
       catch (error) {
         signal.throwIfAborted()
