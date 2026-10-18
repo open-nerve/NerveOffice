@@ -2812,7 +2812,7 @@
   "rustLockBasis": "librsvg 2.63.2 released Cargo.lock; all registry crates retained, including source/test/other-platform dependencies",
   "noticeBook": {
     "path": "apps/api/third-party-licenses/native-images/LICENSE",
-    "sha256": "008347bf19e6f4ead7b7e590712b8500a949e3c6e0b4ff5a9bf08370049cfd01",
-    "bytes": 4485022
+    "sha256": "ec903451e410f09337667165ec99d51291f4e323d792581c40b9077f415a39b9",
+    "bytes": 4485036
   }
 }

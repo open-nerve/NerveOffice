@@ -9,6 +9,7 @@ import { join, relative } from 'node:path'
 import process from 'node:process'
 import { gzipSync } from 'node:zlib'
 import { z } from 'zod'
+import { loadNativeMaterials, nativePackageProblems, validateNativeMaterials } from '../deploy/native-image-materials.ts'
 import { API_PACKAGE, SERVER_LICENSE_SUPPLEMENT, serverLicenseViolations, serverPackages } from '../deploy/server-licenses.ts'
 import { commandJson, listFiles, packageName, readJson, readText, readWorkspaceConfig, REPO_ROOT, workspacePackageDirs } from '../shared/repo.ts'
 import { checkStories, parseDesignStoryIds, parseRegistry, testsFromPlaywrightList, testsFromVitestList } from '../stories/stories.ts'
@@ -165,6 +166,12 @@ function licenses(run: CommandRunner): GateOutcome {
   const serverGraph = collectInstalled(lsOutputSchema.parse(run('pnpm', ['ls', '--prod', '--json', '--depth', 'Infinity', '--filter', API_PACKAGE])))
   const server = serverPackages(serverGraph, SERVER_LICENSE_SUPPLEMENT)
   const serverMissing = serverLicenseViolations(serverGraph, server.packages)
+  const native = loadNativeMaterials(REPO_ROOT)
+  validateNativeMaterials(native)
+  const nativeProblems = nativePackageProblems(native.manifest, [
+    { name: 'sharp', version: readWorkspaceConfig().catalog.sharp ?? 'missing' },
+    ...serverGraph.installed.filter(item => existsSync(item.path)),
+  ])
   return {
     name: 'licenses',
     title: '许可',
@@ -172,10 +179,12 @@ function licenses(run: CommandRunner): GateOutcome {
       ...checkProductionLicenses(graph.installed, licensesByPath(report), PRODUCTION_LICENSES, LICENSE_EXCEPTIONS, existsSync),
       ...checkDevelopmentLicenses(all, LICENSE_EXCEPTIONS),
       ...serverMissing,
+      ...nativeProblems.map(detail => ({ rule: 'licenses/native-images', subject: 'deploy/native-images/sources.json', detail })),
     ],
     notes: [
       `生产依赖 ${graph.installed.length} 个安装实例（本机没装的平台专属包 ${notInstalled} 个，以 CI 的检查为准），全部依赖 ${all.length} 个包`,
       `服务端的许可清单：${server.packages.length} 个包（本机装上的）`,
+      `图片原生材料：${native.manifest.sources.length} 份来源、${native.index.entries.length} 项声明及仓库补件通过；完整源码字节在镜像构建与成品复核时检查`,
     ],
   }
 }
