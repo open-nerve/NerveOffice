@@ -1,4 +1,5 @@
 // assets 域：字节预留跨文件发布持久存在，转正不增加字节；每份上传单独计记录。
+import type { AssetMimeType } from '@nerve-office/contracts'
 import { ASSET_MIME_TYPES } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { bigint, check, index, integer, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core'
@@ -29,7 +30,7 @@ export const assetObjectClaims = pgTable('asset_object_claims', {
 export const assetObjects = pgTable('asset_objects', {
   sha256: text('sha256').primaryKey(),
   storageKey: text('storage_key').notNull(),
-  mimeType: text('mime_type').notNull(),
+  mimeType: text('mime_type').$type<AssetMimeType>().notNull(),
   width: integer('width').notNull(),
   height: integer('height').notNull(),
   frames: integer('frames').notNull(),

@@ -1,3 +1,5 @@
+export type { AssetImage, AssetMetadata } from './asset-metadata.ts'
+export { AssetReadService } from './asset-read.service.ts'
 export { AssetUploadService } from './asset-upload.service.ts'
 export type { AssetUploadActor } from './asset-upload.service.ts'
 export { AssetUpload, AssetUploadInterceptor } from './asset-upload.ts'

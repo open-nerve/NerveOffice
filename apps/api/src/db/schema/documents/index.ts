@@ -8,6 +8,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core'
 import { CLIENT_BUILD_MAX_LENGTH, DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { assets } from '../assets/index.ts'
 import { allOrNone, bytea, lengthBetween, oneOf } from '../common/index.ts'
 import { spaces } from '../spaces/index.ts'
 import { users } from '../users/index.ts'
@@ -340,4 +341,13 @@ export const documentEditLeases = pgTable('document_edit_leases', {
   check('document_edit_leases_taken_over_token_digest_check', sql`octet_length(${table.takenOverTokenDigest}) = ${sql.raw(String(SHA256_BYTES))}`),
   check('document_edit_leases_takeover_check', oneOf(table.takeover, EDIT_LEASE_TAKEOVERS)),
   index('document_edit_leases_holder_idx').on(table.holderId),
+])
+
+/** 当前正文引用；历史保留另建关系，不能凭保留事实向当前查看者授权。 */
+export const documentAssetLinks = pgTable('document_asset_links', {
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  assetId: uuid('asset_id').notNull().references(() => assets.id, { onDelete: 'restrict' }),
+}, table => [
+  primaryKey({ name: 'document_asset_links_pkey', columns: [table.documentId, table.assetId] }),
+  index('document_asset_links_asset_idx').on(table.assetId),
 ])

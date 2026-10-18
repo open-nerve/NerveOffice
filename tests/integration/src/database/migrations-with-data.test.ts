@@ -9,7 +9,7 @@
 // （0021 在 SQL 里回填的请求摘要与服务算的一致，M2 Codex 评审 CX6），迁移之前的文档能经接口保存（M3-P3：存量没有内容哈希与资源名，
 // 第一次保存照常加一个修订、补上它们，之后内容相同的保存不加修订号）。
 //
-// 基准是每个阶段结束时的最后一个迁移（14 个），覆盖了到现在为止的每个迁移在有数据的库上的执行；每个基准一个空库，整个文件 3 秒左右。
+// 基准是各阶段或新增持久模型步骤末尾的迁移（15 个），覆盖到现在为止每个迁移在有数据的库上的执行；每个基准一个空库。
 // 以后的阶段结束时在 BASES 里加上它的最后一个迁移；时长涨得多时，去掉中间被后面的基准完全覆盖的那些（写明理由）
 import type pg from 'pg'
 import type { TestDatabase } from '../support/database.ts'
@@ -52,10 +52,11 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
   ['M3-P5 结束', '0025_m3_p5_handover'],
   // M3 的最后一个迁移（v0.1-m3）：有本机密钥（吊销过的、当前的）、审计里有吊销本机密钥的库迁到以后的
   ['M3 结束（v0.1-m3）', '0026_m3_p6_local_keys'],
+  ['M5-P1-S3 资源上传与配额', '0027_m5_asset_quota'],
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
-const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'document_save_receipts', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles', 'user_local_keys', 'asset_quota', 'asset_object_claims', 'asset_objects', 'assets']
+const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'document_save_receipts', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles', 'user_local_keys', 'asset_quota', 'asset_object_claims', 'asset_objects', 'assets', 'document_asset_links']
 
 const PASSWORD = 'correct horse battery staple'
 
@@ -220,6 +221,15 @@ async function seed(client: pg.Client, base: number): Promise<Seeded> {
               ($2, 1, $3, $4, now() - interval '2 days', NULL)`,
       [amy, root, Buffer.alloc(16, 1), Buffer.alloc(60, 2)],
     )
+  }
+
+  if (at('0027_m5_asset_quota')) {
+    // 迁移夹具只核对元数据：一份共享物理对象、两条资源和一份失败预留，不把假字节当成磁盘文件。
+    const object = 'a'.repeat(64)
+    await client.query('INSERT INTO asset_objects (sha256, storage_key, mime_type, width, height, frames, bytes) VALUES ($1,$2,\'image/png\',1,1,1,100)', [object, `objects/aa/${object}`])
+    await client.query('INSERT INTO asset_object_claims (sha256, bytes) VALUES ($1,200)', ['b'.repeat(64)])
+    await client.query('INSERT INTO assets (uploader_id, object_hash) VALUES ($1,$3),($2,$3)', [amy, root, object])
+    await client.query('INSERT INTO asset_quota (id, used_bytes, used_assets) VALUES (1,300,2)')
   }
 
   if (!at('0009_m2_team_spaces'))

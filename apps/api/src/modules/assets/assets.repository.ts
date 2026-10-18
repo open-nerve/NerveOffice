@@ -1,7 +1,8 @@
 import type { Database, DbExecutor, Transaction } from '../database/index.ts'
+import type { AssetMetadata } from './asset-metadata.ts'
 import type { ProcessedImage } from './image-types.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { eq } from 'drizzle-orm'
+import { eq, sql } from 'drizzle-orm'
 import { assetObjectClaims, assetObjects, assetQuota, assets } from '../../db/schema/assets/index.ts'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { DATABASE, executorOf } from '../database/index.ts'
@@ -21,6 +22,22 @@ function exceeded(kind: 'bytes' | 'count'): AppError {
 @Injectable()
 export class AssetsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
+
+  async metadata(assetId: string, transaction: Transaction): Promise<AssetMetadata | undefined> {
+    const [row] = await executorOf(this.db, transaction).select({
+      assetId: assets.id,
+      uploaderId: assets.uploaderId,
+      createdAt: assets.createdAt,
+      withinUploadWindow: sql<boolean>`${assets.createdAt} > now() - interval '24 hours'`,
+      sha256: assetObjects.sha256,
+      mimeType: assetObjects.mimeType,
+      width: assetObjects.width,
+      height: assetObjects.height,
+      frames: assetObjects.frames,
+      bytes: assetObjects.bytes,
+    }).from(assets).innerJoin(assetObjects, eq(assetObjects.sha256, assets.objectHash)).where(eq(assets.id, assetId))
+    return row
+  }
 
   async reserve(image: AssetObjectMetadata, quotas: AssetQuotas, transaction: Transaction): Promise<void> {
     const db = executorOf(this.db, transaction)

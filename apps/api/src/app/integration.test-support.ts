@@ -8,7 +8,7 @@
 import { assetObjectClaims, assetObjects, assetQuota, assets } from '../db/schema/assets/index.ts'
 import { auditEvents } from '../db/schema/audit/index.ts'
 import { authInvitations, authLoginThrottles, authPasswordResets, authSessions } from '../db/schema/auth/index.ts'
-import { documentContents, documentEditLeases, documentGrants, documentRevisions, documents, documentSaveReceipts, folders, trashEntries } from '../db/schema/documents/index.ts'
+import { documentAssetLinks, documentContents, documentEditLeases, documentGrants, documentRevisions, documents, documentSaveReceipts, folders, trashEntries } from '../db/schema/documents/index.ts'
 import { userLocalKeys } from '../db/schema/local-keys/index.ts'
 import { spaceMembers, spaces } from '../db/schema/spaces/index.ts'
 import { users } from '../db/schema/users/index.ts'
@@ -30,6 +30,7 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   authLoginThrottles,
   authPasswordResets,
   authSessions,
+  documentAssetLinks,
   documentContents,
   documentEditLeases,
   documentGrants,
@@ -47,7 +48,8 @@ export { AssetsRepository } from '../modules/assets/assets.repository.ts'
 export type { AssetObjectMetadata } from '../modules/assets/assets.repository.ts'
 export { FileStorage } from '../modules/assets/file-storage.ts'
 export { ImageRunner } from '../modules/assets/image-runner.ts'
-export { AssetUploadService } from '../modules/assets/index.ts'
+export { AssetReadService, AssetUploadService } from '../modules/assets/index.ts'
+export type { AssetMetadata } from '../modules/assets/index.ts'
 export { ASSET_STORAGE } from '../modules/assets/storage-adapter.ts'
 // 集成测试的探针直接拿数据库句柄：连接池与关闭顺序的用例（database/pool、api/shutdown）
 export { DATABASE } from '../modules/database/index.ts'

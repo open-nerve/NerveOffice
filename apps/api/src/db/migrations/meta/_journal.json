@@ -197,6 +197,13 @@
       "when": 1792326779941,
       "tag": "0027_m5_asset_quota",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792330030721,
+      "tag": "0028_m5_document_asset_links",
+      "breakpoints": true
     }
   ]
 }

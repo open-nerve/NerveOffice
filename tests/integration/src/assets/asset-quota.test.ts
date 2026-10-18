@@ -41,7 +41,7 @@ beforeAll(async () => {
   uploader = (await createPassiveAccount(database, { username: 'asset-quota-uploader' })).id
 })
 beforeEach(async () => {
-  await database.query(async client => client.query('TRUNCATE assets, asset_objects, asset_object_claims, asset_quota'))
+  await database.query(async client => client.query('TRUNCATE document_asset_links, assets, asset_objects, asset_object_claims, asset_quota'))
 })
 afterEach(async () => {
   expect(await database.query(invariantViolations)).toEqual([])
