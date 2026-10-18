@@ -79,6 +79,8 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
   'I24 图片记录配额等于独立资源记录数量':
     `SELECT coalesce((SELECT used_assets FROM asset_quota WHERE id = 1), 0) AS recorded, (SELECT count(*) FROM assets) AS actual
      WHERE coalesce((SELECT used_assets FROM asset_quota WHERE id = 1), 0) <> (SELECT count(*) FROM assets)`,
+  // gzip 正文与当前图片集合不能只靠 SQL 外键/计数证明。asset-save、asset-copies 和 asset-reference-races
+  // 经正式协议比较完整正文/集合、no-op、重放及回滚；asset-references-bulk 再核对七万个 ID 的全量摘要。
 }
 
 /** 每条不变量最多列出几行：够定位，不把整张表打进错误信息 */
