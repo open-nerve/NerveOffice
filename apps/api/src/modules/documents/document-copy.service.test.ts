@@ -1,5 +1,6 @@
 // 复制一份文档（M2-P4 设计 §3.4 第 4 条）：权限、副本的各列、快照原样复制、requestId 的幂等与取锁的顺序。
 // 真实的 INSERT … SELECT（逐字节一致）由集成测试用真实数据库覆盖，这里的假仓储只保持同样的语义。
+import type { DocumentAssetReferences } from './document-asset-references.ts'
 import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -11,7 +12,9 @@ const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fd'
 function setup() {
   const store = new FakeStore()
   const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit } = store.deps
-  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit) }
+  // 既有样本没有图片；当前引用复制的授权与回滚由 asset-copies 的真实 PG 用例覆盖。
+  const references = { copy: async () => {} } as unknown as DocumentAssetReferences
+  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, references) }
 }
 
 let requests = 0

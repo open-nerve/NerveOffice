@@ -4,6 +4,7 @@ import type { Transaction } from '../database/index.ts'
 import type { GzipBody } from '../security/index.ts'
 import type { DocumentAccess } from './access-rules.ts'
 import type { Actor, SpaceContentAccess } from './document-access-policy.ts'
+import type { HeldAssetReferences } from './document-asset-references.ts'
 import type { RevisionRow } from './document-revisions.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import { Buffer } from 'node:buffer'
@@ -16,6 +17,7 @@ import { AppLogger } from '../logging/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { creatableSpace, documentAccessIn, DocumentAccessPolicy, requireAccess, requireSpaceContent } from './document-access-policy.ts'
+import { DocumentAssetReferences } from './document-asset-references.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -53,7 +55,9 @@ interface Placement {
  * 锁（与复制、新建同一套顺序，ADR-014）：requestId 的 advisory lock → 原文档所在空间的树锁（只在要放进那个空间时取：副本可能落进文件夹，
  * 与删除、移动那个文件夹串行；也挡住原文档在空间内换文件夹）→ 原文档所在的空间与本人个人空间的行（FOR SHARE，按 id）→ 原文档行（FOR SHARE）。
  * 锁下重新判断能读原文档（移出空间、取消授权、删除、移走要么先提交、被看到，要么等副本提交之后才生效），重新决定放在哪里
- * （降为查看者、归档、移出先提交时放进个人空间；锁下才变成能新建的照旧放进个人空间——取锁之前没有取那个空间的树锁，这也是一个合法的先后）
+ * （降为查看者、归档、移出先提交时放进个人空间；锁下才变成能新建的照旧放进个人空间——取锁之前没有取那个空间的树锁，这也是一个合法的先后）。
+ * M5 有图片时，在树锁之前固定全部候选，把候选空间/文档并入各自有序共享锁集合；锁下授权上传内容中的标识，最后持资源行。
+ * 无图片保持原锁路径；两者均不整份继承原文档关系，新的正文与实际合格的关系同事务提交
  */
 @Injectable()
 export class DocumentConflictCopyService {
@@ -72,6 +76,7 @@ export class DocumentConflictCopyService {
     private readonly audit: AuditService,
     private readonly clients: ClientFormatGate,
     private readonly inspector: SnapshotInspector,
+    private readonly assetReferences: DocumentAssetReferences,
     logger: AppLogger,
   ) {
     this.#logger = logger.with({ module: 'documents' })
@@ -105,17 +110,29 @@ export class DocumentConflictCopyService {
       const sourceSpaceId = checked.document.spaceId
       const personalSpaceId = await this.personalSpaceIdOf(userId, transaction)
       const intoSource = await creatableSpace(this.policy, actor, sourceSpaceId, transaction) !== undefined
+      // 在树/空间/文档锁之前固定图片来源；原文档因副本流程必须持锁，也属于事先已知的来源集合。
+      const prepared = snapshot.assetIds.length === 0 ? undefined : await this.assetReferences.prepare(userId, snapshot.assetIds, transaction)
       if (intoSource)
         await this.tree.lock([sourceSpaceId], transaction)
-      // 两个空间的行按 id 顺序取共享锁：与归档、移出成员、调整角色（FOR NO KEY UPDATE）互斥
-      for (const spaceId of inIdOrder([sourceSpaceId, personalSpaceId]))
-        await this.spaces.holdSpace(spaceId, transaction)
+      let sourceRow: DocumentRow | undefined
+      let heldReferences: HeldAssetReferences | undefined
+      if (prepared === undefined) {
+        // 无图片沿用原两空间/源文档锁路径。
+        for (const spaceId of inIdOrder([sourceSpaceId, personalSpaceId]))
+          await this.spaces.holdSpace(spaceId, transaction)
+        sourceRow = await this.documents.holdById(id, transaction)
+      }
+      else {
+        heldReferences = await this.assetReferences.hold(prepared, { mode: 'share', documents: [checked.document], spaceIds: [personalSpaceId] }, transaction)
+        sourceRow = heldReferences.documents.get(id)
+      }
       // 原文档行的共享锁：与删除、移动、取消授权（都取 FOR UPDATE）互斥；锁下重新读、重新判断能不能读它
-      const source = await requireAccess(this.policy, userId, await this.documents.holdById(id, transaction), transaction)
+      const source = await requireAccess(this.policy, userId, sourceRow, transaction)
       // 空间行是按取锁之前读到的空间取的：万一刚好有一次跨空间移动提交了，这把锁就保护不到它，按"没找到"回答（与复制相同）
       if (source.document.spaceId !== sourceSpaceId)
         throw new AppError('NOT_FOUND')
       const placement = await this.placementOf(actor, source.document, intoSource, personalSpaceId, transaction)
+      const authorized = heldReferences === undefined ? [] : await this.assetReferences.authorize(heldReferences, transaction)
 
       // 类型与 unitId 照原文档（锁下确认过是正常状态），信封是这次上传的、核对过的页面的；建不出来是数据不一致，按意外错误处理
       const copy = await this.documents.copyFrom(id, {
@@ -128,6 +145,7 @@ export class DocumentConflictCopyService {
       if (copy === undefined)
         throw new Error(`锁住的原文档建不出副本：${id}`)
       await this.contents.insert(copy.id, { snapshot: upload.compressed, rawBytes: upload.decompressed.length, contentHash, resourceNames: snapshot.nonEmptyResources }, transaction)
+      await this.assetReferences.replace(copy.id, authorized, transaction)
       const revision = await this.revisions.insert({
         documentId: copy.id,
         revision: 1,

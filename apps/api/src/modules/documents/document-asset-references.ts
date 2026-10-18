@@ -33,7 +33,7 @@ export interface HeldAssetReferences {
 
 export interface ReferenceLocks {
   readonly mode: 'update' | 'share'
-  /** 复制流程还必须持住原文档，不论它是否被预选为图片来源。 */
+  /** 复制流程必须持住的原文档：在取锁之前固定，也可在锁下证明当前引用。 */
   readonly documents?: readonly AccessTarget[]
   /** 新建副本目标空间；树锁由调用方在 hold 之前取得。 */
   readonly spaceIds?: readonly string[]
@@ -101,7 +101,8 @@ export class DocumentAssetReferences {
     const stable = [...held.documents.values()].filter(row => held.spaceIds.has(row.spaceId))
     const granted = await this.documents.findManyWithGrants(plan.userId, stable.map(row => row.id), transaction)
     const access = await this.policy.accessOfMany(plan.userId, granted.map(row => ({ document: row, grant: row.grantRole ?? undefined })), transaction)
-    const candidates = new Set(plan.sources.map(row => row.id))
+    // 副本原文档也是取锁之前已固定的来源；只在这份已持锁集合内复核，不在这里发现其他文档。
+    const candidates = new Set(held.documents.keys())
     const allowedDocuments = granted.filter((row) => {
       const located = access.get(row.id)
       if (located === undefined)
