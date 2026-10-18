@@ -642,6 +642,8 @@ function parseEnvironment(env: EnvironmentInput, readSecretFile: SecretFileReade
   // 应用进程要求主密钥（M3-P6 设计 §3.4）：变量与 _FILE 都没设时"缺少"（_FILE 读不到、是空的已经报在 _FILE 上，不再重复）
   if (purpose === 'server' && !(MASTER_KEY_VARIABLE in input) && !reported.has(MASTER_KEY_VARIABLE))
     issues.push({ variable: MASTER_KEY_VARIABLE, problem: '缺少' })
+  if (purpose === 'server' && !('NERVE_ASSET_ROOT' in input))
+    issues.push({ variable: 'NERVE_ASSET_ROOT', problem: '缺少' })
   if (result.success) {
     const defaults = new Set(Object.keys(environmentSchema.shape).filter(name => !(name in input)))
     issues.push(...crossChecks(result.data, threadpool, defaults, name => fromFile.get(name) ?? name))

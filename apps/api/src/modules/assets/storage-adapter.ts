@@ -1,5 +1,7 @@
 import type { ProcessedImage } from './image-types.ts'
 
+export const ASSET_STORAGE = Symbol('ASSET_STORAGE')
+
 declare const objectKeyBrand: unique symbol
 export type AssetObjectKey = string & { readonly [objectKeyBrand]: true }
 

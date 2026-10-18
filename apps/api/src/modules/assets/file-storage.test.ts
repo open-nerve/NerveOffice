@@ -28,6 +28,55 @@ afterEach(async () => {
 })
 
 describe('私有不可变文件存储', () => {
+  it('初始化不依赖数据库占用：清旧 probe，保留待发布 tmp，实际发布仍须取得占用', async () => {
+    await storage.initialize()
+    const probe = join(root, 'staging', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.probe')
+    const temporary = join(root, 'staging', 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.tmp')
+    await fs.writeFile(probe, 'p', { mode: 0o600 })
+    await fs.writeFile(temporary, 'charged upload', { mode: 0o600 })
+    const reopened = new FileStorage(root, {
+      tryRun: async () => {
+        throw new Error('database unavailable')
+      },
+    })
+    await reopened.initialize()
+    expect(await fs.readdir(join(root, 'staging'))).toEqual(['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.tmp'])
+    await expect(reopened.publish(image())).rejects.toMatchObject({ reason: 'io' })
+    expect(await fs.readFile(temporary, 'utf8')).toBe('charged upload')
+  })
+
+  it('并发初始化清理活跃 probe 的名字也不妨碍其打开句柄完成写入和同步', async () => {
+    let entered: () => void
+    const opened = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let resume: () => void
+    const continuation = new Promise<void>((resolve) => {
+      resume = resolve
+    })
+    const open = fs.open.bind(fs)
+    let paused = false
+    vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+      const handle = await open(...args)
+      if (String(args[0]).endsWith('.probe') && !paused) {
+        paused = true
+        entered()
+        await continuation
+      }
+      return handle
+    })
+    const first = storage.initialize()
+    try {
+      await opened
+      await new FileStorage(root).initialize()
+    }
+    finally {
+      resume!()
+      await first
+    }
+    expect(await fs.readdir(join(root, 'staging'))).toEqual([])
+  })
+
   it('初始化独占创建遇到已有文件时，不清理没有取得所有权的文件', async () => {
     const open = fs.open.bind(fs)
     let foreign: string | undefined

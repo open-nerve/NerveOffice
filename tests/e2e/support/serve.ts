@@ -19,8 +19,9 @@
 // 不逐行刷在测试输出里；本脚本自己的说明（日志的位置、后端的退出码、启动失败时日志的末尾）写到标准错误。
 import type { ChildProcess } from 'node:child_process'
 import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import pg from 'pg'
@@ -103,6 +104,7 @@ async function main(): Promise<void> {
 
   const databaseUrl = e2eDatabaseUrl()
   const databaseName = new URL(databaseUrl).pathname.slice(1)
+  const assetsDirectory = realpathSync(mkdtempSync(join(tmpdir(), 'nerve-e2e-assets-')))
   let api: ChildProcess | undefined
   let stopping = false
 
@@ -122,6 +124,7 @@ async function main(): Promise<void> {
         code = 1
     }
     await dropDatabase(databaseName).catch((error: unknown) => report(`删除测试库失败：${String(error)}`))
+    rmSync(assetsDirectory, { recursive: true, force: true })
     closeSync(log)
     process.exit(code)
   }
@@ -173,7 +176,7 @@ async function main(): Promise<void> {
     return
 
   // 本机密钥的主密钥只给后端（M3-P6 设计 §3.4）：迁移与初始化管理员的命令不需要它
-  const apiEnv: NodeJS.ProcessEnv = { ...env, NERVE_LOCAL_KEYS_MASTER_KEY: E2E_LOCAL_KEYS_MASTER_KEY }
+  const apiEnv: NodeJS.ProcessEnv = { ...env, NERVE_LOCAL_KEYS_MASTER_KEY: E2E_LOCAL_KEYS_MASTER_KEY, NERVE_ASSET_ROOT: join(assetsDirectory, 'assets') }
   const startApi = (): ChildProcess => {
     const child = spawn(process.execPath, ['--import', EXIT_WITH_PARENT, `${API_DIST}/app/main.js`], { env: apiEnv, stdio: ['pipe', log, log], detached: true })
     child.once('exit', (code, signal) => {

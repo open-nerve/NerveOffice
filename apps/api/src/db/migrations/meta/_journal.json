@@ -190,6 +190,13 @@
       "when": 1791421456124,
       "tag": "0026_m3_p6_local_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792326779941,
+      "tag": "0027_m5_asset_quota",
+      "breakpoints": true
     }
   ]
 }

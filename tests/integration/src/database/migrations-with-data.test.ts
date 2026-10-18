@@ -55,7 +55,7 @@ const BASES: readonly (readonly [label: string, tag: string])[] = [
 ]
 
 /** 行数要核对的表（某个基准上还没有的表跳过） */
-const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'document_save_receipts', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles', 'user_local_keys']
+const TABLES = ['users', 'spaces', 'space_members', 'documents', 'document_contents', 'document_revisions', 'document_grants', 'document_edit_leases', 'document_save_receipts', 'folders', 'trash_entries', 'audit_events', 'auth_sessions', 'auth_invitations', 'auth_password_resets', 'auth_login_throttles', 'user_local_keys', 'asset_quota', 'asset_object_claims', 'asset_objects', 'assets']
 
 const PASSWORD = 'correct horse battery staple'
 

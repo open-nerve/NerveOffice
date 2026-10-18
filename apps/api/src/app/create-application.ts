@@ -8,6 +8,7 @@ import { CommitLedger } from '../modules/database/index.ts'
 import { AppLogger, createRootLogger, NestPinoLogger, RequestContextStore } from '../modules/logging/index.ts'
 import { AppModule } from './app.module.ts'
 import { ApplicationRuntime } from './application-runtime.ts'
+import { assertPrivateAssetLocation } from './asset-location.ts'
 import { configureHttp } from './configure-http.ts'
 import { InFlightRequests } from './in-flight-requests.ts'
 
@@ -23,6 +24,7 @@ export interface ApplicationOptions {
  * 配置是应用进程的那一份（loadServerConfig，带着本机密钥的主密钥，M3-P6 设计 §3.4）：命令行的配置在类型上就传不进来
  */
 export async function createApplication(config: ServerConfig, options: ApplicationOptions = {}): Promise<ApplicationRuntime> {
+  assertPrivateAssetLocation(config.assets.root, config.web.root)
   const rootLogger = createRootLogger({ level: config.log.level, destination: options.logDestination })
   const requestContext = new RequestContextStore()
   const logger = new AppLogger(rootLogger, requestContext)

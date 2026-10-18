@@ -6,6 +6,7 @@ import { Buffer } from 'node:buffer'
 import { createApplication, loadServerConfig, TransactionRunner } from '@nerve-office/api'
 import { sql } from 'drizzle-orm'
 import { expect } from 'vitest'
+import { testAssetRoot } from './asset-root.ts'
 import { captureLogs } from './log-capture.ts'
 
 export interface TestApp {
@@ -63,7 +64,7 @@ export function testEnvironment(databaseUrl: string, overrides: Readonly<Record<
 
 /** 测试里应用进程的配置：在 testEnvironment 之上加测试的主密钥（覆盖成空字符串就是没设） */
 export function serverEnvironment(databaseUrl: string, overrides: Readonly<Record<string, string>> = {}): Record<string, string> {
-  return testEnvironment(databaseUrl, { NERVE_LOCAL_KEYS_MASTER_KEY: TEST_LOCAL_KEYS_MASTER_KEY, ...overrides })
+  return testEnvironment(databaseUrl, { NERVE_LOCAL_KEYS_MASTER_KEY: TEST_LOCAL_KEYS_MASTER_KEY, NERVE_ASSET_ROOT: overrides.NERVE_ASSET_ROOT ?? testAssetRoot(databaseUrl), ...overrides })
 }
 
 export async function startTestApp(options: TestAppOptions): Promise<TestApp> {

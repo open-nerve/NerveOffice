@@ -80,6 +80,20 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 
 ### 变量（`deploy/test/.env`）
 
+M5-P1 开发线已要求 HTTP 服务显式配置 `NERVE_ASSET_ROOT`：应用用户拥有的私有目录绝对路径，目录权限 0700、文件 0600，不能含符号链接，且必须与前端托管目录互不包含；目录的父目录须已存在。缺失、不可写或不安全时拒绝启动。前端根是发布用符号链接时也按真实路径核对，拒绝与私有卷重叠。迁移和运维命令不要求此项。当前 Step 尚未接入 Compose 私有卷与原生源码分发，S6 完成并验证前不能把本开发线当作已交付镜像部署；最终卷路径规划为 `/data/assets`。
+
+本地运行 `pnpm dev:api` 也须显式提供自己的私有目录，不在源码或 Vite 目录里设默认值。可在终端先创建父目录并传入变量（现有目录或祖先含符号链接时需改用真实路径）：
+
+```bash
+mkdir -p -m 700 "$HOME/.local/share/nerve-office"
+export NERVE_ASSET_ROOT="$HOME/.local/share/nerve-office/assets"
+pnpm dev:api
+```
+
+同一资源卷只供同一数据库的一组应用实例使用。每次发布的临时 UUID 在数据库连接上占用会话级锁；下一次发布前仅清理已经无人占用的私有上传临时文件。启动只做本地目录与写入探针检查，数据库不可达时仍保持存活检查 200、就绪检查 503。进程崩溃或连接断开后可恢复，正式对象与持久字节预留不会自动删除。备份与恢复必须把数据库和资源卷配套保管，不能只恢复其中一边。
+
+组织配额由 `NERVE_ASSET_QUOTA_BYTES`（默认 10 GiB，5 MiB–1 TiB）与 `NERVE_ASSET_QUOTA_COUNT`（默认 100,000，1–1,000,000）配置。字节按完整对象与持久预留计，同图只计一次；每次上传单独计记录。下调配额保留已有资源，拒绝新增超额占用；失败预留不会自动清账，P1 不运行正式对象 GC。Linux 启动还必须能用 `/usr/bin/prlimit` 实际设置图片子进程的硬限制；进程、像素与时间预算见 [ADR-021](../docs/adr/ADR-021-图片处理与资源边界.md)。
+
 | 变量 | 说明 |
 |---|---|
 | `NERVE_IMAGE` | 用 `deploy/Dockerfile` 构建的镜像 |

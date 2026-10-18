@@ -1,6 +1,7 @@
 import type { FileHandle } from 'node:fs/promises'
 import type { ProcessedImage } from './image-types.ts'
 import type { AssetObjectKey, StorageAdapter, StorageOperation, StoredImageExpectation } from './storage-adapter.ts'
+import type { TemporaryFileLeases } from './temporary-files.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
@@ -30,14 +31,14 @@ export class FileStorage implements StorageAdapter {
   readonly #root: string
   #initialized = false
 
-  constructor(root: string) {
+  // 独立 FS 单元测试可不注入占用（不执行跨实例回收）；正式模块始终注入数据库占用适配器。
+  constructor(root: string, private readonly temporaryLeases?: TemporaryFileLeases) {
     if (!isAbsolute(root) || root.includes('\0') || resolve(root) === dirname(resolve(root)))
       throw new AssetStorageError('initialize', 'unsafe-path')
     this.#root = resolve(root)
   }
 
   async initialize(): Promise<void> {
-    let probe: string | undefined
     try {
       // 检查已有父路径后才创建根：不能通过符号链接祖先把目录建到别处。
       const parent = dirname(this.#root)
@@ -46,18 +47,26 @@ export class FileStorage implements StorageAdapter {
       const created = await this.#directory(this.#root, true)
       await this.#directory(join(this.#root, 'objects'), true)
       await this.#directory(join(this.#root, 'staging'), true)
-      const candidate = this.#temporaryPath()
-      const handle = await this.#newFile(candidate)
-      probe = candidate
-      try {
-        await handle.writeFile(new Uint8Array([0]))
-        await handle.sync()
+      // 启动的本地写入探针不依赖数据库，保留数据库不可达时的 live/ready 契约。
+      // probe 从不参与 link 发布：拿到句柄后先去掉名字，再写入与同步；并发清名字不影响句柄。
+      await this.#clearProbes()
+      const candidate = join(this.#root, 'staging', `${randomUUID()}.probe`)
+      {
+        const handle = await this.#newFile(candidate)
+        try {
+          try {
+            await this.#removeTemporary(candidate, 'initialize')
+            await handle.writeFile(new Uint8Array([0]))
+            await handle.sync()
+          }
+          finally {
+            await handle.close()
+          }
+        }
+        finally {
+          await this.#removeTemporary(candidate, 'initialize')
+        }
       }
-      finally {
-        await handle.close()
-      }
-      await fs.unlink(probe)
-      probe = undefined
       await this.#syncDirectory(join(this.#root, 'staging'))
       await this.#syncDirectory(join(this.#root, 'objects'))
       await this.#syncDirectory(this.#root)
@@ -68,10 +77,6 @@ export class FileStorage implements StorageAdapter {
     catch (error) {
       throw storageFailure('initialize', error)
     }
-    finally {
-      if (probe !== undefined)
-        await this.#removeTemporary(probe, 'initialize')
-    }
   }
 
   async publish(value: ProcessedImage): Promise<AssetObjectKey> {
@@ -79,41 +84,42 @@ export class FileStorage implements StorageAdapter {
     const checked = validateProcessedImage(value)
     const image = validateProcessedImage({ ...checked, data: Buffer.from(checked.data) })
     const key = assetObjectKey(image.sha256)
-    let temporary: string | undefined
     try {
       await this.#base('publish')
       await this.#directory(join(this.#root, 'staging'))
+      await this.#clearAbandoned('publish')
       const shard = dirname(join(this.#root, key))
       if (await this.#directory(shard, true))
         await this.#syncDirectory(join(this.#root, 'objects'))
-      const candidate = this.#temporaryPath()
-      const handle = await this.#newFile(candidate)
-      temporary = candidate
-      try {
-        await handle.writeFile(image.data)
-        await handle.sync()
-      }
-      finally {
-        await handle.close()
-      }
-      try {
-        await fs.link(temporary, join(this.#root, key))
-      }
-      catch (error) {
-        if (errorCode(error) !== 'EEXIST')
-          throw error
-        // 原子发布的另一方已成功；不能只凭文件名/大小去重，更不能覆盖损坏对象。
-        await this.#readFile(key, image, true)
-      }
-      await this.#syncDirectory(shard)
-      return key
+      return await this.#temporary('publish', async (candidate) => {
+        const handle = await this.#newFile(candidate)
+        try {
+          try {
+            await handle.writeFile(image.data)
+            await handle.sync()
+          }
+          finally {
+            await handle.close()
+          }
+          try {
+            await fs.link(candidate, join(this.#root, key))
+          }
+          catch (error) {
+            if (errorCode(error) !== 'EEXIST')
+              throw error
+            // 原子发布的另一方已成功；不能只凭文件名/大小去重，更不能覆盖损坏对象。
+            await this.#readFile(key, image, true)
+          }
+          await this.#syncDirectory(shard)
+          return key
+        }
+        finally {
+          await this.#removeTemporary(candidate, 'publish')
+        }
+      })
     }
     catch (error) {
       throw storageFailure('publish', error)
-    }
-    finally {
-      if (temporary !== undefined)
-        await this.#removeTemporary(temporary, 'publish')
     }
   }
 
@@ -205,8 +211,50 @@ export class FileStorage implements StorageAdapter {
     }
   }
 
-  #temporaryPath(): string {
-    return join(this.#root, 'staging', `${randomUUID()}.tmp`)
+  async #temporary<T>(operation: StorageOperation, work: (path: string) => Promise<T>): Promise<T> {
+    const id = randomUUID()
+    const run = async (): Promise<T> => work(join(this.#root, 'staging', `${id}.tmp`))
+    if (this.temporaryLeases === undefined)
+      return run()
+    const result = await this.temporaryLeases.tryRun(id, run)
+    if (!result.ran)
+      throw new AssetStorageError(operation, 'io')
+    return result.result
+  }
+
+  async #clearAbandoned(operation: StorageOperation): Promise<void> {
+    if (this.temporaryLeases === undefined)
+      return
+    const staging = join(this.#root, 'staging')
+    const entries = await fs.opendir(staging)
+    for await (const entry of entries) {
+      const id = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.tmp$/.exec(entry.name)?.[1]
+      if (id === undefined)
+        continue
+      await this.temporaryLeases.tryRun(id, async () => this.#discardTemporary(join(staging, entry.name), operation))
+    }
+  }
+
+  async #clearProbes(): Promise<void> {
+    const staging = join(this.#root, 'staging')
+    for await (const entry of await fs.opendir(staging)) {
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.probe$/.test(entry.name))
+        await this.#discardTemporary(join(staging, entry.name), 'initialize')
+    }
+  }
+
+  async #discardTemporary(path: string, operation: StorageOperation): Promise<void> {
+    const stat = await fs.lstat(path).catch((error: unknown) => {
+      if (errorCode(error) === 'ENOENT')
+        return undefined
+      throw error
+    })
+    if (stat === undefined)
+      return
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid !== undefined && stat.uid !== process.getuid()))
+      throw new AssetStorageError(operation, 'unsafe-path')
+    await this.#removeTemporary(path, operation)
+    await this.#syncDirectory(dirname(path))
   }
 
   async #newFile(path: string): Promise<FileHandle> {

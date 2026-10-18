@@ -512,6 +512,7 @@ describe('loadConfig', () => {
 })
 
 describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
+  const REQUIRED = { NERVE_DATABASE_URL: DATABASE_URL, NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN, NERVE_ASSET_ROOT: '/srv/nerve-office/assets' }
   const MASTER_KEY = randomBytes(32).toString('base64')
   const SERVER = { ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: MASTER_KEY }
   const PROBLEM = '必须是 32 字节随机数的标准 base64（44 个字符、以 = 结尾，例如 openssl rand -base64 32 的输出）'
@@ -538,6 +539,7 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
       { variable: 'NERVE_DATABASE_URL', problem: '缺少' },
       { variable: 'NERVE_PUBLIC_ORIGIN', problem: '缺少' },
       { variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '缺少' },
+      { variable: 'NERVE_ASSET_ROOT', problem: '缺少' },
     ])
   })
 
@@ -650,5 +652,17 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
     expect(localKeys).toBe(config.localKeys)
     // 命令行的组装只有 APP_CONFIG
     expect((ConfigModule.forRoot(loadConfig(SERVER)).providers ?? []).map(provider => (provider as { provide: symbol }).provide)).toEqual([APP_CONFIG])
+  })
+})
+
+describe('私有资源目录只在 HTTP 服务端必填', () => {
+  const server = { ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: Buffer.alloc(32, 171).toString('base64') }
+  it('缺少或空值在启动校验阶段拒绝，命令行不要求它', () => {
+    expect(issuesOf(() => loadServerConfig(server))).toEqual([{ variable: 'NERVE_ASSET_ROOT', problem: '缺少' }])
+    expect(issuesOf(() => loadServerConfig({ ...server, NERVE_ASSET_ROOT: '' }))).toEqual([{ variable: 'NERVE_ASSET_ROOT', problem: '缺少' }])
+    expect(loadConfig(REQUIRED).assets.root).toBeUndefined()
+  })
+  it('明确的绝对路径保留在服务端配置', () => {
+    expect(loadServerConfig({ ...server, NERVE_ASSET_ROOT: '/srv/nerve/assets' }).assets.root).toBe('/srv/nerve/assets')
   })
 })

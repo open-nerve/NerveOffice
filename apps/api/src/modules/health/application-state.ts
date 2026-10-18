@@ -4,6 +4,12 @@ import { Injectable } from '@nestjs/common'
 @Injectable()
 export class ApplicationState {
   #accepting = true
+  readonly #shutdown = new AbortController()
+
+  /** 排空请求之前通知可取消的长任务；模块销毁钩子在排空后才调用。 */
+  get shutdownSignal(): AbortSignal {
+    return this.#shutdown.signal
+  }
 
   get accepting(): boolean {
     return this.#accepting
@@ -11,5 +17,6 @@ export class ApplicationState {
 
   beginShutdown(): void {
     this.#accepting = false
+    this.#shutdown.abort()
   }
 }

@@ -7,6 +7,7 @@ import process from 'node:process'
 import { readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import pg from 'pg'
 import { abandonedNames, hostScopedName } from '../../../shared/test-databases.ts'
+import { removeTestAssetRoot } from './asset-root.ts'
 import { describeViolations, invariantViolations } from './invariants.ts'
 
 /** 本机开发数据库（deploy/dev/compose.yaml）；CI 用环境变量指向服务容器。建库、删库都经它（维护库）执行。 */
@@ -206,6 +207,7 @@ export async function createTestDatabase(options: { migrated?: boolean } = {}): 
         ? { violations: undefined }
         : await sweepInvariants(url).then(violations => ({ violations }), (error: unknown) => ({ error }))
       await withClient(async client => client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(name)} WITH (FORCE)`))
+      await removeTestAssetRoot(url)
       if ('error' in swept)
         throw swept.error
       if (swept.violations !== undefined)

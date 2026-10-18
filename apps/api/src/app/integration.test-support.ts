@@ -5,6 +5,7 @@
 // - 只有 tests/integration 能引用它：apps/api 里的任何文件（包括单元测试）引用都由 lint 拦下（eslint 的 nerve/api-integration-entry），
 //   别的元素由模块边界拦下。
 // 只放这类东西（数据库句柄、documents 的仓储与全部的表定义）；集成测试用到的其余程序接口（建应用、迁移、各模块的服务）照旧经 app/index.ts
+import { assetObjectClaims, assetObjects, assetQuota, assets } from '../db/schema/assets/index.ts'
 import { auditEvents } from '../db/schema/audit/index.ts'
 import { authInvitations, authLoginThrottles, authPasswordResets, authSessions } from '../db/schema/auth/index.ts'
 import { documentContents, documentEditLeases, documentGrants, documentRevisions, documents, documentSaveReceipts, folders, trashEntries } from '../db/schema/documents/index.ts'
@@ -20,6 +21,10 @@ import { users } from '../db/schema/users/index.ts'
  * 新加一张表时一并加在这里：漏了的话，迁移建出的库里多出它，那条用例会失败并列出来
  */
 export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
+  assetObjectClaims,
+  assetObjects,
+  assetQuota,
+  assets,
   auditEvents,
   authInvitations,
   authLoginThrottles,
@@ -38,6 +43,12 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   spaces,
   users,
 }
+export { AssetsRepository } from '../modules/assets/assets.repository.ts'
+export type { AssetObjectMetadata } from '../modules/assets/assets.repository.ts'
+export { FileStorage } from '../modules/assets/file-storage.ts'
+export { ImageRunner } from '../modules/assets/image-runner.ts'
+export { AssetUploadService } from '../modules/assets/index.ts'
+export { ASSET_STORAGE } from '../modules/assets/storage-adapter.ts'
 // 集成测试的探针直接拿数据库句柄：连接池与关闭顺序的用例（database/pool、api/shutdown）
 export { DATABASE } from '../modules/database/index.ts'
 export type { Database } from '../modules/database/index.ts'
