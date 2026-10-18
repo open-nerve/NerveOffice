@@ -15,6 +15,9 @@
  */
 export type DatabaseBusyReason = 'lock_timeout' | 'statement_timeout' | 'transaction_timeout' | 'pool_timeout'
 
+/** HTTP 重试间隔取默认等锁/取连接时限（5 秒）；JSON 错误与图片占位共用，避免两种响应漂移。 */
+export const DATABASE_BUSY_RETRY_AFTER_SECONDS = 5
+
 /** PostgreSQL 的 SQLSTATE：等锁超时（lock_not_available）、语句被取消（query_canceled）与超过事务的时限（transaction_timeout） */
 const BUSY_SQLSTATES: ReadonlyMap<string, DatabaseBusyReason> = new Map([
   ['55P03', 'lock_timeout'],

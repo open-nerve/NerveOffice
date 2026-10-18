@@ -51,7 +51,7 @@ export type {
   TransferDocumentsResponse,
   TransferTarget,
 } from './admin/admin.ts'
-export { ASSET_EXTENSION_HEADER, ASSET_EXTENSIONS, ASSET_INVALID_RULES, ASSET_MAX_BYTES, ASSET_MAX_PIXELS, ASSET_MAX_SIDE, ASSET_MIME_TYPES, assetExtensionSchema, assetIdSchema, assetInvalidDetailsSchema, assetQuotaDetailsSchema, assetUploadResponseSchema, assetUrl } from './assets/assets.ts'
+export { ASSET_EXTENSION_HEADER, ASSET_EXTENSIONS, ASSET_INVALID_RULES, ASSET_MAX_BYTES, ASSET_MAX_PIXELS, ASSET_MAX_SIDE, ASSET_MIME_TYPES, ASSET_STATUS_HEADER, assetExtensionSchema, assetIdSchema, assetInvalidDetailsSchema, assetQuotaDetailsSchema, assetReadTargetSchema, assetUploadResponseSchema, assetUrl } from './assets/assets.ts'
 export type { AssetExtension, AssetInvalidDetails, AssetInvalidRule, AssetMimeType, AssetQuotaDetails, AssetUploadResponse } from './assets/assets.ts'
 export { auditDetailsSchema, LINK_ISSUER_REVOCATION_REASONS } from './audit/audit-details.ts'
 export type { AuditActionDetails, AuditActionDetailsInput, AuditDetailsOf, EveryAuditActionHasDetails, LinkIssuerRevocationReason } from './audit/audit-details.ts'

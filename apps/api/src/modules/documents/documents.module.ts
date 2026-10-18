@@ -8,6 +8,7 @@ import { AppLogger } from '../logging/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
+import { DocumentAssetAccessService } from './document-asset-access.service.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { DocumentContentController } from './document-content.controller.ts'
 import { DocumentContentService } from './document-content.service.ts'
@@ -51,6 +52,7 @@ import { WriteAccessRevocation } from './write-access.ts'
   controllers: [DocumentsController, DocumentContentController, OpenCheckReportsController],
   providers: [
     DocumentsRepository,
+    DocumentAssetAccessService,
     DocumentContentsRepository,
     DocumentRevisionsRepository,
     // 保存的回执（M3-P3）：内容相同、修订号没变的确认，只给本模块的保存
@@ -109,6 +111,7 @@ import { WriteAccessRevocation } from './write-access.ts'
   // 到期的自动清理与修订记录、回执的保留期清理只给 jobs（M2-P4 设计 §3.1，M3-P3 设计 §3.9）；
   // 编辑权的接口在 workspace（要补持有者的人名，M3-P1 设计 §3.1），租约的规则与数据在这里；请求编辑与交出（M3-P5）同样
   exports: [
+    DocumentAssetAccessService,
     DocumentAccessPolicy,
     EditLeaseService,
     EditRequestService,

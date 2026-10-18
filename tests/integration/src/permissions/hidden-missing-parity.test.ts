@@ -20,6 +20,7 @@ import { EDIT_LEASE_HEADER, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { uploadTestAsset } from '../support/assets.ts'
 import { acquireBody, clientFormatQuery, renewBody, requestBody } from '../support/client-format.ts'
 import { comparableOf } from '../support/comparable-response.ts'
 import { conflictCopyPath, pageSnapshot } from '../support/conflict-copies.ts'
@@ -40,6 +41,8 @@ import { captureStatements } from '../support/statement-capture.ts'
 type ActorName = 'outsider' | 'admin' | 'systemAdmin' | 'grantViewer' | 'grantEditor'
 
 interface World {
+  /** owner 上传并在他未分享的文档里引用的图片；外人、管理员和只有别处授权的人都不能读。 */
+  readonly asset: string
   readonly owner: TestAccount
   readonly admin: TestAccount
   readonly outsider: TestAccount
@@ -133,6 +136,7 @@ beforeAll(async () => {
   await removeGrant(database, revokedDocument, grantViewer.id)
   const leaver = await createPassiveAccount(database, { username: 'parity-leaver', status: 'disabled' })
   w = {
+    asset: (await uploadTestAsset(app.baseUrl, sessions.owner)).assetId,
     owner,
     admin,
     outsider,
@@ -155,6 +159,7 @@ beforeAll(async () => {
     outsiderFolder: await createFolder(sessions.outsider, outsider.personalSpaceId, '外人自己的文件夹'),
     leaver: { id: leaver.id, document: (await seedDocument(database, { spaceId: leaver.personalSpaceId, createdBy: leaver.id, title: '停用者的' })).id },
   }
+  await database.query(async client => client.query('INSERT INTO document_asset_links (document_id, asset_id) VALUES ($1,$2)', [w.personalOtherDocument, w.asset]))
   capture = captureStatements(database.name)
 })
 
@@ -176,6 +181,8 @@ async function observe(request: () => Promise<Response>): Promise<Observed> {
 interface Probe {
   readonly name: string
   readonly actor: ActorName
+  /** 图片的逻辑 404 用 HTTP 200 PNG 回答，其余接口仍为 HTTP 404。 */
+  readonly image?: true
   /** hidden 为真时对看不到的对象发请求，为假时对不存在的对象发同样的请求 */
   readonly request: (session: LoggedIn, hidden: boolean) => Promise<Response>
 }
@@ -241,6 +248,9 @@ async function conflictCopy(session: LoggedIn, documentId: string, unitId: strin
 const IF_NONE_MATCH = (value: string): Record<string, string> => ({ 'if-none-match': value })
 
 const PROBES: readonly Probe[] = [
+  { name: 'GET 图片占位（外人）', actor: 'outsider', image: true, request: async (s, h) => call(s, `/api/assets/${pick(h, w.asset)}`) },
+  { name: 'GET 图片占位（系统管理员）', actor: 'systemAdmin', image: true, request: async (s, h) => call(s, `/api/assets/${pick(h, w.asset)}`) },
+  { name: 'GET 图片占位（只有另一份文档的授权）', actor: 'grantViewer', image: true, request: async (s, h) => call(s, `/api/assets/${pick(h, w.asset)}`) },
   // ---- 文档：外人对团队空间里的文档 ----
   { name: 'GET 文档元数据', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}`) },
   { name: 'GET 文档内容', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/content`) },
@@ -446,7 +456,11 @@ describe('看不到与不存在完全一致：响应、响应头与语句序列�
     const hidden = await observe(async () => probe.request(session, true))
     const absent = await observe(async () => probe.request(session, false))
     const hiddenAgain = await observe(async () => probe.request(session, true))
-    expect(hidden.status).toBe(404)
+    expect(hidden.status).toBe(probe.image === true ? 200 : 404)
+    if (probe.image === true) {
+      expect(hidden.headers['x-asset-status']).toBe('404')
+      expect(hidden.headers['content-type']).toBe('image/png')
+    }
     expect(absent).toEqual(hidden)
     // 同一个请求再发一次，语句序列稳定：比较是有意义的
     expect(hiddenAgain.statements).toEqual(hidden.statements)

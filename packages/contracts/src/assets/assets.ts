@@ -6,6 +6,7 @@ export const ASSET_MAX_BYTES = 5 * 1024 * 1024
 export const ASSET_MAX_SIDE = 8192
 export const ASSET_MAX_PIXELS = 16_000_000
 export const ASSET_EXTENSION_HEADER = 'X-Asset-Extension'
+export const ASSET_STATUS_HEADER = 'X-Asset-Status'
 export const ASSET_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const
 export type AssetMimeType = (typeof ASSET_MIME_TYPES)[number]
 export const ASSET_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'] as const
@@ -14,6 +15,9 @@ export type AssetExtension = (typeof ASSET_EXTENSIONS)[number]
 /** 请求只交后缀，原文件名不进入服务端任务或日志；只规范化大小写。 */
 export const assetExtensionSchema = z.string().toLowerCase().pipe(z.enum(ASSET_EXTENSIONS))
 export const assetIdSchema = uuidSchema
+
+/** 读取路径先接受字符串，非规范 ID 也进入鉴权后返回统一占位，不能被参数管线提前变成另一类响应。 */
+export const assetReadTargetSchema = z.string()
 
 /** 从服务端的资源 ID 生成规范相对地址；纯地址判定模块不因此引入 zod。 */
 export function assetUrl(assetId: string): string {

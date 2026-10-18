@@ -6,6 +6,8 @@ import { DocumentsModule } from '../documents/index.ts'
 import { LocalKeysModule } from '../local-keys/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
 import { UsersModule } from '../users/index.ts'
+import { AssetReadController } from './asset-read.controller.ts'
+import { AssetReadingService } from './asset-reading.service.ts'
 import { AssetUploadController } from './asset-upload.controller.ts'
 import { DocumentEditingController } from './document-editing.controller.ts'
 import { DocumentEditingService } from './document-editing.service.ts'
@@ -35,7 +37,7 @@ import { TrashController } from './trash.controller.ts'
  */
 @Module({
   imports: [DatabaseModule, AuditModule, UsersModule, SpacesModule, DocumentsModule, LocalKeysModule, AssetsModule],
-  controllers: [SpacesController, SpaceMembersController, FoldersController, TrashController, SearchController, DocumentGrantsController, SharedController, DocumentEditingController, AssetUploadController],
-  providers: [ManagedSpaces, SpaceDirectoryService, SpaceMembershipService, TrashDirectoryService, SearchDirectoryService, DocumentSharingService, SharedDirectoryService, DocumentEditingService],
+  controllers: [SpacesController, SpaceMembersController, FoldersController, TrashController, SearchController, DocumentGrantsController, SharedController, DocumentEditingController, AssetUploadController, AssetReadController],
+  providers: [ManagedSpaces, SpaceDirectoryService, SpaceMembershipService, TrashDirectoryService, SearchDirectoryService, DocumentSharingService, SharedDirectoryService, DocumentEditingService, AssetReadingService],
 })
 export class WorkspaceModule {}

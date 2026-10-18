@@ -5,8 +5,10 @@ import type { DatabaseBusyReason } from '../modules/database/index.ts'
 import type { ErrorDetails } from '../shared/errors/app-error.ts'
 import { ERROR_CODES } from '@nerve-office/contracts'
 import { Catch, HttpException } from '@nestjs/common'
-import { CommitLedger, databaseBusyReasonOf } from '../modules/database/index.ts'
+import { CommitLedger, DATABASE_BUSY_RETRY_AFTER_SECONDS, databaseBusyReasonOf } from '../modules/database/index.ts'
 import { AppError } from '../shared/errors/app-error.ts'
+
+export { DATABASE_BUSY_RETRY_AFTER_SECONDS } from '../modules/database/index.ts'
 
 export interface MappedError {
   readonly status: number
@@ -30,13 +32,6 @@ export interface FailedRequest {
   /** 这个请求里有没有事务已经提交（CommitLedger） */
   readonly committed: boolean
 }
-
-/**
- * 数据库繁忙时建议客户端多久之后重试（Retry-After，秒）：取等锁与取连接的默认时限
- * （NERVE_DATABASE_LOCK_TIMEOUT_MS、NERVE_DATABASE_CONNECT_TIMEOUT_MS 的默认值都是 5 秒）。这次请求已经等了这么久没等到；
- * 占着锁或连接的是别的短事务（它们自己也受语句超时与事务中空闲超时的约束），再隔同样长的时间多半已经结束
- */
-export const DATABASE_BUSY_RETRY_AFTER_SECONDS = 5
 
 /**
  * 框架抛出的客户端错误，按 HTTP 状态映射到登记的错误码：

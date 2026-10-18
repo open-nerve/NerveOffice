@@ -19,6 +19,7 @@ import { adminUserListResponseSchema, adminUserSchema, editStatusSchema } from '
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount, createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { uploadTestAsset } from '../support/assets.ts'
 import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
@@ -44,6 +45,7 @@ const EXEMPT: Readonly<Record<string, string>> = {
 const SNAPSHOT_BEGIN = 'begin isolation level repeatable read read only'
 
 interface World {
+  readonly asset: string
   /** 普通成员：个人空间里有文档、文件夹、回收站里的文档；是团队空间的成员；别人分享给他一份文档 */
   readonly amy: TestAccount
   readonly root: TestAccount
@@ -64,6 +66,7 @@ interface Probe {
 
 /** 每个登录之后的 GET 接口用能成功的参数发的请求。新加的 GET 接口要在这里登记一个，并且走只读快照 */
 const PROBES: Readonly<Record<string, (w: World) => Probe>> = {
+  'GET /api/assets/:assetId': w => ({ who: 'amy', path: `/api/assets/${w.asset}` }),
   'GET /api/admin/audit-events': () => ({ who: 'root', path: '/api/admin/audit-events' }),
   'GET /api/admin/invitations': () => ({ who: 'root', path: '/api/admin/invitations' }),
   'GET /api/admin/spaces': () => ({ who: 'root', path: '/api/admin/spaces' }),
@@ -128,7 +131,7 @@ beforeAll(async () => {
   expect((await handOverLease(app.baseUrl, session, reserved, lease, await pendingRequestId(app.baseUrl, benSession, reserved))).status).toBe(200)
   // 艾米取过本机密钥（M3-P6）：管理界面的账户（列表与详情）要查当前的本机密钥，那条查询同样在快照里
   await takeLocalKey(app.baseUrl, session)
-  w = { amy, root, leaver: leaver.id, document, reserved, team }
+  w = { amy, root, leaver: leaver.id, document, reserved, team, asset: (await uploadTestAsset(app.baseUrl, session)).assetId }
   routes = routesOf(app)
   capture = captureStatements(database.name)
 })

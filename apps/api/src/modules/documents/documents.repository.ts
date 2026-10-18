@@ -2,10 +2,12 @@ import type { DocumentProfile, DocumentStatus, DocumentType, GrantRole, Platform
 import type { SQL } from 'drizzle-orm'
 import type { TimeCursor } from '../../shared/time-cursor.ts'
 import type { Database, Transaction } from '../database/index.ts'
+import type { AccessTarget } from './document-access-policy.ts'
 import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
+import { linkedAssetExists } from './document-assets.repository.ts'
 import { grantedTo, grantRoleOf } from './document-grants.repository.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
@@ -216,6 +218,16 @@ function inFolder(folderId: string | null | undefined): SQL | undefined {
 @Injectable()
 export class DocumentsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
+
+  /** 只取一个可读的当前引用来源；状态与空间/分享范围仍由 accessible 统一限定，不加载全部引用。 */
+  async firstAccessibleAssetSource(scope: AccessibleScope, assetId: string, transaction: Transaction): Promise<AccessTarget | undefined> {
+    const [row] = await executorOf(this.db, transaction)
+      .select({ id: d.id, spaceId: d.spaceId, createdBy: d.createdBy })
+      .from(d)
+      .where(and(accessible(scope), linkedAssetExists(d.id, assetId)))
+      .limit(1)
+    return row
+  }
 
   /** 可访问的文档，按更新时间从新到旧；after 是上一页最后一条的位置（keyset）。 */
   async listAccessible(scope: AccessibleScope, options: ListOptions, transaction?: Transaction): Promise<DocumentRow[]> {

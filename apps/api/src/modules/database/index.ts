@@ -1,4 +1,4 @@
-export { databaseBusyReasonOf, LateTransactionStartError, POOL_TIMEOUT_MESSAGE } from './busy-errors.ts'
+export { DATABASE_BUSY_RETRY_AFTER_SECONDS, databaseBusyReasonOf, LateTransactionStartError, POOL_TIMEOUT_MESSAGE } from './busy-errors.ts'
 export type { DatabaseBusyReason } from './busy-errors.ts'
 export { CommitLedger } from './commit-ledger.ts'
 export { inSavepoint, isUniqueViolation } from './constraint-errors.ts'
