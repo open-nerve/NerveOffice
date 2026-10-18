@@ -25,6 +25,31 @@ function issuesOf(action: () => unknown): readonly ConfigIssue[] {
 }
 
 describe('loadConfig', () => {
+  it('图片目录和配额映射到冻结配置，接受上下界', () => {
+    for (const [quotaBytes, quotaCount] of [[5 * 1024 ** 2, 1], [1024 ** 4, 1_000_000]]) {
+      const config = loadConfig({ ...REQUIRED, NERVE_ASSET_ROOT: '/srv/nerve-office/assets', NERVE_ASSET_QUOTA_BYTES: String(quotaBytes), NERVE_ASSET_QUOTA_COUNT: String(quotaCount) })
+      expect(config.assets).toEqual({ root: '/srv/nerve-office/assets', quotaBytes, quotaCount })
+      expect(Object.isFrozen(config.assets)).toBe(true)
+    }
+  })
+
+  it.each([
+    ['NERVE_ASSET_ROOT', 'relative/assets'],
+    ['NERVE_ASSET_ROOT', '/srv/assets\u0000'],
+    ['NERVE_ASSET_QUOTA_BYTES', '5242879'],
+    ['NERVE_ASSET_QUOTA_BYTES', '1099511627777'],
+    ['NERVE_ASSET_QUOTA_BYTES', '1e10'],
+    ['NERVE_ASSET_QUOTA_BYTES', '5.5'],
+    ['NERVE_ASSET_QUOTA_COUNT', '0'],
+    ['NERVE_ASSET_QUOTA_COUNT', '1000001'],
+    ['NERVE_ASSET_QUOTA_COUNT', '-1'],
+    ['NERVE_ASSET_QUOTA_COUNT', 'NaN'],
+  ])('拒绝图片配置 %s=%j，错误不回显取值', (variable, value) => {
+    const issues = issuesOf(() => loadConfig({ ...REQUIRED, [variable]: value }))
+    expect(issues.map(issue => issue.variable)).toEqual([variable])
+    expect(issues[0]?.problem).not.toContain('不认识的变量')
+  })
+
   it.each([
     [undefined, true],
     ['true', true],
@@ -67,6 +92,7 @@ describe('loadConfig', () => {
       login: { maxFailures: 5, accountMaxFailures: 50, ipMaxFailures: 50, windowMinutes: 15, lockoutMinutes: 15 },
       oneTimeLinks: { recordMaxFailures: 10 },
       web: { root: undefined },
+      assets: { root: undefined, quotaBytes: 10 * 1024 ** 3, quotaCount: 100_000 },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2, hashQueue: { maxWaiting: 64, maxWaitMs: 5_000 } },
@@ -486,6 +512,7 @@ describe('loadConfig', () => {
 })
 
 describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
+  const REQUIRED = { NERVE_DATABASE_URL: DATABASE_URL, NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN, NERVE_ASSET_ROOT: '/srv/nerve-office/assets' }
   const MASTER_KEY = randomBytes(32).toString('base64')
   const SERVER = { ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: MASTER_KEY }
   const PROBLEM = '必须是 32 字节随机数的标准 base64（44 个字符、以 = 结尾，例如 openssl rand -base64 32 的输出）'
@@ -512,6 +539,7 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
       { variable: 'NERVE_DATABASE_URL', problem: '缺少' },
       { variable: 'NERVE_PUBLIC_ORIGIN', problem: '缺少' },
       { variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '缺少' },
+      { variable: 'NERVE_ASSET_ROOT', problem: '缺少' },
     ])
   })
 
@@ -624,5 +652,17 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）', () => {
     expect(localKeys).toBe(config.localKeys)
     // 命令行的组装只有 APP_CONFIG
     expect((ConfigModule.forRoot(loadConfig(SERVER)).providers ?? []).map(provider => (provider as { provide: symbol }).provide)).toEqual([APP_CONFIG])
+  })
+})
+
+describe('私有资源目录只在 HTTP 服务端必填', () => {
+  const server = { ...REQUIRED, NERVE_LOCAL_KEYS_MASTER_KEY: Buffer.alloc(32, 171).toString('base64') }
+  it('缺少或空值在启动校验阶段拒绝，命令行不要求它', () => {
+    expect(issuesOf(() => loadServerConfig(server))).toEqual([{ variable: 'NERVE_ASSET_ROOT', problem: '缺少' }])
+    expect(issuesOf(() => loadServerConfig({ ...server, NERVE_ASSET_ROOT: '' }))).toEqual([{ variable: 'NERVE_ASSET_ROOT', problem: '缺少' }])
+    expect(loadConfig(REQUIRED).assets.root).toBeUndefined()
+  })
+  it('明确的绝对路径保留在服务端配置', () => {
+    expect(loadServerConfig({ ...server, NERVE_ASSET_ROOT: '/srv/nerve/assets' }).assets.root).toBe('/srv/nerve/assets')
   })
 })

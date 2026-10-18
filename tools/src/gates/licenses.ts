@@ -102,8 +102,10 @@ export function isAllowedIn(allowed: readonly string[]): (id: string) => boolean
   return id => normalized.has(id.toUpperCase())
 }
 
-function isException(name: string, license: string, exceptions: readonly LicenseException[]): boolean {
-  return exceptions.some(e => e.name === name && e.license.toUpperCase() === license.toUpperCase())
+function isException(name: string, license: string, versions: readonly string[], exceptions: readonly LicenseException[]): boolean {
+  const matching = exceptions.filter(e => e.name === name && e.license.toUpperCase() === license.toUpperCase())
+  return matching.some(e => e.version === undefined)
+    || (versions.length > 0 && versions.every(version => matching.some(e => e.version === version)))
 }
 
 export function flattenLicenseReport(report: LicenseReport): LicenseEntry[] {
@@ -142,7 +144,7 @@ export function checkProductionLicenses(
       violations.push({ rule: 'licenses/not-listed', subject, detail: `许可清单里找不到这个安装实例（${item.path}），无法确认它的许可` })
       continue
     }
-    if (!satisfies(entry.license, isAllowed) && !isException(entry.name, entry.license, exceptions))
+    if (!satisfies(entry.license, isAllowed) && !isException(entry.name, entry.license, [item.version], exceptions))
       violations.push({ rule: 'licenses/production', subject, detail: `许可 ${entry.license || '（未声明）'} 不在生产依赖的白名单里` })
   }
   return violations
@@ -151,7 +153,7 @@ export function checkProductionLicenses(
 export function checkDevelopmentLicenses(entries: readonly LicenseEntry[], exceptions: readonly LicenseException[]): Violation[] {
   const isPermitted = (id: string): boolean => !STRONG_COPYLEFT.test(id) && !UNDECLARED.has(id.toUpperCase())
   return entries
-    .filter(entry => !satisfies(entry.license, isPermitted) && !isException(entry.name, entry.license, exceptions))
+    .filter(entry => !satisfies(entry.license, isPermitted) && !isException(entry.name, entry.license, entry.versions, exceptions))
     .map(entry => ({
       rule: 'licenses/development',
       subject: `${entry.name}@${entry.versions.join('、')}`,

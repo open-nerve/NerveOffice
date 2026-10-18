@@ -1,3 +1,4 @@
+import { ERROR_CODES } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { ApiError, NetworkError, RequestTimeoutError } from './client.ts'
 import { describeError } from './describe-error.ts'
@@ -22,7 +23,16 @@ describe('describeError', () => {
     expect(describeError(new ApiError(403, 'PERMISSION_DENIED', '编辑者只能删除自己创建的文档')).message).toBe('编辑者只能删除自己创建的文档')
   })
 
-  it('每个错误码都有前端的文字（M2-P6 复核 G3）：文件夹的层数与成环不再落到服务端的说明', () => {
+  it.each(Object.entries(ERROR_CODES))('错误码 %s 始终给出非空提示并保留请求标识', (code, { status }) => {
+    const result = describeError(new ApiError(status, code, '服务端的说明', { requestId: 'r-all' }))
+    expect(result.message).toEqual(expect.stringMatching(/\S/u))
+    expect(result.requestId).toBe('r-all')
+    if (code !== 'PERMISSION_DENIED') {
+      expect(result.message).not.toBe('服务端的说明')
+    }
+  })
+
+  it('文件夹的层数与成环不再落到服务端的说明（M2-P6 复核 G3）', () => {
     expect(describeError(new ApiError(409, 'FOLDER_DEPTH_EXCEEDED', '文件夹的层级超过上限')).message).toBe('文件夹最多 10 层：这样新建或移动会超过层数上限（移动时连同里面的子文件夹一起算）')
     expect(describeError(new ApiError(409, 'FOLDER_CYCLE', '服务端的说明')).message).toBe('不能把文件夹移动到它自己或它的子文件夹里')
   })

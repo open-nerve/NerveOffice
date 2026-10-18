@@ -1,16 +1,21 @@
 // 存活与就绪探针（P2 设计 §3.9）：就绪要求数据库连得上、库结构版本一致。
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { errorResponseSchema, healthLiveResponseSchema, healthReadyResponseSchema } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startTestApp } from '../support/api-app.ts'
+import { removeTestAssetRoot, testAssetRoot } from '../support/asset-root.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 
 const apps: TestApp[] = []
 const databases: TestDatabase[] = []
+const roots = new Set<string>()
 
 async function appOn(databaseUrl: string): Promise<TestApp> {
+  roots.add(databaseUrl)
   const app = await startTestApp({ databaseUrl })
   apps.push(app)
   return app
@@ -35,6 +40,9 @@ afterEach(async () => {
     await app.close()
   for (const created of databases.splice(0))
     await created.drop()
+  for (const url of roots)
+    await removeTestAssetRoot(url)
+  roots.clear()
 })
 
 describe('健康检查（进程内的真实应用）', () => {
@@ -62,9 +70,16 @@ describe('健康检查（进程内的真实应用）', () => {
     expect(await notReadyReason(await appOn(tampered.url))).toMatch(/^库结构不一致：/)
   })
 
-  it('数据库不可达：存活仍然 200，就绪 503', async () => {
-    const app = await appOn('postgres://nerve:nerve_dev_only@127.0.0.1:1/nerve_office')
+  it('数据库不可达，即使有待恢复图片临时文件：存活仍然 200，就绪 503，不清掉上传残留', async () => {
+    const url = 'postgres://nerve:nerve_dev_only@127.0.0.1:1/nerve_office'
+    roots.add(url)
+    const root = testAssetRoot(url)
+    await mkdir(join(root, 'staging'), { mode: 0o700, recursive: true })
+    const temporary = join(root, 'staging', 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.tmp')
+    await writeFile(temporary, 'pending image', { mode: 0o600 })
+    const app = await appOn(url)
     expect((await fetch(`${app.baseUrl}/api/health/live`)).status).toBe(200)
     expect(await notReadyReason(app)).toBe('数据库不可达')
+    expect(await readFile(temporary, 'utf8')).toBe('pending image')
   })
 })

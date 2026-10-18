@@ -4,7 +4,8 @@ M1 交付的是生产镜像与一套测试环境，用于验收与容器 E2E。�
 
 | 路径 | 内容 |
 |---|---|
-| `Dockerfile` | 生产镜像：多阶段构建，运行镜像只有 Node 与构建产物，非 root 运行，自带健康检查 |
+| `Dockerfile` | 生产镜像：多阶段构建，Node 与构建产物、原生组件对应材料，非 root 运行，自带健康检查 |
+| `native-images/` | 精确版本的原生图片组件源码/补丁来源、摘要、许可索引与替换说明 |
 | `sql/bootstrap-roles.sql` | 数据库两个角色（所有者、应用）与数据库的一次性初始化 |
 | `test/` | 测试环境的编排：应用 + PostgreSQL 18 + Caddy（HTTPS） |
 | `dev/compose.yaml` | 本机开发用的 PostgreSQL，与部署无关 |
@@ -31,6 +32,17 @@ docker build -f deploy/Dockerfile -t nerve-office:test \
 
 `VERSION` 与 `REVISION` 写进镜像的 OCI 标签，可以不传。`REVISION` 是十六进制的提交号时，还附在页面的构建版本之后（例如 `0.1.0+1a2b3c4`）：
 页面保存时上报它，修订记录里看得到是哪一次构建写的；服务端按 `NERVE_MIN_CLIENT_BUILD` 比较时不看 `+` 之后的部分。镜像里带着服务端依赖的第三方许可清单（`/app/licenses/`）。
+
+Sharp/libvips 的完整对应源码、补丁、许可正文、构建与替换说明放在 `/app/licenses/native-images`，不在 Web 根中。构建会下载并逐文件核对 `native-images/sources.json` 的大小与 SHA-256，使用独立 BuildKit 缓存；缓存命中同样复核。首次需要获取约 193 MiB 原件，缺件、错误摘要或实际原生版本不符时构建失败。应用运行不需要联网下载，也不执行这些材料里的脚本。
+
+可在运行容器内离线复核，命令会检查实际文件、全部声明、数量和已加载的三个版本，并输出 JSON 回执：
+
+```sh
+docker compose -f deploy/test/compose.yaml exec -T app node native-verification/native-image-verify-cli.js \
+  --bundle /app/licenses/native-images --api-package /app/apps/api/package.json
+```
+
+需要取出材料时，用 `docker cp <应用容器名>:/app/licenses/native-images <全新本地目录>`；重建/替换步骤见其中 `README.md`。卷数据不在这些交付材料中。
 
 ## 起测试环境
 
@@ -71,7 +83,7 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 
 顺序是 备份 → 迁移 → 换镜像：
 
-1. 备份数据库，例如 `docker compose -f deploy/test/compose.yaml exec -T db pg_dump -U postgres -Fc nerve_office > nerve_office.dump`（正式环境的备份与恢复在 M7）；
+1. 暂停写入，配套备份数据库与 `assets` 私有资源卷，例如数据库导出用 `docker compose -f deploy/test/compose.yaml exec -T db pg_dump -U postgres -Fc nerve_office > nerve_office.dump`；仅有数据库备份不足以恢复图片（正式备份与恢复流程在 M7）；
 2. 构建新镜像（用新的标签），改 `.env` 里的 `NERVE_IMAGE`（本机密钥的主密钥保持不变）；
 3. `docker compose -f deploy/test/compose.yaml up -d`：compose 先停掉旧的应用（SIGTERM，排空在途请求再退出）并按新镜像重建 `migrate` 与 `app`，然后执行迁移（只向前、带锁，没有新迁移时说明"已是最新"），成功结束之后才启动新的应用。迁移期间服务不可用，单实例的测试环境可以接受；
 4. 核对：经 HTTPS 的存活探针通过，应用日志里有"数据库已就绪，库结构版本一致"。
@@ -79,6 +91,22 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 迁移只向前，回滚要从备份恢复。
 
 ### 变量（`deploy/test/.env`）
+
+HTTP 服务要求显式配置 `NERVE_ASSET_ROOT`：应用用户拥有的私有目录绝对路径，目录权限 0700、文件 0600，不能含符号链接，且必须与前端托管目录互不包含；目录的父目录须已存在。缺失、不可写或不安全时拒绝启动。前端根是发布用符号链接时也按真实路径核对，拒绝与私有卷重叠。迁移和运维命令不要求此项。
+
+测试编排给应用独占的 `assets` 命名卷，固定挂载 `/var/lib/nerve-office/assets`；初次创建继承镜像中的 node 所有者与 0700。数据库、迁移与 Caddy 不挂此卷，应用根文件系统仍只读，Web 根为 `/app/web`。`down` 保留卷；`down -v` 同时删除数据库与图片，不能用于保留数据的升级。改用宿主目录挂载时须自行按容器 node 的 UID/GID 准备权限，应用不会以 root 修补权限。
+
+本地运行 `pnpm dev:api` 也须显式提供自己的私有目录，不在源码或 Vite 目录里设默认值。可在终端先创建父目录并传入变量（现有目录或祖先含符号链接时需改用真实路径）：
+
+```bash
+mkdir -p -m 700 "$HOME/.local/share/nerve-office"
+export NERVE_ASSET_ROOT="$HOME/.local/share/nerve-office/assets"
+pnpm dev:api
+```
+
+同一资源卷只供同一数据库的一组应用实例使用。每次发布的临时 UUID 在数据库连接上占用会话级锁；下一次发布前仅清理已经无人占用的私有上传临时文件。启动只做本地目录与写入探针检查，数据库不可达时仍保持存活检查 200、就绪检查 503。进程崩溃或连接断开后可恢复，正式对象与持久字节预留不会自动删除。备份与恢复必须把数据库和资源卷配套保管，不能只恢复其中一边。
+
+组织配额由 `NERVE_ASSET_QUOTA_BYTES`（默认 10 GiB，5 MiB–1 TiB）与 `NERVE_ASSET_QUOTA_COUNT`（默认 100,000，1–1,000,000）配置。字节按完整对象与持久预留计，同图只计一次；每次上传单独计记录。下调配额保留已有资源，拒绝新增超额占用；失败预留不会自动清账，P1 不运行正式对象 GC。Linux 启动还必须能用 `/usr/bin/prlimit` 实际设置图片子进程的硬限制；进程、像素与时间预算见 [ADR-021](../docs/adr/ADR-021-图片处理与资源边界.md)。
 
 | 变量 | 说明 |
 |---|---|
@@ -135,17 +163,17 @@ docker compose -f deploy/test/compose.yaml exec -T app \
 **应用容器的内存上限要满足：**
 
 ```
-内存上限 ≥ 子进程数 ×（堆上限 + 约 100 MiB）+ 主进程的峰值（约 500 MiB）
+内存上限 ≥ 快照子进程数 ×（堆上限 + 约 100 MiB）+ 主进程的峰值（约 500 MiB）+ 图片子进程预算（1536 MiB）
 ```
 
 - 每个子进程：堆上限（`NERVE_SNAPSHOT_INSPECTION_HEAP_MB`）之外，另有新生代的 3 个 16 MiB 半区（约 48 MiB）与 Node 本身（约 35 MiB），约 100 MiB 是取整之后的余量（ADR-001 的"M3-P3 的补充"、DEF-018 的测量）；
 - 主进程：容器 E2E 里应用容器的内存峰值落在约 240–270 与约 380–490 MiB 两档，按高档取约 500 MiB（ADR-001 的内存一节）；
-- 按默认值（2 个子进程、堆上限 512 MiB）：2 ×（512 + 100）+ 500 ≈ 1.7 GiB，建议给 2 GiB。实测：默认设置下同时提交数量上限之内最费的形状，容器实际占的内存峰值约 1.2 GiB，5 MiB 的真实快照约 600 MiB（ADR-001）；
-- 内存紧的机器：把子进程数降到 1（1 ×（512 + 100）+ 500 ≈ 1.1 GiB）；堆上限不要低于 128。
+- 既有快照部分按默认 2 个子进程、堆上限 512 MiB 预算约 1.7 GiB；M5-P1 再为单个图片子进程预留 1536 MiB，总计约 3.2 GiB，建议至少 4 GiB（不含 PostgreSQL）。图片队列最多 4 个，单个输入/输出各 5 MiB，主进程余量覆盖队列；Linux 对图片子进程另用 prlimit 约束地址空间，不能替代整个容器的内存预算；
+- 既有快照实测：默认设置下同时提交数量上限内最费的形状，容器内存峰值约 1.2 GiB，5 MiB 真实快照约 600 MiB（ADR-001）；这些是图片接入前的测量，不能直接当作全部服务的新峰值。内存紧时可降低快照子进程数，堆上限不要低于 128，并保留图片预算。
 
 内存上限低于这个数时，容器的内存会先于子进程的堆上限用尽，内核结束一个子进程（子进程把自己的 `oom_score_adj` 调到了 1000，内核先挑它，主进程保住）。正在检查的那一份按"过于复杂"拒绝（`too-complex`，页面说明表格过于复杂），而不是 503 让页面一遍遍原样重发；应用记一条 error："快照检查的子进程在检查期间被系统结束（SIGKILL），多半是容器的内存不够……"。看到它就按上面的规则调高内存上限，或者调低子进程数、堆上限。
 
-`test/compose.yaml` 没有给应用容器设内存上限（容器可以用到主机的内存，与默认值相容）；加上 `mem_limit`（或 `deploy.resources.limits.memory`）时按上面的规则取值。
+`test/compose.yaml` 给应用容器设 `mem_limit: 4g`，保持默认快照并发时使用；提高子进程数或堆上限，须按上面的规则同步提高容器内存并复测。
 
 ### 本机密钥的主密钥
 

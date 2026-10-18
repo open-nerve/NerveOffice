@@ -14,6 +14,7 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { documentAccessIn, DocumentAccessPolicy, requireCreateTarget, requireDocumentContent } from './document-access-policy.ts'
+import { DocumentAssetReferences } from './document-asset-references.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -38,7 +39,8 @@ export interface CopyDocumentCommand {
 /**
  * 复制一份文档（M2-P4 设计 §3.4 第 4 条，US-M2-08）：能读源文档 + 在目标空间有新建权限。
  * 副本是一份新文档：新的 id、修订号 1、写入代次 0、创建人是操作者，修订记录写一条（kind='created'）；
- * 不复制历史修订，也不复制单独授权（P5）。快照不经解析，由数据库直接复制压缩后的字节，副本与源逐字节一致（A10）；
+ * 不复制历史修订，也不复制单独授权（P5）。M5 只承接源的当前图片引用，不提升正文里其他地址的权限。
+ * 快照不经解析，由数据库直接复制压缩后的字节，副本与源逐字节一致（A10）；
  * unitId 原样复制（00 号计划书 §8.3）。requestId 幂等，与新建文档同一个做法：响应带 replayed，重放为真（M2-P6 复核第二批 S-1）。
  *
  * 锁（ADR-007 的顺序：空间树锁 → 空间行按 id → 文档行）：目标空间的树锁（只有目标的结构在变）→ 源空间与目标空间的空间行
@@ -59,6 +61,7 @@ export class DocumentCopyService {
     private readonly spaces: SpacesService,
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
+    private readonly assetReferences: DocumentAssetReferences,
   ) {}
 
   async copy(actor: Actor, id: string, command: CopyDocumentCommand, origin: AuditOrigin): Promise<CreatedDocument> {
@@ -95,6 +98,8 @@ export class DocumentCopyService {
       const copy = await this.documents.copyFrom(id, { spaceId: command.spaceId, folderId, title, createdBy: userId }, transaction)
       if (copy === undefined)
         throw new Error(`锁住的源文档复制不到：${id}`)
+      // 新行仅本事务可见；沿用源的空间/文档锁和读取许可，只复制已经成立的当前引用。
+      await this.assetReferences.copy(source.document, copy.id, transaction)
       // 内容连同哈希与非空的资源名原样复制（M3-P3 设计 §3.1）；副本的修订记录记下这份内容的哈希（源是存量时为空）
       const content = await this.contents.copyFrom(id, copy.id, transaction)
       if (content === undefined)

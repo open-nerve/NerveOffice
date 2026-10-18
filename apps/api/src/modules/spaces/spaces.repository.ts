@@ -146,6 +146,13 @@ export class SpacesRepository {
     return row
   }
 
+  /** 引用授权涉及多个空间时，一次按 id 顺序持共享锁；不用展开 SQL 参数。 */
+  async lockSharedMany(spaceIds: readonly string[], transaction: Transaction): Promise<SpaceRecord[]> {
+    if (spaceIds.length === 0)
+      return []
+    return executorOf(this.db, transaction).select(RECORD_COLUMNS).from(spaces).where(inIdArray(spaces.id, spaceIds)).orderBy(asc(spaces.id)).for('share')
+  }
+
   /**
    * 锁住空间行再读（FOR NO KEY UPDATE）：改名、全员可见、归档与恢复、成员的变更都先锁它，
    * 成员的变更因此在同一个空间里逐个执行（"至少保留一个空间管理员"），也与在空间里新建（FOR SHARE）互斥。

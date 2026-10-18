@@ -51,6 +51,8 @@ export type {
   TransferDocumentsResponse,
   TransferTarget,
 } from './admin/admin.ts'
+export { ASSET_EXTENSION_HEADER, ASSET_EXTENSIONS, ASSET_INVALID_RULES, ASSET_MAX_BYTES, ASSET_MAX_PIXELS, ASSET_MAX_SIDE, ASSET_MIME_TYPES, ASSET_STATUS_HEADER, assetExtensionSchema, assetIdSchema, assetInvalidDetailsSchema, assetQuotaDetailsSchema, assetReadTargetSchema, assetUploadResponseSchema, assetUrl } from './assets/assets.ts'
+export type { AssetExtension, AssetInvalidDetails, AssetInvalidRule, AssetMimeType, AssetQuotaDetails, AssetUploadResponse } from './assets/assets.ts'
 export { auditDetailsSchema, LINK_ISSUER_REVOCATION_REASONS } from './audit/audit-details.ts'
 export type { AuditActionDetails, AuditActionDetailsInput, AuditDetailsOf, EveryAuditActionHasDetails, LinkIssuerRevocationReason } from './audit/audit-details.ts'
 export { auditEventItemSchema, auditEventListResponseSchema, auditEventQuerySchema, auditUserNameSchema } from './audit/audit-query.ts'
@@ -88,6 +90,7 @@ export type {
 export { SESSION_EXPIRED_REASONS, sessionExpiredDetailsSchema } from './auth/session-expiration.ts'
 export type { SessionExpiredDetails, SessionExpiredReason } from './auth/session-expiration.ts'
 export { isPlatformAssetAddress } from './documents/asset-address.ts'
+export { extractAssetIds } from './documents/asset-references.ts'
 export {
   AUTOSAVE_CAPTURE_MAX_MS,
   AUTOSAVE_CAPTURE_QUIET_MS,

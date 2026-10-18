@@ -1,6 +1,6 @@
 // 快照的检查（M3-P3 设计 §3.3，00 号计划书 §11.2）：解压之后的字节 → 解码、按文字数嵌套与元素、解析、与文档无关的规则、
 // 规范化的内容哈希。纯函数、同步、不抛出；在子进程里执行（snapshot-inspection.child.ts，主进程经 SnapshotInspector 交来），
-// 结果很小，经 IPC 回给主进程。
+// 仅把校验元数据与去重后的图片标识经 IPC 回给主进程，不回传正文。
 // 规则按 contracts 的 SNAPSHOT_RULES 的先后检查，第一条不满足的就是结果：encoding → depth、entries（外层的文字）→ json →
 // depth、entries（资源 data 的文字，与外层累加）→ structure → 资源（resources、resource-duplicate、resource-unknown、resource-data、
 // resource-not-empty）→ image-source → 链接（link-structure、link-address、link-range-id）。
@@ -10,6 +10,7 @@ import type { DocumentProfile, SnapshotRule } from '@nerve-office/contracts'
 import type { EntryCount } from './snapshot-checks.ts'
 import { createHash } from 'node:crypto'
 import { canonicalContentTextOf, checkResources, contentHashInput } from '@nerve-office/contracts'
+import { snapshotAssetIds } from './snapshot-assets.ts'
 import { embeddedJson, hasForeignImage, measureJsonText, PROFILE_SNAPSHOT_RULES } from './snapshot-checks.ts'
 
 /** 只看快照本身就能判断的规则：不含要读文档的 unit-id、resource-missing，与子进程池给出的 too-complex */
@@ -26,6 +27,8 @@ export interface PassedSnapshot {
   readonly presentResources: readonly string[]
   /** 其中非空的资源名，按名称排序：随内容存下，下一次保存的不缩水按它核对 */
   readonly nonEmptyResources: readonly string[]
+  /** 正文解析值中的规范图片标识，去重并按码元排序；没有图片时明确返回空数组 */
+  readonly assetIds: readonly string[]
   /** 原文（解压之后）的字节数 */
   readonly rawBytes: number
 }
@@ -96,6 +99,7 @@ export function inspectSnapshot(raw: Uint8Array, profile: DocumentProfile): Snap
     contentHash: new Uint8Array(digest),
     presentResources: resources.present,
     nonEmptyResources: resources.nonEmpty,
+    assetIds: snapshotAssetIds(snapshot, embedded),
     rawBytes: raw.byteLength,
   }
 }

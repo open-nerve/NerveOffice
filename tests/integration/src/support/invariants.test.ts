@@ -128,10 +128,16 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
          VALUES ($1, 1, NULL, NULL, now() - interval '2 hours', now() - interval '1 hour'), ($1, 2, ${material}, now() - interval '2 hours', NULL)`,
         [drift.id],
       )
+      // I22/I23/I24：同 hash 同时是 claim 和对象，字节/记录计数又都与事实不符。
+      await client.query('INSERT INTO asset_object_claims (sha256, bytes) VALUES (repeat(\'a\', 64), 100)')
+      await client.query('INSERT INTO asset_objects (sha256, storage_key, mime_type, width, height, frames, bytes) VALUES (repeat(\'a\', 64), \'objects/aa/\' || repeat(\'a\', 64), \'image/png\', 1, 1, 1, 100)')
+      await client.query('INSERT INTO asset_quota (id, used_bytes, used_assets) VALUES (1, 1, 1)')
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)
     expect(failure?.message).toContain('违反了只由服务保证的不变量')
+    for (const id of ['I22 ', 'I23 ', 'I24 '])
+      expect(failure?.message).toContain(id)
     for (const invariant of Object.keys(INVARIANTS))
       expect(failure?.message, invariant).toContain(`${invariant}：`)
     // 报错之前库已经删掉了：不留下中断的测试库

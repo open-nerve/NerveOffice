@@ -87,6 +87,11 @@ export class SpacesService {
     return this.repository.lockShared(spaceId, transaction)
   }
 
+  /** 全部既有文档锁之前，按 id 批量持住空间，保持成员与空间状态不变。 */
+  async holdSpaces(spaceIds: readonly string[], transaction: Transaction): Promise<readonly SpaceRecord[]> {
+    return this.repository.lockSharedMany(spaceIds, transaction)
+  }
+
   /** 锁住空间行（FOR NO KEY UPDATE）再读：改动空间与成员的事务先锁它（锁的顺序见 M2-P2 设计 §3.9） */
   async lockSpace(spaceId: string, transaction: Transaction): Promise<SpaceRecord | undefined> {
     return this.repository.lockRecord(spaceId, transaction)

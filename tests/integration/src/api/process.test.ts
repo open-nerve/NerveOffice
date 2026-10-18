@@ -4,7 +4,7 @@ import type { ApiProcess } from '../support/api-process.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readExpectedMigrations } from '@nerve-office/api'
@@ -57,13 +57,39 @@ describe('迁移命令', () => {
 })
 
 describe('api 进程', () => {
+  it('私有图片根缺失、权限开放或与静态托管重叠时拒绝监听，错误不回显目录', async () => {
+    const database = await createTestDatabase()
+    databases.push(database)
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'nerve-private-root-')))
+    try {
+      const publicDirectory = join(directory, 'web')
+      mkdirSync(publicDirectory, { mode: 0o755 })
+      writeFileSync(join(publicDirectory, 'index.html'), '<!doctype html>')
+      writeFileSync(join(publicDirectory, 'editor.html'), '<!doctype html>')
+      const configurations: Readonly<Record<string, string>>[] = [
+        { NERVE_ASSET_ROOT: '' },
+        { NERVE_ASSET_ROOT: publicDirectory },
+        { NERVE_ASSET_ROOT: join(publicDirectory, 'images'), NERVE_WEB_ROOT: publicDirectory },
+      ]
+      for (const env of configurations) {
+        const api = start(serverEnvironment(database.url, env))
+        expect((await api.exited).code).toBe(1)
+        expect(api.output()).not.toContain('HTTP 服务已启动')
+        expect(api.output()).not.toContain(directory)
+      }
+    }
+    finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
   it('配置缺失时启动失败：退出码 1，日志的错误码为 CONFIG_INVALID，并列出变量名（应用进程另要求本机密钥的主密钥，M3-P6 设计 §3.4）', async () => {
     const api = start({})
     expect((await api.exited).code).toBe(1)
     const entry = await api.waitForLog(log => log.code === 'CONFIG_INVALID')
     expect(entry).toMatchObject({
       level: 'fatal',
-      issues: [{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }, { variable: 'NERVE_PUBLIC_ORIGIN', problem: '缺少' }, { variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '缺少' }],
+      issues: [{ variable: 'NERVE_DATABASE_URL', problem: '缺少' }, { variable: 'NERVE_PUBLIC_ORIGIN', problem: '缺少' }, { variable: 'NERVE_LOCAL_KEYS_MASTER_KEY', problem: '缺少' }, { variable: 'NERVE_ASSET_ROOT', problem: '缺少' }],
     })
   })
 
@@ -148,6 +174,7 @@ describe('本机密钥的主密钥（M3-P6 设计 §3.4）：只有应用进程�
     databases.push(database)
     const env = testEnvironment(database.url)
     expect(env).not.toHaveProperty('NERVE_LOCAL_KEYS_MASTER_KEY')
+    expect(env).not.toHaveProperty('NERVE_ASSET_ROOT')
     const migrate = start(env, 'migrate')
     expect((await migrate.exited).code).toBe(0)
     const initAdmin = startApiProcess(env, 'init-admin', { args: ['--username', 'root', '--password-stdin'], stdin: 'correct horse battery staple\n' })

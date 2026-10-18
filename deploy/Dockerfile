@@ -2,7 +2,7 @@
 # 在仓库根目录构建：docker build -f deploy/Dockerfile -t nerve-office:<版本> .
 # 不绑定平台：CI 构建 linux/amd64，本机（Apple 芯片）构建 linux/arm64；基础镜像按多架构索引的摘要锁定。
 # 阶段：base（加上 pnpm）→ manifests（锁文件、工作区配置与各包的 package.json）→ build（全部依赖、构建、服务端许可清单）
-# 与 prod-deps（只装 api 的生产依赖）→ runtime（从基础镜像重新开始，不带 pnpm、npm 与源码）。
+# 与 prod-deps（只装 api 的生产依赖）→ runtime（从基础镜像重新开始，不带包管理器；原生组件的对应源码作为发行材料单独携带）。
 
 # Node 的版本与 .node-version 一致，pnpm 的版本与根目录 package.json 的 packageManager 一致（门禁 pins 核对）
 ARG NODE_IMAGE=node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
@@ -32,6 +32,14 @@ COPY packages/contracts packages/contracts
 COPY apps/api apps/api
 COPY apps/web apps/web
 COPY tools tools
+COPY deploy/native-images deploy/native-images
+# 原生图片组件的完整对应材料：缓存也逐件核对大小和 SHA-256，下载/缺件/版本错误均中止构建。
+# 先于 REVISION 构建层收集，单纯换提交号不重新下载约 193 MiB 原件。
+RUN --mount=type=cache,id=nerve-office-native-images,target=/native-cache,sharing=locked \
+    mkdir -p /app/licenses && \
+    node tools/src/deploy/native-image-cli.ts --out /app/licenses/native-images --cache /native-cache && \
+    pnpm --filter @nerve-office/tools run build:native-images && \
+    node tools/dist/native-images/native-image-verify-cli.js --bundle /app/licenses/native-images --api-package /app/apps/api/package.json
 # contracts、api 与 web 的生产构建（web 不是 dist-e2e：测试构建里的 CSP 探针不能进镜像）。
 # 页面的构建版本附上提交号作诊断信息（0.1.0+<提交号>，M3-P3 设计 §3.5，见 apps/web/vite.config.ts 的 clientBuild）：取与 OCI 标签同一个
 # REVISION 构建参数，没传或不是十六进制的提交号时不附。代价：提交号每次都不同，这一步与之后的一步不再命中缓存——依赖安装那一层不受影响，
@@ -59,6 +67,9 @@ LABEL org.opencontainers.image.title="NerveOffice" \
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
            /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
            /opt/yarn-* /usr/local/bin/yarn /usr/local/bin/yarnpkg
+# 私有持久卷第一次挂载时继承此目录的所有者与 0700；运行时不以 root 修补错误权限。
+# 正式处理器在 Linux 使用 prlimit：基础镜像不再带它时构建立即失败。
+RUN /usr/bin/prlimit --version && install -d -o node -g node -m 0700 /var/lib/nerve-office/assets
 # 应用不读 NODE_ENV，Express 的默认行为按生产；前端的生产构建放在 /app/web
 ENV NODE_ENV=production \
     NERVE_WEB_ROOT=/app/web
@@ -71,12 +82,15 @@ COPY --from=build /app/packages/contracts/package.json packages/contracts/
 COPY --from=build /app/packages/contracts/dist packages/contracts/dist
 COPY --from=build /app/apps/api/package.json apps/api/
 COPY --from=build /app/apps/api/dist apps/api/dist
+COPY --from=build /app/tools/dist/native-images apps/api/native-verification
 COPY --from=build /app/apps/web/dist web
 COPY --from=build /app/licenses licenses
 COPY LICENSE licenses/LICENSE
 # 文件归 root 所有、以镜像自带的非 root 用户 node 运行：应用改不了自己的代码
 WORKDIR /app/apps/api
 USER node
+# 复核的是最终 prod-deps，避免构建阶段依赖正确但实际分发依赖不符。
+RUN node native-verification/native-image-verify-cli.js --bundle /app/licenses/native-images --api-package /app/apps/api/package.json
 EXPOSE 3000
 # slim 镜像里没有 curl：用 Node 自带的 fetch 请求就绪探针；就绪失败按 error 记日志，间隔不宜太密
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \

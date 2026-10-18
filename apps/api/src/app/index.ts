@@ -1,6 +1,8 @@
 // api 对外的程序接口（P2 设计 §3.2）：命令行与集成测试经这里建应用，走的是与进程入口相同的管线。
 // 只放各模块经公开入口本来就能拿到的东西：数据库句柄与 documents 的仓储只给集成测试，在 integration.test-support.ts
 // （包的出口 @nerve-office/api/testing）。放在这里的话，命令行与 app 层的其他文件经这里转手引用它们，lint 按路径的限制认不出来（M2-P6 复验 R-S4）
+export { AssetUploadService } from '../modules/assets/index.ts'
+export type { AssetUploadActor } from '../modules/assets/index.ts'
 export { AuditModule, AuditService, RequestOrigin } from '../modules/audit/index.ts'
 export type { AuditEvent, AuditOrigin } from '../modules/audit/index.ts'
 export { ConfigError, loadConfig, loadConfigFromEnvironment, loadServerConfig, loadServerConfigFromEnvironment } from '../modules/config/index.ts'

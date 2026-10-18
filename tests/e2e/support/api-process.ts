@@ -1,7 +1,7 @@
 // 强制结束后端再启动（US-M1-10，P5 设计 §3.6），按运行方式区分：
 // - 本机模式：向服务脚本发 SIGUSR2，它对后端发 SIGKILL 再按原来的参数启动（serve.ts）；
 // - 外部模式（容器 E2E）：docker compose kill -s KILL app，等容器停下，再 up -d --no-deps --wait app：
-//   不连带重跑迁移（start 会先把依赖的 migrate 再跑一遍，审查 B3），容器还是同一个。
+//   不连带重跑迁移（start 会先把依赖的 migrate 再跑一遍，审查 B3），默认仍是同一容器；图片持久卷验收另要求强制重建并确认容器 ID 改变。
 // 两者之后都等到就绪：本机模式请求就绪探针；外部模式的就绪探针不对外（Caddy 返回 404），由 --wait 等容器的健康检查
 // （请求的就是就绪探针）通过，再确认经 Caddy 的存活探针。
 import type { APIRequestContext } from '@playwright/test'
@@ -23,7 +23,7 @@ async function statusOf(request: APIRequestContext, path: string): Promise<numbe
   }
 }
 
-export async function restartApi(request: APIRequestContext): Promise<void> {
+export async function restartApi(request: APIRequestContext, options: { recreateContainer?: boolean } = {}): Promise<void> {
   if (process.env.E2E_BASE_URL === undefined) {
     const before = readServerControl()
     process.kill(before.serverPid, 'SIGUSR2')
@@ -31,9 +31,13 @@ export async function restartApi(request: APIRequestContext): Promise<void> {
     await expect.poll(async () => statusOf(request, '/api/health/ready'), { timeout: RESTART_TIMEOUT_MS }).toBe(200)
     return
   }
+  const before = compose(['ps', '--quiet', 'app']).trim()
+  expect(before).not.toBe('')
   compose(['kill', '-s', 'KILL', 'app'])
   // 等容器真的停下：还在运行时 up 什么都不做
   await expect.poll(() => compose(['ps', '--quiet', '--status', 'running', 'app']).trim(), { timeout: 10_000 }).toBe('')
-  compose(['up', '--detach', '--no-deps', '--wait', '--wait-timeout', String(RESTART_TIMEOUT_MS / 1000), 'app'])
+  compose(['up', '--detach', '--no-deps', ...(options.recreateContainer === true ? ['--force-recreate'] : []), '--wait', '--wait-timeout', String(RESTART_TIMEOUT_MS / 1000), 'app'])
+  if (options.recreateContainer === true)
+    expect(compose(['ps', '--quiet', 'app']).trim()).not.toBe(before)
   await expect.poll(async () => statusOf(request, '/api/health/live'), { timeout: RESTART_TIMEOUT_MS }).toBe(200)
 }

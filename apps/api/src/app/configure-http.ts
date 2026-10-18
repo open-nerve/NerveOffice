@@ -1,4 +1,5 @@
 import type { NestExpressApplication } from '@nestjs/platform-express'
+import type { RequestHandler } from 'express'
 import type { Logger } from 'pino'
 import type { RequestIdentities } from '../modules/auth/index.ts'
 import type { AppConfig } from '../modules/config/index.ts'
@@ -53,7 +54,15 @@ export function configureHttp(app: NestExpressApplication, config: AppConfig, pi
     app.use(webHosting(config.web.root))
   // 其余不属于 /api 的请求：统一的 404 错误响应（Nest 的路由只在 /api 下）
   app.use(notFoundOutsideApi())
-  app.use(jsonBody(config.http.jsonBodyLimitBytes))
+  const parseJson = jsonBody(config.http.jsonBodyLimitBytes)
+  // 即使把媒体类型谎报为 JSON，图片入口也先认证和准入；匹配 Express 的大小写/末尾斜杠语义。
+  const parseBody: RequestHandler = (request, response, next) => {
+    if (request.method === 'POST' && /^\/api\/assets\/?$/i.test(request.path))
+      next()
+    else
+      parseJson(request, response, next)
+  }
+  app.use(parseBody)
   app.setGlobalPrefix('api')
   app.useGlobalInterceptors(pipeline.inFlight.interceptor())
   app.useGlobalPipes(new StandardSchemaValidationPipe({ exceptionFactory: validationError }))

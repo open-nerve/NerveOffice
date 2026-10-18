@@ -27,7 +27,7 @@ x-nerve-environment: &nerve-environment
   # 本机草稿：关闭只影响新写入，不删除浏览器里已有的草稿
   NERVE_LOCAL_DRAFTS_ENABLED: ${NERVE_LOCAL_DRAFTS_ENABLED:-true}
   # 快照检查的子进程池（M3-P3）：子进程数、排队、等待与检查的时限、每个子进程的堆上限（默认值与应用的相同）。
-  # 应用容器没有设内存上限；要设的话按部署说明里"快照检查的子进程与内存"的规则取值
+  # 应用容器默认 4 GiB，覆盖快照池与单个图片子进程；增加并发前先按部署说明重新预算
   NERVE_SNAPSHOT_INSPECTION_PROCESSES: ${NERVE_SNAPSHOT_INSPECTION_PROCESSES:-2}
   NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: ${NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX:-8}
   NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: ${NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS:-10000}
@@ -86,12 +86,18 @@ services:
       # 本机密钥的主密钥（M3-P6）：只给应用容器（迁移与运维命令用不到，不放进上面共用的配置），缺失或写法不对时应用拒绝启动。
       # 正式部署推荐经 Docker secrets 用 NERVE_LOCAL_KEYS_MASTER_KEY_FILE 提供（见部署说明的"本机密钥的主密钥"）
       NERVE_LOCAL_KEYS_MASTER_KEY: ${NERVE_LOCAL_KEYS_MASTER_KEY:?缺少 NERVE_LOCAL_KEYS_MASTER_KEY（本机密钥的主密钥，用 openssl rand -base64 32 生成）}
+      NERVE_ASSET_ROOT: /var/lib/nerve-office/assets
+      NERVE_ASSET_QUOTA_BYTES: ${NERVE_ASSET_QUOTA_BYTES:-10737418240}
+      NERVE_ASSET_QUOTA_COUNT: ${NERVE_ASSET_QUOTA_COUNT:-100000}
+    volumes:
+      - assets:/var/lib/nerve-office/assets
     depends_on:
       migrate:
         condition: service_completed_successfully
     # 不发布端口：只在编排的网络里对 Caddy 可见
     read_only: true
     tmpfs: [/tmp]
+    mem_limit: 4g
     init: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -122,3 +128,4 @@ services:
 
 volumes:
   pgdata: {}
+  assets: {}

@@ -1,0 +1,24 @@
+{
+  "generator": "Pillow 12.3.0",
+  "width": 160,
+  "height": 96,
+  "gifFrames": 2,
+  "files": {
+    "sample.gif": {
+      "bytes": 1908,
+      "sha256": "6bb82de7feb15542d397bfe32c51e5e2183d19d4cd5bb1dbaddfe10f960a9851"
+    },
+    "sample.jpg": {
+      "bytes": 4812,
+      "sha256": "7dfa873e96f8e1e3a547359648945f87762930b79eb72abbf9c360143a838d64"
+    },
+    "sample.png": {
+      "bytes": 1145,
+      "sha256": "c38d9b030b0952e4446cdde399d6cd1f764d525bcd278987efa77b442c8081b2"
+    },
+    "sample.webp": {
+      "bytes": 472,
+      "sha256": "2fc6e7540c7922ea4bce49cbfda8e441bb381bb4d3f782317045aaa1464c9ec1"
+    }
+  }
+}

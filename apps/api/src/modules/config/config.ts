@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { isIP } from 'node:net'
 import { isAbsolute } from 'node:path'
 import process from 'node:process'
-import { LOCAL_DRAFT_RETENTION_DAYS, parseVersion } from '@nerve-office/contracts'
+import { ASSET_MAX_BYTES, LOCAL_DRAFT_RETENTION_DAYS, parseVersion } from '@nerve-office/contracts'
 import { z } from 'zod'
 import { Secret } from '../../shared/secret.ts'
 
@@ -79,6 +79,12 @@ export interface AppConfig {
   readonly web: {
     /** 前端构建目录的绝对路径；不设时不托管前端（开发时由 Vite 开发服务器提供，P3 设计 §3.8） */
     readonly root: string | undefined
+  }
+  /** 私有图片文件与组织配额（ADR-021）；命令行不要求目录，正式 HTTP 接入时必须提供。 */
+  readonly assets: {
+    readonly root: string | undefined
+    readonly quotaBytes: number
+    readonly quotaCount: number
   }
   readonly shutdown: { readonly timeoutMs: number }
   readonly log: { readonly level: LogLevel }
@@ -330,6 +336,9 @@ const environmentSchema = z.object({
   NERVE_HTTP_KEEP_ALIVE_TIMEOUT_MS: integer(1_000, 600_000).default(5_000),
   NERVE_TRUST_PROXY: trustProxy.optional(),
   NERVE_WEB_ROOT: text().refine(isAbsolute, '必须是绝对路径').optional(),
+  NERVE_ASSET_ROOT: text().refine(value => isAbsolute(value) && !value.includes('\0'), '必须是不含空字符的绝对路径').optional(),
+  NERVE_ASSET_QUOTA_BYTES: integer(ASSET_MAX_BYTES, 1024 ** 4).default(10 * 1024 ** 3),
+  NERVE_ASSET_QUOTA_COUNT: integer(1, 1_000_000).default(100_000),
   NERVE_SESSION_IDLE_TIMEOUT_MINUTES: integer(5, 43_200).default(720),
   NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: integer(5, 525_600).default(10_080),
   // 登录限流（ADR-007）：按用户名与来源、只按用户名（宽得多，M2-P6 复核 A1）、按来源三个维度，共用窗口与锁定时长
@@ -508,6 +517,7 @@ function toAppConfig(env: Environment): AppConfig {
     },
     oneTimeLinks: { recordMaxFailures: env.NERVE_LINK_RECORD_MAX_FAILURES },
     web: { root: env.NERVE_WEB_ROOT },
+    assets: { root: env.NERVE_ASSET_ROOT, quotaBytes: env.NERVE_ASSET_QUOTA_BYTES, quotaCount: env.NERVE_ASSET_QUOTA_COUNT },
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },
     jobs: {
@@ -632,6 +642,8 @@ function parseEnvironment(env: EnvironmentInput, readSecretFile: SecretFileReade
   // 应用进程要求主密钥（M3-P6 设计 §3.4）：变量与 _FILE 都没设时"缺少"（_FILE 读不到、是空的已经报在 _FILE 上，不再重复）
   if (purpose === 'server' && !(MASTER_KEY_VARIABLE in input) && !reported.has(MASTER_KEY_VARIABLE))
     issues.push({ variable: MASTER_KEY_VARIABLE, problem: '缺少' })
+  if (purpose === 'server' && !('NERVE_ASSET_ROOT' in input))
+    issues.push({ variable: 'NERVE_ASSET_ROOT', problem: '缺少' })
   if (result.success) {
     const defaults = new Set(Object.keys(environmentSchema.shape).filter(name => !(name in input)))
     issues.push(...crossChecks(result.data, threadpool, defaults, name => fromFile.get(name) ?? name))

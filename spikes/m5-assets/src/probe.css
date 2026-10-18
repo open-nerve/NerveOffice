@@ -1,0 +1,22 @@
+html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; color: #17283d; }
+body { display: flex; flex-direction: column; background: #f6f8fb; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; font-size: 13px; }
+header input[type=text], header input:not([type]) { width: 190px; }
+button { cursor: pointer; border: 1px solid #a9b7c7; border-radius: 4px; background: white; padding: 6px 10px; color: #17283d; }
+button:disabled { opacity: .5; cursor: default; }
+#identity { color: #4a5b70; max-width: 700px; }
+#sources { display: flex; align-items: stretch; gap: 18px; padding: 6px 14px; height: 140px; box-sizing: border-box; }
+#fixtures { display: flex; gap: 8px; }
+.fixture { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; }
+.fixture img { width: 128px; height: 77px; border: 1px solid #a9b7c7; object-fit: contain; }
+.fixture button { padding: 3px 6px; }
+#html-source { width: 220px; background: white; border: 1px solid #a9b7c7; padding: 8px; }
+#html-source td { border: 1px solid #aaa; padding: 5px; }
+#receiver { width: 260px; height: 76px; border: 2px dashed #47749d; background: white; overflow: auto; padding: 5px; }
+#receiver img { max-height: 65px; }
+#sheet { flex: 1; min-height: 400px; position: relative; background: white; }
+footer { height: 90px; padding: 6px 14px; flex-shrink: 0; font-size: 12px; }
+#events { overflow: auto; max-height: 62px; margin: 4px 0; white-space: pre-wrap; }
+body[data-role=receiver] #sheet { display: none; }
+body[data-role=receiver] #receiver { height: 300px; width: 600px; }
+body[data-role=receiver] #sources { height: 400px; }

@@ -1,10 +1,14 @@
 import { Module } from '@nestjs/common'
+import { AssetsModule } from '../assets/index.ts'
 import { AuditModule } from '../audit/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { DocumentsModule } from '../documents/index.ts'
 import { LocalKeysModule } from '../local-keys/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
 import { UsersModule } from '../users/index.ts'
+import { AssetReadController } from './asset-read.controller.ts'
+import { AssetReadingService } from './asset-reading.service.ts'
+import { AssetUploadController } from './asset-upload.controller.ts'
 import { DocumentEditingController } from './document-editing.controller.ts'
 import { DocumentEditingService } from './document-editing.service.ts'
 import { DocumentGrantsController } from './document-grants.controller.ts'
@@ -32,8 +36,8 @@ import { TrashController } from './trash.controller.ts'
  * 收回写入权经 documents 的入口。spaces 在依赖链的底层（users、auth、documents 都依赖它），这些接口放不进 spaces。
  */
 @Module({
-  imports: [DatabaseModule, AuditModule, UsersModule, SpacesModule, DocumentsModule, LocalKeysModule],
-  controllers: [SpacesController, SpaceMembersController, FoldersController, TrashController, SearchController, DocumentGrantsController, SharedController, DocumentEditingController],
-  providers: [ManagedSpaces, SpaceDirectoryService, SpaceMembershipService, TrashDirectoryService, SearchDirectoryService, DocumentSharingService, SharedDirectoryService, DocumentEditingService],
+  imports: [DatabaseModule, AuditModule, UsersModule, SpacesModule, DocumentsModule, LocalKeysModule, AssetsModule],
+  controllers: [SpacesController, SpaceMembersController, FoldersController, TrashController, SearchController, DocumentGrantsController, SharedController, DocumentEditingController, AssetUploadController, AssetReadController],
+  providers: [ManagedSpaces, SpaceDirectoryService, SpaceMembershipService, TrashDirectoryService, SearchDirectoryService, DocumentSharingService, SharedDirectoryService, DocumentEditingService, AssetReadingService],
 })
 export class WorkspaceModule {}

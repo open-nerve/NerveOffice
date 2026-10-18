@@ -36,6 +36,20 @@ describe('satisfies（SPDX 表达式）', () => {
 })
 
 describe('US-M1-11 A01 生产依赖的许可', () => {
+  it('有版本限制的例外仅接受审核的安装版本，不因报告合并版本或其他平台而扩大', () => {
+    const name = '@img/sharp-libvips-linux-x64'
+    const license = 'LGPL-3.0-or-later'
+    const exceptions = [{ name, version: '1.3.4', license, reason: 'ADR-021 的明确版本' }]
+    const item = { ...entry(name, license), versions: ['1.3.4', '1.3.5'] }
+    const path = item.paths[0]!
+    const byPath = new Map([[path, item]])
+    expect(checkProductionLicenses([{ name, version: '1.3.4', path }], byPath, allowed, exceptions, everywhere)).toEqual([])
+    expect(checkProductionLicenses([{ name, version: '1.3.5', path }], byPath, allowed, exceptions, everywhere).map(v => v.rule)).toEqual(['licenses/production'])
+    const anotherPlatform = { ...entry('@img/sharp-libvips-linuxmusl-x64', license), versions: ['1.3.4'] }
+    expect(checkProductionLicenses([{ name: anotherPlatform.name, version: '1.3.4', path }], new Map([[path, anotherPlatform]]), allowed, exceptions, everywhere).map(v => v.rule)).toEqual(['licenses/production'])
+    expect(checkProductionLicenses([{ name, version: '1.3.4', path }], new Map([[path, { ...item, license: 'GPL-3.0-only' }]]), allowed, exceptions, everywhere).map(v => v.rule)).toEqual(['licenses/production'])
+  })
+
   it('合规：生产依赖图里的每个安装实例（含可选依赖）都能在许可清单里查到，并且在白名单里（真实输出）', () => {
     const { installed } = collectInstalled(lsOutputSchema.parse(readFixture('pnpm-12/ls-optional-dependencies.json')))
     const byPath = licensesByPath(licenseReportSchema.parse(readFixture('pnpm-12/licenses-list-optional-dependencies.json')))
@@ -81,6 +95,14 @@ describe('US-M1-11 A01 生产依赖的许可', () => {
 })
 
 describe('US-M1-11 A01 开发依赖的许可', () => {
+  it('开发报告合并多个版本时，未审核的版本不能借用已审核版本的例外', () => {
+    const item = { ...entry('versioned-tool', 'GPL-3.0-only'), versions: ['1.0.0'] }
+    const exceptions = [{ name: item.name, version: '1.0.0', license: item.license, reason: '测试限定版本语义' }]
+    expect(checkDevelopmentLicenses([item], exceptions)).toEqual([])
+    expect(checkDevelopmentLicenses([{ ...item, versions: ['1.0.0', '1.0.1'] }], exceptions).map(v => v.rule)).toEqual(['licenses/development'])
+    expect(checkDevelopmentLicenses([{ ...item, versions: [] }], exceptions).map(v => v.rule)).toEqual(['licenses/development'])
+  })
+
   it('违规：pnpm 12 输出的 GPL 各种写法、Unknown 与 SEE LICENSE IN（真实输出）', () => {
     const entries = flattenLicenseReport(licenseReportSchema.parse(readFixture('pnpm-12/licenses-list.json')))
     const flagged = checkDevelopmentLicenses(entries, []).map(v => v.subject.split('@')[0]).sort()

@@ -3,6 +3,7 @@
 // 这里的假仓储只保持同样的语义。
 import type { ConflictCopyQuery } from '@nerve-office/contracts'
 import type { GzipBody } from '../security/index.ts'
+import type { DocumentAssetReferences } from './document-asset-references.ts'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import zlib from 'node:zlib'
@@ -20,7 +21,12 @@ const TITLE = '周报（冲突副本 2026-10-04 14:30）'
 function setup() {
   const store = new FakeStore()
   const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, logger } = store.deps
-  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, logger) }
+  // 本文件的既有样本无图片；图片来源与实际关系写入由 asset-copies 的真实 PG 用例覆盖。
+  const references = { replace: async (_id: string, ids: readonly string[]) => {
+    if (ids.length !== 0)
+      throw new Error('图片引用样本必须补齐真实授权夹具')
+  } } as unknown as DocumentAssetReferences
+  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, references, logger) }
 }
 
 let requests = 0

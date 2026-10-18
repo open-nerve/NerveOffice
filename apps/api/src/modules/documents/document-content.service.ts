@@ -4,6 +4,7 @@ import type { Transaction } from '../database/index.ts'
 import type { GzipBody } from '../security/index.ts'
 import type { CurrentClient } from './client-format-gate.ts'
 import type { AccessibleDocument } from './document-access-policy.ts'
+import type { HeldAssetReferences } from './document-asset-references.ts'
 import type { ContentEnvelope } from './document-contents.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import type { EditingActor } from './edit-lease.service.ts'
@@ -19,6 +20,7 @@ import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { ClientFormatGate, requireWritableDocument } from './client-format-gate.ts'
 import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
+import { DocumentAssetReferences } from './document-asset-references.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentSaveReceiptsRepository } from './document-save-receipts.repository.ts'
@@ -51,7 +53,7 @@ import { INSPECTED_PROFILE, rejectedSnapshot, requirePassingSnapshot } from './u
  * - 计时从 S' 起（先设 0 停掉会话默认值可能已经启动的计时器，再从这一刻按 60 秒重新计时，再复核 D2），到点没提交的不会再提交，
  *   所以提交了的都有 C − S' ≤ 60 秒；
  * - 合起来 C − S ≤ 10 + 60 = 70 < 90，余 20 秒。正常的保存是毫秒级（实测接近上限的保存，事务用 0.1 秒左右）；一份至多 5 MiB 的正文、
- *   两处等锁（各受 lock_timeout 约束）远用不了 60 秒，用到了说明数据库已经严重变慢，按繁忙失败、页面重试是对的。
+ *   等锁仍分别受 lock_timeout 约束；M5 图片引用扩大了有序锁集合，这个事务总上界照旧，不因资源数量增多延长。
  * 只有保存要它：别的"按事务开始时判断租约"的写路径（心跳、谢绝只锁租约行；交出先锁文档行，Codex 评审 CX1）都不写内容，
  * 申请与它们的交错由有效条件第 7 条兜底。明确结束了的租约撤权不锁、不等，由锁保证（明确结束先锁文档行，与在途的保存互斥），与这个上界无关
  */
@@ -96,6 +98,11 @@ interface SaveAttempt {
   readonly origin: AuditOrigin
 }
 
+interface SaveAccess {
+  readonly accessible: AccessibleDocument<DocumentRow>
+  readonly heldReferences: HeldAssetReferences | undefined
+}
+
 /** 文档的内容（P4 设计 §3.5）：读取当前快照；按基准修订号条件写入新的快照（M3-P3 起有完整的快照检查与"内容相同不递增"）。 */
 @Injectable()
 export class DocumentContentService {
@@ -114,6 +121,7 @@ export class DocumentContentService {
     private readonly audit: AuditService,
     private readonly clients: ClientFormatGate,
     private readonly inspector: SnapshotInspector,
+    private readonly assetReferences: DocumentAssetReferences,
     logger: AppLogger,
   ) {
     this.#logger = logger.with({ module: 'documents' })
@@ -144,12 +152,12 @@ export class DocumentContentService {
    * 1. 重放预检（事务之外，不解析快照）：按 requestId 查修订记录与回执，同一个人、同一份文档、负载摘要一致、仍能访问，就返回原来的结果。
    *    其余情况一律往下走，不提前回答：看不到的、不存在的、另一份文档的 requestId 都留给事务里的再查（"看不到与不存在"的语句序列照旧）；
    * 2. 客户端的数据格式（与文档无关）：过旧时 CLIENT_OUTDATED（ClientFormatGate）；
-   * 3. 快照的检查（与文档无关，子进程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希与资源名；
-   * 4. 一个事务（BEGIN 到提交至多 70 秒，由数据库与事务运行器保证，见 SAVE_TRANSACTION_TIMEOUT_MS；M3-P5 复验 C1）：requestId 的锁（RequestLedger：事务的第一把锁，同一个 requestId 的写入排队，审查 A3）→ 能否访问 → 能编辑时锁文档行、
+   * 3. 快照的检查（与文档无关，子进程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希、资源名与图片标识；
+   * 4. 一个事务（BEGIN 到提交至多 70 秒，由数据库与事务运行器保证，见 SAVE_TRANSACTION_TIMEOUT_MS；M3-P5 复验 C1）：requestId 的锁（RequestLedger：事务的第一把锁，同一个 requestId 的写入排队，审查 A3）→ 能否访问 → 能编辑时锁文档行（有图片则先固定来源、按空间与文档顺序取全锁）、
    *    锁下再判断 → 再查一次重放（并发的同一次请求；查修订记录与回执两张表）→ 这次登录仍然有效 → 文档的格式
    *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、"公式待更新"
    *    只清不设（两边都为真才留着），修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、
-   *    文档的信封（"公式待更新"设成请求里的值）、审计。
+   *    文档的信封（"公式待更新"设成请求里的值）、审计、当前图片引用。图片授权在实际写入之前按锁下关系与权限复核并持资源行。
    * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不锁文档行，
    * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不锁文档行查一次请求标识就有结论，到不了租约这一步
    * （requestId 的锁只与同一个 requestId 的写入排队，不挡别人的保存）。
@@ -174,7 +182,7 @@ export class DocumentContentService {
     return this.transactions.run(async (transaction) => {
       // 第一把锁：看不到与不存在的请求同样取它（与文档无关，语句序列照旧一致）
       await this.ledger.lock(query.requestId, transaction)
-      const accessible = await this.lockIfEditable(saver.userId, id, transaction)
+      const { accessible, heldReferences } = await this.lockIfEditable(saver.userId, id, snapshot.assetIds, transaction)
       const { document } = accessible
 
       // 并发的同一个 requestId：后到的一方拿到锁时前一方已经提交。用过、却不是这一次保存的（别的文档、别的种类）：REQUEST_ID_CONFLICT
@@ -203,7 +211,11 @@ export class DocumentContentService {
       // 存量的哈希为空：按"不同"处理，这一次写入补上（第一次保存多一个修订，§3.7）
       if (current.contentHash?.equals(contentHash) === true)
         return this.confirmUnchanged(attempt, document, transaction)
-      return this.write(attempt, document, contentHash, transaction)
+      // 图片仅在真正写正文的分支授权并替换；unchanged 和两种重放都保持当前关系。
+      const authorized = heldReferences === undefined ? [] : await this.assetReferences.authorize(heldReferences, transaction)
+      const outcome = await this.write(attempt, document, contentHash, transaction)
+      await this.assetReferences.replace(document.id, authorized, transaction)
+      return outcome
     }, { limit: SAVE_TRANSACTION_LIMIT })
   }
 
@@ -334,13 +346,24 @@ export class DocumentContentService {
    * 判断能否访问（别人的与不存在的都是 NOT_FOUND）；能编辑时再锁住文档行、锁下再判断一次，返回锁下的最新状态（修订号等）。
    * 锁下再判断：加锁之前文档可能已经移到别的空间，或者授权被收回了（M2），都按锁下的状态为准（复验 RA7）。
    * 只能查看的不取锁，返回不加锁读到的那一版：调用方拿它只能查重放，写入之前还要求能编辑。
-   * 与改名、移动、删除走同一个判断（requireDocumentContent）：归档的空间里说明"空间已归档"，而不是"只能查看"
+   * 与改名、移动、删除走同一个判断（requireDocumentContent）：归档的空间里说明"空间已归档"，而不是"只能查看"。
+   * 有图片时先固定所有来源，再一次按空间/文档 id 顺序锁住目标与来源；目标移到未持空间锁的位置时按不存在处理（与复制相同）。
+   * 无图片仍沿用原目标锁路径，不为了清空关系引入额外来源锁
    */
-  private async lockIfEditable(userId: string, id: string, transaction: Transaction): Promise<AccessibleDocument<DocumentRow>> {
+  private async lockIfEditable(userId: string, id: string, assetIds: readonly string[], transaction: Transaction): Promise<SaveAccess> {
     const unlocked = await requireDocumentContent(this.policy, userId, await this.documents.findById(id, transaction), [], transaction)
     if (!unlocked.permissions.canEdit)
-      return unlocked
-    return requireDocumentContent(this.policy, userId, await this.documents.lockById(id, transaction), [], transaction)
+      return { accessible: unlocked, heldReferences: undefined }
+    if (assetIds.length === 0) {
+      const accessible = await requireDocumentContent(this.policy, userId, await this.documents.lockById(id, transaction), [], transaction)
+      return { accessible, heldReferences: undefined }
+    }
+    const prepared = await this.assetReferences.prepare(userId, assetIds, transaction, unlocked.document)
+    const heldReferences = await this.assetReferences.hold(prepared, { mode: 'update' }, transaction)
+    const locked = heldReferences.documents.get(id)
+    const stable = locked !== undefined && heldReferences.spaceIds.has(locked.spaceId) ? locked : undefined
+    const accessible = await requireDocumentContent(this.policy, userId, stable, [], transaction)
+    return { accessible, heldReferences }
   }
 
   /**

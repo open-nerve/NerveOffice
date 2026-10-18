@@ -29,6 +29,8 @@ allowBuilds:
   # 经 @univerjs/core → @univerjs/protocol → @grpc/grpc-js → @grpc/proto-loader 引入（M1-P4）。postinstall 只检查依赖方声明的版本写法、
   # 打印警告，不构建任何东西；编辑器只用 protocol 的类型与枚举，不加载 protobufjs（M0-P1 报告 §2.2）
   protobufjs: false
+  # Sharp 使用锁定的平台绑定和共享 libvips 包；不运行安装脚本或临时下载/编译本机库（ADR-021）
+  sharp: false
   # postinstall 只检查原生绑定；pnpm 已按平台安装了可选依赖里的绑定
   unrs-resolver: false
 
@@ -121,6 +123,7 @@ catalog:
   rxjs: 7.8.2
   # 产物扫描按 XML 解析 SVG（实体、处理指令、格式错误），仓库工具用（复验 TA6）；与 jsdom 用的是同一个版本
   saxes: 6.0.0
+  sharp: 0.35.5
   tailwind-merge: 3.7.0
   tailwindcss: 4.3.3
   typescript: 6.0.3

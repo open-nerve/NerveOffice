@@ -1,5 +1,6 @@
 // 响应里可以比较的部分（M2-P6 复核 S2）："看不到"与"不存在"的响应要完全一致：状态码、错误体（去掉每个请求都不同的请求标识）、
 // 非易变的响应头（名称与取值）。权限矩阵的 404 格与"看不到与不存在"的逐条比较都用它。
+import { Buffer } from 'node:buffer'
 
 /**
  * 每个请求都不同的响应头：日期、请求标识、会话的 Cookie、连接的保持；ETag 也不比较——M3-P6 审查 A8 之后应用不再按正文自动算 ETag，
@@ -9,7 +10,7 @@ const VOLATILE_HEADERS: ReadonlySet<string> = new Set(['date', 'x-request-id', '
 
 export interface ComparableResponse {
   readonly status: number
-  /** JSON 正文；错误体去掉了 error.requestId；空的正文为 undefined */
+  /** JSON 正文去掉 error.requestId；图片保留完整字节的 base64；空的正文为 undefined */
   readonly body: unknown
   /** 非易变的响应头 */
   readonly headers: Readonly<Record<string, string>>
@@ -26,7 +27,10 @@ function withoutRequestId(body: unknown): unknown {
 
 /** 读完响应的正文，取出可以比较的部分 */
 export async function comparableOf(response: Response): Promise<ComparableResponse> {
-  const text = await response.text()
+  const bytes = Buffer.from(await response.arrayBuffer())
   const headers = Object.fromEntries([...response.headers.entries()].filter(([name]) => !VOLATILE_HEADERS.has(name)))
-  return { status: response.status, body: text === '' ? undefined : withoutRequestId(JSON.parse(text)), headers }
+  const body = response.headers.get('content-type')?.startsWith('image/') === true
+    ? bytes.toString('base64')
+    : bytes.length === 0 ? undefined : withoutRequestId(JSON.parse(bytes.toString('utf8')))
+  return { status: response.status, body, headers }
 }

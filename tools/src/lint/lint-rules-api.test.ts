@@ -22,6 +22,17 @@ import {
 const { lint, rulesFor, configFor } = prepareLint({ warmUp: [API_CONTROLLER, INTEGRATION_FILE, CONTRACTS_FILE] })
 
 describe('US-M1-11 lint 规则的自测：后端的模块边界', () => {
+  it.each([
+    ['DocumentAssetReferences', 'document-asset-references.ts'],
+    ['DocumentAssetsRepository', 'document-assets.repository.ts'],
+  ])('图片引用内部接口 %s 仅允许集成测试专用出口转出', async (name, filename) => {
+    const exported = `export { ${name} } from '../modules/documents/${filename}'\n`
+    expect(await rulesFor(exported, API_INTEGRATION_ENTRY)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor(exported, 'apps/api/src/app/index.ts')).toContain('boundaries/dependencies')
+    const imported = `import { ${name} } from '../documents/${filename}'\n\nexport const service = ${name}\n`
+    expect(await rulesFor(imported, 'apps/api/src/modules/workspace/workspace.module.ts')).toContain('boundaries/dependencies')
+  })
+
   it('模块之间只经对方的 index.ts；模块不能引用应用的组装', async () => {
     expect(await rulesFor('import { loadConfig } from \'../config/config.ts\'\nexport const f = loadConfig\n', API_SERVICE)).toContain('boundaries/dependencies')
     expect(await rulesFor('import { loadConfig } from \'../config/index.ts\'\nexport const f = loadConfig\n', API_SERVICE)).not.toContain('boundaries/dependencies')

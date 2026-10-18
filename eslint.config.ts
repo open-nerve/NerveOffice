@@ -1545,6 +1545,10 @@ export default antfu(
           { from: { element: { type: 'api-cli' } }, allow: { to: { element: { type: ['api-module', 'api-app'], fileInternalPath: PUBLIC_ENTRY } } } },
           // 集成测试专用的入口转出全部的表定义：集成测试按它生成建库语句，与迁移建出的库逐项比较（M2-P6 复核 B 的 B4；取代复验 S1 只核对判重键的那一条）
           { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-schema', fileInternalPath: PUBLIC_ENTRY } } } },
+          // 图片持久配额/真实文件故障的集成测试：只从测试专用出口取内部实例，不把仓储加入生产公开接口。
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'assets' }, fileInternalPath: ['assets.repository.ts', 'file-storage.ts', 'image-runner.ts', 'image-types.ts', 'storage-adapter.ts'] } } } },
+          // 当前图片引用的真实事务/交错测试，只给测试专用出口，不加入 Documents 的生产公开接口。
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'documents' }, fileInternalPath: ['document-asset-references.ts', 'document-assets.repository.ts'] } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: [PUBLIC_ENTRY, 'integration.test-support.ts'] } } } },
           {
