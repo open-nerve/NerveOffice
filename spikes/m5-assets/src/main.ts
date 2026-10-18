@@ -36,6 +36,7 @@ const query = new URLSearchParams(location.search)
 const mode = query.get('mode') === 'diagnostic' ? 'diagnostic' : 'default'
 const method = ['native-ui', 'protocol'].includes(query.get('method') ?? '') ? query.get('method') as 'native-ui' | 'protocol' : 'synthetic'
 const runId = query.get('run') ?? 'unassigned'
+const copyStrategy = query.get('copyStrategy') === 'gesture' ? 'gesture' : 'delayed'
 const pageId = crypto.randomUUID()
 const identity = { buildId: __M5_PROBE_BUILD__.buildId, sdkVersion: __M5_PROBE_BUILD__.sdkVersion, runId, pageId, userAgent: navigator.userAgent, mode, method }
 const caseInput = document.querySelector<HTMLInputElement>('#case')!
@@ -45,6 +46,7 @@ const blockDrop = document.querySelector<HTMLInputElement>('#block-drop')!
 const compensate = document.querySelector<HTMLInputElement>('#compensate')!
 blockDrop.checked = mode === 'diagnostic' && query.get('drop') === '1'
 compensate.checked = mode === 'diagnostic' && query.get('copy') === '1'
+if (copyStrategy === 'gesture') document.querySelector('#copy-label')!.textContent = '诊断：按键同步复制首图'
 blockDrop.disabled = compensate.disabled = mode !== 'diagnostic'
 document.querySelector<HTMLButtonElement>('#copy-selected')!.disabled = mode !== 'diagnostic'
 document.body.dataset.role = query.get('role') ?? 'sheet'
@@ -161,8 +163,16 @@ function scheduleDiagnosticCopy(origin: string) {
 }
 window.addEventListener('keydown', event => {
   if (armed && compensate.checked && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
-    && !event.repeat && event.key.toLowerCase() === 'c' && event.target instanceof Element && event.target.closest('#sheet'))
-    scheduleDiagnosticCopy('keyboard')
+    && !event.repeat && event.key.toLowerCase() === 'c' && event.target instanceof Element && event.target.closest('#sheet')) {
+    if (copyStrategy === 'gesture') {
+      // 仅实验：本用例明确选择唯一受控图片。正式接线还必须区分图片/单元格焦点。
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      record('diagnostic-copy-intercepted', { target: 'sheet', isTrusted: event.isTrusted, defaultPrevented: true, details: { origin: 'keyboard-gesture' } })
+      void copyDiagnostic('keyboard-gesture').catch(() => {})
+    }
+    else scheduleDiagnosticCopy('keyboard')
+  }
 }, true)
 
 for (const type of ['paste', 'copy', 'drop'] as const) {
@@ -174,7 +184,7 @@ for (const type of ['paste', 'copy', 'drop'] as const) {
     if (type === 'drop' && target === 'sheet' && blockDrop.checked) event.preventDefault()
     const captured = record(type, { target, isTrusted: event.isTrusted, defaultPrevented: event.defaultPrevented,
       types: Array.from(transfer?.types ?? []), files: files.map(file => ({ type: file.type, size: file.size, sha256: null })),
-      details: { text: transfer?.getData('text/plain').slice(0, 4096), html: transfer?.getData('text/html').slice(0, 16384), blockDrop: blockDrop.checked, compensate: compensate.checked } })
+      details: { text: transfer?.getData('text/plain').slice(0, 4096), html: transfer?.getData('text/html').slice(0, 16384), blockDrop: blockDrop.checked, compensate: compensate.checked, copyStrategy } })
     void Promise.all(files.map(async file => ({ type: file.type, size: file.size, sha256: await digest(file) })))
       .then(files => { if (files.length) record('file-digests', { target, files, details: { inputSequence: captured.seq } }) })
       .catch(error => record('digest-error', { error: String(error), details: { inputSequence: captured.seq } }))

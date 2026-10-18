@@ -19,8 +19,9 @@ const results: unknown[] = []
 for (const [browserName, launcher, options] of [['chromium', chromium, {}], ['chrome', chromium, { channel: 'chrome' }], ['webkit', webkit, {}]] as const) {
   const browser = await launcher.launch({ headless: true, ...options })
   try {
-    for (const mode of ['default', 'diagnostic']) {
-      const caseId = `${browserName}-${mode}`
+    for (const variant of ['default', 'diagnostic', 'gesture']) {
+      const mode = variant === 'default' ? 'default' : 'diagnostic'
+      const caseId = `${browserName}-${variant}`
       const context = await browser.newContext({ viewport: { width: 1600, height: 1000 } })
       await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
       const page = await context.newPage()
@@ -33,7 +34,7 @@ for (const [browserName, launcher, options] of [['chromium', chromium, {}], ['ch
         blocked.push(url); return route.abort()
       })
       try {
-        await page.goto(`${origin}/?run=calibration&case=${caseId}&mode=${mode}&method=synthetic&drop=1&copy=1`)
+        await page.goto(`${origin}/?run=calibration&case=${caseId}&mode=${mode}&method=synthetic&drop=1&copy=1&copyStrategy=${variant === 'gesture' ? 'gesture' : 'delayed'}`)
         await page.waitForFunction(() => (window as any).__m5Probe?.records.some((record: any) => ['ready', 'boot-error'].includes(record.type)))
         const initial = await page.evaluate(() => (window as any).__m5Probe.records)
         assert.equal(initial.some((record: any) => record.type === 'boot-error'), false, JSON.stringify(initial))
@@ -61,8 +62,13 @@ for (const [browserName, launcher, options] of [['chromium', chromium, {}], ['ch
         await page.waitForFunction(() => (window as any).__m5Probe.records.some((record: any) => record.type === 'file-digests' && record.target === 'sheet'))
         if (mode === 'diagnostic') {
           // SDK 的复制快捷键直接调用异步 Clipboard API，不保证产生 DOM copy 事件。
-          await page.evaluate(() => document.querySelector('#sheet')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', metaKey: true, bubbles: true, cancelable: true })))
-          await page.waitForFunction(() => (window as any).__m5Probe.records.some((record: any) => record.type === 'diagnostic-copy-scheduled' && record.details.origin === 'keyboard'), null, { timeout: 3000 })
+          const defaultPrevented = await page.evaluate(() => {
+            const event = new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', metaKey: true, bubbles: true, cancelable: true })
+            document.querySelector('#sheet')!.dispatchEvent(event)
+            return event.defaultPrevented
+          })
+          assert.equal(defaultPrevented, variant === 'gesture', '同步接管必须阻止 SDK 后续清空剪贴板；延迟对照保留原事件')
+          if (variant !== 'gesture') await page.waitForFunction(() => (window as any).__m5Probe.records.some((record: any) => record.type === 'diagnostic-copy-scheduled' && record.details.origin === 'keyboard'), null, { timeout: 3000 })
           await page.waitForFunction(() => (window as any).__m5Probe.records.some((record: any) => record.type === 'diagnostic-copy'), null, { timeout: 3000 })
         }
         const state = await page.evaluate(() => ({ record: (window as any).__m5Probe.state(), records: (window as any).__m5Probe.records }))
