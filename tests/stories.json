@@ -4,7 +4,8 @@
     "docs/v0.1/M1-工程底座与行走骨架/00-M1-总设计.md",
     "docs/v0.1/M2-组织空间与权限/00-M2-总设计.md",
     "docs/v0.1/M3-编辑权与保存协议/00-M3-总设计.md",
-    "docs/v0.1/M4-本地优先与离线恢复/00-M4-总设计.md"
+    "docs/v0.1/M4-本地优先与离线恢复/00-M4-总设计.md",
+    "docs/v0.1/M5-表格能力与资源/00-M5-总设计.md"
   ],
   "stories": {
     "US-M1-01": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] },
@@ -63,6 +64,20 @@
     "US-M4-12": { "phase": "P4", "status": "active", "verification": ["e2e"] },
     "US-M4-13": { "phase": "P5", "status": "active", "verification": ["e2e"] },
     "US-M4-14": { "phase": "P3", "status": "active", "verification": ["e2e"] },
-    "US-M4-15": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] }
+    "US-M4-15": { "phase": "P3", "status": "active", "verification": ["integration", "e2e"] },
+    "US-M5-01": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M5-02": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M5-03": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M5-04": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M5-05": { "phase": "P2", "status": "planned", "verification": ["e2e"] },
+    "US-M5-06": { "phase": "P2", "status": "planned", "verification": ["e2e"] },
+    "US-M5-07": { "phase": "P2", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M5-08": { "phase": "P3", "status": "planned", "verification": ["e2e"] },
+    "US-M5-09": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M5-10": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M5-11": { "phase": "P4", "status": "planned", "verification": ["integration", "e2e"] },
+    "US-M5-12": { "phase": "P5", "status": "planned", "verification": ["e2e"] },
+    "US-M5-13": { "phase": "P5", "status": "planned", "verification": ["e2e"] },
+    "US-M5-14": { "phase": "P3", "status": "planned", "verification": ["e2e"] }
   }
 }

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>NerveOffice M5 图片路径诊断</title></head>
+  <body>
+    <header>
+      <strong>M5 图片路径诊断 · 非生产页面</strong><span id="identity"></span>
+      <label>用例 <input id="case" aria-label="用例编号" value="unassigned"></label>
+      <button id="arm">已准备受控样本，开始记录</button>
+      <button id="capture">记录当前状态</button>
+      <label><input type="checkbox" id="block-drop">诊断：接收文件拖放</label>
+      <label><input type="checkbox" id="compensate">诊断：延迟复制补救</label>
+    </header>
+    <section id="sources">
+      <div id="fixtures" aria-label="受控图片样本"></div>
+      <div id="html-source" contenteditable="true" aria-label="受控表格来源"><table><tbody><tr><td>M5-表格</td><td>12</td></tr><tr><td>图片优先级对照</td><td>34</td></tr></tbody></table></div>
+      <div><div id="receiver" contenteditable="true" aria-label="原生粘贴接收区">在此粘贴受控样本</div><button id="copy-selected">诊断：点击复制表格第一张图片</button></div>
+    </section>
+    <div id="sheet" aria-label="SDK 表格画布"></div>
+    <footer><output id="status">准备中</output><pre id="events" aria-label="最近事件"></pre></footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
