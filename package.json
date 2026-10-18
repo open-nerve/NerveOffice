@@ -11,8 +11,8 @@
   },
   "scripts": {
     "prepare": "lefthook install",
-    "lint": "eslint . --max-warnings 0",
-    "lint:fix": "eslint . --fix --max-warnings 0",
+    "lint": "node --max-old-space-size=6144 node_modules/eslint/bin/eslint.js . --max-warnings 0",
+    "lint:fix": "pnpm lint --fix",
     "typecheck": "tsc -p tsconfig.json && pnpm -r --workspace-concurrency=4 run typecheck",
     "test": "vitest run --project unit --project unit-web",
     "test:coverage": "pnpm --filter \"@nerve-office/api...\" run build && vitest run --coverage",

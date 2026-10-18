@@ -78,6 +78,8 @@
 
 环境：Node 与 pnpm 的版本见 `.node-version` 与根 `package.json` 的 `packageManager`（本机用 nvm 安装 Node，`npm i -g pnpm@<版本>` 安装 pnpm）；Docker 用于开发数据库。
 
+全仓库类型感知 lint 会在同一进程保留多个 TypeScript 工程。M5-P1 实测已超过 Node 默认约 4 GiB 旧生代上限；`pnpm lint` 为 ESLint 单独设置 6 GiB 上限，`lint:fix` 复用该入口。开发机和 CI 运行 lint 时须预留相应内存；所有规则、文件范围与零告警要求保持。生产服务及图片子进程仍使用各自既定预算，禁止为此设置全局 `NODE_OPTIONS`。
+
 | 命令 | 作用 |
 |---|---|
 | `pnpm install` | 安装依赖，同时安装 git 钩子 |
