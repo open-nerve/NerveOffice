@@ -1,11 +1,11 @@
 import type { Database, DbExecutor, Transaction } from '../database/index.ts'
-import type { AssetMetadata } from './asset-metadata.ts'
+import type { AssetMetadata, AssetReferenceMetadata } from './asset-metadata.ts'
 import type { ProcessedImage } from './image-types.ts'
 import { Inject, Injectable } from '@nestjs/common'
-import { eq, sql } from 'drizzle-orm'
+import { asc, eq, sql } from 'drizzle-orm'
 import { assetObjectClaims, assetObjects, assetQuota, assets } from '../../db/schema/assets/index.ts'
 import { AppError } from '../../shared/errors/app-error.ts'
-import { DATABASE, executorOf } from '../database/index.ts'
+import { DATABASE, executorOf, inIdArray } from '../database/index.ts'
 import { assetObjectKey } from './storage-adapter.ts'
 
 export type AssetObjectMetadata = Omit<ProcessedImage, 'data'>
@@ -22,6 +22,17 @@ function exceeded(kind: 'bytes' | 'count'): AppError {
 @Injectable()
 export class AssetsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
+
+  async referenceMetadata(ids: readonly string[], hold: boolean, transaction: Transaction): Promise<AssetReferenceMetadata[]> {
+    if (ids.length === 0)
+      return []
+    const query = executorOf(this.db, transaction).select({
+      assetId: assets.id,
+      uploaderId: assets.uploaderId,
+      withinUploadWindow: sql<boolean>`${assets.createdAt} > now() - interval '24 hours'`,
+    }).from(assets).where(inIdArray(assets.id, ids)).orderBy(asc(assets.id))
+    return hold ? query.for('share') : query
+  }
 
   async metadata(assetId: string, transaction: Transaction): Promise<AssetMetadata | undefined> {
     const [row] = await executorOf(this.db, transaction).select({

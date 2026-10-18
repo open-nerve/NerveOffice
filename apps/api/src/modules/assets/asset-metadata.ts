@@ -13,3 +13,10 @@ export interface AssetImage {
   readonly data: Uint8Array
   readonly mimeType: AssetMimeType
 }
+
+/** 只给文档引用判定的身份与窗口，不带文件或对象信息。 */
+export interface AssetReferenceMetadata {
+  readonly assetId: string
+  readonly uploaderId: string
+  readonly withinUploadWindow: boolean
+}

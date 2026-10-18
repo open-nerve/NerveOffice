@@ -1,5 +1,6 @@
 import type { AppConfig } from '../config/index.ts'
 import { Module } from '@nestjs/common'
+import { AssetsModule } from '../assets/index.ts'
 import { AuditModule } from '../audit/index.ts'
 import { AuthModule } from '../auth/index.ts'
 import { APP_CONFIG } from '../config/index.ts'
@@ -9,6 +10,8 @@ import { SpacesModule } from '../spaces/index.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
 import { DocumentAssetAccessService } from './document-asset-access.service.ts'
+import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentAssetsRepository } from './document-assets.repository.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { DocumentContentController } from './document-content.controller.ts'
 import { DocumentContentService } from './document-content.service.ts'
@@ -48,11 +51,13 @@ import { WriteAccessRevocation } from './write-access.ts'
 
 @Module({
   // auth 只为判断别人的租约绑定的登录还在不在（SessionService.isActive，M3-P1 设计 §3.1）；auth 不依赖 documents，依赖图无环
-  imports: [DatabaseModule, SpacesModule, AuditModule, AuthModule],
+  imports: [DatabaseModule, SpacesModule, AuditModule, AuthModule, AssetsModule],
   controllers: [DocumentsController, DocumentContentController, OpenCheckReportsController],
   providers: [
     DocumentsRepository,
     DocumentAssetAccessService,
+    DocumentAssetReferences,
+    DocumentAssetsRepository,
     DocumentContentsRepository,
     DocumentRevisionsRepository,
     // 保存的回执（M3-P3）：内容相同、修订号没变的确认，只给本模块的保存

@@ -5,6 +5,7 @@ import { APP_CONFIG } from '../config/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { HealthModule } from '../health/index.ts'
 import { AssetReadService } from './asset-read.service.ts'
+import { AssetReferenceService } from './asset-reference.service.ts'
 import { AssetUploadService } from './asset-upload.service.ts'
 import { AssetUploadInterceptor } from './asset-upload.ts'
 import { AssetsRepository } from './assets.repository.ts'
@@ -18,6 +19,7 @@ import { AssetTemporaryFiles } from './temporary-files.ts'
   providers: [
     AssetsRepository,
     AssetReadService,
+    AssetReferenceService,
     AssetUploadService,
     AssetUploadInterceptor,
     AssetTemporaryFiles,
@@ -32,6 +34,6 @@ import { AssetTemporaryFiles } from './temporary-files.ts'
       },
     },
   ],
-  exports: [AssetUploadService, AssetUploadInterceptor, AssetReadService],
+  exports: [AssetUploadService, AssetUploadInterceptor, AssetReadService, AssetReferenceService],
 })
 export class AssetsModule {}

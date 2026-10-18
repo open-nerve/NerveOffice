@@ -7,7 +7,7 @@ import { Inject, Injectable } from '@nestjs/common'
 import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm'
 import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
-import { linkedAssetExists } from './document-assets.repository.ts'
+import { linkedAssetExists, requestedAssetLinks } from './document-assets.repository.ts'
 import { grantedTo, grantRoleOf } from './document-grants.repository.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
@@ -40,6 +40,10 @@ export interface DocumentRow {
 }
 
 declare const DOCUMENT_ROW_LOCKED: unique symbol
+declare const DOCUMENT_ROW_HELD: unique symbol
+
+/** 共享或排他锁下的文档行；普通复制在既有一致性锁后凭它复制当前引用。 */
+export type HeldDocumentRow = DocumentRow & { readonly [DOCUMENT_ROW_HELD]: true }
 
 /**
  * 这个事务锁住了这份文档行（FOR UPDATE）的凭据（Codex 评审 CX1）：只由锁住它的 lockById 给出，类型上别处造不出来（与 Transaction 同一个写法）。
@@ -52,7 +56,7 @@ export interface DocumentRowLock {
 }
 
 /** 锁住了的文档行：行本身，连同持锁的凭据 */
-export type LockedDocumentRow = DocumentRow & DocumentRowLock
+export type LockedDocumentRow = HeldDocumentRow & DocumentRowLock
 
 /** 新建文档要写的列：修订号从 1 开始，状态为正常，时间取数据库的当前时间。 */
 export interface NewDocument {
@@ -229,6 +233,19 @@ export class DocumentsRepository {
     return row
   }
 
+  /** 每个请求图片最多一个候选，权限仍按统一 accessible；只读预选不是授权。 */
+  async assetSources(scope: AccessibleScope, ids: readonly string[], transaction: Transaction): Promise<AccessTarget[]> {
+    if (ids.length === 0)
+      return []
+    const executor = executorOf(this.db, transaction)
+    const links = requestedAssetLinks(ids, executor)
+    return executor.selectDistinctOn([links.assetId], { id: d.id, spaceId: d.spaceId, createdBy: d.createdBy })
+      .from(d)
+      .innerJoin(links, eq(links.documentId, d.id))
+      .where(accessible(scope))
+      .orderBy(asc(links.assetId), asc(d.id))
+  }
+
   /** 可访问的文档，按更新时间从新到旧；after 是上一页最后一条的位置（keyset）。 */
   async listAccessible(scope: AccessibleScope, options: ListOptions, transaction?: Transaction): Promise<DocumentRow[]> {
     return executorOf(this.db, transaction)
@@ -295,14 +312,30 @@ export class DocumentsRepository {
     return row as LockedDocumentRow | undefined
   }
 
+  /** 多来源保存一次按 id 取排他锁，不能先共享锁再升级目标。 */
+  async lockByIds(ids: readonly string[], transaction: Transaction): Promise<LockedDocumentRow[]> {
+    if (ids.length === 0)
+      return []
+    const rows = await executorOf(this.db, transaction).select(COLUMNS).from(d).where(and(inIdArray(d.id, ids), eq(d.status, 'active'))).orderBy(asc(d.id)).for('update')
+    return rows as LockedDocumentRow[]
+  }
+
   /**
    * 以共享锁持住文档行（FOR SHARE）再读：复制的源文档用（M2-P6 复核 A 的 S1）。与保存、改名、移动、删除、转移
    * （都取 FOR UPDATE）互斥：锁下读到的就是复制出去的那一版，复制提交之前它不会被改写、移走或删掉；
    * 几次复制之间不互斥。等锁期间它进了回收站或被永久删除时返回 undefined
    */
-  async holdById(id: string, transaction: Transaction): Promise<DocumentRow | undefined> {
+  async holdById(id: string, transaction: Transaction): Promise<HeldDocumentRow | undefined> {
     const [row] = await executorOf(this.db, transaction).select(COLUMNS).from(d).where(and(eq(d.id, id), eq(d.status, 'active'))).for('share')
-    return row
+    return row as HeldDocumentRow | undefined
+  }
+
+  /** 只读来源统一按 id 取共享锁，复制流程不升级任何既有文档锁。 */
+  async holdByIds(ids: readonly string[], transaction: Transaction): Promise<HeldDocumentRow[]> {
+    if (ids.length === 0)
+      return []
+    const rows = await executorOf(this.db, transaction).select(COLUMNS).from(d).where(and(inIdArray(d.id, ids), eq(d.status, 'active'))).orderBy(asc(d.id)).for('share')
+    return rows as HeldDocumentRow[]
   }
 
   /**
