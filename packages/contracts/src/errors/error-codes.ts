@@ -72,6 +72,8 @@ export const ERROR_CODES = {
   LAST_ADMIN: { status: 409, message: '至少要保留一个有效的系统管理员' },
   /** 账户已停用，不能执行这个操作（例如签发重置链接） */
   ACCOUNT_DISABLED: { status: 409, message: '账户已停用' },
+  /** 图片组织配额不足；details.kind 区分物理字节与独立资源记录。 */
+  ASSET_QUOTA_EXCEEDED: { status: 409, message: '图片存储配额不足，请联系管理员' },
   /** 指定的账户不存在或已停用：添加成员、首个空间管理员、转移的目标（M2-P2）。同事目录里只有有效账户，两种情况不区分 */
   ACCOUNT_UNAVAILABLE: { status: 409, message: '这个账户不存在或已停用' },
   /** 只有停用的账户，才能转移它个人空间里的文档（M2-P2） */
@@ -105,12 +107,16 @@ export const ERROR_CODES = {
    * details 带违反的规则（snapshotInvalidDetailsSchema），不回显快照的内容
    */
   SNAPSHOT_INVALID: { status: 422, message: '表格内容的格式不正确，无法保存' },
+  /** 图片完整解码、格式或资源预算不通过；details.rule 只含有限规则，不回显原始内容。 */
+  ASSET_INVALID: { status: 422, message: '图片无法处理，请检查格式或使用较小的图片' },
   /** 登录失败次数过多，暂时锁定；响应带 Retry-After */
   TOO_MANY_ATTEMPTS: { status: 429, message: '尝试次数过多，请稍后再试' },
   /** 意外错误：对外只返回通用说明与请求标识，细节只写进日志 */
   INTERNAL_ERROR: { status: 500, message: '服务器内部错误，请稍后重试' },
   /** 未就绪、正在退出 */
   SERVICE_UNAVAILABLE: { status: 503, message: '服务暂时不可用，请稍后重试' },
+  /** 图片处理准入满、排队超时或正在关闭；响应带 Retry-After: 10。 */
+  ASSET_BUSY: { status: 503, message: '图片处理繁忙，请稍后重试' },
 } as const satisfies Record<string, { readonly status: number, readonly message: string }>
 
 export type ErrorCode = keyof typeof ERROR_CODES

@@ -25,6 +25,31 @@ function issuesOf(action: () => unknown): readonly ConfigIssue[] {
 }
 
 describe('loadConfig', () => {
+  it('图片目录和配额映射到冻结配置，接受上下界', () => {
+    for (const [quotaBytes, quotaCount] of [[5 * 1024 ** 2, 1], [1024 ** 4, 1_000_000]]) {
+      const config = loadConfig({ ...REQUIRED, NERVE_ASSET_ROOT: '/srv/nerve-office/assets', NERVE_ASSET_QUOTA_BYTES: String(quotaBytes), NERVE_ASSET_QUOTA_COUNT: String(quotaCount) })
+      expect(config.assets).toEqual({ root: '/srv/nerve-office/assets', quotaBytes, quotaCount })
+      expect(Object.isFrozen(config.assets)).toBe(true)
+    }
+  })
+
+  it.each([
+    ['NERVE_ASSET_ROOT', 'relative/assets'],
+    ['NERVE_ASSET_ROOT', '/srv/assets\u0000'],
+    ['NERVE_ASSET_QUOTA_BYTES', '5242879'],
+    ['NERVE_ASSET_QUOTA_BYTES', '1099511627777'],
+    ['NERVE_ASSET_QUOTA_BYTES', '1e10'],
+    ['NERVE_ASSET_QUOTA_BYTES', '5.5'],
+    ['NERVE_ASSET_QUOTA_COUNT', '0'],
+    ['NERVE_ASSET_QUOTA_COUNT', '1000001'],
+    ['NERVE_ASSET_QUOTA_COUNT', '-1'],
+    ['NERVE_ASSET_QUOTA_COUNT', 'NaN'],
+  ])('拒绝图片配置 %s=%j，错误不回显取值', (variable, value) => {
+    const issues = issuesOf(() => loadConfig({ ...REQUIRED, [variable]: value }))
+    expect(issues.map(issue => issue.variable)).toEqual([variable])
+    expect(issues[0]?.problem).not.toContain('不认识的变量')
+  })
+
   it.each([
     [undefined, true],
     ['true', true],
@@ -67,6 +92,7 @@ describe('loadConfig', () => {
       login: { maxFailures: 5, accountMaxFailures: 50, ipMaxFailures: 50, windowMinutes: 15, lockoutMinutes: 15 },
       oneTimeLinks: { recordMaxFailures: 10 },
       web: { root: undefined },
+      assets: { root: undefined, quotaBytes: 10 * 1024 ** 3, quotaCount: 100_000 },
       shutdown: { timeoutMs: 8_000 },
       log: { level: 'info' },
       password: { argon2: { memoryKib: 19_456, iterations: 2, parallelism: 1 }, hashConcurrency: 2, hashQueue: { maxWaiting: 64, maxWaitMs: 5_000 } },
