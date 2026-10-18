@@ -33,7 +33,7 @@ for (const [browserName, launcher, options] of [['chromium', chromium, {}], ['ch
         blocked.push(url); return route.abort()
       })
       try {
-        await page.goto(`${origin}/?run=calibration&case=${caseId}&mode=${mode}&method=synthetic&drop=1`)
+        await page.goto(`${origin}/?run=calibration&case=${caseId}&mode=${mode}&method=synthetic&drop=1&copy=1`)
         await page.waitForFunction(() => (window as any).__m5Probe?.records.some((record: any) => ['ready', 'boot-error'].includes(record.type)))
         const initial = await page.evaluate(() => (window as any).__m5Probe.records)
         assert.equal(initial.some((record: any) => record.type === 'boot-error'), false, JSON.stringify(initial))
@@ -59,6 +59,12 @@ for (const [browserName, launcher, options] of [['chromium', chromium, {}], ['ch
         assert.equal(dropped, mode === 'diagnostic')
         if (mode === 'diagnostic') await page.waitForFunction(() => (window as any).__m5Probe.state().drawingCount === 2)
         await page.waitForFunction(() => (window as any).__m5Probe.records.some((record: any) => record.type === 'file-digests' && record.target === 'sheet'))
+        if (mode === 'diagnostic') {
+          // SDK 的复制快捷键直接调用异步 Clipboard API，不保证产生 DOM copy 事件。
+          await page.evaluate(() => document.querySelector('#sheet')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', metaKey: true, bubbles: true, cancelable: true })))
+          await page.waitForFunction(() => (window as any).__m5Probe.records.some((record: any) => record.type === 'diagnostic-copy-scheduled' && record.details.origin === 'keyboard'), null, { timeout: 3000 })
+          await page.waitForFunction(() => (window as any).__m5Probe.records.some((record: any) => record.type === 'diagnostic-copy'), null, { timeout: 3000 })
+        }
         const state = await page.evaluate(() => ({ record: (window as any).__m5Probe.state(), records: (window as any).__m5Probe.records }))
         assert.equal(state.record.details.images[0].sourceType, mode === 'default' ? 'BASE64' : 'URL', '种子图片必须保持默认 SDK 与诊断 IO 各自的来源类型，否则复制对照失真')
         const paste = state.records.find((record: any) => record.type === 'paste')
@@ -70,7 +76,8 @@ for (const [browserName, launcher, options] of [['chromium', chromium, {}], ['ch
         assert.equal(state.record.drawingCount, mode === 'diagnostic' ? 2 : 1)
         assert.deepEqual(errors, [])
         assert.deepEqual(blocked, [])
-        assert.equal(state.records.some((record: any) => record.error || record.type === 'csp-violation'), false, JSON.stringify(state.records.filter((record: any) => record.error || record.type === 'csp-violation')))
+        const unexpected = state.records.filter((record: any) => record.type === 'csp-violation' || record.error && !(record.type === 'diagnostic-copy' && record.error.startsWith('NotAllowedError')))
+        assert.deepEqual(unexpected, [], JSON.stringify(unexpected))
         await page.screenshot({ path: join(output, `${caseId}.png`), fullPage: true })
         writeFileSync(join(output, `${caseId}.json`), `${JSON.stringify({ browserName, version: browser.version(), mode, ...state, errors, blocked }, null, 2)}\n`)
         results.push({ caseId, passed: true, drawingCount: state.record.drawingCount })

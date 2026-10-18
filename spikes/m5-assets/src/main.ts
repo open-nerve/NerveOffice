@@ -149,6 +149,22 @@ function copyDiagnostic(origin: string) {
   return pending
 }
 
+let copyTimer: number | undefined
+function scheduleDiagnosticCopy(origin: string) {
+  // 原生 SDK 快捷键会直接调用 Clipboard API；DOM copy 并非必经路径。
+  if (copyTimer !== undefined) window.clearTimeout(copyTimer)
+  record('diagnostic-copy-scheduled', { details: { origin, delayMs: 350 } })
+  copyTimer = window.setTimeout(() => {
+    copyTimer = undefined
+    void copyDiagnostic(`after-sdk-${origin}-350ms`).catch(() => {})
+  }, 350)
+}
+window.addEventListener('keydown', event => {
+  if (armed && compensate.checked && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
+    && !event.repeat && event.key.toLowerCase() === 'c' && event.target instanceof Element && event.target.closest('#sheet'))
+    scheduleDiagnosticCopy('keyboard')
+}, true)
+
 for (const type of ['paste', 'copy', 'drop'] as const) {
   window.addEventListener(type, (event: Event) => {
     if (!armed) return
@@ -168,7 +184,7 @@ for (const type of ['paste', 'copy', 'drop'] as const) {
       for (const file of files) void insertDiagnostic(file).catch(error => record('diagnostic-drop-error', { error: String(error) }))
     }
     if (type === 'copy' && target === 'sheet' && compensate.checked)
-      setTimeout(() => { void copyDiagnostic('after-sdk-copy-350ms').catch(() => {}) }, 350)
+      scheduleDiagnosticCopy('copy-event')
   }, true)
 }
 sheetElement.addEventListener('dragover', event => { if (blockDrop.checked) event.preventDefault() })
