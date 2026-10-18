@@ -1,5 +1,6 @@
 import type { SaveContentQuery } from '@nerve-office/contracts'
 import type { GzipBody } from '../security/index.ts'
+import type { DocumentAssetReferences } from './document-asset-references.ts'
 import type { ContentSaver } from './document-content.service.ts'
 import { Buffer } from 'node:buffer'
 import { createHash, randomUUID } from 'node:crypto'
@@ -49,7 +50,12 @@ function holding(store: FakeStore, documentId: string, userId: string, clientIns
 /** 保存的服务：运维开关（最低客户端构建）按用例给 */
 function serviceOf(store: FakeStore, minimumBuild?: string): DocumentContentService {
   const { transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, inspector, logger } = store.deps
-  return new DocumentContentService(transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, clientFormatGate(minimumBuild), inspector, logger)
+  // 本文件的既有保存样本不含图片；多来源授权和原子回滚由真实 PG 的 asset-save 覆盖。
+  const references = { replace: async (_id: string, ids: readonly string[]) => {
+    if (ids.length !== 0)
+      throw new Error('图片引用样本必须补齐真实授权夹具')
+  } } as unknown as DocumentAssetReferences
+  return new DocumentContentService(transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, clientFormatGate(minimumBuild), inspector, references, logger)
 }
 
 /** 存量（P3 之前写的）内容：gzip 的快照，没有内容哈希与资源名 */
