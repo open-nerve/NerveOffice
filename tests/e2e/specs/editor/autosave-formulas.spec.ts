@@ -15,7 +15,7 @@ import type { SelftestFormulaMode } from '../../../../apps/web/src/editor/testin
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { verifyFormulaSnapshot } from '../../../../apps/web/src/editor/testing/capture-samples.ts'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
-import { advanceTo, advanceUntil, autosaveLog, capturesOf, logNow, pausedNow, pauseTime, recordWrites, releaseAutosave, saveParam, SDK_CALCULATION_DEBOUNCE_MS, setAutosaveLimits, settleAfterEdit, skipAhead, uploadedText, uploadsOf } from '../../support/autosave.ts'
+import { advanceTo, advanceUntil, autosaveLog, capturesOf, clearAutosaveLog, logNow, pausedNow, pauseTime, recordWrites, releaseAutosave, saveParam, SDK_CALCULATION_DEBOUNCE_MS, setAutosaveLimits, settleAfterEdit, skipAhead, uploadedText, uploadsOf } from '../../support/autosave.ts'
 import { AUTOSAVE_FORMULA_SAMPLE, AUTOSAVE_STOP_SAMPLE, autosaveFormulaSampleFor, autosaveStopSampleFor } from '../../support/capture-samples.ts'
 import { startComposition } from '../../support/composition.ts'
 import { createDocument, createDocumentIn, createTeamSpace, createUser, revisionOf, withDatabase } from '../../support/database.ts'
@@ -23,7 +23,7 @@ import { commandMark, probeCommands, probeFormulaMode, probeFormulasSettled, pro
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditing, openAndEnterEditing, openReader, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditButton, enterEditing, exitEditing, openAndEnterEditing, openReader, saveAndWait, savedContent, saveStatus, selectCell, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -382,6 +382,9 @@ test.describe('US-M3-03 保存下来的公式结果与重新计算的一致', { 
       expect(await probeFormulaMode(page)).toBe(mode)
       await typeInCell(page, 'A1', '1')
       await typeInCell(page, 'A2', '=A1*2')
+      // 初始两格是准备数据；先保存并清空日志，之后只观察被取消命令后的那次修改。
+      await saveAndWait(page)
+      await clearAutosaveLog(page)
       // 入口守卫取消插入超链接（M5 之前没有它）：被取消的命令留在 SDK 的执行栈里，之后命令之外的 mutation（Worker 的写回等）带上它的 trigger
       await selectCell(page, 'C3')
       const mark = await commandMark(page)
