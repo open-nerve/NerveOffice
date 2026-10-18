@@ -1,10 +1,34 @@
 // 图片公开协议的真实上传、主动重读与浏览器解码；不代替 P2 的 SDK 图片入口验收。
 import type { Page, Response } from '@playwright/test'
 import { Buffer } from 'node:buffer'
+import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { assetUploadResponseSchema } from '@nerve-office/contracts'
+import { gzipSync } from 'node:zlib'
+import { acquiredEditLeaseSchema, assetUploadResponseSchema, EDIT_LEASE_HEADER, saveContentResponseSchema } from '@nerve-office/contracts'
+import { clientFormatQuery, CURRENT_CLIENT } from './client-format.ts'
 import { e2eOrigin } from './environment.ts'
 import { expect } from './fixtures.ts'
+
+/** 新建文档经真实租约/保存协议建立图片引用；不直接布置 document_asset_links。 */
+export async function saveAssetSnapshot(page: Page, documentId: string, raw: string): Promise<void> {
+  const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
+  const common = { 'origin': e2eOrigin(), 'x-csrf-token': csrfToken }
+  const clientInstanceId = randomUUID()
+  const leasePath = `/api/documents/${documentId}/edit-lease`
+  const response = await page.request.post(leasePath, { headers: common, data: { clientInstanceId, ...CURRENT_CLIENT } })
+  expect(response.status(), await response.text()).toBe(201)
+  const lease = acquiredEditLeaseSchema.parse(await response.json())
+  const authorized = { ...common, [EDIT_LEASE_HEADER]: lease.token }
+  try {
+    const query = new URLSearchParams({ ...clientFormatQuery(), clientInstanceId, writeEpoch: String(lease.writeEpoch), baseRevision: '1', requestId: randomUUID(), localSeq: '1' })
+    const saved = await page.request.put(`/api/documents/${documentId}/content?${query.toString()}`, { headers: { ...authorized, 'content-type': 'application/gzip' }, data: gzipSync(Buffer.from(raw)) })
+    expect(saved.status(), await saved.text()).toBe(200)
+    expect(saveContentResponseSchema.parse(await saved.json())).toMatchObject({ revision: 2, unchanged: false })
+  }
+  finally {
+    expect((await page.request.delete(leasePath, { headers: authorized })).status()).toBe(204)
+  }
+}
 
 export async function uploadAsset(page: Page, file = 'rgba-text.png', mime = 'image/png', extension = 'png') {
   const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }

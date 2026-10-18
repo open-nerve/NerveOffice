@@ -3,9 +3,9 @@ import type { Page } from '@playwright/test'
 import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
-import { acquiredEditLeaseSchema, createdDocumentSchema, EDIT_LEASE_HEADER, saveContentResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
-import { expectAssetHeaders, renderAsset, uploadAsset } from '../../support/asset-protocol.ts'
-import { clientFormatQuery, CURRENT_CLIENT } from '../../support/client-format.ts'
+import { createdDocumentSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { expectAssetHeaders, renderAsset, saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
+import { clientFormatQuery } from '../../support/client-format.ts'
 import { createUser, withDatabase } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
@@ -23,25 +23,6 @@ async function headers(page: Page): Promise<Record<string, string>> {
 function snapshot(unitId: string, urls: readonly string[], marker: string): string {
   return JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, extra: { urls, marker } })
 }
-async function save(page: Page, documentId: string, raw: string): Promise<void> {
-  const common = await headers(page)
-  const clientInstanceId = randomUUID()
-  const leasePath = `/api/documents/${documentId}/edit-lease`
-  const response = await page.request.post(leasePath, { headers: common, data: { clientInstanceId, ...CURRENT_CLIENT } })
-  expect(response.status(), await response.text()).toBe(201)
-  const lease = acquiredEditLeaseSchema.parse(await response.json())
-  const authorized = { ...common, [EDIT_LEASE_HEADER]: lease.token }
-  try {
-    const query = new URLSearchParams({ ...clientFormatQuery(), clientInstanceId, writeEpoch: String(lease.writeEpoch), baseRevision: '1', requestId: randomUUID(), localSeq: '1' })
-    const saved = await page.request.put(`/api/documents/${documentId}/content?${query.toString()}`, { headers: { ...authorized, 'content-type': 'application/gzip' }, data: gzipSync(Buffer.from(raw)) })
-    expect(saved.status(), await saved.text()).toBe(200)
-    expect(saveContentResponseSchema.parse(await saved.json())).toMatchObject({ revision: 2, unchanged: false })
-  }
-  finally {
-    expect((await page.request.delete(leasePath, { headers: authorized })).status()).toBe(204)
-  }
-}
-
 async function prepareCopy(page: Page, kind: '普通复制' | '本机副本', source: string, spaceId: string, original: string, draft: string) {
   const common = await headers(page)
   const requestId = randomUUID()
@@ -65,7 +46,7 @@ for (const kind of ['普通复制', '本机副本'] as const) {
     const unitId = (await savedContent(anotherDevice, source)).snapshot.id
     const unknown = `/api/assets/${randomUUID()}`
     const sourceText = snapshot(unitId, [image.url, unknown], '原文档内容')
-    await save(anotherDevice, source, sourceText)
+    await saveAssetSnapshot(anotherDevice, source, sourceText)
     // 只推进上传时间，不布置或修改图片关系；关系必须由正式保存/复制事务生成。
     await withDatabase(async client => client.query('UPDATE assets SET created_at=now()-interval \'25 hours\' WHERE id=$1', [image.assetId]))
     const denied = await renderAsset(page, image.url)
