@@ -4,6 +4,7 @@ import type { EditorImageAccess } from '../images/platform-image-io.ts'
 import type { SystemImageInputOptions } from '../images/system-image-input.ts'
 import { installSystemImageInput } from '../images/system-image-input.ts'
 import { createImageInputBridge } from '../internal-api/ui.ts'
+import { installImageInputRecording } from './image-input-recording.ts'
 
 interface ImageInputControlOptions extends Pick<SystemImageInputOptions, 'container' | 'io' | 'changed' | 'failed'> {
   readonly univer: Univer
@@ -21,6 +22,11 @@ export function installImageInputControl(options: ImageInputControlOptions) {
     return undefined
   if (value !== 'enabled')
     throw new Error('无法识别图片输入测试开关')
+  const query = new URLSearchParams(location.search)
+  const recordRun = query.get('nativeImageRun')
+  const recordCase = query.get('nativeImageCase')
+  if (recordRun !== null && (!/^[\w-]{1,80}$/.test(recordRun) || recordCase === null || !/^[\w-]{1,80}$/.test(recordCase)))
+    throw new Error('原生图片记录要求明确的 run/case')
   const owner = options.identity.owner ?? options.identity.current()?.user.id
   const bridge = createImageInputBridge(options.univer, options.container, {
     unitId: options.unitId,
@@ -55,6 +61,20 @@ export function installImageInputControl(options: ImageInputControlOptions) {
     return () => button.removeEventListener('click', action)
   })
   ;(options.pageUi ?? options.container).appendChild(panel)
+  const stopRecording = recordRun === null || recordCase === null
+    ? undefined
+    : installImageInputRecording({
+        container: options.container,
+        panel,
+        run: recordRun,
+        caseId: recordCase,
+        readState: () => {
+          const probe = window.__nerveEditorProbe
+          if (probe === undefined)
+            throw new Error('编辑器探针未就绪')
+          return { snapshot: JSON.parse(probe.snapshot()) as unknown, selected: probe.images.selected(), changeSeq: probe.changeSeq() }
+        },
+      })
   options.enabled(true)
   let disposed = false
   return {
@@ -63,6 +83,7 @@ export function installImageInputControl(options: ImageInputControlOptions) {
       if (disposed)
         return
       disposed = true
+      stopRecording?.()
       options.enabled(false)
       input.dispose()
       bridge.dispose()
