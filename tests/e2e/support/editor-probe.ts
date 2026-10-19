@@ -122,6 +122,12 @@ export interface ProbeFormulaProgress {
 
 interface EditorProbe {
   readonly images: {
+    readonly input?: {
+      readonly insertFiles: (files: readonly File[], kind?: 'float' | 'cell') => Promise<boolean>
+      readonly cancel: () => void
+    } | undefined
+    readonly classify: (data: { readonly html?: string, readonly text?: string, readonly files: readonly File[] }) => { readonly kind: string, readonly reason?: string }
+    readonly selected: () => readonly string[]
     readonly upload: (file: File) => Promise<unknown>
     readonly element: (drawingId: string) => HTMLImageElement | undefined
     readonly cached: (source: string) => HTMLImageElement | undefined

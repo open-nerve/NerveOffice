@@ -38,6 +38,7 @@ import type { EditorAccess } from './editor-access.ts'
 import type { FormulaRound } from './formula-round-stop.ts'
 import type { FormulaWorkerFailure } from './formula-worker-failure.ts'
 import type { EditorImageAccess, PlatformImageIo } from './images/platform-image-io.ts'
+import type { ImageInputState, installSystemImageInput } from './images/system-image-input.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
@@ -157,6 +158,9 @@ export interface CreateSheetEditorOptions {
   readonly imageAccess?: EditorImageAccess
   /** 图片失败由页面聚合提示；不回显原始来源或文件内容，也不作为全表加载失败。 */
   readonly onImageFailure?: (error: unknown) => void
+  /** 输入操作与图片显示分别反馈；系统剪贴板失败不触发图片加载重试。 */
+  readonly onImageOperation?: (state: ImageInputState) => void
+  readonly onImageOperationFailure?: (error: unknown) => void
   /** 编辑器挂载的容器 */
   readonly container: HTMLElement
   /** 快照的 JSON 文本（服务端下发的原文） */
@@ -227,6 +231,7 @@ function createWorkbook(univerAPI: FUniver, snapshot: WorkbookSnapshot): ReturnT
 type Workbook = ReturnType<FUniver['createWorkbook']>
 
 interface MountedEditor {
+  readonly imageInput: ReturnType<typeof installSystemImageInput> | undefined
   readonly univer: Univer
   readonly univerAPI: FUniver
   readonly workbook: Workbook
@@ -278,6 +283,7 @@ function createFormulaHost(mode: FormulaMode, cleanup: CleanupStack): FormulaHos
 interface FormulaRoundRef {
   round: FormulaRound | undefined
   images: PlatformImageIo | undefined
+  imageInput: { dispose: () => void } | undefined
 }
 
 /**
@@ -302,6 +308,7 @@ function formulaRoundOf(univerAPI: FUniver, changes: ChangeTracker): FormulaRoun
  */
 async function tearDown(cleanup: CleanupStack, retirement: FormulaRoundRef): Promise<void> {
   // 撤权/销毁的旧图片必须当场清掉，不能等正在运行的主线程公式退出。
+  retirement.imageInput?.dispose()
   retirement.images?.dispose()
   const round = retirement.round
   if (round?.running() === true) {
@@ -373,7 +380,8 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 只读守卫只在创建编辑器时装上、随编辑器销毁：阅读与编辑之间的切换一律重建编辑器（M3-P2 设计 §3.1），运行中不装也不撤；
   // 将来要在运行中装上、撤下它，有入口守卫占着，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
   // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
-  const guards = installEntryGuards(univerAPI)
+  let managedImageInput = false
+  const guards = installEntryGuards(univerAPI, () => managedImageInput)
   cleanup.defer(() => guards.dispose())
   // 图片先整批验证，再允许后续链接改写；任何拒绝都发生在 SDK 生成撤销或写模型之前。
   const imageOwner = options.imageAccess?.owner ?? options.imageAccess?.current()?.user.id
@@ -445,7 +453,28 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
-  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode, formula }
+  let imageInput: ReturnType<typeof installSystemImageInput> | undefined
+  if (import.meta.env.MODE === 'e2e') {
+    const { installImageInputControl } = await importTesting(async () => import('./testing/image-input-control.ts'))
+    const control = installImageInputControl({
+      univer,
+      unitId: snapshot.unitId,
+      container,
+      access,
+      identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
+      io: images,
+      pageUi: options.pageUi,
+      changed: options.onImageOperation ?? (() => {}),
+      failed: options.onImageOperationFailure ?? (() => {}),
+      enabled: (value) => { managedImageInput = value },
+    })
+    if (control !== undefined) {
+      imageInput = control.input
+      rounds.imageInput = control
+      cleanup.defer(control.dispose)
+    }
+  }
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode, formula, imageInput }
 }
 
 /**
@@ -466,7 +495,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   // 显式选择优先；生产默认不等，也不引入测试构建的 URL 开关。
   const formulaMode = options.formulaMode ?? (import.meta.env.MODE === 'e2e' ? await formulaModeOf() : 'worker')
   const cleanup = createCleanupStack()
-  const rounds: FormulaRoundRef = { round: undefined, images: undefined }
+  const rounds: FormulaRoundRef = { round: undefined, images: undefined, imageInput: undefined }
   let mounted: MountedEditor
   try {
     mounted = await mount(options, snapshot, formulaMode, cleanup, rounds)

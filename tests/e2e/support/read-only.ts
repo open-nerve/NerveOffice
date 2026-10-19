@@ -12,6 +12,7 @@ import { PERMISSION_ALERT_TITLE, PROTECTION_WORDING } from '../../../apps/web/sr
 import { createDocumentIn, createTeamSpace, createUser } from './database.ts'
 import { contentOf, probeCommands, probeSnapshot } from './editor-probe.ts'
 import { expect } from './fixtures.ts'
+import { materializeReadOnlyImages } from './managed-read-only-sample.ts'
 import { collectPageErrors } from './page-errors.ts'
 import { readOnlySampleFor } from './read-only-sample.ts'
 import { loginThroughApi } from './session.ts'
@@ -31,7 +32,13 @@ export async function scene(prefix: string, snapshotFor: (unitId: string) => str
   const author = await createUser(`${prefix}-author`, '作者')
   const viewer = await createUser(`${prefix}-viewer`, '查看者')
   const space = await createTeamSpace('只读样本', admin, [[author, 'admin'], [viewer, 'viewer']])
-  return { author, viewer, spaceId: space.id, documentId: await createDocumentIn(space.id, author, '只读样本', { snapshotFor }) }
+  let snapshot = ''
+  const documentId = await createDocumentIn(space.id, author, '只读样本', { snapshotFor: (unitId) => {
+    snapshot = snapshotFor(unitId)
+    return snapshot
+  } })
+  await materializeReadOnlyImages(author, documentId, snapshot)
+  return { author, viewer, spaceId: space.id, documentId }
 }
 
 /** 页面上收集到的：页面错误与这份文档的保存请求 */

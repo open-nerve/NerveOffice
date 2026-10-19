@@ -1,11 +1,13 @@
-import type { AssetExtension, AssetMimeType, SessionResponse } from '@nerve-office/contracts'
+import type { AssetUploadResponse, SessionResponse } from '@nerve-office/contracts'
+import type { AssetBytes } from '../../shared/assets/asset-api.ts'
 import type { EditorAccess } from '../editor-access.ts'
 import type { IImageIoService, IURLImageService } from '../internal-api/ui.ts'
-import { ASSET_MAX_BYTES, assetExtensionSchema } from '@nerve-office/contracts'
+import { isPlatformAssetAddress } from '@nerve-office/contracts'
 import { Subject } from 'rxjs'
-import { readAsset, uploadAsset } from '../../shared/assets/asset-api.ts'
+import { AssetInputError, readAsset, uploadAsset } from '../../shared/assets/asset-api.ts'
 import { imageServiceOverride, ImageSourceType, ImageUploadStatusType } from '../internal-api/ui.ts'
 import { decodeImage } from './decode-image.ts'
+import { imageFileInput, ImageFileInputError } from './image-input-policy.ts'
 import { createImageResources } from './image-resources.ts'
 import { runImageTask } from './image-task.ts'
 import unavailable from './unavailable.svg?url&no-inline'
@@ -28,27 +30,9 @@ export interface PlatformImageIoOptions {
 
 export interface PlatformImageIo {
   readonly override: ReturnType<typeof imageServiceOverride>
+  readonly upload: (file: File, signal: AbortSignal) => Promise<AssetUploadResponse>
+  readonly read: (source: string, signal: AbortSignal) => Promise<AssetBytes>
   readonly dispose: () => void
-}
-
-const FILE_TYPES: Readonly<Record<AssetExtension, AssetMimeType>> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-}
-
-class ImageUploadInputError extends Error {}
-
-function fileType(file: File): { extension: AssetExtension, mimeType: AssetMimeType } {
-  if (file.size < 1 || file.size > ASSET_MAX_BYTES)
-    throw new ImageUploadInputError(ImageUploadStatusType.ERROR_EXCEED_SIZE)
-  const dot = file.name.lastIndexOf('.')
-  const extension = assetExtensionSchema.safeParse(dot < 0 ? '' : file.name.slice(dot + 1))
-  if (!extension.success || FILE_TYPES[extension.data] !== file.type)
-    throw new ImageUploadInputError(ImageUploadStatusType.ERROR_IMAGE_TYPE)
-  return { extension: extension.data, mimeType: FILE_TYPES[extension.data] }
 }
 
 export function createPlatformImageIo(options: PlatformImageIoOptions): PlatformImageIo {
@@ -63,15 +47,33 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     return !disposed && owner !== undefined && current?.user.id === owner ? current : undefined
   }
 
+  async function read(source: string, caller: AbortSignal): Promise<AssetBytes> {
+    const original = session()
+    if (original === undefined)
+      throw new DOMException('图片身份已失效', 'AbortError')
+    const signal = AbortSignal.any([uploads.signal, caller])
+    signal.throwIfAborted()
+    if (!isPlatformAssetAddress(source, options.origin))
+      throw new AssetInputError('address')
+    const path = source.startsWith('/') ? source : source.slice(options.origin.length)
+    return runImageTask(signal, async () => readAsset(path, { signal, session: original }))
+  }
+
+  async function upload(file: File, caller: AbortSignal): Promise<AssetUploadResponse> {
+    const original = session()
+    if (options.access !== 'edit' || original === undefined)
+      throw new DOMException('图片写入许可已失效', 'AbortError')
+    const signal = AbortSignal.any([uploads.signal, caller])
+    signal.throwIfAborted()
+    const input = imageFileInput(file)
+    const buffer = await runImageTask(signal, async () => file.arrayBuffer())
+    return runImageTask(signal, async () => uploadAsset({ ...input, data: new Uint8Array(buffer) }, { signal, session: original }))
+  }
+
   const resources = createImageResources({
     origin: options.origin,
     placeholder: new URL(unavailable, options.origin).href,
-    read: async (source, signal) => {
-      const original = session()
-      if (original === undefined)
-        throw new DOMException('图片身份已失效', 'AbortError')
-      return readAsset(source, { signal, session: original })
-    },
+    read,
     decode: decodeImage,
     changed: options.changed,
     failed: options.failed,
@@ -111,13 +113,10 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     },
     saveImage: async (file) => {
       const controller = uploads
-      const original = session()
       try {
-        if (options.access !== 'edit' || original === undefined)
+        if (options.access !== 'edit' || session() === undefined)
           return null
-        const input = fileType(file)
-        const buffer = await runImageTask(controller.signal, async () => file.arrayBuffer())
-        const uploaded = await runImageTask(controller.signal, async () => uploadAsset({ ...input, data: new Uint8Array(buffer) }, { signal: controller.signal, session: original }))
+        const uploaded = await upload(file, controller.signal)
         controller.signal.throwIfAborted()
         if (disposed || session() === undefined)
           return null
@@ -132,8 +131,8 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
       catch (error) {
         if (controller.signal.aborted || disposed)
           return null
-        if (error instanceof ImageUploadInputError)
-          throw error
+        if (error instanceof ImageFileInputError)
+          throw new Error(error.reason === 'size' ? ImageUploadStatusType.ERROR_EXCEED_SIZE : ImageUploadStatusType.ERROR_IMAGE_TYPE)
         options.failed(error)
         throw new Error(ImageUploadStatusType.ERROR_IMAGE)
       }
@@ -152,6 +151,8 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
   }
   return {
     override: imageServiceOverride(images, urls),
+    upload,
+    read,
     dispose: () => {
       if (disposed)
         return

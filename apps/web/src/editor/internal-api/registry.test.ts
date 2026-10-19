@@ -6,6 +6,8 @@ import imageCellsSource from './image-cells.ts?raw'
 import imageCleanupSource from './image-cleanup.ts?raw'
 import imageCommandsSource from './image-commands.ts?raw'
 import imageFormulaSource from './image-formula-source.ts?raw'
+import imageInputInsertSource from './image-input-insert.ts?raw'
+import imageInputSource from './image-input.ts?raw'
 import imageJsonSource from './image-json.ts?raw'
 import imageServicesSource from './image-services.ts?raw'
 import imageStructureSource from './image-structure.ts?raw'
@@ -70,6 +72,8 @@ const SOURCES: Readonly<Record<string, string>> = {
   'image-cleanup.ts': imageCleanupSource,
   'image-commands.ts': imageCommandsSource,
   'image-formula-source.ts': imageFormulaSource,
+  'image-input.ts': imageInputSource,
+  'image-input-insert.ts': imageInputInsertSource,
   'image-json.ts': imageJsonSource,
   'image-services.ts': imageServicesSource,
   'image-structure.ts': imageStructureSource,
@@ -389,14 +393,14 @@ describe('内部 API 登记表：扫描 internal-api 里每个文件对 @univerj
 
   it('自测本身：封装的文件引用了没列出的符号、经同目录的文件间接引用、列了不再引用的、清单漏了的与走不到的文件，都报出来', () => {
     // 复验者的变异：formula-protocol.ts 引用没登记的内部符号
-    const withUnregistered: ScannedFiles = { ...SCANNED, 'formula-protocol.ts': scan(`${formulaProtocolSource}\nimport { SheetPermissionCheckController } from '@univerjs/sheets'\n`) }
-    expect(unregisteredReferences(withUnregistered)).toEqual(['formula-protocol.ts：@univerjs/sheets 的 SheetPermissionCheckController（实现的登记项：FORMULA_PROTOCOL）'])
+    const withUnregistered: ScannedFiles = { ...SCANNED, 'formula-protocol.ts': scan(`${formulaProtocolSource}\nimport { SheetInterceptorService } from '@univerjs/sheets'\n`) }
+    expect(unregisteredReferences(withUnregistered)).toEqual(['formula-protocol.ts：@univerjs/sheets 的 SheetInterceptorService（实现的登记项：FORMULA_PROTOCOL）'])
     // 经同目录的文件间接引用：injector.ts 引用一个新文件，新文件引用 SDK（算在 injectorOf 上）；新文件不在清单里时报出来
     const withHelper = { ...SCANNED, 'injector.ts': scan(`${injectorSource}\nimport { helper } from './helper.ts'\n`) }
     expect(reachableFrom(withHelper, EXITS).missing).toEqual(['injector.ts → helper.ts'])
-    const withListedHelper: ScannedFiles = { ...withHelper, 'helper.ts': scan('import { SheetPermissionCheckController } from \'@univerjs/sheets\'\n\nexport const helper = SheetPermissionCheckController\n') }
+    const withListedHelper: ScannedFiles = { ...withHelper, 'helper.ts': scan('import { SheetInterceptorService } from \'@univerjs/sheets\'\n\nexport const helper = SheetInterceptorService\n') }
     const helperEntries = [...entriesOf(withListedHelper, 'helper.ts')].join('、')
-    expect(unregisteredReferences(withListedHelper)).toEqual([`helper.ts：@univerjs/sheets 的 SheetPermissionCheckController（实现的登记项：${helperEntries}）`])
+    expect(unregisteredReferences(withListedHelper)).toEqual([`helper.ts：@univerjs/sheets 的 SheetInterceptorService（实现的登记项：${helperEntries}）`])
     // 清单里有、出口走不到的文件
     expect(unreachableFiles({ ...SCANNED, 'orphan.ts': scan('import { ICommandService } from \'@univerjs/core\'\n\nexport const orphan = ICommandService\n') })).toEqual(['orphan.ts'])
     // injector.ts 不再引用 Univer 的类型：injectorOf 的 sdk 里那一项过时了

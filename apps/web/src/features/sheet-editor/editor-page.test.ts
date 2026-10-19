@@ -324,12 +324,16 @@ function fakeAutosaveControl() {
 const IMAGE_CREATION = {
   imageAccess: expect.objectContaining({ owner: ALICE.user.id, current: expect.any(Function) as unknown, subscribe: expect.any(Function) as unknown }) as unknown,
   onImageFailure: expect.any(Function) as unknown,
+  onImageOperation: expect.any(Function) as unknown,
+  onImageOperationFailure: expect.any(Function) as unknown,
 }
 
 /** 编辑器页交给适配层的创建参数 */
 interface CreateOptions {
   readonly imageAccess?: EditorImageAccess
   readonly onImageFailure?: (error: unknown) => void
+  readonly onImageOperation?: (state: import('../../editor/index.ts').ImageInputState) => void
+  readonly onImageOperationFailure?: (error: unknown) => void
   readonly container: HTMLElement
   readonly snapshot: string
   readonly access: EditorAccess
@@ -349,6 +353,90 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     expect(input?.onImageFailure).toBeTypeOf('function')
     return { ...h, images: input!.imageAccess!, failed: input!.onImageFailure! }
   }
+
+  it('操作失败独立于图片加载；原会话错误仍复核，销毁后迟到状态不回写', async () => {
+    const h = await loaded()
+    const callbacks = h.createEditor.mock.calls.at(-1)![0]
+    const state = { kind: 'failed', operation: 'copy', reason: 'request', completed: 0, total: 1 } as const
+    callbacks.onImageOperation!(state)
+    expect(h.editorPage.view().imageOperation).toEqual(state)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+    callbacks.onImageOperationFailure!(new ApiError(401, 'UNAUTHENTICATED', '不可读取'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+    h.editorPage.dispose()
+    callbacks.onImageOperation!({ kind: 'complete', operation: 'copy', completed: 1, total: 1 })
+    callbacks.onImageOperationFailure!(new ApiError(401, 'UNAUTHENTICATED', '迟到'))
+    await settle()
+    expect(h.editorPage.view().imageOperation).toEqual(state)
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+  })
+
+  it('编辑器重建清操作提示，旧实例状态不能污染新实例', async () => {
+    const h = await loaded({ editIntent: false })
+    const previous = h.createEditor.mock.calls.at(-1)![0]
+    previous.onImageOperation!({ kind: 'failed', operation: 'paste', reason: 'empty', completed: 0, total: 0 })
+    await h.editorPage.enterEditing()
+    await settle()
+    expect(h.createEditor.mock.calls.at(-1)![0]).not.toBe(previous)
+    expect(h.editorPage.view().imageOperation).toBeUndefined()
+    previous.onImageOperation!({ kind: 'complete', operation: 'copy', completed: 1, total: 1 })
+    expect(h.editorPage.view().imageOperation).toBeUndefined()
+    const checks = h.api.session.mock.calls.length
+    previous.onImageOperationFailure!(new ApiError(403, 'CSRF_TOKEN_INVALID', '旧实例'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(checks)
+  })
+
+  it('图片上传的 CSRF 令牌失效也复核会话，不标记图片加载失败', async () => {
+    const h = await loaded()
+    h.createEditor.mock.calls.at(-1)![0].onImageOperationFailure!(new ApiError(403, 'CSRF_TOKEN_INVALID', '令牌失效'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+  })
+
+  it.each(['owner', 'network', 'other-user'] as const)('操作 401 确认后的迟到停写不自动循环；用户再次操作时补确认（%s），不重放', async (result) => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ api: { session: async () => initial } })
+    const callbacks = h.createEditor.mock.calls.at(-1)![0]
+    callbacks.onImageOperationFailure!(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    await settle()
+    expect(h.images.current()).toBeUndefined()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    if (result === 'network')
+      h.api.session.mockRejectedValueOnce(new NetworkError())
+    else
+      h.api.session.mockResolvedValueOnce(result === 'other-user' ? BOB : initial)
+    const rejected = { kind: 'failed', operation: 'insert', reason: 'permission', completed: 0, total: 0 } as const
+    callbacks.onImageOperation!(rejected)
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.images.current()).toBe(result === 'owner' ? initial : undefined)
+    expect(h.editorPage.view().imageOperation).toEqual(rejected)
+    expect(h.createEditor).toHaveBeenCalledOnce()
+  })
+
+  it('图片操作重试合并在途确认，接续轮失败不拿前轮身份放行图片', async () => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ api: { session: async () => initial } })
+    const callbacks = h.createEditor.mock.calls.at(-1)![0]
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise).mockRejectedValueOnce(new NetworkError())
+    const checking = h.editorPage.recheckSession()
+    callbacks.onImageOperation!({ kind: 'failed', operation: 'copy', reason: 'permission', completed: 0, total: 0 })
+    response.resolve(initial)
+    await checking
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.editorPage.view().sessionProblem).toBeInstanceOf(NetworkError)
+    expect(h.images.current()).toBeUndefined()
+  })
 
   it('传原会话对象，同令牌确认不重读，换令牌才通知；图片 401 不产生循环', async () => {
     const h = await loaded()

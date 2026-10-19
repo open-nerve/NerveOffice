@@ -5,9 +5,10 @@
 // 样本见 ./capture-samples.ts（E2E 的生成器写库）：
 // - environment：requestIdleCallback 是不是原生的（WebKit 26.6 没有，SDK 用 1 ms 的 setTimeout 垫片）、CompressionStream、crypto.subtle、
 //   计时的精度与几种计时器实际的延迟；
-// - change-detection（只读样本：图片是 data: 地址，M3-P3 起服务端不收，所以暂停定时的上传、只看捕获）：打开静默（到编辑的 steady 之后
+// - change-detection（只读样本的图片经真实上传/保存受管化）：暂停定时的上传以单独核对捕获。打开静默（到编辑的 steady 之后
 //   再 5 秒，本地修改序号仍是 0，自动保存没有捕获）；只改视图的动作不算修改、不捕获；M0 动作矩阵里能经 Facade 执行的改内容的动作逐个
 //   被检测到（内容确实变了，命令日志与变更检测一致）；自动保存跟上之后再看 5 秒，没有迟到而没被检测的变化（最后一次捕获的内容经同步的订阅取）；
+//   上述检查结束后显式 flush 一次，核对服务端内容与最终快照相同，避免交回结果时依赖隐藏请求的时序；
 // - formula-timing（公式样本，× Worker/主线程：地址参数选，./formula-mode.ts）：见 ./selftest-formulas.ts（自动保存照常，核对服务器上的公式值）；
 // - auto-height（大表，自动保存照常）：5 万行改字号，行高在空闲任务里迟到；自动保存跟上、再看 5 秒，服务器上的就是最终的行高；
 // - large-copy（大表，自动保存照常）：复制 5 万格的工作表，立即另取的快照里复制品完整（大表操作的拆分已关），没有懒执行；
@@ -247,9 +248,8 @@ function mutationIds(commands: readonly ProbeCommand[]): string {
 }
 
 async function changeDetectionScenario(session: Session): Promise<void> {
-  // 只读样本有两张 data: 地址的图片（浮动图片与单元格里的图片，M3-P3 起服务端按 image-source 一律拒收；改内容的动作只删掉浮动的那张）：
-  // 暂停定时的上传，只看自动保存的捕获——捕获的内容经同步的订阅另取。整页跳走交回结果时页面变成隐藏、切到后台的上传照常发起，服务端拒收
-  // （422），服务器上仍是修订号 1
+  // 图片已经由夹具准备为合法受管源，动作必须真的成功。保持定时上传暂停，先独立核对全部动作和捕获；
+  // 最后经既有控制显式保存一次并读回，不能靠非法图片导致 422 来固定服务器修订。
   if (!await checkEditing(session, { mode: 'held' }))
     return
   const { probe } = session
@@ -343,6 +343,24 @@ async function changeDetectionScenario(session: Session): Promise<void> {
       const origin = changes[0]?.at ?? 0
       return `改内容的 ${CONTENT_ACTIONS.length} 个动作之后自动保存捕获 ${capturesIn(log).length} 次（相对第一处修改：${autosaveTimeline(log, origin)}），捕获的时刻都不早于规则的下限；再看 ${LATE_WINDOW_MS / 1000} 秒：没有迟到而没被检测的变化，最后一次捕获与内存里的内容相同；定时的上传暂停时没有上传`
     }, LATE_WINDOW_MS + 45_000)
+
+    await check(session, 'change.saved', async () => {
+      const seq = probe.changeSeq()
+      const result = await control.flush()
+      if (result?.outcome?.kind !== 'saved')
+        fail(`捕获检查后的显式保存没有存上：${JSON.stringify(result) ?? '没有当前的调度'}；${describeAutosave(session)}`)
+      const { upload, request } = await untilUploaded(session, seq, { timeoutMs: 20_000 })
+      // 日志 seq 是编辑器的 mutation 序号，HTTP localSeq 是发件箱的捕获序号；用 requestId 关联同一次保存，不能把两种序号当成同一个。
+      if (uploadsIn(control.log()).length !== 1 || upload.trigger !== 'control' || upload.seq !== seq
+        || request?.status !== 200 || request.requestId !== result.outcome.requestId) {
+        fail(`最终保存不是一次对应最终序号的控制上传；${describeAutosave(session)}`)
+      }
+      const stored = await fetchServerContent(session.host.documentId)
+      const current = probe.snapshot()
+      if (probe.changeSeq() !== seq || !sameContent(stored, current))
+        fail(`最终保存之后内容不一致：${differences(stored, current)}`)
+      return `全部动作和捕获检查结束后仅显式上传一次，序号 ${seq} 收到 200，服务器内容与最终快照相同`
+    }, 30_000)
   }
   finally {
     watch.dispose()

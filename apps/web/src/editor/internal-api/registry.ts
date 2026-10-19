@@ -65,6 +65,28 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 ].join('')
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
+  {
+    name: 'FORMULA_CLIPBOARD_MIME_TYPE',
+    origin: 'sheets-ui 1.0.1 的公式剪贴板 MIME 常量，仅主线程使用',
+    purpose: '系统 paste 事件和显式剪贴板读取保留 SDK 公式数据，表格委托不退化为纯文本',
+    evidence: 'sheets-ui/lib/es/index.js 的 SheetClipboardService copy/paste/legacyPaste 共用同一常量',
+    regression: 'images/image-input-data.test.ts；后续系统图片浏览器回归',
+  },
+  ...['createImageInputBridge', 'CapturedImageTarget', 'ImageInputBridgeOptions', 'ImageInputCommands', 'ImageInputIntent', 'ImageInputSelection', 'ImageTableInput', 'PreparedInputImage', 'SelectedInputImage'].map(name => ({
+    name,
+    origin: '系统图片输入的实例目标、焦点、命令路由与正常图片写入，仅主线程出口',
+    sdk: {
+      '@univerjs/core': ['IDisposable', 'IMultiCommand', 'IRange', 'Univer', 'Workbook', 'Worksheet', 'CommandType', 'CustomCommandExecutionError', 'DOCS_NORMAL_EDITOR_UNIT_ID_KEY', 'DrawingTypeEnum', 'EDITOR_ACTIVATED', 'FOCUSING_FX_BAR_EDITOR', 'FOCUSING_SHEET', 'ICommandService', 'IContextService', 'IPermissionService', 'IUniverInstanceService', 'ImageSourceType', 'UniverInstanceType', 'BooleanNumber', 'BuildTextUtils', 'CellValueType', 'createDocumentModelWithStyle', 'PositionedObjectLayoutType', 'WrapTextType'],
+      '@univerjs/docs': ['buildDocTransform', 'docDrawingPositionToTransform'],
+      '@univerjs/drawing': ['IDrawingManagerService', 'DRAWING_IMAGE_HEIGHT_LIMIT', 'DRAWING_IMAGE_WIDTH_LIMIT'],
+      '@univerjs/sheets': ['RangeProtectionPermissionEditPoint', 'RangeProtectionPermissionViewPoint', 'SetRangeValuesCommand', 'SheetPermissionCheckController', 'SheetsSelectionsService', 'WorkbookCopyPermission', 'WorkbookEditablePermission', 'WorksheetCopyPermission', 'WorksheetEditExtraObjectPermission', 'WorksheetEditPermission', 'WorksheetSetCellStylePermission', 'WorksheetSetCellValuePermission', 'convertPositionCellToSheetOverGrid', 'SheetSkeletonService'],
+      '@univerjs/sheets-drawing': ['ISheetDrawingService', 'RemoveSheetDrawingCommand', 'InsertSheetDrawingCommand'],
+      '@univerjs/sheets-ui': ['PREDEFINED_HOOK_NAME_PASTE', 'SheetCopyCommand', 'SheetCutCommand', 'SheetPasteCommand', 'SheetPasteShortKeyCommand'],
+    },
+    purpose: '捕获原书/表/选区及实际选中图片，异步操作失效后不可复活；比原表格复制高一级的 MultiCommand 同步启动系统处理，失败以 SDK 取消错误终止回落。表格委托保留公式数据但去掉预览文件；图片专属权限与普通剪贴板权限分开。上传的尺寸和规范地址经 SDK 几何及文档构造函数生成正常可撤销命令，不重新用源地址量尺寸',
+    evidence: '1.0.1 core MultiCommand false 回落；sheets-ui SheetCopy/Cut/PasteCommand 的权限及捕获目标；docs-ui 隐藏输入 __editor_ + DOCS_NORMAL_EDITOR_UNIT_ID_KEY 与 data-u-comp=editor；sheets-drawing-ui 的文档图片构造和单元格 2 px 留白；drawing 显示上限 500 px。实际单图 body 为带段落终止符的单一图片控制符，需核对 blockId/index',
+    regression: 'internal-api/image-input.test.ts：真实命令服务、工作簿/选区/图片/权限/历史与受控剪贴板端口；images/image-input-task.test.ts：同步启动、取消/重试与迟到释放；S4 页面和原生证明另验',
+  })),
   ...['createImageCommandPreview', 'IMAGE_COMMAND_PROTOCOL', 'imageCellValueIsSingle', 'prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].map(name => ({
     name,
     origin: '固定 SDK 图片命令、双绘图服务的 JSON1 与撤销记录，只经主线程出口使用',

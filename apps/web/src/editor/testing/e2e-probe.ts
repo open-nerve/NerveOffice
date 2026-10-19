@@ -29,6 +29,7 @@ import type { ChangeTracker } from '../change-tracking/change-tracker.ts'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { CommandKind } from '../change-tracking/command-record.ts'
 import type { FormulaProgress } from '../change-tracking/formula-settle-tracker.ts'
+import type { installSystemImageInput } from '../images/system-image-input.ts'
 import type { OpenCheck } from '../profile/open-check.ts'
 import type { FormulaMode } from '../profile/sheet-profile.ts'
 import { canonicalLink } from '@nerve-office/contracts'
@@ -164,6 +165,7 @@ function readFormulaBar(editors: IEditorService): string {
  * 打开自检的结果
  */
 export interface ProbeTarget {
+  readonly imageInput?: ReturnType<typeof installSystemImageInput> | undefined
   readonly univer: Univer
   readonly univerAPI: FUniver
   readonly workbook: Workbook
@@ -173,7 +175,7 @@ export interface ProbeTarget {
 }
 
 /** 装上探针，返回移除它的函数（编辑器销毁时调用：退订命令事件；已经换成别的探针时不动 window 上的那个） */
-export function installEditorProbe({ univer, univerAPI, workbook, changes, formulaMode, openCheck }: ProbeTarget): () => void {
+export function installEditorProbe({ univer, univerAPI, workbook, changes, formulaMode, openCheck, imageInput }: ProbeTarget): () => void {
   const log: ProbeCommand[] = []
   const record = (phase: ProbeCommand['phase'], event: FacadeEvent): void => {
     const command = toCommandRecord(event)
@@ -201,7 +203,7 @@ export function installEditorProbe({ univer, univerAPI, workbook, changes, formu
   ]
   const injector = injectorOf(univer)
   const probe: EditorProbe = {
-    images: createImageProbe(univer, workbook),
+    images: createImageProbe(univer, workbook, imageInput),
     univerAPI,
     snapshot: () => JSON.stringify(workbook.save()),
     commands: (after = 0) => log.filter(command => command.seq > after),

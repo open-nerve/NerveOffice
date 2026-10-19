@@ -16,7 +16,7 @@
 // 能不能强制接管取自载入时的详情（之后随编辑状态更新）。"强制接管"（设计 §3.8）是写的操作：页头先确认（确认框关掉之后才交到这里），这里与"编辑"
 // 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
-import type { EditorImageAccess } from '../../editor/index.ts'
+import type { EditorImageAccess, ImageInputState } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -87,6 +87,7 @@ export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
 
 export interface EditorPageView {
   readonly imageProblem?: boolean
+  readonly imageOperation?: ImageInputState | undefined
   readonly formulaRecovery?: FormulaRecoveryView | undefined
   readonly recovery?: RecoveryView | undefined
   readonly localSave?: LocalSaveView | undefined
@@ -170,7 +171,7 @@ export interface EditorPageOptions {
    * 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定；页面自己的界面（页头）也交过去——组合输入与面板防抖的输入目标在页头里的
    * 不算文档的输入（M3-P4 设计 §3.6）
    */
-  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement, readonly pageUi: Node, readonly imageAccess?: EditorImageAccess, readonly onImageFailure?: (error: unknown) => void }) => ReturnType<CreateModeEditor>
+  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement, readonly pageUi: Node, readonly imageAccess?: EditorImageAccess, readonly onImageFailure?: (error: unknown) => void, readonly onImageOperation?: (state: ImageInputState) => void, readonly onImageOperationFailure?: (error: unknown) => void }) => ReturnType<CreateModeEditor>
   readonly page: PageLocation
   readonly sessionChannel: SessionChannel
   /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查 */
@@ -298,6 +299,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let imagePermissionEpoch = 0
   let imageInstance = 0
   let imageProblem = false
+  let imageOperation: ImageInputState | undefined
   let imagesHidden = false
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
@@ -366,7 +368,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, imageProblem, recovery: recovery?.view(), formulaRecovery: modeView?.formulaRecovery, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { load, imageProblem, imageOperation, recovery: recovery?.view(), formulaRecovery: modeView?.formulaRecovery, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
   }
 
   function confirmImages(): void {
@@ -805,6 +807,19 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       createEditor: async (editorOptions) => {
         const instance = ++imageInstance
         imageProblem = false
+        imageOperation = undefined
+        const currentImageInstance = (): boolean => !disposed && !imagesHidden && instance === imageInstance
+        const confirmImageOperationSession = async (): Promise<void> => {
+          await recheckSession()
+          if (!currentImageInstance())
+            return
+          // 合并确认要看最后一轮；前轮成功不能掩盖接续轮断网。
+          if (sessionProblem !== undefined) {
+            imageSession = undefined
+            imagePermissionEpoch += 1
+            imageAccess?.suspend()
+          }
+        }
         return options.createEditor({
           ...editorOptions,
           container: surface,
@@ -817,6 +832,21 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
             update()
             if (isAuthenticationError(error) && checkInFlight === undefined)
               void recheckSession()
+          },
+          onImageOperation: (state) => {
+            if (!currentImageInstance())
+              return
+            imageOperation = state
+            update()
+            // stopped 可能晚于先前确认；只在下一次用户动作后补确认，不自动重放剪贴板。
+            if (state.kind === 'failed' && state.reason === 'permission' && imageSession === undefined)
+              void confirmImageOperationSession()
+          },
+          onImageOperationFailure: (error) => {
+            if (!currentImageInstance())
+              return
+            if ((isAuthenticationError(error) || isCsrfTokenError(error)) && checkInFlight === undefined)
+              void confirmImageOperationSession()
           },
         })
       },

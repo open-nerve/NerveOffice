@@ -10,7 +10,7 @@ import { e2eOrigin } from './environment.ts'
 import { expect } from './fixtures.ts'
 
 /** 新建文档经真实租约/保存协议建立图片引用；不直接布置 document_asset_links。 */
-export async function saveAssetSnapshot(page: Page, documentId: string, raw: string): Promise<void> {
+export async function saveAssetSnapshot(page: Pick<Page, 'request'>, documentId: string, raw: string): Promise<void> {
   const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
   const common = { 'origin': e2eOrigin(), 'x-csrf-token': csrfToken }
   const clientInstanceId = randomUUID()

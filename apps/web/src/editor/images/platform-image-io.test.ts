@@ -80,9 +80,9 @@ function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = 
 beforeEach(() => {
   vi.stubGlobal('Blob', NodeBlob)
   vi.stubGlobal('File', NodeFile)
-  vi.mocked(readAsset).mockResolvedValue(BYTES)
-  vi.mocked(uploadAsset).mockResolvedValue(UPLOADED)
-  vi.mocked(decodeImage).mockImplementation(async () => decoded())
+  vi.mocked(readAsset).mockReset().mockResolvedValue(BYTES)
+  vi.mocked(uploadAsset).mockReset().mockResolvedValue(UPLOADED)
+  vi.mocked(decodeImage).mockReset().mockImplementation(async () => decoded())
 })
 
 describe('SDK 单元格缓存属于当前图片实例', () => {
@@ -183,6 +183,86 @@ afterEach(() => {
 })
 
 describe('真实 drawing 插件中的平台 IO', () => {
+  it('系统输入上传返回服务端尺寸，和 SDK 上传共用会话及元信息检查', async () => {
+    const h = setup()
+    const file = new File([new Uint8Array([1, 2, 3])], 'controlled.png', { type: 'image/png' })
+    expect(await h.adapter.upload(file, new AbortController().signal)).toEqual(UPLOADED)
+    expect(vi.mocked(uploadAsset).mock.calls[0]?.[1]?.session).toBe(h.original)
+    expect(h.failed).not.toHaveBeenCalled()
+  })
+
+  it('系统操作失败交回调用方，不误报图片加载失败', async () => {
+    const h = setup()
+    const error = new Error('controlled failure')
+    vi.mocked(uploadAsset).mockRejectedValueOnce(error)
+    const file = new File([new Uint8Array([1])], 'controlled.png', { type: 'image/png' })
+    await expect(h.adapter.upload(file, new AbortController().signal)).rejects.toBe(error)
+    const read = vi.spyOn(file, 'arrayBuffer')
+    h.change(undefined)
+    await expect(h.adapter.upload(file, new AbortController().signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(read).not.toHaveBeenCalled()
+    expect(h.failed).not.toHaveBeenCalled()
+  })
+
+  it.each(['caller', 'identity', 'dispose'] as const)('%s 取消系统上传并取消底层请求，重试仍可使用新代次', async (stop) => {
+    const h = setup()
+    const pending = deferred<AssetUploadResponse>()
+    vi.mocked(uploadAsset).mockReturnValueOnce(pending.promise)
+    const controller = new AbortController()
+    const file = new File([new Uint8Array([1])], 'controlled.png', { type: 'image/png' })
+    const result = h.adapter.upload(file, controller.signal)
+    const assertion = expect(result).rejects.toMatchObject({ name: 'AbortError' })
+    await vi.waitFor(() => expect(uploadAsset).toHaveBeenCalledOnce())
+    const requestSignal = vi.mocked(uploadAsset).mock.calls[0]?.[1]?.signal
+    if (stop === 'caller')
+      controller.abort()
+    else if (stop === 'identity')
+      h.change(session('renewed'))
+    else
+      h.adapter.dispose()
+    await assertion
+    expect(requestSignal?.aborted).toBe(true)
+    pending.resolve(UPLOADED)
+    if (stop !== 'dispose')
+      expect(await h.adapter.upload(file, new AbortController().signal)).toEqual(UPLOADED)
+    expect(h.failed).not.toHaveBeenCalled()
+  })
+
+  it('系统复制每次重新鉴权读取原字节；调用方取消不退役显示缓存', async () => {
+    const h = setup('read')
+    await h.url.getImage(SOURCE)
+    expect(await h.adapter.read(SOURCE, new AbortController().signal)).toEqual(BYTES)
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    const pending = deferred<typeof BYTES>()
+    vi.mocked(readAsset).mockReturnValueOnce(pending.promise)
+    const controller = new AbortController()
+    const result = h.adapter.read(SOURCE, controller.signal)
+    const assertion = expect(result).rejects.toMatchObject({ name: 'AbortError' })
+    controller.abort()
+    await assertion
+    expect(vi.mocked(readAsset).mock.calls.at(-1)?.[1]?.signal?.aborted).toBe(true)
+    expect(h.image.getImageSourceCache(SOURCE, ImageSourceType.URL)?.src).toBe('blob:https://app.test/first')
+    pending.resolve(BYTES)
+    expect(h.failed).not.toHaveBeenCalled()
+  })
+
+  it('系统读取在无效来源、身份或预取消时不发请求；只读不能上传', async () => {
+    const h = setup('read')
+    const signal = new AbortController().signal
+    await expect(h.adapter.read('https://outside.invalid/image.png', signal)).rejects.toMatchObject({ reason: 'address' })
+    const cancelled = new AbortController()
+    cancelled.abort()
+    await expect(h.adapter.read(SOURCE, cancelled.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    const file = new File([new Uint8Array([1])], 'controlled.png', { type: 'image/png' })
+    const read = vi.spyOn(file, 'arrayBuffer')
+    await expect(h.adapter.upload(file, signal)).rejects.toMatchObject({ name: 'AbortError' })
+    h.change(undefined)
+    await expect(h.adapter.read(SOURCE, signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(read).not.toHaveBeenCalled()
+    expect(readAsset).not.toHaveBeenCalled()
+    expect(uploadAsset).not.toHaveBeenCalled()
+  })
+
   it('许可刷新和退役立即关闭预览，普通图片加载不关闭用户正在看的预览', async () => {
     const h = setup()
     await h.url.getImage(SOURCE)

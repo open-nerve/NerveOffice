@@ -74,6 +74,7 @@ import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
 import { editorQueryClient } from './editor-query-client.ts'
 import { formulaRecoveryNotice } from './formula-recovery-ui.ts'
+import { imageInputNotice } from './image-input-notice.ts'
 import { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
 import { RecoveryNotice } from './recovery/recovery-notice.tsx'
 import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
@@ -1203,6 +1204,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           </div>
           {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
           {local !== undefined && <LocalSaveStatus indicator={local} />}
+          {view.imageOperation !== undefined && <p role="status" data-slot="image-operation" className="px-3 pb-2 text-sm text-muted-foreground">{imageInputNotice(view.imageOperation)}</p>}
           {view.imageProblem === true && (
             <div data-slot="image-status" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-sm text-muted-foreground">
               <p role="status">{editorMessages.images.failed}</p>

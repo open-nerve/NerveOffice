@@ -211,11 +211,27 @@ describe('服务器上的核对（storedProblems；M3-P4 S7 起捕获时机的�
     expect(storedProblems(step('read-only'), undefined)).toEqual(['服务器上没有文档 read-only-doc'])
   })
 
-  it('只看不改的几步与 change-detection（暂停了定时的上传，内容带着样本的 data: 图片、服务端拒收）：修订号恰好 1', () => {
-    for (const scenario of ['read-only', 'read-only-formulas', 'edit-chrome', 'environment', 'change-detection'] as const) {
+  it('受管图片准备的保存属于初始基线，不能掩盖只读过程多保存一次或漏记修订', () => {
+    const managed = { ...step('read-only'), initialRevision: 2 }
+    expect(storedProblems(managed, stored({ revision: 2, revisions: 2 }))).toEqual([])
+    expect(storedProblems(managed, stored({ revision: 3, revisions: 3 }))).toHaveLength(1)
+    expect(storedProblems(managed, stored({ revision: 2, revisions: 1 }))).toHaveLength(1)
+    expect(storedProblems(managed, stored())).toHaveLength(1)
+  })
+
+  it('只看不改的几步：修订号恰好 1', () => {
+    for (const scenario of ['read-only', 'read-only-formulas', 'edit-chrome', 'environment'] as const) {
       expect(storedProblems(step(scenario), stored())).toEqual([])
       expect(storedProblems(step(scenario), stored({ revision: 2, revisions: 2 }))).toEqual([`文档 ${scenario}-doc 的修订号是 2、修订记录 2 条（应当都是 1：没有保存过）`])
     }
+  })
+
+  it('change-detection：受管图片准备后，全部动作和捕获检查结束只显式保存一次', () => {
+    const managed = { ...step('change-detection'), initialRevision: 2 }
+    expect(storedProblems(managed, stored({ revision: 3, revisions: 3 }))).toEqual([])
+    expect(storedProblems(managed, stored({ revision: 2, revisions: 2 }))).toHaveLength(1)
+    expect(storedProblems(managed, stored({ revision: 4, revisions: 4 }))).toHaveLength(1)
+    expect(storedProblems(managed, stored({ revision: 3, revisions: 2 }))).toHaveLength(1)
   })
 
   it('enter-exit：恰好 2，内容里有改的那一格；hidden-save：恰好 3，内容里有两格', () => {

@@ -131,6 +131,18 @@ describe('图片的可见失败状态', () => {
     expect(screen.queryByText('部分图片暂时无法显示')).not.toBeInTheDocument()
   })
 
+  it('图片操作失败与部分完成用纯文字说明，不显示图片加载重试', () => {
+    const h = fakePage({ imageOperation: { kind: 'failed', operation: 'insert', reason: 'request', completed: 1, total: 3 }, save: DIRTY })
+    render(<EditorChrome page={h.page} apple={false} />)
+    expect(screen.getByText('插入图片未完成。请求失败，请稍后重试。已插入 1/3 张图片。')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '重新加载图片' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    h.set({ imageOperation: { kind: 'failed', operation: 'paste', reason: 'clipboard-permission', completed: 0, total: 0 } })
+    expect(screen.getByText('粘贴未完成。浏览器未允许访问剪贴板，请允许后再次操作。')).toBeVisible()
+    h.set({ imageOperation: { kind: 'cancelled', operation: 'insert', completed: 1, total: 3 } })
+    expect(screen.getByText('已取消插入图片。已插入 1/3 张图片。')).toBeVisible()
+  })
+
   it.each(['signed-out', 'other-user'] as const)('%s 时不能用图片重试绕过本页会话', (session) => {
     const h = fakePage({ imageProblem: true, session })
     render(<EditorChrome page={h.page} apple={false} />)
