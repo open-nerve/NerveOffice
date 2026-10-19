@@ -82,9 +82,9 @@ export function isGuardedCommand(id: string, params?: unknown): boolean {
 /** 在创建工作簿之前挂上：打开文档的过程中也不执行这些命令 */
 export function installEntryGuards(univerAPI: FUniver, managedImageInput: () => boolean = () => false): IDisposable {
   return univerAPI.addEvent(univerAPI.Event.BeforeCommandExecute, (event) => {
-    // 受控适配只使用正常浮图提交命令；默认文件框、背景、文档和链接入口仍关闭。
+    // 正式适配接管两种文件入口及正常浮图提交；背景、文档和链接入口仍关闭。
     // 切换时保留本监听，不能改变 Facade 与只读防火墙在 SDK 之前的顺序。
-    if (event.id === 'sheet.command.insert-sheet-image' && managedImageInput())
+    if (managedImageInput() && ['sheet.command.insert-sheet-image', 'sheet.command.insert-float-image', 'sheet.command.insert-cell-image'].includes(event.id))
       return
     if (isGuardedCommand(event.id, event.params))
       event.cancel = true

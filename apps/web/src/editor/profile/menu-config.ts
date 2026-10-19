@@ -34,13 +34,16 @@ export const UNSUPPORTED_MENU_ITEMS: readonly HiddenMenuItem[] = [
 ]
 
 /**
- * M5 之前不开放的入口（M1 总设计 §2.1、P4 设计 §3.6.8）：M1 不替换图片服务，SDK 默认把图片存成 data URL（M0-P4 报告 §2.2）；
- * 超链接的地址白名单在 M5。依据是计划书 §4.1"编辑器能力不足时，不显示用不了的按钮"
+ * M5-P2：正式图片插入使用平台输入任务；只读时隐藏父项和两种子项。
  */
-export const BEFORE_M5_MENU_ITEMS: readonly HiddenMenuItem[] = [
+export const IMAGE_INSERT_MENU_ITEMS: readonly HiddenMenuItem[] = [
   { id: 'sheet.menu.image', source: 'sheets-drawing-ui/src/menu/image.menu.ts:30（插入 → 媒体 → 图片的父菜单）' },
   { id: 'sheet.command.insert-float-image', source: 'sheets-drawing-ui/src/menu/schema.ts（子项：插入浮动图片）' },
   { id: 'sheet.command.insert-cell-image', source: 'sheets-drawing-ui/src/menu/schema.ts（子项：插入单元格图片）' },
+]
+
+/** P2 尚不提供原 SDK 下载，超链接入口由 P3 接入。 */
+export const BEFORE_M5_MENU_ITEMS: readonly HiddenMenuItem[] = [
   { id: 'sheet.command.save-cell-images', source: 'sheets-drawing-ui/src/menu/schema.ts（右键：保存单元格图片）' },
   { id: 'sheet.operation.insert-hyper-link-toolbar', source: 'sheets-hyper-link-ui/src/menu/menu.ts:150（工具栏的插入链接）' },
   { id: 'sheet.operation.insert-hyper-link', source: 'sheets-hyper-link-ui/src/menu/menu.ts:138（右键的插入链接：schema 的键是工具栏的 id，工厂返回的 id 是这一个）' },
@@ -50,11 +53,12 @@ export const BEFORE_M5_MENU_ITEMS: readonly HiddenMenuItem[] = [
 export const HIDDEN_MENU_ITEMS: readonly HiddenMenuItem[] = [...PROTECTION_MENU_ITEMS, ...UNSUPPORTED_MENU_ITEMS, ...BEFORE_M5_MENU_ITEMS]
 
 /**
- * 只读时另外隐藏的：工作表标签右键菜单里改动工作簿结构的 5 项（删除、复制、改名、标签颜色、隐藏；插件档案 v1 §5.2，M0 的 ui-config.ts:40-46）。
+ * 只读时另外隐藏的：图片插入及工作表标签右键菜单里改动工作簿结构的 5 项（删除、复制、改名、标签颜色、隐藏；插件档案 v1 §5.2，M0 的 ui-config.ts:40-46）。
  * 只读时右键菜单已经整体关掉（sheet-profile.ts），这 5 项隐藏是档案的约定：以后打开右键菜单时不会漏掉它们。
  * 它们的命令另由只读守卫的防火墙取消
  */
 export const READ_ONLY_MENU_ITEMS: readonly HiddenMenuItem[] = [
+  ...IMAGE_INSERT_MENU_ITEMS,
   { id: 'sheet.command.remove-sheet-confirm', source: 'sheets-ui/src/menu/sheet.menu.ts:43（工作表标签：删除；命令在 commands/commands/remove-sheet-confirm.command.ts:41）' },
   { id: 'sheet.command.copy-sheet', source: 'sheets-ui/src/menu/sheet.menu.ts:81（工作表标签：复制；命令在 sheets 的 commands/commands/copy-worksheet.command.ts:148）' },
   { id: 'sheet.operation.rename-sheet', source: 'sheets-ui/src/menu/sheet.menu.ts:91（工作表标签：重命名；操作在 commands/operations/rename-sheet.operation.ts:27）' },

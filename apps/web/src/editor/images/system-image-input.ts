@@ -17,7 +17,7 @@ export type ImageInputState
 
 export interface SystemImageInputOptions {
   readonly container: HTMLElement
-  readonly bridge: Pick<ReturnType<typeof createImageInputBridge>, 'capture' | 'canWriteImage' | 'insertImage' | 'removeImage' | 'pasteTable' | 'gridFocused' | 'installCommands'>
+  readonly bridge: Pick<ReturnType<typeof createImageInputBridge>, 'capture' | 'canWriteImage' | 'insertImage' | 'removeImage' | 'pasteTable' | 'pasteTableEvent' | 'gridFocused' | 'installCommands'>
   readonly io: Pick<PlatformImageIo, 'upload' | 'read'>
   readonly changed: (state: ImageInputState) => void
   readonly failed: (error: unknown) => void
@@ -150,7 +150,41 @@ export function installSystemImageInput(options: SystemImageInputOptions) {
     }
   }
 
+  async function pasteTableEvent(data: SystemImageInputData): Promise<void> {
+    if (disposed)
+      return
+    if (tasks.busy()) {
+      changed({ kind: 'failed', operation: 'paste', reason: 'busy', completed: 0, total: 0 })
+      return
+    }
+    const id = ++generation
+    try {
+      // 事件已经带齐正文，同步捕获并启动原 SDK；不读取预览，也不先用图片权限挡住只读提示。
+      const result = await options.bridge.pasteTableEvent({ html: data.html, text: data.text, formulaClipboardPayload: data.formulaClipboardPayload })
+      if (result && id === generation)
+        changed({ kind: 'complete', operation: 'paste', completed: 0, total: 0 })
+      // SDK 的权限拒绝已经显示原提示；false 不再叠加图片失败。
+    }
+    catch (error) {
+      if (!disposed && id === generation) {
+        changed({ kind: 'failed', operation: 'paste', reason: 'request', completed: 0, total: 0 })
+        options.failed(error)
+      }
+    }
+  }
+
+  async function chooseFiles(kind: 'float' | 'cell'): Promise<boolean> {
+    const target = options.bridge.capture('insert')
+    return perform('insert', target, 0, async (task, progress) => {
+      if (target === undefined || !options.bridge.canWriteImage(target, kind))
+        throw new InputRejected('permission')
+      const files = await task.run(async () => pickFiles(options.container, kind === 'float', task.signal))
+      await inputData(target, { files }, kind, task, progress)
+    })
+  }
+
   const commands = options.bridge.installCommands({
+    insert: async (kind, files) => files === undefined ? chooseFiles(kind) : insertFiles(files, kind),
     copy: async (target, image, cut) => perform(cut ? 'cut' : 'copy', target, 1, async (task, progress) => {
       await task.run(async () => writeSystemImage(image.source, task.signal, options.io.read))
       task.check()
@@ -164,10 +198,10 @@ export function installSystemImageInput(options: SystemImageInputOptions) {
       const data = await task.run(async () => readClipboardInput(task.signal))
       await inputData(target, data, 'float', task, progress)
     }),
-    rejected: (reason, intent) => {
+    rejected: (reason, intent, operation) => {
       if (!tasks.busy())
         generation += 1
-      changed({ kind: 'failed', operation: intent === 'insert' ? 'paste' : intent, reason, completed: 0, total: 0 })
+      changed({ kind: 'failed', operation: operation ?? (intent === 'insert' ? 'paste' : intent), reason, completed: 0, total: 0 })
     },
   })
 
@@ -192,10 +226,15 @@ export function installSystemImageInput(options: SystemImageInputOptions) {
     if (event.defaultPrevented || data === null || !inEditor(event) || !options.bridge.gridFocused())
       return
     const input = clipboardEventInput(data)
+    const ordinaryTable = classifyImageInput(input).kind === 'delegate'
     // 普通表格保留原事件路径，包括 SDK 的可选公式剪贴板补充读取。
-    if (input.files.length === 0 && classifyImageInput(input).kind === 'delegate')
+    if (input.files.length === 0 && ordinaryTable)
       return
     stop(event)
+    if (ordinaryTable) {
+      void pasteTableEvent(input)
+      return
+    }
     const target = options.bridge.capture('insert')
     void perform('paste', target, 0, async (task, progress) => {
       if (target === undefined)
@@ -219,15 +258,7 @@ export function installSystemImageInput(options: SystemImageInputOptions) {
 
   return {
     insertFiles,
-    chooseFiles: async (kind: 'float' | 'cell'): Promise<boolean> => {
-      const target = options.bridge.capture('insert')
-      return perform('insert', target, 0, async (task, progress) => {
-        if (target === undefined || !options.bridge.canWriteImage(target, kind))
-          throw new InputRejected('permission')
-        const files = await task.run(async () => pickFiles(options.container, kind === 'float', task.signal))
-        await inputData(target, { files }, kind, task, progress)
-      })
-    },
+    chooseFiles,
     cancel: tasks.cancel,
     dispose: () => {
       if (disposed)

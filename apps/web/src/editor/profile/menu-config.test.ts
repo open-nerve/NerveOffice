@@ -24,15 +24,16 @@ describe('两种打开方式都隐藏的菜单项', () => {
     ])
   })
 
-  it('M5 之前不开放的入口：插入图片的父菜单与两个子项、保存单元格图片、工具栏与右键两种 id 的超链接（P4 设计 §3.6.8）', () => {
+  it('P2 只向编辑者开放两种图片插入；下载和链接仍隐藏', () => {
     expect(ids(BEFORE_M5_MENU_ITEMS)).toEqual([
-      'sheet.menu.image',
-      'sheet.command.insert-float-image',
-      'sheet.command.insert-cell-image',
       'sheet.command.save-cell-images',
       'sheet.operation.insert-hyper-link-toolbar',
       'sheet.operation.insert-hyper-link',
     ])
+    for (const id of ['sheet.menu.image', 'sheet.command.insert-float-image', 'sheet.command.insert-cell-image']) {
+      expect(sheetMenuConfig('edit')[id]).toBeUndefined()
+      expect(sheetMenuConfig('read')[id]).toEqual({ hidden: true })
+    }
   })
 
   it('每一项写明出处，没有重复', () => {
@@ -50,6 +51,9 @@ describe('两种打开方式都隐藏的菜单项', () => {
 describe('只读时另外隐藏的菜单项（插件档案 v1 §5.2，M2-P3 设计 §3.4）', () => {
   it('工作表标签的 5 项：删除、复制、改名、标签颜色、隐藏', () => {
     expect(ids(READ_ONLY_MENU_ITEMS)).toEqual([
+      'sheet.menu.image',
+      'sheet.command.insert-float-image',
+      'sheet.command.insert-cell-image',
       'sheet.command.remove-sheet-confirm',
       'sheet.command.copy-sheet',
       'sheet.operation.rename-sheet',

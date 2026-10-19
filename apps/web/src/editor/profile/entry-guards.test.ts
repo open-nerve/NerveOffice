@@ -68,19 +68,22 @@ describe('M5 之前的入口：命令守卫', () => {
       expect(facade.fire(id).cancel, id).toBeUndefined()
   })
 
-  it('受控图片输入只放行正常浮图插入，开关切换不撤销首个监听', () => {
+  it('正式图片输入就绪才放行两种平台入口和浮图提交，退役不撤销首个监听', () => {
     const facade = fakeFacade()
     let enabled = false
     const guard = installEntryGuards(facade.api, () => enabled)
-    const insert = 'sheet.command.insert-sheet-image'
-    expect(facade.fire(insert).cancel).toBe(true)
+    const inserts = ['sheet.command.insert-sheet-image', 'sheet.command.insert-float-image', 'sheet.command.insert-cell-image']
+    for (const id of inserts)
+      expect(facade.fire(id).cancel).toBe(true)
     enabled = true
-    expect(facade.fire(insert).cancel).toBeUndefined()
-    for (const command of GUARDED_COMMANDS.filter(command => command.id !== insert))
+    for (const id of inserts)
+      expect(facade.fire(id).cancel).toBeUndefined()
+    for (const command of GUARDED_COMMANDS.filter(command => !inserts.includes(command.id)))
       expect(facade.fire(command.id).cancel, command.id).toBe(true)
     expect(facade.fire(IMAGE_PASTE_COMMAND.id, {}).cancel).toBe(true)
     enabled = false
-    expect(facade.fire(insert).cancel).toBe(true)
+    for (const id of inserts)
+      expect(facade.fire(id).cancel).toBe(true)
     expect(facade.dispose).not.toHaveBeenCalled()
     guard.dispose()
     expect(facade.dispose).toHaveBeenCalledOnce()

@@ -3,7 +3,7 @@ import type { ImageInputCommands } from './image-input.ts'
 import { CommandType, CustomCommandExecutionError, DOCS_NORMAL_EDITOR_UNIT_ID_KEY, DrawingTypeEnum, EDITOR_ACTIVATED, FOCUSING_FX_BAR_EDITOR, FOCUSING_SHEET, ICommandService, IContextService, ImageSourceType, IPermissionService, IUndoRedoService, IUniverInstanceService, LocaleType, RedoCommand, UndoCommand, Univer, UniverInstanceType } from '@univerjs/core'
 import { IDrawingManagerService, UniverDrawingPlugin } from '@univerjs/drawing'
 import { UniverRenderEnginePlugin } from '@univerjs/engine-render'
-import { SetRangeValuesCommand, SheetsSelectionsService, UniverSheetsPlugin, WorkbookCopyPermission, WorksheetEditExtraObjectPermission, WorksheetSetCellStylePermission } from '@univerjs/sheets'
+import { SetRangeValuesCommand, SheetPermissionCheckController, SheetsSelectionsService, UniverSheetsPlugin, WorkbookCopyPermission, WorkbookEditablePermission, WorksheetEditExtraObjectPermission, WorksheetSetCellStylePermission } from '@univerjs/sheets'
 import { ISheetDrawingService, UniverSheetsDrawingPlugin } from '@univerjs/sheets-drawing'
 import { ISheetClipboardService, SheetCopyCommand, SheetCutCommand, SheetPasteCommand, SheetPasteShortKeyCommand } from '@univerjs/sheets-ui'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -69,7 +69,11 @@ function setup() {
   const copy = vi.fn<ImageInputCommands['copy']>(async () => true)
   const paste = vi.fn<ImageInputCommands['paste']>(async () => true)
   const rejected = vi.fn()
-  const routes = bridge.installCommands({ copy, paste, rejected })
+  const insert = vi.fn(async (_kind: 'float' | 'cell', _files?: readonly File[]) => true)
+  const oldInsert = vi.fn(() => true)
+  for (const id of ['sheet.command.insert-float-image', 'sheet.command.insert-cell-image'])
+    commands.registerCommand({ id, type: CommandType.COMMAND, handler: oldInsert })
+  const routes = bridge.installCommands({ copy, paste, insert, rejected })
   const drawings = injector.get(IDrawingManagerService)
   const sheets = injector.get(ISheetDrawingService)
   const image = (drawingId = 'image', subUnitId = SHEET, drawingType = DrawingTypeEnum.DRAWING_IMAGE) => ({
@@ -102,7 +106,7 @@ function setup() {
     container.remove()
     univer.dispose()
   })
-  return { univer, injector, workbook, commands, context, bridge, container, copy, paste, rejected, focus, capture, select, drawings, sheets, listeners, routes, revoke: () => {
+  return { univer, injector, workbook, commands, context, bridge, container, copy, paste, insert, oldInsert, rejected, focus, capture, select, drawings, sheets, listeners, routes, revoke: () => {
     allowed = false
     for (const listener of listeners)
       listener()
@@ -118,6 +122,47 @@ afterEach(() => {
 })
 
 describe('真实命令服务的图片接管', () => {
+  it.each(['float', 'cell'] as const)('%s 正式菜单同步进入平台输入；失败不回落 SDK 文件框', async (kind) => {
+    const h = setup()
+    const pending = deferred<boolean>()
+    h.insert.mockReturnValueOnce(pending.promise)
+    const result = h.commands.executeCommand(`sheet.command.insert-${kind}-image`)
+    expect(h.insert).toHaveBeenCalledExactlyOnceWith(kind, undefined)
+    expect(h.oldInsert).not.toHaveBeenCalled()
+    pending.resolve(false)
+    expect(await result).toBe(false)
+    expect(h.oldInsert).not.toHaveBeenCalled()
+  })
+
+  it('正式文件命令保留实际 File 列表，伪造文件拒绝且不弹默认文件框', async () => {
+    const h = setup()
+    const files = [new File(['controlled'], 'sample.png', { type: 'image/png' })]
+    expect(await h.commands.executeCommand('sheet.command.insert-float-image', { files })).toBe(true)
+    expect(h.insert).toHaveBeenCalledExactlyOnceWith('float', files)
+    expect(await h.commands.executeCommand('sheet.command.insert-float-image', { files: [{ name: 'forged.png' }] })).toBe(false)
+    expect(h.insert).toHaveBeenCalledOnce()
+    expect(h.rejected).toHaveBeenCalledWith('type', 'insert', 'insert')
+    expect(h.oldInsert).not.toHaveBeenCalled()
+  })
+
+  it('入口失焦、许可失效或处理器失败时不启动旧 SDK，释放不留下可调用入口', async () => {
+    const h = setup()
+    h.context.setContextValue(FOCUSING_FX_BAR_EDITOR, true)
+    expect(await h.commands.executeCommand('sheet.command.insert-cell-image')).toBe(false)
+    expect(h.insert).not.toHaveBeenCalled()
+    h.context.setContextValue(FOCUSING_FX_BAR_EDITOR, false)
+    h.insert.mockRejectedValueOnce(new Error('controlled failure'))
+    expect(await h.commands.executeCommand('sheet.command.insert-cell-image')).toBe(false)
+    h.revoke()
+    expect(await h.commands.executeCommand('sheet.command.insert-cell-image')).toBe(false)
+    expect(h.insert).toHaveBeenCalledOnce()
+    expect(h.oldInsert).not.toHaveBeenCalled()
+    h.routes.dispose()
+    h.routes.dispose()
+    expect(h.commands.hasCommand('sheet.command.insert-float-image')).toBe(false)
+    expect(h.commands.hasCommand('sheet.command.insert-cell-image')).toBe(false)
+  })
+
   it('原 MultiCommand 返回 false 会回落，自定义取消错误终止回落', async () => {
     const h = setup()
     const fallback = vi.fn(() => true)
@@ -167,6 +212,162 @@ describe('真实命令服务的图片接管', () => {
     expect(original).toHaveBeenCalledTimes(2)
   })
 
+  it.each([SheetCopyCommand, SheetCutCommand])('图片服务不可用时，普通区域 %s 仍走原表格剪贴板', async (command) => {
+    const h = setup()
+    const original = vi.fn(async () => true)
+    h.injector.add([ISheetClipboardService, { useValue: clipboardPort({ copy: original, cut: original }) }])
+    h.commands.registerMultipleCommand(command)
+    h.revoke()
+    expect(await h.commands.executeCommand(command.id)).toBe(true)
+    expect(original).toHaveBeenCalledOnce()
+    expect(h.copy).not.toHaveBeenCalled()
+    expect(h.rejected).not.toHaveBeenCalled()
+    expect(h.bridge.capture('insert')).toBeUndefined()
+  })
+
+  it('只读普通区域剪切由真实 SDK 拒绝并发出原提示，图片处理不接管', async () => {
+    const h = setup()
+    const cut = vi.fn(async () => true)
+    h.injector.add([ISheetClipboardService, { useValue: clipboardPort({ cut }) }])
+    h.commands.registerMultipleCommand(SheetCutCommand)
+    h.injector.get(IPermissionService).updatePermissionPoint(new WorkbookEditablePermission(BOOK).id, false)
+    const messages: string[] = []
+    const observer = h.injector.get(SheetPermissionCheckController).triggerPermissionUIEvent$.subscribe(message => messages.push(message))
+    try {
+      expect(await h.commands.executeCommand(SheetCutCommand.id)).toBe(false)
+      expect(messages).toEqual(['这份文档只能查看，不能剪切。'])
+      expect(cut).not.toHaveBeenCalled()
+      expect(h.copy).not.toHaveBeenCalled()
+      expect(h.rejected).not.toHaveBeenCalled()
+    }
+    finally {
+      observer.unsubscribe()
+    }
+  })
+
+  it('只读真实图片剪切仍由严格图片目标拒绝，不回落 SDK', async () => {
+    const h = setup()
+    const fallback = vi.fn(async () => true)
+    h.commands.registerMultipleCommand({ ...SheetCutCommand, handler: fallback })
+    h.focus()
+    h.injector.get(IPermissionService).updatePermissionPoint(new WorkbookEditablePermission(BOOK).id, false)
+    expect(await h.commands.executeCommand(SheetCutCommand.id)).toBe(false)
+    expect(h.rejected).toHaveBeenCalledExactlyOnceWith('permission', 'cut')
+    expect(h.copy).not.toHaveBeenCalled()
+    expect(fallback).not.toHaveBeenCalled()
+  })
+
+  it('同步表格事件在只读时仍由真实快捷粘贴命令发出权限提示，零正文写入', async () => {
+    const h = setup()
+    const legacyPaste = vi.fn(async () => true)
+    h.injector.add([ISheetClipboardService, { useValue: clipboardPort({ legacyPaste }) }])
+    h.commands.registerCommand(SheetPasteShortKeyCommand)
+    h.injector.get(IPermissionService).updatePermissionPoint(new WorkbookEditablePermission(BOOK).id, false)
+    const messages: string[] = []
+    const observer = h.injector.get(SheetPermissionCheckController).triggerPermissionUIEvent$.subscribe(message => messages.push(message))
+    try {
+      const result = h.bridge.pasteTableEvent({ html: '<table><tr><td>42</td></tr></table>', text: '42', formulaClipboardPayload: 'formula' })
+      expect(messages).toEqual(['这份文档只能查看，不能粘贴。'])
+      expect(await result).toBe(false)
+      expect(legacyPaste).not.toHaveBeenCalled()
+      expect(h.paste).not.toHaveBeenCalled()
+    }
+    finally {
+      observer.unsubscribe()
+    }
+  })
+
+  it('同步表格事件立即以原范围启动真实命令，去掉预览文件并保留公式数据', async () => {
+    const h = setup()
+    const pending = deferred<boolean>()
+    const legacyPaste = vi.fn(async () => pending.promise)
+    h.injector.add([ISheetClipboardService, { useValue: clipboardPort({ legacyPaste }) }])
+    h.commands.registerCommand(SheetPasteShortKeyCommand)
+    h.select(3, 2)
+    const result = h.bridge.pasteTableEvent({ html: '<table><tr><td>42</td></tr></table>', text: '42', formulaClipboardPayload: 'formula' })
+    expect(legacyPaste).toHaveBeenCalledExactlyOnceWith('<table><tr><td>42</td></tr></table>', '42', [], 'formula', {
+      unitId: BOOK,
+      subUnitId: SHEET,
+      range: { startRow: 3, endRow: 3, startColumn: 2, endColumn: 2 },
+    })
+    h.select(6, 4)
+    pending.resolve(true)
+    expect(await result).toBe(true)
+    expect(legacyPaste).toHaveBeenCalledOnce()
+  })
+
+  it.each(['focus', 'selection', 'disposed'] as const)('同步表格事件在 %s 无效时不启动旧 SDK', async (reason) => {
+    const h = setup()
+    const legacyPaste = vi.fn(async () => true)
+    h.injector.add([ISheetClipboardService, { useValue: clipboardPort({ legacyPaste }) }])
+    h.commands.registerCommand(SheetPasteShortKeyCommand)
+    if (reason === 'focus')
+      h.context.setContextValue(FOCUSING_SHEET, false)
+    else if (reason === 'selection')
+      h.injector.get(SheetsSelectionsService).setSelections(BOOK, SHEET, [])
+    else
+      h.bridge.dispose()
+    expect(await h.bridge.pasteTableEvent({ text: '不能写入' })).toBe(false)
+    expect(legacyPaste).not.toHaveBeenCalled()
+  })
+
+  it('图片服务不可用时，右键普通表格仍按捕获范围交给真实快捷粘贴命令', async () => {
+    const h = setup()
+    const legacyPaste = vi.fn(async () => true)
+    h.injector.add([ISheetClipboardService, { useValue: clipboardPort({ legacyPaste }) }])
+    h.commands.registerCommand(SheetPasteShortKeyCommand)
+    h.select(3, 2)
+    h.revoke()
+    h.paste.mockImplementation(async target => h.bridge.pasteTable(target, { html: '<table><tr><td>离线正文</td></tr></table>', text: '离线正文' }))
+    expect(await h.commands.executeCommand(SheetPasteCommand.id)).toBe(true)
+    expect(legacyPaste).toHaveBeenCalledExactlyOnceWith('<table><tr><td>离线正文</td></tr></table>', '离线正文', [], undefined, {
+      unitId: BOOK,
+      subUnitId: SHEET,
+      range: { startRow: 3, endRow: 3, startColumn: 2, endColumn: 2 },
+    })
+    expect(h.rejected).not.toHaveBeenCalled()
+  })
+
+  it.each([SheetCopyCommand, SheetCutCommand])('图片服务不可用时，选中图片的 %s 仍被拒绝且不回落', async (command) => {
+    const h = setup()
+    const original = vi.fn(async () => true)
+    h.commands.registerMultipleCommand({ ...command, handler: original })
+    h.focus()
+    h.revoke()
+    expect(await h.commands.executeCommand(command.id)).toBe(false)
+    expect(h.rejected).toHaveBeenCalledExactlyOnceWith('permission', command.id === SheetCutCommand.id ? 'cut' : 'copy')
+    expect(h.copy).not.toHaveBeenCalled()
+    expect(original).not.toHaveBeenCalled()
+  })
+
+  it('离线右键读出图片后不能转为图片写入；普通目标也不绕过身份变化与选区失效', async () => {
+    const h = setup()
+    h.paste.mockImplementation(async target => h.bridge.canWriteImage(target, 'float'))
+    h.revoke()
+    expect(await h.commands.executeCommand(SheetPasteCommand.id)).toBe(false)
+    expect(h.paste).toHaveBeenCalledOnce()
+    expect(h.paste.mock.calls[0]?.[0].isCurrent()).toBe(false)
+    h.paste.mockImplementation(async (target) => {
+      const cancelled = vi.fn()
+      const remove = target.subscribe(cancelled)
+      h.select(1)
+      h.select()
+      expect(target.isCurrent()).toBe(false)
+      expect(cancelled).toHaveBeenCalled()
+      remove()
+      return h.bridge.pasteTable(target, { text: '不能写回' })
+    })
+    expect(await h.commands.executeCommand(SheetPasteCommand.id)).toBe(false)
+    h.paste.mockImplementation(async (target) => {
+      const remove = target.subscribe(() => {})
+      h.revoke()
+      expect(target.isCurrent()).toBe(false)
+      remove()
+      return false
+    })
+    expect(await h.commands.executeCommand(SheetPasteCommand.id)).toBe(false)
+  })
+
   it('多选区域的主单元格可以不在最后一项，普通复制继续原命令且插入捕获活动位置', async () => {
     const h = setup()
     const selections = h.injector.get(SheetsSelectionsService)
@@ -208,7 +409,7 @@ describe('真实命令服务的图片接管', () => {
 
   it.each([[SheetCopyCommand, 'copy'], [SheetCutCommand, 'cut'], [SheetPasteCommand, 'insert']] as const)('权限拒绝报告本次 %s 的操作类别', async (command, intent) => {
     const h = setup()
-    h.revoke()
+    h.injector.get(IPermissionService).updatePermissionPoint((intent === 'insert' ? new WorkbookEditablePermission(BOOK) : new WorkbookCopyPermission(BOOK)).id, false)
     expect(await h.commands.executeCommand(command.id)).toBe(false)
     expect(h.rejected).toHaveBeenCalledExactlyOnceWith('permission', intent)
   })
@@ -424,6 +625,25 @@ describe('真实焦点、模型与固定目标', () => {
 describe('已经上传的受管图片经正常命令插入与剪切', () => {
   const prepared = { source: SOURCE, width: 120, height: 80 }
 
+  it.each(['float', 'cell'] as const)('%s 剪切命令重新绑定严格目标，实际删除与撤销均成立', async (kind) => {
+    const h = setup()
+    if (kind === 'float')
+      h.focus()
+    else
+      expect(h.bridge.insertImage(h.capture('insert'), prepared, 'cell')).toBe(true)
+    const current = () => kind === 'float'
+      ? h.sheets.getDrawingByParam({ unitId: BOOK, subUnitId: SHEET, drawingId: 'image' })
+      : h.workbook.getActiveSheet().getCellRaw(0, 0)?.p
+    const original = structuredClone(current())
+    expect(original).toBeDefined()
+    h.copy.mockImplementation(async (target, image, cut) => cut && h.bridge.removeImage(target, image))
+    expect(await h.commands.executeCommand(SheetCutCommand.id)).toBe(true)
+    expect(h.copy).toHaveBeenCalledOnce()
+    expect(current()).toBeUndefined()
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(current()).toEqual(original)
+  })
+
   it('浮图固定在捕获的单元格、使用独立 ID；真实撤销与重做保留受管地址', async () => {
     const h = setup()
     h.select(3, 2)
@@ -434,7 +654,7 @@ describe('已经上传的受管图片经正常命令插入与剪切', () => {
     const drawingId = ids.at(-1)
     expect(drawingId).toBeDefined()
     const drawing = h.sheets.getDrawingByParam({ unitId: BOOK, subUnitId: SHEET, drawingId: drawingId ?? '' })
-    expect(drawing).toMatchObject({ source: SOURCE, imageSourceType: ImageSourceType.URL, transform: { width: 120, height: 80 }, sheetTransform: { from: { row: 3, column: 2 } } })
+    expect(drawing).toMatchObject({ source: SOURCE, imageSourceType: ImageSourceType.URL, transform: { width: 120, height: 80, angle: 0, skewX: 0, skewY: 0, flipX: false, flipY: false }, sheetTransform: { from: { row: 3, column: 2 } } })
     expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
     expect(h.sheets.getDrawingOrder(BOOK, SHEET)).toEqual(['image', 'second'])
     expect(await h.commands.executeCommand(RedoCommand.id)).toBe(true)

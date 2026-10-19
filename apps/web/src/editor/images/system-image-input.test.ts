@@ -37,6 +37,7 @@ function setup() {
     insertImage: vi.fn(() => current),
     removeImage: vi.fn(() => current),
     pasteTable: vi.fn(async () => current),
+    pasteTableEvent: vi.fn(async () => current),
     gridFocused: vi.fn(() => current),
     installCommands: (value) => {
       handlers = value
@@ -58,7 +59,7 @@ function setup() {
     for (const listener of listeners)
       listener()
   }
-  return { container, target, bridge, io, states, failed, input, listeners, invalidate, copy: async (cut = false) => handlers!.copy(target, selected, cut), paste: async () => handlers!.paste(target) }
+  return { container, target, bridge, io, states, failed, input, listeners, invalidate, rejected: (...args: Parameters<ImageInputCommands['rejected']>) => handlers!.rejected(...args), copy: async (cut = false) => handlers!.copy(target, selected, cut), paste: async () => handlers!.paste(target), insert: async (kind: 'float' | 'cell', files?: readonly File[]) => handlers!.insert(kind, files) }
 }
 
 function file(name = 'controlled.png', type = 'image/png', size = 1): File {
@@ -256,6 +257,7 @@ describe('编辑器范围内的同步事件与文件对话框', () => {
     expect(event.defaultPrevented).toBe(true)
     expect(old).not.toHaveBeenCalled()
     expect(readClipboardInput).not.toHaveBeenCalled()
+    expect(h.bridge.pasteTableEvent).not.toHaveBeenCalled()
     await vi.waitFor(() => expect(h.states.at(-1)?.kind).toBe('complete'))
     expect(h.io.upload).toHaveBeenCalledOnce()
   })
@@ -292,11 +294,41 @@ describe('编辑器范围内的同步事件与文件对话框', () => {
 
   it('事件带表格 HTML 和预览文件时委托表格，不上传预览', async () => {
     const h = setup()
+    vi.mocked(h.bridge.capture).mockReturnValue(undefined)
+    vi.mocked(h.bridge.canWriteImage).mockReturnValue(false)
     const event = transferEvent('paste', [file()], { 'text/html': '<table><tr><td>42</td></tr></table>', 'text/plain': '42' })
     h.container.dispatchEvent(event)
     expect(event.defaultPrevented).toBe(true)
-    await vi.waitFor(() => expect(h.bridge.pasteTable).toHaveBeenCalledOnce())
+    expect(h.bridge.pasteTableEvent).toHaveBeenCalledExactlyOnceWith({ html: '<table><tr><td>42</td></tr></table>', text: '42', formulaClipboardPayload: '' })
+    await vi.waitFor(() => expect(h.states.at(-1)?.kind).toBe('complete'))
     expect(h.io.upload).not.toHaveBeenCalled()
+    expect(h.bridge.capture).not.toHaveBeenCalled()
+    expect(h.bridge.pasteTable).not.toHaveBeenCalled()
+    expect(h.io.read).not.toHaveBeenCalled()
+  })
+
+  it('同步表格委托的 SDK 权限拒绝不叠加图片失败，异常仍被消费并报告', async () => {
+    const h = setup()
+    vi.mocked(h.bridge.pasteTableEvent).mockResolvedValueOnce(false)
+    const event = () => transferEvent('paste', [file()], { 'text/html': '<table><tr><td>42</td></tr></table>' })
+    h.container.dispatchEvent(event())
+    await Promise.resolve()
+    expect(h.states).toEqual([])
+    const error = new Error('controlled SDK failure')
+    vi.mocked(h.bridge.pasteTableEvent).mockRejectedValueOnce(error)
+    h.container.dispatchEvent(event())
+    await vi.waitFor(() => expect(h.failed).toHaveBeenCalledExactlyOnceWith(error))
+    expect(h.states.at(-1)).toMatchObject({ kind: 'failed', reason: 'request' })
+    expect(h.io.read).not.toHaveBeenCalled()
+    expect(h.io.upload).not.toHaveBeenCalled()
+  })
+
+  it('菜单插图预检查拒绝保留插入语义，右键拒绝仍为粘贴', () => {
+    const h = setup()
+    h.rejected('permission', 'insert', 'insert')
+    expect(h.states.at(-1)).toMatchObject({ kind: 'failed', operation: 'insert', reason: 'permission' })
+    h.rejected('permission', 'insert')
+    expect(h.states.at(-1)).toMatchObject({ kind: 'failed', operation: 'paste', reason: 'permission' })
   })
 
   it.each(['<table><tr><td>42</td></tr></table>', '<b>42</b>', ''])('零文件普通粘贴保留原事件及 SDK 公式读取路径：%s', (html) => {
@@ -311,6 +343,20 @@ describe('编辑器范围内的同步事件与文件对话框', () => {
     expect(h.bridge.pasteTable).not.toHaveBeenCalled()
     expect(h.io.upload).not.toHaveBeenCalled()
     expect(readClipboardInput).not.toHaveBeenCalled()
+  })
+
+  it('正式命令同步打开同一文件框，取消不上传；直接 files 走同一输入任务', async () => {
+    const h = setup()
+    const click = vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(() => {})
+    const selecting = h.insert('float')
+    expect(click).toHaveBeenCalledOnce()
+    h.input.cancel()
+    expect(await selecting).toBe(false)
+    expect(h.io.upload).not.toHaveBeenCalled()
+    expect(h.container.querySelector('input[type=file]')).toBeNull()
+    expect(await h.insert('cell', [file()])).toBe(true)
+    expect(h.bridge.insertImage).toHaveBeenCalledExactlyOnceWith(h.target, { source: SOURCE, width: 120, height: 80 }, 'cell')
+    expect(click).toHaveBeenCalledOnce()
   })
 
   it('打开文件框前固定目标；accept 四格式，取消会移除临时元素和监听', async () => {

@@ -83,9 +83,9 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       '@univerjs/sheets-drawing': ['ISheetDrawingService', 'RemoveSheetDrawingCommand', 'InsertSheetDrawingCommand'],
       '@univerjs/sheets-ui': ['PREDEFINED_HOOK_NAME_PASTE', 'SheetCopyCommand', 'SheetCutCommand', 'SheetPasteCommand', 'SheetPasteShortKeyCommand'],
     },
-    purpose: '捕获原书/表/选区及实际选中图片，异步操作失效后不可复活；比原表格复制高一级的 MultiCommand 同步启动系统处理，失败以 SDK 取消错误终止回落。表格委托保留公式数据但去掉预览文件；图片专属权限与普通剪贴板权限分开。上传的尺寸和规范地址经 SDK 几何及文档构造函数生成正常可撤销命令，不重新用源地址量尺寸',
-    evidence: '1.0.1 core MultiCommand false 回落；sheets-ui SheetCopy/Cut/PasteCommand 的权限及捕获目标；docs-ui 隐藏输入 __editor_ + DOCS_NORMAL_EDITOR_UNIT_ID_KEY 与 data-u-comp=editor；sheets-drawing-ui 的文档图片构造和单元格 2 px 留白；drawing 显示上限 500 px。实际单图 body 为带段落终止符的单一图片控制符，需核对 blockId/index',
-    regression: 'internal-api/image-input.test.ts：真实命令服务、工作簿/选区/图片/权限/历史与受控剪贴板端口；images/image-input-task.test.ts：同步启动、取消/重试与迟到释放；S4 页面和原生证明另验',
+    purpose: '捕获原书/表/选区及实际选中图片，异步操作失效后不可复活；比原表格复制高一级的 MultiCommand 同步启动系统处理，失败以 SDK 取消错误终止回落。正式浮图/单元格图片插入的普通 Command 在 Ready 后按同 ID 替换，失败不回落原 SDK，退役时移除；文件参数仅收真实 File 列表。表格委托保留公式数据但去掉预览文件；普通剪贴板目标允许离线，确认图片后不可逆升级为联网、身份及图片专属权限检查，严格图片入口始终使用后者。上传的尺寸和规范地址经 SDK 几何及文档构造函数生成正常可撤销命令，不重新用源地址量尺寸',
+    evidence: '1.0.1 core MultiCommand false 回落；sheets-ui SheetCopy/Cut/PasteCommand 的权限及捕获目标；普通剪切先按 copy 目标分类，无图片才回原 Cut 权限提示，真图片重新绑定 cut 目标。已分类表格事件以固定当前范围和空 files 同步启动 SheetPasteShortKey，其权限检查在首个 await 前执行；异步 pasteTable 不放宽目标检查。docs-ui 隐藏输入 __editor_ + DOCS_NORMAL_EDITOR_UNIT_ID_KEY 与 data-u-comp=editor；sheets-drawing-ui 的文档图片构造和单元格 2 px 留白；drawing 显示上限 500 px。实际单图 body 为带段落终止符的单一图片控制符，需核对 blockId/index',
+    regression: 'internal-api/image-input.test.ts：真实命令服务、工作簿/选区/图片/权限/历史与受控剪贴板端口；images/image-input-task.test.ts：同步启动、取消/重试与迟到释放；image-production.spec.ts：正式菜单、每张图片模型和像素、受控离线普通剪贴板；原生环境证明另验',
   })),
   ...['createImageCommandPreview', 'IMAGE_COMMAND_PROTOCOL', 'imageCellValueIsSingle', 'prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].map(name => ({
     name,

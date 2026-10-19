@@ -59,6 +59,7 @@ import { FormulaWorkerError } from './formula-worker-failure.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
+import { installEditorImageInput } from './images/editor-image-input.ts'
 import { createPlatformImageIo } from './images/platform-image-io.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL } from './internal-api/index.ts'
 import { closeImagePreview, invalidateImageRendering } from './internal-api/ui.ts'
@@ -453,26 +454,29 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
-  let imageInput: ReturnType<typeof installSystemImageInput> | undefined
+  const imageRuntime = installEditorImageInput({
+    univer,
+    unitId: snapshot.unitId,
+    container,
+    access,
+    identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
+    io: images,
+    changed: options.onImageOperation ?? (() => {}),
+    failed: options.onImageOperationFailure ?? (() => {}),
+  })
+  const imageInput = imageRuntime.input
+  managedImageInput = true
+  const retireImageInput = (): void => {
+    managedImageInput = false
+    imageRuntime.dispose()
+  }
+  rounds.imageInput = { dispose: retireImageInput }
+  cleanup.defer(retireImageInput)
   if (import.meta.env.MODE === 'e2e') {
     const { installImageInputControl } = await importTesting(async () => import('./testing/image-input-control.ts'))
-    const control = installImageInputControl({
-      univer,
-      unitId: snapshot.unitId,
-      container,
-      access,
-      identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
-      io: images,
-      pageUi: options.pageUi,
-      changed: options.onImageOperation ?? (() => {}),
-      failed: options.onImageOperationFailure ?? (() => {}),
-      enabled: (value) => { managedImageInput = value },
-    })
-    if (control !== undefined) {
-      imageInput = control.input
-      rounds.imageInput = control
+    const control = installImageInputControl({ container, pageUi: options.pageUi, input: imageInput })
+    if (control !== undefined)
       cleanup.defer(control.dispose)
-    }
   }
   return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode, formula, imageInput }
 }

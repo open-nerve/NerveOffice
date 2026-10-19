@@ -36,7 +36,8 @@ export function prepareImageInsertion(univer: Univer, target: CapturedImageTarge
         drawingType: DrawingTypeEnum.DRAWING_IMAGE,
         imageSourceType: ImageSourceType.URL,
         source,
-        transform,
+        // 渲染器在重开时会写回这五个缺省值；创建时固定，避免无编辑也产生新修订。
+        transform: { angle: 0, skewX: 0, skewY: 0, flipX: false, flipY: false, ...transform },
         sheetTransform,
         axisAlignSheetTransform: sheetTransform,
       }],

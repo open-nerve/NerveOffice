@@ -34,6 +34,7 @@ export type ImageInputSelection
 export interface ImageInputBridgeOptions {
   readonly unitId: string
   readonly origin: string
+  /** 图片 I/O 的联网和原身份条件；普通表格剪贴板仍使用 SDK 权限。 */
   readonly available: (intent: ImageInputIntent) => boolean
   readonly subscribe: (listener: () => void) => () => void
 }
@@ -41,7 +42,8 @@ export interface ImageInputBridgeOptions {
 export interface ImageInputCommands {
   readonly copy: (target: CapturedImageTarget, image: SelectedInputImage, cut: boolean) => Promise<boolean>
   readonly paste: (target: CapturedImageTarget) => Promise<boolean>
-  readonly rejected: (reason: 'selection' | 'permission', intent: ImageInputIntent) => void
+  readonly insert: (kind: 'float' | 'cell', files?: readonly File[]) => Promise<boolean>
+  readonly rejected: (reason: 'selection' | 'permission' | 'type', intent: ImageInputIntent, operation?: 'insert') => void
 }
 
 export interface ImageTableInput {
@@ -63,6 +65,7 @@ interface TargetState {
   readonly range: IRange
   readonly imageRange: IRange
   readonly singleCell: boolean
+  imageRequired: boolean
   writeKind?: 'float' | 'cell'
   imageCurrent?: () => boolean
 }
@@ -103,8 +106,6 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
   }
 
   function permitted(intent: ImageInputIntent, range: IRange, subUnitId: string): boolean {
-    if (!options.available(intent))
-      return false
     const writing = intent !== 'copy'
     return permissionCheck.permissionCheckWithRanges({
       workbookTypes: writing ? (intent === 'cut' ? [WorkbookCopyPermission, WorkbookEditablePermission] : [WorkbookEditablePermission]) : [WorkbookCopyPermission],
@@ -123,18 +124,27 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
 
   function canWriteImage(target: CapturedImageTarget, kind: 'float' | 'cell'): boolean {
     const state = targets.get(target)
-    if (!state || state.intent === 'copy' || !target.isCurrent() || !imagePermitted(state.imageRange, target.subUnitId, kind))
+    if (!state || state.intent === 'copy' || !requireImage(target) || !imagePermitted(state.imageRange, target.subUnitId, kind))
       return false
     // 识别为图片后才加入专属权限；之后权限短暂撤回也会令本次异步目标永久失效。
     state.writeKind = kind
     return true
   }
 
+  function requireImage(target: CapturedImageTarget): boolean {
+    const state = targets.get(target)
+    if (!state)
+      return false
+    // 剪贴板读出图片后才加上图片条件；升级后不能再回到普通目标，离线/失效也不能复活。
+    state.imageRequired = true
+    return target.isCurrent()
+  }
+
   function selectionVersion(): string {
     return JSON.stringify(selections.getCurrentSelections().map(selection => ({ range: selection.range, primary: selection.primary })))
   }
 
-  function capture(intent: ImageInputIntent): CapturedImageTarget | undefined {
+  function captureTarget(intent: ImageInputIntent, imageRequired: boolean): CapturedImageTarget | undefined {
     const workbook = instances.getCurrentUnitOfType<Workbook>(UniverInstanceType.UNIVER_SHEET)
     const worksheet = workbook?.getActiveSheet()
     // Enter/Tab 在多选区域间移动时只移动 primary，不重排数组；最后一项未必有主单元格。
@@ -147,17 +157,18 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
     // 表格剪贴板仍取原 SDK 的最后一项范围；图片锚点另外跟随有 primary 的活动项。
     const range = { ...(selections.getCurrentLastSelection()?.range ?? selection.range) }
     const imageRange = { ...selection.range }
-    if (!permitted(intent, range, subUnitId))
+    if ((imageRequired && !options.available(intent)) || !permitted(intent, range, subUnitId))
       return undefined
     const version = selectionVersion()
     const row = primary.isMerged ? primary.startRow : primary.actualRow
     const column = primary.isMerged ? primary.startColumn : primary.actualColumn
     const singleCell = selections.getCurrentSelections().length === 1 && ((range.startRow === range.endRow && range.startColumn === range.endColumn)
       || (primary.isMerged && primary.startRow === range.startRow && primary.endRow === range.endRow && primary.startColumn === range.startColumn && primary.endColumn === range.endColumn))
-    const state: TargetState = { intent, workbook, worksheet, range, imageRange, singleCell }
+    const state: TargetState = { intent, workbook, worksheet, range, imageRange, singleCell, imageRequired }
     let expired = false
     const isCurrent = (): boolean => {
       expired ||= disposed || !gridFocused() || !permitted(intent, range, subUnitId)
+        || (state.imageRequired && !options.available(intent))
         || instances.getCurrentUnitOfType(UniverInstanceType.UNIVER_SHEET) !== workbook
         || instances.getUnit(unitId) !== workbook || workbook.getActiveSheet() !== worksheet
         || workbook.getSheetBySheetId(subUnitId) !== worksheet || selectionVersion() !== version
@@ -221,6 +232,9 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
     targets.set(target, state)
     return target
   }
+
+  const capture = (intent: ImageInputIntent): CapturedImageTarget | undefined => captureTarget(intent, true)
+  const captureClipboard = (intent: ImageInputIntent): CapturedImageTarget | undefined => captureTarget(intent, false)
 
   function selectedImage(target: CapturedImageTarget): ImageInputSelection {
     const state = targets.get(target)
@@ -287,59 +301,20 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
     return { kind: 'single', image }
   }
 
+  async function executeTablePaste(target: { unitId: string, subUnitId: string, range: IRange }, data: ImageTableInput): Promise<boolean> {
+    return commands.executeCommand(SheetPasteShortKeyCommand.id, {
+      htmlContent: data.html,
+      textContent: data.text,
+      formulaClipboardPayload: data.formulaClipboardPayload,
+      files: [],
+      target,
+    })
+  }
+
   function installCommands(handlers: ImageInputCommands): IDisposable {
     if (disposed)
       return { dispose: () => {} }
-    const definitions = [SheetCopyCommand, SheetCutCommand, SheetPasteCommand]
-    const registrations = definitions.map((command) => {
-      const implementation: IMultiCommand = {
-        id: command.id,
-        name: `nerve-image:${command.name}`,
-        type: CommandType.COMMAND,
-        multi: true,
-        priority: command.priority + 1,
-        preconditions: gridFocused,
-        handler: async (_accessor, params) => {
-          const paste = command.id === SheetPasteCommand.id
-          if (paste && imageRecord(params) && params.value !== undefined && params.value !== PREDEFINED_HOOK_NAME_PASTE.DEFAULT_PASTE)
-            return false
-          const cut = command.id === SheetCutCommand.id
-          const intent = paste ? 'insert' : cut ? 'cut' : 'copy'
-          const target = capture(intent)
-          if (!target) {
-            handlers.rejected('permission', intent)
-            return stopped()
-          }
-          try {
-            let result: Promise<boolean>
-            if (paste) {
-              result = handlers.paste(target)
-            }
-            else {
-              const selected = selectedImage(target)
-              if (selected.kind === 'none')
-                return false
-              if (selected.kind === 'reject') {
-                handlers.rejected('selection', intent)
-                return stopped()
-              }
-              if (cut && !canWriteImage(target, selected.image.kind)) {
-                handlers.rejected('permission', intent)
-                return stopped()
-              }
-              result = handlers.copy(target, selected.image, cut)
-            }
-            if (await result)
-              return true
-          }
-          catch {
-            return stopped()
-          }
-          return stopped()
-        },
-      }
-      return commands.registerMultipleCommand(implementation)
-    })
+    const registrations: IDisposable[] = []
     let removed = false
     const dispose = (): void => {
       if (removed)
@@ -349,12 +324,113 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
       cleanups.delete(dispose)
     }
     cleanups.add(dispose)
+    try {
+      for (const command of [SheetCopyCommand, SheetCutCommand, SheetPasteCommand]) {
+        const implementation: IMultiCommand = {
+          id: command.id,
+          name: `nerve-image:${command.name}`,
+          type: CommandType.COMMAND,
+          multi: true,
+          priority: command.priority + 1,
+          preconditions: gridFocused,
+          handler: async (_accessor, params) => {
+            const paste = command.id === SheetPasteCommand.id
+            if (paste && imageRecord(params) && params.value !== undefined && params.value !== PREDEFINED_HOOK_NAME_PASTE.DEFAULT_PASTE)
+              return false
+            const cut = command.id === SheetCutCommand.id
+            const intent = paste ? 'insert' : cut ? 'cut' : 'copy'
+            // 普通剪切先按复制权限识别选区；没有图片时由原 SDK 检查编辑权限并显示原提示。
+            const target = captureClipboard(cut ? 'copy' : intent)
+            if (!target) {
+              handlers.rejected('permission', intent)
+              return stopped()
+            }
+            try {
+              let result: Promise<boolean>
+              if (paste) {
+                result = handlers.paste(target)
+              }
+              else {
+                let selected = selectedImage(target)
+                if (selected.kind === 'none')
+                  return false
+                if (selected.kind === 'reject') {
+                  handlers.rejected('selection', intent)
+                  return stopped()
+                }
+                let imageTarget = target
+                if (cut) {
+                  const cutTarget = captureClipboard('cut')
+                  if (!cutTarget) {
+                    handlers.rejected('permission', intent)
+                    return stopped()
+                  }
+                  imageTarget = cutTarget
+                  // 删除绑定属于严格 cut 目标，不能复用分类时绑定在 copy 目标上的图片。
+                  selected = selectedImage(imageTarget)
+                  if (selected.kind !== 'single') {
+                    handlers.rejected('selection', intent)
+                    return stopped()
+                  }
+                }
+                if (!requireImage(imageTarget) || (cut && !canWriteImage(imageTarget, selected.image.kind))) {
+                  handlers.rejected('permission', intent)
+                  return stopped()
+                }
+                result = handlers.copy(imageTarget, selected.image, cut)
+              }
+              if (await result)
+                return true
+            }
+            catch {
+              return stopped()
+            }
+            return stopped()
+          },
+        }
+        registrations.push(commands.registerMultipleCommand(implementation))
+      }
+      // 固定 SDK 的两个插入入口是普通 Command；替换本实例的处理器，失败不能回到默认文件框/上传。
+      // 就绪之后安装，入口首个守卫在全部安装成功前仍关闭；退役时先关闭守卫再释放命令。
+      for (const kind of ['float', 'cell'] as const) {
+        const id = `sheet.command.insert-${kind}-image`
+        if (commands.hasCommand(id))
+          commands.unregisterCommand(id)
+        registrations.push(commands.registerCommand({
+          id,
+          type: CommandType.COMMAND,
+          handler: async (_accessor, params) => {
+            const target = capture('insert')
+            if (!target || !canWriteImage(target, kind)) {
+              handlers.rejected('permission', 'insert', 'insert')
+              return false
+            }
+            const files = imageRecord(params) && 'files' in params ? params.files : undefined
+            if (files !== undefined && (!Array.isArray(files) || !files.every(file => file instanceof File))) {
+              handlers.rejected('type', 'insert', 'insert')
+              return false
+            }
+            try {
+              return await handlers.insert(kind, files)
+            }
+            catch {
+              return false
+            }
+          },
+        }))
+      }
+    }
+    catch (error) {
+      dispose()
+      throw error
+    }
     return { dispose }
   }
 
   return {
     gridFocused,
     capture,
+    captureClipboard,
     selectedImage,
     canWriteImage,
     insertImage: (target: CapturedImageTarget, image: PreparedInputImage, kind: 'float' | 'cell'): boolean => {
@@ -371,13 +447,17 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
       const state = targets.get(target)
       if (!state || state.intent !== 'insert' || !target.isCurrent())
         return false
-      return commands.executeCommand(SheetPasteShortKeyCommand.id, {
-        htmlContent: data.html,
-        textContent: data.text,
-        formulaClipboardPayload: data.formulaClipboardPayload,
-        files: [],
-        target: { unitId: target.unitId, subUnitId: target.subUnitId, range: { ...state.range } },
-      })
+      return executeTablePaste({ unitId: target.unitId, subUnitId: target.subUnitId, range: { ...state.range } }, data)
+    },
+    // 仅供已同步分类的表格事件：当前目标捕获后立即启动 SDK，原权限检查在首个 await 前拒绝。
+    // 不产生能用于异步图片任务的目标，也不放宽上方 pasteTable 的存活与权限检查。
+    pasteTableEvent: async (data: ImageTableInput): Promise<boolean> => {
+      const workbook = instances.getCurrentUnitOfType<Workbook>(UniverInstanceType.UNIVER_SHEET)
+      const worksheet = workbook?.getActiveSheet()
+      const selection = selections.getCurrentLastSelection()
+      if (!gridFocused() || !workbook || workbook.getUnitId() !== options.unitId || !worksheet || !selection)
+        return false
+      return executeTablePaste({ unitId: workbook.getUnitId(), subUnitId: worksheet.getSheetId(), range: { ...selection.range } }, data)
     },
     installCommands,
     dispose: () => {

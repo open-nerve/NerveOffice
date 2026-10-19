@@ -6,6 +6,7 @@
 // 打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core 与档案的数据插件，模板与正常的快照通过，损坏的给出失败；两次核对的时机；
 // 公式的模式（M3-P4 设计 §3.14）：生产只有 Worker 模式，测试构建里地址参数可以选主线程模式（不建 Worker、不等它的回报）；
 // 主线程模式下销毁之前先停下正在算的一轮、等它结束（formula-round-stop.ts，创建失败的销毁同样），Worker 模式照旧立即销毁
+import type { SessionResponse } from '@nerve-office/contracts'
 import type { UnitModel } from '@univerjs/core'
 import type { EditorAccess } from './editor-access.ts'
 import type { PluginEntry } from './profile/plugin-entry.ts'
@@ -21,7 +22,9 @@ import { ROUND_STOP_TIMEOUT_MS } from './formula-round-stop.ts'
 import { FormulaWorkerError } from './formula-worker-failure.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { imagePolicyReport } from './image-function/worker-report.ts'
+import { installSystemImageInput } from './images/system-image-input.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
+import { createImageInputBridge } from './internal-api/ui.ts'
 import { dataPluginEntries, snapshotWithResources } from './profile/data-plugins.test-support.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installImagePolicy } from './profile/image-policy.ts'
@@ -71,6 +74,21 @@ vi.mock('./internal-api/index.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./internal-api/index.ts')>()
   return { ...actual, createResourceLoadGuard: vi.fn(actual.createResourceLoadGuard) }
 })
+// 本文件只验证编辑器编排；焦点、真实命令与输入任务分别在对应模块测试。
+const imageRuntime = vi.hoisted(() => ({ inputDispose: vi.fn(), bridgeDispose: vi.fn() }))
+vi.mock('./images/system-image-input.ts', () => ({
+  installSystemImageInput: vi.fn(() => ({
+    dispose: imageRuntime.inputDispose,
+    cancel: vi.fn(),
+    chooseFiles: vi.fn(),
+    insertFiles: vi.fn(),
+  })),
+}))
+vi.mock('./internal-api/ui.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./internal-api/ui.ts')>()
+  return { ...actual, createImageInputBridge: vi.fn(() => ({ dispose: imageRuntime.bridgeDispose })) }
+})
+
 // 视图状态的取出与恢复本身由 view-state.test.ts 测；这里只核对编排（何时恢复、交给谁）
 vi.mock('./view-state.ts', () => ({ readViewState: vi.fn(() => undefined), restoreViewState: vi.fn(() => 'restored') }))
 
@@ -106,6 +124,10 @@ beforeEach(() => {
   vi.mocked(readViewState).mockClear()
   vi.mocked(restoreViewState).mockClear()
   vi.mocked(createResourceLoadGuard).mockClear()
+  vi.mocked(installSystemImageInput).mockClear()
+  vi.mocked(createImageInputBridge).mockClear()
+  imageRuntime.inputDispose.mockClear()
+  imageRuntime.bridgeDispose.mockClear()
 })
 
 afterEach(() => {
@@ -1067,7 +1089,7 @@ describe('主线程模式下销毁之前停下正在算的一轮（M3-P4 设计 
   }
 
   /** 以 mode 创建、走到就绪；之后才盯着 Univer 的销毁 */
-  async function createdIn(mode: 'worker' | 'main-thread') {
+  async function createdIn(mode: 'worker' | 'main-thread', identitySession?: SessionResponse) {
     if (mode === 'main-thread')
       chooseMainThread()
     const log: string[] = []
@@ -1076,7 +1098,7 @@ describe('主线程模式下销毁之前停下正在算的一轮（M3-P4 设计 
     const container = document.createElement('div')
     const imageListeners = new Set<() => void>()
     const imageAccess = {
-      current: () => undefined,
+      current: vi.fn(() => identitySession),
       subscribe: (listener: () => void) => {
         imageListeners.add(listener)
         return () => {
@@ -1088,8 +1110,68 @@ describe('主线程模式下销毁之前停下正在算的一轮（M3-P4 设计 
     await vi.waitFor(() => expect(log).toEqual(['createWorkbook']))
     await reachReady(facade)
     const editor = await creating
-    return { editor, facade, container, imageListeners, univerDispose: vi.spyOn(Univer.prototype, 'dispose') }
+    return { editor, facade, container, imageListeners, imageAccess, univerDispose: vi.spyOn(Univer.prototype, 'dispose') }
   }
+
+  it('普通生产页面不带测试开关也安装图片输入，销毁释放同一实例', async () => {
+    vi.stubEnv('MODE', 'production')
+    history.replaceState(null, '', '/documents/doc-1')
+    const { editor, container } = await createdIn('worker')
+    try {
+      expect(installSystemImageInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ container }))
+      expect(createImageInputBridge).toHaveBeenCalledOnce()
+      // 未取得身份时即使页面为编辑态也不能上传或导出；不能用测试模式放宽。
+      const options = vi.mocked(createImageInputBridge).mock.calls[0]![2]
+      expect(options.available('insert')).toBe(false)
+      expect(options.available('copy')).toBe(false)
+    }
+    finally {
+      await editor.dispose()
+    }
+    expect(imageRuntime.inputDispose).toHaveBeenCalledOnce()
+    expect(imageRuntime.bridgeDispose).toHaveBeenCalledOnce()
+  })
+
+  it('正式输入绑定创建者：离线、许可暂停或换账号立即拒绝，原身份恢复才可再次操作', async () => {
+    const original: SessionResponse = {
+      user: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', username: 'image-owner', displayName: '测试者', systemRole: 'member' },
+      personalSpace: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: '测试空间' },
+      csrfToken: 'test-only',
+      features: { localDraftsEnabled: true },
+    }
+    const { editor, imageAccess } = await createdIn('worker', original)
+    try {
+      const { available } = vi.mocked(createImageInputBridge).mock.calls[0]![2]
+      expect(available('insert')).toBe(true)
+      expect(available('copy')).toBe(true)
+      const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+      expect(available('insert')).toBe(false)
+      expect(available('copy')).toBe(false)
+      online.mockReturnValue(true)
+      imageAccess.current.mockReturnValue(undefined)
+      expect(available('insert')).toBe(false)
+      imageAccess.current.mockReturnValue({ ...original, user: { ...original.user, id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' } })
+      expect(available('copy')).toBe(false)
+      imageAccess.current.mockReturnValue(original)
+      expect(available('insert')).toBe(true)
+    }
+    finally {
+      await editor.dispose()
+    }
+  })
+
+  it('正式输入安装失败时回收桥接与编辑器，不交回半就绪实例', async () => {
+    const failure = new Error('input installation failed')
+    const univerDispose = vi.spyOn(Univer.prototype, 'dispose')
+    vi.mocked(installSystemImageInput).mockImplementationOnce(() => {
+      throw failure
+    })
+    await expect(createdIn('worker')).rejects.toBe(failure)
+    expect(imageRuntime.bridgeDispose).toHaveBeenCalledOnce()
+    expect(imageRuntime.inputDispose).not.toHaveBeenCalled()
+    expect(univerDispose).toHaveBeenCalledOnce()
+    expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
+  })
 
   it('等待主线程公式退出之前已经退役图片实例和身份订阅', async () => {
     const { editor, facade, imageListeners, univerDispose } = await createdIn('main-thread')
@@ -1098,6 +1180,8 @@ describe('主线程模式下销毁之前停下正在算的一轮（M3-P4 设计 
     const disposal = editor.dispose()
     try {
       expect(imageListeners.size).toBe(0)
+      expect(imageRuntime.inputDispose).toHaveBeenCalledOnce()
+      expect(imageRuntime.bridgeDispose).toHaveBeenCalledOnce()
       expect(univerDispose).not.toHaveBeenCalled()
     }
     finally {
