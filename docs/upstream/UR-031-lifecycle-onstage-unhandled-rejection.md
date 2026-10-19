@@ -136,3 +136,9 @@ and the same in `RegisterOtherFormulaService._initFormulaRegister()`. Alternativ
 - Univer: 1.0.1 (`@univerjs/*`); the same code is in 1.0.0. Affected packages: `@univerjs/sheets-drawing-ui`, `@univerjs/engine-formula`.
 - Browsers: Chromium 153.0.8010.12 and WebKit 26.6 bundled with Playwright 1.63.0, headless; the page was served by Vite 8.3.0 (React 19.3.0). Node.js 24.21.0 for the engine-formula script (and for a jsdom 30.1.1 run of the sheets-drawing-ui case with the sheet UI and drawing plugins, same result).
 - OS: macOS 27.0 (Apple silicon).
+
+## 平台处理进展（2026-10-19，M5-P2-S2）
+
+固定 1.0.1 的 drawing 浮动宿主 Ready 承诺只将 LifecycleUnreachableError 视为正常取消，其他错误以 console.error 报告原异常。真实 LifecycleService 退出反例 RED→GREEN，正常 Ready 与其他错误对照通过；engine-formula 的潜在同类路径未修改，也不宣称关闭。
+
+修复由 `pnpm patchedDependencies` 固定，见 [ADR-022](../adr/ADR-022-图片实例与SDK修复.md)。独立副本撤去 sheets-drawing-ui 相关补丁后，真实 Workbook 在 Ready 前构造失败额外产生 LifecycleUnreachableError；修复后的三浏览器仅保留原始构造错误，后续编辑/绘制/保存正常。engine-formula 的潜在 Ready 路径保持未关闭。 18 个图片故事 × 三引擎共 54 项、八份补丁冷安装均通过，见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)。完整 Phase 验收仍在 S6，本记录不代表已经提交或获得上游修复。

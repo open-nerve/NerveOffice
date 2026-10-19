@@ -1,0 +1,240 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 864243815a5f05ca9e7bfc36d8f35d39143459fa..a1a09e7e789b54350ba03d7fe6c4070ab0547c6f 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,4 +1,5 @@
+-import { AbsoluteRefType, BooleanNumber, BuildTextUtils, CellValueType, CommandType, DependentOn, Direction, Disposable, DisposableCollection, DrawingTypeEnum, ICommandService, IConfigService, ILogService, IUndoRedoService, IUniverInstanceService, ImageSourceType, Inject, Injector, InterceptorEffectEnum, LocaleService, ObjectMatrix, Plugin, PositionedObjectLayoutType, RANGE_TYPE, Rectangle, Tools, UniverInstanceType, WrapTextType, cellToRange, createDocumentModelWithStyle, createIdentifier, generateRandomId, getIntersectRange, isFormulaId, isFormulaString, isNodeEnv, isRealNum, merge, moveRangeByOffset, sequenceExecute, toDisposable, touchDependencies } from "@univerjs/core";
++// NerveOffice: IMAGE 量尺寸归图片服务管理，取消/晚结果不写回；见 ADR-022。
++import { AbsoluteRefType, BooleanNumber, BuildTextUtils, CellValueType, CommandType, DependentOn, Direction, Disposable, DisposableCollection, DrawingTypeEnum, ICommandService, IConfigService, IImageIoService, IURLImageService, ILogService, IUndoRedoService, IUniverInstanceService, ImageSourceType, Inject, Injector, InterceptorEffectEnum, LocaleService, ObjectMatrix, Plugin, PositionedObjectLayoutType, RANGE_TYPE, Rectangle, Tools, UniverInstanceType, WrapTextType, cellToRange, createDocumentModelWithStyle, createIdentifier, generateRandomId, getIntersectRange, isFormulaId, isFormulaString, isNodeEnv, isRealNum, merge, moveRangeByOffset, sequenceExecute, toDisposable, touchDependencies } from "@univerjs/core";
+ import { AUTO_FILL_APPLY_TYPE, AUTO_FILL_DATA_TYPE, ClearSelectionFormatCommand, DeleteRangeMoveLeftCommand, DeleteRangeMoveUpCommand, EffectRefRangId, IAutoFillService, INTERCEPTOR_POINT, InsertColCommand, InsertColMutation, InsertRangeMoveDownCommand, InsertRangeMoveRightCommand, InsertRowCommand, InsertRowMutation, InsertSheetMutation, InterceptCellContentPriority, MoveColsCommand, MoveColsMutation, MoveRangeCommand, MoveRangeMutation, MoveRowsCommand, MoveRowsMutation, RefRangeService, RemoveColCommand, RemoveColMutation, RemoveDefinedNameCommand, RemoveRowCommand, RemoveRowMutation, RemoveSheetCommand, RemoveSheetMutation, ReorderRangeMutation, SCOPE_WORKBOOK_VALUE_DEFINED_NAME, SetBorderCommand, SetDefinedNameCommand, SetRangeCustomMetadataCommand, SetRangeValuesCommand, SetRangeValuesMutation, SetRowHiddenMutation, SetRowVisibleMutation, SetStyleCommand, SetWorkbookNameCommand, SetWorksheetActiveOperation, SetWorksheetNameCommand, SheetInterceptorService, UniverSheetsPlugin, getSeparateEffectedRangesOnCommand, getSheetCommandTarget, handleCommonDefaultRangeChangeWithEffectRefCommands, handleDefaultRangeChangeWithEffectRefCommands, handleDeleteRangeMoveLeft, handleDeleteRangeMoveUp, handleIRemoveCol, handleIRemoveRow, handleInsertCol, handleInsertRangeMoveDown, handleInsertRangeMoveRight, handleInsertRow, handleMoveCols, handleMoveRange, handleMoveRows, runRefRangeMutations } from "@univerjs/sheets";
+ import { AstTreeBuilder, ENGINE_FORMULA_CYCLE_REFERENCE_COUNT, ENGINE_FORMULA_RETURN_DEPENDENCY_TREE, ErrorType, FormulaCalculationSessionService, FormulaDataModel, FormulaExecuteStageType, FormulaExecutedStateType, FormulaResultApplicationType, FunctionType, IActiveDirtyManagerService, IDefinedNamesService, IDescriptionService, IFormulaCurrentConfigService, IFunctionService, ISuperTableService, Interpreter, Lexer, LexerTreeBuilder, RemoveDefinedNameMutation, RemoveSuperTableMutation, SetArrayFormulaDataMutation, SetDefinedNameMutation, SetFormulaCalculationNotificationMutation, SetFormulaCalculationStartMutation, SetFormulaCalculationStopMutation, SetFormulaDataMutation, SetFormulaStringBatchCalculationMutation, SetImageFormulaDataMutation, SetSuperTableMutation, SetTriggerFormulaCalculationStartMutation, UniverFormulaEnginePlugin, deserializeRangeWithSheetWithCache, generateExecuteAstNodeData, generateStringWithSequence, getObjectValue, refactorFormulaUnitQualifier, sequenceNodeType, serializeRange, serializeRangeToRefString, serializeRangeWithSheet, serializeRangeWithSpreadsheet, splitTableStructuredRef, stripErrorMargin } from "@univerjs/engine-formula";
+ import { buildDocTransform } from "@univerjs/docs";
+@@ -233,11 +234,21 @@ function _defineProperty(e, r, t) {
+ //#endregion
+ //#region src/controllers/image-formula-cell-interceptor.controller.ts
+ let ImageFormulaCellInterceptorController = class ImageFormulaCellInterceptorController extends Disposable {
+-	constructor(_commandService, _sheetInterceptorService, _formulaDataModel) {
++	constructor(_commandService, _sheetInterceptorService, _formulaDataModel, _imageIoService, _urlImageService) {
+ 		super();
+ 		this._commandService = _commandService;
+ 		this._sheetInterceptorService = _sheetInterceptorService;
+ 		this._formulaDataModel = _formulaDataModel;
++		this._imageIoService = _imageIoService;
++		this._urlImageService = _urlImageService;
++		this._imageRequests = new Map();
++		this._imageMeasurements = new Set();
++		this._imageRetries = new Map();
++		this.disposeWithMe(() => {
++			this._imageRequests.clear();
++			for (const cancel of this._imageMeasurements) cancel();
++			for (const cancel of this._imageRetries.values()) cancel();
++		});
+ 		_defineProperty(this, "_errorValueCell", {
+ 			v: ErrorType.VALUE,
+ 			t: CellValueType.STRING
+@@ -251,25 +262,83 @@ let ImageFormulaCellInterceptorController = class ImageFormulaCellInterceptorCon
+ 	}
+ 	_commandExecutedListener() {
+ 		this.disposeWithMe(this._commandService.onCommandExecuted(async (command) => {
+-			if (command.id === SetImageFormulaDataMutation.id) {
+-				const params = command.params;
+-				if (!params) return;
+-				const { imageFormulaData } = params;
+-				if (!imageFormulaData || imageFormulaData.length === 0) return;
+-				const updateRuntimeImageFormulaData = await Promise.all(imageFormulaData.map((imageFormulaInfo) => {
+-					return this._getImageNatureSize(imageFormulaInfo);
+-				}));
+-				const unitImageFormulaData = Object.create(null);
+-				updateRuntimeImageFormulaData.forEach((imageFormulaInfo) => {
+-					const { unitId, sheetId, row, column, ...imageInfo } = imageFormulaInfo;
+-					if (!unitImageFormulaData[unitId]) unitImageFormulaData[unitId] = Object.create(null);
+-					if (!unitImageFormulaData[unitId][sheetId]) unitImageFormulaData[unitId][sheetId] = new ObjectMatrix();
+-					unitImageFormulaData[unitId][sheetId].setValue(row, column, imageInfo);
+-				});
+-				this._formulaDataModel.mergeUnitImageFormulaData(unitImageFormulaData);
+-				this._refreshRender();
++			if (command.id !== SetImageFormulaDataMutation.id) return;
++			const imageFormulaData = command.params?.imageFormulaData;
++			if (imageFormulaData?.length) await this._applyImageFormulaData(imageFormulaData);
++		}));
++	}
++	_sameImageFormula(info, formula) {
++		return !this._disposed && typeof formula === "string" && this._formulaDataModel.getFormulaStringByCell(info.row, info.column, info.sheetId, info.unitId) === formula;
++	}
++	_watchImageRetry(info, key, request, formula) {
++		if (!this._sameImageFormula(info, formula) || this._imageRequests.get(key) !== request) return;
++		const image = new Image();
++		const cancel = () => {
++			image.onload = null;
++			image.removeAttribute("src");
++			if (this._imageRetries.get(key) === cancel) this._imageRetries.delete(key);
++		};
++		const retry = () => {
++			if (!this._sameImageFormula(info, formula) || this._imageRequests.get(key) !== request) {
++				cancel();
++				return;
++			}
++			const cached = this._imageIoService.getImageSourceCache(info.source, ImageSourceType.URL);
++			if (!cached?.complete || !cached.naturalWidth || !cached.naturalHeight) return;
++			cancel();
++			void this._applyImageFormulaData([info]).catch((error) => console.error(error));
++		};
++		this._imageRetries.set(key, cancel);
++		image.onload = retry;
++		// The platform owns this element. Only a later authorized decode can wake a cancelled/placeholder result.
++		this._imageIoService.addImageSourceCache(info.source, ImageSourceType.URL, image);
++		retry();
++	}
++	async _applyImageFormulaData(imageFormulaData) {
++		if (this._disposed) return;
++		const completedImageRequests = await Promise.all(imageFormulaData.map(async (info) => {
++			const key = JSON.stringify([info.unitId, info.sheetId, info.row, info.column]);
++			const formula = this._formulaDataModel.getFormulaStringByCell(info.row, info.column, info.sheetId, info.unitId);
++			this._imageRetries.get(key)?.();
++			const request = {};
++			this._imageRequests.set(key, request);
++			let result = null;
++			try {
++				result = await this._getImageNatureSize(info);
++				const cached = this._imageIoService.getImageSourceCache(info.source, ImageSourceType.URL);
++				if (cached?.complete && cached.naturalWidth > 0 && cached.naturalHeight > 0) result = {
++					...info,
++					isErrorImage: false,
++					imageNaturalWidth: cached.naturalWidth,
++					imageNaturalHeight: cached.naturalHeight
++				};
++				else this._watchImageRetry(info, key, request, formula);
++			} catch (error) {
++				if (error?.name === "AbortError") this._watchImageRetry(info, key, request, formula);
++				else console.error(error);
+ 			}
++			return { key, request, result, info, formula };
+ 		}));
++		if (this._disposed) return;
++		const updateRuntimeImageFormulaData = completedImageRequests.filter(({ key, request }) => this._imageRequests.get(key) === request).map(({ key, result, info, formula }) => {
++			if (!this._sameImageFormula(info, formula)) {
++				this._imageRetries.get(key)?.();
++				this._imageRequests.delete(key);
++				return null;
++			}
++			if (!this._imageRetries.has(key)) this._imageRequests.delete(key);
++			return result;
++		}).filter(Boolean);
++		if (updateRuntimeImageFormulaData.length === 0) return;
++		const unitImageFormulaData = Object.create(null);
++		updateRuntimeImageFormulaData.forEach((imageFormulaInfo) => {
++			const { unitId, sheetId, row, column, ...imageInfo } = imageFormulaInfo;
++			if (!unitImageFormulaData[unitId]) unitImageFormulaData[unitId] = Object.create(null);
++			if (!unitImageFormulaData[unitId][sheetId]) unitImageFormulaData[unitId][sheetId] = new ObjectMatrix();
++			unitImageFormulaData[unitId][sheetId].setValue(row, column, imageInfo);
++		});
++		this._formulaDataModel.mergeUnitImageFormulaData(unitImageFormulaData);
++		this._refreshRender();
+ 	}
+ 	_initInterceptorCellContent() {
+ 		this.disposeWithMe(this._sheetInterceptorService.intercept(INTERCEPTOR_POINT.CELL_CONTENT, {
+@@ -333,6 +402,7 @@ let ImageFormulaCellInterceptorController = class ImageFormulaCellInterceptorCon
+ 	}
+ 	async _getImageNatureSize(imageFormulaInfo) {
+ 		const imageInfo = await this._getImageSize(imageFormulaInfo.source);
++		if (!imageInfo || this._disposed) return null;
+ 		if (!imageInfo.image) return {
+ 			...imageFormulaInfo,
+ 			isErrorImage: true
+@@ -345,23 +415,37 @@ let ImageFormulaCellInterceptorController = class ImageFormulaCellInterceptorCon
+ 		};
+ 	}
+ 	async _getImageSize(src) {
++		const resolved = await this._urlImageService.getImage(src);
++		if (!resolved || this._disposed) return null;
++		const cached = this._imageIoService.getImageSourceCache(src, ImageSourceType.URL);
++		if (cached && cached.src === resolved && cached.complete && cached.naturalWidth > 0 && cached.naturalHeight > 0) {
++			return { width: cached.naturalWidth, height: cached.naturalHeight, image: cached };
++		}
+ 		return new Promise((resolve) => {
+ 			const image = new Image();
+-			image.src = src;
+-			image.onload = () => {
+-				resolve({
+-					width: image.width,
+-					height: image.height,
+-					image
+-				});
+-			};
+-			image.onerror = () => {
+-				resolve({
+-					width: 0,
+-					height: 0,
+-					image: null
+-				});
++			let settled = false;
++			const cancel = () => finish(null);
++			const finish = (value) => {
++				if (settled) return;
++				settled = true;
++				clearTimeout(timer);
++				image.onload = null;
++				image.onerror = null;
++				if (!value?.image) image.removeAttribute("src");
++				this._imageMeasurements.delete(cancel);
++				resolve(value);
+ 			};
++			const timer = setTimeout(() => finish({ width: 0, height: 0, image: null }), 10000);
++			this._imageMeasurements.add(cancel);
++			image.onload = () => finish(this._disposed || image.src !== resolved ? null : {
++				width: image.naturalWidth,
++				height: image.naturalHeight,
++				image
++			});
++			image.onerror = () => finish({ width: 0, height: 0, image: null });
++			image.src = resolved;
++			this._imageIoService.addImageSourceCache(src, ImageSourceType.URL, image);
++			if (image.src !== resolved) finish(null);
+ 		});
+ 	}
+ 	registerRefreshRenderFunction(refreshRender) {
+@@ -371,7 +455,9 @@ let ImageFormulaCellInterceptorController = class ImageFormulaCellInterceptorCon
+ ImageFormulaCellInterceptorController = __decorate([
+ 	__decorateParam(0, ICommandService),
+ 	__decorateParam(1, Inject(SheetInterceptorService)),
+-	__decorateParam(2, Inject(FormulaDataModel))
++	__decorateParam(2, Inject(FormulaDataModel)),
++	__decorateParam(3, IImageIoService),
++	__decorateParam(4, IURLImageService)
+ ], ImageFormulaCellInterceptorController);
+ 
+ //#endregion
+diff --git a/lib/types/controllers/image-formula-cell-interceptor.controller.d.ts b/lib/types/controllers/image-formula-cell-interceptor.controller.d.ts
+index 163bc3895596a5a27d826f26b20b91bb624432bf..ecee5229a22b9878e55979abe93ac09bb4e3a75f 100644
+--- a/lib/types/controllers/image-formula-cell-interceptor.controller.d.ts
++++ b/lib/types/controllers/image-formula-cell-interceptor.controller.d.ts
+@@ -13,18 +13,27 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
+-import { Disposable, ICommandService } from '@univerjs/core';
++// NerveOffice: IMAGE 量尺寸使用实例 IO；见 ADR-022。
++import { Disposable, ICommandService, IImageIoService, IURLImageService } from '@univerjs/core';
+ import { FormulaDataModel } from '@univerjs/engine-formula';
+ import { SheetInterceptorService } from '@univerjs/sheets';
+ export declare class ImageFormulaCellInterceptorController extends Disposable {
+     private readonly _commandService;
+     private _sheetInterceptorService;
+     private readonly _formulaDataModel;
++    private readonly _imageIoService;
++    private readonly _urlImageService;
++    private _imageRequests;
++    private _imageMeasurements;
++    private _imageRetries;
+     private _errorValueCell;
+     private _refreshRender;
+-    constructor(_commandService: ICommandService, _sheetInterceptorService: SheetInterceptorService, _formulaDataModel: FormulaDataModel);
++    constructor(_commandService: ICommandService, _sheetInterceptorService: SheetInterceptorService, _formulaDataModel: FormulaDataModel, _imageIoService: IImageIoService, _urlImageService: IURLImageService);
+     private _initialize;
+     private _commandExecutedListener;
++    private _sameImageFormula;
++    private _watchImageRetry;
++    private _applyImageFormulaData;
+     private _initInterceptorCellContent;
+     private _getImageNatureSize;
+     private _getImageSize;

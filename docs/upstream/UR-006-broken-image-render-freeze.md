@@ -137,3 +137,9 @@ Line numbers refer to the `v1.0.0` tag; the code is unchanged in the published 1
 1. In `Image._draw()` / `_drawNative()`, do not call `drawImage()` unless the element is usable — for example `native.complete && native.naturalWidth > 0` (a broken image is `complete` with `naturalWidth === 0`) — and paint the placeholder (or nothing) otherwise, repainting on `load` / `error`. A try/catch around `drawImage()`, as `font.ts` does, would also avoid the exception.
 2. Give `changeSource()` the same error handling as the constructor.
 3. Make the render loop resilient: run `_renderFrame()` inside `try/finally` (or request the next frame before rendering) and report the error, so that one failing object cannot stop all further rendering.
+
+## 平台处理进展（2026-10-19，M5-P2-S2）
+
+固定 1.0.1 的图片 `_draw` 入口检查 complete 与自然宽高；只跳过不可绘制的图片，不捕获其他画布异常。三个状态反例 RED→GREEN，正常图、裁剪图及非图片画布错误对照通过。
+
+修复由 `pnpm patchedDependencies` 固定，见 [ADR-022](../adr/ADR-022-图片实例与SDK修复.md)。独立副本撤去相关补丁后，Chromium 真实破损元素产生原生 InvalidStateError；修复后的三浏览器故事验证普通绘制、编辑和保存仍成立。该次原版对照不另外声称观察到永久停帧。 18 个图片故事 × 三引擎共 54 项、八份补丁冷安装均通过，见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)。完整 Phase 验收仍在 S6，本记录不代表已经提交或获得上游修复。

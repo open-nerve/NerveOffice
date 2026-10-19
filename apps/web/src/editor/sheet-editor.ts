@@ -37,6 +37,7 @@ import type { CompositionWatch } from './composition-watch.ts'
 import type { EditorAccess } from './editor-access.ts'
 import type { FormulaRound } from './formula-round-stop.ts'
 import type { FormulaWorkerFailure } from './formula-worker-failure.ts'
+import type { EditorImageAccess, PlatformImageIo } from './images/platform-image-io.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
@@ -57,7 +58,9 @@ import { FormulaWorkerError } from './formula-worker-failure.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
+import { createPlatformImageIo } from './images/platform-image-io.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL } from './internal-api/index.ts'
+import { closeImagePreview, invalidateImageRendering } from './internal-api/ui.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { watchPanelDebounces } from './panel-debounce-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
@@ -147,6 +150,10 @@ export interface SheetEditor {
 }
 
 export interface CreateSheetEditorOptions {
+  /** 页面原会话与图片权限复核信号；未提供时图片读取/上传安全关闭。 */
+  readonly imageAccess?: EditorImageAccess
+  /** 图片失败由页面聚合提示；不回显原始来源或文件内容，也不作为全表加载失败。 */
+  readonly onImageFailure?: (error: unknown) => void
   /** 编辑器挂载的容器 */
   readonly container: HTMLElement
   /** 快照的 JSON 文本（服务端下发的原文） */
@@ -267,6 +274,7 @@ function createFormulaHost(mode: FormulaMode, cleanup: CleanupStack): FormulaHos
  */
 interface FormulaRoundRef {
   round: FormulaRound | undefined
+  images: PlatformImageIo | undefined
 }
 
 /**
@@ -289,7 +297,10 @@ function formulaRoundOf(univerAPI: FUniver, changes: ChangeTracker): FormulaRoun
  * 再按创建的相反顺序销毁；没有在算时调用的这一刻就销毁完。从不失败：停不下、到了时限都照样销毁，交给浏览器的错误报告
  * （之后同一页里新建的编辑器里公式的结果可能不对，要让人看得见）
  */
-async function tearDown(cleanup: CleanupStack, round: FormulaRound | undefined): Promise<void> {
+async function tearDown(cleanup: CleanupStack, retirement: FormulaRoundRef): Promise<void> {
+  // 撤权/销毁的旧图片必须当场清掉，不能等正在运行的主线程公式退出。
+  retirement.images?.dispose()
+  const round = retirement.round
   if (round?.running() === true) {
     try {
       if (await stopRunningRound(round) === 'timeout')
@@ -333,7 +344,17 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const resourceGuard = createResourceLoadGuard()
   const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
-  for (const entry of pluginEntries({ container, formula: formula.execution, access, recalculate }))
+  const images = createPlatformImageIo({
+    access,
+    identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
+    origin: location.origin,
+    changed: () => invalidateImageRendering(univer),
+    invalidated: () => closeImagePreview(univer),
+    failed: options.onImageFailure ?? (() => {}),
+  })
+  rounds.images = images
+  cleanup.defer(images.dispose)
+  for (const entry of pluginEntries({ container, formula: formula.execution, access, recalculate, imageOverride: images.override }))
     entry.register(univer)
   const univerAPI = FUniver.newAPI(univer)
   // 不变量（M2-P6 复核 F3）：Facade 的执行前事件（BeforeCommandExecute）在创建工作簿之前就要有订阅者，而且直到销毁都不能减到零。
@@ -435,7 +456,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   // 显式选择优先；生产默认不等，也不引入测试构建的 URL 开关。
   const formulaMode = options.formulaMode ?? (import.meta.env.MODE === 'e2e' ? await formulaModeOf() : 'worker')
   const cleanup = createCleanupStack()
-  const rounds: FormulaRoundRef = { round: undefined }
+  const rounds: FormulaRoundRef = { round: undefined, images: undefined }
   let mounted: MountedEditor
   try {
     mounted = await mount(options, snapshot, formulaMode, cleanup, rounds)
@@ -455,7 +476,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       throw new FormulaWorkerError(failure)
   }
   catch (error) {
-    await tearDown(cleanup, rounds.round)
+    await tearDown(cleanup, rounds)
     throw error
   }
   const { workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
@@ -466,7 +487,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   const dispose = async (): Promise<void> => {
     if (disposal === undefined) {
       disposed = true
-      disposal = tearDown(cleanup, rounds.round)
+      disposal = tearDown(cleanup, rounds)
     }
     return disposal
   }

@@ -1035,12 +1035,37 @@ describe('主线程模式下销毁之前停下正在算的一轮（M3-P4 设计 
     const facade = steppingFacade(log, 'unit-s')
     vi.mocked(sheetPluginEntries).mockReturnValue([])
     const container = document.createElement('div')
-    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-s'), access: 'edit' })
+    const imageListeners = new Set<() => void>()
+    const imageAccess = {
+      current: () => undefined,
+      subscribe: (listener: () => void) => {
+        imageListeners.add(listener)
+        return () => {
+          imageListeners.delete(listener)
+        }
+      },
+    }
+    const creating = createSheetEditor({ container, snapshot: sheetSnapshotFor('unit-s'), access: 'edit', imageAccess })
     await vi.waitFor(() => expect(log).toEqual(['createWorkbook']))
     await reachReady(facade)
     const editor = await creating
-    return { editor, facade, container, univerDispose: vi.spyOn(Univer.prototype, 'dispose') }
+    return { editor, facade, container, imageListeners, univerDispose: vi.spyOn(Univer.prototype, 'dispose') }
   }
+
+  it('等待主线程公式退出之前已经退役图片实例和身份订阅', async () => {
+    const { editor, facade, imageListeners, univerDispose } = await createdIn('main-thread')
+    expect(imageListeners.size).toBe(1)
+    facade.fire(START)
+    const disposal = editor.dispose()
+    try {
+      expect(imageListeners.size).toBe(0)
+      expect(univerDispose).not.toHaveBeenCalled()
+    }
+    finally {
+      facade.fire(STOPPED)
+      await disposal
+    }
+  })
 
   it('一轮在算：先同步执行停止的 mutation（onlyLocal），收到这一轮结束的通知之前不销毁（计算中的进度通知不算）；dispose 交回的 Promise 在销毁完时兑现，重复调用等的是同一次销毁', async () => {
     const { editor, facade, container, univerDispose } = await createdIn('main-thread')

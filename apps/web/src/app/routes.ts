@@ -1,8 +1,8 @@
 import type { RouteObject } from 'react-router'
 import { ONE_TIME_LINK_PAGE_PATHS } from '@nerve-office/contracts'
-import { CHANGE_PASSWORD_PATH, ChangePasswordPage, InvitationPage, PasswordResetPage } from '../features/account/index.ts'
 import { LoginPage, RequireSession, SessionCheck } from '../features/auth/index.ts'
 import { HomePage, SpacePage } from '../features/spaces/index.ts'
+import { CHANGE_PASSWORD_PATH } from '../shared/lib/account-paths.ts'
 import { ADMIN_PATH, ADMIN_PATHS, ADMIN_USER_DOCUMENTS_ROUTE } from '../shared/lib/admin-paths.ts'
 import { loadChunk } from '../shared/lib/chunk-load.ts'
 import { LOCAL_DRAFTS_PATH } from '../shared/lib/local-drafts-path.ts'
@@ -11,10 +11,16 @@ import { LOGOUT_PATH } from '../shared/lib/logout-path.ts'
 import { SEARCH_PATH, SHARED_PATH, SPACE_FOLDER_ROUTE, SPACE_MEMBERS_ROUTE, SPACE_ROUTE, SPACE_TRASH_ROUTE } from '../shared/lib/space-paths.ts'
 import { AppShell } from './layout/app-shell.tsx'
 import { ErrorPage, RouteErrorBoundary } from './pages/error-page.tsx'
+import { LoadingPage } from './pages/loading-page.tsx'
 import { NotFoundPage } from './pages/not-found-page.tsx'
 
 // 按需加载的页面经 loadChunk 下载：失败时是 ChunkLoadError，内容区的错误边界据此说明"页面没能加载"，
 // 部署之后旧的分块已经不在时整页重新加载一次（M2-P6 复核 S6）
+
+/** 账户表单只在对应路由下载；页头及会话判定仅引用 shared/lib/account-paths.ts。 */
+async function accountPages() {
+  return loadChunk(async () => import('../features/account/index.ts'))
+}
 
 /** 管理界面按需加载（M2-P1 设计 §3.8）：它只给系统管理员，不进平台页面的首屏包。这里是它唯一的引用处，而且只能是动态 import（lint 的模块边界保证） */
 async function adminPages() {
@@ -54,8 +60,8 @@ export const appRoutes: RouteObject[] = [
   { path: LOGOUT_PATH, lazy: async () => ({ Component: (await localDataPages()).LogoutPage }), ErrorBoundary: ErrorPage, HydrateFallback: SessionCheck },
   { path: LOGIN_PATH, Component: LoginPage, ErrorBoundary: ErrorPage },
   // 一次性链接的公开页面（M2-P1）：不需要登录；令牌在链接的 # 之后
-  { path: ONE_TIME_LINK_PAGE_PATHS.invitation, Component: InvitationPage, ErrorBoundary: ErrorPage },
-  { path: ONE_TIME_LINK_PAGE_PATHS.password_reset, Component: PasswordResetPage, ErrorBoundary: ErrorPage },
+  { path: ONE_TIME_LINK_PAGE_PATHS.invitation, lazy: async () => ({ Component: (await accountPages()).InvitationPage }), ErrorBoundary: ErrorPage, HydrateFallback: LoadingPage },
+  { path: ONE_TIME_LINK_PAGE_PATHS.password_reset, lazy: async () => ({ Component: (await accountPages()).PasswordResetPage }), ErrorBoundary: ErrorPage, HydrateFallback: LoadingPage },
   {
     // 除登录页以外都要先登录（默认拒绝，US-M1-08）：包括不存在的地址，未登录的人看不出哪些地址存在（审查 B23）。P4 的文档路由也放在这一层
     Component: RequireSession,
@@ -78,7 +84,7 @@ export const appRoutes: RouteObject[] = [
             { path: SEARCH_PATH, lazy: async () => ({ Component: (await searchPages()).SearchPage }) },
             { path: SHARED_PATH, lazy: async () => ({ Component: (await sharedWithMePages()).SharedWithMePage }) },
             { path: LOCAL_DRAFTS_PATH, lazy: async () => ({ Component: (await localDraftsPages()).LocalDraftsPage }) },
-            { path: CHANGE_PASSWORD_PATH, Component: ChangePasswordPage },
+            { path: CHANGE_PASSWORD_PATH, lazy: async () => ({ Component: (await accountPages()).ChangePasswordPage }) },
             {
               path: ADMIN_PATH,
               lazy: async () => ({ Component: (await adminPages()).AdminLayout }),

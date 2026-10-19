@@ -1,0 +1,25 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 1e1b3025f5e13546252104cafdbfc8dda0b5c6b8..d2e2ac2670f17642fbaa0599bed2cfbf337f63fb 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -4296,6 +4296,7 @@ function clearArrayFormulaCellDataByCell(arrayFormulaRangeMatrix, arrayFormulaCe
+ 
+ //#endregion
+ //#region src/models/formula-data.model.ts
++// NerveOffice: 图片公式的空字符串缓存不包含运行时图片信息；重建时按实际函数 token 重算。见 ADR-022。
+ let FormulaDataModel = class FormulaDataModel extends Disposable {
+ 	constructor(_univerInstanceService, _lexerTreeBuilder) {
+ 		super();
+@@ -4806,7 +4807,11 @@ let FormulaDataModel = class FormulaDataModel extends Disposable {
+ 						const currentCell = sheetInstance.getCellRaw(row, column);
+ 						const isFormula = isFormulaString(currentCell === null || currentCell === void 0 ? void 0 : currentCell.f) || isFormulaId(currentCell === null || currentCell === void 0 ? void 0 : currentCell.si);
+ 						const noValue = (currentCell === null || currentCell === void 0 ? void 0 : currentCell.v) === void 0 || (currentCell === null || currentCell === void 0 ? void 0 : currentCell.v) === null;
+-						if (!(isFormula && noValue)) continue;
++						if (!isFormula) continue;
++						const imageInfo = this._unitImageFormulaData[unitId]?.[sheetId]?.getValue(row, column);
++						const formula = !noValue && !imageInfo ? this.getFormulaStringByCell(row, column, sheetId, unitId) : null;
++						const needsImage = formula != null && (this._lexerTreeBuilder.sequenceNodesBuilder(formula) || []).some((node) => typeof node !== "string" && node.nodeType === sequenceNodeType.FUNCTION && node.token.toUpperCase().replace(/^_XLFN\./, "") === "IMAGE");
++						if (!noValue && !needsImage) continue;
+ 						if (!columnRanges[column]) columnRanges[column] = [];
+ 						const lastRange = columnRanges[column].slice(-1)[0];
+ 						if (lastRange && lastRange.endRow === row - 1) lastRange.endRow = row;

@@ -1207,6 +1207,19 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           </div>
           {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
           {local !== undefined && <LocalSaveStatus indicator={local} />}
+          {view.imageProblem === true && (
+            <div data-slot="image-status" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-sm text-muted-foreground">
+              <p role="status">{editorMessages.images.failed}</p>
+              <Button
+                size="sm"
+                variant="outline"
+                aria-disabled={!available || view.session !== 'active' || view.detailRefreshing}
+                onClick={() => available && page.view().session === 'active' && !page.view().detailRefreshing && void page.refreshDetail()}
+              >
+                {view.detailRefreshing ? editorMessages.images.checking : editorMessages.images.retry}
+              </Button>
+            </div>
+          )}
           {formula !== undefined && (
             <div data-slot="formula-recovery" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-sm text-muted-foreground">
               <p>{formula.text}</p>

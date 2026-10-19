@@ -65,6 +65,28 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 ].join('')
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
+  ...['RenderImage', 'getDrawingShapeKeyByDrawingSearch'].map(name => ({
+    name,
+    origin: name === 'RenderImage' ? 'engine-render.Image，仅主线程出口' : 'drawing.getDrawingShapeKeyByDrawingSearch，通用绘图键计算',
+    purpose: '图片浏览器探针读取真实场景内图元的原生元素，保留元素句柄核对退役清图；不另造加载或渲染路径',
+    evidence: '1.0.1 drawing-ui.DrawingRenderService 按该 key 注册 Image；Image.getNative 返回实际绘制元素',
+    regression: 'tests/e2e/specs/editor/images.spec.ts：实际 SDK 图片与撤权/重建后的旧元素；internal-api 注册与 Worker 边界测试',
+  })),
+  ...['IImageIoService', 'IURLImageService', 'IImageIoServiceParam', 'ImageSourceType', 'ImageUploadStatusType'].map(name => ({
+    name,
+    origin: '@univerjs/core 的图片 IO 标识、契约及枚举；仅从主线程出口使用',
+    purpose: '平台替换 drawing 插件的两个图片服务；规范相对 source、独立 drawing ID、上传状态和元素缓存对齐 SDK 契约',
+    evidence: '1.0.1 core 的 image-io.service / url-image.service；drawing/lib/es/index.js:1177 在插件 onStarting 合并 override；P2-S2 规格 §2、§4',
+    regression: 'images/platform-image-io.test.ts：真实 drawing 注入、两路读取、文件校验/迟到结果/进度；tests/e2e/specs/editor/images.spec.ts（S2 Task4 待验）',
+  })),
+  ...['closeImagePreview', 'imageServiceOverride', 'invalidateImageRendering'].map(name => ({
+    name,
+    origin: '平台对 drawing 图片服务替换及当前场景重绘的窄封装',
+    sdk: { '@univerjs/core': ['DependencyOverride', 'IImageIoService', 'IURLImageService', 'Injector', 'Univer'], '@univerjs/engine-render': ['IRenderManagerService'], '@univerjs/ui': ['IGalleryService'] },
+    purpose: '替换两个完整 IO 服务，按实例释放图片后只标记仍存活场景 dirty，不写模型或变更序号；无渲染插件时不强行创建它',
+    evidence: '1.0.1 drawing 的 _initDependencies，engine-render 的 getRenderAll / RenderUnit.isDisposed / Scene.makeDirty；仅 ui.ts 出口，不进入公式 Worker',
+    regression: 'internal-api/image-services.test.ts、images/platform-image-io.test.ts、sheet-editor.test.ts：插件配置生效、存活场景筛选、等公式退出前同步清理；真实像素由 S2 Task4 验收',
+  })),
   {
     name: 'injectorOf',
     origin: '@univerjs/core 的 Univer.__getInjector()（平台的封装）',

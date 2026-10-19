@@ -178,8 +178,8 @@ describe('图片读取字节客户端', () => {
 
   it('完整 5 MiB 流按顺序拼接，不因边界恰好相等拒绝', async () => {
     const data = new Uint8Array(ASSET_MAX_BYTES)
-    data[0] = 17
-    data[ASSET_MAX_BYTES - 1] = 29
+    for (let index = 0; index < data.length; index++)
+      data[index] = index % 251
     const body = new ReadableStream({
       start(controller) {
         controller.enqueue(data.slice(0, 123))
@@ -189,7 +189,10 @@ describe('图片读取字节客户端', () => {
     })
     const response = new Response(body, { headers: { 'content-type': 'image/png', 'x-asset-status': '200' } })
     installFakeApi({ [`GET ${SOURCE}`]: () => response })
-    expect((await readAsset(SOURCE)).data).toEqual(data)
+    const actual = (await readAsset(SOURCE)).data
+    // 不让通用深比较枚举五百多万个属性；仍逐字节核对完整内容及顺序。
+    expect(actual.byteLength).toBe(data.byteLength)
+    expect(actual.findIndex((byte, index) => byte !== data[index]), '首个不一致字节的位置').toBe(-1)
   })
 
   it('流在下次拉取时复用小缓冲，不会改写已经收到的字节', async () => {

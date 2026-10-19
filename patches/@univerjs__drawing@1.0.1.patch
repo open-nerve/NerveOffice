@@ -1,0 +1,18 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index cb6deac3814575eb4205e2fe904fd0608067c374..d7af530f9cfa24e8ab88a7fc6ad212378fa08edc 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,3 +1,4 @@
++// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
+ import { CommandType, Disposable, DrawingTypeEnum, ICommandService, IConfigService, IImageIoService, IURLImageService, ImageSourceType, ImageUploadStatusType, Inject, Injector, JSON1, Plugin, createIdentifier, generateRandomId, merge, mergeOverrideWithDependencies, normalizeDrawingOrderIndex, sortRules, sortRulesByDesc, toDisposable } from "@univerjs/core";
+ import { Subject } from "rxjs";
+ 
+@@ -231,6 +232,8 @@ var UnitDrawingService = class {
+ 			const param = this._getCurrentBySearch(updateParam);
+ 			if (param == null) return;
+ 			param.transform = updateParam.transform;
++			if (Object.prototype.hasOwnProperty.call(updateParam, "sheetTransform")) param.sheetTransform = updateParam.sheetTransform;
++			if (Object.prototype.hasOwnProperty.call(updateParam, "axisAlignSheetTransform")) param.axisAlignSheetTransform = updateParam.axisAlignSheetTransform;
+ 			if (Object.prototype.hasOwnProperty.call(updateParam, "transforms")) param.transforms = updateParam.transforms;
+ 			if (Object.prototype.hasOwnProperty.call(updateParam, "isMultiTransform")) param.isMultiTransform = updateParam.isMultiTransform;
+ 			if ("behindText" in updateParam) param.behindText = updateParam.behindText;

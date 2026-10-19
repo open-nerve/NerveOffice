@@ -1,0 +1,29 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 554b9bc2843d3752f5e064bca3f8d10cce2843ff..5b6d5a1bceddf77125084fe7c4967adb8d0f6c9d 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,3 +1,4 @@
++// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
+ import { AlignTypeH, AlignTypeV, BaselineOffset, BooleanNumber, BorderStyleTypes, BulletAlignment, COLORS, CellValueType, ColorKit, ColumnResponsiveType, ColumnSeparatorType, CustomDecorationType, CustomRangeType, DEFAULT_DOCUMENT_PARAGRAPH_LINE_SPACING, DEFAULT_EMPTY_DOCUMENT_VALUE, DEFAULT_STYLES, DashStyleType, DataStreamTreeNodeType, DataStreamTreeTokenType, Disposable, DisposableCollection, DocumentBlockRangeType, DocumentDataModel, DocumentFlavor, DocxBreakType, EventSubject, FontStyleType, GridType, HorizontalAlign, IConfigService, IContextService, IUniverInstanceService, Inject, Injector, JSON1, ListGlyphType, LocaleService, LookUp, MODERN_DOCUMENT_DEFAULT_MARGIN, MODERN_DOCUMENT_WIDTH, MOVE_BUFFER_VALUE, ModernDocumentWidthMode, NAMED_STYLE_MAP, NAMED_STYLE_SPACE_MAP, NumberUnitType, ObjectMatrix, ObjectRelativeFromH, ObjectRelativeFromV, PRESET_LIST_TYPE, PageOrientType, Plugin, PositionedObjectLayoutType, Range, Rectangle, Registry, SectionType, SheetSkeleton, Skeleton, SpacingRule, TabStopAlignment, TableAlignmentType, TableRowHeightRule, TableSizeType, TableTextWrapType, TextDecoration, TextX, TextXActionType, ThemeService, Tools, UniverInstanceType, VerticalAlign, VerticalAlignmentType, WrapStrategy, WrapTextType, characterSpacingControlType, checkParagraphHasIndentByStyle, createIdentifier, deleteContent, getColorStyle, getDisplayValueFromCell, getRichTextEditPath, horizontalLineSegmentsSubtraction, insertTextToContent, invertColorByMatrix, isCellCoverable, isClassDependencyItem, isDefaultFormat, isNullCell, isWhiteColor, merge, noop, numberToABC, numberToListABC, numfmt, regexp, registerDependencies, remove, requestImmediateMacroTask, resolveDocumentParagraphStyle, resolveSectionHeaderFooterReferences, searchArray, sortRules, sortRulesByDesc, toDisposable } from "@univerjs/core";
+ import { BehaviorSubject, Observable, Subject, Subscription, distinctUntilChanged, merge as merge$1, shareReplay, startWith } from "rxjs";
+ import { franc } from "franc-min";
+@@ -32389,7 +32390,9 @@ var Image$1 = class extends Shape {
+ 		this._transformCalculateSrcRect = true;
+ 	}
+ 	changeSource(url) {
+-		if (this._native == null) this._native = document.createElement("img");
++		if (this._native != null && this._native.src === url) return;
++		// A decoded element may be shared by several drawings. A source update owns a new element.
++		this._native = document.createElement("img");
+ 		this._native.onload = () => {
+ 			this.makeDirty(true);
+ 		};
+@@ -32516,7 +32519,7 @@ var Image$1 = class extends Shape {
+ 	}
+ 	_draw(ctx, _bounds, renderWidth, renderHeight) {
+ 		const native = this._native;
+-		if (native == null) return;
++		if (native == null || !native.complete || !(native.naturalWidth > 0) || !(native.naturalHeight > 0)) return;
+ 		const w = renderWidth ?? this.width;
+ 		const h = renderHeight ?? this.height;
+ 		if (this._shouldRasterCache()) {

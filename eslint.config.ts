@@ -91,12 +91,17 @@ const UNIVER_INTERNAL_SYMBOLS = [
       'FOCUSING_FX_BAR_EDITOR',
       'IAuthzIoService',
       'IContextService',
+      'IImageIoService',
+      'IImageIoServiceParam',
       'ILocalStorageService',
       'ILogService',
       'IPermissionService',
       'IResourceHook',
       'IResourceManagerService',
       'IUndoRedoService',
+      'IURLImageService',
+      'ImageSourceType',
+      'ImageUploadStatusType',
       'LifecycleService',
       'LocaleService',
       'ResourceManagerService',
@@ -1676,6 +1681,23 @@ export default antfu(
             from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
             allow: {
               to: { element: { type: 'web-feature', captured: { feature: 'shared-with-me' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
+          // 账户表单只在路由按需加载；路径与公开链接判定独立放在 shared/lib/account-paths.ts。
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'account' } } } },
+            message: '账户页面（features/account）只有 app/routes.ts 可以动态 import() 它的公开入口；路径判定使用 shared/lib/account-paths.ts（M5-P2）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'account' }, fileInternalPath: PUBLIC_ENTRY } },
               dependency: { nodeKind: 'dynamic-import' },
             },
           },

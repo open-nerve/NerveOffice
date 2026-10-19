@@ -107,6 +107,11 @@ const DAMAGED_RESOURCE_PHRASES: Readonly<Record<ProfileResourceName<'sheet@1'>, 
 }
 
 export const editorMessages = {
+  images: {
+    failed: '部分图片暂时无法显示',
+    retry: '重新加载图片',
+    checking: '正在重新加载图片…',
+  },
   formulaRecovery: {
     waiting: '请先完成当前输入，页面随后恢复公式计算。',
     working: '正在恢复公式计算，请稍候。',

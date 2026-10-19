@@ -3,6 +3,7 @@
 export type { EditorAccess } from './editor-access.ts'
 export { FormulaWorkerError } from './formula-worker-failure.ts'
 export type { FormulaWorkerFailure } from './formula-worker-failure.ts'
+export type { EditorImageAccess } from './images/platform-image-io.ts'
 export type { SheetEditorLifecycle } from './lifecycle-watch.ts'
 export type { OpenCheck } from './profile/open-check.ts'
 export { SHEET_PROFILE_ID } from './profile/sheet-profile.ts'

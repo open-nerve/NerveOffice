@@ -104,6 +104,26 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   }
 }
 
+describe('图片的可见失败状态', () => {
+  it('显示不含来源的说明，通过既有详情复核重试；不影响正文保存按钮', () => {
+    const h = fakePage({ imageProblem: true, save: DIRTY })
+    render(<EditorChrome page={h.page} apple={false} />)
+    expect(screen.getByText('部分图片暂时无法显示')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '重新加载图片' }))
+    expect(h.page.refreshDetail).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    h.set({ imageProblem: false })
+    expect(screen.queryByText('部分图片暂时无法显示')).not.toBeInTheDocument()
+  })
+
+  it.each(['signed-out', 'other-user'] as const)('%s 时不能用图片重试绕过本页会话', (session) => {
+    const h = fakePage({ imageProblem: true, session })
+    render(<EditorChrome page={h.page} apple={false} />)
+    fireEvent.click(screen.getByRole('button', { name: '重新加载图片' }))
+    expect(h.page.refreshDetail).not.toHaveBeenCalled()
+  })
+})
+
 /** 页头里看得见的状态（载入中的说明、阅读与编辑、保存状态）：不是读屏的播报区（M3-P4，例行的变化只改它的文字） */
 function headerStatus(): HTMLElement {
   const status = screen.getByRole('banner').querySelector<HTMLElement>('[data-slot="header-status"]')

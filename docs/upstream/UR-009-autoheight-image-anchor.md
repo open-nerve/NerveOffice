@@ -160,3 +160,9 @@ The refresh path should keep the anchors consistent with the size it keeps — t
 4. Regression tests: for wrapped text, a larger font and a cell image under a `Position`-anchored image, the size stays unchanged and the `to` anchor moves, after the trigger, after switching sheets and after reopening; `Both` anchors keep resizing with the rows.
 
 We tried items 1 and 2 (first option: two extra `in` checks in `refreshTransform()`) as a local patch on the 1.0.1 packages in our minimal page. In Chromium 153 and WebKit 26.6 the image kept 120 × 80 after the trigger, after switching sheets and after reopening, for all three triggers; the `to` anchor moved (wrapped text: row 3 + 56, font size 36: row 4 + 1, cell image: row 4 + 13); undoing the wrap moved it back to row 5 + 8; the explicit-command control was unaffected. We have not run Univer's own test suites against the change.
+
+## 平台处理进展（2026-10-19，M5-P2-S2）
+
+固定 1.0.1 的 Position 刷新按保留尺寸重算 sheetTransform/axisAlignSheetTransform；公共 refreshTransform 仅在提供字段时传递。真实工作簿/自动行高 mutation 的两项反例 RED→GREEN，Position/Both/None、显式行高及撤销/重做对照通过。刷新仅回写 from/to，保留其余原始属性（包括未提供的默认属性）；直接替换整个锚点会在撤销后补入默认字段，导致后续 JSON1 重做冲突，本次新增反例已证实并避免。
+
+修复由 `pnpm patchedDependencies` 固定，见 [ADR-022](../adr/ADR-022-图片实例与SDK修复.md)。独立副本撤去 drawing/sheets-drawing 相关补丁后，Chromium 的 Position 终点仍为第 6 行，实际锚点断言失败；修复后的三浏览器故事覆盖自动/显式行高、撤销重做、切表、重开及第二次保存。 18 个图片故事 × 三引擎共 54 项、八份补丁冷安装均通过，见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)。完整 Phase 验收仍在 S6，本记录不代表已经提交或获得上游修复。

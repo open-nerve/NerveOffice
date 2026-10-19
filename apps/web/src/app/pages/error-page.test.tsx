@@ -2,7 +2,9 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
+import { ChunkLoadError } from '../../shared/lib/chunk-load.ts'
 import { PageLocationContext } from '../../shared/lib/page-location.ts'
+import { installFakeApi } from '../../shared/testing/fake-api.test-support.ts'
 import { recordingPage } from '../render-app.test-support.tsx'
 import { ErrorPage } from './error-page.tsx'
 
@@ -26,6 +28,15 @@ function renderBroken(error: unknown) {
 }
 
 describe('ErrorPage', () => {
+  it('公开账户页的代码下载失败：保留 main 地标，说明加载失败并允许重试', async () => {
+    installFakeApi({})
+    const page = renderBroken(new ChunkLoadError('module unavailable'))
+    expect(await screen.findByRole('heading', { name: '页面没能加载' })).toBeInTheDocument()
+    expect(within(screen.getByRole('main')).getByText('连不上服务器，请检查网络后重试。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(page.visits).toEqual(['reload'])
+  })
+
   it('渲染出错时：说明、请求标识与重新加载；main 地标保留，提示放在里面（审查 B15）', async () => {
     const page = renderBroken(new ApiError(500, 'INTERNAL_ERROR', 'x', { requestId: 'req-42' }))
     const alert = await screen.findByRole('alert')

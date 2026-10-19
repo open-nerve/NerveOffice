@@ -69,6 +69,8 @@ export type FormulaMode = FormulaExecution['kind']
 export const MAIN_THREAD_FORMULA_INTERVAL_COUNT = 20
 
 export interface SheetProfileContext {
+  /** M5-P2：由本实例持有的两个图片 IO 服务；在 drawing 插件注册时替换。 */
+  readonly imageOverride?: NonNullable<ConstructorParameters<typeof UniverDrawingPlugin>[0]>['override']
   /** 编辑器挂载的容器 */
   readonly container: HTMLElement
   /** 公式在哪里计算：只影响谁执行公式，不影响数据 */
@@ -174,8 +176,8 @@ export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
     // 浮动图片写进资源；单元格图片存在单元格的富文本里
     id: 'drawing',
     resources: ['SHEET_DRAWING_PLUGIN'],
-    plugins: () => [
-      pluginEntry(UniverDrawingPlugin),
+    plugins: ({ imageOverride }) => [
+      pluginEntry(UniverDrawingPlugin, imageOverride === undefined ? undefined : { override: imageOverride }),
       pluginEntry(UniverDocsDrawingPlugin),
       pluginEntry(UniverDrawingUIPlugin),
       pluginEntry(UniverSheetsDrawingPlugin),

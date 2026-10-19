@@ -36,6 +36,7 @@ import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
 import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, injectorOf } from '../internal-api/index.ts'
 import { IEditorService, IShortcutService } from '../internal-api/ui.ts'
+import { createImageProbe } from './image-probe.ts'
 import './probe-facades.ts'
 
 type Workbook = ReturnType<FUniver['createWorkbook']>
@@ -87,6 +88,7 @@ export interface ProbeShortcut {
 }
 
 export interface EditorProbe {
+  readonly images: ReturnType<typeof createImageProbe>
   /** 编辑器的 Facade：E2E 经它调用各个编辑入口 */
   readonly univerAPI: FUniver
   /** 内存里的快照，与编辑器的捕获相同（JSON.stringify(save())） */
@@ -199,6 +201,7 @@ export function installEditorProbe({ univer, univerAPI, workbook, changes, formu
   ]
   const injector = injectorOf(univer)
   const probe: EditorProbe = {
+    images: createImageProbe(univer, workbook),
     univerAPI,
     snapshot: () => JSON.stringify(workbook.save()),
     commands: (after = 0) => log.filter(command => command.seq > after),

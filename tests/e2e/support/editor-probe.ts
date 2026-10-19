@@ -40,6 +40,7 @@ interface CellRect {
 // 返回值 E2E 不用，写成 unknown；入口在页面里执行，这些类型只用来在编写时检查调用的写法
 
 export interface FacadeRange extends EntryRange {
+  readonly setFontSize: (size: number) => unknown
   readonly getCell: () => CellRect
   /** 写一格的值（SetRangeValuesCommand，同步执行） */
   readonly setValue: (value: string | number) => unknown
@@ -51,7 +52,9 @@ export interface FacadeRange extends EntryRange {
   readonly activate: () => unknown
 }
 
-export type FacadeImage = EntryImage
+export interface FacadeImage extends EntryImage {
+  readonly getId: () => string
+}
 
 /** 工作表的选区（sheets 的 Facade 的 FSelection） */
 export interface FacadeSelection {
@@ -62,6 +65,7 @@ export interface FacadeSelection {
 }
 
 export interface FacadeSheet extends EntrySheet {
+  readonly getImages: () => readonly FacadeImage[]
   readonly getRange: (a1: string) => FacadeRange
   readonly getSheetName: () => string
   /** 当前的选区；没有时是 null */
@@ -117,6 +121,12 @@ export interface ProbeFormulaProgress {
 }
 
 interface EditorProbe {
+  readonly images: {
+    readonly upload: (file: File) => Promise<unknown>
+    readonly element: (drawingId: string) => HTMLImageElement | undefined
+    readonly cached: (source: string) => HTMLImageElement | undefined
+    readonly redraw: () => void
+  }
   readonly univerAPI: FacadeApi
   readonly snapshot: () => string
   readonly commands: (after?: number) => readonly ProbeCommand[]

@@ -1,0 +1,47 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index a36fe6257770c8aac96083b80c2f445b337c7fc0..d85bca06128da8c0cfa2c440c79fa87db8b3539b 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,3 +1,4 @@
++// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
+ import { BehaviorSubject, Observable, ReplaySubject, Subject, Subscription, combineLatest, debounceTime, distinctUntilChanged, filter, firstValueFrom, map, merge as merge$1, of, skip, take, takeWhile, tap, timer } from "rxjs";
+ import { ObjectScope, UnitAction, UnitObject, UnitRole, UniverType as UniverInstanceType } from "@univerjs/protocol";
+ import { debounceTime as debounceTime$1, filter as filter$1, first, map as map$1 } from "rxjs/operators";
+@@ -26853,17 +26854,6 @@ var ImageCacheMap = class {
+ 				const newImageElement = new Image();
+ 				const imageIoService = this._injector.has(IImageIoService) ? this._injector.get(IImageIoService) : null;
+ 				const urlImageService = this._injector.has(IURLImageService) ? this._injector.get(IURLImageService) : null;
+-				if (imageSourceType === "UUID") try {
+-					newImageElement.src = await (imageIoService === null || imageIoService === void 0 ? void 0 : imageIoService.getImage(source)) || "";
+-				} catch (error) {
+-					console.error(error);
+-				}
+-				else if (imageSourceType === "URL") try {
+-					newImageElement.src = await (urlImageService === null || urlImageService === void 0 ? void 0 : urlImageService.getImage(source)) || source;
+-				} catch (error) {
+-					newImageElement.src = source;
+-				}
+-				else newImageElement.src = source;
+ 				newImageElement.onload = () => {
+ 					newImageElement.removeAttribute("data-error");
+ 					onLoad === null || onLoad === void 0 || onLoad();
+@@ -26872,7 +26862,19 @@ var ImageCacheMap = class {
+ 					newImageElement.setAttribute("data-error", "true");
+ 					onError === null || onError === void 0 || onError();
+ 				};
++				// Register before IO: a cancelled first generation must still receive later authorized pixels.
+ 				this._imageCacheMap.set(imageCacheKey, newImageElement);
++				imageIoService === null || imageIoService === void 0 || imageIoService.addImageSourceCache(source, imageSourceType, newImageElement);
++				try {
++					const service = imageSourceType === "URL" ? urlImageService : imageIoService;
++					const resolved = await (service === null || service === void 0 ? void 0 : service.getImage(source));
++					if (!resolved) return;
++					newImageElement.src = resolved;
++					imageIoService === null || imageIoService === void 0 || imageIoService.addImageSourceCache(source, imageSourceType, newImageElement);
++				} catch (error) {
++					if ((error === null || error === void 0 ? void 0 : error.name) !== "AbortError") console.error(error);
++					return;
++				}
+ 			})();
+ 			return null;
+ 		}

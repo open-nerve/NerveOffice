@@ -6748,16 +6748,19 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       await prompted(context)
       context.factory.last().edit('甲')
       await context.time.advance(HANDOVER_MS)
-      await settle()
-      expect(editingOf(context.mode).request).toEqual(SHOWN)
-      expect(context.mode.view().save?.status).toBe('failed')
+      // 真实 gzip/摘要可能跨过多个宏任务；等保存失败且交出已退回编辑，才推进重试的假时钟。
+      await vi.waitFor(() => {
+        expect(editingOf(context.mode).request).toEqual(SHOWN)
+        expect(context.mode.view().save?.status).toBe('failed')
+      })
       expect(context.editLease.handOver).not.toHaveBeenCalled()
       expect(context.editLease.release).not.toHaveBeenCalled()
       context.api.save.mockResolvedValue(SAVED)
       await context.time.advance(HEARTBEAT_MS)
-      await settle()
-      expect(context.editLease.handOver).toHaveBeenCalledOnce()
-      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+      await vi.waitFor(() => {
+        expect(context.editLease.handOver).toHaveBeenCalledOnce()
+        expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+      })
     })
 
     it('再也存不上（版本冲突）：留在编辑，不再自动试（提示留着）', async () => {
