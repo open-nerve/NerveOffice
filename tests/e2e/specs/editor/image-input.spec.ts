@@ -24,7 +24,7 @@ async function open(page: Page) {
   return prepared
 }
 
-async function focusCell(page: Page, a1: string): Promise<void> {
+async function focusCell(page: Page, a1: string, button: 'left' | 'right' = 'left'): Promise<void> {
   const position = await page.evaluate((a1) => {
     const sheet = window.__nerveEditorProbe?.univerAPI.getActiveWorkbook().getActiveSheet()
     if (!sheet)
@@ -32,7 +32,12 @@ async function focusCell(page: Page, a1: string): Promise<void> {
     const cell = sheet.getRange(a1).getCell()
     return { x: (cell.startX + cell.endX) / 2, y: (cell.startY + cell.endY) / 2 }
   }, a1)
-  await sheetCanvas(page).click({ position })
+  await sheetCanvas(page).click({ position, button })
+}
+
+async function pasteFromContextMenu(page: Page, a1: string): Promise<void> {
+  await focusCell(page, a1, 'right')
+  await page.getByRole('button', { name: '粘贴', exact: true }).click()
 }
 
 async function choose(page: Page, kind: 'float' | 'cell', names: readonly string[]): Promise<void> {
@@ -270,7 +275,7 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
     expect(await clipboard.evaluate(state => state.text)).toEqual([])
   })
 
-  test('右键命令在受控系统接口拒绝后可重试，图片实际上传，表格预览不读取也不上传', async ({ page }) => {
+  test('真实右键菜单在受控系统接口拒绝后可重试，图片实际上传，表格预览不读取也不上传', async ({ page }) => {
     const { documentId } = await open(page)
     const png = Array.from(await readFile(sample('rgba-text.png')))
     const clipboard = await page.evaluateHandle((png) => {
@@ -295,26 +300,24 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
       } })
       return state
     }, png)
-    await focusCell(page, 'J2')
-    expect(await page.evaluate(async () => window.__nerveEditorProbe?.univerAPI.executeCommand('univer.command.paste'))).toBe(false)
+    await pasteFromContextMenu(page, 'J2')
     await expect(page.locator('[data-slot="image-operation"]')).toContainText('浏览器未允许访问剪贴板')
     await clipboard.evaluate((state) => {
       state.kind = 'image'
     })
-    expect(await page.evaluate(async () => window.__nerveEditorProbe?.univerAPI.executeCommand('univer.command.paste'))).toBe(true)
+    await pasteFromContextMenu(page, 'J2')
     await expectImagePixels(page, 'J2')
     let tableUploads = 0
     page.on('request', (request) => {
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/assets')
         tableUploads += 1
     })
-    await focusCell(page, 'B12')
     await clipboard.evaluate((state) => {
       state.kind = 'table'
     })
     const before = Object.keys(drawingsIn(await probeSnapshot(page)))
-    expect(await page.evaluate(async () => window.__nerveEditorProbe?.univerAPI.executeCommand('univer.command.paste'))).toBe(true)
-    expect(cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'B12')?.v).toBe('右键表格')
+    await pasteFromContextMenu(page, 'B12')
+    await expect.poll(async () => cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'B12')?.v).toBe('右键表格')
     expect(Object.keys(drawingsIn(await probeSnapshot(page)))).toEqual(before)
     expect(await clipboard.evaluate(state => ({ reads: state.reads, previews: state.previews }))).toEqual({ reads: 3, previews: 0 })
     await imageFailureSentinel(page, documentId, '右键拒绝重试后仍可保存')

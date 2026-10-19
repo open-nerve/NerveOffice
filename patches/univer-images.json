@@ -80,6 +80,16 @@
       "patchedEsSha256": "364ad35cf0eb36ed7a3bc48f6a6c9a6f82adddebbd2a43ef15a13f07cb434e01",
       "patch": "patches/@univerjs__engine-formula@1.0.1.patch",
       "patchSha256": "b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571"
+    },
+    {
+      "package": "@univerjs/ui",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "c7cd8d9902480c0569f25a729ec29ad2d8313c9aaf13ca0045c0e3b6c3e4934e",
+      "originalCjsSha256": "04061b654f09c128c21d76e2e93dfdd74a8d4517d0974566dd82d0457d94ccd8",
+      "patchedEsSha256": "749c8fe95e6b4607159030a49507816cc3d912bef902e7a001c76fdba6c1305c",
+      "patch": "patches/@univerjs__ui@1.0.1.patch",
+      "patchSha256": "cc5c84a2621751fbda2a47a14a8ea26959b8e59413fe624e0b85d02d46c83a07"
     }
   ]
 }

@@ -1,0 +1,19 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 995bb43079c1108dc53b36d505ea51049ab85f8d..4f82e827d0cde01c7a8964a1574e963603f06bd7 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,3 +1,4 @@
++// Modified by NerveOffice: restore editor focus before desktop context-menu commands (ADR-022).
+ import { BaselineOffset, BorderStyleTypes, ColorKit, CommandType, DependentOn, Disposable, DocumentDataModel, DocumentFlavor, EDITOR_ACTIVATED, ErrorService, FOCUSING_FX_BAR_EDITOR, FOCUSING_SHEET, FOCUSING_UNIVER_EDITOR, IAuthzIoService, ICommandService, IConfigService, IConfirmService, IContextService, ILocalStorageService, ILogService, IPermissionService, IUndoRedoService, IUniverInstanceService, Inject, Injector, LifecycleService, LifecycleStages, LifecycleUnreachableError, LocaleService, NAMED_STYLE_MAP, NamedStyleType, ObjectPermissionService, Optional, Plugin, Quantity, RedoCommand, SHEET_EDITOR_UNITS, ThemeService, Tools, UndoCommand, UniverInstanceType, UserManagerService, Workbook, createIdentifier, dedupeBy, generateRandomId, getBorderStyleType, isInternalEditorID, isRealNum, merge, mergeOverrideWithDependencies, registerDependencies, remove, throttle, toDisposable, touchDependencies } from "@univerjs/core";
+ import { BehaviorSubject, EMPTY, Observable, ReplaySubject, Subject, Subscription, animationFrameScheduler, combineLatest, debounceTime, distinctUntilChanged, filter, first, fromEvent, isObservable, map, merge as merge$1, of, scan, startWith, switchMap, throttleTime } from "rxjs";
+ import { Fragment, cloneElement, createContext, createElement, forwardRef, memo, useCallback, useContext, useDeferredValue, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+@@ -6240,8 +6241,8 @@ function DesktopContextMenu() {
+ 			const { label: id, commandId, value } = params;
+ 			const rawParams = typeof params.params === "function" ? params.params() : params.params;
+ 			const commandParams = typeof rawParams === "undefined" ? { value } : rawParams;
+-			if (activeCommandService) activeCommandService.executeCommand(commandId ?? id, commandParams);
+ 			activeLayoutService.focus();
++			if (activeCommandService) activeCommandService.executeCommand(commandId ?? id, commandParams);
+ 			handleClose();
+ 		}
+ 	});
