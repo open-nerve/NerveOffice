@@ -45,7 +45,7 @@ native03 再使用原生复制图片和实际菜单点击：F8 成功插入，�
 
 最终同模型只读复核为 `context-menu-final01/final-review.md`：独立重算 234 项单次通过、源码/构建/安装摘要，核对辅助环境失败的反例与完整门禁原件，确认未改断言、未减检查；C/I/M 均无未关闭发现。本地关键证据索引为 `chrome-native-evidence-index01.json`，不将包含继承环境的原始报告作为公开附件。
 
-本轮 `127.0.0.1:49860` 的临时剪贴板权限已恢复默认“可以询问 / off”，见 native03 `permission-final-reset-full.ax.txt` 与截图。Chrome 窗口大小已恢复；Finder 恢复及测试标签清理遇到锁屏，等待解锁后继续。原生宿主与探针均已正常退出 0，宿主 `native-host-04/exit.json` 为 14:02:27.340Z，独立测试库随服务生命周期清理。服务已关闭与尚未收回的 UI 窗口分别记录。
+本轮 `127.0.0.1:49860` 的临时剪贴板权限已恢复默认“可以询问 / off”，见 native03 `permission-final-reset-full.ax.txt` 与截图。原生宿主与探针均已正常退出 0，宿主 `native-host-04/exit.json` 为 14:02:27.340Z，独立测试库随服务生命周期清理。Chrome 窗口大小先前已恢复；Finder 与测试标签的最后清理曾因锁屏中断，用户解锁后于 2026-10-19 22:33（北京时间）补完：仅关闭三个任务标签，用户其他两个标签保留；Finder 通过“恢复上一个大小”回到原窗口大小，再返回 `spikes/m5-assets/fixtures` 和列表视图。回执为 native03 `cleanup-completed.json`、`cleanup-finder-final.ax.txt` 与截图。现场清理已完成，不改变原生验收的剩余条件。
 
 UI 工具重试保存时，地址栏仍获焦，⌘S 打开了浏览器“另存为”；已取消且未写文件，随后用页面“保存”按钮和实际 API 再核对。`host-context-retry-record.json`/截图为中间记录，最终使用 `host-context-retry-record02.json`、`host-context-retry02.png`；不把误开的系统对话框算作产品保存证据。控制台保留了 native02 的旧拒绝错误，时间为 13:02:31Z，不能归到 native03。
 
