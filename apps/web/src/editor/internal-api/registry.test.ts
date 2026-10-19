@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import cellLinksSource from './cell-links.ts?raw'
 import domMarkersSource from './dom-markers.ts?raw'
 import formulaProtocolSource from './formula-protocol.ts?raw'
+import imageCellsSource from './image-cells.ts?raw'
+import imageCleanupSource from './image-cleanup.ts?raw'
+import imageCommandsSource from './image-commands.ts?raw'
+import imageFormulaSource from './image-formula-source.ts?raw'
+import imageJsonSource from './image-json.ts?raw'
 import imageServicesSource from './image-services.ts?raw'
+import imageStructureSource from './image-structure.ts?raw'
 import * as internalApi from './index.ts'
 import source from './index.ts?raw'
 import injectorSource from './injector.ts?raw'
@@ -60,7 +66,13 @@ const SOURCES: Readonly<Record<string, string>> = {
   'cell-links.ts': cellLinksSource,
   'dom-markers.ts': domMarkersSource,
   'formula-protocol.ts': formulaProtocolSource,
+  'image-cells.ts': imageCellsSource,
+  'image-cleanup.ts': imageCleanupSource,
+  'image-commands.ts': imageCommandsSource,
+  'image-formula-source.ts': imageFormulaSource,
+  'image-json.ts': imageJsonSource,
   'image-services.ts': imageServicesSource,
+  'image-structure.ts': imageStructureSource,
   'injector.ts': injectorSource,
   'locale-service.ts': localeServiceSource,
   'memory-local-storage.ts': memoryLocalStorageSource,
@@ -382,8 +394,9 @@ describe('内部 API 登记表：扫描 internal-api 里每个文件对 @univerj
     // 经同目录的文件间接引用：injector.ts 引用一个新文件，新文件引用 SDK（算在 injectorOf 上）；新文件不在清单里时报出来
     const withHelper = { ...SCANNED, 'injector.ts': scan(`${injectorSource}\nimport { helper } from './helper.ts'\n`) }
     expect(reachableFrom(withHelper, EXITS).missing).toEqual(['injector.ts → helper.ts'])
-    const withListedHelper: ScannedFiles = { ...withHelper, 'helper.ts': scan('import { ICommandService } from \'@univerjs/core\'\n\nexport const helper = ICommandService\n') }
-    expect(unregisteredReferences(withListedHelper)).toEqual(['helper.ts：@univerjs/core 的 ICommandService（实现的登记项：injectorOf、closeImagePreview、imageServiceOverride、invalidateImageRendering）'])
+    const withListedHelper: ScannedFiles = { ...withHelper, 'helper.ts': scan('import { SheetPermissionCheckController } from \'@univerjs/sheets\'\n\nexport const helper = SheetPermissionCheckController\n') }
+    const helperEntries = [...entriesOf(withListedHelper, 'helper.ts')].join('、')
+    expect(unregisteredReferences(withListedHelper)).toEqual([`helper.ts：@univerjs/sheets 的 SheetPermissionCheckController（实现的登记项：${helperEntries}）`])
     // 清单里有、出口走不到的文件
     expect(unreachableFiles({ ...SCANNED, 'orphan.ts': scan('import { ICommandService } from \'@univerjs/core\'\n\nexport const orphan = ICommandService\n') })).toEqual(['orphan.ts'])
     // injector.ts 不再引用 Univer 的类型：injectorOf 的 sdk 里那一项过时了

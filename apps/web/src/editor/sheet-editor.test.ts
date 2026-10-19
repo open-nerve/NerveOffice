@@ -24,6 +24,7 @@ import { imagePolicyReport } from './image-function/worker-report.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
 import { dataPluginEntries, snapshotWithResources } from './profile/data-plugins.test-support.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
+import { installImagePolicy } from './profile/image-policy.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
@@ -58,6 +59,10 @@ vi.mock('./profile/entry-guards.ts', async (importOriginal) => {
 vi.mock('./profile/link-policy.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./profile/link-policy.ts')>()
   return { ...actual, installLinkPolicy: vi.fn(actual.installLinkPolicy) }
+})
+vi.mock('./profile/image-policy.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./profile/image-policy.ts')>()
+  return { ...actual, installImagePolicy: vi.fn(actual.installImagePolicy) }
 })
 // 没有注册插件时装不上 IMAGE() 的限制（没有函数服务）：编排的用例要走到就绪，这里当作装上了
 vi.mock('./image-function/install-image-policy.ts', () => ({ installRestrictedImageFunction: vi.fn(() => true) }))
@@ -96,6 +101,7 @@ beforeEach(() => {
   vi.mocked(installReadOnlyGuard).mockClear()
   vi.mocked(createChangeTracker).mockClear()
   vi.mocked(installEntryGuards).mockClear()
+  vi.mocked(installImagePolicy).mockClear()
   vi.mocked(installLinkPolicy).mockClear()
   vi.mocked(readViewState).mockClear()
   vi.mocked(restoreViewState).mockClear()
@@ -197,20 +203,17 @@ describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
     const error = await createFailingAtWorkbook('read')
     expect(error).toBeInstanceOf(SheetEditorLoadError)
     expect((error as SheetEditorLoadError).reason).toBe('create-failed')
-    // BeforeCommandExecute：入口守卫、链接的改写与防火墙各一个
-    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 3, BeforeUndo: 1, BeforeRedo: 1 })
+    // 入口、图片、链接与只读守卫；图片另在专属撤销/重做事件预检完整记录。
+    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 4, BeforeUndo: 2, BeforeRedo: 2 })
     expect(subscribed()).toBe(0)
     expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
   })
 
-  it('能编辑：不装只读守卫，没有撤销与重做的拦截', async () => {
+  it('能编辑：不装只读守卫，图片仍预检撤销与重做', async () => {
     const { recorded, subscribed } = fakeFacade()
     await createFailingAtWorkbook('edit')
     expect(vi.mocked(installReadOnlyGuard)).not.toHaveBeenCalled()
-    // 入口守卫与链接的改写
-    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 2 })
-    expect(recorded.atCreateWorkbook).not.toHaveProperty('BeforeUndo')
-    expect(recorded.atCreateWorkbook).not.toHaveProperty('BeforeRedo')
+    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 3, BeforeUndo: 1, BeforeRedo: 1 })
     expect(subscribed()).toBe(0)
   })
 })
@@ -296,6 +299,38 @@ function recordingGuard(log: string[]): ReadOnlyGuard {
 }
 
 describe('只读时的编排（M2-P3 设计 §3.3，P3 审查 A3）', () => {
+  it('名称查询只读 Facade、无捕获或命令；未知表、查询失败和销毁后均返回 undefined', async () => {
+    const facade = steppingFacade([], 'unit-name')
+    const byId = vi.fn((id: string) => id === 's' ? { getSheetName: (): string => '预算' } : null)
+    Object.assign(facade.workbook, { getSheetBySheetId: byId })
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    vi.mocked(installReadOnlyGuard).mockImplementationOnce(() => recordingGuard([]))
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-name'), access: 'read' })
+    await reachReady(facade)
+    const editor = await creating
+    const capture = vi.spyOn(editor, 'capture')
+    facade.syncExecuteCommand.mockClear()
+    try {
+      expect(editor.sheetName('s')).toBe('预算')
+      expect(editor.sheetName('unknown')).toBeUndefined()
+      byId.mockImplementationOnce(() => {
+        throw new Error('retired')
+      })
+      expect(editor.sheetName('s')).toBeUndefined()
+      byId.mockImplementationOnce(() => ({ getSheetName: () => null as unknown as string }))
+      expect(editor.sheetName('s')).toBeUndefined()
+      expect(capture).not.toHaveBeenCalled()
+      expect(facade.syncExecuteCommand).not.toHaveBeenCalled()
+      expect(editor.changeSeq()).toBe(0)
+    }
+    finally {
+      await editor.dispose()
+    }
+    byId.mockClear()
+    expect(editor.sheetName('s')).toBeUndefined()
+    expect(byId).not.toHaveBeenCalled()
+  })
+
   it('防火墙与变更检测拿到同一份判定的配置；创建工作簿之后设权限点；就绪时（渲染已经完成）装界面的处理、清空撤销栈', async () => {
     const log: string[] = []
     const facade = steppingFacade(log, 'unit-p3')
@@ -329,14 +364,18 @@ describe('只读时的编排（M2-P3 设计 §3.3，P3 审查 A3）', () => {
 
 describe('链接的改写（M3-P3 设计 §3.6，DEF-021）', () => {
   it.each([
-    ['edit', ['installEntryGuards', 'installLinkPolicy', 'createWorkbook']],
-    ['read', ['installEntryGuards', 'installLinkPolicy', 'installReadOnlyGuard', 'createWorkbook', 'applyWorksheetPoints']],
+    ['edit', ['installEntryGuards', 'installImagePolicy', 'installLinkPolicy', 'createWorkbook']],
+    ['read', ['installEntryGuards', 'installImagePolicy', 'installLinkPolicy', 'installReadOnlyGuard', 'createWorkbook', 'applyWorksheetPoints']],
   ] as const)('%s：在入口守卫之后、创建工作簿之前装上（打开过程中的写入也改写）；销毁时先于入口守卫卸下（入口守卫直到最后才退订）', async (access, beforeReady) => {
     const log: string[] = []
     const facade = steppingFacade(log, 'unit-p3')
     vi.mocked(installEntryGuards).mockImplementationOnce(() => {
       log.push('installEntryGuards')
       return { dispose: () => log.push('disposeEntryGuards') }
+    })
+    vi.mocked(installImagePolicy).mockImplementationOnce(() => {
+      log.push('installImagePolicy')
+      return { dispose: () => log.push('disposeImagePolicy'), prepareLegacyRemoval: () => undefined }
     })
     vi.mocked(installLinkPolicy).mockImplementationOnce(() => {
       log.push('installLinkPolicy')
@@ -355,7 +394,7 @@ describe('链接的改写（M3-P3 设计 §3.6，DEF-021）', () => {
     await reachReady(facade)
     const editor = await creating
     await editor.dispose()
-    expect(log.filter(step => step.startsWith('dispose') && step !== 'dispose')).toEqual(['disposeLinkPolicy', 'disposeEntryGuards'])
+    expect(log.filter(step => step.startsWith('dispose') && step !== 'dispose')).toEqual(['disposeLinkPolicy', 'disposeImagePolicy', 'disposeEntryGuards'])
   })
 })
 

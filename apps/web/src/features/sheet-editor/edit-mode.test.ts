@@ -140,6 +140,7 @@ function fakeFactory() {
       formulasSettled: true,
       editor: {
         unitId: 'unit-1',
+        sheetName: vi.fn(() => undefined),
         formulaMode: options.formulaMode ?? 'worker',
         workerFailure: () => failure,
         onWorkerFailure: (listener) => {
@@ -508,6 +509,27 @@ async function editing(context: ReturnType<typeof setup>): Promise<void> {
 }
 
 describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
+  it('名称查询只交给当前实例，重建后不读旧实例，卸载后返回 undefined', async () => {
+    const h = setup()
+    expect(h.mode.sheetName('s')).toBeUndefined()
+    await opened(h)
+    const first = h.factory.created[0]!.editor
+    vi.mocked(first.sheetName).mockReturnValue('旧表')
+    vi.mocked(first.capture).mockClear()
+    expect(h.mode.sheetName('s')).toBe('旧表')
+    expect(first.capture).not.toHaveBeenCalled()
+    await h.mode.enter()
+    const next = h.factory.created.at(-1)!.editor
+    vi.mocked(next.sheetName).mockReturnValue('新表')
+    vi.mocked(first.sheetName).mockClear()
+    expect(h.mode.sheetName('s')).toBe('新表')
+    expect(first.sheetName).not.toHaveBeenCalled()
+    h.mode.dispose()
+    vi.mocked(next.sheetName).mockClear()
+    expect(h.mode.sheetName('s')).toBeUndefined()
+    expect(next.sheetName).not.toHaveBeenCalled()
+  })
+
   it('打开创建失败只报一次真实修订，之后进入/退出不重复；异常内容不传输', async () => {
     const h = setup()
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create', { cause: new Error('机密正文') }))

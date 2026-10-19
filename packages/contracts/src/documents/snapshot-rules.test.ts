@@ -21,4 +21,38 @@ describe('快照检查的规则标识（SNAPSHOT_INVALID 的 details.rule）', (
       expect(snapshotInvalidDetailsSchema.parse(details), JSON.stringify(details)).toEqual({ rule: undefined })
     expect(snapshotInvalidDetailsSchema.parse({ rule: 'json', extra: true })).toEqual({ rule: 'json' })
   })
+
+  it('图片位置最多五项，仅保留结构标识、坐标和资源索引', () => {
+    const imageLocations = [
+      { kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 },
+      { kind: 'drawing', sheetId: 'sheet-1', drawingId: 'image_1', row: 4, column: 3 },
+      { kind: 'sheet', sheetId: 'sheet-2' },
+      { kind: 'resource', resourceIndex: 7 },
+      { kind: 'workbook' },
+    ]
+    expect(snapshotInvalidDetailsSchema.parse({ rule: 'image-source', imageLocations: imageLocations.map(item => ({ ...item, source: 'private', name: 'secret.png' })) })).toEqual({ rule: 'image-source', imageLocations })
+  })
+
+  it.each([
+    [{ kind: 'future', source: 'private' }],
+    [{ kind: 'cell', sheetId: 'sheet-1', row: -1, column: 0 }],
+    [{ kind: 'cell', sheetId: 'sheet-1', row: 0.5, column: 0 }],
+    [{ kind: 'cell', sheetId: 'sheet-1', row: 2_147_483_648, column: 0 }],
+    [{ kind: 'sheet', sheetId: 'x'.repeat(129) }],
+    [{ kind: 'sheet', sheetId: 'secret/file.png' }],
+    [{ kind: 'sheet', sheetId: '__proto__' }],
+    [{ kind: 'drawing', sheetId: 's', drawingId: 'd', row: 0 }],
+    [{ kind: 'resource', resourceIndex: -1 }],
+    Array.from({ length: 6 }, () => ({ kind: 'workbook' })),
+    'not-an-array',
+  ].map(imageLocations => [imageLocations]))('位置不合法时保留图片规则、回退通用说明：%j', (imageLocations) => {
+    expect(snapshotInvalidDetailsSchema.parse({ rule: 'image-source', imageLocations })).toEqual({ rule: 'image-source', imageLocations: undefined })
+  })
+
+  it('其他规则和未知规则不能携带图片位置', () => {
+    for (const rule of ['link-address', 'future', undefined]) {
+      const result = snapshotInvalidDetailsSchema.parse({ rule, imageLocations: [{ kind: 'workbook' }] })
+      expect(result).not.toHaveProperty('imageLocations')
+    }
+  })
 })

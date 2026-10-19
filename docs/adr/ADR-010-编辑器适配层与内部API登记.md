@@ -135,3 +135,15 @@ DEF-072 在原间隔 500 与最终间隔 20 分别做计时器 off/on 对照，�
 ## M4-P5 最终验收（2026-10-17，P6 补录）
 
 上述实现及 I1 修复已随 main `aad47e8d` 验收，本机默认完整门禁、完整生产容器及同 SHA 六项 CI 原件全部通过，DEF-072 已关闭。有限故障契约、Safari 基线未复现、性能样本范围和未覆盖所有原生输入法的限制不变，详见 [P5 交接单](../v0.1/M4-本地优先与离线恢复/handoffs/P5-交接单.md)。
+
+## M5-P2 S3 的补充：图片来源、命令预演和只读名称
+
+IMAGE 包装通过公开 `BaseFunction.calculateAst` 接收实际 AST；`BaseAstNode` 类型和字面量来源识别只经 Worker 安全的 `internal-api/index.ts` 出口。固定节点种类、首参位置及展开前证明标记集中在 `image-formula-source.ts`，实际 Lexer/Parser/Interpreter、定义名称和缓存回归约束它们。新增 SDK 标记及移除条件见 [ADR-022](ADR-022-图片实例与SDK修复.md)。
+
+图片命令协议、两份 drawing 服务的纯 JSON1 预演、目标工作表/单元格读取、结构操作及整条历史预检集中在 `image-commands`、`image-json`、`image-cells`、`image-structure`，经 `ui.ts` 暴露窄的检查能力。输入清洗与命令订阅留在图片/档案层，不向页面导出服务。登记表同时覆盖这些传递依赖，Worker 出口仍不得触达 UI 包。
+
+普通高层写入在生成历史前归一，底层 mutation 只作接受/拒绝。Undo/Redo 的 Facade 通用事件不会触发，必须订阅专属 BeforeUndo/BeforeRedo，在首条 mutation 前检查整条记录；不能等部分执行之后再拒绝。JSON1 仅允许基础操作及已证明为纯的 text-unicode/number 子类型；TextX 原地修改行为不得进入预演。单元格检查仅访问本次目标、命名样式与图片载体，不为每次键入捕获整份快照。
+
+旧坏图片清理在 `image-cleanup.ts` 内绑定当前 workbook、权限、对象版本和一次性确认票据；取消、过期、失败不改数据或清史。成功后仅清该 workbook 的撤销历史，并要求正式入口明确告知不可撤销。分组坏图不在该清理能力范围内。S3 仅建立能力，不开放清理或图片输入入口。
+
+`SheetEditor.sheetName(id)` 是不捕获、不选区、不写模型的只读名称查询，经 EditMode/EditorPage 使用当前实例；销毁、重建、未知工作表及 SDK 非字符串名称返回 undefined。页面共用图片错误格式化器，用后端有界结构位置和本地名称给出说明，SDK 对象与服务端任意内容均不透出。保存、副本及原日志协议保持。

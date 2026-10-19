@@ -42,7 +42,7 @@
 // 只在阅读时有（与读屏状态区里阅读时的说明一样）：进入编辑一开始就收起（交互屏障之下，可编辑的编辑器按收起之后的高度建出）；编辑时、
 // 失去编辑权之后（显示的是本页的内容）都没有。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
-import type { EditInterruption, SnapshotRule } from '@nerve-office/contracts'
+import type { EditInterruption } from '@nerve-office/contracts'
 import type { ReactNode, RefObject } from 'react'
 import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
@@ -54,7 +54,8 @@ import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, Ed
 import type { LocalSaveIndicator } from './local-save-indicator.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
-import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
+import type { SheetName } from './snapshot-problem.ts'
+import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
@@ -77,6 +78,7 @@ import { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicato
 import { RecoveryNotice } from './recovery/recovery-notice.tsx'
 import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 import { EditorShareEntry } from './share-entry.tsx'
+import { snapshotProblem } from './snapshot-problem.ts'
 
 /**
  * 返回的去处（M2-P2 设计 §3.10，M2-P5 设计 §3.5）：
@@ -103,14 +105,8 @@ function isSessionProblem(problem: SaveProblem): boolean {
   return problem.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))
 }
 
-/** SNAPSHOT_INVALID 的详情里违反的规则（宽松解析，认不出时为 undefined：照"格式不正确"说） */
-function snapshotRuleOf(error: ApiError): SnapshotRule | undefined {
-  const details = snapshotInvalidDetailsSchema.safeParse(error.details ?? {})
-  return details.success ? details.data.rule : undefined
-}
-
 /** sessionProblem：最近一次确认会话失败的原因 */
-function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: string, requestId?: string, destructive: boolean } {
+function problemMessage(problem: SaveProblem, sessionProblem: unknown, sheetName: SheetName): { text: string, requestId?: string, destructive: boolean } {
   if (problem.kind === 'cell-editing')
     return { text: editorMessages.finishCellEditing, destructive: false }
   if (problem.kind === 'too-large' || (problem.error instanceof ApiError && problem.error.code === 'PAYLOAD_TOO_LARGE'))
@@ -125,7 +121,7 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown): { text: 
   }
   // 快照被服务端拒绝（M3-P3）：按违反的规则说（链接、图片、资源、过于复杂……），不认识的规则照"格式不正确"说
   if (problem.error instanceof ApiError && problem.error.code === 'SNAPSHOT_INVALID')
-    return { text: editorMessages.saveFailed(editorMessages.snapshotInvalid(snapshotRuleOf(problem.error))), requestId: problem.error.requestId, destructive: true }
+    return { text: editorMessages.saveFailed(snapshotProblem(problem.error.details, sheetName)), requestId: problem.error.requestId, destructive: true }
   // 400（请求不合法）是这次请求本身的问题，按错误码说明（M2-P6 复核第二批 G-5）
   const error = describeError(problem.error)
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
@@ -555,7 +551,7 @@ function capacityNote(save: SaveView | undefined): string | undefined {
   return editorMessages.nearCapacity(Math.floor((bytes / SNAPSHOT_MAX_RAW_BYTES) * 100))
 }
 
-function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: SaveView, onReload: () => void }) {
+function SaveNotices({ view, save, onReload, sheetName }: { view: EditorPageView, save: SaveView, onReload: () => void, sheetName: SheetName }) {
   const { session } = view
   const notices: ReactNode[] = []
   const block = editingBlock(save)
@@ -574,7 +570,7 @@ function SaveNotices({ view, save, onReload }: { view: EditorPageView, save: Sav
     )
   }
   if (save.problem !== undefined && !(isSessionProblem(save.problem) && (session !== 'active' || view.confirmingSession))) {
-    const problem = problemMessage(save.problem, view.sessionProblem)
+    const problem = problemMessage(save.problem, view.sessionProblem, sheetName)
     notices.push(
       <Alert key="problem" variant={problem.destructive ? 'destructive' : 'default'}>
         <AlertDescription>
@@ -640,10 +636,10 @@ function CopiedNote({ title, documentId }: { title: string, documentId: string }
  * 副本被拒、再试也一样时的说明（M3-P3 审查 B3）：本页过旧时说先把内容复制出来、再重新加载页面；内容不能保存时按违反的规则
  * （或超过容量）说，与编辑时保存被拒同一套说法，不说"可以再试"
  */
-function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>): string {
+function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>, sheetName: SheetName): string {
   if (refused.refusal === 'outdated')
     return editorMessages.lost.copyOutdated
-  const problem = refused.error.code === 'PAYLOAD_TOO_LARGE' ? editorMessages.capacityExceeded : editorMessages.snapshotInvalid(snapshotRuleOf(refused.error))
+  const problem = refused.error.code === 'PAYLOAD_TOO_LARGE' ? editorMessages.capacityExceeded : snapshotProblem(refused.error.details, sheetName)
   return editorMessages.lost.copyRefused(problem)
 }
 
@@ -686,7 +682,7 @@ function LostNotice({ available, page, lost, personal, onDiscard, fallbackFocus 
         {reopenFailed && <p>{editorMessages.lost.reopenFailed(copyable)}</p>}
         {checking && <p>{editorMessages.lost.checking}</p>}
         {copy.kind === 'failed' && <p>{editorMessages.lost.copyFailed(describeError(copy.error).message)}</p>}
-        {refused !== undefined && <p>{copyRefusalMessage(refused)}</p>}
+        {refused !== undefined && <p>{copyRefusalMessage(refused, page.sheetName)}</p>}
         {copied !== undefined && <p><CopiedNote title={copied.title} documentId={copied.id} /></p>}
         {reload.kind === 'loading' && <p>{editorMessages.lost.reloading}</p>}
         {reload.kind === 'failed' && <p>{editorMessages.lost.reloadFailed(describeError(reload.error).message)}</p>}
@@ -1261,7 +1257,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
               读不到了（404）之后没有要做的事，不提登录 */}
           {editing?.conflict === undefined && !(lost !== undefined && !lost.readable) && <SessionNotice view={view} editing={editing !== undefined} />}
-          {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} />}
+          {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} sheetName={page.sheetName} />}
         </div>
       </div>
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} unavailable={confirmationUnavailable} />

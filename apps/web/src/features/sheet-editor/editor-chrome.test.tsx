@@ -62,6 +62,7 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
+    sheetName: vi.fn(() => undefined),
     retryFormulaRecovery: vi.fn(),
     retryRecovery: vi.fn(async () => {}),
     copyRecovery: vi.fn(async () => {}),
@@ -105,6 +106,20 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
 }
 
 describe('图片的可见失败状态', () => {
+  it.each(['save', 'copy'] as const)('%s 的真实提示共用图片定位，工作表名称只作为文本显示', (action) => {
+    const error = new ApiError(422, 'SNAPSHOT_INVALID', 'x', { details: { rule: 'image-source', imageLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1, source: 'private' }] } })
+    const h = fakePage(action === 'save'
+      ? { save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } }
+      : { mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'content', error } }), save: undefined })
+    vi.mocked(h.page.sheetName).mockReturnValue('<img src=x>预算')
+    render(<EditorChrome page={h.page} apple={false} />)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('表格里有不能保存的图片。请检查：工作表「<img src=x>预算」的 B3')
+    expect(alert.querySelector('img')).toBeNull()
+    expect(alert).not.toHaveTextContent('private')
+    expect(h.page.sheetName).toHaveBeenCalledWith('s')
+  })
+
   it('显示不含来源的说明，通过既有详情复核重试；不影响正文保存按钮', () => {
     const h = fakePage({ imageProblem: true, save: DIRTY })
     render(<EditorChrome page={h.page} apple={false} />)

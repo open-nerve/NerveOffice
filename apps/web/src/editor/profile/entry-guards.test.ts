@@ -35,6 +35,9 @@ describe('M5 之前的入口：命令守卫', () => {
       'sheet.command.insert-cell-image',
       'sheet.command.insert-sheet-image',
       'sheet.command.add-worksheet-background-image',
+      'sheet.command.set-worksheet-background-image',
+      'sheet.mutation.set-worksheet-background-image',
+      'doc.command.insert-doc-image',
     ])
   })
 

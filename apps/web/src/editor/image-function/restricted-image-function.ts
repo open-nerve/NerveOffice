@@ -1,11 +1,10 @@
 // IMAGE() 的 restricted 包装（插件档案 v1 §6.2，计划书 §11.3，P4 设计 §3.6.7）：
-// 第一个参数是平台资源地址（字符串）才交给原执行器，否则返回 #VALUE!，不产生请求。
-// 引用在计算时已经变成数组（engine-formula 的 function-node.ts:166-168），数组不是字符串，所以单元格引用、区域与数组常量都被拒绝；
-// 拼接出来的字符串在这里与字面量分不开，要到 M5 有了资源服务再定。原执行器不读实例上的状态，直接转交即可
-import type { BaseValueObject } from '../internal-api/index.ts'
-import { BaseFunction, ErrorType, ErrorValueObject } from '../internal-api/index.ts'
+// M5-P2-S3：名称在 AST 之前就已展开，必须同时验证展开前的词法证明、当前 AST 和求值字符串。
+// 原执行器不读实例上的状态；其余参数继续通过 SDK 的 getVariant 求值/转换后转交。
+import { BaseFunction, BaseValueObject, ErrorType, ErrorValueObject, imageLiteralSource } from '../internal-api/index.ts'
 
 export class RestrictedImageFunction extends BaseFunction {
+  override needsAstChildren = true
   private readonly original: BaseFunction
   private readonly isAllowedSource: (source: string) => boolean
 
@@ -18,9 +17,29 @@ export class RestrictedImageFunction extends BaseFunction {
     this.maxParams = original.maxParams
   }
 
-  override calculate(source: BaseValueObject, ...rest: BaseValueObject[]): ReturnType<BaseFunction['calculate']> {
-    if (!source.isString() || !this.isAllowedSource(String(source.getValue())))
+  override calculate(..._args: BaseValueObject[]): ReturnType<BaseFunction['calculate']> {
+    // 无语法来源的直接调用不能放行，即使值恰好等于平台地址。
+    return ErrorValueObject.create(ErrorType.VALUE)
+  }
+
+  override calculateAst(...[children, getVariant]: Parameters<BaseFunction['calculateAst']>): ReturnType<BaseFunction['calculateAst']> {
+    const first = children[0]
+    const literal = first && imageLiteralSource(first)
+    if (literal === undefined || !this.isAllowedSource(literal) || !first)
       return ErrorValueObject.create(ErrorType.VALUE)
+    const source = getVariant(first)
+    if (!(source instanceof BaseValueObject) || !source.isString() || source.getValue() !== literal)
+      return ErrorValueObject.create(ErrorType.VALUE)
+    const rest: BaseValueObject[] = []
+    for (const child of children.slice(1)) {
+      const value = getVariant(child)
+      // 与 SDK 原 _collectVariants 一样跳过 null；实际缺省参数是 NullValueObject。
+      if (value == null)
+        continue
+      if (!(value instanceof BaseValueObject))
+        return ErrorValueObject.create(ErrorType.VALUE)
+      rest.push(value)
+    }
     return this.original.calculate(source, ...rest)
   }
 }

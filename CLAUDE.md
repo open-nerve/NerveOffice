@@ -80,6 +80,8 @@
 
 全仓库类型感知 lint 会在同一进程保留多个 TypeScript 工程。M5-P1 实测已超过 Node 默认约 4 GiB 旧生代上限；`pnpm lint` 为 ESLint 单独设置 6 GiB 上限，`lint:fix` 复用该入口。开发机和 CI 运行 lint 时须预留相应内存；所有规则、文件范围与零告警要求保持。生产服务及图片子进程仍使用各自既定预算，禁止为此设置全局 `NODE_OPTIONS`。
 
+`pnpm patch` 的解包编辑目录及生成的验证材料放在主目录 `.codex/handoffs/` 的任务目录中，不放入开发 worktree 的扫描树。嵌套 `.gitignore` 排除文件不代表 ESLint 也会排除：M5-P2-S3 曾误扫 `.superpowers/sdd` 的 SDK 副本而耗尽 6 GiB；逐文件核对后迁移原件，原始 lint 即通过，无需改规则或检查命令。迁移时保留原路径、摘要与 pnpm 编辑会话映射；之后重新启动外部 patch 编辑目录，不建立旧路径回指。
+
 | 命令 | 作用 |
 |---|---|
 | `pnpm install` | 安装依赖，同时安装 git 钩子 |

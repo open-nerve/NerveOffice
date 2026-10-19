@@ -650,7 +650,7 @@ describe('DocumentContentService.save：处理的顺序（M3-P3 设计 §3.1）�
     expect(await service.save(saver(ALICE), document.id, request, body, HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: false })
     expect(store.inspector.inspect).not.toHaveBeenCalled()
     // 不是重放（新的 requestId）：按现在的规则被拒
-    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ baseRevision: 2 }), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'resource', resourceIndex: 0 }] })
   })
 
   it('回执的重放同样先于一切检查：内容相同的那次确认结果未知，之后升级了（旧页面不带构建与数据格式）、规则也收紧了，原样重发拿到原来的确认（unchanged），不被拦成过旧、不检查快照、不开事务', async () => {
@@ -669,7 +669,7 @@ describe('DocumentContentService.save：处理的顺序（M3-P3 设计 §3.1）�
     expect(await service.save(saver(ALICE), document.id, { ...query(), requestId: request.requestId }, body, HTTP_ORIGIN)).toMatchObject({ revision: 1, unchanged: true })
     expect(store.inspector.inspect).not.toHaveBeenCalled()
     expect((await rejection(service.save(saver(ALICE), document.id, oldPageQuery(), body, HTTP_ORIGIN))).details).toEqual({ reason: 'format' })
-    expect((await rejection(service.save(saver(ALICE), document.id, query(), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
+    expect((await rejection(service.save(saver(ALICE), document.id, query(), body, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'resource', resourceIndex: 0 }] })
   })
 
   it('预检不提前回答：requestId 用过却不是这一次（别人的、另一份文档的、内容不同的）、看不到了，都往下走——由事务里的再查给出 REQUEST_ID_CONFLICT 或 NOT_FOUND', async () => {

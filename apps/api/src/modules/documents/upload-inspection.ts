@@ -2,7 +2,7 @@
 // 不合格时记一条 warn——规则与文档 id，不记快照的内容——再回答 SNAPSHOT_INVALID（details.rule）；与文档有关的两条（unitId、不缩水）
 // 在事务里查，被拒时同样记 warn。快照的档案用服务端的（DOCUMENT_PROFILE_OF.sheet）：v0.1 只有表格，事务里另核对文档的档案
 // （client-format-gate.ts 的 requireWritableDocument；M6 有了文字文档之后按文档的类型选档案）
-import type { SnapshotRule } from '@nerve-office/contracts'
+import type { SnapshotImageLocation, SnapshotRule } from '@nerve-office/contracts'
 import type { AppError } from '../../shared/errors/app-error.ts'
 import type { AppLogger } from '../logging/index.ts'
 import type { GzipBody } from '../security/index.ts'
@@ -17,9 +17,9 @@ export const INSPECTED_PROFILE = DOCUMENT_PROFILE_OF.sheet
 export type PassedSnapshot = Extract<InspectionOutcome, { readonly ok: true }>
 
 /** 快照被拒：记一条 warn（规则、文档 id 与调用方给的少量事实，不记内容），给出 SNAPSHOT_INVALID 的错误 */
-export function rejectedSnapshot(logger: AppLogger, rule: SnapshotRule, documentId: string, fields: Record<string, unknown> = {}): AppError {
+export function rejectedSnapshot(logger: AppLogger, rule: SnapshotRule, documentId: string, fields: Record<string, unknown> = {}, imageLocations?: readonly SnapshotImageLocation[]): AppError {
   logger.warn('快照不合格，拒绝写入', { rule, documentId, ...fields })
-  return snapshotInvalid(rule)
+  return snapshotInvalid(rule, imageLocations)
 }
 
 /**
@@ -30,6 +30,6 @@ export function rejectedSnapshot(logger: AppLogger, rule: SnapshotRule, document
 export async function requirePassingSnapshot(inspector: SnapshotInspector, logger: AppLogger, upload: GzipBody, documentId: string, requesterId: string): Promise<PassedSnapshot> {
   const outcome = await inspector.inspect(upload.decompressed, INSPECTED_PROFILE, requesterId)
   if (!outcome.ok)
-    throw rejectedSnapshot(logger, outcome.rule, documentId, { rawBytes: upload.decompressed.length })
+    throw rejectedSnapshot(logger, outcome.rule, documentId, { rawBytes: upload.decompressed.length }, outcome.imageLocations)
   return outcome
 }

@@ -77,9 +77,9 @@
       "entry": "lib/es/index.js",
       "originalEsSha256": "482ed271dab6bde049240db5580615e88c3a94b1fdd586bf539d4a297a5a2fce",
       "originalCjsSha256": "7b4fb05d4d0ce54714f58c8e2e2aa9f1ed820a846ce83824690a17634da7fd46",
-      "patchedEsSha256": "dada5a889b5e8bf0c595bf29aec35abc8cbd27aa2a5452871957f71268cf384f",
+      "patchedEsSha256": "364ad35cf0eb36ed7a3bc48f6a6c9a6f82adddebbd2a43ef15a13f07cb434e01",
       "patch": "patches/@univerjs__engine-formula@1.0.1.patch",
-      "patchSha256": "f9ae56447896a347b1dd2c5023205b481611b933bb1269f56532f2d67593d189"
+      "patchSha256": "b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571"
     }
   ]
 }

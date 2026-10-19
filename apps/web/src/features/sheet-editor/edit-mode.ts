@@ -511,6 +511,7 @@ export type OpenOutcome
 
 export interface EditMode {
   readonly view: () => EditModeView
+  readonly sheetName: SheetEditor['sheetName']
   readonly subscribe: (listener: () => void) => () => void
   readonly retryFormulaRecovery: () => void
   /**
@@ -2115,6 +2116,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   return {
     view: () => current,
+    sheetName: sheetId => disposed ? undefined : slot.editor()?.sheetName(sheetId),
     retryFormulaRecovery: () => formulaRecovery?.retry(),
     subscribe: (listener) => {
       listeners.add(listener)

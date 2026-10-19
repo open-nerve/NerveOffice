@@ -5,7 +5,9 @@
 // 嵌套与数量在解析之前按文字数（measureJsonText）：JSON.parse 本身不限层数，5 MiB 的 [[[…]]] 解析时 V8 的堆上约 150 MiB、
 // 堆外再约 300 MiB（DEF-018 的测量），超过上限的文字根本不交给它。之后的遍历一律迭代
 import type { CellLinkRule, DocumentProfile, RuleCheck } from '@nerve-office/contracts'
-import { checkCellLinks, isPlatformAssetAddress, SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
+import { checkCellLinks, SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
+
+export { hasForeignImage } from './snapshot-image-locations.ts'
 
 /**
  * 元素数量的上限（对象的键加数组的项，外层与资源 data 里的 JSON 合计）：只挡最极端的形状。真实形状的 5 MiB 快照约 61 万个
@@ -101,74 +103,30 @@ export function measureJsonText(text: string, depth: number, count: EntryCount):
  * 与外层累加），没超出才解析；解析不了的不算在里面——资源的规则会拒绝它（resource-data），规范化也只解析能解析的。
  * 超出时给出规则，否则给出解析出的各个值
  */
-export function embeddedJson(snapshot: unknown, count: EntryCount): JsonLimitRule | readonly unknown[] {
-  const values: unknown[] = []
+export interface EmbeddedJson {
+  readonly resourceIndex: number
+  readonly value: unknown
+}
+
+export function embeddedJson(snapshot: unknown, count: EntryCount): JsonLimitRule | readonly EmbeddedJson[] {
+  const values: EmbeddedJson[] = []
   const resources = isJsonObject(snapshot) ? snapshot.resources : undefined
   if (!Array.isArray(resources))
     return values
-  for (const entry of resources as readonly unknown[]) {
+  for (const [resourceIndex, entry] of (resources as readonly unknown[]).entries()) {
     if (!isJsonObject(entry) || typeof entry.data !== 'string' || entry.data === '')
       continue
     const limit = measureJsonText(entry.data, RESOURCE_DATA_DEPTH, count)
     if (limit !== undefined)
       return limit
     try {
-      values.push(JSON.parse(entry.data) as unknown)
+      values.push({ resourceIndex, value: JSON.parse(entry.data) as unknown })
     }
     catch {
       // 不是 JSON：留给资源的规则
     }
   }
   return values
-}
-
-/** 图片地址的规则（00 号计划书 §11.2）：名为 source 的字段只能是相对的平台图片地址（本站的绝对写法也不接受，M5 的粘贴清洗会改写） */
-function isPlatformImage(value: unknown): boolean {
-  return typeof value === 'string' && isPlatformAssetAddress(value, '')
-}
-
-/** 遍历的一层：一个对象（keys 是它的键）或一个数组（keys 为 undefined），接下来看第 index 项 */
-interface Level {
-  readonly node: object
-  readonly keys: readonly string[] | undefined
-  readonly length: number
-  index: number
-}
-
-/**
- * 图片地址出现在哪里：任何深度上名为 source 的字段（单元格图片的 p.drawings、浮动图片的资源、工作表背景……都在其中），
- * 在快照本身与资源 data 解析出的每个值里找。有一个不是平台的图片地址就是 true。
- * 深度优先、迭代地走（栈的深度就是嵌套的层数，解析之前已经限制在 SNAPSHOT_MAX_DEPTH 之内）
- */
-export function hasForeignImage(roots: readonly unknown[]): boolean {
-  const stack: Level[] = []
-  const enter = (value: unknown): void => {
-    if (typeof value !== 'object' || value === null)
-      return
-    const keys = Array.isArray(value) ? undefined : Object.keys(value)
-    stack.push({ node: value, keys, length: keys === undefined ? (value as readonly unknown[]).length : keys.length, index: 0 })
-  }
-  for (const root of roots) {
-    enter(root)
-    for (let level = stack.at(-1); level !== undefined; level = stack.at(-1)) {
-      if (level.index >= level.length) {
-        stack.pop()
-        continue
-      }
-      const index = level.index
-      level.index += 1
-      if (level.keys === undefined) {
-        enter((level.node as readonly unknown[])[index])
-        continue
-      }
-      const key = level.keys[index] as string
-      const child = (level.node as Record<string, unknown>)[key]
-      if (key === 'source' && !isPlatformImage(child))
-        return true
-      enter(child)
-    }
-  }
-  return false
 }
 
 /** 结构通过之后的快照：unitId，与链接扫描要走的部分 */

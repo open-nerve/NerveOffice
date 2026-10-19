@@ -64,6 +64,7 @@ import { closeImagePreview, invalidateImageRendering } from './internal-api/ui.t
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { watchPanelDebounces } from './panel-debounce-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
+import { installImagePolicy } from './profile/image-policy.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { SHEET_ZH_CN } from './profile/locale.ts'
 import { checkCreated, recheckReady } from './profile/open-check.ts'
@@ -80,6 +81,8 @@ import './profile/styles.ts'
 
 export interface SheetEditor {
   readonly unitId: string
+  /** 只读名称查询，不捕获快照、不切表；未知表或销毁期间返回 undefined。 */
+  readonly sheetName: (sheetId: string) => string | undefined
   /** 本实例在哪里计算；运行中不能原地切换，页面须按原权限重建。 */
   readonly formulaMode: FormulaMode
   /** 本实例 Worker 的首个故障；主线程模式一直为 undefined。订阅后读取，补齐接线前的窗口。 */
@@ -372,6 +375,13 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
   const guards = installEntryGuards(univerAPI)
   cleanup.defer(() => guards.dispose())
+  // 图片先整批验证，再允许后续链接改写；任何拒绝都发生在 SDK 生成撤销或写模型之前。
+  const imageOwner = options.imageAccess?.owner ?? options.imageAccess?.current()?.user.id
+  const imageWrites = installImagePolicy(univer, univerAPI, options.onImageFailure ?? (error => reportError(error)), {
+    unitId: snapshot.unitId,
+    canEdit: () => access === 'edit' && imageOwner !== undefined && options.imageAccess?.current()?.user.id === imageOwner,
+  })
+  cleanup.defer(() => imageWrites.dispose())
   // 链接的改写（profile/link-policy.ts，M3-P3 设计 §3.6，DEF-021）：阅读与编辑都装，订阅在入口守卫之后，不改变上面的不变量
   // （入口守卫仍是第一个订阅者、直到销毁才退订；改写器随编辑器销毁，先于入口守卫退订）。在创建工作簿之前装上：
   // 打开过程中的写入（公式的初次计算写回的 HYPERLINK() 结果）同样经过它。它与只读的防火墙互不影响：Facade 先调完全部订阅者再看取消
@@ -499,6 +509,17 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
 
   return {
     unitId: snapshot.unitId,
+    sheetName(sheetId) {
+      if (disposed)
+        return undefined
+      try {
+        const name: unknown = workbook.getSheetBySheetId(sheetId)?.getSheetName()
+        return typeof name === 'string' ? name : undefined
+      }
+      catch {
+        return undefined
+      }
+    },
     formulaMode,
     workerFailure: formula.failure,
     onWorkerFailure: formula.onFailure,

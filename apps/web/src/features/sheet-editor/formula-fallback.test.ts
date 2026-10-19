@@ -12,6 +12,7 @@ vi.hoisted(() => {
 
 function setup() {
   const created: SheetEditor = {
+    sheetName: () => undefined,
     ...editorFixture().editor,
     unitId: 'unit-1',
     formulaMode: 'main-thread',

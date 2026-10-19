@@ -202,6 +202,7 @@ export interface EditorPageOptions {
 }
 
 export interface EditorPage {
+  readonly sheetName: EditMode['sheetName']
   readonly retryFormulaRecovery: () => void
   readonly retryRecovery: () => Promise<void>
   readonly copyRecovery: () => Promise<void>
@@ -858,6 +859,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   return {
     retryRecovery: async () => recoveryAction(async current => current.discover()),
+    sheetName: sheetId => disposed || session !== 'active' ? undefined : mode?.sheetName(sheetId),
     copyRecovery: async () => recoveryAction(async current => current.copy()),
     beginDiscardRecovery: () => confirmedForWrite() && (mode === undefined || mode.view().mode.kind === 'reading') ? recovery?.beginDiscard() : undefined,
     discardRecovery: async intent => recoveryAction(async current => current.discard(intent)),

@@ -17,6 +17,9 @@ export const IMAGE_GUARDED_COMMANDS: readonly GuardedCommand[] = [
   { id: 'sheet.command.insert-cell-image', source: 'sheets-drawing-ui/src/commands/commands/insert-image.command.ts:55（插入单元格图片）' },
   { id: 'sheet.command.insert-sheet-image', source: 'sheets-drawing/src/commands/commands/insert-sheet-drawing.command.ts:37（底层的插入浮动图片，上面两条之外的调用方也经过它）' },
   { id: 'sheet.command.add-worksheet-background-image', source: 'sheets-drawing-ui/src/commands/commands/worksheet-background-image.command.ts:28（工作表背景图片：菜单已隐藏，同样写入图片数据）' },
+  { id: 'sheet.command.set-worksheet-background-image', source: 'sheets-drawing 1.0.1 lib/es/index.js:699（背景图片的底层命令；M5-P2 仍不支持背景图片）' },
+  { id: 'sheet.mutation.set-worksheet-background-image', source: 'sheets-drawing 1.0.1 lib/es/index.js:684（直接写工作表背景；不能绕过关闭的入口）' },
+  { id: 'doc.command.insert-doc-image', source: 'docs-drawing 1.0.1 lib/es/index.js:9（向编辑栏内部文档插入图片，直接使用 RichTextEditingMutation；M5-P2 仍不支持此路径）' },
 ]
 
 /**

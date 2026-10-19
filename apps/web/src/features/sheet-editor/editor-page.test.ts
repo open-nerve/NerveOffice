@@ -178,6 +178,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered', formulaMode: Formu
   const compositions = new Set<() => void>()
   const editor: SheetEditor = {
     unitId: 'unit-1',
+    sheetName: vi.fn(() => undefined),
     formulaMode,
     workerFailure: () => failure,
     onWorkerFailure: (listener) => {
@@ -1150,6 +1151,20 @@ function deferred<T>() {
 const UNAUTHENTICATED = new ApiError(401, 'UNAUTHENTICATED', '请先登录')
 
 describe('页面、模式与编辑会话共用连接事实', () => {
+  it('页面只读当前实例名称，载入前与卸载后无名称，不触发捕获', async () => {
+    const h = setup()
+    expect(h.editorPage.sheetName('s')).toBeUndefined()
+    await h.editorPage.load()
+    vi.mocked(h.fake.editor.sheetName).mockReturnValue('预算')
+    const capture = vi.spyOn(h.fake.editor, 'capture')
+    expect(h.editorPage.sheetName('s')).toBe('预算')
+    expect(capture).not.toHaveBeenCalled()
+    h.editorPage.dispose()
+    vi.mocked(h.fake.editor.sheetName).mockClear()
+    expect(h.editorPage.sheetName('s')).toBeUndefined()
+    expect(h.fake.editor.sheetName).not.toHaveBeenCalled()
+  })
+
   it('页头读取同一来源的本机元数据，后续编辑立即撤销旧捕获的完整覆盖', async () => {
     const t = setup()
     await t.editorPage.load()

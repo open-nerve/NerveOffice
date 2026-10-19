@@ -11,14 +11,14 @@
 // 子进程的入口按这个文件自己的扩展名找：源码运行（单元测试、集成测试按源码条件引用 api）时是 snapshot-inspection.child.ts，
 // 由 Node 直接剥离类型执行，contracts 也按源码条件解析；构建产物与镜像里是同一个目录下的 .js。找不到入口时建不起来（启动即失败），
 // 不退回主进程
-import type { DocumentProfile, SnapshotRule } from '@nerve-office/contracts'
+import type { DocumentProfile, SnapshotImageLocation, SnapshotRule } from '@nerve-office/contracts'
 import type { OnApplicationShutdown } from '@nestjs/common'
 import type { AppConfig } from '../config/index.ts'
 import type { AppLogger } from '../logging/index.ts'
 import type { InspectionTask, PassedSnapshot, SnapshotInspection } from './snapshot-inspection.ts'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
+import { SNAPSHOT_MAX_DEPTH, snapshotInvalidDetailsSchema } from '@nerve-office/contracts'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { KeyedQuota } from '../../shared/keyed-quota.ts'
 import { ProcessPool, ProcessPoolError } from '../../shared/process-pool.ts'
@@ -44,7 +44,7 @@ export const IDLE_PROCESS_TIMEOUT_MS = 60_000
 export const INSPECTIONS_PER_ACCOUNT = 2
 
 /** 检查的结果：通过，或者违反的规则（与文档无关的，加上 too-complex） */
-export type InspectionOutcome = PassedSnapshot | { readonly ok: false, readonly rule: Exclude<SnapshotRule, 'unit-id' | 'resource-missing'> }
+export type InspectionOutcome = PassedSnapshot | { readonly ok: false, readonly rule: Exclude<SnapshotRule, 'unit-id' | 'resource-missing'>, readonly imageLocations?: readonly SnapshotImageLocation[] }
 
 /** 子进程的入口与它的 Node 选项：与这个文件同一个目录、同一个扩展名 */
 export interface InspectionChildEntry {
@@ -91,8 +91,9 @@ const SNAPSHOT_INVALID_MESSAGES: Readonly<Record<SnapshotRule, string>> = {
  * SNAPSHOT_INVALID 的错误：details.rule 是规则的标识（contracts 的 snapshotInvalidDetailsSchema），说明是这条规则的默认说法。
  * 不回显快照的内容（M3-P3 设计 §3.12）；页面按规则给出自己的说法
  */
-export function snapshotInvalid(rule: SnapshotRule): AppError {
-  return new AppError('SNAPSHOT_INVALID', SNAPSHOT_INVALID_MESSAGES[rule], { details: { rule } })
+export function snapshotInvalid(rule: SnapshotRule, imageLocations?: readonly SnapshotImageLocation[]): AppError {
+  const details = snapshotInvalidDetailsSchema.parse({ rule, ...(imageLocations === undefined ? {} : { imageLocations }) })
+  return new AppError('SNAPSHOT_INVALID', SNAPSHOT_INVALID_MESSAGES[rule], { details })
 }
 
 /** 快照的检查：在子进程池里执行（见文件开头）。由 DocumentsModule 按配置建（工厂），退出时关闭 */

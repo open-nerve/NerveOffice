@@ -124,6 +124,7 @@ const UNIVER_INTERNAL_SYMBOLS = [
   {
     name: '@univerjs/engine-formula',
     importNames: [
+      'BaseAstNode',
       'BaseFunction',
       'BaseValueObject',
       'ErrorType',

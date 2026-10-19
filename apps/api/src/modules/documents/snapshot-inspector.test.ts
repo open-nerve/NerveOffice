@@ -13,6 +13,7 @@ import { AppLogger, createRootLogger, RequestContextStore } from '../logging/ind
 import { SNAPSHOT_MAX_ENTRIES } from './snapshot-checks.ts'
 import { inspectSnapshot } from './snapshot-inspection.ts'
 import { inspectionChildEntry, INSPECTIONS_PER_ACCOUNT, SnapshotInspector, snapshotInvalid } from './snapshot-inspector.ts'
+import { requirePassingSnapshot } from './upload-inspection.ts'
 
 const UNIT_ID = '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d'
 /** 发起检查的账户（检查池按账户限份数，审查 A2） */
@@ -36,7 +37,7 @@ function setup(settings: Partial<SnapshotInspectionSettings> = {}, entry = inspe
   const logger = new AppLogger(createRootLogger({ level: 'silent' }), new RequestContextStore())
   const inspector = new SnapshotInspector({ ...SETTINGS, ...settings }, logger, entry)
   inspectors.push(inspector)
-  return { inspector, warn, error }
+  return { inspector, logger, warn, error }
 }
 
 afterEach(async () => {
@@ -71,6 +72,18 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('SnapshotInspector：在子进程里检查（源码运行：入口是 .ts，按源码条件解析 contracts）', SPAWNING, () => {
+  it('图片位置经真实 IPC 与上传拒绝回传，日志只记规则、文档 id 和字节数', async () => {
+    const { inspector, logger, warn } = setup()
+    const secret = 'https://private.example/private-file.png'
+    const raw = Buffer.from(JSON.stringify({ ...JSON.parse(sheetSnapshotFor(UNIT_ID)) as object, sheets: { 'sheet-1': { cellData: { 2: { 1: { p: { source: secret } } } } } } }))
+    const imageLocations = [{ kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 }]
+    expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'image-source', imageLocations })
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY))
+    expect(error.details).toEqual({ rule: 'image-source', imageLocations })
+    expect(JSON.stringify(error)).not.toContain(secret)
+    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'image-source', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
+  })
+
   it('接近5MiB且十万个不同图片地址：真实子进程完整提取并通过IPC返回，不受SQL参数数量限制', async () => {
     const { inspector } = setup({ processes: 1 })
     const ids = Array.from({ length: 100_000 }, (_, index) => `0199a2c4-0000-7000-8000-${index.toString(16).padStart(12, '0')}`)
@@ -266,6 +279,13 @@ describe('同一个账户在检查池里的份数（审查 A2）', SPAWNING, () 
 })
 
 describe('SNAPSHOT_INVALID 的错误（snapshotInvalid）', () => {
+  it('只为图片规则附带有限位置，额外内容丢弃，畸形位置回退', () => {
+    const locations = [{ kind: 'workbook', source: 'private' }] as const
+    expect(snapshotInvalid('image-source', locations).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'workbook' }] })
+    expect(snapshotInvalid('link-address', locations).details).toEqual({ rule: 'link-address' })
+    expect(snapshotInvalid('image-source', Array.from({ length: 6 }, () => ({ kind: 'workbook' as const }))).details).toEqual({ rule: 'image-source' })
+  })
+
   it.each(SNAPSHOT_RULES)('%s：422，details 是规则（契约能解析），说明不空', (rule) => {
     const error = snapshotInvalid(rule)
     expect(error.code).toBe('SNAPSHOT_INVALID')

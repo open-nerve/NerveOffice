@@ -324,6 +324,14 @@ export const editorMessages = {
   nearCapacity: (percent: number) => `这份表格已用去容量上限（5 MiB）的 ${percent}%，再加内容可能就保存不了了`,
   /** 快照被服务端拒绝（SNAPSHOT_INVALID）：按违反的规则说（不认识的规则照"格式不正确"说） */
   snapshotInvalid: (rule: SnapshotRule | undefined) => rule === undefined ? '表格内容的格式不正确' : SNAPSHOT_RULE_PHRASES[rule],
+  imageLocations: (reason: string, positions: string) => `${reason}。请检查：${positions}`,
+  imageLocation: {
+    sheet: (name: string | undefined) => name === undefined ? '某个工作表' : `工作表「${name}」`,
+    cell: (sheet: string, address: string) => `${sheet}的 ${address}`,
+    drawing: (sheet: string, address: string | undefined) => address === undefined ? `${sheet}的浮动图片` : `${sheet}的 ${address} 附近的浮动图片`,
+    resource: '表格附加内容',
+    workbook: '工作簿中的其他位置',
+  },
   /**
    * 编辑权（M3-P1 设计 §3.4.7、M3-P2 设计 §3.4）：别处正在编辑时说明是谁；失效时说明原因，读得到时给另存为副本、放弃或重新加载。
    * 编辑权中断（到期、空闲回收、换了登录、被接手等）先自动续上，续上了就不说明；这里的失效是续不上、或者失去了访问或编辑权

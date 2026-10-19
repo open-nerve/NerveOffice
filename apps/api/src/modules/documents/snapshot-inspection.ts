@@ -6,12 +6,13 @@
 // resource-not-empty）→ image-source → 链接（link-structure、link-address、link-range-id）。
 // 嵌套与数量在每次解析之前按文字数，没超出才交给 JSON.parse；全部通过之后才规范化（规范化与资源的规则会再解析资源的 data，
 // 那时已经数过）。与文档有关的两条（unit-id、resource-missing）在保存的事务里；too-complex（子进程的堆超过上限）由 SnapshotInspector 给出
-import type { DocumentProfile, SnapshotRule } from '@nerve-office/contracts'
+import type { DocumentProfile, SnapshotImageLocation, SnapshotRule } from '@nerve-office/contracts'
 import type { EntryCount } from './snapshot-checks.ts'
 import { createHash } from 'node:crypto'
 import { canonicalContentTextOf, checkResources, contentHashInput } from '@nerve-office/contracts'
 import { snapshotAssetIds } from './snapshot-assets.ts'
-import { embeddedJson, hasForeignImage, measureJsonText, PROFILE_SNAPSHOT_RULES } from './snapshot-checks.ts'
+import { embeddedJson, measureJsonText, PROFILE_SNAPSHOT_RULES } from './snapshot-checks.ts'
+import { snapshotImageLocations } from './snapshot-image-locations.ts'
 
 /** 只看快照本身就能判断的规则：不含要读文档的 unit-id、resource-missing，与子进程池给出的 too-complex */
 export type SnapshotContentRule = Exclude<SnapshotRule, 'unit-id' | 'resource-missing' | 'too-complex'>
@@ -34,7 +35,7 @@ export interface PassedSnapshot {
 }
 
 /** 检查的结果：通过，或者违反的规则 */
-export type SnapshotInspection = PassedSnapshot | { readonly ok: false, readonly rule: SnapshotContentRule }
+export type SnapshotInspection = PassedSnapshot | { readonly ok: false, readonly rule: SnapshotContentRule, readonly imageLocations?: readonly SnapshotImageLocation[] }
 
 /** 交给子进程的任务：解压之后的字节与文档的档案 */
 export interface InspectionTask {
@@ -86,8 +87,9 @@ export function inspectSnapshot(raw: Uint8Array, profile: DocumentProfile): Snap
   const resources = checkResources(structure.snapshot.resources, profile)
   if (!resources.ok)
     return violated(resources.rule)
-  if (hasForeignImage([snapshot, ...embedded]))
-    return violated('image-source')
+  const imageLocations = snapshotImageLocations(structure.snapshot, embedded)
+  if (imageLocations.length !== 0)
+    return { ok: false, rule: 'image-source', imageLocations }
   const links = rules.links(structure)
   if (!links.ok)
     return violated(links.rule)
@@ -99,7 +101,7 @@ export function inspectSnapshot(raw: Uint8Array, profile: DocumentProfile): Snap
     contentHash: new Uint8Array(digest),
     presentResources: resources.present,
     nonEmptyResources: resources.nonEmpty,
-    assetIds: snapshotAssetIds(snapshot, embedded),
+    assetIds: snapshotAssetIds(snapshot, embedded.map(entry => entry.value)),
     rawBytes: raw.byteLength,
   }
 }

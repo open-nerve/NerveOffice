@@ -101,7 +101,7 @@ describe('资源 data 里的 JSON（embeddedJson）', () => {
       'not-an-object',
       { name: 'SHEET_DRAWING_PLUGIN', data: '{not json' },
     ]), count)
-    expect(values).toEqual([{ 'sheet-1': { 0: { 0: { note: 'x' } } } }])
+    expect(values).toEqual([{ resourceIndex: 0, value: { 'sheet-1': { 0: { 0: { note: 'x' } } } } }])
     // 备注的 4 个，加上解析不了的那段按文字数出的 1 个（数在解析之前）
     expect(count.entries).toBe(5)
   })

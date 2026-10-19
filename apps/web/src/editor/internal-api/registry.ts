@@ -65,6 +65,19 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 ].join('')
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
+  ...['createImageCommandPreview', 'IMAGE_COMMAND_PROTOCOL', 'imageCellValueIsSingle', 'prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].map(name => ({
+    name,
+    origin: '固定 SDK 图片命令、双绘图服务的 JSON1 与撤销记录，只经主线程出口使用',
+    sdk: {
+      '@univerjs/core': ['Univer', 'Workbook', 'UniverInstanceType', 'isICellData', 'IUndoRedoService', 'IUniverInstanceService', 'JSON1', 'JSONXActions', 'RedoCommand', 'UndoCommand', ...(['prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].includes(name) ? ['DrawingTypeEnum', 'ICommandService', 'IPermissionService'] : [])],
+      '@univerjs/drawing': ['IDrawingManagerService'],
+      '@univerjs/sheets': ['SetRangeValuesCommand', 'SetRangeValuesMutation', 'getSheetCommandTarget', 'SheetsSelectionsService', 'CopySheetCommand', 'DeleteRangeMoveLeftCommand', 'DeleteRangeMoveUpCommand', 'InsertColByRangeCommand', 'InsertColCommand', 'InsertColMutation', 'InsertRangeMoveDownCommand', 'InsertRangeMoveRightCommand', 'InsertRowByRangeCommand', 'InsertRowMutation', 'InsertSheetCommand', 'InsertSheetMutation', 'MoveColsCommand', 'MoveRangeCommand', 'MoveRangeMutation', 'MoveRowsCommand', 'RemoveColByRangeCommand', 'RemoveColCommand', 'RemoveRowByRangeCommand', 'RemoveRowCommand', 'RemoveSheetCommand', ...(['prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].includes(name) ? ['WorkbookEditablePermission', 'WorksheetEditPermission'] : [])],
+      '@univerjs/sheets-drawing': ['InsertSheetDrawingCommand', 'ISheetDrawingService', 'RemoveSheetDrawingCommand', 'SetDrawingApplyMutation', 'SetSheetDrawingCommand', 'SetWorksheetBackgroundImageCommand', 'SetWorksheetBackgroundImageMutation', ...(['prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].includes(name) ? ['DrawingApplyType', 'ClearSheetDrawingTransformerOperation'] : [])],
+    },
+    purpose: '模型与历史写入前只读预演；整条 Undo/Redo 在第一条 mutation 前检查；普通写值只读相关格子，结构操作只查目标表载体与双服务操作路径；旧坏图仅经绑定编辑身份的一次确认事务删除，成功后清当前书历史',
+    evidence: '1.0.1 双服务 JSON1 基础操作复制路径，text-x 原地改正文；Facade 通用事件跳过 Undo/Redo。结构后处理发生在表写入之后且不回滚，须提前核对真实目标/来源/路径；manager 的 transform 数值可合法不同。InsertRowCommand 的实际 d.ts 缺声明，集中记录 ES 的 sheet.command.insert-row。清理通知与 clearUndoRedo 均按真实服务验证',
+    regression: 'internal-api/image-commands.test.ts：真实命令、两份服务、普通撤销重做、复合记录提前拒绝、TextX 副作用对照与样式间接图片；images/image-source-policy.test.ts；sheet-editor.test.ts 初始化/销毁编排',
+  })),
   ...['RenderImage', 'getDrawingShapeKeyByDrawingSearch'].map(name => ({
     name,
     origin: name === 'RenderImage' ? 'engine-render.Image，仅主线程出口' : 'drawing.getDrawingShapeKeyByDrawingSearch，通用绘图键计算',
@@ -435,10 +448,18 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     regression: IMAGE_POLICY_REGRESSION,
   },
   {
+    name: 'imageLiteralSource',
+    origin: '固定 engine-formula 的词法来源标记与 Value/Function AST 协议',
+    sdk: { '@univerjs/engine-formula': ['BaseAstNode'] },
+    purpose: 'IMAGE 首参同时证明是原公式字面量与当前字符串值，拒绝名称展开、拼接和计算结果；主线程与 Worker 共用',
+    evidence: 'M5-P2-S3 实际解析器反例：定义名称展开后与字面量 AST 相同；补丁在展开前证明、真实拼接精确位置传递，不按调用序号配对。标记不进入快照，缺少标记默认拒绝',
+    regression: 'internal-api/image-formula-source.test.ts、image-function/restricted-image-function.test.ts；实际 Lexer/Parser/Interpreter 的多个同地址调用、嵌套名称、命名尺寸、LET/LAMBDA、缓存和异步路径；E2E 两种公式模式',
+  },
+  {
     name: 'BaseValueObject',
-    origin: '@univerjs/engine-formula 的值对象基类（只用类型）',
-    purpose: 'IMAGE() 包装的参数与返回值的类型',
-    evidence: '同 BaseFunction；引用在计算时变成数组（engine-formula 的 function-node.ts:166-168），包装据此拒绝引用、区域与数组常量',
+    origin: '@univerjs/engine-formula 的值对象基类',
+    purpose: 'IMAGE() 的 AST 包装安全收窄 getVariant 的值，保持引用转数组、缺省参数及日期语义',
+    evidence: '同 BaseFunction；FunctionNode._calculateAst 提供原 _getChildVariant，传入参数为 BaseValueObject 或引用/null，不使用不安全强转；M5-P2-S3 改为证明来源后转交',
     regression: IMAGE_POLICY_REGRESSION,
   },
   {
