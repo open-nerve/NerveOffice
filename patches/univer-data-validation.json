@@ -1,0 +1,31 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/sheets-data-validation",
+  "version": "1.0.1",
+  "reason": "DEF-056：排队与运行任务绑定原工作簿、工作表；实际脏区立即取消同格旧计算。退役取消等待、await 后复核、真实错误含迟到拒绝可观察且可重试，初始缓冲在 Rendered 后退订。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "8c61c605df83978832631dc586254677c6aa676c9eb48181035aaae02dd309a7",
+      "patchedSha256": "16cc58ece312eaf3f84484180f192e6792bf1bdfa944f80a8e00131eeff9296f",
+      "editedSha256": "00a4276c0f51e3caf5fbc27764aa6f3a6546ae0f301bc99a8314177f0278a9e8"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "6dfbfedc3d0bbc4eb5357bc18f6a23d7b871fd4d0a701ac83456b160020dfecc",
+      "patchedSha256": "cc5bd8cb8f3b1f125983e390f64cfd9cfebb2018971eb15d1611a8edf1620649"
+    },
+    {
+      "path": "lib/types/models/sheet-data-validation-model.d.ts",
+      "originalSha256": "2774cfdd27eb12bb27a0e48fe661170abf13ff8a7a78b166cccc2b7f93b9028d",
+      "patchedSha256": "2886ba2868eff54d6d41fc909e421d3af57c6b4409f7860fb24299b3273a07d1"
+    },
+    {
+      "path": "lib/types/services/dv-validator.service.d.ts",
+      "originalSha256": "a85bb1e75b8f9377bbef03279443931bd0ebe2bba09c615b80005d5e863583f3",
+      "patchedSha256": "c76ad787b7486238c6b629d1d3130546490130304bd1552a6d1686dbdb8ca422"
+    }
+  ],
+  "patch": "patches/@univerjs__sheets-data-validation@1.0.1.patch",
+  "patchSha256": "b98647ee2eb816f9c894a1b0aab346ccd5ee6a496726f5e03b8cf8abb69867ce"
+}

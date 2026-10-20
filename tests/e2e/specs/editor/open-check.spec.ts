@@ -180,12 +180,11 @@ test.describe('US-M3-15 文档数据不完整时不能编辑', () => {
     })
   }
 
-  // 样本用新建的模板（?edit=new 本来就是新建之后的跳转）带一份截断的筛选。不用只读样本：它在不是当前表的"功能"表上有数据验证，
-  // SDK 渲染完成时给它排一个不取消的空闲回调（DEF-056），先取后放刚建好就销毁的那个可编辑的编辑器，回调到来时拿不到工作簿，
-  // 成为一条没处理的拒绝（页面异常）——那是登记过的 SDK 缺陷，不是这条用例要核对的
+  // DEF-056 修复后恢复综合样本：非当前"功能"表的数据验证任务随失败的编辑器退役，
+  // 只读重建仍保留规则，不再用只有截断筛选的模板绕开实际生命周期。
   test('US-M3-15 ?edit=new（新建之后直接编辑）而内容没能完整载入：先取得编辑权、以可编辑新建，自检失败随即释放（租约结束的原因是 released）、以只读重建、只能阅读，地址里去掉 ?edit=new；没有保存请求；两个编辑器各上报一次（编辑、只读，起因都是进入编辑）', async ({ page }) => {
     const owner = await createUser('oc-edit-new')
-    const id = await createDocument(owner, '先取后放', withResources(sheetSnapshotFor, setData(FILTER, '{"sheet-1":{"ref":{"startRow":0,"startColumn":0')))
+    const id = await createDocument(owner, '先取后放', withResources(readOnlySampleFor, truncated(FILTER)))
     const reports = recordReports(page)
     const saves: Request[] = []
     page.on('request', (request) => {
