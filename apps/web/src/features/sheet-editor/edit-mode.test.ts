@@ -2488,9 +2488,11 @@ describe('失去编辑权（M3-P2 设计 §3.4）', () => {
     vi.mocked(writer.editor.commitCellEditing).mockResolvedValue(false)
     loseOnNextHeartbeat(context, DENIED)
     await context.time.advance(HEARTBEAT_MS)
-    await settle()
-    expect(context.api.save).toHaveBeenCalledTimes(2)
-    expect(lostOf(context.mode)).toMatchObject({ checking: false, unsaved: true, inputLeft: true })
+    // 失权捕获的真实 gzip/摘要与重放标记共用草稿队列；一次宏任务不代表已经完成核对。
+    await vi.waitFor(() => {
+      expect(context.api.save).toHaveBeenCalledTimes(2)
+      expect(lostOf(context.mode)).toMatchObject({ checking: false, unsaved: true, inputLeft: true })
+    })
   })
 
   it('退出编辑的过程中失去编辑权（保存得到 403）：转入失去编辑权，不再接着退出', async () => {
