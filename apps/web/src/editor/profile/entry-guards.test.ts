@@ -28,7 +28,7 @@ function fakeFacade() {
   return { api: api as unknown as FUniver, fire, dispose }
 }
 
-describe('M5 之前的入口：命令守卫', () => {
+describe('按阶段开放的入口：命令守卫', () => {
   it('图片：插入浮动与单元格图片（粘贴图片文件也走它）、底层的插入、工作表背景图片', () => {
     expect(IMAGE_GUARDED_COMMANDS.map(command => command.id)).toEqual([
       'sheet.command.insert-float-image',

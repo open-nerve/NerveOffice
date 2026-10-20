@@ -7,7 +7,7 @@ import { EDITOR_TEST_TIMEOUT, exitEditing, openAndEnterEditing, reloadAndEnterEd
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, () => {
-  test('IMAGE 首次失败后恢复的实际图片尺寸，与重新打开后完全一致', async ({ page }, testInfo) => {
+  test('US-M5-07 IMAGE 首次失败后恢复的实际图片尺寸，与重新打开后完全一致', async ({ page }, testInfo) => {
     // 原件纵向，平台占位横向；相同比例的样本会掩盖占位尺寸沿用。
     const { asset, documentId } = await prepare(page, { portrait: true })
     const path = `**${asset.url}`
@@ -28,7 +28,7 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
     await imageFailureSentinel(page, documentId, '图片尺寸恢复后保存哨兵')
   })
 
-  test('实际 SDK 图元的原生图片损坏后，后续单元格仍能绘制和保存', async ({ page }) => {
+  test('US-M5-07 实际 SDK 图元的原生图片损坏后，后续单元格仍能绘制和保存', async ({ page }) => {
     const { documentId } = await prepare(page)
     await openAndEnterEditing(page, documentId, 'steady')
     await expectImagePixels(page, 'C3')
@@ -53,7 +53,7 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
     await imageFailureSentinel(page, documentId, '坏图之后的真实绘制哨兵')
   })
 
-  test('浮图、单元格图片和 IMAGE 经正式资源读取，实际图元完成解码且模型无临时地址', async ({ page }, testInfo) => {
+  test('US-M5-05 浮图、单元格图片和 IMAGE 经正式资源读取，实际图元完成解码且模型无临时地址', async ({ page }, testInfo) => {
     const { asset, documentId } = await prepare(page)
     const replies: import('@playwright/test').Response[] = []
     page.on('response', (response) => {
@@ -83,7 +83,7 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
     await testInfo.attach('实际编辑器图片', { body: await sheetCanvas(page).screenshot(), contentType: 'image/png' })
   })
 
-  test('同源图片移动缩放、换源和撤销重做互不污染，切表及重开后二次保存稳定', async ({ page }) => {
+  test('US-M5-05 同源图片移动缩放、换源和撤销重做互不污染，切表及重开后二次保存稳定', async ({ page }) => {
     const { asset, documentId } = await prepare(page)
     const other = await uploadAsset(page, 'palette.png')
     await openAndEnterEditing(page, documentId, 'steady')
@@ -136,7 +136,7 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
     await second.dispose()
   })
 
-  test('真实自动行高保持 Position 尺寸并更新锚点，Both 随行增高；显式行高撤销重做和重开稳定', async ({ page }) => {
+  test('US-M5-05 真实自动行高保持 Position 尺寸并更新锚点，Both 随行增高；显式行高撤销重做和重开稳定', async ({ page }) => {
     const { documentId } = await prepare(page, { secondAnchor: '1' })
     await openAndEnterEditing(page, documentId, 'steady')
     await setCellValue(page, 'A4', '自动行高')
@@ -165,7 +165,7 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
   })
 
   for (const failure of ['401', '404', '500', '503', 'broken', 'offline'] as const) {
-    test(`图片 ${failure} 后仍能编辑绘制保存；明确重试恢复三种图片，不自动循环请求`, async ({ page }) => {
+    test(`US-M5-07 图片 ${failure} 后仍能编辑绘制保存；明确重试恢复三种图片，不自动循环请求`, async ({ page }) => {
       const { asset, documentId } = await prepare(page)
       let reads = 0
       const path = `**${asset.url}`

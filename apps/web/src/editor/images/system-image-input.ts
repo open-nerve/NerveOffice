@@ -1,16 +1,18 @@
 import type { CapturedImageTarget, createImageInputBridge } from '../internal-api/ui.ts'
 import type { SystemImageInputData } from './image-input-data.ts'
 import type { ImageInputTask } from './image-input-task.ts'
+import type { ImageUploadFailureReason } from './image-upload-error.ts'
 import type { PlatformImageIo } from './platform-image-io.ts'
 import { ImageDecodeError } from './decode-image.ts'
 import { ImageClipboardError, writeSystemImage } from './image-clipboard.ts'
 import { clipboardEventInput, readClipboardInput } from './image-input-data.ts'
-import { classifyImageInput, IMAGE_INPUT_ACCEPT, ImageFileInputError } from './image-input-policy.ts'
+import { classifyImageInput, IMAGE_INPUT_ACCEPT } from './image-input-policy.ts'
 import { createImageInputTasks } from './image-input-task.ts'
 import { runImageTask } from './image-task.ts'
+import { classifyImageUploadFailure } from './image-upload-error.ts'
 
 export type ImageInputOperation = 'copy' | 'cut' | 'paste' | 'insert'
-export type ImageInputReason = 'count' | 'size' | 'type' | 'image-without-file' | 'busy' | 'permission' | 'clipboard-permission' | 'selection' | 'unsupported' | 'empty' | 'timeout' | 'encoding' | 'request'
+export type ImageInputReason = ImageUploadFailureReason | 'count' | 'image-without-file' | 'busy' | 'permission' | 'clipboard-permission' | 'selection' | 'unsupported' | 'empty' | 'timeout' | 'encoding' | 'request'
 export type ImageInputState
   = | { readonly kind: 'busy' | 'complete' | 'cancelled', readonly operation: ImageInputOperation, readonly completed: number, readonly total: number }
     | { readonly kind: 'failed', readonly operation: ImageInputOperation, readonly reason: ImageInputReason, readonly completed: number, readonly total: number }
@@ -32,8 +34,11 @@ class InputRejected extends Error {
 }
 
 function failureReason(error: unknown): ImageInputReason {
-  if (error instanceof InputRejected || error instanceof ImageClipboardError || error instanceof ImageFileInputError)
+  if (error instanceof InputRejected || error instanceof ImageClipboardError)
     return error.reason
+  const upload = classifyImageUploadFailure(error)
+  if (upload !== undefined)
+    return upload
   if (error instanceof ImageDecodeError)
     return error.reason === 'timeout' ? 'timeout' : 'encoding'
   if (error instanceof DOMException && error.name === 'NotAllowedError')

@@ -70,6 +70,9 @@ describe('真实配额与文件的失败边界', () => {
     await rename(staging, join(root, 'held-staging'))
     await mkdir(staging, { mode: 0o755 })
     try {
+      // 故障目录必须确实开放权限，不能让宿主 umask 把故障条件收紧掉。
+      await fs.chmod(staging, 0o755)
+      expect((await fs.stat(staging)).mode & 0o777).toBe(0o755)
       await expect(upload()).rejects.toMatchObject({ name: 'AssetStorageError', reason: 'unsafe-path' })
       expect(await state()).toMatchObject({ count: 0, claims: 1, objects: 0 })
       expect(await objectFiles()).toEqual([])

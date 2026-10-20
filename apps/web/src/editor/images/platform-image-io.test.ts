@@ -4,6 +4,7 @@ import { Blob as NodeBlob, File as NodeFile } from 'node:buffer'
 import { ImageCacheMap, Univer } from '@univerjs/core'
 import { UniverDrawingPlugin } from '@univerjs/drawing'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError, NetworkError } from '../../shared/api/api-errors.ts'
 import { readAsset, uploadAsset } from '../../shared/assets/asset-api.ts'
 import { deferred } from '../async-tools.ts'
 import { injectorOf } from '../internal-api/index.ts'
@@ -407,6 +408,28 @@ describe('真实 drawing 插件中的平台 IO', () => {
     await Promise.resolve()
     await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
     expect(h.failed).not.toHaveBeenCalled()
+    sub.unsubscribe()
+  })
+
+  it.each([
+    { error: new ApiError(413, 'PAYLOAD_TOO_LARGE', 'controlled-private-marker'), status: '1' },
+    { error: new ApiError(413, 'UNKNOWN', 'controlled-private-marker'), status: '1' },
+    { error: new ApiError(415, 'UNSUPPORTED_MEDIA_TYPE', 'controlled-private-marker'), status: '2' },
+    { error: new ApiError(422, 'ASSET_INVALID', 'controlled-private-marker'), status: '4' },
+    { error: new ApiError(409, 'ASSET_QUOTA_EXCEEDED', 'controlled-private-marker'), status: '4' },
+    { error: new ApiError(503, 'ASSET_BUSY', 'controlled-private-marker'), status: '4' },
+    { error: new NetworkError('controlled-private-marker'), status: '4' },
+  ])('服务端上传失败交给 SDK 固定状态 $status，保留一次原错误报告并归零进度', async ({ error, status }) => {
+    const h = setup()
+    const file = new File([new Uint8Array([1])], 'controlled.png', { type: 'image/png' })
+    vi.mocked(uploadAsset).mockRejectedValueOnce(error)
+    const counts: number[] = []
+    const sub = h.image.change$.subscribe(count => counts.push(count))
+    h.image.setWaitCount(1)
+    await expect(h.image.saveImage(file)).rejects.toMatchObject({ message: status })
+    expect(counts.at(-1)).toBe(0)
+    expect(uploadAsset).toHaveBeenCalledOnce()
+    expect(h.failed).toHaveBeenCalledExactlyOnceWith(error)
     sub.unsubscribe()
   })
 

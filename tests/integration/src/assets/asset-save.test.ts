@@ -94,7 +94,7 @@ function signal() {
   return { promise, resolve }
 }
 
-describe('正式保存与图片当前引用', () => {
+describe('US-M5-07 正式保存与图片当前引用', () => {
   it('图片位置经真实保存和副本返回，拒绝时内容、修订与引用不变；纠正后保存成功', async () => {
     const target = await document()
     const kept = await uploaded()

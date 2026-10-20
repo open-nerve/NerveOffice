@@ -10,6 +10,7 @@ import { decodeImage } from './decode-image.ts'
 import { imageFileInput, ImageFileInputError } from './image-input-policy.ts'
 import { createImageResources } from './image-resources.ts'
 import { runImageTask } from './image-task.ts'
+import { classifyImageUploadFailure } from './image-upload-error.ts'
 import unavailable from './unavailable.svg?url&no-inline'
 
 export interface EditorImageAccess {
@@ -131,9 +132,13 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
       catch (error) {
         if (controller.signal.aborted || disposed)
           return null
-        if (error instanceof ImageFileInputError)
-          throw new Error(error.reason === 'size' ? ImageUploadStatusType.ERROR_EXCEED_SIZE : ImageUploadStatusType.ERROR_IMAGE_TYPE)
-        options.failed(error)
+        if (!(error instanceof ImageFileInputError))
+          options.failed(error)
+        const reason = classifyImageUploadFailure(error)
+        if (reason === 'size')
+          throw new Error(ImageUploadStatusType.ERROR_EXCEED_SIZE)
+        if (reason === 'type')
+          throw new Error(ImageUploadStatusType.ERROR_IMAGE_TYPE)
         throw new Error(ImageUploadStatusType.ERROR_IMAGE)
       }
       finally {

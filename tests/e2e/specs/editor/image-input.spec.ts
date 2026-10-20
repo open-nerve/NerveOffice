@@ -144,6 +144,7 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
     await expectImagePixels(page, 'C8')
     await saveAndWait(page)
     expect(JSON.stringify((await savedContent(page, documentId)).snapshot)).not.toMatch(/blob:|data:image/)
+    await exitEditing(page, 'steady')
     await reloadAndEnterEditing(page, 'steady')
     await expectImagePixels(page, 'J2')
     await expectImagePixels(page, 'C8')

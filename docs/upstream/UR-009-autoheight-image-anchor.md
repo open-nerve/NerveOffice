@@ -1,5 +1,7 @@
 # UR-009 浮动图片所跨的行因自动行高变高后不回写终点锚点，切换工作表或重开时图片被拉伸并被保存
 
+> 本项目进度（2026-10-20）：M5-P2-S2 已在锁定的 1.0.1 drawing/sheets-drawing 发布包回写 Position 锚点，保留其他变换属性；原版反例、自动行高、显式行高撤销重做、切表/重开/再次保存均有三浏览器证据，S5 组合复验通过。见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)与 ADR-022。P2 完整门禁及 CI 尚待收口。仍为未提交的上游草稿，下文版本与检索记录是原调查时点；A02 未降级。
+
 > 状态：草稿（提交之前需求方确认）｜上游仓库：dream-num/univer｜提交方式：公开 issue
 > 出处：M0-P2 报告摘要（V03"有条件通过"）、§2.2（DEF-002 用例说明）、§2.3 第 2 条（根因、实测表、补丁规模评估）；用例 `spikes/m0/e2e/v03-drawing-autoheight.spec.ts`（结果 `spikes/m0/e2e/results/v03/drawing-autoheight/*.json`）；延期登记 DEF-002（关联上线门槛 A02）｜发现版本：1.0.0｜1.0.1 核对：仍然存在（依据：已安装的 1.0.1 发布包中，`@univerjs/sheets-drawing` 的 `REFRESH_MUTATIONS` 仍含两个自动行高 mutation（`lib/es/index.js` L1053–1062），`_refreshDrawingTransform` 对 `Position` 锚点仍只保留宽高、不重算锚点（L2255–2297），`_finalizePlan` 的 refresh 分支仍不产生 mutation（L1236–1245）；`@univerjs/drawing` 的 `refreshTransform` 仍只复制 `transform` 等字段（L229–240）；`@univerjs/sheets-drawing-ui` 在切换工作表与渲染初始化时仍按锚点重算尺寸（L4565、L4228）；另在 1.0.1 上用不含平台代码的最小页面实测复现，Chromium 与 WebKit 结果相同，见正文；npm 上的 1.0.2（当前 latest）代码相同）
 

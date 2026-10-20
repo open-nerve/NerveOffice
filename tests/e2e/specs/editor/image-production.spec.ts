@@ -192,6 +192,7 @@ for (const kind of ['float', 'cell'] as const) {
     await pressUniverShortcut(page, 'Y')
     await saveAndWait(page)
     expect((await savedContent(page, documentId)).text).toBe(first.text)
+    await exitEditing(page, 'steady')
     await reloadAndEnterEditing(page, 'steady')
     const second = await saveAndCapture(page)
     expect(second.answer.unchanged).toBe(true)
@@ -216,6 +217,7 @@ test('逐图像素反例：只让 GIF 读取失败，另外三张图不能掩盖
     await expectImageAt(page, snapshot, 'float', index)
   const gif = imageAt(snapshot, 'float', 3)
   const route = `**${gif.source}`
+  await exitEditing(page, 'steady')
   await page.route(route, async request => request.fulfill({ status: 200, headers: { 'Content-Type': 'image/png', 'X-Asset-Status': '503' }, body: 'controlled unavailable' }))
   await reloadAndEnterEditing(page, 'steady')
   await expect(page.getByText('部分图片暂时无法显示', { exact: true })).toBeVisible()
@@ -269,7 +271,7 @@ test('US-M5-06 正式入口拒绝坏图片与离线上传，只读重建不开�
   const before = await savedContent(page, documentId)
   await selectCell(page, 'A1')
   await choose(page, 'float', ['html-disguised.png'])
-  await expect(operation(page)).toContainText('未完成')
+  await expect(operation(page)).toHaveText('插入图片未完成。图片无法处理，请检查格式或使用较小的图片。')
   await saveAndWait(page)
   expect((await savedContent(page, documentId)).text).toBe(before.text)
   const uploads: string[] = []

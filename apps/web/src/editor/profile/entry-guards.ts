@@ -1,5 +1,5 @@
-// M5 之前不开放的入口：命令守卫（P4 设计 §3.6.8）。
-// 隐藏菜单不会停用命令与快捷键（例如超链接的 Ctrl/Cmd+K），粘贴图片文件也不经过菜单，所以这些命令在执行前取消。
+// 按阶段开放的入口：命令守卫（M1-P4 设计 §3.6.8，M5-P2 正式图片输入）。
+// 隐藏菜单不会停用命令与快捷键（例如超链接的 Ctrl/Cmd+K）；平台图片输入就绪前，图片命令也在执行前取消。
 // 多数按命令的 id 取消；带图片的粘贴（DEF-035 的旁支，M3-P2 S3）另按参数判断，见 IMAGE_PASTE_COMMAND。
 // 用的是 Facade 的 BeforeCommandExecute（公开 API）：订阅者把 cancel 设为 true，命令不执行，也不进撤销栈（core 的 f-univer.ts:255-268）
 import type { IDisposable } from '@univerjs/core'
@@ -11,7 +11,7 @@ export interface GuardedCommand {
   readonly source: string
 }
 
-/** 图片：M1 不替换图片服务，SDK 默认把插入与粘贴的图片存成 data URL（M0-P4 报告 §2.2），M3、M5 的服务端校验会拒收这类快照 */
+/** 图片：默认全部拦截；M5-P2 的平台输入就绪后只放行两种入口和浮图提交。SDK 原始 data URL 路径仍不可写入快照。 */
 export const IMAGE_GUARDED_COMMANDS: readonly GuardedCommand[] = [
   { id: 'sheet.command.insert-float-image', source: 'sheets-drawing-ui/src/commands/commands/insert-image.command.ts:27（插入浮动图片；粘贴图片文件也经过它：controllers/sheet-drawing-copy-paste.controller.ts:208-222）' },
   { id: 'sheet.command.insert-cell-image', source: 'sheets-drawing-ui/src/commands/commands/insert-image.command.ts:55（插入单元格图片）' },
@@ -23,7 +23,7 @@ export const IMAGE_GUARDED_COMMANDS: readonly GuardedCommand[] = [
 ]
 
 /**
- * 超链接：插入链接的入口在 M5（计划书 §11.3）。取消链接（cancel-hyper-link）只删除数据，不拦。
+ * 超链接：插入链接的入口由 M5-P3 接入（计划书 §11.3）。取消链接（cancel-hyper-link）只删除数据，不拦。
  * 键入网址时 SDK 的自动识别不经这些命令（sheets-hyper-link 的写入拦截器），照常保留：它与粘贴带来的链接、HYPERLINK() 的结果一样，
  * 写进单元格之前由链接的改写器改成规范写法、不合法的去掉链接（link-policy.ts，M3-P3，DEF-021）
  */
@@ -44,9 +44,9 @@ export const GUARDED_COMMANDS: readonly GuardedCommand[] = [...IMAGE_GUARDED_COM
  * 粘贴图片文件或带 <img> 的 HTML，docs-ui 的剪贴板把它们转成编辑栏内部文档里的图片（docs-ui 的 services/clipboard/clipboard.service.ts：
  * 编辑栏不是单元格编辑器，按 source 方式粘贴，图片文件先转成 <img>，再由 html-to-udm/converter.ts 的 IMG 分支转成 drawings；
  * 1.0.1 的 lib/es/index.js:8591-8603、6988），执行这条命令（:5106）写进去；回车之后单元格的富文本带着这些图片（p.drawings、drawingsOrder），
- * 成了单元格图片，地址是 data URL 或外链（外链在画出来时还触发 CSP 的违规）。M5 之前不开放图片（同 IMAGE_GUARDED_COMMANDS），
- * P3 的完整校验之后这类快照会被拒收。单元格编辑器按纯文本粘贴（只认 text/plain，没有时什么也不贴），表格上的粘贴（选中单元格时）
- * 不把 <img> 写进单元格、图片文件走插入浮动图片（已取消）：这两条 E2E 核实过，不拦。
+ * 成了单元格图片，地址是 data URL 或外链（外链在画出来时还触发 CSP 的违规）。M5-P2 仍关闭此路径，服务端会拒收这类快照。
+ * 单元格编辑器按纯文本粘贴（只认 text/plain，没有时什么也不贴），继续保持；表格上的文件图片粘贴由平台接管上传和插入，
+ * 不经过这条内部文档命令。
  * 取消的是整次粘贴（同时复制来的文字也不贴）：参数里的内容由 SDK 组装，改写它（去掉图片留下文字）要依赖它的结构，得不偿失
  */
 export const IMAGE_PASTE_COMMAND: GuardedCommand = {

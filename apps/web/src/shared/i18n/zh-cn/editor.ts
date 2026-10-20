@@ -116,6 +116,8 @@ export const editorMessages = {
       'count': '每次最多选择 10 张图片。',
       'size': '图片不能为空，每张图片最多 5 MiB。',
       'type': '请选择 PNG、JPEG、WebP 或 GIF 图片，文件格式须与后缀一致。',
+      'invalid': '图片无法处理，请检查格式或使用较小的图片。',
+      'quota': '图片存储配额不足，请联系管理员。',
       'image-without-file': '没有可用的图片文件，请复制图片本身或选择本机文件。',
       'busy': '上一项图片操作仍在进行，请稍候再试。',
       'permission': '当前无法操作该位置，请确认会话和编辑权限后重试。',

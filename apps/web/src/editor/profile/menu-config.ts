@@ -2,7 +2,7 @@
 // 菜单配置是全局的：各 UI 插件的菜单合并成一份，按菜单项的 id 生效；工厂返回了菜单项时认它的 id，
 // 不是 schema 里的键（ui/src/services/menu/menu-manager.service.ts:375 `menuConfig?.[item?.id ?? key]`），
 // 所以右键菜单与工具栏的超链接各写一项。
-// 隐藏菜单不会停用命令与快捷键，M5 之前不开放的入口另由命令守卫取消（entry-guards.ts），只读时的改动由只读守卫取消（read-only/）
+// 隐藏菜单不会停用命令与快捷键，尚未开放的入口另由命令守卫取消（entry-guards.ts），只读时的改动由只读守卫取消（read-only/）
 import type { MenuConfig } from '@univerjs/ui'
 import type { EditorAccess } from '../editor-access.ts'
 

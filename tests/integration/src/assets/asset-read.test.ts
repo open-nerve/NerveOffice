@@ -88,7 +88,7 @@ async function objectOf(id: string): Promise<{ sha256: string, storage_key: stri
   return database.query(async client => (await client.query<{ sha256: string, storage_key: string }>('SELECT o.sha256, o.storage_key FROM assets a JOIN asset_objects o ON o.sha256 = a.object_hash WHERE a.id = $1', [id])).rows[0]!)
 }
 
-describe('图片读取的身份、当前引用与输出契约', () => {
+describe('US-M5-07 图片读取的身份、当前引用与输出契约', () => {
   it('无会话仍是既有 401 JSON，已登录的未知/非规范 ID 是同一 404 占位', async () => {
     const anonymous = await fetch(`${app.baseUrl}/api/assets/${randomUUID()}`)
     expect(anonymous.status).toBe(401)

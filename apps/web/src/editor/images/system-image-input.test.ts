@@ -2,6 +2,7 @@ import type { ImageInputCommands, SelectedInputImage } from '../internal-api/ui.
 import type { ImageInputState, SystemImageInputOptions } from './system-image-input.ts'
 import { File as NodeFile } from 'node:buffer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError, NetworkError } from '../../shared/api/api-errors.ts'
 import { deferred } from '../async-tools.ts'
 import { writeSystemImage } from './image-clipboard.ts'
 import { readClipboardInput } from './image-input-data.ts'
@@ -80,6 +81,32 @@ afterEach(() => {
 })
 
 describe('系统图片操作调度与最终提交', () => {
+  it.each([
+    { error: new ApiError(413, 'PAYLOAD_TOO_LARGE', 'controlled-private-marker'), reason: 'size' },
+    { error: new ApiError(413, 'UNKNOWN', 'controlled-private-marker'), reason: 'size' },
+    { error: new ApiError(415, 'UNSUPPORTED_MEDIA_TYPE', 'controlled-private-marker'), reason: 'type' },
+    { error: new ApiError(422, 'ASSET_INVALID', 'controlled-private-marker', { details: { rule: 'pixels' } }), reason: 'invalid' },
+    { error: new ApiError(409, 'ASSET_QUOTA_EXCEEDED', 'controlled-private-marker', { details: { kind: 'count' } }), reason: 'quota' },
+    { error: new ApiError(409, 'UNKNOWN', 'controlled-private-marker'), reason: 'request' },
+    { error: new ApiError(500, 'ASSET_INVALID', 'controlled-private-marker'), reason: 'request' },
+    { error: new ApiError(503, 'ASSET_BUSY', 'controlled-private-marker'), reason: 'request' },
+    { error: new NetworkError('controlled-private-marker'), reason: 'request' },
+    { error: { status: 409, code: 'ASSET_QUOTA_EXCEEDED', message: 'controlled-private-marker' }, reason: 'request' },
+  ])('上传拒绝 $reason 保留固定原因，零插图且不自动重试，后续操作仍可完成', async ({ error, reason }) => {
+    const h = setup()
+    h.io.upload.mockRejectedValueOnce(error)
+    expect(await h.input.insertFiles([file()])).toBe(false)
+    expect(h.states.at(-1)).toEqual({ kind: 'failed', operation: 'insert', reason, completed: 0, total: 1 })
+    expect(JSON.stringify(h.states)).not.toContain('controlled-private-marker')
+    expect(h.failed).toHaveBeenCalledExactlyOnceWith(error)
+    expect(h.io.upload).toHaveBeenCalledOnce()
+    expect(h.bridge.insertImage).not.toHaveBeenCalled()
+    expect(await h.input.insertFiles([file()])).toBe(true)
+    expect(h.io.upload).toHaveBeenCalledTimes(2)
+    expect(h.bridge.insertImage).toHaveBeenCalledOnce()
+    expect(h.states.at(-1)?.kind).toBe('complete')
+  })
+
   it('复制命令同步调用 write；成功后结束任务，不删除图片', async () => {
     const h = setup()
     const pending = deferred<void>()

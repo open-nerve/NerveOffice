@@ -13,7 +13,7 @@ import { EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, op
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
-test.describe('图片身份与旧实例的实际回收', { tag: '@test-build' }, () => {
+test.describe('US-M5-07 图片身份与旧实例的实际回收', { tag: '@test-build' }, () => {
   test('首次读取还没完成时恢复联网，旧请求取消后本实例三种图片都能恢复', async ({ page, context }) => {
     const { asset, documentId } = await prepareImageDocument(page)
     let release = () => {}

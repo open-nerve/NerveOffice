@@ -143,6 +143,17 @@ describe('图片的可见失败状态', () => {
     expect(screen.getByText('已取消插入图片。已插入 1/3 张图片。')).toBeVisible()
   })
 
+  it.each([
+    { reason: 'quota', message: '图片存储配额不足，请联系管理员。' },
+    { reason: 'invalid', message: '图片无法处理，请检查格式或使用较小的图片。' },
+  ] as const)('图片拒绝 $reason 给出所需操作，仍可保存已有内容', ({ reason, message }) => {
+    const h = fakePage({ imageOperation: { kind: 'failed', operation: 'insert', reason, completed: 0, total: 1 }, save: DIRTY })
+    render(<EditorChrome page={h.page} apple={false} />)
+    expect(screen.getByText(`插入图片未完成。${message}`)).toBeVisible()
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: '重新加载图片' })).not.toBeInTheDocument()
+  })
+
   it.each(['signed-out', 'other-user'] as const)('%s 时不能用图片重试绕过本页会话', (session) => {
     const h = fakePage({ imageProblem: true, session })
     render(<EditorChrome page={h.page} apple={false} />)
