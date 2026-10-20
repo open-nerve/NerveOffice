@@ -7,7 +7,7 @@ import { AppError } from '../../shared/errors/app-error.ts'
 import { imageAborted } from './image-admission.ts'
 import { IMAGE_LIMITS } from './image-types.ts'
 
-/** 提前拒绝不继续读取/排空任意长的正文，回包后关闭这条连接。 */
+/** 有限正文读完再回包关闭，避免代理还在写入时收到 broken pipe 而把业务拒绝变成 502。 */
 function refuse(code: 'UNSUPPORTED_MEDIA_TYPE' | 'REQUEST_INVALID' | 'PAYLOAD_TOO_LARGE'): AppError {
   return new AppError(code, undefined, { headers: { Connection: 'close' } })
 }
@@ -15,22 +15,26 @@ function refuse(code: 'UNSUPPORTED_MEDIA_TYPE' | 'REQUEST_INVALID' | 'PAYLOAD_TO
 export async function readAssetBody(request: Request, signal: AbortSignal): Promise<ImageProcessingInput> {
   const mimeType = request.headers['content-type']?.toLowerCase()
   const encoding = request.headers['content-encoding']?.toLowerCase()
-  if (!(ASSET_MIME_TYPES as readonly unknown[]).includes(mimeType) || (encoding !== undefined && encoding !== 'identity'))
-    throw refuse('UNSUPPORTED_MEDIA_TYPE')
   const rawExtension = request.headers['x-asset-extension']
   const extension = typeof rawExtension === 'string' && /^[A-Z]+$/i.test(rawExtension) ? rawExtension.toLowerCase() : undefined
-  if (!(ASSET_EXTENSIONS as readonly unknown[]).includes(extension))
-    throw refuse('REQUEST_INVALID')
   const length = request.headers['content-length']
-  if (length !== undefined && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))))
-    throw refuse('REQUEST_INVALID')
-  if (length !== undefined && Number(length) > IMAGE_LIMITS.maxBytes)
-    throw refuse('PAYLOAD_TOO_LARGE')
+  let headerError: AppError | undefined
+  if (!(ASSET_MIME_TYPES as readonly unknown[]).includes(mimeType) || (encoding !== undefined && encoding !== 'identity'))
+    headerError = refuse('UNSUPPORTED_MEDIA_TYPE')
+  else if (!(ASSET_EXTENSIONS as readonly unknown[]).includes(extension))
+    headerError = refuse('REQUEST_INVALID')
+  else if (length !== undefined && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))))
+    headerError = refuse('REQUEST_INVALID')
+  else if (length !== undefined && Number(length) > IMAGE_LIMITS.maxBytes)
+    headerError = refuse('PAYLOAD_TOO_LARGE')
   const data = await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = []
     let bytes = 0
     let settled = false
+    let rejection: AppError | undefined
+    let rejectionTimer: ReturnType<typeof setTimeout> | undefined
     const cleanup = (): void => {
+      clearTimeout(rejectionTimer)
       request.off('data', chunk)
       request.off('end', end)
       request.off('error', failed)
@@ -51,6 +55,19 @@ export async function readAssetBody(request: Request, signal: AbortSignal): Prom
         resolve(Buffer.concat(chunks, bytes))
       }
     }
+    const stop = (): void => {
+      finish(rejection)
+      // 清理预算已耗尽，不能先回包再任由 Node 隐式排空任意长的正文。
+      request.destroy()
+    }
+    const discard = (error: AppError): void => {
+      if (rejection !== undefined)
+        return
+      rejection = error
+      chunks.length = 0
+      rejectionTimer = setTimeout(stop, IMAGE_LIMITS.rejectedBodyMs)
+      rejectionTimer.unref()
+    }
     function interrupted(): void {
       finish(imageAborted())
     }
@@ -58,7 +75,7 @@ export async function readAssetBody(request: Request, signal: AbortSignal): Prom
       finish(refuse('REQUEST_INVALID'))
     }
     function end(): void {
-      finish(length !== undefined && bytes !== Number(length) ? refuse('REQUEST_INVALID') : undefined)
+      finish(rejection ?? (length !== undefined && bytes !== Number(length) ? refuse('REQUEST_INVALID') : undefined))
     }
     function chunk(value: Buffer): void {
       if (!Buffer.isBuffer(value)) {
@@ -66,15 +83,22 @@ export async function readAssetBody(request: Request, signal: AbortSignal): Prom
         return
       }
       bytes += value.length
-      if (bytes > IMAGE_LIMITS.maxBytes)
-        finish(refuse('PAYLOAD_TOO_LARGE'))
-      else
+      if (rejection === undefined && bytes > IMAGE_LIMITS.maxBytes)
+        discard(refuse('PAYLOAD_TOO_LARGE'))
+      if (rejection !== undefined) {
+        if (bytes > IMAGE_LIMITS.maxRejectedBodyBytes)
+          stop()
+      }
+      else {
         chunks.push(value)
+      }
     }
     if (signal.aborted || request.destroyed) {
       interrupted()
       return
     }
+    if (headerError !== undefined)
+      discard(headerError)
     if (request.readableEnded) {
       end()
       return
