@@ -29,6 +29,7 @@ import type { ChangeTracker } from '../change-tracking/change-tracker.ts'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { CommandKind } from '../change-tracking/command-record.ts'
 import type { FormulaProgress } from '../change-tracking/formula-settle-tracker.ts'
+import type { installSystemImageInput } from '../images/system-image-input.ts'
 import type { OpenCheck } from '../profile/open-check.ts'
 import type { FormulaMode } from '../profile/sheet-profile.ts'
 import { canonicalLink } from '@nerve-office/contracts'
@@ -36,6 +37,7 @@ import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
 import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, injectorOf } from '../internal-api/index.ts'
 import { IEditorService, IShortcutService } from '../internal-api/ui.ts'
+import { createImageProbe } from './image-probe.ts'
 import './probe-facades.ts'
 
 type Workbook = ReturnType<FUniver['createWorkbook']>
@@ -87,6 +89,7 @@ export interface ProbeShortcut {
 }
 
 export interface EditorProbe {
+  readonly images: ReturnType<typeof createImageProbe>
   /** 编辑器的 Facade：E2E 经它调用各个编辑入口 */
   readonly univerAPI: FUniver
   /** 内存里的快照，与编辑器的捕获相同（JSON.stringify(save())） */
@@ -162,6 +165,7 @@ function readFormulaBar(editors: IEditorService): string {
  * 打开自检的结果
  */
 export interface ProbeTarget {
+  readonly imageInput?: ReturnType<typeof installSystemImageInput> | undefined
   readonly univer: Univer
   readonly univerAPI: FUniver
   readonly workbook: Workbook
@@ -171,7 +175,7 @@ export interface ProbeTarget {
 }
 
 /** 装上探针，返回移除它的函数（编辑器销毁时调用：退订命令事件；已经换成别的探针时不动 window 上的那个） */
-export function installEditorProbe({ univer, univerAPI, workbook, changes, formulaMode, openCheck }: ProbeTarget): () => void {
+export function installEditorProbe({ univer, univerAPI, workbook, changes, formulaMode, openCheck, imageInput }: ProbeTarget): () => void {
   const log: ProbeCommand[] = []
   const record = (phase: ProbeCommand['phase'], event: FacadeEvent): void => {
     const command = toCommandRecord(event)
@@ -199,6 +203,7 @@ export function installEditorProbe({ univer, univerAPI, workbook, changes, formu
   ]
   const injector = injectorOf(univer)
   const probe: EditorProbe = {
+    images: createImageProbe(univer, workbook, imageInput),
     univerAPI,
     snapshot: () => JSON.stringify(workbook.save()),
     commands: (after = 0) => log.filter(command => command.seq > after),

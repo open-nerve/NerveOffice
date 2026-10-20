@@ -20,6 +20,25 @@ packages:
   - tools
   - tests/*
 
+patchedDependencies:
+  # ADR-022：单元格元素缓存走平台鉴权与实例登记；取消不回退原 URL，先登记再等待读取。
+  '@univerjs/core@1.0.1': patches/@univerjs__core@1.0.1.patch
+  # ADR-022：浮图初次加载及桌面/移动更新统一走实例 IO，迟到结果检查来源和场景存活。
+  '@univerjs/drawing-ui@1.0.1': patches/@univerjs__drawing-ui@1.0.1.patch
+  # ADR-022、UR-009：刷新 transform 时同步明确提供的两份工作表锚点。
+  '@univerjs/drawing@1.0.1': patches/@univerjs__drawing@1.0.1.patch
+  # ADR-022：IMAGE 快照补算；在定义名称展开前证明字面量来源并沿实际位置传递，保留原快照格式。
+  '@univerjs/engine-formula@1.0.1': patches/@univerjs__engine-formula@1.0.1.patch
+  # ADR-022、UR-006：坏图/未完成元素不进入 drawImage，换源不污染其他图元共用元素。
+  '@univerjs/engine-render@1.0.1': patches/@univerjs__engine-render@1.0.1.patch
+  # ADR-022、UR-031：插入量尺寸走实例 IO，切表/销毁后取消；Ready 只静默正常退役。
+  '@univerjs/sheets-drawing-ui@1.0.1': patches/@univerjs__sheets-drawing-ui@1.0.1.patch
+  # ADR-022、UR-009：Position 自动行高重算起止锚点，保持尺寸和原属性的缺省状态。
+  '@univerjs/sheets-drawing@1.0.1': patches/@univerjs__sheets-drawing@1.0.1.patch
+  # ADR-022：IMAGE 量尺寸、取消与恢复走实例 IO，采用真实原件几何并拒绝过时批次写回。
+  '@univerjs/sheets-formula@1.0.1': patches/@univerjs__sheets-formula@1.0.1.patch
+  # ADR-022：桌面右键菜单先恢复当前编辑器焦点，再同步执行命令，保留图片焦点守卫。
+  '@univerjs/ui@1.0.1': patches/@univerjs__ui@1.0.1.patch
 # 依赖的安装脚本逐个决定，新增一项要写原因（规范 §3）
 allowBuilds:
   # postinstall 只校验本平台的原生二进制；pnpm 已按平台装好可选依赖里的二进制。drizzle-kit 用它读取表定义，只在开发时使用（M1-P2）

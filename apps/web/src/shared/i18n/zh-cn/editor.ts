@@ -107,6 +107,34 @@ const DAMAGED_RESOURCE_PHRASES: Readonly<Record<ProfileResourceName<'sheet@1'>, 
 }
 
 export const editorMessages = {
+  images: {
+    failed: '部分图片暂时无法显示',
+    retry: '重新加载图片',
+    checking: '正在重新加载图片…',
+    operations: { copy: '复制图片', cut: '剪切图片', paste: '粘贴', insert: '插入图片' },
+    reasons: {
+      'count': '每次最多选择 10 张图片。',
+      'size': '图片不能为空，每张图片最多 5 MiB。',
+      'type': '请选择 PNG、JPEG、WebP 或 GIF 图片，文件格式须与后缀一致。',
+      'invalid': '图片无法处理，请检查格式或使用较小的图片。',
+      'quota': '图片存储配额不足，请联系管理员。',
+      'image-without-file': '没有可用的图片文件，请复制图片本身或选择本机文件。',
+      'busy': '上一项图片操作仍在进行，请稍候再试。',
+      'permission': '当前无法操作该位置，请确认会话和编辑权限后重试。',
+      'clipboard-permission': '浏览器未允许访问剪贴板，请允许后再次操作。',
+      'selection': '请只选择一张图片，并保持原位置不变。',
+      'unsupported': '当前浏览器不支持这项剪贴板操作。',
+      'empty': '没有可粘贴的内容。',
+      'timeout': '图片处理超时，请重试。',
+      'encoding': '无法处理这张图片，请重新选择。',
+      'request': '请求失败，请稍后重试。',
+    },
+    busy: (operation: string): string => `正在${operation}…`,
+    complete: (operation: string): string => `${operation}已完成。`,
+    cancelled: (operation: string): string => `已取消${operation}。`,
+    incomplete: (operation: string): string => `${operation}未完成。`,
+    progress: (completed: number, total: number): string => `已插入 ${completed}/${total} 张图片。`,
+  },
   formulaRecovery: {
     waiting: '请先完成当前输入，页面随后恢复公式计算。',
     working: '正在恢复公式计算，请稍候。',
@@ -319,6 +347,14 @@ export const editorMessages = {
   nearCapacity: (percent: number) => `这份表格已用去容量上限（5 MiB）的 ${percent}%，再加内容可能就保存不了了`,
   /** 快照被服务端拒绝（SNAPSHOT_INVALID）：按违反的规则说（不认识的规则照"格式不正确"说） */
   snapshotInvalid: (rule: SnapshotRule | undefined) => rule === undefined ? '表格内容的格式不正确' : SNAPSHOT_RULE_PHRASES[rule],
+  imageLocations: (reason: string, positions: string) => `${reason}。请检查：${positions}`,
+  imageLocation: {
+    sheet: (name: string | undefined) => name === undefined ? '某个工作表' : `工作表「${name}」`,
+    cell: (sheet: string, address: string) => `${sheet}的 ${address}`,
+    drawing: (sheet: string, address: string | undefined) => address === undefined ? `${sheet}的浮动图片` : `${sheet}的 ${address} 附近的浮动图片`,
+    resource: '表格附加内容',
+    workbook: '工作簿中的其他位置',
+  },
   /**
    * 编辑权（M3-P1 设计 §3.4.7、M3-P2 设计 §3.4）：别处正在编辑时说明是谁；失效时说明原因，读得到时给另存为副本、放弃或重新加载。
    * 编辑权中断（到期、空闲回收、换了登录、被接手等）先自动续上，续上了就不说明；这里的失效是续不上、或者失去了访问或编辑权

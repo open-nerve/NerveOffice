@@ -8,11 +8,12 @@ import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { APPLICATION_NAME, DocumentAssetReferences, DocumentAssetsRepository, DocumentsRepository } from '@nerve-office/api/testing'
-import { saveContentResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { errorResponseSchema, saveContentResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
 import { uploadTestAsset } from '../support/assets.ts'
+import { postConflictCopy } from '../support/conflict-copies.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, releaseLease, saveContent } from '../support/edit-leases.ts'
@@ -93,7 +94,37 @@ function signal() {
   return { promise, resolve }
 }
 
-describe('正式保存与图片当前引用', () => {
+describe('US-M5-07 正式保存与图片当前引用', () => {
+  it('图片位置经真实保存和副本返回，拒绝时内容、修订与引用不变；纠正后保存成功', async () => {
+    const target = await document()
+    const kept = await uploaded()
+    const next = await uploaded()
+    await saved(await put(editor, target, raw(target, [kept]), { baseRevision: 1 }))
+    const before = await facts(target.id)
+    const counts = async () => database.query(async client => (await client.query<{ documents: string, links: string }>('SELECT (SELECT count(*) FROM documents) AS documents, (SELECT count(*) FROM document_asset_links) AS links')).rows[0])
+    const beforeCounts = await counts()
+    const secret = 'https://private.example/private-picture.png'
+    const sheet = { ...SHEET_TEMPLATE.sheets['sheet-1'], name: '不能回传的名称', cellData: { 2: { 1: { p: { source: secret, body: { dataStream: '不能回传的正文\r\n' } } } } } }
+    const snapshot = { ...SHEET_TEMPLATE, id: target.unitId, sheets: { 'sheet-1': sheet }, images: [`/api/assets/${next}`] }
+    const body = Buffer.from(JSON.stringify(snapshot))
+    const logStart = app.logs.entries().length
+    for (const response of [await put(editor, target, body, { baseRevision: 2 }), await postConflictCopy(app.baseUrl, editor.session, target.id, target.unitId, { raw: body })]) {
+      expect(response.status).toBe(422)
+      const text = await response.text()
+      const result = errorResponseSchema.parse(JSON.parse(text))
+      expect(result.error).toMatchObject({ code: 'SNAPSHOT_INVALID', details: { rule: 'image-source', imageLocations: [{ kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 }] } })
+      expect(text).not.toMatch(/private|不能回传/)
+    }
+    expect(await facts(target.id)).toEqual(before)
+    expect(await counts()).toEqual(beforeCounts)
+    const logs = app.logs.entries().slice(logStart)
+    expect(logs.filter(entry => entry.msg === '快照不合格，拒绝写入')).toHaveLength(2)
+    expect(JSON.stringify(logs)).not.toMatch(/imageLocations|sheet-1|private|不能回传/)
+    const corrected = raw(target, [kept, next], '已纠正')
+    expect(await saved(await put(editor, target, corrected, { baseRevision: 2 }))).toMatchObject({ revision: 3 })
+    expect((await facts(target.id)).references).toEqual([kept, next].sort())
+  })
+
   it('新修订合并三类合法来源，无权/未知地址照常存正文但不授予读权；移除地址清空引用并保留资源', async () => {
     const target = await document()
     const source = await document(owner)

@@ -140,6 +140,7 @@ function fakeFactory() {
       formulasSettled: true,
       editor: {
         unitId: 'unit-1',
+        sheetName: vi.fn(() => undefined),
         formulaMode: options.formulaMode ?? 'worker',
         workerFailure: () => failure,
         onWorkerFailure: (listener) => {
@@ -508,6 +509,27 @@ async function editing(context: ReturnType<typeof setup>): Promise<void> {
 }
 
 describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
+  it('名称查询只交给当前实例，重建后不读旧实例，卸载后返回 undefined', async () => {
+    const h = setup()
+    expect(h.mode.sheetName('s')).toBeUndefined()
+    await opened(h)
+    const first = h.factory.created[0]!.editor
+    vi.mocked(first.sheetName).mockReturnValue('旧表')
+    vi.mocked(first.capture).mockClear()
+    expect(h.mode.sheetName('s')).toBe('旧表')
+    expect(first.capture).not.toHaveBeenCalled()
+    await h.mode.enter()
+    const next = h.factory.created.at(-1)!.editor
+    vi.mocked(next.sheetName).mockReturnValue('新表')
+    vi.mocked(first.sheetName).mockClear()
+    expect(h.mode.sheetName('s')).toBe('新表')
+    expect(first.sheetName).not.toHaveBeenCalled()
+    h.mode.dispose()
+    vi.mocked(next.sheetName).mockClear()
+    expect(h.mode.sheetName('s')).toBeUndefined()
+    expect(next.sheetName).not.toHaveBeenCalled()
+  })
+
   it('打开创建失败只报一次真实修订，之后进入/退出不重复；异常内容不传输', async () => {
     const h = setup()
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create', { cause: new Error('机密正文') }))
@@ -6748,16 +6770,19 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
       await prompted(context)
       context.factory.last().edit('甲')
       await context.time.advance(HANDOVER_MS)
-      await settle()
-      expect(editingOf(context.mode).request).toEqual(SHOWN)
-      expect(context.mode.view().save?.status).toBe('failed')
+      // 真实 gzip/摘要可能跨过多个宏任务；等保存失败且交出已退回编辑，才推进重试的假时钟。
+      await vi.waitFor(() => {
+        expect(editingOf(context.mode).request).toEqual(SHOWN)
+        expect(context.mode.view().save?.status).toBe('failed')
+      })
       expect(context.editLease.handOver).not.toHaveBeenCalled()
       expect(context.editLease.release).not.toHaveBeenCalled()
       context.api.save.mockResolvedValue(SAVED)
       await context.time.advance(HEARTBEAT_MS)
-      await settle()
-      expect(context.editLease.handOver).toHaveBeenCalledOnce()
-      expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+      await vi.waitFor(() => {
+        expect(context.editLease.handOver).toHaveBeenCalledOnce()
+        expect(readingOf(context.mode).notice).toEqual({ kind: 'handed-over', to: BEN, auto: true })
+      })
     })
 
     it('再也存不上（版本冲突）：留在编辑，不再自动试（提示留着）', async () => {

@@ -1,10 +1,10 @@
-// 在单元格编辑器与编辑栏里粘贴带图片的内容（DEF-035 的旁支，M3-P2 设计 §3.3）：M5 之前不开放图片（P4 设计 §3.6.8），
-// 单元格的富文本里也不能出现图片（单元格图片：地址是 data URL 或外链，P3 的完整校验会拒收这样的快照）。
+// 在单元格编辑器与编辑栏里粘贴带图片的内容（DEF-035 的旁支，M3-P2 设计 §3.3）：M5-P2 仍禁止 SDK 的内部文档图片路径，
+// 防止 data URL 或外链图片进入单元格富文本；正式单元格图片必须经平台上传并保存资源地址。
 // 核实的结论（M3-P2 S3，Chromium 与 WebKit 上合成的 paste 事件，图片文件与带 <img> 的 HTML）：
 // - 编辑栏在编辑时（先键入过），docs-ui 按 source 方式粘贴，图片转成内部文档里的 drawings，回车之后写进单元格（p.drawings、
 //   drawingsOrder），外链的图片画出来时还触发 CSP 的违规——入口守卫取消带图片的 doc.command.inner-paste（editor/profile/entry-guards.ts）；
 // - 单元格编辑器按纯文字粘贴：只认 text/plain，没有时什么也不贴，不会写进图片——不拦，这里核对它照旧；
-// - 表格上的粘贴（选中单元格、不在编辑）不把 <img> 写进单元格，图片文件走插入浮动图片（本来就被入口守卫取消）。
+// - 表格上的粘贴（选中单元格、不在编辑）在 M5-P2 由平台接管；文件图片的正例见 template.spec.ts、image-input.spec.ts。
 // 合成的 paste 事件派发在获得焦点的输入元素上（docs-ui 在那里监听粘贴），与真实的粘贴走同一条路（读 clipboardData）。
 // 用到探针（只在测试构建里）：标签 @test-build
 import type { Page } from '@playwright/test'

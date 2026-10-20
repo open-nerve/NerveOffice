@@ -9,7 +9,7 @@
 // "公式待更新"的记下、补存清掉（内容相同只清不设、内容不同照常加修订号）。
 // 处理的顺序本身（重放、格式、检查、事务里的各步）在单元测试（document-content.service.test.ts）；看不到与不存在的语句序列在
 // permissions/hidden-missing-parity.test.ts。
-import type { ClientFormat, SaveContentResponse } from '@nerve-office/contracts'
+import type { ClientFormat, SaveContentResponse, SnapshotImageLocation } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -180,7 +180,7 @@ async function auditsOf(documentId: string): Promise<number> {
 const LINK = (url: string, rangeId = 'link1') => ({ p: { id: 'd', body: { dataStream: 'abc\r\n', customRanges: [{ startIndex: 0, endIndex: 2, rangeId, rangeType: 0, properties: { url } }] } } })
 
 describe('US-M3-14 每条快照规则经真实的保存接口被拒，给出规则（details.rule），不写入', () => {
-  const CASES: readonly (readonly [string, string, (unitId: string) => Buffer])[] = [
+  const CASES: readonly (readonly [string, string, (unitId: string) => Buffer, (readonly SnapshotImageLocation[])?])[] = [
     ['不是 UTF-8', 'encoding', () => Buffer.from([0x7B, 0xFF, 0x7D])],
     ['嵌套超过 64 层（外层）', 'depth', unitId => bytesOf(`{"id":"${unitId}","sheetOrder":[],"sheets":{},"x":${'['.repeat(70)}${']'.repeat(70)}}`)],
     ['嵌套超过 64 层（资源 data 里的 JSON 与外层累加）', 'depth', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_NOTE_PLUGIN', data: `{"s":${'['.repeat(62)}${']'.repeat(62)}}` }])))],
@@ -199,8 +199,8 @@ describe('US-M3-14 每条快照规则经真实的保存接口被拒，给出规�
     ['资源名不在档案的白名单里', 'resource-unknown', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_AuthzIoMockService_PLUGIN', data: '{}' }])))],
     ['已知资源的结构不对', 'resource-data', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_CONDITIONAL_FORMATTING_PLUGIN', data: '{"unexpected":"shape","value":42}' }])))],
     ['必须为空的资源不为空（区域保护）', 'resource-not-empty', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_RANGE_PROTECTION_PLUGIN', data: '{"sheet-1":[{"permissionId":"p","unitType":3}]}' }])))],
-    ['图片地址不是平台地址（单元格图片）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: '\b\r\n' }, drawings: { img: { source: 'data:image/png;base64,iVBORw0KGgo=' } } } })))],
-    ['图片地址不是平台地址（浮动图片的资源）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ 'sheet-1': { data: { d1: { source: 'https://example.com/a.png' } }, order: ['d1'] } }) }])))],
+    ['图片地址不是平台地址（单元格图片）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: '\b\r\n' }, drawings: { img: { source: 'data:image/png;base64,iVBORw0KGgo=' } } } }))), [{ kind: 'cell', sheetId: 'sheet-1', row: 0, column: 0 }]],
+    ['图片地址不是平台地址（浮动图片的资源）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ 'sheet-1': { data: { d1: { source: 'https://example.com/a.png' } }, order: ['d1'] } }) }]))), [{ kind: 'resource', resourceIndex: SHEET_TEMPLATE.resources.length - 1 }]],
     ['链接区间看不懂', 'link-structure', unitId => bytesOf(workbookOf(unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: 'abc\r\n', customRanges: 'x' } } })))],
     ['链接地址不合法', 'link-address', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('javascript:alert(1)'))))],
     ['链接地址不是规范写法', 'link-address', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('https://example.com'))))],
@@ -208,12 +208,12 @@ describe('US-M3-14 每条快照规则经真实的保存接口被拒，给出规�
     ['unitId 是别的文档的', 'unit-id', () => bytesOf(workbookOf(randomUUID()))],
   ]
 
-  it.each(CASES)('%s：422 SNAPSHOT_INVALID，规则 %s；修订号、内容不变，说明里没有快照的内容', async (_case, rule, build) => {
+  it.each(CASES.map(([name, rule, build, imageLocations]) => ({ name, rule, build, imageLocations })))('$name：422 SNAPSHOT_INVALID，规则 $rule；修订号、内容不变，说明里没有快照的内容', async ({ rule, build, imageLocations }) => {
     const document = await amyDocument()
     const before = await envelopeOf(document.id)
     const response = await save(document, build(document.unitId))
     const text = await response.clone().text()
-    expect(await errorOf(response)).toEqual({ status: 422, code: 'SNAPSHOT_INVALID', details: { rule } })
+    expect(await errorOf(response)).toEqual({ status: 422, code: 'SNAPSHOT_INVALID', details: { rule, ...(imageLocations === undefined ? {} : { imageLocations }) } })
     expect(text).not.toContain('example.com')
     expect(text).not.toContain('javascript')
     expect(await envelopeOf(document.id)).toEqual(before)
@@ -523,7 +523,7 @@ describe('信封（00 号计划书 §8.1）', () => {
   it('另存为副本：完整的检查（非平台的图片地址 422 image-source）；信封与"公式待更新"、内容的哈希与资源名写在副本上', async () => {
     const source = await amyDocument('原文档')
     const bad = bytesOf(workbookOf(source.unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: '\b\r\n' }, drawings: { img: { source: 'https://example.com/a.png' } } } })))
-    expect(await errorOf(await postConflictCopy(app.baseUrl, amySession, source.id, source.unitId, { raw: bad }))).toEqual({ status: 422, code: 'SNAPSHOT_INVALID', details: { rule: 'image-source' } })
+    expect(await errorOf(await postConflictCopy(app.baseUrl, amySession, source.id, source.unitId, { raw: bad }))).toEqual({ status: 422, code: 'SNAPSHOT_INVALID', details: { rule: 'image-source', imageLocations: [{ kind: 'cell', sheetId: 'sheet-1', row: 0, column: 0 }] } })
     const raw = bytesOf(workbookOf(source.unitId, '本页的修改', withResources([{ name: 'SHEET_NOTE_PLUGIN', data: '{"sheet-1":{"0":{"0":{"note":"n"}}}}' }])))
     // 原文档由更新的版本写过（回滚之后）：副本的信封是本页的（核对过、等于服务端的），不照抄原文档（审查 A7）
     await database.query(async client => client.query('UPDATE documents SET sdk_version = \'99.0.0\' WHERE id = $1', [source.id]))

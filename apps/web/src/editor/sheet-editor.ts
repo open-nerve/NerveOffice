@@ -37,6 +37,8 @@ import type { CompositionWatch } from './composition-watch.ts'
 import type { EditorAccess } from './editor-access.ts'
 import type { FormulaRound } from './formula-round-stop.ts'
 import type { FormulaWorkerFailure } from './formula-worker-failure.ts'
+import type { EditorImageAccess, PlatformImageIo } from './images/platform-image-io.ts'
+import type { ImageInputState, installSystemImageInput } from './images/system-image-input.ts'
 import type { LifecycleWatch, SheetEditorLifecycle } from './lifecycle-watch.ts'
 import type { PanelDebounceWatch } from './panel-debounce-watch.ts'
 import type { OpenCheck } from './profile/open-check.ts'
@@ -57,10 +59,14 @@ import { FormulaWorkerError } from './formula-worker-failure.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
+import { installEditorImageInput } from './images/editor-image-input.ts'
+import { createPlatformImageIo } from './images/platform-image-io.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL } from './internal-api/index.ts'
+import { closeImagePreview, invalidateImageRendering } from './internal-api/ui.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { watchPanelDebounces } from './panel-debounce-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
+import { installImagePolicy } from './profile/image-policy.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { SHEET_ZH_CN } from './profile/locale.ts'
 import { checkCreated, recheckReady } from './profile/open-check.ts'
@@ -77,6 +83,8 @@ import './profile/styles.ts'
 
 export interface SheetEditor {
   readonly unitId: string
+  /** 只读名称查询，不捕获快照、不切表；未知表或销毁期间返回 undefined。 */
+  readonly sheetName: (sheetId: string) => string | undefined
   /** 本实例在哪里计算；运行中不能原地切换，页面须按原权限重建。 */
   readonly formulaMode: FormulaMode
   /** 本实例 Worker 的首个故障；主线程模式一直为 undefined。订阅后读取，补齐接线前的窗口。 */
@@ -147,6 +155,13 @@ export interface SheetEditor {
 }
 
 export interface CreateSheetEditorOptions {
+  /** 页面原会话与图片权限复核信号；未提供时图片读取/上传安全关闭。 */
+  readonly imageAccess?: EditorImageAccess
+  /** 图片失败由页面聚合提示；不回显原始来源或文件内容，也不作为全表加载失败。 */
+  readonly onImageFailure?: (error: unknown) => void
+  /** 输入操作与图片显示分别反馈；系统剪贴板失败不触发图片加载重试。 */
+  readonly onImageOperation?: (state: ImageInputState) => void
+  readonly onImageOperationFailure?: (error: unknown) => void
   /** 编辑器挂载的容器 */
   readonly container: HTMLElement
   /** 快照的 JSON 文本（服务端下发的原文） */
@@ -217,6 +232,7 @@ function createWorkbook(univerAPI: FUniver, snapshot: WorkbookSnapshot): ReturnT
 type Workbook = ReturnType<FUniver['createWorkbook']>
 
 interface MountedEditor {
+  readonly imageInput: ReturnType<typeof installSystemImageInput> | undefined
   readonly univer: Univer
   readonly univerAPI: FUniver
   readonly workbook: Workbook
@@ -267,6 +283,8 @@ function createFormulaHost(mode: FormulaMode, cleanup: CleanupStack): FormulaHos
  */
 interface FormulaRoundRef {
   round: FormulaRound | undefined
+  images: PlatformImageIo | undefined
+  imageInput: { dispose: () => void } | undefined
 }
 
 /**
@@ -289,7 +307,11 @@ function formulaRoundOf(univerAPI: FUniver, changes: ChangeTracker): FormulaRoun
  * 再按创建的相反顺序销毁；没有在算时调用的这一刻就销毁完。从不失败：停不下、到了时限都照样销毁，交给浏览器的错误报告
  * （之后同一页里新建的编辑器里公式的结果可能不对，要让人看得见）
  */
-async function tearDown(cleanup: CleanupStack, round: FormulaRound | undefined): Promise<void> {
+async function tearDown(cleanup: CleanupStack, retirement: FormulaRoundRef): Promise<void> {
+  // 撤权/销毁的旧图片必须当场清掉，不能等正在运行的主线程公式退出。
+  retirement.imageInput?.dispose()
+  retirement.images?.dispose()
+  const round = retirement.round
   if (round?.running() === true) {
     try {
       if (await stopRunningRound(round) === 'timeout')
@@ -333,7 +355,17 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const resourceGuard = createResourceLoadGuard()
   const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
-  for (const entry of pluginEntries({ container, formula: formula.execution, access, recalculate }))
+  const images = createPlatformImageIo({
+    access,
+    identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
+    origin: location.origin,
+    changed: () => invalidateImageRendering(univer),
+    invalidated: () => closeImagePreview(univer),
+    failed: options.onImageFailure ?? (() => {}),
+  })
+  rounds.images = images
+  cleanup.defer(images.dispose)
+  for (const entry of pluginEntries({ container, formula: formula.execution, access, recalculate, imageOverride: images.override }))
     entry.register(univer)
   const univerAPI = FUniver.newAPI(univer)
   // 不变量（M2-P6 复核 F3）：Facade 的执行前事件（BeforeCommandExecute）在创建工作簿之前就要有订阅者，而且直到销毁都不能减到零。
@@ -349,8 +381,16 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 只读守卫只在创建编辑器时装上、随编辑器销毁：阅读与编辑之间的切换一律重建编辑器（M3-P2 设计 §3.1），运行中不装也不撤；
   // 将来要在运行中装上、撤下它，有入口守卫占着，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
   // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
-  const guards = installEntryGuards(univerAPI)
+  let managedImageInput = false
+  const guards = installEntryGuards(univerAPI, () => managedImageInput)
   cleanup.defer(() => guards.dispose())
+  // 图片先整批验证，再允许后续链接改写；任何拒绝都发生在 SDK 生成撤销或写模型之前。
+  const imageOwner = options.imageAccess?.owner ?? options.imageAccess?.current()?.user.id
+  const imageWrites = installImagePolicy(univer, univerAPI, options.onImageFailure ?? (error => reportError(error)), {
+    unitId: snapshot.unitId,
+    canEdit: () => access === 'edit' && imageOwner !== undefined && options.imageAccess?.current()?.user.id === imageOwner,
+  })
+  cleanup.defer(() => imageWrites.dispose())
   // 链接的改写（profile/link-policy.ts，M3-P3 设计 §3.6，DEF-021）：阅读与编辑都装，订阅在入口守卫之后，不改变上面的不变量
   // （入口守卫仍是第一个订阅者、直到销毁才退订；改写器随编辑器销毁，先于入口守卫退订）。在创建工作簿之前装上：
   // 打开过程中的写入（公式的初次计算写回的 HYPERLINK() 结果）同样经过它。它与只读的防火墙互不影响：Facade 先调完全部订阅者再看取消
@@ -414,7 +454,31 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
-  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode, formula }
+  const imageRuntime = installEditorImageInput({
+    univer,
+    unitId: snapshot.unitId,
+    container,
+    access,
+    identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
+    io: images,
+    changed: options.onImageOperation ?? (() => {}),
+    failed: options.onImageOperationFailure ?? (() => {}),
+  })
+  const imageInput = imageRuntime.input
+  managedImageInput = true
+  const retireImageInput = (): void => {
+    managedImageInput = false
+    imageRuntime.dispose()
+  }
+  rounds.imageInput = { dispose: retireImageInput }
+  cleanup.defer(retireImageInput)
+  if (import.meta.env.MODE === 'e2e') {
+    const { installImageInputControl } = await importTesting(async () => import('./testing/image-input-control.ts'))
+    const control = installImageInputControl({ container, pageUi: options.pageUi, input: imageInput })
+    if (control !== undefined)
+      cleanup.defer(control.dispose)
+  }
+  return { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formulaMode, formula, imageInput }
 }
 
 /**
@@ -435,7 +499,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   // 显式选择优先；生产默认不等，也不引入测试构建的 URL 开关。
   const formulaMode = options.formulaMode ?? (import.meta.env.MODE === 'e2e' ? await formulaModeOf() : 'worker')
   const cleanup = createCleanupStack()
-  const rounds: FormulaRoundRef = { round: undefined }
+  const rounds: FormulaRoundRef = { round: undefined, images: undefined, imageInput: undefined }
   let mounted: MountedEditor
   try {
     mounted = await mount(options, snapshot, formulaMode, cleanup, rounds)
@@ -455,7 +519,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       throw new FormulaWorkerError(failure)
   }
   catch (error) {
-    await tearDown(cleanup, rounds.round)
+    await tearDown(cleanup, rounds)
     throw error
   }
   const { workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
@@ -466,7 +530,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
   const dispose = async (): Promise<void> => {
     if (disposal === undefined) {
       disposed = true
-      disposal = tearDown(cleanup, rounds.round)
+      disposal = tearDown(cleanup, rounds)
     }
     return disposal
   }
@@ -478,6 +542,17 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
 
   return {
     unitId: snapshot.unitId,
+    sheetName(sheetId) {
+      if (disposed)
+        return undefined
+      try {
+        const name: unknown = workbook.getSheetBySheetId(sheetId)?.getSheetName()
+        return typeof name === 'string' ? name : undefined
+      }
+      catch {
+        return undefined
+      }
+    },
     formulaMode,
     workerFailure: formula.failure,
     onWorkerFailure: formula.onFailure,

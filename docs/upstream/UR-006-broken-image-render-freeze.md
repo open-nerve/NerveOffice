@@ -1,5 +1,7 @@
 # UR-006 图片读取失败时渲染对破损图片调用 drawImage，抛出 InvalidStateError 并让画布停止刷新
 
+> 本项目进度（2026-10-20）：M5-P2-S2 已在锁定的 1.0.1 发布包增加最小绘制检查，并以原版坏图反例及三浏览器失败后继续编辑/绘制/保存验证；S5 组合复验也已通过。见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)与 ADR-022。P2 完整门禁及 CI 尚待收口。本文件仍为未提交的上游草稿；下文版本、检索及实测记录保留原调查时点，不代表当前上游发布状态。
+
 > 状态：草稿（提交之前需求方确认）｜上游仓库：dream-num/univer｜提交方式：公开 issue
 > 出处：M0-P4 报告摘要"读取失败时 SDK 会抛出未捕获的异常"、§2.2（D5 的说明与"读取失败时的页面错误"表）、§2.3 第 3 条；用例 `spikes/m0/e2e/v11-assets.spec.ts`（"V11 读取失败时返回占位图"，结果 `spikes/m0/e2e/results/v11/fallback/*.json`）与 `spikes/m0/e2e/v11-image-paths.spec.ts`（D5、D6、D8b、D8d 的默认配置，结果 `spikes/m0/e2e/results/v11/paths/`）；P4 交接单"上游报告"第 1 条；没有 DEF 编号｜发现版本：1.0.0｜1.0.1 核对：仍然存在（依据：已安装的 `@univerjs/engine-render@1.0.1` 发布包 `lib/es/index.js` 中，`Image` 类的构造函数仍是先挂 `onerror` 换内置 SVG（L32335）、`_drawNative`（L32536 起）的 4 处 `ctx.drawImage(native, …)`（L32551、L32552、L32565、L32566）仍不检查图片状态，`changeSource`（L32391）仍没有错误处理，`Engine` 的 `_renderFunction`（L34809–34819）仍不捕获异常、渲染完才请求下一帧；另在 1.0.1 上用不含平台代码的最小页面实测复现，见正文 Actual behavior；npm 上的 1.0.2（当前 latest）代码相同）
 
@@ -137,3 +139,9 @@ Line numbers refer to the `v1.0.0` tag; the code is unchanged in the published 1
 1. In `Image._draw()` / `_drawNative()`, do not call `drawImage()` unless the element is usable — for example `native.complete && native.naturalWidth > 0` (a broken image is `complete` with `naturalWidth === 0`) — and paint the placeholder (or nothing) otherwise, repainting on `load` / `error`. A try/catch around `drawImage()`, as `font.ts` does, would also avoid the exception.
 2. Give `changeSource()` the same error handling as the constructor.
 3. Make the render loop resilient: run `_renderFrame()` inside `try/finally` (or request the next frame before rendering) and report the error, so that one failing object cannot stop all further rendering.
+
+## 平台处理进展（2026-10-19，M5-P2-S2）
+
+固定 1.0.1 的图片 `_draw` 入口检查 complete 与自然宽高；只跳过不可绘制的图片，不捕获其他画布异常。三个状态反例 RED→GREEN，正常图、裁剪图及非图片画布错误对照通过。
+
+修复由 `pnpm patchedDependencies` 固定，见 [ADR-022](../adr/ADR-022-图片实例与SDK修复.md)。独立副本撤去相关补丁后，Chromium 真实破损元素产生原生 InvalidStateError；修复后的三浏览器故事验证普通绘制、编辑和保存仍成立。该次原版对照不另外声称观察到永久停帧。 18 个图片故事 × 三引擎共 54 项、八份补丁冷安装均通过，见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)。完整 Phase 验收仍在 S6，本记录不代表已经提交或获得上游修复。

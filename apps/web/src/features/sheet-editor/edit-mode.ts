@@ -234,6 +234,7 @@ interface CheckedStatus {
   readonly selfHolder: SelfHolder | undefined
   readonly issuerHeld: boolean
   readonly requestVersion: number
+  readonly imagePermissionEpoch: number | undefined
 }
 
 /**
@@ -455,6 +456,10 @@ export interface EditModeOptions {
   readonly recovery?: DocumentRecovery | undefined
   readonly api: EditModeApi
   readonly createEditor: CreateModeEditor
+  /** 新的状态查询所得图片权限事实；不以旧视图或图片请求失败推断重新授权。 */
+  readonly onImagePermissions?: (readable: boolean, canEdit?: boolean, canTakeOver?: boolean, issuedEpoch?: number) => void
+  /** 请求开始时的页面图片许可代次，防止旧状态越过详情撤权。 */
+  readonly imagePermissionEpoch?: () => number
   /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查、退出时等释放的上限 */
   readonly clock: LeaseClock
   readonly visibility: PageVisibility
@@ -506,6 +511,7 @@ export type OpenOutcome
 
 export interface EditMode {
   readonly view: () => EditModeView
+  readonly sheetName: SheetEditor['sheetName']
   readonly subscribe: (listener: () => void) => () => void
   readonly retryFormulaRecovery: () => void
   /**
@@ -768,6 +774,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     // 回来时变过了就不按它恢复等待（M3-P5 设计 §3.6）
     fetch: async () => {
       const requestVersion = requests.version()
+      const imagePermissionEpoch = options.imagePermissionEpoch?.()
       const fetched = await api.editStatus(documentId)
       const { status } = fetched
       const mine = status.request?.mine === true || status.reservation?.mine === true
@@ -776,6 +783,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         selfHolder: status.editor?.sameUser === true ? await locate() : undefined,
         issuerHeld: mine && await options.sameBrowser.issuedRequestHeld(),
         requestVersion,
+        imagePermissionEpoch,
       }
     },
     allowed: () => !disposed && mode.kind === 'reading' && session === 'active',
@@ -960,10 +968,12 @@ export function createEditMode(options: EditModeOptions): EditMode {
       // 当前 Document 曾明确请求而暂未在等（撤回未送达）：续接等待；刷新/副本的新内存意图为空（M3-P5 设计 §3.6）。"在此编辑"进行中、不能进入编辑的阅读不恢复
       if (owner === 'here' && status.canEdit && mode.kind === 'reading' && mode.takeover === undefined && mode.blocked === undefined && mode.damaged === undefined)
         requests.resume(status.editor?.holder)
+      options.onImagePermissions?.(true, status.canEdit, status.canTakeOver, result.fetched.imagePermissionEpoch)
     }
     else if (isNotFoundError(result.error)) {
       // 读不到了（删除、移走、失去访问）：说明，没有"编辑"与"有更新"；之后照常检查，恢复访问之后随之恢复
       setMode({ ...reading, gone: true, canEdit: false, holder: undefined, interruption: undefined, update: loading ? 'loading' : 'none' })
+      options.onImagePermissions?.(false)
     }
     else if (isAuthenticationError(result.error)) {
       hooks.readProblem(result.error)
@@ -2106,6 +2116,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   return {
     view: () => current,
+    sheetName: sheetId => disposed ? undefined : slot.editor()?.sheetName(sheetId),
     retryFormulaRecovery: () => formulaRecovery?.retry(),
     subscribe: (listener) => {
       listeners.add(listener)

@@ -1,0 +1,137 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 5acbaac49bceef1b32a7db66c98ea5ff634180a3..571344f1a869ac8402686767cab53e6f9c96cb1d 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,4 +1,5 @@
+-import { BooleanNumber, BuildTextUtils, CommandType, DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, DOCS_NORMAL_EDITOR_UNIT_ID_KEY, DependentOn, Direction, Disposable, DisposableCollection, DrawingTypeEnum, FOCUSING_COMMON_DRAWINGS, FOCUSING_FX_BAR_EDITOR, FOCUSING_PANEL_EDITOR, FOCUSING_SHAPE_TEXT_EDITOR, FOCUSING_SHEET, ICommandService, IConfigService, IContextService, IImageIoService, IPermissionService, IURLImageService, IUndoRedoService, IUniverInstanceService, ImageCacheMap, ImageSourceType, ImageUploadStatusType, Inject, Injector, InterceptorEffectEnum, LifecycleService, LifecycleStages, LocaleService, ObjectMatrix, Optional, Plugin, PositionedObjectLayoutType, RxDisposable, Tools, UniverInstanceType, UserManagerService, WrapTextType, createDocumentModelWithStyle, createIdentifier, fromEventSubject, generateRandomId, merge, mergeOverrideWithDependencies, registerDependencies, sequenceExecute, toDisposable, touchDependencies } from "@univerjs/core";
++// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
++import { BooleanNumber, BuildTextUtils, CommandType, DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, DOCS_NORMAL_EDITOR_UNIT_ID_KEY, DependentOn, Direction, Disposable, DisposableCollection, DrawingTypeEnum, FOCUSING_COMMON_DRAWINGS, FOCUSING_FX_BAR_EDITOR, FOCUSING_PANEL_EDITOR, FOCUSING_SHAPE_TEXT_EDITOR, FOCUSING_SHEET, ICommandService, IConfigService, IContextService, IImageIoService, IPermissionService, IURLImageService, IUndoRedoService, IUniverInstanceService, ImageCacheMap, ImageSourceType, ImageUploadStatusType, Inject, Injector, InterceptorEffectEnum, LifecycleService, LifecycleStages, LifecycleUnreachableError, LocaleService, ObjectMatrix, Optional, Plugin, PositionedObjectLayoutType, RxDisposable, Tools, UniverInstanceType, UserManagerService, WrapTextType, createDocumentModelWithStyle, createIdentifier, fromEventSubject, generateRandomId, merge, mergeOverrideWithDependencies, registerDependencies, sequenceExecute, toDisposable, touchDependencies } from "@univerjs/core";
+ import { ClearSheetDrawingTransformerOperation, DrawingApplyType, ISheetDrawingService, InsertSheetDrawingCommand, RemoveSheetDrawingCommand, SetDrawingApplyMutation, SetDrawingArrangeCommand, SetSheetDrawingCommand, SetSheetDrawingPlacementCommand, SetWorksheetBackgroundImageCommand, SetWorksheetBackgroundImageMutation, SheetDrawingAnchorType, UniverSheetsDrawingPlugin, drawingPositionToTransform, getSheetDrawingPlacement, transformToAxisAlignPosition, transformToDrawingPosition } from "@univerjs/sheets-drawing";
+ import { CURSOR_TYPE, DEFAULT_TRANSFORMER_CONFIG, DRAWING_OBJECT_LAYER_INDEX, IRenderManagerService, Image, ObjectType, Rect, SHEET_EXTENSION_TYPE, SHEET_VIEWPORT_KEY, SheetExtension, UniverRenderEnginePlugin, Vector2, getCurrentTypeOfRenderer, getGroupState, transformObjectOutOfGroup } from "@univerjs/engine-render";
+ import { Button, Checkbox, CheckboxGroup, FormLayout, MessageType, MobileSelect, Radio, RadioGroup, Select, clsx, render, unmount } from "@univerjs/design";
+@@ -621,6 +622,8 @@ let SheetDrawingUpdateController = class SheetDrawingUpdateController extends Di
+ 		return this._insertCellImage(file, location);
+ 	}
+ 	async insertFloatImageByFile(file) {
++		if (this._disposed || this._context.scene._disposed) return;
++		const target = this._getUnitInfo();
+ 		let imageParam;
+ 		try {
+ 			imageParam = await this._imageIoService.saveImage(file);
+@@ -639,12 +642,13 @@ let SheetDrawingUpdateController = class SheetDrawingUpdateController extends Di
+ 				content: this._localeService.t("sheets-drawing-ui.update-status.invalidImage")
+ 			});
+ 		}
+-		if (imageParam == null) return;
+-		const { unitId, subUnitId } = this._getUnitInfo();
+-		const { imageId, imageSourceType, source, base64Cache } = imageParam;
+-		const { width, height, image } = await getImageSize(base64Cache || "");
++		if (imageParam == null || !this._isImageTarget(target)) return;
++		const { unitId, subUnitId } = target;
++		const { imageId, imageSourceType, source } = imageParam;
++		const size = await this._loadImageSize(source, imageSourceType, target);
++		if (!size) return;
++		const { width, height } = size;
+ 		const { width: sceneWidth, height: sceneHeight } = this._context.scene;
+-		this._imageIoService.addImageSourceCache(source, imageSourceType, image);
+ 		let scale = 1;
+ 		if (width > DRAWING_IMAGE_WIDTH_LIMIT || height > DRAWING_IMAGE_HEIGHT_LIMIT) {
+ 			const scaleWidth = DRAWING_IMAGE_WIDTH_LIMIT / width;
+@@ -675,6 +679,8 @@ let SheetDrawingUpdateController = class SheetDrawingUpdateController extends Di
+ 		});
+ 	}
+ 	async _insertCellImage(file, location) {
++		if (this._disposed || this._context.scene._disposed) return false;
++		const target = this._getUnitInfo();
+ 		let imageParam;
+ 		try {
+ 			imageParam = await this._imageIoService.saveImage(file);
+@@ -693,10 +699,11 @@ let SheetDrawingUpdateController = class SheetDrawingUpdateController extends Di
+ 				content: this._localeService.t("sheets-drawing-ui.update-status.invalidImage")
+ 			});
+ 		}
+-		if (imageParam == null) return false;
+-		const { imageId, imageSourceType, source, base64Cache } = imageParam;
+-		const { width, height, image } = await getImageSize(base64Cache || "");
+-		this._imageIoService.addImageSourceCache(source, imageSourceType, image);
++		if (imageParam == null || !this._isImageTarget(target)) return false;
++		const { imageId, imageSourceType, source } = imageParam;
++		const size = await this._loadImageSize(source, imageSourceType, target);
++		if (!size) return false;
++		const { width, height } = size;
+ 		const selection = this._workbookSelections.getCurrentLastSelection();
+ 		if (!selection) return false;
+ 		let row = selection.primary.actualRow;
+@@ -756,14 +763,11 @@ let SheetDrawingUpdateController = class SheetDrawingUpdateController extends Di
+ 		return false;
+ 	}
+ 	async insertCellImageByUrl(url, location) {
+-		let src = url;
+-		try {
+-			src = await this._urlImageService.getImage(url);
+-		} catch (error) {
+-			console.error(`Failed to get image from URLImageService: ${url}`, error);
+-		}
+-		const { width, height, image } = await getImageSize(src || "");
+-		this._imageIoService.addImageSourceCache(url, ImageSourceType.URL, image);
++		if (this._disposed || this._context.scene._disposed) return false;
++		const target = this._getUnitInfo();
++		const size = await this._loadImageSize(url, ImageSourceType.URL, target);
++		if (!size) return false;
++		const { width, height } = size;
+ 		const selection = this._workbookSelections.getCurrentLastSelection();
+ 		if (!selection) return false;
+ 		const docDataModel = createDocumentModelWithStyle("", {});
+@@ -816,6 +820,25 @@ let SheetDrawingUpdateController = class SheetDrawingUpdateController extends Di
+ 		}
+ 		return false;
+ 	}
++	_isImageTarget(target) {
++		return !this._disposed && !this._context.scene._disposed && this._context.unit.getUnitId() === target.unitId && this._context.unit.getActiveSheet()?.getSheetId() === target.subUnitId;
++	}
++	async _loadImageSize(source, imageSourceType, target) {
++		try {
++			const service = imageSourceType === ImageSourceType.URL ? this._urlImageService : this._imageIoService;
++			const resolved = await service.getImage(source);
++			if (!resolved || !this._isImageTarget(target)) return null;
++			const size = await getImageSize(resolved);
++			if (!this._isImageTarget(target)) return null;
++			this._imageIoService.addImageSourceCache(source, imageSourceType, size.image);
++			// An instance may have invalidated the resolved URL while the browser was sizing it.
++			if (size.image.src !== new URL(resolved, document.baseURI).href) return null;
++			return size;
++		} catch (error) {
++			if ((error === null || error === void 0 ? void 0 : error.name) !== "AbortError") console.error(error);
++			return null;
++		}
++	}
+ 	_getUnitInfo() {
+ 		const workbook = this._context.unit;
+ 		const worksheet = workbook.getActiveSheet();
+@@ -3522,6 +3545,8 @@ function touchSheetsDrawingFloatingHostCapabilityWhenReady(injector) {
+ 	}
+ 	lifecycleService.onStage(LifecycleStages.Ready).then(() => {
+ 		touchSheetsDrawingFloatingHostCapability(injector);
++	}).catch((error) => {
++		if (!(error instanceof LifecycleUnreachableError)) console.error(error);
+ 	});
+ }
+ 
+diff --git a/lib/types/controllers/sheet-drawing-update.controller.d.ts b/lib/types/controllers/sheet-drawing-update.controller.d.ts
+index 9c1b388e8ce4391ead12bbc1d0ad6c26826162de..e8b0d0e08b09ad1c1965421232e1cffec143e988 100644
+--- a/lib/types/controllers/sheet-drawing-update.controller.d.ts
++++ b/lib/types/controllers/sheet-drawing-update.controller.d.ts
+@@ -1,3 +1,4 @@
++// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
+ /**
+  * Copyright 2023-present DreamNum Co., Ltd.
+  *
+@@ -59,6 +60,8 @@ export declare class SheetDrawingUpdateController extends Disposable implements
+     insertFloatImageByFile(file: File): Promise<boolean | undefined>;
+     private _insertCellImage;
+     insertCellImageByUrl(url: string, location?: ISheetLocationBase): Promise<boolean>;
++    private _isImageTarget;
++    private _loadImageSize;
+     private _getUnitInfo;
+     private _getImagePosition;
+     private _updateOrderListener;

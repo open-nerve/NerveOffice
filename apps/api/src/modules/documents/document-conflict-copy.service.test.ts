@@ -225,7 +225,7 @@ describe('DocumentConflictCopyService.copy：拒绝', () => {
     expect(store.transactions.run).not.toHaveBeenCalled()
     // 资源、图片与链接的规则同样适用：例如非平台的图片地址
     const image = Buffer.from(JSON.stringify({ id: source.unitId, sheetOrder: [], sheets: { s1: { cellData: { 0: { 0: { p: { drawings: { d: { source: 'https://example.com/a.png' } } } } } } } } }), 'utf8')
-    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand(), { compressed: zlib.gzipSync(image), decompressed: image }, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source' })
+    expect((await errorOf(service.copy(member(ALICE), source.id, copyCommand(), { compressed: zlib.gzipSync(image), decompressed: image }, HTTP_ORIGIN))).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'cell', sheetId: 's1', row: 0, column: 0 }] })
     expect(store.logs().filter(entry => entry.msg === '快照不合格，拒绝写入').map(entry => [entry.level, entry.rule, entry.documentId])).toEqual([['warn', 'structure', source.id], ['warn', 'image-source', source.id]])
   })
 

@@ -15,7 +15,7 @@ export async function loginThroughUi(page: Page, credentials: Credentials): Prom
 }
 
 /** 调登录接口，会话 Cookie 存进这个页面的浏览器上下文。状态变更的请求要带与公开地址相同的 Origin（与 baseURL 同一个源） */
-export async function loginThroughApi(page: Page, credentials: Credentials): Promise<void> {
+export async function loginThroughApi(page: Pick<Page, 'request'>, credentials: Credentials): Promise<void> {
   const response = await page.request.post('/api/auth/login', {
     data: { username: credentials.username, password: credentials.password },
     headers: { origin: e2eOrigin() },

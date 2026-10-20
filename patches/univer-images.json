@@ -1,0 +1,95 @@
+{
+  "adr": "docs/adr/ADR-022-图片实例与SDK修复.md",
+  "packages": [
+    {
+      "package": "@univerjs/core",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "581dc1255b096691e9f493ddc0d288e21f10039cdb82fa40a3d0ffb88e930351",
+      "originalCjsSha256": "90cbd2e7bd0c4e928302c2949ee7755e011b4835b102b1ddd7c00afe5a93b048",
+      "patchedEsSha256": "00309df0ebe786f71f556e1037b6a9735958419bb5c4f06b0fa345270974ee2f",
+      "patch": "patches/@univerjs__core@1.0.1.patch",
+      "patchSha256": "a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24"
+    },
+    {
+      "package": "@univerjs/drawing",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "ceca3ada50a1f6f82a4211834a4f39196addc22ce776cf9858c952824a743662",
+      "originalCjsSha256": "0a42d68c58fefd185b5e8717b5106c87be32dd930aec76471d0e0c59163d325f",
+      "patchedEsSha256": "6b30737e04160f3df2e8ffbe17ccce4ea3e2cbd605bbbef61144d831f6ebd9dc",
+      "patch": "patches/@univerjs__drawing@1.0.1.patch",
+      "patchSha256": "744270d7cb9ddd926cde93bff6e243db6455d82848c9275820553dfce701b47e"
+    },
+    {
+      "package": "@univerjs/drawing-ui",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "aae5d4cce8efd1af748463cf8cb51ca5f786a3d94780153f13c78ee35db7463c",
+      "originalCjsSha256": "af5abe75660e28e5447f93fd486438c6b6c390b650c2d14c914d4a74d94af1d1",
+      "patchedEsSha256": "ca9e85fe99016280fea610b2a84bdd06804755c9f2d5ed3b7c59ad134e2bef33",
+      "patch": "patches/@univerjs__drawing-ui@1.0.1.patch",
+      "patchSha256": "21bfea002ad7a5f19150266a8207c7d3bbff4412814c4f02f825b199e031a767"
+    },
+    {
+      "package": "@univerjs/engine-render",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "dc320e03d3a2d20453cf47e9f46cdd1317a426a0b62adb283a9e5671d2615da3",
+      "originalCjsSha256": "b207f660b32ada04d8aeff67848035bdc6a898eafb2429469f9d17c4f4cd097b",
+      "patchedEsSha256": "41a1bad9f3ebaaa35d4ddb197e547e3cca0b2c0c6d1cf20ba1126a2513d06e92",
+      "patch": "patches/@univerjs__engine-render@1.0.1.patch",
+      "patchSha256": "f9b620aa599945ffb0616fdfba9c4d5b51e0865453b1369c304492a81f615d4a"
+    },
+    {
+      "package": "@univerjs/sheets-drawing",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "97a32a05cf2df41bc07031983b94aaa80a2d2dc194487c2396ae396919ab2283",
+      "originalCjsSha256": "d2ed42425cfc47653c5898e466842d6910a586e6a21ffdff8e91a2d7ce661715",
+      "patchedEsSha256": "f795618ee005a679afc2b0c3d0fbeba7017aeb08bdc3ebaad6e9bfa043726ef9",
+      "patch": "patches/@univerjs__sheets-drawing@1.0.1.patch",
+      "patchSha256": "0c922020b3889b49303a1721666b474133c198c65d8c2c3278c9900054488155"
+    },
+    {
+      "package": "@univerjs/sheets-drawing-ui",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "3e2617d336aeed5f61d6cceab17eb45dd4f6349527b4fc2c3986dc678e3a01cc",
+      "originalCjsSha256": "418a59d5c78b4ee56022723bebd83c691834a23c36a3db07b4b2985d69d36400",
+      "patchedEsSha256": "a2ff279c8a134656e65977ddf306cddae230f00d7f4c291b508cf22686e090ed",
+      "patch": "patches/@univerjs__sheets-drawing-ui@1.0.1.patch",
+      "patchSha256": "439f805cf2aa79e4346e41aab698516c3b39482c0d3a0ffe816e025f6418722f"
+    },
+    {
+      "package": "@univerjs/sheets-formula",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "a27e50329df4884c2577df293c067b697e82e008d6b29cb4a0eefe99ef907fab",
+      "originalCjsSha256": "4478e8711dc3cff43b1bc3ff28900daa4281da55b9952b382618bc62bf3886f5",
+      "patchedEsSha256": "a2f4d0184bc8aabb77c01587cc96200abdcb38640a409cf225387729e0340a90",
+      "patch": "patches/@univerjs__sheets-formula@1.0.1.patch",
+      "patchSha256": "3a5fecc6bf2087232466577330dd8991796c6a6f5bf50d4a5e4016d21cf4701e"
+    },
+    {
+      "package": "@univerjs/engine-formula",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "482ed271dab6bde049240db5580615e88c3a94b1fdd586bf539d4a297a5a2fce",
+      "originalCjsSha256": "7b4fb05d4d0ce54714f58c8e2e2aa9f1ed820a846ce83824690a17634da7fd46",
+      "patchedEsSha256": "364ad35cf0eb36ed7a3bc48f6a6c9a6f82adddebbd2a43ef15a13f07cb434e01",
+      "patch": "patches/@univerjs__engine-formula@1.0.1.patch",
+      "patchSha256": "b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571"
+    },
+    {
+      "package": "@univerjs/ui",
+      "version": "1.0.1",
+      "entry": "lib/es/index.js",
+      "originalEsSha256": "c7cd8d9902480c0569f25a729ec29ad2d8313c9aaf13ca0045c0e3b6c3e4934e",
+      "originalCjsSha256": "04061b654f09c128c21d76e2e93dfdd74a8d4517d0974566dd82d0457d94ccd8",
+      "patchedEsSha256": "749c8fe95e6b4607159030a49507816cc3d912bef902e7a001c76fdba6c1305c",
+      "patch": "patches/@univerjs__ui@1.0.1.patch",
+      "patchSha256": "cc5c84a2621751fbda2a47a14a8ea26959b8e59413fe624e0b85d02d46c83a07"
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 1e1b3025f5e13546252104cafdbfc8dda0b5c6b8..4a8c7b87ae92252d333a3f229919e77aaa94e870 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -2722,6 +2722,37 @@ var LexerNode = class LexerNode {
+ const FORMULA_CACHE_LRU_COUNT$2 = 2e3;
+ const FormulaLexerNodeCache = new FormulaAstLRU(FORMULA_CACHE_LRU_COUNT$2);
+ const FormulaSequenceNodeCache = new FormulaAstLRU(FORMULA_CACHE_LRU_COUNT$2);
++// NerveOffice: preserve literal argument provenance before defined-name expansion.
++// This is runtime-only metadata; a value produced by a name must not look like a source literal.
++function nerveLiteralFirstArgumentOffsets(root) {
++	const offsets = new Set();
++	const pending = [root];
++	while (pending.length) {
++		const node = pending.pop();
++		const children = node.getChildren();
++		for (const child of children) if (child instanceof LexerNode) pending.push(child);
++		const first = children[0];
++		if (!(first instanceof LexerNode) || first.getToken() !== "P_1") continue;
++		const values = first.getChildren().filter((value) => typeof value !== "string" || value.trim() !== "");
++		let start = 0;
++		let end = values.length - 1;
++		while (values[start] === "(" && values[end] === ")" && start < end) {
++			start++;
++			end--;
++		}
++		const value = values[start];
++		if (start === end && typeof value === "string" && value.trim().startsWith("\"") && value.trim().endsWith("\"")) offsets.add(node.getStartIndex());
++	}
++	return offsets;
++}
++function nerveMarkLiteralFirstArguments(root, offsets) {
++	const pending = [root];
++	while (pending.length) {
++		const node = pending.pop();
++		node._nerveLiteralFirstArgument = offsets.has(node.getStartIndex());
++		for (const child of node.getChildren()) if (child instanceof LexerNode) pending.push(child);
++	}
++}
+ var LexerTreeBuilder = class extends Disposable {
+ 	constructor(..._args) {
+ 		super(..._args);
+@@ -3104,14 +3135,17 @@ var LexerTreeBuilder = class extends Disposable {
+ 		const sequenceArray = [];
+ 		let state = this._nodeMaker(formulaString, sequenceArray);
+ 		if (state === "#VALUE!" || sequenceArray.length === 0) return state;
++		const sourceLiteralOffsets = nerveLiteralFirstArgumentOffsets(this._getTopNode(this._currentLexerNode));
++		let literalOffsets = sourceLiteralOffsets;
+ 		let currentHasDefinedName = false;
+ 		let currentSequenceString = "";
+ 		let currentDefinedNames = [];
+ 		if (injectDefinedNameParam) {
+-			const { hasDefinedName, sequenceString, definedNames } = this._handleDefinedName(sequenceArray, injectDefinedNameParam);
++			const { hasDefinedName, sequenceString, definedNames, literalFirstArgumentOffsets } = this._handleDefinedName(sequenceArray, injectDefinedNameParam, sourceLiteralOffsets);
+ 			currentHasDefinedName = hasDefinedName;
+ 			currentSequenceString = sequenceString;
+ 			currentDefinedNames = definedNames;
++			if (hasDefinedName) literalOffsets = literalFirstArgumentOffsets;
+ 		}
+ 		/**
+ 		* If there is a custom name in the formula string,
+@@ -3125,6 +3159,7 @@ var LexerTreeBuilder = class extends Disposable {
+ 		}
+ 		const node = this._getTopNode(this._currentLexerNode);
+ 		if (node) this._currentLexerNode = node;
++		nerveMarkLiteralFirstArguments(this._currentLexerNode, literalOffsets);
+ 		if (transformSuffix) {
+ 			if (!this._suffixExpressionHandler(this._currentLexerNode)) return "#VALUE!";
+ 			if (isCacheable) FormulaLexerNodeCache.set(cacheKey, this._currentLexerNode);
+@@ -3132,7 +3167,7 @@ var LexerTreeBuilder = class extends Disposable {
+ 		if (currentHasDefinedName) this._currentLexerNode.setDefinedNames(currentDefinedNames);
+ 		return this._currentLexerNode;
+ 	}
+-	_handleDefinedName(sequenceArray, param) {
++	_handleDefinedName(sequenceArray, param, sourceLiteralOffsets = new Set()) {
+ 		const { unitId, sheetId, hasFunction, getValueByName } = param;
+ 		if (unitId == null) return {
+ 			sequenceString: "",
+@@ -3143,6 +3178,13 @@ var LexerTreeBuilder = class extends Disposable {
+ 		let sequenceString = "";
+ 		let hasDefinedName = false;
+ 		const definedNames = [];
++		const literalFirstArgumentOffsets = new Set();
++		const appendOriginalToken = (token, node) => {
++			// Sequence indexes can differ from UTF-16 source indexes (escaped quotes).
++			// Map only unchanged original tokens using the lexer's recorded source cursor.
++			if (token === node.token && sourceLiteralOffsets.has(sequenceArray[node.startIndex]?.cur)) literalFirstArgumentOffsets.add(sequenceString.length);
++			sequenceString += token;
++		};
+ 		for (let i = 0, len = sequenceNodes.length; i < len; i++) {
+ 			const node = sequenceNodes[i];
+ 			if (typeof node === "string") {
+@@ -3155,7 +3197,7 @@ var LexerTreeBuilder = class extends Disposable {
+ 				if (nodeType === 3) {
+ 					const nextNode = sequenceNodes[i + 1];
+ 					if (typeof nextNode === "string" && nextNode.trim() === "(" && hasFunction(tokenRaw.trim().toUpperCase())) {
+-						sequenceString += tokenRaw;
++						appendOriginalToken(tokenRaw, node);
+ 						continue;
+ 					}
+ 					token = this._getHasSheetNameDefinedName(tokenRaw, unitId, param);
+@@ -3182,13 +3224,14 @@ var LexerTreeBuilder = class extends Disposable {
+ 					sequenceString += "#NAME?";
+ 					hasDefinedName = true;
+ 					definedNames.push(definedNameToken);
+-				} else sequenceString += token;
+-			} else sequenceString += token;
++				} else appendOriginalToken(token, node);
++			} else appendOriginalToken(token, node);
+ 		}
+ 		return {
+ 			sequenceString,
+ 			hasDefinedName,
+-			definedNames
++			definedNames,
++			literalFirstArgumentOffsets
+ 		};
+ 	}
+ 	_moveDefinedNameRefOffset(formulaString, refOffsetX, refOffsetY) {
+@@ -4296,6 +4339,7 @@ function clearArrayFormulaCellDataByCell(arrayFormulaRangeMatrix, arrayFormulaCe
+ 
+ //#endregion
+ //#region src/models/formula-data.model.ts
++// NerveOffice: 图片公式的空字符串缓存不包含运行时图片信息；重建时按实际函数 token 重算。见 ADR-022。
+ let FormulaDataModel = class FormulaDataModel extends Disposable {
+ 	constructor(_univerInstanceService, _lexerTreeBuilder) {
+ 		super();
+@@ -4806,7 +4850,11 @@ let FormulaDataModel = class FormulaDataModel extends Disposable {
+ 						const currentCell = sheetInstance.getCellRaw(row, column);
+ 						const isFormula = isFormulaString(currentCell === null || currentCell === void 0 ? void 0 : currentCell.f) || isFormulaId(currentCell === null || currentCell === void 0 ? void 0 : currentCell.si);
+ 						const noValue = (currentCell === null || currentCell === void 0 ? void 0 : currentCell.v) === void 0 || (currentCell === null || currentCell === void 0 ? void 0 : currentCell.v) === null;
+-						if (!(isFormula && noValue)) continue;
++						if (!isFormula) continue;
++						const imageInfo = this._unitImageFormulaData[unitId]?.[sheetId]?.getValue(row, column);
++						const formula = !noValue && !imageInfo ? this.getFormulaStringByCell(row, column, sheetId, unitId) : null;
++						const needsImage = formula != null && (this._lexerTreeBuilder.sequenceNodesBuilder(formula) || []).some((node) => typeof node !== "string" && node.nodeType === sequenceNodeType.FUNCTION && node.token.toUpperCase().replace(/^_XLFN\./, "") === "IMAGE");
++						if (!noValue && !needsImage) continue;
+ 						if (!columnRanges[column]) columnRanges[column] = [];
+ 						const lastRange = columnRanges[column].slice(-1)[0];
+ 						if (lastRange && lastRange.endRow === row - 1) lastRange.endRow = row;
+@@ -6224,10 +6272,18 @@ var FunctionService = class extends Disposable {
+ 		this._functionDescriptions.clear();
+ 	}
+ 	deleteFormulaAstCacheKey(...functionToken) {
+-		FORMULA_AST_CACHE.forEach((_, key) => {
+-			functionToken.forEach((token) => {
+-				if (key.includes(token)) FORMULA_AST_CACHE.delete(key);
+-			});
++		const tokens = new Set(functionToken.map((token) => normalizeFunctionToken(token.toUpperCase())));
++		FORMULA_AST_CACHE.forEach((root, key) => {
++			// Names may expand into functions without those functions appearing in the cache key.
++			// Keep the old textual invalidation and also inspect actual normalized function nodes.
++			const pending = [root];
++			let found = functionToken.some((token) => key.includes(token));
++			while (!found && pending.length) {
++				const node = pending.pop();
++				found = node.nodeType === 4 && tokens.has(normalizeFunctionToken(node.getToken().toUpperCase()));
++				if (!found) pending.push(...node.getChildren());
++			}
++			if (found) FORMULA_AST_CACHE.delete(key);
+ 		});
+ 	}
+ };
+@@ -10968,6 +11024,7 @@ let FunctionNodeFactory = class FunctionNodeFactory extends BaseAstNodeFactory {
+ 		if (isColon && COLUMN_LIKE_FUNCTION_NAMES.has(tokenTrimUpper)) return;
+ 		if (this._functionService.hasExecutor(tokenTrimUpper)) {
+ 			const functionNode = this.create(tokenTrimUpper);
++			functionNode._nerveLiteralFirstArgument = param._nerveLiteralFirstArgument === true;
+ 			if (atPrefixNode) functionNode.setParent(atPrefixNode);
+ 			else if (minusPrefixNode) functionNode.setParent(minusPrefixNode);
+ 			return functionNode;

@@ -1,5 +1,7 @@
 # UR-031 两处 `lifecycleService.onStage(LifecycleStages.Ready).then(...)` 没有接住拒绝：Ready 之前销毁实例（例如创建工作簿抛错之后）时留下没处理的 `LifecycleUnreachableError`
 
+> 本项目进度（2026-10-20）：M5-P2-S2 已在锁定的 1.0.1 sheets-drawing-ui 发布包处理已证实的 Ready 取消，仅识别 `LifecycleUnreachableError`；原版额外拒绝反例和构造失败后正常再打开均有证据，S5 组合复验通过。见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)与 ADR-022。engine-formula 旁支在当前默认插件路径未证实，未修复或宣称关闭；P2 完整门禁及 CI 待收口。本文件仍为未提交的上游草稿，下文保持原调查时点。
+
 > 状态：草稿（提交之前需求方确认）｜上游仓库：dream-num/univer｜提交方式：公开 issue（与 UR-029、UR-030 同属"销毁之后还在跑的异步回调"，是否合并见跟踪表"提交之前要确认的事"）
 > 出处：延期登记 DEF-057（main `f755729` 的修复者审计发现：sheets-drawing-ui 的浮动宿主一处已核实；engine-formula 的另一处当时是审计员报告、没有核实，这次核实了，见摘要）；平台目前碰不到：现有的重建都在 Ready 之后，打开自检失败时也是 Ready 之后才销毁，只有"编辑器加载失败"一类的路径（创建工作簿抛错之后销毁）会出现。平台没有规避
 > 发现版本：1.0.1｜1.0.1 发布包的代码：`@univerjs/sheets-drawing-ui@1.0.1` `lib/es/index.js` 的 `touchSheetsDrawingFloatingHostCapabilityWhenReady`，`@univerjs/engine-formula@1.0.1` `lib/es/index.js` 的 `RegisterOtherFormulaService._initFormulaRegister`，`@univerjs/core@1.0.1` `lib/es/index.js` 的 `LifecycleService.onStage` 与 `Univer._tryProgressToReady`，对照 `@univerjs/ui@1.0.1` 的 `SingleUnitUIController._bootstrapWorkbench`（try/catch）｜1.0.0 源码：相同（本地参考 `refer/univer` 是 v1.0.0；1.0.2 与 `dev` 没有核对）｜发布包上的复现：sheets-drawing-ui 一处——2026-10-06 在只用 SDK 的最小页面上复现（Playwright 1.63.0 的 Chromium 153.0.8010.12 与 WebKit 26.6，无头：`createWorkbook()` 因快照里的工作表是 `null` 抛错，随即 `univer.dispose()`；对照：不注册 `UniverSheetsDrawingUIPlugin`，不出现；创建成功之后销毁，不出现），另在 Node.js 24.21.0 + jsdom 30.1.1 上（表格界面与图片的插件，不画任何东西）复现；engine-formula 一处——Node.js 上复现（在第一个单元创建之前登记一个"其他公式"再销毁，下文的脚本），默认插件里没有找到会让它落空的路径（见摘要）
@@ -136,3 +138,9 @@ and the same in `RegisterOtherFormulaService._initFormulaRegister()`. Alternativ
 - Univer: 1.0.1 (`@univerjs/*`); the same code is in 1.0.0. Affected packages: `@univerjs/sheets-drawing-ui`, `@univerjs/engine-formula`.
 - Browsers: Chromium 153.0.8010.12 and WebKit 26.6 bundled with Playwright 1.63.0, headless; the page was served by Vite 8.3.0 (React 19.3.0). Node.js 24.21.0 for the engine-formula script (and for a jsdom 30.1.1 run of the sheets-drawing-ui case with the sheet UI and drawing plugins, same result).
 - OS: macOS 27.0 (Apple silicon).
+
+## 平台处理进展（2026-10-19，M5-P2-S2）
+
+固定 1.0.1 的 drawing 浮动宿主 Ready 承诺只将 LifecycleUnreachableError 视为正常取消，其他错误以 console.error 报告原异常。真实 LifecycleService 退出反例 RED→GREEN，正常 Ready 与其他错误对照通过；engine-formula 的潜在同类路径未修改，也不宣称关闭。
+
+修复由 `pnpm patchedDependencies` 固定，见 [ADR-022](../adr/ADR-022-图片实例与SDK修复.md)。独立副本撤去 sheets-drawing-ui 相关补丁后，真实 Workbook 在 Ready 前构造失败额外产生 LifecycleUnreachableError；修复后的三浏览器仅保留原始构造错误，后续编辑/绘制/保存正常。engine-formula 的潜在 Ready 路径保持未关闭。 18 个图片故事 × 三引擎共 54 项、八份补丁冷安装均通过，见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)。完整 Phase 验收仍在 S6，本记录不代表已经提交或获得上游修复。

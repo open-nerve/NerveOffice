@@ -1,6 +1,6 @@
 // 一次性链接的公开页面：与路由的匹配一样，不区分大小写、不管末尾的斜杠。
 import { describe, expect, it } from 'vitest'
-import { isOneTimeLinkPage } from './paths.ts'
+import { isOneTimeLinkPage } from './account-paths.ts'
 
 describe('isOneTimeLinkPage', () => {
   it('接受邀请与重置密码的页面', () => {

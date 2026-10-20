@@ -1,6 +1,14 @@
+export { prepareLegacyImageRemoval } from './image-cleanup.ts'
+export type { ImageCleanupScope, LegacyImageRemoval } from './image-cleanup.ts'
+export { createImageCommandPreview, IMAGE_COMMAND_PROTOCOL, imageCellValueIsSingle } from './image-commands.ts'
+export { createImageInputBridge } from './image-input.ts'
+export type { CapturedImageTarget, ImageInputBridgeOptions, ImageInputCommands, ImageInputIntent, ImageInputSelection, ImageTableInput, PreparedInputImage, SelectedInputImage } from './image-input.ts'
+export { closeImagePreview, imageServiceOverride, invalidateImageRendering } from './image-services.ts'
 // 界面的包里的内部 API（P3 审查 A1、B2 之后）：只在主线程引用。公式 Worker 引用的是 index.ts，界面的包不能从那里再导出
 // （会整包打进 Worker，见 index.ts 的开头）。其余同 index.ts：只写再导出，每一项在 registry.ts 登记，单元测试核对
+export type { IImageIoServiceParam } from '@univerjs/core'
+export { IImageIoService, ImageSourceType, ImageUploadStatusType, IURLImageService } from '@univerjs/core'
 export { IEditorService } from '@univerjs/docs-ui'
-export { IRenderManagerService } from '@univerjs/engine-render'
-export { HeaderFreezeRenderController, HeaderResizeRenderController } from '@univerjs/sheets-ui'
+export { IRenderManagerService, Image as RenderImage } from '@univerjs/engine-render'
+export { FORMULA_CLIPBOARD_MIME_TYPE, HeaderFreezeRenderController, HeaderResizeRenderController } from '@univerjs/sheets-ui'
 export { IShortcutService } from '@univerjs/ui'

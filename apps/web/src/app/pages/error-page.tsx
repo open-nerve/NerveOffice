@@ -50,7 +50,7 @@ export function ErrorPage() {
   const error = useRouteError()
   return (
     <main className="mx-auto flex max-w-md flex-col items-start gap-3 p-6">
-      <ErrorContent error={error} />
+      {error instanceof ChunkLoadError ? <ChunkLoadFailure /> : <ErrorContent error={error} />}
     </main>
   )
 }

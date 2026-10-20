@@ -66,6 +66,63 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
+    name: 'FORMULA_CLIPBOARD_MIME_TYPE',
+    origin: 'sheets-ui 1.0.1 的公式剪贴板 MIME 常量，仅主线程使用',
+    purpose: '系统 paste 事件和显式剪贴板读取保留 SDK 公式数据，表格委托不退化为纯文本',
+    evidence: 'sheets-ui/lib/es/index.js 的 SheetClipboardService copy/paste/legacyPaste 共用同一常量',
+    regression: 'images/image-input-data.test.ts；后续系统图片浏览器回归',
+  },
+  ...['createImageInputBridge', 'CapturedImageTarget', 'ImageInputBridgeOptions', 'ImageInputCommands', 'ImageInputIntent', 'ImageInputSelection', 'ImageTableInput', 'PreparedInputImage', 'SelectedInputImage'].map(name => ({
+    name,
+    origin: '系统图片输入的实例目标、焦点、命令路由与正常图片写入，仅主线程出口',
+    sdk: {
+      '@univerjs/core': ['IDisposable', 'IMultiCommand', 'IRange', 'Univer', 'Workbook', 'Worksheet', 'CommandType', 'CustomCommandExecutionError', 'DOCS_NORMAL_EDITOR_UNIT_ID_KEY', 'DrawingTypeEnum', 'EDITOR_ACTIVATED', 'FOCUSING_FX_BAR_EDITOR', 'FOCUSING_SHEET', 'ICommandService', 'IContextService', 'IPermissionService', 'IUniverInstanceService', 'ImageSourceType', 'UniverInstanceType', 'BooleanNumber', 'BuildTextUtils', 'CellValueType', 'createDocumentModelWithStyle', 'PositionedObjectLayoutType', 'WrapTextType'],
+      '@univerjs/docs': ['buildDocTransform', 'docDrawingPositionToTransform'],
+      '@univerjs/drawing': ['IDrawingManagerService', 'DRAWING_IMAGE_HEIGHT_LIMIT', 'DRAWING_IMAGE_WIDTH_LIMIT'],
+      '@univerjs/sheets': ['RangeProtectionPermissionEditPoint', 'RangeProtectionPermissionViewPoint', 'SetRangeValuesCommand', 'SheetPermissionCheckController', 'SheetsSelectionsService', 'WorkbookCopyPermission', 'WorkbookEditablePermission', 'WorksheetCopyPermission', 'WorksheetEditExtraObjectPermission', 'WorksheetEditPermission', 'WorksheetSetCellStylePermission', 'WorksheetSetCellValuePermission', 'convertPositionCellToSheetOverGrid', 'SheetSkeletonService'],
+      '@univerjs/sheets-drawing': ['ISheetDrawingService', 'RemoveSheetDrawingCommand', 'InsertSheetDrawingCommand'],
+      '@univerjs/sheets-ui': ['PREDEFINED_HOOK_NAME_PASTE', 'SheetCopyCommand', 'SheetCutCommand', 'SheetPasteCommand', 'SheetPasteShortKeyCommand'],
+    },
+    purpose: '捕获原书/表/选区及实际选中图片，异步操作失效后不可复活；比原表格复制高一级的 MultiCommand 同步启动系统处理，失败以 SDK 取消错误终止回落。正式浮图/单元格图片插入的普通 Command 在 Ready 后按同 ID 替换，失败不回落原 SDK，退役时移除；文件参数仅收真实 File 列表。表格委托保留公式数据但去掉预览文件；普通剪贴板目标允许离线，确认图片后不可逆升级为联网、身份及图片专属权限检查，严格图片入口始终使用后者。上传的尺寸和规范地址经 SDK 几何及文档构造函数生成正常可撤销命令，不重新用源地址量尺寸',
+    evidence: '1.0.1 core MultiCommand false 回落；sheets-ui SheetCopy/Cut/PasteCommand 的权限及捕获目标；普通剪切先按 copy 目标分类，无图片才回原 Cut 权限提示，真图片重新绑定 cut 目标。已分类表格事件以固定当前范围和空 files 同步启动 SheetPasteShortKey，其权限检查在首个 await 前执行；异步 pasteTable 不放宽目标检查。docs-ui 隐藏输入 __editor_ + DOCS_NORMAL_EDITOR_UNIT_ID_KEY 与 data-u-comp=editor；sheets-drawing-ui 的文档图片构造和单元格 2 px 留白；drawing 显示上限 500 px。实际单图 body 为带段落终止符的单一图片控制符，需核对 blockId/index',
+    regression: 'internal-api/image-input.test.ts：真实命令服务、工作簿/选区/图片/权限/历史与受控剪贴板端口；images/image-input-task.test.ts：同步启动、取消/重试与迟到释放；image-production.spec.ts：正式菜单、每张图片模型和像素、受控离线普通剪贴板；原生环境证明另验',
+  })),
+  ...['createImageCommandPreview', 'IMAGE_COMMAND_PROTOCOL', 'imageCellValueIsSingle', 'prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].map(name => ({
+    name,
+    origin: '固定 SDK 图片命令、双绘图服务的 JSON1 与撤销记录，只经主线程出口使用',
+    sdk: {
+      '@univerjs/core': ['Univer', 'Workbook', 'UniverInstanceType', 'isICellData', 'IUndoRedoService', 'IUniverInstanceService', 'JSON1', 'JSONXActions', 'RedoCommand', 'UndoCommand', ...(['prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].includes(name) ? ['DrawingTypeEnum', 'ICommandService', 'IPermissionService'] : [])],
+      '@univerjs/drawing': ['IDrawingManagerService'],
+      '@univerjs/sheets': ['SetRangeValuesCommand', 'SetRangeValuesMutation', 'getSheetCommandTarget', 'SheetsSelectionsService', 'CopySheetCommand', 'DeleteRangeMoveLeftCommand', 'DeleteRangeMoveUpCommand', 'InsertColByRangeCommand', 'InsertColCommand', 'InsertColMutation', 'InsertRangeMoveDownCommand', 'InsertRangeMoveRightCommand', 'InsertRowByRangeCommand', 'InsertRowMutation', 'InsertSheetCommand', 'InsertSheetMutation', 'MoveColsCommand', 'MoveRangeCommand', 'MoveRangeMutation', 'MoveRowsCommand', 'RemoveColByRangeCommand', 'RemoveColCommand', 'RemoveRowByRangeCommand', 'RemoveRowCommand', 'RemoveSheetCommand', ...(['prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].includes(name) ? ['WorkbookEditablePermission', 'WorksheetEditPermission'] : [])],
+      '@univerjs/sheets-drawing': ['InsertSheetDrawingCommand', 'ISheetDrawingService', 'RemoveSheetDrawingCommand', 'SetDrawingApplyMutation', 'SetSheetDrawingCommand', 'SetWorksheetBackgroundImageCommand', 'SetWorksheetBackgroundImageMutation', ...(['prepareLegacyImageRemoval', 'ImageCleanupScope', 'LegacyImageRemoval'].includes(name) ? ['DrawingApplyType', 'ClearSheetDrawingTransformerOperation'] : [])],
+    },
+    purpose: '模型与历史写入前只读预演；整条 Undo/Redo 在第一条 mutation 前检查；普通写值只读相关格子，结构操作只查目标表载体与双服务操作路径；旧坏图仅经绑定编辑身份的一次确认事务删除，成功后清当前书历史',
+    evidence: '1.0.1 双服务 JSON1 基础操作复制路径，text-x 原地改正文；Facade 通用事件跳过 Undo/Redo。结构后处理发生在表写入之后且不回滚，须提前核对真实目标/来源/路径；manager 的 transform 数值可合法不同。InsertRowCommand 的实际 d.ts 缺声明，集中记录 ES 的 sheet.command.insert-row。清理通知与 clearUndoRedo 均按真实服务验证',
+    regression: 'internal-api/image-commands.test.ts：真实命令、两份服务、普通撤销重做、复合记录提前拒绝、TextX 副作用对照与样式间接图片；images/image-source-policy.test.ts；sheet-editor.test.ts 初始化/销毁编排',
+  })),
+  ...['RenderImage', 'getDrawingShapeKeyByDrawingSearch'].map(name => ({
+    name,
+    origin: name === 'RenderImage' ? 'engine-render.Image，仅主线程出口' : 'drawing.getDrawingShapeKeyByDrawingSearch，通用绘图键计算',
+    purpose: '图片浏览器探针读取真实场景内图元的原生元素，保留元素句柄核对退役清图；不另造加载或渲染路径',
+    evidence: '1.0.1 drawing-ui.DrawingRenderService 按该 key 注册 Image；Image.getNative 返回实际绘制元素',
+    regression: 'tests/e2e/specs/editor/images.spec.ts：实际 SDK 图片与撤权/重建后的旧元素；internal-api 注册与 Worker 边界测试',
+  })),
+  ...['IImageIoService', 'IURLImageService', 'IImageIoServiceParam', 'ImageSourceType', 'ImageUploadStatusType'].map(name => ({
+    name,
+    origin: '@univerjs/core 的图片 IO 标识、契约及枚举；仅从主线程出口使用',
+    purpose: '平台替换 drawing 插件的两个图片服务；规范相对 source、独立 drawing ID、上传状态和元素缓存对齐 SDK 契约',
+    evidence: '1.0.1 core 的 image-io.service / url-image.service；drawing/lib/es/index.js:1177 在插件 onStarting 合并 override；P2-S2 规格 §2、§4',
+    regression: 'images/platform-image-io.test.ts：真实 drawing 注入、两路读取、文件校验/迟到结果/进度；tests/e2e/specs/editor/images.spec.ts（S2 Task4 待验）',
+  })),
+  ...['closeImagePreview', 'imageServiceOverride', 'invalidateImageRendering'].map(name => ({
+    name,
+    origin: '平台对 drawing 图片服务替换及当前场景重绘的窄封装',
+    sdk: { '@univerjs/core': ['DependencyOverride', 'IImageIoService', 'IURLImageService', 'Injector', 'Univer'], '@univerjs/engine-render': ['IRenderManagerService'], '@univerjs/ui': ['IGalleryService'] },
+    purpose: '替换两个完整 IO 服务，按实例释放图片后只标记仍存活场景 dirty，不写模型或变更序号；无渲染插件时不强行创建它',
+    evidence: '1.0.1 drawing 的 _initDependencies，engine-render 的 getRenderAll / RenderUnit.isDisposed / Scene.makeDirty；仅 ui.ts 出口，不进入公式 Worker',
+    regression: 'internal-api/image-services.test.ts、images/platform-image-io.test.ts、sheet-editor.test.ts：插件配置生效、存活场景筛选、等公式退出前同步清理；真实像素由 S2 Task4 验收',
+  })),
+  {
     name: 'injectorOf',
     origin: '@univerjs/core 的 Univer.__getInjector()（平台的封装）',
     // injector.ts：参数与返回值的类型
@@ -413,10 +470,18 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     regression: IMAGE_POLICY_REGRESSION,
   },
   {
+    name: 'imageLiteralSource',
+    origin: '固定 engine-formula 的词法来源标记与 Value/Function AST 协议',
+    sdk: { '@univerjs/engine-formula': ['BaseAstNode'] },
+    purpose: 'IMAGE 首参同时证明是原公式字面量与当前字符串值，拒绝名称展开、拼接和计算结果；主线程与 Worker 共用',
+    evidence: 'M5-P2-S3 实际解析器反例：定义名称展开后与字面量 AST 相同；补丁在展开前证明、真实拼接精确位置传递，不按调用序号配对。标记不进入快照，缺少标记默认拒绝',
+    regression: 'internal-api/image-formula-source.test.ts、image-function/restricted-image-function.test.ts；实际 Lexer/Parser/Interpreter 的多个同地址调用、嵌套名称、命名尺寸、LET/LAMBDA、缓存和异步路径；E2E 两种公式模式',
+  },
+  {
     name: 'BaseValueObject',
-    origin: '@univerjs/engine-formula 的值对象基类（只用类型）',
-    purpose: 'IMAGE() 包装的参数与返回值的类型',
-    evidence: '同 BaseFunction；引用在计算时变成数组（engine-formula 的 function-node.ts:166-168），包装据此拒绝引用、区域与数组常量',
+    origin: '@univerjs/engine-formula 的值对象基类',
+    purpose: 'IMAGE() 的 AST 包装安全收窄 getVariant 的值，保持引用转数组、缺省参数及日期语义',
+    evidence: '同 BaseFunction；FunctionNode._calculateAst 提供原 _getChildVariant，传入参数为 BaseValueObject 或引用/null，不使用不安全强转；M5-P2-S3 改为证明来源后转交',
     regression: IMAGE_POLICY_REGRESSION,
   },
   {

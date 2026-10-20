@@ -1,6 +1,6 @@
 import { ONE_TIME_LINK_PAGE_PATHS } from '@nerve-office/contracts'
 
-/** 本人账户的页面地址（M2-P1 设计 §3.8） */
+/** 本人账户的页面地址；首屏只需要路径，不静态引入按需加载的账户页面。 */
 export const CHANGE_PASSWORD_PATH = '/settings/password'
 
 const ONE_TIME_LINK_PAGES: ReadonlySet<string> = new Set(Object.values(ONE_TIME_LINK_PAGE_PATHS))

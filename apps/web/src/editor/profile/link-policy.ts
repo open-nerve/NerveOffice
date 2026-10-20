@@ -195,6 +195,8 @@ export function rewriteCellWrite(event: CellWriteEvent, report: (error: unknown)
 /** 装上改写器（创建工作簿之前、入口守卫之后，见 sheet-editor.ts）：返回卸下它的句柄 */
 export function installLinkPolicy(univerAPI: FUniver, report: (error: unknown) => void = error => reportError(error)): IDisposable {
   return univerAPI.addEvent(univerAPI.Event.BeforeCommandExecute, (event) => {
+    if (event.cancel)
+      return
     rewriteCellWrite(event, report)
   })
 }

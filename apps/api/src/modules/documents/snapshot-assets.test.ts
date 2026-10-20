@@ -45,7 +45,7 @@ describe('完整快照检查返回资源标识', () => {
     const drawing = (source: string) => ({ 'sheet-1': { data: { image: { drawingId: 'image', imageSourceType: 'URL', source } }, order: ['image'] } })
     const snapshot = { ...template(), extra: { p: { drawings: { image: { source: url(B) } } } }, resources: [{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify(drawing(url(A))) }] }
     expect(ids(snapshot)).toEqual([A, B])
-    expect(inspect({ ...snapshot, extra: { source: `https://example.com${url(B)}` } })).toEqual({ ok: false, rule: 'image-source' })
+    expect(inspect({ ...snapshot, extra: { source: `https://example.com${url(B)}` } })).toEqual({ ok: false, rule: 'image-source', imageLocations: [{ kind: 'workbook' }] })
   })
 
   it('即使视图字段不参与内容哈希也照实提取；调用者不能把 unchanged 入参标识当成已落盘内容', () => {

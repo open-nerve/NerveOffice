@@ -1,7 +1,7 @@
 # NerveOffice 的镜像（P5 设计 §3.2，ADR-012）：一个应用容器同时托管前端与 API。
 # 在仓库根目录构建：docker build -f deploy/Dockerfile -t nerve-office:<版本> .
 # 不绑定平台：CI 构建 linux/amd64，本机（Apple 芯片）构建 linux/arm64；基础镜像按多架构索引的摘要锁定。
-# 阶段：base（加上 pnpm）→ manifests（锁文件、工作区配置与各包的 package.json）→ build（全部依赖、构建、服务端许可清单）
+# 阶段：base（加上 pnpm）→ manifests（锁文件、工作区配置、依赖补丁与各包的 package.json）→ build（全部依赖、构建、服务端许可清单）
 # 与 prod-deps（只装 api 的生产依赖）→ runtime（从基础镜像重新开始，不带包管理器；原生组件的对应源码作为发行材料单独携带）。
 
 # Node 的版本与 .node-version 一致，pnpm 的版本与根目录 package.json 的 packageManager 一致（门禁 pins 核对）
@@ -13,9 +13,11 @@ FROM ${NODE_IMAGE} AS base
 RUN npm install --global pnpm@12.6.0
 WORKDIR /app
 
-# 只复制锁文件、工作区配置与各包的 package.json：依赖层只在它们变化时重建
+# 复制完整的依赖安装输入；补丁变化也必须使 build 与 prod-deps 的安装缓存失效。
 FROM base AS manifests
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version ./
+# pnpm 即使只筛选 API 的生产依赖，也会读取工作区声明的补丁。
+COPY patches patches
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/contracts/package.json packages/contracts/

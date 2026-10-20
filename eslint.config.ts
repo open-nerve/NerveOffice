@@ -87,16 +87,25 @@ const UNIVER_INTERNAL_SYMBOLS = [
     importNames: [
       'AuthzIoLocalService',
       'CustomRangeType',
+      'CustomCommandExecutionError',
       'DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY',
+      'DOCS_NORMAL_EDITOR_UNIT_ID_KEY',
+      'EDITOR_ACTIVATED',
       'FOCUSING_FX_BAR_EDITOR',
+      'FOCUSING_SHEET',
       'IAuthzIoService',
       'IContextService',
+      'IImageIoService',
+      'IImageIoServiceParam',
       'ILocalStorageService',
       'ILogService',
       'IPermissionService',
       'IResourceHook',
       'IResourceManagerService',
       'IUndoRedoService',
+      'IURLImageService',
+      'ImageSourceType',
+      'ImageUploadStatusType',
       'LifecycleService',
       'LocaleService',
       'ResourceManagerService',
@@ -119,6 +128,7 @@ const UNIVER_INTERNAL_SYMBOLS = [
   {
     name: '@univerjs/engine-formula',
     importNames: [
+      'BaseAstNode',
       'BaseFunction',
       'BaseValueObject',
       'ErrorType',
@@ -138,6 +148,11 @@ const UNIVER_INTERNAL_SYMBOLS = [
     name: '@univerjs/sheets',
     importNames: [
       'SetRangeValuesMutation',
+      'SheetPermissionCheckController',
+      'SheetsSelectionsService',
+      'SheetSkeletonService',
+      'convertPositionCellToSheetOverGrid',
+      'WorksheetEditExtraObjectPermission',
       // 只读守卫关掉与保留的工作表权限点、授权服务在只读时允许的动作（M2-P3 设计 §3.6）
       'getAllWorksheetPermissionPoint',
       'getAllWorksheetPermissionPointByPointPanel',
@@ -222,7 +237,7 @@ const EDITOR_UNIVER_SOURCE_PATTERNS = [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_U
 
 // ---- 编辑器里能直接引用的 @univerjs/* 的值：白名单（M2-P6 复核 F4）----
 // 上面的 UNIVER_INTERNAL_SYMBOLS 只拦登记过（与决定不用）的内部符号：没登记的新内部符号（例如 @univerjs/sheets 导出的
-// SheetPermissionCheckController）照样能在 internal-api 之外直接引用。所以编辑器里 internal-api 与测试代码之外的文件，
+// SheetPermissionInitController）照样能在 internal-api 之外直接引用。所以编辑器里 internal-api 与测试代码之外的文件，
 // 对 @univerjs/* 的值引用只允许这里按导入源列出的公开符号：插件类、Univer 与 FUniver、用到的枚举、mergeLocales、主题，
 // 以及 /locale/<语言> 的语言包（默认导出）。列的是适配层实际用到的；新用一个公开的值时加进来，内部符号经 internal-api 引用并登记。
 // 不受这份白名单限制的：
@@ -1676,6 +1691,23 @@ export default antfu(
             from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
             allow: {
               to: { element: { type: 'web-feature', captured: { feature: 'shared-with-me' }, fileInternalPath: PUBLIC_ENTRY } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
+          },
+          // 账户表单只在路由按需加载；路径与公开链接判定独立放在 shared/lib/account-paths.ts。
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry' } },
+              { element: { type: 'web-feature' } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'account' } } } },
+            message: '账户页面（features/account）只有 app/routes.ts 可以动态 import() 它的公开入口；路径判定使用 shared/lib/account-paths.ts（M5-P2）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'account' }, fileInternalPath: PUBLIC_ENTRY } },
               dependency: { nodeKind: 'dynamic-import' },
             },
           },

@@ -44,7 +44,9 @@ describe('安装 IMAGE() 的限制', () => {
     expect(installed).toBeInstanceOf(RestrictedImageFunction)
     expect(clearedCache).toEqual([['IMAGE']])
     const wrapper = installed as RestrictedImageFunction
-    expect(wrapper.calculate(StringValueObject.create(`${ORIGIN}${ASSET}`))).not.toBeInstanceOf(ErrorValueObject)
+    expect(wrapper.needsAstChildren).toBe(true)
+    // 安装后不能通过直接 calculate 绕过语法来源；真实来源与 origin 由实际解析器回归覆盖。
+    expect(wrapper.calculate(StringValueObject.create(`${ORIGIN}${ASSET}`))).toBeInstanceOf(ErrorValueObject)
     const rejected = wrapper.calculate(StringValueObject.create('https://evil.example/a.png'))
     expect(rejected instanceof ErrorValueObject && rejected.getErrorType() === ErrorType.VALUE).toBe(true)
   })

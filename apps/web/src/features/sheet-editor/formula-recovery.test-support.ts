@@ -34,6 +34,7 @@ export function formulaEditor(snapshot: string, mode: FormulaMode) {
   const failures = signal<[FormulaWorkerFailure]>()
   const control = { failCapture: false, commitResult: true, checkOk: true }
   const editor: SheetEditor = {
+    sheetName: () => undefined,
     unitId: 'unit-1',
     formulaMode: mode,
     workerFailure: () => failure,

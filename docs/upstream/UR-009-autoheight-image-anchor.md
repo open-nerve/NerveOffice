@@ -1,5 +1,7 @@
 # UR-009 浮动图片所跨的行因自动行高变高后不回写终点锚点，切换工作表或重开时图片被拉伸并被保存
 
+> 本项目进度（2026-10-20）：M5-P2-S2 已在锁定的 1.0.1 drawing/sheets-drawing 发布包回写 Position 锚点，保留其他变换属性；原版反例、自动行高、显式行高撤销重做、切表/重开/再次保存均有三浏览器证据，S5 组合复验通过。见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)与 ADR-022。P2 完整门禁及 CI 尚待收口。仍为未提交的上游草稿，下文版本与检索记录是原调查时点；A02 未降级。
+
 > 状态：草稿（提交之前需求方确认）｜上游仓库：dream-num/univer｜提交方式：公开 issue
 > 出处：M0-P2 报告摘要（V03"有条件通过"）、§2.2（DEF-002 用例说明）、§2.3 第 2 条（根因、实测表、补丁规模评估）；用例 `spikes/m0/e2e/v03-drawing-autoheight.spec.ts`（结果 `spikes/m0/e2e/results/v03/drawing-autoheight/*.json`）；延期登记 DEF-002（关联上线门槛 A02）｜发现版本：1.0.0｜1.0.1 核对：仍然存在（依据：已安装的 1.0.1 发布包中，`@univerjs/sheets-drawing` 的 `REFRESH_MUTATIONS` 仍含两个自动行高 mutation（`lib/es/index.js` L1053–1062），`_refreshDrawingTransform` 对 `Position` 锚点仍只保留宽高、不重算锚点（L2255–2297），`_finalizePlan` 的 refresh 分支仍不产生 mutation（L1236–1245）；`@univerjs/drawing` 的 `refreshTransform` 仍只复制 `transform` 等字段（L229–240）；`@univerjs/sheets-drawing-ui` 在切换工作表与渲染初始化时仍按锚点重算尺寸（L4565、L4228）；另在 1.0.1 上用不含平台代码的最小页面实测复现，Chromium 与 WebKit 结果相同，见正文；npm 上的 1.0.2（当前 latest）代码相同）
 
@@ -160,3 +162,9 @@ The refresh path should keep the anchors consistent with the size it keeps — t
 4. Regression tests: for wrapped text, a larger font and a cell image under a `Position`-anchored image, the size stays unchanged and the `to` anchor moves, after the trigger, after switching sheets and after reopening; `Both` anchors keep resizing with the rows.
 
 We tried items 1 and 2 (first option: two extra `in` checks in `refreshTransform()`) as a local patch on the 1.0.1 packages in our minimal page. In Chromium 153 and WebKit 26.6 the image kept 120 × 80 after the trigger, after switching sheets and after reopening, for all three triggers; the `to` anchor moved (wrapped text: row 3 + 56, font size 36: row 4 + 1, cell image: row 4 + 13); undoing the wrap moved it back to row 5 + 8; the explicit-command control was unaffected. We have not run Univer's own test suites against the change.
+
+## 平台处理进展（2026-10-19，M5-P2-S2）
+
+固定 1.0.1 的 Position 刷新按保留尺寸重算 sheetTransform/axisAlignSheetTransform；公共 refreshTransform 仅在提供字段时传递。真实工作簿/自动行高 mutation 的两项反例 RED→GREEN，Position/Both/None、显式行高及撤销/重做对照通过。刷新仅回写 from/to，保留其余原始属性（包括未提供的默认属性）；直接替换整个锚点会在撤销后补入默认字段，导致后续 JSON1 重做冲突，本次新增反例已证实并避免。
+
+修复由 `pnpm patchedDependencies` 固定，见 [ADR-022](../adr/ADR-022-图片实例与SDK修复.md)。独立副本撤去 drawing/sheets-drawing 相关补丁后，Chromium 的 Position 终点仍为第 6 行，实际锚点断言失败；修复后的三浏览器故事覆盖自动/显式行高、撤销重做、切表、重开及第二次保存。 18 个图片故事 × 三引擎共 54 项、八份补丁冷安装均通过，见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)。完整 Phase 验收仍在 S6，本记录不代表已经提交或获得上游修复。

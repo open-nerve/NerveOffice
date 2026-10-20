@@ -28,13 +28,16 @@ function fakeFacade() {
   return { api: api as unknown as FUniver, fire, dispose }
 }
 
-describe('M5 之前的入口：命令守卫', () => {
+describe('按阶段开放的入口：命令守卫', () => {
   it('图片：插入浮动与单元格图片（粘贴图片文件也走它）、底层的插入、工作表背景图片', () => {
     expect(IMAGE_GUARDED_COMMANDS.map(command => command.id)).toEqual([
       'sheet.command.insert-float-image',
       'sheet.command.insert-cell-image',
       'sheet.command.insert-sheet-image',
       'sheet.command.add-worksheet-background-image',
+      'sheet.command.set-worksheet-background-image',
+      'sheet.mutation.set-worksheet-background-image',
+      'doc.command.insert-doc-image',
     ])
   })
 
@@ -63,6 +66,27 @@ describe('M5 之前的入口：命令守卫', () => {
       expect(facade.fire(command.id).cancel, command.id).toBe(true)
     for (const id of ['sheet.command.set-range-values', 'sheet.command.insert-sheet', 'sheets.command.cancel-hyper-link', 'sheet.command.delete-drawing'])
       expect(facade.fire(id).cancel, id).toBeUndefined()
+  })
+
+  it('正式图片输入就绪才放行两种平台入口和浮图提交，退役不撤销首个监听', () => {
+    const facade = fakeFacade()
+    let enabled = false
+    const guard = installEntryGuards(facade.api, () => enabled)
+    const inserts = ['sheet.command.insert-sheet-image', 'sheet.command.insert-float-image', 'sheet.command.insert-cell-image']
+    for (const id of inserts)
+      expect(facade.fire(id).cancel).toBe(true)
+    enabled = true
+    for (const id of inserts)
+      expect(facade.fire(id).cancel).toBeUndefined()
+    for (const command of GUARDED_COMMANDS.filter(command => !inserts.includes(command.id)))
+      expect(facade.fire(command.id).cancel, command.id).toBe(true)
+    expect(facade.fire(IMAGE_PASTE_COMMAND.id, {}).cancel).toBe(true)
+    enabled = false
+    for (const id of inserts)
+      expect(facade.fire(id).cancel).toBe(true)
+    expect(facade.dispose).not.toHaveBeenCalled()
+    guard.dispose()
+    expect(facade.dispose).toHaveBeenCalledOnce()
   })
 
   it('带图片的粘贴（DEF-035 的旁支）：要贴的内容有 drawings 或图片的锚点就取消；纯文字照常；看不懂的参数按带图片算', () => {

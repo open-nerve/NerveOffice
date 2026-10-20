@@ -93,13 +93,13 @@ describe('US-M1-11 lint 规则的自测：对 @univerjs/* 的值引用只允许�
 
   // 没登记的内部符号报错：命名导入、改名、默认导入、命名空间导入、再导出与 export * 都算，没列出的包与包里没列出的出口也算
   it.each([
-    // 审查者的变异：sheets 导出的权限检查控制器不在登记的清单里，原来只报了导入顺序
-    ['命名导入', 'import { SheetPermissionCheckController } from \'@univerjs/sheets\'\n\nexport const c = SheetPermissionCheckController\n'],
+    // 原反例的 SheetPermissionCheckController 已在 M5 登记；换成仍未登记的权限初始化控制器，保持值/类型边界的对照。
+    ['命名导入', 'import { SheetPermissionInitController } from \'@univerjs/sheets\'\n\nexport const c = SheetPermissionInitController\n'],
     ['改名', 'import { ICommandService as Commands } from \'@univerjs/core\'\n\nexport const c = Commands\n'],
     ['ui 包里的服务', 'import { ILayoutService } from \'@univerjs/ui\'\n\nexport const s = ILayoutService\n'],
     ['默认导入', 'import Sheets from \'@univerjs/sheets\'\n\nexport const s = Sheets\n'],
     ['命名空间导入', 'import * as filter from \'@univerjs/sheets-filter\'\n\nexport const f = filter\n'],
-    ['再导出', 'export { SheetPermissionCheckController } from \'@univerjs/sheets\'\n'],
+    ['再导出', 'export { SheetPermissionInitController } from \'@univerjs/sheets\'\n'],
     ['export *', 'export * from \'@univerjs/sheets-filter\'\n'],
     ['包里没列出的出口', 'import { FRange } from \'@univerjs/sheets/facade\'\n\nexport const r = FRange\n'],
     ['没列出的包', 'import { UniverSheetsTablePlugin } from \'@univerjs/sheets-table\'\n\nexport const p = UniverSheetsTablePlugin\n'],
@@ -120,7 +120,7 @@ describe('US-M1-11 lint 规则的自测：对 @univerjs/* 的值引用只允许�
 
   it.each(OUTSIDE_INTERNAL_API)('类型引用通过（没登记的内部符号的类型、没列出的出口的类型、export type）：%s', async (file) => {
     const types = [
-      'import type { SheetPermissionCheckController } from \'@univerjs/sheets\'\n\nexport type C = SheetPermissionCheckController\n',
+      'import type { SheetPermissionInitController } from \'@univerjs/sheets\'\n\nexport type C = SheetPermissionInitController\n',
       'import type { IShortcutItem } from \'@univerjs/ui\'\n\nexport type S = IShortcutItem\n',
       'import type { FRange } from \'@univerjs/sheets/facade\'\n\nexport type R = FRange\n',
       // 命名空间的类型导入：包里有登记过的内部符号时（例如 @univerjs/sheets）仍由清单拦下，见下面
@@ -132,7 +132,7 @@ describe('US-M1-11 lint 规则的自测：对 @univerjs/* 的值引用只允许�
   })
 
   it('登记过的内部符号的类型仍由清单拦下', async () => {
-    for (const code of ['import type { IUndoRedoService } from \'@univerjs/core\'\n\nexport type U = IUndoRedoService\n', 'import type * as Sheets from \'@univerjs/sheets\'\n\nexport type W = Sheets.SheetInterceptorService\n']) {
+    for (const code of ['import type { SheetPermissionCheckController } from \'@univerjs/sheets\'\n\nexport type C = SheetPermissionCheckController\n', 'import type { IUndoRedoService } from \'@univerjs/core\'\n\nexport type U = IUndoRedoService\n', 'import type * as Sheets from \'@univerjs/sheets\'\n\nexport type W = Sheets.SheetInterceptorService\n']) {
       const registeredType = await lint(code, EDITOR_FILE)
       expect(registeredType.messages.join('\n'), code).toContain(INTERNAL_MESSAGE)
       expect(registeredType.messages.join('\n'), code).not.toContain(PUBLIC_VALUE_MESSAGE)
@@ -140,7 +140,7 @@ describe('US-M1-11 lint 规则的自测：对 @univerjs/* 的值引用只允许�
   })
 
   it('internal-api 里不受限；测试代码不受白名单限制（登记过的内部符号仍由清单拦下）', async () => {
-    const unregistered = 'import { SheetPermissionCheckController } from \'@univerjs/sheets\'\nimport { ICommandService } from \'@univerjs/core\'\n\nexport const used = [SheetPermissionCheckController, ICommandService]\n'
+    const unregistered = 'import { SheetPermissionInitController } from \'@univerjs/sheets\'\nimport { ICommandService } from \'@univerjs/core\'\n\nexport const used = [SheetPermissionInitController, ICommandService]\n'
     for (const file of [INTERNAL_API_FILE, 'apps/web/src/editor/internal-api/ui.ts'])
       expect(await rulesFor(unregistered, file), file).not.toContain('no-restricted-imports')
     const testFile = 'apps/web/src/editor/read-only/freeze-handles.test.ts'

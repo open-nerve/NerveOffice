@@ -3,9 +3,10 @@
 // - 场景的样本与账户（selftestScene）：系统管理员建团队空间，作者是空间管理员，查看者是查看者；按步骤写库造文档：只读样本、
 //   去掉公式缓存值的同一份样本（公式要在 Worker 里算出结果）、去掉图片的样本（enter-exit 保存一次：样本的 data: 图片 M3-P3 起服务端拒绝保存，
 //   read-only-sample.ts 的 sampleWithoutImagesFor）、新建的模板、捕获时机复核的公式样本与 5 万行的大表（capture-samples.ts）；
+//   M5 起带图样本再经真实上传/保存受管化，以准备后的修订为固定基线；原 data: 文件仍保留作非法来源反例；
 // - 每一步的地址（selftestPageUrl）：自检的入口页（测试构建的 selftest.html）带上 # 片段——账户、文档、场景、公式模式与结果交回的地址；
 // - 结果的核对（problemsOf）：页面上的检查之外，驱动脚本与用例另外核对的（公式算出的值与样本的预期相同；enter-exit 交回了两次切换的耗时）；
-// - 服务器上的核对（serverProblemsOf，直接查库；storedProblems 是纯函数）：只看不改的步骤与 change-detection 没有保存过；enter-exit 恰好
+// - 服务器上的核对（serverProblemsOf，直接查库；storedProblems 是纯函数）：只看不改的步骤没有新增保存；change-detection 在动作/捕获检查结束后显式保存一次；enter-exit 恰好
 //   多了一个修订、内容里有改的那一格；自动保存照常运行的几步（M3-P4 S7：formula-timing、auto-height、large-copy、composition）至少保存了
 //   一次，存下的内容另按定义核对（公式、字号与自动行高、复制品、批注）；hidden-save 恰好保存了两次、内容里有隐藏之前与隐藏的那一刻写的两格；
 //   交接的几步（M3-P5 S8）随走的路（A 回应了没有、刷新时停住的那次保存提交了没有）；请求编辑的两条路（M3-P6）同样随走的路。交接的编排与库里的
@@ -22,6 +23,7 @@ import { BIG_SHEET, BULK_SAMPLE_BYTES, cellCount, verifyFormulaSnapshot } from '
 import { COMPOSITION_NOTE, ENTER_EXIT_EDIT, FORMULA_MODE_PARAM, FORMULA_MODE_VALUES, HIDDEN_SAVE_EDITS, isProbeScenario, NEXT_PARAM, PAUSED_HOLDER_EDITS, REFRESH_SAVE_EDIT, REQUEST_WAITER_EDIT, RUNS_PARAM, selftestEditorUrl, selftestPassed, TAKEOVER_EDITS } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { bigSheetFor, bulkSampleFor, formulaSampleFor, perfSampleFor } from './capture-samples.ts'
 import { createDocumentIn, createTeamSpace, createUser, withDatabase } from './database.ts'
+import { materializeReadOnlyImages } from './managed-read-only-sample.ts'
 import { readOnlySampleFor, SAMPLE_FORMULAS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from './read-only-sample.ts'
 
 /** 自检的入口页（只在测试构建里，vite.config.ts 的 TEST_ONLY_INPUTS） */
@@ -118,6 +120,8 @@ export interface SelftestStep {
   readonly scenario: SelftestScenario
   readonly account: { readonly username: string, readonly password: string }
   readonly documentId: string
+  /** 准备样本后的修订基线；受管图片经正式保存为 2，其余默认 1。 */
+  readonly initialRevision?: number
   readonly formula?: SelftestFormulaMode | undefined
   /** 怎样打开：没有时是入口页 */
   readonly opens?: 'entry' | 'editor' | undefined
@@ -176,9 +180,23 @@ export async function selftestScene(prefix: string, definitions: readonly Selfte
   const peer = await createUser(`${prefix}-peer`, '协作者')
   const space = await createTeamSpace('页面自检', admin, [[author, 'admin'], [viewer, 'viewer'], [peer, 'editor']])
   const documentIds: string[] = []
-  for (const definition of definitions)
-    documentIds.push(definition.sharesDocumentOf === undefined ? await createDocumentIn(space.id, author, `自检 ${definition.id}`, { snapshotFor: SAMPLES[definition.sample] }) : '')
-  return { author, viewer, peer, steps: stepsOf(definitions, { author, viewer }, documentIds, runs) }
+  const revisions = new Map<string, number>()
+  for (const definition of definitions) {
+    if (definition.sharesDocumentOf !== undefined) {
+      documentIds.push('')
+      continue
+    }
+    let snapshot = ''
+    const documentId = await createDocumentIn(space.id, author, `自检 ${definition.id}`, { snapshotFor: (unitId) => {
+      snapshot = SAMPLES[definition.sample](unitId)
+      return snapshot
+    } })
+    const initialRevision = await materializeReadOnlyImages(author, documentId, snapshot)
+    documentIds.push(documentId)
+    revisions.set(documentId, initialRevision)
+  }
+  const steps = stepsOf(definitions, { author, viewer }, documentIds, runs).map(step => ({ ...step, initialRevision: revisions.get(step.documentId) ?? 1 }))
+  return { author, viewer, peer, steps }
 }
 
 /**
@@ -465,24 +483,25 @@ function serverExpectation(scenario: SelftestScenario, path: string | undefined)
       return { revision: { atLeast: 2 }, why: '自动保存在组合结束之后上传', cells: [], content: compositionProblems }
     case 'hidden-save':
       return { revision: 3, why: '第一格经控制立即上传一次、隐藏的那一刻自动保存又上传一次', cells: HIDDEN_SAVE_EDITS }
+    case 'change-detection':
+      return { revision: 2, why: '全部动作和捕获检查结束后显式保存了一次', cells: [] }
     case 'read-only':
     case 'read-only-formulas':
     case 'edit-chrome':
     case 'environment':
-    case 'change-detection':
-      // 只看不改的几步；change-detection 暂停了定时的上传，它的内容带着只读样本单元格里的 data: 图片——交回结果时切到后台的上传被服务端拒收
       return { revision: 1, why: '没有保存过', cells: [] }
   }
 }
 
 /**
- * 一步在服务器上该有的样子（空数组就是对的，纯函数）：只看不改的几步与 change-detection（暂停定时的上传；内容带着样本的 data: 图片，
- * 服务端拒收）文档还是修订号 1；enter-exit 恰好保存了一次（修订号 2），内容里有它改的那一格（ENTER_EXIT_EDIT）；自动保存照常运行的几步（formula-timing、auto-height、
+ * 一步在服务器上该有的样子（空数组就是对的，纯函数）：修订数相对准备后的 initialRevision（默认 1）计算。
+ * 只看不改的几步没有新增保存；change-detection 在动作/捕获检查之后显式保存一次，页面已核对服务端内容与最终快照相同；
+ * enter-exit 恰好保存了一次，内容里有它改的那一格（ENTER_EXIT_EDIT）；自动保存照常运行的几步（formula-timing、auto-height、
  * large-copy、composition）至少保存了一次，存下的内容另核对（全部公式按定义、大表每一行的字号与自动行高、复制品的格数、批注的文字）；
  * hidden-save 恰好两次（修订号 3），内容里有它写的两格（HIDDEN_SAVE_EDITS）；交接的几步随走的路（path，handoverExpectation）。
  * 修订记录的条数都与修订号相同，"公式待更新"都不在
  */
-export function storedProblems(step: Pick<SelftestStep, 'scenario' | 'documentId'>, stored: StoredDocument | undefined, path?: string): string[] {
+export function storedProblems(step: Pick<SelftestStep, 'scenario' | 'documentId' | 'initialRevision'>, stored: StoredDocument | undefined, path?: string): string[] {
   const expected = serverExpectation(step.scenario, path)
   if (expected === 'none')
     return []
@@ -491,9 +510,10 @@ export function storedProblems(step: Pick<SelftestStep, 'scenario' | 'documentId
   if (expected === undefined)
     return [`文档 ${step.documentId}：不知道走了哪条路（${path ?? '没有交回'}），说不出服务器上该是什么样子（修订号 ${stored.revision}）`]
   const problems: string[] = []
-  const revisionOk = typeof expected.revision === 'number' ? stored.revision === expected.revision : stored.revision >= expected.revision.atLeast
+  const expectedRevision = (typeof expected.revision === 'number' ? expected.revision : expected.revision.atLeast) + (step.initialRevision ?? 1) - 1
+  const revisionOk = typeof expected.revision === 'number' ? stored.revision === expectedRevision : stored.revision >= expectedRevision
   if (!revisionOk || stored.revisions !== stored.revision) {
-    const wanted = typeof expected.revision === 'number' ? `应当都是 ${expected.revision}` : `应当至少 ${expected.revision.atLeast}、两者相同`
+    const wanted = typeof expected.revision === 'number' ? `应当都是 ${expectedRevision}` : `应当至少 ${expectedRevision}、两者相同`
     problems.push(`文档 ${step.documentId} 的修订号是 ${stored.revision}、修订记录 ${stored.revisions} 条（${wanted}：${expected.why}）`)
   }
   for (const cell of expected.cells) {

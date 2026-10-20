@@ -35,7 +35,7 @@ async function prepareCopy(page: Page, kind: '普通复制' | '本机副本', so
 }
 
 for (const kind of ['普通复制', '本机副本'] as const) {
-  test(`${kind}：上传与保存建立当前引用，撤销原文档分享后副本仍可读，未知地址始终为占位`, async ({ page, anotherDevice }) => {
+  test(`US-M5-07 ${kind}：上传与保存建立当前引用，撤销原文档分享后副本仍可读，未知地址始终为占位`, async ({ page, anotherDevice }) => {
     const owner = await createUser('asset-reference-owner')
     const copier = await createUser('asset-reference-copy')
     await loginThroughApi(anotherDevice, owner)

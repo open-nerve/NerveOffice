@@ -62,6 +62,7 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
+    sheetName: vi.fn(() => undefined),
     retryFormulaRecovery: vi.fn(),
     retryRecovery: vi.fn(async () => {}),
     copyRecovery: vi.fn(async () => {}),
@@ -103,6 +104,63 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
     },
   }
 }
+
+describe('图片的可见失败状态', () => {
+  it.each(['save', 'copy'] as const)('%s 的真实提示共用图片定位，工作表名称只作为文本显示', (action) => {
+    const error = new ApiError(422, 'SNAPSHOT_INVALID', 'x', { details: { rule: 'image-source', imageLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1, source: 'private' }] } })
+    const h = fakePage(action === 'save'
+      ? { save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } }
+      : { mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'content', error } }), save: undefined })
+    vi.mocked(h.page.sheetName).mockReturnValue('<img src=x>预算')
+    render(<EditorChrome page={h.page} apple={false} />)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('表格里有不能保存的图片。请检查：工作表「<img src=x>预算」的 B3')
+    expect(alert.querySelector('img')).toBeNull()
+    expect(alert).not.toHaveTextContent('private')
+    expect(h.page.sheetName).toHaveBeenCalledWith('s')
+  })
+
+  it('显示不含来源的说明，通过既有详情复核重试；不影响正文保存按钮', () => {
+    const h = fakePage({ imageProblem: true, save: DIRTY })
+    render(<EditorChrome page={h.page} apple={false} />)
+    expect(screen.getByText('部分图片暂时无法显示')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '重新加载图片' }))
+    expect(h.page.refreshDetail).toHaveBeenCalledOnce()
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    h.set({ imageProblem: false })
+    expect(screen.queryByText('部分图片暂时无法显示')).not.toBeInTheDocument()
+  })
+
+  it('图片操作失败与部分完成用纯文字说明，不显示图片加载重试', () => {
+    const h = fakePage({ imageOperation: { kind: 'failed', operation: 'insert', reason: 'request', completed: 1, total: 3 }, save: DIRTY })
+    render(<EditorChrome page={h.page} apple={false} />)
+    expect(screen.getByText('插入图片未完成。请求失败，请稍后重试。已插入 1/3 张图片。')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '重新加载图片' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    h.set({ imageOperation: { kind: 'failed', operation: 'paste', reason: 'clipboard-permission', completed: 0, total: 0 } })
+    expect(screen.getByText('粘贴未完成。浏览器未允许访问剪贴板，请允许后再次操作。')).toBeVisible()
+    h.set({ imageOperation: { kind: 'cancelled', operation: 'insert', completed: 1, total: 3 } })
+    expect(screen.getByText('已取消插入图片。已插入 1/3 张图片。')).toBeVisible()
+  })
+
+  it.each([
+    { reason: 'quota', message: '图片存储配额不足，请联系管理员。' },
+    { reason: 'invalid', message: '图片无法处理，请检查格式或使用较小的图片。' },
+  ] as const)('图片拒绝 $reason 给出所需操作，仍可保存已有内容', ({ reason, message }) => {
+    const h = fakePage({ imageOperation: { kind: 'failed', operation: 'insert', reason, completed: 0, total: 1 }, save: DIRTY })
+    render(<EditorChrome page={h.page} apple={false} />)
+    expect(screen.getByText(`插入图片未完成。${message}`)).toBeVisible()
+    expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: '重新加载图片' })).not.toBeInTheDocument()
+  })
+
+  it.each(['signed-out', 'other-user'] as const)('%s 时不能用图片重试绕过本页会话', (session) => {
+    const h = fakePage({ imageProblem: true, session })
+    render(<EditorChrome page={h.page} apple={false} />)
+    fireEvent.click(screen.getByRole('button', { name: '重新加载图片' }))
+    expect(h.page.refreshDetail).not.toHaveBeenCalled()
+  })
+})
 
 /** 页头里看得见的状态（载入中的说明、阅读与编辑、保存状态）：不是读屏的播报区（M3-P4，例行的变化只改它的文字） */
 function headerStatus(): HTMLElement {

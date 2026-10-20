@@ -7,7 +7,7 @@ import { actAs, loginThroughApi } from '../../support/session.ts'
 
 test.describe.configure({ timeout: 90_000 })
 
-test('四格式真实上传后直接显示；主动重读同一地址经过服务端并解码本次响应', async ({ page }) => {
+test('US-M5-07 四格式真实上传后直接显示；主动重读同一地址经过服务端并解码本次响应', async ({ page }) => {
   await loginThroughApi(page, await createUser('asset-formats'))
   await page.goto('/')
   for (const [file, mime, extension] of [
@@ -28,7 +28,7 @@ test('四格式真实上传后直接显示；主动重读同一地址经过服�
   }
 })
 
-test('有当前引用才可读；撤销分享后同一地址重读变为可解码占位，未知资源完全相同', async ({ page, anotherDevice }) => {
+test('US-M5-07 有当前引用才可读；撤销分享后同一地址重读变为可解码占位，未知资源完全相同', async ({ page, anotherDevice }) => {
   const owner = await createUser('asset-owner')
   const viewer = await createUser('asset-viewer')
   await loginThroughApi(anotherDevice, owner)

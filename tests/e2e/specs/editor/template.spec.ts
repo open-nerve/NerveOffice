@@ -1,6 +1,6 @@
 // 模板与档案（P4 设计 §3.4、§3.6.8、§3.10）：新建的文档打开后立即保存，上传的快照与模板逐字节相同（id 除外），即模板仍然收敛
 // （M3-P3 起看上传的正文：内容相同的保存服务端不存，设计 §3.11）；
-// M5 之前图片与超链接的入口不存在：菜单里没有，Ctrl/Cmd+K 没有反应，粘贴图片文件不产生图片。
+// M5-P2 起开放平台图片入口和表格图片粘贴；超链接入口、保护仍关闭，Ctrl/Cmd+K 没有反应。
 // 键入、粘贴网址时 SDK 的自动识别不是入口，照常保留；M3-P3 起写进单元格之前改成规范写法、不合法的去掉链接（DEF-021，
 // editor/profile/link-policy.ts）：这里核对存下的是规范写法，各条路径（编辑栏、单元格编辑器、HTML、HYPERLINK()）与撤销重做见 links.spec.ts。
 import { sheetSnapshotFor } from '@nerve-office/contracts'
@@ -8,7 +8,7 @@ import { createUser } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndCapture, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, resourceOf, saveAndCapture, saveAndWait, savedContent, selectCell, typeInCell } from '../../support/sheet.ts'
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -37,15 +37,21 @@ test.describe('US-M1-06 新建的表格用收敛的模板', () => {
   })
 })
 
-test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
-  test('插入菜单与右键菜单里没有图片、链接与保护；Ctrl/Cmd+K 没有反应', async ({ page }) => {
+test.describe('US-M1-09 按阶段开放图片与超链接的入口', () => {
+  test('M5-P2 插入菜单开放两种图片，链接与保护仍隐藏；右键与 Ctrl/Cmd+K 保持限制', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-menus'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId, 'steady')
     await page.getByRole('tab', { name: '插入', exact: true }).click()
     const toolbar = page.getByRole('toolbar', { name: '插入' })
     await expect(toolbar).toBeVisible()
-    await expect(toolbar.getByRole('button', { name: /图片|链接/ })).toHaveCount(0)
+    await expect(toolbar.getByRole('button', { name: /链接|保护/ })).toHaveCount(0)
+    const images = toolbar.getByRole('button', { name: '图片', exact: true })
+    await expect(images).toBeVisible()
+    await images.click()
+    await expect(page.getByRole('menuitem', { name: '浮动图片', exact: true })).toBeVisible()
+    await expect(page.getByRole('menuitem', { name: '单元格图片', exact: true })).toBeVisible()
+    await page.keyboard.press('Escape')
     await page.getByRole('tab', { name: '开始', exact: true }).click()
 
     await selectCell(page, 'B2', { button: 'right' })
@@ -100,20 +106,44 @@ test.describe('US-M1-09 M5 之前没有图片与超链接的入口', () => {
     expect(linksIn(cellOf(snapshot, 'C2'))).toEqual(['https://paste.example/p?q=1'])
   })
 
-  test('粘贴图片文件：不产生图片', async ({ page }) => {
+  test('M5-P2 合成图片文件粘贴：平台上传完成后在目标格保存资源图片，二次保存内容不变', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-paste'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId, 'steady')
     await selectCell(page, 'C3')
-    await page.evaluate((base64) => {
+    // 合成事件只验证正式宿主的适配路径；原生剪贴板的环境证据另行登记。
+    const prevented = await page.evaluate((base64) => {
       const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0))
       const data = new DataTransfer()
       data.items.add(new File([bytes], 'picture.png', { type: 'image/png' }))
       const target = document.activeElement ?? document.body
-      target.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+      const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })
+      target.dispatchEvent(event)
+      return event.defaultPrevented
     }, PNG)
+    expect(prevented).toBe(true)
+    // 上传和插入是异步任务；未等待完成就保存，会把空快照误当成粘贴被禁止。
+    await expect(page.locator('[data-slot="image-operation"]')).toContainText('粘贴已完成。')
     await saveAndWait(page)
-    const { resources } = (await savedContent(page, documentId)).snapshot
-    expect(resources.find(resource => resource.name === 'SHEET_DRAWING_PLUGIN')?.data).toBe('{}')
+    const saved = await savedContent(page, documentId)
+    const sheetId = saved.snapshot.sheetOrder[0]!
+    const resource = resourceOf(saved.snapshot, 'SHEET_DRAWING_PLUGIN') as Record<string, { data: Record<string, { source: string }> }>
+    const drawings = Object.values(resource[sheetId]!.data)
+    expect(drawings).toHaveLength(1)
+    expect(drawings[0]).toMatchObject({
+      unitId: saved.snapshot.id,
+      subUnitId: sheetId,
+      drawingType: 0,
+      imageSourceType: 'URL',
+      source: expect.stringMatching(/^\/api\/assets\/[\da-f-]{36}$/),
+      sheetTransform: { from: { row: 2, column: 2, rowOffset: 0, columnOffset: 0 } },
+    })
+    expect(saved.text).not.toMatch(/blob:|data:image/)
+    const image = await page.request.get(drawings[0]!.source)
+    expect(image.status()).toBe(200)
+    expect(image.headers()['x-asset-status']).toBe('200')
+    expect(image.headers()['content-type']).toBe('image/png')
+    expect((await saveAndCapture(page)).answer.unchanged).toBe(true)
+    expect((await savedContent(page, documentId)).text).toBe(saved.text)
   })
 })

@@ -1,0 +1,124 @@
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 2d772243f87f5652111f7eafa584774552a3d8c5..1755871877f83374fbefe3c64c5013b85fc79cb4 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,3 +1,4 @@
++// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
+ import { ArrangeTypeEnum, BooleanNumber, CommandType, DependentOn, Disposable, DisposableCollection, DrawingTypeEnum, ICommandService, IConfigService, IImageIoService, IURLImageService, IUniverInstanceService, ImageSourceType, Inject, Injector, LocaleService, Plugin, PositionedObjectLayoutType, ThemeService, UniverInstanceType, checkIfMove, debounce, generateRandomId, merge, toDisposable } from "@univerjs/core";
+ import { DRAWING_GROUPABLE_TYPES, IDrawingManagerService, SetDrawingSelectedOperation, UniverDrawingPlugin, getDrawingShapeKeyByDrawingSearch, isGroupableDrawingType, resolveDrawingRotateEnabled } from "@univerjs/drawing";
+ import { CURSOR_TYPE, Canvas, DRAWING_OBJECT_LAYER_INDEX, DrawingGroupObject, Group, IRenderManagerService, Image as Image$1, RENDER_CLASS_TYPE, Rect, Shape, UniverRenderEnginePlugin, Vector2, degToRad, getGroupState, precisionTo, transformObjectOutOfGroup } from "@univerjs/engine-render";
+@@ -782,6 +783,28 @@ let DrawingRenderService = class DrawingRenderService {
+ 		this._urlImageService = _urlImageService;
+ 		this._univerInstanceService = _univerInstanceService;
+ 		this._drawingImageClipService = _drawingImageClipService;
++		this._imageSourceRequests = new WeakMap();
++	}
++	_isCurrentImage(imageParam, scene, options) {
++		if (scene._disposed || !this._drawingManagerService.getDrawingVisible()) return false;
++		const current = this._drawingManagerService.getDrawingByParam(imageParam);
++		if (!current || current.drawingType !== DrawingTypeEnum.DRAWING_IMAGE || current.source !== imageParam.source || current.imageSourceType !== imageParam.imageSourceType) return false;
++		return (options === null || options === void 0 ? void 0 : options.allowInactiveSheet) || this._univerInstanceService.getUnitType(imageParam.unitId) !== UniverInstanceType.UNIVER_SHEET || imageParam.subUnitId === this._getActiveSheetId();
++	}
++	async updateImageSource(imageShape, imageParam, scene, options) {
++		const { source, imageSourceType } = imageParam;
++		const request = {};
++		this._imageSourceRequests.set(imageShape, request);
++		try {
++			const cached = this._imageIoService.getImageSourceCache(source, imageSourceType);
++			const service = imageSourceType === ImageSourceType.URL ? this._urlImageService : this._imageIoService;
++			const resolved = isRenderableImageCache(cached) ? cached.src : await service.getImage(source);
++			if (!resolved || imageShape._disposed || this._imageSourceRequests.get(imageShape) !== request || !this._isCurrentImage(imageParam, scene, options)) return;
++			imageShape.changeSource(resolved);
++			this._imageIoService.addImageSourceCache(source, imageSourceType, imageShape.getNative());
++		} catch (error) {
++			if ((error === null || error === void 0 ? void 0 : error.name) !== "AbortError") console.error(error);
++		}
+ 	}
+ 	async renderImages(imageParam, scene, options) {
+ 		const { transform: singleTransform, drawingType, source, imageSourceType, srcRect, prstGeom, groupId, unitId, subUnitId, drawingId, isMultiTransform, transforms: multiTransforms, adjustValues, hidden } = imageParam;
+@@ -817,6 +840,7 @@ let DrawingRenderService = class DrawingRenderService {
+ 				(_setClipBounds = imageShape.setClipBounds) === null || _setClipBounds === void 0 || _setClipBounds.call(imageShape, transform.clipBounds);
+ 				if ("hidden" in imageParam) hidden ? imageShape.hide() : imageShape.show();
+ 				ensureDrawingRenderLayer(scene, imageShape, imageParam);
++				await this.updateImageSource(imageShape, imageParam, scene, options);
+ 				continue;
+ 			}
+ 			const orders = this._drawingManagerService.getDrawingOrder(unitId, subUnitId);
+@@ -826,33 +850,23 @@ let DrawingRenderService = class DrawingRenderService {
+ 				zIndex: zIndex === -1 ? orders.length - 1 : zIndex
+ 			};
+ 			const imageNativeCache = this._imageIoService.getImageSourceCache(source, imageSourceType);
+-			let shouldBeCache = false;
+ 			if (isRenderableImageCache(imageNativeCache)) imageConfig.image = imageNativeCache;
+-			else if (imageSourceType === ImageSourceType.UUID) try {
+-				imageConfig.url = await this._imageIoService.getImage(source);
++			else try {
++				const service = imageSourceType === ImageSourceType.URL ? this._urlImageService : this._imageIoService;
++				imageConfig.url = await service.getImage(source);
++				if (!imageConfig.url) continue;
+ 			} catch (error) {
+-				console.error(error);
++				if ((error === null || error === void 0 ? void 0 : error.name) !== "AbortError") console.error(error);
+ 				continue;
+ 			}
+-			else if (imageSourceType === ImageSourceType.URL) {
+-				try {
+-					imageConfig.url = await this._urlImageService.getImage(source);
+-				} catch (error) {
+-					console.error(error);
+-					imageConfig.url = source;
+-				}
+-				shouldBeCache = true;
+-			} else {
+-				imageConfig.url = source;
+-				shouldBeCache = true;
+-			}
++			if (!this._isCurrentImage(imageParam, scene, options)) continue;
+ 			const shouldWaitForInlineTransform = docxHeaderFooterDrawing === true && layoutType === PositionedObjectLayoutType.INLINE;
+ 			if (hidden || shouldWaitForInlineTransform) imageConfig.visible = false;
+ 			if (scene.getObject(imageShapeKey)) continue;
+ 			imageConfig.printable = true;
+ 			const image = new Image$1(imageShapeKey, imageConfig);
+ 			image.setClipService(this._drawingImageClipService);
+-			if (shouldBeCache) this._imageIoService.addImageSourceCache(source, imageSourceType, image.getNative());
++			this._imageIoService.addImageSourceCache(source, imageSourceType, image.getNative());
+ 			scene.addObject(image, getDrawingRenderLayerIndex(imageParam));
+ 			if (this._drawingManagerService.getDrawingEditable()) scene.attachTransformerTo(image);
+ 			groupId && insertGroupObject({
+@@ -3029,7 +3043,7 @@ let MobileImageUpdateController = class MobileImageUpdateController extends Disp
+ 				ensureDrawingRenderLayer(scene, imageShape, drawingParam);
+ 				imageShape.setSrcRect(srcRect);
+ 				imageShape.setPrstGeom(prstGeom);
+-				if (source != null && source.length > 0 && (imageSourceType === ImageSourceType.BASE64 || imageSourceType === ImageSourceType.URL)) imageShape.changeSource(source);
++				void this._drawingRenderService.updateImageSource(imageShape, drawingParam, scene);
+ 			});
+ 		}));
+ 	}
+@@ -4467,7 +4481,7 @@ let ImageUpdateController = class ImageUpdateController extends Disposable {
+ 				ensureDrawingRenderLayer(scene, imageShape, drawingParam);
+ 				imageShape.setSrcRect(srcRect);
+ 				imageShape.setPrstGeom(prstGeom);
+-				if (source != null && source.length > 0 && (imageSourceType === ImageSourceType.BASE64 || imageSourceType === ImageSourceType.URL)) imageShape.changeSource(source);
++				void this._drawingRenderService.updateImageSource(imageShape, drawingParam, scene);
+ 			});
+ 		}));
+ 	}
+diff --git a/lib/types/services/drawing-render.service.d.ts b/lib/types/services/drawing-render.service.d.ts
+index b74814eac42e942ba1b2026addba25a2832d1065..6c5ffee61512f9218038370da5cd71bbad3c0a34 100644
+--- a/lib/types/services/drawing-render.service.d.ts
++++ b/lib/types/services/drawing-render.service.d.ts
+@@ -1,3 +1,4 @@
++// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
+ /**
+  * Copyright 2023-present DreamNum Co., Ltd.
+  *
+@@ -37,6 +38,9 @@ export declare class DrawingRenderService {
+     private readonly _urlImageService;
+     private readonly _univerInstanceService;
+     private readonly _drawingImageClipService;
++    private readonly _imageSourceRequests;
++    private _isCurrentImage;
++    updateImageSource(imageShape: Image, imageParam: IImageData, scene: Scene, options?: { allowInactiveSheet?: boolean }): Promise<void>;
+     constructor(_drawingManagerService: IDrawingManagerService, _imageIoService: IImageIoService, _galleryService: IGalleryService, _urlImageService: IURLImageService, _univerInstanceService: IUniverInstanceService, _drawingImageClipService: DrawingImageClipService);
+     renderImages(imageParam: IImageData, scene: Scene, options?: {
+         allowInactiveSheet?: boolean;

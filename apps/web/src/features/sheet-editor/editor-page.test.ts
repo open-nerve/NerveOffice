@@ -1,6 +1,6 @@
 import type { AcquiredEditLease, CreatedDocument, DocumentDetail, EditRequestOutcome, HandedOverEditLease, RenewedEditLease, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { MockInstance } from 'vitest'
-import type { EditorAccess, FormulaMode, FormulaWorkerFailure, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+import type { EditorAccess, EditorImageAccess, FormulaMode, FormulaWorkerFailure, OpenCheck, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
@@ -178,6 +178,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered', formulaMode: Formu
   const compositions = new Set<() => void>()
   const editor: SheetEditor = {
     unitId: 'unit-1',
+    sheetName: vi.fn(() => undefined),
     formulaMode,
     workerFailure: () => failure,
     onWorkerFailure: (listener) => {
@@ -320,8 +321,19 @@ function fakeAutosaveControl() {
   }
 }
 
+const IMAGE_CREATION = {
+  imageAccess: expect.objectContaining({ owner: ALICE.user.id, current: expect.any(Function) as unknown, subscribe: expect.any(Function) as unknown }) as unknown,
+  onImageFailure: expect.any(Function) as unknown,
+  onImageOperation: expect.any(Function) as unknown,
+  onImageOperationFailure: expect.any(Function) as unknown,
+}
+
 /** 编辑器页交给适配层的创建参数 */
 interface CreateOptions {
+  readonly imageAccess?: EditorImageAccess
+  readonly onImageFailure?: (error: unknown) => void
+  readonly onImageOperation?: (state: import('../../editor/index.ts').ImageInputState) => void
+  readonly onImageOperationFailure?: (error: unknown) => void
   readonly container: HTMLElement
   readonly snapshot: string
   readonly access: EditorAccess
@@ -330,6 +342,347 @@ interface CreateOptions {
   readonly formulaMode?: FormulaMode
   readonly pageUi: Node
 }
+
+describe('图片许可与页面真实会话、权限事实接线', () => {
+  async function loaded(options: Setup = {}) {
+    const h = setup(options)
+    await h.editorPage.load()
+    await settle()
+    const input = h.createEditor.mock.calls.at(-1)?.[0]
+    expect(input?.imageAccess).toBeDefined()
+    expect(input?.onImageFailure).toBeTypeOf('function')
+    return { ...h, images: input!.imageAccess!, failed: input!.onImageFailure! }
+  }
+
+  it('操作失败独立于图片加载；原会话错误仍复核，销毁后迟到状态不回写', async () => {
+    const h = await loaded()
+    const callbacks = h.createEditor.mock.calls.at(-1)![0]
+    const state = { kind: 'failed', operation: 'copy', reason: 'request', completed: 0, total: 1 } as const
+    callbacks.onImageOperation!(state)
+    expect(h.editorPage.view().imageOperation).toEqual(state)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+    callbacks.onImageOperationFailure!(new ApiError(401, 'UNAUTHENTICATED', '不可读取'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+    h.editorPage.dispose()
+    callbacks.onImageOperation!({ kind: 'complete', operation: 'copy', completed: 1, total: 1 })
+    callbacks.onImageOperationFailure!(new ApiError(401, 'UNAUTHENTICATED', '迟到'))
+    await settle()
+    expect(h.editorPage.view().imageOperation).toEqual(state)
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+  })
+
+  it('编辑器重建清操作提示，旧实例状态不能污染新实例', async () => {
+    const h = await loaded({ editIntent: false })
+    const previous = h.createEditor.mock.calls.at(-1)![0]
+    previous.onImageOperation!({ kind: 'failed', operation: 'paste', reason: 'empty', completed: 0, total: 0 })
+    await h.editorPage.enterEditing()
+    await settle()
+    expect(h.createEditor.mock.calls.at(-1)![0]).not.toBe(previous)
+    expect(h.editorPage.view().imageOperation).toBeUndefined()
+    previous.onImageOperation!({ kind: 'complete', operation: 'copy', completed: 1, total: 1 })
+    expect(h.editorPage.view().imageOperation).toBeUndefined()
+    const checks = h.api.session.mock.calls.length
+    previous.onImageOperationFailure!(new ApiError(403, 'CSRF_TOKEN_INVALID', '旧实例'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(checks)
+  })
+
+  it('图片上传的 CSRF 令牌失效也复核会话，不标记图片加载失败', async () => {
+    const h = await loaded()
+    h.createEditor.mock.calls.at(-1)![0].onImageOperationFailure!(new ApiError(403, 'CSRF_TOKEN_INVALID', '令牌失效'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+  })
+
+  it.each(['owner', 'network', 'other-user'] as const)('操作 401 确认后的迟到停写不自动循环；用户再次操作时补确认（%s），不重放', async (result) => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ api: { session: async () => initial } })
+    const callbacks = h.createEditor.mock.calls.at(-1)![0]
+    callbacks.onImageOperationFailure!(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    await settle()
+    expect(h.images.current()).toBeUndefined()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    if (result === 'network')
+      h.api.session.mockRejectedValueOnce(new NetworkError())
+    else
+      h.api.session.mockResolvedValueOnce(result === 'other-user' ? BOB : initial)
+    const rejected = { kind: 'failed', operation: 'insert', reason: 'permission', completed: 0, total: 0 } as const
+    callbacks.onImageOperation!(rejected)
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.images.current()).toBe(result === 'owner' ? initial : undefined)
+    expect(h.editorPage.view().imageOperation).toEqual(rejected)
+    expect(h.createEditor).toHaveBeenCalledOnce()
+  })
+
+  it('图片操作重试合并在途确认，接续轮失败不拿前轮身份放行图片', async () => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ api: { session: async () => initial } })
+    const callbacks = h.createEditor.mock.calls.at(-1)![0]
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise).mockRejectedValueOnce(new NetworkError())
+    const checking = h.editorPage.recheckSession()
+    callbacks.onImageOperation!({ kind: 'failed', operation: 'copy', reason: 'permission', completed: 0, total: 0 })
+    response.resolve(initial)
+    await checking
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.editorPage.view().sessionProblem).toBeInstanceOf(NetworkError)
+    expect(h.images.current()).toBeUndefined()
+  })
+
+  it('传原会话对象，同令牌确认不重读，换令牌才通知；图片 401 不产生循环', async () => {
+    const h = await loaded()
+    expect(h.images.current()).toBe(ALICE)
+    const changed = vi.fn()
+    h.images.subscribe(changed)
+    const latest = { ...ALICE }
+    h.api.session.mockResolvedValueOnce(latest)
+    await h.editorPage.recheckSession()
+    expect(h.images.current()).toBe(latest)
+    expect(changed).not.toHaveBeenCalled()
+    h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(changed).not.toHaveBeenCalled()
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    const fresh = { ...ALICE, csrfToken: 'fresh' }
+    h.api.session.mockResolvedValueOnce(fresh)
+    await h.editorPage.recheckSession()
+    expect(changed).toHaveBeenCalledOnce()
+    expect(h.images.current()).toBe(fresh)
+  })
+
+  it('明确退出和换人立即清身份，本人返回才恢复', async () => {
+    const h = await loaded()
+    const seen: (SessionResponse | undefined)[] = []
+    h.images.subscribe(() => seen.push(h.images.current()))
+    h.api.session.mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '未登录'))
+    await h.editorPage.recheckSession()
+    expect(h.images.current()).toBeUndefined()
+    h.api.session.mockResolvedValueOnce(BOB)
+    await h.editorPage.recheckSession()
+    expect(h.images.current()).toBeUndefined()
+    await h.editorPage.recheckSession()
+    expect(seen).toEqual([undefined, ALICE])
+  })
+
+  it.each(['owner', 'network', 'other-user'] as const)('图片 401 的停写通知晚于会话确认：明确重试重新核实身份，结果 %s', async (result) => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ api: { session: async () => initial } })
+    h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    expect(h.images.current()).toBeUndefined()
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    const confirmed = { ...(result === 'other-user' ? BOB : ALICE) }
+    if (result === 'network')
+      h.api.session.mockRejectedValueOnce(new NetworkError())
+    else
+      h.api.session.mockResolvedValueOnce(confirmed)
+    h.api.document.mockClear()
+    await h.editorPage.refreshDetail()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.images.current()).toBe(result === 'owner' ? confirmed : undefined)
+    expect(h.api.document).toHaveBeenCalledTimes(result === 'owner' ? 1 : 0)
+    if (result === 'network')
+      expect(h.editorPage.view().imageProblem).toBe(true)
+    if (result === 'other-user')
+      expect(h.editorPage.view().session).toBe('other-user')
+  })
+
+  it('图片明确重试合并在途会话确认：前轮成功、接续轮断网时不拿前轮身份继续详情', async () => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ api: { session: async () => initial } })
+    h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await settle()
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise).mockRejectedValueOnce(new NetworkError())
+    h.api.document.mockClear()
+    const checking = h.editorPage.recheckSession()
+    const retrying = h.editorPage.refreshDetail()
+    response.resolve({ ...ALICE })
+    await Promise.all([checking, retrying])
+    expect(h.api.session).toHaveBeenCalledTimes(4)
+    expect(h.editorPage.view().sessionProblem).toBeInstanceOf(NetworkError)
+    expect(h.editorPage.view().detailRefreshing).toBe(false)
+    expect(h.api.document).not.toHaveBeenCalled()
+  })
+
+  it('详情复核重读一次；文档不可读后仅确认本人不恢复，访问恢复后才激活', async () => {
+    const h = await loaded()
+    const changed = vi.fn()
+    h.images.subscribe(changed)
+    await h.editorPage.refreshDetail()
+    expect(changed).toHaveBeenCalledTimes(1)
+    h.api.document.mockRejectedValueOnce(new ApiError(404, 'NOT_FOUND', '不可读'))
+    await h.editorPage.refreshDetail()
+    expect(h.images.current()).toBeUndefined()
+    expect(changed).toHaveBeenCalledTimes(2)
+    await h.editorPage.recheckSession()
+    expect(h.images.current()).toBeUndefined()
+    await h.editorPage.refreshDetail()
+    expect(h.images.current()).toBe(ALICE)
+    expect(changed).toHaveBeenCalledTimes(3)
+  })
+
+  it('阅读状态检查的权限变化重读、失去访问清图、恢复访问激活，同权限检查不循环', async () => {
+    const h = await loaded({ editIntent: false })
+    const changed = vi.fn()
+    h.images.subscribe(changed)
+    const before = await h.api.editStatus(DOCUMENT_ID)
+    h.api.editStatus.mockResolvedValue({ ...before, status: { ...before.status, canEdit: false } })
+    await h.time.advance(30_000)
+    expect(changed).toHaveBeenCalledTimes(1)
+    await h.time.advance(30_000)
+    expect(changed).toHaveBeenCalledTimes(1)
+    h.api.editStatus.mockRejectedValueOnce(new ApiError(404, 'NOT_FOUND', '不可读'))
+    await h.time.advance(30_000)
+    expect(h.images.current()).toBeUndefined()
+    await h.time.advance(30_000)
+    expect(h.images.current()).toBe(ALICE)
+    expect(changed).toHaveBeenCalledTimes(3)
+  })
+
+  it('详情拒绝不能被旧阅读状态重新授权，后续成功的状态检查才恢复', async () => {
+    const h = await loaded({ editIntent: false })
+    h.api.document.mockRejectedValueOnce(new ApiError(404, 'NOT_FOUND', '不可读'))
+    await h.editorPage.refreshDetail()
+    await h.editorPage.recheckSession()
+    expect(h.images.current()).toBeUndefined()
+    await h.time.advance(30_000)
+    expect(h.images.current()).toBe(ALICE)
+  })
+
+  it('详情同时改变编辑和接管权限只刷新一次，不与旧阅读状态互相覆盖', async () => {
+    const h = await loaded({ editIntent: false })
+    const changed = vi.fn()
+    h.images.subscribe(changed)
+    h.api.document.mockResolvedValueOnce({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false, canTakeOver: true } })
+    await h.editorPage.refreshDetail()
+    expect(changed).toHaveBeenCalledOnce()
+  })
+
+  it('详情请求开始后状态检查已撤权，旧详情成功不得恢复图片许可', async () => {
+    const h = await loaded({ editIntent: false })
+    const response = deferred<DocumentDetail>()
+    h.api.document.mockReturnValueOnce(response.promise)
+    const refreshing = h.editorPage.refreshDetail()
+    h.api.editStatus.mockRejectedValueOnce(new ApiError(404, 'NOT_FOUND', '不可读'))
+    await h.time.advance(30_000)
+    expect(h.images.current()).toBeUndefined()
+    const changed = vi.fn()
+    h.images.subscribe(changed)
+    response.resolve(DETAIL)
+    await refreshing
+    expect(h.images.current()).toBeUndefined()
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('状态请求开始后详情已经撤权，旧状态成功不得恢复图片许可', async () => {
+    const h = await loaded({ editIntent: false })
+    const before = await h.api.editStatus(DOCUMENT_ID)
+    const response = deferred<FetchedEditStatus>()
+    h.api.editStatus.mockReturnValueOnce(response.promise)
+    await h.time.advance(30_000)
+    h.api.document.mockRejectedValueOnce(new ApiError(404, 'NOT_FOUND', '不可读'))
+    await h.editorPage.refreshDetail()
+    expect(h.images.current()).toBeUndefined()
+    const changed = vi.fn()
+    h.images.subscribe(changed)
+    response.resolve(before)
+    await settle()
+    expect(h.images.current()).toBeUndefined()
+    expect(changed).not.toHaveBeenCalled()
+    await h.time.advance(30_000)
+    expect(h.images.current()).toBe(ALICE)
+  })
+
+  it('在途状态成功改变权限标志，也不能掩盖随后详情确认的撤权', async () => {
+    const h = await loaded({ editIntent: false })
+    const before = await h.api.editStatus(DOCUMENT_ID)
+    const status = deferred<FetchedEditStatus>()
+    const detail = deferred<DocumentDetail>()
+    h.api.editStatus.mockReturnValueOnce(status.promise)
+    await h.time.advance(30_000)
+    h.api.document.mockReturnValueOnce(detail.promise)
+    const refreshing = h.editorPage.refreshDetail()
+    status.resolve({ ...before, status: { ...before.status, canEdit: false } })
+    await settle()
+    detail.reject(new ApiError(404, 'NOT_FOUND', '不可读'))
+    await refreshing
+    expect(h.images.current()).toBeUndefined()
+  })
+
+  it('载入时会话换人，实例仍绑定原用户；页面隐藏后迟到确认不再激活', async () => {
+    const response = deferred<DocumentDetail>()
+    const h = setup({ editIntent: false, api: { document: async () => response.promise } })
+    const opening = h.editorPage.load()
+    await settle()
+    h.api.session.mockResolvedValueOnce(BOB)
+    await h.editorPage.recheckSession()
+    response.resolve(DETAIL)
+    await opening
+    const images = h.createEditor.mock.calls.at(-1)![0].imageAccess!
+    expect(images.owner).toBe(ALICE.user.id)
+    expect(images.current()).toBeUndefined()
+    await h.editorPage.recheckSession()
+    expect(images.current()).toBe(ALICE)
+    const next = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(next.promise)
+    const checking = h.editorPage.recheckSession()
+    window.dispatchEvent(new Event('pagehide'))
+    expect(images.current()).toBeUndefined()
+    next.resolve(ALICE)
+    await checking
+    expect(images.current()).toBeUndefined()
+  })
+
+  it('网络请求失败不重读，只有浏览器真正恢复在线才触发一次', async () => {
+    const connection = createConnectionState({ online: true, now: () => 0 })
+    const h = await loaded({ network: { online: () => connection.view().browserOnline, onChange: connection.subscribe, connection } })
+    const changed = vi.fn()
+    h.images.subscribe(changed)
+    connection.failed(connection.beginRequest())
+    connection.failed(connection.beginRequest())
+    connection.succeeded(connection.beginRequest())
+    expect(changed).not.toHaveBeenCalled()
+    connection.setBrowserOnline(false)
+    connection.setBrowserOnline(true)
+    expect(changed).toHaveBeenCalledOnce()
+    connection.failed(connection.beginRequest())
+    expect(changed).toHaveBeenCalledOnce()
+  })
+
+  it('编辑器重建后的旧失败通知及页面销毁后的迟到详情不污染新实例', async () => {
+    const h = await loaded({ editIntent: false })
+    await h.editorPage.enterEditing()
+    h.failed(new Error('旧实例晚失败'))
+    expect(h.editorPage.view().imageProblem).toBe(false)
+    const last = h.createEditor.mock.calls.at(-1)![0]
+    last.onImageFailure!(new Error('当前实例失败'))
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    const response = deferred<DocumentDetail>()
+    h.api.document.mockReturnValueOnce(response.promise)
+    const refreshing = h.editorPage.refreshDetail()
+    const seen: (SessionResponse | undefined)[] = []
+    h.images.subscribe(() => seen.push(h.images.current()))
+    h.editorPage.dispose()
+    expect(h.images.current()).toBeUndefined()
+    response.resolve(DETAIL)
+    await refreshing
+    expect(seen).toEqual([undefined])
+  })
+})
 
 interface Setup {
   readonly recoveryReader?: () => RecoveryReader
@@ -886,6 +1239,20 @@ function deferred<T>() {
 const UNAUTHENTICATED = new ApiError(401, 'UNAUTHENTICATED', '请先登录')
 
 describe('页面、模式与编辑会话共用连接事实', () => {
+  it('页面只读当前实例名称，载入前与卸载后无名称，不触发捕获', async () => {
+    const h = setup()
+    expect(h.editorPage.sheetName('s')).toBeUndefined()
+    await h.editorPage.load()
+    vi.mocked(h.fake.editor.sheetName).mockReturnValue('预算')
+    const capture = vi.spyOn(h.fake.editor, 'capture')
+    expect(h.editorPage.sheetName('s')).toBe('预算')
+    expect(capture).not.toHaveBeenCalled()
+    h.editorPage.dispose()
+    vi.mocked(h.fake.editor.sheetName).mockClear()
+    expect(h.editorPage.sheetName('s')).toBeUndefined()
+    expect(h.fake.editor.sheetName).not.toHaveBeenCalled()
+  })
+
   it('页头读取同一来源的本机元数据，后续编辑立即撤销旧捕获的完整覆盖', async () => {
     const t = setup()
     await t.editorPage.load()
@@ -1071,7 +1438,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(api.session).toHaveBeenCalledOnce()
     expect(api.document).toHaveBeenCalledWith(DOCUMENT_ID)
     expect(api.content).toHaveBeenCalledWith(DOCUMENT_ID)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', title: '周报' }, mode: { kind: 'reading', canEdit: true }, save: undefined, session: 'active' })
     expect(editLease.acquire).not.toHaveBeenCalled()
     expect(editIntent.clear).not.toHaveBeenCalled()
@@ -1083,7 +1450,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   it('新建的表格（?edit=new）：载入之后直接申请、以可编辑创建，进入之后去掉地址里的标记；就绪之后可以保存，基准是内容的修订号', async () => {
     const { editorPage, surface, api, createEditor, fake, editIntent, chrome } = setup()
     await editorPage.load()
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready', title: '周报' }, mode: { kind: 'editing' }, save: { status: 'clean' }, session: 'active' })
     expect(editIntent.clear).toHaveBeenCalledOnce()
     expect(surface.dataset.editorState).toBe('ready')
@@ -1169,7 +1536,7 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   it('只能查看：以只读创建编辑器（M2-P3 设计 §3.5），不建保存状态机，不能保存；?edit=new 也不申请、不去掉标记', async () => {
     const { editorPage, surface, api, createEditor, editLease, editIntent, chrome } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }), editStatus: VIEWER_STATUS } })
     await editorPage.load()
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: false }, save: undefined })
     expect(editLease.acquire).not.toHaveBeenCalled()
     expect(editIntent.clear).not.toHaveBeenCalled()
@@ -1987,7 +2354,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     await editorPage.load()
     expect(editLease.acquire).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 'id-1')
     expect(editLease.acquire.mock.invocationCallOrder[0]).toBeGreaterThan(Math.max(...vi.mocked(api.content).mock.invocationCallOrder))
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(editorPage.view()).toMatchObject({ mode: { kind: 'editing' }, save: { canSave: true } })
     await editorPage.save()
     expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ clientInstanceId: 'id-1' }), expect.anything(), CREDENTIALS)
@@ -2020,7 +2387,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     const { editorPage, api, createEditor, surface, chrome } = setup({ api: { content: async () => ({ snapshot: '{"id":"unit-1","v":3}', revision: 3 }), contentIfChanged }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 5 })) } })
     await editorPage.load()
     expect(contentIfChanged).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, 3)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1","v":5}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1","v":5}', access: 'edit' })
     await editorPage.save()
     expect(api.save).toHaveBeenCalledWith(DOCUMENT_ID, expect.objectContaining<Partial<SaveRequest>>({ baseRevision: 5 }), expect.anything(), CREDENTIALS)
   })
@@ -2036,7 +2403,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     const { editorPage, editLease, createEditor, surface, editIntent, chrome } = setup({ api: { contentIfChanged: async () => Promise.reject(new NetworkError('断网')) }, editLease: { acquire: vi.fn(async () => ({ ...ACQUIRED, revision: 4 })) } })
     await editorPage.load()
     expect(editLease.release).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, TOKEN)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: true, notice: { kind: 'enter-failed' } }, save: undefined })
     expect(editIntent.clear).not.toHaveBeenCalled()
   })
@@ -2047,7 +2414,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     const { editorPage, editLease, createEditor, surface, time, editIntent, chrome } = setup({ api: { editStatus }, editLease: { acquire: vi.fn(async () => Promise.reject(heldBy(false, serverTime))) } })
     await editorPage.load()
     await settle()
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read' })
     expect(editorPage.view()).toMatchObject({
       load: { kind: 'ready' },
       save: undefined,
@@ -2070,7 +2437,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     await time.advance(500)
     await loading
     expect(acquire).toHaveBeenCalledTimes(2)
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
   })
 
@@ -2110,7 +2477,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     await time.advance(500)
     await loading
     expect(acquire.mock.calls).toEqual([[DOCUMENT_ID, 'id-1'], [DOCUMENT_ID, 'id-1']])
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'edit' })
     expect(modeOf(editorPage)).toEqual({ kind: 'editing' })
   })
 
@@ -2124,7 +2491,7 @@ describe('编辑权（M3-P1 设计 §3.4.7）', () => {
     await vi.waitFor(() => expect(acquire).toHaveBeenCalledOnce())
     await time.advance(500)
     await loading
-    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
+    expect(createEditor).toHaveBeenCalledExactlyOnceWith({ ...IMAGE_CREATION, container: surface, pageUi: chrome, snapshot: '{"id":"unit-1"}', access: 'read', viewState: undefined })
     expect(editorPage.view()).toMatchObject({ load: { kind: 'ready' }, mode: { kind: 'reading', canEdit: true, notice: { kind: 'enter-failed', error } } })
     expect(surface.dataset.editorState).toBe('ready')
     expect(editIntent.clear).not.toHaveBeenCalled()

@@ -39,13 +39,35 @@ export const SNAPSHOT_RULES = [
 ] as const
 export type SnapshotRule = (typeof SNAPSHOT_RULES)[number]
 
+export const SNAPSHOT_IMAGE_LOCATION_LIMIT = 5
+/** 只用于提示的坐标/索引上限，不改变工作簿本身的格式和容量规则。 */
+export const SNAPSHOT_IMAGE_POSITION_MAX = 2_147_483_647
+
+/** 只回传有限的结构标识，不能把任意路径、名称或正文当成 id。 */
+export function isSnapshotImageIdentifier(value: unknown): value is string {
+  return typeof value === 'string' && /^[\w-]{1,128}$/.test(value) && !['__proto__', 'prototype', 'constructor'].includes(value)
+}
+
+const imageIdentifier = z.string().refine(isSnapshotImageIdentifier)
+const imagePosition = z.number().int().min(0).max(SNAPSHOT_IMAGE_POSITION_MAX)
+export const snapshotImageLocationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('cell'), sheetId: imageIdentifier, row: imagePosition, column: imagePosition }),
+  z.object({ kind: z.literal('drawing'), sheetId: imageIdentifier, drawingId: imageIdentifier, row: imagePosition.optional(), column: imagePosition.optional() })
+    .refine(value => (value.row === undefined) === (value.column === undefined)),
+  z.object({ kind: z.literal('sheet'), sheetId: imageIdentifier }),
+  z.object({ kind: z.literal('resource'), resourceIndex: imagePosition }),
+  z.object({ kind: z.literal('workbook') }),
+])
+export type SnapshotImageLocation = z.infer<typeof snapshotImageLocationSchema>
+
 /**
  * SNAPSHOT_INVALID 的详情：违反的规则。以后的 Phase 会加规则（M6 的文字文档），而响应的结构是宽松的（请求严格、响应宽松，架构总览 §3）：
  * 不认识的规则（以及缺少规则）解析成 undefined，不让整个解析失败，页面按通用的"格式不正确"处理
  */
 export const snapshotInvalidDetailsSchema = z.object({
   rule: z.enum(SNAPSHOT_RULES).optional().catch(undefined),
-})
+  imageLocations: z.array(snapshotImageLocationSchema).max(SNAPSHOT_IMAGE_LOCATION_LIMIT).optional().catch(undefined),
+}).transform((details): { rule?: SnapshotRule | undefined, imageLocations?: SnapshotImageLocation[] | undefined } => details.rule === 'image-source' ? details : { rule: details.rule })
 
 export type SnapshotInvalidDetails = z.infer<typeof snapshotInvalidDetailsSchema>
 

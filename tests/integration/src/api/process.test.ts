@@ -4,7 +4,7 @@ import type { ApiProcess } from '../support/api-process.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readExpectedMigrations } from '@nerve-office/api'
@@ -64,6 +64,9 @@ describe('api 进程', () => {
     try {
       const publicDirectory = join(directory, 'web')
       mkdirSync(publicDirectory, { mode: 0o755 })
+      // 明确注入权限过宽的故障，不依赖启动测试的进程采用哪种 umask。
+      chmodSync(publicDirectory, 0o755)
+      expect(statSync(publicDirectory).mode & 0o777).toBe(0o755)
       writeFileSync(join(publicDirectory, 'index.html'), '<!doctype html>')
       writeFileSync(join(publicDirectory, 'editor.html'), '<!doctype html>')
       const configurations: Readonly<Record<string, string>>[] = [

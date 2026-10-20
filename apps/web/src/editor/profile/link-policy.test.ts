@@ -382,6 +382,15 @@ describe('装上改写器（installLinkPolicy）', () => {
     expect(urlsOf(later)).toEqual(['https://example.com'])
   })
 
+  it('图片或入口守卫已取消的命令不再改写其输入', () => {
+    const facade = fakeFacade()
+    installLinkPolicy(facade.api, noReport())
+    const cell = typed('example.com', 'https://example.com')
+    const event = { ...write({ 0: { 0: cell } }).event, cancel: true }
+    facade.fire(event)
+    expect(urlsOf(cell)).toEqual(['https://example.com'])
+  })
+
   it('默认把意外交给浏览器的错误报告（reportError），事件照常派发完', () => {
     const reported = vi.fn()
     vi.stubGlobal('reportError', reported)

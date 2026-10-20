@@ -16,6 +16,7 @@
 // 能不能强制接管取自载入时的详情（之后随编辑状态更新）。"强制接管"（设计 §3.8）是写的操作：页头先确认（确认框关掉之后才交到这里），这里与"编辑"
 // 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { EditorImageAccess, ImageInputState } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
@@ -32,6 +33,7 @@ import type { LoadedContent } from './editor-api.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
 import type { HandoverTrace } from './handover-trace.ts'
+import type { EditorImageAccessController } from './image-access.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility } from './reading-checks.ts'
@@ -47,6 +49,7 @@ import { draftSessionPermitOf } from '../../shared/local-drafts/session-activati
 import { subscribeLocalSession } from '../../shared/local-drafts/session-events.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
 import { createEditMode } from './edit-mode.ts'
+import { createEditorImageAccess } from './image-access.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 
 /**
@@ -83,6 +86,8 @@ export type EditorPageLoad
 export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
 
 export interface EditorPageView {
+  readonly imageProblem?: boolean
+  readonly imageOperation?: ImageInputState | undefined
   readonly formulaRecovery?: FormulaRecoveryView | undefined
   readonly recovery?: RecoveryView | undefined
   readonly localSave?: LocalSaveView | undefined
@@ -166,7 +171,7 @@ export interface EditorPageOptions {
    * 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定；页面自己的界面（页头）也交过去——组合输入与面板防抖的输入目标在页头里的
    * 不算文档的输入（M3-P4 设计 §3.6）
    */
-  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement, readonly pageUi: Node }) => ReturnType<CreateModeEditor>
+  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement, readonly pageUi: Node, readonly imageAccess?: EditorImageAccess, readonly onImageFailure?: (error: unknown) => void, readonly onImageOperation?: (state: ImageInputState) => void, readonly onImageOperationFailure?: (error: unknown) => void }) => ReturnType<CreateModeEditor>
   readonly page: PageLocation
   readonly sessionChannel: SessionChannel
   /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查 */
@@ -198,6 +203,7 @@ export interface EditorPageOptions {
 }
 
 export interface EditorPage {
+  readonly sheetName: EditMode['sheetName']
   readonly retryFormulaRecovery: () => void
   readonly retryRecovery: () => Promise<void>
   readonly copyRecovery: () => Promise<void>
@@ -284,6 +290,17 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let userId: string | undefined
   let localDraftsEnabled = false
   let localPermit: DraftSessionPermit | undefined
+  let imageAccess: EditorImageAccessController | undefined
+  let imageSession: SessionResponse | undefined
+  let imageReadable = false
+  let imageCanEdit: boolean | undefined
+  let imageCanTakeOver: boolean | undefined
+  /** 详情和阅读检查共享撤权代次，较早发出的成功响应不能重新授权。 */
+  let imagePermissionEpoch = 0
+  let imageInstance = 0
+  let imageProblem = false
+  let imageOperation: ImageInputState | undefined
+  let imagesHidden = false
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
   /** 阅读与编辑（载入之后才有） */
@@ -335,6 +352,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     if (event.cleanup?.cause === 'account_disabled')
       sessionEndedReason = 'account_disabled'
     localPermit = undefined
+    imageSession = undefined
+    imagePermissionEpoch += 1
+    imageAccess?.suspend()
     recovery?.suspend()
     // 沿已有代次变化路径暂停捕获、关闭本机宿主和释放密钥；服务器状态仍由真实会话请求确认。
     mode?.setSession(session)
@@ -348,7 +368,44 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
-    return { load, recovery: recovery?.view(), formulaRecovery: modeView?.formulaRecovery, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { load, imageProblem, imageOperation, recovery: recovery?.view(), formulaRecovery: modeView?.formulaRecovery, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+  }
+
+  function confirmImages(): void {
+    if (disposed || leaving || imagesHidden || session !== 'active' || !imageReadable || imageSession === undefined) {
+      imageAccess?.suspend()
+      return
+    }
+    if (imageAccess?.current()?.csrfToken !== imageSession.csrfToken) {
+      imagePermissionEpoch += 1
+      imageProblem = false
+    }
+    imageAccess?.confirm(imageSession)
+  }
+
+  function refreshImages(): void {
+    const active = imageAccess?.current() !== undefined
+    confirmImages()
+    // 从暂停恢复时 confirm 已发一次通知；重复确认本人不主动重读。
+    if (imageAccess?.current() !== undefined) {
+      imageProblem = false
+      if (active)
+        imageAccess.refresh()
+    }
+    update()
+  }
+
+  function imagePermissions(readable: boolean, canEdit?: boolean, canTakeOver?: boolean, issuedEpoch?: number): void {
+    if (issuedEpoch !== undefined && issuedEpoch !== imagePermissionEpoch)
+      return
+    const changed = imageReadable !== readable || imageCanEdit !== canEdit || imageCanTakeOver !== canTakeOver
+    imageReadable = readable
+    imageCanEdit = canEdit
+    imageCanTakeOver = canTakeOver
+    if (changed) {
+      imagePermissionEpoch += 1
+      refreshImages()
+    }
   }
 
   function formulaBusy(): boolean {
@@ -407,6 +464,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   function finish(result: Exclude<EditorPageLoad, { kind: 'loading' | 'ready' }>): void {
+    imagePermissionEpoch += 1
+    imageReadable = false
+    imageAccess?.suspend()
     load = result
     setSurface('failed')
     update()
@@ -420,6 +480,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     const view = mode?.view()
     if (view === undefined || disposed)
       return
+    // 不可读立即清图；恢复必须来自新请求，不能用旧 reading 视图重新授权。
+    if ((view.mode.kind === 'reading' && view.mode.gone)
+      || (view.mode.kind === 'lost' && !view.mode.readable)
+      || (view.mode.kind === 'losing' && view.mode.loss.kind === 'not-found')
+      || view.mode.kind === 'unavailable') {
+      imagePermissions(false)
+    }
     if (view.mode.kind === 'failed') {
       if (load.kind !== 'editor-failed')
         finish({ kind: 'editor-failed', error: view.mode.error })
@@ -444,6 +511,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     if (leaving)
       return
     leaving = true
+    imageAccess?.suspend()
     setCsrfToken(undefined)
     page.replace(loginPath(options.currentPath(), disabledSessionUserId(error) !== undefined ? 'account_disabled_confirmed' : error.code === 'SESSION_EXPIRED' ? 'expired' : 'required'))
   }
@@ -461,7 +529,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   function enterSession(next: EditorPageSession): void {
     if (next !== 'signed-out')
       sessionEndedReason = undefined
+    if (session !== next)
+      imagePermissionEpoch += 1
     session = next
+    confirmImages()
     if (next !== 'active') {
       localPermit = undefined
       recovery?.suspend()
@@ -599,6 +670,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     else if (confirmed.user.id === userId) {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
       setApiSession(confirmed)
+      imageSession = confirmed
       localDraftsEnabled = confirmed.features.localDraftsEnabled
       localPermit = draftSessionPermitOf(confirmed)
       enterSession('active')
@@ -730,7 +802,54 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       recovery,
       connection: options.network.connection,
       api,
-      createEditor: async editorOptions => options.createEditor({ ...editorOptions, container: surface, pageUi: options.chrome }),
+      onImagePermissions: imagePermissions,
+      imagePermissionEpoch: () => imagePermissionEpoch,
+      createEditor: async (editorOptions) => {
+        const instance = ++imageInstance
+        imageProblem = false
+        imageOperation = undefined
+        const currentImageInstance = (): boolean => !disposed && !imagesHidden && instance === imageInstance
+        const confirmImageOperationSession = async (): Promise<void> => {
+          await recheckSession()
+          if (!currentImageInstance())
+            return
+          // 合并确认要看最后一轮；前轮成功不能掩盖接续轮断网。
+          if (sessionProblem !== undefined) {
+            imageSession = undefined
+            imagePermissionEpoch += 1
+            imageAccess?.suspend()
+          }
+        }
+        return options.createEditor({
+          ...editorOptions,
+          container: surface,
+          pageUi: options.chrome,
+          ...(imageAccess === undefined ? {} : { imageAccess }),
+          onImageFailure: (error) => {
+            if (disposed || imagesHidden || instance !== imageInstance)
+              return
+            imageProblem = true
+            update()
+            if (isAuthenticationError(error) && checkInFlight === undefined)
+              void recheckSession()
+          },
+          onImageOperation: (state) => {
+            if (!currentImageInstance())
+              return
+            imageOperation = state
+            update()
+            // stopped 可能晚于先前确认；只在下一次用户动作后补确认，不自动重放剪贴板。
+            if (state.kind === 'failed' && state.reason === 'permission' && imageSession === undefined)
+              void confirmImageOperationSession()
+          },
+          onImageOperationFailure: (error) => {
+            if (!currentImageInstance())
+              return
+            if ((isAuthenticationError(error) || isCsrfTokenError(error)) && checkInFlight === undefined)
+              void confirmImageOperationSession()
+          },
+        })
+      },
       clock,
       visibility: options.visibility,
       lastActivity: () => lastActivity,
@@ -770,6 +889,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   return {
     retryRecovery: async () => recoveryAction(async current => current.discover()),
+    sheetName: sheetId => disposed || session !== 'active' ? undefined : mode?.sheetName(sheetId),
     copyRecovery: async () => recoveryAction(async current => current.copy()),
     beginDiscardRecovery: () => confirmedForWrite() && (mode === undefined || mode.view().mode.kind === 'reading') ? recovery?.beginDiscard() : undefined,
     discardRecovery: async intent => recoveryAction(async current => current.discard(intent)),
@@ -794,6 +914,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }))
       // 关闭时有保存在途不释放（edit-mode.ts 的 releaseOnHide，M3-P4 设计 §3.4）
       const onPageHide = (): void => {
+        imagesHidden = true
+        imageAccess?.suspend()
         recovery?.suspend()
         mode?.releaseOnHide()
       }
@@ -807,6 +929,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         const next = options.network.online()
         const returned = next && !browserOnline
         browserOnline = next
+        if (returned)
+          refreshImages()
         // 共享连接也发布请求失败；它不是浏览器恢复在线，不能让会话确认自己触发下一轮。
         recheckOnReturn(returned)
       }))
@@ -826,6 +950,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           return
         setApiSession(signedIn)
         userId = signedIn.user.id
+        imageSession = signedIn
+        imageAccess = createEditorImageAccess(userId)
         localDraftsEnabled = signedIn.features.localDraftsEnabled
         localPermit = draftSessionPermitOf(signedIn)
         // 确认会话的回包之前别的标签页登录或退出了：消息当时没法处理，现在补确认一次
@@ -858,6 +984,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         return
       }
       heading = headingOf(document, signedIn.user.id)
+      imagePermissions(true, document.permissions.canEdit, document.permissions.canTakeOver)
       const canEdit = document.permissions.canEdit
       // 新于本页的内容只能阅读。
       const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
@@ -1009,16 +1136,29 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       if (documentId === undefined || heading === undefined || disposed)
         return
       const round = ++detailRound
+      let permissionsEpoch = imagePermissionEpoch
       detailRefreshes += 1
       update()
       let document: DocumentDetail
       try {
+        // 401 的本机停写通知可能晚于会话确认到达；明确重试时先补齐图片身份。
+        // 不在停写通知里自动确认，否则持续 401 会形成确认、重读、再停写的循环。
+        if (imageSession === undefined) {
+          await recheckSession()
+          if (disposed || heading === undefined || round !== detailRound || session !== 'active' || sessionProblem !== undefined || imageSession === undefined) {
+            detailRefreshes -= 1
+            update()
+            return
+          }
+          permissionsEpoch = imagePermissionEpoch
+        }
         document = await api.document(documentId)
       }
       catch (error) {
         detailRefreshes -= 1
         if (disposed || heading === undefined)
           return
+        // 较新的许可只阻止旧成功重新授权；实际拒绝仍须清图，不能被并发成功掩盖。
         if (round !== detailRound) {
           update()
           return
@@ -1026,6 +1166,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         // 看不到了（已经删除、移走，或者自己被移出、授权被取消）：不再能分享。未登录交给会话的确认（页头随之说明）；
         // 别的失败：页头留着之前的信息，说明没能刷新、可以重试（DEF-040，与列表的"没能刷新"同一个说法）
         if (isMissingResource(error)) {
+          imagePermissions(false)
           heading = { ...heading, canShare: false }
           detailProblem = undefined
         }
@@ -1045,13 +1186,19 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       detailRefreshes -= 1
       if (disposed || heading === undefined)
         return
-      if (round !== detailRound) {
+      if (round !== detailRound || permissionsEpoch !== imagePermissionEpoch) {
         update()
         return
       }
       heading = headingOf(document, heading.userId)
       detailProblem = undefined
+      // 先更新详情事实，状态机随后的同一权限通知不重复刷新。
+      imagePermissionEpoch += 1
+      imageReadable = true
+      imageCanEdit = document.permissions.canEdit
+      imageCanTakeOver = document.permissions.canTakeOver
       mode?.updateCanEdit(document.permissions.canEdit)
+      refreshImages()
       if (load.kind === 'ready')
         load = { kind: 'ready', ...heading }
       update()
@@ -1059,6 +1206,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     recheckSession,
     dispose: () => {
       disposed = true
+      imageAccess?.dispose()
       recovery?.dispose()
       cancelRecheck?.()
       cancelRecheck = undefined
