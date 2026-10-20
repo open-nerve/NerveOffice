@@ -160,7 +160,7 @@ const VIEW_ACTIONS: readonly ChangeAction[] = [
 
 /**
  * 改内容（M0 动作矩阵里能经 Facade 执行的；U 类的键入、粘贴改用 Facade 写值与公式，撤销与重做用 Facade）。一份文档上按顺序做，
- * 后面的动作不依赖前面的结果（工作表按名称取）。插入图片与新增超链接在 M5 之前被入口守卫挡着，不做
+ * 后面的动作不依赖前面的结果（工作表按名称取）。该捕获清单保留既有操作集；M5 的图片与正式链接入口另由各自完整故事验证
  */
 const CONTENT_ACTIONS: readonly ChangeAction[] = [
   { name: '写入数值', run: session => sheetNamed(session, DATA).getRange('K3').setValue(123) },

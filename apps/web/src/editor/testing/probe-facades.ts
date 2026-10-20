@@ -7,6 +7,8 @@
 //   getter（_dataValidationModel，读到时才取数据验证的模型），不订阅、不改模型（M2-P6 复核 F6）。
 // 所以编辑器的行为不变，只是 E2E 能调用这些方法。
 // 这个模块有副作用（加载即改动 Facade 的类）：只能随探针经动态 import() 加载，静态引入会把它带进生产构建（lint 拦下，M2-P6 复核 F5）
+// M5-P3 另用公开 Docs Facade 只读核对活动富文本正文；该模块不增加初始化订阅。
+import '@univerjs/docs/facade'
 import '@univerjs/sheets-conditional-formatting/facade'
 import '@univerjs/sheets-data-validation/facade'
 import '@univerjs/sheets-drawing/facade'

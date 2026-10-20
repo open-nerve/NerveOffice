@@ -62,11 +62,12 @@ import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
 import { installEditorImageInput } from './images/editor-image-input.ts'
 import { createPlatformImageIo } from './images/platform-image-io.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL } from './internal-api/index.ts'
-import { closeImagePreview, invalidateImageRendering } from './internal-api/ui.ts'
+import { closeImagePreview, installRichLinkShortcut, invalidateImageRendering } from './internal-api/ui.ts'
 import { watchLifecycle } from './lifecycle-watch.ts'
 import { watchPanelDebounces } from './panel-debounce-watch.ts'
 import { installEntryGuards } from './profile/entry-guards.ts'
 import { installImagePolicy } from './profile/image-policy.ts'
+import { installLinkInputPolicy } from './profile/link-input-policy.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { SHEET_ZH_CN } from './profile/locale.ts'
 import { checkCreated, recheckReady } from './profile/open-check.ts'
@@ -76,9 +77,10 @@ import { SheetEditorLoadError } from './sheet-editor-error.ts'
 import { watchUncommittedInput } from './uncommitted-input.ts'
 import { readViewState, restoreViewState } from './view-state.ts'
 import { parseWorkbookSnapshot } from './workbook-snapshot.ts'
-// Facade 只引用用到的部分（包体积）：createWorkbook、getWorkbook、save 在 sheets，编辑中的单元格在 sheets-ui
+// Facade 只引用用到的部分（包体积）：createWorkbook、getWorkbook、save 在 sheets，编辑中的单元格在 sheets-ui，链接固定提示用 ui.showMessage
 import '@univerjs/sheets/facade'
 import '@univerjs/sheets-ui/facade'
+import '@univerjs/ui/facade'
 import './profile/styles.ts'
 
 export interface SheetEditor {
@@ -382,8 +384,15 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 将来要在运行中装上、撤下它，有入口守卫占着，订阅者也不会减到零。改动这里的顺序（例如把这些订阅挪到创建工作簿之后，
   // 或者入口守卫中途退订）都会破坏它：E2E read-only.spec.ts 的用例"经 Facade 直接执行写公式的 mutation"核对（被取消、单元格不变）
   let managedImageInput = false
-  const guards = installEntryGuards(univerAPI, () => managedImageInput)
+  let managedLinkInput = false
+  const guards = installEntryGuards(univerAPI, () => managedImageInput, () => managedLinkInput && access === 'edit')
   cleanup.defer(() => guards.dispose())
+  const linkInput = installLinkInputPolicy(univerAPI)
+  managedLinkInput = true
+  cleanup.defer(() => {
+    managedLinkInput = false
+    linkInput.dispose()
+  })
   // 图片先整批验证，再允许后续链接改写；任何拒绝都发生在 SDK 生成撤销或写模型之前。
   const imageOwner = options.imageAccess?.owner ?? options.imageAccess?.current()?.user.id
   const imageWrites = installImagePolicy(univer, univerAPI, options.onImageFailure ?? (error => reportError(error)), {
@@ -454,6 +463,8 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   readOnly?.clearUndoStack()
   // 就绪之后再核对一次 hook 集合与这之前记下的加载问题：防 SDK 把注册挪到更晚（1.0.1 里两次的 hook 集合相同）
   const openCheck = recheckReady(created, { profile: SHEET_PROFILE_ID, hookNames: resourceGuard.sheetHookNames(), loadFailures: resourceGuard.loadFailures() })
+  const linkShortcut = installRichLinkShortcut(univer, () => managedLinkInput && access === 'edit')
+  cleanup.defer(() => linkShortcut.dispose())
   const imageRuntime = installEditorImageInput({
     univer,
     unitId: snapshot.unitId,

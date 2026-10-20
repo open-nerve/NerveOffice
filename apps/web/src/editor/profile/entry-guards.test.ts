@@ -89,6 +89,25 @@ describe('按阶段开放的入口：命令守卫', () => {
     expect(facade.dispose).toHaveBeenCalledOnce()
   })
 
+  it('链接策略就绪才放行七个入口，退役后恢复取消；图片和首个监听不变', () => {
+    const facade = fakeFacade()
+    let enabled = false
+    const guard = installEntryGuards(facade.api, () => false, () => enabled)
+    for (const command of HYPERLINK_GUARDED_COMMANDS)
+      expect(facade.fire(command.id).cancel).toBe(true)
+    enabled = true
+    for (const command of HYPERLINK_GUARDED_COMMANDS)
+      expect(facade.fire(command.id).cancel).toBeUndefined()
+    for (const command of IMAGE_GUARDED_COMMANDS)
+      expect(facade.fire(command.id).cancel).toBe(true)
+    enabled = false
+    for (const command of HYPERLINK_GUARDED_COMMANDS)
+      expect(facade.fire(command.id).cancel).toBe(true)
+    expect(facade.dispose).not.toHaveBeenCalled()
+    guard.dispose()
+    expect(facade.dispose).toHaveBeenCalledOnce()
+  })
+
   it('带图片的粘贴（DEF-035 的旁支）：要贴的内容有 drawings 或图片的锚点就取消；纯文字照常；看不懂的参数按带图片算', () => {
     const facade = fakeFacade()
     installEntryGuards(facade.api)

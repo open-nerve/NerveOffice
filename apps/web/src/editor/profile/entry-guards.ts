@@ -56,6 +56,7 @@ export const IMAGE_PASTE_COMMAND: GuardedCommand = {
 }
 
 const GUARDED_IDS: ReadonlySet<string> = new Set(GUARDED_COMMANDS.map(command => command.id))
+const HYPERLINK_IDS: ReadonlySet<string> = new Set(HYPERLINK_GUARDED_COMMANDS.map(command => command.id))
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -80,11 +81,13 @@ export function isGuardedCommand(id: string, params?: unknown): boolean {
 }
 
 /** 在创建工作簿之前挂上：打开文档的过程中也不执行这些命令 */
-export function installEntryGuards(univerAPI: FUniver, managedImageInput: () => boolean = () => false): IDisposable {
+export function installEntryGuards(univerAPI: FUniver, managedImageInput: () => boolean = () => false, managedLinkInput: () => boolean = () => false): IDisposable {
   return univerAPI.addEvent(univerAPI.Event.BeforeCommandExecute, (event) => {
-    // 正式适配接管两种文件入口及正常浮图提交；背景、文档和链接入口仍关闭。
+    // 正式适配接管两种文件入口及正常浮图提交，链接策略就绪后开放链接；背景和文档图片仍关闭。
     // 切换时保留本监听，不能改变 Facade 与只读防火墙在 SDK 之前的顺序。
     if (managedImageInput() && ['sheet.command.insert-sheet-image', 'sheet.command.insert-float-image', 'sheet.command.insert-cell-image'].includes(event.id))
+      return
+    if (managedLinkInput() && HYPERLINK_IDS.has(event.id))
       return
     if (isGuardedCommand(event.id, event.params))
       event.cancel = true

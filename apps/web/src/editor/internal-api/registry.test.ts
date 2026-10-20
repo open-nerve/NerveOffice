@@ -14,6 +14,8 @@ import imageStructureSource from './image-structure.ts?raw'
 import * as internalApi from './index.ts'
 import source from './index.ts?raw'
 import injectorSource from './injector.ts?raw'
+import linkInputSource from './link-input.ts?raw'
+import linkShortcutSource from './link-shortcut.ts?raw'
 import localeServiceSource from './locale-service.ts?raw'
 import memoryLocalStorageSource from './memory-local-storage.ts?raw'
 import panelDebouncesSource from './panel-debounces.ts?raw'
@@ -79,6 +81,8 @@ const SOURCES: Readonly<Record<string, string>> = {
   'image-structure.ts': imageStructureSource,
   'injector.ts': injectorSource,
   'locale-service.ts': localeServiceSource,
+  'link-input.ts': linkInputSource,
+  'link-shortcut.ts': linkShortcutSource,
   'memory-local-storage.ts': memoryLocalStorageSource,
   'panel-debounces.ts': panelDebouncesSource,
   'registry.ts': registrySource,

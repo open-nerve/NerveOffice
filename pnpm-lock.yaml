@@ -447,6 +447,7 @@ patchedDependencies:
   '@univerjs/sheets-drawing-ui@1.0.1': 439f805cf2aa79e4346e41aab698516c3b39482c0d3a0ffe816e025f6418722f
   '@univerjs/sheets-drawing@1.0.1': 0c922020b3889b49303a1721666b474133c198c65d8c2c3278c9900054488155
   '@univerjs/sheets-formula@1.0.1': 3a5fecc6bf2087232466577330dd8991796c6a6f5bf50d4a5e4016d21cf4701e
+  '@univerjs/sheets-hyper-link-ui@1.0.1': 6a72dada7428e0f1922429ca3037a4465fe1cea835fe1698a0da720918cf2459
   '@univerjs/ui@1.0.1': cc5c84a2621751fbda2a47a14a8ea26959b8e59413fe624e0b85d02d46c83a07
 
 importers:
@@ -663,7 +664,7 @@ importers:
         version: 1.0.1(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/sheets-hyper-link-ui':
         specifier: 'catalog:'
-        version: 1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
+        version: 1.0.1(patch_hash=6a72dada7428e0f1922429ca3037a4465fe1cea835fe1698a0da720918cf2459)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/sheets-note':
         specifier: 'catalog:'
         version: 1.0.1(react@19.3.0)(rxjs@7.8.2)
@@ -9450,7 +9451,7 @@ snapshots:
     transitivePeerDependencies:
       - react
 
-  '@univerjs/sheets-hyper-link-ui@1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)':
+  '@univerjs/sheets-hyper-link-ui@1.0.1(patch_hash=6a72dada7428e0f1922429ca3037a4465fe1cea835fe1698a0da720918cf2459)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)':
     dependencies:
       '@univerjs/core': 1.0.1(patch_hash=a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/design': 1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

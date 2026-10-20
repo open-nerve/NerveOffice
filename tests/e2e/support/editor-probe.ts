@@ -58,6 +58,8 @@ export interface FacadeImage extends EntryImage {
 
 /** 工作表的选区（sheets 的 Facade 的 FSelection） */
 export interface FacadeSelection {
+  /** 链接定位可没有主单元格，使用实际选区列表核对范围。 */
+  readonly getActiveRangeList: () => readonly FacadeRange[]
   /** 选区里的活动区域（整行选中时 A1 写法是 "20:20"，整列是 "K:K"） */
   readonly getActiveRange: () => FacadeRange | null
   /** 选区的主单元格：编辑栏显示的就是它（从 0 开始的行号与列号） */
@@ -83,6 +85,7 @@ export interface FacadeSheet extends EntrySheet {
 
 export interface FacadeWorkbook extends EntryWorkbook {
   readonly getActiveSheet: () => FacadeSheet
+  readonly insertDefinedName: (name: string, reference: string) => unknown
   /** 当前单元格（选区的主单元格）；没有选区时是 null */
   readonly getActiveCell: () => FacadeRange | null
   /** 找不到时是 null：入口里按样本的名称取，取不到就让调用抛错（接住后用例失败） */
@@ -91,6 +94,11 @@ export interface FacadeWorkbook extends EntryWorkbook {
 
 export interface FacadeApi extends EntryApi {
   readonly getActiveWorkbook: () => FacadeWorkbook
+  /** 公开 Docs Facade，用于证明非法富文本命令没有先改活动编辑器正文。 */
+  readonly getActiveDocument: () => {
+    readonly getId: () => string
+    readonly save: () => { body?: { dataStream: string, customRanges?: { rangeId: string }[] } }
+  } | null
 }
 
 /** SDK 注册的一个快捷键（与 e2e-probe.ts 的 ProbeShortcut 相同）：各平台的绑定，按页面的平台取其一（support/keyboard.ts） */

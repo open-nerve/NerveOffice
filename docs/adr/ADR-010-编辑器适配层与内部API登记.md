@@ -147,3 +147,18 @@ IMAGE 包装通过公开 `BaseFunction.calculateAst` 接收实际 AST；`BaseAst
 旧坏图片清理在 `image-cleanup.ts` 内绑定当前 workbook、权限、对象版本和一次性确认票据；取消、过期、失败不改数据或清史。成功后仅清该 workbook 的撤销历史，并要求正式入口明确告知不可撤销。分组坏图不在该清理能力范围内。S3 仅建立能力，不开放清理或图片输入入口。
 
 `SheetEditor.sheetName(id)` 是不捕获、不选区、不写模型的只读名称查询，经 EditMode/EditorPage 使用当前实例；销毁、重建、未知工作表及 SDK 非字符串名称返回 undefined。页面共用图片错误格式化器，用后端有界结构位置和本地名称给出说明，SDK 对象与服务端任意内容均不透出。保存、副本及原日志协议保持。
+
+
+## M5-P3 S2 的补充：正式链接输入与导航
+
+链接使用既有 contracts `canonicalLink`，不新增协议猜测或地址验证请求。适配层在 SDK 表单、四个明确写命令及点击导航三个边界应用同一规则；普通自动识别、粘贴和公式结果继续走既有单元格清洗。四命令标识集中在 `internal-api/link-input.ts`、经 `ui.ts` 导出并登记；拒绝通知使用公开 `FUniver.showMessage`，只显示固定文案，不透出用户地址。
+
+固定 `@univerjs/sheets-hyper-link-ui@1.0.1` 的发布 ES/CJS/声明增加可选 `urlHandler.normalizeUrl`，由 `pnpm patch` 管理，来源、散列与覆盖路径见 `patches/univer-links.json`。桌面/移动表单和纯文本粘贴读取实例配置；resolver 在原协议白名单前规范化，无配置时保持 SDK 原行为。原 `isSafeUrl` 可接受相对路径，但只检查解析后的协议，不能代替平台对凭据、控制字符和协议相对地址的约束。内部工作表/区域/定义名称导航保留 SDK 实现。
+
+首个 Facade 入口监听保持最先安装；只有明确输入策略已安装且实例为 edit 才放行七个链接入口。read 实例仍拦快捷键与写入口，独立只读防火墙继续保护底层修改。销毁时关闭 readiness 并移除策略监听，重建重新安装。合法明确写入只规范地址，保留显示文本；非法输入在 SDK 修改文本、模型和历史之前取消。
+
+固定 SDK 原 Ctrl/Cmd+K 排除活动单元格编辑；`internal-api/link-shortcut.ts` 在 Ready 后用本实例 `IShortcutService` 补原工具栏命令，要求可编辑、策略就绪、正常单元格文档、非折叠选区、非公式栏、非组字和真实输入归属。隐藏输入不属于 `editorDOM`，以正常文档的 `DocSelectionRenderService.isFocusing` 和事件目标等于 activeElement 核对实例。销毁时移除绑定，原 SDK 谓词和全局监听不变。SDK 升级若公开支持此场景，先通过实例/只读/组字/销毁反例和富文本真实 UI，再删除本适配及登记。
+
+实际富文本表单 autofocus 引起 Docs `_setEditing(false)`，文本/矩形数组引用和 segment 均不变；原 hyperlink listener 会立即关表单。同包 ES/CJS 补丁只给桌面/移动两个 popup 订阅增加上述身份与数组引用去重，真正换区、清空、上下文变化和销毁仍生效。订阅沿原 `disposeWithMe` 管理，不改全局 Docs、不延时重开。14 项真实发布 controller 对照覆盖桌面/移动，三浏览器真实故事核对桌面整段与子串、历史和重开；移动单元覆盖不冒称移动 UI 验收。上游修复相同焦点通知问题后，须经过这些对照才删除此段补丁；它与 URL normalizer 有独立删除条件。
+
+外部导航只在明确点击时执行 `window.open(href, '_blank', 'noopener,noreferrer')`，回调再次检查地址，不接收内部锚点。配置、输入、保存和重开均不得引起外站预取。SDK 升级若提供相同的公开实例级规范化接点，先通过 resolver 默认行为、真实表单、富文本、只读、历史和导航回归，再删除补丁及登记；不能仅因版本变化移除。

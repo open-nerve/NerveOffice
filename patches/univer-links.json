@@ -1,0 +1,25 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/sheets-hyper-link-ui",
+  "version": "1.0.1",
+  "reason": "同一实例地址规范化接点覆盖桌面/移动表单、粘贴判定和导航；默认安全协议检查保持。区分富文本焦点通知与真实选区替换，防止表单自行关闭。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "c5a2542d12816a43783572af36fea04e5a3e58b3154b40df96b720cdbdc0927a",
+      "patchedSha256": "4d3cdc103df610eb6ea34be86f243a6eade9ebbd1f02a5fb2d85aab51958a939"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "9771c7a8fb1e1d80a4450947906ee1e5fea223d8e927494b325fa283f447f62d",
+      "patchedSha256": "607dd95f1d8c4f56b96870b101b86fb5745b76620f3dbb0239226e0feea24db4"
+    },
+    {
+      "path": "lib/types/config/config.d.ts",
+      "originalSha256": "cafbf48a1211f481216e39e96dcf96f1f2c3d4e62a0526bd04f2f0d4e42b7171",
+      "patchedSha256": "10372fb233f68566c005d88a9aa06ec995146367e708fef052308f7ded3bc8d5"
+    }
+  ],
+  "patch": "patches/@univerjs__sheets-hyper-link-ui@1.0.1.patch",
+  "patchSha256": "6a72dada7428e0f1922429ca3037a4465fe1cea835fe1698a0da720918cf2459"
+}

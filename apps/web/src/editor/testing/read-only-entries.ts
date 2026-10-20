@@ -131,7 +131,7 @@ export interface FacadeEntry extends EntryOutcomes {
   readonly name: string
   /** 只能用参数（见文件开头）。调用抛出的错误由调用方接住：取消之后仍去取结果的 Facade 方法会抛错（例如 insertSheet 的 TypeError） */
   readonly call: (scope: EntryScope) => unknown
-  /** 能编辑时也不改动：超链接在 M5 之前被入口守卫取消（P4 设计 §3.6.8） */
+  /** 能编辑时也预期不改动的特殊入口；当前 Facade 清单均为真实写操作。 */
   readonly unchangedWhenEditable?: true
   /**
    * 操作样本里的图片（"功能"表的第一张浮动图片）：去掉图片的样本上没有对象可操作，调用什么也不做（页面自检的 enter-exit 用那一份，
@@ -165,8 +165,8 @@ export const FACADE_ENTRIES: readonly FacadeEntry[] = [
     edit: { executed: 'sheet.command.add-conditional-rule' },
   },
   { name: '数据验证', call: ({ api, sheet }) => sheet.getRange('K20:K25').setDataValidation(api.newDataValidation().requireNumberBetween(1, 10).build()), read: { blocked: 'sheet.command.addDataValidation', alert: READ_ONLY_ALERT.dataValidation }, edit: { executed: 'sheet.command.addDataValidation' } },
-  // M5 之前两种方式都被入口守卫取消（P4 设计 §3.6.8）：能编辑时同样不改动，对照组另有"取消已有的超链接"
-  { name: '超链接', call: async ({ sheet }) => sheet.getRange('K31').setHyperLink('https://example.com/new', '新链接'), read: { canceled: 'sheets.command.add-hyper-link' }, edit: { canceled: 'sheets.command.add-hyper-link' }, unchangedWhenEditable: true },
+  // M5-P3 正式链接已开放；只读取消、可编辑正常写入。
+  { name: '超链接', call: async ({ sheet }) => sheet.getRange('K31').setHyperLink('https://example.com/new', '新链接'), read: { canceled: 'sheets.command.add-hyper-link' }, edit: { executed: 'sheets.command.add-hyper-link' } },
   { name: '批注', call: ({ sheet }) => sheet.getRange('K30').createOrUpdateNote({ note: '新备注', width: 160, height: 60 }), read: { canceled: 'sheet.mutation.update-note' }, edit: { executed: 'sheet.mutation.update-note' } },
   { name: '全部替换', call: async ({ api }) => (await api.createTextFinderAsync('苹果')).replaceAllWithAsync('苹果X'), read: { blocked: 'sheet.command.set-range-values', alert: READ_ONLY_ALERT.edit }, edit: { executed: 'sheet.command.replace' } },
   { name: '取消已有的超链接（"功能"表 H3）', call: ({ workbook }) => workbook.getSheetByName('功能').getRange('H3').cancelHyperLink(), read: { canceled: 'sheet.mutation.set-range-values' }, edit: { executed: 'sheets.command.cancel-hyper-link' } },

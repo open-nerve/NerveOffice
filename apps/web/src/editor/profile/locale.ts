@@ -25,6 +25,9 @@ import SheetsUIZhCN from '@univerjs/sheets-ui/locale/zh-CN'
 import SheetsZhCN from '@univerjs/sheets/locale/zh-CN'
 import UIZhCN from '@univerjs/ui/locale/zh-CN'
 
+/** 适配层自己的输入提示；不引用编辑器页面的按需加载文案。 */
+export const LINK_INPUT_INVALID_MESSAGE = '链接地址不能使用，请检查后重试。'
+
 /** 只读时被拦下的操作的说法：开头相同，后面按动作 */
 const READ_ONLY = '这份文档只能查看，'
 

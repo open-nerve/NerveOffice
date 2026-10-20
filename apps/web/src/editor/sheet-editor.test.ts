@@ -26,7 +26,7 @@ import { installSystemImageInput } from './images/system-image-input.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL, IAuthzIoService, injectorOf, WorkbookViewPermission } from './internal-api/index.ts'
 import { createImageInputBridge } from './internal-api/ui.ts'
 import { dataPluginEntries, snapshotWithResources } from './profile/data-plugins.test-support.ts'
-import { installEntryGuards } from './profile/entry-guards.ts'
+import { HYPERLINK_GUARDED_COMMANDS, installEntryGuards } from './profile/entry-guards.ts'
 import { installImagePolicy } from './profile/image-policy.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
@@ -86,7 +86,7 @@ vi.mock('./images/system-image-input.ts', () => ({
 }))
 vi.mock('./internal-api/ui.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./internal-api/ui.ts')>()
-  return { ...actual, createImageInputBridge: vi.fn(() => ({ dispose: imageRuntime.bridgeDispose })) }
+  return { ...actual, createImageInputBridge: vi.fn(() => ({ dispose: imageRuntime.bridgeDispose })), installRichLinkShortcut: vi.fn(() => ({ dispose: vi.fn() })) }
 })
 
 // 视图状态的取出与恢复本身由 view-state.test.ts 测；这里只核对编排（何时恢复、交给谁）
@@ -173,18 +173,30 @@ describe('创建表格编辑器的过程中出错（审查 B8）', () => {
  * 没有注册插件时真的 Facade 建不出来（它要取渲染服务），所以换掉 FUniver.newAPI，同时取出那个 Univer 实例里的授权服务
  * （失败之后 Univer 已经销毁，注入器不能再用）
  */
-function fakeFacade() {
+function fakeFacade(onCreate?: (dispatch: (event: object) => void) => void) {
   const active = new Map<string, number>()
+  const commandListeners = new Set<(event: never) => void>()
   const recorded: { atCreateWorkbook?: Record<string, number>, authz?: IAuthzIoService } = {}
   const api = {
     // 事件名就是属性名（与 Facade 的 FEventName 相同）
     Event: new Proxy({}, { get: (_target, name) => String(name) }),
-    addEvent: (name: string) => {
+    addEvent: (name: string, listener: (event: never) => void) => {
       active.set(name, (active.get(name) ?? 0) + 1)
-      return { dispose: () => active.set(name, (active.get(name) ?? 0) - 1) }
+      if (name === 'BeforeCommandExecute')
+        commandListeners.add(listener)
+      return {
+        dispose: () => {
+          active.set(name, (active.get(name) ?? 0) - 1)
+          commandListeners.delete(listener)
+        },
+      }
     },
     createWorkbook: () => {
       recorded.atCreateWorkbook = Object.fromEntries(active)
+      onCreate?.((event) => {
+        for (const listener of commandListeners)
+          listener(event as never)
+      })
       throw new Error('创建工作簿出错')
     },
   }
@@ -202,6 +214,21 @@ async function createFailingAtWorkbook(access: EditorAccess): Promise<unknown> {
 }
 
 describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
+  it.each(['read', 'edit'] as const)('链接策略装好后，只有编辑实例开放入口（%s）', async (access) => {
+    const events = HYPERLINK_GUARDED_COMMANDS.map(({ id }) => ({
+      id,
+      type: id.includes('.operation.') ? CommandType.OPERATION : CommandType.COMMAND,
+      params: { link: { payload: '/spaces' }, payload: { payload: '/spaces' } },
+      cancel: false,
+    }))
+    fakeFacade((dispatch) => {
+      for (const event of events)
+        dispatch(event)
+    })
+    await createFailingAtWorkbook(access)
+    expect(events.map(event => [event.id, event.cancel])).toEqual(events.map(event => [event.id, access === 'read']))
+  })
+
   it('插件档案拿到打开方式（界面的配置按它组合）', async () => {
     fakeFacade()
     await createFailingAtWorkbook('read')
@@ -225,8 +252,8 @@ describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
     const error = await createFailingAtWorkbook('read')
     expect(error).toBeInstanceOf(SheetEditorLoadError)
     expect((error as SheetEditorLoadError).reason).toBe('create-failed')
-    // 入口、图片、链接与只读守卫；图片另在专属撤销/重做事件预检完整记录。
-    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 4, BeforeUndo: 2, BeforeRedo: 2 })
+    // 入口、图片、明确链接输入、自动链接清洗与只读守卫；图片另在专属撤销/重做事件预检完整记录。
+    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 5, BeforeUndo: 2, BeforeRedo: 2 })
     expect(subscribed()).toBe(0)
     expect(FakeWorker.created[0]?.terminate).toHaveBeenCalledOnce()
   })
@@ -235,7 +262,7 @@ describe('按打开方式创建（M2-P3 设计 §3.1–§3.4）', () => {
     const { recorded, subscribed } = fakeFacade()
     await createFailingAtWorkbook('edit')
     expect(vi.mocked(installReadOnlyGuard)).not.toHaveBeenCalled()
-    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 3, BeforeUndo: 1, BeforeRedo: 1 })
+    expect(recorded.atCreateWorkbook).toMatchObject({ BeforeCommandExecute: 4, BeforeUndo: 1, BeforeRedo: 1 })
     expect(subscribed()).toBe(0)
   })
 })

@@ -66,6 +66,28 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
+    name: 'installRichLinkShortcut',
+    origin: '本实例 IShortcutService、正常单元格内部编辑器与富文本选区',
+    sdk: {
+      '@univerjs/core': ['IDisposable', 'Univer', 'DOCS_NORMAL_EDITOR_UNIT_ID_KEY', 'EDITOR_ACTIVATED', 'FOCUSING_FX_BAR_EDITOR', 'FOCUSING_SHEET'],
+      '@univerjs/docs': ['DocSelectionManagerService'],
+      '@univerjs/docs-ui': ['DocSelectionRenderService', 'IEditorService'],
+      '@univerjs/engine-render': ['IRenderManagerService'],
+      '@univerjs/ui': ['IShortcutService', 'KeyCode', 'MetaKeys'],
+    },
+    purpose: '原 SDK Ctrl/Cmd+K 排除已激活的单元格编辑器；仅为本实例可编辑、有效非折叠选区补同一工具栏命令，不在公式栏、弹窗输入、组字或只读时抢键。销毁即注销。',
+    evidence: 'sheets-hyper-link-ui 1.0.1 InsertLinkShortcut 的 whenSheetEditorFocused 排除 EDITOR_ACTIVATED；本实例正常编辑器的 DocSelectionRenderService.isFocusing 与 document.activeElement 确认输入归属；隐藏输入不在 editorDOM 内。',
+    regression: 'internal-api/link-shortcut.test.ts 的焦点/选区/退役；editor/link-input.spec.ts 真实富文本 Ctrl/Cmd+K；SDK 原绑定支持同一范围后，完整回归通过再删本适配。',
+  },
+  {
+    name: 'LINK_INPUT_COMMANDS',
+    origin: '@univerjs/sheets-hyper-link 的普通与富文本 Add/UpdateHyperLinkCommand',
+    sdk: { '@univerjs/sheets-hyper-link': ['AddHyperLinkCommand', 'AddRichHyperLinkCommand', 'UpdateHyperLinkCommand', 'UpdateRichHyperLinkCommand'] },
+    purpose: '明确链接输入在 SDK 修改显示文字、模型和撤销栈之前验证并规范化；添加读取 params.link.payload，更新读取 params.payload.payload。取消链接保持原语义，权限由独立只读守卫判断。',
+    evidence: '固定 1.0.1 lib/es/index.js 的 add-hyper-link.command 与 update-hyper-link.command；M5-P3-S2 spec。地址提示使用公开 Facade.showMessage，不增加消息服务内部依赖。',
+    regression: 'profile/link-input-policy.test.ts 的四命令、拒绝保留、参数不明与销毁；E2E editor/link-input.spec.ts 的正式输入、保存与导航，升级 SDK 时先核对实际参数再移除适配。',
+  },
+  {
     name: 'FORMULA_CLIPBOARD_MIME_TYPE',
     origin: 'sheets-ui 1.0.1 的公式剪贴板 MIME 常量，仅主线程使用',
     purpose: '系统 paste 事件和显式剪贴板读取保留 SDK 公式数据，表格委托不退化为纯文本',

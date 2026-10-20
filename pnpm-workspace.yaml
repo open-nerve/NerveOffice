@@ -37,6 +37,8 @@ patchedDependencies:
   '@univerjs/sheets-drawing@1.0.1': patches/@univerjs__sheets-drawing@1.0.1.patch
   # ADR-022：IMAGE 量尺寸、取消与恢复走实例 IO，采用真实原件几何并拒绝过时批次写回。
   '@univerjs/sheets-formula@1.0.1': patches/@univerjs__sheets-formula@1.0.1.patch
+  # ADR-010、M5-P3：表单、粘贴与导航可配置同一地址规范化，保留 SDK 默认协议检查。
+  '@univerjs/sheets-hyper-link-ui@1.0.1': patches/@univerjs__sheets-hyper-link-ui@1.0.1.patch
   # ADR-022：桌面右键菜单先恢复当前编辑器焦点，再同步执行命令，保留图片焦点守卫。
   '@univerjs/ui@1.0.1': patches/@univerjs__ui@1.0.1.patch
 # 依赖的安装脚本逐个决定，新增一项要写原因（规范 §3）

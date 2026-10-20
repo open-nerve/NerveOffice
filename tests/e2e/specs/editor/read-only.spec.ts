@@ -352,7 +352,7 @@ async function changeWhenEditable(page: Page, s: Scene, entry: Entry): Promise<C
   return JSON.stringify(contentOf(await probeSnapshot(page))) === JSON.stringify(opened) ? 'unchanged' : 'changed'
 }
 
-/** 能编辑时每项都改动了内存里的内容，超链接除外（M5 之前被入口守卫取消） */
+/** 能编辑时各写入口都应改动内存内容；仅明确标注的特殊入口除外。 */
 function expectedWhenEditable(entry: Entry): Change {
   return entry.unchangedWhenEditable ? 'unchanged' : 'changed'
 }
