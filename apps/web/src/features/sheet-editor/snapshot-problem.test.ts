@@ -36,3 +36,38 @@ describe('保存与副本的图片错误说明', () => {
     expect(lookup).not.toHaveBeenCalled()
   })
 })
+
+describe('保存与副本的链接错误说明', () => {
+  it.each(['link-address', 'link-structure', 'link-range-id'])('%s 只用本页表名定位，重复位置只显示一次', (rule) => {
+    const linkLocations = [
+      { kind: 'cell', sheetId: 's', row: 2, column: 1 },
+      { kind: 'cell', sheetId: 's', row: 2, column: 1 },
+      { kind: 'sheet', sheetId: 'missing' },
+      { kind: 'workbook' },
+    ]
+    expect(snapshotProblem({ rule, linkLocations }, id => id === 's' ? '预算' : undefined)).toBe('表格里有不能保存的链接。请检查：工作表「预算」的 B3；某个工作表；工作簿中的其他位置')
+  })
+
+  it('查询名称抛错时仍保留单元格位置；不显示原始 id 或额外地址', () => {
+    expect(snapshotProblem({
+      rule: 'link-address',
+      linkLocations: [{ kind: 'cell', sheetId: 'private_id', row: 26, column: 26, url: 'private address' }],
+    }, () => { throw new Error('disposed') })).toBe('表格里有不能保存的链接。请检查：某个工作表的 AA27')
+  })
+
+  it('名称只取当前实例的最多 120 字符', () => {
+    expect(snapshotProblem({ rule: 'link-address', linkLocations: [{ kind: 'sheet', sheetId: 's' }] }, () => '名'.repeat(121))).toBe(`表格里有不能保存的链接。请检查：工作表「${'名'.repeat(120)}…」`)
+  })
+
+  it.each([
+    {},
+    { linkLocations: [] },
+    { linkLocations: [{ kind: 'cell', sheetId: 's', row: -1, column: 0 }] },
+    { linkLocations: Array.from({ length: 6 }, () => ({ kind: 'workbook' })) },
+    { imageLocations: [{ kind: 'workbook' }] },
+  ])('旧、畸形及错配位置退回通用说明：%j', (details) => {
+    const lookup = vi.fn()
+    expect(snapshotProblem({ rule: 'link-address', ...details }, lookup)).toBe('表格里有不能保存的链接')
+    expect(lookup).not.toHaveBeenCalled()
+  })
+})
