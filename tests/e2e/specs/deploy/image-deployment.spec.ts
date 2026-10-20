@@ -2,8 +2,10 @@
 import type { APIRequestContext, Page } from '@playwright/test'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
+import { request as httpRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import { performance } from 'node:perf_hooks'
-import { assetUploadResponseSchema, errorResponseSchema } from '@nerve-office/contracts'
+import { ASSET_MAX_BYTES, assetUploadResponseSchema, errorResponseSchema } from '@nerve-office/contracts'
 import { restartApi } from '../../support/api-process.ts'
 import { expectAssetHeaders, renderAsset, saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
 import { createUser, withDatabase } from '../../support/database.ts'
@@ -12,6 +14,32 @@ import { expect, test } from '../../support/fixtures.ts'
 import { deploymentImageBytes, deploymentImageFixtures, expectHealthyImageContainer, imageContainerMetrics } from '../../support/image-deployment.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { createSheetThroughApi, savedContent } from '../../support/sheet.ts'
+
+/** 真正不带 Content-Length 的两段 HTTP 上传；Cookie 只取当前测试源，不落盘。 */
+async function chunkedRejection(page: Page, csrfToken: string, bytes: Buffer): Promise<{ status: number, body: string }> {
+  const url = new URL('/api/assets', e2eOrigin())
+  const cookies = await page.context().cookies(url.toString())
+  return new Promise((resolve, reject) => {
+    const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
+      method: 'POST',
+      // 仅测试 Compose 的 Caddy 自签名证书；与既有容器请求夹具相同。
+      rejectUnauthorized: false,
+      headers: { 'cookie': cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; '), 'origin': e2eOrigin(), 'x-csrf-token': csrfToken, 'content-type': 'image/png', 'x-asset-extension': 'png', 'transfer-encoding': 'chunked' },
+    }, (response) => {
+      let body = ''
+      response.setEncoding('utf8')
+      response.on('data', (chunk: string) => {
+        body += chunk
+      })
+      response.on('error', reject)
+      response.on('end', () => resolve({ status: response.statusCode!, body }))
+    })
+    request.setTimeout(15_000, () => request.destroy(new Error('分块拒绝验证超时')))
+    request.on('error', reject)
+    request.write(bytes.subarray(0, ASSET_MAX_BYTES))
+    request.end(bytes.subarray(ASSET_MAX_BYTES))
+  })
+}
 
 /** 逐项执行既有 accept/reject 清单，任何一项失败都使完整矩阵失败。 */
 async function checkFixture(page: Page, csrfToken: string, fixture: (typeof deploymentImageFixtures)[number], rows: object[]): Promise<void> {
@@ -55,6 +83,51 @@ test('图片完整矩阵：44 份真实输入经公开上传处理，边界拒�
   }
   finally {
     await testInfo.attach('image-matrix-and-container-budget', { body: Buffer.from(JSON.stringify({ before, after, rows }, null, 2)), contentType: 'application/json' })
+  }
+})
+
+test('图片正文拒绝：代理内的超大正文与错误声明返回规范错误，清理后正常上传恢复', async ({ page }, testInfo) => {
+  await loginThroughApi(page, await createUser('image-body-rejection'))
+  const { csrfToken } = await (await page.request.get('/api/auth/session')).json() as { csrfToken: string }
+  const rows: object[] = []
+  const before = imageContainerMetrics()
+  let after: ReturnType<typeof imageContainerMetrics>
+  try {
+    const cases = [
+      ...[ASSET_MAX_BYTES + 1, ASSET_MAX_BYTES + 512 * 1024, 5_999_999].map(size => ({
+        size,
+        mimeType: 'image/png',
+        extension: 'png',
+        status: 413,
+        code: 'PAYLOAD_TOO_LARGE',
+      })),
+      { size: 5_999_999, mimeType: 'image/svg+xml', extension: 'png', status: 415, code: 'UNSUPPORTED_MEDIA_TYPE' },
+      { size: 5_999_999, mimeType: 'image/png', extension: 'invalid', status: 400, code: 'REQUEST_INVALID' },
+    ]
+    for (const input of cases) {
+      for (let round = 0; round < 3; round++) {
+        const response = await page.request.post('/api/assets', {
+          data: Buffer.alloc(input.size),
+          headers: { 'origin': e2eOrigin(), 'x-csrf-token': csrfToken, 'content-type': input.mimeType, 'x-asset-extension': input.extension },
+        })
+        rows.push({ ...input, round, actualStatus: response.status() })
+        expect(response.status(), JSON.stringify(input)).toBe(input.status)
+        expect(errorResponseSchema.parse(await response.json()).error.code).toBe(input.code)
+      }
+    }
+    for (const size of [ASSET_MAX_BYTES + 1, ASSET_MAX_BYTES + 512 * 1024, 5_999_999]) {
+      const response = await chunkedRejection(page, csrfToken, Buffer.alloc(size))
+      rows.push({ size, framing: 'chunked', actualStatus: response.status })
+      expect(response.status).toBe(413)
+      expect(errorResponseSchema.parse(JSON.parse(response.body)).error.code).toBe('PAYLOAD_TOO_LARGE')
+    }
+    expect((await uploadAsset(page, 'minimum.png')).width).toBe(1)
+    expect((await page.request.get('/api/health/live')).status()).toBe(200)
+    after = imageContainerMetrics()
+    expectHealthyImageContainer(after)
+  }
+  finally {
+    await testInfo.attach('image-body-rejection-and-container-budget', { body: Buffer.from(JSON.stringify({ before, after, rows }, null, 2)), contentType: 'application/json' })
   }
 })
 

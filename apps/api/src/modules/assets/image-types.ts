@@ -6,6 +6,9 @@ import { z } from 'zod'
 /** ADR-021 的固定资源边界；不设可调大的运维开关。原生限制只用于图片子进程。 */
 export const IMAGE_LIMITS = Object.freeze({
   maxBytes: ASSET_MAX_BYTES,
+  // 拒绝后的正文只计数丢弃；包含此前已读前缀，覆盖代理的 6MB 外层限制。
+  maxRejectedBodyBytes: 6 * 1024 * 1024,
+  rejectedBodyMs: 10_000,
   maxSide: ASSET_MAX_SIDE,
   maxFramePixels: ASSET_MAX_PIXELS,
   maxTotalPixels: 32_000_000,
