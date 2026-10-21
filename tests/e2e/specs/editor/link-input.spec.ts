@@ -119,8 +119,10 @@ test('US-M5-08 富文本选区通过真实表单添加和更新，非法命令�
   const id = await open(page, 'link-rich')
   await typeInCell(page, 'B3', '富文本资料')
   await openCellEditor(page, 'B3')
-  await page.keyboard.press('ControlOrMeta+a')
   const mark = await commandMark(page)
+  // 全选由 Docs 处理，修饰键须与 SDK 的页面平台判断一致（Linux WebKit 的 UA 仍是 Mac）。
+  await pressUniverShortcut(page, 'A')
+  await waitForCommand(page, mark, { phase: 'executed', id: 'doc.command.select-all' })
   await pressUniverShortcut(page, 'K')
   await test.info().attach('rich-shortcut-commands', { body: JSON.stringify(await probeCommands(page, mark), null, 2), contentType: 'application/json' })
   await waitForCommand(page, mark, { phase: 'executed', id: 'sheet.operation.insert-hyper-link-toolbar' })
@@ -153,7 +155,9 @@ test('US-M5-08 富文本选区通过真实表单添加和更新，非法命令�
   expectLink((await savedContent(page, id)).snapshot, 'B3', '更新富文本', 'https://example.invalid/rich')
 
   await openCellEditor(page, 'B3')
-  await page.keyboard.press('ControlOrMeta+a')
+  const selectionMark = await commandMark(page)
+  await pressUniverShortcut(page, 'A')
+  await waitForCommand(page, selectionMark, { phase: 'executed', id: 'doc.command.select-all' })
   const before = await probeSnapshot(page)
   const markRejected = await commandMark(page)
   expect(await runFacade(page, async ({ api, workbook, sheet }) => {
