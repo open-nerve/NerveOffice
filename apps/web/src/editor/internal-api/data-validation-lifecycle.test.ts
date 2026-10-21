@@ -299,15 +299,21 @@ describe('DEF-056：已开始的模型计算与服务等待', () => {
 
   it.each([false, true])('真实错误传回调用方，失败不永久卡住下次校验（同步异常：%s）', async (sync) => {
     const failure = new Error('test validation failed')
-    const h = setup(async () => {
-      if (sync)
+    const h = setup()
+    if (sync) {
+      h.calculateCell.mockImplementation(() => {
         throw failure
-      return Promise.reject(failure)
-    })
+      })
+    }
+    else {
+      h.calculateCell.mockRejectedValue(failure)
+    }
     h.addRule()
     const result = observe(h.service.validatorCell('wb', 's2', 0, 0))
     await h.flush()
+    expect(h.calculateCell.mock.results[0]?.type).toBe(sync ? 'throw' : 'return')
     expect(result).toMatchObject({ error: failure, settled: true })
+    expect(h.cache.ensureCache('wb', 's2').getValue(0, 0)).toBeUndefined()
     h.calculateCell.mockResolvedValue(true)
     expect(await h.service.validatorCell('wb', 's2', 0, 0)).toBe(DataValidationStatus.VALID)
   })
