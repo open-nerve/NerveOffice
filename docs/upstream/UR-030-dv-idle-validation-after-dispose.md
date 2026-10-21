@@ -1,5 +1,9 @@
 # UR-030 数据验证给非当前工作表排的空闲回调不取消、返回的 Promise 不处理：实例或工作簿刚渲染完就销毁时，留下没处理的拒绝"cannot find current workbook"
 
+> S4 接续发现：S3 本地补丁将公式结果通知误作输入失效，造成自定义规则校验取消；这不是对上游原包的新归因。已将公式结果刷新与真实改值/规则/退役分开，并使同格调用共同等待最终结果。实际 SDK 最终 81 项（原生命周期39、面板34、新公式8）、原生 CJS 七项及有效变异通过；S4 的全仓工程、558 项三浏览器回归和单轮审查修正已完成，见 [S4 复核](../v0.1/M5-表格能力与资源/reviews/P3-S4-表格能力逐项复核.md)、公式规则 spec 与 ADR-010。
+
+> 本项目进度（2026-10-21）：M5-P3-S3 已实现固定发布包的调度与模型所有权补丁，独立审查指出的同格新旧计算与迟到真实错误也已 RED→GREEN；39 项实际 SDK 单元、前后两轮共十项有效变异、原生 CJS 五项对照通过。修复后的最终三浏览器 225 项、公开 running 39 项、全仓 10,988 项单元及 lint/类型/构建/九项门禁全部通过；见 [S3 复核](../v0.1/M5-表格能力与资源/reviews/P3-S3-数据验证生命周期复核.md)。DEF-056 等待 P3 阶段验收后整体关闭。新证据覆盖已开始的计算、同 id 重建、同格失效、await 后缓存和真实失败，不能仅取消 idle 或 catch 所有异常。见 [S3 spec](../v0.1/M5-表格能力与资源/specs/P3-S3-数据验证生命周期.md)与 ADR-010。本文仍为未提交草稿，下面保留原调查时点；对外提交前须按最终复核更新修法及影响描述。
+
 > 状态：草稿（提交之前需求方确认）｜上游仓库：dream-num/univer｜提交方式：公开 issue（与 UR-029、UR-031 同属"销毁之后还在跑的异步回调"，是否合并见跟踪表"提交之前要确认的事"）
 > 出处：延期登记 DEF-056（main `f755729` 的修复者审计发现；M3-P4 S5 起在打开自检的"先取后放"路径上必现）；P4 设计（`docs/v0.1/M3-编辑权与保存协议/04-P4-自动保存与打开自检.md`）§3.12 的"SDK 的副作用"；审计时的探索用例（Chromium、平台的编辑器页：把空闲回调推迟到阅读→编辑的切换之后，两次都出现；不推迟、CPU 降速 6 倍都没有出现）；E2E `tests/e2e/specs/editor/open-check.spec.ts` 的 `?edit=new` 先取后放用例因此改用"模板 + 截断的筛选"（注释写明）。平台没有规避
 > 发现版本：1.0.1｜1.0.1 发布包的代码：`@univerjs/sheets-data-validation@1.0.1` `lib/es/index.js` 的 `SheetsDataValidationValidatorService`（`_initRecalculate` 里的 `requestIdleCallback`、`validatorRanges` 的抛错），`@univerjs/core@1.0.1` 的 `requestIdleCallback` 垫片（`installRequestIdleCallback`）｜1.0.0 源码：相同（本地参考 `refer/univer` 是 v1.0.0；1.0.2 与 `dev` 没有核对）｜发布包上的复现：2026-10-06 在只用 SDK 的最小页面上复现（Playwright 1.63.0，无头；下文的代码）：Chromium 153.0.8010.12（原生 `requestIdleCallback`）在 Rendered 之后 0 ms、50 ms 销毁实例都出现，200 ms 不出现；WebKit 26.6（没有原生的 `requestIdleCallback`，用 core 的 `setTimeout(1)` 垫片）0 ms 出现，16 ms、50 ms 不出现；只销毁工作簿（`univerAPI.disposeUnit('wb')`）两个浏览器同样出现；对照：规则放在当前工作表上，不出现

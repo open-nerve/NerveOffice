@@ -282,7 +282,7 @@ describe('探针补上的插件 Facade（probe-facades.ts）', () => {
       expect(range[method], `FRange.${method}`).toBeTypeOf('function')
     for (const method of ['getImages', 'addConditionalFormattingRule', 'newConditionalFormattingRule'])
       expect(worksheet[method], `FWorksheet.${method}`).toBeTypeOf('function')
-    for (const method of ['newDataValidation', 'createTextFinderAsync'])
+    for (const method of ['newDataValidation', 'createTextFinderAsync', 'getActiveDocument'])
       expect(univer[method], `FUniver.${method}`).toBeTypeOf('function')
   })
 })

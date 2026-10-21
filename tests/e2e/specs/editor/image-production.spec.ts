@@ -279,8 +279,10 @@ test('US-M5-06 正式入口拒绝坏图片与离线上传，只读重建不开�
     if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/assets')
       uploads.push(request.url())
   })
+  const connectionNotice = page.getByText('此操作需要联网，连接恢复后可继续。', { exact: true })
   await context.setOffline(true)
   try {
+    await expect(connectionNotice).toBeVisible()
     await selectCell(page, 'A1')
     const insert = await ribbon(page, '插入')
     await insert.getByRole('button', { name: '图片', exact: true }).click()
@@ -291,7 +293,12 @@ test('US-M5-06 正式入口拒绝坏图片与离线上传，只读重建不开�
   finally {
     await context.setOffline(false)
   }
-  await typeInCell(page, 'K13', '失败后继续编辑')
+  // 恢复网络不代表页面已确认连接；提示条消失会移动画布，先等真实界面恢复再按坐标选格。
+  await expect(connectionNotice).toBeHidden()
+  await selectCell(page, 'K13')
+  await expect(page.locator('[data-u-comp="defined-name"]').getByRole('textbox')).toHaveValue('K13')
+  await page.keyboard.type('失败后继续编辑')
+  await page.keyboard.press('Enter')
   await saveAndWait(page)
   expect(cellOf((await savedContent(page, documentId)).snapshot, 'K13')?.v).toBe('失败后继续编辑')
   expect(sources((await savedContent(page, documentId)).snapshot)).toEqual([])

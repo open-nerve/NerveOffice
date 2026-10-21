@@ -1,0 +1,52 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..6b4fb97a949f8575921fdebee29df33e7b4b633d 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -22580,10 +22580,19 @@ function keepLastTextIndex(inputHtml) {
+ 	});
+ }
+ function keepTextSelected(inputHtml) {
++	const ownerDocument = inputHtml.ownerDocument;
++	const initialText = inputHtml.textContent;
++	let interacted = false;
++	const markInteracted = () => { interacted = true; };
++	const events = ["keydown", "beforeinput", "input", "compositionstart", "pointerdown", "focusout"];
++	for (const event of events) inputHtml.addEventListener(event, markInteracted, true);
+ 	setTimeout(() => {
+-		const selection = window.getSelection();
++		for (const event of events) inputHtml.removeEventListener(event, markInteracted, true);
++		// Delayed initial selection must not overwrite input or escape its editing session.
++		if (interacted || !inputHtml.isConnected || inputHtml.ownerDocument !== ownerDocument || inputHtml.getAttribute("contenteditable") !== "true" || inputHtml.textContent !== initialText) return;
++		const selection = ownerDocument.getSelection();
+ 		if (!selection) return;
+-		const range = document.createRange();
++		const range = ownerDocument.createRange();
+ 		range.selectNodeContents(inputHtml);
+ 		selection.removeAllRanges();
+ 		selection.addRange(range);
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 8a725c69bf972456c732af307f3d223217e6dbda..fc287d9d9e51c873655a23a61262bebef593f482 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -22579,10 +22579,19 @@ function keepLastTextIndex(inputHtml) {
+ 	});
+ }
+ function keepTextSelected(inputHtml) {
++	const ownerDocument = inputHtml.ownerDocument;
++	const initialText = inputHtml.textContent;
++	let interacted = false;
++	const markInteracted = () => { interacted = true; };
++	const events = ["keydown", "beforeinput", "input", "compositionstart", "pointerdown", "focusout"];
++	for (const event of events) inputHtml.addEventListener(event, markInteracted, true);
+ 	setTimeout(() => {
+-		const selection = window.getSelection();
++		for (const event of events) inputHtml.removeEventListener(event, markInteracted, true);
++		// Delayed initial selection must not overwrite input or escape its editing session.
++		if (interacted || !inputHtml.isConnected || inputHtml.ownerDocument !== ownerDocument || inputHtml.getAttribute("contenteditable") !== "true" || inputHtml.textContent !== initialText) return;
++		const selection = ownerDocument.getSelection();
+ 		if (!selection) return;
+-		const range = document.createRange();
++		const range = ownerDocument.createRange();
+ 		range.selectNodeContents(inputHtml);
+ 		selection.removeAllRanges();
+ 		selection.addRange(range);

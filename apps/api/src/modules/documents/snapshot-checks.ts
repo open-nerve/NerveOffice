@@ -4,8 +4,10 @@
 // 规则按档案组织（PROFILE_SNAPSHOT_RULES）：结构与链接的位置随文档类型而变，M6 的 doc@1 加一项；嵌套、数量与图片地址不分档案。
 // 嵌套与数量在解析之前按文字数（measureJsonText）：JSON.parse 本身不限层数，5 MiB 的 [[[…]]] 解析时 V8 的堆上约 150 MiB、
 // 堆外再约 300 MiB（DEF-018 的测量），超过上限的文字根本不交给它。之后的遍历一律迭代
-import type { CellLinkRule, DocumentProfile, RuleCheck } from '@nerve-office/contracts'
-import { checkCellLinks, SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
+import type { DocumentProfile } from '@nerve-office/contracts'
+import type { WorkbookLinkCheck } from './snapshot-link-check.ts'
+import { SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
+import { checkWorkbookLinks } from './snapshot-link-check.ts'
 
 export { hasForeignImage } from './snapshot-image-locations.ts'
 
@@ -140,7 +142,7 @@ export interface ProfileSnapshotRules {
   /** 结构：通过时给出 unitId 与快照，不通过时为 undefined（规则 structure） */
   readonly structure: (snapshot: unknown) => CheckedStructure | undefined
   /** 地址提取器的链接一半：扫描这类文档里每一处链接（规则 link-structure、link-address、link-range-id） */
-  readonly links: (checked: CheckedStructure) => RuleCheck<CellLinkRule>
+  readonly links: (checked: CheckedStructure) => WorkbookLinkCheck
 }
 
 /**
@@ -162,34 +164,7 @@ function workbookStructure(snapshot: unknown): CheckedStructure | undefined {
   return { unitId: id, snapshot }
 }
 
-/** 对象或数组的每个值（SDK 按 matrix[row][col] 与 for…in 读单元格，数组的项同样读得到）；别的值没有 */
-function valuesOf(value: unknown): readonly unknown[] {
-  return typeof value === 'object' && value !== null ? Object.values(value) : []
-}
-
-const NO_LINK_VIOLATION: RuleCheck<CellLinkRule> = { ok: true }
-
-/**
- * 工作簿里的链接（sheet@1）：表格的链接只在单元格的富文本里（cell.p.body.customRanges，00 号计划书 §11.2，M0-P2 报告 §2.3），
- * 逐张表（sheets 的每个值，不只 sheetOrder 里的）、逐行、逐个单元格交给 checkCellLinks。行与单元格的容器是对象还是数组都照读：
- * Univer 的 ObjectMatrix 按 matrix[row][col] 与 for…in 读，数组也读得到，扫描不能漏掉
- */
-function workbookLinks(checked: CheckedStructure): RuleCheck<CellLinkRule> {
-  for (const sheet of valuesOf(checked.snapshot.sheets)) {
-    for (const row of valuesOf((sheet as Record<string, unknown>).cellData)) {
-      for (const cell of valuesOf(row)) {
-        if (!isJsonObject(cell))
-          continue
-        const check = checkCellLinks(cell.p)
-        if (!check.ok)
-          return check
-      }
-    }
-  }
-  return NO_LINK_VIOLATION
-}
-
 /** 各档案的结构与链接的规则 */
 export const PROFILE_SNAPSHOT_RULES: Readonly<Record<DocumentProfile, ProfileSnapshotRules>> = {
-  'sheet@1': { structure: workbookStructure, links: workbookLinks },
+  'sheet@1': { structure: workbookStructure, links: checked => checkWorkbookLinks(checked.snapshot) },
 }

@@ -1,6 +1,6 @@
 # UR-031 两处 `lifecycleService.onStage(LifecycleStages.Ready).then(...)` 没有接住拒绝：Ready 之前销毁实例（例如创建工作簿抛错之后）时留下没处理的 `LifecycleUnreachableError`
 
-> 本项目进度（2026-10-20）：M5-P2-S2 已在锁定的 1.0.1 sheets-drawing-ui 发布包处理已证实的 Ready 取消，仅识别 `LifecycleUnreachableError`；原版额外拒绝反例和构造失败后正常再打开均有证据，S5 组合复验通过。见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)与 ADR-022。engine-formula 旁支在当前默认插件路径未证实，未修复或宣称关闭；P2 完整门禁及 CI 待收口。本文件仍为未提交的上游草稿，下文保持原调查时点。
+> 本项目进度（2026-10-21）：M5-P2-S2 已在锁定的 1.0.1 sheets-drawing-ui 发布包处理已证实的 Ready 取消，仅识别 `LifecycleUnreachableError`；P2 完整门禁、同 SHA 六项 CI 与收尾均已完成。见 [S2 复核](../v0.1/M5-表格能力与资源/reviews/P2-S2-图片实例复核.md)、[P2 最终复核](../v0.1/M5-表格能力与资源/reviews/P2-S6-最终CI与关闭复核.md)与 ADR-022。P3-S3 重新运行当前 engine-formula 原生 CJS 直接调用，仍能复现首次建表前注册的拒绝；最终 Chromium/Chrome/WebKit 的默认 Worker/主线程构造失败与正常重开未出现额外拒绝，见 [S3 复核](../v0.1/M5-表格能力与资源/reviews/P3-S3-数据验证生命周期复核.md)。直接调用与默认产品路径继续分开记账，formula 未修复或宣称关闭。本文件仍为未提交的上游草稿，下文保持原调查时点。
 
 > 状态：草稿（提交之前需求方确认）｜上游仓库：dream-num/univer｜提交方式：公开 issue（与 UR-029、UR-030 同属"销毁之后还在跑的异步回调"，是否合并见跟踪表"提交之前要确认的事"）
 > 出处：延期登记 DEF-057（main `f755729` 的修复者审计发现：sheets-drawing-ui 的浮动宿主一处已核实；engine-formula 的另一处当时是审计员报告、没有核实，这次核实了，见摘要）；平台目前碰不到：现有的重建都在 Ready 之后，打开自检失败时也是 Ready 之后才销毁，只有"编辑器加载失败"一类的路径（创建工作簿抛错之后销毁）会出现。平台没有规避

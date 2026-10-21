@@ -1,0 +1,20 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/sheets-formula-ui",
+  "version": "1.0.1",
+  "reason": "UR-036/UR-037：范围高亮配对当前文本与语法树；编辑栏焦点切换前保留逻辑光标，防止旧渲染选区覆盖新输入位置。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "a9e4d0ddfabbe68cbcc8ae19bd33f5879810ac4d34da3d8b2774397b55f2bbdc",
+      "patchedSha256": "25b4c7e0f84739b06f40445bd29a2fa47ef3f646418abb4e952ff956927d9589"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "517aa8364b90c17f13ec4dcb69b2801ede9a9860c8af710f17a513980dad1fdc",
+      "patchedSha256": "f2a65f96c98bd793102c1433456c484db9027cfdbb52ad8feb731cf06555de7f"
+    }
+  ],
+  "patch": "patches/@univerjs__sheets-formula-ui@1.0.1.patch",
+  "patchSha256": "ab72964ec7b523790c5862f5fddc81dbff37e919688d0909799e302e7fd31fd6"
+}

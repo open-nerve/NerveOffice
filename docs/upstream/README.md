@@ -50,12 +50,17 @@ M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，
 | [UR-027](UR-027-hide-freeze-permission-check.md) | 隐藏行列与冻结的命令没有权限检查 | M2-P6 S4 复核（实现者提出的隐藏行列）、F1（从"搜索功能"执行冻结） | 不可编辑时整行、整列选中按 Cmd+9、Cmd+Shift+0，或执行冻结，直接走到 mutation、没有提示，没有防火墙的集成方会被改掉；平台靠防火墙取消，快捷键的回归核对 | 公开 issue（冻结部分与 UR-022 同源，可合并） | 草稿 | — |
 | [UR-028](UR-028-feature-search-readonly.md) | 不可编辑时"搜索功能"照样打开、列出编辑功能；不看 `toolbar`/`contextMenu: false`，也关不掉 | M2-P6 S4 复核 F1 | 列着格式刷、清除格式、冻结、剪切、删除、粘贴等，执行冻结没有提示；平台只读时在执行前取消 `ui.operation.open-feature-search` | 公开 issue（与 UR-019 同一组件、根因不同） | 草稿 | — |
 | [UR-029](UR-029-formula-progress-timer-after-dispose.md) | 一轮公式计算中销毁实例：sheets-formula 的 1 秒进度计时器不清，到点调已销毁的语言服务，抛出没接住的"Locale not initialized" | main `f755729`（M3-P3 之后 CI 的偶发失败）；ADR-010 的 M3-P4 补充 | 阅读与编辑之间重建时一条页面异常（容器 E2E 偶发失败），不影响数据；平台换上销毁之后 `t()` 不抛错的语言服务（`disposalSafeLocaleOverride`） | 公开 issue | 草稿 | — |
-| [UR-030](UR-030-dv-idle-validation-after-dispose.md) | 数据验证给非当前工作表排的空闲回调不取消、Promise 不处理：刚渲染完就销毁实例或工作簿时，没处理的拒绝"cannot find current workbook" | DEF-056；P4 设计 §3.12 | 打开自检"先取后放"时必现（文档的非当前表上有数据验证），页面异常、不影响数据；平台没有规避（M5 评估补丁） | 公开 issue | 草稿 | — |
-| [UR-031](UR-031-lifecycle-onstage-unhandled-rejection.md) | 两处 `onStage(Ready).then(...)` 没有接住拒绝：Ready 之前销毁实例时没处理的 `LifecycleUnreachableError` | DEF-057 | 只在创建工作簿抛错之后销毁时出现（sheets-drawing-ui 一处；engine-formula 一处在默认插件里没找到落空的路径），平台目前碰不到；没有规避 | 公开 issue | 草稿 | — |
+| [UR-030](UR-030-dv-idle-validation-after-dispose.md) | 数据验证给非当前工作表排的空闲回调不取消、Promise 不处理：刚渲染完就销毁实例或工作簿时，没处理的拒绝"cannot find current workbook" | DEF-056；P4 设计 §3.12 | M5-P3-S3 已修复锁定包的排队/运行归属、同格旧计算及真实错误通道；定向与三浏览器通过，待 P3 阶段验收关闭，见 S3 复核 | 公开 issue | 草稿 | — |
+| [UR-031](UR-031-lifecycle-onstage-unhandled-rejection.md) | 两处 `onStage(Ready).then(...)` 没有接住拒绝：Ready 之前销毁实例时没处理的 `LifecycleUnreachableError` | DEF-057 | drawing 已在 M5-P2 修复；P3-S3 仍复现 formula 首次建表前直接调用，默认 Worker/主线程三浏览器未见额外拒绝；formula 未关闭 | 公开 issue | 草稿 | — |
 | [UR-032](UR-032-formula-ast-cache-after-dispose.md) | 公式引擎在本线程运行时，一轮计算中销毁实例，这一轮不停、把 `#NAME?` 的语法树写进模块级缓存，之后同一 unitId 的新实例算出 `#NAME?` | M3-P4 S1 复核 F2；P4 设计 §3.14 | 主线程公式模式（M4 的退路）下"计算中重建"会把 `#NAME?` 存进文档；平台销毁之前先停下这一轮、等结束的通知（`formula-round-stop.ts`，M4 必须保留） | 公开 issue | 草稿 | — |
-| [UR-033](UR-033-panel-debounce-lost-edits.md) | 面板的防抖丢修改：数据验证面板三种更新共用一个防抖、1 秒内先后改两种时前一种被丢；数据验证面板与批注浮层卸载时不 flush | M3-P4 S4；P4 设计 §3.4；`PANEL_DEBOUNCES` | 1 秒内先后改两种设置时前一种丢失（平台无法规避）；销毁之前最后的修改丢失，平台在捕获与销毁之前等 SDK 的防抖到点 | 公开 issue（两部分，可拆成两份） | 草稿 | — |
+| [UR-033](UR-033-panel-debounce-lost-edits.md) | 面板的防抖丢修改：数据验证面板三种更新共用一个防抖、1 秒内先后改两种时前一种被丢；数据验证面板与批注浮层卸载时不 flush | M3-P4 S4；P4 设计 §3.4；`PANEL_DEBOUNCES` | P3-S4 正式复现、补丁及最终三浏览器/审查修正完成；批注保留原等待，捕获/销毁仍沿单一路径 | 公开 issue（两部分，可拆成两份） | 草稿 | — |
 | [UR-034](UR-034-chromium-indexeddb-torn-log-wipe.md) | Chromium 的 IndexedDB：进程在 LevelDB 日志写到一半时被结束，再下一次启动时整个来源的 IndexedDB 被删掉（`reuse_logs` 接在半条记录后面写） | M4-P1 S7 的调查；P1 设计 §3.8 | 浏览器崩溃之后重开时本机发件箱可能被整个删掉、页面认不出（Google Chrome 154 不注入 1400 次强制结束里 5 次）；平台把同一份记录镜像进 OPFS（Worker 里的同步访问句柄、两个槽位），删库之后从它写回并如实告知（M4-P1 S9） | Chromium 的公开 issue（不是 Univer） | 草稿 | — |
 | [UR-035](UR-035-webkit-coop-navigation-cancel.md) | WebKit COOP 进程交接取消同次导航 | M4-P6 S6 / DEF-073 | 新页面在应用启动前停于空白；保留为未解决依赖问题，用户批准工程交接后继续开发 | 上游已有 issue/候选修复，本项目未提交外部消息 | 本地已复现，未解决 | [WebKit 325840](https://bugs.webkit.org/show_bug.cgi?id=325840) |
+| [UR-036](UR-036-range-highlight-stale-text.md) | 范围高亮以旧语法树回写当前文本，快速输入乱码并传入无效范围 | M5-P3-S4 | 锁定包本地修复，原速五次通过、恢复原高亮三次失败；S4 最终三浏览器与审查修正完成，Phase 验收待 S6 | 公开 issue | 草稿 | — |
+| [UR-037](UR-037-formula-focus-stale-caret.md) | 编辑栏切回单元格时旧光标覆盖刚输入的位置，首字母移到末尾 | M5-P3-S4 | 原函数两入口有效反例；S4 最终能力兼容/公开 running、相关回归与审查修正完成 | 公开 issue | 草稿 | — |
+| [UR-038](UR-038-conditional-formula-stale-error.md) | 正确公式已经输入，条件格式确认仍被旧错误状态阻止 | M5-P3-S4 | 本地修复及最终三浏览器、实际像素/历史/重开与审查修正完成 | 公开 issue | 草稿 | — |
+| [UR-039](UR-039-native-input-selection-outside-editor.md) | 单元格已聚焦但原生光标仍在旧表名控件，首次文字输入无效 | M5-P3-S5 | 本地修复，SDK 7 项、S5 工程与 270 项三浏览器组合通过；P3 阶段验证待完成 | 公开 issue | 草稿 | — |
+| [UR-040](UR-040-sheet-name-delayed-selection.md) | 延后全选表名覆盖已经开始的输入，或在改名结束后重设其他选区 | M5-P3-S5 | 固定包 ES/CJS 22 项、重复 UI 18 项及最终 S5 工程/270 项组合通过；P3 阶段审查与验证待完成 | 公开 issue | 草稿 | — |
 
 ## 提交之前要确认的事
 
@@ -72,5 +77,5 @@ M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，
    - UR-007、UR-008：真实浏览器的剪贴板内容与拖放行为（DEF-004）。
    - UR-028："搜索功能"里列出的剪切、删除、粘贴是哪几个菜单项（命令 id）复核时没有记下，草稿按源码推测是 docs-ui 的文字文档段落菜单项，要在 SDK 默认配置下核对并截图；
    - UR-027：没有防火墙时行列确实被隐藏、冻结确实被改，右键菜单、功能区与 Facade 的路径，都是按源码推断；UR-026：从功能区"公式"页选 SUM 是同样的结果，也是按源码推断。提交前在 SDK 默认配置下补跑与截图。
-   - UR-029–UR-033：复现用的 Node 脚本与最小页面没有入库，建复现链接时按草稿里的代码重建；最小页面只在 Playwright 的 Chromium 与 WebKit 上跑过（UR-032 另有平台在真实 Safari 27 与 Chrome 上的结果；真实 Safari 没有原生 `requestIdleCallback`，UR-030 在那里走的是与 Playwright 的 WebKit 相同的垫片）；UR-031 的 engine-formula 一处只用直接调用复现，默认插件里没有找到会落空的路径；UR-033 的范围更新没有在页面上试（按源码与设置、选项是同一个防抖）。
+   - UR-029–UR-033：复现用的 Node 脚本与最小页面没有入库，建复现链接时按草稿里的代码重建；最小页面只在 Playwright 的 Chromium 与 WebKit 上跑过（UR-032 另有平台在真实 Safari 27 与 Chrome 上的结果；真实 Safari 没有原生 `requestIdleCallback`，UR-030 在那里走的是与 Playwright 的 WebKit 相同的垫片）；UR-031 的 engine-formula 一处只用直接调用复现，默认插件里没有找到会落空的路径；UR-033 的范围更新已在 M5-P3-S4 正式宿主补证，原包范围/设置连续操作丢掉前者；详情见草稿顶部接续记录。
 6. **修好之后的副作用**：UR-003 改为按单元格计数之后，被算作大表的表更多，删除时清空撤销栈的情况反而更多；草稿同时建议在文档与确认框里说明。

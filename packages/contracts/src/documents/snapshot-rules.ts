@@ -40,25 +40,39 @@ export const SNAPSHOT_RULES = [
 export type SnapshotRule = (typeof SNAPSHOT_RULES)[number]
 
 export const SNAPSHOT_IMAGE_LOCATION_LIMIT = 5
+export const SNAPSHOT_LINK_LOCATION_LIMIT = 5
 /** 只用于提示的坐标/索引上限，不改变工作簿本身的格式和容量规则。 */
-export const SNAPSHOT_IMAGE_POSITION_MAX = 2_147_483_647
+export const SNAPSHOT_POSITION_MAX = 2_147_483_647
+export const SNAPSHOT_IMAGE_POSITION_MAX = SNAPSHOT_POSITION_MAX
 
 /** 只回传有限的结构标识，不能把任意路径、名称或正文当成 id。 */
-export function isSnapshotImageIdentifier(value: unknown): value is string {
+export function isSnapshotLocationIdentifier(value: unknown): value is string {
   return typeof value === 'string' && /^[\w-]{1,128}$/.test(value) && !['__proto__', 'prototype', 'constructor'].includes(value)
 }
+export const isSnapshotImageIdentifier = isSnapshotLocationIdentifier
 
-const imageIdentifier = z.string().refine(isSnapshotImageIdentifier)
-const imagePosition = z.number().int().min(0).max(SNAPSHOT_IMAGE_POSITION_MAX)
+const imageIdentifier = z.string().refine(isSnapshotLocationIdentifier)
+const imagePosition = z.number().int().min(0).max(SNAPSHOT_POSITION_MAX)
+const cellLocation = z.object({ kind: z.literal('cell'), sheetId: imageIdentifier, row: imagePosition, column: imagePosition })
+const sheetLocation = z.object({ kind: z.literal('sheet'), sheetId: imageIdentifier })
+const workbookLocation = z.object({ kind: z.literal('workbook') })
 export const snapshotImageLocationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('cell'), sheetId: imageIdentifier, row: imagePosition, column: imagePosition }),
+  cellLocation,
   z.object({ kind: z.literal('drawing'), sheetId: imageIdentifier, drawingId: imageIdentifier, row: imagePosition.optional(), column: imagePosition.optional() })
     .refine(value => (value.row === undefined) === (value.column === undefined)),
-  z.object({ kind: z.literal('sheet'), sheetId: imageIdentifier }),
+  sheetLocation,
   z.object({ kind: z.literal('resource'), resourceIndex: imagePosition }),
-  z.object({ kind: z.literal('workbook') }),
+  workbookLocation,
 ])
 export type SnapshotImageLocation = z.infer<typeof snapshotImageLocationSchema>
+export const snapshotLinkLocationSchema = z.discriminatedUnion('kind', [cellLocation, sheetLocation, workbookLocation])
+export type SnapshotLinkLocation = z.infer<typeof snapshotLinkLocationSchema>
+
+/** 检查子进程与错误组装共用；响应仍由下面的 schema 按规则裁剪。 */
+export interface SnapshotIssueLocations {
+  readonly imageLocations?: readonly SnapshotImageLocation[]
+  readonly linkLocations?: readonly SnapshotLinkLocation[]
+}
 
 /**
  * SNAPSHOT_INVALID 的详情：违反的规则。以后的 Phase 会加规则（M6 的文字文档），而响应的结构是宽松的（请求严格、响应宽松，架构总览 §3）：
@@ -67,7 +81,14 @@ export type SnapshotImageLocation = z.infer<typeof snapshotImageLocationSchema>
 export const snapshotInvalidDetailsSchema = z.object({
   rule: z.enum(SNAPSHOT_RULES).optional().catch(undefined),
   imageLocations: z.array(snapshotImageLocationSchema).max(SNAPSHOT_IMAGE_LOCATION_LIMIT).optional().catch(undefined),
-}).transform((details): { rule?: SnapshotRule | undefined, imageLocations?: SnapshotImageLocation[] | undefined } => details.rule === 'image-source' ? details : { rule: details.rule })
+  linkLocations: z.array(snapshotLinkLocationSchema).max(SNAPSHOT_LINK_LOCATION_LIMIT).optional().catch(undefined),
+}).transform((details): { rule?: SnapshotRule | undefined, imageLocations?: SnapshotImageLocation[] | undefined, linkLocations?: SnapshotLinkLocation[] | undefined } => {
+  if (details.rule === 'image-source')
+    return { rule: details.rule, ...('imageLocations' in details ? { imageLocations: details.imageLocations } : {}) }
+  if (details.rule === 'link-structure' || details.rule === 'link-address' || details.rule === 'link-range-id')
+    return { rule: details.rule, ...('linkLocations' in details ? { linkLocations: details.linkLocations } : {}) }
+  return { rule: details.rule }
+})
 
 export type SnapshotInvalidDetails = z.infer<typeof snapshotInvalidDetailsSchema>
 

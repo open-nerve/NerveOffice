@@ -72,6 +72,19 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
 }
 
 describe('SnapshotInspector：在子进程里检查（源码运行：入口是 .ts，按源码条件解析 contracts）', SPAWNING, () => {
+  it('链接位置经真实 IPC 与上传拒绝回传，日志没有位置、地址和正文', async () => {
+    const { inspector, logger, warn } = setup()
+    const secret = 'https://private.example'
+    const cell = { p: { body: { dataStream: 'private display\r\n', customRanges: [{ rangeType: 0, rangeId: 'r1', properties: { url: secret } }] } } }
+    const raw = Buffer.from(JSON.stringify({ ...JSON.parse(sheetSnapshotFor(UNIT_ID)) as object, sheets: { 'sheet-1': { cellData: { 2: { 1: cell } } } } }))
+    const linkLocations = [{ kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 }]
+    expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'link-address', linkLocations })
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY))
+    expect(error.details).toEqual({ rule: 'link-address', linkLocations })
+    expect(JSON.stringify(error)).not.toMatch(/private|dataStream/)
+    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'link-address', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
+  })
+
   it('图片位置经真实 IPC 与上传拒绝回传，日志只记规则、文档 id 和字节数', async () => {
     const { inspector, logger, warn } = setup()
     const secret = 'https://private.example/private-file.png'
@@ -281,9 +294,18 @@ describe('同一个账户在检查池里的份数（审查 A2）', SPAWNING, () 
 describe('SNAPSHOT_INVALID 的错误（snapshotInvalid）', () => {
   it('只为图片规则附带有限位置，额外内容丢弃，畸形位置回退', () => {
     const locations = [{ kind: 'workbook', source: 'private' }] as const
-    expect(snapshotInvalid('image-source', locations).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'workbook' }] })
-    expect(snapshotInvalid('link-address', locations).details).toEqual({ rule: 'link-address' })
-    expect(snapshotInvalid('image-source', Array.from({ length: 6 }, () => ({ kind: 'workbook' as const }))).details).toEqual({ rule: 'image-source' })
+    expect(snapshotInvalid('image-source', { imageLocations: locations }).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'workbook' }] })
+    expect(snapshotInvalid('link-address', { imageLocations: locations }).details).toEqual({ rule: 'link-address' })
+    expect(snapshotInvalid('image-source', { imageLocations: Array.from({ length: 6 }, () => ({ kind: 'workbook' as const })) }).details).toEqual({ rule: 'image-source' })
+  })
+
+  it('链接位置按自身规则组装，不接收图片位置或额外字段', () => {
+    const linkLocations = [{ kind: 'cell', sheetId: 's', row: 2, column: 1, url: 'private' }] as const
+    expect(snapshotInvalid('link-address', { linkLocations, imageLocations: [{ kind: 'workbook' }] }).details).toEqual({
+      rule: 'link-address',
+      linkLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1 }],
+    })
+    expect(snapshotInvalid('json', { linkLocations }).details).toEqual({ rule: 'json' })
   })
 
   it.each(SNAPSHOT_RULES)('%s：422，details 是规则（契约能解析），说明不空', (rule) => {

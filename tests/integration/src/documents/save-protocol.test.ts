@@ -9,7 +9,7 @@
 // "公式待更新"的记下、补存清掉（内容相同只清不设、内容不同照常加修订号）。
 // 处理的顺序本身（重放、格式、检查、事务里的各步）在单元测试（document-content.service.test.ts）；看不到与不存在的语句序列在
 // permissions/hidden-missing-parity.test.ts。
-import type { ClientFormat, SaveContentResponse, SnapshotImageLocation } from '@nerve-office/contracts'
+import type { ClientFormat, SaveContentResponse, SnapshotIssueLocations } from '@nerve-office/contracts'
 import type { TestAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -178,9 +178,10 @@ async function auditsOf(documentId: string): Promise<number> {
 }
 
 const LINK = (url: string, rangeId = 'link1') => ({ p: { id: 'd', body: { dataStream: 'abc\r\n', customRanges: [{ startIndex: 0, endIndex: 2, rangeId, rangeType: 0, properties: { url } }] } } })
+const LINK_AT_A1 = { linkLocations: [{ kind: 'cell', sheetId: 'sheet-1', row: 0, column: 0 }] } as const
 
 describe('US-M3-14 每条快照规则经真实的保存接口被拒，给出规则（details.rule），不写入', () => {
-  const CASES: readonly (readonly [string, string, (unitId: string) => Buffer, (readonly SnapshotImageLocation[])?])[] = [
+  const CASES: readonly (readonly [string, string, (unitId: string) => Buffer, SnapshotIssueLocations?])[] = [
     ['不是 UTF-8', 'encoding', () => Buffer.from([0x7B, 0xFF, 0x7D])],
     ['嵌套超过 64 层（外层）', 'depth', unitId => bytesOf(`{"id":"${unitId}","sheetOrder":[],"sheets":{},"x":${'['.repeat(70)}${']'.repeat(70)}}`)],
     ['嵌套超过 64 层（资源 data 里的 JSON 与外层累加）', 'depth', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_NOTE_PLUGIN', data: `{"s":${'['.repeat(62)}${']'.repeat(62)}}` }])))],
@@ -199,26 +200,73 @@ describe('US-M3-14 每条快照规则经真实的保存接口被拒，给出规�
     ['资源名不在档案的白名单里', 'resource-unknown', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_AuthzIoMockService_PLUGIN', data: '{}' }])))],
     ['已知资源的结构不对', 'resource-data', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_CONDITIONAL_FORMATTING_PLUGIN', data: '{"unexpected":"shape","value":42}' }])))],
     ['必须为空的资源不为空（区域保护）', 'resource-not-empty', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_RANGE_PROTECTION_PLUGIN', data: '{"sheet-1":[{"permissionId":"p","unitType":3}]}' }])))],
-    ['图片地址不是平台地址（单元格图片）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: '\b\r\n' }, drawings: { img: { source: 'data:image/png;base64,iVBORw0KGgo=' } } } }))), [{ kind: 'cell', sheetId: 'sheet-1', row: 0, column: 0 }]],
-    ['图片地址不是平台地址（浮动图片的资源）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ 'sheet-1': { data: { d1: { source: 'https://example.com/a.png' } }, order: ['d1'] } }) }]))), [{ kind: 'resource', resourceIndex: SHEET_TEMPLATE.resources.length - 1 }]],
-    ['链接区间看不懂', 'link-structure', unitId => bytesOf(workbookOf(unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: 'abc\r\n', customRanges: 'x' } } })))],
-    ['链接地址不合法', 'link-address', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('javascript:alert(1)'))))],
-    ['链接地址不是规范写法', 'link-address', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('https://example.com'))))],
-    ['链接的 rangeId 不合写法', 'link-range-id', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('https://example.com/', 'bad id"'))))],
+    ['图片地址不是平台地址（单元格图片）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: '\b\r\n' }, drawings: { img: { source: 'data:image/png;base64,iVBORw0KGgo=' } } } }))), { imageLocations: [{ kind: 'cell', sheetId: 'sheet-1', row: 0, column: 0 }] }],
+    ['图片地址不是平台地址（浮动图片的资源）', 'image-source', unitId => bytesOf(workbookOf(unitId, 'x', withResources([{ name: 'SHEET_DRAWING_PLUGIN', data: JSON.stringify({ 'sheet-1': { data: { d1: { source: 'https://example.com/a.png' } }, order: ['d1'] } }) }]))), { imageLocations: [{ kind: 'resource', resourceIndex: SHEET_TEMPLATE.resources.length - 1 }] }],
+    ['链接区间看不懂', 'link-structure', unitId => bytesOf(workbookOf(unitId, 'x', withCell({ p: { id: 'd', body: { dataStream: 'abc\r\n', customRanges: 'x' } } }))), LINK_AT_A1],
+    ['链接地址不合法', 'link-address', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('javascript:alert(1)')))), LINK_AT_A1],
+    ['链接地址不是规范写法', 'link-address', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('https://example.com')))), LINK_AT_A1],
+    ['链接的 rangeId 不合写法', 'link-range-id', unitId => bytesOf(workbookOf(unitId, 'x', withCell(LINK('https://example.com/', 'bad id"')))), LINK_AT_A1],
     ['unitId 是别的文档的', 'unit-id', () => bytesOf(workbookOf(randomUUID()))],
   ]
 
-  it.each(CASES.map(([name, rule, build, imageLocations]) => ({ name, rule, build, imageLocations })))('$name：422 SNAPSHOT_INVALID，规则 $rule；修订号、内容不变，说明里没有快照的内容', async ({ rule, build, imageLocations }) => {
+  it.each(CASES.map(([name, rule, build, locations]) => ({ name, rule, build, locations })))('$name：422 SNAPSHOT_INVALID，规则 $rule；修订号、内容不变，说明里没有快照的内容', async ({ rule, build, locations }) => {
     const document = await amyDocument()
     const before = await envelopeOf(document.id)
     const response = await save(document, build(document.unitId))
     const text = await response.clone().text()
-    expect(await errorOf(response)).toEqual({ status: 422, code: 'SNAPSHOT_INVALID', details: { rule, ...(imageLocations === undefined ? {} : { imageLocations }) } })
+    expect(await errorOf(response)).toEqual({ status: 422, code: 'SNAPSHOT_INVALID', details: { rule, ...locations } })
     expect(text).not.toContain('example.com')
     expect(text).not.toContain('javascript')
     expect(await envelopeOf(document.id)).toEqual(before)
     // 日志记规则与文档 id
     expect(app.logs.entries().some(entry => entry.msg === '快照不合格，拒绝写入' && entry.rule === rule && entry.documentId === document.id)).toBe(true)
+  })
+
+  it('US-M5-08 保存与另存副本准确返回 B3/隐藏表位置，原正文、回执和副本数量不变，修正后可保存', async () => {
+    const document = await amyDocument()
+    const before = await envelopeOf(document.id)
+    const beforeReceipts = await receiptsOf(document.id)
+    const countDocuments = async () => database.query(async client => (await client.query<{ count: number }>('SELECT count(*)::int AS count FROM documents')).rows[0]?.count)
+    const storedState = async () => database.query(async (client) => {
+      const content = await client.query<{ snapshot: Buffer }>('SELECT snapshot FROM document_contents WHERE document_id = $1', [document.id])
+      const revisions = await client.query('SELECT * FROM document_revisions WHERE document_id = $1 ORDER BY revision', [document.id])
+      return { snapshot: content.rows[0]?.snapshot, revisions: revisions.rows }
+    })
+    const beforeCount = await countDocuments()
+    const beforeStored = await storedState()
+    expect(beforeStored.snapshot).toBeInstanceOf(Buffer)
+    expect(beforeStored.revisions.length).toBeGreaterThan(0)
+    const bad = bytesOf(workbookOf(document.unitId, '不能回传的正文', (workbook) => {
+      const sheets = workbook.sheets as Record<string, { cellData: unknown }>
+      sheets['sheet-1']!.cellData = { 2: { 1: LINK('https://private.example') } }
+      sheets.hidden = { cellData: [[LINK('https://private.example')]] }
+    }))
+    const logStart = app.logs.entries().length
+    for (const request of [
+      async () => save(document, bad),
+      async () => postConflictCopy(app.baseUrl, amySession, document.id, document.unitId, { raw: bad }),
+    ]) {
+      const response = await request()
+      const text = await response.clone().text()
+      expect(await errorOf(response)).toEqual({
+        status: 422,
+        code: 'SNAPSHOT_INVALID',
+        details: { rule: 'link-address', linkLocations: [
+          { kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 },
+          { kind: 'cell', sheetId: 'hidden', row: 0, column: 0 },
+        ] },
+      })
+      expect(text).not.toMatch(/private|不能回传/)
+      expect(await storedState()).toEqual(beforeStored)
+      expect(await envelopeOf(document.id)).toEqual(before)
+      expect(await receiptsOf(document.id)).toEqual(beforeReceipts)
+      expect(await countDocuments()).toBe(beforeCount)
+    }
+    const logs = app.logs.entries().slice(logStart)
+    expect(logs.filter(entry => entry.msg === '快照不合格，拒绝写入')).toHaveLength(2)
+    expect(JSON.stringify(logs)).not.toMatch(/linkLocations|sheet-1|private|不能回传/)
+    const fixed = bytesOf(workbookOf(document.unitId, '已纠正', withCell(LINK('https://example.com/'))))
+    expect(await saved(await save(document, fixed))).toMatchObject({ revision: 2 })
   })
 
   it('阴性对照：规范写法的链接、本站相对地址的链接、文档内锚点、变空的必须为空的资源（{ 表: [] }）、平台的图片地址都照常保存', async () => {

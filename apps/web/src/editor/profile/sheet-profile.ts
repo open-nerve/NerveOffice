@@ -42,6 +42,7 @@ import { UniverSheetsSortUIPlugin } from '@univerjs/sheets-sort-ui'
 import { UniverSheetsUIPlugin } from '@univerjs/sheets-ui'
 import { UniverUIPlugin } from '@univerjs/ui'
 import { memoryLocalStorageOverride } from '../internal-api/index.ts'
+import { linkUiConfig } from './link-input-policy.ts'
 import { sheetMenuConfig } from './menu-config.ts'
 import { pluginEntry } from './plugin-entry.ts'
 
@@ -198,7 +199,7 @@ export const SHEET_PLUGIN_GROUPS: readonly PluginGroup[] = [
     // 超链接存在单元格富文本的 customRanges 里，不走资源
     id: 'hyperlink',
     resources: [],
-    plugins: () => [pluginEntry(UniverSheetsHyperLinkPlugin), pluginEntry(UniverSheetsHyperLinkUIPlugin)],
+    plugins: () => [pluginEntry(UniverSheetsHyperLinkPlugin), pluginEntry(UniverSheetsHyperLinkUIPlugin, linkUiConfig)],
   },
   {
     id: 'dv',

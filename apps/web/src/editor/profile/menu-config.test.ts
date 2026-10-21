@@ -24,13 +24,11 @@ describe('两种打开方式都隐藏的菜单项', () => {
     ])
   })
 
-  it('P2 只向编辑者开放两种图片插入；下载和链接仍隐藏', () => {
+  it('正式图片和链接插入只向编辑者开放，原 SDK 图片下载仍隐藏', () => {
     expect(ids(BEFORE_M5_MENU_ITEMS)).toEqual([
       'sheet.command.save-cell-images',
-      'sheet.operation.insert-hyper-link-toolbar',
-      'sheet.operation.insert-hyper-link',
     ])
-    for (const id of ['sheet.menu.image', 'sheet.command.insert-float-image', 'sheet.command.insert-cell-image']) {
+    for (const id of ['sheet.menu.image', 'sheet.command.insert-float-image', 'sheet.command.insert-cell-image', 'sheet.operation.insert-hyper-link-toolbar', 'sheet.operation.insert-hyper-link']) {
       expect(sheetMenuConfig('edit')[id]).toBeUndefined()
       expect(sheetMenuConfig('read')[id]).toEqual({ hidden: true })
     }
@@ -49,11 +47,13 @@ describe('两种打开方式都隐藏的菜单项', () => {
 })
 
 describe('只读时另外隐藏的菜单项（插件档案 v1 §5.2，M2-P3 设计 §3.4）', () => {
-  it('工作表标签的 5 项：删除、复制、改名、标签颜色、隐藏', () => {
+  it('图片与链接输入，以及工作表标签的删除、复制、改名、标签颜色、隐藏', () => {
     expect(ids(READ_ONLY_MENU_ITEMS)).toEqual([
       'sheet.menu.image',
       'sheet.command.insert-float-image',
       'sheet.command.insert-cell-image',
+      'sheet.operation.insert-hyper-link-toolbar',
+      'sheet.operation.insert-hyper-link',
       'sheet.command.remove-sheet-confirm',
       'sheet.command.copy-sheet',
       'sheet.operation.rename-sheet',
@@ -68,13 +68,13 @@ describe('只读时另外隐藏的菜单项（插件档案 v1 §5.2，M2-P3 设�
     expect(new Set(all).size).toBe(all.length)
   })
 
-  it('只读时的菜单配置：两种方式都隐藏的，加上这 5 项，每一项都设为隐藏', () => {
+  it('只读时的菜单配置：两种方式都隐藏的，加上只读限制，每一项都设为隐藏', () => {
     const config = sheetMenuConfig('read')
     expect(Object.keys(config).sort()).toEqual(ids([...HIDDEN_MENU_ITEMS, ...READ_ONLY_MENU_ITEMS]).sort())
     expect(Object.values(config).every(item => JSON.stringify(item) === JSON.stringify({ hidden: true }))).toBe(true)
   })
 
-  it('能编辑时不隐藏这 5 项', () => {
+  it('能编辑时不隐藏只读限制项', () => {
     const config = sheetMenuConfig('edit')
     expect(ids(READ_ONLY_MENU_ITEMS).filter(id => id in config)).toEqual([])
   })

@@ -106,6 +106,25 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
 }
 
 describe('图片的可见失败状态', () => {
+  it.each(['save', 'copy'] as const)('%s 的真实提示共用链接定位，保留本页内容与既有恢复操作', (action) => {
+    const error = new ApiError(422, 'SNAPSHOT_INVALID', 'x', { details: { rule: 'link-address', linkLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1, url: 'private' }] } })
+    const h = fakePage(action === 'save'
+      ? { save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } }
+      : { mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'content', error } }), save: undefined })
+    vi.mocked(h.page.sheetName).mockReturnValue('<img src=x>预算')
+    render(<EditorChrome page={h.page} apple={false} />)
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('表格里有不能保存的链接。请检查：工作表「<img src=x>预算」的 B3')
+    expect(alert.querySelector('img')).toBeNull()
+    expect(alert).not.toHaveTextContent('private')
+    expect(h.page.sheetName).toHaveBeenCalledWith('s')
+    expect(h.page.discard).not.toHaveBeenCalled()
+    if (action === 'save')
+      expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
+    else
+      expect(screen.getByRole('button', { name: '放弃本页的修改' })).toBeVisible()
+  })
+
   it.each(['save', 'copy'] as const)('%s 的真实提示共用图片定位，工作表名称只作为文本显示', (action) => {
     const error = new ApiError(422, 'SNAPSHOT_INVALID', 'x', { details: { rule: 'image-source', imageLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1, source: 'private' }] } })
     const h = fakePage(action === 'save'

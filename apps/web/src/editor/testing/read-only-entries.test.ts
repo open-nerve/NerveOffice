@@ -70,10 +70,10 @@ describe('只读入口的共用清单：提示的说法', () => {
 })
 
 describe('只读入口的共用清单：Facade 入口', () => {
-  it('M0 的 21 项另加"取消已有的超链接"，名称不重复；能编辑时不改动的只有超链接（M5 之前被入口守卫取消）', () => {
+  it('M0 的 21 项另加"取消已有的超链接"，名称不重复；M5-P3 开放链接后能编辑时每项都修改内容', () => {
     expect(FACADE_ENTRIES).toHaveLength(22)
     expect(new Set(FACADE_ENTRIES.map(entry => entry.name)).size).toBe(22)
-    expect(FACADE_ENTRIES.filter(entry => entry.unchangedWhenEditable).map(entry => entry.name)).toEqual(['超链接'])
+    expect(FACADE_ENTRIES.filter(entry => entry.unchangedWhenEditable).map(entry => entry.name)).toEqual([])
   })
 
   it('要样本里的图片的恰好是操作图片的三项（页面自检的 enter-exit 用去掉图片的样本，跳过它们，M3-P3 设计 §3.11）', async () => {

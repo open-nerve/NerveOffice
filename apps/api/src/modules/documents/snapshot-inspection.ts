@@ -6,7 +6,7 @@
 // resource-not-empty）→ image-source → 链接（link-structure、link-address、link-range-id）。
 // 嵌套与数量在每次解析之前按文字数，没超出才交给 JSON.parse；全部通过之后才规范化（规范化与资源的规则会再解析资源的 data，
 // 那时已经数过）。与文档有关的两条（unit-id、resource-missing）在保存的事务里；too-complex（子进程的堆超过上限）由 SnapshotInspector 给出
-import type { DocumentProfile, SnapshotImageLocation, SnapshotRule } from '@nerve-office/contracts'
+import type { DocumentProfile, SnapshotIssueLocations, SnapshotRule } from '@nerve-office/contracts'
 import type { EntryCount } from './snapshot-checks.ts'
 import { createHash } from 'node:crypto'
 import { canonicalContentTextOf, checkResources, contentHashInput } from '@nerve-office/contracts'
@@ -35,7 +35,7 @@ export interface PassedSnapshot {
 }
 
 /** 检查的结果：通过，或者违反的规则 */
-export type SnapshotInspection = PassedSnapshot | { readonly ok: false, readonly rule: SnapshotContentRule, readonly imageLocations?: readonly SnapshotImageLocation[] }
+export type SnapshotInspection = PassedSnapshot | ({ readonly ok: false, readonly rule: SnapshotContentRule } & SnapshotIssueLocations)
 
 /** 交给子进程的任务：解压之后的字节与文档的档案 */
 export interface InspectionTask {
@@ -92,7 +92,7 @@ export function inspectSnapshot(raw: Uint8Array, profile: DocumentProfile): Snap
     return { ok: false, rule: 'image-source', imageLocations }
   const links = rules.links(structure)
   if (!links.ok)
-    return violated(links.rule)
+    return links
   const digest = createHash('sha256').update(contentHashInput(canonicalContentTextOf(snapshot))).digest()
   return {
     ok: true,

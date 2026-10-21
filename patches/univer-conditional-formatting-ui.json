@@ -1,0 +1,20 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/sheets-conditional-formatting-ui",
+  "version": "1.0.1",
+  "reason": "UR-038：公式条件最终确认使用当前文本的实际校验结果，不让展示用旧错误阻止快速修正。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "0055d1ad7c50d6f19a73fc3b6a0677a421b98aff2dacbb3f52a5dd1b883898fb",
+      "patchedSha256": "b757a8a25df2466fbcb2195b96eac7ecbcd16c6ba0680079eb3b1aa4838b3d1b"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "4fd6e6e70a014a5a365bd5d6969aa54fc750ff2bb385297f4c7f56acbea014d7",
+      "patchedSha256": "0303307e1b073a7916a136f94daf152851e422bd90d7ed0e4a7e84b236daf59c"
+    }
+  ],
+  "patch": "patches/@univerjs__sheets-conditional-formatting-ui@1.0.1.patch",
+  "patchSha256": "f261dad6b60a9e0e6ca72757a9051cb2f71326bd8c8f1dc64eed7df3a84036bf"
+}

@@ -2,12 +2,13 @@
 // 回归断点：去掉启动重试/运行期监听、丢掉未提交输入、换实例时重新申请租约、保存旧公式缓存，都会破坏下面的断言。
 import type { Page, Request } from '@playwright/test'
 import { CURRENT_CLIENT } from '../../support/client-format.ts'
-import { createUser, editLeaseEpoch, revisionOf, withDatabase } from '../../support/database.ts'
+import { createDocument, createUser, editLeaseEpoch, revisionOf, withDatabase } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { expectFormulaCombination, formulaCombinationFor } from '../../support/formula-combination.ts'
 import { blockFormulaWorker, failFormulaWorker, formulaRecoveryNotice } from '../../support/formula-worker-fault.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, expectFoundOnce, isSaveRequest, openAndEnterEditing, openReader, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, expectFoundOnce, isSaveRequest, openAndEnterEditing, openReader, saveAndWait, savedContent, saveStatus, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -49,8 +50,9 @@ async function formulasPending(documentId: string): Promise<boolean | undefined>
 }
 
 test('US-M4-13 启动脚本失败：自动改用主线程，阅读不申请租约，公式与 IMAGE 限制正确保存，重新打开仍保留内容', async ({ page }) => {
-  await loginThroughApi(page, await createUser('formula-start-fallback'))
-  const id = await createSheetThroughApi(page)
+  const owner = await createUser('formula-start-fallback')
+  await loginThroughApi(page, owner)
+  const id = await createDocument(owner, 'formula-start-fallback', formulaCombinationFor)
   const recorded = traffic(page, id)
   const fault = await blockFormulaWorker(page)
   await openReader(page, id, 'steady')
@@ -73,6 +75,7 @@ test('US-M4-13 启动脚本失败：自动改用主线程，阅读不申请租�
   await saveAndWait(page)
   const saved = await savedContent(page, id)
   expect(cellOf(saved.snapshot, 'A2')).toMatchObject({ f: '=A1+22', v: 42 })
+  expectFormulaCombination(saved.snapshot, 20, 42)
   expect(cellOf(saved.snapshot, 'B1')).toMatchObject({ v: '#VALUE!' })
   expect(cellOf(saved.snapshot, 'C1')).toMatchObject({ v: '退化后仍可保存' })
   expect(await formulasPending(id)).toBe(false)
@@ -91,11 +94,13 @@ test('US-M4-13 启动脚本失败：自动改用主线程，阅读不申请租�
   expect(recorded.leases).toEqual(['POST', 'DELETE'])
   expect(await revisionOf(id)).toBe(revision)
   expect(cellOf((await savedContent(page, id)).snapshot, 'A2')).toMatchObject({ f: '=A1+22', v: 42 })
+  expectFormulaCombination((await savedContent(page, id)).snapshot, 20, 42)
 })
 
 test('US-M4-13 运行期错误：离线时保留尚未提交的单元格，原租约恢复后保存重新计算的结果', async ({ page, context }) => {
-  await loginThroughApi(page, await createUser('formula-runtime'))
-  const id = await createSheetThroughApi(page)
+  const owner = await createUser('formula-runtime')
+  await loginThroughApi(page, owner)
+  const id = await createDocument(owner, 'formula-runtime', formulaCombinationFor)
   const recorded = traffic(page, id)
   await openAndEnterEditing(page, id, 'steady')
   await typeInCell(page, 'A1', '20')
@@ -103,6 +108,7 @@ test('US-M4-13 运行期错误：离线时保留尚未提交的单元格，原�
   await saveAndWait(page)
   const before = await savedContent(page, id)
   expect(cellOf(before.snapshot, 'A2')).toMatchObject({ v: 42 })
+  expectFormulaCombination(before.snapshot, 20, 42)
   expect(await editLeaseEpoch(id)).toBe(1)
   await context.setOffline(true)
   try {
@@ -124,6 +130,7 @@ test('US-M4-13 运行期错误：离线时保留尚未提交的单元格，原�
   const saved = await savedContent(page, id)
   expect(cellOf(saved.snapshot, 'A1')).toMatchObject({ v: 37 })
   expect(cellOf(saved.snapshot, 'A2')).toMatchObject({ f: '=A1+22', v: 59 })
+  expectFormulaCombination(saved.snapshot, 37, 59)
   expect(await formulasPending(id)).toBe(false)
   expect(await editLeaseEpoch(id)).toBe(1)
   expect(recorded.leases).toEqual(['POST'])
@@ -132,4 +139,5 @@ test('US-M4-13 运行期错误：离线时保留尚未提交的单元格，原�
   await page.reload()
   await waitForEditorAccess(page, 'read', 'steady')
   expect(cellOf((await savedContent(page, id)).snapshot, 'A2')).toMatchObject({ f: '=A1+22', v: 59 })
+  expectFormulaCombination((await savedContent(page, id)).snapshot, 37, 59)
 })

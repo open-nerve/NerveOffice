@@ -347,8 +347,8 @@ export const editorMessages = {
   nearCapacity: (percent: number) => `这份表格已用去容量上限（5 MiB）的 ${percent}%，再加内容可能就保存不了了`,
   /** 快照被服务端拒绝（SNAPSHOT_INVALID）：按违反的规则说（不认识的规则照"格式不正确"说） */
   snapshotInvalid: (rule: SnapshotRule | undefined) => rule === undefined ? '表格内容的格式不正确' : SNAPSHOT_RULE_PHRASES[rule],
-  imageLocations: (reason: string, positions: string) => `${reason}。请检查：${positions}`,
-  imageLocation: {
+  snapshotLocations: (reason: string, positions: string) => `${reason}。请检查：${positions}`,
+  snapshotLocation: {
     sheet: (name: string | undefined) => name === undefined ? '某个工作表' : `工作表「${name}」`,
     cell: (sheet: string, address: string) => `${sheet}的 ${address}`,
     drawing: (sheet: string, address: string | undefined) => address === undefined ? `${sheet}的浮动图片` : `${sheet}的 ${address} 附近的浮动图片`,

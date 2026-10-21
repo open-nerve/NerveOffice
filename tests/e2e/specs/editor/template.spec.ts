@@ -1,6 +1,6 @@
 // 模板与档案（P4 设计 §3.4、§3.6.8、§3.10）：新建的文档打开后立即保存，上传的快照与模板逐字节相同（id 除外），即模板仍然收敛
 // （M3-P3 起看上传的正文：内容相同的保存服务端不存，设计 §3.11）；
-// M5-P2 起开放平台图片入口和表格图片粘贴；超链接入口、保护仍关闭，Ctrl/Cmd+K 没有反应。
+// M5-P2 起开放平台图片入口和表格图片粘贴；M5-P3 开放超链接工具栏、右键和 Ctrl/Cmd+K；保护仍关闭。
 // 键入、粘贴网址时 SDK 的自动识别不是入口，照常保留；M3-P3 起写进单元格之前改成规范写法、不合法的去掉链接（DEF-021，
 // editor/profile/link-policy.ts）：这里核对存下的是规范写法，各条路径（编辑栏、单元格编辑器、HTML、HYPERLINK()）与撤销重做见 links.spec.ts。
 import { sheetSnapshotFor } from '@nerve-office/contracts'
@@ -38,14 +38,17 @@ test.describe('US-M1-06 新建的表格用收敛的模板', () => {
 })
 
 test.describe('US-M1-09 按阶段开放图片与超链接的入口', () => {
-  test('M5-P2 插入菜单开放两种图片，链接与保护仍隐藏；右键与 Ctrl/Cmd+K 保持限制', async ({ page }) => {
+  test('M5-P3 图片入口保持，链接工具栏、右键和快捷键开放，保护仍隐藏', async ({ page }) => {
     await loginThroughApi(page, await createUser('guards-menus'))
     const documentId = await createSheetThroughApi(page)
     await openAndEnterEditing(page, documentId, 'steady')
     await page.getByRole('tab', { name: '插入', exact: true }).click()
     const toolbar = page.getByRole('toolbar', { name: '插入' })
     await expect(toolbar).toBeVisible()
-    await expect(toolbar.getByRole('button', { name: /链接|保护/ })).toHaveCount(0)
+    await expect(toolbar.getByRole('button', { name: /保护/ })).toHaveCount(0)
+    await toolbar.getByRole('button', { name: '插入链接', exact: true }).click()
+    await expect(page.getByPlaceholder('输入链接地址', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '取消', exact: true }).click()
     const images = toolbar.getByRole('button', { name: '图片', exact: true })
     await expect(images).toBeVisible()
     await images.click()
@@ -56,15 +59,18 @@ test.describe('US-M1-09 按阶段开放图片与超链接的入口', () => {
 
     await selectCell(page, 'B2', { button: 'right' })
     await expect(page.getByText('选择性复制')).toBeVisible()
-    await expect(page.getByText(/^(?:插入链接|链接|超链接|保护|保护区域|插入图片|图片)$/).filter({ visible: true })).toHaveCount(0)
-    await page.keyboard.press('Escape')
+    await expect(page.getByText(/^(?:保护|保护区域|插入图片|图片)$/).filter({ visible: true })).toHaveCount(0)
+    await expect(page.getByText('添加链接', { exact: true }).filter({ visible: true })).toBeVisible()
+    await page.getByText('添加链接', { exact: true }).filter({ visible: true }).click()
+    await expect(page.getByPlaceholder('输入链接地址', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '取消', exact: true }).click()
     await expect(page.getByText('选择性复制')).toBeHidden()
 
     await selectCell(page, 'B2')
     // Univer 按页面的平台取主修饰键（Linux 上的 WebKit 也自称 Mac）：ControlOrMeta 在那里按下的 Control+K 根本不是它的快捷键，这一步就白测了
     await pressUniverShortcut(page, 'K')
-    await expect(page.getByRole('dialog')).toHaveCount(0)
-    await expect(page.getByText(/链接/).filter({ visible: true })).toHaveCount(0)
+    await expect(page.getByPlaceholder('输入链接地址', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '取消', exact: true }).click()
   })
 
   test('键入网址：SDK 自动识别为链接（不经入口守卫），存下的是规范写法（没有协议时 SDK 补的 https:// 之外再补上路径的 /，DEF-021）；文字是键入的原文，普通文字不变', async ({ page }) => {

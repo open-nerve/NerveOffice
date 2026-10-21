@@ -42,9 +42,13 @@ export const IMAGE_INSERT_MENU_ITEMS: readonly HiddenMenuItem[] = [
   { id: 'sheet.command.insert-cell-image', source: 'sheets-drawing-ui/src/menu/schema.ts（子项：插入单元格图片）' },
 ]
 
-/** P2 尚不提供原 SDK 下载，超链接入口由 P3 接入。 */
+/** 平台尚不提供原 SDK 的单元格图片下载。 */
 export const BEFORE_M5_MENU_ITEMS: readonly HiddenMenuItem[] = [
   { id: 'sheet.command.save-cell-images', source: 'sheets-drawing-ui/src/menu/schema.ts（右键：保存单元格图片）' },
+]
+
+/** P3 正式链接入口；只读时隐藏，写命令仍受独立的只读防火墙约束。 */
+const LINK_INSERT_MENU_ITEMS: readonly HiddenMenuItem[] = [
   { id: 'sheet.operation.insert-hyper-link-toolbar', source: 'sheets-hyper-link-ui/src/menu/menu.ts:150（工具栏的插入链接）' },
   { id: 'sheet.operation.insert-hyper-link', source: 'sheets-hyper-link-ui/src/menu/menu.ts:138（右键的插入链接：schema 的键是工具栏的 id，工厂返回的 id 是这一个）' },
 ]
@@ -59,6 +63,7 @@ export const HIDDEN_MENU_ITEMS: readonly HiddenMenuItem[] = [...PROTECTION_MENU_
  */
 export const READ_ONLY_MENU_ITEMS: readonly HiddenMenuItem[] = [
   ...IMAGE_INSERT_MENU_ITEMS,
+  ...LINK_INSERT_MENU_ITEMS,
   { id: 'sheet.command.remove-sheet-confirm', source: 'sheets-ui/src/menu/sheet.menu.ts:43（工作表标签：删除；命令在 commands/commands/remove-sheet-confirm.command.ts:41）' },
   { id: 'sheet.command.copy-sheet', source: 'sheets-ui/src/menu/sheet.menu.ts:81（工作表标签：复制；命令在 sheets 的 commands/commands/copy-worksheet.command.ts:148）' },
   { id: 'sheet.operation.rename-sheet', source: 'sheets-ui/src/menu/sheet.menu.ts:91（工作表标签：重命名；操作在 commands/operations/rename-sheet.operation.ts:27）' },

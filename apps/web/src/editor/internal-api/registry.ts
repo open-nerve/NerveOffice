@@ -66,6 +66,28 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
+    name: 'installRichLinkShortcut',
+    origin: '本实例 IShortcutService、正常单元格内部编辑器与富文本选区',
+    sdk: {
+      '@univerjs/core': ['IDisposable', 'Univer', 'DOCS_NORMAL_EDITOR_UNIT_ID_KEY', 'EDITOR_ACTIVATED', 'FOCUSING_FX_BAR_EDITOR', 'FOCUSING_SHEET'],
+      '@univerjs/docs': ['DocSelectionManagerService'],
+      '@univerjs/docs-ui': ['DocSelectionRenderService', 'IEditorService'],
+      '@univerjs/engine-render': ['IRenderManagerService'],
+      '@univerjs/ui': ['IShortcutService', 'KeyCode', 'MetaKeys'],
+    },
+    purpose: '原 SDK Ctrl/Cmd+K 排除已激活的单元格编辑器；仅为本实例可编辑、有效非折叠选区补同一工具栏命令，不在公式栏、弹窗输入、组字或只读时抢键。销毁即注销。',
+    evidence: 'sheets-hyper-link-ui 1.0.1 InsertLinkShortcut 的 whenSheetEditorFocused 排除 EDITOR_ACTIVATED；本实例正常编辑器的 DocSelectionRenderService.isFocusing 与 document.activeElement 确认输入归属；隐藏输入不在 editorDOM 内。',
+    regression: 'internal-api/link-shortcut.test.ts 的焦点/选区/退役；editor/link-input.spec.ts 真实富文本 Ctrl/Cmd+K；SDK 原绑定支持同一范围后，完整回归通过再删本适配。',
+  },
+  {
+    name: 'LINK_INPUT_COMMANDS',
+    origin: '@univerjs/sheets-hyper-link 的普通与富文本 Add/UpdateHyperLinkCommand',
+    sdk: { '@univerjs/sheets-hyper-link': ['AddHyperLinkCommand', 'AddRichHyperLinkCommand', 'UpdateHyperLinkCommand', 'UpdateRichHyperLinkCommand'] },
+    purpose: '明确链接输入在 SDK 修改显示文字、模型和撤销栈之前验证并规范化；添加读取 params.link.payload，更新读取 params.payload.payload。取消链接保持原语义，权限由独立只读守卫判断。',
+    evidence: '固定 1.0.1 lib/es/index.js 的 add-hyper-link.command 与 update-hyper-link.command；M5-P3-S2 spec。地址提示使用公开 Facade.showMessage，不增加消息服务内部依赖。',
+    regression: 'profile/link-input-policy.test.ts 的四命令、拒绝保留、参数不明与销毁；E2E editor/link-input.spec.ts 的正式输入、保存与导航，升级 SDK 时先核对实际参数再移除适配。',
+  },
+  {
     name: 'FORMULA_CLIPBOARD_MIME_TYPE',
     origin: 'sheets-ui 1.0.1 的公式剪贴板 MIME 常量，仅主线程使用',
     purpose: '系统 paste 事件和显式剪贴板读取保留 SDK 公式数据，表格委托不退化为纯文本',
@@ -355,10 +377,10 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     purpose: '面板的防抖（M3-P4 设计 §3.4，panel-debounce-watch.ts）：这两个面板开着时有用户输入，就记下"SDK 的防抖到点"的时刻；退出编辑、交出与按保存的捕获之前（立即上传在按下时的准备：snapshot-capture.ts 的 settleInputs）、失去编辑权的捕获之前等到这一刻，最后的改动先写进模型再捕获、再销毁编辑器。到点之前算"还没写进模型的输入"（Codex 评审 CX4，uncommitted-input.ts）：保存的状态机据此算未保存，页头不说已保存到云端、离开提示拦下',
     evidence: [
       'ui 的 views/hooks/use-debounce.ts:19-30（组件卸载时不清计时器）与 sheets-note-ui 的 views/Note.tsx:110-143（1.0.1 的 ui lib/es/index.js:6584-6592、sheets-note-ui lib/es/index.js:648、:691）；',
-      'sheets-data-validation-ui 的 views/components/DataValidationDetail.tsx:65-72、:114（三种更新共用一个防抖，卸载时不 flush；1.0.1 的 lib/es/index.js:2931-2934、面板根元素 :3140）。',
-      '关闭面板不提交也不取消、没有对外的"立即提交"，只能等它到点；refer 的其余界面包的防抖只管界面（M3-P4 S4 逐包核对），图片的变换面板在 M5 之前进不来',
+      'sheets-data-validation-ui 的 DataValidationDetail 原包三种更新共用尾调用且卸载不 flush；M5-P3-S4 补丁按输入顺序积累字段增量，仅合并连续同类编辑；历史同步范围正文，范围命令的公式平移不会被旧字段覆盖。关闭/卸载同步提交，规则删除/本工作簿历史操作取消，原工作簿退役不写同 id 新对象；失败保留待办。见 patches/univer-data-validation-ui.json、ADR-010。',
+      'sheets-formula-ui 的范围高亮同时登记 UR-036：按执行时的当前文本重新解析，禁止旧语法树回写新输入；UR-037 在编辑器焦点切换前保留逻辑光标，防止 blur 发出旧渲染选区覆盖新输入位置。数据验证解析结果先按原工作表核对 isValidRange。两补丁不增加公开 API，平台捕获仍等原窗口；批注关闭不提交的原行为继续由此等待保护。',
     ].join(''),
-    regression: '单元测试 panel-debounce-watch.test.ts（面板开着时的输入才算、防抖中到点为止、开始与到点各通知一次、页头里的不算、销毁时放行）、uncommitted-input.test.ts 与 save-coordinator.test.ts（防抖中算未保存）、snapshot-capture.test.ts（捕获之前先等面板）；E2E tests/e2e/specs/editor/autosave.spec.ts"批注里键入之后立即退出编辑""数据验证面板里改了之后立即退出编辑"：服务器上有这次的改动；"防抖还没到点"的几条：离开提示拦下、页头不说已保存到云端，到点之后照常自动保存（本机三个浏览器）',
+    regression: '单元测试 data-validation-panel.test.tsx（实际 SDK 详情、队列、规则与命令）、panel-debounce-watch.test.ts、uncommitted-input.test.ts、save-coordinator.test.ts、snapshot-capture.test.ts；E2E data-validation-panel.spec.ts 的连续输入、范围、类型、关闭、删除历史、范围撤销再确认、custom 平移与重开后公式正文，以及 autosave.spec.ts 既有的面板退出和自动保存边界。SDK 升级须同时复验原窗口与补丁移除条件',
   },
   {
     name: 'FORMULA_BAR_INPUT_SELECTOR',

@@ -32,6 +32,16 @@ function configOf(entries: readonly PluginEntry[], pluginName: string): unknown 
 describe('插件档案 sheet@1：注册顺序（插件档案 v1 §1，公式在 Worker 里计算）', () => {
   const entries = sheetPluginEntries({ container, formula, access: 'edit' })
 
+  it.each(['read', 'edit'] as const)('%s 注册同一平台链接规则，内部锚点和本站路径不被补协议', (access) => {
+    const config = configOf(sheetPluginEntries({ container, formula, access }), 'SHEET_HYPER_LINK_UI_PLUGIN') as {
+      urlHandler?: { normalizeUrl?: (url: string) => string | null, navigateToOtherWebsite?: (url: string) => void }
+    } | undefined
+    expect(config?.urlHandler?.normalizeUrl?.('/documents/../spaces')).toBe('/spaces')
+    expect(config?.urlHandler?.normalizeUrl?.('#gid=sheet-1&range=A1')).toBe('#gid=sheet-1&range=A1')
+    expect(config?.urlHandler?.normalizeUrl?.('//example.invalid/')).toBeNull()
+    expect(config?.urlHandler?.navigateToOtherWebsite).toBeTypeOf('function')
+  })
+
   it('按组注册，组内与组间的顺序按官方 preset', () => {
     expect(SHEET_PROFILE_ID).toBe('sheet@1')
     expect(SHEET_PLUGIN_GROUPS.map(group => group.id)).toEqual(['core', 'numfmt', 'formula', 'drawing', 'cf', 'filter', 'hyperlink', 'dv', 'find-replace', 'note', 'sort'])
@@ -165,7 +175,7 @@ describe('插件档案 sheet@1：主线程的公式模式（M3-P4 设计 §3.14�
 })
 
 describe('插件档案 sheet@1：界面的配置按打开方式（插件档案 v1 §5.2，M2-P3 设计 §3.4）', () => {
-  /** 数据相关的配置之外，只有界面插件与表格界面插件按打开方式配置 */
+  /** 数据相关的配置之外，界面按打开方式配置；链接地址规则由阅读和编辑共用。 */
   const DATA_CONFIGURED = ['UNIVER_RPC_MAIN_THREAD_PLUGIN', 'UNIVER_ENGINE_FORMULA_PLUGIN', 'SHEET_PLUGIN', 'SHEETS_FORMULA_PLUGIN']
 
   function otherConfigured(entries: readonly PluginEntry[], configured: readonly string[]): string[] {
@@ -176,7 +186,7 @@ describe('插件档案 sheet@1：界面的配置按打开方式（插件档案 v
     const entries = sheetPluginEntries({ container, formula, access: 'edit' })
     expect(configOf(entries, 'UNIVER_UI_PLUGIN')).toMatchObject({ container, menu: sheetMenuConfig('edit') })
     expect(configOf(entries, 'SHEET_UI_PLUGIN')).toBeUndefined()
-    expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN'])).toEqual([])
+    expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN', 'SHEET_HYPER_LINK_UI_PLUGIN'])).toEqual([])
   })
 
   it('只读：关掉工具栏与右键菜单，保留编辑栏（header 不写，用默认的显示）；菜单另外隐藏工作表标签的 5 项', () => {
@@ -187,7 +197,7 @@ describe('插件档案 sheet@1：界面的配置按打开方式（插件档案 v
   it('只读：底栏只关掉菜单（网格线开关会写进快照）与新增工作表按钮，工作表标签、统计栏与缩放保持默认', () => {
     const entries = sheetPluginEntries({ container, formula, access: 'read' })
     expect(configOf(entries, 'SHEET_UI_PLUGIN')).toStrictEqual({ footer: { menus: false, addSheetButtonConfig: { show: false } } })
-    expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN', 'SHEET_UI_PLUGIN'])).toEqual([])
+    expect(otherConfigured(entries, [...DATA_CONFIGURED, 'UNIVER_UI_PLUGIN', 'SHEET_UI_PLUGIN', 'SHEET_HYPER_LINK_UI_PLUGIN'])).toEqual([])
   })
 })
 

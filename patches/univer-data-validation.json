@@ -1,0 +1,35 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/sheets-data-validation",
+  "version": "1.0.1",
+  "reason": "DEF-056 / S4：数据验证绑定原实例与同格任务，真实输入/规则/退役立即取消；公式结果刷新仅更新计算代次，共享等待最终结论，真实错误可观察并允许重试。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "8c61c605df83978832631dc586254677c6aa676c9eb48181035aaae02dd309a7",
+      "patchedSha256": "c79b176f5a778242dc9d7d071334643e4dece173e1f3e7d4183e922efcfd3d84"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "6dfbfedc3d0bbc4eb5357bc18f6a23d7b871fd4d0a701ac83456b160020dfecc",
+      "patchedSha256": "66cc1500ddf08b2180cc5eb2f39ff78ea2494389cc8e542417b52888eb384a31"
+    },
+    {
+      "path": "lib/types/models/sheet-data-validation-model.d.ts",
+      "originalSha256": "2774cfdd27eb12bb27a0e48fe661170abf13ff8a7a78b166cccc2b7f93b9028d",
+      "patchedSha256": "2886ba2868eff54d6d41fc909e421d3af57c6b4409f7860fb24299b3273a07d1"
+    },
+    {
+      "path": "lib/types/services/dv-validator.service.d.ts",
+      "originalSha256": "a85bb1e75b8f9377bbef03279443931bd0ebe2bba09c615b80005d5e863583f3",
+      "patchedSha256": "c76ad787b7486238c6b629d1d3130546490130304bd1552a6d1686dbdb8ca422"
+    },
+    {
+      "path": "lib/types/services/dv-cache.service.d.ts",
+      "originalSha256": "7a0c49e8c9c36cf3f8c73c7a59bf63490f07dc1e33b261527dd3856df97850ca",
+      "patchedSha256": "e62434d97ff5302e39d2d707d64696a0c92bf76979605ecb484be5dee11b8ef3"
+    }
+  ],
+  "patch": "patches/@univerjs__sheets-data-validation@1.0.1.patch",
+  "patchSha256": "bfa53fadebef2d31543ca8357c6d24e8aeea61c4e8eeab2511431140f806f057"
+}

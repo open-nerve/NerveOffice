@@ -56,3 +56,47 @@ describe('快照检查的规则标识（SNAPSHOT_INVALID 的 details.rule）', (
     }
   })
 })
+
+describe('链接拒绝位置的有界、兼容契约', () => {
+  it.each(['link-structure', 'link-address', 'link-range-id'])('%s 只保留三类位置，去掉地址与图片字段', (rule) => {
+    const linkLocations = [
+      { kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 },
+      { kind: 'cell', sheetId: 'sheet-1', row: 2_147_483_647, column: 2_147_483_647 },
+      { kind: 'sheet', sheetId: 's'.repeat(128) },
+      { kind: 'workbook' },
+      { kind: 'cell', sheetId: 'sheet-2', row: 0, column: 0 },
+    ]
+    expect(snapshotInvalidDetailsSchema.parse({
+      rule,
+      linkLocations: linkLocations.map(location => ({ ...location, url: 'private address', display: 'private text' })),
+      imageLocations: [{ kind: 'workbook' }],
+    })).toEqual({ rule, linkLocations })
+  })
+
+  it.each([
+    [{ kind: 'cell', sheetId: 's', row: -1, column: 0 }],
+    [{ kind: 'cell', sheetId: 's', row: 0.5, column: 0 }],
+    [{ kind: 'cell', sheetId: 's', row: 0, column: 2_147_483_648 }],
+    [{ kind: 'sheet', sheetId: '' }],
+    [{ kind: 'sheet', sheetId: 's'.repeat(129) }],
+    [{ kind: 'sheet', sheetId: 'private/path' }],
+    [{ kind: 'sheet', sheetId: '__proto__' }],
+    [{ kind: 'sheet', sheetId: 'constructor' }],
+    [{ kind: 'sheet', sheetId: 'prototype' }],
+    [{ kind: 'drawing', sheetId: 's', drawingId: 'd' }],
+    [{ kind: 'resource', resourceIndex: 0 }],
+    Array.from({ length: 6 }, () => ({ kind: 'workbook' })),
+    'not-an-array',
+  ].map(linkLocations => [linkLocations]))('畸形位置只退回固定链接错误，不丢掉规则：%j', (linkLocations) => {
+    const parsed = snapshotInvalidDetailsSchema.parse({ rule: 'link-address', linkLocations })
+    expect(parsed).toEqual({ rule: 'link-address', linkLocations: undefined })
+  })
+
+  it('旧响应不制造位置字段，非链接规则不携带链接位置', () => {
+    expect(snapshotInvalidDetailsSchema.parse({ rule: 'link-address' })).toEqual({ rule: 'link-address' })
+    for (const rule of ['image-source', 'json', 'later', undefined]) {
+      const parsed = snapshotInvalidDetailsSchema.parse({ rule, linkLocations: [{ kind: 'workbook' }] })
+      expect(parsed).not.toHaveProperty('linkLocations')
+    }
+  })
+})

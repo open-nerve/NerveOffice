@@ -1,0 +1,42 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index 825c717d22cbd2149727c88bd594f742ff19575c..e663763d2554f72e58b30152a53c51c79cf72d83 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -2760,14 +2760,14 @@ const FormulaStyleEditor = (props) => {
+ 	(0, react.useEffect)(() => {
+ 		return interceptorManager.intercept(interceptorManager.getInterceptPoints().beforeSubmit, { handler: (v, _c, next) => {
+ 			const isFormulaValid = formula.length > 1 && formula.startsWith(_univerjs_engine_formula.operatorToken.EQUALS) && lexerTreeBuilder.checkIfAddBracket(formula) === 0;
+-			if (formulaError || !isFormulaValid) {
++			if (!isFormulaValid) {
+ 				setFormulaError(localeService.t("sheets-conditional-formatting-ui.errorMessage.formulaError"));
+ 				return false;
+ 			}
++			setFormulaError(void 0);
+ 			return next(v);
+ 		} });
+ 	}, [
+-		formulaError,
+ 		formula,
+ 		interceptorManager,
+ 		lexerTreeBuilder,
+diff --git a/lib/es/index.js b/lib/es/index.js
+index c1e5bceccb929b49e66b94e2cedb04237a6686a7..a147ca265947694777fddea686e0c3bb2f186965 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -2759,14 +2759,14 @@ const FormulaStyleEditor = (props) => {
+ 	useEffect(() => {
+ 		return interceptorManager.intercept(interceptorManager.getInterceptPoints().beforeSubmit, { handler: (v, _c, next) => {
+ 			const isFormulaValid = formula.length > 1 && formula.startsWith(operatorToken.EQUALS) && lexerTreeBuilder.checkIfAddBracket(formula) === 0;
+-			if (formulaError || !isFormulaValid) {
++			if (!isFormulaValid) {
+ 				setFormulaError(localeService.t("sheets-conditional-formatting-ui.errorMessage.formulaError"));
+ 				return false;
+ 			}
++			setFormulaError(void 0);
+ 			return next(v);
+ 		} });
+ 	}, [
+-		formulaError,
+ 		formula,
+ 		interceptorManager,
+ 		lexerTreeBuilder,
