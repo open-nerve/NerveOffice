@@ -377,10 +377,10 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     purpose: '面板的防抖（M3-P4 设计 §3.4，panel-debounce-watch.ts）：这两个面板开着时有用户输入，就记下"SDK 的防抖到点"的时刻；退出编辑、交出与按保存的捕获之前（立即上传在按下时的准备：snapshot-capture.ts 的 settleInputs）、失去编辑权的捕获之前等到这一刻，最后的改动先写进模型再捕获、再销毁编辑器。到点之前算"还没写进模型的输入"（Codex 评审 CX4，uncommitted-input.ts）：保存的状态机据此算未保存，页头不说已保存到云端、离开提示拦下',
     evidence: [
       'ui 的 views/hooks/use-debounce.ts:19-30（组件卸载时不清计时器）与 sheets-note-ui 的 views/Note.tsx:110-143（1.0.1 的 ui lib/es/index.js:6584-6592、sheets-note-ui lib/es/index.js:648、:691）；',
-      'sheets-data-validation-ui 的 views/components/DataValidationDetail.tsx:65-72、:114（三种更新共用一个防抖，卸载时不 flush；1.0.1 的 lib/es/index.js:2931-2934、面板根元素 :3140）。',
-      '关闭面板不提交也不取消、没有对外的"立即提交"，只能等它到点；refer 的其余界面包的防抖只管界面（M3-P4 S4 逐包核对），图片的变换面板在 M5 之前进不来',
+      'sheets-data-validation-ui 的 DataValidationDetail 原包三种更新共用尾调用且卸载不 flush；M5-P3-S4 补丁按输入顺序积累字段增量，仅合并连续同类编辑；历史同步范围正文，范围命令的公式平移不会被旧字段覆盖。关闭/卸载同步提交，规则删除/本工作簿历史操作取消，原工作簿退役不写同 id 新对象；失败保留待办。见 patches/univer-data-validation-ui.json、ADR-010。',
+      'sheets-formula-ui 的范围高亮同时登记 UR-036：按执行时的当前文本重新解析，禁止旧语法树回写新输入；UR-037 在编辑器焦点切换前保留逻辑光标，防止 blur 发出旧渲染选区覆盖新输入位置。数据验证解析结果先按原工作表核对 isValidRange。两补丁不增加公开 API，平台捕获仍等原窗口；批注关闭不提交的原行为继续由此等待保护。',
     ].join(''),
-    regression: '单元测试 panel-debounce-watch.test.ts（面板开着时的输入才算、防抖中到点为止、开始与到点各通知一次、页头里的不算、销毁时放行）、uncommitted-input.test.ts 与 save-coordinator.test.ts（防抖中算未保存）、snapshot-capture.test.ts（捕获之前先等面板）；E2E tests/e2e/specs/editor/autosave.spec.ts"批注里键入之后立即退出编辑""数据验证面板里改了之后立即退出编辑"：服务器上有这次的改动；"防抖还没到点"的几条：离开提示拦下、页头不说已保存到云端，到点之后照常自动保存（本机三个浏览器）',
+    regression: '单元测试 data-validation-panel.test.tsx（实际 SDK 详情、队列、规则与命令）、panel-debounce-watch.test.ts、uncommitted-input.test.ts、save-coordinator.test.ts、snapshot-capture.test.ts；E2E data-validation-panel.spec.ts 的连续输入、范围、类型、关闭、删除历史、范围撤销再确认、custom 平移与重开后公式正文，以及 autosave.spec.ts 既有的面板退出和自动保存边界。SDK 升级须同时复验原窗口与补丁移除条件',
   },
   {
     name: 'FORMULA_BAR_INPUT_SELECTOR',

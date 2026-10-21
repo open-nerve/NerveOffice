@@ -1,0 +1,20 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/sheets-data-validation-ui",
+  "version": "1.0.1",
+  "reason": "UR-033：按输入顺序积累连续同类字段增量及尚未生效的类型草稿；同步范围历史和公式平移；关闭、删除、原实例归属与失败重试。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "634d61a549ffd7357b332ddb12d65512293ecaeb37bb4e3af71b16f7c3e65a25",
+      "patchedSha256": "9b93481418e58c91c2209ffbf87fc6dff659ee9435e861c23ea6544423b7c01a"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "bb8d723c8cc1c8f76ffcc65f5090e03386ca42b749efdd3e93c4af6252185e79",
+      "patchedSha256": "8c219f005268d8698637ba8a11838dcb95ac1f80ad0b4cd0472a0b48bc1b8273"
+    }
+  ],
+  "patch": "patches/@univerjs__sheets-data-validation-ui@1.0.1.patch",
+  "patchSha256": "756fa99c06d014292081bb426cf637bb0e4f6cee6e098f292889b04a42d6c76d"
+}

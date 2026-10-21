@@ -1,0 +1,629 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff81599ab5e 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -2929,10 +2929,43 @@ function DataValidationOptions(props) {
+ 
+ //#endregion
+ //#region src/views/components/DataValidationDetail.tsx
+-const debounceExecuteFactory = (commandService) => (0, _univerjs_core.debounce)(async (id, params, options, callback) => {
+-	const res = await commandService.executeCommand(id, params, options);
+-	callback === null || callback === void 0 || callback(res);
+-}, 1e3);
++const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed) => {
++	const pending = [];
++	const flush = () => {
++		timer.cancel();
++		const hadPending = pending.length > 0;
++		while (pending.length) {
++			if (!isCurrent()) {
++				pending.length = 0;
++				return false;
++			}
++			const task = pending[0];
++			const [id, params, options, callback] = task;
++			const result = commandService.syncExecuteCommand(id, resolveParams(id, params), options);
++			if (!result) return false;
++			if (pending[0] === task) pending.shift();
++			callback === null || callback === void 0 || callback(result);
++		}
++		if (hadPending) onFlushed();
++		return true;
++	};
++	const timer = (0, _univerjs_core.debounce)(flush, 1e3);
++	const execute = (id, params, options, callback) => {
++		const previous = pending[pending.length - 1];
++		if (previous?.[0] === id) {
++			pending.pop();
++			if (id === _univerjs_sheets_data_validation.UpdateSheetDataValidationSettingCommand.id) params = { ...params, setting: { ...previous[1].setting, ...params.setting } };
++		}
++		pending.push([id, params, options, callback]);
++		timer();
++	};
++	execute.flush = flush;
++	execute.cancel = () => {
++		timer.cancel();
++		pending.length = 0;
++	};
++	return execute;
++};
+ function getSheetIdByName(univerInstanceService, unitId, name) {
+ 	var _univerInstanceServic2;
+ 	if (unitId) {
+@@ -2954,6 +2987,7 @@ function DataValidationDetail() {
+ function DataValidationDetailInner(props) {
+ 	var _validators$sort;
+ 	const [key, setKey] = (0, react.useState)(0);
++	const [rangeKey, setRangeKey] = (0, react.useState)(0);
+ 	const dataValidationPanelService = (0, _univerjs_ui.useDependency)(DataValidationPanelService);
+ 	const { unitId, subUnitId, rule } = props.activeRuleInfo;
+ 	const ruleId = rule.uid;
+@@ -2974,7 +3008,57 @@ function DataValidationDetailInner(props) {
+ 		sheetId: "",
+ 		range: i
+ 	})));
+-	const debounceExecute = (0, react.useMemo)(() => debounceExecuteFactory(commandService), [commandService]);
++	const syncRule = (0, _univerjs_ui.useEvent)((resetRange = false) => {
++		const activeRule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
++		if (!activeRule) return;
++		const nextRule = !resetRange && activeRule.type !== localRule.type ? { ...activeRule, ...(0, _univerjs_data_validation.getRuleSetting)(localRule) } : activeRule;
++		if (resetRange || nextRule.formula1 !== localRule.formula1 || nextRule.formula2 !== localRule.formula2) setKey((k) => k + 1);
++		setLocalRule(nextRule);
++		setLocalRanges(activeRule.ranges.map((range) => ({ unitId: "", sheetId: "", range })));
++		if (resetRange) {
++			setRangeKey((k) => k + 1);
++			setIsRangeError(false);
++			setIsFocusRangeSelector(false);
++			setShowError(false);
++		}
++	});
++	const debounceExecute = (0, react.useMemo)(() => {
++		const owner = univerInstanceService.getUnit(unitId);
++		const sheet = owner === null || owner === void 0 ? void 0 : owner.getSheetBySheetId(subUnitId);
++		return debounceExecuteFactory(commandService, () => !!owner && !!sheet && univerInstanceService.getUnit(unitId) === owner && owner.getSheetBySheetId(subUnitId) === sheet && !!dataValidationModel.getRuleById(unitId, subUnitId, ruleId), (id, params) => {
++			if (id !== _univerjs_sheets_data_validation.UpdateSheetDataValidationSettingCommand.id) return params;
++			const { draftSetting, ...commandParams } = params;
++			const currentSetting = (0, _univerjs_data_validation.getRuleSetting)(dataValidationModel.getRuleById(unitId, subUnitId, ruleId));
++			return {
++				...commandParams,
++				setting: { ...(currentSetting.type === draftSetting.type ? currentSetting : draftSetting), ...params.setting }
++			};
++		}, () => syncRule());
++	}, [commandService, univerInstanceService, dataValidationModel, unitId, subUnitId, ruleId, syncRule]);
++	(0, react.useEffect)(() => {
++		const closed = dataValidationPanelService.open$.subscribe((isOpen) => {
++			if (!isOpen) debounceExecute.flush();
++		});
++		const before = commandService.beforeCommandExecuted((info) => {
++			if ((info.id === _univerjs_core.UndoCommand.id || info.id === _univerjs_core.RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) debounceExecute.cancel();
++		});
++		const removed = dataValidationModel.ruleChange$.subscribe((change) => {
++			if (change.type === "remove" && change.unitId === unitId && change.subUnitId === subUnitId && change.rule.uid === ruleId) {
++				debounceExecute.cancel();
++				dataValidationPanelService.setActiveRule(null);
++			}
++		});
++		return () => {
++			closed.unsubscribe();
++			before.dispose();
++			removed.unsubscribe();
++			try {
++				debounceExecute.flush();
++			} finally {
++				debounceExecute.cancel();
++			}
++		};
++	}, [commandService, univerInstanceService, dataValidationModel, dataValidationPanelService, debounceExecute, unitId, subUnitId, ruleId]);
+ 	const [isRangeError, setIsRangeError] = (0, react.useState)(false);
+ 	const [isFocusRangeSelector, setIsFocusRangeSelector] = (0, react.useState)(false);
+ 	const rangeSelectorInstance = (0, react.useRef)(null);
+@@ -2986,35 +3070,11 @@ function DataValidationDetailInner(props) {
+ 		};
+ 	}, [sheetSelectionService]);
+ 	(0, react.useEffect)(() => {
+-		let timer;
+ 		const disposable = commandService.onCommandExecuted((commandInfo) => {
+-			if (commandInfo.id === _univerjs_core.UndoCommand.id || commandInfo.id === _univerjs_core.RedoCommand.id) {
+-				if (timer !== void 0) clearTimeout(timer);
+-				timer = setTimeout(() => {
+-					const activeRule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
+-					setKey((k) => k + 1);
+-					if (activeRule) {
+-						setLocalRule(activeRule);
+-						setLocalRanges(activeRule.ranges.map((i) => ({
+-							unitId: "",
+-							sheetId: "",
+-							range: i
+-						})));
+-					}
+-				}, 20);
+-			}
++			if ((commandInfo.id === _univerjs_core.UndoCommand.id || commandInfo.id === _univerjs_core.RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) syncRule(true);
+ 		});
+-		return () => {
+-			disposable.dispose();
+-			if (timer !== void 0) clearTimeout(timer);
+-		};
+-	}, [
+-		commandService,
+-		dataValidationModel,
+-		ruleId,
+-		subUnitId,
+-		unitId
+-	]);
++		return () => disposable.dispose();
++	}, [commandService, univerInstanceService, unitId, syncRule]);
+ 	const handleUpdateRuleRanges = (0, _univerjs_ui.useEvent)((rangeText) => {
+ 		const unitRanges = rangeText.split(",").filter(Boolean).map(_univerjs_engine_formula.deserializeRangeWithSheet).map((unitRange) => {
+ 			const sheetName = unitRange.sheetName;
+@@ -3030,14 +3090,14 @@ function DataValidationDetailInner(props) {
+ 				sheetId: ""
+ 			};
+ 		});
+-		if ((0, _univerjs_core.isUnitRangesEqual)(unitRanges, localRanges)) return;
+-		setLocalRanges(unitRanges);
+ 		const ranges = unitRanges.filter((i) => (!i.unitId || i.unitId === unitId) && (!i.sheetId || i.sheetId === subUnitId)).map((i) => i.range);
+-		setLocalRule({
+-			...localRule,
+-			ranges
+-		});
+-		if (ranges.length === 0) return;
++		const targetSheet = univerInstanceService.getUnit(unitId)?.getSheetBySheetId(subUnitId);
++		const valid = !!targetSheet && ranges.length > 0 && ranges.every((range) => _univerjs_core.isValidRange(range, targetSheet));
++		setIsRangeError(!valid);
++		if (!valid) return false;
++		if ((0, _univerjs_core.isUnitRangesEqual)(unitRanges, localRanges)) return true;
++		setLocalRanges(unitRanges);
++		setLocalRule((current) => ({ ...current, ranges }));
+ 		const params = {
+ 			unitId,
+ 			subUnitId,
+@@ -3045,8 +3105,9 @@ function DataValidationDetailInner(props) {
+ 			ranges
+ 		};
+ 		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationRangeCommand.id, params);
++		return true;
+ 	});
+-	const rangeStr = (0, react.useMemo)(() => localRanges.map((i) => (0, _univerjs_engine_formula.serializeRange)(i.range)).join(","), []);
++	const rangeStr = (0, react.useMemo)(() => localRanges.map((i) => (0, _univerjs_engine_formula.serializeRange)(i.range)).join(","), [localRanges]);
+ 	if (!validator) return null;
+ 	const operators = validator.operators;
+ 	const operatorNames = validator.operatorNames;
+@@ -3058,31 +3119,30 @@ function DataValidationDetailInner(props) {
+ 		});
+ 	};
+ 	const handleOk = () => {
+-		var _rangeSelectorInstanc;
+-		if ((_rangeSelectorInstanc = rangeSelectorInstance.current) === null || _rangeSelectorInstanc === void 0 || (_rangeSelectorInstanc = _rangeSelectorInstanc.editor) === null || _rangeSelectorInstanc === void 0 ? void 0 : _rangeSelectorInstanc.isFocus()) {
+-			var _rangeSelectorInstanc2;
+-			handleUpdateRuleRanges((_rangeSelectorInstanc2 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc2 === void 0 ? void 0 : _rangeSelectorInstanc2.getValue());
+-		}
+-		if (!localRule.ranges.length || isRangeError) return;
+-		if (validator.validatorFormula(localRule, unitId, subUnitId).success) dataValidationPanelService.setActiveRule(null);
++		const selector = rangeSelectorInstance.current;
++		if (selector && !handleUpdateRuleRanges(selector.getValue())) return;
++		if (validator.validatorFormula(localRule, unitId, subUnitId).success && debounceExecute.flush()) dataValidationPanelService.setActiveRule(null);
+ 		else setShowError(true);
+ 		goBackActiveRuleSheet();
+ 	};
+ 	const handleUpdateRuleSetting = (setting) => {
+-		if ((0, _univerjs_core.shallowEqual)(setting, (0, _univerjs_data_validation.getRuleSetting)(localRule))) return;
+-		setLocalRule({
+-			...localRule,
+-			...setting
+-		});
++		const changed = Object.fromEntries(Object.entries(setting).filter(([field, value]) => value !== localRule[field]));
++		if (!Object.keys(changed).length) return;
++		setLocalRule((current) => ({ ...current, ...changed }));
+ 		const params = {
+ 			unitId,
+ 			subUnitId,
+ 			ruleId,
+-			setting
++			draftSetting: (0, _univerjs_data_validation.getRuleSetting)(localRule),
++			setting: changed
+ 		};
+ 		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationSettingCommand.id, params, void 0);
+ 	};
+ 	const handleDelete = async () => {
++		if (!debounceExecute.flush()) {
++			setShowError(true);
++			return;
++		}
+ 		await commandService.executeCommand(_univerjs_sheets_data_validation.RemoveSheetDataValidationCommand.id, {
+ 			ruleId,
+ 			unitId,
+@@ -3091,16 +3151,13 @@ function DataValidationDetailInner(props) {
+ 		dataValidationPanelService.setActiveRule(null);
+ 		goBackActiveRuleSheet();
+ 	};
+-	const baseRule = {
+-		type: localRule.type,
+-		operator: localRule.operator,
+-		formula1: localRule.formula1,
+-		formula2: localRule.formula2,
+-		allowBlank: localRule.allowBlank
+-	};
+ 	const handleChangeType = (newType) => {
+ 		const validator = validatorService.getValidatorItem(newType);
+ 		if (!validator) return;
++		if (!debounceExecute.flush()) {
++			setShowError(true);
++			return;
++		}
+ 		const operators = validator.operators;
+ 		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
+ 		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
+@@ -3125,10 +3182,7 @@ function DataValidationDetailInner(props) {
+ 	const options = (0, _univerjs_data_validation.getRuleOptions)(localRule);
+ 	const handleUpdateRuleOptions = (newOptions) => {
+ 		if ((0, _univerjs_core.shallowEqual)(newOptions, (0, _univerjs_data_validation.getRuleOptions)(localRule))) return;
+-		setLocalRule({
+-			...localRule,
+-			...newOptions
+-		});
++		setLocalRule((current) => ({ ...current, ...newOptions }));
+ 		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationOptionsCommand.id, {
+ 			unitId,
+ 			subUnitId,
+@@ -3159,7 +3213,7 @@ function DataValidationDetailInner(props) {
+ 						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
+ 					},
+ 					onVerify: (isValid) => setIsRangeError(!isValid)
+-				})
++				}, rangeKey)
+ 			}),
+ 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
+ 				label: localeService.t("sheets-data-validation-ui.panel.type"),
+@@ -3186,10 +3240,7 @@ function DataValidationDetailInner(props) {
+ 						label: operatorNames[i]
+ 					}))],
+ 					onChange: (operator) => {
+-						handleUpdateRuleSetting({
+-							...baseRule,
+-							operator
+-						});
++						handleUpdateRuleSetting({ operator });
+ 					}
+ 				})
+ 			}) : null,
+@@ -3199,12 +3250,7 @@ function DataValidationDetailInner(props) {
+ 					formula1: localRule.formula1,
+ 					formula2: localRule.formula2
+ 				},
+-				onChange: (value) => {
+-					handleUpdateRuleSetting({
+-						...baseRule,
+-						...value
+-					});
+-				},
++				onChange: handleUpdateRuleSetting,
+ 				showError,
+ 				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
+ 				unitId,
+@@ -3214,7 +3260,6 @@ function DataValidationDetailInner(props) {
+ 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, { children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Checkbox, {
+ 				checked: localRule.allowBlank ?? true,
+ 				onChange: () => handleUpdateRuleSetting({
+-					...baseRule,
+ 					allowBlank: !(localRule.allowBlank ?? true)
+ 				}),
+ 				children: localeService.t("sheets-data-validation-ui.panel.allowBlank")
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b6601cf083e 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1,5 +1,5 @@
+ import { ComponentManager, IDialogService, IMenuManagerService, ISidebarService, IconManager, KeyCode, MenuItemType, RibbonDataGroup, RibbonInsertGroup, UniverMobileUIPlugin, getMenuHiddenObservable, useDependency, useEvent, useObservable, useSidebarClick } from "@univerjs/ui";
+-import { CellValueType, ColorKit, CommandType, DEFAULT_STYLES, DataValidationErrorStyle, DataValidationRenderMode, DataValidationStatus, DataValidationType, DateSystem, DependentOn, Disposable, DisposableCollection, HorizontalAlign, ICommandService, IConfigService, IUniverInstanceService, Inject, Injector, InterceptorEffectEnum, LocaleService, Optional, Plugin, Rectangle, RedoCommand, RxDisposable, ThemeService, UndoCommand, UniverInstanceType, VerticalAlign, WrapStrategy, bufferDebounceTime, dateKit, debounce, excelDateTimePartsToSerial, excelSerialToDateTimeParts, generateRandomId, getIntersectRange, isFormulaString, isUnitRangesEqual, merge, numfmt, sequenceExecute, shallowEqual, toDisposable } from "@univerjs/core";
++import { CellValueType, ColorKit, CommandType, DEFAULT_STYLES, DataValidationErrorStyle, DataValidationRenderMode, DataValidationStatus, DataValidationType, DateSystem, DependentOn, Disposable, DisposableCollection, HorizontalAlign, ICommandService, IConfigService, IUniverInstanceService, Inject, Injector, InterceptorEffectEnum, LocaleService, Optional, Plugin, Rectangle, RedoCommand, RxDisposable, ThemeService, UndoCommand, UniverInstanceType, VerticalAlign, WrapStrategy, bufferDebounceTime, dateKit, debounce, excelDateTimePartsToSerial, excelSerialToDateTimeParts, generateRandomId, getIntersectRange, isFormulaString, isUnitRangesEqual, isValidRange, merge, numfmt, sequenceExecute, shallowEqual, toDisposable } from "@univerjs/core";
+ import { AUTO_FILL_APPLY_TYPE, AutoFillTools, IAutoFillService, INTERCEPTOR_POINT, InterceptCellContentPriority, RangeProtectionPermissionEditPoint, SetRangeValuesCommand, SetWorksheetActiveOperation, SheetInterceptorService, SheetPermissionCheckController, SheetsSelectionsService, UniverSheetsPlugin, VALIDATE_CELL, WorkbookEditablePermission, WorksheetEditPermission, WorksheetSetCellStylePermission, checkRangesEditablePermission, deserializeListOptions, getSheetCommandTarget, rangeToDiscreteRange, serializeListOptions } from "@univerjs/sheets";
+ import { AddSheetDataValidationCommand, BASE_FORMULA_INPUT_NAME, CHECKBOX_FORMULA_1, CHECKBOX_FORMULA_2, CHECKBOX_FORMULA_INPUT_NAME, CUSTOM_FORMULA_INPUT_NAME, ClearRangeDataValidationCommand, DATA_VALIDATION_PLUGIN_NAME, DataValidationCacheService, DataValidationFormulaController, DataValidationFormulaService, LIST_FORMULA_INPUT_NAME, RemoveSheetAllDataValidationCommand, RemoveSheetDataValidationCommand, SheetDataValidationModel, SheetsDataValidationValidatorService, UniverSheetsDataValidationPlugin, UpdateSheetDataValidationOptionsCommand, UpdateSheetDataValidationRangeCommand, UpdateSheetDataValidationSettingCommand, createDefaultNewRule, getCellValueOrigin, getDataValidationCellValue, getDataValidationDiffMutations, getFormulaResult, isLegalFormulaResult, transformCheckboxValue } from "@univerjs/sheets-data-validation";
+ import { DataValidationModel, DataValidatorDropdownType, DataValidatorRegistryScope, DataValidatorRegistryService, TWO_FORMULA_OPERATOR_COUNT, UniverDataValidationPlugin, getRuleOptions, getRuleSetting } from "@univerjs/data-validation";
+@@ -2928,10 +2928,43 @@ function DataValidationOptions(props) {
+ 
+ //#endregion
+ //#region src/views/components/DataValidationDetail.tsx
+-const debounceExecuteFactory = (commandService) => debounce(async (id, params, options, callback) => {
+-	const res = await commandService.executeCommand(id, params, options);
+-	callback === null || callback === void 0 || callback(res);
+-}, 1e3);
++const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed) => {
++	const pending = [];
++	const flush = () => {
++		timer.cancel();
++		const hadPending = pending.length > 0;
++		while (pending.length) {
++			if (!isCurrent()) {
++				pending.length = 0;
++				return false;
++			}
++			const task = pending[0];
++			const [id, params, options, callback] = task;
++			const result = commandService.syncExecuteCommand(id, resolveParams(id, params), options);
++			if (!result) return false;
++			if (pending[0] === task) pending.shift();
++			callback === null || callback === void 0 || callback(result);
++		}
++		if (hadPending) onFlushed();
++		return true;
++	};
++	const timer = debounce(flush, 1e3);
++	const execute = (id, params, options, callback) => {
++		const previous = pending[pending.length - 1];
++		if (previous?.[0] === id) {
++			pending.pop();
++			if (id === UpdateSheetDataValidationSettingCommand.id) params = { ...params, setting: { ...previous[1].setting, ...params.setting } };
++		}
++		pending.push([id, params, options, callback]);
++		timer();
++	};
++	execute.flush = flush;
++	execute.cancel = () => {
++		timer.cancel();
++		pending.length = 0;
++	};
++	return execute;
++};
+ function getSheetIdByName(univerInstanceService, unitId, name) {
+ 	var _univerInstanceServic2;
+ 	if (unitId) {
+@@ -2953,6 +2986,7 @@ function DataValidationDetail() {
+ function DataValidationDetailInner(props) {
+ 	var _validators$sort;
+ 	const [key, setKey] = useState(0);
++	const [rangeKey, setRangeKey] = useState(0);
+ 	const dataValidationPanelService = useDependency(DataValidationPanelService);
+ 	const { unitId, subUnitId, rule } = props.activeRuleInfo;
+ 	const ruleId = rule.uid;
+@@ -2973,7 +3007,57 @@ function DataValidationDetailInner(props) {
+ 		sheetId: "",
+ 		range: i
+ 	})));
+-	const debounceExecute = useMemo(() => debounceExecuteFactory(commandService), [commandService]);
++	const syncRule = useEvent((resetRange = false) => {
++		const activeRule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
++		if (!activeRule) return;
++		const nextRule = !resetRange && activeRule.type !== localRule.type ? { ...activeRule, ...getRuleSetting(localRule) } : activeRule;
++		if (resetRange || nextRule.formula1 !== localRule.formula1 || nextRule.formula2 !== localRule.formula2) setKey((k) => k + 1);
++		setLocalRule(nextRule);
++		setLocalRanges(activeRule.ranges.map((range) => ({ unitId: "", sheetId: "", range })));
++		if (resetRange) {
++			setRangeKey((k) => k + 1);
++			setIsRangeError(false);
++			setIsFocusRangeSelector(false);
++			setShowError(false);
++		}
++	});
++	const debounceExecute = useMemo(() => {
++		const owner = univerInstanceService.getUnit(unitId);
++		const sheet = owner === null || owner === void 0 ? void 0 : owner.getSheetBySheetId(subUnitId);
++		return debounceExecuteFactory(commandService, () => !!owner && !!sheet && univerInstanceService.getUnit(unitId) === owner && owner.getSheetBySheetId(subUnitId) === sheet && !!dataValidationModel.getRuleById(unitId, subUnitId, ruleId), (id, params) => {
++			if (id !== UpdateSheetDataValidationSettingCommand.id) return params;
++			const { draftSetting, ...commandParams } = params;
++			const currentSetting = getRuleSetting(dataValidationModel.getRuleById(unitId, subUnitId, ruleId));
++			return {
++				...commandParams,
++				setting: { ...(currentSetting.type === draftSetting.type ? currentSetting : draftSetting), ...params.setting }
++			};
++		}, () => syncRule());
++	}, [commandService, univerInstanceService, dataValidationModel, unitId, subUnitId, ruleId, syncRule]);
++	useEffect(() => {
++		const closed = dataValidationPanelService.open$.subscribe((isOpen) => {
++			if (!isOpen) debounceExecute.flush();
++		});
++		const before = commandService.beforeCommandExecuted((info) => {
++			if ((info.id === UndoCommand.id || info.id === RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) debounceExecute.cancel();
++		});
++		const removed = dataValidationModel.ruleChange$.subscribe((change) => {
++			if (change.type === "remove" && change.unitId === unitId && change.subUnitId === subUnitId && change.rule.uid === ruleId) {
++				debounceExecute.cancel();
++				dataValidationPanelService.setActiveRule(null);
++			}
++		});
++		return () => {
++			closed.unsubscribe();
++			before.dispose();
++			removed.unsubscribe();
++			try {
++				debounceExecute.flush();
++			} finally {
++				debounceExecute.cancel();
++			}
++		};
++	}, [commandService, univerInstanceService, dataValidationModel, dataValidationPanelService, debounceExecute, unitId, subUnitId, ruleId]);
+ 	const [isRangeError, setIsRangeError] = useState(false);
+ 	const [isFocusRangeSelector, setIsFocusRangeSelector] = useState(false);
+ 	const rangeSelectorInstance = useRef(null);
+@@ -2985,35 +3069,11 @@ function DataValidationDetailInner(props) {
+ 		};
+ 	}, [sheetSelectionService]);
+ 	useEffect(() => {
+-		let timer;
+ 		const disposable = commandService.onCommandExecuted((commandInfo) => {
+-			if (commandInfo.id === UndoCommand.id || commandInfo.id === RedoCommand.id) {
+-				if (timer !== void 0) clearTimeout(timer);
+-				timer = setTimeout(() => {
+-					const activeRule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
+-					setKey((k) => k + 1);
+-					if (activeRule) {
+-						setLocalRule(activeRule);
+-						setLocalRanges(activeRule.ranges.map((i) => ({
+-							unitId: "",
+-							sheetId: "",
+-							range: i
+-						})));
+-					}
+-				}, 20);
+-			}
++			if ((commandInfo.id === UndoCommand.id || commandInfo.id === RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) syncRule(true);
+ 		});
+-		return () => {
+-			disposable.dispose();
+-			if (timer !== void 0) clearTimeout(timer);
+-		};
+-	}, [
+-		commandService,
+-		dataValidationModel,
+-		ruleId,
+-		subUnitId,
+-		unitId
+-	]);
++		return () => disposable.dispose();
++	}, [commandService, univerInstanceService, unitId, syncRule]);
+ 	const handleUpdateRuleRanges = useEvent((rangeText) => {
+ 		const unitRanges = rangeText.split(",").filter(Boolean).map(deserializeRangeWithSheet).map((unitRange) => {
+ 			const sheetName = unitRange.sheetName;
+@@ -3029,14 +3089,14 @@ function DataValidationDetailInner(props) {
+ 				sheetId: ""
+ 			};
+ 		});
+-		if (isUnitRangesEqual(unitRanges, localRanges)) return;
+-		setLocalRanges(unitRanges);
+ 		const ranges = unitRanges.filter((i) => (!i.unitId || i.unitId === unitId) && (!i.sheetId || i.sheetId === subUnitId)).map((i) => i.range);
+-		setLocalRule({
+-			...localRule,
+-			ranges
+-		});
+-		if (ranges.length === 0) return;
++		const targetSheet = univerInstanceService.getUnit(unitId)?.getSheetBySheetId(subUnitId);
++		const valid = !!targetSheet && ranges.length > 0 && ranges.every((range) => isValidRange(range, targetSheet));
++		setIsRangeError(!valid);
++		if (!valid) return false;
++		if (isUnitRangesEqual(unitRanges, localRanges)) return true;
++		setLocalRanges(unitRanges);
++		setLocalRule((current) => ({ ...current, ranges }));
+ 		const params = {
+ 			unitId,
+ 			subUnitId,
+@@ -3044,8 +3104,9 @@ function DataValidationDetailInner(props) {
+ 			ranges
+ 		};
+ 		debounceExecute(UpdateSheetDataValidationRangeCommand.id, params);
++		return true;
+ 	});
+-	const rangeStr = useMemo(() => localRanges.map((i) => serializeRange(i.range)).join(","), []);
++	const rangeStr = useMemo(() => localRanges.map((i) => serializeRange(i.range)).join(","), [localRanges]);
+ 	if (!validator) return null;
+ 	const operators = validator.operators;
+ 	const operatorNames = validator.operatorNames;
+@@ -3057,31 +3118,30 @@ function DataValidationDetailInner(props) {
+ 		});
+ 	};
+ 	const handleOk = () => {
+-		var _rangeSelectorInstanc;
+-		if ((_rangeSelectorInstanc = rangeSelectorInstance.current) === null || _rangeSelectorInstanc === void 0 || (_rangeSelectorInstanc = _rangeSelectorInstanc.editor) === null || _rangeSelectorInstanc === void 0 ? void 0 : _rangeSelectorInstanc.isFocus()) {
+-			var _rangeSelectorInstanc2;
+-			handleUpdateRuleRanges((_rangeSelectorInstanc2 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc2 === void 0 ? void 0 : _rangeSelectorInstanc2.getValue());
+-		}
+-		if (!localRule.ranges.length || isRangeError) return;
+-		if (validator.validatorFormula(localRule, unitId, subUnitId).success) dataValidationPanelService.setActiveRule(null);
++		const selector = rangeSelectorInstance.current;
++		if (selector && !handleUpdateRuleRanges(selector.getValue())) return;
++		if (validator.validatorFormula(localRule, unitId, subUnitId).success && debounceExecute.flush()) dataValidationPanelService.setActiveRule(null);
+ 		else setShowError(true);
+ 		goBackActiveRuleSheet();
+ 	};
+ 	const handleUpdateRuleSetting = (setting) => {
+-		if (shallowEqual(setting, getRuleSetting(localRule))) return;
+-		setLocalRule({
+-			...localRule,
+-			...setting
+-		});
++		const changed = Object.fromEntries(Object.entries(setting).filter(([field, value]) => value !== localRule[field]));
++		if (!Object.keys(changed).length) return;
++		setLocalRule((current) => ({ ...current, ...changed }));
+ 		const params = {
+ 			unitId,
+ 			subUnitId,
+ 			ruleId,
+-			setting
++			draftSetting: getRuleSetting(localRule),
++			setting: changed
+ 		};
+ 		debounceExecute(UpdateSheetDataValidationSettingCommand.id, params, void 0);
+ 	};
+ 	const handleDelete = async () => {
++		if (!debounceExecute.flush()) {
++			setShowError(true);
++			return;
++		}
+ 		await commandService.executeCommand(RemoveSheetDataValidationCommand.id, {
+ 			ruleId,
+ 			unitId,
+@@ -3090,16 +3150,13 @@ function DataValidationDetailInner(props) {
+ 		dataValidationPanelService.setActiveRule(null);
+ 		goBackActiveRuleSheet();
+ 	};
+-	const baseRule = {
+-		type: localRule.type,
+-		operator: localRule.operator,
+-		formula1: localRule.formula1,
+-		formula2: localRule.formula2,
+-		allowBlank: localRule.allowBlank
+-	};
+ 	const handleChangeType = (newType) => {
+ 		const validator = validatorService.getValidatorItem(newType);
+ 		if (!validator) return;
++		if (!debounceExecute.flush()) {
++			setShowError(true);
++			return;
++		}
+ 		const operators = validator.operators;
+ 		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
+ 		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
+@@ -3124,10 +3181,7 @@ function DataValidationDetailInner(props) {
+ 	const options = getRuleOptions(localRule);
+ 	const handleUpdateRuleOptions = (newOptions) => {
+ 		if (shallowEqual(newOptions, getRuleOptions(localRule))) return;
+-		setLocalRule({
+-			...localRule,
+-			...newOptions
+-		});
++		setLocalRule((current) => ({ ...current, ...newOptions }));
+ 		debounceExecute(UpdateSheetDataValidationOptionsCommand.id, {
+ 			unitId,
+ 			subUnitId,
+@@ -3158,7 +3212,7 @@ function DataValidationDetailInner(props) {
+ 						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
+ 					},
+ 					onVerify: (isValid) => setIsRangeError(!isValid)
+-				})
++				}, rangeKey)
+ 			}),
+ 			/* @__PURE__ */ jsx(FormLayout, {
+ 				label: localeService.t("sheets-data-validation-ui.panel.type"),
+@@ -3185,10 +3239,7 @@ function DataValidationDetailInner(props) {
+ 						label: operatorNames[i]
+ 					}))],
+ 					onChange: (operator) => {
+-						handleUpdateRuleSetting({
+-							...baseRule,
+-							operator
+-						});
++						handleUpdateRuleSetting({ operator });
+ 					}
+ 				})
+ 			}) : null,
+@@ -3198,12 +3249,7 @@ function DataValidationDetailInner(props) {
+ 					formula1: localRule.formula1,
+ 					formula2: localRule.formula2
+ 				},
+-				onChange: (value) => {
+-					handleUpdateRuleSetting({
+-						...baseRule,
+-						...value
+-					});
+-				},
++				onChange: handleUpdateRuleSetting,
+ 				showError,
+ 				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
+ 				unitId,
+@@ -3213,7 +3259,6 @@ function DataValidationDetailInner(props) {
+ 			/* @__PURE__ */ jsx(FormLayout, { children: /* @__PURE__ */ jsx(Checkbox, {
+ 				checked: localRule.allowBlank ?? true,
+ 				onChange: () => handleUpdateRuleSetting({
+-					...baseRule,
+ 					allowBlank: !(localRule.allowBlank ?? true)
+ 				}),
+ 				children: localeService.t("sheets-data-validation-ui.panel.allowBlank")

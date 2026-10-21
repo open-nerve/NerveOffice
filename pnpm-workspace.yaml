@@ -31,12 +31,18 @@ patchedDependencies:
   '@univerjs/engine-formula@1.0.1': patches/@univerjs__engine-formula@1.0.1.patch
   # ADR-022、UR-006：坏图/未完成元素不进入 drawImage，换源不污染其他图元共用元素。
   '@univerjs/engine-render@1.0.1': patches/@univerjs__engine-render@1.0.1.patch
-  # ADR-010、DEF-056：数据验证绑定原实例及单格计算，脏区/退役取消旧任务，保留真实错误与失败重试。
+  # ADR-010、UR-038：公式条件确认依据当前文本，修正后不被旧错误状态拦截。
+  '@univerjs/sheets-conditional-formatting-ui@1.0.1': patches/@univerjs__sheets-conditional-formatting-ui@1.0.1.patch
+  # ADR-010、UR-033：数据验证面板按输入顺序积累字段增量，同步历史正文与公式平移，保留提交和退役边界。
+  '@univerjs/sheets-data-validation-ui@1.0.1': patches/@univerjs__sheets-data-validation-ui@1.0.1.patch
+  # ADR-010、DEF-056：真实输入/退役取消旧任务；公式结果更新代次，共享等待最终结论及真实错误。
   '@univerjs/sheets-data-validation@1.0.1': patches/@univerjs__sheets-data-validation@1.0.1.patch
   # ADR-022、UR-031：插入量尺寸走实例 IO，切表/销毁后取消；Ready 只静默正常退役。
   '@univerjs/sheets-drawing-ui@1.0.1': patches/@univerjs__sheets-drawing-ui@1.0.1.patch
   # ADR-022、UR-009：Position 自动行高重算起止锚点，保持尺寸和原属性的缺省状态。
   '@univerjs/sheets-drawing@1.0.1': patches/@univerjs__sheets-drawing@1.0.1.patch
+  # ADR-010、UR-036：范围高亮配对使用当前文本和解析结果，避免快速输入被旧语法树覆盖。
+  '@univerjs/sheets-formula-ui@1.0.1': patches/@univerjs__sheets-formula-ui@1.0.1.patch
   # ADR-022：IMAGE 量尺寸、取消与恢复走实例 IO，采用真实原件几何并拒绝过时批次写回。
   '@univerjs/sheets-formula@1.0.1': patches/@univerjs__sheets-formula@1.0.1.patch
   # ADR-010、M5-P3：表单、粘贴与导航可配置同一地址规范化，保留 SDK 默认协议检查。

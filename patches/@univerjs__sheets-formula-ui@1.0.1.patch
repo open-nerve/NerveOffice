@@ -1,0 +1,74 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index 69aa9bcce1837e0f5eed7c1cd7ef8990b02d29ff..8c916a87f0321dbc7b830a5f201bb124224b9b20 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -1860,10 +1860,11 @@ function resolveFormulaEmbedInteractionOwnerId(target) {
+ //#region src/views/formula-editor/hooks/use-focus.ts
+ function focusFormulaEditor(editorService, editor, offset) {
+ 	if (!editor) return;
++	// A focus switch can emit the previous render selection before the new caret is painted.
++	const selections = [...editor.getSelectionRanges()];
+ 	editorService.focus(editor.getEditorId());
+ 	focusFormulaEditorElement(editor);
+ 	if (editor.docSelectionRenderService.isOnPointerEvent) return;
+-	const selections = [...editor.getSelectionRanges()];
+ 	if (_univerjs_core.Tools.isDefine(offset)) editor.setSelectionRanges([{
+ 		startOffset: offset,
+ 		endOffset: offset
+@@ -4979,7 +4980,10 @@ function useRangesHighlight(editor, focusing, unitId, subUnitId) {
+ 			});
+ 			return;
+ 		}
+-		const selections = highlightDoc(editor, sequenceNodes, false);
++		// Effects can still hold the previous parse while the editor already contains a new input.
++		const text = editor.getDocumentDataModel().getPlainText();
++		const nodes = lexerTreeBuilder.sequenceNodesBuilder(text) ?? [];
++		const selections = highlightDoc(editor, nodes, false, void 0, text);
+ 		const disposable = new _univerjs_core.DisposableCollection();
+ 		selections.forEach((selection) => {
+ 			const range = (0, _univerjs_engine_formula.deserializeRangeWithSheet)(selection.token);
+@@ -5005,6 +5009,7 @@ function useRangesHighlight(editor, focusing, unitId, subUnitId) {
+ 		editor,
+ 		focusing,
+ 		highlightDoc,
++		lexerTreeBuilder,
+ 		markSelectionService,
+ 		sequenceNodes
+ 	]);
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 641009a41467a9269fb4805228a31f9697269770..939abcef1a4af44386ce393848dbfa3de8ae1b9c 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -1859,10 +1859,11 @@ function resolveFormulaEmbedInteractionOwnerId(target) {
+ //#region src/views/formula-editor/hooks/use-focus.ts
+ function focusFormulaEditor(editorService, editor, offset) {
+ 	if (!editor) return;
++	// A focus switch can emit the previous render selection before the new caret is painted.
++	const selections = [...editor.getSelectionRanges()];
+ 	editorService.focus(editor.getEditorId());
+ 	focusFormulaEditorElement(editor);
+ 	if (editor.docSelectionRenderService.isOnPointerEvent) return;
+-	const selections = [...editor.getSelectionRanges()];
+ 	if (Tools.isDefine(offset)) editor.setSelectionRanges([{
+ 		startOffset: offset,
+ 		endOffset: offset
+@@ -4978,7 +4979,10 @@ function useRangesHighlight(editor, focusing, unitId, subUnitId) {
+ 			});
+ 			return;
+ 		}
+-		const selections = highlightDoc(editor, sequenceNodes, false);
++		// Effects can still hold the previous parse while the editor already contains a new input.
++		const text = editor.getDocumentDataModel().getPlainText();
++		const nodes = lexerTreeBuilder.sequenceNodesBuilder(text) ?? [];
++		const selections = highlightDoc(editor, nodes, false, void 0, text);
+ 		const disposable = new DisposableCollection();
+ 		selections.forEach((selection) => {
+ 			const range = deserializeRangeWithSheet(selection.token);
+@@ -5004,6 +5008,7 @@ function useRangesHighlight(editor, focusing, unitId, subUnitId) {
+ 		editor,
+ 		focusing,
+ 		highlightDoc,
++		lexerTreeBuilder,
+ 		markSelectionService,
+ 		sequenceNodes
+ 	]);

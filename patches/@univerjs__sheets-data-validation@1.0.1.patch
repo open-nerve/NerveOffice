@@ -1,8 +1,45 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a510776ff 100644
+index 49dca973f4124c9e3c38ed648c34aa1184a018a2..50fd65ce9d5ab3d88b90fee95e04ada1d135e174 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
-@@ -824,6 +824,15 @@ var RuleMatrix = class RuleMatrix {
+@@ -168,7 +168,7 @@ let DataValidationCacheService = class DataValidationCacheService extends _unive
+ 		if (!worksheet) return [];
+ 		return getRangesInWorksheet(ranges, worksheet);
+ 	}
+-	markRangeDirty(unitId, subUnitId, ranges, isSetRange) {
++	markRangeDirty(unitId, subUnitId, ranges, isSetRange, isFormulaResult) {
+ 		const cache = this._ensureCache(unitId, subUnitId);
+ 		this._getEffectiveRanges(unitId, subUnitId, ranges).forEach((range) => {
+ 			_univerjs_core.Range.foreach(range, (row, col) => {
+@@ -179,7 +179,8 @@ let DataValidationCacheService = class DataValidationCacheService extends _unive
+ 			unitId,
+ 			subUnitId,
+ 			ranges,
+-			isSetRange
++			isSetRange,
++			isFormulaResult
+ 		});
+ 	}
+ 	_deleteRange(unitId, subUnitId, ranges) {
+@@ -258,7 +259,7 @@ let DataValidationCustomFormulaService = class DataValidationCustomFormulaServic
+ 						var _result$extra, _result$extra2;
+ 						const ruleInfo = ruleFormulaMap.get((_result$extra = result.extra) === null || _result$extra === void 0 ? void 0 : _result$extra.ruleId);
+ 						const rule = this._dataValidationModel.getRuleById(unitId, subUnitId, (_result$extra2 = result.extra) === null || _result$extra2 === void 0 ? void 0 : _result$extra2.ruleId);
+-						if (rule && ruleInfo) this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges);
++						if (rule && ruleInfo) this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges, false, true);
+ 					});
+ 				}
+ 			}
+@@ -571,7 +572,7 @@ let DataValidationFormulaService = class DataValidationFormulaService extends _u
+ 							const rule = this._dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
+ 							if (rule) {
+ 								this._listCacheService.markRuleDirty(unitId, subUnitId, ruleId);
+-								this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges);
++								this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges, false, true);
+ 							}
+ 						}
+ 					});
+@@ -824,6 +825,15 @@ var RuleMatrix = class RuleMatrix {
  
  //#endregion
  //#region src/models/sheet-data-validation-model.ts
@@ -18,23 +55,27 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_core.Disposable {
  	constructor(_dataValidationModel, _univerInstanceService, _dataValidatorRegistryService, _dataValidationCacheService, _dataValidationFormulaService, _dataValidationCustomFormulaService, _commandService) {
  		super();
-@@ -839,6 +848,15 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
+@@ -839,6 +849,19 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
  		_defineProperty(this, "_ruleChange$", new rxjs.Subject());
  		_defineProperty(this, "ruleChange$", this._ruleChange$.asObservable());
  		_defineProperty(this, "validStatusChange$", this._validStatusChange$.asObservable());
 +		_defineProperty(this, "_pendingValidations", /* @__PURE__ */ new Set());
 +		_defineProperty(this, "_pendingCells", /* @__PURE__ */ new WeakMap());
-+		this.disposeWithMe(this._dataValidationCacheService.dirtyRanges$.subscribe(({ unitId, subUnitId, ranges }) => {
++		this.disposeWithMe(this._dataValidationCacheService.dirtyRanges$.subscribe(({ unitId, subUnitId, ranges, isFormulaResult }) => {
 +			const worksheet = this._univerInstanceService.getUnit(unitId, _univerjs_core.UniverInstanceType.UNIVER_SHEET)?.getSheetBySheetId(subUnitId);
 +			const cells = worksheet && this._pendingCells.get(worksheet);
 +			if (!cells) return;
-+			for (const range of getRangesInWorksheet(ranges, worksheet)) _univerjs_core.Range.foreach(range, (row, col) => cells.getValue(row, col)?.cancel());
++			for (const range of getRangesInWorksheet(ranges, worksheet)) _univerjs_core.Range.foreach(range, (row, col) => {
++				const task = cells.getValue(row, col);
++				if (isFormulaResult) task?.refresh();
++				else task?.cancel();
++			});
 +		}));
 +		this.disposeWithMe(() => this._cancelPendingValidations(() => true));
  		this._initRuleUpdateListener();
  		this.disposeWithMe(() => {
  			this._ruleChange$.complete();
-@@ -848,11 +866,13 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
+@@ -848,11 +871,13 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
  	}
  	_initUniverInstanceListener() {
  		this.disposeWithMe(this._univerInstanceService.unitDisposed$.subscribe((unit) => {
@@ -48,7 +89,7 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  				const subUnitMap = this._ruleMatrixMap.get(unitId);
  				if (subUnitMap) subUnitMap.delete(subUnitId);
  			}
-@@ -938,11 +958,23 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
+@@ -938,11 +963,23 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
  		if (!ruleId) return;
  		return this._dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  	}
@@ -74,7 +115,16 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  				unitId,
  				subUnitId,
  				ruleId: rule.uid,
-@@ -960,23 +992,54 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
+@@ -956,27 +993,88 @@ let SheetDataValidationModel = class SheetDataValidationModel extends _univerjs_
+ 		const cellRaw = worksheet.getCellRaw(row, col);
+ 		const cellValue = getCellValueOrigin(cellRaw);
+ 		if (validator) {
++			const pending = this._pendingCells.get(worksheet)?.getValue(row, col);
++			if (pending) {
++				pending.join(_onCompete, _onError);
++				return _univerjs_core.DataValidationStatus.VALIDATING;
++			}
+ 			const cache = this._dataValidationCacheService.ensureCache(unitId, subUnitId);
  			const current = cache.getValue(row, col);
  			if (current === null || current === void 0) {
  				cache.setValue(row, col, _univerjs_core.DataValidationStatus.VALIDATING);
@@ -85,22 +135,14 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
 -					row,
 -					column: col,
 -					worksheet: pos.worksheet,
--					workbook: pos.workbook,
--					interceptValue: getCellValueOrigin(cell),
--					t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
--				}, rule).then((status) => {
--					const realStatus = status ? _univerjs_core.DataValidationStatus.VALID : _univerjs_core.DataValidationStatus.INVALID;
--					const now = cache.getValue(row, col);
--					if (realStatus === _univerjs_core.DataValidationStatus.VALID) cache.realDeleteValue(row, col);
--					else cache.setValue(row, col, realStatus);
--					onCompete(realStatus, current !== now);
--				});
 +				let cells = this._pendingCells.get(worksheet);
 +				if (!cells) {
 +					cells = new _univerjs_core.ObjectMatrix();
 +					this._pendingCells.set(worksheet, cells);
 +				}
 +				let settled = false;
++				let revision = 0;
++				const waiters = [];
 +				const finish = () => {
 +					settled = true;
 +					this._pendingValidations.delete(task);
@@ -114,39 +156,71 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
 +					const ownsCell = cells.getValue(row, col) === task;
 +					finish();
 +					if (!(error instanceof DataValidationCancelledError) && ownsCell && isCurrent()) cache.realDeleteValue(row, col);
++					const joined = waiters.splice(0);
 +					reportError(error);
++					for (const waiter of joined) {
++						if (waiter.error) waiter.error(error);
++						else if (!(error instanceof DataValidationCancelledError)) console.error(error);
++					}
 +				};
-+				const task = { workbook: pos.workbook, worksheet, cancel: () => fail(new DataValidationCancelledError()) };
++				const task = {
+ 					workbook: pos.workbook,
+-					interceptValue: getCellValueOrigin(cell),
+-					t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
+-				}, rule).then((status) => {
+-					const realStatus = status ? _univerjs_core.DataValidationStatus.VALID : _univerjs_core.DataValidationStatus.INVALID;
+-					const now = cache.getValue(row, col);
+-					if (realStatus === _univerjs_core.DataValidationStatus.VALID) cache.realDeleteValue(row, col);
+-					else cache.setValue(row, col, realStatus);
+-					onCompete(realStatus, current !== now);
+-				});
++					worksheet,
++					cancel: () => fail(new DataValidationCancelledError()),
++					refresh: () => {
++						revision++;
++						cache.setValue(row, col, _univerjs_core.DataValidationStatus.VALIDATING);
++					},
++					join: (complete, error) => {
++						if (complete || error) waiters.push({ complete, error });
++					}
++				};
 +				cells.setValue(row, col, task);
 +				this._pendingValidations.add(task);
-+				try {
-+					Promise.resolve(validator.validator({
-+						value: cellValue,
-+						unitId,
-+						subUnitId,
-+						row,
-+						column: col,
-+						worksheet: pos.worksheet,
-+						workbook: pos.workbook,
-+						interceptValue: getCellValueOrigin(cell),
-+						t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
-+					}, rule)).then((status) => {
-+						if (settled) return;
-+						if (!isCurrent() || cells.getValue(row, col) !== task) return task.cancel();
-+						finish();
-+						const realStatus = status ? _univerjs_core.DataValidationStatus.VALID : _univerjs_core.DataValidationStatus.INVALID;
-+						const now = cache.getValue(row, col);
-+						if (realStatus === _univerjs_core.DataValidationStatus.VALID) cache.realDeleteValue(row, col);
-+						else cache.setValue(row, col, realStatus);
-+						onCompete(realStatus, current !== now);
-+					}, fail);
-+				} catch (error) {
-+					fail(error);
-+				}
++				const run = () => {
++					const calculatingRevision = revision;
++					try {
++						Promise.resolve(validator.validator({
++							value: cellValue,
++							unitId,
++							subUnitId,
++							row,
++							column: col,
++							worksheet: pos.worksheet,
++							workbook: pos.workbook,
++							interceptValue: getCellValueOrigin(cell),
++							t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
++						}, rule)).then((status) => {
++							if (settled) return;
++							if (!isCurrent() || cells.getValue(row, col) !== task) return task.cancel();
++							if (calculatingRevision !== revision) return run();
++							finish();
++							const realStatus = status ? _univerjs_core.DataValidationStatus.VALID : _univerjs_core.DataValidationStatus.INVALID;
++							const now = cache.getValue(row, col);
++							if (realStatus === _univerjs_core.DataValidationStatus.VALID) cache.realDeleteValue(row, col);
++							else cache.setValue(row, col, realStatus);
++							const joined = waiters.splice(0);
++							onCompete(realStatus, current !== now);
++							for (const waiter of joined) waiter.complete?.(realStatus, current !== now);
++						}, fail);
++					} catch (error) {
++						fail(error);
++					}
++				};
++				run();
  				return _univerjs_core.DataValidationStatus.VALIDATING;
  			}
  			onCompete(current ?? _univerjs_core.DataValidationStatus.VALID, false);
-@@ -3097,35 +3160,67 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3097,35 +3195,67 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		this._sheetDataValidationModel = _sheetDataValidationModel;
  		this._dataValidationCacheService = _dataValidationCacheService;
  		this._lifecycleService = _lifecycleService;
@@ -227,7 +301,7 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  		const unitId = workbook.getUnitId();
  		const subUnitId = worksheet.getSheetId();
  		if (!_univerjs_core.Tools.isDefine(row) || !_univerjs_core.Tools.isDefine(col)) throw new Error(`row or col is not defined, row: ${row}, col: ${col}`);
-@@ -3138,17 +3233,33 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3138,17 +3268,33 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		}
  		const rule = this._sheetDataValidationModel.getRuleByLocation(unitId, subUnitId, _row, _col);
  		if (!rule) return _univerjs_core.DataValidationStatus.VALID;
@@ -272,7 +346,7 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  		});
  	}
  	async validatorCell(unitId, subUnitId, row, col) {
-@@ -3164,6 +3275,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3164,6 +3310,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		if (!workbook) throw new Error(`cannot find current workbook, unitId: ${unitId}`);
  		const worksheet = workbook.getSheetBySheetId(subUnitId);
  		if (!worksheet) throw new Error(`cannot find current worksheet, sheetId: ${subUnitId}`);
@@ -280,7 +354,7 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  		const effectiveRanges = getRangesInWorksheet(ranges, worksheet);
  		const ruleRanges = getRangesInWorksheet(this._sheetDataValidationModel.getRules(unitId, subUnitId).flatMap((rule) => rule.ranges), worksheet);
  		const intersectRanges = [];
-@@ -3186,6 +3298,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3186,6 +3333,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  			}
  			return Promise.all(promises);
  		}));
@@ -288,7 +362,7 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  		/**
  		* If this range has merged cells, the validation status of merged cells should be the same as the main cell, so we need to update the status of merged cells here after all validations are done.
  		* Because during the validation process, merged cells are all marked as VALIDATING status in cache.
-@@ -3200,6 +3313,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3200,6 +3348,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		if (!workbook) throw new Error(`cannot find current workbook, unitId: ${unitId}`);
  		const worksheet = workbook.getSheetBySheetId(subUnitId);
  		if (!worksheet) throw new Error(`cannot find current worksheet, sheetId: ${subUnitId}`);
@@ -296,7 +370,7 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  		const ranges = getRangesInWorksheet(this._sheetDataValidationModel.getRules(unitId, subUnitId).flatMap((rule) => rule.ranges), worksheet);
  		await Promise.all(ranges.map((range) => {
  			const promises = [];
-@@ -3208,6 +3322,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3208,6 +3357,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  			});
  			return Promise.all(promises);
  		}));
@@ -305,7 +379,7 @@ index 49dca973f4124c9e3c38ed648c34aa1184a018a2..cf81f567ff74e71e624a96b9f5f1043a
  	}
  	async validatorWorkbook(unitId) {
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6dac1ef87 100644
+index 7960b9d5e032100e20390f6ba615c93c3685d2b6..063ee77c614210894ba556bcc5dfdd863498e835 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -2,7 +2,7 @@ import { CellValueType, CommandType, DataValidationOperator, DataValidationRende
@@ -317,7 +391,44 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  import { UnitAction } from "@univerjs/protocol";
  import { FormulaRefRangeService, UniverSheetsFormulaPlugin } from "@univerjs/sheets-formula";
  
-@@ -823,6 +823,15 @@ var RuleMatrix = class RuleMatrix {
+@@ -167,7 +167,7 @@ let DataValidationCacheService = class DataValidationCacheService extends Dispos
+ 		if (!worksheet) return [];
+ 		return getRangesInWorksheet(ranges, worksheet);
+ 	}
+-	markRangeDirty(unitId, subUnitId, ranges, isSetRange) {
++	markRangeDirty(unitId, subUnitId, ranges, isSetRange, isFormulaResult) {
+ 		const cache = this._ensureCache(unitId, subUnitId);
+ 		this._getEffectiveRanges(unitId, subUnitId, ranges).forEach((range) => {
+ 			Range.foreach(range, (row, col) => {
+@@ -178,7 +178,8 @@ let DataValidationCacheService = class DataValidationCacheService extends Dispos
+ 			unitId,
+ 			subUnitId,
+ 			ranges,
+-			isSetRange
++			isSetRange,
++			isFormulaResult
+ 		});
+ 	}
+ 	_deleteRange(unitId, subUnitId, ranges) {
+@@ -257,7 +258,7 @@ let DataValidationCustomFormulaService = class DataValidationCustomFormulaServic
+ 						var _result$extra, _result$extra2;
+ 						const ruleInfo = ruleFormulaMap.get((_result$extra = result.extra) === null || _result$extra === void 0 ? void 0 : _result$extra.ruleId);
+ 						const rule = this._dataValidationModel.getRuleById(unitId, subUnitId, (_result$extra2 = result.extra) === null || _result$extra2 === void 0 ? void 0 : _result$extra2.ruleId);
+-						if (rule && ruleInfo) this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges);
++						if (rule && ruleInfo) this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges, false, true);
+ 					});
+ 				}
+ 			}
+@@ -570,7 +571,7 @@ let DataValidationFormulaService = class DataValidationFormulaService extends Di
+ 							const rule = this._dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
+ 							if (rule) {
+ 								this._listCacheService.markRuleDirty(unitId, subUnitId, ruleId);
+-								this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges);
++								this._dataValidationCacheService.markRangeDirty(unitId, subUnitId, rule.ranges, false, true);
+ 							}
+ 						}
+ 					});
+@@ -823,6 +824,15 @@ var RuleMatrix = class RuleMatrix {
  
  //#endregion
  //#region src/models/sheet-data-validation-model.ts
@@ -333,23 +444,27 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  let SheetDataValidationModel = class SheetDataValidationModel extends Disposable {
  	constructor(_dataValidationModel, _univerInstanceService, _dataValidatorRegistryService, _dataValidationCacheService, _dataValidationFormulaService, _dataValidationCustomFormulaService, _commandService) {
  		super();
-@@ -838,6 +847,15 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
+@@ -838,6 +848,19 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
  		_defineProperty(this, "_ruleChange$", new Subject());
  		_defineProperty(this, "ruleChange$", this._ruleChange$.asObservable());
  		_defineProperty(this, "validStatusChange$", this._validStatusChange$.asObservable());
 +		_defineProperty(this, "_pendingValidations", /* @__PURE__ */ new Set());
 +		_defineProperty(this, "_pendingCells", /* @__PURE__ */ new WeakMap());
-+		this.disposeWithMe(this._dataValidationCacheService.dirtyRanges$.subscribe(({ unitId, subUnitId, ranges }) => {
++		this.disposeWithMe(this._dataValidationCacheService.dirtyRanges$.subscribe(({ unitId, subUnitId, ranges, isFormulaResult }) => {
 +			const worksheet = this._univerInstanceService.getUnit(unitId, UniverInstanceType.UNIVER_SHEET)?.getSheetBySheetId(subUnitId);
 +			const cells = worksheet && this._pendingCells.get(worksheet);
 +			if (!cells) return;
-+			for (const range of getRangesInWorksheet(ranges, worksheet)) Range.foreach(range, (row, col) => cells.getValue(row, col)?.cancel());
++			for (const range of getRangesInWorksheet(ranges, worksheet)) Range.foreach(range, (row, col) => {
++				const task = cells.getValue(row, col);
++				if (isFormulaResult) task?.refresh();
++				else task?.cancel();
++			});
 +		}));
 +		this.disposeWithMe(() => this._cancelPendingValidations(() => true));
  		this._initRuleUpdateListener();
  		this.disposeWithMe(() => {
  			this._ruleChange$.complete();
-@@ -847,11 +865,13 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
+@@ -847,11 +870,13 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
  	}
  	_initUniverInstanceListener() {
  		this.disposeWithMe(this._univerInstanceService.unitDisposed$.subscribe((unit) => {
@@ -363,7 +478,7 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  				const subUnitMap = this._ruleMatrixMap.get(unitId);
  				if (subUnitMap) subUnitMap.delete(subUnitId);
  			}
-@@ -937,11 +957,23 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
+@@ -937,11 +962,23 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
  		if (!ruleId) return;
  		return this._dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  	}
@@ -389,7 +504,16 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  				unitId,
  				subUnitId,
  				ruleId: rule.uid,
-@@ -959,23 +991,54 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
+@@ -955,27 +992,88 @@ let SheetDataValidationModel = class SheetDataValidationModel extends Disposable
+ 		const cellRaw = worksheet.getCellRaw(row, col);
+ 		const cellValue = getCellValueOrigin(cellRaw);
+ 		if (validator) {
++			const pending = this._pendingCells.get(worksheet)?.getValue(row, col);
++			if (pending) {
++				pending.join(_onCompete, _onError);
++				return DataValidationStatus.VALIDATING;
++			}
+ 			const cache = this._dataValidationCacheService.ensureCache(unitId, subUnitId);
  			const current = cache.getValue(row, col);
  			if (current === null || current === void 0) {
  				cache.setValue(row, col, DataValidationStatus.VALIDATING);
@@ -400,22 +524,14 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
 -					row,
 -					column: col,
 -					worksheet: pos.worksheet,
--					workbook: pos.workbook,
--					interceptValue: getCellValueOrigin(cell),
--					t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
--				}, rule).then((status) => {
--					const realStatus = status ? DataValidationStatus.VALID : DataValidationStatus.INVALID;
--					const now = cache.getValue(row, col);
--					if (realStatus === DataValidationStatus.VALID) cache.realDeleteValue(row, col);
--					else cache.setValue(row, col, realStatus);
--					onCompete(realStatus, current !== now);
--				});
 +				let cells = this._pendingCells.get(worksheet);
 +				if (!cells) {
 +					cells = new ObjectMatrix();
 +					this._pendingCells.set(worksheet, cells);
 +				}
 +				let settled = false;
++				let revision = 0;
++				const waiters = [];
 +				const finish = () => {
 +					settled = true;
 +					this._pendingValidations.delete(task);
@@ -429,39 +545,71 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
 +					const ownsCell = cells.getValue(row, col) === task;
 +					finish();
 +					if (!(error instanceof DataValidationCancelledError) && ownsCell && isCurrent()) cache.realDeleteValue(row, col);
++					const joined = waiters.splice(0);
 +					reportError(error);
++					for (const waiter of joined) {
++						if (waiter.error) waiter.error(error);
++						else if (!(error instanceof DataValidationCancelledError)) console.error(error);
++					}
 +				};
-+				const task = { workbook: pos.workbook, worksheet, cancel: () => fail(new DataValidationCancelledError()) };
++				const task = {
+ 					workbook: pos.workbook,
+-					interceptValue: getCellValueOrigin(cell),
+-					t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
+-				}, rule).then((status) => {
+-					const realStatus = status ? DataValidationStatus.VALID : DataValidationStatus.INVALID;
+-					const now = cache.getValue(row, col);
+-					if (realStatus === DataValidationStatus.VALID) cache.realDeleteValue(row, col);
+-					else cache.setValue(row, col, realStatus);
+-					onCompete(realStatus, current !== now);
+-				});
++					worksheet,
++					cancel: () => fail(new DataValidationCancelledError()),
++					refresh: () => {
++						revision++;
++						cache.setValue(row, col, DataValidationStatus.VALIDATING);
++					},
++					join: (complete, error) => {
++						if (complete || error) waiters.push({ complete, error });
++					}
++				};
 +				cells.setValue(row, col, task);
 +				this._pendingValidations.add(task);
-+				try {
-+					Promise.resolve(validator.validator({
-+						value: cellValue,
-+						unitId,
-+						subUnitId,
-+						row,
-+						column: col,
-+						worksheet: pos.worksheet,
-+						workbook: pos.workbook,
-+						interceptValue: getCellValueOrigin(cell),
-+						t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
-+					}, rule)).then((status) => {
-+						if (settled) return;
-+						if (!isCurrent() || cells.getValue(row, col) !== task) return task.cancel();
-+						finish();
-+						const realStatus = status ? DataValidationStatus.VALID : DataValidationStatus.INVALID;
-+						const now = cache.getValue(row, col);
-+						if (realStatus === DataValidationStatus.VALID) cache.realDeleteValue(row, col);
-+						else cache.setValue(row, col, realStatus);
-+						onCompete(realStatus, current !== now);
-+					}, fail);
-+				} catch (error) {
-+					fail(error);
-+				}
++				const run = () => {
++					const calculatingRevision = revision;
++					try {
++						Promise.resolve(validator.validator({
++							value: cellValue,
++							unitId,
++							subUnitId,
++							row,
++							column: col,
++							worksheet: pos.worksheet,
++							workbook: pos.workbook,
++							interceptValue: getCellValueOrigin(cell),
++							t: cellRaw === null || cellRaw === void 0 ? void 0 : cellRaw.t
++						}, rule)).then((status) => {
++							if (settled) return;
++							if (!isCurrent() || cells.getValue(row, col) !== task) return task.cancel();
++							if (calculatingRevision !== revision) return run();
++							finish();
++							const realStatus = status ? DataValidationStatus.VALID : DataValidationStatus.INVALID;
++							const now = cache.getValue(row, col);
++							if (realStatus === DataValidationStatus.VALID) cache.realDeleteValue(row, col);
++							else cache.setValue(row, col, realStatus);
++							const joined = waiters.splice(0);
++							onCompete(realStatus, current !== now);
++							for (const waiter of joined) waiter.complete?.(realStatus, current !== now);
++						}, fail);
++					} catch (error) {
++						fail(error);
++					}
++				};
++				run();
  				return DataValidationStatus.VALIDATING;
  			}
  			onCompete(current ?? DataValidationStatus.VALID, false);
-@@ -3096,35 +3159,67 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3096,35 +3194,67 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		this._sheetDataValidationModel = _sheetDataValidationModel;
  		this._dataValidationCacheService = _dataValidationCacheService;
  		this._lifecycleService = _lifecycleService;
@@ -542,7 +690,7 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  		const unitId = workbook.getUnitId();
  		const subUnitId = worksheet.getSheetId();
  		if (!Tools.isDefine(row) || !Tools.isDefine(col)) throw new Error(`row or col is not defined, row: ${row}, col: ${col}`);
-@@ -3137,17 +3232,33 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3137,17 +3267,33 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		}
  		const rule = this._sheetDataValidationModel.getRuleByLocation(unitId, subUnitId, _row, _col);
  		if (!rule) return DataValidationStatus.VALID;
@@ -587,7 +735,7 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  		});
  	}
  	async validatorCell(unitId, subUnitId, row, col) {
-@@ -3163,6 +3274,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3163,6 +3309,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		if (!workbook) throw new Error(`cannot find current workbook, unitId: ${unitId}`);
  		const worksheet = workbook.getSheetBySheetId(subUnitId);
  		if (!worksheet) throw new Error(`cannot find current worksheet, sheetId: ${subUnitId}`);
@@ -595,7 +743,7 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  		const effectiveRanges = getRangesInWorksheet(ranges, worksheet);
  		const ruleRanges = getRangesInWorksheet(this._sheetDataValidationModel.getRules(unitId, subUnitId).flatMap((rule) => rule.ranges), worksheet);
  		const intersectRanges = [];
-@@ -3185,6 +3297,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3185,6 +3332,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  			}
  			return Promise.all(promises);
  		}));
@@ -603,7 +751,7 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  		/**
  		* If this range has merged cells, the validation status of merged cells should be the same as the main cell, so we need to update the status of merged cells here after all validations are done.
  		* Because during the validation process, merged cells are all marked as VALIDATING status in cache.
-@@ -3199,6 +3312,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3199,6 +3347,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  		if (!workbook) throw new Error(`cannot find current workbook, unitId: ${unitId}`);
  		const worksheet = workbook.getSheetBySheetId(subUnitId);
  		if (!worksheet) throw new Error(`cannot find current worksheet, sheetId: ${subUnitId}`);
@@ -611,7 +759,7 @@ index 7960b9d5e032100e20390f6ba615c93c3685d2b6..e4cfd0fb11c18916079624f91ac535f6
  		const ranges = getRangesInWorksheet(this._sheetDataValidationModel.getRules(unitId, subUnitId).flatMap((rule) => rule.ranges), worksheet);
  		await Promise.all(ranges.map((range) => {
  			const promises = [];
-@@ -3207,6 +3321,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
+@@ -3207,6 +3356,7 @@ let SheetsDataValidationValidatorService = class SheetsDataValidationValidatorSe
  			});
  			return Promise.all(promises);
  		}));
@@ -642,6 +790,27 @@ index c211e90caf3901c0d2d931d7ebddd7d08d4be5ab..57b6695f66c44542688cbd7574cf2f7f
      getRuleObjectMatrix(unitId: string, subUnitId: string): RuleMatrix;
      getRuleById(unitId: string, subUnitId: string, ruleId: string): ISheetDataValidationRule | undefined;
      getRuleIndex(unitId: string, subUnitId: string, ruleId: string): number;
+diff --git a/lib/types/services/dv-cache.service.d.ts b/lib/types/services/dv-cache.service.d.ts
+index 1b80a17b9394d75b881589a26509691e2c8744ff..9fa8d0468c0a8fe96dd00e0bd5c1b42bf8e4b936 100644
+--- a/lib/types/services/dv-cache.service.d.ts
++++ b/lib/types/services/dv-cache.service.d.ts
+@@ -27,6 +27,7 @@ export declare class DataValidationCacheService extends Disposable {
+         subUnitId: string;
+         ranges: IRange[];
+         isSetRange?: boolean;
++        isFormulaResult?: boolean;
+     }>;
+     constructor(_commandService: ICommandService, _univerInstanceService: IUniverInstanceService, _sheetDataValidationModel: DataValidationModel);
+     private _initDirtyRanges;
+@@ -36,7 +37,7 @@ export declare class DataValidationCacheService extends Disposable {
+     addRule(unitId: string, subUnitId: string, rule: ISheetDataValidationRule): void;
+     removeRule(unitId: string, subUnitId: string, rule: ISheetDataValidationRule): void;
+     private _getEffectiveRanges;
+-    markRangeDirty(unitId: string, subUnitId: string, ranges: IRange[], isSetRange?: boolean): void;
++    markRangeDirty(unitId: string, subUnitId: string, ranges: IRange[], isSetRange?: boolean, isFormulaResult?: boolean): void;
+     private _deleteRange;
+     getValue(unitId: string, subUnitId: string, row: number, col: number): Nullable<Nullable<DataValidationStatus>>;
+ }
 diff --git a/lib/types/services/dv-validator.service.d.ts b/lib/types/services/dv-validator.service.d.ts
 index 3692907f48a23a5f6d6b5ac18d16c3bf60c86ce7..91791494d171de803ff992d0bb3b5309473f239b 100644
 --- a/lib/types/services/dv-validator.service.d.ts
