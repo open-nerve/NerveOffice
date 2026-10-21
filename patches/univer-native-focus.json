@@ -1,0 +1,20 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/docs-ui",
+  "version": "1.0.1",
+  "reason": "UR-039：输入框已聚焦但原生光标留在旧控件时恢复收字位置，保留有效选区、IME 和焦点转移。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "2b741eb24a496b63fec527147b454502df77e22aab337031a93f3a46ff4a68c9",
+      "patchedSha256": "cee4d9672176680557870d3ee25e5cb3c20b88c3f53fad9581ab374ac3e9bea4"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "c22ee098a2e1e5e53641fa7dc3cd55ed38b6cdf4e20e6d29387e37a1b3a25812",
+      "patchedSha256": "0c0adf94c2bc13608161dfffa6c6088c7df35b5ffd4aa81e43fc4efbecb822d5"
+    }
+  ],
+  "patch": "patches/@univerjs__docs-ui@1.0.1.patch",
+  "patchSha256": "8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b"
+}

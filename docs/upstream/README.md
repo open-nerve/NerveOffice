@@ -59,6 +59,8 @@ M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，
 | [UR-036](UR-036-range-highlight-stale-text.md) | 范围高亮以旧语法树回写当前文本，快速输入乱码并传入无效范围 | M5-P3-S4 | 锁定包本地修复，原速五次通过、恢复原高亮三次失败；S4 最终三浏览器与审查修正完成，Phase 验收待 S6 | 公开 issue | 草稿 | — |
 | [UR-037](UR-037-formula-focus-stale-caret.md) | 编辑栏切回单元格时旧光标覆盖刚输入的位置，首字母移到末尾 | M5-P3-S4 | 原函数两入口有效反例；S4 最终能力兼容/公开 running、相关回归与审查修正完成 | 公开 issue | 草稿 | — |
 | [UR-038](UR-038-conditional-formula-stale-error.md) | 正确公式已经输入，条件格式确认仍被旧错误状态阻止 | M5-P3-S4 | 本地修复及最终三浏览器、实际像素/历史/重开与审查修正完成 | 公开 issue | 草稿 | — |
+| [UR-039](UR-039-native-input-selection-outside-editor.md) | 单元格已聚焦但原生光标仍在旧表名控件，首次文字输入无效 | M5-P3-S5 | 本地修复，SDK 7 项、S5 工程与 270 项三浏览器组合通过；P3 阶段验证待完成 | 公开 issue | 草稿 | — |
+| [UR-040](UR-040-sheet-name-delayed-selection.md) | 延后全选表名覆盖已经开始的输入，或在改名结束后重设其他选区 | M5-P3-S5 | 固定包 ES/CJS 22 项、重复 UI 18 项及最终 S5 工程/270 项组合通过；P3 阶段审查与验证待完成 | 公开 issue | 草稿 | — |
 
 ## 提交之前要确认的事
 

@@ -1,0 +1,44 @@
+diff --git a/lib/cjs/index.js b/lib/cjs/index.js
+index 71c91a2f47aa6a7c5bb8702dbaed8835c7a0a138..64cdd00113fc92284eaa5ae30637ef7decb76a91 100644
+--- a/lib/cjs/index.js
++++ b/lib/cjs/index.js
+@@ -3483,6 +3483,17 @@ let DocSelectionRenderService = class DocSelectionRenderService extends _univerj
+ 	focus() {
+ 		if (!this._input.hasAttribute("tabindex")) this._input.tabIndex = -1;
+ 		this._input.focus({ preventScroll: true });
++		// An already focused hidden editor can retain a DOM selection in a retired sheet-name control.
++		// Restore only the native input target; logical canvas selection and active IME remain untouched.
++		const ownerDocument = this._input.ownerDocument;
++		if (ownerDocument.activeElement !== this._input || this._isIMEInputApply) return;
++		const selection = ownerDocument.getSelection();
++		if (!selection || this._input.contains(selection.anchorNode) && this._input.contains(selection.focusNode)) return;
++		const range = ownerDocument.createRange();
++		range.selectNodeContents(this._input);
++		range.collapse(false);
++		selection.removeAllRanges();
++		selection.addRange(range);
+ 	}
+ 	blur() {
+ 		this._input.blur();
+diff --git a/lib/es/index.js b/lib/es/index.js
+index 2f6b43020902d1c3ea8b8e5bd41cdc07e04b3e51..e6bf53712751fe2e91b0e77609e1cd06d2d6e142 100644
+--- a/lib/es/index.js
++++ b/lib/es/index.js
+@@ -3455,6 +3455,17 @@ let DocSelectionRenderService = class DocSelectionRenderService extends RxDispos
+ 	focus() {
+ 		if (!this._input.hasAttribute("tabindex")) this._input.tabIndex = -1;
+ 		this._input.focus({ preventScroll: true });
++		// An already focused hidden editor can retain a DOM selection in a retired sheet-name control.
++		// Restore only the native input target; logical canvas selection and active IME remain untouched.
++		const ownerDocument = this._input.ownerDocument;
++		if (ownerDocument.activeElement !== this._input || this._isIMEInputApply) return;
++		const selection = ownerDocument.getSelection();
++		if (!selection || this._input.contains(selection.anchorNode) && this._input.contains(selection.focusNode)) return;
++		const range = ownerDocument.createRange();
++		range.selectNodeContents(this._input);
++		range.collapse(false);
++		selection.removeAllRanges();
++		selection.addRange(range);
+ 	}
+ 	blur() {
+ 		this._input.blur();

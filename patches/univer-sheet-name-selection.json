@@ -1,0 +1,20 @@
+{
+  "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
+  "package": "@univerjs/sheets-ui",
+  "version": "1.0.1",
+  "reason": "UR-040：延后表名全选只作用于原控件尚未交互的编辑会话，不覆盖已输入文字、IME、光标或其他 document。",
+  "files": [
+    {
+      "path": "lib/es/index.js",
+      "originalSha256": "36c54a0025c9c447a6a35a567dc06e70f835adb68ae3405900f8ca549a4e3ecc",
+      "patchedSha256": "32fb46e8d5efae6d775a13d30ce9d9070b984c9dc043c79e7f607c8f35a83d22"
+    },
+    {
+      "path": "lib/cjs/index.js",
+      "originalSha256": "e96ddece20ba81fba43fe5734f36ab903d137f9ae548c187730abcb455f52a0c",
+      "patchedSha256": "d21058e4142ab3deddba5476885a8f567d4ff1071a2d4d2c053c124dc045ea10"
+    }
+  ],
+  "patch": "patches/@univerjs__sheets-ui@1.0.1.patch",
+  "patchSha256": "712ea19bb269c2a04539d909a8b6075e272976db5bd9fdaafd6b74091913c950"
+}

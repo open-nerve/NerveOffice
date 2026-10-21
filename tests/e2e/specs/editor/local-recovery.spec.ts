@@ -1,5 +1,6 @@
 // M4-P3 S3：原件由合法加密夹具落盘；用户动作、SDK、保存与清理使用产品入口。
 import type { Page, Request } from '@playwright/test'
+import type { Workbook } from '../../support/sheet.ts'
 import { randomUUID } from 'node:crypto'
 import { acquiredEditLeaseSchema } from '@nerve-office/contracts'
 import { recordWrites, saveParam } from '../../support/autosave.ts'
@@ -8,6 +9,7 @@ import { archiveSpace, createDocumentIn, createTeamSpace, createUser, revisionOf
 import { shownCell } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { expectFormulaCombination, withFormulaCombination } from '../../support/formula-combination.ts'
 import { currentLocalKey, readLocalDisk } from '../../support/local-draft.ts'
 import { recoverySnapshot, seedRecovery } from '../../support/local-recovery.ts'
 import { DAY_MS, probe, probeDatabase } from '../../support/outbox-probe.ts'
@@ -26,6 +28,20 @@ async function documentFor(page: Page, prefix: string) {
 
 function notice(page: Page) {
   return page.locator('[data-slot="recovery-notice"]')
+}
+
+/** 两个既定案例共用恢复协议，公式案例额外携带故意错误的跨表缓存。 */
+function fastForwardSnapshot(text: string, formula: boolean): string {
+  const original = recoverySnapshot(text, formula ? 2 : '崩溃前的本机内容', formula)
+  return formula ? withFormulaCombination(original, true) : original
+}
+
+function expectFastForwardContent(book: Workbook, formula: boolean): void {
+  expect(cellOf(book, 'A1')?.v).toBe(formula ? 2 : '崩溃前的本机内容')
+  expect(cellOf(book, 'B1')?.v).toBe(formula ? 4 : undefined)
+  expect(cellOf(book, 'B1')?.f).toBe(formula ? '=A1*2' : undefined)
+  if (formula)
+    expectFormulaCombination(book, 2)
 }
 
 async function copyAndCheck(page: Page, documentId: string, value: string) {
@@ -86,7 +102,7 @@ test.describe('US-M4-03 手动恢复与冲突处理', { tag: '@test-build' }, ()
   for (const formula of [false, true]) {
     test(`快进恢复${formula ? '完整重算公式' : '原文'}，零次额外输入也自动上传并清理`, async ({ page }) => {
       const h = await documentFor(page, `recovery-${formula ? 'formula' : 'text'}`)
-      const snapshot = recoverySnapshot(h.cloud.text, formula ? 2 : '崩溃前的本机内容', formula)
+      const snapshot = fastForwardSnapshot(h.cloud.text, formula)
       await seedRecovery(page, h.key, snapshot, { formulasPending: formula })
       const writes = recordWrites(page, h.documentId)
       await openReader(page, h.documentId)
@@ -97,9 +113,7 @@ test.describe('US-M4-03 手动恢复与冲突处理', { tag: '@test-build' }, ()
       await expect(saveStatus(page)).toHaveText('已保存到云端')
       const cloud = await savedContent(page, h.documentId)
       expect(cloud.revision).toBe(2)
-      expect(cellOf(cloud.snapshot, 'A1')?.v).toBe(formula ? 2 : '崩溃前的本机内容')
-      expect(cellOf(cloud.snapshot, 'B1')?.v).toBe(formula ? 4 : undefined)
-      expect(cellOf(cloud.snapshot, 'B1')?.f).toBe(formula ? '=A1*2' : undefined)
+      expectFastForwardContent(cloud.snapshot, formula)
       expect(saveParam(writes.saves[0], 'formulasPending')).toBe('false')
       expect(Number(saveParam(writes.saves[0], 'localSeq'))).toBeGreaterThan(37)
       await expect.poll(async () => (await readLocalDisk(page, h.key)).draft).toBeNull()

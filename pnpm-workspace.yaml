@@ -23,6 +23,8 @@ packages:
 patchedDependencies:
   # ADR-022：单元格元素缓存走平台鉴权与实例登记；取消不回退原 URL，先登记再等待读取。
   '@univerjs/core@1.0.1': patches/@univerjs__core@1.0.1.patch
+  # ADR-010、UR-039：恢复输入焦点时修复留在旧控件的原生光标，保留现有选区和 IME。
+  '@univerjs/docs-ui@1.0.1': patches/@univerjs__docs-ui@1.0.1.patch
   # ADR-022：浮图初次加载及桌面/移动更新统一走实例 IO，迟到结果检查来源和场景存活。
   '@univerjs/drawing-ui@1.0.1': patches/@univerjs__drawing-ui@1.0.1.patch
   # ADR-022、UR-009：刷新 transform 时同步明确提供的两份工作表锚点。
@@ -47,6 +49,8 @@ patchedDependencies:
   '@univerjs/sheets-formula@1.0.1': patches/@univerjs__sheets-formula@1.0.1.patch
   # ADR-010、M5-P3：表单、粘贴与导航可配置同一地址规范化，保留 SDK 默认协议检查。
   '@univerjs/sheets-hyper-link-ui@1.0.1': patches/@univerjs__sheets-hyper-link-ui@1.0.1.patch
+  # ADR-010、UR-040：表名的延后全选在用户输入、光标操作或会话退役后取消。
+  '@univerjs/sheets-ui@1.0.1': patches/@univerjs__sheets-ui@1.0.1.patch
   # ADR-022：桌面右键菜单先恢复当前编辑器焦点，再同步执行命令，保留图片焦点守卫。
   '@univerjs/ui@1.0.1': patches/@univerjs__ui@1.0.1.patch
 # 依赖的安装脚本逐个决定，新增一项要写原因（规范 §3）

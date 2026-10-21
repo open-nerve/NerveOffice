@@ -14,8 +14,9 @@ import type { Workbook } from '../../support/sheet.ts'
 import { canonicalContentText } from '@nerve-office/contracts'
 import { autosaveLog, capturesOf, clearAutosaveLog, holdSaves, logNow, pauseTime, recordWrites, releaseAutosave, saveParam, setPageHidden, settleAfterEdit, skipAhead, uploadedText, uploadsOf } from '../../support/autosave.ts'
 import { archiveSpace, createDocument, createDocumentIn, createTeamSpace, createUser, editLeaseEndReason, expireSessions, revisionOf } from '../../support/database.ts'
-import { probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
+import { probeFormulasSettled, probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { expectFormulaCombination, formulaCombinationFor } from '../../support/formula-combination.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { sampleWithoutImagesFor } from '../../support/read-only-sample.ts'
 import { loginThroughApi, loginThroughUi } from '../../support/session.ts'
@@ -171,25 +172,35 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
 
   test('US-M3-02 A08：自动保存在途时继续输入——回包之后仍是"有未保存的修改"，服务器上是捕获那一刻的内容；下一次自动保存存上后来的', async ({ page }) => {
     await page.clock.install()
-    const documentId = await openNewSheet(page, 'autosave-a08')
+    const owner = await createUser('autosave-a08')
+    await loginThroughApi(page, owner)
+    const documentId = await createDocument(owner, 'autosave-a08', formulaCombinationFor)
+    await openAndEnterEditing(page, documentId, 'steady')
+    await expect.poll(async () => probeFormulasSettled(page)).toBe(true)
+    const writes = recordWrites(page, documentId)
     const held = await holdSaves(page)
     await releaseAutosave(page)
     const start = await pauseTime(page)
-    await typeInCell(page, 'A1', 'first')
-    await skipAhead(page, 2_000)
+    await typeInCell(page, 'A1', '20')
+    await settleAfterEdit(page)
+    await skipAhead(page, 1_990)
     await expect.poll(held.held).toBe(1)
     await expect(saveStatus(page)).toHaveText('保存中…')
     // 上传在途（拦着）时继续输入
-    await typeInCell(page, 'A2', 'second')
+    await typeInCell(page, 'A2', '7')
+    await settleAfterEdit(page)
     held.release()
     await expect.poll(async () => uploadsOf(await autosaveLog(page))).toMatchObject([{ trigger: 'quiet', startedAt: start + 2_000, seq: 1, outcome: { kind: 'saved' } }])
     // 已保存的只前进到捕获时的那个：后来的修改还没存
     await expect(saveStatus(page)).toHaveText('有未保存的修改')
     expect(await wouldPromptOnLeave(page)).toBe(true)
     const first = (await savedContent(page, documentId)).snapshot
-    expect([cellOf(first, 'A1')?.v, cellOf(first, 'A2')]).toEqual(['first', undefined])
+    expect([cellOf(first, 'A1')?.v, cellOf(first, 'A2')]).toEqual([20, undefined])
+    expectFormulaCombination(first, 20)
+    expectFormulaCombination(JSON.parse(uploadedText(writes.saves[0])) as Workbook, 20)
+    expect(saveParam(writes.saves[0], 'formulasPending')).toBe('false')
     // 后来的那一处：停 1 秒捕获、2 秒上传
-    await skipAhead(page, 2_000)
+    await skipAhead(page, 1_990)
     await expect(saveStatus(page)).toHaveText('已保存到云端')
     expect(uploadsOf(await autosaveLog(page)).map(({ trigger, startedAt, seq }) => ({ trigger, startedAt: startedAt - start, seq }))).toEqual([
       { trigger: 'quiet', startedAt: 2_000, seq: 1 },
@@ -197,7 +208,11 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     ])
     await page.clock.resume()
     const second = (await savedContent(page, documentId)).snapshot
-    expect([cellOf(second, 'A1')?.v, cellOf(second, 'A2')?.v]).toEqual(['first', 'second'])
+    expect([cellOf(second, 'A1')?.v, cellOf(second, 'A2')?.v]).toEqual([20, 7])
+    expectFormulaCombination(second, 20, 7)
+    expect(writes.saves).toHaveLength(2)
+    expectFormulaCombination(JSON.parse(uploadedText(writes.saves[1])) as Workbook, 20, 7)
+    expect(saveParam(writes.saves[1], 'formulasPending')).toBe('false')
   })
 
   test('US-M3-02 单元格里正在输入（还没回车）：自动保存只存已经提交的，不提交、不打断这次输入，页头照旧"有未保存的修改"；回车之后存上', async ({ page }) => {
