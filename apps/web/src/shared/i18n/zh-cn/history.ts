@@ -6,6 +6,18 @@ export const historyMessages = {
   failed: '历史没能加载',
   unavailable: '这份文档的历史已不可用，或你没有查看历史的权限。',
   empty: '最近 7 天没有可用的历史。当前正文不会被当作历史。',
+  clear: '清除历史',
+  clearTitle: '清除文档历史',
+  clearConfirm: '确认清除',
+  clearDescription: '清除后无法撤销。当前正文、图片、编辑会话及运维检查点保持不变。',
+  cleared: (count: number) => `已清除 ${count} 条历史。`,
+  clearUnavailable: '当前没有可清除的历史，或你已不具备空间管理资格。',
+  clearReconfirm: '本次确认不能再次提交。请关闭弹窗，核对刷新后的历史，再决定是否重新清除。',
+  clearUnknown: (refreshed: boolean) => refreshed
+    ? '清除可能已生效，已重新读取历史。请关闭弹窗，核对当前列表后重新确认。'
+    : '清除可能已生效，但历史列表尚未刷新成功。请关闭弹窗，重新加载并核对历史后再确认。',
+  clearNeedsRefresh: '请先重新加载并核对历史，再决定是否清除。',
+  reload: '重新加载历史',
   preview: '只读预览',
   restore: '恢复为副本',
   restoreHere: '恢复到这里',

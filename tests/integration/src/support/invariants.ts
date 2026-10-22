@@ -84,6 +84,19 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
     `SELECT p.id FROM document_checkpoints p JOIN documents d ON d.id=p.source_document_id
      WHERE p.kind='hourly' AND NOT EXISTS (SELECT 1 FROM document_history_buckets b
        WHERE b.document_id=p.source_document_id AND b.hour_bucket=p.hour_bucket)`,
+  'I26 升级源清单数量与冻结时声明相同':
+    `SELECT b.id FROM document_upgrade_batches b WHERE b.source_count
+       <> (SELECT count(*) FROM document_upgrade_sources s WHERE s.batch_id=b.id)`,
+  'I27 升级回执对应本批本源的原修订检查点':
+    `SELECT s.batch_id,s.document_id FROM document_upgrade_sources s JOIN document_checkpoints p ON p.id=s.checkpoint_id
+       WHERE p.kind<>'before_upgrade' OR p.event_id IS DISTINCT FROM s.batch_id
+         OR p.source_document_id<>s.document_id OR p.revision<>s.revision`,
+  // 到期清理可将 ready 的回执设空，状态保留完成时事实；resume/release 必须即时重查，不把过期视为静态不变量违反。
+  'I28 未结束升级批次恰好持有唯一屏障':
+    `SELECT b.id::text AS id FROM document_upgrade_batches b
+       WHERE (b.status IN ('preparing','failed','ready')) IS DISTINCT FROM
+         coalesce((SELECT active_batch_id=b.id FROM document_upgrade_barrier WHERE id=1),false)
+     UNION ALL SELECT 'missing_barrier' WHERE NOT EXISTS (SELECT 1 FROM document_upgrade_barrier WHERE id=1)`,
   // gzip 正文与当前图片集合不能只靠 SQL 外键/计数证明。asset-save、asset-copies 和 asset-reference-races
   // 经正式协议比较完整正文/集合、no-op、重放及回滚；asset-references-bulk 再核对七万个 ID 的全量摘要。
 }

@@ -9,7 +9,7 @@ import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { captureHistory } from '../support/document-history.ts'
 import { asUser } from '../support/session-client.ts'
-import { contentEditor, deniedMessageOf } from './document-rows.ts'
+import { contentEditor, deniedMessageOf, spaceAdminOnly } from './document-rows.ts'
 import { buildMatrixWorld, cellsOf, closeWorld, expectCell } from './matrix-world.ts'
 
 let database: TestDatabase
@@ -51,9 +51,21 @@ describe('US-M5-10 历史权限矩阵：所有读取入口独立要求当前有�
           const page = parseExact(documentHistoryListResponseSchema, await response.json())
           expect(page.items.map(item => item.id)).toEqual([histories.get(target)])
           expect(page.nextCursor).toBeNull()
+          expect(page.canClearHistory).toBe((cell.actor === 'owner' && target === 'personal') || (cell.actor === 'spaceAdmin' && ['team', 'visible'].includes(target)))
           return
         }
         expect(parseExact(documentHistoryDetailSchema, await response.json()).id).toBe(histories.get(target))
+      },
+    })
+  })
+})
+
+describe('US-M5-11 清除历史权限矩阵：只按当前空间管理资格', () => {
+  it.each(cellsOf({ clear: spaceAdminOnly(200) }))('$actor 对 $target → $expected', async (cell) => {
+    await expectCell(world, async (actor, target) => asUser(app.baseUrl, actor.session, `/api/documents/${world.documents[target].id}/history`, { method: 'DELETE' }), cell, {
+      deniedMessage: deniedMessageOf({ usual: '只有空间管理员能清除文档历史', grantOnly: '这份文档是单独分享给你的，不能清除历史' }, cell.actor, cell.target),
+      verify: async (response) => {
+        expect(await response.json()).toEqual({ cleared: 1 })
       },
     })
   })

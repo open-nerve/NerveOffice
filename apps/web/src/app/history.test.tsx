@@ -33,7 +33,7 @@ function setup(handlers: Parameters<typeof installFakeApi>[0] = {}) {
     'GET /api/auth/session': () => json(200, SESSION),
     ...spaceRoutes(SESSION),
     [foldersKey(SESSION.personalSpace.id)]: noFolders,
-    [GET]: () => json(200, { items: [item], nextCursor: null }),
+    [GET]: () => json(200, { items: [item], nextCursor: null, canClearHistory: true }),
     ...handlers,
   })
 }
@@ -50,7 +50,7 @@ describe('US-M5-10 历史列表、只读预览入口和恢复为副本', () => {
     expect(preview).toHaveAttribute('href', historyPreviewPagePath(DOC, item.id))
     expect(preview).toHaveAttribute('target', '_blank')
     expect(preview).toHaveAttribute('rel', 'noopener')
-    api.on(GET, () => json(200, { items: [], nextCursor: null }))
+    api.on(GET, () => json(200, { items: [], nextCursor: null, canClearHistory: true }))
     await runtime.queryClient.invalidateQueries({ queryKey: ['document-history', DOC] })
     expect(await screen.findByText('最近 7 天没有可用的历史。当前正文不会被当作历史。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '恢复为副本' })).toBeNull()
@@ -66,8 +66,8 @@ describe('US-M5-10 历史列表、只读预览入口和恢复为副本', () => {
     api.on(GET, () => apiError(500, 'INTERNAL_ERROR'))
     answer(apiError(500, 'INTERNAL_ERROR'))
     expect(await screen.findByText('历史没能加载', {}, { timeout: 3000 })).toBeInTheDocument()
-    api.on(GET, () => json(200, { items: [item], nextCursor: 'next' }))
-    api.on(`${GET}?cursor=next`, () => json(200, { items: [historyItem({ id: copy.id, title: '更早的历史', revision: 1 })], nextCursor: null }))
+    api.on(GET, () => json(200, { items: [item], nextCursor: 'next', canClearHistory: true }))
+    api.on(`${GET}?cursor=next`, () => json(200, { items: [historyItem({ id: copy.id, title: '更早的历史', revision: 1 })], nextCursor: null, canClearHistory: true }))
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     const more = await screen.findByRole('button', { name: '加载更多' })
     more.focus()
@@ -87,14 +87,14 @@ describe('US-M5-10 历史列表、只读预览入口和恢复为副本', () => {
     expect(await screen.findByText('这份文档的历史已不可用，或你没有查看历史的权限。')).toBeInTheDocument()
     expect(screen.queryByText('历史周报')).toBeNull()
     expect(screen.queryByRole('button', { name: '恢复到这里' })).toBeNull()
-    api.on(GET, () => json(200, { items: [item], nextCursor: null }))
+    api.on(GET, () => json(200, { items: [item], nextCursor: null, canClearHistory: true }))
     await runtime.queryClient.invalidateQueries({ queryKey: ['document-history', DOC] })
     await screen.findByRole('button', { name: '恢复为副本' })
     expect(screen.queryByRole('button', { name: '恢复到这里' })).toBeNull()
   })
 
   it('不支持的历史保留格式说明，不能提交恢复', async () => {
-    setup({ [GET]: () => json(200, { items: [historyItem({ compatibility: 'unsupported' })], nextCursor: null }) })
+    setup({ [GET]: () => json(200, { items: [historyItem({ compatibility: 'unsupported' })], nextCursor: null, canClearHistory: true }) })
     renderApp(historyPagePath(DOC))
     expect(await screen.findByText('当前版本不支持这份历史的格式。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '恢复为副本' })).toBeNull()

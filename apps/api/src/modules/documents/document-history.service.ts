@@ -18,6 +18,7 @@ export type HistoryMetadata = Omit<DocumentHistorySummary, 'savedBy'> & { readon
 export interface HistoryPage {
   readonly items: readonly HistoryMetadata[]
   readonly nextCursor: string | null
+  readonly canClearHistory: boolean
 }
 
 @Injectable()
@@ -33,12 +34,13 @@ export class DocumentHistoryService {
     const after = query.cursor === undefined ? undefined : decodeTimeCursor(query.cursor)
     if (query.cursor !== undefined && after === undefined)
       throw new AppError('REQUEST_INVALID', '分页的游标不合法，请从第一页重新加载')
-    await this.requireHistory(actor.userId, documentId, tx)
+    const { permissions } = await this.requireHistory(actor.userId, documentId, tx)
     const rows = await this.history.list(documentId, await this.clock.now(tx), HISTORY_PAGE_SIZE + 1, after, tx)
     const page = rows.slice(0, HISTORY_PAGE_SIZE)
     const last = page.at(-1)
     return {
       items: page.map(metadataOf),
+      canClearHistory: permissions.canClearHistory,
       nextCursor: rows.length > HISTORY_PAGE_SIZE && last !== undefined ? encodeTimeCursor({ position: last.position, id: last.id }) : null,
     }
   }
@@ -59,8 +61,8 @@ export class DocumentHistoryService {
     return snapshot
   }
 
-  private async requireHistory(userId: string, documentId: string, tx: Transaction): Promise<void> {
-    await requireDocumentContent(this.policy, userId, await this.documents.findById(documentId, tx), ['viewHistory'], tx)
+  private async requireHistory(userId: string, documentId: string, tx: Transaction) {
+    return requireDocumentContent(this.policy, userId, await this.documents.findById(documentId, tx), ['viewHistory'], tx)
   }
 }
 

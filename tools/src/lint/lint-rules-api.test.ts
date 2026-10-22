@@ -22,6 +22,16 @@ import {
 const { lint, rulesFor, configFor } = prepareLint({ warmUp: [API_CONTROLLER, INTEGRATION_FILE, CONTRACTS_FILE] })
 
 describe('US-M1-11 lint 规则的自测：后端的模块边界', () => {
+  it('升级运维服务仅由独立 CLI 应用组合，HTTP/Jobs 不能通过公开出口接入', async () => {
+    const code = 'import { DocumentsOperationsModule, DocumentUpgradeService } from \'../modules/documents/index.ts\'\n\nexport const operations = [DocumentsOperationsModule, DocumentUpgradeService]\n'
+    expect(await rulesFor(code, 'apps/api/src/app/document-checkpoints.ts')).not.toContain('no-restricted-imports')
+    for (const path of ['apps/api/src/app/index.ts', 'apps/api/src/app/create-application.ts', 'apps/api/src/cli/migrate.ts'])
+      expect(await rulesFor(code, path)).toContain('no-restricted-imports')
+    const moduleCode = code.replace('../modules/documents', '../documents')
+    for (const path of ['apps/api/src/modules/workspace/workspace.module.ts', 'apps/api/src/modules/jobs/jobs.module.ts', 'apps/api/src/modules/admin/admin.module.ts'])
+      expect(await rulesFor(moduleCode, path)).toContain('no-restricted-imports')
+  })
+
   it.each([
     ['DocumentAssetReferences', 'document-asset-references.ts'],
     ['DocumentAssetsRepository', 'document-assets.repository.ts'],

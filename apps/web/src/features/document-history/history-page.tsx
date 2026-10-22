@@ -17,6 +17,7 @@ import { Alert, AlertDescription, Button, buttonVariants, PersonName, RetryButto
 import { RefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { DestinationForm, spaceDocumentsQueryKey, targetSpacesOf } from '../documents/index.ts'
 import { spacesQueryOptions } from '../spaces/index.ts'
+import { ClearHistory } from './clear-history.tsx'
 import { historyQueryOptions } from './history-api.ts'
 
 export function HistoryPage() {
@@ -89,6 +90,13 @@ function DocumentHistory({ documentId }: { readonly documentId: string }) {
         <a href={documentPagePath(documentId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{text.back}</a>
       </div>
       <p className="text-sm text-muted-foreground">{text.description}</p>
+      <ClearHistory
+        documentId={documentId}
+        canClear={!denied && history.data?.pages[0]?.canClearHistory === true}
+        hasItems={items.length > 0}
+        listUnavailable={history.isFetching || history.isError}
+        returnFocus={() => headingRef.current?.focus()}
+      />
       {copy !== undefined && (
         <div className="flex items-center gap-3 rounded-lg border p-3" role="status">
           <p>{copy.replayed ? text.replayed : text.restored}</p>

@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common'
 import { DatabaseModule } from '../database/index.ts'
 import { DocumentsModule } from '../documents/index.ts'
 import { Clock, DatabaseClock } from './clock.ts'
+import { HistoryPurgeJob } from './history-purge.job.ts'
 import { JobScheduler } from './job-scheduler.ts'
 import { RevisionPurgeJob } from './revision-purge.job.ts'
 import { SCHEDULED_JOBS } from './scheduled-job.ts'
@@ -20,15 +21,16 @@ import { TrashPurgeJob } from './trash-purge.job.ts'
     { provide: Clock, useClass: DatabaseClock },
     TrashPurgeJob,
     RevisionPurgeJob,
+    HistoryPurgeJob,
     // 调度器逐个排程的任务：新加一个定时任务时加在这里
     {
       provide: SCHEDULED_JOBS,
-      inject: [TrashPurgeJob, RevisionPurgeJob],
+      inject: [TrashPurgeJob, RevisionPurgeJob, HistoryPurgeJob],
       useFactory: (...jobs: ScheduledJob[]): readonly ScheduledJob[] => jobs,
     },
     JobScheduler,
   ],
   // 集成测试经 app 层的程序接口取两个任务，用给定的时刻跑一轮（不必等 30 天）
-  exports: [TrashPurgeJob, RevisionPurgeJob],
+  exports: [TrashPurgeJob, RevisionPurgeJob, HistoryPurgeJob],
 })
 export class JobsModule {}

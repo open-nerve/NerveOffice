@@ -129,6 +129,9 @@ pnpm dev:api
 | `NERVE_REVISION_PURGE_ENABLED` | 保留期清理的开关，默认 `true`（只认 `true` 与 `false`）。关掉之后过了保留期的修订记录与回执留着（不影响使用），重新打开之后下一轮一起清。它不抬高 `NERVE_DATABASE_POOL_MAX` 的下限：每一批只占一个连接 |
 | `NERVE_REVISION_PURGE_INTERVAL_MS` | 两轮保留期清理之间的间隔，默认 3600000（1 小时），实际触发时间带 ±10% 的随机抖动 |
 | `NERVE_REVISION_PURGE_BATCH` | 保留期清理一批最多删多少条（修订记录与回执各算），默认 1000：每批一个短事务，一轮删到不满一批为止 |
+| `NERVE_HISTORY_PURGE_ENABLED` | 历史和运维检查点清理的开关，默认 `true`，只认 `true/false`。关闭只延迟物理清理；用户历史与图片读取资格仍按固定期限失效 |
+| `NERVE_HISTORY_PURGE_INTERVAL_MS` | 两轮检查点清理间隔，默认 3600000（1 小时），范围 1000–86400000；实际触发带 ±10% 抖动 |
+| `NERVE_HISTORY_PURGE_BATCH` | 每批至多 100 条到期检查点和 100 条旧小时占位（两者各自计数），范围 1–1000；每批独立事务，直到两部分都不满批。只清元数据和保留关系，不删除图片文件 |
 | `NERVE_MIN_CLIENT_BUILD` | 最低客户端构建（`x.y.z`，M3-P3）：页面有严重缺陷、修复已经发布时设成修复的版本，还开着的旧页面在保存、另存为副本、申请编辑权与心跳时被拦下（`CLIENT_OUTDATED`），页面提示刷新。不设时不按构建拦——数据格式（Univer 版本、插件档案、平台格式版本）变了的旧页面照样被拦；改了要重启应用 |
 | `NERVE_LOCAL_DRAFTS_ENABLED` | 本机草稿开关，默认 `true`，只认 `true`/`false`（空值沿用未设置的默认值）；敏感部署设为 `false` 后重启应用。会话响应把开关交给页面；关闭时新修改只留页面内存、仍可同步云端，已有草稿保留，不会自动清除。M4-P2 S3 先交付配置与会话能力，页面保存接线在 S4/S5 完成 |
 | `NERVE_SNAPSHOT_INSPECTION_PROCESSES` | 快照检查的子进程数（M3-P3），默认 2，1–64：同时检查的快照数的上限。子进程按需创建，空闲 60 秒之后退出。容器的内存按下面"快照检查的子进程与内存"的规则配 |
@@ -155,6 +158,34 @@ pnpm dev:api
 - 一轮分批删到删完为止，每批一个短事务（至多 `NERVE_REVISION_PURGE_BATCH` 条修订记录与这么多条回执）。每批先在事务里取数据库的 advisory lock（`nerve-office:revision-purge`，事务级），拿不到说明另一个实例正在删，这一轮停下；只锁要删的行，别人正锁着的（例如正在永久删除的文档的）跳过、留给下一轮，所以不与保存、永久删除互相等待。应用退出时做完手上这一批就停。
 - 日志：`{"job":"revision-purge"}`，启动时一条"修订记录与回执的保留期清理已启动"（带间隔、`batchSize` 与 `retentionDays`），删了东西时一条"删掉了过了保留期的修订记录与回执"（带 `revisions`、`receipts`、`batches`）；一批失败时记 error，这一轮到此为止，下一轮再来。
 - 不写审计：删的是请求的记录，不是文档的内容。只用增删改查，受限的 `nerve_app` 角色够用。
+
+### 文档历史的清除与过期
+
+空间管理员可在历史页面清除本份文档的小时历史。清除保留当前正文、租约、保存回执、同小时占位和运维检查点；结果未知时须关闭确认窗，核对重新加载的列表，再发起新的确认。
+
+小时历史保留 168 小时，删除前/升级前运维检查点保留 720 小时。`history-purge` 使用现有调度器和数据库时钟，每小时分批清理到期行与引用关系，跳过被占用的行；旧小时桶在超过七天且对应历史已删除后才清。`NERVE_HISTORY_PURGE_ENABLED=false` 只延迟物理清扫，过期历史和图片授权仍立即失效。该任务不删除图片文件；图片物理 GC 由 P4-S5 实施。
+
+### 升级前检查点与维护窗口
+
+升级检查点命令需要应用数据库凭据和最新迁移，不需要本机密钥主密钥，不启动 HTTP、Jobs 或快照/图片子进程。它复制所有现存文档（含回收站和归档空间）的原 gzip、格式信封及实际图片关系，保留三十天；它不升级 SDK、不转换快照，也不替代数据库/资源文件备份。
+
+先安排写入维护窗口，再在应用目录执行以下流程（容器入口为 `node dist/cli/document-checkpoints.js`；本地开发可用 `pnpm documents:checkpoints`）：
+
+```sh
+node dist/cli/document-checkpoints.js prepare --target univer@next
+node dist/cli/document-checkpoints.js status
+node dist/cli/document-checkpoints.js resume --batch <batchId> --batch-size 20
+node dist/cli/document-checkpoints.js status --batch <batchId>
+node dist/cli/document-checkpoints.js release --batch <batchId>
+```
+
+- `prepare` 等在途源写事务结束后，原子冻结完整源清单。随后正文、修订、引用和文档源集合写入暂回数据库繁忙；读取、权限撤销与仅写入代次更新仍可用。新的 prepare 会拒绝覆盖既有冻结批次。
+- `resume` 每批 1–100 份、默认 20，检查点和源回执同事务提交；失败或重启后使用同一个 batchId 接续。全部有效时才是 `ready`，此时仍保持冻结。
+- `release` 只接受当前 ready 且即时完整的批次；过期/缺失须先 resume 补齐。旧批次命令不会解除新批次的冻结。本版本没有绕过屏障执行快照转换的开关；真正升级/回滚的迁移流程需另行设计。
+- 放弃维护用 `node dist/cli/document-checkpoints.js abort --batch <batchId>`；它解除冻结并标记放弃，已生成检查点仍保留至到期，不能把 aborted 当作完整升级备份。
+- SIGINT/SIGTERM 会完成当前短批后退出 1；强制终止只回滚当前事务。**应用或命令重启不会自动解冻**。命令超时、断网或输出丢失，先 status 查持久批次，不要直接重发 prepare。数据库不可用时保留原冻结，恢复连接后再核对。
+- 标准输出为一行有界 JSON，日志在标准错误；退出码 0 为命令完成、1 为中止/执行失败、2 为参数错误。错误输出不宣称冻结已解除；`status` 的 `writeFrozen` 描述全局冻结，指定旧批次时也可能因为另一个新批次而为 true。`completedCount` 按当前期限重算，旧 ready/released 的检查点之后可能到期。
+- 数据库触发器对四类源表的语句统一守卫，不能以改应用进程环境变量跳过；维护时回收站永久删除和旧修订清扫也可能暂时遇到繁忙，解除后沿原调度接续。只读 status 不改变状态，完成/失败/释放/放弃均有独立系统 CLI 审计。
 
 ### 快照检查的子进程与内存
 

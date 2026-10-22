@@ -661,6 +661,16 @@ const API_REVISION_PURGE = {
   importNames: ['RevisionPurgeService'],
   message: '修订记录与回执的保留期清理（RevisionPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M3-P3 设计 §3.9）',
 }
+const API_HISTORY_PURGE = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentHistoryPurgeService'],
+  message: '检查点到期清理不判断人的权限，只由定时任务的模块（modules/jobs）调用',
+}
+const API_DOCUMENT_OPERATIONS = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentsOperationsModule', 'DocumentUpgradeService'],
+  message: '升级运维服务只由独立 CLI 应用组合，不接入 HTTP、Jobs 或其他模块',
+}
 // 永久删除一个删除单元的本体（TrashEntryPurger）不判断任何人的权限：只在 documents 模块内部由 TrashService.purge（锁下判断过权限之后）
 // 与 TrashPurgeService（到期的清理）调用，不从公开入口导出。别的模块直接引用它的文件由模块边界拦下；这里再拦下经公开入口的引用，
 // 将来有人把它加进入口也拦得住。jobs 也不例外：它只经 TrashPurgeService（M2-P6 复核 A 的 G1）
@@ -742,6 +752,8 @@ interface ApiFileKind {
    * （定时任务的模块与 documents 模块）
    */
   jobEntries?: boolean
+  /** 独立运维 CLI 的应用组合；HTTP 应用不能接线升级操作。 */
+  documentOperations?: boolean
   /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
   foreignRepositories?: boolean
   /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 与 users 的仓储） */
@@ -766,7 +778,8 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
     ...(kind.localKeyRevocation === true ? [] : [API_LOCAL_KEY_REVOCATION]),
     ...(kind.localKeysConfig === true ? [] : [API_LOCAL_KEYS_CONFIG]),
-    ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE]),
+    ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE, API_HISTORY_PURGE]),
+    ...(kind.documentOperations === true ? [] : [API_DOCUMENT_OPERATIONS]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
     ...(kind.idArraysOnly === true ? [API_ID_LISTS] : []),
@@ -1140,6 +1153,7 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
+  { name: 'nerve/api-document-operations', files: ['apps/api/src/app/document-checkpoints.ts'], rules: apiRules({ documentOperations: true }) },
   // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9）与吊销本机密钥的入口（M3-P6），定时任务的模块可以引用到期的回收站清理与修订记录、
   // 回执的保留期清理（M2-P4 设计 §3.1，M3-P3 设计 §3.9）；documents 模块自己都可以；local-keys 模块可以注入主密钥（M3-P6）。
   // 紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
@@ -1774,10 +1788,10 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor,local-drafts}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor,local-drafts,document-history}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
-            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/sharing）引用，不进平台页面的首屏（ADR-008）',
+            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/sharing、features/document-history）引用，不进平台页面的首屏（ADR-008）',
           },
           // 弹窗的文件本身（shared/ui/dialog.tsx，Radix Dialog）同样只由按需加载的功能直接引用（M2-P2 审查 B8）：功能、应用层与入口引用共享层本来是允许的，
           // 这里在允许的策略之后覆盖。shared 内部的中转另由 nerve/web-ui-heavy-components 拦下

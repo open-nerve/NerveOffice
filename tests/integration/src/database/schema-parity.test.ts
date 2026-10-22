@@ -53,6 +53,28 @@ BEGIN
 END;
 $function$`,
   'TRIGGER CREATE TRIGGER document_checkpoints_immutable BEFORE UPDATE ON public.document_checkpoints FOR EACH ROW EXECUTE FUNCTION document_checkpoints_reject_update() ENABLED O',
+  `FUNCTION CREATE OR REPLACE FUNCTION public.document_upgrade_guard()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE active_batch uuid;
+BEGIN
+  IF NOT pg_try_advisory_xact_lock_shared(hashtextextended('nerve-office:document-upgrade-writes', 0)) THEN
+    RAISE EXCEPTION 'document upgrade is preparing' USING ERRCODE = '55P03';
+  END IF;
+  SELECT active_batch_id INTO active_batch FROM document_upgrade_barrier WHERE id = 1 FOR SHARE;
+  IF NOT FOUND OR active_batch IS NOT NULL THEN
+    RAISE EXCEPTION 'document writes are frozen for upgrade' USING ERRCODE = '55P03';
+  END IF;
+  RETURN NULL;
+EXCEPTION WHEN serialization_failure THEN
+  RAISE EXCEPTION 'document upgrade barrier changed' USING ERRCODE = '55P03';
+END $function$`,
+  'TRIGGER CREATE TRIGGER document_upgrade_guard BEFORE INSERT OR DELETE OR UPDATE OR TRUNCATE ON public.document_asset_links FOR EACH STATEMENT EXECUTE FUNCTION document_upgrade_guard() ENABLED O',
+  'TRIGGER CREATE TRIGGER document_upgrade_guard BEFORE INSERT OR DELETE OR UPDATE OR TRUNCATE ON public.document_contents FOR EACH STATEMENT EXECUTE FUNCTION document_upgrade_guard() ENABLED O',
+  'TRIGGER CREATE TRIGGER document_upgrade_guard BEFORE INSERT OR DELETE OR UPDATE OR TRUNCATE ON public.document_revisions FOR EACH STATEMENT EXECUTE FUNCTION document_upgrade_guard() ENABLED O',
+  'TRIGGER CREATE TRIGGER document_upgrade_guard_material BEFORE UPDATE OF id, title, type, unit_id, profile, format_version, sdk_version, client_build, revision, formulas_pending ON public.documents FOR EACH STATEMENT EXECUTE FUNCTION document_upgrade_guard() ENABLED O',
+  'TRIGGER CREATE TRIGGER document_upgrade_guard_membership BEFORE INSERT OR DELETE OR TRUNCATE ON public.documents FOR EACH STATEMENT EXECUTE FUNCTION document_upgrade_guard() ENABLED O',
 ]
 
 /**

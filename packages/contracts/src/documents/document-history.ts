@@ -34,8 +34,12 @@ export type DocumentHistoryDetail = z.infer<typeof documentHistoryDetailSchema>
 export const documentHistoryListResponseSchema = z.object({
   items: z.array(documentHistorySummarySchema),
   nextCursor: z.string().nullable(),
+  canClearHistory: z.boolean(),
 })
 export type DocumentHistoryListResponse = z.infer<typeof documentHistoryListResponseSchema>
+
+export const clearDocumentHistoryResponseSchema = z.object({ cleared: z.number().int().min(0) })
+export type ClearDocumentHistoryResponse = z.infer<typeof clearDocumentHistoryResponseSchema>
 
 export const restoreDocumentHistoryRequestSchema = z.strictObject({
   requestId: uuidSchema,

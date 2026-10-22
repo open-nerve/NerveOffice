@@ -140,11 +140,15 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
         VALUES ($1, 'hourly', date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
           '缺占位', 'sheet', 'fixture', 'sheet@1', 1, 'test', 1, false, '\\x00'::bytea, 1, 1,
           sha256('\\x00'::bytea), $2, now(), now(), now() + interval '168 hours')`, [await w.document(first), owner.id])
+      // I26：声明两份源，清单只有一份；I27：回执错误指向 hourly/别的源；I28：未终结的批次没有持住屏障。
+      const batchId = randomUUID()
+      await client.query('INSERT INTO document_upgrade_batches (id,target_version,source_count) VALUES ($1,\'invariant-fixture\',2)', [batchId])
+      await client.query('INSERT INTO document_upgrade_sources (batch_id,document_id,revision,checkpoint_id) SELECT $1,$2,1,id FROM document_checkpoints LIMIT 1', [batchId, randomUUID()])
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)
     expect(failure?.message).toContain('违反了只由服务保证的不变量')
-    for (const id of ['I22 ', 'I23 ', 'I24 ', 'I25 '])
+    for (const id of ['I22 ', 'I23 ', 'I24 ', 'I25 ', 'I26 ', 'I27 ', 'I28 '])
       expect(failure?.message).toContain(id)
     for (const invariant of Object.keys(INVARIANTS))
       expect(failure?.message, invariant).toContain(`${invariant}：`)

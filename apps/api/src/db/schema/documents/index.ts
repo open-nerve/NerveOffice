@@ -5,7 +5,7 @@
 // 保存的回执（M3-P3 设计 §3.4、§3.7：内容相同、修订号没变的确认，与修订记录一起做 requestId 的幂等）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
-import { CLIENT_BUILD_MAX_LENGTH, DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
+import { CLIENT_BUILD_MAX_LENGTH, DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, DOCUMENT_UPGRADE_FAILURE_CODES, DOCUMENT_UPGRADE_STATUSES, DOCUMENT_UPGRADE_TARGET_PATTERN, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
 import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 import { assets } from '../assets/index.ts'
@@ -426,4 +426,44 @@ export const documentCheckpointAssets = pgTable('document_checkpoint_assets', {
 }, table => [
   primaryKey({ name: 'document_checkpoint_assets_pkey', columns: [table.checkpointId, table.assetId] }),
   index('document_checkpoint_assets_asset_idx').on(table.assetId),
+])
+
+/** 升级检查点批次：ready 仍保持冻结；明确 release/abort 后才恢复源写入。 */
+export const documentUpgradeBatches = pgTable('document_upgrade_batches', {
+  id: uuid('id').primaryKey().default(sql`uuidv7()`),
+  targetVersion: text('target_version').notNull(),
+  status: text('status', { enum: DOCUMENT_UPGRADE_STATUSES }).notNull().default('preparing'),
+  sourceCount: integer('source_count').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  failureCode: text('failure_code', { enum: DOCUMENT_UPGRADE_FAILURE_CODES }),
+}, table => [
+  check('document_upgrade_batches_target_check', sql`${table.targetVersion} ~ ${sql.raw(`'${DOCUMENT_UPGRADE_TARGET_PATTERN}'`)}`),
+  check('document_upgrade_batches_status_check', oneOf(table.status, DOCUMENT_UPGRADE_STATUSES)),
+  check('document_upgrade_batches_count_check', sql`${table.sourceCount} >= 0`),
+  check('document_upgrade_batches_failure_check', oneOf(table.failureCode, DOCUMENT_UPGRADE_FAILURE_CODES)),
+  check('document_upgrade_batches_failure_state_check', sql`(${table.status} = 'failed') = (${table.failureCode} IS NOT NULL)`),
+  check('document_upgrade_batches_completion_check', sql`(${table.status} NOT IN ('ready','released') OR ${table.completedAt} IS NOT NULL) AND (${table.status} NOT IN ('preparing','failed') OR ${table.completedAt} IS NULL)`),
+  check('document_upgrade_batches_clock_check', sql`isfinite(${table.createdAt}) AND isfinite(${table.updatedAt}) AND (${table.completedAt} IS NULL OR isfinite(${table.completedAt}))`),
+])
+
+/** 源清单在冻结事务一次写全；无文档 FK，释放后删除源不抹掉升级事实。 */
+export const documentUpgradeSources = pgTable('document_upgrade_sources', {
+  batchId: uuid('batch_id').notNull().references(() => documentUpgradeBatches.id, { onDelete: 'cascade' }),
+  documentId: uuid('document_id').notNull(),
+  revision: integer('revision').notNull(),
+  checkpointId: uuid('checkpoint_id').references(() => documentCheckpoints.id, { onDelete: 'set null' }),
+}, table => [
+  primaryKey({ name: 'document_upgrade_sources_pkey', columns: [table.batchId, table.documentId] }),
+  check('document_upgrade_sources_revision_check', sql`${table.revision} >= 1`),
+  index('document_upgrade_sources_checkpoint_idx').on(table.checkpointId),
+])
+
+/** 迁移建立 id=1 的单例；源 DML 触发器在缺行时也拒绝，不把破损状态当成开放。 */
+export const documentUpgradeBarrier = pgTable('document_upgrade_barrier', {
+  id: integer('id').primaryKey(),
+  activeBatchId: uuid('active_batch_id').references(() => documentUpgradeBatches.id, { onDelete: 'restrict' }),
+}, table => [
+  check('document_upgrade_barrier_singleton_check', sql`${table.id} = 1`),
 ])

@@ -249,6 +249,7 @@ const IF_NONE_MATCH = (value: string): Record<string, string> => ({ 'if-none-mat
 
 const PROBES: readonly Probe[] = [
   { name: 'POST 从历史恢复副本', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history/${missing()}/restore`, 'POST', { requestId: missing(), spaceId: w.outsider.personalSpaceId }) },
+  { name: 'DELETE 清除历史', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history`, 'DELETE') },
   { name: 'GET 历史列表', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history`) },
   { name: 'GET 历史元数据', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history/${missing()}`) },
   { name: 'GET 历史原正文', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history/${missing()}/content`) },

@@ -1,9 +1,12 @@
-import type { CreatedDocument, DocumentHistoryDetail, DocumentHistoryListResponse, RestoreDocumentHistoryRequest } from '@nerve-office/contracts'
-import { createdDocumentSchema, documentHistoryDetailSchema, documentHistoryListResponseSchema } from '@nerve-office/contracts'
+import type { ClearDocumentHistoryResponse, CreatedDocument, DocumentHistoryDetail, DocumentHistoryListResponse, RestoreDocumentHistoryRequest } from '@nerve-office/contracts'
+import { clearDocumentHistoryResponseSchema, createdDocumentSchema, documentHistoryDetailSchema, documentHistoryListResponseSchema } from '@nerve-office/contracts'
 import { apiFetch, apiRequest, ResponseFormatError } from './client.ts'
 
 function historyPath(documentId: string): string {
   return `/api/documents/${documentId}/history`
+}
+export async function clearDocumentHistory(documentId: string): Promise<ClearDocumentHistoryResponse> {
+  return apiRequest(historyPath(documentId), { method: 'DELETE', schema: clearDocumentHistoryResponseSchema })
 }
 export async function fetchDocumentHistory(documentId: string, cursor: string | null, signal?: AbortSignal): Promise<DocumentHistoryListResponse> {
   const query = cursor === null ? '' : `?${new URLSearchParams({ cursor }).toString()}`

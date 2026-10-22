@@ -57,7 +57,7 @@ async function list(id: string, suffix = '') {
 
 describe('US-M5-10 用户历史读取', () => {
   it('旧文档没有采样时返回真实空列表，不拿当前内容冒充历史', async () => {
-    expect(await list((await document()).id)).toEqual({ items: [], nextCursor: null })
+    expect(await list((await document()).id)).toEqual({ items: [], nextCursor: null, canClearHistory: true })
   })
 
   it('30 条 keyset 分页不重复、不串源；历史标题与保存时间固定，保存人使用当前显示名', async () => {

@@ -218,6 +218,34 @@
       "when": 1792669972625,
       "tag": "0030_m5_history_restore_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1792678641168,
+      "tag": "0031_history_clear_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1792680320057,
+      "tag": "0032_history_purge_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1792681736039,
+      "tag": "0033_m5_document_upgrade_barrier",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792682232289,
+      "tag": "0034_m5_document_upgrade_audit",
+      "breakpoints": true
     }
   ]
 }

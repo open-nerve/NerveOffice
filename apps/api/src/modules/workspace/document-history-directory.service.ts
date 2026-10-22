@@ -20,7 +20,7 @@ export class DocumentHistoryDirectoryService {
     return this.transactions.readSnapshot(async (tx) => {
       const page = await this.history.list(actor, documentId, query, tx)
       const accounts = await this.users.findByIds(page.items.map(item => item.savedBy), tx)
-      return { items: page.items.map(item => ({ ...item, savedBy: toUserSummary(accountIn(accounts, item.savedBy)) })), nextCursor: page.nextCursor }
+      return { items: page.items.map(item => ({ ...item, savedBy: toUserSummary(accountIn(accounts, item.savedBy)) })), nextCursor: page.nextCursor, canClearHistory: page.canClearHistory }
     })
   }
 

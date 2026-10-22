@@ -125,9 +125,10 @@ export {
   UNIVER_SDK_VERSION,
 } from './documents/content.ts'
 export type { RevisionConflictDetails, RevisionSource, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
-export { documentHistoryDetailSchema, documentHistoryIdSchema, documentHistoryListResponseSchema, documentHistorySummarySchema, HISTORY_PAGE_SIZE, historyListQuerySchema, restoreDocumentHistoryRequestSchema } from './documents/document-history.ts'
-export type { DocumentHistoryDetail, DocumentHistoryListResponse, DocumentHistorySummary, HistoryListQuery, RestoreDocumentHistoryRequest } from './documents/document-history.ts'
+export { clearDocumentHistoryResponseSchema, documentHistoryDetailSchema, documentHistoryIdSchema, documentHistoryListResponseSchema, documentHistorySummarySchema, HISTORY_PAGE_SIZE, historyListQuerySchema, restoreDocumentHistoryRequestSchema } from './documents/document-history.ts'
+export type { ClearDocumentHistoryResponse, DocumentHistoryDetail, DocumentHistoryListResponse, DocumentHistorySummary, HistoryListQuery, RestoreDocumentHistoryRequest } from './documents/document-history.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
+export * from './documents/document-upgrade.ts'
 export {
   conflictCopyQuerySchema,
   conflictCopyTitle,

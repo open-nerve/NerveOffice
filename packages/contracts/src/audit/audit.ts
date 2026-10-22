@@ -49,6 +49,13 @@ export const AUDIT_ACTIONS = [
   'documents.moved',
   'documents.copied',
   'documents.history_restored',
+  'documents.history_cleared',
+  'documents.checkpoints_expired',
+  'documents.upgrade_prepared',
+  'documents.upgrade_ready',
+  'documents.upgrade_failed',
+  'documents.upgrade_released',
+  'documents.upgrade_aborted',
   // M2-P4 S3：回收站。删除记原位置与删除单元；恢复记恢复到的位置与是否回落到根目录；
   // 永久删除记这一单里的份数与连带删除的单元，不记标题与名称（到期自动清理时操作者是系统，actor_type = 'system'）
   'documents.deleted',

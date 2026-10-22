@@ -89,6 +89,12 @@ export interface AppConfig {
   readonly shutdown: { readonly timeoutMs: number }
   readonly log: { readonly level: LogLevel }
   readonly jobs: {
+    /** 用户历史与运维检查点按既定期限分批清理。 */
+    readonly historyPurge: {
+      readonly enabled: boolean
+      readonly intervalMs: number
+      readonly batchSize: number
+    }
     /** 回收站里到期的删除单元的自动清理（M2-P4 设计 §3.4 第 6 条）：应用自己的定时器 */
     readonly trashPurge: {
       /** 关掉之后不再起定时器（应用照常提供回收站的人工操作），默认开启 */
@@ -371,6 +377,9 @@ const environmentSchema = z.object({
   NERVE_REVISION_PURGE_ENABLED: flag().default(true),
   NERVE_REVISION_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
   NERVE_REVISION_PURGE_BATCH: integer(1, 10_000).default(1_000),
+  NERVE_HISTORY_PURGE_ENABLED: flag().default(true),
+  NERVE_HISTORY_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
+  NERVE_HISTORY_PURGE_BATCH: integer(1, 1_000).default(100),
   // 最低客户端构建（M3-P3 设计 §3.5）：运维开关，不设时不按构建拦
   NERVE_MIN_CLIENT_BUILD: minimumBuild.optional(),
   NERVE_LOCAL_DRAFTS_ENABLED: flag().default(true),
@@ -521,6 +530,11 @@ function toAppConfig(env: Environment): AppConfig {
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },
     jobs: {
+      historyPurge: {
+        enabled: env.NERVE_HISTORY_PURGE_ENABLED,
+        intervalMs: env.NERVE_HISTORY_PURGE_INTERVAL_MS,
+        batchSize: env.NERVE_HISTORY_PURGE_BATCH,
+      },
       trashPurge: {
         enabled: env.NERVE_TRASH_PURGE_ENABLED,
         intervalMs: env.NERVE_TRASH_PURGE_INTERVAL_MS,

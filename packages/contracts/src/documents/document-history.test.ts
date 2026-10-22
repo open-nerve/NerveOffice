@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { documentHistoryDetailSchema, documentHistoryIdSchema, documentHistoryListResponseSchema, HISTORY_PAGE_SIZE, historyListQuerySchema, restoreDocumentHistoryRequestSchema } from './document-history.ts'
+import { clearDocumentHistoryResponseSchema, documentHistoryDetailSchema, documentHistoryIdSchema, documentHistoryListResponseSchema, HISTORY_PAGE_SIZE, historyListQuerySchema, restoreDocumentHistoryRequestSchema } from './document-history.ts'
 
 const ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const AT = '2026-10-22T08:00:00.000Z'
@@ -41,7 +41,18 @@ describe('用户历史契约', () => {
     expect(documentHistoryDetailSchema.safeParse({ ...item, compatibility: 'verified' }).success).toBe(false)
     for (const patch of [{ id: 'x' }, { savedAt: 'yesterday' }, { revision: 0 }, { rawBytes: -1 }])
       expect(documentHistoryDetailSchema.safeParse({ ...item, ...patch }).success).toBe(false)
-    expect(documentHistoryListResponseSchema.parse({ items: [item], nextCursor: null, total: 1 })).toEqual({ items: [item], nextCursor: null })
+    expect(documentHistoryListResponseSchema.parse({ items: [item], nextCursor: null, canClearHistory: false, total: 1 })).toEqual({ items: [item], nextCursor: null, canClearHistory: false })
+  })
+
+  it('清除资格必须由服务端明确返回，清除数量只接受非负整数', () => {
+    for (const canClearHistory of [undefined, null, 'true', 1])
+      expect(documentHistoryListResponseSchema.safeParse({ items: [], nextCursor: null, canClearHistory }).success).toBe(false)
+    for (const canClearHistory of [false, true])
+      expect(documentHistoryListResponseSchema.parse({ items: [], nextCursor: null, canClearHistory }).canClearHistory).toBe(canClearHistory)
+    for (const cleared of [0, 1, 100])
+      expect(clearDocumentHistoryResponseSchema.parse({ cleared })).toEqual({ cleared })
+    for (const cleared of [undefined, null, -1, 1.5, '2', Number.POSITIVE_INFINITY])
+      expect(clearDocumentHistoryResponseSchema.safeParse({ cleared }).success).toBe(false)
   })
 
   it('恢复明确要求目标空间和请求标识，标题沿用码点与空白规则，不接收替换原件或正文', () => {

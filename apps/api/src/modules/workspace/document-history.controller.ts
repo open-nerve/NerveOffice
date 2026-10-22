@@ -1,19 +1,32 @@
-import type { CreatedDocument, DocumentHistoryDetail, DocumentHistoryListResponse, HistoryListQuery, RestoreDocumentHistoryRequest } from '@nerve-office/contracts'
+import type { ClearDocumentHistoryResponse, CreatedDocument, DocumentHistoryDetail, DocumentHistoryListResponse, HistoryListQuery, RestoreDocumentHistoryRequest } from '@nerve-office/contracts'
 import type { Buffer } from 'node:buffer'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal } from '../auth/index.ts'
 import { documentHistoryIdSchema, documentIdSchema, historyListQuerySchema, restoreDocumentHistoryRequestSchema } from '@nerve-office/contracts'
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseInterceptors } from '@nestjs/common'
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Query, UseInterceptors } from '@nestjs/common'
 import { BackgroundRequest } from '../../shared/background-request.ts'
 import { RequestOrigin } from '../audit/index.ts'
 import { CurrentPrincipal } from '../auth/index.ts'
-import { accessActorOf, DocumentHistoryRestoreService } from '../documents/index.ts'
+import { accessActorOf, DocumentHistoryClearService, DocumentHistoryRestoreService } from '../documents/index.ts'
 import { DocumentHistoryDirectoryService } from './document-history-directory.service.ts'
 import { HistoryContentInterceptor } from './history-content.interceptor.ts'
 
 @Controller('documents/:id/history')
 export class DocumentHistoryController {
-  constructor(private readonly directory: DocumentHistoryDirectoryService, private readonly restoration: DocumentHistoryRestoreService) {}
+  constructor(
+    private readonly directory: DocumentHistoryDirectoryService,
+    private readonly restoration: DocumentHistoryRestoreService,
+    private readonly clearing: DocumentHistoryClearService,
+  ) {}
+
+  @Delete()
+  async clear(
+    @CurrentPrincipal() principal: Principal,
+    @Param('id', { schema: documentIdSchema }) id: string,
+    @RequestOrigin() origin: Extract<AuditOrigin, { source: 'http' }>,
+  ): Promise<ClearDocumentHistoryResponse> {
+    return this.clearing.clear(accessActorOf(principal), id, origin)
+  }
 
   @Get()
   async list(

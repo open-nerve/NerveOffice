@@ -8,7 +8,7 @@
 import { assetObjectClaims, assetObjects, assetQuota, assets } from '../db/schema/assets/index.ts'
 import { auditEvents } from '../db/schema/audit/index.ts'
 import { authInvitations, authLoginThrottles, authPasswordResets, authSessions } from '../db/schema/auth/index.ts'
-import { documentAssetLinks, documentCheckpointAssets, documentCheckpoints, documentContents, documentEditLeases, documentGrants, documentHistoryBuckets, documentRevisions, documents, documentSaveReceipts, folders, trashEntries } from '../db/schema/documents/index.ts'
+import { documentAssetLinks, documentCheckpointAssets, documentCheckpoints, documentContents, documentEditLeases, documentGrants, documentHistoryBuckets, documentRevisions, documents, documentSaveReceipts, documentUpgradeBarrier, documentUpgradeBatches, documentUpgradeSources, folders, trashEntries } from '../db/schema/documents/index.ts'
 import { userLocalKeys } from '../db/schema/local-keys/index.ts'
 import { spaceMembers, spaces } from '../db/schema/spaces/index.ts'
 import { users } from '../db/schema/users/index.ts'
@@ -40,6 +40,9 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   documentRevisions,
   documents,
   documentSaveReceipts,
+  documentUpgradeBarrier,
+  documentUpgradeBatches,
+  documentUpgradeSources,
   folders,
   trashEntries,
   userLocalKeys,
@@ -62,7 +65,7 @@ export type { Database } from '../modules/database/index.ts'
 export { APPLICATION_NAME } from '../modules/database/index.ts'
 export { DocumentAssetReferences } from '../modules/documents/document-asset-references.ts'
 export { DocumentAssetsRepository } from '../modules/documents/document-assets.repository.ts'
-export { DocumentCheckpointClock } from '../modules/documents/document-checkpoint-clock.ts'
+export { DatabaseDocumentCheckpointClock, DocumentCheckpointClock } from '../modules/documents/document-checkpoint-clock.ts'
 export { DocumentCheckpointService } from '../modules/documents/document-checkpoint.service.ts'
 export { DocumentHistoryValidation } from '../modules/documents/document-history-validation.ts'
 export { DocumentHistoryRepository } from '../modules/documents/document-history.repository.ts'

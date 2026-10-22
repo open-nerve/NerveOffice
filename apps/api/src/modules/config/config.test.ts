@@ -101,6 +101,7 @@ describe('loadConfig', () => {
       jobs: {
         trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 },
         revisionPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 1_000 },
+        historyPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 100 },
       },
       revisions: { retentionDays: 30 },
       // 页面的版本：默认不按构建拦（只按数据格式，M3-P3 设计 §3.5）
@@ -152,6 +153,9 @@ describe('loadConfig', () => {
       NERVE_REVISION_PURGE_ENABLED: 'false',
       NERVE_REVISION_PURGE_INTERVAL_MS: '600000',
       NERVE_REVISION_PURGE_BATCH: '250',
+      NERVE_HISTORY_PURGE_ENABLED: 'false',
+      NERVE_HISTORY_PURGE_INTERVAL_MS: '120000',
+      NERVE_HISTORY_PURGE_BATCH: '75',
       NERVE_SNAPSHOT_INSPECTION_PROCESSES: '4',
       NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '0',
       NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '1500',
@@ -190,6 +194,7 @@ describe('loadConfig', () => {
     expect(config.jobs).toEqual({
       trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 },
       revisionPurge: { enabled: false, intervalMs: 600_000, batchSize: 250 },
+      historyPurge: { enabled: false, intervalMs: 120_000, batchSize: 75 },
     })
     expect(config.revisions).toEqual({ retentionDays: 45 })
     expect(config.snapshotInspection).toEqual({ processes: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
@@ -664,5 +669,25 @@ describe('私有资源目录只在 HTTP 服务端必填', () => {
   })
   it('明确的绝对路径保留在服务端配置', () => {
     expect(loadServerConfig({ ...server, NERVE_ASSET_ROOT: '/srv/nerve/assets' }).assets.root).toBe('/srv/nerve/assets')
+  })
+})
+
+describe('历史保留期清理配置', () => {
+  it('默认每小时以 100 条短批清理；配置冻结，接受严格边界', () => {
+    const defaults = loadConfig(REQUIRED).jobs.historyPurge
+    expect(defaults).toEqual({ enabled: true, intervalMs: 3600_000, batchSize: 100 })
+    expect(Object.isFrozen(defaults)).toBe(true)
+    for (const [intervalMs, batchSize] of [[1000, 1], [86400_000, 1000]])
+      expect(loadConfig({ ...REQUIRED, NERVE_HISTORY_PURGE_INTERVAL_MS: String(intervalMs), NERVE_HISTORY_PURGE_BATCH: String(batchSize), NERVE_HISTORY_PURGE_ENABLED: 'false' }).jobs.historyPurge).toEqual({ enabled: false, intervalMs, batchSize })
+  })
+  it.each([
+    ['NERVE_HISTORY_PURGE_ENABLED', 'yes'],
+    ['NERVE_HISTORY_PURGE_INTERVAL_MS', '999'],
+    ['NERVE_HISTORY_PURGE_INTERVAL_MS', '86400001'],
+    ['NERVE_HISTORY_PURGE_BATCH', '0'],
+    ['NERVE_HISTORY_PURGE_BATCH', '1001'],
+    ['NERVE_HISTORY_PURGE_BATCH', '1.5'],
+  ])('%s 拒绝 %s', (variable, value) => {
+    expect(issuesOf(() => loadConfig({ ...REQUIRED, [variable]: value })).map(issue => issue.variable)).toContain(variable)
   })
 })
