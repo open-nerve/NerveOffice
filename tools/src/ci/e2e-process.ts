@@ -8,7 +8,7 @@ import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 
-export const OWNER_VARIABLE = 'NERVE_CI_E2E_OWNER'
+export const OWNER_VARIABLE = 'NERVE_TEST_CI_E2E_OWNER'
 export const CI_BUDGETS = { runMs: 90 * 60_000, cleanupMs: 15 * 60_000, forceMs: 60_000, pollMs: 250 }
 const budgetsSchema = z.object({ runMs: z.number().positive(), cleanupMs: z.number().positive(), forceMs: z.number().positive(), pollMs: z.number().positive() })
 const identitySchema = z.object({ pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), uid: z.number().int().nonnegative(), group: z.number().int().positive() })

@@ -6,7 +6,7 @@ import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import process from 'node:process'
 
-const variable = 'NERVE_CI_E2E_OWNER'
+const variable = 'NERVE_TEST_CI_E2E_OWNER'
 const owner = process.env[variable]
 if (owner !== undefined) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(owner))
