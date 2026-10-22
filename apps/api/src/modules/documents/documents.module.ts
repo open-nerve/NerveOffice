@@ -12,6 +12,9 @@ import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-p
 import { DocumentAssetAccessService } from './document-asset-access.service.ts'
 import { DocumentAssetReferences } from './document-asset-references.ts'
 import { DocumentAssetsRepository } from './document-assets.repository.ts'
+import { DatabaseDocumentCheckpointClock, DocumentCheckpointClock } from './document-checkpoint-clock.ts'
+import { DocumentCheckpointService } from './document-checkpoint.service.ts'
+import { DocumentCheckpointsRepository } from './document-checkpoints.repository.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { DocumentContentController } from './document-content.controller.ts'
 import { DocumentContentService } from './document-content.service.ts'
@@ -58,6 +61,9 @@ import { WriteAccessRevocation } from './write-access.ts'
     DocumentAssetAccessService,
     DocumentAssetReferences,
     DocumentAssetsRepository,
+    DocumentCheckpointsRepository,
+    DocumentCheckpointService,
+    { provide: DocumentCheckpointClock, useClass: DatabaseDocumentCheckpointClock },
     DocumentContentsRepository,
     DocumentRevisionsRepository,
     // 保存的回执（M3-P3）：内容相同、修订号没变的确认，只给本模块的保存

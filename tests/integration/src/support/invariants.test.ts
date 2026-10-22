@@ -132,11 +132,19 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
       await client.query('INSERT INTO asset_object_claims (sha256, bytes) VALUES (repeat(\'a\', 64), 100)')
       await client.query('INSERT INTO asset_objects (sha256, storage_key, mime_type, width, height, frames, bytes) VALUES (repeat(\'a\', 64), \'objects/aa/\' || repeat(\'a\', 64), \'image/png\', 1, 1, 1, 100)')
       await client.query('INSERT INTO asset_quota (id, used_bytes, used_assets) VALUES (1, 1, 1)')
+      // I25：源文档还存在，但小时正文没有对应的独立采样占位；清除后再次保存会复生。
+      await client.query(`INSERT INTO document_checkpoints
+        (source_document_id, kind, hour_bucket, title, document_type, unit_id, profile, format_version,
+         sdk_version, revision, formulas_pending, snapshot, raw_bytes, stored_bytes, snapshot_hash,
+         saved_by, saved_at, created_at, expires_at)
+        VALUES ($1, 'hourly', date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+          '缺占位', 'sheet', 'fixture', 'sheet@1', 1, 'test', 1, false, '\\x00'::bytea, 1, 1,
+          sha256('\\x00'::bytea), $2, now(), now(), now() + interval '168 hours')`, [await w.document(first), owner.id])
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)
     expect(failure?.message).toContain('违反了只由服务保证的不变量')
-    for (const id of ['I22 ', 'I23 ', 'I24 '])
+    for (const id of ['I22 ', 'I23 ', 'I24 ', 'I25 '])
       expect(failure?.message).toContain(id)
     for (const invariant of Object.keys(INVARIANTS))
       expect(failure?.message, invariant).toContain(`${invariant}：`)

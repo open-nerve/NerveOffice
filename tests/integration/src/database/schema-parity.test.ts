@@ -43,6 +43,16 @@ BEGIN
 END;
 $function$`,
   'TRIGGER CREATE TRIGGER documents_write_epoch_monotonic BEFORE UPDATE ON public.documents FOR EACH ROW WHEN ((new.write_epoch < old.write_epoch)) EXECUTE FUNCTION documents_reject_write_epoch_decrease() ENABLED O',
+  `FUNCTION CREATE OR REPLACE FUNCTION public.document_checkpoints_reject_update()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  RAISE EXCEPTION '历史检查点不可覆盖：%', OLD.id
+    USING ERRCODE = 'check_violation', CONSTRAINT = 'document_checkpoints_immutable', TABLE = 'document_checkpoints';
+END;
+$function$`,
+  'TRIGGER CREATE TRIGGER document_checkpoints_immutable BEFORE UPDATE ON public.document_checkpoints FOR EACH ROW EXECUTE FUNCTION document_checkpoints_reject_update() ENABLED O',
 ]
 
 /**
