@@ -1,6 +1,6 @@
 # P3-S6 链接修复与 CI 收尾复核
 
-日期：2026-10-22。承接已提交的 `ab65be50` 调查与用户批准，在唯一 P3 分支实施。局部修复和当前输入 full05/container03 的完整门禁、原件审计已经完成；新合并 SHA 的六项 CI/十份产物、冻结和清理仍待完成，P3 未关闭、P4 未开始。
+日期：2026-10-22。用户批准的 SDK 与 CI 监督器修复已由 full05/container03 完整验证，正常提交 `8634a402`、no-ff 合入并推送 main `3d8b34fd`；原件与源码证明、正常 hooks 已完成。该 SHA 的第三轮 CI 在工作流解析阶段失败，当前仅接续下述两份基础设施增量；最终同 SHA CI、冻结和清理尚待完成，P3 未关闭、P4 未开始。
 
 ## 产品修复
 
@@ -47,3 +47,13 @@ Linux 真实进程反例覆盖快速父退后的孤儿、重复信号、被终�
 full05 默认十阶段全部通过：670 文件/16,149 单元与集成，2,394 E2E 首次通过、16 项原身份及原因跳过；其中原富文本和两条未提交正文故事在三浏览器内全部首次通过。container03 默认生产镜像 330/330 首次通过，包含 319 普通场景、4 崩溃恢复与 7 后端重启。两轮全部 4,414 文件及 16 包/30 文件的 SDK 输入相同，各自前后未变；JSON/HTML、首次结果、原跳过、原件摘要、168+4 轮崩溃、933 份 OPFS 归档及容器配置/清理均通过严格审计。完整数据与原件摘要见 [能力报告](P3-能力验收报告.md)。
 
 独立局部准备复核 `s6/final-local-readiness-review01.md` 未发现新增代码问题（0 Critical / 0 Important / 0 Minor），只核对当时已完成的 full05 及代码，不提前接受尚在运行的 container03。容器结束后由主流程完成上述原件审计；结果文档另作精确差异复核。交付 v2 的六份收集/审计/源码等价/关闭脚本经独立准备审查无遗留发现，仅代表准备就绪，不代表实际 CI 已验收。
+
+## GitHub 工作流上下文修正
+
+[CI 39729684486](https://github.com/open-nerve/NerveOffice/actions/runs/39729684486) 在解析阶段直接失败，未创建 job 或 artifact；注解明确指出 Line 119 的 runner.temp 不可用于 job env。GitHub 官方 [上下文作用域](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability) 列明 step env 支持 runner、job env 不支持。原本机 YAML 接线测试未检查该约束，属于本次 CI 配置遗漏；产品回归没有在该轮开始执行。
+
+仅将路径表达式移到 e2e-prepare 的 step env，在真实 node prepare 成功后经 GITHUB_ENV 交给后续步骤。目录格式、位置、UUID/身份、退出/报告/归档守卫及原预算不变。既有接线测试增加作用域及成功导出顺序断言，仍共 11 项；旧配置有效 RED，修正后 11/11。官方发布 actionlint 1.7.12 的归档和 checksums 均验摘要，其对旧文件唯一报同一上下文错误，对修正后整份工作流退出 0。
+
+摘要锁定的 Node 24.21.0 Linux/ARM64 镜像实际执行 YAML 中的 prepare shell：四浏览器分别独占创建目录并向后续进程传递同一个绝对路径（含空格）；同路径再次登记均失败、不写 GITHUB_ENV、不改变原 owner。四次成功、四次失败关闭，诊断容器回收，定向 lint/type 通过。该对照未运行产品浏览器；不代替最终 GitHub 执行。
+
+两份基础设施变化为 `.github/workflows/ci.yml` 与 `tools/src/verify/ci-workflow.test.ts`。full05/container03 的其余产品、SDK、浏览器故事及运行器内容不变；新签署须逐项校验两文件前后摘要与独立增量证据，并与结果文档白名单分开。完整 CI 六项 jobs、十份 artifacts 仍须在新 main SHA 实际通过。原件位于 `s6/ci-context-fix01/`，原失败 API 与注解来源位于 `s6/ci/39729684486/`。
