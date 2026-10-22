@@ -84,6 +84,8 @@ export interface FacadeSheet extends EntrySheet {
 }
 
 export interface FacadeWorkbook extends EntryWorkbook {
+  /** 公开 Facade，只读确认单元格正文是否仍处于编辑中。 */
+  readonly isCellEditing: () => boolean
   readonly getActiveSheet: () => FacadeSheet
   readonly insertDefinedName: (name: string, reference: string) => unknown
   /** 当前单元格（选区的主单元格）；没有选区时是 null */

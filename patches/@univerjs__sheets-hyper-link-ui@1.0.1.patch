@@ -1,5 +1,5 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index f57aae76dae2faa2d837c9acecae21d473f76815..6a194376878c2d9a7b9e679be1e344d6a43b044d 100644
+index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd014bb342b5 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
 @@ -32,8 +32,8 @@ let _univerjs_sheets_data_validation = require("@univerjs/sheets-data-validation
@@ -114,7 +114,49 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..6a194376878c2d9a7b9e679be1e344d6
  				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Input, {
  					dir: "ltr",
  					value: payload,
-@@ -2509,7 +2514,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2401,6 +2406,8 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 	_initClickListener() {
+ 		this.disposeWithMe(this._hoverManagerService.currentClickedCell$.subscribe((currentCell) => {
+ 			var _renderer$with$getSke, _style$tr;
++			// A queued sheet event must not replace or dismiss the active Docs popup.
++			if (this._editorBridgeService.isVisible().visible) return;
+ 			if (!currentCell) {
+ 				this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 				return;
+@@ -2460,14 +2467,20 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 			visible,
+ 			state
+ 		}))))).subscribe(({ visible, state }) => {
+-			if (!state || state.editorUnitId !== _univerjs_core.DOCS_NORMAL_EDITOR_UNIT_ID_KEY) return;
+-			if (!visible.visible) {
+-				subscription === null || subscription === void 0 || subscription.unsubscribe();
+-				this._sheetsHyperLinkPopupService.hideCurrentPopup("editing");
++			subscription === null || subscription === void 0 || subscription.unsubscribe();
++			subscription = null;
++			// Leaving viewing mode invalidates its buttons even while the pointer is inside.
++			if (visible.visible && this._sheetsHyperLinkPopupService.currentPopup?.type === "viewing") this._sheetsHyperLinkPopupService.hideCurrentPopup("viewing", true);
++			if (!state || state.editorUnitId !== _univerjs_core.DOCS_NORMAL_EDITOR_UNIT_ID_KEY || !visible.visible) {
++				if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				this._sheetsHyperLinkPopupService.endEditing("editing");
+ 				return;
+ 			}
+ 			const { editorUnitId, unitId, sheetId, row, column } = state;
++			// A popup belongs to one editing cell, even when the editor stays visible.
++			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
+ 			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
+ 			if (!renderer) return;
+ 			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
+@@ -2478,7 +2491,6 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 			});
+ 			if (!viewPermission) return;
+ 			const docEventService = renderer.with(_univerjs_docs_ui.DocEventManagerService);
+-			subscription === null || subscription === void 0 || subscription.unsubscribe();
+ 			subscription = docEventService.clickCustomRanges$.subscribe((customRange) => {
+ 				var _this$_renderManagerS;
+ 				if (customRange.range.rangeType !== _univerjs_core.CustomRangeType.HYPERLINK) {
+@@ -2509,7 +2521,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  		this.disposeWithMe(() => subscription === null || subscription === void 0 ? void 0 : subscription.unsubscribe());
  	}
  	_initTextSelectionListener() {
@@ -125,7 +167,50 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..6a194376878c2d9a7b9e679be1e344d6
  			if ((selection === null || selection === void 0 ? void 0 : selection.unitId) === _univerjs_core.DOCS_NORMAL_EDITOR_UNIT_ID_KEY) this._sheetsHyperLinkPopupService.endEditing("editing");
  		}));
  	}
-@@ -3054,7 +3061,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -2939,6 +2953,8 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 	_initHoverListener() {
+ 		this.disposeWithMe(this._hoverManagerService.currentRichText$.pipe((0, rxjs.debounceTime)(200)).subscribe((currentCell) => {
+ 			var _currentCell$customRa, _renderer$with$getSke, _style$tr;
++			// A queued sheet event must not replace or dismiss the active Docs popup.
++			if (this._editorBridgeService.isVisible().visible) return;
+ 			if (!currentCell || ((_currentCell$customRa = currentCell.customRange) === null || _currentCell$customRa === void 0 ? void 0 : _currentCell$customRa.rangeType) !== _univerjs_core.CustomRangeType.HYPERLINK) {
+ 				this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 				return;
+@@ -3001,15 +3017,20 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 			visible,
+ 			state
+ 		}))))).subscribe(({ visible, state }) => {
+-			if (!state) return;
+-			if (state.editorUnitId !== _univerjs_core.DOCS_NORMAL_EDITOR_UNIT_ID_KEY) return;
+-			if (!visible.visible) {
+-				subscribe === null || subscribe === void 0 || subscribe.unsubscribe();
+-				this._sheetsHyperLinkPopupService.hideCurrentPopup("editing");
++			subscribe === null || subscribe === void 0 || subscribe.unsubscribe();
++			subscribe = null;
++			// Leaving viewing mode invalidates its buttons even while the pointer is inside.
++			if (visible.visible && this._sheetsHyperLinkPopupService.currentPopup?.type === "viewing") this._sheetsHyperLinkPopupService.hideCurrentPopup("viewing", true);
++			if (!state || state.editorUnitId !== _univerjs_core.DOCS_NORMAL_EDITOR_UNIT_ID_KEY || !visible.visible) {
++				if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				this._sheetsHyperLinkPopupService.endEditing("editing");
+ 				return;
+ 			}
+ 			const { editorUnitId, unitId, sheetId, row, column } = state;
++			// A popup belongs to one editing cell, even when the editor stays visible.
++			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
+ 			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
+ 			if (!renderer) return;
+ 			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
+@@ -3020,7 +3041,6 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 			});
+ 			const docEventService = renderer.with(_univerjs_docs_ui.DocEventManagerService);
+ 			if (!viewPermission) return;
+-			subscribe === null || subscribe === void 0 || subscribe.unsubscribe();
+ 			subscribe = docEventService.hoverCustomRanges$.pipe((0, rxjs.debounceTime)(200)).subscribe((customRanges) => {
+ 				var _this$_renderManagerS;
+ 				const customRange = customRanges.find((customRange) => customRange.range.rangeType === _univerjs_core.CustomRangeType.HYPERLINK);
+@@ -3054,7 +3074,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  		});
  	}
  	_initTextSelectionListener() {
@@ -137,7 +222,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..6a194376878c2d9a7b9e679be1e344d6
  		}));
  	}
 diff --git a/lib/es/index.js b/lib/es/index.js
-index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..7948334fcf475e19c475ea34b3026c153d791c8a 100644
+index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb9818569b 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -5,7 +5,7 @@ import { DocSelectionManagerService, UniverDocsPlugin } from "@univerjs/docs";
@@ -261,7 +346,49 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..7948334fcf475e19c475ea34b3026c15
  				children: /* @__PURE__ */ jsx(Input, {
  					dir: "ltr",
  					value: payload,
-@@ -2508,7 +2513,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2400,6 +2405,8 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 	_initClickListener() {
+ 		this.disposeWithMe(this._hoverManagerService.currentClickedCell$.subscribe((currentCell) => {
+ 			var _renderer$with$getSke, _style$tr;
++			// A queued sheet event must not replace or dismiss the active Docs popup.
++			if (this._editorBridgeService.isVisible().visible) return;
+ 			if (!currentCell) {
+ 				this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 				return;
+@@ -2459,14 +2466,20 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 			visible,
+ 			state
+ 		}))))).subscribe(({ visible, state }) => {
+-			if (!state || state.editorUnitId !== DOCS_NORMAL_EDITOR_UNIT_ID_KEY) return;
+-			if (!visible.visible) {
+-				subscription === null || subscription === void 0 || subscription.unsubscribe();
+-				this._sheetsHyperLinkPopupService.hideCurrentPopup("editing");
++			subscription === null || subscription === void 0 || subscription.unsubscribe();
++			subscription = null;
++			// Leaving viewing mode invalidates its buttons even while the pointer is inside.
++			if (visible.visible && this._sheetsHyperLinkPopupService.currentPopup?.type === "viewing") this._sheetsHyperLinkPopupService.hideCurrentPopup("viewing", true);
++			if (!state || state.editorUnitId !== DOCS_NORMAL_EDITOR_UNIT_ID_KEY || !visible.visible) {
++				if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				this._sheetsHyperLinkPopupService.endEditing("editing");
+ 				return;
+ 			}
+ 			const { editorUnitId, unitId, sheetId, row, column } = state;
++			// A popup belongs to one editing cell, even when the editor stays visible.
++			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
+ 			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
+ 			if (!renderer) return;
+ 			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
+@@ -2477,7 +2490,6 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 			});
+ 			if (!viewPermission) return;
+ 			const docEventService = renderer.with(DocEventManagerService);
+-			subscription === null || subscription === void 0 || subscription.unsubscribe();
+ 			subscription = docEventService.clickCustomRanges$.subscribe((customRange) => {
+ 				var _this$_renderManagerS;
+ 				if (customRange.range.rangeType !== CustomRangeType.HYPERLINK) {
+@@ -2508,7 +2520,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  		this.disposeWithMe(() => subscription === null || subscription === void 0 ? void 0 : subscription.unsubscribe());
  	}
  	_initTextSelectionListener() {
@@ -272,7 +399,50 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..7948334fcf475e19c475ea34b3026c15
  			if ((selection === null || selection === void 0 ? void 0 : selection.unitId) === DOCS_NORMAL_EDITOR_UNIT_ID_KEY) this._sheetsHyperLinkPopupService.endEditing("editing");
  		}));
  	}
-@@ -3053,7 +3060,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -2938,6 +2952,8 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 	_initHoverListener() {
+ 		this.disposeWithMe(this._hoverManagerService.currentRichText$.pipe(debounceTime(200)).subscribe((currentCell) => {
+ 			var _currentCell$customRa, _renderer$with$getSke, _style$tr;
++			// A queued sheet event must not replace or dismiss the active Docs popup.
++			if (this._editorBridgeService.isVisible().visible) return;
+ 			if (!currentCell || ((_currentCell$customRa = currentCell.customRange) === null || _currentCell$customRa === void 0 ? void 0 : _currentCell$customRa.rangeType) !== CustomRangeType.HYPERLINK) {
+ 				this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 				return;
+@@ -3000,15 +3016,20 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 			visible,
+ 			state
+ 		}))))).subscribe(({ visible, state }) => {
+-			if (!state) return;
+-			if (state.editorUnitId !== DOCS_NORMAL_EDITOR_UNIT_ID_KEY) return;
+-			if (!visible.visible) {
+-				subscribe === null || subscribe === void 0 || subscribe.unsubscribe();
+-				this._sheetsHyperLinkPopupService.hideCurrentPopup("editing");
++			subscribe === null || subscribe === void 0 || subscribe.unsubscribe();
++			subscribe = null;
++			// Leaving viewing mode invalidates its buttons even while the pointer is inside.
++			if (visible.visible && this._sheetsHyperLinkPopupService.currentPopup?.type === "viewing") this._sheetsHyperLinkPopupService.hideCurrentPopup("viewing", true);
++			if (!state || state.editorUnitId !== DOCS_NORMAL_EDITOR_UNIT_ID_KEY || !visible.visible) {
++				if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				this._sheetsHyperLinkPopupService.endEditing("editing");
+ 				return;
+ 			}
+ 			const { editorUnitId, unitId, sheetId, row, column } = state;
++			// A popup belongs to one editing cell, even when the editor stays visible.
++			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
+ 			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
+ 			if (!renderer) return;
+ 			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
+@@ -3019,7 +3040,6 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 			});
+ 			const docEventService = renderer.with(DocEventManagerService);
+ 			if (!viewPermission) return;
+-			subscribe === null || subscribe === void 0 || subscribe.unsubscribe();
+ 			subscribe = docEventService.hoverCustomRanges$.pipe(debounceTime(200)).subscribe((customRanges) => {
+ 				var _this$_renderManagerS;
+ 				const customRange = customRanges.find((customRange) => customRange.range.rangeType === CustomRangeType.HYPERLINK);
+@@ -3053,7 +3073,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  		});
  	}
  	_initTextSelectionListener() {
