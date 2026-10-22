@@ -19,4 +19,13 @@ export class DocumentCheckpointService {
   async captureOperation(documentId: string, kind: OperationCheckpointKind, eventId: string, transaction: Transaction): Promise<string | undefined> {
     return this.repository.captureOperation(documentId, kind, eventId, await this.clock.now(transaction), transaction)
   }
+
+  /** 一次删除单元使用同一数据库时刻；调用方已按 id 持有全部源文档锁。 */
+  async captureOperations(documentIds: readonly string[], kind: OperationCheckpointKind, eventId: string, transaction: Transaction): Promise<void> {
+    if (documentIds.length === 0)
+      return
+    const at = await this.clock.now(transaction)
+    for (const id of documentIds)
+      await this.repository.captureOperation(id, kind, eventId, at, transaction)
+  }
 }

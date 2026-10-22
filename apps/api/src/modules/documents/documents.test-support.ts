@@ -8,6 +8,7 @@ import type { AppConfig } from '../config/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpaceFacts, SpaceFactsWithOwner, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
+import type { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import type { ContentEnvelope, CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
 import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
@@ -842,6 +843,13 @@ export class FakeStore {
     }),
   }
 
+  // 既有业务单元测试隔离持久化；历史正文/引用/事务状态由真实 PostgreSQL 的 checkpoint-* 覆盖。
+  readonly checkpoints = {
+    captureHourly: vi.fn(async () => undefined),
+    captureOperation: vi.fn(async () => undefined),
+    captureOperations: vi.fn(async () => {}),
+  }
+
   get deps() {
     return {
       transactions: this.transactions as unknown as TransactionRunner,
@@ -863,6 +871,7 @@ export class FakeStore {
       clientFormats: this.clientFormats,
       inspector: this.inspector as unknown as SnapshotInspector,
       logger: this.logger,
+      checkpoints: this.checkpoints as unknown as DocumentCheckpointService,
     }
   }
 

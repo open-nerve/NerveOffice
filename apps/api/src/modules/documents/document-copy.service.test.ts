@@ -11,10 +11,10 @@ const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fd'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit } = store.deps
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, checkpoints } = store.deps
   // 既有样本没有图片；当前引用复制的授权与回滚由 asset-copies 的真实 PG 用例覆盖。
   const references = { copy: async () => {} } as unknown as DocumentAssetReferences
-  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, references) }
+  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, references, checkpoints) }
 }
 
 let requests = 0

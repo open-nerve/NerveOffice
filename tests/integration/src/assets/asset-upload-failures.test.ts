@@ -36,7 +36,7 @@ beforeAll(async () => {
   data = await readFile(new URL('../../../../apps/api/src/modules/assets/testdata/minimum.png', import.meta.url))
 })
 beforeEach(async () => {
-  await database.query(async client => client.query('TRUNCATE document_asset_links, assets, asset_objects, asset_object_claims, asset_quota'))
+  await database.query(async client => client.query('TRUNCATE document_asset_links, document_checkpoint_assets, assets, asset_objects, asset_object_claims, asset_quota'))
   await rm(join(root, 'objects'), { recursive: true })
   await mkdir(join(root, 'objects'), { mode: 0o700 })
 })

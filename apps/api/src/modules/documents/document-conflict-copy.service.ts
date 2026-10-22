@@ -18,6 +18,7 @@ import { SpacesService } from '../spaces/index.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { creatableSpace, documentAccessIn, DocumentAccessPolicy, requireAccess, requireSpaceContent } from './document-access-policy.ts'
 import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -77,6 +78,7 @@ export class DocumentConflictCopyService {
     private readonly clients: ClientFormatGate,
     private readonly inspector: SnapshotInspector,
     private readonly assetReferences: DocumentAssetReferences,
+    private readonly checkpoints: DocumentCheckpointService,
     logger: AppLogger,
   ) {
     this.#logger = logger.with({ module: 'documents' })
@@ -160,6 +162,7 @@ export class DocumentConflictCopyService {
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
+      await this.checkpoints.captureHourly(copy.id, transaction)
       // 明细里的 id 用数据库返回的（ADR-014 的"请求里的 id"）
       await this.audit.record({
         action: 'documents.conflict_copied',

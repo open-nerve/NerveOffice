@@ -13,8 +13,8 @@ const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fe'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit } = store.deps
-  const service = new DocumentCreationService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit)
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, checkpoints } = store.deps
+  const service = new DocumentCreationService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, checkpoints)
   return { store, service }
 }
 
