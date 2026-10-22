@@ -808,6 +808,7 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
   { file: 'local-drafts.ts', feature: 'local-drafts' },
   { file: 'local-data.ts', feature: 'local-data' },
   { file: 'editor.ts', feature: 'sheet-editor' },
+  { file: 'history.ts', feature: '{document-history,history-preview}' },
 ]
 
 /** web 元素里的测试与测试辅助（相对元素的路径）：不进产物，模块边界上按需放行 */
@@ -1479,6 +1480,7 @@ export default antfu(
             from: [
               { element: { type: 'web-entry', captured: { entry: 'editor' } } },
               { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } },
+              { element: { type: 'web-feature', captured: { feature: 'history-preview' }, fileInternalPath: 'start.tsx' } },
             ],
             allow: { to: { element: { type: 'web-editor', fileInternalPath: PUBLIC_ENTRY } } },
           },
@@ -1563,7 +1565,7 @@ export default antfu(
           // 图片持久配额/真实文件故障的集成测试：只从测试专用出口取内部实例，不把仓储加入生产公开接口。
           { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'assets' }, fileInternalPath: ['assets.repository.ts', 'file-storage.ts', 'image-runner.ts', 'image-types.ts', 'storage-adapter.ts'] } } } },
           // 图片引用与历史采样的真实事务/交错测试，只给测试专用出口，不加入 Documents 的生产公开接口。
-          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'documents' }, fileInternalPath: ['document-asset-references.ts', 'document-assets.repository.ts', 'document-checkpoint-clock.ts', 'document-checkpoint.service.ts'] } } } },
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'documents' }, fileInternalPath: ['document-asset-references.ts', 'document-assets.repository.ts', 'document-checkpoint-clock.ts', 'document-checkpoint.service.ts', 'document-history.repository.ts', 'document-history-validation.ts'] } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: [PUBLIC_ENTRY, 'integration.test-support.ts'] } } } },
           {
@@ -1676,6 +1678,25 @@ export default antfu(
           {
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'share-entry.tsx' } },
             allow: { to: { element: { type: 'web-feature', captured: { feature: 'sharing' }, fileInternalPath: PUBLIC_ENTRY } } },
+          },
+          // 历史列表按路由加载；独立预览仅由自己的入口组装，不能带入平台运行时。
+          {
+            from: [{ element: { type: ['web-app', 'web-entry', 'web-feature'] } }],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'document-history' } } } },
+            message: '历史列表只有 app/routes.ts 可以动态 import() 公开入口（M5-P4）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: { to: { element: { type: 'web-feature', captured: { feature: 'document-history' }, fileInternalPath: PUBLIC_ENTRY } }, dependency: { nodeKind: 'dynamic-import' } },
+          },
+          {
+            from: [{ element: { type: ['web-app', 'web-entry', 'web-feature'] } }],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'history-preview' } } } },
+            message: '历史预览只有独立 entries/history-preview 可以引用公开入口（M5-P4）',
+          },
+          {
+            from: { element: { type: 'web-entry', captured: { entry: 'history-preview' } } },
+            allow: { to: { element: { type: 'web-feature', captured: { feature: 'history-preview' }, fileInternalPath: PUBLIC_ENTRY } } },
           },
           // "与我共享"页同样按需加载（M2-P5 设计 §3.5）：左侧导航里只有入口，列表的渲染不进首屏
           {

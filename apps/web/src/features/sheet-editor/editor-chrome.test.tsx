@@ -22,6 +22,7 @@ const READY: EditorPageReady = {
   space: PERSONAL,
   accessVia: 'space',
   canShare: false,
+  canViewHistory: true,
   userId: '0199a2c4-0000-7000-8000-00000000000a',
 }
 const CLEAN: SaveView = { status: 'clean', formulasPending: false, problem: undefined, conflict: undefined, canSave: true, unsaved: false, unsavedEdits: false, checking: false, snapshotBytes: undefined }
@@ -49,7 +50,7 @@ const COPY = {
   formatVersion: 1,
   sdkVersion: '1.0.1',
   formulasPending: false,
-  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
+  permissions: { canEdit: true, canViewHistory: true, canClearHistory: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
 } as const
 
 /** 失去编辑权（默认：读得到、有修改，可以另存为副本或放弃） */
@@ -1686,6 +1687,14 @@ describe('打开自检失败的阅读（M3-P4 设计 §3.12，US-M3-15）', () =
   function backLink(): HTMLElement {
     return screen.getByRole('link', { name: '我的空间' })
   }
+
+  it('打开自检失败仍有独立历史入口，撤去资格后立即隐藏', () => {
+    const fake = renderChrome({ load: { ...READY, canViewHistory: true }, mode: { ...READING, damaged: FILTER_DAMAGED }, save: undefined })
+    expect(screen.getByRole('link', { name: '历史' })).toHaveAttribute('href', `/documents/${READY.documentId}/history`)
+    expect(screen.getByRole('link', { name: '历史' })).toHaveAttribute('target', '_blank')
+    fake.set({ load: { ...READY, canViewHistory: false } })
+    expect(screen.queryByRole('link', { name: '历史' })).toBeNull()
+  })
 
   it('数据不完整、能编辑的人：没有"编辑"，页头只能查看；提示条（role="alert"）说已阻止编辑，哪些部分没能载入（同一个说法只说一次）、继续编辑会让它们丢失、已通知管理员', () => {
     renderChrome({ mode: { ...READING, damaged: FILTER_DAMAGED }, save: undefined })

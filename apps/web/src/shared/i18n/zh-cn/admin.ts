@@ -38,6 +38,7 @@ const AUDIT_ACTION_NAMES: Record<AuditAction, string> = {
   'documents.transferred': '转移文档',
   'documents.renamed': '文档改名',
   'documents.moved': '移动文档',
+  'documents.history_restored': '从历史恢复副本',
   'documents.copied': '复制文档',
   'documents.deleted': '删除文档',
   'documents.restored': '恢复文档',

@@ -125,6 +125,8 @@ export {
   UNIVER_SDK_VERSION,
 } from './documents/content.ts'
 export type { RevisionConflictDetails, RevisionSource, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
+export { documentHistoryDetailSchema, documentHistoryIdSchema, documentHistoryListResponseSchema, documentHistorySummarySchema, HISTORY_PAGE_SIZE, historyListQuerySchema, restoreDocumentHistoryRequestSchema } from './documents/document-history.ts'
+export type { DocumentHistoryDetail, DocumentHistoryListResponse, DocumentHistorySummary, HistoryListQuery, RestoreDocumentHistoryRequest } from './documents/document-history.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
 export {
   conflictCopyQuerySchema,
@@ -240,6 +242,7 @@ export type {
   RenewEditLeaseRequest,
   RequestEditRequest,
 } from './documents/editing.ts'
+export { HISTORY_PAGE_ROUTE, HISTORY_PREVIEW_PAGE_PATTERN, historyIdsFromPagePath, historyPagePath, historyPreviewPagePath } from './documents/history-page.ts'
 export { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './documents/link-address.ts'
 export type { CanonicalLink, CellLinkRule, LinkAddressInvalidReason } from './documents/link-address.ts'
 export { LOCAL_DRAFT_RETENTION_DAYS } from './documents/local-drafts.ts'

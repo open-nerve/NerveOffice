@@ -40,6 +40,7 @@ function withoutFolderCreation(store: FakeStore): DocumentAccessPolicy {
   const { policy } = store
   return {
     accessOf: async (userId, document, transaction) => policy.accessOf(userId, document, transaction),
+    historyScope: async (...args) => store.policy.historyScope(...args),
     visibleSpaces: async (actor, transaction) => policy.visibleSpaces(actor, transaction),
     accessOfMany: async (userId, documents, transaction) => policy.accessOfMany(userId, documents, transaction),
     spaceAccessOf: async (actor, spaceId, transaction) => {

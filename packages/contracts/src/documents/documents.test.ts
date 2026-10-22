@@ -127,7 +127,7 @@ describe('文档的元数据', () => {
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
+    permissions: { canEdit: true, canViewHistory: true, canClearHistory: false, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
   }
 
   it('档案、格式版本与 SDK 版本不按已知的取值校验：客户端自己核对，不认识的显示格式不受支持', () => {

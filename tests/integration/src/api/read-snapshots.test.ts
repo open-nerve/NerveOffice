@@ -23,6 +23,7 @@ import { uploadTestAsset } from '../support/assets.ts'
 import { acquireBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { captureHistory } from '../support/document-history.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, handOverLease, pendingRequestId } from '../support/edit-leases.ts'
 import { setGrants } from '../support/grants.ts'
@@ -45,6 +46,7 @@ const EXEMPT: Readonly<Record<string, string>> = {
 const SNAPSHOT_BEGIN = 'begin isolation level repeatable read read only'
 
 interface World {
+  readonly history: string
   readonly asset: string
   /** 普通成员：个人空间里有文档、文件夹、回收站里的文档；是团队空间的成员；别人分享给他一份文档 */
   readonly amy: TestAccount
@@ -78,6 +80,9 @@ const PROBES: Readonly<Record<string, (w: World) => Probe>> = {
   // 批量草稿事实同时经过有效租约、交出预留与缺失项；所有补充事实也必须留在同一个快照中。
   'GET /api/documents/draft-facts': w => ({ who: 'amy', path: `/api/documents/draft-facts?ids=${w.document},${w.reserved},00000000-0000-4000-8000-000000000001` }),
   'GET /api/documents/:id': w => ({ who: 'amy', path: `/api/documents/${w.document}` }),
+  'GET /api/documents/:id/history': w => ({ who: 'amy', path: `/api/documents/${w.document}/history` }),
+  'GET /api/documents/:id/history/:historyId': w => ({ who: 'amy', path: `/api/documents/${w.document}/history/${w.history}` }),
+  'GET /api/documents/:id/history/:historyId/content': w => ({ who: 'amy', path: `/api/documents/${w.document}/history/${w.history}/content` }),
   'GET /api/documents/:id/content': w => ({ who: 'amy', path: `/api/documents/${w.document}/content` }),
   // 编辑状态（M3-P1）：这份文档上有艾米的有效租约，持有者的登录与编辑权也在快照里查；本在请求编辑（M3-P5），请求方的登录与编辑权、
   // 补人名同样在快照里查。交出之后的保留在另一份文档上，见文件末尾的用例
@@ -131,7 +136,7 @@ beforeAll(async () => {
   expect((await handOverLease(app.baseUrl, session, reserved, lease, await pendingRequestId(app.baseUrl, benSession, reserved))).status).toBe(200)
   // 艾米取过本机密钥（M3-P6）：管理界面的账户（列表与详情）要查当前的本机密钥，那条查询同样在快照里
   await takeLocalKey(app.baseUrl, session)
-  w = { amy, root, leaver: leaver.id, document, reserved, team, asset: (await uploadTestAsset(app.baseUrl, session)).assetId }
+  w = { history: await captureHistory(app, document), amy, root, leaver: leaver.id, document, reserved, team, asset: (await uploadTestAsset(app.baseUrl, session)).assetId }
   routes = routesOf(app)
   capture = captureStatements(database.name)
 })

@@ -30,6 +30,11 @@ export function copiedPayloadDigest(sourceId: string, spaceId: string, folderId:
   return createHash('sha256').update(`copied\n${sourceId}\n${spaceId}\n${folderId ?? ''}\n${title ?? ''}`, 'utf8').digest()
 }
 
+/** 历史恢复只按原始请求算摘要；历史或源随后消失也不改变已完成请求的身份。 */
+export function historyRestorePayloadDigest(sourceId: string, historyId: string, spaceId: string, folderId: string | undefined, title: string | undefined): Buffer {
+  return createHash('sha256').update(`history-restored\n${sourceId}\n${historyId}\n${spaceId}\n${folderId ?? ''}\n${title ?? ''}`, 'utf8').digest()
+}
+
 /**
  * 新建文件夹（M2 Codex 评审 CX6）：请求里的空间、父文件夹（没给时留空）与名称（经契约规范化之后的，也就是存下的那个）。
  * 只按请求里的东西算，新建时存进 folders.payload_digest、之后不再改：建好之后改名、移动（同一个空间里、跨空间），

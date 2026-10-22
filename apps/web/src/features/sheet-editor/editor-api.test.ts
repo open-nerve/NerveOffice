@@ -229,7 +229,7 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
       formatVersion: 1,
       sdkVersion: '1.0.1',
       formulasPending: false,
-      permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
+      permissions: { canEdit: true, canViewHistory: true, canClearHistory: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
       replayed: false,
     }
     const format = { ...PAGE_CLIENT_FORMAT, formatVersion: 2, univerVersion: '0.24.1' }

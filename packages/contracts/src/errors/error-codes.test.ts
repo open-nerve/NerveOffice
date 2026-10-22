@@ -29,3 +29,7 @@ describe('错误码登记表', () => {
     expect(ERROR_CODES.DOCUMENT_TOO_NEW.message).toBe('这份文档由更新的版本保存过，当前只能阅读')
   })
 })
+
+it('历史无法恢复与暂时繁忙区分，使用不含正文诊断的 422', () => {
+  expect(ERROR_CODES).toHaveProperty('HISTORY_UNUSABLE', { status: 422, message: '这份历史的内容或格式无法恢复，请尝试其他历史' })
+})

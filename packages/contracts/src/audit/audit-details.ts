@@ -118,6 +118,7 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   // M2-P4：文档的整理。改名只记位置，不记改动前后的标题
   entry('documents.renamed', z.strictObject({ spaceId: id, folderId: folderPosition })),
   entry('documents.moved', z.strictObject({ fromSpaceId: id, fromFolderId: folderPosition, toSpaceId: id, toFolderId: folderPosition })),
+  entry('documents.history_restored', z.strictObject({ sourceId: id, historyId: id, spaceId: id, folderId: folderPosition })),
   entry('documents.copied', z.strictObject({ sourceId: id, sourceSpaceId: id, spaceId: id, folderId: folderPosition })),
   // M2-P4 S3：回收站。永久删除只记份数与删除单元，不记标题与名称
   entry('documents.deleted', z.strictObject({ spaceId: id, folderId: folderPosition, trashEntryId: id })),

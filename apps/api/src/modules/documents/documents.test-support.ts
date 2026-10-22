@@ -266,6 +266,9 @@ export class FakeStore {
 
   readonly repositories = {
     documents: {
+      editorGrantSpaceIds: vi.fn(async (userId: string) => [...new Set([...this.documents.values()]
+        .filter(row => this.activeDocument(row.id) !== undefined && this.grantOf(row.id, userId)?.role === 'editor')
+        .map(row => row.spaceId))]),
       findById: vi.fn(async (id: string) => this.activeDocument(id)),
       findManyWithGrants: vi.fn(async (userId: string, ids: readonly string[], _transaction: Transaction): Promise<GrantedDocumentRow[]> => ids.flatMap((id) => {
         const row = this.activeDocument(id)
@@ -832,7 +835,7 @@ export class FakeStore {
   }
 
   /** 真实的访问策略 */
-  readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService, this.grants as unknown as DocumentGrantsRepository)
+  readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService, this.grants as unknown as DocumentGrantsRepository, this.repositories.documents as unknown as DocumentsRepository)
   /** 真实的 requestId 记录（锁与两张表的查询经上面的假仓储） */
   readonly ledger = new RequestLedger(this.repositories.revisions as unknown as DocumentRevisionsRepository, this.repositories.receipts as unknown as DocumentSaveReceiptsRepository)
   /** 与真实的 AuditService 一样按严格的结构校验（明细多一个键，例如标题，就抛出，M2-P6 复核 M-1），记下原样的事件 */

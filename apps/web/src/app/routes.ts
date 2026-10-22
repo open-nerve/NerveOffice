@@ -1,5 +1,5 @@
 import type { RouteObject } from 'react-router'
-import { ONE_TIME_LINK_PAGE_PATHS } from '@nerve-office/contracts'
+import { HISTORY_PAGE_ROUTE, ONE_TIME_LINK_PAGE_PATHS } from '@nerve-office/contracts'
 import { LoginPage, RequireSession, SessionCheck } from '../features/auth/index.ts'
 import { HomePage, SpacePage } from '../features/spaces/index.ts'
 import { CHANGE_PASSWORD_PATH } from '../shared/lib/account-paths.ts'
@@ -55,6 +55,10 @@ async function localDataPages() {
   return loadChunk(async () => import('../features/local-data/index.ts'))
 }
 
+async function historyPages() {
+  return loadChunk(async () => import('../features/document-history/index.ts'))
+}
+
 /** 平台页面的路由（P3 设计 §3.7）。编辑器页在 P4 另起入口，整页加载。 */
 export const appRoutes: RouteObject[] = [
   { path: LOGOUT_PATH, lazy: async () => ({ Component: (await localDataPages()).LogoutPage }), ErrorBoundary: ErrorPage, HydrateFallback: SessionCheck },
@@ -84,6 +88,7 @@ export const appRoutes: RouteObject[] = [
             { path: SEARCH_PATH, lazy: async () => ({ Component: (await searchPages()).SearchPage }) },
             { path: SHARED_PATH, lazy: async () => ({ Component: (await sharedWithMePages()).SharedWithMePage }) },
             { path: LOCAL_DRAFTS_PATH, lazy: async () => ({ Component: (await localDraftsPages()).LocalDraftsPage }) },
+            { path: HISTORY_PAGE_ROUTE, lazy: async () => ({ Component: (await historyPages()).HistoryPage }) },
             { path: CHANGE_PASSWORD_PATH, lazy: async () => ({ Component: (await accountPages()).ChangePasswordPage }) },
             {
               path: ADMIN_PATH,

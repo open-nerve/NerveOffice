@@ -182,6 +182,19 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
     }
   }, LINT_TIMEOUT)
 
+  it('历史列表只由路由动态引入，预览入口不能经平台或其他功能转入', async () => {
+    expect(await rulesFor(dynamicImport('../features/document-history/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { startHistoryPreview } from \'../../features/history-preview/index.ts\'\nexport const start = startHistoryPreview\n', 'apps/web/src/entries/history-preview/mount.tsx')).not.toContain('boundaries/dependencies')
+    for (const [code, file] of [
+      ['import { HistoryPage } from \'../features/document-history/index.ts\'\nexport const page = HistoryPage\n', ROUTES_FILE],
+      [dynamicImport('../features/document-history/index.ts'), WEB_FILE],
+      [dynamicImport('../features/history-preview/index.ts'), ROUTES_FILE],
+      [dynamicImport('../history-preview/index.ts'), WEB_FEATURE_FILE],
+      [dynamicImport('../../features/history-preview/index.ts'), PLATFORM_ENTRY],
+    ] as const)
+      expect(await rulesFor(code, file), `${file}: ${code}`).toContain('boundaries/dependencies')
+  }, LINT_TIMEOUT)
+
   describe('管理界面按需加载（M2-P1 审查 B2）', () => {
     it('只有路由表能动态 import() 它的公开入口；静态引用、类型引用、再导出、别处的动态引用都不行', async () => {
       expect(await rulesFor(dynamicImport('../features/admin/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')

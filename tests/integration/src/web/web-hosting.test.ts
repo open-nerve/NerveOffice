@@ -14,6 +14,7 @@ import { captureLogs } from '../support/log-capture.ts'
 
 const INDEX_HTML = '<!doctype html><html><head><title>NerveOffice</title></head><body><div id="root"></div></body></html>'
 const EDITOR_HTML = '<!doctype html><html><head><title>NerveOffice</title></head><body><div id="sheet-editor"></div></body></html>'
+const HISTORY_HTML = '<!doctype html><div id=history-preview></div>'
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const CSP_PREFIX = 'default-src \'self\''
 
@@ -28,6 +29,7 @@ beforeAll(async () => {
   mkdirSync(join(webRoot, 'assets'), { recursive: true })
   writeFileSync(join(webRoot, 'index.html'), INDEX_HTML)
   writeFileSync(join(webRoot, 'editor.html'), EDITOR_HTML)
+  writeFileSync(join(webRoot, 'history-preview.html'), HISTORY_HTML)
   writeFileSync(join(webRoot, 'assets/index-abc123.js'), 'console.log("app")')
   writeFileSync(join(webRoot, 'assets/worker-def456.js'), 'self.onmessage = () => {}')
   writeFileSync(join(webRoot, 'favicon.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
@@ -46,6 +48,15 @@ async function get(path: string): Promise<Response> {
 }
 
 describe('US-M1-09 托管前端产物', () => {
+  it('历史列表仍是平台入口，双身份预览单独入口且不缓存', async () => {
+    expect(await (await get(`/documents/${DOCUMENT_ID}/history`)).text()).toBe(INDEX_HTML)
+    const response = await get(`/documents/${DOCUMENT_ID}/history/${DOCUMENT_ID}/preview`)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('content-security-policy')).toMatch(new RegExp(`^${CSP_PREFIX}`))
+    expect(await response.text()).toBe(HISTORY_HTML)
+    expect(await (await get(`/documents/${DOCUMENT_ID}/history/no/preview`)).text()).toBe(INDEX_HTML)
+  })
+
   it('入口页：HTML，带定稿的 CSP 与安全头，不缓存', async () => {
     const response = await get('/')
     expect(response.status).toBe(200)

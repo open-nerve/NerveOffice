@@ -137,7 +137,7 @@ describe('requireDocumentContent：只凭授权的人（M2-P5 设计 §3.4(1)）
     store.setGrant('d1', BOB, 'editor')
     const allowed = await requireDocumentContent(store.policy, BOB, document, ['edit', 'rename', 'copy'])
     expect(allowed.access).toMatchObject({ accessVia: 'grant', contentRole: 'editor' })
-    expect(allowed.permissions).toMatchObject({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
+    expect(allowed.permissions).toMatchObject({ canEdit: true, canViewHistory: true, canClearHistory: false, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['moveWithinSpace']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能移动' })
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['moveAcrossSpaces']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能移动' })
     expect(await errorOf(requireDocumentContent(store.policy, BOB, document, ['delete']))).toMatchObject({ code: 'PERMISSION_DENIED', message: '这份文档是单独分享给你的，不能删除' })
@@ -329,7 +329,7 @@ function policyWithCreate(permissions: { readonly canCreateDocuments: boolean, r
     role: 'editor',
     permissions: { ...permissions, canViewMembers: true, canManageMembers: false, canRename: false, canPurgeTrash: false },
   }
-  return { accessOf: async () => undefined, spaceAccessOf: async () => access, visibleSpaces: async () => [], accessOfMany: async () => new Map() }
+  return { accessOf: async () => undefined, spaceAccessOf: async () => access, visibleSpaces: async () => [], historyScope: async () => ({ spaceIds: [], grantsOf: ALICE, grantSpaceIds: [] }), accessOfMany: async () => new Map() }
 }
 
 describe('requireCreateTarget', () => {
@@ -370,5 +370,42 @@ describe('requireSpaceManagement', () => {
     store.space(TEAM_SPACE).status = 'archived'
     expect(await errorOf(requireSpaceManagement(store.policy, member(BOB), TEAM_SPACE, 'manageMembers'))).toMatchObject({ code: 'PERMISSION_DENIED', message: '空间已归档，只能查看' })
     expect(await requireSpaceManagement(store.policy, { userId: BOB, systemAdmin: true }, TEAM_SPACE, 'manageMembers')).toMatchObject({ role: 'viewer' })
+  })
+})
+
+describe('用户历史资格与清除资格独立判定', () => {
+  it('历史来源范围只有可编辑空间和未归档 editor 授权空间，不按系统管理员扩权', async () => {
+    const store = new FakeStore()
+    const personal = store.addDocument({ spaceId: ALICE_SPACE })
+    const team = store.addDocument({ spaceId: TEAM_SPACE })
+    store.setGrant(personal.id, BOB, 'viewer')
+    store.setGrant(team.id, BOB, 'editor')
+    expect(await store.policy.historyScope({ userId: BOB, systemAdmin: true }, TRANSACTION)).toEqual({ spaceIds: [BOB_SPACE], grantsOf: BOB, grantSpaceIds: [TEAM_SPACE] })
+    store.space(TEAM_SPACE).status = 'archived'
+    expect(await store.policy.historyScope(member(BOB), TRANSACTION)).toEqual({ spaceIds: [BOB_SPACE], grantsOf: BOB, grantSpaceIds: [] })
+    store.setGrant(personal.id, BOB, 'editor')
+    expect(await store.policy.historyScope(member(BOB), TRANSACTION)).toEqual({ spaceIds: [BOB_SPACE], grantsOf: BOB, grantSpaceIds: [ALICE_SPACE] })
+  })
+  const document = { id: 'history-source', spaceId: TEAM_SPACE, createdBy: ALICE }
+  it('空间编辑者与单独 editor 授权能读历史，只有空间管理员能清除', async () => {
+    const store = new FakeStore()
+    store.setMember(TEAM_SPACE, ALICE, 'admin')
+    store.setGrant(document.id, BOB, 'editor')
+    expect((await requireDocumentContent(store.policy, BOB, document, ['viewHistory'])).permissions.canViewHistory).toBe(true)
+    expect((await errorOf(requireDocumentContent(store.policy, BOB, document, ['clearHistory']))).code).toBe('PERMISSION_DENIED')
+    expect((await requireDocumentContent(store.policy, ALICE, document, ['clearHistory'])).permissions.canClearHistory).toBe(true)
+    store.setMember(TEAM_SPACE, BOB, 'editor')
+    expect((await requireDocumentContent(store.policy, BOB, document, ['viewHistory'])).permissions.canViewHistory).toBe(true)
+    expect((await errorOf(requireDocumentContent(store.policy, BOB, document, ['clearHistory']))).code).toBe('PERMISSION_DENIED')
+  })
+  it('查看者、已归档、撤销的单独授权均不能借当前读权取得历史', async () => {
+    const store = new FakeStore()
+    store.setGrant(document.id, BOB, 'viewer')
+    expect((await errorOf(requireDocumentContent(store.policy, BOB, document, ['viewHistory']))).code).toBe('PERMISSION_DENIED')
+    store.setGrant(document.id, BOB, 'editor')
+    store.space(TEAM_SPACE).status = 'archived'
+    expect((await errorOf(requireDocumentContent(store.policy, BOB, document, ['viewHistory']))).code).toBe('PERMISSION_DENIED')
+    store.setGrant(document.id, BOB, undefined)
+    expect((await errorOf(requireDocumentContent(store.policy, BOB, document, ['viewHistory']))).code).toBe('NOT_FOUND')
   })
 })

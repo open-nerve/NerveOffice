@@ -24,6 +24,10 @@ import { DocumentCreationService } from './document-creation.service.ts'
 import { DocumentDraftFactsService } from './document-draft-facts.service.ts'
 import { DocumentGrantsRepository } from './document-grants.repository.ts'
 import { DocumentGrantsService } from './document-grants.service.ts'
+import { DocumentHistoryRestoreService } from './document-history-restore.service.ts'
+import { DocumentHistoryValidation } from './document-history-validation.ts'
+import { DocumentHistoryRepository } from './document-history.repository.ts'
+import { DocumentHistoryService } from './document-history.service.ts'
 import { DocumentOrganizingService } from './document-organizing.service.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentSaveReceiptsRepository } from './document-save-receipts.repository.ts'
@@ -58,6 +62,10 @@ import { WriteAccessRevocation } from './write-access.ts'
   controllers: [DocumentsController, DocumentContentController, OpenCheckReportsController],
   providers: [
     DocumentsRepository,
+    DocumentHistoryRepository,
+    DocumentHistoryValidation,
+    DocumentHistoryRestoreService,
+    DocumentHistoryService,
     DocumentAssetAccessService,
     DocumentAssetReferences,
     DocumentAssetsRepository,
@@ -122,6 +130,8 @@ import { WriteAccessRevocation } from './write-access.ts'
   // 到期的自动清理与修订记录、回执的保留期清理只给 jobs（M2-P4 设计 §3.1，M3-P3 设计 §3.9）；
   // 编辑权的接口在 workspace（要补持有者的人名，M3-P1 设计 §3.1），租约的规则与数据在这里；请求编辑与交出（M3-P5）同样
   exports: [
+    DocumentHistoryRestoreService,
+    DocumentHistoryService,
     DocumentAssetAccessService,
     DocumentAccessPolicy,
     EditLeaseService,

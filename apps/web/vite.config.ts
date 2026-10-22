@@ -6,6 +6,7 @@ import react from '@vitejs/plugin-react'
 import { defaultClientConditions, defineConfig } from 'vite'
 // 配置文件由 Vite 打包后执行：直接引用 contracts 的源码，开发时不需要先构建 contracts
 import { DOCUMENT_PAGE_PATTERN } from '../../packages/contracts/src/documents/document-page.ts'
+import { HISTORY_PREVIEW_PAGE_PATTERN } from '../../packages/contracts/src/documents/history-page.ts'
 import { clientBuild } from './build/client-build.ts'
 import { moduleSources } from './build/module-sources.ts'
 import { thirdPartyLicenses } from './build/third-party-licenses.ts'
@@ -18,8 +19,9 @@ const sources = moduleSources({ root: import.meta.dirname })
 
 /** 两个入口页：平台页面与编辑器页（整页加载，P4 设计 §3.8） */
 const PAGE_INPUTS = {
-  index: resolve(import.meta.dirname, 'index.html'),
-  editor: resolve(import.meta.dirname, 'editor.html'),
+  'index': resolve(import.meta.dirname, 'index.html'),
+  'editor': resolve(import.meta.dirname, 'editor.html'),
+  'history-preview': resolve(import.meta.dirname, 'history-preview.html'),
 }
 
 /**
@@ -40,6 +42,8 @@ function editorPageRewrite(): Plugin {
     const path = request.url?.split('?')[0] ?? ''
     if (DOCUMENT_PAGE_PATTERN.test(path))
       request.url = '/editor.html'
+    else if (HISTORY_PREVIEW_PAGE_PATTERN.test(path))
+      request.url = '/history-preview.html'
     next()
   }
   return {

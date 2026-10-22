@@ -147,3 +147,13 @@ describe('审计明细的结构', () => {
     expect(utf8Length(JSON.stringify(parsed.details))).toBeLessThanOrEqual(AUDIT_DETAILS_MAX_BYTES)
   })
 })
+
+describe('历史恢复审计', () => {
+  const details = { sourceId: ID, historyId: OTHER, spaceId: ID, folderId: null }
+  it('只允许源、检查点和目标位置，不记录标题或正文', () => {
+    expect(accepts('documents.history_restored', details)).toBe(true)
+    expect(accepts('documents.history_restored', { ...details, title: '敏感标题' })).toBe(false)
+    expect(accepts('documents.history_restored', { ...details, historyId: 'bad' })).toBe(false)
+    expect(accepts('documents.history_restored', { sourceId: ID, spaceId: ID, folderId: null })).toBe(false)
+  })
+})

@@ -27,6 +27,8 @@ describe('US-M1-11 lint 规则的自测：后端的模块边界', () => {
     ['DocumentAssetsRepository', 'document-assets.repository.ts'],
     ['DocumentCheckpointClock', 'document-checkpoint-clock.ts'],
     ['DocumentCheckpointService', 'document-checkpoint.service.ts'],
+    ['DocumentHistoryRepository', 'document-history.repository.ts'],
+    ['DocumentHistoryValidation', 'document-history-validation.ts'],
   ])('图片引用与历史内部接口 %s 仅允许集成测试专用出口转出', async (name, filename) => {
     const exported = `export { ${name} } from '../modules/documents/${filename}'\n`
     expect(await rulesFor(exported, API_INTEGRATION_ENTRY)).not.toContain('boundaries/dependencies')

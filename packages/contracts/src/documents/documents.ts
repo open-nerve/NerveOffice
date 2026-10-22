@@ -150,6 +150,10 @@ export type DocumentAccessVia = (typeof DOCUMENT_ACCESS_VIA)[number]
 export const documentPermissionsSchema = z.object({
   /** 改动内容（保存）：内容权限是编辑者及以上 */
   canEdit: z.boolean(),
+  /** 当前有内容编辑资格的人可以读取用户历史 */
+  canViewHistory: z.boolean(),
+  /** 只有有效空间管理员可以清除用户历史 */
+  canClearHistory: z.boolean(),
   /** 改名：与保存同一条规则 */
   canRename: z.boolean(),
   /** 在同一个空间里换文件夹：空间角色是编辑者及以上 */

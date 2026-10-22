@@ -69,6 +69,7 @@ describe('api 进程', () => {
       expect(statSync(publicDirectory).mode & 0o777).toBe(0o755)
       writeFileSync(join(publicDirectory, 'index.html'), '<!doctype html>')
       writeFileSync(join(publicDirectory, 'editor.html'), '<!doctype html>')
+      writeFileSync(join(publicDirectory, 'history-preview.html'), '<!doctype html>')
       const configurations: Readonly<Record<string, string>>[] = [
         { NERVE_ASSET_ROOT: '' },
         { NERVE_ASSET_ROOT: publicDirectory },

@@ -164,7 +164,7 @@ const DETAIL: DocumentDetail = {
   formatVersion: 1,
   sdkVersion: '1.0.1',
   formulasPending: false,
-  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
+  permissions: { canEdit: true, canViewHistory: true, canClearHistory: false, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false },
 }
 
 /** 假的编辑器：生命周期可以推进，保存用到的能力都是最简单的实现；记下谁在订阅修改（每次新建都是新的一个，第一个由用例先拿到） */
@@ -2275,7 +2275,7 @@ describe('页头的文档详情（M2-P5：只凭授权时返回"与我共享"、
   it('就绪时带着页头要的东西：文档 id、看得到它的途径、能不能分享、看这一页的人', async () => {
     const { editorPage } = setup({ api: { document: async () => ({ ...DETAIL, accessVia: 'grant', permissions: { ...DETAIL.permissions, canShare: true } }) } })
     await editorPage.load()
-    expect(editorPage.view().load).toEqual({ kind: 'ready', documentId: DOCUMENT_ID, title: '周报', space: DETAIL.space, accessVia: 'grant', canShare: true, userId: ALICE.user.id })
+    expect(editorPage.view().load).toEqual({ kind: 'ready', documentId: DOCUMENT_ID, title: '周报', space: DETAIL.space, accessVia: 'grant', canShare: true, canViewHistory: true, userId: ALICE.user.id })
   })
 
   it('refreshDetail：重新取文档详情，更新标题、所在的空间、途径与能不能分享；编辑时能不能编辑不变（保存时由服务端再判断）', async () => {

@@ -4,10 +4,11 @@ import type { QueryKey } from '@tanstack/react-query'
 import type { ReactNode, RefObject } from 'react'
 import type { GoneTexts, OrganizeNotice } from './item-actions.tsx'
 import type { TargetSpaces } from './target-spaces.ts'
-import { documentPagePath, documentTitleSchema } from '@nerve-office/contracts'
+import { documentPagePath, documentTitleSchema, historyPagePath } from '@nerve-office/contracts'
 import { useQuery } from '@tanstack/react-query'
 import { FileSpreadsheet } from 'lucide-react'
 import { useId } from 'react'
+import { Link } from 'react-router'
 import { messages } from '../../shared/i18n/index.ts'
 import { useRequestIdLedger } from '../../shared/lib/request-id-ledger.ts'
 import { problemOf } from '../../shared/lib/validation.ts'
@@ -106,6 +107,7 @@ function DocumentPanel({ panelId, documentId, title, spaceId, targetSpaces, onDo
       onDone={onDone}
       onDenied={onDenied}
       onClose={onClose}
+      historyEntry={detail.data?.permissions.canViewHistory === true && <Link to={historyPagePath(documentId)} className={buttonVariants({ variant: 'outline', size: 'sm' })}>{messages.documents.history}</Link>}
       shareEntry={fallbackFocus => (
         <ShareEntry
           documentId={documentId}

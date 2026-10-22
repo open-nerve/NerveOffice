@@ -16,6 +16,14 @@ export interface StoredSnapshot {
   readonly resourceNames: readonly string[]
 }
 
+/** 已核验历史的原信封：旧内容的两个摘要字段仍可同时为空。 */
+export interface PreservedSnapshot {
+  readonly snapshot: Buffer
+  readonly rawBytes: number
+  readonly contentHash: Buffer | null
+  readonly resourceNames: readonly string[] | null
+}
+
 /** 当前内容与它对应的修订号。 */
 export interface CurrentContent {
   readonly revision: number
@@ -46,6 +54,17 @@ export class DocumentContentsRepository {
 
   async insert(documentId: string, content: StoredSnapshot, transaction: Transaction): Promise<void> {
     await executorOf(this.db, transaction).insert(c).values({ documentId, ...content, resourceNames: [...content.resourceNames], storedBytes: content.snapshot.length })
+  }
+
+  async insertPreserved(documentId: string, content: PreservedSnapshot, transaction: Transaction): Promise<void> {
+    await executorOf(this.db, transaction).insert(c).values({
+      documentId,
+      snapshot: content.snapshot,
+      rawBytes: content.rawBytes,
+      contentHash: content.contentHash,
+      resourceNames: content.resourceNames === null ? null : [...content.resourceNames],
+      storedBytes: content.snapshot.length,
+    })
   }
 
   /**

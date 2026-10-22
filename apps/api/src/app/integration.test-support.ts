@@ -64,6 +64,8 @@ export { DocumentAssetReferences } from '../modules/documents/document-asset-ref
 export { DocumentAssetsRepository } from '../modules/documents/document-assets.repository.ts'
 export { DocumentCheckpointClock } from '../modules/documents/document-checkpoint-clock.ts'
 export { DocumentCheckpointService } from '../modules/documents/document-checkpoint.service.ts'
+export { DocumentHistoryValidation } from '../modules/documents/document-history-validation.ts'
+export { DocumentHistoryRepository } from '../modules/documents/document-history.repository.ts'
 // 直接核对 documents 的仓储只查给定范围里的文档（搜索的范围回归，M2-P6 复核 A 的 S3）；
 // 读正文、搜索在判断完权限、读数据之前停住（只读快照的回归，M2 Codex 评审 CX1）
 export { DocumentContentsRepository, DocumentsRepository } from '../modules/documents/index.ts'
