@@ -1,9 +1,9 @@
-import type { AssetObjectMetadata, Database } from '@nerve-office/api/testing'
+import type { AssetObjectMetadata } from '@nerve-office/api/testing'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { TransactionRunner } from '@nerve-office/api'
-import { AssetsRepository, DATABASE } from '@nerve-office/api/testing'
+import { assetObjectKey, AssetsRepository } from '@nerve-office/api/testing'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createPassiveAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -36,12 +36,12 @@ async function state() {
 beforeAll(async () => {
   database = await createTestDatabase()
   app = await startTestApp({ databaseUrl: database.url })
-  repository = new AssetsRepository(app.runtime.get<Database>(DATABASE))
+  repository = app.runtime.get(AssetsRepository)
   transactions = app.runtime.get(TransactionRunner)
   uploader = (await createPassiveAccount(database, { username: 'asset-quota-uploader' })).id
 })
 beforeEach(async () => {
-  await database.query(async client => client.query('TRUNCATE document_asset_links, document_checkpoint_assets, assets, asset_objects, asset_object_claims, asset_quota'))
+  await database.query(async client => client.query('TRUNCATE document_asset_links, document_checkpoint_assets, asset_reference_activity, assets, asset_objects, asset_object_claims, asset_quota'))
 })
 afterEach(async () => {
   expect(await database.query(invariantViolations)).toEqual([])
@@ -53,13 +53,13 @@ afterAll(async () => {
 
 describe('持久资源配额（真实 PostgreSQL）', () => {
   it('预留先提交字节；转正只移动占用，每次上传创建独立 ID', async () => {
-    await transactions.run(async tx => repository.reserve(a, quotas, tx))
+    const reserved = await transactions.run(async tx => repository.reserve(a, quotas, tx))
     expect(await state()).toEqual({ quota: { bytes: 100, count: 0 }, claims: [{ sha256: a.sha256, bytes: 100 }], objects: [], assets: [] })
     const first = randomUUID()
-    await transactions.run(async tx => repository.finalize(first, uploader, a, quotas, tx))
+    await transactions.run(async tx => repository.finalize(first, uploader, a, quotas, tx, reserved))
     const second = randomUUID()
-    await transactions.run(async tx => repository.reserve(a, quotas, tx))
-    await transactions.run(async tx => repository.finalize(second, uploader, a, quotas, tx))
+    const reused = await transactions.run(async tx => repository.reserve(a, quotas, tx))
+    await transactions.run(async tx => repository.finalize(second, uploader, a, quotas, tx, reused))
     const actual = await state()
     expect(actual.quota).toEqual({ bytes: 100, count: 2 })
     expect(actual.claims).toEqual([])
@@ -69,20 +69,20 @@ describe('持久资源配额（真实 PostgreSQL）', () => {
 
   it('字节恰好到上限成立；新 hash 超限不留 claim；相同 hash 仍可新增记录', async () => {
     const limits = { ...quotas, quotaBytes: 100 }
-    await transactions.run(async tx => repository.reserve(a, limits, tx))
-    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, limits, tx))
+    const reserved = await transactions.run(async tx => repository.reserve(a, limits, tx))
+    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, limits, tx, reserved))
     await expect(transactions.run(async tx => repository.reserve(b, limits, tx))).rejects.toMatchObject({ code: 'ASSET_QUOTA_EXCEEDED', details: { kind: 'bytes' } })
-    await transactions.run(async tx => repository.reserve(a, limits, tx))
-    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, limits, tx))
+    const reused = await transactions.run(async tx => repository.reserve(a, limits, tx))
+    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, limits, tx, reused))
     expect((await state()).quota).toEqual({ bytes: 100, count: 2 })
   })
 
   it('记录配额同时约束预检与转正，竞争失败仍保留已提交的字节预留', async () => {
     const limits = { ...quotas, quotaCount: 1 }
-    await transactions.run(async tx => repository.reserve(a, limits, tx))
-    await transactions.run(async tx => repository.reserve(b, limits, tx))
-    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, limits, tx))
-    await expect(transactions.run(async tx => repository.finalize(randomUUID(), uploader, b, limits, tx))).rejects.toMatchObject({ code: 'ASSET_QUOTA_EXCEEDED', details: { kind: 'count' } })
+    const first = await transactions.run(async tx => repository.reserve(a, limits, tx))
+    const second = await transactions.run(async tx => repository.reserve(b, limits, tx))
+    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, limits, tx, first))
+    await expect(transactions.run(async tx => repository.finalize(randomUUID(), uploader, b, limits, tx, second))).rejects.toMatchObject({ code: 'ASSET_QUOTA_EXCEEDED', details: { kind: 'count' } })
     await expect(transactions.run(async tx => repository.reserve(image('third'), limits, tx))).rejects.toMatchObject({ code: 'ASSET_QUOTA_EXCEEDED', details: { kind: 'count' } })
     expect((await state()).quota).toEqual({ bytes: 300, count: 1 })
     expect((await state()).claims).toEqual([{ sha256: b.sha256, bytes: 200 }])
@@ -91,16 +91,16 @@ describe('持久资源配额（真实 PostgreSQL）', () => {
   it('下调字节配额不删除存量，允许零新增字节的重用，拒绝新占用', async () => {
     await transactions.run(async tx => repository.reserve(b, quotas, tx))
     const reduced = { ...quotas, quotaBytes: 100 }
-    await transactions.run(async tx => repository.reserve(b, reduced, tx))
-    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, b, reduced, tx))
+    const reused = await transactions.run(async tx => repository.reserve(b, reduced, tx))
+    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, b, reduced, tx, reused))
     await expect(transactions.run(async tx => repository.reserve(a, reduced, tx))).rejects.toMatchObject({ details: { kind: 'bytes' } })
     expect((await state()).quota).toEqual({ bytes: 200, count: 1 })
   })
 
   it('同 hash 并发只预留一次字节，各自产生记录', async () => {
     await Promise.all(Array.from({ length: 8 }, async () => {
-      await transactions.run(async tx => repository.reserve(a, quotas, tx))
-      await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx))
+      const reserved = await transactions.run(async tx => repository.reserve(a, quotas, tx))
+      await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx, reserved))
     }))
     const actual = await state()
     expect(actual.quota).toEqual({ bytes: 100, count: 8 })
@@ -123,23 +123,24 @@ describe('持久资源配额（真实 PostgreSQL）', () => {
       throw new Error('controlled reserve rollback')
     })).rejects.toThrow('controlled reserve rollback')
     expect((await state()).quota).toEqual({ bytes: 0, count: 0 })
-    await transactions.run(async tx => repository.reserve(a, quotas, tx))
+    const reserved = await transactions.run(async tx => repository.reserve(a, quotas, tx))
     await expect(transactions.run(async (tx) => {
-      await repository.finalize(randomUUID(), uploader, a, quotas, tx)
+      await repository.finalize(randomUUID(), uploader, a, quotas, tx, reserved)
       throw new Error('controlled finalize rollback')
     })).rejects.toThrow('controlled finalize rollback')
     expect((await state()).quota).toEqual({ bytes: 100, count: 0 })
     expect((await state()).claims).toHaveLength(1)
     expect((await state()).objects).toEqual([])
-    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx))
+    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx, reserved))
     expect((await state()).quota).toEqual({ bytes: 100, count: 1 })
   })
 
   it('同 hash 的字节/媒体事实不一致或没有持久预留时，不能转正', async () => {
-    await expect(transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx))).rejects.toThrow()
-    await transactions.run(async tx => repository.reserve(a, quotas, tx))
+    const absent = { sha256: a.sha256, generation: null, storageKey: assetObjectKey(a.sha256) }
+    await expect(transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx, absent))).rejects.toThrow()
+    const reserved = await transactions.run(async tx => repository.reserve(a, quotas, tx))
     await expect(transactions.run(async tx => repository.reserve({ ...a, bytes: 99 }, quotas, tx))).rejects.toThrow()
-    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx))
+    await transactions.run(async tx => repository.finalize(randomUUID(), uploader, a, quotas, tx, reserved))
     await expect(transactions.run(async tx => repository.reserve({ ...a, width: 4 }, quotas, tx))).rejects.toThrow()
     expect((await state()).quota).toEqual({ bytes: 100, count: 1 })
   })

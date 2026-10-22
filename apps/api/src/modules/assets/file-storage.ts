@@ -9,7 +9,7 @@ import fs from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { IMAGE_LIMITS, validateProcessedImage } from './image-types.ts'
-import { assetObjectKey, AssetStorageError } from './storage-adapter.ts'
+import { AssetStorageError, parseAssetObjectKey } from './storage-adapter.ts'
 
 function errorCode(error: unknown): unknown {
   return typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined
@@ -79,12 +79,12 @@ export class FileStorage implements StorageAdapter {
     }
   }
 
-  async publish(value: ProcessedImage): Promise<AssetObjectKey> {
+  async publish(value: ProcessedImage, key: AssetObjectKey): Promise<AssetObjectKey> {
     // 在首个 await 前固定字节；再次验证副本，不能让之后的 buffer 修改写成与对象键不同的内容。
     const checked = validateProcessedImage(value)
     const image = validateProcessedImage({ ...checked, data: Buffer.from(checked.data) })
-    const key = assetObjectKey(image.sha256)
     try {
+      this.#validateKey(key, image, 'publish')
       await this.#base('publish')
       await this.#directory(join(this.#root, 'staging'))
       await this.#clearAbandoned('publish')
@@ -133,16 +133,51 @@ export class FileStorage implements StorageAdapter {
     }
   }
 
-  async #readFile(key: AssetObjectKey, expected: StoredImageExpectation, synchronize: boolean): Promise<Uint8Array> {
-    let canonical: AssetObjectKey
+  /**
+   * 调用方已提交退休回执；不直接 unlink，以免迟到发布重新建立同一路径。
+   * 原子替换为空的永久标记，目录同步完成后才确认。旧上传的 link 无法覆盖它。
+   */
+  async retire(key: AssetObjectKey, expected: StoredImageExpectation): Promise<void> {
     try {
-      canonical = assetObjectKey(expected.sha256)
+      this.#validateKey(key, expected, 'retire')
+      await this.#base('retire')
+      await this.#directory(join(this.#root, 'staging'))
+      await this.#clearAbandoned('retire')
+      const file = join(this.#root, key)
+      const shard = dirname(file)
+      if (await this.#directory(shard, true))
+        await this.#syncDirectory(join(this.#root, 'objects'))
+      const stat = await fs.lstat(file).catch((error: unknown) => {
+        if (errorCode(error) === 'ENOENT')
+          return undefined
+        throw error
+      })
+      if (stat !== undefined && (!stat.isFile() || (stat.mode & 0o077) !== 0 || (process.getuid !== undefined && stat.uid !== process.getuid())))
+        throw new AssetStorageError('retire', 'unsafe-path')
+      await this.#temporary('retire', async (candidate) => {
+        const handle = await this.#newFile(candidate)
+        try {
+          try {
+            await handle.sync()
+          }
+          finally {
+            await handle.close()
+          }
+          await fs.rename(candidate, file)
+          await this.#syncDirectory(shard)
+        }
+        finally {
+          await this.#removeTemporary(candidate, 'retire')
+        }
+      })
     }
-    catch {
-      throw new AssetStorageError('read', 'invalid-key')
+    catch (error) {
+      throw storageFailure('retire', error)
     }
-    if (key !== canonical || !Number.isInteger(expected.bytes) || expected.bytes < 1 || expected.bytes > IMAGE_LIMITS.maxBytes)
-      throw new AssetStorageError('read', 'invalid-key')
+  }
+
+  async #readFile(key: AssetObjectKey, expected: StoredImageExpectation, synchronize: boolean): Promise<Uint8Array> {
+    this.#validateKey(key, expected, 'read')
     const file = join(this.#root, key)
     await this.#directory(dirname(file))
     // NONBLOCK 防止被意外换成 FIFO 时挂住；fstat 后只接受私有普通文件。
@@ -171,6 +206,16 @@ export class FileStorage implements StorageAdapter {
     }
     finally {
       await handle.close()
+    }
+  }
+
+  #validateKey(key: AssetObjectKey, expected: StoredImageExpectation, operation: StorageOperation): void {
+    try {
+      if (parseAssetObjectKey(key, expected.sha256) !== key || !Number.isInteger(expected.bytes) || expected.bytes < 1 || expected.bytes > IMAGE_LIMITS.maxBytes)
+        throw new Error('非法对象回执')
+    }
+    catch {
+      throw new AssetStorageError(operation, 'invalid-key')
     }
   }
 

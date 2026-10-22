@@ -23,6 +23,37 @@ import { createTestDatabase } from '../support/database.ts'
  * 新加手写的对象时在这里登记，并在迁移的注释里写明它为什么只能手写
  */
 const HAND_WRITTEN = [
+  `FUNCTION CREATE OR REPLACE FUNCTION public.asset_object_deletions_preserve_identity()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF ROW(NEW.id, NEW.sha256, NEW.generation, NEW.storage_key, NEW.bytes, NEW.unreferenced_at, NEW.created_at)
+      IS DISTINCT FROM ROW(OLD.id, OLD.sha256, OLD.generation, OLD.storage_key, OLD.bytes, OLD.unreferenced_at, OLD.created_at)
+      OR (OLD.completed_at IS NOT NULL AND NEW.completed_at IS DISTINCT FROM OLD.completed_at) THEN
+    RAISE EXCEPTION '资源退休回执不可改写：%', OLD.id
+      USING ERRCODE = 'check_violation', CONSTRAINT = 'asset_object_deletions_identity', TABLE = 'asset_object_deletions';
+  END IF;
+  RETURN NEW;
+END;
+$function$`,
+  'TRIGGER CREATE TRIGGER asset_object_deletions_identity BEFORE UPDATE ON public.asset_object_deletions FOR EACH ROW EXECUTE FUNCTION asset_object_deletions_preserve_identity() ENABLED O',
+  `FUNCTION CREATE OR REPLACE FUNCTION public.asset_reference_activity_note()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.asset_id = NEW.asset_id THEN
+    RETURN NEW;
+  END IF;
+  INSERT INTO public.asset_reference_activity (asset_id, transaction_id)
+    VALUES (NEW.asset_id, pg_current_xact_id()::text::bigint)
+    ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END;
+$function$`,
+  'TRIGGER CREATE TRIGGER document_assets_note_reference AFTER INSERT OR UPDATE OF asset_id ON public.document_asset_links FOR EACH ROW EXECUTE FUNCTION asset_reference_activity_note() ENABLED O',
+  'TRIGGER CREATE TRIGGER checkpoint_assets_note_reference AFTER INSERT OR UPDATE OF asset_id ON public.document_checkpoint_assets FOR EACH ROW EXECUTE FUNCTION asset_reference_activity_note() ENABLED O',
   `FUNCTION CREATE OR REPLACE FUNCTION public.audit_events_reject_change()
  RETURNS trigger
  LANGUAGE plpgsql

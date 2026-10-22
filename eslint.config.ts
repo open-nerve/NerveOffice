@@ -666,6 +666,16 @@ const API_HISTORY_PURGE = {
   importNames: ['DocumentHistoryPurgeService'],
   message: '检查点到期清理不判断人的权限，只由定时任务的模块（modules/jobs）调用',
 }
+const API_ASSET_GC = {
+  regex: String.raw`(?:^|/)assets/index\.ts$`,
+  importNames: ['AssetGcService', 'AssetRetirementService'],
+  message: '资源回收的特权入口只供 Jobs 组合，不从 HTTP 或其他业务模块调用',
+}
+const API_ASSET_RETENTION = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentAssetRetentionService'],
+  message: '全域资源保留探针只供 Jobs 组合，不代表任何用户的读取权限',
+}
 const API_DOCUMENT_OPERATIONS = {
   regex: String.raw`(?:^|/)documents/index\.ts$`,
   importNames: ['DocumentsOperationsModule', 'DocumentUpgradeService'],
@@ -752,6 +762,8 @@ interface ApiFileKind {
    * （定时任务的模块与 documents 模块）
    */
   jobEntries?: boolean
+  /** 资源扫描/文件退休和全域保留探针；只给 Jobs 与集成测试专用出口。 */
+  assetGcEntries?: boolean
   /** 独立运维 CLI 的应用组合；HTTP 应用不能接线升级操作。 */
   documentOperations?: boolean
   /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
@@ -779,6 +791,7 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.localKeyRevocation === true ? [] : [API_LOCAL_KEY_REVOCATION]),
     ...(kind.localKeysConfig === true ? [] : [API_LOCAL_KEYS_CONFIG]),
     ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE, API_HISTORY_PURGE]),
+    ...(kind.assetGcEntries === true ? [] : [API_ASSET_GC, API_ASSET_RETENTION]),
     ...(kind.documentOperations === true ? [] : [API_DOCUMENT_OPERATIONS]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
@@ -1158,12 +1171,12 @@ export default antfu(
   // 回执的保留期清理（M2-P4 设计 §3.1，M3-P3 设计 §3.9）；documents 模块自己都可以；local-keys 模块可以注入主密钥（M3-P6）。
   // 紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
   { name: 'nerve/api-admin', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true, localKeyRevocation: true }) },
-  { name: 'nerve/api-jobs', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ jobEntries: true }) },
+  { name: 'nerve/api-jobs', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ jobEntries: true, assetGcEntries: true }) },
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, jobEntries: true }) },
   { name: 'nerve/api-local-keys', files: ['apps/api/src/modules/local-keys/**/*.ts'], rules: apiRules({ localKeysConfig: true }) },
   // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
   // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
-  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true }) },
+  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true, assetGcEntries: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
   // 进程自己的计时可以用本机时钟（API_WALL_CLOCK_FILES）：紧跟在所属的块之后，其余的限制照旧
   { name: 'nerve/api-app-wall-clock', files: API_WALL_CLOCK_FILES.app, rules: apiRules({ wallClock: true }) },
@@ -1577,7 +1590,7 @@ export default antfu(
           // 集成测试专用的入口转出全部的表定义：集成测试按它生成建库语句，与迁移建出的库逐项比较（M2-P6 复核 B 的 B4；取代复验 S1 只核对判重键的那一条）
           { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-schema', fileInternalPath: PUBLIC_ENTRY } } } },
           // 图片持久配额/真实文件故障的集成测试：只从测试专用出口取内部实例，不把仓储加入生产公开接口。
-          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'assets' }, fileInternalPath: ['assets.repository.ts', 'file-storage.ts', 'image-runner.ts', 'image-types.ts', 'storage-adapter.ts'] } } } },
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'assets' }, fileInternalPath: ['assets.repository.ts', 'file-storage.ts', 'image-runner.ts', 'image-types.ts', 'storage-adapter.ts', 'asset-gc-clock.ts'] } } } },
           // 图片引用与历史采样的真实事务/交错测试，只给测试专用出口，不加入 Documents 的生产公开接口。
           { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'documents' }, fileInternalPath: ['document-asset-references.ts', 'document-assets.repository.ts', 'document-checkpoint-clock.ts', 'document-checkpoint.service.ts', 'document-history.repository.ts', 'document-history-validation.ts'] } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）

@@ -73,6 +73,14 @@ const IDENTITY = { ...METADATA, sourceDocumentId: t.sourceDocumentId, unitId: t.
 export class DocumentHistoryRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
+  /** 所有仍存在的检查点关系都保留，不借用用户历史的期限/权限过滤。 */
+  async retainedAssetIds(ids: readonly string[], tx: Transaction): Promise<string[]> {
+    if (ids.length === 0)
+      return []
+    const rows = await executorOf(this.db, tx).selectDistinct({ id: links.assetId }).from(links).where(inIdArray(links.assetId, ids))
+    return rows.map(row => row.id)
+  }
+
   async material(documentId: string, historyId: string, now: Date, tx: Transaction): Promise<HistoryMaterial | undefined> {
     const [row] = await executorOf(this.db, tx).select({ ...IDENTITY, snapshot: t.snapshot }).from(t).where(and(visibleHistory(documentId, now), eq(t.id, historyId)))
     return row

@@ -62,7 +62,7 @@ import {
   staleRuns,
   staleTemporaryDirectories,
 } from './container-e2e.ts'
-import { assetMountProblems, assetRuntimeProblems, nativeRuntimeProblems } from './container-image-checks.ts'
+import { assetGcRuntimeProblems, assetMountProblems, assetRuntimeProblems, nativeRuntimeProblems } from './container-image-checks.ts'
 import { loadNativeMaterials } from './native-image-materials.ts'
 
 const LOG_DIR = join(REPO_ROOT, 'tests/e2e/test-results/container')
@@ -280,6 +280,20 @@ function checkAssetDeployment(settings: ContainerE2eSettings): string[] {
   return problems
 }
 
+/** 只在本轮可销毁的库/卷内，经正式 API 组装核对回收；夹具从宿主传入，不加入生产镜像。 */
+async function checkAssetGcDeployment(settings: ContainerE2eSettings): Promise<string[]> {
+  const script = readFileSync(join(REPO_ROOT, 'tests/integration/src/assets/asset-gc-container.test-support.mjs'), 'utf8')
+  const png = readFileSync(join(REPO_ROOT, 'apps/api/src/modules/assets/testdata/minimum.png')).toString('base64')
+  const result = await runTracked(interruption, 'docker', composeArgs(settings, 'exec', '-T', '-e', 'NERVE_TEST_ASSET_GC_CONTAINER=disposable-compose', 'app', 'node', '--input-type=module', '-e', script, png), { cwd: REPO_ROOT, capture: true })
+  if (interruption.interrupted())
+    return ['收到终止信号，资源回收容器核对没有做完']
+  const problems = assetGcRuntimeProblems(result.status, result.stdout)
+  log(`资源回收私有卷回执：${result.stdout.trim() || '没有有效回执'}`)
+  if (problems.length > 0)
+    log(`资源回收容器核对失败：${result.stderr.trim()}`)
+  return problems
+}
+
 /**
  * 本机密钥的主密钥缺失与写法不对时应用拒绝启动（M3-P6 设计 §3.9）：各起一个一次性的应用容器（不带依赖，用镜像默认的命令真的启动），
  * 用 -e 覆盖变量文件里的主密钥；等它退出，最多到时限——还在跑就按名字删掉容器（结束 docker 的命令行停不下容器），算问题。
@@ -467,7 +481,7 @@ async function exercise(settings: ContainerE2eSettings, options: { version: stri
       log(`${LIVE_TIMEOUT_MS / 1000} 秒内经 Caddy 的存活探针没有通过`)
     return 1
   }
-  const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings), ...checkDistributedFiles(settings), ...checkAssetDeployment(settings), ...await checkMasterKeyRefusal(settings)]
+  const problems = [...await checkProxiedProbes(settings), ...await checkClientAddresses(settings), ...checkDistributedFiles(settings), ...checkAssetDeployment(settings), ...await checkAssetGcDeployment(settings), ...await checkMasterKeyRefusal(settings)]
   if (interruption.interrupted())
     return 1
   if (problems.length > 0) {

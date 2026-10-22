@@ -59,6 +59,7 @@ export function testEnvironment(databaseUrl: string, overrides: Readonly<Record<
     NERVE_TRASH_PURGE_ENABLED: 'false',
     NERVE_REVISION_PURGE_ENABLED: 'false',
     NERVE_HISTORY_PURGE_ENABLED: 'false',
+    NERVE_ASSET_GC_ENABLED: 'false',
     ...overrides,
   }
 }

@@ -71,11 +71,13 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
      JOIN user_local_keys p ON p.user_id = n.user_id AND p.version = n.version - 1 WHERE n.created_at IS DISTINCT FROM p.revoked_at`,
   'I22 图片对象不能同时占正式字节与待转正预留':
     'SELECT o.sha256 FROM asset_objects o JOIN asset_object_claims c USING (sha256)',
-  'I23 图片字节配额等于正式对象与持久预留之和':
+  'I23 图片字节配额等于正式对象、持久预留与未完成退休之和':
     `SELECT coalesce((SELECT used_bytes FROM asset_quota WHERE id = 1), 0) AS recorded,
-       (SELECT coalesce(sum(bytes), 0) FROM asset_objects) + (SELECT coalesce(sum(bytes), 0) FROM asset_object_claims) AS actual
+       (SELECT coalesce(sum(bytes), 0) FROM asset_objects) + (SELECT coalesce(sum(bytes), 0) FROM asset_object_claims)
+       + (SELECT coalesce(sum(bytes), 0) FROM asset_object_deletions WHERE completed_at IS NULL) AS actual
      WHERE coalesce((SELECT used_bytes FROM asset_quota WHERE id = 1), 0)
-       <> (SELECT coalesce(sum(bytes), 0) FROM asset_objects) + (SELECT coalesce(sum(bytes), 0) FROM asset_object_claims)`,
+       <> (SELECT coalesce(sum(bytes), 0) FROM asset_objects) + (SELECT coalesce(sum(bytes), 0) FROM asset_object_claims)
+       + (SELECT coalesce(sum(bytes), 0) FROM asset_object_deletions WHERE completed_at IS NULL)`,
   'I24 图片记录配额等于独立资源记录数量':
     `SELECT coalesce((SELECT used_assets FROM asset_quota WHERE id = 1), 0) AS recorded, (SELECT count(*) FROM assets) AS actual
      WHERE coalesce((SELECT used_assets FROM asset_quota WHERE id = 1), 0) <> (SELECT count(*) FROM assets)`,
@@ -97,6 +99,18 @@ export const INVARIANTS: Readonly<Record<string, string>> = {
        WHERE (b.status IN ('preparing','failed','ready')) IS DISTINCT FROM
          coalesce((SELECT active_batch_id=b.id FROM document_upgrade_barrier WHERE id=1),false)
      UNION ALL SELECT 'missing_barrier' WHERE NOT EXISTS (SELECT 1 FROM document_upgrade_barrier WHERE id=1)`,
+  'I29 有保留引用的资源候选必须还有待消费的新引用活动':
+    `SELECT a.id FROM assets a WHERE a.unreferenced_at IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM asset_reference_activity v WHERE v.asset_id=a.id)
+       AND (EXISTS (SELECT 1 FROM document_asset_links l WHERE l.asset_id=a.id)
+         OR EXISTS (SELECT 1 FROM document_checkpoint_assets h WHERE h.asset_id=a.id))`,
+  'I30 已登记退休的路径不能再被存活对象或上传预留使用':
+    `SELECT d.id FROM asset_object_deletions d
+       WHERE EXISTS (SELECT 1 FROM asset_objects o WHERE o.storage_key=d.storage_key)
+         OR EXISTS (SELECT 1 FROM asset_object_claims c WHERE c.sha256=d.sha256 AND c.generation IS NOT DISTINCT FROM d.generation)`,
+  'I31 仍有资源记录的对象不能保留孤儿候选':
+    `SELECT o.sha256 FROM asset_objects o WHERE o.unreferenced_at IS NOT NULL
+       AND EXISTS (SELECT 1 FROM assets a WHERE a.object_hash=o.sha256)`,
   // gzip 正文与当前图片集合不能只靠 SQL 外键/计数证明。asset-save、asset-copies 和 asset-reference-races
   // 经正式协议比较完整正文/集合、no-op、重放及回滚；asset-references-bulk 再核对七万个 ID 的全量摘要。
 }

@@ -1,3 +1,5 @@
+export { ASSET_GC_LOCK, AssetGcJob } from './asset-gc.job.ts'
+export type { AssetGcEnding, AssetGcRound } from './asset-gc.job.ts'
 export { Clock, DatabaseClock } from './clock.ts'
 export { HISTORY_PURGE_LOCK, HistoryPurgeJob } from './history-purge.job.ts'
 export type { HistoryPurgeEnding, HistoryPurgeRound } from './history-purge.job.ts'

@@ -90,7 +90,7 @@ describe('资源元数据与已授权文件读取的公开边界', () => {
 
   it('缺失与损坏文件不能返回假成功，存储错误不带实际路径', async () => {
     const record = (await metadata((await upload('rgba-text.png')).assetId))!
-    const path = join(testAssetRoot(database.url), 'objects', record.sha256.slice(0, 2), record.sha256)
+    const path = join(testAssetRoot(database.url), record.storageKey)
     const original = await readFile(path)
     await rename(path, `${path}.held`)
     try {

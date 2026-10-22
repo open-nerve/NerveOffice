@@ -48,6 +48,32 @@ export function assetRuntimeProblems(status: number | null, output: string): str
   }
 }
 
+const assetGcProofSchema = z.strictObject({
+  platform: z.literal('linux'),
+  uid: z.number().int().positive(),
+  privateRoot: z.literal(true),
+  missingBackupPaused: z.literal(true),
+  invalidConfigurations: z.literal(3),
+  retiredObjects: z.literal(1),
+  markerBytes: z.literal(0),
+  generationChanged: z.literal(true),
+  replayReleasedBytes: z.literal(0),
+  reuploadedReadable: z.literal(true),
+  verified: z.literal(true),
+})
+
+export function assetGcRuntimeProblems(status: number | null, output: string): string[] {
+  try {
+    if (status !== 0)
+      throw new Error('执行失败')
+    assetGcProofSchema.parse(JSON.parse(output))
+    return []
+  }
+  catch {
+    return ['镜像内资源回收的配置保护、私有文件退休或新代次接续核对失败']
+  }
+}
+
 const mountsSchema = z.object({
   mounts: z.array(z.object({ Type: z.string(), Name: z.string().optional(), Destination: z.string(), RW: z.boolean() })),
   readonly: z.boolean(),

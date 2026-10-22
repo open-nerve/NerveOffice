@@ -1,7 +1,9 @@
 import type { ScheduledJob } from './scheduled-job.ts'
 import { Module } from '@nestjs/common'
+import { AssetsModule } from '../assets/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { DocumentsModule } from '../documents/index.ts'
+import { AssetGcJob } from './asset-gc.job.ts'
 import { Clock, DatabaseClock } from './clock.ts'
 import { HistoryPurgeJob } from './history-purge.job.ts'
 import { JobScheduler } from './job-scheduler.ts'
@@ -15,22 +17,23 @@ import { TrashPurgeJob } from './trash-purge.job.ts'
  * 不引入调度框架，也没有自己的表；几个任务共用一个调度器（JobScheduler），各自的开关与间隔
  */
 @Module({
-  imports: [DatabaseModule, DocumentsModule],
+  imports: [DatabaseModule, DocumentsModule, AssetsModule],
   providers: [
     // 每一轮的"现在"取数据库的时间（M2-P6 复核 A 的疑点 Q-1）；测试换成可控的时钟
     { provide: Clock, useClass: DatabaseClock },
     TrashPurgeJob,
     RevisionPurgeJob,
     HistoryPurgeJob,
+    AssetGcJob,
     // 调度器逐个排程的任务：新加一个定时任务时加在这里
     {
       provide: SCHEDULED_JOBS,
-      inject: [TrashPurgeJob, RevisionPurgeJob, HistoryPurgeJob],
+      inject: [TrashPurgeJob, RevisionPurgeJob, HistoryPurgeJob, AssetGcJob],
       useFactory: (...jobs: ScheduledJob[]): readonly ScheduledJob[] => jobs,
     },
     JobScheduler,
   ],
   // 集成测试经 app 层的程序接口取两个任务，用给定的时刻跑一轮（不必等 30 天）
-  exports: [TrashPurgeJob, RevisionPurgeJob, HistoryPurgeJob],
+  exports: [TrashPurgeJob, RevisionPurgeJob, HistoryPurgeJob, AssetGcJob],
 })
 export class JobsModule {}

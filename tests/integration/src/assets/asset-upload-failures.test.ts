@@ -36,7 +36,7 @@ beforeAll(async () => {
   data = await readFile(new URL('../../../../apps/api/src/modules/assets/testdata/minimum.png', import.meta.url))
 })
 beforeEach(async () => {
-  await database.query(async client => client.query('TRUNCATE document_asset_links, document_checkpoint_assets, assets, asset_objects, asset_object_claims, asset_quota'))
+  await database.query(async client => client.query('TRUNCATE document_asset_links, document_checkpoint_assets, asset_reference_activity, assets, asset_objects, asset_object_claims, asset_quota'))
   await rm(join(root, 'objects'), { recursive: true })
   await mkdir(join(root, 'objects'), { mode: 0o700 })
 })
@@ -147,8 +147,8 @@ describe('真实配额与文件的失败边界', () => {
   it('完成真实发布后客户端取消，不转正、不释放预留；下一次恢复', async () => {
     const controller = new AbortController()
     const original = storage.publish.bind(storage)
-    const injected = vi.spyOn(storage, 'publish').mockImplementationOnce(async (image) => {
-      const key = await original(image)
+    const injected = vi.spyOn(storage, 'publish').mockImplementationOnce(async (...args) => {
+      const key = await original(...args)
       controller.abort()
       return key
     })
@@ -206,8 +206,8 @@ describe('真实配额与文件的失败边界', () => {
   it('文件发布后撤销会话，转正事务回滚；已发布文件保留预留，新的登录可继续恢复', async () => {
     const actor = await createAssetActor(database, uploader.userId)
     const original = storage.publish.bind(storage)
-    const injected = vi.spyOn(storage, 'publish').mockImplementationOnce(async (image) => {
-      const key = await original(image)
+    const injected = vi.spyOn(storage, 'publish').mockImplementationOnce(async (...args) => {
+      const key = await original(...args)
       await database.query(async client => client.query('UPDATE auth_sessions SET revoked_at = now(), revoked_reason = \'logout\' WHERE id = $1', [actor.sessionId]))
       return key
     })

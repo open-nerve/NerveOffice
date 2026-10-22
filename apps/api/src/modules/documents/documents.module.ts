@@ -11,6 +11,7 @@ import { ClientFormatGate } from './client-format-gate.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
 import { DocumentAssetAccessService } from './document-asset-access.service.ts'
 import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentAssetRetentionService } from './document-asset-retention.service.ts'
 import { DocumentAssetsRepository } from './document-assets.repository.ts'
 import { DatabaseDocumentCheckpointClock, DocumentCheckpointClock } from './document-checkpoint-clock.ts'
 import { DocumentCheckpointService } from './document-checkpoint.service.ts'
@@ -74,6 +75,7 @@ import { WriteAccessRevocation } from './write-access.ts'
     DocumentHistoryService,
     DocumentAssetAccessService,
     DocumentAssetReferences,
+    DocumentAssetRetentionService,
     DocumentAssetsRepository,
     DocumentCheckpointsRepository,
     DocumentCheckpointService,
@@ -142,6 +144,7 @@ import { WriteAccessRevocation } from './write-access.ts'
     DocumentHistoryService,
     DocumentAssetAccessService,
     DocumentAccessPolicy,
+    DocumentAssetRetentionService,
     EditLeaseService,
     EditRequestService,
     WriteAccessRevocation,

@@ -12,8 +12,8 @@ export type { MigrationOutcome, SchemaStatus, Transaction } from '../modules/dat
 export { DocumentUpgradeError } from '../modules/documents/index.ts'
 export type { DocumentUpgradeReceipt } from '../modules/documents/index.ts'
 // 集成测试用：按给定的时刻跑一轮回收站的清理、修订记录与回执的保留期清理（假时钟推进 30 天，不必真的等）；核对生产的时钟取的是数据库的时间
-export { Clock, HISTORY_PURGE_LOCK, HistoryPurgeJob, JobsModule, REVISION_PURGE_LOCK, RevisionPurgeJob, TRASH_PURGE_LOCK, TrashPurgeJob } from '../modules/jobs/index.ts'
-export type { HistoryPurgeEnding, HistoryPurgeRound, RevisionPurgeEnding, RevisionPurgeRound, TrashPurgeRound } from '../modules/jobs/index.ts'
+export { ASSET_GC_LOCK, AssetGcJob, Clock, HISTORY_PURGE_LOCK, HistoryPurgeJob, JobsModule, REVISION_PURGE_LOCK, RevisionPurgeJob, TRASH_PURGE_LOCK, TrashPurgeJob } from '../modules/jobs/index.ts'
+export type { AssetGcEnding, AssetGcRound, HistoryPurgeEnding, HistoryPurgeRound, RevisionPurgeEnding, RevisionPurgeRound, TrashPurgeRound } from '../modules/jobs/index.ts'
 export { AppLogger } from '../modules/logging/index.ts'
 // 集成测试的探针用：在一个事务里直接调用空间的服务（名称撞上唯一约束之后事务仍可继续，M2-P2 审查 A6）
 export { SpacesModule, SpacesService } from '../modules/spaces/index.ts'

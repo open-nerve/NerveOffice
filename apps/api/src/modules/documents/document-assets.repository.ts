@@ -22,6 +22,13 @@ export function requestedAssetLinks(ids: readonly string[], executor: DbExecutor
 export class DocumentAssetsRepository {
   constructor(@Inject(DATABASE) private readonly db: Database) {}
 
+  async retainedAssetIds(ids: readonly string[], transaction: Transaction): Promise<string[]> {
+    if (ids.length === 0)
+      return []
+    const rows = await executorOf(this.db, transaction).selectDistinct({ id: links.assetId }).from(links).where(inIdArray(links.assetId, ids))
+    return rows.map(row => row.id)
+  }
+
   async current(documentId: string, transaction: Transaction): Promise<string[]> {
     const rows = await executorOf(this.db, transaction).select({ id: links.assetId }).from(links).where(eq(links.documentId, documentId)).orderBy(asc(links.assetId))
     return rows.map(row => row.id)

@@ -21,6 +21,8 @@ const id = z.uuid()
 /** 文件夹的位置：空表示空间的根目录 */
 const folderPosition = z.uuid().nullable()
 const count = z.int().nonnegative()
+const gcCount = z.int().min(1).max(1000)
+const gcBytes = z.int().min(1).max(5_242_880_000)
 /** 这次失败使计数达到上限时，离解锁的秒数 */
 const lockedForSeconds = z.int().nonnegative()
 const username = z.string().regex(new RegExp(USERNAME_PATTERN_SOURCE))
@@ -123,6 +125,9 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   entry('documents.history_restored', z.strictObject({ sourceId: id, historyId: id, spaceId: id, folderId: folderPosition })),
   entry('documents.history_cleared', z.strictObject({ spaceId: id, cleared: count })),
   entry('documents.checkpoints_expired', z.strictObject({ checkpoints: count, buckets: count })),
+  entry('assets.records_collected', z.strictObject({ count: gcCount })),
+  entry('assets.retirement_queued', z.strictObject({ count: gcCount, bytes: gcBytes })),
+  entry('assets.bytes_reclaimed', z.strictObject({ count: gcCount, bytes: gcBytes })),
   entry('documents.upgrade_prepared', upgrade),
   entry('documents.upgrade_ready', upgrade),
   entry('documents.upgrade_failed', upgrade.extend({ reason: z.enum(DOCUMENT_UPGRADE_FAILURE_CODES) })),

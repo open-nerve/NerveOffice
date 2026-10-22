@@ -175,6 +175,19 @@ describe('检查点到期审计', () => {
   })
 })
 
+describe('资源回收审计', () => {
+  it('资源删除只记录一批的有限数量', () => {
+    expect(accepts('assets.records_collected', { count: 1000 })).toBe(true)
+    for (const details of [{ count: 0 }, { count: 1001 }, { count: 0.5 }, { count: 1, ids: [ID] }])
+      expect(accepts('assets.records_collected', details)).toBe(false)
+  })
+  it.each(['assets.retirement_queued', 'assets.bytes_reclaimed'])('%s 只记录数量与有界字节，不允许路径和图片内容', (action) => {
+    expect(accepts(action, { count: 1000, bytes: 5_242_880_000 })).toBe(true)
+    for (const details of [{ count: 1, bytes: 0 }, { count: 1, bytes: 1.5 }, { count: 1001, bytes: 1 }, { count: 1, bytes: 5_242_880_001 }, { count: 1, bytes: 1, storageKey: '/private/path' }])
+      expect(accepts(action, details)).toBe(false)
+  })
+})
+
 describe('升级检查点审计', () => {
   it('限定批次、目标版本和数量，失败只接受有限原因', () => {
     const details = { batchId: ID, targetVersion: 'univer@next-1', documents: 3 }

@@ -246,6 +246,27 @@
       "when": 1792682232289,
       "tag": "0034_m5_document_upgrade_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1792686735421,
+      "tag": "0035_m5_asset_generations",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792688184801,
+      "tag": "0036_m5_asset_reference_activity",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1792689532696,
+      "tag": "0037_m5_asset_retirement",
+      "breakpoints": true
     }
   ]
 }
