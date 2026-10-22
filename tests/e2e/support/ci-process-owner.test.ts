@@ -16,8 +16,8 @@ function forkWith(environment: NodeJS.ProcessEnv, owner: string | undefined) {
   const root = mkdtempSync(join(tmpdir(), 'nerve-ci-fork-'))
   directories.push(root)
   const worker = join(root, 'worker.cjs')
-  writeFileSync(worker, `process.send({keys:Object.keys(process.env).filter(k=>k!=='__CF_USER_TEXT_ENCODING').sort(),owner:process.env.NERVE_CI_E2E_OWNER,secretPresent:process.env.NERVE_PARENT_CREDENTIAL!==undefined,nodeArgs:process.execArgv,limits:[process.env.MALLOC_ARENA_MAX,process.env.UV_THREADPOOL_SIZE,process.env.VIPS_DISC_THRESHOLD]});process.disconnect();`)
-  const env = { ...process.env, NERVE_CI_E2E_OWNER: owner, NERVE_PARENT_CREDENTIAL: 'synthetic-secret-not-to-inherit' }
+  writeFileSync(worker, `process.send({keys:Object.keys(process.env).filter(k=>k!=='__CF_USER_TEXT_ENCODING').sort(),owner:process.env.NERVE_TEST_CI_E2E_OWNER,secretPresent:process.env.NERVE_PARENT_CREDENTIAL!==undefined,nodeArgs:process.execArgv,limits:[process.env.MALLOC_ARENA_MAX,process.env.UV_THREADPOOL_SIZE,process.env.VIPS_DISC_THRESHOLD]});process.disconnect();`)
+  const env = { ...process.env, NERVE_TEST_CI_E2E_OWNER: owner, NERVE_PARENT_CREDENTIAL: 'synthetic-secret-not-to-inherit' }
   return spawnSync(process.execPath, ['--import', new URL('./ci-process-owner.ts', import.meta.url).href, '--input-type=module', '-e', `import {fork} from 'node:child_process';const c=fork(${JSON.stringify(worker)},[],{env:${JSON.stringify(environment)},execArgv:['--no-deprecation'],serialization:'advanced',stdio:['ignore','ignore','inherit','ipc']});c.on('message',m=>process.stdout.write(JSON.stringify(m)));c.on('exit',code=>process.exit(code??1));`], { env, encoding: 'utf8', timeout: 5000 })
 }
 
@@ -28,7 +28,9 @@ it.each([
   const owner = randomUUID()
   const result = forkWith(environment, owner)
   expect(result.status, result.stderr).toBe(0)
-  expect(JSON.parse(result.stdout)).toEqual({ keys: [...keys, 'NERVE_CI_E2E_OWNER'].sort(), owner, secretPresent: false, nodeArgs: ['--no-deprecation'], limits: keys.length === 0 ? [null, null, null] : ['2', '1', '256m'] })
+  expect(JSON.parse(result.stdout)).toEqual({ keys: [...keys, 'NERVE_TEST_CI_E2E_OWNER'].sort(), owner, secretPresent: false, nodeArgs: ['--no-deprecation'], limits: keys.length === 0 ? [null, null, null] : ['2', '1', '256m'] })
+  // 同一标记还会经过迁移和 API 的配置入口；新增的 NERVE_ 键必须属于既有测试保留域。
+  expect(JSON.parse(result.stdout)).toHaveProperty('keys', expect.arrayContaining([expect.stringMatching(/^NERVE_TEST_[A-Z0-9_]+$/)]))
 })
 
 it('未启用监督器时不追加环境；非法标记在启动前拒绝且不回显', () => {

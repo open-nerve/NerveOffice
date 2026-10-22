@@ -4,9 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-import { parseProcessStat, prepareRun } from './e2e-process.ts'
+import { OWNER_VARIABLE, parseProcessStat, prepareRun } from './e2e-process.ts'
 
 describe('CI E2E 的 Linux 内核身份与平台边界', () => {
+  it('跨进程归属标记属于配置模块已保留的测试命名空间', () => {
+    expect(OWNER_VARIABLE).toMatch(/^NERVE_TEST_[A-Z0-9_]+$/)
+  })
+
   it('comm 含空格和括号时仍读取真正的进程组与启动 tick', () => {
     expect(parseProcessStat('421 (worker (a)) S 400 421 421 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0', 501))
       .toEqual({ pid: 421, parent: 400, group: 421, start: '987654', uid: 501, state: 'S' })

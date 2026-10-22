@@ -139,7 +139,7 @@ async function main(): Promise<void> {
     PATH: process.env.PATH,
     // CI 的随机运行标记（不含凭据），让独立进程组里的后端也能在归档前按本轮身份收尾。
     // 未启用 CI 监督器时保持原环境；预加载设施只为 fork 的白名单追加这个 UUID。
-    ...(process.env.NERVE_CI_E2E_OWNER === undefined ? {} : { NERVE_CI_E2E_OWNER: process.env.NERVE_CI_E2E_OWNER }),
+    ...(process.env.NERVE_TEST_CI_E2E_OWNER === undefined ? {} : { NERVE_TEST_CI_E2E_OWNER: process.env.NERVE_TEST_CI_E2E_OWNER }),
     NERVE_DATABASE_URL: databaseUrl,
     NERVE_PUBLIC_ORIGIN: e2eOrigin(),
     NERVE_HTTP_HOST: '127.0.0.1',
@@ -182,7 +182,7 @@ async function main(): Promise<void> {
   // 本机密钥的主密钥只给后端（M3-P6 设计 §3.4）：迁移与初始化管理员的命令不需要它
   const apiEnv: NodeJS.ProcessEnv = { ...env, NERVE_LOCAL_KEYS_MASTER_KEY: E2E_LOCAL_KEYS_MASTER_KEY, NERVE_ASSET_ROOT: join(assetsDirectory, 'assets') }
   const startApi = (): ChildProcess => {
-    const ownerImport = process.env.NERVE_CI_E2E_OWNER === undefined ? [] : ['--import', CI_PROCESS_OWNER]
+    const ownerImport = process.env.NERVE_TEST_CI_E2E_OWNER === undefined ? [] : ['--import', CI_PROCESS_OWNER]
     const child = spawn(process.execPath, ['--import', EXIT_WITH_PARENT, ...ownerImport, `${API_DIST}/app/main.js`], { env: apiEnv, stdio: ['pipe', log, log], detached: true })
     child.once('exit', (code, signal) => {
       // 正在停止，或者是按 SIGUSR2 强制结束的上一个后端
