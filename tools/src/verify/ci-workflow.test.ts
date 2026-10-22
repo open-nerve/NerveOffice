@@ -193,6 +193,15 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     const prepare = steps.findIndex(step => step.id === 'e2e-prepare')
     expect(prepare).toBeGreaterThanOrEqual(0)
     expect(prepare).toBeLessThan(steps.findIndex(runsChecks))
+    // GitHub 在分配 runner 前解析 job env，那里不能读取 runner.temp（CI 39729684486）。
+    // prepare 的 step env 才能解析它；登记成功后经 GITHUB_ENV 交给后续检查与收尾。
+    expect(workflow.jobs.e2e?.env?.NERVE_CI_E2E_STATE).toBeUndefined()
+    // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 表达式原文
+    expect(steps[prepare]?.env?.NERVE_CI_E2E_STATE).toBe('${{ runner.temp }}/nerve-e2e-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.browser }}')
+    expect(steps[prepare]?.run?.trim().split('\n')).toEqual([
+      'node tools/src/ci/e2e-cli.ts prepare',
+      'printf \'NERVE_CI_E2E_STATE=%s\\n\' "$NERVE_CI_E2E_STATE" >> "$GITHUB_ENV"',
+    ])
     const quiescence = steps.findIndex(step => step.id === 'e2e-quiescence')
     expect(quiescence).toBeGreaterThan(steps.findIndex(runsChecks))
     expect(steps[quiescence]?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
