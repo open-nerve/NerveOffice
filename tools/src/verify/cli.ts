@@ -2,6 +2,7 @@
 // 参数的解析与步骤的编排都是纯函数（plan.ts），这里只负责执行命令与输出结果
 import { spawnSync } from 'node:child_process'
 import process from 'node:process'
+import { ciE2eCommand } from '../ci/e2e-command.ts'
 import { REPO_ROOT } from '../shared/repo.ts'
 import { githubAnnotations } from './github-annotations.ts'
 import { parseArgs, planSteps, runSteps, summarize } from './plan.ts'
@@ -15,7 +16,7 @@ if (!parsed.ok) {
 const steps = planSteps(parsed.options)
 const results = runSteps(steps, (step) => {
   console.log(`\n▶ ${step.id}：${step.command.join(' ')}`)
-  const [command = '', ...rest] = step.command
+  const [command = '', ...rest] = ciE2eCommand(step, parsed.options, process.env, REPO_ROOT)
   return spawnSync(command, rest, { cwd: REPO_ROOT, stdio: 'inherit' }).status ?? 1
 }, { keepGoing: parsed.keepGoing, now: () => performance.now() })
 

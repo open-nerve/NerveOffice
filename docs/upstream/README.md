@@ -61,6 +61,7 @@ M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，
 | [UR-038](UR-038-conditional-formula-stale-error.md) | 正确公式已经输入，条件格式确认仍被旧错误状态阻止 | M5-P3-S4 | 本地修复及最终三浏览器、实际像素/历史/重开与审查修正完成 | 公开 issue | 草稿 | — |
 | [UR-039](UR-039-native-input-selection-outside-editor.md) | 单元格已聚焦但原生光标仍在旧表名控件，首次文字输入无效 | M5-P3-S5 | 本地修复，SDK 7 项、S5 工程与 270 项三浏览器组合通过；P3 阶段验证待完成 | 公开 issue | 草稿 | — |
 | [UR-040](UR-040-sheet-name-delayed-selection.md) | 延后全选表名覆盖已经开始的输入，或在改名结束后重设其他选区 | M5-P3-S5 | 固定包 ES/CJS 22 项、重复 UI 18 项及最终 S5 工程/270 项组合通过；P3 阶段审查与验证待完成 | 公开 issue | 草稿 | — |
+| [UR-041](UR-041-link-popup-stale-edit-owner.md) | 进入单元格编辑后旧链接菜单仍可修改已提交模型，覆盖未提交正文 | M5-P3-S6 | 用户批准局部修正；SDK、三浏览器、Linux/ARM64 对照与 full05/container03 通过，最终同 SHA CI 及阶段关闭待完成 | 公开 issue | 草稿 | — |
 
 ## 提交之前要确认的事
 

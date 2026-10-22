@@ -188,14 +188,44 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     }
   })
 
-  it('检查不会被条件跳过：执行 pnpm verify 与容器 E2E 的 job 与步骤都不带 if，这些 job 里其余步骤的 if 只能是 always()（上传报告）（复核第二批 S-1）', () => {
+  it('归档与报告上传必须经过独立退出核验；核验失败时只准上传监督记录', () => {
+    const steps = workflow.jobs.e2e!.steps
+    const prepare = steps.findIndex(step => step.id === 'e2e-prepare')
+    expect(prepare).toBeGreaterThanOrEqual(0)
+    expect(prepare).toBeLessThan(steps.findIndex(runsChecks))
+    const quiescence = steps.findIndex(step => step.id === 'e2e-quiescence')
+    expect(quiescence).toBeGreaterThan(steps.findIndex(runsChecks))
+    expect(steps[quiescence]?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
+    for (const id of ['profile-archive', 'e2e-upload']) {
+      const index = steps.findIndex(step => step.id === id)
+      expect(index, id).toBeGreaterThan(quiescence)
+      expect(steps[index]?.if, id).toBe('always() && steps.e2e-quiescence.outcome == \'success\'')
+    }
+    expect(steps.find(step => step.id === 'e2e-diagnostics')?.if).toBe('always() && steps.e2e-diagnostics-prepare.outcome == \'success\'')
+    expect(steps.find(step => step.id === 'e2e-diagnostics-prepare')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
+    expect(steps.find(step => step.id === 'e2e-report-check')?.['continue-on-error']).toBeUndefined()
+    expect(steps.find(step => step.id === 'e2e-report-check')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
+  })
+
+  it('检查不会被条件跳过；E2E 收尾只操作登记成功的本轮，归档/上传必须等待无写入者', () => {
     const checking = Object.entries(workflow.jobs).filter(([, job]) => job.steps.some(runsChecks))
     // 三个 job 各执行一种检查：verify 与 e2e 的 pnpm verify，container 的容器 E2E
     expect(checking.map(([id]) => id)).toEqual(['verify', 'e2e', 'container'])
     for (const [id, job] of checking) {
       expect(job.if, `${id}：job 不带 if`).toBeUndefined()
-      for (const step of job.steps)
-        expect(runsChecks(step) ? [undefined] : [undefined, 'always()'], stepLabel(id, step)).toContain(step.if)
+      for (const step of job.steps) {
+        const archive = id === 'e2e' && ['profile-archive', 'e2e-upload'].includes(String(step.id))
+        const ownedCleanup = id === 'e2e' && ['e2e-quiescence', 'e2e-report-check', 'e2e-diagnostics-prepare'].includes(String(step.id))
+        const diagnostics = id === 'e2e' && step.id === 'e2e-diagnostics'
+        const allowed = archive
+          ? ['always() && steps.e2e-quiescence.outcome == \'success\'']
+          : ownedCleanup
+            ? ['always() && steps.e2e-prepare.outcome == \'success\'']
+            : diagnostics
+              ? ['always() && steps.e2e-diagnostics-prepare.outcome == \'success\'']
+              : runsChecks(step) ? [undefined] : [undefined, 'always()']
+        expect(allowed, stepLabel(id, step)).toContain(step.if)
+      }
     }
   })
 })

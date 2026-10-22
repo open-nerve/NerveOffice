@@ -211,6 +211,113 @@ test('US-M5-08 富文本选区通过真实表单添加和更新，非法命令�
   expect(unlinked?.p?.body?.dataStream?.trim() ?? unlinked?.v).toBe('更新富文本')
 })
 
+const pendingLinkActions = [
+  {
+    action: 'update',
+    text: '新增前文更新资料后文后补',
+    ranges: [{ startIndex: 4, endIndex: 7, properties: { url: '/spaces?updated=1' } }],
+    apply: async (page: Page) => {
+      await expect(linkEdit(page)).toBeVisible()
+      await linkEdit(page).click()
+      await expect(addressInput(page)).toHaveValue('/spaces')
+      await addressInput(page).fill('/spaces?updated=1')
+      await page.getByPlaceholder('输入文本', { exact: true }).fill('更新资料')
+      await page.getByRole('button', { name: '确认', exact: true }).click()
+      await expect(addressInput(page)).toBeHidden()
+    },
+  },
+  {
+    action: 'cancel',
+    text: '新增前文富文本资料后文后补',
+    ranges: [],
+    apply: async (page: Page) => {
+      await expect(linkRemove(page)).toBeVisible()
+      await linkRemove(page).click()
+    },
+  },
+] as const
+
+for (const { action, text, ranges, apply } of pendingLinkActions) {
+  test(`US-M5-08 旧菜单出现后进入正文编辑，${action} 链接保留未提交前后文及历史 @test-build`, async ({ page }) => {
+    const id = await open(page, `link-pending-${action}`)
+    await typeInCell(page, 'B3', '前文富文本资料后文')
+    await openCellEditor(page, 'B3')
+    const addMark = await commandMark(page)
+    await pressUniverShortcut(page, 'A')
+    await waitForCommand(page, addMark, { phase: 'executed', id: 'doc.command.select-all' })
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.press('ArrowRight')
+    for (let index = 0; index < 5; index += 1)
+      await page.keyboard.press('Shift+ArrowRight')
+    await pressUniverShortcut(page, 'K')
+    await expect(addressInput(page)).toBeVisible()
+    await addressInput(page).fill('/spaces')
+    await page.getByRole('button', { name: '确认', exact: true }).click()
+    await expect(addressInput(page)).toBeHidden()
+    await waitForCommand(page, addMark, { phase: 'executed', id: 'sheets.command.add-rich-hyper-link' })
+    await page.keyboard.press('Enter')
+    await saveAndWait(page)
+    const original = cellOf((await savedContent(page, id)).snapshot, 'B3')
+    expect(original?.p?.body).toMatchObject({ dataStream: '前文富文本资料后文\r\n', customRanges: [{ startIndex: 2, endIndex: 6, properties: { url: '/spaces' } }] })
+
+    // 先明确制造本轮缺陷的前置：普通查看菜单已显示，再进入真实 Docs 编辑。
+    await hoverCell(page, 'B3')
+    await expect(linkRemove(page)).toBeVisible()
+    await openCellEditor(page, 'B3')
+    expect(await page.evaluate(() => window.__nerveEditorProbe!.univerAPI.getActiveWorkbook().isCellEditing())).toBe(true)
+    await pressUniverShortcut(page, 'A')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.insertText('新增')
+    await pressUniverShortcut(page, 'A')
+    await page.keyboard.press('ArrowRight')
+    await page.keyboard.insertText('后补')
+    expect(await activeLinkBody(page)).toMatchObject({ dataStream: '新增前文富文本资料后文后补\r\n', customRanges: [{ startIndex: 4, endIndex: 8, properties: { url: '/spaces' } }] })
+
+    // 新增前文使链接向右移动；在默认列宽的 3/4 处移动真实鼠标，命中中间链接。
+    // 只读获取画布坐标，不改 popup 类型、焦点或命令；不等待旧菜单自行消失。
+    const point = await page.evaluate(() => {
+      const cell = window.__nerveEditorProbe!.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B3').getCell()
+      const canvas = document.querySelector('canvas[id^="univer-sheet-main-canvas_"]')!.getBoundingClientRect()
+      return { x: canvas.left + cell.startX + (cell.endX - cell.startX) * 0.75, y: canvas.top + (cell.startY + cell.endY) / 2 }
+    })
+    await page.mouse.move(point.x, point.y)
+    const mark = await commandMark(page)
+    await apply(page)
+    await waitForCommand(page, mark, { phase: 'executed', id: `sheets.command.${action}-rich-hyper-link` })
+    const body = await activeLinkBody(page)
+    expect(body?.dataStream).toBe(`${text}\r\n`)
+    expect(body?.customRanges ?? []).toHaveLength(ranges.length)
+    expect(body?.customRanges ?? []).toMatchObject([...ranges])
+    await page.keyboard.press('Enter')
+    await saveAndWait(page)
+    const saved = cellOf((await savedContent(page, id)).snapshot, 'B3')
+    // 移除最后一个链接后，SDK 可将正文规范为 cell.v；两种存储都必须保留全部文字和链接范围。
+    expect(saved?.p?.body?.dataStream?.trim() ?? saved?.v).toBe(text)
+    expect(saved?.p?.body?.customRanges ?? []).toEqual(body?.customRanges ?? [])
+
+    await undoOrRedo(page, 'Z')
+    await saveAndWait(page)
+    expect(cellOf((await savedContent(page, id)).snapshot, 'B3')).toEqual(original)
+    await undoOrRedo(page, 'Y')
+    await saveAndWait(page)
+    expect(cellOf((await savedContent(page, id)).snapshot, 'B3')).toEqual(saved)
+    await reloadAndEnterEditing(page, 'steady')
+    expect(cellOf((await savedContent(page, id)).snapshot, 'B3')).toEqual(saved)
+    expect(cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'B3')).toEqual(saved)
+  })
+}
+
+async function activeLinkBody(page: Page) {
+  return page.evaluate(() => {
+    const api = window.__nerveEditorProbe!.univerAPI
+    const doc = api.getActiveDocument()
+    if (!api.getActiveWorkbook().isCellEditing() || doc?.getId() !== '__INTERNAL_EDITOR__DOCS_NORMAL')
+      throw new Error('必须仍处于活动单元格正文编辑中')
+    return doc.save().body
+  })
+}
+
 test('US-M5-08 富文本工具栏只给中间子串加链，前后文字和范围在重开后保持 @test-build', async ({ page }) => {
   const id = await open(page, 'link-rich-toolbar')
   const toolbar = await ribbon(page, '插入')
