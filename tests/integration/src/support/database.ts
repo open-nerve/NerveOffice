@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import process from 'node:process'
 import { readExpectedMigrations, runMigrations } from '@nerve-office/api'
 import pg from 'pg'
-import { abandonedNames, hostScopedName } from '../../../shared/test-databases.ts'
+import { abandonedNames, dropIdleTestDatabase, hostScopedName } from '../../../shared/test-databases.ts'
 import { removeTestAssetRoot } from './asset-root.ts'
 import { describeViolations, invariantViolations } from './invariants.ts'
 
@@ -92,10 +92,13 @@ export function testDatabaseName(): string {
 async function dropAbandoned(client: pg.Client): Promise<void> {
   const databases = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [DATABASE_PREFIX])
   for (const datname of abandonedNames(databases.rows.map(row => row.datname), { prefix: DATABASE_PREFIX, suffix: '_[0-9a-f]+' }))
-    await client.query(`DROP DATABASE IF EXISTS ${pg.escapeIdentifier(datname)} WITH (FORCE)`)
+    await dropIdleTestDatabase(client, datname)
   const roles = await client.query<{ rolname: string }>('SELECT rolname FROM pg_roles WHERE starts_with(rolname, $1)', [DATABASE_PREFIX])
-  for (const rolname of abandonedNames(roles.rows.map(row => row.rolname), { prefix: DATABASE_PREFIX, suffix: '_[0-9a-f]+_(?:owner|app)' }))
-    await client.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(rolname)}`)
+  for (const rolname of abandonedNames(roles.rows.map(row => row.rolname), { prefix: DATABASE_PREFIX, suffix: '_[0-9a-f]+_(?:owner|app)' })) {
+    const dependencies = await client.query('SELECT 1 FROM pg_shdepend WHERE refclassid = \'pg_authid\'::regclass AND refobjid = (SELECT oid FROM pg_roles WHERE rolname = $1) LIMIT 1', [rolname])
+    if (dependencies.rowCount === 0)
+      await client.query(`DROP ROLE IF EXISTS ${pg.escapeIdentifier(rolname)}`)
+  }
 }
 
 /** 别的迁移（别的检出、别的分支）的模板与它们没建完的半成品：当前的模板与当前的半成品除外 */

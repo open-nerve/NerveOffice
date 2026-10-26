@@ -3,10 +3,12 @@ import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { closeSync, openSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { connectGuestBoot } from './guest-connection.ts'
+import { managedVmTemporaryRoot } from './managed-output.ts'
 
 export type VmBrowser = 'chrome' | 'edge' | 'safari'
 export interface VmGuestResource extends VmResource {
@@ -55,7 +57,7 @@ export async function connectVmGuest(resource: VmGuestResource) {
       const target = new URL(url)
       if (target.hostname !== '127.0.0.1' || target.protocol !== 'http:' || !/^\d+$/.test(target.port))
         throw new Error('客体转发只接受本次 loopback HTTP 收集器')
-      const controlDirectory = await mkdtemp('/tmp/nerve-vm-ssh-')
+      const controlDirectory = await mkdtemp(join(managedVmTemporaryRoot(), 'ssh-'))
       const socket = `${controlDirectory}/control`
       const fd = openSync(log, 'wx', 0o600)
       const child = spawn('/usr/bin/ssh', [...args.slice(0, -1), '-M', '-S', socket, '-o', 'ExitOnForwardFailure=yes', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2', '-N', '-R', `127.0.0.1:${target.port}:127.0.0.1:${target.port}`, args.at(-1)!], { stdio: ['ignore', fd, fd] })

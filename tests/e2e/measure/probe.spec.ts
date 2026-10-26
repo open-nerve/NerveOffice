@@ -29,6 +29,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { e2eOrigin } from '../support/environment.ts'
 import { expect, test } from '../support/fixtures.ts'
+import { managedOutputPath } from '../support/managed-output.ts'
 import { firstPage, grantDurableStorage, launchPersistentProfile, overrideQuota } from '../support/persistent-profile.ts'
 import { cacheStateOf, probeVerdicts, verdictLines } from '../support/probe-verdicts.ts'
 import { startResultCollector } from '../support/selftest-collector.ts'
@@ -39,7 +40,7 @@ import { runSelftestStep } from '../support/selftest-run.ts'
 test.use({ webkitStorage: 'temporary' })
 
 const RUNS = Number(process.env.MEASURE_PROBE_RUNS ?? '40')
-const RESULTS_DIR = join(import.meta.dirname, 'test-results', 'probe')
+const RESULTS_DIR = managedOutputPath('probe')
 
 /** 一步最多等多久交回：Worker 的停顿在 runs 40 时约 5–6 分钟的空闲加上各次的计算 */
 const STEP_TIMEOUT_MS = 30 * 60_000

@@ -1,3 +1,7 @@
+import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
+import { readFileSync } from 'node:fs'
+import pg from 'pg'
+import { e2eDatabaseUrl } from './environment.ts'
 // 交接的页面自检的编排（M3-P5 设计 §3.14，S8 后半）：真实 Safari 的驱动脚本（safari/selftest.ts）与 Playwright 的校准（specs/editor/selftest.spec.ts）
 // 共用。页面上的场景在 apps/web/src/editor/testing/selftest-handover.ts。
 // - 让保存停在服务端（slowDownSave）：这次运行的测试库里装一个触发器（第一次用时装，之后不撤：测试库随运行删掉），改写内容行时查一张登记表，
@@ -12,14 +16,9 @@
 // - 服务端的请求日志（serverRequestsOf）：test-results/e2e-server.log 里这份文档的请求（方法、路由、状态码或者中断、用时、记下的时刻；M3-P6 起另有
 //   认证出的用户）；请求编辑的两条路（M3-P6）的编排与判定在 ./selftest-request.ts，也用这两样；
 // - 判定（纯函数，单元测试覆盖）：takeoverJudgement、refreshJudgement——问题与证据的说明。
-import type { SelftestReport } from '../../../apps/web/src/editor/testing/selftest-report.ts'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import pg from 'pg'
-import { e2eDatabaseUrl } from './environment.ts'
+import { managedOutputPath } from './managed-output.ts'
 
 /** 服务脚本写的后端日志（support/serve.ts 的 LOG_FILE） */
-const SERVER_LOG = fileURLToPath(new URL('../test-results/e2e-server.log', import.meta.url))
 
 /** 看库的间隔 */
 const POLL_MS = 100
@@ -284,7 +283,7 @@ export function parseServerRequests(text: string, documentId: string, since: num
 export function serverRequestsOf(documentId: string, since: number, until?: number): ServerRequest[] {
   let text: string
   try {
-    text = readFileSync(SERVER_LOG, 'utf8')
+    text = readFileSync(managedOutputPath('e2e-server.log'), 'utf8')
   }
   catch {
     return []

@@ -12,6 +12,7 @@ import { AUTOSAVE_STOP_SAMPLE, autosaveStopSampleFor } from '../support/capture-
 import { createDocument, createUser } from '../support/database.ts'
 import { probeFormulaMode, probeFormulasSettled, probeSnapshot } from '../support/editor-probe.ts'
 import { expect, test } from '../support/fixtures.ts'
+import { managedOutputPath } from '../support/managed-output.ts'
 import { loginThroughApi } from '../support/session.ts'
 import { EDITOR_TEST_TIMEOUT, openReader } from '../support/sheet.ts'
 
@@ -22,7 +23,7 @@ const ROUNDS = Number(process.env.MEASURE_FORMULA_ROUNDS ?? '10')
 const INTERVAL = Number(process.env.MEASURE_FORMULA_INTERVAL ?? '20')
 if (!Number.isSafeInteger(ROUNDS) || ROUNDS < 1 || ![20, 50, 100, 500].includes(INTERVAL))
   throw new Error('公式测量的轮数或间隔不合法')
-const RESULTS = join(import.meta.dirname, 'test-results', 'formula')
+const RESULTS = managedOutputPath('formula')
 
 interface Stage {
   readonly at: number

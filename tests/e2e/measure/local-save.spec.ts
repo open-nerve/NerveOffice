@@ -17,6 +17,7 @@ import { createDocument, createUser } from '../support/database.ts'
 import { chooseAutosave, expect, test } from '../support/fixtures.ts'
 import { currentLocalKey, diskSnapshot, readLocalDisk } from '../support/local-draft.ts'
 import { measureLocalEdit } from '../support/local-save-measure.ts'
+import { managedOutputPath } from '../support/managed-output.ts'
 import { distribution } from '../support/measure-stats.ts'
 import { firstPage, launchPersistentProfile } from '../support/persistent-profile.ts'
 import { loginThroughApi } from '../support/session.ts'
@@ -26,7 +27,7 @@ import { cellOf, openAndEnterEditing, savedContent, saveStatus } from '../suppor
 test.use({ webkitStorage: 'temporary' })
 
 const ROUNDS = Number(process.env.MEASURE_LOCAL_SAVE_ROUNDS ?? '20')
-const RESULTS_DIR = join(import.meta.dirname, 'test-results', 'local-save')
+const RESULTS_DIR = managedOutputPath('local-save')
 const DOCUMENTS: readonly { readonly id: string, readonly snapshotFor: SnapshotFor, readonly formula: boolean }[] = [
   { id: '1m', snapshotFor: bulkSampleFor(1024 * 1024), formula: false },
   { id: '5m', snapshotFor: bulkSampleFor(5 * 1024 * 1024), formula: false },

@@ -67,6 +67,7 @@ import { parseArgs } from 'node:util'
 import { decodeSelftestReport, isProbeScenario, RUNS_MAX, runsOfValue } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { revisionOf } from '../support/database.ts'
 import { databaseUrl, e2eDatabaseName, pickFreePort } from '../support/environment.ts'
+import { managedOutputPath } from '../support/managed-output.ts'
 import { probeVerdicts, verdictLines } from '../support/probe-verdicts.ts'
 import { REFRESH_SLOW_SAVE_SECONDS, refreshJudgement, serverRequestsOf, slowDownSave, takeoverJudgement, watchDocument } from '../support/selftest-handover.ts'
 import { S3_WAITER_STEPS, SELFTEST_STEPS, selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
@@ -77,7 +78,7 @@ import { chainOf, CLOSE_PATH, DONE_PATH, exitCodeOf, HIDE_PATH, nextAfter, outco
 
 const SERVE_SCRIPT = fileURLToPath(new URL('../support/serve.ts', import.meta.url))
 const SELFTEST_PAGE = fileURLToPath(new URL('../../../apps/web/dist-e2e/selftest.html', import.meta.url))
-const RESULTS_DIR = fileURLToPath(new URL('../safari-results/', import.meta.url))
+const RESULTS_DIR = `${managedOutputPath('native-safari')}/`
 
 /** 准备阶段失败 */
 const SETUP_FAILED = 3

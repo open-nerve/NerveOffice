@@ -2,7 +2,7 @@
 // M4-P1 S7 的事故：Docker 容器里的运行连共用的开发库，只按进程号判断时把宿主机上别人正在用的库当成遗留删掉了（容器看不到宿主机的进程号），反过来也一样
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-import { abandonedNames, hostScopedName, hostTag, isProcessAlive } from './test-databases.ts'
+import { abandonedNames, dropIdleTestDatabase, hostScopedName, hostTag, isProcessAlive } from './test-databases.ts'
 
 const TAG = 'a1b2c3d4'
 const OTHER = 'ffffffff'
@@ -86,5 +86,48 @@ describe('本主机上的进程还在不在（isProcessAlive）', () => {
 
   it('别的用户的进程（1 号进程）也算在：没有权限（EPERM）不等于不在，库是它的就不能删', () => {
     expect(isProcessAlive(1)).toBe(true)
+  })
+})
+
+describe('清理遗留库不强断活动连接', () => {
+  it('有连接时保留，不执行 DROP', async () => {
+    const statements: string[] = []
+    const client = { query: async (sql: string) => {
+      statements.push(sql)
+      return { rowCount: 1 }
+    } }
+    expect(await dropIdleTestDatabase(client, 'nerve_e2e_a1b2c3d4_300')).toBe(false)
+    expect(statements).toHaveLength(1)
+  })
+
+  it('空闲时不使用 FORCE，重复 DROP IF EXISTS 安全', async () => {
+    const statements: string[] = []
+    const client = { query: async (sql: string) => {
+      statements.push(sql)
+      return { rowCount: 0 }
+    } }
+    expect(await dropIdleTestDatabase(client, 'nerve_e2e_a1b2c3d4_300')).toBe(true)
+    expect(await dropIdleTestDatabase(client, 'nerve_e2e_a1b2c3d4_300')).toBe(true)
+    expect(statements.join(' ')).not.toContain('FORCE')
+    expect(statements.filter(sql => sql.startsWith('DROP'))).toEqual(Array.from({ length: 2 }).fill('DROP DATABASE IF EXISTS "nerve_e2e_a1b2c3d4_300"'))
+  })
+
+  it.each(['55006', '55P03'])('检查后有人连入或占锁时保留：%s', async (code) => {
+    const statements: string[] = []
+    const client = { query: async (sql: string) => {
+      statements.push(sql)
+      if (sql.startsWith('DROP'))
+        throw Object.assign(new Error('in use'), { code })
+      return { rowCount: 0 }
+    } }
+    expect(await dropIdleTestDatabase(client, 'nerve_it_a1b2c3d4_300_abcd')).toBe(false)
+    expect(statements.at(-1)).toBe('RESET lock_timeout')
+  })
+
+  it('拒绝业务库名称', async () => {
+    const client = { query: async () => {
+      throw new Error('must not query')
+    } }
+    await expect(dropIdleTestDatabase(client, 'nerve_office')).rejects.toThrow('测试库')
   })
 })

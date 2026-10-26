@@ -1,5 +1,3 @@
-// 真实客体 OS 实验，手动调用，不进入 CI。先给资格报告，再选浏览器和轮次。
-// node tools/vm-durability.ts QUALIFICATION.json chrome|edge|safari OUTPUT control|20 HELPER
 import type { VmBoot } from '../support/vm-durability.ts'
 import type { VmBrowser, VmGuestResource } from '../support/vm-guest.ts'
 import assert from 'node:assert/strict'
@@ -9,6 +7,9 @@ import { join, resolve } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { settleCrashCleanup } from '../safari/crash-cleanup.ts'
+// 真实客体 OS 实验，手动调用，不进入 CI。先给资格报告，再选浏览器和轮次。
+// node tools/vm-durability.ts QUALIFICATION.json chrome|edge|safari OUTPUT control|20 HELPER
+import { requireManagedVm } from '../support/managed-output.ts'
 import { startOwnedVm } from '../support/owned-vm-process.ts'
 import { createVmDurabilityRound } from '../support/vm-durability.ts'
 import { connectVmGuest } from '../support/vm-guest.ts'
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
   const resource = qualification.resource
   const browser = browserArg as VmBrowser
   const output = resolve(outputArg)
+  requireManagedVm(resource, output)
   const helper = resolve(helperArg)
   await mkdir(output, { recursive: false, mode: 0o700 })
   const results: unknown[] = []

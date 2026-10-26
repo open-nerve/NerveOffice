@@ -8,6 +8,6 @@ export default defineConfig({
   ...base,
   testDir: './tools',
   retries: 0,
-  reporter: [['list']],
+  reporter: base.reporter,
   projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
 })

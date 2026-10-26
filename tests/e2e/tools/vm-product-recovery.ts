@@ -1,5 +1,3 @@
-// 客体 OS 突停后的真实产品恢复；手动实验，不进入 CI。
-// NODE_OPTIONS=--conditions=@nerve-office/source node tools/vm-product-recovery.ts QUALIFICATION.json chrome|edge|safari OUTPUT HELPER
 import type { Buffer } from 'node:buffer'
 import type { ChildProcess } from 'node:child_process'
 import type { VmBoot } from '../support/vm-durability.ts'
@@ -19,6 +17,9 @@ import { startCrashProxy } from '../safari/crash-proxy.ts'
 import { createCrashSession } from '../support/crash-session.ts'
 import { createDocument, createUser, withDatabase } from '../support/database.ts'
 import { databaseUrl, e2eDatabaseName, pickFreePort } from '../support/environment.ts'
+// 客体 OS 突停后的真实产品恢复；手动实验，不进入 CI。
+// NODE_OPTIONS=--conditions=@nerve-office/source node tools/vm-product-recovery.ts QUALIFICATION.json chrome|edge|safari OUTPUT HELPER
+import { managedOutputPath, requireManagedVm } from '../support/managed-output.ts'
 import { startOwnedVm } from '../support/owned-vm-process.ts'
 import { connectVmGuest } from '../support/vm-guest.ts'
 import { freezeVmJournal } from '../support/vm-journal-barrier.ts'
@@ -67,6 +68,7 @@ async function main(): Promise<void> {
   const resource = qualification.resource
   const browser = browserArg as VmBrowser
   const output = resolve(outputArg)
+  requireManagedVm(resource, output)
   const helper = resolve(helperArg)
   await mkdir(output, { recursive: false, mode: 0o700 })
   process.env.E2E_DATABASE_URL = databaseUrl(e2eDatabaseName(process.pid))
@@ -215,7 +217,7 @@ async function main(): Promise<void> {
               return
             const cleanup = await stopBackend(backend)
             await writeFile(join(directory, 'backend-cleanup.json'), `${JSON.stringify(cleanup)}\n`, { flag: 'wx' })
-            await copyFile(fileURLToPath(new URL('../test-results/e2e-server.log', import.meta.url)), join(directory, 'backend.log'))
+            await copyFile(managedOutputPath('e2e-server.log'), join(directory, 'backend.log'))
             assert(cleanup.exitCode === 0 && cleanup.signal === null && !cleanup.forced, '专用后端没有正常退出')
           } },
           { name: 'journal', run: journal.close },

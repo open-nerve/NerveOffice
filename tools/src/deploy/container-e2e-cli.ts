@@ -65,7 +65,10 @@ import {
 import { assetGcRuntimeProblems, assetMountProblems, assetRuntimeProblems, nativeRuntimeProblems } from './container-image-checks.ts'
 import { loadNativeMaterials } from './native-image-materials.ts'
 
-const LOG_DIR = join(REPO_ROOT, 'tests/e2e/test-results/container')
+const outputDirectory = process.env.NERVE_TEST_OUTPUT_DIR
+if (outputDirectory === undefined)
+  throw new Error('容器 E2E 须通过 pnpm test:e2e:container 的资源运行器启动')
+const LOG_DIR = join(outputDirectory, 'container')
 const SERVICES = ['db', 'migrate', 'app', 'caddy'] as const
 /** 等经 Caddy 的存活探针通过的时限 */
 const LIVE_TIMEOUT_MS = 120_000

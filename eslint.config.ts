@@ -1052,6 +1052,7 @@ export default antfu(
     // 文档是手写的中文，不做 lint 与格式化
     markdown: false,
     ignores: [
+      '.test-resources/**',
       'spikes/**',
       'refer/**',
       'docs/**',
