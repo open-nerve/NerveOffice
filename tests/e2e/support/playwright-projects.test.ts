@@ -33,9 +33,13 @@ function projects(external: boolean, browsers: string): Project[] {
       restart: accepts(project, '/specs/deploy/restart.spec.ts'),
     }))));
   `
-  return JSON.parse(execFileSync(process.execPath, ['--conditions=@nerve-office/source', '--input-type=module', '-e', source], {
+  // 只读配置检查显式走列举路径，不借用外层 coverage 的受管资源。
+  return JSON.parse(execFileSync(process.execPath, ['--conditions=@nerve-office/source', '--input-type=module', '-e', source, '--', '--list'], {
     env: {
       ...process.env,
+      NERVE_TEST_RUN_ID: undefined,
+      NERVE_TEST_SCRATCH: undefined,
+      NERVE_TEST_OUTPUT_DIR: undefined,
       CI: 'false',
       E2E_BROWSERS: browsers,
       E2E_PORT: '48123',
