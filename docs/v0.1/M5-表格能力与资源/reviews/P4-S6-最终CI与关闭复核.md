@@ -225,3 +225,12 @@ container02 在同一 clean `9abf02d2` 上串行完成，原件目录为 `s6/s6-
 下一步只做计划已登记的诊断检查点：模板局部修正、有界异常摘要、安装前的小型预检与无需 pnpm 的始终输出回执；保持失败保留、当前删除保护和六项最终门禁。诊断性合并/推送只用于取得托管 Linux 原因，不构成 P4 验收；旧 v2 的 parentMain/full12/container02/push03 及来源签署均不改写。实际 Linux 能力成立后，最终输入仍须完成新本机完整门禁与容器门禁、最终同 SHA 六项 CI、冻结和 worktree 清理。P5 未开始。
 
 诊断检查点轻型校验已完成：最终同一输入的 Python 资源管理回归 **151/151**（59.019 秒），CI 接线回归 **12/12**（2.73 秒），修改的 YAML/TypeScript 按正常提交钩子的 ESLint 规则通过。13 份相关源码/测试/工作流的前后 SHA 完全一致；两轮受管 scratch、短根和进程组均已消失。回执为 `s6/ci-resource-path-fix/ci-40593800515-checkpoint/validation.json`（SHA-256 `c3df3d5df1f670e117126dee882adc24d99953ccc191f6bcf7917ea46c2c6795`）。独审发现的伪注解脱敏问题已以真实 RED 复现并修复，复验 27/27；回执读取器 22/22，独审无遗留 C/I/M。上述接受只覆盖诊断性提交，未运行新完整本机门禁、未取得新 CI 结果，不改变 P4 未关闭状态。
+
+
+## 2026-10-28：诊断 CI 40600596503 的实测结果
+
+诊断提交 `c576c1fe` 正常 no-ff 合 main `18892db5`，正常 pre-push 263.27 秒后推送成功；推送受管 run `912fab9d-712e-4d73-a6bd-ef2873e3c89f` 已 cleanup complete，scratch、短根和进程组均消失。回执为 `s6/ci-resource-path-fix/ci-40593800515-checkpoint/normal-push-receipt.json`，SHA-256 `f419ec725f58970c326d3991caf6ec9c894fbba8c04a7b5c16c2dc240d837686`。
+
+新 [CI 40600596503](https://github.com/open-nerve/NerveOffice/actions/runs/40600596503) 六项全部在安装依赖前的资源预检停止；Docker 服务查询不再是首个错误。lsof 返回0、stderr为空，但每项有19–54条不能完整解释的宿主记录，样本未截断；包含 UNIX-STREAM、UDP/TCP/NETLINK/QIPCRTR 与匿名 bpf-map 映射。每项均有一条 UNIX-STREAM，不能由协议名或数字PID断定其无文件系统路径。六份状态回执为 cleanup-pending、childGroup=null、scratch/短根仍存在；没有运行产品子命令。
+
+六份原日志与逐任务审计已核验保存，不能用收集成功或正常推送声明 CI 通过。完整证据及责任边界建议见 [CI清理边界复核与调整建议](P4-S6-CI清理边界复核与调整建议.md)。本轮不启动新的重型门禁；需要先决定是否按持久机器与一次性托管VM区分回收责任。方案未实施，P4未关闭，P5未开始。
