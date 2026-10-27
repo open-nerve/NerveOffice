@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { REPO_ROOT } from '../shared/repo.ts'
 import { checkReports } from './e2e-command.ts'
-import { prepareRun, runOwnedCommand, settleRun, snapshotDiagnostics } from './e2e-process.ts'
+import { failureStageSchema, processDiagnostic } from './e2e-diagnostics.ts'
+import { prepareRun, recordProcessFailure, runOwnedCommand, settleRun, snapshotDiagnostics } from './e2e-process.ts'
 
 async function main(): Promise<number> {
   const directory = process.env.NERVE_CI_E2E_STATE
@@ -41,8 +42,18 @@ async function main(): Promise<number> {
   }
 }
 
-void main().then(code => process.exit(code)).catch(() => {
-  // 不把第三方异常的参数、环境或 JSON 正文写进日志。具体阶段由命令名与保留的运行记录识别。
+void main().then(code => process.exit(code)).catch((error: unknown) => {
+  const parsed = failureStageSchema.safeParse(process.argv[2])
+  const stage = parsed.success ? parsed.data : 'unknown'
+  let recorded = false
+  try {
+    if (process.env.NERVE_CI_E2E_STATE !== undefined) {
+      recordProcessFailure(process.env.NERVE_CI_E2E_STATE, REPO_ROOT, stage, error)
+      recorded = true
+    }
+  }
+  catch { /* 不能核对目录身份或写记录时仍失败；不输出底层异常正文。 */ }
+  console.error(JSON.stringify({ stage, recorded, ...processDiagnostic(error) }))
   console.error('CI E2E 执行/退出核验/报告核验失败；保留本轮监督记录，不宣告通过。')
   process.exit(1)
 })

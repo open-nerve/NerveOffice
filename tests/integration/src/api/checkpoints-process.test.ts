@@ -1,5 +1,5 @@
 import type { TestAccount } from '../support/accounts.ts'
-import type { ApiProcess } from '../support/api-process.ts'
+import type { ApiProcess, ProcessExit } from '../support/api-process.ts'
 import type { TestDatabase } from '../support/database.ts'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
@@ -7,7 +7,7 @@ import { testEnvironment } from '../support/api-app.ts'
 import { startApiProcess } from '../support/api-process.ts'
 import { createTestDatabase } from '../support/database.ts'
 import { seedDocument } from '../support/documents.ts'
-import { raceAgainstHeldLock, whileHolding } from '../support/held-lock.ts'
+import { interruptWhileHeldLock, raceAgainstHeldLock } from '../support/held-lock.ts'
 
 let database: TestDatabase
 let owner: TestAccount
@@ -47,11 +47,28 @@ afterEach(async () => {
 })
 afterAll(async () => database?.drop())
 
-function run(args: readonly string[]) {
+function run(args: readonly string[], env: Readonly<Record<string, string>> = {}) {
   // 三个 Job 的默认开关也保持 true；窄 CLI 不组装 Jobs，因此不会启动它们。
-  const process = startApiProcess(testEnvironment(database.url, { NERVE_TRASH_PURGE_ENABLED: 'true', NERVE_REVISION_PURGE_ENABLED: 'true', NERVE_HISTORY_PURGE_ENABLED: 'true' }), 'document-checkpoints', { args })
+  const process = startApiProcess(testEnvironment(database.url, { NERVE_TRASH_PURGE_ENABLED: 'true', NERVE_REVISION_PURGE_ENABLED: 'true', NERVE_HISTORY_PURGE_ENABLED: 'true', ...env }), 'document-checkpoints', { args })
   processes.push(process)
   return process
+}
+
+/** 只取测试 preload 的固定阶段，不把 CLI 原始输出、连接串或业务数据放进失败诊断。 */
+function startupPhases(process: ApiProcess): string[] {
+  return process.output().slice(-4096).split('\n').flatMap((line) => {
+    try {
+      const entry: unknown = JSON.parse(line)
+      if (entry !== null && typeof entry === 'object' && 'event' in entry && entry.event === 'checkpoint-test-startup-delay'
+        && 'phase' in entry && (entry.phase === 'entered' || entry.phase === 'released')) {
+        return [entry.phase]
+      }
+    }
+    catch {
+      return []
+    }
+    return []
+  }).slice(-2)
 }
 
 async function receipt(args: readonly string[]) {
@@ -82,7 +99,8 @@ describe('US-M5-11 升级检查点真实进程', () => {
     expect(await receipt(['abort', '--batch', other.batch.id])).toMatchObject({ writeFrozen: false, batch: { status: 'aborted', completedCount: 0 } })
   })
 
-  it.each(['SIGKILL', 'SIGTERM'] as const)('%s 在第二个短批持锁时到来；首批保留、当前批按语义回滚或提交，异进程继续', async (signal) => {
+  it.each(['SIGKILL', 'SIGTERM', 'SIGKILL 慢启动'] as const)('%s 在第二个短批持锁时到来；首批保留、当前批按语义回滚或提交，异进程继续', async (mode) => {
+    const signal = mode === 'SIGTERM' ? 'SIGTERM' : 'SIGKILL'
     const id = (await receipt(['prepare', '--target', 'restartable'])).batch.id
     await database.query(async client => client.query('INSERT INTO checkpoint_process_gate (document_id) VALUES ($1)', [ids[1]]))
     let child: ApiProcess | undefined
@@ -109,13 +127,44 @@ describe('US-M5-11 升级检查点真实进程', () => {
       expect(JSON.parse(child!.stdout())).toMatchObject({ writeFrozen: true, interrupted: true, batch: { completedCount: 2 } })
     }
     else {
-      await whileHolding(database, async client => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'checkpoint-process-gate\',0))'), async () => {
-        const killed = run(['resume', '--batch', id, '--batch-size', '1'])
-        await expect.poll(async () => database.query(async client => (await client.query<{ n: number }>('SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database() AND application_name=\'nerve-office-api\' AND cardinality(pg_blocking_pids(pid))>0')).rows[0]!.n)).toBe(1)
-        await rememberFirst()
-        killed.kill('SIGKILL')
-        expect(await killed.exited).toEqual({ code: null, signal: 'SIGKILL' })
-      })
+      const started = performance.now()
+      const phases: { phase: string, elapsedMs: number }[] = []
+      const mark = (phase: string): void => {
+        phases.push({ phase, elapsedMs: Math.round(performance.now() - started) })
+      }
+      // 只给本次 resume 显式传入；不影响 prepare/status、其他故事或真实业务启动。
+      const env: Readonly<Record<string, string>> = mode === 'SIGKILL 慢启动'
+        ? { NODE_OPTIONS: `--import=${new URL('../support/checkpoint-startup-delay.test-support.mjs', import.meta.url).href}` }
+        : {}
+      let killed: ApiProcess | undefined
+      let exit: ProcessExit | undefined
+      try {
+        const result = await interruptWhileHeldLock(database, {
+          hold: async client => client.query('SELECT pg_advisory_xact_lock(hashtextextended(\'checkpoint-process-gate\',0))'),
+          request: async () => {
+            killed = run(['resume', '--batch', id, '--batch-size', '1'], env)
+            mark('spawn')
+            void killed.exited.then((value) => {
+              exit = value
+              mark('close')
+            })
+            return killed.exited
+          },
+          beforeInterrupt: async () => {
+            mark('blocked')
+            await rememberFirst()
+            mark('first-committed')
+          },
+          interrupt: () => {
+            killed!.kill('SIGKILL')
+            mark('SIGKILL')
+          },
+        })
+        expect(result).toEqual({ code: null, signal: 'SIGKILL' })
+      }
+      catch (error) {
+        throw new Error(`SIGKILL 等锁协调失败：${JSON.stringify({ phases, exit, startup: killed === undefined ? [] : startupPhases(killed) })}`, { cause: error })
+      }
       expect(await receipt(['status', '--batch', id])).toMatchObject({ writeFrozen: true, batch: { completedCount: 1, status: 'preparing' } })
     }
     await database.query(async client => client.query('DELETE FROM checkpoint_process_gate'))

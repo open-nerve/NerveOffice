@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import https from 'node:https'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
@@ -388,12 +388,11 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
   try {
     // 与 E2E 包的 test 脚本相同：按 @nerve-office/source 条件解析工作区的包（经环境变量，工作进程也继承）
     const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source`.trim()
-    // 浏览器的临时配置目录放进本次运行的临时目录：强制结束时留下的，随它一起删掉
-    const temporary = join(dirname(settings.envFile), 'tmp')
-    mkdirSync(temporary, { recursive: true })
+    // 保留资源运行器提供的短 TMPDIR/TMP/TEMP；再嵌套配置目录会超过 Linux branded 浏览器的 Unix socket 路径上限。
+    // 真实内容仍在本轮 scratch/tmp，随受管运行结束回收。
     const { status } = await runTracked(interruption, process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
       cwd: join(REPO_ROOT, 'tests/e2e'),
-      env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions, TMPDIR: temporary },
+      env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions },
       signalTarget: 'leader',
     })
     return { status, peak }

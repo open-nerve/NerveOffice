@@ -8,7 +8,8 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { afterEach, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { OWNER_VARIABLE, parseProcessStat, prepareRun, settleRun, snapshotDiagnostics } from './e2e-process.ts'
+import { inspectProcessOperation } from './e2e-diagnostics.ts'
+import { OWNER_VARIABLE, parseProcessStat, prepareRun, recordProcessFailure, settleRun, snapshotDiagnostics } from './e2e-process.ts'
 
 assert.equal(process.platform, 'linux', '真实进程契约必须在 Linux 运行；macOS 不能以跳过代替通过')
 const moduleUrl = new URL('./e2e-process.ts', import.meta.url).href
@@ -214,10 +215,24 @@ void test('诊断发布为静态白名单快照；原运行记录继续变化也
   const runtime = JSON.parse(readFileSync(join(directory, 'runtime.json'), 'utf8')) as Record<string, unknown>
   runtime.privateField = 'synthetic-credential-never-publish'
   writeFileSync(join(directory, 'runtime.json'), JSON.stringify(runtime))
+  let inspectionError: unknown
+  try {
+    inspectProcessOperation('read-environment', () => {
+      throw Object.assign(new Error('synthetic-credential-never-publish'), { code: 'EIO', path: 'privateField' })
+    }, 123)
+  }
+  catch (error) { inspectionError = error }
+  recordProcessFailure(directory, root, 'run', inspectionError)
+  recordProcessFailure(directory, root, 'settle', new Error('synthetic-credential-never-publish'))
+  const failure = json(join(directory, 'failure-run.json')) as Record<string, unknown>
+  failure.privateField = 'synthetic-credential-never-publish'
+  writeFileSync(join(directory, 'failure-run.json'), JSON.stringify(failure))
   const snapshot = join(snapshotDiagnostics(directory, root), 'snapshot.json')
   const original = readFileSync(snapshot, 'utf8')
   const saved = JSON.parse(original) as Record<string, unknown>
   assert.deepEqual(saved.unavailable, [])
+  assert.deepEqual(saved['failure-run.json'], { at: failure.at, stage: 'run', operation: 'read-environment', code: 'EIO', pid: 123 })
+  assert.equal((saved['failure-settle.json'] as Record<string, unknown>).operation, 'unclassified')
   assert.equal('stop.json' in saved, false, '正常结束与静默确认不能制造停止记录')
   assert.equal('soft-stop.json' in saved, false)
   assert.equal(original.includes('synthetic-credential-never-publish'), false)
@@ -233,9 +248,11 @@ void test('可选停止记录损坏仍写入 unavailable，不能冒充正常缺
   assert.deepEqual(await settleRun(directory, root), { quiescent: true, forced: false })
   writeFileSync(join(directory, 'stop.json'), '{')
   writeFileSync(join(directory, 'soft-stop.json'), JSON.stringify({ at: 'invalid' }))
+  writeFileSync(join(directory, 'failure-run.json'), JSON.stringify({ at: 1, stage: 'settle', operation: 'read-process', code: 'EIO' }))
+  writeFileSync(join(directory, 'failure-settle.json'), JSON.stringify({ at: 1, stage: 'settle', operation: 'read-process', code: 'ESECRET' }))
   try {
     const saved = json(join(snapshotDiagnostics(directory, root), 'snapshot.json')) as Record<string, unknown>
-    assert.deepEqual(saved.unavailable, ['stop.json', 'soft-stop.json'])
+    assert.deepEqual(saved.unavailable, ['stop.json', 'soft-stop.json', 'failure-run.json', 'failure-settle.json'])
     assert.equal('stop.json' in saved, false)
     assert.equal('soft-stop.json' in saved, false)
   }

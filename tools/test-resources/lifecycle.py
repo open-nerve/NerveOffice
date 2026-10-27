@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import time
 import tempfile
@@ -110,14 +111,47 @@ def group_alive(group):
 
 def open_paths(root):
     executable = shutil.which("lsof") or "/usr/sbin/lsof"
-    result = subprocess.run([executable, "-nP", "-F", "n"], capture_output=True,
-                            text=True, timeout=30)
+    command = [executable, "-nP", "-F", "n"]
+    started = time.monotonic()
+    def incomplete(returncode=None, stderr=b"", timed_out=False, error_number=None):
+        raw = stderr.encode("utf-8", errors="replace") if isinstance(stderr, str) else (stderr or b"")
+        details = {"operation": "lsof-open-paths", "root": str(root), "argv": command,
+                   "returncode": returncode, "timedOut": timed_out, "errno": error_number,
+                   "durationMs": round((time.monotonic() - started) * 1000),
+                   "stderr": raw[:4096].decode("utf-8", errors="replace"),
+                   "stderrBytes": len(raw), "stderrTruncated": len(raw) > 4096}
+        return RuntimeError("无法完整核对打开文件；保留资源：" + json.dumps(details, ensure_ascii=False))
+    try:
+        result = subprocess.run(command, capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired as error:
+        raise incomplete(stderr=error.stderr, timed_out=True) from None
+    except OSError as error:
+        raise incomplete(error_number=error.errno) from None
     if result.returncode not in (0, 1) or result.stderr:
-        raise RuntimeError("无法完整核对打开文件；保留资源")
-    prefix = str(root.resolve()) + "/"
-    return sorted({line[1:] for line in result.stdout.splitlines()
-                   if line.startswith("n") and
-                   (line[1:] == str(root.resolve()) or line[1:].startswith(prefix))})
+        raise incomplete(result.returncode, result.stderr)
+    canonical = str(root.resolve())
+    def inside(name):
+        return name == canonical or name.startswith(canonical + "/")
+    output = os.fsdecode(result.stdout)
+    found = set()
+    for line in output.splitlines():
+        if not line.startswith("n/"):
+            continue
+        name = line[1:]
+        if inside(name):
+            found.add(name)
+            continue
+        # UNIX sockets may retain the path used at bind(), including a nested
+        # run's alias. Resolve only absolute pathname candidates; retain lsof's
+        # original text as evidence. Missing/deleted leaves still resolve parents.
+        plain = re.split(r" type=(?:STREAM|DGRAM|SEQPACKET)(?: |$)", name, maxsplit=1)[0]
+        plain = re.sub(r" \((?:deleted|revoked)\)$", "", plain)
+        try:
+            if any(inside(str(Path(candidate).resolve())) for candidate in {name, plain}):
+                found.add(name)
+        except (OSError, RuntimeError, ValueError):
+            raise RuntimeError("无法解析打开文件的路径别名；保留资源：" + str(root)) from None
+    return sorted(found)
 
 
 def check_opfs(profile):
@@ -371,7 +405,7 @@ class Store:
                 report["unknown"].append(directory.name)
                 continue
             try:
-                if run.scratch.exists() or run.data.get("cleanupStage") == "reports-collected" or run.data.get("status") == "prepared":
+                if run.scratch.exists() or run.data.get("cleanupStage") == "reports-collected" or run.data.get("status") in ("prepared", "cleanup-pending"):
                     if group_alive(run.data.get("childGroup")):
                         report["active"].append(run.id)
                     else:
@@ -471,47 +505,107 @@ class Run:
             self.released = True
 
     def create_short_root(self):
-        root = Path("/tmp").resolve() / ("nerve-vm-" + self.id)
+        if "shortRoot" in self.data:
+            raise ValueError("短目录已经登记，拒绝重复创建")
+        vm = self.data["kind"] == "vm"
+        root = Path("/tmp").resolve() / (("nerve-vm-" if vm else "nerve-t-") + self.id)
         # Precise ownership is durable before creation; an existing directory is never adopted.
-        self.update(shortRoot=str(root))
+        # Explicitly distinguish a new interrupted creation from legacy VM manifests.
+        self.update(shortRoot=str(root), shortRootIdentity=None)
         root.mkdir(mode=0o700)
-        atomic_json(root / "owner.json", {"runId": self.id, "repo": str(self.store.repo), "kind": "vm-short-path"})
+        info = root.lstat()
+        self.update(shortRootIdentity={"device": info.st_dev, "inode": info.st_ino})
+        atomic_json(root / "owner.json", {"runId": self.id, "repo": str(self.store.repo),
+                    "kind": "vm-short-path" if vm else "test-short-path"})
         return root
 
-    def retire_short_root(self):
+    def create_short_tmp(self):
+        target = contained(self.scratch / "tmp", self.store.root)
+        target.mkdir(mode=0o700)
+        root = self.create_short_root()
+        alias = root / "t"
+        # Record the sole permitted alias before creating it. Partial creation
+        # without its exact identity is retained for ownership investigation.
+        self.update(shortTmp={"path": str(alias), "target": str(target)})
+        alias.symlink_to(target, target_is_directory=True)
+        info = alias.lstat()
+        self.update(shortTmpIdentity={"device": info.st_dev, "inode": info.st_ino})
+        self.short_root()
+        return alias
+
+    def short_root(self):
         if not self.data.get("shortRoot"):
-            return
-        expected = Path("/tmp").resolve() / ("nerve-vm-" + self.id)
-        if self.data["shortRoot"] != str(expected) or expected.is_symlink():
-            raise ValueError("VM 短路径归属不符")
-        if not expected.exists():
-            return
+            return None
+        vm = self.data["kind"] == "vm"
+        expected = Path("/tmp").resolve() / (("nerve-vm-" if vm else "nerve-t-") + self.id)
+        if self.data["shortRoot"] != str(expected):
+            raise ValueError("短路径归属不符")
+        try:
+            info = expected.lstat()
+        except FileNotFoundError:
+            # It may not have been created yet, or a completed removal was interrupted.
+            # Still return the lexical root so any remaining open socket is checked.
+            return expected
+        identity = {"device": info.st_dev, "inode": info.st_ino}
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+                or info.st_uid != os.getuid()
+                or (self.data.get("shortRootIdentity") != identity
+                    and not (vm and all(key not in self.data for key in
+                                        ("shortRootIdentity", "shortTmp", "shortTmpIdentity"))))):
+            raise ValueError("短目录已被替换或没有完整创建证明，保留")
         marker = expected / "owner.json"
-        if marker.is_symlink() or read_json(marker) != {"runId": self.id, "repo": str(self.store.repo), "kind": "vm-short-path"}:
-            raise ValueError("VM 短路径没有完整创建证明，保留")
-        if group_alive(self.data.get("childGroup")) or open_paths(expected):
-            raise RuntimeError("VM 短路径仍有使用者，保留")
-        remove(expected, expected.parent)
+        if (not stat.S_ISREG(marker.lstat().st_mode)
+                or read_json(marker) != {"runId": self.id, "repo": str(self.store.repo),
+                                        "kind": "vm-short-path" if vm else "test-short-path"}):
+            raise ValueError("短路径没有完整创建证明，保留")
+        registered = self.data.get("shortTmp")
+        if registered is not None:
+            target = contained(self.scratch / "tmp", self.store.root)
+            alias = expected / "t"
+            alias_info = alias.lstat()
+            if (registered != {"path": str(alias), "target": str(target)}
+                    or not stat.S_ISLNK(alias_info.st_mode)
+                    or self.data.get("shortTmpIdentity") != {"device": alias_info.st_dev, "inode": alias_info.st_ino}
+                    or os.readlink(alias) != str(target)
+                    or target.resolve() != target):
+                raise ValueError("短路径别名已被替换或未完整登记，保留")
+        if not vm and set(path.name for path in expected.iterdir()) != ({"owner.json", "t"} if registered is not None else {"owner.json"}):
+            raise ValueError("短目录含有未登记内容，保留")
+        return expected
+
+    def assert_quiescent(self):
+        contained(self.scratch, self.store.root)
+        if self.scratch.is_symlink():
+            raise ValueError("scratch 不能是链接")
+        short = self.short_root()
+        if group_alive(self.data.get("childGroup")):
+            raise RuntimeError("资源仍有活动进程，保留")
+        # Both roots are checked before any compaction, move or evidence copy.
+        for root in [self.scratch, *([short] if short is not None else [])]:
+            if open_paths(root):
+                raise RuntimeError("资源仍有打开句柄，保留：" + str(root))
+
+    def retire_short_root(self):
+        expected = self.short_root()
+        if expected is not None:
+            if group_alive(self.data.get("childGroup")) or open_paths(expected):
+                raise RuntimeError("短路径仍有使用者，保留")
+            if expected.exists():
+                remove(expected, expected.parent)
 
     def finish(self, status, release=True):
         if status not in ("passed", "failed", "interrupted"):
             raise ValueError("终态无效")
-        if not self.scratch.exists():
-            if self.data.get("cleanupStage") == "reports-collected":
-                self.retire_short_root()
-                self.update(status=self.data["requestedStatus"], endedAt=time.time(), cleanupStage="complete")
-            elif self.data.get("status") == "prepared":
-                self.retire_short_root()
-                self.update(status="interrupted", endedAt=time.time(), cleanupStage="never-started")
-            if release:
-                self.release()
-            return self.data
         try:
-            contained(self.scratch, self.store.root)
-            if self.scratch.is_symlink():
-                raise ValueError("scratch 不能是链接")
-            if group_alive(self.data.get("childGroup")) or open_paths(self.scratch):
-                raise RuntimeError("资源仍有活动进程或打开句柄")
+            self.assert_quiescent()
+            if not self.scratch.exists():
+                if self.data.get("cleanupStage") == "reports-collected":
+                    self.retire_short_root()
+                    self.update(status=self.data["requestedStatus"], endedAt=time.time(), cleanupStage="complete")
+                elif self.data.get("status") in ("prepared", "cleanup-pending") and self.data.get("childGroup") is None:
+                    self.retire_short_root()
+                    self.update(status="interrupted", endedAt=time.time(), cleanupStage="never-started")
+                return self.data
             if self.data.get("cleanupStage") == "reports-collected":
                 self.retire_short_root()
                 remove(self.scratch, self.store.root)

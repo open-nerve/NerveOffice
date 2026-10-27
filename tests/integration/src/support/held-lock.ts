@@ -45,6 +45,14 @@ export interface HeldLockRace<T> {
   readonly waiting?: number
 }
 
+export interface HeldLockInterruption<T> {
+  readonly hold: (client: pg.Client) => Promise<unknown>
+  readonly request: () => Promise<T>
+  /** 目标已经等锁；在故意终止前核对已提交的数据，随后还会复验同一等待目标。 */
+  readonly beforeInterrupt?: () => Promise<unknown>
+  readonly interrupt: () => void | Promise<void>
+}
+
 /** 最多等多久：比应用的锁等待上限（5 秒）长也没关系，请求先结束就立即失败（见 waitUntilBlocked） */
 const WAIT_TIMEOUT_MS = 10_000
 
@@ -154,6 +162,110 @@ function watch(promise: Promise<unknown>): () => string | undefined {
     },
   )
   return () => outcome
+}
+
+interface ApplicationWaiter {
+  readonly pid: number
+  readonly backendStart: string | null
+  readonly queryStart: string | null
+  readonly blockers: number[]
+  readonly waitEvent: string | null
+}
+
+/** 与进程故事原先的 count === 1 相同范围；只取两个，第二个已经足以证明目标不唯一。 */
+async function applicationWaiters(database: TestDatabase): Promise<ApplicationWaiter[]> {
+  return database.query(async client => (await client.query<ApplicationWaiter>(
+    `SELECT pid, backend_start::text AS "backendStart", query_start::text AS "queryStart",
+       pg_blocking_pids(pid) AS blockers, wait_event AS "waitEvent"
+     FROM pg_stat_activity
+     WHERE datname = current_database() AND application_name = $1 AND cardinality(pg_blocking_pids(pid)) > 0
+     ORDER BY pid LIMIT 2`,
+    [APPLICATION_NAME],
+  )).rows)
+}
+
+function uniqueWaiter(waiters: readonly ApplicationWaiter[], holderPid: number, ended: () => string | undefined): ApplicationWaiter {
+  if (ended() !== undefined)
+    throw new Error('被测请求已经结束，拒绝故意终止')
+  if (waiters.length !== 1)
+    throw new Error('应用等待者不是唯一一个，拒绝故意终止')
+  const target = waiters[0]!
+  if (!target.blockers.includes(holderPid))
+    throw new Error('唯一应用等待者没有被本轮 holder 阻塞，拒绝故意终止')
+  if (target.backendStart === null || target.queryStart === null)
+    throw new Error('无法确认等待目标的连接与语句身份，拒绝故意终止')
+  return target
+}
+
+/**
+ * 故意结束一个真实请求：确认唯一目标 → 核对已提交数据 → 复验同一目标 → 终止 → 等结局 → 放锁。
+ * 不要求终止后的请求仍在等锁。复用现有 10 秒协调预算；checkpoint SIGKILL 原先是 spawn 后默认 1 秒 poll。
+ * PID、连接开始和语句开始一起比较，不能把核对期间换来的连接或同一连接的新语句当作原目标。
+ */
+export async function interruptWhileHeldLock<T>(database: TestDatabase, interruption: HeldLockInterruption<T>): Promise<T> {
+  let pending: Promise<T> | undefined
+  try {
+    return await database.query(async (client) => {
+      await client.query('BEGIN')
+      const started = performance.now()
+      let phase = 'hold'
+      let holderPid: number | undefined
+      let target: ApplicationWaiter | undefined
+      let waiters: ApplicationWaiter[] = []
+      let ended: () => string | undefined = () => undefined
+      let result: { value: T } | { error: unknown }
+      try {
+        await interruption.hold(client)
+        holderPid = await backendPidOf(client)
+        phase = 'request'
+        pending = interruption.request()
+        const outcome = watch(pending)
+        // 只用已有监视器判断结局；诊断不转储请求错误里的参数、SQL 或输出。
+        ended = () => outcome() === undefined ? undefined : '请求已结束'
+        phase = 'wait'
+        await waitUntilBlocked(database, holderPid, 1, ended)
+        waiters = await applicationWaiters(database)
+        target = uniqueWaiter(waiters, holderPid, ended)
+        phase = 'beforeInterrupt'
+        await interruption.beforeInterrupt?.()
+        waiters = await applicationWaiters(database)
+        const current = uniqueWaiter(waiters, holderPid, ended)
+        if (current.pid !== target.pid || current.backendStart !== target.backendStart || current.queryStart !== target.queryStart)
+          throw new Error('核对期间等待目标已变化，拒绝故意终止')
+        phase = 'interrupt'
+        await interruption.interrupt()
+        phase = 'exit'
+        result = { value: await pending }
+      }
+      catch (error) {
+        let snapshotUnavailable = false
+        try {
+          waiters = await applicationWaiters(database)
+        }
+        catch {
+          snapshotUnavailable = true
+        }
+        // 只保留本库最多两个候选的身份与等待状态；不读取 query、连接串或请求输出。
+        const describe = (waiter: ApplicationWaiter) => ({ ...waiter, blockers: waiter.blockers.slice(0, 8) })
+        const snapshot = { phase, elapsedMs: Math.round(performance.now() - started), holderPid, target: target === undefined ? undefined : describe(target), waiters: waiters.map(describe), requestEnded: ended() !== undefined, snapshotUnavailable }
+        result = { error: new Error(`故意终止前置或请求失败：${JSON.stringify(snapshot)}`, { cause: error }) }
+      }
+      try {
+        await client.query('ROLLBACK')
+      }
+      catch (error) {
+        result = { error: 'error' in result ? new AggregateError([result.error, error], '故意终止失败且持锁事务回滚失败') : error }
+      }
+      if ('error' in result)
+        throw result.error
+      return result.value
+    })
+  }
+  catch (error) {
+    // database.query 的 finally 已关闭持锁连接；失败时先放锁，再等被测请求，避免互相等待。
+    await pending?.catch(() => {})
+    throw error
+  }
 }
 
 export async function raceAgainstHeldLock<T>(database: TestDatabase, race: HeldLockRace<T>): Promise<T> {
