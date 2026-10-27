@@ -208,3 +208,20 @@ container02 在同一 clean `9abf02d2` 上串行完成，原件目录为 `s6/s6-
 两轮四份 v2 capture 已生成并核对时间顺序、clean HEAD、4,566 个路径的字节/类型/模式/链接目标及 16 包 30 个已安装 SDK 文件；两轮完全同源，新增的 container02 回执为 `s6/container02-source-before-v2.json` 与 `s6/container02-source-after-v2.json`。原始审计 `s6/container02-audit.json` 的 SHA-256 为 `9600fa8e0fb57af659c98abba7858542d974f999ca54863d3a572ddb5c3fa7cf`；独立回执 `s6/resume-20261028/container02-independent-review.json` 为 0 C/I/M，SHA-256 `26b627628cc741d150a0224538f4ab1b80c4690de5c20d85e71981f9ce62a781`。
 
 本轮 Task 3 的两套原范围本机门禁、原件/资源审计和独立接受已完成，结论绑定受测 `9abf02d2`。文档更新至最终合并 SHA 的精确等价证明、正常 no-ff/推送与 pre-push、新同 SHA 六项 CI 仍须实际完成；本轮未验收 GitHub Ubuntu/linux-amd64 的真实部署或固定 PostgreSQL service scope。最终证据冻结、唯一 P4 worktree/分支清理与关闭只由操作后外部回执确认，不预填已删除。DEF-061、ADR-023 的阶段关闭状态与全部既有环境债保持，不开始 P5 设计。
+
+## 2026-10-28：第二次实际 Linux CI 的失败与诊断检查点
+
+本机 full12/container02 的独立接受与 `cd2ee5f8` 的正常合并、推送均已成立，但不能据此关闭 P4。该 SHA 的 [CI 40593800515](https://github.com/open-nerve/NerveOffice/actions/runs/40593800515) 最终 **0 成功、6 失败**。六份 job 日志与四份小型监督原件位于主目录 `.codex/handoffs/m5-p4-20261022/s6/ci-early/40593800515/`，最后收集回执为 `failure-collection-20261027T223027Z.json`，并非完整测试报告验收。
+
+| 任务 | 实际停止位置 | 可确认与不可确认 |
+|---|---|---|
+| verify 与四个浏览器分片 | `container-inspect` 固定查询返回 1 | 五项均尚未通过资源检查；verify 的 lint/typecheck/static/build/artifact/audit 等仍通过，tests 阶段失败。远端未保存 Docker stderr，不能把本机错误正文当远端原件。 |
+| container | `run.py` 启动受管子命令前的 `assert_quiescent` | 全局 lsof 返回 0、stderr 空，但解析器拒绝 18 条记录（16 条样本截断），生产容器 CLI/Compose/E2E 尚未启动。日志只有 pid/fd/reason/operation，缺 type/name 与原查询进程身份，不能认定所有记录与本轮目录无关。 |
+
+真实只读 Docker 28.1.1/API 1.49 对照在同一既有容器上复现原模板失败：`.Id` 触发 typed struct 失败后的 raw JSON 回退，随后 `HostConfig.Mounts/Tmpfs` 的省略空字段导致模板错误。仅在内存改 `ID` 后完整模板成功；正式两字段修正后，当前模块真实执行 9 条查询，container/network/volume 共 42 字段类型成立，3 个未知字段均被拒绝，容器身份不变。此处参考 [Docker CLI 的 typed/raw 执行链](https://github.com/docker/cli/blob/v28.1.1/cli/command/inspect/inspector.go#L104)。之前 112 项的 dict mock 没有执行 Go 模板，不能覆盖这个接口错误；新的永久 CI 预检将直接执行实际服务证明。
+
+服务诊断及 RED/GREEN/源码与资源回执保存在 `s6/ci-resource-path-fix/ci-40593800515-service-diagnosis/`；两个实际只读探针的 scratch、短根和进程组均已回收。container 的只读归因保存在相邻 `ci-40593800515-container-diagnosis/diagnosis.json`。不完整全流在目标路径筛选之前阻止查询，是当前实现与全宿主状态耦合的事实；尚无证据支持新的 PID/协议例外。
+
+下一步只做计划已登记的诊断检查点：模板局部修正、有界异常摘要、安装前的小型预检与无需 pnpm 的始终输出回执；保持失败保留、当前删除保护和六项最终门禁。诊断性合并/推送只用于取得托管 Linux 原因，不构成 P4 验收；旧 v2 的 parentMain/full12/container02/push03 及来源签署均不改写。实际 Linux 能力成立后，最终输入仍须完成新本机完整门禁与容器门禁、最终同 SHA 六项 CI、冻结和 worktree 清理。P5 未开始。
+
+诊断检查点轻型校验已完成：最终同一输入的 Python 资源管理回归 **151/151**（59.019 秒），CI 接线回归 **12/12**（2.73 秒），修改的 YAML/TypeScript 按正常提交钩子的 ESLint 规则通过。13 份相关源码/测试/工作流的前后 SHA 完全一致；两轮受管 scratch、短根和进程组均已消失。回执为 `s6/ci-resource-path-fix/ci-40593800515-checkpoint/validation.json`（SHA-256 `c3df3d5df1f670e117126dee882adc24d99953ccc191f6bcf7917ea46c2c6795`）。独审发现的伪注解脱敏问题已以真实 RED 复现并修复，复验 27/27；回执读取器 22/22，独审无遗留 C/I/M。上述接受只覆盖诊断性提交，未运行新完整本机门禁、未取得新 CI 结果，不改变 P4 未关闭状态。

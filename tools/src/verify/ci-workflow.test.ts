@@ -188,6 +188,43 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     }
   })
 
+  it('资源能力不成立时在安装依赖与浏览器前停止，预检沿用受管清理且只把数据库身份交给有服务的 job', () => {
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      const preflight = job.steps.findIndex(step => step.id === 'resource-preflight')
+      expect(preflight, id).toBeGreaterThanOrEqual(0)
+      const step = job.steps[preflight]!
+      expect(step.run?.trim()).toBe('python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true')
+      expect(step.if, id).toBeUndefined()
+      expect(step['continue-on-error'], id).toBeUndefined()
+      expect(step['timeout-minutes'], id).toBe(3)
+      expect(preflight, id).toBeGreaterThan(job.steps.findIndex(item => item.uses?.startsWith('actions/checkout@')))
+      expect(preflight, id).toBeLessThan(job.steps.findIndex(item => item.uses?.startsWith('actions/setup-node@')))
+      expect(preflight, id).toBeLessThan(job.steps.findIndex(runsChecks))
+      const receiptIndex = job.steps.findIndex(item => item.id === 'resource-preflight-receipt')
+      expect(receiptIndex, id).toBe(preflight + 1)
+      const receipt = job.steps[receiptIndex]!
+      expect(receipt.if, id).toBe('always()')
+      expect(receipt.run?.trim()).toBe('python3 -B tools/test-resources/ci_preflight_receipt.py')
+      expect(receipt['timeout-minutes'], id).toBe(1)
+      expect(receipt['continue-on-error'], id).toBeUndefined()
+      const installing = job.steps.flatMap((item, index) => (
+        item.uses?.startsWith('actions/setup-node@')
+        || item.uses?.startsWith('pnpm/action-setup@')
+        || /(?:^|\n)\s*pnpm (?:install\b|.*\bplaywright install\b)/.test(item.run ?? '')
+      )
+        ? [index]
+        : [])
+      expect(installing.length, id).toBeGreaterThanOrEqual(3)
+      for (const index of installing)
+        expect(index, stepLabel(id, job.steps[index]!)).toBeGreaterThan(receiptIndex)
+
+      expect(job.env?.NERVE_TEST_CI_POSTGRES_SERVICE_ID, id).toBeUndefined()
+      // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的实际服务身份
+      const service = id === 'container' ? undefined : '${{ job.services.postgres.id }}'
+      expect(step.env?.NERVE_TEST_CI_POSTGRES_SERVICE_ID, id).toBe(service)
+    }
+  })
+
   it('归档与报告上传必须经过独立退出核验；核验失败时只准上传监督记录', () => {
     const steps = workflow.jobs.e2e!.steps
     const prepare = steps.findIndex(step => step.id === 'e2e-prepare')

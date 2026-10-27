@@ -28,7 +28,7 @@
 
 清理和恢复证据快照在任何精简、移动、复制之前，先核对真实 scratch 与短根两处；活动 UNIX socket 可能被 lsof 显示为短别名，不能只检查真实目录。嵌套运行的别名还须解析回其实际目标核对。lsof 的返回码、标准错误（最多 4 KiB）、超时或启动错误留下有界诊断；无法完成检查仍拒绝清理，不忽略警告或把未知当空闲。容器 E2E 保留外层短临时目录，不在变量文件目录下再次覆盖 TMPDIR。
 
-查询明确请求 `-nP -F pfnt`，先校验整份 PID/FD/name/type 记录，再匹配受管路径。Linux 权限失败可能位于 stdout 的 `NOFD` 或 `/proc/PID/fd/N (readlink: …)` 等记录，即使退出 0、stderr 为空也不表示完整。`readlink/opendir/stat/lstat` 失败、未能识别的套接字（含仅有 `protocol:` 的记录）、映射的 path dev/inode 身份不一致及格式不完整均保留资源；不按 ENOENT 文本豁免退出竞争。唯一 Linux 匿名映射例外是 `mem`/`REG` 且名称精确为 `anon_inode:[io_uring] (stat: No such file or directory)`：内核创建的是匿名对象，lsof 4.95 把它当路径 stat 才产生该注解。路径前缀、其他描述符/类型、其他错误及其他平台均不适用。只保存不完整记录总数及最多 16 条固定字段诊断，不保存全局 stdout。实际 macOS 的 PIPE、NPOLICY、NEXUS 是非文件路径对象，可有显式的空 name 字段；仅在 Darwin 且类型精确相符时接受这种协议记录，整行 name 缺失仍拒绝。REG、DIR、UNIX socket、未知或相似拼写类型缺名仍保留，错误注解优先拒绝。
+查询明确请求 `-nP -F pfnt`，先校验整份 PID/FD/name/type 记录，再匹配受管路径。Linux 权限失败可能位于 stdout 的 `NOFD` 或 `/proc/PID/fd/N (readlink: …)` 等记录，即使退出 0、stderr 为空也不表示完整。`readlink/opendir/stat/lstat` 失败、未能识别的套接字（含仅有 `protocol:` 的记录）、映射的 path dev/inode 身份不一致及格式不完整均保留资源；不按 ENOENT 文本豁免退出竞争。唯一 Linux 匿名映射例外是 `mem`/`REG` 且名称精确为 `anon_inode:[io_uring] (stat: No such file or directory)`：内核创建的是匿名对象，lsof 4.95 把它当路径 stat 才产生该注解。路径前缀、其他描述符/类型、其他错误及其他平台均不适用。只保存不完整记录总数及最多 16 种异常样本，不保存全局 stdout。异常样本包含 PID/FD/type/reason/operation、最多 512 字节的 name 摘要、原名字节数与 SHA-256、脱敏/截断标记及重复次数；绝对路径正文脱敏，只保留区分匿名映射和错误类别所需的标志；尾注仅输出精确的 ENOENT/EACCES/EPERM/ESTALE C locale 文本或纯数字 dev/inode，并锚定行尾。文件名伪注解和未知错误正文不能进入摘要，仍由 operation、原字节数与 hash 留下关联。样本按完整记录身份聚合，截断由总异常数与已保存样本的重复次数之和判断；重复本身不等于截断。类型/名称诊断不改变原拒绝条件，失败后观察到的 PID 身份不能冒认原查询身份。实际 macOS 的 PIPE、NPOLICY、NEXUS 是非文件路径对象，可有显式的空 name 字段；仅在 Darwin 且类型精确相符时接受这种协议记录，整行 name 缺失仍拒绝。REG、DIR、UNIX socket、未知或相似拼写类型缺名仍保留，错误注解优先拒绝。
 
 普通运行使用直接查询。现有 GitHub Ubuntu 24.04 job 显式设置 `NERVE_TEST_LSOF_MODE=github-ubuntu-sudo`；运行器同时要求 Linux、`CI=true`、`GITHUB_ACTIONS=true`、`RUNNER_ENVIRONMENT=github-hosted`、`RUNNER_OS=Linux` 及 `/etc/os-release` 的 Ubuntu 24.04，才调用固定 `/usr/bin/sudo -n -- /usr/bin/lsof -nP -F pfnt`。没有自定义命令或自动提权回退，测试和清理程序仍为普通用户；提权失败、超时或输出不完整继续拒绝。GitHub 的[默认变量](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)及[托管 VM 权限](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges)说明这一明确 CI 上下文；这些环境检查并非宿主身份的密码学证明。隔离容器中的 root 可能仍缺少检查其他进程的能力，不能仅因 UID 为 0 就认定完整；PID/网络命名空间及实际可见性仍须由运行环境保证。
 
@@ -96,3 +96,9 @@ full10因启动时已使用旧包装器，曾由`guard-archive-review.py`独立�
 后续签署/关闭读取`archive_review_evidence.py`证明：精确bundle的status必须accepted=true，资源证明绑定同轮runId、清理完成及未回收原件，真实pin的owner和理由匹配；status/resources/pin/raw audit摘要共同进入gate proof。测试退出0、清理成功、普通报告存在或手工pin中的任一单项，都不能替代这份接受证明。该接受仍只覆盖对应一轮门禁，本轮同源码容器已有独立接受证明，整个Phase仍须同SHA CI、最终冻结与实际清理。
 
 已审查的工具摘要和轻型反例在`.codex/handoffs/m5-p4-20261022/s6/resume-20261027/independent-review.json`；两轮独立接受回执为同目录`full11-independent-acceptance.json`与`container01-independent-acceptance.json`。这些外部回执不改变普通入口的权限、测试范围、原断言或预算。
+
+## CI 安装前的小型能力预检
+
+现有 verify、四浏览器分片及 container job 在检出代码后、安装 Node/pnpm/依赖/浏览器之前，运行 `python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true`。只创建本轮预登记的 KiB 级目录，沿用相同的归属、锁、短路径、句柄查询与回收；verify/e2e 步骤注入本 job 实际 PostgreSQL 服务 ID，container 不注入。预检只能说明当前查询/收尾路径可用，不替代真实测试后的删除前核验，也不独立证明所有外部引用均可识别。
+
+紧接的 `ci_preflight_receipt.py` 步骤使用 `if: always()`，无需 pnpm，向原 job 日志输出最多 64 KiB 的安全 JSON 摘要，最多读取 128 个登记目录、输出 4 个 `ci-preflight` 运行。只读核对 owner/台账与锁，拒绝链接、FIFO、活跃或不可信记录；单台账最多 64 KiB。仅包含运行身份、状态、有限错误与 scratch/短根是否仍存在，不输出 command/env、不读取或上传 scratch 内容。收集成功不等于预检通过或资源已回收；缺失和拒绝必须显式记录。预检失败仍令 job 失败，后续重型步骤不会启动；日志经既有 CI 原件收集路径保存。
