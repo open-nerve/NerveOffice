@@ -16,6 +16,8 @@
 | 单独清扫 | `pnpm test:cleanup`；只处理本 worktree 已登记资源，不扫描整个 handoffs |
 | 小型机制回归 | `pnpm test:cleanup:check`；另有 managed-output、test-databases 的 Vitest 单元回归 |
 
+只读配置探针显式使用 `--list`，并清除继承的 `NERVE_TEST_RUN_ID`、`NERVE_TEST_SCRATCH`、`NERVE_TEST_OUTPUT_DIR`，避免 coverage 的外层环境掩盖单独执行时的错误；实际测试仍须使用受管入口。M5-P4 的探针修复保持原项目配置与断言，不能用只读标记启动真实测试。
+
 需要 Python 3.9+、POSIX 文件锁和 `lsof`。缺少句柄查询能力时保留原件并返回待处理状态，不冒险删除。测试的断言、范围、重试与超时不由清理器更改。真实 Safari 的解锁、空闲 120 秒和用户活动中止条件仍适用。
 
 ## 创建、终止与恢复
