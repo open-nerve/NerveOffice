@@ -39,7 +39,7 @@ def rotate_reports(store, kind, current_run=None):
         if not target.exists() or not any(target.iterdir()):
             continue
         marker = target / "resource-run.json"
-        if marker.is_symlink() or not marker.is_file() or open_paths(target):
+        if marker.is_symlink() or not marker.is_file():
             raise ValueError("已有报告未登记或仍在使用；请先归档，拒绝覆盖")
         previous = read_json(marker)["runId"]
         if not RUN_ID.fullmatch(previous):
@@ -47,20 +47,27 @@ def rotate_reports(store, kind, current_run=None):
         directory = contained(store.root / "runs" / previous, store.root)
         if directory.is_symlink():
             raise ValueError("旧运行不能是链接")
-        value = read_json(directory / "run.json")
         relative = str(target.relative_to(store.repo))
-        if value.get("runId") != previous or value.get("repo") != str(store.repo) or relative not in value.get("published", []):
-            raise ValueError("旧报告未登记到原运行")
-        if current_run is not None and previous == current_run.id:
-            continue  # This run already holds its lease; resume its atomic publication in place.
-        with locked(directory / "run.lock", blocking=False):
+        owner = current_run if current_run is not None and previous == current_run.id else Run(store, directory, existing=True)
+        try:
+            value = owner.data
+            if (read_json(marker).get("runId") != previous or value.get("runId") != previous
+                    or value.get("repo") != str(store.repo) or relative not in value.get("published", [])):
+                raise ValueError("旧报告未登记到原运行")
+            if open_paths(target, owner=owner):
+                raise ValueError("已有报告仍在使用；拒绝覆盖")
+            if owner is current_run:
+                continue
             old = contained(directory / "reports" / name, store.root)
             if old.exists() or old.is_symlink():
                 raise ValueError("旧报告归档已存在")
-            old.parent.mkdir(parents=True, exist_ok=True)
+            owner.scope_directory(old.parent)
+            owner.scope_move(target, old)
             target.rename(old)
-            value["published"].remove(relative)
-            atomic_json(directory / "run.json", value)
+            owner.update(published=[p for p in owner.data["published"] if p != relative])
+        finally:
+            if owner is not current_run:
+                owner.release()
 
 
 def published_by(run, target):
@@ -104,6 +111,7 @@ def publish(run, kind, reports=None):
         if target.exists():
             target.rmdir()
         relative = str(target.relative_to(run.store.repo))
+        run.scope_move(source, target)
         run.update(published=list(dict.fromkeys([*run.data.get("published", []), relative])))
         atomic_json(source / "resource-run.json", {"version": 1, "runId": run.id,
                     "receipt": str(run.directory / "run.json"), "status": run.data["status"]})
@@ -118,6 +126,7 @@ def evidence_snapshot(run):
     destination = contained(run.directory / "reports/recovery", run.store.root)
     if destination.is_symlink():
         raise ValueError("恢复诊断目录不得是链接")
+    run.scope_directory(run.directory / "reports")
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "test-results").mkdir(exist_ok=True)
     copied, omitted, total = [], [], 0

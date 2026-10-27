@@ -157,7 +157,7 @@ lsof 原错误未被旧实现保存。目前补充最多 4 KiB 标准错误、�
 
 ### lsof 查询完整性复核（仍未开始 full12/container02）
 
-`e78d1fa1` 已正常提交短路径、进程监督与检查点同步修复；主目录/远端仍为 main@1277dcb9。后续 lsof 增量尚未提交。实际小型 Linux 对照证实：普通用户会缺其他 UID 的 fd；隔离容器中的 root 也不自动拥有跨 UID 查询能力。带唯一 SYS_PTRACE 能力的独立、无宿主挂载容器可看到两 UID 自制文件/socket；该证明不覆盖宿主机其他 mount/net namespace，不能直接等价于 GitHub 托管主机。
+`e78d1fa1` 已正常提交短路径、进程监督与检查点同步修复；主目录/远端仍为 main@1277dcb9。后续 lsof 增量已阶段提交为 `903d0849`。实际小型 Linux 对照证实：普通用户会缺其他 UID 的 fd；隔离容器中的 root 也不自动拥有跨 UID 查询能力。带唯一 SYS_PTRACE 能力的独立、无宿主挂载容器可看到两 UID 自制文件/socket；该证明不覆盖宿主机其他 mount/net namespace，不能直接等价于 GitHub 托管主机。
 
 真实 `-F pfnt` 的进一步回放揭示 `anon_inode:[io_uring] (stat: No such file or directory)` 假阳性。已知自有 PID 的直接 stat 同样 ENOENT；内核 `anon_inode_create_getfile("[io_uring]", ...)` 和 lsof4.95 的 `mem`/`S_IFREG` 回退与原件相符。修复只接受 Linux、mem、REG 与完整精确匿名名称/错误组合；其他 stat 错误继续拒绝。独立审查同时发现仅返回 `protocol: UNIX` 的未解析 socket、path inode/dev 不一致注解曾被遗漏，现同组拒绝，不因路径看似在本轮目录外就当作完整。
 
@@ -166,3 +166,20 @@ r2 的 RED 为6个方法中的8个预期断言失败、0 errors；目标23/23与
 另已确认设计约束：lsof4.95 的 maps stat 使用调用者路径视图，socket 表只取调用者 `/proc/net/`，因此 sudo 本身不能消除其他 namespace 的歧义。CI 的独立 PostgreSQL 服务可能因此触发保守阻断。尚在收敛对已登记隔离服务的可达性证明，未加入任意 PID/容器豁免。原五项失败、新完整门禁、新同 SHA CI、最终关闭继续待验；未启动 full12/container02 或 P5。
 
 新版外部来源/推送/关闭工具已独立审查，34项轻型契约与真实小 Git/blob/模式样本通过，0 C/I/M；12轮实现样例与2轮独立样例清理完成。工具审查回执在 `s6/p4-round-v2-tests/independent-review.json`。真实门禁前必须在 clean 的固定提交上分别采集 capture-before，结束后 capture-after；没有预签真实结果、binding、推送或关闭回执。
+
+
+### 固定 CI 服务的查询 scope 与跨 namespace 证据（局部回归完成）
+
+全局 lsof 不可见记录仍默认拒绝。新增 scope 只接受当前固定 GitHub 托管 Ubuntu job 的 PostgreSQL 服务 ID，在本轮 scratch/短根/报告根创建前登记服务 epoch，并核对固定镜像、runc、无宿主挂载/额外能力的独立桥接网络及匿名本地卷。查询前后核对 PID/starttime/cgroup/mount、net、pid namespace；未知 PID、身份变化或不完整查询不能据此豁免。真实文件和 socket 路径依旧遍历完整输出并阻止清理，不排除整个服务 PID。旧台账、无 owner、任意目录与 archive 保持严格；普通本机不会自动提权。
+
+初版完整 Python 回归为 104/104，run `dbe736e8-627f-4b31-8353-fb4e64bdf3f6`，58.012 秒、退出0，10份来源前后相同，scratch/短根已清理。原件在 `s6/ci-resource-path-fix/ci-service-scope/`。独立审查随后复现：run.json 若被换成符号链接，旧 prune 可能先删除报告再由写回拒绝；当前补齐读取普通文件、拒绝父/叶链接及 FIFO、无 scope 运行的相同保护，并收紧固定 Runtime。原104项通过不能代替这些修复后的最终回归。
+
+真实格式对照前两次止于探针自身的包选择/重复记录断言，失败原件保留且资源清理。第三次 `707690f3-a386-43c7-a4c1-24b8b1727576` 用时5.20秒、退出0。same/cross 四次观察的服务 PID、starttime、四个 FD/inode 完全一致；共享该自有服务的私有 PID namespace，mount/net namespace 不同。same 中的 UNIX 路径、IPv4 TCP/UDP 地址，在 cross 中分别成为精确 `sock` / `protocol: UNIX-STREAM`、`protocol: TCP`、`protocol: UDP`，普通文件真实路径保持；另有 mem/REG 的 path dev 注解。各控制记录重复7次且内容一致，原始自有 PID 块完整保留；未保存全局输出。查询容器只有 SYS_PTRACE，未访问宿主或其他项目的 PID namespace。两容器均按完整 ID 及归属删除、名称复核不存在，受管清理 complete 且 scratch 缺失。累计锁定的 deb 输入7,725,666字节，未创建浏览器、数据库或 VM。
+
+实际回执为 `s6/ci-resource-path-fix/linux-lsof-namespace-format/.test-resources/runs/707690f3-a386-43c7-a4c1-24b8b1727576/reports/test-results/namespace-format-receipt.json`，SHA-256 `ebe3b4b98a2d055da0766bb2d5dc45794e5ff671b52222f335d291331b81da9d`。该原件只证明受控 Linux 格式，不是 GitHub Ubuntu 或整个 CI 通过。旧 CI 五份 PG 日志均记录 IPv6 监听；额外 `TCPv6` / `UDPv6` 由固定版本官方 Linux 协议名、sockfs xattr 到 lsof4.95 fallback 的完整源码链推导，未在该探针实测。不把源码推导称为实际 CI 通过，也不泛化为任意 protocol 前缀。
+
+最终修复为固定六个 protocol 完整名称，仍限定已验证服务的数字 FD/sock 记录；台账授权前统一核对租约、父/叶路径和普通文件，包括无 service scope 的本机运行。实际707690原块回放中，same 的严格/带scope不完整数为0/0，cross为70/0；真实文件路径仍命中，额外未知NOFD仍拒绝。这是该自有PID块的回放，不是全局输出或CI验收。
+
+最终 Python 为112/112（原76加新增36），0失败/错误/跳过，58.230秒；run `d95978a4-70c9-4cb0-a8ad-d221875e4c18` 位于 `ci-service-scope/review-fix/`，validation SHA-256 `44f4063a97cd70469de62d99db504e70c826dc8151a1501864341e1765d380d5`，10份来源前后一致、passed/cleanup complete、scratch/短根不存在。外部v2原34项兼容回归亦通过，run `8e835f7c-fddc-400d-b07a-3e3212adc1fd`，四份传递依赖前后相同，清理complete；补充回执 `s6/p4-round-v2-tests/review-service-scope-dependency.json` 的SHA-256为 `0fea0f64bd8fe6bee86fe8dd8c70418fe8f30c01a0805eca0f53166f76ad792e`。旧工具、旧原件和失败记录未覆盖。
+
+局部独立审查已完成，0 C/I/M，回执为 `s6/ci-resource-path-fix/ci-service-scope/independent-review.json`（SHA-256 `b6cdd4c9f8defd5b13d17fa1c0dd2a129e9b65788124182f982542a64b2db5a9`）。两项台账/runtime发现及 namespace 格式缺口已在本次明确契约内闭环；允许正常提交和启动原范围完整门禁，不凭此单独合并或关闭 P4。后续为同一源码串行采集 full12/container02，再正常合并、推送、验收新同 SHA CI。实际 Ubuntu 部署与 P4/P5 状态仍待后续结果。
