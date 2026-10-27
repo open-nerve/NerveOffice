@@ -8,8 +8,9 @@
 // 项目功能夹具从 M4-P4 起也为 WebKit 选择持久上下文；macOS 的功能目录适配不用于原生性能或崩溃测量。
 import type { BrowserContext, BrowserType, Page, TestInfo } from '@playwright/test'
 import type { CspViolations, PageErrors } from './fixtures.ts'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import process from 'node:process'
 import { isolateWebkitStorage } from './webkit-storage.ts'
 
 /** 用例的夹具：另开的上下文同样挂上 CSP 违规与页面错误的收集 */
@@ -35,12 +36,24 @@ export function profileDirName(testId: string, repeatEachIndex: number, retry: n
 
 /**
  * 持久上下文的资料目录：<项目的输出目录>/persistent-profiles/<用例的 id>-<第几次重复>-<第几次重试>-<name>。每条用例、每次重复与重试、
- * 每个 name 各自一个；建好目录，路径记进用例的注解（persistent-profile）；失败时留着便于看，下一次运行 Playwright 清空项目的输出目录。
+ * 每个 name 各自一个；建好目录，路径记进用例的注解（persistent-profile）；创建后立即登记归属；运行器结束时保留 OPFS 证据、限额保留失败资料并释放其余环境。
  * 不带用例标题（见文件开头）；仓库本身放在带非 ASCII 字符的路径下时照样起不来，那是环境的事
  */
 export function profileDirFor(testInfo: TestInfo, name: string): string {
   const dir = join(testInfo.project.outputDir, PROFILES_DIR_NAME, profileDirName(testInfo.testId, testInfo.repeatEachIndex, testInfo.retry, name))
   mkdirSync(dir, { recursive: true })
+  const runId = process.env.NERVE_TEST_RUN_ID
+  if (runId === undefined)
+    throw new Error('持久浏览器资料必须通过测试资源运行器创建')
+  const marker = join(dir, 'resource-owner.json')
+  const record = JSON.stringify({ version: 1, runId, kind: 'browser-profile' })
+  if (existsSync(marker)) {
+    if (readFileSync(marker, 'utf8') !== record)
+      throw new Error('持久浏览器资料归属不符')
+  }
+  else {
+    writeFileSync(marker, record, { flag: 'wx', mode: 0o600 })
+  }
   testInfo.annotations.push({ type: 'persistent-profile', description: dir })
   return dir
 }

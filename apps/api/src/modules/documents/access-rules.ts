@@ -128,6 +128,8 @@ export function documentPermissionsOf(access: DocumentAccess, document: Document
   const spaceAdmin = access.spaceRole === 'admin'
   return {
     canEdit: contentEditor,
+    canViewHistory: contentEditor,
+    canClearHistory: spaceAdmin,
     canRename: contentEditor,
     // 能读就能复制（目标空间的新建权限另判）：查看者、归档空间里的成员、只凭授权的人也可以
     canCopy: true,

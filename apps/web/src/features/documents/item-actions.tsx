@@ -115,6 +115,8 @@ interface ItemActionsProps {
    * 焦点交给面板里的"取消"
    */
   readonly shareEntry?: (fallbackFocus: () => void) => ReactNode
+  /** 文档当前可查看的历史入口；文件夹没有历史。 */
+  readonly historyEntry?: ReactNode
   /**
    * 说明里给不给"打开回收站"（默认给）："与我共享"里的一行，看不到它所在空间的人（只凭单独授权）进不去那个空间的回收站，
    * 说它已经不在了的时候不给这个入口（Codex 对抗评审 CX3）
@@ -219,7 +221,7 @@ function RenameForm({ panelId, name, validate, pending, error, onSubmit, onCance
  * 已经打开的改名、移动、复制表单，刷新之后这一种操作不能做了（例如别处的操作被拒绝、页面按新的权限重新请求，空间刚被归档、
  * 自己刚被降为查看者）：表单随之收起，回到按新权限列出的操作（M2-P6 复核第二批 G-6；文件夹一个操作都做不了时整个面板收起）。
  */
-export function ItemActions({ panelId, name, validateName, permissions, request, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry, trashReachable = true, goneTexts = SPACE_GONE_TEXTS }: ItemActionsProps) {
+export function ItemActions({ panelId, name, validateName, permissions, request, current, excludeFolderId, targetSpaces, operations, onDone, onDenied, onClose, shareEntry, historyEntry, trashReachable = true, goneTexts = SPACE_GONE_TEXTS }: ItemActionsProps) {
   const unavailable = connectionUnavailable(useConnectionState())
   const [chosen, setChosen] = useState<Exclude<Operation, 'delete'>>()
   /**
@@ -398,6 +400,7 @@ export function ItemActions({ panelId, name, validateName, permissions, request,
       {allows(permissions, operations, 'move') && <Button type="button" variant="outline" size="sm" aria-disabled={unavailable !== undefined} onClick={() => choose('move')}>{text.move}</Button>}
       {allows(permissions, operations, 'copy') && <Button type="button" variant="outline" size="sm" aria-disabled={unavailable !== undefined} onClick={() => choose('copy')}>{text.copy}</Button>}
       {shareEntry?.(() => cancelRef.current?.focus())}
+      {historyEntry}
       {permissions.canDelete && (
         <Button
           type="button"

@@ -16,9 +16,9 @@ const BEFORE = new Date(EXPIRES_AT.getTime() - 1)
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess } = store.deps
+  const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, checkpoints } = store.deps
   const purger = new TrashEntryPurger(documents, folders, entries, audit)
-  const trash = new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger)
+  const trash = new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger, checkpoints)
   return { store, trash, service: new TrashPurgeService(transactions, documents, entries, tree, spaces, purger) }
 }
 

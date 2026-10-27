@@ -124,7 +124,7 @@ function grantDetail(document: SharedDocument, role: 'viewer' | 'editor', change
     formatVersion: 1,
     sdkVersion: '1.0.1',
     formulasPending: false,
-    permissions: { canEdit: editor, canRename: editor, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false },
+    permissions: { canEdit: editor, canViewHistory: editor, canClearHistory: false, canRename: editor, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false },
     ...changes,
   }
 }
@@ -197,11 +197,13 @@ describe('US-M2-08 "与我共享"的行内操作（Codex 对抗评审 CX3）', (
     const trigger = await openActions('只读的报表')
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(buttonsOf('只读的报表')).toEqual(['操作', '复制', '取消'])
+    expect(screen.queryByRole('link', { name: '历史' })).toBeNull()
 
     // 收起，焦点回到这一条的"操作"；再展开另一条
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     await waitFor(() => expect(document.activeElement).toBe(trigger))
     await openActions('能改的周报')
+    expect(screen.getByRole('link', { name: '历史' })).toHaveAttribute('href', `/documents/${EDITABLE.id}/history`)
     expect(buttonsOf('能改的周报')).toEqual(['操作', '改名', '复制', '取消'])
     expect(screen.queryByRole('button', { name: /^(?:移动|删除|分享)$/ })).toBeNull()
   })
@@ -221,7 +223,7 @@ describe('US-M2-08 "与我共享"的行内操作（Codex 对抗评审 CX3）', (
         space: { id: SESSION.personalSpace.id, type: 'personal' },
         accessVia: 'space',
         revision: 1,
-        permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
+        permissions: { canEdit: true, canViewHistory: true, canClearHistory: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
         replayed: false,
       }),
     })

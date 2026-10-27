@@ -142,7 +142,7 @@ describe('US-M2-10 系统管理员被单独分享（需求方 2026-10-02 的决�
       folderId: null,
       accessVia: 'grant',
       space: { id: world.teamSpace, type: 'team' },
-      permissions: { canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false },
+      permissions: { canEdit: true, canViewHistory: true, canClearHistory: false, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false },
     })
     // 个人空间：只给 id 与类型，不给存的名称（规范 §2.4）
     expect((await detailOf(adminSession, world.personalShared.id)).space).toEqual({ id: amy.personalSpaceId, type: 'personal' })

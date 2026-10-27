@@ -147,3 +147,58 @@ describe('审计明细的结构', () => {
     expect(utf8Length(JSON.stringify(parsed.details))).toBeLessThanOrEqual(AUDIT_DETAILS_MAX_BYTES)
   })
 })
+
+describe('历史恢复审计', () => {
+  const details = { sourceId: ID, historyId: OTHER, spaceId: ID, folderId: null }
+  it('只允许源、检查点和目标位置，不记录标题或正文', () => {
+    expect(accepts('documents.history_restored', details)).toBe(true)
+    expect(accepts('documents.history_restored', { ...details, title: '敏感标题' })).toBe(false)
+    expect(accepts('documents.history_restored', { ...details, historyId: 'bad' })).toBe(false)
+    expect(accepts('documents.history_restored', { sourceId: ID, spaceId: ID, folderId: null })).toBe(false)
+  })
+})
+
+describe('历史清除审计', () => {
+  it('明确记录清除数量与空间，拒绝标题、非法数量和缺失字段', () => {
+    expect(accepts('documents.history_cleared', { spaceId: ID, cleared: 0 })).toBe(true)
+    expect(accepts('documents.history_cleared', { spaceId: ID, cleared: 30 })).toBe(true)
+    for (const details of [{ spaceId: ID }, { cleared: 1 }, { spaceId: 'bad', cleared: 1 }, { spaceId: ID, cleared: -1 }, { spaceId: ID, cleared: 1.5 }, { spaceId: ID, cleared: 1, title: '正文标题' }])
+      expect(accepts('documents.history_cleared', details)).toBe(false)
+  })
+})
+
+describe('检查点到期审计', () => {
+  it('只允许有界数量，不接收正文或无界 id 数组', () => {
+    expect(accepts('documents.checkpoints_expired', { checkpoints: 2, buckets: 0 })).toBe(true)
+    for (const details of [{ checkpoints: -1, buckets: 0 }, { checkpoints: 1, buckets: 0.5 }, { checkpoints: 1 }, { checkpoints: 1, buckets: 1, ids: [ID] }])
+      expect(accepts('documents.checkpoints_expired', details)).toBe(false)
+  })
+})
+
+describe('资源回收审计', () => {
+  it('资源删除只记录一批的有限数量', () => {
+    expect(accepts('assets.records_collected', { count: 1000 })).toBe(true)
+    for (const details of [{ count: 0 }, { count: 1001 }, { count: 0.5 }, { count: 1, ids: [ID] }])
+      expect(accepts('assets.records_collected', details)).toBe(false)
+  })
+  it.each(['assets.retirement_queued', 'assets.bytes_reclaimed'])('%s 只记录数量与有界字节，不允许路径和图片内容', (action) => {
+    expect(accepts(action, { count: 1000, bytes: 5_242_880_000 })).toBe(true)
+    for (const details of [{ count: 1, bytes: 0 }, { count: 1, bytes: 1.5 }, { count: 1001, bytes: 1 }, { count: 1, bytes: 5_242_880_001 }, { count: 1, bytes: 1, storageKey: '/private/path' }])
+      expect(accepts(action, details)).toBe(false)
+  })
+})
+
+describe('升级检查点审计', () => {
+  it('限定批次、目标版本和数量，失败只接受有限原因', () => {
+    const details = { batchId: ID, targetVersion: 'univer@next-1', documents: 3 }
+    for (const action of ['documents.upgrade_prepared', 'documents.upgrade_ready', 'documents.upgrade_released', 'documents.upgrade_aborted'] as const) {
+      expect(accepts(action, details)).toBe(true)
+      expect(accepts(action, { ...details, title: '源标题' })).toBe(false)
+      expect(accepts(action, { ...details, targetVersion: '非法版本' })).toBe(false)
+      expect(accepts(action, { ...details, documents: -1 })).toBe(false)
+    }
+    expect(accepts('documents.upgrade_failed', { ...details, reason: 'source_changed' })).toBe(true)
+    expect(accepts('documents.upgrade_failed', { ...details, reason: '原始数据库连接串' })).toBe(false)
+    expect(accepts('documents.upgrade_failed', details)).toBe(false)
+  })
+})

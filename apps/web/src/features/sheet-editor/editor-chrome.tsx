@@ -55,7 +55,7 @@ import type { LocalSaveIndicator } from './local-save-indicator.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
 import type { SheetName } from './snapshot-problem.ts'
-import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES } from '@nerve-office/contracts'
+import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, historyPagePath, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
@@ -66,6 +66,7 @@ import { formatClockTime, formatRecentClockTime } from '../../shared/lib/format.
 import { LOCAL_DRAFTS_PATH } from '../../shared/lib/local-drafts-path.ts'
 import { LOGIN_PATH } from '../../shared/lib/login-path.ts'
 import { HOME_PATH, SHARED_PATH, spacePath } from '../../shared/lib/space-paths.ts'
+import { useDocumentTitle } from '../../shared/lib/use-document-title.ts'
 import { focusIsLost } from '../../shared/lib/use-focus-hand-off.ts'
 import { useFocusRescue } from '../../shared/lib/use-focus-rescue.ts'
 import { Alert, AlertDescription, Button, buttonVariants, PersonName, Phrase } from '../../shared/ui/index.ts'
@@ -1059,10 +1060,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   // "编辑"随权限消失（403、404、检查时读到不能编辑）、"有更新"在载入或得知没有变化之后、失去编辑权时的"保存""退出编辑"、副本建好之后的按钮
   const rescueFocus = useFocusRescue(backRef)
 
-  useEffect(() => {
-    if (title !== undefined)
-      document.title = messages.app.pageTitle(title)
-  }, [title])
+  useDocumentTitle(title)
 
   const reading = ready !== undefined && mode?.kind === 'reading' ? mode : undefined
   const entering = ready !== undefined && mode?.kind === 'entering'
@@ -1192,6 +1190,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             </a>
             {title !== undefined && <h1 className="min-w-0 truncate text-base font-medium">{title}</h1>}
             <a href={LOCAL_DRAFTS_PATH} target="_blank" rel="noopener" className={buttonVariants({ variant: 'ghost', size: 'sm' })} aria-label={messages.auth.localDraftsNewTab}>{messages.auth.localDrafts}</a>
+            {ready?.canViewHistory === true && <a href={historyPagePath(ready.documentId)} target="_blank" rel="noopener" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>{messages.documents.history}</a>}
             <div className="ml-auto flex items-center gap-3">
               {/* 分享（M2-P5）：只在能分享时出现 */}
               {ready !== undefined && <EditorShareEntry available={available} page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}

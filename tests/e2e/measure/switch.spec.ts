@@ -17,13 +17,14 @@ import process from 'node:process'
 import { sheetSnapshotFor } from '@nerve-office/contracts'
 import { expect, test } from '../support/fixtures.ts'
 import { largeSheetFor, largeSheetScale } from '../support/large-sheet.ts'
+import { managedOutputPath } from '../support/managed-output.ts'
 import { authorVersions, checkEditStatusNow, installTiming, measureOpen, measureScene, measureSwitch, updateButton } from '../support/measure-scene.ts'
 import { readOnlySampleFor } from '../support/read-only-sample.ts'
 import { loginThroughApi } from '../support/session.ts'
 import { editorSurface, enterEditButton, exitEditButton } from '../support/sheet.ts'
 
 const ROUNDS = Number(process.env.MEASURE_ROUNDS ?? '12')
-const RESULTS_DIR = join(import.meta.dirname, 'test-results', 'switch')
+const RESULTS_DIR = managedOutputPath('switch')
 
 // 一份文档的用例要切换几十次（每次等到 steady，SDK 固定 3 秒）
 test.describe.configure({ timeout: 20 * 60_000 })

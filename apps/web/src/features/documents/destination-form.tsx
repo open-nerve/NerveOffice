@@ -30,6 +30,8 @@ interface DestinationFormProps {
   /** 展开的面板的 id：与“操作”按钮的 aria-controls 对应 */
   readonly panelId: string
   readonly action: 'move' | 'copy'
+  /** 复用位置选择的其他新建操作提供自己的名称，权限与目录规则仍沿 copy。 */
+  readonly labels?: { readonly action: string, readonly submit: string, readonly pending: string }
   /** 可以选的目标空间，连同取到了没有：调用方按服务端给的权限筛好（能不能跨空间、目标空间能不能新建） */
   readonly targets: TargetSpaces
   /** 对象现在所在的位置：移动时用来说明"它已经在这里了" */
@@ -96,7 +98,7 @@ function defaultSpaceOf(action: DestinationFormProps['action'], spaces: readonly
  * 现在都交给"目标位置"这一行，读屏随之读到选到了哪里：表单出现时焦点落到了 body 就给它（还没有目标位置时给"取消"；焦点已经在别处时不抢）；
  * 点"进入""上一级"之后一律给它（"上一级"还在时也是：不然换到的位置读屏听不到；按键盘的顺序它的下一个就是"上一级"）
  */
-export function DestinationForm({ panelId, action, targets, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
+export function DestinationForm({ panelId, action, labels, targets, current, excludeFolderId, pending, error, onSubmit, onCancel }: DestinationFormProps) {
   const spaceSelectId = useId()
   const [choice, setChoice] = useState<TargetChoice>()
   /**
@@ -148,7 +150,7 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
     <form
       id={panelId}
       className="flex flex-col gap-3 border-t bg-muted/30 px-4 py-3"
-      aria-label={action === 'move' ? text.move : text.copy}
+      aria-label={labels?.action ?? (action === 'move' ? text.move : text.copy)}
       onSubmit={(event) => {
         event.preventDefault()
         if (!blocked && connectionUnavailable() === undefined)
@@ -209,8 +211,8 @@ export function DestinationForm({ panelId, action, targets, current, excludeFold
         {/* 进行中与不能提交都用 aria-disabled：按钮变成 disabled 时浏览器把焦点丢到 body（M2-P1 审查 B13） */}
         <Button type="submit" size="sm" aria-disabled={blocked || unavailable !== undefined}>
           {pending
-            ? (action === 'move' ? text.moving : text.copying)
-            : (action === 'move' ? text.moveHere : text.copyHere)}
+            ? (labels?.pending ?? (action === 'move' ? text.moving : text.copying))
+            : (labels?.submit ?? (action === 'move' ? text.moveHere : text.copyHere))}
         </Button>
         <Button ref={cancelRef} type="button" variant="ghost" size="sm" aria-disabled={pending} onClick={() => !pending && onCancel()}>{text.cancel}</Button>
         {unchanged && <span className="text-sm text-muted-foreground">{text.sameLocation}</span>}

@@ -1,3 +1,5 @@
+export { DestinationForm } from './destination-form.tsx'
+export type { Destination } from './destination-form.tsx'
 // 一份文档的一行与行内操作、操作面板与说明的状态（DocumentRow、GoneTexts、OrganizeNoticeBar、useOrganizePanels）：
 // 空间页与按需加载的"与我共享"共用（Codex 对抗评审 CX3）
 export { DocumentRow } from './document-row.tsx'

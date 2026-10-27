@@ -248,6 +248,11 @@ async function conflictCopy(session: LoggedIn, documentId: string, unitId: strin
 const IF_NONE_MATCH = (value: string): Record<string, string> => ({ 'if-none-match': value })
 
 const PROBES: readonly Probe[] = [
+  { name: 'POST 从历史恢复副本', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history/${missing()}/restore`, 'POST', { requestId: missing(), spaceId: w.outsider.personalSpaceId }) },
+  { name: 'DELETE 清除历史', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history`, 'DELETE') },
+  { name: 'GET 历史列表', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history`) },
+  { name: 'GET 历史元数据', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history/${missing()}`) },
+  { name: 'GET 历史原正文', actor: 'outsider', request: async (s, h) => call(s, `/api/documents/${pick(h, w.teamDocument.id)}/history/${missing()}/content`) },
   { name: 'GET 图片占位（外人）', actor: 'outsider', image: true, request: async (s, h) => call(s, `/api/assets/${pick(h, w.asset)}`) },
   { name: 'GET 图片占位（系统管理员）', actor: 'systemAdmin', image: true, request: async (s, h) => call(s, `/api/assets/${pick(h, w.asset)}`) },
   { name: 'GET 图片占位（只有另一份文档的授权）', actor: 'grantViewer', image: true, request: async (s, h) => call(s, `/api/assets/${pick(h, w.asset)}`) },

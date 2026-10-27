@@ -23,9 +23,36 @@ const { lint, rulesFor, configFor } = prepareLint({ warmUp: [API_CONTROLLER, INT
 
 describe('US-M1-11 lint 规则的自测：后端的模块边界', () => {
   it.each([
+    ['assets', 'AssetGcService'],
+    ['assets', 'AssetRetirementService'],
+    ['documents', 'DocumentAssetRetentionService'],
+  ])('资源回收入口 %s/%s 只供 Jobs 和集成测试，不经 HTTP 或业务模块拼接', async (module, name) => {
+    const code = `import { ${name} } from '../${module}/index.ts'\n\nexport const gc = ${name}\n`
+    expect(await rulesFor(code, 'apps/api/src/modules/jobs/jobs.module.ts')).not.toContain('no-restricted-imports')
+    for (const path of ['apps/api/src/modules/workspace/workspace.module.ts', 'apps/api/src/modules/admin/admin.module.ts', 'apps/api/src/modules/documents/documents.module.ts'])
+      expect(await rulesFor(code, path)).toContain('no-restricted-imports')
+    const exported = `export { ${name} } from '../modules/${module}/index.ts'\n`
+    expect(await rulesFor(exported, API_INTEGRATION_ENTRY)).not.toContain('no-restricted-imports')
+    expect(await rulesFor(exported, 'apps/api/src/app/index.ts')).toContain('no-restricted-imports')
+  })
+  it('升级运维服务仅由独立 CLI 应用组合，HTTP/Jobs 不能通过公开出口接入', async () => {
+    const code = 'import { DocumentsOperationsModule, DocumentUpgradeService } from \'../modules/documents/index.ts\'\n\nexport const operations = [DocumentsOperationsModule, DocumentUpgradeService]\n'
+    expect(await rulesFor(code, 'apps/api/src/app/document-checkpoints.ts')).not.toContain('no-restricted-imports')
+    for (const path of ['apps/api/src/app/index.ts', 'apps/api/src/app/create-application.ts', 'apps/api/src/cli/migrate.ts'])
+      expect(await rulesFor(code, path)).toContain('no-restricted-imports')
+    const moduleCode = code.replace('../modules/documents', '../documents')
+    for (const path of ['apps/api/src/modules/workspace/workspace.module.ts', 'apps/api/src/modules/jobs/jobs.module.ts', 'apps/api/src/modules/admin/admin.module.ts'])
+      expect(await rulesFor(moduleCode, path)).toContain('no-restricted-imports')
+  })
+
+  it.each([
     ['DocumentAssetReferences', 'document-asset-references.ts'],
     ['DocumentAssetsRepository', 'document-assets.repository.ts'],
-  ])('图片引用内部接口 %s 仅允许集成测试专用出口转出', async (name, filename) => {
+    ['DocumentCheckpointClock', 'document-checkpoint-clock.ts'],
+    ['DocumentCheckpointService', 'document-checkpoint.service.ts'],
+    ['DocumentHistoryRepository', 'document-history.repository.ts'],
+    ['DocumentHistoryValidation', 'document-history-validation.ts'],
+  ])('图片引用与历史内部接口 %s 仅允许集成测试专用出口转出', async (name, filename) => {
     const exported = `export { ${name} } from '../modules/documents/${filename}'\n`
     expect(await rulesFor(exported, API_INTEGRATION_ENTRY)).not.toContain('boundaries/dependencies')
     expect(await rulesFor(exported, 'apps/api/src/app/index.ts')).toContain('boundaries/dependencies')

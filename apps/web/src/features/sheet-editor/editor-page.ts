@@ -63,6 +63,7 @@ export interface EditorPageReady {
   readonly space: DocumentSpace
   readonly accessVia: DocumentAccessVia
   readonly canShare: boolean
+  readonly canViewHistory: boolean
   readonly userId: string
 }
 
@@ -274,7 +275,7 @@ function isKnownFormat(document: DocumentDetail): boolean {
 type EditorHeading = Omit<EditorPageReady, 'kind'>
 
 function headingOf(document: DocumentDetail, userId: string): EditorHeading {
-  return { documentId: document.id, title: document.title, space: document.space, accessVia: document.accessVia, canShare: document.permissions.canShare, userId }
+  return { documentId: document.id, title: document.title, space: document.space, accessVia: document.accessVia, canShare: document.permissions.canShare, canViewHistory: document.permissions.canViewHistory, userId }
 }
 
 /** 这些状态里编辑器在换（或正要换）：交互屏障挂着 */
@@ -1167,7 +1168,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         // 别的失败：页头留着之前的信息，说明没能刷新、可以重试（DEF-040，与列表的"没能刷新"同一个说法）
         if (isMissingResource(error)) {
           imagePermissions(false)
-          heading = { ...heading, canShare: false }
+          heading = { ...heading, canShare: false, canViewHistory: false }
           detailProblem = undefined
         }
         else if (isAuthenticationError(error)) {

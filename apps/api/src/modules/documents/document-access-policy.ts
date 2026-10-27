@@ -3,11 +3,13 @@ import type { Principal } from '../auth/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { SpaceFacts } from '../spaces/index.ts'
 import type { DocumentAccess, DocumentOwnership } from './access-rules.ts'
+import type { HistoryAccessibleScope } from './documents.repository.ts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { canShareOnceRestored, documentAccessOf, documentPermissionsOf, effectiveSpaceRole, folderPermissionsOf, spacePermissionsOf, trashPermissionsOf } from './access-rules.ts'
 import { DocumentGrantsRepository } from './document-grants.repository.ts'
+import { DocumentsRepository } from './documents.repository.ts'
 
 /** 调用者（M2-P2 设计 §3.4）：系统角色只影响团队空间的管理操作，不带来任何内容权限（00 号计划书 §5.2）。 */
 export interface Actor {
@@ -72,6 +74,9 @@ export abstract class DocumentAccessPolicy {
   /** 我能看到的空间（有内容权限的）：导航与"可访问文档"。个人空间在前，团队空间按名称排序。在读请求的只读快照里调用（M2 Codex 评审 CX1） */
   abstract visibleSpaces(actor: Actor, transaction: Transaction): Promise<SpaceContentAccess[]>
 
+  /** 历史来源预选；只依赖当前人的空间与授权，与待查图片及其隐藏来源数量无关。 */
+  abstract historyScope(actor: Actor, transaction: Transaction): Promise<HistoryAccessibleScope>
+
   /**
    * 一批文档上的访问（M2-P5 设计 §3.4(4)，"与我共享"）：空间事实按一批 id 取（一条语句），规则仍是 documentAccessOf——
    * 服务不另算。单独授权由调用方从列出这批文档的那一条语句里带来（"与我共享"的条件就是授权那一半，角色与行出自同一个快照；
@@ -90,6 +95,7 @@ export class EffectiveAccessPolicy extends DocumentAccessPolicy {
   constructor(
     private readonly spaces: SpacesService,
     private readonly grants: DocumentGrantsRepository,
+    private readonly documents: DocumentsRepository,
   ) {
     super()
   }
@@ -123,6 +129,17 @@ export class EffectiveAccessPolicy extends DocumentAccessPolicy {
       const role = effectiveSpaceRole(space)
       return role === undefined ? [] : [{ space, role, permissions: spacePermissionsOf(space, role, actor.systemAdmin) }]
     })
+  }
+
+  async historyScope(actor: Actor, transaction: Transaction): Promise<HistoryAccessibleScope> {
+    const visible = await this.visibleSpaces(actor, transaction)
+    const candidates = await this.documents.editorGrantSpaceIds(actor.userId, transaction)
+    const facts = await this.spaces.accessFactsOfMany(actor.userId, candidates, { transaction })
+    return {
+      spaceIds: visible.filter(row => row.role !== 'viewer').map(row => row.space.id),
+      grantsOf: actor.userId,
+      grantSpaceIds: candidates.filter(id => facts.get(id)?.status === 'active'),
+    }
   }
 
   async accessOfMany(userId: string, documents: readonly GrantedTarget[], transaction: Transaction): Promise<ReadonlyMap<string, LocatedAccess>> {
@@ -197,7 +214,7 @@ export interface AccessibleDocument<T extends AccessTarget> extends Accessible<T
  * 文档上要权限的操作（只看能不能读时用 requireAccess）；edit 是保存内容，share 是查看与改动这份文档的单独授权（M2-P5），
  * takeOver 是强制接管别人的编辑（M3-P5，与 edit 一起要求）。
  */
-export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete' | 'share' | 'takeOver'
+export type DocumentOperation = 'edit' | 'rename' | 'moveWithinSpace' | 'moveAcrossSpaces' | 'copy' | 'delete' | 'share' | 'takeOver' | 'viewHistory' | 'clearHistory'
 
 /** 一项操作看的权限位与不能做时的说明 */
 interface DocumentOperationRule {
@@ -232,6 +249,8 @@ const DOCUMENT_CONTENT: Readonly<Record<DocumentOperation, DocumentOperationRule
   edit: { permission: 'canEdit', message: '只能查看这份文档，不能编辑' },
   rename: { permission: 'canRename', message: '没有给这份文档改名的权限' },
   copy: { permission: 'canCopy', message: '没有复制这份文档的权限' },
+  viewHistory: { permission: 'canViewHistory', message: '只有编辑者能查看这份文档的历史' },
+  clearHistory: { permission: 'canClearHistory', message: '只有空间管理员能清除文档历史', grantOnlyMessage: '这份文档是单独分享给你的，不能清除历史' },
   // 结构性的操作：权限位只看空间角色
   moveWithinSpace: { permission: 'canMoveWithinSpace', message: '没有移动这份文档的权限', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },
   moveAcrossSpaces: { permission: 'canMoveAcrossSpaces', message: '只有空间管理员能把文档移出这个空间', grantOnlyMessage: '这份文档是单独分享给你的，不能移动' },

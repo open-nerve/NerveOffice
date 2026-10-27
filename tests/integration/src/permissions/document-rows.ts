@@ -12,7 +12,7 @@ export const NOBODY_CHANGES: Row = [403, 403, 403, 403, 403, 403, 403, 403]
  * 只有编辑授权的人在个人空间、团队空间、全员可见的空间里能做；归档的空间里所有人至多是查看者，也 403；
  * 个人空间只有所有者与被授权的人看得到，别人一概 404。
  */
-export function contentEditor(success: 200): Readonly<Record<TargetName, Row>> {
+export function contentEditor(success: 200 | 201): Readonly<Record<TargetName, Row>> {
   return {
     personal: [success, 404, 404, 404, 404, 404, 403, success],
     team: [404, success, success, 403, 404, 404, 403, success],

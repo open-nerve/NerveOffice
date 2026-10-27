@@ -33,6 +33,20 @@ function variables(text: string): Map<string, string> {
 const containerEnvFile = variables(renderEnvFile(createSettings({ pid: 1, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 })))
 
 describe('测试环境的编排与变量（deploy/test，M3-P6 设计 §3.9）', () => {
+  it('GC 开关与宽限进入应用容器，但备份声明不填默认值', () => {
+    const { 'x-nerve-environment': shared, services } = compose()
+    const expected = {
+      NERVE_ASSET_GC_ENABLED: `\${NERVE_ASSET_GC_ENABLED:-true}`,
+      NERVE_ASSET_GC_INTERVAL_MS: `\${NERVE_ASSET_GC_INTERVAL_MS:-3600000}`,
+      NERVE_ASSET_GC_BATCH: `\${NERVE_ASSET_GC_BATCH:-100}`,
+      NERVE_ASSET_GC_GRACE_DAYS: `\${NERVE_ASSET_GC_GRACE_DAYS:-30}`,
+      NERVE_BACKUP_RETENTION_DAYS: `\${NERVE_BACKUP_RETENTION_DAYS:-}`,
+      NERVE_ASSET_GC_RECOVERY_BEFORE: `\${NERVE_ASSET_GC_RECOVERY_BEFORE:-}`,
+    }
+    expect(services.app?.environment).toMatchObject(expected)
+    for (const name of Object.keys(expected))
+      expect(shared).not.toHaveProperty(name)
+  })
   it('图片仅给应用挂私有持久卷，迁移/数据库/代理没有图片卷；只读根和非 Web 资源位置保持', () => {
     const { 'x-nerve-environment': shared, services } = compose()
     const app = services.app

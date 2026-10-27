@@ -33,7 +33,7 @@ const DETAIL: DocumentDetail = {
   formatVersion: 1,
   sdkVersion: '1.0.1',
   formulasPending: false,
-  permissions: { canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
+  permissions: { canEdit: true, canViewHistory: true, canClearHistory: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
 }
 
 /** 服务端现在的入口页：带着这些模块脚本 */

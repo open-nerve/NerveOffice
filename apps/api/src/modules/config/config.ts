@@ -89,6 +89,21 @@ export interface AppConfig {
   readonly shutdown: { readonly timeoutMs: number }
   readonly log: { readonly level: LogLevel }
   readonly jobs: {
+    /** 默认只整理候选；删除还须经过显式备份声明及数据库当前时刻核对。 */
+    readonly assetGc: {
+      readonly enabled: boolean
+      readonly intervalMs: number
+      readonly batchSize: number
+      readonly graceDays: number
+      readonly backupRetentionDays: number | undefined
+      readonly recoveryBefore: string | undefined
+    }
+    /** 用户历史与运维检查点按既定期限分批清理。 */
+    readonly historyPurge: {
+      readonly enabled: boolean
+      readonly intervalMs: number
+      readonly batchSize: number
+    }
     /** 回收站里到期的删除单元的自动清理（M2-P4 设计 §3.4 第 6 条）：应用自己的定时器 */
     readonly trashPurge: {
       /** 关掉之后不再起定时器（应用照常提供回收站的人工操作），默认开启 */
@@ -229,6 +244,12 @@ const publicOrigin = text().transform((value, ctx): string => {
 const MINIMUM_BUILD_PROBLEM = '必须是 x.y.z 的版本号（例如 0.1.3：不带前导零，不带 + 之后的诊断信息）'
 const minimumBuild = text().refine(value => !value.includes('+') && parseVersion(value) !== undefined, MINIMUM_BUILD_PROBLEM)
 
+const recoveryBoundary = text().refine((value) => {
+  const time = Date.parse(value)
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
+    && Number.isFinite(time) && new Date(time).toISOString() === value
+}, '必须是规范 UTC 时间 YYYY-MM-DDTHH:mm:ss.sssZ')
+
 const TRUST_PROXY_NAMES: ReadonlySet<string> = new Set(['loopback', 'linklocal', 'uniquelocal'])
 const TRUST_PROXY_PROBLEM = '必须是 1–10 的跳数，或者由 IP 地址、网段与 loopback、linklocal、uniquelocal 组成的逗号分隔列表'
 
@@ -339,6 +360,12 @@ const environmentSchema = z.object({
   NERVE_ASSET_ROOT: text().refine(value => isAbsolute(value) && !value.includes('\0'), '必须是不含空字符的绝对路径').optional(),
   NERVE_ASSET_QUOTA_BYTES: integer(ASSET_MAX_BYTES, 1024 ** 4).default(10 * 1024 ** 3),
   NERVE_ASSET_QUOTA_COUNT: integer(1, 1_000_000).default(100_000),
+  NERVE_ASSET_GC_ENABLED: flag().default(true),
+  NERVE_ASSET_GC_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
+  NERVE_ASSET_GC_BATCH: integer(1, 1_000).default(100),
+  NERVE_ASSET_GC_GRACE_DAYS: integer(1, 3_650).default(30),
+  NERVE_BACKUP_RETENTION_DAYS: integer(1, 3_650).optional(),
+  NERVE_ASSET_GC_RECOVERY_BEFORE: recoveryBoundary.optional(),
   NERVE_SESSION_IDLE_TIMEOUT_MINUTES: integer(5, 43_200).default(720),
   NERVE_SESSION_ABSOLUTE_TIMEOUT_MINUTES: integer(5, 525_600).default(10_080),
   // 登录限流（ADR-007）：按用户名与来源、只按用户名（宽得多，M2-P6 复核 A1）、按来源三个维度，共用窗口与锁定时长
@@ -371,6 +398,9 @@ const environmentSchema = z.object({
   NERVE_REVISION_PURGE_ENABLED: flag().default(true),
   NERVE_REVISION_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
   NERVE_REVISION_PURGE_BATCH: integer(1, 10_000).default(1_000),
+  NERVE_HISTORY_PURGE_ENABLED: flag().default(true),
+  NERVE_HISTORY_PURGE_INTERVAL_MS: integer(1_000, 86_400_000).default(3_600_000),
+  NERVE_HISTORY_PURGE_BATCH: integer(1, 1_000).default(100),
   // 最低客户端构建（M3-P3 设计 §3.5）：运维开关，不设时不按构建拦
   NERVE_MIN_CLIENT_BUILD: minimumBuild.optional(),
   NERVE_LOCAL_DRAFTS_ENABLED: flag().default(true),
@@ -437,6 +467,12 @@ const TRASH_PURGE_MIN_POOL = 2
  */
 function crossChecks(env: Environment, threadpool: Threadpool | undefined, defaults: ReadonlySet<string>, variableOf: (name: keyof Environment) => string): ConfigIssue[] {
   const issues: ConfigIssue[] = []
+  if (env.NERVE_BACKUP_RETENTION_DAYS !== undefined && env.NERVE_ASSET_GC_GRACE_DAYS < env.NERVE_BACKUP_RETENTION_DAYS) {
+    issues.push({
+      variable: 'NERVE_ASSET_GC_GRACE_DAYS',
+      problem: '资源回收宽限不能短于 NERVE_BACKUP_RETENTION_DAYS 声明的备份保留期',
+    })
+  }
   const current = (variable: keyof Environment, value: number): string => `${value}${defaults.has(variable) ? '（默认值）' : ''}`
   // 只按用户名的上限要比按用户名与来源的上限大（M2-P6 复核 A1）：否则一个来源的失败就能把这个账户在所有来源上锁住
   if (env.NERVE_LOGIN_ACCOUNT_MAX_FAILURES <= env.NERVE_LOGIN_MAX_FAILURES) {
@@ -446,7 +482,15 @@ function crossChecks(env: Environment, threadpool: Threadpool | undefined, defau
         + `（现在是 ${current('NERVE_LOGIN_MAX_FAILURES', env.NERVE_LOGIN_MAX_FAILURES)}）：否则一个来源的失败就能把这个账户在所有来源上锁住`,
     })
   }
-  if (env.NERVE_TRASH_PURGE_ENABLED && env.NERVE_DATABASE_POOL_MAX < TRASH_PURGE_MIN_POOL) {
+  // GC 与回收站都跨短事务持有一个会话锁；两个都开启时必须另留一个可完成工作的连接。
+  const gcPoolMinimum = env.NERVE_TRASH_PURGE_ENABLED ? 3 : 2
+  if (env.NERVE_ASSET_GC_ENABLED && env.NERVE_DATABASE_POOL_MAX < gcPoolMinimum) {
+    issues.push({
+      variable: 'NERVE_DATABASE_POOL_MAX',
+      problem: `开启资源回收时连接池至少需要 ${gcPoolMinimum} 个连接：每个跨事务清理任务持有一个会话锁，还必须留出一个工作连接；或关闭相应的自动清理任务`,
+    })
+  }
+  else if (env.NERVE_TRASH_PURGE_ENABLED && env.NERVE_DATABASE_POOL_MAX < TRASH_PURGE_MIN_POOL) {
     issues.push({
       variable: 'NERVE_DATABASE_POOL_MAX',
       problem: `现在是 ${current('NERVE_DATABASE_POOL_MAX', env.NERVE_DATABASE_POOL_MAX)}，开启回收站的自动清理时至少为 ${TRASH_PURGE_MIN_POOL}`
@@ -521,6 +565,19 @@ function toAppConfig(env: Environment): AppConfig {
     shutdown: { timeoutMs: env.NERVE_SHUTDOWN_TIMEOUT_MS },
     log: { level: env.NERVE_LOG_LEVEL },
     jobs: {
+      assetGc: {
+        enabled: env.NERVE_ASSET_GC_ENABLED,
+        intervalMs: env.NERVE_ASSET_GC_INTERVAL_MS,
+        batchSize: env.NERVE_ASSET_GC_BATCH,
+        graceDays: env.NERVE_ASSET_GC_GRACE_DAYS,
+        backupRetentionDays: env.NERVE_BACKUP_RETENTION_DAYS,
+        recoveryBefore: env.NERVE_ASSET_GC_RECOVERY_BEFORE,
+      },
+      historyPurge: {
+        enabled: env.NERVE_HISTORY_PURGE_ENABLED,
+        intervalMs: env.NERVE_HISTORY_PURGE_INTERVAL_MS,
+        batchSize: env.NERVE_HISTORY_PURGE_BATCH,
+      },
       trashPurge: {
         enabled: env.NERVE_TRASH_PURGE_ENABLED,
         intervalMs: env.NERVE_TRASH_PURGE_INTERVAL_MS,

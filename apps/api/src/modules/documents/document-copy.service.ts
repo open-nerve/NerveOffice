@@ -15,6 +15,7 @@ import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { documentAccessIn, DocumentAccessPolicy, requireCreateTarget, requireDocumentContent } from './document-access-policy.ts'
 import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -62,6 +63,7 @@ export class DocumentCopyService {
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
     private readonly assetReferences: DocumentAssetReferences,
+    private readonly checkpoints: DocumentCheckpointService,
   ) {}
 
   async copy(actor: Actor, id: string, command: CopyDocumentCommand, origin: AuditOrigin): Promise<CreatedDocument> {
@@ -119,6 +121,7 @@ export class DocumentCopyService {
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
+      await this.checkpoints.captureHourly(copy.id, transaction)
       await this.audit.record({
         action: 'documents.copied',
         actor: { type: 'user', id: userId },

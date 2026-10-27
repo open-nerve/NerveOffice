@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { selftestEditorUrl } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { databaseUrl, e2eDatabaseName, pickFreePort } from '../support/environment.ts'
+import { managedOutputPath, requireManagedReport } from '../support/managed-output.ts'
 import { createNaturalObservation } from '../support/natural-observation.ts'
 import { PAUSE_CLOUD_HASH, PAUSE_CONTENT_HASH, pauseCloudState, pauseRequestEvidence } from '../support/pause-evidence.ts'
 import { selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
   if (process.platform !== 'darwin' || uid === undefined || mode === undefined || !['minimize', 'hide', 'space'].includes(mode) || from === undefined || values['profile-proof'] === undefined || values['owned-pages'] === undefined || values.output === undefined || process.env.NERVE_TEST_DATABASE_URL === undefined)
     throw new Error('需要明确自然条件、专用场景/页面清单、当前任务 URL、新目录与测试数据库')
   const output = resolve(values.output)
+  requireManagedReport(output)
   mkdirSync(output, { mode: 0o700 })
   const proofBytes = readFileSync(values['profile-proof'])
   const profile = parseProfileProof(JSON.parse(proofBytes.toString('utf8')))
@@ -294,7 +296,7 @@ async function main(): Promise<void> {
           clearTimeout(timer)
         }
         report.backendStop = { exitCode: backend.exitCode, signal: backend.signalCode, forced }
-        copyFileSync(fileURLToPath(new URL('../test-results/e2e-server.log', import.meta.url)), join(output, 'server.log'))
+        copyFileSync(managedOutputPath('e2e-server.log'), join(output, 'server.log'))
         if (backend.exitCode !== 0 || forced)
           throw new Error('后端没有正常退出')
       } },

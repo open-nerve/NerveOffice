@@ -64,6 +64,14 @@ describe('US-M1-11 首屏 JS 的体积预算', () => {
     expect(result.violations.map(v => v.rule)).toEqual(['budgets/exceeded'])
   })
 
+  it('完整闭包预算包括延迟 JS、去重共享块，保留独立的首屏文件数限制', () => {
+    const full: EntryBudget = { ...editorBudget, maxGzipBytes: 26_000, maxReachableGzipBytes: 925_999, maxInitialFiles: 3 }
+    const result = checkBudgets(MANIFEST, [budget('index.html', 35_000), full], [formulaBudget], OUTPUT)
+    expect(result.violations).toEqual([expect.objectContaining({ rule: 'budgets/exceeded', subject: 'editor.html' })])
+    expect(result.notes[2]).toContain('完整闭包 JS')
+    expect(checkBudgets(MANIFEST, [budget('index.html', 35_000), { ...full, maxReachableGzipBytes: 926_000 }], [formulaBudget], OUTPUT).violations).toEqual([])
+  })
+
   it('首屏文件数的上限（M2-P6 复核第三批 S-b）：不超过时通过；超过时违规、列出全部文件，体积还在预算之内也一样；不设上限时只看体积', () => {
     const limited = (maxInitialFiles: number): EntryBudget => ({ ...budget('index.html', 35_000), maxInitialFiles })
     expect(checkBudgets(MANIFEST, [limited(3), editorBudget], [formulaBudget], OUTPUT).violations).toEqual([])
@@ -75,8 +83,10 @@ describe('US-M1-11 首屏 JS 的体积预算', () => {
     expect(checkBudgets(MANIFEST, [budget('index.html', 35_000), editorBudget], [formulaBudget], OUTPUT).violations).toEqual([])
   })
 
-  it('平台页面的首屏限定 2 个文件（入口块与和编辑器页共用的块，M2-P6 复核第三批 S-b）', () => {
-    expect(ENTRY_BUDGETS.find(entry => entry.entry === 'index.html')?.maxInitialFiles).toBe(2)
+  it('平台首屏保留 180 KiB，三入口共享关系限为 3 个文件；历史首屏与完整闭包分别计量', () => {
+    expect(ENTRY_BUDGETS.find(entry => entry.entry === 'index.html')).toMatchObject({ maxInitialFiles: 3, maxGzipBytes: 180 * 1024 })
+    expect(ENTRY_BUDGETS.find(entry => entry.entry === 'editor.html')?.maxGzipBytes).toBe(2350 * 1024)
+    expect(ENTRY_BUDGETS.find(entry => entry.entry === 'history-preview.html')).toMatchObject({ maxGzipBytes: 2350 * 1024, maxReachableGzipBytes: 3300 * 1024 })
   })
 
   it('预算指向的入口不存在：违规（预算表要跟着入口一起改）', () => {

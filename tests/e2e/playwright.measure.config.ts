@@ -11,11 +11,11 @@ const MEMORY_SPEC = /[\\/]memory\.spec\.ts$/
 export default defineConfig({
   ...base,
   testDir: './measure',
-  outputDir: './measure/test-results/playwright',
+  outputDir: base.outputDir,
   retries: 0,
   workers: 1,
   fullyParallel: false,
-  reporter: [['list']],
+  reporter: base.reporter,
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },
     { name: 'chrome', use: { browserName: 'chromium', channel: 'chrome' }, testIgnore: MEMORY_SPEC },

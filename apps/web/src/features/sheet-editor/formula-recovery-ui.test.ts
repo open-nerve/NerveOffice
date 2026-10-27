@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { formulaRecoveryNotice } from './formula-recovery-ui.ts'
 
 const BASE: EditorPageView = {
-  load: { kind: 'ready', documentId: 'doc', title: '表格', space: { type: 'personal', id: 'space' }, accessVia: 'space', canShare: false, userId: 'user' },
+  load: { kind: 'ready', documentId: 'doc', title: '表格', space: { type: 'personal', id: 'space' }, accessVia: 'space', canShare: false, canViewHistory: true, userId: 'user' },
   mode: { kind: 'editing' },
   save: { status: 'dirty', formulasPending: true, problem: undefined, conflict: undefined, canSave: true, unsaved: true, unsavedEdits: false, checking: false, snapshotBytes: undefined },
   autosave: undefined,

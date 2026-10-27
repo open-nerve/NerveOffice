@@ -159,11 +159,13 @@ export const AUDIT_EXCEPTIONS: readonly AuditException[] = []
  * 以后需要瘦身时，可以按路由懒加载，或者让 contracts 改用 zod/mini。表格编辑器页在 M1-P4 加上。
  * 平台页面的首屏另限定文件数（M2-P6 复核第三批 S-b）：入口块与它和编辑器页共用的那一块，共 2 个。只给平台页面用的模块经两个入口
  * 共用的模块转出时（第二批找出的那种回退），入口会多出两个小块（实测 4 个文件），体积只多约 1.6 KiB、还在预算之内，lint 也只拦得住
- * 经 shared/api/index.ts 转出这一条路，这里从结果上兜住
+ * 经 shared/api/index.ts 转出这一条路，这里从结果上兜住。M5-P4 的独立预览形成第三组合理共享关系，
+ * 上限调整为 3；平台体积上限不变，预览完整可达 JS 另设上限，并禁止引入本机草稿 Worker。
  */
 export const ENTRY_BUDGETS: readonly EntryBudget[] = [
-  { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, maxInitialFiles: 2, reason: 'M1-P3 收尾时门禁实测 147.7 KiB，预算比实测多约 22%；首屏 2 个文件（入口块与和编辑器页共用的块，M2-P6 复核第三批 S-b）' },
+  { entry: 'index.html', label: '平台页面', maxGzipBytes: 180 * 1024, maxInitialFiles: 3, reason: '原 180 KiB 不变；M5-P4 新增独立预览后为入口、三个页面共用、平台与编辑器共用三块。保持预览不引入草稿运行时，沿自动分块；设计与基线对照见 P4-S3 复核' },
   { entry: 'editor.html', label: '表格编辑器页', maxGzipBytes: 2350 * 1024, reason: 'M1-P4：生产档案 sheet@1 实测 1991 KiB（Univer 约占九成，与 M0 候选档案的 1.93–1.96 MiB 相当），预算比实测多约 18%' },
+  { entry: 'history-preview.html', label: '历史只读预览', maxGzipBytes: 2350 * 1024, maxReachableGzipBytes: 3300 * 1024, reason: 'M5-P4-S3：首屏沿编辑器 2350 KiB；全可达 JS 另设 3300 KiB（初测 3060 KiB，旧编辑器已有约 1 MiB 延迟语言包）。不运行编辑会话或草稿维护' },
 ]
 
 /** 入口能创建的 Worker：各自的脚本与静态依赖另列预算，包含按需启动的本机草稿 Worker。 */
@@ -171,10 +173,11 @@ export const WORKER_BUDGETS: readonly WorkerBudget[] = [
   { entry: 'editor.html', worker: 'formula.worker', label: '公式 Worker', maxGzipBytes: 800 * 1024, reason: 'M1-P4：实测 673 KiB，预算比实测多约 19%' },
   { entry: 'editor.html', worker: 'outbox.worker', label: '本机草稿 Worker', maxGzipBytes: 15 * 1024, reason: 'M4-P2 §3.9：沿用 P1 验证的 15 KiB gzip 完整闭包预算；P2-S4 正式接入编辑器，包含所有静态依赖' },
   { entry: 'index.html', worker: 'outbox.worker', label: '本机草稿页恢复 Worker', maxGzipBytes: 15 * 1024, reason: 'M4-P4：按需草稿页复用编辑器的同一恢复 Worker，沿用 15 KiB gzip 完整闭包上限；不进入平台首屏' },
+  { entry: 'history-preview.html', worker: 'formula.worker', label: '历史预览公式 Worker', maxGzipBytes: 800 * 1024, reason: 'M5-P4-S3：沿用公开只读编辑器的公式 Worker 和 800 KiB 上限；预览不允许 outbox Worker' },
 ]
 
 /** 平台页面的入口：它的产物（含与编辑器页共用的块）里的地址只按具体地址放行 */
 export const PLATFORM_ENTRIES: readonly string[] = ['index.html']
 
 /** 编辑器页的入口：它能加载到的产物与它创建的 Worker 里，地址可以按 ARTIFACT_POLICY 的前缀登记放行 */
-export const EDITOR_ENTRIES: readonly string[] = ['editor.html']
+export const EDITOR_ENTRIES: readonly string[] = ['editor.html', 'history-preview.html']

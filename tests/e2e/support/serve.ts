@@ -1,3 +1,13 @@
+import type { ChildProcess } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import process from 'node:process'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import pg from 'pg'
+import { abandonedNames, dropIdleTestDatabase } from '../../shared/test-databases.ts'
+import { E2E_ADMIN, E2E_DATABASE_PREFIX, E2E_LOCAL_KEYS_MASTER_KEY, e2eDatabaseUrl, e2eOrigin, e2ePort, maintenanceDatabaseUrl } from './environment.ts'
 // E2E 的服务（P3 设计 §3.10）：由 Playwright 的 webServer 启动（node support/serve.ts）。
 // 1. 建一个本次运行专用的数据库（名称带主机的标识与 Playwright 主进程的进程号），先清理本主机建的、进程已经不在的遗留库
 //    （别的主机建的不动：tests/shared/test-databases.ts）；
@@ -17,16 +27,7 @@
 //
 // 日志（审查 B23）：迁移、初始化与后端的输出写进 test-results/e2e-server.log（CI 随测试结果一起上传），
 // 不逐行刷在测试输出里；本脚本自己的说明（日志的位置、后端的退出码、启动失败时日志的末尾）写到标准错误。
-import type { ChildProcess } from 'node:child_process'
-import { spawn, spawnSync } from 'node:child_process'
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import process from 'node:process'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import pg from 'pg'
-import { abandonedNames } from '../../shared/test-databases.ts'
-import { E2E_ADMIN, E2E_DATABASE_PREFIX, E2E_LOCAL_KEYS_MASTER_KEY, e2eDatabaseUrl, e2eOrigin, e2ePort, maintenanceDatabaseUrl } from './environment.ts'
+import { managedOutputPath } from './managed-output.ts'
 import { writeServerControl } from './server-control.ts'
 
 const API_DIST = fileURLToPath(new URL('../../../apps/api/dist', import.meta.url))
@@ -34,7 +35,7 @@ const WEB_ROOT = fileURLToPath(new URL('../../../apps/web/dist-e2e', import.meta
 const EXIT_WITH_PARENT = pathToFileURL(fileURLToPath(new URL('./exit-with-parent.ts', import.meta.url))).href
 const CI_PROCESS_OWNER = pathToFileURL(fileURLToPath(new URL('./ci-process-owner.ts', import.meta.url))).href
 /** Playwright 在启动服务之前清空 test-results，所以日志写在这里不会被删；CI 上传这个目录 */
-const LOG_FILE = fileURLToPath(new URL('../test-results/e2e-server.log', import.meta.url))
+const LOG_FILE = managedOutputPath('e2e-server.log')
 /** 启动失败时打出来的日志行数 */
 const LOG_TAIL_LINES = 40
 
@@ -79,7 +80,7 @@ async function dropAbandonedDatabases(): Promise<void> {
   await withMaintenance(async (client) => {
     const { rows } = await client.query<{ datname: string }>('SELECT datname FROM pg_database WHERE starts_with(datname, $1)', [E2E_DATABASE_PREFIX])
     for (const datname of abandonedNames(rows.map(row => row.datname), { prefix: E2E_DATABASE_PREFIX }))
-      await client.query(`DROP DATABASE IF EXISTS ${quoted(datname)} WITH (FORCE)`)
+      await dropIdleTestDatabase(client, datname)
   })
 }
 

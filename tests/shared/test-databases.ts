@@ -58,3 +58,26 @@ export function abandonedNames(names: readonly string[], options: AbandonedNames
     return match !== null && match[1] === tag && !isAlive(Number(match[2]))
   })
 }
+
+/** 调用者已核对本主机与失活 PID；数据库端仍可能有其他会话，绝不 FORCE。 */
+export async function dropIdleTestDatabase(client: { query: (sql: string, values?: unknown[]) => Promise<{ rowCount: number | null }> }, name: string): Promise<boolean> {
+  if (!/^nerve_(?:e2e_[0-9a-f]{8}_\d+|it_[0-9a-f]{8}_\d+_[0-9a-f]+)$/.test(name))
+    throw new Error('拒绝清理非隔离测试库')
+  const connected = await client.query('SELECT 1 FROM pg_stat_activity WHERE datname = $1 LIMIT 1', [name])
+  if (connected.rowCount !== 0)
+    return false
+  await client.query('SET lock_timeout = \'1s\'')
+  try {
+    await client.query(`DROP DATABASE IF EXISTS "${name}"`)
+    return true
+  }
+  catch (error) {
+    const code = (error as { code?: unknown } | undefined)?.code
+    if (code === '55006' || code === '55P03')
+      return false
+    throw error
+  }
+  finally {
+    await client.query('RESET lock_timeout')
+  }
+}

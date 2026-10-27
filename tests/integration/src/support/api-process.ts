@@ -14,6 +14,7 @@ const ENTRIES = {
   'migrate': fileURLToPath(new URL('../../../../apps/api/dist/cli/migrate.js', import.meta.url)),
   'init-admin': fileURLToPath(new URL('../../../../apps/api/dist/cli/init-admin.js', import.meta.url)),
   'reset-link': fileURLToPath(new URL('../../../../apps/api/dist/cli/reset-link.js', import.meta.url)),
+  'document-checkpoints': fileURLToPath(new URL('../../../../apps/api/dist/cli/document-checkpoints.js', import.meta.url)),
 }
 
 export type ApiEntry = keyof typeof ENTRIES

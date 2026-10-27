@@ -20,6 +20,12 @@ packages:
   - tools
   - tests/*
 
+overrides:
+  # GHSA-q7qp-rjg7-q26m：Nest 12.1.0 固定旧 multer；限定父版本升级到修复版，后续升级 Nest 时重新核对（ADR-002）。
+  '@nestjs/platform-express@12.1.0>multer': 2.5.0
+  # GHSA-27r3-jxmh-p828：修复压缩正文结束后的解码流清理；保留 JSON 原编码集合（ADR-002）。
+  express@5.2.1>body-parser: 2.4.0
+
 patchedDependencies:
   # ADR-022：单元格元素缓存走平台鉴权与实例登记；取消不回退原 URL，先登记再等待读取。
   '@univerjs/core@1.0.1': patches/@univerjs__core@1.0.1.patch
@@ -163,4 +169,4 @@ catalog:
   vite: 8.3.3
   vitest: 4.1.11
   yaml: 2.9.1
-  zod: 4.6.5
+  zod: 4.6.6

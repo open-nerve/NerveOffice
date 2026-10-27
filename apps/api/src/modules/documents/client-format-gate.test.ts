@@ -69,7 +69,7 @@ describe('documentTooNew：与文档有关的一半（回滚之后，M3-P3 设�
   })
 
   it('档案或平台格式版本不是服务端对这类文档写的：太新（不能改写成旧格式）', () => {
-    expect(documentTooNew({ ...DOCUMENT, profile: 'sheet@2' as 'sheet@1' })).toBe(true)
+    expect(documentTooNew({ ...DOCUMENT, profile: 'sheet@2' })).toBe(true)
     expect(documentTooNew({ ...DOCUMENT, formatVersion: 2 })).toBe(true)
   })
 

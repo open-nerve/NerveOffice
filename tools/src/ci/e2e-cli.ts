@@ -1,4 +1,5 @@
 // 仅工作流 E2E 分片使用；不接收测试筛选/重试/超时参数，照常运行原配置的全部项目。
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -18,7 +19,7 @@ async function main(): Promise<number> {
       const cwd = join(REPO_ROOT, 'tests/e2e')
       const require = createRequire(join(cwd, 'package.json'))
       const cli = require.resolve('@playwright/test/cli')
-      const result = await runOwnedCommand(directory, REPO_ROOT, process.execPath, [cli, 'test'], {
+      const result = await runOwnedCommand(directory, REPO_ROOT, 'python3', [join(REPO_ROOT, 'tools/test-resources/run.py'), 'e2e', '--', process.execPath, cli, 'test'], {
         cwd,
         // 与 tests/e2e 的 test 脚本相同，保留调用者已有的 NODE_OPTIONS。
         env: { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source` },
@@ -27,6 +28,7 @@ async function main(): Promise<number> {
     }
     case 'settle':
       await settleRun(directory, REPO_ROOT)
+      execFileSync('python3', [join(REPO_ROOT, 'tools/test-resources/run.py'), '--ci-state', directory, 'recover-ci'], { cwd: REPO_ROOT, stdio: 'inherit' })
       return 0
     case 'reports':
       checkReports(REPO_ROOT, directory)

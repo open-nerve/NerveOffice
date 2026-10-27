@@ -3,6 +3,9 @@ import express from 'express'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { checkJsonLimits, JSON_MAX_DEPTH, JSON_MAX_ENTRIES } from './json-limits.ts'
 
+const JSON_TYPES = ['application/json', 'application/*+json']
+const JSON_ENCODINGS = ['identity', 'gzip', 'deflate', 'br']
+
 /** body-parser 的错误类型 → 统一的错误码与说明（说明不回显请求内容）。 */
 const BODY_ERRORS: Readonly<Record<string, (limitBytes: number) => AppError>> = {
   'entity.parse.failed': () => new AppError('REQUEST_INVALID', '请求体不是合法的 JSON'),
@@ -35,8 +38,16 @@ export function toBodyError(error: unknown, limitBytes: number): unknown {
  * 接受 gzip、deflate、br 压缩的请求体：上限按解压后的大小计算，压缩炸弹在解压到上限时就被截住。
  */
 export function jsonBody(limitBytes: number): RequestHandler {
-  const parse = express.json({ limit: limitBytes, strict: true, type: ['application/json', 'application/*+json'] })
+  const parse = express.json({ limit: limitBytes, strict: true, type: JSON_TYPES })
   return (request, response, next) => {
+    // ADR-002：依赖的安全更新会新增 zstd；只对本解析器接收的 JSON 正文保持既有编码集合。
+    const declaredEncoding = request.headers['content-encoding']
+    // body-parser 原本把缺省和空声明都视为未压缩；大小写行为也保持一致。
+    const encoding = declaredEncoding === undefined || declaredEncoding === '' ? 'identity' : declaredEncoding.toLowerCase()
+    if (typeof request.is(JSON_TYPES) === 'string' && !JSON_ENCODINGS.includes(encoding)) {
+      next(new AppError('UNSUPPORTED_MEDIA_TYPE', '请求体的内容编码不受支持'))
+      return
+    }
     parse(request, response, (error?: unknown) => {
       if (error !== undefined && error !== null) {
         next(toBodyError(error, limitBytes))

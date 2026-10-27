@@ -41,7 +41,7 @@ describe('私有不可变文件存储', () => {
     })
     await reopened.initialize()
     expect(await fs.readdir(join(root, 'staging'))).toEqual(['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb.tmp'])
-    await expect(reopened.publish(image())).rejects.toMatchObject({ reason: 'io' })
+    await expect(reopened.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ reason: 'io' })
     expect(await fs.readFile(temporary, 'utf8')).toBe('charged upload')
   })
 
@@ -95,7 +95,7 @@ describe('私有不可变文件存储', () => {
 
   it('发布后完整可读，文件 0600、目录 0700，重新打开仍可读', async () => {
     await storage.initialize()
-    const key = await storage.publish(image())
+    const key = await storage.publish(image(), assetObjectKey(image().sha256))
     expect(key).toBe('objects/ba/ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad')
     expect(await storage.read(key, image())).toEqual(Buffer.from('abc'))
     expect((await fs.stat(join(root, key))).mode & 0o777).toBe(0o600)
@@ -109,11 +109,11 @@ describe('私有不可变文件存储', () => {
 
   it('同对象并发发布只保留一份，已有 inode 和字节不变', async () => {
     await storage.initialize()
-    const keys = await Promise.all(Array.from({ length: 8 }, async () => storage.publish(image())))
+    const keys = await Promise.all(Array.from({ length: 8 }, async () => storage.publish(image(), assetObjectKey(image().sha256))))
     const first = await fs.stat(join(root, keys[0]!))
     expect(new Set(keys).size).toBe(1)
     expect(await fs.readdir(join(root, 'objects/ba'))).toEqual([image().sha256])
-    await storage.publish(image())
+    await storage.publish(image(), assetObjectKey(image().sha256))
     expect((await fs.stat(join(root, keys[0]!))).ino).toBe(first.ino)
     expect(await storage.read(keys[0]!, image())).toEqual(Buffer.from('abc'))
     expect(await fs.readdir(join(root, 'staging'))).toEqual([])
@@ -122,7 +122,7 @@ describe('私有不可变文件存储', () => {
   it('在首个 await 前固定输入字节，调用方随后改 buffer 不影响已发布对象', async () => {
     await storage.initialize()
     const input = image()
-    const publishing = storage.publish(input)
+    const publishing = storage.publish(input, assetObjectKey(input.sha256))
     input.data.fill(0)
     const key = await publishing
     expect(await storage.read(key, image())).toEqual(Buffer.from('abc'))
@@ -130,10 +130,10 @@ describe('私有不可变文件存储', () => {
 
   it.each(['xyz', 'longer-than-original'])('同名文件内容已损坏（%s）时拒绝读取和发布，不覆盖它', async (corrupt) => {
     await storage.initialize()
-    const key = await storage.publish(image())
+    const key = await storage.publish(image(), assetObjectKey(image().sha256))
     await fs.writeFile(join(root, key), corrupt)
     await expect(storage.read(key, image())).rejects.toMatchObject({ operation: 'read', reason: 'integrity' })
-    await expect(storage.publish(image())).rejects.toMatchObject({ operation: 'publish', reason: 'integrity' })
+    await expect(storage.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ operation: 'publish', reason: 'integrity' })
     expect(await fs.readFile(join(root, key), 'utf8')).toBe(corrupt)
     expect(await fs.readdir(join(root, 'staging'))).toEqual([])
   })
@@ -141,7 +141,7 @@ describe('私有不可变文件存储', () => {
   it('摘要或声明长度不符的内部结果不会写临时或正式文件', async () => {
     await storage.initialize()
     for (const patch of [{ sha256: '0'.repeat(64) }, { bytes: 4 }])
-      await expect(storage.publish({ ...image(), ...patch })).rejects.toThrow()
+      await expect(storage.publish({ ...image(), ...patch }, assetObjectKey(image().sha256))).rejects.toThrow()
     expect(await fs.readdir(join(root, 'objects'))).toEqual([])
     expect(await fs.readdir(join(root, 'staging'))).toEqual([])
   })
@@ -170,19 +170,19 @@ describe('私有不可变文件存储', () => {
     await fs.mkdir(elsewhere, { mode: 0o700 })
     await fs.rm(join(root, part), { recursive: true, force: true })
     await fs.symlink(elsewhere, join(root, part))
-    await expect(storage.publish(image())).rejects.toMatchObject({ reason: 'unsafe-path' })
+    await expect(storage.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ reason: 'unsafe-path' })
     expect(await fs.readdir(elsewhere)).toEqual([])
   })
 
   it('已有对象为符号链接时不能通过校验或覆盖，目标原样保留', async () => {
     await storage.initialize()
-    const key = await storage.publish(image())
+    const key = await storage.publish(image(), assetObjectKey(image().sha256))
     const elsewhere = join(scratch, 'elsewhere')
     await fs.writeFile(elsewhere, 'abc', { mode: 0o600 })
     await fs.unlink(join(root, key))
     await fs.symlink(elsewhere, join(root, key))
     await expect(storage.read(key, image())).rejects.toMatchObject({ reason: 'unsafe-path' })
-    await expect(storage.publish(image())).rejects.toMatchObject({ reason: 'unsafe-path' })
+    await expect(storage.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ reason: 'unsafe-path' })
     expect(await fs.readFile(elsewhere, 'utf8')).toBe('abc')
     expect((await fs.lstat(join(root, key))).isSymbolicLink()).toBe(true)
   })
@@ -193,7 +193,7 @@ describe('私有不可变文件存储', () => {
     await fs.mkdir(join(root, key), { recursive: true, mode: 0o700 })
     await expect(storage.read(key, image())).rejects.toMatchObject({ reason: 'unsafe-path' })
     await fs.chmod(root, 0o755)
-    await expect(storage.publish(image())).rejects.toMatchObject({ reason: 'unsafe-path' })
+    await expect(storage.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ reason: 'unsafe-path' })
     expect((await fs.stat(root)).mode & 0o777).toBe(0o755)
   })
 
@@ -203,7 +203,7 @@ describe('私有不可变文件存储', () => {
       expect(() => assetObjectKey(sha256)).toThrow()
     for (const key of ['../outside', '/etc/passwd', `objects/00/${image().sha256}`, `${assetObjectKey(image().sha256)}/extra`])
       await expect(storage.read(key as AssetObjectKey, image())).rejects.toMatchObject({ reason: 'invalid-key' })
-    const key = await storage.publish(image())
+    const key = await storage.publish(image(), assetObjectKey(image().sha256))
     await expect(storage.read(key, { ...image(), sha256: '0'.repeat(64) })).rejects.toMatchObject({ reason: 'invalid-key' })
   })
 
@@ -212,11 +212,11 @@ describe('私有不可变文件存储', () => {
     const foreign = join(root, 'staging', 'foreign-file')
     await fs.writeFile(foreign, 'leave-alone')
     const linking = vi.spyOn(fs, 'link').mockRejectedValueOnce(Object.assign(new Error('private path must not leak'), { code: 'EIO' }))
-    await expect(storage.publish(image())).rejects.toMatchObject({ operation: 'publish', reason: 'io' })
+    await expect(storage.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ operation: 'publish', reason: 'io' })
     expect(await fs.readdir(join(root, 'staging'))).toEqual(['foreign-file'])
     expect(await fs.readdir(join(root, 'objects/ba'))).toEqual([])
     linking.mockRestore()
-    expect(await storage.read(await storage.publish(image()), image())).toEqual(Buffer.from('abc'))
+    expect(await storage.read(await storage.publish(image(), assetObjectKey(image().sha256)), image())).toEqual(Buffer.from('abc'))
     expect(await fs.readFile(foreign, 'utf8')).toBe('leave-alone')
   })
 
@@ -229,11 +229,11 @@ describe('私有不可变文件存储', () => {
         vi.spyOn(handle, 'sync').mockRejectedValueOnce(Object.assign(new Error('sync failed'), { code: 'EIO' }))
       return handle
     })
-    await expect(storage.publish(image())).rejects.toMatchObject({ operation: 'publish', reason: 'io' })
+    await expect(storage.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ operation: 'publish', reason: 'io' })
     expect(await fs.readdir(join(root, 'objects/ba'))).toEqual([])
     expect(await fs.readdir(join(root, 'staging'))).toEqual([])
     opening.mockRestore()
-    expect(await storage.read(await storage.publish(image()), image())).toEqual(Buffer.from('abc'))
+    expect(await storage.read(await storage.publish(image(), assetObjectKey(image().sha256)), image())).toEqual(Buffer.from('abc'))
   })
 
   it('正式目录 fsync 失败保留已完整发布的文件，重试安全去重', async () => {
@@ -245,11 +245,11 @@ describe('私有不可变文件存储', () => {
         vi.spyOn(handle, 'sync').mockRejectedValueOnce(Object.assign(new Error('sync failed'), { code: 'EIO' }))
       return handle
     })
-    await expect(storage.publish(image())).rejects.toMatchObject({ operation: 'publish', reason: 'io' })
+    await expect(storage.publish(image(), assetObjectKey(image().sha256))).rejects.toMatchObject({ operation: 'publish', reason: 'io' })
     const key = assetObjectKey(image().sha256)
     expect(await fs.readFile(join(root, key), 'utf8')).toBe('abc')
     expect(await fs.readdir(join(root, 'staging'))).toEqual([])
     opening.mockRestore()
-    expect(await storage.read(await storage.publish(image()), image())).toEqual(Buffer.from('abc'))
+    expect(await storage.read(await storage.publish(image(), assetObjectKey(image().sha256)), image())).toEqual(Buffer.from('abc'))
   })
 })

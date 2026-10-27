@@ -13,9 +13,9 @@ const MISSING = '0199a2c4-0000-7000-8000-0000000000fd'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess } = store.deps
+  const { transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, checkpoints } = store.deps
   const purger = new TrashEntryPurger(documents, folders, entries, audit)
-  return { store, service: new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger) }
+  return { store, service: new TrashService(transactions, documents, folders, entries, tree, spaces, policy, audit, writeAccess, purger, checkpoints) }
 }
 
 async function errorOf(promise: Promise<unknown>): Promise<AppError> {

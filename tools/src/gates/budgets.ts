@@ -12,6 +12,8 @@ export interface EntryBudget {
   entry: string
   label: string
   maxGzipBytes: number
+  /** 首屏之外，同时限制全部可达 JS（含动态加载）；Worker 另计。 */
+  maxReachableGzipBytes?: number
   /**
    * 首屏最多几个 JS 文件（入口块与它静态引用的块；可选，M2-P6 复核第三批 S-b）。文件数本身也要守住：分块方式一变
    * （例如只给平台页面用的模块经两个入口共用的桶文件转出），入口就多出几个小块，每个都是首屏多一次请求，体积却可能还在预算之内。
@@ -145,9 +147,9 @@ function unattributedScripts(manifest: ViteManifest, output: BuildOutput): strin
   return output.files.filter(file => /\.m?js$/.test(file) && !attributed.has(file))
 }
 
-function measure(label: string, subject: string, files: readonly string[], maxGzipBytes: number, output: BuildOutput): BudgetResult {
+function measure(label: string, subject: string, files: readonly string[], maxGzipBytes: number, output: BuildOutput, scope = '首屏'): BudgetResult {
   const total = files.reduce((sum, file) => sum + output.gzipSize(file), 0)
-  const summary = `${label}（${subject}）首屏 JS ${(total / 1024).toFixed(1)} KiB / 预算 ${(maxGzipBytes / 1024).toFixed(0)} KiB（gzip，${files.length} 个文件）`
+  const summary = `${label}（${subject}）${scope} JS ${(total / 1024).toFixed(1)} KiB / 预算 ${(maxGzipBytes / 1024).toFixed(0)} KiB（gzip，${files.length} 个文件）`
   const violations: Violation[] = total > maxGzipBytes
     ? [{ rule: 'budgets/exceeded', subject, detail: `${summary}：超出预算。先看是否可以按路由拆分或换掉体积大的依赖；确需调整预算时，在 Phase 设计里写明原因` }]
     : []
@@ -178,6 +180,10 @@ export function checkBudgets(manifest: ViteManifest, budgets: readonly EntryBudg
       continue
     }
     results.push(measure(budget.label, budget.entry, files, budget.maxGzipBytes, output), countFiles(budget, files))
+    if (budget.maxReachableGzipBytes !== undefined) {
+      const closure = reachableFiles(manifest, budget.entry).filter(file => /\.m?js$/.test(file))
+      results.push(measure(budget.label, budget.entry, closure, budget.maxReachableGzipBytes, output, '完整闭包'))
+    }
   }
   // 构建清单里没有预算的入口：新增入口时要一起定下预算（复验 RA5）
   for (const [entry, chunk] of Object.entries(manifest)) {

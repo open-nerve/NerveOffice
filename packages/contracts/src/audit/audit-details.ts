@@ -1,6 +1,7 @@
 import type { AuditAction } from './audit.ts'
 import { z } from 'zod'
 import { LINK_INVALID_REASONS, ONE_TIME_LINK_PURPOSES } from '../auth/links.ts'
+import { DOCUMENT_UPGRADE_FAILURE_CODES, isDocumentUpgradeTarget } from '../documents/document-upgrade.ts'
 import { localKeyVersionSchema } from '../local-keys/local-keys.ts'
 import { GRANT_ROLES } from '../sharing/sharing.ts'
 import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES } from '../spaces/spaces.ts'
@@ -20,6 +21,8 @@ const id = z.uuid()
 /** 文件夹的位置：空表示空间的根目录 */
 const folderPosition = z.uuid().nullable()
 const count = z.int().nonnegative()
+const gcCount = z.int().min(1).max(1000)
+const gcBytes = z.int().min(1).max(5_242_880_000)
 /** 这次失败使计数达到上限时，离解锁的秒数 */
 const lockedForSeconds = z.int().nonnegative()
 const username = z.string().regex(new RegExp(USERNAME_PATTERN_SOURCE))
@@ -32,6 +35,7 @@ const systemRole = z.enum(USER_SYSTEM_ROLES)
 
 /** 没有补充信息的动作 */
 const none = z.strictObject({})
+const upgrade = z.strictObject({ batchId: id, targetVersion: z.string().refine(isDocumentUpgradeTarget), documents: count })
 
 /**
  * 链接因为签发人离任而作废（M2-P6 复核 A2）：签发人被停用、签发人不再是系统管理员。
@@ -118,6 +122,17 @@ export const auditDetailsSchema = z.discriminatedUnion('action', [
   // M2-P4：文档的整理。改名只记位置，不记改动前后的标题
   entry('documents.renamed', z.strictObject({ spaceId: id, folderId: folderPosition })),
   entry('documents.moved', z.strictObject({ fromSpaceId: id, fromFolderId: folderPosition, toSpaceId: id, toFolderId: folderPosition })),
+  entry('documents.history_restored', z.strictObject({ sourceId: id, historyId: id, spaceId: id, folderId: folderPosition })),
+  entry('documents.history_cleared', z.strictObject({ spaceId: id, cleared: count })),
+  entry('documents.checkpoints_expired', z.strictObject({ checkpoints: count, buckets: count })),
+  entry('assets.records_collected', z.strictObject({ count: gcCount })),
+  entry('assets.retirement_queued', z.strictObject({ count: gcCount, bytes: gcBytes })),
+  entry('assets.bytes_reclaimed', z.strictObject({ count: gcCount, bytes: gcBytes })),
+  entry('documents.upgrade_prepared', upgrade),
+  entry('documents.upgrade_ready', upgrade),
+  entry('documents.upgrade_failed', upgrade.extend({ reason: z.enum(DOCUMENT_UPGRADE_FAILURE_CODES) })),
+  entry('documents.upgrade_released', upgrade),
+  entry('documents.upgrade_aborted', upgrade),
   entry('documents.copied', z.strictObject({ sourceId: id, sourceSpaceId: id, spaceId: id, folderId: folderPosition })),
   // M2-P4 S3：回收站。永久删除只记份数与删除单元，不记标题与名称
   entry('documents.deleted', z.strictObject({ spaceId: id, folderId: folderPosition, trashEntryId: id })),

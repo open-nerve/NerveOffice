@@ -5,9 +5,12 @@
 import type { Page } from '@playwright/test'
 import type { LocalServer } from '../../support/servers.ts'
 import { randomUUID } from 'node:crypto'
+import { createUser } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { startControlServer, startTargetServer } from '../../support/servers.ts'
+import { loginThroughApi } from '../../support/session.ts'
+import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, openReader } from '../../support/sheet.ts'
 
 /** M0 定稿的策略（00 号计划书 §11.3），逐字比较 */
 const CONTENT_SECURITY_POLICY = 'default-src \'self\'; img-src \'self\' data: blob:; connect-src \'self\'; font-src \'self\'; style-src \'self\' \'unsafe-inline\'; script-src \'self\'; worker-src \'self\'; frame-ancestors \'none\'; base-uri \'self\'; form-action \'self\''
@@ -24,19 +27,31 @@ async function probeResult(page: Page, url: string): Promise<unknown> {
 }
 
 test.describe('US-M1-09 CSP 与安全头', () => {
-  test('页面、脚本、Worker 脚本、接口与错误响应都带定稿的 CSP 与安全头；经 HTTPS 访问时带 HSTS；不暴露应用与代理的软件', async ({ request }) => {
+  test('页面、脚本、Worker 脚本、接口与错误响应都带定稿的 CSP 与安全头；经 HTTPS 访问时带 HSTS；不暴露应用与代理的软件', async ({ page, request }, testInfo) => {
+    // 实际打开编辑器取得 Worker 请求，沿用打开编辑器用例的既定时限。
+    test.setTimeout(EDITOR_TEST_TIMEOUT)
     const index = await request.get('/')
     const script = /src="(\/assets\/index-[\w-]+\.js)"/.exec(await index.text())?.[1]
-    // 编辑器页（任意文档的地址都给 editor.html）的脚本创建公式 Worker：生产构建里有的 Worker 脚本
     const editorPage = await request.get(`/documents/${randomUUID()}`)
     const editorScript = /src="(\/assets\/editor-[\w-]+\.js)"/.exec(await editorPage.text())?.[1] ?? ''
-    const worker = /\/assets\/formula\.worker-[\w-]+\.js/.exec(await (await request.get(editorScript)).text())?.[0]
     expect(script).toBeDefined()
-    expect(worker).toBeDefined()
+    expect(editorScript).not.toBe('')
+    // 创建 Worker 的代码可被打包器移到共享模块；以正式阅读流程实际收到的响应定位，不能只扫描入口文件。
+    const workers = new Map<string, number>()
+    page.on('response', (response) => {
+      const url = new URL(response.url())
+      if (url.origin === e2eOrigin() && /^\/assets\/formula\.worker-[\w-]+\.js$/.test(url.pathname))
+        workers.set(url.pathname, response.status())
+    })
+    await loginThroughApi(page, await createUser('csp-headers'))
+    await openReader(page, await createSheetThroughApi(page))
+    expect(workers.size).toBe(1)
+    expect([...workers.values()]).toEqual([200])
     // 外部模式经 Caddy 的 HTTPS：应用采信了代理转发的协议才会下发 HSTS
     const https = new URL(e2eOrigin()).protocol === 'https:'
 
-    for (const path of ['/', '/login', script ?? '', editorScript, worker ?? '', '/api/health/live', '/api/auth/session', '/assets/missing.js']) {
+    const paths = ['/', '/login', script ?? '', editorScript, ...workers.keys(), '/api/health/live', '/api/auth/session', '/assets/missing.js']
+    for (const path of paths) {
       const headers = (await request.get(path)).headers()
       expect(headers['content-security-policy'], path).toBe(CONTENT_SECURITY_POLICY)
       expect(headers['x-content-type-options'], path).toBe('nosniff')
@@ -47,6 +62,7 @@ test.describe('US-M1-09 CSP 与安全头', () => {
       expect(headers.server, path).toBeUndefined()
       expect(headers.via, path).toBeUndefined()
     }
+    await testInfo.attach('csp-response-paths', { body: JSON.stringify({ editorScript, workerPaths: [...workers.keys()], checkedPaths: paths }), contentType: 'application/json' })
   })
 
   test.describe('探针', { tag: '@test-build' }, () => {

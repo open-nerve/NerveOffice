@@ -7,6 +7,8 @@ import { SpacesService } from '../spaces/index.ts'
 import { documentPermissionsOf } from './access-rules.ts'
 import { DocumentAccessPolicy } from './document-access-policy.ts'
 import { DocumentAssetsRepository } from './document-assets.repository.ts'
+import { DocumentCheckpointClock } from './document-checkpoint-clock.ts'
+import { DocumentHistoryRepository } from './document-history.repository.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 
 const PREPARED: unique symbol = Symbol('prepared asset references')
@@ -53,6 +55,8 @@ export class DocumentAssetReferences {
     private readonly documents: DocumentsRepository,
     private readonly spaces: SpacesService,
     private readonly policy: DocumentAccessPolicy,
+    private readonly history: DocumentHistoryRepository,
+    private readonly clock: DocumentCheckpointClock,
   ) {}
 
   async prepare(userId: string, assetIds: readonly string[], transaction: Transaction, preservedTarget?: AccessTarget): Promise<PreparedAssetReferences> {
@@ -69,7 +73,8 @@ export class DocumentAssetReferences {
     if (remaining.length > 0) {
       const visible = await this.policy.visibleSpaces({ userId, systemAdmin: false }, transaction)
       const candidates = await this.documents.assetSources({ spaceIds: visible.map(row => row.space.id), grantsOf: userId }, remaining, transaction)
-      sources = [...new Map(candidates.map(row => [row.id, row])).values()]
+      const historical = await this.documents.historyAssetSources(await this.policy.historyScope({ userId, systemAdmin: false }, transaction), remaining, await this.clock.now(transaction), transaction)
+      sources = [...new Map([...candidates, ...historical].map(row => [row.id, row])).values()]
     }
     return { [PREPARED]: true, transaction, userId, ids, sources, preservedTarget }
   }
@@ -112,6 +117,12 @@ export class DocumentAssetReferences {
       return candidates.has(row.id)
     })
     const referenced = new Set(await this.links.referencedIds(allowedDocuments.map(row => row.id), plan.ids, transaction))
+    const historical = allowedDocuments.filter((row) => {
+      const located = access.get(row.id)
+      return located !== undefined && documentPermissionsOf(located.access, row, plan.userId).canViewHistory
+    })
+    for (const id of await this.history.referencedIds(historical.map(row => row.id), plan.ids, await this.clock.now(transaction), transaction))
+      referenced.add(id)
     // 资源行最后取共享锁；窗口按该事务的数据库时刻判断，元数据在 P1 只追加。
     const metadata = await this.assets.hold(plan.ids, transaction)
     return metadata.filter(row => referenced.has(row.assetId) || (row.uploaderId === plan.userId && row.withinUploadWindow)).map(row => row.assetId)

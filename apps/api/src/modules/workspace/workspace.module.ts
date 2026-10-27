@@ -12,6 +12,8 @@ import { AssetUploadController } from './asset-upload.controller.ts'
 import { DocumentEditingController } from './document-editing.controller.ts'
 import { DocumentEditingService } from './document-editing.service.ts'
 import { DocumentGrantsController } from './document-grants.controller.ts'
+import { DocumentHistoryDirectoryService } from './document-history-directory.service.ts'
+import { DocumentHistoryController } from './document-history.controller.ts'
 import { DocumentSharingService } from './document-sharing.service.ts'
 import { FoldersController } from './folders.controller.ts'
 import { ManagedSpaces } from './managed-space.ts'
@@ -37,7 +39,7 @@ import { TrashController } from './trash.controller.ts'
  */
 @Module({
   imports: [DatabaseModule, AuditModule, UsersModule, SpacesModule, DocumentsModule, LocalKeysModule, AssetsModule],
-  controllers: [SpacesController, SpaceMembersController, FoldersController, TrashController, SearchController, DocumentGrantsController, SharedController, DocumentEditingController, AssetUploadController, AssetReadController],
-  providers: [ManagedSpaces, SpaceDirectoryService, SpaceMembershipService, TrashDirectoryService, SearchDirectoryService, DocumentSharingService, SharedDirectoryService, DocumentEditingService, AssetReadingService],
+  controllers: [DocumentHistoryController, SpacesController, SpaceMembersController, FoldersController, TrashController, SearchController, DocumentGrantsController, SharedController, DocumentEditingController, AssetUploadController, AssetReadController],
+  providers: [DocumentHistoryDirectoryService, ManagedSpaces, SpaceDirectoryService, SpaceMembershipService, TrashDirectoryService, SearchDirectoryService, DocumentSharingService, SharedDirectoryService, DocumentEditingService, AssetReadingService],
 })
 export class WorkspaceModule {}

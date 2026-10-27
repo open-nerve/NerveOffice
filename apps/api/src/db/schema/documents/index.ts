@@ -5,9 +5,9 @@
 // 保存的回执（M3-P3 设计 §3.4、§3.7：内容相同、修订号没变的确认，与修订记录一起做 requestId 的幂等）。
 import type { EditLeaseLostReason } from '@nerve-office/contracts'
 import type { AnyPgColumn } from 'drizzle-orm/pg-core'
-import { CLIENT_BUILD_MAX_LENGTH, DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
+import { CLIENT_BUILD_MAX_LENGTH, DOCUMENT_PROFILES, DOCUMENT_STATUSES, DOCUMENT_TITLE_MAX_LENGTH, DOCUMENT_TYPES, DOCUMENT_UPGRADE_FAILURE_CODES, DOCUMENT_UPGRADE_STATUSES, DOCUMENT_UPGRADE_TARGET_PATTERN, FOLDER_MAX_DEPTH, FOLDER_NAME_MAX_LENGTH, GRANT_ROLES, PLATFORM_FORMAT_VERSIONS, SNAPSHOT_MAX_RAW_BYTES, TRASH_ENTRY_KINDS } from '@nerve-office/contracts'
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, pgTable, primaryKey, text, timestamp, unique, uniqueIndex, uuid } from 'drizzle-orm/pg-core'
 import { assets } from '../assets/index.ts'
 import { allOrNone, bytea, lengthBetween, oneOf } from '../common/index.ts'
 import { spaces } from '../spaces/index.ts'
@@ -350,4 +350,120 @@ export const documentAssetLinks = pgTable('document_asset_links', {
 }, table => [
   primaryKey({ name: 'document_asset_links_pkey', columns: [table.documentId, table.assetId] }),
   index('document_asset_links_asset_idx').on(table.assetId),
+])
+
+export const DOCUMENT_CHECKPOINT_KINDS = ['hourly', 'before_delete', 'before_upgrade'] as const
+export type DocumentCheckpointKind = (typeof DOCUMENT_CHECKPOINT_KINDS)[number]
+
+/** 清除正文不清除小时占位；否则同小时下一次保存会重新生成一份历史。 */
+export const documentHistoryBuckets = pgTable('document_history_buckets', {
+  documentId: uuid('document_id').notNull().references(() => documents.id, { onDelete: 'cascade' }),
+  hourBucket: timestamp('hour_bucket', { withTimezone: true }).notNull(),
+}, table => [
+  primaryKey({ name: 'document_history_buckets_pkey', columns: [table.documentId, table.hourBucket] }),
+  check('document_history_buckets_hour_check', sql`isfinite(${table.hourBucket}) AND ${table.hourBucket} = date_trunc('hour', ${table.hourBucket} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`),
+  index('document_history_buckets_expiry_idx').on(table.hourBucket),
+])
+
+/**
+ * 不可变的整份正文和当时信封。源身份不设外键：永久删除之后，运维检查点仍须保留 30 天。
+ * 普通历史授权必须经当前源文档重新判断，不能凭这一行给访问权。UPDATE 由迁移中的触发器拒绝。
+ */
+export const documentCheckpoints = pgTable('document_checkpoints', {
+  id: uuid('id').primaryKey().default(sql`uuidv7()`),
+  sourceDocumentId: uuid('source_document_id').notNull(),
+  kind: text('kind', { enum: DOCUMENT_CHECKPOINT_KINDS }).notNull(),
+  hourBucket: timestamp('hour_bucket', { withTimezone: true }),
+  eventId: uuid('event_id'),
+  title: text('title').notNull(),
+  documentType: text('document_type', { enum: DOCUMENT_TYPES }).notNull(),
+  unitId: text('unit_id').notNull(),
+  // 历史可能早于当前档案；保留原字符串，不用当前档案白名单排除旧格式。
+  profile: text('profile').notNull(),
+  formatVersion: integer('format_version').notNull(),
+  sdkVersion: text('sdk_version').notNull(),
+  clientBuild: text('client_build'),
+  revision: integer('revision').notNull(),
+  formulasPending: boolean('formulas_pending').notNull(),
+  snapshot: bytea('snapshot').notNull(),
+  rawBytes: integer('raw_bytes').notNull(),
+  storedBytes: integer('stored_bytes').notNull(),
+  contentHash: bytea('content_hash'),
+  snapshotHash: bytea('snapshot_hash').notNull(),
+  resourceNames: text('resource_names').array(),
+  savedBy: uuid('saved_by').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  savedAt: timestamp('saved_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+}, table => [
+  check('document_checkpoints_kind_check', oneOf(table.kind, DOCUMENT_CHECKPOINT_KINDS)),
+  check('document_checkpoints_type_check', oneOf(table.documentType, DOCUMENT_TYPES)),
+  check('document_checkpoints_title_check', lengthBetween(table.title, 1, DOCUMENT_TITLE_MAX_LENGTH)),
+  check('document_checkpoints_profile_check', lengthBetween(table.profile, 1, 64)),
+  check('document_checkpoints_format_check', sql`${table.formatVersion} >= 1`),
+  check('document_checkpoints_sdk_check', lengthBetween(table.sdkVersion, 1, SDK_VERSION_MAX_LENGTH)),
+  check('document_checkpoints_client_check', lengthBetween(table.clientBuild, 1, CLIENT_BUILD_MAX_LENGTH)),
+  check('document_checkpoints_revision_check', sql`${table.revision} >= 1`),
+  check('document_checkpoints_raw_bytes_check', sql`${table.rawBytes} BETWEEN 1 AND ${sql.raw(String(SNAPSHOT_MAX_RAW_BYTES))}`),
+  check('document_checkpoints_stored_bytes_check', sql`${table.storedBytes} = octet_length(${table.snapshot}) AND ${table.storedBytes} BETWEEN 1 AND ${sql.raw(String(SNAPSHOT_MAX_RAW_BYTES))}`),
+  check('document_checkpoints_content_hash_check', sql`octet_length(${table.contentHash}) = 32`),
+  check('document_checkpoints_snapshot_hash_check', sql`${table.snapshotHash} = sha256(${table.snapshot})`),
+  check('document_checkpoints_envelope_check', sql`(${table.contentHash} IS NULL) = (${table.resourceNames} IS NULL)`),
+  check('document_checkpoints_clock_check', sql`isfinite(${table.createdAt}) AND isfinite(${table.expiresAt}) AND isfinite(${table.savedAt})`),
+  check('document_checkpoints_kind_fields_check', sql`(${table.kind} = 'hourly') = (${table.hourBucket} IS NOT NULL) AND (${table.kind} = 'hourly') = (${table.eventId} IS NULL)`),
+  check('document_checkpoints_hour_check', sql`${table.hourBucket} IS NULL OR ${table.hourBucket} = date_trunc('hour', ${table.createdAt} AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`),
+  check('document_checkpoints_expiry_check', sql`${table.expiresAt} = ${table.createdAt} + CASE WHEN ${table.kind} = 'hourly' THEN interval '168 hours' ELSE interval '720 hours' END`),
+  uniqueIndex('document_checkpoints_hour_key').on(table.sourceDocumentId, table.hourBucket).where(sql`${table.kind} = 'hourly'`),
+  uniqueIndex('document_checkpoints_event_key').on(table.sourceDocumentId, table.kind, table.eventId).where(sql`${table.kind} <> 'hourly'`),
+  index('document_checkpoints_list_idx').on(table.sourceDocumentId, table.kind, table.createdAt.desc(), table.id.desc()),
+  index('document_checkpoints_expiry_idx').on(table.expiresAt, table.id),
+])
+
+/** 只复制当时已授权的关系；保留资格与当前用户读取资格是两回事。 */
+export const documentCheckpointAssets = pgTable('document_checkpoint_assets', {
+  checkpointId: uuid('checkpoint_id').notNull().references(() => documentCheckpoints.id, { onDelete: 'cascade' }),
+  assetId: uuid('asset_id').notNull().references(() => assets.id, { onDelete: 'restrict' }),
+}, table => [
+  primaryKey({ name: 'document_checkpoint_assets_pkey', columns: [table.checkpointId, table.assetId] }),
+  index('document_checkpoint_assets_asset_idx').on(table.assetId),
+])
+
+/** 升级检查点批次：ready 仍保持冻结；明确 release/abort 后才恢复源写入。 */
+export const documentUpgradeBatches = pgTable('document_upgrade_batches', {
+  id: uuid('id').primaryKey().default(sql`uuidv7()`),
+  targetVersion: text('target_version').notNull(),
+  status: text('status', { enum: DOCUMENT_UPGRADE_STATUSES }).notNull().default('preparing'),
+  sourceCount: integer('source_count').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  failureCode: text('failure_code', { enum: DOCUMENT_UPGRADE_FAILURE_CODES }),
+}, table => [
+  check('document_upgrade_batches_target_check', sql`${table.targetVersion} ~ ${sql.raw(`'${DOCUMENT_UPGRADE_TARGET_PATTERN}'`)}`),
+  check('document_upgrade_batches_status_check', oneOf(table.status, DOCUMENT_UPGRADE_STATUSES)),
+  check('document_upgrade_batches_count_check', sql`${table.sourceCount} >= 0`),
+  check('document_upgrade_batches_failure_check', oneOf(table.failureCode, DOCUMENT_UPGRADE_FAILURE_CODES)),
+  check('document_upgrade_batches_failure_state_check', sql`(${table.status} = 'failed') = (${table.failureCode} IS NOT NULL)`),
+  check('document_upgrade_batches_completion_check', sql`(${table.status} NOT IN ('ready','released') OR ${table.completedAt} IS NOT NULL) AND (${table.status} NOT IN ('preparing','failed') OR ${table.completedAt} IS NULL)`),
+  check('document_upgrade_batches_clock_check', sql`isfinite(${table.createdAt}) AND isfinite(${table.updatedAt}) AND (${table.completedAt} IS NULL OR isfinite(${table.completedAt}))`),
+])
+
+/** 源清单在冻结事务一次写全；无文档 FK，释放后删除源不抹掉升级事实。 */
+export const documentUpgradeSources = pgTable('document_upgrade_sources', {
+  batchId: uuid('batch_id').notNull().references(() => documentUpgradeBatches.id, { onDelete: 'cascade' }),
+  documentId: uuid('document_id').notNull(),
+  revision: integer('revision').notNull(),
+  checkpointId: uuid('checkpoint_id').references(() => documentCheckpoints.id, { onDelete: 'set null' }),
+}, table => [
+  primaryKey({ name: 'document_upgrade_sources_pkey', columns: [table.batchId, table.documentId] }),
+  check('document_upgrade_sources_revision_check', sql`${table.revision} >= 1`),
+  index('document_upgrade_sources_checkpoint_idx').on(table.checkpointId),
+])
+
+/** 迁移建立 id=1 的单例；源 DML 触发器在缺行时也拒绝，不把破损状态当成开放。 */
+export const documentUpgradeBarrier = pgTable('document_upgrade_barrier', {
+  id: integer('id').primaryKey(),
+  activeBatchId: uuid('active_batch_id').references(() => documentUpgradeBatches.id, { onDelete: 'restrict' }),
+}, table => [
+  check('document_upgrade_barrier_singleton_check', sql`${table.id} = 1`),
 ])

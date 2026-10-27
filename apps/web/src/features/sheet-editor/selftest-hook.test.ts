@@ -36,7 +36,7 @@ function fakePage() {
   }
 }
 
-const READY: EditorPageLoad = { kind: 'ready', documentId: DOCUMENT_ID, title: '只读样本', space: { id: 's', type: 'team', name: '空间' }, accessVia: 'space', canShare: false, userId: 'u' }
+const READY: EditorPageLoad = { kind: 'ready', documentId: DOCUMENT_ID, title: '只读样本', space: { id: 's', type: 'team', name: '空间' }, accessVia: 'space', canShare: false, canViewHistory: true, userId: 'u' }
 
 /** 就绪的页面：阅读（readOnly）或编辑，编辑器的容器到了 surface 这一步 */
 function ready(surface: 'ready' | 'steady', readOnly = true): Partial<EditorPageView> {

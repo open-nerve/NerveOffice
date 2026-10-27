@@ -128,9 +128,9 @@ describe('文档上能做的操作：只有空间角色时（00 号计划书 §5
   const others = { createdBy: BOB }
 
   it('改名、保存与空间内移动：编辑者及以上；跨空间移动、分享与强制接管只给空间管理员；能读就能复制', () => {
-    expect(documentPermissionsOf(viaSpace('admin'), mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true })
-    expect(documentPermissionsOf(viaSpace('editor'), mine, ALICE)).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false })
-    expect(documentPermissionsOf(viaSpace('viewer'), mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false })
+    expect(documentPermissionsOf(viaSpace('admin'), mine, ALICE)).toEqual({ canEdit: true, canViewHistory: true, canClearHistory: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true })
+    expect(documentPermissionsOf(viaSpace('editor'), mine, ALICE)).toEqual({ canEdit: true, canViewHistory: true, canClearHistory: false, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false })
+    expect(documentPermissionsOf(viaSpace('viewer'), mine, ALICE)).toEqual({ canEdit: false, canViewHistory: false, canClearHistory: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('删除（P4-S3 spec §2）：空间管理员任意，编辑者只能删自己创建的，查看者一概不能', () => {
@@ -144,7 +144,7 @@ describe('文档上能做的操作：只有空间角色时（00 号计划书 §5
     const archived = facts({ status: 'archived', memberRole: 'admin' })
     const access = documentAccessOf(archived, undefined)
     expect(access).toEqual({ spaceRole: 'viewer', contentRole: 'viewer', accessVia: 'space', space: archived })
-    expect(access && documentPermissionsOf(access, mine, ALICE)).toEqual({ canEdit: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false })
+    expect(access && documentPermissionsOf(access, mine, ALICE)).toEqual({ canEdit: false, canViewHistory: false, canClearHistory: false, canRename: false, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canCopy: true, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('个人空间的所有者是空间管理员：能分享、能强制接管；别人的个人空间没有空间角色', () => {
@@ -242,12 +242,13 @@ describe('文档的访问：空间角色 × 单独授权 × 归档的全部组�
       return
     for (const [document, creator] of [[mine, true], [others, false]] as const) {
       const permissions = documentPermissionsOf(access, document, ALICE)
-      const content: Partial<DocumentPermissions> = { canEdit: contentRank >= 2, canRename: contentRank >= 2, canCopy: true }
+      const content: Partial<DocumentPermissions> = { canEdit: contentRank >= 2, canViewHistory: contentRank >= 2, canRename: contentRank >= 2, canCopy: true }
       const structure: Partial<DocumentPermissions> = {
         canMoveWithinSpace: spaceRank >= 2,
         canMoveAcrossSpaces: spaceRank === 3,
         canDelete: spaceRank === 3 || (spaceRank >= 2 && creator),
         canShare: spaceRank === 3,
+        canClearHistory: spaceRank === 3,
       }
       // 强制接管（M3-P5）两样都看：空间管理员，并且能编辑
       const takeOver: Partial<DocumentPermissions> = { canTakeOver: spaceRank === 3 && contentRank >= 2 }
@@ -266,13 +267,13 @@ describe('文档的访问：几种要紧的情形（M2-P5 设计 §1、§3.4(1)�
   it('只凭授权的编辑者：能保存、改名、复制；不能移动、删除、分享、强制接管——他是创建人也不能删（看不到空间的目录结构）', () => {
     const access = documentAccessOf(outsider, 'editor')
     expect(access).toEqual({ spaceRole: undefined, contentRole: 'editor', accessVia: 'grant', space: outsider })
-    expect(access && documentPermissionsOf(access, { createdBy: ALICE }, ALICE)).toEqual({ canEdit: true, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
+    expect(access && documentPermissionsOf(access, { createdBy: ALICE }, ALICE)).toEqual({ canEdit: true, canViewHistory: true, canClearHistory: false, canRename: true, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('只凭授权的查看者：只能读与复制', () => {
     const access = documentAccessOf(outsider, 'viewer')
     expect(access).toMatchObject({ spaceRole: undefined, contentRole: 'viewer', accessVia: 'grant' })
-    expect(access && documentPermissionsOf(access, others, ALICE)).toEqual({ canEdit: false, canRename: false, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
+    expect(access && documentPermissionsOf(access, others, ALICE)).toEqual({ canEdit: false, canViewHistory: false, canClearHistory: false, canRename: false, canCopy: true, canMoveWithinSpace: false, canMoveAcrossSpaces: false, canDelete: false, canShare: false, canTakeOver: false })
   })
 
   it('归档的空间里授权同样降级：被单独授权为编辑者的人只是查看者', () => {

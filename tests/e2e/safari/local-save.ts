@@ -19,6 +19,7 @@ import { createLocalSaveDriver } from '../support/local-save-driver.ts'
 import { startLocalSaveEnvironment } from '../support/local-save-environment.ts'
 import { readLocalSaveCloud } from '../support/local-save-evidence.ts'
 import { createLocalSaveSession } from '../support/local-save-session.ts'
+import { managedOutputPath, requireManagedReport } from '../support/managed-output.ts'
 import { settleCrashCleanup } from './crash-cleanup.ts'
 import { hidIdleSeconds, screenLocked, watchActivity } from './desktop.ts'
 import { captureProfilePage, compileProfileNative, parseProfileProof } from './profile-adapter.ts'
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
     throw new Error('屏幕锁定，不能开始真实 Safari 操作')
   const config: LocalSaveConfig = { sample: sample as LocalSaveConfig['sample'], network, rounds: 20 }
   const output = resolve(values.output)
+  requireManagedReport(output)
   mkdirSync(output, { mode: 0o700 })
   const proofBytes = readFileSync(values['profile-proof'])
   const profile = parseProfileProof(JSON.parse(proofBytes.toString('utf8')))
@@ -227,7 +229,7 @@ async function main(): Promise<void> {
       { name: '本组应用代理与后端', run: async () => environment?.close() },
       { name: '后端日志', run: () => {
         if (environment !== undefined)
-          copyFileSync(fileURLToPath(new URL('../test-results/e2e-server.log', import.meta.url)), join(output, 'server.log'))
+          copyFileSync(managedOutputPath('e2e-server.log'), join(output, 'server.log'))
       } },
       { name: '输入摘要', run: () => {
         report.sourceUnchanged = JSON.stringify(inputs()) === JSON.stringify(originalInputs)

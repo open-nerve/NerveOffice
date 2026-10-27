@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { assetMountProblems, assetRuntimeProblems, nativeRuntimeProblems } from './container-image-checks.ts'
+import { assetGcRuntimeProblems, assetMountProblems, assetRuntimeProblems, nativeRuntimeProblems } from './container-image-checks.ts'
 
 describe('正式镜像回执不能用空文件或只有成功退出替代', () => {
   const expected = { sharp: '0.35.5', sharpLibvips: '1.3.4', libvips: '8.18.7', sourceFiles: 398, sourceBytes: 201994917, distributedFiles: 402 }
@@ -21,6 +21,15 @@ describe('正式镜像回执不能用空文件或只有成功退出替代', () =
     for (const changed of [{ uid: 0 }, { root: '/app/web' }, { private: false }, { writable: false }, { separated: false }, { limit: '' }, { verified: false }])
       expect(assetRuntimeProblems(0, JSON.stringify({ ...proof, ...changed }))).not.toEqual([])
     expect(assetRuntimeProblems(1, JSON.stringify(proof))).not.toEqual([])
+  })
+  it('资源回收回执须包含 Linux 私有卷、备份暂停、危险配置拒绝、退休和新代次重开', () => {
+    const proof = { platform: 'linux', uid: 1000, privateRoot: true, missingBackupPaused: true, invalidConfigurations: 3, retiredObjects: 1, markerBytes: 0, generationChanged: true, replayReleasedBytes: 0, reuploadedReadable: true, verified: true }
+    expect(assetGcRuntimeProblems(0, JSON.stringify(proof))).toEqual([])
+    for (const changed of [{ platform: 'darwin' }, { uid: 0 }, { privateRoot: false }, { missingBackupPaused: false }, { invalidConfigurations: 2 }, { retiredObjects: 0 }, { markerBytes: 1 }, { generationChanged: false }, { replayReleasedBytes: 1 }, { reuploadedReadable: false }, { verified: false }])
+      expect(assetGcRuntimeProblems(0, JSON.stringify({ ...proof, ...changed }))).not.toEqual([])
+    expect(assetGcRuntimeProblems(1, JSON.stringify(proof))).not.toEqual([])
+    for (const output of ['', '{}', 'ok'])
+      expect(assetGcRuntimeProblems(0, output)).not.toEqual([])
   })
 })
 

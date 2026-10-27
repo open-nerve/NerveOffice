@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { selftestEditorUrl } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import { databaseUrl, e2eDatabaseName, pickFreePort } from '../support/environment.ts'
+import { managedOutputPath, requireManagedReport } from '../support/managed-output.ts'
 import { PAUSE_CLOUD_HASH, PAUSE_CONTENT_HASH, pauseCloudState, pauseRequestEvidence, pauseServerProblems } from '../support/pause-evidence.ts'
 import { createLocalPauseSession } from '../support/pause-session.ts'
 import { selftestScene, serverProblemsOf } from '../support/selftest-plan.ts'
@@ -67,6 +68,7 @@ async function main(): Promise<void> {
   if (process.platform !== 'darwin' || values['profile-proof'] === undefined || values['owned-pages'] === undefined || values.output === undefined || process.env.NERVE_TEST_DATABASE_URL === undefined)
     throw new CheckError('需要 macOS、测试维护库、明确的创建/历史证明及新报告目录')
   const output = resolve(values.output)
+  requireManagedReport(output)
   mkdirSync(dirname(output), { recursive: true })
   mkdirSync(output, { mode: 0o700 })
   const startedAt = Date.now()
@@ -351,7 +353,7 @@ async function main(): Promise<void> {
         if (backend !== undefined) {
           const stopped = await stopBackend(backend)
           report.backendStop = stopped
-          copyFileSync(fileURLToPath(new URL('../test-results/e2e-server.log', import.meta.url)), join(output, 'server.log'))
+          copyFileSync(managedOutputPath('e2e-server.log'), join(output, 'server.log'))
           if (stopped.exitCode !== 0 || stopped.forced)
             throw new CheckError('后端未正常退出')
         }

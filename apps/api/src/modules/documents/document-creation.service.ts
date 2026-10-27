@@ -13,6 +13,7 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { documentAccessIn, DocumentAccessPolicy, requireSpaceContent } from './document-access-policy.ts'
+import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { toDetail } from './document-views.ts'
@@ -79,6 +80,7 @@ export class DocumentCreationService {
     private readonly spaces: SpacesService,
     private readonly policy: DocumentAccessPolicy,
     private readonly audit: AuditService,
+    private readonly checkpoints: DocumentCheckpointService,
   ) {}
 
   async create(actor: Actor, command: CreateDocumentCommand, origin: AuditOrigin): Promise<CreatedDocument> {
@@ -135,6 +137,7 @@ export class DocumentCreationService {
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')
+      await this.checkpoints.captureHourly(document.id, transaction)
       await this.audit.record({
         action: 'documents.created',
         actor: { type: 'user', id: userId },

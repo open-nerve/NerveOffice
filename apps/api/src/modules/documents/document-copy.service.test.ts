@@ -11,10 +11,10 @@ const MISSING_ID = '0199a2c4-0000-7000-8000-0000000000fd'
 
 function setup() {
   const store = new FakeStore()
-  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit } = store.deps
+  const { transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, checkpoints } = store.deps
   // 既有样本没有图片；当前引用复制的授权与回滚由 asset-copies 的真实 PG 用例覆盖。
   const references = { copy: async () => {} } as unknown as DocumentAssetReferences
-  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, references) }
+  return { store, service: new DocumentCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, references, checkpoints) }
 }
 
 let requests = 0
@@ -83,7 +83,7 @@ describe('DocumentCopyService.copy', () => {
     const folder = store.addFolder({ spaceId: TEAM_SPACE, name: '资料' })
     const copy = await service.copy(member(ALICE), document.id, { spaceId: TEAM_SPACE, folderId: folder.id, title: '周报（存档）', requestId: nextRequestId() }, HTTP_ORIGIN)
     expect(copy).toMatchObject({ title: '周报（存档）', spaceId: TEAM_SPACE, folderId: folder.id, space: { id: TEAM_SPACE, name: '市场部' }, accessVia: 'space' })
-    expect(copy.permissions).toEqual({ canEdit: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false })
+    expect(copy.permissions).toEqual({ canEdit: true, canViewHistory: true, canClearHistory: false, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: false, canCopy: true, canDelete: true, canShare: false, canTakeOver: false })
   })
 
   it('只凭授权的人（M2-P5）：查看授权就能复制到自己有新建权限的空间；副本是新文档，不带原文档的授权，响应照常带文件夹', async () => {

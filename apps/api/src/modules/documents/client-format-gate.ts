@@ -50,7 +50,7 @@ export function checkClient(format: ClientFormat, minimumBuild: string | undefin
 /** 文档的信封里与格式有关的几项（documents 的行） */
 export interface DocumentFormat {
   readonly type: DocumentType
-  readonly profile: DocumentProfile
+  readonly profile: string
   readonly formatVersion: number
   readonly sdkVersion: string
 }

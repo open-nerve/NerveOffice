@@ -8,6 +8,7 @@ import type { AppConfig } from '../config/index.ts'
 import type { Transaction, TransactionRunner } from '../database/index.ts'
 import type { SpaceFacts, SpaceFactsWithOwner, SpacesService } from '../spaces/index.ts'
 import type { Actor } from './document-access-policy.ts'
+import type { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import type { ContentEnvelope, CurrentContent, DocumentContentsRepository, StoredSnapshot } from './document-contents.repository.ts'
 import type { DocumentGrantsRepository, GrantRow, NewGrant } from './document-grants.repository.ts'
 import type { DocumentRevisionsRepository, NewRevision, RevisionRow } from './document-revisions.repository.ts'
@@ -265,6 +266,9 @@ export class FakeStore {
 
   readonly repositories = {
     documents: {
+      editorGrantSpaceIds: vi.fn(async (userId: string) => [...new Set([...this.documents.values()]
+        .filter(row => this.activeDocument(row.id) !== undefined && this.grantOf(row.id, userId)?.role === 'editor')
+        .map(row => row.spaceId))]),
       findById: vi.fn(async (id: string) => this.activeDocument(id)),
       findManyWithGrants: vi.fn(async (userId: string, ids: readonly string[], _transaction: Transaction): Promise<GrantedDocumentRow[]> => ids.flatMap((id) => {
         const row = this.activeDocument(id)
@@ -831,7 +835,7 @@ export class FakeStore {
   }
 
   /** 真实的访问策略 */
-  readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService, this.grants as unknown as DocumentGrantsRepository)
+  readonly policy = new EffectiveAccessPolicy(this.spaces as unknown as SpacesService, this.grants as unknown as DocumentGrantsRepository, this.repositories.documents as unknown as DocumentsRepository)
   /** 真实的 requestId 记录（锁与两张表的查询经上面的假仓储） */
   readonly ledger = new RequestLedger(this.repositories.revisions as unknown as DocumentRevisionsRepository, this.repositories.receipts as unknown as DocumentSaveReceiptsRepository)
   /** 与真实的 AuditService 一样按严格的结构校验（明细多一个键，例如标题，就抛出，M2-P6 复核 M-1），记下原样的事件 */
@@ -840,6 +844,13 @@ export class FakeStore {
       parseAuditEvent(event)
       this.audits.push(event)
     }),
+  }
+
+  // 既有业务单元测试隔离持久化；历史正文/引用/事务状态由真实 PostgreSQL 的 checkpoint-* 覆盖。
+  readonly checkpoints = {
+    captureHourly: vi.fn(async () => undefined),
+    captureOperation: vi.fn(async () => undefined),
+    captureOperations: vi.fn(async () => {}),
   }
 
   get deps() {
@@ -863,6 +874,7 @@ export class FakeStore {
       clientFormats: this.clientFormats,
       inspector: this.inspector as unknown as SnapshotInspector,
       logger: this.logger,
+      checkpoints: this.checkpoints as unknown as DocumentCheckpointService,
     }
   }
 

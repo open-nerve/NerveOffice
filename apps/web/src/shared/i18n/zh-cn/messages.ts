@@ -59,6 +59,7 @@ const ERROR_MESSAGES: Record<ErrorCode, string | typeof SERVER_EXPLAINS> = {
   REQUEST_ID_CONFLICT: '请求已失效，请重试',
   PAYLOAD_TOO_LARGE: '内容超过容量上限',
   UNSUPPORTED_MEDIA_TYPE: '请求的格式不受支持，请刷新页面后重试',
+  HISTORY_UNUSABLE: '这份历史的内容或格式无法恢复，请尝试其他历史',
   SNAPSHOT_INVALID: '表格内容的格式不正确，无法保存',
   ASSET_QUOTA_EXCEEDED: '图片存储配额不足，请联系管理员',
   ASSET_INVALID: '图片无法处理，请检查格式或使用较小的图片',
@@ -312,6 +313,7 @@ export const messages = {
     renameDenied: (reason: string) => `没能改名：${reason}`,
   },
   documents: {
+    history: '历史',
     localDraft: '本机有未同步修改',
     title: '我的空间',
     listLabel: '文档列表',

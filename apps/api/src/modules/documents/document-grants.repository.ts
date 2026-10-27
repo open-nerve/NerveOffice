@@ -49,8 +49,8 @@ function grantKey(documentId: string, userId: string): SQL | undefined {
  * 作为"这一行凭授权命中"的标志（与行出自同一条语句，M2-P5 设计 §3.4(2)）。
  * document_grants 上的 SQL 都写在这个文件里，documents 的仓储不直接碰这张表。走主键 (document_id, user_id)
  */
-export function grantedTo(documentId: AnyPgColumn, userId: string): SQL<boolean> {
-  return sql<boolean>`EXISTS (SELECT 1 FROM ${g} WHERE ${and(eq(g.documentId, documentId), eq(g.userId, userId))})`
+export function grantedTo(documentId: AnyPgColumn, userId: string, role?: GrantRole): SQL<boolean> {
+  return sql<boolean>`EXISTS (SELECT 1 FROM ${g} WHERE ${and(eq(g.documentId, documentId), eq(g.userId, userId), role === undefined ? undefined : eq(g.role, role))})`
 }
 
 /**

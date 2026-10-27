@@ -15,6 +15,7 @@ import { loadavg } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { expect, test } from '../support/fixtures.ts'
+import { managedOutputPath } from '../support/managed-output.ts'
 import { authorVersions, checkEditStatusNow, installTiming, measureOpen, measureScene, measureSwitch, updateButton } from '../support/measure-scene.ts'
 import { memoryTable, memoryTrend } from '../support/measure-stats.ts'
 import { readOnlySampleFor } from '../support/read-only-sample.ts'
@@ -26,7 +27,7 @@ const ROUNDS = Number(process.env.MEASURE_MEMORY_ROUNDS ?? '20')
 const SNAPSHOT_ROUNDS: ReadonlySet<number> = process.env.MEASURE_HEAP_SNAPSHOTS === '1'
   ? new Set((process.env.MEASURE_HEAP_SNAPSHOT_ROUNDS ?? `2,${ROUNDS}`).split(',').map(Number))
   : new Set()
-const RESULTS_DIR = join(import.meta.dirname, 'test-results', 'memory')
+const RESULTS_DIR = managedOutputPath('memory')
 
 test.describe.configure({ timeout: 30 * 60_000 })
 

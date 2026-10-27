@@ -5,10 +5,10 @@
 // - 只有 tests/integration 能引用它：apps/api 里的任何文件（包括单元测试）引用都由 lint 拦下（eslint 的 nerve/api-integration-entry），
 //   别的元素由模块边界拦下。
 // 只放这类东西（数据库句柄、documents 的仓储与全部的表定义）；集成测试用到的其余程序接口（建应用、迁移、各模块的服务）照旧经 app/index.ts
-import { assetObjectClaims, assetObjects, assetQuota, assets } from '../db/schema/assets/index.ts'
+import { assetObjectClaims, assetObjectDeletions, assetObjects, assetQuota, assetReferenceActivity, assets } from '../db/schema/assets/index.ts'
 import { auditEvents } from '../db/schema/audit/index.ts'
 import { authInvitations, authLoginThrottles, authPasswordResets, authSessions } from '../db/schema/auth/index.ts'
-import { documentAssetLinks, documentContents, documentEditLeases, documentGrants, documentRevisions, documents, documentSaveReceipts, folders, trashEntries } from '../db/schema/documents/index.ts'
+import { documentAssetLinks, documentCheckpointAssets, documentCheckpoints, documentContents, documentEditLeases, documentGrants, documentHistoryBuckets, documentRevisions, documents, documentSaveReceipts, documentUpgradeBarrier, documentUpgradeBatches, documentUpgradeSources, folders, trashEntries } from '../db/schema/documents/index.ts'
 import { userLocalKeys } from '../db/schema/local-keys/index.ts'
 import { spaceMembers, spaces } from '../db/schema/spaces/index.ts'
 import { users } from '../db/schema/users/index.ts'
@@ -22,8 +22,10 @@ import { users } from '../db/schema/users/index.ts'
  */
 export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   assetObjectClaims,
+  assetObjectDeletions,
   assetObjects,
   assetQuota,
+  assetReferenceActivity,
   assets,
   auditEvents,
   authInvitations,
@@ -31,12 +33,18 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   authPasswordResets,
   authSessions,
   documentAssetLinks,
+  documentCheckpointAssets,
+  documentCheckpoints,
   documentContents,
   documentEditLeases,
   documentGrants,
+  documentHistoryBuckets,
   documentRevisions,
   documents,
   documentSaveReceipts,
+  documentUpgradeBarrier,
+  documentUpgradeBatches,
+  documentUpgradeSources,
   folders,
   trashEntries,
   userLocalKeys,
@@ -44,21 +52,27 @@ export const TABLE_DEFINITIONS: Readonly<Record<string, unknown>> = {
   spaces,
   users,
 }
+export { AssetGcClock } from '../modules/assets/asset-gc-clock.ts'
 export { AssetsRepository } from '../modules/assets/assets.repository.ts'
-export type { AssetObjectMetadata } from '../modules/assets/assets.repository.ts'
+export type { AssetObjectMetadata, AssetObjectReservation } from '../modules/assets/assets.repository.ts'
 export { FileStorage } from '../modules/assets/file-storage.ts'
 export { ImageRunner } from '../modules/assets/image-runner.ts'
-export { AssetReadService, AssetReferenceService, AssetUploadService } from '../modules/assets/index.ts'
+export { AssetGcService, AssetReadService, AssetReferenceService, AssetRetirementService, AssetUploadService } from '../modules/assets/index.ts'
 export type { AssetMetadata } from '../modules/assets/index.ts'
-export { ASSET_STORAGE } from '../modules/assets/storage-adapter.ts'
+export { ASSET_STORAGE, assetObjectKey } from '../modules/assets/storage-adapter.ts'
 // 集成测试的探针直接拿数据库句柄：连接池与关闭顺序的用例（database/pool、api/shutdown）
-export { DATABASE } from '../modules/database/index.ts'
+export { DATABASE, ExclusiveRunner } from '../modules/database/index.ts'
 export type { Database } from '../modules/database/index.ts'
 // 应用的连接池的名字（application_name）：单连接核对与语句记录按它认应用自己的连接（support/single-query.ts、statement-capture.ts），
 // 引用这个常量而不各自写死：改名时两项核对跟着走，不会悄悄什么也不记（M2 Codex 评审复验的建议 2）
 export { APPLICATION_NAME } from '../modules/database/index.ts'
 export { DocumentAssetReferences } from '../modules/documents/document-asset-references.ts'
 export { DocumentAssetsRepository } from '../modules/documents/document-assets.repository.ts'
+export { DatabaseDocumentCheckpointClock, DocumentCheckpointClock } from '../modules/documents/document-checkpoint-clock.ts'
+export { DocumentCheckpointService } from '../modules/documents/document-checkpoint.service.ts'
+export { DocumentHistoryValidation } from '../modules/documents/document-history-validation.ts'
+export { DocumentHistoryRepository } from '../modules/documents/document-history.repository.ts'
+export { DocumentAssetRetentionService } from '../modules/documents/index.ts'
 // 直接核对 documents 的仓储只查给定范围里的文档（搜索的范围回归，M2-P6 复核 A 的 S3）；
 // 读正文、搜索在判断完权限、读数据之前停住（只读快照的回归，M2 Codex 评审 CX1）
 export { DocumentContentsRepository, DocumentsRepository } from '../modules/documents/index.ts'

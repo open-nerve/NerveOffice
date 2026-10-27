@@ -661,6 +661,26 @@ const API_REVISION_PURGE = {
   importNames: ['RevisionPurgeService'],
   message: '修订记录与回执的保留期清理（RevisionPurgeService）不判断人的权限，只由定时任务的模块（modules/jobs）调用（M3-P3 设计 §3.9）',
 }
+const API_HISTORY_PURGE = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentHistoryPurgeService'],
+  message: '检查点到期清理不判断人的权限，只由定时任务的模块（modules/jobs）调用',
+}
+const API_ASSET_GC = {
+  regex: String.raw`(?:^|/)assets/index\.ts$`,
+  importNames: ['AssetGcService', 'AssetRetirementService'],
+  message: '资源回收的特权入口只供 Jobs 组合，不从 HTTP 或其他业务模块调用',
+}
+const API_ASSET_RETENTION = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentAssetRetentionService'],
+  message: '全域资源保留探针只供 Jobs 组合，不代表任何用户的读取权限',
+}
+const API_DOCUMENT_OPERATIONS = {
+  regex: String.raw`(?:^|/)documents/index\.ts$`,
+  importNames: ['DocumentsOperationsModule', 'DocumentUpgradeService'],
+  message: '升级运维服务只由独立 CLI 应用组合，不接入 HTTP、Jobs 或其他模块',
+}
 // 永久删除一个删除单元的本体（TrashEntryPurger）不判断任何人的权限：只在 documents 模块内部由 TrashService.purge（锁下判断过权限之后）
 // 与 TrashPurgeService（到期的清理）调用，不从公开入口导出。别的模块直接引用它的文件由模块边界拦下；这里再拦下经公开入口的引用，
 // 将来有人把它加进入口也拦得住。jobs 也不例外：它只经 TrashPurgeService（M2-P6 复核 A 的 G1）
@@ -742,6 +762,10 @@ interface ApiFileKind {
    * （定时任务的模块与 documents 模块）
    */
   jobEntries?: boolean
+  /** 资源扫描/文件退休和全域保留探针；只给 Jobs 与集成测试专用出口。 */
+  assetGcEntries?: boolean
+  /** 独立运维 CLI 的应用组合；HTTP 应用不能接线升级操作。 */
+  documentOperations?: boolean
   /** 经别的模块的公开入口引用它的仓储（只有集成测试专用的入口，为集成测试转出 documents 的仓储） */
   foreignRepositories?: boolean
   /** 一串 id 只用一个数组参数，不用 drizzle 的 inArray、notInArray（documents 与 users 的仓储） */
@@ -766,7 +790,9 @@ function apiRules(kind: ApiFileKind = {}): Linter.RulesRecord {
     ...(kind.documentTransfer === true ? [] : [API_DOCUMENT_TRANSFER]),
     ...(kind.localKeyRevocation === true ? [] : [API_LOCAL_KEY_REVOCATION]),
     ...(kind.localKeysConfig === true ? [] : [API_LOCAL_KEYS_CONFIG]),
-    ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE]),
+    ...(kind.jobEntries === true ? [] : [API_TRASH_PURGE, API_REVISION_PURGE, API_HISTORY_PURGE]),
+    ...(kind.assetGcEntries === true ? [] : [API_ASSET_GC, API_ASSET_RETENTION]),
+    ...(kind.documentOperations === true ? [] : [API_DOCUMENT_OPERATIONS]),
     API_TRASH_ENTRY_PURGER,
     ...(kind.foreignRepositories === true ? [] : [API_FOREIGN_REPOSITORIES]),
     ...(kind.idArraysOnly === true ? [API_ID_LISTS] : []),
@@ -808,6 +834,7 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
   { file: 'local-drafts.ts', feature: 'local-drafts' },
   { file: 'local-data.ts', feature: 'local-data' },
   { file: 'editor.ts', feature: 'sheet-editor' },
+  { file: 'history.ts', feature: '{document-history,history-preview}' },
 ]
 
 /** web 元素里的测试与测试辅助（相对元素的路径）：不进产物，模块边界上按需放行 */
@@ -1025,6 +1052,7 @@ export default antfu(
     // 文档是手写的中文，不做 lint 与格式化
     markdown: false,
     ignores: [
+      '.test-resources/**',
       'spikes/**',
       'refer/**',
       'docs/**',
@@ -1139,16 +1167,17 @@ export default antfu(
   },
   // 后端：先是所有文件的限制，后面的块按文件类型放开各自需要的部分（后面的块覆盖前面的同名规则）
   { name: 'nerve/api', files: ['apps/api/src/**/*.ts'], rules: apiRules() },
+  { name: 'nerve/api-document-operations', files: ['apps/api/src/app/document-checkpoints.ts'], rules: apiRules({ documentOperations: true }) },
   // 管理界面的模块可以引用停用者文档的转移（M2-P2 审查 A9）与吊销本机密钥的入口（M3-P6），定时任务的模块可以引用到期的回收站清理与修订记录、
   // 回执的保留期清理（M2-P4 设计 §3.1，M3-P3 设计 §3.9）；documents 模块自己都可以；local-keys 模块可以注入主密钥（M3-P6）。
   // 紧跟在上一块之后：后面按文件类型的块（控制器、仓储等）照常拦下，它们不需要
   { name: 'nerve/api-admin', files: ['apps/api/src/modules/admin/**/*.ts'], rules: apiRules({ documentTransfer: true, localKeyRevocation: true }) },
-  { name: 'nerve/api-jobs', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ jobEntries: true }) },
+  { name: 'nerve/api-jobs', files: ['apps/api/src/modules/jobs/**/*.ts'], rules: apiRules({ jobEntries: true, assetGcEntries: true }) },
   { name: 'nerve/api-documents', files: ['apps/api/src/modules/documents/**/*.ts'], rules: apiRules({ documentTransfer: true, jobEntries: true }) },
   { name: 'nerve/api-local-keys', files: ['apps/api/src/modules/local-keys/**/*.ts'], rules: apiRules({ localKeysConfig: true }) },
   // 集成测试专用的入口为集成测试转出数据库句柄、documents 的仓储与全部的表定义；app 层的程序接口（index.ts）与 app 层的其他文件同样拿不到
   // （复验 N6，M2-P6 复核 A 的 S3、复验 R-S4、复核 B 的 B4）
-  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true }) },
+  { name: 'nerve/api-integration-entry-exports', files: [API_INTEGRATION_ENTRY], rules: apiRules({ databaseHandles: true, foreignRepositories: true, tables: true, assetGcEntries: true }) },
   { name: 'nerve/api-database', files: ['apps/api/src/modules/database/**/*.ts'], rules: apiRules({ databaseLibraries: true, databaseHandles: true }) },
   // 进程自己的计时可以用本机时钟（API_WALL_CLOCK_FILES）：紧跟在所属的块之后，其余的限制照旧
   { name: 'nerve/api-app-wall-clock', files: API_WALL_CLOCK_FILES.app, rules: apiRules({ wallClock: true }) },
@@ -1479,6 +1508,7 @@ export default antfu(
             from: [
               { element: { type: 'web-entry', captured: { entry: 'editor' } } },
               { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } },
+              { element: { type: 'web-feature', captured: { feature: 'history-preview' }, fileInternalPath: 'start.tsx' } },
             ],
             allow: { to: { element: { type: 'web-editor', fileInternalPath: PUBLIC_ENTRY } } },
           },
@@ -1561,9 +1591,9 @@ export default antfu(
           // 集成测试专用的入口转出全部的表定义：集成测试按它生成建库语句，与迁移建出的库逐项比较（M2-P6 复核 B 的 B4；取代复验 S1 只核对判重键的那一条）
           { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-schema', fileInternalPath: PUBLIC_ENTRY } } } },
           // 图片持久配额/真实文件故障的集成测试：只从测试专用出口取内部实例，不把仓储加入生产公开接口。
-          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'assets' }, fileInternalPath: ['assets.repository.ts', 'file-storage.ts', 'image-runner.ts', 'image-types.ts', 'storage-adapter.ts'] } } } },
-          // 当前图片引用的真实事务/交错测试，只给测试专用出口，不加入 Documents 的生产公开接口。
-          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'documents' }, fileInternalPath: ['document-asset-references.ts', 'document-assets.repository.ts'] } } } },
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'assets' }, fileInternalPath: ['assets.repository.ts', 'file-storage.ts', 'image-runner.ts', 'image-types.ts', 'storage-adapter.ts', 'asset-gc-clock.ts'] } } } },
+          // 图片引用与历史采样的真实事务/交错测试，只给测试专用出口，不加入 Documents 的生产公开接口。
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'documents' }, fileInternalPath: ['document-asset-references.ts', 'document-assets.repository.ts', 'document-checkpoint-clock.ts', 'document-checkpoint.service.ts', 'document-history.repository.ts', 'document-history-validation.ts'] } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: [PUBLIC_ENTRY, 'integration.test-support.ts'] } } } },
           {
@@ -1677,6 +1707,25 @@ export default antfu(
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'share-entry.tsx' } },
             allow: { to: { element: { type: 'web-feature', captured: { feature: 'sharing' }, fileInternalPath: PUBLIC_ENTRY } } },
           },
+          // 历史列表按路由加载；独立预览仅由自己的入口组装，不能带入平台运行时。
+          {
+            from: [{ element: { type: ['web-app', 'web-entry', 'web-feature'] } }],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'document-history' } } } },
+            message: '历史列表只有 app/routes.ts 可以动态 import() 公开入口（M5-P4）',
+          },
+          {
+            from: { element: { type: 'web-app', fileInternalPath: 'routes.ts' } },
+            allow: { to: { element: { type: 'web-feature', captured: { feature: 'document-history' }, fileInternalPath: PUBLIC_ENTRY } }, dependency: { nodeKind: 'dynamic-import' } },
+          },
+          {
+            from: [{ element: { type: ['web-app', 'web-entry', 'web-feature'] } }],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'history-preview' } } } },
+            message: '历史预览只有独立 entries/history-preview 可以引用公开入口（M5-P4）',
+          },
+          {
+            from: { element: { type: 'web-entry', captured: { entry: 'history-preview' } } },
+            allow: { to: { element: { type: 'web-feature', captured: { feature: 'history-preview' }, fileInternalPath: PUBLIC_ENTRY } } },
+          },
           // "与我共享"页同样按需加载（M2-P5 设计 §3.5）：左侧导航里只有入口，列表的渲染不进首屏
           {
             from: [
@@ -1753,10 +1802,10 @@ export default antfu(
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor,local-drafts}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor,local-drafts,document-history}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
-            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/sharing）引用，不进平台页面的首屏（ADR-008）',
+            message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/sharing、features/document-history）引用，不进平台页面的首屏（ADR-008）',
           },
           // 弹窗的文件本身（shared/ui/dialog.tsx，Radix Dialog）同样只由按需加载的功能直接引用（M2-P2 审查 B8）：功能、应用层与入口引用共享层本来是允许的，
           // 这里在允许的策略之后覆盖。shared 内部的中转另由 nerve/web-ui-heavy-components 拦下

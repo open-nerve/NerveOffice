@@ -12,6 +12,68 @@ const PUBLIC_ORIGIN = 'https://docs.example.com'
 /** 两个必填项 */
 const REQUIRED = { NERVE_DATABASE_URL: DATABASE_URL, NERVE_PUBLIC_ORIGIN: PUBLIC_ORIGIN }
 
+describe('资源回收与显式备份声明', () => {
+  it.each([[false, false, 1], [true, false, 2], [false, true, 2], [true, true, 3]] as const)('持会话锁的任务共存时必须留出一个工作连接：GC=%s，回收站=%s', (gc, trash, minimum) => {
+    const env = { ...REQUIRED, NERVE_ASSET_GC_ENABLED: String(gc), NERVE_TRASH_PURGE_ENABLED: String(trash) }
+    expect(loadConfig({ ...env, NERVE_DATABASE_POOL_MAX: String(minimum) }).database.poolMax).toBe(minimum)
+    if (minimum > 1)
+      expect(issuesOf(() => loadConfig({ ...env, NERVE_DATABASE_POOL_MAX: String(minimum - 1) })).map(issue => issue.variable)).toEqual(['NERVE_DATABASE_POOL_MAX'])
+  })
+  it('默认整理候选，但不编造备份保留期和恢复水位', () => {
+    expect(loadConfig(REQUIRED).jobs).toHaveProperty('assetGc', {
+      enabled: true,
+      intervalMs: 3_600_000,
+      batchSize: 100,
+      graceDays: 30,
+      backupRetentionDays: undefined,
+      recoveryBefore: undefined,
+    })
+  })
+
+  it.each([[1, 1000, 1], [3650, 86_400_000, 1000]])('接受边界并冻结 GC 配置：宽限 %s 天', (days, interval, batch) => {
+    const config = loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', NERVE_ASSET_GC_INTERVAL_MS: String(interval), NERVE_ASSET_GC_BATCH: String(batch), NERVE_ASSET_GC_GRACE_DAYS: String(days), NERVE_BACKUP_RETENTION_DAYS: String(days), NERVE_ASSET_GC_RECOVERY_BEFORE: '2026-10-01T00:00:00.000Z' })
+    expect(config.jobs).toHaveProperty('assetGc', {
+      enabled: false,
+      intervalMs: interval,
+      batchSize: batch,
+      graceDays: days,
+      backupRetentionDays: days,
+      recoveryBefore: '2026-10-01T00:00:00.000Z',
+    })
+    expect(Object.isFrozen(config.jobs.assetGc)).toBe(true)
+  })
+
+  it.each([
+    ['NERVE_ASSET_GC_ENABLED', 'yes'],
+    ['NERVE_ASSET_GC_INTERVAL_MS', '999'],
+    ['NERVE_ASSET_GC_INTERVAL_MS', '86400001'],
+    ['NERVE_ASSET_GC_BATCH', '0'],
+    ['NERVE_ASSET_GC_BATCH', '1001'],
+    ['NERVE_ASSET_GC_BATCH', '1.5'],
+    ['NERVE_ASSET_GC_GRACE_DAYS', '0'],
+    ['NERVE_ASSET_GC_GRACE_DAYS', '3651'],
+    ['NERVE_BACKUP_RETENTION_DAYS', '0'],
+    ['NERVE_BACKUP_RETENTION_DAYS', '3651'],
+    ['NERVE_BACKUP_RETENTION_DAYS', '1e1'],
+    ['NERVE_BACKUP_RETENTION_DAYS', '1.5'],
+    ['NERVE_ASSET_GC_RECOVERY_BEFORE', '2026-02-30T00:00:00.000Z'],
+    ['NERVE_ASSET_GC_RECOVERY_BEFORE', '2026-10-01'],
+    ['NERVE_ASSET_GC_RECOVERY_BEFORE', '2026-10-01T00:00:00Z'],
+    ['NERVE_ASSET_GC_RECOVERY_BEFORE', '2026-10-01T08:00:00.000+08:00'],
+    ['NERVE_ASSET_GC_RECOVERY_BEFORE', 'Infinity'],
+    ['NERVE_ASSET_GC_RECOVERY_BEFORE', ' 2026-10-01T00:00:00.000Z'],
+  ])('拒绝 %s 的非法值，不将它当成未知变量', (variable, value) => {
+    const issues = issuesOf(() => loadConfig({ ...REQUIRED, [variable]: value }))
+    expect(issues.map(issue => issue.variable)).toEqual([variable])
+    expect(issues[0]?.problem).not.toContain('不认识的变量')
+  })
+
+  it('即使关闭任务也拒绝宽限短于备份保留期，错误不泄露任何环境取值', () => {
+    const issues = issuesOf(() => loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', NERVE_ASSET_GC_GRACE_DAYS: '29', NERVE_BACKUP_RETENTION_DAYS: '30' }))
+    expect(issues).toEqual([{ variable: 'NERVE_ASSET_GC_GRACE_DAYS', problem: '资源回收宽限不能短于 NERVE_BACKUP_RETENTION_DAYS 声明的备份保留期' }])
+  })
+})
+
 function issuesOf(action: () => unknown): readonly ConfigIssue[] {
   try {
     action()
@@ -99,8 +161,10 @@ describe('loadConfig', () => {
       // 回收站的自动清理默认开着：每小时一轮，一轮最多 50 个删除单元；
       // 修订记录与回执的保留期清理默认开着：每小时一轮，一批最多 1000 条，保留 30 天（M3-P3 设计 §3.9）
       jobs: {
+        assetGc: { enabled: true, intervalMs: 3_600_000, batchSize: 100, graceDays: 30, backupRetentionDays: undefined, recoveryBefore: undefined },
         trashPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 50 },
         revisionPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 1_000 },
+        historyPurge: { enabled: true, intervalMs: 3_600_000, batchSize: 100 },
       },
       revisions: { retentionDays: 30 },
       // 页面的版本：默认不按构建拦（只按数据格式，M3-P3 设计 §3.5）
@@ -152,6 +216,9 @@ describe('loadConfig', () => {
       NERVE_REVISION_PURGE_ENABLED: 'false',
       NERVE_REVISION_PURGE_INTERVAL_MS: '600000',
       NERVE_REVISION_PURGE_BATCH: '250',
+      NERVE_HISTORY_PURGE_ENABLED: 'false',
+      NERVE_HISTORY_PURGE_INTERVAL_MS: '120000',
+      NERVE_HISTORY_PURGE_BATCH: '75',
       NERVE_SNAPSHOT_INSPECTION_PROCESSES: '4',
       NERVE_SNAPSHOT_INSPECTION_QUEUE_MAX: '0',
       NERVE_SNAPSHOT_INSPECTION_QUEUE_TIMEOUT_MS: '1500',
@@ -188,8 +255,10 @@ describe('loadConfig', () => {
     expect(config.oneTimeLinks).toEqual({ recordMaxFailures: 7 })
     expect(config.web.root).toBe('/srv/nerve-office/web')
     expect(config.jobs).toEqual({
+      assetGc: { enabled: true, intervalMs: 3_600_000, batchSize: 100, graceDays: 30, backupRetentionDays: undefined, recoveryBefore: undefined },
       trashPurge: { enabled: false, intervalMs: 900_000, batchSize: 10 },
       revisionPurge: { enabled: false, intervalMs: 600_000, batchSize: 250 },
+      historyPurge: { enabled: false, intervalMs: 120_000, batchSize: 75 },
     })
     expect(config.revisions).toEqual({ retentionDays: 45 })
     expect(config.snapshotInspection).toEqual({ processes: 4, queue: { maxWaiting: 0, maxWaitMs: 1_500 }, timeoutMs: 20_000, heapMb: 1_024 })
@@ -365,26 +434,26 @@ describe('loadConfig', () => {
   })
 
   it('开启回收站的自动清理时连接池至少 2 个连接（M2-P6 复核 A 的 G-3）：一个连接持着防重复执行的锁，删除在另一个连接上', () => {
-    const issuesWith = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, ...extra }))
-    // 自动清理默认开启：只把连接池调成 1 就不行，说明里写出两边的值（以及哪个是默认值）与两种改法
+    const issuesWith = (extra: Record<string, string>) => issuesOf(() => loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', ...extra }))
+    // 本组关闭新的资源 GC，单独核对回收站原协议。自动清理默认开启：只把连接池调成 1 就不行，说明里写出两边的值（以及哪个是默认值）与两种改法
     const issues = issuesWith({ NERVE_DATABASE_POOL_MAX: '1' })
     expect(issues.map(issue => issue.variable)).toEqual(['NERVE_DATABASE_POOL_MAX'])
     expect(issues[0]?.problem).toContain('现在是 1，开启回收站的自动清理时至少为 2（NERVE_TRASH_PURGE_ENABLED 现在是 true（默认值））')
     expect(issues[0]?.problem).toContain('或者把 NERVE_TRASH_PURGE_ENABLED 设为 false')
     expect(issuesWith({ NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'true' })[0]?.problem).toContain('NERVE_TRASH_PURGE_ENABLED 现在是 true）')
     // 关掉自动清理时一个连接也可以；两个连接时可以开
-    expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'false' }).database.poolMax).toBe(1)
-    expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '2' }).jobs.trashPurge.enabled).toBe(true)
+    expect(loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'false' }).database.poolMax).toBe(1)
+    expect(loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', NERVE_DATABASE_POOL_MAX: '2' }).jobs.trashPurge.enabled).toBe(true)
   })
 
   it('修订记录与回执的保留期清理不抬高连接池的下限（M3-P3 设计 §3.9）：每一批是一个短事务、只占一个连接，两个清理都开着时 2 个连接也够', () => {
     // 两个都开着（默认）：仍然是 2
-    const both = loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '2' })
+    const both = loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', NERVE_DATABASE_POOL_MAX: '2' })
     expect([both.jobs.trashPurge.enabled, both.jobs.revisionPurge.enabled]).toEqual([true, true])
     // 只开保留期清理：1 个连接也可以
-    expect(loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'false', NERVE_REVISION_PURGE_ENABLED: 'true' }).jobs.revisionPurge.enabled).toBe(true)
+    expect(loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', NERVE_DATABASE_POOL_MAX: '1', NERVE_TRASH_PURGE_ENABLED: 'false', NERVE_REVISION_PURGE_ENABLED: 'true' }).jobs.revisionPurge.enabled).toBe(true)
     // 回收站的清理开着、连接池是 1：照旧只报回收站的那一条，不因为保留期清理多报
-    expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_DATABASE_POOL_MAX: '1' })).map(issue => issue.variable)).toEqual(['NERVE_DATABASE_POOL_MAX'])
+    expect(issuesOf(() => loadConfig({ ...REQUIRED, NERVE_ASSET_GC_ENABLED: 'false', NERVE_DATABASE_POOL_MAX: '1' })).map(issue => issue.variable)).toEqual(['NERVE_DATABASE_POOL_MAX'])
   })
 
   it('登录与一次性链接的新上限按整数范围校验', () => {
@@ -664,5 +733,25 @@ describe('私有资源目录只在 HTTP 服务端必填', () => {
   })
   it('明确的绝对路径保留在服务端配置', () => {
     expect(loadServerConfig({ ...server, NERVE_ASSET_ROOT: '/srv/nerve/assets' }).assets.root).toBe('/srv/nerve/assets')
+  })
+})
+
+describe('历史保留期清理配置', () => {
+  it('默认每小时以 100 条短批清理；配置冻结，接受严格边界', () => {
+    const defaults = loadConfig(REQUIRED).jobs.historyPurge
+    expect(defaults).toEqual({ enabled: true, intervalMs: 3600_000, batchSize: 100 })
+    expect(Object.isFrozen(defaults)).toBe(true)
+    for (const [intervalMs, batchSize] of [[1000, 1], [86400_000, 1000]])
+      expect(loadConfig({ ...REQUIRED, NERVE_HISTORY_PURGE_INTERVAL_MS: String(intervalMs), NERVE_HISTORY_PURGE_BATCH: String(batchSize), NERVE_HISTORY_PURGE_ENABLED: 'false' }).jobs.historyPurge).toEqual({ enabled: false, intervalMs, batchSize })
+  })
+  it.each([
+    ['NERVE_HISTORY_PURGE_ENABLED', 'yes'],
+    ['NERVE_HISTORY_PURGE_INTERVAL_MS', '999'],
+    ['NERVE_HISTORY_PURGE_INTERVAL_MS', '86400001'],
+    ['NERVE_HISTORY_PURGE_BATCH', '0'],
+    ['NERVE_HISTORY_PURGE_BATCH', '1001'],
+    ['NERVE_HISTORY_PURGE_BATCH', '1.5'],
+  ])('%s 拒绝 %s', (variable, value) => {
+    expect(issuesOf(() => loadConfig({ ...REQUIRED, [variable]: value })).map(issue => issue.variable)).toContain(variable)
   })
 })

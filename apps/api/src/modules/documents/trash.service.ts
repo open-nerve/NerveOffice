@@ -15,6 +15,7 @@ import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { trashPermissionsOf } from './access-rules.ts'
 import { DocumentAccessPolicy, requireDocumentContent, requireFolderContent, requireSpaceContent, requireTrashEntry } from './document-access-policy.ts'
+import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentsRepository } from './documents.repository.ts'
 import { FoldersRepository } from './folders.repository.ts'
 import { SpaceTreeRepository } from './space-tree.repository.ts'
@@ -72,6 +73,7 @@ export class TrashService {
     private readonly audit: AuditService,
     private readonly writeAccess: WriteAccessRevocation,
     private readonly purger: TrashEntryPurger,
+    private readonly checkpoints: DocumentCheckpointService,
   ) {}
 
   /**
@@ -121,6 +123,7 @@ export class TrashService {
         originParentId: document.folderId,
         title: document.title,
       }, transaction)
+      await this.checkpoints.captureOperation(document.id, 'before_delete', entry.id, transaction)
       await this.documents.trash([document.id], entry.id, transaction)
       await this.writeAccess.revoke({ kind: 'documents', documentIds: [document.id] }, transaction)
       await this.record({
@@ -164,8 +167,9 @@ export class TrashService {
         originParentId: folder.parentId,
         title: folder.name,
       }, transaction)
-      await this.folders.trashMany(folderIds, entry.id, transaction)
       const documentIds = documents.map(row => row.id)
+      await this.checkpoints.captureOperations(documentIds, 'before_delete', entry.id, transaction)
+      await this.folders.trashMany(folderIds, entry.id, transaction)
       if (documentIds.length > 0) {
         await this.documents.trash(documentIds, entry.id, transaction)
         await this.writeAccess.revoke({ kind: 'documents', documentIds }, transaction)

@@ -9,6 +9,7 @@ import { documents } from '../../db/schema/documents/index.ts'
 import { DATABASE, executorOf, inIdArray, keysetPosition } from '../database/index.ts'
 import { linkedAssetExists, requestedAssetLinks } from './document-assets.repository.ts'
 import { grantedTo, grantRoleOf } from './document-grants.repository.ts'
+import { requestedHistoryAssetLinks } from './document-history.repository.ts'
 import { TITLE_SEARCH_ESCAPE } from './title-search.ts'
 
 export interface DocumentRow {
@@ -70,6 +71,9 @@ export interface NewDocument {
   readonly profile: DocumentProfile
   readonly formatVersion: PlatformFormatVersion
   readonly sdkVersion: string
+  /** 历史恢复保留原信封；正常新建沿数据库默认值。 */
+  readonly clientBuild?: string | null
+  readonly formulasPending?: boolean
 }
 
 /**
@@ -83,6 +87,13 @@ export interface NewDocument {
 export interface AccessibleScope {
   readonly spaceIds: readonly string[]
   readonly grantsOf: string | undefined
+}
+
+/** 历史的合法预选范围由访问策略给出；单独 editor 授权还必须位于未归档空间。 */
+export interface HistoryAccessibleScope {
+  readonly spaceIds: readonly string[]
+  readonly grantsOf: string
+  readonly grantSpaceIds: readonly string[]
 }
 
 /** 列出可访问文档的条件与分页。 */
@@ -203,6 +214,13 @@ function accessible(scope: AccessibleScope): SQL | undefined {
   return and(eq(d.status, 'active'), halves.length === 0 ? sql`false` : or(...halves))
 }
 
+function historyAccessible(scope: HistoryAccessibleScope): SQL | undefined {
+  return and(eq(d.status, 'active'), or(
+    inIdArray(d.spaceId, scope.spaceIds),
+    and(inIdArray(d.spaceId, scope.grantSpaceIds), grantedTo(d.id, scope.grantsOf, 'editor')),
+  ))
+}
+
 /** keyset 分页：上一页最后一条之后（按更新时间从新到旧、同一时间按 id），列表、搜索与"与我共享"同一个条件 */
 function afterPosition(after: TimeCursor | undefined): SQL | undefined {
   return after === undefined ? undefined : sql`(${d.updatedAt}, ${d.id}) < (${after.position}::timestamptz, ${after.id}::uuid)`
@@ -231,6 +249,24 @@ export class DocumentsRepository {
       .where(and(accessible(scope), linkedAssetExists(d.id, assetId)))
       .limit(1)
     return row
+  }
+
+  /** 与图片 id 无关的授权空间候选；空间的状态由策略经 Spaces 公开接口判断，不跨模块联表。 */
+  async editorGrantSpaceIds(userId: string, transaction: Transaction): Promise<string[]> {
+    const rows = await executorOf(this.db, transaction).selectDistinct({ id: d.spaceId }).from(d).where(and(eq(d.status, 'active'), grantedTo(d.id, userId, 'editor'))).orderBy(asc(d.spaceId))
+    return rows.map(row => row.id)
+  }
+
+  async historyAssetSources(scope: HistoryAccessibleScope, ids: readonly string[], now: Date, transaction: Transaction): Promise<AccessTarget[]> {
+    if (ids.length === 0)
+      return []
+    const executor = executorOf(this.db, transaction)
+    const links = requestedHistoryAssetLinks(ids, now, executor)
+    return executor.selectDistinctOn([links.assetId], { id: d.id, spaceId: d.spaceId, createdBy: d.createdBy })
+      .from(d)
+      .innerJoin(links, eq(links.documentId, d.id))
+      .where(historyAccessible(scope))
+      .orderBy(asc(links.assetId), asc(d.id))
   }
 
   /** 每个请求图片最多一个候选，权限仍按统一 accessible；只读预选不是授权。 */

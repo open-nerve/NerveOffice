@@ -21,6 +21,7 @@ import { AppLogger } from '../logging/index.ts'
 import { ClientFormatGate, requireWritableDocument } from './client-format-gate.ts'
 import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
 import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
 import { DocumentSaveReceiptsRepository } from './document-save-receipts.repository.ts'
@@ -122,6 +123,7 @@ export class DocumentContentService {
     private readonly clients: ClientFormatGate,
     private readonly inspector: SnapshotInspector,
     private readonly assetReferences: DocumentAssetReferences,
+    private readonly checkpoints: DocumentCheckpointService,
     logger: AppLogger,
   ) {
     this.#logger = logger.with({ module: 'documents' })
@@ -157,7 +159,7 @@ export class DocumentContentService {
    *    锁下再判断 → 再查一次重放（并发的同一次请求；查修订记录与回执两张表）→ 这次登录仍然有效 → 文档的格式
    *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、"公式待更新"
    *    只清不设（两边都为真才留着），修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、
-   *    文档的信封（"公式待更新"设成请求里的值）、审计、当前图片引用。图片授权在实际写入之前按锁下关系与权限复核并持资源行。
+   *    文档的信封（"公式待更新"设成请求里的值）、审计、当前图片引用及小时历史。小时历史失败则整个保存事务回滚，不改变上述时限。图片授权在实际写入之前按锁下关系与权限复核并持资源行。
    * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不锁文档行，
    * 不让能编辑的人的保存排队（复验 RA7）——它能得到的只有重放，不锁文档行查一次请求标识就有结论，到不了租约这一步
    * （requestId 的锁只与同一个 requestId 的写入排队，不挡别人的保存）。
@@ -215,6 +217,7 @@ export class DocumentContentService {
       const authorized = heldReferences === undefined ? [] : await this.assetReferences.authorize(heldReferences, transaction)
       const outcome = await this.write(attempt, document, contentHash, transaction)
       await this.assetReferences.replace(document.id, authorized, transaction)
+      await this.checkpoints.captureHourly(document.id, transaction)
       return outcome
     }, { limit: SAVE_TRANSACTION_LIMIT })
   }

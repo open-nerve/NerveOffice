@@ -5,11 +5,14 @@
 // - 外部模式（E2E_BASE_URL）：测已经部署好的环境（容器 E2E 用生产镜像），测试数据直接写被测环境的库（E2E_DATABASE_URL）。
 //   只依赖测试构建的用例（标签 @test-build）按标签排除，生产镜像里没有探针页。
 import type { PlaywrightTestProject } from '@playwright/test'
+import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { defineConfig } from '@playwright/test'
 import { databaseUrl, e2eDatabaseName, e2eOrigin, pickFreePort } from './support/environment.ts'
+import { managedOutputPath } from './support/managed-output.ts'
 
 const CI = process.env.CI === 'true'
+const output = managedOutputPath()
 const externalBaseUrl = process.env.E2E_BASE_URL
 
 // 配置在主进程与每个工作进程里都会执行一遍：本次运行的端口与测试库只在主进程里定一次，工作进程与服务脚本从环境变量继承。
@@ -57,7 +60,7 @@ const restartProjects = browsers.includes('chromium')
 
 export default defineConfig({
   testDir: './specs',
-  outputDir: './test-results',
+  outputDir: output,
   forbidOnly: true,
   // 出现重试就记为不稳定，在当前 Phase 内修掉根因（规范 §8.4）。CI 上重试一次之后通过的用例（flaky）也让这次运行失败：
   // 原来只写进报告与注解、job 照样成功，M2-P6 第 2 片合并时 chrome 那一片的 admin/audit.spec.ts 就是这样，跨了三片没人发现
@@ -66,8 +69,8 @@ export default defineConfig({
   failOnFlakyTests: CI,
   reporter: [
     ['list'],
-    ['html', { open: 'never', outputFolder: './playwright-report' }],
-    ['json', { outputFile: './test-results/results.json' }],
+    ['html', { open: 'never', outputFolder: join(dirname(output), 'playwright-report') }],
+    ['json', { outputFile: join(output, 'results.json') }],
     // CI 上把失败与不稳定的用例写成 GitHub 注解，不登录也能从运行结果里看到
     ...(CI ? [['github'] as const] : []),
   ],

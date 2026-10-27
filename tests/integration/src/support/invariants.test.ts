@@ -131,12 +131,33 @@ describe('数据不变量的扫描（M2-P6 复核 B 的 B5）', () => {
       // I22/I23/I24：同 hash 同时是 claim 和对象，字节/记录计数又都与事实不符。
       await client.query('INSERT INTO asset_object_claims (sha256, bytes) VALUES (repeat(\'a\', 64), 100)')
       await client.query('INSERT INTO asset_objects (sha256, storage_key, mime_type, width, height, frames, bytes) VALUES (repeat(\'a\', 64), \'objects/aa/\' || repeat(\'a\', 64), \'image/png\', 1, 1, 1, 100)')
-      await client.query('INSERT INTO asset_quota (id, used_bytes, used_assets) VALUES (1, 1, 1)')
+      await client.query('INSERT INTO asset_quota (id, used_bytes, used_assets) VALUES (1, 1, 2)')
+      // I29：候选已有保留引用，却没有未消费活动可使候选失效。
+      const candidateId = randomUUID()
+      await client.query('INSERT INTO assets (id,uploader_id,object_hash,unreferenced_at) VALUES ($1,$2,repeat(\'a\',64),now())', [candidateId, owner.id])
+      await client.query('INSERT INTO document_asset_links (document_id,asset_id) VALUES ($1,$2)', [await w.document(first), candidateId])
+      await client.query('DELETE FROM asset_reference_activity WHERE asset_id=$1', [candidateId])
+      // I30/I31：退休路径仍被存活对象占用，有资产的对象却被当作孤儿候选。
+      await client.query(`INSERT INTO asset_object_deletions (sha256,storage_key,bytes,unreferenced_at,created_at)
+        VALUES (repeat('a',64),'objects/aa/' || repeat('a',64),100,now()-interval '30 days',now())`)
+      await client.query('UPDATE asset_objects SET unreferenced_at=now()')
+      // I25：源文档还存在，但小时正文没有对应的独立采样占位；清除后再次保存会复生。
+      await client.query(`INSERT INTO document_checkpoints
+        (source_document_id, kind, hour_bucket, title, document_type, unit_id, profile, format_version,
+         sdk_version, revision, formulas_pending, snapshot, raw_bytes, stored_bytes, snapshot_hash,
+         saved_by, saved_at, created_at, expires_at)
+        VALUES ($1, 'hourly', date_trunc('hour', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+          '缺占位', 'sheet', 'fixture', 'sheet@1', 1, 'test', 1, false, '\\x00'::bytea, 1, 1,
+          sha256('\\x00'::bytea), $2, now(), now(), now() + interval '168 hours')`, [await w.document(first), owner.id])
+      // I26：声明两份源，清单只有一份；I27：回执错误指向 hourly/别的源；I28：未终结的批次没有持住屏障。
+      const batchId = randomUUID()
+      await client.query('INSERT INTO document_upgrade_batches (id,target_version,source_count) VALUES ($1,\'invariant-fixture\',2)', [batchId])
+      await client.query('INSERT INTO document_upgrade_sources (batch_id,document_id,revision,checkpoint_id) SELECT $1,$2,1,id FROM document_checkpoints LIMIT 1', [batchId, randomUUID()])
     })
 
     const failure = await database.drop().then(() => undefined, (error: unknown) => error as Error)
     expect(failure?.message).toContain('违反了只由服务保证的不变量')
-    for (const id of ['I22 ', 'I23 ', 'I24 '])
+    for (const id of ['I22 ', 'I23 ', 'I24 ', 'I25 ', 'I26 ', 'I27 ', 'I28 ', 'I29 ', 'I30 ', 'I31 '])
       expect(failure?.message).toContain(id)
     for (const invariant of Object.keys(INVARIANTS))
       expect(failure?.message, invariant).toContain(`${invariant}：`)

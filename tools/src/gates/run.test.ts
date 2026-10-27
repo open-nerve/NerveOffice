@@ -327,16 +327,18 @@ describe('US-M1-11 产物门禁的装配', () => {
 
 describe('US-M1-11 体积预算门禁的装配', () => {
   /** 平台按需草稿页与编辑器共用本机草稿 Worker，公式 Worker 仍只属编辑器。 */
-  function dist(indexContent: string): string {
+  function dist(indexContent: string, previewAssets: string[] = ['assets/formula.worker-a1b2c3d4.js']): string {
     return writeDist({
       '.vite/manifest.json': JSON.stringify({
         'index.html': { file: 'assets/index.js', isEntry: true, dynamicImports: ['src/local-drafts.ts'] },
         'src/local-drafts.ts': { file: 'assets/local-drafts.js', assets: ['assets/outbox.worker-b2c3d4e5.js'] },
         'editor.html': { file: 'assets/editor.js', isEntry: true, assets: ['assets/formula.worker-a1b2c3d4.js', 'assets/outbox.worker-b2c3d4e5.js'] },
+        'history-preview.html': { file: 'assets/history-preview.js', isEntry: true, assets: previewAssets },
       }),
       'assets/index.js': indexContent,
       'assets/local-drafts.js': 'new Worker(new URL(`/assets/outbox.worker-b2c3d4e5.js`,``+import.meta.url),{type:`module`})',
       'assets/editor.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`});new Worker(new URL(`/assets/outbox.worker-b2c3d4e5.js`,``+import.meta.url),{type:`module`})',
+      'assets/history-preview.js': 'new Worker(new URL(`/assets/formula.worker-a1b2c3d4.js`,``+import.meta.url),{type:`module`})',
       'assets/formula.worker-a1b2c3d4.js': 'self.onmessage=()=>{}',
       'assets/outbox.worker-b2c3d4e5.js': 'self.onmessage=()=>{}',
     })
@@ -351,16 +353,24 @@ describe('US-M1-11 体积预算门禁的装配', () => {
 
   it('入口没有引用应登记的 Worker：编辑器的两份和平台按需恢复分别违规', () => {
     const noWorker = writeDist({
-      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true } }),
+      '.vite/manifest.json': JSON.stringify({ 'index.html': { file: 'assets/index.js', isEntry: true }, 'editor.html': { file: 'assets/editor.js', isEntry: true }, 'history-preview.html': { file: 'assets/history-preview.js', isEntry: true } }),
       'assets/index.js': 'console.log(1)',
       'assets/editor.js': 'console.log(2)',
+      'assets/history-preview.js': 'console.log(3)',
     })
     expect(budgetsGate(noWorker).violations.map(({ rule, subject }) => ({ rule, subject }))).toEqual([
       { rule: 'budgets/missing-worker', subject: 'formula.worker' },
       { rule: 'budgets/missing-worker', subject: 'outbox.worker' },
       { rule: 'budgets/missing-worker', subject: 'outbox.worker' },
+      { rule: 'budgets/missing-worker', subject: 'formula.worker' },
     ])
-    expect(budgetsGate(noWorker).violations.at(-1)?.detail).toContain('index.html')
+    expect(budgetsGate(noWorker).violations.at(-1)?.detail).toContain('history-preview.html')
+  })
+
+  it('历史预览引用本机草稿 Worker 时拒绝，即使其他入口已经登记同一 Worker', () => {
+    const result = budgetsGate(dist('console.log(1)', ['assets/formula.worker-a1b2c3d4.js', 'assets/outbox.worker-b2c3d4e5.js']))
+    expect(result.violations).toEqual([expect.objectContaining({ rule: 'budgets/unbudgeted-worker', subject: 'assets/outbox.worker-b2c3d4e5.js' })])
+    expect(result.violations[0]?.detail).toContain('history-preview.html')
   })
 
   it('违规：没有构建清单', () => {

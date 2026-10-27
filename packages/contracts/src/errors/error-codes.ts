@@ -106,6 +106,7 @@ export const ERROR_CODES = {
    * 快照不合法：快照检查的某一条规则没有通过（M1 的基本校验，M3-P3 起是完整的检查：资源、图片与链接地址等，设计 §3.3）。
    * details 带违反的规则（snapshotInvalidDetailsSchema），不回显快照的内容
    */
+  HISTORY_UNUSABLE: { status: 422, message: '这份历史的内容或格式无法恢复，请尝试其他历史' },
   SNAPSHOT_INVALID: { status: 422, message: '表格内容的格式不正确，无法保存' },
   /** 图片完整解码、格式或资源预算不通过；details.rule 只含有限规则，不回显原始内容。 */
   ASSET_INVALID: { status: 422, message: '图片无法处理，请检查格式或使用较小的图片' },

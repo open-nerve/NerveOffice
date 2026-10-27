@@ -24,6 +24,14 @@ const { lint, rulesFor, lintAtProbe, configFor } = prepareLint({ warmUp: [WEB_FI
 const GUARD_FILE = 'apps/web/src/editor/read-only/read-only-guard.ts'
 
 describe('US-M1-11 lint 规则的自测：谁能引用编辑器（P4 设计 §3.1）', () => {
+  it('历史预览仅组装入口可经公开 Facade 创建只读实例，列表和共享层没有这个入口', async () => {
+    const code = 'import { createSheetEditor } from \'../../editor/index.ts\'\nexport const f = createSheetEditor\n'
+    expect(await rulesFor(code, 'apps/web/src/features/history-preview/start.tsx')).not.toContain('boundaries/dependencies')
+    expect(await rulesFor(code, 'apps/web/src/features/document-history/history-page.tsx')).toContain('boundaries/dependencies')
+    expect(await rulesFor(code, 'apps/web/src/features/history-preview/preview-controller.ts')).toContain('boundaries/dependencies')
+    expect(await rulesFor(code.replace('/index.ts', '/sheet-editor.ts'), 'apps/web/src/features/history-preview/start.tsx')).toContain('boundaries/dependencies')
+  })
+
   it('只有编辑器页的入口与编辑器页（sheet-editor 功能）能引用编辑器，而且只经公开入口', async () => {
     const importEditor = (path: string): string => `import { createSheetEditor } from '${path}'\n\nexport const f = createSheetEditor\n`
     expect((await lintAtProbe(importEditor('../../editor/index.ts'), PROBE_FILES.editorEntry)).rules).not.toContain('boundaries/dependencies')
