@@ -8,3 +8,8 @@ import { requestWithLocalSession } from './session-tracking.ts'
 export async function requestSession(signal?: AbortSignal): Promise<SessionResponse> {
   return requestWithLocalSession('query', async () => apiRequest('/api/auth/session', { schema: sessionResponseSchema, signal }), signal)
 }
+
+/** 被动身份复核不顺延登录；保留原查询的取消、来源关联和晚到响应处理。 */
+export async function requestBackgroundSession(signal?: AbortSignal): Promise<SessionResponse> {
+  return requestWithLocalSession('query', async () => apiRequest('/api/auth/session/check', { schema: sessionResponseSchema, signal }), signal)
+}

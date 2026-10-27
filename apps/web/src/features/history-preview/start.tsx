@@ -3,7 +3,7 @@ import { historyIdsFromPagePath } from '@nerve-office/contracts'
 import { createRoot } from 'react-dom/client'
 import { createSheetEditor } from '../../editor/index.ts'
 import { fetchHistoryContent, fetchHistoryDetail } from '../../shared/api/document-history.ts'
-import { requestSession, setApiSession, setCsrfToken } from '../../shared/api/index.ts'
+import { requestBackgroundSession, requestSession, setApiSession, setCsrfToken } from '../../shared/api/index.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { PreviewChrome } from './preview-chrome.tsx'
 import { createHistoryPreview } from './preview-controller.ts'
@@ -28,7 +28,7 @@ export function startHistoryPreview({ chrome, surface, pathname = window.locatio
   let imageProblem = false
   let stopped = false
   const preview = createHistoryPreview({
-    session: requestSession,
+    session: async (signal, activity) => activity === 'user' ? requestSession(signal) : requestBackgroundSession(signal),
     detail: async signal => fetchHistoryDetail(ids.documentId, ids.historyId, signal),
     content: async signal => fetchHistoryContent(ids.documentId, ids.historyId, signal),
     adopt: (session) => {
@@ -53,7 +53,11 @@ export function startHistoryPreview({ chrome, surface, pathname = window.locatio
   })
   function retry(): void {
     imageProblem = false
-    void preview.refresh()
+    void preview.refresh('user')
+  }
+  function recheck(): void {
+    imageProblem = false
+    void preview.refresh('background')
   }
   function show(): void {
     if (stopped)
@@ -66,10 +70,10 @@ export function startHistoryPreview({ chrome, surface, pathname = window.locatio
     root.render(<PreviewChrome state={state} documentId={ids?.documentId} pathname={pathname} imageProblem={imageProblem} retry={retry} />)
   }
   const unsubscribe = preview.subscribe(show)
-  const unlisten = channel.subscribe(retry)
+  const unlisten = channel.subscribe(recheck)
   const whenVisible = (): void => {
     if (document.visibilityState === 'visible')
-      retry()
+      recheck()
   }
   const interval = window.setInterval(whenVisible, RECHECK_MS)
   document.addEventListener('visibilitychange', whenVisible)

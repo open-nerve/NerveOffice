@@ -34,10 +34,13 @@ const PUBLIC_ROUTES: readonly string[] = [
  * 与接管同样是用户的操作（持有者空闲之后自动交出也是先前的操作的结果），照常顺延
  */
 const BACKGROUND_ROUTES: readonly string[] = [
+  'GET /api/assets/:assetId',
+  'GET /api/auth/session/check',
   'GET /api/documents/:id/edit-lease',
   'PUT /api/documents/:id/edit-lease',
   'PUT /api/documents/:id/edit-lease/request',
   'GET /api/documents/:id/history/:historyId',
+  'GET /api/documents/:id/history/:historyId/content',
   'POST /api/documents/:id/open-check-failures',
 ]
 
@@ -88,6 +91,7 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
       'POST /api/documents/:id/edit-lease/request',
       'PUT /api/documents/:id/edit-lease/request',
       'GET /api/documents/:id/history/:historyId',
+      'GET /api/documents/:id/history/:historyId/content',
       'DELETE /api/documents/:id/edit-lease/request',
       'POST /api/documents/:id/edit-lease/request/decline',
       'POST /api/documents/:id/edit-lease/handover',
@@ -114,7 +118,7 @@ describe('全部接口的认证：没有 @Public() 的都要求登录，公开�
   })
 })
 
-describe('后台请求：标了 @BackgroundRequest() 的接口恰好是编辑状态、心跳、请求编辑的续期、历史预览资格与打开自检的上报（M3-P2 设计 §3.2，复核 B5；M3-P4 设计 §3.13；M3-P5 设计 §3.13）', () => {
+describe('后台请求：标了 @BackgroundRequest() 的接口恰好是编辑状态、心跳、请求编辑的续期、历史预览与图片/会话复核、打开自检的上报（M3-P2 设计 §3.2，复核 B5；M3-P4 设计 §3.13；M3-P5 设计 §3.13）', () => {
   it('从控制器的元数据列出的接口与路由表相同；按会话守卫的读法（方法上的覆盖控制器上的）带着这个标记的，恰好是写明的那几个', () => {
     const handled = controllerRoutesOf(app)
     expect(handled.map(nameOf)).toEqual(routes.map(nameOf))

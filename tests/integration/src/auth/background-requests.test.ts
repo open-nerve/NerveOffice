@@ -13,9 +13,11 @@ import { CSRF_TOKEN_HEADER, EDIT_LEASE_HEADER, errorResponseSchema, sheetSnapsho
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
+import { uploadTestAsset } from '../support/assets.ts'
 import { acquireBody, renewBody } from '../support/client-format.ts'
 import { parseExact } from '../support/contracts.ts'
 import { createTestDatabase } from '../support/database.ts'
+import { captureHistory } from '../support/document-history.ts'
 import { seedDocument } from '../support/documents.ts'
 import { acquireLease, cancelEditRequest, declineEditRequest, handOverLease, pendingRequestId, releaseLease, renewEditRequest, renewLease, saveContent, sendEditRequest } from '../support/edit-leases.ts'
 import { setGrant } from '../support/grants.ts'
@@ -163,5 +165,38 @@ describe('US-M3-02 自动保存是编辑的结果，照常顺延登录（不标�
     expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, snapshotWith(document.unitId, '第一次'), { baseRevision: 2, lease, localSeq: 3 }), 200)).toBe(true)
     expect(await keptAlive(session, async () => saveContent(app.baseUrl, session, document.id, snapshotWith(document.unitId, '第二次'), { baseRevision: 2, lease, localSeq: 4 }), 200)).toBe(true)
     expect(await keptAlive(session, async () => renewLease(app.baseUrl, session, document.id, lease), 200)).toBe(false)
+  })
+})
+
+describe('US-M5-10 历史预览的被动复核', () => {
+  it.each(['无图', '含图', '失败后自动重载'])('%s的完整周期不改变最后活动和空闲期限', async (scenario) => {
+    const { session, document } = await fresh()
+    const asset = scenario === '无图' ? undefined : await uploadTestAsset(app.baseUrl, session)
+    if (asset !== undefined)
+      await database.query(async client => client.query('INSERT INTO document_asset_links (document_id,asset_id) VALUES ($1,$2)', [document.id, asset.assetId]))
+    const history = await captureHistory(app, document.id)
+    const detail = `/api/documents/${document.id}/history/${history}`
+    const paths = ['/api/auth/session/check', detail]
+    if (scenario === '失败后自动重载')
+      paths.push(`${detail}/content`, '/api/auth/session/check', detail, '/api/auth/session/check', detail)
+    if (asset !== undefined)
+      paths.push(`/api/assets/${asset.assetId}`)
+    const before = await staleSession(session)
+    for (const path of paths) {
+      const response = await asUser(app.baseUrl, session, path)
+      expect(response.status, path).toBe(200)
+      if (path.startsWith('/api/assets/'))
+        expect(response.headers.get('x-asset-status')).toBe('200')
+      await response.arrayBuffer()
+    }
+    expect(await timesOf(session)).toEqual(before)
+    // 主动打开/点击重试的首次查询仍续期，只有随后自动读取不续期。
+    expect(await keptAlive(session, async () => asUser(app.baseUrl, session, '/api/auth/session'), 200)).toBe(true)
+    await database.query(async client => client.query('UPDATE auth_sessions SET idle_expires_at=now()-interval \'1 second\' WHERE token_hash=$1', [digestOf(session)]))
+    for (const path of [...new Set(paths)]) {
+      const expired = await asUser(app.baseUrl, session, path)
+      expect(expired.status, path).toBe(401)
+      expect(parseExact(errorResponseSchema, await expired.json()).error.code).toBe('SESSION_EXPIRED')
+    }
   })
 })

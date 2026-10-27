@@ -179,14 +179,20 @@ describe('不可再发布的退休路径', () => {
     await fs.mkdir(join(root, 'objects/ba'), { mode: 0o700 })
     const outside = join(scratch, 'outside')
     await fs.writeFile(outside, 'keep', { mode: 0o600 })
-    if (kind === 'symlink')
+    if (kind === 'symlink') {
       await fs.symlink(outside, target)
-    else if (kind === 'directory')
+    }
+    else if (kind === 'directory') {
       await fs.mkdir(target, { mode: 0o700 })
-    else if (kind === 'fifo')
+    }
+    else if (kind === 'fifo') {
       await promisify(execFile)('mkfifo', [target])
-    else
+    }
+    else {
       await fs.writeFile(target, 'abc', { mode: 0o644 })
+      // 明确注入权限过宽的目标，避免宿主 umask 将故障样本收紧为安全的 0600。
+      await fs.chmod(target, 0o644)
+    }
     const before = await fs.lstat(target)
     await expect(storage.retire(key, value)).rejects.toMatchObject({ operation: 'retire', reason: 'unsafe-path' })
     expect((await fs.lstat(target)).ino).toBe(before.ino)

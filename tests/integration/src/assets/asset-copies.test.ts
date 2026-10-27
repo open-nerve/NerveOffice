@@ -98,7 +98,7 @@ async function status(client: Client, id: string): Promise<string | null> {
   return response.headers.get('x-asset-status')
 }
 
-describe('两种副本的独立图片引用', () => {
+describe('US-M5-09 两种副本的独立图片引用', () => {
   it.each(['撤销原授权', '删除原文档'] as const)('普通复制只复制当前集合，gzip/unitId 原样保留；%s后副本可读，重放不补正文中的其他地址', async (change) => {
     const source = await document()
     const kept = await uploaded()

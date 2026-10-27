@@ -243,7 +243,8 @@ export type {
   RenewEditLeaseRequest,
   RequestEditRequest,
 } from './documents/editing.ts'
-export { HISTORY_PAGE_ROUTE, HISTORY_PREVIEW_PAGE_PATTERN, historyIdsFromPagePath, historyPagePath, historyPreviewPagePath } from './documents/history-page.ts'
+export { HISTORY_PAGE_ROUTE, historyPagePath } from './documents/history-page.ts'
+export { HISTORY_PREVIEW_PAGE_PATTERN, historyIdsFromPagePath, historyPreviewPagePath } from './documents/history-preview-page.ts'
 export { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './documents/link-address.ts'
 export type { CanonicalLink, CellLinkRule, LinkAddressInvalidReason } from './documents/link-address.ts'
 export { LOCAL_DRAFT_RETENTION_DAYS } from './documents/local-drafts.ts'

@@ -3,6 +3,7 @@ import type { AuditOrigin } from '../audit/index.ts'
 import type { Principal, SessionCookie } from './principal.ts'
 import { changePasswordRequestSchema, loginRequestSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, HttpCode, Post, Put } from '@nestjs/common'
+import { BackgroundRequest } from '../../shared/background-request.ts'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { Public } from '../../shared/public.ts'
 import { RequestOrigin } from '../audit/index.ts'
@@ -46,6 +47,13 @@ export class AuthController {
 
   @Get('session')
   async session(@CurrentPrincipal() principal: Principal): Promise<SessionResponse> {
+    return this.auth.current(principal)
+  }
+
+  /** 周期身份复核不代表用户活动；认证、账户状态和响应格式与主动查询相同。 */
+  @Get('session/check')
+  @BackgroundRequest()
+  async checkSession(@CurrentPrincipal() principal: Principal): Promise<SessionResponse> {
     return this.auth.current(principal)
   }
 

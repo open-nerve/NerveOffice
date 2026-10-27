@@ -4,7 +4,7 @@ import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
 import type { LogEntry } from '../support/log-capture.ts'
 import { setTimeout as delay } from 'node:timers/promises'
-import { gzipSync } from 'node:zlib'
+import { brotliCompressSync, deflateSync, gzipSync, zstdCompressSync } from 'node:zlib'
 import { AppError, AppLogger, Public } from '@nerve-office/api'
 import { errorResponseSchema } from '@nerve-office/contracts'
 import { Body, Controller, Get, Module, Post } from '@nestjs/common'
@@ -132,6 +132,31 @@ describe('错误响应（规范 §4、ADR-006）', () => {
   it('字符集或内容编码不受支持 → 415 UNSUPPORTED_MEDIA_TYPE', async () => {
     await expectError(await postJson('/api/__test/echo', '{"name":"a"}', { 'content-type': 'application/json; charset=gbk' }), 415, 'UNSUPPORTED_MEDIA_TYPE')
     await expectError(await postJson('/api/__test/echo', '{"name":"a"}', { ...JSON_HEADERS, 'content-encoding': 'compress' }), 415, 'UNSUPPORTED_MEDIA_TYPE')
+  })
+
+  it('空的内容编码声明仍按未压缩 JSON 处理，与既有解析器一致', async () => {
+    const response = await postJson('/api/__test/echo', '{"name":"a"}', { ...JSON_HEADERS, 'content-encoding': '' })
+    expect(response.status).toBe(201)
+    expect(await response.json()).toEqual({ name: 'a' })
+  })
+
+  it('未纳入接口约定的 zstd 编码保持 415，不随依赖升级开放', async () => {
+    const body = zstdCompressSync(JSON.stringify({ name: '压缩' }))
+    await expectError(await request('/api/__test/echo', { method: 'POST', body, headers: { ...JSON_HEADERS, 'content-encoding': 'zstd' } }), 415, 'UNSUPPORTED_MEDIA_TYPE')
+  })
+
+  it.each([
+    ['gzip', gzipSync],
+    ['deflate', deflateSync],
+    ['br', brotliCompressSync],
+  ] as const)('约定的 %s 编码仍能解析合法 JSON', async (encoding, compress) => {
+    const response = await request('/api/__test/echo', {
+      method: 'POST',
+      body: compress(JSON.stringify({ name: '压缩' })),
+      headers: { ...JSON_HEADERS, 'content-encoding': encoding },
+    })
+    expect(response.status).toBe(201)
+    expect(await response.json()).toEqual({ name: '压缩' })
   })
 
   it('压缩的请求体：损坏时 400；解压后超过上限（压缩炸弹）时 413，按解压后的大小计算', async () => {

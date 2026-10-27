@@ -42,10 +42,13 @@ describe('US-M5-10 独立历史预览生命周期', () => {
     expect(w.preview.view()).toMatchObject({ kind: 'ready', history: historyItem() })
     expect(w.deps.mount).toHaveBeenCalledWith('{"history":"original"}', expect.anything(), historyItem())
     expect(w.images()?.current()).toBe(HISTORY_SESSION)
-    await w.preview.refresh()
+    await w.preview.refresh('background')
     expect(w.deps.mount).toHaveBeenCalledTimes(1)
     expect(w.deps.content).toHaveBeenCalledTimes(1)
     expect(w.deps.detail).toHaveBeenCalledTimes(4)
+    expect(w.deps.session).toHaveBeenNthCalledWith(1, expect.any(AbortSignal), 'user')
+    for (const call of [2, 3, 4])
+      expect(w.deps.session).toHaveBeenNthCalledWith(call, expect.any(AbortSignal), 'background')
   })
 
   it.each([{ compatibility: 'unsupported' as const }, { sdkVersion: '999.0.0' }, { profile: 'sheet@999' }, { formatVersion: 999 }])('本页不支持格式 %j 时不读取正文或挂载 SDK', async (patch) => {

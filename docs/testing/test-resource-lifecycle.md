@@ -46,7 +46,7 @@ CI 的 settle 在监督器确认退出后，按本轮 owner token 恢复精简�
 
 ## handoff 归档
 
-`tools/test-resources/archive.py` 管理显式登记的新归档。已有历史材料不自动认领。当前本地 P4 的 `.codex/handoffs/m5-p4-20261022/s6/run-full-gate.py` 已接入：创建 bundle 先登记/持锁，门禁结束清扫本轮资源再冻结报告，成功、失败、异常退出都释放归档锁；开始和结束检查保留期/容量。
+`tools/test-resources/archive.py` 管理显式登记的新归档，已有历史材料不自动认领。当前本地 P4 的 `.codex/handoffs/m5-p4-20261022/s6/run-full-gate.py` 创建 bundle 时先登记并持锁；结束时先在发布/run 锁内转存报告，再记录资源清扫，最后在 retention 锁与原 bundle lease 内审计并 pin 必要通过证据，释放后才 prune。成功、失败和异常均有释放与接受状态处理。此处的额外接受流程仅属于本 P4 外部包装，完整顺序见下节，不泛指上表所有入口。
 
 仅回收已登记、未被使用且非 pinned 的 `output/`、`prior-output/`、`command.log`，合计 5 GiB 或 14 天，保留日志尾、运行摘要、源码快照、补丁、目录与原校验索引，并新增退役回执。开始删除前保存 pending 清单；中途崩溃后沿同一清单继续，保留首次删除的字节记录。旧索引不改写；退役后不得再宣称它支持完整环境复现。外部归档机制的原脚本备份和本轮清理账在 `.codex/handoffs/test-residue-cleanup-20261026/`。
 
@@ -63,3 +63,18 @@ pin 只用于经过审查的必要最终证据；不要 pin 每次失败重试�
 Python 小型回归覆盖成功释放、失败限额与过期、SIGTERM、遗留恢复、打开句柄/活动锁、父目录链接、重复执行、失败重试归属、转移中断续作、发布锁、容器重复发布和 handoff 源码/最终证据保护。TypeScript 回归覆盖受管目录、VM 越界、纯函数导入兼容与数据库连接竞争。
 
 强制断电期间无法执行任何清理；重新运行时才能回收。未知历史目录和未确认的业务/测试数据保留待核对。保留期限和容量由每次启动/退出及手工清扫执行，不安装系统定时任务。大环境运行中可达到高于留档限额的峰值，12 GiB 余量只是中止条件，不能替代为大型实验预估容量。
+
+## M5-P4 外部完整门禁的附加接受流程（2026-10-27）
+
+本节只说明当前P4主目录外部入口 `.codex/handoffs/m5-p4-20261022/s6/run-full-gate.py` 与 `guard-archive-review.py` 的额外原件验收，不代表上表全部普通测试命令、CI或其他Phase已经使用这套包装。普通入口仍按前文负责同轮资源生命周期与固定报告发布。
+
+1. 等待本轮写入者退出，在报告发布锁与对应run锁内核验归属、终态及路径，先把固定报告转存到本轮bundle。父/叶目录、run.json、marker不得为链接，目标已存在时拒绝覆盖；不先执行可能回收尚待审查报告的清扫。
+2. 转存后执行本worktree受管资源sweep，保存`resource-cleanup.json`，记录本轮清理结果；源码/安装SDK前后清单及原件摘要一同冻结。未知或待处理资源不能伪装成清理完成。
+3. 保持原bundle lease，并持归档根`.retention.lock`，依次seal、运行原件审计、精确核对该轮资源runId/终态/无scratch和活动写入者/原件未被prune，再写资源证明、pin必要通过原件并记录accepted状态。原始审计覆盖精确案例、JSON/HTML、原件摘要及OPFS证明；pin理由绑定该bundle和受测HEAD。
+4. 完成上述操作后才释放bundle lease并执行归档prune；按既有期限/容量处理未pin输出，源码、补丁与原索引仍保留。原始审计或资源核验异常时明确写accepted=false并传播失败，不能只凭测试命令退出0签署。
+
+full10因启动时已使用旧包装器，曾由`guard-archive-review.py`独立守护持retention锁，待该轮结束/封存并取得bundle锁后完成审查；full11及后续包装器在原lease内复用它的`accept`函数，不为同一活动轮叠加两套接受流程。full10实际失败、不被接受；full11与同源码container01已各自通过原件与资源核验并pin。
+
+后续签署/关闭读取`archive_review_evidence.py`证明：精确bundle的status必须accepted=true，资源证明绑定同轮runId、清理完成及未回收原件，真实pin的owner和理由匹配；status/resources/pin/raw audit摘要共同进入gate proof。测试退出0、清理成功、普通报告存在或手工pin中的任一单项，都不能替代这份接受证明。该接受仍只覆盖对应一轮门禁，本轮同源码容器已有独立接受证明，整个Phase仍须同SHA CI、最终冻结与实际清理。
+
+已审查的工具摘要和轻型反例在`.codex/handoffs/m5-p4-20261022/s6/resume-20261027/independent-review.json`；两轮独立接受回执为同目录`full11-independent-acceptance.json`与`container01-independent-acceptance.json`。这些外部回执不改变普通入口的权限、测试范围、原断言或预算。

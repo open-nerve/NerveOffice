@@ -76,6 +76,7 @@ const PROBES: Readonly<Record<string, (w: World) => Probe>> = {
   'GET /api/admin/users/:id': w => ({ who: 'root', path: `/api/admin/users/${w.amy.id}` }),
   'GET /api/admin/users/:id/documents': w => ({ who: 'root', path: `/api/admin/users/${w.leaver}/documents` }),
   'GET /api/auth/session': () => ({ who: 'amy', path: '/api/auth/session' }),
+  'GET /api/auth/session/check': () => ({ who: 'amy', path: '/api/auth/session/check' }),
   'GET /api/documents': w => ({ who: 'amy', path: `/api/documents?spaceId=${w.amy.personalSpaceId}` }),
   // 批量草稿事实同时经过有效租约、交出预留与缺失项；所有补充事实也必须留在同一个快照中。
   'GET /api/documents/draft-facts': w => ({ who: 'amy', path: `/api/documents/draft-facts?ids=${w.document},${w.reserved},00000000-0000-4000-8000-000000000001` }),

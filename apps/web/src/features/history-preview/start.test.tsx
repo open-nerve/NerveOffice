@@ -21,6 +21,24 @@ afterEach(async () => {
 })
 
 describe('US-M5-10 独立预览实际组装', () => {
+  it('真正属于另一检查点的响应仍被拒绝，不挂载正文', async () => {
+    const item = historyItem()
+    installFakeApi({
+      'GET /api/auth/session': () => json(200, HISTORY_SESSION),
+      [`GET /api/documents/${DOC}/history/${item.id}`]: () => json(200, { ...item, id: '0199a2c4-0000-7000-8000-0000000000ff' }),
+    })
+    const chrome = document.createElement('div')
+    const surface = document.createElement('div')
+    document.body.append(chrome, surface)
+    const channel: SessionChannel = { announce: vi.fn(), close: vi.fn(), subscribe: () => () => {} }
+    await act(async () => {
+      stop = startHistoryPreview({ chrome, surface, pathname: historyPreviewPagePath(DOC, item.id), channel })
+    })
+    await screen.findByRole('alert')
+    expect(surface.hidden).toBe(true)
+    expect(sdk.create).not.toHaveBeenCalled()
+  })
+
   it.each(['signed-out', 'changed-user'])('周期确认身份 %s 时清掉原预览，停止后的计时器不再读取', async (outcome) => {
     let tick = () => {}
     // 只截取宿主使用的无参数浏览器回调，避免 Node 重载与 DOM TimerHandler 的宽泛 Function 类型。
@@ -39,6 +57,7 @@ describe('US-M5-10 独立预览实际组装', () => {
     const detail = `GET /api/documents/${DOC}/history/${item.id}`
     const api = installFakeApi({
       'GET /api/auth/session': () => json(200, HISTORY_SESSION),
+      'GET /api/auth/session/check': () => json(200, HISTORY_SESSION),
       [detail]: () => json(200, item),
       [`${detail}/content`]: () => new Response('{}'),
     })
@@ -56,7 +75,7 @@ describe('US-M5-10 独立预览实际组装', () => {
     await act(async () => tick())
     expect(api.requests).toHaveLength(before)
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
-    api.on('GET /api/auth/session', () => outcome === 'signed-out'
+    api.on('GET /api/auth/session/check', () => outcome === 'signed-out'
       ? apiError(401, 'UNAUTHENTICATED')
       : json(200, { ...HISTORY_SESSION, user: { ...HISTORY_SESSION.user, id: '0199a2c4-0000-7000-8000-0000000000b1' } }))
     await act(async () => tick())
@@ -74,14 +93,20 @@ describe('US-M5-10 独立预览实际组装', () => {
     expect(channel.close).toHaveBeenCalledTimes(1)
   })
 
-  it('只以 read 创建 SDK；可见性、会话消息会重新确认，撤权隐藏正文；没有编辑租约或保存请求', async () => {
+  it.each(['小写', '大写', '混合大小写'])('%s地址只以 read 创建 SDK；可见性、会话消息会重新确认，撤权隐藏正文；没有编辑租约或保存请求', async (casing) => {
     const item = historyItem()
     const detail = `GET /api/documents/${DOC}/history/${item.id}`
     const api = installFakeApi({
       'GET /api/auth/session': () => json(200, HISTORY_SESSION),
+      'GET /api/auth/session/check': () => json(200, HISTORY_SESSION),
       [detail]: () => json(200, item),
       [`${detail}/content`]: () => new Response('{"history":true}'),
     })
+    const documentId = casing === '大写' ? DOC.toUpperCase() : DOC
+    const historyId = casing === '小写' ? item.id : item.id.toUpperCase()
+    const requestedDetail = `GET /api/documents/${documentId}/history/${historyId}`
+    api.on(requestedDetail, () => json(200, item))
+    api.on(`${requestedDetail}/content`, () => new Response('{"history":true}'))
     let message = () => {}
     const channel: SessionChannel = { announce: vi.fn(), close: vi.fn(), subscribe: (listener) => {
       message = listener
@@ -91,7 +116,7 @@ describe('US-M5-10 独立预览实际组装', () => {
     const surface = document.createElement('div')
     document.body.append(chrome, surface)
     await act(async () => {
-      stop = startHistoryPreview({ chrome, surface, pathname: historyPreviewPagePath(DOC, item.id), channel })
+      stop = startHistoryPreview({ chrome, surface, pathname: historyPreviewPagePath(documentId, historyId), channel })
     })
     await waitFor(() => expect(surface.dataset.editorState).toBe('ready'))
     expect(sdk.create).toHaveBeenCalledWith(expect.objectContaining({ access: 'read', container: surface, snapshot: '{"history":true}' }))

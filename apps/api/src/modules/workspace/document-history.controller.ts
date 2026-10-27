@@ -48,6 +48,7 @@ export class DocumentHistoryController {
   }
 
   @Get(':historyId/content')
+  @BackgroundRequest()
   @UseInterceptors(HistoryContentInterceptor)
   async content(
     @CurrentPrincipal() principal: Principal,

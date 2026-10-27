@@ -46,6 +46,13 @@ describe('打开自检失败的上报（请求体，严格）', () => {
     expect(openCheckReportSchema.parse(REPORT)).toEqual(REPORT)
   })
 
+  it('超过失败清单上限时直接拒绝，不为每个无效元素展开错误（GHSA-mrhx-c7xc-m3w5）', () => {
+    const result = openCheckReportSchema.safeParse(report({ failures: Array.from({ length: 33 }, () => ({})) }))
+    expect(result.success).toBe(false)
+    expect(result.error?.issues).toMatchObject([{ code: 'too_big', path: ['failures'] }])
+    expect(result.error?.issues).toHaveLength(1)
+  })
+
   it('打开方式与起因的枚举：每一种都合法', () => {
     for (const access of ['read', 'edit'])
       expect(openCheckReportSchema.safeParse(report({ access })).success, access).toBe(true)

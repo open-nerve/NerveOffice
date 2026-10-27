@@ -9,15 +9,16 @@ export interface PreviewEditor {
   readonly usable: boolean
   readonly dispose: () => Promise<void>
 }
+type PreviewActivity = 'user' | 'background'
 export interface PreviewDependencies {
-  readonly session: (signal: AbortSignal) => Promise<SessionResponse>
+  readonly session: (signal: AbortSignal, activity: PreviewActivity) => Promise<SessionResponse>
   readonly detail: (signal: AbortSignal) => Promise<DocumentHistoryDetail>
   readonly content: (signal: AbortSignal) => Promise<string>
   readonly mount: (snapshot: string, images: SessionImageAccessController, metadata: DocumentHistoryDetail) => Promise<PreviewEditor>
   readonly adopt: (session: SessionResponse | undefined) => void
 }
 export interface HistoryPreviewController {
-  readonly refresh: () => Promise<void>
+  readonly refresh: (activity?: PreviewActivity) => Promise<void>
   readonly view: () => PreviewState
   readonly subscribe: (listener: () => void) => () => void
   readonly dispose: () => Promise<void>
@@ -62,8 +63,8 @@ export function createHistoryPreview(deps: PreviewDependencies): HistoryPreviewC
     publish(next)
     await retire()
   }
-  async function authorize(token: number, signal: AbortSignal) {
-    const session = await deps.session(signal)
+  async function authorize(token: number, signal: AbortSignal, activity: PreviewActivity = 'background') {
+    const session = await deps.session(signal, activity)
     if (!current(token))
       return undefined
     if (images !== undefined && images.owner !== session.user.id) {
@@ -81,7 +82,7 @@ export function createHistoryPreview(deps: PreviewDependencies): HistoryPreviewC
     }
     return { session, history }
   }
-  async function refresh(): Promise<void> {
+  async function refresh(activity: PreviewActivity = 'user'): Promise<void> {
     if (disposed || ended)
       return
     const token = ++generation
@@ -92,7 +93,7 @@ export function createHistoryPreview(deps: PreviewDependencies): HistoryPreviewC
     images?.suspend()
     publish({ kind: 'loading' })
     try {
-      let access = await authorize(token, signal)
+      let access = await authorize(token, signal, activity)
       if (access === undefined || !current(token))
         return
       if (editor === undefined) {
