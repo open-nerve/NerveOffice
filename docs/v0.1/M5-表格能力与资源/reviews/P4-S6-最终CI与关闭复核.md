@@ -153,3 +153,16 @@ lsof 原错误未被旧实现保存。目前补充最多 4 KiB 标准错误、�
 轻型 Linux 进程契约的第二轮通过：沿用相同输入与资源限制，改由同 UID 的 `docker exec -i tar` 向既有 `/tmp` tmpfs 写入源码，避免 Docker archive API 对只读根的拒绝；只读根、禁用网络、无宿主挂载、32 MiB tmpfs、1 CPU/512 MiB、90 秒外层限制均保持。原生 arm64 Node 24.21 的 12/12 契约通过，无跳过/失败，前后源码与包字节一致，容器已删除且本轮受管清理完成。它覆盖进程监督协议，不覆盖 branded 浏览器或未知 lsof 原因。回执为 `s6/ci-resource-path-fix/linux-process-contract/receipt-92fca34e-5ef4-4e9e-a545-41c402ba60bb.json`。
 
 最终四文件检查点独立审查为 0 C/I/M，精确绑定 r2 的 19 项回归、静态检查和清理回执；受控慢启动 RED 的旧 preload 为顶层 await，有限延迟语义已核对。该复现说明夹具对启动时序的脆弱性，仍不宣称已证明历史 CI 当时的所有根因。独立回执为 `s6/ci-resource-path-fix/checkpoint-independent-review.json`。
+
+
+### lsof 查询完整性复核（仍未开始 full12/container02）
+
+`e78d1fa1` 已正常提交短路径、进程监督与检查点同步修复；主目录/远端仍为 main@1277dcb9。后续 lsof 增量尚未提交。实际小型 Linux 对照证实：普通用户会缺其他 UID 的 fd；隔离容器中的 root 也不自动拥有跨 UID 查询能力。带唯一 SYS_PTRACE 能力的独立、无宿主挂载容器可看到两 UID 自制文件/socket；该证明不覆盖宿主机其他 mount/net namespace，不能直接等价于 GitHub 托管主机。
+
+真实 `-F pfnt` 的进一步回放揭示 `anon_inode:[io_uring] (stat: No such file or directory)` 假阳性。已知自有 PID 的直接 stat 同样 ENOENT；内核 `anon_inode_create_getfile("[io_uring]", ...)` 和 lsof4.95 的 `mem`/`S_IFREG` 回退与原件相符。修复只接受 Linux、mem、REG 与完整精确匿名名称/错误组合；其他 stat 错误继续拒绝。独立审查同时发现仅返回 `protocol: UNIX` 的未解析 socket、path inode/dev 不一致注解曾被遗漏，现同组拒绝，不因路径看似在本轮目录外就当作完整。
+
+r2 的 RED 为6个方法中的8个预期断言失败、0 errors；目标23/23与全套76/76通过。三轮均已清理 scratch 和短根，7份源码前后指纹一致。原件索引为 `s6/ci-resource-path-fix/lsof-query-fix-r2/delivery.json`（SHA-256 `1d6ea9c6060969b29c453fa791457ff1b75b45cc494c19315e0bf72e66cd3b58`）。随后真实 Linux 全流回放已执行：io_uring 误拒消失，两 UID 自制文件/socket 活动时可见、关闭后均消失，但 root 输出仍含 PID 1 的一条 mem 映射身份冲突，整体退出1，未被接受。该条未保存具体路径/值，不猜测其底层原因、不加入豁免。原件 `linux-lsof-capability/receipt-891759f1-d73f-47a0-b035-ae5c3ead4af5.json` 的 SHA-256 为 `cfb4d65ffa21699c86c376d7ddedd7e2797601962f6e2b7232e792d03e014f14`；6.75秒结束、容器删除且受管 cleanupStage=complete，前后解析器和协议源码一致。不得将这些局部正例改写成全流或 CI 成功。
+
+另已确认设计约束：lsof4.95 的 maps stat 使用调用者路径视图，socket 表只取调用者 `/proc/net/`，因此 sudo 本身不能消除其他 namespace 的歧义。CI 的独立 PostgreSQL 服务可能因此触发保守阻断。尚在收敛对已登记隔离服务的可达性证明，未加入任意 PID/容器豁免。原五项失败、新完整门禁、新同 SHA CI、最终关闭继续待验；未启动 full12/container02 或 P5。
+
+新版外部来源/推送/关闭工具已独立审查，34项轻型契约与真实小 Git/blob/模式样本通过，0 C/I/M；12轮实现样例与2轮独立样例清理完成。工具审查回执在 `s6/p4-round-v2-tests/independent-review.json`。真实门禁前必须在 clean 的固定提交上分别采集 capture-before，结束后 capture-after；没有预签真实结果、binding、推送或关闭回执。

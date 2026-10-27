@@ -8,6 +8,7 @@
 - 使用已接入的 `pnpm test:e2e`、`test:e2e:container`、`test:integration`、`test:coverage` 及 E2E 包的测量、模板和 Safari 命令。手工执行测试也须经 `python3 tools/test-resources/run.py <类型> -- <命令>`；只读列举 `--list` 除外。
 - 本轮资源只放运行器提供的 `NERVE_TEST_SCRATCH` 和 `TMPDIR`（VM SSH 使用同轮预登记的 `NERVE_TEST_SHORT_ROOT`）；必要报告放 `NERVE_TEST_OUTPUT_DIR`。先登记后启动资源，VM 的准备、克隆与重启实验必须在同一轮受管命令中。不得认领外部已有 VM 或个人浏览器资料。
 - 浏览器临时目录继承运行器的短 `TMPDIR/TMP/TEMP`，不得在测试入口重新拼成长路径。真实内容仍属于本轮 `scratch/tmp`；短目录和唯一别名同轮登记，清理及诊断快照前同时核对真实目录与短目录。已有目录、被替换的别名、句柄查询异常一律保留并报出有界原因；不能用忽略 lsof 告警代替核验。
+- lsof 必须先核对完整 `p/f/n/t` 输出中的不可见记录，再筛选受管路径；`NOFD`、逐 FD 读链/目录/状态查询失败不能因退出 0 或 stderr 为空而放行。只有 CI 显式设置 `NERVE_TEST_LSOF_MODE=github-ubuntu-sudo` 且符合 GitHub 托管 Ubuntu 24.04/Linux 上下文时，才允许固定的 `/usr/bin/sudo -n -- /usr/bin/lsof` 只读查询；本机不自动提权，不接受自定义 root 命令，root 查询仍须完整核验。
 - 成功立即释放临时环境；失败完整浏览器资料最长 7 天、每轮 256 MiB、合计 2 GiB。便携诊断只导出日志/配置/崩溃记录，单文件 4 MiB、单用例 16 MiB、每轮 64 MiB。JSON/HTML、trace、截图及 OPFS 证明按报告策略保存。
 - 普通报告最多保留 14 天、每个 worktree 合计 5 GiB；新登记的本地门禁 bulk 归档另设 14 天/5 GiB 上限。最终审查通过的唯一证据须显式 pin 并记录理由。源码快照、补丁、摘要与索引不按垃圾回收。
 - 重新启动会检查登记清单、文件锁、进程组和打开句柄；归属不清、句柄检查失败、仍有写入者的资源保留并报告。不得凭文件名、时间或 PID 单项依据批量删除。`pnpm test:cleanup` 可重复运行，但不能代替调查未登记旧材料。

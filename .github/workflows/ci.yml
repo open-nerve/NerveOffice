@@ -46,6 +46,8 @@ jobs:
           --health-retries 30
     env:
       CI: 'true'
+      # 仅托管 Ubuntu 24.04 的固定只读 lsof 查询提权；运行器及测试仍使用普通用户。
+      NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
       NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
     steps:
       - name: 检出代码
@@ -113,6 +115,7 @@ jobs:
           --health-retries 30
     env:
       CI: 'true'
+      NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
       NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
       E2E_BROWSERS: ${{ matrix.browser }}
     steps:
@@ -218,6 +221,7 @@ jobs:
     timeout-minutes: 45
     env:
       CI: 'true'
+      NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
     steps:
       - name: 检出代码
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

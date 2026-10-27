@@ -9,6 +9,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import tempfile
 import uuid
@@ -109,30 +110,122 @@ def group_alive(group):
         return True
 
 
+def lsof_query_command():
+    mode = os.environ.get("NERVE_TEST_LSOF_MODE", "direct")
+    if mode == "direct":
+        return [shutil.which("lsof") or "/usr/sbin/lsof", "-nP", "-F", "pfnt"]
+    if mode != "github-ubuntu-sudo":
+        raise ValueError("unsupported-lsof-mode")
+    required = {"CI": "true", "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux"}
+    if sys.platform != "linux" or any(os.environ.get(key) != value for key, value in required.items()):
+        raise ValueError("ineligible-lsof-sudo-context")
+    release = Path("/etc/os-release").read_text(encoding="utf-8")
+    if not re.search(r'^ID=(?:ubuntu|"ubuntu")$', release, re.M) or not re.search(r'^VERSION_ID=(?:24\.04|"24\.04")$', release, re.M):
+        raise ValueError("ineligible-lsof-sudo-os")
+    # Only this read-only system binary is elevated, never the runner or a PATH-selected command.
+    return ["/usr/bin/sudo", "-n", "--", "/usr/bin/lsof", "-nP", "-F", "pfnt"]
+
+
+def lsof_incomplete_records(output):
+    """Validate p/f/t/n before filtering; names may contain lsof errors, not paths."""
+    pid = descriptor = name = file_type = None
+    process_has_file = False
+    count, samples = 0, []
+    def problem(reason, operation=None):
+        nonlocal count
+        count += 1
+        if len(samples) < 16:
+            samples.append({"pid": pid, "fd": descriptor, "reason": reason, "operation": operation})
+    def finish_file():
+        if descriptor is None:
+            return
+        if descriptor == "NOFD":
+            problem("NOFD", "opendir")
+        elif name is None:
+            problem("missing-name-field")
+        elif name == "":
+            # Actual Darwin records for these non-vnode objects have empty names.
+            # Never apply this rule to filesystem files, UNIX sockets or unknown types.
+            if sys.platform != "darwin" or file_type not in ("PIPE", "NPOLICY", "NEXUS"):
+                problem("missing-name")
+        else:
+            error = re.search(r'(?:\(|\s)(readlink|opendir|stat|lstat):[^\n]*\)$', name)
+            if error:
+                # lsof 4.95 stats this Linux pseudo name as a pathname. It is
+                # an io_uring anonymous mapping, not an unresolved filesystem path.
+                known_anonymous_map = (sys.platform == "linux" and descriptor == "mem" and file_type == "REG"
+                                       and name == "anon_inode:[io_uring] (stat: No such file or directory)")
+                if not known_anonymous_map:
+                    problem("inspection-error", error[1])
+            elif name.startswith(("can't identify protocol", "socket:[", "protocol:")):
+                problem("unresolved-socket")
+            elif re.search(r" \(path (?:dev|inode)=[^\n]*\)$", name):
+                problem("mapping-identity-mismatch", "stat")
+    for line in output.splitlines():
+        field, value = line[:1], line[1:]
+        if field == "p":
+            finish_file()
+            if pid is not None and not process_has_file:
+                problem("process-without-file")
+            pid = int(value) if re.fullmatch(r"[0-9]{1,10}", value) else None
+            descriptor = name = file_type = None
+            process_has_file = False
+            if pid is None:
+                problem("invalid-pid")
+        elif field == "f":
+            finish_file()
+            descriptor = value if re.fullmatch(r"(?:[0-9]{1,10}|[A-Za-z][A-Za-z0-9_-]{0,31})", value) else None
+            name = file_type = None
+            process_has_file = True
+            if pid is None or descriptor is None:
+                problem("invalid-file-context")
+        elif field == "t":
+            if pid is None or descriptor is None or file_type is not None or not re.fullmatch(r"[A-Za-z0-9_-]{1,16}", value):
+                problem("invalid-type-context")
+            file_type = value
+        elif field == "n":
+            if pid is None or descriptor is None or name is not None or "\0" in value:
+                problem("invalid-name-context")
+            name = value
+        else:
+            problem("unexpected-field")
+    finish_file()
+    if pid is None or not process_has_file:
+        problem("incomplete-process-set")
+    return count, samples
+
+
 def open_paths(root):
-    executable = shutil.which("lsof") or "/usr/sbin/lsof"
-    command = [executable, "-nP", "-F", "n"]
+    command = []
     started = time.monotonic()
-    def incomplete(returncode=None, stderr=b"", timed_out=False, error_number=None):
+    def incomplete(returncode=None, stderr=b"", timed_out=False, error_number=None, reason=None, records=(0, ())):
         raw = stderr.encode("utf-8", errors="replace") if isinstance(stderr, str) else (stderr or b"")
         details = {"operation": "lsof-open-paths", "root": str(root), "argv": command,
                    "returncode": returncode, "timedOut": timed_out, "errno": error_number,
+                   "reason": reason, "incompleteRecordCount": records[0], "incompleteRecords": records[1],
+                   "incompleteRecordsTruncated": records[0] > len(records[1]),
                    "durationMs": round((time.monotonic() - started) * 1000),
                    "stderr": raw[:4096].decode("utf-8", errors="replace"),
                    "stderrBytes": len(raw), "stderrTruncated": len(raw) > 4096}
         return RuntimeError("无法完整核对打开文件；保留资源：" + json.dumps(details, ensure_ascii=False))
     try:
-        result = subprocess.run(command, capture_output=True, timeout=30)
+        command = lsof_query_command()
+        result = subprocess.run(command, capture_output=True, timeout=30, env=dict(os.environ, LC_ALL="C"))
+    except ValueError as error:
+        raise incomplete(reason=str(error)) from None
     except subprocess.TimeoutExpired as error:
         raise incomplete(stderr=error.stderr, timed_out=True) from None
     except OSError as error:
         raise incomplete(error_number=error.errno) from None
     if result.returncode not in (0, 1) or result.stderr:
         raise incomplete(result.returncode, result.stderr)
+    output = os.fsdecode(result.stdout)
+    records = lsof_incomplete_records(output)
+    if records[0]:
+        raise incomplete(result.returncode, result.stderr, records=records)
     canonical = str(root.resolve())
     def inside(name):
         return name == canonical or name.startswith(canonical + "/")
-    output = os.fsdecode(result.stdout)
     found = set()
     for line in output.splitlines():
         if not line.startswith("n/"):

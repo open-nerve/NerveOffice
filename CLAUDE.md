@@ -6,7 +6,7 @@
 
 S6 提交 `e49ee5f1` 后，只读配置探针的独立运行修复已提交为 `d161a629`，正常 no-ff 合并为 `main@1277dcb9` 并正常推送成功。该 SHA 的 CI 40525146257 最终为 1 成功、5 失败，**P4 尚未关闭，P5 尚未开始**：Chrome/Edge 因受管 TMPDIR 过长无法建立 SingletonSocket；verify 的 SIGKILL 夹具在隐式 1 秒等待内未到达持锁检查点；Chromium/WebKit 已执行用例全部通过，但 lsof 清理核对失败且未上传完整报告。旧代码没有保留 lsof 具体错误，不能认定其根因或豁免验收。
 
-当前修复留在原 P4 分支：受管短路径及严格归属/双路径句柄核对、启动前清理能力检查、有界进程/查询诊断、Linux 合法 t 状态解析、检查点精确持锁者协调。已通过 Python 57 项、监督相关 TypeScript 70 项与最终检查点 19 项定向回归；这些不替代新输入完整门禁与同 SHA CI。下一步完成独立复核、串行完整 verify/生产容器、正常提交/no-ff/推送并验收新 SHA 六项 CI；冻结和清理唯一 P4 分支/worktree 后才进入 P5 CSV。Linux 浏览器本地安装探针未进入测试，其共享 Docker 虚拟机的约 345 MB 已删除文件句柄单独待回收，不重启其他项目正在使用的 Docker。事实及证据见 `reviews/P4-S6-最终CI与关闭复核.md` 和主目录 `.codex/handoffs/m5-p4-20261022/progress.json`。Excel、Safari/Finder，以及 M4 DEF-073/UR-035、完整验收与标签继续挂账。
+当前修复留在原 P4 分支：受管短路径及严格归属/双路径句柄核对、启动前清理能力检查、有界进程/查询诊断、Linux 合法 t 状态解析、检查点精确持锁者协调。短路径/进程/检查点修复已提交为 `e78d1fa1`。后续 lsof 记录解析增量尚未提交，已通过 Python 76 项、监督相关 TypeScript 70 项与最终检查点 19 项定向回归；这些不替代新输入完整门禁与同 SHA CI。当前先收敛 Linux 跨 mount/net namespace 的查询完整性，不能仅靠 sudo 或忽略未知错误；full12/container02 尚未启动。随后正常提交、采集门禁前来源、串行完整 verify/生产容器、正常 no-ff/推送并验收新 SHA 六项 CI；冻结和清理唯一 P4 分支/worktree 后才进入 P5 CSV。Linux 浏览器本地安装探针未进入测试，其共享 Docker 虚拟机的约 345 MB 已删除文件句柄单独待回收，不重启其他项目正在使用的 Docker。事实及证据见 `docs/v0.1/M5-表格能力与资源/reviews/P4-S6-最终CI与关闭复核.md` 和主目录 `.codex/handoffs/m5-p4-20261022/progress.json`。Excel、Safari/Finder，以及 M4 DEF-073/UR-035、完整验收与标签继续挂账。
 
 ## 先读
 

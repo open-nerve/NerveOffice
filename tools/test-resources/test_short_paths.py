@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from lifecycle import Store, open_paths
+from lifecycle import Store, lsof_incomplete_records, open_paths
 from run import evidence_snapshot
 
 
@@ -294,7 +294,7 @@ class ShortPathTests(unittest.TestCase):
         runner = Path(__file__).with_name("run.py")
         try:
             result = subprocess.run([sys.executable, "-B", str(runner), "--repo", str(self.repo), "sample", "--", sys.executable, "-c", "pass"],
-                                    env=dict(os.environ, PATH=str(self.repo) + os.pathsep + os.environ.get("PATH", "")),
+                                    env=dict(os.environ, NERVE_TEST_LSOF_MODE="direct", PATH=str(self.repo) + os.pathsep + os.environ.get("PATH", "")),
                                     capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 1)
         finally:
@@ -403,6 +403,187 @@ class HandleDiagnosticTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def assert_incomplete_query_preserves(self, output, expected):
+        run = self.store.create("sample")
+        marker = run.scratch / "keep"; marker.write_text("owned")
+        answer = subprocess.CompletedProcess(["lsof"], 0, output, b"")
+        with patch.dict(os.environ, {}, clear=True), patch("lifecycle.subprocess.run", return_value=answer):
+            result = run.finish("passed")
+        self.assertEqual(result["status"], "cleanup-pending")
+        self.assertEqual(marker.read_text(), "owned")
+        self.assertIn(expected, result["cleanupError"])
+        self.assertNotIn("GLOBAL-STDOUT-SECRET", result["cleanupError"])
+        self.assertLess(len(result["cleanupError"].encode()), 10000)
+        return result["cleanupError"]
+
+    def test_nofd_outside_owned_root_is_incomplete_even_with_zero_exit(self):
+        self.assert_incomplete_query_preserves(
+            b"p156\nfNOFD\nn/proc/156/fd (opendir: Permission denied)\n", "NOFD")
+
+    def test_per_fd_readlink_failure_is_incomplete_without_nofd_or_stderr(self):
+        self.assert_incomplete_query_preserves(
+            b"p144\nf20\nn/proc/144/fd/20 (readlink: Permission denied)\n", "readlink")
+
+    def test_proc_errors_and_exit_races_are_not_ignored(self):
+        for descriptor, name, operation in [
+            ("cwd", "/proc/144/cwd (readlink: Permission denied)", "readlink"),
+            ("rtd", "/proc/144/task/145/root (readlink: No such file or directory)", "readlink"),
+            ("20", "/other/GLOBAL-STDOUT-SECRET (stat: Permission denied)", "stat"),
+            ("20", "/other/GLOBAL-STDOUT-SECRET lstat: No such file or directory)", "lstat"),
+        ]:
+            with self.subTest(descriptor=descriptor, operation=operation):
+                self.assert_incomplete_query_preserves(
+                    f"p144\nf{descriptor}\nn{name}\n".encode(), operation)
+
+    def test_linux_io_uring_mapping_is_known_nonfilesystem_name(self):
+        output = b"p145\nfmem\ntREG\nnanon_inode:[io_uring] (stat: No such file or directory)\n"
+        answer = subprocess.CompletedProcess(["lsof"], 0, output, b"")
+        with self.configured_query({}, answer=answer):
+            self.assertEqual(lsof_incomplete_records(output.decode()), (0, []))
+            self.assertEqual(open_paths(self.repo), [])
+
+    def test_io_uring_mapping_does_not_hide_owned_paths(self):
+        names = [str(self.repo / "held.txt"), str(self.repo / "held.sock") + " type=STREAM"]
+        output = ("p145\nfmem\ntREG\nnanon_inode:[io_uring] (stat: No such file or directory)\n"
+                  + f"f20\ntREG\nn{names[0]}\nf22\ntunix\nn{names[1]}\n").encode()
+        answer = subprocess.CompletedProcess(["lsof"], 0, output, b"")
+        with self.configured_query({}, answer=answer):
+            self.assertEqual(lsof_incomplete_records(output.decode()), (0, []))
+            self.assertEqual(open_paths(self.repo), sorted(names))
+
+    def test_io_uring_lookalikes_and_other_contexts_remain_incomplete(self):
+        exact = "anon_inode:[io_uring] (stat: No such file or directory)"
+        cases = [(platform, "mem", "REG", exact) for platform in ("darwin", "freebsd")]
+        cases += [("linux", fd, "REG", exact) for fd in ("20", "txt", "MEM")]
+        cases += [("linux", "mem", kind, exact) for kind in ("a_inode", "DIR", "unix", "REGULAR", None)]
+        cases += [("linux", "mem", "REG", name) for name in (
+            "/absolute/path/" + exact, "./" + exact,
+            exact.replace("[io_uring]", "[eventpoll]"), exact.replace("[io_uring]", "[io_uring_extra]"),
+            exact.replace("No such file or directory", "Permission denied"),
+            exact.replace("No such file or directory", "Input/output error"),
+            exact.replace("stat:", "lstat:"), exact.replace("stat:", "readlink:"),
+        )]
+        for platform, descriptor, kind, name in cases:
+            type_field = f"t{kind}\n" if kind is not None else ""
+            output = f"p145\nf{descriptor}\n{type_field}n{name}\n".encode()
+            with self.subTest(platform=platform, descriptor=descriptor, kind=kind, name=name), patch("sys.platform", platform):
+                self.assert_incomplete_query_preserves(output, "inspection-error")
+
+    def test_io_uring_mapping_does_not_hide_other_incomplete_records(self):
+        output = (b"p145\nfmem\ntREG\nnanon_inode:[io_uring] (stat: No such file or directory)\n"
+                  b"p157\nfNOFD\nn/proc/157/fd (opendir: Permission denied)\n")
+        with patch("sys.platform", "linux"):
+            self.assert_incomplete_query_preserves(output, "NOFD")
+
+    def test_protocol_only_socket_fallback_preserves_resources(self):
+        for protocol in ("UNIX", "UNKNOWN", "TCP"):
+            with self.subTest(protocol=protocol):
+                self.assert_incomplete_query_preserves(
+                    f"p144\nf20\ntsock\nnprotocol: {protocol}\n".encode(), "unresolved-socket")
+
+    def test_mapping_identity_mismatches_preserve_resources(self):
+        for annotation in ("(path inode=42)", "(path dev=8,1)", "(path dev=8,1,inode=42)"):
+            with self.subTest(annotation=annotation):
+                self.assert_incomplete_query_preserves(
+                    f"p144\nfmem\ntREG\nn/other/GLOBAL-STDOUT-SECRET {annotation}\n".encode(),
+                    "mapping-identity-mismatch")
+
+    def test_malformed_or_unresolved_records_never_mean_no_handles(self):
+        for output in (b"", b"p123\nf3\n", b"p123\nn/elsewhere\n", b"pbad\nf3\nn/elsewhere\n",
+                       b"p123\nf3\nn/elsewhere\nn/second\n", b"GLOBAL-STDOUT-SECRET\n",
+                       b"p123\nf3\nncan't identify protocol\n"):
+            with self.subTest(output=output):
+                self.assert_incomplete_query_preserves(output, "incompleteRecordCount")
+
+    def test_incomplete_record_diagnostics_are_bounded_and_normalized(self):
+        output = b"".join(f"p{pid}\nf20\nn/other/GLOBAL-STDOUT-SECRET (readlink: Permission denied)\n".encode() for pid in range(100, 164))
+        error = self.assert_incomplete_query_preserves(output, '"incompleteRecordCount": 64')
+        details = json.loads(error.split("：", 1)[1])
+        self.assertEqual(len(details["incompleteRecords"]), 16)
+        self.assertTrue(details["incompleteRecordsTruncated"])
+        self.assertEqual(details["incompleteRecords"][0]["pid"], 100)
+        self.assertEqual(details["incompleteRecords"][0]["fd"], "20")
+
+    def test_actual_mac_nonpath_types_may_have_empty_names(self):
+        # Observed in the real macOS stream; these are not vnode or UNIX socket types.
+        for kind in ("PIPE", "NPOLICY", "NEXUS"):
+            answer = subprocess.CompletedProcess(["lsof"], 0, f"p123\nf3\nt{kind}\nn\n".encode(), b"")
+            with self.subTest(kind=kind), self.configured_query({}, platform="darwin", answer=answer):
+                self.assertEqual(open_paths(self.repo), [])
+
+    def test_mac_nonpath_types_still_require_the_name_field(self):
+        for kind in ("PIPE", "NPOLICY", "NEXUS"):
+            answer = subprocess.CompletedProcess(["lsof"], 0, f"p123\nf3\nt{kind}\n".encode(), b"")
+            with self.subTest(kind=kind), self.configured_query({}, platform="darwin", answer=answer):
+                with self.assertRaises(RuntimeError):
+                    open_paths(self.repo)
+
+    def test_nameless_files_sockets_and_unknown_types_still_reject(self):
+        for kind in ("REG", "DIR", "unix", "UNKNOWN", "", "pipe", "PIPE-extra", "xNPOLICY", "NEXUS2"):
+            answer = subprocess.CompletedProcess(["lsof"], 0, f"p123\nf3\nt{kind}\nn\n".encode(), b"")
+            with self.subTest(kind=kind), self.configured_query({}, platform="darwin", answer=answer):
+                with self.assertRaises(RuntimeError):
+                    open_paths(self.repo)
+
+    def test_nonpath_name_rule_never_hides_errors_or_applies_to_linux(self):
+        for platform, name in (("darwin", "/proc/144/fd/20 (readlink: Permission denied)"), ("linux", "")):
+            answer = subprocess.CompletedProcess(["lsof"], 0, f"p144\nf20\ntPIPE\nn{name}\n".encode(), b"")
+            with self.subTest(platform=platform), self.configured_query({}, platform=platform, answer=answer):
+                with self.assertRaises(RuntimeError):
+                    open_paths(self.repo)
+
+    @contextlib.contextmanager
+    def configured_query(self, environment, platform="linux", release=None, answer=None):
+        if answer is None:
+            answer = subprocess.CompletedProcess(["lsof"], 0, b"p123\nf3\nn/elsewhere\n", b"")
+        options = {"side_effect": answer} if isinstance(answer, Exception) else {"return_value": answer}
+        release_text = "\n".join(key + "=" + value for key, value in (release or {"ID": "ubuntu", "VERSION_ID": "24.04"}).items())
+        with patch.dict(os.environ, environment, clear=True), patch("sys.platform", platform), \
+                patch("lifecycle.Path.read_text", return_value=release_text), \
+                patch("lifecycle.shutil.which", return_value="/local/bin/lsof"), \
+                patch("lifecycle.subprocess.run", **options) as query:
+            yield query
+
+    def github_query_environment(self):
+        return {"NERVE_TEST_LSOF_MODE": "github-ubuntu-sudo", "CI": "true", "GITHUB_ACTIONS": "true",
+                "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux"}
+
+    def test_explicit_github_ubuntu_mode_uses_only_fixed_noninteractive_lsof(self):
+        with self.configured_query(self.github_query_environment()) as query:
+            self.assertEqual(open_paths(self.repo), [])
+        self.assertEqual(query.call_args.args[0], ["/usr/bin/sudo", "-n", "--", "/usr/bin/lsof", "-nP", "-F", "pfnt"])
+        self.assertEqual(query.call_args.kwargs["env"]["LC_ALL"], "C")
+        self.assertEqual(query.call_args.kwargs["timeout"], 30)
+
+    def test_mac_and_ordinary_local_queries_never_automatically_elevate(self):
+        for platform in ("darwin", "linux"):
+            with self.subTest(platform=platform), self.configured_query({"CI": "true"}, platform=platform) as query:
+                self.assertEqual(open_paths(self.repo), [])
+                self.assertEqual(query.call_args.args[0], ["/local/bin/lsof", "-nP", "-F", "pfnt"])
+
+    def test_ci_mode_misuse_and_custom_commands_are_rejected_before_spawn(self):
+        eligible = self.github_query_environment()
+        cases = [({**eligible, key: value}, "linux", None) for key, value in [
+            ("CI", "false"), ("GITHUB_ACTIONS", "false"), ("RUNNER_ENVIRONMENT", "self-hosted"),
+            ("RUNNER_OS", "macOS"), ("NERVE_TEST_LSOF_MODE", "/tmp/custom-root-command")]]
+        cases += [(eligible, "darwin", None), (eligible, "linux", {"ID": "debian", "VERSION_ID": "12"}),
+                  (eligible, "linux", {"ID": "ubuntu", "VERSION_ID": "22.04"})]
+        for environment, platform, release in cases:
+            with self.subTest(environment=environment, platform=platform, release=release), \
+                    self.configured_query(environment, platform=platform, release=release) as query:
+                with self.assertRaises(RuntimeError):
+                    open_paths(self.repo)
+                query.assert_not_called()
+
+    def test_elevated_query_failures_and_incomplete_results_still_reject(self):
+        for answer in [subprocess.CompletedProcess(["sudo"], 1, b"", b"sudo: a password is required"),
+                       subprocess.CompletedProcess(["sudo"], 0, b"p144\nf20\nn/proc/144/fd/20 (readlink: Permission denied)\n", b""),
+                       subprocess.TimeoutExpired(["sudo"], 30, output=b"GLOBAL-STDOUT-SECRET")]:
+            with self.subTest(answer=type(answer).__name__), self.configured_query(self.github_query_environment(), answer=answer):
+                with self.assertRaises(RuntimeError) as caught:
+                    open_paths(self.repo)
+                self.assertNotIn("GLOBAL-STDOUT-SECRET", str(caught.exception))
+
     def test_failures_keep_bounded_diagnostics_and_never_global_stdout(self):
         for code in (0, 1, 2, -9):
             with self.subTest(code=code):
@@ -452,7 +633,7 @@ class HandleDiagnosticTests(unittest.TestCase):
         for suffix in ("", " (deleted)", " type=STREAM (CONNECTED)"):
             with self.subTest(suffix=suffix):
                 original = str(alias / "gone") + suffix
-                answer = subprocess.CompletedProcess(["lsof"], 0, "p123\nn" + original + "\n", "")
+                answer = subprocess.CompletedProcess(["lsof"], 0, "p123\nf3\nn" + original + "\n", "")
                 with patch("lifecycle.subprocess.run", return_value=answer):
                     self.assertEqual(open_paths(run.scratch), [original])
         run.release()

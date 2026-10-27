@@ -28,6 +28,10 @@
 
 清理和恢复证据快照在任何精简、移动、复制之前，先核对真实 scratch 与短根两处；活动 UNIX socket 可能被 lsof 显示为短别名，不能只检查真实目录。嵌套运行的别名还须解析回其实际目标核对。lsof 的返回码、标准错误（最多 4 KiB）、超时或启动错误留下有界诊断；无法完成检查仍拒绝清理，不忽略警告或把未知当空闲。容器 E2E 保留外层短临时目录，不在变量文件目录下再次覆盖 TMPDIR。
 
+查询明确请求 `-nP -F pfnt`，先校验整份 PID/FD/name/type 记录，再匹配受管路径。Linux 权限失败可能位于 stdout 的 `NOFD` 或 `/proc/PID/fd/N (readlink: …)` 等记录，即使退出 0、stderr 为空也不表示完整。`readlink/opendir/stat/lstat` 失败、未能识别的套接字（含仅有 `protocol:` 的记录）、映射的 path dev/inode 身份不一致及格式不完整均保留资源；不按 ENOENT 文本豁免退出竞争。唯一 Linux 匿名映射例外是 `mem`/`REG` 且名称精确为 `anon_inode:[io_uring] (stat: No such file or directory)`：内核创建的是匿名对象，lsof 4.95 把它当路径 stat 才产生该注解。路径前缀、其他描述符/类型、其他错误及其他平台均不适用。只保存不完整记录总数及最多 16 条固定字段诊断，不保存全局 stdout。实际 macOS 的 PIPE、NPOLICY、NEXUS 是非文件路径对象，可有显式的空 name 字段；仅在 Darwin 且类型精确相符时接受这种协议记录，整行 name 缺失仍拒绝。REG、DIR、UNIX socket、未知或相似拼写类型缺名仍保留，错误注解优先拒绝。
+
+普通运行使用直接查询。现有 GitHub Ubuntu 24.04 job 显式设置 `NERVE_TEST_LSOF_MODE=github-ubuntu-sudo`；运行器同时要求 Linux、`CI=true`、`GITHUB_ACTIONS=true`、`RUNNER_ENVIRONMENT=github-hosted`、`RUNNER_OS=Linux` 及 `/etc/os-release` 的 Ubuntu 24.04，才调用固定 `/usr/bin/sudo -n -- /usr/bin/lsof -nP -F pfnt`。没有自定义命令或自动提权回退，测试和清理程序仍为普通用户；提权失败、超时或输出不完整继续拒绝。GitHub 的[默认变量](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)及[托管 VM 权限](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges)说明这一明确 CI 上下文；这些环境检查并非宿主身份的密码学证明。隔离容器中的 root 可能仍缺少检查其他进程的能力，不能仅因 UID 为 0 就认定完整；PID/网络命名空间及实际可见性仍须由运行环境保证。
+
 启动命令前，运行器在资源登记完成后先执行同一套句柄与归属核对；查询警告、超时或启动失败时，子命令不会启动，错误与待回收状态会保存。查询期间收到 SIGINT/SIGTERM 也不再启动子命令。此预检避免清理能力已失效时仍运行长测，不能取代测试结束后的再次检查。
 
 相同 worktree 的报告发布口持锁，第二轮不会覆盖第一轮。不同 worktree 分别拥有管理根。测试程序继承独立 `TMPDIR/TMP/TEMP`；非 VM 子运行不继承父 VM 的短根授权；不改宿主机全局设置。开始前及运行中检查可用磁盘，低于 12 GiB 时停止本轮，不继续写满磁盘。控制台日志上限 32 MiB。
