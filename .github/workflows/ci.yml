@@ -46,6 +46,8 @@ jobs:
           --health-retries 30
     env:
       CI: 'true'
+      # 仅托管 Ubuntu 24.04 的固定只读 lsof 查询提权；运行器及测试仍使用普通用户。
+      NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
       NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
     steps:
       - name: 检出代码
@@ -71,6 +73,7 @@ jobs:
       - name: pnpm verify --ci --scope=no-e2e
         run: pnpm verify --ci --keep-going --scope=no-e2e
         env:
+          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
           # 推送事件：迁移门禁拿推送之前的提交作基准，一次推送里的每个提交都在比较范围内；定时与手动触发时为空，门禁改用 HEAD^1
           GATE_MIGRATIONS_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
@@ -113,6 +116,7 @@ jobs:
           --health-retries 30
     env:
       CI: 'true'
+      NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
       NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
       E2E_BROWSERS: ${{ matrix.browser }}
     steps:
@@ -149,12 +153,16 @@ jobs:
       - name: pnpm verify --ci --scope=e2e
         timeout-minutes: 115
         run: pnpm verify --ci --keep-going --scope=e2e
+        env:
+          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
 
       - name: 确认本轮全部写入者退出（含外层终止后的恢复收尾）
         id: e2e-quiescence
         if: always() && steps.e2e-prepare.outcome == 'success'
         timeout-minutes: 17
         run: node tools/src/ci/e2e-cli.ts settle
+        env:
+          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
 
       - name: 核对原始 JSON 与 HTML 报告存在且完整
         id: e2e-report-check
@@ -218,6 +226,7 @@ jobs:
     timeout-minutes: 45
     env:
       CI: 'true'
+      NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
     steps:
       - name: 检出代码
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

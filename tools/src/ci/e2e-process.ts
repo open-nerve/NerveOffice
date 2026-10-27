@@ -7,6 +7,7 @@ import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
+import { failureStageSchema, inspectProcessOperation, processDiagnostic, processFailureSchema } from './e2e-diagnostics.ts'
 
 export const OWNER_VARIABLE = 'NERVE_TEST_CI_E2E_OWNER'
 export const CI_BUDGETS = { runMs: 90 * 60_000, cleanupMs: 15 * 60_000, forceMs: 60_000, pollMs: 250 }
@@ -86,7 +87,8 @@ export function parseProcessStat(text: string, uid: number): ProcessRow | undefi
   if (group === 0)
     return undefined
   const identity = identitySchema.parse({ pid, uid, group, start: fields[19] })
-  if (end < 0 || !/^[A-Z]$/.test(fields[0] ?? '') || !Number.isSafeInteger(Number(fields[1])))
+  // Linux 的 tracing stop 是小写 t（Crashpad/调试器暂停时），仍是有身份的活进程。
+  if (end < 0 || !/^[A-Zt]$/.test(fields[0] ?? '') || !Number.isSafeInteger(Number(fields[1])))
     throw new Error('Linux 进程身份格式无效')
   return { ...identity, parent: Number(fields[1]), state: fields[0] ?? '' }
 }
@@ -94,16 +96,17 @@ export function parseProcessStat(text: string, uid: number): ProcessRow | undefi
 function readProcess(pid: number, uid?: number): ProcessRow | undefined {
   try {
     const path = `/proc/${pid}/stat`
-    const actualUid = statSync(path).uid
+    const actualUid = inspectProcessOperation('stat-process', () => statSync(path).uid, pid)
     // 先过滤用户，不能让宿主内核线程（PGID=0）的不可发信号身份干扰本轮扫描。
     if (uid !== undefined && actualUid !== uid)
       return undefined
-    return parseProcessStat(readFileSync(path, 'utf8'), actualUid)
+    const text = inspectProcessOperation('read-process', () => readFileSync(path, 'utf8'), pid)
+    return inspectProcessOperation('parse-process', () => parseProcessStat(text, actualUid), pid)
   }
   catch (error) {
     if (absent(error))
       return undefined
-    throw new Error('无法读取 Linux 进程身份；不能宣告已无写入者')
+    throw error
   }
 }
 
@@ -120,7 +123,7 @@ function identity(row: Identity): Identity {
 }
 
 function scanOwned(owner: Owner, known: readonly Identity[]): Identity[] {
-  const rows = readdirSync('/proc').filter(name => /^\d+$/.test(name)).map(name => readProcess(Number(name), owner.uid)).filter((row): row is ProcessRow => row !== undefined)
+  const rows = inspectProcessOperation('list-processes', () => readdirSync('/proc')).filter(name => /^\d+$/.test(name)).map(name => readProcess(Number(name), owner.uid)).filter((row): row is ProcessRow => row !== undefined)
   const owned = new Map<number, ProcessRow>()
   for (const row of rows) {
     if (known.some(previous => same(previous, row))) {
@@ -128,14 +131,14 @@ function scanOwned(owner: Owner, known: readonly Identity[]): Identity[] {
       continue
     }
     try {
-      const environment = readFileSync(`/proc/${row.pid}/environ`)
+      const environment = inspectProcessOperation('read-environment', () => readFileSync(`/proc/${row.pid}/environ`), row.pid)
       if (environment.toString().split('\0').includes(`${OWNER_VARIABLE}=${owner.token}`))
         owned.set(row.pid, row)
     }
     catch (error) {
       // 非 dumpable 的同用户进程（例如系统代理）不可读；本轮已登记身份仍从上面的 known 识别。
       if (!absent(error) && !(error instanceof Error && 'code' in error && error.code === 'EACCES'))
-        throw new Error('无法扫描本轮 CI 进程')
+        throw error
     }
   }
   // 每个根都由 detached spawn 创建独占组。只扩展仍与本轮内核身份相连的组/后代，
@@ -161,11 +164,11 @@ function signal(target: Identity | undefined, value: NodeJS.Signals): void {
   if (!current || !live(current) || !same(current, target))
     return
   try {
-    process.kill(target.pid, value)
+    inspectProcessOperation('signal-process', () => process.kill(target.pid, value), target.pid)
   }
   catch (error) {
     if (!absent(error))
-      throw new Error('无法停止本轮 CI 进程')
+      throw error
   }
 }
 
@@ -308,6 +311,14 @@ export async function settleRun(directory: string, root: string): Promise<{ quie
   }
 }
 
+/** 只在原独占目录身份通过后记录故障；不同命令阶段各一份，恢复错误不覆盖启动错误。 */
+export function recordProcessFailure(directory: string, root: string, stage: string | undefined, error: unknown): void {
+  readOwner(directory, root)
+  const parsed = failureStageSchema.safeParse(stage)
+  const value = { at: Date.now(), stage: parsed.success ? parsed.data : 'unknown' as const, ...processDiagnostic(error) }
+  writeJson(directory, `failure-${value.stage}.json`, value)
+}
+
 /** 即使停止核验失败，也只上传一份独立静态快照，不能让上传器遍历仍在变化的运行目录。 */
 export function snapshotDiagnostics(directory: string, root: string): string {
   const owner = readOwner(directory, root)
@@ -327,6 +338,19 @@ export function snapshotDiagnostics(directory: string, root: string): string {
       if (value === undefined && (name === 'stop.json' || name === 'soft-stop.json'))
         continue
       snapshot[name] = schema.parse(value)
+    }
+    catch { unavailable.push(name) }
+  }
+  for (const stage of failureStageSchema.options) {
+    const name = `failure-${stage}.json`
+    try {
+      const value = readJson(directory, name)
+      if (value !== undefined) {
+        const failure = processFailureSchema.parse(value)
+        if (failure.stage !== stage)
+          throw new Error('故障记录阶段不符')
+        snapshot[name] = failure
+      }
     }
     catch { unavailable.push(name) }
   }

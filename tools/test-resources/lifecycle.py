@@ -7,10 +7,14 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
+import sys
 import time
 import tempfile
 import uuid
+
+import service_scope
 
 VERSION = 1
 MIB = 1024 ** 2
@@ -48,6 +52,19 @@ def atomic_json(path, value):
 
 def read_json(path):
     return json.loads(path.read_text())
+
+
+def read_run_manifest(path):
+    # Check the opened object, without following links or blocking on a FIFO.
+    # This does not grant a lease; callers still hold run.lock for authorization.
+    path = Path(path)
+    if path.parent.resolve() != path.parent.absolute():
+        raise ValueError("运行台账父目录不能经过链接")
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("运行台账必须是普通文件")
+        return json.load(stream)
 
 
 def contained(path, root):
@@ -108,16 +125,153 @@ def group_alive(group):
         return True
 
 
-def open_paths(root):
-    executable = shutil.which("lsof") or "/usr/sbin/lsof"
-    result = subprocess.run([executable, "-nP", "-F", "n"], capture_output=True,
-                            text=True, timeout=30)
+def lsof_query_command():
+    mode = os.environ.get("NERVE_TEST_LSOF_MODE", "direct")
+    if mode == "direct":
+        return [shutil.which("lsof") or "/usr/sbin/lsof", "-nP", "-F", "pfnt"]
+    if mode != "github-ubuntu-sudo":
+        raise ValueError("unsupported-lsof-mode")
+    required = {"CI": "true", "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux"}
+    if sys.platform != "linux" or any(os.environ.get(key) != value for key, value in required.items()):
+        raise ValueError("ineligible-lsof-sudo-context")
+    release = Path("/etc/os-release").read_text(encoding="utf-8")
+    if not re.search(r'^ID=(?:ubuntu|"ubuntu")$', release, re.M) or not re.search(r'^VERSION_ID=(?:24\.04|"24\.04")$', release, re.M):
+        raise ValueError("ineligible-lsof-sudo-os")
+    # Only this read-only system binary is elevated, never the runner or a PATH-selected command.
+    return ["/usr/bin/sudo", "-n", "--", "/usr/bin/lsof", "-nP", "-F", "pfnt"]
+
+
+def lsof_incomplete_records(output, service_pids=()):
+    """Validate p/f/t/n before filtering; names may contain lsof errors, not paths."""
+    pid = descriptor = name = file_type = None
+    process_has_file = False
+    count, samples = 0, []
+    def problem(reason, operation=None):
+        nonlocal count
+        count += 1
+        if len(samples) < 16:
+            samples.append({"pid": pid, "fd": descriptor, "reason": reason, "operation": operation})
+    def finish_file():
+        if descriptor is None:
+            return
+        if descriptor == "NOFD":
+            problem("NOFD", "opendir")
+        elif name is None:
+            problem("missing-name-field")
+        elif name == "":
+            # Actual Darwin records for these non-vnode objects have empty names.
+            # Never apply this rule to filesystem files, UNIX sockets or unknown types.
+            if sys.platform != "darwin" or file_type not in ("PIPE", "NPOLICY", "NEXUS"):
+                problem("missing-name")
+        else:
+            service_map = pid in service_pids and descriptor == "mem" and file_type == "REG" and name.startswith("/")
+            error = re.search(r'(?:\(|\s)(readlink|opendir|stat|lstat):[^\n]*\)$', name)
+            if error:
+                # lsof 4.95 stats this Linux pseudo name as a pathname. It is
+                # an io_uring anonymous mapping, not an unresolved filesystem path.
+                known_anonymous_map = (sys.platform == "linux" and descriptor == "mem" and file_type == "REG"
+                                       and name == "anon_inode:[io_uring] (stat: No such file or directory)")
+                if not known_anonymous_map and not (service_map and name.endswith(" (stat: No such file or directory)")):
+                    problem("inspection-error", error[1])
+            elif name.startswith(("can't identify protocol", "socket:[", "protocol:")):
+                if not (pid in service_pids and descriptor.isdigit() and file_type == "sock"
+                        and name in ("protocol: UNIX", "protocol: UNIX-STREAM", "protocol: TCP", "protocol: UDP",
+                                     "protocol: TCPv6", "protocol: UDPv6")):
+                    problem("unresolved-socket")
+            elif re.search(r" \(path (?:dev|inode)=[^\n]*\)$", name):
+                if not (service_map and re.search(r" \(path (?:dev=[0-9]+,[0-9]+(?:,\s*inode=[0-9]+)?|inode=[0-9]+)\)$", name)):
+                    problem("mapping-identity-mismatch", "stat")
+    for line in output.splitlines():
+        field, value = line[:1], line[1:]
+        if field == "p":
+            finish_file()
+            if pid is not None and not process_has_file:
+                problem("process-without-file")
+            pid = int(value) if re.fullmatch(r"[0-9]{1,10}", value) else None
+            descriptor = name = file_type = None
+            process_has_file = False
+            if pid is None:
+                problem("invalid-pid")
+        elif field == "f":
+            finish_file()
+            descriptor = value if re.fullmatch(r"(?:[0-9]{1,10}|[A-Za-z][A-Za-z0-9_-]{0,31})", value) else None
+            name = file_type = None
+            process_has_file = True
+            if pid is None or descriptor is None:
+                problem("invalid-file-context")
+        elif field == "t":
+            if pid is None or descriptor is None or file_type is not None or not re.fullmatch(r"[A-Za-z0-9_-]{1,16}", value):
+                problem("invalid-type-context")
+            file_type = value
+        elif field == "n":
+            if pid is None or descriptor is None or name is not None or "\0" in value:
+                problem("invalid-name-context")
+            name = value
+        else:
+            problem("unexpected-field")
+    finish_file()
+    if pid is None or not process_has_file:
+        problem("incomplete-process-set")
+    return count, samples
+
+
+def open_paths(root, owner=None):
+    command = []
+    started = time.monotonic()
+    def incomplete(returncode=None, stderr=b"", timed_out=False, error_number=None, reason=None, records=(0, ())):
+        raw = stderr.encode("utf-8", errors="replace") if isinstance(stderr, str) else (stderr or b"")
+        details = {"operation": "lsof-open-paths", "root": str(root), "argv": command,
+                   "returncode": returncode, "timedOut": timed_out, "errno": error_number,
+                   "reason": reason, "incompleteRecordCount": records[0], "incompleteRecords": records[1],
+                   "incompleteRecordsTruncated": records[0] > len(records[1]),
+                   "durationMs": round((time.monotonic() - started) * 1000),
+                   "stderr": raw[:4096].decode("utf-8", errors="replace"),
+                   "stderrBytes": len(raw), "stderrTruncated": len(raw) > 4096}
+        return RuntimeError("无法完整核对打开文件；保留资源：" + json.dumps(details, ensure_ascii=False))
+    try:
+        command = lsof_query_command()
+        proof = owner.service_proof(root) if isinstance(owner, Run) else None
+        if not os.environ.get(service_scope.SERVICE_ID):
+            proof = None
+        query = lambda timeout: subprocess.run(command, capture_output=True, timeout=timeout, env=dict(os.environ, LC_ALL="C"))
+        if proof is None:
+            result, service_pids = query(30), ()
+        else:
+            result, service_pids = service_scope.observe(proof, query)
+    except ValueError as error:
+        raise incomplete(reason=str(error)) from None
+    except subprocess.TimeoutExpired as error:
+        raise incomplete(stderr=error.stderr, timed_out=True) from None
+    except OSError as error:
+        raise incomplete(error_number=error.errno) from None
     if result.returncode not in (0, 1) or result.stderr:
-        raise RuntimeError("无法完整核对打开文件；保留资源")
-    prefix = str(root.resolve()) + "/"
-    return sorted({line[1:] for line in result.stdout.splitlines()
-                   if line.startswith("n") and
-                   (line[1:] == str(root.resolve()) or line[1:].startswith(prefix))})
+        raise incomplete(result.returncode, result.stderr)
+    output = os.fsdecode(result.stdout)
+    records = lsof_incomplete_records(output, service_pids=service_pids)
+    if records[0]:
+        raise incomplete(result.returncode, result.stderr, records=records)
+    canonical = str(root.resolve())
+    def inside(name):
+        return name == canonical or name.startswith(canonical + "/")
+    found = set()
+    for line in output.splitlines():
+        if not line.startswith("n/"):
+            continue
+        name = line[1:]
+        if inside(name):
+            found.add(name)
+            continue
+        # UNIX sockets may retain the path used at bind(), including a nested
+        # run's alias. Resolve only absolute pathname candidates; retain lsof's
+        # original text as evidence. Missing/deleted leaves still resolve parents.
+        plain = re.split(r" type=(?:STREAM|DGRAM|SEQPACKET)(?: |$)", name, maxsplit=1)[0]
+        plain = re.sub(r" \((?:deleted|revoked)\)$", "", plain)
+        try:
+            if any(inside(str(Path(candidate).resolve())) for candidate in {name, plain}):
+                found.add(name)
+        except (OSError, RuntimeError, ValueError):
+            raise RuntimeError("无法解析打开文件的路径别名；保留资源：" + str(root)) from None
+    return sorted(found)
 
 
 def check_opfs(profile):
@@ -350,10 +504,18 @@ class Store:
         # Manifest is durable before the scratch directory or any child exists.
         run.data = {"version": VERSION, "runId": identity, "repo": str(self.repo),
                     "kind": kind, "ownerPid": os.getpid(), "childGroup": None,
-                    "startedAt": time.time(), "status": "prepared"}
+                    "startedAt": time.time(), "status": "prepared", "serviceScope": None}
         run.persist()
-        run.scratch.mkdir(mode=0o700)
-        return run
+        try:
+            proof = service_scope.register(identity, self.repo, run.scope_roots())
+            run.update(serviceScope=proof, scopePaths={}, scopeMoves=[])
+            run.scratch.mkdir(mode=0o700)
+            run.remember_scope_path(run.scratch)
+            return run
+        except BaseException as error:
+            run.update(status="cleanup-pending", cleanupStage="creation-incomplete", cleanupError=str(error))
+            run.release()
+            raise
 
     def sweep(self, now=None):
         now = time.time() if now is None else now
@@ -371,7 +533,7 @@ class Store:
                 report["unknown"].append(directory.name)
                 continue
             try:
-                if run.scratch.exists() or run.data.get("cleanupStage") == "reports-collected" or run.data.get("status") == "prepared":
+                if run.scratch.exists() or run.data.get("cleanupStage") == "reports-collected" or run.data.get("status") in ("prepared", "cleanup-pending"):
                     if group_alive(run.data.get("childGroup")):
                         report["active"].append(run.id)
                     else:
@@ -392,7 +554,7 @@ class Store:
                 if directory.is_symlink() or not RUN_ID.fullmatch(directory.name):
                     continue
                 try:
-                    value = read_json(directory / "run.json")
+                    value = read_run_manifest(directory / "run.json")
                     if value["runId"] != directory.name or value["repo"] != str(self.repo):
                         continue
                 except (OSError, ValueError, KeyError):
@@ -421,11 +583,15 @@ class Store:
                     continue
                 try:
                     with contextlib.ExitStack() as locks:
-                        locks.enter_context(locked(directory / "run.lock", blocking=False))
+                        owner = Run(self, directory, existing=True)
+                        locks.callback(owner.release)
                         if published:
                             locks.enter_context(locked(self.root / "publication.lock", blocking=False))
-                        value = read_json(directory / "run.json")
-                        if value.get("status") not in ("passed", "failed", "interrupted") or group_alive(value.get("childGroup")) or open_paths(path):
+                        value = owner.data
+                        if published and (path.is_symlink() or read_json(path / "resource-run.json").get("runId") != owner.id
+                                          or str(path.relative_to(self.repo)) not in value.get("published", [])):
+                            continue
+                        if value.get("status") not in ("passed", "failed", "interrupted") or group_alive(value.get("childGroup")) or open_paths(path, owner=owner):
                             continue
                         remove(path, self.repo if published else self.root)
                         if published:
@@ -442,6 +608,9 @@ class Store:
 
 class Run:
     def __init__(self, store, directory, existing=False):
+        if (directory.parent != store.root / "runs" or not RUN_ID.fullmatch(directory.name)
+                or directory.is_symlink()):
+            raise ValueError("运行目录归属不符")
         self.store, self.directory, self.id = store, directory, directory.name
         self.scratch = directory / "scratch"
         self.lock = locked(directory / "run.lock", blocking=False)
@@ -450,7 +619,7 @@ class Run:
         self.data = {}
         if existing:
             try:
-                self.data = read_json(directory / "run.json")
+                self.data = read_run_manifest(directory / "run.json")
                 if self.data["version"] != VERSION or self.data["runId"] != self.id or self.data["repo"] != str(store.repo):
                     raise ValueError("运行归属不符")
                 if self.scratch.is_symlink():
@@ -470,48 +639,195 @@ class Run:
             self.lock.__exit__(None, None, None)
             self.released = True
 
+    def scope_roots(self):
+        short = Path("/tmp").resolve() / (("nerve-vm-" if self.data["kind"] == "vm" else "nerve-t-") + self.id)
+        return {"scratch": str(self.scratch), "short": str(short), "reports": str(self.directory / "reports"),
+                "failures": str(self.store.root / "failures" / self.id)}
+
+    def remember_scope_path(self, path):
+        if self.data.get("serviceScope") is not None:
+            path = Path(path)
+            if str(path) not in self.scope_roots().values():
+                raise ValueError("服务 scope 只登记本轮固定根")
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("服务 scope 根不是独占目录")
+            paths = dict(self.data["scopePaths"])
+            paths[str(path)] = {"device": info.st_dev, "inode": info.st_ino}
+            self.update(scopePaths=paths)
+
+    def scope_directory(self, path):
+        path = Path(path)
+        if self.data.get("serviceScope") is None:
+            path.mkdir(parents=True, exist_ok=True)
+        elif path.exists() or path.is_symlink():
+            if str(path) not in self.data.get("scopePaths", {}):
+                raise ValueError("服务 scope 不接管已有目录")
+            self.service_proof(path)
+        else:
+            if str(path) in self.data.get("scopePaths", {}):
+                raise ValueError("已登记的服务 scope 根消失，保留原归属")
+            path.mkdir(mode=0o700)
+            self.remember_scope_path(path)
+
+    def service_proof(self, root):
+        if self.released or read_run_manifest(self.directory / "run.json") != self.data:
+            raise ValueError("运行租约或台账归属不符")
+        proof = self.data.get("serviceScope")
+        if proof is None:
+            return None
+        if (proof.get("version") != 1 or proof.get("runId") != self.id or proof.get("repo") != str(self.store.repo)
+                or proof.get("roots") != self.scope_roots()):
+            raise ValueError("服务 scope 运行归属或创建证明不符")
+        root = Path(root).absolute()
+        if str(root) != self.scope_roots()["short"]:
+            contained(root, self.store.repo)
+        expected = self.data.get("scopePaths", {}).get(str(root))
+        if str(root) not in self.scope_roots().values():
+            relative = str(root.relative_to(self.store.repo)) if root.is_relative_to(self.store.repo) else None
+            if relative not in self.data.get("published", []):
+                return None
+            marker = root / "resource-run.json"
+            if marker.is_symlink() or read_json(marker).get("runId") != self.id:
+                raise ValueError("服务 scope 报告标记不符")
+            moves = [m for m in self.data.get("scopeMoves", []) if m["destination"] == str(root)]
+            if not moves:
+                return None
+            expected = moves[-1]["identity"]
+        if expected is None:
+            return None
+        if root.exists() or root.is_symlink():
+            info = root.lstat()
+            if not stat.S_ISDIR(info.st_mode) or expected != {"device": info.st_dev, "inode": info.st_ino}:
+                raise ValueError("服务 scope 根身份已变化")
+        if str(root) == self.scope_roots()["short"]:
+            self.short_root()
+        return proof
+
+    def scope_move(self, source, destination):
+        if self.data.get("serviceScope") is None:
+            return
+        source, destination = Path(source), Path(destination)
+        roots = [Path(p) for p in self.scope_roots().values()]
+        published = {self.store.repo / base / leaf for base in ("tests/e2e", "tests/e2e/measure", "tests/e2e/safari-results")
+                     for leaf in ("test-results", "playwright-report")}
+        origin = next((p for p in roots if source.is_relative_to(p)), source if source in published else None)
+        if origin is None or self.service_proof(origin) is None or not (any(destination.is_relative_to(p) for p in roots) or destination in published):
+            raise ValueError("报告 scope 缺少本轮创建及搬迁链")
+        if source.is_symlink() or destination.exists() or destination.is_symlink():
+            raise ValueError("报告 scope 搬迁路径已存在或被替换")
+        info = source.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("报告 scope 只搬迁目录")
+        moves = [*self.data.get("scopeMoves", []), {"source": str(source), "destination": str(destination),
+                  "identity": {"device": info.st_dev, "inode": info.st_ino}}]
+        if len(moves) > 32:
+            raise ValueError("报告 scope 搬迁次数超过界限")
+        self.update(scopeMoves=moves)
+
     def create_short_root(self):
-        root = Path("/tmp").resolve() / ("nerve-vm-" + self.id)
+        if "shortRoot" in self.data:
+            raise ValueError("短目录已经登记，拒绝重复创建")
+        vm = self.data["kind"] == "vm"
+        root = Path("/tmp").resolve() / (("nerve-vm-" if vm else "nerve-t-") + self.id)
         # Precise ownership is durable before creation; an existing directory is never adopted.
-        self.update(shortRoot=str(root))
+        # Explicitly distinguish a new interrupted creation from legacy VM manifests.
+        self.update(shortRoot=str(root), shortRootIdentity=None)
         root.mkdir(mode=0o700)
-        atomic_json(root / "owner.json", {"runId": self.id, "repo": str(self.store.repo), "kind": "vm-short-path"})
+        info = root.lstat()
+        self.update(shortRootIdentity={"device": info.st_dev, "inode": info.st_ino})
+        self.remember_scope_path(root)
+        atomic_json(root / "owner.json", {"runId": self.id, "repo": str(self.store.repo),
+                    "kind": "vm-short-path" if vm else "test-short-path"})
         return root
 
-    def retire_short_root(self):
+    def create_short_tmp(self):
+        target = contained(self.scratch / "tmp", self.store.root)
+        target.mkdir(mode=0o700)
+        root = self.create_short_root()
+        alias = root / "t"
+        # Record the sole permitted alias before creating it. Partial creation
+        # without its exact identity is retained for ownership investigation.
+        self.update(shortTmp={"path": str(alias), "target": str(target)})
+        alias.symlink_to(target, target_is_directory=True)
+        info = alias.lstat()
+        self.update(shortTmpIdentity={"device": info.st_dev, "inode": info.st_ino})
+        self.short_root()
+        return alias
+
+    def short_root(self):
         if not self.data.get("shortRoot"):
-            return
-        expected = Path("/tmp").resolve() / ("nerve-vm-" + self.id)
-        if self.data["shortRoot"] != str(expected) or expected.is_symlink():
-            raise ValueError("VM 短路径归属不符")
-        if not expected.exists():
-            return
+            return None
+        vm = self.data["kind"] == "vm"
+        expected = Path("/tmp").resolve() / (("nerve-vm-" if vm else "nerve-t-") + self.id)
+        if self.data["shortRoot"] != str(expected):
+            raise ValueError("短路径归属不符")
+        try:
+            info = expected.lstat()
+        except FileNotFoundError:
+            # It may not have been created yet, or a completed removal was interrupted.
+            # Still return the lexical root so any remaining open socket is checked.
+            return expected
+        identity = {"device": info.st_dev, "inode": info.st_ino}
+        if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+                or info.st_uid != os.getuid()
+                or (self.data.get("shortRootIdentity") != identity
+                    and not (vm and all(key not in self.data for key in
+                                        ("shortRootIdentity", "shortTmp", "shortTmpIdentity"))))):
+            raise ValueError("短目录已被替换或没有完整创建证明，保留")
         marker = expected / "owner.json"
-        if marker.is_symlink() or read_json(marker) != {"runId": self.id, "repo": str(self.store.repo), "kind": "vm-short-path"}:
-            raise ValueError("VM 短路径没有完整创建证明，保留")
-        if group_alive(self.data.get("childGroup")) or open_paths(expected):
-            raise RuntimeError("VM 短路径仍有使用者，保留")
-        remove(expected, expected.parent)
+        if (not stat.S_ISREG(marker.lstat().st_mode)
+                or read_json(marker) != {"runId": self.id, "repo": str(self.store.repo),
+                                        "kind": "vm-short-path" if vm else "test-short-path"}):
+            raise ValueError("短路径没有完整创建证明，保留")
+        registered = self.data.get("shortTmp")
+        if registered is not None:
+            target = contained(self.scratch / "tmp", self.store.root)
+            alias = expected / "t"
+            alias_info = alias.lstat()
+            if (registered != {"path": str(alias), "target": str(target)}
+                    or not stat.S_ISLNK(alias_info.st_mode)
+                    or self.data.get("shortTmpIdentity") != {"device": alias_info.st_dev, "inode": alias_info.st_ino}
+                    or os.readlink(alias) != str(target)
+                    or target.resolve() != target):
+                raise ValueError("短路径别名已被替换或未完整登记，保留")
+        if not vm and set(path.name for path in expected.iterdir()) != ({"owner.json", "t"} if registered is not None else {"owner.json"}):
+            raise ValueError("短目录含有未登记内容，保留")
+        return expected
+
+    def assert_quiescent(self):
+        contained(self.scratch, self.store.root)
+        if self.scratch.is_symlink():
+            raise ValueError("scratch 不能是链接")
+        short = self.short_root()
+        if group_alive(self.data.get("childGroup")):
+            raise RuntimeError("资源仍有活动进程，保留")
+        # Both roots are checked before any compaction, move or evidence copy.
+        for root in [self.scratch, *([short] if short is not None else [])]:
+            if open_paths(root, owner=self):
+                raise RuntimeError("资源仍有打开句柄，保留：" + str(root))
+
+    def retire_short_root(self):
+        expected = self.short_root()
+        if expected is not None:
+            if group_alive(self.data.get("childGroup")) or open_paths(expected, owner=self):
+                raise RuntimeError("短路径仍有使用者，保留")
+            if expected.exists():
+                remove(expected, expected.parent)
 
     def finish(self, status, release=True):
         if status not in ("passed", "failed", "interrupted"):
             raise ValueError("终态无效")
-        if not self.scratch.exists():
-            if self.data.get("cleanupStage") == "reports-collected":
-                self.retire_short_root()
-                self.update(status=self.data["requestedStatus"], endedAt=time.time(), cleanupStage="complete")
-            elif self.data.get("status") == "prepared":
-                self.retire_short_root()
-                self.update(status="interrupted", endedAt=time.time(), cleanupStage="never-started")
-            if release:
-                self.release()
-            return self.data
         try:
-            contained(self.scratch, self.store.root)
-            if self.scratch.is_symlink():
-                raise ValueError("scratch 不能是链接")
-            if group_alive(self.data.get("childGroup")) or open_paths(self.scratch):
-                raise RuntimeError("资源仍有活动进程或打开句柄")
+            self.assert_quiescent()
+            if not self.scratch.exists():
+                if self.data.get("cleanupStage") == "reports-collected":
+                    self.retire_short_root()
+                    self.update(status=self.data["requestedStatus"], endedAt=time.time(), cleanupStage="complete")
+                elif self.data.get("status") in ("prepared", "cleanup-pending") and self.data.get("childGroup") is None:
+                    self.retire_short_root()
+                    self.update(status="interrupted", endedAt=time.time(), cleanupStage="never-started")
+                return self.data
             if self.data.get("cleanupStage") == "reports-collected":
                 self.retire_short_root()
                 remove(self.scratch, self.store.root)
@@ -523,6 +839,8 @@ class Run:
                 if results.is_symlink() or html.is_symlink():
                     raise ValueError("报告路径不能是链接")
                 failed = set() if status == "passed" else failed_profile_names(results / "results.json")
+                if self.data.get("serviceScope") is not None:
+                    self.scope_directory(self.store.root / "failures" / self.id)
                 compact = compact_profiles(results / "persistent-profiles", self.id,
                                            self.store.root / "failures" / self.id,
                                            failed, self.store.failure_run_bytes)
@@ -530,12 +848,13 @@ class Run:
                 report = contained(self.directory / "reports", self.store.root)
                 if report.is_symlink():
                     raise ValueError("报告归档不能是链接")
-                report.mkdir(exist_ok=True)
+                self.scope_directory(report)
                 for source, name in [(results, "test-results"),
                                      (html, "playwright-report")]:
                     if source.exists():
                         if source.is_symlink() or (report / name).exists():
                             raise ValueError("报告路径不合法或已经存在")
+                        self.scope_move(source, report / name)
                         source.rename(report / name)
                 log = self.directory / "command.log"
                 if log.exists():

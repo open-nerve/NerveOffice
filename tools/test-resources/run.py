@@ -39,7 +39,7 @@ def rotate_reports(store, kind, current_run=None):
         if not target.exists() or not any(target.iterdir()):
             continue
         marker = target / "resource-run.json"
-        if marker.is_symlink() or not marker.is_file() or open_paths(target):
+        if marker.is_symlink() or not marker.is_file():
             raise ValueError("已有报告未登记或仍在使用；请先归档，拒绝覆盖")
         previous = read_json(marker)["runId"]
         if not RUN_ID.fullmatch(previous):
@@ -47,20 +47,27 @@ def rotate_reports(store, kind, current_run=None):
         directory = contained(store.root / "runs" / previous, store.root)
         if directory.is_symlink():
             raise ValueError("旧运行不能是链接")
-        value = read_json(directory / "run.json")
         relative = str(target.relative_to(store.repo))
-        if value.get("runId") != previous or value.get("repo") != str(store.repo) or relative not in value.get("published", []):
-            raise ValueError("旧报告未登记到原运行")
-        if current_run is not None and previous == current_run.id:
-            continue  # This run already holds its lease; resume its atomic publication in place.
-        with locked(directory / "run.lock", blocking=False):
+        owner = current_run if current_run is not None and previous == current_run.id else Run(store, directory, existing=True)
+        try:
+            value = owner.data
+            if (read_json(marker).get("runId") != previous or value.get("runId") != previous
+                    or value.get("repo") != str(store.repo) or relative not in value.get("published", [])):
+                raise ValueError("旧报告未登记到原运行")
+            if open_paths(target, owner=owner):
+                raise ValueError("已有报告仍在使用；拒绝覆盖")
+            if owner is current_run:
+                continue
             old = contained(directory / "reports" / name, store.root)
             if old.exists() or old.is_symlink():
                 raise ValueError("旧报告归档已存在")
-            old.parent.mkdir(parents=True, exist_ok=True)
+            owner.scope_directory(old.parent)
+            owner.scope_move(target, old)
             target.rename(old)
-            value["published"].remove(relative)
-            atomic_json(directory / "run.json", value)
+            owner.update(published=[p for p in owner.data["published"] if p != relative])
+        finally:
+            if owner is not current_run:
+                owner.release()
 
 
 def published_by(run, target):
@@ -104,6 +111,7 @@ def publish(run, kind, reports=None):
         if target.exists():
             target.rmdir()
         relative = str(target.relative_to(run.store.repo))
+        run.scope_move(source, target)
         run.update(published=list(dict.fromkeys([*run.data.get("published", []), relative])))
         atomic_json(source / "resource-run.json", {"version": 1, "runId": run.id,
                     "receipt": str(run.directory / "run.json"), "status": run.data["status"]})
@@ -114,11 +122,11 @@ def publish(run, kind, reports=None):
 
 def evidence_snapshot(run):
     """Quiescent but incomplete OPFS/cleanup proof: export bounded diagnostics, no raw profile."""
-    if group_alive(run.data.get("childGroup")) or open_paths(run.scratch):
-        raise RuntimeError("恢复证据仍有写入者；保留原件")
+    run.assert_quiescent()
     destination = contained(run.directory / "reports/recovery", run.store.root)
     if destination.is_symlink():
         raise ValueError("恢复诊断目录不得是链接")
+    run.scope_directory(run.directory / "reports")
     destination.mkdir(parents=True, exist_ok=True)
     (destination / "test-results").mkdir(exist_ok=True)
     copied, omitted, total = [], [], 0
@@ -230,27 +238,37 @@ def main():
     with locked(store.root / "publication.lock", blocking=False):
         rotate_reports(store, args.kind)
         run = store.create(args.kind)
-        if os.environ.get("NERVE_TEST_CI_E2E_OWNER") and os.environ.get("NERVE_CI_E2E_STATE"):
-            run.update(ciOwner=os.environ["NERVE_TEST_CI_E2E_OWNER"],
-                       ciState=str(Path(os.environ["NERVE_CI_E2E_STATE"]).resolve()))
-        temp = run.scratch / "tmp"; temp.mkdir()
-        output = run.scratch / "tests/e2e/test-results"
-        output.mkdir(parents=True)
-        env = dict(os.environ, NERVE_TEST_RUN_ID=run.id, NERVE_TEST_SCRATCH=str(run.scratch),
-                   NERVE_TEST_OUTPUT_DIR=str(output), NERVE_TEST_REPORT_DIR=str(output),
-                   TMPDIR=str(temp), TMP=str(temp), TEMP=str(temp))
-        if args.kind == "vm":
-            env["NERVE_TEST_SHORT_ROOT"] = str(run.create_short_root())
         stopped = []
         child = None
         output_thread = None
-        read_fd, write_fd = os.pipe()
+        read_fd = write_fd = -1
+        original = {}
         def request_stop(signum, frame):
             stopped.append(signum)
             if child is not None and child.poll() is None:
                 os.killpg(child.pid, signum)
-        original = {sig: signal.signal(sig, request_stop) for sig in (signal.SIGINT, signal.SIGTERM)}
         try:
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                original[sig] = signal.signal(sig, request_stop)
+            if os.environ.get("NERVE_TEST_CI_E2E_OWNER") and os.environ.get("NERVE_CI_E2E_STATE"):
+                run.update(ciOwner=os.environ["NERVE_TEST_CI_E2E_OWNER"],
+                           ciState=str(Path(os.environ["NERVE_CI_E2E_STATE"]).resolve()))
+            temp = run.create_short_tmp()
+            output = run.scratch / "tests/e2e/test-results"
+            output.mkdir(parents=True)
+            env = dict(os.environ, NERVE_TEST_RUN_ID=run.id, NERVE_TEST_SCRATCH=str(run.scratch),
+                       NERVE_TEST_OUTPUT_DIR=str(output), NERVE_TEST_REPORT_DIR=str(output),
+                       TMPDIR=str(temp), TMP=str(temp), TEMP=str(temp))
+            env.pop("NERVE_TEST_SHORT_ROOT", None)
+            if args.kind == "vm":
+                env["NERVE_TEST_SHORT_ROOT"] = run.data["shortRoot"]
+            if stopped:
+                return 128 + int(stopped[0])
+            # Refuse to start work when the same owned-root cleanup check cannot run.
+            run.assert_quiescent()
+            if stopped:
+                return 128 + int(stopped[0])
+            read_fd, write_fd = os.pipe()
             child = subprocess.Popen([sys.executable, "-c", BOOTSTRAP, str(read_fd), *command],
                                      env=env, pass_fds=(read_fd,), start_new_session=True,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -304,33 +322,37 @@ def main():
             run.update(commandExitCode=code, exitCode=result, interrupted=bool(stopped))
             receipt = run.finish("interrupted" if stopped else ("passed" if result == 0 else "failed"), release=False)
             if receipt["status"] == "cleanup-pending":
-                print("测试环境尚不能安全回收；原件与归属已保留。", file=sys.stderr)
+                print("测试环境尚不能安全回收；原件与归属已保留。" + receipt.get("cleanupError", ""), file=sys.stderr)
                 return result or 1
             publish(run, args.kind)
             return result
         finally:
-            for fd in (read_fd, write_fd):
-                if fd >= 0:
-                    os.close(fd)
-            if child is not None and child.poll() is None:
-                os.killpg(child.pid, signal.SIGTERM)
-                try:
-                    child.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL); child.wait(timeout=5)
-            if run.data.get("status") in ("prepared", "running"):
-                if output_thread is not None:
-                    output_thread.join(timeout=5)
-                if output_thread is None or not output_thread.is_alive():
-                    run.update(exitCode=1, interrupted=True)
-                    run.finish("interrupted", release=False)
-                else:
-                    run.update(status="cleanup-pending", cleanupError="异常退出后输出仍有写入者")
-            run.release()
+            try:
+                for fd in (read_fd, write_fd):
+                    if fd >= 0:
+                        os.close(fd)
+                if child is not None and child.poll() is None:
+                    os.killpg(child.pid, signal.SIGTERM)
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid, signal.SIGKILL); child.wait(timeout=5)
+                if run.data.get("status") in ("prepared", "running"):
+                    if output_thread is not None:
+                        output_thread.join(timeout=5)
+                    if output_thread is None or not output_thread.is_alive():
+                        run.update(exitCode=128 + int(stopped[0]) if stopped else 1, interrupted=True)
+                        run.finish("interrupted", release=False)
+                    else:
+                        run.update(status="cleanup-pending", cleanupError="异常退出后输出仍有写入者")
+            finally:
+                if child is not None and child.stdout is not None and (output_thread is None or not output_thread.is_alive()):
+                    child.stdout.close()
+                run.release()
+                for sig, handler in original.items():
+                    signal.signal(sig, handler)
             with locked(store.root / "gc.lock"):
                 store.prune(time.time())
-            for sig, handler in original.items():
-                signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

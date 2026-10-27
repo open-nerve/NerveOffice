@@ -1,8 +1,8 @@
 # M5-P4 最终验收与关闭复核
 
-> **2026-10-27 当前记录**：安全依赖修正、测试资源治理及外部收尾工具独立复核已有证据；full09/full10 均未被接受。full11 与同源码完整生产容器 container01 均已通过门禁、原件审计和独立接受复核；S6 已提交为 `e49ee5f1` 并在本地正常 no-ff 合入 `main@73c199f0`；首次正常推送被配置探针单元测试阻止，远端尚未更新。探针的单文件修复及独立复核已通过，待同分支提交、再次正常合并/推送、最终同 SHA 六项 CI、冻结和实际清理。下方早期状态和 full02/full04 记录按当时事实保留，最新接续见文末。
+> **2026-10-28 当前记录**：旧输入 full11/container01 与 `main@1277dcb9` 的失败 CI 均按原件保留。后续修复已正常提交为 `9abf02d2`；本轮 full12 默认完整 verify 与 container02 完整生产容器均已通过原件/资源审计及独立接受，两轮受测输入一致。Task 3 完成；受测提交至最终合并的精确文档等价、正常合并/推送、新同 SHA 六项 CI、最终证据冻结与实际清理仍待完成。最新计数与边界见文末。
 
-> 状态：本机两套完整门禁已接受，本地初次合并已完成；首次推送被钩子阻止，最终 CI、证据冻结和 P4 关闭尚未完成。结果以原始证据与关闭回执为准。
+> 状态：本轮本机完整 verify 与生产容器已独立接受；最终同 SHA CI 与实际关闭尚待完成，P4 未关闭，P5 未启动。
 
 ## 本机完整门禁
 
@@ -133,3 +133,78 @@ container01（`s6/s6-gates/container01-20261027T133551673862Z`）在full11结束
 - 独立收尾复核、最终冻结、唯一分支/worktree 实际清理及外部关闭回执。Task 3四项已按两轮实证完成；Task 4与P4最终完成项待实际操作，不预勾。
 
 Excel、Safari/Finder、DEF-004、M4 DEF-073/UR-035、完整 M4 验收及标签继续挂账；M7 联合备份/PITR、升级转换和回滚演练未被 P4 替代。P4 实际关闭后才从 main 建立唯一 P5 worktree 并即时设计客户端 CSV；P5/P6 未实现，不提前关闭 M5。
+
+## 2026-10-28：正常推送完成，Linux CI 失败后的同分支修复
+
+`d161a629` 已在本地正常 no-ff 合并为 `1277dcb9e3bb746918c00feb41bcb54f1e407284`，正常 pre-push 与推送成功。Lefthook 成功时只输出摘要，最初外部回执包装因此误判缺少详细检查输出；保留原推送日志并按原摘要、退出码、Git 事实补全回执，没有重推、跳过钩子或改写历史。证据位于 `s6/main-push02/normal-push-receipt.json` 与 `s6/source-equivalence-1277dcb9e3bb/receipt.json`。
+
+CI 40525146257 的六份原日志和四份监督快照保存在 `s6/ci-early/40525146257/`。最终仅生产容器 job 成功，其余五项失败：
+
+- Chrome/Edge 日志明确报 SingletonSocket 路径过长；原 TMPDIR 为 111 字节，最终 socket 路径 152/153 字节。监督器缺少 result 的异常仍缺原始操作信息，不能把后来发现的合法 t 状态解析缺陷直接认定为唯一原因。
+- verify 为 16,906 项通过、1 失败，失败发生在 SIGKILL 测试的持锁前置等待；首批持久性断言及 SIGKILL 尚未执行，没有证据说明产品丢失检查点。
+- Chromium 为 813 通过、4 原平台跳过；WebKit 为 802 通过、8 原平台跳过，两者均无重试且未触发原运行时限。监督记录确认进程退出，随后 lsof 核对失败，完整报告归档/上传未执行。因此两项仍失败，不能用终端通过数代替完整验收。
+
+当前修改和红绿证据在 `s6/ci-resource-path-fix/`。Python 57 项通过，包含成功/失败/中断、身份替换、活动句柄、短别名、预检失败不启动命令及安全重复回收；最后预检增量另有独立复核。监督相关 TypeScript 70 项通过，固定格式诊断不记录任意异常正文，未知错误仍失败关闭；Linux `t` 只增补为合法且存活的状态。检查点最终版本 19/19 通过，源码前后一致，测试 API 连接 0、scratch/短根均消失；沿用项目已有 10 秒精确锁等待预算，替代原 SIGKILL 夹具隐式 1 秒 poll，原 API 产品时限、批次计数与两种终止语义保持。
+
+本机 Linux branded 浏览器探针只到安装阶段，没有取得浏览器红绿结果；相应容器与缓存已删除，共享 Virtualization VM 仍持有约 345 MB 已删除文件的只读句柄，已登记 cleanup-pending。其他项目的容器正在运行，不重启共享 Docker、不把该空间计为已释放。轻型 Linux 进程契约的首轮在只读根上的 Docker archive 复制阶段停止，测试未执行，该轮容器和临时目录已清理。所有此类未完成结果如实保留，不代替 CI。
+
+lsof 原错误未被旧实现保存。目前补充最多 4 KiB 标准错误、退出码和超时诊断，并在启动子命令前检查清理能力；仍不忽略警告。实际 Linux 原因、当前输入完整门禁及新同 SHA CI 都需要后续证据。冻结、worktree/分支清理和 P5 尚未发生。
+
+轻型 Linux 进程契约的第二轮通过：沿用相同输入与资源限制，改由同 UID 的 `docker exec -i tar` 向既有 `/tmp` tmpfs 写入源码，避免 Docker archive API 对只读根的拒绝；只读根、禁用网络、无宿主挂载、32 MiB tmpfs、1 CPU/512 MiB、90 秒外层限制均保持。原生 arm64 Node 24.21 的 12/12 契约通过，无跳过/失败，前后源码与包字节一致，容器已删除且本轮受管清理完成。它覆盖进程监督协议，不覆盖 branded 浏览器或未知 lsof 原因。回执为 `s6/ci-resource-path-fix/linux-process-contract/receipt-92fca34e-5ef4-4e9e-a545-41c402ba60bb.json`。
+
+最终四文件检查点独立审查为 0 C/I/M，精确绑定 r2 的 19 项回归、静态检查和清理回执；受控慢启动 RED 的旧 preload 为顶层 await，有限延迟语义已核对。该复现说明夹具对启动时序的脆弱性，仍不宣称已证明历史 CI 当时的所有根因。独立回执为 `s6/ci-resource-path-fix/checkpoint-independent-review.json`。
+
+
+### lsof 查询完整性复核（仍未开始 full12/container02）
+
+`e78d1fa1` 已正常提交短路径、进程监督与检查点同步修复；主目录/远端仍为 main@1277dcb9。后续 lsof 增量已阶段提交为 `903d0849`。实际小型 Linux 对照证实：普通用户会缺其他 UID 的 fd；隔离容器中的 root 也不自动拥有跨 UID 查询能力。带唯一 SYS_PTRACE 能力的独立、无宿主挂载容器可看到两 UID 自制文件/socket；该证明不覆盖宿主机其他 mount/net namespace，不能直接等价于 GitHub 托管主机。
+
+真实 `-F pfnt` 的进一步回放揭示 `anon_inode:[io_uring] (stat: No such file or directory)` 假阳性。已知自有 PID 的直接 stat 同样 ENOENT；内核 `anon_inode_create_getfile("[io_uring]", ...)` 和 lsof4.95 的 `mem`/`S_IFREG` 回退与原件相符。修复只接受 Linux、mem、REG 与完整精确匿名名称/错误组合；其他 stat 错误继续拒绝。独立审查同时发现仅返回 `protocol: UNIX` 的未解析 socket、path inode/dev 不一致注解曾被遗漏，现同组拒绝，不因路径看似在本轮目录外就当作完整。
+
+r2 的 RED 为6个方法中的8个预期断言失败、0 errors；目标23/23与全套76/76通过。三轮均已清理 scratch 和短根，7份源码前后指纹一致。原件索引为 `s6/ci-resource-path-fix/lsof-query-fix-r2/delivery.json`（SHA-256 `1d6ea9c6060969b29c453fa791457ff1b75b45cc494c19315e0bf72e66cd3b58`）。随后真实 Linux 全流回放已执行：io_uring 误拒消失，两 UID 自制文件/socket 活动时可见、关闭后均消失，但 root 输出仍含 PID 1 的一条 mem 映射身份冲突，整体退出1，未被接受。该条未保存具体路径/值，不猜测其底层原因、不加入豁免。原件 `linux-lsof-capability/receipt-891759f1-d73f-47a0-b035-ae5c3ead4af5.json` 的 SHA-256 为 `cfb4d65ffa21699c86c376d7ddedd7e2797601962f6e2b7232e792d03e014f14`；6.75秒结束、容器删除且受管 cleanupStage=complete，前后解析器和协议源码一致。不得将这些局部正例改写成全流或 CI 成功。
+
+另已确认设计约束：lsof4.95 的 maps stat 使用调用者路径视图，socket 表只取调用者 `/proc/net/`，因此 sudo 本身不能消除其他 namespace 的歧义。CI 的独立 PostgreSQL 服务可能因此触发保守阻断。尚在收敛对已登记隔离服务的可达性证明，未加入任意 PID/容器豁免。原五项失败、新完整门禁、新同 SHA CI、最终关闭继续待验；未启动 full12/container02 或 P5。
+
+新版外部来源/推送/关闭工具已独立审查，34项轻型契约与真实小 Git/blob/模式样本通过，0 C/I/M；12轮实现样例与2轮独立样例清理完成。工具审查回执在 `s6/p4-round-v2-tests/independent-review.json`。真实门禁前必须在 clean 的固定提交上分别采集 capture-before，结束后 capture-after；没有预签真实结果、binding、推送或关闭回执。
+
+
+### 固定 CI 服务的查询 scope 与跨 namespace 证据（局部回归完成）
+
+全局 lsof 不可见记录仍默认拒绝。新增 scope 只接受当前固定 GitHub 托管 Ubuntu job 的 PostgreSQL 服务 ID，在本轮 scratch/短根/报告根创建前登记服务 epoch，并核对固定镜像、runc、无宿主挂载/额外能力的独立桥接网络及匿名本地卷。查询前后核对 PID/starttime/cgroup/mount、net、pid namespace；未知 PID、身份变化或不完整查询不能据此豁免。真实文件和 socket 路径依旧遍历完整输出并阻止清理，不排除整个服务 PID。旧台账、无 owner、任意目录与 archive 保持严格；普通本机不会自动提权。
+
+初版完整 Python 回归为 104/104，run `dbe736e8-627f-4b31-8353-fb4e64bdf3f6`，58.012 秒、退出0，10份来源前后相同，scratch/短根已清理。原件在 `s6/ci-resource-path-fix/ci-service-scope/`。独立审查随后复现：run.json 若被换成符号链接，旧 prune 可能先删除报告再由写回拒绝；当前补齐读取普通文件、拒绝父/叶链接及 FIFO、无 scope 运行的相同保护，并收紧固定 Runtime。原104项通过不能代替这些修复后的最终回归。
+
+真实格式对照前两次止于探针自身的包选择/重复记录断言，失败原件保留且资源清理。第三次 `707690f3-a386-43c7-a4c1-24b8b1727576` 用时5.20秒、退出0。same/cross 四次观察的服务 PID、starttime、四个 FD/inode 完全一致；共享该自有服务的私有 PID namespace，mount/net namespace 不同。same 中的 UNIX 路径、IPv4 TCP/UDP 地址，在 cross 中分别成为精确 `sock` / `protocol: UNIX-STREAM`、`protocol: TCP`、`protocol: UDP`，普通文件真实路径保持；另有 mem/REG 的 path dev 注解。各控制记录重复7次且内容一致，原始自有 PID 块完整保留；未保存全局输出。查询容器只有 SYS_PTRACE，未访问宿主或其他项目的 PID namespace。两容器均按完整 ID 及归属删除、名称复核不存在，受管清理 complete 且 scratch 缺失。累计锁定的 deb 输入7,725,666字节，未创建浏览器、数据库或 VM。
+
+实际回执为 `s6/ci-resource-path-fix/linux-lsof-namespace-format/.test-resources/runs/707690f3-a386-43c7-a4c1-24b8b1727576/reports/test-results/namespace-format-receipt.json`，SHA-256 `ebe3b4b98a2d055da0766bb2d5dc45794e5ff671b52222f335d291331b81da9d`。该原件只证明受控 Linux 格式，不是 GitHub Ubuntu 或整个 CI 通过。旧 CI 五份 PG 日志均记录 IPv6 监听；额外 `TCPv6` / `UDPv6` 由固定版本官方 Linux 协议名、sockfs xattr 到 lsof4.95 fallback 的完整源码链推导，未在该探针实测。不把源码推导称为实际 CI 通过，也不泛化为任意 protocol 前缀。
+
+最终修复为固定六个 protocol 完整名称，仍限定已验证服务的数字 FD/sock 记录；台账授权前统一核对租约、父/叶路径和普通文件，包括无 service scope 的本机运行。实际707690原块回放中，same 的严格/带scope不完整数为0/0，cross为70/0；真实文件路径仍命中，额外未知NOFD仍拒绝。这是该自有PID块的回放，不是全局输出或CI验收。
+
+最终 Python 为112/112（原76加新增36），0失败/错误/跳过，58.230秒；run `d95978a4-70c9-4cb0-a8ad-d221875e4c18` 位于 `ci-service-scope/review-fix/`，validation SHA-256 `44f4063a97cd70469de62d99db504e70c826dc8151a1501864341e1765d380d5`，10份来源前后一致、passed/cleanup complete、scratch/短根不存在。外部v2原34项兼容回归亦通过，run `8e835f7c-fddc-400d-b07a-3e3212adc1fd`，四份传递依赖前后相同，清理complete；补充回执 `s6/p4-round-v2-tests/review-service-scope-dependency.json` 的SHA-256为 `0fea0f64bd8fe6bee86fe8dd8c70418fe8f30c01a0805eca0f53166f76ad792e`。旧工具、旧原件和失败记录未覆盖。
+
+局部独立审查已完成，0 C/I/M，回执为 `s6/ci-resource-path-fix/ci-service-scope/independent-review.json`（SHA-256 `b6cdd4c9f8defd5b13d17fa1c0dd2a129e9b65788124182f982542a64b2db5a9`）。两项台账/runtime发现及 namespace 格式缺口已在本次明确契约内闭环；允许正常提交和启动原范围完整门禁，不凭此单独合并或关闭 P4。后续为同一源码串行采集 full12/container02，再正常合并、推送、验收新同 SHA CI。实际 Ubuntu 部署与 P4/P5 状态仍待后续结果。
+
+
+## 2026-10-28：修复提交 9abf02d2 与 full12 独立接受
+
+修复已正常提交为 `9abf02d2c4a4d1b513cf7089e69ecdab29b34d0b`，本轮 full12 在该 clean 提交上执行。原输入 full11/container01、第一次本地合并、`1277dcb9` 正常推送与 CI 40525146257 的失败分别保留；本轮结果不倒改旧失败，也不等于新的 main 已合并或推送。
+
+完整原件为 `s6/s6-gates/full12-20261027T185921612084Z`。本轮默认完整 verify 的十个阶段均通过，退出 0：704 文件、16,935 项单元/集成；E2E 2,421 通过、16 个原平台跳过，重试、flaky 和未运行均为 0。项目身份分别为 Chromium 786、Chrome 786、WebKit 783 通过/3 跳过，三组 crash 为 20/4、20/4、19/5，restart 7 通过。覆盖率为 lines 93.92%、statements 93.84%、functions 94.53%、branches 90.31%；产物预算与生产依赖审计沿原门禁通过，不等于全部开发依赖零漏洞。
+
+4,566 个来源前后逐项相同，两个 source manifest 的 SHA-256 均为 `566bf27777057b39a941faad3f1da725f1e49a2252f14212b56a25074fbe1b31`；16 个已安装 SDK 包的前后清单相同。v2 来源回执 `s6/full12-source-before-v2.json`、`s6/full12-source-after-v2.json` 已实际生成并核对先后顺序。独立复核串行读取全部 11,518 个原件、共 141,980,272 字节，JSON/HTML 案例一致；59 份 crash 附件覆盖 168 轮及 891 个本轮进程，迟到进程为 0。944 份 OPFS 归档包含 842 个文件、158,918 字节；其余 168 个 profile 按原件不含该归档，没有虚报为缺失。
+
+full12 的 integration/E2E 两个受管 run 均为 passed/cleanup complete，本轮 scratch/短根回收已核验；共精简 1,112 个 profile，保留原始 profile 和便携诊断均为 0，必要报告及 OPFS 原件保留。归档 accepted=true 且已真实 pin，sweep 四组均为空。资源回执为 `s6/archive-review/full12/resources.json`，SHA-256 `4390cc1f9a96619c639ecdf1165a4717adce56d3bb5c0e2915072a63ebcfab09`；接受状态为同目录 `status.json`，SHA-256 `1da24cf78d4ee05857e1a41de0d7842e9787369c657c9abde25d48ec0394a991`。本轮守护共 319 次采样，最小可用磁盘 94,728,241,152 字节、结束观测 110,518,538,240 字节；这些是采样时的余量，不是净释放量，也不代表共享 Docker 既有句柄已回收。
+
+原始审计 `s6/full12-audit.json` 的 SHA-256 为 `a4b0fd719c61dec9794fa5e2bf9db7d5f4f24ba829d34ee3adba095ca596a1b3`。独立回执 `s6/resume-20261028/full12-independent-review.json` 为 0 C/I/M、接受本轮本机完整 verify，SHA-256 `75be71b91e6c56baeab3394c38ddb44ed8af84113a444996bd8b4b895a97c94c`。本机 serviceScope 为 null；本轮并未验收实际 GitHub Ubuntu PostgreSQL namespace scope。
+
+## 2026-10-28：同源 container02 独立接受与本轮 Task 3 完成
+
+container02 在同一 clean `9abf02d2` 上串行完成，原件目录为 `s6/s6-gates/container02-20261027T214901112459Z`，命令退出 0。339 项首次通过：Chromium 普通 328、crash 4、restart 7；失败、跳过、重试、flaky 和未运行均为 0。JSON/HTML 身份及正文证据一致；4 份 crash 附件覆盖 4 轮及 16 个归属进程，迟到进程为 0。独立复核重算全部 4,620 个原件、共 72,447,364 字节，与保存审计一致。
+
+原生材料为 linux-arm64。图片矩阵、正文拒绝后恢复、私有卷和资源 GC 的原断言通过，缺备份时暂停删除、配置拒绝、重复回放不再次释放配额及重传后可读均核对。附件的 8 个整容器 cgroup 样本中，最大 memoryPeak 为 763,281,408 字节，memoryMax 均为 4,294,967,296 字节（4 GiB），oom/oomKill 均为 0；该峰值不解释成单次上传专用内存，也不放宽原预算。
+
+受管 run `3a9c88dd-9b91-4c16-aff3-ffdd2dfa1026` 为 passed/cleanup complete，发布完成；8 个 profile 已精简，保留原始 profile 和便携诊断均为 0，scratch、短根、失败资料及登记进程组均不存在。精确 Compose 项目 label 与本轮镜像 reference 的只读查询确认本轮容器、网络、卷和镜像 tag 已清理；不涉及共享 Docker 的既有待回收句柄。本轮 OPFS 归档为 0，full12 的 OPFS 原件独立保留。归档 accepted=true 且已实际 pin；资源回执 `s6/archive-review/container02/resources.json` 的 SHA-256 为 `31f622c1df376f2c22773e3919e2bf5020b6104b4de8fc90394cac034ad76be3`，同目录 `status.json` 为 `f6b8c20d490c66c61b3fd8090c2a216f6ef8a09f90a23383b489c5d795418781`。
+
+两轮四份 v2 capture 已生成并核对时间顺序、clean HEAD、4,566 个路径的字节/类型/模式/链接目标及 16 包 30 个已安装 SDK 文件；两轮完全同源，新增的 container02 回执为 `s6/container02-source-before-v2.json` 与 `s6/container02-source-after-v2.json`。原始审计 `s6/container02-audit.json` 的 SHA-256 为 `9600fa8e0fb57af659c98abba7858542d974f999ca54863d3a572ddb5c3fa7cf`；独立回执 `s6/resume-20261028/container02-independent-review.json` 为 0 C/I/M，SHA-256 `26b627628cc741d150a0224538f4ab1b80c4690de5c20d85e71981f9ce62a781`。
+
+本轮 Task 3 的两套原范围本机门禁、原件/资源审计和独立接受已完成，结论绑定受测 `9abf02d2`。文档更新至最终合并 SHA 的精确等价证明、正常 no-ff/推送与 pre-push、新同 SHA 六项 CI 仍须实际完成；本轮未验收 GitHub Ubuntu/linux-amd64 的真实部署或固定 PostgreSQL service scope。最终证据冻结、唯一 P4 worktree/分支清理与关闭只由操作后外部回执确认，不预填已删除。DEF-061、ADR-023 的阶段关闭状态与全部既有环境债保持，不开始 P5 设计。
