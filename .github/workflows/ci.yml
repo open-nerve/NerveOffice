@@ -57,6 +57,21 @@ jobs:
           # 取完整历史：迁移门禁拿这次推送之前的提交作基准，确认已合并的迁移没有被改动（ADR-005）
           fetch-depth: 0
 
+      # 在下载依赖/浏览器前确认同一受管查询与清理路径可用；不替代删除前核验。
+      - name: 核对测试资源能力（KiB 级预检）
+        id: resource-preflight
+        timeout-minutes: 3
+        run: python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true
+        env:
+          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+
+      # 安装前失败也必须留下原 runId 和清理状态；不读取或上传 scratch 内容。
+      - name: 保存预检的有界状态回执
+        id: resource-preflight-receipt
+        if: always()
+        timeout-minutes: 1
+        run: python3 -B tools/test-resources/ci_preflight_receipt.py
+
       - name: 安装 Node.js（版本见 .node-version）
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -124,6 +139,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # 在下载依赖/浏览器前确认同一受管查询与清理路径可用；不替代删除前核验。
+      - name: 核对测试资源能力（KiB 级预检）
+        id: resource-preflight
+        timeout-minutes: 3
+        run: python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true
+        env:
+          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+
+      # 安装前失败也必须留下原 runId 和清理状态；不读取或上传 scratch 内容。
+      - name: 保存预检的有界状态回执
+        id: resource-preflight-receipt
+        if: always()
+        timeout-minutes: 1
+        run: python3 -B tools/test-resources/ci_preflight_receipt.py
 
       - name: 安装 Node.js（版本见 .node-version）
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -232,6 +262,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # 在下载依赖/浏览器前确认同一受管查询与清理路径可用；不替代删除前核验。
+      - name: 核对测试资源能力（KiB 级预检）
+        id: resource-preflight
+        timeout-minutes: 3
+        run: python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true
+
+      # 安装前失败也必须留下原 runId 和清理状态；不读取或上传 scratch 内容。
+      - name: 保存预检的有界状态回执
+        id: resource-preflight-receipt
+        if: always()
+        timeout-minutes: 1
+        run: python3 -B tools/test-resources/ci_preflight_receipt.py
 
       - name: 安装 Node.js（版本见 .node-version）
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

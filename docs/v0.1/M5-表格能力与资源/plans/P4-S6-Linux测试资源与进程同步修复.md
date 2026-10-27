@@ -46,3 +46,20 @@ Chromium/WebKit 最终全部已执行断言通过，但清理查询失败，报�
 7. **轻型验证与审查。** 保留76项并补RED/GREEN：无owner/旧台账/任意root/跨run或attempt；错误CID/image；volume bind options/共享namespace/设备/capability；服务重启/PID复用/成员变化/新PID；scope内真实scratch文件、短别名socket、deleted文件；NOFD/readlink/未知协议；inspect/top超时/截断/异常；archive严格及注册中断。原始日志与前后源码摘要、实际清理回执归档。独立审查通过后正常提交，再采集full12开始前来源，串行原完整verify与container02，正常no-ff/推送和同SHA六项CI。
 
 该契约不声称覆盖宿主root刻意进行nsenter/SCM_RIGHTS注入；inspect/top本身无法证明不存在这种额外特权操作。未知启动方式或宿主FD/UNIX入口通道不满足scope。所有路径命中保留，避免整PID过滤隐藏已知占用。原CI日志的标准docker create行只作历史设计依据，不能替代当前运行证明。实际CI未通过前，本节不代表P4关闭。
+
+## 2026-10-28：CI 40593800515 的受限诊断检查点
+
+main `cd2ee5f8` 已由正常 no-ff 合并与正常钩子推送产生，六项 CI 均失败；P4 未关闭，P5 未开始。full12/container02 原件仍只证明 `9abf02d2` 的本机输入。五项任务在 Docker container-inspect 首次查询失败；container job 在受管子命令启动前因全局 lsof 的 18 条不完整记录失败。后者日志未保存 type/name，不能猜测其协议、路径或进程归属。
+
+**目标与边界：** 只修正已实证的 Docker 模板接口，并补齐有界诊断与安装依赖前的 KiB 级能力预检；当前删除、归属、全流校验和原六项测试门禁不放宽。不再未经证据累加 PID/协议豁免。诊断 CI 不是最终交付验收。
+
+- [x] 真实模板回归：先保留原模板实际 rc=1、同容器仅 `Id→ID` 后 rc=0 的 RED/候选对照；修正 `tools/test-resources/service_scope.py`，再次实际执行当前源码产生的模板，检查字段完整、空字段为 null、未知字段仍失败。受管只读探针不读取 Config.Env、不创建/改变容器；保留版本、源码和清理回执。dict mock 不能替代该接口回归。
+- [x] 异常记录诊断：`lifecycle.py` 仅为原本已判不完整的记录补 type 与有界 name/长度/hash，聚合重复记录保留次数和总截断事实。不完整判定及路径命中行为不变；写小型 RED/GREEN 覆盖可区分协议/映射错误、重复记录、长文本/控制字符/上限及失败仍保留。不得把失败之后采样的 PID 身份冒认为原查询身份。
+- [x] CI 能力预检：在现有 verify/e2e/container job 检出后、安装依赖与浏览器之前，执行 `python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true`。verify/e2e 在该步骤注入实际 postgres service ID；container 不注入。使用既有登记、锁、短路径、检查和收尾，创建失败仍保留证据并失败；不执行产品测试或生成完整环境。原测试步骤、范围、阈值、重试、超时及六项最终门禁保留。 紧接以 `if: always()` 调用无 pnpm 依赖的 `ci_preflight_receipt.py`，仅向原日志输出有界的本轮身份/清理摘要，早期失败不依赖尚未生成的测试报告或 E2E prepare；不得上传未知 scratch。
+- [x] 验证与独审：先真实 Docker 模板对照、Python 资源管理完整小型回归、预检的成功/失败/中断/异目录保护及配置检查，再独立审查。所有临时资源使用受管目录；工作区变化、摘要和实际清理结果登记。重型测试保持串行且此诊断阶段不启动。
+- [ ] **诊断性提交与 CI：** 正常中文提交、同一 P4 分支正常 no-ff 合 main、正常 pre-push；保留新的提交、父提交、推送和 CI 原件。其目的仅是取得实际托管 Linux 的早期能力证据，不签发源码等价/最终关闭证明；冻结的 v2 工具与 full12/container02、push03 原件不得改写或挪用。预检若失败，先分析新增证据，不启动本机全量门禁来代替 Linux 原因调查。
+- [ ] **最终交付仍须完成：** Linux 能力及修复独审成立后，在最终受测输入串行跑 full13/container03（或实际登记的新轮次），随后按实际 source/SDK 等价、正常合并/推送、新同 SHA 六项 CI、最终证据冻结与 worktree 清理验收；完成这些才可关闭 P4、进入 P5。任何诊断 CI 绿灯不替代这些条件。
+
+根负责人按用户既有自主授权将上述调整限定为测试基础设施的局部诊断迭代。若新增证据表明必须改变“何时能删除/保留未知资源”的安全契约，再单独提出有证据的方案；本次不预先授权该架构变更。
+
+证据：主目录 `.codex/handoffs/m5-p4-20261022/s6/ci-early/40593800515/`，以及 `ci-resource-path-fix/ci-40593800515-service-diagnosis/`。原始 Docker 模板在本机 Docker 28.1.1 / API 1.49 实际失败，原远端 stderr 未保存，二者不得写成完全相同的已取证错误。

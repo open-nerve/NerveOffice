@@ -130,7 +130,7 @@ def _unique_pairs(pairs):
     return result
 
 
-CONTAINER_FIELDS = {"id": "Id", "image": "Config.Image", "imageId": "Image", "running": "State.Running",
+CONTAINER_FIELDS = {"id": "ID", "image": "Config.Image", "imageId": "Image", "running": "State.Running",
     "startedAt": "State.StartedAt", "pid": "State.Pid", "path": "Path", "args": "Args",
     "entrypoint": "Config.Entrypoint", "cmd": "Config.Cmd", "privileged": "HostConfig.Privileged",
     "capAdd": "HostConfig.CapAdd", "devices": "HostConfig.Devices", "deviceRequests": "HostConfig.DeviceRequests",
@@ -139,7 +139,7 @@ CONTAINER_FIELDS = {"id": "Id", "image": "Config.Image", "imageId": "Image", "ru
     "ipcMode": "HostConfig.IpcMode", "networkMode": "HostConfig.NetworkMode", "openStdin": "Config.OpenStdin",
     "attachStdin": "Config.AttachStdin", "tty": "Config.Tty", "runtime": "HostConfig.Runtime", "mounts": "Mounts",
     "networks": "NetworkSettings.Networks", "ports": "NetworkSettings.Ports", "exposedPorts": "Config.ExposedPorts"}
-NETWORK_FIELDS = {"id": "Id", "name": "Name", "driver": "Driver", "scope": "Scope", "options": "Options",
+NETWORK_FIELDS = {"id": "ID", "name": "Name", "driver": "Driver", "scope": "Scope", "options": "Options",
                   "containers": "Containers", "internal": "Internal"}
 VOLUME_FIELDS = {"name": "Name", "driver": "Driver", "scope": "Scope", "options": "Options", "mountpoint": "Mountpoint"}
 

@@ -146,11 +146,47 @@ def lsof_incomplete_records(output, service_pids=()):
     pid = descriptor = name = file_type = None
     process_has_file = False
     count, samples = 0, []
+    sample_identities = {}
     def problem(reason, operation=None):
         nonlocal count
         count += 1
-        if len(samples) < 16:
-            samples.append({"pid": pid, "fd": descriptor, "reason": reason, "operation": operation})
+        # Task blocks can repeat a file. Keep the failure count and full identity;
+        # only the bounded diagnostic samples are aggregated.
+        identity = (pid, descriptor, reason, operation, file_type, name)
+        if identity in sample_identities:
+            sample_identities[identity]["multiplicity"] += 1
+            return
+        if len(samples) >= 16:
+            return
+        raw_name = os.fsencode(name) if name is not None else None
+        shown_name = name
+        redacted = name is not None and name.startswith("/")
+        if redacted:
+            # Filenames can themselves contain annotation-like text. Render only
+            # fixed C-locale errno spellings or a complete numeric identity tail.
+            errno_text = {"ENOENT": "No such file or directory", "EACCES": "Permission denied",
+                          "EPERM": "Operation not permitted", "ESTALE": "Stale file handle"}
+            error_tail = (r' \(?(?:readlink|opendir|stat|lstat): (?:'
+                          + '|'.join(re.escape(text) for text in errno_text.values()) + r')\)')
+            numeric_tail = r' \(path (?:dev=[0-9]+,[0-9]+(?:,[ \t]*inode=[0-9]+)?|inode=[0-9]+)\)'
+            annotation = re.search('(?:' + error_tail + '|' + numeric_tail + r')\Z', name)
+            prefix = name[:annotation.start()].rstrip() if annotation else name
+            marker = next((suffix for suffix in (" (deleted)", " (revoked)") if prefix.endswith(suffix)), "")
+            shown_name = "/memfd:<redacted>" if name.startswith("/memfd:") else "<absolute-path>"
+            shown_name += marker + (" " + annotation[0].lstrip() if annotation else "")
+        shown_bytes = os.fsencode(shown_name) if shown_name is not None else None
+        raw_type = os.fsencode(file_type) if file_type is not None else None
+        sample = {"pid": pid, "fd": descriptor, "reason": reason, "operation": operation,
+                  "type": os.fsdecode(raw_type[:16]) if raw_type is not None else None,
+                  "typeBytes": len(raw_type) if raw_type is not None else None,
+                  "typeTruncated": raw_type is not None and len(raw_type) > 16,
+                  "name": os.fsdecode(shown_bytes[:512]) if shown_bytes is not None else None,
+                  "nameBytes": len(raw_name) if raw_name is not None else None,
+                  "nameSha256": hashlib.sha256(raw_name).hexdigest() if raw_name is not None else None,
+                  "nameTruncated": raw_name is not None and (len(raw_name) > 512 or len(shown_bytes) > 512),
+                  "nameRedacted": redacted, "multiplicity": 1}
+        samples.append(sample)
+        sample_identities[identity] = sample
     def finish_file():
         if descriptor is None:
             return
@@ -223,11 +259,11 @@ def open_paths(root, owner=None):
         details = {"operation": "lsof-open-paths", "root": str(root), "argv": command,
                    "returncode": returncode, "timedOut": timed_out, "errno": error_number,
                    "reason": reason, "incompleteRecordCount": records[0], "incompleteRecords": records[1],
-                   "incompleteRecordsTruncated": records[0] > len(records[1]),
+                   "incompleteRecordsTruncated": records[0] > sum(sample.get("multiplicity", 1) for sample in records[1]),
                    "durationMs": round((time.monotonic() - started) * 1000),
                    "stderr": raw[:4096].decode("utf-8", errors="replace"),
                    "stderrBytes": len(raw), "stderrTruncated": len(raw) > 4096}
-        return RuntimeError("无法完整核对打开文件；保留资源：" + json.dumps(details, ensure_ascii=False))
+        return RuntimeError("无法完整核对打开文件；保留资源：" + json.dumps(details, ensure_ascii=True))
     try:
         command = lsof_query_command()
         proof = owner.service_proof(root) if isinstance(owner, Run) else None
