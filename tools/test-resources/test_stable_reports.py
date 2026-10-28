@@ -385,6 +385,132 @@ class StableReportsTests(unittest.TestCase):
                          "oversized manifest metadata must stop export before payload copying")
         self.assertTrue((self.results / "results.json").is_file())
 
+    def test_unselected_diagnostic_directories_do_not_consume_manifest_budget(self):
+        profile = self.profile()
+        for index in range(12):
+            directory = profile / ("opaque-%02d-" % index + "x" * 48)
+            directory.mkdir()
+            (directory / "raw.sqlite").write_bytes(b"opaque")
+        before = self.inventory(self.scratch)
+        self.export(failed_profiles=set())
+        reference = self.manifest()
+        self.destination = self.run / "uncertain-reports"
+        with patch.object(stable_reports, "JSON_LIMIT", 3500):
+            try:
+                receipt = self.export(failed_profiles=None)
+            except ValueError as error:
+                self.fail("unselected raw directories consumed the small metadata budget: " + str(error))
+        manifest = self.manifest()
+        for key in ("entries", "directories", "sources", "omissions", "diagnosticBytes"):
+            self.assertEqual(manifest[key], reference[key])
+        self.assertEqual({entry["path"] for entry in manifest["sourceDirectories"]}, {
+            "tests/e2e/test-results", "tests/e2e/playwright-report",
+            "tests/e2e/test-results/persistent-profiles",
+            "tests/e2e/test-results/persistent-profiles/case",
+        })
+        self.assertLessEqual((self.destination / "test-results/stable-export.json").stat().st_size, 3500)
+        self.assertEqual(stable_reports.verify_snapshot(self.destination, RUN_ID, receipt), receipt)
+        self.assertEqual(self.inventory(self.scratch), before)
+
+    def test_persisted_source_directories_keep_selected_ancestors_and_empty_proofs(self):
+        profile = self.profile()
+        diagnostic = profile / "logs/selected/debug.log"
+        diagnostic.parent.mkdir(parents=True)
+        diagnostic.write_bytes(b"selected diagnostic\n")
+        opaque = profile / "opaque"
+        opaque.mkdir()
+        (opaque / "raw.sqlite").write_bytes(b"opaque")
+        ordinary_empty = self.results / "empty-report"
+        ordinary_empty.mkdir()
+        archive = profile / "opfs-archive"
+        (archive / "files/empty").mkdir(parents=True)
+        (archive / "manifest.json").write_text(json.dumps({
+            "namespace": "empty-test", "directories": [["empty"]], "files": [],
+        }))
+        (archive / "cleanup.json").write_text(json.dumps({
+            "namespace": "empty-test", "removed": True,
+        }))
+        before = self.inventory(self.scratch)
+        receipt = self.export(failed_profiles=None)
+        paths = {entry["path"] for entry in self.manifest()["sourceDirectories"]}
+        required = (ordinary_empty, profile, profile / "logs", diagnostic.parent,
+                    archive, archive / "files", archive / "files/empty")
+        self.assertTrue({str(path.relative_to(self.scratch)) for path in required} <= paths)
+        self.assertNotIn(str(opaque.relative_to(self.scratch)), paths)
+        self.assertTrue((self.destination / "test-results/empty-report").is_dir())
+        self.assertTrue((self.destination / "test-results/persistent-profiles/case/opfs-archive/files/empty").is_dir())
+        self.assertEqual(stable_reports.verify_snapshot(self.destination, RUN_ID, receipt), receipt)
+        self.assertEqual(self.inventory(self.scratch), before)
+        exported = self.destination / "test-results/failure-diagnostics/case/logs/selected/debug.log"
+        self.assertEqual(exported.read_bytes(), b"selected diagnostic\n")
+        exported.write_bytes(b"tampered")
+        with self.assertRaises(ValueError):
+            stable_reports.verify_snapshot(self.destination, RUN_ID, receipt)
+
+    def test_unselected_diagnostic_directory_still_requires_stable_source_identity(self):
+        real_execute = stable_reports._Selection.execute
+        for operation in ("change", "replace"):
+            with self.subTest(operation=operation):
+                profile = self.profile(name=operation)
+                opaque = profile / "opaque"
+                opaque.mkdir()
+                (opaque / "raw.sqlite").write_bytes(b"opaque")
+                self.destination = self.run / (operation + "-reports")
+                changed = []
+
+                def mutate_then_execute(selection, destination=None):
+                    if not changed:
+                        changed.append(True)
+                        if operation == "replace":
+                            opaque.rename(self.run / "old-opaque")
+                            opaque.mkdir()
+                        (opaque / "late.sqlite").write_bytes(b"late")
+                    return real_execute(selection, destination)
+
+                with patch.object(stable_reports._Selection, "execute", mutate_then_execute):
+                    with self.assertRaisesRegex(RuntimeError, "report directory changed"):
+                        self.export(failed_profiles=None)
+                self.assertTrue(changed, "the fixture must mutate a real scanned directory")
+                self.assertFalse((self.destination / "test-results/stable-export.json").exists())
+
+    def test_metadata_failure_distinguishes_json_and_total_limits_before_copy(self):
+        prefix = "stable report including metadata exceeds report limit: "
+        cases = (("manifest-json-limit", 512, 5 * 1024 ** 3),
+                 ("report-total-limit", 16 * 1024 ** 2, 512))
+        for reason, json_limit, report_limit in cases:
+            with self.subTest(reason=reason):
+                self.destination = self.run / reason
+                before = self.inventory(self.scratch)
+                with patch.object(stable_reports, "JSON_LIMIT", json_limit):
+                    with self.assertRaises(ValueError) as caught:
+                        self.export(report_limit=report_limit)
+                message = str(caught.exception)
+                self.assertTrue(message.startswith(prefix), "budget rejection needs bounded diagnostics")
+                diagnostic = json.loads(message[len(prefix):])
+                self.assertEqual(diagnostic["reason"], reason)
+                self.assertEqual(diagnostic["jsonLimitBytes"], json_limit)
+                self.assertEqual(diagnostic["reportLimitBytes"], report_limit)
+                self.assertEqual(diagnostic["payloadBytes"], sum(
+                    path.stat().st_size for path in (self.results / "results.json", self.html / "index.html")))
+                self.assertEqual(diagnostic["files"], 2)
+                self.assertEqual(diagnostic["directories"], 2)
+                self.assertEqual(diagnostic["persistedSourceDirectories"], 2)
+                self.assertEqual(diagnostic["observedSourceDirectories"], 2)
+                self.assertEqual(diagnostic["omissions"], 0)
+                self.assertEqual(diagnostic["diagnosticBytes"], 0)
+                self.assertGreater(diagnostic["ownerBytes"], 0)
+                self.assertGreater(diagnostic["encodedBytesAtStop"], 0)
+                if reason == "manifest-json-limit":
+                    self.assertGreater(diagnostic["encodedBytesAtStop"], json_limit)
+                else:
+                    self.assertGreater(diagnostic["payloadBytes"] + diagnostic["ownerBytes"]
+                                       + diagnostic["encodedBytesAtStop"], report_limit)
+                self.assertLess(len(message.encode("utf-8")), 1024)
+                self.assertNotIn(str(self.scratch), message)
+                self.assertNotIn("results.json", message)
+                self.assertFalse(self.destination.exists(), "both limits must reject before payload copying")
+                self.assertEqual(self.inventory(self.scratch), before)
+
     def test_database_or_vm_payload_in_ordinary_report_tree_is_refused(self):
         (self.results / "unexpected.sqlite").write_bytes(b"whole database")
         with self.assertRaises((ValueError, RuntimeError)):

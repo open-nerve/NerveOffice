@@ -115,6 +115,8 @@ Run 在 scratch 创建前落盘 `hostedScope`，并登记四个固定根、实�
 
 单快照最多 100,000 个文件/目录/省略项（包含 owner 和 manifest 自身两项），manifest 最多 16 MiB。枚举有界，复制前核对元数据及原 5 GiB 总额，完成时再校验。必要报告不能静默截断；失败诊断达到扫描上限时显式记录省略。导出目的持有原目录 FD，路径被替换时不得向替代目录写入报告或最终清单。
 
+扫描过的来源目录仍全部在内存登记并于导出后复核身份，包含未选中的原始浏览器资料分支。manifest只逐项持久化必要报告目录、profile根、OPFS（含空目录）和所选诊断的已观察祖先；纯未选分支不写入这份索引，避免缓存目录数单独撑大必要报告的清单。任何被观察目录的替换仍拒绝导出。容量错误区分`manifest-json-limit`与`report-total-limit`，只附固定数值计数，不含路径；`encodedBytesAtStop`是拒绝时已编码的前缀字节数，不是完整清单总长。两个阈值及复制前拒绝时机不变。
+
 托管 integration 的覆盖率目录由运行器设为本轮 output 下的 coverage，连同 command.log 和资源回执进入便携报告。其他运行清除旧的覆盖率目标继承值，本机保持原 coverage 路径。verify 只上传 `.test-resources/runs/*/reports/portable/test-results/`，明确启用隐藏目录并要求有文件；checker 核验同一 UUID 的覆盖率摘要与非空 HTML，不以资源回执替代实际覆盖率。
 
 E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `reports/transport/`。计划先登记、目录独占、inode先于子进程登记；压缩输出有容量/磁盘余量保护，tar 解码逐项核对文件/目录集合、类型、大小和 SHA-256，拒绝链接、稀疏、重复、越界、额外成员及超限元数据。运输收据绑定原 manifest 与 archive，不改写稳定清单；没有 profile 时明确登记空运输。原 artifact 增加精确 transport 路径，展开的 profile 不上传，归档失败不回退 raw。只清理确认属于本次创建的 partial，未知或被替换的目录保持。运输和最终清理回执都计入报告预算，最终写入后再检查容量。
