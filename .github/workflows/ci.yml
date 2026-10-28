@@ -46,6 +46,8 @@ jobs:
           --health-retries 30
     env:
       CI: 'true'
+      # 固定一次性托管 VM 按宿主生命周期回收原环境；报告先独立验证稳定导出。
+      NERVE_TEST_RESOURCE_POLICY: github-hosted-vm
       # 仅托管 Ubuntu 24.04 的固定只读 lsof 查询提权；运行器及测试仍使用普通用户。
       NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
       NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
@@ -62,8 +64,6 @@ jobs:
         id: resource-preflight
         timeout-minutes: 3
         run: python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true
-        env:
-          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
 
       # 安装前失败也必须留下原 runId 和清理状态；不读取或上传 scratch 内容。
       - name: 保存预检的有界状态回执
@@ -88,18 +88,26 @@ jobs:
       - name: pnpm verify --ci --scope=no-e2e
         run: pnpm verify --ci --keep-going --scope=no-e2e
         env:
-          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
           # 推送事件：迁移门禁拿推送之前的提交作基准，一次推送里的每个提交都在比较范围内；定时与手动触发时为空，门禁改用 HEAD^1
           GATE_MIGRATIONS_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
-      # 总是上传：失败时要能查到覆盖率与报告（E2E 的报告在 e2e 那几个 job 里）
-      - name: 上传覆盖率报告
+      - name: 核对本轮资源处置与报告导出
+        id: resource-check
         if: always()
+        timeout-minutes: 3
+        run: python3 -B tools/test-resources/check_ci_resources.py
+
+      # 产品失败仍可上传已经通过资源核验的报告；原检查步骤保持失败。
+      - name: 上传覆盖率报告
+        id: resource-upload
+        if: always() && steps.resource-check.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: reports-${{ github.run_id }}
-          path: coverage/
+          path: .test-resources/runs/*/reports/portable/test-results/
+          include-hidden-files: true
           retention-days: 14
+          if-no-files-found: error
 
   # E2E：按浏览器分片并行（M2-P4）。每片自己构建（E2E 要用构建产物），跑一个浏览器的全部用例；
   # 重启用例（US-M1-10）只在带 chromium 的那一片里跑一次（playwright.config.ts）
@@ -131,6 +139,7 @@ jobs:
           --health-retries 30
     env:
       CI: 'true'
+      NERVE_TEST_RESOURCE_POLICY: github-hosted-vm
       NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
       NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
       E2E_BROWSERS: ${{ matrix.browser }}
@@ -145,8 +154,6 @@ jobs:
         id: resource-preflight
         timeout-minutes: 3
         run: python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true
-        env:
-          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
 
       # 安装前失败也必须留下原 runId 和清理状态；不读取或上传 scratch 内容。
       - name: 保存预检的有界状态回执
@@ -183,53 +190,40 @@ jobs:
       - name: pnpm verify --ci --scope=e2e
         timeout-minutes: 115
         run: pnpm verify --ci --keep-going --scope=e2e
-        env:
-          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
 
       - name: 确认本轮全部写入者退出（含外层终止后的恢复收尾）
         id: e2e-quiescence
         if: always() && steps.e2e-prepare.outcome == 'success'
         timeout-minutes: 17
         run: node tools/src/ci/e2e-cli.ts settle
-        env:
-          NERVE_TEST_CI_POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
 
       - name: 核对原始 JSON 与 HTML 报告存在且完整
         id: e2e-report-check
         if: always() && steps.e2e-prepare.outcome == 'success'
         run: node tools/src/ci/e2e-cli.ts reports
 
-      # 持久资料里的相同构建资源跨用例重复，逐文件 ZIP 无法跨文件压缩，曾令上传超出 job 时限。
-      # 保留所有文件并在替代上传前与原目录逐项比较；原目录始终保留。
-      # 未确认无写入者时禁止归档/上传活目录，只上传独立监督记录。
+      # 只把已核验的便携资料打包到同轮 transport；原环境留在 scratch 等待宿主回收。
+      # 固定入口负责登记、压缩限额、成员与哈希核验及预算复核，不改写原稳定导出树。
       - name: 无损归档浏览器持久资料
         id: profile-archive
-        if: always() && steps.e2e-quiescence.outcome == 'success'
-        shell: bash
-        run: |
-          profiles=tests/e2e/test-results/persistent-profiles
-          if [[ -d "$profiles" ]]; then
-            archive="${profiles}.tar.zst"
-            test ! -e "$archive"
-            trap 'rm -f -- "$archive.partial"' EXIT
-            tar --sort=name --use-compress-program='zstd -T2 --long=27 -3' \
-              --create --file="$archive.partial" --directory=tests/e2e/test-results persistent-profiles
-            tar --use-compress-program='zstd --long=27 -d' \
-              --compare --file="$archive.partial" --directory=tests/e2e/test-results
-            mv -- "$archive.partial" "$archive"
-          fi
+        if: always() && steps.e2e-quiescence.outcome == 'success' && steps.e2e-report-check.outcome == 'success'
+        timeout-minutes: 10
+        run: python3 -B tools/test-resources/pack_ci_profiles.py
 
-      # 总是上传：重试后通过的用例也要能查到报告（规范 §8.4，出现重试即记为不稳定）
+      # 产品失败仍保留安全报告；归档失败不能回退上传未压缩的 profile 目录。
       - name: 上传测试报告
         id: e2e-upload
-        if: always() && steps.e2e-quiescence.outcome == 'success'
+        if: always() && steps.e2e-quiescence.outcome == 'success' && steps.e2e-report-check.outcome == 'success' && steps.profile-archive.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-reports-${{ matrix.browser }}-${{ github.run_id }}
           path: |
             tests/e2e/playwright-report/
             tests/e2e/test-results/
-            ${{ steps.profile-archive.outcome == 'success' && '!tests/e2e/test-results/persistent-profiles/**' || '' }}
+            .test-resources/runs/*/reports/portable/test-results/
+            .test-resources/runs/*/reports/transport/
+            !tests/e2e/test-results/persistent-profiles/**
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
 
@@ -256,6 +250,7 @@ jobs:
     timeout-minutes: 45
     env:
       CI: 'true'
+      NERVE_TEST_RESOURCE_POLICY: github-hosted-vm
       NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
     steps:
       - name: 检出代码
@@ -296,12 +291,21 @@ jobs:
       - name: pnpm test:e2e:container
         run: pnpm test:e2e:container
 
-      - name: 上传测试报告与容器日志
+      - name: 核对本轮资源处置与报告导出
+        id: resource-check
         if: always()
+        timeout-minutes: 3
+        run: python3 -B tools/test-resources/check_ci_resources.py
+
+      - name: 上传测试报告与容器日志
+        id: resource-upload
+        if: always() && steps.resource-check.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: container-reports-${{ github.run_id }}
           path: |
             tests/e2e/playwright-report/
             tests/e2e/test-results/
+            .test-resources/runs/*/reports/portable/test-results/
+          include-hidden-files: true
           retention-days: 14

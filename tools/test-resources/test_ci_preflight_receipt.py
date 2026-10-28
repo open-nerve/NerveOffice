@@ -1,4 +1,5 @@
 """Small real filesystem fixtures; run through the managed test runner."""
+import copy
 import importlib.util
 import fcntl
 import json
@@ -52,6 +53,39 @@ class PreflightReceiptTests(unittest.TestCase):
         self.assertNotIn("SECRET", json.dumps(result))
         return result
 
+    def hosted_record(self, *, identity=None, status="passed", exit_code=0):
+        identity = identity or str(uuid.uuid4())
+        run = self.repo / ".test-resources/runs" / identity
+        scope = {"version": 1, "policy": "github-hosted-vm", "runId": identity,
+                 "context": {"version": 1, "policy": "github-hosted-vm", "repo": str(self.repo),
+                             "repository": "open-nerve/NerveOffice", "sha": "a" * 40,
+                             "runId": "40600596503", "attempt": "2", "job": "verify",
+                             "runner": "GitHub Actions test",
+                             "bootId": "66666666-7777-4888-8999-aaaaaaaaaaaa"},
+                 "roots": {"scratch": str(run / "scratch"),
+                           "short": str(Path("/tmp").resolve() / ("nerve-t-" + identity)),
+                           "reports": str(run / "reports"),
+                           "failures": str(self.repo / ".test-resources/failures" / identity)}}
+        directory = self.record(identity=identity, status=status, exitCode=exit_code,
+                                interrupted=status == "interrupted",
+                                cleanupStage="host-disposal-pending", cleanupComplete=False,
+                                producerQuiescent=True, hostedScope=scope,
+                                stableExport={"manifest": "test-results/stable-export.json",
+                                              "sha256": "b" * 64, "files": 2, "bytes": 64,
+                                              "complete": True},
+                                resourceBudget={"bytes": 128, "files": 4, "freeBytes": 24 * 1024 ** 3,
+                                                "limitBytes": 16 * 1024 ** 3,
+                                                "reserveBytes": 12 * 1024 ** 3, "reportBytes": 256},
+                                referenceObservation={"operation": "non-destructive-export",
+                                                      "root": str(run / "scratch"),
+                                                      "incompleteRecordCount": 3,
+                                                      "incompleteRecords": [{"private": "REFERENCE-SECRET"}],
+                                                      "incompleteRecordsTruncated": False,
+                                                      "absenceProven": False,
+                                                      "rawDeletionAuthorized": False})
+        (directory / "scratch").mkdir()
+        return directory
+
     def cli(self, *arguments):
         target = self.repo / "tools/test-resources/ci_preflight_receipt.py"
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -96,6 +130,139 @@ class PreflightReceiptTests(unittest.TestCase):
         self.assertIsNone(row["exitCode"])
         self.assertIsNone(row["shortRootExists"])
         self.assertNotIn("cleanupComplete", row)
+
+    def test_host_pending_is_bounded_diagnostic_only_and_leaves_resources_untouched(self):
+        # The short root belongs to the outer managed run: observe it without taking ownership.
+        directory = self.hosted_record(identity=os.environ["NERVE_TEST_RUN_ID"])
+        os.mkfifo(directory / "scratch/must-not-read")
+        before = {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()}
+        result = self.module.collect(self.repo)
+        self.assertEqual(result["collectionStatus"], "collected")
+        row = result["runs"][0]
+        self.assertEqual(row["status"], "passed")
+        self.assertEqual(row["cleanupStage"], "host-disposal-pending")
+        self.assertIs(row["cleanupComplete"], False)
+        self.assertIs(row["producerQuiescent"], True)
+        self.assertEqual(row["validation"], "diagnostic-only")
+        self.assertTrue(row["scratchExists"])
+        self.assertTrue(row["shortRootExists"])
+        self.assertEqual(row["hostedContext"], {
+            "version": 1, "policy": "github-hosted-vm", "repository": "open-nerve/NerveOffice",
+            "sha": "a" * 40, "runId": "40600596503", "attempt": "2", "job": "verify",
+            "runner": "GitHub Actions test", "bootId": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+        })
+        self.assertEqual(row["stableExport"], {"manifest": "test-results/stable-export.json",
+                                              "sha256": "b" * 64, "files": 2, "bytes": 64,
+                                              "complete": True})
+        self.assertEqual(row["resourceBudget"], {"bytes": 128, "files": 4,
+                                                "freeBytes": 24 * 1024 ** 3,
+                                                "limitBytes": 16 * 1024 ** 3,
+                                                "reserveBytes": 12 * 1024 ** 3, "reportBytes": 256})
+        self.assertEqual(row["referenceObservation"], {"incompleteRecordCount": 3,
+                                                      "absenceProven": False,
+                                                      "rawDeletionAuthorized": False})
+        self.assertNotIn("SECRET", json.dumps(result))
+        self.assertNotIn("ciAccepted", row)
+        self.assertNotIn("disposalObserved", row)
+        self.assertEqual(before, {p: p.read_bytes() for p in self.repo.rglob("*") if p.is_file()})
+        self.assertFalse((directory / "reports").exists(), "diagnostics must not create or verify an export")
+
+    def test_host_pending_failed_and_interrupted_results_are_not_promoted(self):
+        directory = self.hosted_record(status="failed", exit_code=7)
+        path = directory / "run.json"
+        for status, code in (("failed", 7), ("interrupted", 143)):
+            with self.subTest(status=status):
+                value = json.loads(path.read_text())
+                value.update(status=status, exitCode=code, interrupted=status == "interrupted")
+                path.write_text(json.dumps(value))
+                command = self.cli()
+                self.assertEqual(command.returncode, 0)  # Only diagnostic collection succeeds.
+                row = json.loads(command.stdout)["runs"][0]
+                self.assertEqual((row["status"], row["exitCode"]), (status, code))
+                self.assertIs(row["cleanupComplete"], False)
+                self.assertFalse(row["shortRootExists"])
+                self.assertEqual(command.stderr, b"")
+
+    def test_host_pending_requires_explicit_producer_and_disposal_records(self):
+        directory = self.hosted_record()
+        path = directory / "run.json"
+        original = json.loads(path.read_text())
+        for field in ("hostedScope", "cleanupComplete", "producerQuiescent", "stableExport",
+                      "resourceBudget", "referenceObservation"):
+            with self.subTest(missing=field):
+                value = copy.deepcopy(original)
+                del value[field]
+                path.write_text(json.dumps(value))
+                self.reject("invalid-hosted-record")
+        for field, replacement in (("cleanupComplete", True), ("cleanupComplete", 0),
+                                   ("producerQuiescent", False), ("producerQuiescent", 1)):
+            with self.subTest(field=field, value=replacement):
+                value = copy.deepcopy(original)
+                value[field] = replacement
+                path.write_text(json.dumps(value))
+                self.reject("invalid-hosted-record")
+
+    def test_host_pending_does_not_relax_product_or_local_complete_consistency(self):
+        directory = self.hosted_record()
+        path = directory / "run.json"
+        original = json.loads(path.read_text())
+        for change in ({"status": "passed", "exitCode": 7}, {"status": "failed", "exitCode": 0},
+                       {"status": "interrupted", "exitCode": 0, "interrupted": True},
+                       {"status": "cleanup-pending"}, {"status": "passed", "interrupted": True},
+                       {"cleanupStage": "complete", "cleanupComplete": True}):
+            with self.subTest(change=change):
+                path.write_text(json.dumps({**original, **change}))
+                self.reject("inconsistent-record")
+
+    def test_host_pending_scope_summary_is_bound_to_manifest_and_paths(self):
+        directory = self.hosted_record()
+        path = directory / "run.json"
+        original = json.loads(path.read_text())
+        changes = (("runId", str(uuid.uuid4())), ("policy", "strict"),
+                   ("context.repo", "/FOREIGN-SECRET"), ("context.version", True),
+                   ("context.runner", "x" * 129), ("context.sha", "wrong"),
+                   ("roots.scratch", "/FOREIGN-SECRET"), ("roots.short", "/FOREIGN-SECRET"))
+        for field, replacement in changes:
+            with self.subTest(field=field):
+                value = copy.deepcopy(original)
+                target = value["hostedScope"]
+                names = field.split(".")
+                for name in names[:-1]:
+                    target = target[name]
+                target[names[-1]] = replacement
+                path.write_text(json.dumps(value))
+                self.reject("invalid-hosted-record")
+
+    def test_host_pending_export_budget_and_reference_summaries_reject_invalid_values(self):
+        directory = self.hosted_record()
+        path = directory / "run.json"
+        original = json.loads(path.read_text())
+        changes = (("stableExport", "manifest", "/MANIFEST-SECRET"),
+                   ("stableExport", "sha256", "not-a-hash"), ("stableExport", "files", True),
+                   ("stableExport", "bytes", -1), ("stableExport", "complete", False),
+                   ("resourceBudget", "bytes", 17 * 1024 ** 3),
+                   ("resourceBudget", "freeBytes", 1), ("resourceBudget", "files", False),
+                   ("resourceBudget", "reportBytes", -1),
+                   ("referenceObservation", "incompleteRecordCount", True),
+                   ("referenceObservation", "absenceProven", True),
+                   ("referenceObservation", "rawDeletionAuthorized", True))
+        for record, field, replacement in changes:
+            with self.subTest(record=record, field=field):
+                value = copy.deepcopy(original)
+                value[record][field] = replacement
+                path.write_text(json.dumps(value))
+                self.reject("invalid-hosted-record")
+
+    def test_host_pending_omits_raw_reference_details_and_bounds_summary(self):
+        directory = self.hosted_record()
+        path = directory / "run.json"
+        value = json.loads(path.read_text())
+        value["referenceObservation"]["incompleteRecords"] = [{"private": "SECRET" * 5000}]
+        path.write_text(json.dumps(value))
+        result = self.module.collect(self.repo)
+        self.assertEqual(result["collectionStatus"], "collected")
+        self.assertLess(len(json.dumps(result).encode()), 4096)
+        self.assertNotIn("SECRET", json.dumps(result))
 
     def test_pending_roots_are_observed_without_scanning_contents(self):
         # This outer runner's short root is already registered; only observe it.

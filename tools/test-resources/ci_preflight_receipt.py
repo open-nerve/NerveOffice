@@ -95,6 +95,64 @@ def _identity(data, identity, repo):
         raise Rejected("invalid-manifest")
 
 
+def _hosted_row(data, identity):
+    """Summarize declared hosted evidence, without reading raw resources or authorizing disposal."""
+    def require(condition):
+        if not condition:
+            raise Rejected("invalid-hosted-record")
+
+    def text(value, limit):
+        return (type(value) is str and 0 < len(value) <= limit
+                and all(ord(character) >= 32 and ord(character) != 127 for character in value))
+
+    def integer(value):
+        return type(value) is int and 0 <= value <= 2 ** 63 - 1
+
+    scope = data.get("hostedScope")
+    require(type(scope) is dict and set(scope) == {"version", "policy", "context", "runId", "roots"})
+    require(type(scope["version"]) is int and scope["version"] == 1
+            and scope["policy"] == "github-hosted-vm" and scope["runId"] == identity)
+    context = scope["context"]
+    keys = {"version", "policy", "repo", "repository", "sha", "runId", "attempt", "job", "runner", "bootId"}
+    require(type(context) is dict and set(context) == keys)
+    require(type(context["version"]) is int and context["version"] == 1
+            and context["policy"] == "github-hosted-vm" and context["repo"] == data["repo"])
+    for key, limit, pattern in (("repository", 201, r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"),
+                                ("sha", 40, r"[0-9a-f]{40}"), ("runId", 20, r"[1-9][0-9]*"),
+                                ("attempt", 10, r"[1-9][0-9]*"),
+                                ("bootId", 36, r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")):
+        require(text(context[key], limit) and re.fullmatch(pattern, context[key]) is not None)
+    require(text(context["job"], 32) and context["job"] in ("verify", "e2e", "container")
+            and text(context["runner"], 128))
+    repo = Path(data["repo"])
+    run = repo / ".test-resources/runs" / identity
+    require(scope["roots"] == {"scratch": str(run / "scratch"),
+                               "short": str(Path("/tmp").resolve() / ("nerve-t-" + identity)),
+                               "reports": str(run / "reports"),
+                               "failures": str(repo / ".test-resources/failures" / identity)})
+    require(data.get("cleanupComplete") is False and data.get("producerQuiescent") is True)
+
+    export = data.get("stableExport")
+    require(type(export) is dict and set(export) == {"manifest", "sha256", "files", "bytes", "complete"})
+    require(export["manifest"] == "test-results/stable-export.json" and export["complete"] is True
+            and text(export["sha256"], 64) and re.fullmatch(r"[0-9a-f]{64}", export["sha256"]) is not None
+            and integer(export["files"]) and integer(export["bytes"]))
+    budget = data.get("resourceBudget")
+    require(type(budget) is dict and set(budget) == {"bytes", "files", "freeBytes", "limitBytes", "reserveBytes", "reportBytes"})
+    require(all(integer(value) for value in budget.values())
+            and budget["bytes"] <= budget["limitBytes"] and budget["freeBytes"] >= budget["reserveBytes"])
+    observation = data.get("referenceObservation")
+    require(type(observation) is dict and integer(observation.get("incompleteRecordCount"))
+            and observation.get("absenceProven") is False and observation.get("rawDeletionAuthorized") is False)
+    # These are declared facts only: the full checker separately validates the live host,
+    # producer identities, stable hashes and limits. No resource content is read here.
+    return {"cleanupComplete": False, "producerQuiescent": True, "validation": "diagnostic-only",
+            "hostedContext": {key: value for key, value in context.items() if key != "repo"},
+            "stableExport": export, "resourceBudget": budget,
+            "referenceObservation": {key: observation[key] for key in
+                                     ("incompleteRecordCount", "absenceProven", "rawDeletionAuthorized")}}
+
+
 def _row(data, identity, directory):
     status = data.get("status")
     if status in ("prepared", "running"):
@@ -102,7 +160,7 @@ def _row(data, identity, directory):
     stage, code, group = data.get("cleanupStage"), data.get("exitCode"), data.get("childGroup")
     if (status not in ("passed", "failed", "interrupted", "cleanup-pending")
             or "childGroup" not in data
-            or stage not in (None, "creation-incomplete", "reports-collected", "complete", "never-started")
+            or stage not in (None, "creation-incomplete", "reports-collected", "complete", "never-started", "host-disposal-pending")
             or (code is not None and (type(code) is not int or not 0 <= code <= 255))
             or (group is not None and (type(group) is not int or not 0 < group <= 2147483647))
             or (data.get("cleanupError") is not None and not isinstance(data["cleanupError"], str))):
@@ -115,12 +173,16 @@ def _row(data, identity, directory):
             raise Rejected("invalid-run-path")
         with ExitStack() as stack:
             short = _exists(_directory(stack, expected.parent), expected.name)
+    hosted_pending = stage == "host-disposal-pending"
     if ((stage in ("complete", "never-started") and (scratch or short))
             or (stage == "never-started" and (status != "interrupted" or group is not None))
-            or (status != "cleanup-pending" and stage not in ("complete", "never-started"))
+            or (status != "cleanup-pending" and stage not in ("complete", "never-started") and not hosted_pending)
             or (status == "cleanup-pending" and stage == "complete")
             or (status == "passed" and code != 0)
-            or (status == "failed" and code in (None, 0))):
+            or (status == "failed" and code in (None, 0))
+            or (hosted_pending and (status not in ("passed", "failed", "interrupted") or code is None
+                                   or (status != "passed" and code == 0)
+                                   or (status == "passed" and data.get("interrupted") is not False)))):
         raise Rejected("inconsistent-record")
     error, truncated = None, False
     if data.get("cleanupError") is not None:
@@ -133,7 +195,8 @@ def _row(data, identity, directory):
     return {"runId": identity, "kind": "ci-preflight", "status": status,
             "cleanupStage": stage, "exitCode": code, "childGroup": group,
             "scratchExists": scratch, "shortRootExists": short,
-            "cleanupError": error, "cleanupErrorTruncated": truncated}
+            "cleanupError": error, "cleanupErrorTruncated": truncated,
+            **(_hosted_row(data, identity) if hosted_pending else {})}
 
 
 def collect(repo):

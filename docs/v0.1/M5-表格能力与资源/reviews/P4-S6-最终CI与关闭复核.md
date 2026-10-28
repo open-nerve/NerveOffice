@@ -1,8 +1,8 @@
 # M5-P4 最终验收与关闭复核
 
-> **2026-10-28 当前记录**：旧输入 full11/container01 与 `main@1277dcb9` 的失败 CI 均按原件保留。后续修复已正常提交为 `9abf02d2`；本轮 full12 默认完整 verify 与 container02 完整生产容器均已通过原件/资源审计及独立接受，两轮受测输入一致。Task 3 完成；受测提交至最终合并的精确文档等价、正常合并/推送、新同 SHA 六项 CI、最终证据冻结与实际清理仍待完成。最新计数与边界见文末。
+> **2026-10-28 当前记录**：方案 B 已在 `50beb4e9` 实施；full13 默认完整 verify 与 container03 完整生产容器在同一组 4,582 个源码输入和 16 份 SDK 记录上通过，原件与资源审计均接受。受测提交至最终合并的精确文档等价、正常合并/推送、同 SHA 六项托管 CI、最终证据冻结及唯一 P4 worktree/分支清理仍待完成；P4 尚未关闭，P5 尚未开始。 旧full11/container01、full12/container02和失败CI各按原件保留；最新事实见文末。
 
-> 状态：本轮本机完整 verify 与生产容器已独立接受；最终同 SHA CI 与实际关闭尚待完成，P4 未关闭，P5 未启动。
+> 状态：最新完整本机及生产容器门禁、原件与实际资源清理已通过；最终文档等价、同 SHA 托管 CI 与实际关闭仍待完成。
 
 ## 本机完整门禁
 
@@ -225,3 +225,27 @@ container02 在同一 clean `9abf02d2` 上串行完成，原件目录为 `s6/s6-
 下一步只做计划已登记的诊断检查点：模板局部修正、有界异常摘要、安装前的小型预检与无需 pnpm 的始终输出回执；保持失败保留、当前删除保护和六项最终门禁。诊断性合并/推送只用于取得托管 Linux 原因，不构成 P4 验收；旧 v2 的 parentMain/full12/container02/push03 及来源签署均不改写。实际 Linux 能力成立后，最终输入仍须完成新本机完整门禁与容器门禁、最终同 SHA 六项 CI、冻结和 worktree 清理。P5 未开始。
 
 诊断检查点轻型校验已完成：最终同一输入的 Python 资源管理回归 **151/151**（59.019 秒），CI 接线回归 **12/12**（2.73 秒），修改的 YAML/TypeScript 按正常提交钩子的 ESLint 规则通过。13 份相关源码/测试/工作流的前后 SHA 完全一致；两轮受管 scratch、短根和进程组均已消失。回执为 `s6/ci-resource-path-fix/ci-40593800515-checkpoint/validation.json`（SHA-256 `c3df3d5df1f670e117126dee882adc24d99953ccc191f6bcf7917ea46c2c6795`）。独审发现的伪注解脱敏问题已以真实 RED 复现并修复，复验 27/27；回执读取器 22/22，独审无遗留 C/I/M。上述接受只覆盖诊断性提交，未运行新完整本机门禁、未取得新 CI 结果，不改变 P4 未关闭状态。
+
+
+## 2026-10-28：诊断 CI 40600596503 的实测结果
+
+诊断提交 `c576c1fe` 正常 no-ff 合 main `18892db5`，正常 pre-push 263.27 秒后推送成功；推送受管 run `912fab9d-712e-4d73-a6bd-ef2873e3c89f` 已 cleanup complete，scratch、短根和进程组均消失。回执为 `s6/ci-resource-path-fix/ci-40593800515-checkpoint/normal-push-receipt.json`，SHA-256 `f419ec725f58970c326d3991caf6ec9c894fbba8c04a7b5c16c2dc240d837686`。
+
+新 [CI 40600596503](https://github.com/open-nerve/NerveOffice/actions/runs/40600596503) 六项全部在安装依赖前的资源预检停止；Docker 服务查询不再是首个错误。lsof 返回0、stderr为空，但每项有19–54条不能完整解释的宿主记录，样本未截断；包含 UNIX-STREAM、UDP/TCP/NETLINK/QIPCRTR 与匿名 bpf-map 映射。每项均有一条 UNIX-STREAM，不能由协议名或数字PID断定其无文件系统路径。六份状态回执为 cleanup-pending、childGroup=null、scratch/短根仍存在；没有运行产品子命令。
+
+历史断点（方案B审批前）：六份原日志与逐任务审计已核验保存，不能用收集成功或正常推送声明CI通过。当时尚未实施方案，需要先决定持久机器与一次性托管VM的回收责任。用户随后已批准方案B，实施及本机新门禁结果见下节；原失败结论不改写。
+
+## 2026-10-28：方案B实施与新同源双门禁
+
+方案B实现提交为`50beb4e95ad0a019d614cae6f561916192856dc6`，正常提交钩子通过。完整资源Python回归289/289，CI相关TypeScript三文件21项、定向lint和tools类型检查通过；新外部合同15项、hosted审计器21项、v3来源与关闭工具39项通过。运输、跨模块、外部合同、hosted审计器与v3工具五份独审记录均无遗留阻断，见`s6/hosted-vm-policy/`。工具审查不是实际托管CI通过。
+
+| 新轮 | 原范围结果 | 资源与来源 |
+|---|---|---|
+| `full13-20261028T120939972856Z` | 705文件、16,943项单元/集成；2,421 E2E通过、16个与旧基线身份/理由一致的平台跳过；零失败、重试或flaky | 59份崩溃附件、168轮；1,112个profile精简，仅保留必要证据；两个内层及外层临时目录实际清理 |
+| `container03-20261028T144206482454Z` | 339项通过：328常规、4生产崩溃恢复、7后端重启；无跳过/重试 | 私有图片卷、GC备份水位及代次验证通过；8个profile精简，内外层临时目录实际清理 |
+
+两轮均以50beb4e9开始，4,582源码输入和16份SDK记录前后及两轮之间一致，源码未在门禁中改变。两份`archive-review/<label>/status.json`为accepted，资源证明为本机真实cleanup complete，原件经案例/JSON/HTML/摘要/OPFS核验后pin；新四份before/after-v3回执按真实启动与结束时间采集，不覆盖旧v2证明。两轮独立接受记录分别为`hosted-vm-policy/full13-independent-acceptance.json`（SHA-256 `fa9b22a190c48ed7166f92b0c167abf58695bb5bdb22341da157cba30c44808f`）和`hosted-vm-policy/container03-independent-acceptance.json`（`7143cdc2ad1ca9de6b8990d8a083731b6ed4bf25e9fb11b430b5fcb3a47b7480`）；案例、附件与关键摘要直接复核，完整归档其余文件沿用已保存原审计，未重复运行测试。
+
+容器为本机Linux arm64：镜像526.4 MB，应用空闲内存243.1 MiB、E2E轮询峰值409.8 MiB、结束222.1 MiB；独立核对的cgroup实际峰值732,782,592 B（约698.8 MiB），低于4 GiB上限且OOM为0，原预算保持；缺主密钥及错误格式均在1秒内退出1，四份容器日志扫描未泄露主密钥。测试编排环境已删除。两轮WindowServer身份保持989，未触发桌面保护；full13期间最低可用磁盘约87.17 GiB，清理后约102 GiB，container03收尾后约101.6 GiB。这是采样到的本机空间，不把APFS目录大小当作实际释放量。
+
+剩余顺序：结果文档独审和中文提交→正常no-ff合main→精确文档等价及新v3绑定→正常pre-push与推送→同SHA六项CI和十份artifact的真实托管合同审计→独立关闭复核→冻结证据→实际移除唯一P4 worktree/分支→finalize。托管资源即使合格仍为host-disposal-pending、cleanupComplete=false、ciRawCleanupObserved=false，不宣称已独立观察VM销毁。P4未关闭，P5未开始，原生环境与M4挂账不变。

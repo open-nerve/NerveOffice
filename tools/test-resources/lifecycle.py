@@ -15,6 +15,8 @@ import tempfile
 import uuid
 
 import service_scope
+import hosted
+import stable_reports
 
 VERSION = 1
 MIB = 1024 ** 2
@@ -141,7 +143,7 @@ def lsof_query_command():
     return ["/usr/bin/sudo", "-n", "--", "/usr/bin/lsof", "-nP", "-F", "pfnt"]
 
 
-def lsof_incomplete_records(output, service_pids=()):
+def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
     """Validate p/f/t/n before filtering; names may contain lsof errors, not paths."""
     pid = descriptor = name = file_type = None
     process_has_file = False
@@ -149,6 +151,8 @@ def lsof_incomplete_records(output, service_pids=()):
     sample_identities = {}
     def problem(reason, operation=None):
         nonlocal count
+        if allow_unresolved and reason in {"NOFD", "inspection-error", "unresolved-socket", "mapping-identity-mismatch"}:
+            return
         count += 1
         # Task blocks can repeat a file. Keep the failure count and full identity;
         # only the bounded diagnostic samples are aggregated.
@@ -190,6 +194,8 @@ def lsof_incomplete_records(output, service_pids=()):
     def finish_file():
         if descriptor is None:
             return
+        if allow_unresolved and descriptor != "NOFD" and file_type is None:
+            problem("missing-type-field")
         if descriptor == "NOFD":
             problem("NOFD", "opendir")
         elif name is None:
@@ -251,7 +257,7 @@ def lsof_incomplete_records(output, service_pids=()):
     return count, samples
 
 
-def open_paths(root, owner=None):
+def open_paths(root, owner=None, *, export_only=False):
     command = []
     started = time.monotonic()
     def incomplete(returncode=None, stderr=b"", timed_out=False, error_number=None, reason=None, records=(0, ())):
@@ -266,6 +272,8 @@ def open_paths(root, owner=None):
         return RuntimeError("无法完整核对打开文件；保留资源：" + json.dumps(details, ensure_ascii=True))
     try:
         command = lsof_query_command()
+        if export_only and (not isinstance(owner, Run) or owner.hosted_proof(root) is None):
+            raise ValueError("非破坏导出缺少托管归属证明")
         proof = owner.service_proof(root) if isinstance(owner, Run) else None
         if not os.environ.get(service_scope.SERVICE_ID):
             proof = None
@@ -284,8 +292,16 @@ def open_paths(root, owner=None):
         raise incomplete(result.returncode, result.stderr)
     output = os.fsdecode(result.stdout)
     records = lsof_incomplete_records(output, service_pids=service_pids)
-    if records[0]:
+    structural = lsof_incomplete_records(output, allow_unresolved=True) if export_only else records
+    if structural[0]:
+        raise incomplete(result.returncode, result.stderr, records=structural)
+    if records[0] and not export_only:
         raise incomplete(result.returncode, result.stderr, records=records)
+    if export_only:
+        owner.update(referenceObservation={"operation": "non-destructive-export", "root": str(root),
+                     "incompleteRecordCount": records[0], "incompleteRecords": records[1],
+                     "incompleteRecordsTruncated": records[0] > sum(s.get("multiplicity", 1) for s in records[1]),
+                     "absenceProven": False, "rawDeletionAuthorized": False})
     canonical = str(root.resolve())
     def inside(name):
         return name == canonical or name.startswith(canonical + "/")
@@ -301,6 +317,11 @@ def open_paths(root, owner=None):
         # run's alias. Resolve only absolute pathname candidates; retain lsof's
         # original text as evidence. Missing/deleted leaves still resolve parents.
         plain = re.split(r" type=(?:STREAM|DGRAM|SEQPACKET)(?: |$)", name, maxsplit=1)[0]
+        # A semantic lookup failure still contains positive path information.
+        # Strip only the known lsof annotation syntax for conservative matching;
+        # an ambiguous filename may block export, never authorize removal.
+        plain = re.sub(r" \((?:readlink|opendir|stat|lstat):[^\n]*\)$", "", plain)
+        plain = re.sub(r" \(path (?:dev|inode)=[^\n]*\)$", "", plain)
         plain = re.sub(r" \((?:deleted|revoked)\)$", "", plain)
         try:
             if any(inside(str(Path(candidate).resolve())) for candidate in {name, plain}):
@@ -540,11 +561,13 @@ class Store:
         # Manifest is durable before the scratch directory or any child exists.
         run.data = {"version": VERSION, "runId": identity, "repo": str(self.repo),
                     "kind": kind, "ownerPid": os.getpid(), "childGroup": None,
-                    "startedAt": time.time(), "status": "prepared", "serviceScope": None}
+                    "startedAt": time.time(), "status": "prepared", "serviceScope": None, "hostedScope": None}
         run.persist()
         try:
-            proof = service_scope.register(identity, self.repo, run.scope_roots())
-            run.update(serviceScope=proof, scopePaths={}, scopeMoves=[])
+            context = hosted.context(self.repo)
+            proof = None if context is not None else service_scope.register(identity, self.repo, run.scope_roots())
+            host_proof = hosted.register(context, identity, run.scope_roots()) if context is not None else None
+            run.update(serviceScope=proof, hostedScope=host_proof, scopePaths={}, scopeMoves=[])
             run.scratch.mkdir(mode=0o700)
             run.remember_scope_path(run.scratch)
             return run
@@ -552,6 +575,34 @@ class Store:
             run.update(status="cleanup-pending", cleanupStage="creation-incomplete", cleanupError=str(error))
             run.release()
             raise
+
+    def hosted_budget(self):
+        context = hosted.context(self.repo)
+        if context is None:
+            return None
+        roots = []
+        for directory in sorted((self.root / "runs").iterdir()):
+            if directory.is_symlink() or not RUN_ID.fullmatch(directory.name):
+                raise ValueError("托管任务存在未知运行目录，拒绝继续堆积")
+            value = read_run_manifest(directory / "run.json")
+            proof = value.get("hostedScope")
+            if proof is None or proof.get("context") != context:
+                raise ValueError("托管任务存在未绑定或跨宿主台账，保留并停止")
+            scratch = directory / "scratch"
+            roots_map = {"scratch": str(scratch), "short": str(Path('/tmp').resolve() / ('nerve-t-' + directory.name)),
+                         "reports": str(directory / 'reports'), "failures": str(self.root / 'failures' / directory.name)}
+            hosted.validate(proof, context, directory.name, roots_map)
+            if scratch.exists():
+                info = scratch.lstat()
+                if value.get('scopePaths', {}).get(str(scratch)) != {"device": info.st_dev, "inode": info.st_ino}:
+                    raise ValueError("托管容量核验遇到被替换的根")
+            roots.append(scratch)
+        result = hosted.check_budget(self.repo, roots)
+        # Export copies count separately; they are not exempted by leaving raw disposal to the VM.
+        report_roots = [p / 'reports' for p in (self.root / 'runs').iterdir()]
+        report_roots += [self.repo / 'tests/e2e' / leaf for leaf in ('test-results', 'playwright-report')]
+        result['reportBytes'] = hosted.measure(report_roots, limit_bytes=self.report_bytes)['bytes']
+        return result
 
     def sweep(self, now=None):
         now = time.time() if now is None else now
@@ -569,12 +620,17 @@ class Store:
                 report["unknown"].append(directory.name)
                 continue
             try:
+                if run.data.get("hostedScope") is not None and run.data.get("cleanupStage") == "host-disposal-pending":
+                    run.validate_hosted_completion()
+                    run.verify_export()
+                    continue
                 if run.scratch.exists() or run.data.get("cleanupStage") == "reports-collected" or run.data.get("status") in ("prepared", "cleanup-pending"):
                     if group_alive(run.data.get("childGroup")):
                         report["active"].append(run.id)
                     else:
                         value = run.finish("interrupted")
-                        report["recovered" if value["status"] != "cleanup-pending" else "active"].append(run.id)
+                        if value.get("cleanupStage") != "host-disposal-pending":
+                            report["recovered" if value["status"] != "cleanup-pending" else "active"].append(run.id)
             finally:
                 run.release()
         with locked(self.root / "gc.lock"):
@@ -593,6 +649,8 @@ class Store:
                     value = read_run_manifest(directory / "run.json")
                     if value["runId"] != directory.name or value["repo"] != str(self.repo):
                         continue
+                    if value.get("hostedScope") is not None:
+                        continue  # Only the disposable VM owns final disposal, including old snapshots.
                 except (OSError, ValueError, KeyError):
                     continue
                 paths = [(self.root / "failures" / directory.name, False)] if category == "failures" else [(directory / "reports", False)]
@@ -681,7 +739,7 @@ class Run:
                 "failures": str(self.store.root / "failures" / self.id)}
 
     def remember_scope_path(self, path):
-        if self.data.get("serviceScope") is not None:
+        if self.has_scope():
             path = Path(path)
             if str(path) not in self.scope_roots().values():
                 raise ValueError("服务 scope 只登记本轮固定根")
@@ -694,17 +752,127 @@ class Run:
 
     def scope_directory(self, path):
         path = Path(path)
-        if self.data.get("serviceScope") is None:
+        if not self.has_scope():
             path.mkdir(parents=True, exist_ok=True)
         elif path.exists() or path.is_symlink():
             if str(path) not in self.data.get("scopePaths", {}):
                 raise ValueError("服务 scope 不接管已有目录")
-            self.service_proof(path)
+            self.scope_proof(path)
         else:
             if str(path) in self.data.get("scopePaths", {}):
                 raise ValueError("已登记的服务 scope 根消失，保留原归属")
             path.mkdir(mode=0o700)
             self.remember_scope_path(path)
+
+    def has_scope(self):
+        return self.data.get('serviceScope') is not None or self.data.get('hostedScope') is not None
+
+    def scope_proof(self, path):
+        return self.hosted_proof(path) if self.data.get('hostedScope') is not None else self.service_proof(path)
+
+    def hosted_proof(self, root):
+        if self.released or read_run_manifest(self.directory / 'run.json') != self.data:
+            raise ValueError('托管运行租约或台账归属不符')
+        proof = self.data.get('hostedScope')
+        if proof is None:
+            raise ValueError('托管导出缺少创建前登记')
+        hosted.validate(proof, hosted.context(self.store.repo), self.id, self.scope_roots())
+        root = Path(root).absolute()
+        if str(root) != self.scope_roots()['short']:
+            contained(root, self.store.repo)
+        expected = self.data.get('scopePaths', {}).get(str(root))
+        if str(root) not in self.scope_roots().values():
+            relative = str(root.relative_to(self.store.repo))
+            if relative not in self.data.get('published', []):
+                raise ValueError('托管导出根没有发布归属')
+            marker = root / 'resource-run.json'
+            if marker.is_symlink() or read_run_manifest(marker).get('runId') != self.id:
+                raise ValueError('托管报告发布标记不符')
+            moves = [m for m in self.data.get('scopeMoves', []) if m['destination'] == str(root)]
+            expected = moves[-1]['identity'] if moves else None
+        if expected is None or not root.exists():
+            raise ValueError('托管根缺少创建或搬迁身份证明')
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or expected != {'device': info.st_dev, 'inode': info.st_ino}:
+            raise ValueError('托管根身份已变化')
+        if str(root) == self.scope_roots()['short']:
+            self.short_root()
+        return proof
+
+    def assert_exportable(self):
+        """Unknown global references allow a bounded copy, never deletion of the original."""
+        if group_alive(self.data.get('childGroup')):
+            raise RuntimeError('本轮生产者仍活动，拒绝导出')
+        roots = [self.scratch]
+        short = self.short_root()
+        if short is not None:
+            roots.append(short)
+        for root in roots:
+            self.hosted_proof(root)
+            if open_paths(root, owner=self, export_only=True):
+                raise RuntimeError('托管资源仍有已知打开句柄，保留：' + str(root))
+
+    def validate_hosted_completion(self):
+        self.hosted_proof(self.scratch)
+        if self.data.get('shortRoot'):
+            self.hosted_proof(self.short_root())
+        status, code = self.data.get('status'), self.data.get('exitCode')
+        if (self.data.get('producerQuiescent') is not True or group_alive(self.data.get('childGroup'))
+                or status not in ('passed', 'failed', 'interrupted') or type(code) is not int
+                or (status == 'passed' and (code != 0 or self.data.get('interrupted') is not False))
+                or (status != 'passed' and code == 0)
+                or self.data.get('cleanupStage') != 'host-disposal-pending'
+                or self.data.get('cleanupComplete') is not False):
+            raise ValueError('托管结果、生产者退出或处置状态不完整')
+        self.export_receipt()
+
+    def export_receipt(self):
+        receipt = self.data.get('stableExport')
+        if (type(receipt) is not dict or set(receipt) != {'manifest', 'sha256', 'files', 'bytes', 'complete'}
+                or receipt.get('manifest') != 'test-results/stable-export.json' or receipt.get('complete') is not True
+                or type(receipt.get('sha256')) is not str or not re.fullmatch('[0-9a-f]{64}', receipt['sha256'])
+                or any(type(receipt.get(key)) is not int or receipt[key] < 0 for key in ('files', 'bytes'))):
+            raise ValueError('托管完成态缺少持久化的稳定导出回执')
+        return receipt
+
+    def verify_export(self):
+        self.hosted_proof(self.scratch)
+        root = self.directory / 'reports/portable'
+        if self.data.get('published'):
+            roots = {str((self.store.repo / p).parent) for p in self.data['published']}
+            if len(roots) != 1:
+                raise ValueError('托管报告发布位置不一致')
+            root = Path(next(iter(roots)))
+            for relative in self.data['published']:
+                self.hosted_proof(self.store.repo / relative)
+        else:
+            self.hosted_proof(root.parent)
+        return stable_reports.verify_snapshot(root, self.id, self.export_receipt())
+
+    def finish_hosted(self, status):
+        self.assert_exportable()
+        if self.data.get('producerQuiescent') is not True:
+            raise RuntimeError('尚无本轮生产者及输出线程退出证明')
+        code = self.data.get('exitCode')
+        if type(code) is not int or (status == 'passed' and (code != 0 or self.data.get('interrupted') is not False)) or (status != 'passed' and code == 0):
+            raise ValueError('测试结果与退出状态不一致')
+        before = self.store.hosted_budget()
+        report = self.directory / 'reports'
+        self.scope_directory(report)
+        results = self.scratch / 'tests/e2e/test-results'
+        failed = set() if status == 'passed' else failed_profile_names(results / 'results.json')
+        log = self.directory / 'command.log'
+        self.update(exportDirectory='reports/portable')
+        receipt = stable_reports.snapshot_reports(self.scratch, report / 'portable', self.id, failed,
+                    command_log=log if log.exists() else None, report_limit=self.store.report_bytes)
+        self.assert_exportable()
+        self.update(stableExport=receipt, resourceBudget=self.store.hosted_budget(),
+                    resourceBudgetBeforeExport=before, status=status, endedAt=time.time(),
+                    cleanupStage='host-disposal-pending', cleanupComplete=False,
+                    disposalOwner='GitHub job VM lifecycle; final deletion not observed')
+        self.validate_hosted_completion()
+        self.verify_export()
+        return self.data
 
     def service_proof(self, root):
         if self.released or read_run_manifest(self.directory / "run.json") != self.data:
@@ -741,14 +909,14 @@ class Run:
         return proof
 
     def scope_move(self, source, destination):
-        if self.data.get("serviceScope") is None:
+        if not self.has_scope():
             return
         source, destination = Path(source), Path(destination)
         roots = [Path(p) for p in self.scope_roots().values()]
         published = {self.store.repo / base / leaf for base in ("tests/e2e", "tests/e2e/measure", "tests/e2e/safari-results")
                      for leaf in ("test-results", "playwright-report")}
         origin = next((p for p in roots if source.is_relative_to(p)), source if source in published else None)
-        if origin is None or self.service_proof(origin) is None or not (any(destination.is_relative_to(p) for p in roots) or destination in published):
+        if origin is None or self.scope_proof(origin) is None or not (any(destination.is_relative_to(p) for p in roots) or destination in published):
             raise ValueError("报告 scope 缺少本轮创建及搬迁链")
         if source.is_symlink() or destination.exists() or destination.is_symlink():
             raise ValueError("报告 scope 搬迁路径已存在或被替换")
@@ -855,6 +1023,8 @@ class Run:
         if status not in ("passed", "failed", "interrupted"):
             raise ValueError("终态无效")
         try:
+            if self.data.get('hostedScope') is not None:
+                return self.finish_hosted(status)
             self.assert_quiescent()
             if not self.scratch.exists():
                 if self.data.get("cleanupStage") == "reports-collected":
