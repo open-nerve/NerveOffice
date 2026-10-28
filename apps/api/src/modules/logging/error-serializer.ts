@@ -42,9 +42,29 @@ function isPgDatabaseError(error: Error): error is PgDatabaseError {
   return 'code' in error && typeof error.code === 'string' && /^[\dA-Z]{5}$/.test(error.code) && 'severity' in error
 }
 
-/** 只留堆栈里的调用位置：堆栈开头是消息，而消息可能有好几行（drizzle 的消息第二行就是参数）。 */
+/** 从调用者已选定的堆栈文本中只留调用位置；数据库错误须先剥离完整消息，不能凭 at 前缀判断敏感参数。 */
 export function framesOnly(stack: string | undefined): string | undefined {
   return stack?.split('\n').filter(line => /^\s+at /.test(line)).join('\n')
+}
+
+/** 数据库消息可能包含换行伪帧。无法确认完整 header 时省略 stack，保留其他结构化数据库诊断。 */
+function databaseFrames(error: Error): string | undefined {
+  try {
+    const { name, message, stack } = error
+    if (typeof name !== 'string' || typeof message !== 'string' || typeof stack !== 'string')
+      return undefined
+    // Error 标准文本的两个空值分支也要一致，不能把空消息拼成多余的冒号。
+    const header = name === '' ? message : message === '' ? name : `${name}: ${message}`
+    const prefix = `${header}\n`
+    if (!stack.startsWith(prefix))
+      return undefined
+    const frames = framesOnly(stack.slice(prefix.length))
+    return frames === '' ? undefined : frames
+  }
+  catch {
+    // 自定义 stack getter 不是查询失败的替代原因；不尝试回退扫描原串。
+    return undefined
+  }
 }
 
 /** 可以写进日志的异常消息：数据库错误的消息带着值，换成不带值的说明；其他异常原样。 */
@@ -65,7 +85,7 @@ export function serializeError(error: unknown, depth = 0): unknown {
     return error
   const cause = depth < MAX_CAUSE_DEPTH && error.cause !== undefined ? serializeError(error.cause, depth + 1) : undefined
   if (isDrizzleQueryError(error))
-    return defined({ type: 'DrizzleQueryError', message: safeErrorMessage(error), query: truncatedQuery(error.query), paramCount: error.params.length, stack: framesOnly(error.stack), cause })
+    return defined({ type: 'DrizzleQueryError', message: safeErrorMessage(error), query: truncatedQuery(error.query), paramCount: error.params.length, stack: databaseFrames(error), cause })
   if (isPgDatabaseError(error)) {
     return defined({
       type: 'DatabaseError',
@@ -78,7 +98,7 @@ export function serializeError(error: unknown, depth = 0): unknown {
       dataType: error.dataType,
       constraint: error.constraint,
       routine: error.routine,
-      stack: framesOnly(error.stack),
+      stack: databaseFrames(error),
       cause,
     })
   }

@@ -19,6 +19,8 @@ import { createTestDatabase } from '../support/database.ts'
 import { stallBeforeLimit } from '../support/limited-transactions.ts'
 
 const SENSITIVE = 'SENSITIVE-PARAM-7c1f'
+const FRAME_SENSITIVE = 'SENSITIVE-STACK-FRAME-9b31'
+const FAILURE_PARAMETER = `${SENSITIVE}\n    at ${FRAME_SENSITIVE}\n结束`
 
 // 只在测试里存在的接口：不经登录（认证本身由 auth 的测试覆盖）
 @Public()
@@ -32,7 +34,7 @@ class DatabaseProbeController {
   /** 带着一个"敏感"的参数执行一条会失败的查询（不是合法的 UUID） */
   @Get('failure')
   async failure(): Promise<void> {
-    await this.db.execute(sql`SELECT ${SENSITIVE}::uuid`)
+    await this.db.execute(sql`SELECT ${FAILURE_PARAMETER}::uuid`)
   }
 
   /** 只读快照里经连接池查询：与仓储的读方法漏传快照的事务、直接用连接池同一个情形 */
@@ -98,9 +100,13 @@ describe('连接池', () => {
     const response = await fetch(`${app.baseUrl}/api/__test/database/failure`)
     expect(response.status).toBe(500)
     const requestId = response.headers.get('x-request-id')
+    const body = await response.text()
+    expect(body.includes(SENSITIVE)).toBe(false)
+    expect(body.includes(FRAME_SENSITIVE)).toBe(false)
     const entry = app.logs.entries().find(log => log.requestId === requestId && log.level === 'error')
     expect(entry).toMatchObject({ err: { type: 'DrizzleQueryError', query: 'SELECT $1::uuid', cause: { type: 'DatabaseError', sqlState: '22P02' } } })
     expect(app.logs.text()).not.toContain(SENSITIVE)
+    expect(app.logs.text().includes(FRAME_SENSITIVE)).toBe(false)
   })
 })
 

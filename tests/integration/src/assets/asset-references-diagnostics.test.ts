@@ -257,6 +257,7 @@ it.each(['throwing-getter', 'non-string-stack'] as const)('诊断构造遇未知
   const text = formatted(error)
   expect(text.includes(PARAMETER_MARKER)).toBe(false)
   expect(text.includes('57014')).toBe(true)
-  expect(text.includes('diagnostic-incomplete')).toBe(true)
+  if (kind === 'throwing-getter')
+    expect(text.includes('diagnostic-incomplete')).toBe(true)
   expect(error === original).toBe(false)
 })
