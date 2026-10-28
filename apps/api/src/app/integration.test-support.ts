@@ -76,6 +76,8 @@ export { DocumentAssetRetentionService } from '../modules/documents/index.ts'
 // 直接核对 documents 的仓储只查给定范围里的文档（搜索的范围回归，M2-P6 复核 A 的 S3）；
 // 读正文、搜索在判断完权限、读数据之前停住（只读快照的回归，M2 Codex 评审 CX1）
 export { DocumentContentsRepository, DocumentsRepository } from '../modules/documents/index.ts'
+// 大集合回归沿用应用已有的数据库异常脱敏，只在测试入口暴露。
+export { framesOnly, serializeError } from '../modules/logging/error-serializer.ts'
 // 后台请求的标记的键（shared/background-request.ts）：核对哪些接口标了 @BackgroundRequest()（api/routes.test.ts，M3-P2 复核 B5）
 export { BACKGROUND_REQUEST_ROUTE } from '../shared/background-request.ts'
 // 取应用的 HTTP 适配器，列出它注册的全部路由：核对每个接口的认证与"看不到与不存在"的覆盖（support/routes.ts，M2-P6 第 6 片复核 S5）；

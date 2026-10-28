@@ -567,6 +567,17 @@ describe('US-M1-11 lint 规则的自测：绕过权限的服务只给指定的�
     }
   })
 
+  it('数据库诊断序列化只经集成测试出口访问，普通 app 和其他模块仍不能直连 logging 私有文件', async () => {
+    const exportSerializer = 'export { framesOnly, serializeError } from \'../modules/logging/error-serializer.ts\'\n'
+    expect(await rulesFor(exportSerializer, API_INTEGRATION_ENTRY)).not.toContain('boundaries/dependencies')
+    expect(await rulesFor(exportSerializer, 'apps/api/src/app/index.ts')).toContain('boundaries/dependencies')
+    expect(await rulesFor(exportSerializer, 'apps/api/src/app/app.module.ts')).toContain('boundaries/dependencies')
+    const importSerializer = 'import { serializeError } from \'../logging/error-serializer.ts\'\n\nexport const diagnostic = serializeError\n'
+    expect(await rulesFor(importSerializer, 'apps/api/src/modules/documents/documents.service.ts')).toContain('boundaries/dependencies')
+    const wrongPrivateFile = 'export { LOG_SERIALIZERS } from \'../modules/logging/root-logger.ts\'\n'
+    expect(await rulesFor(wrongPrivateFile, API_INTEGRATION_ENTRY)).toContain('boundaries/dependencies')
+  })
+
   it('集成测试专用的入口（@nerve-office/api/testing）只给 tests/integration：命令行、app 层的程序接口与其他文件、各模块、单元测试引用都失败（M2-P6 复验 R-S4）', async () => {
     const ENTRY_MESSAGE = '集成测试专用的入口（app/integration.test-support.ts）只给 tests/integration'
     const fromTests = await lint('import { DATABASE, DocumentsRepository } from \'@nerve-office/api/testing\'\n\nexport const used = [DATABASE, DocumentsRepository]\n', INTEGRATION_FILE)

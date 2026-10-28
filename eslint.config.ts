@@ -1594,6 +1594,8 @@ export default antfu(
           { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'assets' }, fileInternalPath: ['assets.repository.ts', 'file-storage.ts', 'image-runner.ts', 'image-types.ts', 'storage-adapter.ts', 'asset-gc-clock.ts'] } } } },
           // 图片引用与历史采样的真实事务/交错测试，只给测试专用出口，不加入 Documents 的生产公开接口。
           { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'documents' }, fileInternalPath: ['document-asset-references.ts', 'document-assets.repository.ts', 'document-checkpoint-clock.ts', 'document-checkpoint.service.ts', 'document-history.repository.ts', 'document-history-validation.ts'] } } } },
+          // 大集合回归复用数据库异常脱敏，仅测试专用出口可引用这一文件。
+          { from: { element: { type: 'api-app', fileInternalPath: 'integration.test-support.ts' } }, allow: { to: { element: { type: 'api-module', captured: { module: 'logging' }, fileInternalPath: 'error-serializer.ts' } } } },
           // 集成测试经 @nerve-office/api 的程序接口建应用，经集成测试专用的入口（@nerve-office/api/testing）拿数据库句柄与仓储（M2-P6 复验 R-S4）
           { from: { element: { type: 'integration-tests' } }, allow: { to: { element: { type: 'api-app', fileInternalPath: [PUBLIC_ENTRY, 'integration.test-support.ts'] } } } },
           {
