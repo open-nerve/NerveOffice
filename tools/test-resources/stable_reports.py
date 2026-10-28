@@ -311,6 +311,9 @@ class _Selection:
         self.limit = limit
         self.files = {}
         self.directories = set()
+        # Persist evidence directories only. The source tree still observes and
+        # checks every scanned directory, including unselected raw diagnostics.
+        self.source_directories = set()
         self.omissions = []
         self.diagnostic_bytes = 0
         self.bytes = 0
@@ -349,10 +352,15 @@ class _Selection:
             raise ValueError("stable report exceeds total report limit")
         self.files[output] = {"source": source, "path": path, "data": data,
                               "identity": identity, "bytes": size, "sha256": expected_sha}
+        if source is self.source:
+            parts = _parts(path)
+            self.source_directories.update(parent for size in range(1, len(parts))
+                                           if (parent := "/".join(parts[:size])) in source.observed)
         self.entry_budget()
 
     def ordinary(self, source_path, output):
         self.directory(output)
+        self.source_directories.add(source_path)
         for name in self.source.names(source_path, observe=True):
             _parts(name)
             path, target = source_path + "/" + name, output + "/" + name
@@ -374,10 +382,12 @@ class _Selection:
 
     def profiles(self, source_path, output):
         self.directory(output)
+        self.source_directories.add(source_path)
         for name in self.source.names(source_path, observe=True):
             _parts(name)
             path, target = source_path + "/" + name, output + "/" + name
             self.source.observe_directory(path)
+            self.source_directories.add(path)
             owner_path = path + "/resource-owner.json"
             owner, owner_sha, unused = self.source.json(owner_path, MARKER_LIMIT)
             if type(owner.get("version")) is not int or owner["version"] != 1 or owner.get("runId") != self.run_id \
@@ -431,6 +441,7 @@ class _Selection:
         for relative in sorted(allowed_dirs):
             current = path + ("/" + relative if relative else "")
             self.directory(output + ("/" + relative if relative else ""))
+            self.source_directories.add(current)
             for name in self.source.names(current, observe=True):
                 child = relative + "/" + name if relative else name
                 if child not in allowed_files and child not in allowed_dirs:
@@ -548,8 +559,9 @@ def _manifest(selection, run_id, owner_bytes, entries, sources):
         "directories": sorted(selection.directories),
         "diagnosticBytes": selection.diagnostic_bytes, "omissions": selection.omissions,
         "ownerSha256": hashlib.sha256(owner_bytes).hexdigest(), "sources": sources,
-        "sourceDirectories": [{"source": selection.source.tag, "path": path, "identity": list(identity)}
-                              for path, identity in sorted(selection.source.observed.items())],
+        "sourceDirectories": [{"source": selection.source.tag, "path": path,
+                               "identity": list(selection.source.observed[path])}
+                              for path in sorted(selection.source_directories)],
     }
 
 
@@ -560,7 +572,20 @@ def _metadata_budget(manifest, selection, owner_bytes, report_limit):
     for chunk in encoder.iterencode(manifest):
         size += len(chunk.encode("utf-8"))
         if size > JSON_LIMIT or selection.bytes + len(owner_bytes) + size > report_limit:
-            raise ValueError("stable report including metadata exceeds report limit")
+            # This is the encoded prefix at rejection, not the complete JSON
+            # length. Keep diagnostics fixed-shape and free of source paths.
+            detail = {
+                "reason": "manifest-json-limit" if size > JSON_LIMIT else "report-total-limit",
+                "encodedBytesAtStop": size, "payloadBytes": selection.bytes,
+                "ownerBytes": len(owner_bytes), "jsonLimitBytes": JSON_LIMIT,
+                "reportLimitBytes": report_limit, "files": len(selection.files),
+                "directories": len(selection.directories), "omissions": len(selection.omissions),
+                "persistedSourceDirectories": len(selection.source_directories),
+                "observedSourceDirectories": len(selection.source.observed),
+                "diagnosticBytes": selection.diagnostic_bytes,
+            }
+            raise ValueError("stable report including metadata exceeds report limit: "
+                             + json.dumps(detail, sort_keys=True, separators=(",", ":")))
 
 
 def _preflight_metadata(selection, run_id, owner_bytes, report_limit):

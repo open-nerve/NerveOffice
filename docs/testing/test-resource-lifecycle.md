@@ -115,6 +115,8 @@ Run 在 scratch 创建前落盘 `hostedScope`，并登记四个固定根、实�
 
 单快照最多 100,000 个文件/目录/省略项（包含 owner 和 manifest 自身两项），manifest 最多 16 MiB。枚举有界，复制前核对元数据及原 5 GiB 总额，完成时再校验。必要报告不能静默截断；失败诊断达到扫描上限时显式记录省略。导出目的持有原目录 FD，路径被替换时不得向替代目录写入报告或最终清单。
 
+扫描过的来源目录仍全部在内存登记并于导出后复核身份，包含未选中的原始浏览器资料分支。manifest只逐项持久化必要报告目录、profile根、OPFS（含空目录）和所选诊断的已观察祖先；纯未选分支不写入这份索引，避免缓存目录数单独撑大必要报告的清单。任何被观察目录的替换仍拒绝导出。容量错误区分`manifest-json-limit`与`report-total-limit`，只附固定数值计数，不含路径；`encodedBytesAtStop`是拒绝时已编码的前缀字节数，不是完整清单总长。两个阈值及复制前拒绝时机不变。
+
 托管 integration 的覆盖率目录由运行器设为本轮 output 下的 coverage，连同 command.log 和资源回执进入便携报告。其他运行清除旧的覆盖率目标继承值，本机保持原 coverage 路径。verify 只上传 `.test-resources/runs/*/reports/portable/test-results/`，明确启用隐藏目录并要求有文件；checker 核验同一 UUID 的覆盖率摘要与非空 HTML，不以资源回执替代实际覆盖率。
 
 E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `reports/transport/`。计划先登记、目录独占、inode先于子进程登记；压缩输出有容量/磁盘余量保护，tar 解码逐项核对文件/目录集合、类型、大小和 SHA-256，拒绝链接、稀疏、重复、越界、额外成员及超限元数据。运输收据绑定原 manifest 与 archive，不改写稳定清单；没有 profile 时明确登记空运输。原 artifact 增加精确 transport 路径，展开的 profile 不上传，归档失败不回退 raw。只清理确认属于本次创建的 partial，未知或被替换的目录保持。运输和最终清理回执都计入报告预算，最终写入后再检查容量。
@@ -124,5 +126,7 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 容器成功结果另外要求完整的 Playwright JSON 结构及非空 HTML，JSON 读取上限 64 MiB，超过则明确拒绝而不截断。构建先于 Playwright 失败时，可以只发布已经通过稳定清单核验的 test-results 诊断叶；失败退出码与产品状态保持，不能补造 HTML 或结果。仅这一失败诊断分支允许缺少 playwright-report 叶，其他发布路径仍拒绝。
 
 启动、结束和运行中每两秒计量同 job 所有已登记 scratch，包括上一轮等待宿主回收的内容，硬链接按 inode 去重，短别名不重复计量。16 GiB 是观察后停止的阈值，不是文件系统配额；采样及终止等待可能超调。每 0.1 秒的 12 GiB 磁盘余量检查独立覆盖报告、构建与镜像占盘，不能因为原环境低于 16 GiB 就忽略磁盘不足。报告合计 5 GiB，便携诊断维持 4 MiB/文件、16 MiB/用例、64 MiB/轮；artifact 14 天。身份、容量或清理条件不成立时停止，不创建反复重试的完整环境。
+
+活动目录的容量采样通过父目录 FD 核验子项。列举后 stat、子目录打开前、已打开子目录结束复核这三处，只有确认子项 ENOENT 时才继续扫描；已累计字节保留，稳定兄弟和累计超限仍照常核验。本次计量已确认存在的根固定身份，不能在重试时把根消失当成尚未创建的零用量，或认领同名替换目录。权限、未知错误、祖先/根及子目录身份替换仍失败；无法完成的扫描最多三次尝试，并以固定操作名、errno 和尝试次数记录有界诊断，不输出私有路径。该采样规则不授权任何删除，也不适用于稳定报告内容校验。
 
 `check_ci_resources.py` 在当前 job 上持 publication/run 锁，核验唯一预检和该 job 主测试的身份、退出、实际稳定报告哈希、历史及当前预算，写入 `cleanup-receipt.json` 的 `ciResources`。产品失败的合格诊断报告可以上传，原产品步骤仍失败；checker 拒绝则不上传。E2E 额外要求原监督器退出、JSON/HTML 合格及便携 profile 归档成功，归档失败不会回退上传 raw。预检收据只读收集有界摘要，明确 diagnostic-only，不能替代这一完整核验。三个 job 的既有报告 artifact 同时携带精确 `.test-resources/runs/*/reports/portable/test-results/` 路径下的预检原件，启用隐藏目录，不上传 scratch；因此远端可重新核对预检与主测试两份清单，而非只相信合同声明。最终远端接受还须绑定实际同 SHA 六项 CI 及下载后的便携证据，旧本地 v2 关闭证明继续只接受实际 cleanup complete。

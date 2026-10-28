@@ -1,8 +1,24 @@
 import { describe, expect, it } from 'vitest'
-import { captureLogs, drizzleError, pgError, SECRET_VALUE } from './logging.test-support.ts'
+import { captureLogs, drizzleError, FRAME_SECRET_VALUE, multilineDatabaseError, pgError, SECRET_VALUE } from './logging.test-support.ts'
 import { createRootLogger, REDACTED_KEYS, REDACTION_CENSOR } from './root-logger.ts'
 
 describe('createRootLogger', () => {
+  it('root 与 child 的真实原始 JSON 不会把数据库参数里的伪调用帧写进 stack', () => {
+    const logs = captureLogs()
+    const root = createRootLogger({ level: 'info', destination: logs.destination })
+    for (const logger of [root, root.child({ requestId: 'frame-probe' })]) {
+      logger.error(multilineDatabaseError())
+      logger.error({ err: multilineDatabaseError() }, '查询失败')
+    }
+    expect(logs.lines()).toHaveLength(4)
+    expect(logs.lines().join('').includes(FRAME_SECRET_VALUE)).toBe(false)
+    expect(logs.lines().join('').includes(SECRET_VALUE)).toBe(false)
+    for (const entry of logs.entries()) {
+      expect(entry).toMatchObject({ err: { type: 'DrizzleQueryError', query: 'select $1::uuid', paramCount: 1, cause: { type: 'DatabaseError', sqlState: '22P02' } } })
+      expect((entry.err as { stack: string }).stack).toContain('logging.test-support.ts')
+    }
+  })
+
   it('JSON，每行一条：ISO 8601 的时间、文字的级别与消息', () => {
     const logs = captureLogs()
     createRootLogger({ level: 'info', destination: logs.destination }).info({ port: 3000 }, 'HTTP 服务已启动')

@@ -42,7 +42,7 @@ def _uuid(value):
         return False
 
 
-def _directory(path, *, required=False):
+def _directory(path, *, required=False, with_identity=False):
     """Require an absolute canonical directory path, allowing uncreated tails."""
     if not isinstance(path, (str, Path)) or not _text(str(path), 4096):
         raise ValueError("托管资源路径无效")
@@ -50,6 +50,7 @@ def _directory(path, *, required=False):
     value = Path(name)
     if not value.is_absolute() or name.startswith("//") or os.path.normpath(name) != name:
         raise ValueError("托管资源路径必须规范且绝对")
+    leaf_info = None
     try:
         for candidate in [*reversed(value.parents), value]:
             try:
@@ -60,9 +61,11 @@ def _directory(path, *, required=False):
                 break
             if not stat.S_ISDIR(info.st_mode):
                 raise ValueError("托管资源路径含链接或非目录")
+            if candidate == value:
+                leaf_info = info
     except OSError as error:
         raise ValueError("托管资源路径无法核验：errno=" + str(error.errno)) from None
-    return value
+    return (value, leaf_info) if with_identity else value
 
 
 def _metadata(path, limit):
@@ -173,7 +176,9 @@ def validate(proof, identity, run_id, roots):
 
 
 class _Changed(Exception):
-    pass
+    def __init__(self, operation, error_number=None):
+        self.operation, self.errno = operation, error_number
+        super().__init__(operation)
 
 
 def _identity(info):
@@ -198,21 +203,56 @@ def _measure_once(roots, limit_bytes):
     seen = set()
     total = {"bytes": 0, "files": 0}
 
+    def missing_child(name, parent):
+        # Confirm only this name through the still-open parent. A recreated
+        # name or any other lookup error is not evidence of disappearance.
+        try:
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except OSError as error:
+            if error.errno == errno.ENOENT:
+                return True
+            raise
+        return False
+
     def walk(name, expected, parent=None):
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
-        descriptor = (_open_root(Path(name), flags) if parent is None
-                      else os.open(name, flags, dir_fd=parent))
+        descriptor = -1
+        operation = "root-open" if parent is None else "child-open"
         try:
+            try:
+                descriptor = (_open_root(Path(name), flags) if parent is None
+                              else os.open(name, flags, dir_fd=parent))
+            except OSError as error:
+                if parent is not None and error.errno == errno.ENOENT:
+                    operation = "child-confirm"
+                    if missing_child(name, parent):
+                        return
+                raise _Changed("root-open" if parent is None else "child-open", error.errno) from None
+            operation = "root-fstat" if parent is None else "child-fstat"
             opened = os.fstat(descriptor)
             if _identity(opened) != _identity(expected):
-                raise _Changed()
+                raise _Changed("root-identity" if parent is None else "child-identity")
             key = _identity(opened)
             if key in seen:
                 return
             seen.add(key)
+            operation = "root-scandir" if parent is None else "child-scandir"
             with os.scandir(descriptor) as entries:
-                for entry in entries:
-                    info = entry.stat(follow_symlinks=False)
+                while True:
+                    operation = "root-scandir" if parent is None else "child-scandir"
+                    try:
+                        entry = next(entries)
+                    except StopIteration:
+                        break
+                    operation = "entry-stat"
+                    try:
+                        info = entry.stat(follow_symlinks=False)
+                    except OSError as error:
+                        if error.errno == errno.ENOENT:
+                            operation = "entry-confirm"
+                            if missing_child(entry.name, descriptor):
+                                continue
+                        raise _Changed("entry-stat", error.errno) from None
                     if stat.S_ISDIR(info.st_mode):
                         walk(entry.name, info, descriptor)
                     elif stat.S_ISREG(info.st_mode) and _identity(info) not in seen:
@@ -224,25 +264,33 @@ def _measure_once(roots, limit_bytes):
                     # Links and special files have no regular-file payload to count.
                     # The separate free-space reserve covers other disk consumers.
             if parent is None:
+                operation = "root-recheck"
                 current = _open_root(Path(name), flags)
                 try:
                     after = os.fstat(current)
                 finally:
                     os.close(current)
             else:
-                after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                operation = "child-recheck"
+                try:
+                    after = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                except OSError as error:
+                    if error.errno == errno.ENOENT:
+                        # Bytes already counted through this opened directory
+                        # stay in the sample; only its vanished name is retired.
+                        return
+                    raise
             if not stat.S_ISDIR(after.st_mode) or _identity(after) != _identity(opened):
-                raise _Changed()
+                raise _Changed("root-identity" if parent is None else "child-identity")
+        except OSError as error:
+            raise _Changed(operation, error.errno) from None
         finally:
-            os.close(descriptor)
+            if descriptor >= 0:
+                os.close(descriptor)
 
-    for root in roots:
-        try:
-            info = root.lstat()
-        except FileNotFoundError:
+    for root, info in roots:
+        if info is None:
             continue
-        if not stat.S_ISDIR(info.st_mode):
-            raise ValueError("计量根必须为真实目录")
         walk(root, info)
     return total
 
@@ -252,20 +300,28 @@ def measure(roots, limit_bytes=RAW_LIMIT):
 
     Files may grow after sampling. This threshold is not a filesystem quota.
     Directory descriptors prevent a swapped child link from being traversed.
+    Confirmed child disappearance retires only that name, not the stable siblings
+    or bytes already observed. Root identities stay fixed across this sample's
+    retries; an existing root cannot become an absent or replacement root.
     """
     if type(limit_bytes) is not int or limit_bytes < 0:
         raise ValueError("资源容量阈值无效")
-    paths = [_directory(root) for root in roots]
+    captured = {}
+    for root in roots:
+        # Use the same stat that validated the path. A second lookup would
+        # reopen a gap in which a present/absent root could be reinterpreted.
+        path, info = _directory(root, with_identity=True)
+        if path not in captured:
+            captured[path] = info
     for attempt in range(SCAN_ATTEMPTS):
         try:
-            return _measure_once(paths, limit_bytes)
-        except OSError as error:
-            if error.errno not in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
-                raise RuntimeError("资源计量失败：errno=" + str(error.errno)) from None
-        except _Changed:
-            pass
-        if attempt + 1 == SCAN_ATTEMPTS:
-            raise RuntimeError("资源目录持续变化，无法完成有界计量") from None
+            return _measure_once(captured.items(), limit_bytes)
+        except _Changed as error:
+            details = "operation=" + error.operation + ",errno=" + str(error.errno) + ",attempts=" + str(attempt + 1)
+            if error.errno != errno.ENOENT:
+                raise RuntimeError("资源计量失败：" + details) from None
+            if attempt + 1 == SCAN_ATTEMPTS:
+                raise RuntimeError("资源目录持续变化，无法完成有界计量：" + details) from None
 
 
 def check_budget(repo, roots, limit_bytes=RAW_LIMIT, reserve_bytes=DISK_RESERVE):

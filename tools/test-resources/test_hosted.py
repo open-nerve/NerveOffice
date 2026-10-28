@@ -19,6 +19,18 @@ SHA = "a" * 40
 POLICY = "github-hosted-vm"
 
 
+class Entries:
+    """Keep real DirEntry objects while controlling one fixture's deletion time."""
+    def __init__(self, values, after=None):
+        self.values, self.after = iter(values), after
+    def __enter__(self): return self
+    def __iter__(self): return self
+    def __next__(self): return next(self.values)
+    def __exit__(self, *unused):
+        if self.after:
+            self.after()
+
+
 class HostedPolicyTests(unittest.TestCase):
     def setUp(self):
         temporary_root = os.environ.get("NERVE_TEST_SCRATCH") or os.environ["TMPDIR"]
@@ -356,6 +368,184 @@ class HostedPolicyTests(unittest.TestCase):
             self.assertEqual(self.module.measure([root], limit_bytes=1024), {"bytes": 0, "files": 0})
         self.assertTrue(injected)
         self.assertEqual(list(root.iterdir()), [])
+
+    @contextlib.contextmanager
+    def disappearing_child(self, root, stage):
+        """Every attempted scan loses a real child, while keep.bin stays intact."""
+        real_scan, real_open = os.scandir, os.open
+        victim = root / 'vanishes'
+        scans = []
+        def remove_open_child():
+            (victim / 'counted.bin').unlink()
+            victim.rmdir()
+        def scan(path):
+            if self.scans_directory(path, root):
+                scans.append(True)
+                if len(scans) > 16:
+                    raise AssertionError('live sampling retried without a useful bound')
+                if stage == 'entry-stat':
+                    victim.write_bytes(b'v' * 32)
+                else:
+                    victim.mkdir()
+                    if stage == 'child-recheck':
+                        (victim / 'counted.bin').write_bytes(b'c' * 128)
+                with real_scan(path) as stream:
+                    values = sorted(stream, key=lambda entry: entry.name != victim.name)
+                if stage == 'entry-stat':
+                    victim.unlink()
+                return Entries(values)
+            if stage == 'child-recheck' and victim.exists() and self.scans_directory(path, victim):
+                with real_scan(path) as stream:
+                    values = list(stream)
+                return Entries(values, remove_open_child)
+            return real_scan(path)
+        def opening(path, flags, *args, **kwargs):
+            if (stage == 'child-open' and os.fspath(path) == victim.name and kwargs.get('dir_fd') is not None
+                    and self.scans_directory(kwargs['dir_fd'], root)):
+                victim.rmdir()
+            return real_open(path, flags, *args, **kwargs)
+        with patch.object(self.module.os, 'scandir', scan), patch.object(self.module.os, 'open', opening):
+            yield scans
+
+    def live_sample(self, stage, *, limit=1024):
+        root = self.repo / 'scratch'
+        root.mkdir()
+        (root / 'keep.bin').write_bytes(b'k' * 512)
+        with self.disappearing_child(root, stage):
+            observed = self.module.measure([root], limit_bytes=limit)
+        self.assertEqual((root / 'keep.bin').read_bytes(), b'k' * 512)
+        return observed
+
+    def test_each_scan_can_lose_one_file_without_losing_its_stable_sibling(self):
+        self.assertEqual(self.live_sample('entry-stat'), {'bytes': 512, 'files': 1})
+
+    def test_each_scan_can_lose_a_child_before_open_without_losing_its_sibling(self):
+        self.assertEqual(self.live_sample('child-open'), {'bytes': 512, 'files': 1})
+
+    def test_open_child_disappearance_preserves_already_counted_bytes(self):
+        self.assertEqual(self.live_sample('child-recheck'), {'bytes': 640, 'files': 2})
+
+    def test_live_child_disappearance_does_not_hide_a_stable_over_budget_sibling(self):
+        for stage in ('entry-stat', 'child-open', 'child-recheck'):
+            with self.subTest(stage=stage):
+                root = self.repo / stage
+                root.mkdir()
+                (root / 'keep.bin').write_bytes(b'k' * 512)
+                with self.disappearing_child(root, stage), self.assertRaisesRegex(RuntimeError, '容量阈值'):
+                    self.module.measure([root], limit_bytes=256)
+                self.assertEqual((root / 'keep.bin').read_bytes(), b'k' * 512)
+
+    def test_previously_present_root_cannot_become_an_absent_zero_on_retry(self):
+        root = self.repo / 'scratch'
+        root.mkdir()
+        real_scan = os.scandir
+        removed = []
+        def scan(path):
+            if not removed and self.scans_directory(path, root):
+                with real_scan(path) as stream:
+                    values = list(stream)
+                root.rmdir()
+                removed.append(True)
+                return Entries(values)
+            return real_scan(path)
+        with patch.object(self.module.os, 'scandir', scan), self.assertRaises(RuntimeError):
+            self.module.measure([root], limit_bytes=1024)
+        self.assertTrue(removed)
+
+    def test_root_disappearing_immediately_after_path_validation_is_not_initially_absent(self):
+        root = self.repo / 'scratch'
+        root.mkdir()
+        real_lstat = Path.lstat
+        removed = []
+        def inspected(path, *args, **kwargs):
+            info = real_lstat(path, *args, **kwargs)
+            if path == root and not removed:
+                root.rmdir()
+                removed.append(True)
+            return info
+        with patch.object(Path, 'lstat', inspected), self.assertRaises(RuntimeError):
+            self.module.measure([root], limit_bytes=1024)
+        self.assertTrue(removed)
+
+    def test_initially_absent_root_created_after_validation_is_not_adopted_in_that_sample(self):
+        root = self.repo / 'scratch'
+        real_lstat = Path.lstat
+        created = []
+        def inspected(path, *args, **kwargs):
+            try:
+                return real_lstat(path, *args, **kwargs)
+            except FileNotFoundError:
+                if path == root and not created:
+                    root.mkdir()
+                    (root / 'later.bin').write_bytes(b'l' * 512)
+                    created.append(True)
+                raise
+        with patch.object(Path, 'lstat', inspected):
+            self.assertEqual(self.module.measure([root, root], limit_bytes=1024), {'bytes': 0, 'files': 0})
+        self.assertTrue(created)
+        self.assertEqual((root / 'later.bin').read_bytes(), b'l' * 512)
+
+    def test_real_replacement_root_cannot_be_adopted_on_a_later_attempt(self):
+        root, preserved = self.repo / 'scratch', self.repo / 'original'
+        root.mkdir()
+        (root / 'keep.bin').write_bytes(b'k' * 512)
+        real_scan = os.scandir
+        swapped, replacement_scans = [], []
+        def scan(path):
+            if self.scans_directory(path, root):
+                if swapped:
+                    replacement_scans.append(True)
+                else:
+                    root.rename(preserved)
+                    root.mkdir()
+                    (root / 'replacement.bin').write_bytes(b'r' * 16)
+                    swapped.append(True)
+            return real_scan(path)
+        with patch.object(self.module.os, 'scandir', scan), self.assertRaises(RuntimeError):
+            self.module.measure([root], limit_bytes=1024)
+        self.assertEqual(replacement_scans, [])
+        self.assertEqual((preserved / 'keep.bin').read_bytes(), b'k' * 512)
+        self.assertEqual((root / 'replacement.bin').read_bytes(), b'r' * 16)
+
+    def test_persistent_root_scan_failure_has_bounded_operation_errno_diagnostics(self):
+        root = self.repo / 'scratch'
+        root.mkdir()
+        real_scan = os.scandir
+        attempts = []
+        def scan(path):
+            if self.scans_directory(path, root):
+                attempts.append(True)
+                if len(attempts) > 16:
+                    raise AssertionError('root scan retry is unbounded')
+                raise FileNotFoundError(errno.ENOENT, 'PRIVATE-ERROR', str(root))
+            return real_scan(path)
+        with patch.object(self.module.os, 'scandir', scan), self.assertRaises(RuntimeError) as caught:
+            self.module.measure([root], limit_bytes=1024)
+        self.assertEqual(len(attempts), 3)
+        self.assertIn('operation=root-scandir', str(caught.exception))
+        self.assertIn('errno=2', str(caught.exception))
+        self.assertIn('attempts=3', str(caught.exception))
+        self.assertNotIn('PRIVATE', str(caught.exception))
+        self.assertNotIn(str(root), str(caught.exception))
+        self.assertLess(len(str(caught.exception).encode()), 512)
+
+    def test_child_open_permission_and_unknown_io_errors_are_not_disappearance(self):
+        root = self.repo / 'scratch'
+        child = root / 'child'
+        child.mkdir(parents=True)
+        (child / 'keep.bin').write_bytes(b'k' * 128)
+        real_open = os.open
+        for number in (errno.EACCES, errno.EPERM, errno.EIO):
+            def opening(path, flags, *args, **kwargs):
+                if os.fspath(path) == 'child' and kwargs.get('dir_fd') is not None:
+                    raise OSError(number, 'PRIVATE-ERROR', str(child))
+                return real_open(path, flags, *args, **kwargs)
+            with self.subTest(errno=number), patch.object(self.module.os, 'open', opening), self.assertRaises(RuntimeError) as caught:
+                self.module.measure([root], limit_bytes=1024)
+            self.assertIn('operation=child-open', str(caught.exception))
+            self.assertIn('errno=' + str(number), str(caught.exception))
+            self.assertNotIn('PRIVATE', str(caught.exception))
+            self.assertEqual((child / 'keep.bin').read_bytes(), b'k' * 128)
 
     def test_persistent_scan_race_stops_after_a_bounded_number_of_attempts(self):
         root = self.repo / "scratch"
