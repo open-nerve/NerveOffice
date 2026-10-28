@@ -249,3 +249,11 @@ container02 在同一 clean `9abf02d2` 上串行完成，原件目录为 `s6/s6-
 容器为本机Linux arm64：镜像526.4 MB，应用空闲内存243.1 MiB、E2E轮询峰值409.8 MiB、结束222.1 MiB；独立核对的cgroup实际峰值732,782,592 B（约698.8 MiB），低于4 GiB上限且OOM为0，原预算保持；缺主密钥及错误格式均在1秒内退出1，四份容器日志扫描未泄露主密钥。测试编排环境已删除。两轮WindowServer身份保持989，未触发桌面保护；full13期间最低可用磁盘约87.17 GiB，清理后约102 GiB，container03收尾后约101.6 GiB。这是采样到的本机空间，不把APFS目录大小当作实际释放量。
 
 剩余顺序：结果文档独审和中文提交→正常no-ff合main→精确文档等价及新v3绑定→正常pre-push与推送→同SHA六项CI和十份artifact的真实托管合同审计→独立关闭复核→冻结证据→实际移除唯一P4 worktree/分支→finalize。托管资源即使合格仍为host-disposal-pending、cleanupComplete=false、ciRawCleanupObserved=false，不宣称已独立观察VM销毁。P4未关闭，P5未开始，原生环境与M4挂账不变。
+
+## 2026-10-28：790e746c 推送后预检阻断
+
+上述结果文档、精确文档等价、正常 no-ff 合并和推送已完成。main/origin/main 为 `790e746cd1b4ab0b4c6e9d4cf8d0de55c12f1384`，正常 pre-push 292.02 秒通过；原 v3 绑定和回执保持。
+
+随后 [CI 40713106707](https://github.com/open-nerve/NerveOffice/actions/runs/40713106707) 六项均在安装依赖前的 KiB 资源预检失败，产品子命令未启动。全局句柄列表的绝对路径在普通用户下解析别名时触发统一错误分支；日志没有实际候选路径、异常类型或 errno，不能用可能的权限原因代替实测结论。六份原日志及 hash 收据保存在 `s6/hosted-vm-policy/ci-40713106707-failure/`，详细事实和方案 B 局部修复边界见[调查](P4-S6-托管路径别名阻断调查.md)。
+
+修复只补齐托管非破坏导出的语义未知分支；已知本轮引用、根身份、生产者及结构/命令失败仍阻断，本机严格清理保持。先完成小样例与独审，再正常诊断合并/推送核对实际托管全链。full13/container03 的旧输入接受不改写为新源码通过；P4 仍未关闭，P5 仍未开始。

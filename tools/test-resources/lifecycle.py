@@ -297,19 +297,53 @@ def open_paths(root, owner=None, *, export_only=False):
         raise incomplete(result.returncode, result.stderr, records=structural)
     if records[0] and not export_only:
         raise incomplete(result.returncode, result.stderr, records=records)
-    if export_only:
-        owner.update(referenceObservation={"operation": "non-destructive-export", "root": str(root),
-                     "incompleteRecordCount": records[0], "incompleteRecords": records[1],
-                     "incompleteRecordsTruncated": records[0] > sum(s.get("multiplicity", 1) for s in records[1]),
-                     "absenceProven": False, "rawDeletionAuthorized": False})
+    # Ownership and the inspected root itself must remain fully resolvable. Only
+    # foreign candidates from an already validated lsof stream may be unknown.
     canonical = str(root.resolve())
     def inside(name):
         return name == canonical or name.startswith(canonical + "/")
+    count, samples = records[0], list(records[1])
+    alias_samples = {}
+    def alias_problem(name, error):
+        nonlocal count
+        count += 1
+        raw_name = os.fsencode(name)
+        identity = (pid, descriptor, file_type, name, type(error).__name__, getattr(error, 'errno', None))
+        if identity in alias_samples:
+            alias_samples[identity]['multiplicity'] += 1
+        elif len(samples) < 16:
+            sample = {'pid': pid, 'fd': descriptor, 'reason': 'alias-resolution-error', 'operation': 'resolve',
+                      'type': file_type, 'typeBytes': len(os.fsencode(file_type)) if file_type is not None else None,
+                      'typeTruncated': False,
+                      'name': '<absolute-path>', 'nameBytes': len(raw_name),
+                      'nameSha256': hashlib.sha256(raw_name).hexdigest(),
+                      'nameTruncated': len(raw_name) > 512, 'nameRedacted': True, 'multiplicity': 1,
+                      'exceptionType': type(error).__name__, 'errno': getattr(error, 'errno', None)}
+            # Never serialize the exception text: it can contain private paths.
+            samples.append(sample)
+            alias_samples[identity] = sample
+    def path_records():
+        # The preceding validator accepts either t/n ordering. Wait for the
+        # complete file record, including NOFD records with no type at all.
+        pid = descriptor = file_type = name = None
+        for line in output.splitlines():
+            field, value = line[:1], line[1:]
+            if field in ('p', 'f'):
+                if name is not None and name.startswith('/'):
+                    yield pid, descriptor, file_type, name
+                file_type = name = None
+            if field == 'p':
+                pid, descriptor = int(value), None
+            elif field == 'f':
+                descriptor = value
+            elif field == 't':
+                file_type = value
+            elif field == 'n':
+                name = value
+        if name is not None and name.startswith('/'):
+            yield pid, descriptor, file_type, name
     found = set()
-    for line in output.splitlines():
-        if not line.startswith("n/"):
-            continue
-        name = line[1:]
+    for pid, descriptor, file_type, name in path_records():
         if inside(name):
             found.add(name)
             continue
@@ -323,11 +357,40 @@ def open_paths(root, owner=None, *, export_only=False):
         plain = re.sub(r" \((?:readlink|opendir|stat|lstat):[^\n]*\)$", "", plain)
         plain = re.sub(r" \(path (?:dev|inode)=[^\n]*\)$", "", plain)
         plain = re.sub(r" \((?:deleted|revoked)\)$", "", plain)
-        try:
-            if any(inside(str(Path(candidate).resolve())) for candidate in {name, plain}):
-                found.add(name)
-        except (OSError, RuntimeError, ValueError):
-            raise RuntimeError("无法解析打开文件的路径别名；保留资源：" + str(root)) from None
+        # Check all positive lexical evidence before a foreign lookup can fail.
+        # Candidate order is deterministic; one unknown cannot hide the other.
+        candidates = tuple(dict.fromkeys((plain, name)))
+        if any(inside(candidate) for candidate in candidates):
+            found.add(name)
+            continue
+        first_error = None
+        for candidate in candidates:
+            path = Path(candidate)
+            try:
+                if inside(str(path.resolve())):
+                    found.add(name)
+            except (OSError, RuntimeError) as error:
+                first_error = first_error or error
+                if not export_only:
+                    alias_problem(name, error)
+                    raise incomplete(result.returncode, records=(count, samples), reason='alias-resolution-error') from None
+                # An external alias can already enter our root before an
+                # inaccessible or looping descendant. Such a known prefix must
+                # still block export; failure to resolve it proves no absence.
+                for parent in path.parents:
+                    try:
+                        if inside(str(parent.resolve())):
+                            found.add(name)
+                            break
+                    except (OSError, RuntimeError):
+                        continue
+        if first_error is not None:
+            alias_problem(name, first_error)
+    if export_only:
+        owner.update(referenceObservation={"operation": "non-destructive-export", "root": str(root),
+                     "incompleteRecordCount": count, "incompleteRecords": samples,
+                     "incompleteRecordsTruncated": count > sum(s.get("multiplicity", 1) for s in samples),
+                     "absenceProven": False, "rawDeletionAuthorized": False})
     return sorted(found)
 
 

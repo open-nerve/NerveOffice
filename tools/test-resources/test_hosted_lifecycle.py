@@ -1,6 +1,7 @@
 """Exercise the real resource state machine with small files and controlled OS observations."""
 import copy
 from contextlib import ExitStack
+import errno
 import hashlib
 import importlib.util
 import json
@@ -161,6 +162,161 @@ class HostedLifecycleTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         value.assert_exportable()
         self.assertFalse((value.directory / 'reports').exists())
+
+    def test_external_symlink_loop_is_unknown_only_for_owned_hosted_export(self):
+        value = self.create()
+        loop = self.repo / 'foreign-private-loop'
+        loop.symlink_to(loop.name)
+        output = ('p987655\nf4\ntREG\nn' + str(loop / 'file') + '\n').encode()
+        result = subprocess.CompletedProcess([], 0, output, b'')
+        with patch.object(lifecycle.subprocess, 'run', return_value=result):
+            finished = value.finish('passed', release=False)
+        self.assertEqual(finished['status'], 'passed', finished.get('cleanupError'))
+        self.assertEqual(finished['cleanupStage'], 'host-disposal-pending')
+        self.assertIs(finished['cleanupComplete'], False)
+        self.assertEqual((value.scratch / 'raw.db').read_bytes(), b'keep-raw')
+        observation = finished['referenceObservation']
+        self.assertEqual(observation['incompleteRecordCount'], 1)
+        self.assertIs(observation['absenceProven'], False)
+        self.assertIs(observation['rawDeletionAuthorized'], False)
+        sample = observation['incompleteRecords'][0]
+        self.assertEqual(sample['reason'], 'alias-resolution-error')
+        self.assertEqual(sample['operation'], 'resolve')
+        self.assertIn(sample['exceptionType'], ('RuntimeError', 'OSError'))
+        self.assertNotIn(str(loop), json.dumps(observation))
+        self.assertEqual(sample['nameSha256'], hashlib.sha256(os.fsencode(loop / 'file')).hexdigest())
+
+    def test_external_symlink_loop_stays_strict_without_export_authority(self):
+        value = self.create()
+        loop = self.repo / 'foreign-loop'
+        loop.symlink_to(loop.name)
+        result = subprocess.CompletedProcess([], 0, ('p987655\nf4\ntREG\nn' + str(loop) + '\n').encode(), b'')
+        with patch.object(lifecycle.subprocess, 'run', return_value=result):
+            with self.assertRaises(RuntimeError):
+                lifecycle.open_paths(value.scratch, owner=value)
+            with self.assertRaises(RuntimeError):
+                lifecycle.open_paths(value.scratch, export_only=True)
+            value.update(hostedScope=None)
+            with self.assertRaises(RuntimeError):
+                lifecycle.open_paths(value.scratch, owner=value, export_only=True)
+        self.assertTrue(value.scratch.exists())
+
+    def test_unknown_alias_does_not_hide_later_known_owned_reference(self):
+        value = self.create()
+        loop = self.repo / 'foreign-loop'
+        loop.symlink_to(loop.name)
+        known = str(value.scratch / 'raw.db')
+        output = ('p987655\nf4\ntREG\nn' + str(loop) + '\nf5\ntREG\nn' + known + '\n').encode()
+        with patch.object(lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+            self.assertEqual(lifecycle.open_paths(value.scratch, owner=value, export_only=True), [known])
+            with self.assertRaisesRegex(RuntimeError, '已知'):
+                value.assert_exportable()
+
+    def test_resolvable_alias_prefix_into_owned_root_blocks_after_leaf_failure(self):
+        value = self.create()
+        nested = value.scratch / 'nested'
+        nested.mkdir()
+        (nested / 'loop').symlink_to('loop')
+        alias = self.repo / 'outside-alias'
+        alias.symlink_to(nested, target_is_directory=True)
+        known = str(alias / 'loop' / 'leaf')
+        output = ('p987655\nf4\ntREG\nn' + known + '\n').encode()
+        with patch.object(lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+            self.assertEqual(lifecycle.open_paths(value.scratch, owner=value, export_only=True), [known])
+            with self.assertRaisesRegex(RuntimeError, '已知'):
+                value.assert_exportable()
+
+    def test_annotated_root_matches_before_an_unreadable_candidate_is_resolved(self):
+        value = self.create()
+        real_resolve = Path.resolve
+        for suffix in (' (stat: Permission denied)', ' (deleted) (stat: Permission denied)'):
+            name = str(value.scratch) + suffix
+            def denied(path, *args, **kwargs):
+                if str(path) == name:
+                    raise PermissionError(errno.EACCES, 'private filename must not leak', str(path))
+                return real_resolve(path, *args, **kwargs)
+            output = ('p987655\nf4\ntDIR\nn' + name + '\n').encode()
+            with self.subTest(suffix=suffix), patch.object(Path, 'resolve', denied), patch.object(
+                    lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+                self.assertEqual(lifecycle.open_paths(value.scratch, owner=value, export_only=True), [name])
+
+    def test_permission_unknown_diagnostics_are_counted_bounded_and_redacted(self):
+        value = self.create()
+        names = [str(self.repo / ('PRIVATE-' + str(index))) for index in range(20)]
+        output = ('p987655\n' + ''.join('f' + str(index + 4) + '\ntREG\nn' + name + '\n'
+                                     for index, name in enumerate(names))).encode()
+        real_resolve = Path.resolve
+        def denied(path, *args, **kwargs):
+            if str(path) in names:
+                raise PermissionError(errno.EACCES, 'PRIVATE-MESSAGE', str(path))
+            return real_resolve(path, *args, **kwargs)
+        with patch.object(Path, 'resolve', denied), patch.object(
+                lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+            self.assertEqual(lifecycle.open_paths(value.scratch, owner=value, export_only=True), [])
+        observation = value.data['referenceObservation']
+        self.assertEqual(observation['incompleteRecordCount'], 20)
+        self.assertEqual(len(observation['incompleteRecords']), 16)
+        self.assertIs(observation['incompleteRecordsTruncated'], True)
+        self.assertNotIn('PRIVATE', json.dumps(observation))
+        for sample in observation['incompleteRecords']:
+            self.assertEqual(sample['errno'], errno.EACCES)
+            self.assertEqual(sample['exceptionType'], 'PermissionError')
+            self.assertEqual(sample['name'], '<absolute-path>')
+            self.assertTrue(sample['nameRedacted'])
+
+    def test_value_error_and_owned_root_resolution_failures_remain_fatal(self):
+        value = self.create()
+        candidate = self.repo / 'foreign-invalid'
+        output = ('p987655\nf4\ntREG\nn' + str(candidate) + '\n').encode()
+        real_resolve = Path.resolve
+        for failed_path, failure in ((candidate, ValueError('invalid input')),
+                                     (value.scratch, PermissionError(errno.EACCES, 'owned root unavailable'))):
+            def fail(path, *args, **kwargs):
+                if path == failed_path:
+                    raise failure
+                return real_resolve(path, *args, **kwargs)
+            with self.subTest(path=failed_path), patch.object(Path, 'resolve', fail), patch.object(
+                    lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+                with self.assertRaises((RuntimeError, ValueError, OSError)):
+                    lifecycle.open_paths(value.scratch, owner=value, export_only=True)
+        self.assertTrue(value.scratch.exists())
+
+    def test_alias_diagnostic_uses_the_complete_record_when_name_precedes_type(self):
+        value = self.create()
+        loop = self.repo / 'foreign-loop'
+        loop.symlink_to(loop.name)
+        output = ('p987655\nf4\nn' + str(loop) + '\ntREG\n').encode()
+        with patch.object(lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+            self.assertEqual(lifecycle.open_paths(value.scratch, owner=value, export_only=True), [])
+        sample = value.data['referenceObservation']['incompleteRecords'][0]
+        self.assertEqual((sample['pid'], sample['fd'], sample['type']), (987655, '4', 'REG'))
+
+    def test_alias_diagnostics_preserve_existing_and_repeated_record_counts(self):
+        value = self.create()
+        loop = self.repo / 'foreign-loop'
+        loop.symlink_to(loop.name)
+        record = ('p987655\nf4\ntREG\nn' + str(loop) + '\n').encode()
+        with patch.object(lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, UNKNOWN * 2 + record * 3, b'')):
+            self.assertEqual(lifecycle.open_paths(value.scratch, owner=value, export_only=True), [])
+        observation = value.data['referenceObservation']
+        self.assertEqual(observation['incompleteRecordCount'], 5)
+        self.assertEqual(len(observation['incompleteRecords']), 2)
+        self.assertEqual([sample['multiplicity'] for sample in observation['incompleteRecords']], [2, 3])
+        self.assertIs(observation['incompleteRecordsTruncated'], False)
+
+    def test_nofd_alias_diagnostic_preserves_a_missing_type(self):
+        value = self.create()
+        loop = self.repo / 'foreign-loop'
+        loop.symlink_to(loop.name)
+        output = ('p987655\nfNOFD\nn' + str(loop) + '\n').encode()
+        with patch.object(lifecycle.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, output, b'')):
+            self.assertEqual(lifecycle.open_paths(value.scratch, owner=value, export_only=True), [])
+        observation = value.data['referenceObservation']
+        self.assertEqual(observation['incompleteRecordCount'], 2)
+        sample = next(row for row in observation['incompleteRecords'] if row['reason'] == 'alias-resolution-error')
+        self.assertEqual((sample['pid'], sample['fd']), (987655, 'NOFD'))
+        self.assertIsNone(sample['type'])
+        self.assertIsNone(sample['typeBytes'])
 
     def test_structural_errors_and_query_failures_are_not_semantic_unknowns(self):
         value = self.create()
