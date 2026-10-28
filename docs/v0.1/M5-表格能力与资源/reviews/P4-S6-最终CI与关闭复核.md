@@ -1,8 +1,8 @@
 # M5-P4 最终验收与关闭复核
 
-> **2026-10-29 当前记录**：main/origin/main 为 `63bf7d64`，P4 唯一分支仍在。CI40718430340六项资源预检通过，容器328项通过后因活动目录计量竞态中断、11项未运行，checker及报告上传成功而job保持失败。局部修复33项定向与309项完整资源Python回归通过，独立代码审查无阻断；新full14/container04尚未开始，P4未关闭、P5未开始。旧full13/container03和此前失败原件保持，详情见文末。
+> **2026-10-29 当前记录**：main/origin/main 为 `41de69e9`，唯一 P4 分支 tip 为 `6de31f16`。诊断 CI `40742680031` 的来源、资源与报告能力已独立接受；本轮 full14/container04 也已在同一组 4,589 项源码与 16 份 SDK 输入上完成、独立接受并实际清理。full14 为706文件/16,968项单元集成、2,421 E2E通过及16既有跳过；container04为339/339通过。精确结果文档审查、最终合并/推送、同最终 SHA 六项 CI、冻结和实际 worktree 清理仍待完成；P4 尚未关闭，P5 尚未开始。 以下日期化旧轮次为历史证据，最新双门禁与后续待办见文末。
 
-> 状态：旧输入完整本机与容器门禁已通过；本次修复的新源码、最终同SHA六项CI、证据冻结和实际关闭仍待完成。
+> 状态：新输入full14/container04完整门禁、同源证明、独立原件/资源接受及实际清理已完成；精确结果文档审查、最终合并/同SHA CI/冻结/实际关闭仍待完成。
 
 ## 本机完整门禁
 
@@ -258,10 +258,33 @@ container02 在同一 clean `9abf02d2` 上串行完成，原件目录为 `s6/s6-
 
 修复只补齐托管非破坏导出的语义未知分支；已知本轮引用、根身份、生产者及结构/命令失败仍阻断，本机严格清理保持。先完成小样例与独审，再正常诊断合并/推送核对实际托管全链。full13/container03 的旧输入接受不改写为新源码通过；P4 仍未关闭，P5 仍未开始。
 
-## 2026-10-29：63bf7d64 诊断与活动目录计量
+## 2026-10-29：63bf7d64 诊断与活动目录计量（当时快照）
 
 别名修复bfd31dba的55项定向和299项资源Python回归通过，独审接受后正常no-ff合main63bf7d64并推送，pre-push 291.72秒。CI40718430340六项资源预检及其回执均通过。容器随后328项常规用例通过、11项未运行，因容量采样连续目录竞态被终止；原报告保留interrupted/143，checker与artifact上传成功，job保持failure。
 
 失败结束采样原资源41,773,490字节、空闲83,213,148,160字节；现有错误没有具体操作或目录，不能推断为磁盘满、超时或特定浏览器删除。详细原件和局部修复边界见[活动目录计量调查](P4-S6-活动目录计量阻断调查.md)。UTC 16:37后取得的verify原日志显示：705文件/16,943项中有1项真实集成失败，位于asset-references-bulk的七万资源关系INSERT SELECT unnest；其余704文件/16,942项通过，随后job达到45分钟上限而取消。原日志未保留该异常的SQLSTATE/cause，不能猜测超时、锁或数据错误。此为与容量采样分开调查的新增阻断；在根因及必要修复核实前不启动full14，也不以环境挂账放行。四浏览器仍运行。整个失败工作流不能运行要求全绿的诊断成功合同，也不签最终audit/ready。
 
 新r04工具已完成43项小型回归与独审，但尚未冻结、full14未开始。待局部修复与本轮实际报告能力核实后，依次完整本机full14、同源容器container04、正常合并/推送、同最终SHA六项CI与十份artifact、独立关闭复核及实际worktree清理。全部最终质量门槛保持；无需为已经定位且充分取证的失败重复建立诊断环境。P4未关闭，P5未开始。
+
+
+## 2026-10-29：41de69e9 诊断能力接受与 full14 实际结果
+
+本节以已保存原件为准。正常诊断 merge 为 main `41de69e92f44dae9f51ab73d76669e53b49bf633`，Phase tip `6de31f169c56eeb661bca37996b5c34d9eb53cdf`；pre-push 294.14秒、退出0、受管清理完成。活动采样33/309、清单40/313、bulk安全诊断13及数据库日志帧134项局部验证与各自独审已完成；相关调查/修复记录保留，未改SQL、搜索契约、70,000案例规模或既有预算。
+
+诊断 CI40742680031 六项成功，十ZIP共42,728,825字节。verify为706文件/16,968项，原70,000资源案例32,319ms通过；四浏览器3,227通过、20原跳过，container339通过。稳定导出、原件来源、压缩运输、资源核验、coverage与上传均由固定合同核对，JSON/HTML案例集合、结果/重试/错误计数一致。此为诊断能力接受，`diagnosticOnly=true`、`finalAcceptance=false`、`ciRawCleanupObserved=false`，不签最终同SHA验收或宿主原环境已销毁。历史CI的SQLSTATE/cause仍未知，新通过不反推旧原因。
+
+旧reader与debug因额外64MiB HTML内嵌ZIP合计限额拒绝，失败原件保留。新版只对该诊断读取改为128MiB总量，同时收紧单JSON与摘要累计至16MiB，外层64MiB保持；27项KiB回归、代码独审和真实重放均成立。实际接受原件为主目录 `s6/hosted-vm-policy/diagnostic-reader-bounded-40742680031-real01/actual-independent-acceptance.json`，SHA256 `6cfc48d79afbdad8edb2007cc8faf97b249b59a3f68ee95449ba4ee31aaa9787`（本节所有`s6/`均位于主目录`.codex/handoffs/m5-p4-20261022/`）。已保存alias样本有截断，只能说明样本内的PermissionError/errno13，不能补写旧失败errno或推断全局无未知引用。
+
+r04父提交按真实41de69e9维护，44项小回归及独审接受；14工具与7wrapper于2026-10-28 20:12:07 UTC冻结，full14 before于20:12:08采集，不补签。冻结收据 `s6/hosted-vm-policy/tools-frozen-before-full14-r04.json`，SHA256 `9931aaf372eda364247c3c9d1cfc7b3aa45a87ce903c1e6978319acfaedf5ffb`；旧v2/v3、full13/container03和候选原件保持。
+
+full14 bundle `s6/s6-gates/full14-20261028T201220351244Z` 实际于20:12:21–22:48:35 UTC运行默认完整verify，退出0。十个既定阶段通过；706文件/16,968项单元集成、2,421 E2E通过和16既有平台跳过。4,589项源码及16份SDK前后不变；原件审计接受、报告已pin，JSON/HTML与摘要一致，168轮崩溃、944份OPFS（840文件）及1,112个profile精简均有原件记录。行/语句/函数/分支覆盖率为93.92%/93.84%/94.53%/90.31%，原预算未改。audit阶段通过不等于零漏洞：含开发依赖的总计仍为low3/moderate11/high6/critical2，按原规则报告。
+
+full14外层 `4017d26f-e6a0-4e16-b137-e1fb8779d352`、integration `434b02ff-e8fb-4c94-bec5-8b0300b0c911`、E2E `14940838-8d7a-4860-9d4f-26fd9b2f37a5` 均passed/cleanup complete；scratch、短根、别名、owner及child process group实际消失，没有保留完整profile。既有专用PostgreSQL容器继续复用，不声称它被删除。原始资源回执为 `s6/archive-review/full14/resources.json`，实际外层核对为 `s6/hosted-vm-policy/full14-launch/completion.json`；来源after为 `s6/full14-source-after-r04.json`。**full14独立接受回执已于2026-10-28 22:55:41 UTC签发**：`s6/hosted-vm-policy/full14-independent-acceptance.json`，SHA256 `5f6f30cf14c7b2be5484fe6eb1cab7ce2a9d84d5ebdc430b5dd226ac264ff9ea`。其范围仅为该轮本机门禁，不预签后续最终CI或关闭。
+
+container04 bundle `s6/s6-gates/container04-20261028T225617266122Z` 于22:56:18–23:04:59 UTC串行运行完整 `pnpm test:e2e:container`，退出0，339/339首次通过，零跳过/重试/flaky/全局错误。实际平台为linux-arm64，不扩写为x64；4,589项源码/形态与16份SDK在两轮前后及两轮之间完全相同。独立JSON/HTML与附件/案例审查、原件摘要、pin、原预算、部署日志和清理均接受：`s6/hosted-vm-policy/container04-independent-acceptance.json`，SHA256 `df6223b97a931056922390dd03792d51a9e2b7583172f405c87bb6d444e5b679`，签发于23:08:47 UTC。
+
+容器图片矩阵44项（20接受/24拒绝）、准入5接受/5忙、重启重建持久化、18项正文拒绝与随后正常上传、私有卷/GC/代次/配置拒绝均有原件。8份cgroup整容器峰值记录最大741,384,192字节，低于4GiB，oom/oomKill均0；定时CLI采样峰值431.6MiB为另一口径，不混称单图片RSS。四份服务日志与秘密扫描通过。container目录不含OPFS附件，其OPFS/ACK证明由full14另行承担，不伪造容器附件。
+
+container04外层 `1afb3772-1c08-4077-9657-e2a33a7a1cb3` 与内层 `be7a3d68-84e0-4e50-968c-841d8b521a0f` 均passed/cleanup complete，scratch/短根/alias/owner/group实际消失，8个profile已精简且未保留完整profile。本轮compose项目 `nerve-office-e2e-26704` 的容器、网络、卷与镜像标签已不存在；既有专用PostgreSQL及原卷保留。桌面guard全程WindowServer989，空闲空间最低107,294,375,936字节，无stopReason。full14 结束后、container04 启动前的只读就绪探针曾因macOS多列ps截短comm错误记录空列表；原件保留，独立pgrep/ps纠正记录另存，不改固定guard或门禁结论。
+
+两轮本机门禁已完成Task 3；待填且不得预勾：①精确结果文档列表及独审before/after摘要；②最终Phase tip与正常no-ff/main SHA、pre-push/远端事实；③同最终SHA六CI、十份原件与严格最终审计；④ready/freeze/final/completion及实际P4 worktree/分支清理。以上完成后才能关闭P4、进入P5；Excel/Safari/Finder与M4既有挂账不变。
