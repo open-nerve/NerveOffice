@@ -183,12 +183,24 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
       for (const step of job.steps) {
         expect(step['continue-on-error'], stepLabel(id, step)).toBeUndefined()
         // 步骤级的 env 盖过 job 的：CI 改掉了重试与"出现重试即失败"就不生效，E2E_BROWSERS 改掉了每片都跑同一个浏览器（复核第二批 S-1）
-        expect(Object.keys(step.env ?? {}).filter(name => ['CI', 'E2E_BROWSERS'].includes(name)), stepLabel(id, step)).toEqual([])
+        expect(Object.keys(step.env ?? {}).filter(name => ['CI', 'E2E_BROWSERS', 'NERVE_TEST_RESOURCE_POLICY', 'NERVE_TEST_LSOF_MODE'].includes(name)), stepLabel(id, step)).toEqual([])
       }
     }
   })
 
-  it('资源能力不成立时在安装依赖与浏览器前停止，预检沿用受管清理且只把数据库身份交给有服务的 job', () => {
+  it('只有固定托管 Ubuntu job 显式使用 VM 回收策略；不再把数据库服务身份当作资源例外', () => {
+    expect(Object.keys(workflow.jobs)).toEqual(['verify', 'e2e', 'container'])
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      expect(job['runs-on'], id).toBe('ubuntu-24.04')
+      expect(job.env?.NERVE_TEST_RESOURCE_POLICY, id).toBe('github-hosted-vm')
+      expect(job.env?.NERVE_TEST_LSOF_MODE, id).toBe('github-ubuntu-sudo')
+      expect(job.env?.NERVE_TEST_CI_POSTGRES_SERVICE_ID, id).toBeUndefined()
+      for (const step of job.steps)
+        expect(step.env?.NERVE_TEST_CI_POSTGRES_SERVICE_ID, stepLabel(id, step)).toBeUndefined()
+    }
+  })
+
+  it('资源能力不成立时在安装依赖与浏览器前停止，预检失败也保存有界回执', () => {
     for (const [id, job] of Object.entries(workflow.jobs)) {
       const preflight = job.steps.findIndex(step => step.id === 'resource-preflight')
       expect(preflight, id).toBeGreaterThanOrEqual(0)
@@ -217,15 +229,43 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
       expect(installing.length, id).toBeGreaterThanOrEqual(3)
       for (const index of installing)
         expect(index, stepLabel(id, job.steps[index]!)).toBeGreaterThan(receiptIndex)
-
-      expect(job.env?.NERVE_TEST_CI_POSTGRES_SERVICE_ID, id).toBeUndefined()
-      // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的实际服务身份
-      const service = id === 'container' ? undefined : '${{ job.services.postgres.id }}'
-      expect(step.env?.NERVE_TEST_CI_POSTGRES_SERVICE_ID, id).toBe(service)
     }
   })
 
-  it('归档与报告上传必须经过独立退出核验；核验失败时只准上传监督记录', () => {
+  it.each(['verify', 'container'])('%s 的失败产品报告也先核验资源归属与稳定导出；资源核验失败不得上传', (id) => {
+    const steps = workflow.jobs[id]!.steps
+    const checking = steps.findIndex(runsChecks)
+    const resource = steps.findIndex(step => step.id === 'resource-check')
+    const upload = steps.findIndex(step => step.id === 'resource-upload')
+    expect(resource).toBeGreaterThan(checking)
+    expect(steps[resource]?.run?.trim()).toBe('python3 -B tools/test-resources/check_ci_resources.py')
+    expect(steps[resource]?.if).toBe('always()')
+    expect(steps[resource]?.['continue-on-error']).toBeUndefined()
+    expect(upload).toBeGreaterThan(resource)
+    expect(steps[upload]?.uses?.startsWith('actions/upload-artifact@')).toBe(true)
+    expect(steps[upload]?.if).toBe('always() && steps.resource-check.outcome == \'success\'')
+    expect(steps[upload]?.['continue-on-error']).toBeUndefined()
+    const reports = z.object({
+      'path': z.string(),
+      'include-hidden-files': z.boolean().optional(),
+      'if-no-files-found': z.string().optional(),
+    }).parse(steps[upload]?.with)
+    if (id === 'verify') {
+      expect(reports.path).toBe('.test-resources/runs/*/reports/portable/test-results/')
+      expect(reports['include-hidden-files']).toBe(true)
+      expect(reports['if-no-files-found']).toBe('error')
+    }
+    else {
+      expect(reports.path.trim().split('\n')).toEqual([
+        'tests/e2e/playwright-report/',
+        'tests/e2e/test-results/',
+        '.test-resources/runs/*/reports/portable/test-results/',
+      ])
+      expect(reports['include-hidden-files']).toBe(true)
+    }
+  })
+
+  it('归档与报告上传必须经过退出和稳定报告核验；归档失败不能回退上传原始 profile', () => {
     const steps = workflow.jobs.e2e!.steps
     const prepare = steps.findIndex(step => step.id === 'e2e-prepare')
     expect(prepare).toBeGreaterThanOrEqual(0)
@@ -242,34 +282,61 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     const quiescence = steps.findIndex(step => step.id === 'e2e-quiescence')
     expect(quiescence).toBeGreaterThan(steps.findIndex(runsChecks))
     expect(steps[quiescence]?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
+    const reportCheck = steps.findIndex(step => step.id === 'e2e-report-check')
+    expect(reportCheck).toBeGreaterThan(quiescence)
+    expect(steps[reportCheck]?.run?.trim()).toBe('node tools/src/ci/e2e-cli.ts reports')
     for (const id of ['profile-archive', 'e2e-upload']) {
       const index = steps.findIndex(step => step.id === id)
       expect(index, id).toBeGreaterThan(quiescence)
-      expect(steps[index]?.if, id).toBe('always() && steps.e2e-quiescence.outcome == \'success\'')
+      expect(index, id).toBeGreaterThan(reportCheck)
     }
+    const archive = steps.findIndex(step => step.id === 'profile-archive')
+    const upload = steps.findIndex(step => step.id === 'e2e-upload')
+    expect(steps[archive]?.if).toBe('always() && steps.e2e-quiescence.outcome == \'success\' && steps.e2e-report-check.outcome == \'success\'')
+    expect(steps[archive]?.run?.trim()).toBe('python3 -B tools/test-resources/pack_ci_profiles.py')
+    expect(upload).toBeGreaterThan(archive)
+    expect(steps[upload]?.if).toBe('always() && steps.e2e-quiescence.outcome == \'success\' && steps.e2e-report-check.outcome == \'success\' && steps.profile-archive.outcome == \'success\'')
+    const reports = z.object({ 'path': z.string(), 'include-hidden-files': z.boolean().optional() }).parse(steps[upload]?.with)
+    expect(reports.path.trim().split('\n')).toEqual([
+      'tests/e2e/playwright-report/',
+      'tests/e2e/test-results/',
+      '.test-resources/runs/*/reports/portable/test-results/',
+      '.test-resources/runs/*/reports/transport/',
+      '!tests/e2e/test-results/persistent-profiles/**',
+    ])
+    expect(reports['include-hidden-files']).toBe(true)
     expect(steps.find(step => step.id === 'e2e-diagnostics')?.if).toBe('always() && steps.e2e-diagnostics-prepare.outcome == \'success\'')
     expect(steps.find(step => step.id === 'e2e-diagnostics-prepare')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
     expect(steps.find(step => step.id === 'e2e-report-check')?.['continue-on-error']).toBeUndefined()
     expect(steps.find(step => step.id === 'e2e-report-check')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
   })
 
-  it('检查不会被条件跳过；E2E 收尾只操作登记成功的本轮，归档/上传必须等待无写入者', () => {
+  it('产品检查不会被条件跳过；报告上传必须等待所属资源核验，失败诊断仍独立上传', () => {
     const checking = Object.entries(workflow.jobs).filter(([, job]) => job.steps.some(runsChecks))
     // 三个 job 各执行一种检查：verify 与 e2e 的 pnpm verify，container 的容器 E2E
     expect(checking.map(([id]) => id)).toEqual(['verify', 'e2e', 'container'])
     for (const [id, job] of checking) {
       expect(job.if, `${id}：job 不带 if`).toBeUndefined()
       for (const step of job.steps) {
-        const archive = id === 'e2e' && ['profile-archive', 'e2e-upload'].includes(String(step.id))
+        const archive = id === 'e2e' && step.id === 'profile-archive'
+        const e2eUpload = id === 'e2e' && step.id === 'e2e-upload'
+        const resourceCheck = id !== 'e2e' && step.id === 'resource-check'
+        const resourceUpload = id !== 'e2e' && step.id === 'resource-upload'
         const ownedCleanup = id === 'e2e' && ['e2e-quiescence', 'e2e-report-check', 'e2e-diagnostics-prepare'].includes(String(step.id))
         const diagnostics = id === 'e2e' && step.id === 'e2e-diagnostics'
         const allowed = archive
-          ? ['always() && steps.e2e-quiescence.outcome == \'success\'']
-          : ownedCleanup
-            ? ['always() && steps.e2e-prepare.outcome == \'success\'']
-            : diagnostics
-              ? ['always() && steps.e2e-diagnostics-prepare.outcome == \'success\'']
-              : runsChecks(step) ? [undefined] : [undefined, 'always()']
+          ? ['always() && steps.e2e-quiescence.outcome == \'success\' && steps.e2e-report-check.outcome == \'success\'']
+          : e2eUpload
+            ? ['always() && steps.e2e-quiescence.outcome == \'success\' && steps.e2e-report-check.outcome == \'success\' && steps.profile-archive.outcome == \'success\'']
+            : resourceCheck
+              ? ['always()']
+              : resourceUpload
+                ? ['always() && steps.resource-check.outcome == \'success\'']
+                : ownedCleanup
+                  ? ['always() && steps.e2e-prepare.outcome == \'success\'']
+                  : diagnostics
+                    ? ['always() && steps.e2e-diagnostics-prepare.outcome == \'success\'']
+                    : runsChecks(step) ? [undefined] : [undefined, 'always()']
         expect(allowed, stepLabel(id, step)).toContain(step.if)
       }
     }

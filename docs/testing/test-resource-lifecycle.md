@@ -32,7 +32,7 @@
 
 普通运行使用直接查询。现有 GitHub Ubuntu 24.04 job 显式设置 `NERVE_TEST_LSOF_MODE=github-ubuntu-sudo`；运行器同时要求 Linux、`CI=true`、`GITHUB_ACTIONS=true`、`RUNNER_ENVIRONMENT=github-hosted`、`RUNNER_OS=Linux` 及 `/etc/os-release` 的 Ubuntu 24.04，才调用固定 `/usr/bin/sudo -n -- /usr/bin/lsof -nP -F pfnt`。没有自定义命令或自动提权回退，测试和清理程序仍为普通用户；提权失败、超时或输出不完整继续拒绝。GitHub 的[默认变量](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)及[托管 VM 权限](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges)说明这一明确 CI 上下文；这些环境检查并非宿主身份的密码学证明。隔离容器中的 root 可能仍缺少检查其他进程的能力，不能仅因 UID 为 0 就认定完整；PID/网络命名空间及实际可见性仍须由运行环境保证。
 
-现有 verify、E2E 运行与 settle 步骤另通过 `NERVE_TEST_CI_POSTGRES_SERVICE_ID=${{ job.services.postgres.id }}` 明确指定本 job 的固定 PostgreSQL 18.6 服务；该变量只放在允许使用 job context 的步骤环境，生产容器 job 不注入。新 Run 在 scratch 创建前登记服务 epoch、UUID/repo、GitHub run/attempt/job 与固定根，再记录实际目录身份。服务必须是 pinned 镜像的标准启动、精确 `HostConfig.Runtime=runc`、独立 GitHub bridge 网络、无 Options 的 local 匿名卷；privileged、增加 capability、设备、宿主 bind、VolumesFrom 或共享 namespace 不成立。卷来源与真实根、短根/别名双向相交时拒绝。没有这一创建证明的旧台账不能补签。
+原严格策略保留 `NERVE_TEST_CI_POSTGRES_SERVICE_ID` 的 service scope 实现；新托管 VM 策略不再注入此变量，也不以服务 PID 例外解释宿主未知记录。严格服务 scope 在 scratch 创建前登记服务 epoch、UUID/repo、GitHub run/attempt/job 与固定根，再记录实际目录身份。服务必须是 pinned 镜像的标准启动、精确 `HostConfig.Runtime=runc`、独立 GitHub bridge 网络、无 Options 的 local 匿名卷；privileged、增加 capability、设备、宿主 bind、VolumesFrom 或共享 namespace 不成立。卷来源与真实根、短根/别名双向相交时拒绝。没有这一创建证明的旧台账不能补签。
 
 `service_scope.py` 只用固定 `/usr/bin/docker --host unix:///var/run/docker.sock` 选择必要 inspect/volume inspect/top 字段，不读取 Config.Env；namespace 身份用固定的非交互 sudo/readlink 系统命令读取；卷 Source 经本服务 inspect/volume inspect 验证后，再用固定 `/usr/bin/sudo -n -- /usr/bin/readlink -e -- <Source>` 取得唯一绝对规范路径，不把普通调用者遇到 EACCES 后的词法结果当作 canonical，不读目录内容。每个辅助命令最多 5 秒、stdout/stderr 合计 64 KiB，最多 128 个服务进程；查询前后的完整证明共用 30 秒预算，最多取 3 轮快照。只有已确认的 PID 消失/复用或快照成员变化可重新采样，权限、格式、Docker 错误立即保留；这些重采样不重跑测试用例。错误只保存固定枚举、errno/返回码，不保存全局 lsof stdout 或任意第三方正文。
 
@@ -99,6 +99,28 @@ full10因启动时已使用旧包装器，曾由`guard-archive-review.py`独立�
 
 ## CI 安装前的小型能力预检
 
-现有 verify、四浏览器分片及 container job 在检出代码后、安装 Node/pnpm/依赖/浏览器之前，运行 `python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true`。只创建本轮预登记的 KiB 级目录，沿用相同的归属、锁、短路径、句柄查询与回收；verify/e2e 步骤注入本 job 实际 PostgreSQL 服务 ID，container 不注入。预检只能说明当前查询/收尾路径可用，不替代真实测试后的删除前核验，也不独立证明所有外部引用均可识别。
+现有 verify、四浏览器分片及 container job 在检出代码后、安装 Node/pnpm/依赖/浏览器之前，运行 `python3 -B tools/test-resources/run.py ci-preflight -- /usr/bin/true`。只创建本轮预登记的 KiB 级目录，使用下面明确批准的托管 VM 策略，不再注入服务 ID。预检只能说明当前登记、查询、稳定导出及预算路径可用，不替代真实测试结束时的核验，也不独立证明所有外部引用均可识别。
 
 紧接的 `ci_preflight_receipt.py` 步骤使用 `if: always()`，无需 pnpm，向原 job 日志输出最多 64 KiB 的安全 JSON 摘要，最多读取 128 个登记目录、输出 4 个 `ci-preflight` 运行。只读核对 owner/台账与锁，拒绝链接、FIFO、活跃或不可信记录；单台账最多 64 KiB。仅包含运行身份、状态、有限错误与 scratch/短根是否仍存在，不输出 command/env、不读取或上传 scratch 内容。收集成功不等于预检通过或资源已回收；缺失和拒绝必须显式记录。预检失败仍令 job 失败，后续重型步骤不会启动；日志经既有 CI 原件收集路径保存。
+
+## 固定托管 VM 的回收责任（2026-10-28 用户批准方案 B）
+
+本节是上述本机立即删除规则的显式窄例外。只有三个 job 定义（verify、四浏览器 e2e、container）设置 `NERVE_TEST_RESOURCE_POLICY=github-hosted-vm`；`hosted.py` 核对 GitHub-hosted/Linux/X64/Ubuntu 24.04、固定 main CI 工作流、真实 workspace、仓库/SHA/run/attempt/job/runner 和 kernel boot ID。默认及显式 strict 不启用，错误或不完整环境拒绝。此为平台执行契约，不是密码学证明；本地模拟测试不构成实际 GitHub 验证。
+
+Run 在 scratch 创建前落盘 `hostedScope`，并登记四个固定根、实际 inode 与短别名。持锁核验原台账后，启动及结束都检查原 scratch 和短根。本轮进程组须退出，输出线程须结束。全流 lsof 的语义未知对象保留有界诊断，只允许非破坏报告导出；格式损坏、stderr/命令失败、已知本轮路径及别名命中仍拒绝。未知原目录不精简、不移动、不删除，不能把未知写成已证明无引用。
+
+`stable_reports.py` 在受管 reports 根内建立独立 `portable/`，先写 `test-results/snapshot-owner.json`，最后写 `stable-export.json`。报告流式复制并重查来源身份、字节数与 SHA-256；有效 OPFS 文件和空目录按清单保存，完整 profile/VM/数据库排除，失败只取限额日志/配置/崩溃记录。稳定清单覆盖两片报告树，发布只移动这些导出副本；归属标记随 test-results 搬迁。两片发布之间不可捕获中断时保留分散原件并拒绝接受，不靠 publicationComplete 布尔值绕过验证。
+
+单快照最多 100,000 个文件/目录/省略项（包含 owner 和 manifest 自身两项），manifest 最多 16 MiB。枚举有界，复制前核对元数据及原 5 GiB 总额，完成时再校验。必要报告不能静默截断；失败诊断达到扫描上限时显式记录省略。导出目的持有原目录 FD，路径被替换时不得向替代目录写入报告或最终清单。
+
+托管 integration 的覆盖率目录由运行器设为本轮 output 下的 coverage，连同 command.log 和资源回执进入便携报告。其他运行清除旧的覆盖率目标继承值，本机保持原 coverage 路径。verify 只上传 `.test-resources/runs/*/reports/portable/test-results/`，明确启用隐藏目录并要求有文件；checker 核验同一 UUID 的覆盖率摘要与非空 HTML，不以资源回执替代实际覆盖率。
+
+E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `reports/transport/`。计划先登记、目录独占、inode先于子进程登记；压缩输出有容量/磁盘余量保护，tar 解码逐项核对文件/目录集合、类型、大小和 SHA-256，拒绝链接、稀疏、重复、越界、额外成员及超限元数据。运输收据绑定原 manifest 与 archive，不改写稳定清单；没有 profile 时明确登记空运输。原 artifact 增加精确 transport 路径，展开的 profile 不上传，归档失败不回退 raw。只清理确认属于本次创建的 partial，未知或被替换的目录保持。运输和最终清理回执都计入报告预算，最终写入后再检查容量。
+
+正常退出保留产品 `passed/failed/interrupted` 和原退出码，资源状态独立为 `cleanupStage=host-disposal-pending`、`cleanupComplete=false`。写入者未退出、无完整稳定清单、日志或容量触发仍返回失败。后续 sweep 验证已结束委托项，不重复 finish 或改写产品结果；prune 不手工删这些原环境。只有 job VM 的平台生命周期负责最终销毁，本项目没有独立观测最终删除。可捕获中断停止本轮生产者并处理归属；强制终止无完整收据时不得虚报完成。
+
+容器成功结果另外要求完整的 Playwright JSON 结构及非空 HTML，JSON 读取上限 64 MiB，超过则明确拒绝而不截断。构建先于 Playwright 失败时，可以只发布已经通过稳定清单核验的 test-results 诊断叶；失败退出码与产品状态保持，不能补造 HTML 或结果。仅这一失败诊断分支允许缺少 playwright-report 叶，其他发布路径仍拒绝。
+
+启动、结束和运行中每两秒计量同 job 所有已登记 scratch，包括上一轮等待宿主回收的内容，硬链接按 inode 去重，短别名不重复计量。16 GiB 是观察后停止的阈值，不是文件系统配额；采样及终止等待可能超调。每 0.1 秒的 12 GiB 磁盘余量检查独立覆盖报告、构建与镜像占盘，不能因为原环境低于 16 GiB 就忽略磁盘不足。报告合计 5 GiB，便携诊断维持 4 MiB/文件、16 MiB/用例、64 MiB/轮；artifact 14 天。身份、容量或清理条件不成立时停止，不创建反复重试的完整环境。
+
+`check_ci_resources.py` 在当前 job 上持 publication/run 锁，核验唯一预检和该 job 主测试的身份、退出、实际稳定报告哈希、历史及当前预算，写入 `cleanup-receipt.json` 的 `ciResources`。产品失败的合格诊断报告可以上传，原产品步骤仍失败；checker 拒绝则不上传。E2E 额外要求原监督器退出、JSON/HTML 合格及便携 profile 归档成功，归档失败不会回退上传 raw。预检收据只读收集有界摘要，明确 diagnostic-only，不能替代这一完整核验。三个 job 的既有报告 artifact 同时携带精确 `.test-resources/runs/*/reports/portable/test-results/` 路径下的预检原件，启用隐藏目录，不上传 scratch；因此远端可重新核对预检与主测试两份清单，而非只相信合同声明。最终远端接受还须绑定实际同 SHA 六项 CI 及下载后的便携证据，旧本地 v2 关闭证明继续只接受实际 cleanup complete。

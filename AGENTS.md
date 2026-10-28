@@ -14,4 +14,6 @@
 - 普通报告最多保留 14 天、每个 worktree 合计 5 GiB；新登记的本地门禁 bulk 归档另设 14 天/5 GiB 上限。最终审查通过的唯一证据须显式 pin 并记录理由。源码快照、补丁、摘要与索引不按垃圾回收。
 - 重新启动会检查登记清单、文件锁、进程组和打开句柄；归属不清、句柄检查失败、仍有写入者的资源保留并报告。不得凭文件名、时间或 PID 单项依据批量删除。`pnpm test:cleanup` 可重复运行，但不能代替调查未登记旧材料。
 - 同一 worktree 固定报告发布口串行；跨 worktree 隔离。缺少可安全清理的条件时，不继续反复创建同类环境。
+- **2026-10-28 用户批准的方案 B**：上述立即删除规则继续适用于本机、普通 Linux、自托管及未知环境。仅显式 `NERVE_TEST_RESOURCE_POLICY=github-hosted-vm` 且固定 GitHub Ubuntu 24.04、仓库/run/attempt/job/runner/boot/SHA 与创建前台账相符时，原环境可保留到 job VM 销毁；不再注入 PostgreSQL service scope。必须持锁核对根身份、本轮生产者退出、完整 lsof 格式及已知本轮路径，非破坏导出并验证有界报告。语义未知引用仍留诊断并禁止删除，格式损坏/命令异常/已知引用/活跃写入者仍拒绝。
+- 托管委托状态为 `cleanupStage=host-disposal-pending`、`cleanupComplete=false`，产品 `passed/failed/interrupted` 独立保留。不得把平台销毁承诺写成实测删除完成。每 2 秒计量同 job 全部受管原环境，16 GiB 为停止阈值（不是配额，允许采样和停止等待超调），12 GiB 可用空间独立检查；报告仍合计 5 GiB、artifact 14 天。完整原环境不上载、不缓存、不移动、不压缩；重启、prune 不手工删除此类目录。身份/预算/稳定导出有问题时停止，不能无界重试。
 - 完整规则、入口、归档 pin 与验证命令见 `docs/testing/test-resource-lifecycle.md`。清理规则的验证使用 KiB 级临时样例，不为验收机制再创建大型环境。

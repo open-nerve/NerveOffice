@@ -32,6 +32,24 @@ def rotate_reports(store, kind, current_run=None):
     base = publication_base(store, kind)
     if base is None:
         return
+    # Validate the complete portable tree before moving either leaf. Partial publication
+    # or an altered export is preserved for diagnosis, not silently accepted on restart.
+    validated = set()
+    for name in ('test-results', 'playwright-report'):
+        marker = base / name / 'resource-run.json'
+        if marker.is_file() and not marker.is_symlink():
+            identity = read_json(marker).get('runId', '')
+            if identity in validated or not RUN_ID.fullmatch(identity):
+                continue
+            owner = current_run if current_run is not None and identity == current_run.id else Run(store, store.root / 'runs' / identity, existing=True)
+            try:
+                if owner.data.get('hostedScope') is not None:
+                    owner.validate_hosted_completion()
+                    owner.verify_export()
+                validated.add(identity)
+            finally:
+                if owner is not current_run:
+                    owner.release()
     for name in ("test-results", "playwright-report"):
         target = contained(base / name, store.repo)
         if target.is_symlink():
@@ -54,17 +72,23 @@ def rotate_reports(store, kind, current_run=None):
             if (read_json(marker).get("runId") != previous or value.get("runId") != previous
                     or value.get("repo") != str(store.repo) or relative not in value.get("published", [])):
                 raise ValueError("旧报告未登记到原运行")
-            if open_paths(target, owner=owner):
+            if open_paths(target, owner=owner, export_only=owner.data.get('hostedScope') is not None):
                 raise ValueError("已有报告仍在使用；拒绝覆盖")
             if owner is current_run:
                 continue
-            old = contained(directory / "reports" / name, store.root)
+            old_root = directory / ('reports/portable' if owner.data.get('hostedScope') is not None else 'reports')
+            old = contained(old_root / name, store.root)
             if old.exists() or old.is_symlink():
                 raise ValueError("旧报告归档已存在")
-            owner.scope_directory(old.parent)
+            owner.scope_directory(directory / 'reports')
+            if not old_root.is_dir() or old_root.is_symlink():
+                raise ValueError('原导出暂存根缺失或被替换')
             owner.scope_move(target, old)
             target.rename(old)
             owner.update(published=[p for p in owner.data["published"] if p != relative])
+            if owner.data.get('hostedScope') is not None and not owner.data.get('published'):
+                owner.update(publicationComplete=False)
+                owner.verify_export()
         finally:
             if owner is not current_run:
                 owner.release()
@@ -82,9 +106,12 @@ def publish(run, kind, reports=None):
     base = publication_base(run.store, kind)
     if base is None:
         return
-    reports = reports or run.directory / "reports"
+    if run.data.get('hostedScope') is not None:
+        run.validate_hosted_completion()
+        run.verify_export()
+    reports = reports or run.directory / ('reports/portable' if run.data.get('hostedScope') is not None else 'reports')
     relative_reports = str(reports.relative_to(run.directory))
-    if relative_reports not in ("reports", "reports/recovery"):
+    if relative_reports not in ("reports", "reports/recovery", "reports/portable"):
         raise ValueError("报告暂存归属不符")
     run.update(publicationReports=relative_reports)
     # A self-contained receipt and bounded diagnostics travel with CI/handoff artifacts.
@@ -118,6 +145,9 @@ def publish(run, kind, reports=None):
         # Directory rename is atomic; a crash cannot leave an unowned half-copy.
         source.rename(target)
     run.update(publicationComplete=True)
+    if run.data.get('hostedScope') is not None:
+        run.verify_export()
+        run.update(resourceBudget=run.store.hosted_budget())
 
 
 def evidence_snapshot(run):
@@ -193,10 +223,19 @@ def recover_ci(store, state):
         run = Run(store, matches[0], existing=True)
         try:
             if run.data.get("publicationComplete"):
+                if run.data.get('hostedScope') is not None:
+                    run.validate_hosted_completion()
+                    run.assert_exportable()
+                    run.verify_export()
                 return 0
             prior_reports = run.data.get("publicationReports")
-            if prior_reports is not None:
-                if prior_reports not in ("reports", "reports/recovery"):
+            if run.data.get('hostedScope') is not None and run.data.get('cleanupStage') == 'host-disposal-pending':
+                run.validate_hosted_completion()
+                run.assert_exportable()
+                run.verify_export()
+                reports = run.directory / 'reports/portable'
+            elif prior_reports is not None:
+                if prior_reports not in ("reports", "reports/recovery", "reports/portable"):
                     raise ValueError("中断发布暂存位置不符")
                 reports = contained(run.directory / prior_reports, store.root)
             else:
@@ -227,6 +266,7 @@ def main():
     if not command:
         parser.error("需要测试命令")
     store.sweep()
+    store.hosted_budget()
     if shutil.disk_usage(store.repo).free < MIN_FREE:
         raise RuntimeError("可用磁盘不足 12 GiB，未创建本轮环境")
     for manifest in (store.root / "runs").glob("*/run.json"):
@@ -260,12 +300,19 @@ def main():
                        NERVE_TEST_OUTPUT_DIR=str(output), NERVE_TEST_REPORT_DIR=str(output),
                        TMPDIR=str(temp), TMP=str(temp), TEMP=str(temp))
             env.pop("NERVE_TEST_SHORT_ROOT", None)
+            env.pop('NERVE_TEST_COVERAGE_DIR', None)
+            if run.data.get('hostedScope') is not None and args.kind == 'integration':
+                env['NERVE_TEST_COVERAGE_DIR'] = str(output / 'coverage')
             if args.kind == "vm":
                 env["NERVE_TEST_SHORT_ROOT"] = run.data["shortRoot"]
             if stopped:
                 return 128 + int(stopped[0])
             # Refuse to start work when the same owned-root cleanup check cannot run.
-            run.assert_quiescent()
+            if run.data.get('hostedScope') is not None:
+                run.assert_exportable()
+                run.update(resourceBudget=store.hosted_budget())
+            else:
+                run.assert_quiescent()
             if stopped:
                 return 128 + int(stopped[0])
             read_fd, write_fd = os.pipe()
@@ -278,28 +325,42 @@ def main():
             log_problem = []
             def copy_output():
                 written = 0
-                with (run.directory / "command.log").open("wb") as log:
-                    while True:
-                        chunk = os.read(child.stdout.fileno(), 65536)
-                        if not chunk:
-                            break
-                        if written + len(chunk) <= MAX_LOG:
-                            log.write(chunk); log.flush()
-                        else:
-                            log_problem.append("command log exceeds 32 MiB")
-                        written += len(chunk)
-                        try:
-                            sys.stdout.buffer.write(chunk); sys.stdout.buffer.flush()
-                        except BrokenPipeError:
-                            pass
+                try:
+                    with (run.directory / "command.log").open("wb") as log:
+                        while True:
+                            chunk = os.read(child.stdout.fileno(), 65536)
+                            if not chunk:
+                                break
+                            if written + len(chunk) <= MAX_LOG:
+                                log.write(chunk); log.flush()
+                            elif not log_problem:
+                                log_problem.append("command-log-cap")
+                            written += len(chunk)
+                            try:
+                                sys.stdout.buffer.write(chunk); sys.stdout.buffer.flush()
+                            except BrokenPipeError:
+                                pass
+                except (OSError, ValueError) as error:
+                    log_problem.append('output-io-error:' + type(error).__name__)
             output_thread = threading.Thread(target=copy_output, daemon=True)
             output_thread.start()
             stop_at = None
+            budget_at = time.monotonic()
             while child.poll() is None:
                 if shutil.disk_usage(store.repo).free < MIN_FREE or log_problem:
                     if not stopped:
                         stopped.append(signal.SIGTERM); os.killpg(child.pid, signal.SIGTERM)
                         run.update(stopReason="disk-reserve-or-log-cap")
+                if run.data.get('hostedScope') is not None and time.monotonic() - budget_at >= 2:
+                    budget_at = time.monotonic()
+                    try:
+                        run.update(resourceBudget=store.hosted_budget())
+                    except (OSError, ValueError, RuntimeError) as error:
+                        if not stopped:
+                            stopped.append(signal.SIGTERM)
+                            if child.poll() is None:
+                                os.killpg(child.pid, signal.SIGTERM)
+                        run.update(stopReason='hosted-resource-budget', budgetError=str(error))
                 if stopped:
                     stop_at = stop_at or time.monotonic()
                     if time.monotonic() - stop_at > 10:
@@ -319,7 +380,12 @@ def main():
                 run.update(status="cleanup-pending", cleanupError="输出仍有写入者")
                 return code or 1
             result = 128 + int(stopped[0]) if stopped else (128 - code if code < 0 else code)
-            run.update(commandExitCode=code, exitCode=result, interrupted=bool(stopped))
+            # The final output chunk may arrive after the child already exited;
+            # joining the thread is not evidence of successful log capture.
+            if log_problem:
+                result = result or 1
+                run.update(stopReason='log-cap-or-output-error', outputErrors=log_problem[:4])
+            run.update(commandExitCode=code, exitCode=result, interrupted=bool(stopped), producerQuiescent=True)
             receipt = run.finish("interrupted" if stopped else ("passed" if result == 0 else "failed"), release=False)
             if receipt["status"] == "cleanup-pending":
                 print("测试环境尚不能安全回收；原件与归属已保留。" + receipt.get("cleanupError", ""), file=sys.stderr)
@@ -341,7 +407,8 @@ def main():
                     if output_thread is not None:
                         output_thread.join(timeout=5)
                     if output_thread is None or not output_thread.is_alive():
-                        run.update(exitCode=128 + int(stopped[0]) if stopped else 1, interrupted=True)
+                        run.update(exitCode=128 + int(stopped[0]) if stopped else 1, interrupted=True,
+                                   producerQuiescent=not group_alive(run.data.get('childGroup')))
                         run.finish("interrupted", release=False)
                     else:
                         run.update(status="cleanup-pending", cleanupError="异常退出后输出仍有写入者")

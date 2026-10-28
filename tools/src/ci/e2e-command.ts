@@ -1,4 +1,5 @@
 import type { PlanOptions, Step } from '../verify/plan.ts'
+import { execFileSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
@@ -27,4 +28,6 @@ export function checkReports(root: string, directory: string): void {
   const html = statSync(join(root, 'tests/e2e/playwright-report/index.html'))
   if (!html.isFile() || html.size === 0)
     throw new Error('缺少完整的 Playwright HTML 报告')
+  // 资源身份、稳定导出和处置状态由同一个 Python 合同核验；产品退出码仍由原执行步骤保留。
+  execFileSync('python3', ['-B', join(root, 'tools/test-resources/check_ci_resources.py')], { cwd: root, stdio: 'inherit' })
 }

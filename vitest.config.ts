@@ -1,4 +1,5 @@
 // Vitest：单元测试（unit、unit-web）与集成测试（integration）分成不同的项目（规范 §8）。
+import process from 'node:process'
 import { defaultClientConditions, defaultServerConditions } from 'vite'
 import { defineConfig } from 'vitest/config'
 
@@ -80,7 +81,7 @@ export default defineConfig({
         'apps/web/build/fixtures/**',
       ],
       reporter: ['text-summary', 'html', 'json-summary'],
-      reportsDirectory: 'coverage',
+      reportsDirectory: process.env.NERVE_TEST_COVERAGE_DIR ?? 'coverage',
       thresholds: {
         'packages/contracts/src/**': { lines: 90 },
         'apps/api/src/**': { lines: 80 },
