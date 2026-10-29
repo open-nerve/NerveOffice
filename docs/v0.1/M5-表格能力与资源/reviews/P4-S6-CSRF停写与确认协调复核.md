@@ -34,7 +34,7 @@ full15 的原 Chromium CSRF 续期故事在同一次续期周期多发一次会�
 | 生产构建与原预算 | 构建与 artifacts/budgets 通过；平台 179.9/180 KiB、编辑器 2143.2/2350 KiB、outbox Worker 15.0/15 KiB，预算未改 |
 | 真实存储 | Chromium/Chrome/WebKit 各 13 项，共 39/39 首次通过，零重试、跳过、flaky；包含新增反例 3 项和原 session-fence 36 项 |
 | 原交接/图片组合 | Chromium/Chrome/WebKit 各 20 项，共 60/60 首次通过；零重试、跳过、flaky、全局错误，原 CSRF/图片断言不变，439.57 秒 |
-| 完整验收 | full16、container05、正常合并推送、同最终 SHA 六项 CI、冻结与实际关闭仍待；旧轮次不覆盖本次新增源码 |
+| 完整验收 | 修复提交 `000022ae` 为本轮完整门禁受测输入；full16 经 r07 补充审计、container05 及同源双门禁已独立接受。r06 实际 capture 保持；旧审计失败和最终文档/来源/正常合并推送/CI/关闭条件见[最终验收记录](P4-S6-最终CI与关闭复核.md)，不预签整阶段关闭 |
 
 ## 证据与资源
 
