@@ -1,8 +1,10 @@
 # NerveOffice 协作约定
 
+**2026-10-29 最新断点：full15 失败已收存，跨模块修复待决策。** main/origin/main 仍为 `323b957b`；受测源码为 P4 的 `f2e28647`。710 文件 / 17,026 项覆盖率测试、静态检查、构建与预算通过；Chromium CSRF 续期场景多发一次会话确认，原断言未通过。本轮已受管停止，395 项通过、1 项失败，其余未完成；三轮临时资源实际回收，磁盘约 101 GiB，原件未接受为通过。调查发现单纯页面去重不足以覆盖原现场，建议协调请求失效登记、会话查询取票与页面补核；按 CLAUDE.md 的跨模块规则先提交方案再等用户决策。container05 未启动，P4 未关闭，P5 未开始。详见[调查与修复建议](docs/v0.1/M5-表格能力与资源/reviews/P4-S6-CSRF确认与停写顺序调查.md)。
+
 自部署、单租户的团队在线文档平台（在线表格 + 文字文档），基于 Univer 开源 SDK 构建。
 
-**2026-10-29 当前断点**：M0–M3 已完成并打标；M4 工程交接及 M5-P1/P2/P3 工程交付已完成。唯一 P4 分支/worktree 为 `codex/m5-p4-history-gc`，主目录保持 main；main/origin/main 为 `323b957b`，Phase 已正常提交数据库修复 `50ba1c8d` 与 WebKit 有界诊断 `1deac003`，尚未再次合并/推送。Chrome 图片修复仍在该工作副本验证；**P4 尚未关闭，P5 尚未开始**。
+**full15 启动前的局部修复记录**：M0–M3 已完成并打标；M4 工程交接及 M5-P1/P2/P3 工程交付已完成。唯一 P4 分支/worktree 为 `codex/m5-p4-history-gc`，主目录保持 main；main/origin/main 为 `323b957b`，Phase 已正常提交数据库修复 `50ba1c8d` 与 WebKit 有界诊断 `1deac003`，尚未再次合并/推送。Chrome 图片修复仍在该工作副本验证；**P4 尚未关闭，P5 尚未开始**。
 
 最终 CI `40787715273` 的 verify 中，七万资源关系替换 15,162 ms 后收到 PostgreSQL `57014` / statement timeout，现场为逐行活动触发器 INSERT；16,967 项通过、1 项失败。完整 coverage 因失败缺失，资源核验随之拒绝，不能接受。最终结果为verify、Chrome、WebKit失败，Chromium、Edge、容器成功。两项浏览器均为首次失败、重试通过的flaky，原件已保留并独立调查；不把其余成功替代失败。旧 CI `40718430340` 的 SQLSTATE/cause 仍未知，本次事实不回填旧故障。
 
