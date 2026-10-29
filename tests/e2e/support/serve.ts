@@ -146,8 +146,8 @@ async function main(): Promise<void> {
     NERVE_HTTP_HOST: '127.0.0.1',
     NERVE_HTTP_PORT: String(e2ePort()),
     NERVE_WEB_ROOT: WEB_ROOT,
-    // 写进日志文件：照常记录每个请求（info），失败排查时看得到 4xx 的原因
-    NERVE_LOG_LEVEL: 'info',
+    // 显式登录弹窗补证才保留静态响应的 debug；原脱敏 logger 无 receive 记录，缺日志不证明请求未到达。
+    NERVE_LOG_LEVEL: process.env.E2E_LOGIN_POPUP_DIAGNOSTIC === '1' ? 'debug' : 'info',
     // 所有测试都来自本机：按地址的限流调高，免得互相影响；按用户名（与来源）的限流照常测（集成测试覆盖按地址的限流与换来源的情形）
     NERVE_LOGIN_IP_MAX_FAILURES: '100000',
     // 空闲连接的超时调到上限（10 分钟）：测试进程的请求（page.request 等，Playwright 的 APIRequestContext）用 keepAlive 的 Node agent，
