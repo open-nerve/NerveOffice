@@ -11,7 +11,8 @@ export type SessionStoreResult<T> = Promise<T | StoreProblem>
 export interface SessionStore {
   readonly readState: () => SessionStoreResult<{ readonly kind: 'state', readonly state: LocalSessionState | undefined }>
   readonly beginSessionCheck: (kind: SessionCheckTicket['kind']) => SessionStoreResult<{ readonly kind: 'ticket', readonly ticket: SessionCheckTicket }>
-  readonly acceptSessionCheck: (ticket: SessionCheckTicket, source: SessionSource) => SessionStoreResult<{ readonly kind: 'active', readonly permit: DraftSessionPermit }>
+  /** 同步否决在真实事务的状态决定处执行，只能拒绝接受，不能换票或授予资格。 */
+  readonly acceptSessionCheck: (ticket: SessionCheckTicket, source: SessionSource, allow?: () => boolean) => SessionStoreResult<{ readonly kind: 'active', readonly permit: DraftSessionPermit }>
   readonly failSessionChange: (ticket: SessionCheckTicket) => SessionStoreResult<{ readonly kind: 'released' }>
   readonly rejectSessionCheck: (ticket: SessionCheckTicket, failure: SessionCheckFailure) => SessionStoreResult<SessionRejectionResult | { readonly kind: 'invalidated' }>
   readonly suspendSession: (permit: DraftSessionPermit) => SessionStoreResult<{ readonly kind: 'suspended' }>
@@ -71,7 +72,9 @@ export function createSessionStore(options: SessionStoreOptions): SessionStore {
         scope.finish({ kind: 'ticket', ticket: sessionCheckTicket(current) })
       })
     }),
-    acceptSessionCheck: async (ticket, source) => transition((state) => {
+    acceptSessionCheck: async (ticket, source, allow) => transition((state) => {
+      if (allow?.() === false)
+        return undefined
       const next = acceptSessionCheck(state, ticket, source, newGeneration(), now())
       return next === undefined ? undefined : { state: next.state, value: { kind: 'active', permit: next.permit } }
     }),

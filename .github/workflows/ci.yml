@@ -143,6 +143,7 @@ jobs:
       NERVE_TEST_LSOF_MODE: github-ubuntu-sudo
       NERVE_TEST_DATABASE_URL: postgres://nerve:nerve_ci_only@127.0.0.1:5432/nerve_office
       E2E_BROWSERS: ${{ matrix.browser }}
+      E2E_LOGIN_POPUP_DIAGNOSTIC: ${{ matrix.browser == 'webkit' && '1' || '' }}
     steps:
       - name: 检出代码
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

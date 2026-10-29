@@ -15,6 +15,8 @@ const WORKFLOW = '.github/workflows/ci.yml'
 const PLAYWRIGHT_CONFIG = 'tests/e2e/playwright.config.ts'
 // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文，不是模板字符串
 const MATRIX_BROWSER = '${{ matrix.browser }}'
+// eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文，只在 WebKit 分片启用现有补证
+const WEBKIT_LOGIN_POPUP_DIAGNOSTIC = '${{ matrix.browser == \'webkit\' && \'1\' || \'\' }}'
 
 const stepSchema = z.object({
   'name': z.string().optional(),
@@ -33,6 +35,7 @@ const jobSchema = z.object({
   'continue-on-error': z.unknown().optional(),
 }).loose()
 const workflowSchema = z.object({
+  env: z.record(z.string(), z.unknown()).optional(),
   on: z.object({
     push: z.object({ branches: z.array(z.string()) }).loose().optional(),
     schedule: z.array(z.object({ cron: z.string() })).optional(),
@@ -163,6 +166,18 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
 
   it('另有容器 E2E 的 job（生产镜像，规范 §9）', () => {
     expect(workflow.jobs.container?.steps.some(step => step.run?.trim() === 'pnpm test:e2e:container')).toBe(true)
+  })
+
+  it('登录 popup 导航补证只在 WebKit 矩阵启用，不影响其他浏览器、verify 或容器；全局与步骤不能覆盖开关', () => {
+    expect(workflow.env?.E2E_LOGIN_POPUP_DIAGNOSTIC).toBeUndefined()
+    // 固定条件表达式直接约束真实工作流，不另造 GitHub 表达式求值器。
+    expect(workflow.jobs.e2e?.env?.E2E_LOGIN_POPUP_DIAGNOSTIC).toBe(WEBKIT_LOGIN_POPUP_DIAGNOSTIC)
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      if (id !== 'e2e')
+        expect(job.env?.E2E_LOGIN_POPUP_DIAGNOSTIC, id).toBeUndefined()
+      for (const step of job.steps)
+        expect(step.env?.E2E_LOGIN_POPUP_DIAGNOSTIC, stepLabel(id, step)).toBeUndefined()
+    }
   })
 
   it('CI 上 E2E 重试一次，出现重试（重试之后才通过）就让这次运行失败；本机不重试（规范 §8.4，M2-P6 第 6 片复核 M4）', () => {

@@ -1,6 +1,8 @@
 import type { AssetBytes } from '../../shared/assets/asset-api.ts'
 import type { DecodedImage } from './decode-image.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../../shared/api/api-errors.ts'
+import { createImageReadFailures } from '../../shared/lib/session-image-access.ts'
 import { deferred } from '../async-tools.ts'
 import { BYTES, decoded, OTHER, PLACEHOLDER, resourcesHarness, SOURCE } from './image-resources.test-support.ts'
 
@@ -10,6 +12,45 @@ afterEach(() => {
 })
 
 describe('图片资源的代次与退役', () => {
+  it('失败轮次先于暂停回调固定；同轮恢复只挡失败规范来源，下载仍独立验证', async () => {
+    const failures = createImageReadFailures()
+    const h = resourcesHarness({ readFailures: () => failures })
+    const error = new ApiError(401, 'UNAUTHENTICATED', '受控显示失败')
+    h.failed.mockImplementation(() => h.resources.suspend())
+    h.read.mockRejectedValueOnce(error)
+    expect(await h.resources.load(`https://app.test${SOURCE}`)).toBe(PLACEHOLDER)
+    expect(failures.has(SOURCE)).toBe(true)
+    h.resources.refresh(false)
+    expect(await h.resources.load(SOURCE)).toBe(PLACEHOLDER)
+    expect(h.read).toHaveBeenCalledOnce()
+    expect(await h.resources.load(OTHER)).toBe('blob:https://app.test/first')
+    const download = await h.resources.download(SOURCE)
+    expect(download.size).toBe(BYTES.data.byteLength)
+    expect(download.type).toBe(BYTES.mimeType)
+    expect(h.read).toHaveBeenCalledTimes(3)
+    expect(h.failed).toHaveBeenCalledExactlyOnceWith(error)
+    h.resources.dispose()
+  })
+
+  it('失败登记捕获发出时轮次，轮次已退休但取消通知未到也不能登记到新轮', async () => {
+    let failures = createImageReadFailures()
+    const h = resourcesHarness({ readFailures: () => failures })
+    const pending = deferred<AssetBytes>()
+    h.read.mockReturnValueOnce(pending.promise)
+    const old = h.resources.load(SOURCE)
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledOnce())
+    const retired = failures
+    failures = createImageReadFailures()
+    pending.reject(new ApiError(401, 'UNAUTHENTICATED', '旧轮次显示失败'))
+    expect(await old).toBe(PLACEHOLDER)
+    expect(retired.has(SOURCE)).toBe(false)
+    expect(failures.has(SOURCE)).toBe(false)
+    expect(h.failed).not.toHaveBeenCalled()
+    h.resources.refresh()
+    expect(await h.resources.load(SOURCE)).toBe('blob:https://app.test/first')
+    h.resources.dispose()
+  })
+
   it('未交给 SDK 的内部解码元素在刷新后释放，不继续跟随新一轮像素', async () => {
     const h = resourcesHarness()
     const first = decoded('blob:https://app.test/internal-first')

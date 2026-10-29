@@ -1,16 +1,21 @@
 import type { AssetBytes } from '../../shared/assets/asset-api.ts'
+import type { ImageReadFailures } from '../../shared/lib/session-image-access.ts'
 import type { DecodedImage } from './decode-image.ts'
 import { isPlatformAssetAddress } from '@nerve-office/contracts'
+import { ApiError } from '../../shared/api/api-errors.ts'
 import { AssetInputError } from '../../shared/assets/asset-api.ts'
+import { createImageReadFailures } from '../../shared/lib/session-image-access.ts'
 import { runImageTask } from './image-task.ts'
 
 export interface ImageResourcesOptions {
   readonly origin: string
   readonly placeholder: string
-  readonly read: (source: string, signal: AbortSignal) => Promise<AssetBytes>
+  /** 显示读取可观察原始拒绝；即使取消先赢，也不改变请求对外结果。下载不注册观察。 */
+  readonly read: (source: string, signal: AbortSignal, rejected?: (error: unknown) => void) => Promise<AssetBytes>
   readonly decode: (bytes: AssetBytes, signal: AbortSignal) => Promise<DecodedImage>
   readonly changed: () => void
   readonly failed: (error: unknown) => void
+  readonly readFailures?: () => ImageReadFailures
 }
 
 export interface ImageResources {
@@ -18,7 +23,7 @@ export interface ImageResources {
   readonly cached: (source: string) => HTMLImageElement | undefined
   readonly track: (source: string, image: HTMLImageElement) => void
   readonly download: (source: string) => Promise<Blob>
-  readonly refresh: () => void
+  readonly refresh: (retryFailures?: boolean) => void
   readonly suspend: () => void
   readonly dispose: () => void
 }
@@ -42,6 +47,8 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
   let generation = new AbortController()
   let active = true
   let disposed = false
+  let localFailures = createImageReadFailures()
+  const failures = (): ImageReadFailures => options.readFailures?.() ?? localFailures
 
   function canonical(source: string): string | undefined {
     if (!isPlatformAssetAddress(source, options.origin))
@@ -108,8 +115,8 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     options.changed()
   }
 
-  async function readDecoded(source: string, signal: AbortSignal): Promise<{ bytes: AssetBytes, decoded: DecodedImage }> {
-    const bytes = await runImageTask(signal, async () => options.read(source, signal))
+  async function readDecoded(source: string, signal: AbortSignal, rejected?: (error: unknown) => void): Promise<{ bytes: AssetBytes, decoded: DecodedImage }> {
+    const bytes = await runImageTask(signal, async () => options.read(source, signal, rejected))
     const decoded = await runImageTask(signal, async () => options.decode(bytes, signal), late => late.dispose())
     try {
       signal.throwIfAborted()
@@ -129,7 +136,23 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       return options.placeholder
     }
     const entry = entryOf(path)
-    entry.task ??= readDecoded(path, signal).then(({ decoded }) => {
+    const issuedFailures = failures()
+    if (issuedFailures.has(path))
+      return options.placeholder
+    const recordFailure = (error: unknown): void => {
+      if (disposed || failures() !== issuedFailures || issuedFailures.has(path))
+        return
+      issuedFailures.add(path)
+      options.failed(error)
+    }
+    entry.task ??= readDecoded(path, signal, (error) => {
+      // 只补原请求认证失败的观察；任意取消原因即使形似 ApiError 也不作为新失败。
+      if (error instanceof ApiError && error.status === 401
+        && (error.code === 'UNAUTHENTICATED' || error.code === 'SESSION_EXPIRED')
+        && !(signal.aborted && error === signal.reason)) {
+        recordFailure(error)
+      }
+    }).then(({ decoded }) => {
       if (signal.aborted) {
         decoded.dispose()
         throw signal.reason
@@ -141,7 +164,9 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     }).catch((error: unknown) => {
       if (signal.aborted)
         throw signal.reason
-      options.failed(error)
+      if (failures() !== issuedFailures)
+        return options.placeholder
+      recordFailure(error)
       return options.placeholder
     })
     return entry.task
@@ -185,9 +210,11 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
         result.decoded.dispose()
       }
     },
-    refresh: () => {
+    refresh: (retryFailures = true) => {
       if (disposed)
         return
+      if (retryFailures)
+        localFailures = createImageReadFailures()
       generation.abort(new DOMException('图片读取代次已更新', 'AbortError'))
       generation = new AbortController()
       active = true

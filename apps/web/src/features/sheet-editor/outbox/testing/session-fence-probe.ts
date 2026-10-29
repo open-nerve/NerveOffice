@@ -2,11 +2,12 @@
 import type { DraftSessionPermit, SessionCheckFailure, SessionCheckTicket, SessionSource, UserCleanupCause, UserCleanupPermit } from '../../../../shared/outbox/session-fence.ts'
 import type { SessionStore } from '../../../../shared/outbox/session-store.ts'
 import type { ProbeStoreOptions } from './outbox-probe.ts'
+import type { SessionCoordinationPorts } from './session-coordination-probe.ts'
 import { withOutboxLock } from '../../../../shared/outbox/outbox-lock.ts'
 import { createSessionStore } from '../../../../shared/outbox/session-store.ts'
 import { plain } from './probe-result.ts'
 
-export function createSessionFenceProbe() {
+export function createSessionFenceProbe(coordination: SessionCoordinationPorts) {
   let now = Date.now()
   const create = (options: ProbeStoreOptions = {}): SessionStore => createSessionStore({
     now: () => now,
@@ -30,6 +31,10 @@ export function createSessionFenceProbe() {
     }
   }
   return {
+    disabledBeforeDecision: async () => {
+      const probe = await import('./session-coordination-probe.ts')
+      return probe.probeDisabledBeforeSessionDecision(coordination)
+    },
     read: async () => run(async current => current.readState()),
     begin: async (kind: SessionCheckTicket['kind']) => run(async current => current.beginSessionCheck(kind)),
     accept: async (ticket: SessionCheckTicket, source: SessionSource) => run(async current => current.acceptSessionCheck(ticket, source)),

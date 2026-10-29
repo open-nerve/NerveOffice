@@ -14,7 +14,9 @@ import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createSheetEditor, SheetEditorLoadError } from '../../editor/index.ts'
-import { requestSession } from '../../shared/api/index.ts'
+import { ApiError, requestSession, setApiSession } from '../../shared/api/index.ts'
+import { associatedSessionPermit } from '../../shared/api/session-association.ts'
+import { reportRequestSessionFailure } from '../../shared/api/session-tracking.ts'
 import { watchBrowserConnection } from '../../shared/lib/browser-connection.ts'
 import { connectionState } from '../../shared/lib/connection-state.ts'
 import { startDraftMaintenance } from '../../shared/lib/draft-maintenance.ts'
@@ -112,8 +114,15 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     // 与组装各走各的；引入失败同样不上报（理由见下），用到它的 E2E 等不到探针、自己会失败
     if (parameters.has('outboxProbe')) {
       void Promise.allSettled([import('./outbox/testing/outbox-probe.ts')]).then(([probe]) => {
-        if (probe.status === 'fulfilled')
-          probe.value.installOutboxProbe(window)
+        if (probe.status === 'fulfilled') {
+          probe.value.installOutboxProbe(window, {
+            request: requestSession,
+            adopt: setApiSession,
+            failed: async (response, kind) => reportRequestSessionFailure(kind === 'preserve'
+              ? new ApiError(403, 'CSRF_TOKEN_INVALID', '探针：原请求令牌失效')
+              : new ApiError(401, 'SESSION_EXPIRED', '探针：原来源确证停用', { details: { reason: 'account_disabled', userId: response.user.id } }), associatedSessionPermit(response)),
+          })
+        }
       })
     }
     // 地址带 crashProbe 时：写入中途结束整棵浏览器进程的原子性用例的探针（M4-P1 设计 §3.7，outbox/testing/crash-probe.ts），同上

@@ -7,12 +7,15 @@ import { sha256Hex } from '../outbox/draft-codec.ts'
 import { withOutboxLock } from '../outbox/outbox-lock.ts'
 import { readDraftSessionPermit } from '../outbox/session-fence.ts'
 import { createSessionStore } from '../outbox/session-store.ts'
+import { allowFailureConfirmation, finishFailureConfirmation, registerRequestFailure, waitForRequestFailure } from './session-failure-coordination.ts'
 
 export interface SessionActivationOptions {
   readonly store: Pick<SessionStore, 'beginSessionCheck' | 'acceptSessionCheck' | 'failSessionChange'>
   readonly exclusive: <T>(work: () => Promise<T>) => Promise<T>
   readonly source: (response: SessionResponse) => Promise<SessionSource>
   readonly rejected: (error: unknown, ticket: SessionCheckTicket) => Promise<void>
+  /** 已登记却未完成的原来源失效可以否决激活；不能借此授予许可或换发票据。 */
+  readonly allow?: (response: SessionResponse) => boolean
 }
 
 export function draftSessionPermitOf(response: object) {
@@ -58,7 +61,7 @@ export function createSessionActivation(options: SessionActivationOptions) {
         throw error
       }
       rememberSessionPermit(response, undefined)
-      if (ticket === undefined)
+      if (ticket === undefined || options.allow?.(response) === false)
         return response
       let source: SessionSource
       try {
@@ -72,12 +75,20 @@ export function createSessionActivation(options: SessionActivationOptions) {
       const accepted = await local(async () => {
         // 等锁期间也可能取消；检查必须位于真正开始接受原票据之前。
         signal?.throwIfAborted()
-        return options.store.acceptSessionCheck(ticket, source)
+        if (options.allow?.(response) === false)
+          return undefined
+        return options.store.acceptSessionCheck(ticket, source, () => {
+          // 入锁后 IDB 仍要异步读取；真正决定前再次同步核对，不能先 put 再剥响应关联。
+          signal?.throwIfAborted()
+          return options.allow?.(response) !== false
+        })
       })
       // local 只降级存储故障；取消不能随它一起被吞掉或变成成功响应。
       signal?.throwIfAborted()
-      if (accepted?.kind === 'active')
-        rememberSessionPermit(response, Object.freeze({ ...accepted.permit }))
+      if (accepted?.kind === 'active') {
+        const permit = Object.freeze({ ...accepted.permit })
+        rememberSessionPermit(response, permit, async facts => registerRequestFailure(facts, permit))
+      }
       return response
     },
   }
@@ -87,5 +98,10 @@ const store = createSessionStore({ blockedTimeoutMs: 3_000 })
 
 /** 请求层传入自己的错误处理端口；资格模块与探针不静态引入契约校验或反向引用请求层。 */
 export async function trackSessionRequest<T extends SessionResponse>(kind: SessionCheckTicket['kind'], request: () => Promise<T>, signal: AbortSignal | undefined, rejected: SessionActivationOptions['rejected']): Promise<T> {
-  return createSessionActivation({ store, exclusive: withOutboxLock, source: sessionSourceOf, rejected }).track(kind, request, signal)
+  if (kind === 'query')
+    await waitForRequestFailure(signal)
+  const response = await createSessionActivation({ store, exclusive: withOutboxLock, source: sessionSourceOf, rejected, allow: kind === 'query' ? allowFailureConfirmation : undefined }).track(kind, request, signal)
+  if (kind === 'query')
+    finishFailureConfirmation(response)
+  return response
 }

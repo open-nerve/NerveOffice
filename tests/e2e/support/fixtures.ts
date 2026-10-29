@@ -20,6 +20,7 @@ import type { AutosaveMode } from './autosave.ts'
 import process from 'node:process'
 import { test as base, expect } from '@playwright/test'
 import { applyAutosaveMode, autosaveModeScript } from './autosave.ts'
+import { isLoginPopupTarget, watchLoginPopupDiagnostic } from './login-popup-diagnostic.ts'
 import { watchPageErrors } from './page-errors.ts'
 import { profileDirFor } from './persistent-profile.ts'
 import { isolateWebkitStorage } from './webkit-storage.ts'
@@ -167,11 +168,20 @@ export const test = base.extend<{ cspViolations: CspViolations, pageErrors: Page
     const profile = profileDirFor(testInfo, 'standard-webkit')
     const persistent = await playwright.webkit.launchPersistentContext(profile, { baseURL, ignoreHTTPSErrors, locale, timezoneId })
     await isolateWebkitStorage(persistent, profile, testInfo)
+    const diagnostic = isLoginPopupTarget({ file: testInfo.file, title: testInfo.title, project: testInfo.project.name }, process.env.E2E_LOGIN_POPUP_DIAGNOSTIC)
+      ? watchLoginPopupDiagnostic(persistent, testInfo)
+      : undefined
     try {
       await provide(persistent)
     }
     finally {
-      await persistent.close()
+      diagnostic?.stop()
+      try {
+        await persistent.close()
+      }
+      finally {
+        await diagnostic?.attach()
+      }
     }
   },
   /** 打开时定时的自动保存暂停（held，默认）还是照常（running），见 defaultAutosaveMode */

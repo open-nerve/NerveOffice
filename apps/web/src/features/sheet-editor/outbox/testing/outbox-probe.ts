@@ -17,6 +17,7 @@ import type { DraftSessionPermit, UserCleanupPermit } from '../../../../shared/o
 import type { WriterIdentity } from '../../../../shared/outbox/writer-fence.ts'
 import type { ProbePipeline } from './pipeline-probe.ts'
 import type { Plain, ProbeError } from './probe-result.ts'
+import type { SessionCoordinationPorts } from './session-coordination-probe.ts'
 import { browserIndexedDb, DRAFTS_STORE, NOTICES_STORE, openOutboxDatabase, OUTBOX_DATABASE_NAME, OUTBOX_DATABASE_VERSION, OUTBOX_KEY_PATH, WRITERS_STORE } from '../../../../shared/outbox/database.ts'
 import { gunzipBytes, gzipBytes, openDraft, sealDraft } from '../../../../shared/outbox/draft-codec.ts'
 import { draftDocumentIds } from '../../../../shared/outbox/draft-index.ts'
@@ -297,7 +298,7 @@ function rawOf(value: unknown): Record<string, unknown> | null {
   return Object.fromEntries(Object.entries(value).map(([field, item]) => [field, ArrayBuffer.isView(item) ? { hex: hex(new Uint8Array(item.buffer, item.byteOffset, item.byteLength)) } : item]))
 }
 
-export function installOutboxProbe(target: Window): OutboxProbe {
+export function installOutboxProbe(target: Window, coordination: SessionCoordinationPorts): OutboxProbe {
   let key: LocalKeyHandle | undefined
   let store: DraftStore = createDraftStore({ blockedTimeoutMs: 1000 })
   let fixturePermit: DraftSessionPermit | undefined
@@ -375,7 +376,7 @@ export function installOutboxProbe(target: Window): OutboxProbe {
   }
 
   const probe: OutboxProbe = {
-    fence: createSessionFenceProbe(),
+    fence: createSessionFenceProbe(coordination),
     names: { database: OUTBOX_DATABASE_NAME, version: OUTBOX_DATABASE_VERSION, drafts: DRAFTS_STORE, writers: WRITERS_STORE },
     chooseKey: async (version, rawHex) => {
       const raw = rawHex === undefined ? crypto.getRandomValues(new Uint8Array(32)) : fromHex(rawHex)

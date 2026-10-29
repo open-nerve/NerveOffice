@@ -8,6 +8,16 @@ export interface CleanupPermit extends SessionPermit { readonly cause: 'logout' 
 type Result<T> = Promise<T | ProbeProblem | { readonly kind: 'session-invalid' }>
 
 export interface SessionFenceProbe {
+  readonly disabledBeforeDecision: () => Promise<{
+    readonly before: Readonly<Record<string, unknown>>
+    readonly atDecision: Readonly<Record<string, unknown>> | undefined
+    readonly durability: string | undefined
+    readonly registered: boolean
+    readonly permit: SessionPermit | undefined
+    readonly writes: readonly { readonly phase: string, readonly generation: string }[]
+    readonly committedCleanup: boolean
+    readonly after: { readonly kind: string, readonly state?: Readonly<Record<string, unknown>> }
+  }>
   readonly read: () => Result<{ readonly kind: 'state', readonly state: Readonly<Record<string, unknown>> | undefined }>
   readonly begin: (kind: SessionTicket['kind']) => Result<{ readonly kind: 'ticket', readonly ticket: SessionTicket }>
   readonly accept: (ticket: SessionTicket, source: SessionSource) => Result<{ readonly kind: 'active', readonly permit: SessionPermit }>

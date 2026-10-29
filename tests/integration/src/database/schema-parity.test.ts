@@ -52,8 +52,25 @@ BEGIN
   RETURN NEW;
 END;
 $function$`,
-  'TRIGGER CREATE TRIGGER document_assets_note_reference AFTER INSERT OR UPDATE OF asset_id ON public.document_asset_links FOR EACH ROW EXECUTE FUNCTION asset_reference_activity_note() ENABLED O',
-  'TRIGGER CREATE TRIGGER checkpoint_assets_note_reference AFTER INSERT OR UPDATE OF asset_id ON public.document_checkpoint_assets FOR EACH ROW EXECUTE FUNCTION asset_reference_activity_note() ENABLED O',
+  `FUNCTION CREATE OR REPLACE FUNCTION public.asset_reference_activity_note_insert()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+  reference_transaction_id bigint := pg_current_xact_id()::text::bigint;
+BEGIN
+  INSERT INTO public.asset_reference_activity (asset_id, transaction_id)
+    SELECT asset_id, reference_transaction_id
+    FROM (SELECT DISTINCT asset_id FROM inserted_asset_references) AS referenced
+    ORDER BY asset_id
+    ON CONFLICT DO NOTHING;
+  RETURN NULL;
+END;
+$function$`,
+  'TRIGGER CREATE TRIGGER document_assets_note_reference AFTER INSERT ON public.document_asset_links REFERENCING NEW TABLE AS inserted_asset_references FOR EACH STATEMENT EXECUTE FUNCTION asset_reference_activity_note_insert() ENABLED O',
+  'TRIGGER CREATE TRIGGER checkpoint_assets_note_reference AFTER INSERT ON public.document_checkpoint_assets REFERENCING NEW TABLE AS inserted_asset_references FOR EACH STATEMENT EXECUTE FUNCTION asset_reference_activity_note_insert() ENABLED O',
+  'TRIGGER CREATE TRIGGER document_assets_note_reference_update AFTER UPDATE OF asset_id ON public.document_asset_links FOR EACH ROW EXECUTE FUNCTION asset_reference_activity_note() ENABLED O',
+  'TRIGGER CREATE TRIGGER checkpoint_assets_note_reference_update AFTER UPDATE OF asset_id ON public.document_checkpoint_assets FOR EACH ROW EXECUTE FUNCTION asset_reference_activity_note() ENABLED O',
   `FUNCTION CREATE OR REPLACE FUNCTION public.audit_events_reject_change()
  RETURNS trigger
  LANGUAGE plpgsql

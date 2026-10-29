@@ -267,6 +267,13 @@
       "when": 1792689532696,
       "tag": "0037_m5_asset_retirement",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1793233322302,
+      "tag": "0038_m5_asset_reference_batch",
+      "breakpoints": true
     }
   ]
 }

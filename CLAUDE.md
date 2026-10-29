@@ -1,16 +1,14 @@
 # NerveOffice 协作约定
 
+**2026-10-29 本轮验收记录**：完整门禁受测提交为 `000022ae`，本轮合并前 main/origin/main 基线为 `323b957b`。full16 经 r07 补充审计、container05 及同源双门禁均已独立接受。真实 capture 保持 r06，后续来源绑定/正常合并推送/同 SHA CI/关闭走 r07；本次落档不预签最终关闭或 P5 开始。实际后续状态与旧失败边界见[最终验收记录](docs/v0.1/M5-表格能力与资源/reviews/P4-S6-最终CI与关闭复核.md)及其外部记录入口。
+
 自部署、单租户的团队在线文档平台（在线表格 + 文字文档），基于 Univer 开源 SDK 构建。
 
-**2026-10-29 当前断点**：M0–M3 已完成并打标；M4 工程交接及 M5-P1/P2/P3 工程交付已完成。唯一 P4 分支/worktree 为 `codex/m5-p4-history-gc`，主目录保持 main；当前 main/origin/main `41de69e9`，Phase tip `6de31f16`。P4 产品实现与局部修复已完成，**P4 尚未关闭，P5 尚未开始**。
+M0–M3 已完成并打标；M4 工程交接及 M5-P1/P2/P3 工程交付已完成。唯一 P4 分支/worktree 为 `codex/m5-p4-history-gc`，主目录保持 main。引用活动批量写入、WebKit 有界诊断、图片 401 恢复及 CSRF 停写/确认协调已提交；最新局部实现与独审见[协调复核](docs/v0.1/M5-表格能力与资源/reviews/P4-S6-CSRF停写与确认协调复核.md)。旧 full15 和 CI `40787715273` 失败、历史 full14/container04 通过及旧 WebKit Linux 根因未知均保留在最终验收记录，不用旧输入的通过替代当前输入。
 
-诊断 CI `40742680031` 六项成功、十份原件齐备；来源、数据库/coverage、稳定导出、压缩运输、资源核验和上传能力经独立复核接受。此为诊断能力证据，不代替最终合并 SHA 的 CI。旧 CI 的七万资源 SQLSTATE/cause 仍未知；新案例通过不反推旧故障原因，旧失败原件保持。
+用户已批准[方案 B](docs/v0.1/M5-表格能力与资源/reviews/P4-S6-CI清理边界复核与调整建议.md)：本机继续严格清理；固定一次性 GitHub VM 在原身份、退出、引用和报告核验成立后只登记 `host-disposal-pending`、`cleanupComplete=false`、`ciRawCleanupObserved=false`。不把平台回收承诺称为实测删除或产品通过。重型测试串行，每轮结束及时处理残留，监测磁盘与负载；旧原件和冻结证明不覆盖。
 
-full14 已在干净的 `6de31f16` 上完成默认完整 `pnpm verify --ci`：706 文件 / 16,968 项单元集成、2,421 E2E 通过、16 项既有平台跳过。同源 container04 完整生产容器 339/339 通过。两轮 4,589 项源码及 16 份 SDK 前后、相互一致；原件/资源审计、独立验收和实际临时资源回收均已完成。**下一步是精确结果文档审查及正常最终 no-ff/推送，再验收同最终 SHA 六项 CI 与十份原件、独立冻结和实际关闭**。旧 full13/container03/v3 只证明旧输入，诊断 CI 不替代最终 CI。
-
-用户已批准[方案 B](docs/v0.1/M5-表格能力与资源/reviews/P4-S6-CI清理边界复核与调整建议.md)：本机严格删除；固定一次性 GitHub VM 只在显式身份绑定、生产者退出、无已知本轮引用和稳定报告核验后登记 `host-disposal-pending`，原环境留待宿主销毁。该状态不等于删除完成、全局无引用或测试通过；实际托管 VM 最终销毁未作已观测声明。本轮 r04 的 14 份工具、7 份 wrapper 已在 full14 前冻结，before/after 已采集，不改动旧证据或补签起点。
-
-当前详情与历史失败统一见 [P4 最终验收记录](docs/v0.1/M5-表格能力与资源/reviews/P4-S6-最终CI与关闭复核.md)、[P4 交接单](docs/v0.1/M5-表格能力与资源/handoffs/P4-交接单.md) 及主目录 `.codex/handoffs/m5-p4-20261022/progress.json`。重型测试串行、每轮结束及时处理残留。Linux 安装探针共享 Docker 虚拟机约 345 MB 已删除文件旧句柄仍挂账，不重启其他项目使用中的 Docker；Excel、Safari/Finder，以及 M4 DEF-073/UR-035、完整验收和标签继续挂账。
+Excel、Safari/Finder，M4 DEF-073/UR-035、完整验收和标签继续挂账；DEF-061 在 P4 实际关闭前不提前关闭。Linux 安装探针共享 Docker 虚拟机约 345 MB 已删除文件旧句柄仍挂账，不重启其他项目使用中的 Docker，不计为本轮已释放。交接与产品边界见 [P4 交接单](docs/v0.1/M5-表格能力与资源/handoffs/P4-交接单.md)。
 
 ## 先读
 
