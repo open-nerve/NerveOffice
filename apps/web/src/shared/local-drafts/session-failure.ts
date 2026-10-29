@@ -10,22 +10,24 @@ export interface SessionFailureOptions {
 }
 
 export function createSessionFailure(options: SessionFailureOptions) {
-  async function attempt(work: () => Promise<void>): Promise<void> {
+  async function attempt<T>(work: () => Promise<T>): Promise<T | undefined> {
     try {
-      await work()
+      return await work()
     }
     catch { /* 本机副作用不能替换或重试原网络请求；持久 clearing 留给维护重试。 */ }
   }
   return {
-    request: async (failure: SessionCheckFailure | undefined, original: unknown): Promise<void> => attempt(async () => {
+    request: async (failure: SessionCheckFailure | undefined, original: unknown) => attempt(async () => {
       const permit = readDraftSessionPermit(original)
       if (permit === undefined || failure === undefined || (failure.kind === 'disabled' && failure.userId !== permit.userId))
         return
       const result = await options.exclusive(async () => failure.kind === 'disabled'
         ? options.sessions.beginUserCleanup(permit, 'account_disabled')
         : options.sessions.suspendSession(permit))
-      if (result.kind === 'clearing' || result.kind === 'suspended')
+      if (result.kind === 'clearing' || result.kind === 'suspended') {
         await options.stopped(permit, result.kind === 'clearing' ? result.permit : undefined)
+        return 'stopped' as const
+      }
     }),
     query: async (failure: SessionCheckFailure | undefined, ticket: SessionCheckTicket): Promise<void> => attempt(async () => {
       if (failure === undefined)

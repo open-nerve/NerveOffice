@@ -17,7 +17,7 @@ import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@ner
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
-import { rememberSessionPermit } from '../../shared/api/session-association.ts'
+import { associatedSessionPermit, rememberSessionPermit } from '../../shared/api/session-association.ts'
 import { connectionState, createConnectionState } from '../../shared/lib/connection-state.ts'
 import { publishLocalSession } from '../../shared/local-drafts/session-events.ts'
 import { gzipBytes } from '../../shared/outbox/draft-codec.ts'
@@ -474,7 +474,7 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     h.api.session.mockReturnValueOnce(answer.promise)
     h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
     await vi.waitFor(() => expect(h.api.session).toHaveBeenCalledTimes(2))
-    // 控制停写先于确认的顺序：G1 撤销后，原查询结束还须补核一次新的资格。
+    // 已登记的停写发生于取票前：这次真实确认已经取得 G2，不应再为同一个 stopped 补查。
     publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
     expect(h.images.current()).toBeUndefined()
     expect(h.editorPage.view().imageProblem).toBe(true)
@@ -485,7 +485,7 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     expect(h.images.current()).toBe(confirmed)
     expect(h.editorPage.view().session).toBe('active')
     expect.soft(h.editorPage.view().imageProblem).toBe(true)
-    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.api.session).toHaveBeenCalledTimes(2)
     if (rebuild) {
       await h.editorPage.enterEditing()
       expect(modeOf(h.editorPage)?.kind).toBe('editing')
@@ -552,6 +552,71 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     await h.editorPage.save()
     expect.soft(h.api.save).toHaveBeenCalledOnce()
     expect.soft(h.api.session).toHaveBeenCalledTimes(3)
+  })
+
+  it('无许可的同人确认先返回，迟到 stopped 仍可补核；识别来源不成为持久许可', async () => {
+    const initial = permitted({ ...ALICE })
+    const confirmed = permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000002')
+    const h = await loaded({ editIntent: false, api: { session: async () => initial } })
+    h.api.session.mockResolvedValueOnce({ ...ALICE }).mockResolvedValue(confirmed)
+    h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(associatedSessionPermit(h.images.current()!)).toBeUndefined()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.images.current()).toBe(confirmed)
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+  })
+
+  it('G2 确认后的续租仍在等待时又停写 G2，不能用较早响应消掉这次补核', async () => {
+    const initial = permitted({ ...ALICE })
+    const confirmed = permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000002')
+    const latest = permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000003')
+    const h = await loaded({ api: { session: async () => initial } })
+    const renewal = deferred<RenewedEditLease>()
+    h.editLease.renew.mockReturnValueOnce(renewal.promise)
+    h.api.session.mockResolvedValueOnce(confirmed).mockResolvedValue(latest)
+    const checking = h.editorPage.recheckSession()
+    await vi.waitFor(() => expect(h.editLease.renew).toHaveBeenCalledOnce())
+    publishLocalSession({ kind: 'stopped', previous: { userId: ALICE.user.id, generation: '0199b0c4-7d3e-7a3b-9c4e-000000000002' }, cleanup: undefined })
+    expect(h.images.current()).toBeUndefined()
+    renewal.resolve(RENEWED)
+    await checking
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.images.current()).toBe(latest)
+  })
+
+  it('新许可覆盖 stopped 时，另外收到的会话广播仍要求下一轮确认', async () => {
+    const initial = permitted({ ...ALICE })
+    const confirmed = permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000002')
+    const h = await loaded({ editIntent: false, api: { session: async () => initial } })
+    const answer = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(answer.promise).mockResolvedValue(confirmed)
+    const checking = h.editorPage.recheckSession()
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    h.fromOtherTab()
+    answer.resolve(confirmed)
+    await checking
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.images.current()).toBe(confirmed)
+  })
+
+  it('真实不同令牌的无许可确认退休旧匹配来源，迟到旧 stopped 不再影响当前会话', async () => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ editIntent: false, api: { session: async () => initial } })
+    const confirmed = { ...ALICE, csrfToken: 'new-login' }
+    h.api.session.mockResolvedValueOnce(confirmed)
+    await h.editorPage.recheckSession()
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(h.images.current()).toBe(confirmed)
+    expect(associatedSessionPermit(confirmed)).toBeUndefined()
   })
 
   it('明确退出和换人立即清身份，本人返回才恢复', async () => {

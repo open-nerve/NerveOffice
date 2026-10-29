@@ -291,6 +291,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let userId: string | undefined
   let localDraftsEnabled = false
   let localPermit: DraftSessionPermit | undefined
+  /** 无许可的同源确认之后仍可识别迟到 stopped；绝不交给本机 reader/writer。 */
+  let unconfirmedLocalSource: DraftSessionPermit | undefined
   let imageAccess: EditorImageAccessController | undefined
   let imageSession: SessionResponse | undefined
   let confirmedImageSession: SessionResponse | undefined
@@ -320,6 +322,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   /** 进行中的会话确认（含确认期间又要求的那一轮）：按保存时等它结束（复验 RB1） */
   let checkInFlight: Promise<void> | undefined
   let checkAgain = false
+  /** 与普通广播/错误的 checkAgain 分开；真实新许可可以覆盖这一次停写复核。 */
+  let pendingLocalStop: DraftSessionPermit | undefined
   /** 载入时还不知道本页的用户就收到了会话消息：知道之后再确认一次（复验 RB7） */
   let checkWhenLoaded = false
   /** 保存得到未登录、确认还没有结果：确认时断网也按没有人登录显示（复验 SB4） */
@@ -349,11 +353,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let writable = true
   const cleanups: (() => void)[] = []
   cleanups.push(subscribeLocalSession((event) => {
-    if (disposed || event.kind !== 'stopped' || localPermit?.userId !== event.previous.userId || localPermit.generation !== event.previous.generation)
+    const source = localPermit ?? unconfirmedLocalSource
+    if (disposed || event.kind !== 'stopped' || source?.userId !== event.previous.userId || source.generation !== event.previous.generation)
       return
     if (event.cleanup?.cause === 'account_disabled')
       sessionEndedReason = 'account_disabled'
     localPermit = undefined
+    unconfirmedLocalSource = undefined
+    pendingLocalStop = event.previous
     imageSession = undefined
     imagePermissionEpoch += 1
     imageAccess?.suspend()
@@ -361,8 +368,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     // 沿已有代次变化路径暂停捕获、关闭本机宿主和释放密钥；服务器状态仍由真实会话请求确认。
     mode?.setSession(session)
     update()
-    // 停写可能使在途查询的本机票据失效；按原合并规则补核，不重放失败图片或用户操作。
-    void recheckSession()
+    // 取票前完成的停写可由在途确认覆盖；旧票失效及确认后晚到停写仍须补核。
+    void recheckSession(true)
   }))
   /** 交互屏障：撤掉它的函数 */
   let releaseBarrier: (() => void) | undefined
@@ -546,6 +553,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     confirmImages()
     if (next !== 'active') {
       localPermit = undefined
+      unconfirmedLocalSource = undefined
       recovery?.suspend()
     }
     mode?.setSession(next)
@@ -575,7 +583,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
    * 向服务端确认现在是谁：别的标签页登录或退出了、请求得到未登录或 CSRF_TOKEN_INVALID、暂停保存时又按了保存（ADR-008）。
    * 几次请求合并成一次，确认期间又有请求时结束后再确认一次（与平台页面相同）；返回的 Promise 在这些都结束之后完成（复验 RB1）
    */
-  async function recheckSession(): Promise<void> {
+  async function recheckSession(localStop = false): Promise<void> {
     if (leaving || disposed)
       return
     if (userId === undefined) {
@@ -583,15 +591,22 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       return
     }
     if (checkInFlight !== undefined) {
-      checkAgain = true
+      if (!localStop)
+        checkAgain = true
       return checkInFlight
     }
     const run = async (): Promise<void> => {
       try {
         for (;;) {
           checkAgain = false
+          const stopAtStart = pendingLocalStop
           await checkSessionOnce()
-          if (!checkAgain || leaving || disposed)
+          const stopped = pendingLocalStop
+          // 必须看 resumeLease 完成后的当前许可，不能用其开始前的响应吞掉更晚的停写。
+          const needsLocalCheck = stopped !== undefined && stopped !== stopAtStart && session === 'active'
+            && sessionProblem === undefined && (localPermit === undefined || localPermit.generation === stopped.generation)
+          pendingLocalStop = undefined
+          if ((!checkAgain && !needsLocalCheck) || leaving || disposed)
             break
         }
       }
@@ -681,9 +696,13 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     else if (confirmed.user.id === userId) {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
       setApiSession(confirmed)
+      const confirmedPermit = draftSessionPermitOf(confirmed)
+      unconfirmedLocalSource = confirmedPermit === undefined && imageSession?.user.id === confirmed.user.id && imageSession.csrfToken === confirmed.csrfToken
+        ? localPermit ?? unconfirmedLocalSource
+        : undefined
       imageSession = confirmed
       localDraftsEnabled = confirmed.features.localDraftsEnabled
-      localPermit = draftSessionPermitOf(confirmed)
+      localPermit = confirmedPermit
       enterSession('active')
       // 编辑权绑定登录（P1 设计 §3.4.1）：登录可能换过（重新登录、换令牌），恢复续租并立即核对一次——失效时随即说明、停止保存。
       // 确认在它有了结果之后才算结束：按保存时等的是这一步，不带着已经失效的编辑权去保存。例外：续租连着第二次起被判会话不对（服务端一直拒绝、

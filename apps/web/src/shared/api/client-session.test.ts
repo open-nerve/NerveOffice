@@ -78,4 +78,14 @@ describe('普通请求固定自己的本机会话来源', () => {
     await vi.waitFor(() => expect(reportRequestSessionFailure).toHaveBeenCalledTimes(1))
     expect(api.requests).toHaveLength(1)
   })
+
+  it('同步登记自身抛错也不能替换原网络认证错误', async () => {
+    vi.mocked(reportRequestSessionFailure).mockImplementationOnce(() => {
+      throw new Error('登记异常')
+    })
+    const api = installFakeApi({ 'POST /api/test': disabled })
+    setApiSession(session(G1))
+    await expect(apiRequest('/api/test', { method: 'POST', schema: z.undefined() })).rejects.toMatchObject({ code: 'SESSION_EXPIRED' })
+    expect(api.requests).toHaveLength(1)
+  })
 })

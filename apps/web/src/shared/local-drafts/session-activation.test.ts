@@ -178,8 +178,36 @@ describe('真实请求前固定本机票据', () => {
     controller.abort(reason)
     finish.resolve()
     await rejected
-    expect(t.store.acceptSessionCheck).toHaveBeenCalledExactlyOnceWith({ kind: 'query', generation: INITIAL }, SOURCE)
+    expect(t.store.acceptSessionCheck).toHaveBeenCalledExactlyOnceWith({ kind: 'query', generation: INITIAL }, SOURCE, expect.any(Function))
     expect(t.store.failSessionChange).not.toHaveBeenCalled()
+    expect(t.rejected).not.toHaveBeenCalled()
+    expect(draftSessionPermitOf(t.result)).toBeUndefined()
+  })
+
+  it('接受已入锁但仓库尚未决定时取消，同步否决阻止真正接受且仍抛原取消原因', async () => {
+    const t = fixture()
+    const controller = new AbortController()
+    const reason = new Error('IDB 读取期间取消')
+    const entered = deferred<void>()
+    const decide = deferred<void>()
+    let accepted = false
+    t.store.acceptSessionCheck.mockImplementationOnce(async (_ticket, _source, allow) => {
+      entered.resolve()
+      await decide.promise
+      if (allow?.() === false)
+        return { kind: 'session-invalid' }
+      accepted = true
+      return { kind: 'active', permit: PERMIT }
+    })
+    const waiting = t.track('query', t.request, controller.signal)
+    const rejected = expect(waiting).rejects.toBe(reason)
+    await entered.promise
+    controller.abort(reason)
+    decide.resolve()
+    await rejected
+    expect(accepted).toBe(false)
+    expect(t.store.beginSessionCheck).toHaveBeenCalledOnce()
+    expect(t.request).toHaveBeenCalledOnce()
     expect(t.rejected).not.toHaveBeenCalled()
     expect(draftSessionPermitOf(t.result)).toBeUndefined()
   })
@@ -200,7 +228,7 @@ describe('真实请求前固定本机票据', () => {
     const fields = Object.keys(t.result)
     expect(await t.track(kind, t.request)).toBe(t.result)
     expect(t.trace).toEqual([`begin:${kind}`, 'network', 'source', 'accept'])
-    expect(t.store.acceptSessionCheck).toHaveBeenCalledExactlyOnceWith({ kind, generation: INITIAL }, SOURCE)
+    expect(t.store.acceptSessionCheck).toHaveBeenCalledExactlyOnceWith({ kind, generation: INITIAL }, SOURCE, expect.any(Function))
     expect(t.source).toHaveBeenCalledExactlyOnceWith(t.result)
     expect(draftSessionPermitOf(t.result)).toEqual(PERMIT)
     expect(draftSessionPermitOf({ ...t.result })).toBeUndefined()

@@ -156,7 +156,10 @@ export async function apiFetch<T>(path: string, options: RawRequestOptions, read
     if (originalPermit !== undefined && !(options.signal?.aborted === true && error === options.signal.reason)
       && (isAuthenticationError(error) || isCsrfTokenError(error))) {
       // 请求来源已在发出前固定；本机副作用不会延长原请求时限或替换原错误。
-      void Promise.resolve().then(async () => reportRequestSessionFailure(error, originalPermit)).catch(() => {})
+      try {
+        void reportRequestSessionFailure(error, originalPermit).catch(() => {})
+      }
+      catch { /* 同步登记故障也不能替换原认证错误。 */ }
     }
     throw error
   }
