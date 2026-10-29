@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from '@playwright/test'
+import type { BrowserContext, Page, TestInfo } from '@playwright/test'
 import type { ProbeCapture } from '../../support/outbox-probe.ts'
 import type { SessionPermit, SessionTicket } from '../../support/session-fence-probe.ts'
 import { randomUUID } from 'node:crypto'
@@ -48,6 +48,32 @@ async function lateDisabled(page: Page, late: 'request' | 'query', original: Ses
   return late === 'request'
     ? fence(page, 'beginCleanup', original, 'account_disabled')
     : fence(page, 'reject', ticket, { kind: 'disabled', userId: original.userId })
+}
+
+async function finishCleanupRace(page: Page, next: Page, userId: string, pending: Promise<unknown>[], testInfo: TestInfo, bodyCompleted: boolean): Promise<void> {
+  // 清理先放行，已启动的三项工作结算后才关页；前置失败也必须关闭 next。
+  const teardown: PromiseSettledResult<unknown>[] = await Promise.allSettled([probePipeline(page, 'resumeCleanup')])
+  teardown.push(...await Promise.allSettled(pending))
+  for (const operation of [
+    async () => removeMirrorOf(page, userId),
+    async () => removeMirrorOf(next, userId),
+    async () => next.close(),
+    async () => expect.poll(async () => removeMirrorOf(page, userId)).toBe('removed'),
+  ]) {
+    teardown.push(...await Promise.allSettled([operation()]))
+  }
+  const errors = teardown.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : [])
+  if (errors.length > 0) {
+    // 保留原主流程异常；收尾异常另附原件。主流程成功时，任何收尾异常仍使本例失败。
+    const [attachment] = await Promise.allSettled([testInfo.attach('session-cleanup-teardown-errors', {
+      body: JSON.stringify(errors.map(error => (error instanceof Error ? error.message : String(error)).slice(0, 4096))),
+      contentType: 'application/json',
+    })])
+    if (attachment?.status === 'rejected')
+      errors.push(attachment.reason)
+    if (bodyCompleted)
+      throw new AggregateError(errors, '清理竞争用例收尾失败')
+  }
 }
 
 test.describe('持久清理资格与真实镜像', { tag: '@test-build' }, () => {
@@ -121,25 +147,37 @@ test.describe('持久清理资格与真实镜像', { tag: '@test-build' }, () =>
     }
   })
 
-  test('清理先得锁：镜像删除期间登记和新激活等待；完成后旧宿主拒绝，新会话可以重新保存', async ({ profile: { page, context } }) => {
+  test('清理先得锁：镜像删除期间登记和新激活等待；完成后旧宿主拒绝，新会话可以重新保存', async ({ profile: { page, context } }, testInfo) => {
     const h = await setup(page)
     const next = await context.newPage()
-    const permit = outcomeOf(await probePipeline(page, 'beginCleanup', 'account_disabled'), 'clearing').permit
-    await probePipeline(page, 'release', h.id, h.key)
-    await probePipeline(page, 'pauseCleanup')
-    const cleaning = probePipeline(page, 'cleanupUser', permit)
+    const pending: Promise<unknown>[] = []
+    function observe(promise: Promise<unknown>): void {
+      pending.push(promise)
+      // 当场观察拒绝；原 Promise 仍由主流程断言，并在 finally 完整结算。
+      void promise.catch(() => {})
+    }
+    let bodyCompleted = false
     try {
+      // 先准备空探针页；真正登录与授权仍在下面的清理持锁期间发起。
+      await openOutboxProbe(next, { authorize: false })
+      const permit = outcomeOf(await probePipeline(page, 'beginCleanup', 'account_disabled'), 'clearing').permit
+      await probePipeline(page, 'release', h.id, h.key)
+      await probePipeline(page, 'pauseCleanup')
+      const cleaning = probePipeline(page, 'cleanupUser', permit)
+      observe(cleaning)
       await expect.poll(async () => probePipeline(page, 'cleanupPaused')).toBe(true)
       expect(await probeDatabase(page, 'getRaw', 'writers', h.key)).toMatchObject({ writerId: 'retired' })
       const registering = probePipeline(page, 'register', h.id, { ...h.key, documentId: randomUUID() }, h.writer, true)
+      observe(registering)
       await loginThroughApi(next, h.user)
-      const activating = openOutboxProbe(next)
+      const activating = probe(next, 'authorizeSession')
+      observe(activating)
       await expect.poll(async () => page.evaluate(async () => (await navigator.locks.query()).pending?.length ?? 0)).toBeGreaterThanOrEqual(2)
       expect(await probeDatabase(page, 'getRaw', 'sessions', 'current')).toMatchObject({ state: { phase: 'clearing', generation: permit.generation } })
       await probePipeline(page, 'resumeCleanup')
       expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })
       expect(await registering).toMatchObject({ kind: 'session-invalid' })
-      await activating
+      expect(await activating, '真实会话查询应给予本机测试许可').toEqual({ kind: 'bound' })
       expect(await probeDatabase(page, 'getRaw', 'drafts', h.key)).toBeNull()
       await probe(next, 'chooseKey', 1, RAW_KEY)
       const id = await worker(next)
@@ -148,14 +186,10 @@ test.describe('持久清理资格与真实镜像', { tag: '@test-build' }, () =>
       expect((await probePipeline(next, 'write', id, { ...h.capture, writer: newer, draftSeq: 1, content: 'after cleanup' })).kind).toBe('written')
       expect(await probePipeline(page, 'cleanupUser', permit)).toEqual({ kind: 'invalidated' })
       expect(await probePipeline(next, 'read', id, h.key)).toMatchObject({ kind: 'draft', gzip: { text: 'after cleanup' } })
+      bodyCompleted = true
     }
     finally {
-      await probePipeline(page, 'resumeCleanup')
-      await cleaning
-      await removeMirrorOf(page, h.user.id)
-      await removeMirrorOf(next, h.user.id)
-      await next.close()
-      await expect.poll(async () => removeMirrorOf(page, h.user.id)).toBe('removed')
+      await finishCleanupRace(page, next, h.user.id, pending, testInfo, bodyCompleted)
     }
   })
 
