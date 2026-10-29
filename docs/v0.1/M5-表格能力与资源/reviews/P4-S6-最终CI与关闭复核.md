@@ -1,8 +1,48 @@
 # M5-P4 最终验收与关闭复核
 
+## 2026-10-30 接续：full17/container06 同源本地接受
+
+本轮受测提交为 `bdb7ddc38d09e3ce881b20c3ea88f2265d3e63d5`，合并前 main 基线为 `2ad8c3242127fa56cee094e40ec09e6b6e5efa7b`。清理竞争用例仅调整未授权页面的前置准备和异步收尾，原 5 秒、锁等待及旧宿主拒绝/新会话重存断言保持；背景见[前置同步复核](P4-S6-清理竞争用例前置同步复核.md)。以下只接受本地双门禁与资源终态，本次文档的独审、正常提交/合并/推送、最终同 SHA CI、冻结和 P4 关闭仍按后续实际回执完成。
+
+下列 `s6/` 路径均相对主目录 `.codex/handoffs/m5-p4-20261022/`。r08 工具在 full17 开始前真实冻结，启动前分别核对 2,440/339 个完整身份及 timeout/expectedStatus/status/annotations；四份 `*-source-before-r08.json` / `*-source-after-r08.json` 分别在真实开始前和结束后生成。旧 r06/r07 原件及 full16 的旧外层审计失败保持，不用后来的冻结时间补签旧运行。
+
+| 范围 | 本轮实际结果 |
+| --- | --- |
+| full17 | `s6/s6-gates/full17-20261029T163511059941Z`，2026-10-29 16:35:12–19:10:59 UTC；原完整 `pnpm verify --ci` 与外层均 exit 0。711 文件、17,060 项单元/集成通过；E2E 2,424 通过、16 个原平台跳过，零重试/flaky/全局错误，完整十阶段通过。 |
+| full17 内容与预算 | JSON/HTML、2,440 个案例及原 16 跳过身份/理由一致；11,568 条 checksums 复算通过。59 份崩溃附件覆盖 168 轮、891 个已归属终止进程，late 0；945 份 OPFS 含 842 文件/181,038 B。行/语句/函数/分支覆盖率为 93.98%/93.89%/94.62%/90.35%；平台 179.9/180 KiB、编辑器 2143.2/2350 KiB、历史预览 2033.7/2350 KiB、公式 Worker 679.1/800 KiB、outbox Worker 15.0/15 KiB，原预算保持。原依赖审计策略通过不扩大为全依赖零漏洞。 |
+| 本次修复的完整门禁结果 | “清理先得锁”的完整案例在 Chromium、Chrome、WebKit 均 retry 0 首过，日志耗时分别为 1.2/2.6/3.2 秒。旧 Linux HTML 导航未完成的底层原因仍未知，不将前置编排修正写成浏览器底层问题已解决。 |
+| container06 | `s6/s6-gates/container06-20261029T192652728027Z`，2026-10-29 19:26:53–19:35:37 UTC；原 `pnpm test:e2e:container` 与外层 exit 0。339/339 首次通过（328 常规、4 崩溃、7 重启），零跳过/重试/flaky/全局错误，4,664 条 checksums 与 JSON/HTML 核验通过。 |
+| 生产内容与预算 | 实际 Linux arm64 原生图片、uid 1000 私有资源卷、备份缺失暂停 GC、3 项错误配置拒绝、退休标记、新代次和重放不重复释放均通过。44 项图片矩阵（20 接受/24 拒绝）、5 接受/5 ASSET_BUSY 及 18 项正文拒绝保持；8 个 cgroup 样本最大 memoryPeak 813,047,808 B，memoryMax 4,294,967,296 B，oom/oomKill 均 0。峰值属于整个容器生命周期；本轮不代签 Linux x64 或真实原生输入。 |
+| 同源与时序 | 四份真实 capture、两轮源码字节/类型/模式及 16 个 SDK 包一致，共 4,610 个受测输入，两个门禁之间没有文档或源码变化。局部同源回执 `s6/hosted-vm-policy/final-ci-40882447516-investigation/r08-local-pair-source-check.json`（SHA-256 `fe7a5254a6b20aa876800bb70665922713c5d6c74f5f3e7fb66d9e2d6c67bfcb`）仅证明这两轮，最终合并源码等价还须绑定真实文档增量与 Git 提交。 |
+| 资源与桌面 | 两轮分别精简 1,113/8 个浏览器 profile，raw profile 与便携诊断保留均 0；原件已按实际审计 pin。scratch、短根/alias、owner/进程组、锁及完整 pfnt 由独审核实，先核完整流再筛路径。本轮容器 4 个、网络 1 个、卷 2 个和测试镜像均实际移除，原 Docker 对象及开发 PG 身份/启动时间/端口保持；共享 Docker 与构建缓存未清扫。两轮 WindowServer 均保持 989，未触发守护停止。 |
+| 有限留档 | 两轮 checksums 所登记文件分别为 143,782,396 B / 74,116,769 B，包含必要报告、附件和源码快照，不是运行中的完整环境大小。container06 实际资源回执 `s6/hosted-vm-policy/final-ci-40882447516-investigation/container06-actual-resource-closure.json`（SHA-256 `a197af4ae0a7f5d0d952a0a2112dd8736c43c447689af52e91137e1ec57f816a`）另保留全盘可用空间观测；不把目录逻辑大小或共享缓存当作本轮实测释放量。 |
+
+full17 独立接受：`s6/hosted-vm-policy/full17-r08-independent-acceptance.json`，SHA-256 `2c750c1bbd84d0f9ead7aafc45658b4364071dbc825cbeffb5556f60fca96fba`。container06 及本地同源双门禁独立接受：`s6/hosted-vm-policy/container06-r08-independent-acceptance.json`，SHA-256 `3aa209f30760d0899aa5a45b15f3e4591977dba26046c9439f4578741a8e6178`。两份同名 Markdown 记录方法和边界；原 audit、archive-review/resources、运行前后 capture、桌面守护及受管辅助轮均由回执索引。full17 独审中的目录初始化和标题筛选两次辅助错误原样留档，修正后小型只读复算通过；产品门禁没有为此重跑。container06 独立受管复算首次通过并完成清理。
+
+原 CI `40882447516` 的失败、full16 旧 outer failed/1 与运行后补审、旧 full15/CI `40787715273` 等历史记录继续保留。Excel、Safari/Finder 原生缺口、M4 DEF-073/UR-035、完整验收/标签及 M7 联合备份/PITR/升级回滚边界保持；DEF-061 没有可用历史时不能保证恢复，最终收口仍以实际 P4 关闭为准。
+
+### r08 后续完成条件
+
+1. 仅对本批既有结果文档的精确差异作独立审查，再正常中文提交，得到真实 Phase tip T。
+2. 正常 `--no-ff` 合入 main 得到 M，父节点必须为 `[2ad8c3242127fa56cee094e40ec09e6b6e5efa7b, T]`；M 与 T 同树。用实际四份 capture、精确文档 before/after 与 Git blobs 生成 r08 来源等价证明，再正常推送并保留原 pre-push 门禁。
+3. 获取同一个 M、attempt 1 的六项 CI 和十份原件，独立核对案例、原生 x64/浏览器/容器及资源合同。方案 B 继续只表示 `host-disposal-pending`、`cleanupComplete=false`、`ciRawCleanupObserved=false`，不把托管 VM 的销毁承诺写成实测删除。
+4. 独立收尾复核、真实冻结、唯一 P4 worktree/分支实际清理及 finalize 后，才关闭 P4/DEF-061，并从 main 进入 P5 即时设计。既有架构总览与 ADR-023/024 已在前一轮落档，本次不改功能、权限、备份或预算语义。
+
+后续实际状态以主目录 `.codex/handoffs/m5-p4-20261022/progress.json` 及真实生成的 `s6/p4-ci-binding-r08.json`、`s6/source-equivalence-r08-v3-<实际M前12位>/receipt.json`、`s6/main-push-r08/normal-push-receipt.json`、`s6/ci-<实际run>-hosted-audit-r08.json`、`s6/p4-ci-ready-r08.json`、`s6/p4-final-r08/`、`s6/p4-completion-r08.json` 为准。这些是流程入口，不预签未来提交、CI 或关闭已经完成。
+
+## 2026-10-29 历史断点：CI 40882447516 有一项 flaky
+
+下方 full16/container05 的本地接受仍是对应输入的历史事实。随后结果文档提交 `98df13b4`、正常 no-ff 合并 `2ad8c3242127fa56cee094e40ec09e6b6e5efa7b`、原 pre-push 门禁与正常推送均已完成。对应最终 CI [40882447516](https://github.com/open-nerve/NerveOffice/actions/runs/40882447516) 五项通过，WebKit 因一个 flaky 失败；六份日志与十份 ZIP 已完整收集；十份 ZIP 合计 44,532,392 B，六份日志另为 2,575,902 B。没有执行 r07 的最终接受/冻结/关闭，P4 和 DEF-061 尚未收口，P5 尚未开始。
+
+唯一 flaky 为“清理先得锁”：首轮原 5 秒内只看到一个锁等待者，新页 HTML 尚未完成、真实授权没有发出；重试通过。旧 CSRF/登录故事及新增 IDB 边界首轮通过。局部修复仅提前加载未授权探针页，原临界段仍真实登录并授权，全部业务断言与时限保持；受控前后对照、最终三浏览器 54 项及类型/lint 已通过，详见[前置同步复核](P4-S6-清理竞争用例前置同步复核.md)。不称未知的 WebKit 导航底层问题已经解决，也不以环境欠账豁免本轮失败。
+
+当前外部证据根为 `s6/hosted-vm-policy/final-ci-40882447516-investigation/`。新 r08 工具候选只用于准备正常 full17/container06 证据链，启动前核对 2,440/339 完整案例及元数据；待真实修复提交绑定、轻型验证与独审后再执行。新的 capture、门禁结果、最终提交/合并、推送、CI 和关闭均不得预填。下列 r06/r07 的旧工具、失败与接受时序保持，不事后覆盖。
+
+## full16/container05 历史本地接受
+
 **2026-10-29 本轮本地双门禁验收：full16 经 r07 补充审计、container05 及两轮同源均已独立接受。** 完整门禁受测提交为 `000022ae6810aa156f0ae0d1fd724d53c6b3d4f4`，本轮合并前 main/origin/main 基线为 `323b957b5302208de965e76e6590052cc60a84e2`。真实 capture 保持 r06，后续来源绑定/正常合并推送/同 SHA CI/关闭走 r07；本记录不预签最终 main 来源、推送、CI 或 P4 关闭。
 
-## 本轮门禁与收尾结果：r06 实际运行、r07 补充审计
+## full16/container05 历史门禁：r06 实际运行、r07 补充审计
 
 本节集中记录本轮结果；下方日期章节保留旧输入和当时状态。引用活动 INSERT 集合化 `50ba1c8d`、WebKit 有界诊断 `1deac003`、图片 401 恢复 `f2e28647` 与 CSRF 停写/确认协调 `000022ae` 均已提交；局部事实分别见[批量写入复核](P4-S6-引用活动批量写入复核.md)、[WebKit 诊断](P4-S6-WebKit登录导航诊断.md)、[图片恢复复核](P4-S6-图片401与本机资格复核.md)与[协调复核](P4-S6-CSRF停写与确认协调复核.md)。
 
