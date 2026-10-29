@@ -6,7 +6,7 @@
 
 六份日志和九份现存 ZIP 共 39,207,908 B 已校验归档；覆盖率 JSON/HTML 因测试失败未生成，`reports-40947141649` 缺件。没有降低原十份报告合同，也没有用补件回执替代最终接受。独立核对五项成功报告：Chromium 814 通过/4 原跳过，Chrome 807/4、Edge 807/4、WebKit 803/8、容器 339/0；无 flaky、重试或全局错误。资源仍按方案 B 记为 `host-disposal-pending`、`cleanupComplete=false`，不称托管 VM 已实测删除。
 
-本轮外部调查目录为 `s6/hosted-vm-policy/final-ci-40947141649-investigation/`；现存原件位于其中 `ci-supplement-20261029T215150601239Z/`。独审 `final-ci-partial-evidence-review.md` 的 SHA-256 为 `4646b4334c3c4e333a81b0f8b0889dc9dc5fa471927abe6f14706a6733aa2f83`。新增观测与两次本机定向取证见[七万资源调查](P4-S6-七万资源往返超时调查.md)。它们不改生产实现，也不能用本机通过判定 CI 根因已解决。后续必须先完成定位和必要修复，再按实际输入验证；下方 r08 接受仅覆盖旧输入，旧失败和冻结材料均不覆盖。
+本轮外部调查目录为 `s6/hosted-vm-policy/final-ci-40947141649-investigation/`；现存原件位于其中 `ci-supplement-20261029T215150601239Z/`。独审 `final-ci-partial-evidence-review.md` 的 SHA-256 为 `4646b4334c3c4e333a81b0f8b0889dc9dc5fa471927abe6f14706a6733aa2f83`。新增观测与两次本机定向取证见[七万资源调查](P4-S6-七万资源往返超时调查.md)。它们不改生产实现，也不能用本机通过判定 CI 根因已解决。原规模 SQL 补充诊断没有支持修改数据库结构的证据；现按用户重型串行要求显式将容量文件排在同一次 coverage 的普通组收尾后，原数值与断言保持，87 项局部回归和完整清单守恒已通过。此调整不证明旧 CI 的底层原因；后续须按真实新输入完成 full18/container07 及同 SHA CI；下方 r08 接受仅覆盖旧输入，旧失败和冻结材料均不覆盖。
 
 ## 2026-10-30 接续：full17/container06 同源本地接受
 
