@@ -14,7 +14,7 @@ describe('实例图片资源读取', () => {
     const second = h.resources.load(`https://app.test${SOURCE}`)
     expect(await first).toBe('blob:https://app.test/first')
     expect(await second).toBe('blob:https://app.test/first')
-    expect(h.read).toHaveBeenCalledExactlyOnceWith(SOURCE, expect.any(AbortSignal))
+    expect(h.read).toHaveBeenCalledExactlyOnceWith(SOURCE, expect.any(AbortSignal), expect.any(Function))
     expect(h.resources.cached(SOURCE)?.src).toBe('blob:https://app.test/first')
     expect(await h.resources.load(SOURCE)).toBe('blob:https://app.test/first')
     expect(h.read).toHaveBeenCalledTimes(1)

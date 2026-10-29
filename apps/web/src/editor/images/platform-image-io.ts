@@ -1,5 +1,6 @@
 import type { AssetUploadResponse, SessionResponse } from '@nerve-office/contracts'
 import type { AssetBytes } from '../../shared/assets/asset-api.ts'
+import type { ImageReadFailures } from '../../shared/lib/session-image-access.ts'
 import type { EditorAccess } from '../editor-access.ts'
 import type { IImageIoService, IURLImageService } from '../internal-api/ui.ts'
 import { isPlatformAssetAddress } from '@nerve-office/contracts'
@@ -18,6 +19,8 @@ export interface EditorImageAccess {
   readonly owner?: string
   readonly current: () => SessionResponse | undefined
   readonly subscribe: (listener: () => void) => () => void
+  /** 可跨本页实例保留失败；不参与上传、复制或正文编辑的许可判定。 */
+  readonly readFailures?: () => ImageReadFailures
 }
 
 export interface PlatformImageIoOptions {
@@ -42,13 +45,15 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
   let disposed = false
   let uploads = new AbortController()
   let waiting = 0
+  let previousSession = options.identity.current()
+  let lastConfirmed = previousSession
 
   function session(): SessionResponse | undefined {
     const current = options.identity.current()
     return !disposed && owner !== undefined && current?.user.id === owner ? current : undefined
   }
 
-  async function read(source: string, caller: AbortSignal): Promise<AssetBytes> {
+  async function read(source: string, caller: AbortSignal, rejected?: (error: unknown) => void): Promise<AssetBytes> {
     const original = session()
     if (original === undefined)
       throw new DOMException('图片身份已失效', 'AbortError')
@@ -57,7 +62,14 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     if (!isPlatformAssetAddress(source, options.origin))
       throw new AssetInputError('address')
     const path = source.startsWith('/') ? source : source.slice(options.origin.length)
-    return runImageTask(signal, async () => readAsset(path, { signal, session: original }))
+    return runImageTask(signal, async () => readAsset(path, { signal, session: original }).catch((error: unknown) => {
+      // 401 自身撤权可能先取消外层任务；仍观察原请求的拒绝，不能让取消丢掉显示失败。
+      try {
+        rejected?.(error)
+      }
+      catch { /* 显示观察不能替换原请求错误或已经确定的取消结果。 */ }
+      throw error
+    }))
   }
 
   async function upload(file: File, caller: AbortSignal): Promise<AssetUploadResponse> {
@@ -78,6 +90,7 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     decode: decodeImage,
     changed: options.changed,
     failed: options.failed,
+    readFailures: options.identity.readFailures,
   })
   if (session() === undefined)
     resources.suspend()
@@ -94,10 +107,17 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     uploads.abort(new DOMException('图片上传代次已更新', 'AbortError'))
     uploads = new AbortController()
     setWaiting(0)
-    if (session() === undefined)
+    const current = session()
+    const sameIdentity = current !== undefined && lastConfirmed !== undefined && current.user.id === lastConfirmed.user.id && current.csrfToken === lastConfirmed.csrfToken
+    if (current === undefined) {
       resources.suspend()
-    else
-      resources.refresh()
+    }
+    else {
+      // 同身份从暂停恢复只恢复许可；已活跃时的通知是明确刷新，真正换身份同样打开新读取。
+      resources.refresh(previousSession !== undefined || !sameIdentity)
+      lastConfirmed = current
+    }
+    previousSession = current
   })
 
   const images: IImageIoService = {

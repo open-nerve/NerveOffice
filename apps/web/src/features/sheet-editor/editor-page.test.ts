@@ -100,7 +100,7 @@ describe('已打开编辑器的停用说明沿实际账户事实', () => {
       publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
       throw new ApiError(401, 'SESSION_EXPIRED', '账户停用', { details: { reason: 'account_disabled', userId: ALICE.user.id } })
     })
-    h.api.session.mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '请先登录'))
+    h.api.session.mockRejectedValue(new ApiError(401, 'UNAUTHENTICATED', '请先登录'))
     await h.editorPage.save()
     await vi.waitFor(() => expect(h.editorPage.view().session).toBe('signed-out'))
     expect(h.editorPage.view().sessionEndedReason).toBe('account_disabled')
@@ -397,25 +397,30 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     expect(h.editorPage.view().imageProblem).toBe(false)
   })
 
-  it.each(['owner', 'network', 'other-user'] as const)('操作 401 确认后的迟到停写不自动循环；用户再次操作时补确认（%s），不重放', async (result) => {
+  it.each(['owner', 'network', 'other-user'] as const)('操作 401 后匹配停写补核；用户再次操作合并最终确认（%s），不重放', async (result) => {
     const initial = permitted({ ...ALICE })
     const h = await loaded({ api: { session: async () => initial } })
     const callbacks = h.createEditor.mock.calls.at(-1)![0]
     callbacks.onImageOperationFailure!(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
     await settle()
     expect(h.api.session).toHaveBeenCalledTimes(2)
-    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
-    await settle()
-    expect(h.images.current()).toBeUndefined()
-    expect(h.api.session).toHaveBeenCalledTimes(2)
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise)
     if (result === 'network')
-      h.api.session.mockRejectedValueOnce(new NetworkError())
+      h.api.session.mockRejectedValue(new NetworkError())
     else
-      h.api.session.mockResolvedValueOnce(result === 'other-user' ? BOB : initial)
+      h.api.session.mockResolvedValue(result === 'other-user' ? BOB : initial)
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    expect(h.images.current()).toBeUndefined()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
     const rejected = { kind: 'failed', operation: 'insert', reason: 'permission', completed: 0, total: 0 } as const
     callbacks.onImageOperation!(rejected)
+    if (result === 'network')
+      response.reject(new NetworkError())
+    else
+      response.resolve(result === 'other-user' ? BOB : initial)
     await settle()
-    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.api.session).toHaveBeenCalledTimes(4)
     expect(h.images.current()).toBe(result === 'owner' ? initial : undefined)
     expect(h.editorPage.view().imageOperation).toEqual(rejected)
     expect(h.createEditor).toHaveBeenCalledOnce()
@@ -425,9 +430,9 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     const initial = permitted({ ...ALICE })
     const h = await loaded({ api: { session: async () => initial } })
     const callbacks = h.createEditor.mock.calls.at(-1)![0]
-    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
     const response = deferred<SessionResponse>()
     h.api.session.mockReturnValueOnce(response.promise).mockRejectedValueOnce(new NetworkError())
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
     const checking = h.editorPage.recheckSession()
     callbacks.onImageOperation!({ kind: 'failed', operation: 'copy', reason: 'permission', completed: 0, total: 0 })
     response.resolve(initial)
@@ -458,6 +463,95 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     await h.editorPage.recheckSession()
     expect(changed).toHaveBeenCalledOnce()
     expect(h.images.current()).toBe(fresh)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+  })
+
+  it.each([false, true])('图片 401 先停写后确认：同身份恢复许可仍保留失败，重建=%s，明确重试才清除', async (rebuild) => {
+    const initial = permitted({ ...ALICE })
+    const confirmed = permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000002')
+    const h = await loaded({ editIntent: false, api: { session: async () => initial } })
+    const answer = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(answer.promise)
+    h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await vi.waitFor(() => expect(h.api.session).toHaveBeenCalledTimes(2))
+    // 控制停写先于确认的顺序：G1 撤销后，原查询结束还须补核一次新的资格。
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    expect(h.images.current()).toBeUndefined()
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    h.api.session.mockResolvedValue(confirmed)
+    answer.resolve(confirmed)
+    await settle()
+    // current 表示真实许可，失败图片不能连带禁止复核后的上传或正文编辑。
+    expect(h.images.current()).toBe(confirmed)
+    expect(h.editorPage.view().session).toBe('active')
+    expect.soft(h.editorPage.view().imageProblem).toBe(true)
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    if (rebuild) {
+      await h.editorPage.enterEditing()
+      expect(modeOf(h.editorPage)?.kind).toBe('editing')
+      expect(h.createEditor.mock.calls.at(-1)?.[0].access).toBe('edit')
+      expect.soft(h.editorPage.view().imageProblem).toBe(true)
+    }
+    h.api.document.mockClear()
+    await h.editorPage.refreshDetail()
+    expect(h.api.document).toHaveBeenCalledOnce()
+    expect(h.images.current()).toBe(confirmed)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+  })
+
+  it.each(['during-confirm', 'after-confirm'] as const)('图片 401 的本机停写与会话确认交错 %s：补核新许可后仍可手动编辑，失败图片不自动重取', async (order) => {
+    const initial = permitted({ ...ALICE })
+    const confirmed = permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000002')
+    const fetch = vi.fn(async () => newKey(1))
+    const keeper = createLocalKeyKeeper({ fetch, clock: fakeLeaseClock().clock, retry: { initialMs: 2_000, maxMs: 30_000 }, requestTimeoutMs: 10_000 })
+    const store = fakeDraftStore()
+    const bindings: MockInstance<ReturnType<typeof createDraftWriter>['bindSession']>[] = []
+    const host = vi.fn(async () => {
+      const writer = createDraftWriter({ store: store.store, now: Date.now })
+      bindings.push(vi.spyOn(writer, 'bindSession'))
+      return { kind: 'in-process' as const, writer, broken: () => false, dispose: () => writer.dispose() }
+    })
+    // 既有页面夹具默认用“没有草稿”的读器；这里走真实 reader 的缺许可判定，避免掩盖 memory/session-invalid。
+    const h = await loaded({ editIntent: false, recoveryReader: 'production', api: { session: async () => initial }, localDrafts: { keeper, host, supported: () => true, persist: async () => ({ kind: 'denied' }) } })
+    const failures = h.images.readFailures!()
+    failures.add('/api/assets/11111111-1111-4111-8111-111111111111')
+    const answer = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(answer.promise).mockResolvedValue(confirmed)
+    h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await vi.waitFor(() => expect(h.api.session).toHaveBeenCalledTimes(2))
+    const stop = (): void => publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    if (order === 'during-confirm') {
+      stop()
+      expect(h.images.current()).toBeUndefined()
+      // query 的旧票据已被 stop 作废：网络仍是同人同 CSRF 的 200，但 session-activation 不关联许可。
+      answer.resolve({ ...ALICE })
+    }
+    else {
+      answer.resolve(initial)
+      await settle()
+      expect(h.images.current()).toBe(initial)
+      stop()
+      expect(h.images.current()).toBeUndefined()
+    }
+    await settle()
+    expect.soft(h.api.session).toHaveBeenCalledTimes(3)
+    expect.soft(h.images.current()).toBe(confirmed)
+    expect(h.images.readFailures!()).toBe(failures)
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    expect(h.createEditor).toHaveBeenCalledOnce()
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
+    // 用户到这时才点“编辑”：不提前创建写入者，不重放图片，不改变 beginRestore 的点击来源锁存。
+    await h.editorPage.enterEditing()
+    expect.soft(modeOf(h.editorPage)?.kind).toBe('editing')
+    expect.soft(h.createEditor.mock.calls.at(-1)?.[0].access).toBe('edit')
+    expect.soft(bindings.at(-1)).toHaveBeenCalledWith({ userId: ALICE.user.id, generation: '0199b0c4-7d3e-7a3b-9c4e-000000000002' })
+    expect.soft(fetch).toHaveBeenCalledOnce()
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    expect(h.images.readFailures!()).toBe(failures)
+    await h.editorPage.save()
+    expect.soft(h.api.save).toHaveBeenCalledOnce()
+    expect.soft(h.api.session).toHaveBeenCalledTimes(3)
   })
 
   it('明确退出和换人立即清身份，本人返回才恢复', async () => {
@@ -474,23 +568,69 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     expect(seen).toEqual([undefined, ALICE])
   })
 
-  it.each(['owner', 'network', 'other-user'] as const)('图片 401 的停写通知晚于会话确认：明确重试重新核实身份，结果 %s', async (result) => {
+  it.each(['signed-out', 'other-user'] as const)('显示失败后真正 %s，旧失败轮次不带回本人新确认', async (change) => {
+    const h = await loaded()
+    const failed = h.images.readFailures!()
+    failed.add('/api/assets/11111111-1111-4111-8111-111111111111')
+    h.failed(new Error('受控图片读取失败'))
+    if (change === 'signed-out')
+      h.api.session.mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '未登录'))
+    else
+      h.api.session.mockResolvedValueOnce(BOB)
+    await h.editorPage.recheckSession()
+    expect(h.images.current()).toBeUndefined()
+    expect(h.images.readFailures!()).not.toBe(failed)
+    await h.editorPage.recheckSession()
+    expect(h.images.current()).toBe(ALICE)
+    expect(h.editorPage.view().imageProblem).toBe(false)
+  })
+
+  it('图片 401 后停写：补核同身份与阅读重建仍保留失败，明确重试才清除', async () => {
+    const initial = permitted({ ...ALICE })
+    const h = await loaded({ editIntent: false, api: { session: async () => initial } })
+    h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    const confirmed = permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000002')
+    h.api.session.mockResolvedValue(confirmed)
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    expect(h.images.current()).toBeUndefined()
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(3)
+    expect(h.images.current()).toBe(confirmed)
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    await h.editorPage.enterEditing()
+    expect(modeOf(h.editorPage)?.kind).toBe('editing')
+    expect(h.editorPage.view().imageProblem).toBe(true)
+    await h.editorPage.refreshDetail()
+    expect(h.editorPage.view().imageProblem).toBe(false)
+  })
+
+  it.each(['owner', 'network', 'other-user'] as const)('图片 401 晚到停写的补核与明确重试合并，核实最终身份 %s', async (result) => {
     const initial = permitted({ ...ALICE })
     const h = await loaded({ api: { session: async () => initial } })
     h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
     await settle()
     expect(h.api.session).toHaveBeenCalledTimes(2)
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise)
+    const confirmed = { ...(result === 'other-user' ? BOB : ALICE) }
+    if (result === 'network')
+      h.api.session.mockRejectedValue(new NetworkError())
+    else
+      h.api.session.mockResolvedValue(confirmed)
     publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
     expect(h.images.current()).toBeUndefined()
     expect(h.editorPage.view().imageProblem).toBe(true)
-    const confirmed = { ...(result === 'other-user' ? BOB : ALICE) }
-    if (result === 'network')
-      h.api.session.mockRejectedValueOnce(new NetworkError())
-    else
-      h.api.session.mockResolvedValueOnce(confirmed)
     h.api.document.mockClear()
-    await h.editorPage.refreshDetail()
-    expect(h.api.session).toHaveBeenCalledTimes(3)
+    const retrying = h.editorPage.refreshDetail()
+    if (result === 'network')
+      response.reject(new NetworkError())
+    else
+      response.resolve(confirmed)
+    await retrying
+    expect(h.api.session).toHaveBeenCalledTimes(4)
     expect(h.images.current()).toBe(result === 'owner' ? confirmed : undefined)
     expect(h.api.document).toHaveBeenCalledTimes(result === 'owner' ? 1 : 0)
     if (result === 'network')
@@ -504,9 +644,9 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
     const h = await loaded({ api: { session: async () => initial } })
     h.failed(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
     await settle()
-    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
     const response = deferred<SessionResponse>()
     h.api.session.mockReturnValueOnce(response.promise).mockRejectedValueOnce(new NetworkError())
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
     h.api.document.mockClear()
     const checking = h.editorPage.recheckSession()
     const retrying = h.editorPage.refreshDetail()
@@ -685,7 +825,7 @@ describe('图片许可与页面真实会话、权限事实接线', () => {
 })
 
 interface Setup {
-  readonly recoveryReader?: () => RecoveryReader
+  readonly recoveryReader?: (() => RecoveryReader) | 'production'
   readonly localDrafts?: Parameters<typeof createEditorPage>[0]['localDrafts']
   readonly network?: Parameters<typeof createEditorPage>[0]['network']
   readonly documentId?: string | undefined
@@ -760,7 +900,7 @@ function setup(options: Setup = {}) {
   let id = 0
   const editorPage = createEditorPage({
     localDrafts: options.localDrafts ?? { supported: () => false },
-    recoveryReader: options.recoveryReader ?? (() => ({ observe: async () => ({ kind: 'observed', observation: { key: { userId: ALICE.user.id, documentId: DOCUMENT_ID }, id: 'absent' }, record: { kind: 'absent' }, writer: undefined }), refreshKey: async () => ({ kind: 'failed', error: { name: 'UnexpectedRefresh', message: '无草稿不需刷新密钥' } }), remove: async () => ({ kind: 'absent' }), notices: async () => ({ kind: 'notices', notices: [] }), clearNotice: async () => ({ kind: 'absent' }), dispose: () => {} })),
+    ...(options.recoveryReader === 'production' ? {} : { recoveryReader: options.recoveryReader ?? (() => ({ observe: async () => ({ kind: 'observed', observation: { key: { userId: ALICE.user.id, documentId: DOCUMENT_ID }, id: 'absent' }, record: { kind: 'absent' }, writer: undefined }), refreshKey: async () => ({ kind: 'failed', error: { name: 'UnexpectedRefresh', message: '无草稿不需刷新密钥' } }), remove: async () => ({ kind: 'absent' }), notices: async () => ({ kind: 'notices', notices: [] }), clearNotice: async () => ({ kind: 'absent' }), dispose: () => {} })) }),
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
     surface,
     chrome,
@@ -3793,14 +3933,22 @@ describe('编辑页消费原会话响应的本机许可', () => {
     expect(keeper.current()).toBeDefined()
     publishLocalSession({ kind: 'stopped', previous: { userId: ALICE.user.id, generation: '0199b0c4-7d3e-7a3b-9c4e-000000000099' }, cleanup: undefined })
     expect(dispose).not.toHaveBeenCalled()
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(BOB.user.id), cleanup: undefined })
+    expect(dispose).not.toHaveBeenCalled()
+    expect(h.api.session).toHaveBeenCalledOnce()
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise)
     publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
     await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce())
     expect(keeper.current()).toBeUndefined()
     expect(h.editorPage.view().session).toBe('active')
     expect(h.editorPage.view().mode?.kind).toBe('editing')
-    expect(h.api.session).toHaveBeenCalledOnce()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
     expect(host).toHaveBeenCalledOnce()
     h.editorPage.dispose()
+    response.resolve(permitted({ ...ALICE }, '0199b0c4-7d3e-7a3b-9c4e-000000000002'))
+    await settle()
+    expect(host).toHaveBeenCalledOnce()
   })
 
   it('网络登录正常但本机资格缺失时仍可进入编辑与云端保存，不建持久宿主', async () => {
@@ -3817,6 +3965,30 @@ describe('编辑页消费原会话响应的本机许可', () => {
     expect(fetch).not.toHaveBeenCalled()
     expect(host).not.toHaveBeenCalled()
     h.editorPage.dispose()
+  })
+
+  it.each(['signed-out', 'other-user', 'account-disabled'] as const)('匹配本机停写只补核一次，真实结果 %s 不恢复旧页面写入', async (result) => {
+    const initial = permitted({ ...ALICE })
+    const h = setup({ editIntent: false, api: { session: async () => initial } })
+    await h.editorPage.load()
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise)
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(h.createEditor.mock.calls.at(-1)?.[0].imageAccess?.current()).toBeUndefined()
+    if (result === 'other-user')
+      response.resolve(BOB)
+    else
+      response.reject(new ApiError(401, result === 'account-disabled' ? 'SESSION_EXPIRED' : 'UNAUTHENTICATED', '不能继续登录', result === 'account-disabled' ? { details: { reason: 'account_disabled', userId: ALICE.user.id } } : undefined))
+    await settle()
+    expect(h.editorPage.view().session).toBe(result === 'other-user' ? 'other-user' : 'signed-out')
+    expect(h.editorPage.view().sessionEndedReason).toBe(result === 'account-disabled' ? 'account_disabled' : undefined)
+    // 原代次已经退休；重复的旧通知不能自动再查询或复活身份。
+    publishLocalSession({ kind: 'stopped', previous: testSessionPermit(ALICE.user.id), cleanup: undefined })
+    await settle()
+    expect(h.api.session).toHaveBeenCalledTimes(2)
+    expect(h.editLease.acquire).not.toHaveBeenCalled()
+    expect(h.api.save).not.toHaveBeenCalled()
   })
 
   it('同一人换会话后关闭旧宿主，再按新回包的许可恢复，原宿主不换绑', async () => {

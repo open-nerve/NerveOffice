@@ -1,17 +1,19 @@
 import type { AssetUploadResponse, SessionResponse } from '@nerve-office/contracts'
 import type { EditorAccess } from '../editor-access.ts'
+import type { EditorImageAccess } from './platform-image-io.ts'
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer'
 import { ImageCacheMap, Univer } from '@univerjs/core'
 import { UniverDrawingPlugin } from '@univerjs/drawing'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/api-errors.ts'
 import { readAsset, uploadAsset } from '../../shared/assets/asset-api.ts'
+import { createSessionImageAccess } from '../../shared/lib/session-image-access.ts'
 import { deferred } from '../async-tools.ts'
 import { injectorOf } from '../internal-api/index.ts'
 import { IImageIoService, ImageSourceType, IURLImageService } from '../internal-api/ui.ts'
 import { sheetPluginEntries } from '../profile/sheet-profile.ts'
 import { decodeImage } from './decode-image.ts'
-import { BYTES, decoded, SOURCE } from './image-resources.test-support.ts'
+import { BYTES, decoded, OTHER, SOURCE } from './image-resources.test-support.ts'
 import { createPlatformImageIo } from './platform-image-io.ts'
 
 vi.hoisted(() => {
@@ -34,14 +36,14 @@ function session(token = 'original'): SessionResponse {
   return { user: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', username: 'alice', displayName: '甲', systemRole: 'member' }, personalSpace: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: '甲' }, csrfToken: token, features: { localDraftsEnabled: true } }
 }
 
-function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = session(), owner?: string) {
+function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = session(), owner?: string, identity?: EditorImageAccess) {
   let current: SessionResponse | undefined = initial ?? undefined
   const listeners = new Set<() => void>()
   const failed = vi.fn()
   const invalidated = vi.fn()
   const adapter = createPlatformImageIo({
     access,
-    identity: {
+    identity: identity ?? {
       ...(owner === undefined ? {} : { owner }),
       current: () => current,
       subscribe: (listener) => {
@@ -322,6 +324,94 @@ describe('真实 drawing 插件中的平台 IO', () => {
     expect(new URL(result).pathname).toMatch(/\.svg$/)
     await expect(h.url.downloadImage(SOURCE)).rejects.toThrow('controlled offline')
     expect(h.failed).toHaveBeenCalledTimes(1)
+  })
+
+  it('图片 401 先停写后确认：同身份恢复可上传，但失败缓存等待明确重试才重读', async () => {
+    const h = setup()
+    const error = new ApiError(401, 'UNAUTHENTICATED', '图片不可读')
+    vi.mocked(readAsset).mockRejectedValueOnce(error)
+    const placeholder = await h.url.getImage(SOURCE)
+    expect(new URL(placeholder).pathname).toMatch(/\.svg$/)
+    expect(h.failed).toHaveBeenCalledExactlyOnceWith(error)
+    expect(readAsset).toHaveBeenCalledOnce()
+    h.change(undefined)
+    await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    const confirmed = { ...h.original! }
+    h.change(confirmed)
+    // 沿真实资源表读同一失败源，不能因暂停/恢复抹掉失败并发出第二次请求。
+    expect.soft(await h.url.getImage(SOURCE)).toBe(placeholder)
+    expect.soft(readAsset).toHaveBeenCalledOnce()
+    const file = new File([new Uint8Array([1, 2, 3])], 'controlled.png', { type: 'image/png' })
+    expect(await h.adapter.upload(file, new AbortController().signal)).toEqual(UPLOADED)
+    expect(vi.mocked(uploadAsset).mock.calls[0]?.[1]?.session).toBe(confirmed)
+    // 已活跃时的明确刷新仍打开一轮新读取，不能把失败做成永久禁用。
+    h.change(confirmed)
+    expect(await h.url.getImage(SOURCE)).toBe('blob:https://app.test/first')
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    expect(h.failed).toHaveBeenCalledOnce()
+  })
+
+  it.each(['before-confirm', 'after-confirm'] as const)('停写 %s：页面失败来源跨只读/编辑实例重建保留，新上传与新来源不被旧失败阻止', async (order) => {
+    const original = session()
+    const identity = createSessionImageAccess(original.user.id, { preserveReadFailures: true })
+    identity.confirm(original)
+    const reader = setup('read', original, undefined, identity)
+    vi.mocked(readAsset).mockRejectedValueOnce(new ApiError(401, 'UNAUTHENTICATED', '图片不可读'))
+    const placeholder = await reader.url.getImage(SOURCE)
+    if (order === 'after-confirm')
+      identity.confirm({ ...original })
+    identity.suspend()
+    const confirmed = { ...original }
+    identity.confirm(confirmed)
+    reader.adapter.dispose()
+    const editor = setup('edit', confirmed, undefined, identity)
+    expect(await editor.url.getImage(`https://app.test${SOURCE}`)).toBe(placeholder)
+    expect(readAsset).toHaveBeenCalledOnce()
+    const file = new File([new Uint8Array([1])], 'controlled.png', { type: 'image/png' })
+    vi.mocked(uploadAsset).mockResolvedValueOnce({ ...UPLOADED, url: OTHER })
+    expect(await editor.adapter.upload(file, new AbortController().signal)).toMatchObject({ url: OTHER })
+    expect(vi.mocked(uploadAsset).mock.calls[0]?.[1]?.session).toBe(confirmed)
+    expect(await editor.url.getImage(OTHER)).toBe('blob:https://app.test/first')
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    identity.refresh()
+    expect(await editor.url.getImage(SOURCE)).toBe('blob:https://app.test/first')
+    expect(identity.readFailures().has(SOURCE)).toBe(false)
+    expect(editor.failed).not.toHaveBeenCalled()
+  })
+
+  it.each(['csrf', 'refresh', 'other-user', 'dispose'] as const)('读取中的旧 401 晚于 %s：不锁存到新读取轮次，不清新像素', async (change) => {
+    const original = session()
+    const identity = createSessionImageAccess(original.user.id, { preserveReadFailures: true })
+    identity.confirm(original)
+    const h = setup('edit', original, undefined, identity)
+    const pending = deferred<typeof BYTES>()
+    vi.mocked(readAsset).mockReturnValueOnce(pending.promise)
+    const old = h.url.getImage(SOURCE).catch((error: unknown) => error)
+    await vi.waitFor(() => expect(readAsset).toHaveBeenCalledOnce())
+    if (change === 'csrf') {
+      identity.confirm(session('new-token'))
+    }
+    else if (change === 'refresh') {
+      identity.refresh()
+    }
+    else if (change === 'other-user') {
+      identity.confirm({ ...original, user: { ...original.user, id: 'other-user' } })
+      expect(identity.current()).toBeUndefined()
+      identity.confirm(original)
+    }
+    else {
+      identity.dispose()
+    }
+    expect(await old).toMatchObject({ name: 'AbortError' })
+    pending.reject(new ApiError(401, 'UNAUTHENTICATED', '旧读取晚失败'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(identity.readFailures().has(SOURCE)).toBe(false)
+    expect(h.failed).not.toHaveBeenCalled()
+    if (change === 'dispose')
+      await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    else
+      expect(await h.url.getImage(SOURCE)).toBe('blob:https://app.test/first')
   })
 
   it.each([['png', 'image/png'], ['jpg', 'image/jpeg'], ['JPEG', 'image/jpeg'], ['webp', 'image/webp'], ['gif', 'image/gif']] as const)('上传 %s：规范 source 字段和独立 drawing ID，不复用 assetId', async (extension, mimeType) => {

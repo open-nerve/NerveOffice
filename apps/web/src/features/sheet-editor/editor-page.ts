@@ -293,6 +293,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let localPermit: DraftSessionPermit | undefined
   let imageAccess: EditorImageAccessController | undefined
   let imageSession: SessionResponse | undefined
+  let confirmedImageSession: SessionResponse | undefined
   let imageReadable = false
   let imageCanEdit: boolean | undefined
   let imageCanTakeOver: boolean | undefined
@@ -360,6 +361,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     // 沿已有代次变化路径暂停捕获、关闭本机宿主和释放密钥；服务器状态仍由真实会话请求确认。
     mode?.setSession(session)
     update()
+    // 停写可能使在途查询的本机票据失效；按原合并规则补核，不重放失败图片或用户操作。
+    void recheckSession()
   }))
   /** 交互屏障：撤掉它的函数 */
   let releaseBarrier: (() => void) | undefined
@@ -377,15 +380,18 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       imageAccess?.suspend()
       return
     }
-    if (imageAccess?.current()?.csrfToken !== imageSession.csrfToken) {
+    if (imageAccess?.current()?.csrfToken !== imageSession.csrfToken)
       imagePermissionEpoch += 1
+    if (confirmedImageSession?.csrfToken !== imageSession.csrfToken)
       imageProblem = false
-    }
+    confirmedImageSession = imageSession
     imageAccess?.confirm(imageSession)
   }
 
   function refreshImages(): void {
     const active = imageAccess?.current() !== undefined
+    // 明确重试/真实权限变化先退休旧读取轮次，迟到旧失败不能污染恢复后的实例。
+    imageAccess?.resetReadFailures()
     confirmImages()
     // 从暂停恢复时 confirm 已发一次通知；重复确认本人不主动重读。
     if (imageAccess?.current() !== undefined) {
@@ -533,6 +539,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     if (session !== next)
       imagePermissionEpoch += 1
     session = next
+    if (next !== 'active') {
+      confirmedImageSession = undefined
+      imageAccess?.resetReadFailures()
+    }
     confirmImages()
     if (next !== 'active') {
       localPermit = undefined
@@ -807,7 +817,6 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       imagePermissionEpoch: () => imagePermissionEpoch,
       createEditor: async (editorOptions) => {
         const instance = ++imageInstance
-        imageProblem = false
         imageOperation = undefined
         const currentImageInstance = (): boolean => !disposed && !imagesHidden && instance === imageInstance
         const confirmImageOperationSession = async (): Promise<void> => {
@@ -839,7 +848,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
               return
             imageOperation = state
             update()
-            // stopped 可能晚于先前确认；只在下一次用户动作后补确认，不自动重放剪贴板。
+            // 用户动作仍可合并正在进行的停写补核；确认不会自动重放剪贴板。
             if (state.kind === 'failed' && state.reason === 'permission' && imageSession === undefined)
               void confirmImageOperationSession()
           },
@@ -1142,8 +1151,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       update()
       let document: DocumentDetail
       try {
-        // 401 的本机停写通知可能晚于会话确认到达；明确重试时先补齐图片身份。
-        // 不在停写通知里自动确认，否则持续 401 会形成确认、重读、再停写的循环。
+        // 停写补核尚未完成时，明确重试合并确认并检查最终身份；失败源只由明确重试清除。
         if (imageSession === undefined) {
           await recheckSession()
           if (disposed || heading === undefined || round !== detailRound || session !== 'active' || sessionProblem !== undefined || imageSession === undefined) {
