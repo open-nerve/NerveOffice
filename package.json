@@ -16,7 +16,7 @@
     "typecheck": "tsc -p tsconfig.json && pnpm -r --workspace-concurrency=4 run typecheck",
     "test": "vitest run --project unit --project unit-web",
     "test:coverage": "pnpm --filter \"@nerve-office/api...\" run build && python3 tools/test-resources/run.py integration -- vitest run --coverage",
-    "test:integration": "pnpm --filter \"@nerve-office/api...\" run build && python3 tools/test-resources/run.py integration -- vitest run --project integration",
+    "test:integration": "pnpm --filter \"@nerve-office/api...\" run build && python3 tools/test-resources/run.py integration -- vitest run --project integration --project integration-capacity",
     "test:e2e": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && pnpm --filter @nerve-office/e2e run test",
     "test:e2e:container": "python3 tools/test-resources/run.py container -- node tools/src/deploy/container-e2e-cli.ts",
     "build": "pnpm -r --filter './packages/*' --filter './apps/*' run build",
