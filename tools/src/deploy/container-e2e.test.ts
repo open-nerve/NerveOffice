@@ -33,8 +33,6 @@ import {
   renderEnvFile,
   sampleMemory,
   serverRequestId,
-  staleRuns,
-  staleTemporaryDirectories,
 } from './container-e2e.ts'
 
 /** 每次给出不同的字节：0x01…、0x02…、0x03… */
@@ -46,21 +44,22 @@ function counter(): (size: number) => Uint8Array {
   }
 }
 
-const settings = createSettings({ pid: 4242, composeFile: '/repo/deploy/test/compose.yaml', envFile: '/tmp/e2e/test.env', httpsPort: 18443, databasePort: 15432, random: counter() })
+const RUN_ID = '0199a2c4-1111-7000-8000-111111111111'
+const settings = createSettings({ runId: RUN_ID, composeFile: '/repo/deploy/test/compose.yaml', envFile: '/tmp/e2e/test.env', httpsPort: 18443, databasePort: 15432, random: counter() })
 
 describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
-  it('项目名与镜像标签带进程号；三个密码各自随机，只用十六进制字符', () => {
-    expect(settings.project).toBe('nerve-office-e2e-4242')
-    expect(settings.image).toBe('nerve-office:e2e-4242')
+  it('项目名与镜像标签带 UUID；三个密码各自随机，只用十六进制字符', () => {
+    expect(settings.project).toBe('nerve-office-e2e-0199a2c4-1111-7000-8000-111111111111')
+    expect(settings.image).toBe('nerve-office:e2e-0199a2c4-1111-7000-8000-111111111111')
     expect(settings.passwords).toEqual({ admin: '01'.repeat(16), owner: '02'.repeat(16), app: '03'.repeat(16) })
-    const real = createSettings({ pid: 1, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 }).passwords
+    const real = createSettings({ runId: RUN_ID, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 }).passwords
     expect(new Set([real.admin, real.owner, real.app]).size).toBe(3)
     expect(real.admin).toMatch(/^[\da-f]{32}$/)
   })
 
   it('本机密钥的主密钥每次随机：32 字节的标准 base64，与 openssl rand -base64 32 的输出同一个写法（M3-P6）', () => {
     expect(settings.localKeysMasterKey).toBe(Buffer.alloc(32, 4).toString('base64'))
-    const keys = [1, 2].map(pid => createSettings({ pid, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 }).localKeysMasterKey)
+    const keys = [1, 2].map(() => createSettings({ runId: RUN_ID, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 }).localKeysMasterKey)
     expect(new Set(keys).size).toBe(2)
     for (const key of keys) {
       expect(key).toMatch(/^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/)
@@ -70,7 +69,7 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
 
   it('变量文件：镜像、三个密码、本机密钥的主密钥、两个端口；按地址的登录失败上限调高', () => {
     expect(renderEnvFile(settings)).toBe([
-      'NERVE_IMAGE=nerve-office:e2e-4242',
+      'NERVE_IMAGE=nerve-office:e2e-0199a2c4-1111-7000-8000-111111111111',
       `NERVE_DB_ADMIN_PASSWORD=${'01'.repeat(16)}`,
       `NERVE_DB_OWNER_PASSWORD=${'02'.repeat(16)}`,
       `NERVE_DB_APP_PASSWORD=${'03'.repeat(16)}`,
@@ -84,7 +83,7 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
   })
 
   it('docker compose 的参数带上项目、编排文件与变量文件', () => {
-    expect(composeArgs(settings, 'kill', '-s', 'KILL', 'app')).toEqual(['compose', '-p', 'nerve-office-e2e-4242', '-f', '/repo/deploy/test/compose.yaml', '--env-file', '/tmp/e2e/test.env', 'kill', '-s', 'KILL', 'app'])
+    expect(composeArgs(settings, 'kill', '-s', 'KILL', 'app')).toEqual(['compose', '-p', 'nerve-office-e2e-0199a2c4-1111-7000-8000-111111111111', '-f', '/repo/deploy/test/compose.yaml', '--env-file', '/tmp/e2e/test.env', 'kill', '-s', 'KILL', 'app'])
   })
 
   it('交给 Playwright 的环境变量：外部模式的地址、管理员连接的库、浏览器、编排与编排脚本的进程号', () => {
@@ -94,19 +93,11 @@ describe('容器 E2E 的编排参数（P5 设计 §3.6）', () => {
       E2E_BASE_URL: 'https://localhost:18443',
       E2E_DATABASE_URL: databaseUrl(settings),
       E2E_BROWSERS: 'chromium,webkit',
-      E2E_COMPOSE_PROJECT: 'nerve-office-e2e-4242',
+      E2E_COMPOSE_PROJECT: 'nerve-office-e2e-0199a2c4-1111-7000-8000-111111111111',
       E2E_COMPOSE_FILE: '/repo/deploy/test/compose.yaml',
       E2E_COMPOSE_ENV_FILE: '/tmp/e2e/test.env',
       E2E_RUNNER_PID: '4242',
     })
-  })
-
-  it('遗留的项目与镜像：前缀相同、进程已经不在；别的名字与还在运行的不算', () => {
-    const alive = new Set([100])
-    expect(staleRuns(['nerve-office-e2e-100', 'nerve-office-e2e-200', 'nerve-office-test', 'nerve-office-e2e-x', 'nerve-office-e2e-', 'other-e2e-300'], 'nerve-office-e2e-', pid => alive.has(pid)))
-      .toEqual(['nerve-office-e2e-200'])
-    expect(staleRuns(['nerve-office:e2e-100', 'nerve-office:e2e-300', 'nerve-office:test'], 'nerve-office:e2e-', pid => alive.has(pid)))
-      .toEqual(['nerve-office:e2e-300'])
   })
 })
 
@@ -197,14 +188,6 @@ describe('本机密钥的主密钥：缺失、写法不对时拒绝启动，日�
     expect(masterKeyLeakProblems(key, new Map([['db', 'LOG:  database system is ready'], ['app', line]]))).toEqual(['app 的日志里出现了本机密钥的主密钥'])
     // 只有前 31 个字节：不算
     expect(masterKeyLeakProblems(key, new Map([['app', JSON.stringify({ data: [...bytes.subarray(0, 31)] })]]))).toEqual([])
-  })
-})
-
-describe('中断的运行留下的临时目录（审查 B6）', () => {
-  it('前缀、进程号与随机后缀，进程已经不在的才删', () => {
-    const alive = new Set([100])
-    expect(staleTemporaryDirectories(['nerve-office-e2e-100-AbC123', 'nerve-office-e2e-200-XyZ789', 'nerve-office-e2e-300', 'nerve-office-test-400-a', 'other'], pid => alive.has(pid)))
-      .toEqual(['nerve-office-e2e-200-XyZ789'])
   })
 })
 
@@ -317,7 +300,7 @@ describe('docker 输出的解析', () => {
   })
 
   it('镜像体积在一次性的容器里合计镜像里的文件：不联网、以 root 读全部目录、不跨文件系统（不算 /proc 等）', () => {
-    expect(imageSizeArgs('nerve-office:e2e-42')).toEqual(['run', '--rm', '--network', 'none', '--user', '0', '--entrypoint', 'du', 'nerve-office:e2e-42', '-sxb', '/'])
+    expect(imageSizeArgs('nerve-office:e2e-42', 'owned-size', ['run=uuid', 'repo=hash'])).toEqual(['run', '--rm', '--name', 'owned-size', '--label', 'run=uuid', '--label', 'repo=hash', '--network', 'none', '--user', '0', '--entrypoint', 'du', 'nerve-office:e2e-42', '-sxb', '/'])
   })
 
   it('中位数：奇数个取中间那个，偶数个取中间两个的平均，与顺序无关；没有数时是 undefined', () => {

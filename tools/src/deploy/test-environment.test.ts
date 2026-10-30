@@ -14,6 +14,8 @@ const MASTER_KEY_PATTERN = /^[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]=$/
 const environmentSchema = z.record(z.string(), z.unknown())
 const composeSchema = z.object({
   'x-nerve-environment': environmentSchema,
+  'networks': z.record(z.string(), z.object({ labels: environmentSchema })),
+  'volumes': z.record(z.string(), z.object({ labels: environmentSchema })),
   'services': z.record(z.string(), z.object({ environment: environmentSchema.optional() }).loose()),
 })
 
@@ -30,7 +32,7 @@ function variables(text: string): Map<string, string> {
   }))
 }
 
-const containerEnvFile = variables(renderEnvFile(createSettings({ pid: 1, composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 })))
+const containerEnvFile = variables(renderEnvFile(createSettings({ runId: '0199a2c4-1111-7000-8000-111111111111', composeFile: 'c', envFile: 'e', httpsPort: 1, databasePort: 2 })))
 
 describe('测试环境的编排与变量（deploy/test，M3-P6 设计 §3.9）', () => {
   it('GC 开关与宽限进入应用容器，但备份声明不填默认值', () => {
@@ -87,4 +89,14 @@ describe('测试环境的编排与变量（deploy/test，M3-P6 设计 §3.9）',
     expect(example.get(MASTER_KEY_VARIABLE)).not.toMatch(MASTER_KEY_PATTERN)
     expect(containerEnvFile.get(MASTER_KEY_VARIABLE)).toMatch(MASTER_KEY_PATTERN)
   })
+})
+
+it('所有测试服务、网络、卷带运行归属；手工默认 manual 不会被接管', () => {
+  const { services, networks, volumes } = compose()
+  for (const value of [...Object.values(services), ...Object.values(networks), ...Object.values(volumes)]) {
+    expect(value.labels).toEqual({
+      'org.nerve-office.test.run': `\${NERVE_TEST_RUN_ID:-manual}`,
+      'org.nerve-office.test.repo': `\${NERVE_TEST_REPO_HASH:-manual}`,
+    })
+  }
 })

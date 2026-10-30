@@ -15,6 +15,7 @@ import tempfile
 import uuid
 
 import service_scope
+import container_resources
 import hosted
 import stable_reports
 
@@ -633,6 +634,9 @@ class Store:
             run.update(serviceScope=proof, hostedScope=host_proof, scopePaths={}, scopeMoves=[])
             run.scratch.mkdir(mode=0o700)
             run.remember_scope_path(run.scratch)
+            if kind == 'container':
+                run.update(containerResources=container_resources.MARKER)
+                container_resources.register(run.directory, run.id, self.repo, run.scratch)
             return run
         except BaseException as error:
             run.update(status="cleanup-pending", cleanupStage="creation-incomplete", cleanupError=str(error))
@@ -684,6 +688,13 @@ class Store:
                 continue
             try:
                 if run.data.get("hostedScope") is not None and run.data.get("cleanupStage") == "host-disposal-pending":
+                    if 'containerResources' in run.data:
+                        try:
+                            run.assert_container_closed()
+                        except (OSError, ValueError, RuntimeError, TypeError) as error:
+                            run.update(status='cleanup-pending', cleanupError=str(error))
+                            report['active'].append(run.id)
+                            continue
                     run.validate_hosted_completion()
                     run.verify_export()
                     continue
@@ -876,6 +887,8 @@ class Run:
                 raise RuntimeError('托管资源仍有已知打开句柄，保留：' + str(root))
 
     def validate_hosted_completion(self):
+        if 'containerResources' in self.data:
+            self.assert_container_closed()
         self.hosted_proof(self.scratch)
         if self.data.get('shortRoot'):
             self.hosted_proof(self.short_root())
@@ -1082,10 +1095,34 @@ class Run:
             if expected.exists():
                 remove(expected, expected.parent)
 
+    def assert_container_closed(self):
+        if (self.data.get('kind') == 'container' and 'containerResources' not in self.data
+                and self.data.get('hostedScope') is None
+                and self.scratch.exists() and (self.data.get('childGroup') is not None
+                or self.data.get('command') is not None or self.data.get('status') == 'running')):
+            raise ValueError('legacy-container-ownership-unverified：旧 Docker 归属未知，保留环境，不补签')
+        if 'containerResources' in self.data:
+            if self.data['containerResources'] != container_resources.MARKER:
+                raise ValueError('容器协议标记无效')
+            return container_resources.assert_closed(self.directory, self.id, self.store.repo, self.scratch)
+
     def finish(self, status, release=True):
         if status not in ("passed", "failed", "interrupted"):
             raise ValueError("终态无效")
         try:
+            container_snapshot = self.assert_container_closed()
+            if 'containerResources' in self.data:
+                if self.scratch.exists() and self.data.get('cleanupStage') != 'reports-collected':
+                    if self.data.get('hostedScope') is not None:
+                        self.assert_exportable()
+                    else:
+                        self.assert_quiescent()
+                    results = contained(self.scratch / 'tests/e2e/test-results', self.scratch)
+                    if results.is_symlink():
+                        raise ValueError('容器回执目标不得是链接')
+                    results.mkdir(parents=True, exist_ok=True)
+                    container_resources.export(self.directory, results, self.id, self.store.repo, self.scratch,
+                                               snapshot=container_snapshot, require_closed=True)
             if self.data.get('hostedScope') is not None:
                 return self.finish_hosted(status)
             self.assert_quiescent()

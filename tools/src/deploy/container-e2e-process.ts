@@ -24,8 +24,8 @@ export function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
     return true
   }
   catch (error) {
-    // 没有权限给它发信号，说明进程组还在
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
+    // 只有 ESRCH 证明不存在；权限或其他未知错误均保留为仍在。
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
 }
 
@@ -97,6 +97,8 @@ export function createInterruption(options: InterruptionOptions = {}): Interrupt
 export interface RunResult {
   /** 退出码；被信号结束时是 1 */
   readonly status: number
+  /** 全组及输出均已退出；false 时不得清理环境。 */
+  readonly quiescent: boolean
   /** capture 为真时收集的输出 */
   readonly stdout: string
   readonly stderr: string
@@ -110,25 +112,28 @@ export interface RunOptions {
   /** 第一次的 SIGINT 发给谁，默认整个进程组 */
   readonly signalTarget?: SignalTarget
   readonly groupExitTimeoutMs?: number
+  /** spawn 返回后立即持久登记；登记失败也须停下并等待整个组。 */
+  readonly onSpawn?: (pid: number) => void
 }
 
 /** 强制结束进程组之后，再等它真的退出（被回收）的上限 */
 const KILLED_GROUP_EXIT_TIMEOUT_MS = 2_000
 
 /** 主进程退出之后等整个进程组退出：最多 timeoutMs，之后强制结束，再等它退出 */
-export async function waitForProcessGroup(pid: number, timeoutMs = GROUP_EXIT_TIMEOUT_MS): Promise<void> {
+export async function waitForProcessGroup(pid: number, timeoutMs = GROUP_EXIT_TIMEOUT_MS): Promise<boolean> {
   let deadline = Date.now() + timeoutMs
   let killed = false
   while (signalGroup(pid, 0)) {
     if (Date.now() >= deadline) {
       if (killed)
-        return
+        return false
       signalGroup(pid, 'SIGKILL')
       killed = true
       deadline = Date.now() + KILLED_GROUP_EXIT_TIMEOUT_MS
     }
     await delay(50)
   }
+  return true
 }
 
 /**
@@ -151,18 +156,47 @@ export async function runTracked(interruption: Interruption, command: string, ar
   child.stderr?.setEncoding('utf8').on('data', (chunk: string) => {
     stderr += chunk
   })
+  let status = 1
+  const lifecycle = { exited: false }
+  let closed = false
+  child.once('error', (error) => {
+    stderr += String(error)
+    lifecycle.exited = true
+  })
+  child.once('exit', (code) => {
+    status = code ?? 1
+    lifecycle.exited = true
+  })
+  child.once('close', () => {
+    closed = true
+  })
   const untrack = interruption.track(child, options.signalTarget ?? 'group')
   try {
-    const status = await new Promise<number>((resolve) => {
-      child.once('error', (error) => {
-        stderr += String(error)
-        resolve(1)
-      })
-      child.once('close', code => resolve(code ?? 1))
-    })
-    if (child.pid !== undefined)
-      await waitForProcessGroup(child.pid, options.groupExitTimeoutMs)
-    return { status, stdout, stderr }
+    if (child.pid !== undefined) {
+      try {
+        options.onSpawn?.(child.pid)
+      }
+      catch {
+        interruption.receive()
+        stderr += '\nproducer-registration-failed'
+      }
+    }
+    // A descendant can retain stdout after the leader exits. Do not wait for close
+    // before entering the existing group deadline; interruption uses the same bound.
+    while (!lifecycle.exited && !interruption.interrupted())
+      await delay(50)
+    const groupGone = child.pid === undefined || await waitForProcessGroup(child.pid, options.groupExitTimeoutMs)
+    // Drain the close event already queued by group shutdown. Unknown outside-group
+    // pipe holders never turn a leader exit into a quiescent result.
+    if (!closed)
+      await delay(50)
+    const quiescent = groupGone && closed
+    if (!quiescent) {
+      child.stdout?.destroy()
+      child.stderr?.destroy()
+      child.unref()
+    }
+    return { status: quiescent && !interruption.interrupted() ? status : Math.max(status, 1), stdout, stderr, quiescent }
   }
   finally {
     untrack()

@@ -48,7 +48,25 @@ Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `a
 
 SIGINT/SIGTERM 只转交本轮仍存活的子进程组，等待后才回收。根进程已退出却仍有子进程、打开句柄或查询失败时，标记 `cleanup-pending` 并保留；不凭可能重用的进程组号码继续杀进程。强制终止、崩溃之后，下一次运行或 `test:cleanup` 通过文件锁、原进程组与句柄复核接续回收。资源归属或父目录链接不合法时失败关闭。未解决的同类待清理运行会阻止继续堆积新环境。
 
-数据库有独立生命周期：E2E/集成测试以主机标识、PID、随机后缀登记隔离库；正常退出按原夹具回收。下一次启动只挑本主机已失活 PID 的库，再确认数据库没有连接，以不带 FORCE 的 DROP 清理；连接竞争或占锁时跳过。仍有依赖的测试角色保留。业务库、其他主机的测试库与活跃库不动。容器沿既有专属标签和 compose 清理流程；Docker 不可用时保留其数据，不直接删除 Docker 磁盘。
+数据库有独立生命周期：E2E/集成测试以主机标识、PID、随机后缀登记隔离库；正常退出按原夹具回收。下一次启动只挑本主机已失活 PID 的库，再确认数据库没有连接，以不带 FORCE 的 DROP 清理；连接竞争或占锁时跳过。仍有依赖的测试角色保留。业务库、其他主机的测试库与活跃库不动。容器按下一节的创建前 UUID 台账及实际归属清理；Docker 不可用时保留其数据，不直接删除 Docker 磁盘。
+
+## 容器资源归属与闭合（2026-10-30）
+
+两端读取先拒绝每层重复 JSON 键、无效数值和类型；文件读取与解析不超过 64 KiB。正常收尾在报告搬迁、stable-export/checksums 前，把同一次严格白名单验证的台账原字节封存为 `container-resource-ledger.json`，`container-resource-receipt.json` 绑定其 SHA-256，保留 run/repo/scratch、daemon、命名空间/标签、实际对象与镜像身份、生产者/清理结果及末态查询。重复清理保留已有观测，不用空集合抹去身份。有效 pending 只增加这份小原件到既有 diagnostic-only 包；含额外/秘密字段、缺件、错身份或损坏输入只生成固定错误摘要、保留原环境，不导出未知原文。不得把第二次读到的新台账给第一次摘要补签闭合。
+
+`run.py container` 在 child bootstrap 放行前，将 `containerResources` 协议标记和 `container-resources.json` 初始 `unclaimed` 台账持久化，导出 `NERVE_TEST_RUN_DIR`。`tools/src/deploy/container-e2e-resources.ts` 核对父目录、UUID、真实源码根、scratch 和初始台账，确认当前 daemon 中本轮命名空间为空，再以文件及父目录 fsync 登记 `reserved`。项目和镜像使用 UUID，PID 只用于进程控制；旧 PID 目录、旧 Compose 项目和其他 worktree 的资源从不自动接管，取消启动前无条件 `down`。
+
+Compose 的四个服务、默认网络、两个卷，以及构建镜像和镜像体积测量容器使用 `org.nerve-office.test.run` / `org.nerve-office.test.repo` 标签；后者为真实源码根 SHA-256。手工 Compose 默认标签是 `manual`，不可被自动清理认领。长命令启动前先记录待退出意向，spawn 后立即登记进程组；只有全组和输出真正退出才撤销。主进程退出不等于 quiescent；原组等待 10 秒、强制结束后 2 秒仍未确认退出时，结果失败且保留环境。
+
+正常、失败及可捕获中断均在生产者已退出后收集报告，再逐项重新核对相同 daemon 与完整归属。合法的应用重建通过新观测到的 ID 处理；一次性容器 stop 后自动移除须由成功列表查询确认。只 stop/rm 本轮容器、网络、卷和本轮镜像标签，不用 force、全局 prune 或 Docker 重启；外部引用使删除失败时保留对应资源。独立删除失败不跳过其他已验证资源，任何失败都使本轮非零，只有最后重新查询四类资源均不存在才登记 `closed`。
+
+`test.env` 保持 0600，只位于本轮 scratch 的临时目录；CLI 不自行沿短别名再次删除它。父运行器读取有界普通文件台账，只接受精确未使用的 `unclaimed` 或带实际不存在证明的 `closed`，再按原锁、根/别名/完整句柄规则处理文件。缺失、链接、损坏、待退出生产者或未闭合台账都保留为 `cleanup-pending`，下一轮同类启动停止，不能反复堆积。新协议的 hosted 验收与 sweep 快路径同样核验台账；不能仅修改为 `host-disposal-pending` 绕过它。
+
+父侧把白名单 `container-resource-receipt.json` 随正常报告导出，含台账摘要、命名空间、状态和闭合/待处理事实，不包含密码、env 正文或完整 `Config.Env`。子 CLI 被强杀来不及生成报告时，在原生产者/导出及发布锁条件成立后，只沿既有归属搬迁链发布三个固定 JSON 的 diagnostic-only 包；保留原台账与环境，`cleanup-pending`、`cleanupComplete=false`、`publicationComplete=false`，不获得产品通过或 hosted 完成资格。无法核验时只留本地证据。台账和回执单文件不超过 64 KiB，报告沿原 14 天/5 GiB 策略。
+
+旧 run 不补签新协议。严格策略下，旧 container 曾启动且 scratch 仍在时登记 `legacy-container-ownership-unverified`，保留其 env/证明；未启动的旧 prepared 样本与已完成且无 scratch 的历史记录保持兼容。已经按旧方案 B 合法登记、稳定导出的 `host-disposal-pending` 历史记录继续保留原环境，原验收与冻结字节不因新字段改变。
+
+主密钥拒绝启动的两个原探针在正常路径都执行。任一达到原 60 秒时限，本轮已经失败，停止下一项；先通过原信号升级与有界组等待确认生产者退出，再交本轮归属清理，不在生产者还在创建容器时直接 `rm -f`。
 
 ## 证据与容量
 

@@ -6,8 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { afterEach, describe, expect, it } from 'vitest'
-import { createInterruption, ESCALATE_AFTER_MS, runCleanup, runTracked, signalGroup } from './container-e2e-process.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createInterruption, ESCALATE_AFTER_MS, runCleanup, runTracked, signalGroup, waitForProcessGroup } from './container-e2e-process.ts'
 
 function fakeChild(pid = 4242): TrackedChild & { signals: string[] } {
   const signals: string[] = []
@@ -151,7 +151,7 @@ describe('长命令异步执行、在自己的进程组里（真实的子进程�
   it('返回退出码，收集输出；命令启动不了时是 1', async () => {
     const interruption = createInterruption()
     const [command, args] = node('process.stdout.write("out");process.stderr.write("err");process.exit(3)')
-    expect(await runTracked(interruption, command, args, { cwd: tmpdir(), capture: true })).toEqual({ status: 3, stdout: 'out', stderr: 'err' })
+    expect(await runTracked(interruption, command, args, { cwd: tmpdir(), capture: true })).toEqual({ status: 3, stdout: 'out', stderr: 'err', quiescent: true })
     const missing = await runTracked(interruption, 'nerve-no-such-command', [], { cwd: tmpdir(), capture: true })
     expect(missing.status).toBe(1)
     expect(missing.stderr).toContain('ENOENT')
@@ -186,6 +186,21 @@ describe('长命令异步执行、在自己的进程组里（真实的子进程�
     expect((await running).status).toBe(5)
     expect(existsSync(grandchildGotSigint)).toBe(false)
     expect(alive(grandchild)).toBe(false)
+  })
+
+  it('只收到一次中断也有界等待不理会 SIGINT 的生产者，确认组消失后返回', async () => {
+    const ready = marker('single-interruption')
+    const interruption = createInterruption()
+    const [command, args] = node(`process.on('SIGINT', () => {});require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid));setInterval(() => {}, 1000)`)
+    const running = runTracked(interruption, command, args, { cwd: tmpdir(), capture: true, groupExitTimeoutMs: 200 })
+    await waitFor(ready)
+    const pid = Number(readFileSync(ready, 'utf8'))
+    pids.push(pid)
+    interruption.receive()
+    const result = await running
+    expect(result.status).not.toBe(0)
+    expect(result.quiescent).toBe(true)
+    expect(signalGroup(pid, 0)).toBe(false)
   })
 
   it('不理会 SIGINT 的长命令：1 秒以上再收到信号时强制结束整个进程组', async () => {
@@ -235,4 +250,21 @@ describe('清理的每一步都执行（Codex 评审 CX13）', () => {
     expect(runCleanup([{ label: 'a', run: () => true }, { label: 'b', run: () => true }], message => messages.push(message))).toBe(true)
     expect(messages).toEqual([])
   })
+})
+
+it('原组等待上限耗尽但仍存在的组明确不静止', async () => {
+  let now = 0
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => {
+    now += 2_000
+    return now
+  })
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+  try {
+    expect(await waitForProcessGroup(2147483646, 10_000)).toBe(false)
+    expect(kill).toHaveBeenCalledWith(-2147483646, 'SIGKILL')
+  }
+  finally {
+    clock.mockRestore()
+    kill.mockRestore()
+  }
 })

@@ -10,6 +10,8 @@ import sys
 import threading
 import time
 
+import container_resources
+
 from lifecycle import Store, Run, atomic_bytes, atomic_json, contained, group_alive, locked, open_paths, read_json, RUN_ID
 
 MIN_FREE = 12 * 1024 ** 3
@@ -150,6 +152,43 @@ def publish(run, kind, reports=None):
         run.update(resourceBudget=run.store.hosted_budget())
 
 
+def publish_container_diagnostic(run):
+    """Only fixed, small JSON evidence. Never move a pending environment or reports."""
+    if run.data.get('containerResources') != container_resources.MARKER or run.data.get('status') != 'cleanup-pending':
+        return
+    if run.data.get('hostedScope') is not None:
+        run.assert_exportable()
+    else:
+        run.assert_quiescent()
+    base = publication_base(run.store, 'container')
+    target = contained(base / 'test-results', run.store.repo)
+    if target.is_symlink() or (target.exists() and any(target.iterdir())):
+        raise ValueError('容器诊断发布位置已占用；保留本地台账')
+    report_root = run.directory / 'reports'
+    run.scope_directory(report_root)
+    staging = contained(report_root / 'container-diagnostic', report_root)
+    if staging.exists() or staging.is_symlink():
+        raise ValueError('容器诊断暂存已存在；保留原件')
+    staging.mkdir(mode=0o700)
+    source = staging / 'test-results'
+    source.mkdir(mode=0o700)
+    container_resources.export(run.directory, source, run.id, run.store.repo, run.scratch)
+    atomic_json(source / 'cleanup-receipt.json', {
+        'version': 1, 'runId': run.id, 'status': 'cleanup-pending', 'cleanupComplete': False,
+        'diagnosticOnly': True, 'productAcceptance': False,
+    })
+    atomic_json(source / 'resource-run.json', {
+        'version': 1, 'runId': run.id, 'receipt': str(run.directory / 'run.json'), 'status': 'cleanup-pending',
+    })
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        target.rmdir()
+    run.scope_move(source, target)
+    run.update(published=[str(target.relative_to(run.store.repo))], containerDiagnosticOnly=True,
+               publicationComplete=False)
+    source.rename(target)
+
+
 def evidence_snapshot(run):
     """Quiescent but incomplete OPFS/cleanup proof: export bounded diagnostics, no raw profile."""
     run.assert_quiescent()
@@ -228,6 +267,12 @@ def recover_ci(store, state):
                     run.assert_exportable()
                     run.verify_export()
                 return 0
+            if run.data.get("containerResources") == container_resources.MARKER:
+                run.finish("interrupted", release=False)
+                if run.data.get("status") == "cleanup-pending":
+                    if not run.data.get("containerDiagnosticOnly"):
+                        publish_container_diagnostic(run)
+                    return 0  # Diagnostics only; pending state still fails the resource gate.
             prior_reports = run.data.get("publicationReports")
             if run.data.get('hostedScope') is not None and run.data.get('cleanupStage') == 'host-disposal-pending':
                 run.validate_hosted_completion()
@@ -296,7 +341,7 @@ def main():
             temp = run.create_short_tmp()
             output = run.scratch / "tests/e2e/test-results"
             output.mkdir(parents=True)
-            env = dict(os.environ, NERVE_TEST_RUN_ID=run.id, NERVE_TEST_SCRATCH=str(run.scratch),
+            env = dict(os.environ, NERVE_TEST_RUN_ID=run.id, NERVE_TEST_RUN_DIR=str(run.directory), NERVE_TEST_SCRATCH=str(run.scratch),
                        NERVE_TEST_OUTPUT_DIR=str(output), NERVE_TEST_REPORT_DIR=str(output),
                        TMPDIR=str(temp), TMP=str(temp), TEMP=str(temp))
             env.pop("NERVE_TEST_SHORT_ROOT", None)
@@ -388,6 +433,7 @@ def main():
             run.update(commandExitCode=code, exitCode=result, interrupted=bool(stopped), producerQuiescent=True)
             receipt = run.finish("interrupted" if stopped else ("passed" if result == 0 else "failed"), release=False)
             if receipt["status"] == "cleanup-pending":
+                publish_container_diagnostic(run)
                 print("测试环境尚不能安全回收；原件与归属已保留。" + receipt.get("cleanupError", ""), file=sys.stderr)
                 return result or 1
             publish(run, args.kind)

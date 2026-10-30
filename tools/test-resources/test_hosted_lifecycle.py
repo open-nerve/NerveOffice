@@ -65,6 +65,83 @@ class HostedLifecycleTests(unittest.TestCase):
         value.update(producerQuiescent=True, exitCode=0, interrupted=False)
         return value
 
+    def test_accepted_legacy_hosted_container_remains_unchanged_without_adoption(self):
+        value = self.create('e2e')  # Legacy registration has no container protocol.
+        value.update(kind='container', exitCode=9, childGroup=2147483646)
+        self.assertEqual(value.finish('failed', release=False)['cleanupStage'], 'host-disposal-pending')
+        value.release()
+        before = (value.directory / 'run.json').read_bytes()
+        self.store.sweep()
+        self.assertEqual((value.directory / 'run.json').read_bytes(), before)
+        self.assertTrue(value.scratch.exists())
+        self.assertFalse((value.directory / 'container-resources.json').exists())
+
+    def test_new_container_protocol_cannot_bypass_pending_or_missing_ledger_via_hosted_fast_path(self):
+        for mode in ('reserved', 'missing'):
+            with self.subTest(mode=mode):
+                value = self.create('container')
+                value.update(exitCode=9)
+                self.assertEqual(value.finish('failed', release=False)['cleanupStage'], 'host-disposal-pending')
+                path = value.directory / 'container-resources.json'
+                if mode == 'missing':
+                    path.unlink()
+                else:
+                    ledger = json.loads(path.read_text())
+                    ledger['state'] = 'reserved'
+                    lifecycle.atomic_json(path, ledger)
+                with self.assertRaises((ValueError, OSError)):
+                    value.validate_hosted_completion()
+                value.release()
+                self.store.sweep()
+                result = json.loads((value.directory / 'run.json').read_text())
+                self.assertEqual(result['status'], 'cleanup-pending')
+                self.assertTrue(value.scratch.exists())
+
+    def test_pending_container_diagnostics_keep_existing_hosted_publication_identity_chain(self):
+        value = self.create('container')
+        value.update(exitCode=9)
+        path = value.directory / 'container-resources.json'
+        ledger = json.loads(path.read_text())
+        ledger.update(state='reserved', producers=[None])
+        lifecycle.atomic_json(path, ledger)
+        self.assertEqual(value.finish('failed', release=False)['status'], 'cleanup-pending')
+        runner.publish_container_diagnostic(value)
+        target = self.repo / 'tests/e2e/test-results'
+        self.assertIsNotNone(value.hosted_proof(target))
+        self.assertEqual(sorted(p.name for p in target.iterdir()),
+                         ['cleanup-receipt.json', 'container-resource-receipt.json', 'resource-run.json'])
+        self.assertTrue(value.scratch.exists())
+        self.assertFalse(value.data['publicationComplete'])
+        with self.assertRaises(ValueError):
+            value.validate_hosted_completion()
+
+    def test_valid_pending_container_payload_is_sealed_without_hosted_completion(self):
+        value = self.create('container')
+        value.update(exitCode=9)
+        path = value.directory / 'container-resources.json'
+        ledger = json.loads(path.read_text())
+        ledger.update(state='pending', daemon='fixture-daemon',
+                      repoHash=hashlib.sha256(str(self.repo).encode()).hexdigest(),
+                      project='nerve-office-e2e-' + value.id, image='nerve-office:e2e-' + value.id,
+                      temporaryDirectory=str(value.scratch / 'tmp/env'), producers=[None],
+                      observed={'containers': [], 'networks': [], 'volumes': [], 'images': []},
+                      problem='container-producer-not-quiescent')
+        lifecycle.atomic_json(path, ledger)
+        original = path.read_bytes()
+        self.assertEqual(value.finish('failed', release=False)['status'], 'cleanup-pending')
+        runner.publish_container_diagnostic(value)
+        target = self.repo / 'tests/e2e/test-results'
+        self.assertIsNotNone(value.hosted_proof(target))
+        self.assertEqual((target / 'container-resource-ledger.json').read_bytes(), original)
+        receipt = json.loads((target / 'container-resource-receipt.json').read_text())
+        self.assertEqual(receipt['ledgerSha256'], hashlib.sha256(original).hexdigest())
+        self.assertFalse(receipt['dockerClosed'])
+        self.assertTrue(receipt['diagnosticOnly'])
+        self.assertFalse(value.data['publicationComplete'])
+        self.assertTrue(value.scratch.exists())
+        with self.assertRaises(ValueError):
+            value.validate_hosted_completion()
+
     def command(self, script, *, kind='check', wait_for_output=False):
         """Run an actual child and pipe; only advance the output thread's schedule."""
         created = []

@@ -1,21 +1,20 @@
 // 容器 E2E（P5 设计 §3.6、§3.8；pnpm test:e2e:container）：用生产镜像起一套测试环境（deploy/test），对它跑 E2E 的外部模式。
 // 用法：node tools/src/deploy/container-e2e-cli.ts [--browsers chromium,webkit] [-- <交给 Playwright 的参数>]
-// 1. 清理中断的运行留下的编排项目与镜像标签；随机生成三个密码与本机密钥的主密钥，挑两个空闲端口，变量文件写在临时目录；
-// 2. 构建镜像（标签带本进程的进程号）；起 db、migrate、app、caddy（compose 按依赖的条件依次等待）；等经 Caddy 的存活探针通过；
+// 1. 校验父运行器台账，登记 UUID 空命名空间；随机密码、主密钥及临时 env 只在本轮 scratch；
+// 2. 构建镜像（UUID 与源码根归属标签）；起 db、migrate、app、caddy（compose 按依赖的条件依次等待）；等经 Caddy 的存活探针通过；
 // 3. 部署配置的核对：经 Caddy 的探针（就绪探针的各种写法都被屏蔽）、客户端地址（DEF-014：本机与编排网络里两个来源、
 //    伪造的转发头不被采信）、应用的端口没有发布到主机；本机密钥的主密钥缺失、写法不对时应用拒绝启动，输出里没有给出的取值（M3-P6）；
 // 4. 以外部模式运行 E2E（E2E 的管理员由 Playwright 的全局准备经编排初始化，tests/e2e/support/external-setup.ts）；
 // 5. 打印镜像体积与应用容器的内存（空闲：部署核对之后等一会儿、取几次样的中位数；E2E 期间每 2 秒取样的峰值；跑完之后，ADR-001）；
-// 6. 无论成败，把各容器的日志收集到 tests/e2e/test-results/container/、扫一遍里面有没有主密钥（M3-P6），然后 down -v、
-//    去掉这次的镜像标签、删除临时目录：每一步都执行，前一步失败不跳过后面的，有一步失败就以非零退出（Codex 评审 CX13）。
+// 6. 确认生产者退出后收集日志、扫描主密钥并核验当前 daemon/对象标签，只清理本轮；父侧闭合前保留临时环境。
 // 长命令（构建、起环境、编排网络里的核对、E2E）异步执行，收到信号时转给它们，之后不再开始新的步骤（Codex 评审 CX12，
 // container-e2e-process.ts）；短命令同步执行，带超时：docker 的守护进程卡住时不会一直停在那里。
 import type { AddressInfo } from 'node:net'
-import type { CleanupStep } from './container-e2e-process.ts'
+import type { CleanupStep, RunOptions, RunResult } from './container-e2e-process.ts'
 import type { ContainerE2eSettings, ProbeResponse } from './container-e2e.ts'
 import { execFile, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import https from 'node:https'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -26,6 +25,7 @@ import { promisify } from 'node:util'
 import { z } from 'zod'
 import { readJson, REPO_ROOT } from '../shared/repo.ts'
 import { createInterruption, runCleanup, runTracked } from './container-e2e-process.ts'
+import { ContainerRunResources } from './container-e2e-resources.ts'
 import {
   clientAddressProblems,
   COMPOSE_FILE,
@@ -38,7 +38,6 @@ import {
   FILE_SIZES_SCRIPT,
   FORGED_CLIENT_ADDRESS,
   IDLE_MEMORY_SAMPLING,
-  IMAGE_PREFIX,
   imageSizeArgs,
   MASTER_KEY_REFUSAL_TIME_LIMIT_MS,
   MASTER_KEY_VARIABLE,
@@ -59,8 +58,6 @@ import {
   renderEnvFile,
   sampleMemory,
   serverRequestId,
-  staleRuns,
-  staleTemporaryDirectories,
 } from './container-e2e.ts'
 import { assetGcRuntimeProblems, assetMountProblems, assetRuntimeProblems, nativeRuntimeProblems } from './container-image-checks.ts'
 import { loadNativeMaterials } from './native-image-materials.ts'
@@ -86,6 +83,7 @@ const PLAYWRIGHT_CLI = join(REPO_ROOT, 'tests/e2e/node_modules/@playwright/test/
  * 因为处理了 SIGHUP，nohup 的忽略对本进程不起作用：放到后台跑用 tmux、screen 或 setsid（复验 TB2）
  */
 const interruption = createInterruption()
+let resources: ContainerRunResources | undefined
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const)
   process.on(signal, () => interruption.receive())
 
@@ -133,9 +131,32 @@ function capture(command: string, args: readonly string[]): Captured {
   return { status: result.status, stdout: result.stdout ?? '', stderr: `${result.stderr ?? ''}${failure}` }
 }
 
+/** 归属查询只接受小型固定字段，绝不读取 Config.Env。 */
+function resourceCapture(args: readonly string[]): Captured {
+  const result = spawnSync('docker', args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024, timeout: SHORT_COMMAND_TIMEOUT_MS, killSignal: 'SIGKILL' })
+  return { status: result.error === undefined ? result.status : null, stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
+}
+
+async function runOwned(command: string, args: readonly string[], options: RunOptions): Promise<RunResult> {
+  if (resources === undefined)
+    throw new Error('容器归属尚未登记')
+  if (interruption.interrupted())
+    return { status: 1, stdout: '', stderr: 'interrupted', quiescent: true }
+  resources.producerIntent()
+  let pid: number | undefined
+  const result = await runTracked(interruption, command, args, { ...options, onSpawn: (value) => {
+    pid = value
+    resources?.producerStarted(value)
+  } })
+  resources.producerStopped(pid, result.quiescent)
+  if (!result.quiescent)
+    interruption.receive()
+  return result
+}
+
 /** 异步执行长命令，输出直接显示；收到信号时由 interruption 转给它 */
 async function run(command: string, args: readonly string[]): Promise<number> {
-  return (await runTracked(interruption, command, args, { cwd: REPO_ROOT })).status
+  return (await runOwned(command, args, { cwd: REPO_ROOT })).status
 }
 
 async function freePort(): Promise<number> {
@@ -147,16 +168,6 @@ async function freePort(): Promise<number> {
   const { port } = server.address() as AddressInfo
   await new Promise<void>(resolve => server.close(() => resolve()))
   return port
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  }
-  catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'EPERM'
-  }
 }
 
 /** 经 HTTPS 发一个请求，返回状态码与响应头；连不上时状态码是 0。测试环境的证书来自 Caddy 自带的 CA，不校验 */
@@ -185,25 +196,6 @@ async function waitUntilLive(settings: ContainerE2eSettings): Promise<boolean> {
       return false
     await delay(500)
   }
-}
-
-const composeProjectsSchema = z.array(z.object({ Name: z.string() }))
-
-/** 清理中断的运行留下的编排项目（连同数据卷）、镜像标签与临时目录 */
-function removeStaleRuns(): void {
-  const projects = capture('docker', ['compose', 'ls', '--all', '--format', 'json'])
-  if (projects.status === 0) {
-    const names = composeProjectsSchema.parse(JSON.parse(projects.stdout)).map(project => project.Name)
-    for (const name of staleRuns(names, PROJECT_PREFIX, isAlive)) {
-      log(`清理中断的运行留下的编排项目 ${name}`)
-      capture('docker', ['compose', '-p', name, 'down', '-v', '--remove-orphans'])
-    }
-  }
-  const images = capture('docker', ['image', 'ls', '--filter', `reference=${IMAGE_PREFIX}*`, '--format', '{{.Repository}}:{{.Tag}}'])
-  for (const image of staleRuns(images.stdout.split('\n').filter(line => line !== ''), IMAGE_PREFIX, isAlive))
-    capture('docker', ['image', 'rm', image])
-  for (const directory of staleTemporaryDirectories(readdirSync(tmpdir()), isAlive))
-    rmSync(join(tmpdir(), directory), { recursive: true, force: true })
 }
 
 /** 经 Caddy 请求各个探针：存活探针转发，就绪探针的各种写法都被屏蔽；响应都不带 Server 与 Via（审查 A1、复验 RB3） */
@@ -236,7 +228,7 @@ async function checkClientAddresses(settings: ContainerE2eSettings): Promise<str
   const script = `fetch('https://caddy/api/auth/login', { method: 'POST', headers: ${JSON.stringify(headers)}, body: ${JSON.stringify(body)} })`
     + '.then(response => { console.log(response.headers.get(\'x-request-id\') ?? \'\'); process.exit(response.status === 401 ? 0 : 1) }, () => process.exit(2))'
   // 要起一个容器，是长命令：异步执行，收到信号时转给它（Codex 评审 CX12）
-  const network = await runTracked(interruption, 'docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '-e', 'NODE_TLS_REJECT_UNAUTHORIZED=0', 'app', 'node', '-e', script), { cwd: REPO_ROOT, capture: true })
+  const network = await runOwned('docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '-e', 'NODE_TLS_REJECT_UNAUTHORIZED=0', 'app', 'node', '-e', script), { cwd: REPO_ROOT, capture: true })
   if (interruption.interrupted())
     return ['收到终止信号，核对没有做完']
   if (network.status !== 0)
@@ -287,7 +279,7 @@ function checkAssetDeployment(settings: ContainerE2eSettings): string[] {
 async function checkAssetGcDeployment(settings: ContainerE2eSettings): Promise<string[]> {
   const script = readFileSync(join(REPO_ROOT, 'tests/integration/src/assets/asset-gc-container.test-support.mjs'), 'utf8')
   const png = readFileSync(join(REPO_ROOT, 'apps/api/src/modules/assets/testdata/minimum.png')).toString('base64')
-  const result = await runTracked(interruption, 'docker', composeArgs(settings, 'exec', '-T', '-e', 'NERVE_TEST_ASSET_GC_CONTAINER=disposable-compose', 'app', 'node', '--input-type=module', '-e', script, png), { cwd: REPO_ROOT, capture: true })
+  const result = await runOwned('docker', composeArgs(settings, 'exec', '-T', '-e', 'NERVE_TEST_ASSET_GC_CONTAINER=disposable-compose', 'app', 'node', '--input-type=module', '-e', script, png), { cwd: REPO_ROOT, capture: true })
   if (interruption.interrupted())
     return ['收到终止信号，资源回收容器核对没有做完']
   const problems = assetGcRuntimeProblems(result.status, result.stdout)
@@ -299,7 +291,7 @@ async function checkAssetGcDeployment(settings: ContainerE2eSettings): Promise<s
 
 /**
  * 本机密钥的主密钥缺失与写法不对时应用拒绝启动（M3-P6 设计 §3.9）：各起一个一次性的应用容器（不带依赖，用镜像默认的命令真的启动），
- * 用 -e 覆盖变量文件里的主密钥；等它退出，最多到时限——还在跑就按名字删掉容器（结束 docker 的命令行停不下容器），算问题。
+ * 原 60 秒到期即失败；先中断并确认整个生产者组退出，再交本轮归属清理。
  * 判断在 container-e2e.ts（masterKeyRefusalProblems）。返回发现的问题
  */
 async function checkMasterKeyRefusal(settings: ContainerE2eSettings): Promise<string[]> {
@@ -308,17 +300,15 @@ async function checkMasterKeyRefusal(settings: ContainerE2eSettings): Promise<st
     const name = `${settings.project}-master-key-check-${index}`
     const started = Date.now()
     // 要起一个容器，是长命令：异步执行，收到信号时转给它（Codex 评审 CX12）
-    const running = runTracked(interruption, 'docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '--name', name, '-e', `${MASTER_KEY_VARIABLE}=${attempt.value}`, 'app'), { cwd: REPO_ROOT, capture: true })
+    const running = runOwned('docker', composeArgs(settings, 'run', '--rm', '--no-deps', '-T', '--name', name, '-e', `${MASTER_KEY_VARIABLE}=${attempt.value}`, 'app'), { cwd: REPO_ROOT, capture: true })
     const limit = new AbortController()
     const timedOut = await Promise.race([running.then(() => false), delay(MASTER_KEY_REFUSAL_TIME_LIMIT_MS, true, { signal: limit.signal }).catch(() => false)])
     limit.abort()
     if (timedOut)
-      capture('docker', ['rm', '-f', name])
+      interruption.receive()
     const result = await running
-    if (interruption.interrupted()) {
-      capture('docker', ['rm', '-f', name])
-      return ['收到终止信号，核对没有做完']
-    }
+    if (interruption.interrupted())
+      return [timedOut ? '主密钥探针达到原 60 秒时限；停止后续探针，交归属清理' : '收到终止信号，核对没有做完']
     const output = `${result.stdout}\n${result.stderr}`
     const found = masterKeyRefusalProblems(attempt, { status: timedOut ? null : result.status, timedOut, output })
     const seconds = ((Date.now() - started) / 1000).toFixed(1)
@@ -359,10 +349,17 @@ function formatMemory(bytes: number | undefined): string {
 }
 
 /** 镜像里文件的合计（与镜像存储无关，见 imageSizeArgs）；量不出来时说明原因 */
-function imageSize(image: string): string {
-  const result = capture('docker', imageSizeArgs(image))
-  const bytes = result.status === 0 ? duBytes(result.stdout) : undefined
-  return bytes === undefined ? `（没有量到：${result.stderr.trim() || `退出码 ${String(result.status)}`}）` : megabytes(bytes)
+async function imageSize(settings: ContainerE2eSettings): Promise<string> {
+  if (resources === undefined)
+    throw new Error('容器归属尚未登记')
+  const running = runOwned('docker', imageSizeArgs(settings.image, `${settings.project}-image-size`, resources.labels), { cwd: REPO_ROOT, capture: true })
+  const limit = setTimeout(() => interruption.receive(), SHORT_COMMAND_TIMEOUT_MS)
+  try {
+    const result = await running
+    const bytes = result.status === 0 ? duBytes(result.stdout) : undefined
+    return bytes === undefined ? `（没有量到：退出码 ${result.status}）` : megabytes(bytes)
+  }
+  finally { clearTimeout(limit) }
 }
 
 /**
@@ -390,7 +387,7 @@ async function runE2e(settings: ContainerE2eSettings, browsers: readonly string[
     const nodeOptions = `${process.env.NODE_OPTIONS ?? ''} --conditions=@nerve-office/source`.trim()
     // 保留资源运行器提供的短 TMPDIR/TMP/TEMP；再嵌套配置目录会超过 Linux branded 浏览器的 Unix socket 路径上限。
     // 真实内容仍在本轮 scratch/tmp，随受管运行结束回收。
-    const { status } = await runTracked(interruption, process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
+    const { status } = await runOwned(process.execPath, [PLAYWRIGHT_CLI, 'test', ...playwrightArgs], {
       cwd: join(REPO_ROOT, 'tests/e2e'),
       env: { ...process.env, ...playwrightEnvironment(settings, browsers, process.pid), NODE_OPTIONS: nodeOptions },
       signalTarget: 'leader',
@@ -437,45 +434,24 @@ function scanLogsForMasterKey(settings: ContainerE2eSettings): boolean {
   return problems.length === 0
 }
 
-/**
- * 清理（Codex 评审 CX13）：收集日志、扫一遍日志里的主密钥、删除测试环境（连同数据卷）、去掉这次的镜像标签、删除临时目录
- * （变量文件里有密码与主密钥），每一步都执行。删除失败的编排项目与镜像标签带着本进程的进程号，下一次运行的遗留清理会认出来再删
- */
-function cleanUp(settings: ContainerE2eSettings, directory: string): boolean {
+/** 先收集必要报告；Docker 闭合后由父运行器核对根/别名/句柄并清理临时 env。 */
+function cleanUp(settings: ContainerE2eSettings): boolean {
+  if (resources === undefined || !resources.canCollect())
+    return false
   const steps: CleanupStep[] = [
     { label: '收集日志', run: () => collectLogs(settings) },
     { label: '扫一遍日志里的主密钥', run: () => scanLogsForMasterKey(settings) },
-    { label: '删除测试环境', run: () => succeeded('删除测试环境', capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))) },
-    {
-      label: '去掉这次的镜像标签',
-      run: () => {
-        // 只去掉这次的标签：构建缓存还在，下次构建照样快。构建没有完成时没有这个标签，不算失败
-        const tagged = capture('docker', ['image', 'ls', '--quiet', settings.image])
-        if (!succeeded('查询这次的镜像标签', tagged))
-          return false
-        return tagged.stdout.trim() === '' || succeeded('去掉这次的镜像标签', capture('docker', ['image', 'rm', settings.image]))
-      },
-    },
-    {
-      label: '删除临时目录',
-      run: () => {
-        rmSync(directory, { recursive: true, force: true })
-        return true
-      },
-    },
+    { label: '核实并清理本轮 Docker 资源', run: () => resources?.cleanup() === true },
   ]
-  log('收集日志，删除测试环境')
   return runCleanup(steps, log)
 }
 
 /** 构建、起环境、核对、跑 E2E；返回退出码。每一步之后先看有没有收到终止信号，再做下一步（Codex 评审 CX12） */
 async function exercise(settings: ContainerE2eSettings, options: { version: string, revision: string, browsers: readonly string[], playwrightArgs: readonly string[] }): Promise<number> {
   log(`构建镜像 ${settings.image}`)
-  if (await run('docker', ['build', '-f', 'deploy/Dockerfile', '-t', settings.image, '--build-arg', `VERSION=${options.version}`, '--build-arg', `REVISION=${options.revision}`, '.']) !== 0 || interruption.interrupted())
+  if (await run('docker', ['build', '-f', 'deploy/Dockerfile', '-t', settings.image, ...(resources?.labels.flatMap(label => ['--label', label]) ?? []), '--build-arg', `VERSION=${options.version}`, '--build-arg', `REVISION=${options.revision}`, '.']) !== 0 || interruption.interrupted())
     return 1
   log(`起测试环境（编排项目 ${settings.project}，${publicOrigin(settings)}）`)
-  // 进程号可能被复用：同名的项目不管是谁留下的，先删掉，免得复用旧的数据卷（旧密码）
-  capture('docker', composeArgs(settings, 'down', '-v', '--remove-orphans'))
   if (interruption.interrupted() || await run('docker', composeArgs(settings, 'up', '-d')) !== 0 || interruption.interrupted())
     return 1
   if (!await waitUntilLive(settings)) {
@@ -490,7 +466,7 @@ async function exercise(settings: ContainerE2eSettings, options: { version: stri
     log(`部署配置的核对没有通过：\n- ${problems.join('\n- ')}`)
     return 1
   }
-  measurement(`镜像体积（镜像里文件的合计，解压之后）：${imageSize(settings.image)}`)
+  measurement(`镜像体积（镜像里文件的合计，解压之后）：${await imageSize(settings)}`)
   // 空闲：部署核对里的登录各算一次 Argon2，等内存回落之后取几次样、取中位数（IDLE_MEMORY_SAMPLING 写明了等多久、取几次与理由）
   const container = appContainer(settings)
   const idle = await sampleMemory(IDLE_MEMORY_SAMPLING, { sample: async () => memoryOf(container), wait: pause, stopped: () => interruption.interrupted() })
@@ -509,27 +485,33 @@ async function main(): Promise<number> {
   const { browsers, playwrightArgs } = parseArgs(process.argv.slice(2))
   const version = z.object({ version: z.string() }).parse(readJson('package.json')).version
   const revision = capture('git', ['rev-parse', '--short', 'HEAD']).stdout.trim()
-  removeStaleRuns()
   if (interruption.interrupted())
     return 1
 
-  // 临时目录的名字带进程号：被 SIGKILL 时留下的，下一次运行认得出来并删掉
-  const directory = mkdtempSync(join(tmpdir(), `${PROJECT_PREFIX}${process.pid}-`))
+  const context = z.object({ directory: z.string(), runId: z.string(), scratch: z.string() }).parse({
+    directory: process.env.NERVE_TEST_RUN_DIR,
+    runId: process.env.NERVE_TEST_RUN_ID,
+    scratch: process.env.NERVE_TEST_SCRATCH,
+  })
+  const directory = mkdtempSync(join(tmpdir(), `${PROJECT_PREFIX}${context.runId}-`))
   const httpsPort = await freePort()
   let databasePort = await freePort()
   while (databasePort === httpsPort)
     databasePort = await freePort()
-  const settings = createSettings({ pid: process.pid, composeFile: join(REPO_ROOT, COMPOSE_FILE), envFile: join(directory, 'test.env'), httpsPort, databasePort })
-  writeFileSync(settings.envFile, renderEnvFile(settings), { mode: 0o600 })
+  const settings = createSettings({ runId: context.runId, composeFile: join(REPO_ROOT, COMPOSE_FILE), envFile: join(directory, 'test.env'), httpsPort, databasePort })
+  resources = new ContainerRunResources({ ...context, repo: realpathSync(REPO_ROOT) }, settings, resourceCapture)
+  resources.reserve()
+  process.env.NERVE_TEST_REPO_HASH = resources.repoHash
   let status = 1
   try {
+    writeFileSync(settings.envFile, `${renderEnvFile(settings)}NERVE_TEST_RUN_ID=${context.runId}\nNERVE_TEST_REPO_HASH=${resources.repoHash}\n`, { mode: 0o600 })
     status = await exercise(settings, { version, revision, browsers, playwrightArgs })
   }
   catch (error) {
     console.error(error)
   }
   // 清理有一步没成功（例如测试环境没删掉）：即使 E2E 通过，也以非零退出，免得留下的东西没人发现
-  const cleaned = cleanUp(settings, directory)
+  const cleaned = cleanUp(settings)
   return cleaned ? status : Math.max(status, 1)
 }
 
