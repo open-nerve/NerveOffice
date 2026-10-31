@@ -163,6 +163,10 @@ IMAGE 包装通过公开 `BaseFunction.calculateAst` 接收实际 AST；`BaseAst
 
 S6 真实 UI 复现了另一处生命周期缺陷：查看菜单先出现，再进入单元格编辑，其普通取消命令仍可能覆盖尚未提交的正文。用户批准后，同包 ES/CJS 的桌面/移动控制器在编辑开始时立即移除查看菜单，并阻止排队的工作表事件操作正文菜单；编辑状态结束或清空时取消旧 Docs 订阅与菜单。编辑仍可见但文档、工作表、行或列变化时，撤掉旧所属单元格的正文菜单，并经原 `endEditing` 关闭旧正文表单；保留同一单元格通知、普通表单及范围选择器的 keepVisible 语义。不主动提交正文、不改写命令类型、不增加持久化字段。真实发布类的生命周期与原焦点回归合计 45 项通过；正式 UI 分别检查未提交前后文、rich 命令、历史和保存后客户端重建。Linux/ARM64 原三故事及当前 full05 默认完整门禁、container03 生产容器已通过，最终合并 SHA 的 CI 仍待执行。移动端只验证实际类，未声称移动 UI 验收。上游修复后，须通过这些反例、三浏览器故事及原只读/导航回归才能移除此段补丁。
 
+M5-P4 S6 的受控真实 manager 回归进一步证明：同格正文更新及撤销重做后，旧 hover 缓存仍可重放为 editing 菜单；这不补齐原 Linux CI 的具体输入时序。同包 ES/CJS 增加不导出的 `resolveCurrentEditingHyperLink`，仅在桌面延后 hover、移动 click 和原编辑状态通知处复核当前真实 normal Docs body。segment 只接受 undefined/空串；候选与当前同 ID 范围须都是 HYPERLINK，且 start/end、URL、有效 `tooltip ?? _xlsxHyperlinkTooltip` 相同，合格返回当前模型对象。既有 editing 菜单在相同边界也复核并强制退役，避免同 ID 去重保留旧值；不触碰 viewing、普通表单及 keepVisible，不新建正文订阅、DI 或公开 API，原声明保持。
+
+`link-popup-cache-replay.test.ts` 只在真实 DocEventManager 的私有发布口受控投递真实正文对象，其他部分使用实际 controller/service、Doc/Workbook/Undo/Redo；不作为产品内部 API 导出。`link-popup-lifecycle.test.ts` 接真实 DocumentDataModel 并覆盖两端 body/segment/ID/语义换代及 canDispose=false。阶段 A/B 最终两文件 97 项、既有链接共六文件 139 项对应输入通过，web 类型/pins/lint 通过；当前 SDK 重建后的原 WebKit 三故事均首过，实际资源收尾；独立规格与质量审查通过，C/I/M 为 0/0/1，既有输出提示单列维护。移除此身份段补丁须上游同时保证当前 body 身份、有效首次重放/等价克隆和旧菜单退役，并通过本组反例、原正式浏览器故事及权限/未提交正文保护；旧 URL normalizer、焦点和 owner 各段删除条件仍各自成立。详见[本次复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-链接缓存身份复核.md)。
+
 外部导航只在明确点击时执行 `window.open(href, '_blank', 'noopener,noreferrer')`，回调再次检查地址，不接收内部锚点。配置、输入、保存和重开均不得引起外站预取。SDK 升级若提供相同的公开实例级规范化接点，先通过 resolver 默认行为、真实表单、富文本、只读、历史和导航回归，再删除补丁及登记；不能仅因版本变化移除。
 
 ## M5-P3 S3 的补充：数据验证异步工作的归属

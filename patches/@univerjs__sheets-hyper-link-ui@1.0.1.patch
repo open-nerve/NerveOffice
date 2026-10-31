@@ -1,8 +1,8 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd014bb342b5 100644
+index f57aae76dae2faa2d837c9acecae21d473f76815..1fae211d369243461e1322967bb48e8c57173804 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
-@@ -32,8 +32,8 @@ let _univerjs_sheets_data_validation = require("@univerjs/sheets-data-validation
+@@ -32,8 +32,19 @@ let _univerjs_sheets_data_validation = require("@univerjs/sheets-data-validation
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
@@ -10,10 +10,21 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
 -	return _univerjs_core.Tools.isLegalUrl(link);
 +function isLegalLink(link, normalizeUrl) {
 +	return normalizeUrl ? normalizeUrl(link) !== null : _univerjs_core.Tools.isLegalUrl(link);
++}
++// Resolve at the consumer boundary: hover replay and delayed delivery can outlive the body.
++function resolveCurrentEditingHyperLink(instanceService, editorUnitId, candidateRange, segmentId) {
++	if (editorUnitId !== _univerjs_core.DOCS_NORMAL_EDITOR_UNIT_ID_KEY || segmentId !== void 0 && segmentId !== "") return null;
++	const document = instanceService.getUnit(editorUnitId, _univerjs_core.UniverInstanceType.UNIVER_DOC);
++	const body = document?.getSelfOrHeaderFooterModel(segmentId)?.getBody();
++	if (!body || candidateRange?.rangeType !== _univerjs_core.CustomRangeType.HYPERLINK) return null;
++	const currentRange = body.customRanges?.find((range) => range.rangeId === candidateRange.rangeId);
++	if (!currentRange || currentRange.rangeType !== _univerjs_core.CustomRangeType.HYPERLINK || currentRange.startIndex !== candidateRange.startIndex || currentRange.endIndex !== candidateRange.endIndex) return null;
++	if (currentRange.properties?.url !== candidateRange.properties?.url || (currentRange.properties?.tooltip ?? currentRange.properties?._xlsxHyperlinkTooltip) !== (candidateRange.properties?.tooltip ?? candidateRange.properties?._xlsxHyperlinkTooltip)) return null;
++	return currentRange;
  }
  function hasProtocol(urlString) {
  	return /^[a-zA-Z]+:\/\//.test(urlString);
-@@ -41,7 +41,8 @@ function hasProtocol(urlString) {
+@@ -41,7 +52,8 @@ function hasProtocol(urlString) {
  function isEmail(url) {
  	return /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/.test(url);
  }
@@ -23,7 +34,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  	if (isLegalLink(urlStr)) {
  		const transformedUrl = hasProtocol(urlStr) ? urlStr : isEmail(urlStr) ? `mailto://${urlStr}` : `http://${urlStr}`;
  		let url;
-@@ -196,8 +197,10 @@ let SheetsHyperLinkResolverService = class SheetsHyperLinkResolverService {
+@@ -196,8 +208,10 @@ let SheetsHyperLinkResolverService = class SheetsHyperLinkResolverService {
  	}
  	async navigateToOtherWebsite(url) {
  		var _config$urlHandler;
@@ -35,7 +46,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  		if (config === null || config === void 0 || (_config$urlHandler = config.urlHandler) === null || _config$urlHandler === void 0 ? void 0 : _config$urlHandler.navigateToOtherWebsite) return config.urlHandler.navigateToOtherWebsite(url);
  		window.open(url, "_blank", "noopener noreferrer");
  	}
-@@ -329,6 +332,7 @@ const CellLinkEdit = () => {
+@@ -329,6 +343,7 @@ const CellLinkEdit = () => {
  	const editing = (0, _univerjs_ui.useObservable)(popupService.currentEditing$);
  	const parserService = (0, _univerjs_ui.useDependency)(_univerjs_sheets_hyper_link.SheetsHyperLinkParserService);
  	const resolverService = (0, _univerjs_ui.useDependency)(SheetsHyperLinkResolverService);
@@ -43,7 +54,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  	const commandService = (0, _univerjs_ui.useDependency)(_univerjs_core.ICommandService);
  	const sidePanelService = (0, _univerjs_ui.useDependency)(SheetsHyperLinkSidePanelService);
  	const sidePanelOptions = (0, react.useMemo)(() => sidePanelService.getOptions(), [sidePanelService]);
-@@ -566,7 +570,7 @@ const CellLinkEdit = () => {
+@@ -566,7 +581,7 @@ const CellLinkEdit = () => {
  		value: value.id
  	}));
  	const formatUrl = (type, payload) => {
@@ -52,7 +63,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  		if (type === _univerjs_sheets_hyper_link.SheetHyperLinkType.RANGE) {
  			const info = (0, _univerjs_engine_formula.deserializeRangeWithSheet)(payload);
  			const worksheet = workbook.getSheetBySheetName(info.sheetName);
-@@ -575,7 +579,7 @@ const CellLinkEdit = () => {
+@@ -575,7 +590,7 @@ const CellLinkEdit = () => {
  		return `#${type}=${payload}`;
  	};
  	const handleSubmit = async () => {
@@ -61,7 +72,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  			setShowError(true);
  			return;
  		}
-@@ -667,7 +671,7 @@ const CellLinkEdit = () => {
+@@ -667,7 +682,7 @@ const CellLinkEdit = () => {
  				})
  			}),
  			type === _univerjs_sheets_hyper_link.SheetHyperLinkType.URL && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
@@ -70,7 +81,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Input, {
  					dir: "ltr",
  					value: payload,
-@@ -1324,7 +1328,7 @@ let SheetsHyperLinkCopyPasteController = class SheetsHyperLinkCopyPasteControlle
+@@ -1324,7 +1339,7 @@ let SheetsHyperLinkCopyPasteController = class SheetsHyperLinkCopyPasteControlle
  			},
  			onPastePlainText: (pasteTo, clipText) => {
  				const filterResult = this._filterPlainText(clipText);
@@ -79,7 +90,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  					const { range, unitId, subUnitId } = pasteTo;
  					const { ranges: [pasteToRange], mapFunc } = (0, _univerjs_sheets_ui.virtualizeDiscreteRanges)([range]);
  					const redos = [];
-@@ -1740,6 +1744,7 @@ const MobileCellLinkEdit = () => {
+@@ -1740,6 +1755,7 @@ const MobileCellLinkEdit = () => {
  	const editing = (0, _univerjs_ui.useObservable)(popupService.currentEditing$);
  	const parserService = (0, _univerjs_ui.useDependency)(_univerjs_sheets_hyper_link.SheetsHyperLinkParserService);
  	const resolverService = (0, _univerjs_ui.useDependency)(SheetsHyperLinkResolverService);
@@ -87,7 +98,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  	const commandService = (0, _univerjs_ui.useDependency)(_univerjs_core.ICommandService);
  	const sidePanelService = (0, _univerjs_ui.useDependency)(SheetsHyperLinkSidePanelService);
  	const sidePanelOptions = (0, react.useMemo)(() => sidePanelService.getOptions(), [sidePanelService]);
-@@ -1977,7 +1982,7 @@ const MobileCellLinkEdit = () => {
+@@ -1977,7 +1993,7 @@ const MobileCellLinkEdit = () => {
  		value: value.id
  	}));
  	const formatUrl = (type, payload) => {
@@ -96,7 +107,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  		if (type === _univerjs_sheets_hyper_link.SheetHyperLinkType.RANGE) {
  			const info = (0, _univerjs_engine_formula.deserializeRangeWithSheet)(payload);
  			const worksheet = workbook.getSheetBySheetName(info.sheetName);
-@@ -1986,7 +1991,7 @@ const MobileCellLinkEdit = () => {
+@@ -1986,7 +2002,7 @@ const MobileCellLinkEdit = () => {
  		return `#${type}=${payload}`;
  	};
  	const handleSubmit = async () => {
@@ -105,7 +116,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  			setShowError(true);
  			return;
  		}
-@@ -2078,7 +2083,7 @@ const MobileCellLinkEdit = () => {
+@@ -2078,7 +2094,7 @@ const MobileCellLinkEdit = () => {
  				})
  			}),
  			type === _univerjs_sheets_hyper_link.SheetHyperLinkType.URL && /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
@@ -114,7 +125,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  				children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Input, {
  					dir: "ltr",
  					value: payload,
-@@ -2401,6 +2406,8 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2401,6 +2417,8 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  	_initClickListener() {
  		this.disposeWithMe(this._hoverManagerService.currentClickedCell$.subscribe((currentCell) => {
  			var _renderer$with$getSke, _style$tr;
@@ -123,7 +134,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  			if (!currentCell) {
  				this._sheetsHyperLinkPopupService.hideCurrentPopup();
  				return;
-@@ -2460,14 +2467,20 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2460,14 +2478,22 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  			visible,
  			state
  		}))))).subscribe(({ visible, state }) => {
@@ -145,10 +156,12 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
 +			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
++			const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++			if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
  			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
  			if (!renderer) return;
  			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
-@@ -2478,7 +2491,6 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2478,13 +2504,19 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  			});
  			if (!viewPermission) return;
  			const docEventService = renderer.with(_univerjs_docs_ui.DocEventManagerService);
@@ -156,7 +169,29 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  			subscription = docEventService.clickCustomRanges$.subscribe((customRange) => {
  				var _this$_renderManagerS;
  				if (customRange.range.rangeType !== _univerjs_core.CustomRangeType.HYPERLINK) {
-@@ -2509,7 +2521,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 					this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 					return;
+ 				}
++				const currentRange = resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, customRange.range, customRange.segmentId);
++				if (!currentRange) {
++					if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++					return;
++				}
++				const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++				if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				const rect = customRange.rects[customRange.rects.length - 1];
+ 				if (!((_this$_renderManagerS = this._renderManagerService.getRenderUnitById(unitId)) === null || _this$_renderManagerS === void 0 || (_this$_renderManagerS = _this$_renderManagerS.with(_univerjs_sheets_ui.SheetSkeletonManagerService).getSkeletonParam(sheetId)) === null || _this$_renderManagerS === void 0 ? void 0 : _this$_renderManagerS.skeleton) || !rect) return;
+ 				const canvasClientRect = renderer.engine.getCanvasElement().getBoundingClientRect();
+@@ -2493,7 +2525,7 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 					subUnitId: sheetId,
+ 					row,
+ 					col: column,
+-					customRange: customRange.range,
++					customRange: currentRange,
+ 					customRangeRect: {
+ 						left: rect.left + canvasClientRect.left,
+ 						top: rect.top + canvasClientRect.top,
+@@ -2509,7 +2541,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  		this.disposeWithMe(() => subscription === null || subscription === void 0 ? void 0 : subscription.unsubscribe());
  	}
  	_initTextSelectionListener() {
@@ -167,7 +202,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  			if ((selection === null || selection === void 0 ? void 0 : selection.unitId) === _univerjs_core.DOCS_NORMAL_EDITOR_UNIT_ID_KEY) this._sheetsHyperLinkPopupService.endEditing("editing");
  		}));
  	}
-@@ -2939,6 +2953,8 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -2939,6 +2973,8 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  	_initHoverListener() {
  		this.disposeWithMe(this._hoverManagerService.currentRichText$.pipe((0, rxjs.debounceTime)(200)).subscribe((currentCell) => {
  			var _currentCell$customRa, _renderer$with$getSke, _style$tr;
@@ -176,7 +211,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  			if (!currentCell || ((_currentCell$customRa = currentCell.customRange) === null || _currentCell$customRa === void 0 ? void 0 : _currentCell$customRa.rangeType) !== _univerjs_core.CustomRangeType.HYPERLINK) {
  				this._sheetsHyperLinkPopupService.hideCurrentPopup();
  				return;
-@@ -3001,15 +3017,20 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -3001,15 +3037,22 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  			visible,
  			state
  		}))))).subscribe(({ visible, state }) => {
@@ -199,10 +234,12 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
 +			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
++			const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++			if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
  			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
  			if (!renderer) return;
  			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
-@@ -3020,7 +3041,6 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -3020,7 +3063,6 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  			});
  			const docEventService = renderer.with(_univerjs_docs_ui.DocEventManagerService);
  			if (!viewPermission) return;
@@ -210,7 +247,30 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  			subscribe = docEventService.hoverCustomRanges$.pipe((0, rxjs.debounceTime)(200)).subscribe((customRanges) => {
  				var _this$_renderManagerS;
  				const customRange = customRanges.find((customRange) => customRange.range.rangeType === _univerjs_core.CustomRangeType.HYPERLINK);
-@@ -3054,7 +3074,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -3028,6 +3070,13 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 					this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 					return;
+ 				}
++				const currentRange = resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, customRange.range, customRange.segmentId);
++				if (!currentRange) {
++					if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++					return;
++				}
++				const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++				if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				const rect = customRange.rects[customRange.rects.length - 1];
+ 				if (!((_this$_renderManagerS = this._renderManagerService.getRenderUnitById(unitId)) === null || _this$_renderManagerS === void 0 || (_this$_renderManagerS = _this$_renderManagerS.with(_univerjs_sheets_ui.SheetSkeletonManagerService).getSkeletonParam(sheetId)) === null || _this$_renderManagerS === void 0 ? void 0 : _this$_renderManagerS.skeleton) || !rect) return;
+ 				const canvasClientRect = renderer.engine.getCanvasElement().getBoundingClientRect();
+@@ -3036,7 +3085,7 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 					subUnitId: sheetId,
+ 					row,
+ 					col: column,
+-					customRange: customRange.range,
++					customRange: currentRange,
+ 					customRangeRect: {
+ 						left: rect.left + canvasClientRect.left,
+ 						top: rect.top + canvasClientRect.top,
+@@ -3054,7 +3103,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  		});
  	}
  	_initTextSelectionListener() {
@@ -222,7 +282,7 @@ index f57aae76dae2faa2d837c9acecae21d473f76815..20af992e20babe95479d245029e5bd01
  		}));
  	}
 diff --git a/lib/es/index.js b/lib/es/index.js
-index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb9818569b 100644
+index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..1d3ccdd23fbafe110b9b742b06d2647ce6eb8e1a 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -5,7 +5,7 @@ import { DocSelectionManagerService, UniverDocsPlugin } from "@univerjs/docs";
@@ -234,7 +294,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  import { ActionRow, Button, FormLayout, Input, MessageType, MobileActionRow, MobileActionRowGroup, MobileSelect, Select, Tooltip, borderClassName, clsx } from "@univerjs/design";
  import { IDefinedNamesService, UniverFormulaEnginePlugin, deserializeRangeWithSheet, serializeRange, serializeRangeToRefString, serializeRangeWithSheet } from "@univerjs/engine-formula";
  import { MobileRangeSelector, RangeSelector } from "@univerjs/sheets-formula-ui";
-@@ -31,8 +31,8 @@ import { SheetDataValidationModel } from "@univerjs/sheets-data-validation";
+@@ -31,8 +31,19 @@ import { SheetDataValidationModel } from "@univerjs/sheets-data-validation";
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
@@ -242,10 +302,21 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
 -	return Tools.isLegalUrl(link);
 +function isLegalLink(link, normalizeUrl) {
 +	return normalizeUrl ? normalizeUrl(link) !== null : Tools.isLegalUrl(link);
++}
++// Resolve at the consumer boundary: hover replay and delayed delivery can outlive the body.
++function resolveCurrentEditingHyperLink(instanceService, editorUnitId, candidateRange, segmentId) {
++	if (editorUnitId !== DOCS_NORMAL_EDITOR_UNIT_ID_KEY || segmentId !== void 0 && segmentId !== "") return null;
++	const document = instanceService.getUnit(editorUnitId, UniverInstanceType.UNIVER_DOC);
++	const body = document?.getSelfOrHeaderFooterModel(segmentId)?.getBody();
++	if (!body || candidateRange?.rangeType !== CustomRangeType.HYPERLINK) return null;
++	const currentRange = body.customRanges?.find((range) => range.rangeId === candidateRange.rangeId);
++	if (!currentRange || currentRange.rangeType !== CustomRangeType.HYPERLINK || currentRange.startIndex !== candidateRange.startIndex || currentRange.endIndex !== candidateRange.endIndex) return null;
++	if (currentRange.properties?.url !== candidateRange.properties?.url || (currentRange.properties?.tooltip ?? currentRange.properties?._xlsxHyperlinkTooltip) !== (candidateRange.properties?.tooltip ?? candidateRange.properties?._xlsxHyperlinkTooltip)) return null;
++	return currentRange;
  }
  function hasProtocol(urlString) {
  	return /^[a-zA-Z]+:\/\//.test(urlString);
-@@ -40,7 +40,8 @@ function hasProtocol(urlString) {
+@@ -40,7 +51,8 @@ function hasProtocol(urlString) {
  function isEmail(url) {
  	return /^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$/.test(url);
  }
@@ -255,7 +326,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  	if (isLegalLink(urlStr)) {
  		const transformedUrl = hasProtocol(urlStr) ? urlStr : isEmail(urlStr) ? `mailto://${urlStr}` : `http://${urlStr}`;
  		let url;
-@@ -195,8 +196,10 @@ let SheetsHyperLinkResolverService = class SheetsHyperLinkResolverService {
+@@ -195,8 +207,10 @@ let SheetsHyperLinkResolverService = class SheetsHyperLinkResolverService {
  	}
  	async navigateToOtherWebsite(url) {
  		var _config$urlHandler;
@@ -267,7 +338,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  		if (config === null || config === void 0 || (_config$urlHandler = config.urlHandler) === null || _config$urlHandler === void 0 ? void 0 : _config$urlHandler.navigateToOtherWebsite) return config.urlHandler.navigateToOtherWebsite(url);
  		window.open(url, "_blank", "noopener noreferrer");
  	}
-@@ -328,6 +331,7 @@ const CellLinkEdit = () => {
+@@ -328,6 +342,7 @@ const CellLinkEdit = () => {
  	const editing = useObservable(popupService.currentEditing$);
  	const parserService = useDependency(SheetsHyperLinkParserService);
  	const resolverService = useDependency(SheetsHyperLinkResolverService);
@@ -275,7 +346,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  	const commandService = useDependency(ICommandService);
  	const sidePanelService = useDependency(SheetsHyperLinkSidePanelService);
  	const sidePanelOptions = useMemo(() => sidePanelService.getOptions(), [sidePanelService]);
-@@ -565,7 +569,7 @@ const CellLinkEdit = () => {
+@@ -565,7 +580,7 @@ const CellLinkEdit = () => {
  		value: value.id
  	}));
  	const formatUrl = (type, payload) => {
@@ -284,7 +355,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  		if (type === SheetHyperLinkType.RANGE) {
  			const info = deserializeRangeWithSheet(payload);
  			const worksheet = workbook.getSheetBySheetName(info.sheetName);
-@@ -574,7 +578,7 @@ const CellLinkEdit = () => {
+@@ -574,7 +589,7 @@ const CellLinkEdit = () => {
  		return `#${type}=${payload}`;
  	};
  	const handleSubmit = async () => {
@@ -293,7 +364,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  			setShowError(true);
  			return;
  		}
-@@ -666,7 +670,7 @@ const CellLinkEdit = () => {
+@@ -666,7 +681,7 @@ const CellLinkEdit = () => {
  				})
  			}),
  			type === SheetHyperLinkType.URL && /* @__PURE__ */ jsx(FormLayout, {
@@ -302,7 +373,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  				children: /* @__PURE__ */ jsx(Input, {
  					dir: "ltr",
  					value: payload,
-@@ -1323,7 +1327,7 @@ let SheetsHyperLinkCopyPasteController = class SheetsHyperLinkCopyPasteControlle
+@@ -1323,7 +1338,7 @@ let SheetsHyperLinkCopyPasteController = class SheetsHyperLinkCopyPasteControlle
  			},
  			onPastePlainText: (pasteTo, clipText) => {
  				const filterResult = this._filterPlainText(clipText);
@@ -311,7 +382,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  					const { range, unitId, subUnitId } = pasteTo;
  					const { ranges: [pasteToRange], mapFunc } = virtualizeDiscreteRanges([range]);
  					const redos = [];
-@@ -1739,6 +1743,7 @@ const MobileCellLinkEdit = () => {
+@@ -1739,6 +1754,7 @@ const MobileCellLinkEdit = () => {
  	const editing = useObservable(popupService.currentEditing$);
  	const parserService = useDependency(SheetsHyperLinkParserService);
  	const resolverService = useDependency(SheetsHyperLinkResolverService);
@@ -319,7 +390,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  	const commandService = useDependency(ICommandService);
  	const sidePanelService = useDependency(SheetsHyperLinkSidePanelService);
  	const sidePanelOptions = useMemo(() => sidePanelService.getOptions(), [sidePanelService]);
-@@ -1976,7 +1981,7 @@ const MobileCellLinkEdit = () => {
+@@ -1976,7 +1992,7 @@ const MobileCellLinkEdit = () => {
  		value: value.id
  	}));
  	const formatUrl = (type, payload) => {
@@ -328,7 +399,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  		if (type === SheetHyperLinkType.RANGE) {
  			const info = deserializeRangeWithSheet(payload);
  			const worksheet = workbook.getSheetBySheetName(info.sheetName);
-@@ -1985,7 +1990,7 @@ const MobileCellLinkEdit = () => {
+@@ -1985,7 +2001,7 @@ const MobileCellLinkEdit = () => {
  		return `#${type}=${payload}`;
  	};
  	const handleSubmit = async () => {
@@ -337,7 +408,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  			setShowError(true);
  			return;
  		}
-@@ -2077,7 +2082,7 @@ const MobileCellLinkEdit = () => {
+@@ -2077,7 +2093,7 @@ const MobileCellLinkEdit = () => {
  				})
  			}),
  			type === SheetHyperLinkType.URL && /* @__PURE__ */ jsx(FormLayout, {
@@ -346,7 +417,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  				children: /* @__PURE__ */ jsx(Input, {
  					dir: "ltr",
  					value: payload,
-@@ -2400,6 +2405,8 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2400,6 +2416,8 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  	_initClickListener() {
  		this.disposeWithMe(this._hoverManagerService.currentClickedCell$.subscribe((currentCell) => {
  			var _renderer$with$getSke, _style$tr;
@@ -355,7 +426,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  			if (!currentCell) {
  				this._sheetsHyperLinkPopupService.hideCurrentPopup();
  				return;
-@@ -2459,14 +2466,20 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2459,14 +2477,22 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  			visible,
  			state
  		}))))).subscribe(({ visible, state }) => {
@@ -377,10 +448,12 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
 +			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
++			const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++			if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
  			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
  			if (!renderer) return;
  			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
-@@ -2477,7 +2490,6 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+@@ -2477,13 +2503,19 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  			});
  			if (!viewPermission) return;
  			const docEventService = renderer.with(DocEventManagerService);
@@ -388,7 +461,29 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  			subscription = docEventService.clickCustomRanges$.subscribe((customRange) => {
  				var _this$_renderManagerS;
  				if (customRange.range.rangeType !== CustomRangeType.HYPERLINK) {
-@@ -2508,7 +2520,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 					this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 					return;
+ 				}
++				const currentRange = resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, customRange.range, customRange.segmentId);
++				if (!currentRange) {
++					if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++					return;
++				}
++				const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++				if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				const rect = customRange.rects[customRange.rects.length - 1];
+ 				if (!((_this$_renderManagerS = this._renderManagerService.getRenderUnitById(unitId)) === null || _this$_renderManagerS === void 0 || (_this$_renderManagerS = _this$_renderManagerS.with(SheetSkeletonManagerService).getSkeletonParam(sheetId)) === null || _this$_renderManagerS === void 0 ? void 0 : _this$_renderManagerS.skeleton) || !rect) return;
+ 				const canvasClientRect = renderer.engine.getCanvasElement().getBoundingClientRect();
+@@ -2492,7 +2524,7 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
+ 					subUnitId: sheetId,
+ 					row,
+ 					col: column,
+-					customRange: customRange.range,
++					customRange: currentRange,
+ 					customRangeRect: {
+ 						left: rect.left + canvasClientRect.left,
+ 						top: rect.top + canvasClientRect.top,
+@@ -2508,7 +2540,9 @@ let SheetsHyperLinkMobilePopupController = class SheetsHyperLinkMobilePopupContr
  		this.disposeWithMe(() => subscription === null || subscription === void 0 ? void 0 : subscription.unsubscribe());
  	}
  	_initTextSelectionListener() {
@@ -399,7 +494,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  			if ((selection === null || selection === void 0 ? void 0 : selection.unitId) === DOCS_NORMAL_EDITOR_UNIT_ID_KEY) this._sheetsHyperLinkPopupService.endEditing("editing");
  		}));
  	}
-@@ -2938,6 +2952,8 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -2938,6 +2972,8 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  	_initHoverListener() {
  		this.disposeWithMe(this._hoverManagerService.currentRichText$.pipe(debounceTime(200)).subscribe((currentCell) => {
  			var _currentCell$customRa, _renderer$with$getSke, _style$tr;
@@ -408,7 +503,7 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  			if (!currentCell || ((_currentCell$customRa = currentCell.customRange) === null || _currentCell$customRa === void 0 ? void 0 : _currentCell$customRa.rangeType) !== CustomRangeType.HYPERLINK) {
  				this._sheetsHyperLinkPopupService.hideCurrentPopup();
  				return;
-@@ -3000,15 +3016,20 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -3000,15 +3036,22 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  			visible,
  			state
  		}))))).subscribe(({ visible, state }) => {
@@ -431,10 +526,12 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
 +			const belongsToOtherCell = (popup) => popup?.type === "editing" && (popup.unitId !== unitId || popup.subUnitId !== sheetId || popup.row !== row || popup.col !== column);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentPopup)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
 +			if (belongsToOtherCell(this._sheetsHyperLinkPopupService.currentEditing)) this._sheetsHyperLinkPopupService.endEditing("editing");
++			const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++			if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
  			const renderer = this._renderManagerService.getRenderUnitById(editorUnitId);
  			if (!renderer) return;
  			const { editPermission, viewPermission, copyPermission } = this._getLinkPermission({
-@@ -3019,7 +3040,6 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -3019,7 +3062,6 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  			});
  			const docEventService = renderer.with(DocEventManagerService);
  			if (!viewPermission) return;
@@ -442,7 +539,30 @@ index f359b83881a83a5b1c7ae8f7520d9e817d7a13c0..59bb35abb8bb4a337d457b33b9660adb
  			subscribe = docEventService.hoverCustomRanges$.pipe(debounceTime(200)).subscribe((customRanges) => {
  				var _this$_renderManagerS;
  				const customRange = customRanges.find((customRange) => customRange.range.rangeType === CustomRangeType.HYPERLINK);
-@@ -3053,7 +3073,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+@@ -3027,6 +3069,13 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 					this._sheetsHyperLinkPopupService.hideCurrentPopup();
+ 					return;
+ 				}
++				const currentRange = resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, customRange.range, customRange.segmentId);
++				if (!currentRange) {
++					if (this._sheetsHyperLinkPopupService.currentPopup?.type === "editing") this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
++					return;
++				}
++				const editingPopup = this._sheetsHyperLinkPopupService.currentPopup;
++				if (editingPopup?.type === "editing" && !resolveCurrentEditingHyperLink(this._univerInstanceService, editorUnitId, editingPopup.customRange)) this._sheetsHyperLinkPopupService.hideCurrentPopup("editing", true);
+ 				const rect = customRange.rects[customRange.rects.length - 1];
+ 				if (!((_this$_renderManagerS = this._renderManagerService.getRenderUnitById(unitId)) === null || _this$_renderManagerS === void 0 || (_this$_renderManagerS = _this$_renderManagerS.with(SheetSkeletonManagerService).getSkeletonParam(sheetId)) === null || _this$_renderManagerS === void 0 ? void 0 : _this$_renderManagerS.skeleton) || !rect) return;
+ 				const canvasClientRect = renderer.engine.getCanvasElement().getBoundingClientRect();
+@@ -3035,7 +3084,7 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
+ 					subUnitId: sheetId,
+ 					row,
+ 					col: column,
+-					customRange: customRange.range,
++					customRange: currentRange,
+ 					customRangeRect: {
+ 						left: rect.left + canvasClientRect.left,
+ 						top: rect.top + canvasClientRect.top,
+@@ -3053,7 +3102,9 @@ let SheetsHyperLinkPopupController = class SheetsHyperLinkPopupController extend
  		});
  	}
  	_initTextSelectionListener() {
