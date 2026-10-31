@@ -1,5 +1,5 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..6b4fb97a949f8575921fdebee29df33e7b4b633d 100644
+index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a23b12609 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
 @@ -22580,10 +22580,19 @@ function keepLastTextIndex(inputHtml) {
@@ -24,8 +24,63 @@ index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..6b4fb97a949f8575921fdebee29df33e
  		range.selectNodeContents(inputHtml);
  		selection.removeAllRanges();
  		selection.addRange(range);
+@@ -26128,7 +26137,7 @@ function getListDropdownValue(value, multiple) {
+ //#endregion
+ //#region src/views/dropdown/ListDropDown.tsx
+ function SelectList(props) {
+-	const { value, onChange, multiple, options, onEdit, style, location, showEdit: showEditOnDropdown, showSearch: showSearchOnDropdown } = props;
++	const { value, onChange, multiple, options, onEdit, style, location, showEdit: showEditOnDropdown, showSearch: showSearchOnDropdown, autoFocusSearch = true } = props;
+ 	const localeService = (0, _univerjs_ui.useDependency)(_univerjs_core.LocaleService);
+ 	const themeService = (0, _univerjs_ui.useDependency)(_univerjs_core.ThemeService);
+ 	(0, _univerjs_ui.useObservable)(themeService.currentTheme$);
+@@ -26136,14 +26145,14 @@ function SelectList(props) {
+ 	const searchRef = (0, react.useRef)(null);
+ 	(0, react.useEffect)(() => {
+ 		let timer = null;
+-		if (showSearchOnDropdown) timer = setTimeout(() => {
++		if (showSearchOnDropdown && autoFocusSearch) timer = setTimeout(() => {
+ 			var _searchRef$current;
+ 			(_searchRef$current = searchRef.current) === null || _searchRef$current === void 0 || _searchRef$current.focus();
+ 		}, 0);
+ 		return () => {
+-			if (timer) clearTimeout(timer);
++			if (timer !== null) clearTimeout(timer);
+ 		};
+-	}, [showSearchOnDropdown]);
++	}, [showSearchOnDropdown, autoFocusSearch]);
+ 	const [lowerFilter, setLowerFilter] = (0, react.useState)("");
+ 	const filteredOptions = (0, react.useMemo)(() => {
+ 		return options.filter((item) => lowerFilter ? item.label.toLowerCase().includes(lowerFilter) : true);
+@@ -26180,7 +26189,7 @@ function SelectList(props) {
+ 					className: (0, _univerjs_design.clsx)("univer-w-full univer-rounded-md univer-bg-gray-0 univer-px-2 univer-py-1 univer-text-sm univer-text-gray-900 focus:univer-border-primary-500 focus:univer-outline-none dark:!univer-bg-gray-1000 dark:!univer-text-gray-0", _univerjs_design.borderClassName),
+ 					type: "text",
+ 					value: lowerFilter,
+-					autoFocus: true,
++					autoFocus: autoFocusSearch,
+ 					onChange: handleSearchChange
+ 				})
+ 			}),
+@@ -26244,7 +26253,7 @@ function SelectList(props) {
+ }
+ function ListDropDown(props) {
+ 	const { popup: { extraProps, anchorRect } } = props;
+-	const { location, hideFn, onChange, onEdit, options, defaultValue, multiple, showSearch, showEdit } = extraProps;
++	const { location, hideFn, onChange, onEdit, options, defaultValue, multiple, showSearch, showEdit, autoFocusSearch } = extraProps;
+ 	const { worksheet } = location;
+ 	const [localValue, setLocalValue] = (0, react.useState)(defaultValue);
+ 	if (!worksheet) return null;
+@@ -26265,7 +26274,8 @@ function ListDropDown(props) {
+ 		onEdit,
+ 		location,
+ 		showEdit,
+-		showSearch
++		showSearch,
++		autoFocusSearch
+ 	});
+ }
+ ListDropDown.componentKey = "sheets.dropdown.list";
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 8a725c69bf972456c732af307f3d223217e6dbda..fc287d9d9e51c873655a23a61262bebef593f482 100644
+index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8b35f7a1f 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -22579,10 +22579,19 @@ function keepLastTextIndex(inputHtml) {
@@ -50,3 +105,70 @@ index 8a725c69bf972456c732af307f3d223217e6dbda..fc287d9d9e51c873655a23a61262bebe
  		range.selectNodeContents(inputHtml);
  		selection.removeAllRanges();
  		selection.addRange(range);
+@@ -26127,7 +26136,7 @@ function getListDropdownValue(value, multiple) {
+ //#endregion
+ //#region src/views/dropdown/ListDropDown.tsx
+ function SelectList(props) {
+-	const { value, onChange, multiple, options, onEdit, style, location, showEdit: showEditOnDropdown, showSearch: showSearchOnDropdown } = props;
++	const { value, onChange, multiple, options, onEdit, style, location, showEdit: showEditOnDropdown, showSearch: showSearchOnDropdown, autoFocusSearch = true } = props;
+ 	const localeService = useDependency(LocaleService);
+ 	const themeService = useDependency(ThemeService);
+ 	useObservable(themeService.currentTheme$);
+@@ -26135,14 +26144,14 @@ function SelectList(props) {
+ 	const searchRef = useRef(null);
+ 	useEffect(() => {
+ 		let timer = null;
+-		if (showSearchOnDropdown) timer = setTimeout(() => {
++		if (showSearchOnDropdown && autoFocusSearch) timer = setTimeout(() => {
+ 			var _searchRef$current;
+ 			(_searchRef$current = searchRef.current) === null || _searchRef$current === void 0 || _searchRef$current.focus();
+ 		}, 0);
+ 		return () => {
+-			if (timer) clearTimeout(timer);
++			if (timer !== null) clearTimeout(timer);
+ 		};
+-	}, [showSearchOnDropdown]);
++	}, [showSearchOnDropdown, autoFocusSearch]);
+ 	const [lowerFilter, setLowerFilter] = useState("");
+ 	const filteredOptions = useMemo(() => {
+ 		return options.filter((item) => lowerFilter ? item.label.toLowerCase().includes(lowerFilter) : true);
+@@ -26179,7 +26188,7 @@ function SelectList(props) {
+ 					className: clsx("univer-w-full univer-rounded-md univer-bg-gray-0 univer-px-2 univer-py-1 univer-text-sm univer-text-gray-900 focus:univer-border-primary-500 focus:univer-outline-none dark:!univer-bg-gray-1000 dark:!univer-text-gray-0", borderClassName),
+ 					type: "text",
+ 					value: lowerFilter,
+-					autoFocus: true,
++					autoFocus: autoFocusSearch,
+ 					onChange: handleSearchChange
+ 				})
+ 			}),
+@@ -26243,7 +26252,7 @@ function SelectList(props) {
+ }
+ function ListDropDown(props) {
+ 	const { popup: { extraProps, anchorRect } } = props;
+-	const { location, hideFn, onChange, onEdit, options, defaultValue, multiple, showSearch, showEdit } = extraProps;
++	const { location, hideFn, onChange, onEdit, options, defaultValue, multiple, showSearch, showEdit, autoFocusSearch } = extraProps;
+ 	const { worksheet } = location;
+ 	const [localValue, setLocalValue] = useState(defaultValue);
+ 	if (!worksheet) return null;
+@@ -26264,7 +26273,8 @@ function ListDropDown(props) {
+ 		onEdit,
+ 		location,
+ 		showEdit,
+-		showSearch
++		showSearch,
++		autoFocusSearch
+ 	});
+ }
+ ListDropDown.componentKey = "sheets.dropdown.list";
+diff --git a/lib/types/views/dropdown/ListDropDown.d.ts b/lib/types/views/dropdown/ListDropDown.d.ts
+index 4d0dd03d860cd73add8b81598ffac342d2a8ff2d..e675f994afe27a71b757cb15ab70a4a66a87c014 100644
+--- a/lib/types/views/dropdown/ListDropDown.d.ts
++++ b/lib/types/views/dropdown/ListDropDown.d.ts
+@@ -27,6 +27,7 @@ export interface IListDropdownProps {
+     defaultValue?: string;
+     showEdit?: boolean;
+     showSearch?: boolean;
++    autoFocusSearch?: boolean;
+ }
+ export declare function ListDropDown(props: {
+     popup: IPopupWithExtraProps<IListDropdownProps & IBaseDropdownProps>;

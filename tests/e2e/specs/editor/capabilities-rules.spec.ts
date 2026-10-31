@@ -1,8 +1,11 @@
 // US-M5-04：数据验证的实际入口、规则、拒绝输入、历史、重开与查看者。
-import type { Locator, Page } from '@playwright/test'
+import type { Locator, Page, TestInfo } from '@playwright/test'
+import type { ListFocusSnapshot } from '../../support/list-focus-observation.ts'
 import type { Workbook } from '../../support/sheet.ts'
+import { Buffer } from 'node:buffer'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
+import { beginListAutoFocusObservation } from '../../support/list-focus-observation.ts'
 import { committedWorkbook, finishCapabilitySheet, historyStep, openCapabilitySheet, selectAddress } from '../../support/sheet-capabilities.ts'
 import { cellOf, EDITOR_TEST_TIMEOUT, resourceOf, ribbon, selectCell, typeInCell } from '../../support/sheet.ts'
 
@@ -78,11 +81,90 @@ interface DvCase {
   error: RegExp
 }
 
-async function inputValidated(page: Page, value: string): Promise<void> {
+async function inputValidated(page: Page, value: string, beforeType?: () => Promise<void>): Promise<void> {
   // 点击复选框会切值、点击列表会展开；用名称框定位后真实键入，避免把准备动作混进输入历史。
   await selectAddress(page, 'C3')
+  if (beforeType)
+    await beforeType()
   await page.keyboard.type(value)
   await page.keyboard.press('Enter')
+}
+
+interface ListFocusWindow {
+  value: string
+  installAttempted: boolean
+  handleCreated: boolean
+  snapshot?: ListFocusSnapshot
+  observationFailed: boolean
+}
+
+async function rejectInvalidInput(page: Page, invalid: string, example: DvCase, testInfo: TestInfo, listFocusWindows: ListFocusWindow[]): Promise<Locator> {
+  const window: ListFocusWindow | undefined = example.type === 'list'
+    ? { value: invalid, installAttempted: false, handleCreated: false, observationFailed: false }
+    : undefined
+  if (window)
+    listFocusWindows.push(window)
+  let observation: Awaited<ReturnType<typeof beginListAutoFocusObservation>> | undefined
+  const errors: unknown[] = []
+  const reject = page.getByRole('dialog', { name: '提示', exact: true })
+  try {
+    await inputValidated(page, invalid, window
+      ? async () => {
+        window.installAttempted = true
+        observation = await beginListAutoFocusObservation(page)
+        window.handleCreated = true
+      }
+      : undefined)
+    await expect(reject).toBeVisible()
+    await expect(reject).toContainText(example.error)
+  }
+  catch (error) {
+    errors.push(error)
+  }
+  finally {
+    if (window) {
+      try {
+        if (observation)
+          window.snapshot = await observation.finish()
+        else
+          window.observationFailed = true
+      }
+      catch (error) {
+        window.observationFailed = true
+        errors.push(error)
+      }
+      try {
+        const body = Buffer.from(JSON.stringify(window))
+        if (body.byteLength > 4096) {
+          errors.push(new Error('list-focus-attachment-too-large'))
+          await testInfo.attach(`list-focus-${invalid}.json`, { body: '{"observationFailed":true,"reason":"attachment-too-large"}', contentType: 'application/json' })
+        }
+        else {
+          await testInfo.attach(`list-focus-${invalid}.json`, { body, contentType: 'application/json' })
+        }
+      }
+      catch (error) {
+        errors.push(error)
+      }
+    }
+  }
+  // 原提示错误与观察/附件错误都保留；单个原错误保持原身份和栈。
+  if (errors.length > 1)
+    throw new AggregateError(errors, '非法输入验证与列表焦点观察存在多个失败')
+  if (errors.length === 1)
+    throw errors[0]
+  return reject
+}
+
+function assertListFocusWindows(example: DvCase, listFocusWindows: ListFocusWindow[]): void {
+  if (example.type === 'list') {
+    expect(listFocusWindows.map(window => window.value)).toEqual(example.invalid)
+    for (const window of listFocusWindows) {
+      expect(window).toMatchObject({ installAttempted: true, handleCreated: true, observationFailed: false })
+      expect(window.snapshot).toMatchObject({ started: true, sealed: true, events: [], overflow: false, expired: false })
+      expect(Buffer.byteLength(JSON.stringify(window.snapshot))).toBeLessThanOrEqual(4096)
+    }
+  }
 }
 
 async function exerciseChoiceWidget(page: Page, id: string, example: DvCase): Promise<void> {
@@ -182,7 +264,8 @@ const dvCases: DvCase[] = [
 ]
 
 for (const example of dvCases) {
-  test(`US-M5-04 ${example.name}通过正式面板创建修改删除，合法输入保留、非法输入拒绝且历史可恢复`, async ({ page }) => {
+  test(`US-M5-04 ${example.name}通过正式面板创建修改删除，合法输入保留、非法输入拒绝且历史可恢复`, async ({ page }, testInfo) => {
+    const listFocusWindows: ListFocusWindow[] = []
     const actors = await openCapabilitySheet(page, `dv-${example.type}`)
     const id = actors.documentId
     await typeInCell(page, 'A1', 'validation-marker')
@@ -208,10 +291,7 @@ for (const example of dvCases) {
 
     await historyStep(page, id, '接受合法值', book => cellOf(book, 'C3')?.v ?? null, async () => inputValidated(page, example.valid), example.value)
     for (const invalid of example.invalid) {
-      await inputValidated(page, invalid)
-      const reject = page.getByRole('dialog', { name: '提示', exact: true })
-      await expect(reject).toBeVisible()
-      await expect(reject).toContainText(example.error)
+      const reject = await rejectInvalidInput(page, invalid, example, testInfo, listFocusWindows)
       await reject.getByRole('button', { name: '确定', exact: true }).click()
       await page.keyboard.press('Escape')
       await selectAddress(page, 'A1')
@@ -229,5 +309,6 @@ for (const example of dvCases) {
     expect(dvRules(await committedWorkbook(page, id))).toMatchObject([{ ...example.changed, errorStyle: 1, ranges: [C3] }])
     expect(cellOf(await committedWorkbook(page, id), 'C3')?.v).toBe(example.value)
     await finishCapabilitySheet(page, actors, 'validation-marker')
+    assertListFocusWindows(example, listFocusWindows)
   })
 }

@@ -222,3 +222,13 @@ UR-040 由三浏览器最终回归揭示：keepTextSelected 延后无条件全�
 该内部函数未公开导出，单元测试以 `?raw` 读取两份固定发布包，核对声明唯一后执行原函数，使用真实 DOM/Selection 和可控计时器。仅这一个测试文件明确登记原文读取及函数求值的逐行 lint 例外，目的为避免复制实现或新增生产测试出口；生产模块、依赖导入及内部 API 门禁保持原约束。既有序列化测试采用相同的限定求值方式。22 项中旧逻辑 20 项有效失败，修正后 22 项及 UR-039 7 项通过；移除交互守卫、正文守卫和所属文档读取的变异分别产生 10/2/2 项预期断言失败，恢复后 29 项通过。
 
 无诊断的原速公式整链及 S4 工作表结构链三浏览器各三轮共 18 项通过；S5 final03 的 11,059 项单元、工程及三浏览器兼容 225/公开 running 21/自检两模式各 12 项全部通过。S5 单轮独立审查先于 UR-040，该新增补丁须由 S6 阶段审查覆盖；完整阶段门禁尚未完成。上游须通过相同反例、正常全选、输入/光标/IME、关闭/销毁/重开和跨 document 边界，以及三浏览器真实链路后，方能移除补丁；未发送上游。
+
+## M5-P4 S6 的补充：列表编辑与搜索的焦点归属
+
+列表非法输入的原 CI 故事曾把 `cyan` 分流到单元格与搜索框；本地被动观察确认搜索 input 的 React `autoFocus` 和零延时 timer 都会与编辑器争夺焦点。旧 SDK 的真实组件链出现 6 个行为反例，原 Chromium 故事的一次被动观察也检出了搜索取焦；这些事实不等同于重现原 CI 的完整失败。WebKit 链接问题另行调查。
+
+固定 `sheets-data-validation-ui@1.0.1` 的 `DataValidationDropdownManagerService` 在 LIST/MULTIPLE_LIST 共用分支传 `autoFocusSearch: param.trigger !== 'editor-bridge'`。`sheets-ui@1.0.1` 的 `IListDropdownProps.autoFocusSearch?: boolean` 经真实 `SheetCellDropdownManagerService` 的 popup、`ListDropDown` 原样传到 `SelectList`，缺省为 true；显式打开及其他未传属性的调用保持自动搜索聚焦。React input 的 `autoFocus` 与延后 `focus()` 共用该策略，effect 依赖 `[showSearchOnDropdown, autoFocusSearch]`；隐藏搜索、切换策略及卸载都清理本实例 timer，包括编号为 0 的句柄。`showSearch` 仍控制搜索框是否显示；联动打开不自动取焦，用户主动进入搜索仍可过滤、选择，单选关闭和多选保留语义保持。
+
+两包 ES/CJS、sheets-ui 声明及正常 pnpm 补丁/锁一致；数据验证的 `trigger?: 'editor-bridge'` 声明已有，无需新增宿主出口。原 UR-033 面板和 UR-040 表名修复全部保留，原始包与实际安装/patch 摘要继续登记在 `patches/univer-data-validation-ui.json`、`patches/univer-sheet-name-selection.json`。`registry.ts` 只补协议说明与回归索引；`EditorContainer`、全局焦点、校验和保存算法不变。
+
+升级或移除本段补丁前，须通过 `data-validation-dropdown-focus.test.tsx` 的真实 manager → popup → 组件链：全过程无搜索 focusin、显式/缺省调用、主动搜索、timer 取消及实例重建；并复验原面板、验证生命周期/公式、原生光标与表名全选回归。原 `capabilities-rules.spec.ts` 下拉故事须在 Chromium、Chrome、WebKit 保留原速键入、拒绝提示、历史和保存重开断言，并让 red/cyan 各自的被动窗口真实开始、封存且零搜索事件；`list-focus-observation.test.ts` 校准 16 条、4 KiB、15,000 ms 上限及失效/异常清理。只有上游提供同等来源策略与生命周期、上述回归及原门禁通过，才移除本段补丁；旧面板与表名补丁各有独立移除条件。2026-10-31 原三浏览器故事已各一例首过，定向结果见[列表焦点复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-列表编辑焦点复核.md)；独立任务审查的规格与质量均 Approved，C/I/M 均为 0；最终阶段门禁仍待，不据局部通过签署 P4 关闭。
