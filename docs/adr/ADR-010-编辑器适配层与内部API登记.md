@@ -163,6 +163,12 @@ IMAGE 包装通过公开 `BaseFunction.calculateAst` 接收实际 AST；`BaseAst
 
 S6 真实 UI 复现了另一处生命周期缺陷：查看菜单先出现，再进入单元格编辑，其普通取消命令仍可能覆盖尚未提交的正文。用户批准后，同包 ES/CJS 的桌面/移动控制器在编辑开始时立即移除查看菜单，并阻止排队的工作表事件操作正文菜单；编辑状态结束或清空时取消旧 Docs 订阅与菜单。编辑仍可见但文档、工作表、行或列变化时，撤掉旧所属单元格的正文菜单，并经原 `endEditing` 关闭旧正文表单；保留同一单元格通知、普通表单及范围选择器的 keepVisible 语义。不主动提交正文、不改写命令类型、不增加持久化字段。真实发布类的生命周期与原焦点回归合计 45 项通过；正式 UI 分别检查未提交前后文、rich 命令、历史和保存后客户端重建。Linux/ARM64 原三故事及当前 full05 默认完整门禁、container03 生产容器已通过，最终合并 SHA 的 CI 仍待执行。移动端只验证实际类，未声称移动 UI 验收。上游修复后，须通过这些反例、三浏览器故事及原只读/导航回归才能移除此段补丁。
 
+M5-P4 S6 的受控真实 manager 回归进一步证明：同格正文更新及撤销重做后，旧 hover 缓存仍可重放为 editing 菜单；这不补齐原 Linux CI 的具体输入时序。同包 ES/CJS 增加不导出的 `resolveCurrentEditingHyperLink`，仅在桌面延后 hover、移动 click 和原编辑状态通知处复核当前真实 normal Docs body。segment 只接受 undefined/空串；候选与当前同 ID 范围须都是 HYPERLINK，且 start/end、URL、有效 `tooltip ?? _xlsxHyperlinkTooltip` 相同，合格返回当前模型对象。既有 editing 菜单在相同边界也复核并强制退役，避免同 ID 去重保留旧值；不触碰 viewing、普通表单及 keepVisible，不新建正文订阅、DI 或公开 API，原声明保持。
+
+`link-popup-cache-replay.test.ts` 只在真实 DocEventManager 的私有发布口受控投递真实正文对象，其他部分使用实际 controller/service、Doc/Workbook/Undo/Redo；不作为产品内部 API 导出。`link-popup-lifecycle.test.ts` 接真实 DocumentDataModel 并覆盖两端 body/segment/ID/语义换代及 canDispose=false。阶段 A/B 最终两文件 97 项、既有链接共六文件 139 项对应输入通过，web 类型/pins/lint 通过；当前 SDK 重建后的原 WebKit 三故事均首过，实际资源收尾；独立规格与质量审查通过，C/I/M 为 0/0/1，既有输出提示单列维护。移除此身份段补丁须上游同时保证当前 body 身份、有效首次重放/等价克隆和旧菜单退役，并通过本组反例、原正式浏览器故事及权限/未提交正文保护；旧 URL normalizer、焦点和 owner 各段删除条件仍各自成立。详见[本次复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-链接缓存身份复核.md)。
+
+2026-10-31 整体复核补充：真实 DocEventManager 在同 ID/start 的 URL/end/有效 tooltip 换代时截断新 hover，导致消费者拒绝旧值后无法恢复；受控真实链四类反例成立，不作为原 Linux CI 时序证明。docs-ui 1.0.1 累计 ES/CJS 现在在发布时取得语义 key，保留原 ID/segment/page/start 并比较范围类型及链接 end/URL/有效 tooltip；等价事件仍去重，原地更新不因旧对象引用变动而漏报。直接指针订阅仅在空→非空时记住原 cursor，连续命中后离开仍正确恢复。没有 dirty 清空、额外订阅/等待、公开 API 或声明变化；241 份声明及原 native-focus 补丁保持，摘要继续登记在 `patches/univer-native-focus.json`。新旧链接与原生焦点七文件 157 项通过，最终机制文件 17 项及静态检查通过；新 SDK 的原正式浏览器/完整门禁及独审仍由 root 接续，不借用旧输入通过。移除此生产者补丁须同 ID 真实链、等价去重、首次重放、cursor 和现有身份/未提交正文保护共同通过，详见[整体审查补正复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-整体审查接口补正复核.md)。
+
 外部导航只在明确点击时执行 `window.open(href, '_blank', 'noopener,noreferrer')`，回调再次检查地址，不接收内部锚点。配置、输入、保存和重开均不得引起外站预取。SDK 升级若提供相同的公开实例级规范化接点，先通过 resolver 默认行为、真实表单、富文本、只读、历史和导航回归，再删除补丁及登记；不能仅因版本变化移除。
 
 ## M5-P3 S3 的补充：数据验证异步工作的归属
@@ -222,3 +228,13 @@ UR-040 由三浏览器最终回归揭示：keepTextSelected 延后无条件全�
 该内部函数未公开导出，单元测试以 `?raw` 读取两份固定发布包，核对声明唯一后执行原函数，使用真实 DOM/Selection 和可控计时器。仅这一个测试文件明确登记原文读取及函数求值的逐行 lint 例外，目的为避免复制实现或新增生产测试出口；生产模块、依赖导入及内部 API 门禁保持原约束。既有序列化测试采用相同的限定求值方式。22 项中旧逻辑 20 项有效失败，修正后 22 项及 UR-039 7 项通过；移除交互守卫、正文守卫和所属文档读取的变异分别产生 10/2/2 项预期断言失败，恢复后 29 项通过。
 
 无诊断的原速公式整链及 S4 工作表结构链三浏览器各三轮共 18 项通过；S5 final03 的 11,059 项单元、工程及三浏览器兼容 225/公开 running 21/自检两模式各 12 项全部通过。S5 单轮独立审查先于 UR-040，该新增补丁须由 S6 阶段审查覆盖；完整阶段门禁尚未完成。上游须通过相同反例、正常全选、输入/光标/IME、关闭/销毁/重开和跨 document 边界，以及三浏览器真实链路后，方能移除补丁；未发送上游。
+
+## M5-P4 S6 的补充：列表编辑与搜索的焦点归属
+
+列表非法输入的原 CI 故事曾把 `cyan` 分流到单元格与搜索框；本地被动观察确认搜索 input 的 React `autoFocus` 和零延时 timer 都会与编辑器争夺焦点。旧 SDK 的真实组件链出现 6 个行为反例，原 Chromium 故事的一次被动观察也检出了搜索取焦；这些事实不等同于重现原 CI 的完整失败。WebKit 链接问题另行调查。
+
+固定 `sheets-data-validation-ui@1.0.1` 的 `DataValidationDropdownManagerService` 在 LIST/MULTIPLE_LIST 共用分支传 `autoFocusSearch: param.trigger !== 'editor-bridge'`。`sheets-ui@1.0.1` 的 `IListDropdownProps.autoFocusSearch?: boolean` 经真实 `SheetCellDropdownManagerService` 的 popup、`ListDropDown` 原样传到 `SelectList`，缺省为 true；显式打开及其他未传属性的调用保持自动搜索聚焦。React input 的 `autoFocus` 与延后 `focus()` 共用该策略，effect 依赖 `[showSearchOnDropdown, autoFocusSearch]`；隐藏搜索、切换策略及卸载都清理本实例 timer，包括编号为 0 的句柄。`showSearch` 仍控制搜索框是否显示；联动打开不自动取焦，用户主动进入搜索仍可过滤、选择，单选关闭和多选保留语义保持。
+
+两包 ES/CJS、sheets-ui 声明及正常 pnpm 补丁/锁一致；数据验证的 `trigger?: 'editor-bridge'` 声明已有，无需新增宿主出口。原 UR-033 面板和 UR-040 表名修复全部保留，原始包与实际安装/patch 摘要继续登记在 `patches/univer-data-validation-ui.json`、`patches/univer-sheet-name-selection.json`。`registry.ts` 只补协议说明与回归索引；`EditorContainer`、全局焦点、校验和保存算法不变。
+
+升级或移除本段补丁前，须通过 `data-validation-dropdown-focus.test.tsx` 的真实 manager → popup → 组件链：全过程无搜索 focusin、显式/缺省调用、主动搜索、timer 取消及实例重建；并复验原面板、验证生命周期/公式、原生光标与表名全选回归。原 `capabilities-rules.spec.ts` 下拉故事须在 Chromium、Chrome、WebKit 保留原速键入、拒绝提示、历史和保存重开断言，并让 red/cyan 各自的被动窗口真实开始、封存且零搜索事件；`list-focus-observation.test.ts` 校准 16 条、4 KiB、15,000 ms 上限及失效/异常清理。只有上游提供同等来源策略与生命周期、上述回归及原门禁通过，才移除本段补丁；旧面板与表名补丁各有独立移除条件。2026-10-31 原三浏览器故事已各一例首过，定向结果见[列表焦点复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-列表编辑焦点复核.md)；独立任务审查的规格与质量均 Approved，C/I/M 均为 0；最终阶段门禁仍待，不据局部通过签署 P4 关闭。

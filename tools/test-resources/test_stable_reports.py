@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import tempfile
 import unittest
@@ -71,6 +72,95 @@ class StableReportsTests(unittest.TestCase):
 
     def manifest(self):
         return json.loads((self.destination / "test-results/stable-export.json").read_text())
+
+    def split_publication(self, *, move=True):
+        profile = self.profile()
+        self.opfs(profile)
+        receipt = self.export()
+        published = self.root / 'published'
+        published.mkdir()
+        source = self.destination / 'test-results'
+        info = source.stat()
+        identities = {'test-results': {'device': info.st_dev, 'inode': info.st_ino}}
+        if move:
+            source.rename(published / 'test-results')
+        return receipt, published, identities
+
+    def verify_split(self, receipt, published, identities):
+        return stable_reports.verify_snapshot(self.destination, RUN_ID, receipt,
+                     publication_root=published, publication_identities=identities)
+
+    def test_split_publication_verifies_one_unchanged_snapshot_and_opfs_across_both_roots(self):
+        receipt, published, identities = self.split_publication()
+        before = self.inventory(self.root)
+        self.assertEqual(self.verify_split(receipt, published, identities), receipt)
+        self.assertEqual(self.verify_split(receipt, published, identities), receipt)
+        self.assertEqual(self.inventory(self.root), before)
+
+    def test_split_publication_accepts_registered_intent_before_rename(self):
+        receipt, published, identities = self.split_publication(move=False)
+        self.assertEqual(self.verify_split(receipt, published, identities), receipt)
+        self.assertTrue((self.destination / 'test-results/results.json').exists())
+        self.assertFalse((published / 'test-results').exists())
+
+    def test_split_publication_rejects_same_bytes_in_both_locations(self):
+        receipt, published, identities = self.split_publication()
+        shutil.copytree(published / 'test-results', self.destination / 'test-results')
+        with self.assertRaisesRegex(ValueError, 'staging and publication'):
+            self.verify_split(receipt, published, identities)
+
+    def test_split_publication_rejects_replaced_leaf_even_when_bytes_match(self):
+        receipt, published, identities = self.split_publication()
+        (published / 'test-results').rename(self.root / 'original-leaf')
+        shutil.copytree(self.root / 'original-leaf', published / 'test-results')
+        with self.assertRaisesRegex(ValueError, 'identity changed'):
+            self.verify_split(receipt, published, identities)
+
+    def test_split_publication_rejects_missing_registered_leaf(self):
+        receipt, published, identities = self.split_publication()
+        (published / 'test-results').rename(self.root / 'missing-leaf')
+        with self.assertRaisesRegex(ValueError, 'registered report leaf is missing'):
+            self.verify_split(receipt, published, identities)
+
+    def test_split_publication_rejects_linked_leaf(self):
+        receipt, published, identities = self.split_publication()
+        (published / 'test-results').rename(self.root / 'original-leaf')
+        (published / 'test-results').symlink_to(self.root / 'original-leaf', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'linked or not a directory'):
+            self.verify_split(receipt, published, identities)
+
+    def test_split_publication_rejects_tampered_content_in_unpublished_leaf(self):
+        receipt, published, identities = self.split_publication()
+        (self.destination / 'playwright-report/index.html').write_text('changed')
+        with self.assertRaisesRegex(ValueError, 'content mismatch'):
+            self.verify_split(receipt, published, identities)
+
+    def test_split_publication_rejects_foreign_publication_marker(self):
+        receipt, published, identities = self.split_publication()
+        (published / 'test-results/resource-run.json').write_text(json.dumps({'runId': OTHER_RUN}))
+        with self.assertRaisesRegex(ValueError, 'another run'):
+            self.verify_split(receipt, published, identities)
+
+    def test_split_publication_rejects_unregistered_target_and_arbitrary_leaf(self):
+        receipt, published, identities = self.split_publication()
+        with self.assertRaises(ValueError):
+            self.verify_split(receipt, published, {'playwright-report': identities['test-results']})
+        with self.assertRaises(ValueError):
+            self.verify_split(receipt, published, {'arbitrary': identities['test-results']})
+
+    def test_split_publication_rejects_duplicate_leaf_created_during_verification(self):
+        receipt, published, identities = self.split_publication()
+        read = stable_reports._Tree.read
+
+        def create_duplicate(tree, path, *args, **kwargs):
+            result = read(tree, path, *args, **kwargs)
+            if tree.path == published and path == stable_reports.MANIFEST:
+                (self.destination / 'test-results').mkdir()
+            return result
+
+        with patch.object(stable_reports._Tree, 'read', create_duplicate):
+            with self.assertRaisesRegex(RuntimeError, 'appeared during export'):
+                self.verify_split(receipt, published, identities)
 
     def inventory(self, root):
         value = {}

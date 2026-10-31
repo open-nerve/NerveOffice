@@ -5,6 +5,13 @@
 // 一一对应，由 tools/src/lint/internal-api-sources.test.ts 递归列出目录核对）对 @univerjs/* 的引用：出口直接再导出的就是登记的那一项，
 // 封装的一项（例如 FORMULA_PROTOCOL）用到的 SDK 符号列在它的 sdk 里，没列出的报出来。文件之间只认 ./<文件名> 的静态导入导出：
 // 子目录与 ../ 绕路报为认不出的写法，动态 import() 由 lint 禁止（nerve/editor-internal-api）。新增一项时，先写回归用例，再登记
+// M5-P4-S6 的列表焦点补丁只连接 SDK 内部协议，不增加本表出口项：sheets-data-validation-ui 的 LIST/MULTIPLE_LIST
+// 将 autoFocusSearch: param.trigger !== 'editor-bridge' 交给 sheets-ui ListDropDown，再传给 SelectList；属性可选且缺省 true。
+// React autoFocus 与延后 focus 共用该策略，effect 依赖 showSearch/autoFocusSearch 并取消本实例 timer；showSearch 和用户主动搜索保持。
+// 升级回归：data-validation-dropdown-focus.test.tsx 的真实 manager → popup → 组件链，以及 data-validation-panel.test.tsx、
+// data-validation-lifecycle.test.ts、data-validation-formula.test.ts、native-input-focus.test.ts、sheet-name-selection.test.ts；
+// E2E capabilities-rules.spec.ts 的原下拉故事与 list-focus-observation.test.ts 校准。两包 ES/CJS/types、原始/安装/patch 摘要
+// 见 patches/univer-data-validation-ui.json、patches/univer-sheet-name-selection.json；移除条件见 ADR-010。
 export interface InternalApiEntry {
   /** internal-api/index.ts 或 ui.ts 导出的名字 */
   readonly name: string

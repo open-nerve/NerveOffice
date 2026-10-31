@@ -1,8 +1,16 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff81599ab5e 100644
+index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6ccfe8bebb5 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
-@@ -2929,10 +2929,43 @@ function DataValidationOptions(props) {
+@@ -536,6 +536,7 @@ let DataValidationDropdownManagerService = class DataValidationDropdownManagerSe
+ 						onEdit: handleEdit,
+ 						defaultValue: cellStr,
+ 						multiple,
++						autoFocusSearch: param.trigger !== "editor-bridge",
+ 						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
+ 						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
+ 					}
+@@ -2929,10 +2930,43 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -50,7 +58,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2954,6 +2987,7 @@ function DataValidationDetail() {
+@@ -2954,6 +2988,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = (0, react.useState)(0);
@@ -58,7 +66,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  	const dataValidationPanelService = (0, _univerjs_ui.useDependency)(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2974,7 +3008,57 @@ function DataValidationDetailInner(props) {
+@@ -2974,7 +3009,57 @@ function DataValidationDetailInner(props) {
  		sheetId: "",
  		range: i
  	})));
@@ -117,7 +125,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  	const [isRangeError, setIsRangeError] = (0, react.useState)(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = (0, react.useState)(false);
  	const rangeSelectorInstance = (0, react.useRef)(null);
-@@ -2986,35 +3070,11 @@ function DataValidationDetailInner(props) {
+@@ -2986,35 +3071,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	(0, react.useEffect)(() => {
@@ -156,7 +164,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  	const handleUpdateRuleRanges = (0, _univerjs_ui.useEvent)((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(_univerjs_engine_formula.deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3030,14 +3090,14 @@ function DataValidationDetailInner(props) {
+@@ -3030,14 +3091,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -178,7 +186,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3045,8 +3105,9 @@ function DataValidationDetailInner(props) {
+@@ -3045,8 +3106,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationRangeCommand.id, params);
@@ -189,7 +197,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3058,31 +3119,30 @@ function DataValidationDetailInner(props) {
+@@ -3058,31 +3120,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -233,7 +241,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  		await commandService.executeCommand(_univerjs_sheets_data_validation.RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3091,16 +3151,13 @@ function DataValidationDetailInner(props) {
+@@ -3091,16 +3152,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -254,7 +262,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3125,10 +3182,7 @@ function DataValidationDetailInner(props) {
+@@ -3125,10 +3183,7 @@ function DataValidationDetailInner(props) {
  	const options = (0, _univerjs_data_validation.getRuleOptions)(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if ((0, _univerjs_core.shallowEqual)(newOptions, (0, _univerjs_data_validation.getRuleOptions)(localRule))) return;
@@ -266,7 +274,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3159,7 +3213,7 @@ function DataValidationDetailInner(props) {
+@@ -3159,7 +3214,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -275,7 +283,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  			}),
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3186,10 +3240,7 @@ function DataValidationDetailInner(props) {
+@@ -3186,10 +3241,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -287,7 +295,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  					}
  				})
  			}) : null,
-@@ -3199,12 +3250,7 @@ function DataValidationDetailInner(props) {
+@@ -3199,12 +3251,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -301,7 +309,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3214,7 +3260,6 @@ function DataValidationDetailInner(props) {
+@@ -3214,7 +3261,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, { children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({
@@ -310,7 +318,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8ecc732e1b1dd58b50538788ee6f9ff8
  				}),
  				children: localeService.t("sheets-data-validation-ui.panel.allowBlank")
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b6601cf083e 100644
+index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002399c1cf3 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -1,5 +1,5 @@
@@ -320,7 +328,15 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  import { AUTO_FILL_APPLY_TYPE, AutoFillTools, IAutoFillService, INTERCEPTOR_POINT, InterceptCellContentPriority, RangeProtectionPermissionEditPoint, SetRangeValuesCommand, SetWorksheetActiveOperation, SheetInterceptorService, SheetPermissionCheckController, SheetsSelectionsService, UniverSheetsPlugin, VALIDATE_CELL, WorkbookEditablePermission, WorksheetEditPermission, WorksheetSetCellStylePermission, checkRangesEditablePermission, deserializeListOptions, getSheetCommandTarget, rangeToDiscreteRange, serializeListOptions } from "@univerjs/sheets";
  import { AddSheetDataValidationCommand, BASE_FORMULA_INPUT_NAME, CHECKBOX_FORMULA_1, CHECKBOX_FORMULA_2, CHECKBOX_FORMULA_INPUT_NAME, CUSTOM_FORMULA_INPUT_NAME, ClearRangeDataValidationCommand, DATA_VALIDATION_PLUGIN_NAME, DataValidationCacheService, DataValidationFormulaController, DataValidationFormulaService, LIST_FORMULA_INPUT_NAME, RemoveSheetAllDataValidationCommand, RemoveSheetDataValidationCommand, SheetDataValidationModel, SheetsDataValidationValidatorService, UniverSheetsDataValidationPlugin, UpdateSheetDataValidationOptionsCommand, UpdateSheetDataValidationRangeCommand, UpdateSheetDataValidationSettingCommand, createDefaultNewRule, getCellValueOrigin, getDataValidationCellValue, getDataValidationDiffMutations, getFormulaResult, isLegalFormulaResult, transformCheckboxValue } from "@univerjs/sheets-data-validation";
  import { DataValidationModel, DataValidatorDropdownType, DataValidatorRegistryScope, DataValidatorRegistryService, TWO_FORMULA_OPERATOR_COUNT, UniverDataValidationPlugin, getRuleOptions, getRuleSetting } from "@univerjs/data-validation";
-@@ -2928,10 +2928,43 @@ function DataValidationOptions(props) {
+@@ -535,6 +535,7 @@ let DataValidationDropdownManagerService = class DataValidationDropdownManagerSe
+ 						onEdit: handleEdit,
+ 						defaultValue: cellStr,
+ 						multiple,
++						autoFocusSearch: param.trigger !== "editor-bridge",
+ 						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
+ 						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
+ 					}
+@@ -2928,10 +2929,43 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -368,7 +384,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2953,6 +2986,7 @@ function DataValidationDetail() {
+@@ -2953,6 +2987,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = useState(0);
@@ -376,7 +392,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  	const dataValidationPanelService = useDependency(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2973,7 +3007,57 @@ function DataValidationDetailInner(props) {
+@@ -2973,7 +3008,57 @@ function DataValidationDetailInner(props) {
  		sheetId: "",
  		range: i
  	})));
@@ -435,7 +451,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  	const [isRangeError, setIsRangeError] = useState(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = useState(false);
  	const rangeSelectorInstance = useRef(null);
-@@ -2985,35 +3069,11 @@ function DataValidationDetailInner(props) {
+@@ -2985,35 +3070,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	useEffect(() => {
@@ -474,7 +490,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  	const handleUpdateRuleRanges = useEvent((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3029,14 +3089,14 @@ function DataValidationDetailInner(props) {
+@@ -3029,14 +3090,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -496,7 +512,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3044,8 +3104,9 @@ function DataValidationDetailInner(props) {
+@@ -3044,8 +3105,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(UpdateSheetDataValidationRangeCommand.id, params);
@@ -507,7 +523,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3057,31 +3118,30 @@ function DataValidationDetailInner(props) {
+@@ -3057,31 +3119,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -551,7 +567,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  		await commandService.executeCommand(RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3090,16 +3150,13 @@ function DataValidationDetailInner(props) {
+@@ -3090,16 +3151,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -572,7 +588,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3124,10 +3181,7 @@ function DataValidationDetailInner(props) {
+@@ -3124,10 +3182,7 @@ function DataValidationDetailInner(props) {
  	const options = getRuleOptions(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if (shallowEqual(newOptions, getRuleOptions(localRule))) return;
@@ -584,7 +600,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  		debounceExecute(UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3158,7 +3212,7 @@ function DataValidationDetailInner(props) {
+@@ -3158,7 +3213,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -593,7 +609,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  			}),
  			/* @__PURE__ */ jsx(FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3185,10 +3239,7 @@ function DataValidationDetailInner(props) {
+@@ -3185,10 +3240,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -605,7 +621,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  					}
  				})
  			}) : null,
-@@ -3198,12 +3249,7 @@ function DataValidationDetailInner(props) {
+@@ -3198,12 +3250,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -619,7 +635,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..3335f38ca547ec60c8aea63c99f50b66
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3213,7 +3259,6 @@ function DataValidationDetailInner(props) {
+@@ -3213,7 +3260,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ jsx(FormLayout, { children: /* @__PURE__ */ jsx(Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({

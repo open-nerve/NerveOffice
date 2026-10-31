@@ -2,19 +2,24 @@
   "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
   "package": "@univerjs/sheets-ui",
   "version": "1.0.1",
-  "reason": "UR-040：延后表名全选只作用于原控件尚未交互的编辑会话，不覆盖已输入文字、IME、光标或其他 document。",
+  "reason": "UR-040：延后表名全选只作用于原控件尚未交互的编辑会话，不覆盖已输入文字、IME、光标或其他 document。M5-P4-S6：ListDropDown 传递可选 autoFocusSearch，缺省 true；SelectList 的 React 与 timer 自动聚焦共用该策略，隐藏、策略切换和卸载取消本实例 timer，保留用户主动搜索与选择。",
   "files": [
     {
       "path": "lib/es/index.js",
       "originalSha256": "36c54a0025c9c447a6a35a567dc06e70f835adb68ae3405900f8ca549a4e3ecc",
-      "patchedSha256": "32fb46e8d5efae6d775a13d30ce9d9070b984c9dc043c79e7f607c8f35a83d22"
+      "patchedSha256": "71bf328d004d3de15b335b464968b10b2f3bbcddd5eb9f1a3122eb8810e2cc89"
     },
     {
       "path": "lib/cjs/index.js",
       "originalSha256": "e96ddece20ba81fba43fe5734f36ab903d137f9ae548c187730abcb455f52a0c",
-      "patchedSha256": "d21058e4142ab3deddba5476885a8f567d4ff1071a2d4d2c053c124dc045ea10"
+      "patchedSha256": "62abf46de9eb1cda760362dce87474d07eeeec0d637b424fdf53215a152d80a4"
+    },
+    {
+      "path": "lib/types/views/dropdown/ListDropDown.d.ts",
+      "originalSha256": "f5f9810def6d53fa0612d837e5606a5d0c58c46cae6e0262b6ec707ceecce4b4",
+      "patchedSha256": "a58feba17605614835b3000d635cefb1ff62d72a24d25cda70032ef200b16cad"
     }
   ],
   "patch": "patches/@univerjs__sheets-ui@1.0.1.patch",
-  "patchSha256": "712ea19bb269c2a04539d909a8b6075e272976db5bd9fdaafd6b74091913c950"
+  "patchSha256": "5a7c38d834b121b0c6228b8a214ca6044166679c01aeaf29bc8ab70315e52977"
 }

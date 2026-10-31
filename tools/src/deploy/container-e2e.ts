@@ -1,6 +1,6 @@
 // 容器 E2E（P5 设计 §3.6）里可以单独测试的部分：编排的参数与变量文件、交给 Playwright 的环境变量、
 // 部署配置的核对（经代理的探针、客户端地址 DEF-014、应用的端口不发布；本机密钥的主密钥缺失与写法不对时拒绝启动、
-// 日志里没有主密钥，M3-P6 设计 §3.9）、遗留编排项目的识别、docker 输出的解析、空闲内存的取样与中位数（ADR-001）。
+// 日志里没有主密钥，M3-P6 设计 §3.9）、docker 输出的解析、空闲内存的取样与中位数（ADR-001）。
 // 执行的步骤在 container-e2e-cli.ts。
 import { Buffer } from 'node:buffer'
 import { randomBytes } from 'node:crypto'
@@ -9,8 +9,7 @@ import { z } from 'zod'
 /** 测试环境的编排（相对仓库根目录） */
 export const COMPOSE_FILE = 'deploy/test/compose.yaml'
 /**
- * 编排项目名与镜像标签的前缀，后面接编排脚本的进程号：同时运行的两次互不影响（包括镜像的标签不被另一次覆盖），
- * 中断的运行留下的项目与镜像可以认出来
+ * 项目与镜像后缀使用父运行器的 UUID；名字本身不授予清理权。
  */
 export const PROJECT_PREFIX = 'nerve-office-e2e-'
 export const IMAGE_PREFIX = 'nerve-office:e2e-'
@@ -38,7 +37,7 @@ export interface ContainerE2eSettings {
 }
 
 export interface SettingsInput {
-  readonly pid: number
+  readonly runId: string
   readonly composeFile: string
   readonly envFile: string
   readonly httpsPort: number
@@ -57,12 +56,14 @@ export const MASTER_KEY_VARIABLE = 'NERVE_LOCAL_KEYS_MASTER_KEY'
 const MASTER_KEY_BYTES = 32
 
 export function createSettings(input: SettingsInput): ContainerE2eSettings {
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(input.runId))
+    throw new Error('容器测试需要父运行器的 UUID')
   const random = input.random ?? randomBytes
   return {
-    project: `${PROJECT_PREFIX}${input.pid}`,
+    project: `${PROJECT_PREFIX}${input.runId}`,
     composeFile: input.composeFile,
     envFile: input.envFile,
-    image: `${IMAGE_PREFIX}${input.pid}`,
+    image: `${IMAGE_PREFIX}${input.runId}`,
     httpsPort: input.httpsPort,
     databasePort: input.databasePort,
     passwords: { admin: password(random), owner: password(random), app: password(random) },
@@ -115,25 +116,6 @@ export function playwrightEnvironment(settings: ContainerE2eSettings, browsers: 
     E2E_COMPOSE_ENV_FILE: settings.envFile,
     E2E_RUNNER_PID: String(runnerPid),
   }
-}
-
-/** 中断的运行留下的编排项目或镜像：名字是前缀加编排脚本的进程号，进程已经不在了 */
-export function staleRuns(names: readonly string[], prefix: string, isAlive: (pid: number) => boolean): string[] {
-  return names.filter((name) => {
-    const pid = name.startsWith(prefix) ? name.slice(prefix.length) : ''
-    return /^\d+$/.test(pid) && !isAlive(Number(pid))
-  })
-}
-
-/**
- * 中断的运行（例如被 SIGKILL）留下的临时目录：名字是前缀、进程号、连字符与随机后缀（mkdtemp）。
- * 里面的变量文件有三个密码与本机密钥的主密钥（M3-P6），下一次运行时删掉（审查 B6）
- */
-export function staleTemporaryDirectories(names: readonly string[], isAlive: (pid: number) => boolean): string[] {
-  return names.filter((name) => {
-    const pid = name.startsWith(PROJECT_PREFIX) ? /^(\d+)-/.exec(name.slice(PROJECT_PREFIX.length))?.[1] : undefined
-    return pid !== undefined && !isAlive(Number(pid))
-  })
 }
 
 const SERVER_REQUEST_ID = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/
@@ -442,8 +424,8 @@ export function describeIdleMemory(plan: MemorySampling, samples: readonly (numb
  * 仍存在下面层里的文件；containerd 的镜像存储（Docker Desktop）里 `docker image ls` 把压缩的内容与解压之后的一起算，
  * 非本机平台的镜像没解压时只有压缩的部分，inspect 的 Size 是压缩之后的
  */
-export function imageSizeArgs(image: string): string[] {
-  return ['run', '--rm', '--network', 'none', '--user', '0', '--entrypoint', 'du', image, '-sxb', '/']
+export function imageSizeArgs(image: string, name: string, labels: readonly string[]): string[] {
+  return ['run', '--rm', '--name', name, ...labels.flatMap(label => ['--label', label]), '--network', 'none', '--user', '0', '--entrypoint', 'du', image, '-sxb', '/']
 }
 
 /** `du -sxb /` 的输出（"285717915\t/"）→ 字节数；读不出来时是 undefined */

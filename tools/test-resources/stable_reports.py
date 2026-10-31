@@ -5,6 +5,8 @@ resources. The caller owns those checks; an export only proves the selected
 report bytes were stable. Unknown host references do not grant deletion rights.
 """
 import hashlib
+from collections import ChainMap
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -687,10 +689,87 @@ def _verify_profiles(tree, expected, run_id):
             raise ValueError("raw or incomplete profile in stable export")
 
 
-def verify_snapshot(root, run_id, receipt=None):
+class _PublishedReportTree:
+    """Read the fixed two leaves across one owned publication move, without copying."""
+    tag = ""
+
+    def __init__(self, staging, published, identities):
+        if (not isinstance(identities, dict) or not identities or not set(identities) <= set(LEAVES)
+                or any(not isinstance(value, dict) or set(value) != {"device", "inode"}
+                       or any(type(number) is not int or number < 0 for number in value.values())
+                       for value in identities.values())
+                or _absolute(staging) == _absolute(published)):
+            raise ValueError("invalid fixed report publication identities")
+        self.stack = ExitStack()
+        try:
+            self.staging = self.stack.enter_context(_Tree(staging))
+            self.published = self.stack.enter_context(_Tree(published))
+            self.observed = ChainMap(self.staging.observed, self.published.observed)
+            self.locations = {}
+            for leaf in LEAVES:
+                source, target = self.staging.exists(leaf), self.published.exists(leaf)
+                if source and target:
+                    raise ValueError("report leaf exists in staging and publication: " + leaf)
+                if target and leaf not in identities:
+                    raise ValueError("report publication leaf lacks its move identity: " + leaf)
+                if leaf in identities and not (source or target):
+                    raise ValueError("registered report leaf is missing: " + leaf)
+                tree = self.published if target else self.staging
+                if source or target:
+                    info = tree.info(leaf)
+                    if not stat.S_ISDIR(info.st_mode):
+                        raise ValueError("report publication leaf is linked or not a directory")
+                    if leaf in identities and identities[leaf] != {"device": info.st_dev, "inode": info.st_ino}:
+                        raise ValueError("report publication leaf identity changed: " + leaf)
+                    tree.observe_directory(leaf)
+                self.locations[leaf] = tree
+        except BaseException:
+            self.stack.close()
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *unused):
+        self.stack.close()
+
+    def tree(self, path):
+        leaf = _parts(path)[0]
+        if leaf not in self.locations:
+            raise ValueError("path is outside fixed report leaves")
+        return self.locations[leaf]
+
+    def exists(self, path):
+        return self.tree(path).exists(path)
+
+    def info(self, path):
+        return self.tree(path).info(path)
+
+    def names(self, path, **kwargs):
+        return self.tree(path).names(path, **kwargs)
+
+    def observe_directory(self, path):
+        return self.tree(path).observe_directory(path)
+
+    def read(self, path, *args, **kwargs):
+        return self.tree(path).read(path, *args, **kwargs)
+
+    def json(self, path, limit=JSON_LIMIT):
+        return self.tree(path).json(path, limit)
+
+    def check(self):
+        self.staging.check()
+        self.published.check()
+
+
+def verify_snapshot(root, run_id, receipt=None, *, publication_root=None, publication_identities=None):
     """Verify the two report leaves only; a published root may also hold source."""
     _validate_run_id(run_id)
-    with _Tree(root) as tree:
+    if (publication_root is None) != (publication_identities is None):
+        raise ValueError("report publication requires both root and move identities")
+    view = (_Tree(root) if publication_root is None else
+            _PublishedReportTree(root, publication_root, publication_identities))
+    with view as tree:
         owner, owner_digest, owner_identity = tree.json(OWNER, MARKER_LIMIT)
         if type(owner.get("version")) is not int or owner["version"] != 1 \
                 or owner.get("kind") != "stable-report-snapshot" \

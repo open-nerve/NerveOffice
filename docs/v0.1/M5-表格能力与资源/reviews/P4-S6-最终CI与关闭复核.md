@@ -1,6 +1,36 @@
 # M5-P4 最终验收与关闭复核
 
-## 2026-10-30 当前断点：full18/container07 同源本地接受
+## 2026-10-31 当前断点：full19/container08 同源本地接受
+
+真实受测 F 为 `ea8129cbea23a43ee6b7e5c9f141a1dc846e57dc`，父 main/origin/main 基线为 `c4b564f5000ccb49de732bb2fe32e829b06686a9`；唯一 P4 分支/worktree 保持 `codex/m5-p4-history-gc`。容器归属 `8ee47b0d`、列表焦点 `4b11737a`、链接身份 `24360a95` 及整体接口补正 `ea8129cb` 均正常提交。整体 I1/I2 经真实反例、统一修复和一次限定差异复审接受，原非阻断 M1 构建/颜色输出观察保持。本节只接受本地双门禁，P4/DEF-061 未关闭，P5 未开始。
+
+以下 `s6/` 相对主目录 `.codex/handoffs/m5-p4-20261022/`；Q 为 `s6/hosted-vm-policy/final-ci-40947141649-investigation/`。r10 工具经 94 项合同、12 项 bridge、真实 exec 0/7 和全部 14 轮小型资源闭合后独审接受。真实运行前冻结为 `s6/hosted-vm-policy/tools-frozen-before-full19-r10.json`，SHA-256 `311c26b4230937f47e3f42e4a7c102f85fe0b79ce012f10e30554ed3fe975410`，含 53 输入及 23 工具；旧工具与失败原件不覆盖。
+
+| 本轮 | 实际原件与结果 |
+| --- | --- |
+| full19 | `s6/s6-gates/full19-20261031T124124775641Z`，2026-10-31 12:41:27–15:17:11 UTC。原 `pnpm verify --ci` 十阶段和桌面守护 exit 0；717 文件/17,200 单元与集成，E2E 2,424 首过及 16 原平台跳过，零 retry/flaky/global error/漏跑。原 JSON/HTML、完整清单及 timeout/expectedStatus/status/annotations 相符，11,616 条 checksums 独立复算。 |
+| 覆盖率/容量 | 原单次 coverage、五组原阈值通过；总行 93.88%、语句 93.8%、函数 94.54%、分支 90.3%。七万原例保持 17 条断言和 60 秒，161 个操作均有开始/完成，完整观测终尾 9,634 ms。原范围、worker、时限和预算不变。 |
+| 崩溃/OPFS | full19 的 59 份崩溃附件、168 轮、891 个归属终止进程，late 0；945 份 OPFS、840 文件/158,931 B，摘要与命名空间清理成立。历史预览、图片、链接零隐式外站请求和正文拒绝均由原 auditor 复算。 |
+| container08 | `s6/s6-gates/container08-20261031T151844259509Z`，2026-10-31 15:18:45–15:27:54 UTC。原 `pnpm test:e2e:container` 和桌面守护 exit 0，339 首过（328 常规、4 崩溃、7 重启），零 skip/retry/flaky/global error；4,692 条 checksums 复算，4 份崩溃附件/4 轮/16 个归属进程、late 0。 |
+| 生产部署 | 原 Linux arm64 native 图片矩阵、私有卷/GC、危险配置、主密钥拒绝和日志核对成立；18 次正文拒绝及后续上传恢复首过。8 份 cgroup 观测最大 775,733,248 B，原 4 GiB 上限，OOM/OOM-kill 均 0；不冒充 CI x64 已验。 |
+
+两轮 4,636 项源码、类型/模式/链接和 16 个实际安装 SDK 包一致，无 intergate 差异或代码/测试/基础设施例外。四份 `full19-source-{before,after}-r10.json`、`container08-source-{before,after}-r10.json` 均为真实开始前/结束后采集，没有事后补签起点。
+
+**实际清理：** full19 e2e `d51000b2-862f-4f9e-8472-bcb1beb6799c`、integration `09ba876f-3f06-40f3-9aaf-e657e8c70be2` 和 container08 `3a73e98e-41bf-416a-801f-4438ebd3ad4f` 均 passed/0、cleanup complete。scratch/短根/alias 实际不存在，owner/子进程组退出，完整 lsof 和锁可取；1,121 个 profile 清理，完整 profile 与便携诊断保留字节均为 0。必要原件已真实 pin，未复制完整 VM、数据库或浏览器环境。
+
+容器主 run 的 1,971 B 便携台账和 1,116 B 回执严格绑定同 UUID、repo/scratch、daemon、主 cleanup/marker/checksums；closed、producers=[]、cleanupFailures=[] 和四类终态空查询成立。root 与独审分别重新做 11 条本轮 namespace 查询，容器、网络、卷及镜像标签均为空。共享 Docker daemon 与 PostgreSQL 启动身份保持；未全局 prune、重启 Docker 或清共享缓存，旧约 345 MB 已删除文件句柄债不计本轮释放。
+
+两轮 WindowServer 均为 989，无守护触发。full19 守护首个采样至结束可用空间 101,850,992,640 → 101,753,491,456 B，净 −97,501,184 B，最低 85,981,511,680 B；container08 为 98,741,198,848 → 101,542,428,672 B，净 +2,801,229,824 B，最低 97,860,542,464 B。首个采样不是启动瞬间，APFS 整机变化不等于本轮独占释放量；时点见 Q 的两份 `*-root-resource-summary-r10.json`。
+
+**独立接受：** `Q/full19-container08-r10-independent-review.md`，SHA-256 `8a61eda2ead2d939a8ef747d9f0579fa52dc14f974cea31bf988df71e4032f80`；`Q/full19-container08-r10-independent-acceptance.json`，SHA-256 `693b3f009fb014d8f9d999909a8c5e6ee0cfdfab9ad59cfe1236dc5cd1589142`。C/I/M=0/0/0。独审只读执行原 auditor 的原模式逻辑，仅把末端输出改到受管报告，结果与原审计逐字节一致；没有产品重跑。记录器的 71 是保留的静态 Assert 节点数，不是动态断言次数，已明确命名限制且不覆写原件。审查自身 run 亦实际收尾。
+
+**保留观察：** 六个 WebKit 链接用例首过但约 1.7 分钟，HTML 将主要 87–91 秒定位到 `support/sheet.ts:188` 的 enterEditing 点击。五个在 full18 也有类似等待，工具栏子串用例从旧约 11.3 秒变为本轮 101.6 秒；原 240 秒 metadata 保持。`Q/full19-webkit-link-timing-observation.json` 留下对照，尚不能证明驱动、页面或浏览器底层原因，不把首过解释为没有交互延迟。原验收合同保持，随最终 CI 继续留证。
+
+**后续条件：** 只落档并独审精确的既有结果文档，正常中文提交后 `--no-ff` 合入 main；以真实 T/M 建立 r10 来源绑定，经正常 pre-push 推 main，再核同最终 SHA、attempt 1 的六项 CI/十份 artifact，独立接受、冻结及实际清理唯一 P4 worktree/分支后才关闭。托管 CI 原环境仍按方案 B 区分平台待销毁与实测删除，不预填 cleanupComplete。轻量 SDD 唯一材料已另存 Q 的 `r10-sdd-preservation01/`；移除 worktree 前仍须核后续新增材料。
+
+旧 main `c4b564f5` 的 CI `40994784729` 四项通过、容器/WebKit 各一项 flaky，保持未接受；更早超时、缺件与失败原件不覆盖。本机通过不证明旧 Linux 根因已解决。Excel/Safari/Finder、M4 DEF-073/UR-035、完整验收及标签仍挂账。下方各轮是生成时的历史快照，不替代当前输入。
+
+## 2026-10-30 历史本地验收：full18/container07
 
 受测提交为 `be62f490e5b1472e0478e7d7b5b874a6cfdd3436`，本轮合并前 main/origin/main 基线为 `988bb89cc805282d0b22c80d19838cbfce6ab27b`。测试专用观测和容量文件分组的 Task 1、整支代码独审均无遗留问题；正常提交钩子已通过。原七万规模、17 条断言、60 秒整例时限及 SQL/事务预算保持；分组落实重型测试串行，不作为旧 CI 底层原因的证明。
 
