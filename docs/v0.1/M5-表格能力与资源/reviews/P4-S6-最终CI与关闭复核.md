@@ -1,6 +1,20 @@
 # M5-P4 最终验收与关闭复核
 
-## 2026-10-31 当前断点：full19/container08 同源本地接受
+## 2026-11-01 当前断点：r10 已推送，CI 监督器失败后的局部补正
+
+结果文档正常提交 `e472b6d7` 后，已 `--no-ff` 合入并正常推送 main `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`，原 pre-push 门禁通过。真实 r10 来源证明位于 `s6/source-equivalence-r10-v3-3dc2cde057ce/receipt.json`，正常推送原件在 `s6/main-push-r10/`；受管 push v2 的实际闭合与接受另记于 Q 的 `r10-main-push-v2-root-acceptance01.json`，不回写原运行器快照。下文 `s6/` 仍相对主目录 `.codex/handoffs/m5-p4-20261022/`，Q 为 `s6/hosted-vm-policy/final-ci-40947141649-investigation/`。
+
+同 SHA、attempt 1 的 CI `41220859473` 已结束：verify、容器、Chromium、Chrome、Edge 成功，WebKit 失败。可用产品 JSON 记录容器 339、Chromium 814、Chrome 807、Edge 807 首过；三个浏览器各四个原跳过，无额外尝试或全局错误。WebKit 在 307 条不同通过日志后出现 `parse-process / UNKNOWN / pid=108758`；缺完整产品报告，后续 `quiescent=true` 仅代表恢复收尾。旧 reader 在归属判断前解析所有同 UID 进程，原字段未保存，故此 PID 的归属与确切根因均未知。**整轮 CI 未接受，P4/DEF-061 未关闭，P5 未开始。**
+
+六份日志和全部九份可用 artifact 共 36,685,816 B 已收集、逐份验 hash；缺件为 `e2e-reports-webkit-41220859473`。原十份报告要求不变，失败补件不等于验收。补件、摘要和原始诊断在 `Q/r10-webkit-ci-failure01/`；可用报告汇总 `available-report-summary01.json` 的 SHA-256 为 `b16bd0d519f7da76a5745a6c7c3144504a47bc00c3d4641952f8cd231b09154d`。托管成功项仍是 `host-disposal-pending / cleanupComplete=false`，不称为本机实测删除。
+
+官方 Linux 源码另证明完整退出哨兵 `ppid=0,pgrp=-1,session=-1,num_threads=0` 是合法路径，旧正组解析器存在独立兼容缺口。两次本机受限 Linux 观察均未捕获真实负 PGID，不把这一缺口认定为旧 CI 的已证实根因。现有 P4 worktree 已完成[进程身份观察补正](P4-S6-Linux进程身份观察复核.md)：只有精确完整哨兵才有界重新观察，持续未知仍阻断；新增失败诊断按同一 schema 落盘和快照。产品、SDK、工作流、原断言、重试与预算不变。
+
+局部验证为 63 项单元、17 项真实隔离 Linux 契约及类型/lint 通过。Linux 单轮 8.217 秒、无跳过/失败，原 12 项断言保留；其资源 run `ebb1bf72-da5a-4c91-a9eb-be6af505c191` 经 root 独立核对文件、进程、锁、全量 lsof、短路径和 11 项 Docker 空查询实际闭合，共享 PostgreSQL 未变。最终原件 `Q/proc-stat-linux-contracts01-root-result.json`，SHA-256 `7670ecd9ded16aa4a3d15bdad9c5a0e6f24dc3ca2f1b6c4af97453c8359d9882`。这里仍不替代新源码的完整门禁或 GitHub Ubuntu CI。
+
+接下来正常提交并独立代码审查；通过后，以实际新 F 完成原完整双门禁、独审和正常合并推送、同 SHA 六项 CI 与真实冻结清理。不得改旧 r10 工具/接受回执，或以未来绿色结果倒推旧失败原因。下方各节继续作为生成时的历史证明保留。
+
+## 2026-10-31 历史本地验收：full19/container08 同源接受
 
 真实受测 F 为 `ea8129cbea23a43ee6b7e5c9f141a1dc846e57dc`，父 main/origin/main 基线为 `c4b564f5000ccb49de732bb2fe32e829b06686a9`；唯一 P4 分支/worktree 保持 `codex/m5-p4-history-gc`。容器归属 `8ee47b0d`、列表焦点 `4b11737a`、链接身份 `24360a95` 及整体接口补正 `ea8129cb` 均正常提交。整体 I1/I2 经真实反例、统一修复和一次限定差异复审接受，原非阻断 M1 构建/颜色输出观察保持。本节只接受本地双门禁，P4/DEF-061 未关闭，P5 未开始。
 

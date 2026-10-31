@@ -1,5 +1,7 @@
+import type { StatObservation } from './e2e-diagnostics.ts'
+import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
-import { inspectProcessOperation, processDiagnostic, processFailureSchema } from './e2e-diagnostics.ts'
+import { failureStageSchema, inspectProcessOperation, processDiagnostic, processFailureSchema, statInspectionFailure } from './e2e-diagnostics.ts'
 
 describe('CI 进程检查诊断不吞掉故障，也不记录第三方正文', () => {
   it('正常结果原样返回', () => {
@@ -51,5 +53,43 @@ describe('CI 进程检查诊断不吞掉故障，也不记录第三方正文', (
     }
     catch (error) { caught = error }
     expect(processDiagnostic(caught)).toEqual({ operation: 'stat-process', pid: 17, code: 'EIO' })
+  })
+
+  it('受控 stat 诊断跨包装与固定阶段槽保留，字段白名单与大小限制同时有效', () => {
+    const observation: StatObservation = {
+      bytes: 4097,
+      overflow: true,
+      sha256: 'a'.repeat(64),
+      fields: 50,
+      structure: true,
+      pid: 421,
+      uid: 501,
+      pidMatches: true,
+      state: 'R',
+      parent: 0,
+      group: -1,
+      session: -1,
+      threads: 0,
+      start: '18446744073709551615',
+    }
+    const source = statInspectionFailure('exit-unresolved', [observation, observation, observation], 421)
+    let caught: unknown
+    try {
+      inspectProcessOperation('list-processes', () => {
+        throw source
+      })
+    }
+    catch (error) { caught = error }
+    const diagnostic = processDiagnostic(caught)
+    expect(diagnostic.stat?.observations).toEqual([observation, observation, observation])
+    const saved = failureStageSchema.options.map(stage => processFailureSchema.parse({ ...diagnostic, at: 1, stage, comm: 'synthetic-secret' }))
+    expect(saved.every(value => value.stat?.reason === 'exit-unresolved')).toBe(true)
+    expect(saved.every(value => Buffer.byteLength(JSON.stringify(value)) <= 2048)).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(saved))).toBeLessThan(16 * 1024)
+    expect(JSON.stringify(saved)).not.toContain('synthetic-secret')
+    expect(processFailureSchema.safeParse({ ...saved[0], stat: { reason: 'exit-unresolved', observations: [observation, observation, observation, observation] } }).success).toBe(false)
+    expect(processFailureSchema.safeParse({ ...saved[0], stat: { reason: 'external-secret', observations: [] } }).success).toBe(false)
+    expect(processFailureSchema.safeParse({ ...saved[0], stat: { reason: 'exit-unresolved', observations: [{ ...observation, state: 'private-name' }] } }).success).toBe(false)
+    expect(processFailureSchema.safeParse({ ...saved[0], stat: { reason: 'exit-unresolved', observations: [{ ...observation, sha256: 'private-name' }] } }).success).toBe(false)
   })
 })
