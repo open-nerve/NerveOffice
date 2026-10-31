@@ -1,12 +1,13 @@
 // 编排脚本的进程控制（Codex 评审 CX12、CX13）：信号的转发规则用假的子进程与时钟测，长命令的执行用真实的子进程测
 // （各在自己的进程组里、信号发给谁、主进程退出之后等整个进程组）。
 import type { TrackedChild } from './container-e2e-process.ts'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { pidReadyScript, readReadyPid } from '../shared/process-ready.test-support.ts'
 import { createInterruption, ESCALATE_AFTER_MS, runCleanup, runTracked, signalGroup, waitForProcessGroup } from './container-e2e-process.ts'
 
 function fakeChild(pid = 4242): TrackedChild & { signals: string[] } {
@@ -16,6 +17,36 @@ function fakeChild(pid = 4242): TrackedChild & { signals: string[] } {
     return true
   } }
 }
+
+describe('进程组信号的 PID 边界', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each([0, -0, 1, -1, -42, 2.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2147483648, 4294967298, Number.MAX_SAFE_INTEGER])('非法 PID %s 在任何系统调用前明确拒绝', (pid) => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+    expect(() => signalGroup(pid, 'SIGKILL')).toThrow(RangeError)
+    expect(kill).not.toHaveBeenCalled()
+  })
+
+  it.each([2, 4242, 2147483647])('合法 PID %s 保留零信号探测和组信号', (pid) => {
+    const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+    expect(signalGroup(pid, 0)).toBe(true)
+    expect(kill).toHaveBeenLastCalledWith(-pid, 0)
+    expect(signalGroup(pid, 'SIGINT')).toBe(true)
+    expect(kill).toHaveBeenLastCalledWith(-pid, 'SIGINT')
+  })
+
+  it.each([
+    { code: 'ESRCH', present: false },
+    { code: 'EPERM', present: true },
+    { code: 'EIO', present: true },
+    { code: undefined, present: true },
+  ])('只有 ESRCH 表示消失：$code', ({ code, present }) => {
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('signal failed'), { code })
+    })
+    expect(signalGroup(4242, 0)).toBe(present)
+  })
+})
 
 describe('收到终止信号时转给正在运行的长命令（Codex 评审 CX12）', () => {
   function setup() {
@@ -138,7 +169,7 @@ describe('长命令异步执行、在自己的进程组里（真实的子进程�
   function leaderWithGrandchild(exitCode: number, ready: string, grandchildGotSigint: string): [string, string[]] {
     const grandchild = [
       `process.on('SIGINT', () => { require('node:fs').writeFileSync(${JSON.stringify(grandchildGotSigint)}, ''); process.exit(0) })`,
-      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid))`,
+      pidReadyScript(ready),
       'setInterval(() => {}, 1000)',
     ].join('\n')
     return node([
@@ -164,7 +195,7 @@ describe('长命令异步执行、在自己的进程组里（真实的子进程�
     const [command, args] = leaderWithGrandchild(130, ready, grandchildGotSigint)
     const running = runTracked(interruption, command, args, { cwd: tmpdir(), capture: true, groupExitTimeoutMs: 5_000 })
     await waitFor(ready)
-    const grandchild = Number(readFileSync(ready, 'utf8'))
+    const grandchild = readReadyPid(ready)
     pids.push(grandchild)
     interruption.receive()
     const result = await running
@@ -180,7 +211,7 @@ describe('长命令异步执行、在自己的进程组里（真实的子进程�
     const [command, args] = leaderWithGrandchild(5, ready, grandchildGotSigint)
     const running = runTracked(interruption, command, args, { cwd: tmpdir(), capture: true, signalTarget: 'leader', groupExitTimeoutMs: 300 })
     await waitFor(ready)
-    const grandchild = Number(readFileSync(ready, 'utf8'))
+    const grandchild = readReadyPid(ready)
     pids.push(grandchild)
     interruption.receive()
     expect((await running).status).toBe(5)
@@ -191,10 +222,10 @@ describe('长命令异步执行、在自己的进程组里（真实的子进程�
   it('只收到一次中断也有界等待不理会 SIGINT 的生产者，确认组消失后返回', async () => {
     const ready = marker('single-interruption')
     const interruption = createInterruption()
-    const [command, args] = node(`process.on('SIGINT', () => {});require('node:fs').writeFileSync(${JSON.stringify(ready)}, String(process.pid));setInterval(() => {}, 1000)`)
+    const [command, args] = node(`process.on('SIGINT', () => {});${pidReadyScript(ready)};setInterval(() => {}, 1000)`)
     const running = runTracked(interruption, command, args, { cwd: tmpdir(), capture: true, groupExitTimeoutMs: 200 })
     await waitFor(ready)
-    const pid = Number(readFileSync(ready, 'utf8'))
+    const pid = readReadyPid(ready)
     pids.push(pid)
     interruption.receive()
     const result = await running

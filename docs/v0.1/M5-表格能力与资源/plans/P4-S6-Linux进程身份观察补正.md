@@ -53,6 +53,6 @@
 
 ## 实际执行状态（2026-11-01）
 
-Task 1 的实现、自审和局部验证已完成，等待 root 正常提交与独立代码审查；勾选 Step 6 表示已交复核材料，不表示独立审查已通过或 Phase 已关闭。原 reader 行为 RED 8 项预期失败；最终四个 CI 单元文件 63/63、tools 类型与局部 lint 通过，真实隔离 Linux 原 12 项及新增 5 项共 17/17 通过（8.217 秒、0 skip/fail/cancel、stderr 0）。未知 I/O 不发信号/不签归档、PID 复用保护及诊断实际落盘/快照均已验证。
+Task 1 已正常提交 `8efd1a7b`，独立任务及整体代码审查均通过（C/I/M=0/0/0）；Step 6 的源码复核已完成，不表示 Phase 已关闭。原 reader 行为 RED 8 项预期失败；最终四个 CI 单元文件 63/63、tools 类型与局部 lint 通过，真实隔离 Linux 原 12 项及新增 5 项共 17/17 通过（8.217 秒、0 skip/fail/cancel、stderr 0）。未知 I/O 不发信号/不签归档、PID 复用保护及诊断实际落盘/快照均已验证。后续 full20 在 lint 阶段失败，full21 的 coverage 主进程收到 SIGKILL，两轮均未接受为完整验收；新实际输入的原完整本机双门禁与最终同 SHA CI 仍待验证，状态和原件索引见[最终验收记录](../reviews/P4-S6-最终CI与关闭复核.md)。
 
 所有检查串行，本机临时环境已实际清理；Linux 父 run `ebb1bf72-da5a-4c91-a9eb-be6af505c191` 的文件、进程、锁及 11 项 Docker 查询由 root 独立复核。实现与验证详情见[实现复核](../reviews/P4-S6-Linux进程身份观察复核.md)。旧 CI 根因仍未知、WebKit 报告仍缺；当前结果不替代新实际输入的完整门禁及最终同 SHA CI，P4/DEF-061 与 P5 状态不变。

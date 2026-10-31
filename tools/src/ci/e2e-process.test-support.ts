@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import process from 'node:process'
 import { afterEach, mock, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
+import { pidReadyScript, readReadyPid } from '../shared/process-ready.test-support.ts'
 import { failureStageSchema, inspectProcessOperation, processDiagnostic } from './e2e-diagnostics.ts'
 import { OWNER_VARIABLE, parseProcessStat, prepareRun, readProcess, recordProcessFailure, runOwnedCommand, settleRun, snapshotDiagnostics } from './e2e-process.ts'
 
@@ -63,7 +64,7 @@ function json(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8')) as unknown
 }
 function pid(path: string): number {
-  const value = Number(readFileSync(path, 'utf8'))
+  const value = readReadyPid(path)
   extraPids.push(value)
   return value
 }
@@ -129,7 +130,7 @@ void test('主进程先退出：另起进程组的写入者仍必须退出，不
   const { root, directory } = fixture(2000, 350)
   const marker = join(root, 'writer.pid')
   const writes = join(root, 'writes')
-  const writer = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>fs.appendFileSync(${JSON.stringify(writes)},'x'),20)`
+  const writer = `const fs=require('node:fs');${pidReadyScript(marker)};setInterval(()=>fs.appendFileSync(${JSON.stringify(writes)},'x'),20)`
   const started = start(root, directory, `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(writer)}],{detached:true,stdio:'ignore'});c.unref();`)
   await until(() => existsSync(marker))
   const writerPid = pid(marker)
@@ -144,7 +145,7 @@ void test('主进程先退出：另起进程组的写入者仍必须退出，不
 void test('计算子进程清空环境后仍属于本轮；原父进程退出与重新挂到 init 不丢失所有权', { timeout: 10_000 }, async () => {
   const { root, directory } = fixture(2000, 400)
   const marker = join(root, 'unmarked.pid')
-  const writer = `require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`
+  const writer = `${pidReadyScript(marker)};setInterval(()=>{},1000)`
   const api = `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(writer)}],{env:{},stdio:'ignore'});c.unref();setTimeout(()=>process.exit(0),300);`
   const started = start(root, directory, `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(api)}],{detached:true,stdio:'ignore'});c.unref();setTimeout(()=>process.exit(0),400);`)
   await until(() => existsSync(marker))
@@ -157,7 +158,7 @@ void test('计算子进程清空环境后仍属于本轮；原父进程退出与
 void test('忽略软停止会在独立清理预算后强制结束；不会无限等待 leader', { timeout: 10_000 }, async () => {
   const { root, directory } = fixture(300, 400)
   const marker = join(root, 'stubborn.pid')
-  const started = start(root, directory, `process.on('SIGINT',()=>{});require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`)
+  const started = start(root, directory, `process.on('SIGINT',()=>{});${pidReadyScript(marker)};setInterval(()=>{},1000)`)
   await until(() => existsSync(marker))
   const writerPid = pid(marker)
   assert.equal(await started.exit, 1)
@@ -169,7 +170,7 @@ void test('外层强杀监督器后，独立收尾入口按原身份软停止且
   const { root, directory } = fixture(5000, 1000)
   const marker = join(root, 'ready')
   const report = join(root, 'report')
-  const started = start(root, directory, `const fs=require('node:fs');process.on('SIGINT',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(report)},'closed');process.exit(0)},200));fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`)
+  const started = start(root, directory, `const fs=require('node:fs');process.on('SIGINT',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(report)},'closed');process.exit(0)},200));${pidReadyScript(marker)};setInterval(()=>{},1000)`)
   await until(() => existsSync(marker))
   const writerPid = pid(marker)
   started.child.kill('SIGKILL')
@@ -212,7 +213,7 @@ for (const [name, environment] of [
     const marker = join(root, 'fast.pid')
     const worker = join(root, 'worker.cjs')
     const api = join(root, 'api.cjs')
-    writeFileSync(worker, `require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`)
+    writeFileSync(worker, `${pidReadyScript(marker)};setInterval(()=>{},1000)`)
     writeFileSync(api, `const c=require('node:child_process').fork(${JSON.stringify(worker)},[],{env:${JSON.stringify(environment)},stdio:'ignore'});c.unref();process.exit(0);`)
     const started = start(root, directory, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},'');setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){const c=require('node:child_process').spawn(process.execPath,['--import',${JSON.stringify(ownerPreload)},${JSON.stringify(api)}],{detached:true,stdio:'ignore'});c.unref();process.exit(0)}},10)`)
     await until(() => existsSync(ready))
@@ -339,7 +340,7 @@ void test('signal 再读身份未知时不发送 SIGINT，也不签归档许可'
   const { root, directory } = fixture(5000, 600)
   const marker = join(root, 'ready')
   const signals = join(root, 'signals')
-  const started = start(root, directory, `const fs=require('node:fs');process.on('SIGINT',()=>fs.writeFileSync(${JSON.stringify(signals)},'I'));fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`)
+  const started = start(root, directory, `const fs=require('node:fs');process.on('SIGINT',()=>fs.writeFileSync(${JSON.stringify(signals)},'I'));${pidReadyScript(marker)};setInterval(()=>{},1000)`)
   await until(() => existsSync(marker))
   const leader = pid(marker)
   started.child.kill('SIGKILL')

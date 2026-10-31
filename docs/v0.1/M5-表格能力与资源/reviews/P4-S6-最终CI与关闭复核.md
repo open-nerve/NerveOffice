@@ -1,6 +1,18 @@
 # M5-P4 最终验收与关闭复核
 
-## 2026-11-01 当前断点：r10 已推送，CI 监督器失败后的局部补正
+## 2026-11-01 当前断点：full21 终止与 PID 就绪协议补正
+
+主目录 main/origin/main 保持 `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`，唯一 P4 worktree 的 Linux 进程身份观察补正已正常提交 `8efd1a7b70f22257e2a8d2049106522a19614f3b`，局部 63 项单元、17 项真实 Linux 契约及独审通过。以下 Q 为主目录 `.codex/handoffs/m5-p4-20261022/s6/hosted-vm-policy/final-ci-40947141649-investigation/`，旧原件保持。
+
+该输入的 full20 在 lint 阶段因 SDD 辅助 JSON 误入扫描树而失败；原件按索引迁入 Q，W 扫描树不再含该目录，没有更改 lint 规则。新 full21 原范围门禁中 lint、类型、静态通过，coverage 主进程在 112.8 秒收到 SIGKILL（产品退出 137，外层退出 1），无断言汇总，后续构建/E2E/audit 未执行。运行器没有请求中断，系统日志未给出信号发送者；事后内存样本不能证明失败前没有峰值。源码 4,641 项及 16 SDK 未变，文件资源已实际闭合。该轮保持失败，不生成成功 after-capture，不据其推进合并。
+
+调查独立证明两类 PID 就绪夹具存在同型缺口：直接创建 marker 再写入，消费者仅等文件存在后执行 `Number`，空内容成为 0；组清理和直接进程清理都可能误伤调用组。受管独占组以原函数消费空 marker，实得 137/-9 并实际清理，证明机制可触发，但不能证明 full21 当次读到了 0。另一次有界 coverage 诊断发现 pnpm 子进程另起组，root 及时停止，实际两个组和九个已确认隔离测试库均清除；它未复现原 SIGKILL。原观察器 v4 候选保持暂停。
+
+原 P4 分支已修正原子发布、严格规范十进制读取和 `signalGroup` 参数边界，数字只接受整数 2–2147483647；合法 signal=0 和 ESRCH/未知语义保持。容器三处与 Linux 六处 PID 读写成对更新，直接清理只接收已验证值，布尔空 marker 不变。无应用、SDK、工作流、原断言、范围、worker/retry 或预算变更。行为 RED 为 37 个原缺口断言失败；实现过程的 ASI/格式失败另行保留，最终 7 文件/141 项、类型/lint、原 17 项隔离 Linux 契约通过。Linux 8.114 秒、stderr 空；九轮本机检查和本轮 Docker 资源均经 root 实际闭合核验，共享 PostgreSQL 未变。细节与摘要链见[就绪与信号复核](P4-S6-进程就绪标记与信号边界复核.md)；原始调查、失败与清理在 `Q/r12-full21-sigkill01/`，本次实现/验证在 `Q/pid-marker-repair01/` 及 `Q/pid-ready-*`。
+
+任务与整体审查已通过（唯一进度文档问题已修正并限定复审），正常中文提交后，以新实际 F 绑定原完整本机双门禁，再正常 `--no-ff` 合并推送、核同最终 SHA 六项 CI/十份报告和真实冻结清理。旧 r12、失败 full21、暂停观察器及旧通过均不能代替新输入验收。full21 与旧 CI 历史原因继续未知，P4/DEF-061 未关闭，P5 未开始。
+
+## 2026-11-01 历史断点：r10 已推送，CI 监督器失败后的局部补正
 
 结果文档正常提交 `e472b6d7` 后，已 `--no-ff` 合入并正常推送 main `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`，原 pre-push 门禁通过。真实 r10 来源证明位于 `s6/source-equivalence-r10-v3-3dc2cde057ce/receipt.json`，正常推送原件在 `s6/main-push-r10/`；受管 push v2 的实际闭合与接受另记于 Q 的 `r10-main-push-v2-root-acceptance01.json`，不回写原运行器快照。下文 `s6/` 仍相对主目录 `.codex/handoffs/m5-p4-20261022/`，Q 为 `s6/hosted-vm-policy/final-ci-40947141649-investigation/`。
 
