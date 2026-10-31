@@ -1,6 +1,18 @@
 # M5-P4 最终验收与关闭复核
 
-## 2026-11-01 当前断点：full21 终止与 PID 就绪协议补正
+## 2026-11-01 当前断点：full22 独立 CLI 夹具依赖补正
+
+主目录 main/origin/main 仍为 `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`。PID 就绪/信号边界修复已正常提交 `15fcbb5c79ec63b4fbf6ff272315f0b432f062d0`；r13 工具的 97 项合同、16 项 bridge、真实 exec 0/7 与独审通过后，运行该 F 的原完整 full22。lint、类型、静态通过，coverage 以 **719 文件/17,299 项通过，1 文件/2 项失败**结束，退出 1，本轮没有 SIGKILL 或守护停止请求；后续构建、E2E、audit 未运行，container09 未启动。4,648 源码、16 SDK 和 301 冻结输入不变，4,662 项原件校验通过。资源运行器及 root 复核均证明 scratch/短根/别名、owner/进程组、完整 lsof 和锁实际闭合，共享 PostgreSQL 未变。
+
+两项失败都在 `container-e2e-resources.test.ts` 的真实 CLI build/env 故障场景：夹具手工复制 deploy 模块，但 shared 清单仍只有 `repo.ts`，漏掉新引入的 `process-id.ts`。新增等价存在性断言后，真实 RED 的两份 stderr 明确为 `ERR_MODULE_NOT_FOUND`，CLI 在调用 fake Docker 前退出 1，原读 calls.jsonl 的 ENOENT 是后果。本次仅在夹具 shared 清单补齐真实模块，并保留能显示 stdout/stderr 的诊断断言；全部旧断言、15 秒时限、生产信号保护、UUID/其他任务保护与清理行为保持。
+
+本机小回归原件为 Q 下 `cli-fixture-red01`（20 通过/2 预期失败）、`cli-fixture-green01`（2 文件/54 项通过）、`cli-fixture-type01` 和 `cli-fixture-lint01`（均 0）；四轮串行、运行中源码未变且资源实际清理。实施差异只有一个测试文件 3 增/1 删，同型扫描未发现第二处手工复制该 CLI 的缺失依赖。root 另行核对四轮完整原件与实际闭合。README 的 coverage parse 告警也存在于已通过的 full19，本次未改覆盖率范围。
+
+原始失败与调查在 `Q/r13-full22-cli-fixture01/`：`root-result01.json` SHA `60f7462e316a988276ef0eea2a2f0305df1e0ae89edc55f2ce957a750c275639`；实现 manifest SHA `27c7cb163ec7e0d10f168b5228d8977d45b31d00cb26d1d041b61860febf3ccd`；root 小检查复核 `root-small-checks01.json` SHA `1e464ff4b1a4f5f6008cb0aa0c640832b4a4826892dfb79b9b46fc4b6d47b4da`。Q 为主目录 `.codex/handoffs/m5-p4-20261022/s6/hosted-vm-policy/final-ci-40947141649-investigation/`。
+
+后续按原独立复审、正常中文提交、新实际 F 的完整双门禁、正常 `--no-ff` 合并推送及同最终 SHA CI 流程推进。full22 保留 failed/1，不生成成功 after-capture；其小修复通过不能预签整轮门禁。旧 full21 SIGKILL 与 CI UNKNOWN 的确切原因仍未知。P4/DEF-061 未关闭，P5 未开始。
+
+## 2026-11-01 前序记录：full21 终止与 PID 就绪协议补正
 
 主目录 main/origin/main 保持 `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`，唯一 P4 worktree 的 Linux 进程身份观察补正已正常提交 `8efd1a7b70f22257e2a8d2049106522a19614f3b`，局部 63 项单元、17 项真实 Linux 契约及独审通过。以下 Q 为主目录 `.codex/handoffs/m5-p4-20261022/s6/hosted-vm-policy/final-ci-40947141649-investigation/`，旧原件保持。
 
