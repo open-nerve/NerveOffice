@@ -167,6 +167,8 @@ M5-P4 S6 的受控真实 manager 回归进一步证明：同格正文更新及�
 
 `link-popup-cache-replay.test.ts` 只在真实 DocEventManager 的私有发布口受控投递真实正文对象，其他部分使用实际 controller/service、Doc/Workbook/Undo/Redo；不作为产品内部 API 导出。`link-popup-lifecycle.test.ts` 接真实 DocumentDataModel 并覆盖两端 body/segment/ID/语义换代及 canDispose=false。阶段 A/B 最终两文件 97 项、既有链接共六文件 139 项对应输入通过，web 类型/pins/lint 通过；当前 SDK 重建后的原 WebKit 三故事均首过，实际资源收尾；独立规格与质量审查通过，C/I/M 为 0/0/1，既有输出提示单列维护。移除此身份段补丁须上游同时保证当前 body 身份、有效首次重放/等价克隆和旧菜单退役，并通过本组反例、原正式浏览器故事及权限/未提交正文保护；旧 URL normalizer、焦点和 owner 各段删除条件仍各自成立。详见[本次复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-链接缓存身份复核.md)。
 
+2026-10-31 整体复核补充：真实 DocEventManager 在同 ID/start 的 URL/end/有效 tooltip 换代时截断新 hover，导致消费者拒绝旧值后无法恢复；受控真实链四类反例成立，不作为原 Linux CI 时序证明。docs-ui 1.0.1 累计 ES/CJS 现在在发布时取得语义 key，保留原 ID/segment/page/start 并比较范围类型及链接 end/URL/有效 tooltip；等价事件仍去重，原地更新不因旧对象引用变动而漏报。直接指针订阅仅在空→非空时记住原 cursor，连续命中后离开仍正确恢复。没有 dirty 清空、额外订阅/等待、公开 API 或声明变化；241 份声明及原 native-focus 补丁保持，摘要继续登记在 `patches/univer-native-focus.json`。新旧链接与原生焦点七文件 157 项通过，最终机制文件 17 项及静态检查通过；新 SDK 的原正式浏览器/完整门禁及独审仍由 root 接续，不借用旧输入通过。移除此生产者补丁须同 ID 真实链、等价去重、首次重放、cursor 和现有身份/未提交正文保护共同通过，详见[整体审查补正复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-整体审查接口补正复核.md)。
+
 外部导航只在明确点击时执行 `window.open(href, '_blank', 'noopener,noreferrer')`，回调再次检查地址，不接收内部锚点。配置、输入、保存和重开均不得引起外站预取。SDK 升级若提供相同的公开实例级规范化接点，先通过 resolver 默认行为、真实表单、富文本、只读、历史和导航回归，再删除补丁及登记；不能仅因版本变化移除。
 
 ## M5-P3 S3 的补充：数据验证异步工作的归属

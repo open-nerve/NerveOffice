@@ -98,8 +98,10 @@ function fixture(mobile = false) {
   )
   dispose.push(() => manager.dispose())
   let lastHover: Hover[] = []
+  const hoverEmissions: Hover[][] = []
   const hoverObserver = manager.hoverCustomRanges$.subscribe((value) => {
     lastHover = value
+    hoverEmissions.push(value)
   })
   dispose.push(() => hoverObserver.unsubscribe())
 
@@ -185,6 +187,9 @@ function fixture(mobile = false) {
     else publisher._hoverCustomRanges$.next(payload)
     return range
   }
+  const publishHover = (ranges: Hover[]) => {
+    (manager as unknown as { _hoverCustomRanges$: Subject<Hover[]> })._hoverCustomRanges$.next(ranges)
+  }
   const syncDocFromCell = () => {
     const current = cell()
     expect(current?.body?.customRanges).toHaveLength(1)
@@ -228,6 +233,8 @@ function fixture(mobile = false) {
     manager,
     scene,
     lastHover: () => lastHover,
+    hoverEmissions,
+    publishHover,
     enter: () => visible$.next({ visible: true }),
     leave: () => visible$.next({ visible: false }),
     publishCurrentRange,
@@ -325,6 +332,84 @@ describe('真实 Docs 事件缓存与同格正文换代（受控回归）', () =
 })
 
 describe('真实 manager 发布后的正文身份', () => {
+  const semanticChanges: [string, (range: ICustomRange) => void][] = [
+    ['URL', (range) => { range.properties = { ...range.properties, url: 'https://example.invalid/current' } }],
+    ['endIndex', (range) => { range.endIndex -= 1 }],
+    ['tooltip', (range) => { range.properties = { ...range.properties, tooltip: 'current tooltip' } }],
+    ['XLSX tooltip', (range) => { range.properties = { ...range.properties, _xlsxHyperlinkTooltip: 'current tooltip' } }],
+  ]
+
+  it.each(semanticChanges)('同 ID/start 的 %s 更新在真实 manager 中拒绝旧值后，无重置即可交付新值', (_name, change) => {
+    const f = fixture()
+    f.enter()
+    const previous = f.publishCurrentRange()
+    vi.advanceTimersByTime(100)
+    const next = structuredClone(f.doc.getSnapshot())
+    change(next.body!.customRanges![0]!)
+    f.doc.reset(next)
+    const current = f.doc.getBody()!.customRanges![0]!
+    expect(current.rangeId).toBe(previous.rangeId)
+    expect(current.startIndex).toBe(previous.startIndex)
+    const body = structuredClone(f.doc.getBody())
+    f.executed.length = 0
+    vi.advanceTimersByTime(101)
+    expect(f.popups.currentPopup).toBeNull()
+    f.publishCurrentRange()
+    vi.advanceTimersByTime(201)
+    expect(f.popups.currentPopup).toMatchObject({ ...owner, type: 'editing', customRange: current })
+    expect(f.popups.currentPopup?.customRange).toBe(current)
+    expect(f.doc.getBody()).toEqual(body)
+    expect(f.executed).toEqual([])
+  })
+
+  it.each(semanticChanges)('真实范围对象原地修改 %s 后仍产生新的语义事件', (_name, change) => {
+    const f = fixture()
+    const range = f.publishCurrentRange()
+    const before = f.hoverEmissions.length
+    change(range)
+    f.publishCurrentRange(range)
+    expect(f.hoverEmissions).toHaveLength(before + 1)
+    expect(f.lastHover()[0]?.range).toBe(range)
+  })
+
+  it('语义相同的克隆和 tooltip 等效来源保持去重，空值仍能发布', () => {
+    const f = fixture()
+    const range = f.doc.getBody()!.customRanges![0]!
+    range.properties = { ...range.properties, tooltip: 'tip', _xlsxHyperlinkTooltip: 'unused' }
+    f.publishCurrentRange(range)
+    const before = f.hoverEmissions.length
+    f.publishCurrentRange(structuredClone(range))
+    const equivalent = structuredClone(range)
+    equivalent.properties = { ...equivalent.properties, tooltip: undefined, _xlsxHyperlinkTooltip: 'tip' }
+    f.publishCurrentRange(equivalent)
+    expect(f.hoverEmissions).toHaveLength(before)
+    f.publishHover([])
+    expect(f.hoverEmissions).toHaveLength(before + 1)
+    expect(f.lastHover()).toEqual([])
+  })
+
+  it('链接变成非链接时通知当前订阅，普通非链接的附加属性不扩大去重语义', () => {
+    const f = fixture()
+    const link = f.publishCurrentRange()
+    const before = f.hoverEmissions.length
+    const nonLink = { ...structuredClone(link), rangeType: CustomRangeType.COMMENT }
+    f.publishCurrentRange(nonLink)
+    expect(f.hoverEmissions).toHaveLength(before + 1)
+    f.publishCurrentRange({ ...nonLink, properties: { url: 'irrelevant' } })
+    expect(f.hoverEmissions).toHaveLength(before + 1)
+  })
+
+  it('连续命中不同范围后离开仍恢复最初 cursor', () => {
+    const f = fixture()
+    const originalCursor = f.scene.getCursor()
+    const range = f.publishCurrentRange()
+    expect(f.scene.getCursor()).toBe('pointer')
+    f.publishCurrentRange({ ...range, rangeId: 'another-range' })
+    expect(f.scene.getCursor()).toBe('pointer')
+    f.publishHover([])
+    expect(f.scene.getCursor()).toBe(originalCursor)
+  })
+
   it('桌面悬停发布 100 ms 后正文替换，200 ms 消费边界拒绝旧值并接受新悬停', () => {
     const f = fixture()
     f.enter()

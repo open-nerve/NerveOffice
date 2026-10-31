@@ -267,7 +267,11 @@ def recover_ci(store, state):
                     run.assert_exportable()
                     run.verify_export()
                 return 0
-            if run.data.get("containerResources") == container_resources.MARKER:
+            completed_hosted = (run.data.get('hostedScope') is not None
+                                and run.data.get('cleanupStage') == 'host-disposal-pending')
+            # A completed export only needs publication. Re-finishing would replace its
+            # product result and try to generate an already sealed snapshot again.
+            if run.data.get("containerResources") == container_resources.MARKER and not completed_hosted:
                 run.finish("interrupted", release=False)
                 if run.data.get("status") == "cleanup-pending":
                     if not run.data.get("containerDiagnosticOnly"):

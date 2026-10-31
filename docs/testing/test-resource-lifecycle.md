@@ -133,7 +133,9 @@ Run 在 scratch 创建前落盘 `hostedScope`，并登记四个固定根、实�
 
 绝对路径的别名解析也遵循此边界：原文和去附注路径分别核对，已知词法命中及可解析前缀指向本轮目录时仍拒绝导出；一条外部路径无法解析不能跳过其他候选或后续记录。仅托管导出把文件系统解析异常记为语义未知，默认严格查询仍拒绝；根自身及归属验证不属于此例外。异常样本与既有记录共用最多16项的摘要预算，只输出异常类型、errno和脱敏的记录身份、字节数、SHA-256，不输出外部私有路径或异常正文。没有无引用证明，也没有原环境删除授权。
 
-`stable_reports.py` 在受管 reports 根内建立独立 `portable/`，先写 `test-results/snapshot-owner.json`，最后写 `stable-export.json`。报告流式复制并重查来源身份、字节数与 SHA-256；有效 OPFS 文件和空目录按清单保存，完整 profile/VM/数据库排除，失败只取限额日志/配置/崩溃记录。稳定清单覆盖两片报告树，发布只移动这些导出副本；归属标记随 test-results 搬迁。两片发布之间不可捕获中断时保留分散原件并拒绝接受，不靠 publicationComplete 布尔值绕过验证。
+`stable_reports.py` 在受管 reports 根内建立独立 `portable/`，先写 `test-results/snapshot-owner.json`，最后写 `stable-export.json`。报告流式复制并重查来源身份、字节数与 SHA-256；有效 OPFS 文件和空目录按清单保存，完整 profile/VM/数据库排除，失败只取限额日志/配置/崩溃记录。稳定清单覆盖两片报告树，发布只移动这些导出副本；归属标记随 test-results 搬迁。两片发布之间不可捕获中断时保留分散原件；恢复只沿同 run 已登记的 staging/固定发布口搬迁链，按原 inode 确定 test-results/playwright-report 每叶唯一实际位置，再以同一稳定清单完整复核字节、OPFS 和预算。已登记但尚未 rename 的源叶也核原身份；源目标双份、缺失、跨轮标记、替换、链接或篡改均拒绝，不能用任意备用路径或 publicationComplete 布尔值绕过验证。
+
+容器 Docker ledger 已闭合且 hosted 稳定导出完成时，恢复只继续上述发布，不重新以 interrupted 执行 finish，不重建 stableExport，不改写原 passed/failed/interrupted、退出码或已记录结束时间。ledger、生产者退出、根/别名与打开句柄及完整导出证明仍须核验；未完成或不闭合只留有界诊断。小型恢复矩阵与双叶反例见 `test_hosted_lifecycle.py`、`test_stable_reports.py` 及[整体审查补正复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-整体审查接口补正复核.md)。方案 B 的 cleanupComplete=false 与平台处置边界保持。
 
 单快照最多 100,000 个文件/目录/省略项（包含 owner 和 manifest 自身两项），manifest 最多 16 MiB。枚举有界，复制前核对元数据及原 5 GiB 总额，完成时再校验。必要报告不能静默截断；失败诊断达到扫描上限时显式记录省略。导出目的持有原目录 FD，路径被替换时不得向替代目录写入报告或最终清单。
 

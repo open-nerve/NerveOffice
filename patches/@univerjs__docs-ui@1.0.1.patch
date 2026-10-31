@@ -1,5 +1,5 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index 71c91a2f47aa6a7c5bb8702dbaed8835c7a0a138..64cdd00113fc92284eaa5ae30637ef7decb76a91 100644
+index 71c91a2f47aa6a7c5bb8702dbaed8835c7a0a138..f0fd621cd05f8e0d73385264286cb23781de4880 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
 @@ -3483,6 +3483,17 @@ let DocSelectionRenderService = class DocSelectionRenderService extends _univerj
@@ -20,8 +20,50 @@ index 71c91a2f47aa6a7c5bb8702dbaed8835c7a0a138..64cdd00113fc92284eaa5ae30637ef7d
  	}
  	blur() {
  		this._input.blur();
+@@ -15013,6 +15024,16 @@ function getTableHorizontalViewportGeometry(tableLeft, tableWidth, viewport) {
+ function hasHorizontalTableViewport(viewport) {
+ 	return viewport != null && (viewport.leadingInsetLeft ?? 0) + viewport.contentWidth + (viewport.trailingInsetRight ?? 0) > viewport.viewportWidth;
+ }
++function customRangeHoverIdentity(ranges) {
++	return ranges.map(({ range, segmentId, segmentPageIndex }) => {
++		const identity = [range.rangeId, segmentId, segmentPageIndex, range.startIndex, range.rangeType];
++		if (range.rangeType === _univerjs_core.CustomRangeType.HYPERLINK) identity.push(range.endIndex, range.properties?.url, range.properties?.tooltip ?? range.properties?._xlsxHyperlinkTooltip);
++		return identity;
++	});
++}
++function sameCustomRangeHoverIdentity(previous, current) {
++	return previous.length === current.length && previous.every((identity, i) => identity.length === current[i].length && identity.every((value, j) => value === current[i][j]));
++}
+ let DocEventManagerService = class DocEventManagerService extends _univerjs_core.Disposable {
+ 	get hoverParagraph() {
+ 		return this._hoverParagraph$.value;
+@@ -15031,7 +15052,7 @@ let DocEventManagerService = class DocEventManagerService extends _univerjs_core
+ 		this._context = _context;
+ 		this._docSkeletonManagerService = _docSkeletonManagerService;
+ 		_defineProperty(this, "_hoverCustomRanges$", new rxjs.BehaviorSubject([]));
+-		_defineProperty(this, "hoverCustomRanges$", this._hoverCustomRanges$.pipe((0, rxjs.distinctUntilChanged)((pre, aft) => pre.length === aft.length && pre.every((item, i) => aft[i].range.rangeId === item.range.rangeId && aft[i].segmentId === item.segmentId && aft[i].segmentPageIndex === item.segmentPageIndex && aft[i].range.startIndex === item.range.startIndex))));
++		_defineProperty(this, "hoverCustomRanges$", this._hoverCustomRanges$.pipe((0, rxjs.distinctUntilChanged)(sameCustomRangeHoverIdentity, customRangeHoverIdentity)));
+ 		_defineProperty(this, "_clickCustomRanges$", new rxjs.Subject());
+ 		_defineProperty(this, "clickCustomRanges$", this._clickCustomRanges$.asObservable());
+ 		_defineProperty(this, "_pointerDownCustomRanges$", new rxjs.Subject());
+@@ -15085,11 +15106,13 @@ let DocEventManagerService = class DocEventManagerService extends _univerjs_core
+ 	}
+ 	_initPointer() {
+ 		let preCursor = _univerjs_engine_render.CURSOR_TYPE.TEXT;
++		let hasCustomRange = false;
+ 		this.disposeWithMe(this.hoverCustomRanges$.subscribe((ranges) => {
+ 			if (ranges.length) {
+-				preCursor = this._context.scene.getCursor();
++				if (!hasCustomRange) preCursor = this._context.scene.getCursor();
+ 				this._context.scene.setCursor(_univerjs_engine_render.CURSOR_TYPE.POINTER);
+-			} else this._context.scene.setCursor(preCursor);
++			} else if (hasCustomRange) this._context.scene.setCursor(preCursor);
++			hasCustomRange = ranges.length > 0;
+ 		}));
+ 	}
+ 	_initResetDirty() {
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 2f6b43020902d1c3ea8b8e5bd41cdc07e04b3e51..e6bf53712751fe2e91b0e77609e1cd06d2d6e142 100644
+index 2f6b43020902d1c3ea8b8e5bd41cdc07e04b3e51..4542a96a386a075a0f0808c17f6efc9dae21db5c 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -3455,6 +3455,17 @@ let DocSelectionRenderService = class DocSelectionRenderService extends RxDispos
@@ -42,3 +84,45 @@ index 2f6b43020902d1c3ea8b8e5bd41cdc07e04b3e51..e6bf53712751fe2e91b0e77609e1cd06
  	}
  	blur() {
  		this._input.blur();
+@@ -14985,6 +14996,16 @@ function getTableHorizontalViewportGeometry(tableLeft, tableWidth, viewport) {
+ function hasHorizontalTableViewport(viewport) {
+ 	return viewport != null && (viewport.leadingInsetLeft ?? 0) + viewport.contentWidth + (viewport.trailingInsetRight ?? 0) > viewport.viewportWidth;
+ }
++function customRangeHoverIdentity(ranges) {
++	return ranges.map(({ range, segmentId, segmentPageIndex }) => {
++		const identity = [range.rangeId, segmentId, segmentPageIndex, range.startIndex, range.rangeType];
++		if (range.rangeType === CustomRangeType.HYPERLINK) identity.push(range.endIndex, range.properties?.url, range.properties?.tooltip ?? range.properties?._xlsxHyperlinkTooltip);
++		return identity;
++	});
++}
++function sameCustomRangeHoverIdentity(previous, current) {
++	return previous.length === current.length && previous.every((identity, i) => identity.length === current[i].length && identity.every((value, j) => value === current[i][j]));
++}
+ let DocEventManagerService = class DocEventManagerService extends Disposable {
+ 	get hoverParagraph() {
+ 		return this._hoverParagraph$.value;
+@@ -15003,7 +15024,7 @@ let DocEventManagerService = class DocEventManagerService extends Disposable {
+ 		this._context = _context;
+ 		this._docSkeletonManagerService = _docSkeletonManagerService;
+ 		_defineProperty(this, "_hoverCustomRanges$", new BehaviorSubject([]));
+-		_defineProperty(this, "hoverCustomRanges$", this._hoverCustomRanges$.pipe(distinctUntilChanged((pre, aft) => pre.length === aft.length && pre.every((item, i) => aft[i].range.rangeId === item.range.rangeId && aft[i].segmentId === item.segmentId && aft[i].segmentPageIndex === item.segmentPageIndex && aft[i].range.startIndex === item.range.startIndex))));
++		_defineProperty(this, "hoverCustomRanges$", this._hoverCustomRanges$.pipe(distinctUntilChanged(sameCustomRangeHoverIdentity, customRangeHoverIdentity)));
+ 		_defineProperty(this, "_clickCustomRanges$", new Subject());
+ 		_defineProperty(this, "clickCustomRanges$", this._clickCustomRanges$.asObservable());
+ 		_defineProperty(this, "_pointerDownCustomRanges$", new Subject());
+@@ -15057,11 +15078,13 @@ let DocEventManagerService = class DocEventManagerService extends Disposable {
+ 	}
+ 	_initPointer() {
+ 		let preCursor = CURSOR_TYPE.TEXT;
++		let hasCustomRange = false;
+ 		this.disposeWithMe(this.hoverCustomRanges$.subscribe((ranges) => {
+ 			if (ranges.length) {
+-				preCursor = this._context.scene.getCursor();
++				if (!hasCustomRange) preCursor = this._context.scene.getCursor();
+ 				this._context.scene.setCursor(CURSOR_TYPE.POINTER);
+-			} else this._context.scene.setCursor(preCursor);
++			} else if (hasCustomRange) this._context.scene.setCursor(preCursor);
++			hasCustomRange = ranges.length > 0;
+ 		}));
+ 	}
+ 	_initResetDirty() {

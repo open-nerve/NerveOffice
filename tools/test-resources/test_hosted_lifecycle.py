@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 import lifecycle
 import run as runner
+import container_resources
 
 
 UNKNOWN = b'p987654\nf3\ntsock\nnprotocol: UNIX-STREAM\n'
@@ -471,6 +472,159 @@ class HostedLifecycleTests(unittest.TestCase):
         self.assertTrue(after['publicationComplete'])
         self.assertTrue((self.repo / 'tests/e2e/test-results/results.json').is_file())
         self.assertEqual((value.scratch / 'raw.db').read_bytes(), b'keep-raw')
+
+    def completed_container_for_recovery(self, status='passed'):
+        # Closed protocol data describes this fixture only; no Docker operation is performed.
+        value = self.create('container')
+        ledger = container_resources.initial(value.id, self.repo, value.scratch)
+        empty = {kind: [] for kind in container_resources.KINDS}
+        ledger.update(state='closed', daemon='fixture-daemon',
+                      repoHash=hashlib.sha256(str(self.repo).encode()).hexdigest(),
+                      project='nerve-office-e2e-' + value.id, image='nerve-office:e2e-' + value.id,
+                      temporaryDirectory=str(value.scratch / 'tmp/env'), producers=[],
+                      observed=empty, cleanupFailures=[],
+                      closure={'daemon': 'fixture-daemon', 'observedAt': '2026-10-31T00:00:00.000Z',
+                               'absent': empty})
+        lifecycle.atomic_json(value.directory / container_resources.FILE, ledger)
+        state = self.repo / ('ci-state-' + value.id)
+        state.mkdir()
+        (state / 'owner.json').write_text(json.dumps({'root': str(self.repo), 'token': value.id}))
+        (state / 'quiescence.json').write_text(json.dumps({'quiescent': True}))
+        code = {'passed': 0, 'failed': 9, 'interrupted': 130}[status]
+        value.update(ciOwner=value.id, ciState=str(state), exitCode=code, interrupted=status == 'interrupted')
+        self.assertEqual(value.finish(status, release=False)['status'], status)
+        self.assertEqual(value.data['cleanupStage'], 'host-disposal-pending')
+        self.assertFalse(value.data['cleanupComplete'])
+        return value, state
+
+    def assert_completed_container_recovers(self, status):
+        value, state = self.completed_container_for_recovery(status)
+        before = copy.deepcopy(value.data)
+        ledger = (value.directory / container_resources.FILE).read_bytes()
+        value.release()
+        self.assertEqual(runner.recover_ci(self.store, state), 0)
+        after = json.loads((value.directory / 'run.json').read_text())
+        for key in ('status', 'exitCode', 'interrupted', 'stableExport', 'endedAt', 'cleanupStage', 'cleanupComplete'):
+            self.assertEqual(after[key], before[key], key)
+        self.assertTrue(after['publicationComplete'])
+        target = self.repo / 'tests/e2e/test-results'
+        self.assertEqual(json.loads((target / 'cleanup-receipt.json').read_text())['status'], status)
+        self.assertEqual((target / container_resources.PORTABLE).read_bytes(), ledger)
+        self.assertEqual((value.scratch / 'raw.db').read_bytes(), b'keep-raw')
+        self.assertTrue((self.repo / 'tests/e2e/playwright-report/index.html').is_file())
+        published_before = (value.directory / 'run.json').read_bytes()
+        self.assertEqual(runner.recover_ci(self.store, state), 0)
+        self.assertEqual((value.directory / 'run.json').read_bytes(), published_before)
+
+    def test_recover_completed_container_success_preserves_original_result(self):
+        self.assert_completed_container_recovers('passed')
+
+    def test_recover_completed_container_failure_preserves_original_result(self):
+        self.assert_completed_container_recovers('failed')
+
+    def test_recover_completed_container_interruption_preserves_original_result(self):
+        self.assert_completed_container_recovers('interrupted')
+
+    def test_recover_completed_container_after_first_report_leaf_moved(self):
+        value, state = self.completed_container_for_recovery()
+        before = copy.deepcopy(value.data)
+        move = value.scope_move
+
+        def interrupt_second_leaf(source, target):
+            if source.name == 'playwright-report':
+                raise OSError('fixture interrupted between publication leaves')
+            return move(source, target)
+
+        with patch.object(value, 'scope_move', side_effect=interrupt_second_leaf):
+            with self.assertRaisesRegex(OSError, 'between publication leaves'):
+                runner.publish(value, 'container')
+        self.assertEqual(value.data['published'], ['tests/e2e/test-results'])
+        self.assertTrue((self.repo / 'tests/e2e/test-results/results.json').is_file())
+        self.assertTrue((value.directory / 'reports/portable/playwright-report/index.html').is_file())
+        value.release()
+        self.assertEqual(runner.recover_ci(self.store, state), 0)
+        after = json.loads((value.directory / 'run.json').read_text())
+        for key in ('status', 'exitCode', 'stableExport', 'endedAt', 'cleanupStage', 'cleanupComplete'):
+            self.assertEqual(after[key], before[key], key)
+        self.assertTrue(after['publicationComplete'])
+        self.assertTrue((self.repo / 'tests/e2e/playwright-report/index.html').is_file())
+        self.assertEqual((value.scratch / 'raw.db').read_bytes(), b'keep-raw')
+
+    def test_recover_completed_container_revalidates_ledger_and_export(self):
+        # A completion string never authorizes publication of an invalid or live environment.
+        for mode in ('missing', 'reserved', 'producer', 'ledger-tamper', 'export-tamper'):
+            with self.subTest(mode=mode):
+                value, state = self.completed_container_for_recovery()
+                path = value.directory / container_resources.FILE
+                ledger = json.loads(path.read_text())
+                if mode == 'missing':
+                    path.unlink()
+                elif mode == 'reserved':
+                    ledger['state'] = 'reserved'
+                    lifecycle.atomic_json(path, ledger)
+                elif mode == 'producer':
+                    ledger['producers'] = [None]
+                    lifecycle.atomic_json(path, ledger)
+                elif mode == 'ledger-tamper':
+                    ledger['runId'] = '00000000-0000-4000-8000-000000000000'
+                    lifecycle.atomic_json(path, ledger)
+                else:
+                    (value.directory / 'reports/portable/test-results/results.json').write_text('changed')
+                value.release()
+                try:
+                    runner.recover_ci(self.store, state)
+                except (OSError, ValueError, RuntimeError):
+                    pass
+                after = json.loads((value.directory / 'run.json').read_text())
+                self.assertFalse(after.get('publicationComplete', False))
+                self.assertEqual((value.scratch / 'raw.db').read_bytes(), b'keep-raw')
+                self.assertFalse((self.repo / 'tests/e2e/playwright-report/index.html').exists())
+                # Remove only a prior fixture's bounded diagnostics, not another task's data.
+                target = self.repo / 'tests/e2e/test-results'
+                if target.exists():
+                    self.assertEqual(json.loads((target / 'resource-run.json').read_text())['runId'], value.id)
+                    shutil.rmtree(target)
+
+    def test_recover_completed_container_after_move_registered_before_rename(self):
+        value, state = self.completed_container_for_recovery()
+        before = copy.deepcopy(value.data)
+        source = value.directory / 'reports/portable/test-results'
+        original = Path.rename
+
+        def interrupt_rename(path, target):
+            if path == source:
+                raise OSError('fixture interrupted after move registration')
+            return original(path, target)
+
+        with patch.object(Path, 'rename', interrupt_rename):
+            with self.assertRaisesRegex(OSError, 'after move registration'):
+                runner.publish(value, 'container')
+        self.assertEqual(value.data['published'], ['tests/e2e/test-results'])
+        self.assertTrue(source.is_dir())
+        self.assertFalse((self.repo / 'tests/e2e/test-results').exists())
+        value.release()
+        self.assertEqual(runner.recover_ci(self.store, state), 0)
+        after = json.loads((value.directory / 'run.json').read_text())
+        self.assertTrue(after['publicationComplete'])
+        for key in ('status', 'exitCode', 'stableExport', 'endedAt'):
+            self.assertEqual(after[key], before[key], key)
+
+    def test_recover_completed_container_rejects_foreign_move_identity(self):
+        value, state = self.completed_container_for_recovery()
+        source = value.directory / 'reports/portable/test-results'
+        target = self.repo / 'tests/e2e/test-results'
+        target.parent.mkdir(parents=True)
+        value.scope_move(source, target)
+        moves = copy.deepcopy(value.data['scopeMoves'])
+        moves[-1]['identity']['inode'] += 1
+        value.update(scopeMoves=moves)
+        value.release()
+        with self.assertRaisesRegex(ValueError, 'identity changed'):
+            runner.recover_ci(self.store, state)
+        after = json.loads((value.directory / 'run.json').read_text())
+        self.assertFalse(after.get('publicationComplete', False))
+        self.assertTrue(source.is_dir())
+        self.assertFalse(target.exists())
 
     def test_export_failure_remains_failed_and_keeps_original_environment(self):
         value = self.create()

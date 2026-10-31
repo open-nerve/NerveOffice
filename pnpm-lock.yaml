@@ -444,7 +444,7 @@ overrides:
 
 patchedDependencies:
   '@univerjs/core@1.0.1': a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24
-  '@univerjs/docs-ui@1.0.1': 8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b
+  '@univerjs/docs-ui@1.0.1': fdf8bb431dd62f5a0b01f2c9bf4e04b52ab2e54445513073941d2d9ae11f1a83
   '@univerjs/drawing-ui@1.0.1': 21bfea002ad7a5f19150266a8207c7d3bbff4412814c4f02f825b199e031a767
   '@univerjs/drawing@1.0.1': 744270d7cb9ddd926cde93bff6e243db6455d82848c9275820553dfce701b47e
   '@univerjs/engine-formula@1.0.1': b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571
@@ -614,7 +614,7 @@ importers:
         version: 1.0.1(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/docs-ui':
         specifier: 'catalog:'
-        version: 1.0.1(patch_hash=8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
+        version: 1.0.1(patch_hash=fdf8bb431dd62f5a0b01f2c9bf4e04b52ab2e54445513073941d2d9ae11f1a83)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/drawing':
         specifier: 'catalog:'
         version: 1.0.1(patch_hash=744270d7cb9ddd926cde93bff6e243db6455d82848c9275820553dfce701b47e)(react@19.3.0)(rxjs@7.8.2)
@@ -9201,7 +9201,7 @@ snapshots:
       - react
       - rxjs
 
-  '@univerjs/docs-ui@1.0.1(patch_hash=8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)':
+  '@univerjs/docs-ui@1.0.1(patch_hash=fdf8bb431dd62f5a0b01f2c9bf4e04b52ab2e54445513073941d2d9ae11f1a83)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)':
     dependencies:
       '@univerjs/core': 1.0.1(patch_hash=a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/design': 1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -9369,7 +9369,7 @@ snapshots:
       '@univerjs/design': 1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@univerjs/docs': 1.0.1(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/docs-drawing': 1.0.1(react@19.3.0)(rxjs@7.8.2)
-      '@univerjs/docs-ui': 1.0.1(patch_hash=8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
+      '@univerjs/docs-ui': 1.0.1(patch_hash=fdf8bb431dd62f5a0b01f2c9bf4e04b52ab2e54445513073941d2d9ae11f1a83)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/drawing': 1.0.1(patch_hash=744270d7cb9ddd926cde93bff6e243db6455d82848c9275820553dfce701b47e)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/drawing-ui': 1.0.1(patch_hash=21bfea002ad7a5f19150266a8207c7d3bbff4412814c4f02f825b199e031a767)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/engine-render': 1.0.1(patch_hash=f9b620aa599945ffb0616fdfba9c4d5b51e0865453b1369c304492a81f615d4a)(react@19.3.0)(rxjs@7.8.2)
@@ -9442,7 +9442,7 @@ snapshots:
       '@univerjs/core': 1.0.1(patch_hash=a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/design': 1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@univerjs/docs': 1.0.1(react@19.3.0)(rxjs@7.8.2)
-      '@univerjs/docs-ui': 1.0.1(patch_hash=8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
+      '@univerjs/docs-ui': 1.0.1(patch_hash=fdf8bb431dd62f5a0b01f2c9bf4e04b52ab2e54445513073941d2d9ae11f1a83)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/engine-formula': 1.0.1(patch_hash=b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/engine-render': 1.0.1(patch_hash=f9b620aa599945ffb0616fdfba9c4d5b51e0865453b1369c304492a81f615d4a)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/icons': 1.43.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -9473,7 +9473,7 @@ snapshots:
       '@univerjs/core': 1.0.1(patch_hash=a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/design': 1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@univerjs/docs': 1.0.1(react@19.3.0)(rxjs@7.8.2)
-      '@univerjs/docs-ui': 1.0.1(patch_hash=8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
+      '@univerjs/docs-ui': 1.0.1(patch_hash=fdf8bb431dd62f5a0b01f2c9bf4e04b52ab2e54445513073941d2d9ae11f1a83)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/engine-formula': 1.0.1(patch_hash=b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/engine-render': 1.0.1(patch_hash=f9b620aa599945ffb0616fdfba9c4d5b51e0865453b1369c304492a81f615d4a)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/icons': 1.43.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -9583,7 +9583,7 @@ snapshots:
       '@univerjs/core': 1.0.1(patch_hash=a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/design': 1.0.1(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@univerjs/docs': 1.0.1(react@19.3.0)(rxjs@7.8.2)
-      '@univerjs/docs-ui': 1.0.1(patch_hash=8932a7ebfae77dcbf71f7064de098e246097a36edad2bfca92cbb82aab2b371b)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
+      '@univerjs/docs-ui': 1.0.1(patch_hash=fdf8bb431dd62f5a0b01f2c9bf4e04b52ab2e54445513073941d2d9ae11f1a83)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/engine-formula': 1.0.1(patch_hash=b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/engine-render': 1.0.1(patch_hash=f9b620aa599945ffb0616fdfba9c4d5b51e0865453b1369c304492a81f615d4a)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/icons': 1.43.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

@@ -914,15 +914,35 @@ class Run:
     def verify_export(self):
         self.hosted_proof(self.scratch)
         root = self.directory / 'reports/portable'
-        if self.data.get('published'):
-            roots = {str((self.store.repo / p).parent) for p in self.data['published']}
-            if len(roots) != 1:
-                raise ValueError('托管报告发布位置不一致')
-            root = Path(next(iter(roots)))
-            for relative in self.data['published']:
-                self.hosted_proof(self.store.repo / relative)
-        else:
-            self.hosted_proof(root.parent)
+        self.hosted_proof(root.parent)
+        # Publication renames two leaves separately. A crash can leave a leaf at
+        # either endpoint, including after the move intent but before rename.
+        base = self.store.repo / 'tests/e2e'
+        if self.data['kind'] == 'measure':
+            base = base / 'measure'
+        elif self.data['kind'] == 'native':
+            base = base / 'safari-results'
+        published = self.data.get('published', [])
+        allowed = {str((base / leaf).relative_to(self.store.repo)) for leaf in stable_reports.LEAVES}
+        if (not isinstance(published, list) or any(not isinstance(p, str) for p in published)
+                or len(published) != len(set(published)) or not set(published) <= allowed):
+            raise ValueError('托管报告发布位置不一致')
+        identities = {}
+        for leaf in stable_reports.LEAVES:
+            source, target = root / leaf, base / leaf
+            moves = [move for move in self.data.get('scopeMoves', [])
+                     if move.get('source') == str(source) or move.get('destination') == str(source)]
+            last = moves[-1] if moves else None
+            relative = str(target.relative_to(self.store.repo))
+            if relative in published or (last is not None and last.get('destination') == str(target)):
+                if (last is None or {last.get('source'), last.get('destination')} != {str(source), str(target)}):
+                    raise ValueError('托管报告缺少固定双叶搬迁链')
+                identities[leaf] = last['identity']
+                if target.exists() or target.is_symlink():
+                    self.hosted_proof(target)
+        if identities:
+            return stable_reports.verify_snapshot(root, self.id, self.export_receipt(),
+                        publication_root=base, publication_identities=identities)
         return stable_reports.verify_snapshot(root, self.id, self.export_receipt())
 
     def finish_hosted(self, status):
