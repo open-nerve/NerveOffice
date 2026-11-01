@@ -11,6 +11,7 @@ import threading
 import time
 
 import container_resources
+import report_safety
 
 from lifecycle import Store, Run, atomic_bytes, atomic_json, contained, group_alive, locked, open_paths, read_json, RUN_ID
 
@@ -115,6 +116,19 @@ def publish(run, kind, reports=None):
     relative_reports = str(reports.relative_to(run.directory))
     if relative_reports not in ("reports", "reports/recovery", "reports/portable"):
         raise ValueError("报告暂存归属不符")
+    # Check both leaves before publishing either; resume checks the already moved
+    # leaf too. Rejection preserves the product result and the original evidence.
+    checks = []
+    try:
+        for name in ("test-results", "playwright-report"):
+            target = contained(base / name, run.store.repo)
+            source = target if published_by(run, target) else reports / name
+            if source.exists() or source.is_symlink():
+                checks.append(report_safety.check_leaf(source, name))
+    except report_safety.ReportSafetyError as error:
+        run.update(publicationComplete=False, reportSafety={"status": "rejected", "reason": error.reason})
+        raise
+    run.update(reportSafety={"status": "passed", "checks": checks})
     run.update(publicationReports=relative_reports)
     # A self-contained receipt and bounded diagnostics travel with CI/handoff artifacts.
     results = reports / "test-results"

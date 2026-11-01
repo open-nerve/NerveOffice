@@ -14,7 +14,7 @@
 | 真实 Safari | E2E 包 `safari:selftest` → `run.py native`；手工 local-save/natural/pause 同样包在 native 运行中，`--output` 必须位于本轮报告目录 |
 | VM 实验 | 用 `run.py vm -- <准备和实验脚本>` 包含整个生命周期；`vm-durability.ts` / `vm-product-recovery.ts` 验证磁盘与目录在本轮 scratch 内 |
 | 单独清扫 | `pnpm test:cleanup`；只处理本 worktree 已登记资源，不扫描整个 handoffs |
-| 小型机制回归 | `pnpm test:cleanup:check`；另有 managed-output、test-databases 的 Vitest 单元回归 |
+| 小型机制回归 | `pnpm test:cleanup:check` → `run.py unit`；另有 managed-output、test-databases 的 Vitest 单元回归 |
 
 Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `asset-references-bulk.test.ts`，在组 1 等普通项目（包括 `afterAll`）结束后运行。两个集成项目共享 node/forks、source 解析、数据库及单查询 setup 和原时限；原 70,000 规模、断言与 60 秒整例上限不变。`pnpm test:integration` 同时选择 `integration` 和 `integration-capacity`；`pnpm test:coverage` 仍一次执行所有项目并生成同一份聚合覆盖率，原范围和阈值不变。这只保证本次 Vitest 内的分组次序，不保证整台机器没有其他进程；重型入口仍须串行启动。
 
@@ -23,6 +23,16 @@ Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `a
 只读配置探针显式使用 `--list`，并清除继承的 `NERVE_TEST_RUN_ID`、`NERVE_TEST_SCRATCH`、`NERVE_TEST_OUTPUT_DIR`，避免 coverage 的外层环境掩盖单独执行时的错误；实际测试仍须使用受管入口。M5-P4 的探针修复保持原项目配置与断言，不能用只读标记启动真实测试。
 
 需要 Python 3.9+、POSIX 文件锁和 `lsof`。缺少句柄查询能力时保留原件并返回待处理状态，不冒险删除。测试的断言、范围、重试与超时不由清理器更改。真实 Safari 的解锁、空闲 120 秒和用户活动中止条件仍适用。
+
+## 报告配置与凭据边界
+
+Playwright 的 webServer 默认继承父进程环境。不要把 `process.env` 展开到公开配置的 `webServer.env`：JSON reporter 会保存显式环境对象。正常子进程环境传递继续使用原入口，禁止以删除数据库/资源参数代替修正报告配置。`tools/src/verify/report-environment.test.ts` 用隔离的虚构 canary、真实配置列举和微型 HTTP 服务核对继承及真实 JSON/HTML 字节，不使用 Agent 或 CI 凭据。
+
+`run.py publish` 持有既有发布/run 锁，在搬迁任一叶目录前检查两份真实报告；中断接续也检查已发布叶。`check_ci_resources.py` 在上传前独立核对稳定导出和实际报告内容，不信任旧 publisher 的通过字段。`pack_ci_profiles.py` 沿用此检查。`report_safety.py` 只读核验 `test-results/results.json` 及 `playwright-report/index.html` 的内嵌 base64/ZIP；拒绝非空环境对象、损坏/歧义 JSON、不可信链接和越界内容。单份 JSON/HTML 上限 64 MiB，ZIP 最多 4,096 个 JSON 成员、展开合计 64 MiB。异常仅输出固定错误码，不输出报告正文或变量值。
+
+检查通过只证明这个已知配置边界，不是对任意正文、trace、日志和附件的通用秘密扫描。拒绝时记录 `reportSafety.status=rejected` 和有界原因，保留原证据，产品 `passed/failed/interrupted` 与清理结果保持独立；不得为了上传删除未知字段或把损坏报告伪装成空报告。可独立只读检查：`python3 tools/test-resources/report_safety.py --results /已核实的/test-results --html /已核实的/playwright-report`。
+
+历史含凭据报告先登记原路径与 SHA-256，在归属、写入者退出、文件锁和打开句柄核验后隔离到本地受限目录（目录 0700、原件 0600），不上传、不改写原摘要。安全派生件另名并记录删改路径及新摘要；不能作为原件冒用。P5 I-01 的具体处置见 `docs/v0.1/M5-表格能力与资源/reviews/P5-S5-测试报告环境凭据调查.md`，手工历史材料不由普通 prune 自动认领。
 
 ## 创建、终止与恢复
 

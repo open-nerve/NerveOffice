@@ -9,6 +9,7 @@ import stat
 import sys
 
 import hosted
+import report_safety
 from lifecycle import Store, Run, RUN_ID, atomic_json, locked, open_paths, read_run_manifest
 
 
@@ -17,7 +18,7 @@ FIELDS = ('version', 'runId', 'repo', 'kind', 'status', 'exitCode', 'interrupted
           'shortRoot', 'shortRootIdentity', 'shortTmp', 'shortTmpIdentity',
           'cleanupStage', 'cleanupComplete', 'stableExport', 'resourceBudget',
           'referenceObservation', 'published', 'publicationComplete', 'exportDirectory',
-          'ciOwner', 'ciState', 'packagedProfiles')
+          'ciOwner', 'ciState', 'packagedProfiles', 'reportSafety')
 
 
 def container_report(repo):
@@ -114,6 +115,18 @@ def check(repo):
             for root in roots:
                 if open_paths(root, owner=value, export_only=True):
                     raise ValueError('报告仍有已知使用者，拒绝上传')
+            checks = []
+            # Recheck actual report bytes at the final upload boundary. An older
+            # publisher or a self-declared safety flag cannot authorize release.
+            for leaf in ('test-results', 'playwright-report'):
+                candidates = [value.directory / 'reports/portable' / leaf]
+                relative = 'tests/e2e/' + leaf
+                if relative in value.data.get('published', []):
+                    candidates.append(store.repo / relative)
+                for candidate in candidates:
+                    if candidate.exists() or candidate.is_symlink():
+                        checks.append(report_safety.check_leaf(candidate, leaf))
+            value.update(reportSafety={'status': 'passed', 'checks': checks})
             runs.append(value)
         primaries = [value for value in runs if value.data['kind'] == expected]
         preflights = [value for value in runs if value.data['kind'] == 'ci-preflight']

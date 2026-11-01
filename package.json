@@ -43,7 +43,7 @@
     "verify": "node tools/src/verify/cli.ts",
     "clean": "node tools/src/verify/clean-cli.ts",
     "test:cleanup": "python3 tools/test-resources/run.py cleanup",
-    "test:cleanup:check": "python3 -m unittest discover -s tools/test-resources -p 'test_*.py'"
+    "test:cleanup:check": "python3 tools/test-resources/run.py unit -- python3 -m unittest discover -s tools/test-resources -p 'test_*.py'"
   },
   "devDependencies": {
     "@antfu/eslint-config": "catalog:",
