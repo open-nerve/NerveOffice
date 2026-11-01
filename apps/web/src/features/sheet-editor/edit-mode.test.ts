@@ -3494,7 +3494,8 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     expect(context.api.save).not.toHaveBeenCalled()
     writer.settle(true)
     await context.time.advance(0)
-    await settle()
+    // 原生压缩与哈希不由假时钟推进；等实际保存确认，不能把一个宏任务当作异步准备完成。
+    await vi.waitFor(() => expect(context.mode.view().save?.status).toBe('clean'))
     expect((await savedRequests(context))).toMatchObject([{ baseRevision: 3, localSeq: 1, formulasPending: false }])
     expect(context.mode.view().save).toMatchObject({ status: 'clean', formulasPending: false, unsaved: false })
     expect(context.mode.hasUnsavedWork()).toBe(false)
