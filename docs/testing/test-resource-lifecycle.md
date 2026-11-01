@@ -28,7 +28,7 @@ Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `a
 
 Playwright 的 webServer 默认继承父进程环境。不要把 `process.env` 展开到公开配置的 `webServer.env`：JSON reporter 会保存显式环境对象。正常子进程环境传递继续使用原入口，禁止以删除数据库/资源参数代替修正报告配置。`tools/src/verify/report-environment.test.ts` 用隔离的虚构 canary、真实配置列举和微型 HTTP 服务核对继承及真实 JSON/HTML 字节，不使用 Agent 或 CI 凭据。
 
-`run.py publish` 持有既有发布/run 锁，在搬迁任一叶目录前检查两份真实报告；中断接续也检查已发布叶。`check_ci_resources.py` 在上传前独立核对稳定导出和实际报告内容，不信任旧 publisher 的通过字段。`pack_ci_profiles.py` 沿用此检查。`report_safety.py` 只读核验 `test-results/results.json` 及 `playwright-report/index.html` 的内嵌 base64/ZIP；拒绝非空环境对象、损坏/歧义 JSON、不可信链接和越界内容。单份 JSON/HTML 上限 64 MiB，ZIP 最多 4,096 个 JSON 成员、展开合计 64 MiB。异常仅输出固定错误码，不输出报告正文或变量值。
+`run.py publish` 持有既有发布/run 锁，在搬迁任一叶目录前检查两份真实报告；中断接续也检查已发布叶。`check_ci_resources.py` 在上传前独立核对稳定导出和实际报告内容，不信任旧 publisher 的通过字段。`pack_ci_profiles.py` 沿用此检查。`report_safety.py` 只读核验 `test-results/results.json` 及 `playwright-report/index.html` 的内嵌 base64/ZIP；拒绝非空环境对象、损坏/歧义 JSON、不可信链接和越界内容。单份 JSON/HTML 及单个 ZIP 成员上限均为 64 MiB，ZIP 最多 4,096 个 JSON 成员、展开合计 256 MiB。累计上限约束顺序扫描的总工作量，逐成员读取、解析、配置检查与释放，不一次载入全部展开内容。该值按既有 P4/P5 完整报告约 156/159 MiB 校准；普通报告保留容量和原环境预算不因此改变。异常仅输出固定错误码，不输出报告正文或变量值。
 
 检查通过只证明这个已知配置边界，不是对任意正文、trace、日志和附件的通用秘密扫描。拒绝时记录 `reportSafety.status=rejected` 和有界原因，保留原证据，产品 `passed/failed/interrupted` 与清理结果保持独立；不得为了上传删除未知字段或把损坏报告伪装成空报告。可独立只读检查：`python3 tools/test-resources/report_safety.py --results /已核实的/test-results --html /已核实的/playwright-report`。
 

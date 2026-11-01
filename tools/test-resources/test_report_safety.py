@@ -1,5 +1,6 @@
 """KiB 级报告边界：只使用虚构值，不启动浏览器、数据库或 VM。"""
 import base64
+from contextlib import contextmanager
 import hashlib
 import importlib
 import io
@@ -22,11 +23,26 @@ SAFE = {'config': {'webServer': {'command': 'node service.mjs'}},
         'stats': {'expected': 1, 'unexpected': 0}}
 
 
-def html_report(value):
+def html_members(members):
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED) as zipped:
-        zipped.writestr('report.json', json.dumps(value))
+        for name, value in members:
+            zipped.writestr(name, json.dumps(value))
     return b'<html><script>window.playwrightReportBase64="data:application/zip;base64,' + base64.b64encode(archive.getvalue()) + b'";</script></html>'
+
+
+def html_report(value):
+    return html_members([('report.json', value)])
+
+
+@contextmanager
+def scaled_report_budgets():
+    safety = importlib.import_module('report_safety')
+    # Keep the production budgets' relationship, using KiB instead of MiB.
+    limits = {name: getattr(safety, name) // 1024 for name in
+              ('MAX_JSON_BYTES', 'MAX_HTML_BYTES', 'MAX_EXPANDED_BYTES')}
+    with patch.multiple(safety, **limits):
+        yield safety
 
 
 class ReportSafetyTests(unittest.TestCase):
@@ -103,6 +119,47 @@ class ReportSafetyTests(unittest.TestCase):
         (self.html / 'index.html').write_bytes(html_report({'large': 'x' * 1024}))
         with patch.object(safety, 'MAX_EXPANDED_BYTES', 512):
             self.rejected('playwright-report')
+
+    def test_full_report_can_contain_several_individually_bounded_members(self):
+        # Actual full04: 159 MiB across 133 members, largest member 15 MiB.
+        # Four 40 KiB members reproduce the cumulative/per-member distinction.
+        members = [(f'file-{index}.json', {**SAFE, 'steps': 'x' * (40 * 1024)})
+                   for index in range(4)]
+        path = self.html / 'index.html'; path.write_bytes(html_members(members))
+        before = hashlib.sha256(path.read_bytes()).hexdigest()
+        with scaled_report_budgets() as safety:
+            try:
+                self.assertEqual(self.check('playwright-report'), self.check('playwright-report'))
+            except safety.ReportSafetyError as error:
+                self.fail('合法多成员报告被累计预算误拒绝：' + error.reason)
+        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+
+    def test_environment_in_late_member_is_checked_after_first_member_budget(self):
+        members = [(f'file-{index}.json', {**SAFE, 'steps': 'x' * (40 * 1024)})
+                   for index in range(4)] + [('last.json', UNSAFE)]
+        (self.html / 'index.html').write_bytes(html_members(members))
+        with scaled_report_budgets() as safety:
+            with self.assertRaises(safety.ReportSafetyError) as error:
+                self.check('playwright-report')
+        self.assertEqual(error.exception.reason, 'serialized-webserver-environment')
+        self.assertNotIn(CANARY, str(error.exception))
+        self.assertNotIn('UNRELATED_CREDENTIAL', str(error.exception))
+
+    def test_larger_aggregate_budget_does_not_relax_single_member_limit(self):
+        (self.html / 'index.html').write_bytes(html_report({'steps': 'x' * (65 * 1024)}))
+        with scaled_report_budgets() as safety:
+            with self.assertRaises(safety.ReportSafetyError) as error:
+                self.check('playwright-report')
+        self.assertEqual(error.exception.reason, 'html-report-expanded-budget')
+
+    def test_individually_small_members_still_have_an_aggregate_limit(self):
+        members = [(f'file-{index}.json', {**SAFE, 'steps': 'x' * (40 * 1024)})
+                   for index in range(7)]
+        (self.html / 'index.html').write_bytes(html_members(members))
+        with scaled_report_budgets() as safety:
+            with self.assertRaises(safety.ReportSafetyError) as error:
+                self.check('playwright-report')
+        self.assertEqual(error.exception.reason, 'html-report-expanded-budget')
 
 
 class ReportPublicationTests(unittest.TestCase):

@@ -19,7 +19,9 @@ from stable_reports import _Tree
 
 MAX_JSON_BYTES = 64 * 1024 * 1024
 MAX_HTML_BYTES = 64 * 1024 * 1024
-MAX_EXPANDED_BYTES = 64 * 1024 * 1024
+# Aggregate work across members, not a larger per-member allocation. Existing
+# full P4/P5 reports expand to 156–159 MiB, with each member below 16 MiB.
+MAX_EXPANDED_BYTES = 256 * 1024 * 1024
 MAX_ZIP_ENTRIES = 4096
 PREFIX = b'data:application/zip;base64,'
 PAYLOAD = re.compile(re.escape(PREFIX) + rb'([A-Za-z0-9+/=]+)')
