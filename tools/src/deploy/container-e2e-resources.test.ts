@@ -238,13 +238,24 @@ it.each(['build', 'env'])('有效父记录的真实 CLI 在 %s 失败后收尾�
   const foreign = join(f.context.scratch, 'tmp/nerve-office-e2e-2147483646-foreign')
   mkdirSync(foreign)
   writeFileSync(join(foreign, 'keep'), 'other-task')
-  const calls = join(f.context.repo, 'calls.jsonl')
+  const calls = join(f.context.repo, 'calls.argv')
   const image = join(f.context.repo, 'owned-image')
   const docker = join(bin, 'docker')
-  writeFileSync(docker, `#!${process.execPath}
+  const dockerState = join(bin, 'docker-state.mjs')
+  const shellQuote = (value: string) => `'${value.replaceAll('\'', '\'\\\'\'')}'`
+  // 空列表仍经过真实子进程，只省去每次查询的 Node 冷启动；动态台账与构建身份照旧验证。
+  // 每次调用写入 argc 和 NUL 分隔的原始 argv，保留空字符串、换行与引用字符。
+  writeFileSync(docker, `#!/bin/sh
+set -eu
+{ printf '%s\\0' "$#"; printf '%s\\0' "$@"; } >> ${shellQuote(calls)}
+case "$1:\${2-}" in
+  container:ls|network:ls|volume:ls) exit 0 ;;
+esac
+exec ${shellQuote(process.execPath)} ${shellQuote(dockerState)} "$@"
+`)
+  writeFileSync(dockerState, `
 import fs from 'node:fs'
 const args = process.argv.slice(2)
-fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + '\\n')
 const ledger = JSON.parse(fs.readFileSync(${JSON.stringify(f.ledger)}, 'utf8'))
 if (args[0] === 'info') {
   if (${JSON.stringify(failure)} === 'env' && ledger.state === 'unclaimed') {
@@ -280,7 +291,16 @@ else if (args[0] === 'image' && args[1] === 'rm' && args[2] === ledger.image) fs
   expect(result.error).toBeUndefined()
   expect(result.status, result.stderr).toBe(1)
   expect(existsSync(calls), result.stdout + result.stderr).toBe(true)
-  const operations = readFileSync(calls, 'utf8').trim().split('\n').map(line => z.array(z.string()).parse(JSON.parse(line)))
+  const fields = readFileSync(calls, 'utf8').split('\0')
+  expect(fields.pop()).toBe('')
+  const operations: string[][] = []
+  for (let offset = 0; offset < fields.length;) {
+    const count = z.coerce.number().int().positive().parse(fields[offset++])
+    const args = fields.slice(offset, offset + count)
+    expect(args).toHaveLength(count)
+    operations.push(args)
+    offset += count
+  }
   expect(operations.some(args => args[0] === 'build')).toBe(failure === 'build')
   expect(existsSync(image)).toBe(false)
   expect(JSON.parse(readFileSync(f.ledger, 'utf8')), result.stdout + result.stderr).toMatchObject({ state: 'closed' })
