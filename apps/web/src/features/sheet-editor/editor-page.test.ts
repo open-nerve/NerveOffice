@@ -14,7 +14,7 @@ import type { EditorPage, EditorPageApi } from './editor-page.ts'
 import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { MarkerStorage } from './pending-save-marker.ts'
 import type { SameBrowser } from './same-browser.ts'
-import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS } from '@nerve-office/contracts'
+import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
@@ -1027,6 +1027,66 @@ describe('CSV 正式页面接线', () => {
     await h.editorPage.csv.chooseFile(csvFile('001,甲'))
     expect(h.editorPage.csv.view().dialog).toMatchObject({ kind: 'import', stage: 'preview' })
   }
+
+  async function createdCsvPage() {
+    const unitId = '0199a2c4-0000-7000-8000-00000000ffff'
+    const snapshot = sheetSnapshotFor(unitId)
+    const h = csvSetup({
+      api: { document: async () => ({ ...DETAIL, revision: 1 }), content: async () => ({ snapshot, revision: 1 }) },
+      editLease: { acquire: async () => ({ ...ACQUIRED, revision: 1 }) },
+    })
+    let seq = 0
+    Object.assign(h.fake.editor, { unitId, capture: () => snapshot, changeSeq: () => seq })
+    const insert = h.fake.editor.csv.insert
+    Object.assign(h.fake.editor.csv, { insert: (table: CsvTable) => {
+      seq += 1
+      h.fake.changeListeners.forEach(listener => listener())
+      return insert(table)
+    } })
+    await h.editorPage.load()
+    const intent = { documentId: DOCUMENT_ID, userId: ALICE.user.id, csrfToken: ALICE.csrfToken, current: () => true }
+    const table = { rows: [['新文档 CSV']], rowCount: 1, columnCount: 1 }
+    return { ...h, intent, table }
+  }
+
+  it('创建见证交接到原新空白页，准备/插表沿原控制器，重复交接不能再次写入', async () => {
+    const h = await createdCsvPage()
+    expect(await h.editorPage.importCreatedCsv(h.table, h.intent)).toBe(true)
+    expect(h.inserted).toEqual([h.table])
+    expect(h.editLease.renew).toHaveBeenCalledOnce()
+    expect(h.api.save).not.toHaveBeenCalled()
+    expect(await h.editorPage.importCreatedCsv(h.table, h.intent)).toBe(false)
+    expect(h.inserted).toHaveLength(1)
+  })
+
+  it.each(['documentId', 'userId', 'csrfToken'] as const)('创建见证 %s 不匹配时不写入', async (field) => {
+    const h = await createdCsvPage()
+    expect(await h.editorPage.importCreatedCsv(h.table, { ...h.intent, [field]: 'different' })).toBe(false)
+    expect(h.inserted).toEqual([])
+    expect(h.api.session).toHaveBeenCalledOnce()
+  })
+
+  it('创建控制器在会话确认等待期间失效，正式页保留原实例但不导入', async () => {
+    const h = await createdCsvPage()
+    const response = deferred<SessionResponse>()
+    h.api.session.mockReturnValueOnce(response.promise)
+    let current = true
+    const applying = h.editorPage.importCreatedCsv(h.table, { ...h.intent, current: () => current })
+    current = false
+    response.resolve(ALICE)
+    expect(await applying).toBe(false)
+    expect(h.inserted).toEqual([])
+    expect(h.fake.editor.dispose).not.toHaveBeenCalled()
+  })
+
+  it('新空白页已有未提交输入，自动交接不能提交或覆盖用户文字', async () => {
+    const h = await createdCsvPage()
+    const commit = vi.fn(async () => true)
+    Object.assign(h.fake.editor, { uncommittedInput: () => 'pending', commitCellEditing: commit })
+    expect(await h.editorPage.importCreatedCsv(h.table, h.intent)).toBe(false)
+    expect(commit).not.toHaveBeenCalled()
+    expect(h.inserted).toEqual([])
+  })
 
   it('先确认同一登录并复核原租约，再导入；确认期间保留预览', async () => {
     const h = csvSetup()

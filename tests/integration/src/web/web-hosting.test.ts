@@ -48,6 +48,17 @@ async function get(path: string): Promise<Response> {
 }
 
 describe('US-M1-09 托管前端产物', () => {
+  it('CSV 新建与普通文档共用编辑器 HTML，携带位置仍有安全头且不缓存', async () => {
+    for (const path of ['/documents/new/csv', `/documents/new/csv?spaceId=${DOCUMENT_ID}&folderId=${DOCUMENT_ID}`]) {
+      const response = await get(path)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      expect(response.headers.get('content-security-policy')).toMatch(new RegExp(`^${CSP_PREFIX}`))
+      expect(await response.text()).toBe(EDITOR_HTML)
+    }
+    expect(await (await get('/documents/new/csv/extra')).text()).toBe(INDEX_HTML)
+  })
+
   it('历史列表仍是平台入口，双身份预览单独入口且不缓存', async () => {
     expect(await (await get(`/documents/${DOCUMENT_ID}/history`)).text()).toBe(INDEX_HTML)
     const response = await get(`/documents/${DOCUMENT_ID}/history/${DOCUMENT_ID}/preview`)

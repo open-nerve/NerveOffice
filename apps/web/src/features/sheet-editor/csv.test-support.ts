@@ -23,6 +23,7 @@ export function unusedCsvController(): CsvController {
     chooseFile: unexpected,
     selectSheet: unexpected,
     confirmImport: unexpected,
+    importPrepared: unexpected,
     exportSelected: unexpected,
     cancel: unexpected,
     environmentChanged: unexpected,

@@ -1,8 +1,12 @@
 import type { CsvOperationReason, CsvSheetSummary, SheetEditor } from '../../editor/index.ts'
 import type { CsvErrorReason, CsvTable } from '../../shared/csv/index.ts'
+import type { CsvFile, CsvPreview } from './csv-file.ts'
 import { CsvOperationError } from '../../editor/index.ts'
 import { CSV_LIMITS, CsvError, encodeCsv, parseCsv } from '../../shared/csv/index.ts'
 import { csvFilename } from './csv-download.ts'
+import { csvPreview } from './csv-file.ts'
+
+export type { CsvFile, CsvPreview } from './csv-file.ts'
 
 export type CsvEditor = Pick<SheetEditor, 'csv' | 'commitCellEditing' | 'settlePanels' | 'settleFormulas' | 'formulasSettled' | 'composing' | 'uncommittedInput'>
 
@@ -11,18 +15,6 @@ export interface CsvTarget {
   readonly current: () => boolean
   readonly writable: () => boolean
   readonly formulasPending: () => boolean
-}
-
-export interface CsvFile {
-  readonly name: string
-  readonly size: number
-  readonly arrayBuffer: () => Promise<ArrayBuffer>
-}
-
-export interface CsvPreview {
-  readonly rowCount: number
-  readonly columnCount: number
-  readonly rows: readonly (readonly string[])[]
 }
 
 export type CsvProblem = Exclude<CsvErrorReason, 'cancelled'> | CsvOperationReason | 'file-read' | 'preparation-failed' | 'input-pending' | 'download-failed'
@@ -48,6 +40,8 @@ export interface CsvController {
   readonly chooseFile: (file: CsvFile) => Promise<void>
   readonly selectSheet: (id: string) => void
   readonly confirmImport: () => Promise<void>
+  /** 同页创建流程的预解析数据；目标另含新空白文档与创建身份见证。 */
+  readonly importPrepared: (table: CsvTable, target: CsvTarget) => Promise<boolean>
   readonly exportSelected: () => Promise<void>
   readonly cancel: () => void
   readonly environmentChanged: () => void
@@ -73,14 +67,6 @@ function problemOf(error: unknown, fallback: CsvProblem): CsvProblem {
   if (error instanceof CsvError && error.reason !== 'cancelled')
     return error.reason
   return fallback
-}
-
-function previewOf(table: CsvTable): CsvPreview {
-  return {
-    rowCount: table.rowCount,
-    columnCount: table.columnCount,
-    rows: table.rows.slice(0, 8).map(row => row.slice(0, 8).map(cell => cell.length <= 80 ? cell : `${cell.slice(0, 78)}…`)),
-  }
 }
 
 /** 一轮意图只绑定一个原实例；所有续体在跨过异步边界后重新检查，不能重取实例接着写。 */
@@ -191,6 +177,36 @@ export function createCsvController(options: CsvControllerOptions): CsvControlle
     return undefined
   }
 
+  async function applyImport(mine: CsvOperation, dialog: Extract<CsvDialog, { kind: 'import' }>): Promise<boolean> {
+    if (!mine.table || !current(mine))
+      return false
+    publish({ ...dialog, stage: 'applying' }, undefined, undefined)
+    try {
+      await options.prepareImport()
+      if (!current(mine))
+        return false
+      const preparation = await prepareInput(mine, true)
+      if (!current(mine))
+        return false
+      const problem = preparation ?? finalProblem(mine.target)
+      if (problem) {
+        publish(dialog, problem, undefined)
+        return false
+      }
+      assertWritable(mine)
+      // 等待期间只由 operation 持有矩阵，取消会立即清掉它；不在迟到的会话 Promise 中另留一份引用。
+      mine.target.editor.csv.insert(mine.table)
+      release()
+      publish({ kind: 'closed' }, undefined, 'imported')
+      return true
+    }
+    catch (error) {
+      if (current(mine))
+        publish(dialog, problemOf(error, 'preparation-failed'), undefined)
+      return false
+    }
+  }
+
   publish(view.dialog, view.problem, view.notice)
   return {
     view: () => view,
@@ -249,7 +265,7 @@ export function createCsvController(options: CsvControllerOptions): CsvControlle
         if (!current(mine))
           return
         mine.table = table
-        publish({ kind: 'import', stage: 'preview', fileName, preview: previewOf(table) }, undefined, undefined)
+        publish({ kind: 'import', stage: 'preview', fileName, preview: csvPreview(table) }, undefined, undefined)
       }
       catch (error) {
         if (current(mine))
@@ -267,28 +283,22 @@ export function createCsvController(options: CsvControllerOptions): CsvControlle
       const dialog = view.dialog
       if (!mine || !current(mine) || dialog.kind !== 'import' || dialog.stage !== 'preview' || !mine.table)
         return
-      publish({ ...dialog, stage: 'applying' }, undefined, undefined)
+      await applyImport(mine, dialog)
+    },
+    async importPrepared(table, target) {
+      if (disposed || operation || !target.current() || !target.writable())
+        return false
+      const mine = begin(target)
+      mine.table = table
       try {
-        await options.prepareImport()
-        if (!current(mine))
-          return
-        const preparation = await prepareInput(mine, true)
-        if (!current(mine))
-          return
-        const problem = preparation ?? finalProblem(mine.target)
-        if (problem) {
-          publish(dialog, problem, undefined)
-          return
-        }
-        assertWritable(mine)
-        // 等待期间只由 operation 持有矩阵，取消会立即清掉它；不在迟到的会话 Promise 中另留一份引用。
-        mine.target.editor.csv.insert(mine.table)
-        release()
-        publish({ kind: 'closed' }, undefined, 'imported')
+        return await applyImport(mine, { kind: 'import', stage: 'preview', preview: csvPreview(table) })
       }
-      catch (error) {
-        if (current(mine))
-          publish(dialog, problemOf(error, 'preparation-failed'), undefined)
+      finally {
+        // 失败时由创建控制器继续拥有数据；不让隐藏的 CSV 操作挡住普通导入或持有第二份意图。
+        if (operation === mine) {
+          release()
+          publish({ kind: 'closed' }, view.problem, undefined)
+        }
       }
     },
     async exportSelected() {

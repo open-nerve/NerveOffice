@@ -125,18 +125,20 @@ export {
   UNIVER_SDK_VERSION,
 } from './documents/content.ts'
 export type { RevisionConflictDetails, RevisionSource, SaveContentQuery, SaveContentResponse } from './documents/content.ts'
+export { csvCreateLocation } from './documents/csv-create-location.ts'
+export { CSV_CREATE_PAGE_PATH, CSV_CREATE_PAGE_PATTERN, csvCreatePagePath } from './documents/csv-create-page.ts'
+export type { CsvCreateLocation } from './documents/csv-create-page.ts'
 export { clearDocumentHistoryResponseSchema, documentHistoryDetailSchema, documentHistoryIdSchema, documentHistoryListResponseSchema, documentHistorySummarySchema, HISTORY_PAGE_SIZE, historyListQuerySchema, restoreDocumentHistoryRequestSchema } from './documents/document-history.ts'
 export type { ClearDocumentHistoryResponse, DocumentHistoryDetail, DocumentHistoryListResponse, DocumentHistorySummary, HistoryListQuery, RestoreDocumentHistoryRequest } from './documents/document-history.ts'
 export { DOCUMENT_PAGE_PATTERN, documentIdFromPagePath, documentPagePath } from './documents/document-page.ts'
+export { conflictCopyQuerySchema, copyDocumentRequestSchema, createDocumentRequestSchema, moveDocumentRequestSchema, updateDocumentRequestSchema } from './documents/document-requests.ts'
+export type { ConflictCopyQuery, CopyDocumentRequest, CreateDocumentRequest, MoveDocumentRequest, UpdateDocumentRequest } from './documents/document-requests.ts'
 export * from './documents/document-upgrade.ts'
 export {
-  conflictCopyQuerySchema,
   conflictCopyTitle,
   COPIED_TITLE_SUFFIX,
   copiedDocumentTitle,
-  copyDocumentRequestSchema,
   createdDocumentSchema,
-  createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
   DOCUMENT_ACCESS_VIA,
   DOCUMENT_LIST_ALL_FOLDERS,
@@ -155,16 +157,11 @@ export {
   documentSpaceSchema,
   documentSummarySchema,
   documentTitleSchema,
-  moveDocumentRequestSchema,
   PLATFORM_FORMAT_VERSION,
   PLATFORM_FORMAT_VERSIONS,
-  updateDocumentRequestSchema,
 } from './documents/documents.ts'
 export type {
-  ConflictCopyQuery,
-  CopyDocumentRequest,
   CreatedDocument,
-  CreateDocumentRequest,
   DocumentAccessVia,
   DocumentDetail,
   DocumentListQuery,
@@ -175,9 +172,7 @@ export type {
   DocumentStatus,
   DocumentSummary,
   DocumentType,
-  MoveDocumentRequest,
   PlatformFormatVersion,
-  UpdateDocumentRequest,
 } from './documents/documents.ts'
 export { documentDraftFactSchema, documentDraftFactsQuerySchema, documentDraftFactsResponseSchema, DRAFT_FACTS_MAX_IDS } from './documents/draft-facts.ts'
 export type { DocumentDraftFact, DocumentDraftFactsQuery, DocumentDraftFactsResponse } from './documents/draft-facts.ts'
@@ -336,9 +331,9 @@ export type {
   SharedListQuery,
   SharedListResponse,
 } from './sharing/sharing.ts'
+export { addSpaceMemberRequestSchema, changeSpaceMemberRoleRequestSchema, spaceMemberListResponseSchema, spaceMemberSchema } from './spaces/members.ts'
+export type { AddSpaceMemberRequest, ChangeSpaceMemberRoleRequest, SpaceMember, SpaceMemberListResponse } from './spaces/members.ts'
 export {
-  addSpaceMemberRequestSchema,
-  changeSpaceMemberRoleRequestSchema,
   renameSpaceRequestSchema,
   SPACE_NAME_MAX_LENGTH,
   SPACE_ROLES,
@@ -347,21 +342,15 @@ export {
   spaceIdentitySchema,
   spaceIdSchema,
   spaceListResponseSchema,
-  spaceMemberListResponseSchema,
-  spaceMemberSchema,
   spaceNameSchema,
   spacePermissionsSchema,
   spaceViewSchema,
   teamSpaceSchema,
 } from './spaces/spaces.ts'
 export type {
-  AddSpaceMemberRequest,
-  ChangeSpaceMemberRoleRequest,
   RenameSpaceRequest,
   SpaceIdentity,
   SpaceListResponse,
-  SpaceMember,
-  SpaceMemberListResponse,
   SpacePermissions,
   SpaceRole,
   SpaceStatus,

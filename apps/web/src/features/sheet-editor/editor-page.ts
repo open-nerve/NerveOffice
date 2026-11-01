@@ -18,6 +18,7 @@
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { EditorImageAccess, ImageInputState } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
+import type { CsvTable } from '../../shared/csv/index.ts'
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
@@ -208,6 +209,7 @@ export interface EditorPageOptions {
 
 export interface EditorPage {
   readonly csv: CsvController
+  readonly importCreatedCsv: (table: CsvTable, intent: CreatedCsvIntent) => Promise<boolean>
   readonly sheetName: EditMode['sheetName']
   readonly retryFormulaRecovery: () => void
   readonly retryRecovery: () => Promise<void>
@@ -265,6 +267,13 @@ export interface EditorPage {
   readonly recheckSession: () => Promise<void>
   /** 停止计时器，尽力释放编辑权，销毁编辑器 */
   readonly dispose: () => void
+}
+
+export interface CreatedCsvIntent {
+  readonly documentId: string
+  readonly userId: string
+  readonly csrfToken: string
+  readonly current: () => boolean
 }
 
 export type EditorSurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
@@ -397,8 +406,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     pageSession = next
   }
 
-  function csvTarget(): CsvTarget | undefined {
-    const target = mode?.csvTarget()
+  function csvTarget(newDocument = false): CsvTarget | undefined {
+    const target = mode?.csvTarget(newDocument)
     const signedIn = pageSession
     if (!target || !signedIn || checkInFlight !== undefined || sessionProblem !== undefined)
       return undefined
@@ -970,6 +979,16 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   return {
     csv,
+    async importCreatedCsv(table, intent) {
+      const matches = (): boolean => intent.current() && documentId === intent.documentId
+        && pageSession?.user.id === intent.userId && pageSession.csrfToken === intent.csrfToken
+      if (!matches())
+        return false
+      const target = csvTarget(true)
+      if (!target)
+        return false
+      return csv.importPrepared(table, { ...target, current: () => matches() && target.current(), writable: () => matches() && target.writable() })
+    },
     retryRecovery: async () => recoveryAction(async current => current.discover()),
     sheetName: sheetId => disposed || session !== 'active' ? undefined : mode?.sheetName(sheetId),
     copyRecovery: async () => recoveryAction(async current => current.copy()),

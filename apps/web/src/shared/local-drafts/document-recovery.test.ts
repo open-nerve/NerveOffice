@@ -63,6 +63,55 @@ async function fixture() {
   }
 }
 
+describe('恢复观察的暂停', () => {
+  it('从未发现原件的空状态暂停，不制造清理失败或读取存储', async () => {
+    const h = await fixture()
+    h.recovery.suspend()
+    expect(h.recovery.view()).toMatchObject({ stage: 'unchecked', problem: undefined, operation: undefined, cleanup: undefined })
+    expect(h.makeReader).not.toHaveBeenCalled()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it('已经核实没有草稿，正常暂停不制造失败，也不重开 Reader', async () => {
+    const h = await fixture()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'absent' } })
+    await h.recovery.discover()
+    expect(h.recovery.view().decision).toEqual({ kind: 'none' })
+    const readers = h.makeReader.mock.calls.length
+    h.recovery.suspend()
+    expect(h.recovery.view()).toMatchObject({ problem: undefined, operation: undefined, cleanup: undefined })
+    expect(h.makeReader).toHaveBeenCalledTimes(readers)
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it('已存在的恢复候选暂停后仍报告观察失效，旧丢弃意图不能删除原件', async () => {
+    const h = await fixture()
+    await h.recovery.discover()
+    const intent = h.recovery.beginDiscard()
+    expect(intent).toBeDefined()
+    h.recovery.suspend()
+    expect(h.recovery.view().problem).toBe('invalidated')
+    if (intent === undefined)
+      throw new Error('缺少原候选的丢弃意图')
+    await h.recovery.discard(intent)
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+
+  it('仍有检查在途时暂停保留失效说明，晚到原件不能获得条件动作', async () => {
+    const h = await fixture()
+    const observed = deferred<ObserveResult>()
+    h.observe.mockReturnValueOnce(observed.promise)
+    const checking = h.recovery.discover()
+    await vi.waitFor(() => expect(h.observe).toHaveBeenCalledOnce())
+    h.recovery.suspend()
+    observed.resolve(h.original)
+    await checking
+    expect(h.recovery.view().problem).toBe('invalidated')
+    expect(h.recovery.beginDiscard()).toBeUndefined()
+    expect(h.remove).not.toHaveBeenCalled()
+  })
+})
+
 describe('当前页面副本成功后的条件清理', () => {
   it('清理同一页同一编辑代次的较早落盘；仅使用该次观察，不重放或确认原文档', async () => {
     const h = await fixture()
@@ -73,6 +122,16 @@ describe('当前页面副本成功后的条件清理', () => {
     expect(h.replay).not.toHaveBeenCalled()
     expect(h.conflictCopy).not.toHaveBeenCalled()
     expect(h.reader.dispose).toHaveBeenCalledOnce()
+  })
+
+  it('当前副本的条件清理已完成，再暂停不能把成功改成清理失败', async () => {
+    const h = await fixture()
+    h.observe.mockResolvedValue({ ...h.original, record: { kind: 'draft', meta: { ...h.meta, writtenBy: 'new-page' }, gzip: await gzipBytes(new TextEncoder().encode(BODY)) } })
+    await h.recovery.cleanupCurrentCopy({ writeEpoch: h.meta.writeEpoch, draftSeq: h.meta.draftSeq + 1 })
+    expect(h.recovery.view()).toMatchObject({ stage: 'finished', cleanup: { kind: 'removed' } })
+    h.recovery.suspend()
+    expect(h.recovery.view()).toMatchObject({ stage: 'finished', cleanup: { kind: 'removed' }, problem: undefined })
+    expect(h.remove).toHaveBeenCalledOnce()
   })
 
   it.each([

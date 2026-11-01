@@ -1,9 +1,10 @@
 import type { CsvController, CsvProblem } from './csv-controller.ts'
-import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useId, useRef, useState, useSyncExternalStore } from 'react'
 import { messages } from '../../shared/i18n/index.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Button } from '../../shared/ui/index.ts'
+import { CsvPreviewTable } from './csv-preview.tsx'
 
 const text = editorMessages.csv
 const problems: Readonly<Record<CsvProblem, string>> = text.problems
@@ -19,12 +20,6 @@ export function CsvEntry({ controller, fallbackFocus }: { controller: CsvControl
   const sheetId = useId()
   const problem = view.problem === undefined ? undefined : problems[view.problem]
   const notice = view.notice === undefined ? undefined : text[view.notice]
-  const preview = dialog.kind === 'import' ? dialog.preview : undefined
-  // 预览保留 CSV 的原行列位置；按源坐标标识，不随内容重复或异步重读丢掉单元格身份。
-  const previewRows = useMemo(() => preview?.rows.map((values, row) => ({
-    address: `R${row + 1}`,
-    cells: values.map((value, column) => ({ address: `R${row + 1}C${column + 1}`, value })),
-  })), [preview])
 
   return (
     <div ref={setPortalContainer} data-slot="csv-entry" className="flex flex-wrap items-center gap-2 px-3 pb-2">
@@ -92,24 +87,7 @@ export function CsvEntry({ controller, fallbackFocus }: { controller: CsvControl
                       {dialog.fileName === undefined ? text.chooseFile : text.replaceFile}
                     </Button>
                     {dialog.fileName !== undefined && <p className="truncate text-sm">{dialog.fileName}</p>}
-                    {dialog.preview !== undefined && (
-                      <>
-                        <p className="text-sm">{text.dimensions(dialog.preview.rowCount, dialog.preview.columnCount)}</p>
-                        <div className="max-h-64 overflow-auto rounded border">
-                          <table className="w-full text-sm">
-                            <caption className="sr-only">{text.preview}</caption>
-                            <tbody>
-                              {previewRows?.map(row => (
-                                <tr key={row.address}>
-                                  {row.cells.map(cell => <td key={cell.address} className="max-w-48 overflow-hidden border px-2 py-1 text-ellipsis whitespace-pre">{cell.value}</td>)}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                        <p className="text-xs text-muted-foreground">{text.previewLimit}</p>
-                      </>
-                    )}
+                    {dialog.preview !== undefined && <CsvPreviewTable preview={dialog.preview} />}
                     {dialog.stage === 'reading' && <p role="status">{text.reading}</p>}
                     {dialog.stage === 'preview' && !view.canImport && <p role="status" className="text-sm text-muted-foreground">{text.awaitWritable}</p>}
                   </>

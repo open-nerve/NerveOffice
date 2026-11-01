@@ -107,6 +107,32 @@ const DAMAGED_RESOURCE_PHRASES: Readonly<Record<ProfileResourceName<'sheet@1'>, 
 }
 
 export const editorMessages = {
+  csvCreate: {
+    title: '从 CSV 新建表格',
+    description: '选择 UTF-8 编码的 CSV 文件（最大 5 MiB），预览并确认后创建文档。首行按数据保留，不导入公式或格式。',
+    destination: (space: string, folder?: string) => `创建位置：${space}${folder === undefined ? '' : ` / ${folder}`}`,
+    selectedFolder: '所选文件夹',
+    working: '正在处理，请稍候…',
+    cancel: '取消选择',
+    retry: '重试',
+    confirm: '确认创建并导入',
+    done: 'CSV 已导入，请查看页头保存状态。',
+    replayed: '已找到上一次创建的文档，本轮 CSV 未自动导入。',
+    openCreated: '打开已创建文档',
+    back: '返回空间',
+    login: '重新登录',
+    invalidLocation: '创建位置不正确，请从空间中的 CSV 入口重新打开。',
+    problems: {
+      'offline': '当前无法连接服务，请联网后重试。',
+      'identity': '登录状态已变化，本轮 CSV 已取消。若文档已经打开，请在文档中确认导入和保存状态。',
+      'access-denied': '当前没有在此位置创建文档的权限。',
+      'create-failed': '暂时无法准备或创建文档，请重试。',
+      'result-unknown': '创建结果尚未确认，请重试核对；不会重复创建。',
+      'already-created': '此前的创建可能已经完成，请返回空间核对文档。',
+      'open-failed': '文档已创建，但暂时无法打开。请重试或打开已创建文档。',
+      'import-failed': '文档已创建，本次未完成导入。请确认文档未被修改、网络和编辑状态正常后重试，也可以使用页头的导入入口。',
+    },
+  },
   csv: {
     import: '导入 CSV',
     export: '导出 CSV',

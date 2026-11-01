@@ -3,6 +3,7 @@ import { SPACE_ROLES, spaceNameSchema } from '@nerve-office/contracts'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useId, useState } from 'react'
 import { ApiError, describeError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { addMember } from '../../shared/api/space-members.ts'
 import { writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { adminMessages } from '../../shared/i18n/zh-cn/admin.ts'
@@ -11,7 +12,7 @@ import { problemOf } from '../../shared/lib/validation.ts'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../shared/ui/dialog.tsx'
 import { Alert, AlertDescription, Button, FieldProblem, Input, Label, NativeSelect } from '../../shared/ui/index.ts'
 import { sessionQueryOptions, SYSTEM_ADMIN_ONLY } from '../auth/index.ts'
-import { addMember, renameSpace } from '../spaces/index.ts'
+import { renameSpace } from '../spaces/index.ts'
 
 const text = adminMessages.spaces
 

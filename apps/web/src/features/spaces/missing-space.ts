@@ -1,9 +1,10 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
+import { spaceMembersQueryKey } from '../../shared/api/space-query-keys.ts'
 import { refreshQueries } from '../../shared/lib/refresh-queries.ts'
 import { spaceDocumentsQueryKey, spaceFoldersQueryKey } from '../documents/index.ts'
-import { membersQueryOptions, spaceQueryOptions, spacesQueryOptions } from './spaces-api.ts'
+import { spaceQueryOptions, spacesQueryOptions } from './spaces-api.ts'
 
 /**
  * 去掉一个空间在请求缓存里的内容（页头、成员、各层的文件夹与文档）：下次打开从加载开始，不先显示旧的内容。
@@ -13,7 +14,7 @@ import { membersQueryOptions, spaceQueryOptions, spacesQueryOptions } from './sp
  */
 export function forgetSpace(queryClient: QueryClient, spaceId: string, options: { readonly leaving?: boolean } = {}): void {
   const type = options.leaving === true ? 'all' : 'inactive'
-  for (const queryKey of [spaceQueryOptions(spaceId).queryKey, membersQueryOptions(spaceId).queryKey])
+  for (const queryKey of [spaceQueryOptions(spaceId).queryKey, spaceMembersQueryKey(spaceId)])
     queryClient.removeQueries({ queryKey, exact: true, type })
   for (const queryKey of [spaceDocumentsQueryKey(spaceId), spaceFoldersQueryKey(spaceId)])
     queryClient.removeQueries({ queryKey, type })

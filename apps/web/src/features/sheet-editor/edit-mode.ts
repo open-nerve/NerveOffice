@@ -149,7 +149,7 @@ import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { HandoverFailure, SameBrowser } from './same-browser.ts'
 import type { SaveCoordinator, SaveStatus, SaveView } from './save-coordinator.ts'
 import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
-import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
+import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { incompatibilityOf } from '../../shared/api/client-format.ts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { createLostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
@@ -512,7 +512,7 @@ export type OpenOutcome
 
 export interface EditMode {
   readonly view: () => EditModeView
-  readonly csvTarget: () => CsvTarget | undefined
+  readonly csvTarget: (newDocument?: boolean) => CsvTarget | undefined
   readonly sheetName: SheetEditor['sheetName']
   readonly subscribe: (listener: () => void) => () => void
   readonly retryFormulaRecovery: () => void
@@ -877,7 +877,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     return !disposed && token === generation
   }
 
-  function csvTarget(): CsvTarget | undefined {
+  function csvTarget(newDocument = false): CsvTarget | undefined {
     const editor = slot.editor()
     const kind = mode.kind
     if (!editor || (kind !== 'reading' && kind !== 'editing'))
@@ -887,10 +887,23 @@ export function createEditMode(options: EditModeOptions): EditMode {
     const held = editing.lease
     const epoch = held?.credentials().writeEpoch
     const saver = editing.coordinator
+    const pristine = (): boolean => !newDocument || (kind === 'editing' && editing.baseRevision() === 1
+      && editor.changeSeq() === 0 && saver?.view().unsaved === false
+      && !editor.composing() && editor.uncommittedInput() === 'none')
+    if (newDocument) {
+      try {
+        // 文档 id 与正文 unitId 独立；同时证明服务器原件是该 unit 的空白模板、当前实例未改它。
+        if (!pristine() || shown.snapshot !== sheetSnapshotFor(editor.unitId) || editor.capture() !== shown.snapshot)
+          return undefined
+      }
+      catch {
+        return undefined
+      }
+    }
     const currentTarget = (): boolean => {
       if (!still(token) || sessionToken !== csvSessionGeneration || session !== 'active' || hidden
         || slot.editor() !== editor || mode.kind !== kind || !editor.openCheck.ok
-        || editor.workerFailure() !== undefined || recoveryBusy()) {
+        || editor.workerFailure() !== undefined || recoveryBusy() || !pristine()) {
         return false
       }
       if (mode.kind === 'reading')

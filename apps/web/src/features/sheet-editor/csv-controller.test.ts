@@ -9,6 +9,49 @@ vi.hoisted(() => {
 })
 afterEach(() => vi.useRealTimers())
 
+describe('CSV 同页预解析交接', () => {
+  const table = { rows: [['001', '=1+1']], rowCount: 1, columnCount: 2 }
+
+  it('复用输入准备与一次插表，交接成功明确返回 true', async () => {
+    const h = csvFixture()
+    expect(await h.controller.importPrepared(table, h.target)).toBe(true)
+    expect(h.inserted).toEqual([table])
+    expect(h.events).toEqual(['prepare', 'commit', 'panels', 'formulas', 'insert'])
+    expect(h.controller.view()).toMatchObject({ dialog: { kind: 'closed' }, notice: 'imported' })
+  })
+
+  it('交接的来源失效或只读时不调用输入准备', async () => {
+    const h = csvFixture()
+    h.state.current = false
+    expect(await h.controller.importPrepared(table, h.target)).toBe(false)
+    h.state.current = true
+    h.state.writable = false
+    expect(await h.controller.importPrepared(table, h.target)).toBe(false)
+    expect(h.events).toEqual([])
+  })
+
+  it('异步准备后来源失效，不插入；失败清掉交接矩阵，普通入口仍可使用', async () => {
+    const h = csvFixture()
+    let current = true
+    h.steps.panels = async () => {
+      current = false
+    }
+    expect(await h.controller.importPrepared(table, { ...h.target, current: () => current })).toBe(false)
+    expect(h.inserted).toEqual([])
+    h.controller.openImport()
+    expect(h.controller.view().dialog).toMatchObject({ kind: 'import', stage: 'selecting' })
+  })
+
+  it('已有普通 CSV 对话框时不能覆盖它的文件意图', async () => {
+    const h = csvFixture()
+    h.controller.openImport()
+    await h.controller.chooseFile(csvFile('原选择'))
+    expect(await h.controller.importPrepared(table, h.target)).toBe(false)
+    await h.controller.confirmImport()
+    expect(h.inserted[0]?.rows).toEqual([['原选择']])
+  })
+})
+
 describe('CSV 文件选择与预览', () => {
   it('超过 5 MiB 在读文件之前拒绝，不触碰原输入', async () => {
     const h = csvFixture()

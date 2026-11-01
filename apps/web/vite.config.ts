@@ -4,6 +4,7 @@ import process from 'node:process'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defaultClientConditions, defineConfig } from 'vite'
+import { CSV_CREATE_PAGE_PATTERN } from '../../packages/contracts/src/documents/csv-create-page.ts'
 // 配置文件由 Vite 打包后执行：直接引用 contracts 的源码，开发时不需要先构建 contracts
 import { DOCUMENT_PAGE_PATTERN } from '../../packages/contracts/src/documents/document-page.ts'
 import { HISTORY_PREVIEW_PAGE_PATTERN } from '../../packages/contracts/src/documents/history-preview-page.ts'
@@ -40,7 +41,7 @@ const TEST_ONLY_INPUTS = {
 function editorPageRewrite(): Plugin {
   const rewrite: Connect.NextHandleFunction = (request, _response, next) => {
     const path = request.url?.split('?')[0] ?? ''
-    if (DOCUMENT_PAGE_PATTERN.test(path))
+    if (DOCUMENT_PAGE_PATTERN.test(path) || CSV_CREATE_PAGE_PATTERN.test(path))
       request.url = '/editor.html'
     else if (HISTORY_PREVIEW_PAGE_PATTERN.test(path))
       request.url = '/history-preview.html'

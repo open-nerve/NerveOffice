@@ -12,7 +12,7 @@ import type { FakeLeaseServer } from './lease-server.test-support.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FormulaWorkerError } from '../../editor/index.ts'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
@@ -511,6 +511,52 @@ async function editing(context: ReturnType<typeof setup>): Promise<void> {
 }
 
 describe('CSV 正式模式目标', () => {
+  async function blank(revision = 1, captured = sheetSnapshotFor(DOCUMENT_ID), source = sheetSnapshotFor(DOCUMENT_ID)) {
+    const h = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision }) } })
+    h.factory.configureWith((fake) => {
+      Object.assign(fake.editor, { unitId: (JSON.parse(source) as { id?: string }).id ?? 'unit-1' })
+      vi.mocked(fake.editor.capture).mockReturnValue(captured)
+    })
+    await h.mode.open({ snapshot: source, revision, canEdit: true }, { enterEdit: true })
+    return h
+  }
+
+  it('CSV 文档 id 与正文 unitId 不同，原 revision 1 模板仍应可以导入', async () => {
+    const source = sheetSnapshotFor('0199a2c4-0000-7000-8000-00000000ffff')
+    const h = await blank(1, source, source)
+    expect(h.mode.csvTarget(true)?.writable()).toBe(true)
+  })
+
+  it('CSV 正文 unitId 被替换，或原服务器内容并非空白，不能自动导入', async () => {
+    const source = sheetSnapshotFor('0199a2c4-0000-7000-8000-00000000ffff')
+    const replaced = await blank(1, sheetSnapshotFor(DOCUMENT_ID), source)
+    expect(replaced.mode.csvTarget(true)).toBeUndefined()
+    const nonblank = await blank(1, sheetSnapshotFor(DOCUMENT_ID), snapshotOf('服务器已有正文'))
+    expect(nonblank.mode.csvTarget(true)).toBeUndefined()
+  })
+
+  it('CSV 新建目标只接受 revision 1 的原始空白模板，后续正文变更立即失效', async () => {
+    const h = await blank()
+    const target = h.mode.csvTarget(true)
+    expect(target?.writable()).toBe(true)
+    h.factory.last().edit('用户已经输入')
+    expect(target?.current()).toBe(false)
+    expect(h.mode.csvTarget(true)).toBeUndefined()
+    expect(h.factory.last().disposed).toBe(false)
+  })
+
+  it.each([2, 5])('即使正文为空也不能把 revision %s 当新文档自动导入', async (revision) => {
+    const h = await blank(revision)
+    expect(h.mode.csvTarget(true)).toBeUndefined()
+    expect(h.mode.csvTarget()?.writable()).toBe(true)
+  })
+
+  it('revision 1 的非模板内容不能自动导入，普通 CSV 功能仍保留', async () => {
+    const h = await blank(1, snapshotOf('并非空白'))
+    expect(h.mode.csvTarget(true)).toBeUndefined()
+    expect(h.mode.csvTarget()?.writable()).toBe(true)
+  })
+
   it('阅读仅可导出；进入/退出编辑或卸载后旧目标永久失效', async () => {
     const h = setup()
     expect(h.mode.csvTarget?.()).toBeUndefined()

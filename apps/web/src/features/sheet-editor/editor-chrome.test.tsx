@@ -81,6 +81,7 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   const listeners = new Set<() => void>()
   const page: EditorPage = {
     csv: unusedCsvController(),
+    importCreatedCsv: vi.fn(async () => false),
     sheetName: vi.fn(() => undefined),
     retryFormulaRecovery: vi.fn(),
     retryRecovery: vi.fn(async () => {}),

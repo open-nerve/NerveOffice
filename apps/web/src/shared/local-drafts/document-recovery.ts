@@ -183,13 +183,15 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
   }
 
   function suspend(): void {
+    // 空恢复状态的正常会话确认不等于清理失败；有原件或在途操作时仍须明确作废观察。
+    const invalidated = recordKnown || candidate !== undefined || cleanup !== undefined || action !== undefined
     generation += 1
     knownSource = undefined
     closeReader()
     action?.finish()
     action = undefined
     if (!disposed)
-      publish({ operation: undefined, problem: 'invalidated' })
+      publish({ operation: undefined, ...(invalidated ? { problem: 'invalidated' as const } : {}) })
   }
 
   function live(): boolean {
