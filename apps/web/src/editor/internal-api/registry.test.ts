@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import cellLinksSource from './cell-links.ts?raw'
+import csvArrayCellsSource from './csv-array-cells.ts?raw'
+import csvSheetCommandSource from './csv-sheet-command.ts?raw'
 import domMarkersSource from './dom-markers.ts?raw'
 import formulaProtocolSource from './formula-protocol.ts?raw'
 import imageCellsSource from './image-cells.ts?raw'
@@ -68,6 +70,8 @@ const SOURCES: Readonly<Record<string, string>> = {
   'index.ts': source,
   'ui.ts': uiSource,
   'cell-links.ts': cellLinksSource,
+  'csv-array-cells.ts': csvArrayCellsSource,
+  'csv-sheet-command.ts': csvSheetCommandSource,
   'dom-markers.ts': domMarkersSource,
   'formula-protocol.ts': formulaProtocolSource,
   'image-cells.ts': imageCellsSource,

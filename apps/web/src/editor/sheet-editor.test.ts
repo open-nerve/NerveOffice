@@ -14,10 +14,11 @@ import type { ReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { profileResourceNames, sheetSnapshotFor } from '@nerve-office/contracts'
 import { CommandType, LifecycleStages, Univer, UniverInstanceType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
-import { DeviceInputEventType } from '@univerjs/engine-render'
+import { DeviceInputEventType, UniverRenderEnginePlugin } from '@univerjs/engine-render'
 import { KeyCode } from '@univerjs/ui'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
+import { CsvOperationError } from './csv/csv-operation-error.ts'
 import { ROUND_STOP_TIMEOUT_MS } from './formula-round-stop.ts'
 import { FormulaWorkerError } from './formula-worker-failure.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
@@ -29,6 +30,7 @@ import { dataPluginEntries, snapshotWithResources } from './profile/data-plugins
 import { HYPERLINK_GUARDED_COMMANDS, installEntryGuards } from './profile/entry-guards.ts'
 import { installImagePolicy } from './profile/image-policy.ts'
 import { installLinkPolicy } from './profile/link-policy.ts'
+import { pluginEntry } from './profile/plugin-entry.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
@@ -700,6 +702,137 @@ function realUnitFacade(log: string[]) {
   }
 }
 
+/** CSV 接线使用真实 Facade/命令；只补 jsdom 没有的渲染生命周期，并可送入公式进度事件。 */
+function csvReadyFacade() {
+  const createApi = FUniver.newAPI.bind(FUniver)
+  const lifecycle = new Set<(event: { stage: LifecycleStages }) => void>()
+  const commands = new Set<(event: FakeCommandEvent) => void>()
+  vi.spyOn(FUniver, 'newAPI').mockImplementation((univer) => {
+    const api = createApi(univer)
+    const add = api.addEvent.bind(api)
+    vi.spyOn(api, 'addEvent').mockImplementation((name, callback) => {
+      if (name === api.Event.LifeCycleChanged) {
+        const listener = (event: { stage: LifecycleStages }): void => {
+          callback(event)
+        }
+        lifecycle.add(listener)
+        return { dispose: () => lifecycle.delete(listener) }
+      }
+      const subscription = add(name, callback)
+      if (name !== api.Event.CommandExecuted)
+        return subscription
+      const listener = (event: FakeCommandEvent): void => {
+        callback(event as never)
+      }
+      commands.add(listener)
+      return {
+        dispose: () => {
+          commands.delete(listener)
+          subscription.dispose()
+        },
+      }
+    })
+    return api
+  })
+  return {
+    reach: (stage: LifecycleStages): void => { lifecycle.forEach(listener => listener({ stage })) },
+    fire: (event: FakeCommandEvent): void => { commands.forEach(listener => listener(event)) },
+  }
+}
+
+describe('正式编辑器的 CSV 能力与生命周期', () => {
+  async function create(access: EditorAccess) {
+    // sheets-ui Facade 初始化需要真实 RenderManager；不启动 UI 插件或 canvas 渲染。
+    vi.mocked(sheetPluginEntries).mockReturnValue([pluginEntry(UniverRenderEnginePlugin), ...dataPluginEntries()])
+    // DOM 只读守卫的渲染部分由原只读故事负责；CSV 自己仍必须拒绝只读插入。
+    if (access === 'read')
+      vi.mocked(installReadOnlyGuard).mockImplementationOnce(() => recordingGuard([]))
+    const facade = csvReadyFacade()
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('csv-editor'), access })
+    const [editor] = await Promise.all([creating, reachReady(facade)])
+    try {
+      expect(editor.openCheck).toEqual({ ok: true })
+      // 此文件的 Worker 是受控替身；用原进度协议完成空模板的初始轮，不冒充真实 Worker 计算证据。
+      facade.fire({ id: FORMULA_PROTOCOL.startMutationId, type: CommandType.MUTATION, params: {}, options: { onlyLocal: true } })
+      facade.fire({ id: FORMULA_PROTOCOL.notificationMutationId, type: CommandType.MUTATION, params: { functionsExecutedState: FORMULA_PROTOCOL.completedStates[1] }, options: { onlyLocal: true } })
+      expect(await editor.settleFormulas(2000)).toBe('settled')
+    }
+    catch (error) {
+      await editor.dispose()
+      throw error
+    }
+    return { editor, facade }
+  }
+
+  it.each(['read', 'edit'] as const)('%s 可读取，旧 csv 在 dispose 开始后不能读写', async (access) => {
+    const { editor } = await create(access)
+    try {
+      expect(editor.csv.sheets()).toEqual([{ id: 'sheet-1', name: '工作表1', active: true }])
+      expect(editor.csv.read('sheet-1')).toEqual([[{ text: '', kind: 'text' }]])
+      if (access === 'read')
+        expect(() => editor.csv.insert({ rows: [['no']], rowCount: 1, columnCount: 1 })).toThrow(new CsvOperationError('read-only'))
+      const csv = editor.csv
+      const retiring = editor.dispose()
+      expect(() => csv.sheets()).toThrow(new CsvOperationError('unavailable'))
+      expect(() => csv.read('sheet-1')).toThrow(new CsvOperationError('unavailable'))
+      expect(() => csv.insert({ rows: [['late']], rowCount: 1, columnCount: 1 })).toThrow(new CsvOperationError('unavailable'))
+      await retiring
+    }
+    finally {
+      await editor.dispose()
+    }
+  })
+
+  it('真实插表触发正式 onChange，capture 包含完整的显式类型内容', async () => {
+    const { editor } = await create('edit')
+    try {
+      const changed = vi.fn()
+      editor.onChange(changed)
+      const before = editor.changeSeq()
+      const id = editor.csv.insert({ rows: [['001', '12']], rowCount: 1, columnCount: 2 })
+      expect(changed).toHaveBeenCalledOnce()
+      expect(editor.changeSeq()).toBe(before + 1)
+      expect(JSON.parse(editor.capture())).toMatchObject({
+        sheetOrder: ['sheet-1', id],
+        sheets: { [id]: { cellData: { 0: { 0: { v: '001', t: 1 }, 1: { v: 12, t: 2 } } } } },
+      })
+    }
+    finally {
+      await editor.dispose()
+    }
+  })
+
+  it('公式进度实际接到 CSV 的就绪条件：正在计算拒绝，结束后可读', async () => {
+    const { editor, facade } = await create('edit')
+    try {
+      facade.fire({ id: FORMULA_PROTOCOL.startMutationId, type: CommandType.MUTATION, params: {}, options: { onlyLocal: true } })
+      expect(editor.formulasSettled()).toBe(false)
+      expect(() => editor.csv.read('sheet-1')).toThrow(new CsvOperationError('formula-pending'))
+      facade.fire({ id: FORMULA_PROTOCOL.notificationMutationId, type: CommandType.MUTATION, params: { functionsExecutedState: FORMULA_PROTOCOL.completedStates[1] }, options: { onlyLocal: true } })
+      expect(editor.formulasSettled()).toBe(true)
+      expect(editor.csv.read('sheet-1')).toEqual([[{ text: '', kind: 'text' }]])
+    }
+    finally {
+      await editor.dispose()
+    }
+  })
+
+  it('Worker 首错之后旧 CSV 能力不可再操作', async () => {
+    const { editor } = await create('edit')
+    try {
+      const csv = editor.csv
+      expect(csv.sheets()).toHaveLength(1)
+      FakeWorker.created[0]?.dispatchEvent(new ErrorEvent('error', { message: 'worker failed' }))
+      expect(editor.workerFailure()).toBeDefined()
+      expect(() => csv.read('sheet-1')).toThrow(new CsvOperationError('unavailable'))
+      expect(() => csv.insert({ rows: [['late']], rowCount: 1, columnCount: 1 })).toThrow(new CsvOperationError('unavailable'))
+    }
+    finally {
+      await editor.dispose()
+    }
+  })
+})
+
 /** 真实的资源守卫（被 vi.mock 包了一层的那一个的原样） */
 const { createResourceLoadGuard: realResourceGuard } = await vi.importActual<typeof import('./internal-api/index.ts')>('./internal-api/index.ts')
 
@@ -754,6 +887,8 @@ describe('打开自检（M3-P4 设计 §3.11）：jsdom 里真实的 Univer core
       { kind: 'parse-threw', resource: 'SHEET_FILTER_PLUGIN', error: 'SyntaxError' },
       { kind: 'resource-emptied', resource: 'SHEET_FILTER_PLUGIN' },
     ] })
+    expect(() => editor.csv.sheets()).toThrow(new CsvOperationError('unavailable'))
+    expect(() => editor.csv.insert({ rows: [['no']], rowCount: 1, columnCount: 1 })).toThrow(new CsvOperationError('unavailable'))
     await editor.dispose()
   })
 

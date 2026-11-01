@@ -2,6 +2,7 @@ import type { EditorAccess, FormulaMode, FormulaWorkerFailure, SheetEditor } fro
 import type { CreateModeEditor } from './editor-slot.ts'
 import type { FormulaRecovery, FormulaRecoveryContext } from './formula-recovery.ts'
 import { vi } from 'vitest'
+import { unusedCsv } from './csv.test-support.ts'
 import { deferred, INITIAL, leaseFixture, prepare, fixture as sessionFixture } from './editing-session.test-support.ts'
 import { createEditorSlot } from './editor-slot.ts'
 import { createFormulaFallback } from './formula-fallback.ts'
@@ -34,6 +35,7 @@ export function formulaEditor(snapshot: string, mode: FormulaMode) {
   const failures = signal<[FormulaWorkerFailure]>()
   const control = { failCapture: false, commitResult: true, checkOk: true }
   const editor: SheetEditor = {
+    csv: unusedCsv(),
     sheetName: () => undefined,
     unitId: 'unit-1',
     formulaMode: mode,

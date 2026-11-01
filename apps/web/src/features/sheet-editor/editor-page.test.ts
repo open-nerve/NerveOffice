@@ -28,6 +28,7 @@ import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.tes
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+import { unusedCsv } from './csv.test-support.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorPage } from './editor-page.ts'
 import { memoryIssuedRequest } from './issued-request.test-support.ts'
@@ -177,6 +178,7 @@ function fakeEditor(stage: SheetEditorLifecycle = 'rendered', formulaMode: Formu
   const failures = new Set<(failure: FormulaWorkerFailure) => void>()
   const compositions = new Set<() => void>()
   const editor: SheetEditor = {
+    csv: unusedCsv(),
     unitId: 'unit-1',
     sheetName: vi.fn(() => undefined),
     formulaMode,

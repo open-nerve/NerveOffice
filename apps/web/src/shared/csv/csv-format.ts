@@ -35,3 +35,14 @@ export function assertCsvShape(rows: number, columns: number): void {
   if (rows * columns > CSV_LIMITS.cells)
     throw new CsvError('cells')
 }
+
+/** 用于已读入的字段；解析扫描仍须逐字符限制内存。 */
+export function assertCsvField(text: string): void {
+  if (text.length > CSV_LIMITS.field)
+    throw new CsvError('field')
+  if (text.includes('\0'))
+    throw new CsvError('syntax')
+  // Unicode 模式将合法代理对视为一个码点，只拒绝孤立代理字符。
+  if (/[\uD800-\uDFFF]/u.test(text))
+    throw new CsvError('encoding')
+}

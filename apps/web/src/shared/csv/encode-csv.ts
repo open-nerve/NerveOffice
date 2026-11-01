@@ -1,4 +1,4 @@
-import { assertCsvShape, CSV_LIMITS, CsvError } from './csv-format.ts'
+import { assertCsvField, assertCsvShape, CSV_LIMITS, CsvError } from './csv-format.ts'
 
 export interface CsvExportCell {
   readonly text: string
@@ -20,13 +20,7 @@ function formulaLike(text: string): boolean {
 
 function quotedCell(cell: CsvExportCell | undefined): string {
   const text = cell?.text ?? ''
-  if (text.length > CSV_LIMITS.field)
-    throw new CsvError('field')
-  if (text.includes('\0'))
-    throw new CsvError('syntax')
-  // Unicode 模式下合法代理对视为一个码点，只拒绝孤立代理字符，避免 TextEncoder 替换正文。
-  if (/[\uD800-\uDFFF]/u.test(text))
-    throw new CsvError('encoding')
+  assertCsvField(text)
   const numeric = cell?.kind === 'number' && NUMERIC_DISPLAY.test(text)
   const protectedText = !numeric && formulaLike(text) ? `\t${text}` : text
   if (protectedText.length > CSV_LIMITS.field)

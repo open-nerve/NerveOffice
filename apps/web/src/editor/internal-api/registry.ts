@@ -73,6 +73,22 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
+    name: 'csvArrayCells',
+    origin: 'engine-formula 的 FormulaDataModel.getArrayFormulaCellData 与 sheets-formula 的 ArrayFormulaCellInterceptorController 协议',
+    sdk: { '@univerjs/core': ['Univer', 'CellValueType'], '@univerjs/engine-formula': ['FormulaDataModel'] },
+    purpose: '只读枚举当前文档/表的实际数组结果坐标与数值类型，供 CSV 有界范围和类型判断；不暴露服务或缓存引用，显示文本仍经公开 Facade。',
+    evidence: '固定 1.0.1 引擎只把数组锚点写入原 cellData，溢出由 SetArrayFormulaDataMutation 更新缓存；CELL_CONTENT 覆盖 v/t、保留 p，v/t 同时 nullish 时显示 NUMBER/0。getDataRange 仍只读原存储，无法代替该查询。',
+    regression: 'csv/sheet-csv.test.ts：真实 SetArrayFormulaDataMutation、Facade 显示和原始锚点对照，数组负数/格式/富文本/nullish/空结果/预算/文档表隔离/只读快照；registry 与源码清单；P5-S5 真实 SEQUENCE 的 Worker/主线程计算后导出。',
+  },
+  {
+    name: 'CSV_SHEET_COMMAND',
+    origin: 'core 的 mergeWorksheetSnapshotWithDefault 与 sheets 的 InsertSheetCommand；公开 FUniver 同步命令入口',
+    sdk: { '@univerjs/core': ['IWorksheetData', 'mergeWorksheetSnapshotWithDefault'], '@univerjs/core/facade': ['FUniver'], '@univerjs/sheets': ['InsertSheetCommand'] },
+    purpose: 'CSV 在完整候选通过原快照容量预算后，单次插入已显式定型的工作表并进入原撤销栈；保留命令拒绝的结果。视图激活另行处理。',
+    evidence: '固定 1.0.1 sheets 的 insert-sheet.command.ts 只在 InsertSheetMutation 成功后登记一组 undo/redo；FWorkbook.insertSheet 忽略命令返回值，仍按索引激活，故不能作为原子导入出口。',
+    regression: 'csv/sheet-csv.test.ts：真实 core 与原档案数据插件，整表一次撤销重做、原六类资源不变、两层拒绝无写入/历史改变、容量预检；registry.test.ts 与 tools/internal-api-sources.test.ts；P5-S5 CSV 保存重开故事。',
+  },
+  {
     name: 'installRichLinkShortcut',
     origin: '本实例 IShortcutService、正常单元格内部编辑器与富文本选区',
     sdk: {

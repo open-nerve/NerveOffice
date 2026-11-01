@@ -28,6 +28,7 @@ import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.tes
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+import { unusedCsv } from './csv.test-support.ts'
 import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS, TAKEOVER_STEAL_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
@@ -139,6 +140,7 @@ function fakeFactory() {
       failCapture: false,
       formulasSettled: true,
       editor: {
+        csv: unusedCsv(),
         unitId: 'unit-1',
         sheetName: vi.fn(() => undefined),
         formulaMode: options.formulaMode ?? 'worker',

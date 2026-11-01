@@ -245,6 +245,8 @@ export type {
 } from './documents/editing.ts'
 export { HISTORY_PAGE_ROUTE, historyPagePath } from './documents/history-page.ts'
 export { HISTORY_PREVIEW_PAGE_PATTERN, historyIdsFromPagePath, historyPreviewPagePath } from './documents/history-preview-page.ts'
+export { measureJsonText, RESOURCE_DATA_DEPTH, SNAPSHOT_MAX_ENTRIES } from './documents/json-complexity.ts'
+export type { EntryCount, JsonLimitRule } from './documents/json-complexity.ts'
 export { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './documents/link-address.ts'
 export type { CanonicalLink, CellLinkRule, LinkAddressInvalidReason } from './documents/link-address.ts'
 export { LOCAL_DRAFT_RETENTION_DAYS } from './documents/local-drafts.ts'

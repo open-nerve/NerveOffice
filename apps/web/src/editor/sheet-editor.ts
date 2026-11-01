@@ -34,6 +34,7 @@ import type { ChangeClassifierConfig } from './change-tracking/change-classifier
 import type { ChangeTracker } from './change-tracking/change-tracker.ts'
 import type { CleanupStack } from './cleanup-stack.ts'
 import type { CompositionWatch } from './composition-watch.ts'
+import type { SheetCsv } from './csv/sheet-csv.ts'
 import type { EditorAccess } from './editor-access.ts'
 import type { FormulaRound } from './formula-round-stop.ts'
 import type { FormulaWorkerFailure } from './formula-worker-failure.ts'
@@ -54,6 +55,7 @@ import { watchCellEditing } from './cell-editing-watch.ts'
 import { createChangeTracker } from './change-tracking/change-tracker.ts'
 import { createCleanupStack } from './cleanup-stack.ts'
 import { watchComposition } from './composition-watch.ts'
+import { createSheetCsv } from './csv/sheet-csv.ts'
 import { ROUND_STOP_TIMEOUT_MS, stopRunningRound } from './formula-round-stop.ts'
 import { FormulaWorkerError } from './formula-worker-failure.ts'
 import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
@@ -85,6 +87,8 @@ import './profile/styles.ts'
 
 export interface SheetEditor {
   readonly unitId: string
+  /** 有界 CSV 适配：公开显示数据/单次插表；会话、租约与在线条件由宿主在执行前再次核对。 */
+  readonly csv: SheetCsv
   /** 只读名称查询，不捕获快照、不切表；未知表或销毁期间返回 undefined。 */
   readonly sheetName: (sheetId: string) => string | undefined
   /** 本实例在哪里计算；运行中不能原地切换，页面须按原权限重建。 */
@@ -533,7 +537,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     await tearDown(cleanup, rounds)
     throw error
   }
-  const { workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
+  const { univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
 
   let disposed = false
   /** 这一次销毁（第一次调用 dispose 时开始）：重复调用等的都是它，不再销毁一次 */
@@ -551,8 +555,21 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       throw new Error('表格编辑器已经销毁')
   }
 
+  const formulasSettled = (): boolean => !disposed && formula.failure() === undefined && changes.formulasSettled()
+  const csv = createSheetCsv({
+    univer: mounted.univer,
+    workbook,
+    univerAPI,
+    canRead: () => !disposed && openCheck.ok && formula.failure() === undefined,
+    canWrite: () => options.access === 'edit',
+    formulasSettled,
+    newId: () => crypto.randomUUID(),
+    reportError: error => reportError(error),
+  })
+
   return {
     unitId: snapshot.unitId,
+    csv,
     sheetName(sheetId) {
       if (disposed)
         return undefined
@@ -593,7 +610,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
       const settled = await pollUntil(() => formula.failure() !== undefined || changes.formulasSettled(), { timeoutMs, intervalMs: SETTLE_POLL_INTERVAL_MS })
       return settled && formula.failure() === undefined ? 'settled' : 'timeout'
     },
-    formulasSettled: () => !disposed && formula.failure() === undefined && changes.formulasSettled(),
+    formulasSettled,
     onFormulaProgress(listener) {
       if (disposed)
         return () => {}

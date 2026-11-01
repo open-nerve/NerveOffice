@@ -248,7 +248,7 @@ const EDITOR_UNIVER_SOURCE_PATTERNS = [NO_UNIVER_PRO, NO_NODE_MODULES_PATH, NO_U
 // lint 看不出来、由审查保证的（写进 ADR-010）：Facade 对象上的方法调用（它们本来就是公开 API，其中的内部对象经返回值流出时
 // 认不出来）、经注入器按字符串或变量取服务、对 SDK 对象的私有字段的其他访问写法
 const UNIVER_PUBLIC_VALUES: Readonly<Record<string, readonly string[]>> = {
-  '@univerjs/core': ['CommandType', 'LifecycleStages', 'LocaleType', 'LogLevel', 'mergeLocales', 'Univer'],
+  '@univerjs/core': ['CellValueType', 'CommandType', 'LifecycleStages', 'LocaleType', 'LogLevel', 'mergeLocales', 'Univer'],
   '@univerjs/core/facade': ['FUniver'],
   '@univerjs/data-validation': ['UniverDataValidationPlugin'],
   '@univerjs/docs': ['UniverDocsPlugin'],

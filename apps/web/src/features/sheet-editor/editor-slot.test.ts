@@ -3,6 +3,7 @@
 import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
+import { unusedCsv } from './csv.test-support.ts'
 import { createEditorSlot } from './editor-slot.ts'
 
 interface FakeEditor {
@@ -69,6 +70,7 @@ function fakeFactory() {
       },
       finishDispose: () => finish(),
       editor: {
+        csv: unusedCsv(),
         unitId: 'unit-1',
         sheetName: () => undefined,
         formulaMode: 'worker',
