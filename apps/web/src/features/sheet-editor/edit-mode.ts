@@ -131,6 +131,7 @@ import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
 import type { DraftCaptureRef, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
+import type { CsvTarget } from './csv-controller.ts'
 import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit-request.ts'
 import type { EditingDraftReady } from './editing-draft.ts'
@@ -511,6 +512,7 @@ export type OpenOutcome
 
 export interface EditMode {
   readonly view: () => EditModeView
+  readonly csvTarget: () => CsvTarget | undefined
   readonly sheetName: SheetEditor['sheetName']
   readonly subscribe: (listener: () => void) => () => void
   readonly retryFormulaRecovery: () => void
@@ -690,6 +692,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 进入编辑的时刻（clock.now 的时间轴上）：空闲释放与自动交出都从它与最后一次操作中较晚的那个算起 */
   let editingSince = 0
   let generation = 0
+  let csvSessionGeneration = 0
   let session: 'active' | 'signed-out' | 'other-user' = 'active'
   let localGeneration = options.localDrafts?.permit?.()?.generation
   let markerStopped = false
@@ -872,6 +875,41 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 这件事还在：页面没有卸载，也没有开始别的事 */
   function still(token: number): boolean {
     return !disposed && token === generation
+  }
+
+  function csvTarget(): CsvTarget | undefined {
+    const editor = slot.editor()
+    const kind = mode.kind
+    if (!editor || (kind !== 'reading' && kind !== 'editing'))
+      return undefined
+    const token = generation
+    const sessionToken = csvSessionGeneration
+    const held = editing.lease
+    const epoch = held?.credentials().writeEpoch
+    const saver = editing.coordinator
+    const currentTarget = (): boolean => {
+      if (!still(token) || sessionToken !== csvSessionGeneration || session !== 'active' || hidden
+        || slot.editor() !== editor || mode.kind !== kind || !editor.openCheck.ok
+        || editor.workerFailure() !== undefined || recoveryBusy()) {
+        return false
+      }
+      if (mode.kind === 'reading')
+        return !mode.gone && mode.damaged === undefined && mode.blocked === undefined && mode.update !== 'loading' && mode.takeover === undefined
+      return mode.kind === 'editing' && held !== undefined && editing.lease === held
+        && held.credentials().writeEpoch === epoch && editing.holdsLock()
+        && pendingLoss === undefined && pendingBlock === undefined
+        && saver !== undefined && editing.coordinator === saver && !saveEnded(saver.view().status)
+    }
+    if (!currentTarget())
+      return undefined
+    return {
+      editor,
+      current: currentTarget,
+      writable: () => kind === 'editing' && currentTarget() && writableUnprompted(),
+      // 阅读不重算，必须尊重服务器的旧缓存标记。编辑态已按该标记强制重算，完成与否由 SDK 的实时 tracker 判断；
+      // 保存协调器的标记还可能只是“算完但尚未上传”，不能让导出依赖一次新的正文保存。
+      formulasPending: () => mode.kind === 'reading' && mode.formulasPending,
+    }
   }
 
   /** 服务端说的这一版的"公式待更新"（不知道时为假：下一次检查补上） */
@@ -2116,6 +2154,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   return {
     view: () => current,
+    csvTarget,
     sheetName: sheetId => disposed ? undefined : slot.editor()?.sheetName(sheetId),
     retryFormulaRecovery: () => formulaRecovery?.retry(),
     subscribe: (listener) => {
@@ -2292,8 +2331,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
       localGeneration = nextGeneration
       const previous = session
       session = next
-      if (previous !== next || localChanged)
+      if (previous !== next || localChanged) {
+        csvSessionGeneration += 1
         formulaRecovery?.cancel()
+      }
       syncSaving()
       notify()
       if (localChanged)

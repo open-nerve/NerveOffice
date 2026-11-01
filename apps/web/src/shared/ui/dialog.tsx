@@ -13,6 +13,8 @@ export const DialogTrigger = DialogPrimitive.Trigger
 export const DialogClose = DialogPrimitive.Close
 
 type DialogContentProps = ComponentProps<typeof DialogPrimitive.Content> & {
+  /** 需要属于宿主页头交互/输入范围时指定容器；默认仍挂到 body。 */
+  readonly portalContainer?: HTMLElement | null
   /** 关闭之后，打开之前有焦点的元素已经不在了（例如随操作消失的按钮）或者不能聚焦时，焦点去哪里 */
   readonly fallbackFocus?: () => void
   /**
@@ -29,7 +31,7 @@ type DialogContentProps = ComponentProps<typeof DialogPrimitive.Content> & {
  * 交还焦点是在 Radix 的 onCloseAutoFocus 里：内容卸下之后（FocusScope 卸下时延后一个任务派发），这时弹窗之外的 aria-hidden
  * 已经撤销（DialogContent 卸下时 hideOthers 的撤销）。交还之后再告诉使用方弹窗关掉了（onClosed）
  */
-export function DialogContent({ className, children, onOpenAutoFocus, onCloseAutoFocus, fallbackFocus, onClosed, ...props }: DialogContentProps) {
+export function DialogContent({ className, children, onOpenAutoFocus, onCloseAutoFocus, fallbackFocus, onClosed, portalContainer, ...props }: DialogContentProps) {
   const openerRef = useRef<HTMLElement | null>(null)
 
   function rememberOpener(event: Event): void {
@@ -55,7 +57,7 @@ export function DialogContent({ className, children, onOpenAutoFocus, onCloseAut
   }
 
   return (
-    <DialogPrimitive.Portal>
+    <DialogPrimitive.Portal container={portalContainer}>
       <DialogPrimitive.Overlay data-slot="dialog-overlay" className="fixed inset-0 z-50 bg-black/40" />
       <DialogPrimitive.Content
         data-slot="dialog-content"

@@ -73,6 +73,7 @@ import { Alert, AlertDescription, Button, buttonVariants, PersonName, Phrase } f
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
+import { CsvEntry } from './csv-entry.tsx'
 import { editorQueryClient } from './editor-query-client.ts'
 import { formulaRecoveryNotice } from './formula-recovery-ui.ts'
 import { imageInputNotice } from './image-input-notice.ts'
@@ -1201,6 +1202,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               {editing !== undefined && <SaveControls available={available && !formulaBlocked} page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
             </div>
           </div>
+          {ready !== undefined && <CsvEntry controller={page.csv} fallbackFocus={() => backRef.current?.focus()} />}
           {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
           {local !== undefined && <LocalSaveStatus indicator={local} />}
           {view.imageOperation !== undefined && <p role="status" data-slot="image-operation" className="px-3 pb-2 text-sm text-muted-foreground">{imageInputNotice(view.imageOperation)}</p>}
