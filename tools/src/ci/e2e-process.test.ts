@@ -6,25 +6,31 @@ import process from 'node:process'
 import { describe, expect, it } from 'vitest'
 import { OWNER_VARIABLE, parseProcessStat, prepareRun } from './e2e-process.ts'
 
+// 旧人工样例只列到 start 后两项；保持原值/断言，只补齐 Linux 剩余数字列和末尾换行。
+function completeStat(text: string): string {
+  const fields = text.slice(text.lastIndexOf(')') + 2).split(' ')
+  return `${text}${' 0'.repeat(50 - fields.length)}\n`
+}
+
 describe('CI E2E 的 Linux 内核身份与平台边界', () => {
   it('跨进程归属标记属于配置模块已保留的测试命名空间', () => {
     expect(OWNER_VARIABLE).toMatch(/^NERVE_TEST_[A-Z0-9_]+$/)
   })
 
   it('comm 含空格和括号时仍读取真正的进程组与启动 tick', () => {
-    expect(parseProcessStat('421 (worker (a)) S 400 421 421 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0', 501))
+    expect(parseProcessStat(completeStat('421 (worker (a)) S 400 421 421 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0'), 501))
       .toEqual({ pid: 421, parent: 400, group: 421, start: '987654', uid: 501, state: 'S' })
     expect(() => parseProcessStat('broken', 501)).toThrow()
-    expect(parseProcessStat('2 (kthreadd) S 0 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 0 0', 0)).toBeUndefined()
+    expect(parseProcessStat(completeStat('2 (kthreadd) S 0 0 0 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 1 0 0'), 0)).toBeUndefined()
   })
 
   it.each(['R', 'S', 'D', 'T', 't', 'X', 'Z', 'P', 'I'])('Linux 内核状态 %s 仍给出真实身份，tracing stop 不能误判为坏数据或已退出', (state) => {
-    expect(parseProcessStat(`421 (browser) ${state} 400 421 421 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0`, 501))
+    expect(parseProcessStat(completeStat(`421 (browser) ${state} 400 421 421 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0`), 501))
       .toEqual({ pid: 421, parent: 400, group: 421, start: '987654', uid: 501, state })
   })
 
   it.each(['?', 'tt', 'q'])('未识别或非法的状态 %s 仍拒绝解析', (state) => {
-    expect(() => parseProcessStat(`421 (browser) ${state} 400 421 421 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0`, 501)).toThrow()
+    expect(() => parseProcessStat(completeStat(`421 (browser) ${state} 400 421 421 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 987654 0 0`), 501)).toThrow()
   })
 
   if (process.platform === 'linux') {

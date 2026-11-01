@@ -1,28 +1,29 @@
 // 只供 Linux CI 的 E2E 分片使用。只记录 PID、内核启动身份与随机运行标记，绝不记录命令行或环境。
 // 浏览器/API 会另起进程组；serve.ts 的 CI 预加载设施在 fork 时保留标记，组/后代跟踪只作为补充。
+import type { Identity, ProcessRow } from './e2e-proc-stat.ts'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
 import { failureStageSchema, inspectProcessOperation, processDiagnostic, processFailureSchema } from './e2e-diagnostics.ts'
+import { identitySchema, readProcess } from './e2e-proc-stat.ts'
+
+export { parseProcessStat, readProcess } from './e2e-proc-stat.ts'
 
 export const OWNER_VARIABLE = 'NERVE_TEST_CI_E2E_OWNER'
 export const CI_BUDGETS = { runMs: 90 * 60_000, cleanupMs: 15 * 60_000, forceMs: 60_000, pollMs: 250 }
 const budgetsSchema = z.object({ runMs: z.number().positive(), cleanupMs: z.number().positive(), forceMs: z.number().positive(), pollMs: z.number().positive() })
-const identitySchema = z.object({ pid: z.number().int().positive(), start: z.string().regex(/^\d+$/), uid: z.number().int().nonnegative(), group: z.number().int().positive() })
 const ownerSchema = z.object({ version: z.literal(1), token: z.uuid(), root: z.string(), uid: z.number().int().nonnegative(), budgets: budgetsSchema })
 const runtimeSchema = z.object({ startedAt: z.number(), supervisor: identitySchema, leader: identitySchema.optional(), owned: z.array(identitySchema) })
 const stopSchema = z.object({ at: z.number(), reason: z.enum(['deadline', 'signal', 'recovery']) })
 const resultSchema = z.object({ exitCode: z.number().int(), stopped: z.boolean(), forced: z.boolean(), quiescent: z.boolean() })
 const quiescenceSchema = z.object({ quiescent: z.literal(true), forced: z.boolean() })
-type Identity = z.infer<typeof identitySchema>
 type Owner = z.infer<typeof ownerSchema>
 type Runtime = z.infer<typeof runtimeSchema>
 type Stop = z.infer<typeof stopSchema>
-interface ProcessRow extends Identity { parent: number, state: string }
 export interface RunResult { exitCode: number, stopped: boolean, forced: boolean, quiescent: boolean }
 
 function linux(): number {
@@ -75,39 +76,6 @@ function readOwner(directory: string, root: string): Owner {
   if (owner.root !== realpathSync(root) || owner.uid !== uid)
     throw new Error('CI 运行记录不属于当前 worktree/用户')
   return owner
-}
-
-/** /proc/stat 的 comm 可以含空格和括号；starttime 是内核启动 tick，不用秒级墙钟猜 PID 复用。 */
-export function parseProcessStat(text: string, uid: number): ProcessRow | undefined {
-  const end = text.lastIndexOf(')')
-  const pid = Number(text.slice(0, text.indexOf(' ')))
-  const fields = text.slice(end + 2).trim().split(/\s+/)
-  const group = Number(fields[2])
-  // 内核线程不属于任何用户进程组，不是本工具可授权发信号的对象。
-  if (group === 0)
-    return undefined
-  const identity = identitySchema.parse({ pid, uid, group, start: fields[19] })
-  // Linux 的 tracing stop 是小写 t（Crashpad/调试器暂停时），仍是有身份的活进程。
-  if (end < 0 || !/^[A-Zt]$/.test(fields[0] ?? '') || !Number.isSafeInteger(Number(fields[1])))
-    throw new Error('Linux 进程身份格式无效')
-  return { ...identity, parent: Number(fields[1]), state: fields[0] ?? '' }
-}
-
-function readProcess(pid: number, uid?: number): ProcessRow | undefined {
-  try {
-    const path = `/proc/${pid}/stat`
-    const actualUid = inspectProcessOperation('stat-process', () => statSync(path).uid, pid)
-    // 先过滤用户，不能让宿主内核线程（PGID=0）的不可发信号身份干扰本轮扫描。
-    if (uid !== undefined && actualUid !== uid)
-      return undefined
-    const text = inspectProcessOperation('read-process', () => readFileSync(path, 'utf8'), pid)
-    return inspectProcessOperation('parse-process', () => parseProcessStat(text, actualUid), pid)
-  }
-  catch (error) {
-    if (absent(error))
-      return undefined
-    throw error
-  }
 }
 
 function same(a: Identity, b: Identity): boolean {
@@ -315,7 +283,7 @@ export async function settleRun(directory: string, root: string): Promise<{ quie
 export function recordProcessFailure(directory: string, root: string, stage: string | undefined, error: unknown): void {
   readOwner(directory, root)
   const parsed = failureStageSchema.safeParse(stage)
-  const value = { at: Date.now(), stage: parsed.success ? parsed.data : 'unknown' as const, ...processDiagnostic(error) }
+  const value = processFailureSchema.parse({ at: Date.now(), stage: parsed.success ? parsed.data : 'unknown', ...processDiagnostic(error) })
   writeJson(directory, `failure-${value.stage}.json`, value)
 }
 

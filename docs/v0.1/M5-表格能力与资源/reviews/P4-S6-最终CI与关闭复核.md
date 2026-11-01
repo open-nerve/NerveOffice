@@ -1,6 +1,70 @@
 # M5-P4 最终验收与关闭复核
 
-## 2026-10-31 当前断点：full19/container08 同源本地接受
+## 2026-11-01 本地验收：full24/container09 同源通过
+
+真实受测提交为 `e1177abe3baa1e17aac6b000f03ee8313b5ed253`，本轮合并前 main/origin/main 为 `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`；仍只使用 `codex/m5-p4-history-gc`。Linux 退出哨兵观察补正 `8efd1a7b`、PID 就绪及信号边界补正 `15fcbb5c`、独立 CLI 夹具依赖补正 `e1177abe` 均已正常提交。以下只记录当前输入的本地验收；最终合并推送、同 SHA CI 和 Phase 关闭仍须实际完成。
+
+本节 `s6/` 相对主目录 `.codex/handoffs/m5-p4-20261022/`，Q 为 `s6/hosted-vm-policy/final-ci-40947141649-investigation/`。r15 工具经 99 项合同、16 项 bridge、真实 exec 0/7 及小型资源闭合验证后独审接受；运行前冻结为 `s6/hosted-vm-policy/tools-frozen-before-full24-r15.json`，SHA-256 `5c40e591e6483f6513f015453ad3a7771b8e963cb0f16f43b11a6a707e17eab6`，553 项冻结输入保持。工具接受不代替产品门禁，旧工具及失败原件不覆盖。
+
+| 范围 | 本轮事实 |
+| --- | --- |
+| full24 | `s6/s6-gates/full24-20261101T024459905094Z`，原 `pnpm verify --ci` 十阶段与桌面守护均 exit 0。720 文件/17,301 项单元与集成通过；E2E 2,424 首过及 16 个原平台跳过，无 retry/flaky/global error/漏跑。JSON、HTML、2,440 项运行前清单与原元数据一致，11,693 项 checksums 独立核对。 |
+| 容量与覆盖率 | 原单次 coverage 的五组阈值通过；总行/语句/函数/分支分别 93.9%/93.83%/94.62%/90.38%。七万资源用例保持原 17 条断言、60 秒和完整规模，161 个操作均有开始/完成，终尾累计 10,065 ms。原范围、时限、worker/retry、配置和预算未变。 |
+| 崩溃与 OPFS | full24 的 59 份崩溃附件、168 轮、891 个归属进程，late 0；945 份 OPFS 证明、840 文件/134,044 B，完整命名空间及清理映射成立。历史预览、图片、链接零隐式外站请求与原正文拒绝断言均复核。 |
+| container09 | `s6/s6-gates/container09-20261101T052756984268Z`，原 `pnpm test:e2e:container` 与守护均 exit 0。339 首过（328 常规、4 崩溃、7 重启），零 skip/retry/flaky/global error；4,704 项 checksums 复算，4 份崩溃附件/4 轮/16 个归属进程、late 0。 |
+| 生产部署 | 本机 Linux arm64 原生图片矩阵、私有卷/GC、错误配置与主密钥拒绝、日志核对通过。18 次正文拒绝及随后上传恢复首过；图片附件中的 6 条及正文拒绝附件中的 2 条容器内存观测，峰值最大 668,241,920 B，原 4 GiB 上限，OOM/OOM-kill 均 0。本机 arm64 不冒充 CI x64。 |
+
+两轮 4,648 项源码字节、类型/模式/链接和 16 个实际安装 SDK 包一致，无 intergate 代码、测试或基础设施例外。四份 `full24-source-{before,after}-r15.json`、`container09-source-{before,after}-r15.json` 均在真实开始前/结束后由原入口采集。随后结果文档的精确差异须另经独审，并绑定实际 T/M；不预填未来提交。
+
+**实际清理：** full24 e2e `c728f2fd-89f6-4cb0-96b6-7761b3d97d5f`、integration `23321dbf-b686-46cf-b68e-993dbfc4be44` 及 container09 `c2090838-f92d-4039-ba47-abf51bb06065` 均 passed/0、cleanup complete。scratch/短根/alias 实际不存在，owner/进程组退出，完整 lsof 和锁核对通过；合计 1,121 个 profile 清理，完整 profile 与便携诊断保留均为 0。必要最终报告已 pin。容器原台账、回执与主 run/归档摘要绑定；root 与独审另行按本轮 namespace 做 11 项查询，容器、网络、卷和镜像均空。共享 Docker daemon、PostgreSQL 启动身份未变，旧约 345 MB 已删除句柄债仍挂账。
+
+两轮 native `caffeinate -i` 只用于防空闲休眠，不阻止合盖休眠，不更改系统设置或产品配置；实际 helper/guard/wrapper/observer/产品组归属、运行中 assertion 及结束释放均核对。WindowServer 全程为 989，无守护停止；full24 311 个连续采样最大间隔 30.617055 秒。full24 首次守护采样至结束可用空间为 100,637,097,984 → 100,486,942,720 B，最低 84,647,522,304 B；container09 为 99,689,836,544 → 101,916,246,016 B，最低 99,684,622,336 B。首次采样不等于启动瞬间；APFS 整机变化不等于本轮独占释放量。实际运行与 root 收尾证明在 Q 的 `full24-native-launch01/` 和 `container09-native-launch01/`。
+
+**full23 保留为中断：** 该轮跨过 2026-11-01 07:00:35–09:45:19（Asia/Shanghai）的合盖休眠；10 个失败用例与睡眠时间重叠，root 随后停止原轮，没有生成成功 after-capture。相同源码的清醒有界复验中这 10 项全部首过，本次 full24 也全部首过；原失败不回写为成功。调查、电源记录与复现信息在 `Q/r14-full23-sleep01/`，原 bundle 保持。其 11 个完整失败 profile 已按精确归属、全部租约和完整 lsof 安全退役，原 interrupted/130 与历史计量保留；逐节点清单、保留证据及无副作用重复执行证明见 `Q/full23-profile-retirement01/root-verification01.json`。退役逻辑量 180,916,086 B；实测整机可用空间 101,915,480,064 → 102,009,356,288 B，净 +93,876,224 B，不宣称全部净变化均由本操作贡献。
+
+**独立接受：** `Q/full24-container09-r15-independent-review01.md`（SHA-256 `c9303e3ea02d1c399dbe0f40ee0db7ff3a8428fd5b1b068c81af41293c98e4ab`）及同名 `.json`（SHA-256 `3d3004c889ab786c994f49bc977d9786e9b8e37185f9aa6c8a05f42c6c0226eb`）。C/I/M=0/0/0。原 auditor 只重定向末端输出，全部原断言保留，重放结果与原审计逐字节一致；未重跑产品测试。报告只接受本地双门禁，不签未来 CI 或 Phase 关闭。
+
+**接续：** 更新并独审既有结果文档，正常中文提交和 `--no-ff` 合入 main；绑定实际 T/M，经原 pre-push 推 main，再核同最终 SHA、attempt 1 的六项 CI 和十份报告。最终独审、冻结和实际清理唯一 P4 worktree/分支后才关闭 P4/DEF-061、进入 P5。方案 B 的 hosted 状态仍为 `host-disposal-pending / cleanupComplete=false`，不把平台回收承诺称为实测删除。旧 CI `41220859473` 的 WebKit UNKNOWN/缺件、full21 SIGKILL 的历史原因仍未知；本轮本机通过不反推其根因。Excel/Safari/Finder、M4 DEF-073/UR-035、完整验收及标签继续挂账。
+
+## 2026-11-01 前序断点：full22 独立 CLI 夹具依赖补正
+
+主目录 main/origin/main 仍为 `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`。PID 就绪/信号边界修复已正常提交 `15fcbb5c79ec63b4fbf6ff272315f0b432f062d0`；r13 工具的 97 项合同、16 项 bridge、真实 exec 0/7 与独审通过后，运行该 F 的原完整 full22。lint、类型、静态通过，coverage 以 **719 文件/17,299 项通过，1 文件/2 项失败**结束，退出 1，本轮没有 SIGKILL 或守护停止请求；后续构建、E2E、audit 未运行，container09 未启动。4,648 源码、16 SDK 和 301 冻结输入不变，4,662 项原件校验通过。资源运行器及 root 复核均证明 scratch/短根/别名、owner/进程组、完整 lsof 和锁实际闭合，共享 PostgreSQL 未变。
+
+两项失败都在 `container-e2e-resources.test.ts` 的真实 CLI build/env 故障场景：夹具手工复制 deploy 模块，但 shared 清单仍只有 `repo.ts`，漏掉新引入的 `process-id.ts`。新增等价存在性断言后，真实 RED 的两份 stderr 明确为 `ERR_MODULE_NOT_FOUND`，CLI 在调用 fake Docker 前退出 1，原读 calls.jsonl 的 ENOENT 是后果。本次仅在夹具 shared 清单补齐真实模块，并保留能显示 stdout/stderr 的诊断断言；全部旧断言、15 秒时限、生产信号保护、UUID/其他任务保护与清理行为保持。
+
+本机小回归原件为 Q 下 `cli-fixture-red01`（20 通过/2 预期失败）、`cli-fixture-green01`（2 文件/54 项通过）、`cli-fixture-type01` 和 `cli-fixture-lint01`（均 0）；四轮串行、运行中源码未变且资源实际清理。实施差异只有一个测试文件 3 增/1 删，同型扫描未发现第二处手工复制该 CLI 的缺失依赖。root 另行核对四轮完整原件与实际闭合。README 的 coverage parse 告警也存在于已通过的 full19，本次未改覆盖率范围。
+
+原始失败与调查在 `Q/r13-full22-cli-fixture01/`：`root-result01.json` SHA `60f7462e316a988276ef0eea2a2f0305df1e0ae89edc55f2ce957a750c275639`；实现 manifest SHA `27c7cb163ec7e0d10f168b5228d8977d45b31d00cb26d1d041b61860febf3ccd`；root 小检查复核 `root-small-checks01.json` SHA `1e464ff4b1a4f5f6008cb0aa0c640832b4a4826892dfb79b9b46fc4b6d47b4da`。Q 为主目录 `.codex/handoffs/m5-p4-20261022/s6/hosted-vm-policy/final-ci-40947141649-investigation/`。
+
+后续按原独立复审、正常中文提交、新实际 F 的完整双门禁、正常 `--no-ff` 合并推送及同最终 SHA CI 流程推进。full22 保留 failed/1，不生成成功 after-capture；其小修复通过不能预签整轮门禁。旧 full21 SIGKILL 与 CI UNKNOWN 的确切原因仍未知。P4/DEF-061 未关闭，P5 未开始。
+
+## 2026-11-01 前序记录：full21 终止与 PID 就绪协议补正
+
+主目录 main/origin/main 保持 `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`，唯一 P4 worktree 的 Linux 进程身份观察补正已正常提交 `8efd1a7b70f22257e2a8d2049106522a19614f3b`，局部 63 项单元、17 项真实 Linux 契约及独审通过。以下 Q 为主目录 `.codex/handoffs/m5-p4-20261022/s6/hosted-vm-policy/final-ci-40947141649-investigation/`，旧原件保持。
+
+该输入的 full20 在 lint 阶段因 SDD 辅助 JSON 误入扫描树而失败；原件按索引迁入 Q，W 扫描树不再含该目录，没有更改 lint 规则。新 full21 原范围门禁中 lint、类型、静态通过，coverage 主进程在 112.8 秒收到 SIGKILL（产品退出 137，外层退出 1），无断言汇总，后续构建/E2E/audit 未执行。运行器没有请求中断，系统日志未给出信号发送者；事后内存样本不能证明失败前没有峰值。源码 4,641 项及 16 SDK 未变，文件资源已实际闭合。该轮保持失败，不生成成功 after-capture，不据其推进合并。
+
+调查独立证明两类 PID 就绪夹具存在同型缺口：直接创建 marker 再写入，消费者仅等文件存在后执行 `Number`，空内容成为 0；组清理和直接进程清理都可能误伤调用组。受管独占组以原函数消费空 marker，实得 137/-9 并实际清理，证明机制可触发，但不能证明 full21 当次读到了 0。另一次有界 coverage 诊断发现 pnpm 子进程另起组，root 及时停止，实际两个组和九个已确认隔离测试库均清除；它未复现原 SIGKILL。原观察器 v4 候选保持暂停。
+
+原 P4 分支已修正原子发布、严格规范十进制读取和 `signalGroup` 参数边界，数字只接受整数 2–2147483647；合法 signal=0 和 ESRCH/未知语义保持。容器三处与 Linux 六处 PID 读写成对更新，直接清理只接收已验证值，布尔空 marker 不变。无应用、SDK、工作流、原断言、范围、worker/retry 或预算变更。行为 RED 为 37 个原缺口断言失败；实现过程的 ASI/格式失败另行保留，最终 7 文件/141 项、类型/lint、原 17 项隔离 Linux 契约通过。Linux 8.114 秒、stderr 空；九轮本机检查和本轮 Docker 资源均经 root 实际闭合核验，共享 PostgreSQL 未变。细节与摘要链见[就绪与信号复核](P4-S6-进程就绪标记与信号边界复核.md)；原始调查、失败与清理在 `Q/r12-full21-sigkill01/`，本次实现/验证在 `Q/pid-marker-repair01/` 及 `Q/pid-ready-*`。
+
+任务与整体审查已通过（唯一进度文档问题已修正并限定复审），正常中文提交后，以新实际 F 绑定原完整本机双门禁，再正常 `--no-ff` 合并推送、核同最终 SHA 六项 CI/十份报告和真实冻结清理。旧 r12、失败 full21、暂停观察器及旧通过均不能代替新输入验收。full21 与旧 CI 历史原因继续未知，P4/DEF-061 未关闭，P5 未开始。
+
+## 2026-11-01 历史断点：r10 已推送，CI 监督器失败后的局部补正
+
+结果文档正常提交 `e472b6d7` 后，已 `--no-ff` 合入并正常推送 main `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`，原 pre-push 门禁通过。真实 r10 来源证明位于 `s6/source-equivalence-r10-v3-3dc2cde057ce/receipt.json`，正常推送原件在 `s6/main-push-r10/`；受管 push v2 的实际闭合与接受另记于 Q 的 `r10-main-push-v2-root-acceptance01.json`，不回写原运行器快照。下文 `s6/` 仍相对主目录 `.codex/handoffs/m5-p4-20261022/`，Q 为 `s6/hosted-vm-policy/final-ci-40947141649-investigation/`。
+
+同 SHA、attempt 1 的 CI `41220859473` 已结束：verify、容器、Chromium、Chrome、Edge 成功，WebKit 失败。可用产品 JSON 记录容器 339、Chromium 814、Chrome 807、Edge 807 首过；三个浏览器各四个原跳过，无额外尝试或全局错误。WebKit 在 307 条不同通过日志后出现 `parse-process / UNKNOWN / pid=108758`；缺完整产品报告，后续 `quiescent=true` 仅代表恢复收尾。旧 reader 在归属判断前解析所有同 UID 进程，原字段未保存，故此 PID 的归属与确切根因均未知。**整轮 CI 未接受，P4/DEF-061 未关闭，P5 未开始。**
+
+六份日志和全部九份可用 artifact 共 36,685,816 B 已收集、逐份验 hash；缺件为 `e2e-reports-webkit-41220859473`。原十份报告要求不变，失败补件不等于验收。补件、摘要和原始诊断在 `Q/r10-webkit-ci-failure01/`；可用报告汇总 `available-report-summary01.json` 的 SHA-256 为 `b16bd0d519f7da76a5745a6c7c3144504a47bc00c3d4641952f8cd231b09154d`。托管成功项仍是 `host-disposal-pending / cleanupComplete=false`，不称为本机实测删除。
+
+官方 Linux 源码另证明完整退出哨兵 `ppid=0,pgrp=-1,session=-1,num_threads=0` 是合法路径，旧正组解析器存在独立兼容缺口。两次本机受限 Linux 观察均未捕获真实负 PGID，不把这一缺口认定为旧 CI 的已证实根因。现有 P4 worktree 已完成[进程身份观察补正](P4-S6-Linux进程身份观察复核.md)：只有精确完整哨兵才有界重新观察，持续未知仍阻断；新增失败诊断按同一 schema 落盘和快照。产品、SDK、工作流、原断言、重试与预算不变。
+
+局部验证为 63 项单元、17 项真实隔离 Linux 契约及类型/lint 通过。Linux 单轮 8.217 秒、无跳过/失败，原 12 项断言保留；其资源 run `ebb1bf72-da5a-4c91-a9eb-be6af505c191` 经 root 独立核对文件、进程、锁、全量 lsof、短路径和 11 项 Docker 空查询实际闭合，共享 PostgreSQL 未变。最终原件 `Q/proc-stat-linux-contracts01-root-result.json`，SHA-256 `7670ecd9ded16aa4a3d15bdad9c5a0e6f24dc3ca2f1b6c4af97453c8359d9882`。这里仍不替代新源码的完整门禁或 GitHub Ubuntu CI。
+
+接下来正常提交并独立代码审查；通过后，以实际新 F 完成原完整双门禁、独审和正常合并推送、同 SHA 六项 CI 与真实冻结清理。不得改旧 r10 工具/接受回执，或以未来绿色结果倒推旧失败原因。下方各节继续作为生成时的历史证明保留。
+
+## 2026-10-31 历史本地验收：full19/container08 同源接受
 
 真实受测 F 为 `ea8129cbea23a43ee6b7e5c9f141a1dc846e57dc`，父 main/origin/main 基线为 `c4b564f5000ccb49de732bb2fe32e829b06686a9`；唯一 P4 分支/worktree 保持 `codex/m5-p4-history-gc`。容器归属 `8ee47b0d`、列表焦点 `4b11737a`、链接身份 `24360a95` 及整体接口补正 `ea8129cb` 均正常提交。整体 I1/I2 经真实反例、统一修复和一次限定差异复审接受，原非阻断 M1 构建/颜色输出观察保持。本节只接受本地双门禁，P4/DEF-061 未关闭，P5 未开始。
 

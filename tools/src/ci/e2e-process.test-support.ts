@@ -1,15 +1,19 @@
 // Linux 真实进程契约；node --test 直接执行，不启动浏览器、数据库或构建。
 import type { ChildProcess } from 'node:child_process'
+import type { Mode, OpenMode, PathLike } from 'node:fs'
 import assert from 'node:assert/strict'
+import { Buffer } from 'node:buffer'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import fs, { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
-import { afterEach, test } from 'node:test'
+import { afterEach, mock, test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { inspectProcessOperation } from './e2e-diagnostics.ts'
-import { OWNER_VARIABLE, parseProcessStat, prepareRun, recordProcessFailure, settleRun, snapshotDiagnostics } from './e2e-process.ts'
+import { pidReadyScript, readReadyPid } from '../shared/process-ready.test-support.ts'
+import { failureStageSchema, inspectProcessOperation, processDiagnostic } from './e2e-diagnostics.ts'
+import { OWNER_VARIABLE, parseProcessStat, prepareRun, readProcess, recordProcessFailure, runOwnedCommand, settleRun, snapshotDiagnostics } from './e2e-process.ts'
 
 assert.equal(process.platform, 'linux', '真实进程契约必须在 Linux 运行；macOS 不能以跳过代替通过')
 const moduleUrl = new URL('./e2e-process.ts', import.meta.url).href
@@ -60,9 +64,25 @@ function json(path: string): unknown {
   return JSON.parse(readFileSync(path, 'utf8')) as unknown
 }
 function pid(path: string): number {
-  const value = Number(readFileSync(path, 'utf8'))
+  const value = readReadyPid(path)
   extraPids.push(value)
   return value
+}
+
+/** 仅在指定 /proc stat 的底层 open 注入 I/O 故障；归属、停止、持久化均为真实实现。 */
+function failProcOpen(target: number, after = 1): () => void {
+  const native = fs.openSync
+  let attempts = 0
+  const replacement = mock.method(fs, 'openSync', (path: PathLike, flags: OpenMode, mode?: Mode) => {
+    if (path === `/proc/${target}/stat` && ++attempts >= after)
+      throw Object.assign(new Error('synthetic-private-message'), { code: 'EIO' })
+    return native(path, flags, mode)
+  })
+  syncBuiltinESMExports()
+  return () => {
+    replacement.mock.restore()
+    syncBuiltinESMExports()
+  }
 }
 
 afterEach(async () => {
@@ -110,7 +130,7 @@ void test('主进程先退出：另起进程组的写入者仍必须退出，不
   const { root, directory } = fixture(2000, 350)
   const marker = join(root, 'writer.pid')
   const writes = join(root, 'writes')
-  const writer = `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>fs.appendFileSync(${JSON.stringify(writes)},'x'),20)`
+  const writer = `const fs=require('node:fs');${pidReadyScript(marker)};setInterval(()=>fs.appendFileSync(${JSON.stringify(writes)},'x'),20)`
   const started = start(root, directory, `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(writer)}],{detached:true,stdio:'ignore'});c.unref();`)
   await until(() => existsSync(marker))
   const writerPid = pid(marker)
@@ -125,7 +145,7 @@ void test('主进程先退出：另起进程组的写入者仍必须退出，不
 void test('计算子进程清空环境后仍属于本轮；原父进程退出与重新挂到 init 不丢失所有权', { timeout: 10_000 }, async () => {
   const { root, directory } = fixture(2000, 400)
   const marker = join(root, 'unmarked.pid')
-  const writer = `require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`
+  const writer = `${pidReadyScript(marker)};setInterval(()=>{},1000)`
   const api = `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(writer)}],{env:{},stdio:'ignore'});c.unref();setTimeout(()=>process.exit(0),300);`
   const started = start(root, directory, `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(api)}],{detached:true,stdio:'ignore'});c.unref();setTimeout(()=>process.exit(0),400);`)
   await until(() => existsSync(marker))
@@ -138,7 +158,7 @@ void test('计算子进程清空环境后仍属于本轮；原父进程退出与
 void test('忽略软停止会在独立清理预算后强制结束；不会无限等待 leader', { timeout: 10_000 }, async () => {
   const { root, directory } = fixture(300, 400)
   const marker = join(root, 'stubborn.pid')
-  const started = start(root, directory, `process.on('SIGINT',()=>{});require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`)
+  const started = start(root, directory, `process.on('SIGINT',()=>{});${pidReadyScript(marker)};setInterval(()=>{},1000)`)
   await until(() => existsSync(marker))
   const writerPid = pid(marker)
   assert.equal(await started.exit, 1)
@@ -150,7 +170,7 @@ void test('外层强杀监督器后，独立收尾入口按原身份软停止且
   const { root, directory } = fixture(5000, 1000)
   const marker = join(root, 'ready')
   const report = join(root, 'report')
-  const started = start(root, directory, `const fs=require('node:fs');process.on('SIGINT',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(report)},'closed');process.exit(0)},200));fs.writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`)
+  const started = start(root, directory, `const fs=require('node:fs');process.on('SIGINT',()=>setTimeout(()=>{fs.writeFileSync(${JSON.stringify(report)},'closed');process.exit(0)},200));${pidReadyScript(marker)};setInterval(()=>{},1000)`)
   await until(() => existsSync(marker))
   const writerPid = pid(marker)
   started.child.kill('SIGKILL')
@@ -193,7 +213,7 @@ for (const [name, environment] of [
     const marker = join(root, 'fast.pid')
     const worker = join(root, 'worker.cjs')
     const api = join(root, 'api.cjs')
-    writeFileSync(worker, `require('node:fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`)
+    writeFileSync(worker, `${pidReadyScript(marker)};setInterval(()=>{},1000)`)
     writeFileSync(api, `const c=require('node:child_process').fork(${JSON.stringify(worker)},[],{env:${JSON.stringify(environment)},stdio:'ignore'});c.unref();process.exit(0);`)
     const started = start(root, directory, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(ready)},'');setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){const c=require('node:child_process').spawn(process.execPath,['--import',${JSON.stringify(ownerPreload)},${JSON.stringify(api)}],{detached:true,stdio:'ignore'});c.unref();process.exit(0)}},10)`)
     await until(() => existsSync(ready))
@@ -272,4 +292,98 @@ void test('尚无启动记录不得签归档许可；已有独占目录与证据
   assert.equal(existsSync(join(directory, 'quiescence.json')), false)
   assert.throws(() => prepareRun(directory, root), /EEXIST/)
   assert.equal(readFileSync(join(directory, 'owner.json'), 'utf8'), original)
+})
+
+void test('真实 reader 从当前 Linux stat FD 取得 UID、PGID 和启动 tick', () => {
+  const uid = process.getuid?.() ?? -1
+  const actual = readProcess(process.pid, uid)
+  const direct = parseProcessStat(readFileSync(`/proc/${process.pid}/stat`), uid, process.pid)
+  assert.ok(actual !== undefined && direct !== undefined)
+  assert.equal(actual.pid, process.pid)
+  assert.equal(actual.uid, uid)
+  assert.equal(actual.group, direct.group)
+  assert.equal(actual.start, direct.start)
+})
+
+void test('启动身份读取未知时先拒绝，不创建 runtime 或启动产品进程', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'nerve-ci-read-start-'))
+  directories.push(root)
+  const directory = join(root, 'owner')
+  prepareRun(directory, root)
+  const marker = join(root, 'must-not-start')
+  const restore = failProcOpen(process.pid)
+  try {
+    await assert.rejects(runOwnedCommand(directory, root, process.execPath, ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)},'started')`], { cwd: root }), (error: unknown) => {
+      assert.deepEqual(processDiagnostic(error), { operation: 'open-process', code: 'EIO', pid: process.pid })
+      return true
+    })
+    assert.equal(existsSync(join(directory, 'runtime.json')), false)
+    assert.equal(existsSync(marker), false)
+  }
+  finally { restore() }
+})
+
+void test('settle 的全量扫描遇到未知 I/O 仍拒绝，不能把本用户未知进程算为空扫描', async () => {
+  const { root, directory } = fixture(2000)
+  assert.equal(await start(root, directory, 'process.exit(0)').exit, 0)
+  const before = readFileSync(join(directory, 'runtime.json'), 'utf8')
+  const restore = failProcOpen(process.pid)
+  try {
+    await assert.rejects(settleRun(directory, root))
+    assert.equal(existsSync(join(directory, 'quiescence.json')), false)
+    assert.equal(readFileSync(join(directory, 'runtime.json'), 'utf8'), before)
+  }
+  finally { restore() }
+})
+
+void test('signal 再读身份未知时不发送 SIGINT，也不签归档许可', { timeout: 10_000 }, async () => {
+  const { root, directory } = fixture(5000, 600)
+  const marker = join(root, 'ready')
+  const signals = join(root, 'signals')
+  const started = start(root, directory, `const fs=require('node:fs');process.on('SIGINT',()=>fs.writeFileSync(${JSON.stringify(signals)},'I'));${pidReadyScript(marker)};setInterval(()=>{},1000)`)
+  await until(() => existsSync(marker))
+  const leader = pid(marker)
+  started.child.kill('SIGKILL')
+  assert.equal(await started.exit, 1)
+  // 扫描取得完整身份；softStop 发信号前的第二次身份观察失败。
+  const restore = failProcOpen(leader, 2)
+  try {
+    await assert.rejects(settleRun(directory, root), (error: unknown) => {
+      assert.deepEqual(processDiagnostic(error), { operation: 'open-process', code: 'EIO', pid: leader })
+      return true
+    })
+    assert.equal(existsSync(signals), false)
+    assert.equal(existsSync(join(directory, 'quiescence.json')), false)
+  }
+  finally { restore() }
+})
+
+void test('parser 诊断经异常包装、阶段落盘与静态快照保持一致且不泄露 comm', async () => {
+  const { root, directory } = fixture(2000)
+  assert.equal(await start(root, directory, 'process.exit(0)').exit, 0)
+  await settleRun(directory, root)
+  const raw = readFileSync(`/proc/${process.pid}/stat`).toString()
+  const bad = `${process.pid} (synthetic-private-comm) ?${raw.slice(raw.lastIndexOf(')') + 3)}`
+  let caught: unknown
+  try {
+    inspectProcessOperation('list-processes', () => parseProcessStat(bad, process.getuid?.() ?? -1, process.pid))
+  }
+  catch (error) { caught = error }
+  const diagnostic = processDiagnostic(caught)
+  assert.equal(diagnostic.stat?.reason, 'invalid-state')
+  for (const stage of failureStageSchema.options)
+    recordProcessFailure(directory, root, stage, caught)
+  const destination = snapshotDiagnostics(directory, root)
+  const snapshot = json(join(destination, 'snapshot.json')) as Record<string, unknown>
+  let bytes = 0
+  for (const stage of failureStageSchema.options) {
+    const name = `failure-${stage}.json`
+    const saved = json(join(directory, name)) as Record<string, unknown>
+    assert.deepEqual(saved.stat, diagnostic.stat)
+    assert.deepEqual(snapshot[name], saved)
+    assert.ok(Buffer.byteLength(JSON.stringify(saved)) <= 2048)
+    bytes += Buffer.byteLength(JSON.stringify(saved))
+  }
+  assert.ok(bytes < 16 * 1024)
+  assert.equal(readFileSync(join(destination, 'snapshot.json'), 'utf8').includes('synthetic-private-comm'), false)
 })

@@ -11,6 +11,7 @@ import type { ChildProcess } from 'node:child_process'
 import { spawn } from 'node:child_process'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
+import { assertSignalPid } from '../shared/process-id.ts'
 
 /** 再次收到信号时，相隔多久才强制结束（之内的算同一次） */
 export const ESCALATE_AFTER_MS = 1_000
@@ -19,6 +20,7 @@ export const GROUP_EXIT_TIMEOUT_MS = 10_000
 
 /** 给整个进程组发信号；进程组已经不在时返回 false（发 0 用来探测是否还在） */
 export function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  assertSignalPid(pid)
   try {
     process.kill(-pid, signal)
     return true
