@@ -145,6 +145,58 @@ class HostedPolicyTests(unittest.TestCase):
                 "runner": "GitHub Actions 1000006096", "bootId": BOOT,
             })
 
+    def phase_dispatch(self):
+        return {
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_REF": "refs/heads/codex/m5-p6-closeout",
+            "GITHUB_WORKFLOW_REF": (
+                "open-nerve/NerveOffice/.github/workflows/ci.yml"
+                "@refs/heads/codex/m5-p6-closeout"),
+        }
+
+    def test_approved_phase_dispatch_registers_original_identity_for_all_jobs(self):
+        for job in ("verify", "e2e", "container"):
+            with self.subTest(job=job), self.configured(
+                    overrides={**self.phase_dispatch(), "GITHUB_JOB": job}):
+                try:
+                    identity = self.module.context(self.repo)
+                except ValueError as error:
+                    self.fail(f"已批准的 P6 手动运行应能登记资源：{error}")
+                proof = self.module.register(identity, RUN, self.roots())
+                self.assertIsNone(self.module.validate(proof, identity, RUN, self.roots()))
+                self.assertEqual(identity["job"], job)
+                self.assertEqual(identity["sha"], SHA)
+                self.assertEqual(identity["runId"], "40600596503")
+                self.assertEqual(identity["bootId"], BOOT)
+        self.assertEqual(list(self.repo.iterdir()), [])
+
+    def test_phase_exception_rejects_other_events_refs_repositories_and_workflows(self):
+        changes = [
+            {"GITHUB_EVENT_NAME": value}
+            for value in (None, "push", "schedule", "pull_request", "workflow_call")
+        ] + [
+            {"GITHUB_REF": value}
+            for value in (None, "refs/heads/main", "refs/heads/codex/m5-p6-closeout-extra",
+                          "refs/tags/codex/m5-p6-closeout")
+        ] + [
+            {"GITHUB_WORKFLOW_REF": "open-nerve/NerveOffice/.github/workflows/other.yml"
+                                    "@refs/heads/codex/m5-p6-closeout"},
+            {"GITHUB_WORKFLOW_REF": "open-nerve/NerveOffice/.github/workflows/ci.yml"
+                                    "@refs/heads/codex/m5-p6-closeout-extra"},
+            {"GITHUB_REPOSITORY": "other/NerveOffice",
+             "GITHUB_WORKFLOW_REF": "other/NerveOffice/.github/workflows/ci.yml"
+                                    "@refs/heads/codex/m5-p6-closeout"},
+            {"RUNNER_ENVIRONMENT": "self-hosted"},
+            {"RUNNER_ARCH": "ARM64"}, {"GITHUB_JOB": "other-job"},
+            {"GITHUB_SHA": "invalid"}, {"GITHUB_RUN_ID": "0"},
+        ]
+        for change in changes:
+            with self.subTest(change=change), self.configured(
+                    overrides={**self.phase_dispatch(), **change}):
+                with self.assertRaises(ValueError):
+                    self.module.context(self.repo)
+        self.assertEqual(list(self.repo.iterdir()), [])
+
     def test_workspace_mismatch_and_workspace_alias_are_rejected(self):
         other = self.repo / "other"
         other.mkdir()

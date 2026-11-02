@@ -153,6 +153,8 @@ full10因启动时已使用旧包装器，曾由`guard-archive-review.py`独立�
 
 本节是上述本机立即删除规则的显式窄例外。只有三个 job 定义（verify、四浏览器 e2e、container）设置 `NERVE_TEST_RESOURCE_POLICY=github-hosted-vm`；`hosted.py` 核对 GitHub-hosted/Linux/X64/Ubuntu 24.04、固定 main CI 工作流、真实 workspace、仓库/SHA/run/attempt/job/runner 和 kernel boot ID。默认及显式 strict 不启用，错误或不完整环境拒绝。此为平台执行契约，不是密码学证明；本地模拟测试不构成实际 GitHub 验证。
 
+2026-11-02 用户批准的 P6 预验收另允许一个精确入口：`open-nerve/NerveOffice` 的 `GITHUB_REF=refs/heads/codex/m5-p6-closeout`、`GITHUB_EVENT_NAME=workflow_dispatch` 与 `GITHUB_WORKFLOW_REF=open-nerve/NerveOffice/.github/workflows/ci.yml@refs/heads/codex/m5-p6-closeout` 必须同时成立。main 原契约保持；其他事件、分支、仓库或 runner 不因此获得此例外。见 ADR-026 附录。此入口沿用所有下述身份、根、退出、稳定导出、预算与平台处置条件，不授权手动删除托管原环境。
+
 Run 在 scratch 创建前落盘 `hostedScope`，并登记四个固定根、实际 inode 与短别名。持锁核验原台账后，启动及结束都检查原 scratch 和短根。本轮进程组须退出，输出线程须结束。全流 lsof 的语义未知对象保留有界诊断，只允许非破坏报告导出；格式损坏、stderr/命令失败、已知本轮路径及别名命中仍拒绝。未知原目录不精简、不移动、不删除，不能把未知写成已证明无引用。
 
 绝对路径的别名解析也遵循此边界：原文和去附注路径分别核对，已知词法命中及可解析前缀指向本轮目录时仍拒绝导出；一条外部路径无法解析不能跳过其他候选或后续记录。仅托管导出把文件系统解析异常记为语义未知，默认严格查询仍拒绝；根自身及归属验证不属于此例外。异常样本与既有记录共用最多16项的摘要预算，只输出异常类型、errno和脱敏的记录身份、字节数、SHA-256，不输出外部私有路径或异常正文。没有无引用证明，也没有原环境删除授权。
