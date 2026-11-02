@@ -1,7 +1,9 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { expect, it } from 'vitest'
+import { REPO_ROOT } from '../shared/repo.ts'
 import { ContainerRunResources } from './container-e2e-resources.ts'
 import { createSettings } from './container-e2e.ts'
 import { browserPlan, budgetProblem, GIB, guestExitStatus, PLAYWRIGHT_IMAGE, stopWithMeter, withLinuxCleanup } from './linux-browser.ts'
@@ -37,6 +39,31 @@ it('两轮内部卷隔离，runner 不把宿主文件作为工作目录或 init 
   expect(second.runner.join(' ')).not.toContain('/scratch/first')
   expect(first.database.join(' ')).toContain('run-first_pgdata')
   expect(second.database.join(' ')).toContain('run-second_pgdata')
+})
+
+it('真实准备命令之后可用原 Store 创建归属，不留下未登记管理目录', () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'nerve-linux-store-')))
+  try {
+    const owned = join(root, 'owned')
+    const toolchain = join(root, 'toolchain')
+    mkdirSync(toolchain)
+    writeFileSync(join(toolchain, 'tiny-node'), 'tiny fixture')
+    const quote = (path: string) => `'${path.replaceAll('\'', '\'\\\'\'')}'`
+    const command = browserPlan('example', '/unused', []).preparation.at(-1)!.replaceAll('/owned', quote(owned)).replaceAll('/usr/local/.', `${quote(toolchain)}/.`)
+    execFileSync('/bin/sh', ['-eu', '-c', command])
+    const repo = join(owned, 'source')
+    execFileSync('python3', ['-B', '-c', 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from lifecycle import Store; Store(Path(sys.argv[2]))', join(REPO_ROOT, 'tools/test-resources'), repo])
+    expect(JSON.parse(readFileSync(join(repo, '.test-resources/owner.json'), 'utf8'))).toEqual({
+      version: 1,
+      purpose: 'nerve-office-test-resources',
+      repo,
+    })
+    expect(existsSync(join(repo, '.test-resources/runs'))).toBe(true)
+    expect(readFileSync(join(owned, 'node/tiny-node'), 'utf8')).toBe('tiny fixture')
+  }
+  finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 it.each([0, 1, 130])('成功、失败与中断（%i）都先停止写入、导出，再闭合容器和卷', async (status) => {

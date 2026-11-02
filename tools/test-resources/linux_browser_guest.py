@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from lifecycle import open_paths
+from lifecycle import Store, open_paths
 from linux_browser_evidence import installed_patches, read_json, validate_results, verify_source, write_json
 
 GROUPS = (
@@ -66,6 +66,9 @@ def install_dependencies(repo, root, execute):
 def main():
     root = Path('/owned'); repo = root / 'source'; evidence = root / 'evidence'
     evidence.mkdir(exist_ok=True)
+    # Register the root before any run directories exist, using the same strict
+    # constructor as run.py. Also leaves an owned empty runs directory for export.
+    Store(repo)
     proof = read_json(root / 'source.json')
     versions = {'platform': platform.system(), 'machine': platform.machine(),
                 'node': subprocess.check_output(['node', '--version'], text=True).strip(),
