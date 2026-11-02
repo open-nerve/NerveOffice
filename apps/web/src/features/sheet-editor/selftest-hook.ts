@@ -51,9 +51,9 @@ const HANDOVER_CHANNEL_PREFIX = 'nerve-office:doc:'
  * 就打开（tab-handover.ts 订阅交接请求；same-browser.ts 第一次收发时才打开，组装处每次打开时才取全局的 BroadcastChannel），那时载入的会话、详情与内容
  * 都已回来——组装处在测试构建、地址带 selftest 时等这里挂上之后才开始载入（start.tsx，审查 B8），不靠分块与请求谁先回来
  */
-export function deafenHandoverChannel(scope: { BroadcastChannel: typeof BroadcastChannel } = globalThis): void {
+export function deafenHandoverChannel(scope: { BroadcastChannel: typeof BroadcastChannel } = globalThis): () => void {
   const Original = scope.BroadcastChannel
-  scope.BroadcastChannel = class extends Original {
+  const DeafChannel = class extends Original {
     override addEventListener<K extends keyof BroadcastChannelEventMap>(type: K, listener: (this: BroadcastChannel, event: BroadcastChannelEventMap[K]) => unknown, options?: boolean | AddEventListenerOptions): void
     override addEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): void
     override addEventListener(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): void {
@@ -62,7 +62,39 @@ export function deafenHandoverChannel(scope: { BroadcastChannel: typeof Broadcas
       super.addEventListener(type, listener, options)
     }
   }
+  scope.BroadcastChannel = DeafChannel
+  return () => {
+    if (scope.BroadcastChannel === DeafChannel)
+      scope.BroadcastChannel = Original
+  }
 }
+
+/** 本挂接的资源按逆序归还；异步准备晚到的资源在登记时立即释放。 */
+function selftestLifetime(signal?: AbortSignal) {
+  let stopped = signal?.aborted ?? false
+  const cleanups: (() => void)[] = []
+  const stop = (): void => {
+    if (stopped)
+      return
+    stopped = true
+    signal?.removeEventListener('abort', stop)
+    for (const cleanup of cleanups.splice(0).reverse())
+      cleanup()
+  }
+  signal?.addEventListener('abort', stop, { once: true })
+  return {
+    stopped: () => stopped,
+    stop,
+    keep: (cleanup: () => void): void => {
+      if (stopped)
+        cleanup()
+      else
+        cleanups.push(cleanup)
+    },
+  }
+}
+
+type SelftestLifetime = ReturnType<typeof selftestLifetime>
 
 function describe(value: unknown): string {
   if (value instanceof Error)
@@ -84,26 +116,40 @@ interface PageLog {
   readonly visibility: string[]
 }
 
-/** 挂上收集：没接住的异常、没处理的拒绝、console.error 的调用与页面可见性的变化（自检结束之后整页跳走，不必撤掉） */
-function watchPage(target: Window): PageLog {
+/** 收集异常、拒绝、console.error 与页面可见性；取消挂接时归还监听和仍由本挂接拥有的包装。 */
+function watchPage(target: Window, lifetime: SelftestLifetime): PageLog {
   const log: PageLog = { pageErrors: [], consoleErrors: [], ignoredNotices: [], visibility: [`${new Date().toISOString()} ${target.document.visibilityState}`] }
-  target.addEventListener('error', (event) => {
+  const onError = (event: ErrorEvent): void => {
     const text = event.error instanceof Error ? describe(event.error) : event.message
     ;(RESIZE_OBSERVER_LOOP_NOTICE.test(event.message) ? log.ignoredNotices : log.pageErrors).push(text)
-  })
-  target.addEventListener('unhandledrejection', (event) => {
+  }
+  target.addEventListener('error', onError)
+  const onRejection = (event: PromiseRejectionEvent): void => {
     log.pageErrors.push(`没有处理的拒绝 ${describe(event.reason)}`)
-  })
+  }
+  target.addEventListener('unhandledrejection', onRejection)
   // 自检要收集页面里 console.error 的调用（M3-P2 设计 §3.5）：包装它，照常转给原来的
   /* eslint-disable no-console -- 见上一行：只在测试构建的自检里包装 console.error */
   const original = console.error
-  console.error = (...args: unknown[]) => {
-    log.consoleErrors.push(args.map(describe).join(' '))
+  const wrapped = (...args: unknown[]): void => {
+    if (!lifetime.stopped())
+      log.consoleErrors.push(args.map(describe).join(' '))
     original.apply(console, args)
   }
+  console.error = wrapped
+  lifetime.keep(() => {
+    if (console.error === wrapped)
+      console.error = original
+  })
   /* eslint-enable no-console */
-  target.document.addEventListener('visibilitychange', () => {
+  const onVisibility = (): void => {
     log.visibility.push(`${new Date().toISOString()} ${target.document.visibilityState}`)
+  }
+  target.document.addEventListener('visibilitychange', onVisibility)
+  lifetime.keep(() => {
+    target.removeEventListener('error', onError)
+    target.removeEventListener('unhandledrejection', onRejection)
+    target.document.removeEventListener('visibilitychange', onVisibility)
   })
   return log
 }
@@ -115,12 +161,14 @@ function watchPage(target: Window): PageLog {
  * 与请求；最小的探针页只有合成事件时 Safari 27 不弹，那一页之前可能有人点过窗口，复核报告 F1）。所以自检自己跳走的那一刻（allowLeave 之后）
  * 在捕获阶段先于页面的监听拦下这个事件，离开提示不生效；别的时候照常（DOM 规范：目标上捕获阶段的监听先于冒泡阶段的）
  */
-function allowLeaveForReport(target: Window): () => void {
+function allowLeaveForReport(target: Window, lifetime: SelftestLifetime): () => void {
   let leaving = false
-  target.addEventListener('beforeunload', (event) => {
+  const onLeave = (event: BeforeUnloadEvent): void => {
     if (leaving)
       event.stopImmediatePropagation()
-  }, { capture: true })
+  }
+  target.addEventListener('beforeunload', onLeave, { capture: true })
+  lifetime.keep(() => target.removeEventListener('beforeunload', onLeave, { capture: true }))
   return () => {
     leaving = true
   }
@@ -180,13 +228,15 @@ export function handoverViewOf(mode: EditModeState | undefined): Partial<Selftes
 }
 
 /** 刷新恢复发生在 steady 前；从 load 前观察，不等待指纹计算、不读取令牌、不改变请求。 */
-function watchReloadSaves(documentId: string): NonNullable<SelftestHost['reloadSaves']> {
+function watchReloadSaves(documentId: string, lifetime: SelftestLifetime): NonNullable<SelftestHost['reloadSaves']> {
   const marks: ReturnType<NonNullable<SelftestHost['reloadSaves']>>[number][] = []
-  const originalFetch = window.fetch.bind(window)
-  window.fetch = async (input, init) => {
+  // eslint-disable-next-line ts/unbound-method -- 保存身份用于归还；实际调用只用下方绑定 window 的函数
+  const original = window.fetch
+  const originalFetch = original.bind(window)
+  const wrapped: typeof window.fetch = async (input, init) => {
     const request = input instanceof Request ? input : undefined
     const url = new URL(request?.url ?? String(input), location.href)
-    if ((init?.method ?? request?.method ?? 'GET').toUpperCase() !== 'PUT' || url.pathname !== `/api/documents/${documentId}/content`)
+    if (lifetime.stopped() || (init?.method ?? request?.method ?? 'GET').toUpperCase() !== 'PUT' || url.pathname !== `/api/documents/${documentId}/content`)
       return originalFetch(input, init)
     let bodyHash: Promise<string>
     try {
@@ -211,39 +261,65 @@ function watchReloadSaves(documentId: string): NonNullable<SelftestHost['reloadS
       throw error
     }
   }
+  window.fetch = wrapped
+  lifetime.keep(() => {
+    if (window.fetch === wrapped)
+      window.fetch = original
+  })
   return () => marks
 }
 
 /** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
-export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements, reloadDiagnostics?: () => unknown): void | Promise<void> {
+export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements, reloadDiagnostics?: () => unknown, signal?: AbortSignal): void | Promise<void> {
+  const lifetime = selftestLifetime(signal)
+  if (lifetime.stopped())
+    return
   const startedAt = new Date().toISOString()
   const documentId = documentIdFromPagePath(window.location.pathname)
   if (new URLSearchParams(window.location.search).get('selftest') === DEAF_HOLDER_SCENARIO)
-    deafenHandoverChannel()
-  const reloadSaves = documentId !== undefined && new URLSearchParams(window.location.search).get('selftest') === 'refresh-save' ? watchReloadSaves(documentId) : undefined
-  const log = watchPage(window)
+    lifetime.keep(deafenHandoverChannel())
+  const reloadSaves = documentId !== undefined && new URLSearchParams(window.location.search).get('selftest') === 'refresh-save' ? watchReloadSaves(documentId, lifetime) : undefined
+  const log = watchPage(window, lifetime)
+  const prepared = async (work: Promise<void>): Promise<void> => work.catch((error: unknown) => {
+    lifetime.stop()
+    throw error
+  })
   if (new URLSearchParams(window.location.search).get('selftest') === 'crash-recovery') {
-    return import('../../editor/testing/selftest.ts').then(async ({ watchCrashSelftest }) => watchCrashSelftest({
-      documentId: documentId ?? '',
-      chrome: elements.chrome,
-      view: () => ({ mode: page.view().mode?.kind, surface: page.view().surface, save: page.view().save?.status }),
-      pageErrors: () => [...log.pageErrors, ...log.consoleErrors],
-      recovered: () => page.view().recovery?.stage === 'restored',
-      subscribe: listener => page.subscribe(listener),
-      diagnostics: reloadDiagnostics,
+    return prepared(import('../../editor/testing/selftest.ts').then(async ({ watchCrashSelftest }) => {
+      if (lifetime.stopped())
+        return
+      await watchCrashSelftest({
+        documentId: documentId ?? '',
+        chrome: elements.chrome,
+        view: () => ({ mode: page.view().mode?.kind, surface: page.view().surface, save: page.view().save?.status }),
+        pageErrors: () => [...log.pageErrors, ...log.consoleErrors],
+        recovered: () => page.view().recovery?.stage === 'restored',
+        subscribe: listener => page.subscribe(listener),
+        diagnostics: reloadDiagnostics,
+      })
     }))
   }
-  const watch = (localPause?: SelftestHost['localPause'], localSave?: SelftestHost['localSave']): void => watchScenario(page, elements, { startedAt, documentId, log, reloadSaves, localPause, localSave })
+  const watch = (localPause?: SelftestHost['localPause'], localSave?: SelftestHost['localSave']): void => {
+    if (!lifetime.stopped())
+      watchScenario(page, elements, { startedAt, documentId, log, reloadSaves, localPause, localSave }, lifetime)
+  }
   if (new URLSearchParams(window.location.search).get('selftest') === 'paused-local-holder') {
-    return import('../../editor/testing/selftest.ts').then(async ({ prepareLocalPauseSelftest }) => {
+    return prepared(import('../../editor/testing/selftest.ts').then(async ({ prepareLocalPauseSelftest }) => {
+      if (lifetime.stopped())
+        return
       const localPause = await prepareLocalPauseSelftest(documentId ?? '')
+      lifetime.keep(() => localPause.dispose())
       watch(localPause)
-    })
+    }))
   }
   if (['local-save-online', 'local-save-offline'].includes(new URLSearchParams(window.location.search).get('selftest') ?? '')) {
-    return import('../../editor/testing/selftest.ts').then(async ({ prepareLocalSaveSelftest }) => {
-      watch(undefined, await prepareLocalSaveSelftest(documentId ?? ''))
-    })
+    return prepared(import('../../editor/testing/selftest.ts').then(async ({ prepareLocalSaveSelftest }) => {
+      if (lifetime.stopped())
+        return
+      const localSave = await prepareLocalSaveSelftest(documentId ?? '')
+      lifetime.keep(() => localSave.dispose())
+      watch(undefined, localSave)
+    }))
   }
   watch()
 }
@@ -255,9 +331,9 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
   readonly reloadSaves: ReturnType<typeof watchReloadSaves> | undefined
   readonly localPause: SelftestHost['localPause']
   readonly localSave: SelftestHost['localSave']
-}): void {
+}, lifetime: SelftestLifetime): void {
   const { startedAt, documentId, log, reloadSaves, localPause, localSave } = setup
-  const allowLeave = allowLeaveForReport(window)
+  const allowLeave = allowLeaveForReport(window, lifetime)
   let started = false
   // 第一次载入（打开即阅读）时容器第一次到 ready、steady 的时刻（M4-P1 S1 的首屏）：页面的状态每变一次同步通知，订阅在载入之前
   const firstLoad: { ready: number | null, steady: number | null } = { ready: null, steady: null }
@@ -265,7 +341,7 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
   let timer: ReturnType<typeof setTimeout> | undefined
   let hiddenTimer: ReturnType<typeof setTimeout> | undefined
   const begin = (state: SelftestHost['page']): void => {
-    if (started)
+    if (started || lifetime.stopped())
       return
     started = true
     unsubscribe?.()
@@ -294,12 +370,17 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
       // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（outbox/testing/ 只在测试构建里、只能动态引入）
       outboxReview: async () => (await import('./outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
     }
-    void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => runSelftestAndReport(host))
+    void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => {
+      if (!lifetime.stopped())
+        await runSelftestAndReport(host)
+    })
   }
   // 打开即阅读：要在编辑时跑的场景先进入编辑，只进一次。进入有了结果（进入了编辑，或者被占用、不能编辑而留在阅读）之后再看：
   // 进入了就等编辑的 steady；留在阅读就照样跑，自检按只读打开说明
   let entering: 'no' | 'requested' | 'settled' = EDITING_SCENARIOS.has(new URLSearchParams(window.location.search).get('selftest') ?? '') ? 'no' : 'settled'
   const onChange = (): void => {
+    if (lifetime.stopped())
+      return
     const { load, mode, surface } = page.view()
     if (firstLoad.ready === null && (surface === 'ready' || surface === 'steady'))
       firstLoad.ready = performance.now()
@@ -324,12 +405,15 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
     }
   }
   unsubscribe = page.subscribe(onChange)
+  lifetime.keep(() => unsubscribe?.())
   timer = setTimeout(() => begin({ state: 'timeout', detail: `${STEADY_TIMEOUT_MS / 1000} 秒内没有到 steady（${page.view().load.kind}）` }), STEADY_TIMEOUT_MS)
+  lifetime.keep(() => clearTimeout(timer))
   if (document.visibilityState === 'hidden') {
     hiddenTimer = setTimeout(() => {
       if (document.visibilityState === 'hidden')
         begin({ state: 'hidden', detail: '页面在后台（document.visibilityState 是 hidden）：浏览器暂停了隐藏页面的动画帧与计时器，编辑器画不出来，自检做不了。让浏览器的窗口露出来再跑' })
     }, HIDDEN_GRACE_MS)
+    lifetime.keep(() => clearTimeout(hiddenTimer))
   }
   onChange()
 }

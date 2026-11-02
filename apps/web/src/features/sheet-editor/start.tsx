@@ -133,16 +133,14 @@ export async function startSheetEditorPage(elements: SheetEditorPageElements): P
   }
   window.addEventListener('pagehide', dispose)
   try {
-    mounted = await prepare(elements, reporter.report, () => stopped)
+    mounted = await prepare(elements, reporter.report, () => stopped, () => window.removeEventListener('pagehide', dispose))
     if (stopped) {
       mounted?.dispose()
       return
     }
     if (mounted === undefined)
       return
-    // 已挂载页面自己的 pagehide 负责在途保存/未知回执和租约；普通 dispose 会释放租约，不能抢先执行。
-    // 此入口只在测试钩子尚未加载、页面还没装配时拦住晚到的挂载。
-    window.removeEventListener('pagehide', dispose)
+    // 准备期监听在实际 page.load 开始时移交；返回 mount 不代表 selftest 的异步准备已经完成。
     return { page: mounted.page, loaded: mounted.loaded, dispose }
   }
   catch (error) {
@@ -151,7 +149,7 @@ export async function startSheetEditorPage(elements: SheetEditorPageElements): P
   }
 }
 
-async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, stopped: () => boolean): Promise<SheetEditorPageMount | undefined> {
+async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, stopped: () => boolean, onLoadStarted: () => void): Promise<SheetEditorPageMount | undefined> {
   if (import.meta.env.MODE === 'e2e') {
     const parameters = new URLSearchParams(window.location.search)
     // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
@@ -194,12 +192,13 @@ async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (er
       control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
       log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
       observed?.snapshot,
+      onLoadStarted,
     )
   }
-  return assemble(elements, reportLoadFailure, undefined, undefined)
+  return assemble(elements, reportLoadFailure, undefined, undefined, undefined, onLoadStarted)
 }
 
-function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics?: () => unknown): SheetEditorPageMount {
+function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics: (() => unknown) | undefined, onLoadStarted: () => void): SheetEditorPageMount {
   const stopMaintenance = startDraftMaintenance()
   clearInheritedReloadMarkers(() => window.sessionStorage)
   const page = createEditorPage({
@@ -266,15 +265,26 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
   // 频道在建编辑模式时就打开（订阅交接请求），那时会话、详情与内容都已回来；原来先发起载入、再引入挂接，靠挂接的小分块先回来，不是保证的先后。
   // 引入失败照常载入（自检随之没有结果，错误交给浏览器的错误报告）。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
   let disposed = false
+  const selftestAbort = import.meta.env.MODE === 'e2e' ? new AbortController() : undefined
+  const load = async (): Promise<void> => {
+    if (disposed)
+      return
+    // load 同步安装正式 pagehide 处理；之后不能用普通 dispose 抢先释放在途保存的租约。
+    onLoadStarted()
+    await page.load()
+  }
   const loaded = import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')
     ? import('./selftest-hook.ts').then(
-        ({ watchForSelftest }): void | Promise<void> => watchForSelftest(page, elements, reloadDiagnostics),
-        (error: unknown) => reportLoadFailure(error),
-      ).then(async () => {
-        if (!disposed)
-          await page.load()
-      })
-    : page.load()
+        ({ watchForSelftest }): void | Promise<void> => {
+          if (!disposed)
+            return watchForSelftest(page, elements, reloadDiagnostics, selftestAbort?.signal)
+        },
+        (error: unknown) => {
+          if (!disposed)
+            reportLoadFailure(error)
+        },
+      ).then(load)
+    : load()
   return {
     page,
     loaded,
@@ -282,6 +292,7 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
       if (disposed)
         return
       disposed = true
+      selftestAbort?.abort()
       stopGuards()
       stopMaintenance()
       root.unmount()

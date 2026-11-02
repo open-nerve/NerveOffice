@@ -5,10 +5,12 @@ import type { EditModeState } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import { EDIT_LEASE_HEADER } from '@nerve-office/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { deferred } from './editing-session.test-support.ts'
 import { deafenHandoverChannel, handoverViewOf, watchForSelftest } from './selftest-hook.ts'
 
 const run = vi.hoisted(() => vi.fn(async (_host: SelftestHost) => undefined))
-vi.mock('../../editor/testing/selftest.ts', () => ({ runSelftestAndReport: run }))
+const prepare = vi.hoisted(() => ({ pause: vi.fn(), save: vi.fn() }))
+vi.mock('../../editor/testing/selftest.ts', () => ({ runSelftestAndReport: run, prepareLocalPauseSelftest: prepare.pause, prepareLocalSaveSelftest: prepare.save }))
 
 const DOCUMENT_ID = '01a0fb60-a504-7c95-8bdf-8aeaec893aaf'
 
@@ -28,6 +30,7 @@ function fakePage() {
   return {
     page,
     enterEditing,
+    listenerCount: () => listeners.size,
     set: (next: Partial<EditorPageView>): void => {
       view = { ...view, ...next }
       for (const listener of [...listeners])
@@ -51,6 +54,8 @@ let forwarded: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   run.mockClear()
+  prepare.pause.mockReset()
+  prepare.save.mockReset()
   forwarded = vi.spyOn(console, 'error').mockImplementation(() => {})
   window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=read-only`)
 })
@@ -71,6 +76,140 @@ async function hostOfFirstRun(): Promise<SelftestHost> {
 }
 
 describe('页面自检的挂接', () => {
+  it('已经取消的挂载不安装任何收集包装或计时器', async () => {
+    vi.useFakeTimers()
+    const abort = new AbortController()
+    abort.abort()
+    const originalConsole: unknown = forwarded
+    const { page, set } = fakePage()
+    await watchForSelftest(page, elements, undefined, abort.signal)
+    set(ready('steady'))
+    await vi.dynamicImportSettled()
+    expect(console).toHaveProperty('error', originalConsole)
+    expect(vi.getTimerCount()).toBe(0)
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('控制器准备失败保留原异常，同时撤掉已装的诊断收集', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=local-save-online`)
+    const originalConsole: unknown = forwarded
+    const failure = new Error('controlled preparation rejection')
+    prepare.save.mockRejectedValueOnce(failure)
+    const abort = new AbortController()
+    try {
+      await expect(watchForSelftest(fakePage().page, elements, undefined, abort.signal)).rejects.toBe(failure)
+      expect(console).toHaveProperty('error', originalConsole)
+      expect(run).not.toHaveBeenCalled()
+    }
+    finally { abort.abort() }
+  })
+
+  it('准备取消后撤销订阅、计时器和 console 包装，页面稍后 steady 不再启动自检', async () => {
+    vi.useFakeTimers()
+    const abort = new AbortController()
+    const originalConsole: unknown = forwarded
+    const { page, set, listenerCount } = fakePage()
+    try {
+      await watchForSelftest(page, elements, undefined, abort.signal)
+      expect(listenerCount()).toBe(1)
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      abort.abort()
+      // 在推进时间前观察真实释放，不能让超时自行耗尽掩盖缺少 clearTimeout。
+      expect(listenerCount()).toBe(0)
+      expect(vi.getTimerCount()).toBe(0)
+      set(ready('steady'))
+      await vi.runAllTimersAsync()
+      await vi.dynamicImportSettled()
+      expect(run).not.toHaveBeenCalled()
+      expect(console).toHaveProperty('error', originalConsole)
+      expect(vi.getTimerCount()).toBe(0)
+    }
+    finally { abort.abort() }
+  })
+
+  it('取消后页面错误、拒绝与可见性事件不再写入旧挂接日志', async () => {
+    const abort = new AbortController()
+    const { page, set } = fakePage()
+    // 这是故意派发的夹具事件；取消默认错误处理，不阻断其他监听器收到它们。
+    const delivered: string[] = []
+    const consume = (event: Event): void => {
+      delivered.push(event.type)
+      event.preventDefault()
+    }
+    window.addEventListener('error', consume)
+    window.addEventListener('unhandledrejection', consume)
+    try {
+      await watchForSelftest(page, elements, undefined, abort.signal)
+      set(ready('steady'))
+      const host = await hostOfFirstRun()
+      const before = { errors: [...host.pageErrors()], visibility: [...host.visibility()] }
+      abort.abort()
+      window.dispatchEvent(new ErrorEvent('error', { message: 'after disposal', error: new Error('after disposal'), cancelable: true }))
+      window.dispatchEvent(Object.assign(new Event('unhandledrejection', { cancelable: true }), { reason: new Error('after disposal') }))
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(delivered).toEqual(['error', 'unhandledrejection'])
+      expect({ errors: host.pageErrors(), visibility: host.visibility() }).toEqual(before)
+    }
+    finally {
+      abort.abort()
+      window.removeEventListener('error', consume)
+      window.removeEventListener('unhandledrejection', consume)
+    }
+  })
+
+  it.each(['paused-local-holder', 'local-save-online'] as const)('%s 控制器准备期间取消，返回后释放控制器且不订阅旧页', async (scenario) => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=${scenario}`)
+    const abort = new AbortController()
+    const control = deferred<{ dispose: () => void }>()
+    const preparation = scenario === 'paused-local-holder' ? prepare.pause : prepare.save
+    preparation.mockReturnValueOnce(control.promise)
+    const originalConsole: unknown = forwarded
+    const { page, set } = fakePage()
+    let resourceAlive = true
+    const dispose = (): void => {
+      resourceAlive = false
+    }
+    const mounted = watchForSelftest(page, elements, undefined, abort.signal)
+    try {
+      await vi.waitFor(() => expect(preparation).toHaveBeenCalledOnce())
+      abort.abort()
+      control.resolve({ dispose })
+      await mounted
+      set(ready('steady'))
+      await vi.dynamicImportSettled()
+      expect(resourceAlive).toBe(false)
+      expect(run).not.toHaveBeenCalled()
+      expect(console).toHaveProperty('error', originalConsole)
+    }
+    finally {
+      abort.abort()
+      control.resolve({ dispose })
+      await mounted
+    }
+  })
+
+  it('刷新诊断取消后恢复本挂接拥有的 fetch，不覆盖其他后装的包装', async () => {
+    window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=refresh-save`)
+    const original = vi.spyOn(window, 'fetch')
+    const first = new AbortController()
+    const second = new AbortController()
+    try {
+      await watchForSelftest(fakePage().page, elements, undefined, first.signal)
+      first.abort()
+      expect(window).toHaveProperty('fetch', original)
+      await watchForSelftest(fakePage().page, elements, undefined, second.signal)
+      const later = vi.fn<typeof fetch>()
+      window.fetch = later
+      second.abort()
+      expect(window).toHaveProperty('fetch', later)
+    }
+    finally {
+      first.abort()
+      second.abort()
+      window.fetch = original
+    }
+  })
+
   it('refresh-save 在载入前被动记录保存指纹，steady 前的自动重放也可核对且不改原请求或结果', async () => {
     window.history.replaceState(null, '', `/documents/${DOCUMENT_ID}?selftest=refresh-save`)
     const response = new Response('{}', { status: 200 })
