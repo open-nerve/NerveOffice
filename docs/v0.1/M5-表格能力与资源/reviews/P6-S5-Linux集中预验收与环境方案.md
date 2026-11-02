@@ -2,6 +2,8 @@
 
 2026-11-02。状态：用户已明确批准“P6 提前推送并执行云端预验收”；执行记录位于主目录 `.codex/handoffs/m5-p6-20261102/s5/central-acceptance/`。下文保留原方案依据，实际推送/调度和结果以固定 SHA 回执为准。
 
+最新执行断点：`77325db7` 正常 pre-push 暴露 Git 夹具隔离缺陷，实际误写仓库元数据；现场已保全恢复，推送失败且云端尚未启动。按新高风险边界暂停，见[调查与修复方案](P6-S5-推送钩子Git隔离调查与修复方案.md)。原发布授权保留，当前需先决定这项修复，不能重复启动原失败输入。
+
 ## 结论与已核实环境
 
 **建议复用现有 GitHub Actions 原生 Linux x64 runner，用户暂时无需购买或安装新环境。** 当前 Mac 的 Docker 内存无需增加，也无需升级本机 Chrome/Safari 来解决 Linux arm64 缺少品牌浏览器的问题。已安装的 Playwright 1.63.0 的 Chrome/Edge Linux 安装脚本在 aarch64 明确拒绝；本轮 29 条通过的运行器只提供 Linux arm64 Chromium 证据。
