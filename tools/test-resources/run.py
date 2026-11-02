@@ -12,6 +12,7 @@ import time
 
 import container_resources
 import report_safety
+from desktop_session import SessionGuard
 
 from lifecycle import Store, Run, atomic_bytes, atomic_json, contained, group_alive, locked, open_paths, read_json, RUN_ID
 
@@ -346,10 +347,27 @@ def main():
         output_thread = None
         read_fd = write_fd = -1
         original = {}
+        session = SessionGuard(args.kind)
+        session_record = None
         def request_stop(signum, frame):
             stopped.append(signum)
             if child is not None and child.poll() is None:
-                os.killpg(child.pid, signum)
+                try:
+                    os.killpg(child.pid, signum)
+                except ProcessLookupError:
+                    pass
+        def check_session(force=False):
+            nonlocal session_record
+            healthy = session.check(force=force)
+            current = session.record()
+            if current != session_record:
+                run.update(desktopSession=current)
+                session_record = current
+            if not healthy:
+                run.update(stopReason="desktop-session")
+                if not stopped:
+                    request_stop(signal.SIGTERM, None)
+            return healthy
         try:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 original[sig] = signal.signal(sig, request_stop)
@@ -368,6 +386,8 @@ def main():
                 env['NERVE_TEST_COVERAGE_DIR'] = str(output / 'coverage')
             if args.kind == "vm":
                 env["NERVE_TEST_SHORT_ROOT"] = run.data["shortRoot"]
+            if not check_session(force=True):
+                return 128 + int(stopped[0])
             if stopped:
                 return 128 + int(stopped[0])
             # Refuse to start work when the same owned-root cleanup check cannot run.
@@ -384,6 +404,10 @@ def main():
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             os.close(read_fd); read_fd = -1
             run.update(status="running", childGroup=child.pid, command=command, cwd=os.getcwd())
+            # The registered bootstrap still cannot execute the test command. Recheck
+            # after registration so a changed desktop never becomes a new baseline.
+            if not check_session(force=True) or stopped:
+                return 128 + int(stopped[0])
             os.write(write_fd, b"1"); os.close(write_fd); write_fd = -1
             log_problem = []
             def copy_output():
@@ -410,9 +434,11 @@ def main():
             stop_at = None
             budget_at = time.monotonic()
             while child.poll() is None:
+                if not stopped:
+                    check_session()
                 if shutil.disk_usage(store.repo).free < MIN_FREE or log_problem:
                     if not stopped:
-                        stopped.append(signal.SIGTERM); os.killpg(child.pid, signal.SIGTERM)
+                        request_stop(signal.SIGTERM, None)
                         run.update(stopReason="disk-reserve-or-log-cap")
                 if run.data.get('hostedScope') is not None and time.monotonic() - budget_at >= 2:
                     budget_at = time.monotonic()
@@ -420,16 +446,20 @@ def main():
                         run.update(resourceBudget=store.hosted_budget())
                     except (OSError, ValueError, RuntimeError) as error:
                         if not stopped:
-                            stopped.append(signal.SIGTERM)
-                            if child.poll() is None:
-                                os.killpg(child.pid, signal.SIGTERM)
+                            request_stop(signal.SIGTERM, None)
                         run.update(stopReason='hosted-resource-budget', budgetError=str(error))
                 if stopped:
                     stop_at = stop_at or time.monotonic()
                     if time.monotonic() - stop_at > 10:
-                        os.killpg(child.pid, signal.SIGKILL)
+                        if child.poll() is None:
+                            try:
+                                os.killpg(child.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
                 time.sleep(.1)
             code = child.wait()
+            # A zero exit racing with a desktop loss is still an interrupted run.
+            check_session(force=True)
             # Give normal browser shutdown time; never delete while descendants or handles remain.
             deadline = time.monotonic() + 3
             while group_alive(child.pid) and time.monotonic() < deadline:
