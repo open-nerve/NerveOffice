@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url'
 import sharp from 'sharp'
 import { uploadAsset } from '../../support/asset-protocol.ts'
 import { probeFormulasSettled, probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
-import { expect, test } from '../../support/fixtures.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, prepareImageDocument } from '../../support/image-editor.ts'
+import { expect, test } from '../../support/implicit-request-fixture.ts'
 import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, reloadAndEnterEditing, saveAndWait, savedContent, sheetCanvas, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -151,7 +151,7 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
     expect(Object.keys(drawingsIn(await probeSnapshot(page)))).toEqual(expect.arrayContaining(inserted))
   })
 
-  test('表格带图片预览仍贴单元格且零上传；无文件普通粘贴保留原路径，HTML 分类不加载资源', async ({ page }) => {
+  test('US-M5-14 表格带图片预览仍贴单元格且零上传；无文件普通粘贴保留原路径，HTML 分类不加载资源', async ({ page }) => {
     const { documentId } = await open(page)
     const png = Array.from(await readFile(sample('rgba-text.png')))
     const uploads: string[] = []

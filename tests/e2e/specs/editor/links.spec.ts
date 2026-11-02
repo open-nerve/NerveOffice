@@ -12,43 +12,18 @@
 // 合成的 paste 事件派发在获得焦点的元素上（SDK 在那里监听粘贴，与真实的粘贴走同一条路，paste-images.spec.ts 同样的做法）。
 // 用到探针（只在测试构建里）：标签 @test-build
 import type { CanonicalLink, LinkAddressInvalidReason } from '@nerve-office/contracts'
-import type { Page, Request } from '@playwright/test'
+import type { Page } from '@playwright/test'
 import type { LinkAddressCase } from '../../../../packages/contracts/src/documents/link-address.test-support.ts'
 import type { Workbook } from '../../support/sheet.ts'
 import { canonicalContentText, canonicalLink, checkCellLinks } from '@nerve-office/contracts'
 import { LINK_ADDRESS_CASES, LINK_SCAN_INPUTS, randomLinkAddresses } from '../../../../packages/contracts/src/documents/link-address.test-support.ts'
 import { createUser } from '../../support/database.ts'
 import { commandMark, probeCanonicalLinks, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
-import { test as base, expect } from '../../support/fixtures.ts'
+import { expect, test } from '../../support/implicit-request-fixture.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { formulaBarEditor, formulaBarInput, grantClipboard } from '../../support/read-only-checks.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, openAndEnterEditing, openCellEditor, openReader, saveAndWait, savedContent, selectCell, waitForEditorAccess } from '../../support/sheet.ts'
-
-// 从首次导航前收集到故事结束；context 的 request 同时覆盖页面、Worker 和新页。
-// 不只依赖 CSP：保存、重算和重开均不能为了处理链接读取外站。
-const test = base.extend<{ implicitExternalRequests: void }>({
-  implicitExternalRequests: [async ({ context, baseURL }, provide, testInfo) => {
-    if (baseURL === undefined)
-      throw new Error('链接请求检查缺少被测站点地址')
-    const origin = new URL(baseURL).origin
-    const external: string[] = []
-    const collect = (request: Request) => {
-      const url = new URL(request.url())
-      if ((url.protocol === 'http:' || url.protocol === 'https:') && url.origin !== origin)
-        external.push(url.href)
-    }
-    context.on('request', collect)
-    try {
-      await provide()
-    }
-    finally {
-      context.off('request', collect)
-      await testInfo.attach('link-external-requests', { body: JSON.stringify(external), contentType: 'application/json' })
-      expect(external, '链接输入、历史、保存和重开期间不得隐式读取外站').toEqual([])
-    }
-  }, { auto: true }],
-})
 
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -231,7 +206,7 @@ async function expectReopenedKeepsCanonical(page: Page, documentId: string): Pro
   expect(canonicalContentText((await savedContent(page, documentId)).text)).toBe(canonicalContentText(saved.text))
 }
 
-test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法（DEF-021）', { tag: '@test-build' }, () => {
+test.describe('US-M3-14 US-M5-14 写入之前把自动识别的链接改成规范写法（DEF-021）', { tag: '@test-build' }, () => {
   test('US-M3-14 单元格里键入、编辑栏里键入与粘贴：规范写法或去掉链接、文字不变；撤销两步重做两步之后不变；服务器上的与页面里的相同，每个链接都通过服务端的核对', async ({ page }) => {
     const documentId = await open(page, 'links-typed')
     await selectCell(page, 'A1')
