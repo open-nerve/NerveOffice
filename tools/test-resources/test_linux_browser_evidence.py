@@ -163,6 +163,8 @@ class EvidenceTests(unittest.TestCase):
             'versions.json': {'platform': 'Linux', 'machine': 'aarch64', 'node': 'v24.21.0', 'pnpm': '12.6.0',
                               'playwright': '1.63.0', 'osRelease': 'VERSION_ID="24.04"'},
             'execution.json': {'status': 0, 'steps': [{'status': 0} for unused in range(5)]},
+            'preflight-before-install.json': {'version': 1, 'phase': 'before-install', 'completeQueryPassed': True},
+            'preflight-after-pnpm.json': {'version': 1, 'phase': 'after-pnpm', 'completeQueryPassed': True},
         }
         for name, value in fixtures.items():
             (evidence / name).write_text(json.dumps(value))
@@ -189,6 +191,8 @@ class EvidenceTests(unittest.TestCase):
         root = self.root / 'owned'
         inner = root / 'source/.test-resources/runs/inner'; inner.mkdir(parents=True)
         (inner / 'run.json').write_text(json.dumps({'runId': 'inner', 'status': 'failed', 'cleanupStage': 'complete', 'publicationComplete': True}))
+        (inner / 'reports').mkdir()
+        (inner / 'reports/command.log').write_bytes(b'original inner log')
         group = root / 'evidence/groups/calibration/tests/e2e'
         results = group / 'test-results'; results.mkdir(parents=True)
         value = report(); value['stats']['unexpected'] = 1; value['stats']['expected'] = 0
@@ -200,6 +204,21 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(summary['safeToRelease'])
         self.assertFalse(summary['passed'])
         self.assertTrue((output / 'calibration/test-results/results.json').is_file())
+        self.assertEqual((output / 'inner-runs/inner/run.json').read_bytes(), (inner / 'run.json').read_bytes())
+        self.assertEqual((output / 'inner-runs/inner/reports/command.log').read_bytes(), b'original inner log')
+
+    def test_filtered_run_residue_still_prevents_volume_release(self):
+        root=self.root/'exported';root.mkdir();output=self.root/'output';output.mkdir()
+        (root/'transport.json').write_text(json.dumps({'version':1,'sections':[
+            {'section':'runs','unknownRunResidue':True}]}))
+        self.assertFalse(subject.collect_all(root,output)['safeToRelease'])
+
+    def test_published_budget_counts_metadata_and_inner_logs_not_only_group_payload(self):
+        output=self.root/'output';output.mkdir()
+        (output/'transport.json').write_bytes(b'x'*700)
+        (output/'inner-runs').mkdir();(output/'inner-runs/log.txt').write_bytes(b'x'*400)
+        with self.assertRaises(ValueError):subject.report_bytes(output,limit=1024)
+        self.assertEqual(subject.report_bytes(output,limit=2048),1100)
 
 
 if __name__ == '__main__':

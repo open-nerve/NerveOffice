@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { LinuxBrowserCache } from './linux-browser-cache.ts'
-import { PLAYWRIGHT_IMAGE } from './linux-browser.ts'
+import { GIB, PLAYWRIGHT_IMAGE } from './linux-browser.ts'
 
 const roots: string[] = []
 afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, force: true })))
@@ -12,7 +12,7 @@ afterEach(() => roots.splice(0).forEach(root => rmSync(root, { recursive: true, 
 function fixture(present = false) {
   const directory = mkdtempSync(join(tmpdir(), 'nerve-linux-cache-'))
   roots.push(directory)
-  const state = { present, daemon: 'daemon-one', used: false, extraTag: false, queryFailed: false }
+  const state = { present, daemon: 'daemon-one', used: false, extraTag: false, ownAlias: false, logicalSize: '3.48GB', queryFailed: false }
   const calls: string[][] = []
   function capture(args: readonly string[]): ResourceCapture {
     calls.push([...args])
@@ -23,9 +23,11 @@ function fixture(present = false) {
       return ok(state.daemon)
     if (args[0] === 'image' && args[1] === 'inspect') {
       return state.present
-        ? ok({ id: `sha256:${'a'.repeat(64)}`, bytes: 100, os: 'linux', arch: 'arm64', tags: state.extraTag ? ['other-project:keep'] : null, digests: [PLAYWRIGHT_IMAGE] })
+        ? ok({ id: `sha256:${'a'.repeat(64)}`, bytes: 100, os: 'linux', arch: 'arm64', tags: state.extraTag ? ['other-project:keep'] : state.ownAlias ? [PLAYWRIGHT_IMAGE] : null, digests: [PLAYWRIGHT_IMAGE] })
         : { status: 1, stdout: '', stderr: `Error response from daemon: No such image: ${PLAYWRIGHT_IMAGE}` }
     }
+    if (args[0] === 'image' && args[1] === 'ls')
+      return ok({ id: `sha256:${'a'.repeat(64)}`, size: state.logicalSize })
     if (args[0] === 'container' && args[1] === 'ls')
       return ok(state.used ? 'container-foreign' : '')
     if (args[0] === 'image' && args[1] === 'rm') {
@@ -96,4 +98,29 @@ it.each(['identity', 'bytes', 'bom'])('同 UUID 台账被改写也不取得删�
   expect(cache.release(true)).toBe(false)
   expect(calls.some(args => args[1] === 'rm')).toBe(false)
   expect(readFileSync(path, 'utf8')).toBe(changed)
+})
+
+it('固定 digest 的同名 tag 不被误判为其他项目的共享引用', () => {
+  const { cache, state, calls, record } = fixture()
+  cache.reserve()
+  state.present = true
+  state.ownAlias = true
+  cache.acquired()
+  expect(cache.release(true)).toBe(true)
+  expect(record().state).toBe('released')
+  expect(calls.some(args => args[1] === 'rm')).toBe(true)
+})
+
+it('拉取后及借用时仍预留 5 GiB；不能用压缩 inspect 字节降低预算', () => {
+  for (const existing of [false, true]) {
+    const { cache, state } = fixture(existing)
+    cache.reserve()
+    state.present = true
+    expect(cache.acquired()).toBe(5 * GIB)
+  }
+  const { cache, state } = fixture()
+  cache.reserve()
+  state.present = true
+  state.logicalSize = '6GB'
+  expect(() => cache.acquired()).toThrow()
 })

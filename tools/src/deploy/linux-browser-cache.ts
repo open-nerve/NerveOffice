@@ -157,11 +157,27 @@ export class LinuxBrowserCache {
     const image = this.image()
     if (image === null || (record.image !== null && record.image.id !== image.id))
       throw new Error('image-missing-or-changed')
+    const displayed = z.object({ id: z.string(), size: z.string() }).strict().parse(parseContainerJson(this.query([
+      'image',
+      'ls',
+      '--no-trunc',
+      '--filter',
+      `reference=${PLAYWRIGHT_IMAGE}`,
+      '--format',
+      '{"id":{{json .ID}},"size":{{json .Size}}}',
+    ])))
+    const match = /^(\d+(?:\.\d+)?)(B|kB|KB|MB|GB|TB)$/.exec(displayed.size)
+    const units: { [key: string]: number } = { B: 1, kB: 1000, KB: 1000, MB: 1000 ** 2, GB: 1000 ** 3, TB: 1000 ** 4 }
+    const precision = match?.[1]?.split('.')[1]?.length ?? 0
+    const unit = units[match?.[2] ?? '']
+    const upper = match === null || unit === undefined ? Number.NaN : Math.ceil((Number(match[1]) + 10 ** -precision) * unit)
+    if (displayed.id !== image.id || !Number.isSafeInteger(upper) || upper > 5 * GIB)
+      throw new Error('image-logical-size-unverified')
     record.image = image
     if (record.state !== 'borrowed')
       record.state = 'acquired'
     this.persist()
-    return record.state === 'borrowed' ? 0 : image.bytes
+    return 5 * GIB // Keep the conservative reservation after pull, including borrowed images.
   }
 
   release(quiescent: boolean): boolean {
@@ -181,7 +197,7 @@ export class LinuxBrowserCache {
         if (image.id !== record.image?.id)
           throw new Error('image-replaced')
         const users = this.query(['container', 'ls', '-a', '--no-trunc', '--filter', `ancestor=${image.id}`, '--format', '{{.ID}}'])
-        if (users || (image.tags?.length ?? 0) > 0 || image.digests.some(ref => ref !== PLAYWRIGHT_IMAGE)) {
+        if (users || (image.tags ?? []).some(ref => ref !== PLAYWRIGHT_IMAGE) || image.digests.some(ref => ref !== PLAYWRIGHT_IMAGE)) {
           record.state = 'shared'
           this.persist()
           return true

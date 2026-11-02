@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 
+from lifecycle import open_paths
 from linux_browser_evidence import installed_patches, read_json, validate_results, verify_source, write_json
 
 GROUPS = (
@@ -39,6 +40,18 @@ def run_groups(repo, root, execute):
     return 0
 
 
+def handle_preflight(root, phase, check=open_paths):
+    if phase not in ('before-install', 'after-pnpm'):
+        raise ValueError('preflight-phase')
+    # A non-existent target still validates the complete p/f/n/t stream before
+    # filtering. The pnpm invocation keeps its real executable mapped as well.
+    target = root / 'preflight-must-not-exist'
+    if target.exists() or target.is_symlink() or check(target):
+        raise ValueError('preflight-open-path')
+    write_json(root / 'evidence' / ('preflight-' + phase + '.json'),
+               {'version': 1, 'phase': phase, 'completeQueryPassed': True})
+
+
 def main():
     root = Path('/owned'); repo = root / 'source'; evidence = root / 'evidence'
     evidence.mkdir(exist_ok=True)
@@ -60,10 +73,12 @@ def main():
         return status
     status = 1
     try:
+        handle_preflight(root, 'before-install')
         subprocess.check_call(['npm', 'install', '--global', '--prefix', '/owned/pnpm', 'pnpm@12.6.0'], cwd=repo)
         versions['pnpm'] = subprocess.check_output(['pnpm', '--version'], text=True).strip()
         if versions['pnpm'] != '12.6.0':
             raise ValueError('guest-pnpm-mismatch')
+        subprocess.check_call(['pnpm', 'exec', 'python3', '-B', str(Path(__file__)), '--handle-preflight'], cwd=repo)
         # Source copy deliberately has no .git. This follows the existing image
         # install policy; the real host commit hooks are unaffected.
         if execute(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--store-dir', '/owned/pnpm-store']) != 0:
@@ -94,4 +109,9 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    if sys.argv[1:] == ['--handle-preflight']:
+        handle_preflight(Path('/owned'), 'after-pnpm')
+    elif len(sys.argv) == 1:
+        sys.exit(main())
+    else:
+        raise ValueError('guest-arguments')

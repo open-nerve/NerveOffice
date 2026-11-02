@@ -48,6 +48,16 @@ class GuestTests(unittest.TestCase):
                 subject.run_groups(repo, root, execute)
             self.assertEqual(len(calls), 1)
 
+    def test_preflight_does_not_write_pass_when_complete_handle_query_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory).resolve(); (root/'evidence').mkdir()
+            def failed(path): raise RuntimeError('mapping-identity-mismatch')
+            with self.assertRaises(RuntimeError):subject.handle_preflight(root,'before-install',failed)
+            self.assertFalse((root/'evidence/preflight-before-install.json').exists())
+            subject.handle_preflight(root,'before-install',lambda path: [])
+            self.assertEqual(json.loads((root/'evidence/preflight-before-install.json').read_text()),
+                             {'version':1,'phase':'before-install','completeQueryPassed':True})
+
 
 if __name__ == '__main__':
     unittest.main()

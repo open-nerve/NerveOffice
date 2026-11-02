@@ -282,16 +282,84 @@ def validate_guest_evidence(root):
     expected_versions = {'platform': 'Linux', 'machine': 'aarch64', 'node': 'v24.21.0', 'pnpm': '12.6.0', 'playwright': '1.63.0'}
     if any(versions.get(key) != value for key, value in expected_versions.items()) or 'VERSION_ID="24.04"' not in versions.get('osRelease', ''):
         raise ValueError('guest-version-proof')
+    for phase in ('before-install', 'after-pnpm'):
+        if evidence('preflight-' + phase + '.json') != {'version': 1, 'phase': phase, 'completeQueryPassed': True}:
+            raise ValueError('guest-preflight-proof')
     execution = evidence('execution.json')
     if execution.get('status') != 0 or len(execution.get('steps', [])) != 5 or any(step.get('status') != 0 for step in execution['steps']):
         raise ValueError('guest-execution-proof')
     return {'head': source['head'], 'patchPackages': len(host), 'verified': True}
 
 
+def export_inner_run(directory, output, budget):
+    entries = []; total = 0
+    with _Tree(directory) as source, _Tree(output) as target:
+        for name in ('run.json', 'command.log', 'reports/command.log', 'reports/temporary-inventory.json'):
+            if not source.exists(name):
+                continue
+            size, digest, unused, unused_data = source.read(name, limit=4 * 1024 ** 2)
+            total += size
+            if total > budget:
+                raise ValueError('inner-ledger-export-budget')
+            path = 'inner-runs/' + directory.name + '/' + name
+            target.mkdirs(str(Path(path).parent))
+            try:
+                target.info(path)
+                exists = True
+            except FileNotFoundError:
+                exists = False
+            if exists:
+                copied, checksum, unused, unused_data = target.read(path, limit=4 * 1024 ** 2)
+                if (copied, checksum) != (size, digest):
+                    raise ValueError('inner-ledger-export-changed')
+            else:
+                target.create(path, lambda sink, name=name: source.read(name, sink=sink, limit=4 * 1024 ** 2))
+            entries.append({'path': path, 'bytes': size, 'sha256': digest})
+        source.check(); target.check()
+    return {'runId': directory.name, 'bytes': total, 'files': entries}
+
+
+def report_bytes(root, limit=5 * 1024 ** 3):
+    total = entries = 0
+    with _Tree(root) as tree:
+        def visit(relative):
+            nonlocal total, entries
+            for name in tree.names(relative, observe=True):
+                entries += 1
+                if entries > 100000:
+                    raise ValueError('report-entry-budget')
+                path = relative + '/' + name if relative else name
+                info = tree.info(path)
+                if stat.S_ISDIR(info.st_mode):
+                    visit(path)
+                elif stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                    total += info.st_size
+                    if total > limit:
+                        raise ValueError('report-total-budget')
+                else:
+                    raise ValueError('report-file-type')
+        visit(''); tree.check()
+    return total
+
+
 def collect_all(root, output):
     root, output = Path(root), Path(output)
     groups = []; errors = []; exported_ids = set(); safe = True
-    remaining = 5 * 1024 ** 3 - 32 * 1024 ** 2
+    inner_exports = []; inner_remaining = 16 * 1024 ** 2
+    transport = root / 'transport.json'
+    if transport.exists() or transport.is_symlink():
+        try:
+            transfer = read_json(transport)
+            sections = transfer['sections']
+            if (transfer.get('version') != 1 or len(sections) != 2
+                    or [part['section'] for part in sections] != ['evidence', 'runs']
+                    or sections[1].get('unknownRunResidue') is not False):
+                raise ValueError('inner-run-residue')
+        except (OSError, ValueError, KeyError, TypeError):
+            safe = False; errors.append('inner-original-requires-retention')
+    remaining = 5 * 1024 ** 3 - 64 * 1024 ** 2 - inner_remaining - report_bytes(output)
+    if remaining <= 0:
+        raise ValueError('report-total-budget')
     for name, count in (('calibration', 1), ('stories', 13)):
         group = safe_path(root, 'evidence/groups/' + name)
         if not group.is_dir():
@@ -330,17 +398,20 @@ def collect_all(root, output):
                         or run.get('cleanupStage') != 'complete' or run.get('publicationComplete') is not True
                         or (directory / 'scratch').exists()):
                     raise ValueError('inner-run-not-exported')
+                export = export_inner_run(directory, output, inner_remaining)
+                inner_remaining -= export['bytes']; inner_exports.append(export)
                 seen.add(run['runId'])
             except (OSError, ValueError, KeyError):
                 safe = False; errors.append('inner-original-requires-retention')
     if seen != exported_ids:
         safe = False; errors.append('inner-run-ledger-missing')
+    report_bytes(output, limit=5 * 1024 ** 3 - 64 * 1024 ** 2)
     if not errors:
         try:
             validate_guest_evidence(root)
         except (OSError, ValueError, KeyError):
             errors.append('guest-proof-incomplete')
-    return {'version': 1, 'safeToRelease': safe, 'passed': not errors, 'groups': groups, 'errors': errors}
+    return {'version': 1, 'safeToRelease': safe, 'passed': not errors, 'groups': groups, 'innerRunExports': inner_exports, 'errors': errors}
 
 
 def main():

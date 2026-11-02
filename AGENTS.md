@@ -22,6 +22,8 @@
 - 托管委托状态为 `cleanupStage=host-disposal-pending`、`cleanupComplete=false`，产品 `passed/failed/interrupted` 独立保留。不得把平台销毁承诺写成实测删除完成。每 2 秒计量同 job 全部受管原环境，16 GiB 为停止阈值（不是配额，允许采样和停止等待超调），12 GiB 可用空间独立检查；报告仍合计 5 GiB、artifact 14 天。完整原环境不上载、不缓存、不移动、不压缩；重启、prune 不手工删除此类目录。身份/预算/稳定导出有问题时停止，不能无界重试。
 - 完整规则、入口、归档 pin 与验证命令见 `docs/testing/test-resource-lifecycle.md`。清理规则的验证使用 KiB 级临时样例，不为验收机制再创建大型环境。
 
-- P6-S4 的 `pnpm test:e2e:linux` 经 `run.py container` 运行固定的 1+13 条原生 Linux arm64 Chromium 校准，只挂本轮 scratch；runner 4 GiB/3 CPU，数据库 512 MiB/1 CPU。16 GiB 停止阈值、12 GiB 空间保留、2 秒尝试采样；未知采样或会话异常停止，不自动重试。新 Playwright 镜像先登记、上限 5 GiB/14 天，结束仅删除已证明本轮新增且无共享引用的 digest；既有镜像不认领，未知残留阻止下一轮拉取，不全局 prune。此入口不替代完整门禁或 Mac 原生验收。
+- P6-S4 的 `pnpm test:e2e:linux` 经 `run.py container` 运行固定的 1+13 条原生 Linux arm64 Chromium 校准，工作文件只用本轮登记的 `_assets` Linux 内部卷，源码经 Docker cp 传入，不 bind 宿主工作目录；runner 4 GiB/3 CPU，数据库 512 MiB/1 CPU。16 GiB 停止阈值、12 GiB 空间保留、2 秒尝试采样；未知采样或会话异常停止，不自动重试。新 Playwright 镜像先登记、上限 5 GiB/14 天，结束仅删除已证明本轮新增且无共享引用的 digest；既有镜像不认领，未知残留阻止下一轮拉取，不全局 prune。此入口不替代完整门禁或 Mac 原生验收。
 
 - Linux 隔离 guest 启动前持久登记 `linux-browser-evidence-hold.json`；安全拒绝、未发布或归属不明的内层报告原件不得随外层 scratch 删除。只有全部实际内层证据安全导出并核对台账后才解除，父 finish/sweep 和同类入口在此之前保持待处理。普通产品失败不冒充通过，也不因已导出而永久保留完整环境。
+
+- Linux 内部卷先核对本轮生产者退出、全部容器完整 ID 与停止状态，再流式导出有界报告，最后实际闭合容器/卷。传输拒绝路径穿越、链接、特殊文件、重复项、超限与未知证据；完整 profile、依赖及数据库不写到宿主。证据不明时保留卷与 hold 并停止；安装前及 pnpm 就绪后先做原完整 lsof 预检，不放宽原拒绝条件。导出期间继续计量静止卷和宿主新增副本。
