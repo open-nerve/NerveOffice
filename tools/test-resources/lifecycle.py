@@ -1131,6 +1131,12 @@ class Run:
             raise ValueError("终态无效")
         try:
             container_snapshot = self.assert_container_closed()
+            # Linux child evidence may be rejected by the report safety guard or
+            # interrupted before export. Keep its original bytes, including on
+            # restart; Docker closure alone does not authorize discarding them.
+            evidence_hold = self.directory / 'linux-browser-evidence-hold.json'
+            if evidence_hold.exists() or evidence_hold.is_symlink():
+                raise ValueError('linux-browser-evidence-retention-pending')
             if 'containerResources' in self.data:
                 if self.scratch.exists() and self.data.get('cleanupStage') != 'reports-collected':
                     if self.data.get('hostedScope') is not None:

@@ -178,3 +178,17 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 活动目录的容量采样通过父目录 FD 核验子项。列举后 stat、子目录打开前、已打开子目录结束复核这三处，只有确认子项 ENOENT 时才继续扫描；已累计字节保留，稳定兄弟和累计超限仍照常核验。本次计量已确认存在的根固定身份，不能在重试时把根消失当成尚未创建的零用量，或认领同名替换目录。权限、未知错误、祖先/根及子目录身份替换仍失败；无法完成的扫描最多三次尝试，并以固定操作名、errno 和尝试次数记录有界诊断，不输出私有路径。该采样规则不授权任何删除，也不适用于稳定报告内容校验。
 
 `check_ci_resources.py` 在当前 job 上持 publication/run 锁，核验唯一预检和该 job 主测试的身份、退出、实际稳定报告哈希、历史及当前预算，写入 `cleanup-receipt.json` 的 `ciResources`。产品失败的合格诊断报告可以上传，原产品步骤仍失败；checker 拒绝则不上传。E2E 额外要求原监督器退出、JSON/HTML 合格及便携 profile 归档成功，归档失败不会回退上传 raw。预检收据只读收集有界摘要，明确 diagnostic-only，不能替代这一完整核验。三个 job 的既有报告 artifact 同时携带精确 `.test-resources/runs/*/reports/portable/test-results/` 路径下的预检原件，启用隐藏目录，不上传 scratch；因此远端可重新核对预检与主测试两份清单，而非只相信合同声明。最终远端接受还须绑定实际同 SHA 六项 CI 及下载后的便携证据，旧本地 v2 关闭证明继续只接受实际 cleanup complete。
+
+## P6-S4 Linux 小范围校准
+
+`pnpm test:e2e:linux` 使用 `tools/src/deploy/linux-browser-cli.ts`，外层仍是 `run.py container`。只接受固定范围；校准 1 条通过才运行其余 13 条，Chromium、单 worker、原断言/超时/重试/trace/截图不变。Node 24.21.0、pnpm 12.6.0、Playwright 1.63.0、Ubuntu 24.04 和 Linux arm64 固定。独立提交源码副本与数据库，安装 SDK 的 16 组补丁字节前后核对，未提交源码拒绝运行。
+
+runner 限 4 GiB RAM/3 CPU，数据库限 512 MiB/1 CPU；私有 1 GiB shm，不挂 Docker socket 或宿主 IPC/PID/network。每 2 秒尝试采样 scratch、容器可写层、数据库卷与新镜像；16 GiB 为停止阈值，采样和退出等待可能超调，12 GiB 磁盘保留独立执行。查询失败、OOM、会话变化、任一产品失败均停止，不自动创建下一轮。
+
+复用父 UUID 容器/卷/网络台账，先登记后创建；先结束生产者并实际闭合 Docker，再提取报告。内层 `run.py e2e` 的真实回执与父回执分别保留，不改写为同一轮。报告导出先检查 JSON/HTML 的环境变量边界，再以稳定字节清单复制；完整 profile、node_modules、数据库不导出。两组报告合计不超过 5 GiB，沿普通 14 天/5 GiB 策略；失败和中断走同一清理路径。
+
+基础镜像缓存另记父运行目录 `linux-browser-image.json`，拉取前 fsync，固定 Playwright digest 上限 5 GiB/14 天；既有 Node/PostgreSQL/Playwright 镜像只借用。新增镜像确认 daemon、ID、digest、所有容器使用和额外引用后，仅非强制 `docker image rm <digest>`。共享时保留明确状态和到期时间；未闭合拉取、查询异常、身份变化或到期共享缓存阻止新拉取，保留待核对，不删除未知或其他项目资源。元数据不按报告垃圾回收，不清全局 image/builder cache。
+
+小型验证：受管 Python `test_linux_browser*.py` 及受管 Vitest `tools/src/deploy/linux-browser*.test.ts`，并核对既有容器归属/生产者回归。真实入口只用于已批准的 P6-S4 范围，不隐式恢复 Mac 浏览器或完整 Gate。
+
+Linux guest 启动前还会持久写 `linux-browser-evidence-hold.json`。父 `finish` 与重启 sweep 在该标记存在时保留原件并登记 `cleanup-pending`；内层报告安全拒绝、未发布、清理未闭合或证据归属不明时不会解除。普通产品失败的安全报告全部导出后可解除，不把产品失败当成证据丢失。缺证明时不得计为通过；成功还须核对 guest 已停止且退出码为零、无 OOM，以及版本/源码/SDK 前后证明全部一致。
