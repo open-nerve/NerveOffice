@@ -1,11 +1,11 @@
 /** Fixed Linux arm64 calibration/selftest. No host browser or full gate. */
+import type { MeasurementStage } from './linux-browser-measurement.ts'
 import type { BudgetSample } from './linux-browser.ts'
-import { execFile, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
 import { setTimeout as delay } from 'node:timers/promises'
-import { promisify } from 'node:util'
 import { z } from 'zod'
 import { REPO_ROOT } from '../shared/repo.ts'
 import { parseContainerJson } from './container-e2e-json.ts'
@@ -13,6 +13,7 @@ import { createInterruption, runTracked } from './container-e2e-process.ts'
 import { ContainerRunResources } from './container-e2e-resources.ts'
 import { createSettings, memoryBytes } from './container-e2e.ts'
 import { assertNoOutstandingImageCache, LinuxBrowserCache } from './linux-browser-cache.ts'
+import { measurementCommand as bounded, recordMeasurementFailure } from './linux-browser-measurement.ts'
 import { browserPlan, budgetProblem, DATABASE_IMAGE, GIB, guestExitStatus, linuxEnvironmentFile, linuxSuite, NODE_IMAGE, PLAYWRIGHT_IMAGE, stopWithMeter, withLinuxCleanup } from './linux-browser.ts'
 
 const environment = z.object({
@@ -76,7 +77,6 @@ function holdEvidence(): void {
   }
   syncDirectory()
 }
-const executeFile = promisify(execFile)
 let stopMonitor = false
 let monitor: Promise<void> | undefined
 let imageBytes = 5 * GIB
@@ -87,6 +87,8 @@ let meterStarted = false
 let guestStartIntent = false
 let reserved = false
 let stopReason: string | undefined
+let measurementFailureAttempted = false
+let measurementFailureSaved = false
 const created = new Map<string, string>()
 const daemon = z.object({ id: z.string(), os: z.literal('linux'), arch: z.literal('aarch64'), memory: z.number().min(6 * GIB) })
   .parse(parseContainerJson(query(['info', '--format', '{"id":{{json .ID}},"os":{{json .OSType}},"arch":{{json .Architecture}},"memory":{{json .MemTotal}}}'])))
@@ -115,13 +117,6 @@ async function requireRun(command: string, args: readonly string[]): Promise<voi
   if (await owned(command, args) !== 0)
     throw new Error('linux-command-failed')
 }
-async function bounded(command: string, args: readonly string[]): Promise<string> {
-  const result = await executeFile(command, args, { encoding: 'utf8', timeout: 15_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024 })
-  if (result.stderr.trim())
-    throw new Error('linux-measurement-stderr')
-  return result.stdout.trim()
-}
-
 const measuredContainer = z.object({
   id: z.string().min(1),
   name: z.string(),
@@ -135,50 +130,78 @@ const measuredContainer = z.object({
 const containerFormat = '{"id":{{json .Id}},"name":{{json .Name}},"writable":{{json .SizeRw}},"run":{{json (index .Config.Labels "org.nerve-office.test.run")}},"repo":{{json (index .Config.Labels "org.nerve-office.test.repo")}},"running":{{json .State.Running}},"oom":{{json .State.OOMKilled}},"exit":{{json .State.ExitCode}}}'
 
 async function measure(): Promise<void> {
-  if (frozenContainers === undefined && await bounded('docker', ['info', '--format', '{{.ID}}']) !== daemon.id)
-    throw new Error('linux-daemon-changed')
-  const containers = frozenContainers === undefined ? [] : [...frozenContainers]
-  for (const [name, id] of frozenContainers === undefined ? created : []) {
-    const info = measuredContainer.parse(parseContainerJson(await bounded('docker', ['container', 'inspect', '--size', '--format', containerFormat, name])))
-    if (info.name !== `/${name}` || info.id !== id)
-      throw new Error('linux-container-replaced')
-    containers.push(info)
+  let stage: MeasurementStage = 'daemon'
+  try {
+    if (frozenContainers === undefined && await bounded('docker', ['info', '--format', '{{.ID}}']) !== daemon.id)
+      throw new Error('linux-daemon-changed')
+    stage = 'container-size'
+    const containers = frozenContainers === undefined ? [] : [...frozenContainers]
+    for (const [name, id] of frozenContainers === undefined ? created : []) {
+      const info = measuredContainer.parse(parseContainerJson(await bounded('docker', ['container', 'inspect', '--size', '--format', containerFormat, name])))
+      if (info.name !== `/${name}` || info.id !== id)
+        throw new Error('linux-container-replaced')
+      containers.push(info)
+    }
+    const size = (text: string) => {
+      const match = /^(\d+)\s/.exec(text)
+      if (match === null)
+        throw new Error('linux-du-format')
+      return Number(match[1]) * 1024
+    }
+    stage = 'scratch-size'
+    const scratchBytes = size(await bounded('du', ['-sk', scratch]))
+    stage = 'volume-size'
+    const volumeSizes = frozenVolumes ?? (meterStarted ? (await bounded('docker', ['exec', `${settings.project}-meter`, 'du', '-sk', '/owned', '/database'])).split('\n').map(size) : [0, 0])
+    if (volumeSizes.length !== 2)
+      throw new Error('linux-volume-measurement')
+    lastVolumes = volumeSizes as [number, number]
+    const [workspace, database] = lastVolumes
+    stage = 'filesystem'
+    const filesystem = statfsSync(scratch)
+    const sample: BudgetSample = { scratch: scratchBytes, writable: containers.reduce((sum, item) => sum + item.writable, 0), workspace, database, image: imageBytes, available: filesystem.bavail * filesystem.bsize }
+    stage = 'container-stats'
+    const running = containers.filter(item => item.running)
+    const stats = running.length === 0
+      ? []
+      : (await bounded('docker', ['stats', '--no-stream', '--format', '{"id":{{json .ID}},"memory":{{json .MemUsage}},"cpu":{{json .CPUPerc}}}', ...running.map(item => item.id)]))
+          .split('\n')
+          .map((line) => {
+            const info = z.object({ id: z.string(), memory: z.string(), cpu: z.string() }).parse(parseContainerJson(line))
+            const bytes = memoryBytes(info.memory)
+            if (bytes === undefined || !running.some(item => item.id.startsWith(info.id)))
+              throw new Error('linux-stats-format')
+            return { ...info, memoryBytes: bytes }
+          })
+    const record = { at: new Date().toISOString(), ...sample, containers, stats }
+    // 2-second records are bounded to 4 MiB, and no Config.Env or credentials are inspected.
+    stage = 'sample-log'
+    const log = join(logDirectory, 'measurements.jsonl')
+    if (existsSync(log) && lstatSync(log).size >= 4 * 1024 ** 2)
+      throw new Error('linux-measurement-log-budget')
+    appendFileSync(log, `${JSON.stringify(record)}\n`, { mode: 0o600 })
+    stage = 'budget'
+    const problem = budgetProblem(sample)
+    if (problem !== undefined || containers.some(item => item.oom))
+      throw new Error(problem ?? 'container-oom')
   }
-  const size = (text: string) => {
-    const match = /^(\d+)\s/.exec(text)
-    if (match === null)
-      throw new Error('linux-du-format')
-    return Number(match[1]) * 1024
+  catch (error) {
+    stopReason ??= error instanceof Error && ['container-oom', 'environment-budget', 'disk-reserve'].includes(error.message) ? error.message : 'resource-measurement-failed'
+    const stop = () => {
+      interruption.receive()
+      recoveryInterruption?.receive()
+    }
+    // Keep the first failure: cleanup sampling must not overwrite its cause.
+    if (!measurementFailureAttempted) {
+      measurementFailureAttempted = true
+      measurementFailureSaved = recordMeasurementFailure(stage, error, (detail) => {
+        write('measurement-failure.json', { version: 1, runId, at: new Date().toISOString(), ...detail })
+      }, stop)
+    }
+    else {
+      stop()
+    }
+    throw error
   }
-  const scratchBytes = size(await bounded('du', ['-sk', scratch]))
-  const volumeSizes = frozenVolumes ?? (meterStarted ? (await bounded('docker', ['exec', `${settings.project}-meter`, 'du', '-sk', '/owned', '/database'])).split('\n').map(size) : [0, 0])
-  if (volumeSizes.length !== 2)
-    throw new Error('linux-volume-measurement')
-  lastVolumes = volumeSizes as [number, number]
-  const [workspace, database] = lastVolumes
-  const filesystem = statfsSync(scratch)
-  const sample: BudgetSample = { scratch: scratchBytes, writable: containers.reduce((sum, item) => sum + item.writable, 0), workspace, database, image: imageBytes, available: filesystem.bavail * filesystem.bsize }
-  const running = containers.filter(item => item.running)
-  const stats = running.length === 0
-    ? []
-    : (await bounded('docker', ['stats', '--no-stream', '--format', '{"id":{{json .ID}},"memory":{{json .MemUsage}},"cpu":{{json .CPUPerc}}}', ...running.map(item => item.id)]))
-        .split('\n')
-        .map((line) => {
-          const info = z.object({ id: z.string(), memory: z.string(), cpu: z.string() }).parse(parseContainerJson(line))
-          const bytes = memoryBytes(info.memory)
-          if (bytes === undefined || !running.some(item => item.id.startsWith(info.id)))
-            throw new Error('linux-stats-format')
-          return { ...info, memoryBytes: bytes }
-        })
-  const record = { at: new Date().toISOString(), ...sample, containers, stats }
-  // 2-second records are bounded to 4 MiB, and no Config.Env or credentials are inspected.
-  const log = join(logDirectory, 'measurements.jsonl')
-  if (existsSync(log) && lstatSync(log).size >= 4 * 1024 ** 2)
-    throw new Error('linux-measurement-log-budget')
-  appendFileSync(log, `${JSON.stringify(record)}\n`, { mode: 0o600 })
-  const problem = budgetProblem(sample)
-  if (problem !== undefined || containers.some(item => item.oom))
-    throw new Error(problem ?? 'container-oom')
 }
 
 async function monitoring(): Promise<void> {
@@ -189,10 +212,8 @@ async function monitoring(): Promise<void> {
     try {
       await measure()
     }
-    catch (error) {
-      stopReason = error instanceof Error && ['container-oom', 'environment-budget', 'disk-reserve'].includes(error.message) ? error.message : 'resource-measurement-failed'
-      interruption.receive()
-      recoveryInterruption?.receive()
+    catch {
+      // measure() has recorded the bounded diagnostic and requested a stop.
       return
     }
     if (!stopMonitor)
@@ -315,10 +336,7 @@ async function main(): Promise<void> {
         try {
           await measure()
         }
-        catch {
-          stopReason ??= 'resource-measurement-failed'
-          interruption.receive()
-        }
+        catch { /* measure() already recorded the failure and requested a stop. */ }
       }
       return !reserved || quiesceContainers()
     },
@@ -380,7 +398,7 @@ async function main(): Promise<void> {
       return released
     },
   })
-  write('summary.json', { ...result, stopReason, runId, sourceHead: existsSync(join(scratch, 'source.json'))
+  write('summary.json', { ...result, stopReason, measurementFailureSaved, runId, sourceHead: existsSync(join(scratch, 'source.json'))
     ? (JSON.parse(readFileSync(join(scratch, 'source.json'), 'utf8')) as { head: string }).head
     : null, sampleNote: '16 GiB is a stop threshold; sampling/termination can overshoot. Shared image retention is separate from container closure.' })
   console.log(`Linux Chromium 校准：退出 ${result.status}，容器闭合 ${result.closed}，镜像处置 ${result.cacheHandled}`)

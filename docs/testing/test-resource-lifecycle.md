@@ -187,6 +187,8 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 
 runner 限 4 GiB RAM/3 CPU，数据库限 512 MiB/1 CPU；私有 1 GiB shm，不挂 Docker socket 或宿主 IPC/PID/network。每 2 秒尝试采样 scratch、容器可写层、内部工作卷、数据库卷与镜像；16 GiB 为停止阈值，采样和退出等待可能超调，12 GiB 磁盘保留独立执行。查询失败、OOM、会话变化、任一产品失败均停止，不自动创建下一轮。
 
+第一处采样失败另存 `linux-browser/measurement-failure.json`：只含固定阶段/原因、白名单错误码/信号、数值退出码、输出字节数和最多 64 KiB 前缀摘要，以及缺失项/权限拒绝布尔线索；不保存命令参数、原异常正文、输出正文或环境变量。后续收尾异常不覆盖原件，`summary.json` 的 `measurementFailureSaved` 表示是否实际保存。诊断失败也停止，不能因为记录缺失继续运行、忽略 stderr 或改变清理权限。该记录帮助定位失败，不证明原问题已解决。
+
 复用父 UUID 容器/卷/网络台账，先登记后创建；工作文件使用本轮 `_assets` 内部卷，Node 子目录另作只读挂载，源码和清单通过 Docker cp 传入；不把数万个依赖文件 bind 到宿主。先结束生产者、核对本轮全部容器完整 ID 并停止，再提取报告，安全导出后才实际删除容器/卷。容器内 tini 替代 Docker 注入 init；安装前和 pnpm 就绪后先通过原完整 lsof 预检。内层 `run.py e2e` 的真实回执与父回执分别保留，不改写为同一轮。停止的容器经 `linux_browser_transport.py` 流式导出至父 scratch：两流总 payload 5 GiB，每流元数据 64 MiB/10 万项（整轮最多 128 MiB/20 万项），扩展 tar 头限 64 KiB；拒绝越界、链接、特殊文件、重复项与未知证据，内层提取原 run.json、根层或 reports/command.log 与临时清单，每件限 4 MiB、发布合计 16 MiB；scratch（含空目录）及未知残留会保留存在性拒绝信号，不能因过滤消失。导出后先检查 JSON/HTML 的环境变量边界，再以稳定字节清单复制；完整 profile、node_modules、数据库不导出。两组报告合计不超过 5 GiB，沿普通 14 天/5 GiB 策略；失败和中断走同一清理路径。
 
 基础镜像缓存另记父运行目录 `linux-browser-image.json`，拉取前 fsync，固定 Playwright digest 上限 5 GiB/14 天；既有 Node/PostgreSQL/Playwright 镜像只借用。新增镜像确认 daemon、ID、digest、所有容器使用和额外引用后，仅非强制 `docker image rm <digest>`。与固定 digest 完全相同的 tag 仅视为本轮别名；其他 tag/digest 或其他容器引用仍视为共享。Docker inspect 的压缩 Size 不代替总体积：核对显示容量的保守上界，整轮维持 5 GiB 预留。共享时保留明确状态和到期时间；未闭合拉取、查询异常、身份变化或到期共享缓存阻止新拉取，保留待核对，不删除未知或其他项目资源。元数据不按报告垃圾回收，不清全局 image/builder cache。
