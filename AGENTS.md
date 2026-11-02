@@ -3,6 +3,7 @@
 先阅读本目录 `CLAUDE.md`。这里补充所有 Agent 均须执行的测试资源规则，覆盖与旧文档不一致的旧测试启动示例。
 
 - 主项目目录 HEAD 始终保持 `main`。每个 Phase 一个分支和 worktree，Codex 路径为 `.codex/worktress/<branch>/`；不在主目录切分支。整个 Phase 验证与审查通过后才 `--no-ff` 合入 main。
+- **2026-11-02 用户批准的 M5-P5→P6 接续**：P5 经快速门禁、相关回归、源码对应和审查后可 `--no-ff` 合入本地 main，暂缓推送；P6 从该 main 建唯一分支，M5 收官统一原完整 Gate/容器/浏览器矩阵及最终同 SHA CI。本地中间状态只作开发集成，不能称作完整验收或可发布；不改 CI 触发、不跳 hooks，不追认旧失败，也不自动解除桌面故障的长测阻断。仅适用于本次接续，详见 `docs/adr/ADR-026-M5阶段接续与集中验收.md`。
 - 提交信息用中文。既有未提交修改及源码、Git、活动 worktree、业务数据不得作为测试垃圾处理。
 - **测试完成必须处理本轮残留**，包括成功、失败、异常与可捕获中断。不得把完整 VM、浏览器 profile、数据库或反复重试的完整环境永久复制进 handoffs。
 - 使用已接入的 `pnpm test:e2e`、`test:e2e:container`、`test:integration`、`test:coverage` 及 E2E 包的测量、模板和 Safari 命令。手工执行测试也须经 `python3 tools/test-resources/run.py <类型> -- <命令>`；只读列举 `--list` 除外。
