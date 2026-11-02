@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import container_resources
 import run as runner
+from fixture_retention import ManagedFixture
 from lifecycle import Store, atomic_json
 
 
@@ -148,6 +149,8 @@ process.exitCode = process.argv[2] === 'failed' ? 9 : 0
         result = subprocess.run([sys.executable, '-B', str(Path(__file__).with_name('run.py')),
                                  '--repo', str(self.repo), 'container', '--', shutil.which('node'), str(script), mode],
                                 cwd=self.repo, text=True, capture_output=True, timeout=30)
+        if getattr(self, 'fixture', None) is not None:
+            self.fixture.capture()
         manifests = list((self.store.root / 'runs').glob('*/run.json'))
         self.assertEqual(len(manifests), 1, result.stdout + result.stderr)
         value = json.loads(manifests[0].read_text())
@@ -157,11 +160,14 @@ process.exitCode = process.argv[2] === 'failed' ? 9 : 0
         return result, value, receipt, manifests[0].parent
 
     def test_python_parent_accepts_actual_node_closed_ledger_and_publishes_success(self):
-        result, value, receipt, directory = self.run_node_protocol('passed')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(value['status'], 'passed')
-        self.assertTrue(receipt['dockerClosed'])
-        self.assertFalse((directory / 'scratch').exists())
+        with ManagedFixture() as self.fixture:
+            self.repo = self.fixture.path
+            self.store = Store(self.repo)
+            result, value, receipt, directory = self.run_node_protocol('passed')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(value['status'], 'passed')
+            self.assertTrue(receipt['dockerClosed'])
+            self.assertFalse((directory / 'scratch').exists())
 
     def test_product_failure_is_preserved_after_actual_node_cleanup(self):
         result, value, receipt, directory = self.run_node_protocol('failed')

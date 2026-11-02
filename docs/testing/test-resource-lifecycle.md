@@ -30,6 +30,14 @@ Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `a
 
 `test_git_repository_isolation.py` 纳入 `pnpm test:cleanup:check`，使用本轮 TMPDIR 下的 KiB 级父仓库、linked worktree 与本地 bare 目标，真实触发 pre-push，分别运行既有迁移/证据夹具。核对父 HEAD、refs、index、共享配置和文件前后不变，并验证读取助手、变量组合与根拒绝。创建前核对外层运行台账、scratch、进程组和 TMPDIR 归属；夹具不设置逐例删除或 finalizer，超时也保留目录及回执，由外层运行器确认整组退出及句柄闭合后清理。复现只针对受管夹具，禁止把真实项目或其他任务 `.git` 注入测试环境。见 [P6 调查与修复方案](../v0.1/M5-表格能力与资源/reviews/P6-S5-推送钩子Git隔离调查与修复方案.md)。
 
+## 嵌套运行器的失败保全
+
+P6 的三条批准取证入口（真实 Node 协议成功、桌面屏障 kill-gone、报告轮转）使用 `fixture_retention.ManagedFixture`，详见[固定清单](../v0.1/M5-表格能力与资源/plans/P6-S5-句柄诊断与失败台账保全.md)。先核对外层运行身份、进程组和受管目录，再持锁写 `fixture-holds/<UUID>.json`，随后创建本轮 TMPDIR 中的夹具；不设逐例删除或 finalizer。`Run.finish` 在收集/删除之前拒绝任何未释放保留目录，后续 `Store.sweep` 也维持保留。清理未闭合不能仅记录日志后继续：三条实测使用 unittest fail-fast。
+
+夹具导出原内层 run.json、存在且身份匹配的短根 owner 及摘要，首次观察不可覆盖；每子轮总计 64 KiB，所有夹具报告合计 1 MiB。夹具边界错误另有最多 64 KiB 的回执，错误片段至多 8 KiB、附完整长度/摘要及截断标记，也计入 1 MiB。导出/身份/预算失败都使当前用例失败并保留原件。仅原件导出核验、全部子轮已闭合、租约和进程组退出、scratch/短根实际消失且句柄查询完整时，才解除自身标记；只解除标记，工作文件由外层统一清理。失败后的再次 close 不重试子轮；需要调查后决定恢复，不能删除标记骗过保护。
+
+这次仅迁移上述三个入口；其他有意损坏/伪造外部资源的旧 mock 夹具不在本轮完整闭合声明内。原 `full02` 的三个短根因创建身份证明丢失继续保留。lsof 对拒绝的 f 原值增加有界诊断（最多 64 bytes、16 样本，其他文本/绝对路径脱敏），**接受格式及原拒绝规则不变**。
+
 ## macOS 桌面会话异常停止
 
 `tools/test-resources/desktop_session.py` 对 `e2e/container/measure/template/native/vm` 启用；外层本地门禁使用 `SessionGuard('gate')`。非 macOS 及非浏览器类型只记 `not-applicable`，没有桌面监测通过的含义，不得通过改变资源类型绕过检查。

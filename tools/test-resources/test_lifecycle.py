@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from fixture_retention import ManagedFixture
 from unittest.mock import patch
 
 from lifecycle import Store, compact_profiles, failed_profile_names
@@ -285,13 +286,14 @@ class LifecycleTests(unittest.TestCase):
 class RunnerTests(unittest.TestCase):
     def test_e2e_then_container_publication_rotates_without_overwrite(self):
         runner = Path(__file__).with_name("run.py")
-        with tempfile.TemporaryDirectory(prefix="nerve-publish-test-") as temp:
-            repo = Path(temp)
+        with ManagedFixture() as fixture:
+            repo = fixture.path
             for kind in ("e2e", "container", "container"):
                 result = subprocess.run([sys.executable, str(runner), "--repo", str(repo), kind, "--",
                     sys.executable, "-c",
                     "import os,pathlib; p=pathlib.Path(os.environ['NERVE_TEST_OUTPUT_DIR']); (p/'results.json').write_text('{'+chr(34)+'stats'+chr(34)+': {}}')"],
                     capture_output=True,text=True,timeout=15)
+                fixture.capture()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue((repo / "tests/e2e/test-results/results.json").exists())
             self.assertEqual(len(list((repo / ".test-resources/runs").glob("*/reports/test-results/results.json"))), 2)

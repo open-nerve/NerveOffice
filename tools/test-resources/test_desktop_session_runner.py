@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 import run as runner
 import lifecycle
 from lifecycle import Store
+from fixture_retention import ManagedFixture
 
 
 class ObservedSession:
@@ -45,10 +46,13 @@ class DesktopSessionRunnerTests(unittest.TestCase):
         args = ["run.py", "--repo", str(self.repo), "e2e", "--", sys.executable, "-c", code, str(self.ready)]
         with patch.object(sys, "argv", args), patch.object(runner, "SessionGuard", return_value=observer, create=True):
             result = runner.main()
+        if getattr(self, 'fixture', None) is not None:
+            self.fixture.capture()
         records = list((self.repo / ".test-resources/runs").glob("*/run.json"))
         self.assertEqual(len(records), 1)
         data = json.loads(records[0].read_text())
-        self.assertEqual(data["cleanupStage"], "complete")
+        self.assertEqual(data.get("cleanupStage"), "complete",
+                         json.dumps({key: data.get(key) for key in ('status', 'cleanupStage', 'cleanupError')}, ensure_ascii=False))
         self.assertFalse((records[0].parent / "scratch").exists())
         self.assertFalse(Path(data["shortRoot"]).exists())
         return result, data
@@ -139,7 +143,10 @@ class DesktopSessionRunnerTests(unittest.TestCase):
         self.exercise_barrier_exit_race("term-gone")
 
     def test_barrier_finally_tolerates_group_gone_before_kill(self):
-        self.exercise_barrier_exit_race("kill-gone")
+        with ManagedFixture() as self.fixture:
+            self.repo = self.fixture.path
+            self.ready = self.repo / 'sample-ready'
+            self.exercise_barrier_exit_race("kill-gone")
 
     def test_barrier_finally_does_not_kill_after_leader_already_exited(self):
         self.exercise_barrier_exit_race("ended-before-kill")
