@@ -18,6 +18,7 @@
 import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { EditorImageAccess, ImageInputState } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
+import type { CsvTable } from '../../shared/csv/index.ts'
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
@@ -27,6 +28,7 @@ import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.t
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { DraftSessionPermit } from '../../shared/outbox/session-fence.ts'
 import type { AutosavePage, AutosaveView } from './autosave.ts'
+import type { CsvController, CsvTarget } from './csv-controller.ts'
 import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
@@ -48,6 +50,8 @@ import { createRecoveryReader } from '../../shared/local-drafts/recovery-reader.
 import { draftSessionPermitOf } from '../../shared/local-drafts/session-activation.ts'
 import { subscribeLocalSession } from '../../shared/local-drafts/session-events.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
+import { createCsvController } from './csv-controller.ts'
+import { downloadCsv } from './csv-download.ts'
 import { createEditMode } from './edit-mode.ts'
 import { createEditorImageAccess } from './image-access.ts'
 import { blockInteractions } from './interaction-barrier.ts'
@@ -204,6 +208,8 @@ export interface EditorPageOptions {
 }
 
 export interface EditorPage {
+  readonly csv: CsvController
+  readonly importCreatedCsv: (table: CsvTable, intent: CreatedCsvIntent) => Promise<boolean>
   readonly sheetName: EditMode['sheetName']
   readonly retryFormulaRecovery: () => void
   readonly retryRecovery: () => Promise<void>
@@ -263,6 +269,13 @@ export interface EditorPage {
   readonly dispose: () => void
 }
 
+export interface CreatedCsvIntent {
+  readonly documentId: string
+  readonly userId: string
+  readonly csrfToken: string
+  readonly current: () => boolean
+}
+
 export type EditorSurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
 
 /** 本页认识的档案与格式版本；别的一律不进入编辑，也不改写（计划书 §8.7） */
@@ -294,7 +307,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   /** 无许可的同源确认之后仍可识别迟到 stopped；绝不交给本机 reader/writer。 */
   let unconfirmedLocalSource: DraftSessionPermit | undefined
   let imageAccess: EditorImageAccessController | undefined
-  let imageSession: SessionResponse | undefined
+  let pageSession: SessionResponse | undefined
+  let csvIdentityEpoch = 0
   let confirmedImageSession: SessionResponse | undefined
   let imageReadable = false
   let imageCanEdit: boolean | undefined
@@ -304,7 +318,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let imageInstance = 0
   let imageProblem = false
   let imageOperation: ImageInputState | undefined
-  let imagesHidden = false
+  let pageHidden = false
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
   /** 阅读与编辑（载入之后才有） */
@@ -361,7 +375,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     localPermit = undefined
     unconfirmedLocalSource = undefined
     pendingLocalStop = event.previous
-    imageSession = undefined
+    acceptPageSession(undefined)
     imagePermissionEpoch += 1
     imageAccess?.suspend()
     recovery?.suspend()
@@ -376,6 +390,41 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   /** 编辑器容器的状态（写在容器的 data-editor-state 上） */
   let surfaceState: EditorSurfaceState = 'loading'
   let current = computeView()
+  const csv = createCsvController({
+    current: csvTarget,
+    prepareImport: async () => {
+      if (serverAvailable())
+        await confirmForSave(false)
+    },
+    title: () => heading?.title ?? '',
+    download: downloadCsv,
+  })
+
+  function acceptPageSession(next: SessionResponse | undefined): void {
+    if (pageSession?.user.id !== next?.user.id || pageSession?.csrfToken !== next?.csrfToken)
+      csvIdentityEpoch += 1
+    pageSession = next
+  }
+
+  function csvTarget(newDocument = false): CsvTarget | undefined {
+    const target = mode?.csvTarget(newDocument)
+    const signedIn = pageSession
+    if (!target || !signedIn || checkInFlight !== undefined || sessionProblem !== undefined)
+      return undefined
+    const epoch = csvIdentityEpoch
+    const currentTarget = (): boolean => !disposed && !leaving && !pageHidden && load.kind === 'ready'
+      && session === 'active' && !unauthenticatedPending && staleAfter === undefined
+      && epoch === csvIdentityEpoch && pageSession?.user.id === signedIn.user.id && pageSession.csrfToken === signedIn.csrfToken
+      && target.current()
+    if (!currentTarget())
+      return undefined
+    return {
+      editor: target.editor,
+      current: currentTarget,
+      writable: () => currentTarget() && target.writable() && serverAvailable() && confirmedForWrite(),
+      formulasPending: target.formulasPending,
+    }
+  }
 
   function computeView(): EditorPageView {
     const modeView = mode?.view()
@@ -383,16 +432,16 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   function confirmImages(): void {
-    if (disposed || leaving || imagesHidden || session !== 'active' || !imageReadable || imageSession === undefined) {
+    if (disposed || leaving || pageHidden || session !== 'active' || !imageReadable || pageSession === undefined) {
       imageAccess?.suspend()
       return
     }
-    if (imageAccess?.current()?.csrfToken !== imageSession.csrfToken)
+    if (imageAccess?.current()?.csrfToken !== pageSession.csrfToken)
       imagePermissionEpoch += 1
-    if (confirmedImageSession?.csrfToken !== imageSession.csrfToken)
+    if (confirmedImageSession?.csrfToken !== pageSession.csrfToken)
       imageProblem = false
-    confirmedImageSession = imageSession
-    imageAccess?.confirm(imageSession)
+    confirmedImageSession = pageSession
+    imageAccess?.confirm(pageSession)
   }
 
   function refreshImages(): void {
@@ -447,10 +496,12 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     if (!next)
       recovery?.suspend()
     signalPage()
+    csv.environmentChanged()
   }
 
   function update(): void {
     syncWritable()
+    csv.environmentChanged()
     const next = computeView()
     const changed = (Object.keys(next) as (keyof EditorPageView)[]).some(key => next[key] !== current[key])
     if (!changed)
@@ -543,8 +594,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   function enterSession(next: EditorPageSession): void {
     if (next !== 'signed-out')
       sessionEndedReason = undefined
-    if (session !== next)
+    if (session !== next) {
       imagePermissionEpoch += 1
+      csvIdentityEpoch += 1
+    }
     session = next
     if (next !== 'active') {
       confirmedImageSession = undefined
@@ -562,6 +615,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   /** 编辑权与另存为副本的请求得到未登录或令牌失效：向服务端确认现在是谁（不显示"正在确认"：不是用户按了保存） */
   function writeProblem(error: ApiError): void {
+    csvIdentityEpoch += 1
+    csv.environmentChanged()
     if (userId !== undefined && disabledSessionUserId(error) === userId)
       sessionEndedReason = 'account_disabled'
     if (isAuthenticationError(error))
@@ -697,10 +752,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 本页的用户（在别的标签页重新登录了）：换上新的令牌，恢复保存与阅读时的检查
       setApiSession(confirmed)
       const confirmedPermit = draftSessionPermitOf(confirmed)
-      unconfirmedLocalSource = confirmedPermit === undefined && imageSession?.user.id === confirmed.user.id && imageSession.csrfToken === confirmed.csrfToken
+      unconfirmedLocalSource = confirmedPermit === undefined && pageSession?.user.id === confirmed.user.id && pageSession.csrfToken === confirmed.csrfToken
         ? localPermit ?? unconfirmedLocalSource
         : undefined
-      imageSession = confirmed
+      acceptPageSession(confirmed)
       localDraftsEnabled = confirmed.features.localDraftsEnabled
       localPermit = confirmedPermit
       enterSession('active')
@@ -837,14 +892,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       createEditor: async (editorOptions) => {
         const instance = ++imageInstance
         imageOperation = undefined
-        const currentImageInstance = (): boolean => !disposed && !imagesHidden && instance === imageInstance
+        const currentImageInstance = (): boolean => !disposed && !pageHidden && instance === imageInstance
         const confirmImageOperationSession = async (): Promise<void> => {
           await recheckSession()
           if (!currentImageInstance())
             return
           // 合并确认要看最后一轮；前轮成功不能掩盖接续轮断网。
           if (sessionProblem !== undefined) {
-            imageSession = undefined
+            acceptPageSession(undefined)
             imagePermissionEpoch += 1
             imageAccess?.suspend()
           }
@@ -855,7 +910,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           pageUi: options.chrome,
           ...(imageAccess === undefined ? {} : { imageAccess }),
           onImageFailure: (error) => {
-            if (disposed || imagesHidden || instance !== imageInstance)
+            if (disposed || pageHidden || instance !== imageInstance)
               return
             imageProblem = true
             update()
@@ -868,7 +923,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
             imageOperation = state
             update()
             // 用户动作仍可合并正在进行的停写补核；确认不会自动重放剪贴板。
-            if (state.kind === 'failed' && state.reason === 'permission' && imageSession === undefined)
+            if (state.kind === 'failed' && state.reason === 'permission' && pageSession === undefined)
               void confirmImageOperationSession()
           },
           onImageOperationFailure: (error) => {
@@ -888,18 +943,24 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       session: {
         // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
         saveUnauthenticated: (error) => {
+          csvIdentityEpoch += 1
+          csv.environmentChanged()
           if (userId !== undefined && disabledSessionUserId(error) === userId)
             sessionEndedReason = 'account_disabled'
           unauthenticatedPending = true
           void confirmForSave(true)
         },
         saveStale: () => {
+          csvIdentityEpoch += 1
+          csv.environmentChanged()
           staleAfter = checksStarted
           syncWritable()
           void confirmForSave(true)
         },
         writeProblem,
         readProblem: (error) => {
+          csvIdentityEpoch += 1
+          csv.environmentChanged()
           if (userId !== undefined && disabledSessionUserId(error) === userId)
             sessionEndedReason = 'account_disabled'
           void recheckSession()
@@ -917,6 +978,17 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   return {
+    csv,
+    async importCreatedCsv(table, intent) {
+      const matches = (): boolean => intent.current() && documentId === intent.documentId
+        && pageSession?.user.id === intent.userId && pageSession.csrfToken === intent.csrfToken
+      if (!matches())
+        return false
+      const target = csvTarget(true)
+      if (!target)
+        return false
+      return csv.importPrepared(table, { ...target, current: () => matches() && target.current(), writable: () => matches() && target.writable() })
+    },
     retryRecovery: async () => recoveryAction(async current => current.discover()),
     sheetName: sheetId => disposed || session !== 'active' ? undefined : mode?.sheetName(sheetId),
     copyRecovery: async () => recoveryAction(async current => current.copy()),
@@ -943,7 +1015,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }))
       // 关闭时有保存在途不释放（edit-mode.ts 的 releaseOnHide，M3-P4 设计 §3.4）
       const onPageHide = (): void => {
-        imagesHidden = true
+        pageHidden = true
+        csv.dispose()
         imageAccess?.suspend()
         recovery?.suspend()
         mode?.releaseOnHide()
@@ -979,7 +1052,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
           return
         setApiSession(signedIn)
         userId = signedIn.user.id
-        imageSession = signedIn
+        acceptPageSession(signedIn)
         imageAccess = createEditorImageAccess(userId)
         localDraftsEnabled = signedIn.features.localDraftsEnabled
         localPermit = draftSessionPermitOf(signedIn)
@@ -1171,9 +1244,9 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       let document: DocumentDetail
       try {
         // 停写补核尚未完成时，明确重试合并确认并检查最终身份；失败源只由明确重试清除。
-        if (imageSession === undefined) {
+        if (pageSession === undefined) {
           await recheckSession()
-          if (disposed || heading === undefined || round !== detailRound || session !== 'active' || sessionProblem !== undefined || imageSession === undefined) {
+          if (disposed || heading === undefined || round !== detailRound || session !== 'active' || sessionProblem !== undefined || pageSession === undefined) {
             detailRefreshes -= 1
             update()
             return
@@ -1234,6 +1307,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     recheckSession,
     dispose: () => {
       disposed = true
+      csv.dispose()
       imageAccess?.dispose()
       recovery?.dispose()
       cancelRecheck?.()

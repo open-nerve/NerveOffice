@@ -8,6 +8,8 @@
 // UNIVER_INTERNAL_SYMBOLS），引用这里的文件也只能经两个出口（nerve/editor-internal-api-exits，M2-P6 复验 N4）。
 // 这个文件只写再导出：登记表的核对按这里的写法取出导出的名字
 export { CELL_LINK_PROTOCOL } from './cell-links.ts'
+export { csvArrayCells } from './csv-array-cells.ts'
+export { CSV_SHEET_COMMAND } from './csv-sheet-command.ts'
 export { FIND_ADVANCED_LINK_SELECTOR, FORMULA_BAR_INPUT_SELECTOR, NOTE_TEXTAREA_SELECTOR } from './dom-markers.ts'
 export { FORMULA_PROTOCOL } from './formula-protocol.ts'
 export { imageLiteralSource } from './image-formula-source.ts'

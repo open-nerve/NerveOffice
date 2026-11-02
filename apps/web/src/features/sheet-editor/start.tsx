@@ -1,4 +1,4 @@
-import type { AutosaveControlHooks, EditIntent, PageActivity, PageNetwork } from './editor-page.ts'
+import type { AutosaveControlHooks, EditIntent, EditorPage, PageActivity, PageNetwork } from './editor-page.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
 // 浏览器的实现都在这里给出（M3-P5）：本页的键盘、鼠标操作（窗口的捕获阶段）、同一个浏览器里的锁与交接频道（navigator.locks、
@@ -40,6 +40,14 @@ export interface SheetEditorPageElements {
   readonly chrome: HTMLElement
   /** 编辑器的容器（Univer） */
   readonly surface: HTMLElement
+  /** 创建页保留自己的状态条；正式页头放在 chrome 的子容器，屏障仍覆盖整个 chrome。 */
+  readonly heading?: HTMLElement
+}
+
+export interface SheetEditorPageMount {
+  readonly page: EditorPage
+  readonly loaded: Promise<void>
+  readonly dispose: () => void
 }
 
 /** 页面的可见性：document.visibilityState 与 visibilitychange */
@@ -93,21 +101,57 @@ const LEAVING_GRACE_MS = 10_000
  * 引入的测试钩子不经这里上报（见 startSheetEditorPage）。只用在加载失败上：编辑器的加载失败另有可见的说明（"编辑器加载失败"），上报只用于诊断；
  * 别的意外错误照常立即上报
  */
-function loadFailureReporter(target: Window): (error: unknown) => void {
+function loadFailureReporter(target: Window) {
   let leavingSince: number | undefined
-  target.addEventListener('beforeunload', (event) => {
+  const onLeave = (event: BeforeUnloadEvent): void => {
     if (event.isTrusted)
       leavingSince = performance.now()
-  })
-  return (error) => {
-    if (leavingSince === undefined || performance.now() - leavingSince >= LEAVING_GRACE_MS)
-      reportError(error)
+  }
+  target.addEventListener('beforeunload', onLeave)
+  return {
+    report: (error: unknown) => {
+      if (leavingSince === undefined || performance.now() - leavingSince >= LEAVING_GRACE_MS)
+        reportError(error)
+    },
+    dispose: () => target.removeEventListener('beforeunload', onLeave),
   }
 }
 
-export function startSheetEditorPage(elements: SheetEditorPageElements): void {
-  watchBrowserConnection({ state: connectionState, probe: requestSession })
-  const reportLoadFailure = loadFailureReporter(window)
+export async function startSheetEditorPage(elements: SheetEditorPageElements): Promise<SheetEditorPageMount | undefined> {
+  const stopConnection = watchBrowserConnection({ state: connectionState, probe: requestSession })
+  const reporter = loadFailureReporter(window)
+  let stopped = false
+  let mounted: SheetEditorPageMount | undefined
+  const dispose = (): void => {
+    if (stopped)
+      return
+    stopped = true
+    window.removeEventListener('pagehide', dispose)
+    stopConnection()
+    reporter.dispose()
+    mounted?.dispose()
+  }
+  window.addEventListener('pagehide', dispose)
+  try {
+    mounted = await prepare(elements, reporter.report, () => stopped)
+    if (stopped) {
+      mounted?.dispose()
+      return
+    }
+    if (mounted === undefined)
+      return
+    // 已挂载页面自己的 pagehide 负责在途保存/未知回执和租约；普通 dispose 会释放租约，不能抢先执行。
+    // 此入口只在测试钩子尚未加载、页面还没装配时拦住晚到的挂载。
+    window.removeEventListener('pagehide', dispose)
+    return { page: mounted.page, loaded: mounted.loaded, dispose }
+  }
+  catch (error) {
+    dispose()
+    throw error
+  }
+}
+
+async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, stopped: () => boolean): Promise<SheetEditorPageMount | undefined> {
   if (import.meta.env.MODE === 'e2e') {
     const parameters = new URLSearchParams(window.location.search)
     // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
@@ -140,23 +184,23 @@ export function startSheetEditorPage(elements: SheetEditorPageElements): void {
     // 脚本还没执行、还没开始听 beforeunload 时就已开始，随后取消它们（WebKit 报"Importing a module script failed."），分不清是不是跳转取消的
     // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）
     const crash = parameters.get('selftest') === 'crash-recovery'
-    void Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('./recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)]).then(([control, log, diagnostics]) => {
-      const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadStart(() => window.sessionStorage) : undefined
-      assemble(
-        elements,
-        reportLoadFailure,
-        control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
-        log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
-        observed?.snapshot,
-      )
-    })
-    return
+    const [control, log, diagnostics] = await Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('./recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)])
+    if (stopped())
+      return
+    const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadStart(() => window.sessionStorage) : undefined
+    return assemble(
+      elements,
+      reportLoadFailure,
+      control.status === 'fulfilled' ? control.value.installAutosaveControl(window, DEFAULT_AUTOSAVE_LIMITS) : undefined,
+      log.status === 'fulfilled' ? log.value.installHandoverLog(window).observe : undefined,
+      observed?.snapshot,
+    )
   }
-  assemble(elements, reportLoadFailure, undefined, undefined)
+  return assemble(elements, reportLoadFailure, undefined, undefined)
 }
 
-function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics?: () => unknown): void {
-  startDraftMaintenance()
+function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics?: () => unknown): SheetEditorPageMount {
+  const stopMaintenance = startDraftMaintenance()
   clearInheritedReloadMarkers(() => window.sessionStorage)
   const page = createEditorPage({
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
@@ -209,8 +253,9 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
   })
   // navigator.platform 已不推荐使用，但各浏览器都还给出真实的平台；userAgentData 只有 Chromium 有
   const apple = isApplePlatform(navigator.platform)
-  installPageGuards(window, page, apple)
-  createRoot(elements.chrome).render(
+  const stopGuards = installPageGuards(window, page, apple)
+  const root = createRoot(elements.heading ?? elements.chrome)
+  root.render(
     <StrictMode>
       <LocalDataNotice />
       <EditorChrome page={page} apple={apple} />
@@ -220,12 +265,27 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
   // 要在会话与内容的请求回来之前挂上，"收不到交接消息"的那一页（takeover-holder-deaf）要在编辑器页第一次打开交接频道之前换上吞消息的频道——
   // 频道在建编辑模式时就打开（订阅交接请求），那时会话、详情与内容都已回来；原来先发起载入、再引入挂接，靠挂接的小分块先回来，不是保证的先后。
   // 引入失败照常载入（自检随之没有结果，错误交给浏览器的错误报告）。生产构建里 MODE 是 production，这个分支与自检的分块都被去掉（门禁 artifacts 核对）
-  if (import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')) {
-    void import('./selftest-hook.ts').then(
-      ({ watchForSelftest }): void | Promise<void> => watchForSelftest(page, elements, reloadDiagnostics),
-      (error: unknown) => reportLoadFailure(error),
-    ).then(async () => page.load())
-    return
+  let disposed = false
+  const loaded = import.meta.env.MODE === 'e2e' && new URLSearchParams(window.location.search).has('selftest')
+    ? import('./selftest-hook.ts').then(
+        ({ watchForSelftest }): void | Promise<void> => watchForSelftest(page, elements, reloadDiagnostics),
+        (error: unknown) => reportLoadFailure(error),
+      ).then(async () => {
+        if (!disposed)
+          await page.load()
+      })
+    : page.load()
+  return {
+    page,
+    loaded,
+    dispose() {
+      if (disposed)
+        return
+      disposed = true
+      stopGuards()
+      stopMaintenance()
+      root.unmount()
+      page.dispose()
+    },
   }
-  void page.load()
 }

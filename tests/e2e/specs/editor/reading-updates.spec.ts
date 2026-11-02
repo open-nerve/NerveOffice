@@ -117,7 +117,12 @@ test.describe('US-M3-05 别人保存了新版本时阅读者得到提示', { tag
     const second = latest.snapshot.sheetOrder[1] ?? ''
     await expect.poll(async () => shownCell(anotherDevice, 'A1', second)).toBe('v3')
     await waitForEditorAccess(anotherDevice, 'read')
-    await expect(anotherDevice.locator('#editor-chrome').getByRole('banner').getByRole('button')).toHaveCount(0)
+    await expect(updateButton(anotherDevice)).toHaveCount(0)
+    // 查看者仍没有编辑/保存等其他操作；P5 的 CSV 控件保留，只允许导出已加载内容。
+    const readerBanner = anotherDevice.locator('#editor-chrome').getByRole('banner')
+    await expect(readerBanner.getByRole('button')).toHaveText(['导入 CSV', '导出 CSV'])
+    await expect(readerBanner.getByRole('button', { name: '导入 CSV', exact: true })).toBeDisabled()
+    await expect(readerBanner.getByRole('button', { name: '导出 CSV', exact: true })).toBeEnabled()
     expect(reads.content).toEqual([null, revisionEtag(2)])
     expect(await editorView(anotherDevice)).toEqual(view)
     await expect(saveStatus(anotherDevice)).toHaveText('只能查看')

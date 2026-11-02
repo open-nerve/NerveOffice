@@ -3,6 +3,7 @@
 先阅读本目录 `CLAUDE.md`。这里补充所有 Agent 均须执行的测试资源规则，覆盖与旧文档不一致的旧测试启动示例。
 
 - 主项目目录 HEAD 始终保持 `main`。每个 Phase 一个分支和 worktree，Codex 路径为 `.codex/worktress/<branch>/`；不在主目录切分支。整个 Phase 验证与审查通过后才 `--no-ff` 合入 main。
+- **2026-11-02 用户批准的 M5-P5→P6 接续**：P5 经快速门禁、相关回归、源码对应和审查后可 `--no-ff` 合入本地 main，暂缓推送；P6 从该 main 建唯一分支，M5 收官统一原完整 Gate/容器/浏览器矩阵及最终同 SHA CI。本地中间状态只作开发集成，不能称作完整验收或可发布；不改 CI 触发、不跳 hooks，不追认旧失败，也不自动解除桌面故障的长测阻断。仅适用于本次接续，详见 `docs/adr/ADR-026-M5阶段接续与集中验收.md`。
 - 提交信息用中文。既有未提交修改及源码、Git、活动 worktree、业务数据不得作为测试垃圾处理。
 - **测试完成必须处理本轮残留**，包括成功、失败、异常与可捕获中断。不得把完整 VM、浏览器 profile、数据库或反复重试的完整环境永久复制进 handoffs。
 - 使用已接入的 `pnpm test:e2e`、`test:e2e:container`、`test:integration`、`test:coverage` 及 E2E 包的测量、模板和 Safari 命令。手工执行测试也须经 `python3 tools/test-resources/run.py <类型> -- <命令>`；只读列举 `--list` 除外。
@@ -12,9 +13,11 @@
 - 固定 CI PostgreSQL 服务的 namespace 记录仅可使用本轮 scratch 创建前登记的 service scope；服务 ID 由实际运行与 settle 步骤注入。服务 epoch、runc 标准启动及独立桥接/本地卷拓扑、PID/starttime/cgroup/namespace 及受管根创建/报告搬迁链均须核实。不得排除整个 PID；真实路径命中、NOFD、readlink 和未知协议仍保留。无 owner、旧台账、任意路径及 archive 查询保持严格，不能事后补签。
 - 成功立即释放临时环境；失败完整浏览器资料最长 7 天、每轮 256 MiB、合计 2 GiB。便携诊断只导出日志/配置/崩溃记录，单文件 4 MiB、单用例 16 MiB、每轮 64 MiB。JSON/HTML、trace、截图及 OPFS 证明按报告策略保存。
 - 普通报告最多保留 14 天、每个 worktree 合计 5 GiB；新登记的本地门禁 bulk 归档另设 14 天/5 GiB 上限。最终审查通过的唯一证据须显式 pin 并记录理由。源码快照、补丁、摘要与索引不按垃圾回收。
+- 测试配置不得将 `process.env` 全量展开到 Playwright `webServer.env` 等会序列化的报告字段；服务沿 Playwright 的默认进程环境继承。发布与 CI 上传前由 `report_safety.py` 分别检查真实 JSON 及 HTML 内嵌 ZIP 的环境对象。检查失败保留原件、拒绝发布，不改写产品测试结果；历史含凭据原件只限本地受限取证，脱敏派生件须另命名并关联原摘要，禁止把原件上传或冒称已脱敏。此检查针对已知配置边界，不代替日志/附件的实际用途审查。
 - 重新启动会检查登记清单、文件锁、进程组和打开句柄；归属不清、句柄检查失败、仍有写入者的资源保留并报告。不得凭文件名、时间或 PID 单项依据批量删除。`pnpm test:cleanup` 可重复运行，但不能代替调查未登记旧材料。
 - 容器 E2E 只使用父运行器 UUID，创建前持久登记 `container-resources.json`（不超过 64 KiB），核对相同 daemon、源码根哈希标签与本轮命名空间；禁止按旧 PID/名称全局清扫或启动前强制 down。生产者全组未确认退出、查询失败或标签变化时保留环境并阻止同类重试；Docker 实际闭合后临时 env 由父运行器清理。两端在身份/状态判定前拒绝各层重复 JSON 键；完整白名单与类型/大小验证通过的无秘密台账原字节及其摘要随报告封存，不能只留计数或复制未知字段。待处理诊断不等于清理或产品通过。旧合法方案 B 历史记录不补签、不改写；严格策略下曾启动但未闭合的旧容器环境保留待核对。
 - 同一 worktree 固定报告发布口串行；跨 worktree 隔离。缺少可安全清理的条件时，不继续反复创建同类环境。
+- macOS 的 `e2e/container/measure/template/native/vm` 受管入口由 `desktop_session.py` 在启动屏障前后、运行中和结束时核对固定桌面会话身份；查询失败或身份变化按中断停止本轮进程组，不能重新认领新基线，也不能因子命令退出 0 放行。不得改资源类型绕过保护或向系统桌面/其他应用发信号。外层本地门禁复用同一保护，异常留下 `needs-attention`，调查后才决定恢复；非 macOS/非浏览器类型明确记不适用。此机制不证明图形资源安全，不预防首次 WindowServer 崩溃，不替代 Safari 的解锁/空闲条件。
 - **2026-10-28 用户批准的方案 B**：上述立即删除规则继续适用于本机、普通 Linux、自托管及未知环境。仅显式 `NERVE_TEST_RESOURCE_POLICY=github-hosted-vm` 且固定 GitHub Ubuntu 24.04、仓库/run/attempt/job/runner/boot/SHA 与创建前台账相符时，原环境可保留到 job VM 销毁；不再注入 PostgreSQL service scope。必须持锁核对根身份、本轮生产者退出、完整 lsof 格式及已知本轮路径，非破坏导出并验证有界报告。语义未知引用仍留诊断并禁止删除，格式损坏/命令异常/已知引用/活跃写入者仍拒绝。
 - 托管委托状态为 `cleanupStage=host-disposal-pending`、`cleanupComplete=false`，产品 `passed/failed/interrupted` 独立保留。不得把平台销毁承诺写成实测删除完成。每 2 秒计量同 job 全部受管原环境，16 GiB 为停止阈值（不是配额，允许采样和停止等待超调），12 GiB 可用空间独立检查；报告仍合计 5 GiB、artifact 14 天。完整原环境不上载、不缓存、不移动、不压缩；重启、prune 不手工删除此类目录。身份/预算/稳定导出有问题时停止，不能无界重试。
 - 完整规则、入口、归档 pin 与验证命令见 `docs/testing/test-resource-lifecycle.md`。清理规则的验证使用 KiB 级临时样例，不为验收机制再创建大型环境。

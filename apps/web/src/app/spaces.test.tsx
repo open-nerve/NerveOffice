@@ -129,6 +129,7 @@ describe('US-M2-05 空间页', () => {
     expect(screen.getByRole('link', { name: '成员' })).toHaveAttribute('href', `/spaces/${TEAM_ID}/members`)
     expect(screen.queryByRole('button', { name: '改名' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '新建表格' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '从 CSV 新建' })).toHaveAttribute('href', `/documents/new/csv?spaceId=${TEAM_ID}`)
     expect(await screen.findByText('周报')).toBeInTheDocument()
     expect(api.requests.some(request => request.key === teamDocumentsKey())).toBe(true)
   })
@@ -138,6 +139,7 @@ describe('US-M2-05 空间页', () => {
     renderApp(`/spaces/${TEAM_ID}`)
     expect(await screen.findByText('这个空间已归档，只能查看。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '新建表格' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '从 CSV 新建' })).not.toBeInTheDocument()
   })
 
   it('看不到与不存在的空间：同一句说明', async () => {

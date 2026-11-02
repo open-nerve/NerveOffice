@@ -163,6 +163,7 @@ describe('US-M2-07 文件夹导航', () => {
     fireEvent.click(screen.getByRole('link', { name: '方案' }))
     expect(await screen.findByText('季度计划')).toBeInTheDocument()
     expect(currentPath(app)).toBe(`/spaces/${SPACE_ID}/folders/${PLAN_ID}`)
+    expect(screen.getByRole('link', { name: '从 CSV 新建' })).toHaveAttribute('href', `/documents/new/csv?spaceId=${SPACE_ID}&folderId=${PLAN_ID}`)
     const breadcrumb = screen.getByRole('navigation', { name: '位置' })
     expect(within(breadcrumb).getByText('方案')).toHaveAttribute('aria-current', 'page')
     expect(screen.queryByText('周报')).not.toBeInTheDocument()

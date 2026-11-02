@@ -20,7 +20,7 @@ import { problemOf } from '../../shared/lib/validation.ts'
 import { Alert, AlertDescription, Badge, Button, buttonVariants, FieldProblem, Input, Label, Notice, RetryButton, Skeleton } from '../../shared/ui/index.ts'
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
-import { NewSheetButton, SpaceContents, targetSpacesOf, useOrganizeRefreshChecked } from '../documents/index.ts'
+import { NewCsvLink, NewSheetButton, SpaceContents, targetSpacesOf, useOrganizeRefreshChecked } from '../documents/index.ts'
 import { useForgetMissingSpace } from './missing-space.ts'
 import { SpaceNotFound } from './space-not-found.tsx'
 import { renameSpace, spaceQueryOptions, SPACES_QUERY_KEY, spacesQueryOptions } from './spaces-api.ts'
@@ -162,6 +162,7 @@ function SpaceHeader({ space, query, folderId, titleRef, onDenied }: SpaceHeader
           {space.permissions.canCreateDocuments && (
             <NewSheetButton spaceId={space.id} folderId={folderId} onDenied={error => denied(messages.documents.createDenied(describeError(error).message))} />
           )}
+          {space.status === 'active' && space.permissions.canCreateDocuments && <NewCsvLink spaceId={space.id} folderId={folderId} />}
         </div>
       </div>
       <DetailRefreshProblem query={query} detail={text.detailName} fallbackFocus={titleRef} />

@@ -1,5 +1,7 @@
 # M5-P4 最终验收与关闭复核
 
+> **2026-11-01 实际接续状态**：P4 已完成正常合并推送，最终 `main@884591c8` 同 SHA CI `41279765991` 六项通过，原件已冻结、必要忽略材料已保留，唯一 P4 worktree 与分支已正常清理。关闭回执 `.codex/handoffs/m5-p4-20261022/s6/p4-completion-r15.json` 四项均为 true（SHA-256 `d3e46fca5839910da4f8bcab2a84247659a69c65a89e97e42c61ab31d4355185`）。DEF-061 本项目实现关闭；没有可用历史时不能保证恢复。当前从该 main 建立唯一 `codex/m5-p5-csv` worktree，开始 P5 客户端 CSV。CI 原环境仍为 `host-disposal-pending`，未实测平台销毁；旧失败、共享 Docker 旧句柄、原生环境及 M4 验收/标签欠账保持，M5 整体尚未验收。
+
 ## 2026-11-01 本地验收：full24/container09 同源通过
 
 真实受测提交为 `e1177abe3baa1e17aac6b000f03ee8313b5ed253`，本轮合并前 main/origin/main 为 `3dc2cde057cef1810b443fab0e81fa11ee5ad4f9`；仍只使用 `codex/m5-p4-history-gc`。Linux 退出哨兵观察补正 `8efd1a7b`、PID 就绪及信号边界补正 `15fcbb5c`、独立 CLI 夹具依赖补正 `e1177abe` 均已正常提交。以下只记录当前输入的本地验收；最终合并推送、同 SHA CI 和 Phase 关闭仍须实际完成。

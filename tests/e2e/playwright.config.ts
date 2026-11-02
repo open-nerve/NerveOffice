@@ -106,7 +106,7 @@ export default defineConfig({
     ? {
         command: 'node support/serve.ts',
         url: `${baseURL}/api/health/ready`,
-        env: { ...process.env as Record<string, string> },
+        // Playwright 启动服务时自动继承 process.env；显式展开会把凭据序列化进测试报告。
         // 不复用已经在运行的服务：可能是别的 worktree 的构建。启动前 Playwright 先确认这个端口上没有服务，有就直接失败
         reuseExistingServer: false,
         gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },

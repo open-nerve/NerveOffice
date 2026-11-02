@@ -11,8 +11,25 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
+import { csvFixture } from './csv-controller.test-support.ts'
+import { unusedCsvController } from './csv.test-support.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { ANNOUNCEMENT_MS } from './save-indicator.ts'
+
+vi.hoisted(() => {
+  globalThis.Path2D ??= class {} as unknown as typeof Path2D
+})
+
+it('有 CSV 能力的正式页头开放导入与导出，按钮接入同一控制器', () => {
+  const h = fakePage()
+  const csv = csvFixture()
+  Object.assign(h.page, { csv: csv.controller })
+  render(<EditorChrome page={h.page} apple />)
+  fireEvent.click(screen.getByRole('button', { name: '导出 CSV' }))
+  expect(screen.getByRole('dialog', { name: '导出 CSV' })).toBeInTheDocument()
+  expect(screen.getByRole('combobox', { name: '工作表' })).toHaveValue('second')
+  expect(csv.controller.view().dialog.kind).toBe('export')
+})
 
 const PERSONAL = { id: '0199a2c4-0000-7000-8000-0000000000a1', type: 'personal' } as const
 const READY: EditorPageReady = {
@@ -63,6 +80,8 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
   const page: EditorPage = {
+    csv: unusedCsvController(),
+    importCreatedCsv: vi.fn(async () => false),
     sheetName: vi.fn(() => undefined),
     retryFormulaRecovery: vi.fn(),
     retryRecovery: vi.fn(async () => {}),

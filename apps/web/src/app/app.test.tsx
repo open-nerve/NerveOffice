@@ -192,6 +192,29 @@ describe('US-M1-02 登录与退出', () => {
     expect(app.page.visits).toEqual([editorPath])
   })
 
+  const csvTargets = [
+    `/documents/new/csv?spaceId=${SESSION.personalSpace.id}`,
+    `/documents/new/csv?spaceId=${SESSION.personalSpace.id}&folderId=${document(7).id}`,
+  ]
+  it.each(csvTargets)('CSV 创建页重新登录后整页回跳，保留原位置：%s', async (target) => {
+    installFakeApi({ ...LOGGED_OUT, 'POST /api/auth/login': () => json(200, SESSION) })
+    const path = `/login?from=${encodeURIComponent(target)}`
+    const app = renderApp(path)
+    await fillLogin('alice', 'correct horse')
+    await waitFor(() => expect(app.page.visits).toEqual([target]))
+    expect(currentPath(app)).toBe(path)
+  })
+
+  it.each(csvTargets)('已有会话从登录页回 CSV 创建入口，只整页打开一次：%s', async (target) => {
+    installFakeApi(LOGGED_IN)
+    const path = `/login?from=${encodeURIComponent(target)}`
+    const app = renderApp(path)
+    await waitFor(() => expect(app.page.visits).toEqual([target]))
+    await settle()
+    expect(app.page.visits).toEqual([target])
+    expect(currentPath(app)).toBe(path)
+  })
+
   it('已登录时打开登录页：确认会话之前显示骨架屏、不显示表单，随后直接回到首页（审查 B14）', async () => {
     const pending = deferred()
     installFakeApi({ 'GET /api/auth/session': pending.handler, ...SPACES, ...NO_DOCUMENTS })

@@ -1,5 +1,9 @@
 // 编辑器适配层的公开入口（P4 设计 §3.6.1，ADR-003）：Univer 的一切都在 src/editor/ 里，对外只有这一个小接口。
 // 只有编辑器页的入口与 sheet-editor 功能能引用这里（eslint.config.ts 的模块边界）；平台页面的包里没有编辑器
+export { CsvOperationError } from './csv/csv-operation-error.ts'
+export type { CsvOperationReason } from './csv/csv-operation-error.ts'
+export { assertNewCsvDocument } from './csv/new-csv-document.ts'
+export type { CsvSheetSummary, SheetCsv } from './csv/sheet-csv.ts'
 export type { EditorAccess } from './editor-access.ts'
 export { FormulaWorkerError } from './formula-worker-failure.ts'
 export type { FormulaWorkerFailure } from './formula-worker-failure.ts'

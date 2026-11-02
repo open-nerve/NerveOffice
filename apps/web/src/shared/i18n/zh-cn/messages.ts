@@ -325,6 +325,7 @@ export const messages = {
     typeName: (type: DocumentType) => DOCUMENT_TYPE_NAMES[type],
     updatedAt: (time: string) => `更新于 ${time}`,
     create: '新建表格',
+    createCsv: '从 CSV 新建',
     creating: '正在新建…',
     createFailed: (reason: string) => `新建表格失败：${reason}`,
     // 结果未知（M2-P6 复核 M1）：带着 requestId，再点沿用同一个，服务端不会建出第二份。列表随即刷新，没能刷新时另说（第四批）

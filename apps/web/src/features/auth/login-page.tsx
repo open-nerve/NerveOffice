@@ -1,5 +1,5 @@
 import type { SyntheticEvent } from 'react'
-import { documentIdFromPagePath } from '@nerve-office/contracts'
+import { CSV_CREATE_PAGE_PATTERN, documentIdFromPagePath } from '@nerve-office/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useId, useRef, useState } from 'react'
 import { Navigate, useNavigate, useSearchParams } from 'react-router'
@@ -24,7 +24,8 @@ const LOGIN_NOTICES: ReadonlyMap<string, string> = new Map([
 
 /** 登录后要去的是编辑器页：它是另一个入口，要整页打开，不能在平台页面的路由里切换（P4 设计 §3.8）。 */
 function opensEditorPage(target: string): boolean {
-  return documentIdFromPagePath(new URL(target, window.location.origin).pathname) !== undefined
+  const path = new URL(target, window.location.origin).pathname
+  return documentIdFromPagePath(path) !== undefined || CSV_CREATE_PAGE_PATTERN.test(path)
 }
 
 /** 整页打开另一个入口的页面，只打开一次（开发模式的 StrictMode 会把副作用执行两遍）；打开之前显示骨架屏。 */

@@ -830,6 +830,31 @@ class HostedLifecycleTests(unittest.TestCase):
         receipt = json.loads((self.repo / 'tests/e2e/test-results/cleanup-receipt.json').read_text())
         self.assertTrue(all('packagedProfiles' not in row for row in receipt['ciResources']['runs']))
 
+    def legacy_serialized_environment(self, html=False):
+        from test_report_safety import UNSAFE, html_report
+        preflight = self.create('ci-preflight'); preflight.finish('passed')
+        value = self.create()
+        if html:
+            (value.scratch / 'tests/e2e/playwright-report/index.html').write_bytes(html_report(UNSAFE))
+        else:
+            (value.scratch / 'tests/e2e/test-results/results.json').write_text(json.dumps(UNSAFE))
+        value.finish('passed', release=False)
+        # Model an older publisher: the stable export, identities and hashes are
+        # real. Only its absent content guard is bypassed; CI must check itself.
+        with patch.object(runner.report_safety, 'check_leaf', return_value={}):
+            runner.publish(value, 'e2e')
+        value.release()
+        with self.assertRaisesRegex(ValueError, 'serialized-webserver-environment'):
+            self.checker().check(self.repo)
+        self.assertTrue(value.scratch.exists())
+        self.assertEqual(json.loads((value.directory / 'run.json').read_text())['status'], 'passed')
+
+    def test_ci_rejects_legacy_serialized_environment_in_json(self):
+        self.legacy_serialized_environment()
+
+    def test_ci_rejects_legacy_serialized_environment_in_html(self):
+        self.legacy_serialized_environment(html=True)
+
     def test_ci_checker_rejects_prepared_profile_transport(self):
         value = self.ci_runs()
         owner = lifecycle.Run(self.store, value.directory, existing=True)
@@ -974,7 +999,10 @@ class HostedLifecycleTests(unittest.TestCase):
         self.assertTrue(value.scratch.exists())
 
     def test_container_checker_rejects_success_with_malformed_results_json(self):
-        self.ci_container_runs(result='{incomplete json')
+        # Simulate an older publisher so this still proves the independent
+        # upload checker rejects malformed reports with a valid stable inventory.
+        with patch.object(runner.report_safety, 'check_leaf', return_value={}):
+            self.ci_container_runs(result='{incomplete json')
         with self.assertRaises(ValueError):
             self.checker().check(self.repo)
 

@@ -1,13 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { addSpaceMemberRequestSchema, changeSpaceMemberRoleRequestSchema, spaceMemberListResponseSchema } from './members.ts'
 import {
-  addSpaceMemberRequestSchema,
-  changeSpaceMemberRoleRequestSchema,
   renameSpaceRequestSchema,
   SPACE_NAME_MAX_LENGTH,
   SPACE_ROLES,
   spaceIdentitySchema,
   spaceListResponseSchema,
-  spaceMemberListResponseSchema,
   spaceNameSchema,
   spaceViewSchema,
 } from './spaces.ts'

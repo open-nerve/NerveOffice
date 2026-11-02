@@ -11,6 +11,8 @@ import threading
 import time
 
 import container_resources
+import report_safety
+from desktop_session import SessionGuard
 
 from lifecycle import Store, Run, atomic_bytes, atomic_json, contained, group_alive, locked, open_paths, read_json, RUN_ID
 
@@ -115,6 +117,19 @@ def publish(run, kind, reports=None):
     relative_reports = str(reports.relative_to(run.directory))
     if relative_reports not in ("reports", "reports/recovery", "reports/portable"):
         raise ValueError("报告暂存归属不符")
+    # Check both leaves before publishing either; resume checks the already moved
+    # leaf too. Rejection preserves the product result and the original evidence.
+    checks = []
+    try:
+        for name in ("test-results", "playwright-report"):
+            target = contained(base / name, run.store.repo)
+            source = target if published_by(run, target) else reports / name
+            if source.exists() or source.is_symlink():
+                checks.append(report_safety.check_leaf(source, name))
+    except report_safety.ReportSafetyError as error:
+        run.update(publicationComplete=False, reportSafety={"status": "rejected", "reason": error.reason})
+        raise
+    run.update(reportSafety={"status": "passed", "checks": checks})
     run.update(publicationReports=relative_reports)
     # A self-contained receipt and bounded diagnostics travel with CI/handoff artifacts.
     results = reports / "test-results"
@@ -332,10 +347,33 @@ def main():
         output_thread = None
         read_fd = write_fd = -1
         original = {}
+        session = SessionGuard(args.kind)
+        session_record = None
+        def signal_live_child(signum):
+            if child is not None and child.poll() is None:
+                try:
+                    os.killpg(child.pid, signum)
+                except ProcessLookupError:
+                    pass
         def request_stop(signum, frame):
             stopped.append(signum)
-            if child is not None and child.poll() is None:
-                os.killpg(child.pid, signum)
+            signal_live_child(signum)
+        def record_exit(code, **fields):
+            result = 128 + int(stopped[0]) if stopped else (128 - code if code < 0 else code)
+            run.update(commandExitCode=code, exitCode=result, interrupted=bool(stopped), **fields)
+            return result
+        def check_session(force=False):
+            nonlocal session_record
+            healthy = session.check(force=force)
+            current = session.record()
+            if current != session_record:
+                run.update(desktopSession=current)
+                session_record = current
+            if not healthy:
+                run.update(stopReason="desktop-session")
+                if not stopped:
+                    request_stop(signal.SIGTERM, None)
+            return healthy
         try:
             for sig in (signal.SIGINT, signal.SIGTERM):
                 original[sig] = signal.signal(sig, request_stop)
@@ -354,6 +392,8 @@ def main():
                 env['NERVE_TEST_COVERAGE_DIR'] = str(output / 'coverage')
             if args.kind == "vm":
                 env["NERVE_TEST_SHORT_ROOT"] = run.data["shortRoot"]
+            if not check_session(force=True):
+                return 128 + int(stopped[0])
             if stopped:
                 return 128 + int(stopped[0])
             # Refuse to start work when the same owned-root cleanup check cannot run.
@@ -370,6 +410,10 @@ def main():
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
             os.close(read_fd); read_fd = -1
             run.update(status="running", childGroup=child.pid, command=command, cwd=os.getcwd())
+            # The registered bootstrap still cannot execute the test command. Recheck
+            # after registration so a changed desktop never becomes a new baseline.
+            if not check_session(force=True) or stopped:
+                return 128 + int(stopped[0])
             os.write(write_fd, b"1"); os.close(write_fd); write_fd = -1
             log_problem = []
             def copy_output():
@@ -396,9 +440,11 @@ def main():
             stop_at = None
             budget_at = time.monotonic()
             while child.poll() is None:
+                if not stopped:
+                    check_session()
                 if shutil.disk_usage(store.repo).free < MIN_FREE or log_problem:
                     if not stopped:
-                        stopped.append(signal.SIGTERM); os.killpg(child.pid, signal.SIGTERM)
+                        request_stop(signal.SIGTERM, None)
                         run.update(stopReason="disk-reserve-or-log-cap")
                 if run.data.get('hostedScope') is not None and time.monotonic() - budget_at >= 2:
                     budget_at = time.monotonic()
@@ -406,29 +452,32 @@ def main():
                         run.update(resourceBudget=store.hosted_budget())
                     except (OSError, ValueError, RuntimeError) as error:
                         if not stopped:
-                            stopped.append(signal.SIGTERM)
-                            if child.poll() is None:
-                                os.killpg(child.pid, signal.SIGTERM)
+                            request_stop(signal.SIGTERM, None)
                         run.update(stopReason='hosted-resource-budget', budgetError=str(error))
                 if stopped:
                     stop_at = stop_at or time.monotonic()
                     if time.monotonic() - stop_at > 10:
-                        os.killpg(child.pid, signal.SIGKILL)
+                        signal_live_child(signal.SIGKILL)
                 time.sleep(.1)
             code = child.wait()
+            # A zero exit racing with a desktop loss is still an interrupted run.
+            check_session(force=True)
+            # These facts are already known even if cleanup must retain a live
+            # descendant or writer. Quiescence is recorded only after those checks.
+            record_exit(code)
             # Give normal browser shutdown time; never delete while descendants or handles remain.
             deadline = time.monotonic() + 3
             while group_alive(child.pid) and time.monotonic() < deadline:
                 time.sleep(.1)
             if group_alive(child.pid):
                 # The leader is gone: a PID/group number alone is not a new signal authorization.
-                run.update(status="cleanup-pending", cleanupError="首进程已退出但仍有同组进程；保留并等待归属复核")
-                return code or 1
+                return record_exit(code, status="cleanup-pending",
+                                   cleanupError="首进程已退出但仍有同组进程；保留并等待归属复核") or 1
             output_thread.join(timeout=5)
             if output_thread.is_alive():
-                run.update(status="cleanup-pending", cleanupError="输出仍有写入者")
-                return code or 1
-            result = 128 + int(stopped[0]) if stopped else (128 - code if code < 0 else code)
+                return record_exit(code, status="cleanup-pending", cleanupError="输出仍有写入者") or 1
+            # Include signals received during the bounded quiescence/join waits.
+            result = record_exit(code)
             # The final output chunk may arrive after the child already exited;
             # joining the thread is not evidence of successful log capture.
             if log_problem:
@@ -448,11 +497,11 @@ def main():
                     if fd >= 0:
                         os.close(fd)
                 if child is not None and child.poll() is None:
-                    os.killpg(child.pid, signal.SIGTERM)
+                    signal_live_child(signal.SIGTERM)
                     try:
                         child.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        os.killpg(child.pid, signal.SIGKILL); child.wait(timeout=5)
+                        signal_live_child(signal.SIGKILL); child.wait(timeout=5)
                 if run.data.get("status") in ("prepared", "running"):
                     if output_thread is not None:
                         output_thread.join(timeout=5)

@@ -2,6 +2,7 @@ import type { FormulaWorkerFailure, SheetEditor } from '../../editor/index.ts'
 import type { CreateModeEditor } from './editor-slot.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { FormulaWorkerError, SheetEditorLoadError } from '../../editor/index.ts'
+import { unusedCsv } from './csv.test-support.ts'
 import { deferred, editorFixture } from './editing-session.test-support.ts'
 import { createFormulaFallback } from './formula-fallback.ts'
 
@@ -12,6 +13,7 @@ vi.hoisted(() => {
 
 function setup() {
   const created: SheetEditor = {
+    csv: unusedCsv(),
     sheetName: () => undefined,
     ...editorFixture().editor,
     unitId: 'unit-1',

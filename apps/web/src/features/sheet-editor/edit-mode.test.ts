@@ -12,7 +12,7 @@ import type { FakeLeaseServer } from './lease-server.test-support.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { FakeBrowser } from './same-browser.test-support.ts'
 import type { HeldLock, SameBrowser } from './same-browser.ts'
-import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS } from '@nerve-office/contracts'
+import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FormulaWorkerError } from '../../editor/index.ts'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
@@ -28,6 +28,7 @@ import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.tes
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+import { unusedCsv } from './csv.test-support.ts'
 import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 import { createEditMode, EXIT_RELEASE_WAIT_MS, TAKEOVER_STEAL_WAIT_MS } from './edit-mode.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
@@ -139,6 +140,7 @@ function fakeFactory() {
       failCapture: false,
       formulasSettled: true,
       editor: {
+        csv: unusedCsv(),
         unitId: 'unit-1',
         sheetName: vi.fn(() => undefined),
         formulaMode: options.formulaMode ?? 'worker',
@@ -507,6 +509,135 @@ async function editing(context: ReturnType<typeof setup>): Promise<void> {
   await context.mode.enter()
   expect(modeOf(context.mode).kind).toBe('editing')
 }
+
+describe('CSV 正式模式目标', () => {
+  async function blank(revision = 1, captured = sheetSnapshotFor(DOCUMENT_ID), source = sheetSnapshotFor(DOCUMENT_ID)) {
+    const h = setup({ editLease: { acquire: async () => ({ ...ACQUIRED, revision }) } })
+    h.factory.configureWith((fake) => {
+      Object.assign(fake.editor, { unitId: (JSON.parse(source) as { id?: string }).id ?? 'unit-1' })
+      vi.mocked(fake.editor.capture).mockReturnValue(captured)
+    })
+    await h.mode.open({ snapshot: source, revision, canEdit: true }, { enterEdit: true })
+    return h
+  }
+
+  it('CSV 文档 id 与正文 unitId 不同，原 revision 1 模板仍应可以导入', async () => {
+    const source = sheetSnapshotFor('0199a2c4-0000-7000-8000-00000000ffff')
+    const h = await blank(1, source, source)
+    expect(h.mode.csvTarget(true)?.writable()).toBe(true)
+  })
+
+  it('CSV 正文 unitId 被替换，或原服务器内容并非空白，不能自动导入', async () => {
+    const source = sheetSnapshotFor('0199a2c4-0000-7000-8000-00000000ffff')
+    const replaced = await blank(1, sheetSnapshotFor(DOCUMENT_ID), source)
+    expect(replaced.mode.csvTarget(true)).toBeUndefined()
+    const nonblank = await blank(1, sheetSnapshotFor(DOCUMENT_ID), snapshotOf('服务器已有正文'))
+    expect(nonblank.mode.csvTarget(true)).toBeUndefined()
+  })
+
+  it('CSV 新建目标只接受 revision 1 的原始空白模板，后续正文变更立即失效', async () => {
+    const h = await blank()
+    const target = h.mode.csvTarget(true)
+    expect(target?.writable()).toBe(true)
+    h.factory.last().edit('用户已经输入')
+    expect(target?.current()).toBe(false)
+    expect(h.mode.csvTarget(true)).toBeUndefined()
+    expect(h.factory.last().disposed).toBe(false)
+  })
+
+  it.each([2, 5])('即使正文为空也不能把 revision %s 当新文档自动导入', async (revision) => {
+    const h = await blank(revision)
+    expect(h.mode.csvTarget(true)).toBeUndefined()
+    expect(h.mode.csvTarget()?.writable()).toBe(true)
+  })
+
+  it('revision 1 的非模板内容不能自动导入，普通 CSV 功能仍保留', async () => {
+    const h = await blank(1, snapshotOf('并非空白'))
+    expect(h.mode.csvTarget(true)).toBeUndefined()
+    expect(h.mode.csvTarget()?.writable()).toBe(true)
+  })
+
+  it('阅读仅可导出；进入/退出编辑或卸载后旧目标永久失效', async () => {
+    const h = setup()
+    expect(h.mode.csvTarget?.()).toBeUndefined()
+    await opened(h)
+    const read = h.mode.csvTarget?.()
+    expect(read).toBeDefined()
+    expect(read?.current()).toBe(true)
+    expect(read?.writable()).toBe(false)
+    await h.mode.enter()
+    expect(read?.current()).toBe(false)
+    const edit = h.mode.csvTarget()
+    expect(edit?.editor).toBe(h.factory.last().editor)
+    expect(edit?.writable()).toBe(true)
+    h.autosave.setPage({ online: false })
+    expect(edit?.current()).toBe(true)
+    expect(edit?.writable()).toBe(false)
+    h.autosave.setPage({ online: true })
+    await h.mode.exit()
+    expect(edit?.current()).toBe(false)
+    const next = h.mode.csvTarget()
+    expect(next?.current()).toBe(true)
+    expect(next?.writable()).toBe(false)
+    h.mode.dispose()
+    expect(next?.current()).toBe(false)
+    expect(h.mode.csvTarget()).toBeUndefined()
+  })
+
+  it('同一 SDK 实例的会话离开再回来，旧目标也不能复活', async () => {
+    const h = setup()
+    await editing(h)
+    const target = h.mode.csvTarget?.()
+    expect(target).toBeDefined()
+    h.mode.setSession('other-user')
+    h.mode.setSession('active')
+    expect(target?.current()).toBe(false)
+    expect(h.mode.csvTarget()?.current()).toBe(true)
+  })
+
+  it('续上得到新 writeEpoch 后旧导入失效，即使编辑器没有换', async () => {
+    const h = setup()
+    await editing(h)
+    const target = h.mode.csvTarget?.()
+    expect(target).toBeDefined()
+    h.editLease.acquire.mockResolvedValueOnce({ ...ACQUIRED, token: 'M'.repeat(43), writeEpoch: 8 })
+    h.api.save.mockRejectedValueOnce(new ApiError(409, 'EDIT_LEASE_LOST', '编辑权失效', { details: { reason: 'expired' } }))
+    h.factory.last().edit('新文字')
+    await h.mode.save()
+    expect(target?.current()).toBe(false)
+    expect(h.mode.csvTarget()?.writable()).toBe(true)
+  })
+
+  it('保存终态、Worker 故障和自检失败都不能继续旧导入', async () => {
+    const h = setup()
+    await editing(h)
+    const target = h.mode.csvTarget?.()
+    expect(target).toBeDefined()
+    h.api.save.mockRejectedValueOnce(new ApiError(409, 'CLIENT_OUTDATED', '页面过旧', { details: { reason: 'format' } }))
+    h.factory.last().edit('仍需保留的原文')
+    await h.mode.save()
+    expect(target?.writable()).toBe(false)
+    const broken = setup()
+    broken.factory.checkWith(() => ({ ok: false, failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }] }))
+    await opened(broken)
+    expect(broken.mode.csvTarget()).toBeUndefined()
+    const worker = setup()
+    await opened(worker)
+    const before = worker.mode.csvTarget()
+    expect(before?.current()).toBe(true)
+    worker.factory.last().failWorker()
+    expect(before?.current()).toBe(false)
+  })
+
+  it('阅读态的公式待更新标记不能被本地 settled 掩盖', async () => {
+    const h = setup({ api: { editStatus: async () => ({ ...status(3), status: { ...status(3).status, formulasPending: true } }) } })
+    await h.mode.open({ ...LOADED, canEdit: true, formulasPending: true }, { enterEdit: false })
+    const target = h.mode.csvTarget?.()
+    expect(target).toBeDefined()
+    expect(target?.editor.formulasSettled()).toBe(true)
+    expect(target?.formulasPending()).toBe(true)
+  })
+})
 
 describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
   it('名称查询只交给当前实例，重建后不读旧实例，卸载后返回 undefined', async () => {
@@ -3363,7 +3494,8 @@ describe('自动保存的接线（M3-P4 设计 §3.10）', () => {
     expect(context.api.save).not.toHaveBeenCalled()
     writer.settle(true)
     await context.time.advance(0)
-    await settle()
+    // 原生压缩与哈希不由假时钟推进；等实际保存确认，不能把一个宏任务当作异步准备完成。
+    await vi.waitFor(() => expect(context.mode.view().save?.status).toBe('clean'))
     expect((await savedRequests(context))).toMatchObject([{ baseRevision: 3, localSeq: 1, formulasPending: false }])
     expect(context.mode.view().save).toMatchObject({ status: 'clean', formulasPending: false, unsaved: false })
     expect(context.mode.hasUnsavedWork()).toBe(false)

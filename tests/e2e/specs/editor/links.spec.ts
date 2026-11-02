@@ -202,9 +202,9 @@ function matchesCase(browser: CanonicalLink | undefined, item: LinkAddressCase):
 
 /** 撤销两步：两格回到空的；再重做两步：与之前完全相同（改写之后的写法就在撤销栈里） */
 async function expectUndoRedoKeepsCanonical(page: Page, lastTwo: readonly [string, string], before: Workbook): Promise<void> {
-  // 点一个空单元格让表格拿到焦点（选区不进撤销栈）
+  // 点一个可见空单元格让表格拿到焦点（选区不进撤销栈）；P5 工具栏下 K20 已在可见网格之外。
   await mouseAway(page)
-  await selectCell(page, 'K20')
+  await selectCell(page, 'K10')
   await undoOrRedo(page, 'undo')
   await undoOrRedo(page, 'undo')
   const undone = await shown(page)
@@ -336,7 +336,7 @@ test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法�
     expectLinks(copied, { K1: ['https://html.example/a%20b'] })
     expect(cellOf(copied, 'K1')?.p?.body?.dataStream).toBe(cellOf(before, 'I1')?.p?.body?.dataStream)
     await mouseAway(page)
-    await selectCell(page, 'K20')
+    await selectCell(page, 'K10')
     await undoOrRedo(page, 'undo')
     expect(await shown(page)).toEqual(before)
     await undoOrRedo(page, 'redo')
@@ -380,7 +380,7 @@ test.describe('US-M3-14 写入之前把自动识别的链接改成规范写法�
 
     // 撤销两步（A4、A3 的公式）、重做两步：重算出来的仍是同样的内容，保存下来的与第一次相同
     await mouseAway(page)
-    await selectCell(page, 'K20')
+    await selectCell(page, 'K10')
     await undoOrRedo(page, 'undo')
     await undoOrRedo(page, 'undo')
     const undone = await shown(page)

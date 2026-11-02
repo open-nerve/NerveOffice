@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useId, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import { ApiError, describeError, isMissingResource, isPermissionDeniedError, isUnknownOutcome } from '../../shared/api/index.ts'
+import { addMember, changeMemberRole, membersQueryOptions, removeMember } from '../../shared/api/space-members.ts'
 import { refreshAfterSuccess, writeFailureText } from '../../shared/api/write-outcome.ts'
 import { messages } from '../../shared/i18n/index.ts'
 import { membersMessages } from '../../shared/i18n/zh-cn/members.ts'
@@ -25,7 +26,7 @@ import { StillRefreshing } from '../../shared/ui/still-refreshing.tsx'
 import { sessionQueryOptions } from '../auth/index.ts'
 import { ColleaguePicker } from '../colleagues/index.ts'
 import { ConfirmDialog } from '../confirmation/index.ts'
-import { addMember, changeMemberRole, forgetSpace, membersQueryOptions, removeMember, SpaceNotFound, SPACES_QUERY_KEY, spacesQueryOptions, useForgetMissingSpace } from '../spaces/index.ts'
+import { forgetSpace, SpaceNotFound, SPACES_QUERY_KEY, spacesQueryOptions, useForgetMissingSpace } from '../spaces/index.ts'
 
 const text = membersMessages
 

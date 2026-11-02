@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { codePointLength } from '../text/text.ts'
+import { conflictCopyQuerySchema, copyDocumentRequestSchema, createDocumentRequestSchema, moveDocumentRequestSchema, updateDocumentRequestSchema } from './document-requests.ts'
 import {
-  conflictCopyQuerySchema,
   conflictCopyTitle,
   COPIED_TITLE_SUFFIX,
   copiedDocumentTitle,
-  copyDocumentRequestSchema,
-  createDocumentRequestSchema,
   DEFAULT_DOCUMENT_TITLES,
   DOCUMENT_ACCESS_VIA,
   DOCUMENT_PROFILE_OF,
@@ -17,10 +15,8 @@ import {
   documentListQuerySchema,
   documentListResponseSchema,
   documentTitleSchema,
-  moveDocumentRequestSchema,
   PLATFORM_FORMAT_VERSION,
   PLATFORM_FORMAT_VERSIONS,
-  updateDocumentRequestSchema,
 } from './documents.ts'
 
 describe('文档列表的查询参数', () => {

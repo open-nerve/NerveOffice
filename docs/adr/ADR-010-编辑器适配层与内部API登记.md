@@ -238,3 +238,19 @@ UR-040 由三浏览器最终回归揭示：keepTextSelected 延后无条件全�
 两包 ES/CJS、sheets-ui 声明及正常 pnpm 补丁/锁一致；数据验证的 `trigger?: 'editor-bridge'` 声明已有，无需新增宿主出口。原 UR-033 面板和 UR-040 表名修复全部保留，原始包与实际安装/patch 摘要继续登记在 `patches/univer-data-validation-ui.json`、`patches/univer-sheet-name-selection.json`。`registry.ts` 只补协议说明与回归索引；`EditorContainer`、全局焦点、校验和保存算法不变。
 
 升级或移除本段补丁前，须通过 `data-validation-dropdown-focus.test.tsx` 的真实 manager → popup → 组件链：全过程无搜索 focusin、显式/缺省调用、主动搜索、timer 取消及实例重建；并复验原面板、验证生命周期/公式、原生光标与表名全选回归。原 `capabilities-rules.spec.ts` 下拉故事须在 Chromium、Chrome、WebKit 保留原速键入、拒绝提示、历史和保存重开断言，并让 red/cyan 各自的被动窗口真实开始、封存且零搜索事件；`list-focus-observation.test.ts` 校准 16 条、4 KiB、15,000 ms 上限及失效/异常清理。只有上游提供同等来源策略与生命周期、上述回归及原门禁通过，才移除本段补丁；旧面板与表名补丁各有独立移除条件。2026-10-31 原三浏览器故事已各一例首过，定向结果见[列表焦点复核](../v0.1/M5-表格能力与资源/reviews/P4-S6-列表编辑焦点复核.md)；独立任务审查的规格与质量均 Approved，C/I/M 均为 0；最终阶段门禁仍待，不据局部通过签署 P4 关闭。
+
+
+## M5-P5 S2 的补充：CSV 整表导入与显示读取
+
+新增集中登记的 `CSV_SHEET_COMMAND`，封装固定 1.0.1 的 `mergeWorksheetSnapshotWithDefault` 与 `InsertSheetCommand`，只从 `internal-api/index.ts` 导出。公开 Facade 的 `insertSheet` 忽略同步命令的返回值，再按索引激活；CSV 需要在命令拒绝时准确报告原表未写入，因此经公开 `FUniver.syncExecuteCommand` 执行这一条整表命令。无需新依赖、SDK 补丁或 UI 包进入公式 Worker。
+
+适配器先从最新 `workbook.save()` 建立完整候选，复用 contracts 中的原快照 UTF-8 字节、JSON 深度与累计元素预算；预检失败不执行命令。显式文本不生成公式，安全普通十进制才标记数字。身份冲突重试有界，名称按现有表去重；成功插入产生一条原撤销记录，激活仅是后续视图操作，激活异常报告原错误但仍返回已插入的表，避免误导用户重复导入。服务端原结构与资源校验仍执行。
+
+导出从最新快照的稀疏内容确定 A1 至末个内容的矩形，格式独占格不扩大范围，先限制行列与矩形容量再分配。显示文字由公开 `getDisplayValues()` 读取；原数值类型只影响 CSV 编码边界的公式保护。禁止在公式未收齐时读取，不暴露公式源、资源或 SDK 对象。真实只读前后逐字节核对保存结果；显示读取不能用来替代正文捕获。
+
+回归为 `editor/csv/sheet-csv.test.ts` 的真实 core、原档案数据插件、格式服务与命令/历史栈，以及原内部 API 注册表和源码清单检查。完整宿主生命周期接线、保存重开和浏览器故事仍按 P5 后续 Step 验收。升级 SDK 时先验证整表命令失败前无写入、一次撤销重做、六类既有资源不变及只读格式化无正文变更，再考虑替换此封装。
+
+
+S2 独审 I1 发现：固定 SDK 的数组公式只把锚点写入原 `cellData`，溢出结果由 `SetArrayFormulaDataMutation` 写到 `FormulaDataModel`，随后 `ArrayFormulaCellInterceptorController` 提供显示值。公开 Facade 没有对应的稀疏结果枚举；`getDataRange()` 仍取原始存储范围。因此追加集中登记的 `csvArrayCells`，只按当前文档/表惰性返回实际缓存格的坐标与数值类型，既不导出服务/缓存引用/内容，也不采用可能包括失败溢出意图的 `arrayFormulaRange`。调用方在登记每格之前检查矩形预算，超过即停止。
+
+缓存覆盖原 v/t，保留原 p 的优先级；v/t 同时 nullish 时 SDK 显示 NUMBER/0，已清除的 null 格忽略，实际空字符串公式结果仍占格。文字和数字格式始终交公开显示方法计算，不在平台重写公式或合并范围。七项真实缓存 mutation/Facade 对照覆盖范围、负数/格式/富文本、空结果、三类预算及跨文档/表隔离，另核对只读前后快照字节相同。该组证明显示通道，真实 SEQUENCE 在 Worker/主线程计算后导出的故事仍须 S5 完成，不能用受控缓存冒充计算证据。
