@@ -1,15 +1,11 @@
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import tempfile
 import unittest
 
 import linux_browser_evidence as subject
-
-
-def command(root, *args):
-    return subprocess.check_output(['git', '-C', str(root), *args], stderr=subprocess.DEVNULL)
+from git_repository import git as command
 
 
 def report(count=1):
@@ -47,9 +43,10 @@ class EvidenceTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / 'repo'; self.repo.mkdir()
-        command(self.repo, 'init', '-q')
+        command(self.repo, 'init', '-q', '--template=')
         command(self.repo, 'config', 'user.email', 'fixture@example.invalid')
         command(self.repo, 'config', 'user.name', 'Fixture')
+        command(self.repo, 'config', 'commit.gpgsign', 'false')
         (self.repo / 'input.txt').write_text('source\n')
         command(self.repo, 'add', '.')
         command(self.repo, 'commit', '-qm', 'fixture')

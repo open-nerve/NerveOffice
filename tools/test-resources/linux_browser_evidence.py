@@ -6,9 +6,9 @@ import os
 from pathlib import Path
 import re
 import stat
-import subprocess
 
 import report_safety
+from git_repository import git
 from stable_reports import _Tree
 
 
@@ -55,10 +55,6 @@ def linux_profile(suite):
 
 def group_command(group):
     return ['pnpm', '--filter', '@nerve-office/e2e', 'run', 'test', *group['args']]
-
-
-def git(repo, *args):
-    return subprocess.check_output(['git', '-C', str(repo), *args], timeout=30)
 
 
 def safe_path(root, name):

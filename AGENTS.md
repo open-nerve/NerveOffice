@@ -6,6 +6,7 @@
 - **2026-11-02 用户批准的 P6 云端预验收例外**：允许合并前推送现有唯一 `codex/m5-p6-closeout`，手动触发原六项 CI；本仓库该精确分支的 `workflow_dispatch` 可使用既有托管 VM 策略。正常 hooks、固定 SHA、原断言/预算及方案 B 处置状态保持；不推 main、不合并 P6，不恢复本机长测。已定位常规修复按同分支验证/审查后以新 SHA 接续，未知资源/身份/权限异常停止，不自动重跑失败 SHA。Linux 结果不替代 Mac 验收和最终 main 同 SHA CI；详见 ADR-026 附录与 `P6-S5-Linux集中预验收与环境方案.md`。
 - **2026-11-02 用户批准的 M5-P5→P6 接续**：P5 经快速门禁、相关回归、源码对应和审查后可 `--no-ff` 合入本地 main，暂缓推送；P6 从该 main 建唯一分支，M5 收官统一原完整 Gate/容器/浏览器矩阵及最终同 SHA CI。本地中间状态只作开发集成，不能称作完整验收或可发布；不改 CI 触发、不跳 hooks，不追认旧失败，也不自动解除桌面故障的长测阻断。仅适用于本次接续，详见 `docs/adr/ADR-026-M5阶段接续与集中验收.md`。
 - 提交信息用中文。既有未提交修改及源码、Git、活动 worktree、业务数据不得作为测试垃圾处理。
+- 测试中对另一 Git 仓库或 worktree 的调用，必须在子进程环境副本中清除 `git rev-parse --local-env-vars` 声明的仓库变量并核对指定根；仅设置 `cwd` / `git -C` 不足以隔离钩子环境。使用 TS `tools/src/shared/git-directory.ts` 或 Python `tools/test-resources/git_repository.py`；不得全局清除正常 hook 环境或拿真实项目 `.git` 作误写复现。临时父仓库、worktree 和本地 bare 远端均须归属本轮临时根。
 - **测试完成必须处理本轮残留**，包括成功、失败、异常与可捕获中断。不得把完整 VM、浏览器 profile、数据库或反复重试的完整环境永久复制进 handoffs。
 - 使用已接入的 `pnpm test:e2e`、`test:e2e:container`、`test:integration`、`test:coverage` 及 E2E 包的测量、模板和 Safari 命令。手工执行测试也须经 `python3 tools/test-resources/run.py <类型> -- <命令>`；只读列举 `--list` 除外。
 - 本轮资源只放运行器提供的 `NERVE_TEST_SCRATCH` 和 `TMPDIR`（VM SSH 使用同轮预登记的 `NERVE_TEST_SHORT_ROOT`）；必要报告放 `NERVE_TEST_OUTPUT_DIR`。先登记后启动资源，VM 的准备、克隆与重启实验必须在同一轮受管命令中。不得认领外部已有 VM 或个人浏览器资料。

@@ -1,9 +1,9 @@
 // 迁移门禁的装配：用临时 git 仓库验证读取基准的各种情况（审查 B4、B5、B10）。
-import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { gitInDirectory } from '../shared/git-directory.ts'
 import { gitIn, migrationsBaseRef, readAt, runMigrationsGate } from './migrations-gate.ts'
 import { MIGRATIONS_DIR } from './migrations.ts'
 
@@ -11,7 +11,7 @@ const ZERO = '00000000-0000-0000-0000-000000000000'
 let root: string
 
 function git(...args: string[]): string {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  return gitInDirectory(root, args)
 }
 
 function write(path: string, content: string): void {
@@ -42,7 +42,7 @@ function gate(env: NodeJS.ProcessEnv = {}): ReturnType<typeof runMigrationsGate>
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'nerve-migrations-gate-'))
-  git('init', '-q', '-b', 'main')
+  git('init', '-q', '--template=', '-b', 'main')
   git('config', 'user.email', 'gate@example.com')
   git('config', 'user.name', 'gate')
   git('config', 'commit.gpgsign', 'false')

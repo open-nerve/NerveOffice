@@ -24,6 +24,12 @@ Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `a
 
 需要 Python 3.9+、POSIX 文件锁和 `lsof`。缺少句柄查询能力时保留原件并返回待处理状态，不冒险删除。测试的断言、范围、重试与超时不由清理器更改。真实 Safari 的解锁、空闲 120 秒和用户活动中止条件仍适用。
 
+## 临时 Git 仓库与钩子环境
+
+`cwd` / `git -C` 不会覆盖 pre-push 导出的仓库定位变量。针对另一仓库的 Git 子进程使用 `tools/src/shared/git-directory.ts` / `tools/test-resources/git_repository.py`，在环境副本中清除 Git 声明的局部仓库变量及配置键值项，保留 PATH、TMPDIR 与本轮资源变量；不修改父环境或全局 Git 设置。命令前核对指定工作树根，已有 `.git` 不重新初始化；新仓库初始化后再次核对归属。
+
+`test_git_repository_isolation.py` 纳入 `pnpm test:cleanup:check`，使用本轮 TMPDIR 下的 KiB 级父仓库、linked worktree 与本地 bare 目标，真实触发 pre-push，分别运行既有迁移/证据夹具。核对父 HEAD、refs、index、共享配置和文件前后不变，并验证读取助手、变量组合与根拒绝。创建前核对外层运行台账、scratch、进程组和 TMPDIR 归属；夹具不设置逐例删除或 finalizer，超时也保留目录及回执，由外层运行器确认整组退出及句柄闭合后清理。复现只针对受管夹具，禁止把真实项目或其他任务 `.git` 注入测试环境。见 [P6 调查与修复方案](../v0.1/M5-表格能力与资源/reviews/P6-S5-推送钩子Git隔离调查与修复方案.md)。
+
 ## macOS 桌面会话异常停止
 
 `tools/test-resources/desktop_session.py` 对 `e2e/container/measure/template/native/vm` 启用；外层本地门禁使用 `SessionGuard('gate')`。非 macOS 及非浏览器类型只记 `not-applicable`，没有桌面监测通过的含义，不得通过改变资源类型绕过检查。
