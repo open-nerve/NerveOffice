@@ -19,7 +19,29 @@ def report(count=1):
                                   for unused in range(count)]}]}
 
 
+def execution_fixture(suite='calibration'):
+    commands = [
+        ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--store-dir', '/owned/pnpm-store'],
+        ['pnpm', '--filter', '@nerve-office/api...', 'run', 'build'],
+        ['pnpm', '--filter', '@nerve-office/web', 'run', 'build:e2e'],
+    ]
+    base = ['pnpm', '--filter', '@nerve-office/e2e', 'run', 'test']
+    if suite == 'calibration':
+        commands.extend([base + files + ['--project=chromium', '--workers=1', '--grep=US-M5-14'] for files in (
+            ['security/csp.spec.ts'], ['editor/image-input.spec.ts', 'editor/image-policy.spec.ts',
+                                     'editor/links.spec.ts', 'editor/paste-images.spec.ts'])])
+    else:
+        commands.append(base + ['editor/selftest.spec.ts', 'editor/selftest-next.spec.ts',
+                                '--project=chromium', '--workers=1', '--max-failures=1'])
+    return {'version': 1, 'suite': suite, 'status': 0, 'steps': [{'status': 0, 'command': args} for args in commands]}
+
+
 class EvidenceTests(unittest.TestCase):
+    def test_profile_rejects_unknown_selection(self):
+        for selection in ('full', '', ['selftest'], 'selftest --grep=one'):
+            with self.subTest(selection=selection), self.assertRaisesRegex(ValueError, 'linux-browser-fixed-suite-only'):
+                subject.linux_profile(selection)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='nerve-linux-evidence-')
         self.addCleanup(self.temp.cleanup)
@@ -162,7 +184,7 @@ class EvidenceTests(unittest.TestCase):
             'patches-before.json': patches, 'patches-after.json': patches,
             'versions.json': {'platform': 'Linux', 'machine': 'aarch64', 'node': 'v24.21.0', 'pnpm': '12.6.0',
                               'playwright': '1.63.0', 'osRelease': 'VERSION_ID="24.04"'},
-            'execution.json': {'status': 0, 'steps': [{'status': 0} for unused in range(5)]},
+            'execution.json': execution_fixture(),
             'preflight-before-install.json': {'version': 1, 'phase': 'before-install', 'completeQueryPassed': True},
             'preflight-after-pnpm.json': {'version': 1, 'phase': 'after-pnpm', 'completeQueryPassed': True},
         }
@@ -174,6 +196,45 @@ class EvidenceTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 subject.validate_guest_evidence(root)
             (evidence / name).write_text(json.dumps(original))
+        for mutation in ('suite', 'command'):
+            value = execution_fixture()
+            if mutation == 'suite':
+                value['suite'] = 'selftest'
+            else:
+                value['steps'][-1]['command'].append('--grep=one-case')
+            (evidence / 'execution.json').write_text(json.dumps(value))
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'guest-execution-proof'):
+                subject.validate_guest_evidence(root)
+        (evidence / 'execution.json').write_text(json.dumps(execution_fixture('selftest')))
+        self.assertTrue(subject.validate_guest_evidence(root, 'selftest')['verified'])
+        with self.assertRaisesRegex(ValueError, 'guest-execution-proof'):
+            subject.validate_guest_evidence(root)
+
+    def test_unexpected_group_is_retained_instead_of_ignored(self):
+        root = self.root / 'owned'; group = root / 'evidence/groups/unapproved'
+        group.mkdir(parents=True)
+        (group / 'diagnostic.txt').write_text('unique original')
+        output = self.root / 'output'; output.mkdir()
+        result = subject.collect_all(root, output)
+        self.assertFalse(result['safeToRelease'])
+        self.assertIn('unexpected-group', result['errors'])
+        self.assertEqual((group / 'diagnostic.txt').read_text(), 'unique original')
+
+    def test_selftest_collection_uses_29_and_exports_failed_evidence_for_cleanup(self):
+        for count in (29, 28):
+            root = self.root / ('owned' + str(count)); output = self.root / ('out' + str(count)); output.mkdir()
+            group = root / 'evidence/groups/selftest/tests/e2e'; results = group / 'test-results'; results.mkdir(parents=True)
+            (results / 'results.json').write_text(json.dumps(report(count)))
+            (results / 'cleanup-receipt.json').write_text(json.dumps({'runId': 'inner', 'status': 'passed', 'cleanupStage': 'complete'}))
+            html = group / 'playwright-report'; html.mkdir(); (html / 'index.html').write_text('<html>fixture</html>')
+            inner = root / 'source/.test-resources/runs/inner'; inner.mkdir(parents=True)
+            (inner / 'run.json').write_text(json.dumps({'runId': 'inner', 'status': 'passed', 'cleanupStage': 'complete', 'publicationComplete': True}))
+            result = subject.collect_all(root, output, 'selftest')
+            self.assertTrue(result['safeToRelease'])
+            self.assertFalse(result['passed'])  # Complete source/SDK proofs intentionally absent.
+            self.assertEqual([g['group'] for g in result['groups']], ['selftest'])
+            self.assertEqual(result['errors'], ['guest-proof-incomplete'] if count == 29 else ['selftest-product-failed'])
+            self.assertEqual(json.loads((output / 'selftest/test-results/results.json').read_text())['stats']['expected'], count)
 
     def test_unpublished_inner_report_requests_retention_without_exporting_it(self):
         root = self.root / 'owned'; run = root / 'source/.test-resources/runs/inner'; run.mkdir(parents=True)
@@ -212,6 +273,17 @@ class EvidenceTests(unittest.TestCase):
         (root/'transport.json').write_text(json.dumps({'version':1,'sections':[
             {'section':'runs','unknownRunResidue':True}]}))
         self.assertFalse(subject.collect_all(root,output)['safeToRelease'])
+
+    def test_transport_receipt_must_match_the_selected_suite(self):
+        for recorded in ('selftest', 'calibration', None):
+            with self.subTest(recorded=recorded):
+                root=self.root/('transport-'+str(recorded));root.mkdir()
+                output=self.root/('output-'+str(recorded));output.mkdir()
+                (root/'transport.json').write_text(json.dumps({'version':1,'suite':recorded,'sections':[
+                    {'section':'evidence'}, {'section':'runs','unknownRunResidue':False}]}))
+                result=subject.collect_all(root,output,'selftest')
+                self.assertEqual(result['safeToRelease'],recorded=='selftest')
+                self.assertFalse(result['passed'])  # No product report in this small fixture.
 
     def test_published_budget_counts_metadata_and_inner_logs_not_only_group_payload(self):
         output=self.root/'output';output.mkdir()

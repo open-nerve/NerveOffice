@@ -31,6 +31,32 @@ def read_json(path, limit=16 * 1024 ** 2):
     return json.loads(data, object_pairs_hook=report_safety._pairs, parse_constant=report_safety._constant)
 
 
+def linux_profile(suite):
+    if suite not in ('calibration', 'selftest'):
+        raise ValueError('linux-browser-fixed-suite-only')
+    profiles = read_json(Path(__file__).with_name('linux-browser-profiles.json'), limit=16 * 1024)
+    if (not isinstance(profiles, dict) or set(profiles) != {'version', 'calibration', 'selftest'}
+            or type(profiles['version']) is not int or profiles['version'] != 1):
+        raise ValueError('linux-browser-profile-format')
+    expected_names = {'calibration': ['calibration', 'stories'], 'selftest': ['selftest']}
+    for name, names in expected_names.items():
+        groups = profiles[name]
+        if not isinstance(groups, list) or len(groups) != len(names):
+            raise ValueError('linux-browser-profile-format')
+        for group, expected_name in zip(groups, names):
+            if (not isinstance(group, dict) or set(group) != {'name', 'count', 'args'}
+                    or group['name'] != expected_name or type(group['count']) is not int
+                    or not 1 <= group['count'] <= 29 or not isinstance(group['args'], list)
+                    or not 1 <= len(group['args']) <= 16
+                    or any(not isinstance(arg, str) or not arg for arg in group['args'])):
+                raise ValueError('linux-browser-profile-format')
+    return profiles[suite]
+
+
+def group_command(group):
+    return ['pnpm', '--filter', '@nerve-office/e2e', 'run', 'test', *group['args']]
+
+
 def git(repo, *args):
     return subprocess.check_output(['git', '-C', str(repo), *args], timeout=30)
 
@@ -267,7 +293,7 @@ def collect_group(source, destination, run_id, count, budget=5 * 1024 ** 3, requ
     return receipt
 
 
-def validate_guest_evidence(root):
+def validate_guest_evidence(root, suite='calibration'):
     root = Path(root)
     def evidence(name):
         return read_json(safe_path(root, 'evidence/' + name))
@@ -286,9 +312,18 @@ def validate_guest_evidence(root):
         if evidence('preflight-' + phase + '.json') != {'version': 1, 'phase': phase, 'completeQueryPassed': True}:
             raise ValueError('guest-preflight-proof')
     execution = evidence('execution.json')
-    if execution.get('status') != 0 or len(execution.get('steps', [])) != 5 or any(step.get('status') != 0 for step in execution['steps']):
+    expected_commands = [
+        ['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--store-dir', '/owned/pnpm-store'],
+        ['pnpm', '--filter', '@nerve-office/api...', 'run', 'build'],
+        ['pnpm', '--filter', '@nerve-office/web', 'run', 'build:e2e'],
+        *[group_command(group) for group in linux_profile(suite)],
+    ]
+    steps = execution.get('steps', [])
+    if (execution.get('version') != 1 or execution.get('suite') != suite or execution.get('status') != 0
+            or not isinstance(steps, list) or any(not isinstance(step, dict) or step.get('status') != 0 for step in steps)
+            or [step.get('command') for step in steps] != expected_commands):
         raise ValueError('guest-execution-proof')
-    return {'head': source['head'], 'patchPackages': len(host), 'verified': True}
+    return {'head': source['head'], 'suite': suite, 'patchPackages': len(host), 'verified': True}
 
 
 def export_inner_run(directory, output, budget):
@@ -342,16 +377,23 @@ def report_bytes(root, limit=5 * 1024 ** 3):
     return total
 
 
-def collect_all(root, output):
+def collect_all(root, output, suite='calibration'):
     root, output = Path(root), Path(output)
     groups = []; errors = []; exported_ids = set(); safe = True
     inner_exports = []; inner_remaining = 16 * 1024 ** 2
+    profile = linux_profile(suite)
+    group_root = safe_path(root, 'evidence/groups')
+    if group_root.exists():
+        expected_names = {group['name'] for group in profile}
+        for child in group_root.iterdir():
+            if child.name not in expected_names or child.is_symlink() or not child.is_dir():
+                safe = False; errors.append('unexpected-group')
     transport = root / 'transport.json'
     if transport.exists() or transport.is_symlink():
         try:
             transfer = read_json(transport)
             sections = transfer['sections']
-            if (transfer.get('version') != 1 or len(sections) != 2
+            if (transfer.get('version') != 1 or transfer.get('suite') != suite or len(sections) != 2
                     or [part['section'] for part in sections] != ['evidence', 'runs']
                     or sections[1].get('unknownRunResidue') is not False):
                 raise ValueError('inner-run-residue')
@@ -360,7 +402,8 @@ def collect_all(root, output):
     remaining = 5 * 1024 ** 3 - 64 * 1024 ** 2 - inner_remaining - report_bytes(output)
     if remaining <= 0:
         raise ValueError('report-total-budget')
-    for name, count in (('calibration', 1), ('stories', 13)):
+    for definition in profile:
+        name, count = definition['name'], definition['count']
         group = safe_path(root, 'evidence/groups/' + name)
         if not group.is_dir():
             errors.append(name + '-missing'); continue
@@ -408,10 +451,10 @@ def collect_all(root, output):
     report_bytes(output, limit=5 * 1024 ** 3 - 64 * 1024 ** 2)
     if not errors:
         try:
-            validate_guest_evidence(root)
+            validate_guest_evidence(root, suite)
         except (OSError, ValueError, KeyError):
             errors.append('guest-proof-incomplete')
-    return {'version': 1, 'safeToRelease': safe, 'passed': not errors, 'groups': groups, 'innerRunExports': inner_exports, 'errors': errors}
+    return {'version': 1, 'suite': suite, 'safeToRelease': safe, 'passed': not errors, 'groups': groups, 'innerRunExports': inner_exports, 'errors': errors}
 
 
 def main():
@@ -421,6 +464,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--run-id')
+    parser.add_argument('--suite', choices=('calibration', 'selftest'), default='calibration')
     args = parser.parse_args()
     if args.action == 'snapshot':
         snapshot_source(args.repo, args.output, args.manifest)
@@ -429,7 +473,7 @@ def main():
     elif args.action == 'patches':
         write_json(args.output, installed_patches(args.repo))
     else:
-        summary = collect_all(args.repo, args.output)
+        summary = collect_all(args.repo, args.output, args.suite)
         write_json(args.output / 'groups.json', summary)
         if not summary['passed']:
             raise ValueError('linux-browser-evidence-incomplete')

@@ -1,4 +1,4 @@
-/** P6-S4: fixed Linux arm64 calibration. No host browser or full gate. */
+/** Fixed Linux arm64 calibration/selftest. No host browser or full gate. */
 import type { BudgetSample } from './linux-browser.ts'
 import { execFile, spawnSync } from 'node:child_process'
 import { appendFileSync, closeSync, copyFileSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, statfsSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -13,7 +13,7 @@ import { createInterruption, runTracked } from './container-e2e-process.ts'
 import { ContainerRunResources } from './container-e2e-resources.ts'
 import { createSettings, memoryBytes } from './container-e2e.ts'
 import { assertNoOutstandingImageCache, LinuxBrowserCache } from './linux-browser-cache.ts'
-import { browserPlan, budgetProblem, DATABASE_IMAGE, GIB, guestExitStatus, linuxEnvironmentFile, NODE_IMAGE, PLAYWRIGHT_IMAGE, stopWithMeter, withLinuxCleanup } from './linux-browser.ts'
+import { browserPlan, budgetProblem, DATABASE_IMAGE, GIB, guestExitStatus, linuxEnvironmentFile, linuxSuite, NODE_IMAGE, PLAYWRIGHT_IMAGE, stopWithMeter, withLinuxCleanup } from './linux-browser.ts'
 
 const environment = z.object({
   NERVE_TEST_RUN_ID: z.string().uuid(),
@@ -21,8 +21,7 @@ const environment = z.object({
   NERVE_TEST_SCRATCH: z.string(),
   NERVE_TEST_OUTPUT_DIR: z.string(),
 }).parse(process.env)
-if (process.argv.length !== 2)
-  throw new Error('linux-calibration-has-no-custom-arguments')
+const suite = linuxSuite(process.argv.slice(2))
 const { NERVE_TEST_RUN_ID: runId, NERVE_TEST_RUN_DIR: directory, NERVE_TEST_SCRATCH: scratch, NERVE_TEST_OUTPUT_DIR: output } = environment
 if (realpathSync(output) !== join(scratch, 'tests/e2e/test-results'))
   throw new Error('linux-output-owner')
@@ -53,7 +52,7 @@ const settings = createSettings({ runId, composeFile: join(REPO_ROOT, 'deploy/te
 mkdirSync(dirname(settings.envFile))
 const resources = new ContainerRunResources({ directory, runId, repo: REPO_ROOT, scratch }, settings, capture)
 const cache = new LinuxBrowserCache(directory, runId, capture)
-const plan = browserPlan(settings.project, scratch, resources.labels)
+const plan = browserPlan(settings.project, scratch, resources.labels, suite)
 const evidenceTool = join(REPO_ROOT, 'tools/test-resources/linux_browser_evidence.py')
 const evidenceHold = join(directory, 'linux-browser-evidence-hold.json')
 const evidenceHoldBytes = `${JSON.stringify({ version: 1, runId, reason: 'inner-evidence-not-exported' })}\n`
@@ -91,7 +90,7 @@ let stopReason: string | undefined
 const created = new Map<string, string>()
 const daemon = z.object({ id: z.string(), os: z.literal('linux'), arch: z.literal('aarch64'), memory: z.number().min(6 * GIB) })
   .parse(parseContainerJson(query(['info', '--format', '{"id":{{json .ID}},"os":{{json .OSType}},"arch":{{json .Architecture}},"memory":{{json .MemTotal}}}'])))
-write('environment.json', { version: 1, daemon, runId, platform: 'linux/arm64', runnerMemory: 4 * GIB, databaseMemory: GIB / 2, memoryNote: 'Docker Desktop settings unchanged', stopThreshold: 16 * GIB, reserve: 12 * GIB, samplingMs: 2000, plan })
+write('environment.json', { version: 1, suite, daemon, runId, platform: 'linux/arm64', runnerMemory: 4 * GIB, databaseMemory: GIB / 2, memoryNote: 'Docker Desktop settings unchanged', stopThreshold: 16 * GIB, reserve: 12 * GIB, samplingMs: 2000, plan })
 
 async function owned(command: string, args: readonly string[], recovering = false): Promise<number> {
   const control = recovering ? createInterruption() : interruption
@@ -335,7 +334,7 @@ async function main(): Promise<void> {
       stopMonitor = false
       monitor = monitoring()
       const exported = join(scratch, 'exported')
-      const transferStatus = await owned('python3', ['-B', join(REPO_ROOT, 'tools/test-resources/linux_browser_transport.py'), '--container', runnerIdentity(), '--output', exported], true)
+      const transferStatus = await owned('python3', ['-B', join(REPO_ROOT, 'tools/test-resources/linux_browser_transport.py'), '--container', runnerIdentity(), '--output', exported, '--suite', suite], true)
       if (transferStatus !== 0)
         throw new Error('linux-transfer-incomplete')
       assertStoppedContainers()
@@ -352,7 +351,7 @@ async function main(): Promise<void> {
         }
       }
       const verification = await owned('python3', ['-B', evidenceTool, 'verify', '--repo', REPO_ROOT, '--manifest', join(scratch, 'source.json'), '--output', join(logDirectory, 'host-source-after.json')], true)
-      const collection = await owned('python3', ['-B', evidenceTool, 'collect', '--repo', exported, '--output', logDirectory, '--run-id', runId], true)
+      const collection = await owned('python3', ['-B', evidenceTool, 'collect', '--repo', exported, '--output', logDirectory, '--run-id', runId, '--suite', suite], true)
       const summary = z.object({ version: z.literal(1), safeToRelease: z.boolean() }).parse(parseContainerJson(readFileSync(join(logDirectory, 'groups.json'), 'utf8')))
       return { safeToRelease: summary.safeToRelease, passed: verification === 0 && collection === 0 }
     },

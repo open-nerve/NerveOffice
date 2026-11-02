@@ -48,6 +48,28 @@ class TransportTests(unittest.TestCase):
             self.assertTrue((root/'evidence'/base/'opfs-archive/index.json').is_file())
             self.assertEqual(result['omittedFiles'], 1)
 
+    def test_selftest_exports_trace_but_not_full_profile_and_rejects_unknown_group(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); base = 'groups/selftest/tests/e2e/test-results/'
+            result = self.receive(root, [(base + 'case/trace.zip', b'trace fixture', tarfile.REGTYPE),
+                (base + 'persistent-profiles/one/Default/History', b'private environment', tarfile.REGTYPE)], suite='selftest')
+            self.assertEqual((root / 'evidence' / base / 'case/trace.zip').read_bytes(), b'trace fixture')
+            self.assertEqual(result['omittedFiles'], 1)
+            self.assertFalse((root / 'evidence' / base / 'persistent-profiles/one/Default/History').exists())
+        with tempfile.TemporaryDirectory() as directory, self.assertRaisesRegex(ValueError, 'transport-evidence-path'):
+            self.receive(Path(directory).resolve(), [('groups/other/tests/e2e/test-results/data.json', b'{}', tarfile.REGTYPE)])
+
+    def test_other_profile_cannot_disappear_as_empty_or_filtered_group(self):
+        for suite, extra in (('calibration', 'selftest'), ('selftest', 'calibration'), ('selftest', 'stories')):
+            entries = [
+                ('groups/' + extra, b'', tarfile.DIRTYPE),
+                ('groups/' + extra + '/tests/e2e/test-results/persistent-profiles/one/Default/History', b'original', tarfile.REGTYPE),
+            ]
+            for entry in entries:
+                with self.subTest(suite=suite, path=entry[0]), tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaisesRegex(ValueError, 'transport-evidence-path'):
+                        self.receive(Path(directory).resolve(), [entry], suite=suite)
+
     def test_only_original_inner_ledger_and_log_are_copied(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory).resolve(); uid='0199a2c4-1111-7000-8000-111111111111'

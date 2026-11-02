@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 
 from stable_reports import _Tree
+from linux_browser_evidence import linux_profile
 
 LIMIT = 5 * 1024 ** 3
 METADATA_LIMIT = 64 * 1024 ** 2
@@ -71,7 +72,7 @@ def _name(name):
     return name
 
 
-def _retain(name, section, directory):
+def _retain(name, section, directory, group_names):
     parts = name.split('/')
     if section == 'runs':
         if not UUID.fullmatch(parts[0]):
@@ -79,7 +80,7 @@ def _retain(name, section, directory):
         return not directory and '/'.join(parts[1:]) in RUN_FILES
     if parts[0] in PROOFS and len(parts) == 1:
         return True
-    expected = ('groups', ('calibration', 'stories'), 'tests', 'e2e', ('test-results', 'playwright-report'))
+    expected = ('groups', group_names, 'tests', 'e2e', ('test-results', 'playwright-report'))
     for index, part in enumerate(parts[:5]):
         if part not in (expected[index] if isinstance(expected[index], tuple) else (expected[index],)):
             raise ValueError('transport-evidence-path')
@@ -92,10 +93,11 @@ def _retain(name, section, directory):
     return True
 
 
-def receive_archive(stream, destination, section, budget=LIMIT):
+def receive_archive(stream, destination, section, budget=LIMIT, suite='calibration'):
     if section not in ('evidence', 'runs') or not 0 < budget <= LIMIT:
         raise ValueError('transport-section-or-budget')
     destination = Path(destination)
+    group_names = tuple(group['name'] for group in linux_profile(suite))
     prefix = 'evidence' if section == 'evidence' else 'source/.test-resources/runs'
     reader = _Reader(stream, budget + 64 * 1024 ** 2)
     names = set(); files = []; retained = scanned = omitted = 0
@@ -116,7 +118,9 @@ def receive_archive(stream, destination, section, budget=LIMIT):
                     if not member.isdir():
                         raise ValueError('transport-root')
                     continue
-                keep = _retain(name, section, member.isdir())
+                # Validate the selected suite before omitting directories or raw
+                # profiles, so an extra group cannot disappear during transport.
+                keep = _retain(name, section, member.isdir(), group_names)
                 if section == 'runs':
                     # Keep even a mkdir/run.lock-only run visible to the collector.
                     target.mkdirs(prefix + '/' + name.split('/')[0])
@@ -163,6 +167,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--container', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--suite', choices=('calibration', 'selftest'), default='calibration')
     args = parser.parse_args()
     if not re.fullmatch(r'[0-9a-f]{64}', args.container):
         raise ValueError('transport-container-id')
@@ -177,7 +182,7 @@ def main():
             process = subprocess.Popen(['docker', 'cp', args.container + ':' + source, '-'],
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             try:
-                receipt = receive_archive(process.stdout, args.output, section, remaining)
+                receipt = receive_archive(process.stdout, args.output, section, remaining, args.suite)
                 remaining -= receipt['scannedPayloadBytes']
                 if process.wait(timeout=15) != 0 or process.stderr.read(64 * 1024 + 1):
                     raise ValueError('transport-docker-copy-failed')
@@ -192,7 +197,7 @@ def main():
     finally:
         signal.alarm(0)
     with (args.output/'transport.json').open('x') as stream:
-        json.dump({'version': 1, 'container': args.container, 'sections': receipts}, stream, indent=2)
+        json.dump({'version': 1, 'suite': args.suite, 'container': args.container, 'sections': receipts}, stream, indent=2)
         stream.write('\n')
 
 

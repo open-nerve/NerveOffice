@@ -11,6 +11,40 @@ from test_linux_browser_evidence import report
 
 
 class GuestTests(unittest.TestCase):
+    def test_selftest_runs_only_approved_arguments_and_requires_29_first_passes(self):
+        for count in (29, 28):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve(); repo = root / 'source'; repo.mkdir()
+                calls = []
+                def execute(args):
+                    calls.append(args)
+                    results = repo / 'tests/e2e/test-results'; results.mkdir(parents=True)
+                    (results / 'results.json').write_text(json.dumps(report(count)))
+                    (results / 'cleanup-receipt.json').write_text(json.dumps({'status': 'passed', 'cleanupStage': 'complete'}))
+                    return 0
+                if count == 29:
+                    self.assertEqual(subject.run_groups(repo, root, execute, 'selftest'), 0)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'test-results-count'):
+                        subject.run_groups(repo, root, execute, 'selftest')
+                self.assertEqual(calls, [['pnpm', '--filter', '@nerve-office/e2e', 'run', 'test',
+                    'editor/selftest.spec.ts', 'editor/selftest-next.spec.ts', '--project=chromium',
+                    '--workers=1', '--max-failures=1']])
+                self.assertTrue((root / 'evidence/groups/selftest/tests/e2e/test-results/results.json').is_file())
+
+    def test_selftest_failure_preserves_published_diagnostics_without_rerun(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); repo = root / 'source'; repo.mkdir()
+            calls = []
+            def execute(args):
+                calls.append(args)
+                results = repo / 'tests/e2e/test-results'; results.mkdir(parents=True)
+                (results / 'failure.txt').write_text('original failure')
+                return 1
+            self.assertEqual(subject.run_groups(repo, root, execute, 'selftest'), 1)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual((root / 'evidence/groups/selftest/tests/e2e/test-results/failure.txt').read_text(), 'original failure')
+
     def test_fresh_gitless_install_does_not_run_prepare_before_pnpm_preflight(self):
         # Regression: pnpm 12 exec installs missing dependencies and runs prepare.
         # Exercise the real pinned pnpm with no external packages or browser.

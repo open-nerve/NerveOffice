@@ -20,6 +20,7 @@
     "test:e2e": "pnpm --filter \"@nerve-office/api...\" run build && pnpm --filter @nerve-office/web run build:e2e && pnpm --filter @nerve-office/e2e run test",
     "test:e2e:container": "python3 tools/test-resources/run.py container -- node tools/src/deploy/container-e2e-cli.ts",
     "test:e2e:linux": "python3 tools/test-resources/run.py container -- node tools/src/deploy/linux-browser-cli.ts",
+    "test:e2e:linux:selftest": "python3 tools/test-resources/run.py container -- node tools/src/deploy/linux-browser-cli.ts selftest",
     "build": "pnpm -r --filter './packages/*' --filter './apps/*' run build",
     "dev:api": "pnpm --filter @nerve-office/api run dev",
     "dev:web": "pnpm --filter @nerve-office/web run dev",

@@ -7,19 +7,13 @@ import sys
 import time
 
 from lifecycle import Store, open_paths
-from linux_browser_evidence import installed_patches, read_json, validate_results, verify_source, write_json
-
-GROUPS = (
-    ('calibration', 1, ['security/csp.spec.ts']),
-    ('stories', 13, ['editor/image-input.spec.ts', 'editor/image-policy.spec.ts',
-                     'editor/links.spec.ts', 'editor/paste-images.spec.ts']),
-)
+from linux_browser_evidence import group_command, installed_patches, linux_profile, read_json, validate_results, verify_source, write_json
 
 
-def run_groups(repo, root, execute):
-    for name, count, files in GROUPS:
-        args = ['pnpm', '--filter', '@nerve-office/e2e', 'run', 'test', *files,
-                '--project=chromium', '--workers=1', '--grep=US-M5-14']
+def run_groups(repo, root, execute, suite='calibration'):
+    for group in linux_profile(suite):
+        name, count = group['name'], group['count']
+        args = group_command(group)
         destination = root / 'evidence/groups' / name / 'tests/e2e'
         destination.mkdir(parents=True)
         status = execute(args)
@@ -63,7 +57,8 @@ def install_dependencies(repo, root, execute):
     return 0
 
 
-def main():
+def main(suite='calibration'):
+    linux_profile(suite)  # Reject unknown selections before creating resources.
     root = Path('/owned'); repo = root / 'source'; evidence = root / 'evidence'
     evidence.mkdir(exist_ok=True)
     # Register the root before any run directories exist, using the same strict
@@ -80,7 +75,7 @@ def main():
     steps = []
     def execute(args):
         started = time.time()
-        print('Linux 校准步骤：' + ' '.join(args), flush=True)
+        print('Linux ' + suite + ' 步骤：' + ' '.join(args), flush=True)
         status = subprocess.call(args, cwd=repo)
         steps.append({'command': args, 'status': status, 'seconds': time.time() - started,
                       'maxChildRssKiB': resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss})
@@ -107,7 +102,7 @@ def main():
             if execute(args) != 0:
                 return 1
         write_json(evidence / 'source-before.json', verify_source(repo, proof))
-        group_status = run_groups(repo, root, execute)
+        group_status = run_groups(repo, root, execute, suite)
         write_json(evidence / 'source-after.json', verify_source(repo, proof))
         after = installed_patches(repo)
         write_json(evidence / 'patches-after.json', after)
@@ -116,7 +111,7 @@ def main():
         status = group_status
         return status
     finally:
-        write_json(evidence / 'execution.json', {'version': 1, 'steps': steps, 'status': status})
+        write_json(evidence / 'execution.json', {'version': 1, 'suite': suite, 'steps': steps, 'status': status})
 
 
 if __name__ == '__main__':
@@ -124,5 +119,7 @@ if __name__ == '__main__':
         handle_preflight(Path('/owned'), 'after-pnpm')
     elif len(sys.argv) == 1:
         sys.exit(main())
+    elif len(sys.argv) == 2 and sys.argv[1] in ('calibration', 'selftest'):
+        sys.exit(main(sys.argv[1]))
     else:
         raise ValueError('guest-arguments')

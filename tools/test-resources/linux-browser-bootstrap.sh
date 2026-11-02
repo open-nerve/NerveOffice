@@ -6,4 +6,4 @@ if ! command -v python3 >/dev/null 2>&1 || ! command -v lsof >/dev/null 2>&1 || 
   apt-get update -qq
   DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 lsof tini
 fi
-exec /usr/bin/tini -s -- python3 -B /owned/source/tools/test-resources/linux_browser_guest.py
+exec /usr/bin/tini -s -- python3 -B /owned/source/tools/test-resources/linux_browser_guest.py "$@"

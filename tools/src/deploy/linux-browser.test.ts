@@ -6,7 +6,7 @@ import { expect, it } from 'vitest'
 import { REPO_ROOT } from '../shared/repo.ts'
 import { ContainerRunResources } from './container-e2e-resources.ts'
 import { createSettings } from './container-e2e.ts'
-import { browserPlan, budgetProblem, GIB, guestExitStatus, PLAYWRIGHT_IMAGE, stopWithMeter, withLinuxCleanup } from './linux-browser.ts'
+import { browserPlan, budgetProblem, GIB, guestExitStatus, linuxSuite, PLAYWRIGHT_IMAGE, stopWithMeter, withLinuxCleanup } from './linux-browser.ts'
 
 it('只生成原生隔离的一条校准和十三条故事，不修改原 timeout/retry/trace', () => {
   const plan = browserPlan('nerve-office-e2e-example', '/owned/scratch', ['run=one', 'repo=two'])
@@ -27,6 +27,30 @@ it('预算在 16 GiB 或空间少于 12 GiB 时停止；未知采样不能放行
   expect(budgetProblem({ workspace: 0, scratch: 10 * GIB, writable: GIB, database: 0, image: 5 * GIB, available: 20 * GIB })).toBe('environment-budget')
   expect(budgetProblem({ workspace: 0, scratch: 0, writable: 0, database: 0, image: 0, available: 12 * GIB - 1 })).toBe('disk-reserve')
   expect(budgetProblem({ workspace: 0, scratch: Number.NaN, writable: 0, database: 0, image: 0, available: 20 * GIB })).toBe('measurement-invalid')
+})
+
+it('selftest 固定为原两文件共 29 条，首错停止且不带故事过滤器', () => {
+  const plan = browserPlan('selftest-run', '/owned/scratch', [], 'selftest')
+  expect(plan.groups).toEqual([{
+    name: 'selftest',
+    count: 29,
+    args: ['editor/selftest.spec.ts', 'editor/selftest-next.spec.ts', '--project=chromium', '--workers=1', '--max-failures=1'],
+  }])
+  expect(plan.runner.slice(-2)).toEqual(['/owned/source/tools/test-resources/linux-browser-bootstrap.sh', 'selftest'])
+  expect(plan.runner).toContain('--memory=4g')
+  expect(plan.runner).toContain('--cpus=3')
+  expect(plan.runner.join(' ')).not.toMatch(/E2E_AUTOSAVE|retries|timeout|trace|--grep/)
+})
+
+it('入口拒绝自定义范围，宿主和 Python 验收读取同一固定清单', () => {
+  expect(linuxSuite([])).toBe('calibration')
+  expect(linuxSuite(['selftest'])).toBe('selftest')
+  for (const args of [['other'], ['selftest', '--grep=one'], ['--project=webkit'], ['']])
+    expect(() => linuxSuite(args)).toThrow('linux-browser-fixed-suite-only')
+  for (const suite of ['calibration', 'selftest'] as const) {
+    const guest = execFileSync('python3', ['-B', '-c', 'import sys,json; sys.path.insert(0, sys.argv[1]); from linux_browser_evidence import linux_profile; print(json.dumps(linux_profile(sys.argv[2])))', join(REPO_ROOT, 'tools/test-resources'), suite], { encoding: 'utf8' })
+    expect(JSON.parse(guest)).toEqual(browserPlan('shared', '/unused', [], suite).groups)
+  }
 })
 
 it('两轮内部卷隔离，runner 不把宿主文件作为工作目录或 init 映射', () => {

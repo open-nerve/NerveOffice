@@ -179,9 +179,11 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 
 `check_ci_resources.py` 在当前 job 上持 publication/run 锁，核验唯一预检和该 job 主测试的身份、退出、实际稳定报告哈希、历史及当前预算，写入 `cleanup-receipt.json` 的 `ciResources`。产品失败的合格诊断报告可以上传，原产品步骤仍失败；checker 拒绝则不上传。E2E 额外要求原监督器退出、JSON/HTML 合格及便携 profile 归档成功，归档失败不会回退上传 raw。预检收据只读收集有界摘要，明确 diagnostic-only，不能替代这一完整核验。三个 job 的既有报告 artifact 同时携带精确 `.test-resources/runs/*/reports/portable/test-results/` 路径下的预检原件，启用隐藏目录，不上传 scratch；因此远端可重新核对预检与主测试两份清单，而非只相信合同声明。最终远端接受还须绑定实际同 SHA 六项 CI 及下载后的便携证据，旧本地 v2 关闭证明继续只接受实际 cleanup complete。
 
-## P6-S4 Linux 小范围校准
+## P6 Linux 固定校准与自检
 
 `pnpm test:e2e:linux` 使用 `tools/src/deploy/linux-browser-cli.ts`，外层仍是 `run.py container`。只接受固定范围；校准 1 条通过才运行其余 13 条，Chromium、单 worker、原断言/超时/重试/trace/截图不变。Node 24.21.0、pnpm 12.6.0、Playwright 1.63.0、Ubuntu 24.04 和 Linux arm64 固定。独立提交源码副本与数据库，安装 SDK 的 16 组补丁字节前后核对，未提交源码拒绝运行。
+
+2026-11-02 用户批准的 `pnpm test:e2e:linux:selftest` 通过同一入口选择固定 `selftest` 配置：`editor/selftest.spec.ts` 与 `editor/selftest-next.spec.ts`，共 29 条、Chromium、单 worker、默认自动保存，仅加 `--max-failures=1` 使首错后停止。原重试、trace、截图、超时、容量和断言保持。受跟踪 `tools/test-resources/linux-browser-profiles.json` 是宿主计划、guest 执行及收集的同一来源；命令行拒绝任意范围与额外参数。guest 原始执行证明中的配置名和完整命令必须与宿主选择相符，29 条均须首过，无重试/flaky/跳过；额外组不能忽略，保留原件并阻止环境释放。不自动重跑，不扩大到其他平台或完整 Gate。
 
 runner 限 4 GiB RAM/3 CPU，数据库限 512 MiB/1 CPU；私有 1 GiB shm，不挂 Docker socket 或宿主 IPC/PID/network。每 2 秒尝试采样 scratch、容器可写层、内部工作卷、数据库卷与镜像；16 GiB 为停止阈值，采样和退出等待可能超调，12 GiB 磁盘保留独立执行。查询失败、OOM、会话变化、任一产品失败均停止，不自动创建下一轮。
 
@@ -189,6 +191,6 @@ runner 限 4 GiB RAM/3 CPU，数据库限 512 MiB/1 CPU；私有 1 GiB shm，不
 
 基础镜像缓存另记父运行目录 `linux-browser-image.json`，拉取前 fsync，固定 Playwright digest 上限 5 GiB/14 天；既有 Node/PostgreSQL/Playwright 镜像只借用。新增镜像确认 daemon、ID、digest、所有容器使用和额外引用后，仅非强制 `docker image rm <digest>`。与固定 digest 完全相同的 tag 仅视为本轮别名；其他 tag/digest 或其他容器引用仍视为共享。Docker inspect 的压缩 Size 不代替总体积：核对显示容量的保守上界，整轮维持 5 GiB 预留。共享时保留明确状态和到期时间；未闭合拉取、查询异常、身份变化或到期共享缓存阻止新拉取，保留待核对，不删除未知或其他项目资源。元数据不按报告垃圾回收，不清全局 image/builder cache。
 
-小型验证：受管 Python `test_linux_browser*.py` 及受管 Vitest `tools/src/deploy/linux-browser*.test.ts`，并核对既有容器归属/生产者回归。真实入口只用于已批准的 P6-S4 范围，不隐式恢复 Mac 浏览器或完整 Gate。
+小型验证：受管 Python `test_linux_browser*.py` 及受管 Vitest `tools/src/deploy/linux-browser*.test.ts`，并核对既有容器归属/生产者回归。真实入口只用于已批准的 S4 校准或 S5 自检清单，不隐式恢复 Mac 浏览器或完整 Gate。
 
 Linux guest 启动前还会持久写 `linux-browser-evidence-hold.json`。父 `finish` 与重启 sweep 在该标记存在时保留原件并登记 `cleanup-pending`；内层报告安全拒绝、未发布、清理未闭合或证据归属不明时不会解除。普通产品失败的安全报告全部导出后可解除，不把产品失败当成证据丢失。缺证明时不得计为通过；成功还须核对 guest 已停止且退出码为零、无 OOM，以及版本/源码/SDK 前后证明全部一致。
