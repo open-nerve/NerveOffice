@@ -349,13 +349,19 @@ def main():
         original = {}
         session = SessionGuard(args.kind)
         session_record = None
-        def request_stop(signum, frame):
-            stopped.append(signum)
+        def signal_live_child(signum):
             if child is not None and child.poll() is None:
                 try:
                     os.killpg(child.pid, signum)
                 except ProcessLookupError:
                     pass
+        def request_stop(signum, frame):
+            stopped.append(signum)
+            signal_live_child(signum)
+        def record_exit(code, **fields):
+            result = 128 + int(stopped[0]) if stopped else (128 - code if code < 0 else code)
+            run.update(commandExitCode=code, exitCode=result, interrupted=bool(stopped), **fields)
+            return result
         def check_session(force=False):
             nonlocal session_record
             healthy = session.check(force=force)
@@ -451,28 +457,27 @@ def main():
                 if stopped:
                     stop_at = stop_at or time.monotonic()
                     if time.monotonic() - stop_at > 10:
-                        if child.poll() is None:
-                            try:
-                                os.killpg(child.pid, signal.SIGKILL)
-                            except ProcessLookupError:
-                                pass
+                        signal_live_child(signal.SIGKILL)
                 time.sleep(.1)
             code = child.wait()
             # A zero exit racing with a desktop loss is still an interrupted run.
             check_session(force=True)
+            # These facts are already known even if cleanup must retain a live
+            # descendant or writer. Quiescence is recorded only after those checks.
+            record_exit(code)
             # Give normal browser shutdown time; never delete while descendants or handles remain.
             deadline = time.monotonic() + 3
             while group_alive(child.pid) and time.monotonic() < deadline:
                 time.sleep(.1)
             if group_alive(child.pid):
                 # The leader is gone: a PID/group number alone is not a new signal authorization.
-                run.update(status="cleanup-pending", cleanupError="首进程已退出但仍有同组进程；保留并等待归属复核")
-                return code or 1
+                return record_exit(code, status="cleanup-pending",
+                                   cleanupError="首进程已退出但仍有同组进程；保留并等待归属复核") or 1
             output_thread.join(timeout=5)
             if output_thread.is_alive():
-                run.update(status="cleanup-pending", cleanupError="输出仍有写入者")
-                return code or 1
-            result = 128 + int(stopped[0]) if stopped else (128 - code if code < 0 else code)
+                return record_exit(code, status="cleanup-pending", cleanupError="输出仍有写入者") or 1
+            # Include signals received during the bounded quiescence/join waits.
+            result = record_exit(code)
             # The final output chunk may arrive after the child already exited;
             # joining the thread is not evidence of successful log capture.
             if log_problem:
@@ -492,11 +497,11 @@ def main():
                     if fd >= 0:
                         os.close(fd)
                 if child is not None and child.poll() is None:
-                    os.killpg(child.pid, signal.SIGTERM)
+                    signal_live_child(signal.SIGTERM)
                     try:
                         child.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        os.killpg(child.pid, signal.SIGKILL); child.wait(timeout=5)
+                        signal_live_child(signal.SIGKILL); child.wait(timeout=5)
                 if run.data.get("status") in ("prepared", "running"):
                     if output_thread is not None:
                         output_thread.join(timeout=5)

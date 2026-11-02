@@ -24,6 +24,20 @@ Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `a
 
 需要 Python 3.9+、POSIX 文件锁和 `lsof`。缺少句柄查询能力时保留原件并返回待处理状态，不冒险删除。测试的断言、范围、重试与超时不由清理器更改。真实 Safari 的解锁、空闲 120 秒和用户活动中止条件仍适用。
 
+## macOS 桌面会话异常停止
+
+`tools/test-resources/desktop_session.py` 对 `e2e/container/measure/template/native/vm` 启用；外层本地门禁使用 `SessionGuard('gate')`。非 macOS 及非浏览器类型只记 `not-applicable`，没有桌面监测通过的含义，不得通过改变资源类型绕过检查。
+
+探针只用固定 `/bin/ps -ww -axo pid=,uid=,lstart=,comm=` 和 `/dev/console`，不读取进程参数/环境、不提权、不截图。核对当前 console UID、唯一系统 WindowServer 与当前用户唯一 loginwindow 的 PID/UID/启动时间/固定路径，并核对读取前后 console 用户一致。查询超时 2 秒，取得完整输出后仅接受 1 MiB 以内的无错误结果；这是接受上限，不是采集峰值内存的硬上限。多义、缺失、格式损坏或查询失败均停止，记录固定原因而不写原始进程表或 stderr。固定基线不能在运行中自动重建。
+
+内层在创建本轮临时资源后建立基线，实际测试命令仍受既有登记启动屏障约束；登记子进程后、释放命令前再次核对。运行中每 2 秒采样，命令结束后强制再读一次，避免返回 0 与桌面退出同时发生时被接受。只有仍存活的本轮子进程首进程允许发送组信号；沿原 SIGTERM、10 秒等待和 SIGKILL 处理，再核对整组/句柄/资源。所有正常及 finally 发送路径容忍组恰好消失，并在升级前重新核对首进程。首进程退出后存在其他引用时继续保留，不能凭旧组号补杀。记录 `desktopSession`、`stopReason=desktop-session`、原命令退出码和中断结果；等待清理时收到的晚到中断也会纳入最终结果。即使进入 `cleanup-pending` 仍保留已知退出/中断事实；清理是否完成仍按实际证据独立判断。
+
+P5 外层 `s6/gate_helpers.py` 复用该探针和原有信号升级；会话失效时固定记录 `needs-attention`，后续 `run-gate.py` 拒绝直接开始下一轮。首次拒绝发生在命令启动前时，原命令退出码为 `null`；不得伪造一次已执行测试。内外层各自监测自己的进程，并不以外层还活着为内层前提。正式后续输入须重新绑定修改后的包装摘要，不复用旧门禁证明。
+
+2 秒是采样间隔，不是硬实时停止保证；查询、调度和原有退出等待会影响延迟。普通锁屏、空闲与真实 Safari 前置检查继续由原规则处理。本保护只能减少桌面失效后的连锁测试，不预防首次 IOSurface 耗尽，也不能在监测器被强制终止后继续运行；异常残留沿下一次启动的归属检查恢复。磁盘/RSS 正常或本保护的模拟通过均不能证明长测安全。
+
+小型回归：`python3 tools/test-resources/run.py unit -- python3 -m unittest discover -s tools/test-resources -p 'test_desktop_session*.py'`；完整资源机制仍用 `pnpm test:cleanup:check`。只创建 KiB 级样本与短命 Python 子进程，不启动真实浏览器、数据库或 VM。
+
 ## 报告配置与凭据边界
 
 Playwright 的 webServer 默认继承父进程环境。不要把 `process.env` 展开到公开配置的 `webServer.env`：JSON reporter 会保存显式环境对象。正常子进程环境传递继续使用原入口，禁止以删除数据库/资源参数代替修正报告配置。`tools/src/verify/report-environment.test.ts` 用隔离的虚构 canary、真实配置列举和微型 HTTP 服务核对继承及真实 JSON/HTML 字节，不使用 Agent 或 CI 凭据。
