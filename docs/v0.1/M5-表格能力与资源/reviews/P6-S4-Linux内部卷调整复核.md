@@ -26,3 +26,15 @@
 - 本次 20 轮受管记录已核对，临时目录均实际清理，无 cleanup-pending。源码指纹、运行 UUID 和失败观察分别见 `s4/volume-preparation-verification01.json` 与 `volume-unit-full01-observation.json`。
 
 接下来正常中文提交，工作区 clean 后使用 `pnpm test:e2e:linux` 继续已批准的固定 1+13 条校准；任一失败停止，不自动重试。现有 Docker 资源分配保持，本机浏览器、完整 Gate、生产容器全量与最终 CI 仍未恢复或签署。
+
+## pilot02：依赖安装顺序修正
+
+固定提交 `8ac7d976` 的第二轮 UUID 为 `1e9e0de3-3ce7-431a-8fea-9979763a6bbc`。内部卷上的安装前完整 lsof 预检通过；新增的 `pnpm exec` 在显式依赖安装之前运行，pnpm 12.6.0 自动安装依赖并触发根 `prepare`。源码副本没有 `.git`，因此 `lefthook install` 失败；浏览器实际执行数仍为零。原件索引见 `s4/pilot02-result.json`。
+
+这是入口顺序错误。修正为先完成原 `--frozen-lockfile --ignore-scripts --store-dir /owned/pnpm-store` 安装，成功后再以存活 pnpm 执行原完整句柄预检；失败立即停止。未改变宿主提交钩子、依赖版本、供应链配置、产品断言或浏览器时限。
+
+使用无外部依赖、无 Git 的微型 package 和真实固定 pnpm 复现：旧顺序会执行带标记的 prepare 并失败，修正后 prepare 不执行、锁文件字节不变、预检执行。另一个反例验证安装失败不进入预检。两项 RED 已观察；guest/evidence/transport 共 34 项 GREEN，运行 UUID `85721575-c3f2-4cdc-b111-f2bff517dc92`。三轮小样例的 scratch 与短目录均已实际清理。
+
+pilot02 的父状态保持 failed；本轮容器、网络、两卷已闭合，scratch 和短目录不存在。报告沿普通 14 天/5 GiB 策略保留，不 pin 每轮失败。原三个服务正常运行；本次未再次重启 Docker，未调整配额。限定复审后正常提交，以新固定 SHA 再接续原 14 条；尚不构成 S4 或 M5 验收。
+
+安装顺序增量已完成独立只读复审，C/I/M=0/0/0；复核了两个 RED 原日志、34 项 GREEN 与源码摘要及临时资源归属。下一轮真实校准结果须另行保存，不以本次局部通过替代。

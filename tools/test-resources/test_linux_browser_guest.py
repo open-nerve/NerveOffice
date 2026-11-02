@@ -1,13 +1,56 @@
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import linux_browser_guest as subject
 from test_linux_browser_evidence import report
 
 
 class GuestTests(unittest.TestCase):
+    def test_fresh_gitless_install_does_not_run_prepare_before_pnpm_preflight(self):
+        # Regression: pnpm 12 exec installs missing dependencies and runs prepare.
+        # Exercise the real pinned pnpm with no external packages or browser.
+        with tempfile.TemporaryDirectory(prefix='nerve-linux-install-') as directory:
+            root = Path(directory).resolve(); repo = root / 'source'; repo.mkdir()
+            (repo / 'pnpm-workspace.yaml').write_text('packages: []\n')
+            (repo / 'prepare.cjs').write_text("require('node:fs').writeFileSync('prepare-ran', 'unexpected'); process.exit(42);\n")
+            (repo / 'package.json').write_text(json.dumps({
+                'name': 'nerve-guest-install-regression', 'version': '1.0.0', 'private': True,
+                'packageManager': 'pnpm@12.6.0', 'scripts': {'prepare': 'node prepare.cjs'},
+            }))
+            (root / 'empty.npmrc').write_text('')
+            environment = {'XDG_STATE_HOME': str(root / 'state'), 'XDG_CACHE_HOME': str(root / 'cache'),
+                           'XDG_DATA_HOME': str(root / 'data'), 'XDG_CONFIG_HOME': str(root / 'config'),
+                           'npm_config_userconfig': str(root / 'empty.npmrc'),
+                           'npm_config_cache': str(root / 'npm-cache'), 'CI': '1'}
+            probe = root / 'probe.py'
+            probe.write_text("from pathlib import Path\nPath('probe-ran').write_text('complete')\n")
+            with patch.dict(os.environ, environment), patch.object(subject, '__file__', str(probe)):
+                self.assertEqual(subprocess.check_output(['pnpm', '--version'], text=True).strip(), '12.6.0')
+                subprocess.check_call(['pnpm', 'install', '--lockfile-only', '--ignore-scripts',
+                                       '--store-dir', str(root / 'pnpm-store')], cwd=repo)
+                lock = (repo / 'pnpm-lock.yaml').read_bytes()
+                execute = lambda args: subprocess.call(args, cwd=repo)
+                try:
+                    status = subject.install_dependencies(repo, root, execute)
+                except subprocess.CalledProcessError as error:
+                    self.fail('preflight invoked implicit install/prepare before explicit install: '
+                              + str((repo / 'prepare-ran').exists()) + '; exit=' + str(error.returncode))
+            self.assertEqual(status, 0)
+            self.assertEqual((repo / 'probe-ran').read_text(), 'complete')
+            self.assertFalse((repo / 'prepare-ran').exists())
+            self.assertEqual((repo / 'pnpm-lock.yaml').read_bytes(), lock)
+
+    def test_failed_install_stops_before_pnpm_preflight(self):
+        with patch.object(subject.subprocess, 'check_call',
+                          side_effect=AssertionError('preflight started after failed install')):
+            self.assertEqual(subject.install_dependencies(Path('/unused/source'), Path('/unused'),
+                                                          lambda args: 23), 23)
+
     def test_failed_calibration_does_not_start_stories_and_keeps_small_evidence(self):
         with tempfile.TemporaryDirectory(prefix='nerve-linux-guest-') as directory:
             root = Path(directory).resolve(); repo = root / 'source'; repo.mkdir()

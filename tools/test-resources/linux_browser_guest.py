@@ -52,6 +52,17 @@ def handle_preflight(root, phase, check=open_paths):
                {'version': 1, 'phase': phase, 'completeQueryPassed': True})
 
 
+def install_dependencies(repo, root, execute):
+    # Source copy deliberately has no .git. This follows the existing image
+    # install policy; the real host commit hooks are unaffected. pnpm 12 exec
+    # can auto-install, so run it only after this explicit installation succeeds.
+    status = execute(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--store-dir', str(root / 'pnpm-store')])
+    if status != 0:
+        return status
+    subprocess.check_call(['pnpm', 'exec', 'python3', '-B', str(Path(__file__)), '--handle-preflight'], cwd=repo)
+    return 0
+
+
 def main():
     root = Path('/owned'); repo = root / 'source'; evidence = root / 'evidence'
     evidence.mkdir(exist_ok=True)
@@ -78,10 +89,7 @@ def main():
         versions['pnpm'] = subprocess.check_output(['pnpm', '--version'], text=True).strip()
         if versions['pnpm'] != '12.6.0':
             raise ValueError('guest-pnpm-mismatch')
-        subprocess.check_call(['pnpm', 'exec', 'python3', '-B', str(Path(__file__)), '--handle-preflight'], cwd=repo)
-        # Source copy deliberately has no .git. This follows the existing image
-        # install policy; the real host commit hooks are unaffected.
-        if execute(['pnpm', 'install', '--frozen-lockfile', '--ignore-scripts', '--store-dir', '/owned/pnpm-store']) != 0:
+        if install_dependencies(repo, root, execute) != 0:
             return 1
         versions['playwright'] = read_json(repo / 'tests/e2e/node_modules/@playwright/test/package.json')['version']
         if versions['playwright'] != '1.63.0':
