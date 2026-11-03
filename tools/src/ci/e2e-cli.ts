@@ -6,7 +6,7 @@ import process from 'node:process'
 import { REPO_ROOT } from '../shared/repo.ts'
 import { checkReports } from './e2e-command.ts'
 import { failureStageSchema, processDiagnostic } from './e2e-diagnostics.ts'
-import { prepareRun, recordProcessFailure, runOwnedCommand, settleRun, snapshotDiagnostics } from './e2e-process.ts'
+import { ciBudgetsForBrowser, prepareRun, recordProcessFailure, runOwnedCommand, settleRun, snapshotDiagnostics } from './e2e-process.ts'
 
 async function main(): Promise<number> {
   const directory = process.env.NERVE_CI_E2E_STATE
@@ -14,7 +14,7 @@ async function main(): Promise<number> {
     throw new Error('CI E2E 工具需要 CI=true 与本轮独占目录')
   switch (process.argv[2] ?? '') {
     case 'prepare':
-      prepareRun(directory, REPO_ROOT)
+      prepareRun(directory, REPO_ROOT, ciBudgetsForBrowser(process.env.E2E_BROWSERS))
       return 0
     case 'run': {
       const cwd = join(REPO_ROOT, 'tests/e2e')

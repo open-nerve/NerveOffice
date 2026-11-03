@@ -1,5 +1,7 @@
 # P6-S5 云端首轮结果与 WebKit 总时限建议
 
+2026-11-03 接续决定：用户已批准本篇固定 WebKit run 120 / step 145 / job 170 分钟的例外，经小型验证和独审后以新 SHA 继续原六项 CI；下文“尚待决定”保留为提案时历史。实际实施与验证见[窗口调整复核](P6-S5-WebKit整批窗口调整复核.md)，不追认旧 CI 通过，不恢复本机浏览器长测。
+
 2026-11-03。原六项 CI [41622949552](https://github.com/open-nerve/NerveOffice/actions/runs/41622949552) 已结束，固定输入 `2fcd4b2e604f068e81620cbc5491d0dbc5f0750f`、P6 分支、workflow_dispatch、attempt 1。**整体失败，未验收。**没有重跑旧 SHA，也没有移动远端受测分支。
 
 ## 已取得的结果

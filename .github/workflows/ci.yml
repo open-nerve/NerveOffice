@@ -114,9 +114,9 @@ jobs:
   e2e:
     name: pnpm verify --ci --scope=e2e（${{ matrix.browser }}）
     runs-on: ubuntu-24.04
-    # 执行器给原 Playwright CLI 90 分钟运行 + 独立 15 分钟夹具/报告收尾，再最多 1 分钟强制核验。
-    # 外层步骤 115、job 140 分钟留构建/安装/归档余量；原单例时限、重试与浏览器范围不变。
-    timeout-minutes: 140
+    # WebKit 整批 120 分钟，其他分片仍为 90 分钟；独立 15 分钟收尾与最多 1 分钟强制核验保持。
+    # 外层 step/job 同步给 WebKit 增加 30 分钟；原单例时限、次数、重试与资源限制不变。
+    timeout-minutes: ${{ matrix.browser == 'webkit' && 170 || 140 }}
     strategy:
       fail-fast: false
       matrix:
@@ -189,7 +189,7 @@ jobs:
           printf 'NERVE_CI_E2E_STATE=%s\n' "$NERVE_CI_E2E_STATE" >> "$GITHUB_ENV"
 
       - name: pnpm verify --ci --scope=e2e
-        timeout-minutes: 115
+        timeout-minutes: ${{ matrix.browser == 'webkit' && 145 || 115 }}
         run: pnpm verify --ci --keep-going --scope=e2e
 
       - name: 确认本轮全部写入者退出（含外层终止后的恢复收尾）
