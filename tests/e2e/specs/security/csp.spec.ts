@@ -3,7 +3,7 @@
 // 安全头的用例只用生产构建里的文件，本机与外部两种运行方式都执行（外部模式经 Caddy 的 HTTPS，另核对 HSTS）；
 // 阳性对照与对照要打开测试构建里的探针页（csp-probe.html），标签 @test-build：测生产镜像的外部模式按标签排除（P5 设计 §3.6，审查 B2）。
 import type { Page } from '@playwright/test'
-import type { LocalServer } from '../../support/servers.ts'
+import type { TargetServer } from '../../support/servers.ts'
 import { randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
@@ -67,7 +67,7 @@ test.describe('US-M1-09 CSP 与安全头', () => {
   })
 
   test.describe('探针', { tag: '@test-build' }, () => {
-    let target: LocalServer
+    let target: TargetServer
 
     test.beforeEach(async () => {
       target = await startTargetServer()
@@ -108,7 +108,7 @@ test.describe('US-M1-09 CSP 与安全头', () => {
       finally {
         watcher.stop()
         await control.close()
-        await testInfo.attach('request-observer-control', { body: JSON.stringify({ requests: watcher.list(), targetHits: target.hits() }), contentType: 'application/json' })
+        await testInfo.attach('request-observer-control', { body: JSON.stringify({ requests: watcher.list(), targetHits: target.hits(), targetRequests: target.requests() }), contentType: 'application/json' })
       }
     })
   })
