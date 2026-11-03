@@ -212,3 +212,17 @@ runner 限 4 GiB RAM/3 CPU，数据库限 512 MiB/1 CPU；私有 1 GiB shm，不
 小型验证：受管 Python `test_linux_browser*.py` 及受管 Vitest `tools/src/deploy/linux-browser*.test.ts`，并核对既有容器归属/生产者回归。真实入口只用于已批准的 S4 校准或 S5 自检清单，不隐式恢复 Mac 浏览器或完整 Gate。
 
 Linux guest 启动前还会持久写 `linux-browser-evidence-hold.json`。父 `finish` 与重启 sweep 在该标记存在时保留原件并登记 `cleanup-pending`；内层报告安全拒绝、未发布、清理未闭合或证据归属不明时不会解除。普通产品失败的安全报告全部导出后可解除，不把产品失败当成证据丢失。缺证明时不得计为通过；成功还须核对 guest 已停止且退出码为零、无 OOM，以及版本/源码/SDK 前后证明全部一致。
+
+## 2026-11-03 资源回归接续
+
+用户批准整体进度中的下一步后，真实子运行夹具继续接入 `ManagedFixture`，详见 [接续计划](../v0.1/M5-表格能力与资源/plans/P6-S5-资源夹具接续与整组回归.md)。`pnpm test:cleanup:check` 保留全部 `test_*.py`，增加 unittest `-f`，遇到首个异常停止；不删除测试或降低原断言。
+
+接入范围：DesktopSessionRunnerTests 全部真实/屏障子运行，RunnerTests 的报告轮转、CI settle/恢复和退出码/中断链，Node 协议三个实际父子入口，正常短路径/受控预检失败后恢复/管道关闭，VM 短路径恢复（只创建 KiB 文件），Linux 证据 hold 的拒绝与恢复。创建前有外层 hold，内层异常先导出，无法证明闭合时保留原件，外层 finish/sweep 均不能删除。
+
+Node `killed` 用例始终通过自制 `owned-protocol.mjs` 的内存 capture 函数模拟全部 Docker API，未调用 Docker daemon。该固定模型在创建前登记 `node-docker-stub-v1`；原来的 pending、诊断导出、未发布、env 保留以及 sweep 不修改协议台账断言全部保留。断言成立后，测试辅助核对固定模型字段、租约、真实生产者退出、目录/短根身份及完整句柄查询，保存有界原始台账和 `test-model-only` 处置说明，仅退役自己的真实短根，本地模型文件仍由外层严格回收。原 run.json 不改成 complete/passed，`realDockerClosureObserved=false`；没有预登记、真实服务/托管记录、活跃组、句柄或身份问题一律保留。不能将此测试辅助用于产品资源回收。
+
+`HostedLifecycleTests.command()` 的七个真实子进程入口同样在启动前使用独立 `ManagedFixture`，登记 `hosted-command-observation-v1`。纯模型初始化目录不被认领；已存在其他模型 run 时拒绝切入该入口。收尾先释放本例租约、解除 lsof/平台/环境模拟，再执行真实组、完整句柄及短根身份核验。固定的假 runner/run/attempt/SHA/boot/job 与严格 hosted scope 必须匹配，拒绝容器和 service scope；保存原 `host-disposal-pending` 台账与有界命令日志，处置记录为 `test-model-only`、`hostDisposalObserved=false`。不把本机测试模型退役称为实测 GitHub VM 销毁。
+
+Node 模型在导出协议原字节前复用 `container_resources.read` 的严格 JSON、全字段和命名空间校验，再拒绝不属于 killed 时点的附加观测/异常/闭合字段。两个模型都在取得子锁前核对整个夹具的实际句柄，持锁后继续核对 scratch 和短根；不忽略查询结果或豁免整个 PID。
+
+其余纯内存/文件协议测试、不调用真实 command 的 hosted/service-scope 观察模型与故意破坏短根身份的模型继续保留测试控制的样本处置；它们不代表实测平台销毁或未知资源被安全清理。未将本轮接入表述为所有旧模拟夹具已做统一迁移。

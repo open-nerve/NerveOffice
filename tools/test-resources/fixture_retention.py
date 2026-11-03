@@ -7,6 +7,7 @@ import stat
 import uuid
 
 import lifecycle
+import container_resources
 
 CHILD_LIMIT = 64 * 1024
 REPORT_LIMIT = 1024 * 1024
@@ -63,7 +64,9 @@ def report_size(root):
 
 
 class ManagedFixture:
-    def __init__(self):
+    def __init__(self, *, simulation=None):
+        if simulation not in (None, 'node-docker-stub-v1', 'hosted-command-observation-v1'):
+            raise ValueError('fixture-simulation-kind')
         self.parent = Path(os.environ['NERVE_TEST_RUN_DIR']).absolute()
         owner = decode(read_bytes(self.parent / 'run.json', CHILD_LIMIT))
         token = os.environ['NERVE_TEST_RUN_ID']
@@ -94,7 +97,8 @@ class ManagedFixture:
                 if decode(read_bytes(existing, CHILD_LIMIT)).get('state') == 'pending':
                     raise RuntimeError('prior-fixture-retained')
             self.record = {'version': 1, 'parentRunId': token, 'fixtureId': self.token,
-                           'root': str(self.path), 'identity': None, 'state': 'reserved'}
+                           'root': str(self.path), 'identity': None, 'state': 'reserved',
+                           'simulation': simulation}
             if self.hold.exists() or self.hold.is_symlink():
                 raise ValueError('fixture-registration-exists')
             lifecycle.atomic_json(self.hold, self.record)  # Durable before mkdir.
@@ -197,7 +201,8 @@ class ManagedFixture:
                         continue
                     files = {'run.json': raw}
                     short = value.get('shortRoot')
-                    expected_short = Path('/tmp').resolve() / ('nerve-t-' + root.name)
+                    vm = value.get('kind') == 'vm'
+                    expected_short = Path('/tmp').resolve() / (('nerve-vm-' if vm else 'nerve-t-') + root.name)
                     if short is not None:
                         if short != str(expected_short):
                             raise ValueError('fixture-short-owner')
@@ -205,7 +210,7 @@ class ManagedFixture:
                             if identity(expected_short) != value.get('shortRootIdentity'):
                                 raise ValueError('fixture-short-identity')
                             files['short-owner.json'] = read_bytes(expected_short / 'owner.json', CHILD_LIMIT)
-                            if decode(files['short-owner.json']) != {'runId': root.name, 'repo': str(self.path), 'kind': 'test-short-path'}:
+                            if decode(files['short-owner.json']) != {'runId': root.name, 'repo': str(self.path), 'kind': 'vm-short-path' if vm else 'test-short-path'}:
                                 raise ValueError('fixture-short-owner')
                     summary = {'version': 1, 'parentRunId': self.record['parentRunId'],
                                'fixtureId': self.token, 'runId': root.name, 'root': str(self.path),
@@ -249,7 +254,7 @@ class ManagedFixture:
                                 or lifecycle.group_alive(value.get('childGroup'))):
                             raise RuntimeError('fixture-child-not-closed')
                         scratch = root / 'scratch'
-                        short = Path('/tmp').resolve() / ('nerve-t-' + root.name)
+                        short = Path('/tmp').resolve() / (('nerve-vm-' if value.get('kind') == 'vm' else 'nerve-t-') + root.name)
                         if (scratch.exists() or scratch.is_symlink() or short.exists() or short.is_symlink()):
                             raise RuntimeError('fixture-child-resources-remain')
                 self.verify()
@@ -258,6 +263,104 @@ class ManagedFixture:
                     self.holds.rmdir()
                 self.closed = True
         except (OSError, ValueError, RuntimeError, KeyError) as error:
+            self.pending(error)
+
+    def dispose_node_protocol_model(self):
+        self._dispose_model('node-docker-stub-v1')
+
+    def dispose_hosted_command_model(self):
+        self._dispose_model('hosted-command-observation-v1')
+
+    def _model_evidence(self, mode, owner, value):
+        """Validate the fixed synthetic observations BEFORE exporting raw bytes."""
+        root = owner.directory
+        if mode == 'node-docker-stub-v1':
+            ledger, raw = container_resources.read(root, root.name, self.path, owner.scratch)
+            if (value.get('kind') != 'container' or value.get('status') != 'cleanup-pending'
+                    or value.get('hostedScope') is not None
+                    or ledger['daemon'] != 'protocol-daemon' or ledger['state'] != 'reserved'
+                    or ledger['producers'] != [None]
+                    or ledger['observed'] != {key: [] for key in container_resources.KINDS}
+                    or set(ledger) & {'observedImageIds', 'problem', 'cleanupFailures', 'closure'}):
+                raise ValueError('fixture-node-model-changed')
+            return {'simulation-ledger.json': raw}, {'realDockerClosureObserved': False,
+                                                     'ledgerSha256': hashlib.sha256(raw).hexdigest()}
+        if mode != 'hosted-command-observation-v1':
+            raise ValueError('fixture-unregistered-simulation')
+        if (value.get('kind') not in ('check', 'integration')
+                or 'containerResources' in value
+                or value.get('status') not in ('passed', 'failed', 'interrupted')
+                or value.get('cleanupStage') != 'host-disposal-pending'
+                or value.get('cleanupComplete') is not False):
+            raise ValueError('fixture-hosted-model-changed')
+        context = {'version': 1, 'policy': 'github-hosted-vm', 'repo': str(self.path),
+                   'repository': 'open-nerve/NerveOffice', 'sha': 'a' * 40,
+                   'runId': '40600596503', 'attempt': '2',
+                   'job': 'verify' if value['kind'] == 'integration' else 'e2e',
+                   'runner': 'GitHub Actions test',
+                   'bootId': '66666666-7777-4888-8999-aaaaaaaaaaaa'}
+        lifecycle.hosted.validate(value.get('hostedScope'), context, root.name, owner.scope_roots())
+        if value.get('scopePaths', {}).get(str(owner.scratch)) != identity(owner.scratch):
+            raise ValueError('fixture-hosted-scratch-identity')
+        log = root / 'command.log'
+        files = {'simulation-command.log': read_bytes(log, CHILD_LIMIT)} if log.exists() else {}
+        return files, {'hostDisposalObserved': False}
+
+    def _dispose_model(self, mode):
+        """End fixed test models after real quiescence, keeping their original state.
+
+        No production run uses this test utility. The caller must restore injected
+        platform observations first. Raw source ledgers are never rewritten as
+        complete; the outer owner removes only the remaining local model files.
+        """
+        if self.closed:
+            return
+        records = self.capture()
+        try:
+            with lifecycle.locked(self.lock):
+                self.verify()
+                if self.record.get('simulation') != mode or len(records) != 1:
+                    raise ValueError('fixture-unregistered-simulation')
+                # Query before acquiring a child lock inside this root. Never
+                # suppress an open-path result or whitelist an entire process.
+                if lifecycle.open_paths(self.path):
+                    raise RuntimeError('fixture-open-handles')
+                root, value, raw = records[0]
+                owner = lifecycle.Run(lifecycle.Store(self.path), root, existing=True)
+                try:
+                    if (read_bytes(root / 'run.json', CHILD_LIMIT) != raw
+                            or value.get('producerQuiescent') is not True
+                            or value.get('serviceScope') is not None):
+                        raise ValueError('fixture-model-producer-or-scope')
+                    files, flags = self._model_evidence(mode, owner, value)
+                    owner.assert_quiescent()
+                    proof = {'version': 1, 'fixtureId': self.token, 'runId': root.name,
+                             'simulation': mode, 'disposition': 'test-model-only',
+                             'runSha256': hashlib.sha256(raw).hexdigest(),
+                             'firstObservedRunSha256': self.exports[root.name]['run.json'], **flags}
+                    files['simulation-disposition.json'] = (json.dumps(proof, indent=2) + '\n').encode()
+                    size = sum(map(len, files.values()))
+                    if report_size(self.evidence / root.name) + size > CHILD_LIMIT or report_size(self.report_root) + size > REPORT_LIMIT:
+                        raise ValueError('fixture-evidence-budget')
+                    for name, data in files.items():
+                        target = self.evidence / name
+                        if target.exists() or target.is_symlink():
+                            raise ValueError('fixture-simulation-export-exists')
+                        lifecycle.atomic_bytes(target, data)
+                        if read_bytes(target, CHILD_LIMIT) != data:
+                            raise ValueError('fixture-export-mismatch')
+                    owner.retire_short_root()
+                    short = Path(owner.scope_roots()['short'])
+                    if short.exists() or short.is_symlink() or read_bytes(root / 'run.json', CHILD_LIMIT) != raw:
+                        raise ValueError('fixture-model-resources-remain')
+                    self.verify()
+                    self.hold.unlink()
+                    if not any(self.holds.iterdir()):
+                        self.holds.rmdir()
+                    self.closed = True
+                finally:
+                    owner.release()
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
             self.pending(error)
 
     def __enter__(self):

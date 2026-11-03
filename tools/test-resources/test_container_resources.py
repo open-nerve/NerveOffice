@@ -170,28 +170,35 @@ process.exitCode = process.argv[2] === 'failed' ? 9 : 0
             self.assertFalse((directory / 'scratch').exists())
 
     def test_product_failure_is_preserved_after_actual_node_cleanup(self):
-        result, value, receipt, directory = self.run_node_protocol('failed')
-        self.assertEqual(result.returncode, 9, result.stdout + result.stderr)
-        self.assertEqual(value['status'], 'failed')
-        self.assertTrue(receipt['dockerClosed'])
-        self.assertFalse((directory / 'scratch').exists())
+        with ManagedFixture() as self.fixture:
+            self.repo = self.fixture.path
+            self.store = Store(self.repo)
+            result, value, receipt, directory = self.run_node_protocol('failed')
+            self.assertEqual(result.returncode, 9, result.stdout + result.stderr)
+            self.assertEqual(value['status'], 'failed')
+            self.assertTrue(receipt['dockerClosed'])
+            self.assertFalse((directory / 'scratch').exists())
 
     def test_killed_node_exports_only_pending_diagnostic_and_retains_ledger_and_env(self):
-        result, value, receipt, directory = self.run_node_protocol('killed')
-        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(value['status'], 'cleanup-pending')
-        self.assertTrue(value['containerDiagnosticOnly'])
-        self.assertFalse(value['publicationComplete'])
-        self.assertFalse(receipt['dockerClosed'])
-        self.assertTrue(receipt['diagnosticOnly'])
-        self.assertTrue(list((directory / 'scratch/tmp').glob('env-*/test.env')))
-        self.assertEqual(json.loads((directory / 'container-resources.json').read_text())['producers'], [None])
-        exported = self.repo / 'tests/e2e/test-results'
-        self.assertEqual(sorted(p.name for p in exported.iterdir()),
-                         ['cleanup-receipt.json', 'container-resource-ledger.json', 'container-resource-receipt.json', 'resource-run.json'])
-        before = (directory / 'container-resources.json').read_bytes()
-        self.store.sweep(); self.store.sweep()
-        self.assertEqual((directory / 'container-resources.json').read_bytes(), before)
+        with ManagedFixture(simulation='node-docker-stub-v1') as self.fixture:
+            self.repo = self.fixture.path
+            self.store = Store(self.repo)
+            result, value, receipt, directory = self.run_node_protocol('killed')
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(value['status'], 'cleanup-pending')
+            self.assertTrue(value['containerDiagnosticOnly'])
+            self.assertFalse(value['publicationComplete'])
+            self.assertFalse(receipt['dockerClosed'])
+            self.assertTrue(receipt['diagnosticOnly'])
+            self.assertTrue(list((directory / 'scratch/tmp').glob('env-*/test.env')))
+            self.assertEqual(json.loads((directory / 'container-resources.json').read_text())['producers'], [None])
+            exported = self.repo / 'tests/e2e/test-results'
+            self.assertEqual(sorted(p.name for p in exported.iterdir()),
+                             ['cleanup-receipt.json', 'container-resource-ledger.json', 'container-resource-receipt.json', 'resource-run.json'])
+            before = (directory / 'container-resources.json').read_bytes()
+            self.store.sweep(); self.store.sweep()
+            self.assertEqual((directory / 'container-resources.json').read_bytes(), before)
+            self.fixture.dispose_node_protocol_model()
 
 
     def closed(self, run):

@@ -1,17 +1,17 @@
 """KiB fixtures: a rejected inner report must survive outer cleanup/restart."""
-import tempfile
 from pathlib import Path
 import subprocess
 import sys
 import unittest
 
+from fixture_retention import ManagedFixture
 from lifecycle import Store
 
 
 class EvidenceRetentionTests(unittest.TestCase):
     def test_hold_keeps_original_across_finish_and_sweep_until_explicit_release(self):
-        with tempfile.TemporaryDirectory(prefix='nerve-linux-hold-') as directory:
-            store = Store(Path(directory).resolve())
+        with ManagedFixture() as fixture:
+            store = Store(fixture.path)
             run = store.create('container')
             original = run.scratch / 'rejected-report.json'
             original.write_text('{"fixture":"original"}')

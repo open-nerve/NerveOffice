@@ -17,6 +17,7 @@ from unittest.mock import patch
 import lifecycle
 import run as runner
 import container_resources
+from fixture_retention import ManagedFixture
 
 
 UNKNOWN = b'p987654\nf3\ntsock\nnprotocol: UNIX-STREAM\n'
@@ -25,6 +26,7 @@ CLEAR = b'p987654\nfcwd\ntDIR\nn/unrelated\n'
 
 class HostedLifecycleTests(unittest.TestCase):
     def setUp(self):
+        self.fixture = None
         self.temp = tempfile.TemporaryDirectory(dir=os.environ['TMPDIR'])
         self.addCleanup(self.temp.cleanup)
         self.repo = Path(self.temp.name).resolve()
@@ -48,10 +50,19 @@ class HostedLifecycleTests(unittest.TestCase):
         for run in self.runs:
             run.release()
             short = run.data.get('shortRoot')
-            if short:
+            if short and self.fixture is None:
                 root = Path(short)
                 if root.is_dir() and json.loads((root / 'owner.json').read_text())['runId'] == run.id:
                     shutil.rmtree(root)
+
+    def finish_managed_command(self):
+        # These patches model hosted lsof observations, not actual host quiescence.
+        for value in self.runs:
+            value.release()
+        self.query.stop()
+        self.host.stop()
+        self.environment.stop()
+        self.fixture.dispose_hosted_command_model()
 
     def create(self, kind='e2e'):
         value = self.store.create(kind)
@@ -145,6 +156,14 @@ class HostedLifecycleTests(unittest.TestCase):
 
     def command(self, script, *, kind='check', wait_for_output=False):
         """Run an actual child and pipe; only advance the output thread's schedule."""
+        if self.fixture is None:
+            if self.runs:
+                raise ValueError('real-command-cannot-adopt-earlier-model-runs')
+            self.fixture = ManagedFixture(simulation='hosted-command-observation-v1')
+            self.addCleanup(self.finish_managed_command)
+            self.repo = self.fixture.path
+            self.context['repo'] = str(self.repo)
+            self.store = lifecycle.Store(self.repo)
         created = []
         children = []
         real_create = lifecycle.Store.create

@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from fixture_retention import ManagedFixture
 from lifecycle import Store, lsof_incomplete_records, open_paths
 from run import evidence_snapshot
 
@@ -56,29 +57,37 @@ class ShortPathTests(unittest.TestCase):
         return profile
 
     def test_runner_uses_short_alias_but_writes_to_canonical_scratch(self):
-        runner = Path(__file__).with_name("run.py")
-        command = "import os,pathlib,json; p=pathlib.Path(os.environ['TMPDIR']); (p/'sample').write_text('owned'); print(json.dumps({'tmp':str(p),'resolved':str(p.resolve()),'allEqual':os.environ['TMPDIR']==os.environ['TMP']==os.environ['TEMP']}))"
-        result = subprocess.run([sys.executable, "-B", str(runner), "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command], capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        observed = json.loads(result.stdout)
-        directory, = (self.store.root / "runs").iterdir()
-        receipt = json.loads((directory / "run.json").read_text())
-        expected = Path("/tmp").resolve() / ("nerve-t-" + directory.name)
-        self.assertEqual(observed["tmp"], str(expected / "t"))
-        self.assertEqual(observed["resolved"], str(directory / "scratch/tmp"))
-        self.assertTrue(observed["allEqual"])
-        self.assertEqual(receipt["shortRoot"], str(expected))
-        self.assertFalse(expected.exists())
-        self.assertFalse((directory / "scratch").exists())
+        with ManagedFixture() as fixture:
+            self.repo = fixture.path
+            self.store = Store(self.repo)
+            runner = Path(__file__).with_name("run.py")
+            command = "import os,pathlib,json; p=pathlib.Path(os.environ['TMPDIR']); (p/'sample').write_text('owned'); print(json.dumps({'tmp':str(p),'resolved':str(p.resolve()),'allEqual':os.environ['TMPDIR']==os.environ['TMP']==os.environ['TEMP']}))"
+            result = subprocess.run([sys.executable, "-B", str(runner), "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command], capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            observed = json.loads(result.stdout)
+            directory, = (self.store.root / "runs").iterdir()
+            receipt = json.loads((directory / "run.json").read_text())
+            expected = Path("/tmp").resolve() / ("nerve-t-" + directory.name)
+            self.assertEqual(observed["tmp"], str(expected / "t"))
+            self.assertEqual(observed["resolved"], str(directory / "scratch/tmp"))
+            self.assertTrue(observed["allEqual"])
+            self.assertEqual(receipt["shortRoot"], str(expected))
+            self.assertFalse(expected.exists())
+            self.assertFalse((directory / "scratch").exists())
+
 
     def test_non_vm_drops_inherited_vm_short_root(self):
-        runner = Path(__file__).with_name("run.py")
-        command = "import os,json; print(json.dumps(os.environ.get('NERVE_TEST_SHORT_ROOT')))"
-        result = subprocess.run([sys.executable, "-B", str(runner), "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command],
-                                env=dict(os.environ, NERVE_TEST_SHORT_ROOT="/not-this-run"),
-                                capture_output=True, text=True, timeout=20)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIsNone(json.loads(result.stdout))
+        with ManagedFixture() as fixture:
+            self.repo = fixture.path
+            self.store = Store(self.repo)
+            runner = Path(__file__).with_name("run.py")
+            command = "import os,json; print(json.dumps(os.environ.get('NERVE_TEST_SHORT_ROOT')))"
+            result = subprocess.run([sys.executable, "-B", str(runner), "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command],
+                                    env=dict(os.environ, NERVE_TEST_SHORT_ROOT="/not-this-run"),
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIsNone(json.loads(result.stdout))
+
 
     def test_socket_blocks_compaction_before_any_profile_is_modified(self):
         run, root, alias = self.alias()
@@ -236,22 +245,26 @@ class ShortPathTests(unittest.TestCase):
         self.assertFalse(root.exists())
 
     def test_sigterm_during_alias_creation_never_starts_command_and_cleans_roots(self):
-        import run as runner
-        original = Path.symlink_to
-        def interrupt(path, *args, **kwargs):
-            os.kill(os.getpid(), signal.SIGTERM)
-            return original(path, *args, **kwargs)
-        with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", "raise AssertionError('must not start')"]), patch.object(Path, "symlink_to", interrupt):
-            self.assertEqual(runner.main(), 143)
-        directory, = (self.store.root / "runs").iterdir()
-        receipt = json.loads((directory / "run.json").read_text())
-        root = Path(receipt["shortRoot"]); self.roots.append(root)
-        self.assertEqual(receipt["exitCode"], 143)
-        self.assertEqual(receipt["status"], "interrupted")
-        self.assertEqual(receipt["requestedStatus"], "interrupted")
-        self.assertIsNone(receipt["childGroup"])
-        self.assertFalse(root.exists())
-        self.assertFalse((directory / "scratch").exists())
+        with ManagedFixture() as fixture:
+            self.repo = fixture.path
+            self.store = Store(self.repo)
+            import run as runner
+            original = Path.symlink_to
+            def interrupt(path, *args, **kwargs):
+                os.kill(os.getpid(), signal.SIGTERM)
+                return original(path, *args, **kwargs)
+            with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", "raise AssertionError('must not start')"]), patch.object(Path, "symlink_to", interrupt):
+                self.assertEqual(runner.main(), 143)
+            directory, = (self.store.root / "runs").iterdir()
+            receipt = json.loads((directory / "run.json").read_text())
+            root = Path(receipt["shortRoot"])
+            self.assertEqual(receipt["exitCode"], 143)
+            self.assertEqual(receipt["status"], "interrupted")
+            self.assertEqual(receipt["requestedStatus"], "interrupted")
+            self.assertIsNone(receipt["childGroup"])
+            self.assertFalse(root.exists())
+            self.assertFalse((directory / "scratch").exists())
+
 
     def test_success_failure_interruption_and_repeat_cleanup_preserve_other_directory(self):
         other = self.repo / "business"; other.mkdir(); (other / "keep").write_text("external")
@@ -288,56 +301,69 @@ class ShortPathTests(unittest.TestCase):
             pass
 
     def test_lsof_failure_diagnostics_are_emitted_to_runner_stderr(self):
-        fake = self.repo / "lsof"
-        fake.write_text("#!/bin/sh\nprintf 'controlled-lsof-warning' >&2\nexit 0\n")
-        fake.chmod(0o700)
-        runner = Path(__file__).with_name("run.py")
-        try:
-            result = subprocess.run([sys.executable, "-B", str(runner), "--repo", str(self.repo), "sample", "--", sys.executable, "-c", "pass"],
-                                    env=dict(os.environ, NERVE_TEST_LSOF_MODE="direct", PATH=str(self.repo) + os.pathsep + os.environ.get("PATH", "")),
-                                    capture_output=True, text=True, timeout=20)
-            self.assertEqual(result.returncode, 1)
-        finally:
-            directory, = (self.store.root / "runs").iterdir()
-            receipt = json.loads((directory / "run.json").read_text())
-            self.roots.append(Path(receipt["shortRoot"]))
-        self.assertEqual(receipt["status"], "cleanup-pending")
-        self.assertIn("controlled-lsof-warning", result.stderr)
-        self.assertIn('"returncode": 0', result.stderr)
+        with ManagedFixture() as fixture:
+            self.repo = fixture.path
+            self.store = Store(self.repo)
+            fake = self.repo / "lsof"
+            fake.write_text("#!/bin/sh\nprintf 'controlled-lsof-warning' >&2\nexit 0\n")
+            fake.chmod(0o700)
+            runner = Path(__file__).with_name("run.py")
+            try:
+                result = subprocess.run([sys.executable, "-B", str(runner), "--repo", str(self.repo), "sample", "--", sys.executable, "-c", "pass"],
+                                        env=dict(os.environ, NERVE_TEST_LSOF_MODE="direct", PATH=str(self.repo) + os.pathsep + os.environ.get("PATH", "")),
+                                        capture_output=True, text=True, timeout=20)
+                self.assertEqual(result.returncode, 1)
+            finally:
+                directory, = (self.store.root / "runs").iterdir()
+                receipt = json.loads((directory / "run.json").read_text())
+                root = Path(receipt["shortRoot"])
+            self.assertEqual(receipt["status"], "cleanup-pending")
+            self.assertIn("controlled-lsof-warning", result.stderr)
+            self.assertIn('"returncode": 0', result.stderr)
+            # The injected lsof was scoped to the child PATH; normal recovery is real.
+            self.store.sweep()
+            self.assertFalse(root.exists())
+            restored = json.loads((directory / "run.json").read_text())
+            self.assertEqual(restored.get("cleanupStage"), "complete", restored.get("cleanupError"))
+
 
     def assert_failed_preflight_does_not_spawn(self, failure, expected):
-        import run as runner
-        marker = self.repo / "command-started"
-        command = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')"
-        options = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
-        caught = None
-        try:
-            with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command, str(marker)]), patch("lifecycle.subprocess.run", **options), contextlib.redirect_stderr(io.StringIO()):
-                try:
-                    runner.main()
-                except RuntimeError as error:
-                    caught = error
-        finally:
-            directory, = (self.store.root / "runs").iterdir()
-            receipt = json.loads((directory / "run.json").read_text())
-            root = Path(receipt["shortRoot"]); self.roots.append(root)
-        self.assertFalse(marker.exists(), "failed handle preflight must prevent the marker command from starting")
-        self.assertIsInstance(caught, RuntimeError)
-        for diagnostic in (str(caught), receipt["cleanupError"]):
-            self.assertIn(expected, diagnostic)
-            self.assertIn("controlled-preflight", diagnostic)
-            self.assertNotIn("GLOBAL-STDOUT-SECRET", diagnostic)
-            self.assertLess(len(diagnostic.encode()), 10000)
-        self.assertEqual(receipt["status"], "cleanup-pending")
-        self.assertEqual(receipt["exitCode"], 1)
-        self.assertIsNone(receipt["childGroup"])
-        self.assertTrue(root.exists())
-        self.assertTrue((directory / "scratch").exists())
-        # Once the same handle check works again, the registered partial setup is recoverable.
-        self.store.sweep(); self.store.sweep()
-        self.assertFalse(root.exists())
-        self.assertFalse((directory / "scratch").exists())
-        self.assertFalse(marker.exists())
+        with ManagedFixture() as fixture:
+            self.repo = fixture.path
+            self.store = Store(self.repo)
+            import run as runner
+            marker = self.repo / "command-started"
+            command = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')"
+            options = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+            caught = None
+            try:
+                with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command, str(marker)]), patch("lifecycle.subprocess.run", **options), contextlib.redirect_stderr(io.StringIO()):
+                    try:
+                        runner.main()
+                    except RuntimeError as error:
+                        caught = error
+            finally:
+                directory, = (self.store.root / "runs").iterdir()
+                receipt = json.loads((directory / "run.json").read_text())
+                root = Path(receipt["shortRoot"])
+            self.assertFalse(marker.exists(), "failed handle preflight must prevent the marker command from starting")
+            self.assertIsInstance(caught, RuntimeError)
+            for diagnostic in (str(caught), receipt["cleanupError"]):
+                self.assertIn(expected, diagnostic)
+                self.assertIn("controlled-preflight", diagnostic)
+                self.assertNotIn("GLOBAL-STDOUT-SECRET", diagnostic)
+                self.assertLess(len(diagnostic.encode()), 10000)
+            self.assertEqual(receipt["status"], "cleanup-pending")
+            self.assertEqual(receipt["exitCode"], 1)
+            self.assertIsNone(receipt["childGroup"])
+            self.assertTrue(root.exists())
+            self.assertTrue((directory / "scratch").exists())
+            # Once the same handle check works again, the registered partial setup is recoverable.
+            self.store.sweep(); self.store.sweep()
+            self.assertFalse(root.exists())
+            self.assertFalse((directory / "scratch").exists())
+            self.assertFalse(marker.exists())
+
 
     def test_lsof_warning_preflight_prevents_command_start(self):
         warning = b"controlled-preflight-warning " + b"x" * 9000
@@ -349,49 +375,57 @@ class ShortPathTests(unittest.TestCase):
         self.assert_failed_preflight_does_not_spawn(failure, '"timedOut": true')
 
     def test_signal_during_handle_preflight_does_not_start_command(self):
-        import run as runner
-        marker = self.repo / "command-started"
-        original = subprocess.run
-        interrupted = False
-        def interrupt(*args, **kwargs):
-            nonlocal interrupted
-            if not interrupted:
-                interrupted = True
-                os.kill(os.getpid(), signal.SIGTERM)
-            return original(*args, **kwargs)
-        command = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')"
-        try:
-            with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command, str(marker)]), patch("lifecycle.subprocess.run", side_effect=interrupt):
-                code = runner.main()
-        finally:
-            directory, = (self.store.root / "runs").iterdir()
-            receipt = json.loads((directory / "run.json").read_text())
-            root = Path(receipt["shortRoot"]); self.roots.append(root)
-        self.assertFalse(marker.exists(), "signal during preflight must not start the command")
-        self.assertEqual(code, 143)
-        self.assertEqual(receipt["exitCode"], 143)
-        self.assertEqual(receipt["status"], "interrupted")
-        self.assertIsNone(receipt["childGroup"])
-        self.assertFalse(root.exists())
-        self.assertFalse((directory / "scratch").exists())
+        with ManagedFixture() as fixture:
+            self.repo = fixture.path
+            self.store = Store(self.repo)
+            import run as runner
+            marker = self.repo / "command-started"
+            original = subprocess.run
+            interrupted = False
+            def interrupt(*args, **kwargs):
+                nonlocal interrupted
+                if not interrupted:
+                    interrupted = True
+                    os.kill(os.getpid(), signal.SIGTERM)
+                return original(*args, **kwargs)
+            command = "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('started')"
+            try:
+                with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", command, str(marker)]), patch("lifecycle.subprocess.run", side_effect=interrupt):
+                    code = runner.main()
+            finally:
+                directory, = (self.store.root / "runs").iterdir()
+                receipt = json.loads((directory / "run.json").read_text())
+                root = Path(receipt["shortRoot"])
+            self.assertFalse(marker.exists(), "signal during preflight must not start the command")
+            self.assertEqual(code, 143)
+            self.assertEqual(receipt["exitCode"], 143)
+            self.assertEqual(receipt["status"], "interrupted")
+            self.assertIsNone(receipt["childGroup"])
+            self.assertFalse(root.exists())
+            self.assertFalse((directory / "scratch").exists())
+
 
     def test_completed_runner_closes_its_output_pipe(self):
-        import run as runner
-        original = subprocess.Popen
-        children = []
-        def spawn(*args, **kwargs):
-            child = original(*args, **kwargs)
-            if args[0][0] == sys.executable:
-                children.append(child)
-            return child
-        try:
-            with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", "pass"]), patch("run.subprocess.Popen", side_effect=spawn):
-                self.assertEqual(runner.main(), 0)
-            self.assertEqual(len(children), 1)
-            self.assertTrue(children[0].stdout.closed, "completed output pipe must be released")
-        finally:
-            for child in children:
-                child.stdout.close()
+        with ManagedFixture() as fixture:
+            self.repo = fixture.path
+            self.store = Store(self.repo)
+            import run as runner
+            original = subprocess.Popen
+            children = []
+            def spawn(*args, **kwargs):
+                child = original(*args, **kwargs)
+                if args[0][0] == sys.executable:
+                    children.append(child)
+                return child
+            try:
+                with patch.object(sys, "argv", ["run.py", "--repo", str(self.repo), "sample", "--", sys.executable, "-c", "pass"]), patch("run.subprocess.Popen", side_effect=spawn):
+                    self.assertEqual(runner.main(), 0)
+                self.assertEqual(len(children), 1)
+                self.assertTrue(children[0].stdout.closed, "completed output pipe must be released")
+            finally:
+                for child in children:
+                    child.stdout.close()
+
 
 
 class HandleDiagnosticTests(unittest.TestCase):

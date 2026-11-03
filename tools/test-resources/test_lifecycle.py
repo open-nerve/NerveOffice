@@ -12,7 +12,7 @@ import unittest
 from fixture_retention import ManagedFixture
 from unittest.mock import patch
 
-from lifecycle import Store, compact_profiles, failed_profile_names
+from lifecycle import Run, Store, compact_profiles, failed_profile_names
 
 class LifecycleTests(unittest.TestCase):
     def setUp(self):
@@ -269,18 +269,18 @@ class LifecycleTests(unittest.TestCase):
 
 
     def test_vm_short_socket_directory_is_registered_and_recovered(self):
-        import shutil
-        run = self.store.create("vm")
-        root = run.create_short_root()
-        try:
-            self.assertLess(len(str(root / "ssh-123456/control")), 100)
-            (root / "socket-sample").write_text("owned")
-            self.assertEqual(json.loads((run.directory / "run.json").read_text())["shortRoot"], str(root))
-            run.release()
-            self.store.sweep(); self.store.sweep()
+        with ManagedFixture() as fixture:
+            store = Store(fixture.path)
+            run = store.create("vm")
+            root = run.create_short_root()
+            try:
+                self.assertLess(len(str(root / "ssh-123456/control")), 100)
+                (root / "socket-sample").write_text("owned")
+                self.assertEqual(json.loads((run.directory / "run.json").read_text())["shortRoot"], str(root))
+            finally:
+                run.release()
+            store.sweep(); store.sweep()
             self.assertFalse(root.exists())
-        finally:
-            if root.exists(): shutil.rmtree(root)
 
 
 class RunnerTests(unittest.TestCase):
@@ -300,8 +300,8 @@ class RunnerTests(unittest.TestCase):
 
     def test_ci_settle_recovers_only_its_owner_and_publishes_after_forced_exit(self):
         runner = Path(__file__).with_name("run.py")
-        with tempfile.TemporaryDirectory() as temp:
-            repo = Path(temp).resolve(); store = Store(repo)
+        with ManagedFixture() as fixture:
+            repo = fixture.path; store = Store(repo)
             state = repo / "ci-state"; state.mkdir()
             token = "11111111-1111-4111-8111-111111111111"
             (state / "owner.json").write_text(json.dumps({"token": token, "root": str(repo)}))
@@ -329,17 +329,36 @@ class RunnerTests(unittest.TestCase):
                     if partial:
                         self.assertTrue((published / "persistent-profiles/case/opfs-archive/manifest.json").exists())
                         self.assertFalse((published / "persistent-profiles/case/cache.bin").exists())
+                        # This fixture deliberately omits cleanup.json. Recovery
+                        # exports evidence but correctly retains the original.
+                        held = json.loads((run.directory / "run.json").read_text())
+                        self.assertEqual(held['status'], 'cleanup-pending')
+                        self.assertIn('cleanup.json', held['cleanupError'])
+                        self.assertTrue(run.scratch.exists())
+                        fixture.capture()
+                        # Dispose only our synthetic incomplete archive AFTER the
+                        # original retention assertions, without fabricating proof.
+                        owner = Run(store, run.directory, existing=True)
+                        try:
+                            owner.assert_quiescent()
+                            archive.rename(repo / ('incomplete-opfs-model-' + run.id))
+                            disposition = owner.finish('interrupted')
+                            self.assertEqual(disposition.get('cleanupStage'), 'complete', disposition.get('cleanupError'))
+                        finally:
+                            owner.release()
                     # A real CI owner is single use; give the second fixture another owner.
                     token = "22222222-2222-4222-8222-222222222222"
                     (state / "owner.json").write_text(json.dumps({"token": token, "root": str(repo)}))
-            finally: other.release()
+            finally:
+                state = other.finish("passed")
+                self.assertEqual(state.get("cleanupStage"), "complete", state.get("cleanupError"))
 
     def test_ci_resumes_publication_after_first_directory_rename(self):
         from run import publish
         runner = Path(__file__).with_name("run.py")
         for timing in ("before", "after"):
-            with tempfile.TemporaryDirectory() as temp:
-                repo=Path(temp).resolve();store=Store(repo)
+            with ManagedFixture() as fixture:
+                repo=fixture.path;store=Store(repo)
                 state=repo/"ci-state";state.mkdir()
                 token="11111111-1111-4111-8111-111111111111"
                 (state/"owner.json").write_text(json.dumps({"token":token,"root":str(repo)}))
@@ -375,8 +394,8 @@ class RunnerTests(unittest.TestCase):
 
     def test_success_failure_and_interrupt_use_real_small_child(self):
         runner = Path(__file__).with_name("run.py")
-        with tempfile.TemporaryDirectory(prefix="nerve-runner-test-") as temp:
-            repo = Path(temp)
+        with ManagedFixture() as fixture:
+            repo = fixture.path
             for code in (0, 3):
                 command = [sys.executable, str(runner), "--repo", str(repo), "sample", "--", sys.executable, "-c", "import os,pathlib,sys; pathlib.Path(os.environ['NERVE_TEST_SCRATCH'],'junk').write_text('temporary'); print('evidence'); sys.exit(int(sys.argv[1]))", str(code)]
                 result = subprocess.run(command, capture_output=True, text=True, timeout=15)
