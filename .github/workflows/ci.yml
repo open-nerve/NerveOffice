@@ -59,6 +59,11 @@ jobs:
           # 取完整历史：迁移门禁拿这次推送之前的提交作基准，确认已合并的迁移没有被改动（ADR-005）
           fetch-depth: 0
 
+      # 只读、限量诊断固定目录；不改变资源阈值或原 verify 退出结果。
+      - name: 记录安装前磁盘容量
+        timeout-minutes: 2
+        run: python3 -B tools/test-resources/ci_disk_diagnostic.py before-install
+
       # 在下载依赖/浏览器前确认同一受管查询与清理路径可用；不替代删除前核验。
       - name: 核对测试资源能力（KiB 级预检）
         id: resource-preflight
@@ -85,11 +90,21 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      - name: 记录安装后磁盘容量
+        if: always()
+        timeout-minutes: 2
+        run: python3 -B tools/test-resources/ci_disk_diagnostic.py after-install
+
       - name: pnpm verify --ci --scope=no-e2e
         run: pnpm verify --ci --keep-going --scope=no-e2e
         env:
           # 推送事件：迁移门禁拿推送之前的提交作基准，一次推送里的每个提交都在比较范围内；定时与手动触发时为空，门禁改用 HEAD^1
           GATE_MIGRATIONS_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+
+      - name: 记录 verify 结束时磁盘容量
+        if: always()
+        timeout-minutes: 2
+        run: python3 -B tools/test-resources/ci_disk_diagnostic.py after-verify
 
       - name: 核对本轮资源处置与报告导出
         id: resource-check

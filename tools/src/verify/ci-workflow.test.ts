@@ -340,6 +340,33 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(steps.find(step => step.id === 'e2e-report-check')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
   })
 
+  it('verify 在依赖安装前后与失败结束时独立收取磁盘诊断，原检查不被包装或放行', () => {
+    const steps = workflow.jobs.verify!.steps
+    const command = 'python3 -B tools/test-resources/ci_disk_diagnostic.py '
+    const before = steps.findIndex(step => step.run === `${command}before-install`)
+    const after = steps.findIndex(step => step.run === `${command}after-install`)
+    const ended = steps.findIndex(step => step.run === `${command}after-verify`)
+    const install = steps.findIndex(step => step.run === 'pnpm install --frozen-lockfile')
+    const verify = steps.findIndex(step => step.run === 'pnpm verify --ci --keep-going --scope=no-e2e')
+    expect(before).toBeGreaterThan(0)
+    expect(before).toBeLessThan(install)
+    expect(after).toBeGreaterThan(install)
+    expect(after).toBeLessThan(verify)
+    expect(ended).toBeGreaterThan(verify)
+    for (const index of [before, after, ended]) {
+      expect(steps[index]?.['timeout-minutes']).toBe(2)
+      expect(steps[index]?.['continue-on-error']).toBeUndefined()
+      expect(steps[index]?.env).toBeUndefined()
+    }
+    expect(steps[before]?.if).toBeUndefined()
+    expect(steps[after]?.if).toBe('always()')
+    expect(steps[ended]?.if).toBe('always()')
+    expect(steps[verify]?.if).toBeUndefined()
+    expect(steps[verify]?.['continue-on-error']).toBeUndefined()
+    for (const id of ['e2e', 'container'])
+      expect(workflow.jobs[id]?.steps.some(step => step.run?.includes('ci_disk_diagnostic.py'))).toBe(false)
+  })
+
   it('产品检查不会被条件跳过；报告上传必须等待所属资源核验，失败诊断仍独立上传', () => {
     const checking = Object.entries(workflow.jobs).filter(([, job]) => job.steps.some(runsChecks))
     // 三个 job 各执行一种检查：verify 与 e2e 的 pnpm verify，container 的容器 E2E
