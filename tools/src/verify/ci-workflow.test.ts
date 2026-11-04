@@ -194,6 +194,18 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     }
   })
 
+  it('关闭阶段补证只在 Chrome 分片启用，不能扩大到其他 job 或被步骤覆盖', () => {
+    expect(workflow.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC).toBeUndefined()
+    // eslint-disable-next-line no-template-curly-in-string -- 实际 GitHub 矩阵开关，不另造表达式求值器
+    expect(workflow.jobs.e2e?.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC).toBe('${{ matrix.browser == \'chrome\' && \'1\' || \'\' }}')
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      if (id !== 'e2e')
+        expect(job.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC, id).toBeUndefined()
+      for (const step of job.steps)
+        expect(step.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC, stepLabel(id, step)).toBeUndefined()
+    }
+  })
+
   it('CI 上 E2E 重试一次，出现重试（重试之后才通过）就让这次运行失败；本机不重试（规范 §8.4，M2-P6 第 6 片复核 M4）', () => {
     // 取 Playwright 解析之后的配置（列举用例时输出的 config）：与 CI 上真正生效的是同一份
     const resolved = (ci: boolean): { failOnFlakyTests: boolean, retries: number[] } => {
@@ -338,6 +350,33 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(steps.find(step => step.id === 'e2e-diagnostics-prepare')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
     expect(steps.find(step => step.id === 'e2e-report-check')?.['continue-on-error']).toBeUndefined()
     expect(steps.find(step => step.id === 'e2e-report-check')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
+  })
+
+  it('verify 在依赖安装前后与失败结束时独立收取磁盘诊断，原检查不被包装或放行', () => {
+    const steps = workflow.jobs.verify!.steps
+    const command = 'python3 -B tools/test-resources/ci_disk_diagnostic.py '
+    const before = steps.findIndex(step => step.run === `${command}before-install`)
+    const after = steps.findIndex(step => step.run === `${command}after-install`)
+    const ended = steps.findIndex(step => step.run === `${command}after-verify`)
+    const install = steps.findIndex(step => step.run === 'pnpm install --frozen-lockfile')
+    const verify = steps.findIndex(step => step.run === 'pnpm verify --ci --keep-going --scope=no-e2e')
+    expect(before).toBeGreaterThan(0)
+    expect(before).toBeLessThan(install)
+    expect(after).toBeGreaterThan(install)
+    expect(after).toBeLessThan(verify)
+    expect(ended).toBeGreaterThan(verify)
+    for (const index of [before, after, ended]) {
+      expect(steps[index]?.['timeout-minutes']).toBe(2)
+      expect(steps[index]?.['continue-on-error']).toBeUndefined()
+      expect(steps[index]?.env).toBeUndefined()
+    }
+    expect(steps[before]?.if).toBeUndefined()
+    expect(steps[after]?.if).toBe('always()')
+    expect(steps[ended]?.if).toBe('always()')
+    expect(steps[verify]?.if).toBeUndefined()
+    expect(steps[verify]?.['continue-on-error']).toBeUndefined()
+    for (const id of ['e2e', 'container'])
+      expect(workflow.jobs[id]?.steps.some(step => step.run?.includes('ci_disk_diagnostic.py'))).toBe(false)
   })
 
   it('产品检查不会被条件跳过；报告上传必须等待所属资源核验，失败诊断仍独立上传', () => {

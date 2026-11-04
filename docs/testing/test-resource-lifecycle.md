@@ -2,6 +2,28 @@
 
 2026-10-26：历史 handoffs 累积约 175.1 GB，其中大量是已结束的 VM 磁盘和通过用例的完整浏览器资料。APFS 共享块使目录统计不等于可回收空间。本规范与执行脚本共同生效，取代旧文档中直接启动 Playwright 的写法。
 
+## verify 云端磁盘诊断
+
+`ci_disk_diagnostic.py before-install|after-install|after-verify` 只在本仓库固定 GitHub Ubuntu 24.04 的 verify job 使用，复用 `hosted.context` 的仓库、run、attempt、job、SHA、runner/boot 身份检查。`.github/workflows/ci.yml` 在依赖安装前、安装后及 verify 结束时独立调用；后两步使用 `always()`，原产品步骤、断言、退出与资源合同保持。
+
+它只查询固定 workspace、`.git`、`node_modules`、apps/packages、`.test-resources`、同级 runner `_temp` 和固定用户 pnpm store 的元数据。每项记录目录 uid/gid/dev/inode、文件系统 total/free/available、去重 inode 的分配字节及普通文件逻辑字节；链接与特殊文件只计数，不读目标或内容。目录相互重叠，**各行不能相加**；结果是非原子时点观察，不代表实际可释放的 APFS 空间。根和每级目录用不跟随链接的 fd 访问，跨设备、身份变化、读取失败及未知显式报告。
+
+pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/store`，对应已锁定 action 在 CI95 原日志中确认的 `store/v11` 布局；不使用默认 `.local/share` 猜测，也不接受任意 `PNPM_HOME` 作为读取授权。
+
+每项最多 5 秒/20 万项/深度 64，整批最多 45 秒/50 万项；单次 JSON 最多 32 KiB，工作流外层 2 分钟。必需的工作区和 runner 临时根消失为不完整，其余固定可选根不存在明确记 missing。任何拒绝、部分/超限结果返回非零，不能冒充完整容量；查询不会判断或修改原 12 GiB 余量、16 GiB 原环境等门槛。
+
+诊断不创建临时环境或独立 artifact，只向原 job 日志输出固定字段；不输出环境对象、子项名称、文件内容或原异常文本。日志沿六项 CI 原件的 14 天/5 GiB 报告规则保留，必要最终证据通过原独审/pin 流程留档。成功诊断只说明观察完成，`diagnosticOnly=true`、`cleanupAuthorized=false`，不代替测试通过或资源清理。KiB 回归入口为 `python3 -B tools/test-resources/run.py unit -- python3 -B -m unittest discover -s tools/test-resources -p 'test_ci_disk_diagnostic.py'`。
+
+## 固定 Chrome 用例的关闭阶段诊断
+
+`tests/e2e/support/context-close-diagnostic.ts` 仅在 `E2E_CONTEXT_CLOSE_DIAGNOSTIC=1` 且原 `catalog-boundaries.spec.ts` 的指定换人故事、`chrome`、retry 0/1 时安装；workflow 只给 Chrome 分片开关。正式 `fixtures.ts` 在交出默认 context 前安装，不在外层 `provide` 返回时撤掉，让默认底层关闭也能被记录。
+
+每 attempt 独占创建 `testInfo.outputPath('context-close-diagnostic.json')`（0600），立即登记 attachment 与受管 UUID/固定 GitHub run、attempt、SHA 和项目归属，再包装三个公开方法。开始事件同步写入，非阻塞重开后、写入前核对父目录和原普通文件 dev/inode/nlink/大小，每次写入即关闭描述符；已有文件、链接、FIFO 等身份替换、写入/注册失败均留下固定不完整注解，不覆盖原产品异常。仅保存阶段、序号、单调时间、调用关联和结果，不保存参数、错误正文、认证信息或环境对象。
+
+每份最多 32 KiB/64 条；原 retry 0/1 合计至多 64 KiB，沿现有报告 14 天/5 GiB、稳定导出与必要证据独审/pin 策略，不增加 profile、VM 或数据库。原 Promise、this、参数和同步异常保持；不增加关闭、等待、重试或私有协议调用。`incomplete` 初始为真，只有原 close 完成、close 事件到达且已观察调用无挂起/失败时才能结束观察；超限/写入失败/缺文件/不完整状态不接受。产品与诊断结果分别核对，观察完整不等于旧根因已修复，也不覆盖原 flaky 判失败。
+
+小型验证：`python3 -B tools/test-resources/run.py unit -- pnpm exec vitest run --project unit tests/e2e/support/context-close-diagnostic.test.ts`。其中真实 Playwright Node 夹具调度只替换 browser 边界，不启动浏览器，分别保留 passed 与预期 teardown timedOut；退出不明时保留本轮根交父运行器核对，不将模型结果冒充 Chrome 实测。
+
 ## 正式入口
 
 | 场景 | 入口与资源类型 |
