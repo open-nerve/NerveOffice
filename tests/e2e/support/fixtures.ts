@@ -20,6 +20,7 @@ import type { AutosaveMode } from './autosave.ts'
 import process from 'node:process'
 import { test as base, expect } from '@playwright/test'
 import { applyAutosaveMode, autosaveModeScript } from './autosave.ts'
+import { watchContextCloseDiagnostic } from './context-close-diagnostic.ts'
 import { isLoginPopupTarget, watchLoginPopupDiagnostic } from './login-popup-diagnostic.ts'
 import { watchPageErrors } from './page-errors.ts'
 import { profileDirFor } from './persistent-profile.ts'
@@ -161,6 +162,8 @@ export const test = base.extend<{ cspViolations: CspViolations, pageErrors: Page
   webkitStorage: ['persistent', { option: true }],
   context: async ({ context, playwright, browserName, webkitStorage }, provide, testInfo) => {
     if (browserName !== 'webkit' || webkitStorage === 'temporary') {
+      // 默认 context 在 provide 返回之后才由底层夹具关闭；观察器自行随关闭完成释放，不能在这里提前 stop。
+      watchContextCloseDiagnostic(context, testInfo)
       await provide(context)
       return
     }

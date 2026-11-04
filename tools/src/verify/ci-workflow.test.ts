@@ -194,6 +194,18 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     }
   })
 
+  it('关闭阶段补证只在 Chrome 分片启用，不能扩大到其他 job 或被步骤覆盖', () => {
+    expect(workflow.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC).toBeUndefined()
+    // eslint-disable-next-line no-template-curly-in-string -- 实际 GitHub 矩阵开关，不另造表达式求值器
+    expect(workflow.jobs.e2e?.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC).toBe('${{ matrix.browser == \'chrome\' && \'1\' || \'\' }}')
+    for (const [id, job] of Object.entries(workflow.jobs)) {
+      if (id !== 'e2e')
+        expect(job.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC, id).toBeUndefined()
+      for (const step of job.steps)
+        expect(step.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC, stepLabel(id, step)).toBeUndefined()
+    }
+  })
+
   it('CI 上 E2E 重试一次，出现重试（重试之后才通过）就让这次运行失败；本机不重试（规范 §8.4，M2-P6 第 6 片复核 M4）', () => {
     // 取 Playwright 解析之后的配置（列举用例时输出的 config）：与 CI 上真正生效的是同一份
     const resolved = (ci: boolean): { failOnFlakyTests: boolean, retries: number[] } => {
