@@ -4,7 +4,7 @@ import type { MigrationFiles } from './migrations.ts'
 import type { Violation } from './types.ts'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
-import { commandText } from '../shared/repo.ts'
+import { gitInDirectory } from '../shared/git-directory.ts'
 import { checkMigrations, MIGRATIONS_DIR } from './migrations.ts'
 
 export interface GitReader {
@@ -15,7 +15,7 @@ export interface GitReader {
 }
 
 export function gitIn(root: string): GitReader {
-  const git = (args: readonly string[]): string => commandText('git', args, { cwd: root })
+  const git = (args: readonly string[]): string => gitInDirectory(root, args)
   return {
     mergeBase: (left, right) => git(['merge-base', left, right]).trim(),
     // -z：路径按 NUL 分隔、不转义；否则非 ASCII 的文件名会被加引号转义，读取时找不到（审查 B5）

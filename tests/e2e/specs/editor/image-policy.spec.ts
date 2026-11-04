@@ -1,20 +1,21 @@
 import type { Page } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { Buffer } from 'node:buffer'
+import { readFile } from 'node:fs/promises'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
 import { createUser } from '../../support/database.ts'
 import { probeChangeSeq, probeFormulaMode, probeFormulasSettled, probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
-import { expect, test } from '../../support/fixtures.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, imagePixels, prepareImageDocument } from '../../support/image-editor.ts'
 import { imageSample } from '../../support/image-sample.ts'
+import { expect, test } from '../../support/implicit-request-fixture.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, isSaveRequest, openAndEnterEditing, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
-const REJECTED_CELLS = ['B1', 'C1', 'D1', 'E1', 'F1', 'G1']
+const REJECTED_CELLS = ['B1', 'C1', 'D1', 'E1', 'F1', 'G1', 'H1', 'I1']
 
 /** 首次打开只含非法来源公式，没有任何可先读取该地址的合法图片，避免缓存掩盖来源检查。 */
 async function prepareFormulaDocument(page: Page) {
@@ -30,6 +31,8 @@ async function prepareFormulaDocument(page: Page) {
   if (!sheet)
     throw new Error('图片样本缺少工作表')
   const id = asset.url.slice('/api/assets/'.length)
+  const png = await readFile(new URL('../../../../apps/api/src/modules/assets/testdata/rgba-text.png', import.meta.url))
+  const inputFormula = { sheetId: 'images', row: 0, column: 8, formula: `=IMAGE("data:image/png;base64,${png.toString('base64')}")` }
   sheet.cellData = {
     0: {
       0: { v: asset.url },
@@ -39,12 +42,14 @@ async function prepareFormulaDocument(page: Page) {
       4: { f: `=IMAGE({"${asset.url}"})` },
       5: { f: '=IMAGE(IF(TRUE,A1,A1))' },
       6: { f: '=IMAGE(LEFT(A1,LEN(A1)))' },
+      7: { f: '=IMAGE("https://example.invalid/implicit-image.png")' },
+      8: { f: inputFormula.formula },
     },
     1: { 1: { f: '=IF(FALSE,IMAGE(A1),123)' } },
   }
   snapshot.resources = snapshot.resources.map(resource => resource.name === 'SHEET_DRAWING_PLUGIN' ? { ...resource, data: '{}' } : resource)
   await saveAssetSnapshot(page, documentId, JSON.stringify(snapshot))
-  return { asset, documentId }
+  return { asset, documentId, inputFormula }
 }
 
 async function expectRejectedFormulas(page: Page) {
@@ -58,8 +63,8 @@ async function expectRejectedFormulas(page: Page) {
 
 test.describe('图片来源、写入边界与保存位置', { tag: '@test-build' }, () => {
   for (const mode of ['worker', 'main-thread'] as const) {
-    test(`${mode}：首次打开非法 IMAGE 来源零读取，字面量与参数尺寸在重开后保持`, async ({ page }, testInfo) => {
-      const { asset, documentId } = await prepareFormulaDocument(page)
+    test(`US-M5-14 ${mode}：首次打开非法 IMAGE 来源零读取，字面量与参数尺寸在重开后保持`, async ({ page }, testInfo) => {
+      const { asset, documentId, inputFormula } = await prepareFormulaDocument(page)
       let reads = 0
       page.on('request', (request) => {
         if (request.method() === 'GET' && new URL(request.url()).pathname === asset.url)
@@ -94,7 +99,7 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
       const after = await imagePixels(page, 'G8')
       expect({ width: after.imageWidth, height: after.imageHeight }).toEqual({ width: before.imageWidth, height: before.imageHeight })
       await testInfo.attach('来源与重开尺寸', { body: JSON.stringify({ mode, reads, before, after }), contentType: 'application/json' })
-      await imageFailureSentinel(page, documentId, `${mode} 来源检查后的编辑保存`)
+      await imageFailureSentinel(page, documentId, `${mode} 来源检查后的编辑保存`, inputFormula)
     })
   }
 

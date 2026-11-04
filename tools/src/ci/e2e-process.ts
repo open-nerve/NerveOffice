@@ -15,6 +15,12 @@ export { parseProcessStat, readProcess } from './e2e-proc-stat.ts'
 
 export const OWNER_VARIABLE = 'NERVE_TEST_CI_E2E_OWNER'
 export const CI_BUDGETS = { runMs: 90 * 60_000, cleanupMs: 15 * 60_000, forceMs: 60_000, pollMs: 250 }
+
+/** 只在创建 owner 前选择整批窗口；run/settle 继续使用原 owner，不从环境重新计时。 */
+export function ciBudgetsForBrowser(browser: string | undefined): typeof CI_BUDGETS {
+  return { ...CI_BUDGETS, runMs: browser === 'webkit' ? 120 * 60_000 : CI_BUDGETS.runMs }
+}
+
 const budgetsSchema = z.object({ runMs: z.number().positive(), cleanupMs: z.number().positive(), forceMs: z.number().positive(), pollMs: z.number().positive() })
 const ownerSchema = z.object({ version: z.literal(1), token: z.uuid(), root: z.string(), uid: z.number().int().nonnegative(), budgets: budgetsSchema })
 const runtimeSchema = z.object({ startedAt: z.number(), supervisor: identitySchema, leader: identitySchema.optional(), owned: z.array(identitySchema) })

@@ -7,13 +7,13 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
-import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
 import run as runner
 import lifecycle
 from lifecycle import Store
+from fixture_retention import ManagedFixture
 
 
 class ObservedSession:
@@ -34,21 +34,21 @@ class ObservedSession:
 
 class DesktopSessionRunnerTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="session-runner-")
-        self.repo = Path(self.temp.name).resolve()
+        self.fixture = ManagedFixture()
+        self.addCleanup(self.fixture.close)
+        self.repo = self.fixture.path
         self.ready = self.repo / "sample-ready"
-
-    def tearDown(self):
-        self.temp.cleanup()
 
     def invoke(self, observer, code):
         args = ["run.py", "--repo", str(self.repo), "e2e", "--", sys.executable, "-c", code, str(self.ready)]
         with patch.object(sys, "argv", args), patch.object(runner, "SessionGuard", return_value=observer, create=True):
             result = runner.main()
+        self.fixture.capture()
         records = list((self.repo / ".test-resources/runs").glob("*/run.json"))
         self.assertEqual(len(records), 1)
         data = json.loads(records[0].read_text())
-        self.assertEqual(data["cleanupStage"], "complete")
+        self.assertEqual(data.get("cleanupStage"), "complete",
+                         json.dumps({key: data.get(key) for key in ('status', 'cleanupStage', 'cleanupError')}, ensure_ascii=False))
         self.assertFalse((records[0].parent / "scratch").exists())
         self.assertFalse(Path(data["shortRoot"]).exists())
         return result, data
@@ -192,6 +192,7 @@ class DesktopSessionRunnerTests(unittest.TestCase):
                     child.terminate(); child.wait(timeout=5)
                 child.stdout.close()
             Store(self.repo).sweep()
+            self.fixture.capture()
             for record in (self.repo / ".test-resources/runs").glob("*/run.json"):
                 data = json.loads(record.read_text())
                 self.assertEqual(data["cleanupStage"], "complete")
@@ -221,8 +222,9 @@ class DesktopSessionRunnerTests(unittest.TestCase):
         self.assertEqual(result, 143)
 
     def test_session_stop_does_not_signal_other_group_or_remove_other_resources(self):
-        (self.repo / "other-project").mkdir()
-        other_store = Store(self.repo / "other-project")
+        other_fixture = ManagedFixture()
+        self.addCleanup(other_fixture.close)
+        other_store = Store(other_fixture.path)
         other = other_store.create("sample")
         preserved = other.scratch / "keep"
         preserved.write_bytes(b"x" * 1024)
@@ -242,7 +244,8 @@ class DesktopSessionRunnerTests(unittest.TestCase):
             child.wait(timeout=5)
             child.stdin.close()
             other.update(producerQuiescent=True)
-            other.finish("passed")
+            state = other.finish("passed")
+            self.assertEqual(state.get("cleanupStage"), "complete", state.get("cleanupError"))
 
 
 if __name__ == "__main__":

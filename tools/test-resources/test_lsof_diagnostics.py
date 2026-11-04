@@ -25,6 +25,35 @@ class LsofDiagnosticSampleTests(unittest.TestCase):
         text = str(caught.exception)
         return json.loads(text.split("：", 1)[1]), text
 
+    def test_rejected_fd_is_preserved_without_accepting_its_format(self):
+        for value in ('fp.', '*123', ' '):
+            with self.subTest(value=value):
+                details, _ = self.diagnostic(f'p123\nf{value}\ntREG\nn/other/private\n')
+                self.assertEqual(details['incompleteRecordCount'], 3)
+                sample = details['incompleteRecords'][0]
+                self.assertIsNone(sample['fd'])
+                self.assertEqual(sample.get('fdRaw'), value)
+                self.assertEqual(sample.get('fdBytes'), len(value.encode()))
+                self.assertEqual(sample.get('fdSha256'), hashlib.sha256(value.encode()).hexdigest())
+
+    def test_rejected_fd_samples_remain_distinct_bounded_and_redacted(self):
+        count, samples = lsof_incomplete_records('p123\nffp.\ntREG\nn/a\nf*123\ntREG\nn/a\n')
+        self.assertEqual(count, 6)
+        self.assertEqual(len(samples), 6)
+        for value in ('*' + '1' * 1000, '/private/SECRET', 'SECRET=' * 30):
+            details, text = self.diagnostic(f'p123\nf{value}\ntREG\nn/other/private\n')
+            sample = details['incompleteRecords'][0]
+            self.assertLessEqual(len(sample.get('fdRaw', '').encode()), 64)
+            self.assertEqual(sample.get('fdBytes'), len(value.encode()))
+            self.assertEqual(sample.get('fdSha256'), hashlib.sha256(value.encode()).hexdigest())
+            self.assertNotIn('SECRET', text)
+
+    def test_rejected_fd_diagnostic_does_not_cross_process_boundary(self):
+        _, samples = lsof_incomplete_records('p123\nffp.\ntREG\nn/a\np124\ntREG\nn/b\n')
+        later = [s for s in samples if s['pid'] == 124]
+        self.assertTrue(later)
+        self.assertTrue(all(s.get('fdRaw') is None for s in later))
+
     def test_protocol_sample_keeps_exact_type_name_and_digest(self):
         name = "protocol: NETLINK"
         count, samples = lsof_incomplete_records(f"p607\nf3\ntsock\nn{name}\n")

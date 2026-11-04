@@ -126,8 +126,16 @@ def context(repo):
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     root = _directory(repo, required=True)
     workspace = _directory(os.environ.get("GITHUB_WORKSPACE", ""), required=True)
-    if (root != workspace or os.environ.get("GITHUB_WORKFLOW_REF")
-            != repository + "/.github/workflows/ci.yml@refs/heads/main"):
+    workflow = os.environ.get("GITHUB_WORKFLOW_REF")
+    main_workflow = workflow == repository + "/.github/workflows/ci.yml@refs/heads/main"
+    # 2026-11-02: approved P6 preacceptance on this one branch, before merging main.
+    # This is not a general branch allowlist or permission to delete hosted roots.
+    phase_ref = "refs/heads/codex/m5-p6-closeout"
+    phase_dispatch = (repository == "open-nerve/NerveOffice"
+                      and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                      and os.environ.get("GITHUB_REF") == phase_ref
+                      and workflow == repository + "/.github/workflows/ci.yml@" + phase_ref)
+    if root != workspace or not (main_workflow or phase_dispatch):
         raise ValueError("托管工作目录或工作流不匹配")
     value = {"version": 1, "policy": POLICY, "repo": str(root), "repository": repository,
              "sha": os.environ.get("GITHUB_SHA", ""), "runId": os.environ.get("GITHUB_RUN_ID", ""),

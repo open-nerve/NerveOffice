@@ -11,7 +11,7 @@ import type { Page } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { createUser } from '../../support/database.ts'
 import { commandMark, probeSnapshot, waitForCommand } from '../../support/editor-probe.ts'
-import { expect, test } from '../../support/fixtures.ts'
+import { expect, test } from '../../support/implicit-request-fixture.ts'
 import { nextFrames } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, openAndEnterEditing, selectCell } from '../../support/sheet.ts'
@@ -75,7 +75,7 @@ async function open(page: Page, prefix: string): Promise<void> {
   await openAndEnterEditing(page, await createSheetThroughApi(page), 'steady')
 }
 
-test.describe('在单元格编辑器与编辑栏里粘贴带图片的内容：单元格里不会有图片（DEF-035 的旁支）', { tag: '@test-build' }, () => {
+test.describe('US-M5-14 在单元格编辑器与编辑栏里粘贴带图片的内容：单元格里不会有图片（DEF-035 的旁支）', { tag: '@test-build' }, () => {
   for (const clipboard of ['image-file', 'image-html', 'image-html-and-text'] as const) {
     test(`编辑栏在编辑时粘贴（${clipboard}）：整次粘贴被入口守卫取消，回车之后 B2 只有键入的字，没有图片（外链的图片也就不加载）`, async ({ page }) => {
       await open(page, 'paste-bar')

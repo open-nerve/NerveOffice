@@ -3,8 +3,11 @@
 先阅读本目录 `CLAUDE.md`。这里补充所有 Agent 均须执行的测试资源规则，覆盖与旧文档不一致的旧测试启动示例。
 
 - 主项目目录 HEAD 始终保持 `main`。每个 Phase 一个分支和 worktree，Codex 路径为 `.codex/worktress/<branch>/`；不在主目录切分支。整个 Phase 验证与审查通过后才 `--no-ff` 合入 main。
+- **2026-11-04 用户批准的 M5-P6 工程收尾**：在固定 Linux 原六项及原件已独立接受的前提下，允许正常 `--no-ff` 合入 main、推送并取得最终 main 同 SHA 原六项 CI，再完成证据/资源/worktree/已合并分支退役。Mac 原完整验收按 DEF-074 单列，最迟 M7 上线总验收前补验或明确裁决；完整 M5 与标签不关闭，本机浏览器长测仍暂停。此项覆盖下文较早“不合并/不推 main”的时序限制，不改原测试和资源门槛。**M5 工程收官后停止，等待用户安排，不启动 M6 总设计、分支或实施**；DEF-013 的未来 M6 前提保持。详见 ADR-026 新附录与 P6 交接单。
+- **2026-11-02 用户批准的 P6 云端预验收例外**：允许合并前推送现有唯一 `codex/m5-p6-closeout`，手动触发原六项 CI；本仓库该精确分支的 `workflow_dispatch` 可使用既有托管 VM 策略。正常 hooks、固定 SHA、原断言/预算及方案 B 处置状态保持；不推 main、不合并 P6，不恢复本机长测。已定位常规修复按同分支验证/审查后以新 SHA 接续，未知资源/身份/权限异常停止，不自动重跑失败 SHA。Linux 结果不替代 Mac 验收和最终 main 同 SHA CI；详见 ADR-026 附录与 `P6-S5-Linux集中预验收与环境方案.md`。
 - **2026-11-02 用户批准的 M5-P5→P6 接续**：P5 经快速门禁、相关回归、源码对应和审查后可 `--no-ff` 合入本地 main，暂缓推送；P6 从该 main 建唯一分支，M5 收官统一原完整 Gate/容器/浏览器矩阵及最终同 SHA CI。本地中间状态只作开发集成，不能称作完整验收或可发布；不改 CI 触发、不跳 hooks，不追认旧失败，也不自动解除桌面故障的长测阻断。仅适用于本次接续，详见 `docs/adr/ADR-026-M5阶段接续与集中验收.md`。
 - 提交信息用中文。既有未提交修改及源码、Git、活动 worktree、业务数据不得作为测试垃圾处理。
+- 测试中对另一 Git 仓库或 worktree 的调用，必须在子进程环境副本中清除 `git rev-parse --local-env-vars` 声明的仓库变量并核对指定根；仅设置 `cwd` / `git -C` 不足以隔离钩子环境。使用 TS `tools/src/shared/git-directory.ts` 或 Python `tools/test-resources/git_repository.py`；不得全局清除正常 hook 环境或拿真实项目 `.git` 作误写复现。临时父仓库、worktree 和本地 bare 远端均须归属本轮临时根。
 - **测试完成必须处理本轮残留**，包括成功、失败、异常与可捕获中断。不得把完整 VM、浏览器 profile、数据库或反复重试的完整环境永久复制进 handoffs。
 - 使用已接入的 `pnpm test:e2e`、`test:e2e:container`、`test:integration`、`test:coverage` 及 E2E 包的测量、模板和 Safari 命令。手工执行测试也须经 `python3 tools/test-resources/run.py <类型> -- <命令>`；只读列举 `--list` 除外。
 - 本轮资源只放运行器提供的 `NERVE_TEST_SCRATCH` 和 `TMPDIR`（VM SSH 使用同轮预登记的 `NERVE_TEST_SHORT_ROOT`）；必要报告放 `NERVE_TEST_OUTPUT_DIR`。先登记后启动资源，VM 的准备、克隆与重启实验必须在同一轮受管命令中。不得认领外部已有 VM 或个人浏览器资料。
@@ -14,6 +17,7 @@
 - 成功立即释放临时环境；失败完整浏览器资料最长 7 天、每轮 256 MiB、合计 2 GiB。便携诊断只导出日志/配置/崩溃记录，单文件 4 MiB、单用例 16 MiB、每轮 64 MiB。JSON/HTML、trace、截图及 OPFS 证明按报告策略保存。
 - 普通报告最多保留 14 天、每个 worktree 合计 5 GiB；新登记的本地门禁 bulk 归档另设 14 天/5 GiB 上限。最终审查通过的唯一证据须显式 pin 并记录理由。源码快照、补丁、摘要与索引不按垃圾回收。
 - 测试配置不得将 `process.env` 全量展开到 Playwright `webServer.env` 等会序列化的报告字段；服务沿 Playwright 的默认进程环境继承。发布与 CI 上传前由 `report_safety.py` 分别检查真实 JSON 及 HTML 内嵌 ZIP 的环境对象。检查失败保留原件、拒绝发布，不改写产品测试结果；历史含凭据原件只限本地受限取证，脱敏派生件须另命名并关联原摘要，禁止把原件上传或冒称已脱敏。此检查针对已知配置边界，不代替日志/附件的实际用途审查。
+- 真实嵌套运行器测试使用 `tools/test-resources/fixture_retention.py`：创建前在外层登记 `fixture-holds`，子台账/短根未闭合时内外层及重启清扫均保留；禁止删标记强行放行。原子轮回执每份最多 64 KiB、同轮证据合计 1 MiB，错误片段最多 8 KiB 并附长度/摘要；资源回归串行且 fail-fast，不自动重试未知失败。已接入桌面子运行、报告轮转/CI 恢复、Node 协议、正常短路径及 Linux 证据 hold；原断言保持。唯一 Node Docker stub 的故意 pending 模型在创建前登记 `node-docker-stub-v1`，保留原 run/协议台账、不改写状态，仅在真实租约/进程组/句柄/短根核验后退役自己的短根并把本地模型文件交外层；记录 `test-model-only`、`realDockerClosureObserved=false`，不得用于真实容器或托管平台记录。hosted command 的七个真实子进程用例另预登记 `hosted-command-observation-v1`，解除全部模拟观察后实际核验组/租约/句柄/短根；固定假平台 scope 校验及原状态保持，处置记录 `hostDisposalObserved=false`。Node 原台账导出复用完整协议白名单。其余不启动真实生产者的纯模型不冒充真实环境闭合，具体范围见 P6-S5 资源夹具接续计划。
 - 重新启动会检查登记清单、文件锁、进程组和打开句柄；归属不清、句柄检查失败、仍有写入者的资源保留并报告。不得凭文件名、时间或 PID 单项依据批量删除。`pnpm test:cleanup` 可重复运行，但不能代替调查未登记旧材料。
 - 容器 E2E 只使用父运行器 UUID，创建前持久登记 `container-resources.json`（不超过 64 KiB），核对相同 daemon、源码根哈希标签与本轮命名空间；禁止按旧 PID/名称全局清扫或启动前强制 down。生产者全组未确认退出、查询失败或标签变化时保留环境并阻止同类重试；Docker 实际闭合后临时 env 由父运行器清理。两端在身份/状态判定前拒绝各层重复 JSON 键；完整白名单与类型/大小验证通过的无秘密台账原字节及其摘要随报告封存，不能只留计数或复制未知字段。待处理诊断不等于清理或产品通过。旧合法方案 B 历史记录不补签、不改写；严格策略下曾启动但未闭合的旧容器环境保留待核对。
 - 同一 worktree 固定报告发布口串行；跨 worktree 隔离。缺少可安全清理的条件时，不继续反复创建同类环境。
@@ -21,3 +25,11 @@
 - **2026-10-28 用户批准的方案 B**：上述立即删除规则继续适用于本机、普通 Linux、自托管及未知环境。仅显式 `NERVE_TEST_RESOURCE_POLICY=github-hosted-vm` 且固定 GitHub Ubuntu 24.04、仓库/run/attempt/job/runner/boot/SHA 与创建前台账相符时，原环境可保留到 job VM 销毁；不再注入 PostgreSQL service scope。必须持锁核对根身份、本轮生产者退出、完整 lsof 格式及已知本轮路径，非破坏导出并验证有界报告。语义未知引用仍留诊断并禁止删除，格式损坏/命令异常/已知引用/活跃写入者仍拒绝。
 - 托管委托状态为 `cleanupStage=host-disposal-pending`、`cleanupComplete=false`，产品 `passed/failed/interrupted` 独立保留。不得把平台销毁承诺写成实测删除完成。每 2 秒计量同 job 全部受管原环境，16 GiB 为停止阈值（不是配额，允许采样和停止等待超调），12 GiB 可用空间独立检查；报告仍合计 5 GiB、artifact 14 天。完整原环境不上载、不缓存、不移动、不压缩；重启、prune 不手工删除此类目录。身份/预算/稳定导出有问题时停止，不能无界重试。
 - 完整规则、入口、归档 pin 与验证命令见 `docs/testing/test-resource-lifecycle.md`。清理规则的验证使用 KiB 级临时样例，不为验收机制再创建大型环境。
+
+- P6-S4 的 `pnpm test:e2e:linux` 经 `run.py container` 运行固定的 1+13 条原生 Linux arm64 Chromium 校准，工作文件只用本轮登记的 `_assets` Linux 内部卷，源码经 Docker cp 传入，不 bind 宿主工作目录；runner 4 GiB/3 CPU，数据库 512 MiB/1 CPU。16 GiB 停止阈值、12 GiB 空间保留、2 秒尝试采样；未知采样或会话异常停止，不自动重试。新 Playwright 镜像先登记、上限 5 GiB/14 天，结束仅删除已证明本轮新增且无共享引用的 digest；既有镜像不认领，未知残留阻止下一轮拉取，不全局 prune。此入口不替代完整门禁或 Mac 原生验收。
+
+- Linux 隔离 guest 启动前持久登记 `linux-browser-evidence-hold.json`；安全拒绝、未发布或归属不明的内层报告原件不得随外层 scratch 删除。只有全部实际内层证据安全导出并核对台账后才解除，父 finish/sweep 和同类入口在此之前保持待处理。普通产品失败不冒充通过，也不因已导出而永久保留完整环境。
+
+- Linux 内部卷先核对本轮生产者退出、全部容器完整 ID 与停止状态，再流式导出有界报告，最后实际闭合容器/卷。传输拒绝路径穿越、链接、特殊文件、重复项、超限与未知证据；完整 profile、依赖及数据库不写到宿主。证据不明时保留卷与 hold 并停止；安装前及 pnpm 就绪后先做原完整 lsof 预检，不放宽原拒绝条件。导出期间继续计量静止卷和宿主新增副本。
+
+- **2026-11-02 已批准的下一段**：`pnpm test:e2e:linux:selftest` 复用上述隔离、预算和清理，固定执行两个既有 selftest 文件的 29 条 Chromium 用例、单 worker、默认自动保存、首错停止；原重试/超时/trace/截图与断言不变。宿主、guest、验收共用受跟踪 `linux-browser-profiles.json`，只接受命名配置；实际命令、配置名、29 首过及全部内层清理证明必须相符，未知组保留并阻止释放。原默认入口仍为 1+13；本机浏览器、完整 Gate 与其他平台未因此恢复，不自动整轮重试。

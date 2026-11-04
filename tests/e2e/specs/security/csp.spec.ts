@@ -3,10 +3,11 @@
 // 安全头的用例只用生产构建里的文件，本机与外部两种运行方式都执行（外部模式经 Caddy 的 HTTPS，另核对 HSTS）；
 // 阳性对照与对照要打开测试构建里的探针页（csp-probe.html），标签 @test-build：测生产镜像的外部模式按标签排除（P5 设计 §3.6，审查 B2）。
 import type { Page } from '@playwright/test'
-import type { LocalServer } from '../../support/servers.ts'
+import type { TargetServer } from '../../support/servers.ts'
 import { randomUUID } from 'node:crypto'
 import { createUser } from '../../support/database.ts'
 import { e2eOrigin } from '../../support/environment.ts'
+import { watchExternalRequests } from '../../support/external-requests.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { startControlServer, startTargetServer } from '../../support/servers.ts'
 import { loginThroughApi } from '../../support/session.ts'
@@ -66,7 +67,7 @@ test.describe('US-M1-09 CSP 与安全头', () => {
   })
 
   test.describe('探针', { tag: '@test-build' }, () => {
-    let target: LocalServer
+    let target: TargetServer
 
     test.beforeEach(async () => {
       target = await startTargetServer()
@@ -86,15 +87,28 @@ test.describe('US-M1-09 CSP 与安全头', () => {
       await expect.poll(() => [...new Set(cspViolations.list().map(violation => violation.directive))].sort()).toEqual(['connect-src', 'script-src'])
     })
 
-    test('对照：没有 CSP 时同样的探针都能执行（探针有效，目标可达）', async ({ page }) => {
+    test('US-M5-14 对照：无 CSP 探针有效且请求观察覆盖页面、Worker 与新页', async ({ page, context }, testInfo) => {
       const control = await startControlServer()
+      const watcher = watchExternalRequests(context, control.origin)
       try {
         const result = await probeResult(page, `${control.origin}/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe`)}`)
         expect(result).toEqual({ page: ALL_ALLOWED, worker: ALL_ALLOWED })
         expect(target.hits()).toBe(2)
+        expect(watcher.list()).toEqual([`${target.origin}/probe`, `${target.origin}/probe`])
+        const another = await context.newPage()
+        try {
+          await another.goto(`${target.origin}/new-page`)
+          expect(watcher.list()).toEqual([`${target.origin}/probe`, `${target.origin}/probe`, `${target.origin}/new-page`])
+          expect(target.hits()).toBe(3)
+        }
+        finally {
+          await another.close()
+        }
       }
       finally {
+        watcher.stop()
         await control.close()
+        await testInfo.attach('request-observer-control', { body: JSON.stringify({ requests: watcher.list(), targetHits: target.hits(), targetRequests: target.requests() }), contentType: 'application/json' })
       }
     })
   })

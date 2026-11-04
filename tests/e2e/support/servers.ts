@@ -23,6 +23,11 @@ export interface LocalServer {
   close: () => Promise<void>
 }
 
+export interface TargetServer extends LocalServer {
+  /** 前 32 次实际到达的原始路径，每项至多 2048 字符；总数仍由 hits 保留。 */
+  readonly requests: () => readonly string[]
+}
+
 async function listen(handler: Parameters<typeof createServer>[1]): Promise<{ origin: string, close: () => Promise<void> }> {
   const server = createServer(handler)
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -36,14 +41,24 @@ async function listen(handler: Parameters<typeof createServer>[1]): Promise<{ or
   }
 }
 
-export async function startTargetServer(): Promise<LocalServer> {
+export async function startTargetServer(): Promise<TargetServer> {
   let hits = 0
-  const server = await listen((_request, response) => {
+  const requests: string[] = []
+  const server = await listen((request, response) => {
     hits += 1
+    if (requests.length < 32)
+      requests.push((request.url ?? '/').slice(0, 2048))
+    if (request.url === '/new-page') {
+      // 新页对照只制造一次导航；显式内嵌图标，避免浏览器自行补发 /favicon.ico。
+      // 不过滤任何到达请求：意外网络仍会使原 3 次断言失败，并在附件中留下路径。
+      response.writeHead(200, { 'access-control-allow-origin': '*', 'content-type': 'text/html; charset=utf-8' })
+      response.end('<!doctype html><html><head><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' width=\'1\' height=\'1\'%3E%3C/svg%3E"></head><body>reachable</body></html>')
+      return
+    }
     response.writeHead(200, { 'access-control-allow-origin': '*', 'content-type': 'text/plain' })
     response.end('reachable')
   })
-  return { ...server, hits: () => hits }
+  return { ...server, hits: () => hits, requests: () => [...requests] }
 }
 
 export async function startControlServer(): Promise<LocalServer> {

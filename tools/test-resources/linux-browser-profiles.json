@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "calibration": [
+    {
+      "name": "calibration",
+      "count": 1,
+      "args": ["security/csp.spec.ts", "--project=chromium", "--workers=1", "--grep=US-M5-14"]
+    },
+    {
+      "name": "stories",
+      "count": 13,
+      "args": ["editor/image-input.spec.ts", "editor/image-policy.spec.ts", "editor/links.spec.ts", "editor/paste-images.spec.ts", "--project=chromium", "--workers=1", "--grep=US-M5-14"]
+    }
+  ],
+  "selftest": [
+    {
+      "name": "selftest",
+      "count": 29,
+      "args": ["editor/selftest.spec.ts", "editor/selftest-next.spec.ts", "--project=chromium", "--workers=1", "--max-failures=1"]
+    }
+  ]
+}

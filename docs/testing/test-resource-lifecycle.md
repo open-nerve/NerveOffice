@@ -24,6 +24,20 @@ Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `a
 
 需要 Python 3.9+、POSIX 文件锁和 `lsof`。缺少句柄查询能力时保留原件并返回待处理状态，不冒险删除。测试的断言、范围、重试与超时不由清理器更改。真实 Safari 的解锁、空闲 120 秒和用户活动中止条件仍适用。
 
+## 临时 Git 仓库与钩子环境
+
+`cwd` / `git -C` 不会覆盖 pre-push 导出的仓库定位变量。针对另一仓库的 Git 子进程使用 `tools/src/shared/git-directory.ts` / `tools/test-resources/git_repository.py`，在环境副本中清除 Git 声明的局部仓库变量及配置键值项，保留 PATH、TMPDIR 与本轮资源变量；不修改父环境或全局 Git 设置。命令前核对指定工作树根，已有 `.git` 不重新初始化；新仓库初始化后再次核对归属。
+
+`test_git_repository_isolation.py` 纳入 `pnpm test:cleanup:check`，使用本轮 TMPDIR 下的 KiB 级父仓库、linked worktree 与本地 bare 目标，真实触发 pre-push，分别运行既有迁移/证据夹具。核对父 HEAD、refs、index、共享配置和文件前后不变，并验证读取助手、变量组合与根拒绝。创建前核对外层运行台账、scratch、进程组和 TMPDIR 归属；夹具不设置逐例删除或 finalizer，超时也保留目录及回执，由外层运行器确认整组退出及句柄闭合后清理。复现只针对受管夹具，禁止把真实项目或其他任务 `.git` 注入测试环境。见 [P6 调查与修复方案](../v0.1/M5-表格能力与资源/reviews/P6-S5-推送钩子Git隔离调查与修复方案.md)。
+
+## 嵌套运行器的失败保全
+
+P6 的三条批准取证入口（真实 Node 协议成功、桌面屏障 kill-gone、报告轮转）使用 `fixture_retention.ManagedFixture`，详见[固定清单](../v0.1/M5-表格能力与资源/plans/P6-S5-句柄诊断与失败台账保全.md)。先核对外层运行身份、进程组和受管目录，再持锁写 `fixture-holds/<UUID>.json`，随后创建本轮 TMPDIR 中的夹具；不设逐例删除或 finalizer。`Run.finish` 在收集/删除之前拒绝任何未释放保留目录，后续 `Store.sweep` 也维持保留。清理未闭合不能仅记录日志后继续：三条实测使用 unittest fail-fast。
+
+夹具导出原内层 run.json、存在且身份匹配的短根 owner 及摘要，首次观察不可覆盖；每子轮总计 64 KiB，所有夹具报告合计 1 MiB。夹具边界错误另有最多 64 KiB 的回执，错误片段至多 8 KiB、附完整长度/摘要及截断标记，也计入 1 MiB。导出/身份/预算失败都使当前用例失败并保留原件。仅原件导出核验、全部子轮已闭合、租约和进程组退出、scratch/短根实际消失且句柄查询完整时，才解除自身标记；只解除标记，工作文件由外层统一清理。失败后的再次 close 不重试子轮；需要调查后决定恢复，不能删除标记骗过保护。
+
+这次仅迁移上述三个入口；其他有意损坏/伪造外部资源的旧 mock 夹具不在本轮完整闭合声明内。原 `full02` 的三个短根因创建身份证明丢失继续保留。lsof 对拒绝的 f 原值增加有界诊断（最多 64 bytes、16 样本，其他文本/绝对路径脱敏），**接受格式及原拒绝规则不变**。
+
 ## macOS 桌面会话异常停止
 
 `tools/test-resources/desktop_session.py` 对 `e2e/container/measure/template/native/vm` 启用；外层本地门禁使用 `SessionGuard('gate')`。非 macOS 及非浏览器类型只记 `not-applicable`，没有桌面监测通过的含义，不得通过改变资源类型绕过检查。
@@ -153,6 +167,8 @@ full10因启动时已使用旧包装器，曾由`guard-archive-review.py`独立�
 
 本节是上述本机立即删除规则的显式窄例外。只有三个 job 定义（verify、四浏览器 e2e、container）设置 `NERVE_TEST_RESOURCE_POLICY=github-hosted-vm`；`hosted.py` 核对 GitHub-hosted/Linux/X64/Ubuntu 24.04、固定 main CI 工作流、真实 workspace、仓库/SHA/run/attempt/job/runner 和 kernel boot ID。默认及显式 strict 不启用，错误或不完整环境拒绝。此为平台执行契约，不是密码学证明；本地模拟测试不构成实际 GitHub 验证。
 
+2026-11-02 用户批准的 P6 预验收另允许一个精确入口：`open-nerve/NerveOffice` 的 `GITHUB_REF=refs/heads/codex/m5-p6-closeout`、`GITHUB_EVENT_NAME=workflow_dispatch` 与 `GITHUB_WORKFLOW_REF=open-nerve/NerveOffice/.github/workflows/ci.yml@refs/heads/codex/m5-p6-closeout` 必须同时成立。main 原契约保持；其他事件、分支、仓库或 runner 不因此获得此例外。见 ADR-026 附录。此入口沿用所有下述身份、根、退出、稳定导出、预算与平台处置条件，不授权手动删除托管原环境。
+
 Run 在 scratch 创建前落盘 `hostedScope`，并登记四个固定根、实际 inode 与短别名。持锁核验原台账后，启动及结束都检查原 scratch 和短根。本轮进程组须退出，输出线程须结束。全流 lsof 的语义未知对象保留有界诊断，只允许非破坏报告导出；格式损坏、stderr/命令失败、已知本轮路径及别名命中仍拒绝。未知原目录不精简、不移动、不删除，不能把未知写成已证明无引用。
 
 绝对路径的别名解析也遵循此边界：原文和去附注路径分别核对，已知词法命中及可解析前缀指向本轮目录时仍拒绝导出；一条外部路径无法解析不能跳过其他候选或后续记录。仅托管导出把文件系统解析异常记为语义未知，默认严格查询仍拒绝；根自身及归属验证不属于此例外。异常样本与既有记录共用最多16项的摘要预算，只输出异常类型、errno和脱敏的记录身份、字节数、SHA-256，不输出外部私有路径或异常正文。没有无引用证明，也没有原环境删除授权。
@@ -178,3 +194,35 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 活动目录的容量采样通过父目录 FD 核验子项。列举后 stat、子目录打开前、已打开子目录结束复核这三处，只有确认子项 ENOENT 时才继续扫描；已累计字节保留，稳定兄弟和累计超限仍照常核验。本次计量已确认存在的根固定身份，不能在重试时把根消失当成尚未创建的零用量，或认领同名替换目录。权限、未知错误、祖先/根及子目录身份替换仍失败；无法完成的扫描最多三次尝试，并以固定操作名、errno 和尝试次数记录有界诊断，不输出私有路径。该采样规则不授权任何删除，也不适用于稳定报告内容校验。
 
 `check_ci_resources.py` 在当前 job 上持 publication/run 锁，核验唯一预检和该 job 主测试的身份、退出、实际稳定报告哈希、历史及当前预算，写入 `cleanup-receipt.json` 的 `ciResources`。产品失败的合格诊断报告可以上传，原产品步骤仍失败；checker 拒绝则不上传。E2E 额外要求原监督器退出、JSON/HTML 合格及便携 profile 归档成功，归档失败不会回退上传 raw。预检收据只读收集有界摘要，明确 diagnostic-only，不能替代这一完整核验。三个 job 的既有报告 artifact 同时携带精确 `.test-resources/runs/*/reports/portable/test-results/` 路径下的预检原件，启用隐藏目录，不上传 scratch；因此远端可重新核对预检与主测试两份清单，而非只相信合同声明。最终远端接受还须绑定实际同 SHA 六项 CI 及下载后的便携证据，旧本地 v2 关闭证明继续只接受实际 cleanup complete。
+
+## P6 Linux 固定校准与自检
+
+`pnpm test:e2e:linux` 使用 `tools/src/deploy/linux-browser-cli.ts`，外层仍是 `run.py container`。只接受固定范围；校准 1 条通过才运行其余 13 条，Chromium、单 worker、原断言/超时/重试/trace/截图不变。Node 24.21.0、pnpm 12.6.0、Playwright 1.63.0、Ubuntu 24.04 和 Linux arm64 固定。独立提交源码副本与数据库，安装 SDK 的 16 组补丁字节前后核对，未提交源码拒绝运行。
+
+2026-11-02 用户批准的 `pnpm test:e2e:linux:selftest` 通过同一入口选择固定 `selftest` 配置：`editor/selftest.spec.ts` 与 `editor/selftest-next.spec.ts`，共 29 条、Chromium、单 worker、默认自动保存，仅加 `--max-failures=1` 使首错后停止。原重试、trace、截图、超时、容量和断言保持。受跟踪 `tools/test-resources/linux-browser-profiles.json` 是宿主计划、guest 执行及收集的同一来源；命令行拒绝任意范围与额外参数。guest 原始执行证明中的配置名和完整命令必须与宿主选择相符，29 条均须首过，无重试/flaky/跳过；额外组不能忽略，保留原件并阻止环境释放。不自动重跑，不扩大到其他平台或完整 Gate。
+
+runner 限 4 GiB RAM/3 CPU，数据库限 512 MiB/1 CPU；私有 1 GiB shm，不挂 Docker socket 或宿主 IPC/PID/network。每 2 秒尝试采样 scratch、容器可写层、内部工作卷、数据库卷与镜像；16 GiB 为停止阈值，采样和退出等待可能超调，12 GiB 磁盘保留独立执行。查询失败、OOM、会话变化、任一产品失败均停止，不自动创建下一轮。
+
+第一处采样失败另存 `linux-browser/measurement-failure.json`：只含固定阶段/原因、白名单错误码/信号、数值退出码、输出字节数和最多 64 KiB 前缀摘要，以及缺失项/权限拒绝布尔线索；不保存命令参数、原异常正文、输出正文或环境变量。后续收尾异常不覆盖原件，`summary.json` 的 `measurementFailureSaved` 表示是否实际保存。诊断失败也停止，不能因为记录缺失继续运行、忽略 stderr 或改变清理权限。该记录帮助定位失败，不证明原问题已解决。
+
+复用父 UUID 容器/卷/网络台账，先登记后创建；工作文件使用本轮 `_assets` 内部卷，Node 子目录另作只读挂载，源码和清单通过 Docker cp 传入；不把数万个依赖文件 bind 到宿主。先结束生产者、核对本轮全部容器完整 ID 并停止，再提取报告，安全导出后才实际删除容器/卷。容器内 tini 替代 Docker 注入 init；安装前和 pnpm 就绪后先通过原完整 lsof 预检。内层 `run.py e2e` 的真实回执与父回执分别保留，不改写为同一轮。停止的容器经 `linux_browser_transport.py` 流式导出至父 scratch：两流总 payload 5 GiB，每流元数据 64 MiB/10 万项（整轮最多 128 MiB/20 万项），扩展 tar 头限 64 KiB；拒绝越界、链接、特殊文件、重复项与未知证据，内层提取原 run.json、根层或 reports/command.log 与临时清单，每件限 4 MiB、发布合计 16 MiB；scratch（含空目录）及未知残留会保留存在性拒绝信号，不能因过滤消失。导出后先检查 JSON/HTML 的环境变量边界，再以稳定字节清单复制；完整 profile、node_modules、数据库不导出。两组报告合计不超过 5 GiB，沿普通 14 天/5 GiB 策略；失败和中断走同一清理路径。
+
+基础镜像缓存另记父运行目录 `linux-browser-image.json`，拉取前 fsync，固定 Playwright digest 上限 5 GiB/14 天；既有 Node/PostgreSQL/Playwright 镜像只借用。新增镜像确认 daemon、ID、digest、所有容器使用和额外引用后，仅非强制 `docker image rm <digest>`。与固定 digest 完全相同的 tag 仅视为本轮别名；其他 tag/digest 或其他容器引用仍视为共享。Docker inspect 的压缩 Size 不代替总体积：核对显示容量的保守上界，整轮维持 5 GiB 预留。共享时保留明确状态和到期时间；未闭合拉取、查询异常、身份变化或到期共享缓存阻止新拉取，保留待核对，不删除未知或其他项目资源。元数据不按报告垃圾回收，不清全局 image/builder cache。
+
+小型验证：受管 Python `test_linux_browser*.py` 及受管 Vitest `tools/src/deploy/linux-browser*.test.ts`，并核对既有容器归属/生产者回归。真实入口只用于已批准的 S4 校准或 S5 自检清单，不隐式恢复 Mac 浏览器或完整 Gate。
+
+Linux guest 启动前还会持久写 `linux-browser-evidence-hold.json`。父 `finish` 与重启 sweep 在该标记存在时保留原件并登记 `cleanup-pending`；内层报告安全拒绝、未发布、清理未闭合或证据归属不明时不会解除。普通产品失败的安全报告全部导出后可解除，不把产品失败当成证据丢失。缺证明时不得计为通过；成功还须核对 guest 已停止且退出码为零、无 OOM，以及版本/源码/SDK 前后证明全部一致。
+
+## 2026-11-03 资源回归接续
+
+用户批准整体进度中的下一步后，真实子运行夹具继续接入 `ManagedFixture`，详见 [接续计划](../v0.1/M5-表格能力与资源/plans/P6-S5-资源夹具接续与整组回归.md)。`pnpm test:cleanup:check` 保留全部 `test_*.py`，增加 unittest `-f`，遇到首个异常停止；不删除测试或降低原断言。
+
+接入范围：DesktopSessionRunnerTests 全部真实/屏障子运行，RunnerTests 的报告轮转、CI settle/恢复和退出码/中断链，Node 协议三个实际父子入口，正常短路径/受控预检失败后恢复/管道关闭，VM 短路径恢复（只创建 KiB 文件），Linux 证据 hold 的拒绝与恢复。创建前有外层 hold，内层异常先导出，无法证明闭合时保留原件，外层 finish/sweep 均不能删除。
+
+Node `killed` 用例始终通过自制 `owned-protocol.mjs` 的内存 capture 函数模拟全部 Docker API，未调用 Docker daemon。该固定模型在创建前登记 `node-docker-stub-v1`；原来的 pending、诊断导出、未发布、env 保留以及 sweep 不修改协议台账断言全部保留。断言成立后，测试辅助核对固定模型字段、租约、真实生产者退出、目录/短根身份及完整句柄查询，保存有界原始台账和 `test-model-only` 处置说明，仅退役自己的真实短根，本地模型文件仍由外层严格回收。原 run.json 不改成 complete/passed，`realDockerClosureObserved=false`；没有预登记、真实服务/托管记录、活跃组、句柄或身份问题一律保留。不能将此测试辅助用于产品资源回收。
+
+`HostedLifecycleTests.command()` 的七个真实子进程入口同样在启动前使用独立 `ManagedFixture`，登记 `hosted-command-observation-v1`。纯模型初始化目录不被认领；已存在其他模型 run 时拒绝切入该入口。收尾先释放本例租约、解除 lsof/平台/环境模拟，再执行真实组、完整句柄及短根身份核验。固定的假 runner/run/attempt/SHA/boot/job 与严格 hosted scope 必须匹配，拒绝容器和 service scope；保存原 `host-disposal-pending` 台账与有界命令日志，处置记录为 `test-model-only`、`hostDisposalObserved=false`。不把本机测试模型退役称为实测 GitHub VM 销毁。
+
+Node 模型在导出协议原字节前复用 `container_resources.read` 的严格 JSON、全字段和命名空间校验，再拒绝不属于 killed 时点的附加观测/异常/闭合字段。两个模型都在取得子锁前核对整个夹具的实际句柄，持锁后继续核对 scratch 和短根；不忽略查询结果或豁免整个 PID。
+
+其余纯内存/文件协议测试、不调用真实 command 的 hosted/service-scope 观察模型与故意破坏短根身份的模型继续保留测试控制的样本处置；它们不代表实测平台销毁或未知资源被安全清理。未将本轮接入表述为所有旧模拟夹具已做统一迁移。

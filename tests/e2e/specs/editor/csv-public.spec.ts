@@ -39,7 +39,8 @@ test('US-M5-13 公开 CSV 导入保留未提交正文，键盘一次撤销重做
   expect(undone.snapshot.sheetOrder).toEqual(original.snapshot.sheetOrder)
   expect(cellOf(undone.snapshot, 'D4')?.v).toBe('原表尚未回车的文字')
   await selectCell(page, 'C3')
-  await pressUniverShortcut(page, 'Shift+Z')
+  // SDK 的跨平台重做是 Ctrl/Cmd+Y；Cmd+Shift+Z 只注册在 Mac 平台。
+  await pressUniverShortcut(page, 'Y')
   await expect(sheetTab(page, 'CSV导入')).toBeVisible()
   await saveAndWait(page)
   expect((await savedContent(page, id)).snapshot.sheetOrder).toEqual(inserted.snapshot.sheetOrder)

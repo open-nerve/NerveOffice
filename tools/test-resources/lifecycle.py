@@ -146,7 +146,7 @@ def lsof_query_command():
 
 def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
     """Validate p/f/t/n before filtering; names may contain lsof errors, not paths."""
-    pid = descriptor = name = file_type = None
+    pid = descriptor = descriptor_field = name = file_type = None
     process_has_file = False
     count, samples = 0, []
     sample_identities = {}
@@ -157,7 +157,7 @@ def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
         count += 1
         # Task blocks can repeat a file. Keep the failure count and full identity;
         # only the bounded diagnostic samples are aggregated.
-        identity = (pid, descriptor, reason, operation, file_type, name)
+        identity = (pid, descriptor, descriptor_field, reason, operation, file_type, name)
         if identity in sample_identities:
             sample_identities[identity]["multiplicity"] += 1
             return
@@ -190,6 +190,15 @@ def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
                   "nameSha256": hashlib.sha256(raw_name).hexdigest() if raw_name is not None else None,
                   "nameTruncated": raw_name is not None and (len(raw_name) > 512 or len(shown_bytes) > 512),
                   "nameRedacted": redacted, "multiplicity": 1}
+        if descriptor is None and descriptor_field is not None:
+            raw_fd = os.fsencode(descriptor_field)
+            # Diagnostic only: none of these spellings becomes an accepted FD.
+            # Keep numeric/punctuation candidates and the fixed Darwin spelling;
+            # arbitrary text/paths are represented only by their length and hash.
+            safe_fd = descriptor_field == 'fp.' or re.fullmatch(r'[0-9*?. +_-]*', descriptor_field) is not None
+            sample.update(fdRaw=os.fsdecode(raw_fd[:64]) if safe_fd else '<redacted-fd>',
+                          fdBytes=len(raw_fd), fdSha256=hashlib.sha256(raw_fd).hexdigest(),
+                          fdTruncated=len(raw_fd) > 64, fdRedacted=not safe_fd)
         samples.append(sample)
         sample_identities[identity] = sample
     def finish_file():
@@ -231,12 +240,13 @@ def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
             if pid is not None and not process_has_file:
                 problem("process-without-file")
             pid = int(value) if re.fullmatch(r"[0-9]{1,10}", value) else None
-            descriptor = name = file_type = None
+            descriptor = descriptor_field = name = file_type = None
             process_has_file = False
             if pid is None:
                 problem("invalid-pid")
         elif field == "f":
             finish_file()
+            descriptor_field = value
             descriptor = value if re.fullmatch(r"(?:[0-9]{1,10}|[A-Za-z][A-Za-z0-9_-]{0,31})", value) else None
             name = file_type = None
             process_has_file = True
@@ -1130,7 +1140,18 @@ class Run:
         if status not in ("passed", "failed", "interrupted"):
             raise ValueError("终态无效")
         try:
+            # Nested test fixtures register before creating resources. A crash or
+            # failed child closure must survive this outer finish and later sweep.
+            fixture_holds = self.directory / 'fixture-holds'
+            if fixture_holds.exists() or fixture_holds.is_symlink():
+                raise ValueError('nested-fixture-retention-pending')
             container_snapshot = self.assert_container_closed()
+            # Linux child evidence may be rejected by the report safety guard or
+            # interrupted before export. Keep its original bytes, including on
+            # restart; Docker closure alone does not authorize discarding them.
+            evidence_hold = self.directory / 'linux-browser-evidence-hold.json'
+            if evidence_hold.exists() or evidence_hold.is_symlink():
+                raise ValueError('linux-browser-evidence-retention-pending')
             if 'containerResources' in self.data:
                 if self.scratch.exists() and self.data.get('cleanupStage') != 'reports-collected':
                     if self.data.get('hostedScope') is not None:

@@ -168,6 +168,20 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(workflow.jobs.container?.steps.some(step => step.run?.trim() === 'pnpm test:e2e:container')).toBe(true)
   })
 
+  it('仅 WebKit 整批外层窗口增加 30 分钟，原六项与独立退出收尾窗口保持', () => {
+    // 固定条件表达式约束真实工作流；不另造 GitHub 表达式求值器。
+    // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文
+    expect(workflow.jobs.e2e?.['timeout-minutes']).toBe('${{ matrix.browser == \'webkit\' && 170 || 140 }}')
+    const steps = workflow.jobs.e2e!.steps
+    const checking = steps.filter(runsChecks)
+    expect(checking).toHaveLength(1)
+    // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文
+    expect(checking[0]?.['timeout-minutes']).toBe('${{ matrix.browser == \'webkit\' && 145 || 115 }}')
+    expect(steps.find(step => step.id === 'e2e-quiescence')?.['timeout-minutes']).toBe(17)
+    expect(workflow.jobs.verify?.['timeout-minutes']).toBe(45)
+    expect(workflow.jobs.container?.['timeout-minutes']).toBe(45)
+  })
+
   it('登录 popup 导航补证只在 WebKit 矩阵启用，不影响其他浏览器、verify 或容器；全局与步骤不能覆盖开关', () => {
     expect(workflow.env?.E2E_LOGIN_POPUP_DIAGNOSTIC).toBeUndefined()
     // 固定条件表达式直接约束真实工作流，不另造 GitHub 表达式求值器。

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-import { OWNER_VARIABLE, parseProcessStat, prepareRun } from './e2e-process.ts'
+import { ciBudgetsForBrowser, OWNER_VARIABLE, parseProcessStat, prepareRun } from './e2e-process.ts'
 
 // 旧人工样例只列到 start 后两项；保持原值/断言，只补齐 Linux 剩余数字列和末尾换行。
 function completeStat(text: string): string {
@@ -13,6 +13,21 @@ function completeStat(text: string): string {
 }
 
 describe('CI E2E 的 Linux 内核身份与平台边界', () => {
+  it('仅完整 WebKit 分片取得 120 分钟整批预算，其他输入与独立收尾预算保持原值', () => {
+    for (const browser of [undefined, '', 'chromium', 'chrome', 'msedge', 'webkit,chrome', ' webkit', 'WEBKIT', '120']) {
+      expect(ciBudgetsForBrowser(browser), browser).toEqual({ runMs: 5_400_000, cleanupMs: 900_000, forceMs: 60_000, pollMs: 250 })
+    }
+    expect(ciBudgetsForBrowser('webkit')).toEqual({ runMs: 7_200_000, cleanupMs: 900_000, forceMs: 60_000, pollMs: 250 })
+  })
+
+  it('各轮取得独立预算值，调用者不能改写下一轮默认或 WebKit 预算', () => {
+    const first = ciBudgetsForBrowser('webkit')
+    first.runMs = 1
+    first.cleanupMs = 1
+    expect(ciBudgetsForBrowser('webkit')).toEqual({ runMs: 7_200_000, cleanupMs: 900_000, forceMs: 60_000, pollMs: 250 })
+    expect(ciBudgetsForBrowser(undefined)).toEqual({ runMs: 5_400_000, cleanupMs: 900_000, forceMs: 60_000, pollMs: 250 })
+  })
+
   it('跨进程归属标记属于配置模块已保留的测试命名空间', () => {
     expect(OWNER_VARIABLE).toMatch(/^NERVE_TEST_[A-Z0-9_]+$/)
   })

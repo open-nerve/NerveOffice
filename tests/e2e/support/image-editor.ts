@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import type { ImageInputFormula } from './image-snapshot-urls.ts'
 import sharp from 'sharp'
 import { saveAssetSnapshot, uploadAsset } from './asset-protocol.ts'
 import { formulaSampleFor } from './capture-samples.ts'
@@ -6,6 +7,7 @@ import { createUser } from './database.ts'
 import { probeSnapshot, setCellValue } from './editor-probe.ts'
 import { expect } from './fixtures.ts'
 import { imageSample } from './image-sample.ts'
+import { imageSnapshotForUrlCheck } from './image-snapshot-urls.ts'
 import { loginThroughApi } from './session.ts'
 import { createSheetThroughApi, saveAndWait, savedContent, sheetCanvas } from './sheet.ts'
 
@@ -90,14 +92,15 @@ export async function expectImagePixels(page: Page, a1: string, present = true):
 }
 
 /** 故障之后继续走真正的编辑、绘制和保存捕获，不只看页面没有报错。 */
-export async function imageFailureSentinel(page: Page, documentId: string, value: string): Promise<void> {
+export async function imageFailureSentinel(page: Page, documentId: string, value: string, inputFormula?: ImageInputFormula): Promise<void> {
   await setCellValue(page, 'J12', value)
   await expect.poll(async () => (await imagePixels(page, 'J12')).ink).toBeGreaterThan(10)
   await saveAndWait(page)
   const snapshot = await probeSnapshot(page)
   expect(snapshot).toContain(value)
-  expect(snapshot).not.toMatch(/blob:|data:image/)
+  expect(imageSnapshotForUrlCheck(snapshot, inputFormula)).not.toMatch(/blob:|data:image/)
   const saved = await savedContent(page, documentId)
   expect(JSON.stringify(saved.snapshot)).toContain(value)
+  expect(imageSnapshotForUrlCheck(JSON.stringify(saved.snapshot), inputFormula)).not.toMatch(/blob:|data:image/)
   expect(await sheetCanvas(page).screenshot()).not.toHaveLength(0)
 }
