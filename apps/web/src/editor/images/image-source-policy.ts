@@ -65,11 +65,15 @@ function canonicalSource(value: unknown, origin: string): string {
   return value.startsWith('/') ? value : value.slice(origin.length)
 }
 
-/** 每次写入共用预算，不因拆成许多小图片片段而重置。 */
-function fragmentVisitor(origin: string): (value: unknown, depth?: number) => unknown {
+/**
+ * 预算按顶层片段计：一次 normalizeImageFragment 的整个值共用一份预算，单元格与行列的每个 p/s 各自一份。
+ * 预算只约束单个片段的规模与深度；整次写入的规模由 cells 上限约束。整次写入共用一份时，
+ * 中等规模表上的撤销、加粗、边框与富文本结构命令会被整体取消（M5R-I-01）。
+ */
+function fragmentVisitor(origin: string): (value: unknown) => unknown {
   const ancestors = new WeakSet<object>()
   let count = 0
-  const visit = (value: unknown, depth = 0): unknown => {
+  const visit = (value: unknown, depth: number): unknown => {
     if (++count > IMAGE_FRAGMENT_LIMITS.entries || depth > IMAGE_FRAGMENT_LIMITS.depth)
       return reject('limit')
     // 这里处理 SDK 运行期片段；普通富文本的 pageSize 使用 Infinity 表示无限画布。
@@ -90,7 +94,10 @@ function fragmentVisitor(origin: string): (value: unknown, depth?: number) => un
     ancestors.delete(value)
     return next
   }
-  return visit
+  return (value) => {
+    count = 0
+    return visit(value, 0)
+  }
 }
 
 function checked(value: unknown, visit: (value: unknown) => unknown): ImageSourceResult {
@@ -115,7 +122,8 @@ function cellVisitor(origin: string): (value: unknown) => unknown {
     if (typeof value !== 'object' || Array.isArray(value))
       return reject('structure')
     return remap(value, dataEntries(value), (child, key) => {
-      if (key === 'p' || (key === 's' && typeof child === 'object'))
+      // null 是 SDK 撤销与清除为每格补的空位，不是片段，不进入预算
+      if (child !== null && (key === 'p' || (key === 's' && typeof child === 'object')))
         return fragment(child)
       return child
     })
@@ -180,22 +188,30 @@ export function normalizeImageSheet(value: unknown, origin: string): ImageSource
   })
 }
 
-/** 只检查实际改变的分支。低层不能再归一，否则保存的逆操作与模型会不一致。 */
-export function acceptsImageTransition(previous: unknown, next: unknown, allowLegacyRemoval = false): boolean {
+export type ImageTransitionResult = { readonly ok: true } | { readonly ok: false, readonly reason: FailureReason }
+
+/** 只检查实际改变的分支。低层不能再归一，否则保存的逆操作与模型会不一致。拒绝时给出有界原因，供操作状态提示（M5R-M-10）。 */
+export function imageTransition(previous: unknown, next: unknown, allowLegacyRemoval = false): ImageTransitionResult {
   let count = 0
-  const visit = (before: unknown, after: unknown, depth = 0): boolean => {
+  const settled = (value: unknown): void => {
+    const result = normalizeImageFragment(value, '')
+    if (!result.ok)
+      reject(result.reason)
+    if (result.changed)
+      reject('source')
+  }
+  const visit = (before: unknown, after: unknown, depth: number): void => {
     if (before === after)
-      return true
+      return
     if (++count > IMAGE_FRAGMENT_LIMITS.entries || depth > IMAGE_FRAGMENT_LIMITS.depth)
-      return false
+      reject('limit')
     const beforeObject = typeof before === 'object' && before !== null
     const afterObject = typeof after === 'object' && after !== null
     if (!beforeObject || !afterObject) {
-      const valid = (value: unknown) => {
-        const result = normalizeImageFragment(value, '')
-        return result.ok && !result.changed
-      }
-      return valid(after) && (allowLegacyRemoval || valid(before))
+      settled(after)
+      if (!allowLegacyRemoval)
+        settled(before)
+      return
     }
     const old = new Map(dataEntries(before))
     const current = new Map(dataEntries(after))
@@ -206,18 +222,24 @@ export function acceptsImageTransition(previous: unknown, next: unknown, allowLe
         continue
       if (key === 'source' || key === 'base64Cache') {
         if ((current.has(key) && canonicalSource(to, '') !== to) || (!allowLegacyRemoval && old.has(key) && canonicalSource(from, '') !== from))
-          return false
+          reject('source')
         if (current.has('source') && current.has('base64Cache') && current.get('source') !== current.get('base64Cache'))
-          return false
+          reject('source')
       }
-      else if (!visit(from, to, depth + 1)) {
-        return false
+      else {
+        visit(from, to, depth + 1)
       }
     }
-    return true
   }
   try {
-    return visit(previous, next)
+    visit(previous, next, 0)
+    return { ok: true }
   }
-  catch { return false }
+  catch (error) {
+    return { ok: false, reason: error instanceof RejectedImageFragment ? error.reason : 'structure' }
+  }
+}
+
+export function acceptsImageTransition(previous: unknown, next: unknown, allowLegacyRemoval = false): boolean {
+  return imageTransition(previous, next, allowLegacyRemoval).ok
 }

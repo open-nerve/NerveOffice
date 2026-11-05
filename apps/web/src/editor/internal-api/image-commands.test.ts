@@ -1,9 +1,9 @@
 import type { JSONXActions, Workbook } from '@univerjs/core'
-import { CommandType, createDocumentModelWithStyle, Direction, DrawingTypeEnum, ICommandService, ImageSourceType, IUndoRedoService, IUniverInstanceService, JSON1, LocaleType, ObjectRelativeFromH, ObjectRelativeFromV, PositionedObjectLayoutType, RedoCommand, UndoCommand, Univer, UniverInstanceType } from '@univerjs/core'
+import { BorderStyleTypes, BorderType, CommandType, createDocumentModelWithStyle, Direction, DrawingTypeEnum, ICommandService, ImageSourceType, IUndoRedoService, IUniverInstanceService, JSON1, LocaleType, ObjectRelativeFromH, ObjectRelativeFromV, PositionedObjectLayoutType, RedoCommand, UndoCommand, Univer, UniverInstanceType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { IDrawingManagerService, UniverDrawingPlugin } from '@univerjs/drawing'
 import { UniverRenderEnginePlugin } from '@univerjs/engine-render'
-import { CopySheetCommand, DeleteRangeMoveLeftCommand, DeleteRangeMoveUpCommand, InsertRangeMoveDownCommand, InsertRangeMoveRightCommand, InsertRowByRangeCommand, InsertSheetCommand, InsertSheetMutation, MoveRangeCommand, MoveRangeMutation, RemoveColByRangeCommand, RemoveRowByRangeCommand, RemoveSheetCommand, SetRangeValuesCommand, SetRangeValuesMutation, SheetSkeletonService, SheetsSelectionsService, UniverSheetsPlugin } from '@univerjs/sheets'
+import { ClearSelectionContentCommand, CopySheetCommand, DeleteRangeMoveLeftCommand, DeleteRangeMoveUpCommand, InsertRangeMoveDownCommand, InsertRangeMoveRightCommand, InsertRowByRangeCommand, InsertSheetCommand, InsertSheetMutation, MoveRangeCommand, MoveRangeMutation, RemoveColByRangeCommand, RemoveRowByRangeCommand, RemoveSheetCommand, SetBorderBasicCommand, SetRangeValuesCommand, SetRangeValuesMutation, SetStyleCommand, SheetSkeletonService, SheetsSelectionsService, UniverSheetsPlugin } from '@univerjs/sheets'
 import { drawingPositionToTransform, ISheetDrawingService, RemoveSheetDrawingCommand, SetDrawingApplyMutation, SetSheetDrawingCommand, SheetDrawingAnchorType, UniverSheetsDrawingPlugin } from '@univerjs/sheets-drawing'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { editorIdentityOverride } from '../identity/editor-authz-io.service.ts'
@@ -21,7 +21,7 @@ const cleanup: (() => void)[] = []
 const target = { unitId: BOOK, subUnitId: SHEET, drawingId: 'image' }
 const path = [BOOK, SHEET, 'data', 'image']
 
-function setup(source = SOURCE) {
+function setup(source = SOURCE, size = { rowCount: 20, columnCount: 10 }) {
   const univer = new Univer({ locale: LocaleType.ZH_CN, locales: { [LocaleType.ZH_CN]: SHEET_ZH_CN }, override: editorIdentityOverride('edit') })
   univer.registerPlugin(UniverRenderEnginePlugin)
   univer.registerPlugin(UniverSheetsPlugin)
@@ -30,12 +30,13 @@ function setup(source = SOURCE) {
   const api = FUniver.newAPI(univer)
   const guards = installEntryGuards(api)
   const report = vi.fn()
+  const rejected = vi.fn()
   let editing = true
-  const policy = installImagePolicy(univer, api, report, { unitId: BOOK, canEdit: () => editing })
+  const policy = installImagePolicy(univer, api, { failed: report, rejected }, { unitId: BOOK, canEdit: () => editing })
   const workbook = univer.createUnit<unknown, Workbook>(UniverInstanceType.UNIVER_SHEET, {
     id: BOOK,
     sheetOrder: [SHEET, 'other'],
-    sheets: { [SHEET]: { id: SHEET, name: 'Sheet', rowCount: 20, columnCount: 10 }, other: { id: 'other', name: 'Other', rowCount: 20, columnCount: 10 } },
+    sheets: { [SHEET]: { id: SHEET, name: 'Sheet', ...size }, other: { id: 'other', name: 'Other', rowCount: 20, columnCount: 10 } },
   })
   const injector = injectorOf(univer)
   injector.get(IUniverInstanceService).focusUnit(BOOK)
@@ -82,7 +83,7 @@ function setup(source = SOURCE) {
     executed: [...executed],
   })
   const apply = (op: JSONXActions) => commands.syncExecuteCommand(SetDrawingApplyMutation.id, { ...target, op, objects: [target], type: 2 })
-  return { univer, api, injector, commands, history, services, workbook, state, apply, report, drawing, policy, revokeEdit: () => {
+  return { univer, api, injector, commands, history, services, workbook, state, apply, report, rejected, drawing, policy, revokeEdit: () => {
     editing = false
   } }
 }
@@ -281,8 +282,9 @@ describe('真实图片命令：归一发生在生成历史之前', () => {
       { ...target, source: 'https://private-input.example/secret.png' },
     ] })).toBe(false)
     expect(h.state()).toEqual(before)
-    expect(h.report).toHaveBeenCalledTimes(1)
-    expect(String(h.report.mock.calls[0]?.[0])).not.toContain('private-input')
+    // 写入策略的拒绝走操作状态通道并带有界原因，不冒充图片显示失败（M5R-M-10）
+    expect(h.rejected).toHaveBeenCalledExactlyOnceWith('write-source')
+    expect(h.report).not.toHaveBeenCalled()
   })
 
   it.each([SetSheetDrawingCommand.id, RemoveSheetDrawingCommand.id])('普通 %s 不能生成恢复非法旧地址的 undo', async (id) => {
@@ -628,5 +630,101 @@ describe('工作表结构变化必须在 handler 前拒绝坏逆操作', () => {
       toRange: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
     })).toBe(false)
     expect(h.state()).toEqual(before)
+  })
+})
+
+describe('大范围写入、格式与撤销不受图片预算误拦（M5R-I-01）', () => {
+  const ROWS = 3_000
+  const COLUMNS = 20
+  const all = { startRow: 0, endRow: ROWS - 1, startColumn: 0, endColumn: COLUMNS - 1 }
+  const grid = (rows: number, columns: number, cell: (row: number, column: number) => unknown): unknown[][] =>
+    Array.from({ length: rows }, (_, row) => Array.from({ length: columns }, (_, column) => cell(row, column)))
+  const large = () => setup(SOURCE, { rowCount: ROWS, columnCount: COLUMNS })
+  const raw = (h: ReturnType<typeof setup>, row: number, column: number) => h.workbook.getSheetBySheetId(SHEET)?.getCellRaw(row, column)
+  const style = (h: ReturnType<typeof setup>, row: number, column: number) => h.workbook.getStyles().getStyleByCell(raw(h, row, column))
+  const quiet = (h: ReturnType<typeof setup>) => {
+    expect(h.report).not.toHaveBeenCalled()
+    expect(h.rejected).not.toHaveBeenCalled()
+  }
+  const link = (row: number) => {
+    const p = createDocumentModelWithStyle(`链接${row}`, {}).getSnapshot()
+    return { ...p, body: { ...p.body!, customRanges: [{ startIndex: 0, endIndex: 3, rangeId: `link-${row}`, rangeType: 0, properties: { url: 'https://example.com/page' } }] } }
+  }
+
+  it('6 万格写入、清除与逐级撤销重做都完成', async () => {
+    const h = large()
+    const last = ROWS * COLUMNS - 1
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, { unitId: BOOK, subUnitId: SHEET, range: all, value: grid(ROWS, COLUMNS, (row, column) => ({ v: row * COLUMNS + column })) })).toBe(true)
+    expect(raw(h, ROWS - 1, COLUMNS - 1)?.v).toBe(last)
+    expect(await h.commands.executeCommand(ClearSelectionContentCommand.id, { unitId: BOOK, subUnitId: SHEET, ranges: [all] })).toBe(true)
+    expect(raw(h, ROWS - 1, COLUMNS - 1)?.v ?? null).toBeNull()
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(raw(h, ROWS - 1, COLUMNS - 1)?.v).toBe(last)
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(raw(h, ROWS - 1, COLUMNS - 1)?.v ?? null).toBeNull()
+    expect(await h.commands.executeCommand(RedoCommand.id)).toBe(true)
+    expect(raw(h, ROWS - 1, COLUMNS - 1)?.v).toBe(last)
+    quiet(h)
+  })
+
+  it('6 万格加粗及其撤销完成', async () => {
+    const h = large()
+    expect(await h.commands.executeCommand(SetStyleCommand.id, { unitId: BOOK, subUnitId: SHEET, range: all, style: { type: 'bl', value: 1 } })).toBe(true)
+    expect(style(h, ROWS - 1, COLUMNS - 1)?.bl).toBe(1)
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(style(h, ROWS - 1, COLUMNS - 1)?.bl).toBeUndefined()
+    quiet(h)
+  })
+
+  it('6,000 格四边框及其撤销完成', async () => {
+    const h = large()
+    const range = { startRow: 0, endRow: 299, startColumn: 0, endColumn: COLUMNS - 1 }
+    expect(await h.commands.executeCommand(SetBorderBasicCommand.id, { unitId: BOOK, subUnitId: SHEET, ranges: [range], value: { type: BorderType.ALL, color: '#000000', style: BorderStyleTypes.THIN, activeBorderType: true } })).toBe(true)
+    expect(style(h, 299, COLUMNS - 1)?.bd?.b).toBeTruthy()
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(style(h, 299, COLUMNS - 1)?.bd?.b ?? null).toBeNull()
+    quiet(h)
+  })
+
+  it('1 万格带格式与富文本的写入（粘贴形态）及其撤销重做完成', async () => {
+    const h = large()
+    const range = { startRow: 0, endRow: 499, startColumn: 0, endColumn: COLUMNS - 1 }
+    const value = grid(500, COLUMNS, row => ({ s: { bl: 1, cl: { rgb: '#ff0000' }, bd: { b: { s: BorderStyleTypes.THIN, cl: { rgb: '#000000' } } } }, p: link(row) }))
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, { unitId: BOOK, subUnitId: SHEET, range, value })).toBe(true)
+    expect(raw(h, 499, COLUMNS - 1)?.p?.body?.customRanges).toHaveLength(1)
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(raw(h, 499, COLUMNS - 1)?.p ?? null).toBeNull()
+    expect(await h.commands.executeCommand(RedoCommand.id)).toBe(true)
+    expect(style(h, 499, COLUMNS - 1)?.bl).toBe(1)
+    quiet(h)
+  })
+
+  it('3,000 个链接格的表上插行、删行及其撤销完成', async () => {
+    const h = large()
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, { unitId: BOOK, subUnitId: SHEET, range: { startRow: 0, endRow: ROWS - 1, startColumn: 0, endColumn: 0 }, value: grid(ROWS, 1, row => ({ p: link(row) })) })).toBe(true)
+    const row = { startRow: 0, endRow: 0, startColumn: 0, endColumn: COLUMNS - 1 }
+    expect(await h.commands.executeCommand(InsertRowByRangeCommand.id, { unitId: BOOK, subUnitId: SHEET, range: row, direction: Direction.UP })).toBe(true)
+    expect(raw(h, 1, 0)?.p?.body?.customRanges?.[0]?.rangeId).toBe('link-0')
+    expect(await h.commands.executeCommand(RemoveRowByRangeCommand.id, { unitId: BOOK, subUnitId: SHEET, range: { ...row, startRow: 1, endRow: 1 } })).toBe(true)
+    expect(raw(h, 1, 0)?.p?.body?.customRanges?.[0]?.rangeId).toBe('link-1')
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(raw(h, 1, 0)?.p?.body?.customRanges?.[0]?.rangeId).toBe('link-0')
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(raw(h, 0, 0)?.p?.body?.customRanges?.[0]?.rangeId).toBe('link-0')
+    quiet(h)
+  })
+
+  it('同一大范围写入中的非法来源仍整批拒绝并给出来源原因；同源绝对地址仍归一', async () => {
+    const h = large()
+    const before = h.state()
+    const value = grid(ROWS, COLUMNS, () => ({ s: { bl: 1 } }))
+    value[ROWS - 1]![COLUMNS - 1] = { p: { ...link(0), drawings: { image: { ...h.drawing, source: 'blob:bad' } } } }
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, { unitId: BOOK, subUnitId: SHEET, range: all, value })).toBe(false)
+    expect(h.state()).toEqual(before)
+    expect(h.rejected).toHaveBeenCalledExactlyOnceWith('write-source')
+    expect(h.report).not.toHaveBeenCalled()
+    value[ROWS - 1]![COLUMNS - 1] = { p: { ...link(0), drawings: { image: { ...h.drawing, source: `${location.origin}${OTHER}`, base64Cache: `${location.origin}${OTHER}` } } } }
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, { unitId: BOOK, subUnitId: SHEET, range: all, value })).toBe(true)
+    expect(raw(h, ROWS - 1, COLUMNS - 1)?.p?.drawings?.image).toMatchObject({ source: OTHER, base64Cache: OTHER })
   })
 })

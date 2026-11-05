@@ -399,7 +399,11 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   })
   // 图片先整批验证，再允许后续链接改写；任何拒绝都发生在 SDK 生成撤销或写模型之前。
   const imageOwner = options.imageAccess?.owner ?? options.imageAccess?.current()?.user.id
-  const imageWrites = installImagePolicy(univer, univerAPI, options.onImageFailure ?? (error => reportError(error)), {
+  // 写入策略的拒绝走操作状态，不置“图片暂时无法显示”，也不让“重新加载图片”假装重试（M5R-M-10）
+  const imageWrites = installImagePolicy(univer, univerAPI, {
+    failed: options.onImageFailure ?? (error => reportError(error)),
+    rejected: reason => options.onImageOperation?.({ kind: 'failed', operation: 'edit', reason, completed: 0, total: 0 }),
+  }, {
     unitId: snapshot.unitId,
     canEdit: () => access === 'edit' && imageOwner !== undefined && options.imageAccess?.current()?.user.id === imageOwner,
   })

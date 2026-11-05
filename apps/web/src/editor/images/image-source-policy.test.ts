@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { IMAGE_FRAGMENT_LIMITS, normalizeImageCells, normalizeImageFragment } from './image-source-policy.ts'
+import { IMAGE_FRAGMENT_LIMITS, imageTransition, normalizeImageAxis, normalizeImageCells, normalizeImageFragment } from './image-source-policy.ts'
 
 const ORIGIN = 'https://docs.example.com'
 const SOURCE = '/api/assets/11111111-1111-4111-8111-111111111111'
@@ -113,5 +113,76 @@ describe('单元格写入：只处理 p 和对象样式，不递归普通值/公
     const before = JSON.stringify(matrix)
     expect(normalizeImageCells(matrix, ORIGIN).ok).toBe(false)
     expect(JSON.stringify(matrix)).toBe(before)
+  })
+})
+
+describe('大范围写入按片段计预算（M5R-I-01）', () => {
+  const grid = (rows: number, columns: number, cell: (row: number) => unknown): Record<number, Record<number, unknown>> =>
+    Object.fromEntries(Array.from({ length: rows }, (_, row) => [row, Object.fromEntries(Array.from({ length: columns }, (_, column) => [column, cell(row)]))]))
+  const side = () => ({ s: 1, cl: { rgb: '#000000' } })
+  const border = () => ({ bd: { t: side(), b: side(), l: side(), r: side() } })
+  // 链接格的富文本形态：段落、文字样式、超链接范围与无限页面尺寸，每格三十余个节点
+  const link = (row: number) => ({
+    id: `link-${row}`,
+    body: {
+      dataStream: `链接${row}\r\n`,
+      textRuns: [{ st: 0, ed: 4, ts: { cl: { rgb: '#1155cc' }, ul: { s: 1 } } }],
+      paragraphs: [{ startIndex: 5, paragraphStyle: { horizontalAlign: 0 } }],
+      customRanges: [{ startIndex: 0, endIndex: 4, rangeId: `range-${row}`, rangeType: 0, properties: { url: 'https://example.com/page' } }],
+      sectionBreaks: [{ startIndex: 6 }],
+    },
+    documentStyle: { pageSize: { width: Infinity, height: Infinity } },
+  })
+
+  it.each([
+    { name: '撤销与清除形态 {p:null, s:null} 6 万格', matrix: () => grid(3_000, 20, () => ({ v: 1, p: null, s: null })) },
+    { name: '加粗 6 万格', matrix: () => grid(3_000, 20, () => ({ s: { bl: 1 } })) },
+    { name: '四边框 6,000 格', matrix: () => grid(300, 20, () => ({ s: border() })) },
+    { name: '链接富文本 5,000 格', matrix: () => grid(5_000, 1, row => ({ p: link(row) })) },
+    { name: '带格式粘贴 1 万格（样式＋富文本）', matrix: () => grid(500, 20, row => ({ v: 'x', s: { bl: 1, ...border() }, p: link(row) })) },
+  ])('$name：不被图片预算拒绝，矩阵身份不变', ({ matrix }) => {
+    const value = matrix()
+    const result = normalizeImageCells(value, ORIGIN)
+    expect(result).toEqual({ ok: true, changed: false, value })
+    if (result.ok)
+      expect(result.value).toBe(value)
+  })
+
+  it('行列样式 6 万项同样按片段计预算', () => {
+    const value = Object.fromEntries(Array.from({ length: 60_000 }, (_, row) => [row, { h: 20, s: { bl: 1 } }]))
+    expect(normalizeImageAxis(value, ORIGIN)).toEqual({ ok: true, changed: false, value })
+  })
+
+  it('大范围写入里的非法来源仍整批拒绝；同源绝对地址仍被归一', () => {
+    const value = grid(3_000, 20, () => ({ s: { bl: 1 } }))
+    value[2_999]![19] = { s: { fill: { source: 'https://outside.example/a.png' } } }
+    expect(normalizeImageCells(value, ORIGIN)).toEqual({ ok: false, reason: 'source' })
+    value[2_999]![19] = { p: { drawings: { i: { source: `${ORIGIN}${SOURCE}` } } } }
+    const result = normalizeImageCells(value, ORIGIN)
+    expect(result.ok && result.changed).toBe(true)
+    if (result.ok)
+      expect((result.value as typeof value)[2_999]![19]).toEqual({ p: { drawings: { i: { source: SOURCE } } } })
+  })
+
+  it('单个片段仍受规模与深度上限约束，原因分类为 limit', () => {
+    const wide = { p: { body: { textRuns: Array.from({ length: IMAGE_FRAGMENT_LIMITS.entries + 1 }, () => ({ st: 0 })) } } }
+    expect(normalizeImageCells({ 0: { 0: wide } }, ORIGIN)).toEqual({ ok: false, reason: 'limit' })
+    let deep: unknown = { source: SOURCE }
+    for (let i = 0; i <= IMAGE_FRAGMENT_LIMITS.depth; i++)
+      deep = { child: deep }
+    expect(normalizeImageCells({ 0: { 0: { s: deep } } }, ORIGIN)).toEqual({ ok: false, reason: 'limit' })
+  })
+
+  it('状态迁移的拒绝带有界原因：来源、规模', () => {
+    expect(imageTransition({ source: SOURCE }, { source: SOURCE })).toEqual({ ok: true })
+    expect(imageTransition({ source: SOURCE }, { source: 'blob:bad' })).toEqual({ ok: false, reason: 'source' })
+    expect(imageTransition({ source: SOURCE }, { source: SOURCE, base64Cache: OTHER })).toEqual({ ok: false, reason: 'source' })
+    let before: unknown = 1
+    let after: unknown = 2
+    for (let i = 0; i <= IMAGE_FRAGMENT_LIMITS.depth; i++) {
+      before = { child: before }
+      after = { child: after }
+    }
+    expect(imageTransition(before, after)).toEqual({ ok: false, reason: 'limit' })
   })
 })
