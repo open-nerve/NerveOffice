@@ -15,6 +15,7 @@ Linux 预验收固定 `ad6e947032a2b19d6e93c4acb5548730b2a2113e`、CI94 `4168241
 | 浏览器进程与钥匙串 | `browser-crash.ts`、`browser-processes.ts` 的 XPC/Networking/launchd 分支及 WebCrypto | 只操作本轮进程/资料，重开可读、整组退出、原归属与句柄检查成立；凭据由正常桌面会话提供 |
 | 真实平台键盘与桌面 | `support/keyboard.ts`、read-only/input-focus/CSV 等既有用例；`desktop_session.py` | 验证真实 Mac 平台按键和会话，不把 Linux 的 UA/Meta 模拟当作本机结果；会话身份变化即停 |
 | 生产容器组合 | 原 `pnpm test:e2e:container` 及固定源码/生产镜像 | 在批准的 Mac 执行环境补齐原平台组合与原资源核验，Linux 已有通过独立保留 |
+| 真实 Safari 的 CSV 下载（2026-11-05 补登，M5 整体独立审查 Q-13） | `apps/web/src/features/sheet-editor/csv-download.ts` 在 click 后同步 `revokeObjectURL`；Playwright WebKit 可通过，真实 Safari 未验证 | 真实 Safari 下导出文件实际落盘且内容正确；若失败，改为下一个任务再释放对象地址并补回归，不以 WebKit 通过代签 |
 
 Excel、真实 Safari/Finder 图片矩阵沿 **DEF-004** 与 [P2 原生待验登记](P2-原生环境待验登记.md)，不并入新的自动化豁免。**DEF-013** 的真实 macOS 输入法仍在 M6 开始前核对；M6 当前未获启动授权。M4 **DEF-073/UR-035**、M4 完整验收/标签独立保留。
 
