@@ -25,6 +25,14 @@ export interface PanelDebounce {
 /** 数据验证的详情面板的根元素（sheets-data-validation-ui 的 views/components/DataValidationDetail.tsx 的 data-u-comp） */
 const DATA_VALIDATION_DETAIL_SELECTOR = '[data-u-comp="data-validation-detail"]'
 
+/**
+ * 数据验证详情的提交失败（M5R-I-05，补丁 UR-033 的 M5-P7 增量）：防抖到点或确认、关闭时有设置被命令拒绝（不合法的条件），那一项留在待办里、
+ * 字段上显示错误。补丁在详情的根元素上挂这个属性，直到提交成功或详情卸载；平台据此把它算作“还没写进模型的输入”（panel-debounce-watch.ts）
+ */
+export const PANEL_UNCOMMITTED_ATTRIBUTE = 'data-nerve-uncommitted'
+/** 上面的属性挂上或撤下（含卸载）时，补丁在详情所在的 document 上派发这个事件（不带内容），平台据此重新核对 */
+export const PANEL_UNCOMMITTED_EVENT = 'nerve-panel-uncommitted'
+
 export const PANEL_DEBOUNCES: readonly PanelDebounce[] = Object.freeze([
   Object.freeze({ panel: 'note', selector: NOTE_TEXTAREA_SELECTOR, delayMs: 300 } as const),
   Object.freeze({ panel: 'data-validation', selector: DATA_VALIDATION_DETAIL_SELECTOR, delayMs: 1000 } as const),

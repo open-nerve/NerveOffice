@@ -1,8 +1,26 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6ccfe8bebb5 100644
+index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c03738692092 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
-@@ -536,6 +536,7 @@ let DataValidationDropdownManagerService = class DataValidationDropdownManagerSe
+@@ -188,7 +188,16 @@ let DataValidationRejectInputController = class DataValidationRejectInputControl
+ 			if (!rule || rule.showErrorMessage === false || rule.errorStyle !== _univerjs_core.DataValidationErrorStyle.STOP) return next(Promise.resolve(true));
+ 			const validator = this._dataValidatorRegistryService.getValidatorItem(rule.type);
+ 			if (!validator) return next(Promise.resolve(true));
+-			if (await this._sheetsDataValidationValidatorService.validatorCell(unitId, subUnitId, row, col) === _univerjs_core.DataValidationStatus.VALID) return next(Promise.resolve(true));
++			let status;
++			try {
++				status = await this._sheetsDataValidationValidatorService.validatorCell(unitId, subUnitId, row, col);
++			} catch (error) {
++				// M5-P7（M5R-M-08）：校验任务已不再当前（撤销、规则变更或实例销毁）——没有结论：这次输入不写入，不当成未处理的错误；
++				// 取消错误来自 sheets-data-validation 的补丁（未导出类，按 name 认），真实错误照常抛出
++				if ((error === null || error === void 0 ? void 0 : error.name) === "DataValidationCancelledError") return next(Promise.resolve(false));
++				throw error;
++			}
++			if (status === _univerjs_core.DataValidationStatus.VALID) return next(Promise.resolve(true));
+ 			this._dialogService.open({
+ 				width: 368,
+ 				title: { title: this._localeService.t("sheets-data-validation-ui.alert.title") },
+@@ -536,6 +545,7 @@ let DataValidationDropdownManagerService = class DataValidationDropdownManagerSe
  						onEdit: handleEdit,
  						defaultValue: cellStr,
  						multiple,
@@ -10,7 +28,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
  						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
  					}
-@@ -2929,10 +2930,43 @@ function DataValidationOptions(props) {
+@@ -2929,10 +2939,76 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -18,8 +36,9 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
 -	const res = await commandService.executeCommand(id, params, options);
 -	callback === null || callback === void 0 || callback(res);
 -}, 1e3);
-+const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed) => {
++const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed, onFailed) => {
 +	const pending = [];
++	const isSetting = (task) => task[0] === _univerjs_sheets_data_validation.UpdateSheetDataValidationSettingCommand.id;
 +	const flush = () => {
 +		timer.cancel();
 +		const hadPending = pending.length > 0;
@@ -31,7 +50,25 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
 +			const task = pending[0];
 +			const [id, params, options, callback] = task;
 +			const result = commandService.syncExecuteCommand(id, resolveParams(id, params), options);
-+			if (!result) return false;
++			if (!result) {
++				// M5-P7（M5R-I-05）：提交不了的设置项并入下一项设置（后来的字段为准）后出队，后面不同种类的输入照常提交；
++				// 没有后续设置时停在这里：待办保留，onFailed 在字段上显示错误并告知平台还有未写进模型的输入
++				const later = pending[0] === task && isSetting(task) ? pending.findIndex((item, index) => index > 0 && isSetting(item)) : -1;
++				if (later > 0) {
++					const [laterId, laterParams, laterOptions, laterCallback] = pending[later];
++					pending[later] = [laterId, {
++						...laterParams,
++						setting: {
++							...params.setting,
++							...laterParams.setting
++						}
++					}, laterOptions, laterCallback];
++					pending.shift();
++					continue;
++				}
++				if (pending.length > 0) onFailed();
++				return false;
++			}
 +			if (pending[0] === task) pending.shift();
 +			callback === null || callback === void 0 || callback(result);
 +		}
@@ -40,6 +77,20 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
 +	};
 +	const timer = (0, _univerjs_core.debounce)(flush, 1e3);
 +	const execute = (id, params, options, callback) => {
++		if (id === _univerjs_sheets_data_validation.UpdateSheetDataValidationSettingCommand.id) {
++			// M5-P7（M5R-I-05）：同一字段的后续值覆盖更早的未提交设置——从更早的设置项去掉这些字段，空了就出队；不同种类的先后不变
++			const fields = Object.keys(params.setting);
++			for (let index = pending.length - 1; index >= 0; index--) {
++				const [taskId, taskParams, taskOptions, taskCallback] = pending[index];
++				if (taskId !== id) continue;
++				const rest = Object.fromEntries(Object.entries(taskParams.setting).filter(([field]) => !fields.includes(field)));
++				if (Object.keys(rest).length === 0) pending.splice(index, 1);
++				else pending[index] = [taskId, {
++					...taskParams,
++					setting: rest
++				}, taskOptions, taskCallback];
++			}
++		}
 +		const previous = pending[pending.length - 1];
 +		if (previous?.[0] === id) {
 +			pending.pop();
@@ -58,7 +109,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2954,6 +2988,7 @@ function DataValidationDetail() {
+@@ -2954,6 +3030,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = (0, react.useState)(0);
@@ -66,7 +117,15 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  	const dataValidationPanelService = (0, _univerjs_ui.useDependency)(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2974,7 +3009,57 @@ function DataValidationDetailInner(props) {
+@@ -2968,13 +3045,86 @@ function DataValidationDetailInner(props) {
+ 	const [localRule, setLocalRule] = (0, react.useState)(rule);
+ 	const validator = validatorService.getValidatorItem(localRule.type);
+ 	const [showError, setShowError] = (0, react.useState)(false);
++	// M5-P7（M5R-I-05）：有设置被命令拒绝、还留在待办里（字段上已显示错误），直到提交成功、取消或卸载
++	const [uncommitted, setUncommitted] = (0, react.useState)(false);
+ 	const validators = validatorService.getValidatorsByScope(_univerjs_data_validation.DataValidatorRegistryScope.SHEET);
+ 	const [localRanges, setLocalRanges] = (0, react.useState)(() => localRule.ranges.map((i) => ({
+ 		unitId: "",
  		sheetId: "",
  		range: i
  	})));
@@ -96,14 +155,23 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
 +				...commandParams,
 +				setting: { ...(currentSetting.type === draftSetting.type ? currentSetting : draftSetting), ...params.setting }
 +			};
-+		}, () => syncRule());
++		}, () => {
++			setUncommitted(false);
++			syncRule();
++		}, () => {
++			setShowError(true);
++			setUncommitted(true);
++		});
 +	}, [commandService, univerInstanceService, dataValidationModel, unitId, subUnitId, ruleId, syncRule]);
 +	(0, react.useEffect)(() => {
 +		const closed = dataValidationPanelService.open$.subscribe((isOpen) => {
 +			if (!isOpen) debounceExecute.flush();
 +		});
 +		const before = commandService.beforeCommandExecuted((info) => {
-+			if ((info.id === _univerjs_core.UndoCommand.id || info.id === _univerjs_core.RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) debounceExecute.cancel();
++			if ((info.id === _univerjs_core.UndoCommand.id || info.id === _univerjs_core.RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) {
++				debounceExecute.cancel();
++				setUncommitted(false);
++			}
 +		});
 +		const removed = dataValidationModel.ruleChange$.subscribe((change) => {
 +			if (change.type === "remove" && change.unitId === unitId && change.subUnitId === subUnitId && change.rule.uid === ruleId) {
@@ -122,10 +190,22 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
 +			}
 +		};
 +	}, [commandService, univerInstanceService, dataValidationModel, dataValidationPanelService, debounceExecute, unitId, subUnitId, ruleId]);
++	// M5-P7（M5R-I-05）：留在待办里的输入告知平台（panel-debounce-watch.ts 的 PANEL_UNCOMMITTED_EVENT）：变化时派发一次，卸载时撤下
++	const reportedUncommitted = (0, react.useRef)(false);
++	(0, react.useEffect)(() => {
++		if (reportedUncommitted.current === uncommitted) return;
++		reportedUncommitted.current = uncommitted;
++		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted } }));
++	}, [uncommitted]);
++	(0, react.useEffect)(() => () => {
++		if (!reportedUncommitted.current) return;
++		reportedUncommitted.current = false;
++		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted: false } }));
++	}, []);
  	const [isRangeError, setIsRangeError] = (0, react.useState)(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = (0, react.useState)(false);
  	const rangeSelectorInstance = (0, react.useRef)(null);
-@@ -2986,35 +3071,11 @@ function DataValidationDetailInner(props) {
+@@ -2986,35 +3136,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	(0, react.useEffect)(() => {
@@ -164,7 +244,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  	const handleUpdateRuleRanges = (0, _univerjs_ui.useEvent)((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(_univerjs_engine_formula.deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3030,14 +3091,14 @@ function DataValidationDetailInner(props) {
+@@ -3030,14 +3156,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -186,7 +266,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3045,8 +3106,9 @@ function DataValidationDetailInner(props) {
+@@ -3045,8 +3171,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationRangeCommand.id, params);
@@ -197,7 +277,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3058,31 +3120,30 @@ function DataValidationDetailInner(props) {
+@@ -3058,31 +3185,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -241,7 +321,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  		await commandService.executeCommand(_univerjs_sheets_data_validation.RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3091,16 +3152,13 @@ function DataValidationDetailInner(props) {
+@@ -3091,16 +3217,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -262,7 +342,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3125,10 +3183,7 @@ function DataValidationDetailInner(props) {
+@@ -3125,10 +3248,7 @@ function DataValidationDetailInner(props) {
  	const options = (0, _univerjs_data_validation.getRuleOptions)(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if ((0, _univerjs_core.shallowEqual)(newOptions, (0, _univerjs_data_validation.getRuleOptions)(localRule))) return;
@@ -274,7 +354,15 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3159,7 +3214,7 @@ function DataValidationDetailInner(props) {
+@@ -3139,6 +3259,7 @@ function DataValidationDetailInner(props) {
+ 	const shouldHideFormula = operators.length && !localRule.operator;
+ 	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+ 		"data-u-comp": "data-validation-detail",
++		"data-nerve-uncommitted": uncommitted ? "" : void 0,
+ 		className: "univer-py-2",
+ 		children: [
+ 			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
+@@ -3159,7 +3280,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -283,7 +371,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  			}),
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3186,10 +3241,7 @@ function DataValidationDetailInner(props) {
+@@ -3186,10 +3307,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -295,7 +383,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  					}
  				})
  			}) : null,
-@@ -3199,12 +3251,7 @@ function DataValidationDetailInner(props) {
+@@ -3199,12 +3317,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -309,7 +397,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3214,7 +3261,6 @@ function DataValidationDetailInner(props) {
+@@ -3214,7 +3327,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, { children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({
@@ -318,7 +406,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..4b74ac19985d0a991af3ce642b6ef6cc
  				}),
  				children: localeService.t("sheets-data-validation-ui.panel.allowBlank")
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002399c1cf3 100644
+index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c711320b72 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -1,5 +1,5 @@
@@ -328,7 +416,25 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  import { AUTO_FILL_APPLY_TYPE, AutoFillTools, IAutoFillService, INTERCEPTOR_POINT, InterceptCellContentPriority, RangeProtectionPermissionEditPoint, SetRangeValuesCommand, SetWorksheetActiveOperation, SheetInterceptorService, SheetPermissionCheckController, SheetsSelectionsService, UniverSheetsPlugin, VALIDATE_CELL, WorkbookEditablePermission, WorksheetEditPermission, WorksheetSetCellStylePermission, checkRangesEditablePermission, deserializeListOptions, getSheetCommandTarget, rangeToDiscreteRange, serializeListOptions } from "@univerjs/sheets";
  import { AddSheetDataValidationCommand, BASE_FORMULA_INPUT_NAME, CHECKBOX_FORMULA_1, CHECKBOX_FORMULA_2, CHECKBOX_FORMULA_INPUT_NAME, CUSTOM_FORMULA_INPUT_NAME, ClearRangeDataValidationCommand, DATA_VALIDATION_PLUGIN_NAME, DataValidationCacheService, DataValidationFormulaController, DataValidationFormulaService, LIST_FORMULA_INPUT_NAME, RemoveSheetAllDataValidationCommand, RemoveSheetDataValidationCommand, SheetDataValidationModel, SheetsDataValidationValidatorService, UniverSheetsDataValidationPlugin, UpdateSheetDataValidationOptionsCommand, UpdateSheetDataValidationRangeCommand, UpdateSheetDataValidationSettingCommand, createDefaultNewRule, getCellValueOrigin, getDataValidationCellValue, getDataValidationDiffMutations, getFormulaResult, isLegalFormulaResult, transformCheckboxValue } from "@univerjs/sheets-data-validation";
  import { DataValidationModel, DataValidatorDropdownType, DataValidatorRegistryScope, DataValidatorRegistryService, TWO_FORMULA_OPERATOR_COUNT, UniverDataValidationPlugin, getRuleOptions, getRuleSetting } from "@univerjs/data-validation";
-@@ -535,6 +535,7 @@ let DataValidationDropdownManagerService = class DataValidationDropdownManagerSe
+@@ -187,7 +187,16 @@ let DataValidationRejectInputController = class DataValidationRejectInputControl
+ 			if (!rule || rule.showErrorMessage === false || rule.errorStyle !== DataValidationErrorStyle.STOP) return next(Promise.resolve(true));
+ 			const validator = this._dataValidatorRegistryService.getValidatorItem(rule.type);
+ 			if (!validator) return next(Promise.resolve(true));
+-			if (await this._sheetsDataValidationValidatorService.validatorCell(unitId, subUnitId, row, col) === DataValidationStatus.VALID) return next(Promise.resolve(true));
++			let status;
++			try {
++				status = await this._sheetsDataValidationValidatorService.validatorCell(unitId, subUnitId, row, col);
++			} catch (error) {
++				// M5-P7（M5R-M-08）：校验任务已不再当前（撤销、规则变更或实例销毁）——没有结论：这次输入不写入，不当成未处理的错误；
++				// 取消错误来自 sheets-data-validation 的补丁（未导出类，按 name 认），真实错误照常抛出
++				if ((error === null || error === void 0 ? void 0 : error.name) === "DataValidationCancelledError") return next(Promise.resolve(false));
++				throw error;
++			}
++			if (status === DataValidationStatus.VALID) return next(Promise.resolve(true));
+ 			this._dialogService.open({
+ 				width: 368,
+ 				title: { title: this._localeService.t("sheets-data-validation-ui.alert.title") },
+@@ -535,6 +544,7 @@ let DataValidationDropdownManagerService = class DataValidationDropdownManagerSe
  						onEdit: handleEdit,
  						defaultValue: cellStr,
  						multiple,
@@ -336,7 +442,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
  						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
  					}
-@@ -2928,10 +2929,43 @@ function DataValidationOptions(props) {
+@@ -2928,10 +2938,76 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -344,8 +450,9 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
 -	const res = await commandService.executeCommand(id, params, options);
 -	callback === null || callback === void 0 || callback(res);
 -}, 1e3);
-+const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed) => {
++const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed, onFailed) => {
 +	const pending = [];
++	const isSetting = (task) => task[0] === UpdateSheetDataValidationSettingCommand.id;
 +	const flush = () => {
 +		timer.cancel();
 +		const hadPending = pending.length > 0;
@@ -357,7 +464,25 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
 +			const task = pending[0];
 +			const [id, params, options, callback] = task;
 +			const result = commandService.syncExecuteCommand(id, resolveParams(id, params), options);
-+			if (!result) return false;
++			if (!result) {
++				// M5-P7（M5R-I-05）：提交不了的设置项并入下一项设置（后来的字段为准）后出队，后面不同种类的输入照常提交；
++				// 没有后续设置时停在这里：待办保留，onFailed 在字段上显示错误并告知平台还有未写进模型的输入
++				const later = pending[0] === task && isSetting(task) ? pending.findIndex((item, index) => index > 0 && isSetting(item)) : -1;
++				if (later > 0) {
++					const [laterId, laterParams, laterOptions, laterCallback] = pending[later];
++					pending[later] = [laterId, {
++						...laterParams,
++						setting: {
++							...params.setting,
++							...laterParams.setting
++						}
++					}, laterOptions, laterCallback];
++					pending.shift();
++					continue;
++				}
++				if (pending.length > 0) onFailed();
++				return false;
++			}
 +			if (pending[0] === task) pending.shift();
 +			callback === null || callback === void 0 || callback(result);
 +		}
@@ -366,6 +491,20 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
 +	};
 +	const timer = debounce(flush, 1e3);
 +	const execute = (id, params, options, callback) => {
++		if (id === UpdateSheetDataValidationSettingCommand.id) {
++			// M5-P7（M5R-I-05）：同一字段的后续值覆盖更早的未提交设置——从更早的设置项去掉这些字段，空了就出队；不同种类的先后不变
++			const fields = Object.keys(params.setting);
++			for (let index = pending.length - 1; index >= 0; index--) {
++				const [taskId, taskParams, taskOptions, taskCallback] = pending[index];
++				if (taskId !== id) continue;
++				const rest = Object.fromEntries(Object.entries(taskParams.setting).filter(([field]) => !fields.includes(field)));
++				if (Object.keys(rest).length === 0) pending.splice(index, 1);
++				else pending[index] = [taskId, {
++					...taskParams,
++					setting: rest
++				}, taskOptions, taskCallback];
++			}
++		}
 +		const previous = pending[pending.length - 1];
 +		if (previous?.[0] === id) {
 +			pending.pop();
@@ -384,7 +523,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2953,6 +2987,7 @@ function DataValidationDetail() {
+@@ -2953,6 +3029,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = useState(0);
@@ -392,7 +531,15 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  	const dataValidationPanelService = useDependency(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2973,7 +3008,57 @@ function DataValidationDetailInner(props) {
+@@ -2967,13 +3044,86 @@ function DataValidationDetailInner(props) {
+ 	const [localRule, setLocalRule] = useState(rule);
+ 	const validator = validatorService.getValidatorItem(localRule.type);
+ 	const [showError, setShowError] = useState(false);
++	// M5-P7（M5R-I-05）：有设置被命令拒绝、还留在待办里（字段上已显示错误），直到提交成功、取消或卸载
++	const [uncommitted, setUncommitted] = useState(false);
+ 	const validators = validatorService.getValidatorsByScope(DataValidatorRegistryScope.SHEET);
+ 	const [localRanges, setLocalRanges] = useState(() => localRule.ranges.map((i) => ({
+ 		unitId: "",
  		sheetId: "",
  		range: i
  	})));
@@ -422,14 +569,23 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
 +				...commandParams,
 +				setting: { ...(currentSetting.type === draftSetting.type ? currentSetting : draftSetting), ...params.setting }
 +			};
-+		}, () => syncRule());
++		}, () => {
++			setUncommitted(false);
++			syncRule();
++		}, () => {
++			setShowError(true);
++			setUncommitted(true);
++		});
 +	}, [commandService, univerInstanceService, dataValidationModel, unitId, subUnitId, ruleId, syncRule]);
 +	useEffect(() => {
 +		const closed = dataValidationPanelService.open$.subscribe((isOpen) => {
 +			if (!isOpen) debounceExecute.flush();
 +		});
 +		const before = commandService.beforeCommandExecuted((info) => {
-+			if ((info.id === UndoCommand.id || info.id === RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) debounceExecute.cancel();
++			if ((info.id === UndoCommand.id || info.id === RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) {
++				debounceExecute.cancel();
++				setUncommitted(false);
++			}
 +		});
 +		const removed = dataValidationModel.ruleChange$.subscribe((change) => {
 +			if (change.type === "remove" && change.unitId === unitId && change.subUnitId === subUnitId && change.rule.uid === ruleId) {
@@ -448,10 +604,22 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
 +			}
 +		};
 +	}, [commandService, univerInstanceService, dataValidationModel, dataValidationPanelService, debounceExecute, unitId, subUnitId, ruleId]);
++	// M5-P7（M5R-I-05）：留在待办里的输入告知平台（panel-debounce-watch.ts 的 PANEL_UNCOMMITTED_EVENT）：变化时派发一次，卸载时撤下
++	const reportedUncommitted = useRef(false);
++	useEffect(() => {
++		if (reportedUncommitted.current === uncommitted) return;
++		reportedUncommitted.current = uncommitted;
++		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted } }));
++	}, [uncommitted]);
++	useEffect(() => () => {
++		if (!reportedUncommitted.current) return;
++		reportedUncommitted.current = false;
++		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted: false } }));
++	}, []);
  	const [isRangeError, setIsRangeError] = useState(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = useState(false);
  	const rangeSelectorInstance = useRef(null);
-@@ -2985,35 +3070,11 @@ function DataValidationDetailInner(props) {
+@@ -2985,35 +3135,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	useEffect(() => {
@@ -490,7 +658,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  	const handleUpdateRuleRanges = useEvent((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3029,14 +3090,14 @@ function DataValidationDetailInner(props) {
+@@ -3029,14 +3155,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -512,7 +680,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3044,8 +3105,9 @@ function DataValidationDetailInner(props) {
+@@ -3044,8 +3170,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(UpdateSheetDataValidationRangeCommand.id, params);
@@ -523,7 +691,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3057,31 +3119,30 @@ function DataValidationDetailInner(props) {
+@@ -3057,31 +3184,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -567,7 +735,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  		await commandService.executeCommand(RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3090,16 +3151,13 @@ function DataValidationDetailInner(props) {
+@@ -3090,16 +3216,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -588,7 +756,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3124,10 +3182,7 @@ function DataValidationDetailInner(props) {
+@@ -3124,10 +3247,7 @@ function DataValidationDetailInner(props) {
  	const options = getRuleOptions(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if (shallowEqual(newOptions, getRuleOptions(localRule))) return;
@@ -600,7 +768,15 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  		debounceExecute(UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3158,7 +3213,7 @@ function DataValidationDetailInner(props) {
+@@ -3138,6 +3258,7 @@ function DataValidationDetailInner(props) {
+ 	const shouldHideFormula = operators.length && !localRule.operator;
+ 	return /* @__PURE__ */ jsxs("div", {
+ 		"data-u-comp": "data-validation-detail",
++		"data-nerve-uncommitted": uncommitted ? "" : void 0,
+ 		className: "univer-py-2",
+ 		children: [
+ 			/* @__PURE__ */ jsx(FormLayout, {
+@@ -3158,7 +3279,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -609,7 +785,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  			}),
  			/* @__PURE__ */ jsx(FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3185,10 +3240,7 @@ function DataValidationDetailInner(props) {
+@@ -3185,10 +3306,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -621,7 +797,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  					}
  				})
  			}) : null,
-@@ -3198,12 +3250,7 @@ function DataValidationDetailInner(props) {
+@@ -3198,12 +3316,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -635,7 +811,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..7b90e73efc2fba099233efee0722c002
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3213,7 +3260,6 @@ function DataValidationDetailInner(props) {
+@@ -3213,7 +3326,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ jsx(FormLayout, { children: /* @__PURE__ */ jsx(Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({

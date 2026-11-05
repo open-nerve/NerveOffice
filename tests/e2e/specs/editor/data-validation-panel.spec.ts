@@ -9,7 +9,7 @@ import { nameBox, probeSnapshot } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, resourceOf, ribbon, saveAndWait, savedContent, selectCell } from '../../support/sheet.ts'
+import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, resourceOf, ribbon, saveAndCapture, saveAndWait, savedContent, selectCell } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -290,4 +290,72 @@ test('US-M5-04 自定义公式移动范围后改设置：保留平移、历史�
   await page.keyboard.type('7')
   await detail(page).getByRole('button', { name: '确认', exact: true }).click()
   await savedRule('=D4>7', [D4], false)
+})
+
+test('US-M5-04 逐键清空条件、改选项、再改正条件：确认后全部保存，待办不再卡住（M5R-I-05）', async ({ page }) => {
+  await loginThroughApi(page, await createUser('dv-panel-invalid-middle'))
+  const documentId = await createSheetThroughApi(page)
+  await openAndEnterEditing(page, documentId, 'steady')
+  await openRule(page)
+  const condition = detail(page).getByPlaceholder('请输入值或公式')
+  await expect(condition).toHaveValue('100')
+  await condition.click()
+  await condition.press('End')
+  // 逐键删除：经过 '10'、'1'、'' 这些中间值，最后的空条件是提交不了的设置
+  for (let index = 0; index < 3; index++)
+    await condition.press('Backspace')
+  await expect(condition).toHaveValue('')
+  await detail(page).getByText('高级设置', { exact: true }).click()
+  await detail(page).getByText('拒绝输入', { exact: true }).click()
+  await condition.click()
+  await page.keyboard.type('5')
+  await detail(page).getByRole('button', { name: '确认', exact: true }).click()
+  await expect(detail(page)).toBeHidden()
+  await saveAndWait(page)
+  expect(resourceOf((await savedContent(page, documentId)).snapshot, 'SHEET_DATA_VALIDATION_PLUGIN')).toMatchObject({
+    [FIRST_SHEET]: [{ type: 'decimal', operator: 'equal', formula1: '5', errorStyle: 1, ranges: [C3] }],
+  })
+})
+
+test('US-M5-04 拒绝输入的自定义规则：回车后立即撤销，页面不留未处理的拒绝（M5R-M-08）', async ({ page, pageErrors }) => {
+  const author = await createUser('dv-reject-undo')
+  const documentId = await createDocument(author, '拒绝输入与撤销', (unitId) => {
+    const snapshot = JSON.parse(sheetSnapshotFor(unitId)) as Workbook
+    const resource = snapshot.resources.find(item => item.name === 'SHEET_DATA_VALIDATION_PLUGIN')!
+    resource.data = JSON.stringify({ [FIRST_SHEET]: [{ uid: 'reject-rule', type: 'custom', formula1: '=C3>10', errorStyle: 1, showErrorMessage: true, allowBlank: true, ranges: [C3] }] })
+    return JSON.stringify(snapshot)
+  })
+  await loginThroughApi(page, author)
+  await openAndEnterEditing(page, documentId, 'steady')
+  for (const value of ['5', '50']) {
+    await selectCell(page, 'C3')
+    await page.keyboard.type(value)
+    await page.keyboard.press('Enter')
+    // 自定义公式的校验在公式线程里异步完成；回车后立即撤销，正赶在结果之前取消校验任务
+    await pressUniverShortcut(page, 'Z')
+  }
+  await saveAndWait(page)
+  expect(pageErrors.list()).toEqual([])
+})
+
+test('US-M5-04 拒绝输入的异步校验：编辑中直接保存，上传的内容与校验结束后的界面一致（审查疑点 Q-07）', async ({ page }) => {
+  const author = await createUser('dv-reject-capture')
+  const documentId = await createDocument(author, '拒绝输入与保存捕获', (unitId) => {
+    const snapshot = JSON.parse(sheetSnapshotFor(unitId)) as Workbook
+    const resource = snapshot.resources.find(item => item.name === 'SHEET_DATA_VALIDATION_PLUGIN')!
+    resource.data = JSON.stringify({ [FIRST_SHEET]: [{ uid: 'reject-rule', type: 'custom', formula1: '=C3>10', errorStyle: 1, showErrorMessage: true, allowBlank: true, ranges: [C3] }] })
+    return JSON.stringify(snapshot)
+  })
+  await loginThroughApi(page, author)
+  await openAndEnterEditing(page, documentId, 'steady')
+  const c3 = (uploaded: string) => cellOf(JSON.parse(uploaded) as Workbook, 'C3')?.v
+  // 合规的值：保存先提交单元格（commitCellEditing），要等异步校验通过并写入之后再捕获
+  await selectCell(page, 'C3')
+  await page.keyboard.type('50')
+  expect(Number(c3((await saveAndCapture(page)).uploaded))).toBe(50)
+  // 不合规的值：校验拒绝后回滚并弹出 SDK 的提示，上传的仍是回滚后的内容
+  await selectCell(page, 'C3')
+  await page.keyboard.type('5')
+  expect(Number(c3((await saveAndCapture(page)).uploaded))).toBe(50)
+  await expect(page.getByRole('dialog')).toBeVisible()
 })

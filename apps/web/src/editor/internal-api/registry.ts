@@ -400,11 +400,18 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     purpose: '面板的防抖（M3-P4 设计 §3.4，panel-debounce-watch.ts）：这两个面板开着时有用户输入，就记下"SDK 的防抖到点"的时刻；退出编辑、交出与按保存的捕获之前（立即上传在按下时的准备：snapshot-capture.ts 的 settleInputs）、失去编辑权的捕获之前等到这一刻，最后的改动先写进模型再捕获、再销毁编辑器。到点之前算"还没写进模型的输入"（Codex 评审 CX4，uncommitted-input.ts）：保存的状态机据此算未保存，页头不说已保存到云端、离开提示拦下',
     evidence: [
       'ui 的 views/hooks/use-debounce.ts:19-30（组件卸载时不清计时器）与 sheets-note-ui 的 views/Note.tsx:110-143（1.0.1 的 ui lib/es/index.js:6584-6592、sheets-note-ui lib/es/index.js:648、:691）；',
-      'sheets-data-validation-ui 的 DataValidationDetail 原包三种更新共用尾调用且卸载不 flush；M5-P3-S4 补丁按输入顺序积累字段增量，仅合并连续同类编辑；历史同步范围正文，范围命令的公式平移不会被旧字段覆盖。关闭/卸载同步提交，规则删除/本工作簿历史操作取消，原工作簿退役不写同 id 新对象；失败保留待办。见 patches/univer-data-validation-ui.json、ADR-010。',
+      'sheets-data-validation-ui 的 DataValidationDetail 原包三种更新共用尾调用且卸载不 flush；M5-P3-S4 补丁按输入顺序积累字段增量，仅合并连续同类编辑；历史同步范围正文，范围命令的公式平移不会被旧字段覆盖。关闭/卸载同步提交，规则删除/本工作簿历史操作取消，原工作簿退役不写同 id 新对象；失败保留待办。M5-P7（M5R-I-05）：入队时剔除被同字段后续值覆盖的更早设置；提交不了的设置并入下一项设置后出队，其他种类照常提交；仍提交不了的留在待办里、字段显示错误，并按 PANEL_UNCOMMITTED_EVENT 告知平台。见 patches/univer-data-validation-ui.json、ADR-010。',
       'sheets-formula-ui 的范围高亮同时登记 UR-036：按执行时的当前文本重新解析，禁止旧语法树回写新输入；UR-037 在编辑器焦点切换前保留逻辑光标，防止 blur 发出旧渲染选区覆盖新输入位置。数据验证解析结果先按原工作表核对 isValidRange。两补丁不增加公开 API，平台捕获仍等原窗口；批注关闭不提交的原行为继续由此等待保护。',
     ].join(''),
     regression: '单元测试 data-validation-panel.test.tsx（实际 SDK 详情、队列、规则与命令）、panel-debounce-watch.test.ts、uncommitted-input.test.ts、save-coordinator.test.ts、snapshot-capture.test.ts；E2E data-validation-panel.spec.ts 的连续输入、范围、类型、关闭、删除历史、范围撤销再确认、custom 平移与重开后公式正文，以及 autosave.spec.ts 既有的面板退出和自动保存边界。SDK 升级须同时复验原窗口与补丁移除条件',
   },
+  ...['PANEL_UNCOMMITTED_ATTRIBUTE', 'PANEL_UNCOMMITTED_EVENT'].map(name => ({
+    name,
+    origin: '平台自己的 sheets-data-validation-ui 补丁（UR-033 的 M5-P7 增量，M5R-I-05）与平台之间的约定：详情根元素上的属性 data-nerve-uncommitted，与在详情所在 document 上派发的事件 nerve-panel-uncommitted（detail.uncommitted 为布尔值）',
+    purpose: '数据验证详情有设置被命令拒绝（不合法的条件）、还留在待办里时，补丁挂上属性并派发 uncommitted:true；提交成功、撤销重做取消或卸载时撤下并派发 false。panel-debounce-watch.ts 据此把它算作“还没写进模型的输入”：页头不说已保存、离开提示拦下；settled 不等它（要用户改正）',
+    evidence: '补丁 patches/@univerjs__sheets-data-validation-ui@1.0.1.patch 的 DataValidationDetailInner：onFailed 置 uncommitted 并 setShowError(true)，onFlushed 清除；reportedUncommitted 只在变化时派发，卸载时补派 false。名称是平台自定，不来自上游 SDK',
+    regression: '单元测试 data-validation-panel.test.tsx（实际发布包详情：被拒后属性与事件、改正后撤下、卸载时撤下）、panel-debounce-watch.test.ts（事件约定、与防抖合成、settled 不等、畸形事件不算）',
+  })),
   {
     name: 'FORMULA_BAR_INPUT_SELECTOR',
     origin: 'sheets-ui 编辑栏的 DOM 标记：根元素 data-u-comp="formula-bar"、编辑框 formula-editor、左边的按钮 formula-bar-actions（views/formula-bar/FormulaBar.tsx:298-402）；平台对这个约定的封装',

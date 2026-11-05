@@ -254,3 +254,16 @@ UR-040 由三浏览器最终回归揭示：keepTextSelected 延后无条件全�
 S2 独审 I1 发现：固定 SDK 的数组公式只把锚点写入原 `cellData`，溢出结果由 `SetArrayFormulaDataMutation` 写到 `FormulaDataModel`，随后 `ArrayFormulaCellInterceptorController` 提供显示值。公开 Facade 没有对应的稀疏结果枚举；`getDataRange()` 仍取原始存储范围。因此追加集中登记的 `csvArrayCells`，只按当前文档/表惰性返回实际缓存格的坐标与数值类型，既不导出服务/缓存引用/内容，也不采用可能包括失败溢出意图的 `arrayFormulaRange`。调用方在登记每格之前检查矩形预算，超过即停止。
 
 缓存覆盖原 v/t，保留原 p 的优先级；v/t 同时 nullish 时 SDK 显示 NUMBER/0，已清除的 null 格忽略，实际空字符串公式结果仍占格。文字和数字格式始终交公开显示方法计算，不在平台重写公式或合并范围。七项真实缓存 mutation/Facade 对照覆盖范围、负数/格式/富文本、空结果、三类预算及跨文档/表隔离，另核对只读前后快照字节相同。该组证明显示通道，真实 SEQUENCE 在 Worker/主线程计算后导出的故事仍须 S5 完成，不能用受控缓存冒充计算证据。
+
+## M5-P7 的补充：数据验证面板的被拒待办与拒绝输入的取消（M5R-I-05、M5R-M-08）
+
+M5 整体独立审查发现 UR-033 的有序待办有一个缺口：队首的不合法设置被命令拒绝后，不会被后续合法输入覆盖，整队永远停住；确认时没有可见错误，卸载时全部清空。本次补丁增量（ES/CJS 对称）做了四处修改：
+
+- **入队**：新设置的字段会从更早的未提交设置里去掉，某项设置因此变空就出队。不同种类命令之间的先后不变。
+- **提交**：某项设置被拒、而它后面还有设置时，把它并入下一项设置（后来的字段为准）再出队，后面不同种类的输入照常提交。范围或选项被拒时，仍按原设计阻塞后续项。
+- **失败反馈**：仍提交不了的那一项留在待办里，`onFailed` 打开字段错误。详情根元素挂上平台约定的 `data-nerve-uncommitted`，并在 document 上派发 `nerve-panel-uncommitted`（`detail.uncommitted`）。提交成功、撤销重做取消或卸载时撤下并派发 `false`。平台的 `panel-debounce-watch.ts` 把它算作未写进模型的输入：页头不称已保存，离开提示会拦下；`settled` 不等它。
+- **卸载**：卸载时仍提交不了的只剩不合法的设置，丢弃它与原 SDK 对非法设置的处理一致；已提交的范围和选项不受影响。
+
+**M5R-M-08**：拒绝输入的写入拦截器在校验任务被取消时（撤销、规则变更或实例销毁），按“无结论”处理：返回 `false`，这次输入不写入、不弹提示，也不留下未处理的拒绝。取消错误来自 sheets-data-validation 补丁中未导出的类，按 `name === 'DataValidationCancelledError'` 识别；真实错误照常抛出。
+
+两个约定名称登记在 `registry.ts`（`PANEL_UNCOMMITTED_ATTRIBUTE`、`PANEL_UNCOMMITTED_EVENT`）。补丁摘要更新于 `patches/univer-data-validation-ui.json`。回归见 `data-validation-panel.test.tsx`、`data-validation-reject-input.test.ts`、`panel-debounce-watch.test.ts` 与 E2E。UR-033 仍未发送上游，移除条件不变。

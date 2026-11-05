@@ -450,7 +450,7 @@ patchedDependencies:
   '@univerjs/engine-formula@1.0.1': b3127dca1c357c2e1166281cfc0d8c3280fb736bbe44dea0da5981d148ee9571
   '@univerjs/engine-render@1.0.1': f9b620aa599945ffb0616fdfba9c4d5b51e0865453b1369c304492a81f615d4a
   '@univerjs/sheets-conditional-formatting-ui@1.0.1': f261dad6b60a9e0e6ca72757a9051cb2f71326bd8c8f1dc64eed7df3a84036bf
-  '@univerjs/sheets-data-validation-ui@1.0.1': 79e80feece34d5eb281e9c52dc2e8c71bb08a0fdb84ad0252a46a35a98f44c1e
+  '@univerjs/sheets-data-validation-ui@1.0.1': c569aa70769804730fc91132edbb2fe11985b334263df8b6bd5585a084935d08
   '@univerjs/sheets-data-validation@1.0.1': bfa53fadebef2d31543ca8357c6d24e8aeea61c4e8eeab2511431140f806f057
   '@univerjs/sheets-drawing-ui@1.0.1': 439f805cf2aa79e4346e41aab698516c3b39482c0d3a0ffe816e025f6418722f
   '@univerjs/sheets-drawing@1.0.1': 0c922020b3889b49303a1721666b474133c198c65d8c2c3278c9900054488155
@@ -647,7 +647,7 @@ importers:
         version: 1.0.1(patch_hash=bfa53fadebef2d31543ca8357c6d24e8aeea61c4e8eeab2511431140f806f057)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/sheets-data-validation-ui':
         specifier: 'catalog:'
-        version: 1.0.1(patch_hash=79e80feece34d5eb281e9c52dc2e8c71bb08a0fdb84ad0252a46a35a98f44c1e)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
+        version: 1.0.1(patch_hash=c569aa70769804730fc91132edbb2fe11985b334263df8b6bd5585a084935d08)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/sheets-drawing':
         specifier: 'catalog:'
         version: 1.0.1(patch_hash=0c922020b3889b49303a1721666b474133c198c65d8c2c3278c9900054488155)(react@19.3.0)(rxjs@7.8.2)
@@ -9330,7 +9330,7 @@ snapshots:
     transitivePeerDependencies:
       - react
 
-  '@univerjs/sheets-data-validation-ui@1.0.1(patch_hash=79e80feece34d5eb281e9c52dc2e8c71bb08a0fdb84ad0252a46a35a98f44c1e)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)':
+  '@univerjs/sheets-data-validation-ui@1.0.1(patch_hash=c569aa70769804730fc91132edbb2fe11985b334263df8b6bd5585a084935d08)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(rxjs@7.8.2)':
     dependencies:
       '@univerjs/core': 1.0.1(patch_hash=a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24)(react@19.3.0)(rxjs@7.8.2)
       '@univerjs/data-validation': 1.0.1(react@19.3.0)(rxjs@7.8.2)

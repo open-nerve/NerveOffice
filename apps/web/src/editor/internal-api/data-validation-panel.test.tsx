@@ -13,6 +13,7 @@ import { useImperativeHandle, useRef } from 'react'
 import { BehaviorSubject } from 'rxjs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { injectorOf } from './injector.ts'
+import { PANEL_UNCOMMITTED_ATTRIBUTE, PANEL_UNCOMMITTED_EVENT } from './panel-debounces.ts'
 
 // SDK 导入时创建下拉箭头的 Path2D；本组不绘制箭头，实际渲染由 E2E 覆盖。
 vi.hoisted(() => vi.stubGlobal('Path2D', class {}))
@@ -73,7 +74,8 @@ function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula = 
     title: '数字',
     // 公式输入端口采用 SDK 的 BaseFormulaInput；custom 的实际画布另由公开 E2E 覆盖。
     formulaInput: BASE_FORMULA_INPUT_NAME,
-    validatorFormula: (rule: IDataValidationRule) => ({ success: !requireFormula || Boolean(rule.formula1) }),
+    // 不合法时带上字段错误：详情面板在 showError 时把它显示在公式输入下方（M5R-I-05 的字段错误回归）
+    validatorFormula: (rule: IDataValidationRule) => !requireFormula || Boolean(rule.formula1) ? { success: true } : { success: false, formula1: '请填写条件值' },
     normalizeFormula: () => ({}),
     validator: async () => true,
   }
@@ -532,5 +534,82 @@ describe('UR-033：实际数据验证详情组件的连续编辑', () => {
     })
     await h.tick()
     expect(h.current().allowBlank).toBe(false)
+  })
+})
+
+describe('M5R-I-05：非法的中间设置被后续合法输入覆盖后，待办不再卡住', () => {
+  const formula = (value: string) => fireEvent.change(screen.getByPlaceholderText('规则公式'), { target: { value } })
+  const range = (value: string) => fireEvent.change(screen.getByLabelText('范围'), { target: { value } })
+  const marked = () => document.querySelector(`[data-u-comp="data-validation-detail"][${PANEL_UNCOMMITTED_ATTRIBUTE}]`) !== null
+  const C3_C4 = [{ startRow: 2, endRow: 3, startColumn: 2, endColumn: 2 }]
+
+  it.each([
+    { name: '范围', other: () => range('C3:C4'), expected: { ranges: C3_C4 } },
+    { name: '选项', other: (h: ReturnType<typeof setup>) => h.option(), expected: { errorStyle: 1 } },
+  ])('清空条件 → 改$name → 改正条件，确认后都写入并关闭', ({ other, expected }) => {
+    const h = setup('number', true)
+    formula('')
+    other(h)
+    formula('5')
+    fireEvent.click(screen.getByText('确认'))
+    expect(h.current()).toMatchObject({ formula1: '5', ...expected })
+    expect(h.close).toHaveBeenCalledWith(null)
+    expect(marked()).toBe(false)
+  })
+
+  it('同样的序列直接卸载：改正后的条件与范围都不丢', () => {
+    const h = setup('number', true)
+    formula('')
+    range('C3:C4')
+    formula('5')
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '5', ranges: C3_C4 })
+  })
+
+  it('不合法的设置后接不同种类与另一项设置：其他输入先生效，不合法的字段留待改正，改正后一并写入', async () => {
+    const h = setup('number', true)
+    formula('')
+    h.option()
+    h.setting()
+    await h.tick()
+    expect(h.current()).toMatchObject({ formula1: '100', errorStyle: 1, allowBlank: true })
+    formula('5')
+    await h.tick()
+    expect(h.current()).toMatchObject({ formula1: '5', errorStyle: 1, allowBlank: false })
+    expect(marked()).toBe(false)
+  })
+
+  it('防抖到点时提交被拒：在字段上显示错误并标记有未提交的输入，改正提交后标记消失', async () => {
+    const h = setup('number', true)
+    const changes = vi.fn()
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, changes)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, changes))
+    formula('')
+    await h.tick()
+    expect(h.current().formula1).toBe('100')
+    expect(screen.getByText('请填写条件值')).toBeInTheDocument()
+    expect(marked()).toBe(true)
+    expect(changes).toHaveBeenCalledTimes(1)
+    formula('5')
+    await h.tick()
+    expect(h.current().formula1).toBe('5')
+    expect(marked()).toBe(false)
+    expect(changes.mock.calls.map(([event]) => (event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)).toEqual([true, false])
+  })
+
+  it('卸载时仍有提交不了的输入：已提交的范围保留，只丢不合法的那一项，撤下标记并通知平台', async () => {
+    const h = setup('number', true)
+    const changes = vi.fn()
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, changes)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, changes))
+    range('C3:C4')
+    formula('')
+    await h.tick()
+    expect(h.current()).toMatchObject({ formula1: '100', ranges: C3_C4 })
+    expect(marked()).toBe(true)
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', ranges: C3_C4 })
+    expect(marked()).toBe(false)
+    expect(changes.mock.calls.map(([event]) => (event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)).toEqual([true, false])
   })
 })
