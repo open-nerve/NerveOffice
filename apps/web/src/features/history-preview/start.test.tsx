@@ -1,6 +1,6 @@
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import { historyPreviewPagePath } from '@nerve-office/contracts'
-import { act, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
 import { HISTORY_DOCUMENT_ID as DOC, HISTORY_SESSION, historyItem } from '../../shared/testing/history.test-support.ts'
@@ -206,6 +206,26 @@ describe('M5-P7 历史预览的终态、后台复核与公式提示', () => {
     await act(async () => answer(json(200, HISTORY_SESSION)))
     await waitFor(() => expect(surface.dataset.editorState).toBe('ready'))
     expect(sdk.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('M5R-M-04 后台复核只核验、不重读图片：已报告的图片失败提示保留，用户重新打开才清除', async () => {
+    const imageFailed = '部分图片未能显示，可重新确认权限后重试。'
+    const { api, surface } = await open()
+    await waitFor(() => expect(surface.dataset.editorState).toBe('ready'))
+    const [options] = sdk.create.mock.calls[0] as [{ readonly onImageFailure: () => void }]
+    act(() => options.onImageFailure())
+    expect(screen.getByText(imageFailed)).toBeInTheDocument()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const before = api.requests.length
+    await act(async () => document.dispatchEvent(new Event('visibilitychange')))
+    // 一次核验是会话复核加详情两次读取；都回来之后才发布结论
+    await waitFor(() => expect(api.requests.length).toBeGreaterThanOrEqual(before + 2))
+    await act(async () => {})
+    expect(surface.dataset.editorState).toBe('ready')
+    expect(screen.getByText(imageFailed)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '重新打开' }))
+    await waitFor(() => expect(screen.queryByText(imageFailed)).toBeNull())
+    await waitFor(() => expect(surface.dataset.editorState).toBe('ready'))
   })
 
   it('M5R-M-07 历史里公式未收齐：页头按阅读页口径提示', async () => {

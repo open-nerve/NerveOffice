@@ -72,7 +72,7 @@ export function CsvCreateEntry({ controller, backHref, loginHref }: { controller
       {view.stage === 'done' && <p role="status">{text.done}</p>}
       {view.stage === 'replayed' && <p role="status">{text.replayed}</p>}
       {view.document !== undefined && <a className="text-sm underline" href={documentPagePath(view.document.id)}>{text.openCreated}</a>}
-      {view.problem === 'identity' && loginHref !== undefined && <a className="block text-sm underline" href={loginHref}>{text.login}</a>}
+      {(view.problem === 'identity' || view.problem === 'identity-unknown') && loginHref !== undefined && <a className="block text-sm underline" href={loginHref}>{text.login}</a>}
       <a className="block text-sm underline" href={backHref}>{text.back}</a>
     </section>
   )

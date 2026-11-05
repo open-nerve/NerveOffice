@@ -1,3 +1,4 @@
+import type { SheetEditorFailure } from '../../editor/index.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import { historyIdsFromPagePath } from '@nerve-office/contracts'
 import { createRoot } from 'react-dom/client'
@@ -10,7 +11,7 @@ import { createHistoryPreview } from './preview-controller.ts'
 
 const RECHECK_MS = 30_000
 /** SDK 按数据拒绝的加载失败：同一份历史重试也是同样的结果（M5R-M-05）；Worker、图片限制与就绪超时属于环境，仍可重试 */
-const DATA_FAILURES = new Set(['snapshot-invalid', 'create-failed', 'unit-mismatch'])
+const DATA_FAILURES: ReadonlySet<SheetEditorFailure> = new Set<SheetEditorFailure>(['snapshot-invalid', 'create-failed', 'unit-mismatch'])
 export interface HistoryPreviewElements {
   readonly chrome: HTMLElement
   readonly surface: HTMLElement
@@ -55,12 +56,22 @@ export function startHistoryPreview({ chrome, surface, pathname = window.locatio
     },
   })
   function retry(): void {
-    imageProblem = false
     void preview.refresh('user')
   }
   function recheck(): void {
-    imageProblem = false
     void preview.refresh('background')
+  }
+  let previous = preview.view().kind
+  /**
+   * 图片失败提示只在真正重新载入时清除：进入加载态时图片随之暂停，之后会重读、再报失败。
+   * 就绪时的后台复核只核验、不重读图片（D-06），已报告的失败要一直显示到用户重新打开（M5R-M-04）
+   */
+  function changed(): void {
+    const kind = preview.view().kind
+    if (kind === 'loading' && previous !== 'loading')
+      imageProblem = false
+    previous = kind
+    show()
   }
   function show(): void {
     if (stopped)
@@ -72,7 +83,7 @@ export function startHistoryPreview({ chrome, surface, pathname = window.locatio
     surface.dataset.editorState = state.kind === 'ready' ? 'ready' : state.kind === 'loading' ? 'loading' : 'failed'
     root.render(<PreviewChrome state={state} documentId={ids?.documentId} pathname={pathname} imageProblem={imageProblem} retry={retry} />)
   }
-  const unsubscribe = preview.subscribe(show)
+  const unsubscribe = preview.subscribe(changed)
   const unlisten = channel.subscribe(recheck)
   const whenVisible = (): void => {
     if (document.visibilityState === 'visible')
