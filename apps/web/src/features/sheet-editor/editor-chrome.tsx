@@ -1035,7 +1035,11 @@ function LoadFailure({ load, backRef }: { load: Exclude<EditorPageLoad, { kind: 
           {requestId !== undefined && <p>{messages.common.requestId(requestId)}</p>}
         </AlertDescription>
       </Alert>
-      <a ref={backRef} href={HOME_PATH} className={buttonVariants({ variant: 'outline' })}>{editorMessages.back}</a>
+      <div className="flex flex-wrap gap-2">
+        <a ref={backRef} href={HOME_PATH} className={buttonVariants({ variant: 'outline' })}>{editorMessages.back}</a>
+        {/* 正文过了服务端检查、SDK 却建不起来时刷新也是一样：给能看历史的人一个恢复的入口，与页头的“历史”一样另开标签页 */}
+        {load.kind === 'editor-failed' && load.historyDocumentId !== undefined && <a href={historyPagePath(load.historyDocumentId)} target="_blank" rel="noopener" className={buttonVariants({ variant: 'outline' })}>{editorMessages.restoreFromHistory}</a>}
+      </div>
     </main>
   )
 }

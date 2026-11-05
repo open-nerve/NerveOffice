@@ -30,6 +30,7 @@ export function PreviewChrome({ state, documentId, pathname, imageProblem, retry
         {state.kind === 'ready' && state.history.savedBy !== null && <PersonName person={state.history.savedBy} />}
       </div>
       <p className="text-sm text-muted-foreground">{text.previewReadOnly}</p>
+      {state.kind === 'ready' && state.history.formulasPending && <p className="text-sm">{text.previewFormulasPending}</p>}
       {state.kind === 'loading' && <p role="status">{text.previewLoading}</p>}
       {state.kind === 'unavailable' && <Alert variant="destructive"><AlertDescription>{text.unavailable}</AlertDescription></Alert>}
       {(state.kind === 'unsupported' || state.kind === 'unusable') && <Alert variant="destructive"><AlertDescription>{state.kind === 'unsupported' ? text.unsupported : text.previewUnusable}</AlertDescription></Alert>}

@@ -1,14 +1,16 @@
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import { historyIdsFromPagePath } from '@nerve-office/contracts'
 import { createRoot } from 'react-dom/client'
-import { createSheetEditor } from '../../editor/index.ts'
-import { fetchHistoryContent, fetchHistoryDetail } from '../../shared/api/document-history.ts'
+import { createSheetEditor, SheetEditorLoadError } from '../../editor/index.ts'
+import { fetchHistoryContent, fetchHistoryDetail, HistoryContentError } from '../../shared/api/document-history.ts'
 import { requestBackgroundSession, requestSession, setApiSession, setCsrfToken } from '../../shared/api/index.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
 import { PreviewChrome } from './preview-chrome.tsx'
 import { createHistoryPreview } from './preview-controller.ts'
 
 const RECHECK_MS = 30_000
+/** SDK 按数据拒绝的加载失败：同一份历史重试也是同样的结果（M5R-M-05）；Worker、图片限制与就绪超时属于环境，仍可重试 */
+const DATA_FAILURES = new Set(['snapshot-invalid', 'create-failed', 'unit-mismatch'])
 export interface HistoryPreviewElements {
   readonly chrome: HTMLElement
   readonly surface: HTMLElement
@@ -31,6 +33,7 @@ export function startHistoryPreview({ chrome, surface, pathname = window.locatio
     session: async (signal, activity) => activity === 'user' ? requestSession(signal) : requestBackgroundSession(signal),
     detail: async signal => fetchHistoryDetail(ids.documentId, ids.historyId, signal),
     content: async signal => fetchHistoryContent(ids.documentId, ids.historyId, signal),
+    unusable: error => error instanceof HistoryContentError || (error instanceof SheetEditorLoadError && DATA_FAILURES.has(error.reason)),
     adopt: (session) => {
       if (session === undefined)
         setCsrfToken(undefined)

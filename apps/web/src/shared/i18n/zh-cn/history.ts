@@ -39,6 +39,8 @@ export const historyMessages = {
   previewTitle: '历史只读预览',
   previewLoading: '正在确认身份并打开历史…',
   previewUnusable: '这份历史没能完整载入，无法预览。可返回历史列表尝试其他历史。',
+  /** 与阅读页“公式结果可能还没更新”同一口径（M5R-M-07）；历史只读，不说进入编辑之后重算 */
+  previewFormulasPending: '这份历史的公式结果可能还没更新（保存这一版时公式还没算完）',
   previewReadOnly: '这是历史的只读预览，不会修改原文档或本机草稿。',
   historyList: '返回历史列表',
   sessionChanged: '登录的账户已经变化，旧预览已关闭。请重新打开历史。',

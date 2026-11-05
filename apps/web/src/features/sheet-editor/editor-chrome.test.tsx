@@ -7,6 +7,7 @@ import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
 import type { SaveView } from './save-coordinator.ts'
+import { historyPagePath } from '@nerve-office/contracts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
@@ -864,6 +865,19 @@ describe('编辑器页的载入失败', () => {
   ])('%s', (_case, load, text) => {
     renderChrome({ load, mode: undefined, save: undefined })
     expect(screen.getByRole('alert')).toHaveTextContent(text)
+  })
+
+  it('M5R-M-06 编辑器创建失败、已知能看历史：失败页给出从历史恢复的入口，与页头一样另开标签页', () => {
+    renderChrome({ load: { kind: 'editor-failed', error: new Error('x'), historyDocumentId: '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d' }, mode: undefined, save: undefined })
+    const link = screen.getByRole('link', { name: '从历史恢复' })
+    expect(link).toHaveAttribute('href', historyPagePath('0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'))
+    expect(link).toHaveAttribute('target', '_blank')
+    expect(screen.getByRole('link', { name: '我的空间' })).toHaveAttribute('href', '/')
+  })
+
+  it('M5R-M-06 不知道能不能看历史时不给入口', () => {
+    renderChrome({ load: { kind: 'editor-failed', error: new Error('x') }, mode: undefined, save: undefined })
+    expect(screen.queryByRole('link', { name: '从历史恢复' })).toBeNull()
   })
 
   it('请求失败的说明带请求标识', () => {

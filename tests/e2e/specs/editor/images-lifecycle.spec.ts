@@ -1,5 +1,6 @@
 import type { RebuildCalculationGate } from '../../../../apps/web/src/editor/testing/rebuild-calculation-gate.ts'
 import { readFile } from 'node:fs/promises'
+import { historyPagePath } from '@nerve-office/contracts'
 import { installRebuildCalculationGate } from '../../../../apps/web/src/editor/testing/rebuild-calculation-gate.ts'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { createDocument, createUser, grantDocument } from '../../support/database.ts'
@@ -115,6 +116,10 @@ test.describe('US-M5-07 图片身份与旧实例的实际回收', { tag: '@test-
     await page.goto(`/documents/${brokenId}`)
     const brokenUrl = page.url()
     await expect(page.getByText('编辑器加载失败，请刷新页面重试', { exact: true })).toBeVisible()
+    // M5R-M-06：所有者能看历史，失败页给出从历史恢复的入口（另开标签页，与页头的“历史”一致）
+    const restore = page.getByRole('link', { name: '从历史恢复' })
+    await expect(restore).toHaveAttribute('href', historyPagePath(brokenId))
+    await expect(restore).toHaveAttribute('target', '_blank')
     await openAndEnterEditing(page, documentId, 'steady')
     await expectImagePixels(page, 'C3')
     await imageFailureSentinel(page, documentId, '加载失败后新文档保存哨兵')

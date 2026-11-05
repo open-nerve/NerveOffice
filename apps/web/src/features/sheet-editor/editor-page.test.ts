@@ -1908,6 +1908,18 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(surface.dataset.editorState).toBe('failed')
   })
 
+  it.each([true, false])('M5R-M-06 编辑器创建失败：已知能看历史=%s 时失败页带上历史入口', async (canViewHistory) => {
+    const { editorPage } = setup({
+      createEditor: async () => Promise.reject(new Error('SDK 建不起来')),
+      editIntent: false,
+      api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canViewHistory } }) },
+    })
+    await editorPage.load()
+    const { load } = editorPage.view()
+    expect(load).toMatchObject({ kind: 'editor-failed' })
+    expect(load.kind === 'editor-failed' ? load.historyDocumentId : 'not-failed').toBe(canViewHistory ? DOCUMENT_ID : undefined)
+  })
+
   it('只能查看：以只读创建编辑器（M2-P3 设计 §3.5），不建保存状态机，不能保存；?edit=new 也不申请、不去掉标记', async () => {
     const { editorPage, surface, api, createEditor, editLease, editIntent, chrome } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }), editStatus: VIEWER_STATUS } })
     await editorPage.load()
