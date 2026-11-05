@@ -57,7 +57,8 @@ describe('planSteps', () => {
       'build-e2e',
       'e2e',
     ])
-    expect(steps.find(s => s.id === 'tests')?.command).toEqual(['pnpm', 'test:coverage'])
+    // 覆盖率之后在同一轮受管运行里接着跑测试资源工具的 Python 回归（M5R-M-21，D-10）
+    expect(steps.find(s => s.id === 'tests')?.command).toEqual(['pnpm', 'test:verify'])
   })
 
   it('快速门禁的单元测试不统计覆盖率（覆盖率的下限按单元与集成测试合计，需要数据库）', () => {

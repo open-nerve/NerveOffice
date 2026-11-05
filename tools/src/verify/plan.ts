@@ -79,8 +79,10 @@ const UNIT: Step = { id: 'unit', command: ['pnpm', 'test'] }
 // 故事对照只在这里对仓库现状核对，必须留在静态门禁一步（--fast 也执行），由 plan.test.ts 核对（M2-P6 第 6 片复核第二批 M-1）
 const STATIC_GATES: Step = { id: 'static-gates', command: ['node', 'tools/src/gates/cli.ts', 'pins', 'config', 'stories', 'migrations', 'schema'] }
 const DATABASE: Step = { id: 'database', command: ['pnpm', 'db:up'] }
-// 单元与集成测试合计的覆盖率（规范 §8.3），需要数据库；已经包含单元测试，完整模式不再单独执行单元测试
-const TESTS: Step = { id: 'tests', command: ['pnpm', 'test:coverage'] }
+// 单元与集成测试合计的覆盖率（规范 §8.3），需要数据库；已经包含单元测试，完整模式不再单独执行单元测试。
+// 覆盖率之后在同一轮受管运行里接着跑测试资源工具的 Python 回归（M5R-M-21，D-10，coverage-resources.ts）：
+// 不新增运行，CI 每个 job 恰好两轮的资源合同不变；--fast（pre-push）不含它
+const TESTS: Step = { id: 'tests', command: ['pnpm', 'test:verify'] }
 // 先删除旧产物，构建没有真正执行时，后面的产物检查会失败
 const CLEAN: Step = { id: 'clean', command: ['pnpm', 'clean'] }
 const BUILD: Step = { id: 'build', command: ['pnpm', 'build'] }

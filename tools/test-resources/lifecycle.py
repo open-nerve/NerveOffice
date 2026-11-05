@@ -70,6 +70,16 @@ def read_run_manifest(path):
         return json.load(stream)
 
 
+def require_portable_root(path):
+    """lsof 在 C locale 下把非 ASCII、控制字符与反斜杠写成转义序列，按前缀比较时，仍被打开的文件会被当成不在管理根里，
+    句柄核验恒判“无句柄”（M5R-M-17）。这类路径不支持：失败关闭，不创建、不认领、不清理任何目录。"""
+    text = str(path)
+    for character in text:
+        if not 0x20 <= ord(character) <= 0x7E or character == "\\":
+            raise ValueError("测试资源管理根路径含非 ASCII、控制字符或反斜杠（U+%04X）：lsof 会把它写成转义序列，"
+                             "句柄核验无法比对；请把仓库放在纯 ASCII 路径下" % ord(character))
+
+
 def contained(path, root):
     path = Path(path).absolute()
     root = Path(root).resolve()
@@ -268,6 +278,17 @@ def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
     return count, samples
 
 
+def lsof_exit_sample(count=3):
+    """Q-10：按运行器同款固定命令（同一提权方式与 C locale）取几次全量列举，只记退出码与 stderr 字节数，不记输出内容。
+    不经任何运行台账，也不参与清理决定；只供 CI 资源核对写成注解"""
+    command = lsof_query_command()
+    samples = []
+    for _ in range(count):
+        result = subprocess.run(command, capture_output=True, timeout=30, env=dict(os.environ, LC_ALL="C"))
+        samples.append({"returncode": result.returncode, "stderrBytes": len(result.stderr)})
+    return samples
+
+
 def open_paths(root, owner=None, *, export_only=False):
     command = []
     started = time.monotonic()
@@ -299,6 +320,8 @@ def open_paths(root, owner=None, *, export_only=False):
         raise incomplete(stderr=error.stderr, timed_out=True) from None
     except OSError as error:
         raise incomplete(error_number=error.errno) from None
+    # 全量列举时 lsof 遇到错误会在 stderr 写警告（没有 -w）；退出码 1 且 stderr 为空按现行规则接受，
+    # 实际分布由 CI 资源核对单独采样（Q-10，lsof_exit_sample），之后再定是否收紧
     if result.returncode not in (0, 1) or result.stderr:
         raise incomplete(result.returncode, result.stderr)
     output = os.fsdecode(result.stdout)
@@ -602,6 +625,7 @@ def compact_profiles(profiles, run_id, failure_root, failed, limit):
 class Store:
     def __init__(self, repo, failure_bytes=2 * GIB, failure_run_bytes=256 * MIB, report_bytes=5 * GIB):
         self.repo = Path(repo).resolve()
+        require_portable_root(self.repo)
         self.root = self.repo / ".test-resources"
         self.failure_bytes = failure_bytes
         self.failure_run_bytes = failure_run_bytes
@@ -721,7 +745,9 @@ class Store:
             report["pruned"] = self.prune(now)
         return report
 
-    def prune(self, now):
+    def prune(self, now, skipped=None):
+        """按期限与总量回收旧报告与失败档案。单个候选的核验失败（句柄查询不完整、读不了台账等）只跳过它、原样保留，
+        记进 skipped（给出时），不让一个候选挡住其余候选，也不让收尾 GC 改变本轮的结论（M5R-M-20）"""
         removed = []
         for category, ttl, cap in (("failures", FAILURE_DAYS, self.failure_bytes),
                                    ("reports", REPORT_DAYS, self.report_bytes)):
@@ -780,6 +806,11 @@ class Store:
                         atomic_json(directory / "run.json", value)
                         removed.append(event); total -= size
                 except BlockingIOError:
+                    continue
+                except (OSError, ValueError, RuntimeError) as error:
+                    if skipped is not None and len(skipped) < 16:
+                        skipped.append({"category": category, "runId": directory.name, "reason": "verification-failed",
+                                        "error": type(error).__name__})
                     continue
         return removed
 
@@ -1174,6 +1205,13 @@ class Run:
                 elif self.data.get("status") in ("prepared", "cleanup-pending") and self.data.get("childGroup") is None:
                     self.retire_short_root()
                     self.update(status="interrupted", endedAt=time.time(), cleanupStage="never-started")
+                elif self.data.get("status") in ("prepared", "running"):
+                    # 运行期间 scratch 被外部删除（M5R-M-19）：报告随之没了，不能按请求的结论收尾；上面已确认组内进程与句柄都已退出。
+                    # 清理阶段沿用 complete（确实已无残留，下游按它判定终态），原因记在 stopReason
+                    self.retire_short_root()
+                    self.update(status="interrupted", endedAt=time.time(), cleanupStage="complete",
+                                requestedStatus=status, stopReason="scratch-missing",
+                                cleanupError="运行期间临时目录被外部删除，本轮按中断收尾")
                 return self.data
             if self.data.get("cleanupStage") == "reports-collected":
                 self.retire_short_root()
@@ -1223,6 +1261,13 @@ class Run:
         finally:
             if release:
                 self.release()
-        with locked(self.store.root / "gc.lock"):
-            self.store.prune(time.time())
+        # 收尾 GC 与本轮结论、发布隔离（M5R-M-20）：它出错只告警，不改变已经确定的结论，也不挡住调用方发布本轮报告
+        skipped = []
+        try:
+            with locked(self.store.root / "gc.lock"):
+                self.store.prune(time.time(), skipped)
+        except (OSError, ValueError, RuntimeError) as error:
+            skipped.append({"reason": "prune-failed", "error": type(error).__name__})
+        if skipped:
+            print("测试资源收尾回收跳过了部分候选（原样保留）：" + json.dumps(skipped, ensure_ascii=False), file=sys.stderr)
         return self.data

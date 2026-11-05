@@ -217,12 +217,13 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(resolved(false)).toEqual({ failOnFlakyTests: false, retries: [0] })
   }, 60_000)
 
-  it('每个 job 都在 CI=true 下执行（E2E 的重试与"出现重试即失败"按它生效，playwright.config.ts），没有哪一步或哪个 job 失败了也算通过', () => {
+  it('每个 job 都在 CI=true 下执行（E2E 的重试与"出现重试即失败"按它生效，playwright.config.ts），没有哪一步或哪个 job 失败了也算通过（只有三步只读磁盘诊断例外，D-09）', () => {
     for (const [id, job] of Object.entries(workflow.jobs)) {
       expect(job.env?.CI, id).toBe('true')
       expect(job['continue-on-error'], id).toBeUndefined()
       for (const step of job.steps) {
-        expect(step['continue-on-error'], stepLabel(id, step)).toBeUndefined()
+        // 磁盘诊断失败只告警，不影响后续步骤与 job 结论（M5R-M-18）；其余任何一步都不能失败了也算通过
+        expect(step['continue-on-error'], stepLabel(id, step)).toBe(step.run?.startsWith('python3 -B tools/test-resources/ci_disk_diagnostic.py ') === true ? true : undefined)
         // 步骤级的 env 盖过 job 的：CI 改掉了重试与"出现重试即失败"就不生效，E2E_BROWSERS 改掉了每片都跑同一个浏览器（复核第二批 S-1）
         expect(Object.keys(step.env ?? {}).filter(name => ['CI', 'E2E_BROWSERS', 'NERVE_TEST_RESOURCE_POLICY', 'NERVE_TEST_LSOF_MODE'].includes(name)), stepLabel(id, step)).toEqual([])
       }
@@ -352,7 +353,7 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(steps.find(step => step.id === 'e2e-report-check')?.if).toBe('always() && steps.e2e-prepare.outcome == \'success\'')
   })
 
-  it('verify 在依赖安装前后与失败结束时独立收取磁盘诊断，原检查不被包装或放行', () => {
+  it('verify 在依赖安装前后与结束时独立收取磁盘诊断；诊断失败只告警、不跳过或否决 verify（D-09），原检查不被包装或放行', () => {
     const steps = workflow.jobs.verify!.steps
     const command = 'python3 -B tools/test-resources/ci_disk_diagnostic.py '
     const before = steps.findIndex(step => step.run === `${command}before-install`)
@@ -367,7 +368,7 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(ended).toBeGreaterThan(verify)
     for (const index of [before, after, ended]) {
       expect(steps[index]?.['timeout-minutes']).toBe(2)
-      expect(steps[index]?.['continue-on-error']).toBeUndefined()
+      expect(steps[index]?.['continue-on-error']).toBe(true)
       expect(steps[index]?.env).toBeUndefined()
     }
     expect(steps[before]?.if).toBeUndefined()

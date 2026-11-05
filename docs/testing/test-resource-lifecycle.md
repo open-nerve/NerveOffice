@@ -12,6 +12,8 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 
 每项最多 5 秒/20 万项/深度 64，整批最多 45 秒/50 万项；单次 JSON 最多 32 KiB，工作流外层 2 分钟。必需的工作区和 runner 临时根消失为不完整，其余固定可选根不存在明确记 missing。任何拒绝、部分/超限结果返回非零，不能冒充完整容量；查询不会判断或修改原 12 GiB 余量、16 GiB 原环境等门槛。
 
+三步诊断都设 `continue-on-error: true`（M5-P7，D-09）：脚本的退出码不变，诊断失败只在该步骤显示告警，不跳过后续的预检、安装与 verify，也不否决 job 结论；其余步骤仍不允许失败了也算通过（`ci-workflow.test.ts`）。
+
 诊断不创建临时环境或独立 artifact，只向原 job 日志输出固定字段；不输出环境对象、子项名称、文件内容或原异常文本。日志沿六项 CI 原件的 14 天/5 GiB 报告规则保留，必要最终证据通过原独审/pin 流程留档。成功诊断只说明观察完成，`diagnosticOnly=true`、`cleanupAuthorized=false`，不代替测试通过或资源清理。KiB 回归入口为 `python3 -B tools/test-resources/run.py unit -- python3 -B -m unittest discover -s tools/test-resources -p 'test_ci_disk_diagnostic.py'`。
 
 ## 固定 Chrome 用例的关闭阶段诊断
@@ -159,6 +161,15 @@ python3 tools/test-resources/archive.py /绝对路径/归档根 --pin 已结束b
 pin 只用于经过审查的必要最终证据；不要 pin 每次失败重试。新写的门禁或调查脚本同样使用 Archives 创建/封存，不自行永久复制运行环境。CI 继续使用工作流已有 14 天 artifact 保留策略。
 
 ## 清理回归与局限
+
+**纳入门禁**（M5-P7，D-10）：Python 回归（`pnpm test:cleanup:check` 的同一组用例）经 `pnpm test:verify` 纳入完整 verify。它在覆盖率的同一轮受管运行（`run.py integration`）里、覆盖率结束之后执行（`tools/src/verify/coverage-resources.ts`）：两段都执行、任一失败即整步失败，不新增运行，CI 每 job 恰好两轮的资源合同不变；pre-push 快速门禁不含它。这组用例是严格策略下的工具单测，在临时目录里建自己的管理根，所以不继承 CI job 的托管策略（`NERVE_TEST_RESOURCE_POLICY` 要求管理根就是 `GITHUB_WORKSPACE`）；句柄查询方式照常继承，CI 上即用运行器同款的 sudo lsof。本机实测 491 项约 3 分钟。
+
+**M5-P7 的四处行为调整**：
+
+- 管理根路径（仓库或 worktree 的路径）含非 ASCII、控制字符或反斜杠时，`Store` 初始化即失败关闭（M5R-M-17）：lsof 在 C locale 下把这些字节写成转义序列，按前缀比较会把仍被打开的文件当成不在管理根里；
+- 运行期间 scratch 被外部删除时，running/prepared 按中断收尾（`stopReason=scratch-missing`，清理阶段 complete），短根随之退役；运行器不再以子进程的退出码冒充本轮成功（M5R-M-19）；
+- 收尾 GC 的单个候选核验失败（句柄查询不完整等）只跳过它、原样保留并告警，其余候选照常回收；收尾 GC 出错不改变本轮结论、不挡住发布（M5R-M-20）；
+- lsof 全量列举的退出码 1 且 stderr 为空时仍按现行规则接受，有警告即不完整（Q-10 单测钉住）。CI 资源核对之后，另按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解；收集到分布后再定是否收紧。
 
 Python 小型回归覆盖成功释放、失败限额与过期、SIGTERM、遗留恢复、打开句柄/活动锁、父目录链接、重复执行、失败重试归属、转移中断续作、发布锁、容器重复发布和 handoff 源码/最终证据保护。TypeScript 回归覆盖受管目录、VM 越界、纯函数导入兼容与数据库连接竞争。
 

@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -258,6 +259,84 @@ class LifecycleTests(unittest.TestCase):
         (destination / "crash.log").symlink_to(external)
         self.assertEqual(run.finish("failed")["status"], "cleanup-pending")
         self.assertEqual(external.read_text(), "keep")
+
+    def test_non_portable_root_paths_fail_closed_before_creating_anything(self):
+        # M5R-M-17：lsof 在 C locale 下转义这些字节，句柄核验会恒判“无句柄”；Store 初始化时失败关闭
+        for name in ("nerve-中文-root", "nerve-back\\slash", "nerve-tab\tname"):
+            with self.subTest(name=name):
+                root = self.repo / name
+                root.mkdir()
+                with self.assertRaisesRegex(ValueError, "非 ASCII、控制字符或反斜杠"):
+                    Store(root)
+                self.assertEqual(list(root.iterdir()), [])
+
+    def test_scratch_removed_while_running_finishes_interrupted_and_retires_short_root(self):
+        # M5R-M-19：运行期间 scratch 被外部删除，不能停在 running，也不能泄漏短根
+        with ManagedFixture() as fixture:
+            store = Store(fixture.path)
+            run = store.create("unit")
+            root = run.create_short_tmp().parent
+            run.update(status="running")
+            shutil.rmtree(run.scratch)
+            value = run.finish("passed")
+            self.assertEqual((value["status"], value["cleanupStage"], value["stopReason"], value["requestedStatus"]), ("interrupted", "complete", "scratch-missing", "passed"))
+            self.assertFalse(root.exists())
+            self.assertEqual(json.loads((run.directory / "run.json").read_text())["status"], "interrupted")
+
+    def test_unverifiable_gc_candidate_is_skipped_and_kept_without_failing_finish(self):
+        # M5R-M-20：句柄查询不完整的候选只跳过、原样保留；本轮照常收尾，其余候选照常回收
+        import lifecycle
+        runs = []
+        for _ in range(2):
+            run = self.store.create("e2e")
+            results = run.scratch / "tests/e2e/test-results"
+            results.mkdir(parents=True)
+            (results / "results.json").write_text('{"stats":{}}')
+            self.assertEqual(run.finish("passed")["status"], "passed")
+            runs.append(run)
+        # 两轮都收尾之后才让它们过期，免得第二轮收尾时就把第一轮回收掉
+        for run in runs:
+            data = json.loads((run.directory / "run.json").read_text())
+            data["endedAt"] = time.time() - 365 * 86400
+            lifecycle.atomic_json(run.directory / "run.json", data)
+        blocked = runs[0].directory / "reports"
+        original = lifecycle.open_paths
+
+        def query(root, owner=None, **options):
+            if Path(root) == blocked:
+                raise RuntimeError("无法完整核对打开文件")
+            return original(root, owner=owner, **options)
+
+        current = self.store.create("e2e")
+        results = current.scratch / "tests/e2e/test-results"
+        results.mkdir(parents=True)
+        (results / "results.json").write_text('{"stats":{}}')
+        with patch("lifecycle.open_paths", side_effect=query):
+            value = current.finish("passed")
+        self.assertEqual((value["status"], value["cleanupStage"]), ("passed", "complete"))
+        self.assertTrue(blocked.exists())
+        self.assertFalse((runs[1].directory / "reports").exists())
+        skipped = []
+        with patch("lifecycle.open_paths", side_effect=query):
+            self.store.prune(time.time(), skipped)
+        self.assertEqual(skipped, [{"category": "reports", "runId": runs[0].id, "reason": "verification-failed", "error": "RuntimeError"}])
+        self.assertTrue(blocked.exists())
+
+    def test_lsof_exit_code_one_with_empty_stderr_is_accepted_and_with_warnings_is_incomplete(self):
+        # Q-10：全量列举的现行规则——退出码 1 且 stderr 为空按“没有打开的文件”接受；有警告即判不完整、保留资源
+        import lifecycle
+        # 合法的全量列举至少列出当前进程（校验器拒绝空的进程集）
+        listing = ("p%d\nf0\ntCHR\nn/dev/null\n" % os.getpid()).encode()
+        quiet = subprocess.CompletedProcess(args=[], returncode=1, stdout=listing, stderr=b"")
+        noisy = subprocess.CompletedProcess(args=[], returncode=1, stdout=listing, stderr=b"lsof: WARNING: can't stat()\n")
+        with patch.dict(os.environ, {"NERVE_TEST_LSOF_MODE": "direct"}):
+            with patch("lifecycle.subprocess.run", return_value=quiet):
+                self.assertEqual(lifecycle.open_paths(self.repo), [])
+                self.assertEqual(lifecycle.lsof_exit_sample(2), [{"returncode": 1, "stderrBytes": 0}] * 2)
+            with patch("lifecycle.subprocess.run", return_value=noisy):
+                with self.assertRaisesRegex(RuntimeError, "无法完整核对打开文件"):
+                    lifecycle.open_paths(self.repo)
+                self.assertEqual(lifecycle.lsof_exit_sample(1), [{"returncode": 1, "stderrBytes": len(noisy.stderr)}])
 
     def test_atomic_record_never_follows_predictable_temporary_link(self):
         from lifecycle import atomic_json
