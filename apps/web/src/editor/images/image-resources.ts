@@ -16,6 +16,11 @@ export interface ImageResourcesOptions {
   readonly changed: () => void
   readonly failed: (error: unknown) => void
   readonly readFailures?: () => ImageReadFailures
+  /**
+   * 当前文档仍引用的规范相对地址（M5R-M-11）：刷新只清空并重读其中出现过的来源。返回 undefined（还没有文档）时全部重读。
+   * 不能用“弱引用还取得到元素”判断在用：core 的 ImageCacheMap（LRU）长期持有已删除图片的元素
+   */
+  readonly liveSources?: () => ReadonlySet<string> | undefined
 }
 
 export interface ImageResources {
@@ -105,8 +110,8 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     }
   }
 
-  function clearDecoded(): void {
-    for (const entry of entries.values()) {
+  function clearDecoded(selected: Iterable<Entry> = entries.values()): void {
+    for (const entry of selected) {
       entry.decoded?.dispose()
       entry.decoded = undefined
       entry.task = undefined
@@ -129,7 +134,17 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
   }
 
   async function load(source: string): Promise<string> {
-    const signal = requireActive()
+    if (disposed)
+      throw new DOMException('图片实例已结束', 'AbortError')
+    // 暂停时显示路径只给本地占位、不读取（M5R-M-09）：抛出取消会让 SDK 不建浮图图元、约每 33 毫秒重试一次。
+    // 来源照常登记，SDK 建图元时交回元素登记，恢复时 refresh 重读；地址不合格的失败留到恢复以后再报告
+    if (!active) {
+      const pending = canonical(source)
+      if (pending !== undefined)
+        entryOf(pending)
+      return options.placeholder
+    }
+    const signal = generation.signal
     const path = canonical(source)
     if (path === undefined) {
       options.failed(new AssetInputError('address'))
@@ -218,8 +233,18 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       generation.abort(new DOMException('图片读取代次已更新', 'AbortError'))
       generation = new AbortController()
       active = true
-      clearDecoded()
-      for (const source of entries.keys()) {
+      // 只重读文档里仍引用的来源（M5R-M-11）。已删除的保持现状：不重下、不报告与当前画面无关的失败；
+      // 撤销删除时 SDK 缓存里的元素仍显示原来的像素。刷新只发生在同一用户身上（换人一律先暂停、清空）
+      const live = options.liveSources?.()
+      const selected: [string, Entry][] = []
+      for (const [source, entry] of entries) {
+        if (live === undefined || live.has(source))
+          selected.push([source, entry])
+        else if (entry.decoded === undefined)
+          entry.task = undefined
+      }
+      clearDecoded(selected.map(([, entry]) => entry))
+      for (const [source] of selected) {
         // 普通失败已在 load 里报告；下一次刷新/暂停造成的取消没有用户错误。
         void load(source).catch(() => {})
       }

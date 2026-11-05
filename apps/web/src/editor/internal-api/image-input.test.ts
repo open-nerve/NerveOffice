@@ -1,4 +1,5 @@
 import type { IMultiCommand, Workbook } from '@univerjs/core'
+import type { ISheetClipboardHook } from '@univerjs/sheets-ui'
 import type { ImageInputCommands } from './image-input.ts'
 import { CommandType, CustomCommandExecutionError, DOCS_NORMAL_EDITOR_UNIT_ID_KEY, DrawingTypeEnum, EDITOR_ACTIVATED, FOCUSING_FX_BAR_EDITOR, FOCUSING_SHEET, ICommandService, IContextService, ImageSourceType, IPermissionService, IUndoRedoService, IUniverInstanceService, LocaleType, RedoCommand, UndoCommand, Univer, UniverInstanceType } from '@univerjs/core'
 import { IDrawingManagerService, UniverDrawingPlugin } from '@univerjs/drawing'
@@ -21,7 +22,8 @@ const cleanup: (() => void)[] = []
 /** 只替换命令所调用的系统剪贴板端口；未列出的服务调用立即报错。 */
 function clipboardPort(methods: Partial<ISheetClipboardService>): ISheetClipboardService {
   return new Proxy(methods, { get: (target, key) => {
-    if (key === 'dispose')
+    // dispose 由注入器在释放时探测；__symbol 是 redi 的 Injector.get 判断异步钩子时读取的标记
+    if (key === 'dispose' || key === '__symbol')
       return undefined
     if (!Object.hasOwn(target, key))
       throw new Error(`未声明的剪贴板测试依赖：${String(key)}`)
@@ -161,6 +163,24 @@ describe('真实命令服务的图片接管', () => {
     h.routes.dispose()
     expect(h.commands.hasCommand('sheet.command.insert-float-image')).toBe(false)
     expect(h.commands.hasCommand('sheet.command.insert-cell-image')).toBe(false)
+  })
+
+  it('M5R-M-12 选择性粘贴遇到纯图片：SDK 补丁拒绝后经剪贴板钩子明确提示用普通粘贴，释放时撤下钩子', async () => {
+    const h = setup()
+    h.routes.dispose()
+    const hooks: ISheetClipboardHook[] = []
+    h.injector.add([ISheetClipboardService, { useValue: clipboardPort({ addClipboardHook: (hook) => {
+      hooks.push(hook)
+      return { dispose: () => void hooks.splice(hooks.indexOf(hook), 1) }
+    } }) }])
+    const rejected = vi.fn()
+    const routes = h.bridge.installCommands({ copy: h.copy, paste: h.paste, insert: h.insert, rejected })
+    expect(hooks).toHaveLength(1)
+    hooks[0]?.onPasteFilesRejected?.({ pasteType: 'special-paste-value' })
+    expect(rejected).toHaveBeenCalledExactlyOnceWith('special-paste-image', 'insert')
+    expect(h.insert).not.toHaveBeenCalled()
+    routes.dispose()
+    expect(hooks).toEqual([])
   })
 
   it('原 MultiCommand 返回 false 会回落，自定义取消错误终止回落', async () => {

@@ -201,6 +201,7 @@ export const editorMessages = {
       'timeout': '图片处理超时，请重试。',
       'encoding': '无法处理这张图片，请重新选择。',
       'request': '请求失败，请稍后重试。',
+      'special-paste-image': '选择性粘贴不支持图片，请使用普通粘贴。',
       'write-source': '涉及的图片不是本平台上传的图片；旧版图片请先按提示确认清理。',
       'write-limit': '涉及的图片内容过大或层级过深。',
       'write-structure': '内容格式不受支持。',

@@ -62,6 +62,7 @@ import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
 import { installEditorImageInput } from './images/editor-image-input.ts'
+import { liveAssetPaths } from './images/live-asset-paths.ts'
 import { createPlatformImageIo } from './images/platform-image-io.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL } from './internal-api/index.ts'
 import { closeImagePreview, installRichLinkShortcut, invalidateImageRendering } from './internal-api/ui.ts'
@@ -362,6 +363,16 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const resourceGuard = createResourceLoadGuard()
   const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
+  // 图片刷新只重读文档里仍引用的来源（M5R-M-11）：工作簿建好之前没有文档，全部重读；取不到（例如正在销毁）时同样全部重读
+  let liveWorkbook: { readonly save: () => unknown } | undefined
+  const liveSources = (): ReadonlySet<string> | undefined => {
+    try {
+      return liveWorkbook === undefined ? undefined : liveAssetPaths(liveWorkbook.save(), location.origin)
+    }
+    catch {
+      return undefined
+    }
+  }
   const images = createPlatformImageIo({
     access,
     identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
@@ -369,6 +380,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
     changed: () => invalidateImageRendering(univer),
     invalidated: () => closeImagePreview(univer),
     failed: options.onImageFailure ?? (() => {}),
+    liveSources,
   })
   rounds.images = images
   cleanup.defer(images.dispose)
@@ -437,6 +449,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 打开自检的"之前"一侧（M3-P4 设计 §3.11 第 3 条）：SDK 会改动交给 createWorkbook 的对象，先把载入的快照里的资源取出一份
   const resourcesBefore = structuredClone(snapshot.data.resources)
   const workbook = createWorkbook(univerAPI, snapshot)
+  liveWorkbook = workbook
   // 还没写进模型的输入（Codex 评审 CX4）：单元格编辑器里的与面板防抖中的合成一个状态；单元格编辑器开着与否问工作簿，所以在它之后建
   const input = watchUncommittedInput({ cellEditorOpen: () => workbook.isCellEditing(), cellInput: cellEditing, panelInput: panels })
   cleanup.defer(input.dispose)

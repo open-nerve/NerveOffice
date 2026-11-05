@@ -2,24 +2,29 @@
   "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
   "package": "@univerjs/sheets-ui",
   "version": "1.0.1",
-  "reason": "UR-040：延后表名全选只作用于原控件尚未交互的编辑会话，不覆盖已输入文字、IME、光标或其他 document。M5-P4-S6：ListDropDown 传递可选 autoFocusSearch，缺省 true；SelectList 的 React 与 timer 自动聚焦共用该策略，隐藏、策略切换和卸载取消本实例 timer，保留用户主动搜索与选择。",
+  "reason": "UR-040：延后表名全选只作用于原控件尚未交互的编辑会话，不覆盖已输入文字、IME、光标或其他 document。M5-P4-S6：ListDropDown 传递可选 autoFocusSearch，缺省 true；SelectList 的 React 与 timer 自动聚焦共用该策略，隐藏、策略切换和卸载取消本实例 timer，保留用户主动搜索与选择。M5-P7（M5R-M-12，D-08a）：SheetClipboardService._pasteFiles 遇到非默认粘贴类型（选择性粘贴纯图片剪贴板）时不执行粘贴，经新增的可选钩子 onPasteFilesRejected 交给平台提示改用普通粘贴；不生成撤销记录、不清空重做栈、不上传，普通粘贴不变。M5-P7（M5R-M-16，D-08i）：HtmlToUSMService.convert 把粘贴的样式接进挂在页面上的 shadow root 之前，先用不接入文档的可构造样式表解析（@import 不加载，转义写法还原），只留普通样式规则并去掉值里带 url()/image-set() 等资源函数的声明；解析失败时不留样式。",
   "files": [
     {
       "path": "lib/es/index.js",
       "originalSha256": "36c54a0025c9c447a6a35a567dc06e70f835adb68ae3405900f8ca549a4e3ecc",
-      "patchedSha256": "71bf328d004d3de15b335b464968b10b2f3bbcddd5eb9f1a3122eb8810e2cc89"
+      "patchedSha256": "c8571cdbe0caf9013119f273ad2915f93607452625aebcd43d07e69b888b926a"
     },
     {
       "path": "lib/cjs/index.js",
       "originalSha256": "e96ddece20ba81fba43fe5734f36ab903d137f9ae548c187730abcb455f52a0c",
-      "patchedSha256": "62abf46de9eb1cda760362dce87474d07eeeec0d637b424fdf53215a152d80a4"
+      "patchedSha256": "47ff6d31f0ddd2b16126335283e0595a6eb15a104a409901d2ba4ca1e0c4ba86"
     },
     {
       "path": "lib/types/views/dropdown/ListDropDown.d.ts",
       "originalSha256": "f5f9810def6d53fa0612d837e5606a5d0c58c46cae6e0262b6ec707ceecce4b4",
       "patchedSha256": "a58feba17605614835b3000d635cefb1ff62d72a24d25cda70032ef200b16cad"
+    },
+    {
+      "path": "lib/types/services/clipboard/type.d.ts",
+      "originalSha256": "bcfb1670d738aa8cfe9e06b1f38cca7a8ac0fc1c8a6f0780dcf03ea2069c8cb1",
+      "patchedSha256": "2b158d876b9323221319a79931d2730bc125ac5ed943bbeaa3a184c0489fae82"
     }
   ],
   "patch": "patches/@univerjs__sheets-ui@1.0.1.patch",
-  "patchSha256": "5a7c38d834b121b0c6228b8a214ca6044166679c01aeaf29bc8ab70315e52977"
+  "patchSha256": "5cb69e5a828636e41938113e5be94c101828ae1942df42346cc2d7f29da62b9a"
 }

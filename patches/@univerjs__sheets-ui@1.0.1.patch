@@ -1,8 +1,60 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a23b12609 100644
+index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..0b085693f9fbe9b0dd49cd7597dc7f1a9dce6dcf 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
-@@ -22580,10 +22580,19 @@ function keepLastTextIndex(inputHtml) {
+@@ -2887,6 +2887,25 @@ function cleanTextNodes(node) {
+ 	}
+ 	node.childNodes.forEach(cleanTextNodes);
+ }
++// NerveOffice（M5R-M-16，D-08i）：粘贴的样式只用来取普通样式规则（选择器 → 声明）。接入页面之前，先用不接入任何文档的可构造样式表解析：
++// @import 不加载（replaceSync 忽略），规则与值规范化（CSS 转义写法也还原）。只留普通样式规则，去掉值里带资源函数的声明，
++// 其余规则（@import、@font-face、@media 等）一律不留。解析不了时不留任何样式：不能把原文接进页面
++const NERVE_STYLE_RESOURCE_FUNCTION = /(?:^|[^\w-])(?:url|src|image|image-set|-webkit-image-set|cross-fade|element)\s*\(/i;
++function nerveWithoutStyleResources(cssText) {
++	try {
++		const sheet = new CSSStyleSheet();
++		sheet.replaceSync(cssText);
++		const rules = [];
++		for (const rule of sheet.cssRules) {
++			if (!(rule instanceof CSSStyleRule)) continue;
++			for (const name of Array.from(rule.style)) if (NERVE_STYLE_RESOURCE_FUNCTION.test(rule.style.getPropertyValue(name))) rule.style.removeProperty(name);
++			rules.push(rule.cssText);
++		}
++		return rules.join("\n");
++	} catch {
++		return "";
++	}
++}
+ function parseToDom(rawHtml) {
+ 	const doc = document.implementation.createHTMLDocument("");
+ 	const range = doc.createRange();
+@@ -3020,7 +3039,8 @@ var HtmlToUSMService = class HtmlToUSMService {
+ 		if (style) {
+ 			const rawStyleText = style.textContent ?? "";
+ 			this._parseMsoNumfmtFromCssText(rawStyleText);
+-			style.textContent = normalizeLegacySystemColors(rawStyleText);
++			// NerveOffice（M5R-M-16）：下面要把样式接进挂在真实页面上的 shadow root 才能取规则；接入之前去掉会加载外部资源的部分
++			style.textContent = nerveWithoutStyleResources(normalizeLegacySystemColors(rawStyleText));
+ 			const shadowHost = document.createElement("div");
+ 			const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+ 			document.body.appendChild(shadowHost);
+@@ -4475,6 +4495,15 @@ let SheetClipboardService = class SheetClipboardService extends _univerjs_core.D
+ 		return result;
+ 	}
+ 	async _pasteFiles(files, pasteType, target) {
++		// NerveOffice（M5R-M-12）：选择性粘贴不处理纯图片剪贴板。图片钩子会把文件包成插图命令放进重做记录，
++		// _executePaste 另压一条撤销（清空重做栈），重做时再上传一次。这里直接拒绝、不生成撤销记录，经钩子交给平台说明原因
++		if (pasteType !== PREDEFINED_HOOK_NAME_PASTE.DEFAULT_PASTE) {
++			for (const h of this._clipboardHooks) {
++				var _h$onPasteFilesRejected;
++				(_h$onPasteFilesRejected = h.onPasteFilesRejected) === null || _h$onPasteFilesRejected === void 0 || _h$onPasteFilesRejected.call(h, { pasteType });
++			}
++			return false;
++		}
+ 		return this._executePaste((h, payload) => {
+ 			var _h$onPasteFiles;
+ 			return (_h$onPasteFiles = h.onPasteFiles) === null || _h$onPasteFiles === void 0 ? void 0 : _h$onPasteFiles.call(h, payload, files, { pasteType });
+@@ -22580,10 +22609,19 @@ function keepLastTextIndex(inputHtml) {
  	});
  }
  function keepTextSelected(inputHtml) {
@@ -24,7 +76,7 @@ index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a
  		range.selectNodeContents(inputHtml);
  		selection.removeAllRanges();
  		selection.addRange(range);
-@@ -26128,7 +26137,7 @@ function getListDropdownValue(value, multiple) {
+@@ -26128,7 +26166,7 @@ function getListDropdownValue(value, multiple) {
  //#endregion
  //#region src/views/dropdown/ListDropDown.tsx
  function SelectList(props) {
@@ -33,7 +85,7 @@ index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a
  	const localeService = (0, _univerjs_ui.useDependency)(_univerjs_core.LocaleService);
  	const themeService = (0, _univerjs_ui.useDependency)(_univerjs_core.ThemeService);
  	(0, _univerjs_ui.useObservable)(themeService.currentTheme$);
-@@ -26136,14 +26145,14 @@ function SelectList(props) {
+@@ -26136,14 +26174,14 @@ function SelectList(props) {
  	const searchRef = (0, react.useRef)(null);
  	(0, react.useEffect)(() => {
  		let timer = null;
@@ -51,7 +103,7 @@ index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a
  	const [lowerFilter, setLowerFilter] = (0, react.useState)("");
  	const filteredOptions = (0, react.useMemo)(() => {
  		return options.filter((item) => lowerFilter ? item.label.toLowerCase().includes(lowerFilter) : true);
-@@ -26180,7 +26189,7 @@ function SelectList(props) {
+@@ -26180,7 +26218,7 @@ function SelectList(props) {
  					className: (0, _univerjs_design.clsx)("univer-w-full univer-rounded-md univer-bg-gray-0 univer-px-2 univer-py-1 univer-text-sm univer-text-gray-900 focus:univer-border-primary-500 focus:univer-outline-none dark:!univer-bg-gray-1000 dark:!univer-text-gray-0", _univerjs_design.borderClassName),
  					type: "text",
  					value: lowerFilter,
@@ -60,7 +112,7 @@ index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a
  					onChange: handleSearchChange
  				})
  			}),
-@@ -26244,7 +26253,7 @@ function SelectList(props) {
+@@ -26244,7 +26282,7 @@ function SelectList(props) {
  }
  function ListDropDown(props) {
  	const { popup: { extraProps, anchorRect } } = props;
@@ -69,7 +121,7 @@ index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a
  	const { worksheet } = location;
  	const [localValue, setLocalValue] = (0, react.useState)(defaultValue);
  	if (!worksheet) return null;
-@@ -26265,7 +26274,8 @@ function ListDropDown(props) {
+@@ -26265,7 +26303,8 @@ function ListDropDown(props) {
  		onEdit,
  		location,
  		showEdit,
@@ -80,10 +132,62 @@ index be0a5b9c08aeea40c1036d4cae7a41da5439fcb2..712fb2845e24b7ad120efc3e38356e6a
  }
  ListDropDown.componentKey = "sheets.dropdown.list";
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8b35f7a1f 100644
+index 8a725c69bf972456c732af307f3d223217e6dbda..ca1ab0968c038e471c1693abf72574394448c072 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
-@@ -22579,10 +22579,19 @@ function keepLastTextIndex(inputHtml) {
+@@ -2886,6 +2886,25 @@ function cleanTextNodes(node) {
+ 	}
+ 	node.childNodes.forEach(cleanTextNodes);
+ }
++// NerveOffice（M5R-M-16，D-08i）：粘贴的样式只用来取普通样式规则（选择器 → 声明）。接入页面之前，先用不接入任何文档的可构造样式表解析：
++// @import 不加载（replaceSync 忽略），规则与值规范化（CSS 转义写法也还原）。只留普通样式规则，去掉值里带资源函数的声明，
++// 其余规则（@import、@font-face、@media 等）一律不留。解析不了时不留任何样式：不能把原文接进页面
++const NERVE_STYLE_RESOURCE_FUNCTION = /(?:^|[^\w-])(?:url|src|image|image-set|-webkit-image-set|cross-fade|element)\s*\(/i;
++function nerveWithoutStyleResources(cssText) {
++	try {
++		const sheet = new CSSStyleSheet();
++		sheet.replaceSync(cssText);
++		const rules = [];
++		for (const rule of sheet.cssRules) {
++			if (!(rule instanceof CSSStyleRule)) continue;
++			for (const name of Array.from(rule.style)) if (NERVE_STYLE_RESOURCE_FUNCTION.test(rule.style.getPropertyValue(name))) rule.style.removeProperty(name);
++			rules.push(rule.cssText);
++		}
++		return rules.join("\n");
++	} catch {
++		return "";
++	}
++}
+ function parseToDom(rawHtml) {
+ 	const doc = document.implementation.createHTMLDocument("");
+ 	const range = doc.createRange();
+@@ -3019,7 +3038,8 @@ var HtmlToUSMService = class HtmlToUSMService {
+ 		if (style) {
+ 			const rawStyleText = style.textContent ?? "";
+ 			this._parseMsoNumfmtFromCssText(rawStyleText);
+-			style.textContent = normalizeLegacySystemColors(rawStyleText);
++			// NerveOffice（M5R-M-16）：下面要把样式接进挂在真实页面上的 shadow root 才能取规则；接入之前去掉会加载外部资源的部分
++			style.textContent = nerveWithoutStyleResources(normalizeLegacySystemColors(rawStyleText));
+ 			const shadowHost = document.createElement("div");
+ 			const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+ 			document.body.appendChild(shadowHost);
+@@ -4474,6 +4494,15 @@ let SheetClipboardService = class SheetClipboardService extends Disposable {
+ 		return result;
+ 	}
+ 	async _pasteFiles(files, pasteType, target) {
++		// NerveOffice（M5R-M-12）：选择性粘贴不处理纯图片剪贴板。图片钩子会把文件包成插图命令放进重做记录，
++		// _executePaste 另压一条撤销（清空重做栈），重做时再上传一次。这里直接拒绝、不生成撤销记录，经钩子交给平台说明原因
++		if (pasteType !== PREDEFINED_HOOK_NAME_PASTE.DEFAULT_PASTE) {
++			for (const h of this._clipboardHooks) {
++				var _h$onPasteFilesRejected;
++				(_h$onPasteFilesRejected = h.onPasteFilesRejected) === null || _h$onPasteFilesRejected === void 0 || _h$onPasteFilesRejected.call(h, { pasteType });
++			}
++			return false;
++		}
+ 		return this._executePaste((h, payload) => {
+ 			var _h$onPasteFiles;
+ 			return (_h$onPasteFiles = h.onPasteFiles) === null || _h$onPasteFiles === void 0 ? void 0 : _h$onPasteFiles.call(h, payload, files, { pasteType });
+@@ -22579,10 +22608,19 @@ function keepLastTextIndex(inputHtml) {
  	});
  }
  function keepTextSelected(inputHtml) {
@@ -105,7 +209,7 @@ index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8
  		range.selectNodeContents(inputHtml);
  		selection.removeAllRanges();
  		selection.addRange(range);
-@@ -26127,7 +26136,7 @@ function getListDropdownValue(value, multiple) {
+@@ -26127,7 +26165,7 @@ function getListDropdownValue(value, multiple) {
  //#endregion
  //#region src/views/dropdown/ListDropDown.tsx
  function SelectList(props) {
@@ -114,7 +218,7 @@ index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8
  	const localeService = useDependency(LocaleService);
  	const themeService = useDependency(ThemeService);
  	useObservable(themeService.currentTheme$);
-@@ -26135,14 +26144,14 @@ function SelectList(props) {
+@@ -26135,14 +26173,14 @@ function SelectList(props) {
  	const searchRef = useRef(null);
  	useEffect(() => {
  		let timer = null;
@@ -132,7 +236,7 @@ index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8
  	const [lowerFilter, setLowerFilter] = useState("");
  	const filteredOptions = useMemo(() => {
  		return options.filter((item) => lowerFilter ? item.label.toLowerCase().includes(lowerFilter) : true);
-@@ -26179,7 +26188,7 @@ function SelectList(props) {
+@@ -26179,7 +26217,7 @@ function SelectList(props) {
  					className: clsx("univer-w-full univer-rounded-md univer-bg-gray-0 univer-px-2 univer-py-1 univer-text-sm univer-text-gray-900 focus:univer-border-primary-500 focus:univer-outline-none dark:!univer-bg-gray-1000 dark:!univer-text-gray-0", borderClassName),
  					type: "text",
  					value: lowerFilter,
@@ -141,7 +245,7 @@ index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8
  					onChange: handleSearchChange
  				})
  			}),
-@@ -26243,7 +26252,7 @@ function SelectList(props) {
+@@ -26243,7 +26281,7 @@ function SelectList(props) {
  }
  function ListDropDown(props) {
  	const { popup: { extraProps, anchorRect } } = props;
@@ -150,7 +254,7 @@ index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8
  	const { worksheet } = location;
  	const [localValue, setLocalValue] = useState(defaultValue);
  	if (!worksheet) return null;
-@@ -26264,7 +26273,8 @@ function ListDropDown(props) {
+@@ -26264,7 +26302,8 @@ function ListDropDown(props) {
  		onEdit,
  		location,
  		showEdit,
@@ -160,6 +264,21 @@ index 8a725c69bf972456c732af307f3d223217e6dbda..4685c19e3721eda088b52d074889b3a8
  	});
  }
  ListDropDown.componentKey = "sheets.dropdown.list";
+diff --git a/lib/types/services/clipboard/type.d.ts b/lib/types/services/clipboard/type.d.ts
+index cdb3b02f6c9e38f3d93234f02e0237ffecc2f7ca..e83301bd6abcc7d1369b17e5b27851dd79e1a304 100644
+--- a/lib/types/services/clipboard/type.d.ts
++++ b/lib/types/services/clipboard/type.d.ts
+@@ -201,6 +201,10 @@ export interface ISheetClipboardHook {
+         undos: IMutationInfo[];
+         redos: IMutationInfo[];
+     };
++    /**
++     * NerveOffice（M5R-M-12）：选择性粘贴遇到纯图片剪贴板时不执行粘贴，改为通知各钩子（没有撤销记录、不上传）
++     */
++    onPasteFilesRejected?(payload: ICopyPastePayload): void;
+     onPasteUnrecognized?(pasteTo: ISheetDiscreteRangeLocation): {
+         undos: IMutationInfo[];
+         redos: IMutationInfo[];
 diff --git a/lib/types/views/dropdown/ListDropDown.d.ts b/lib/types/views/dropdown/ListDropDown.d.ts
 index 4d0dd03d860cd73add8b81598ffac342d2a8ff2d..e675f994afe27a71b757cb15ab70a4a66a87c014 100644
 --- a/lib/types/views/dropdown/ListDropDown.d.ts

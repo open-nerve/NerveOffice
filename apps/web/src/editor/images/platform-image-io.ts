@@ -30,6 +30,8 @@ export interface PlatformImageIoOptions {
   readonly changed: () => void
   readonly invalidated?: () => void
   readonly failed: (error: unknown) => void
+  /** 当前文档仍引用的平台图片地址；刷新只重读其中的来源（M5R-M-11，image-resources.ts） */
+  readonly liveSources?: () => ReadonlySet<string> | undefined
 }
 
 export interface PlatformImageIo {
@@ -91,6 +93,7 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     changed: options.changed,
     failed: options.failed,
     readFailures: options.identity.readFailures,
+    ...(options.liveSources === undefined ? {} : { liveSources: options.liveSources }),
   })
   if (session() === undefined)
     resources.suspend()

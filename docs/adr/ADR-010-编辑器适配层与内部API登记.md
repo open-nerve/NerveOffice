@@ -267,3 +267,43 @@ M5 整体独立审查发现 UR-033 的有序待办有一个缺口：队首的不
 **M5R-M-08**：拒绝输入的写入拦截器在校验任务被取消时（撤销、规则变更或实例销毁），按“无结论”处理：返回 `false`，这次输入不写入、不弹提示，也不留下未处理的拒绝。取消错误来自 sheets-data-validation 补丁中未导出的类，按 `name === 'DataValidationCancelledError'` 识别；真实错误照常抛出。
 
 两个约定名称登记在 `registry.ts`（`PANEL_UNCOMMITTED_ATTRIBUTE`、`PANEL_UNCOMMITTED_EVENT`）。补丁摘要更新于 `patches/univer-data-validation-ui.json`。回归见 `data-validation-panel.test.tsx`、`data-validation-reject-input.test.ts`、`panel-debounce-watch.test.ts` 与 E2E。UR-033 仍未发送上游，移除条件不变。
+
+## M5-P7 的补充：选择性粘贴遇到纯图片剪贴板（M5R-M-12，D-08a）
+
+普通粘贴与快捷键粘贴由平台的图片输入接管；选择性粘贴（仅值、格式、列宽、边框以外、公式）交给 SDK 自己读剪贴板。剪贴板只有图片时，sheets-ui 走 `_pasteFiles`，sheets-drawing-ui 的文件钩子不看粘贴类型，把文件包成带 `files` 的 `insert-float-image` 放进重做记录。这条命令已由平台的插图处理器接管，执行即上传一次。`_executePaste` 又以 `every(executeCommand(...))` 判断成功（Promise 恒为真值），无论命令成败都压入一条撤销记录、清空重做栈；重做时再上传一次，`File` 也被撤销栈长期持有。
+
+只在平台的插图处理器或入口守卫里拒绝，挡得住上传，挡不住那条撤销记录。平台先自己读一次剪贴板再交给 SDK，又要读两次，Safari 每次读取都需要用户手势。因此在 sheets-ui 的 `SheetClipboardService._pasteFiles` 加最小补丁（ES/CJS 对称）：
+
+- 粘贴类型不是 `DEFAULT_PASTE` 时不执行粘贴，返回 `false`，不进 `_executePaste`；
+- 依次调用各钩子新增的可选方法 `onPasteFilesRejected({ pasteType })`，声明加在 `ISheetClipboardHook`；
+- 普通粘贴的路径不变。
+
+平台在安装图片命令接管时注册一个剪贴板钩子（`nerve-image-special-paste`），收到通知即经操作状态通道提示“选择性粘贴不支持图片，请使用普通粘贴”，随接管一起撤下。`registry.ts` 为图片输入补登 `ISheetClipboardService`。补丁摘要（含新增声明文件的原始与安装摘要）更新于 `patches/univer-sheet-name-selection.json`。
+
+回归：
+
+- `special-paste-images.test.ts` 直接调用已安装 sheets-ui 的 `_pasteFiles`：五种选择性粘贴都不执行、只通知钩子，普通粘贴照常；
+- `image-input.test.ts` 核对钩子注册、提示与撤下；
+- E2E `image-input.spec.ts` 用受控剪贴板经真实右键菜单触发：只读一次剪贴板，没有上传；撤销、重做不再上传，浮图数量不变。
+
+移除条件：上游在选择性粘贴时不再把纯图片转为插图命令，`_executePaste` 不再为没有生效的修改压入撤销记录，并通过上述回归。
+
+## M5-P7 的补充：粘贴样式接入页面之前去掉外部资源（M5R-M-16，D-08i）
+
+sheets-ui 的 `HtmlToUSMService.convert` 要取粘贴 HTML 里第一个 `<style>` 的 `style.sheet.cssRules`，为此把它从惰性文档移进一个挂在 `document.body` 上的 shadow root。样式一旦接进真实页面，`@import` 立即加载，只有 CSP 的 `style-src` 拦着。
+
+M5-P7 在真实 Chromium 中复现：无文件的普通表格快捷键粘贴与选择性粘贴各触发一条 `style-src-elem` 违规，外部请求记录里是第三方的 `@import` 地址；背景、字体与图片都没有被请求。
+
+平台的图片输入只在菜单粘贴、带文件的快捷键粘贴时经手 HTML，另两条路径由 SDK 自己读剪贴板。所以清理放在这个唯一的接入点（ES/CJS 对称）：
+
+- 接入之前先用不接入任何文档的可构造样式表（`new CSSStyleSheet()` 加 `replaceSync`）解析：`@import` 不加载，规则与值规范化，CSS 转义写法还原；
+- 只留普通样式规则（`CSSStyleRule`），去掉值里带资源函数（`url()`、`image-set()`、`src()`、`cross-fade()`、`element()` 等）的声明；
+- `@import`、`@font-face`、`@media` 等其余规则不留；解析失败时不留任何样式，不把原文接进页面；
+- `mso-number-format` 仍在清理之前从原文读取，SDK 取样式规则的方式不变。
+
+回归：
+
+- E2E `image-input.spec.ts` 用第三方目标服务的样本走上述两条路径，断言单元格贴进、文字颜色保留、目标服务零命中、零外部请求与零 CSP 违规；修复前同一用例失败（两条 `style-src-elem` 违规）；
+- 同文件旧用例补上从未断言的预览哨兵。
+
+补丁摘要更新于 `patches/univer-sheet-name-selection.json`。移除条件：上游在接入页面之前清理粘贴样式，或者不再把它接入真实文档，并通过上述回归。

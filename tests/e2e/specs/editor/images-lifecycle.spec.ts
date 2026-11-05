@@ -10,7 +10,7 @@ import { expectImagePixels, imageFailureSentinel, prepareImageDocument } from '.
 import { imageSample } from '../../support/image-sample.ts'
 import { logoutWithOpenEditor } from '../../support/logout.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, openReader, waitForEditorAccess } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, openReader, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -165,6 +165,17 @@ test.describe('US-M5-07 图片身份与旧实例的实际回收', { tag: '@test-
       await page.unroute(path)
       for (const a1 of ['C3', 'A8', 'D8'])
         await expectImagePixels(page, a1, false)
+      // M5R-M-09：暂停期间切表再切回，浮图照常建图元、显示本地占位，不发读取。修复前读取被取消，SDK 不建图元并约每 33 毫秒重试
+      const reads: string[] = []
+      const record = (request: { url: () => string }): void => {
+        reads.push(new URL(request.url()).pathname)
+      }
+      page.on('request', record)
+      await sheetTab(page, '切表对照').click()
+      await sheetTab(page, '图片复核').click()
+      await expect.poll(async () => page.evaluate(() => window.__nerveEditorProbe?.images.element('first')?.src ?? 'missing')).toMatch(/\.svg$/)
+      page.off('request', record)
+      expect(reads).not.toContain(asset.url)
       const replacement = await createUser('image-other')
       await loginThroughUi(other, replacement)
       await expect(other.getByRole('heading', { name: '我的空间', exact: true })).toBeVisible()

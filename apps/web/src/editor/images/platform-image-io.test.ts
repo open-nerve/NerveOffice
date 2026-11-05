@@ -106,9 +106,10 @@ describe('SDK 单元格缓存属于当前图片实例', () => {
   it('创建时许可已暂停，仍绑定页面所有者：不能被另一用户激活，本人返回后可恢复', async () => {
     const original = session()
     const h = setup('read', null, original.user.id)
-    await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    // 暂停时显示路径给本地占位、不读取（M5R-M-09）；下载仍拒绝
+    expect(new URL(await h.url.getImage(SOURCE)).pathname).toMatch(/\.svg$/)
     h.change({ ...original, user: { ...original.user, id: 'other-user' } })
-    await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(new URL(await h.url.getImage(SOURCE)).pathname).toMatch(/\.svg$/)
     expect(readAsset).not.toHaveBeenCalled()
     h.change(original)
     await expect(h.url.getImage(SOURCE)).resolves.toBe('blob:https://app.test/first')
@@ -118,7 +119,7 @@ describe('SDK 单元格缓存属于当前图片实例', () => {
   it('未提供所有者也没有初始身份时永久关闭，不能由后来第一个人认领', async () => {
     const h = setup('read', null)
     h.change(session())
-    await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(new URL(await h.url.getImage(SOURCE)).pathname).toMatch(/\.svg$/)
     expect(readAsset).not.toHaveBeenCalled()
   })
 
@@ -335,7 +336,7 @@ describe('真实 drawing 插件中的平台 IO', () => {
     expect(h.failed).toHaveBeenCalledExactlyOnceWith(error)
     expect(readAsset).toHaveBeenCalledOnce()
     h.change(undefined)
-    await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(new URL(await h.url.getImage(SOURCE)).pathname).toMatch(/\.svg$/)
     const confirmed = { ...h.original! }
     h.change(confirmed)
     // 沿真实资源表读同一失败源，不能因暂停/恢复抹掉失败并发出第二次请求。
@@ -409,7 +410,7 @@ describe('真实 drawing 插件中的平台 IO', () => {
     expect(identity.readFailures().has(SOURCE)).toBe(false)
     expect(h.failed).not.toHaveBeenCalled()
     if (change === 'dispose')
-      await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+      expect(new URL(await h.url.getImage(SOURCE)).pathname).toMatch(/\.svg$/)
     else
       expect(await h.url.getImage(SOURCE)).toBe('blob:https://app.test/first')
   })
@@ -496,7 +497,11 @@ describe('真实 drawing 插件中的平台 IO', () => {
     expect(counts.at(-1)).toBe(0)
     pending.resolve(UPLOADED)
     await Promise.resolve()
-    await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    // 实例已结束仍拒绝；暂停与换人时显示路径给本地占位（M5R-M-09）
+    if (stop === 'dispose')
+      await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    else
+      expect(new URL(await h.url.getImage(SOURCE)).pathname).toMatch(/\.svg$/)
     expect(h.failed).not.toHaveBeenCalled()
     sub.unsubscribe()
   })

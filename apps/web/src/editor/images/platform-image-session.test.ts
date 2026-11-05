@@ -170,7 +170,7 @@ describe('真实图片客户端 401 与本机撤权竞态', () => {
     if (change === 'permission')
       h.identity.confirm(session(G2))
     if (change === 'dispose')
-      await expect(h.url.getImage(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+      expect(new URL(await h.url.getImage(SOURCE)).pathname).toMatch(/\.svg$/)
     else
       expect(await h.url.getImage(SOURCE)).toBe('blob:https://app.test/first')
     expect(h.identity.readFailures().has(SOURCE)).toBe(false)

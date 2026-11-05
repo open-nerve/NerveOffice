@@ -9,8 +9,10 @@ import { startHistoryPreview } from './start.tsx'
 const sdk = vi.hoisted(() => {
   /** 替身里的同名错误类：被测的组装与这里的用例经同一个模块替身拿到它 */
   class SheetEditorLoadError extends Error {
-    constructor(readonly reason: string, message: string) {
+    readonly reason: string
+    constructor(reason: string, message: string) {
       super(message)
+      this.reason = reason
     }
   }
   return { create: vi.fn(), dispose: vi.fn(async () => {}), SheetEditorLoadError }

@@ -83,6 +83,17 @@ describe('表格、图片与文字的输入优先级', () => {
     expect(classifyImageInput({ html, text: 'https://outside.invalid/image.png', files })).toEqual({ kind: 'images', files })
   })
 
+  // M5 整体审查 Q-14：富文本来源（例如 macOS 的 Word、Pages）可能同时给出正文 HTML 与渲染图文件。现行顺序下文件优先、正文被舍弃；
+  // 原生剪贴板的实际 types/files 未验证，并入 DEF-004 补验（P2-原生环境待验登记），这里先把现行分类钉住作对照
+  it.each([
+    '<p>正文文字</p>',
+    '<p>正文文字</p><img src="https://outside.invalid/rendering.png">',
+    '<div><b>标题</b><br>第二段正文</div>',
+  ])('Q-14 正文 HTML 加文件（没有表格结构）：按图片文件处理，正文不贴入：%s', (html) => {
+    const files = [file('rendering.png')]
+    expect(classifyImageInput({ html, text: '正文文字', files })).toEqual({ kind: 'images', files })
+  })
+
   it('接受十张，拒绝第十一张；整批先检查，不修改调用者数组或读取字节', () => {
     const files = Object.freeze(Array.from({ length: 10 }, (_, index) => file(`${index}.png`)))
     const reads = files.map((input) => {
