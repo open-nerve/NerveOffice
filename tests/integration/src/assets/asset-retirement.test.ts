@@ -209,7 +209,8 @@ describe('图片文件退休的真实事务和文件接续', () => {
   it.each([
     [{ ...GC_TEST_ENV, NERVE_ASSET_GC_ENABLED: 'false' }, 'disabled'],
     [{ ...GC_TEST_ENV, NERVE_ASSET_GC_GRACE_DAYS: '3650' }, 'candidate-protected'],
-    [{ ...GC_TEST_ENV, NERVE_ASSET_GC_RECOVERY_BEFORE: '2019-12-31T00:00:00.000Z' }, 'candidate-protected'],
+    // 宽限已满、只因水位挪回到候选之前而保留：单列为被水位挡住（M5R-M-03，D-05）
+    [{ ...GC_TEST_ENV, NERVE_ASSET_GC_RECOVERY_BEFORE: '2019-12-31T00:00:00.000Z' }, 'recovery-blocked'],
   ] as const)('重启收紧政策后不执行旧任务：%j', async (env, reason) => {
     const task = await queueAsset(app, database, owner)
     await app.close()

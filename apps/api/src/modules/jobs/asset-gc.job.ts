@@ -9,7 +9,8 @@ import { DocumentAssetRetentionService } from '../documents/index.ts'
 import { AppLogger } from '../logging/index.ts'
 
 export const ASSET_GC_LOCK = 'nerve-office:asset-gc'
-export type AssetGcEnding = 'drained' | 'contended' | 'paused' | 'stopped' | 'failed'
+/** partial：本轮走完，但有文件任务的存储失败、保留待办（M5R-M-02） */
+export type AssetGcEnding = 'drained' | 'partial' | 'contended' | 'paused' | 'stopped' | 'failed'
 interface Progress {
   batches: number
   scannedAssets: number
@@ -19,6 +20,12 @@ interface Progress {
   retiredObjects: number
   reclaimedBytes: number
   pausedTasks: number
+  /** 存储失败、保留待办的文件任务（M5R-M-02） */
+  failedTasks: number
+  /** 宽限已满但被恢复水位挡住的资源记录、对象与文件任务（M5R-M-03，D-05） */
+  blockedAssets: number
+  blockedObjects: number
+  blockedTasks: number
   pauseReason: AssetRetirementPause | undefined
   stage: 'assets' | 'object' | 'claim' | 'files'
 }
@@ -27,6 +34,11 @@ export interface AssetGcRound extends Readonly<Progress> {
   readonly ending: AssetGcEnding
 }
 const NEVER_STOPPING = new AbortController().signal
+/**
+ * 每轮逐条记录的文件任务失败上限（M5R-M-02）：整卷故障（根目录或 objects 目录的属主、权限被改）时每个待办都会失败，
+ * 逐条记录会每轮刷出与待办同样多的告警；超出的只计入本轮结束日志的 failedTasks
+ */
+const TASK_FAILURE_LOGS = 5
 
 /** 一轮跨事务独占；候选/任务固定上界，文件 IO 与所有数据库短事务分开。 */
 @Injectable()
@@ -56,7 +68,7 @@ export class AssetGcJob implements ScheduledJob {
 
   /** 调度的 now 只表示触发时间；每个危险决定必须重新取锁后的数据库时刻。 */
   async runOnce(_now: Date, signal: AbortSignal = NEVER_STOPPING): Promise<AssetGcRound> {
-    const progress: Progress = { batches: 0, scannedAssets: 0, removedAssets: 0, scannedObjects: 0, queuedObjects: 0, retiredObjects: 0, reclaimedBytes: 0, pausedTasks: 0, pauseReason: undefined, stage: 'assets' }
+    const progress: Progress = { batches: 0, scannedAssets: 0, removedAssets: 0, scannedObjects: 0, queuedObjects: 0, retiredObjects: 0, reclaimedBytes: 0, pausedTasks: 0, failedTasks: 0, blockedAssets: 0, blockedObjects: 0, blockedTasks: 0, pauseReason: undefined, stage: 'assets' }
     if (signal.aborted)
       return { ...progress, ran: false, ending: 'stopped' }
     let ran = false
@@ -80,10 +92,17 @@ export class AssetGcJob implements ScheduledJob {
           return 'paused'
         progress.stage = 'files'
         await this.retireFiles(progress, signal)
-        return signal.aborted ? 'stopped' : progress.pauseReason === undefined ? 'drained' : 'paused'
+        if (signal.aborted)
+          return 'stopped'
+        if (progress.pauseReason !== undefined)
+          return 'paused'
+        return progress.failedTasks > 0 ? 'partial' : 'drained'
       })
       const result: AssetGcRound = { ...progress, ran: outcome.ran, ending: outcome.ran ? outcome.result : 'contended' }
       this.#logger.info('图片资源回收本轮结束', { ...result })
+      const { blockedAssets, blockedObjects, blockedTasks } = progress
+      if (blockedAssets + blockedObjects + blockedTasks > 0)
+        this.#logger.warn('图片资源回收：宽限已满但被恢复水位挡住，请随备份轮换推进 NERVE_ASSET_GC_RECOVERY_BEFORE', { blockedAssets, blockedObjects, blockedTasks })
       return result
     }
     catch (error) {
@@ -104,6 +123,7 @@ export class AssetGcJob implements ScheduledJob {
       progress.batches++
       progress.scannedAssets += page.scanned
       progress.removedAssets += page.removed
+      progress.blockedAssets += page.blocked
       notePolicy(progress, page.policy)
       if (page.lastId === undefined)
         return
@@ -121,6 +141,7 @@ export class AssetGcJob implements ScheduledJob {
       progress.batches++
       progress.scannedObjects += page.scanned
       progress.queuedObjects += page.queued
+      progress.blockedObjects += page.blocked
       notePolicy(progress, page.policy)
       if (page.lastHash === undefined)
         return
@@ -141,12 +162,28 @@ export class AssetGcJob implements ScheduledJob {
       for (const id of ids) {
         if (signal.aborted)
           return
-        const outcome = await this.retirement.retire(id, signal)
+        let outcome: Awaited<ReturnType<AssetRetirementService['retire']>>
+        try {
+          outcome = await this.retirement.retire(id, signal)
+        }
+        catch (error) {
+          if (!(error instanceof AssetStorageError))
+            throw error
+          // 单个任务的存储失败（路径类型、权限、属主不符或稳定的 IO 错误）：记下任务 id 与有界原因、保持待办，接着处理后面的，
+          // 不能让同一个最小 id 每轮卡住全部物理回收（M5R-M-02）。原始异常可能带路径，不记录
+          progress.failedTasks++
+          if (progress.failedTasks <= TASK_FAILURE_LOGS)
+            this.#logger.warn('图片文件回收任务失败，保留待办并继续后续任务', { taskId: id, failure: error.reason })
+          else if (progress.failedTasks === TASK_FAILURE_LOGS + 1)
+            this.#logger.warn('图片文件回收本轮失败的任务较多，之后的只计入 failedTasks、不再逐条记录', { logged: TASK_FAILURE_LOGS })
+          continue
+        }
         progress.retiredObjects += Number(outcome.state === 'completed')
         progress.reclaimedBytes += outcome.bytes
         if (outcome.state === 'paused') {
           progress.pausedTasks++
           progress.pauseReason = outcome.reason
+          progress.blockedTasks += Number(outcome.reason === 'recovery-blocked')
         }
         if (outcome.state === 'stopped')
           return
