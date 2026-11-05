@@ -125,6 +125,7 @@ export const editorMessages = {
     problems: {
       'offline': '当前无法连接服务，请联网后重试。',
       'identity': '登录状态已变化，本轮 CSV 已取消。若文档已经打开，请在文档中确认导入和保存状态。',
+      'identity-unknown': '登录状态已变化，本轮 CSV 已取消。此前的创建可能已经完成，请返回空间核对文档。',
       'access-denied': '当前没有在此位置创建文档的权限。',
       'create-failed': '暂时无法准备或创建文档，请重试。',
       'result-unknown': '创建结果尚未确认，请重试核对；不会重复创建。',
@@ -158,6 +159,7 @@ export const editorMessages = {
     problems: {
       'encoding': '文件不是有效的 UTF-8 文本，请以 UTF-8 CSV 格式重新导出。',
       'syntax': 'CSV 格式不正确，请检查引号和分隔符后重试。',
+      'control': '文件里有表格不支持的控制字符（例如退格符或 Ctrl+Z 文件结束符），请删除后重试。',
       'empty': '没有可导入或导出的内容。',
       'bytes': 'CSV 超过 5 MiB，请减少内容后重试。',
       'field': '单个字段过长，请缩短后重试。',
@@ -174,6 +176,8 @@ export const editorMessages = {
       'preparation-failed': '未能准备本次 CSV 操作，请检查页面状态后重试。',
       'input-pending': '请先完成当前输入，再重试 CSV 操作。',
       'download-failed': '未能发起下载，请重试。',
+      'export-character': '表格里有 CSV 写不出的字符（例如空字符或不完整的 Unicode 字符），请修改相关单元格后重试。',
+      'export-capacity': '这张工作表的内容范围超出 CSV 的限制，请减少内容后重试。',
     },
   },
   images: {

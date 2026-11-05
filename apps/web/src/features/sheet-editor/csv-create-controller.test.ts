@@ -215,6 +215,46 @@ describe('幂等创建、重放与创建后重试', () => {
     expect(h.api.create).toHaveBeenCalledTimes(2)
   })
 
+  it('M5R-M-14 未知结果后流程作废：不再算未完成的工作（离开不拦），提示可能已创建、请回空间核对', async () => {
+    const h = await preview()
+    h.api.create.mockRejectedValueOnce(new NetworkError('lost'))
+    await h.controller.confirm()
+    expect(h.controller.hasPendingWork()).toBe(true)
+    h.api.create.mockRejectedValueOnce(new ApiError(403, 'CSRF_TOKEN_INVALID', '失效'))
+    await h.controller.retry()
+    expect(h.controller.view()).toMatchObject({ stage: 'invalid', creation: 'unknown', problem: 'identity-unknown' })
+    expect(h.controller.hasPendingWork()).toBe(false)
+  })
+
+  it('M5R-M-14 未知结果后的业务拒绝作废流程：同样不再拦离开', async () => {
+    const h = await preview()
+    h.api.create.mockRejectedValueOnce(new NetworkError('lost'))
+    await h.controller.confirm()
+    h.api.create.mockRejectedValueOnce(new ApiError(409, 'REQUEST_ID_CONFLICT', '已经用过'))
+    await h.controller.retry()
+    expect(h.controller.view()).toMatchObject({ stage: 'invalid', creation: 'unknown', problem: 'already-created' })
+    expect(h.controller.hasPendingWork()).toBe(false)
+  })
+
+  it('M5R-M-14 首次创建收到服务端明确未生效的 503：按未创建处理，不再显示“结果尚未确认”，可取消、换文件或重试', async () => {
+    const h = await preview()
+    h.api.create.mockRejectedValueOnce(new ApiError(503, 'SERVICE_UNAVAILABLE', '繁忙'))
+    await h.controller.confirm()
+    expect(h.controller.view()).toMatchObject({ stage: 'failed', creation: 'none', problem: 'create-failed' })
+    expect(h.controller.hasPendingWork()).toBe(true)
+    // 503 不是载荷相关的结论，请求标识沿平台约定保留（request-ids.ts）；服务端确定未生效，重发同一请求同样只建一份
+    await h.controller.retry()
+    expect(h.api.create).toHaveBeenCalledTimes(2)
+    expect(h.applied).toHaveLength(1)
+  })
+
+  it('M5R-M-14 首次创建收到其他 5xx 仍是结果未知，保持原请求核对', async () => {
+    const h = await preview()
+    h.api.create.mockRejectedValueOnce(new ApiError(500, 'INTERNAL_ERROR', '出错'))
+    await h.controller.confirm()
+    expect(h.controller.view()).toMatchObject({ stage: 'failed', creation: 'unknown', problem: 'result-unknown' })
+  })
+
   it('创建后的宿主加载失败有文档链接，保留 CSV 重试且不再创建', async () => {
     const h = await preview()
     h.api.openCreated.mockRejectedValueOnce(new Error('load failed'))
