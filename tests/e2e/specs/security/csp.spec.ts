@@ -77,14 +77,40 @@ test.describe('US-M1-09 CSP 与安全头', () => {
       await target.close()
     })
 
-    test('阳性对照：页面与 Worker 里违反策略的请求、eval 与 new Function 都被拦截', async ({ page, cspViolations }) => {
+    test('阳性对照：页面与 Worker 里违反策略的请求、eval 与 new Function 都被拦截', async ({ page, context, cspViolations, baseURL }, testInfo) => {
       // 本用例就是要触发违规：声明预期有违规，夹具不再断言为空
       cspViolations.expectViolations()
-      const result = await probeResult(page, `/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe`)}`)
-      expect(result).toEqual({ page: ALL_BLOCKED, worker: ALL_BLOCKED })
-      expect(target.hits()).toBe(0)
-      // 夹具收到了页面里的违规（Worker 里的收不到）：证明所有用例共用的违规收集本身有效（审查 B1）
-      await expect.poll(() => [...new Set(cspViolations.list().map(violation => violation.directive))].sort()).toEqual(['connect-src', 'script-src'])
+      // Q-09：顺带记下请求观察器是否看到被 connect-src 拦下的尝试（只记录事实，不作断言：随浏览器而异，见 external-requests.ts）
+      const watcher = watchExternalRequests(context, baseURL ?? e2eOrigin())
+      try {
+        const result = await probeResult(page, `/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe`)}`)
+        expect(result).toEqual({ page: ALL_BLOCKED, worker: ALL_BLOCKED })
+        expect(target.hits()).toBe(0)
+        // 夹具收到了页面里的违规（Worker 里的收不到）：证明所有用例共用的违规收集本身有效（审查 B1）
+        await expect.poll(() => [...new Set(cspViolations.list().map(violation => violation.directive))].sort()).toEqual(['connect-src', 'script-src'])
+      }
+      finally {
+        watcher.stop()
+        await testInfo.attach('blocked-attempts-observed', { body: JSON.stringify({ observed: watcher.list(), targetHits: target.hits() }), contentType: 'application/json' })
+      }
+    })
+
+    test('M5R-M-15 对照：以 /favicon.ico 结尾的站外地址，请求观察器看不到，只有目标服务的命中数能发现', async ({ page, context }, testInfo) => {
+      const control = await startControlServer()
+      const watcher = watchExternalRequests(context, control.origin)
+      try {
+        const result = await probeResult(page, `${control.origin}/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe/favicon.ico`)}`)
+        expect(result).toEqual({ page: ALL_ALLOWED, worker: ALL_ALLOWED })
+        // 网络侧真值：页面与 Worker 各取到一次
+        expect(target.requests()).toEqual(['/probe/favicon.ico', '/probe/favicon.ico'])
+        // Playwright 不为这类地址发出 context 的请求事件：只看观察器会平凡通过，所以关键样本另以目标服务零命中为准
+        expect(watcher.list()).toEqual([])
+      }
+      finally {
+        watcher.stop()
+        await control.close()
+        await testInfo.attach('favicon-observer-control', { body: JSON.stringify({ observed: watcher.list(), targetRequests: target.requests() }), contentType: 'application/json' })
+      }
     })
 
     test('US-M5-14 对照：无 CSP 探针有效且请求观察覆盖页面、Worker 与新页', async ({ page, context }, testInfo) => {

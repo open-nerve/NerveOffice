@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import type { TargetServer } from '../../support/servers.ts'
 import type { Workbook } from '../../support/sheet.ts'
 import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
@@ -11,6 +12,7 @@ import { probeChangeSeq, probeFormulaMode, probeFormulasSettled, probeSnapshot, 
 import { drawingsIn, expectImagePixels, imageFailureSentinel, imagePixels, prepareImageDocument } from '../../support/image-editor.ts'
 import { imageSample } from '../../support/image-sample.ts'
 import { expect, test } from '../../support/implicit-request-fixture.ts'
+import { startTargetServer } from '../../support/servers.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, isSaveRequest, openAndEnterEditing, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
@@ -18,8 +20,11 @@ test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 const REJECTED_CELLS = ['B1', 'C1', 'D1', 'E1', 'F1', 'G1', 'H1', 'I1']
 
-/** 首次打开只含非法来源公式，没有任何可先读取该地址的合法图片，避免缓存掩盖来源检查。 */
-async function prepareFormulaDocument(page: Page) {
+/**
+ * 首次打开只含非法来源公式，没有任何可先读取该地址的合法图片，避免缓存掩盖来源检查。
+ * 站外来源指向本地目标服务（M5R-M-15）：请求观察器有盲区，以服务端零命中作为网络侧真值
+ */
+async function prepareFormulaDocument(page: Page, external: string) {
   await loginThroughApi(page, await createUser('image-provenance'))
   const asset = await uploadAsset(page)
   const documentId = await createSheetThroughApi(page, 'IMAGE 来源证明')
@@ -43,7 +48,7 @@ async function prepareFormulaDocument(page: Page) {
       4: { f: `=IMAGE({"${asset.url}"})` },
       5: { f: '=IMAGE(IF(TRUE,A1,A1))' },
       6: { f: '=IMAGE(LEFT(A1,LEN(A1)))' },
-      7: { f: '=IMAGE("https://example.invalid/implicit-image.png")' },
+      7: { f: `=IMAGE("${external}/implicit-image.png")` },
       8: { f: inputFormula.formula },
     },
     1: { 1: { f: '=IF(FALSE,IMAGE(A1),123)' } },
@@ -63,9 +68,24 @@ async function expectRejectedFormulas(page: Page) {
 }
 
 test.describe('图片来源、写入边界与保存位置', { tag: '@test-build' }, () => {
+  let target: TargetServer
+
+  test.beforeEach(async () => {
+    target = await startTargetServer()
+  })
+
+  test.afterEach(async () => {
+    try {
+      expect(target.requests(), '站外样本的目标服务不得收到任何请求').toEqual([])
+    }
+    finally {
+      await target.close()
+    }
+  })
+
   for (const mode of ['worker', 'main-thread'] as const) {
     test(`US-M5-14 ${mode}：首次打开非法 IMAGE 来源零读取，字面量与参数尺寸在重开后保持`, async ({ page }, testInfo) => {
-      const { asset, documentId, inputFormula } = await prepareFormulaDocument(page)
+      const { asset, documentId, inputFormula } = await prepareFormulaDocument(page, target.origin)
       let reads = 0
       page.on('request', (request) => {
         if (request.method() === 'GET' && new URL(request.url()).pathname === asset.url)
@@ -117,7 +137,7 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
     await expect.poll(async () => probeFormulasSettled(page)).toBe(true)
     const before = drawingsIn(await probeSnapshot(page))
     const sequence = await probeChangeSeq(page)
-    const replace = async (mixed: boolean) => page.evaluate(async ({ source, mixed }) => {
+    const replace = async (mixed: boolean) => page.evaluate(async ({ source, mixed, external }) => {
       const probe = window.__nerveEditorProbe
       if (!probe)
         throw new Error('没有编辑器探针')
@@ -129,9 +149,9 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
       // 独立命令 payload；不调用会在命令前修改模型的 FOverGridImage.setSource。
       const drawings = [{ ...images.first, source, base64Cache: source }]
       if (mixed)
-        drawings.push({ ...images.second, source: 'https://example.invalid/private-image', base64Cache: 'https://example.invalid/private-image' })
+        drawings.push({ ...images.second, source: external, base64Cache: external })
       return probe.univerAPI.executeCommand('sheet.command.set-sheet-image', { unitId: snapshot.id, drawings })
-    }, { source: new URL(replacement.url, page.url()).href, mixed })
+    }, { source: new URL(replacement.url, page.url()).href, mixed, external: `${target.origin}/private-image` })
 
     expect(await replace(true)).toBe(false)
     expect(drawingsIn(await probeSnapshot(page))).toEqual(before)
