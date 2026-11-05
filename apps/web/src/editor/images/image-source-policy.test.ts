@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { IMAGE_FRAGMENT_LIMITS, imageTransition, normalizeImageAxis, normalizeImageCells, normalizeImageFragment } from './image-source-policy.ts'
+import { IMAGE_FRAGMENT_LIMITS, imageTransition, normalizeImageAxis, normalizeImageCell, normalizeImageCells, normalizeImageFragment } from './image-source-policy.ts'
 
 const ORIGIN = 'https://docs.example.com'
 const SOURCE = '/api/assets/11111111-1111-4111-8111-111111111111'
@@ -184,5 +184,28 @@ describe('大范围写入按片段计预算（M5R-I-01）', () => {
       after = { child: after }
     }
     expect(imageTransition(before, after)).toEqual({ ok: false, reason: 'limit' })
+  })
+})
+
+describe('单元格公式里 IMAGE() 首参的本站绝对地址（M5R-I-03）', () => {
+  it('写入时把首参改为相对地址，原件、其他字段与其他格保持身份', () => {
+    const stable = { v: 1, f: '=SUM(A1)' }
+    const matrix = { 0: { 0: { f: `=IMAGE("${ORIGIN}${SOURCE}","",0)`, v: 'x' }, 1: stable } }
+    const result = normalizeImageCells(matrix, ORIGIN)
+    expect(result).toEqual({ ok: true, changed: true, value: { 0: { 0: { f: `=IMAGE("${SOURCE}","",0)`, v: 'x' }, 1: stable } } })
+    expect(matrix[0][0].f).toBe(`=IMAGE("${ORIGIN}${SOURCE}","",0)`)
+    if (result.ok)
+      expect((result.value as typeof matrix)[0][1]).toBe(stable)
+  })
+
+  it('没有本站源（历史预检）时不改写；相对地址、外站地址与非 IMAGE 文字不变', () => {
+    for (const [cell, origin] of [
+      [{ f: `=IMAGE("${ORIGIN}${SOURCE}")` }, ''],
+      [{ f: `=IMAGE("${SOURCE}")` }, ORIGIN],
+      [{ f: `=IMAGE("https://outside.example${SOURCE}")` }, ORIGIN],
+      [{ f: `="${ORIGIN}${SOURCE}"` }, ORIGIN],
+      [{ v: `=IMAGE("${ORIGIN}${SOURCE}")` }, ORIGIN],
+    ] as const)
+      expect(normalizeImageCell(cell, origin)).toEqual({ ok: true, changed: false, value: cell })
   })
 })

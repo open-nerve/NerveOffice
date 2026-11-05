@@ -4,13 +4,13 @@ import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
-import { saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
+import { expectAssetHeaders, renderAsset, saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
 import { createUser } from '../../support/database.ts'
 import { probeChangeSeq, probeFormulaMode, probeFormulasSettled, probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, imagePixels, prepareImageDocument } from '../../support/image-editor.ts'
 import { imageSample } from '../../support/image-sample.ts'
 import { expect, test } from '../../support/implicit-request-fixture.ts'
-import { loginThroughApi } from '../../support/session.ts'
+import { actAs, loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, isSaveRequest, openAndEnterEditing, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -191,5 +191,31 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
     await page.unroute(path)
     await imageFailureSentinel(page, documentId, '修正图片来源后的真实保存')
     expect((await savedContent(page, documentId)).revision).toBe(original.revision + 1)
+  })
+
+  test('US-M5-07 只用本站绝对地址的 IMAGE() 写入时规范为相对地址，保存后其他成员可读（M5R-I-03）', async ({ page, anotherDevice }) => {
+    const owner = await createUser('image-absolute-owner')
+    const reader = await createUser('image-absolute-reader')
+    await loginThroughApi(page, owner)
+    const asset = await uploadAsset(page)
+    const documentId = await createSheetThroughApi(page, 'IMAGE 绝对地址')
+    await openAndEnterEditing(page, documentId, 'steady')
+    const absolute = new URL(asset.url, page.url()).href
+    expect(absolute).not.toBe(asset.url)
+    // 同表不放相对写法：相对写法建立的引用会掩盖绝对写法缺引用的问题（审查报告 I-03 的“测试为何未覆盖”）
+    await setCellValue(page, 'A1', `=IMAGE("${absolute}","",0)`)
+    await expectImagePixels(page, 'A1')
+    await saveAndWait(page)
+    const saved = await savedContent(page, documentId)
+    expect(cellOf(saved.snapshot, 'A1')?.f).toBe(`=IMAGE("${asset.url}","",0)`)
+    expect(saved.text).not.toContain(absolute)
+    await loginThroughApi(anotherDevice, reader)
+    await anotherDevice.goto('/')
+    const before = await renderAsset(anotherDevice, asset.url)
+    await expectAssetHeaders(before.response, 404, 'image/png')
+    await actAs(page, 'PUT', `/api/documents/${documentId}/grants/${reader.id}`, { role: 'viewer' })
+    const shared = await renderAsset(anotherDevice, asset.url)
+    await expectAssetHeaders(shared.response, 200, asset.mimeType)
+    expect({ width: shared.width, height: shared.height }).toEqual({ width: asset.width, height: asset.height })
   })
 })

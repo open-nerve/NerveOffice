@@ -437,6 +437,25 @@ describe('单元格片段经过实际命令与 mutation', () => {
     expect(cell()?.p?.drawings?.image).toMatchObject({ source: OTHER, base64Cache: OTHER })
   })
 
+  it('IMAGE() 首参的同源绝对地址在命令与历史之前改为相对地址，撤销重做与底层 mutation 一致（M5R-I-03）', async () => {
+    const h = setup()
+    const formula = (source: string) => `=IMAGE("${source}","",0)`
+    const cell = (row: number) => h.workbook.getSheetBySheetId(SHEET)?.getCellRaw(row, 0)
+    const params = { unitId: BOOK, subUnitId: SHEET, range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }, value: { f: formula(`${location.origin}${OTHER}`) } }
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, params)).toBe(true)
+    expect(cell(0)?.f).toBe(formula(OTHER))
+    expect(await h.commands.executeCommand(UndoCommand.id)).toBe(true)
+    expect(cell(0)?.f ?? null).toBeNull()
+    expect(await h.commands.executeCommand(RedoCommand.id)).toBe(true)
+    expect(cell(0)?.f).toBe(formula(OTHER))
+    expect(h.commands.syncExecuteCommand(SetRangeValuesMutation.id, { unitId: BOOK, subUnitId: SHEET, cellValue: { 1: { 0: { f: formula(`${location.origin}${SOURCE}`) } } } })).toBe(true)
+    expect(cell(1)?.f).toBe(formula(SOURCE))
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, { ...params, range: { ...params.range, startRow: 2, endRow: 2 }, value: { f: formula(`https://outside.example${SOURCE}`) } })).toBe(true)
+    expect(cell(2)?.f).toBe(formula(`https://outside.example${SOURCE}`))
+    expect(h.rejected).not.toHaveBeenCalled()
+    expect(h.report).not.toHaveBeenCalled()
+  })
+
   it('非法嵌套图片拒绝整个底层批次，普通值不进入图片解析', () => {
     const h = setup()
     const before = h.state()

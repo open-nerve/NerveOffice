@@ -1,4 +1,5 @@
 import { isPlatformAssetAddress } from '@nerve-office/contracts'
+import { normalizeImageFormula } from './image-formula-address.ts'
 
 export const IMAGE_FRAGMENT_LIMITS = { depth: 64, entries: 100_000, cells: 1_500_000 } as const
 
@@ -125,6 +126,9 @@ function cellVisitor(origin: string): (value: unknown) => unknown {
       // null 是 SDK 撤销与清除为每格补的空位，不是片段，不进入预算
       if (child !== null && (key === 'p' || (key === 's' && typeof child === 'object')))
         return fragment(child)
+      // IMAGE() 首参的本站绝对地址改为相对地址，服务端才建立引用（M5R-I-03）；不含本站地址的公式只做一次子串判断
+      if (key === 'f' && typeof child === 'string')
+        return normalizeImageFormula(child, origin)
       return child
     })
   }
