@@ -25,7 +25,10 @@ export const test = base.extend<{ implicitExternalRequests: ImplicitExternalRequ
     finally {
       watcher.stop()
       const external = watcher.list()
-      await testInfo.attach('implicit-external-requests', { body: JSON.stringify({ expected: declared.expected, external }), contentType: 'application/json' })
+      // 附件正文保持原来的数组格式（复核脚本按它复算）；声明了预期的对照另附一条说明
+      await testInfo.attach('implicit-external-requests', { body: JSON.stringify(external), contentType: 'application/json' })
+      if (declared.expected)
+        await testInfo.attach('implicit-external-requests-expected', { body: 'true', contentType: 'application/json' })
       expect(declared.expected ? [] : external, '打开、输入、历史、保存和重开期间不得隐式读取外站').toEqual([])
     }
   }, { auto: true }],
