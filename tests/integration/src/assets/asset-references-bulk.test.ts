@@ -68,7 +68,7 @@ it('七万个真实资源的来源查询、加锁和关系替换完整往返；�
       const prepared = await observation.stage('prepare', () => stage('prepare', async () => references.prepare(editor.id, ids, transaction, targetRow)))
       expect(prepared.sources.map(row => row.id)).toEqual([source.id])
       const held = await observation.stage('hold', () => stage('hold', async () => references.hold(prepared, { mode: 'update' }, transaction)))
-      const authorized = await observation.stage('authorize', () => stage('authorize', async () => references.authorize(held, transaction)))
+      const authorized = await observation.stage('authorize', () => stage('authorize', async () => references.authorize(held, transaction, { documentId: target.id, ids: new Set() })))
       expect(authorized).toHaveLength(ids.length)
       expect(digest(authorized)).toBe(digest(ids))
       await observation.stage('replace', () => stage('replace', async () => references.replace(target.id, authorized, transaction)))

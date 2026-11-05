@@ -138,7 +138,7 @@ describe('失效副本的保存结果', () => {
       throw new Error('未返回副本文档')
     expect(result.document).toBe(CREATED)
     expect(compress).toHaveBeenCalledExactlyOnceWith(SNAPSHOT)
-    expect(conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT, { requestId: 'copy-1', title: CREATED.title, formulasPending: true, format: PAGE_CLIENT_FORMAT }, new TextEncoder().encode(SNAPSHOT))
+    expect(conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT, { requestId: 'copy-1', title: CREATED.title, formulasPending: true, baseRevision: 1, format: PAGE_CLIENT_FORMAT }, new TextEncoder().encode(SNAPSHOT))
     expect(onSessionProblem).not.toHaveBeenCalled()
   })
 

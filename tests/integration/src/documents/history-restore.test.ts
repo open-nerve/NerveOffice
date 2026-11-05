@@ -186,6 +186,19 @@ describe('US-M5-10 从历史恢复为独立副本', () => {
     await image.arrayBuffer()
   })
 
+  it('恢复出的副本修订记下历史正文的完整图片标识，未登记的也在内（M5R-I-02，D-01）', async () => {
+    const doc = await source()
+    const asset = await uploadTestAsset(app.baseUrl, session)
+    const unknown = randomUUID()
+    const bytes = gzipSync(Buffer.from(JSON.stringify({ ...JSON.parse(pageSnapshot(doc.unitId, '历史有两张图').toString('utf8')) as Record<string, unknown>, images: [`/api/assets/${unknown}`, `/api/assets/${asset.assetId}`] })))
+    expect((await saveContent(app.baseUrl, session, doc.id, bytes, { baseRevision: 1 })).status).toBe(200)
+    const history = (await state(doc.id)).histories[0]!
+    const copy = await created(await restore(doc.id, history, randomUUID(), { title: '恢复的完整标识' }))
+    expect((await state(copy.id)).assets).toEqual([asset.assetId])
+    const revision = await database.query(async client => (await client.query<{ asset_ids: string[] | null }>('SELECT asset_ids::text[] AS asset_ids FROM document_revisions WHERE document_id=$1 AND revision=1', [copy.id])).rows[0]!)
+    expect(revision.asset_ids).toEqual([asset.assetId, unknown].sort())
+  })
+
   it('回包丢失后源撤权/历史清除仍返回同一已完成副本；改负载或换人拒绝', async () => {
     const doc = await source()
     const history = await captureHistory(app, doc.id)

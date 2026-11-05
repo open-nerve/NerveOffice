@@ -33,6 +33,15 @@ export interface HeldAssetReferences {
   readonly documents: ReadonlyMap<string, HeldDocumentRow>
 }
 
+/**
+ * 授权的比较基准（M5-P7 设计 §3.2，D-01）：上一版所在的文档与那一版正文提取到的完整图片标识。
+ * 保存时是被替换的当前版本；另存为副本时是草稿所基于的源文档版本。
+ */
+export interface AssetReferenceBase {
+  readonly documentId: string
+  readonly ids: ReadonlySet<string>
+}
+
 export interface ReferenceLocks {
   readonly mode: 'update' | 'share'
   /** 复制流程必须持住的原文档：在取锁之前固定，也可在锁下证明当前引用。 */
@@ -97,7 +106,11 @@ export class DocumentAssetReferences {
     }
   }
 
-  async authorize(held: HeldAssetReferences, transaction: Transaction): Promise<readonly string[]> {
+  /**
+   * 只为相对基准新出现的标识按写入者当时的权限授权；已在基准版本里的标识是沿用，当且仅当它此刻登记在基准文档上才保留，
+   * 不看写入者后来能读什么——否则他人预埋的无权地址会被第三人的普通保存“洗白”（M5R-I-02，D-01）。
+   */
+  async authorize(held: HeldAssetReferences, transaction: Transaction, base: AssetReferenceBase): Promise<readonly string[]> {
     const plan = held.prepared
     sameTransaction(plan, transaction)
     if (plan.ids.length === 0)
@@ -116,16 +129,26 @@ export class DocumentAssetReferences {
         return held.mode === 'update' && documentPermissionsOf(located.access, row, plan.userId).canEdit
       return candidates.has(row.id)
     })
-    const referenced = new Set(await this.links.referencedIds(allowedDocuments.map(row => row.id), plan.ids, transaction))
+    const previous = base.ids
+    const carried = plan.ids.filter(id => previous.has(id))
+    const fresh = plan.ids.filter(id => !previous.has(id))
+    // 沿用：基准文档须在本次允许的文档里（保存时是能编辑的目标本身，副本时是已持锁、能读的源文档），且此刻登记在它上面
+    const kept = new Set(carried.length === 0 || !allowedDocuments.some(row => row.id === base.documentId)
+      ? []
+      : await this.links.referencedIds([base.documentId], carried, transaction))
+    const referenced = new Set(fresh.length === 0 ? [] : await this.links.referencedIds(allowedDocuments.map(row => row.id), fresh, transaction))
     const historical = allowedDocuments.filter((row) => {
       const located = access.get(row.id)
       return located !== undefined && documentPermissionsOf(located.access, row, plan.userId).canViewHistory
     })
-    for (const id of await this.history.referencedIds(historical.map(row => row.id), plan.ids, await this.clock.now(transaction), transaction))
-      referenced.add(id)
+    if (fresh.length > 0) {
+      for (const id of await this.history.referencedIds(historical.map(row => row.id), fresh, await this.clock.now(transaction), transaction))
+        referenced.add(id)
+    }
     // 资源行最后取共享锁；窗口按该事务的数据库时刻判断，元数据在 P1 只追加。
     const metadata = await this.assets.hold(plan.ids, transaction)
-    return metadata.filter(row => referenced.has(row.assetId) || (row.uploaderId === plan.userId && row.withinUploadWindow)).map(row => row.assetId)
+    return metadata.filter(row => kept.has(row.assetId)
+      || (!previous.has(row.assetId) && (referenced.has(row.assetId) || (row.uploaderId === plan.userId && row.withinUploadWindow)))).map(row => row.assetId)
   }
 
   /** 仅实际写入新正文时调用；unchanged 与重放不得调用。目标已持排他锁或是事务新建的私有行。 */

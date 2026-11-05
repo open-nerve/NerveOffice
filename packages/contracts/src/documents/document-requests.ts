@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
 import { clientFormatQueryShape } from './client-format.ts'
-import { formulasPendingParam } from './content.ts'
+import { formulasPendingParam, revisionParam } from './content.ts'
 import { DOCUMENT_TYPES, documentTitleSchema } from './documents.ts'
 
 /**
@@ -61,13 +61,16 @@ export type CopyDocumentRequest = z.input<typeof copyDocumentRequestSchema>
  * （SNAPSHOT_UPLOAD_CONTENT_TYPE，与保存同一个读取方式），元数据只能放在查询串里。
  * - requestId：与新建、复制一样做幂等，网络错误之后用同一个 requestId 重试只建一份；
  * - title：副本的标题，由页面给出（conflictCopyTitle：原标题加"（冲突副本 时间）"，时间按页面所在的时区）；
- * - formulasPending 与客户端的构建、数据格式：与保存相同，都可选（M3-P3 设计 §3.5、§3.8）。
+ * - formulasPending 与客户端的构建、数据格式：与保存相同，都可选（M3-P3 设计 §3.5、§3.8）；
+ * - baseRevision：草稿所基于的原文档修订号，可选（M5-P7，D-01）。服务端以那一版的完整图片标识作授权基准，已在那一版里却没有
+ *   登记在原文档上的图片不随副本升级；缺省（旧页面）或那一版已过保留期时退回原文档当前版本。给出时计入负载摘要。
  * 放在哪里不由请求决定：服务端按"本人在原文档所在的空间能不能新建"放进原文档所在的文件夹或本人的个人空间（00 号计划书 §7.5）
  */
 export const conflictCopyQuerySchema = z.strictObject({
   requestId: uuidSchema,
   title: documentTitleSchema,
   formulasPending: formulasPendingParam,
+  baseRevision: revisionParam.optional(),
   ...clientFormatQueryShape,
 })
 

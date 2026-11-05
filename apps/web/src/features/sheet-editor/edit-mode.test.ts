@@ -2655,7 +2655,8 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     await settle()
     expect(new TextDecoder().decode(await gunzipBytes(context.api.conflictCopy.mock.calls.at(-1)![2]))).toBe(snapshotOf('本页的'))
     // 捕获时公式已经收齐（假的编辑器）：副本不带"公式待更新"（M3-P3）
-    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, format: PAGE_CLIENT_FORMAT }, expect.anything())
+    // 草稿所基于的修订（本页打开时的修订 3）随副本请求带上，作服务端的图片授权基准（M5-P7，D-01）
+    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: PAGE_CLIENT_FORMAT }, expect.anything())
     expect(context.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的') })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: false, notice: { kind: 'copied', document: { ...COPY, replayed: false } } })

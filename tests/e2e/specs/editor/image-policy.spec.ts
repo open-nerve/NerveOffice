@@ -3,9 +3,10 @@ import type { Workbook } from '../../support/sheet.ts'
 import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
 import { gunzipSync, gzipSync } from 'node:zlib'
+import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { expectAssetHeaders, renderAsset, saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
-import { createUser } from '../../support/database.ts'
+import { createUser, withDatabase } from '../../support/database.ts'
 import { probeChangeSeq, probeFormulaMode, probeFormulasSettled, probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, imagePixels, prepareImageDocument } from '../../support/image-editor.ts'
 import { imageSample } from '../../support/image-sample.ts'
@@ -217,5 +218,34 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
     const shared = await renderAsset(anotherDevice, asset.url)
     await expectAssetHeaders(shared.response, 200, asset.mimeType)
     expect({ width: shared.width, height: shared.height }).toEqual({ width: asset.width, height: asset.height })
+  })
+
+  test('US-M5-07 他人预埋的无权图片地址：有权成员在编辑器里正常保存，也不会把它共享出去（M5R-I-02）', async ({ page, anotherDevice }) => {
+    const holder = await createUser('image-plant-holder')
+    const planter = await createUser('image-plant-planter')
+    await loginThroughApi(page, holder)
+    await loginThroughApi(anotherDevice, planter)
+    await anotherDevice.goto('/')
+    // 乙（holder）的表 X 引用图片 A；上传窗口推到 24 小时之外，只剩 X 的当前引用这一条来源
+    const asset = await uploadAsset(page)
+    const x = await createSheetThroughApi(page, '乙的图片表')
+    await saveAssetSnapshot(page, x, JSON.stringify({ ...SHEET_TEMPLATE, id: (await savedContent(page, x)).snapshot.id, extra: { images: [asset.url] } }))
+    await withDatabase(async client => client.query('UPDATE assets SET created_at=now()-interval \'25 hours\' WHERE id=$1', [asset.assetId]))
+    // 甲（planter）读不到 A，却把它的地址写进两人都能编辑的 D：放在单元格文字里，编辑器保存时原样保留
+    const d = await createSheetThroughApi(anotherDevice, '共同编辑的表')
+    const unitId = (await savedContent(anotherDevice, d)).snapshot.id
+    const sheet = SHEET_TEMPLATE.sheets['sheet-1']
+    await saveAssetSnapshot(anotherDevice, d, JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: asset.url } } } } } }))
+    await actAs(anotherDevice, 'PUT', `/api/documents/${d}/grants/${holder.id}`, { role: 'editor' })
+    await expectAssetHeaders((await renderAsset(anotherDevice, asset.url)).response, 404, 'image/png')
+    // 乙在编辑器里打开 D、改另一格、正常保存
+    await openAndEnterEditing(page, d, 'steady')
+    await setCellValue(page, 'B2', '乙的真实修改')
+    await saveAndWait(page)
+    const saved = await savedContent(page, d)
+    expect(cellOf(saved.snapshot, 'B2')?.v).toBe('乙的真实修改')
+    expect(cellOf(saved.snapshot, 'A1')?.v).toBe(asset.url)
+    // 预埋地址是沿用的，不按乙的权限升级：甲仍只得到占位
+    await expectAssetHeaders((await renderAsset(anotherDevice, asset.url)).response, 404, 'image/png')
   })
 })

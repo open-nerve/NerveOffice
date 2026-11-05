@@ -3,6 +3,7 @@
 // 这里的假仓储只保持同样的语义。
 import type { ConflictCopyQuery } from '@nerve-office/contracts'
 import type { GzipBody } from '../security/index.ts'
+import type { AssetReferenceBases } from './asset-reference-bases.ts'
 import type { DocumentAssetReferences } from './document-asset-references.ts'
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
@@ -26,7 +27,10 @@ function setup() {
     if (ids.length !== 0)
       throw new Error('图片引用样本必须补齐真实授权夹具')
   } } as unknown as DocumentAssetReferences
-  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, references, checkpoints, logger) }
+  const bases = { resolve: async () => {
+    throw new Error('图片引用样本必须补齐真实授权夹具')
+  } } as unknown as AssetReferenceBases
+  return { store, service: new DocumentConflictCopyService(transactions, documents, contents, revisions, ledger, folders, tree, spaces, policy, audit, clientFormats, inspector, references, bases, checkpoints, logger) }
 }
 
 let requests = 0

@@ -35,6 +35,11 @@ export interface NewRevision {
   readonly contentHash: Buffer | null
   /** 写入这一版的页面的构建（保存、另存为副本）；新建与复制是服务端写的，为空 */
   readonly clientBuild: string | null
+  /**
+   * 这一版正文提取到的完整图片标识（含未获授权的；M5-P7 设计 §3.2，D-01）。新写入的一律给出；
+   * 只有复制存量（源的这一列为空）时照样为空
+   */
+  readonly assetIds: readonly string[] | null
 }
 
 /**
@@ -139,12 +144,23 @@ export class DocumentRevisionsRepository {
    * 写入都在 requestId 的锁下、查过两张表之后才写（RequestLedger），走到这里不会撞上；留作兜底
    */
   async insert(revision: NewRevision, transaction: Transaction): Promise<RevisionRow | undefined> {
-    const { source, ...columns } = revision
+    const { source, assetIds, ...columns } = revision
     const [row] = await executorOf(this.db, transaction)
       .insert(r)
-      .values({ ...columns, clientInstanceId: source?.clientInstanceId ?? null, localSeq: source?.localSeq ?? null })
+      .values({ ...columns, assetIds: assetIds === null ? null : [...new Set(assetIds)].sort(), clientInstanceId: source?.clientInstanceId ?? null, localSeq: source?.localSeq ?? null })
       .onConflictDoNothing({ target: r.requestId })
       .returning(COLUMNS)
     return row === undefined ? undefined : toRevision(row)
+  }
+
+  /**
+   * 某一版的完整图片标识（D-01 的比较基准）：没有这一行（已过保留期或不属于这份文档）为 undefined，P7 之前写的修订为 null（未知）
+   */
+  async assetIdsOf(documentId: string, revision: number, transaction: Transaction): Promise<readonly string[] | null | undefined> {
+    const [row] = await executorOf(this.db, transaction)
+      .select({ assetIds: r.assetIds })
+      .from(r)
+      .where(and(eq(r.documentId, documentId), eq(r.revision, revision)))
+    return row === undefined ? undefined : row.assetIds
   }
 }

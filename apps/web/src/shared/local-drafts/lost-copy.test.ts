@@ -46,7 +46,8 @@ describe('失去编辑权之后的那一份（M3-P2 设计 §3.2、§3.4）', ()
     context.rename('周报（改过）')
     expect(await context.copy.save()).toBe(CREATED)
     expect(context.compress).toHaveBeenCalledExactlyOnceWith('{"id":"unit-1","v":"本页的"}')
-    expect(context.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: 'request-1', title: '周报（改过）（冲突副本 2026-10-04 15:30）', formulasPending: false, format: PAGE_CLIENT_FORMAT }, expect.anything())
+    // 草稿所基于的修订一起带上（M5-P7，D-01）：服务端以那一版的完整图片标识作授权基准
+    expect(context.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: 'request-1', title: '周报（改过）（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 1, format: PAGE_CLIENT_FORMAT }, expect.anything())
     expect(context.compress).toHaveBeenCalledOnce()
   })
 
@@ -60,7 +61,7 @@ describe('失去编辑权之后的那一份（M3-P2 设计 §3.2、§3.4）', ()
     const second = h.conflictCopy.mock.calls[1]!
     expect(second[1]).toBe(first[1])
     expect(second[2]).toBe(first[2])
-    expect(second[1]).toMatchObject({ title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: true, format: PAGE_CLIENT_FORMAT })
+    expect(second[1]).toMatchObject({ title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: true, baseRevision: 1, format: PAGE_CLIENT_FORMAT })
     expect(h.compress).toHaveBeenCalledOnce()
   })
 

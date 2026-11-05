@@ -131,6 +131,8 @@ export class DocumentHistoryRestoreService {
         savedBy: actor.userId,
         contentHash: record.contentHash,
         clientBuild: record.clientBuild,
+        // 关系取自检查点（不变）；完整标识取历史校验时的检查结果，未登记的不会因下一次保存升级（D-01）
+        assetIds: verified.assetIds,
       }, tx)
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')

@@ -94,7 +94,8 @@ export function createLostCopy(options: LostCopyOptions): LostCopy {
     if (disposed)
       throw inactive()
     owned = upload
-    const sending = query ?? Object.freeze({ requestId: options.newId(), title: conflictCopyTitle(options.title(), conflictCopyLabel(options.lostAt)), formulasPending: upload.formulasPending, format: upload.format })
+    // 基准修订与请求一起冻结：未知结果的重试原样重放（摘要含它，D-01）
+    const sending = query ?? Object.freeze({ requestId: options.newId(), title: conflictCopyTitle(options.title(), conflictCopyLabel(options.lostAt)), formulasPending: upload.formulasPending, baseRevision: upload.baseRevision, format: upload.format })
     if (disposed)
       throw inactive()
     query = sending

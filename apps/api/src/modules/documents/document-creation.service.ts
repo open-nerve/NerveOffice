@@ -41,10 +41,14 @@ const TEMPLATES: Readonly<Record<DocumentType, (unitId: string) => string>> = { 
 
 /** 新文档的内容：模板换上 unitId 之后 gzip 压缩的字节，连同它的规范化哈希与非空的资源名（M3-P3 设计 §3.1） */
 interface TemplateContent {
-  readonly snapshot: Buffer
-  readonly rawBytes: number
-  readonly contentHash: Buffer
-  readonly resourceNames: readonly string[]
+  readonly content: {
+    readonly snapshot: Buffer
+    readonly rawBytes: number
+    readonly contentHash: Buffer
+    readonly resourceNames: readonly string[]
+  }
+  /** 模板正文提取到的完整图片标识（模板没有图片，为空）；记在修订上，作下一次保存的授权基准（D-01） */
+  readonly assetIds: readonly string[]
 }
 
 /**
@@ -57,7 +61,10 @@ function templateContent(type: DocumentType, unitId: string): TemplateContent {
   const inspected = inspectSnapshot(raw, DOCUMENT_PROFILE_OF[type])
   if (!inspected.ok)
     throw new Error(`新建用的模板过不了快照的检查：${inspected.rule}`)
-  return { snapshot: zlib.gzipSync(raw), rawBytes: raw.length, contentHash: Buffer.from(inspected.contentHash), resourceNames: inspected.nonEmptyResources }
+  return {
+    content: { snapshot: zlib.gzipSync(raw), rawBytes: raw.length, contentHash: Buffer.from(inspected.contentHash), resourceNames: inspected.nonEmptyResources },
+    assetIds: inspected.assetIds,
+  }
 }
 
 /**
@@ -120,7 +127,7 @@ export class DocumentCreationService {
         formatVersion: PLATFORM_FORMAT_VERSION,
         sdkVersion: UNIVER_SDK_VERSION,
       }, transaction)
-      const content = templateContent(command.type, unitId)
+      const { content, assetIds } = templateContent(command.type, unitId)
       await this.contents.insert(document.id, content, transaction)
       const revision = await this.revisions.insert({
         documentId: document.id,
@@ -133,6 +140,7 @@ export class DocumentCreationService {
         contentHash: content.contentHash,
         // 新建的内容是服务端写的模板，没有客户端构建
         clientBuild: null,
+        assetIds,
       }, transaction)
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)

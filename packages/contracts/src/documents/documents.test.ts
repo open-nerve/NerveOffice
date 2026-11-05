@@ -283,4 +283,11 @@ describe('另存为副本（M3-P2 设计 §3.2）', () => {
     expect(conflictCopyQuerySchema.safeParse({ requestId, title: '周报', formulasPending: '1' }).success).toBe(false)
     expect(conflictCopyQuerySchema.safeParse({ requestId, title: '周报', formatVersion: '0' }).success).toBe(false)
   })
+
+  it('M5-P7：草稿所基于的修订可选，与保存的修订号同一写法（不带前导零、正负号、小数，≥1）', () => {
+    expect(conflictCopyQuerySchema.parse({ requestId, title: '周报', baseRevision: '7' })).toEqual({ requestId, title: '周报', baseRevision: 7 })
+    expect(conflictCopyQuerySchema.parse({ requestId, title: '周报' })).not.toHaveProperty('baseRevision')
+    for (const baseRevision of ['0', '07', '-1', '1.5', '1e3', '', '2147483648', ['1', '2']])
+      expect(conflictCopyQuerySchema.safeParse({ requestId, title: '周报', baseRevision }).success, String(baseRevision)).toBe(false)
+  })
 })

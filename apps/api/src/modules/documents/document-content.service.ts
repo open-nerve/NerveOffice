@@ -18,6 +18,7 @@ import { AuditService } from '../audit/index.ts'
 import { SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
+import { AssetReferenceBases } from './asset-reference-bases.ts'
 import { ClientFormatGate, requireWritableDocument } from './client-format-gate.ts'
 import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
 import { DocumentAssetReferences } from './document-asset-references.ts'
@@ -123,6 +124,7 @@ export class DocumentContentService {
     private readonly clients: ClientFormatGate,
     private readonly inspector: SnapshotInspector,
     private readonly assetReferences: DocumentAssetReferences,
+    private readonly referenceBases: AssetReferenceBases,
     private readonly checkpoints: DocumentCheckpointService,
     logger: AppLogger,
   ) {
@@ -214,7 +216,10 @@ export class DocumentContentService {
       if (current.contentHash?.equals(contentHash) === true)
         return this.confirmUnchanged(attempt, document, transaction)
       // 图片仅在真正写正文的分支授权并替换；unchanged 和两种重放都保持当前关系。
-      const authorized = heldReferences === undefined ? [] : await this.assetReferences.authorize(heldReferences, transaction)
+      // 比较基准是被替换的当前版本：只为新出现的标识授权，已在里面却没有登记的不升级（M5R-I-02，D-01）
+      const authorized = heldReferences === undefined
+        ? []
+        : await this.assetReferences.authorize(heldReferences, transaction, await this.referenceBases.resolve(document.id, document.revision, undefined, transaction))
       const outcome = await this.write(attempt, document, contentHash, transaction)
       await this.assetReferences.replace(document.id, authorized, transaction)
       await this.checkpoints.captureHourly(document.id, transaction)
@@ -305,6 +310,7 @@ export class DocumentContentService {
       savedBy: saver.userId,
       contentHash,
       clientBuild: client.clientBuild,
+      assetIds: snapshot.assetIds,
     }, transaction)
     // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
     if (revision === undefined)
