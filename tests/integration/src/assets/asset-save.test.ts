@@ -291,4 +291,19 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     expect(hold).not.toHaveBeenCalled()
     expect((await facts(target.id)).references).toEqual([])
   })
+
+  it('M5R-I-04 正文里的长串结尾包裹符不拖住快照检查：保存在检查时限内正常返回，引用照常提取', async () => {
+    const target = await document()
+    const kept = await uploaded()
+    // 原实现对每个这样的字符串二次回溯（百万字符约数百秒），检查子进程会超过 10 秒时限，保存失败
+    const hostile = `${')'.repeat(1_000_000)}x`
+    const body = raw(target, [kept], hostile)
+    const extra = JSON.parse(body.toString('utf8')) as { extra: { images: string[] } }
+    extra.extra.images.push(`/api/assets/${')'.repeat(1_000_000)}x`)
+    const hostileBody = Buffer.from(JSON.stringify(extra))
+    expect(await saved(await put(editor, target, hostileBody, { baseRevision: 1 }))).toMatchObject({ revision: 2, unchanged: false })
+    const stored = await facts(target.id)
+    expect(stored.snapshot).toEqual(gzipSync(hostileBody))
+    expect(stored.references).toEqual([kept])
+  })
 })
