@@ -76,6 +76,7 @@ import { checkCreated, recheckReady } from './profile/open-check.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, SHEET_PROFILE_ID, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
+import { captureWorkbookData } from './snapshot-capture-form.ts'
 import { watchUncommittedInput } from './uncommitted-input.ts'
 import { readViewState, restoreViewState } from './view-state.ts'
 import { parseWorkbookSnapshot } from './workbook-snapshot.ts'
@@ -541,7 +542,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     await tearDown(cleanup, rounds)
     throw error
   }
-  const { univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
+  const { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
 
   let disposed = false
   /** 这一次销毁（第一次调用 dispose 时开始）：重复调用等的都是它，不再销毁一次 */
@@ -630,7 +631,8 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     settlePanels: async () => panels.settled(),
     capture() {
       usable()
-      return JSON.stringify(workbook.save())
+      // 多格数组公式锚点不带缓存值，重开时由 WHEN_EMPTY 定向重算、恢复溢出结果（M5R-I-07，snapshot-capture-form.ts）
+      return captureWorkbookData(univer, workbook.save())
     },
     viewState: () => disposed ? undefined : readViewState(workbook),
     openCheck,

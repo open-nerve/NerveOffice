@@ -73,6 +73,14 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
+    name: 'arrayFormulaAnchors',
+    origin: 'engine-formula 的 FormulaDataModel.getArrayFormulaRange（数组公式锚点与其溢出范围）',
+    sdk: { '@univerjs/core': ['Univer'], '@univerjs/engine-formula': ['FormulaDataModel'] },
+    purpose: '只读枚举当前文档确有多格结果的数组公式锚点坐标（M5R-I-07，D-04）：捕获正文时去掉这些锚点的缓存值，重开时 SDK 默认的 WHEN_EMPTY 初次计算只重算它们，溢出结果随之恢复；不暴露服务或缓存引用',
+    evidence: '固定 1.0.1 引擎只把锚点写入原 cellData，溢出结果由 SetArrayFormulaDataMutation 写入 FormulaDataModel；加载时只从单元格 ref 恢复数组数据，engine-formula/sheets-formula/sheets 都不写回 ref；初次计算在 WHEN_EMPTY 下只提交“有公式且没有缓存值”的格（getFormulaDirtyRanges）。1×1 结果不进入范围表的多格项',
+    regression: 'snapshot-capture-form.test.ts（真实 SetArrayFormulaDataMutation：多格锚点去掉 v/t、1×1 与普通公式保留、跨文档/表隔离、模型不变）；E2E csv-formulas.spec.ts 的“收齐保存后常规重开”（Worker 与主线程）',
+  },
+  {
     name: 'csvArrayCells',
     origin: 'engine-formula 的 FormulaDataModel.getArrayFormulaCellData 与 sheets-formula 的 ArrayFormulaCellInterceptorController 协议',
     sdk: { '@univerjs/core': ['Univer', 'CellValueType'], '@univerjs/engine-formula': ['FormulaDataModel'] },

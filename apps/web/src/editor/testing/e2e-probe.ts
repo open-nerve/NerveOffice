@@ -37,6 +37,7 @@ import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
 import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, injectorOf } from '../internal-api/index.ts'
 import { IEditorService, IShortcutService } from '../internal-api/ui.ts'
+import { captureWorkbookData } from '../snapshot-capture-form.ts'
 import { createImageProbe } from './image-probe.ts'
 import './probe-facades.ts'
 
@@ -205,7 +206,8 @@ export function installEditorProbe({ univer, univerAPI, workbook, changes, formu
   const probe: EditorProbe = {
     images: createImageProbe(univer, workbook, imageInput),
     univerAPI,
-    snapshot: () => JSON.stringify(workbook.save()),
+    // 与编辑器的捕获相同（含数组锚点形态，M5R-I-07）
+    snapshot: () => captureWorkbookData(univer, workbook.save()),
     commands: (after = 0) => log.filter(command => command.seq > after),
     shortcuts: () => injector.get(IShortcutService).getAllShortcuts().map(toProbeShortcut),
     formulaBarText: () => readFormulaBar(injector.get(IEditorService)),

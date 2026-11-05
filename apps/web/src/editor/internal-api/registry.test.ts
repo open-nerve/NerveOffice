@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import arrayFormulaAnchorsSource from './array-formula-anchors.ts?raw'
 import cellLinksSource from './cell-links.ts?raw'
 import csvArrayCellsSource from './csv-array-cells.ts?raw'
 import csvSheetCommandSource from './csv-sheet-command.ts?raw'
@@ -69,6 +70,7 @@ const UI_PACKAGE = /^@univerjs\/(?:[\w-]+-ui|ui|design|engine-render)(?:\/|$)/
 const SOURCES: Readonly<Record<string, string>> = {
   'index.ts': source,
   'ui.ts': uiSource,
+  'array-formula-anchors.ts': arrayFormulaAnchorsSource,
   'cell-links.ts': cellLinksSource,
   'csv-array-cells.ts': csvArrayCellsSource,
   'csv-sheet-command.ts': csvSheetCommandSource,

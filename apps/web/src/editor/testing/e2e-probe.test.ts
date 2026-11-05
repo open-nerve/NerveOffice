@@ -6,6 +6,7 @@ import type { ProbeTarget } from './e2e-probe.ts'
 import { canonicalLink } from '@nerve-office/contracts'
 import { CommandType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
+import { FormulaDataModel } from '@univerjs/engine-formula'
 import { FRange, FWorksheet } from '@univerjs/sheets/facade'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY } from '../internal-api/index.ts'
@@ -57,17 +58,19 @@ interface FakeServices {
   formulaBar?: { body?: { dataStream: string } } | null
 }
 
-/** 假的 Univer：注入器只给出快捷键服务与编辑器管理（编辑器按 id 取，只有编辑栏的那个） */
+/** 假的 Univer：注入器只给出快捷键服务、编辑器管理（编辑器按 id 取，只有编辑栏的那个）与数组公式的数据模型 */
 function fakeUniver({ shortcuts = [], formulaBar = { body: { dataStream: '\r\n' } } }: FakeServices = {}): Univer {
   const services = new Map<unknown, unknown>([
     [IShortcutService, { getAllShortcuts: () => [...shortcuts] }],
     [IEditorService, { getEditor: (id: string) => id === DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY && formulaBar !== null ? { getDocumentData: () => formulaBar } : null }],
+    // 快照与编辑器的捕获相同：要看数组公式锚点（M5R-I-07）；本组样本没有数组结果
+    [FormulaDataModel, { getArrayFormulaRange: () => ({}) }],
   ])
   return {
     __getInjector: () => ({
       get: (id: unknown) => {
         if (!services.has(id))
-          throw new Error('探针只取快捷键服务与编辑器管理')
+          throw new Error('探针只取快捷键服务、编辑器管理与数组公式的数据模型')
         return services.get(id)
       },
     }),
