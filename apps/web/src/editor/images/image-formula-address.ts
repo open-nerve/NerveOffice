@@ -3,6 +3,20 @@ import { isPlatformAssetAddress } from '@nerve-office/contracts'
 const PREFIX = '/api/assets/'
 const SPACE = new Set([' ', '\t', '\n', '\r'])
 const NAME = /^[\p{L}\p{N}_.]$/u
+/** 函数名与括号之间：SDK 对函数名 token 用 String.prototype.trim，去掉的就是这一类空白 */
+const TRIMMED = /^\s$/u
+/** SDK 去掉的函数名前缀（engine-formula 的 normalizeFunctionToken，大写比较、只去掉一个） */
+const FUNCTION_PREFIXES = ['_XLFN.', '_XLWS.', '_XLETA.'] as const
+
+/**
+ * SDK 认作哪个函数（engine-formula 的 checkAndCreateNodeType 与 normalizeFunctionToken）：不区分大小写，去掉一个
+ * _XLFN./_XLWS./_XLETA. 前缀。名字前的 @、- 是另外的前缀节点，扫描时本来就跳过（S14 审查 E2）
+ */
+function functionNameOf(token: string): string {
+  const upper = token.toUpperCase()
+  const prefix = FUNCTION_PREFIXES.find(candidate => upper.startsWith(candidate))
+  return prefix === undefined ? upper : upper.slice(prefix.length)
+}
 
 interface Literal {
   /** 起止下标，含两端引号 */
@@ -113,8 +127,12 @@ export function normalizeImageFormula(formula: string, origin: string): string {
     let end = index
     while (end < formula.length && NAME.test(formula.charAt(end)))
       end += 1
-    if (formula.slice(index, end).toUpperCase() === 'IMAGE' && formula.charAt(end) === '(') {
-      const literal = firstArgumentLiteral(formula, end + 1)
+    // 名字与括号之间可以有空白：SDK 去掉函数名两端的空白，`IMAGE (` 也是 IMAGE 调用
+    let open = end
+    while (open < formula.length && TRIMMED.test(formula.charAt(open)))
+      open += 1
+    if (functionNameOf(formula.slice(index, end)) === 'IMAGE' && formula.charAt(open) === '(') {
+      const literal = firstArgumentLiteral(formula, open + 1)
       if (literal !== undefined && literal.value.startsWith(`${origin}/`) && isPlatformAssetAddress(literal.value, origin))
         edits.push({ start: literal.start, end: literal.end, text: `"${literal.value.slice(origin.length)}"` })
     }

@@ -23,6 +23,21 @@ describe('IMAGE() 首参的本站绝对地址写入时规范为相对地址（M5
     expect(normalizeImageFormula(formula, ORIGIN)).toBe(expected)
   })
 
+  // SDK 认作 IMAGE 调用的等价写法（engine-formula 的 checkAndCreateNodeType：名字两端的空白去掉；normalizeFunctionToken：
+  // 不区分大小写、去掉一个 _XLFN./_XLWS./_XLETA. 前缀；@、- 是另外的前缀节点）：写入者能看到图，必须同样改写（S14 审查 E2）
+  it.each([
+    [`=IMAGE ("${ABSOLUTE}")`, `=IMAGE ("${RELATIVE}")`],
+    [`=IMAGE\n\t("${ABSOLUTE}")`, `=IMAGE\n\t("${RELATIVE}")`],
+    [`=IMAGE\u00A0("${ABSOLUTE}")`, `=IMAGE\u00A0("${RELATIVE}")`],
+    [`=_xlfn.IMAGE("${ABSOLUTE}")`, `=_xlfn.IMAGE("${RELATIVE}")`],
+    [`=_XLWS.image("${ABSOLUTE}")`, `=_XLWS.image("${RELATIVE}")`],
+    [`=_xleta.Image ("${ABSOLUTE}")`, `=_xleta.Image ("${RELATIVE}")`],
+    [`=@IMAGE("${ABSOLUTE}")`, `=@IMAGE("${RELATIVE}")`],
+    [`=IF(A1,_xlfn.IMAGE ("${ABSOLUTE}"),"")`, `=IF(A1,_xlfn.IMAGE ("${RELATIVE}"),"")`],
+  ])('SDK 认作 IMAGE 的等价写法同样改写：%s', (formula, expected) => {
+    expect(normalizeImageFormula(formula, ORIGIN)).toBe(expected)
+  })
+
   it.each([
     `=IMAGE("${RELATIVE}")`,
     `=IMAGE("https://outside.example/api/assets/${ID}")`,
@@ -33,7 +48,10 @@ describe('IMAGE() 首参的本站绝对地址写入时规范为相对地址（M5
     `="${ABSOLUTE}"`,
     `=HYPERLINK("${ABSOLUTE}")`,
     `=MYIMAGE("${ABSOLUTE}")`,
-    `=IMAGE ("${ABSOLUTE}")`,
+    // SDK 只去掉一个前缀、前缀要带点：这些不是 IMAGE 调用
+    `=_xlfn._xlws.IMAGE("${ABSOLUTE}")`,
+    `=_xlfnIMAGE("${ABSOLUTE}")`,
+    `=XLFN.IMAGE("${ABSOLUTE}")`,
     `=IMAGE(A1)`,
     `=IMAGE("${ABSOLUTE}"&"")`,
     `=IMAGE(+"${ABSOLUTE}")`,
