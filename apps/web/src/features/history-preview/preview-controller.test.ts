@@ -199,6 +199,41 @@ describe('M5R-M-04 后台复核只核验不打断（D-06）', () => {
     expect(w.deps.mount).toHaveBeenCalledTimes(1)
   })
 
+  it('复核卡住时反复触发也不推迟隐藏：截止时刻从第一次还没有结论的核验算起（S14 审查 FE4）', async () => {
+    vi.useFakeTimers()
+    const w = setup()
+    await w.preview.refresh()
+    vi.mocked(w.deps.session).mockImplementation(async () => new Promise<typeof HISTORY_SESSION>(() => {}))
+    void w.preview.refresh('background')
+    await vi.advanceTimersByTimeAsync(6_000)
+    void w.preview.refresh('background')
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(w.preview.view().kind).toBe('ready')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(w.preview.view().kind).toBe('loading')
+    expect(w.images()?.current()).toBeUndefined()
+  })
+
+  it('无权与临时失败的后台复核：结论到之前不发布加载态，结论不变时提示不重插（S14 审查 FE5）', async () => {
+    const w = setup()
+    vi.mocked(w.deps.detail).mockRejectedValue(new ApiError(403, 'PERMISSION_DENIED', '无权'))
+    await w.preview.refresh()
+    expect(w.preview.view()).toEqual({ kind: 'unavailable' })
+    const states: string[] = []
+    w.preview.subscribe(() => states.push(w.preview.view().kind))
+    await w.preview.refresh('background')
+    expect(states).toEqual(['unavailable'])
+    vi.mocked(w.deps.detail).mockRejectedValue(new NetworkError('断网'))
+    await w.preview.refresh('background')
+    await w.preview.refresh('background')
+    expect(states).toEqual(['unavailable', 'failed', 'failed'])
+    // 资格恢复：创建实例之前才发布加载态（SDK 需要布局尺寸），之后就绪
+    vi.mocked(w.deps.detail).mockResolvedValue(historyItem())
+    await w.preview.refresh('background')
+    expect(states).toEqual(['unavailable', 'failed', 'failed', 'loading', 'ready'])
+    expect(w.deps.mount).toHaveBeenCalledTimes(1)
+  })
+
   it('后台复核发现撤权：不等 10 秒，立即关图片并销毁实例', async () => {
     const w = setup()
     await w.preview.refresh()

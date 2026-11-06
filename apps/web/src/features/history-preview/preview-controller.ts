@@ -53,10 +53,13 @@ export function createHistoryPreview(deps: PreviewDependencies): HistoryPreviewC
   let editor: PreviewEditor | undefined
   let mounting = Promise.resolve()
   let retiring = Promise.resolve()
+  /** 还没有结论的就绪核验从何时开始：新的触发会中止旧核验，但不重新计时（S14 审查 FE4）；任何结论或状态变化都清掉它 */
+  let verifyingSince: number | undefined
   const listeners = new Set<() => void>()
   const current = (token: number) => !disposed && !ended && token === generation
   function publish(next: PreviewState): void {
     state = next
+    verifyingSince = undefined
     for (const listener of [...listeners])
       listener()
   }
@@ -102,21 +105,27 @@ export function createHistoryPreview(deps: PreviewDependencies): HistoryPreviewC
     abort?.abort()
     abort = new AbortController()
     const { signal } = abort
-    // 就绪时的后台复核只核验（D-06）：不暂停图片、不隐藏画布、不发布加载态，超过 VERIFY_HIDE_MS 仍没有结论才隐藏。
-    // 换人、撤权、登录失效与失败照旧立即清除（block）。其余情况（首次加载、用户重试、失败后的重试）隐藏画布并停止图片
+    // 就绪时的后台复核只核验（D-06）：不暂停图片、不隐藏画布、不发布加载态，超过 VERIFY_HIDE_MS 仍没有结论才隐藏；
+    // 截止时刻从第一次还没有结论的核验算起，反复触发不会把隐藏一直往后推（FE4）。
+    // 无权与临时失败时的后台复核（quiet）同样不先发布加载态：画面本来就是提示、没有正文，先换成加载再换回来只会让读屏
+    // 每轮重读一遍（FE5）；需要创建实例时才发布加载态。
+    // 换人、撤权、登录失效与失败照旧立即清除（block）。其余情况（首次加载、用户重试）隐藏画布并停止图片
     const verifying = activity === 'background' && state.kind === 'ready' && editor !== undefined
+    const quiet = activity === 'background' && (state.kind === 'unavailable' || state.kind === 'failed')
     let slow: ReturnType<typeof setTimeout> | undefined
     if (verifying) {
+      verifyingSince ??= Date.now()
       slow = setTimeout(() => {
         if (current(token)) {
           images?.suspend()
           publish({ kind: 'loading' })
         }
-      }, VERIFY_HIDE_MS)
+      }, Math.max(0, VERIFY_HIDE_MS - (Date.now() - verifyingSince)))
     }
     else {
       images?.suspend()
-      publish({ kind: 'loading' })
+      if (!quiet)
+        publish({ kind: 'loading' })
     }
     try {
       let access = await authorize(token, signal, activity)
@@ -133,6 +142,9 @@ export function createHistoryPreview(deps: PreviewDependencies): HistoryPreviewC
         const imageAccess = images
         if (imageAccess === undefined)
           return
+        // 创建实例之前容器要有布局尺寸（加载态不隐藏容器，只设为不可见）；quiet 的复核到这里才发布加载态
+        if (state.kind !== 'loading')
+          publish({ kind: 'loading' })
         // 连续复核遇到仍在创建的 SDK 时串行；晚到实例先销毁，才允许下一实例使用同一容器。
         const pending = mounting.then(async () => {
           await retiring
