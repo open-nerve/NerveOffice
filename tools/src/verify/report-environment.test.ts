@@ -16,13 +16,18 @@ const require = createRequire(join(E2E, 'package.json'))
 const testPackage = dirname(require.resolve('@playwright/test/package.json'))
 const cli = join(testPackage, 'cli.js')
 
-/** 绝不把运行 Agent/CI 的真实凭据送进可能失败并留报告的回归。 */
+/**
+ * 绝不把运行 Agent/CI 的真实凭据送进可能失败并留报告的回归。Playwright 照真实入口（tests/e2e 的 test 脚本、
+ * tools/src/ci/e2e-cli.ts）的方式启动：带 @nerve-office/source 条件，工作区的包按源码解析，不依赖事先构建出的 dist
+ * （新建的 worktree 没构建过时，pre-push 的快速门禁曾因此失败，M5-P8）。
+ */
 function isolatedEnvironment(): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH,
     TMPDIR: tmpdir(),
     TMP: tmpdir(),
     TEMP: tmpdir(),
+    NODE_OPTIONS: '--conditions=@nerve-office/source',
     NERVE_TEST_DATABASE_URL: DATABASE,
     NERVE_REPORT_ENV_CANARY: CANARY,
   }
