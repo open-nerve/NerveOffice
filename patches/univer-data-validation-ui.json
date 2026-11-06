@@ -2,19 +2,19 @@
   "adr": "docs/adr/ADR-010-编辑器适配层与内部API登记.md",
   "package": "@univerjs/sheets-data-validation-ui",
   "version": "1.0.1",
-  "reason": "UR-033：按输入顺序积累连续同类字段增量及尚未生效的类型草稿；同步范围历史和公式平移；关闭、删除、原实例归属与失败重试。M5-P4-S6：LIST/MULTIPLE_LIST 按 trigger 传递 autoFocusSearch，editor-bridge 联动不自动夺取编辑器焦点，显式打开仍自动聚焦搜索。 M5-P7（M5R-I-05、M5R-M-08）：入队时剔除被同字段后续值覆盖的更早设置，提交不了的设置并入下一项设置后出队，其他种类照常提交；仍提交不了的留在待办、字段显示错误，并以 data-nerve-uncommitted 属性与 nerve-panel-uncommitted 事件告知平台；拒绝输入的校验被取消时按无结论处理（不写入、不留未处理拒绝），真实错误照常抛出。 M5-P7 S14 审查（E1、E5）：详情卸载时的最后一次提交丢掉被拒的那一项、其余按原顺序提交（面板开着时仍停在被拒项上等改正）；未提交事件在提交成功、失败与取消的同一个调用里同步派发，不等重新渲染。 S14 复验第二轮：设置项保留按输入顺序的各段，卸载时被拒的设置照常并入后面的设置，仍提交不了就去掉最早的一段再试，非法字段丢掉、同一项里合法的字段与后面的范围、选项照常提交。",
+  "reason": "UR-033：按输入顺序积累连续同类字段增量及尚未生效的类型草稿；同步范围历史和公式平移；关闭、删除、原实例归属与失败重试。M5-P4-S6：LIST/MULTIPLE_LIST 按 trigger 传递 autoFocusSearch，editor-bridge 联动不自动夺取编辑器焦点，显式打开仍自动聚焦搜索。 M5-P7（M5R-I-05、M5R-M-08）：入队时剔除被同字段后续值覆盖的更早设置，提交不了的设置并入下一项设置后出队，其他种类照常提交；仍提交不了的留在待办、字段显示错误，并以 data-nerve-uncommitted 属性与 nerve-panel-uncommitted 事件告知平台；拒绝输入的校验被取消时按无结论处理（不写入、不留未处理拒绝），真实错误照常抛出。 M5-P7 S14 审查（E1、E5）：详情卸载时的最后一次提交丢掉被拒的那一项、其余按原顺序提交（面板开着时仍停在被拒项上等改正）；未提交事件在提交成功、失败与取消的同一个调用里同步派发，不等重新渲染。 S14 复验：卸载时被拒的设置照常并入后面的设置；仍提交不了就整组丢掉条件字段（类型、运算符、两个条件值），只带独立的“忽略空值”再试一次，不与模型值拼出用户没设过的条件。",
   "files": [
     {
       "path": "lib/es/index.js",
       "originalSha256": "634d61a549ffd7357b332ddb12d65512293ecaeb37bb4e3af71b16f7c3e65a25",
-      "patchedSha256": "0a1a8e5985f89f0422aac00bbc1eb7009f309ca5d1304630628fcb1cd7094dd7"
+      "patchedSha256": "c706080daa750f265a98c3045a8d1289d8f2a45308c0dc4836d83a1eedc0c83e"
     },
     {
       "path": "lib/cjs/index.js",
       "originalSha256": "bb8d723c8cc1c8f76ffcc65f5090e03386ca42b749efdd3e93c4af6252185e79",
-      "patchedSha256": "06369377e209b71aa0eceb0654a2a391a7b9b8ac5966d4a445e1679d5c6f2c9b"
+      "patchedSha256": "6cd80520cac39675cd74321dea25aad7c9b522d7de1b7cde30b5c3477523bfbd"
     }
   ],
   "patch": "patches/@univerjs__sheets-data-validation-ui@1.0.1.patch",
-  "patchSha256": "48dba8dd7d11726ccb2951fed8a78476a2977605ae29417aad3aede4f520d5cf"
+  "patchSha256": "fec5e8a47f8b3f2bc2e5523c027bb0a527930f4452b6a08ef55f946a90ae1205"
 }

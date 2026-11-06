@@ -70,8 +70,8 @@ function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula: b
   const validator = {
     id: 'decimal',
     type: 'decimal',
-    operators: [DataValidationOperator.EQUAL],
-    operatorNames: ['等于'],
+    operators: [DataValidationOperator.EQUAL, DataValidationOperator.GREATER_THAN],
+    operatorNames: ['等于', '大于'],
     title: '数字',
     // 公式输入端口采用 SDK 的 BaseFormulaInput；custom 的实际画布另由公开 E2E 覆盖。
     formulaInput: BASE_FORMULA_INPUT_NAME,
@@ -661,6 +661,29 @@ describe('M5R-I-05：非法的中间设置被后续合法输入覆盖后，待�
     h.setting()
     h.view.unmount()
     expect(h.current()).toMatchObject({ formula1: '100', allowBlank: false })
+  })
+
+  it('清空条件值 → 改运算符 → 关面板并卸载：条件字段整组丢掉，原条件不变，不拼出用户没设过的“大于 100”（S14 复验第三轮）', async () => {
+    const h = setup('number', true)
+    formula('')
+    fireEvent.pointerDown(screen.getByText('等于'), { button: 0, ctrlKey: false })
+    await h.tick(1)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '大于' }))
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ operator: DataValidationOperator.EQUAL, formula1: '100', allowBlank: true })
+  })
+
+  it('同样的序列再改“忽略空值”：条件字段整组丢掉，独立的“忽略空值”照常提交（S14 复验第三轮）', async () => {
+    const h = setup('number', true)
+    formula('')
+    fireEvent.pointerDown(screen.getByText('等于'), { button: 0, ctrlKey: false })
+    await h.tick(1)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '大于' }))
+    h.setting()
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ operator: DataValidationOperator.EQUAL, formula1: '100', allowBlank: false })
   })
 
   it('清空条件 → 改范围 → 没等防抖到点就卸载：范围照常写入（S14 审查 E1）', () => {
