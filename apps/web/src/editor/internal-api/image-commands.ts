@@ -71,7 +71,7 @@ export function createImageCommandPreview(univer: Univer, valid: TransitionCheck
       const targets = imageMoveTargets(univer, params)
       return targets !== undefined && targets.every(target => acceptsImageCellWrite(univer, target, target.cellValue, true, validCell))
     }),
-    cells: (params: unknown, value: unknown, mutation: boolean, validCell: CellCheck): boolean => safe(() => acceptsImageCellWrite(univer, params, value, mutation, validCell)),
+    cells: (params: unknown, value: unknown, mutation: boolean, validCell: CellCheck, preparedValue = false): boolean => safe(() => acceptsImageCellWrite(univer, params, value, mutation, validCell, preparedValue)),
     mutation: (params: unknown): boolean => safe(() => {
       for (const state of states())
         previewImageMutation(state, params, valid)

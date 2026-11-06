@@ -41,7 +41,8 @@ function commandChecker(univer: Univer, permits: WeakSet<object>): (id: string, 
   const validCell = (cell: unknown): boolean => settled(normalizeImageCell(cell, ''))
   const validFragment = (value: unknown): boolean => settled(normalizeImageFragment(value, ''))
   const validSheet = (value: unknown): boolean => settled(normalizeImageSheet(value, ''))
-  const check = (id: string, params: unknown, history: boolean): boolean => {
+  /** prepared：params 刚经本次判定的 prepareImageCommandInput 校验，且准备阶段没有改动它。 */
+  const check = (id: string, params: unknown, history: boolean, prepared: boolean): boolean => {
     if (id === C.background || id === C.applyBackground) {
       reason = 'write-unsupported'
       return false
@@ -73,11 +74,12 @@ function commandChecker(univer: Univer, permits: WeakSet<object>): (id: string, 
     const field = id === C.setCells ? 'value' : 'cellValue'
     if (history)
       return preview.sheet({ unitId: params.unitId, sheet: { cellData: params[field] } }, validFragment)
-    return preview.cells(params, params[field], id !== C.setCells, validCell)
+    // 准备阶段原样通过的新值不再整体遍历第二遍；旧值、命名样式与矩阵结构照常校验（P7-S15，M5R-I-01 的分支 CI 首轮）
+    return preview.cells(params, params[field], id !== C.setCells, validCell, prepared)
   }
   const historyInput = (id: string, params: unknown): boolean => {
     if (!RELATED.has(id))
-      return check(id, params, true)
+      return check(id, params, true, false)
     const input = prepareImageCommandInput(id, params, '')
     if (!input.ok) {
       reason = REJECTIONS[input.reason]
@@ -87,19 +89,21 @@ function commandChecker(univer: Univer, permits: WeakSet<object>): (id: string, 
       reason = 'write-source'
       return false
     }
-    return check(id, input.params, true)
+    return check(id, input.params, true, true)
   }
   const accepts = (id: string, params: unknown): boolean => {
     if (id === C.undo || id === C.redo)
       return preview.history(id, historyInput)
     if (!RELATED.has(id))
-      return check(id, params, false)
+      return check(id, params, false, false)
     const input = prepareImageCommandInput(id, params, location.origin)
     if (!input.ok) {
       reason = REJECTIONS[input.reason]
       return false
     }
-    if (!check(id, input.params, false))
+    // 准备阶段没有改动时，空 origin 下的复核必然通过且未改变（来源已是相对地址、没有 NaN，公式在空 origin 下原样返回），
+    // 可以只补查旧值、命名样式与矩阵键和坐标；改动过（同源绝对地址、NaN 等）就照旧整体复核准备后的值（P7-S15 复验 I-1）
+    if (!check(id, input.params, false, !input.changed))
       return false
     reason = 'write-structure'
     return input.commit()

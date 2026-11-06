@@ -23,41 +23,67 @@ function reject(reason: FailureReason): never {
   throw new RejectedImageFragment(reason)
 }
 
+/** 自身数据属性，按 Reflect.ownKeys 的次序；键与值分列存放，大范围写入时不为每个属性另建元组。 */
+interface DataEntries {
+  readonly array: boolean
+  readonly keys: readonly string[]
+  readonly values: readonly unknown[]
+}
+
 /** 只读数据属性；不执行 getter、toJSON 或复制对象时的用户代码。 */
-function dataEntries(value: object): [string, unknown][] {
+function dataEntries(value: object): DataEntries {
+  const array = Array.isArray(value)
   const prototype: unknown = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null && !(Array.isArray(value) && prototype === Array.prototype))
+  if (prototype !== Object.prototype && prototype !== null && !(array && prototype === Array.prototype))
     reject('structure')
-  const entries: [string, unknown][] = []
+  const keys: string[] = []
+  const values: unknown[] = []
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string' || key === '__proto__' || key === 'prototype' || key === 'constructor')
       reject('structure')
     const descriptor = Object.getOwnPropertyDescriptor(value, key)
     if (descriptor === undefined || !('value' in descriptor))
       reject('structure')
-    if (Array.isArray(value) && key === 'length')
+    if (array && key === 'length')
       continue
-    entries.push([key, descriptor.value])
+    keys.push(key)
+    values.push(descriptor.value)
   }
-  return entries
+  return { array, keys, values }
 }
 
-/** 先构造完整结果；发现后续坏字段时，原输入及之前的字段从未改变。 */
-function remap(value: object, entries: readonly [string, unknown][], visit: Visitor): unknown {
-  let changed = false
-  const mapped = entries.map(([key, previous]): [string, unknown] => {
+function dataMap(value: object): Map<string, unknown> {
+  const { keys, values } = dataEntries(value)
+  return new Map(keys.map((key, index) => [key, values[index]]))
+}
+
+function define(target: object, key: string, value: unknown): void {
+  Object.defineProperty(target, key, { value, enumerable: true, writable: true, configurable: true })
+}
+
+/**
+ * 按次序访问全部字段；发现后续坏字段时，原输入从未改变。没有字段改变时返回原对象，
+ * 第一个改变出现时才建副本并补上之前的字段（M5R-I-01 的 CI 首轮：校验大范围写入时不为每个对象建映射数组）。
+ */
+function remap(value: object, entries: DataEntries, visit: Visitor): unknown {
+  const { array, keys, values } = entries
+  let copy: object | undefined
+  let index = 0
+  for (const key of keys) {
+    const previous = values[index]
     const next = visit(previous, key)
-    changed ||= next !== previous
-    return [key, next]
-  })
-  if (!changed)
-    return value
-  const copy: object = Array.isArray(value) ? [] : {}
-  if (Array.isArray(value) && Array.isArray(copy))
-    copy.length = value.length
-  for (const [key, next] of mapped)
-    Object.defineProperty(copy, key, { value: next, enumerable: true, writable: true, configurable: true })
-  return copy
+    if (copy === undefined && next !== previous) {
+      const created: unknown[] | Record<string, unknown> = array ? [] : {}
+      if (Array.isArray(value) && Array.isArray(created))
+        created.length = value.length
+      keys.slice(0, index).forEach((earlierKey, earlier) => define(created, earlierKey, values[earlier]))
+      copy = created
+    }
+    if (copy !== undefined)
+      define(copy, key, next)
+    index++
+  }
+  return copy ?? value
 }
 
 function canonicalSource(value: unknown, origin: string): string {
@@ -72,7 +98,8 @@ function canonicalSource(value: unknown, origin: string): string {
  * 中等规模表上的撤销、加粗、边框与富文本结构命令会被整体取消（M5R-I-01）。
  */
 function fragmentVisitor(origin: string): (value: unknown) => unknown {
-  const ancestors = new WeakSet<object>()
+  // 当前路径上的祖先（深度不超过 64）；共享而非祖先的引用照常各访问一次
+  const ancestors: object[] = []
   let count = 0
   const visit = (value: unknown, depth: number): unknown => {
     if (++count > IMAGE_FRAGMENT_LIMITS.entries || depth > IMAGE_FRAGMENT_LIMITS.depth)
@@ -81,22 +108,23 @@ function fragmentVisitor(origin: string): (value: unknown) => unknown {
     // 数字不是图片来源，不在此改写布局值。source/cache 仍单独校验，JSON1 操作仍须纯 JSON。
     if (value === null || value === undefined || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number')
       return value
-    if (typeof value !== 'object' || ancestors.has(value))
+    if (typeof value !== 'object' || ancestors.includes(value))
       return reject('structure')
     const entries = dataEntries(value)
-    if (entries.length + count > IMAGE_FRAGMENT_LIMITS.entries || (Array.isArray(value) && value.length > IMAGE_FRAGMENT_LIMITS.entries))
+    if (entries.keys.length + count > IMAGE_FRAGMENT_LIMITS.entries || (Array.isArray(value) && value.length > IMAGE_FRAGMENT_LIMITS.entries))
       return reject('limit')
-    const source = entries.find(([key]) => key === 'source')
-    const cache = entries.find(([key]) => key === 'base64Cache')
-    if (source && cache && canonicalSource(source[1], origin) !== canonicalSource(cache[1], origin))
+    const source = entries.keys.indexOf('source')
+    const cache = entries.keys.indexOf('base64Cache')
+    if (source >= 0 && cache >= 0 && canonicalSource(entries.values[source], origin) !== canonicalSource(entries.values[cache], origin))
       return reject('source')
-    ancestors.add(value)
+    ancestors.push(value)
     const next = remap(value, entries, (child, key) => key === 'source' || key === 'base64Cache' ? canonicalSource(child, origin) : visit(child, depth + 1))
-    ancestors.delete(value)
+    ancestors.pop()
     return next
   }
   return (value) => {
     count = 0
+    ancestors.length = 0
     return visit(value, 0)
   }
 }
@@ -147,7 +175,7 @@ export function normalizeImageCells(value: unknown, origin: string): ImageSource
     if (typeof input !== 'object')
       return reject('structure')
     const entries = dataEntries(input)
-    count += entries.length
+    count += entries.keys.length
     if (count > IMAGE_FRAGMENT_LIMITS.cells)
       return reject('limit')
     return remap(input, entries, visit)
@@ -164,7 +192,7 @@ export function normalizeImageAxis(value: unknown, origin: string): ImageSourceR
     if (typeof input !== 'object')
       return reject('structure')
     const entries = dataEntries(input)
-    if (entries.length > IMAGE_FRAGMENT_LIMITS.cells)
+    if (entries.keys.length > IMAGE_FRAGMENT_LIMITS.cells)
       return reject('limit')
     return remap(input, entries, cell)
   })
@@ -217,8 +245,8 @@ export function imageTransition(previous: unknown, next: unknown, allowLegacyRem
         settled(before)
       return
     }
-    const old = new Map(dataEntries(before))
-    const current = new Map(dataEntries(after))
+    const old = dataMap(before)
+    const current = dataMap(after)
     for (const key of new Set([...old.keys(), ...current.keys()])) {
       const from = old.get(key)
       const to = current.get(key)

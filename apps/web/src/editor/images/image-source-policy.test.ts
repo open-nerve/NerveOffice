@@ -20,6 +20,31 @@ describe('图片相关片段：验证完才生成规范副本', () => {
     expect(Reflect.get(result.value, 'anchor')).toBe(anchor)
   })
 
+  it('后面的字段归一时，前面未变的字段按原次序与原身份进入副本；数组保留长度与空位（P7-S15）', () => {
+    const anchor = { from: { row: 1, column: 2 } }
+    const input = Object.freeze({ altText: 'a', anchor, source: `${ORIGIN}${SOURCE}`, base64Cache: `${ORIGIN}${SOURCE}`, tail: 1 })
+    const result = normalizeImageFragment(input, ORIGIN)
+    expect(result).toEqual({ ok: true, changed: true, value: { altText: 'a', anchor, source: SOURCE, base64Cache: SOURCE, tail: 1 } })
+    if (!result.ok || typeof result.value !== 'object' || result.value === null)
+      throw new Error('合法图片片段被拒绝')
+    expect(Object.keys(result.value)).toEqual(['altText', 'anchor', 'source', 'base64Cache', 'tail'])
+    expect(Reflect.get(result.value, 'anchor')).toBe(anchor)
+    const stable = { v: 1 }
+    const list: unknown[] = [stable]
+    list[2] = { source: `${ORIGIN}${SOURCE}` }
+    // 尾部也留一个空位：长度只能来自原数组，不能由最后定义的下标推出
+    list.length = 4
+    const mapped = normalizeImageFragment(Object.freeze(list), ORIGIN)
+    if (!mapped.ok || !Array.isArray(mapped.value))
+      throw new Error('合法数组被拒绝或不再是数组')
+    expect(mapped.changed).toBe(true)
+    expect(mapped.value).toHaveLength(4)
+    expect(mapped.value[0]).toBe(stable)
+    expect(1 in mapped.value).toBe(false)
+    expect(mapped.value[2]).toEqual({ source: SOURCE })
+    expect(3 in mapped.value).toBe(false)
+  })
+
   it('已规范的片段保持对象身份，普通文本与链接不改写', () => {
     const value = { source: SOURCE, base64Cache: SOURCE, altText: 'https://outside.example/image', url: 'https://outside.example/link' }
     const result = normalizeImageFragment(value, ORIGIN)
@@ -58,7 +83,9 @@ describe('图片相关片段：验证完才生成规范副本', () => {
   it('循环、过深、超预算和非 JSON 对象安全拒绝', () => {
     const cycle: Record<string, unknown> = {}
     cycle.child = cycle
-    expect(normalizeImageFragment(cycle, ORIGIN).ok).toBe(false)
+    // 循环由祖先检测按结构拒绝，不是等到深度超限（P7-S15 改用祖先栈后钉住原因）
+    expect(normalizeImageFragment(cycle, ORIGIN)).toEqual({ ok: false, reason: 'structure' })
+    expect(normalizeImageCells({ 0: { 0: { p: cycle } } }, ORIGIN)).toEqual({ ok: false, reason: 'structure' })
     let deep: unknown = { source: SOURCE }
     for (let i = 0; i <= IMAGE_FRAGMENT_LIMITS.depth; i++)
       deep = { child: deep }

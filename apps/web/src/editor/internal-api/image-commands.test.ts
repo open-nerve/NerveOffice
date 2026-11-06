@@ -414,6 +414,25 @@ describe('单元格片段经过实际命令与 mutation', () => {
     expect(h.state()).toEqual(before)
   })
 
+  it.each([{ x: { 0: { v: 1 } } }, { 0: { y: { v: 1 } } }])('底层写入的矩阵键不是行列号 %j 时整批拒绝（已准备的新值仍经结构校验，P7-S15）', (cellValue) => {
+    const h = setup()
+    const before = h.state()
+    expect(h.commands.syncExecuteCommand(SetRangeValuesMutation.id, { unitId: BOOK, subUnitId: SHEET, cellValue })).toBe(false)
+    expect(h.state()).toEqual(before)
+    expect(h.rejected).toHaveBeenCalledExactlyOnceWith('write-structure')
+  })
+
+  // 访问器按 !== 判断改变，NaN 恒为“改变”。准备阶段改动过的新值必须照旧整体复核：
+  // 放行之后，旧值复核与结构预演会一直判这一格不合格，该表的后续写入与结构命令全被拒（P7-S15 复验 I-1）
+  it.each([['v', { v: Number.NaN }], ['s.fs', { v: 1, s: { fs: Number.NaN } }]] as const)('新值的 %s 为 NaN 时底层写入与命令都照旧拒绝', async (_field, cell) => {
+    const h = setup()
+    const before = h.state()
+    expect(h.commands.syncExecuteCommand(SetRangeValuesMutation.id, { unitId: BOOK, subUnitId: SHEET, cellValue: { 0: { 0: cell } } })).toBe(false)
+    expect(await h.commands.executeCommand(SetRangeValuesCommand.id, { unitId: BOOK, subUnitId: SHEET, range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }, value: cell })).toBe(false)
+    expect(h.state()).toEqual(before)
+    expect(h.rejected.mock.calls).toEqual([['write-source'], ['write-source']])
+  })
+
   it('命名样式内的非法图片不得借 s 字符串写入', () => {
     const h = setup()
     // SDK 样式数据可以含扩展填充；由只读载入的实际样式表供命令解析。
@@ -652,7 +671,11 @@ describe('工作表结构变化必须在 handler 前拒绝坏逆操作', () => {
   })
 })
 
-describe('大范围写入、格式与撤销不受图片预算误拦（M5R-I-01）', () => {
+// 大范围容量用例。分支 CI 首轮（优化前）覆盖率满载时，“1 万格带格式与富文本”一例 8.2 秒、“6 万格写入、清除与逐级撤销重做”一例 4.7 秒，
+// 约为当时本机的 8 倍；P7-S15 优化之后本机单例约 0.1～0.7 秒。与七万资源容量用例一样写明整例上限，规模与断言不变（需求方 2026-11-06 批准）。
+const CAPACITY_TIMEOUT = 30_000
+
+describe('大范围写入、格式与撤销不受图片预算误拦（M5R-I-01）', { timeout: CAPACITY_TIMEOUT }, () => {
   const ROWS = 3_000
   const COLUMNS = 20
   const all = { startRow: 0, endRow: ROWS - 1, startColumn: 0, endColumn: COLUMNS - 1 }
