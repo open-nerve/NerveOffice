@@ -1,5 +1,5 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f2b396ec3 100644
+index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..8d3d3dd5ae469949de3e6ff8149ec92241f321e8 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
 @@ -188,7 +188,16 @@ let DataValidationRejectInputController = class DataValidationRejectInputControl
@@ -28,7 +28,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
  						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
  					}
-@@ -2929,10 +2939,82 @@ function DataValidationOptions(props) {
+@@ -2929,10 +2939,83 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -40,7 +40,8 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
 +	const pending = [];
 +	const isSetting = (task) => task[0] === _univerjs_sheets_data_validation.UpdateSheetDataValidationSettingCommand.id;
 +	// final：最后一次提交（详情卸载）。M5-P7（S14 审查 E1）：这时被拒的那一项丢掉，其余项按原顺序提交——
-+	// 否则排在它后面的合法范围、选项会随取消一起丢失；面板开着时仍停在被拒项上、等用户改正
++	// 否则排在它后面的合法范围、选项会随取消一起丢失；面板开着时仍停在被拒项上、等用户改正。
++	// 被拒的设置这时也不并入后面的设置（S14 复验）：并入会把非法字段带进后面合法的设置、连带丢掉它
 +	const flush = (final = false) => {
 +		timer.cancel();
 +		const hadPending = pending.length > 0;
@@ -55,7 +56,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
 +			if (!result) {
 +				// M5-P7（M5R-I-05）：提交不了的设置项并入下一项设置（后来的字段为准）后出队，后面不同种类的输入照常提交；
 +				// 没有后续设置时停在这里：待办保留，onFailed 在字段上显示错误并告知平台还有未写进模型的输入
-+				const later = pending[0] === task && isSetting(task) ? pending.findIndex((item, index) => index > 0 && isSetting(item)) : -1;
++				const later = !final && pending[0] === task && isSetting(task) ? pending.findIndex((item, index) => index > 0 && isSetting(item)) : -1;
 +				if (later > 0) {
 +					const [laterId, laterParams, laterOptions, laterCallback] = pending[later];
 +					pending[later] = [laterId, {
@@ -115,7 +116,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2954,6 +3036,7 @@ function DataValidationDetail() {
+@@ -2954,6 +3037,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = (0, react.useState)(0);
@@ -123,7 +124,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  	const dataValidationPanelService = (0, _univerjs_ui.useDependency)(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2968,13 +3051,89 @@ function DataValidationDetailInner(props) {
+@@ -2968,13 +3052,89 @@ function DataValidationDetailInner(props) {
  	const [localRule, setLocalRule] = (0, react.useState)(rule);
  	const validator = validatorService.getValidatorItem(localRule.type);
  	const [showError, setShowError] = (0, react.useState)(false);
@@ -214,7 +215,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  	const [isRangeError, setIsRangeError] = (0, react.useState)(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = (0, react.useState)(false);
  	const rangeSelectorInstance = (0, react.useRef)(null);
-@@ -2986,35 +3145,11 @@ function DataValidationDetailInner(props) {
+@@ -2986,35 +3146,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	(0, react.useEffect)(() => {
@@ -253,7 +254,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  	const handleUpdateRuleRanges = (0, _univerjs_ui.useEvent)((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(_univerjs_engine_formula.deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3030,14 +3165,14 @@ function DataValidationDetailInner(props) {
+@@ -3030,14 +3166,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -275,7 +276,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3045,8 +3180,9 @@ function DataValidationDetailInner(props) {
+@@ -3045,8 +3181,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationRangeCommand.id, params);
@@ -286,7 +287,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3058,31 +3194,30 @@ function DataValidationDetailInner(props) {
+@@ -3058,31 +3195,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -330,7 +331,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  		await commandService.executeCommand(_univerjs_sheets_data_validation.RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3091,16 +3226,13 @@ function DataValidationDetailInner(props) {
+@@ -3091,16 +3227,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -351,7 +352,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3125,10 +3257,7 @@ function DataValidationDetailInner(props) {
+@@ -3125,10 +3258,7 @@ function DataValidationDetailInner(props) {
  	const options = (0, _univerjs_data_validation.getRuleOptions)(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if ((0, _univerjs_core.shallowEqual)(newOptions, (0, _univerjs_data_validation.getRuleOptions)(localRule))) return;
@@ -363,7 +364,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3139,6 +3268,7 @@ function DataValidationDetailInner(props) {
+@@ -3139,6 +3269,7 @@ function DataValidationDetailInner(props) {
  	const shouldHideFormula = operators.length && !localRule.operator;
  	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
  		"data-u-comp": "data-validation-detail",
@@ -371,7 +372,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  		className: "univer-py-2",
  		children: [
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
-@@ -3159,7 +3289,7 @@ function DataValidationDetailInner(props) {
+@@ -3159,7 +3290,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -380,7 +381,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  			}),
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3186,10 +3316,7 @@ function DataValidationDetailInner(props) {
+@@ -3186,10 +3317,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -392,7 +393,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  					}
  				})
  			}) : null,
-@@ -3199,12 +3326,7 @@ function DataValidationDetailInner(props) {
+@@ -3199,12 +3327,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -406,7 +407,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3214,7 +3336,6 @@ function DataValidationDetailInner(props) {
+@@ -3214,7 +3337,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, { children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({
@@ -415,7 +416,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f
  				}),
  				children: localeService.t("sheets-data-validation-ui.panel.allowBlank")
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb61c76fc34 100644
+index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8e460ee2a807d066af78463c25e3126417fffbdb 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -1,5 +1,5 @@
@@ -451,7 +452,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
  						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
  					}
-@@ -2928,10 +2938,82 @@ function DataValidationOptions(props) {
+@@ -2928,10 +2938,83 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -463,7 +464,8 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
 +	const pending = [];
 +	const isSetting = (task) => task[0] === UpdateSheetDataValidationSettingCommand.id;
 +	// final：最后一次提交（详情卸载）。M5-P7（S14 审查 E1）：这时被拒的那一项丢掉，其余项按原顺序提交——
-+	// 否则排在它后面的合法范围、选项会随取消一起丢失；面板开着时仍停在被拒项上、等用户改正
++	// 否则排在它后面的合法范围、选项会随取消一起丢失；面板开着时仍停在被拒项上、等用户改正。
++	// 被拒的设置这时也不并入后面的设置（S14 复验）：并入会把非法字段带进后面合法的设置、连带丢掉它
 +	const flush = (final = false) => {
 +		timer.cancel();
 +		const hadPending = pending.length > 0;
@@ -478,7 +480,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
 +			if (!result) {
 +				// M5-P7（M5R-I-05）：提交不了的设置项并入下一项设置（后来的字段为准）后出队，后面不同种类的输入照常提交；
 +				// 没有后续设置时停在这里：待办保留，onFailed 在字段上显示错误并告知平台还有未写进模型的输入
-+				const later = pending[0] === task && isSetting(task) ? pending.findIndex((item, index) => index > 0 && isSetting(item)) : -1;
++				const later = !final && pending[0] === task && isSetting(task) ? pending.findIndex((item, index) => index > 0 && isSetting(item)) : -1;
 +				if (later > 0) {
 +					const [laterId, laterParams, laterOptions, laterCallback] = pending[later];
 +					pending[later] = [laterId, {
@@ -538,7 +540,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2953,6 +3035,7 @@ function DataValidationDetail() {
+@@ -2953,6 +3036,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = useState(0);
@@ -546,7 +548,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  	const dataValidationPanelService = useDependency(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2967,13 +3050,89 @@ function DataValidationDetailInner(props) {
+@@ -2967,13 +3051,89 @@ function DataValidationDetailInner(props) {
  	const [localRule, setLocalRule] = useState(rule);
  	const validator = validatorService.getValidatorItem(localRule.type);
  	const [showError, setShowError] = useState(false);
@@ -637,7 +639,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  	const [isRangeError, setIsRangeError] = useState(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = useState(false);
  	const rangeSelectorInstance = useRef(null);
-@@ -2985,35 +3144,11 @@ function DataValidationDetailInner(props) {
+@@ -2985,35 +3145,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	useEffect(() => {
@@ -676,7 +678,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  	const handleUpdateRuleRanges = useEvent((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3029,14 +3164,14 @@ function DataValidationDetailInner(props) {
+@@ -3029,14 +3165,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -698,7 +700,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3044,8 +3179,9 @@ function DataValidationDetailInner(props) {
+@@ -3044,8 +3180,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(UpdateSheetDataValidationRangeCommand.id, params);
@@ -709,7 +711,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3057,31 +3193,30 @@ function DataValidationDetailInner(props) {
+@@ -3057,31 +3194,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -753,7 +755,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  		await commandService.executeCommand(RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3090,16 +3225,13 @@ function DataValidationDetailInner(props) {
+@@ -3090,16 +3226,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -774,7 +776,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3124,10 +3256,7 @@ function DataValidationDetailInner(props) {
+@@ -3124,10 +3257,7 @@ function DataValidationDetailInner(props) {
  	const options = getRuleOptions(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if (shallowEqual(newOptions, getRuleOptions(localRule))) return;
@@ -786,7 +788,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  		debounceExecute(UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3138,6 +3267,7 @@ function DataValidationDetailInner(props) {
+@@ -3138,6 +3268,7 @@ function DataValidationDetailInner(props) {
  	const shouldHideFormula = operators.length && !localRule.operator;
  	return /* @__PURE__ */ jsxs("div", {
  		"data-u-comp": "data-validation-detail",
@@ -794,7 +796,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  		className: "univer-py-2",
  		children: [
  			/* @__PURE__ */ jsx(FormLayout, {
-@@ -3158,7 +3288,7 @@ function DataValidationDetailInner(props) {
+@@ -3158,7 +3289,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -803,7 +805,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  			}),
  			/* @__PURE__ */ jsx(FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3185,10 +3315,7 @@ function DataValidationDetailInner(props) {
+@@ -3185,10 +3316,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -815,7 +817,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  					}
  				})
  			}) : null,
-@@ -3198,12 +3325,7 @@ function DataValidationDetailInner(props) {
+@@ -3198,12 +3326,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -829,7 +831,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb6
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3213,7 +3335,6 @@ function DataValidationDetailInner(props) {
+@@ -3213,7 +3336,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ jsx(FormLayout, { children: /* @__PURE__ */ jsx(Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({

@@ -618,6 +618,16 @@ describe('M5R-I-05：非法的中间设置被后续合法输入覆盖后，待�
     expect(changes).toEqual([true, false])
   })
 
+  it('清空条件 → 改选项 → 改“忽略空值” → 卸载（没有改正）：选项与另一项设置照常写入，只丢不合法的条件（S14 复验）', () => {
+    // 卸载时被拒的设置直接丢掉，不并入后面的设置——并入会把空条件带进后面合法的设置、连带丢掉它
+    const h = setup('number', true)
+    formula('')
+    h.option()
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', errorStyle: 1, allowBlank: false })
+  })
+
   it('清空条件 → 改范围 → 没等防抖到点就卸载：范围照常写入（S14 审查 E1）', () => {
     const h = setup('number', true)
     formula('')
