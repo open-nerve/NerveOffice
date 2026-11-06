@@ -7,6 +7,7 @@ import sharp from 'sharp'
 import { createDocument, createUser } from '../../support/database.ts'
 import { nameBox, probeSnapshot } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
+import { addFormulaWorkerGate, heldFormulaMessages, holdFormulaWorker, releaseFormulaWorker } from '../../support/formula-worker-gate.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, resourceOf, ribbon, saveAndCapture, saveAndWait, savedContent, selectCell } from '../../support/sheet.ts'
@@ -326,14 +327,21 @@ test('US-M5-04 拒绝输入的自定义规则：回车后立即撤销，页面�
     return JSON.stringify(snapshot)
   })
   await loginThroughApi(page, author)
+  await addFormulaWorkerGate(page)
   await openAndEnterEditing(page, documentId, 'steady')
   for (const value of ['5', '50']) {
     await selectCell(page, 'C3')
     await page.keyboard.type(value)
+    // 自定义公式的校验在公式 Worker 里异步完成。扣住 Worker 的回包，等校验结果到达并被截下之后再撤销：撤销时结果一定还没交给 SDK，
+    // 校验任务确定被取消（原写法靠按键赶在结果之前，结果有时先到、弹出拒绝提示，时过时不过——P7-S14 本机实测）
+    await holdFormulaWorker(page)
     await page.keyboard.press('Enter')
-    // 自定义公式的校验在公式线程里异步完成；回车后立即撤销，正赶在结果之前取消校验任务
+    await expect.poll(async () => heldFormulaMessages(page)).toBeGreaterThan(0)
     await pressUniverShortcut(page, 'Z')
+    // 放出迟到的校验结果：已取消的任务不写入、不弹提示，也不留下未处理的拒绝（下一轮的点击与最后的页面错误核对它）
+    await releaseFormulaWorker(page)
   }
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   await saveAndWait(page)
   expect(pageErrors.list()).toEqual([])
 })
