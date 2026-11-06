@@ -1,5 +1,5 @@
 diff --git a/lib/cjs/index.js b/lib/cjs/index.js
-index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c03738692092 100644
+index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..bb82b92d60e95a55b3041408c73f251f2b396ec3 100644
 --- a/lib/cjs/index.js
 +++ b/lib/cjs/index.js
 @@ -188,7 +188,16 @@ let DataValidationRejectInputController = class DataValidationRejectInputControl
@@ -28,7 +28,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
  						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
  					}
-@@ -2929,10 +2939,76 @@ function DataValidationOptions(props) {
+@@ -2929,10 +2939,82 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -39,7 +39,9 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
 +const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed, onFailed) => {
 +	const pending = [];
 +	const isSetting = (task) => task[0] === _univerjs_sheets_data_validation.UpdateSheetDataValidationSettingCommand.id;
-+	const flush = () => {
++	// final：最后一次提交（详情卸载）。M5-P7（S14 审查 E1）：这时被拒的那一项丢掉，其余项按原顺序提交——
++	// 否则排在它后面的合法范围、选项会随取消一起丢失；面板开着时仍停在被拒项上、等用户改正
++	const flush = (final = false) => {
 +		timer.cancel();
 +		const hadPending = pending.length > 0;
 +		while (pending.length) {
@@ -64,6 +66,10 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
 +						}
 +					}, laterOptions, laterCallback];
 +					pending.shift();
++					continue;
++				}
++				if (final) {
++					if (pending[0] === task) pending.shift();
 +					continue;
 +				}
 +				if (pending.length > 0) onFailed();
@@ -109,7 +115,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2954,6 +3030,7 @@ function DataValidationDetail() {
+@@ -2954,6 +3036,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = (0, react.useState)(0);
@@ -117,7 +123,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  	const dataValidationPanelService = (0, _univerjs_ui.useDependency)(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2968,13 +3045,86 @@ function DataValidationDetailInner(props) {
+@@ -2968,13 +3051,89 @@ function DataValidationDetailInner(props) {
  	const [localRule, setLocalRule] = (0, react.useState)(rule);
  	const validator = validatorService.getValidatorItem(localRule.type);
  	const [showError, setShowError] = (0, react.useState)(false);
@@ -144,6 +150,15 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
 +			setShowError(false);
 +		}
 +	});
++	// M5-P7（S14 审查 E5）：未提交的输入在提交成功、失败与取消的同一个调用里同步告知平台（panel-debounce-watch.ts 的
++	// PANEL_UNCOMMITTED_EVENT）：平台的计时器只比 SDK 的防抖晚 20 毫秒，等重新渲染之后的 effect 再通知可能晚于它。属性仍随状态渲染
++	const reportedUncommitted = (0, react.useRef)(false);
++	const reportUncommitted = (0, _univerjs_ui.useEvent)((next) => {
++		setUncommitted(next);
++		if (reportedUncommitted.current === next) return;
++		reportedUncommitted.current = next;
++		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted: next } }));
++	});
 +	const debounceExecute = (0, react.useMemo)(() => {
 +		const owner = univerInstanceService.getUnit(unitId);
 +		const sheet = owner === null || owner === void 0 ? void 0 : owner.getSheetBySheetId(subUnitId);
@@ -156,11 +171,11 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
 +				setting: { ...(currentSetting.type === draftSetting.type ? currentSetting : draftSetting), ...params.setting }
 +			};
 +		}, () => {
-+			setUncommitted(false);
++			reportUncommitted(false);
 +			syncRule();
 +		}, () => {
 +			setShowError(true);
-+			setUncommitted(true);
++			reportUncommitted(true);
 +		});
 +	}, [commandService, univerInstanceService, dataValidationModel, unitId, subUnitId, ruleId, syncRule]);
 +	(0, react.useEffect)(() => {
@@ -170,7 +185,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
 +		const before = commandService.beforeCommandExecuted((info) => {
 +			if ((info.id === _univerjs_core.UndoCommand.id || info.id === _univerjs_core.RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) {
 +				debounceExecute.cancel();
-+				setUncommitted(false);
++				reportUncommitted(false);
 +			}
 +		});
 +		const removed = dataValidationModel.ruleChange$.subscribe((change) => {
@@ -184,19 +199,13 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
 +			before.dispose();
 +			removed.unsubscribe();
 +			try {
-+				debounceExecute.flush();
++				debounceExecute.flush(true);
 +			} finally {
 +				debounceExecute.cancel();
 +			}
 +		};
 +	}, [commandService, univerInstanceService, dataValidationModel, dataValidationPanelService, debounceExecute, unitId, subUnitId, ruleId]);
-+	// M5-P7（M5R-I-05）：留在待办里的输入告知平台（panel-debounce-watch.ts 的 PANEL_UNCOMMITTED_EVENT）：变化时派发一次，卸载时撤下
-+	const reportedUncommitted = (0, react.useRef)(false);
-+	(0, react.useEffect)(() => {
-+		if (reportedUncommitted.current === uncommitted) return;
-+		reportedUncommitted.current = uncommitted;
-+		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted } }));
-+	}, [uncommitted]);
++	// M5-P7（M5R-I-05）：卸载时撤下仍报告着的未提交（上面的最后一次提交已经同步报告过的，这里不重复）
 +	(0, react.useEffect)(() => () => {
 +		if (!reportedUncommitted.current) return;
 +		reportedUncommitted.current = false;
@@ -205,7 +214,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  	const [isRangeError, setIsRangeError] = (0, react.useState)(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = (0, react.useState)(false);
  	const rangeSelectorInstance = (0, react.useRef)(null);
-@@ -2986,35 +3136,11 @@ function DataValidationDetailInner(props) {
+@@ -2986,35 +3145,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	(0, react.useEffect)(() => {
@@ -244,7 +253,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  	const handleUpdateRuleRanges = (0, _univerjs_ui.useEvent)((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(_univerjs_engine_formula.deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3030,14 +3156,14 @@ function DataValidationDetailInner(props) {
+@@ -3030,14 +3165,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -266,7 +275,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3045,8 +3171,9 @@ function DataValidationDetailInner(props) {
+@@ -3045,8 +3180,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationRangeCommand.id, params);
@@ -277,7 +286,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3058,31 +3185,30 @@ function DataValidationDetailInner(props) {
+@@ -3058,31 +3194,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -321,7 +330,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  		await commandService.executeCommand(_univerjs_sheets_data_validation.RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3091,16 +3217,13 @@ function DataValidationDetailInner(props) {
+@@ -3091,16 +3226,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -342,7 +351,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3125,10 +3248,7 @@ function DataValidationDetailInner(props) {
+@@ -3125,10 +3257,7 @@ function DataValidationDetailInner(props) {
  	const options = (0, _univerjs_data_validation.getRuleOptions)(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if ((0, _univerjs_core.shallowEqual)(newOptions, (0, _univerjs_data_validation.getRuleOptions)(localRule))) return;
@@ -354,7 +363,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  		debounceExecute(_univerjs_sheets_data_validation.UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3139,6 +3259,7 @@ function DataValidationDetailInner(props) {
+@@ -3139,6 +3268,7 @@ function DataValidationDetailInner(props) {
  	const shouldHideFormula = operators.length && !localRule.operator;
  	return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
  		"data-u-comp": "data-validation-detail",
@@ -362,7 +371,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  		className: "univer-py-2",
  		children: [
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
-@@ -3159,7 +3280,7 @@ function DataValidationDetailInner(props) {
+@@ -3159,7 +3289,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -371,7 +380,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  			}),
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3186,10 +3307,7 @@ function DataValidationDetailInner(props) {
+@@ -3186,10 +3316,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -383,7 +392,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  					}
  				})
  			}) : null,
-@@ -3199,12 +3317,7 @@ function DataValidationDetailInner(props) {
+@@ -3199,12 +3326,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -397,7 +406,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3214,7 +3327,6 @@ function DataValidationDetailInner(props) {
+@@ -3214,7 +3336,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.FormLayout, { children: /* @__PURE__ */ (0, react_jsx_runtime.jsx)(_univerjs_design.Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({
@@ -406,7 +415,7 @@ index b83e29f9daeb5c89bdaf4bc4c750270ccc38b218..30e1ebac570335be640de022a049c037
  				}),
  				children: localeService.t("sheets-data-validation-ui.panel.allowBlank")
 diff --git a/lib/es/index.js b/lib/es/index.js
-index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c711320b72 100644
+index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..6314a9a2d7b6bbe7db3c0439b2acbeb61c76fc34 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -1,5 +1,5 @@
@@ -442,7 +451,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  						showEdit: ((_this$_configService$ = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$ === void 0 ? void 0 : _this$_configService$.showEditOnDropdown) ?? true,
  						showSearch: ((_this$_configService$2 = this._configService.getConfig("sheets-data-validation-ui.config")) === null || _this$_configService$2 === void 0 ? void 0 : _this$_configService$2.showSearchOnDropdown) ?? true
  					}
-@@ -2928,10 +2938,76 @@ function DataValidationOptions(props) {
+@@ -2928,10 +2938,82 @@ function DataValidationOptions(props) {
  
  //#endregion
  //#region src/views/components/DataValidationDetail.tsx
@@ -453,7 +462,9 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
 +const debounceExecuteFactory = (commandService, isCurrent, resolveParams, onFlushed, onFailed) => {
 +	const pending = [];
 +	const isSetting = (task) => task[0] === UpdateSheetDataValidationSettingCommand.id;
-+	const flush = () => {
++	// final：最后一次提交（详情卸载）。M5-P7（S14 审查 E1）：这时被拒的那一项丢掉，其余项按原顺序提交——
++	// 否则排在它后面的合法范围、选项会随取消一起丢失；面板开着时仍停在被拒项上、等用户改正
++	const flush = (final = false) => {
 +		timer.cancel();
 +		const hadPending = pending.length > 0;
 +		while (pending.length) {
@@ -478,6 +489,10 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
 +						}
 +					}, laterOptions, laterCallback];
 +					pending.shift();
++					continue;
++				}
++				if (final) {
++					if (pending[0] === task) pending.shift();
 +					continue;
 +				}
 +				if (pending.length > 0) onFailed();
@@ -523,7 +538,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  function getSheetIdByName(univerInstanceService, unitId, name) {
  	var _univerInstanceServic2;
  	if (unitId) {
-@@ -2953,6 +3029,7 @@ function DataValidationDetail() {
+@@ -2953,6 +3035,7 @@ function DataValidationDetail() {
  function DataValidationDetailInner(props) {
  	var _validators$sort;
  	const [key, setKey] = useState(0);
@@ -531,7 +546,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  	const dataValidationPanelService = useDependency(DataValidationPanelService);
  	const { unitId, subUnitId, rule } = props.activeRuleInfo;
  	const ruleId = rule.uid;
-@@ -2967,13 +3044,86 @@ function DataValidationDetailInner(props) {
+@@ -2967,13 +3050,89 @@ function DataValidationDetailInner(props) {
  	const [localRule, setLocalRule] = useState(rule);
  	const validator = validatorService.getValidatorItem(localRule.type);
  	const [showError, setShowError] = useState(false);
@@ -558,6 +573,15 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
 +			setShowError(false);
 +		}
 +	});
++	// M5-P7（S14 审查 E5）：未提交的输入在提交成功、失败与取消的同一个调用里同步告知平台（panel-debounce-watch.ts 的
++	// PANEL_UNCOMMITTED_EVENT）：平台的计时器只比 SDK 的防抖晚 20 毫秒，等重新渲染之后的 effect 再通知可能晚于它。属性仍随状态渲染
++	const reportedUncommitted = useRef(false);
++	const reportUncommitted = useEvent((next) => {
++		setUncommitted(next);
++		if (reportedUncommitted.current === next) return;
++		reportedUncommitted.current = next;
++		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted: next } }));
++	});
 +	const debounceExecute = useMemo(() => {
 +		const owner = univerInstanceService.getUnit(unitId);
 +		const sheet = owner === null || owner === void 0 ? void 0 : owner.getSheetBySheetId(subUnitId);
@@ -570,11 +594,11 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
 +				setting: { ...(currentSetting.type === draftSetting.type ? currentSetting : draftSetting), ...params.setting }
 +			};
 +		}, () => {
-+			setUncommitted(false);
++			reportUncommitted(false);
 +			syncRule();
 +		}, () => {
 +			setShowError(true);
-+			setUncommitted(true);
++			reportUncommitted(true);
 +		});
 +	}, [commandService, univerInstanceService, dataValidationModel, unitId, subUnitId, ruleId, syncRule]);
 +	useEffect(() => {
@@ -584,7 +608,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
 +		const before = commandService.beforeCommandExecuted((info) => {
 +			if ((info.id === UndoCommand.id || info.id === RedoCommand.id) && univerInstanceService.getFocusedUnit()?.getUnitId() === unitId) {
 +				debounceExecute.cancel();
-+				setUncommitted(false);
++				reportUncommitted(false);
 +			}
 +		});
 +		const removed = dataValidationModel.ruleChange$.subscribe((change) => {
@@ -598,19 +622,13 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
 +			before.dispose();
 +			removed.unsubscribe();
 +			try {
-+				debounceExecute.flush();
++				debounceExecute.flush(true);
 +			} finally {
 +				debounceExecute.cancel();
 +			}
 +		};
 +	}, [commandService, univerInstanceService, dataValidationModel, dataValidationPanelService, debounceExecute, unitId, subUnitId, ruleId]);
-+	// M5-P7（M5R-I-05）：留在待办里的输入告知平台（panel-debounce-watch.ts 的 PANEL_UNCOMMITTED_EVENT）：变化时派发一次，卸载时撤下
-+	const reportedUncommitted = useRef(false);
-+	useEffect(() => {
-+		if (reportedUncommitted.current === uncommitted) return;
-+		reportedUncommitted.current = uncommitted;
-+		document.dispatchEvent(new CustomEvent("nerve-panel-uncommitted", { detail: { uncommitted } }));
-+	}, [uncommitted]);
++	// M5-P7（M5R-I-05）：卸载时撤下仍报告着的未提交（上面的最后一次提交已经同步报告过的，这里不重复）
 +	useEffect(() => () => {
 +		if (!reportedUncommitted.current) return;
 +		reportedUncommitted.current = false;
@@ -619,7 +637,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  	const [isRangeError, setIsRangeError] = useState(false);
  	const [isFocusRangeSelector, setIsFocusRangeSelector] = useState(false);
  	const rangeSelectorInstance = useRef(null);
-@@ -2985,35 +3135,11 @@ function DataValidationDetailInner(props) {
+@@ -2985,35 +3144,11 @@ function DataValidationDetailInner(props) {
  		};
  	}, [sheetSelectionService]);
  	useEffect(() => {
@@ -658,7 +676,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  	const handleUpdateRuleRanges = useEvent((rangeText) => {
  		const unitRanges = rangeText.split(",").filter(Boolean).map(deserializeRangeWithSheet).map((unitRange) => {
  			const sheetName = unitRange.sheetName;
-@@ -3029,14 +3155,14 @@ function DataValidationDetailInner(props) {
+@@ -3029,14 +3164,14 @@ function DataValidationDetailInner(props) {
  				sheetId: ""
  			};
  		});
@@ -680,7 +698,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  		const params = {
  			unitId,
  			subUnitId,
-@@ -3044,8 +3170,9 @@ function DataValidationDetailInner(props) {
+@@ -3044,8 +3179,9 @@ function DataValidationDetailInner(props) {
  			ranges
  		};
  		debounceExecute(UpdateSheetDataValidationRangeCommand.id, params);
@@ -691,7 +709,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  	if (!validator) return null;
  	const operators = validator.operators;
  	const operatorNames = validator.operatorNames;
-@@ -3057,31 +3184,30 @@ function DataValidationDetailInner(props) {
+@@ -3057,31 +3193,30 @@ function DataValidationDetailInner(props) {
  		});
  	};
  	const handleOk = () => {
@@ -735,7 +753,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  		await commandService.executeCommand(RemoveSheetDataValidationCommand.id, {
  			ruleId,
  			unitId,
-@@ -3090,16 +3216,13 @@ function DataValidationDetailInner(props) {
+@@ -3090,16 +3225,13 @@ function DataValidationDetailInner(props) {
  		dataValidationPanelService.setActiveRule(null);
  		goBackActiveRuleSheet();
  	};
@@ -756,7 +774,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  		const operators = validator.operators;
  		const rule = dataValidationModel.getRuleById(unitId, subUnitId, ruleId);
  		const newRule = newType === (rule === null || rule === void 0 ? void 0 : rule.type) || newType.includes("list") && (rule === null || rule === void 0 ? void 0 : rule.type.includes("list")) ? {
-@@ -3124,10 +3247,7 @@ function DataValidationDetailInner(props) {
+@@ -3124,10 +3256,7 @@ function DataValidationDetailInner(props) {
  	const options = getRuleOptions(localRule);
  	const handleUpdateRuleOptions = (newOptions) => {
  		if (shallowEqual(newOptions, getRuleOptions(localRule))) return;
@@ -768,7 +786,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  		debounceExecute(UpdateSheetDataValidationOptionsCommand.id, {
  			unitId,
  			subUnitId,
-@@ -3138,6 +3258,7 @@ function DataValidationDetailInner(props) {
+@@ -3138,6 +3267,7 @@ function DataValidationDetailInner(props) {
  	const shouldHideFormula = operators.length && !localRule.operator;
  	return /* @__PURE__ */ jsxs("div", {
  		"data-u-comp": "data-validation-detail",
@@ -776,7 +794,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  		className: "univer-py-2",
  		children: [
  			/* @__PURE__ */ jsx(FormLayout, {
-@@ -3158,7 +3279,7 @@ function DataValidationDetailInner(props) {
+@@ -3158,7 +3288,7 @@ function DataValidationDetailInner(props) {
  						if (!focusing && str && ((_rangeSelectorInstanc4 = rangeSelectorInstance.current) === null || _rangeSelectorInstanc4 === void 0 ? void 0 : _rangeSelectorInstanc4.verify())) handleUpdateRuleRanges(str);
  					},
  					onVerify: (isValid) => setIsRangeError(!isValid)
@@ -785,7 +803,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  			}),
  			/* @__PURE__ */ jsx(FormLayout, {
  				label: localeService.t("sheets-data-validation-ui.panel.type"),
-@@ -3185,10 +3306,7 @@ function DataValidationDetailInner(props) {
+@@ -3185,10 +3315,7 @@ function DataValidationDetailInner(props) {
  						label: operatorNames[i]
  					}))],
  					onChange: (operator) => {
@@ -797,7 +815,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  					}
  				})
  			}) : null,
-@@ -3198,12 +3316,7 @@ function DataValidationDetailInner(props) {
+@@ -3198,12 +3325,7 @@ function DataValidationDetailInner(props) {
  					formula1: localRule.formula1,
  					formula2: localRule.formula2
  				},
@@ -811,7 +829,7 @@ index 7a8c141a85f0d6852236acba1090f332a9a1b5b5..8465f560956b7ac539075fce3a02c2c7
  				showError,
  				validResult: validator.validatorFormula(localRule, unitId, subUnitId),
  				unitId,
-@@ -3213,7 +3326,6 @@ function DataValidationDetailInner(props) {
+@@ -3213,7 +3335,6 @@ function DataValidationDetailInner(props) {
  			/* @__PURE__ */ jsx(FormLayout, { children: /* @__PURE__ */ jsx(Checkbox, {
  				checked: localRule.allowBlank ?? true,
  				onChange: () => handleUpdateRuleSetting({

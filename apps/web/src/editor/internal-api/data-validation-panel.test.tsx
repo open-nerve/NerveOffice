@@ -597,6 +597,49 @@ describe('M5R-I-05：非法的中间设置被后续合法输入覆盖后，待�
     expect(changes.mock.calls.map(([event]) => (event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)).toEqual([true, false])
   })
 
+  it.each([
+    { name: '范围', other: () => range('C3:C4'), expected: { ranges: C3_C4 } },
+    { name: '选项', other: (h: ReturnType<typeof setup>) => h.option(), expected: { errorStyle: 1 } },
+  ])('清空条件 → 改$name → 关面板（没有改正）：$name照常写入，只丢不合法的条件（S14 审查 E1）', async ({ other, expected }) => {
+    const h = setup('number', true)
+    const changes: boolean[] = []
+    const listener = (event: Event) => changes.push((event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, listener)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, listener))
+    formula('')
+    other(h)
+    await h.tick()
+    // 面板开着时被拒的条件留在待办、等用户改正，其后的修改按原顺序排在它后面
+    expect(h.current().formula1).toBe('100')
+    expect(marked()).toBe(true)
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', ...expected })
+    expect(changes).toEqual([true, false])
+  })
+
+  it('清空条件 → 改范围 → 没等防抖到点就卸载：范围照常写入（S14 审查 E1）', () => {
+    const h = setup('number', true)
+    formula('')
+    range('C3:C4')
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', ranges: C3_C4 })
+  })
+
+  it('防抖到点时提交被拒：在同一个计时器回调里就通知平台，不等重新渲染（S14 审查 E5）', () => {
+    setup('number', true)
+    const changes: boolean[] = []
+    const listener = (event: Event) => changes.push((event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, listener)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, listener))
+    formula('')
+    act(() => {
+      vi.advanceTimersByTime(1001)
+      // act 的回调里 React 还没有重新渲染：平台的计时器只比 SDK 的晚 20 毫秒，通知必须在 SDK 的计时器回调里同步发出
+      expect(changes).toEqual([true])
+    })
+  })
+
   it('卸载时仍有提交不了的输入：已提交的范围保留，只丢不合法的那一项，撤下标记并通知平台', async () => {
     const h = setup('number', true)
     const changes = vi.fn()
