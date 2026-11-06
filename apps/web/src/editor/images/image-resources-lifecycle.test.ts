@@ -174,10 +174,57 @@ describe('图片资源的代次与退役', () => {
     h.resources.dispose()
   })
 
-  it('M5R-M-09 暂停期间的地址不合格时同样给占位、不报告失败', async () => {
+  it('M5R-M-09 暂停期间的地址不合格时同样给占位、不报告失败；恢复之后补报一次（S14 审查 E6）', async () => {
     const h = resourcesHarness()
     h.resources.suspend()
     expect(await h.resources.load('https://evil.test/x.png')).toBe(PLACEHOLDER)
+    expect(await h.resources.load('https://evil.test/y.png')).toBe(PLACEHOLDER)
+    expect(h.failed).not.toHaveBeenCalled()
+    // 给了占位，SDK 不会再来读：恢复时补报，否则这张图一直是占位、页面也没有失败提示
+    h.resources.refresh()
+    expect(h.failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: 'AssetInputError' }))
+    h.resources.refresh()
+    expect(h.failed).toHaveBeenCalledTimes(1)
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 暂停之后恢复：已删除、但 SDK 仍持有元素的来源静默重读，撤销删除时不卡在占位（S14 审查 E3）', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    h.decode.mockImplementation(async () => decoded(`blob:https://app.test/${String(h.decode.mock.calls.length)}`))
+    // core 的 ImageCacheMap 长期持有已删除单元格图片的元素，撤销删除时命中即复用
+    const removed = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(OTHER, removed)
+    live = new Set([SOURCE])
+    h.resources.suspend()
+    expect(removed.src).toBe(PLACEHOLDER)
+    h.read.mockClear()
+    h.resources.refresh()
+    await vi.waitFor(() => expect(removed.src).toMatch(/^blob:https:\/\/app\.test\/\d+$/))
+    expect(h.read).toHaveBeenCalledWith(OTHER, expect.any(AbortSignal), expect.any(Function))
+    expect(h.failed).not.toHaveBeenCalled()
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 静默重读失败（删除并保存之后对本人已不可读）不报告，元素保持占位（S14 审查 E3）', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    const removed = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(OTHER, removed)
+    live = new Set([SOURCE])
+    h.resources.suspend()
+    h.read.mockClear()
+    h.read.mockImplementation(async (source) => {
+      if (source === OTHER)
+        throw new AssetReadError(404, undefined)
+      return BYTES
+    })
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledWith(OTHER, expect.any(AbortSignal), expect.any(Function)))
+    await Promise.resolve()
+    expect(removed.src).toBe(PLACEHOLDER)
     expect(h.failed).not.toHaveBeenCalled()
     h.resources.dispose()
   })

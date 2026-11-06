@@ -52,6 +52,8 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
   let generation = new AbortController()
   let active = true
   let disposed = false
+  /** 暂停期间 SDK 要过不合格的地址：给了占位、SDK 不会再来读，恢复时补报一次（S14 审查 E6） */
+  let invalidWhileSuspended = false
   let localFailures = createImageReadFailures()
   const failures = (): ImageReadFailures => options.readFailures?.() ?? localFailures
 
@@ -133,14 +135,17 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     }
   }
 
-  async function load(source: string): Promise<string> {
+  /** quiet：已删除来源的静默重读（见 refresh）：失败不报告、也不记进本轮失败，之后在用时照常读取和报告 */
+  async function load(source: string, quiet = false): Promise<string> {
     if (disposed)
       throw new DOMException('图片实例已结束', 'AbortError')
     // 暂停时显示路径只给本地占位、不读取（M5R-M-09）：抛出取消会让 SDK 不建浮图图元、约每 33 毫秒重试一次。
-    // 来源照常登记，SDK 建图元时交回元素登记，恢复时 refresh 重读；地址不合格的失败留到恢复以后再报告
+    // 来源照常登记，SDK 建图元时交回元素登记，恢复时 refresh 重读；地址不合格的失败记下，恢复时补报
     if (!active) {
       const pending = canonical(source)
-      if (pending !== undefined)
+      if (pending === undefined)
+        invalidWhileSuspended = true
+      else
         entryOf(pending)
       return options.placeholder
     }
@@ -155,12 +160,14 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     if (issuedFailures.has(path))
       return options.placeholder
     const recordFailure = (error: unknown): void => {
-      if (disposed || failures() !== issuedFailures || issuedFailures.has(path))
+      if (quiet || disposed || failures() !== issuedFailures || issuedFailures.has(path))
         return
       issuedFailures.add(path)
       options.failed(error)
     }
-    entry.task ??= readDecoded(path, signal, (error) => {
+    if (entry.task !== undefined)
+      return entry.task
+    const task: Promise<string> = readDecoded(path, signal, (error) => {
       // 只补原请求认证失败的观察；任意取消原因即使形似 ApiError 也不作为新失败。
       if (error instanceof ApiError && error.status === 401
         && (error.code === 'UNAUTHENTICATED' || error.code === 'SESSION_EXPIRED')
@@ -181,10 +188,17 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
         throw signal.reason
       if (failures() !== issuedFailures)
         return options.placeholder
+      if (quiet) {
+        // 静默重读失败：不报告，也不留在条目上——之后在用的读取重新读取、照常报告
+        if (entry.task === task)
+          entry.task = undefined
+        return options.placeholder
+      }
       recordFailure(error)
       return options.placeholder
     })
-    return entry.task
+    entry.task = task
+    return task
   }
 
   return {
@@ -233,21 +247,38 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       generation.abort(new DOMException('图片读取代次已更新', 'AbortError'))
       generation = new AbortController()
       active = true
+      if (invalidWhileSuspended) {
+        invalidWhileSuspended = false
+        options.failed(new AssetInputError('address'))
+      }
       // 只重读文档里仍引用的来源（M5R-M-11）。已删除的保持现状：不重下、不报告与当前画面无关的失败；
-      // 撤销删除时 SDK 缓存里的元素仍显示原来的像素。刷新只发生在同一用户身上（换人一律先暂停、清空）
+      // 撤销删除时 SDK 缓存里的元素仍显示原来的像素。刷新只发生在同一用户身上（换人一律先暂停、清空）。
+      // 例外是暂停清掉了像素、SDK 仍持有元素的已删来源（core 的 ImageCacheMap 命中即复用）：静默重读，否则撤销删除时一直是占位、
+      // 又没有失败可提示（S14 审查 E3）
       const live = options.liveSources?.()
       const selected: [string, Entry][] = []
+      const dormant: string[] = []
       for (const [source, entry] of entries) {
-        if (live === undefined || live.has(source))
+        if (live === undefined || live.has(source)) {
           selected.push([source, entry])
-        else if (entry.decoded === undefined)
+        }
+        else if (entry.decoded === undefined) {
           entry.task = undefined
+          let held = false
+          forEachImage(entry, () => {
+            held = true
+          })
+          if (held)
+            dormant.push(source)
+        }
       }
       clearDecoded(selected.map(([, entry]) => entry))
       for (const [source] of selected) {
         // 普通失败已在 load 里报告；下一次刷新/暂停造成的取消没有用户错误。
         void load(source).catch(() => {})
       }
+      for (const source of dormant)
+        void load(source, true).catch(() => {})
     },
     suspend: () => {
       if (disposed || !active)
