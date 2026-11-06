@@ -40,7 +40,7 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 | 单独清扫 | `pnpm test:cleanup`；只处理本 worktree 已登记资源，不扫描整个 handoffs |
 | 小型机制回归 | `pnpm test:cleanup:check` → `run.py unit`；另有 managed-output、test-databases 的 Vitest 单元回归 |
 
-Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `asset-references-bulk.test.ts`，在组 1 等普通项目（包括 `afterAll`）结束后运行。两个集成项目共享 node/forks、source 解析、数据库及单查询 setup 和原时限；原 70,000 规模、断言与 60 秒整例上限不变。`pnpm test:integration` 同时选择 `integration` 和 `integration-capacity`；`pnpm test:coverage` 仍一次执行所有项目并生成同一份聚合覆盖率，原范围和阈值不变。这只保证本次 Vitest 内的分组次序，不保证整台机器没有其他进程；重型入口仍须串行启动。
+Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `asset-references-bulk.test.ts`，在组 1 等普通项目（包括 `afterAll`）结束后运行。两个集成项目共享 node/forks、source 解析、数据库及单查询 setup 和原时限；原 70,000 规模、断言与 60 秒整例上限不变。`pnpm test:integration` 同时选择 `integration` 和 `integration-capacity`；`pnpm test:coverage` 仍一次执行所有项目并生成同一份聚合覆盖率，原范围和阈值不变。这只保证本次 Vitest 内的分组次序，不保证整台机器没有其他进程；重型入口仍须串行启动。unit-web 里 M5R-I-01 的六条真实 SDK 大范围写入用例（`apps/web/src/editor/internal-api/image-commands.test.ts`）不另设项目，只在 describe 上写明 30 秒整例上限（P7-S15，2026-11-06 需求方批准；CI 覆盖率满载时约比本机慢 8 倍，默认 5 秒没有余量），规模与断言不变。
 
 定向执行容量例须选择新项目：`python3 tools/test-resources/run.py integration -- pnpm exec vitest run --project integration-capacity tests/integration/src/assets/asset-references-bulk.test.ts`（数据库准备沿原入口）。`tools/src/verify/capacity-project.test.ts` 调用实际 Vitest，以两份无数据库小夹具验证正式选择器、组次序、普通 `afterAll` 完成和两组失败的退出码；它不替代真实七万资源链或完整覆盖率验收。有受管报告口时留存小报告，普通 `pnpm test`/推送钩子没有该变量时报告随自建临时根收尾；子进程超时或信号退出时不猜测 worker 已退出，不立即删根，交外层运行器核验。
 
