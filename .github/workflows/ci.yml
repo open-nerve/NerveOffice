@@ -59,9 +59,11 @@ jobs:
           # 取完整历史：迁移门禁拿这次推送之前的提交作基准，确认已合并的迁移没有被改动（ADR-005）
           fetch-depth: 0
 
-      # 只读、限量诊断固定目录；不改变资源阈值或原 verify 退出结果。
+      # 只读、限量诊断固定目录；不改变资源阈值或原 verify 退出结果。三步诊断都 continue-on-error：
+      # 诊断失败（条目超限、超时、跨挂载等）只在该步骤显示告警，不跳过后续步骤、不否决 job 结论（M5R-M-18，D-09）
       - name: 记录安装前磁盘容量
         timeout-minutes: 2
+        continue-on-error: true
         run: python3 -B tools/test-resources/ci_disk_diagnostic.py before-install
 
       # 在下载依赖/浏览器前确认同一受管查询与清理路径可用；不替代删除前核验。
@@ -93,6 +95,7 @@ jobs:
       - name: 记录安装后磁盘容量
         if: always()
         timeout-minutes: 2
+        continue-on-error: true
         run: python3 -B tools/test-resources/ci_disk_diagnostic.py after-install
 
       - name: pnpm verify --ci --scope=no-e2e
@@ -104,6 +107,7 @@ jobs:
       - name: 记录 verify 结束时磁盘容量
         if: always()
         timeout-minutes: 2
+        continue-on-error: true
         run: python3 -B tools/test-resources/ci_disk_diagnostic.py after-verify
 
       - name: 核对本轮资源处置与报告导出

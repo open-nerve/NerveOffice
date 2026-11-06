@@ -116,3 +116,19 @@ test('US-M5-12 正式只读入口离线按选表下载真实 UTF-8 CSV，保护�
   expect({ text: after.text, revision: after.revision }).toEqual({ text: before.text, revision: before.revision })
   expect(writes).toEqual([])
 })
+
+test('US-M5-13 导入带文档流结构字符的 CSV 明确拒绝：不加表、不改原工作簿、页面无异常（审查疑点 Q-12） @test-build', async ({ page, pageErrors }) => {
+  await loginThroughApi(page, await createUser('csv-control-chars'))
+  const id = await createSheetThroughApi(page)
+  await openAndEnterEditing(page, id)
+  const original = await probeSnapshot(page)
+  // \b 是 CUSTOM_BLOCK、\u001F 是自定义范围的开始、\u001A 是表格的开始。修复前照原样进入文字格，进入编辑即抛出
+  // [DocStructure] missing-custom-block-metadata / unbalanced-custom-range / unbalanced-table（修复记录 S7）
+  await previewCsv(page, '"a\bb","x\u001Fy","\u001Az"')
+  await expect(page.getByRole('alert')).toContainText('文件里有表格不支持的控制字符（例如退格符或 Ctrl+Z 文件结束符），请删除后重试。')
+  await expect(page.getByText(/^共 \d+ 行、\d+ 列$/u)).toHaveCount(0)
+  expect(await probeSnapshot(page)).toBe(original)
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  expect(await probeSnapshot(page)).toBe(original)
+  expect(pageErrors.list()).toEqual([])
+})

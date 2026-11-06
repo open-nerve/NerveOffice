@@ -1,3 +1,4 @@
+export { arrayFormulaAnchors } from './array-formula-anchors.ts'
 // Univer 内部 API 的出口（P4 设计 §3.6.9，ADR-010）：适配层用到的、Facade 之外的符号与约定只从 internal-api/ 引用。
 // 出口有两个：这里（主线程与公式 Worker 都引用），与 ui.ts（界面的包里的内部 API，只在主线程引用）。公式 Worker 引用这里，
 // 这里再导出的包都会打进 Worker（Univer 的包没有声明 sideEffects，打包时去不掉），所以这里不从界面的包再导出（单元测试核对，
@@ -16,7 +17,7 @@ export { imageLiteralSource } from './image-formula-source.ts'
 export { injectorOf } from './injector.ts'
 export { disposalSafeLocaleOverride } from './locale-service.ts'
 export { memoryLocalStorageOverride } from './memory-local-storage.ts'
-export { PANEL_DEBOUNCES } from './panel-debounces.ts'
+export { PANEL_DEBOUNCES, PANEL_UNCOMMITTED_ATTRIBUTE, PANEL_UNCOMMITTED_EVENT } from './panel-debounces.ts'
 export { createResourceLoadGuard } from './resource-load-guard.ts'
 export { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, FOCUSING_FX_BAR_EDITOR, IAuthzIoService, IContextService, IPermissionService, IUndoRedoService, LifecycleService } from '@univerjs/core'
 export { getDrawingShapeKeyByDrawingSearch, IDrawingManagerService } from '@univerjs/drawing'

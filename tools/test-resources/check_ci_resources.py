@@ -6,11 +6,12 @@ import math
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 
 import hosted
 import report_safety
-from lifecycle import Store, Run, RUN_ID, atomic_json, locked, open_paths, read_run_manifest
+from lifecycle import Store, Run, RUN_ID, atomic_json, locked, lsof_exit_sample, open_paths, read_run_manifest
 
 
 FIELDS = ('version', 'runId', 'repo', 'kind', 'status', 'exitCode', 'interrupted',
@@ -184,6 +185,14 @@ def main():
         raise ValueError('资源核验入口不接受额外参数')
     result = check(Path(__file__).resolve().parents[2])
     print(json.dumps(result, ensure_ascii=False))
+    # Q-10：资源核验通过之后，按运行器同款固定命令另取几次全量列举，退出码写成注解（经公开接口可读，日志要仓库管理员权限）。
+    # 只是采样：整段有总时限（lsof_exit_sample 默认 20 秒），失败或超时只写注解，不改变本步骤的结论
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        try:
+            sample = json.dumps(lsof_exit_sample(), ensure_ascii=False)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            sample = type(error).__name__
+        print('::notice title=lsof 退出码采样（Q-10）::' + sample)
     return 0
 
 

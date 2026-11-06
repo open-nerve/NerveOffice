@@ -345,6 +345,29 @@ describe('CSV 选表与下载', () => {
     expect(h.controller.view()).toMatchObject({ dialog: { kind: 'closed' }, notice: 'exported' })
   })
 
+  it.each([
+    { name: '空字符', cells: [[{ text: 'a\0b', kind: 'text' as const }]], problem: 'export-character' },
+    { name: '孤立代理字符', cells: [[{ text: '\uD800', kind: 'text' as const }]], problem: 'export-character' },
+  ])('导出遇到$name：给出导出方向的提示，不沿用导入的文案，不回显正文（M5R-M-13）', async ({ cells, problem }) => {
+    const h = csvFixture()
+    h.steps.read = () => cells
+    h.controller.openExport()
+    await h.controller.exportSelected()
+    expect(h.downloads).toEqual([])
+    expect(h.controller.view()).toMatchObject({ problem, dialog: { kind: 'export', stage: 'choosing' } })
+  })
+
+  it('导出读取超出范围时给出导出方向的容量提示（M5R-M-13）', async () => {
+    const h = csvFixture()
+    h.steps.read = () => {
+      throw new CsvOperationError('capacity')
+    }
+    h.controller.openExport()
+    await h.controller.exportSelected()
+    expect(h.downloads).toEqual([])
+    expect(h.controller.view().problem).toBe('export-capacity')
+  })
+
   it('用户选择仅影响导出表，不切换 SDK 活动表；未知表不能下载', async () => {
     const h = csvFixture()
     h.controller.openExport()

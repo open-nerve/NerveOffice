@@ -152,3 +152,145 @@ describe('US-M5-10 独立历史预览生命周期', () => {
     expect(editor.dispose).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('M5R-M-04 后台复核只核验不打断（D-06）', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('资格未变时：复核期间仍是就绪，不暂停图片、不发布加载态，不重下正文、不重建实例', async () => {
+    const w = setup()
+    await w.preview.refresh()
+    const imageChanges = vi.fn()
+    w.images()?.subscribe(imageChanges)
+    const states: string[] = []
+    w.preview.subscribe(() => states.push(w.preview.view().kind))
+    const session = deferred<typeof HISTORY_SESSION>()
+    vi.mocked(w.deps.session).mockImplementationOnce(async () => session.promise)
+    const pending = w.preview.refresh('background')
+    expect(w.preview.view().kind).toBe('ready')
+    expect(w.images()?.current()).toBe(HISTORY_SESSION)
+    session.resolve(HISTORY_SESSION)
+    await pending
+    expect(w.preview.view().kind).toBe('ready')
+    expect(states).not.toContain('loading')
+    expect(imageChanges).not.toHaveBeenCalled()
+    expect(w.deps.content).toHaveBeenCalledTimes(1)
+    expect(w.deps.mount).toHaveBeenCalledTimes(1)
+  })
+
+  it('复核超过约 10 秒仍没有结论才隐藏；结论到了恢复显示', async () => {
+    vi.useFakeTimers()
+    const w = setup()
+    await w.preview.refresh()
+    const session = deferred<typeof HISTORY_SESSION>()
+    vi.mocked(w.deps.session).mockImplementationOnce(async () => session.promise)
+    const pending = w.preview.refresh('background')
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(w.preview.view().kind).toBe('ready')
+    expect(w.images()?.current()).toBe(HISTORY_SESSION)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(w.preview.view().kind).toBe('loading')
+    expect(w.images()?.current()).toBeUndefined()
+    session.resolve(HISTORY_SESSION)
+    await pending
+    expect(w.preview.view().kind).toBe('ready')
+    expect(w.images()?.current()).toBe(HISTORY_SESSION)
+    expect(w.deps.mount).toHaveBeenCalledTimes(1)
+  })
+
+  it('复核卡住时反复触发也不推迟隐藏：截止时刻从第一次还没有结论的核验算起（S14 审查 FE4）', async () => {
+    vi.useFakeTimers()
+    const w = setup()
+    await w.preview.refresh()
+    vi.mocked(w.deps.session).mockImplementation(async () => new Promise<typeof HISTORY_SESSION>(() => {}))
+    void w.preview.refresh('background')
+    await vi.advanceTimersByTimeAsync(6_000)
+    void w.preview.refresh('background')
+    await vi.advanceTimersByTimeAsync(3_999)
+    expect(w.preview.view().kind).toBe('ready')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(w.preview.view().kind).toBe('loading')
+    expect(w.images()?.current()).toBeUndefined()
+  })
+
+  it('无权与临时失败的后台复核：结论到之前不发布加载态，结论不变时提示不重插（S14 审查 FE5）', async () => {
+    const w = setup()
+    vi.mocked(w.deps.detail).mockRejectedValue(new ApiError(403, 'PERMISSION_DENIED', '无权'))
+    await w.preview.refresh()
+    expect(w.preview.view()).toEqual({ kind: 'unavailable' })
+    const states: string[] = []
+    w.preview.subscribe(() => states.push(w.preview.view().kind))
+    await w.preview.refresh('background')
+    expect(states).toEqual(['unavailable'])
+    vi.mocked(w.deps.detail).mockRejectedValue(new NetworkError('断网'))
+    await w.preview.refresh('background')
+    await w.preview.refresh('background')
+    expect(states).toEqual(['unavailable', 'failed', 'failed'])
+    // 资格恢复：创建实例之前才发布加载态（SDK 需要布局尺寸），之后就绪
+    vi.mocked(w.deps.detail).mockResolvedValue(historyItem())
+    await w.preview.refresh('background')
+    expect(states).toEqual(['unavailable', 'failed', 'failed', 'loading', 'ready'])
+    expect(w.deps.mount).toHaveBeenCalledTimes(1)
+  })
+
+  it('后台复核发现撤权：不等 10 秒，立即关图片并销毁实例', async () => {
+    const w = setup()
+    await w.preview.refresh()
+    vi.mocked(w.deps.detail).mockRejectedValueOnce(new ApiError(403, 'PERMISSION_DENIED', '撤权'))
+    await w.preview.refresh('background')
+    expect(w.preview.view()).toEqual({ kind: 'unavailable' })
+    expect(w.images()?.current()).toBeUndefined()
+    expect(w.editor.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('无法预览是终态：后台复核不再读正文或创建实例，只有用户重试才重来', async () => {
+    const editor = { usable: false, dispose: vi.fn(async () => {}) }
+    const w = setup({ mount: vi.fn(async () => editor) })
+    await w.preview.refresh()
+    expect(w.preview.view().kind).toBe('unusable')
+    await w.preview.refresh('background')
+    await w.preview.refresh('background')
+    expect(w.deps.session).toHaveBeenCalledTimes(2)
+    expect(w.deps.content).toHaveBeenCalledTimes(1)
+    expect(w.deps.mount).toHaveBeenCalledTimes(1)
+    await w.preview.refresh('user')
+    expect(w.deps.mount).toHaveBeenCalledTimes(2)
+  })
+
+  it('不受支持是终态：后台复核不再查询', async () => {
+    const w = setup({ detail: vi.fn(async () => historyItem({ compatibility: 'unsupported' })) })
+    await w.preview.refresh()
+    await w.preview.refresh('background')
+    expect(w.preview.view()).toEqual({ kind: 'unsupported' })
+    expect(w.deps.detail).toHaveBeenCalledTimes(1)
+  })
+
+  it('非临时性的失败只在用户点击时重试；网络类临时失败仍自动重试', async () => {
+    const w = setup()
+    vi.mocked(w.deps.mount).mockRejectedValueOnce(new Error('SDK 内部错误'))
+    await w.preview.refresh()
+    expect(w.preview.view().kind).toBe('failed')
+    await w.preview.refresh('background')
+    expect(w.deps.mount).toHaveBeenCalledTimes(1)
+    await w.preview.refresh('user')
+    expect(w.preview.view().kind).toBe('ready')
+    vi.mocked(w.deps.detail).mockRejectedValueOnce(new NetworkError('断网'))
+    await w.preview.refresh('background')
+    expect(w.preview.view().kind).toBe('failed')
+    await w.preview.refresh('background')
+    expect(w.preview.view().kind).toBe('ready')
+  })
+})
+
+describe('M5R-M-05 数据类加载错误与正文无法解码归入无法预览', () => {
+  class DataProblem extends Error {}
+  it.each(['content', 'mount'] as const)('%s 抛出数据类错误：显示无法预览，后台不再重试', async (where) => {
+    const w = setup({ unusable: error => error instanceof DataProblem })
+    vi.mocked(w.deps[where]).mockRejectedValueOnce(new DataProblem('正文坏了'))
+    await w.preview.refresh()
+    expect(w.preview.view()).toEqual({ kind: 'unusable' })
+    await w.preview.refresh('background')
+    expect(w.deps.mount).toHaveBeenCalledTimes(where === 'mount' ? 1 : 0)
+  })
+})

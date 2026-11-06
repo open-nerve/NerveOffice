@@ -1,5 +1,6 @@
 import type { SaveContentQuery } from '@nerve-office/contracts'
 import type { GzipBody } from '../security/index.ts'
+import type { AssetReferenceBases } from './asset-reference-bases.ts'
 import type { DocumentAssetReferences } from './document-asset-references.ts'
 import type { ContentSaver } from './document-content.service.ts'
 import { Buffer } from 'node:buffer'
@@ -55,7 +56,11 @@ function serviceOf(store: FakeStore, minimumBuild?: string): DocumentContentServ
     if (ids.length !== 0)
       throw new Error('图片引用样本必须补齐真实授权夹具')
   } } as unknown as DocumentAssetReferences
-  return new DocumentContentService(transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, clientFormatGate(minimumBuild), inspector, references, checkpoints, logger)
+  // 无图片时不取授权基准；取了就说明样本缺少真实图片夹具（M5-P7 的语义由真实 PG 的 asset-save 覆盖）
+  const bases = { resolve: async () => {
+    throw new Error('图片引用样本必须补齐真实授权夹具')
+  } } as unknown as AssetReferenceBases
+  return new DocumentContentService(transactions, documents, contents, revisions, receipts, ledger, leases, sessions, policy, audit, clientFormatGate(minimumBuild), inspector, references, bases, checkpoints, logger)
 }
 
 /** 存量（P3 之前写的）内容：gzip 的快照，没有内容哈希与资源名 */

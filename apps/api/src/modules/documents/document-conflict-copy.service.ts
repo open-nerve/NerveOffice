@@ -15,9 +15,10 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { SpacesService } from '../spaces/index.ts'
+import { AssetReferenceBases } from './asset-reference-bases.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { creatableSpace, documentAccessIn, DocumentAccessPolicy, requireAccess, requireSpaceContent } from './document-access-policy.ts'
-import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentAssetReferences, unlinkedAssetIds } from './document-asset-references.ts'
 import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
@@ -78,6 +79,7 @@ export class DocumentConflictCopyService {
     private readonly clients: ClientFormatGate,
     private readonly inspector: SnapshotInspector,
     private readonly assetReferences: DocumentAssetReferences,
+    private readonly referenceBases: AssetReferenceBases,
     private readonly checkpoints: DocumentCheckpointService,
     logger: AppLogger,
   ) {
@@ -88,7 +90,7 @@ export class DocumentConflictCopyService {
     const userId = actor.userId
     // "公式待更新"可选、不带等于否：规整成布尔值再算摘要（M3-P3 设计 §3.8）
     const formulasPending = command.formulasPending === true
-    const digest = conflictCopyPayloadDigest(id, command.title, upload.decompressed, formulasPending)
+    const digest = conflictCopyPayloadDigest(id, command.title, upload.decompressed, formulasPending, command.baseRevision)
     // 重放先于其余检查（M3-P3 设计 §3.1 第 2 步）：已经建好的那份副本，之后客户端被判为过旧、校验的规则收紧，原样的重试照样拿到它
     const replayed = await this.replayBeforeChecks(userId, command.requestId, digest)
     if (replayed !== undefined)
@@ -134,7 +136,11 @@ export class DocumentConflictCopyService {
       if (source.document.spaceId !== sourceSpaceId)
         throw new AppError('NOT_FOUND')
       const placement = await this.placementOf(actor, source.document, intoSource, personalSpaceId, transaction)
-      const authorized = heldReferences === undefined ? [] : await this.assetReferences.authorize(heldReferences, transaction)
+      // 比较基准是草稿所基于的源文档版本（页面给出 baseRevision；缺省或已不存在时退回源的当前版本，D-01）：
+      // 已在那一版里却没有登记在源上的标识不升级，接管后删掉预埋地址也不能借副本“洗白”（M5R-I-02）
+      const authorized = heldReferences === undefined
+        ? []
+        : await this.assetReferences.authorize(heldReferences, transaction, await this.referenceBases.resolve(source.document.id, source.document.revision, command.baseRevision, transaction))
 
       // 类型与 unitId 照原文档（锁下确认过是正常状态），信封是这次上传的、核对过的页面的；建不出来是数据不一致，按意外错误处理
       const copy = await this.documents.copyFrom(id, {
@@ -158,6 +164,8 @@ export class DocumentConflictCopyService {
         savedBy: userId,
         contentHash,
         clientBuild: client.clientBuild,
+        // 草稿里存在、却没有为副本登记的标识（基准里未登记的、证明不了来源的）：之后以副本这一版为基准的写入不升级它们
+        unlinkedAssetIds: unlinkedAssetIds(snapshot.assetIds, authorized),
       }, transaction)
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)

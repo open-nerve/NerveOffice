@@ -1,6 +1,6 @@
 import type { AssetGcSettings } from './asset-gc-policy.ts'
 import { describe, expect, it } from 'vitest'
-import { assetGcPolicy, canRetire } from './asset-gc-policy.ts'
+import { assetGcPolicy, blockedByRecovery, canRetire } from './asset-gc-policy.ts'
 
 const DAY = 86_400_000
 const NOW = new Date('2026-12-01T12:34:56.789Z')
@@ -18,6 +18,8 @@ describe('资源回收的备份保护政策', () => {
     const policy = assetGcPolicy(settings, NOW)
     expect(policy.state).toBe(state)
     expect(canRetire(new Date(0), policy)).toBe(false)
+    // 政策未就绪由暂停原因报告，不计入“被水位挡住”
+    expect(blockedByRecovery(new Date(0), policy)).toBe(false)
   })
 
   it('水位不晚于保留期边界才有效；候选恰好等于水位仍保留，早一毫秒才放行', () => {
@@ -35,6 +37,17 @@ describe('资源回收的备份保护政策', () => {
     expect(canRetire(new Date(cutoff.getTime() + 1), policy)).toBe(false)
   })
 
+  it('M5R-M-03 宽限已满、只因不早于水位而保留的才算被水位挡住；宽限未满或可以回收的都不算', () => {
+    const policy = assetGcPolicy({ ...READY, graceDays: 1 }, NOW)
+    const grace = new Date(NOW.getTime() - DAY)
+    expect(blockedByRecovery(BEFORE, policy)).toBe(true)
+    expect(blockedByRecovery(grace, policy)).toBe(true)
+    expect(blockedByRecovery(new Date(grace.getTime() + 1), policy)).toBe(false)
+    expect(canRetire(new Date(grace.getTime() + 1), policy)).toBe(false)
+    expect(blockedByRecovery(new Date(BEFORE.getTime() - 1), policy)).toBe(false)
+    expect(canRetire(new Date(BEFORE.getTime() - 1), policy)).toBe(true)
+  })
+
   it('使用当次数据库时刻，不能沿用调度开始时已通过的备份结论', () => {
     expect(assetGcPolicy(READY, NOW).state).toBe('ready')
     expect(assetGcPolicy(READY, new Date(NOW.getTime() - 1)).state).toBe('recovery-boundary-too-new')
@@ -44,5 +57,6 @@ describe('资源回收的备份保护政策', () => {
   it('非法内部时刻直接拒绝，不能绕过有限日期与完整宽限', () => {
     expect(() => assetGcPolicy(READY, new Date(Number.NaN))).toThrow()
     expect(() => canRetire(new Date(Number.NaN), assetGcPolicy(READY, NOW))).toThrow()
+    expect(() => blockedByRecovery(new Date(Number.NaN), assetGcPolicy(READY, NOW))).toThrow()
   })
 })

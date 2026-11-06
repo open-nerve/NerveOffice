@@ -1,35 +1,14 @@
 import type { Page, Request } from '@playwright/test'
 import { documentPagePath, historyPagePath, historyPreviewPagePath } from '@nerve-office/contracts'
 import { createUser, editLeaseEndReason, editLeaseEpoch, grantDocument, withDatabase, writeVersion } from '../../support/database.ts'
-import { test as base, expect } from '../../support/fixtures.ts'
 import { expectHistoryImage, prepareHistory, replaceHistoryFormat } from '../../support/history.ts'
+import { expect, test } from '../../support/implicit-request-fixture.ts'
 import { readLocalDisk } from '../../support/local-draft.ts'
 import { actAs, loginThroughApi } from '../../support/session.ts'
 import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, openReader, saveAndWait, savedContent, typeInCell, waitForEditorAccess } from '../../support/sheet.ts'
 
-// 同时收集所有页面/Worker 的请求；CSP 与 pageerror 沿标准夹具，不能因历史链接隐式读取外站。
-const test = base.extend<{ externalRequests: void }>({
-  externalRequests: [async ({ context, baseURL }, provide, testInfo) => {
-    if (baseURL === undefined)
-      throw new Error('历史故事缺少被测地址')
-    const origin = new URL(baseURL).origin
-    const external: string[] = []
-    const record = (request: Request) => {
-      const url = new URL(request.url())
-      if (/^https?:$/.test(url.protocol) && url.origin !== origin)
-        external.push(url.href)
-    }
-    context.on('request', record)
-    try {
-      await provide()
-    }
-    finally {
-      context.off('request', record)
-      await testInfo.attach('history-external-requests', { body: JSON.stringify(external), contentType: 'application/json' })
-      expect(external).toEqual([])
-    }
-  }, { auto: true }],
-})
+// 外部请求沿共享的隐式请求夹具：默认上下文与另开的设备（撤权预览在 anotherDevice 里）都观察，能力限制见 external-requests.ts（M5R-M-15）。
+// CSP 与 pageerror 沿标准夹具，不能因历史链接隐式读取外站。
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 async function recoverFromList(page: Page): Promise<string> {

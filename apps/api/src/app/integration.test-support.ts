@@ -67,6 +67,7 @@ export type { Database } from '../modules/database/index.ts'
 // 引用这个常量而不各自写死：改名时两项核对跟着走，不会悄悄什么也不记（M2 Codex 评审复验的建议 2）
 export { APPLICATION_NAME } from '../modules/database/index.ts'
 export { DocumentAssetReferences } from '../modules/documents/document-asset-references.ts'
+export type { AssetReferenceBase } from '../modules/documents/document-asset-references.ts'
 export { DocumentAssetsRepository } from '../modules/documents/document-assets.repository.ts'
 export { DatabaseDocumentCheckpointClock, DocumentCheckpointClock } from '../modules/documents/document-checkpoint-clock.ts'
 export { DocumentCheckpointService } from '../modules/documents/document-checkpoint.service.ts'

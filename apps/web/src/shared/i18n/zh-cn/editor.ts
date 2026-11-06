@@ -125,6 +125,7 @@ export const editorMessages = {
     problems: {
       'offline': '当前无法连接服务，请联网后重试。',
       'identity': '登录状态已变化，本轮 CSV 已取消。若文档已经打开，请在文档中确认导入和保存状态。',
+      'identity-unknown': '登录状态已变化，本轮 CSV 已取消。此前的创建可能已经完成，请返回空间核对文档。',
       'access-denied': '当前没有在此位置创建文档的权限。',
       'create-failed': '暂时无法准备或创建文档，请重试。',
       'result-unknown': '创建结果尚未确认，请重试核对；不会重复创建。',
@@ -158,6 +159,7 @@ export const editorMessages = {
     problems: {
       'encoding': '文件不是有效的 UTF-8 文本，请以 UTF-8 CSV 格式重新导出。',
       'syntax': 'CSV 格式不正确，请检查引号和分隔符后重试。',
+      'control': '文件里有表格不支持的控制字符（例如退格符或 Ctrl+Z 文件结束符），请删除后重试。',
       'empty': '没有可导入或导出的内容。',
       'bytes': 'CSV 超过 5 MiB，请减少内容后重试。',
       'field': '单个字段过长，请缩短后重试。',
@@ -174,13 +176,15 @@ export const editorMessages = {
       'preparation-failed': '未能准备本次 CSV 操作，请检查页面状态后重试。',
       'input-pending': '请先完成当前输入，再重试 CSV 操作。',
       'download-failed': '未能发起下载，请重试。',
+      'export-character': '表格里有 CSV 写不出的字符（例如空字符或不完整的 Unicode 字符），请修改相关单元格后重试。',
+      'export-capacity': '这张工作表的内容范围超出 CSV 的限制，请减少内容后重试。',
     },
   },
   images: {
     failed: '部分图片暂时无法显示',
     retry: '重新加载图片',
     checking: '正在重新加载图片…',
-    operations: { copy: '复制图片', cut: '剪切图片', paste: '粘贴', insert: '插入图片' },
+    operations: { copy: '复制图片', cut: '剪切图片', paste: '粘贴', insert: '插入图片', edit: '操作' },
     reasons: {
       'count': '每次最多选择 10 张图片。',
       'size': '图片不能为空，每张图片最多 5 MiB。',
@@ -197,6 +201,11 @@ export const editorMessages = {
       'timeout': '图片处理超时，请重试。',
       'encoding': '无法处理这张图片，请重新选择。',
       'request': '请求失败，请稍后重试。',
+      'special-paste-image': '选择性粘贴不支持图片，请使用普通粘贴。',
+      'write-source': '涉及的图片不是本平台上传的图片；旧版图片请先按提示确认清理。',
+      'write-limit': '涉及的图片内容过大或层级过深。',
+      'write-structure': '内容格式不受支持。',
+      'write-unsupported': '暂不支持这类图片操作。',
     },
     busy: (operation: string): string => `正在${operation}…`,
     complete: (operation: string): string => `${operation}已完成。`,
@@ -683,6 +692,8 @@ export const editorMessages = {
   unsupported: '这份表格的格式比当前页面新，请刷新页面；刷新后仍然打不开，请联系管理员',
   loadFailed: (reason: string) => `表格加载失败：${reason}`,
   editorFailed: '编辑器加载失败，请刷新页面重试',
+  /** 编辑器创建失败页的历史入口（M5R-M-06） */
+  restoreFromHistory: '从历史恢复',
   // 编辑权绑定这次登录（M3-P1 设计 §3.4.1）：重新登录之后页面自动续上编辑权，修改随即自动保存（M3-P4）；期间别处保存过时，页头另有失效的说明
   signedOut: '登录已过期或已在别处退出。本页的修改还在：请在新的标签页中用同一个账户登录，回到这里之后会自动保存',
   disabledMemory: '本页的修改仍留在内存中，关闭页面会丢失。账户重新启用并登录后才能继续保存。',

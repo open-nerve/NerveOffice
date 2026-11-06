@@ -18,7 +18,7 @@
 // 在等的 settled 中最早的那一刻：早到了（时钟与计时器有出入）或者到点被推后了，就接着等剩下的——不提前说"写进了模型"。
 // 做不到的（盲区）：SDK 改了防抖的时长或写法（E2E 回归先失败）；不经这些 DOM 事件的改动（目前没有）
 
-import { PANEL_DEBOUNCES } from './internal-api/index.ts'
+import { PANEL_DEBOUNCES, PANEL_UNCOMMITTED_EVENT } from './internal-api/index.ts'
 
 /** 到点之后再多等的一点（毫秒）：让 SDK 的计时器先执行（见文件头），不是对 SDK 时长的估计 */
 export const PANEL_SETTLE_MARGIN_MS = 20
@@ -27,7 +27,10 @@ export const PANEL_SETTLE_MARGIN_MS = 20
 const INPUT_EVENTS = ['input', 'change', 'keydown', 'pointerup', 'click', 'paste', 'cut', 'drop', 'compositionend'] as const
 
 export interface PanelDebounceWatch {
-  /** 面板里有按 SDK 的防抖还没写进模型的输入（最后一次输入加上那个面板的时长、含余量，还没到点）；销毁之后为假 */
+  /**
+   * 面板里有还没写进模型的输入：按 SDK 的防抖还没到点（最后一次输入加上那个面板的时长、含余量），或者数据验证详情报告有设置被命令拒绝、
+   * 还留在待办里（M5R-I-05，补丁派发 PANEL_UNCOMMITTED_EVENT，详情卸载时撤下）；销毁之后为假
+   */
   readonly pending: () => boolean
   /** pending 变了：开始（第一次输入）与到点各通知一次，期间再输入不通知；销毁不通知。在计时器与 DOM 事件里同步调用 */
   readonly onChange: (listener: () => void) => () => void
@@ -65,6 +68,8 @@ export function watchPanelDebounces(target: Document, options: PanelDebounceWatc
   const listeners = new Set<() => void>()
   /** SDK 的防抖最晚到点的时刻（含余量）；不在防抖中时为 undefined */
   let due: number | undefined
+  /** 数据验证详情报告的“提交不了、还留在待办里”（M5R-I-05）：用户改正之前不会写进模型，settled 不等它 */
+  let rejected = false
   let waiters: Waiter[] = []
   /** 唯一的计时器：at 是它排定的时刻 */
   let timer: { readonly at: number, readonly cancel: () => void } | undefined
@@ -99,8 +104,9 @@ export function watchPanelDebounces(target: Document, options: PanelDebounceWatc
     const released = waiters.filter(waiter => waiter.until <= at)
     waiters = waiters.filter(waiter => waiter.until > at)
     arm()
-    // 清掉与通知（保存的状态机随之更新）都在放行之前同步做完：放行的后续（捕获、判断有没有没存的）看到的是到点之后的状态
-    if (ended)
+    // 清掉与通知（保存的状态机随之更新）都在放行之前同步做完：放行的后续（捕获、判断有没有没存的）看到的是到点之后的状态；
+    // 防抖到点时详情仍报告有提交不了的输入，就接着算未写进模型，不通知
+    if (ended && !rejected)
       notify()
     for (const waiter of released)
       waiter.release()
@@ -118,7 +124,8 @@ export function watchPanelDebounces(target: Document, options: PanelDebounceWatc
     // 没有面板开着，或者之前的输入定下的到点更晚
     if (next === due)
       return
-    const started = due === undefined
+    // 详情已报告有提交不了的输入时本来就算未写进模型，新的防抖不再通知
+    const started = due === undefined && !rejected
     due = next
     arm()
     if (started)
@@ -127,8 +134,20 @@ export function watchPanelDebounces(target: Document, options: PanelDebounceWatc
   for (const type of INPUT_EVENTS)
     target.addEventListener(type, onInput, { capture: true })
 
+  /** 补丁的约定（internal-api 的 PANEL_UNCOMMITTED_EVENT）：detail.uncommitted 只认布尔值，别的事件不算 */
+  const onUncommitted = (event: Event): void => {
+    const detail: unknown = event instanceof CustomEvent ? event.detail : undefined
+    if (typeof detail !== 'object' || detail === null || !('uncommitted' in detail) || typeof detail.uncommitted !== 'boolean')
+      return
+    const before = due !== undefined || rejected
+    rejected = detail.uncommitted
+    if ((due !== undefined || rejected) !== before)
+      notify()
+  }
+  target.addEventListener(PANEL_UNCOMMITTED_EVENT, onUncommitted)
+
   return {
-    pending: () => due !== undefined,
+    pending: () => due !== undefined || rejected,
     onChange(listener) {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -146,6 +165,8 @@ export function watchPanelDebounces(target: Document, options: PanelDebounceWatc
       disposed = true
       for (const type of INPUT_EVENTS)
         target.removeEventListener(type, onInput, { capture: true })
+      target.removeEventListener(PANEL_UNCOMMITTED_EVENT, onUncommitted)
+      rejected = false
       timer?.cancel()
       timer = undefined
       due = undefined

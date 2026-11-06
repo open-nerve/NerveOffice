@@ -1908,6 +1908,18 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
     expect(surface.dataset.editorState).toBe('failed')
   })
 
+  it.each([true, false])('M5R-M-06 编辑器创建失败：已知能看历史=%s 时失败页带上历史入口', async (canViewHistory) => {
+    const { editorPage } = setup({
+      createEditor: async () => Promise.reject(new Error('SDK 建不起来')),
+      editIntent: false,
+      api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canViewHistory } }) },
+    })
+    await editorPage.load()
+    const { load } = editorPage.view()
+    expect(load).toMatchObject({ kind: 'editor-failed' })
+    expect(load.kind === 'editor-failed' ? load.historyDocumentId : 'not-failed').toBe(canViewHistory ? DOCUMENT_ID : undefined)
+  })
+
   it('只能查看：以只读创建编辑器（M2-P3 设计 §3.5），不建保存状态机，不能保存；?edit=new 也不申请、不去掉标记', async () => {
     const { editorPage, surface, api, createEditor, editLease, editIntent, chrome } = setup({ api: { document: async () => ({ ...DETAIL, permissions: { ...DETAIL.permissions, canEdit: false } }), editStatus: VIEWER_STATUS } })
     await editorPage.load()
@@ -3580,7 +3592,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     await settle()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: true, readable: true })
     await editorPage.saveCopy()
-    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, format: PAGE_CLIENT_FORMAT }, expect.anything())
+    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: PAGE_CLIENT_FORMAT }, expect.anything())
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'copied', document: { id: COPY_ID } } })
   })
 

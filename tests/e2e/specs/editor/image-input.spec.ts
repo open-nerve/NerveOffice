@@ -8,6 +8,7 @@ import { uploadAsset } from '../../support/asset-protocol.ts'
 import { probeFormulasSettled, probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, prepareImageDocument } from '../../support/image-editor.ts'
 import { expect, test } from '../../support/implicit-request-fixture.ts'
+import { startTargetServer } from '../../support/servers.ts'
 import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, reloadAndEnterEditing, saveAndWait, savedContent, sheetCanvas, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
@@ -48,6 +49,12 @@ async function choose(page: Page, kind: 'float' | 'cell', names: readonly string
 
 async function command(page: Page, name: 'undo' | 'redo'): Promise<void> {
   expect(await page.evaluate(async name => window.__nerveEditorProbe?.univerAPI.executeCommand(`univer.command.${name}`), name)).toBe(true)
+}
+
+/** 单元格的样式（直接写在单元格上，或者引用工作簿的样式表）序列化成文本，便于核对其中的一项 */
+function styleText(book: Workbook, a1: string): string {
+  const style = cellOf(book, a1)?.s
+  return JSON.stringify(typeof style === 'string' ? book.styles[style] : style) ?? ''
 }
 
 async function selectFirstImage(page: Page): Promise<void> {
@@ -155,7 +162,9 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
     const { documentId } = await open(page)
     const png = Array.from(await readFile(sample('rgba-text.png')))
     const uploads: string[] = []
+    const paths: string[] = []
     page.on('request', (request) => {
+      paths.push(new URL(request.url()).pathname)
       if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/assets')
         uploads.push(request.url())
     })
@@ -173,6 +182,8 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
     await expect.poll(async () => cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'B12')?.v).toBe('表格正文')
     expect(cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'C12')?.v).toBe(42)
     expect(uploads).toHaveLength(0)
+    // 表格里附带的图片预览只作分类，不加载（M5R-M-16 指出原来从未断言这个哨兵）
+    expect(paths).not.toContain('/image-input-preview-sentinel.png')
 
     await focusCell(page, 'B14')
     await page.evaluate(() => {
@@ -191,6 +202,41 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
     await imageFailureSentinel(page, documentId, '分类之后继续编辑保存')
     expect(sentinels).toHaveLength(0)
     expect(uploads).toHaveLength(0)
+  })
+
+  test('M5R-M-16 粘贴的表格带第三方 @import、外链背景、字体与图片：只取普通样式规则，目标服务零命中、没有 CSP 违规', async ({ page }) => {
+    await open(page)
+    const target = await startTargetServer()
+    try {
+      const html = `<style>@import url("${target.origin}/paste-import.css"); .nerve-x { color: rgb(255, 0, 0); background-image: url("${target.origin}/paste-background.png") } @font-face { font-family: nerve-t; src: url("${target.origin}/paste-font.woff") }</style><table><tr><td class="nerve-x">样式哨兵</td></tr></table><img src="${target.origin}/paste-image.png">`
+      // 没有文件的普通表格快捷键粘贴：原生事件由 SDK 自己处理
+      await focusCell(page, 'B16')
+      await page.evaluate((html) => {
+        const data = new DataTransfer()
+        data.setData('text/html', html)
+        data.setData('text/plain', '样式哨兵')
+        document.activeElement?.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+      }, html)
+      await expect.poll(async () => cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'B16')?.v).toBe('样式哨兵')
+      // 普通格式仍从样式规则取到：单元格样式里的文字颜色
+      expect(styleText(JSON.parse(await probeSnapshot(page)) as Workbook, 'B16')).toMatch(/"cl":\{"rgb":"(?:#ff0000|rgb\(255,\s*0,\s*0\))"/i)
+      // 选择性粘贴：SDK 自己读剪贴板
+      await page.evaluate((html) => {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+          readText: async () => '',
+          read: async () => [new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob(['样式哨兵'], { type: 'text/plain' }) })],
+        } })
+      }, html)
+      await focusCell(page, 'B18', 'right')
+      await page.getByRole('button', { name: '选择性粘贴', exact: true }).hover()
+      await page.getByRole('button', { name: '仅粘贴值', exact: true }).click()
+      await expect.poll(async () => cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'B18')?.v).toBe('样式哨兵')
+      expect(target.requests()).toEqual([])
+      expect(target.hits()).toBe(0)
+    }
+    finally {
+      await target.close()
+    }
   })
 
   test('多文件按序插入；混合不合格批次零上传，拒绝后可以继续编辑保存', async ({ page }) => {
@@ -323,6 +369,40 @@ test.describe('系统图片输入受控浏览器回归', { tag: '@test-build' },
     expect(await clipboard.evaluate(state => ({ reads: state.reads, previews: state.previews }))).toEqual({ reads: 3, previews: 0 })
     await imageFailureSentinel(page, documentId, '右键拒绝重试后仍可保存')
     expect(tableUploads).toBe(0)
+  })
+
+  test('M5R-M-12 选择性粘贴遇到纯图片剪贴板：明确提示改用普通粘贴，只读一次，不上传，也不多压撤销记录', async ({ page }) => {
+    await open(page)
+    const png = Array.from(await readFile(sample('rgba-text.png')))
+    // 先做一次可撤销的编辑：之后第一次撤销撤回的若是它，说明选择性粘贴没有压入撤销记录
+    await setCellValue(page, 'H5', '撤销哨兵')
+    await expect.poll(async () => cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'H5')?.v).toBe('撤销哨兵')
+    const clipboard = await page.evaluateHandle((png) => {
+      const state = { reads: 0 }
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+        readText: async () => '',
+        read: async () => {
+          state.reads += 1
+          return [new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })]
+        },
+      } })
+      return state
+    }, png)
+    const requests: string[] = []
+    page.on('request', request => requests.push(`${request.method()} ${new URL(request.url()).pathname}`))
+    const before = Object.keys(drawingsIn(await probeSnapshot(page)))
+    await focusCell(page, 'J2', 'right')
+    await page.getByRole('button', { name: '选择性粘贴', exact: true }).hover()
+    await page.getByRole('button', { name: '仅粘贴值', exact: true }).click()
+    await expect(page.locator('[data-slot="image-operation"]')).toContainText('选择性粘贴不支持图片，请使用普通粘贴')
+    expect(await clipboard.evaluate(state => state.reads)).toBe(1)
+    expect(Object.keys(drawingsIn(await probeSnapshot(page)))).toEqual(before)
+    await command(page, 'undo')
+    await expect.poll(async () => cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'H5')?.v).toBeUndefined()
+    await command(page, 'redo')
+    await expect.poll(async () => cellOf(JSON.parse(await probeSnapshot(page)) as Workbook, 'H5')?.v).toBe('撤销哨兵')
+    expect(Object.keys(drawingsIn(await probeSnapshot(page)))).toEqual(before)
+    expect(requests).not.toContain('POST /api/assets')
   })
 
   test('单元格图片复制保留原件，剪切可撤销；阅读模式仍可复制但不能剪切或插入', async ({ page }) => {

@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -258,6 +259,237 @@ class LifecycleTests(unittest.TestCase):
         (destination / "crash.log").symlink_to(external)
         self.assertEqual(run.finish("failed")["status"], "cleanup-pending")
         self.assertEqual(external.read_text(), "keep")
+
+    def test_non_portable_root_paths_fail_closed_before_creating_anything(self):
+        # M5R-M-17：lsof 在 C locale 下转义这些字节，句柄核验会恒判“无句柄”；Store 初始化时失败关闭
+        for name in ("nerve-中文-root", "nerve-back\\slash", "nerve-tab\tname"):
+            with self.subTest(name=name):
+                root = self.repo / name
+                root.mkdir()
+                with self.assertRaisesRegex(ValueError, "非 ASCII、控制字符或反斜杠"):
+                    Store(root)
+                self.assertEqual(list(root.iterdir()), [])
+
+    def test_open_paths_treats_non_portable_root_as_incomplete_without_querying(self):
+        # M5R-M-17 补正（S14 审查 T2）：Archives 根与夹具根不经过 Store、直接调用 open_paths；路径无法与 lsof 输出比对时按核对不完整失败关闭
+        import lifecycle
+        root = self.repo / "nerve-中文-archive"
+        root.mkdir()
+        with patch.object(lifecycle.subprocess, "run") as query:
+            with self.assertRaisesRegex(RuntimeError, "无法完整核对打开文件"):
+                lifecycle.open_paths(root)
+        query.assert_not_called()
+
+    def test_archive_prune_on_non_portable_root_keeps_bulk(self):
+        from archive import Archives
+        root = self.repo / "nerve-中文-archives"
+        root.mkdir()
+        store = Archives(root, cap=0)
+        bundle, lease = store.create("sample")
+        try:
+            (bundle / "output").mkdir()
+            (bundle / "output/large").write_bytes(b"x" * 2048)
+            (bundle / "run.json").write_text('{"status":"failed"}')
+            store.seal(bundle)
+        finally:
+            lease.__exit__(None, None, None)
+        with self.assertRaisesRegex(RuntimeError, "无法完整核对打开文件"):
+            store.prune()
+        self.assertTrue((bundle / "output/large").exists())
+
+    def test_scratch_removed_while_running_finishes_interrupted_and_retires_short_root(self):
+        # M5R-M-19：运行期间 scratch 被外部删除，不能停在 running，也不能泄漏短根
+        with ManagedFixture() as fixture:
+            store = Store(fixture.path)
+            run = store.create("unit")
+            root = run.create_short_tmp().parent
+            run.update(status="running")
+            shutil.rmtree(run.scratch)
+            value = run.finish("passed")
+            self.assertEqual((value["status"], value["cleanupStage"], value["stopReason"], value["requestedStatus"]), ("interrupted", "complete", "scratch-missing", "passed"))
+            self.assertFalse(root.exists())
+            self.assertEqual(json.loads((run.directory / "run.json").read_text())["status"], "interrupted")
+
+    def test_sweep_recovers_running_run_whose_runner_died_and_scratch_vanished(self):
+        # M5R-M-19 补正（S14 审查 T3）：运行器本身被强杀、之后 scratch 又被删时，没有人再调用 finish；sweep 要能接手
+        with ManagedFixture() as fixture:
+            store = Store(fixture.path)
+            run = store.create("unit")
+            root = run.create_short_tmp().parent
+            run.update(status="running")
+            shutil.rmtree(run.scratch)
+            run.release()
+            report = store.sweep()
+            self.assertIn(run.id, report["recovered"])
+            value = json.loads((run.directory / "run.json").read_text())
+            self.assertEqual((value["status"], value["cleanupStage"], value["stopReason"]), ("interrupted", "complete", "scratch-missing"))
+            self.assertFalse(root.exists())
+
+    def test_unverifiable_gc_candidate_is_skipped_and_kept_without_failing_finish(self):
+        # M5R-M-20：句柄查询不完整的候选只跳过、原样保留；本轮照常收尾，其余候选照常回收
+        import lifecycle
+        runs = []
+        for _ in range(2):
+            run = self.store.create("e2e")
+            results = run.scratch / "tests/e2e/test-results"
+            results.mkdir(parents=True)
+            (results / "results.json").write_text('{"stats":{}}')
+            self.assertEqual(run.finish("passed")["status"], "passed")
+            runs.append(run)
+        # 两轮都收尾之后才让它们过期，免得第二轮收尾时就把第一轮回收掉
+        for run in runs:
+            data = json.loads((run.directory / "run.json").read_text())
+            data["endedAt"] = time.time() - 365 * 86400
+            lifecycle.atomic_json(run.directory / "run.json", data)
+        blocked = runs[0].directory / "reports"
+        original = lifecycle.open_paths
+
+        def query(root, owner=None, **options):
+            if Path(root) == blocked:
+                raise RuntimeError("无法完整核对打开文件")
+            return original(root, owner=owner, **options)
+
+        current = self.store.create("e2e")
+        results = current.scratch / "tests/e2e/test-results"
+        results.mkdir(parents=True)
+        (results / "results.json").write_text('{"stats":{}}')
+        with patch("lifecycle.open_paths", side_effect=query):
+            value = current.finish("passed")
+        self.assertEqual((value["status"], value["cleanupStage"]), ("passed", "complete"))
+        self.assertTrue(blocked.exists())
+        self.assertFalse((runs[1].directory / "reports").exists())
+        skipped = []
+        with patch("lifecycle.open_paths", side_effect=query):
+            self.store.prune(time.time(), skipped)
+        self.assertEqual(skipped, [{"category": "reports", "runId": runs[0].id, "reason": "verification-failed", "error": "RuntimeError"}])
+        self.assertTrue(blocked.exists())
+
+    def expired_reports(self, count):
+        import lifecycle
+        runs = []
+        for _ in range(count):
+            run = self.store.create("e2e")
+            results = run.scratch / "tests/e2e/test-results"
+            results.mkdir(parents=True)
+            (results / "results.json").write_text('{"stats":{}}')
+            self.assertEqual(run.finish("passed")["status"], "passed")
+            runs.append(run)
+        for run in runs:
+            data = json.loads((run.directory / "run.json").read_text())
+            data["endedAt"] = time.time() - 365 * 86400
+            lifecycle.atomic_json(run.directory / "run.json", data)
+        return runs
+
+    def test_prune_records_removal_failure_separately_from_verification(self):
+        # S14 审查 T4：核验通过、已决定删除之后的删除失败不是“核验失败”；该候选不记 retired，其余候选照常回收
+        import lifecycle
+        runs = self.expired_reports(2)
+        failing = runs[0].directory / "reports"
+        original = lifecycle.remove
+
+        def remove(path, root):
+            if Path(path) == failing:
+                raise OSError("删到一半")
+            return original(path, root)
+
+        skipped = []
+        with patch("lifecycle.remove", side_effect=remove):
+            removed = self.store.prune(time.time(), skipped)
+        self.assertEqual(skipped, [{"category": "reports", "runId": runs[0].id, "reason": "removal-failed", "error": "OSError"}])
+        self.assertEqual([event["runId"] for event in removed], [runs[1].id])
+        self.assertNotIn("retired", json.loads((runs[0].directory / "run.json").read_text()))
+        self.assertTrue(failing.exists())
+        self.assertFalse((runs[1].directory / "reports").exists())
+
+    def test_prune_skips_candidate_whose_size_cannot_be_read(self):
+        # S14 审查 T4：统计大小时出错（例如被并发删除）只跳过这一个候选，不让整个 prune 抛出
+        import lifecycle
+        runs = self.expired_reports(2)
+        unreadable = runs[0].directory / "reports"
+        original = lifecycle.byte_size
+
+        def size(path):
+            if Path(path) == unreadable:
+                raise FileNotFoundError("并发删除")
+            return original(path)
+
+        skipped = []
+        with patch("lifecycle.byte_size", side_effect=size):
+            removed = self.store.prune(time.time(), skipped)
+        self.assertEqual(skipped, [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "FileNotFoundError"}])
+        self.assertEqual([event["runId"] for event in removed], [runs[1].id])
+
+    def test_prune_skips_run_record_missing_fields_and_isolated_prune_absorbs_key_errors(self):
+        # S14 复验：台账缺 startedAt 时收集阶段的 KeyError 只跳过这一个候选；收尾回收连 KeyError 也不外溢
+        import lifecycle
+        runs = self.expired_reports(2)
+        data = json.loads((runs[0].directory / "run.json").read_text())
+        del data["startedAt"]
+        lifecycle.atomic_json(runs[0].directory / "run.json", data)
+        skipped = []
+        removed = self.store.prune(time.time(), skipped)
+        self.assertEqual(skipped, [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "KeyError"}])
+        self.assertEqual([event["runId"] for event in removed], [runs[1].id])
+        with patch.object(Store, "prune", side_effect=KeyError("startedAt")):
+            self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "KeyError"}])
+        # endedAt 不是数字时排序或相减抛 TypeError：隔离边界同样吸收
+        with patch.object(Store, "prune", side_effect=TypeError("endedAt")):
+            self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "TypeError"}])
+
+    def test_isolated_final_prune_never_raises_and_sweep_reports_skipped(self):
+        # S14 审查 T4：运行器结束时的收尾 GC 与 finish 共用隔离入口；sweep 也把跳过的候选报出来
+        runs = self.expired_reports(1)
+        with patch.object(Store, "prune", side_effect=OSError("整个统计出错")):
+            self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "OSError"}])
+        blocked = runs[0].directory / "reports"
+        import lifecycle
+        original = lifecycle.open_paths
+
+        def query(root, owner=None, **options):
+            if Path(root) == blocked:
+                raise RuntimeError("无法完整核对打开文件")
+            return original(root, owner=owner, **options)
+
+        with patch("lifecycle.open_paths", side_effect=query):
+            report = self.store.sweep()
+        self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "verification-failed", "error": "RuntimeError"}])
+        self.assertTrue(blocked.exists())
+
+    def test_lsof_exit_code_one_with_empty_stderr_is_accepted_and_with_warnings_is_incomplete(self):
+        # Q-10：全量列举的现行规则——退出码 1 且 stderr 为空按“没有打开的文件”接受；有警告即判不完整、保留资源
+        import lifecycle
+        # 合法的全量列举至少列出当前进程（校验器拒绝空的进程集）
+        listing = ("p%d\nf0\ntCHR\nn/dev/null\n" % os.getpid()).encode()
+        quiet = subprocess.CompletedProcess(args=[], returncode=1, stdout=listing, stderr=b"")
+        noisy = subprocess.CompletedProcess(args=[], returncode=1, stdout=listing, stderr=b"lsof: WARNING: can't stat()\n")
+        with patch.dict(os.environ, {"NERVE_TEST_LSOF_MODE": "direct"}):
+            with patch("lifecycle.subprocess.run", return_value=quiet):
+                self.assertEqual(lifecycle.open_paths(self.repo), [])
+                self.assertEqual(lifecycle.lsof_exit_sample(2), [{"returncode": 1, "stderrBytes": 0}] * 2)
+            with patch("lifecycle.subprocess.run", return_value=noisy):
+                with self.assertRaisesRegex(RuntimeError, "无法完整核对打开文件"):
+                    lifecycle.open_paths(self.repo)
+                self.assertEqual(lifecycle.lsof_exit_sample(1), [{"returncode": 1, "stderrBytes": len(noisy.stderr)}])
+
+    def test_lsof_exit_sample_has_a_total_budget(self):
+        # S14 审查 T5：采样放在时限 3 分钟的 CI 资源核验步骤里，整段采样有总时限；超时只记下并停止，不让步骤超时
+        import lifecycle
+        timeouts = []
+
+        def slow(command, **options):
+            timeouts.append(options["timeout"])
+            raise subprocess.TimeoutExpired(command, options["timeout"], stderr=b"x")
+
+        with patch("lifecycle.subprocess.run", side_effect=slow):
+            self.assertEqual(lifecycle.lsof_exit_sample(3, budget=5), [{"timedOut": True, "stderrBytes": 1}])
+        self.assertEqual(len(timeouts), 1)
+        self.assertLessEqual(timeouts[0], 5)
+        listing = ("p%d\nf0\ntCHR\nn/dev/null\n" % os.getpid()).encode()
+        clock = iter([0.0, 1.0, 6.0])
+        with patch("lifecycle.time.monotonic", side_effect=lambda: next(clock)), \
+                patch("lifecycle.subprocess.run", return_value=subprocess.CompletedProcess([], 0, listing, b"")) as query:
+            self.assertEqual(lifecycle.lsof_exit_sample(3, budget=5), [{"returncode": 0, "stderrBytes": 0}])
+        self.assertEqual(query.call_count, 1)
 
     def test_atomic_record_never_follows_predictable_temporary_link(self):
         from lifecycle import atomic_json

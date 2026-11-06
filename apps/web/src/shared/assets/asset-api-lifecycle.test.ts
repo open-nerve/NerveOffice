@@ -1,10 +1,12 @@
 import type { SessionResponse } from '@nerve-office/contracts'
 import type { AssetRequestOptions } from './asset-api.ts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApiError, NetworkError, setApiSession, setCsrfToken } from '../api/client.ts'
+import { ApiError, apiFetch, NetworkError, setApiSession, setCsrfToken } from '../api/client.ts'
 import { rememberSessionPermit } from '../api/session-association.ts'
 import { reportRequestSessionFailure } from '../api/session-tracking.ts'
+import { connectionState } from '../lib/connection-state.ts'
 import { deferred } from '../outbox/outbox-lock.test-support.ts'
+import { restoreConnection } from '../testing/connection.test-support.ts'
 import { apiError, installFakeApi, json } from '../testing/fake-api.test-support.ts'
 import { readAsset, uploadAsset } from './asset-api.ts'
 
@@ -170,5 +172,43 @@ describe('图片读取正文仍在同一个时限中', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(outcome).toBe(stopped)
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('M5 整体审查 Q-15：图片读取超时与整页连接状态', () => {
+  afterEach(() => restoreConnection())
+
+  it('读取 30 秒没完成：整页标为“网络没有回应”；之后开始的请求成功即恢复', async () => {
+    vi.useFakeTimers()
+    restoreConnection()
+    const waiting = deferred<Response>()
+    installFakeApi({
+      [`GET ${SOURCE}`]: async () => waiting.promise,
+      'GET /api/health/live': async () => new Response('ok'),
+    })
+    const read = readAsset(SOURCE).catch((error: unknown) => error)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await read).toMatchObject({ name: 'RequestTimeoutError' })
+    expect(connectionState.view()).toMatchObject({ available: false, problem: 'unresponsive' })
+    // 页面的连接复核（browser-connection.ts，约 2 秒后）或任何之后开始的请求成功，都会恢复
+    expect(await apiFetch('/api/health/live', {}, async response => response.text())).toBe('ok')
+    expect(connectionState.view()).toMatchObject({ available: true, problem: undefined })
+    waiting.resolve(new Response(DATA, { headers: { 'content-type': 'image/png', 'x-asset-status': '200' } }))
+  })
+
+  it('读取期间有之后开始的请求先成功：读取超时不改连接状态（编辑中的心跳、保存会盖过它）', async () => {
+    vi.useFakeTimers()
+    restoreConnection()
+    const waiting = deferred<Response>()
+    installFakeApi({
+      [`GET ${SOURCE}`]: async () => waiting.promise,
+      'GET /api/health/live': async () => new Response('ok'),
+    })
+    const read = readAsset(SOURCE).catch((error: unknown) => error)
+    expect(await apiFetch('/api/health/live', {}, async response => response.text())).toBe('ok')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(await read).toMatchObject({ name: 'RequestTimeoutError' })
+    expect(connectionState.view()).toMatchObject({ available: true, problem: undefined })
+    waiting.resolve(new Response(DATA, { headers: { 'content-type': 'image/png', 'x-asset-status': '200' } }))
   })
 })

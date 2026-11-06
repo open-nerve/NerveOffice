@@ -11,8 +11,11 @@ import { createImageInputTasks } from './image-input-task.ts'
 import { runImageTask } from './image-task.ts'
 import { classifyImageUploadFailure } from './image-upload-error.ts'
 
-export type ImageInputOperation = 'copy' | 'cut' | 'paste' | 'insert'
-export type ImageInputReason = ImageUploadFailureReason | 'count' | 'image-without-file' | 'busy' | 'permission' | 'clipboard-permission' | 'selection' | 'unsupported' | 'empty' | 'timeout' | 'encoding' | 'request'
+/** 'edit' 是图片写入策略拒绝的任意编辑命令（格式、撤销、粘贴、结构等），与图片显示失败分开反馈（M5R-M-10）。 */
+export type ImageInputOperation = 'copy' | 'cut' | 'paste' | 'insert' | 'edit'
+/** 写入策略拒绝的有界原因：来源不合规（含未确认清理的旧图）、单个片段过大或过深、结构不受支持、暂不支持的图片操作。 */
+export type ImageWriteRejection = 'write-source' | 'write-limit' | 'write-structure' | 'write-unsupported'
+export type ImageInputReason = ImageUploadFailureReason | 'count' | 'image-without-file' | 'busy' | 'permission' | 'clipboard-permission' | 'selection' | 'unsupported' | 'empty' | 'timeout' | 'encoding' | 'request' | 'special-paste-image' | ImageWriteRejection
 export type ImageInputState
   = | { readonly kind: 'busy' | 'complete' | 'cancelled', readonly operation: ImageInputOperation, readonly completed: number, readonly total: number }
     | { readonly kind: 'failed', readonly operation: ImageInputOperation, readonly reason: ImageInputReason, readonly completed: number, readonly total: number }

@@ -254,3 +254,67 @@ UR-040 由三浏览器最终回归揭示：keepTextSelected 延后无条件全�
 S2 独审 I1 发现：固定 SDK 的数组公式只把锚点写入原 `cellData`，溢出结果由 `SetArrayFormulaDataMutation` 写到 `FormulaDataModel`，随后 `ArrayFormulaCellInterceptorController` 提供显示值。公开 Facade 没有对应的稀疏结果枚举；`getDataRange()` 仍取原始存储范围。因此追加集中登记的 `csvArrayCells`，只按当前文档/表惰性返回实际缓存格的坐标与数值类型，既不导出服务/缓存引用/内容，也不采用可能包括失败溢出意图的 `arrayFormulaRange`。调用方在登记每格之前检查矩形预算，超过即停止。
 
 缓存覆盖原 v/t，保留原 p 的优先级；v/t 同时 nullish 时 SDK 显示 NUMBER/0，已清除的 null 格忽略，实际空字符串公式结果仍占格。文字和数字格式始终交公开显示方法计算，不在平台重写公式或合并范围。七项真实缓存 mutation/Facade 对照覆盖范围、负数/格式/富文本、空结果、三类预算及跨文档/表隔离，另核对只读前后快照字节相同。该组证明显示通道，真实 SEQUENCE 在 Worker/主线程计算后导出的故事仍须 S5 完成，不能用受控缓存冒充计算证据。
+
+## M5-P7 的补充：数据验证面板的被拒待办与拒绝输入的取消（M5R-I-05、M5R-M-08）
+
+M5 整体独立审查发现 UR-033 的有序待办有一个缺口：队首的不合法设置被命令拒绝后，不会被后续合法输入覆盖，整队永远停住；确认时没有可见错误，卸载时全部清空。本次补丁增量（ES/CJS 对称）做了四处修改：
+
+- **入队**：新设置的字段会从更早的未提交设置里去掉，某项设置因此变空就出队。不同种类命令之间的先后不变。
+- **提交**：某项设置被拒、而它后面还有设置时，把它并入下一项设置（后来的字段为准）再出队，后面不同种类的输入照常提交。范围或选项被拒时，仍按原设计阻塞后续项。
+- **失败反馈**：仍提交不了的那一项留在待办里，`onFailed` 打开字段错误。详情根元素挂上平台约定的 `data-nerve-uncommitted`，并在 document 上派发 `nerve-panel-uncommitted`（`detail.uncommitted`）。提交成功、撤销重做取消或卸载时撤下并派发 `false`。平台的 `panel-debounce-watch.ts` 把它算作未写进模型的输入：页头不称已保存，离开提示会拦下；`settled` 不等它。事件在提交成功、失败与取消的同一个调用里同步派发，属性仍随组件状态渲染（S14 审查 E5）：平台的计时器只比 SDK 的防抖晚 20 毫秒，等重新渲染之后的 effect 再派发，负载高时会先报“已写入”、再翻回未保存。
+- **卸载**：卸载时做最后一次提交。被拒的设置照常先并入后面的设置，也许正是后面的输入把它补全（例如先填下限、后填上限）。仍提交不了时，把条件字段（类型、运算符、两个条件值）作为一组整体丢掉，只带独立的字段（“忽略空值”）再试一次；还不行就丢掉整项。条件字段互相依赖，只能整组提交或整组丢掉：拆开再与模型值拼接，会得出用户从没设过的条件（例如原规则“等于 100”，清空条件值后改运算符为“大于”，会被提交成“大于 100”）。非法的条件因此不提交，与原 SDK 对非法设置的处理一致；独立字段与排在后面的范围、选项照常提交，已提交的不受影响。用户切换了类型、草稿还没生效时，再试以类型草稿为底，提交的是最后一次输入之前用户看到过的草稿状态；草稿本身不成立就整项丢掉，原规则不变。S14 审查 E1 与三轮复验发现过三种错误：最初的实现在“清空条件 → 改范围、选项或另一项设置 → 关面板”这类顺序下，让后面合法的修改随取消一起丢失，并撤下标记、让页头可能显示已保存；中间一版卸载时不并入，让只有合并后才成立的设置提交不完整；再一版按输入先后逐段退回，拼出了用户没设过的条件。面板开着时仍停在被拒项上，等用户改正。
+
+**M5R-M-08**：拒绝输入的写入拦截器在校验任务被取消时（撤销、规则变更或实例销毁），按“无结论”处理：返回 `false`，这次输入不写入、不弹提示，也不留下未处理的拒绝。取消错误来自 sheets-data-validation 补丁中未导出的类，按 `name === 'DataValidationCancelledError'` 识别；真实错误照常抛出。
+
+两个约定名称登记在 `registry.ts`（`PANEL_UNCOMMITTED_ATTRIBUTE`、`PANEL_UNCOMMITTED_EVENT`）。补丁摘要更新于 `patches/univer-data-validation-ui.json`。回归见 `data-validation-panel.test.tsx`、`data-validation-reject-input.test.ts`、`panel-debounce-watch.test.ts` 与 E2E。UR-033 仍未发送上游，移除条件不变。
+
+## M5-P7 的补充：选择性粘贴遇到纯图片剪贴板（M5R-M-12，D-08a）
+
+普通粘贴与快捷键粘贴由平台的图片输入接管；选择性粘贴（仅值、格式、列宽、边框以外、公式）交给 SDK 自己读剪贴板。剪贴板只有图片时，sheets-ui 走 `_pasteFiles`，sheets-drawing-ui 的文件钩子不看粘贴类型，把文件包成带 `files` 的 `insert-float-image` 放进重做记录。这条命令已由平台的插图处理器接管，执行即上传一次。`_executePaste` 又以 `every(executeCommand(...))` 判断成功（Promise 恒为真值），无论命令成败都压入一条撤销记录、清空重做栈；重做时再上传一次，`File` 也被撤销栈长期持有。
+
+只在平台的插图处理器或入口守卫里拒绝，挡得住上传，挡不住那条撤销记录。平台先自己读一次剪贴板再交给 SDK，又要读两次，Safari 每次读取都需要用户手势。因此在 sheets-ui 的 `SheetClipboardService._pasteFiles` 加最小补丁（ES/CJS 对称）：
+
+- 粘贴类型不是 `DEFAULT_PASTE` 时不执行粘贴，返回 `false`，不进 `_executePaste`；
+- 依次调用各钩子新增的可选方法 `onPasteFilesRejected({ pasteType })`，声明加在 `ISheetClipboardHook`；
+- 普通粘贴的路径不变。
+
+平台在安装图片命令接管时注册一个剪贴板钩子（`nerve-image-special-paste`），收到通知即经操作状态通道提示“选择性粘贴不支持图片，请使用普通粘贴”，随接管一起撤下。`registry.ts` 为图片输入补登 `ISheetClipboardService`。补丁摘要（含新增声明文件的原始与安装摘要）更新于 `patches/univer-sheet-name-selection.json`。
+
+回归：
+
+- `special-paste-images.test.ts` 直接调用已安装 sheets-ui 的 `_pasteFiles`：五种选择性粘贴都不执行、只通知钩子，普通粘贴照常；
+- `image-input.test.ts` 核对钩子注册、提示与撤下；
+- E2E `image-input.spec.ts` 用受控剪贴板经真实右键菜单触发：只读一次剪贴板，没有上传；撤销、重做不再上传，浮图数量不变。
+
+移除条件：上游在选择性粘贴时不再把纯图片转为插图命令，`_executePaste` 不再为没有生效的修改压入撤销记录，并通过上述回归。
+
+## M5-P7 的补充：粘贴样式接入页面之前去掉外部资源（M5R-M-16，D-08i）
+
+sheets-ui 的 `HtmlToUSMService.convert` 要取粘贴 HTML 里第一个 `<style>` 的 `style.sheet.cssRules`，为此把它从惰性文档移进一个挂在 `document.body` 上的 shadow root。样式一旦接进真实页面，`@import` 立即加载，只有 CSP 的 `style-src` 拦着。
+
+M5-P7 在真实 Chromium 中复现：无文件的普通表格快捷键粘贴与选择性粘贴各触发一条 `style-src-elem` 违规，外部请求记录里是第三方的 `@import` 地址；背景、字体与图片都没有被请求。
+
+平台的图片输入只在菜单粘贴、带文件的快捷键粘贴时经手 HTML，另两条路径由 SDK 自己读剪贴板。所以清理放在这个唯一的接入点（ES/CJS 对称）：
+
+- 接入之前先用不接入任何文档的可构造样式表（`new CSSStyleSheet()` 加 `replaceSync`）解析：`@import` 不加载，规则与值规范化，CSS 转义写法还原；
+- 只留普通样式规则（`CSSStyleRule`），去掉值里带资源函数（`url()`、`image-set()`、`src()`、`cross-fade()`、`element()` 等）的声明；
+- `@import`、`@font-face`、`@media` 等其余规则不留；解析失败时不留任何样式，不把原文接进页面；
+- `mso-number-format` 仍在清理之前从原文读取，SDK 取样式规则的方式不变。
+
+回归：
+
+- E2E `image-input.spec.ts` 用第三方目标服务的样本走上述两条路径，断言单元格贴进、文字颜色保留、目标服务零命中、零外部请求与零 CSP 违规；修复前同一用例失败（两条 `style-src-elem` 违规）；
+- 同文件旧用例补上从未断言的预览哨兵。
+
+补丁摘要更新于 `patches/univer-sheet-name-selection.json`。移除条件：上游在接入页面之前清理粘贴样式，或者不再把它接入真实文档，并通过上述回归。
+
+## M5-P7 的补充：捕获正文时去掉多格数组锚点的缓存值（M5R-I-07，D-04）
+
+上文 P5 `csvArrayCells` 一节已说明：固定 SDK 的数组公式只把锚点写进 `cellData`，溢出结果由 `SetArrayFormulaDataMutation` 写进 `FormulaDataModel`，不进正文。正文里留着锚点的缓存值 `v` 时，常规重开的 WHEN_EMPTY 初次计算认为锚点已有结果而跳过，溢出区一直为空。主线程模式因 Worker 启动失败的回退本身强制全量重算，所以只在 Worker 模式复现；P7 的 Chromium 用例修复前在 Worker 模式失败（阅读态导出只剩锚点），修复后两种模式通过。
+
+- 新增登记的 `arrayFormulaAnchors`（internal-api，`registry.ts` 已登记），从 `FormulaDataModel` 的数组范围表（`getArrayFormulaRange`）列出范围多于一格的锚点；1×1 结果与普通公式不在其中。与上文 P5 的 `csvArrayCells` 不同，这里有意使用范围表：它也含溢出失败（`#SPILL!`）的意图范围，导出不能把意图当成实际结果，所以 `csvArrayCells` 不用它；而捕获时多去掉几个锚点的缓存值，只是重开时多重算几格、结果仍正确，少去掉才会留下缺失的溢出，所以按意图范围取全集（S14 审查 E7 补记）。
+- `snapshot-capture-form.ts` 捕获正文时去掉这些锚点的 `v`/`t`，其余字段原样保留，不改模型；每张表的 `cellData` 与每一行最多复制一次（S14 审查 E4：最初逐个锚点复制整张表，整列数组公式时是平方级，十万个锚点约 6 秒，每次自动保存都在主线程上）。`sheet-editor.ts` 的 `capture()` 与测试构建探针的 `snapshot()` 用同一函数。
+- 正文格式与档案版本不变：“有公式、没有缓存值”本来就是合法正文。重开时阅读、编辑、Worker 与主线程都只重算这些锚点。
+- D-04 (c) 的 CSV 兜底由既有的 `formula-pending` 门禁承担：修复后，数组结果不完整只会表现为锚点尚未算出、公式未收齐。按函数名或区域引用猜测会误拒 `SUM(A1:A3)` 一类普通公式的导出，不采用（理由见 P7-S8 计划 §3）。
+
+剩余：P7 之前保存、之后从未在会话中重新计算过的正文仍带锚点缓存值。M5 尚未发布，这类正文只存在于开发库与测试样本，见 P7 交接单。移除条件：上游重开时不再因锚点缓存值跳过数组计算，或把溢出结果纳入快照，并通过上述回归。

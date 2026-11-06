@@ -2,6 +2,7 @@ import type { AssetBytes } from '../../shared/assets/asset-api.ts'
 import type { DecodedImage } from './decode-image.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../shared/api/api-errors.ts'
+import { AssetReadError } from '../../shared/assets/asset-api.ts'
 import { createImageReadFailures } from '../../shared/lib/session-image-access.ts'
 import { deferred } from '../async-tools.ts'
 import { BYTES, decoded, OTHER, PLACEHOLDER, resourcesHarness, SOURCE } from './image-resources.test-support.ts'
@@ -145,16 +146,194 @@ describe('图片资源的代次与退役', () => {
     h.resources.dispose()
   })
 
-  it('暂停时 load/download 不发请求，恢复从新一代开始', async () => {
+  it('暂停时 load/download 不发请求，恢复从新一代开始；显示路径给本地占位（M5R-M-09），下载仍拒绝', async () => {
     const h = resourcesHarness()
     await h.resources.load(SOURCE)
     h.resources.suspend()
-    await expect(h.resources.load(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
+    await expect(h.resources.load(SOURCE)).resolves.toBe(PLACEHOLDER)
     await expect(h.resources.download(SOURCE)).rejects.toMatchObject({ name: 'AbortError' })
     expect(h.read).toHaveBeenCalledTimes(1)
+    expect(h.failed).not.toHaveBeenCalled()
     h.resources.refresh()
     await h.resources.load(SOURCE)
     expect(h.read).toHaveBeenCalledTimes(2)
+    h.resources.dispose()
+  })
+
+  it('M5R-M-09 暂停期间才出现的来源：给占位并登记元素，不读取；恢复后重读并换上原图', async () => {
+    const h = resourcesHarness()
+    h.resources.suspend()
+    expect(await h.resources.load(OTHER)).toBe(PLACEHOLDER)
+    const image = document.createElement('img')
+    h.resources.track(OTHER, image)
+    expect(image.src).toBe(PLACEHOLDER)
+    expect(h.read).not.toHaveBeenCalled()
+    h.resources.refresh()
+    await vi.waitFor(() => expect(image.src).toBe('blob:https://app.test/first'))
+    expect(h.read).toHaveBeenCalledExactlyOnceWith(OTHER, expect.any(AbortSignal), expect.any(Function))
+    h.resources.dispose()
+  })
+
+  it('M5R-M-09 暂停期间的地址不合格时同样给占位、不报告失败；恢复之后补报一次（S14 审查 E6）', async () => {
+    const h = resourcesHarness()
+    h.resources.suspend()
+    expect(await h.resources.load('https://evil.test/x.png')).toBe(PLACEHOLDER)
+    expect(await h.resources.load('https://evil.test/y.png')).toBe(PLACEHOLDER)
+    expect(h.failed).not.toHaveBeenCalled()
+    // 给了占位，SDK 不会再来读：恢复时补报，否则这张图一直是占位、页面也没有失败提示
+    h.resources.refresh()
+    expect(h.failed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ name: 'AssetInputError' }))
+    h.resources.refresh()
+    expect(h.failed).toHaveBeenCalledTimes(1)
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 暂停之后恢复：已删除、但 SDK 仍持有元素的来源静默重读，撤销删除时不卡在占位（S14 审查 E3）', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    h.decode.mockImplementation(async () => decoded(`blob:https://app.test/${String(h.decode.mock.calls.length)}`))
+    // core 的 ImageCacheMap 长期持有已删除单元格图片的元素，撤销删除时命中即复用
+    const removed = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(OTHER, removed)
+    live = new Set([SOURCE])
+    h.resources.suspend()
+    expect(removed.src).toBe(PLACEHOLDER)
+    h.read.mockClear()
+    h.resources.refresh()
+    await vi.waitFor(() => expect(removed.src).toMatch(/^blob:https:\/\/app\.test\/\d+$/))
+    expect(h.read).toHaveBeenCalledWith(OTHER, expect.any(AbortSignal), expect.any(Function))
+    expect(h.failed).not.toHaveBeenCalled()
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 静默重读失败（删除并保存之后对本人已不可读）不报告，元素保持占位（S14 审查 E3）', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    const removed = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(OTHER, removed)
+    live = new Set([SOURCE])
+    h.resources.suspend()
+    h.read.mockClear()
+    h.read.mockImplementation(async (source) => {
+      if (source === OTHER)
+        throw new AssetReadError(404, undefined)
+      return BYTES
+    })
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledWith(OTHER, expect.any(AbortSignal), expect.any(Function)))
+    await Promise.resolve()
+    expect(removed.src).toBe(PLACEHOLDER)
+    expect(h.failed).not.toHaveBeenCalled()
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 刷新只重读文档里仍引用的来源；已删除的保持现状，不请求、不报告失败', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    h.decode.mockImplementation(async () => decoded(`blob:https://app.test/${String(h.decode.mock.calls.length)}`))
+    const kept = document.createElement('img')
+    const removed = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(SOURCE, kept)
+    h.resources.track(OTHER, removed)
+    const removedUrl = removed.src
+    expect(h.read).toHaveBeenCalledTimes(2)
+    // 删除并保存之后，这张图对本人已不可读：重读会 404
+    h.read.mockImplementation(async (source) => {
+      if (source === OTHER)
+        throw new AssetReadError(404, undefined)
+      return BYTES
+    })
+    live = new Set([SOURCE])
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledTimes(3))
+    await vi.waitFor(() => expect(kept.src).toBe('blob:https://app.test/3'))
+    expect(h.read).toHaveBeenLastCalledWith(SOURCE, expect.any(AbortSignal), expect.any(Function))
+    expect(removed.src).toBe(removedUrl)
+    expect(h.failed).not.toHaveBeenCalled()
+    // 撤销删除之后，再次刷新时照常重读
+    live = new Set([SOURCE, OTHER])
+    h.read.mockResolvedValue(BYTES)
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledTimes(5))
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 静默重读只补暂停清掉的像素、只补一次：失败之后再刷新不重下，从没显示过的已删来源也不重下（S14 复验）', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    const removed = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(OTHER, removed)
+    live = new Set([SOURCE])
+    h.resources.suspend()
+    h.read.mockClear()
+    h.read.mockImplementation(async (source) => {
+      if (source === OTHER)
+        throw new AssetReadError(404, undefined)
+      return BYTES
+    })
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledTimes(2))
+    // 等这一轮的读取落定（替身都是立即完成的 Promise，一个宏任务足够）：还在进行中就刷新，会被新一代取消、按设计留到下次再补
+    await new Promise(resolve => setTimeout(resolve, 0))
+    // 联网恢复、会话复核、用户重试都会刷新：已经补过一次（失败）的已删来源不再重下
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledTimes(3))
+    await Promise.resolve()
+    expect(h.read.mock.calls.filter(([source]) => source === OTHER)).toHaveLength(1)
+    expect(h.failed).not.toHaveBeenCalled()
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 从没显示过的已删来源（第一次读取就失败）：刷新不重下（S14 复验）', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    h.read.mockImplementation(async (source) => {
+      if (source === OTHER)
+        throw new AssetReadError(404, undefined)
+      return BYTES
+    })
+    const failedImage = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(OTHER, failedImage)
+    live = new Set([SOURCE])
+    h.read.mockClear()
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledTimes(1))
+    await Promise.resolve()
+    expect(h.read).toHaveBeenCalledExactlyOnceWith(SOURCE, expect.any(AbortSignal), expect.any(Function))
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 静默重读进行中、在用的读取加入：失败照常报告（S14 复验）', async () => {
+    let live = new Set([SOURCE, OTHER])
+    const h = resourcesHarness({ liveSources: () => live })
+    const removed = document.createElement('img')
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.track(OTHER, removed)
+    live = new Set([SOURCE])
+    h.resources.suspend()
+    const pending = deferred<AssetBytes>()
+    h.read.mockImplementation(async source => source === OTHER ? pending.promise : BYTES)
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledWith(OTHER, expect.any(AbortSignal), expect.any(Function)))
+    // 撤销删除：这张图又在用了，SDK 来读
+    live = new Set([SOURCE, OTHER])
+    const joined = h.resources.load(OTHER)
+    pending.reject(new AssetReadError(404, undefined))
+    await expect(joined).resolves.toBe(PLACEHOLDER)
+    expect(h.failed).toHaveBeenCalledOnce()
+    h.resources.dispose()
+  })
+
+  it('M5R-M-11 还取不到文档时（liveSources 返回 undefined）照旧重读全部来源', async () => {
+    const h = resourcesHarness({ liveSources: () => undefined })
+    await Promise.all([h.resources.load(SOURCE), h.resources.load(OTHER)])
+    h.resources.refresh()
+    await vi.waitFor(() => expect(h.read).toHaveBeenCalledTimes(4))
     h.resources.dispose()
   })
 

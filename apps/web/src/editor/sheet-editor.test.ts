@@ -449,6 +449,28 @@ describe('链接的改写（M3-P3 设计 §3.6，DEF-021）', () => {
   })
 })
 
+describe('图片写入策略的拒绝走操作状态通道（M5R-M-10）', () => {
+  it('rejected 变成“操作未完成”的编辑失败状态，不经图片显示失败通道；failed 仍报图片失败', async () => {
+    const facade = steppingFacade([], 'unit-m10')
+    vi.mocked(sheetPluginEntries).mockReturnValue([])
+    const onImageFailure = vi.fn()
+    const onImageOperation = vi.fn()
+    const creating = createSheetEditor({ container: document.createElement('div'), snapshot: sheetSnapshotFor('unit-m10'), access: 'edit', onImageFailure, onImageOperation })
+    const channels = vi.mocked(installImagePolicy).mock.calls.at(-1)?.[2]
+    expect(channels).toBeDefined()
+    channels!.rejected('write-limit')
+    expect(onImageOperation).toHaveBeenCalledExactlyOnceWith({ kind: 'failed', operation: 'edit', reason: 'write-limit', completed: 0, total: 0 })
+    expect(onImageFailure).not.toHaveBeenCalled()
+    const failure = new Error('图片读取失败')
+    channels!.failed(failure)
+    expect(onImageFailure).toHaveBeenCalledExactlyOnceWith(failure)
+    expect(onImageOperation).toHaveBeenCalledOnce()
+    await reachReady(facade)
+    const editor = await creating
+    await editor.dispose()
+  })
+})
+
 /** 走到就绪：推进生命周期、Worker 回报装好了 IMAGE() 的限制 */
 async function reachReady(facade: Pick<ReturnType<typeof steppingFacade>, 'reach'>): Promise<void> {
   facade.reach(LifecycleStages.Ready)

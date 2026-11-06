@@ -7,7 +7,17 @@ export const CSV_LIMITS = {
   cells: 100_000,
 } as const
 
-export type CsvErrorReason = 'encoding' | 'syntax' | 'empty' | 'bytes' | 'field' | 'rows' | 'columns' | 'cells' | 'cancelled'
+export type CsvErrorReason = 'encoding' | 'syntax' | 'control' | 'empty' | 'bytes' | 'field' | 'rows' | 'columns' | 'cells' | 'cancelled'
+
+/**
+ * 表格单元格的文字在 SDK 里会按文档流编辑：这些字符是文档流的结构标记（core 的 DataStreamTreeTokenType：CUSTOM_BLOCK 0x08、分栏 0x0B、
+ * 分页 0x0C、表格/列/块 0x0E–0x15 与 0x1A–0x1D、自定义范围 0x1E–0x1F）。CSV 导入照原样放进文字格，进入编辑时 SDK 的文档结构校验会抛出
+ * 未接住的异常（审查疑点 Q-12 的实测），所以导入时拒绝，与空字符同样处理；制表符与换行是正常文字，其他控制字符没有结构含义，照常保留
+ */
+export function isDocumentStructureCharacter(char: string): boolean {
+  const code = char.charCodeAt(0)
+  return code === 0x08 || code === 0x0B || code === 0x0C || (code >= 0x0E && code <= 0x15) || (code >= 0x1A && code <= 0x1F)
+}
 
 export class CsvError extends Error {
   override readonly name = 'CsvError'

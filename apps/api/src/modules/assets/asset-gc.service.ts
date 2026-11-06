@@ -6,7 +6,7 @@ import { AuditService } from '../audit/index.ts'
 import { APP_CONFIG } from '../config/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AssetGcClock } from './asset-gc-clock.ts'
-import { assetGcPolicy, canRetire } from './asset-gc-policy.ts'
+import { assetGcPolicy, blockedByRecovery, canRetire } from './asset-gc-policy.ts'
 import { AssetGcRepository } from './asset-gc.repository.ts'
 
 /** Assets 只消费保留判定端口，不依赖文档域或将授权条件误当成保留条件。 */
@@ -35,7 +35,7 @@ export class AssetGcService {
       const rows = await this.repository.lockAssets(page, tx)
       const last = rows.at(-1)
       if (last === undefined)
-        return { scanned: 0, marked: 0, reset: 0, removed: 0, policy: assetGcPolicy(this.config.jobs.assetGc, await this.clock.now(tx)).state }
+        return { scanned: 0, marked: 0, reset: 0, removed: 0, blocked: 0, policy: assetGcPolicy(this.config.jobs.assetGc, await this.clock.now(tx)).state }
       const ids = rows.map(row => row.id)
       const retained = await probe.retained(ids, tx)
       const active = await this.repository.activeAssets(ids, tx)
@@ -46,6 +46,7 @@ export class AssetGcService {
       const marked: string[] = []
       const reset: string[] = []
       const removed: string[] = []
+      let blocked = 0
       for (const row of rows) {
         if (retained.has(row.id) || recent.has(row.id)) {
           if (row.unreferencedAt !== null)
@@ -57,6 +58,9 @@ export class AssetGcService {
         else if (canRetire(row.unreferencedAt, policy)) {
           removed.push(row.id)
         }
+        else if (blockedByRecovery(row.unreferencedAt, policy)) {
+          blocked++
+        }
       }
       await this.repository.updateCandidates(marked, reset, at, tx)
       await this.repository.consumeActivity(ids, tx)
@@ -64,7 +68,7 @@ export class AssetGcService {
       if (removed.length > 0) {
         await this.audit.record({ action: 'assets.records_collected', actor: { type: 'system' }, origin: { source: 'job' }, details: { count: removed.length } }, { transaction: tx })
       }
-      return { scanned: rows.length, marked: marked.length, reset: reset.length, removed: removed.length, policy: policy.state, lastId: last.id }
+      return { scanned: rows.length, marked: marked.length, reset: reset.length, removed: removed.length, blocked, policy: policy.state, lastId: last.id }
     })
   }
 
@@ -83,6 +87,7 @@ export class AssetGcService {
       const marked: string[] = []
       const reset: string[] = []
       const queued: AssetGcObjectRow[] = []
+      let blocked = 0
       for (const row of rows) {
         if (retained.has(row.sha256)) {
           if (row.unreferencedAt !== null)
@@ -94,6 +99,9 @@ export class AssetGcService {
         else if (canRetire(row.unreferencedAt, policy)) {
           queued.push(row)
         }
+        else if (blockedByRecovery(row.unreferencedAt, policy)) {
+          blocked++
+        }
       }
       await this.repository.updateObjectCandidates(kind, marked, reset, at, tx)
       await this.repository.queueObjects(kind, queued, at, tx)
@@ -101,7 +109,7 @@ export class AssetGcService {
       if (queued.length > 0) {
         await this.audit.record({ action: 'assets.retirement_queued', actor: { type: 'system' }, origin: { source: 'job' }, details: { count: queued.length, bytes } }, { transaction: tx })
       }
-      return { scanned: rows.length, marked: marked.length, reset: reset.length, queued: queued.length, bytes, policy: policy.state, ...(last === undefined ? {} : { lastHash: last.sha256 }) }
+      return { scanned: rows.length, marked: marked.length, reset: reset.length, queued: queued.length, blocked, bytes, policy: policy.state, ...(last === undefined ? {} : { lastHash: last.sha256 }) }
     })
   }
 

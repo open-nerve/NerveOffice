@@ -103,10 +103,10 @@ export interface FakeContent {
 }
 
 /** 内存里的一条修订记录：行，连同 requestId 与这一版的信封（内容哈希、客户端构建） */
-export type StoredRevision = RevisionRow & { readonly requestId: string, readonly contentHash: Buffer | null, readonly clientBuild: string | null }
+export type StoredRevision = RevisionRow & { readonly requestId: string, readonly contentHash: Buffer | null, readonly clientBuild: string | null, readonly unlinkedAssetIds: readonly string[] | null }
 
-/** 摆一条修订记录：信封两项不给时为空（存量的写法） */
-export type RevisionSeed = Omit<NewRevision, 'contentHash' | 'clientBuild'> & Partial<Pick<NewRevision, 'contentHash' | 'clientBuild'>> & { readonly createdAt?: Date }
+/** 摆一条修订记录：信封三项（内容哈希、客户端构建、存在但未登记的图片标识）不给时为空（存量的写法） */
+export type RevisionSeed = Omit<NewRevision, 'contentHash' | 'clientBuild' | 'unlinkedAssetIds'> & Partial<Pick<NewRevision, 'contentHash' | 'clientBuild' | 'unlinkedAssetIds'>> & { readonly createdAt?: Date }
 
 /** 现在的页面上报的构建与数据格式（M3-P3）：保存、另存为副本、申请编辑权与心跳的用例都带它 */
 export const CURRENT_CLIENT: ClientFormat = { clientBuild: '0.1.0', univerVersion: UNIVER_SDK_VERSION, profile: DOCUMENT_PROFILE_OF.sheet, formatVersion: PLATFORM_FORMAT_VERSION }
@@ -453,6 +453,7 @@ export class FakeStore {
       findByRevision: vi.fn(async (documentId: string, revision: number) => this.revisions.find(row => row.documentId === documentId && row.revision === revision)),
       insert: vi.fn(async (revision: NewRevision): Promise<RevisionRow | undefined> =>
         this.revisions.some(row => row.requestId === revision.requestId) ? undefined : this.addRevision(revision)),
+      unlinkedAssetIdsOf: vi.fn(async (documentId: string, revision: number) => this.revisions.find(row => row.documentId === documentId && row.revision === revision)?.unlinkedAssetIds),
     },
     /** 保存的回执（M3-P3）：requestId 主键，重复的不写（与真实仓储的 ON CONFLICT 一样） */
     receipts: {
@@ -950,7 +951,7 @@ export class FakeStore {
   }
 
   addRevision(revision: RevisionSeed): RevisionRow {
-    const row: StoredRevision = { ...revision, contentHash: revision.contentHash ?? null, clientBuild: revision.clientBuild ?? null, createdAt: revision.createdAt ?? NOW }
+    const row: StoredRevision = { ...revision, contentHash: revision.contentHash ?? null, clientBuild: revision.clientBuild ?? null, unlinkedAssetIds: revision.unlinkedAssetIds ?? null, createdAt: revision.createdAt ?? NOW }
     this.revisions.push(row)
     return row
   }

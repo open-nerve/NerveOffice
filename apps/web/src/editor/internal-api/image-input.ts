@@ -4,7 +4,7 @@ import { CommandType, CustomCommandExecutionError, DOCS_NORMAL_EDITOR_UNIT_ID_KE
 import { IDrawingManagerService } from '@univerjs/drawing'
 import { RangeProtectionPermissionEditPoint, RangeProtectionPermissionViewPoint, SetRangeValuesCommand, SheetPermissionCheckController, SheetsSelectionsService, WorkbookCopyPermission, WorkbookEditablePermission, WorksheetCopyPermission, WorksheetEditExtraObjectPermission, WorksheetEditPermission, WorksheetSetCellStylePermission, WorksheetSetCellValuePermission } from '@univerjs/sheets'
 import { ISheetDrawingService, RemoveSheetDrawingCommand } from '@univerjs/sheets-drawing'
-import { PREDEFINED_HOOK_NAME_PASTE, SheetCopyCommand, SheetCutCommand, SheetPasteCommand, SheetPasteShortKeyCommand } from '@univerjs/sheets-ui'
+import { ISheetClipboardService, PREDEFINED_HOOK_NAME_PASTE, SheetCopyCommand, SheetCutCommand, SheetPasteCommand, SheetPasteShortKeyCommand } from '@univerjs/sheets-ui'
 import { prepareImageInsertion } from './image-input-insert.ts'
 import { imageRecord } from './image-json.ts'
 import { injectorOf } from './injector.ts'
@@ -43,7 +43,8 @@ export interface ImageInputCommands {
   readonly copy: (target: CapturedImageTarget, image: SelectedInputImage, cut: boolean) => Promise<boolean>
   readonly paste: (target: CapturedImageTarget) => Promise<boolean>
   readonly insert: (kind: 'float' | 'cell', files?: readonly File[]) => Promise<boolean>
-  readonly rejected: (reason: 'selection' | 'permission' | 'type', intent: ImageInputIntent, operation?: 'insert') => void
+  /** special-paste-image：选择性粘贴遇到纯图片剪贴板，提示改用普通粘贴（M5R-M-12） */
+  readonly rejected: (reason: 'selection' | 'permission' | 'type' | 'special-paste-image', intent: ImageInputIntent, operation?: 'insert') => void
 }
 
 export interface ImageTableInput {
@@ -389,6 +390,14 @@ export function createImageInputBridge(univer: Univer, container: HTMLElement, o
           },
         }
         registrations.push(commands.registerMultipleCommand(implementation))
+      }
+      // 选择性粘贴交给 SDK（上面的处理器返回 false）。剪贴板只有图片时，sheets-ui 补丁不执行粘贴（不生成撤销、不上传），
+      // 经剪贴板钩子通知这里，明确提示改用普通粘贴（M5R-M-12，D-08a，patches/univer-sheet-name-selection.json）
+      if (injector.has(ISheetClipboardService)) {
+        registrations.push(injector.get(ISheetClipboardService).addClipboardHook({
+          id: 'nerve-image-special-paste',
+          onPasteFilesRejected: () => handlers.rejected('special-paste-image', 'insert'),
+        }))
       }
       // 固定 SDK 的两个插入入口是普通 Command；替换本实例的处理器，失败不能回到默认文件框/上传。
       // 就绪之后安装，入口首个守卫在全部安装成功前仍关闭；退役时先关闭守卫再释放命令。

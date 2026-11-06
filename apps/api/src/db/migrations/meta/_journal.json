@@ -274,6 +274,13 @@
       "when": 1793233322302,
       "tag": "0038_m5_asset_reference_batch",
       "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1793879164699,
+      "tag": "0039_m5_revision_asset_ids",
+      "breakpoints": true
     }
   ]
 }

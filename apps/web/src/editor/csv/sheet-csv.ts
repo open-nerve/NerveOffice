@@ -32,6 +32,39 @@ interface SheetCsvOptions {
   readonly reportError: (error: unknown) => void
 }
 
+/**
+ * 文档流的结构标记（core 的 DataStreamTreeTokenType）：文档结尾 \0、CUSTOM_BLOCK \b（单元格图片）、表格/列/块 0x0E–0x15 与 0x1A–0x1D、
+ * 自定义范围（链接）0x1E–0x1F。它们不是文字，SDK 的显示值（getPlainText）只去掉其中一部分
+ */
+const DOC_MARKERS: ReadonlySet<number> = new Set([0x00, 0x08, 0x0E, 0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F])
+
+function withoutMarkers(line: string): string {
+  let text = ''
+  for (const char of line) {
+    if (!DOC_MARKERS.has(char.charCodeAt(0)))
+      text += char
+  }
+  return text
+}
+
+/**
+ * 富文本单元格导出的文字（D-03，M5R-I-06）：CSV 只带显示的文字，不带图片。按段落（\r）、分栏、分页与节拆开，只有结构标记的段落
+ * （单元格图片独占的一段）整段丢弃，其余去掉标记；首尾的空段落去掉、中间的保留，段落之间统一为 LF
+ */
+function richText(dataStream: string): string {
+  const body = dataStream.endsWith('\r\n') ? dataStream.slice(0, -2) : dataStream
+  const lines = body.split(/\r\n|[\r\n\v\f]/u)
+    .filter(line => line === '' || withoutMarkers(line) !== '')
+    .map(withoutMarkers)
+  let start = 0
+  let end = lines.length
+  while (start < end && lines[start] === '')
+    start += 1
+  while (end > start && lines[end - 1] === '')
+    end -= 1
+  return lines.slice(start, end).join('\n')
+}
+
 function hasContent(cell: ICellData | null | undefined): boolean {
   if (!cell)
     return false
@@ -39,7 +72,7 @@ function hasContent(cell: ICellData | null | undefined): boolean {
     return true
   const text = cell.p?.body?.dataStream
   if (text !== undefined && text !== '')
-    return text.replace(/\r\n$/u, '') !== ''
+    return richText(text) !== ''
   return cell.v !== undefined && cell.v !== null && cell.v !== ''
 }
 
@@ -126,8 +159,10 @@ export function createSheetCsv(options: SheetCsvOptions): SheetCsv {
         const cell = raw.cellData?.[rowIndex]?.[columnIndex]
         const rawNumeric = cell?.t === CellValueType.NUMBER || ((cell?.t === undefined || cell.t === null) && typeof cell?.v === 'number')
         // 数组缓存只覆盖 v/t，不替换原 p；实际富文本仍优先于数字显示。
-        const numeric = (arrayTypes.get(`${rowIndex}:${columnIndex}`) ?? rawNumeric) && (cell?.p?.body?.dataStream ?? '') === ''
-        return { text, kind: numeric ? 'number' as const : 'text' as const }
+        const dataStream = cell?.p?.body?.dataStream ?? ''
+        const numeric = (arrayTypes.get(`${rowIndex}:${columnIndex}`) ?? rawNumeric) && dataStream === ''
+        // 富文本取正文里的文字（D-03）：SDK 的显示值会带出单元格图片与段落的控制符
+        return { text: dataStream === '' ? text : richText(dataStream), kind: numeric ? 'number' as const : 'text' as const }
       }))
     },
     insert(table) {

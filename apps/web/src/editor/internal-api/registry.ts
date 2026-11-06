@@ -73,6 +73,14 @@ const RESOURCE_LOAD_GUARD_REGRESSION = [
 
 export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   {
+    name: 'arrayFormulaAnchors',
+    origin: 'engine-formula 的 FormulaDataModel.getArrayFormulaRange（数组公式锚点与其溢出范围）',
+    sdk: { '@univerjs/core': ['Univer'], '@univerjs/engine-formula': ['FormulaDataModel'] },
+    purpose: '只读枚举当前文档确有多格结果的数组公式锚点坐标（M5R-I-07，D-04）：捕获正文时去掉这些锚点的缓存值，重开时 SDK 默认的 WHEN_EMPTY 初次计算只重算它们，溢出结果随之恢复；不暴露服务或缓存引用',
+    evidence: '固定 1.0.1 引擎只把锚点写入原 cellData，溢出结果由 SetArrayFormulaDataMutation 写入 FormulaDataModel；加载时只从单元格 ref 恢复数组数据，engine-formula/sheets-formula/sheets 都不写回 ref；初次计算在 WHEN_EMPTY 下只提交“有公式且没有缓存值”的格（getFormulaDirtyRanges）。1×1 结果不进入范围表的多格项',
+    regression: 'snapshot-capture-form.test.ts（真实 SetArrayFormulaDataMutation：多格锚点去掉 v/t、1×1 与普通公式保留、跨文档/表隔离、模型不变）；E2E csv-formulas.spec.ts 的“收齐保存后常规重开”（Worker 与主线程）',
+  },
+  {
     name: 'csvArrayCells',
     origin: 'engine-formula 的 FormulaDataModel.getArrayFormulaCellData 与 sheets-formula 的 ArrayFormulaCellInterceptorController 协议',
     sdk: { '@univerjs/core': ['Univer', 'CellValueType'], '@univerjs/engine-formula': ['FormulaDataModel'] },
@@ -126,7 +134,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       '@univerjs/drawing': ['IDrawingManagerService', 'DRAWING_IMAGE_HEIGHT_LIMIT', 'DRAWING_IMAGE_WIDTH_LIMIT'],
       '@univerjs/sheets': ['RangeProtectionPermissionEditPoint', 'RangeProtectionPermissionViewPoint', 'SetRangeValuesCommand', 'SheetPermissionCheckController', 'SheetsSelectionsService', 'WorkbookCopyPermission', 'WorkbookEditablePermission', 'WorksheetCopyPermission', 'WorksheetEditExtraObjectPermission', 'WorksheetEditPermission', 'WorksheetSetCellStylePermission', 'WorksheetSetCellValuePermission', 'convertPositionCellToSheetOverGrid', 'SheetSkeletonService'],
       '@univerjs/sheets-drawing': ['ISheetDrawingService', 'RemoveSheetDrawingCommand', 'InsertSheetDrawingCommand'],
-      '@univerjs/sheets-ui': ['PREDEFINED_HOOK_NAME_PASTE', 'SheetCopyCommand', 'SheetCutCommand', 'SheetPasteCommand', 'SheetPasteShortKeyCommand'],
+      '@univerjs/sheets-ui': ['ISheetClipboardService', 'PREDEFINED_HOOK_NAME_PASTE', 'SheetCopyCommand', 'SheetCutCommand', 'SheetPasteCommand', 'SheetPasteShortKeyCommand'],
     },
     purpose: '捕获原书/表/选区及实际选中图片，异步操作失效后不可复活；比原表格复制高一级的 MultiCommand 同步启动系统处理，失败以 SDK 取消错误终止回落。正式浮图/单元格图片插入的普通 Command 在 Ready 后按同 ID 替换，失败不回落原 SDK，退役时移除；文件参数仅收真实 File 列表。表格委托保留公式数据但去掉预览文件；普通剪贴板目标允许离线，确认图片后不可逆升级为联网、身份及图片专属权限检查，严格图片入口始终使用后者。上传的尺寸和规范地址经 SDK 几何及文档构造函数生成正常可撤销命令，不重新用源地址量尺寸',
     evidence: '1.0.1 core MultiCommand false 回落；sheets-ui SheetCopy/Cut/PasteCommand 的权限及捕获目标；普通剪切先按 copy 目标分类，无图片才回原 Cut 权限提示，真图片重新绑定 cut 目标。已分类表格事件以固定当前范围和空 files 同步启动 SheetPasteShortKey，其权限检查在首个 await 前执行；异步 pasteTable 不放宽目标检查。docs-ui 隐藏输入 __editor_ + DOCS_NORMAL_EDITOR_UNIT_ID_KEY 与 data-u-comp=editor；sheets-drawing-ui 的文档图片构造和单元格 2 px 留白；drawing 显示上限 500 px。实际单图 body 为带段落终止符的单一图片控制符，需核对 blockId/index',
@@ -400,11 +408,18 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     purpose: '面板的防抖（M3-P4 设计 §3.4，panel-debounce-watch.ts）：这两个面板开着时有用户输入，就记下"SDK 的防抖到点"的时刻；退出编辑、交出与按保存的捕获之前（立即上传在按下时的准备：snapshot-capture.ts 的 settleInputs）、失去编辑权的捕获之前等到这一刻，最后的改动先写进模型再捕获、再销毁编辑器。到点之前算"还没写进模型的输入"（Codex 评审 CX4，uncommitted-input.ts）：保存的状态机据此算未保存，页头不说已保存到云端、离开提示拦下',
     evidence: [
       'ui 的 views/hooks/use-debounce.ts:19-30（组件卸载时不清计时器）与 sheets-note-ui 的 views/Note.tsx:110-143（1.0.1 的 ui lib/es/index.js:6584-6592、sheets-note-ui lib/es/index.js:648、:691）；',
-      'sheets-data-validation-ui 的 DataValidationDetail 原包三种更新共用尾调用且卸载不 flush；M5-P3-S4 补丁按输入顺序积累字段增量，仅合并连续同类编辑；历史同步范围正文，范围命令的公式平移不会被旧字段覆盖。关闭/卸载同步提交，规则删除/本工作簿历史操作取消，原工作簿退役不写同 id 新对象；失败保留待办。见 patches/univer-data-validation-ui.json、ADR-010。',
+      'sheets-data-validation-ui 的 DataValidationDetail 原包三种更新共用尾调用且卸载不 flush；M5-P3-S4 补丁按输入顺序积累字段增量，仅合并连续同类编辑；历史同步范围正文，范围命令的公式平移不会被旧字段覆盖。关闭/卸载同步提交，规则删除/本工作簿历史操作取消，原工作簿退役不写同 id 新对象；失败保留待办。M5-P7（M5R-I-05）：入队时剔除被同字段后续值覆盖的更早设置；提交不了的设置并入下一项设置后出队，其他种类照常提交；仍提交不了的留在待办里、字段显示错误，并按 PANEL_UNCOMMITTED_EVENT 告知平台（提交成功、失败与取消时同步派发）；详情卸载时的最后一次提交：被拒的设置照常先并入后面的设置，仍提交不了就整组丢掉条件字段（类型、运算符、两个条件值）、只带独立的“忽略空值”再试一次，还不行就丢掉整项，其余按原顺序提交（S14 审查 E1、E5 与复验）。见 patches/univer-data-validation-ui.json、ADR-010。',
       'sheets-formula-ui 的范围高亮同时登记 UR-036：按执行时的当前文本重新解析，禁止旧语法树回写新输入；UR-037 在编辑器焦点切换前保留逻辑光标，防止 blur 发出旧渲染选区覆盖新输入位置。数据验证解析结果先按原工作表核对 isValidRange。两补丁不增加公开 API，平台捕获仍等原窗口；批注关闭不提交的原行为继续由此等待保护。',
     ].join(''),
     regression: '单元测试 data-validation-panel.test.tsx（实际 SDK 详情、队列、规则与命令）、panel-debounce-watch.test.ts、uncommitted-input.test.ts、save-coordinator.test.ts、snapshot-capture.test.ts；E2E data-validation-panel.spec.ts 的连续输入、范围、类型、关闭、删除历史、范围撤销再确认、custom 平移与重开后公式正文，以及 autosave.spec.ts 既有的面板退出和自动保存边界。SDK 升级须同时复验原窗口与补丁移除条件',
   },
+  ...['PANEL_UNCOMMITTED_ATTRIBUTE', 'PANEL_UNCOMMITTED_EVENT'].map(name => ({
+    name,
+    origin: '平台自己的 sheets-data-validation-ui 补丁（UR-033 的 M5-P7 增量，M5R-I-05）与平台之间的约定：详情根元素上的属性 data-nerve-uncommitted，与在详情所在 document 上派发的事件 nerve-panel-uncommitted（detail.uncommitted 为布尔值）',
+    purpose: '数据验证详情有设置被命令拒绝（不合法的条件）、还留在待办里时，补丁挂上属性并派发 uncommitted:true；提交成功、撤销重做取消或卸载时撤下并派发 false。panel-debounce-watch.ts 据此把它算作“还没写进模型的输入”：页头不说已保存、离开提示拦下；settled 不等它（要用户改正）',
+    evidence: '补丁 patches/@univerjs__sheets-data-validation-ui@1.0.1.patch 的 DataValidationDetailInner：onFailed 置 uncommitted 并 setShowError(true)，onFlushed 清除；reportedUncommitted 只在变化时派发，卸载时补派 false。名称是平台自定，不来自上游 SDK',
+    regression: '单元测试 data-validation-panel.test.tsx（实际发布包详情：被拒后属性与事件、改正后撤下、卸载时撤下）、panel-debounce-watch.test.ts（事件约定、与防抖合成、settled 不等、畸形事件不算）',
+  })),
   {
     name: 'FORMULA_BAR_INPUT_SELECTOR',
     origin: 'sheets-ui 编辑栏的 DOM 标记：根元素 data-u-comp="formula-bar"、编辑框 formula-editor、左边的按钮 formula-bar-actions（views/formula-bar/FormulaBar.tsx:298-402）；平台对这个约定的封装',

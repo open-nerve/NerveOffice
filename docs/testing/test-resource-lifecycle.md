@@ -12,6 +12,8 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 
 每项最多 5 秒/20 万项/深度 64，整批最多 45 秒/50 万项；单次 JSON 最多 32 KiB，工作流外层 2 分钟。必需的工作区和 runner 临时根消失为不完整，其余固定可选根不存在明确记 missing。任何拒绝、部分/超限结果返回非零，不能冒充完整容量；查询不会判断或修改原 12 GiB 余量、16 GiB 原环境等门槛。
 
+三步诊断都设 `continue-on-error: true`（M5-P7，D-09）：脚本的退出码不变，诊断失败只在该步骤显示告警，不跳过后续的预检、安装与 verify，也不否决 job 结论；其余步骤仍不允许失败了也算通过（`ci-workflow.test.ts`）。
+
 诊断不创建临时环境或独立 artifact，只向原 job 日志输出固定字段；不输出环境对象、子项名称、文件内容或原异常文本。日志沿六项 CI 原件的 14 天/5 GiB 报告规则保留，必要最终证据通过原独审/pin 流程留档。成功诊断只说明观察完成，`diagnosticOnly=true`、`cleanupAuthorized=false`，不代替测试通过或资源清理。KiB 回归入口为 `python3 -B tools/test-resources/run.py unit -- python3 -B -m unittest discover -s tools/test-resources -p 'test_ci_disk_diagnostic.py'`。
 
 ## 固定 Chrome 用例的关闭阶段诊断
@@ -38,7 +40,7 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 | 单独清扫 | `pnpm test:cleanup`；只处理本 worktree 已登记资源，不扫描整个 handoffs |
 | 小型机制回归 | `pnpm test:cleanup:check` → `run.py unit`；另有 managed-output、test-databases 的 Vitest 单元回归 |
 
-Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `asset-references-bulk.test.ts`，在组 1 等普通项目（包括 `afterAll`）结束后运行。两个集成项目共享 node/forks、source 解析、数据库及单查询 setup 和原时限；原 70,000 规模、断言与 60 秒整例上限不变。`pnpm test:integration` 同时选择 `integration` 和 `integration-capacity`；`pnpm test:coverage` 仍一次执行所有项目并生成同一份聚合覆盖率，原范围和阈值不变。这只保证本次 Vitest 内的分组次序，不保证整台机器没有其他进程；重型入口仍须串行启动。
+Vitest 的普通项目保持默认组 0；`integration-capacity` 只包含原 `asset-references-bulk.test.ts`，在组 1 等普通项目（包括 `afterAll`）结束后运行。两个集成项目共享 node/forks、source 解析、数据库及单查询 setup 和原时限；原 70,000 规模、断言与 60 秒整例上限不变。`pnpm test:integration` 同时选择 `integration` 和 `integration-capacity`；`pnpm test:coverage` 仍一次执行所有项目并生成同一份聚合覆盖率，原范围和阈值不变。这只保证本次 Vitest 内的分组次序，不保证整台机器没有其他进程；重型入口仍须串行启动。unit-web 里 M5R-I-01 的六条真实 SDK 大范围写入用例（`apps/web/src/editor/internal-api/image-commands.test.ts`）不另设项目，只在 describe 上写明 30 秒整例上限（P7-S15，2026-11-06 需求方批准；CI 覆盖率满载时约比本机慢 8 倍，默认 5 秒没有余量），规模与断言不变。
 
 定向执行容量例须选择新项目：`python3 tools/test-resources/run.py integration -- pnpm exec vitest run --project integration-capacity tests/integration/src/assets/asset-references-bulk.test.ts`（数据库准备沿原入口）。`tools/src/verify/capacity-project.test.ts` 调用实际 Vitest，以两份无数据库小夹具验证正式选择器、组次序、普通 `afterAll` 完成和两组失败的退出码；它不替代真实七万资源链或完整覆盖率验收。有受管报告口时留存小报告，普通 `pnpm test`/推送钩子没有该变量时报告随自建临时根收尾；子进程超时或信号退出时不猜测 worker 已退出，不立即删根，交外层运行器核验。
 
@@ -159,6 +161,17 @@ python3 tools/test-resources/archive.py /绝对路径/归档根 --pin 已结束b
 pin 只用于经过审查的必要最终证据；不要 pin 每次失败重试。新写的门禁或调查脚本同样使用 Archives 创建/封存，不自行永久复制运行环境。CI 继续使用工作流已有 14 天 artifact 保留策略。
 
 ## 清理回归与局限
+
+**纳入门禁**（M5-P7，D-10；2026-11-06 修订）：Python 回归（`pnpm test:cleanup:check` 的同一组用例）经 `pnpm test:verify` 纳入**本机**完整 verify。它在覆盖率的同一轮受管运行（`run.py integration`）里、覆盖率结束之后执行（`tools/src/verify/coverage-resources.ts`）：两段都执行、任一失败即整步失败，不新增运行；pre-push 快速门禁不含它。本机实测约 3 分钟（S14 时 499 项）。
+
+CI 的 verify job 只跑覆盖率（`pnpm verify --ci` 的 tests 一步是 `pnpm test:coverage`）。这组用例是严格策略下的工具单测，会对临时管理根做真实的全宿主 lsof 核验；GitHub 托管 VM 上全宿主 lsof 必有无法解释的 socket 与内核对象记录（见下文“固定托管 VM 的回收责任”与 ADR-024），严格核验在那里必然判不完整，用例也还没在 Linux 上兼容运行过。按需求方决定不进 CI，Linux 兼容运行与 CI 子集另行设计（DEF-080）。
+
+**M5-P7 的四处行为调整**（S14 独立审查之后补全）：
+
+- 管理根路径（仓库或 worktree 的路径）含非 ASCII、控制字符或反斜杠时，`Store` 初始化即失败关闭（M5R-M-17）：lsof 在 C locale 下把这些字节写成转义序列，按前缀比较会把仍被打开的文件当成不在管理根里。同一校验也在每次句柄查询（`open_paths`）里做，所以不经过 `Store` 的根（handoff 归档 `Archives`、嵌套夹具）同样按核对不完整处理；
+- 运行期间 scratch 被外部删除时，running/prepared 按中断收尾（`stopReason=scratch-missing`，清理阶段 complete），短根随之退役；运行器不再以子进程的退出码冒充本轮成功（M5R-M-19）。运行器本身被强杀、之后 scratch 又被删时，`run.py cleanup`（`sweep`）也接手停在 running 的运行；仍在活动的运行持有运行锁或进程组存活，不会被误收；
+- 收尾 GC 的单个候选出错只跳过它：统计大小出错记 `collection-failed`，核验没有通过（句柄查询不完整等）记 `verification-failed` 并原样保留，已决定删除之后的删除或记账出错记 `removal-failed`（下一轮重新核验后接着删），其余候选照常回收。`finish` 与运行器结束时的收尾 GC 共用 `prune_isolated`：出错只告警，不改变本轮结论与退出码、不挡住发布；`sweep` 的报告里列出跳过的候选（M5R-M-20）；
+- lsof 全量列举的退出码 1 且 stderr 为空时仍按现行规则接受，有警告即不完整（Q-10 单测钉住）。CI 资源核对之后，另按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解；整段采样最多 20 秒，超时只记下，不让核对步骤超时。收集到分布后再定是否收紧。
 
 Python 小型回归覆盖成功释放、失败限额与过期、SIGTERM、遗留恢复、打开句柄/活动锁、父目录链接、重复执行、失败重试归属、转移中断续作、发布锁、容器重复发布和 handoff 源码/最终证据保护。TypeScript 回归覆盖受管目录、VM 越界、纯函数导入兼容与数据库连接竞争。
 

@@ -1,5 +1,7 @@
 # NerveOffice 协作约定
 
+**2026-11-05 当前批准（M5-P7 审查问题修复）**：M5 工程交付已完成（main `cd2d6403`，CI96 `41884117195` 原六项成功并接受，P6 已退役）。需求方审阅 [M5 整体独立审查](docs/v0.1/M5-表格能力与资源/reviews/P6-M5整体独立审查-20261105.md)后逐项闭合 D-01～D-11，并批准新建唯一 M5-P7：worktree `.claude/worktrees/m5-p7-review-fixes`，按 [P7 设计](docs/v0.1/M5-表格能力与资源/07-P7-审查问题修复.md)逐项 TDD 修复、独立审查后，推送该唯一分支并手动触发原六项 CI（托管 VM 的 workflow_dispatch 例外改为该精确分支，见 ADR-026 附录），通过后 `--no-ff` 合入 main、推送并取得 main 同 SHA CI。本机只跑单元/集成（可 `pnpm db:up`）与少量串行短时的 Chromium 定向 E2E，经 `run.py` 按实际类型登记；本机浏览器长测仍暂停。Mac 完整验收（DEF-074）、M5 标签与“不启动 M6”保持。2026-11-06 S14 停点，需求方按推荐决定：CI 不跑测试资源工具的 Python 回归、只进本机完整门禁（托管 VM 的全宿主 lsof 必然不完整，DEF-080）；另存为副本保留客户端 `baseRevision` 并追认这条跨模块接线；跨文档重新引入图片地址按已知限制接受（ADR-023）；DEF-079 留 M7 在部署硬件上复测。同日首轮分支 CI（run `42187596562`，`5d4c2d05`）五项成功、verify 唯一失败为 S3 的“1 万格带格式富文本写入及撤销重做”超过 unit-web 默认 5 秒；需求方批准 S15：优化图片写入策略（判定不变），并给 M5R-I-01 这组 6 条真实 SDK 大范围用例写明 30 秒整例上限（规模与断言不变，见 ADR-022 的“M5-P7 的补充”），以新 SHA 接续原六项 CI。此批准只适用于这组用例，不放宽其他超时。第二轮分支 CI（run `42205797298`，`b35f080d`）原六项成功。
+
 **2026-11-05 当前批准（Chrome 关闭阶段补证）**：用户已批准 `b0e303d2` 的[接续建议](docs/v0.1/M5-表格能力与资源/reviews/P6-S6-CI95结果与Chrome收尾取证建议.md)，按[实施清单](docs/v0.1/M5-表格能力与资源/plans/P6-S6-Chrome关闭阶段取证与单轮接续.md)仅对固定 Chrome 用例补有界公开关闭阶段记录。完成小型验证与独审后，复用下文已经批准、尚未执行的唯一下轮新 SHA 原六项 CI，不另外增加轮次。CI95 六项已结束：verify/Chrome failure，其余四项 success；主覆盖率未启动，Chrome 业务断言完成但默认 context 关闭超时，内部根因未知。必要失败原件已独立接受并 pin，四个重复 payload 已清理；不是最终 CI 接受。磁盘诊断已提交 `a69d4366`；原断言/时限/资源门槛、未知再次停止及禁止 M6 保持。
 
 **2026-11-05 当前批准（最终 CI 磁盘诊断与单轮接续）**：用户已批准 `c7cffeff` 的[接续建议](docs/v0.1/M5-表格能力与资源/reviews/P6-S6-最终CI磁盘余量调查与接续建议.md)，按[实施清单](docs/v0.1/M5-表格能力与资源/plans/P6-S6-云端磁盘诊断与单轮接续.md)补有界只读诊断，小型验证及独审后，先收齐 CI95，再正常合并/推送新 SHA 接续唯一一轮原六项 CI。main `46b5e8f4` 已合并推送，CI95 verify 在主覆盖率启动前触及原 12 GiB 余量保护；容量差异原因未确定，失败不追认、不重跑旧 SHA。阈值/断言保持，不删系统工具，不恢复本机长测；再次未知停止，不自动追加轮次。原工程收尾与停止 M6 授权保持，最终实际结果以主目录 `central-acceptance/engineering-closeout/` 与新固定 run 回执为准。下方早期“main 未变、P6 未合并”等为当时历史状态。
@@ -152,7 +154,7 @@ Excel、Safari/Finder，M4 DEF-073/UR-035、完整验收和标签继续挂账；
 | 命令 | 作用 |
 |---|---|
 | `pnpm install` | 安装依赖，同时安装 git 钩子 |
-| `pnpm verify` | 合并前的完整门禁：lint、类型检查、静态检查、单元与集成测试及覆盖率、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
+| `pnpm verify` | 合并前的完整门禁：lint、类型检查、静态检查、单元与集成测试及覆盖率（本机其后接着跑测试资源工具的 Python 回归，CI 不跑，M5-P7 D-10）、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
 | `pnpm verify --fast` | 快速门禁（pre-push 使用；不需要数据库） |
 | `pnpm dev:api` | 以监听模式启动后端（读取 `apps/api/.env.development`，先 `pnpm db:up` 与 `pnpm db:migrate`） |
 | `pnpm dev:web` | 启动前端的开发服务器（`http://127.0.0.1:5173`，`/api` 代理到 `pnpm dev:api`） |
@@ -161,6 +163,7 @@ Excel、Safari/Finder，M4 DEF-073/UR-035、完整验收和标签继续挂账；
 | `pnpm lint` / `pnpm lint:fix` | 检查 / 修正代码规范与格式 |
 | `pnpm typecheck` | 类型检查 |
 | `pnpm test` / `pnpm test:coverage` | 单元测试 / 单元与集成测试合计的覆盖率（需要数据库） |
+| `pnpm test:verify` | 本机完整门禁的 tests 一步：同一轮受管运行里先跑 test:coverage 的覆盖率，再跑 test:cleanup:check 的 Python 回归（约 3 分钟），两段都执行（M5-P7 D-10）；需要数据库。CI 的 verify 只跑 test:coverage（托管 VM 的全宿主 lsof 必然不完整，DEF-080） |
 | `pnpm db:up` / `pnpm db:down` | 启动 / 停止开发用的 PostgreSQL |
 | `pnpm db:migrate` | 构建后端并对开发库执行迁移 |
 | `pnpm db:generate --name <名称>` | 按表定义生成迁移（人工审阅后入库；合并后的迁移不再修改） |

@@ -6,7 +6,7 @@ const C = IMAGE_COMMAND_PROTOCOL
 type Cleaner = (value: unknown, origin: string) => ImageSourceResult
 
 export type PreparedImageInput
-  = | { readonly ok: false }
+  = | { readonly ok: false, readonly reason: Extract<ImageSourceResult, { ok: false }>['reason'] }
     | { readonly ok: true, readonly params: unknown, readonly changed: boolean, readonly commit: () => boolean }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -61,12 +61,12 @@ export function prepareImageCommandInput(id: string, params: unknown, origin: st
   if (params === undefined)
     return { ok: true, params, changed: false, commit: () => true }
   if (!record(params))
-    return { ok: false }
+    return { ok: false, reason: 'structure' }
   const changes: Record<string, unknown> = {}
   for (const [key, normalize] of Object.entries(fields(id, params))) {
     const result = normalize(params[key], origin)
     if (!result.ok)
-      return { ok: false }
+      return { ok: false, reason: result.reason }
     if (result.changed)
       changes[key] = result.value
   }

@@ -16,6 +16,11 @@ export interface ImageResourcesOptions {
   readonly changed: () => void
   readonly failed: (error: unknown) => void
   readonly readFailures?: () => ImageReadFailures
+  /**
+   * 当前文档仍引用的规范相对地址（M5R-M-11）：刷新只清空并重读其中出现过的来源。返回 undefined（还没有文档）时全部重读。
+   * 不能用“弱引用还取得到元素”判断在用：core 的 ImageCacheMap（LRU）长期持有已删除图片的元素
+   */
+  readonly liveSources?: () => ReadonlySet<string> | undefined
 }
 
 export interface ImageResources {
@@ -32,6 +37,10 @@ interface Entry {
   readonly images: Set<WeakRef<HTMLImageElement>>
   decoded: DecodedImage | undefined
   task: Promise<string> | undefined
+  /** 当前读取是不是静默的；在用的读取加入时改为 false，失败照常报告 */
+  attempt: { quiet: boolean } | undefined
+  /** 暂停清掉了这一条的像素：恢复时它若已不在文档里，也静默重读一次（S14 审查 E3）；读出或静默失败之后清掉，被取消则留到下次恢复 */
+  restore: boolean
 }
 
 interface TrackedImage {
@@ -47,6 +56,8 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
   let generation = new AbortController()
   let active = true
   let disposed = false
+  /** 暂停期间 SDK 要过不合格的地址：给了占位、SDK 不会再来读，恢复时补报一次（S14 审查 E6） */
+  let invalidWhileSuspended = false
   let localFailures = createImageReadFailures()
   const failures = (): ImageReadFailures => options.readFailures?.() ?? localFailures
 
@@ -65,7 +76,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
   function entryOf(source: string): Entry {
     let entry = entries.get(source)
     if (entry === undefined) {
-      entry = { images: new Set(), decoded: undefined, task: undefined }
+      entry = { images: new Set(), decoded: undefined, task: undefined, attempt: undefined, restore: false }
       entries.set(source, entry)
     }
     return entry
@@ -105,11 +116,12 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     }
   }
 
-  function clearDecoded(): void {
-    for (const entry of entries.values()) {
+  function clearDecoded(selected: Iterable<Entry> = entries.values()): void {
+    for (const entry of selected) {
       entry.decoded?.dispose()
       entry.decoded = undefined
       entry.task = undefined
+      entry.attempt = undefined
       forEachImage(entry, image => show(image, options.placeholder))
     }
     options.changed()
@@ -128,8 +140,21 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     }
   }
 
-  async function load(source: string): Promise<string> {
-    const signal = requireActive()
+  /** quiet：已删除来源的静默重读（见 refresh）：失败不报告、也不记进本轮失败，之后在用时照常读取和报告 */
+  async function load(source: string, quiet = false): Promise<string> {
+    if (disposed)
+      throw new DOMException('图片实例已结束', 'AbortError')
+    // 暂停时显示路径只给本地占位、不读取（M5R-M-09）：抛出取消会让 SDK 不建浮图图元、约每 33 毫秒重试一次。
+    // 来源照常登记，SDK 建图元时交回元素登记，恢复时 refresh 重读；地址不合格的失败记下，恢复时补报
+    if (!active) {
+      const pending = canonical(source)
+      if (pending === undefined)
+        invalidWhileSuspended = true
+      else
+        entryOf(pending)
+      return options.placeholder
+    }
+    const signal = generation.signal
     const path = canonical(source)
     if (path === undefined) {
       options.failed(new AssetInputError('address'))
@@ -139,13 +164,20 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     const issuedFailures = failures()
     if (issuedFailures.has(path))
       return options.placeholder
+    if (entry.task !== undefined) {
+      // 在用的读取加入正在进行的静默重读：它失败时照常报告
+      if (!quiet && entry.attempt !== undefined)
+        entry.attempt.quiet = false
+      return entry.task
+    }
+    const attempt = { quiet }
     const recordFailure = (error: unknown): void => {
-      if (disposed || failures() !== issuedFailures || issuedFailures.has(path))
+      if (attempt.quiet || disposed || failures() !== issuedFailures || issuedFailures.has(path))
         return
       issuedFailures.add(path)
       options.failed(error)
     }
-    entry.task ??= readDecoded(path, signal, (error) => {
+    const task: Promise<string> = readDecoded(path, signal, (error) => {
       // 只补原请求认证失败的观察；任意取消原因即使形似 ApiError 也不作为新失败。
       if (error instanceof ApiError && error.status === 401
         && (error.code === 'UNAUTHENTICATED' || error.code === 'SESSION_EXPIRED')
@@ -158,6 +190,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
         throw signal.reason
       }
       entry.decoded = decoded
+      entry.restore = false
       forEachImage(entry, image => show(image, decoded.url))
       options.changed()
       return decoded.url
@@ -166,10 +199,21 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
         throw signal.reason
       if (failures() !== issuedFailures)
         return options.placeholder
+      if (attempt.quiet) {
+        // 静默重读失败：不报告、不再补（restore 清掉），也不留在条目上——之后在用的读取重新读取、照常报告
+        entry.restore = false
+        if (entry.task === task) {
+          entry.task = undefined
+          entry.attempt = undefined
+        }
+        return options.placeholder
+      }
       recordFailure(error)
       return options.placeholder
     })
-    return entry.task
+    entry.task = task
+    entry.attempt = attempt
+    return task
   }
 
   return {
@@ -218,17 +262,48 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       generation.abort(new DOMException('图片读取代次已更新', 'AbortError'))
       generation = new AbortController()
       active = true
-      clearDecoded()
-      for (const source of entries.keys()) {
+      if (invalidWhileSuspended) {
+        invalidWhileSuspended = false
+        options.failed(new AssetInputError('address'))
+      }
+      // 只重读文档里仍引用的来源（M5R-M-11）。已删除的保持现状：不重下、不报告与当前画面无关的失败；
+      // 撤销删除时 SDK 缓存里的元素仍显示原来的像素。刷新只发生在同一用户身上（换人一律先暂停、清空）。
+      // 例外是暂停清掉了像素、SDK 仍持有元素的已删来源（core 的 ImageCacheMap 命中即复用）：静默重读一次，否则撤销删除时一直是占位、
+      // 又没有失败可提示（S14 审查 E3）。只补暂停清掉的那些（restore）、只补一次：从没显示过的或已经补过的，刷新时不重下（S14 复验）
+      const live = options.liveSources?.()
+      const selected: [string, Entry][] = []
+      const dormant: string[] = []
+      for (const [source, entry] of entries) {
+        if (live === undefined || live.has(source)) {
+          selected.push([source, entry])
+        }
+        else if (entry.decoded === undefined) {
+          entry.task = undefined
+          entry.attempt = undefined
+          let held = false
+          forEachImage(entry, () => {
+            held = true
+          })
+          if (held && entry.restore)
+            dormant.push(source)
+        }
+      }
+      clearDecoded(selected.map(([, entry]) => entry))
+      for (const [source] of selected) {
         // 普通失败已在 load 里报告；下一次刷新/暂停造成的取消没有用户错误。
         void load(source).catch(() => {})
       }
+      for (const source of dormant)
+        void load(source, true).catch(() => {})
     },
     suspend: () => {
       if (disposed || !active)
         return
       active = false
       generation.abort(new DOMException('图片实例已暂停', 'AbortError'))
+      // 记下哪些条目的像素是这次暂停清掉的（之前补到一半又被暂停的，标记留着）
+      for (const entry of entries.values())
+        entry.restore ||= entry.decoded !== undefined
       clearDecoded()
     },
     dispose: () => {

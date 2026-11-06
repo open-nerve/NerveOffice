@@ -15,6 +15,8 @@ export interface ValidatedHistory {
   readonly record: HistoryMaterial
   readonly profile: DocumentProfile
   readonly formatVersion: PlatformFormatVersion
+  /** 检查子进程从这份历史正文提取到的全部图片标识：减去检查点的关系之后，作为恢复出的副本修订的未登记标识（D-01） */
+  readonly assetIds: readonly string[]
 }
 
 /** 准入必须包住正文加载和写入完成；大 JSON 仍只交现有子进程检查器。 */
@@ -73,7 +75,7 @@ export class DocumentHistoryValidation {
       if (names.length !== actual.length || names.some((name, index) => name !== actual[index]))
         throw new AppError('HISTORY_UNUSABLE')
     }
-    return { record, profile, formatVersion: PLATFORM_FORMAT_VERSION }
+    return { record, profile, formatVersion: PLATFORM_FORMAT_VERSION, assetIds: outcome.assetIds }
   }
 }
 

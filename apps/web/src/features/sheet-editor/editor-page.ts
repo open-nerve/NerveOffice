@@ -78,7 +78,8 @@ export type EditorPageLoad
     | { readonly kind: 'not-found' }
     | { readonly kind: 'unsupported' }
     | { readonly kind: 'failed', readonly error: unknown }
-    | { readonly kind: 'editor-failed', readonly error: unknown }
+    /** historyDocumentId：失败时已知能看历史，失败页给出“从历史恢复”的入口（M5R-M-06，D-07） */
+    | { readonly kind: 'editor-failed', readonly error: unknown, readonly historyDocumentId?: string }
 
 /**
  * 本页的会话（P4 设计 §3.7.3，审查 B1）：
@@ -554,7 +555,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
     if (view.mode.kind === 'failed') {
       if (load.kind !== 'editor-failed')
-        finish({ kind: 'editor-failed', error: view.mode.error })
+        finish({ kind: 'editor-failed', error: view.mode.error, ...(heading?.canViewHistory === true ? { historyDocumentId: heading.documentId } : {}) })
       return
     }
     if (view.mode.kind === 'unavailable') {

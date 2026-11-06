@@ -8,11 +8,11 @@ import { AuditService } from '../audit/index.ts'
 import { APP_CONFIG } from '../config/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AssetGcClock } from './asset-gc-clock.ts'
-import { assetGcPolicy, canRetire } from './asset-gc-policy.ts'
+import { assetGcPolicy, blockedByRecovery, canRetire } from './asset-gc-policy.ts'
 import { AssetRetirementRepository } from './asset-retirement.repository.ts'
 import { ASSET_STORAGE, assetObjectKey, parseAssetObjectKey } from './storage-adapter.ts'
 
-export type AssetRetirementPause = AssetGcPause | 'candidate-protected'
+export type AssetRetirementPause = AssetGcPause | 'candidate-protected' | 'recovery-blocked'
 export type AssetRetirementResult
   = { readonly state: 'paused', readonly reason: AssetRetirementPause, readonly bytes: 0 }
     | { readonly state: 'completed' | 'already-completed' | 'missing' | 'stopped', readonly bytes: number }
@@ -87,7 +87,10 @@ export class AssetRetirementService {
     const policy = assetGcPolicy(this.config.jobs.assetGc, at)
     if (policy.state !== 'ready')
       return policy.state
-    return canRetire(receipt.unreferencedAt, policy) ? undefined : 'candidate-protected'
+    if (canRetire(receipt.unreferencedAt, policy))
+      return undefined
+    // 被恢复水位挡住与宽限未满分开报告：前者要运维推进水位（M5R-M-03，D-05）
+    return blockedByRecovery(receipt.unreferencedAt, policy) ? 'recovery-blocked' : 'candidate-protected'
   }
 }
 

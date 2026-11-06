@@ -64,8 +64,11 @@ export function savedPayloadDigest(baseRevision: number, raw: Buffer, formulasPe
  * - 与保存一样按解压后的字节算：重试时客户端不必保证压缩结果逐字节相同，同一份内容就是同一个请求；内容不同（重试之前又捕获了一次）
  *   就是另一个请求，同一个 requestId 拒绝（REQUEST_ID_CONFLICT），不把新内容当成上一次的结果。
  * 标题不含控制字符（契约），按换行分段不会与标题混淆，快照字节接在最后一个换行之后；id 已由契约统一成小写。
- * "公式待更新"与保存的写法相同（M3-P3 设计 §3.8）：有标记时开头一行换成另一种
+ * "公式待更新"与保存的写法相同（M3-P3 设计 §3.8）：有标记时开头一行换成另一种。
+ * 草稿的基准修订（M5-P7，D-01）给出时开头一行另加 -based 后缀、原文档之后插一行修订号；不给时与之前的摘要逐字节相同，旧请求的重放不受影响
  */
-export function conflictCopyPayloadDigest(sourceId: string, title: string, raw: Buffer, formulasPending = false): Buffer {
-  return createHash('sha256').update(`${formulasPending ? 'conflict-copied-formulas-pending' : 'conflict-copied'}\n${sourceId}\n${title}\n`, 'utf8').update(raw).digest()
+export function conflictCopyPayloadDigest(sourceId: string, title: string, raw: Buffer, formulasPending = false, baseRevision?: number): Buffer {
+  const kind = `${formulasPending ? 'conflict-copied-formulas-pending' : 'conflict-copied'}${baseRevision === undefined ? '' : '-based'}`
+  const base = baseRevision === undefined ? '' : `${baseRevision}\n`
+  return createHash('sha256').update(`${kind}\n${sourceId}\n${base}${title}\n`, 'utf8').update(raw).digest()
 }

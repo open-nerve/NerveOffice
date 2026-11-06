@@ -1,7 +1,7 @@
 // 面板的防抖（M3-P4 设计 §3.4；Codex 评审 CX4，M3-P6 设计 §3.13）：面板开着时的输入才算，到 SDK 的防抖到点（含余量）之前是"防抖中"，
 // 开始与到点各通知一次；settled 等调用时的到点；页头里的不算；销毁时放行、不再通知
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PANEL_DEBOUNCES } from './internal-api/index.ts'
+import { PANEL_DEBOUNCES, PANEL_UNCOMMITTED_EVENT } from './internal-api/index.ts'
 import { PANEL_SETTLE_MARGIN_MS, watchPanelDebounces } from './panel-debounce-watch.ts'
 
 const NOTE_MS = PANEL_DEBOUNCES.find(debounce => debounce.panel === 'note')?.delayMs ?? Number.NaN
@@ -361,5 +361,66 @@ describe('防抖中的状态与通知（Codex 评审 CX4）：开始与到点各
     expect(watch.pending()).toBe(false)
     expect(listener).toHaveBeenCalledOnce()
     await watch.settled()
+  })
+})
+
+describe('数据验证详情里被命令拒绝、留在待办里的输入（M5R-I-05）', () => {
+  const uncommitted = (value: unknown) => document.dispatchEvent(new CustomEvent(PANEL_UNCOMMITTED_EVENT, { detail: { uncommitted: value } }))
+
+  it('补丁报告有提交不了的输入时算还没写进模型，撤下时结束；开始与结束各通知一次', () => {
+    const time = fakeTime()
+    page()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const listener = vi.fn()
+    watch.onChange(listener)
+    uncommitted(true)
+    expect(watch.pending()).toBe(true)
+    uncommitted(true)
+    expect(listener).toHaveBeenCalledOnce()
+    uncommitted(false)
+    expect(watch.pending()).toBe(false)
+    expect(listener).toHaveBeenCalledTimes(2)
+    watch.dispose()
+  })
+
+  it('与防抖中的输入合成一个状态：防抖到点后仍有提交不了的输入就接着算，不重复通知', async () => {
+    const time = fakeTime()
+    const { openDataValidation } = page()
+    const panel = openDataValidation()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    const listener = vi.fn()
+    watch.onChange(listener)
+    typeInto(panel.querySelector('input') ?? panel)
+    uncommitted(true)
+    await time.advance(DV_MS + PANEL_SETTLE_MARGIN_MS)
+    expect(watch.pending()).toBe(true)
+    expect(listener).toHaveBeenCalledOnce()
+    uncommitted(false)
+    expect(watch.pending()).toBe(false)
+    expect(listener).toHaveBeenCalledTimes(2)
+    watch.dispose()
+  })
+
+  it('settled 只等 SDK 的防抖，不等用户去改正不合法的输入（捕获照常进行，页头与离开提示仍按未保存算）', async () => {
+    const time = fakeTime()
+    page()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    uncommitted(true)
+    await watch.settled()
+    expect(watch.pending()).toBe(true)
+    watch.dispose()
+  })
+
+  it('不是这个约定的事件不算；销毁之后不再记', () => {
+    const time = fakeTime()
+    page()
+    const watch = watchPanelDebounces(document, { now: time.now, schedule: time.schedule })
+    for (const detail of [undefined, null, {}, { uncommitted: 'true' }, { uncommitted: 1 }])
+      document.dispatchEvent(new CustomEvent(PANEL_UNCOMMITTED_EVENT, { detail }))
+    document.dispatchEvent(new Event(PANEL_UNCOMMITTED_EVENT))
+    expect(watch.pending()).toBe(false)
+    watch.dispose()
+    uncommitted(true)
+    expect(watch.pending()).toBe(false)
   })
 })

@@ -236,6 +236,34 @@ describe('CSV 显示值读取', () => {
     expect(h.csv.read('sheet-1')).toEqual(Array.from({ length: 2 }, () => Array.from({ length: 2 }, () => ({ text: '', kind: 'text' }))))
   })
 
+  it('单元格图片只导出文字（D-03，M5R-I-06）：纯图片格为空串且不扩大矩形，图文混排只留文字，段落为 LF，链接标记去掉', () => {
+    const snapshot = csvBook()
+    // 平台插入的单元格图片：段落里一个 CUSTOM_BLOCK（\b），再加文档结尾 \r\n（image-input-insert.ts）
+    const image = (id: string, dataStream: string, startIndex: number) => ({ p: { id, body: { dataStream, customBlocks: [{ startIndex, blockId: `${id}-image` }] }, documentStyle: {} } })
+    first(snapshot).cellData = {
+      0: {
+        0: image('only', '\r\b\r\n', 1),
+        1: image('mixed', '说明\b\r\n', 2),
+        2: { p: { id: 'paragraphs', body: { dataStream: '第一段\r第二段\r\n' }, documentStyle: {} } },
+        3: { p: { id: 'link', body: { dataStream: '\u001F链接\u001E\r\n' }, documentStyle: {} } },
+        // 中间的空段落保留；夹在两段文字之间、图片独占的一段整段去掉
+        4: { p: { id: 'blank-line', body: { dataStream: '甲\r\r乙\r\n' }, documentStyle: {} } },
+        5: image('between', '上\r\b\r下\r\n', 2),
+      },
+      // 远处只有图片：不扩大导出矩形
+      40: { 10: image('far', '\b\r\n', 0) },
+    }
+    const h = setup(snapshot)
+    expect(h.csv.read('sheet-1')).toEqual([[
+      { text: '', kind: 'text' },
+      { text: '说明', kind: 'text' },
+      { text: '第一段\n第二段', kind: 'text' },
+      { text: '链接', kind: 'text' },
+      { text: '甲\n\n乙', kind: 'text' },
+      { text: '上\n下', kind: 'text' },
+    ]])
+  })
+
   it('空富文本正文下 SDK 仍显示的原值不能被范围扫描漏掉', () => {
     const snapshot = csvBook()
     first(snapshot).cellData = { 1: {

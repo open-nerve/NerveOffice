@@ -17,7 +17,7 @@ export interface CsvTarget {
   readonly formulasPending: () => boolean
 }
 
-export type CsvProblem = Exclude<CsvErrorReason, 'cancelled'> | CsvOperationReason | 'file-read' | 'preparation-failed' | 'input-pending' | 'download-failed'
+export type CsvProblem = Exclude<CsvErrorReason, 'cancelled'> | CsvOperationReason | 'file-read' | 'preparation-failed' | 'input-pending' | 'download-failed' | 'export-character' | 'export-capacity'
 
 export type CsvDialog
   = { readonly kind: 'closed' }
@@ -67,6 +67,17 @@ function problemOf(error: unknown, fallback: CsvProblem): CsvProblem {
   if (error instanceof CsvError && error.reason !== 'cancelled')
     return error.reason
   return fallback
+}
+
+/**
+ * 导出方向的问题（M5R-M-13）：编码器的 syntax/encoding 来自表格里 CSV 写不出的字符（空字符、孤立代理字符，例如 =CHAR(65536)），
+ * capacity 来自读取时的范围；沿用导入的文案会让人去检查“文件的引号与分隔符”。其余（行列、字段、字节等）两个方向说法相同
+ */
+function exportProblemOf(error: unknown, fallback: CsvProblem): CsvProblem {
+  const problem = problemOf(error, fallback)
+  if (problem === 'syntax' || problem === 'encoding')
+    return 'export-character'
+  return problem === 'capacity' ? 'export-capacity' : problem
 }
 
 /** 一轮意图只绑定一个原实例；所有续体在跨过异步边界后重新检查，不能重取实例接着写。 */
@@ -332,7 +343,7 @@ export function createCsvController(options: CsvControllerOptions): CsvControlle
       }
       catch (error) {
         if (current(mine))
-          publish(dialog, problemOf(error, fallback), undefined)
+          publish(dialog, exportProblemOf(error, fallback), undefined)
       }
     },
     cancel() {

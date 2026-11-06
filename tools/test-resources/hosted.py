@@ -128,9 +128,9 @@ def context(repo):
     workspace = _directory(os.environ.get("GITHUB_WORKSPACE", ""), required=True)
     workflow = os.environ.get("GITHUB_WORKFLOW_REF")
     main_workflow = workflow == repository + "/.github/workflows/ci.yml@refs/heads/main"
-    # 2026-11-02: approved P6 preacceptance on this one branch, before merging main.
-    # This is not a general branch allowlist or permission to delete hosted roots.
-    phase_ref = "refs/heads/codex/m5-p6-closeout"
+    # 2026-11-05: approved M5-P7 review fixes on this one branch, before merging main (ADR-026 appendix).
+    # It replaces the retired P6 branch. This is not a general branch allowlist or permission to delete hosted roots.
+    phase_ref = "refs/heads/m5-p7-review-fixes"
     phase_dispatch = (repository == "open-nerve/NerveOffice"
                       and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
                       and os.environ.get("GITHUB_REF") == phase_ref

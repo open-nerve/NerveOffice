@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { IMAGE_FRAGMENT_LIMITS, normalizeImageCells, normalizeImageFragment } from './image-source-policy.ts'
+import { IMAGE_FRAGMENT_LIMITS, imageTransition, normalizeImageAxis, normalizeImageCell, normalizeImageCells, normalizeImageFragment } from './image-source-policy.ts'
 
 const ORIGIN = 'https://docs.example.com'
 const SOURCE = '/api/assets/11111111-1111-4111-8111-111111111111'
@@ -18,6 +18,31 @@ describe('图片相关片段：验证完才生成规范副本', () => {
     if (typeof result.value !== 'object' || result.value === null)
       throw new Error('归一结果应保留对象')
     expect(Reflect.get(result.value, 'anchor')).toBe(anchor)
+  })
+
+  it('后面的字段归一时，前面未变的字段按原次序与原身份进入副本；数组保留长度与空位（P7-S15）', () => {
+    const anchor = { from: { row: 1, column: 2 } }
+    const input = Object.freeze({ altText: 'a', anchor, source: `${ORIGIN}${SOURCE}`, base64Cache: `${ORIGIN}${SOURCE}`, tail: 1 })
+    const result = normalizeImageFragment(input, ORIGIN)
+    expect(result).toEqual({ ok: true, changed: true, value: { altText: 'a', anchor, source: SOURCE, base64Cache: SOURCE, tail: 1 } })
+    if (!result.ok || typeof result.value !== 'object' || result.value === null)
+      throw new Error('合法图片片段被拒绝')
+    expect(Object.keys(result.value)).toEqual(['altText', 'anchor', 'source', 'base64Cache', 'tail'])
+    expect(Reflect.get(result.value, 'anchor')).toBe(anchor)
+    const stable = { v: 1 }
+    const list: unknown[] = [stable]
+    list[2] = { source: `${ORIGIN}${SOURCE}` }
+    // 尾部也留一个空位：长度只能来自原数组，不能由最后定义的下标推出
+    list.length = 4
+    const mapped = normalizeImageFragment(Object.freeze(list), ORIGIN)
+    if (!mapped.ok || !Array.isArray(mapped.value))
+      throw new Error('合法数组被拒绝或不再是数组')
+    expect(mapped.changed).toBe(true)
+    expect(mapped.value).toHaveLength(4)
+    expect(mapped.value[0]).toBe(stable)
+    expect(1 in mapped.value).toBe(false)
+    expect(mapped.value[2]).toEqual({ source: SOURCE })
+    expect(3 in mapped.value).toBe(false)
   })
 
   it('已规范的片段保持对象身份，普通文本与链接不改写', () => {
@@ -58,7 +83,9 @@ describe('图片相关片段：验证完才生成规范副本', () => {
   it('循环、过深、超预算和非 JSON 对象安全拒绝', () => {
     const cycle: Record<string, unknown> = {}
     cycle.child = cycle
-    expect(normalizeImageFragment(cycle, ORIGIN).ok).toBe(false)
+    // 循环由祖先检测按结构拒绝，不是等到深度超限（P7-S15 改用祖先栈后钉住原因）
+    expect(normalizeImageFragment(cycle, ORIGIN)).toEqual({ ok: false, reason: 'structure' })
+    expect(normalizeImageCells({ 0: { 0: { p: cycle } } }, ORIGIN)).toEqual({ ok: false, reason: 'structure' })
     let deep: unknown = { source: SOURCE }
     for (let i = 0; i <= IMAGE_FRAGMENT_LIMITS.depth; i++)
       deep = { child: deep }
@@ -113,5 +140,99 @@ describe('单元格写入：只处理 p 和对象样式，不递归普通值/公
     const before = JSON.stringify(matrix)
     expect(normalizeImageCells(matrix, ORIGIN).ok).toBe(false)
     expect(JSON.stringify(matrix)).toBe(before)
+  })
+})
+
+describe('大范围写入按片段计预算（M5R-I-01）', () => {
+  const grid = (rows: number, columns: number, cell: (row: number) => unknown): Record<number, Record<number, unknown>> =>
+    Object.fromEntries(Array.from({ length: rows }, (_, row) => [row, Object.fromEntries(Array.from({ length: columns }, (_, column) => [column, cell(row)]))]))
+  const side = () => ({ s: 1, cl: { rgb: '#000000' } })
+  const border = () => ({ bd: { t: side(), b: side(), l: side(), r: side() } })
+  // 链接格的富文本形态：段落、文字样式、超链接范围与无限页面尺寸，每格三十余个节点
+  const link = (row: number) => ({
+    id: `link-${row}`,
+    body: {
+      dataStream: `链接${row}\r\n`,
+      textRuns: [{ st: 0, ed: 4, ts: { cl: { rgb: '#1155cc' }, ul: { s: 1 } } }],
+      paragraphs: [{ startIndex: 5, paragraphStyle: { horizontalAlign: 0 } }],
+      customRanges: [{ startIndex: 0, endIndex: 4, rangeId: `range-${row}`, rangeType: 0, properties: { url: 'https://example.com/page' } }],
+      sectionBreaks: [{ startIndex: 6 }],
+    },
+    documentStyle: { pageSize: { width: Infinity, height: Infinity } },
+  })
+
+  it.each([
+    { name: '撤销与清除形态 {p:null, s:null} 6 万格', matrix: () => grid(3_000, 20, () => ({ v: 1, p: null, s: null })) },
+    { name: '加粗 6 万格', matrix: () => grid(3_000, 20, () => ({ s: { bl: 1 } })) },
+    { name: '四边框 6,000 格', matrix: () => grid(300, 20, () => ({ s: border() })) },
+    { name: '链接富文本 5,000 格', matrix: () => grid(5_000, 1, row => ({ p: link(row) })) },
+    { name: '带格式粘贴 1 万格（样式＋富文本）', matrix: () => grid(500, 20, row => ({ v: 'x', s: { bl: 1, ...border() }, p: link(row) })) },
+  ])('$name：不被图片预算拒绝，矩阵身份不变', ({ matrix }) => {
+    const value = matrix()
+    const result = normalizeImageCells(value, ORIGIN)
+    expect(result).toEqual({ ok: true, changed: false, value })
+    if (result.ok)
+      expect(result.value).toBe(value)
+  })
+
+  it('行列样式 6 万项同样按片段计预算', () => {
+    const value = Object.fromEntries(Array.from({ length: 60_000 }, (_, row) => [row, { h: 20, s: { bl: 1 } }]))
+    expect(normalizeImageAxis(value, ORIGIN)).toEqual({ ok: true, changed: false, value })
+  })
+
+  it('大范围写入里的非法来源仍整批拒绝；同源绝对地址仍被归一', () => {
+    const value = grid(3_000, 20, () => ({ s: { bl: 1 } }))
+    value[2_999]![19] = { s: { fill: { source: 'https://outside.example/a.png' } } }
+    expect(normalizeImageCells(value, ORIGIN)).toEqual({ ok: false, reason: 'source' })
+    value[2_999]![19] = { p: { drawings: { i: { source: `${ORIGIN}${SOURCE}` } } } }
+    const result = normalizeImageCells(value, ORIGIN)
+    expect(result.ok && result.changed).toBe(true)
+    if (result.ok)
+      expect((result.value as typeof value)[2_999]![19]).toEqual({ p: { drawings: { i: { source: SOURCE } } } })
+  })
+
+  it('单个片段仍受规模与深度上限约束，原因分类为 limit', () => {
+    const wide = { p: { body: { textRuns: Array.from({ length: IMAGE_FRAGMENT_LIMITS.entries + 1 }, () => ({ st: 0 })) } } }
+    expect(normalizeImageCells({ 0: { 0: wide } }, ORIGIN)).toEqual({ ok: false, reason: 'limit' })
+    let deep: unknown = { source: SOURCE }
+    for (let i = 0; i <= IMAGE_FRAGMENT_LIMITS.depth; i++)
+      deep = { child: deep }
+    expect(normalizeImageCells({ 0: { 0: { s: deep } } }, ORIGIN)).toEqual({ ok: false, reason: 'limit' })
+  })
+
+  it('状态迁移的拒绝带有界原因：来源、规模', () => {
+    expect(imageTransition({ source: SOURCE }, { source: SOURCE })).toEqual({ ok: true })
+    expect(imageTransition({ source: SOURCE }, { source: 'blob:bad' })).toEqual({ ok: false, reason: 'source' })
+    expect(imageTransition({ source: SOURCE }, { source: SOURCE, base64Cache: OTHER })).toEqual({ ok: false, reason: 'source' })
+    let before: unknown = 1
+    let after: unknown = 2
+    for (let i = 0; i <= IMAGE_FRAGMENT_LIMITS.depth; i++) {
+      before = { child: before }
+      after = { child: after }
+    }
+    expect(imageTransition(before, after)).toEqual({ ok: false, reason: 'limit' })
+  })
+})
+
+describe('单元格公式里 IMAGE() 首参的本站绝对地址（M5R-I-03）', () => {
+  it('写入时把首参改为相对地址，原件、其他字段与其他格保持身份', () => {
+    const stable = { v: 1, f: '=SUM(A1)' }
+    const matrix = { 0: { 0: { f: `=IMAGE("${ORIGIN}${SOURCE}","",0)`, v: 'x' }, 1: stable } }
+    const result = normalizeImageCells(matrix, ORIGIN)
+    expect(result).toEqual({ ok: true, changed: true, value: { 0: { 0: { f: `=IMAGE("${SOURCE}","",0)`, v: 'x' }, 1: stable } } })
+    expect(matrix[0][0].f).toBe(`=IMAGE("${ORIGIN}${SOURCE}","",0)`)
+    if (result.ok)
+      expect((result.value as typeof matrix)[0][1]).toBe(stable)
+  })
+
+  it('没有本站源（历史预检）时不改写；相对地址、外站地址与非 IMAGE 文字不变', () => {
+    for (const [cell, origin] of [
+      [{ f: `=IMAGE("${ORIGIN}${SOURCE}")` }, ''],
+      [{ f: `=IMAGE("${SOURCE}")` }, ORIGIN],
+      [{ f: `=IMAGE("https://outside.example${SOURCE}")` }, ORIGIN],
+      [{ f: `="${ORIGIN}${SOURCE}"` }, ORIGIN],
+      [{ v: `=IMAGE("${ORIGIN}${SOURCE}")` }, ORIGIN],
+    ] as const)
+      expect(normalizeImageCell(cell, origin)).toEqual({ ok: true, changed: false, value: cell })
   })
 })

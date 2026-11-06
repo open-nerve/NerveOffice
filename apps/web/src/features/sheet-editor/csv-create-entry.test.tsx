@@ -68,6 +68,21 @@ describe('从 CSV 新建的页面', () => {
     expect(screen.getByRole('button', { name: '更换文件' })).toBeDisabled()
   })
 
+  it('M5R-M-14 结果未知时会话变化：提示此前的创建可能已完成，并且仍给出重新登录入口', async () => {
+    const h = csvCreationFixture()
+    render(<CsvCreateEntry controller={h.controller} backHref="/spaces/example" loginHref="/login?next=csv" />)
+    await act(async () => h.controller.load())
+    const response = pending<typeof CSV_CREATED>()
+    h.api.create.mockImplementationOnce(async () => response.promise)
+    await choose()
+    fireEvent.click(screen.getByRole('button', { name: '确认创建并导入' }))
+    await waitFor(() => expect(h.api.create).toHaveBeenCalledOnce())
+    await act(async () => response.reject(new TypeError('network failed')))
+    act(() => h.controller.invalidate())
+    expect(screen.getByRole('alert')).toHaveTextContent('此前的创建可能已经完成')
+    expect(screen.getByRole('link', { name: '重新登录' })).toHaveAttribute('href', '/login?next=csv')
+  })
+
   it('已创建但导入失败保留文档链接；重试成功后让原页头报告保存', async () => {
     const h = await entry()
     h.host.apply.mockResolvedValueOnce(false)

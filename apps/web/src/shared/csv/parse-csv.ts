@@ -1,5 +1,5 @@
 import type { CsvTable } from './csv-format.ts'
-import { assertCsvShape, CSV_LIMITS, CsvError } from './csv-format.ts'
+import { assertCsvShape, CSV_LIMITS, CsvError, isDocumentStructureCharacter } from './csv-format.ts'
 
 type FieldState = 'start' | 'bare' | 'quoted' | 'closed'
 const YIELD_CHARACTERS = 16_384
@@ -63,6 +63,8 @@ export async function parseCsv(bytes: Uint8Array, options?: { readonly signal?: 
     const char = text.charAt(index)
     if (char === '\0')
       throw new CsvError('syntax')
+    if (isDocumentStructureCharacter(char))
+      throw new CsvError('control')
     if (state === 'quoted') {
       if (char === '"')
         state = 'closed'

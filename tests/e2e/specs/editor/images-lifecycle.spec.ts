@@ -1,5 +1,6 @@
 import type { RebuildCalculationGate } from '../../../../apps/web/src/editor/testing/rebuild-calculation-gate.ts'
 import { readFile } from 'node:fs/promises'
+import { historyPagePath } from '@nerve-office/contracts'
 import { installRebuildCalculationGate } from '../../../../apps/web/src/editor/testing/rebuild-calculation-gate.ts'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
 import { createDocument, createUser, grantDocument } from '../../support/database.ts'
@@ -9,7 +10,7 @@ import { expectImagePixels, imageFailureSentinel, prepareImageDocument } from '.
 import { imageSample } from '../../support/image-sample.ts'
 import { logoutWithOpenEditor } from '../../support/logout.ts'
 import { actAs, loginThroughApi, loginThroughUi } from '../../support/session.ts'
-import { EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, openReader, waitForEditorAccess } from '../../support/sheet.ts'
+import { EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, openAndEnterEditing, openReader, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -115,6 +116,10 @@ test.describe('US-M5-07 图片身份与旧实例的实际回收', { tag: '@test-
     await page.goto(`/documents/${brokenId}`)
     const brokenUrl = page.url()
     await expect(page.getByText('编辑器加载失败，请刷新页面重试', { exact: true })).toBeVisible()
+    // M5R-M-06：所有者能看历史，失败页给出从历史恢复的入口（另开标签页，与页头的“历史”一致）
+    const restore = page.getByRole('link', { name: '从历史恢复' })
+    await expect(restore).toHaveAttribute('href', historyPagePath(brokenId))
+    await expect(restore).toHaveAttribute('target', '_blank')
     await openAndEnterEditing(page, documentId, 'steady')
     await expectImagePixels(page, 'C3')
     await imageFailureSentinel(page, documentId, '加载失败后新文档保存哨兵')
@@ -160,6 +165,17 @@ test.describe('US-M5-07 图片身份与旧实例的实际回收', { tag: '@test-
       await page.unroute(path)
       for (const a1 of ['C3', 'A8', 'D8'])
         await expectImagePixels(page, a1, false)
+      // M5R-M-09：暂停期间切表再切回，浮图照常建图元、显示本地占位，不发读取。修复前读取被取消，SDK 不建图元并约每 33 毫秒重试
+      const reads: string[] = []
+      const record = (request: { url: () => string }): void => {
+        reads.push(new URL(request.url()).pathname)
+      }
+      page.on('request', record)
+      await sheetTab(page, '切表对照').click()
+      await sheetTab(page, '图片复核').click()
+      await expect.poll(async () => page.evaluate(() => window.__nerveEditorProbe?.images.element('first')?.src ?? 'missing')).toMatch(/\.svg$/)
+      page.off('request', record)
+      expect(reads).not.toContain(asset.url)
       const replacement = await createUser('image-other')
       await loginThroughUi(other, replacement)
       await expect(other.getByRole('heading', { name: '我的空间', exact: true })).toBeVisible()

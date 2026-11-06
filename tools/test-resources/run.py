@@ -484,10 +484,15 @@ def main():
                 result = result or 1
                 run.update(stopReason='log-cap-or-output-error', outputErrors=log_problem[:4])
             run.update(commandExitCode=code, exitCode=result, interrupted=bool(stopped), producerQuiescent=True)
-            receipt = run.finish("interrupted" if stopped else ("passed" if result == 0 else "failed"), release=False)
+            requested = "interrupted" if stopped else ("passed" if result == 0 else "failed")
+            receipt = run.finish(requested, release=False)
             if receipt["status"] == "cleanup-pending":
                 publish_container_diagnostic(run)
                 print("测试环境尚不能安全回收；原件与归属已保留。" + receipt.get("cleanupError", ""), file=sys.stderr)
+                return result or 1
+            if receipt["status"] != requested:
+                # 例如运行期间临时目录被外部删除（M5R-M-19）：没有可发布的报告，不能以子进程的退出码冒充本轮成功
+                print("测试运行未按请求的结论收尾：" + receipt.get("cleanupError", receipt["status"]), file=sys.stderr)
                 return result or 1
             publish(run, args.kind)
             return result
@@ -517,8 +522,8 @@ def main():
                 run.release()
                 for sig, handler in original.items():
                     signal.signal(sig, handler)
-            with locked(store.root / "gc.lock"):
-                store.prune(time.time())
+            # 与 finish 的收尾 GC 一样隔离：它在 finally 里，出错若抛出会盖掉已确定的返回值，让已发布的 passed 轮以 1 退出（M5R-M-20 补正）
+            store.prune_isolated(time.time())
 
 
 if __name__ == "__main__":

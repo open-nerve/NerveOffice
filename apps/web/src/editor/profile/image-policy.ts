@@ -1,7 +1,9 @@
 import type { IDisposable, Univer } from '@univerjs/core'
 import type { FUniver } from '@univerjs/core/facade'
+import type { ImageSourceResult } from '../images/image-source-policy.ts'
+import type { ImageWriteRejection } from '../images/system-image-input.ts'
 import type { ImageCleanupScope, LegacyImageRemoval } from '../internal-api/ui.ts'
-import { acceptsImageTransition, normalizeImageCell, normalizeImageFragment, normalizeImageSheet } from '../images/image-source-policy.ts'
+import { acceptsImageTransition, imageTransition, normalizeImageCell, normalizeImageFragment, normalizeImageSheet } from '../images/image-source-policy.ts'
 import { createImageCommandPreview, IMAGE_COMMAND_PROTOCOL, prepareLegacyImageRemoval } from '../internal-api/ui.ts'
 import { prepareImageCommandInput } from './image-command-input.ts'
 
@@ -15,24 +17,36 @@ const RELATED = new Set([C.insert, C.update, C.remove, C.apply, C.setCells, C.ap
 
 const legacyTransition = (before: unknown, after: unknown): boolean => acceptsImageTransition(before, after, true)
 
-function commandChecker(univer: Univer, permits: WeakSet<object>): (id: string, params: unknown) => boolean {
-  const preview = createImageCommandPreview(univer, acceptsImageTransition)
-  const cleanupPreview = createImageCommandPreview(univer, legacyTransition)
-  const validCell = (cell: unknown): boolean => {
-    const result = normalizeImageCell(cell, '')
+type FragmentFailure = Extract<ImageSourceResult, { ok: false }>['reason']
+const REJECTIONS: Readonly<Record<FragmentFailure, ImageWriteRejection>> = { source: 'write-source', limit: 'write-limit', structure: 'write-structure' }
+
+/** 返回 undefined 表示放行；拒绝时返回最后一个判定失败的有界原因，未归类的失败按结构处理。 */
+function commandChecker(univer: Univer, permits: WeakSet<object>): (id: string, params: unknown) => ImageWriteRejection | undefined {
+  let reason: ImageWriteRejection = 'write-structure'
+  const settled = (result: ImageSourceResult): boolean => {
+    if (!result.ok)
+      reason = REJECTIONS[result.reason]
+    else if (result.changed)
+      reason = 'write-source'
     return result.ok && !result.changed
   }
-  const validFragment = (value: unknown): boolean => {
-    const result = normalizeImageFragment(value, '')
-    return result.ok && !result.changed
+  const transition = (allowLegacyRemoval: boolean) => (before: unknown, after: unknown): boolean => {
+    const result = imageTransition(before, after, allowLegacyRemoval)
+    if (!result.ok)
+      reason = REJECTIONS[result.reason]
+    return result.ok
   }
-  const validSheet = (value: unknown): boolean => {
-    const result = normalizeImageSheet(value, '')
-    return result.ok && !result.changed
-  }
-  const check = (id: string, params: unknown, history: boolean): boolean => {
-    if (id === C.background || id === C.applyBackground)
+  const preview = createImageCommandPreview(univer, transition(false))
+  const cleanupPreview = createImageCommandPreview(univer, transition(true))
+  const validCell = (cell: unknown): boolean => settled(normalizeImageCell(cell, ''))
+  const validFragment = (value: unknown): boolean => settled(normalizeImageFragment(value, ''))
+  const validSheet = (value: unknown): boolean => settled(normalizeImageSheet(value, ''))
+  /** prepared：params 刚经本次判定的 prepareImageCommandInput 校验，且准备阶段没有改动它。 */
+  const check = (id: string, params: unknown, history: boolean, prepared: boolean): boolean => {
+    if (id === C.background || id === C.applyBackground) {
+      reason = 'write-unsupported'
       return false
+    }
     if (!RELATED.has(id))
       return true
     if (C.structural.includes(id) || C.insertAxis.includes(id)) {
@@ -60,47 +74,76 @@ function commandChecker(univer: Univer, permits: WeakSet<object>): (id: string, 
     const field = id === C.setCells ? 'value' : 'cellValue'
     if (history)
       return preview.sheet({ unitId: params.unitId, sheet: { cellData: params[field] } }, validFragment)
-    return preview.cells(params, params[field], id !== C.setCells, validCell)
+    // 准备阶段原样通过的新值不再整体遍历第二遍；旧值、命名样式与矩阵结构照常校验（P7-S15，M5R-I-01 的分支 CI 首轮）
+    return preview.cells(params, params[field], id !== C.setCells, validCell, prepared)
   }
   const historyInput = (id: string, params: unknown): boolean => {
     if (!RELATED.has(id))
-      return check(id, params, true)
+      return check(id, params, true, false)
     const input = prepareImageCommandInput(id, params, '')
-    return input.ok && !input.changed && check(id, input.params, true)
+    if (!input.ok) {
+      reason = REJECTIONS[input.reason]
+      return false
+    }
+    if (input.changed) {
+      reason = 'write-source'
+      return false
+    }
+    return check(id, input.params, true, true)
   }
-  return (id, params) => {
+  const accepts = (id: string, params: unknown): boolean => {
     if (id === C.undo || id === C.redo)
       return preview.history(id, historyInput)
     if (!RELATED.has(id))
-      return check(id, params, false)
+      return check(id, params, false, false)
     const input = prepareImageCommandInput(id, params, location.origin)
-    return input.ok && check(id, input.params, false) && input.commit()
+    if (!input.ok) {
+      reason = REJECTIONS[input.reason]
+      return false
+    }
+    // 准备阶段没有改动时，空 origin 下的复核必然通过且未改变（来源已是相对地址、没有 NaN，公式在空 origin 下原样返回），
+    // 可以只补查旧值、命名样式与矩阵键和坐标；改动过（同源绝对地址、NaN 等）就照旧整体复核准备后的值（P7-S15 复验 I-1）
+    if (!check(id, input.params, false, !input.changed))
+      return false
+    reason = 'write-structure'
+    return input.commit()
   }
+  return (id, params) => {
+    reason = 'write-structure'
+    return accepts(id, params) ? undefined : reason
+  }
+}
+
+/** 图片显示与资源请求的失败走 failed；写入策略的拒绝走 rejected，只带有界原因，不回显输入（M5R-M-10）。 */
+export interface ImagePolicyChannels {
+  readonly failed: (error: unknown) => void
+  readonly rejected: (reason: ImageWriteRejection) => void
 }
 
 export interface ImagePolicy extends IDisposable {
   readonly prepareLegacyRemoval: (sheetId: string, ids: readonly string[]) => LegacyImageRemoval | undefined
 }
 
-export function installImagePolicy(univer: Univer, api: FUniver, report: (error: unknown) => void, scope?: ImageCleanupScope): ImagePolicy {
+export function installImagePolicy(univer: Univer, api: FUniver, channels: ImagePolicyChannels, scope?: ImageCleanupScope): ImagePolicy {
   let active = true
   const permits = new WeakSet<object>()
   const accept = commandChecker(univer, permits)
+  const report = channels.failed
   const before = (id: string, params: unknown, event: { cancel?: boolean }): void => {
     if (event.cancel)
       return
-    let accepted = false
+    let rejection: ImageWriteRejection | undefined = 'write-structure'
     try {
-      accepted = accept(id, params)
+      rejection = accept(id, params)
     }
     catch { /* 畸形图片参数只作整次拒绝，不回显输入。 */ }
-    if (accepted)
+    if (rejection === undefined)
       return
     event.cancel = true
     try {
-      report(new Error('图片操作未完成：来源不符合要求，或需要先确认清理旧图片。'))
+      channels.rejected(rejection)
     }
-    catch { /* 错误通道失效也不能让被拒绝的写入继续。 */ }
+    catch { /* 提示通道失效也不能让被拒绝的写入继续。 */ }
   }
   // Facade 的通用事件明确跳过 Undo/Redo；必须在专属事件里预检，不能等内部 mutation 再拒绝。
   const subscriptions = [

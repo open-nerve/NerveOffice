@@ -1,24 +1,30 @@
 import type { Page } from '@playwright/test'
+import type { TargetServer } from '../../support/servers.ts'
 import type { Workbook } from '../../support/sheet.ts'
 import { Buffer } from 'node:buffer'
 import { readFile } from 'node:fs/promises'
 import { gunzipSync, gzipSync } from 'node:zlib'
+import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { FORMULA_MODE_PARAM, FORMULA_MODE_VALUES } from '../../../../apps/web/src/editor/testing/selftest-report.ts'
-import { saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
-import { createUser } from '../../support/database.ts'
+import { expectAssetHeaders, renderAsset, saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
+import { createUser, withDatabase } from '../../support/database.ts'
 import { probeChangeSeq, probeFormulaMode, probeFormulasSettled, probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, imagePixels, prepareImageDocument } from '../../support/image-editor.ts'
 import { imageSample } from '../../support/image-sample.ts'
 import { expect, test } from '../../support/implicit-request-fixture.ts'
-import { loginThroughApi } from '../../support/session.ts'
+import { startTargetServer } from '../../support/servers.ts'
+import { actAs, loginThroughApi } from '../../support/session.ts'
 import { cellOf, createSheetThroughApi, EDITOR_TEST_TIMEOUT, enterEditing, exitEditing, isSaveRequest, openAndEnterEditing, reloadAndEnterEditing, saveAndWait, saveButton, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
 const REJECTED_CELLS = ['B1', 'C1', 'D1', 'E1', 'F1', 'G1', 'H1', 'I1']
 
-/** 首次打开只含非法来源公式，没有任何可先读取该地址的合法图片，避免缓存掩盖来源检查。 */
-async function prepareFormulaDocument(page: Page) {
+/**
+ * 首次打开只含非法来源公式，没有任何可先读取该地址的合法图片，避免缓存掩盖来源检查。
+ * 站外来源指向本地目标服务（M5R-M-15）：请求观察器有盲区，以服务端零命中作为网络侧真值
+ */
+async function prepareFormulaDocument(page: Page, external: string) {
   await loginThroughApi(page, await createUser('image-provenance'))
   const asset = await uploadAsset(page)
   const documentId = await createSheetThroughApi(page, 'IMAGE 来源证明')
@@ -42,7 +48,7 @@ async function prepareFormulaDocument(page: Page) {
       4: { f: `=IMAGE({"${asset.url}"})` },
       5: { f: '=IMAGE(IF(TRUE,A1,A1))' },
       6: { f: '=IMAGE(LEFT(A1,LEN(A1)))' },
-      7: { f: '=IMAGE("https://example.invalid/implicit-image.png")' },
+      7: { f: `=IMAGE("${external}/implicit-image.png")` },
       8: { f: inputFormula.formula },
     },
     1: { 1: { f: '=IF(FALSE,IMAGE(A1),123)' } },
@@ -62,9 +68,24 @@ async function expectRejectedFormulas(page: Page) {
 }
 
 test.describe('图片来源、写入边界与保存位置', { tag: '@test-build' }, () => {
+  let target: TargetServer
+
+  test.beforeEach(async () => {
+    target = await startTargetServer()
+  })
+
+  test.afterEach(async () => {
+    try {
+      expect(target.requests(), '站外样本的目标服务不得收到任何请求').toEqual([])
+    }
+    finally {
+      await target.close()
+    }
+  })
+
   for (const mode of ['worker', 'main-thread'] as const) {
     test(`US-M5-14 ${mode}：首次打开非法 IMAGE 来源零读取，字面量与参数尺寸在重开后保持`, async ({ page }, testInfo) => {
-      const { asset, documentId, inputFormula } = await prepareFormulaDocument(page)
+      const { asset, documentId, inputFormula } = await prepareFormulaDocument(page, target.origin)
       let reads = 0
       page.on('request', (request) => {
         if (request.method() === 'GET' && new URL(request.url()).pathname === asset.url)
@@ -116,7 +137,7 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
     await expect.poll(async () => probeFormulasSettled(page)).toBe(true)
     const before = drawingsIn(await probeSnapshot(page))
     const sequence = await probeChangeSeq(page)
-    const replace = async (mixed: boolean) => page.evaluate(async ({ source, mixed }) => {
+    const replace = async (mixed: boolean) => page.evaluate(async ({ source, mixed, external }) => {
       const probe = window.__nerveEditorProbe
       if (!probe)
         throw new Error('没有编辑器探针')
@@ -128,9 +149,9 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
       // 独立命令 payload；不调用会在命令前修改模型的 FOverGridImage.setSource。
       const drawings = [{ ...images.first, source, base64Cache: source }]
       if (mixed)
-        drawings.push({ ...images.second, source: 'https://example.invalid/private-image', base64Cache: 'https://example.invalid/private-image' })
+        drawings.push({ ...images.second, source: external, base64Cache: external })
       return probe.univerAPI.executeCommand('sheet.command.set-sheet-image', { unitId: snapshot.id, drawings })
-    }, { source: new URL(replacement.url, page.url()).href, mixed })
+    }, { source: new URL(replacement.url, page.url()).href, mixed, external: `${target.origin}/private-image` })
 
     expect(await replace(true)).toBe(false)
     expect(drawingsIn(await probeSnapshot(page))).toEqual(before)
@@ -191,5 +212,60 @@ test.describe('图片来源、写入边界与保存位置', { tag: '@test-build'
     await page.unroute(path)
     await imageFailureSentinel(page, documentId, '修正图片来源后的真实保存')
     expect((await savedContent(page, documentId)).revision).toBe(original.revision + 1)
+  })
+
+  test('US-M5-07 只用本站绝对地址的 IMAGE() 写入时规范为相对地址，保存后其他成员可读（M5R-I-03）', async ({ page, anotherDevice }) => {
+    const owner = await createUser('image-absolute-owner')
+    const reader = await createUser('image-absolute-reader')
+    await loginThroughApi(page, owner)
+    const asset = await uploadAsset(page)
+    const documentId = await createSheetThroughApi(page, 'IMAGE 绝对地址')
+    await openAndEnterEditing(page, documentId, 'steady')
+    const absolute = new URL(asset.url, page.url()).href
+    expect(absolute).not.toBe(asset.url)
+    // 同表不放相对写法：相对写法建立的引用会掩盖绝对写法缺引用的问题（审查报告 I-03 的“测试为何未覆盖”）
+    await setCellValue(page, 'A1', `=IMAGE("${absolute}","",0)`)
+    await expectImagePixels(page, 'A1')
+    await saveAndWait(page)
+    const saved = await savedContent(page, documentId)
+    expect(cellOf(saved.snapshot, 'A1')?.f).toBe(`=IMAGE("${asset.url}","",0)`)
+    expect(saved.text).not.toContain(absolute)
+    await loginThroughApi(anotherDevice, reader)
+    await anotherDevice.goto('/')
+    const before = await renderAsset(anotherDevice, asset.url)
+    await expectAssetHeaders(before.response, 404, 'image/png')
+    await actAs(page, 'PUT', `/api/documents/${documentId}/grants/${reader.id}`, { role: 'viewer' })
+    const shared = await renderAsset(anotherDevice, asset.url)
+    await expectAssetHeaders(shared.response, 200, asset.mimeType)
+    expect({ width: shared.width, height: shared.height }).toEqual({ width: asset.width, height: asset.height })
+  })
+
+  test('US-M5-07 他人预埋的无权图片地址：有权成员在编辑器里正常保存，也不会把它共享出去（M5R-I-02）', async ({ page, anotherDevice }) => {
+    const holder = await createUser('image-plant-holder')
+    const planter = await createUser('image-plant-planter')
+    await loginThroughApi(page, holder)
+    await loginThroughApi(anotherDevice, planter)
+    await anotherDevice.goto('/')
+    // 乙（holder）的表 X 引用图片 A；上传窗口推到 24 小时之外，只剩 X 的当前引用这一条来源
+    const asset = await uploadAsset(page)
+    const x = await createSheetThroughApi(page, '乙的图片表')
+    await saveAssetSnapshot(page, x, JSON.stringify({ ...SHEET_TEMPLATE, id: (await savedContent(page, x)).snapshot.id, extra: { images: [asset.url] } }))
+    await withDatabase(async client => client.query('UPDATE assets SET created_at=now()-interval \'25 hours\' WHERE id=$1', [asset.assetId]))
+    // 甲（planter）读不到 A，却把它的地址写进两人都能编辑的 D：放在单元格文字里，编辑器保存时原样保留
+    const d = await createSheetThroughApi(anotherDevice, '共同编辑的表')
+    const unitId = (await savedContent(anotherDevice, d)).snapshot.id
+    const sheet = SHEET_TEMPLATE.sheets['sheet-1']
+    await saveAssetSnapshot(anotherDevice, d, JSON.stringify({ ...SHEET_TEMPLATE, id: unitId, sheets: { 'sheet-1': { ...sheet, cellData: { 0: { 0: { v: asset.url } } } } } }))
+    await actAs(anotherDevice, 'PUT', `/api/documents/${d}/grants/${holder.id}`, { role: 'editor' })
+    await expectAssetHeaders((await renderAsset(anotherDevice, asset.url)).response, 404, 'image/png')
+    // 乙在编辑器里打开 D、改另一格、正常保存
+    await openAndEnterEditing(page, d, 'steady')
+    await setCellValue(page, 'B2', '乙的真实修改')
+    await saveAndWait(page)
+    const saved = await savedContent(page, d)
+    expect(cellOf(saved.snapshot, 'B2')?.v).toBe('乙的真实修改')
+    expect(cellOf(saved.snapshot, 'A1')?.v).toBe(asset.url)
+    // 预埋地址是沿用的，不按乙的权限升级：甲仍只得到占位
+    await expectAssetHeaders((await renderAsset(anotherDevice, asset.url)).response, 404, 'image/png')
   })
 })

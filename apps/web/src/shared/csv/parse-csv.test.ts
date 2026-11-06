@@ -39,6 +39,16 @@ describe('CSV 解析：保留字段，只交付完整矩阵', () => {
     await expect(parseCsv(utf8(input))).rejects.toMatchObject({ reason: 'syntax' })
   })
 
+  it.each(['08', '0B', '0C', '0E', '15', '1A', '1D', '1E', '1F'])('文档流的结构字符 U+00%s 在导入时拒绝：进了文字格，编辑时会被 SDK 当成结构标记而出错（审查疑点 Q-12）', async (hex) => {
+    const char = String.fromCharCode(Number.parseInt(hex, 16))
+    for (const input of [`a${char}b`, `"x${char}"`, `ok\n${char}`])
+      await expect(parseCsv(utf8(input))).rejects.toMatchObject({ reason: 'control' })
+  })
+
+  it('普通的控制字符与制表符、换行照常保留（只拒绝文档流用作结构标记的那些）', async () => {
+    await expect(parseCsv(utf8('a\tb,"x\ny",\u0001\u0007\u007F'))).resolves.toMatchObject({ rows: [['a\tb', 'x\ny', '\u0001\u0007\u007F']] })
+  })
+
   it.each([[0xFF], [0xC3], [0xC0, 0xAF], [0xED, 0xA0, 0x80], [0xFF, 0xFE, 0x61, 0]])('坏 UTF-8 %j 不用替换字符悄悄接受', async (...bytes) => {
     await expect(parseCsv(new Uint8Array(bytes))).rejects.toMatchObject({ reason: 'encoding' })
   })

@@ -61,15 +61,31 @@ for (const scenario of scenes) {
     await scenario.assertCanvas(page)
     const requests: string[] = []
     page.on('request', request => requests.push(`${request.method()} ${new URL(request.url()).pathname}`))
+    // D-06（M5R-M-04）：资格未变时的周期复核只核验，画布不隐藏、不进加载态。记下预览画布在复核期间的每次变化
+    await page.evaluate(() => {
+      const surface = document.querySelector('#sheet-editor')
+      if (!(surface instanceof HTMLElement))
+        throw new Error('没有预览画布')
+      const seen: string[] = []
+      Object.defineProperty(window, '__previewSurfaceStates', { value: seen })
+      new MutationObserver(() => seen.push(`${surface.dataset.editorState}:${String(surface.hidden)}:${surface.style.visibility}`))
+        .observe(surface, { attributes: true, attributeFilter: ['data-editor-state', 'hidden', 'style'] })
+    })
     const beforeIdle = await times(scene.owner.id, true)
-    // 等真实的 30 秒周期；不拨浏览器或服务端时钟，不伪造刷新调用。
-    await page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/session/check', { timeout: 40_000 })
+    // 等真实的 30 秒周期；不拨浏览器或服务端时钟，不伪造刷新调用。复核先确认会话、再读历史详情，两个回包都等到
+    const sessionChecked = page.waitForResponse(response => new URL(response.url()).pathname === '/api/auth/session/check', { timeout: 40_000 })
+    const detailChecked = page.waitForResponse(response => new URL(response.url()).pathname === detail, { timeout: 40_000 })
+    await sessionChecked
+    await detailChecked
     await waitForEditorAccess(page, 'read')
     await scenario.assertCanvas(page)
     const afterIdle = await times(scene.owner.id)
     expect(afterIdle).toEqual(beforeIdle)
     expect(requests).toContain(`GET ${detail}`)
-    expect(requests.some(path => path.startsWith('GET /api/assets/'))).toBe(pictures)
+    // 只核验：不重下正文与图片，画布始终是就绪、可见
+    expect(requests.some(path => path.startsWith('GET /api/assets/'))).toBe(false)
+    expect(requests).not.toContain(`GET ${detail}/content`)
+    expect(await page.evaluate(() => (Reflect.get(window, '__previewSurfaceStates') as string[]).filter(state => state !== 'ready:false:visible'))).toEqual([])
     expect(requests).not.toContain('GET /api/auth/session')
 
     async function failRecheck(): Promise<void> {

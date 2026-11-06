@@ -8,7 +8,7 @@ import { Buffer } from 'node:buffer'
 import { randomUUID } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { APPLICATION_NAME, DocumentAssetReferences, DocumentAssetsRepository, DocumentsRepository } from '@nerve-office/api/testing'
-import { errorResponseSchema, saveContentResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
+import { createdDocumentSchema, errorResponseSchema, saveContentResponseSchema, SHEET_TEMPLATE } from '@nerve-office/contracts'
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createAccount } from '../support/accounts.ts'
 import { startTestApp } from '../support/api-app.ts'
@@ -65,6 +65,11 @@ async function expire(ids: readonly string[]): Promise<void> {
 async function share(from: Client, doc: SeededDocument, to: Client, enabled = true): Promise<void> {
   const response = await asUser(app.baseUrl, from.session, `/api/documents/${doc.id}/grants/${to.account.id}`, enabled ? { method: 'PUT', body: { role: 'viewer' } } : { method: 'DELETE' })
   expect(response.status).toBe(enabled ? 200 : 204)
+  await response.arrayBuffer()
+}
+async function grant(from: Client, doc: SeededDocument, to: Client, role: 'viewer' | 'editor'): Promise<void> {
+  const response = await asUser(app.baseUrl, from.session, `/api/documents/${doc.id}/grants/${to.account.id}`, { method: 'PUT', body: { role } })
+  expect(response.status).toBe(200)
   await response.arrayBuffer()
 }
 async function facts(id: string) {
@@ -172,7 +177,7 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     expect(replace).not.toHaveBeenCalled()
   })
 
-  it('原来无权的正文地址不会因 unchanged 被升级；下一次真实修改才按新权限授权', async () => {
+  it('原来无权的正文地址：unchanged 与获权后的真实修改都不升级；删除后重新引入才按当时权限授权（D-01）', async () => {
     const source = await document(owner)
     const target = await document()
     const id = await uploaded(owner)
@@ -187,10 +192,161 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     expect((await facts(target.id)).references).toEqual([])
     expect(await status(editor, id)).toBe('404')
     await share(owner, source, editor)
+    // 已在上一版里的地址是沿用，不按保存人后来的权限升级
     await saved(await put(editor, target, raw(target, [id], '真正改动'), { baseRevision: 2 }))
+    expect((await facts(target.id)).references).toEqual([])
+    // 删去后重新引入：这一次是新出现的，按引入者当时的权限授权
+    await saved(await put(editor, target, raw(target, [], '删去'), { baseRevision: 3 }))
+    await saved(await put(editor, target, raw(target, [id], '重新引入'), { baseRevision: 4 }))
     await share(owner, source, editor, false)
     expect((await facts(target.id)).references).toEqual([id])
     expect(await status(editor, id)).toBe('200')
+  })
+
+  it('M5R-I-02 他人预埋的无权地址，有权的第三人真实修改保存也不会“洗白”', async () => {
+    // 乙（owner）拥有 X 与 A；甲（editor）读不到 X，但知道 A 的地址并预埋进两人都能编辑的 D
+    const x = await document(owner)
+    const a = await uploaded(owner)
+    await saved(await put(owner, x, raw(x, [a]), { baseRevision: 1 }))
+    await expire([a])
+    const d = await document(editor)
+    await grant(editor, d, owner, 'editor')
+    await saved(await put(editor, d, raw(d, [a], '甲预埋'), { baseRevision: 1 }))
+    expect((await facts(d.id)).references).toEqual([])
+    await saved(await put(owner, d, raw(d, [a], '乙的真实修改'), { baseRevision: 2 }))
+    expect((await facts(d.id)).references).toEqual([])
+    expect(await status(editor, a)).toBe('404')
+    // 乙明确删去后再引入才算乙的共享
+    await saved(await put(owner, d, raw(d, [], '乙删去'), { baseRevision: 3 }))
+    await saved(await put(owner, d, raw(d, [a], '乙重新引入'), { baseRevision: 4 }))
+    expect((await facts(d.id)).references).toEqual([a])
+    expect(await status(editor, a)).toBe('200')
+  })
+
+  it('M5R-I-02 只在他人文档历史中的图片：查看者预埋后，有历史资格者的保存也不升级', async () => {
+    const x = await document(owner)
+    const a = await uploaded(owner)
+    await saved(await put(owner, x, raw(x, [a], '含 A'), { baseRevision: 1 }))
+    await saved(await put(owner, x, raw(x, [], '去掉 A'), { baseRevision: 2 }))
+    await expire([a])
+    // 甲只是 X 的查看者：看得到 X 当前正文，看不到只在历史里的图片
+    await share(owner, x, editor)
+    expect(await status(editor, a)).toBe('404')
+    const d = await document(editor)
+    await grant(editor, d, owner, 'editor')
+    await saved(await put(editor, d, raw(d, [a], '甲预埋'), { baseRevision: 1 }))
+    await saved(await put(owner, d, raw(d, [a], '乙的真实修改'), { baseRevision: 2 }))
+    expect((await facts(d.id)).references).toEqual([])
+    expect(await status(editor, a)).toBe('404')
+  })
+
+  /** 乙（owner）拥有 X 与 A、甲（editor）读不到 X；甲把 A 预埋进两人都能编辑的 D（修订 2） */
+  async function planted() {
+    const x = await document(owner)
+    const a = await uploaded(owner)
+    await saved(await put(owner, x, raw(x, [a]), { baseRevision: 1 }))
+    await expire([a])
+    const d = await document(editor)
+    await grant(editor, d, owner, 'editor')
+    await saved(await put(editor, d, raw(d, [a], '甲预埋'), { baseRevision: 1 }))
+    expect((await facts(d.id)).references).toEqual([])
+    return { a, d }
+  }
+  /** 这一版里存在、却没有登记关系的图片标识（S14 审查 B1/B3：只记这一部分，不记完整集合） */
+  async function revisionAssetIds(documentId: string, revision: number): Promise<string[] | null> {
+    return database.query(async client => (await client.query<{ unlinked: string[] | null }>('SELECT unlinked_asset_ids::text[] AS unlinked FROM document_revisions WHERE document_id=$1 AND revision=$2', [documentId, revision])).rows[0]!.unlinked)
+  }
+
+  it('M5R-I-02 每一版修订记下存在但未登记的图片标识（含未授权与未知的），排重排序；已登记的不记', async () => {
+    const { a, d } = await planted()
+    const unknown = randomUUID()
+    const own = await uploaded(owner)
+    expect(await revisionAssetIds(d.id, 2)).toEqual([a])
+    await saved(await put(owner, d, raw(d, [unknown, a, a, own], '再加未知与自己的图'), { baseRevision: 2 }))
+    expect((await facts(d.id)).references).toEqual([own])
+    expect(await revisionAssetIds(d.id, 3)).toEqual([a, unknown].sort())
+  })
+
+  it('M5R-I-02 另存为副本以较早的修订为基准：那一版已登记、之后被他人删掉的图片仍按原规则登记，不丢（S14 审查 B1）', async () => {
+    // 乙（owner）在 D 里放进自己刚上传的 P（修订 2，已登记）；甲接管后删掉 P（修订 3）；乙基于修订 2 的草稿另存为副本
+    const d = await document(editor)
+    await grant(editor, d, owner, 'editor')
+    const p = await uploaded(owner)
+    await saved(await put(owner, d, raw(d, [p], '乙放进 P'), { baseRevision: 1 }))
+    expect((await facts(d.id)).references).toEqual([p])
+    await saved(await put(editor, d, raw(d, [], '甲删去 P'), { baseRevision: 2 }))
+    const created = await postConflictCopy(app.baseUrl, owner.session, d.id, d.unitId, { raw: raw(d, [p], '乙基于修订 2 的草稿'), query: { baseRevision: '2' } })
+    expect(created.status, await created.clone().text()).toBe(201)
+    const copy = createdDocumentSchema.parse(await created.json())
+    expect((await facts(copy.id)).references).toEqual([p])
+    expect(await revisionAssetIds(copy.id, 1)).toEqual([])
+  })
+
+  it('M5R-I-02 另存为副本以草稿所基于的修订为基准：甲删掉预埋地址后，乙的旧草稿副本也不登记它', async () => {
+    const { a, d } = await planted()
+    await saved(await put(editor, d, raw(d, [], '甲删去'), { baseRevision: 2 }))
+    const created = await postConflictCopy(app.baseUrl, owner.session, d.id, d.unitId, { raw: raw(d, [a], '乙基于修订 2 的草稿'), query: { baseRevision: '2' } })
+    expect(created.status, await created.clone().text()).toBe(201)
+    const copy = createdDocumentSchema.parse(await created.json())
+    expect((await facts(copy.id)).references).toEqual([])
+    expect(await revisionAssetIds(copy.id, 1)).toEqual([a])
+    expect(await status(editor, a)).toBe('404')
+  })
+
+  it('M5R-I-02 另存为副本缺省基准修订（旧页面）或那一版已不存在时，退回源文档的当前版本', async () => {
+    const { a, d } = await planted()
+    // 源当前版本（修订 2）含 A：缺省与不存在的修订都按沿用处理，不升级
+    const queries: readonly Readonly<Record<string, string>>[] = [{}, { baseRevision: '99' }]
+    for (const query of queries) {
+      const created = await postConflictCopy(app.baseUrl, owner.session, d.id, d.unitId, { raw: raw(d, [a], `草稿 ${JSON.stringify(query)}`), query })
+      expect(created.status, await created.clone().text()).toBe(201)
+      expect((await facts(createdDocumentSchema.parse(await created.json()).id)).references).toEqual([])
+    }
+  })
+
+  it('M5R-I-02 普通复制照搬未登记的图片标识：副本里的预埋地址之后同样不升级', async () => {
+    const { a, d } = await planted()
+    const response = await asUser(app.baseUrl, editor.session, `/api/documents/${d.id}/copy`, { method: 'POST', body: { requestId: randomUUID(), spaceId: editor.account.personalSpaceId } })
+    expect(response.status, await response.clone().text()).toBe(201)
+    const copy = createdDocumentSchema.parse(await response.json())
+    expect((await facts(copy.id)).references).toEqual([])
+    expect(await revisionAssetIds(copy.id, 1)).toEqual([a])
+    const target = { ...d, id: copy.id }
+    await grant(editor, target, owner, 'editor')
+    await saved(await put(owner, target, raw(target, [a], '乙在副本里的修改'), { baseRevision: 1 }))
+    expect((await facts(copy.id)).references).toEqual([])
+  })
+
+  it('M5R-I-02 存量修订没有记未登记标识：锁下按当前正文减去已登记的关系回退，同样不升级预埋地址', async () => {
+    const { a, d } = await planted()
+    await database.query(async client => client.query('UPDATE document_revisions SET unlinked_asset_ids=NULL WHERE document_id=$1', [d.id]))
+    await saved(await put(owner, d, raw(d, [a], '乙的真实修改'), { baseRevision: 2 }))
+    expect((await facts(d.id)).references).toEqual([])
+    expect(await revisionAssetIds(d.id, 3)).toEqual([a])
+  })
+
+  it('M5R-I-02 存量回退时减去已登记的关系：已登记的图片照常保留，预埋地址同样不升级（S14 复验）', async () => {
+    const { a, d } = await planted()
+    const own = await uploaded(owner)
+    await saved(await put(owner, d, raw(d, [a, own], '乙放进自己的图'), { baseRevision: 2 }))
+    expect((await facts(d.id)).references).toEqual([own])
+    // 上传窗口过期：之后只能凭 D 上已有的关系证明它
+    await expire([own])
+    await database.query(async client => client.query('UPDATE document_revisions SET unlinked_asset_ids=NULL WHERE document_id=$1', [d.id]))
+    await saved(await put(owner, d, raw(d, [a, own], '乙的真实修改'), { baseRevision: 3 }))
+    expect((await facts(d.id)).references).toEqual([own])
+  })
+
+  it('M5R-I-02 存量正文解析不了时以当前已登记的关系作基准并记警告（等于这一次沿用旧语义）', async () => {
+    const { a, d } = await planted()
+    await database.query(async (client) => {
+      await client.query('UPDATE document_revisions SET unlinked_asset_ids=NULL WHERE document_id=$1', [d.id])
+      await client.query('UPDATE document_contents SET snapshot=decode(\'00\',\'hex\'),stored_bytes=1 WHERE document_id=$1', [d.id])
+    })
+    const logStart = app.logs.entries().length
+    await saved(await put(owner, d, raw(d, [a], '乙的真实修改'), { baseRevision: 2 }))
+    expect(app.logs.entries().slice(logStart).filter(entry => entry.msg === '存量的正文解析不出图片标识，这一次以当前已登记的图片关系作授权基准')).toHaveLength(1)
+    expect((await facts(d.id)).references).toEqual([a])
   })
 
   it('前置重放旧保存或 unchanged 回执，不改变后来已提交的正文与引用', async () => {
@@ -290,5 +446,20 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     expect(prepare).not.toHaveBeenCalled()
     expect(hold).not.toHaveBeenCalled()
     expect((await facts(target.id)).references).toEqual([])
+  })
+
+  it('M5R-I-04 正文里的长串结尾包裹符不拖住快照检查：保存在检查时限内正常返回，引用照常提取', async () => {
+    const target = await document()
+    const kept = await uploaded()
+    // 原实现对每个这样的字符串二次回溯（百万字符约数百秒），检查子进程会超过 10 秒时限，保存失败
+    const hostile = `${')'.repeat(1_000_000)}x`
+    const body = raw(target, [kept], hostile)
+    const extra = JSON.parse(body.toString('utf8')) as { extra: { images: string[] } }
+    extra.extra.images.push(`/api/assets/${')'.repeat(1_000_000)}x`)
+    const hostileBody = Buffer.from(JSON.stringify(extra))
+    expect(await saved(await put(editor, target, hostileBody, { baseRevision: 1 }))).toMatchObject({ revision: 2, unchanged: false })
+    const stored = await facts(target.id)
+    expect(stored.snapshot).toEqual(gzipSync(hostileBody))
+    expect(stored.references).toEqual([kept])
   })
 })

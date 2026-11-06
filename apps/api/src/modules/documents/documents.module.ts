@@ -7,6 +7,7 @@ import { APP_CONFIG } from '../config/index.ts'
 import { DatabaseModule } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { SpacesModule } from '../spaces/index.ts'
+import { AssetReferenceBases } from './asset-reference-bases.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { DocumentAccessPolicy, EffectiveAccessPolicy } from './document-access-policy.ts'
 import { DocumentAssetAccessService } from './document-asset-access.service.ts'
@@ -75,6 +76,8 @@ import { WriteAccessRevocation } from './write-access.ts'
     DocumentHistoryService,
     DocumentAssetAccessService,
     DocumentAssetReferences,
+    // 图片授权的比较基准（M5-P7，D-01）：只给保存与另存为副本
+    AssetReferenceBases,
     DocumentAssetRetentionService,
     DocumentAssetsRepository,
     DocumentCheckpointsRepository,

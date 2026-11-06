@@ -32,6 +32,9 @@ export interface LeaseCredentials {
  */
 export async function saveConflictCopy(documentId: string, query: ConflictCopyRequest, compressed: Uint8Array<ArrayBuffer>): Promise<CreatedDocument> {
   const search = new URLSearchParams({ requestId: query.requestId, title: query.title, formulasPending: String(query.formulasPending === true), ...clientFormatParams(query.format) })
+  // 草稿所基于的修订（M5-P7，D-01）：服务端以那一版里存在、却没有登记的图片标识作授权基准
+  if (query.baseRevision !== undefined)
+    search.set('baseRevision', String(query.baseRevision))
   const path = `${documentPath(documentId)}/conflict-copies?${search.toString()}`
   return apiFetch(path, { timeoutMs: SNAPSHOT_REQUEST_TIMEOUT_MS, method: 'POST', body: { contentType: SNAPSHOT_UPLOAD_CONTENT_TYPE, data: compressed } }, async response => readJson(response, createdDocumentSchema, `POST ${documentPath(documentId)}/conflict-copies`))
 }

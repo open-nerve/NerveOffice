@@ -1,5 +1,5 @@
 import type { AssetUploadActor, Transaction } from '@nerve-office/api'
-import type { Database } from '@nerve-office/api/testing'
+import type { AssetReferenceBase, Database } from '@nerve-office/api/testing'
 import type { PassiveAccount } from '../support/accounts.ts'
 import type { TestApp } from '../support/api-app.ts'
 import type { TestDatabase } from '../support/database.ts'
@@ -66,10 +66,14 @@ async function grant(documentId: string, userId = editor.id): Promise<void> {
 async function current(documentId: string): Promise<string[]> {
   return database.query(async client => (await client.query<{ asset_id: string }>('SELECT asset_id FROM document_asset_links WHERE document_id=$1 ORDER BY asset_id', [documentId])).rows.map(row => row.asset_id))
 }
+/** 基准里没有存在但未登记的标识：本文件核对多来源规则；基准排除的规则另有用例（D-01，asset-save.test.ts） */
+function fresh(): AssetReferenceBase {
+  return { unlinked: new Set() }
+}
 async function eligible(userId: string, ids: readonly string[], transaction: Transaction, target?: Awaited<ReturnType<typeof document>>) {
   const prepared = await references.prepare(userId, ids, transaction, target)
   const held = await references.hold(prepared, { mode: 'update' }, transaction)
-  return references.authorize(held, transaction)
+  return references.authorize(held, transaction, fresh())
 }
 
 describe('图片引用的批量授权与真实事务', () => {
@@ -124,7 +128,7 @@ describe('图片引用的批量授权与真实事务', () => {
           await client.query('UPDATE documents SET space_id=$2 WHERE id=$1', [source.id, admin.personalSpaceId])
       })
       const held = await references.hold(prepared, { mode: 'share' }, transaction)
-      expect(await references.authorize(held, transaction)).toEqual([])
+      expect(await references.authorize(held, transaction, fresh())).toEqual([])
     })
   })
 
@@ -143,7 +147,7 @@ describe('图片引用的批量授权与真实事务', () => {
       await database.query(async client => client.query('DELETE FROM document_grants WHERE document_id=$1', [selected]))
       const held = await references.hold(prepared, { mode: 'share' }, transaction)
       expect([...held.documents.keys()]).toEqual([selected])
-      expect(await references.authorize(held, transaction)).toEqual([])
+      expect(await references.authorize(held, transaction, fresh())).toEqual([])
     })
     expect(await transactions.run(async transaction => eligible(editor.id, [id], transaction))).toEqual([id])
   })
@@ -175,7 +179,7 @@ describe('图片引用的批量授权与真实事务', () => {
       const plan = await references.prepare(editor.id, [id], transaction)
       return references.hold(plan, { mode: 'share' }, transaction)
     })
-    await expect(transactions.run(async transaction => references.authorize(held, transaction))).rejects.toThrow('资源引用事务不一致')
+    await expect(transactions.run(async transaction => references.authorize(held, transaction, fresh()))).rejects.toThrow('资源引用事务不一致')
   })
 
   it('目标已有引用要求可编辑；仅能查看时不能把它冒充保留资格', async () => {
@@ -196,7 +200,7 @@ describe('图片引用的批量授权与真实事务', () => {
       const prepared = await references.prepare(editor.id, [id], transaction)
       await database.query(async client => client.query('DELETE FROM space_members WHERE space_id=$1 AND user_id=$2', [spaceId, editor.id]))
       const held = await references.hold(prepared, { mode: 'share' }, transaction)
-      expect(await references.authorize(held, transaction)).toEqual([])
+      expect(await references.authorize(held, transaction, fresh())).toEqual([])
     })
   })
 

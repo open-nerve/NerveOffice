@@ -6,7 +6,7 @@ import { createDocument, createUser, withDatabase } from '../../support/database
 import { expect, test } from '../../support/fixtures.ts'
 import { blockFormulaWorker, formulaRecoveryNotice } from '../../support/formula-worker-fault.ts'
 import { loginThroughApi } from '../../support/session.ts'
-import { cellOf, EDITOR_TEST_TIMEOUT, openAndEnterEditing, saveAndWait, savedContent } from '../../support/sheet.ts'
+import { cellOf, EDITOR_TEST_TIMEOUT, enterEditing, openAndEnterEditing, saveAndWait, savedContent, waitForEditorAccess } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -35,10 +35,33 @@ for (const mode of modes) {
     expect(page.workers().filter(worker => /\/formula\.worker-/.test(worker.url()))).toHaveLength(mode.workers)
     await saveAndWait(page)
     const before = await savedContent(page, id)
-    expect(cellOf(before.snapshot, 'A1')).toMatchObject({ f: '=SEQUENCE(2,3)', v: 1 })
+    // 多格数组锚点的正文只留公式、不带缓存值，重开时 WHEN_EMPTY 定向重算（M5R-I-07）
+    expect(cellOf(before.snapshot, 'A1')).toEqual({ f: '=SEQUENCE(2,3)' })
     const downloaded = await downloadCsv(page, CSV_FORMULA_SHEET)
     expect(downloaded.name).toBe('CSV公式导出-CSV计算样本.csv')
     expect(downloaded.bytes).toEqual(EXPECTED)
     expect(await savedContent(page, id)).toEqual(before)
+  })
+
+  test(`US-M5-12 ${mode.name} 数组公式收齐保存后常规重开：阅读与编辑都仍有完整溢出结果并能导出（M5R-I-07）`, async ({ page }) => {
+    const user = await createUser('csv-formulas-reopen')
+    await loginThroughApi(page, user)
+    const id = await createDocument(user, 'CSV公式重开', csvFormulaSampleFor)
+    await withDatabase(async client => client.query('UPDATE documents SET formulas_pending = true WHERE id = $1', [id]))
+    await mode.setup(page)
+    await openAndEnterEditing(page, id, 'steady')
+    await saveAndWait(page)
+    // 收齐之后的保存清掉“公式待更新”：之后的打开都是常规打开，不再强制全量重算
+    const pending = await withDatabase(async client => (await client.query<{ formulas_pending: boolean }>('SELECT formulas_pending FROM documents WHERE id = $1', [id])).rows[0]?.formulas_pending)
+    expect(pending).toBe(false)
+    const saved = await savedContent(page, id)
+    expect(cellOf(saved.snapshot, 'A1')).toEqual({ f: '=SEQUENCE(2,3)' })
+    expect(cellOf(saved.snapshot, 'B1')).toBeUndefined()
+    await page.reload()
+    await waitForEditorAccess(page, 'read', 'steady')
+    expect((await downloadCsv(page, CSV_FORMULA_SHEET)).bytes).toEqual(EXPECTED)
+    await enterEditing(page, 'steady')
+    expect((await downloadCsv(page, CSV_FORMULA_SHEET)).bytes).toEqual(EXPECTED)
+    expect(await savedContent(page, id)).toEqual(saved)
   })
 }

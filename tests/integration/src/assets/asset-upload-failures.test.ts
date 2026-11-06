@@ -73,7 +73,12 @@ describe('真实配额与文件的失败边界', () => {
       // 故障目录必须确实开放权限，不能让宿主 umask 把故障条件收紧掉。
       await fs.chmod(staging, 0o755)
       expect((await fs.stat(staging)).mode & 0o777).toBe(0o755)
+      const logStart = app.logs.entries().length
       await expect(upload()).rejects.toMatchObject({ name: 'AssetStorageError', reason: 'unsafe-path' })
+      // M5R-M-01：服务端日志记下停在哪一步与有界分类，不带路径
+      const logs = app.logs.entries().slice(logStart)
+      expect(logs.filter(line => line.msg === '图片上传处理失败')).toMatchObject([{ level: 'warn', stage: 'publish', reason: 'unsafe-path', inputBytes: data.length }])
+      expect(JSON.stringify(logs)).not.toContain(root)
       expect(await state()).toMatchObject({ count: 0, claims: 1, objects: 0 })
       expect(await objectFiles()).toEqual([])
     }

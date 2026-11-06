@@ -33,3 +33,12 @@ export function canRetire(since: Date, policy: AssetGcPolicy): boolean {
   const time = finiteTime(since)
   return policy.state === 'ready' && time <= policy.graceBefore && time < policy.recoveryBefore
 }
+
+/**
+ * 宽限已满、只因候选时刻不早于恢复水位而不能回收（M5R-M-03，D-05）：水位不随备份轮换推进时，这类资源会一直累积，
+ * 每轮按资源、对象与文件任务分别计数并告警，提醒运维推进 NERVE_ASSET_GC_RECOVERY_BEFORE
+ */
+export function blockedByRecovery(since: Date, policy: AssetGcPolicy): boolean {
+  const time = finiteTime(since)
+  return policy.state === 'ready' && time <= policy.graceBefore && time >= policy.recoveryBefore
+}

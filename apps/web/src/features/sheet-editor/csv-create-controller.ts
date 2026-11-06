@@ -3,7 +3,7 @@ import type { CsvTable } from '../../shared/csv/index.ts'
 import type { CsvProblem } from './csv-controller.ts'
 import type { CsvFile, CsvPreview } from './csv-file.ts'
 import { assertNewCsvDocument, CsvOperationError } from '../../editor/index.ts'
-import { isAccessDenied, isAuthenticationError, isCsrfTokenError, isDefiniteRejection } from '../../shared/api/index.ts'
+import { isAccessDenied, isAuthenticationError, isCsrfTokenError, isUnknownOutcome } from '../../shared/api/index.ts'
 import { concludesRequest, createRequestIdLedger } from '../../shared/api/request-ids.ts'
 import { CSV_LIMITS, CsvError, parseCsv } from '../../shared/csv/index.ts'
 import { csvPreview } from './csv-file.ts'
@@ -36,7 +36,7 @@ export interface CsvCreationOptions {
   readonly newId?: () => string
 }
 
-export type CsvCreationProblem = CsvProblem | 'offline' | 'identity' | 'access-denied' | 'create-failed' | 'result-unknown' | 'already-created' | 'open-failed' | 'import-failed'
+export type CsvCreationProblem = CsvProblem | 'offline' | 'identity' | 'identity-unknown' | 'access-denied' | 'create-failed' | 'result-unknown' | 'already-created' | 'open-failed' | 'import-failed'
 export type CsvCreationStage = 'loading' | 'selecting' | 'reading' | 'preview' | 'confirming' | 'creating' | 'opening' | 'importing' | 'failed' | 'replayed' | 'done' | 'invalid'
 export interface CsvCreationView {
   readonly stage: CsvCreationStage
@@ -119,7 +119,8 @@ export function createCsvCreation(options: CsvCreationOptions): CsvCreation {
     clearFile()
     destination = undefined
     created = undefined
-    publish('invalid', 'identity')
+    // 结果未知时作废，仍要提醒文档可能已经建好（P5 §4.2 不宣称未创建，M5R-M-14）
+    publish('invalid', creation === 'unknown' ? 'identity-unknown' : 'identity')
   }
 
   function failed(error: unknown, fallback: CsvCreationProblem): CsvCreationProblem {
@@ -270,7 +271,8 @@ export function createCsvCreation(options: CsvCreationOptions): CsvCreation {
         publish('invalid', 'already-created')
         return
       }
-      if (sent && !previouslyUnknown && isDefiniteRejection(error))
+      // 首次发出就得到确定的回答（4xx，或服务端明确未生效的 503 SERVICE_UNAVAILABLE）：确定没有创建（M5R-M-14）
+      if (sent && !previouslyUnknown && !isUnknownOutcome(error))
         creation = 'none'
       const problem = failed(error, creation === 'unknown' ? 'result-unknown' : 'create-failed')
       if (current(token))
@@ -337,6 +339,7 @@ export function createCsvCreation(options: CsvCreationOptions): CsvCreation {
       listeners.clear()
       publish('invalid', 'identity')
     },
-    hasPendingWork: () => table !== undefined || creation === 'unknown',
+    // 作废之后本轮已不能继续，也没有能保住的工作：离开不再拦（M5R-M-14）
+    hasPendingWork: () => !ended && (table !== undefined || creation === 'unknown'),
   }
 }

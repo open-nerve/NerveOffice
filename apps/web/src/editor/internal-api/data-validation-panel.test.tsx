@@ -13,6 +13,7 @@ import { useImperativeHandle, useRef } from 'react'
 import { BehaviorSubject } from 'rxjs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { injectorOf } from './injector.ts'
+import { PANEL_UNCOMMITTED_ATTRIBUTE, PANEL_UNCOMMITTED_EVENT } from './panel-debounces.ts'
 
 // SDK 导入时创建下拉箭头的 Path2D；本组不绘制箭头，实际渲染由 E2E 覆盖。
 vi.hoisted(() => vi.stubGlobal('Path2D', class {}))
@@ -50,7 +51,8 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula = false) {
+/** requireFormula：条件值不能为空；为 'pair' 时另要求条件值 pair 必须与“忽略空值”关闭同时出现（只有合并后才成立的设置，S14 复验） */
+function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula: boolean | 'pair' = false) {
   vi.useFakeTimers()
   const univer = new Univer()
   const injector = injectorOf(univer)
@@ -68,12 +70,19 @@ function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula = 
   const validator = {
     id: 'decimal',
     type: 'decimal',
-    operators: [DataValidationOperator.EQUAL],
-    operatorNames: ['等于'],
+    operators: [DataValidationOperator.EQUAL, DataValidationOperator.GREATER_THAN],
+    operatorNames: ['等于', '大于'],
     title: '数字',
     // 公式输入端口采用 SDK 的 BaseFormulaInput；custom 的实际画布另由公开 E2E 覆盖。
     formulaInput: BASE_FORMULA_INPUT_NAME,
-    validatorFormula: (rule: IDataValidationRule) => ({ success: !requireFormula || Boolean(rule.formula1) }),
+    // 不合法时带上字段错误：详情面板在 showError 时把它显示在公式输入下方（M5R-I-05 的字段错误回归）
+    validatorFormula: (rule: IDataValidationRule) => {
+      if (requireFormula !== false && (rule.formula1 === undefined || rule.formula1 === ''))
+        return { success: false, formula1: '请填写条件值' }
+      if (requireFormula === 'pair' && rule.formula1 === 'pair' && rule.allowBlank !== false)
+        return { success: false, formula1: 'pair 要求不忽略空值' }
+      return { success: true }
+    },
     normalizeFormula: () => ({}),
     validator: async () => true,
   }
@@ -532,5 +541,197 @@ describe('UR-033：实际数据验证详情组件的连续编辑', () => {
     })
     await h.tick()
     expect(h.current().allowBlank).toBe(false)
+  })
+})
+
+describe('M5R-I-05：非法的中间设置被后续合法输入覆盖后，待办不再卡住', () => {
+  const formula = (value: string) => fireEvent.change(screen.getByPlaceholderText('规则公式'), { target: { value } })
+  const range = (value: string) => fireEvent.change(screen.getByLabelText('范围'), { target: { value } })
+  const marked = () => document.querySelector(`[data-u-comp="data-validation-detail"][${PANEL_UNCOMMITTED_ATTRIBUTE}]`) !== null
+  const C3_C4 = [{ startRow: 2, endRow: 3, startColumn: 2, endColumn: 2 }]
+
+  it.each([
+    { name: '范围', other: () => range('C3:C4'), expected: { ranges: C3_C4 } },
+    { name: '选项', other: (h: ReturnType<typeof setup>) => h.option(), expected: { errorStyle: 1 } },
+  ])('清空条件 → 改$name → 改正条件，确认后都写入并关闭', ({ other, expected }) => {
+    const h = setup('number', true)
+    formula('')
+    other(h)
+    formula('5')
+    fireEvent.click(screen.getByText('确认'))
+    expect(h.current()).toMatchObject({ formula1: '5', ...expected })
+    expect(h.close).toHaveBeenCalledWith(null)
+    expect(marked()).toBe(false)
+  })
+
+  it('同样的序列直接卸载：改正后的条件与范围都不丢', () => {
+    const h = setup('number', true)
+    formula('')
+    range('C3:C4')
+    formula('5')
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '5', ranges: C3_C4 })
+  })
+
+  it('不合法的设置后接不同种类与另一项设置：其他输入先生效，不合法的字段留待改正，改正后一并写入', async () => {
+    const h = setup('number', true)
+    formula('')
+    h.option()
+    h.setting()
+    await h.tick()
+    expect(h.current()).toMatchObject({ formula1: '100', errorStyle: 1, allowBlank: true })
+    formula('5')
+    await h.tick()
+    expect(h.current()).toMatchObject({ formula1: '5', errorStyle: 1, allowBlank: false })
+    expect(marked()).toBe(false)
+  })
+
+  it('防抖到点时提交被拒：在字段上显示错误并标记有未提交的输入，改正提交后标记消失', async () => {
+    const h = setup('number', true)
+    const changes = vi.fn()
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, changes)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, changes))
+    formula('')
+    await h.tick()
+    expect(h.current().formula1).toBe('100')
+    expect(screen.getByText('请填写条件值')).toBeInTheDocument()
+    expect(marked()).toBe(true)
+    expect(changes).toHaveBeenCalledTimes(1)
+    formula('5')
+    await h.tick()
+    expect(h.current().formula1).toBe('5')
+    expect(marked()).toBe(false)
+    expect(changes.mock.calls.map(([event]) => (event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)).toEqual([true, false])
+  })
+
+  it.each([
+    { name: '范围', other: () => range('C3:C4'), expected: { ranges: C3_C4 } },
+    { name: '选项', other: (h: ReturnType<typeof setup>) => h.option(), expected: { errorStyle: 1 } },
+  ])('清空条件 → 改$name → 关面板（没有改正）：$name照常写入，只丢不合法的条件（S14 审查 E1）', async ({ other, expected }) => {
+    const h = setup('number', true)
+    const changes: boolean[] = []
+    const listener = (event: Event) => changes.push((event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, listener)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, listener))
+    formula('')
+    other(h)
+    await h.tick()
+    // 面板开着时被拒的条件留在待办、等用户改正，其后的修改按原顺序排在它后面
+    expect(h.current().formula1).toBe('100')
+    expect(marked()).toBe(true)
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', ...expected })
+    expect(changes).toEqual([true, false])
+  })
+
+  it('清空条件 → 改选项 → 改“忽略空值” → 卸载（没有改正）：选项与另一项设置照常写入，只丢不合法的条件（S14 复验）', () => {
+    // 卸载时被拒的设置直接丢掉，不并入后面的设置——并入会把空条件带进后面合法的设置、连带丢掉它
+    const h = setup('number', true)
+    formula('')
+    h.option()
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', errorStyle: 1, allowBlank: false })
+  })
+
+  it('同样的序列先关面板再卸载：关面板时的提交已把空条件并入后一项设置，卸载时仍只丢空条件（S14 复验）', () => {
+    const h = setup('number', true)
+    formula('')
+    h.option()
+    h.setting()
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', errorStyle: 1, allowBlank: false })
+  })
+
+  it('只有与后一项设置合并才成立的设置：卸载时照常合并、完整提交（S14 复验）', () => {
+    // 条件值 pair 要求同时关闭“忽略空值”：第一段单独提交会被拒，与后面一段合并后才成立
+    const h = setup('number', 'pair')
+    formula('pair')
+    h.option()
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: 'pair', errorStyle: 1, allowBlank: false })
+  })
+
+  it('连续两次设置输入合成一项：卸载时只丢不合法的那一段，合法的那一段照常提交（S14 复验）', () => {
+    const h = setup('number', true)
+    formula('')
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', allowBlank: false })
+  })
+
+  it('清空条件值 → 改运算符 → 关面板并卸载：条件字段整组丢掉，原条件不变，不拼出用户没设过的“大于 100”（S14 复验第三轮）', async () => {
+    const h = setup('number', true)
+    formula('')
+    fireEvent.pointerDown(screen.getByText('等于'), { button: 0, ctrlKey: false })
+    await h.tick(1)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '大于' }))
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ operator: DataValidationOperator.EQUAL, formula1: '100', allowBlank: true })
+  })
+
+  it('同样的序列再改“忽略空值”：条件字段整组丢掉，独立的“忽略空值”照常提交（S14 复验第三轮）', async () => {
+    const h = setup('number', true)
+    formula('')
+    fireEvent.pointerDown(screen.getByText('等于'), { button: 0, ctrlKey: false })
+    await h.tick(1)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '大于' }))
+    h.setting()
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ operator: DataValidationOperator.EQUAL, formula1: '100', allowBlank: false })
+  })
+
+  it('切换类型（还没补条件）→ 改“忽略空值” → 卸载：以类型草稿为底再试仍不成立，整项丢掉，原规则不变（S14 复验第四轮）', async () => {
+    const h = setup('number', true)
+    fireEvent.pointerDown(screen.getByText('数字'), { button: 0, ctrlKey: false })
+    await h.tick(1)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '整数' }))
+    await h.tick(1)
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ type: 'decimal', operator: DataValidationOperator.EQUAL, formula1: '100', allowBlank: true })
+  })
+
+  it('清空条件 → 改范围 → 没等防抖到点就卸载：范围照常写入（S14 审查 E1）', () => {
+    const h = setup('number', true)
+    formula('')
+    range('C3:C4')
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', ranges: C3_C4 })
+  })
+
+  it('防抖到点时提交被拒：在同一个计时器回调里就通知平台，不等重新渲染（S14 审查 E5）', () => {
+    setup('number', true)
+    const changes: boolean[] = []
+    const listener = (event: Event) => changes.push((event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, listener)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, listener))
+    formula('')
+    act(() => {
+      vi.advanceTimersByTime(1001)
+      // act 的回调里 React 还没有重新渲染：平台的计时器只比 SDK 的晚 20 毫秒，通知必须在 SDK 的计时器回调里同步发出
+      expect(changes).toEqual([true])
+    })
+  })
+
+  it('卸载时仍有提交不了的输入：已提交的范围保留，只丢不合法的那一项，撤下标记并通知平台', async () => {
+    const h = setup('number', true)
+    const changes = vi.fn()
+    document.addEventListener(PANEL_UNCOMMITTED_EVENT, changes)
+    cleanups.push(() => document.removeEventListener(PANEL_UNCOMMITTED_EVENT, changes))
+    range('C3:C4')
+    formula('')
+    await h.tick()
+    expect(h.current()).toMatchObject({ formula1: '100', ranges: C3_C4 })
+    expect(marked()).toBe(true)
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', ranges: C3_C4 })
+    expect(marked()).toBe(false)
+    expect(changes.mock.calls.map(([event]) => (event as CustomEvent<{ uncommitted: boolean }>).detail.uncommitted)).toEqual([true, false])
   })
 })

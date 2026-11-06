@@ -90,4 +90,17 @@ describe('负载摘要', () => {
       .toEqual(createHash('sha256').update(`conflict-copied-formulas-pending\n${sourceId}\n周报\n{"id":"u"}`, 'utf8').digest())
     expect(conflictCopyPayloadDigest(sourceId, '周报', raw, false)).toEqual(conflictCopyPayloadDigest(sourceId, '周报', raw))
   })
+
+  it('另存为副本的草稿基准修订（M5-P7，D-01）：给出时另成一种摘要并计入修订号；不给时与之前逐字节相同', () => {
+    const sourceId = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0e'
+    const raw = Buffer.from('{"id":"u"}', 'utf8')
+    expect(conflictCopyPayloadDigest(sourceId, '周报', raw, false, undefined))
+      .toEqual(createHash('sha256').update(`conflict-copied\n${sourceId}\n周报\n{"id":"u"}`, 'utf8').digest())
+    expect(conflictCopyPayloadDigest(sourceId, '周报', raw, false, 2))
+      .toEqual(createHash('sha256').update(`conflict-copied-based\n${sourceId}\n2\n周报\n{"id":"u"}`, 'utf8').digest())
+    expect(conflictCopyPayloadDigest(sourceId, '周报', raw, true, 2))
+      .toEqual(createHash('sha256').update(`conflict-copied-formulas-pending-based\n${sourceId}\n2\n周报\n{"id":"u"}`, 'utf8').digest())
+    const digests = [undefined, 2, 3].map(base => conflictCopyPayloadDigest(sourceId, '周报', raw, false, base).toString('hex'))
+    expect(new Set(digests).size).toBe(3)
+  })
 })

@@ -17,6 +17,8 @@ export interface AssetGcAssetPage {
   readonly marked: number
   readonly reset: number
   readonly removed: number
+  /** 宽限已满但被恢复水位挡住的资源记录（M5R-M-03） */
+  readonly blocked: number
   readonly policy: AssetGcPolicy['state']
   readonly lastId?: string
 }
@@ -27,6 +29,8 @@ export interface AssetGcObjectPage {
   readonly marked: number
   readonly reset: number
   readonly queued: number
+  /** 宽限已满但被恢复水位挡住的物理对象或预留（M5R-M-03） */
+  readonly blocked: number
   readonly bytes: number
   readonly policy: AssetGcPolicy['state']
   readonly lastHash?: string

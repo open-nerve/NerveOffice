@@ -62,6 +62,7 @@ import { editorIdentityOverride } from './identity/editor-authz-io.service.ts'
 import { installRestrictedImageFunction } from './image-function/install-image-policy.ts'
 import { watchWorkerImagePolicy } from './image-function/worker-image-policy.ts'
 import { installEditorImageInput } from './images/editor-image-input.ts'
+import { liveAssetPaths } from './images/live-asset-paths.ts'
 import { createPlatformImageIo } from './images/platform-image-io.ts'
 import { createResourceLoadGuard, disposalSafeLocaleOverride, FORMULA_PROTOCOL } from './internal-api/index.ts'
 import { closeImagePreview, installRichLinkShortcut, invalidateImageRendering } from './internal-api/ui.ts'
@@ -76,6 +77,7 @@ import { checkCreated, recheckReady } from './profile/open-check.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS, SHEET_PROFILE_ID, sheetPluginEntries } from './profile/sheet-profile.ts'
 import { installReadOnlyGuard } from './read-only/read-only-guard.ts'
 import { SheetEditorLoadError } from './sheet-editor-error.ts'
+import { captureWorkbookData } from './snapshot-capture-form.ts'
 import { watchUncommittedInput } from './uncommitted-input.ts'
 import { readViewState, restoreViewState } from './view-state.ts'
 import { parseWorkbookSnapshot } from './workbook-snapshot.ts'
@@ -361,6 +363,16 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   const resourceGuard = createResourceLoadGuard()
   const univer = createUniver(access, resourceGuard)
   cleanup.defer(() => univer.dispose())
+  // 图片刷新只重读文档里仍引用的来源（M5R-M-11）：工作簿建好之前没有文档，全部重读；取不到（例如正在销毁）时同样全部重读
+  let liveWorkbook: { readonly save: () => unknown } | undefined
+  const liveSources = (): ReadonlySet<string> | undefined => {
+    try {
+      return liveWorkbook === undefined ? undefined : liveAssetPaths(liveWorkbook.save(), location.origin)
+    }
+    catch {
+      return undefined
+    }
+  }
   const images = createPlatformImageIo({
     access,
     identity: options.imageAccess ?? { current: () => undefined, subscribe: () => () => {} },
@@ -368,6 +380,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
     changed: () => invalidateImageRendering(univer),
     invalidated: () => closeImagePreview(univer),
     failed: options.onImageFailure ?? (() => {}),
+    liveSources,
   })
   rounds.images = images
   cleanup.defer(images.dispose)
@@ -399,7 +412,11 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   })
   // 图片先整批验证，再允许后续链接改写；任何拒绝都发生在 SDK 生成撤销或写模型之前。
   const imageOwner = options.imageAccess?.owner ?? options.imageAccess?.current()?.user.id
-  const imageWrites = installImagePolicy(univer, univerAPI, options.onImageFailure ?? (error => reportError(error)), {
+  // 写入策略的拒绝走操作状态，不置“图片暂时无法显示”，也不让“重新加载图片”假装重试（M5R-M-10）
+  const imageWrites = installImagePolicy(univer, univerAPI, {
+    failed: options.onImageFailure ?? (error => reportError(error)),
+    rejected: reason => options.onImageOperation?.({ kind: 'failed', operation: 'edit', reason, completed: 0, total: 0 }),
+  }, {
     unitId: snapshot.unitId,
     canEdit: () => access === 'edit' && imageOwner !== undefined && options.imageAccess?.current()?.user.id === imageOwner,
   })
@@ -432,6 +449,7 @@ async function mount(options: CreateSheetEditorOptions, snapshot: WorkbookSnapsh
   // 打开自检的"之前"一侧（M3-P4 设计 §3.11 第 3 条）：SDK 会改动交给 createWorkbook 的对象，先把载入的快照里的资源取出一份
   const resourcesBefore = structuredClone(snapshot.data.resources)
   const workbook = createWorkbook(univerAPI, snapshot)
+  liveWorkbook = workbook
   // 还没写进模型的输入（Codex 评审 CX4）：单元格编辑器里的与面板防抖中的合成一个状态；单元格编辑器开着与否问工作簿，所以在它之后建
   const input = watchUncommittedInput({ cellEditorOpen: () => workbook.isCellEditing(), cellInput: cellEditing, panelInput: panels })
   cleanup.defer(input.dispose)
@@ -537,7 +555,7 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     await tearDown(cleanup, rounds)
     throw error
   }
-  const { univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
+  const { univer, univerAPI, workbook, changes, cellEditing, lifecycle, composition, panels, input, openCheck, formula } = mounted
 
   let disposed = false
   /** 这一次销毁（第一次调用 dispose 时开始）：重复调用等的都是它，不再销毁一次 */
@@ -626,7 +644,8 @@ export async function createSheetEditor(options: CreateSheetEditorOptions): Prom
     settlePanels: async () => panels.settled(),
     capture() {
       usable()
-      return JSON.stringify(workbook.save())
+      // 多格数组公式锚点不带缓存值，重开时由 WHEN_EMPTY 定向重算、恢复溢出结果（M5R-I-07，snapshot-capture-form.ts）
+      return captureWorkbookData(univer, workbook.save())
     },
     viewState: () => disposed ? undefined : readViewState(workbook),
     openCheck,
