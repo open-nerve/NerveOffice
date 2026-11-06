@@ -186,7 +186,7 @@ def main():
     result = check(Path(__file__).resolve().parents[2])
     print(json.dumps(result, ensure_ascii=False))
     # Q-10：资源核验通过之后，按运行器同款固定命令另取几次全量列举，退出码写成注解（经公开接口可读，日志要仓库管理员权限）。
-    # 只是采样：失败只写注解，不改变本步骤的结论
+    # 只是采样：整段有总时限（lsof_exit_sample 默认 20 秒），失败或超时只写注解，不改变本步骤的结论
     if os.environ.get('GITHUB_ACTIONS') == 'true':
         try:
             sample = json.dumps(lsof_exit_sample(), ensure_ascii=False)

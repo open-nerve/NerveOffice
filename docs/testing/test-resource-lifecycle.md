@@ -162,7 +162,9 @@ pin 只用于经过审查的必要最终证据；不要 pin 每次失败重试�
 
 ## 清理回归与局限
 
-**纳入门禁**（M5-P7，D-10）：Python 回归（`pnpm test:cleanup:check` 的同一组用例）经 `pnpm test:verify` 纳入完整 verify。它在覆盖率的同一轮受管运行（`run.py integration`）里、覆盖率结束之后执行（`tools/src/verify/coverage-resources.ts`）：两段都执行、任一失败即整步失败，不新增运行，CI 每 job 恰好两轮的资源合同不变；pre-push 快速门禁不含它。这组用例是严格策略下的工具单测，在临时目录里建自己的管理根，所以不继承 CI job 的托管策略（`NERVE_TEST_RESOURCE_POLICY` 要求管理根就是 `GITHUB_WORKSPACE`）；句柄查询方式照常继承，CI 上即用运行器同款的 sudo lsof。本机实测 491 项约 3 分钟。
+**纳入门禁**（M5-P7，D-10；2026-11-06 修订）：Python 回归（`pnpm test:cleanup:check` 的同一组用例）经 `pnpm test:verify` 纳入**本机**完整 verify。它在覆盖率的同一轮受管运行（`run.py integration`）里、覆盖率结束之后执行（`tools/src/verify/coverage-resources.ts`）：两段都执行、任一失败即整步失败，不新增运行；pre-push 快速门禁不含它。本机实测 491 项约 3 分钟。
+
+CI 的 verify job 只跑覆盖率（`pnpm verify --ci` 的 tests 一步是 `pnpm test:coverage`）。这组用例是严格策略下的工具单测，会对临时管理根做真实的全宿主 lsof 核验；GitHub 托管 VM 上全宿主 lsof 必有无法解释的 socket 与内核对象记录（见下文“固定托管 VM 的回收责任”与 ADR-024），严格核验在那里必然判不完整，用例也还没在 Linux 上兼容运行过。按需求方决定不进 CI，Linux 兼容运行与 CI 子集另行设计（DEF-080）。
 
 **M5-P7 的四处行为调整**：
 

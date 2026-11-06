@@ -154,7 +154,7 @@ Excel、Safari/Finder，M4 DEF-073/UR-035、完整验收和标签继续挂账；
 | 命令 | 作用 |
 |---|---|
 | `pnpm install` | 安装依赖，同时安装 git 钩子 |
-| `pnpm verify` | 合并前的完整门禁：lint、类型检查、静态检查、单元与集成测试及覆盖率（其后接着跑测试资源工具的 Python 回归，M5-P7 D-10）、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
+| `pnpm verify` | 合并前的完整门禁：lint、类型检查、静态检查、单元与集成测试及覆盖率（本机其后接着跑测试资源工具的 Python 回归，CI 不跑，M5-P7 D-10）、构建、依赖与产物检查、E2E（本机的 Chromium、Chrome、WebKit；CI 另加 Edge） |
 | `pnpm verify --fast` | 快速门禁（pre-push 使用；不需要数据库） |
 | `pnpm dev:api` | 以监听模式启动后端（读取 `apps/api/.env.development`，先 `pnpm db:up` 与 `pnpm db:migrate`） |
 | `pnpm dev:web` | 启动前端的开发服务器（`http://127.0.0.1:5173`，`/api` 代理到 `pnpm dev:api`） |
@@ -163,7 +163,7 @@ Excel、Safari/Finder，M4 DEF-073/UR-035、完整验收和标签继续挂账；
 | `pnpm lint` / `pnpm lint:fix` | 检查 / 修正代码规范与格式 |
 | `pnpm typecheck` | 类型检查 |
 | `pnpm test` / `pnpm test:coverage` | 单元测试 / 单元与集成测试合计的覆盖率（需要数据库） |
-| `pnpm test:verify` | 完整门禁的 tests 一步：同一轮受管运行里先跑 test:coverage 的覆盖率，再跑 test:cleanup:check 的 Python 回归（约 3 分钟），两段都执行（M5-P7 D-10）；需要数据库 |
+| `pnpm test:verify` | 本机完整门禁的 tests 一步：同一轮受管运行里先跑 test:coverage 的覆盖率，再跑 test:cleanup:check 的 Python 回归（约 3 分钟），两段都执行（M5-P7 D-10）；需要数据库。CI 的 verify 只跑 test:coverage（托管 VM 的全宿主 lsof 必然不完整，DEF-080） |
 | `pnpm db:up` / `pnpm db:down` | 启动 / 停止开发用的 PostgreSQL |
 | `pnpm db:migrate` | 构建后端并对开发库执行迁移 |
 | `pnpm db:generate --name <名称>` | 按表定义生成迁移（人工审阅后入库；合并后的迁移不再修改） |

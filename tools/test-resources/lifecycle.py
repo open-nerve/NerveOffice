@@ -278,13 +278,22 @@ def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
     return count, samples
 
 
-def lsof_exit_sample(count=3):
+def lsof_exit_sample(count=3, budget=20.0):
     """Q-10：按运行器同款固定命令（同一提权方式与 C locale）取几次全量列举，只记退出码与 stderr 字节数，不记输出内容。
-    不经任何运行台账，也不参与清理决定；只供 CI 资源核对写成注解"""
+    不经任何运行台账，也不参与清理决定；只供 CI 资源核对写成注解。整段采样最多 budget 秒（S14 审查 T5）：它跑在时限
+    3 分钟的资源核验步骤里，不能因采样拖到超时；超时只记下并停止"""
     command = lsof_query_command()
     samples = []
+    deadline = time.monotonic() + budget
     for _ in range(count):
-        result = subprocess.run(command, capture_output=True, timeout=30, env=dict(os.environ, LC_ALL="C"))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            result = subprocess.run(command, capture_output=True, timeout=remaining, env=dict(os.environ, LC_ALL="C"))
+        except subprocess.TimeoutExpired as error:
+            samples.append({"timedOut": True, "stderrBytes": len(error.stderr or b"")})
+            break
         samples.append({"returncode": result.returncode, "stderrBytes": len(result.stderr)})
     return samples
 
@@ -303,6 +312,8 @@ def open_paths(root, owner=None, *, export_only=False):
                    "stderrBytes": len(raw), "stderrTruncated": len(raw) > 4096}
         return RuntimeError("无法完整核对打开文件；保留资源：" + json.dumps(details, ensure_ascii=True))
     try:
+        # 路径在 lsof 输出里会被转义、无法按前缀比对时，一律按核对不完整处理（M5R-M-17）：Store 之外的根（Archives、夹具）也走这里
+        require_portable_root(Path(root).resolve())
         command = lsof_query_command()
         if export_only and (not isinstance(owner, Run) or owner.hosted_proof(root) is None):
             raise ValueError("非破坏导出缺少托管归属证明")
@@ -732,7 +743,9 @@ class Store:
                     run.validate_hosted_completion()
                     run.verify_export()
                     continue
-                if run.scratch.exists() or run.data.get("cleanupStage") == "reports-collected" or run.data.get("status") in ("prepared", "cleanup-pending"):
+                # running 也要接手：运行器本身被强杀、之后 scratch 又被删时没有人再调用 finish（M5R-M-19 补正）。
+                # 仍在活动的运行持有运行锁（上面取锁失败即算 active），进程组存活的下面也算 active
+                if run.scratch.exists() or run.data.get("cleanupStage") == "reports-collected" or run.data.get("status") in ("prepared", "running", "cleanup-pending"):
                     if group_alive(run.data.get("childGroup")):
                         report["active"].append(run.id)
                     else:
@@ -741,14 +754,35 @@ class Store:
                             report["recovered" if value["status"] != "cleanup-pending" else "active"].append(run.id)
             finally:
                 run.release()
+        skipped = []
         with locked(self.root / "gc.lock"):
-            report["pruned"] = self.prune(now)
+            report["pruned"] = self.prune(now, skipped)
+        report["skipped"] = skipped
         return report
 
+    def prune_isolated(self, now):
+        """收尾 GC：与本轮结论、发布隔离（M5R-M-20）。finish 与运行器结束时都经这里：出错只告警、不抛出，
+        不改变已经确定的结论与退出码，也不挡住发布。返回跳过的候选（含 prune 本身出错）"""
+        skipped = []
+        try:
+            with locked(self.root / "gc.lock"):
+                self.prune(now, skipped)
+        except (OSError, ValueError, RuntimeError) as error:
+            skipped.append({"reason": "prune-failed", "error": type(error).__name__})
+        if skipped:
+            print("测试资源收尾回收跳过了部分候选（原样保留）：" + json.dumps(skipped, ensure_ascii=False), file=sys.stderr)
+        return skipped
+
     def prune(self, now, skipped=None):
-        """按期限与总量回收旧报告与失败档案。单个候选的核验失败（句柄查询不完整、读不了台账等）只跳过它、原样保留，
-        记进 skipped（给出时），不让一个候选挡住其余候选，也不让收尾 GC 改变本轮的结论（M5R-M-20）"""
+        """按期限与总量回收旧报告与失败档案。单个候选出错只跳过它，记进 skipped（给出时），不让一个候选挡住其余候选（M5R-M-20）：
+        - collection-failed：统计大小时出错（例如文件被并发删除），这一轮不考虑它；
+        - verification-failed：核验没有通过（句柄查询不完整、读不了台账等），原样保留；
+        - removal-failed：核验通过、已经决定删除，删除或记账出错，可能删了一部分；下一轮重新核验后接着删"""
         removed = []
+
+        def note(category, run_id, reason, error):
+            if skipped is not None and len(skipped) < 16:
+                skipped.append({"category": category, "runId": run_id, "reason": reason, "error": type(error).__name__})
         for category, ttl, cap in (("failures", FAILURE_DAYS, self.failure_bytes),
                                    ("reports", REPORT_DAYS, self.report_bytes)):
             candidates = []
@@ -779,8 +813,11 @@ class Store:
                         except (OSError, ValueError):
                             continue
                 for path, published in paths:
-                    if path.exists() and not path.is_symlink():
-                        candidates.append((value.get("endedAt", value["startedAt"]), directory, path, byte_size(path), published))
+                    try:
+                        if path.exists() and not path.is_symlink():
+                            candidates.append((value.get("endedAt", value["startedAt"]), directory, path, byte_size(path), published))
+                    except OSError as error:
+                        note(category, directory.name, "collection-failed", error)
             total = sum(item[3] for item in candidates)
             for ended, directory, path, size, published in sorted(candidates):
                 if now - ended <= ttl * 86400 and total <= cap:
@@ -797,20 +834,23 @@ class Store:
                             continue
                         if value.get("status") not in ("passed", "failed", "interrupted") or group_alive(value.get("childGroup")) or open_paths(path, owner=owner):
                             continue
-                        remove(path, self.repo if published else self.root)
-                        if published:
-                            value["published"].remove(str(path.relative_to(self.repo)))
-                        event = {"category": category, "runId": directory.name, "bytes": size,
-                                 "reason": "expired" if now - ended > ttl * 86400 else "total-cap", "at": now}
-                        value.setdefault("retired", []).append(event)
-                        atomic_json(directory / "run.json", value)
+                        # 核验到此为止；以下是已经决定的删除与记账，出错与核验失败分开记
+                        try:
+                            remove(path, self.repo if published else self.root)
+                            if published:
+                                value["published"].remove(str(path.relative_to(self.repo)))
+                            event = {"category": category, "runId": directory.name, "bytes": size,
+                                     "reason": "expired" if now - ended > ttl * 86400 else "total-cap", "at": now}
+                            value.setdefault("retired", []).append(event)
+                            atomic_json(directory / "run.json", value)
+                        except (OSError, ValueError) as error:
+                            note(category, directory.name, "removal-failed", error)
+                            continue
                         removed.append(event); total -= size
                 except BlockingIOError:
                     continue
                 except (OSError, ValueError, RuntimeError) as error:
-                    if skipped is not None and len(skipped) < 16:
-                        skipped.append({"category": category, "runId": directory.name, "reason": "verification-failed",
-                                        "error": type(error).__name__})
+                    note(category, directory.name, "verification-failed", error)
                     continue
         return removed
 
@@ -1261,13 +1301,5 @@ class Run:
         finally:
             if release:
                 self.release()
-        # 收尾 GC 与本轮结论、发布隔离（M5R-M-20）：它出错只告警，不改变已经确定的结论，也不挡住调用方发布本轮报告
-        skipped = []
-        try:
-            with locked(self.store.root / "gc.lock"):
-                self.store.prune(time.time(), skipped)
-        except (OSError, ValueError, RuntimeError) as error:
-            skipped.append({"reason": "prune-failed", "error": type(error).__name__})
-        if skipped:
-            print("测试资源收尾回收跳过了部分候选（原样保留）：" + json.dumps(skipped, ensure_ascii=False), file=sys.stderr)
+        self.store.prune_isolated(time.time())
         return self.data

@@ -22,10 +22,9 @@ describe('M5R-M-21 完整门禁 tests 一步：覆盖率之后接着跑测试资
     ])
   })
 
-  it('Python 回归不继承 CI job 的托管策略，其余环境（含句柄查询方式）照常继承', () => {
-    const [coverage, resources] = coverageSegments({ NERVE_TEST_RESOURCE_POLICY: 'github-hosted-vm', NERVE_TEST_LSOF_MODE: 'github-ubuntu-sudo', CI: 'true' })
-    expect(coverage?.env).toMatchObject({ NERVE_TEST_RESOURCE_POLICY: 'github-hosted-vm' })
-    expect(resources?.env).toEqual({ NERVE_TEST_LSOF_MODE: 'github-ubuntu-sudo', CI: 'true' })
+  it('两段都照原样继承调用方的环境（只在本机完整门禁里执行，CI 不跑这一步）', () => {
+    const env = { DATABASE_URL: 'postgres://example', NERVE_TEST_LSOF_MODE: 'direct' }
+    expect(coverageSegments(env).map(segment => segment.env)).toEqual([env, env])
   })
 
   it('两段都通过才算通过', () => {

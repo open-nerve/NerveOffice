@@ -522,8 +522,8 @@ def main():
                 run.release()
                 for sig, handler in original.items():
                     signal.signal(sig, handler)
-            with locked(store.root / "gc.lock"):
-                store.prune(time.time())
+            # 与 finish 的收尾 GC 一样隔离：它在 finally 里，出错若抛出会盖掉已确定的返回值，让已发布的 passed 轮以 1 退出（M5R-M-20 补正）
+            store.prune_isolated(time.time())
 
 
 if __name__ == "__main__":

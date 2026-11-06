@@ -80,9 +80,11 @@ const UNIT: Step = { id: 'unit', command: ['pnpm', 'test'] }
 const STATIC_GATES: Step = { id: 'static-gates', command: ['node', 'tools/src/gates/cli.ts', 'pins', 'config', 'stories', 'migrations', 'schema'] }
 const DATABASE: Step = { id: 'database', command: ['pnpm', 'db:up'] }
 // 单元与集成测试合计的覆盖率（规范 §8.3），需要数据库；已经包含单元测试，完整模式不再单独执行单元测试。
-// 覆盖率之后在同一轮受管运行里接着跑测试资源工具的 Python 回归（M5R-M-21，D-10，coverage-resources.ts）：
-// 不新增运行，CI 每个 job 恰好两轮的资源合同不变；--fast（pre-push）不含它
-const TESTS: Step = { id: 'tests', command: ['pnpm', 'test:verify'] }
+// 本机的完整门禁在覆盖率的同一轮受管运行里接着跑测试资源工具的 Python 回归（M5R-M-21，D-10，coverage-resources.ts），不新增运行。
+// CI 只跑覆盖率（2026-11-06 需求方决定）：GitHub 托管 VM 的全宿主 lsof 必有无法解释的记录，工具的严格校验在那里必然判不完整
+// （ADR-024），这组用例也还没在 Linux 上兼容运行过；Linux 兼容运行与 CI 子集另行设计（DEF-080）。--fast（pre-push）都不含它
+const LOCAL_TESTS: Step = { id: 'tests', command: ['pnpm', 'test:verify'] }
+const CI_TESTS: Step = { id: 'tests', command: ['pnpm', 'test:coverage'] }
 // 先删除旧产物，构建没有真正执行时，后面的产物检查会失败
 const CLEAN: Step = { id: 'clean', command: ['pnpm', 'clean'] }
 const BUILD: Step = { id: 'build', command: ['pnpm', 'build'] }
@@ -104,7 +106,7 @@ export function planSteps(options: PlanOptions): Step[] {
   // e2e 分片：只构建与跑 E2E。构建是 E2E 的前提，所以两个分片都构建（产物门禁只在 no-e2e 那片执行，不重复）
   if (scope === 'e2e')
     return [CLEAN, BUILD, ...E2E]
-  const steps = [LINT, TYPECHECK, STATIC_GATES, ...(options.ci ? [] : [DATABASE]), TESTS, CLEAN, BUILD, ARTIFACT_GATES]
+  const steps = [LINT, TYPECHECK, STATIC_GATES, ...(options.ci ? [] : [DATABASE]), options.ci ? CI_TESTS : LOCAL_TESTS, CLEAN, BUILD, ARTIFACT_GATES]
   if (scope === 'all')
     steps.push(...E2E)
   if (options.ci || options.audit)
