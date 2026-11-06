@@ -455,20 +455,28 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "verification-failed", "error": "RuntimeError"}])
         self.assertTrue(blocked.exists())
 
-    def test_lsof_exit_code_one_with_empty_stderr_is_accepted_and_with_warnings_is_incomplete(self):
-        # Q-10：全量列举的现行规则——退出码 1 且 stderr 为空按“没有打开的文件”接受；有警告即判不完整、保留资源
+    def test_lsof_full_listing_accepts_only_exit_zero_without_warnings(self):
+        # Q-10（2026-11-06 需求方决定收紧）：全量列举只接受退出码 0 且 stderr 为空；退出码 1 即便 stderr 为空也判不完整、
+        # 保留资源（三轮 CI 51 次与本机采样都没出现过这种组合，出现就是异常，不能当作“没有打开的文件”）。采样照旧如实记录
         import lifecycle
         # 合法的全量列举至少列出当前进程（校验器拒绝空的进程集）
         listing = ("p%d\nf0\ntCHR\nn/dev/null\n" % os.getpid()).encode()
+        clean = subprocess.CompletedProcess(args=[], returncode=0, stdout=listing, stderr=b"")
         quiet = subprocess.CompletedProcess(args=[], returncode=1, stdout=listing, stderr=b"")
         noisy = subprocess.CompletedProcess(args=[], returncode=1, stdout=listing, stderr=b"lsof: WARNING: can't stat()\n")
         with patch.dict(os.environ, {"NERVE_TEST_LSOF_MODE": "direct"}):
-            with patch("lifecycle.subprocess.run", return_value=quiet):
+            with patch("lifecycle.subprocess.run", return_value=clean):
                 self.assertEqual(lifecycle.open_paths(self.repo), [])
+            for result in (quiet, noisy):
+                with self.subTest(returncode=result.returncode, stderr=result.stderr), \
+                        patch("lifecycle.subprocess.run", return_value=result):
+                    with self.assertRaisesRegex(RuntimeError, "无法完整核对打开文件") as caught:
+                        lifecycle.open_paths(self.repo)
+                    details = json.loads(str(caught.exception).split("保留资源：", 1)[1])
+                    self.assertEqual((details["returncode"], details["stderrBytes"]), (1, len(result.stderr)))
+            with patch("lifecycle.subprocess.run", return_value=quiet):
                 self.assertEqual(lifecycle.lsof_exit_sample(2), [{"returncode": 1, "stderrBytes": 0}] * 2)
             with patch("lifecycle.subprocess.run", return_value=noisy):
-                with self.assertRaisesRegex(RuntimeError, "无法完整核对打开文件"):
-                    lifecycle.open_paths(self.repo)
                 self.assertEqual(lifecycle.lsof_exit_sample(1), [{"returncode": 1, "stderrBytes": len(noisy.stderr)}])
 
     def test_lsof_exit_sample_has_a_total_budget(self):
