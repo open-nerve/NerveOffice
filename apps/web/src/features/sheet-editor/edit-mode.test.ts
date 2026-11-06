@@ -44,6 +44,30 @@ vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
 })
 
+// 捕获之后的 gzip 与内容哈希（draft-codec 的 gzipBytes、sha256Hex，内存工作草稿在用）是 CompressionStream 与 WebCrypto，在 Node 里由
+// 线程池异步完成：至少晚一个宏任务，机器满载时晚多少不定。这个文件的用例按“一个宏任务内走完”写（settle 借一个真实的宏任务），
+// 满载时“settle 之后断言已经上传、已经重发”的用例时过时不过——S3 与 S14 的本机全量运行各见一次；让 gzipBytes 晚 30 毫秒兑现
+// 即可稳定复现（18 条用例失败）。也有用例依赖“至少晚一个宏任务”：换成立即兑现，又有 4 条失败。这里换成恰好晚一个宏任务、
+// 同步算出的同一结果（真实的 gzip 与 SHA-256）：保留真实的下界，去掉满载时不定的上界；它的计时器排在之后的 settle 前面。
+// 编解码本身由 draft-codec.test.ts 覆盖
+vi.mock('../../shared/outbox/draft-codec.ts', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../shared/outbox/draft-codec.ts')>()
+  const { gzipSync } = await import('node:zlib')
+  const { createHash } = await import('node:crypto')
+  const macrotask = async (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+  return {
+    ...original,
+    gzipBytes: async (bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> => {
+      await macrotask()
+      return new Uint8Array(gzipSync(bytes))
+    },
+    sha256Hex: async (bytes: Uint8Array<ArrayBuffer>): Promise<string> => {
+      await macrotask()
+      return createHash('sha256').update(bytes).digest('hex')
+    },
+  }
+})
+
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-7a3b-8c4d-00000000aaaa'
 const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }
