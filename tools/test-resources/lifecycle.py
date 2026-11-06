@@ -767,7 +767,7 @@ class Store:
         try:
             with locked(self.root / "gc.lock"):
                 self.prune(now, skipped)
-        except (OSError, ValueError, RuntimeError) as error:
+        except (OSError, ValueError, RuntimeError, KeyError) as error:
             skipped.append({"reason": "prune-failed", "error": type(error).__name__})
         if skipped:
             print("测试资源收尾回收跳过了部分候选（原样保留）：" + json.dumps(skipped, ensure_ascii=False), file=sys.stderr)
@@ -816,7 +816,7 @@ class Store:
                     try:
                         if path.exists() and not path.is_symlink():
                             candidates.append((value.get("endedAt", value["startedAt"]), directory, path, byte_size(path), published))
-                    except OSError as error:
+                    except (OSError, KeyError) as error:
                         note(category, directory.name, "collection-failed", error)
             total = sum(item[3] for item in candidates)
             for ended, directory, path, size, published in sorted(candidates):

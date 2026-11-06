@@ -15,7 +15,7 @@ export interface ValidatedHistory {
   readonly record: HistoryMaterial
   readonly profile: DocumentProfile
   readonly formatVersion: PlatformFormatVersion
-  /** 检查子进程从这份历史正文提取到的完整图片标识：恢复出的副本记在修订上，作下一次保存的授权基准（D-01） */
+  /** 检查子进程从这份历史正文提取到的全部图片标识：减去检查点的关系之后，作为恢复出的副本修订的未登记标识（D-01） */
   readonly assetIds: readonly string[]
 }
 

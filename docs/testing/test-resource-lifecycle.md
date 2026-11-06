@@ -162,16 +162,16 @@ pin 只用于经过审查的必要最终证据；不要 pin 每次失败重试�
 
 ## 清理回归与局限
 
-**纳入门禁**（M5-P7，D-10；2026-11-06 修订）：Python 回归（`pnpm test:cleanup:check` 的同一组用例）经 `pnpm test:verify` 纳入**本机**完整 verify。它在覆盖率的同一轮受管运行（`run.py integration`）里、覆盖率结束之后执行（`tools/src/verify/coverage-resources.ts`）：两段都执行、任一失败即整步失败，不新增运行；pre-push 快速门禁不含它。本机实测 491 项约 3 分钟。
+**纳入门禁**（M5-P7，D-10；2026-11-06 修订）：Python 回归（`pnpm test:cleanup:check` 的同一组用例）经 `pnpm test:verify` 纳入**本机**完整 verify。它在覆盖率的同一轮受管运行（`run.py integration`）里、覆盖率结束之后执行（`tools/src/verify/coverage-resources.ts`）：两段都执行、任一失败即整步失败，不新增运行；pre-push 快速门禁不含它。本机实测约 3 分钟（S14 时 499 项）。
 
 CI 的 verify job 只跑覆盖率（`pnpm verify --ci` 的 tests 一步是 `pnpm test:coverage`）。这组用例是严格策略下的工具单测，会对临时管理根做真实的全宿主 lsof 核验；GitHub 托管 VM 上全宿主 lsof 必有无法解释的 socket 与内核对象记录（见下文“固定托管 VM 的回收责任”与 ADR-024），严格核验在那里必然判不完整，用例也还没在 Linux 上兼容运行过。按需求方决定不进 CI，Linux 兼容运行与 CI 子集另行设计（DEF-080）。
 
-**M5-P7 的四处行为调整**：
+**M5-P7 的四处行为调整**（S14 独立审查之后补全）：
 
-- 管理根路径（仓库或 worktree 的路径）含非 ASCII、控制字符或反斜杠时，`Store` 初始化即失败关闭（M5R-M-17）：lsof 在 C locale 下把这些字节写成转义序列，按前缀比较会把仍被打开的文件当成不在管理根里；
-- 运行期间 scratch 被外部删除时，running/prepared 按中断收尾（`stopReason=scratch-missing`，清理阶段 complete），短根随之退役；运行器不再以子进程的退出码冒充本轮成功（M5R-M-19）；
-- 收尾 GC 的单个候选核验失败（句柄查询不完整等）只跳过它、原样保留并告警，其余候选照常回收；收尾 GC 出错不改变本轮结论、不挡住发布（M5R-M-20）；
-- lsof 全量列举的退出码 1 且 stderr 为空时仍按现行规则接受，有警告即不完整（Q-10 单测钉住）。CI 资源核对之后，另按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解；收集到分布后再定是否收紧。
+- 管理根路径（仓库或 worktree 的路径）含非 ASCII、控制字符或反斜杠时，`Store` 初始化即失败关闭（M5R-M-17）：lsof 在 C locale 下把这些字节写成转义序列，按前缀比较会把仍被打开的文件当成不在管理根里。同一校验也在每次句柄查询（`open_paths`）里做，所以不经过 `Store` 的根（handoff 归档 `Archives`、嵌套夹具）同样按核对不完整处理；
+- 运行期间 scratch 被外部删除时，running/prepared 按中断收尾（`stopReason=scratch-missing`，清理阶段 complete），短根随之退役；运行器不再以子进程的退出码冒充本轮成功（M5R-M-19）。运行器本身被强杀、之后 scratch 又被删时，`run.py cleanup`（`sweep`）也接手停在 running 的运行；仍在活动的运行持有运行锁或进程组存活，不会被误收；
+- 收尾 GC 的单个候选出错只跳过它：统计大小出错记 `collection-failed`，核验没有通过（句柄查询不完整等）记 `verification-failed` 并原样保留，已决定删除之后的删除或记账出错记 `removal-failed`（下一轮重新核验后接着删），其余候选照常回收。`finish` 与运行器结束时的收尾 GC 共用 `prune_isolated`：出错只告警，不改变本轮结论与退出码、不挡住发布；`sweep` 的报告里列出跳过的候选（M5R-M-20）；
+- lsof 全量列举的退出码 1 且 stderr 为空时仍按现行规则接受，有警告即不完整（Q-10 单测钉住）。CI 资源核对之后，另按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解；整段采样最多 20 秒，超时只记下，不让核对步骤超时。收集到分布后再定是否收紧。
 
 Python 小型回归覆盖成功释放、失败限额与过期、SIGTERM、遗留恢复、打开句柄/活动锁、父目录链接、重复执行、失败重试归属、转移中断续作、发布锁、容器重复发布和 handoff 源码/最终证据保护。TypeScript 回归覆盖受管目录、VM 越界、纯函数导入兼容与数据库连接竞争。
 

@@ -325,6 +325,18 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     expect(await revisionAssetIds(d.id, 3)).toEqual([a])
   })
 
+  it('M5R-I-02 存量回退时减去已登记的关系：已登记的图片照常保留，预埋地址同样不升级（S14 复验）', async () => {
+    const { a, d } = await planted()
+    const own = await uploaded(owner)
+    await saved(await put(owner, d, raw(d, [a, own], '乙放进自己的图'), { baseRevision: 2 }))
+    expect((await facts(d.id)).references).toEqual([own])
+    // 上传窗口过期：之后只能凭 D 上已有的关系证明它
+    await expire([own])
+    await database.query(async client => client.query('UPDATE document_revisions SET unlinked_asset_ids=NULL WHERE document_id=$1', [d.id]))
+    await saved(await put(owner, d, raw(d, [a, own], '乙的真实修改'), { baseRevision: 3 }))
+    expect((await facts(d.id)).references).toEqual([own])
+  })
+
   it('M5R-I-02 存量正文解析不了时以当前已登记的关系作基准并记警告（等于这一次沿用旧语义）', async () => {
     const { a, d } = await planted()
     await database.query(async (client) => {

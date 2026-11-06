@@ -12,7 +12,7 @@ function stored(snapshot: unknown): Buffer {
   return zlib.gzipSync(Buffer.from(JSON.stringify(snapshot), 'utf8'))
 }
 
-describe('legacyAssetIds：存量修订的完整图片标识（M5-P7 设计 §3.2，D-01 的回退基准）', () => {
+describe('legacyAssetIds：存量修订正文里的图片标识（M5-P7 设计 §3.2，D-01 的回退基准，调用方再减去已登记的关系）', () => {
   it('正文任意字符串与资源 data 里的规范地址都算，去重排序；不看是否合规或是否获授权', () => {
     const snapshot = {
       id: 'u',

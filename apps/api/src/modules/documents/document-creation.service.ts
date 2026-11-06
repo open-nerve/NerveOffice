@@ -47,7 +47,7 @@ interface TemplateContent {
     readonly contentHash: Buffer
     readonly resourceNames: readonly string[]
   }
-  /** 模板正文提取到的完整图片标识（模板没有图片，为空）；记在修订上，作下一次保存的授权基准（D-01） */
+  /** 模板正文提取到的图片标识（模板没有图片，为空）；新建不登记关系，它们都记为修订的未登记标识（D-01） */
   readonly assetIds: readonly string[]
 }
 

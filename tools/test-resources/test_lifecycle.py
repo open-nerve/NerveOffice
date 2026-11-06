@@ -419,6 +419,20 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(skipped, [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "FileNotFoundError"}])
         self.assertEqual([event["runId"] for event in removed], [runs[1].id])
 
+    def test_prune_skips_run_record_missing_fields_and_isolated_prune_absorbs_key_errors(self):
+        # S14 复验：台账缺 startedAt 时收集阶段的 KeyError 只跳过这一个候选；收尾回收连 KeyError 也不外溢
+        import lifecycle
+        runs = self.expired_reports(2)
+        data = json.loads((runs[0].directory / "run.json").read_text())
+        del data["startedAt"]
+        lifecycle.atomic_json(runs[0].directory / "run.json", data)
+        skipped = []
+        removed = self.store.prune(time.time(), skipped)
+        self.assertEqual(skipped, [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "KeyError"}])
+        self.assertEqual([event["runId"] for event in removed], [runs[1].id])
+        with patch.object(Store, "prune", side_effect=KeyError("startedAt")):
+            self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "KeyError"}])
+
     def test_isolated_final_prune_never_raises_and_sweep_reports_skipped(self):
         # S14 审查 T4：运行器结束时的收尾 GC 与 finish 共用隔离入口；sweep 也把跳过的候选报出来
         runs = self.expired_reports(1)
