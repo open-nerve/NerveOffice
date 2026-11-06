@@ -3,6 +3,8 @@
 # WebKit，darwin 上 WebKit 单 worker），资源工具用默认的严格本机模式（真实删除并核对）。照 CI 的做法分片并行：
 # 本机模式的 no-e2e 与按浏览器的 e2e 合起来恰好是本机完整门禁（plan.test.ts），另加生产容器 E2E。
 # Intel 版能用 colima 起 Docker（pnpm db:up 与容器 E2E 都要用），Apple 芯片版不能（S3 探测，run 42252502692）。
+# Homebrew 的 docker 只是命令行：compose 与 buildx 两个插件另装并链接，与开发机的 Docker Desktop 一致。生产镜像的 Dockerfile
+# 用了只有 BuildKit 支持的 RUN --mount，没有 buildx 时退回旧构建器、构建失败（第 2 轮 run 42256375539 的容器 job，mac-workflow.test.ts）。
 # 新工作流合并到默认分支之前不能 workflow_dispatch（GitHub 只认默认分支上已有的工作流文件），所以合并前只由推送
 # 本 Phase 的唯一分支触发，合并后可手动触发。不随 main 推送运行，不改 ci.yml 的原六项。
 # 各个 Action 按提交的 SHA 锁定，注释里写对应的版本（与 ci.yml 相同）。
@@ -60,12 +62,14 @@ jobs:
       - name: 启动 Docker（colima）
         timeout-minutes: 20
         run: |
-          brew install colima docker docker-compose
+          brew install colima docker docker-compose docker-buildx
           mkdir -p "$HOME/.docker/cli-plugins"
           ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+          ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$HOME/.docker/cli-plugins/docker-buildx"
           colima start --cpu 2 --memory 3 --disk 30
           docker info --format '{{.ServerVersion}}'
           docker compose version
+          docker buildx version
 
       - name: pnpm verify --scope=no-e2e（本机模式）
         timeout-minutes: 100
@@ -132,12 +136,14 @@ jobs:
       - name: 启动 Docker（colima）
         timeout-minutes: 20
         run: |
-          brew install colima docker docker-compose
+          brew install colima docker docker-compose docker-buildx
           mkdir -p "$HOME/.docker/cli-plugins"
           ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+          ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$HOME/.docker/cli-plugins/docker-buildx"
           colima start --cpu 2 --memory 3 --disk 30
           docker info --format '{{.ServerVersion}}'
           docker compose version
+          docker buildx version
 
       - name: pnpm verify --scope=e2e（本机模式）
         timeout-minutes: 300
@@ -201,12 +207,14 @@ jobs:
       - name: 启动 Docker（colima）
         timeout-minutes: 20
         run: |
-          brew install colima docker docker-compose
+          brew install colima docker docker-compose docker-buildx
           mkdir -p "$HOME/.docker/cli-plugins"
           ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+          ln -sfn "$(brew --prefix)/opt/docker-buildx/bin/docker-buildx" "$HOME/.docker/cli-plugins/docker-buildx"
           colima start --cpu 3 --memory 8 --disk 60
           docker info --format '{{.ServerVersion}}'
           docker compose version
+          docker buildx version
 
       - name: pnpm test:e2e:container（本机模式）
         timeout-minutes: 120

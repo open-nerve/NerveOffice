@@ -5,58 +5,18 @@
 // 步骤级的 env 改掉 CI 或 E2E_BROWSERS。
 import process from 'node:process'
 import { describe, expect, it } from 'vitest'
-import { parse } from 'yaml'
 import { z } from 'zod'
 import { commandText, readText } from '../shared/repo.ts'
 import { parseArgs, planSteps } from './plan.ts'
+import { parseWorkflow, PLAYWRIGHT_CONFIG, playwrightBrowsers, runsChecks, stepLabel, verifyArgs, workflowWith as workflowTextWith } from './workflow.test-support.ts'
 
 const WORKFLOW = '.github/workflows/ci.yml'
-/** E2E 的浏览器表（playwright.config.ts 的 BROWSERS）：本机跑前三个，CI 另加 Edge（规范 §8.2） */
-const PLAYWRIGHT_CONFIG = 'tests/e2e/playwright.config.ts'
 // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文，不是模板字符串
 const MATRIX_BROWSER = '${{ matrix.browser }}'
 // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文，只在 WebKit 分片启用现有补证
 const WEBKIT_LOGIN_POPUP_DIAGNOSTIC = '${{ matrix.browser == \'webkit\' && \'1\' || \'\' }}'
 
-const stepSchema = z.object({
-  'name': z.string().optional(),
-  'run': z.string().optional(),
-  'uses': z.string().optional(),
-  'if': z.unknown().optional(),
-  'env': z.record(z.string(), z.unknown()).optional(),
-  'continue-on-error': z.unknown().optional(),
-}).loose()
-const jobSchema = z.object({
-  'name': z.string().optional(),
-  'if': z.unknown().optional(),
-  'env': z.record(z.string(), z.unknown()).optional(),
-  'strategy': z.object({ 'fail-fast': z.boolean().optional(), 'matrix': z.record(z.string(), z.unknown()).optional() }).loose().optional(),
-  'steps': z.array(stepSchema),
-  'continue-on-error': z.unknown().optional(),
-}).loose()
-const workflowSchema = z.object({
-  env: z.record(z.string(), z.unknown()).optional(),
-  on: z.object({
-    push: z.object({ branches: z.array(z.string()) }).loose().optional(),
-    schedule: z.array(z.object({ cron: z.string() })).optional(),
-  }).loose(),
-  jobs: z.record(z.string(), jobSchema),
-})
-
-type Workflow = z.infer<typeof workflowSchema>
-type Job = z.infer<typeof jobSchema>
-type Step = z.infer<typeof stepSchema>
-
-function parseWorkflow(text: string): Workflow {
-  return workflowSchema.parse(parse(text))
-}
-
 const workflow = parseWorkflow(readText(WORKFLOW))
-
-/** 一个 job 里执行 pnpm verify 的各步的参数（只认 run 里以 pnpm verify 开头的一行） */
-function verifyArgs(job: Job): string[][] {
-  return job.steps.flatMap(step => (step.run ?? '').split('\n').map(line => line.trim().split(/\s+/)).filter(words => words[0] === 'pnpm' && words[1] === 'verify').map(words => words.slice(2)))
-}
 
 /**
  * CI 与本机完整的一套（pnpm verify 不带参数）只差这两步（plan.ts）：数据库由服务容器提供，CI 不执行 database；
@@ -100,28 +60,9 @@ function shardingProblems(text: string): string[] {
   return problems
 }
 
-/** 在内存里改工作流的文字（不改文件）：要换掉的那一段必须恰好出现一次，否则说明工作流改了写法，用例要跟着改 */
+/** 在内存里改 ci.yml 的文字（不改文件）：要换掉的那一段必须恰好出现一次 */
 function workflowWith(original: string, replacement: string): string {
-  const text = readText(WORKFLOW)
-  expect(text.split(original).length - 1, `工作流里应恰好有一处：${original}`).toBe(1)
-  return text.replace(original, replacement)
-}
-
-/** 这一步执行检查：pnpm verify 或容器 E2E（run 里有一行以它开头） */
-function runsChecks(step: Step): boolean {
-  return (step.run ?? '').split('\n').some(line => /^pnpm (?:verify|test:e2e:container)(?:\s|$)/.test(line.trim()))
-}
-
-function stepLabel(id: string, step: Step): string {
-  return `${id}：${step.name ?? step.uses ?? step.run ?? ''}`
-}
-
-/** playwright.config.ts 里浏览器表的名字：const BROWSERS … = { 名字: …, … } */
-function playwrightBrowsers(source: string): string[] {
-  const block = /^const BROWSERS\b[^=]*= \{\n([\s\S]*?)^\}$/m.exec(source)?.[1]
-  if (block === undefined)
-    throw new Error(`${PLAYWRIGHT_CONFIG} 里找不到 const BROWSERS = { … }：改了写法，同步这里的解析`)
-  return [...block.matchAll(/^ {2}(\w+): /gm)].map(match => match[1] ?? '')
+  return workflowTextWith(WORKFLOW, original, replacement)
 }
 
 describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）', () => {
@@ -134,14 +75,14 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     expect(shardingProblems(readText(WORKFLOW))).toEqual([])
   })
 
+  // CX7 的变异原先由步骤等价性核对发现少跑的步骤；M5-P8 S4（独立审查 M-1）起 parseArgs 直接拒绝 --fast 与分片同给，
+  // 分片名不变而实际步骤变少的写法在解析这一步就拦下，变异照样不能通过
   it.each([
-    ['no-e2e 那片多了 --fast：少跑集成测试与覆盖率、产物门禁', 'run: pnpm verify --ci --keep-going --scope=no-e2e', 'run: pnpm verify --ci --keep-going --fast --scope=no-e2e', ['tests', 'artifact-gates']],
-    ['e2e 那片多了 --fast：不构建、不跑 E2E', 'run: pnpm verify --ci --keep-going --scope=e2e', 'run: pnpm verify --ci --fast --keep-going --scope=e2e', ['build-e2e', 'e2e']],
-  ])('改变计划的参数（Codex 评审 CX7 的变异，在内存里改工作流的文字）：%s，等价性核对失败', (_name, original, replacement, missing) => {
+    ['no-e2e 那片多了 --fast：少跑集成测试与覆盖率、产物门禁', 'run: pnpm verify --ci --keep-going --scope=no-e2e', 'run: pnpm verify --ci --keep-going --fast --scope=no-e2e', 'verify', 'no-e2e'],
+    ['e2e 那片多了 --fast：不构建、不跑 E2E', 'run: pnpm verify --ci --keep-going --scope=e2e', 'run: pnpm verify --ci --fast --keep-going --scope=e2e', 'e2e', 'e2e'],
+  ])('改变计划的参数（Codex 评审 CX7 的变异，在内存里改工作流的文字）：%s，解析即拒绝', (_name, original, replacement, job, scope) => {
     const problems = shardingProblems(workflowWith(original, replacement))
-    expect(problems).toHaveLength(1)
-    for (const step of missing)
-      expect(problems[0]).toMatch(new RegExp(`少了 [^，]*${step}`))
+    expect(problems[0]).toMatch(new RegExp(`^${job}：pnpm verify 不认得这些参数（--fast 不分片：快速门禁只有一套步骤，不能与 --scope=${scope} 一起给。`))
   })
 
   it('verify 那片改成跑完整的一套（--scope=all）：E2E 跑两遍，分片的核对失败', () => {

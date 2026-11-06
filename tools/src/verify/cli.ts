@@ -1,4 +1,5 @@
-// 用法：pnpm verify [--fast] [--audit] [--keep-going]；CI 的分片：pnpm verify --ci [--scope=all|no-e2e|e2e]
+// 用法见 plan.ts 的 VERIFY_USAGE：pnpm verify [--fast] [--audit] [--keep-going] [--scope=all|no-e2e|e2e]，CI 加 --ci；
+// 分片 CI 与托管 Mac 的本机模式都用（M5-P8），--fast 不分片
 // 参数的解析与步骤的编排都是纯函数（plan.ts），这里只负责执行命令与输出结果
 import { spawnSync } from 'node:child_process'
 import process from 'node:process'

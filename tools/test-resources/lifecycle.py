@@ -281,8 +281,8 @@ def lsof_incomplete_records(output, service_pids=(), *, allow_unresolved=False):
 def lsof_exit_sample(count=3, budget=20.0):
     """Q-10：按运行器同款固定命令（同一提权方式与 C locale）取几次全量列举，只记退出码与 stderr 字节数，不记输出内容。
     不经任何运行台账，也不参与清理决定；只供 CI 资源核对写成注解。规则收紧（只接受退出码 0）之后保留，作为新环境
-    （例如托管 Mac）的观测。整段采样最多 budget 秒（S14 审查 T5）：它跑在时限 3 分钟的资源核验步骤里，不能因采样
-    拖到超时；超时只记下并停止"""
+    的观测（托管 Mac 不经 CI 资源核对，由 ci_mac_probe.py 按直接模式的同一条命令采样）。整段采样最多 budget 秒
+    （S14 审查 T5）：它跑在时限 3 分钟的资源核验步骤里，不能因采样拖到超时；超时只记下并停止"""
     command = lsof_query_command()
     samples = []
     deadline = time.monotonic() + budget

@@ -30,6 +30,14 @@ POSTGRES_FORMULA = "postgresql@18"
 INITDB_ARGS = ("--encoding=UTF8", "--locale-provider=builtin", "--builtin-locale=C.UTF-8")
 BROWSERS = (("chromium", None), ("webkit", None), ("chromium", "chrome"))
 GIB = 1024 ** 3
+# 与 desktop_session.read_snapshot 同一条命令与环境（会话保护每 2 秒读一次，读取时限 2 秒）：记它在托管 Mac 上的耗时
+PS = ("/bin/ps", "-ww", "-axo", "pid=,uid=,lstart=,comm=")
+PS_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "LANG": "C"}
+# 门禁用到的工具链（S4 独立审查 M-3）：原件据此绑定环境版本；Homebrew 的公式随托管镜像的快照
+TOOLS = (("node", ("node", "--version")), ("pnpm", ("pnpm", "--version")), ("brew", ("brew", "--version")),
+         ("colima", ("colima", "version")), ("docker", ("docker", "--version")),
+         ("compose", ("docker", "compose", "version", "--short")), ("buildx", ("docker", "buildx", "version")))
+VERSION_CHARS = 200
 
 
 def tail(data, limit=TAIL_BYTES):
@@ -112,6 +120,19 @@ def lsof_samples(prefix=(), count=3, timeout=60):
             for sample in (run([*prefix, *LSOF], timeout, env={"LC_ALL": "C"}) for _ in range(count))]
 
 
+def ps_samples(count=3, timeout=30):
+    return [{key: sample[key] for key in ("returncode", "stdoutBytes", "stderrBytes", "durationMs", "timedOut", "error") if key in sample}
+            for sample in (run(PS, timeout, env=PS_ENV) for _ in range(count))]
+
+
+def toolchain():
+    """各工具 --version 的第一行（有界），找不到或失败时为 None；python3 记探测自身的解释器（门禁同一个 python3）。"""
+    def first_line(argv):
+        text = stdout_of(list(argv), timeout=30)
+        return text.splitlines()[0][:VERSION_CHARS] if text else None
+    return {"probePython": sys.version.split()[0], **{name: first_line(argv) for name, argv in TOOLS}}
+
+
 def system():
     total = stdout_of(["/usr/sbin/sysctl", "-n", "hw.memsize"])
     default_keychain = (stdout_of(["/usr/bin/security", "default-keychain", "-d", "user"]) or "").strip().strip('"')
@@ -140,6 +161,8 @@ def system():
         "openFilesLimit": resource.getrlimit(resource.RLIMIT_NOFILE)[0],
         "lsofUser": lsof_samples(),
         "lsofSudo": lsof_samples(("/usr/bin/sudo", "-n", "--")),
+        "ps": ps_samples(),
+        "toolchain": toolchain(),
     }
 
 
@@ -236,7 +259,8 @@ def safari():
 
 
 def final():
-    return {"diskFreeGiB": disks(), "memory": memory()}
+    # 门禁跑完、colima 仍在时再采一次 lsof（Q-10 的观测，与运行器直接模式同一条命令）与 ps 的耗时
+    return {"diskFreeGiB": disks(), "memory": memory(), "toolchain": toolchain(), "ps": ps_samples(), "lsofUser": lsof_samples()}
 
 
 def notice(title, payload):

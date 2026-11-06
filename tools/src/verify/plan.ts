@@ -58,6 +58,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   const scope = scopeArgs.at(-1)?.slice(SCOPE_PREFIX.length) ?? 'all'
   if (!isPlanScope(scope))
     return { ok: false, error: `不认识的分片：${scope}（可选 ${PLAN_SCOPES.join('、')}）。${VERIFY_USAGE}` }
+  // 快速门禁只有一套步骤（planSteps 先看 fast），与分片一起给时分片会被悄悄丢掉（M5-P8 S4 独立审查 M-1）
+  if (args.has('--fast') && scope !== 'all')
+    return { ok: false, error: `--fast 不分片：快速门禁只有一套步骤，不能与 --scope=${scope} 一起给。${VERIFY_USAGE}` }
   return { ok: true, options: { fast: args.has('--fast'), ci, audit: args.has('--audit'), scope }, keepGoing: args.has('--keep-going') }
 }
 

@@ -171,7 +171,7 @@ CI 的 verify job 只跑覆盖率（`pnpm verify --ci` 的 tests 一步是 `pnpm
 - 管理根路径（仓库或 worktree 的路径）含非 ASCII、控制字符或反斜杠时，`Store` 初始化即失败关闭（M5R-M-17）：lsof 在 C locale 下把这些字节写成转义序列，按前缀比较会把仍被打开的文件当成不在管理根里。同一校验也在每次句柄查询（`open_paths`）里做，所以不经过 `Store` 的根（handoff 归档 `Archives`、嵌套夹具）同样按核对不完整处理；
 - 运行期间 scratch 被外部删除时，running/prepared 按中断收尾（`stopReason=scratch-missing`，清理阶段 complete），短根随之退役；运行器不再以子进程的退出码冒充本轮成功（M5R-M-19）。运行器本身被强杀、之后 scratch 又被删时，`run.py cleanup`（`sweep`）也接手停在 running 的运行；仍在活动的运行持有运行锁或进程组存活，不会被误收；
 - 收尾 GC 的单个候选出错只跳过它：统计大小出错记 `collection-failed`，核验没有通过（句柄查询不完整等）记 `verification-failed` 并原样保留，已决定删除之后的删除或记账出错记 `removal-failed`（下一轮重新核验后接着删），其余候选照常回收。`finish` 与运行器结束时的收尾 GC 共用 `prune_isolated`：出错只告警，不改变本轮结论与退出码、不挡住发布；`sweep` 的报告里列出跳过的候选（M5R-M-20）；
-- lsof 全量列举只接受退出码 0 且 stderr 为空；退出码 1（即便 stderr 为空）或有警告都判不完整、保留资源（Q-10，2026-11-06 需求方决定收紧：三轮 CI 51 次与本机采样都没出现过“退出码 1 且 stderr 为空”，M5-P8 S2 实施，单测钉住）。CI 资源核对之后照旧按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解，作为新环境（例如托管 Mac）的观测；整段采样最多 20 秒，超时只记下，不让核对步骤超时。
+- lsof 全量列举只接受退出码 0 且 stderr 为空；退出码 1（即便 stderr 为空）或有警告都判不完整、保留资源（Q-10，2026-11-06 需求方决定收紧：三轮 CI 51 次与本机采样都没出现过“退出码 1 且 stderr 为空”，M5-P8 S2 实施，单测钉住）。CI 资源核对之后照旧按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解，作为新环境的观测；整段采样最多 20 秒，超时只记下，不让核对步骤超时。托管 Mac 不经 CI 资源核对，由 `ci_mac_probe.py` 在 job 开始与结束时按同一条命令采样（见下文“GitHub 托管 Mac”）。
 
 Python 小型回归覆盖成功释放、失败限额与过期、SIGTERM、遗留恢复、打开句柄/活动锁、父目录链接、重复执行、失败重试归属、转移中断续作、发布锁、容器重复发布和 handoff 源码/最终证据保护。TypeScript 回归覆盖受管目录、VM 越界、纯函数导入兼容与数据库连接竞争。
 
@@ -238,8 +238,9 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
   - 资源工具用默认的严格本机模式：删除前核验、真实删除与回收核对照常执行，不登记 `host-disposal-pending`，`hosted.py` 不参与。
   - lsof 用默认的普通权限命令；Q-10 收紧后，任何退出码 1 都判为不完整。
   - darwin 的桌面会话保护照常生效，会话变化即停。
-- **Docker**：由 colima 提供；`pnpm db:up` 起的开发库与本机使用同一编排和镜像摘要。Apple 芯片版托管 Mac 不能嵌套虚拟化、起不了 Docker，不用于验收。
-- **分片**：本机模式的 `pnpm verify --scope=no-e2e|e2e` 按浏览器并行，两片各自先执行 `pnpm db:up`，合起来恰好是本机完整门禁（`plan.test.ts`）；另加 `pnpm test:e2e:container`。
+- **Docker**：由 colima 提供；`pnpm db:up` 起的开发库与本机使用同一编排和镜像摘要。Homebrew 的 docker 只是命令行，compose 与 buildx 两个插件另装并链接，与开发机的 Docker Desktop 一致（生产镜像的 Dockerfile 用了只有 BuildKit 支持的 `RUN --mount`）。Apple 芯片版托管 Mac 不能嵌套虚拟化、起不了 Docker，不用于验收。
+- **观测**：每个 job 开始与结束时由 `ci_mac_probe.py` 记环境事实（写成 notice 注解）：磁盘、内存、工具链版本、会话保护那条 ps 的耗时，以及按运行器直接模式同一条命令的 lsof 退出码与 stderr 字节数。只作观测，不作验收证据。
+- **分片**：本机模式的 `pnpm verify --scope=no-e2e|e2e` 按浏览器并行，两片各自先执行 `pnpm db:up`，合起来恰好是本机完整门禁（`plan.test.ts`）；另加 `pnpm test:e2e:container`。工作流本身的接线（分片参数、浏览器矩阵、`CI` 置空、不设资源策略、没有条件跳过或失败放行、Docker 插件）由 `mac-workflow.test.ts` 核对。
 - **上传**：每个 job 上传 E2E 的 JSON/HTML 与结果目录（不含持久资料目录）、覆盖率报告和本轮台账 `run.json`，供原件核对。
 
 ## P6 Linux 固定校准与自检

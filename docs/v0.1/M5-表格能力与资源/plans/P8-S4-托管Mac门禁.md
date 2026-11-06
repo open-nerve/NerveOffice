@@ -48,7 +48,7 @@
 1. 检出代码；verify 取完整历史，迁移门禁要用。
 2. 记环境事实：`ci_mac_probe.py system`。
 3. 安装 Node 与 pnpm，安装依赖。
-4. 安装 colima、docker 与 docker-compose，把 compose 插件链接到 `~/.docker/cli-plugins/`，然后启动 colima。verify 与 e2e 用 2 核、3 GB；container 用 3 核、8 GB，生产镜像的构建在里面完成。
+4. 安装 colima、docker、docker-compose 与 docker-buildx，把 compose 与 buildx 两个插件链接到 `~/.docker/cli-plugins/`，然后启动 colima，核对两个插件可用。Homebrew 的 docker 只是命令行，开发机的 Docker Desktop 自带这两个插件；生产镜像的 Dockerfile 用了只有 BuildKit 支持的 `RUN --mount`（第 2 轮 run `42256375539` 的容器 job 因缺 buildx 失败后补上）。verify 与 e2e 用 2 核、3 GB；container 用 3 核、8 GB，生产镜像的构建在里面完成。
 5. 仅 e2e：安装本片的 Playwright 浏览器。
 6. 运行门禁，`CI` 置空；verify 的 `GATE_MIGRATIONS_BASE` 与 `ci.yml` 相同。
 7. 记结束时的环境：`ci_mac_probe.py final`；上传报告（`if: always()`）。上传内容为 E2E 的 JSON/HTML 与结果目录（不含持久资料目录）、覆盖率报告，以及本轮台账 `run.json`。

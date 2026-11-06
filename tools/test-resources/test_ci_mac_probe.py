@@ -70,6 +70,65 @@ class MacProbeTests(unittest.TestCase):
         self.assertEqual([set(sample) for sample in samples], [{"returncode", "stderrBytes", "durationMs"}] * 2)
         self.assertEqual([(sample["returncode"], sample["stderrBytes"]) for sample in samples], [(1, 7)] * 2)
 
+    def test_ps_samples_time_the_same_command_as_the_desktop_session_guard(self):
+        # 第 2 轮托管 Mac 门禁（run 42256375539）里会话保护的 ps 两次超过 2 秒的读取时限：探测照同一条命令记录耗时
+        import desktop_session
+
+        seen = []
+
+        def capture(argv, **options):
+            seen.append((list(argv), options["env"]))
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        with patch("desktop_session.subprocess.run", side_effect=capture):
+            with self.assertRaises(desktop_session.SessionReadError):
+                desktop_session.read_snapshot()
+        calls = []
+
+        def fake(argv, **options):
+            calls.append((list(argv), options["env"], options["timeout"]))
+            return subprocess.CompletedProcess(argv, 0, b"x" * 50, b"")
+
+        with patch("ci_mac_probe.subprocess.run", side_effect=fake):
+            samples = probe.ps_samples(count=2, timeout=9)
+        self.assertEqual([call[0] for call in calls], [seen[0][0]] * 2)
+        for name, value in seen[0][1].items():
+            self.assertEqual({call[1][name] for call in calls}, {value})
+        self.assertEqual({call[2] for call in calls}, {9})
+        self.assertEqual([set(sample) for sample in samples], [{"returncode", "stdoutBytes", "stderrBytes", "durationMs"}] * 2)
+        self.assertEqual([(sample["returncode"], sample["stdoutBytes"]) for sample in samples], [(0, 50)] * 2)
+
+    def test_toolchain_records_only_the_first_bounded_line_of_each_version_or_none(self):
+        outputs = {"python3": None, "node": "v24.21.0", "docker": "Docker version 29.7.2, build x\nextra",
+                   "colima": "colima version 0.10.3\ngit commit: abc", "brew": "Homebrew " + "9" * 400}
+
+        def fake(argv, timeout=20, limit=probe.TAIL_BYTES):
+            self.assertLessEqual(timeout, 30)
+            return outputs.get(argv[0] if argv[0] != "docker" or len(argv) == 2 else "compose-or-buildx")
+
+        with patch.object(probe, "stdout_of", side_effect=fake):
+            value = probe.toolchain()
+        self.assertEqual(value["probePython"], sys.version.split()[0])
+        self.assertEqual(value["node"], "v24.21.0")
+        self.assertEqual(value["docker"], "Docker version 29.7.2, build x")
+        self.assertEqual(value["colima"], "colima version 0.10.3")
+        self.assertEqual(len(value["brew"]), 200)
+        self.assertIsNone(value["compose"])
+        self.assertIsNone(value["buildx"])
+        self.assertEqual(set(value), {"probePython", *(name for name, _argv in probe.TOOLS)})
+
+    def test_final_records_disk_memory_toolchain_ps_timing_and_lsof_after_the_gate(self):
+        with patch.object(probe, "disks", return_value={"root": 1.0}), patch.object(probe, "memory", return_value={}), \
+                patch.object(probe, "toolchain", return_value={"node": "v24"}), patch.object(probe, "ps_samples", return_value=[{"durationMs": 5}]), \
+                patch.object(probe, "lsof_samples", return_value=[{"returncode": 0}]):
+            self.assertEqual(probe.final(), {"diskFreeGiB": {"root": 1.0}, "memory": {}, "toolchain": {"node": "v24"},
+                                             "ps": [{"durationMs": 5}], "lsofUser": [{"returncode": 0}]})
+
+    def test_probe_lsof_command_is_the_runner_direct_mode_command(self):
+        with patch.dict(os.environ, {"NERVE_TEST_LSOF_MODE": "direct"}), patch("lifecycle.shutil.which", return_value="/usr/sbin/lsof"):
+            import lifecycle
+            self.assertEqual(lifecycle.lsof_query_command(), list(probe.LSOF))
+
     def test_system_reports_only_allowlisted_environment_keys(self):
         secret = "ghs_not_a_real_token_value"
         environment = {"GITHUB_TOKEN": secret, "ACTIONS_RUNTIME_TOKEN": secret, "ImageOS": "macos26", "RUNNER_OS": "macOS"}

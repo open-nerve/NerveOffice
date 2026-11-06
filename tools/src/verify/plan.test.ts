@@ -29,6 +29,23 @@ describe('parseArgs', () => {
     expect(parseArgs(['--keep-going', '--scope=no-e2e'])).toEqual({ ok: true, keepGoing: true, options: { fast: false, ci: false, audit: false, scope: 'no-e2e' } })
   })
 
+  /**
+   * --fast 只跑快速门禁，不分片（planSteps 先看 fast）：与分片一起给时分片会被悄悄丢掉，只跑快速门禁也可能以 0 退出。
+   * 本机分片放开之前，这个组合在本机模式里被“分片只给 CI 用”顺带拦下（M5-P8 S4 独立审查 M-1）；现在两种模式都明确拦下
+   */
+  it.each([
+    [['--fast', '--scope=e2e']],
+    [['--fast', '--keep-going', '--scope=no-e2e']],
+    [['--ci', '--fast', '--scope=e2e']],
+  ])('--fast 不与分片一起给：%j', (argv) => {
+    const parsed = parseArgs(argv)
+    expect(parsed.ok ? '' : parsed.error).toContain('--fast 不分片')
+  })
+
+  it('--fast 与 --scope=all（等于不分片）仍可一起给', () => {
+    expect(parseArgs(['--fast', '--scope=all'])).toEqual({ ok: true, keepGoing: false, options: { fast: true, ci: false, audit: false, scope: 'all' } })
+  })
+
   it('不认识的分片与未知的参数都拦下，并列出可选项', () => {
     const scope = parseArgs(['--ci', '--scope=unit'])
     expect(scope.ok ? '' : scope.error).toContain('不认识的分片：unit')
