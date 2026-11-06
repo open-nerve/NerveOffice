@@ -1,0 +1,84 @@
+# 托管 Mac（M5-P8，DEF-074）：先探测 GitHub 托管 Mac 的环境事实，再决定能否在其上跑 Mac 原完整门禁（P8 设计 §3.3）。
+# 新工作流合并到默认分支之前不能 workflow_dispatch（GitHub 只认默认分支上已有的工作流文件），所以合并前只由推送
+# 本 Phase 的唯一分支触发，合并后可手动触发。不随 main 推送运行，不改 ci.yml 的原六项。
+# 各个 Action 按提交的 SHA 锁定，注释里写对应的版本（与 ci.yml 相同）。
+name: Mac
+
+on:
+  push:
+    branches: [m5-p8-final-closeout]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 只收集环境事实：不跑产品测试、不经测试资源运行器、不读写台账，结果不作任何验收证据（ci_mac_probe.py）。
+  # 环境里缺的能力（Docker、数据库、浏览器）只记下，不让整个 job 失败。
+  probe:
+    name: 托管 Mac 探测（${{ matrix.runner }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-26-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 系统、会话、钥匙串与 lsof
+        timeout-minutes: 10
+        run: python3 -B tools/test-resources/ci_mac_probe.py system
+
+      - name: 安装 Node.js（版本见 .node-version）
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: 安装 pnpm（版本见 package.json 的 packageManager）
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: PostgreSQL（Homebrew）
+        timeout-minutes: 25
+        continue-on-error: true
+        run: python3 -B tools/test-resources/ci_mac_probe.py postgres
+
+      - name: Docker（colima）
+        timeout-minutes: 40
+        continue-on-error: true
+        run: python3 -B tools/test-resources/ci_mac_probe.py docker
+
+      - name: 安装 Playwright 浏览器（chromium、chrome、webkit）
+        timeout-minutes: 20
+        continue-on-error: true
+        run: pnpm --filter @nerve-office/e2e exec playwright install chromium chrome webkit
+
+      - name: 浏览器最小启动
+        timeout-minutes: 15
+        continue-on-error: true
+        run: python3 -B tools/test-resources/ci_mac_probe.py browsers
+
+      - name: Safari 与 safaridriver
+        timeout-minutes: 5
+        continue-on-error: true
+        run: python3 -B tools/test-resources/ci_mac_probe.py safari
+
+      - name: 结束时的磁盘与内存
+        if: always()
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py final
