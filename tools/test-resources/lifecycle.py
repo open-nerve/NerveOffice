@@ -767,7 +767,7 @@ class Store:
         try:
             with locked(self.root / "gc.lock"):
                 self.prune(now, skipped)
-        except (OSError, ValueError, RuntimeError, KeyError) as error:
+        except Exception as error:  # noqa: BLE001 —— 隔离边界：台账内容异常（缺字段、类型不对）也不能改变已确定的结论（S14 复验）
             skipped.append({"reason": "prune-failed", "error": type(error).__name__})
         if skipped:
             print("测试资源收尾回收跳过了部分候选（原样保留）：" + json.dumps(skipped, ensure_ascii=False), file=sys.stderr)

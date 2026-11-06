@@ -51,7 +51,8 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula = false) {
+/** requireFormula：条件值不能为空；为 'pair' 时另要求条件值 pair 必须与“忽略空值”关闭同时出现（只有合并后才成立的设置，S14 复验） */
+function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula: boolean | 'pair' = false) {
   vi.useFakeTimers()
   const univer = new Univer()
   const injector = injectorOf(univer)
@@ -75,7 +76,13 @@ function setup(kind: 'number' | 'custom' | 'bound' = 'number', requireFormula = 
     // 公式输入端口采用 SDK 的 BaseFormulaInput；custom 的实际画布另由公开 E2E 覆盖。
     formulaInput: BASE_FORMULA_INPUT_NAME,
     // 不合法时带上字段错误：详情面板在 showError 时把它显示在公式输入下方（M5R-I-05 的字段错误回归）
-    validatorFormula: (rule: IDataValidationRule) => !requireFormula || Boolean(rule.formula1) ? { success: true } : { success: false, formula1: '请填写条件值' },
+    validatorFormula: (rule: IDataValidationRule) => {
+      if (requireFormula !== false && (rule.formula1 === undefined || rule.formula1 === ''))
+        return { success: false, formula1: '请填写条件值' }
+      if (requireFormula === 'pair' && rule.formula1 === 'pair' && rule.allowBlank !== false)
+        return { success: false, formula1: 'pair 要求不忽略空值' }
+      return { success: true }
+    },
     normalizeFormula: () => ({}),
     validator: async () => true,
   }
@@ -626,6 +633,34 @@ describe('M5R-I-05：非法的中间设置被后续合法输入覆盖后，待�
     h.setting()
     h.view.unmount()
     expect(h.current()).toMatchObject({ formula1: '100', errorStyle: 1, allowBlank: false })
+  })
+
+  it('同样的序列先关面板再卸载：关面板时的提交已把空条件并入后一项设置，卸载时仍只丢空条件（S14 复验）', () => {
+    const h = setup('number', true)
+    formula('')
+    h.option()
+    h.setting()
+    act(() => h.panelOpen$.next(false))
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', errorStyle: 1, allowBlank: false })
+  })
+
+  it('只有与后一项设置合并才成立的设置：卸载时照常合并、完整提交（S14 复验）', () => {
+    // 条件值 pair 要求同时关闭“忽略空值”：第一段单独提交会被拒，与后面一段合并后才成立
+    const h = setup('number', 'pair')
+    formula('pair')
+    h.option()
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: 'pair', errorStyle: 1, allowBlank: false })
+  })
+
+  it('连续两次设置输入合成一项：卸载时只丢不合法的那一段，合法的那一段照常提交（S14 复验）', () => {
+    const h = setup('number', true)
+    formula('')
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ formula1: '100', allowBlank: false })
   })
 
   it('清空条件 → 改范围 → 没等防抖到点就卸载：范围照常写入（S14 审查 E1）', () => {

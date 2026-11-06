@@ -432,6 +432,9 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual([event["runId"] for event in removed], [runs[1].id])
         with patch.object(Store, "prune", side_effect=KeyError("startedAt")):
             self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "KeyError"}])
+        # endedAt 不是数字时排序或相减抛 TypeError：隔离边界同样吸收
+        with patch.object(Store, "prune", side_effect=TypeError("endedAt")):
+            self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "TypeError"}])
 
     def test_isolated_final_prune_never_raises_and_sweep_reports_skipped(self):
         # S14 审查 T4：运行器结束时的收尾 GC 与 finish 共用隔离入口；sweep 也把跳过的候选报出来
