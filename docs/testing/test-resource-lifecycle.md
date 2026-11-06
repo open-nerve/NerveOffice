@@ -230,6 +230,18 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 
 `check_ci_resources.py` 在当前 job 上持 publication/run 锁，核验唯一预检和该 job 主测试的身份、退出、实际稳定报告哈希、历史及当前预算，写入 `cleanup-receipt.json` 的 `ciResources`。产品失败的合格诊断报告可以上传，原产品步骤仍失败；checker 拒绝则不上传。E2E 额外要求原监督器退出、JSON/HTML 合格及便携 profile 归档成功，归档失败不会回退上传 raw。预检收据只读收集有界摘要，明确 diagnostic-only，不能替代这一完整核验。三个 job 的既有报告 artifact 同时携带精确 `.test-resources/runs/*/reports/portable/test-results/` 路径下的预检原件，启用隐藏目录，不上传 scratch；因此远端可重新核对预检与主测试两份清单，而非只相信合同声明。最终远端接受还须绑定实际同 SHA 六项 CI 及下载后的便携证据，旧本地 v2 关闭证明继续只接受实际 cleanup complete。
 
+## GitHub 托管 Mac（M5-P8）
+
+`.github/workflows/mac.yml` 在 GitHub 托管的 Intel 版 Mac（`macos-26-intel`）上补验 Mac 原完整门禁（DEF-074），照开发机的方式运行，不属于上一节方案 B 的托管 VM 例外：
+
+- **配置**：不设 `NERVE_TEST_RESOURCE_POLICY`，`CI` 置空。
+  - 资源工具用默认的严格本机模式：删除前核验、真实删除与回收核对照常执行，不登记 `host-disposal-pending`，`hosted.py` 不参与。
+  - lsof 用默认的普通权限命令；Q-10 收紧后，任何退出码 1 都判为不完整。
+  - darwin 的桌面会话保护照常生效，会话变化即停。
+- **Docker**：由 colima 提供；`pnpm db:up` 起的开发库与本机使用同一编排和镜像摘要。Apple 芯片版托管 Mac 不能嵌套虚拟化、起不了 Docker，不用于验收。
+- **分片**：本机模式的 `pnpm verify --scope=no-e2e|e2e` 按浏览器并行，两片各自先执行 `pnpm db:up`，合起来恰好是本机完整门禁（`plan.test.ts`）；另加 `pnpm test:e2e:container`。
+- **上传**：每个 job 上传 E2E 的 JSON/HTML 与结果目录（不含持久资料目录）、覆盖率报告和本轮台账 `run.json`，供原件核对。
+
 ## P6 Linux 固定校准与自检
 
 `pnpm test:e2e:linux` 使用 `tools/src/deploy/linux-browser-cli.ts`，外层仍是 `run.py container`。只接受固定范围；校准 1 条通过才运行其余 13 条，Chromium、单 worker、原断言/超时/重试/trace/截图不变。Node 24.21.0、pnpm 12.6.0、Playwright 1.63.0、Ubuntu 24.04 和 Linux arm64 固定。独立提交源码副本与数据库，安装 SDK 的 16 组补丁字节前后核对，未提交源码拒绝运行。

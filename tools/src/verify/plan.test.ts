@@ -21,13 +21,12 @@ describe('parseArgs', () => {
   })
 
   /**
-   * 分片都不含"启动开发数据库"一步（planSteps 里的 DATABASE 只在非 CI 的完整门禁里）：
-   * 本机 `pnpm verify --scope=e2e` 会连不上库、失败得莫名其妙，所以直接拦下（M2-P4 审查建议 7）
+   * 本机模式也能分片（M5-P8 托管 Mac）：本机的两个分片各自先启动开发数据库（planSteps 的 DATABASE），不再连不上库；
+   * 原先“只给 CI 用”的拦截（M2-P4 审查建议 7）的理由因此不再成立
    */
-  it('本机不带 --ci 用 --scope：直接拦下，并说明它只给 CI 的分片用', () => {
-    const parsed = parseArgs(['--scope=e2e'])
-    expect(parsed.ok).toBe(false)
-    expect(parsed.ok ? '' : parsed.error).toContain('--scope 只给 CI 的分片用，必须与 --ci 一起给')
+  it('本机不带 --ci 也可以分片：本机模式的分片各自先启动开发数据库', () => {
+    expect(parseArgs(['--scope=e2e'])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: false, audit: false, scope: 'e2e' } })
+    expect(parseArgs(['--keep-going', '--scope=no-e2e'])).toEqual({ ok: true, keepGoing: true, options: { fast: false, ci: false, audit: false, scope: 'no-e2e' } })
   })
 
   it('不认识的分片与未知的参数都拦下，并列出可选项', () => {
@@ -102,6 +101,32 @@ describe('planSteps', () => {
       'audit',
     ])
     expect(planSteps({ fast: false, ci: true, audit: false, scope: 'e2e' }).map(s => s.id)).toEqual(['clean', 'build', 'build-e2e', 'e2e'])
+  })
+
+  it('本机模式的分片（托管 Mac，M5-P8）：两片都先启动开发数据库；no-e2e 跑本机的 tests（覆盖率与 Python 回归），e2e 只构建与跑 E2E', () => {
+    const options = { fast: false, ci: false, audit: false } as const
+    expect(planSteps({ ...options, scope: 'no-e2e' }).map(s => s.id)).toEqual([
+      'lint',
+      'typecheck',
+      'static-gates',
+      'database',
+      'tests',
+      'clean',
+      'build',
+      'artifact-gates',
+    ])
+    expect(planSteps({ ...options, scope: 'no-e2e' }).find(s => s.id === 'tests')?.command).toEqual(['pnpm', 'test:verify'])
+    expect(planSteps({ ...options, scope: 'e2e' }).map(s => s.id)).toEqual(['database', 'clean', 'build', 'build-e2e', 'e2e'])
+  })
+
+  it('本机模式的两个分片合起来与本机完整的一套一样，除启动数据库与构建外没有重复执行的步骤', () => {
+    for (const audit of [false, true]) {
+      const options = { fast: false, ci: false, audit } as const
+      const complete = planSteps({ ...options }).map(s => s.id)
+      const sharded = [...planSteps({ ...options, scope: 'no-e2e' }), ...planSteps({ ...options, scope: 'e2e' })].map(s => s.id)
+      expect(new Set(sharded)).toEqual(new Set(complete))
+      expect(sharded.filter((id, index) => sharded.indexOf(id) !== index)).toEqual(['database', 'clean', 'build'])
+    }
   })
 
   it('两个分片合起来与完整的一套一样：CI 分片之后不会有步骤漏掉（规范 §9：本机与 CI 执行同一套步骤）', () => {

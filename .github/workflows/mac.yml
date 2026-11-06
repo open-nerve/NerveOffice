@@ -1,4 +1,8 @@
-# 托管 Mac（M5-P8，DEF-074）：先探测 GitHub 托管 Mac 的环境事实，再决定能否在其上跑 Mac 原完整门禁（P8 设计 §3.3）。
+# 托管 Mac（M5-P8，DEF-074）：在 GitHub 托管的 Intel 版 Mac 上按开发机的方式跑 Mac 原完整门禁（P8 设计 §3.4，
+# plans/P8-S4-托管Mac门禁.md）。不设 CI、不设托管 VM 资源策略：Playwright 配置与开发机相同（不重试，Chromium、Chrome、
+# WebKit，darwin 上 WebKit 单 worker），资源工具用默认的严格本机模式（真实删除并核对）。照 CI 的做法分片并行：
+# 本机模式的 no-e2e 与按浏览器的 e2e 合起来恰好是本机完整门禁（plan.test.ts），另加生产容器 E2E。
+# Intel 版能用 colima 起 Docker（pnpm db:up 与容器 E2E 都要用），Apple 芯片版不能（S3 探测，run 42252502692）。
 # 新工作流合并到默认分支之前不能 workflow_dispatch（GitHub 只认默认分支上已有的工作流文件），所以合并前只由推送
 # 本 Phase 的唯一分支触发，合并后可手动触发。不随 main 推送运行，不改 ci.yml 的原六项。
 # 各个 Action 按提交的 SHA 锁定，注释里写对应的版本（与 ci.yml 相同）。
@@ -16,28 +20,28 @@ concurrency:
   group: mac-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  HOMEBREW_NO_INSTALL_CLEANUP: '1'
+  HOMEBREW_NO_ANALYTICS: '1'
+
 jobs:
-  # 只收集环境事实：不跑产品测试、不经测试资源运行器、不读写台账，结果不作任何验收证据（ci_mac_probe.py）。
-  # 环境里缺的能力（Docker、数据库、浏览器）只记下，不让整个 job 失败。
-  probe:
-    name: 托管 Mac 探测（${{ matrix.runner }}）
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-26, macos-26-intel]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    env:
-      HOMEBREW_NO_AUTO_UPDATE: '1'
-      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+  # 本机门禁的 no-e2e 分片：lint、类型、静态门禁、开发数据库、覆盖率与测试资源工具的 Python 回归、构建、产物门禁
+  verify:
+    name: Mac pnpm verify --scope=no-e2e
+    runs-on: macos-26-intel
+    timeout-minutes: 120
     steps:
       - name: 检出代码
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # 取完整历史：迁移门禁拿这次推送之前的提交作基准（ADR-005）
+          fetch-depth: 0
 
-      - name: 系统、会话、钥匙串与 lsof
-        timeout-minutes: 10
+      # 只记环境事实，不作验收证据（ci_mac_probe.py）
+      - name: 记录环境（开始）
+        timeout-minutes: 5
         run: python3 -B tools/test-resources/ci_mac_probe.py system
 
       - name: 安装 Node.js（版本见 .node-version）
@@ -53,32 +57,178 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
-      - name: PostgreSQL（Homebrew）
-        timeout-minutes: 25
-        continue-on-error: true
-        run: python3 -B tools/test-resources/ci_mac_probe.py postgres
-
-      - name: Docker（colima）
-        timeout-minutes: 40
-        continue-on-error: true
-        run: python3 -B tools/test-resources/ci_mac_probe.py docker
-
-      - name: 安装 Playwright 浏览器（chromium、chrome、webkit）
+      - name: 启动 Docker（colima）
         timeout-minutes: 20
-        continue-on-error: true
-        run: pnpm --filter @nerve-office/e2e exec playwright install chromium chrome webkit
+        run: |
+          brew install colima docker docker-compose
+          mkdir -p "$HOME/.docker/cli-plugins"
+          ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+          colima start --cpu 2 --memory 3 --disk 30
+          docker info --format '{{.ServerVersion}}'
+          docker compose version
 
-      - name: 浏览器最小启动
-        timeout-minutes: 15
-        continue-on-error: true
-        run: python3 -B tools/test-resources/ci_mac_probe.py browsers
+      - name: pnpm verify --scope=no-e2e（本机模式）
+        timeout-minutes: 100
+        env:
+          # 本机模式：Playwright 与各工具按开发机的方式运行（不重试、不加 GitHub 报告器）
+          CI: ''
+          # 推送事件：迁移门禁拿推送之前的提交作基准；手动触发时为空，门禁改用 HEAD^1（同 ci.yml）
+          GATE_MIGRATIONS_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: pnpm verify --keep-going --scope=no-e2e
 
-      - name: Safari 与 safaridriver
-        timeout-minutes: 5
-        continue-on-error: true
-        run: python3 -B tools/test-resources/ci_mac_probe.py safari
-
-      - name: 结束时的磁盘与内存
+      - name: 记录环境（结束）
         if: always()
         timeout-minutes: 5
         run: python3 -B tools/test-resources/ci_mac_probe.py final
+
+      - name: 上传覆盖率报告与本轮台账
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-verify-${{ github.run_id }}
+          path: |
+            coverage/
+            .test-resources/runs/*/run.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  # 本机门禁的 e2e 分片：每片一个浏览器，崩溃项目随浏览器走，重启项目只在 Chromium 那片（playwright.config.ts）
+  e2e:
+    name: Mac pnpm verify --scope=e2e（${{ matrix.browser }}）
+    runs-on: macos-26-intel
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, chrome, webkit]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 记录环境（开始）
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py system
+
+      - name: 安装 Node.js（版本见 .node-version）
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: 安装 pnpm（版本见 package.json 的 packageManager）
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装浏览器（${{ matrix.browser }}）
+        timeout-minutes: 20
+        run: pnpm --filter @nerve-office/e2e exec playwright install ${{ matrix.browser }}
+
+      - name: 启动 Docker（colima）
+        timeout-minutes: 20
+        run: |
+          brew install colima docker docker-compose
+          mkdir -p "$HOME/.docker/cli-plugins"
+          ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+          colima start --cpu 2 --memory 3 --disk 30
+          docker info --format '{{.ServerVersion}}'
+          docker compose version
+
+      - name: pnpm verify --scope=e2e（本机模式）
+        timeout-minutes: 300
+        env:
+          CI: ''
+          E2E_BROWSERS: ${{ matrix.browser }}
+        run: pnpm verify --keep-going --scope=e2e
+
+      - name: 记录环境（结束）
+        if: always()
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py final
+
+      - name: 上传测试报告与本轮台账
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-e2e-${{ matrix.browser }}-${{ github.run_id }}
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+            !tests/e2e/test-results/persistent-profiles/**
+            .test-resources/runs/*/run.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  # 生产容器组合：生产镜像起测试环境（应用 + PostgreSQL + Caddy 的 HTTPS），Mac 上的 Chromium 对它跑 E2E 与重启用例
+  container:
+    name: Mac pnpm test:e2e:container
+    runs-on: macos-26-intel
+    timeout-minutes: 150
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 记录环境（开始）
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py system
+
+      - name: 安装 Node.js（版本见 .node-version）
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: 安装 pnpm（版本见 package.json 的 packageManager）
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装浏览器（chromium）
+        timeout-minutes: 20
+        run: pnpm --filter @nerve-office/e2e exec playwright install chromium
+
+      # 生产镜像在 colima 的虚拟机里构建，给它多一些 CPU 与内存
+      - name: 启动 Docker（colima）
+        timeout-minutes: 20
+        run: |
+          brew install colima docker docker-compose
+          mkdir -p "$HOME/.docker/cli-plugins"
+          ln -sfn "$(brew --prefix)/opt/docker-compose/bin/docker-compose" "$HOME/.docker/cli-plugins/docker-compose"
+          colima start --cpu 3 --memory 8 --disk 60
+          docker info --format '{{.ServerVersion}}'
+          docker compose version
+
+      - name: pnpm test:e2e:container（本机模式）
+        timeout-minutes: 120
+        env:
+          CI: ''
+        run: pnpm test:e2e:container
+
+      - name: 记录环境（结束）
+        if: always()
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py final
+
+      - name: 上传容器 E2E 报告、日志与本轮台账
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-container-${{ github.run_id }}
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+            !tests/e2e/test-results/persistent-profiles/**
+            .test-resources/runs/*/run.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
