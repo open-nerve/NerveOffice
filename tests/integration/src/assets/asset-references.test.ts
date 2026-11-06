@@ -66,14 +66,14 @@ async function grant(documentId: string, userId = editor.id): Promise<void> {
 async function current(documentId: string): Promise<string[]> {
   return database.query(async client => (await client.query<{ asset_id: string }>('SELECT asset_id FROM document_asset_links WHERE document_id=$1 ORDER BY asset_id', [documentId])).rows.map(row => row.asset_id))
 }
-/** 全部视为新出现的标识（与基准版本无交集）：本文件核对新出现标识的多来源规则；沿用规则另有用例（D-01） */
-function fresh(documentId = '00000000-0000-4000-8000-000000000000'): AssetReferenceBase {
-  return { documentId, ids: new Set() }
+/** 基准里没有存在但未登记的标识：本文件核对多来源规则；基准排除的规则另有用例（D-01，asset-save.test.ts） */
+function fresh(): AssetReferenceBase {
+  return { unlinked: new Set() }
 }
 async function eligible(userId: string, ids: readonly string[], transaction: Transaction, target?: Awaited<ReturnType<typeof document>>) {
   const prepared = await references.prepare(userId, ids, transaction, target)
   const held = await references.hold(prepared, { mode: 'update' }, transaction)
-  return references.authorize(held, transaction, fresh(target?.id))
+  return references.authorize(held, transaction, fresh())
 }
 
 describe('图片引用的批量授权与真实事务', () => {

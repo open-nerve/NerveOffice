@@ -18,7 +18,7 @@ import { SpacesService } from '../spaces/index.ts'
 import { AssetReferenceBases } from './asset-reference-bases.ts'
 import { ClientFormatGate } from './client-format-gate.ts'
 import { creatableSpace, documentAccessIn, DocumentAccessPolicy, requireAccess, requireSpaceContent } from './document-access-policy.ts'
-import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentAssetReferences, unlinkedAssetIds } from './document-asset-references.ts'
 import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
@@ -164,7 +164,8 @@ export class DocumentConflictCopyService {
         savedBy: userId,
         contentHash,
         clientBuild: client.clientBuild,
-        assetIds: snapshot.assetIds,
+        // 草稿里存在、却没有为副本登记的标识（基准里未登记的、证明不了来源的）：之后以副本这一版为基准的写入不升级它们
+        unlinkedAssetIds: unlinkedAssetIds(snapshot.assetIds, authorized),
       }, transaction)
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)

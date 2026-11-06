@@ -252,16 +252,34 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     expect((await facts(d.id)).references).toEqual([])
     return { a, d }
   }
+  /** 这一版里存在、却没有登记关系的图片标识（S14 审查 B1/B3：只记这一部分，不记完整集合） */
   async function revisionAssetIds(documentId: string, revision: number): Promise<string[] | null> {
-    return database.query(async client => (await client.query<{ asset_ids: string[] | null }>('SELECT asset_ids::text[] AS asset_ids FROM document_revisions WHERE document_id=$1 AND revision=$2', [documentId, revision])).rows[0]!.asset_ids)
+    return database.query(async client => (await client.query<{ unlinked: string[] | null }>('SELECT unlinked_asset_ids::text[] AS unlinked FROM document_revisions WHERE document_id=$1 AND revision=$2', [documentId, revision])).rows[0]!.unlinked)
   }
 
-  it('M5R-I-02 每一版修订记下完整图片标识（含未授权与未知的），排重排序', async () => {
+  it('M5R-I-02 每一版修订记下存在但未登记的图片标识（含未授权与未知的），排重排序；已登记的不记', async () => {
     const { a, d } = await planted()
     const unknown = randomUUID()
+    const own = await uploaded(owner)
     expect(await revisionAssetIds(d.id, 2)).toEqual([a])
-    await saved(await put(owner, d, raw(d, [unknown, a, a], '再加未知'), { baseRevision: 2 }))
+    await saved(await put(owner, d, raw(d, [unknown, a, a, own], '再加未知与自己的图'), { baseRevision: 2 }))
+    expect((await facts(d.id)).references).toEqual([own])
     expect(await revisionAssetIds(d.id, 3)).toEqual([a, unknown].sort())
+  })
+
+  it('M5R-I-02 另存为副本以较早的修订为基准：那一版已登记、之后被他人删掉的图片仍按原规则登记，不丢（S14 审查 B1）', async () => {
+    // 乙（owner）在 D 里放进自己刚上传的 P（修订 2，已登记）；甲接管后删掉 P（修订 3）；乙基于修订 2 的草稿另存为副本
+    const d = await document(editor)
+    await grant(editor, d, owner, 'editor')
+    const p = await uploaded(owner)
+    await saved(await put(owner, d, raw(d, [p], '乙放进 P'), { baseRevision: 1 }))
+    expect((await facts(d.id)).references).toEqual([p])
+    await saved(await put(editor, d, raw(d, [], '甲删去 P'), { baseRevision: 2 }))
+    const created = await postConflictCopy(app.baseUrl, owner.session, d.id, d.unitId, { raw: raw(d, [p], '乙基于修订 2 的草稿'), query: { baseRevision: '2' } })
+    expect(created.status, await created.clone().text()).toBe(201)
+    const copy = createdDocumentSchema.parse(await created.json())
+    expect((await facts(copy.id)).references).toEqual([p])
+    expect(await revisionAssetIds(copy.id, 1)).toEqual([])
   })
 
   it('M5R-I-02 另存为副本以草稿所基于的修订为基准：甲删掉预埋地址后，乙的旧草稿副本也不登记它', async () => {
@@ -286,7 +304,7 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     }
   })
 
-  it('M5R-I-02 普通复制照搬完整图片标识：副本里的预埋地址之后同样不升级', async () => {
+  it('M5R-I-02 普通复制照搬未登记的图片标识：副本里的预埋地址之后同样不升级', async () => {
     const { a, d } = await planted()
     const response = await asUser(app.baseUrl, editor.session, `/api/documents/${d.id}/copy`, { method: 'POST', body: { requestId: randomUUID(), spaceId: editor.account.personalSpaceId } })
     expect(response.status, await response.clone().text()).toBe(201)
@@ -299,9 +317,9 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
     expect((await facts(copy.id)).references).toEqual([])
   })
 
-  it('M5R-I-02 存量修订没有记完整标识：锁下按当前正文回退，同样不升级预埋地址', async () => {
+  it('M5R-I-02 存量修订没有记未登记标识：锁下按当前正文减去已登记的关系回退，同样不升级预埋地址', async () => {
     const { a, d } = await planted()
-    await database.query(async client => client.query('UPDATE document_revisions SET asset_ids=NULL WHERE document_id=$1', [d.id]))
+    await database.query(async client => client.query('UPDATE document_revisions SET unlinked_asset_ids=NULL WHERE document_id=$1', [d.id]))
     await saved(await put(owner, d, raw(d, [a], '乙的真实修改'), { baseRevision: 2 }))
     expect((await facts(d.id)).references).toEqual([])
     expect(await revisionAssetIds(d.id, 3)).toEqual([a])
@@ -310,7 +328,7 @@ describe('US-M5-07 正式保存与图片当前引用', () => {
   it('M5R-I-02 存量正文解析不了时以当前已登记的关系作基准并记警告（等于这一次沿用旧语义）', async () => {
     const { a, d } = await planted()
     await database.query(async (client) => {
-      await client.query('UPDATE document_revisions SET asset_ids=NULL WHERE document_id=$1', [d.id])
+      await client.query('UPDATE document_revisions SET unlinked_asset_ids=NULL WHERE document_id=$1', [d.id])
       await client.query('UPDATE document_contents SET snapshot=decode(\'00\',\'hex\'),stored_bytes=1 WHERE document_id=$1', [d.id])
     })
     const logStart = app.logs.entries().length

@@ -21,7 +21,7 @@ import { AppLogger } from '../logging/index.ts'
 import { AssetReferenceBases } from './asset-reference-bases.ts'
 import { ClientFormatGate, requireWritableDocument } from './client-format-gate.ts'
 import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
-import { DocumentAssetReferences } from './document-asset-references.ts'
+import { DocumentAssetReferences, unlinkedAssetIds } from './document-asset-references.ts'
 import { DocumentCheckpointService } from './document-checkpoint.service.ts'
 import { DocumentContentsRepository } from './document-contents.repository.ts'
 import { DocumentRevisionsRepository } from './document-revisions.repository.ts'
@@ -220,7 +220,7 @@ export class DocumentContentService {
       const authorized = heldReferences === undefined
         ? []
         : await this.assetReferences.authorize(heldReferences, transaction, await this.referenceBases.resolve(document.id, document.revision, undefined, transaction))
-      const outcome = await this.write(attempt, document, contentHash, transaction)
+      const outcome = await this.write(attempt, document, contentHash, unlinkedAssetIds(attempt.snapshot.assetIds, authorized), transaction)
       await this.assetReferences.replace(document.id, authorized, transaction)
       await this.checkpoints.captureHourly(document.id, transaction)
       return outcome
@@ -297,7 +297,7 @@ export class DocumentContentService {
    * 写入新的一版：修订记录（来源、内容哈希、客户端构建）→ 修订号加一与文档的信封（SDK 版本是页面上报、核对过的，客户端构建，
    * "公式待更新"）→ 内容（gzip 的原样字节、哈希与非空的资源名）→ 审计
    */
-  private async write(attempt: SaveAttempt, document: DocumentRow, contentHash: Buffer, transaction: Transaction): Promise<SaveContentResponse> {
+  private async write(attempt: SaveAttempt, document: DocumentRow, contentHash: Buffer, unlinked: readonly string[], transaction: Transaction): Promise<SaveContentResponse> {
     const { saver, query, upload, client, snapshot } = attempt
     const next = document.revision + 1
     const revision = await this.revisions.insert({
@@ -310,7 +310,7 @@ export class DocumentContentService {
       savedBy: saver.userId,
       contentHash,
       clientBuild: client.clientBuild,
-      assetIds: snapshot.assetIds,
+      unlinkedAssetIds: unlinked,
     }, transaction)
     // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
     if (revision === undefined)

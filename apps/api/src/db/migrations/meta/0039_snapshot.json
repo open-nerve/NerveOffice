@@ -2387,8 +2387,8 @@
           "primaryKey": false,
           "notNull": false
         },
-        "asset_ids": {
-          "name": "asset_ids",
+        "unlinked_asset_ids": {
+          "name": "unlinked_asset_ids",
           "type": "uuid[]",
           "primaryKey": false,
           "notNull": false
@@ -2487,9 +2487,9 @@
           "name": "document_revisions_local_seq_check",
           "value": "\"document_revisions\".\"local_seq\" >= 0"
         },
-        "document_revisions_asset_ids_check": {
-          "name": "document_revisions_asset_ids_check",
-          "value": "\"document_revisions\".\"asset_ids\" IS NULL OR array_ndims(\"document_revisions\".\"asset_ids\") IS NULL OR array_ndims(\"document_revisions\".\"asset_ids\") = 1"
+        "document_revisions_unlinked_asset_ids_check": {
+          "name": "document_revisions_unlinked_asset_ids_check",
+          "value": "\"document_revisions\".\"unlinked_asset_ids\" IS NULL OR array_ndims(\"document_revisions\".\"unlinked_asset_ids\") IS NULL OR array_ndims(\"document_revisions\".\"unlinked_asset_ids\") = 1"
         },
         "document_revisions_source_check": {
           "name": "document_revisions_source_check",

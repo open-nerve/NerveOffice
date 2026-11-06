@@ -15,6 +15,7 @@ import { AuditService } from '../audit/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { documentAccessIn, DocumentAccessPolicy, requireCreateTarget, requireDocumentContent } from './document-access-policy.ts'
+import { unlinkedAssetIds } from './document-asset-references.ts'
 import { DocumentAssetsRepository } from './document-assets.repository.ts'
 import { DocumentCheckpointClock } from './document-checkpoint-clock.ts'
 import { DocumentCheckpointService } from './document-checkpoint.service.ts'
@@ -131,8 +132,8 @@ export class DocumentHistoryRestoreService {
         savedBy: actor.userId,
         contentHash: record.contentHash,
         clientBuild: record.clientBuild,
-        // 关系取自检查点（不变）；完整标识取历史校验时的检查结果，未登记的不会因下一次保存升级（D-01）
-        assetIds: verified.assetIds,
+        // 关系取自检查点（不变）；未登记的标识＝历史校验时提取到的全部标识减去这些关系，不会因下一次保存升级（D-01）
+        unlinkedAssetIds: unlinkedAssetIds(verified.assetIds, assetIds),
       }, tx)
       if (revision === undefined)
         throw new AppError('REQUEST_ID_CONFLICT')

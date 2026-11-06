@@ -117,8 +117,8 @@ export class DocumentCopyService {
         contentHash: content.contentHash,
         // 复制是服务端写的，没有客户端构建（文档的信封照源文档，documents.copyFrom）
         clientBuild: null,
-        // 正文与源当前版本逐字节相同，完整图片标识也照搬（源是 P7 之前写的存量时为空，副本下次保存时同样回退，D-01）
-        assetIds: await this.revisions.assetIdsOf(id, source.document.revision, transaction) ?? null,
+        // 正文与源当前版本逐字节相同、关系照搬源当前的全部关系，未登记的标识也照搬（源是 P7 之前写的存量时为空，副本下次保存时同样回退，D-01）
+        unlinkedAssetIds: await this.revisions.unlinkedAssetIdsOf(id, source.document.revision, transaction) ?? null,
       }, transaction)
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)

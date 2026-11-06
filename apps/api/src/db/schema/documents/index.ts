@@ -187,9 +187,10 @@ export const documentRevisions = pgTable('document_revisions', {
   // 这一版的信封（M3-P3 设计 §3.4）：规范化的内容哈希，与写入它的页面的构建（新建、复制是服务端写的，没有构建）。存量为空
   contentHash: bytea('content_hash'),
   clientBuild: text('client_build'),
-  // 这一版正文提取到的完整图片标识（含未获授权的，去重、按码元排序；M5-P7 设计 §3.2，D-01）：下一次写入只为相对它新出现的标识授权，
-  // 已在这一版里却没有登记的标识，任何人之后保存都不升级。P7 之前写的修订为空（未知），由保存在锁下按当前正文回退（legacy-asset-ids.ts）
-  assetIds: uuid('asset_ids').array(),
+  // 这一版正文里存在、却没有登记关系的图片标识（含未获授权与未知的，去重、按码元排序；M5-P7 设计 §3.2，D-01）：之后以这一版为基准的写入，
+  // 这些标识任何人保存都不升级，其余标识按原规则授权。只记这一部分（S14 审查 B1/B3）：已登记的由当前关系表达，副本以较早的修订为基准时
+  // 也能分清“那一版已登记、后来被删”与“那一版就没登记”；通常为空数组。P7 之前写的修订为空（未知），由保存在锁下按当前正文回退（legacy-asset-ids.ts）
+  unlinkedAssetIds: uuid('unlinked_asset_ids').array(),
 }, table => [
   unique('document_revisions_document_revision_key').on(table.documentId, table.revision),
   unique('document_revisions_request_id_key').on(table.requestId),
@@ -201,7 +202,7 @@ export const documentRevisions = pgTable('document_revisions', {
   check('document_revisions_content_hash_check', sql`octet_length(${table.contentHash}) = ${sql.raw(String(SHA256_BYTES))}`),
   check('document_revisions_client_build_check', lengthBetween(table.clientBuild, 1, CLIENT_BUILD_MAX_LENGTH)),
   check('document_revisions_local_seq_check', sql`${table.localSeq} >= 0`),
-  check('document_revisions_asset_ids_check', sql`${table.assetIds} IS NULL OR array_ndims(${table.assetIds}) IS NULL OR array_ndims(${table.assetIds}) = 1`),
+  check('document_revisions_unlinked_asset_ids_check', sql`${table.unlinkedAssetIds} IS NULL OR array_ndims(${table.unlinkedAssetIds}) IS NULL OR array_ndims(${table.unlinkedAssetIds}) = 1`),
   // 保存有来源（两项同时有），新建没有
   check('document_revisions_source_check', sql`(${table.clientInstanceId} IS NULL) = (${table.kind} = 'created') AND (${table.clientInstanceId} IS NULL) = (${table.localSeq} IS NULL)`),
   // 保留期的清理（M3-P3 设计 §3.9）按创建时间取一批

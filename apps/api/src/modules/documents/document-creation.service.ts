@@ -140,7 +140,8 @@ export class DocumentCreationService {
         contentHash: content.contentHash,
         // 新建的内容是服务端写的模板，没有客户端构建
         clientBuild: null,
-        assetIds,
+        // 新建不登记任何关系：模板里若有图片标识，都算存在但未登记（固定模板没有）
+        unlinkedAssetIds: assetIds,
       }, transaction)
       // requestId 已经被用掉（在它的锁下查过两张表，走到这里不会撞上；留作兜底）
       if (revision === undefined)
