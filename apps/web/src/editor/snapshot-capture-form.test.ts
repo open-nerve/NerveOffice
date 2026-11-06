@@ -79,4 +79,21 @@ describe('正文捕获的数组锚点形态（M5R-I-07，D-04）', () => {
     expect(withoutArrayAnchorValues(stripped, [{ sheetId: 'sheet-1', row: 0, column: 0 }])).toBe(stripped)
     expect(data.sheets['sheet-1']!.cellData![0]![0]).toMatchObject({ v: 1 })
   })
+
+  it('整列都是数组公式（十万个锚点）时按线性完成，不逐个锚点复制整张 cellData（S14 审查 E4）', () => {
+    // 本机 node 实测：逐个锚点复制整张表时两万、五万、十万个锚点分别约 0.36、1.5、6.2 秒（平方级）；按表、按行各复制一次约 2、5、10 毫秒。
+    // 时限放宽到 2 秒，只区分两种复杂度
+    const data = book()
+    const rows = 100_000
+    const cellData: Record<number, Record<number, { v: number, t: CellValueType, f: string }>> = {}
+    for (let row = 0; row < rows; row++)
+      cellData[row] = { 0: { v: row, t: CellValueType.NUMBER, f: '=SEQUENCE(1,2)' } }
+    data.sheets['sheet-1']!.cellData = cellData
+    const anchors = Array.from({ length: rows }, (_, row) => ({ sheetId: 'sheet-1', row, column: 0 }))
+    const started = performance.now()
+    const stripped = withoutArrayAnchorValues(data, anchors)
+    expect(performance.now() - started).toBeLessThan(2_000)
+    expect(stripped.sheets['sheet-1']!.cellData![rows - 1]).toEqual({ 0: { f: '=SEQUENCE(1,2)' } })
+    expect(cellData[rows - 1]![0]).toMatchObject({ v: rows - 1 })
+  })
 })
