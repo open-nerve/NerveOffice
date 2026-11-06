@@ -686,6 +686,17 @@ describe('M5R-I-05：非法的中间设置被后续合法输入覆盖后，待�
     expect(h.current()).toMatchObject({ operator: DataValidationOperator.EQUAL, formula1: '100', allowBlank: false })
   })
 
+  it('切换类型（还没补条件）→ 改“忽略空值” → 卸载：以类型草稿为底再试仍不成立，整项丢掉，原规则不变（S14 复验第四轮）', async () => {
+    const h = setup('number', true)
+    fireEvent.pointerDown(screen.getByText('数字'), { button: 0, ctrlKey: false })
+    await h.tick(1)
+    fireEvent.click(screen.getByRole('menuitemradio', { name: '整数' }))
+    await h.tick(1)
+    h.setting()
+    h.view.unmount()
+    expect(h.current()).toMatchObject({ type: 'decimal', operator: DataValidationOperator.EQUAL, formula1: '100', allowBlank: true })
+  })
+
   it('清空条件 → 改范围 → 没等防抖到点就卸载：范围照常写入（S14 审查 E1）', () => {
     const h = setup('number', true)
     formula('')
