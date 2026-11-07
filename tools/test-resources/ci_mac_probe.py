@@ -30,13 +30,13 @@ POSTGRES_FORMULA = "postgresql@18"
 INITDB_ARGS = ("--encoding=UTF8", "--locale-provider=builtin", "--builtin-locale=C.UTF-8")
 BROWSERS = (("chromium", None), ("webkit", None), ("chromium", "chrome"))
 GIB = 1024 ** 3
-# 与 desktop_session.read_snapshot 同一条命令与环境（会话保护每 2 秒读一次，读取时限 2 秒）：记它在托管 Mac 上的耗时
+# 与 desktop_session.read_snapshot 同一条命令与环境（会话保护两次读取间隔 2 秒，读取时限 PS_TIMEOUT 10 秒）：记它在托管 Mac 上的耗时
 PS = ("/bin/ps", "-ww", "-axo", "pid=,uid=,lstart=,comm=")
 PS_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "LANG": "C"}
-# 门禁用到的工具链（S4 独立审查 M-3）：原件据此绑定环境版本；Homebrew 的公式随托管镜像的快照
+# 门禁用到的工具链（S4 独立审查 M-3）：原件据此绑定环境版本；Homebrew 的公式随托管镜像的快照。
+# 托管的 Apple 芯片 Mac 不起 Docker，数据库是 mac.yml 用 Homebrew 装的 PostgreSQL（开始时还没装，记为 None）
 TOOLS = (("node", ("node", "--version")), ("pnpm", ("pnpm", "--version")), ("brew", ("brew", "--version")),
-         ("colima", ("colima", "version")), ("docker", ("docker", "--version")),
-         ("compose", ("docker", "compose", "version", "--short")), ("buildx", ("docker", "buildx", "version")))
+         ("postgresql", ("brew", "list", "--versions", POSTGRES_FORMULA)))
 VERSION_CHARS = 200
 
 

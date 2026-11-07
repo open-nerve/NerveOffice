@@ -15,6 +15,7 @@ export interface Step {
  * 本机模式也能分片（M5-P8：GitHub 托管 Mac 照开发机的方式跑本机门禁，串行跑完接近托管 job 的时限）。
  * 本机的完整门禁要先启动开发数据库（DATABASE 一步），所以本机的两个分片都先执行它；原先只许与 `--ci` 一起给
  * （M2-P4 审查建议 7：分片不含 DATABASE，本机直接分片会连不上库）的理由因此不再成立。
+ * 托管的 Apple 芯片 Mac 起不了 Docker，数据库由工作流按开发库的设置提供，带 `--external-db` 时本机模式不执行 DATABASE。
  */
 export const PLAN_SCOPES = ['all', 'no-e2e', 'e2e'] as const
 
@@ -34,16 +35,21 @@ export interface PlanOptions {
   audit: boolean
   /** 分片（CI 与托管 Mac 的本机模式都可用）；省略为 `all` */
   scope?: PlanScope
+  /**
+   * 本机模式的数据库由外部提供，不执行 pnpm db:up（M5-P8：托管的 Apple 芯片 Mac 不能起 Docker，工作流用 Homebrew 的 PostgreSQL
+   * 按开发库的版本、账号、库名、初始化参数与端口提供同一个库，mac-workflow.test.ts 核对）。省略为 false
+   */
+  externalDatabase?: boolean
 }
 
-export const VERIFY_USAGE = '用法：pnpm verify [--fast] [--audit] [--keep-going] [--scope=all|no-e2e|e2e]；CI：pnpm verify --ci [--scope=all|no-e2e|e2e]'
+export const VERIFY_USAGE = '用法：pnpm verify [--fast] [--audit] [--keep-going] [--scope=all|no-e2e|e2e] [--external-db]；CI：pnpm verify --ci [--scope=all|no-e2e|e2e]'
 
 /** 命令行参数的解析结果：要么是一套可以执行的选项，要么是一句给用户的说明 */
 export type ParsedArgs
   = { readonly ok: true, readonly options: PlanOptions, readonly keepGoing: boolean }
     | { readonly ok: false, readonly error: string }
 
-const KNOWN_FLAGS: readonly string[] = ['--fast', '--ci', '--audit', '--keep-going']
+const KNOWN_FLAGS: readonly string[] = ['--fast', '--ci', '--audit', '--keep-going', '--external-db']
 const SCOPE_PREFIX = '--scope='
 
 /** 解析 pnpm verify 的命令行参数（纯函数，由 cli.ts 调用；不认识的参数与用错的组合都在这里拦下）。 */
@@ -61,7 +67,11 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   // 快速门禁只有一套步骤（planSteps 先看 fast），与分片一起给时分片会被悄悄丢掉（M5-P8 S4 独立审查 M-1）
   if (args.has('--fast') && scope !== 'all')
     return { ok: false, error: `--fast 不分片：快速门禁只有一套步骤，不能与 --scope=${scope} 一起给。${VERIFY_USAGE}` }
-  return { ok: true, options: { fast: args.has('--fast'), ci, audit: args.has('--audit'), scope }, keepGoing: args.has('--keep-going') }
+  // CI 本来就不启动数据库，快速门禁不用数据库：这两种模式里给它会被悄悄忽略
+  const externalDatabase = args.has('--external-db')
+  if (externalDatabase && (ci || args.has('--fast')))
+    return { ok: false, error: `--external-db 只用于本机模式的完整门禁与分片：CI 的数据库由服务容器提供，快速门禁不用数据库。${VERIFY_USAGE}` }
+  return { ok: true, options: { fast: args.has('--fast'), ci, audit: args.has('--audit'), scope, externalDatabase }, keepGoing: args.has('--keep-going') }
 }
 
 export type StepStatus = 'passed' | 'failed' | 'skipped'
@@ -103,11 +113,13 @@ export function planSteps(options: PlanOptions): Step[] {
   const scope = options.scope ?? 'all'
   if (options.fast)
     return [LINT, TYPECHECK, UNIT, STATIC_GATES, ...(options.ci || options.audit ? [AUDIT] : [])]
+  // 本机模式先启动开发数据库；CI 由服务容器提供，托管 Mac 由工作流提供（--external-db）
+  const database = options.ci || options.externalDatabase === true ? [] : [DATABASE]
   // e2e 分片：只构建与跑 E2E。构建是 E2E 的前提，所以两个分片都构建（产物门禁只在 no-e2e 那片执行，不重复）；
   // 本机模式另先启动开发数据库（E2E 的服务脚本经它建库）
   if (scope === 'e2e')
-    return [...(options.ci ? [] : [DATABASE]), CLEAN, BUILD, ...E2E]
-  const steps = [LINT, TYPECHECK, STATIC_GATES, ...(options.ci ? [] : [DATABASE]), options.ci ? CI_TESTS : LOCAL_TESTS, CLEAN, BUILD, ARTIFACT_GATES]
+    return [...database, CLEAN, BUILD, ...E2E]
+  const steps = [LINT, TYPECHECK, STATIC_GATES, ...database, options.ci ? CI_TESTS : LOCAL_TESTS, CLEAN, BUILD, ARTIFACT_GATES]
   if (scope === 'all')
     steps.push(...E2E)
   if (options.ci || options.audit)

@@ -43,7 +43,9 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(desktop.read_snapshot()["windowServer"]["pid"], 29055)
         args, kwargs = command.call_args
         self.assertEqual(args[0], ["/bin/ps", "-ww", "-axo", "pid=,uid=,lstart=,comm="])
-        self.assertEqual(kwargs["timeout"], 2)
+        # M5-P8：托管 Mac 负载下这条 ps 超过原 2 秒，需求方批准放宽到 10 秒；超时仍按失败关闭
+        self.assertEqual(desktop.PS_TIMEOUT, 10)
+        self.assertEqual(kwargs["timeout"], desktop.PS_TIMEOUT)
         self.assertEqual(kwargs["env"]["LC_ALL"], "C")
         self.assertNotIn("EXAMPLE_SECRET", kwargs["env"])
 
@@ -117,15 +119,69 @@ class GuardTests(unittest.TestCase):
             self.assertEqual(guard.record()["readError"], "ps-timeout")
 
     def test_sampling_is_throttled_but_forced_finish_read_is_not(self):
+        clock = Clock()
         with patch.object(desktop.sys, "platform", "darwin"), \
-                patch.object(desktop.time, "monotonic", side_effect=[0, .1, 1.9, 2.0, 2.1]), \
+                patch.object(desktop.time, "monotonic", clock), \
                 patch.object(desktop, "read_snapshot", return_value=self.baseline()) as probe:
             guard = desktop.SessionGuard("e2e")
-            for _ in range(4):
+            for now in (0, .1, 1.9, 2.0):
+                clock.now = now
                 self.assertTrue(guard.check())
             self.assertEqual(probe.call_count, 2)
+            clock.now = 2.1
             self.assertTrue(guard.check(force=True))
             self.assertEqual(probe.call_count, 3)
+
+    def test_interval_counts_from_the_end_of_the_previous_read(self):
+        # 负载下一次读取要几秒：从读完起算间隔，不让 ps 首尾相接地连续运行
+        clock = Clock()
+
+        def slow_read():
+            clock.now += 3.0
+            return self.baseline()
+        with patch.object(desktop.sys, "platform", "darwin"), \
+                patch.object(desktop.time, "monotonic", clock), \
+                patch.object(desktop, "read_snapshot", side_effect=slow_read) as probe:
+            guard = desktop.SessionGuard("e2e")
+            self.assertTrue(guard.check())
+            clock.now = 4.9
+            self.assertTrue(guard.check())
+            self.assertEqual(probe.call_count, 1)
+            clock.now = 5.0
+            self.assertTrue(guard.check())
+            self.assertEqual(probe.call_count, 2)
+
+    def test_records_read_count_and_slowest_read_including_the_failed_one(self):
+        clock = Clock()
+        durations = iter((0.4, 3.25, 10.0))
+
+        def read(outcome):
+            clock.now += next(durations)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+        outcomes = [self.baseline(), self.baseline(), desktop.SessionReadError("ps-timeout")]
+        with patch.object(desktop.sys, "platform", "darwin"), \
+                patch.object(desktop.time, "monotonic", clock), \
+                patch.object(desktop, "read_snapshot", side_effect=lambda: read(outcomes.pop(0))):
+            guard = desktop.SessionGuard("e2e")
+            self.assertTrue(guard.check(force=True))
+            self.assertEqual((guard.record()["readCount"], guard.record()["maxReadSeconds"]), (1, 0.4))
+            self.assertTrue(guard.check(force=True))
+            self.assertEqual((guard.record()["readCount"], guard.record()["maxReadSeconds"]), (2, 3.25))
+            self.assertFalse(guard.check(force=True))
+            record = guard.record()
+        self.assertEqual((record["readCount"], record["maxReadSeconds"]), (3, 10.0))
+        self.assertEqual((record["status"], record["reason"], record["readError"]), ("stopped", "session-unavailable", "ps-timeout"))
+
+
+class Clock:
+    """可控的 time.monotonic：测试直接设定或推进 now。"""
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
 
 
 if __name__ == "__main__":

@@ -66,13 +66,13 @@ P6 的三条批准取证入口（真实 Node 协议成功、桌面屏障 kill-go
 
 `tools/test-resources/desktop_session.py` 对 `e2e/container/measure/template/native/vm` 启用；外层本地门禁使用 `SessionGuard('gate')`。非 macOS 及非浏览器类型只记 `not-applicable`，没有桌面监测通过的含义，不得通过改变资源类型绕过检查。
 
-探针只用固定 `/bin/ps -ww -axo pid=,uid=,lstart=,comm=` 和 `/dev/console`，不读取进程参数/环境、不提权、不截图。核对当前 console UID、唯一系统 WindowServer 与当前用户唯一 loginwindow 的 PID/UID/启动时间/固定路径，并核对读取前后 console 用户一致。查询超时 2 秒，取得完整输出后仅接受 1 MiB 以内的无错误结果；这是接受上限，不是采集峰值内存的硬上限。多义、缺失、格式损坏或查询失败均停止，记录固定原因而不写原始进程表或 stderr。固定基线不能在运行中自动重建。
+探针只用固定 `/bin/ps -ww -axo pid=,uid=,lstart=,comm=` 和 `/dev/console`，不读取进程参数/环境、不提权、不截图。核对当前 console UID、唯一系统 WindowServer 与当前用户唯一 loginwindow 的 PID/UID/启动时间/固定路径，并核对读取前后 console 用户一致。查询超时 10 秒（`PS_TIMEOUT`；原为 2 秒，M5-P8 托管 Mac 负载下这条 ps 超过 2 秒，需求方批准放宽，超时仍按失败关闭），取得完整输出后仅接受 1 MiB 以内的无错误结果；这是接受上限，不是采集峰值内存的硬上限。多义、缺失、格式损坏或查询失败均停止，记录固定原因而不写原始进程表或 stderr。固定基线不能在运行中自动重建。
 
-内层在创建本轮临时资源后建立基线，实际测试命令仍受既有登记启动屏障约束；登记子进程后、释放命令前再次核对。运行中每 2 秒采样，命令结束后强制再读一次，避免返回 0 与桌面退出同时发生时被接受。只有仍存活的本轮子进程首进程允许发送组信号；沿原 SIGTERM、10 秒等待和 SIGKILL 处理，再核对整组/句柄/资源。所有正常及 finally 发送路径容忍组恰好消失，并在升级前重新核对首进程。首进程退出后存在其他引用时继续保留，不能凭旧组号补杀。记录 `desktopSession`、`stopReason=desktop-session`、原命令退出码和中断结果；等待清理时收到的晚到中断也会纳入最终结果。即使进入 `cleanup-pending` 仍保留已知退出/中断事实；清理是否完成仍按实际证据独立判断。
+内层在创建本轮临时资源后建立基线，实际测试命令仍受既有登记启动屏障约束；登记子进程后、释放命令前再次核对。运行中两次读取间隔 2 秒（从上一次读完算起，负载下读取要几秒时 ps 不会首尾相接），命令结束后强制再读一次，避免返回 0 与桌面退出同时发生时被接受。只有仍存活的本轮子进程首进程允许发送组信号；沿原 SIGTERM、10 秒等待和 SIGKILL 处理，再核对整组/句柄/资源。所有正常及 finally 发送路径容忍组恰好消失，并在升级前重新核对首进程。首进程退出后存在其他引用时继续保留，不能凭旧组号补杀。记录 `desktopSession`、`stopReason=desktop-session`、原命令退出码和中断结果；等待清理时收到的晚到中断也会纳入最终结果。即使进入 `cleanup-pending` 仍保留已知退出/中断事实；清理是否完成仍按实际证据独立判断。
 
 P5 外层 `s6/gate_helpers.py` 复用该探针和原有信号升级；会话失效时固定记录 `needs-attention`，后续 `run-gate.py` 拒绝直接开始下一轮。首次拒绝发生在命令启动前时，原命令退出码为 `null`；不得伪造一次已执行测试。内外层各自监测自己的进程，并不以外层还活着为内层前提。正式后续输入须重新绑定修改后的包装摘要，不复用旧门禁证明。
 
-2 秒是采样间隔，不是硬实时停止保证；查询、调度和原有退出等待会影响延迟。普通锁屏、空闲与真实 Safari 前置检查继续由原规则处理。本保护只能减少桌面失效后的连锁测试，不预防首次 IOSurface 耗尽，也不能在监测器被强制终止后继续运行；异常残留沿下一次启动的归属检查恢复。磁盘/RSS 正常或本保护的模拟通过均不能证明长测安全。
+2 秒是采样间隔，不是硬实时停止保证；查询（最长 10 秒）、调度和原有退出等待会影响延迟。`desktopSession` 记读取次数 `readCount` 与最慢一次的耗时 `maxReadSeconds`（失败的那次也算），用来核对负载下离时限还有多远。普通锁屏、空闲与真实 Safari 前置检查继续由原规则处理。本保护只能减少桌面失效后的连锁测试，不预防首次 IOSurface 耗尽，也不能在监测器被强制终止后继续运行；异常残留沿下一次启动的归属检查恢复。磁盘/RSS 正常或本保护的模拟通过均不能证明长测安全。
 
 小型回归：`python3 tools/test-resources/run.py unit -- python3 -m unittest discover -s tools/test-resources -p 'test_desktop_session*.py'`；完整资源机制仍用 `pnpm test:cleanup:check`。只创建 KiB 级样本与短命 Python 子进程，不启动真实浏览器、数据库或 VM。
 
@@ -232,15 +232,16 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 
 ## GitHub 托管 Mac（M5-P8）
 
-`.github/workflows/mac.yml` 在 GitHub 托管的 Intel 版 Mac（`macos-26-intel`）上补验 Mac 原完整门禁（DEF-074），照开发机的方式运行，不属于上一节方案 B 的托管 VM 例外：
+`.github/workflows/mac.yml` 在 GitHub 托管的 Apple 芯片 Mac（`macos-26`）上补验 Mac 原完整门禁（DEF-074），照开发机的方式运行，不属于上一节方案 B 的托管 VM 例外。只管 Apple 芯片，Intel 版不在范围内（需求方 2026-11-07 决定；原生图片也只核对了 darwin-arm64）：
 
 - **配置**：不设 `NERVE_TEST_RESOURCE_POLICY`，`CI` 置空。
   - 资源工具用默认的严格本机模式：删除前核验、真实删除与回收核对照常执行，不登记 `host-disposal-pending`，`hosted.py` 不参与。
   - lsof 用默认的普通权限命令；Q-10 收紧后，任何退出码 1 都判为不完整。
   - darwin 的桌面会话保护照常生效，会话变化即停。
-- **Docker**：由 colima 提供；`pnpm db:up` 起的开发库与本机使用同一编排和镜像摘要。Homebrew 的 docker 只是命令行，compose 与 buildx 两个插件另装并链接，与开发机的 Docker Desktop 一致（生产镜像的 Dockerfile 用了只有 BuildKit 支持的 `RUN --mount`）。Apple 芯片版托管 Mac 不能嵌套虚拟化、起不了 Docker，不用于验收。
-- **观测**：每个 job 开始与结束时由 `ci_mac_probe.py` 记环境事实（写成 notice 注解）：磁盘、内存、工具链版本、会话保护那条 ps 的耗时，以及按运行器直接模式同一条命令的 lsof 退出码与 stderr 字节数。只作观测，不作验收证据。
-- **分片**：本机模式的 `pnpm verify --scope=no-e2e|e2e` 按浏览器并行，两片各自先执行 `pnpm db:up`，合起来恰好是本机完整门禁（`plan.test.ts`）；另加 `pnpm test:e2e:container`。工作流本身的接线（分片参数、浏览器矩阵、`CI` 置空、不设资源策略、没有条件跳过或失败放行、Docker 插件）由 `mac-workflow.test.ts` 核对。
+- **数据库**：Apple 芯片的托管 Mac 不支持嵌套虚拟化，起不了 Docker。每个 job 在门禁之前用 Homebrew 装同一版本的 PostgreSQL，按 `deploy/dev/compose.yaml` 的账号、库名、初始化参数与端口（127.0.0.1:54318）起库；认证照开发库的镜像（本机套接字免密、TCP 要密码），版本与开发库不同就在这一步失败。测试连库的地址与开发机相同，不另设连接串；`pnpm verify` 带 `--external-db`，不再执行 `pnpm db:up`。数据目录在 `RUNNER_TEMP`，不在仓库里，不属于本轮受管资源，随托管机回收。
+- **生产容器 E2E**：没有 Docker，不在托管 Mac 上跑。Linux CI 照旧覆盖；Mac 上的这部分列入 M5 收官前由需求方裁决的未验范围。
+- **观测**：每个 job 开始与结束时由 `ci_mac_probe.py` 记环境事实（写成 notice 注解）：磁盘、内存、工具链版本（Node、pnpm、Homebrew 与它装的 PostgreSQL）、会话保护那条 ps 的耗时，以及按运行器直接模式同一条命令的 lsof 退出码与 stderr 字节数。只作观测，不作验收证据。会话保护自身在台账里记读取次数与最慢一次的耗时。
+- **分片**：本机模式的 `pnpm verify --scope=no-e2e|e2e --external-db` 按浏览器并行，合起来恰好是托管 Mac 上的本机完整门禁，即开发机的完整门禁去掉 `pnpm db:up`（`plan.test.ts`）。工作流本身的接线（分片参数、浏览器矩阵、`CI` 置空、不设资源策略、没有条件跳过或失败放行、数据库与开发库一致、不起 Docker）由 `mac-workflow.test.ts` 核对。
 - **上传**：每个 job 上传 E2E 的 JSON/HTML 与结果目录（不含持久资料目录）、覆盖率报告和本轮台账 `run.json`，供原件核对。
 
 ## P6 Linux 固定校准与自检

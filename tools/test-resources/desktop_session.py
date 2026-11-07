@@ -7,7 +7,11 @@ import subprocess
 import sys
 import time
 
+# 两次读取之间的间隔，从上一次读完算起：负载下一次读取要几秒时，不让 ps 首尾相接地连续运行
 CHECK_INTERVAL = 2.0
+# 一次读取的时限。M5-P8：托管 Mac 负载下这条 ps 超过了原来的 2 秒，需求方批准放宽到 10 秒；超时仍按失败关闭。
+# 台账记读取次数与最慢一次的耗时（readCount、maxReadSeconds），失败的那次也算
+PS_TIMEOUT = 10
 MAX_PS_BYTES = 1024 * 1024
 GUARDED_KINDS = frozenset(("e2e", "container", "measure", "template", "native", "vm", "gate"))
 WINDOW_SERVERS = frozenset((
@@ -64,7 +68,7 @@ def read_snapshot():
         raise SessionReadError("console-read-failed") from None
     try:
         result = subprocess.run(["/bin/ps", "-ww", "-axo", "pid=,uid=,lstart=,comm="],
-                                capture_output=True, timeout=2,
+                                capture_output=True, timeout=PS_TIMEOUT,
                                 env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C", "LANG": "C"})
     except subprocess.TimeoutExpired:
         raise SessionReadError("ps-timeout") from None
@@ -98,21 +102,28 @@ class SessionGuard:
     def record(self):
         return copy.deepcopy(self._record)
 
+    def _measured(self, started):
+        finished = time.monotonic()
+        self._last_check = finished
+        self._record["readCount"] = self._record.get("readCount", 0) + 1
+        self._record["maxReadSeconds"] = max(self._record.get("maxReadSeconds", 0), round(finished - started, 3))
+
     def check(self, force=False):
         if not self.enabled:
             return True
         if self._record["status"] == "stopped":
             return False
-        now = time.monotonic()
-        if not force and self._last_check is not None and now - self._last_check < CHECK_INTERVAL:
+        started = time.monotonic()
+        if not force and self._last_check is not None and started - self._last_check < CHECK_INTERVAL:
             return True
-        self._last_check = now
         self._record["checkedAt"] = datetime.now(timezone.utc).isoformat()
         try:
             observed = read_snapshot()
         except SessionReadError as error:
+            self._measured(started)
             self._record.update(status="stopped", reason="session-unavailable", readError=error.reason)
             return False
+        self._measured(started)
         if "baseline" not in self._record:
             self._record.update(status="monitoring", baseline=observed)
         elif observed != self._record["baseline"]:

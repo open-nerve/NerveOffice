@@ -99,22 +99,22 @@ class MacProbeTests(unittest.TestCase):
         self.assertEqual([(sample["returncode"], sample["stdoutBytes"]) for sample in samples], [(0, 50)] * 2)
 
     def test_toolchain_records_only_the_first_bounded_line_of_each_version_or_none(self):
-        outputs = {"python3": None, "node": "v24.21.0", "docker": "Docker version 29.7.2, build x\nextra",
-                   "colima": "colima version 0.10.3\ngit commit: abc", "brew": "Homebrew " + "9" * 400}
+        # 托管的 Apple 芯片 Mac 不起 Docker：门禁的工具链是 Node、pnpm、Homebrew 与它装的 PostgreSQL（开始时还没装，记为 None）
+        self.assertEqual([name for name, _argv in probe.TOOLS], ["node", "pnpm", "brew", "postgresql"])
+        outputs = {("node", "--version"): "v24.21.0", ("brew", "--version"): "Homebrew " + "9" * 400,
+                   ("brew", "list", "--versions", "postgresql@18"): "postgresql@18 18.6_1\nextra"}
 
         def fake(argv, timeout=20, limit=probe.TAIL_BYTES):
             self.assertLessEqual(timeout, 30)
-            return outputs.get(argv[0] if argv[0] != "docker" or len(argv) == 2 else "compose-or-buildx")
+            return outputs.get(tuple(argv))
 
         with patch.object(probe, "stdout_of", side_effect=fake):
             value = probe.toolchain()
         self.assertEqual(value["probePython"], sys.version.split()[0])
         self.assertEqual(value["node"], "v24.21.0")
-        self.assertEqual(value["docker"], "Docker version 29.7.2, build x")
-        self.assertEqual(value["colima"], "colima version 0.10.3")
+        self.assertIsNone(value["pnpm"])
         self.assertEqual(len(value["brew"]), 200)
-        self.assertIsNone(value["compose"])
-        self.assertIsNone(value["buildx"])
+        self.assertEqual(value["postgresql"], "postgresql@18 18.6_1")
         self.assertEqual(set(value), {"probePython", *(name for name, _argv in probe.TOOLS)})
 
     def test_final_records_disk_memory_toolchain_ps_timing_and_lsof_after_the_gate(self):

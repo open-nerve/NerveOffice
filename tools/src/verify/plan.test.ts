@@ -5,19 +5,19 @@ import { parseArgs, planSteps, runSteps, summarize } from './plan.ts'
 
 describe('parseArgs', () => {
   it('没有参数就是本机的完整门禁', () => {
-    expect(parseArgs([])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: false, audit: false, scope: 'all' } })
+    expect(parseArgs([])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: false, audit: false, scope: 'all', externalDatabase: false } })
   })
 
   it('认得 --fast、--ci、--audit 与 --keep-going', () => {
     expect(parseArgs(['--fast', '--ci', '--audit', '--keep-going'])).toEqual({
       ok: true,
       keepGoing: true,
-      options: { fast: true, ci: true, audit: true, scope: 'all' },
+      options: { fast: true, ci: true, audit: true, scope: 'all', externalDatabase: false },
     })
   })
 
   it('CI 的分片要与 --ci 一起给', () => {
-    expect(parseArgs(['--ci', '--scope=e2e'])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: true, audit: false, scope: 'e2e' } })
+    expect(parseArgs(['--ci', '--scope=e2e'])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: true, audit: false, scope: 'e2e', externalDatabase: false } })
   })
 
   /**
@@ -25,8 +25,8 @@ describe('parseArgs', () => {
    * 原先“只给 CI 用”的拦截（M2-P4 审查建议 7）的理由因此不再成立
    */
   it('本机不带 --ci 也可以分片：本机模式的分片各自先启动开发数据库', () => {
-    expect(parseArgs(['--scope=e2e'])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: false, audit: false, scope: 'e2e' } })
-    expect(parseArgs(['--keep-going', '--scope=no-e2e'])).toEqual({ ok: true, keepGoing: true, options: { fast: false, ci: false, audit: false, scope: 'no-e2e' } })
+    expect(parseArgs(['--scope=e2e'])).toEqual({ ok: true, keepGoing: false, options: { fast: false, ci: false, audit: false, scope: 'e2e', externalDatabase: false } })
+    expect(parseArgs(['--keep-going', '--scope=no-e2e'])).toEqual({ ok: true, keepGoing: true, options: { fast: false, ci: false, audit: false, scope: 'no-e2e', externalDatabase: false } })
   })
 
   /**
@@ -43,7 +43,29 @@ describe('parseArgs', () => {
   })
 
   it('--fast 与 --scope=all（等于不分片）仍可一起给', () => {
-    expect(parseArgs(['--fast', '--scope=all'])).toEqual({ ok: true, keepGoing: false, options: { fast: true, ci: false, audit: false, scope: 'all' } })
+    expect(parseArgs(['--fast', '--scope=all'])).toEqual({ ok: true, keepGoing: false, options: { fast: true, ci: false, audit: false, scope: 'all', externalDatabase: false } })
+  })
+
+  /**
+   * 数据库由外部提供（M5-P8：托管的 Apple 芯片 Mac 不能起 Docker，工作流用 Homebrew 的 PostgreSQL 按开发库的设置提供同一个库）：
+   * 本机模式不执行 pnpm db:up，其余照旧
+   */
+  it('本机模式认得 --external-db：数据库由外部提供', () => {
+    expect(parseArgs(['--external-db', '--keep-going', '--scope=e2e'])).toEqual({
+      ok: true,
+      keepGoing: true,
+      options: { fast: false, ci: false, audit: false, scope: 'e2e', externalDatabase: true },
+    })
+  })
+
+  /** CI 本来就不启动数据库，快速门禁不用数据库：这两种模式里给 --external-db 会被悄悄忽略，所以拦下 */
+  it.each([
+    [['--external-db', '--ci']],
+    [['--external-db', '--fast']],
+    [['--ci', '--external-db', '--scope=no-e2e']],
+  ])('--external-db 只用于本机模式的完整门禁与分片：%j', (argv) => {
+    const parsed = parseArgs(argv)
+    expect(parsed.ok ? '' : parsed.error).toContain('--external-db 只用于本机模式')
   })
 
   it('不认识的分片与未知的参数都拦下，并列出可选项', () => {
@@ -143,6 +165,22 @@ describe('planSteps', () => {
       const sharded = [...planSteps({ ...options, scope: 'no-e2e' }), ...planSteps({ ...options, scope: 'e2e' })].map(s => s.id)
       expect(new Set(sharded)).toEqual(new Set(complete))
       expect(sharded.filter((id, index) => sharded.indexOf(id) !== index)).toEqual(['database', 'clean', 'build'])
+    }
+  })
+
+  it('数据库由外部提供时（托管 Mac，M5-P8），本机模式的完整门禁与两个分片都只少启动开发数据库一步，两片合起来仍与完整的一套一样', () => {
+    for (const audit of [false, true]) {
+      for (const scope of ['all', 'no-e2e', 'e2e'] as const) {
+        const options = { fast: false, ci: false, audit, scope }
+        expect(planSteps({ ...options, externalDatabase: true })).toEqual(planSteps(options).filter(step => step.id !== 'database'))
+      }
+      const options = { fast: false, ci: false, audit, externalDatabase: true } as const
+      const complete = planSteps({ ...options }).map(s => s.id)
+      expect(complete).not.toContain('database')
+      expect(complete).toContain('tests')
+      const sharded = [...planSteps({ ...options, scope: 'no-e2e' }), ...planSteps({ ...options, scope: 'e2e' })].map(s => s.id)
+      expect(new Set(sharded)).toEqual(new Set(complete))
+      expect(sharded.filter((id, index) => sharded.indexOf(id) !== index)).toEqual(['clean', 'build'])
     }
   })
 

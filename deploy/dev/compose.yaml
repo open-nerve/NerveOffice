@@ -4,7 +4,7 @@ name: nerve-office-dev
 
 services:
   postgres:
-    # 18.6-alpine 的多架构索引摘要；升级时同时更新 CI 的服务容器与 tests/integration 的版本检查
+    # 18.6-alpine 的多架构索引摘要；升级时同时更新 CI 的服务容器、tests/integration 的版本检查与托管 Mac（mac.yml）的 POSTGRES_VERSION
     image: postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
     environment:
       POSTGRES_USER: nerve
