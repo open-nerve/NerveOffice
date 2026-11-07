@@ -53,9 +53,9 @@
 修订后 `mac.yml` 有四个门禁 job（verify 与 e2e 的三个浏览器），都跑在 `macos-26` 上，`fail-fast: false`。每个 job 依次：
 
 1. 检出代码；verify 取完整历史，迁移门禁要用。
-2. 记环境事实：`ci_mac_probe.py system`。
-3. 安装 Node 与 pnpm，安装依赖。
-4. 仅 e2e：安装本片的 Playwright 浏览器。
+2. 把 `python3` 换成 macOS 自带的 `/usr/bin/python3`，与开发机相同。托管镜像默认的 python3 是 3.15，测试资源工具的回归在那里与开发机分叉（第 3 轮，见实施记录）。Node 与 pnpm 的版本由仓库固定，Python 没有固定，开发机用的是系统自带的那个。
+3. 记环境事实：`ci_mac_probe.py system`。
+4. 安装 Node 与 pnpm，安装依赖；仅 e2e：安装本片的 Playwright 浏览器。
 5. 起数据库：`brew install postgresql@18`，`initdb`（开发库的初始化参数，本机套接字免密、TCP 用 scram-sha-256，时区 UTC），`pg_ctl` 在 127.0.0.1:54318 启动，建 `nerve_office`，核对版本与开发库相同。两类 job 的这一步完全相同。
 6. 运行门禁，`CI` 置空；verify 的 `GATE_MIGRATIONS_BASE` 与 `ci.yml` 相同。
 7. 记结束时的环境：`ci_mac_probe.py final`；上传报告（`if: always()`）。上传内容为 E2E 的 JSON/HTML 与结果目录（不含持久资料目录）、覆盖率报告，以及本轮台账 `run.json`。

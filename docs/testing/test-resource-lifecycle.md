@@ -239,6 +239,7 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
   - lsof 用默认的普通权限命令；Q-10 收紧后，任何退出码 1 都判为不完整。
   - darwin 的桌面会话保护照常生效，会话变化即停。
 - **数据库**：Apple 芯片的托管 Mac 不支持嵌套虚拟化，起不了 Docker。每个 job 在门禁之前用 Homebrew 装同一版本的 PostgreSQL，按 `deploy/dev/compose.yaml` 的账号、库名、初始化参数与端口（127.0.0.1:54318）起库；认证照开发库的镜像（本机套接字免密、TCP 要密码），版本与开发库不同就在这一步失败。测试连库的地址与开发机相同，不另设连接串；`pnpm verify` 带 `--external-db`，不再执行 `pnpm db:up`。数据目录在 `RUNNER_TEMP`，不在仓库里，不属于本轮受管资源，随托管机回收。
+- **Python**：每个 job 在用到 `python3` 之前把它换成 macOS 自带的 `/usr/bin/python3`，与开发机相同。托管镜像默认的是 3.15，测试资源工具的回归在那里与开发机分叉（第 3 轮：深层嵌套的 JSON 在 3.14 起不再触发 RecursionError，台账读取因此加了与解释器无关的层数上限 `MAX_DEPTH`）。
 - **生产容器 E2E**：没有 Docker，不在托管 Mac 上跑。Linux CI 照旧覆盖；Mac 上的这部分列入 M5 收官前由需求方裁决的未验范围。
 - **观测**：每个 job 开始与结束时由 `ci_mac_probe.py` 记环境事实（写成 notice 注解）：磁盘、内存、工具链版本（Node、pnpm、Homebrew 与它装的 PostgreSQL）、会话保护那条 ps 的耗时，以及按运行器直接模式同一条命令的 lsof 退出码与 stderr 字节数。只作观测，不作验收证据。会话保护自身在台账里记读取次数与最慢一次的耗时。
 - **分片**：本机模式的 `pnpm verify --scope=no-e2e|e2e --external-db` 按浏览器并行，合起来恰好是托管 Mac 上的本机完整门禁，即开发机的完整门禁去掉 `pnpm db:up`（`plan.test.ts`）。工作流本身的接线（分片参数、浏览器矩阵、`CI` 置空、不设资源策略、没有条件跳过或失败放行、数据库与开发库一致、不起 Docker）由 `mac-workflow.test.ts` 核对。

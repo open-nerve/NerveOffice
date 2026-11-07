@@ -187,6 +187,27 @@ describe('M5-P8 托管 Mac 的接线：照开发机的方式跑本机完整门�
       expect(step, id).toEqual(setups[0]?.step)
   })
 
+  /**
+   * 开发机的 python3 是 macOS 自带的（/usr/bin/python3，3.9）；托管镜像默认的 python3 是 3.15，测试资源工具的回归在那里与开发机分叉
+   * （第 3 轮 run 42407334017：深层嵌套的 JSON 在 3.14 起不再触发 RecursionError）。每个 job 在用到 python3 之前先把它换成 macOS 自带的，
+   * 运行器、探测与回归都与开发机用同一个解释器
+   */
+  it('每个 job 在用到 python3 之前先换成 macOS 自带的 python3（同开发机），两类 job 的这一步完全相同', () => {
+    const setups = Object.entries(workflow.jobs).map(([id, job]) => {
+      const indexes = job.steps.flatMap((step, index) => (step.run ?? '').includes('/usr/bin/python3') ? [index] : [])
+      expect(indexes, `${id} 恰好换一次 python3`).toHaveLength(1)
+      const first = job.steps.findIndex((step, index) => index !== indexes[0] && /\bpython3\b/.test(step.run ?? ''))
+      expect(first, `${id} 用到 python3`).toBeGreaterThanOrEqual(0)
+      expect(indexes[0], `${id}：换 python3 在第一次用到它之前`).toBeLessThan(first)
+      const lines = (job.steps[indexes[0]!]!.run ?? '').split('\n').map(line => line.trim())
+      expect(lines, id).toContain('ln -sfn /usr/bin/python3 "$RUNNER_TEMP/macos-python/python3"')
+      expect(lines, id).toContain('echo "$RUNNER_TEMP/macos-python" >> "$GITHUB_PATH"')
+      return job.steps[indexes[0]!]!
+    })
+    for (const setup of setups.slice(1))
+      expect(setup).toEqual(setups[0])
+  })
+
   it('不起 Docker，没有容器 E2E 的 job：Apple 芯片的托管 Mac 不支持嵌套虚拟化（S3 探测），生产容器 E2E 由 Linux CI 覆盖', () => {
     for (const [id, job] of Object.entries(workflow.jobs)) {
       for (const step of job.steps)

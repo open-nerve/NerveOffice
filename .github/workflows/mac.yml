@@ -42,6 +42,15 @@ jobs:
           # 取完整历史：迁移门禁拿这次推送之前的提交作基准（ADR-005）
           fetch-depth: 0
 
+      # 开发机的 python3 是 macOS 自带的（/usr/bin/python3）；托管镜像默认的是 3.15，测试资源工具的回归在那里与开发机分叉
+      # （第 3 轮 run 42407334017）。在用到 python3 之前换成 macOS 自带的，运行器、探测与回归都用同一个解释器（mac-workflow.test.ts）
+      - name: 使用 macOS 自带的 python3（同开发机）
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-python"
+          ln -sfn /usr/bin/python3 "$RUNNER_TEMP/macos-python/python3"
+          echo "$RUNNER_TEMP/macos-python" >> "$GITHUB_PATH"
+          /usr/bin/python3 --version
+
       # 只记环境事实，不作验收证据（ci_mac_probe.py）
       - name: 记录环境（开始）
         timeout-minutes: 5
@@ -126,6 +135,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # 与 verify 的这一步完全相同（mac-workflow.test.ts）
+      - name: 使用 macOS 自带的 python3（同开发机）
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-python"
+          ln -sfn /usr/bin/python3 "$RUNNER_TEMP/macos-python/python3"
+          echo "$RUNNER_TEMP/macos-python" >> "$GITHUB_PATH"
+          /usr/bin/python3 --version
 
       - name: 记录环境（开始）
         timeout-minutes: 5

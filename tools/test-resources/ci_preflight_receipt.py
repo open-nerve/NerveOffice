@@ -10,6 +10,9 @@ import stat
 import sys
 
 MAX_BYTES = 64 * 1024
+# 嵌套层数的上限（根对象算第 1 层），比它深的判 invalid-json。写在读取一侧，不靠解释器的递归上限：
+# Python 3.14 起按实际栈深保护，2000 层也能解析（M5-P8 S5 第 3 轮，托管 Mac 的 python3 3.15）。真实台账最多 4 层
+MAX_DEPTH = 64
 RUN_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}")
 
 
@@ -71,10 +74,36 @@ def _read(parent, name):
         if len(raw) > MAX_BYTES:
             raise Rejected("manifest-too-large")
     try:
-        return json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs,
+        text = raw.decode("utf-8")
+        if not _within_depth(text):
+            raise ValueError()
+        return json.loads(text, object_pairs_hook=_pairs,
                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
     except (ValueError, UnicodeError, RecursionError):
         raise Rejected("invalid-json") from None
+
+
+def _within_depth(text):
+    """数组与对象的嵌套不超过 MAX_DEPTH；字符串里的括号不算。格式错误留给 json.loads 判。"""
+    depth = 0
+    quoted = escaped = False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in "[{":
+            depth += 1
+            if depth > MAX_DEPTH:
+                return False
+        elif char in "]}":
+            depth -= 1
+    return True
 
 
 def _exists(parent, name):

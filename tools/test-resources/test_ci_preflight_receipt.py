@@ -400,6 +400,26 @@ class PreflightReceiptTests(unittest.TestCase):
                 path.write_bytes(raw)
                 self.reject("invalid-json")
 
+    def test_nesting_depth_has_an_explicit_bound_independent_of_the_interpreter(self):
+        # 上一条的 2000 层在 Python 3.9、3.12 上触发 RecursionError；3.14 起改按实际栈深保护，能解析成列表，
+        # 原先因此判成 invalid-manifest（托管 Mac 的 python3 3.15，M5-P8 S5 第 3 轮）。层数上限写在读取一侧：
+        # 比上限深就判 invalid-json，不随解释器变化；根对象算第 1 层，字符串里的括号不算层数
+        limit = self.module.MAX_DEPTH
+        directory = self.record()
+        path = directory / "run.json"
+        base = json.loads(path.read_text())
+
+        def nest(levels):
+            return json.loads("[" * levels + "]" * levels)
+        path.write_text(json.dumps(dict(base, extra=nest(limit - 1))))
+        self.assertEqual(self.module.collect(self.repo)["collectionStatus"], "collected")
+        path.write_text(json.dumps(dict(base, extra=nest(limit))))
+        self.reject("invalid-json")
+        path.write_bytes(b"[" * 100 + b"]" * 100)
+        self.reject("invalid-json")
+        path.write_text(json.dumps(dict(base, extra="[{" * 200)))
+        self.assertEqual(self.module.collect(self.repo)["collectionStatus"], "collected")
+
     def test_four_receipts_are_bounded_and_fifth_is_rejected(self):
         for _ in range(4):
             self.record(status="cleanup-pending", cleanupStage=None, exitCode=1,
