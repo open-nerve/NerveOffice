@@ -43,6 +43,30 @@ async function addLink(page: Page, a1: string, label: string, href: string): Pro
   await expect(addressInput(page)).toBeHidden()
 }
 
+/** 单元格里一点在页面上的坐标（只读取画布位置与单元格范围；xFraction 是单元格宽度上的比例） */
+async function pointInCell(page: Page, a1: string, xFraction: number): Promise<{ x: number, y: number }> {
+  return page.evaluate(({ a1, xFraction }) => {
+    const cell = window.__nerveEditorProbe!.univerAPI.getActiveWorkbook().getActiveSheet().getRange(a1).getCell()
+    const canvas = document.querySelector('canvas[id^="univer-sheet-main-canvas_"]')!.getBoundingClientRect()
+    return { x: canvas.left + cell.startX + (cell.endX - cell.startX) * xFraction, y: canvas.top + (cell.startY + cell.endY) / 2 }
+  }, { a1, xFraction })
+}
+
+/**
+ * 双击打开富文本单元格的编辑器，等编辑器真正盖住这一格之后，把鼠标移开再移回这一格。编辑器是双击之后异步打开的：
+ * 打开之前悬停，鼠标事件落在底层表格画布上，之后不再移动，链接浮层就不会出现（M5-P8 托管 Mac 第 3 轮 trace：双击后 0 毫秒即悬停）。
+ * 编辑器的容器（sheets-ui 的 EditorContainer，data-u-comp="editor"）隐藏时透明、不接收鼠标，打开之后才移到这一格上；
+ * 双击时鼠标已停在这一格上，原地再悬停不一定产生新的移动，所以先移开。
+ */
+async function openRichEditorAndHover(page: Page, a1: string): Promise<void> {
+  await openCellEditor(page, a1)
+  const point = await pointInCell(page, a1, 0.5)
+  await expect.poll(async () => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-u-comp="editor"]') != null, point), { message: `等单元格编辑器盖住 ${a1}` }).toBe(true)
+  await page.mouse.move(1, 1)
+  // 同一屏幕坐标此时由上层 Docs 画布接收鼠标，不能等待底层 sheet canvas 收到事件。
+  await hoverCell(page, a1, { force: true })
+}
+
 function expectLink(snapshot: Workbook, a1: string, label: string, href: string): void {
   const cell = cellOf(snapshot, a1)
   expect(cell).toMatchObject({ p: { body: { dataStream: `${label}\r\n`, customRanges: [{ properties: { url: href } }] } } })
@@ -135,9 +159,7 @@ test('US-M5-08 富文本选区通过真实表单添加和更新，非法命令�
   await saveAndWait(page)
   expectLink((await savedContent(page, id)).snapshot, 'B3', '富文本资料', '/spaces')
 
-  await openCellEditor(page, 'B3')
-  // 同一屏幕坐标此时由上层 Docs 画布接收鼠标，不能等待底层 sheet canvas 收到事件。
-  await hoverCell(page, 'B3', { force: true })
+  await openRichEditorAndHover(page, 'B3')
   await expect(linkEdit(page)).toBeVisible()
   const updateMark = await commandMark(page)
   await linkEdit(page).click()
@@ -196,9 +218,7 @@ test('US-M5-08 富文本选区通过真实表单添加和更新，非法命令�
   await saveAndWait(page)
   expectLink((await savedContent(page, id)).snapshot, 'B3', '更新富文本', 'https://example.invalid/rich')
 
-  await openCellEditor(page, 'B3')
-  // 同一屏幕坐标此时由上层 Docs 画布接收鼠标，不能等待底层 sheet canvas 收到事件。
-  await hoverCell(page, 'B3', { force: true })
+  await openRichEditorAndHover(page, 'B3')
   await expect(linkRemove(page)).toBeVisible()
   const removeMark = await commandMark(page)
   await linkRemove(page).click()
@@ -276,11 +296,7 @@ for (const { action, text, ranges, apply } of pendingLinkActions) {
 
     // 新增前文使链接向右移动；在默认列宽的 3/4 处移动真实鼠标，命中中间链接。
     // 只读获取画布坐标，不改 popup 类型、焦点或命令；不等待旧菜单自行消失。
-    const point = await page.evaluate(() => {
-      const cell = window.__nerveEditorProbe!.univerAPI.getActiveWorkbook().getActiveSheet().getRange('B3').getCell()
-      const canvas = document.querySelector('canvas[id^="univer-sheet-main-canvas_"]')!.getBoundingClientRect()
-      return { x: canvas.left + cell.startX + (cell.endX - cell.startX) * 0.75, y: canvas.top + (cell.startY + cell.endY) / 2 }
-    })
+    const point = await pointInCell(page, 'B3', 0.75)
     await page.mouse.move(point.x, point.y)
     const mark = await commandMark(page)
     await apply(page)

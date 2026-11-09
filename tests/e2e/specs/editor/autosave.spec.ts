@@ -145,6 +145,8 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     const documentId = await openNewSheet(page, 'autosave-hidden')
     const writes = recordWrites(page, documentId)
     await typeInCell(page, 'A1', 'background')
+    // 输入会让公式引擎排队一轮；算完之前切后台，这次上传按产品规则记为“公式结果尚未保存”，不是本用例要验证的路径（M5-P8 托管 Mac 第 3 轮）。
+    await expect.poll(async () => probeFormulasSettled(page)).toBe(true)
     await clearAutosaveLog(page)
     await setPageHidden(page, true)
     await expect.poll(() => writes.saves.length).toBe(1)

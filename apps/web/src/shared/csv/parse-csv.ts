@@ -2,7 +2,14 @@ import type { CsvTable } from './csv-format.ts'
 import { assertCsvShape, CSV_LIMITS, CsvError, isDocumentStructureCharacter } from './csv-format.ts'
 
 type FieldState = 'start' | 'bare' | 'quoted' | 'closed'
-const YIELD_CHARACTERS = 16_384
+/** 每处理这么多字符看一次时钟 */
+const CHECK_CHARACTERS = 16_384
+/**
+ * 连续计算满这么久才让出一轮事件循环：按计算时长而不是按字符数让出（M5-P8）。原先每 16K 字符让出一次，3 MB 的文件约 200 次，
+ * 每次至少等浏览器嵌套计时器的 4 毫秒下限、负载高时更久，计算本身只要几十毫秒；托管 Mac 的 Chromium 上新建流程 5 秒内没读完。
+ * 一段最多约 8 毫秒，页面仍能及时处理取消与输入。
+ */
+const SLICE_MILLISECONDS = 8
 
 function assertActive(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true)
@@ -31,7 +38,8 @@ export async function parseCsv(bytes: Uint8Array, options?: { readonly signal?: 
   let state: FieldState = 'start'
   let width = 0
   let recordStart = 0
-  let nextYield = YIELD_CHARACTERS
+  let nextCheck = CHECK_CHARACTERS
+  let sliceStart = performance.now()
 
   function append(value: string): void {
     if (field.length + value.length > CSV_LIMITS.field)
@@ -54,11 +62,14 @@ export async function parseCsv(bytes: Uint8Array, options?: { readonly signal?: 
   }
 
   for (let index = 0; index < text.length; index++) {
-    if (index >= nextYield) {
-      // Promise.resolve 只让出微任务，页面无法处理取消；这里必须让出一轮事件循环。
-      await new Promise<void>(resolve => setTimeout(resolve, 0))
-      assertActive(signal)
-      nextYield = index + YIELD_CHARACTERS
+    if (index >= nextCheck) {
+      nextCheck = index + CHECK_CHARACTERS
+      if (performance.now() - sliceStart >= SLICE_MILLISECONDS) {
+        // Promise.resolve 只让出微任务，页面无法处理取消；这里必须让出一轮事件循环。
+        await new Promise<void>(resolve => setTimeout(resolve, 0))
+        assertActive(signal)
+        sliceStart = performance.now()
+      }
     }
     const char = text.charAt(index)
     if (char === '\0')

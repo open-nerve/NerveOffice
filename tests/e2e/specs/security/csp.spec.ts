@@ -95,22 +95,53 @@ test.describe('US-M1-09 CSP 与安全头', () => {
       }
     })
 
-    test('M5R-M-15 对照：以 /favicon.ico 结尾的站外地址，请求观察器看不到，只有目标服务的命中数能发现', async ({ page, context }, testInfo) => {
-      const control = await startControlServer()
-      const watcher = watchExternalRequests(context, control.origin)
-      try {
-        const result = await probeResult(page, `${control.origin}/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe/favicon.ico`)}`)
-        expect(result).toEqual({ page: ALL_ALLOWED, worker: ALL_ALLOWED })
-        // 网络侧真值：页面与 Worker 各取到一次
-        expect(target.requests()).toEqual(['/probe/favicon.ico', '/probe/favicon.ico'])
-        // Playwright 不为这类地址发出 context 的请求事件：只看观察器会平凡通过，所以关键样本另以目标服务零命中为准
-        expect(watcher.list()).toEqual([])
-      }
-      finally {
-        watcher.stop()
-        await control.close()
-        await testInfo.attach('favicon-observer-control', { body: JSON.stringify({ observed: watcher.list(), targetRequests: target.requests() }), contentType: 'application/json' })
-      }
+    test.describe('不挂路由的上下文', () => {
+      // 这条对照只打开控制服务的探针页，不打开应用页面；macOS 上 WebKit 的持久上下文为隔离存储挂了路由，
+      // 挂了路由时 /favicon.ico 结尾的请求出不了浏览器（见下一组与 external-requests.ts），所以这里用不挂路由的临时上下文（需求方 2026-11-09 决定）。
+      test.use({ webkitStorage: 'temporary' })
+
+      test('M5R-M-15 对照：以 /favicon.ico 结尾的站外地址，请求观察器看不到，只有目标服务的命中数能发现', async ({ page, context }, testInfo) => {
+        const control = await startControlServer()
+        const watcher = watchExternalRequests(context, control.origin)
+        try {
+          const result = await probeResult(page, `${control.origin}/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe/favicon.ico`)}`)
+          expect(result).toEqual({ page: ALL_ALLOWED, worker: ALL_ALLOWED })
+          // 网络侧真值：页面与 Worker 各取到一次
+          expect(target.requests()).toEqual(['/probe/favicon.ico', '/probe/favicon.ico'])
+          // Playwright 不为这类地址发出 context 的请求事件：只看观察器会平凡通过，所以关键样本另以目标服务零命中为准
+          expect(watcher.list()).toEqual([])
+        }
+        finally {
+          watcher.stop()
+          await control.close()
+          await testInfo.attach('favicon-observer-control', { body: JSON.stringify({ observed: watcher.list(), targetRequests: target.requests() }), contentType: 'application/json' })
+        }
+      })
+    })
+
+    test.describe('macOS WebKit 挂了路由的上下文', () => {
+      test('M5R-M-15 能力限制对照：挂了路由的上下文里，以 /favicon.ico 结尾的请求出不了浏览器；同一上下文里的普通地址照常到达', async ({ page, context, browserName }, testInfo) => {
+        // eslint-disable-next-line playwright/no-skipped-test -- 只有 macOS 上的 WebKit 持久上下文为隔离存储挂了路由（webkit-storage.ts），其他浏览器与平台没有这条路由、对照无从成立；需求方 2026-11-09 决定这条对照只在 macOS WebKit 上运行
+        test.skip(browserName !== 'webkit' || process.platform !== 'darwin', '只有 macOS 上的 WebKit 持久上下文为隔离存储挂了路由')
+        const control = await startControlServer()
+        const watcher = watchExternalRequests(context, control.origin)
+        let favicon: unknown
+        try {
+          // 先证明这个上下文能到达目标服务：页面与 Worker 各一次
+          await probeResult(page, `${control.origin}/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe`)}`)
+          expect(target.requests()).toEqual(['/probe', '/probe'])
+          expect(watcher.list()).toEqual([`${target.origin}/probe`, `${target.origin}/probe`])
+          // 再取 /favicon.ico 结尾的地址：Playwright 开着拦截时直接中止这类请求，不发事件，目标服务也收不到
+          favicon = await probeResult(page, `${control.origin}/csp-probe.html?target=${encodeURIComponent(`${target.origin}/probe/favicon.ico`)}`)
+          expect(target.requests()).toEqual(['/probe', '/probe'])
+          expect(watcher.list()).toEqual([`${target.origin}/probe`, `${target.origin}/probe`])
+        }
+        finally {
+          watcher.stop()
+          await control.close()
+          await testInfo.attach('favicon-routed-webkit-control', { body: JSON.stringify({ favicon, observed: watcher.list(), targetRequests: target.requests() }), contentType: 'application/json' })
+        }
+      })
     })
 
     test('US-M5-14 对照：无 CSP 探针有效且请求观察覆盖页面、Worker 与新页', async ({ page, context }, testInfo) => {
