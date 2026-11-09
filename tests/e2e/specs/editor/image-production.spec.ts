@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import sharp from 'sharp'
 import { createUser } from '../../support/database.ts'
+// nameBox 只是名称框（公开界面）的定位器，不用探针
 import { nameBox } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
@@ -251,6 +252,10 @@ test('DEF-081 视口向下滚动之后正式插入浮图，存下的锚点与不
   await expect(nameBox(page)).toHaveValue('J63')
   await choose(page, 'float', ['rgba-text.png'])
   await expect(operation(page)).toContainText('插入图片已完成。')
+  // 视口确实滚动过（否则修复前后都会通过）：点未滚动时 A3 所在的屏幕位置，选中的是下方远处的一格
+  await selectCell(page, 'A3')
+  await expect(nameBox(page)).toHaveValue(/^A\d+$/)
+  expect(Number((await nameBox(page).inputValue()).slice(1))).toBeGreaterThan(3)
   await saveAndWait(page)
   const snapshot = (await savedContent(page, documentId)).snapshot
   const sheetId = snapshot.sheetOrder[0]!

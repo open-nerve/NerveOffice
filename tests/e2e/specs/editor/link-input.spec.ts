@@ -53,15 +53,19 @@ async function pointInCell(page: Page, a1: string, xFraction: number): Promise<{
 }
 
 /**
- * 双击打开富文本单元格的编辑器，等编辑器真正盖住这一格之后，把鼠标移开再移回这一格。编辑器是双击之后异步打开的：
+ * 双击打开富文本单元格的编辑器，等编辑器的画布真正盖住这一格之后，把鼠标移开再移回这一格。编辑器是双击之后异步打开的：
  * 打开之前悬停，鼠标事件落在底层表格画布上，之后不再移动，链接浮层就不会出现（M5-P8 托管 Mac 第 3 轮 trace：双击后 0 毫秒即悬停）。
- * 编辑器的容器（sheets-ui 的 EditorContainer，data-u-comp="editor"）隐藏时透明、不接收鼠标，打开之后才移到这一格上；
+ * 编辑器的容器（sheets-ui 的 EditorContainer，data-u-comp="editor"）不编辑时在 (-1000, -1000)、宽高为 0，打开时才移到这一格上；
+ * 里面 Docs 画布的尺寸在下一个宏任务里才调整，链接浮层要靠落在这块画布上的鼠标事件，所以等该点的元素是容器里的画布。
  * 双击时鼠标已停在这一格上，原地再悬停不一定产生新的移动，所以先移开。
  */
 async function openRichEditorAndHover(page: Page, a1: string): Promise<void> {
   await openCellEditor(page, a1)
   const point = await pointInCell(page, a1, 0.5)
-  await expect.poll(async () => page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('[data-u-comp="editor"]') != null, point), { message: `等单元格编辑器盖住 ${a1}` }).toBe(true)
+  await expect.poll(async () => page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y)
+    return target instanceof HTMLCanvasElement && target.closest('[data-u-comp="editor"]') != null
+  }, point), { message: `等单元格编辑器的画布盖住 ${a1}` }).toBe(true)
   await page.mouse.move(1, 1)
   // 同一屏幕坐标此时由上层 Docs 画布接收鼠标，不能等待底层 sheet canvas 收到事件。
   await hoverCell(page, a1, { force: true })

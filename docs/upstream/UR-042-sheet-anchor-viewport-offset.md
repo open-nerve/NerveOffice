@@ -24,3 +24,9 @@
 真实 SDK 回归（`apps/web/src/editor/internal-api/image-anchor-regression.test.ts`）覆盖纵向滚动、横向滚动、放大 200%、滚动并缩小到 50%：两个换算函数与产品插入路径存下的两份锚点，必须与未滚动、未缩放时相同。未修正时 8 条全部失败，修正后通过。正式入口的浏览器故事见 `tests/e2e/specs/editor/image-production.spec.ts` 的 DEF-081 用例。
 
 上游修复同一换算（或改为由调用方按视口坐标传入并同步修改两个调用方）之后，须通过上述回归与浏览器故事，再移除本段补丁。
+
+## 相关现象（按源码推断，未实测）
+
+SDK 自带的插入浮图命令（sheets-drawing-ui 的 `_getImagePosition`）用 `SheetSelectionRenderService.getCellWithCoordByOffset` 换算终点。该方法先减去滚动量、再按缩放换算，传入的却是 `attachRangeWithCoord` 得到的绝对坐标；滚动量在里面会抵消，缩放不是 100% 时终点同样会偏。本项目已用自己的处理器替换 `sheet.command.insert-float-image` 与 `sheet.command.insert-cell-image`，产品走不到这条路径，所以没有修补，也没有单独验证。向上游报告时一并提及。
+
+修复之前存下的偏移锚点打开时不会自动纠正，要到下一次经过换算的操作（移动、行高变化等）才改正；本项目 v0.1 未上线，不做数据迁移。

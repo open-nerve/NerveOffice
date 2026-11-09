@@ -7,7 +7,10 @@ vi.hoisted(() => {
   // 公开出口会装载 SDK 模块；本组只运行控制器与真实编解码，不运行 Canvas。
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
 })
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
 
 describe('CSV 同页预解析交接', () => {
   const table = { rows: [['001', '=1+1']], rowCount: 1, columnCount: 2 }
@@ -132,10 +135,17 @@ describe('CSV 文件选择与预览', () => {
 
   it('解析让出时取消，释放本轮预览且无写入', async () => {
     vi.useFakeTimers()
+    // 解析按计算时长让出，而假计时器连 performance 一起伪造、解析期间时钟不走；让时钟每读一次前进 10 毫秒，
+    // 解析在第一处检查就让出。必须在 useFakeTimers 之后打桩：打在被替换掉的真 performance 上不生效
+    let clock = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => (clock += 10))
     const h = csvFixture()
     h.controller.openImport()
     const choosing = h.controller.chooseFile(csvFile('字'.repeat(20_000)))
     await Promise.resolve()
+    // 取消必须落在解析让出期间：解析停在让出的计时器上（一口气算完就没有待触发的计时器），还在读取、没有预览
+    expect(vi.getTimerCount()).toBe(1)
+    expect(h.controller.view().dialog).toMatchObject({ kind: 'import', stage: 'reading' })
     h.controller.cancel()
     await vi.runAllTimersAsync()
     await choosing
