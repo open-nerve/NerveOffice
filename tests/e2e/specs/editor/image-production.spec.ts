@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { SHEET_TEMPLATE } from '@nerve-office/contracts'
 import sharp from 'sharp'
 import { createUser } from '../../support/database.ts'
+import { nameBox } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { loginThroughApi } from '../../support/session.ts'
@@ -228,6 +229,50 @@ test('逐图像素反例：只让 GIF 读取失败，另外三张图不能掩盖
   await page.unroute(route)
   await page.getByRole('button', { name: '重新加载图片', exact: true }).click()
   await expectImageAt(page, snapshot, 'float', 3)
+})
+
+interface AnchorPoint { readonly row: number, readonly column: number, readonly rowOffset: number, readonly columnOffset: number }
+interface Anchored {
+  readonly transform: { readonly top: number, readonly left: number, readonly width: number, readonly height: number }
+  readonly sheetTransform: { readonly from: AnchorPoint, readonly to: AnchorPoint }
+  readonly axisAlignSheetTransform: { readonly from: AnchorPoint, readonly to: AnchorPoint }
+}
+
+// DEF-081（M5-P8 S6 原生补验 N4 发现）：SDK 换算浮图终点锚点时套用了视口的滚动，向下滚过之后插入，存下的终点行与行内偏移随滚动量偏移。
+test('DEF-081 视口向下滚动之后正式插入浮图，存下的锚点与不滚动时相同', async ({ page }) => {
+  const { documentId } = await open(page, '滚动之后插图')
+  await selectCell(page, 'C3')
+  await choose(page, 'float', ['rgba-text.png'])
+  await expect(operation(page)).toContainText('插入图片已完成。')
+  // 点开图片之外的一格，再用方向键把选区移到第 63 行：视口随之向下滚动。插入的目标是选区，与鼠标位置无关。
+  await selectCell(page, 'J3')
+  for (let row = 3; row < 63; row += 1)
+    await page.keyboard.press('ArrowDown')
+  await expect(nameBox(page)).toHaveValue('J63')
+  await choose(page, 'float', ['rgba-text.png'])
+  await expect(operation(page)).toContainText('插入图片已完成。')
+  await saveAndWait(page)
+  const snapshot = (await savedContent(page, documentId)).snapshot
+  const sheetId = snapshot.sheetOrder[0]!
+  const floats = Object.values((resourceOf(snapshot, 'SHEET_DRAWING_PLUGIN') as Record<string, { data: Record<string, Anchored> }> | undefined)?.[sheetId]?.data ?? {})
+  expect(floats).toHaveLength(2)
+  const at = (row: number, column: number): Anchored => {
+    const found = floats.filter(drawing => drawing.sheetTransform.from.row === row && drawing.sheetTransform.from.column === column)
+    expect(found).toHaveLength(1)
+    return found[0]!
+  }
+  const unscrolled = at(2, 2)
+  const scrolled = at(62, 9)
+  for (const drawing of [unscrolled, scrolled]) {
+    expect(drawing.sheetTransform.from).toMatchObject({ rowOffset: 0, columnOffset: 0 })
+    expect(drawing.axisAlignSheetTransform).toEqual(drawing.sheetTransform)
+  }
+  // 同一张图、相同的默认行高列宽：终点相对起点的行列数与格内偏移必须相同；位置是工作表绝对坐标，相差 60 行 7 列
+  const span = ({ from, to }: Anchored['sheetTransform']) => ({ rows: to.row - from.row, rowOffset: to.rowOffset, columns: to.column - from.column, columnOffset: to.columnOffset })
+  expect(span(scrolled.sheetTransform)).toEqual(span(unscrolled.sheetTransform))
+  expect(scrolled.transform).toMatchObject({ width: unscrolled.transform.width, height: unscrolled.transform.height })
+  expect(scrolled.transform.top - unscrolled.transform.top).toBe(60 * geometry.defaultRowHeight)
+  expect(scrolled.transform.left - unscrolled.transform.left).toBe(7 * geometry.defaultColumnWidth)
 })
 
 test('US-M5-09 正式插图后从列表复制，删除原文档不破坏副本图片', async ({ page }) => {

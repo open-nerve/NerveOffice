@@ -7,9 +7,9 @@
       "entry": "lib/es/index.js",
       "originalEsSha256": "581dc1255b096691e9f493ddc0d288e21f10039cdb82fa40a3d0ffb88e930351",
       "originalCjsSha256": "90cbd2e7bd0c4e928302c2949ee7755e011b4835b102b1ddd7c00afe5a93b048",
-      "patchedEsSha256": "00309df0ebe786f71f556e1037b6a9735958419bb5c4f06b0fa345270974ee2f",
+      "patchedEsSha256": "b6c2ba0d2ca0d58b0296ae1e61452654ee0b6d4d0f52ba36272920b4cc65ece1",
       "patch": "patches/@univerjs__core@1.0.1.patch",
-      "patchSha256": "a92d25af44f9a09c5bf5c8c2e8d4bd49fe6d0a1cb7ab17d0caf2ed9dca7a2c24"
+      "patchSha256": "e2754858f960ade03df7c96e5fde9ce203aa38c2b516376d6a6e41092257f3b5"
     },
     {
       "package": "@univerjs/drawing",

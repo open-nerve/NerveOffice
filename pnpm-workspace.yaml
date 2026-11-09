@@ -28,6 +28,7 @@ overrides:
 
 patchedDependencies:
   # ADR-022：单元格元素缓存走平台鉴权与实例登记；取消不回退原 URL，先登记再等待读取。
+  # DEF-081：浮图锚点按工作表绝对坐标换算，视口的滚动与缩放不进入存下的锚点。
   '@univerjs/core@1.0.1': patches/@univerjs__core@1.0.1.patch
   # ADR-010、UR-039：恢复输入焦点时修复留在旧控件的原生光标，保留现有选区和 IME。
   '@univerjs/docs-ui@1.0.1': patches/@univerjs__docs-ui@1.0.1.patch
