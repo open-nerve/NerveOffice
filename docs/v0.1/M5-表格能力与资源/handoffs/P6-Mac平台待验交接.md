@@ -38,9 +38,9 @@ DEF-074 改在 GitHub 托管的 Apple 芯片 Mac（`macos-26`，3 核 M1 虚拟�
 | 范围 | P8 结果 |
 |---|---|
 | 原 Mac 完整 Gate | 第 4 轮（`16dfa93d`，run `42784172617`）四个 job 都成功：no-e2e 那片包括 lint、类型、静态门禁，覆盖率 758 个文件 17,956 项，测试资源工具的 Python 回归 517 项，构建与产物门禁；E2E 三片 Chromium 846 项通过、5 项跳过，Chrome 839、5，WebKit 836、8，没有失败、重试或 flaky，跳过的都是只在另一种内核或平台上运行的用例。之后只改了托管 Mac 的探测脚本及其用例，用最终代码再跑一轮（第 5 轮），以它的原件核对与独立接受作关闭依据 |
-| WebKit OPFS 与持久性 | 由 WebKit 那片的 E2E 覆盖（darwin 路径的 `isolateWebkitStorage`、崩溃与重启项目） |
+| WebKit OPFS 与持久性 | 由 WebKit 那片的 E2E 与 crash-webkit 项目覆盖（darwin 路径的 `isolateWebkitStorage`）。后端重启项目与浏览器无关，只在 Chromium 那片用 chromium 跑一次 |
 | 浏览器进程与钥匙串 | 探测记下托管 Mac 有 Aqua 会话与已解锁的登录钥匙串；由各片的崩溃项目覆盖 |
-| 真实平台键盘与桌面 | 托管 Mac 上是真实的 macOS 按键与桌面会话，会话保护照常生效 |
+| 真实平台键盘与桌面 | 在真实 macOS 上运行：`ControlOrMeta` 按运行机器取 Meta，页面的平台判断也是苹果平台，不是 Linux 上的 UA 模拟；按键由 Playwright 经浏览器协议注入，不是系统级输入（系统级合成输入见 DEF-084）。桌面是托管机的 Aqua 会话，会话保护照常运行，读取次数与最慢耗时以第 5 轮的台账为准（见 P8 实施记录） |
 | 生产容器组合 | 托管的 Apple 芯片 Mac 不支持嵌套虚拟化，起不了 Docker。需求方 2026-11-10 裁决：接受不在 Mac 上跑，生产镜像的容器 E2E 由 Linux CI 覆盖 |
 | 真实 Safari 的 CSV 下载（Q-13） | 通过（S6 的 N8，Safari 27.0.1）：文件落进“下载”，文件名与 `csvFilename` 一致，62 字节，与产品编码器按固定内容算出的预期逐字节相同（含 BOM、CRLF 与引号转义）。`csv-download.ts` 不需要修改 |
 
