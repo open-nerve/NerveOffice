@@ -62,7 +62,7 @@ M0 各 Phase、M1、M2 与 M3 发现、需要报告给 Univer 上游的问题，
 | [UR-039](UR-039-native-input-selection-outside-editor.md) | 单元格已聚焦但原生光标仍在旧表名控件，首次文字输入无效 | M5-P3-S5 | 本地修复，SDK 7 项、S5 工程与 270 项三浏览器组合通过；P3 阶段验证待完成 | 公开 issue | 草稿 | — |
 | [UR-040](UR-040-sheet-name-delayed-selection.md) | 延后全选表名覆盖已经开始的输入，或在改名结束后重设其他选区 | M5-P3-S5 | 固定包 ES/CJS 22 项、重复 UI 18 项及最终 S5 工程/270 项组合通过；P3 阶段审查与验证待完成 | 公开 issue | 草稿 | — |
 | [UR-041](UR-041-link-popup-stale-edit-owner.md) | 进入单元格编辑后旧链接菜单仍可修改已提交模型，覆盖未提交正文 | M5-P3-S6 | 用户批准局部修正；SDK、三浏览器、Linux/ARM64 对照与 full05/container03 通过，最终同 SHA CI 及阶段关闭待完成 | 公开 issue | 草稿 | — |
-| [UR-042](UR-042-sheet-anchor-viewport-offset.md) | 视口滚动或缩放之后插入、移动浮图，存下的终点锚点随视口偏移 | M5-P8-S6 | core 补丁修正（DEF-081）；真实 SDK 回归 8 项先失败后通过，正式入口浏览器故事本机 Chromium 通过，待分支 CI 各浏览器 | 公开 issue | 草稿 | — |
+| [UR-042](UR-042-sheet-anchor-viewport-offset.md) | 视口滚动或缩放之后插入、移动浮图，存下的终点锚点随视口偏移 | M5-P8-S6 | core 补丁修正（DEF-081）；真实 SDK 回归 8 项先失败后通过，正式入口浏览器故事在本机 Chromium、分支 CI 的 Linux 四个浏览器与生产容器通过，待托管 Mac | 公开 issue | 草稿 | — |
 | [UR-043](UR-043-generic-html-paragraphs.md) | 一般来源的 HTML 粘贴进表格时忽略段落边界：相邻段落直接拼接，只有 `<br>` 另起一行 | M5-P8-S6 | 不修补，按已知限制登记（DEF-082，需求方 2026-11-10 决定）；真实 Safari、Chrome 原件与源码核对，最小复现待在 SDK 默认配置下补跑 | 公开 issue | 草稿 | — |
 
 ## 提交之前要确认的事
