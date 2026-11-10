@@ -2,13 +2,16 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
-import tempfile
 import unittest
 from unittest.mock import patch
 
 import ci_mac_probe as probe
+
+# GitHub 托管的 Mac 上这三个变量的取值（第 3 轮 run 42407334017 的 system 段原件记下 RUNNER_ENVIRONMENT=github-hosted、RUNNER_OS=macOS）
+HOSTED_ENV = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "macOS"}
 
 
 class MacProbeTests(unittest.TestCase):
@@ -49,12 +52,34 @@ class MacProbeTests(unittest.TestCase):
     def test_main_rejects_unknown_sections_and_prints_details_and_one_notice(self):
         self.assertEqual(probe.main(["ci_mac_probe.py"]), 2)
         self.assertEqual(probe.main(["ci_mac_probe.py", "unknown"]), 2)
-        with patch.object(probe, "final", return_value={"diskFreeGiB": {"root": 1.5}}), \
+        with patch.dict(os.environ, HOSTED_ENV), patch.object(probe, "final", return_value={"diskFreeGiB": {"root": 1.5}}), \
                 patch("builtins.print") as printed:
             self.assertEqual(probe.main(["ci_mac_probe.py", "final"]), 0)
         lines = [call.args[0] for call in printed.call_args_list]
         self.assertEqual(json.loads(lines[0]), {"diskFreeGiB": {"root": 1.5}})
         self.assertEqual(sum(line.startswith("::notice") for line in lines), 1)
+
+    def test_main_runs_no_section_outside_a_github_hosted_mac(self):
+        # S7 独立审查 M-1：system 段会执行 sudo -n；在开发机或其他环境上手动运行时，任何一段都不执行
+        refused = [{}, dict(HOSTED_ENV, GITHUB_ACTIONS="false"), dict(HOSTED_ENV, RUNNER_ENVIRONMENT="self-hosted"),
+                   dict(HOSTED_ENV, RUNNER_OS="Linux")]
+        for environment in refused:
+            with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(probe, "system", side_effect=AssertionError("不应执行")), \
+                    patch.object(probe, "final", side_effect=AssertionError("不应执行")), \
+                    patch("builtins.print") as printed:
+                self.assertEqual(probe.main(["ci_mac_probe.py", "system"]), 3)
+                self.assertEqual(probe.main(["ci_mac_probe.py", "final"]), 3)
+            self.assertTrue(all(call.kwargs.get("file") is sys.stderr for call in printed.call_args_list))
+
+    def test_sections_are_exactly_the_ones_the_mac_workflow_calls(self):
+        # S3 探测用过的 postgres、docker、browsers、safari 段已删（S7 独立审查 M-1：docker 段启动失败时会 colima delete --force）
+        workflow = (Path(__file__).resolve().parents[2] / ".github" / "workflows" / "mac.yml").read_text(encoding="utf-8")
+        called = set(re.findall(r"ci_mac_probe\.py (\w+)", workflow))
+        self.assertEqual(called, {"system", "final"})
+        self.assertEqual(set(probe.SECTIONS), called)
+        for name in ("postgres", "docker", "browsers", "safari"):
+            self.assertFalse(hasattr(probe, name), name)
 
     def test_lsof_samples_use_the_fixed_command_c_locale_and_keep_only_counts(self):
         calls = []
@@ -159,39 +184,6 @@ class MacProbeTests(unittest.TestCase):
 
         with patch("ci_mac_probe.subprocess.run", side_effect=fake):
             self.assertEqual(probe.memory(), {"freeGiB": 2.0, "freePercent": 55})
-
-    def test_json_of_returns_none_for_failure_oversized_or_invalid_output(self):
-        cases = [
-            (subprocess.CompletedProcess([], 0, b'{"a": 1}', b""), {"a": 1}),
-            (subprocess.CompletedProcess([], 1, b'{"a": 1}', b""), None),
-            (subprocess.CompletedProcess([], 0, b"not json", b""), None),
-            (subprocess.CompletedProcess([], 0, b" " * (probe.JSON_BYTES + 1), b""), None),
-        ]
-        for completed, expected in cases:
-            with self.subTest(returncode=completed.returncode, size=len(completed.stdout)), \
-                    patch("ci_mac_probe.subprocess.run", return_value=completed):
-                self.assertEqual(probe.json_of(["brew"], 5), expected)
-        with patch("ci_mac_probe.subprocess.run", side_effect=subprocess.TimeoutExpired("brew", 5)):
-            self.assertIsNone(probe.json_of(["brew"], 5))
-
-    def test_formula_stable_reads_the_brew_json_shape(self):
-        with patch.object(probe, "json_of", return_value={"formulae": [{"versions": {"stable": "18.6"}}]}):
-            self.assertEqual(probe.formula_stable("postgresql@18"), "18.6")
-        for broken in (None, {}, {"formulae": []}, {"formulae": [{}]}):
-            with self.subTest(broken=broken), patch.object(probe, "json_of", return_value=broken):
-                self.assertIsNone(probe.formula_stable("postgresql@18"))
-
-    def test_browsers_records_every_browser_even_when_launch_fails(self):
-        with tempfile.TemporaryDirectory(prefix="nerve-mac-probe-") as temporary, \
-                patch.dict(os.environ, {"RUNNER_TEMP": temporary, "HOME": temporary}), \
-                patch.object(probe, "run", return_value={"returncode": 1, "durationMs": 3, "stderrTail": "launch failed"}) as launched:
-            value = probe.browsers()
-        self.assertEqual(set(value), {"chromium", "webkit", "chrome", "playwrightCacheGiB"})
-        self.assertEqual(value["chrome"], {"returncode": 1, "durationMs": 3, "stderrTail": "launch failed", "screenshotBytes": 0})
-        self.assertIsNone(value["playwrightCacheGiB"])
-        channels = [call.args[0] for call in launched.call_args_list]
-        self.assertIn(["--channel", "chrome"], [argv[argv.index("--channel"):argv.index("--channel") + 2] for argv in channels if "--channel" in argv])
-        self.assertTrue(all(argv[-2] == "about:blank" and Path(argv[-1]).parent == Path(temporary) for argv in channels))
 
 
 if __name__ == "__main__":
