@@ -5,7 +5,7 @@
 # （plan.test.ts、mac-workflow.test.ts）。
 # Apple 芯片版不支持嵌套虚拟化，起不了 Docker（S3 探测，run 42252502692）：数据库由 Homebrew 的 PostgreSQL 按开发库（deploy/dev/compose.yaml）
 # 的版本、账号、库名、初始化参数与端口提供，测试连库的地址与开发机相同；pnpm verify 带 --external-db，不再执行 pnpm db:up。
-# 生产容器 E2E 不在这里跑：Linux CI 照旧覆盖，Mac 上的这部分列入 M5 收官前的裁决。
+# 生产容器 E2E 不在这里跑：Linux CI 照旧覆盖，需求方 2026-11-10 裁决接受 Mac 上不跑这部分（DEF-074）。
 # 新工作流合并到默认分支之前不能 workflow_dispatch（GitHub 只认默认分支上已有的工作流文件），所以合并前只由推送
 # 本 Phase 的唯一分支触发，合并后可手动触发。不随 main 推送运行，不改 ci.yml 的原六项。
 # 各个 Action 按提交的 SHA 锁定，注释里写对应的版本（与 ci.yml 相同）。

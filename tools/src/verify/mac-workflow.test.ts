@@ -1,7 +1,7 @@
 // 托管 Mac 的接线（M5-P8 S4/S5，DEF-074；P8 设计 §4 的“Mac 工作流结构”）：mac.yml 照开发机的方式在托管的 Apple 芯片 Mac 上跑本机完整门禁。
 // 接受依据是“两片合起来恰好是本机完整门禁（数据库由工作流提供）、本机的三个浏览器都跑、数据库与开发库同版本同设置、资源工具是严格本机模式”。
 // 只管 Apple 芯片，Intel 版不在范围内（需求方 2026-11-07 决定）。Apple 芯片版不能起 Docker（S3 探测），数据库改由 Homebrew 的 PostgreSQL 提供；
-// 生产容器 E2E 不在 Mac 上跑（Linux CI 照旧覆盖，Mac 上的这部分列入 M5 收官前的裁决）。
+// 生产容器 E2E 不在 Mac 上跑（Linux CI 照旧覆盖，需求方 2026-11-10 裁决接受 Mac 上不跑这部分，DEF-074）。
 // plan.test.ts 只在 plan 层证明两片等价；这里解析工作流本身，与 plan.ts、E2E 的浏览器表、开发库的编排核对，并拦下让检查悄悄少跑的写法
 // （与 ci-workflow.test.ts 用同一套判断，S4 独立审查 I-1）。
 import type { Step } from './workflow.test-support.ts'

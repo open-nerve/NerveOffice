@@ -63,6 +63,8 @@ class MacProbeTests(unittest.TestCase):
         # S7 独立审查 M-1：system 段会执行 sudo -n；在开发机或其他环境上手动运行时，任何一段都不执行
         refused = [{}, dict(HOSTED_ENV, GITHUB_ACTIONS="false"), dict(HOSTED_ENV, RUNNER_ENVIRONMENT="self-hosted"),
                    dict(HOSTED_ENV, RUNNER_OS="Linux")]
+        # 只缺其中一个、另外两个都对，同样一段也不执行：缺的那一项不能按期望值补上（S7 修正的复验 Minor）
+        refused += [{name: value for name, value in HOSTED_ENV.items() if name != missing} for missing in HOSTED_ENV]
         for environment in refused:
             with self.subTest(environment=environment), patch.dict(os.environ, environment, clear=True), \
                     patch.object(probe, "system", side_effect=AssertionError("不应执行")), \
