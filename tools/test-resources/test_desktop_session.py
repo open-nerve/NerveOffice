@@ -10,6 +10,8 @@ import desktop_session as desktop
 WS = "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer"
 LOGIN = "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow"
 TABLE = f"29055 88 Mon Nov  2 06:58:19 2026 {WS}\n29059 501 Mon Nov  2 06:58:19 2026 {LOGIN}\n1 0 Sun Oct 25 17:23:38 2026 /sbin/launchd\n"
+# 托管 Mac 第 5 轮 WebKit 片的台账（run 42816768144）里基线的两个进程
+RUN5 = f"154 88 Tue Nov 10 12:32:20 2026 {WS}\n157 501 Tue Nov 10 12:32:21 2026 {LOGIN}\n"
 
 
 class SnapshotTests(unittest.TestCase):
@@ -33,6 +35,19 @@ class SnapshotTests(unittest.TestCase):
         for console, current in [(0, 501), (502, 501), (0, 0), (501, 502)]:
             with self.subTest(console=console, current=current), self.assertRaises(desktop.SessionReadError):
                 desktop.parse_snapshot(TABLE, console, current)
+
+    def test_only_loginwindow_is_the_console_users_even_while_temporarily_root(self):
+        # loginwindow 以 root 启动（真实、保存用户号为 0）、平时降为当前用户运行，可以临时切回 root：
+        # 只有一个时就是控制台用户的那个（控制台属于当前用户已另行核对），不按有效用户号挑选
+        self.assertEqual(desktop.parse_snapshot(RUN5.replace("157 501", "157 0"), 501, 501)["loginwindow"]["pid"], 157)
+
+    def test_several_loginwindows_are_told_apart_by_the_current_user(self):
+        # 多个登录会话（快速切换用户）时才按有效用户号认出当前用户的那个；认不出就失败关闭
+        other = f"301 502 Tue Nov 10 13:00:00 2026 {LOGIN}\n"
+        self.assertEqual(desktop.parse_snapshot(RUN5 + other, 501, 501)["loginwindow"]["pid"], 157)
+        for value in [RUN5.replace("157 501", "157 0") + other, RUN5 + f"301 501 Tue Nov 10 13:00:00 2026 {LOGIN}\n"]:
+            with self.subTest(value=value[-60:]), self.assertRaises(desktop.SessionReadError):
+                desktop.parse_snapshot(value, 501, 501)
 
     def test_fixed_query_is_bounded_and_does_not_read_argv_or_inherit_secrets(self):
         completed = subprocess.CompletedProcess([], 0, TABLE.encode(), b"")
@@ -97,7 +112,9 @@ class GuardTests(unittest.TestCase):
 
     def test_identity_changes_including_same_pid_reuse_are_sticky(self):
         for actor, key, value in [("windowServer", "pid", 29056), ("loginwindow", "pid", 29060),
-                                  ("windowServer", "startedAt", "Mon Nov 2 06:59:19 2026")]:
+                                  ("windowServer", "startedAt", "Mon Nov 2 06:59:19 2026"),
+                                  ("loginwindow", "startedAt", "Mon Nov 2 06:59:19 2026"),
+                                  ("windowServer", "executable", sorted(desktop.WINDOW_SERVERS - {WS})[0])]:
             baseline = self.baseline(); changed = copy.deepcopy(baseline); changed[actor][key] = value
             with self.subTest(actor=actor, key=key), patch.object(desktop.sys, "platform", "darwin"), \
                     patch.object(desktop, "read_snapshot", side_effect=[baseline, changed, baseline]) as probe:
@@ -108,6 +125,22 @@ class GuardTests(unittest.TestCase):
                 self.assertEqual(guard.record()["reason"], "session-changed")
                 self.assertEqual(guard.record()["baseline"], baseline)
                 self.assertEqual(probe.call_count, 2)
+
+    def test_same_process_switching_its_effective_uid_is_not_a_session_change(self):
+        # 第 5 轮 WebKit 片被停的那一次：WindowServer 的 pid、启动时间与可执行文件都没变，只有 ps 读到的有效用户号由 88 变成 0，
+        # 被判成会话变化（误判）。WindowServer 与 loginwindow 都以 root 启动、平时降为普通用户号运行，可以临时切回 root
+        baseline = desktop.parse_snapshot(RUN5, 501, 501)
+        for switched in (RUN5.replace("154 88", "154 0"), RUN5.replace("157 501", "157 0")):
+            observed = desktop.parse_snapshot(switched, 501, 501)
+            with self.subTest(switched=switched.splitlines()[0 if "154 0" in switched else 1][:12]), \
+                    patch.object(desktop.sys, "platform", "darwin"), \
+                    patch.object(desktop, "read_snapshot", side_effect=[baseline, observed, baseline]) as probe:
+                guard = desktop.SessionGuard("e2e")
+                for _ in range(3):
+                    self.assertTrue(guard.check(force=True))
+                self.assertEqual(guard.record()["status"], "monitoring")
+                self.assertEqual(guard.record()["baseline"], baseline)
+                self.assertEqual(probe.call_count, 3)
 
     def test_read_failure_stops_without_leaking_message_or_rebasing(self):
         with patch.object(desktop.sys, "platform", "darwin"), \

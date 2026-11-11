@@ -19,6 +19,10 @@ WINDOW_SERVERS = frozenset((
     "/System/Library/PrivateFrameworks/SkyLight.framework/Versions/A/Resources/WindowServer",
 ))
 LOGINWINDOW = "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow"
+# 判定是不是同一个进程只看这几项。ps 的 uid 是有效用户号：WindowServer、loginwindow 都以 root 启动（真实、保存用户号为 0），
+# 平时降为普通用户号运行，可以临时切回 root，同一进程的有效用户号会变（M5-P8 托管 Mac 第 5 轮），不能作为身份
+IDENTITY_KEYS = ("pid", "startedAt", "executable")
+SESSION_ACTORS = ("windowServer", "loginwindow")
 ROW = re.compile(r"\s*(\d+)\s+(\d+)\s+([A-Za-z]{3})\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(.+)")
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 WEEKDAYS = "Mon Tue Wed Thu Fri Sat Sun".split()
@@ -54,10 +58,21 @@ def parse_snapshot(text, console_uid, current_uid):
                               f"{weekday} {month} {int(day)} {hour}:{minute}:{second} {year}",
                               "executable": executable}
     servers = [p for p in processes.values() if p["executable"] in WINDOW_SERVERS]
-    logins = [p for p in processes.values() if p["executable"] == LOGINWINDOW and p["uid"] == current_uid]
+    logins = [p for p in processes.values() if p["executable"] == LOGINWINDOW]
+    if len(logins) > 1:
+        # 多个登录会话（快速切换用户）才按有效用户号认出当前用户的那个；它恰好临时切回 root 时认不出，失败关闭。
+        # 只有一个时就是控制台用户的（控制台属于当前用户已在上面核对），不看它此刻的有效用户号
+        logins = [p for p in logins if p["uid"] == current_uid]
     if len(servers) != 1 or len(logins) != 1:
         raise SessionReadError("session-identity-ambiguous")
     return {"consoleUid": console_uid, "windowServer": servers[0], "loginwindow": logins[0]}
+
+
+def same_session(baseline, observed):
+    """还是基线的那个桌面会话：控制台用户相同，WindowServer 与 loginwindow 都是同一个进程（进程号、启动时间与可执行文件）。
+    重启、换用户都会改变其中一项；有效用户号不参与比较（见 IDENTITY_KEYS）"""
+    return observed["consoleUid"] == baseline["consoleUid"] and all(
+        observed[actor][key] == baseline[actor][key] for actor in SESSION_ACTORS for key in IDENTITY_KEYS)
 
 
 def read_snapshot():
@@ -126,7 +141,7 @@ class SessionGuard:
         self._measured(started)
         if "baseline" not in self._record:
             self._record.update(status="monitoring", baseline=observed)
-        elif observed != self._record["baseline"]:
+        elif not same_session(self._record["baseline"], observed):
             self._record.update(status="stopped", reason="session-changed", observed=observed)
             return False
         return True

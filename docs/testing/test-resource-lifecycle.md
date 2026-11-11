@@ -66,7 +66,7 @@ P6 的三条批准取证入口（真实 Node 协议成功、桌面屏障 kill-go
 
 `tools/test-resources/desktop_session.py` 对 `e2e/container/measure/template/native/vm` 启用；外层本地门禁使用 `SessionGuard('gate')`。非 macOS 及非浏览器类型只记 `not-applicable`，没有桌面监测通过的含义，不得通过改变资源类型绕过检查。
 
-探针只用固定 `/bin/ps -ww -axo pid=,uid=,lstart=,comm=` 和 `/dev/console`，不读取进程参数/环境、不提权、不截图。核对当前 console UID、唯一系统 WindowServer 与当前用户唯一 loginwindow 的 PID/UID/启动时间/固定路径，并核对读取前后 console 用户一致。查询超时 10 秒（`PS_TIMEOUT`；原为 2 秒，M5-P8 托管 Mac 负载下这条 ps 超过 2 秒，需求方批准放宽，超时仍按失败关闭），取得完整输出后仅接受 1 MiB 以内的无错误结果；这是接受上限，不是采集峰值内存的硬上限。多义、缺失、格式损坏或查询失败均停止，记录固定原因而不写原始进程表或 stderr。固定基线不能在运行中自动重建。
+探针只用固定 `/bin/ps -ww -axo pid=,uid=,lstart=,comm=` 和 `/dev/console`，不读取进程参数/环境、不提权、不截图。核对当前 console UID、唯一系统 WindowServer 与当前用户唯一 loginwindow 的 PID/启动时间/固定路径，并核对读取前后 console 用户一致。ps 的 UID 是有效用户号，只记录、不参与同一进程的判定：WindowServer 与 loginwindow 都以 root 启动（真实、保存用户号为 0）、平时降为普通用户号运行，可以临时切回 root；M5-P8 托管 Mac 第 5 轮曾因 WindowServer 同一进程的有效用户号 88→0 被误判为会话变化而停下整片（需求方 2026-11-11 决定按 PID、启动时间与固定路径判定）。只有一个 loginwindow 时它就是控制台用户的；有多个登录会话时才按有效用户号认出当前用户的那个，认不出即失败关闭。查询超时 10 秒（`PS_TIMEOUT`；原为 2 秒，M5-P8 托管 Mac 负载下这条 ps 超过 2 秒，需求方批准放宽，超时仍按失败关闭），取得完整输出后仅接受 1 MiB 以内的无错误结果；这是接受上限，不是采集峰值内存的硬上限。多义、缺失、格式损坏或查询失败均停止，记录固定原因而不写原始进程表或 stderr。固定基线不能在运行中自动重建。
 
 内层在创建本轮临时资源后建立基线，实际测试命令仍受既有登记启动屏障约束；登记子进程后、释放命令前再次核对。运行中两次读取间隔 2 秒（从上一次读完算起，负载下读取要几秒时 ps 不会首尾相接；M5-P8 实现时没有单独请示，S7 独立审查 M-3 指出后需求方 2026-11-10 追认），命令结束后强制再读一次，避免返回 0 与桌面退出同时发生时被接受。只有仍存活的本轮子进程首进程允许发送组信号；沿原 SIGTERM、10 秒等待和 SIGKILL 处理，再核对整组/句柄/资源。所有正常及 finally 发送路径容忍组恰好消失，并在升级前重新核对首进程。首进程退出后存在其他引用时继续保留，不能凭旧组号补杀。记录 `desktopSession`、`stopReason=desktop-session`、原命令退出码和中断结果；等待清理时收到的晚到中断也会纳入最终结果。即使进入 `cleanup-pending` 仍保留已知退出/中断事实；清理是否完成仍按实际证据独立判断。
 
