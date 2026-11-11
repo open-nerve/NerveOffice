@@ -3,7 +3,8 @@
 // 静态引入它（或 probe-facades.ts）会把补上的 Facade 带进生产构建、门禁认不出，所以 lint 规定非测试代码只能动态引入（M2-P6 复核 F5）。
 // 为什么要它：画布上的内容读不出来，"改动被拦住"要比较内存里的快照；M0 的 28 个表格编辑入口里 21 个是直接调 Facade 的，
 // 只读时界面上没有它们的入口，但防火墙必须拦住它们（SDK 升级可能带来新的入口），E2E 经这里逐项调用。
-// 探针只读取与调用 Facade、读取两项内部服务（快捷键的清单、编辑栏的内容，经 internal-api 登记），不改变编辑器的行为；E2E 的其他用例不用它。
+// 探针只读取与调用 Facade、读取三项内部状态（快捷键的清单、编辑栏的内容、SDK 挂着的右键菜单，经 internal-api 登记），不改变编辑器的行为；
+// E2E 的其他用例不用它。
 // 放在 editor/ 下：只有编辑器适配层能引用 Univer；文件名不带 test-support，生产代码（sheet-editor.ts）才能引用它。
 // 另外两样（M2-P3 S3）：
 // - 命令日志：订阅 Facade 的执行前与执行后的事件，记下每条命令。探针在就绪之后才装上，排在入口守卫与只读守卫之后，
@@ -36,7 +37,7 @@ import { canonicalLink } from '@nerve-office/contracts'
 import { toCommandRecord } from '../change-tracking/command-event.ts'
 import { stringParam } from '../change-tracking/command-record.ts'
 import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY, injectorOf } from '../internal-api/index.ts'
-import { IEditorService, IShortcutService } from '../internal-api/ui.ts'
+import { contextMenuHosts, IEditorService, IShortcutService } from '../internal-api/ui.ts'
 import { captureWorkbookData } from '../snapshot-capture-form.ts'
 import { createImageProbe } from './image-probe.ts'
 import './probe-facades.ts'
@@ -119,6 +120,12 @@ export interface EditorProbe {
   readonly formulaProgress: () => FormulaProgress
   /** 公式在哪里计算：worker 或 main-thread（测试构建经地址参数选，./formula-mode.ts） */
   readonly formulaMode: FormulaMode
+  /**
+   * SDK 现在挂着的右键菜单（internal-api 的 contextMenuHosts，右键菜单宿主服务里登记的 hostId；单元格与工作表标签的见
+   * read-only-entries.ts 的 contextMenusIn）：只读档案两个都不挂（contextMenu: false），右键不会弹出菜单。
+   * 只读时"没有菜单"以它为准，不靠等几帧之后看一眼（M5-P8 托管 Mac 第 5 轮之后）；能编辑时两个都在，是它的对照
+   */
+  readonly contextMenus: () => readonly string[]
 }
 
 declare global {
@@ -217,6 +224,7 @@ export function installEditorProbe({ univer, univerAPI, workbook, changes, formu
     formulaProgress: changes.formulaProgress,
     formulaMode,
     openCheck,
+    contextMenus: () => contextMenuHosts(univer),
   }
   window.__nerveEditorProbe = probe
   return () => {

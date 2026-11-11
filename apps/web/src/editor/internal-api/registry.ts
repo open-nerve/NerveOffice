@@ -180,7 +180,7 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
     origin: '@univerjs/core 的 Univer.__getInjector()（平台的封装）',
     // injector.ts：参数与返回值的类型
     sdk: { '@univerjs/core': ['Injector', 'Univer'] },
-    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService、IRenderManagerService（冻结线与行列调整的控制器）、IEditorService、IContextService，以及 E2E 的探针（只在测试构建里）的 IShortcutService、IEditorService',
+    purpose: '取 Facade 没有暴露的服务：IFunctionService、IActiveDirtyManagerService，Worker 里的 LifecycleService，只读守卫的 IPermissionService、IUndoRedoService、IDrawingManagerService、IRenderManagerService（冻结线与行列调整的控制器）、IEditorService、IContextService，以及 E2E 的探针（只在测试构建里）的 IShortcutService、IEditorService 与 contextMenuHosts 读的 IContextMenuHostService',
     evidence: 'M0-P3 报告 §7"取服务"；M0 的 create-editor.ts 经它取各项内部服务；P4 探针 (a)–(f) 全程使用',
     regression: 'E2E（S4）编辑器能打开并就绪：任何一处取服务失败都会按加载失败处理；单元测试 install-image-policy.test.ts、calculation-trigger.test.ts 核对取的是哪项服务',
   },
@@ -514,6 +514,21 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
       'PlatformService 按 navigator.appVersion 判断平台，:953-959）',
     ].join(''),
     regression: READ_ONLY_SHORTCUTS_E2E,
+  },
+  {
+    name: 'contextMenuHosts',
+    origin: '@univerjs/ui 的 ContextMenuHostService 里登记的右键菜单（私有字段 _menuMap 的键，平台的封装）',
+    // context-menu.ts：参数的类型与取服务的标识
+    sdk: { '@univerjs/core': ['Univer'], '@univerjs/ui': ['IContextMenuHostService'] },
+    purpose: 'E2E 的探针与页面自检（只在测试构建里）判断 SDK 挂没挂上单元格与工作表标签的右键菜单：只读时两个都不挂，右键不会弹出菜单，这是结构上的判定，不靠"等两帧只看一次"的时间窗；能编辑时都挂上，作为它的对照（M5-P8 托管 Mac 第 5 轮之后，需求方 2026-11-11 决定）；生产代码不用它',
+    evidence: [
+      'ui 1.0.1 的 views/components/context-menu/AnchoredContextMenu.tsx（挂上时 contextMenuHostService.registerMenu(hostId)、卸下时注销）；services/contextmenu/contextmenu-host.service.ts（_menuMap）；',
+      '单元格的 DesktopContextMenu（views/components/context-menu/ContextMenu.tsx，hostId desktop-context-menu）只在 contextMenu 为真时由 Workbench 渲染（views/workbench/Workbench.tsx:254）；',
+      '工作表标签的 sheets-ui SheetBarTabsContextMenu（hostId sheetbar-tabs-context-menu- 加 6 位随机后缀）在界面插件的 contextMenu 为假时不渲染（views/sheet-bar/sheet-bar-tabs/SheetBarTabs.tsx:164）；',
+      '安装的 1.0.1 构建里都在（lib/es/index.js 的 _menuMap、两个 hostId）；只读档案 contextMenu: false（profile/sheet-profile.ts）。',
+      '托管 Mac 第 5 轮：能编辑时右键菜单在等两帧之后约 150 毫秒才渲染，原来"等两帧只看一次"的对照失败（P8 实施记录“第 5 轮产物的核对与原因”）',
+    ].join(''),
+    regression: '单元测试 internal-api/context-menu.test.ts（真实的 ContextMenuHostService：没有登记时为空、登记之后列出、注销之后不再列出；服务没有这个字段时抛错）；E2E tests/e2e/specs/editor/read-only.spec.ts"界面没有编辑入口"（只读时两个都不在、能编辑时两个都在且右键确实弹出菜单）与 selftest.spec.ts 的页面自检（context-menu.mounted / unmounted）',
   },
   {
     name: 'LifecycleService',

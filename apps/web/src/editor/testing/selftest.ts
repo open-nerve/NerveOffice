@@ -27,7 +27,7 @@ import type { SelftestCheck, SelftestReport, SelftestScenario, SelftestTimelineE
 import type { SelftestApi, SelftestHost, Session } from './selftest-session.ts'
 import type { SwitchDirection, SwitchTimingRecorder } from './switch-timing.ts'
 import { canonicalJson, documentChangeAttemptsIn, documentChangesIn, sameContent } from './content-compare.ts'
-import { FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
+import { contextMenusIn, FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, PERMISSION_ALERT_TITLE, PROTECTION_WORDING, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
 import { holdTimedAutosave } from './selftest-autosave.ts'
 import { EXPECTS_HIDDEN as CAPTURE_EXPECTS_HIDDEN, CAPTURE_SCENARIO_RUNNERS } from './selftest-capture.ts'
 import { COST_SCENARIO_RUNNERS } from './selftest-cost.ts'
@@ -260,27 +260,32 @@ async function checkChrome(session: Session, present: boolean): Promise<void> {
 }
 
 /**
- * 右键单元格与工作表标签：只读时页面上没有菜单（SDK 不渲染右键菜单），能编辑时弹出（之后在文档上按 Escape 关掉）。
- * 右键之后先等选区移过去、标签选中（右键已经处理），再等两帧（菜单在动画帧里弹出），然后只看一次页面上有没有菜单——
- * 能编辑时这样看得到它，这是只读时"没有菜单"的校准（与 E2E 的 expectEditingChrome 相同：只读时 toHaveCount(0)）。
- * 能编辑时再等它淡入到显示出来（isShown：关上的菜单留在页面上、透明度为 0，Playwright 的"可见"认不出），按 Escape 之后等它淡出
+ * 右键单元格与工作表标签：只读时 SDK 不挂右键菜单（只读档案 contextMenu: false），能编辑时挂着、右键弹出（之后在文档上按 Escape 关掉）。
+ * 先核对 SDK 挂没挂上这两个菜单（探针读右键菜单宿主服务的登记，与 E2E 的 expectEditingChrome 共用 contextMenusIn）：只读时"没有菜单"
+ * 以这个结构上的判定为准，不靠等几帧之后看一眼；能编辑时两个都在是它的对照。右键之后先等选区移过去、标签选中（右键已经处理）：
+ * 只读时再看一眼页面上没有菜单；能编辑时等菜单淡入到显示出来（isShown：关上的菜单留在页面上、透明度为 0，Playwright 的"可见"认不出），
+ * 不限定在两帧之内（React 渲染的时刻没有保证，托管 Mac 第 5 轮之后需求方 2026-11-11 决定），按 Escape 之后等它淡出
  */
 async function checkContextMenus(session: Session, present: boolean): Promise<void> {
   const cellMenu = (): HTMLElement[] => byExactText('选择性复制')
   const tabMenu = (): HTMLElement[] => byRole('button', { name: '重命名' })
+  await check(session, present ? 'context-menu.mounted' : 'context-menu.unmounted', async () => {
+    const { cell, sheetTab: tab } = contextMenusIn(session.probe.contextMenus())
+    if (cell !== present || tab !== present)
+      fail(`SDK ${cell ? '挂着' : '没有挂上'}单元格的右键菜单，${tab ? '挂着' : '没有挂上'}工作表标签的右键菜单`)
+    return present ? 'SDK 挂着单元格与工作表标签的右键菜单' : 'SDK 没有挂上右键菜单（只读档案 contextMenu: false）'
+  })
   const expectMenu = async (found: () => readonly HTMLElement[], what: string): Promise<string> => {
-    if (!await nextFrames())
-      fail('等不到动画帧（页面隐藏？）')
-    const rendered = found().length > 0
-    if (rendered !== present)
-      fail(present ? `两帧之后页面上还没有${what}` : `页面上有${what}`)
-    if (!present)
-      return `两帧之后页面上没有${what}`
+    if (!present) {
+      if (found().length > 0)
+        fail(`页面上有${what}`)
+      return `页面上没有${what}`
+    }
     if (!await waitFor(() => found().some(isShown), SIGNAL_TIMEOUT_MS))
       fail(`${what}没有显示出来`)
     if (!await escapeUntil(() => !found().some(isShown)))
       fail(`${what}按 Escape 关不掉`)
-    return `两帧之后页面上有${what}，显示出来，按 Escape 关掉`
+    return `页面上有${what}，显示出来，按 Escape 关掉`
   }
   await check(session, present ? 'context-menu.cell.present' : 'context-menu.cell.absent', async () => {
     // 先选另一格：右键落在当前选区之外，选区随之移过去，这就是"右键已经处理"的信号

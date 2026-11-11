@@ -1,4 +1,5 @@
 import type { Univer } from '@univerjs/core'
+import type { IContextMenuHostService as ContextMenuHost } from '@univerjs/ui'
 import type { CommandEvent } from '../change-tracking/command-event.ts'
 import type { FormulaProgress } from '../change-tracking/formula-settle-tracker.ts'
 import type { OpenCheck } from '../profile/open-check.ts'
@@ -8,6 +9,7 @@ import { CommandType } from '@univerjs/core'
 import { FUniver } from '@univerjs/core/facade'
 import { FormulaDataModel } from '@univerjs/engine-formula'
 import { FRange, FWorksheet } from '@univerjs/sheets/facade'
+import { ContextMenuHostService, IContextMenuHostService } from '@univerjs/ui'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY } from '../internal-api/index.ts'
 import { IEditorService, IShortcutService } from '../internal-api/ui.ts'
@@ -56,21 +58,24 @@ interface FakeServices {
   shortcuts?: readonly Record<string, unknown>[]
   /** 编辑栏的编辑器的文档；null 时没有这个编辑器 */
   formulaBar?: { body?: { dataStream: string } } | null
+  /** 右键菜单宿主服务（默认是 SDK 的实现，没有登记任何菜单） */
+  contextMenus?: ContextMenuHost
 }
 
-/** 假的 Univer：注入器只给出快捷键服务、编辑器管理（编辑器按 id 取，只有编辑栏的那个）与数组公式的数据模型 */
-function fakeUniver({ shortcuts = [], formulaBar = { body: { dataStream: '\r\n' } } }: FakeServices = {}): Univer {
+/** 假的 Univer：注入器只给出快捷键服务、编辑器管理（编辑器按 id 取，只有编辑栏的那个）、右键菜单宿主服务与数组公式的数据模型 */
+function fakeUniver({ shortcuts = [], formulaBar = { body: { dataStream: '\r\n' } }, contextMenus = new ContextMenuHostService() }: FakeServices = {}): Univer {
   const services = new Map<unknown, unknown>([
     [IShortcutService, { getAllShortcuts: () => [...shortcuts] }],
     [IEditorService, { getEditor: (id: string) => id === DOCS_FORMULA_BAR_EDITOR_UNIT_ID_KEY && formulaBar !== null ? { getDocumentData: () => formulaBar } : null }],
     // 快照与编辑器的捕获相同：要看数组公式锚点（M5R-I-07）；本组样本没有数组结果
     [FormulaDataModel, { getArrayFormulaRange: () => ({}) }],
+    [IContextMenuHostService, contextMenus],
   ])
   return {
     __getInjector: () => ({
       get: (id: unknown) => {
         if (!services.has(id))
-          throw new Error('探针只取快捷键服务、编辑器管理与数组公式的数据模型')
+          throw new Error('探针只取快捷键服务、编辑器管理、右键菜单宿主服务与数组公式的数据模型')
         return services.get(id)
       },
     }),
@@ -287,5 +292,21 @@ describe('探针补上的插件 Facade（probe-facades.ts）', () => {
       expect(worksheet[method], `FWorksheet.${method}`).toBeTypeOf('function')
     for (const method of ['newDataValidation', 'createTextFinderAsync', 'getActiveDocument'])
       expect(univer[method], `FUniver.${method}`).toBeTypeOf('function')
+  })
+})
+
+describe('探针给出 SDK 挂着的右键菜单（M5-P8 托管 Mac 第 5 轮之后）', () => {
+  it('contextMenus：每次调用时重新读取右键菜单宿主服务里登记的 hostId（菜单挂上、卸下都跟着变）', () => {
+    const { api } = fakeFacade()
+    const contextMenus = new ContextMenuHostService()
+    installEditorProbe(api, fakeWorkbook(() => ({})), { contextMenus })
+    expect(window.__nerveEditorProbe?.contextMenus()).toEqual([])
+    const cell = contextMenus.registerMenu('desktop-context-menu', () => {})
+    const tab = contextMenus.registerMenu('sheetbar-tabs-context-menu-a1b2c3', () => {})
+    expect(window.__nerveEditorProbe?.contextMenus()).toEqual(['desktop-context-menu', 'sheetbar-tabs-context-menu-a1b2c3'])
+    cell.dispose()
+    tab.dispose()
+    expect(window.__nerveEditorProbe?.contextMenus()).toEqual([])
+    contextMenus.dispose()
   })
 })

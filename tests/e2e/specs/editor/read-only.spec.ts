@@ -34,13 +34,13 @@ import zlib from 'node:zlib'
 import { SNAPSHOT_UPLOAD_CONTENT_TYPE } from '@nerve-office/contracts'
 import { clientFormatQuery } from '../../support/client-format.ts'
 import { archiveSpace } from '../../support/database.ts'
-import { cellCenter, clickCell, commandMark, contentOf, nameBox, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
+import { cellCenter, clickCell, commandMark, contentOf, contextMenusMounted, nameBox, probeCommands, probeSnapshot, runFacade, waitForCommand } from '../../support/editor-probe.ts'
 import { e2eOrigin } from '../../support/environment.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { pressUniverShortcut } from '../../support/keyboard.ts'
 import { allSheetsMenuButton, expectEntriesUnchanged, findApple, FORMULA_BAR_UNIT, formulaBarEditor, formulaBarInput, grantClipboard, OTHER_READ_ONLY_ENTRIES, OTHER_UI_ENTRIES, PROBE_FACADE_ENTRIES, showSheet, slipOntoFormulaBar, step, TYPING, UI_ENTRIES } from '../../support/read-only-checks.ts'
 import { SAMPLE_CELLS, SAMPLE_FORMULAS, SAMPLE_SHEETS, sampleWithoutFormulaValuesFor, sampleWithoutImagesFor } from '../../support/read-only-sample.ts'
-import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FORMULA_MUTATION_CELL, LOOK_ONCE, nextFrames, OPENED, openReadOnly, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
+import { ALERT, closePermissionAlert, documentChangeAttempts, expectUnchanged, FORMULA_MUTATION_CELL, LOOK_ONCE, OPENED, openReadOnly, scene, SHORTCUT_OUTCOMES, unitIdOf, watch, writeFormulaMutation } from '../../support/read-only.ts'
 import { loginThroughApi } from '../../support/session.ts'
 import { EDITOR_TEST_TIMEOUT, openAndEnterEditing, resourceOf, saveButton, savedContent, saveStatus, selectCell, sheetCanvas, sheetTab, waitForEditorAccess } from '../../support/sheet.ts'
 
@@ -365,14 +365,16 @@ async function expectClipboardText(page: Page, browserName: string, expected: st
 
 /**
  * 编辑入口在不在：能编辑时都在，只读时都没有。
- * 右键菜单在动画帧里弹出（ui 的 ContextMenu.tsx 的 handleContextMenu）：右键之后先等选区移过去（右键已经处理），再等两帧，
- * 然后只看一次（不重试）：能编辑时这样看得到菜单，这是只读时"没有菜单"的校准（P3 审查 B14）
+ * 右键菜单（单元格与工作表标签）：先核对 SDK 挂没挂上这两个菜单（探针读右键菜单宿主服务的登记）。只读档案两个都不挂，右键就不会弹出菜单：
+ * "没有菜单"以这个结构上的判定为准，不靠等几帧之后看一眼。能编辑时两个都挂着（对照：判定不是空的），右键之后再等菜单真的弹出（对照：
+ * 同样的右键确实弹出菜单）。SDK 在下一个动画帧里改菜单状态，React 之后才渲染，什么时候渲染完没有保证：原来"等两帧只看一次"的对照
+ * （P3 审查 B14）在托管 Mac 第 5 轮上菜单晚约 150 毫秒出现而失败，需求方 2026-11-11 决定改成现在这样。只读时右键之后再看一眼页面上没有菜单
  */
 async function expectEditingChrome(page: Page, mode: Mode): Promise<void> {
   const present = mode === 'edit'
   const count = async (locator: Locator): Promise<void> => present ? expect(locator.first()).toBeVisible() : expect(locator).toHaveCount(0)
-  const countNow = async (locator: Locator): Promise<void> => present
-    ? expect(locator.first(), '等两帧之后菜单已经弹出').toBeVisible(LOOK_ONCE)
+  const menuItem = async (locator: Locator): Promise<void> => present
+    ? expect(locator.first(), '右键之后菜单弹出').toBeVisible()
     : expect(locator).toHaveCount(0, LOOK_ONCE)
   // 页头：能编辑时有保存按钮；只读时显示"只能查看"
   await count(saveButton(page))
@@ -391,15 +393,15 @@ async function expectEditingChrome(page: Page, mode: Mode): Promise<void> {
   await expect(allSheetsMenuButton(page)).toBeVisible()
 
   // 右键单元格与工作表标签
+  expect(await contextMenusMounted(page), present ? 'SDK 挂着单元格与工作表标签的右键菜单' : 'SDK 没有挂上右键菜单（只读档案 contextMenu: false）')
+    .toEqual({ cell: present, sheetTab: present })
   await sheetCanvas(page).click({ button: 'right', position: await cellCenter(page, 'C3') })
   await expect(nameBox(page)).toHaveValue('C3')
-  await nextFrames(page)
-  await countNow(page.getByText('选择性复制', { exact: true }))
+  await menuItem(page.getByText('选择性复制', { exact: true }))
   await page.keyboard.press('Escape')
   await sheetTab(page, SAMPLE_SHEETS.summary.name).click({ button: 'right' })
   await expect(sheetTab(page, SAMPLE_SHEETS.summary.name)).toHaveAttribute('aria-selected', 'true')
-  await nextFrames(page)
-  await countNow(page.getByRole('button', { name: '重命名', exact: true }))
+  await menuItem(page.getByRole('button', { name: '重命名', exact: true }))
   await page.keyboard.press('Escape')
 }
 

@@ -23,7 +23,8 @@ export async function waitFor(predicate: () => boolean, timeoutMs: number, inter
 }
 
 /**
- * 等两个动画帧：SDK 在动画帧里结算的状态（右键菜单的弹出、对话框的渲染）这时已经处理完（与 E2E 的 nextFrames 相同）。
+ * 等两个动画帧（与 E2E 的 nextFrames 相同）：SDK 在动画帧回调里结算的状态这时已经处理完。React 在动画帧之后另排的渲染（右键菜单、
+ * 对话框）不在此列，不能用它判断"已经弹出"（托管 Mac 第 5 轮之后）：这里只在否定的一眼之前用，肯定的等到真的出现。
  * 页面隐藏时浏览器不给动画帧：timeoutMs 之后返回 false
  */
 export async function nextFrames(timeoutMs = 2_000): Promise<boolean> {
