@@ -392,9 +392,12 @@ async function expectEditingChrome(page: Page, mode: Mode): Promise<void> {
   await count(addSheetButton(page))
   await expect(allSheetsMenuButton(page)).toBeVisible()
 
-  // 右键单元格与工作表标签
-  expect(await contextMenusMounted(page), present ? 'SDK 挂着单元格与工作表标签的右键菜单' : 'SDK 没有挂上右键菜单（只读档案 contextMenu: false）')
-    .toEqual({ cell: present, sheetTab: present })
+  // 右键单元格与工作表标签。能编辑时等到两个菜单都登记（菜单组件挂上之后在 effect 里登记，同样不假定此刻已经执行）；
+  // 只读时两个组件都不渲染，读一次就是结论
+  if (present)
+    await expect.poll(async () => contextMenusMounted(page), { message: 'SDK 挂着单元格与工作表标签的右键菜单' }).toEqual({ cell: true, sheetTab: true })
+  else
+    expect(await contextMenusMounted(page), 'SDK 没有挂上右键菜单（只读档案 contextMenu: false）').toEqual({ cell: false, sheetTab: false })
   await sheetCanvas(page).click({ button: 'right', position: await cellCenter(page, 'C3') })
   await expect(nameBox(page)).toHaveValue('C3')
   await menuItem(page.getByText('选择性复制', { exact: true }))

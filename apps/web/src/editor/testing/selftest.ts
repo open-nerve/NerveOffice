@@ -270,7 +270,11 @@ async function checkContextMenus(session: Session, present: boolean): Promise<vo
   const cellMenu = (): HTMLElement[] => byExactText('选择性复制')
   const tabMenu = (): HTMLElement[] => byRole('button', { name: '重命名' })
   await check(session, present ? 'context-menu.mounted' : 'context-menu.unmounted', async () => {
-    const { cell, sheetTab: tab } = contextMenusIn(session.probe.contextMenus())
+    const mounted = (): ReturnType<typeof contextMenusIn> => contextMenusIn(session.probe.contextMenus())
+    // 能编辑时等到两个菜单都登记（菜单组件挂上之后在 effect 里登记，不假定此刻已经执行）；只读时两个组件都不渲染，读一次就是结论
+    if (present)
+      await waitFor(() => mounted().cell && mounted().sheetTab, SIGNAL_TIMEOUT_MS)
+    const { cell, sheetTab: tab } = mounted()
     if (cell !== present || tab !== present)
       fail(`SDK ${cell ? '挂着' : '没有挂上'}单元格的右键菜单，${tab ? '挂着' : '没有挂上'}工作表标签的右键菜单`)
     return present ? 'SDK 挂着单元格与工作表标签的右键菜单' : 'SDK 没有挂上右键菜单（只读档案 contextMenu: false）'

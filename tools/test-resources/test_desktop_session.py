@@ -38,8 +38,16 @@ class SnapshotTests(unittest.TestCase):
 
     def test_only_loginwindow_is_the_console_users_even_while_temporarily_root(self):
         # loginwindow 以 root 启动（真实、保存用户号为 0）、平时降为当前用户运行，可以临时切回 root：
-        # 只有一个时就是控制台用户的那个（控制台属于当前用户已另行核对），不按有效用户号挑选
+        # 只有一个时，有效用户号是当前用户或 0 都认作控制台用户的那个（控制台属于当前用户已另行核对）
         self.assertEqual(desktop.parse_snapshot(RUN5.replace("157 501", "157 0"), 501, 501)["loginwindow"]["pid"], 157)
+
+    def test_only_loginwindow_of_another_user_fails_closed(self):
+        # 唯一的 loginwindow 属于别的用户（不是当前用户、也不是临时切回的 root）：认不出，失败关闭
+        for uid in ("502", "88"):
+            with self.subTest(uid=uid):
+                with self.assertRaises(desktop.SessionReadError) as caught:
+                    desktop.parse_snapshot(RUN5.replace("157 501", f"157 {uid}"), 501, 501)
+                self.assertEqual(caught.exception.reason, "session-identity-ambiguous")
 
     def test_several_loginwindows_are_told_apart_by_the_current_user(self):
         # 多个登录会话（快速切换用户）时才按有效用户号认出当前用户的那个；认不出就失败关闭

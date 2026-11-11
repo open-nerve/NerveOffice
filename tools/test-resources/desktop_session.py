@@ -61,8 +61,11 @@ def parse_snapshot(text, console_uid, current_uid):
     logins = [p for p in processes.values() if p["executable"] == LOGINWINDOW]
     if len(logins) > 1:
         # 多个登录会话（快速切换用户）才按有效用户号认出当前用户的那个；它恰好临时切回 root 时认不出，失败关闭。
-        # 只有一个时就是控制台用户的（控制台属于当前用户已在上面核对），不看它此刻的有效用户号
         logins = [p for p in logins if p["uid"] == current_uid]
+    else:
+        # 只有一个时：有效用户号是当前用户，或者临时切回的 root（loginwindow 以 root 启动，真实、保存用户号为 0），
+        # 才认作控制台用户的那个（控制台属于当前用户已在上面核对）；属于别的用户时认不出，失败关闭
+        logins = [p for p in logins if p["uid"] in (current_uid, 0)]
     if len(servers) != 1 or len(logins) != 1:
         raise SessionReadError("session-identity-ambiguous")
     return {"consoleUid": console_uid, "windowServer": servers[0], "loginwindow": logins[0]}
