@@ -44,17 +44,29 @@ const test = projectTest.extend({
   browser: [async ({}, use) => {
     const browser = new EventEmitter()
     browser._connection = { headers: [] }
+    const contexts = []
+    const closed = (context) => {
+      if (context.closed)
+        return
+      context.closed = true
+      context.emit('close')
+    }
     browser.newContext = async () => {
       const context = new EventEmitter()
+      contexts.push(context)
+      context.closed = false
       context.browser = () => browser
       context.exposeBinding = async () => {}
       context.addInitScript = async () => {}
       context.request = { dispose: () => ${mode === 'pending' ? 'new Promise(() => {})' : 'Promise.resolve()'} }
       context.tracing = { stopChunk: () => Promise.resolve() }
-      context.close = () => context.request.dispose().then(() => context.tracing.stopChunk()).then(() => { context.emit('close') })
+      context.close = () => context.request.dispose().then(() => context.tracing.stopChunk()).then(() => closed(context))
       return context
     }
     await use(browser)
+    // 与 Playwright 关浏览器的顺序相同（Browser.didClose）：先让还没关的 context 发出 close，再断连
+    for (const context of contexts)
+      closed(context)
     browser.emit('disconnected')
   }, { scope: 'worker' }],
 })

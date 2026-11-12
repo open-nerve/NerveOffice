@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CloseProtocolFilter, fitSnapshot, PROTOCOL_CORE_VERSION, PROTOCOL_FILE, PROTOCOL_INCOMPLETE, PROTOCOL_MAX_BYTES, startCloseProtocolRecorder, tapLogger, tapPlaywrightProtocol } from './context-close-protocol.ts'
 
 const CTX = `AAAAAAAA${'0'.repeat(24)}`
+const OTHER_CTX = `BBBBBBBB${'0'.repeat(24)}`
 const PAGE = `77777777${'0'.repeat(24)}`
 const SESSION = `55555555${'0'.repeat(24)}`
 const BIG_PAGE = `99999999${'0'.repeat(24)}`
@@ -123,6 +124,25 @@ describe('协议过滤器', () => {
     expect(snapshot.pending).toEqual([])
   })
 
+  it('关闭开始之后发出的 dispose 都得到回复（没有错误）才算完成；关闭开始之前别的 context 的不算', () => {
+    const filter = new CloseProtocolFilter(0)
+    expect(filter.disposeOutcome()).toBe('close-not-started')
+    filter.feed(send({ id: 1, method: 'Target.disposeBrowserContext', params: { browserContextId: OTHER_CTX } }), 1)
+    filter.feed(recv({ id: 1, result: {} }), 2)
+    filter.closeStarted(10)
+    expect(filter.disposeOutcome()).toBe('dispose-not-sent')
+    filter.feed(send({ id: 2, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }), 11)
+    expect(filter.disposeOutcome()).toBe('dispose-unanswered')
+    filter.feed(recv({ id: 2, result: {} }), 14)
+    expect(filter.disposeOutcome()).toBe('answered')
+
+    const failed = new CloseProtocolFilter(0)
+    failed.closeStarted(0)
+    failed.feed(send({ id: 3, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }), 1)
+    failed.feed(recv({ id: 3, error: { code: -32000, message: 'Failed to find context' } }), 2)
+    expect(failed.disposeOutcome()).toBe('dispose-error')
+  })
+
   it('各列表都有上限，超出只计数', () => {
     const letters = (value: number) => [...value.toString(26)].map(digit => String.fromCharCode(97 + Number.parseInt(digit, 26))).join('')
     const filter = new CloseProtocolFilter(0)
@@ -139,6 +159,8 @@ describe('协议过滤器', () => {
     expect(snapshot.unparsed).toBe(0)
     expect(snapshot.closeEvents).toHaveLength(300)
     expect(snapshot.closeEventsDropped).toBe(110)
+    // 超出时丢最早的：离关闭最近的（最后一个 dispose）留下
+    expect(snapshot.closeEvents.at(-1)).toMatchObject({ k: 'S', m: 'Target.disposeBrowserContext', id: 5_059 })
     expect(snapshot.targets).toHaveLength(200)
     expect(snapshot.targetsDropped).toBe(150)
     // 第一个 context 来自 targetCreated，关闭命令又带来 60 个：留到 50 个，其余 11 个只计数
@@ -165,6 +187,28 @@ describe('协议过滤器', () => {
     expect(fitted.trimmed).toBe(true)
     expect(Buffer.byteLength(fitted.text)).toBeLessThanOrEqual(16 * 1024)
     expect(fitSnapshot(build, filter.snapshot(700), PROTOCOL_MAX_BYTES).trimmed).toBe(false)
+  })
+
+  it('裁剪时关闭后的序列留开头，关闭前的序列留离关闭最近的结尾', () => {
+    const filter = new CloseProtocolFilter(0)
+    for (let i = 0; i < 100; i++)
+      filter.feed(send({ id: i + 1, method: 'Runtime.callFunctionOn', sessionId: SESSION }), i)
+    filter.closeStarted(100)
+    for (let i = 0; i < 600; i++)
+      filter.feed(send({ id: 1_000 + i, method: 'Runtime.callFunctionOn', sessionId: SESSION }), 100 + i)
+    const build = (value: ProtocolSnapshot) => JSON.stringify(value)
+    const partly = filter.snapshot(800)
+    fitSnapshot(build, partly, 30 * 1024)
+    expect(partly.postClose.length).toBeGreaterThan(0)
+    expect(partly.postClose.length).toBeLessThan(600)
+    expect(partly.postClose[0]).toMatchObject({ id: 1_000 })
+    expect(partly.preClose).toHaveLength(100)
+    const tight = filter.snapshot(800)
+    fitSnapshot(build, tight, 8 * 1024)
+    expect(tight.postClose).toEqual([])
+    expect(tight.preClose.length).toBeGreaterThan(0)
+    expect(tight.preClose.length).toBeLessThan(100)
+    expect(tight.preClose.at(-1)).toMatchObject({ id: 100 })
   })
 })
 
@@ -230,6 +274,22 @@ describe('接上日志对象', () => {
     expect(Object.hasOwn(enabled, 'isEnabled')).toBe(false)
     expect(tapLogger({ isEnabled }, () => {})).toBe('logger-unavailable')
     expect(tapLogger(undefined, () => {})).toBe('logger-unavailable')
+  })
+
+  it('日志对象问不了或改不动时只回原因，不留下改了一半的方法', () => {
+    const throwing = { isEnabled: () => {
+      throw new Error('boom')
+    }, log: () => {} }
+    expect(tapLogger(throwing, () => {})).toBe('tap-failed')
+    const frozen = Object.freeze({ isEnabled: (name: string) => name === 'error', log: () => {} })
+    const original = frozen.isEnabled
+    expect(tapLogger(frozen, () => {})).toBe('tap-failed')
+    expect(frozen.isEnabled).toBe(original)
+    // 没接上不占位：之后照样接得上
+    const after = tapLogger(new FakeLogger(), () => {})
+    expect(typeof after).toBe('object')
+    if (typeof after !== 'string')
+      after.release()
   })
 
   it('运行中的 playwright-core 是约定的版本，它的日志对象接得上、撤得掉', () => {
@@ -304,9 +364,9 @@ describe('一个 attempt 的协议记录', () => {
     expect(value.attachments).toEqual([{ name: 'context-close-protocol', path: value.path, contentType: 'application/json' }])
     expect(statSync(value.path).mode & 0o777).toBe(0o600)
     expect(value.read()).toMatchObject({ version: 1, state: 'recording', incomplete: true, coreVersion: PROTOCOL_CORE_VERSION, owner: { project: 'msedge' } })
-    value.feed(send({ id: 3, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }))
     recorder?.closeStarted()
     expect(value.read()).toMatchObject({ state: 'closing' })
+    value.feed(send({ id: 3, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }))
     value.feed(recv({ id: 3, result: {} }))
     value.context.emit('close')
     expect(value.read()).toMatchObject({ state: 'closed', incomplete: false, reasons: [], trimmed: false })
@@ -316,7 +376,40 @@ describe('一个 attempt 的协议记录', () => {
     expect(value.annotations).toEqual([])
   })
 
-  it('关闭卡住时按时刻整份重写；浏览器断连后写下断连状态并登记不完整', () => {
+  it('关闭卡住之后浏览器被关掉：先到的 close 事件不算完整，按没有回复的 dispose 记原因', () => {
+    vi.useFakeTimers()
+    const value = attempt()
+    const recorder = value.start()
+    recorder?.closeStarted()
+    value.feed(send({ id: 4, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }))
+    vi.advanceTimersByTime(200_000)
+    expect(value.read()).toMatchObject({ state: 'closing', pending: [expect.objectContaining({ id: 4, method: 'Target.disposeBrowserContext' })] })
+    // Playwright 关浏览器时先派发各 context 的 close，再派发断连（Browser.didClose）
+    value.context.emit('close')
+    value.context.browserEvents.emit('disconnected')
+    const final = value.read()
+    expect(final).toMatchObject({ state: 'closed', incomplete: true, reasons: ['dispose-unanswered'] })
+    expect(final.contexts).toEqual([expect.objectContaining({ id: 'AAAAAAAA', disposeSentT: expect.any(Number) as unknown, disposeWaitingMs: expect.any(Number) as unknown })])
+    expect((final.contexts as Record<string, unknown>[])[0]).not.toHaveProperty('disposeDoneT')
+    expect(value.annotations).toEqual([{ type: PROTOCOL_INCOMPLETE, description: 'dispose-unanswered' }])
+    expect(value.released()).toBe(1)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('没有开始关闭就收到 close 事件、或关闭之后没有看到 dispose，都记原因', () => {
+    const early = attempt()
+    early.start()
+    early.context.emit('close')
+    expect(early.read()).toMatchObject({ state: 'closed', incomplete: true, reasons: ['close-not-started'] })
+    expect(early.annotations).toEqual([{ type: PROTOCOL_INCOMPLETE, description: 'close-not-started' }])
+
+    const silent = attempt()
+    silent.start()?.closeStarted()
+    silent.context.emit('close')
+    expect(silent.read()).toMatchObject({ state: 'closed', incomplete: true, reasons: ['dispose-not-sent'] })
+  })
+
+  it('关闭卡住时按时刻整份重写；浏览器先断连时写下断连状态并登记不完整', () => {
     vi.useFakeTimers()
     const value = attempt()
     const recorder = value.start()
@@ -360,6 +453,14 @@ describe('一个 attempt 的协议记录', () => {
     expect(readFileSync(other.path, 'utf8')).toBe('existing evidence')
     expect(other.annotations).toEqual([{ type: PROTOCOL_INCOMPLETE, description: 'report-unavailable' }])
     expect(existsSync(other.path)).toBe(true)
+
+    // 接法自己抛错：只记原因，不传给用例
+    const thrown = attempt()
+    expect(thrown.start(() => {
+      throw new Error('boom')
+    })).toBeUndefined()
+    expect(thrown.read()).toMatchObject({ state: 'stopped', incomplete: true, reasons: ['tap-failed'] })
+    expect(thrown.annotations).toEqual([{ type: PROTOCOL_INCOMPLETE, description: 'tap-failed' }])
   })
 
   it('落下的文件不含任何参数值', () => {

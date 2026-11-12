@@ -9,7 +9,7 @@
 // "在此编辑"的三条路、同一浏览器的先保存再交出、旧页不响应之后接手（前一个连着网：核对得知被接管，随即失去编辑权）、刷新时在途保存的等待、
 // 跨设备在 handover-takeover.spec.ts（设计 §3.7）。
 // 容器 E2E 也跑：修改在断开之后才做，两种构建里都存不上；另存为副本不经保存的那条路（断开只拦保存与心跳）
-import type { APIResponse, Page, Request, Response } from '@playwright/test'
+import type { APIResponse, Page, Request, Response, TestInfo } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
 import { performance } from 'node:perf_hooks'
 import { createUser, editLeaseEpoch, editLeaseTakeover, expireEditLease } from '../../support/database.ts'
@@ -46,6 +46,25 @@ async function nextRenewal(page: Page, documentId: string): Promise<Response> {
   return page.waitForResponse(response => response.request().method() === 'PUT' && isLeaseRequest(response.url(), documentId))
 }
 
+/** 扣住回包的计时：start 从扣住起算；note 返回至今的毫秒数，第一次调用（放行或被放弃时）把它记进注解 held-acquisition-ms */
+function heldTimer(info: TestInfo) {
+  let since = 0
+  let noted = false
+  return {
+    start: (): void => {
+      since = performance.now()
+    },
+    note: (): number => {
+      const elapsed = Math.round(performance.now() - since)
+      if (!noted) {
+        noted = true
+        info.annotations.push({ type: 'held-acquisition-ms', description: String(elapsed) })
+      }
+      return elapsed
+    },
+  }
+}
+
 test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机锁，锁的争用由服务端裁决', () => {
   test('US-M3-08 回包乱序（Codex 评审 CX2）：A 的申请服务端已经提交（第 1 代）、回包迟到，B 点"在此编辑"取得第 2 代、拿锁、进入编辑；A 的回包到了——锁被 B 占着，A 向服务端核对得知第 1 代已被接管：不抢锁、不释放，回到阅读，说本浏览器的另一个标签页在编辑、照常给"在此编辑"；B 照常编辑、保存', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('stale-acquire'))
@@ -66,9 +85,11 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
     const acquisition = new Promise<APIResponse>((resolve) => {
       committed = resolve
     })
-    // 扣住的申请在回包送达之前被页面取消（多半是到了时限），回包迟到的前提就不成立：立即失败、写明原因，不空等那一次核对
+    // 扣住的申请被 A 放弃（多半是到了时限），回包迟到的前提就不成立：一发生就失败、写明原因，不等 B 走完，也不空等那一次核对。
+    // 两种迹象：被扣住的请求在回包送达之前被页面取消（requestfailed）；A 在它之后又发了一次申请（取消之后重新申请，或回包到时已超时）。
+    // 扣住的时长（到放行或到被放弃）记进注解，各轮看得到离时限还有多远
+    const timer = heldTimer(test.info())
     let held: Request | undefined
-    let heldSince = 0
     let cancelHeld: (reason: string) => void = () => {}
     const heldCancelled = new Promise<never>((_resolve, reject) => {
       cancelHeld = reason => reject(new Error(reason))
@@ -76,17 +97,19 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
     void heldCancelled.catch(() => {})
     page.on('requestfailed', (request) => {
       if (request === held)
-        cancelHeld(`A 被扣住的申请在回包送达之前被页面取消（${request.failure()?.errorText ?? '原因不明'}，已扣住 ${Math.round(performance.now() - heldSince)} 毫秒；页面对编辑权请求的时限为 10 秒）：回包迟到的前提不成立`)
+        cancelHeld(`A 被扣住的申请在回包送达之前被页面取消（${request.failure()?.errorText ?? '原因不明'}，已扣住 ${timer.note()} 毫秒；页面对编辑权请求的时限为 10 秒）：回包迟到的前提不成立`)
     })
     let intercepted = false
     await page.route(`**/api/documents/${documentId}/edit-lease`, async (route) => {
+      if (route.request().method() === 'POST' && intercepted)
+        cancelHeld(`A 在被扣住的申请之后又发了一次申请（距扣住开始 ${timer.note()} 毫秒；页面对编辑权请求的时限为 10 秒）：A 已放弃被扣住的那一次，回包迟到的前提不成立`)
       if (route.request().method() !== 'POST' || intercepted) {
         await route.continue()
         return
       }
       intercepted = true
       held = route.request()
-      heldSince = performance.now()
+      timer.start()
       const response = await route.fetch()
       committed(response)
       await delivered
@@ -97,20 +120,25 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
       expect((await acquisition).status()).toBe(201)
       expect(await editLeaseEpoch(documentId)).toBe(1)
 
-      // B（回到前台，与新开时一样）：A 还没拿到回包、没拿锁，B 读到的是自己在别处编辑；"在此编辑"以本人接管取得第 2 代、拿锁（锁空着）、进入编辑
-      await other.bringToFront()
-      await openReader(other, documentId)
-      await expect(editingNotice(other)).toHaveText(ELSEWHERE)
-      await takeOverHereButton(other).click()
-      await waitForEditorAccess(other, 'edit')
-      await expect(saveButton(other)).toBeVisible()
-      expect(await editLeaseEpoch(documentId)).toBe(2)
-      expect(await editLeaseTakeover(documentId)).toBe('self')
+      // B（回到前台，与新开时一样）：A 还没拿到回包、没拿锁，B 读到的是自己在别处编辑；"在此编辑"以本人接管取得第 2 代、拿锁（锁空着）、进入编辑。
+      // 这一整段都在扣住期间，与"A 放弃了被扣住的申请"竞速（B 没走完的步骤在页面关闭时自行失败，不另报）
+      const takeover = (async () => {
+        await other.bringToFront()
+        await openReader(other, documentId)
+        await expect(editingNotice(other)).toHaveText(ELSEWHERE)
+        await takeOverHereButton(other).click()
+        await waitForEditorAccess(other, 'edit')
+        await expect(saveButton(other)).toBeVisible()
+        expect(await editLeaseEpoch(documentId)).toBe(2)
+        expect(await editLeaseTakeover(documentId)).toBe('self')
+      })()
+      void takeover.catch(() => {})
+      await Promise.race([takeover, heldCancelled])
 
-      // A 的回包到了：锁被 B 占着，A 核对（续租第 1 代）——服务端说第 1 代已被本人接管。扣住的时长记进注解，各轮看得到离时限还有多远
+      // A 的回包到了：锁被 B 占着，A 核对（续租第 1 代）——服务端说第 1 代已被本人接管
       const leaseWrites = recordLeaseWrites(page, documentId)
       const verdict = nextRenewal(page, documentId)
-      test.info().annotations.push({ type: 'held-acquisition-ms', description: String(Math.round(performance.now() - heldSince)) })
+      timer.note()
       deliver()
       const answer = await Promise.race([verdict, heldCancelled])
       expect(answer.status()).toBe(409)

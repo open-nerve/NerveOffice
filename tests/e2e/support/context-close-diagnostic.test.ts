@@ -338,14 +338,15 @@ describe('固定 Chrome、Edge 默认上下文关闭的有界补证', () => {
       expect(report.events.some(event => event.stage === 'request.dispose' && event.outcome === 'fulfilled')).toBe(false)
     else
       expect(report.events.at(-1)).toMatchObject({ stage: 'context.close', outcome: 'fulfilled' })
-    // 真实 Playwright 工作进程里接上了运行中的 playwright-core 的日志对象（假浏览器没有协议消息），关闭开始已传到协议记录
+    // 真实 Playwright 工作进程里接上了运行中的 playwright-core 的日志对象，关闭开始已传到协议记录。两种模型都以 context 的 close 结束
+    // （卡住的那种由收尾关浏览器时发出）；假浏览器没有协议消息，看不到 dispose 的回复，按规则判为不完整
     expect(result.protocols).toHaveLength(1)
     expect(result.protocols[0]).toMatchObject({
       version: 1,
       coreVersion: '1.63.0',
-      state: mode === 'complete' ? 'closed' : 'disconnected',
-      incomplete: mode === 'pending',
-      reasons: [],
+      state: 'closed',
+      incomplete: true,
+      reasons: ['dispose-not-sent'],
       messages: 0,
       closeStartedT: expect.any(Number) as unknown,
       owner: { project: 'chrome', retry: 0 },

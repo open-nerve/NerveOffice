@@ -112,6 +112,10 @@ interface PendingItem { id: number, method: string, waitedMs: number, s?: string
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+/** 正则从整条消息上截出的子串可能连带留住整条原文（V8 的切片字符串）：要保存的方法名与会话号先复制成独立的字符串 */
+function detach(value: string): string {
+  return Buffer.from(value, 'utf8').toString('utf8')
+}
 function short(value: unknown): string | undefined {
   return typeof value === 'string' && HEX.test(value) ? value.slice(0, 8) : undefined
 }
@@ -236,6 +240,7 @@ export interface ProtocolSnapshot {
   targetsDropped: number
   pending: PendingItem[]
   pendingTotal: number
+  /** 关闭相关的命令、回复与事件，超过 300 条时留最近的 */
   closeEvents: CloseEvent[]
   closeEventsDropped: number
   /** 关闭开始之前的最后 100 条（还没开始关闭时就是最近的 100 条） */
@@ -291,6 +296,29 @@ export class CloseProtocolFilter {
 
   closeStarted(now = performance.now()): void {
     this.closeAt ??= now
+  }
+
+  /**
+   * 关闭开始之后发出的 Target.disposeBrowserContext 的结局：都已回复且没有错误为 answered；还没开始关闭、一个也没发、有没回复的、
+   * 有回复错误的各为一种原因。context 的 close 事件不能单独说明关闭完成：关闭卡住之后浏览器被关掉时，Playwright 也先派发它，再派发断连
+   */
+  disposeOutcome(): 'answered' | 'close-not-started' | 'dispose-not-sent' | 'dispose-unanswered' | 'dispose-error' {
+    if (this.closeAt === undefined)
+      return 'close-not-started'
+    let sent = false
+    let failed = false
+    for (const state of this.contexts.values()) {
+      if (state.disposeSent === undefined || state.disposeSent < this.closeAt)
+        continue
+      sent = true
+      if (state.disposeDone === undefined)
+        return 'dispose-unanswered'
+      if (state.disposeError !== undefined)
+        failed = true
+    }
+    if (!sent)
+      return 'dispose-not-sent'
+    return failed ? 'dispose-error' : 'answered'
   }
 
   snapshot(now = performance.now()): ProtocolSnapshot {
@@ -358,8 +386,10 @@ export class CloseProtocolFilter {
     const head = body.slice(0, HEAD_CHARS)
     const idText = HEAD_ID.exec(head)?.[1]
     const ident = idText === undefined ? undefined : Number(idText)
-    const method = (send ? SEND_METHOD : EVENT_METHOD).exec(head)?.[1]
-    const session = TAIL_SESSION.exec(body.slice(-TAIL_CHARS))?.[1] ?? ''
+    const methodText = (send ? SEND_METHOD : EVENT_METHOD).exec(head)?.[1]
+    const method = methodText === undefined ? undefined : detach(methodText)
+    const sessionText = TAIL_SESSION.exec(body.slice(-TAIL_CHARS))?.[1]
+    const session = sessionText === undefined ? '' : detach(sessionText)
     if (send) {
       if (ident === undefined || method === undefined) {
         this.unparsed++
@@ -412,12 +442,13 @@ export class CloseProtocolFilter {
     }
   }
 
+  /** 超过上限时丢最早的：离关闭最近的留下 */
   private closeEvent(record: Light, extra: Extra): void {
-    if (this.closeEvents.length >= MAX_CLOSE_EVENTS) {
-      this.closeEventsDropped++
-      return
-    }
     this.closeEvents.push({ ...extra, ...record })
+    if (this.closeEvents.length > MAX_CLOSE_EVENTS) {
+      this.closeEvents.shift()
+      this.closeEventsDropped++
+    }
   }
 
   private record(now: number, k: Kind, m: string, session: string, more: { id?: number, code?: number, ms?: number } = {}): Light {
@@ -543,7 +574,7 @@ export class CloseProtocolFilter {
     }
     this.closeEvent(record, extra)
     let context = text(extra, 'context')
-    if (targetId !== undefined && context !== undefined)
+    if (targetId !== undefined && context !== undefined && (this.targetContext.has(targetId) || this.targetContext.size < MAX_SESSIONS))
       this.targetContext.set(targetId, context)
     context ??= (targetId === undefined ? undefined : this.targetContext.get(targetId)) ?? this.sessions.get(session)?.context
     if (targetId !== undefined) {
@@ -606,8 +637,13 @@ export function tapLogger(logger: unknown, onMessage: (message: string) => void)
   if (tapped)
     return 'tap-busy'
   const target = logger
-  if (target.isEnabled('protocol'))
-    return 'protocol-log-enabled-elsewhere'
+  try {
+    if (target.isEnabled('protocol'))
+      return 'protocol-log-enabled-elsewhere'
+  }
+  catch {
+    return 'tap-failed'
+  }
   const ownIsEnabled = Object.hasOwn(target, 'isEnabled')
   const ownLog = Object.hasOwn(target, 'log')
   // 保存原方法，以 call 原 this 调用并原样恢复，不预先绑定
@@ -624,8 +660,21 @@ export function tapLogger(logger: unknown, onMessage: (message: string) => void)
     }
     catch { /* 过滤器自己计数异常；不能影响 Playwright 的收发 */ }
   }
-  target.isEnabled = isEnabled
-  target.log = log
+  const undo = (): void => {
+    try {
+      restore(target, 'isEnabled', isEnabled, ownIsEnabled, originalIsEnabled)
+      restore(target, 'log', log, ownLog, originalLog)
+    }
+    catch { /* 撤不掉只能留着：isEnabled 只对 protocol 说是，log 对其余名字原样交还 */ }
+  }
+  try {
+    target.isEnabled = isEnabled
+    target.log = log
+  }
+  catch {
+    undo()
+    return 'tap-failed'
+  }
   tapped = true
   let released = false
   return {
@@ -634,8 +683,7 @@ export function tapLogger(logger: unknown, onMessage: (message: string) => void)
         return
       released = true
       tapped = false
-      restore(target, 'isEnabled', isEnabled, ownIsEnabled, originalIsEnabled)
-      restore(target, 'log', log, ownLog, originalLog)
+      undo()
     },
   }
 }
@@ -664,16 +712,25 @@ export function tapPlaywrightProtocol(onMessage: (message: string) => void): Pro
   return tapLogger(logger, onMessage)
 }
 
-/** 让快照不超过上限：依次减半关闭后的序列、关闭前的序列、关闭相关的记录与等待中的命令；返回是否裁剪过 */
+/**
+ * 让快照不超过上限：依次减半关闭后的序列、关闭前的序列、关闭相关的记录与等待中的命令；返回是否裁剪过。关闭后的序列留开头（关闭的经过），
+ * 关闭前的序列与关闭相关的记录留结尾（离关闭最近的），等待中的命令留开头（编号最小、等得最久的）
+ */
 export function fitSnapshot(build: (snapshot: ProtocolSnapshot) => string, snapshot: ProtocolSnapshot, maxBytes: number): { text: string, trimmed: boolean } {
   let output = build(snapshot)
   let trimmed = false
-  const lists = ['postClose', 'preClose', 'closeEvents', 'pending'] as const
+  const lists = [['postClose', 'head'], ['preClose', 'tail'], ['closeEvents', 'tail'], ['pending', 'head']] as const
   for (let round = 0; Buffer.byteLength(output) > maxBytes && round < 80; round++) {
-    const list = lists.find(name => snapshot[name].length > 0)
-    if (list === undefined)
+    const next = lists.find(([name]) => snapshot[name].length > 0)
+    if (next === undefined)
       break
-    snapshot[list].splice(Math.floor(snapshot[list].length / 2))
+    const [name, keep] = next
+    const list = snapshot[name]
+    const half = Math.floor(list.length / 2)
+    if (keep === 'head')
+      list.splice(half)
+    else
+      list.splice(0, list.length - half)
     trimmed = true
     output = build(snapshot)
   }
@@ -686,7 +743,8 @@ type State = 'recording' | 'closing' | 'closed' | 'disconnected' | 'stopped'
 
 /**
  * 为固定用例的一个 attempt 开始记录：独占创建 context-close-protocol.json 并登记附件，接上协议日志；context 关闭、浏览器断连
- * 或到兜底时限即释放并写下最终快照。失败只登记固定原因的注解，不影响原关闭。
+ * 或到兜底时限即释放并写下最终快照。context 关闭时按协议里的事实判定是否完整（disposeOutcome），不只看 close 事件。
+ * 失败只登记固定原因的注解，不影响原关闭。
  */
 export function startCloseProtocolRecorder(context: BrowserContext, testInfo: TestInfo, owner: object, tap: ProtocolTapFactory): CloseProtocolRecorder | undefined {
   let annotated = false
@@ -767,6 +825,11 @@ export function startCloseProtocolRecorder(context: BrowserContext, testInfo: Te
       browser?.off('disconnected', onDisconnect)
     }
     catch { reasons.add('listener-release-unavailable') }
+    if (next === 'closed') {
+      const outcome = filter.disposeOutcome()
+      if (outcome !== 'answered')
+        reasons.add(outcome)
+    }
     state = next
     save()
     if (state !== 'closed')
@@ -775,13 +838,19 @@ export function startCloseProtocolRecorder(context: BrowserContext, testInfo: Te
       incomplete([...reasons].sort().join(','))
   }
 
-  const result = tap((message) => {
-    filter.feed(message)
-    if (filter.errors >= MAX_FILTER_ERRORS && !finished) {
-      reasons.add('filter-errors')
-      finish('stopped')
-    }
-  })
+  let result: ProtocolTap | string
+  try {
+    result = tap((message) => {
+      filter.feed(message)
+      if (filter.errors >= MAX_FILTER_ERRORS && !finished) {
+        reasons.add('filter-errors')
+        finish('stopped')
+      }
+    })
+  }
+  catch {
+    result = 'tap-failed'
+  }
   if (typeof result === 'string') {
     reasons.add(result)
     state = 'stopped'
