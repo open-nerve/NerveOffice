@@ -103,7 +103,8 @@ export async function clearLegacyStorage(userId: string, options: LegacyStorageO
 
 /**
  * 退役的旧 SDK 库（ADR-010）：blocked 或到时限仍没有完成事件就如实交回 pending，同一 Document 不重复排队。
- * 别页开着连接时当即 blocked；排在别页被挡住的删库请求后面时收不到任何事件，要等满时限（不会等到别页放手）。
+ * 有页面开着连接（含本页 SDK 模块自己的私有连接）时当即 blocked；排在别页被挡住的删库请求后面时收不到任何事件，
+ * 要等满时限（不会等到别页放手）。
  * 它不属于主库、镜像与会话状态，调用者不能占着同源锁等它（ADR-020 的 M5-P8 补充）
  */
 export async function clearRetiredSdkDatabase(options: RetiredSdkDatabaseOptions): Promise<MetadataCleanupOutcome> {

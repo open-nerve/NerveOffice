@@ -194,13 +194,18 @@ describe('退役存储在同源锁外等待', () => {
     })
     const t = setup(undefined, clearRetired)
     const cleaning = t.cleanup.removeUser(PERMIT)
-    await vi.waitFor(() => expect(clearRetired).toHaveBeenCalledOnce())
-    await entered.promise
-    // 退化成锁内等待时，这里明确报“锁被占着”，而不是等到用例超时
-    const ran = await Promise.race([withOutboxLock(async () => 'ran'), new Promise<string>(resolve => setTimeout(resolve, 1_000, 'lock-held'))])
-    expect(ran).toBe('ran')
-    expect(t.retire).not.toHaveBeenCalled()
-    release.resolve({ kind: 'cleared' })
+    try {
+      await vi.waitFor(() => expect(clearRetired).toHaveBeenCalledOnce())
+      await entered.promise
+      // 退化成锁内等待时，这里明确报“锁被占着”，而不是等到用例超时
+      const ran = await Promise.race([withOutboxLock(async () => 'ran'), new Promise<string>(resolve => setTimeout(resolve, 1_000, 'lock-held'))])
+      expect(ran).toBe('ran')
+      expect(t.retire).not.toHaveBeenCalled()
+    }
+    finally {
+      // 失败时也放行，锁不会一直被占着而连累同文件后面的用例
+      release.resolve({ kind: 'cleared' })
+    }
     expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })
     expect(t.retire).toHaveBeenCalledWith(PERMIT, { now: NOW })
     expect(t.sessions.finishUserCleanup).toHaveBeenCalledExactlyOnceWith(PERMIT)

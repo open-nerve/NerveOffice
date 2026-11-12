@@ -77,7 +77,8 @@ export interface LocalCleanupOptions {
   /** 原清理许可核对后、同源锁内清理浏览器附加清单（本人记号等）；未完成不能提交 cleared。 */
   readonly clearMetadata?: (userId: string) => Promise<MetadataCleanupOutcome>
   /**
-   * 与用户无关的退役存储（旧 SDK 库，ADR-010）：别页开着连接时当即 blocked、如实 pending；删库请求排在别页被挡住的删库请求后面时
+   * 与用户无关的退役存储（旧 SDK 库，ADR-010）：有页面开着连接（含本页 SDK 模块自己的私有连接）时当即 blocked、如实 pending；
+   * 删库请求排在别页被挡住的删库请求后面时
    * 收不到任何事件，要等满时限才如实 pending（不会等到别页放手）。它不属于主库、镜像与会话状态，
    * 在同源锁外、进锁之前等它——会话确认、退出与各页的清理都排在这把锁上（ADR-020 的 M5-P8 补充）；未完成同样不能提交 cleared。
    */
