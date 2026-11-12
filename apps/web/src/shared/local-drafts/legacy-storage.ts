@@ -5,6 +5,10 @@ type LegacyStorage = Pick<Storage, 'length' | 'key' | 'removeItem'>
 interface LegacyStorageOptions {
   readonly localStorage: () => LegacyStorage
   readonly sessionStorage: () => LegacyStorage
+}
+
+/** 退役的旧 SDK 库：与用户无关，可能要等别的标签页放手，调用者在同源锁外等它（P8 第 7 轮） */
+interface RetiredSdkDatabaseOptions {
   readonly indexedDB: () => Pick<IDBFactory, 'deleteDatabase'>
   readonly timeoutMs?: number
 }
@@ -83,6 +87,7 @@ async function deleteSdkDatabase(factory: Pick<IDBFactory, 'deleteDatabase'>, ti
   return result
 }
 
+/** 本人的旧记号、退役意图与 SDK 的旧键：只碰同步存储，调用者在同源锁内、核对原清理许可之后调用 */
 export async function clearLegacyStorage(userId: string, options: LegacyStorageOptions): Promise<MetadataCleanupOutcome> {
   let problem: { readonly kind: 'failed', readonly error: unknown } | undefined
   for (const [storage, sdk] of [[options.localStorage, true], [options.sessionStorage, false]] as const) {
@@ -93,11 +98,18 @@ export async function clearLegacyStorage(userId: string, options: LegacyStorageO
       problem ??= { kind: 'failed', error }
     }
   }
+  return problem ?? { kind: 'cleared' }
+}
+
+/**
+ * 退役的旧 SDK 库（ADR-010）：blocked 或到时限仍没有完成事件就如实交回 pending，同一 Document 不重复排队。
+ * 它不属于主库、镜像与会话状态，删库被别的标签页占着时要等到时限；调用者不能占着同源锁等它（ADR-020 的 M5-P8 补充）
+ */
+export async function clearRetiredSdkDatabase(options: RetiredSdkDatabaseOptions): Promise<MetadataCleanupOutcome> {
   try {
-    const database = await deleteSdkDatabase(options.indexedDB(), options.timeoutMs ?? 3_000)
-    return problem ?? database
+    return await deleteSdkDatabase(options.indexedDB(), options.timeoutMs ?? 3_000)
   }
   catch (error) {
-    return problem ?? { kind: 'failed', error }
+    return { kind: 'failed', error }
   }
 }

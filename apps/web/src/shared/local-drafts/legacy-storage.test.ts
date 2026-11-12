@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearLegacySessionMarkers, clearLegacyStorage } from './legacy-storage.ts'
+import { clearLegacySessionMarkers, clearLegacyStorage, clearRetiredSdkDatabase } from './legacy-storage.ts'
 
 /** 仅替代浏览器的存储事件；真实 IDB blocked/释放在三浏览器故事里验证。 */
 function database() {
@@ -18,8 +18,10 @@ function database() {
 
 function setup() {
   const db = database()
-  const options = { localStorage: () => localStorage, sessionStorage: () => sessionStorage, indexedDB: () => db.factory, timeoutMs: 100 }
-  return { db, options }
+  const options = { localStorage: () => localStorage, sessionStorage: () => sessionStorage }
+  // 退役的旧 SDK 库与用户无关，单独删（调用者在同源锁外等它，P8 第 7 轮）
+  const retired = { indexedDB: () => db.factory, timeoutMs: 100 }
+  return { db, options, retired }
 }
 
 /** Storage 的删除允许重排剩余键；jsdom 恰好保持插入顺序，不能单靠它验证枚举。 */
@@ -51,8 +53,8 @@ describe('旧数据只按清单清理', () => {
     const local = reorderedStorage('nerve-office:pending-save:u1:d1')
     const session = reorderedStorage('nerve-office:pending-save:u1:d1')
     const result = clearLegacyStorage('u1', { ...t.options, localStorage: () => local, sessionStorage: () => session })
-    t.db.requests[0]?.dispatchEvent(new Event('success'))
     expect(await result).toEqual({ kind: 'cleared' })
+    expect(t.db.names).toEqual([])
     expect(local.remaining()).toEqual(['unrelated-1', 'unrelated-2'])
     expect(session.remaining()).toEqual(['unrelated-1', 'unrelated-2'])
   })
@@ -81,10 +83,10 @@ describe('旧数据只按清单清理', () => {
       sessionStorage.setItem(key, 'unchanged')
     }
     const read = vi.spyOn(Storage.prototype, 'getItem')
-    const pending = clearLegacyStorage('u1', t.options)
-    expect(t.db.names).toEqual(['UniverLocalStorage'])
-    t.db.requests[0]?.dispatchEvent(new Event('success'))
-    expect(await pending).toEqual({ kind: 'cleared' })
+    const result = clearLegacyStorage('u1', t.options)
+    // 本人记号不碰任何数据库；退役的旧 SDK 库由 clearRetiredSdkDatabase 另删
+    expect(t.db.names).toEqual([])
+    expect(await result).toEqual({ kind: 'cleared' })
     expect(read).not.toHaveBeenCalled()
     read.mockRestore()
     expect(Object.keys(localStorage).sort()).toEqual(kept.sort())
@@ -116,7 +118,6 @@ describe('旧数据只按清单清理', () => {
     }
     sessionStorage.setItem('nerve-office:reload:old', '{}')
     const result = clearLegacyStorage('u1', { ...t.options, localStorage: failure === 'access' ? fail : () => target })
-    t.db.requests[0]?.dispatchEvent(new Event('success'))
     expect(await result).toMatchObject({ kind: 'failed', error: new Error('storage denied') })
     expect(sessionStorage.length).toBe(0)
   })
@@ -127,7 +128,6 @@ describe('旧数据只按清单清理', () => {
     const result = clearLegacyStorage('u1', { ...t.options, sessionStorage: () => {
       throw new Error('session denied')
     } })
-    t.db.requests[0]?.dispatchEvent(new Event('success'))
     expect(await result).toMatchObject({ kind: 'failed' })
     expect(localStorage.length).toBe(0)
   })
@@ -136,16 +136,16 @@ describe('旧数据只按清单清理', () => {
 describe('旧 SDK 库删除的实际结果', () => {
   it('blocked 立即返回 pending；未完成请求不重复排队，迟到完成不删新用户键；下一次重新核对', async () => {
     const t = setup()
-    const result = clearLegacyStorage('u1', t.options)
+    const result = clearRetiredSdkDatabase(t.retired)
     t.db.requests[0]?.dispatchEvent(new Event('blocked'))
     expect(await result).toEqual({ kind: 'pending' })
-    expect(await clearLegacyStorage('u1', t.options)).toEqual({ kind: 'pending' })
+    expect(await clearRetiredSdkDatabase(t.retired)).toEqual({ kind: 'pending' })
     expect(t.db.names).toEqual(['UniverLocalStorage'])
     localStorage.setItem('nerve-office:pending-save:u1:new-session', 'new')
     t.db.requests[0]?.dispatchEvent(new Event('success'))
     expect(localStorage.getItem('nerve-office:pending-save:u1:new-session')).toBe('new')
     // 调用者须在重试之前重新核对原许可；低层不获取或切换资格。
-    const retry = clearLegacyStorage('u1', t.options)
+    const retry = clearRetiredSdkDatabase(t.retired)
     expect(t.db.names).toEqual(['UniverLocalStorage', 'UniverLocalStorage'])
     t.db.requests[1]?.dispatchEvent(new Event('success'))
     expect(await retry).toEqual({ kind: 'cleared' })
@@ -154,11 +154,11 @@ describe('旧 SDK 库删除的实际结果', () => {
   it('没有任何事件也有限时；超时之后错误不会制造未处理拒绝，重试可重新发起', async () => {
     vi.useFakeTimers()
     const t = setup()
-    const result = clearLegacyStorage('u1', t.options)
+    const result = clearRetiredSdkDatabase(t.retired)
     await vi.advanceTimersByTimeAsync(100)
     expect(await result).toEqual({ kind: 'pending' })
     t.db.requests[0]?.dispatchEvent(new Event('error'))
-    const retry = clearLegacyStorage('u1', t.options)
+    const retry = clearRetiredSdkDatabase(t.retired)
     t.db.requests[1]?.dispatchEvent(new Event('success'))
     expect(await retry).toEqual({ kind: 'cleared' })
     expect(vi.getTimerCount()).toBe(0)
@@ -166,13 +166,13 @@ describe('旧 SDK 库删除的实际结果', () => {
 
   it('删除错误和同步访问错误都保留 failed，不冒充无旧数据', async () => {
     const t = setup()
-    const result = clearLegacyStorage('u1', t.options)
+    const result = clearRetiredSdkDatabase(t.retired)
     t.db.requests[0]?.dispatchEvent(new Event('error'))
     expect(await result).toMatchObject({ kind: 'failed', error: new Error('delete failed') })
-    expect(await clearLegacyStorage('u1', { ...t.options, indexedDB: () => {
+    expect(await clearRetiredSdkDatabase({ ...t.retired, indexedDB: () => {
       throw new Error('denied')
     } })).toMatchObject({ kind: 'failed' })
-    expect(await clearLegacyStorage('u1', { ...t.options, indexedDB: () => ({ deleteDatabase: () => {
+    expect(await clearRetiredSdkDatabase({ ...t.retired, indexedDB: () => ({ deleteDatabase: () => {
       throw new Error('denied')
     } }) })).toMatchObject({ kind: 'failed' })
   })
