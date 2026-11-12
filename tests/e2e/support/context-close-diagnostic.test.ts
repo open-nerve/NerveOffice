@@ -1,6 +1,7 @@
 // KiB 级记录器验证；浏览器边界用 EventEmitter/原 Promise，不启动真实浏览器。
 /* eslint-disable ts/promise-function-async -- 样例必须保留原 Promise 对象和同步抛错，async 会改变被验证的边界。 */
 import type { BrowserContext, TestInfo } from '@playwright/test'
+import type { ProtocolTapFactory } from './context-close-protocol.ts'
 import { EventEmitter } from 'node:events'
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -9,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { runCloseFixtureModel, runReportFifoReplacementModel } from './context-close-diagnostic.test-support.ts'
 import { isContextCloseTarget, watchContextCloseDiagnostic } from './context-close-diagnostic.ts'
+import { PROTOCOL_FILE } from './context-close-protocol.ts'
 
 const TARGET = {
   file: '/repo/tests/e2e/specs/local-drafts/catalog-boundaries.spec.ts',
@@ -24,7 +26,7 @@ const reportSchema = z.object({
     githubRunId: z.string(),
     githubRunAttempt: z.string(),
     sha: z.string(),
-    project: z.literal('chrome'),
+    project: z.enum(['chrome', 'msedge']),
     retry: z.number(),
   }).strict(),
   incomplete: z.boolean(),
@@ -59,7 +61,7 @@ class ContextBoundary extends EventEmitter {
 }
 
 const roots: string[] = []
-function input() {
+function input(project = 'chrome') {
   const dir = mkdtempSync(join(tmpdir(), 'nerve-close-diagnostic-'))
   roots.push(dir)
   const context = new ContextBoundary()
@@ -67,7 +69,7 @@ function input() {
   const annotations: TestInfo['annotations'] = []
   const info = {
     ...TARGET,
-    project: { name: 'chrome', outputDir: dir },
+    project: { name: project, outputDir: dir },
     outputPath: (name: string) => join(dir, name),
     attachments,
     annotations,
@@ -75,8 +77,9 @@ function input() {
   const path = join(dir, NAME)
   return { context, info, path, dir, attachments, annotations, read: () => reportSchema.parse(JSON.parse(readFileSync(path, 'utf8'))) }
 }
-function watch(value: ReturnType<typeof input>) {
-  watchContextCloseDiagnostic(value.context as unknown as BrowserContext, value.info)
+/** 公开调用阶段的样例不接协议日志（协议记录另见 context-close-protocol.test.ts 与本文件末尾的接线样例） */
+function watch(value: ReturnType<typeof input>, protocol: ProtocolTapFactory | null = null) {
+  watchContextCloseDiagnostic(value.context as unknown as BrowserContext, value.info, { protocol })
 }
 
 beforeEach(() => {
@@ -92,15 +95,20 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true })
 })
 
-describe('固定 Chrome 默认上下文关闭的有界补证', () => {
-  it('只选择显式开关下原 file/title/project 的 attempt 0/1', () => {
+describe('固定 Chrome、Edge 默认上下文关闭的有界补证', () => {
+  it('只选择显式开关下原 file/title 在 chrome、msedge 上的 attempt 0/1', () => {
     expect(isContextCloseTarget(TARGET, '1')).toBe(true)
     expect(isContextCloseTarget({ ...TARGET, retry: 1 }, '1')).toBe(true)
+    expect(isContextCloseTarget({ ...TARGET, project: 'msedge' }, '1')).toBe(true)
+    expect(isContextCloseTarget({ ...TARGET, project: 'msedge', retry: 1 }, '1')).toBe(true)
     for (const enabled of [undefined, '', 'true', '0'])
       expect(isContextCloseTarget(TARGET, enabled)).toBe(false)
     for (const target of [
       { ...TARGET, project: 'chromium' },
       { ...TARGET, project: 'webkit' },
+      { ...TARGET, project: 'crash-chrome' },
+      { ...TARGET, project: 'crash-msedge' },
+      { ...TARGET, project: 'Msedge' },
       { ...TARGET, title: `${TARGET.title}额外` },
       { ...TARGET, file: `${TARGET.file}.old` },
       { ...TARGET, file: '/repo/tests/e2e/specs/editor/catalog-boundaries.spec.ts' },
@@ -330,5 +338,57 @@ describe('固定 Chrome 默认上下文关闭的有界补证', () => {
       expect(report.events.some(event => event.stage === 'request.dispose' && event.outcome === 'fulfilled')).toBe(false)
     else
       expect(report.events.at(-1)).toMatchObject({ stage: 'context.close', outcome: 'fulfilled' })
+    // 真实 Playwright 工作进程里接上了运行中的 playwright-core 的日志对象（假浏览器没有协议消息），关闭开始已传到协议记录
+    expect(result.protocols).toHaveLength(1)
+    expect(result.protocols[0]).toMatchObject({
+      version: 1,
+      coreVersion: '1.63.0',
+      state: mode === 'complete' ? 'closed' : 'disconnected',
+      incomplete: mode === 'pending',
+      reasons: [],
+      messages: 0,
+      closeStartedT: expect.any(Number) as unknown,
+      owner: { project: 'chrome', retry: 0 },
+    })
   }, 20_000)
+
+  it('msedge 的 attempt 同样落档，归属写明项目', async () => {
+    const value = input('msedge')
+    watch(value)
+    await value.context.close()
+    expect(value.read()).toMatchObject({ incomplete: false, owner: { project: 'msedge', retry: 0 } })
+  })
+
+  it('同一开关下接上协议记录：关闭开始传给协议记录，context 关闭后释放并写下最终快照', async () => {
+    const value = input()
+    let feed: (message: string) => void = () => {}
+    let released = 0
+    watch(value, (onMessage) => {
+      feed = onMessage
+      return { release: () => {
+        released++
+      } }
+    })
+    expect(value.attachments.map(item => item.name)).toEqual(['context-close-diagnostic', 'context-close-protocol'])
+    const closing = value.context.close()
+    feed('SEND ► {"id":7,"method":"Target.disposeBrowserContext","params":{"browserContextId":"ABCDEF0123456789ABCDEF0123456789"}}')
+    feed('◀ RECV {"id":7,"result":{}}')
+    await closing
+    const protocol = JSON.parse(readFileSync(join(value.dir, PROTOCOL_FILE), 'utf8')) as Record<string, unknown>
+    expect(protocol).toMatchObject({ state: 'closed', incomplete: false, reasons: [], owner: { project: 'chrome' } })
+    expect(protocol.closeStartedT).toEqual(expect.any(Number))
+    expect(protocol.contexts).toEqual([expect.objectContaining({ id: 'ABCDEF01', disposeLatencyMs: expect.any(Number) as unknown, pendingAtDispose: [] })])
+    expect(released).toBe(1)
+    expect(value.annotations).toEqual([])
+    expect(value.read().incomplete).toBe(false)
+  })
+
+  it('协议日志接不上时只登记协议的不完整原因，公开调用阶段照常记完', async () => {
+    const value = input()
+    watch(value, () => 'unsupported-version')
+    await value.context.close()
+    expect(value.read().incomplete).toBe(false)
+    expect(value.annotations).toEqual([{ type: 'context-close-protocol-incomplete', description: 'unsupported-version' }])
+    expect(JSON.parse(readFileSync(join(value.dir, PROTOCOL_FILE), 'utf8'))).toMatchObject({ state: 'stopped', incomplete: true, reasons: ['unsupported-version'] })
+  })
 })

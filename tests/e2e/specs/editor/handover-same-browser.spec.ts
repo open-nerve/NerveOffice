@@ -3,13 +3,15 @@
 // 说明不了这一刻的事实——服务端批准之后、回包到达之前可能已经再换代。拿锁时被本浏览器的别的标签页占着，先向服务端核对（续租一次）本页这一代
 // 仍是当前的才抢，不是当前的就不抢、不释放、回到阅读；锁被抢的一方同样先核对，确实被取代才失去编辑权（说是本人在本浏览器的另一个标签页接手了，
 // 没保存的修改照旧给副本与放弃），核对不了（断网）时不判自己失效、也不抢，等之后的心跳给出结论。
-// 两个标签页用同一个浏览器上下文（共用 Cookie、Web Locks 与 Playwright 的时钟）；回包迟到用 route.fetch()（先执行真实的服务端事务）、扣住再送达；
-// 前一个"断网、休眠"用拦下它的心跳与保存模拟（support/sheet.ts 的 disconnectTab）；编辑权到期改写租约行。
+// 两个标签页用同一个浏览器上下文（共用 Cookie、Web Locks 与 Playwright 的时钟）；回包迟到用 route.fetch()（先执行真实的服务端事务）、扣住再送达，
+// 扣住的时长要短于页面对编辑权请求的 10 秒时限（按页面时钟计）；前一个"断网、休眠"用拦下它的心跳与保存模拟（support/sheet.ts 的 disconnectTab）；
+// 编辑权到期改写租约行。
 // "在此编辑"的三条路、同一浏览器的先保存再交出、旧页不响应之后接手（前一个连着网：核对得知被接管，随即失去编辑权）、刷新时在途保存的等待、
 // 跨设备在 handover-takeover.spec.ts（设计 §3.7）。
 // 容器 E2E 也跑：修改在断开之后才做，两种构建里都存不上；另存为副本不经保存的那条路（断开只拦保存与心跳）
-import type { APIResponse, Page, Response } from '@playwright/test'
+import type { APIResponse, Page, Request, Response } from '@playwright/test'
 import type { Workbook } from '../../support/sheet.ts'
+import { performance } from 'node:perf_hooks'
 import { createUser, editLeaseEpoch, editLeaseTakeover, expireEditLease } from '../../support/database.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { currentLocalKey, diskSnapshot, readLocalDisk } from '../../support/local-draft.ts'
@@ -45,11 +47,15 @@ async function nextRenewal(page: Page, documentId: string): Promise<Response> {
 }
 
 test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机锁，锁的争用由服务端裁决', () => {
-  test('US-M3-08 回包乱序（Codex 评审 CX2）：A 的申请服务端已经提交（第 1 代）、回包迟到，B 点"在此编辑"取得第 2 代、拿锁、编辑；A 的回包到了——锁被 B 占着，A 向服务端核对得知第 1 代已被接管：不抢锁、不释放，回到阅读，说本浏览器的另一个标签页在编辑、照常给"在此编辑"；B 照常编辑、保存', async ({ page, context }) => {
+  test('US-M3-08 回包乱序（Codex 评审 CX2）：A 的申请服务端已经提交（第 1 代）、回包迟到，B 点"在此编辑"取得第 2 代、拿锁、进入编辑；A 的回包到了——锁被 B 占着，A 向服务端核对得知第 1 代已被接管：不抢锁、不释放，回到阅读，说本浏览器的另一个标签页在编辑、照常给"在此编辑"；B 照常编辑、保存', async ({ page, context }) => {
     await loginThroughApi(page, await createUser('stale-acquire'))
     const documentId = await createSheetThroughApi(page)
     // Playwright 的时钟是上下文级的：两个标签页一起走，最后拨它核对 A 不再续租
     await page.clock.install()
+    // 扣住 A 的回包的那一段要短于页面对编辑权请求的 10 秒时限（按页面时钟计，这里时钟照常走）：B 的标签页先开好（空白页），扣住期间
+    // 不再新开页面；A 回到前台再打开阅读、点"编辑"，前后台与只有 A 一个标签页时相同；B 的输入放到 A 核对之后
+    const other = await context.newPage()
+    await page.bringToFront()
     await openReader(page, documentId)
     // A 的申请：先执行真实的服务端事务（route.fetch），回包扣住、等 B 接手之后再送达；别的请求照常
     let deliver: () => void = () => {}
@@ -60,6 +66,18 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
     const acquisition = new Promise<APIResponse>((resolve) => {
       committed = resolve
     })
+    // 扣住的申请在回包送达之前被页面取消（多半是到了时限），回包迟到的前提就不成立：立即失败、写明原因，不空等那一次核对
+    let held: Request | undefined
+    let heldSince = 0
+    let cancelHeld: (reason: string) => void = () => {}
+    const heldCancelled = new Promise<never>((_resolve, reject) => {
+      cancelHeld = reason => reject(new Error(reason))
+    })
+    void heldCancelled.catch(() => {})
+    page.on('requestfailed', (request) => {
+      if (request === held)
+        cancelHeld(`A 被扣住的申请在回包送达之前被页面取消（${request.failure()?.errorText ?? '原因不明'}，已扣住 ${Math.round(performance.now() - heldSince)} 毫秒；页面对编辑权请求的时限为 10 秒）：回包迟到的前提不成立`)
+    })
     let intercepted = false
     await page.route(`**/api/documents/${documentId}/edit-lease`, async (route) => {
       if (route.request().method() !== 'POST' || intercepted) {
@@ -67,6 +85,8 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
         return
       }
       intercepted = true
+      held = route.request()
+      heldSince = performance.now()
       const response = await route.fetch()
       committed(response)
       await delivered
@@ -77,8 +97,8 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
       expect((await acquisition).status()).toBe(201)
       expect(await editLeaseEpoch(documentId)).toBe(1)
 
-      // B：A 还没拿到回包、没拿锁，B 读到的是自己在别处编辑；"在此编辑"以本人接管取得第 2 代、拿锁（锁空着）、编辑
-      const other = await context.newPage()
+      // B（回到前台，与新开时一样）：A 还没拿到回包、没拿锁，B 读到的是自己在别处编辑；"在此编辑"以本人接管取得第 2 代、拿锁（锁空着）、进入编辑
+      await other.bringToFront()
       await openReader(other, documentId)
       await expect(editingNotice(other)).toHaveText(ELSEWHERE)
       await takeOverHereButton(other).click()
@@ -86,13 +106,13 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
       await expect(saveButton(other)).toBeVisible()
       expect(await editLeaseEpoch(documentId)).toBe(2)
       expect(await editLeaseTakeover(documentId)).toBe('self')
-      await typeInCell(other, 'A1', 'newer holder')
 
-      // A 的回包到了：锁被 B 占着，A 核对（续租第 1 代）——服务端说第 1 代已被本人接管
+      // A 的回包到了：锁被 B 占着，A 核对（续租第 1 代）——服务端说第 1 代已被本人接管。扣住的时长记进注解，各轮看得到离时限还有多远
       const leaseWrites = recordLeaseWrites(page, documentId)
       const verdict = nextRenewal(page, documentId)
+      test.info().annotations.push({ type: 'held-acquisition-ms', description: String(Math.round(performance.now() - heldSince)) })
       deliver()
-      const answer = await verdict
+      const answer = await Promise.race([verdict, heldCancelled])
       expect(answer.status()).toBe(409)
       expect(await answer.json()).toMatchObject({ error: { code: 'EDIT_LEASE_LOST', details: { reason: 'taken_over', forced: false } } })
 
@@ -105,6 +125,7 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
 
       // B 不受影响：照常编辑、保存，服务器上是 B 的修改，仍是第 2 代
       await expect(lostNotice(other)).toHaveCount(0)
+      await typeInCell(other, 'A1', 'newer holder')
       await saveAndWait(other)
       expect(cellOf((await savedContent(other, documentId)).snapshot, 'A1')?.v).toBe('newer holder')
       expect(await editLeaseEpoch(documentId)).toBe(2)

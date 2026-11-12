@@ -16,15 +16,21 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 
 诊断不创建临时环境或独立 artifact，只向原 job 日志输出固定字段；不输出环境对象、子项名称、文件内容或原异常文本。日志沿六项 CI 原件的 14 天/5 GiB 报告规则保留，必要最终证据通过原独审/pin 流程留档。成功诊断只说明观察完成，`diagnosticOnly=true`、`cleanupAuthorized=false`，不代替测试通过或资源清理。KiB 回归入口为 `python3 -B tools/test-resources/run.py unit -- python3 -B -m unittest discover -s tools/test-resources -p 'test_ci_disk_diagnostic.py'`。
 
-## 固定 Chrome 用例的关闭阶段诊断
+## 固定 Chrome、Edge 用例的关闭阶段诊断
 
-`tests/e2e/support/context-close-diagnostic.ts` 仅在 `E2E_CONTEXT_CLOSE_DIAGNOSTIC=1` 且原 `catalog-boundaries.spec.ts` 的指定换人故事、`chrome`、retry 0/1 时安装；workflow 只给 Chrome 分片开关。正式 `fixtures.ts` 在交出默认 context 前安装，不在外层 `provide` 返回时撤掉，让默认底层关闭也能被记录。
+`tests/e2e/support/context-close-diagnostic.ts` 仅在 `E2E_CONTEXT_CLOSE_DIAGNOSTIC=1` 且原 `catalog-boundaries.spec.ts` 的指定换人故事、`chrome` 或 `msedge`、retry 0/1 时安装；workflow 只给 Chrome、Edge 两个分片开关（M5-P8，需求方 2026-11-12 批准扩到 Edge）。正式 `fixtures.ts` 在交出默认 context 前安装，不在外层 `provide` 返回时撤掉，让默认底层关闭也能被记录。
 
-每 attempt 独占创建 `testInfo.outputPath('context-close-diagnostic.json')`（0600），立即登记 attachment 与受管 UUID/固定 GitHub run、attempt、SHA 和项目归属，再包装三个公开方法。开始事件同步写入，非阻塞重开后、写入前核对父目录和原普通文件 dev/inode/nlink/大小，每次写入即关闭描述符；已有文件、链接、FIFO 等身份替换、写入/注册失败均留下固定不完整注解，不覆盖原产品异常。仅保存阶段、序号、单调时间、调用关联和结果，不保存参数、错误正文、认证信息或环境对象。
+每 attempt 独占创建 `testInfo.outputPath('context-close-diagnostic.json')`（0600），立即登记 attachment 与受管 UUID/固定 GitHub run、attempt、SHA 和项目归属，再包装三个公开方法。开始事件同步写入，非阻塞重开后、写入前核对父目录和原普通文件 dev/inode/nlink/大小，每次写入即关闭描述符（`exclusive-report.ts`，两份报告共用）；已有文件、链接、FIFO 等身份替换、写入/注册失败均留下固定不完整注解，不覆盖原产品异常。仅保存阶段、序号、单调时间、调用关联和结果，不保存参数、错误正文、认证信息或环境对象。
 
-每份最多 32 KiB/64 条；原 retry 0/1 合计至多 64 KiB，沿现有报告 14 天/5 GiB、稳定导出与必要证据独审/pin 策略，不增加 profile、VM 或数据库。原 Promise、this、参数和同步异常保持；不增加关闭、等待、重试或私有协议调用。`incomplete` 初始为真，只有原 close 完成、close 事件到达且已观察调用无挂起/失败时才能结束观察；超限/写入失败/缺文件/不完整状态不接受。产品与诊断结果分别核对，观察完整不等于旧根因已修复，也不覆盖原 flaky 判失败。
+每份最多 32 KiB/64 条；原 retry 0/1 合计至多 64 KiB，沿现有报告 14 天/5 GiB、稳定导出与必要证据独审/pin 策略，不增加 profile、VM 或数据库。原 Promise、this、参数和同步异常保持；不增加关闭、等待、重试或协议调用。`incomplete` 初始为真，只有原 close 完成、close 事件到达且已观察调用无挂起/失败时才能结束观察；超限/写入失败/缺文件/不完整状态不接受。产品与诊断结果分别核对，观察完整不等于旧根因已修复，也不覆盖原 flaky 判失败。
 
-小型验证：`python3 -B tools/test-resources/run.py unit -- pnpm exec vitest run --project unit tests/e2e/support/context-close-diagnostic.test.ts`。其中真实 Playwright Node 夹具调度只替换 browser 边界，不启动浏览器，分别保留 passed 与预期 teardown timedOut；退出不明时保留本轮根交父运行器核对，不将模型结果冒充 Chrome 实测。
+**协议记录**（`context-close-protocol.ts`，同一开关、同一 attempt、同一归属）：另独占创建 `context-close-protocol.json`（0600，最多 192 KiB），在这条用例所在的工作进程里、只在这条用例期间，把 Playwright 与浏览器之间的协议消息接到内存里的过滤器。
+
+- 接法：从 Node 的模块缓存里取这个进程已经加载的、恰好一份 playwright-core，版本须为 1.63.0（它旁边的 `package.json`），取它从 `lib/coreBundle` 导出的内部日志对象 `utils.debugLogger`，只替换 `isEnabled`/`log` 对 `protocol` 的处理，其余名字原样交还；协议日志已在别处开启、版本或形状不符都不安装，只登记 `context-close-protocol-incomplete` 注解。不设 `DEBUG`、`DEBUG_FILE` 等环境变量，不经管道或文件，不发任何协议命令。
+- 只留与关闭页面、关闭 context 有关的命令、回复与事件（含 `Page.captureScreenshot`、`Page.stopScreencast` 与 `Target.disposeBrowserContext`）的方法名、编号、时刻、目标类型、截短到 8 位的标识与等待时长；对话框只留类型，错误只留错误码与截短的 ASCII 文字；另有各方法名的计数（最多 300 个）、关闭开始之前 100 条与之后 600 条的方法名序列、仍在等待回复的命令。参数、结果、地址、标题、Cookie、请求与回复内容不保存，原始消息不落盘、不输出。
+- 关闭开始时（由本文件对 `context.close` 的包装通知）与之后 2、10、30、90、200 秒整份重写；context 关闭、浏览器断连或安装满 330 秒即撤掉接法并写下最终状态（`closed`／`disconnected`／`stopped`）。只有 `closed` 且无原因才算完整。
+
+小型验证：`python3 -B tools/test-resources/run.py unit -- pnpm exec vitest run --project unit tests/e2e/support/context-close-diagnostic.test.ts tests/e2e/support/context-close-protocol.test.ts`。其中真实 Playwright Node 夹具调度只替换 browser 边界，不启动浏览器，分别保留 passed 与预期 teardown timedOut，并核对协议记录在真实工作进程里接上运行中的 playwright-core、随关闭或断连撤掉；合成的协议日志行核对输出不含任何参数值。退出不明时保留本轮根交父运行器核对，不将模型结果冒充 Chrome、Edge 实测。
 
 ## 正式入口
 

@@ -1,15 +1,17 @@
-// 测试专用补证：不等待或替代原关闭，只观察固定用例的公开调用。
+// 测试专用补证：不等待或替代原关闭，只观察固定用例的公开调用；同一开关下另记关闭前后的协议消息（context-close-protocol.ts）。
 import type { BrowserContext, TestInfo } from '@playwright/test'
-import { Buffer } from 'node:buffer'
-import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, realpathSync, writeSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import type { ProtocolTapFactory } from './context-close-protocol.ts'
 import { performance } from 'node:perf_hooks'
 import process from 'node:process'
+import { startCloseProtocolRecorder, tapPlaywrightProtocol } from './context-close-protocol.ts'
+import { createExclusiveReport } from './exclusive-report.ts'
 
 const TITLE = '另一页换人后旧草稿页重新聚焦，不再显示原账户已完成副本的标题和链接'
 const FILE = 'context-close-diagnostic.json'
 const MAX_BYTES = 32 * 1024
 const MAX_EVENTS = 64
+/** 同一种关闭卡住先后出在 Chrome（CI95）与 Edge（#102）：两种完整浏览器都记 */
+const PROJECTS: ReadonlySet<string> = new Set(['chrome', 'msedge'])
 type Method = 'context.close' | 'request.dispose' | 'tracing.stopChunk'
 type Stage = Method | 'observer.registered' | 'context.closed' | 'browser.disconnected'
 type Outcome = 'event' | 'start' | 'fulfilled' | 'rejected' | 'threw'
@@ -22,12 +24,12 @@ interface Entry {
 }
 
 export function isContextCloseTarget(target: { file: string, title: string, project: string, retry: number }, enabled: string | undefined): boolean {
-  return enabled === '1' && target.project === 'chrome' && target.title === TITLE
+  return enabled === '1' && PROJECTS.has(target.project) && target.title === TITLE
     && target.file.endsWith('/tests/e2e/specs/local-drafts/catalog-boundaries.spec.ts')
     && (target.retry === 0 || target.retry === 1)
 }
 
-function ownerFor(retry: number) {
+function ownerFor(retry: number, project: string) {
   const runId = process.env.NERVE_TEST_RUN_ID
   const githubRunId = process.env.GITHUB_RUN_ID
   const githubRunAttempt = process.env.GITHUB_RUN_ATTEMPT
@@ -38,11 +40,16 @@ function ownerFor(retry: number) {
     || !/^[a-f0-9]{40}$/.test(sha ?? '')) {
     return undefined
   }
-  return { runId, githubRunId, githubRunAttempt, sha, project: 'chrome', retry }
+  return { runId, githubRunId, githubRunAttempt, sha, project, retry }
+}
+
+export interface ContextCloseDiagnosticOptions {
+  /** 协议记录的接法；省略时接运行中的 Playwright，null 不记协议（只留公开调用的阶段） */
+  readonly protocol?: ProtocolTapFactory | null
 }
 
 /** 同步登记开始事件；即使默认 fixture 在 provide 返回之后挂起，已写入的前缀仍存在。 */
-export function watchContextCloseDiagnostic(context: BrowserContext, testInfo: TestInfo): void {
+export function watchContextCloseDiagnostic(context: BrowserContext, testInfo: TestInfo, options: ContextCloseDiagnosticOptions = {}): void {
   if (!isContextCloseTarget({ file: testInfo.file, title: testInfo.title, project: testInfo.project.name, retry: testInfo.retry }, process.env.E2E_CONTEXT_CLOSE_DIAGNOSTIC))
     return
   let annotated = false
@@ -56,7 +63,7 @@ export function watchContextCloseDiagnostic(context: BrowserContext, testInfo: T
     }
     catch { /* 缺附件或缺少完整终态同样拒绝诊断接受。 */ }
   }
-  const owner = ownerFor(testInfo.retry)
+  const owner = ownerFor(testInfo.retry, testInfo.project.name)
   if (owner === undefined) {
     incomplete('identity-unavailable')
     return
@@ -71,48 +78,8 @@ export function watchContextCloseDiagnostic(context: BrowserContext, testInfo: T
   let detach = (): void => {}
   let write: (text: string) => void
   try {
-    const path = testInfo.outputPath(FILE)
-    if (!isAbsolute(path) || basename(path) !== FILE)
-      throw new Error('invalid-output')
-    const root = realpathSync(testInfo.project.outputDir)
-    const parent = realpathSync(dirname(path))
-    const inside = relative(root, parent)
-    if (inside === '..' || inside.startsWith('../') || isAbsolute(inside))
-      throw new Error('outside-output')
-    const parentIdentity = lstatSync(parent)
-    if (!parentIdentity.isDirectory() || parentIdentity.isSymbolicLink())
-      throw new Error('invalid-parent')
-    const target = join(parent, FILE)
-    const fd = openSync(target, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    let identity
-    try {
-      identity = fstatSync(fd)
-      // 登记早于首条记录和方法包装；不调用 attach(path) 提前复制一个尚未完成的快照。
-      testInfo.attachments.push({ name: 'context-close-diagnostic', path, contentType: 'application/json' })
-    }
-    finally { closeSync(fd) }
-    let size = 0
-    write = (text) => {
-      const bytes = Buffer.from(text)
-      if (bytes.length > MAX_BYTES)
-        throw new Error('byte-limit')
-      const parentNow = lstatSync(parent)
-      if (parentNow.dev !== parentIdentity.dev || parentNow.ino !== parentIdentity.ino || !parentNow.isDirectory())
-        throw new Error('parent-changed')
-      // 替换成无 reader 的 FIFO 时也不能在 fstat 前阻塞，避免诊断反过来挂住原调用。
-      const output = openSync(target, constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
-      try {
-        const now = fstatSync(output)
-        if (!now.isFile() || now.nlink !== 1 || now.dev !== identity.dev || now.ino !== identity.ino || now.size !== size)
-          throw new Error('file-changed')
-        ftruncateSync(output, 0)
-        if (writeSync(output, bytes) !== bytes.length)
-          throw new Error('partial-write')
-        fsyncSync(output)
-        size = bytes.length
-      }
-      finally { closeSync(output) }
-    }
+    // 登记早于首条记录和方法包装（见 exclusive-report.ts）。
+    write = createExclusiveReport(testInfo, FILE, MAX_BYTES, 'context-close-diagnostic')
   }
   catch {
     incomplete('report-unavailable')
@@ -150,12 +117,16 @@ export function watchContextCloseDiagnostic(context: BrowserContext, testInfo: T
       reasons.add('observed-call-failed')
     note(stage, outcome, callId)
   }
-  const wrap = <Args extends unknown[], Result>(stage: Method, original: (...args: Args) => Promise<Result>) => {
+  const wrap = <Args extends unknown[], Result>(stage: Method, original: (...args: Args) => Promise<Result>, onStart?: () => void) => {
     // eslint-disable-next-line ts/promise-function-async -- async 会替换原 Promise 并把同步异常转为拒绝；这里必须透明透传。
     return function (this: unknown, ...args: Args): Promise<Result> {
       const callId = ++callSequence
       pending.add(callId)
       note(stage, 'start', callId)
+      try {
+        onStart?.()
+      }
+      catch { /* 协议记录自己登记不完整；不影响原调用。 */ }
       let result: Promise<Result>
       try {
         result = original.apply(this, args)
@@ -180,6 +151,8 @@ export function watchContextCloseDiagnostic(context: BrowserContext, testInfo: T
   note('observer.registered', 'event')
   if (stopped)
     return
+  // 协议记录从这里开始（本条用例的页面都在这之后创建），context 关闭、浏览器断连或到兜底时限时自行释放。
+  const protocol = options.protocol === null ? undefined : startCloseProtocolRecorder(context, testInfo, owner, options.protocol ?? tapPlaywrightProtocol)
   const request = context.request
   const tracing = context.tracing
   // eslint-disable-next-line ts/unbound-method -- 保存原方法供动态 this 的 apply 与原样恢复，不能预先绑定改变调用语义。
@@ -188,7 +161,7 @@ export function watchContextCloseDiagnostic(context: BrowserContext, testInfo: T
   const originalDispose = request.dispose
   // eslint-disable-next-line ts/unbound-method -- 同上，包装器将原 this/参数透传。
   const originalStopChunk = tracing.stopChunk
-  const close = wrap('context.close', originalClose)
+  const close = wrap('context.close', originalClose, () => protocol?.closeStarted())
   const dispose = wrap('request.dispose', originalDispose)
   const stopChunk = wrap('tracing.stopChunk', originalStopChunk)
   const browser = context.browser()

@@ -135,10 +135,10 @@ describe('US-M1-11 CI 的接线与 pnpm verify 的分片一致（规范 §9）',
     }
   })
 
-  it('关闭阶段补证只在 Chrome 分片启用，不能扩大到其他 job 或被步骤覆盖', () => {
+  it('关闭阶段补证（含协议记录）只在 Chrome、Edge 分片启用，不能扩大到其他 job 或被步骤覆盖', () => {
     expect(workflow.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC).toBeUndefined()
     // eslint-disable-next-line no-template-curly-in-string -- 实际 GitHub 矩阵开关，不另造表达式求值器
-    expect(workflow.jobs.e2e?.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC).toBe('${{ matrix.browser == \'chrome\' && \'1\' || \'\' }}')
+    expect(workflow.jobs.e2e?.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC).toBe('${{ (matrix.browser == \'chrome\' || matrix.browser == \'msedge\') && \'1\' || \'\' }}')
     for (const [id, job] of Object.entries(workflow.jobs)) {
       if (id !== 'e2e')
         expect(job.env?.E2E_CONTEXT_CLOSE_DIAGNOSTIC, id).toBeUndefined()

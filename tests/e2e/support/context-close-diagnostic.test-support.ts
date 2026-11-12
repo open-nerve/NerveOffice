@@ -85,16 +85,21 @@ test('另一页换人后旧草稿页重新聚焦，不再显示原账户已完�
       throw new Error('默认关闭夹具模型的 Node 调度器没有正常退出；保留临时根等待外层核对')
     if (!existsSync(results))
       throw new Error(`默认关闭夹具模型没有报告：${result.stderr}`)
-    const reports = existsSync(output)
-      ? readdirSync(output, { recursive: true }).filter((path): path is string => typeof path === 'string' && path.endsWith('/context-close-diagnostic.json')).map(path => readFileSync(join(output, path), 'utf8'))
+    const named = (suffix: string) => existsSync(output)
+      ? readdirSync(output, { recursive: true }).filter((path): path is string => typeof path === 'string' && path.endsWith(suffix)).map(path => readFileSync(join(output, path), 'utf8'))
       : []
+    const reports = named('/context-close-diagnostic.json')
+    const protocols = named('/context-close-protocol.json')
     for (const [index, report] of reports.entries())
       writeFileSync(join(evidence, `diagnostic-${index}.json`), report)
+    for (const [index, report] of protocols.entries())
+      writeFileSync(join(evidence, `protocol-${index}.json`), report)
     return {
       status: result.status,
       bodyFinished: existsSync(bodyProof),
       statuses: outcomeSchema.parse(JSON.parse(readFileSync(results, 'utf8'))).suites.flatMap(suite => suite.specs.flatMap(spec => spec.tests.flatMap(test => test.results.map(item => item.status)))),
       reports: reports.map((text): unknown => JSON.parse(text)),
+      protocols: protocols.map((text): unknown => JSON.parse(text)),
     }
   }
   finally {
@@ -135,7 +140,7 @@ watchContextCloseDiagnostic(context, {
   title: '另一页换人后旧草稿页重新聚焦，不再显示原账户已完成副本的标题和链接',
   retry: 0, project: { name: 'chrome', outputDir: ${JSON.stringify(root)} },
   outputPath: () => path, annotations, attachments: [],
-})
+}, { protocol: null })
 renameSync(path, ${JSON.stringify(prior)})
 renameSync(${JSON.stringify(fifo)}, path)
 await context.close()
