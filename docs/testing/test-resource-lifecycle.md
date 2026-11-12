@@ -26,11 +26,17 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 
 **协议记录**（`context-close-protocol.ts`，同一开关、同一 attempt、同一归属）：另独占创建 `context-close-protocol.json`（0600，最多 192 KiB），在这条用例所在的工作进程里、只在这条用例期间，把 Playwright 与浏览器之间的协议消息接到内存里的过滤器。
 
-- 接法：从 Node 的模块缓存里取这个进程已经加载的、恰好一份 playwright-core，版本须为 1.63.0（它旁边的 `package.json`），取它从 `lib/coreBundle` 导出的内部日志对象 `utils.debugLogger`，只替换 `isEnabled`/`log` 对 `protocol` 的处理，其余名字原样交还；协议日志已在别处开启、版本或形状不符都不安装，只登记 `context-close-protocol-incomplete` 注解。不设 `DEBUG`、`DEBUG_FILE` 等环境变量，不经管道或文件，不发任何协议命令。
-- 只留与关闭页面、关闭 context 有关的命令、回复与事件（含 `Page.captureScreenshot`、`Page.stopScreencast` 与 `Target.disposeBrowserContext`）的方法名、编号、时刻、目标类型、截短到 8 位的标识与等待时长，以及几个布尔标志（是否已附着、是否等待调试器、关闭是否成功、截图是否超出视口）与截图格式；对话框只留类型，错误只留错误码与截短的 ASCII 文字；另有各方法名的计数（最多 300 个）、关闭开始之前 100 条与之后 600 条的方法名序列、仍在等待回复的命令。参数、结果、地址、标题、Cookie、请求与回复内容不保存，原始消息不落盘、不输出。
-- 关闭开始时（由本文件对 `context.close` 的包装通知）与之后 2、10、30、90、200 秒整份重写；context 关闭、浏览器断连或安装满 330 秒即撤掉接法并写下最终状态（`closed`／`disconnected`／`stopped`）。只有 `closed` 且无原因才算完整。
+- 接法：从 Node 的模块缓存里取这个进程已经加载的、恰好一份 playwright-core，版本须为 1.63.0（它旁边的 `package.json`），取它从 `lib/coreBundle` 导出的内部日志对象 `utils.debugLogger`，只替换 `isEnabled`/`log` 对 `protocol` 的处理，其余名字原样交还。协议日志已在别处开启、版本或形状不符、接法出错（`tap-failed`）都不安装：写一份 `state: stopped` 的文件写明原因，并登记 `context-close-protocol-incomplete` 注解，不影响用例。不设 `DEBUG`、`DEBUG_FILE` 等环境变量，不经管道或文件，不发任何协议命令。
+- 只留与关闭页面、关闭 context 有关的命令、回复与事件（含 `Page.captureScreenshot`、`Page.stopScreencast` 与 `Target.disposeBrowserContext`）：
+  - 方法名、编号、时刻、类别（发出、回复、事件）、会话与目标的类型、截短到 8 位的标识（目标、会话、context、打开者）与等待时长；
+  - 少量布尔与枚举值：是否已附着、是否等待调试器、关闭是否成功、截图格式与是否超出视口、新建目标是否新窗口与是否后台、对话框的类型与是否由浏览器处理、对话框是否接受与结果、崩溃的状态与错误码、`Inspector.detached` 的原因；
+  - 错误只留错误码与截短的 ASCII 文字。
 
-小型验证：`python3 -B tools/test-resources/run.py unit -- pnpm exec vitest run --project unit tests/e2e/support/context-close-diagnostic.test.ts tests/e2e/support/context-close-protocol.test.ts`。其中真实 Playwright Node 夹具调度只替换 browser 边界，不启动浏览器，分别保留 passed 与预期 teardown timedOut，并核对协议记录在真实工作进程里接上运行中的 playwright-core、随关闭或断连撤掉；合成的协议日志行核对输出不含任何参数值。退出不明时保留本轮根交父运行器核对，不将模型结果冒充 Chrome、Edge 实测。
+  另有各方法名的计数（最多 300 个）；关闭开始之前 100 条与之后 600 条的序列，每条是方法名、类别、时刻、编号、会话与目标类型、错误码与回复用时；仍在等待回复的命令。参数值、结果、地址、标题、Cookie、请求与回复内容不保存，原始消息不落盘、不输出；要保存的方法名与会话号先复制成独立的字符串，不连带留住整条原文。关闭相关的记录超过 300 条时留最近的；需要裁剪才放得进 192 KiB 时，关闭后的序列留开头，关闭前的序列与关闭相关的记录留离关闭最近的结尾。
+- 关闭开始时（由本文件对 `context.close` 的包装通知）与之后 2、10、30、90、200 秒整份重写；context 关闭、浏览器断连或安装满 330 秒即撤掉接法并写下最终状态（`closed`／`disconnected`／`stopped`）。
+- 完整的判定：只有以 context 的 close 事件结束，且关闭开始之后发出的 `Target.disposeBrowserContext` 都得到回复（没有错误），才算完整；否则原因记为 `close-not-started`、`dispose-not-sent`、`dispose-unanswered` 或 `dispose-error`。关闭卡住之后浏览器被关掉时，Playwright 先派发 context 的 close、再派发断连（`Browser.didClose`），所以这种情形是 `closed` 加原因 `dispose-unanswered`；判读以 `contexts[].disposeSentT`、`disposeDoneT` 与 `pending` 为准。
+
+小型验证：`python3 -B tools/test-resources/run.py unit -- pnpm exec vitest run --project unit tests/e2e/support/context-close-diagnostic.test.ts tests/e2e/support/context-close-protocol.test.ts`。其中真实 Playwright Node 夹具调度只替换 browser 边界，不启动浏览器，分别保留 passed 与预期 teardown timedOut，并核对协议记录在真实工作进程里接上运行中的 playwright-core、随 context 的 close 撤掉（假浏览器收尾时按 Playwright 的顺序先发 close、再断连；没有协议消息，记 `dispose-not-sent`）；合成的协议日志行核对输出不含任何参数值，并按真实顺序核对关闭卡住之后的 `dispose-unanswered`。退出不明时保留本轮根交父运行器核对，不将模型结果冒充 Chrome、Edge 实测。
 
 ## 正式入口
 
