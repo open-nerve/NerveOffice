@@ -124,6 +124,17 @@ describe('协议过滤器', () => {
     expect(snapshot.pending).toEqual([])
   })
 
+  it('平稳关浏览器的 Browser.close 不经日志发出，只有回复（编号 -9999）进日志：认作 Browser.close 的回复，不计为未解析', () => {
+    const filter = new CloseProtocolFilter(0)
+    filter.closeStarted(10)
+    filter.feed(recv({ id: -9999, result: {} }), 20)
+    const snapshot = filter.snapshot(30)
+    expect(snapshot.unparsed).toBe(0)
+    expect(snapshot.closeEvents).toEqual([{ t: 20, k: 'A', m: 'Browser.close', id: -9999 }])
+    expect(snapshot.methods).toEqual({ 'answer Browser.close': 1 })
+    expect(snapshot.postClose).toEqual([{ t: 20, k: 'A', m: 'Browser.close', id: -9999 }])
+  })
+
   it('关闭开始之后发出的 dispose 都得到回复（没有错误）才算完成；关闭开始之前别的 context 的不算', () => {
     const filter = new CloseProtocolFilter(0)
     expect(filter.disposeOutcome()).toBe('close-not-started')

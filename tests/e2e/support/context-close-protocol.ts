@@ -28,10 +28,15 @@ const CORE_BUNDLE = `${sep}playwright-core${sep}lib${sep}coreBundle.js`
 const SEND = 'SEND ► '
 const RECV = '◀ RECV '
 const TRUNCATED = ' <<<<<( LOG TRUNCATED )>>>>> '
-const HEAD_ID = /^\{"id":(\d{1,15})[,}]/
+const HEAD_ID = /^\{"id":(-?\d{1,15})[,}]/
 const SEND_METHOD = /^\{"id":\d{1,15},"method":"([A-Z][A-Za-z]{0,39}\.[A-Za-z]{1,60})"/
 const EVENT_METHOD = /^\{"method":"([A-Z][A-Za-z]{0,39}\.[A-Za-z]{1,60})"/
-const ERROR_HEAD = /^\{"id":\d{1,15},"error":(?:\{"code":(-?\d{1,9}))?/
+const ERROR_HEAD = /^\{"id":-?\d{1,15},"error":(?:\{"code":(-?\d{1,9}))?/
+/**
+ * Playwright 1.63 平稳关浏览器时（attemptToGracefullyCloseBrowser）把 Browser.close 直接写进管道、不经日志，编号固定为 -9999
+ * （CR 的 kBrowserCloseMessageId）；只有它的回复进日志。认出这条回复，看得到浏览器还回不回应平稳关闭
+ */
+const GRACEFUL_CLOSE_ID = -9999
 const TAIL_SESSION = /"sessionId":"([0-9A-F]{8,64})"\}$/i
 const HEX = /^[0-9A-F]{8,64}$/i
 const WORD = /^[A-Z_ .-]{1,60}$/i
@@ -112,7 +117,10 @@ interface PendingItem { id: number, method: string, waitedMs: number, s?: string
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
-/** 正则从整条消息上截出的子串可能连带留住整条原文（V8 的切片字符串）：要保存的方法名与会话号先复制成独立的字符串 */
+/**
+ * 从整条消息里截出或解析出的较长字符串可能连带留住整条原文（V8 的切片字符串，正则与 JSON.parse 都会产生）：要保存的方法名、会话号
+ * 与枚举值先复制成独立的字符串
+ */
 function detach(value: string): string {
   return Buffer.from(value, 'utf8').toString('utf8')
 }
@@ -120,7 +128,7 @@ function short(value: unknown): string | undefined {
   return typeof value === 'string' && HEX.test(value) ? value.slice(0, 8) : undefined
 }
 function word(value: unknown): string | undefined {
-  return typeof value === 'string' && WORD.test(value) ? value : undefined
+  return typeof value === 'string' && WORD.test(value) ? detach(value) : undefined
 }
 function flag(params: Record<string, unknown>, key: string): boolean | undefined {
   const value = params[key]
@@ -521,7 +529,7 @@ export class CloseProtocolFilter {
   private onAnswer(now: number, ident: number, session: string, head: string, body: string): void {
     const entry = this.pending.get(ident)
     this.pending.delete(ident)
-    const method = entry?.method
+    const method = entry?.method ?? (ident === GRACEFUL_CLOSE_ID ? 'Browser.close' : undefined)
     const errorHead = ERROR_HEAD.exec(head)
     const isError = errorHead !== null
     const code = !isError ? undefined : errorHead[1] === undefined ? 1 : Number(errorHead[1])
@@ -570,7 +578,7 @@ export class CloseProtocolFilter {
       const owner = text(extra, 'context')
       if (owner !== undefined)
         info.context = owner
-      this.sessions.set(params.sessionId, info)
+      this.sessions.set(detach(params.sessionId), info)
     }
     this.closeEvent(record, extra)
     let context = text(extra, 'context')

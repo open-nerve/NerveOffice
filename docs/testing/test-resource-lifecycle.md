@@ -30,9 +30,10 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 - 只留与关闭页面、关闭 context 有关的命令、回复与事件（含 `Page.captureScreenshot`、`Page.stopScreencast` 与 `Target.disposeBrowserContext`）：
   - 方法名、编号、时刻、类别（发出、回复、事件）、会话与目标的类型、截短到 8 位的标识（目标、会话、context、打开者）与等待时长；
   - 少量布尔与枚举值：是否已附着、是否等待调试器、关闭是否成功、截图格式与是否超出视口、新建目标是否新窗口与是否后台、对话框的类型与是否由浏览器处理、对话框是否接受与结果、崩溃的状态与错误码、`Inspector.detached` 的原因；
-  - 错误只留错误码与截短的 ASCII 文字。
+  - 错误只留错误码与截短的 ASCII 文字；
+  - Playwright 平稳关浏览器的 `Browser.close` 直接写进管道、不经日志，只有回复（编号 -9999）进日志：记作 `Browser.close` 的回复（没有等待时长），看得到浏览器还回不回应平稳关闭。
 
-  另有各方法名的计数（最多 300 个）；关闭开始之前 100 条与之后 600 条的序列，每条是方法名、类别、时刻、编号、会话与目标类型、错误码与回复用时；仍在等待回复的命令。参数值、结果、地址、标题、Cookie、请求与回复内容不保存，原始消息不落盘、不输出；要保存的方法名与会话号先复制成独立的字符串，不连带留住整条原文。关闭相关的记录超过 300 条时留最近的；需要裁剪才放得进 192 KiB 时，关闭后的序列留开头，关闭前的序列与关闭相关的记录留离关闭最近的结尾。
+  另有各方法名的计数（最多 300 个）；关闭开始之前 100 条与之后 600 条的序列，每条是方法名、类别、时刻、编号、会话与目标类型、错误码与回复用时；仍在等待回复的命令。参数值、结果、地址、标题、Cookie、请求与回复内容不保存，原始消息不落盘、不输出；要保存的方法名、会话号与枚举值先复制成独立的字符串，不连带留住整条原文。关闭相关的记录超过 300 条时留最近的；需要裁剪才放得进 192 KiB 时，关闭后的序列留开头，关闭前的序列与关闭相关的记录留离关闭最近的结尾。
 - 关闭开始时（由本文件对 `context.close` 的包装通知）与之后 2、10、30、90、200 秒整份重写；context 关闭、浏览器断连或安装满 330 秒即撤掉接法并写下最终状态（`closed`／`disconnected`／`stopped`）。
 - 完整的判定：只有以 context 的 close 事件结束，且关闭开始之后发出的 `Target.disposeBrowserContext` 都得到回复（没有错误），才算完整；否则原因记为 `close-not-started`、`dispose-not-sent`、`dispose-unanswered` 或 `dispose-error`。关闭卡住之后浏览器被关掉时，Playwright 先派发 context 的 close、再派发断连（`Browser.didClose`），所以这种情形是 `closed` 加原因 `dispose-unanswered`；判读以 `contexts[].disposeSentT`、`disposeDoneT` 与 `pending` 为准。
 
