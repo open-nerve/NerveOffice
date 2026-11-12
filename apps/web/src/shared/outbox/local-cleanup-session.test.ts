@@ -182,7 +182,7 @@ describe('完整清单在原清理许可内完成', () => {
   })
 })
 
-// 与用户无关的退役存储（旧 SDK 库）：别的标签页占着时删库要等到时限才如实 pending。它不属于主库、镜像与会话状态，
+// 与用户无关的退役存储（旧 SDK 库）：删库请求排在别页被挡住的删库请求后面时收不到任何事件，要等满时限才如实 pending。它不属于主库、镜像与会话状态，
 // 等待不能占着同源锁——会话确认、退出与各页的清理都排在这把锁上（P8 第 7 轮：登录页每次多等约 3 秒才出表单）
 describe('退役存储在同源锁外等待', () => {
   it('等待期间同源锁空闲，别的互斥任务不必陪着等；等完才在锁内核对许可并清理', async () => {
@@ -196,7 +196,9 @@ describe('退役存储在同源锁外等待', () => {
     const cleaning = t.cleanup.removeUser(PERMIT)
     await vi.waitFor(() => expect(clearRetired).toHaveBeenCalledOnce())
     await entered.promise
-    expect(await withOutboxLock(async () => 'ran')).toBe('ran')
+    // 退化成锁内等待时，这里明确报“锁被占着”，而不是等到用例超时
+    const ran = await Promise.race([withOutboxLock(async () => 'ran'), new Promise<string>(resolve => setTimeout(resolve, 1_000, 'lock-held'))])
+    expect(ran).toBe('ran')
     expect(t.retire).not.toHaveBeenCalled()
     release.resolve({ kind: 'cleared' })
     expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })

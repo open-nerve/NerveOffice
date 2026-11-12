@@ -10,7 +10,7 @@
 // - 按用户清理：先在库里把这个人每份文档的写入者换成墓碑（一个事务，复验 C5）——之后那一页写不进去、它的发件箱 Worker 不再写镜像，
 //   删镜像目录与清库之间不会把目录重建出来；再列出、删掉他的镜像目录；最后清库，跳过的那几份草稿、提示与墓碑留着。之后凭同一清理许可再调 removeUser
 //   接着清；每轮在同源锁下核对持久 clearing，重新登录先换代时旧清理不能碰主库或镜像。全部清完才转入 cleared，保留代次。
-//   与用户无关的退役存储（旧 SDK 库）每轮在进锁之前、锁外等完：删库被别的标签页占着时要等到时限，不能让排在这把锁上的
+//   与用户无关的退役存储（旧 SDK 库）每轮在进锁之前、锁外等完：删库请求排在别页被挡住的删库请求后面时收不到任何事件，要等满时限，不能让排在这把锁上的
 //   会话确认、退出与各页清理陪着等（ADR-020 的 M5-P8 补充）；它没清完同样不转入 cleared。
 // - 放弃：库里的草稿与提示照删，写入者换成墓碑；不必再调 abandon（再调会删掉那一页之后新写的）：镜像在下一次比对时被截断（墓碑挡住写回），
 //   目录与墓碑由保留期回收。
@@ -77,7 +77,8 @@ export interface LocalCleanupOptions {
   /** 原清理许可核对后、同源锁内清理浏览器附加清单（本人记号等）；未完成不能提交 cleared。 */
   readonly clearMetadata?: (userId: string) => Promise<MetadataCleanupOutcome>
   /**
-   * 与用户无关的退役存储（旧 SDK 库，ADR-010）：别的标签页占着时要等到时限才如实 pending。它不属于主库、镜像与会话状态，
+   * 与用户无关的退役存储（旧 SDK 库，ADR-010）：别页开着连接时当即 blocked、如实 pending；删库请求排在别页被挡住的删库请求后面时
+   * 收不到任何事件，要等满时限才如实 pending（不会等到别页放手）。它不属于主库、镜像与会话状态，
    * 在同源锁外、进锁之前等它——会话确认、退出与各页的清理都排在这把锁上（ADR-020 的 M5-P8 补充）；未完成同样不能提交 cleared。
    */
   readonly clearRetired?: () => Promise<MetadataCleanupOutcome>
@@ -209,9 +210,9 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
    */
   async function removeUser(permit: UserCleanupPermit, retiredStorage: MetadataCleanupOutcome): Promise<UserCleanupOutcome | StoreProblem> {
     const { userId } = permit
-    const retired = await store.retireUser(permit, { now: now() })
-    if (retired.kind !== 'retired')
-      return retired
+    const tombstoned = await store.retireUser(permit, { now: now() })
+    if (tombstoned.kind !== 'retired')
+      return tombstoned
     let metadata: MetadataCleanupOutcome = { kind: 'cleared' }
     try {
       metadata = await options.clearMetadata?.(userId) ?? metadata
@@ -257,7 +258,7 @@ export function createLocalCleanup(options: LocalCleanupOptions): LocalCleanup {
       const fixed = readUserCleanupPermit(permit)
       if (fixed === undefined)
         return { kind: 'invalidated' }
-      // 退役存储先在锁外等完：删库被别的标签页占着时要等到时限，同源锁不能陪着等（ADR-020 的 M5-P8 补充）
+      // 退役存储先在锁外等完：删库请求排在别页被挡住的请求后面时要等满时限，同源锁不能陪着等（ADR-020 的 M5-P8 补充）
       const retiredStorage = await clearRetired()
       const result = await exclusive(async () => removeUser(fixed, retiredStorage))
       return result.kind === 'session-invalid' ? { kind: 'invalidated' } : result

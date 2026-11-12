@@ -7,7 +7,7 @@ interface LegacyStorageOptions {
   readonly sessionStorage: () => LegacyStorage
 }
 
-/** 退役的旧 SDK 库：与用户无关，可能要等别的标签页放手，调用者在同源锁外等它（P8 第 7 轮） */
+/** 退役的旧 SDK 库：与用户无关；删库请求可能要等到时限才有结果，调用者在同源锁外等它（P8 第 7 轮） */
 interface RetiredSdkDatabaseOptions {
   readonly indexedDB: () => Pick<IDBFactory, 'deleteDatabase'>
   readonly timeoutMs?: number
@@ -103,7 +103,8 @@ export async function clearLegacyStorage(userId: string, options: LegacyStorageO
 
 /**
  * 退役的旧 SDK 库（ADR-010）：blocked 或到时限仍没有完成事件就如实交回 pending，同一 Document 不重复排队。
- * 它不属于主库、镜像与会话状态，删库被别的标签页占着时要等到时限；调用者不能占着同源锁等它（ADR-020 的 M5-P8 补充）
+ * 别页开着连接时当即 blocked；排在别页被挡住的删库请求后面时收不到任何事件，要等满时限（不会等到别页放手）。
+ * 它不属于主库、镜像与会话状态，调用者不能占着同源锁等它（ADR-020 的 M5-P8 补充）
  */
 export async function clearRetiredSdkDatabase(options: RetiredSdkDatabaseOptions): Promise<MetadataCleanupOutcome> {
   try {
