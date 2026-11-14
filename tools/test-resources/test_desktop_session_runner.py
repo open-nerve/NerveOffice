@@ -144,6 +144,44 @@ class DesktopSessionRunnerTests(unittest.TestCase):
     def test_barrier_finally_does_not_kill_after_leader_already_exited(self):
         self.exercise_barrier_exit_race("ended-before-kill")
 
+    def exercise_denied_after_exit(self, denied):
+        """托管 Mac #7：收尾补发信号前刚看到子进程还在运行，它紧接着退出、尚未回收，macOS 对这样的组 killpg 报 EPERM。"""
+        sent = []
+        exited = []
+        child = Mock(pid=12345, stdout=io.BytesIO())
+        child.poll.side_effect = lambda: 0 if exited else None
+        def wait(timeout=None):
+            if denied == signal.SIGKILL and signal.SIGKILL not in sent:
+                raise subprocess.TimeoutExpired("synthetic-owned-child", timeout)
+            exited.append(True)
+            return 0
+        child.wait.side_effect = wait
+        def send(pid, signum):
+            self.assertEqual(pid, child.pid)
+            sent.append(signum)
+            # 启动屏障处的第一次 SIGTERM 照常送达；之后要拒绝的那一次，子进程已退出、尚未回收
+            if len(sent) > 1 and signum == denied:
+                raise PermissionError(1, "Operation not permitted")
+        popen = subprocess.Popen
+        def start(args, *a, **kw):
+            return child if len(args) > 2 and args[2] == runner.BOOTSTRAP else popen(args, *a, **kw)
+        with patch.object(runner.subprocess, "Popen", side_effect=start), \
+                patch.object(runner.os, "killpg", side_effect=send), \
+                patch.object(runner, "group_alive", return_value=False), \
+                patch.object(lifecycle, "group_alive", return_value=False):
+            result, data = self.invoke(ObservedSession(lambda s: s.forced < 2), self.sample(0))
+        self.assertEqual(result, 143)
+        self.assertEqual(data["status"], "interrupted")
+        self.assertFalse(self.ready.exists())
+        return sent
+
+    def test_barrier_finally_tolerates_term_denied_after_leader_exited(self):
+        self.assertEqual(self.exercise_denied_after_exit(signal.SIGTERM), [signal.SIGTERM, signal.SIGTERM])
+
+    def test_barrier_finally_tolerates_kill_denied_after_leader_exited(self):
+        self.assertEqual(self.exercise_denied_after_exit(signal.SIGKILL),
+                         [signal.SIGTERM, signal.SIGTERM, signal.SIGKILL])
+
     def exercise_pending_cleanup(self, kind, late_interrupt=False):
         args = ["run.py", "--repo", str(self.repo), "e2e", "--", sys.executable, "-c", self.sample(0), str(self.ready)]
         observer = ObservedSession(lambda s: late_interrupt or s.forced < 3)

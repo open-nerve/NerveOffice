@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -337,6 +338,32 @@ class ServiceProofTests(unittest.TestCase):
             with self.subTest(script=script), self.assertRaises(RuntimeError) as caught:
                 self.module._capture("test", [sys.executable, "-c", script], deadline, limit)
             self.assertNotIn("PRIVATE", str(caught.exception))
+
+    def test_bounded_command_that_exits_just_before_its_kill_keeps_the_original_failure(self):
+        # 托管 Mac #7 的同类竞争：超时收尾时刚看到命令还在运行，它紧接着退出、尚未回收，macOS 对这样的组 killpg 报 EPERM
+        started = []
+        real_popen, real_killpg = subprocess.Popen, os.killpg
+        def popen(*args, **kwargs):
+            child = real_popen(*args, **kwargs)
+            started.append(child)
+            return child
+        def exits_first(pid, signum):
+            self.assertEqual(pid, started[0].pid)
+            real_killpg(pid, signal.SIGKILL)
+            raise PermissionError(1, "Operation not permitted")
+        try:
+            with patch.object(self.module.subprocess, "Popen", side_effect=popen), \
+                    patch.object(self.module.os, "killpg", side_effect=exits_first), \
+                    self.assertRaises(self.module.ScopeError) as caught:
+                self.module._capture("test", [sys.executable, "-c", "import time; time.sleep(2)"], time.monotonic() + .05)
+            self.assertEqual((caught.exception.operation, caught.exception.reason), ("test", "timeout"))
+            self.assertEqual(started[0].returncode, -signal.SIGKILL)
+        finally:
+            for child in started:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
+                child.stdout.close(); child.stderr.close()
 
 
 class OwnerScopeTests(unittest.TestCase):

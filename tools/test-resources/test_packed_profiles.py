@@ -553,5 +553,53 @@ finally:
             self.assertIn(b"FIFO_REJECTED", output)
 
 
+class PackedChildStopTests(unittest.TestCase):
+    """macOS 对只剩已退出、尚未回收进程的组 killpg 报 EPERM（托管 Mac #7）。只向本测试自己启动的子进程发信号。"""
+
+    def setUp(self):
+        self.module = load_module(self)
+        self.real_killpg = os.killpg
+
+    def start(self, code):
+        child = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+
+        def close():
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
+            for stream in (child.stdout, child.stderr):
+                stream.close()
+        self.addCleanup(close)
+        return child
+
+    def exits_before(self, child, denied):
+        def send(pid, signum):
+            self.assertEqual(pid, child.pid)
+            if signum != denied:
+                return self.real_killpg(pid, signum)
+            # 本轮的生产者恰在这次信号之前自行退出、尚未回收：macOS 对这样的组报 EPERM
+            self.real_killpg(pid, signal.SIGKILL)
+            raise PermissionError(1, "Operation not permitted")
+        return send
+
+    def test_stop_tolerates_producer_that_exits_just_before_term(self):
+        child = self.start("import time; time.sleep(30)")
+        with patch.object(self.module.os, "killpg", side_effect=self.exits_before(child, signal.SIGTERM)):
+            self.module._stop([child])
+        self.assertEqual(child.returncode, -signal.SIGKILL)
+        self.assertTrue(child.stdout.closed and child.stderr.closed)
+
+    def test_stop_tolerates_producer_that_exits_just_before_kill(self):
+        # 不理会 SIGTERM，等满两秒后转 SIGKILL；它恰在 SIGKILL 之前退出
+        child = self.start("import signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                           "print('ready', flush=True); time.sleep(30)")
+        self.assertEqual(child.stdout.readline(), b"ready\n")
+        with patch.object(self.module.os, "killpg", side_effect=self.exits_before(child, signal.SIGKILL)):
+            self.module._stop([child])
+        self.assertEqual(child.returncode, -signal.SIGKILL)
+        self.assertTrue(child.stdout.closed and child.stderr.closed)
+
+
 if __name__ == "__main__":
     unittest.main()

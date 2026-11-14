@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+from child_group import signal_child_group
+
 IMAGE = "postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"
 SERVICE_ID = "NERVE_TEST_CI_POSTGRES_SERVICE_ID"
 DOCKER = ["/usr/bin/docker", "--host", "unix:///var/run/docker.sock"]
@@ -101,10 +103,7 @@ def _capture(operation, argv, deadline, limit=MAX_OUTPUT):
     finally:
         if child is not None:
             if child.poll() is None:
-                try:
-                    os.killpg(child.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                signal_child_group(child, signal.SIGKILL)
                 child.wait(timeout=1)
             child.stdout.close(); child.stderr.close()
 
