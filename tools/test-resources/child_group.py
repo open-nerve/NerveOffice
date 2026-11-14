@@ -8,8 +8,10 @@ ESRCH（Linux 照常返回成功，回收之后两边都报 ESRCH）。本机实
 （它确实还在运行、无权发信号，或本进程别处正占着 Popen 的回收）就照旧抛出，失败关闭。
 
 组长尚未回收、同组还有能收信号的进程时，killpg 照常送达，不会报 EPERM；剩下的都无权发信号（例如换了身份的后代）时，
-组长回收后即返回。整组是否都已停下不由这里判定：run.py 随后用 group_alive 核对（它把 EPERM 当作存活）；
-pack_ci_profiles、service_scope 的子命令都是单进程（tar、zstd、docker 命令行），不另行核对。"""
+组长回收后即返回。整组是否都已停下不由这里判定：run.py 随后用 group_alive 核对（它把 EPERM 当作存活）。
+pack_ci_profiles 的 tar、zstd 与 service_scope 的 docker 命令行都是单进程；service_scope 的 sudo readlink（只在
+Linux CI 上）会派生以 root 身份运行的子进程，本进程本就无权向它发信号。这些都是短时命令，收尾不另行核对整组，
+与改动前相同。"""
 import os
 import subprocess
 
