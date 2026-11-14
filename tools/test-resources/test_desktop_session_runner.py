@@ -15,6 +15,10 @@ import lifecycle
 from lifecycle import Store
 from fixture_retention import ManagedFixture
 
+# 桩子进程的组号：大于 macOS（99999）与 Linux（最多 2**22）的进程号上限。用例结束后夹具收尾仍会拿它做真实的组存活探测，
+# 补丁万一失效也可能拿它真的发信号；用不可能存在的组号，两者都只会得到 ESRCH，不会碰到本机真实的进程组
+IMPOSSIBLE_GROUP = 2 ** 30
+
 
 class ObservedSession:
     def __init__(self, healthy):
@@ -107,7 +111,7 @@ class DesktopSessionRunnerTests(unittest.TestCase):
     def exercise_barrier_exit_race(self, mode):
         waited = []
         sent = []
-        child = Mock(pid=12345, stdout=io.BytesIO())
+        child = Mock(pid=IMPOSSIBLE_GROUP, stdout=io.BytesIO())
         child.poll.side_effect = lambda: 0 if waited and waited[-1] == "done" else None
         def wait(**kwargs):
             if mode != "term-gone" and not waited:
@@ -148,7 +152,7 @@ class DesktopSessionRunnerTests(unittest.TestCase):
         """托管 Mac #7：收尾补发信号前刚看到子进程还在运行，它紧接着退出、尚未回收，macOS 对这样的组 killpg 报 EPERM。"""
         sent = []
         exited = []
-        child = Mock(pid=12345, stdout=io.BytesIO())
+        child = Mock(pid=IMPOSSIBLE_GROUP, stdout=io.BytesIO())
         child.poll.side_effect = lambda: 0 if exited else None
         def wait(timeout=None):
             if denied == signal.SIGKILL and signal.SIGKILL not in sent:

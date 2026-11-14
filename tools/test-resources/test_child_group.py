@@ -82,6 +82,14 @@ class ChildGroupSignalTests(unittest.TestCase):
                 signal_child_group(child, signal.SIGTERM, settle=.2)
         self.assertIsNone(child.poll())
 
+    def test_denied_signal_while_child_is_finishing_waits_for_its_exit(self):
+        # 报 EPERM 的那一刻子进程还没退出完：在等待时限内退出就照常回收、保留退出码，不能只看一眼就报错
+        child = self.start("import time; print('ready', flush=True); time.sleep(.2)", stdout=subprocess.PIPE)
+        self.assertEqual(child.stdout.readline(), b"ready\n")
+        with patch.object(os, "killpg", side_effect=PermissionError(1, "Operation not permitted")):
+            signal_child_group(child, signal.SIGTERM)
+        self.assertEqual(child.returncode, 0)
+
     def test_running_child_group_receives_the_signal(self):
         child = self.start(GROUP_SCRIPT, stdout=subprocess.PIPE)
         self.assertEqual(child.stdout.readline(), b"ready\n")
