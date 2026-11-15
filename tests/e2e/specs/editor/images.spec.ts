@@ -1,4 +1,5 @@
 import { expectAssetHeaders, uploadAsset } from '../../support/asset-protocol.ts'
+import { browserReturns, countBrowserReturns } from '../../support/browser-online.ts'
 import { probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, imagePixels, prepareImageDocument as prepare } from '../../support/image-editor.ts'
@@ -165,8 +166,13 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
   })
 
   for (const failure of ['401', '404', '500', '503', 'broken', 'offline'] as const) {
+    // 打开并进入编辑时最多读几次：阅读、编辑各一实例，身份未变化最多各一读；401 还触发既有本机会话撤权，本人复核后可新建一代
+    // （同代不重试），真实撤权后最多各补一读
+    const firstReads = failure === '401' ? 4 : 2
+
     test(`US-M5-07 图片 ${failure} 后仍能编辑绘制保存；明确重试恢复三种图片，不自动循环请求`, async ({ page }) => {
       const { asset, documentId } = await prepare(page)
+      await countBrowserReturns(page)
       let reads = 0
       const path = `**${asset.url}`
       await page.route(path, async (route) => {
@@ -185,13 +191,21 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
       await expect(page.getByText('部分图片暂时无法显示', { exact: true })).toBeVisible()
       for (const a1 of ['C3', 'F3', 'A8', 'D8'])
         await expectImagePixels(page, a1, false)
+      // 浏览器真实回到在线时，失败的图片按 P2-S2 规格新建一代、再读一次（托管 Mac 第 5 轮：虚拟机真实断网约 3～5 秒，需求方
+      // 2026-11-11 决定判定与规格一致）。回到在线的次数都在读取次数之后再记：页面先记下回到在线、才因此发出读取，后记的次数一定包含
+      // 已经记进读取次数的那些读取的起因
       const before = reads
+      const returnsByBefore = await browserReturns(page)
       expect(before).toBeGreaterThan(0)
-      // 401 还触发既有本机会话撤权：本人复核后可新建一代；同代不重试。
-      // 阅读、编辑各一实例，身份未变化最多各一读；真实撤权后最多各补一读。
-      expect(before).toBeLessThanOrEqual(failure === '401' ? 4 : 2)
+      // 浏览器每回到在线一次，最多再读一次
+      expect(before).toBeLessThanOrEqual(firstReads + returnsByBefore)
       await imageFailureSentinel(page, documentId, `${failure} 后编辑绘制与捕获`)
-      expect(reads).toBe(before)
+      const after = reads
+      const returns = await browserReturns(page)
+      // 编辑、绘制与保存期间：浏览器从没回到在线就一次也不许多读（不自动循环请求）；回到过在线时，每一次最多带来一次读取。
+      // 按至今回到在线的总次数，不按这段期间的次数：回到在线在记下 before 之前、它带来的读取在之后，也是规格允许的那一次
+      expect(after - before, `至今浏览器回到在线 ${returns} 次`).toBeLessThanOrEqual(returns)
+      expect(after, `至今浏览器回到在线 ${returns} 次`).toBeLessThanOrEqual(firstReads + returns)
       await page.unroute(path)
       const response = page.waitForResponse(response => new URL(response.url()).pathname === asset.url)
       await page.getByRole('button', { name: '重新加载图片', exact: true }).click()
@@ -202,4 +216,41 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
       await imageFailureSentinel(page, documentId, `${failure} 恢复后二次保存`)
     })
   }
+
+  test('US-M5-07 图片读取失败之后浏览器断网再恢复：失败的图片按规格新建一代、只再读一次，之后编辑、绘制与保存不再请求', async ({ page, context }) => {
+    // P2-S2 规格：普通失败本代内不自动循环重读；联网恢复创建新代（托管 Mac 第 5 轮：虚拟机真实断网又恢复时页面这样读了一次，
+    // 需求方 2026-11-11 决定补这条确定的用例）。断网与恢复用浏览器的离线模拟，页面收到的是同一对 online、offline 事件
+    const { asset, documentId } = await prepare(page)
+    await countBrowserReturns(page)
+    let reads = 0
+    await page.route(`**${asset.url}`, async (route) => {
+      reads += 1
+      await route.fulfill({ status: 200, contentType: 'image/png', headers: { 'x-asset-status': '503', 'cache-control': 'no-store' }, body: 'deliberately invalid image bytes' })
+    })
+    await openAndEnterEditing(page, documentId, 'steady')
+    const notice = page.getByText('部分图片暂时无法显示', { exact: true })
+    await expect(notice).toBeVisible()
+    for (const a1 of ['C3', 'F3', 'A8', 'D8'])
+      await expectImagePixels(page, a1, false)
+    const before = reads
+    expect(before).toBeGreaterThan(0)
+    expect(await browserReturns(page), '用例开始前浏览器没有离线过').toBe(0)
+    const connectionNotice = page.getByText('此操作需要联网，连接恢复后可继续。', { exact: true })
+    await context.setOffline(true)
+    try {
+      // 页面认出了离线（连接不可用时说明要联网）：之后再恢复，页面看到的才是"由离线回到在线"
+      await expect(connectionNotice).toBeVisible()
+    }
+    finally {
+      await context.setOffline(false)
+    }
+    // 提示条消失会移动画布：等页面确认连接恢复再按坐标操作（与 image-production.spec.ts 的离线用例相同）
+    await expect(connectionNotice).toBeHidden()
+    await expect.poll(() => reads, { message: '回到在线之后失败的图片新建一代、再读一次' }).toBe(before + 1)
+    expect(await browserReturns(page)).toBe(1)
+    await expect(notice, '再读仍然失败，提示照旧').toBeVisible()
+    await imageFailureSentinel(page, documentId, '断网恢复之后编辑绘制与捕获')
+    expect(reads, '这一代之后编辑、绘制与保存不再请求这张图').toBe(before + 1)
+    expect(await browserReturns(page)).toBe(1)
+  })
 })

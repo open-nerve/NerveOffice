@@ -26,7 +26,15 @@ import { recordStatusWrites, spokenWrites } from '../../support/status-writes.ts
 // 打开编辑器的用例：整份 spec 放宽时限（support/sheet.ts 里有实测数字与理由）
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
-/** 断网时被抢走本机锁：恢复后由下一次真实续租得知旧租约失效；只认本次等待开始后发出的请求。 */
+/** 拨钟的一步（毫秒）：远小于页面给编辑权请求设的 10 秒时限 */
+const CLOCK_STEP_MS = 500
+
+/**
+ * 断网时被抢走本机锁：恢复后由下一次真实续租得知旧租约失效；只认本次等待开始后发出的请求。
+ * 逐段拨到下一次心跳（至多一个心跳间隔），续租已发出就不再拨。一跳 10 秒会让页面此刻在途的请求（续租得到 409 之后的重新申请）
+ * 当即到达页面的 10 秒时限，被页面取消、按网络失败处理，失效说明要等再下一次心跳（P8 实施记录“第 7 轮产物的只读分析”）；
+ * 写法同 handover-takeover.spec.ts 的“已在途就不拨时间；逐段到点”
+ */
 async function awaitLostLeaseHeartbeat(page: Page, documentId: string, reconnect: () => Promise<void>): Promise<void> {
   const sent = new Set<Request>()
   const record = (request: Request): void => {
@@ -37,7 +45,14 @@ async function awaitLostLeaseHeartbeat(page: Page, documentId: string, reconnect
   try {
     const answered = page.waitForResponse(response => sent.has(response.request()))
     await reconnect()
-    await page.clock.fastForward(EDIT_LEASE_HEARTBEAT_SECONDS * 1_000)
+    let advanced = 0
+    await expect.poll(async () => {
+      if (sent.size === 0 && advanced < EDIT_LEASE_HEARTBEAT_SECONDS * 1_000) {
+        await page.clock.fastForward(CLOCK_STEP_MS)
+        advanced += CLOCK_STEP_MS
+      }
+      return sent.size
+    }, { message: '旧页的下一次续租已发出', intervals: [50] }).toBeGreaterThan(0)
     const response = await answered
     expect(response.status(), await response.text()).toBe(409)
     expect(await response.json()).toMatchObject({ error: { code: 'EDIT_LEASE_LOST' } })

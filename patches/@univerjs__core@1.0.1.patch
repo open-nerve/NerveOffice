@@ -1,9 +1,9 @@
 diff --git a/lib/es/index.js b/lib/es/index.js
-index a36fe6257770c8aac96083b80c2f445b337c7fc0..d85bca06128da8c0cfa2c440c79fa87db8b3539b 100644
+index a36fe6257770c8aac96083b80c2f445b337c7fc0..d73c3539f9852d6efd3acf04232fe90288a1c633 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -1,3 +1,4 @@
-+// Modified by NerveOffice: instance-owned images and rendering lifecycle fixes (ADR-022).
++// Modified by NerveOffice: instance-owned images, rendering lifecycle and floating-image anchor fixes (ADR-022).
  import { BehaviorSubject, Observable, ReplaySubject, Subject, Subscription, combineLatest, debounceTime, distinctUntilChanged, filter, firstValueFrom, map, merge as merge$1, of, skip, take, takeWhile, tap, timer } from "rxjs";
  import { ObjectScope, UnitAction, UnitObject, UnitRole, UniverType as UniverInstanceType } from "@univerjs/protocol";
  import { debounceTime as debounceTime$1, filter as filter$1, first, map as map$1 } from "rxjs/operators";
@@ -45,3 +45,22 @@ index a36fe6257770c8aac96083b80c2f445b337c7fc0..d85bca06128da8c0cfa2c440c79fa87d
  			})();
  			return null;
  		}
+@@ -28021,12 +28023,14 @@ let SheetSkeleton = class SheetSkeleton extends Skeleton {
+ 		};
+ 	}
+ 	/**
+-	* Here, offsetX and offsetY are the coordinates in the viewport, including the rowHeaderWidthAndMarginLeft and columnHeaderHeightAndMarginTop.
++	* Here, offsetX and offsetY are absolute sheet coordinates, including the rowHeaderWidthAndMarginLeft and columnHeaderHeightAndMarginTop.
++	* NerveOffice (DEF-081): every caller (convertPositionCellToSheetOverGrid, transformToDrawingPosition) passes absolute coordinates and the
++	* offsets below are computed without scroll or scale, so the lookup must not apply the current viewport scroll or zoom either.
+ 	*/
+ 	getCellIndexAndOffsetByPosition(offsetX, offsetY) {
+-		const { actualRow, actualColumn, startX, startY } = this.getCellWithCoordByOffset(offsetX, offsetY, this._scaleX, this._scaleY, {
+-			x: this._scrollX,
+-			y: this._scrollY
++		const { actualRow, actualColumn, startX, startY } = this.getCellWithCoordByOffset(offsetX, offsetY, 1, 1, {
++			x: 0,
++			y: 0
+ 		});
+ 		return {
+ 			row: actualRow,

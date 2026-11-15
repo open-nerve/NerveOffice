@@ -13,7 +13,7 @@ import { testSessionPermit } from './session-fence.test-support.ts'
 const KEY = { userId: USER_ID, documentId: DOCUMENT_ID }
 const PERMIT: UserCleanupPermit = { ...testSessionPermit(), cause: 'logout' }
 
-function setup(clearMetadata?: LocalCleanupOptions['clearMetadata']) {
+function setup(clearMetadata?: LocalCleanupOptions['clearMetadata'], clearRetired?: LocalCleanupOptions['clearRetired']) {
   const store = fakeDraftStore()
   const files = fakeMirrorDirectory()
   const sessions = {
@@ -21,7 +21,14 @@ function setup(clearMetadata?: LocalCleanupOptions['clearMetadata']) {
     finishUserCleanup: vi.fn<SessionStore['finishUserCleanup']>(async () => ({ kind: 'cleared' })),
   }
   const retire = vi.fn(store.store.retireUser)
-  const cleanup = createLocalCleanup({ store: { ...store.store, retireUser: retire }, sessions, directory: files.directory, now: () => NOW, ...(clearMetadata === undefined ? {} : { clearMetadata }) })
+  const cleanup = createLocalCleanup({
+    store: { ...store.store, retireUser: retire },
+    sessions,
+    directory: files.directory,
+    now: () => NOW,
+    ...(clearMetadata === undefined ? {} : { clearMetadata }),
+    ...(clearRetired === undefined ? {} : { clearRetired }),
+  })
   return { store, files, sessions, retire, cleanup }
 }
 
@@ -172,5 +179,69 @@ describe('完整清单在原清理许可内完成', () => {
     expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })
     await activate
     expect(activated).toBe(true)
+  })
+})
+
+// 与用户无关的退役存储（旧 SDK 库）：删库请求排在别页被挡住的删库请求后面时收不到任何事件，要等满时限才如实 pending。它不属于主库、镜像与会话状态，
+// 等待不能占着同源锁——会话确认、退出与各页的清理都排在这把锁上（P8 第 7 轮：登录页每次多等约 3 秒才出表单）
+describe('退役存储在同源锁外等待', () => {
+  it('等待期间同源锁空闲，别的互斥任务不必陪着等；等完才在锁内核对许可并清理', async () => {
+    const entered = deferred<void>()
+    const release = deferred<MetadataCleanupOutcome>()
+    const clearRetired = vi.fn(async () => {
+      entered.resolve()
+      return release.promise
+    })
+    const t = setup(undefined, clearRetired)
+    const cleaning = t.cleanup.removeUser(PERMIT)
+    try {
+      await vi.waitFor(() => expect(clearRetired).toHaveBeenCalledOnce())
+      await entered.promise
+      // 退化成锁内等待时，这里明确报“锁被占着”，而不是等到用例超时
+      const ran = await Promise.race([withOutboxLock(async () => 'ran'), new Promise<string>(resolve => setTimeout(resolve, 1_000, 'lock-held'))])
+      expect(ran).toBe('ran')
+      expect(t.retire).not.toHaveBeenCalled()
+    }
+    finally {
+      // 失败时也放行，锁不会一直被占着而连累同文件后面的用例
+      release.resolve({ kind: 'cleared' })
+    }
+    expect(await cleaning).toEqual({ kind: 'cleared', pending: [] })
+    expect(t.retire).toHaveBeenCalledWith(PERMIT, { now: NOW })
+    expect(t.sessions.finishUserCleanup).toHaveBeenCalledExactlyOnceWith(PERMIT)
+  })
+
+  it.each(['pending', 'failed', 'throw'] as const)('退役存储 %s 仍清理本人草稿与镜像，但不完成 clearing；同许可重试才能结束', async (kind) => {
+    let result: MetadataCleanupOutcome = kind === 'pending' ? { kind: 'pending' } : { kind: 'failed', error: new Error('retired') }
+    let throws = kind === 'throw'
+    const t = setup(undefined, async () => {
+      if (throws)
+        throw new Error('retired')
+      return result
+    })
+    t.store.putRaw('drafts', KEY, sampleStoredDraft())
+    t.files.putFile(KEY, 0, new Uint8Array([1]))
+    expect(await t.cleanup.removeUser(PERMIT)).toMatchObject({ kind: kind === 'pending' ? 'pending' : 'failed' })
+    expect(t.store.rawDraft(KEY)).toBeUndefined()
+    expect(await t.files.directory.listDocuments(USER_ID)).toEqual({ kind: 'listed', documentIds: [] })
+    expect(t.sessions.finishUserCleanup).not.toHaveBeenCalled()
+    result = { kind: 'cleared' }
+    throws = false
+    expect(await t.cleanup.removeUser(PERMIT)).toEqual({ kind: 'cleared', pending: [] })
+    expect(t.sessions.finishUserCleanup).toHaveBeenCalledExactlyOnceWith(PERMIT)
+  })
+
+  it('本人记号失败优先于退役存储的 pending，交回记号的失败', async () => {
+    const error = new Error('storage')
+    const t = setup(async () => ({ kind: 'failed', error }), async () => ({ kind: 'pending' }))
+    expect(await t.cleanup.removeUser(PERMIT)).toEqual({ kind: 'failed', error })
+    expect(t.sessions.finishUserCleanup).not.toHaveBeenCalled()
+  })
+
+  it('许可无效时直接交回 invalidated，不去删退役存储', async () => {
+    const clearRetired = vi.fn(async (): Promise<MetadataCleanupOutcome> => ({ kind: 'cleared' }))
+    const t = setup(undefined, clearRetired)
+    expect(await t.cleanup.removeUser(USER_ID as unknown as UserCleanupPermit)).toEqual({ kind: 'invalidated' })
+    expect(clearRetired).not.toHaveBeenCalled()
   })
 })

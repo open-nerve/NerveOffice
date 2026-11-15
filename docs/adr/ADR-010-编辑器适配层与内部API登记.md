@@ -318,3 +318,19 @@ M5-P7 在真实 Chromium 中复现：无文件的普通表格快捷键粘贴与�
 - D-04 (c) 的 CSV 兜底由既有的 `formula-pending` 门禁承担：修复后，数组结果不完整只会表现为锚点尚未算出、公式未收齐。按函数名或区域引用猜测会误拒 `SUM(A1:A3)` 一类普通公式的导出，不采用（理由见 P7-S8 计划 §3）。
 
 剩余：P7 之前保存、之后从未在会话中重新计算过的正文仍带锚点缓存值。M5 尚未发布，这类正文只存在于开发库与测试样本，见 P7 交接单。移除条件：上游重开时不再因锚点缓存值跳过数组计算，或把溢出结果纳入快照，并通过上述回归。
+
+## M5-P8 的补充：测试构建读 SDK 挂着的右键菜单
+
+托管 Mac 第 5 轮的 Chrome 片里，只读界面用例在作者一侧“右键之后等两帧只看一次”的对照失败：菜单比两帧晚约 150 毫秒才渲染（P8 实施记录“第 5 轮产物的核对与原因”）。需求方 2026-11-11 决定改成不靠时间窗的判定：只读时“右键不弹出菜单”以 SDK 没有挂上右键菜单为准，能编辑时等菜单真的弹出。
+
+- **读法**：`internal-api/context-menu.ts` 的 `contextMenuHosts(univer)` 经注入器取 `IContextMenuHostService`（`@univerjs/ui`，经 `ui.ts` 导出），读私有字段 `_menuMap` 的键。
+- **为什么能这样判定**：
+  - `AnchoredContextMenu` 挂上时登记自己的 hostId，卸下时注销。
+  - 单元格的菜单（`desktop-context-menu`）只在界面插件的 `contextMenu` 为真时由 Workbench 渲染；工作表标签的菜单（`sheetbar-tabs-context-menu-` 加 6 位随机后缀）同样看这个开关。
+  - 只读档案给 `contextMenu: false`，两个都不挂。
+- **使用范围**：只给测试构建：E2E 探针的 `contextMenus()` 与页面自检；生产代码不用。字段不在或不是 `Map` 时抛错（SDK 升级改了登记方式），不当作“没有菜单”放行。
+- **回归**：
+  - `context-menu.test.ts` 用真实的 `ContextMenuHostService` 核对登记、注销与缺少字段时抛错。
+  - `read-only.spec.ts` 的“界面没有编辑入口”：只读时两个都不在，能编辑时两个都在、右键确实弹出。
+  - `selftest.spec.ts` 的页面自检（`context-menu.mounted` / `unmounted`）。
+- **移除条件**：SDK 公开“挂着哪些右键菜单”的读法（或只读档案下右键菜单的公开状态）之后，改用公开接口。

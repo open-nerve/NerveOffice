@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 
+from child_group import signal_child_group
 import container_resources
 import report_safety
 from desktop_session import SessionGuard
@@ -350,11 +351,8 @@ def main():
         session = SessionGuard(args.kind)
         session_record = None
         def signal_live_child(signum):
-            if child is not None and child.poll() is None:
-                try:
-                    os.killpg(child.pid, signum)
-                except ProcessLookupError:
-                    pass
+            if child is not None:
+                signal_child_group(child, signum)
         def request_stop(signum, frame):
             stopped.append(signum)
             signal_live_child(signum)

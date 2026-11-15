@@ -2,7 +2,7 @@
 // 序列化之后照样调得到它要调的 Facade；写公式的 mutation 写的就是登记的那一格。
 import { describe, expect, it } from 'vitest'
 import { READ_ONLY_PERMISSION_TEXTS } from '../profile/locale.ts'
-import { ANY_READ_ONLY_ALERT, FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, READ_ONLY_ALERT, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
+import { ANY_READ_ONLY_ALERT, contextMenusIn, FACADE_ENTRIES, FORMULA_MUTATION_CELL, FORMULA_MUTATION_ID, READ_ONLY_ALERT, SHORTCUT_OUTCOMES, writeFormulaMutation } from './read-only-entries.ts'
 
 /** 语言包里的全部文字 */
 function leaves(value: unknown): string[] {
@@ -94,5 +94,15 @@ describe('只读入口的共用清单：Facade 入口', () => {
     expect(execute?.args[0]).toBe(FORMULA_MUTATION_ID)
     const params = execute?.args[1] as { cellValue: Record<number, Record<number, { f: string }>> }
     expect(params.cellValue[FORMULA_MUTATION_CELL.row]?.[FORMULA_MUTATION_CELL.column]).toEqual({ f: '=1+1' })
+  })
+})
+
+describe('只读入口的共用清单：SDK 挂着的右键菜单（M5-P8 托管 Mac 第 5 轮之后）', () => {
+  it('contextMenusIn：单元格的按 hostId 认，工作表标签的按前缀认（hostId 带随机后缀）；别的菜单与相近的写法不算', () => {
+    expect(contextMenusIn([])).toEqual({ cell: false, sheetTab: false })
+    expect(contextMenusIn(['desktop-context-menu', 'sheetbar-tabs-context-menu-a1b2c3'])).toEqual({ cell: true, sheetTab: true })
+    expect(contextMenusIn(['desktop-context-menu'])).toEqual({ cell: true, sheetTab: false })
+    expect(contextMenusIn(['sheetbar-tabs-context-menu-x9y8z7'])).toEqual({ cell: false, sheetTab: true })
+    expect(contextMenusIn(['zen-editor-context-menu', 'desktop-context-menu-2', 'sheetbar-tabs-context-menu'])).toEqual({ cell: false, sheetTab: false })
   })
 })

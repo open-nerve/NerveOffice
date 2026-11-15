@@ -15,8 +15,7 @@ interface Project {
 }
 
 function projects(external: boolean, browsers: string): Project[] {
-  const source = `
-    import config from ${JSON.stringify(new URL('../playwright.config.ts', import.meta.url).href)};
+  return configured(`
     const accepts = (project, file) => {
       const matches = rule => (Array.isArray(rule) ? rule : [rule]).some(pattern => pattern.test(file));
       return (project.testMatch === undefined || matches(project.testMatch)) &&
@@ -32,6 +31,14 @@ function projects(external: boolean, browsers: string): Project[] {
       editor: accepts(project, '/specs/editor/conflict.spec.ts'),
       restart: accepts(project, '/specs/deploy/restart.spec.ts'),
     }))));
+  `, external, browsers) as Project[]
+}
+
+/** 在子进程里导入配置（变量 config），执行 body，取它写到标准输出的 JSON */
+function configured(body: string, external: boolean, browsers: string): unknown {
+  const source = `
+    import config from ${JSON.stringify(new URL('../playwright.config.ts', import.meta.url).href)};
+    ${body}
   `
   // 只读配置检查显式走列举路径，不借用外层 coverage 的受管资源。
   return JSON.parse(execFileSync(process.execPath, ['--conditions=@nerve-office/source', '--input-type=module', '-e', source, '--', '--list'], {
@@ -48,8 +55,15 @@ function projects(external: boolean, browsers: string): Project[] {
     },
     encoding: 'utf8',
     timeout: 10_000,
-  })) as Project[]
+  })) as unknown
 }
+
+describe('Playwright 报告器的实际配置', () => {
+  it('列表报告器在每次失败当时打印报错：运行中途被停下时日志里也有报错', () => {
+    const reporters = configured('process.stdout.write(JSON.stringify(config.reporter));', false, 'chromium')
+    expect(Array.isArray(reporters) ? reporters[0] : reporters).toEqual(['list', { printFailuresInline: true }])
+  })
+})
 
 describe('Playwright 生产崩溃项目的实际配置', () => {
   it('生产 Chromium 收到生产恢复文件，排除探针；后端重启等真实崩溃完成', () => {

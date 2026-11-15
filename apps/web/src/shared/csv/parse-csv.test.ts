@@ -1,8 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CsvError } from './csv-format.ts'
 import { parseCsv } from './parse-csv.ts'
 
 const utf8 = (text: string) => new TextEncoder().encode(text)
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('CSV 解析：保留字段，只交付完整矩阵', () => {
   it('逗号、转义引号和字段内换行不丢字', async () => {
@@ -93,10 +97,32 @@ describe('CSV 解析：保留字段，只交付完整矩阵', () => {
   })
 
   it('解析让出后可取消，不返回半份矩阵', async () => {
+    // 按计算时长让出：时钟每读一次前进 10 毫秒，第一处检查就超过一段的时长，必须让出一轮事件循环
+    let clock = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => (clock += 10))
     const controller = new AbortController()
     const parsing = parseCsv(utf8('a,b\n'.repeat(20_000)), { signal: controller.signal })
     setTimeout(() => controller.abort(), 0)
     await expect(parsing).rejects.toMatchObject({ reason: 'cancelled' })
+  })
+
+  it('按计算时长让出，不按字符数：算得快时 3 MB 的文件不逐段让出，结果不变', async () => {
+    // M5-P8：原先每 16K 字符让出一次，3 MB 约 200 次，每次至少等浏览器计时器的 4 毫秒下限，托管 Mac 上新建流程 5 秒内读不完
+    vi.spyOn(performance, 'now').mockReturnValue(0)
+    const timers = vi.spyOn(globalThis, 'setTimeout')
+    const table = await parseCsv(utf8(Array.from<string>({ length: 100 }).fill('\\'.repeat(32_767)).join('\n')))
+    expect(table).toMatchObject({ rowCount: 100, columnCount: 1 })
+    expect(table.rows[99]).toEqual(['\\'.repeat(32_767)])
+    expect(timers).not.toHaveBeenCalled()
+  })
+
+  it('一段算满时长就在下一处检查让出，算得慢的大文件仍逐段让出', async () => {
+    let clock = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => (clock += 10))
+    const timers = vi.spyOn(globalThis, 'setTimeout')
+    expect((await parseCsv(utf8('a,b\n'.repeat(20_000)))).rowCount).toBe(20_000)
+    // 80,000 个字符，每 16,384 个检查一次：第 16,384、32,768、49,152、65,536 个字符处各让出一次
+    expect(timers.mock.calls.filter(([, delay]) => delay === 0)).toHaveLength(4)
   })
 
   it('错误不包含输入的正文', async () => {

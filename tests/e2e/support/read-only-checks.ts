@@ -462,18 +462,18 @@ async function openFeatureSearch(page: Page, mode: Mode): Promise<void> {
   await showSheet(page, SAMPLE_SHEETS.data.name)
   await clickCell(page, 'A2')
   const panel = page.getByRole('dialog', { name: '搜索功能' })
-  // 与快捷键的回归（read-only-shortcuts.spec.ts）同样的看法：按下之后等两帧（对话框在动画帧里渲染）、只看一次。
-  // 能编辑时这样看得到面板，这是只读时"没有面板"与那份回归的两帧的校准；之后再等到确定的信号
+  // 面板由一条操作打开（ui.operation.open-feature-search）：只读时它在执行前被只读守卫取消，面板就不会出现，以这个确定的信号为准；
+  // 能编辑时等它执行完，再等面板真的出现（对照）。React 渲染对话框的时刻没有保证，不限定在两帧之内（原来"等两帧只看一次"的对照依赖
+  // 这个时间假设，托管 Mac 第 5 轮之后需求方 2026-11-11 决定改掉）。只读时取消之后再看一眼页面上没有面板
   const mark = await commandMark(page)
   await page.keyboard.press(await featureSearchKeys(page))
-  await nextFrames(page)
   if (mode === 'read') {
-    await expect(panel).toHaveCount(0, LOOK_ONCE)
     await settle(page, mark, SHORTCUT_OUTCOMES.featureSearch.read)
+    await expect(panel).toHaveCount(0, LOOK_ONCE)
     return
   }
-  await expect(panel).toBeVisible(LOOK_ONCE)
   await settle(page, mark, SHORTCUT_OUTCOMES.featureSearch.edit)
+  await expect(panel).toBeVisible()
   await panel.getByPlaceholder('输入功能或菜单名称…').fill('粗体')
   await step(page, mode, async () => panel.getByRole('option').filter({ hasText: '粗体' }).first().click(), {
     edit: { executed: 'sheet.command.set-style' },
@@ -491,18 +491,18 @@ async function quickSum(page: Page, mode: Mode): Promise<void> {
   await clickCell(page, 'B10')
   // 选区移过来时编辑栏换成 B10 的内容（空）
   await expect.poll(async () => formulaBarText(page), { message: '编辑栏显示 B10 的内容' }).toBe('')
-  // 与快捷键的回归同样的看法：按下之后等两帧、只看一次（能编辑时这样看得到求和公式，是校准）；之后再等到确定的信号
+  // 快速求和是一条操作（formula-ui.operation.insert-function）：只读时它在执行前被只读守卫取消，编辑栏就不会被写入，以这个确定的信号为准；
+  // 能编辑时等它执行完，再等编辑栏显示填好的求和公式（对照）。不限定在按下之后两帧之内（同 openFeatureSearch）
   const mark = await commandMark(page)
   await page.keyboard.press(await quickSumKeys(page))
-  await nextFrames(page)
   if (mode === 'read') {
+    await settle(page, mark, SHORTCUT_OUTCOMES.quickSum.read)
     expect(await formulaBarText(page), '编辑栏显示的是 B10 真实的内容').toBe('')
     await expect(permissionAlert(page)).toHaveCount(0, LOOK_ONCE)
-    await settle(page, mark, SHORTCUT_OUTCOMES.quickSum.read)
     return
   }
-  expect(await formulaBarText(page), '能编辑时编辑栏显示填好的求和公式').toBe('=SUM(B2:B9')
   await settle(page, mark, SHORTCUT_OUTCOMES.quickSum.edit)
+  await expect.poll(async () => formulaBarText(page), { message: '能编辑时编辑栏显示填好的求和公式' }).toBe('=SUM(B2:B9')
   await step(page, mode, async () => page.keyboard.press('Enter'), { edit: { executed: 'sheet.command.set-range-values' } })
 }
 
@@ -519,7 +519,9 @@ async function dragFreezeLine(page: Page, mode: Mode): Promise<void> {
   const line = { x: origin.x + (d1.startX + d1.endX) / 2, y: origin.y + d1.endY - 1 }
   await page.mouse.move(line.x, line.y + 6)
   await page.mouse.move(line.x, line.y, { steps: 3 })
-  // 移上之后等两帧再读一次光标（不重试）：能编辑时这样读到的是可以拖动的 grab，这是只读时"不是 grab"的校准
+  // 移上之后等两帧再读一次光标（不重试）：能编辑时这样读到的是可以拖动的 grab，这是只读时"不是 grab"的校准。
+  // 这里的两帧是确定的先后，不是时间窗（托管 Mac 第 5 轮之后的逐处审查）：浏览器把连续的指针移动对齐到动画帧、在动画帧回调之前派发，
+  // SDK 在 pointermove 里同步设光标（engine-render 的 _pointerMoveEvent → scene.setCursor → canvas.style.cursor），两帧之后光标已经定了
   await nextFrames(page)
   const cursor = await sheetCanvas(page).evaluate(canvas => getComputedStyle(canvas).cursor)
   expect(cursor === 'grab', `冻结线上的光标是 ${cursor}`).toBe(mode === 'edit')
@@ -535,7 +537,7 @@ async function dragFreezeLine(page: Page, mode: Mode): Promise<void> {
 
 /**
  * 移到分隔线上（from 是旁边的一点，to 是分隔线上），等两帧之后读一次画布的光标（不重试）：能编辑时这样读到的是调整的光标，
- * 这是只读时"不是调整的光标"的校准
+ * 这是只读时"不是调整的光标"的校准。两帧是确定的先后，不是时间窗（同 dragFreezeLine：指针移动在动画帧回调之前派发，SDK 同步设光标）
  */
 async function cursorOnDivider(page: Page, from: Point, to: Point): Promise<string> {
   await page.mouse.move(from.x, from.y)

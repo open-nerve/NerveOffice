@@ -204,3 +204,17 @@ export const SHORTCUT_OUTCOMES = {
   quickSum: { read: { canceled: 'formula-ui.operation.insert-function' }, edit: { executed: 'formula-ui.operation.insert-function' } },
   replace: { read: { canceled: 'ui.operation.open-replace-dialog' }, edit: { executed: 'ui.operation.open-replace-dialog' } },
 } as const satisfies Readonly<Record<string, EntryOutcomes>>
+
+/**
+ * SDK 的两个右键菜单在右键菜单宿主服务里登记的 hostId（探针的 contextMenus 给出现在登记着的，internal-api 的 contextMenuHosts）：
+ * 单元格的是 ui 的 DesktopContextMenu，工作表标签的是 sheets-ui 的 SheetBarTabsContextMenu（hostId 带 6 位随机后缀）
+ */
+export const CONTEXT_MENU_HOSTS = { cell: 'desktop-context-menu', sheetTabPrefix: 'sheetbar-tabs-context-menu-' } as const
+
+/**
+ * 这份登记里单元格与工作表标签的右键菜单各挂没挂上（M5-P8 托管 Mac 第 5 轮之后）：只读档案两个都不挂（界面插件 contextMenu: false），
+ * 右键不会弹出菜单。只读时"右键不弹出菜单"以它为准（结构上的判定，不靠等几帧之后看一眼）；能编辑时两个都在，是它的对照
+ */
+export function contextMenusIn(hosts: readonly string[]): { readonly cell: boolean, readonly sheetTab: boolean } {
+  return { cell: hosts.includes(CONTEXT_MENU_HOSTS.cell), sheetTab: hosts.some(id => id.startsWith(CONTEXT_MENU_HOSTS.sheetTabPrefix)) }
+}

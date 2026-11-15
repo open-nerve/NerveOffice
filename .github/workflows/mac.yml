@@ -1,0 +1,217 @@
+# 托管 Mac（M5-P8，DEF-074）：在 GitHub 托管的 Apple 芯片 Mac（macos-26）上按开发机的方式跑 Mac 原完整门禁（P8 设计 §3.4，
+# plans/P8-S4-托管Mac门禁.md）。只管 Apple 芯片，Intel 版不在范围内（需求方 2026-11-07 决定；原生图片也只核对了 darwin-arm64，ADR-021）。
+# 不设 CI、不设托管 VM 资源策略：Playwright 配置与开发机相同（不重试，Chromium、Chrome、WebKit，darwin 上 WebKit 单 worker），
+# 资源工具用默认的严格本机模式（真实删除并核对）。照 CI 的做法分片并行：本机模式的 no-e2e 与按浏览器的 e2e 合起来恰好是本机完整门禁
+# （plan.test.ts、mac-workflow.test.ts）。
+# Apple 芯片版不支持嵌套虚拟化，起不了 Docker（S3 探测，run 42252502692）：数据库由 Homebrew 的 PostgreSQL 按开发库（deploy/dev/compose.yaml）
+# 的版本、账号、库名、初始化参数与端口提供，测试连库的地址与开发机相同；pnpm verify 带 --external-db，不再执行 pnpm db:up。
+# 生产容器 E2E 不在这里跑：Linux CI 照旧覆盖，需求方 2026-11-10 裁决接受 Mac 上不跑这部分（DEF-074）。
+# 新工作流合并到默认分支之前不能 workflow_dispatch（GitHub 只认默认分支上已有的工作流文件），所以合并前只由推送
+# 本 Phase 的唯一分支触发，合并后可手动触发。不随 main 推送运行，不改 ci.yml 的原六项。
+# 各个 Action 按提交的 SHA 锁定，注释里写对应的版本（与 ci.yml 相同）。
+name: Mac
+
+on:
+  push:
+    branches: [m5-p8-final-closeout]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: '1'
+  HOMEBREW_NO_INSTALL_CLEANUP: '1'
+  HOMEBREW_NO_ANALYTICS: '1'
+
+jobs:
+  # 本机门禁的 no-e2e 分片：lint、类型、静态门禁、覆盖率与测试资源工具的 Python 回归、构建、产物门禁（数据库由工作流提供）
+  verify:
+    name: Mac pnpm verify --scope=no-e2e
+    runs-on: macos-26
+    timeout-minutes: 330
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # 取完整历史：迁移门禁拿这次推送之前的提交作基准（ADR-005）
+          fetch-depth: 0
+
+      # 开发机的 python3 是 macOS 自带的（/usr/bin/python3）；托管镜像默认的是 3.15，测试资源工具的回归在那里与开发机分叉
+      # （第 3 轮 run 42407334017）。在用到 python3 之前换成 macOS 自带的，运行器、探测与回归都用同一个解释器（mac-workflow.test.ts）
+      - name: 使用 macOS 自带的 python3（同开发机）
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-python"
+          ln -sfn /usr/bin/python3 "$RUNNER_TEMP/macos-python/python3"
+          echo "$RUNNER_TEMP/macos-python" >> "$GITHUB_PATH"
+          /usr/bin/python3 --version
+
+      # 只记环境事实，不作验收证据（ci_mac_probe.py）
+      - name: 记录环境（开始）
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py system
+
+      - name: 安装 Node.js（版本见 .node-version）
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: 安装 pnpm（版本见 package.json 的 packageManager）
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 与 e2e 的这一步完全相同（mac-workflow.test.ts）。版本、账号、库名、初始化参数与端口取自 deploy/dev/compose.yaml；
+      # 认证照开发库的镜像：本机套接字免密，TCP 要密码（scram-sha-256）；时区 UTC。装出来的版本与开发库不同就在这一步失败
+      - name: 启动 PostgreSQL（Homebrew，设置同开发库）
+        timeout-minutes: 15
+        env:
+          POSTGRES_VERSION: '18.6'
+          POSTGRES_USER: nerve
+          POSTGRES_PASSWORD: nerve_dev_only
+          POSTGRES_DB: nerve_office
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=builtin --builtin-locale=C.UTF-8
+          POSTGRES_PORT: '54318'
+        run: |
+          brew install "postgresql@${POSTGRES_VERSION%%.*}"
+          bin="$(brew --prefix "postgresql@${POSTGRES_VERSION%%.*}")/bin"
+          data="$RUNNER_TEMP/nerve-postgres"
+          password="$RUNNER_TEMP/nerve-postgres-password"
+          printf '%s\n' "$POSTGRES_PASSWORD" > "$password"
+          TZ=UTC "$bin/initdb" -D "$data" -U "$POSTGRES_USER" --pwfile="$password" --auth-local=trust --auth-host=scram-sha-256 $POSTGRES_INITDB_ARGS
+          rm "$password"
+          "$bin/pg_ctl" -D "$data" -l "$RUNNER_TEMP/nerve-postgres.log" -w -t 60 -o "-p $POSTGRES_PORT -c listen_addresses=127.0.0.1" start
+          export PGPASSWORD="$POSTGRES_PASSWORD"
+          "$bin/createdb" -h 127.0.0.1 -p "$POSTGRES_PORT" -U "$POSTGRES_USER" "$POSTGRES_DB"
+          version="$("$bin/psql" -h 127.0.0.1 -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'show server_version')"
+          echo "PostgreSQL $version"
+          test "${version%% *}" = "$POSTGRES_VERSION"
+
+      - name: pnpm verify --scope=no-e2e（本机模式，数据库由上一步提供）
+        timeout-minutes: 300
+        env:
+          # 本机模式：Playwright 与各工具按开发机的方式运行（不重试、不加 GitHub 报告器）
+          CI: ''
+          # 推送事件：迁移门禁拿推送之前的提交作基准；手动触发时为空，门禁改用 HEAD^1（同 ci.yml）
+          GATE_MIGRATIONS_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
+        run: pnpm verify --keep-going --scope=no-e2e --external-db
+
+      - name: 记录环境（结束）
+        if: always()
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py final
+
+      - name: 上传覆盖率报告与本轮台账
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-verify-${{ github.run_id }}
+          path: |
+            coverage/
+            .test-resources/runs/*/run.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  # 本机门禁的 e2e 分片：每片一个浏览器，崩溃项目随浏览器走，重启项目只在 Chromium 那片（playwright.config.ts）
+  e2e:
+    name: Mac pnpm verify --scope=e2e（${{ matrix.browser }}）
+    runs-on: macos-26
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, chrome, webkit]
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # 与 verify 的这一步完全相同（mac-workflow.test.ts）
+      - name: 使用 macOS 自带的 python3（同开发机）
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-python"
+          ln -sfn /usr/bin/python3 "$RUNNER_TEMP/macos-python/python3"
+          echo "$RUNNER_TEMP/macos-python" >> "$GITHUB_PATH"
+          /usr/bin/python3 --version
+
+      - name: 记录环境（开始）
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py system
+
+      - name: 安装 Node.js（版本见 .node-version）
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+
+      - name: 安装 pnpm（版本见 package.json 的 packageManager）
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          cache: true
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 安装浏览器（${{ matrix.browser }}）
+        timeout-minutes: 20
+        run: pnpm --filter @nerve-office/e2e exec playwright install ${{ matrix.browser }}
+
+      # 与 verify 的这一步完全相同（mac-workflow.test.ts）
+      - name: 启动 PostgreSQL（Homebrew，设置同开发库）
+        timeout-minutes: 15
+        env:
+          POSTGRES_VERSION: '18.6'
+          POSTGRES_USER: nerve
+          POSTGRES_PASSWORD: nerve_dev_only
+          POSTGRES_DB: nerve_office
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale-provider=builtin --builtin-locale=C.UTF-8
+          POSTGRES_PORT: '54318'
+        run: |
+          brew install "postgresql@${POSTGRES_VERSION%%.*}"
+          bin="$(brew --prefix "postgresql@${POSTGRES_VERSION%%.*}")/bin"
+          data="$RUNNER_TEMP/nerve-postgres"
+          password="$RUNNER_TEMP/nerve-postgres-password"
+          printf '%s\n' "$POSTGRES_PASSWORD" > "$password"
+          TZ=UTC "$bin/initdb" -D "$data" -U "$POSTGRES_USER" --pwfile="$password" --auth-local=trust --auth-host=scram-sha-256 $POSTGRES_INITDB_ARGS
+          rm "$password"
+          "$bin/pg_ctl" -D "$data" -l "$RUNNER_TEMP/nerve-postgres.log" -w -t 60 -o "-p $POSTGRES_PORT -c listen_addresses=127.0.0.1" start
+          export PGPASSWORD="$POSTGRES_PASSWORD"
+          "$bin/createdb" -h 127.0.0.1 -p "$POSTGRES_PORT" -U "$POSTGRES_USER" "$POSTGRES_DB"
+          version="$("$bin/psql" -h 127.0.0.1 -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc 'show server_version')"
+          echo "PostgreSQL $version"
+          test "${version%% *}" = "$POSTGRES_VERSION"
+
+      - name: pnpm verify --scope=e2e（本机模式，数据库由上一步提供）
+        timeout-minutes: 300
+        env:
+          CI: ''
+          E2E_BROWSERS: ${{ matrix.browser }}
+        run: pnpm verify --keep-going --scope=e2e --external-db
+
+      - name: 记录环境（结束）
+        if: always()
+        timeout-minutes: 5
+        run: python3 -B tools/test-resources/ci_mac_probe.py final
+
+      - name: 上传测试报告与本轮台账
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac-e2e-${{ matrix.browser }}-${{ github.run_id }}
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+            !tests/e2e/test-results/persistent-profiles/**
+            .test-resources/runs/*/run.json
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn

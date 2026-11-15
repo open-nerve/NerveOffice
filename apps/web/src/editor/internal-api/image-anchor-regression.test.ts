@@ -1,13 +1,15 @@
 import type { Workbook } from '@univerjs/core'
 import type { ISheetImage } from '@univerjs/sheets-drawing'
+import type { CapturedImageTarget } from './image-input.ts'
 import { DrawingTypeEnum, ICommandService, ImageSourceType, IUniverInstanceService, LocaleType, RedoCommand, UndoCommand, Univer, UniverInstanceType } from '@univerjs/core'
 import { IDrawingManagerService, UniverDrawingPlugin } from '@univerjs/drawing'
 import { UniverRenderEnginePlugin } from '@univerjs/engine-render'
-import { SetRowHeightCommand, SetWorksheetRowAutoHeightMutation, SheetSkeletonService, UniverSheetsPlugin } from '@univerjs/sheets'
-import { drawingPositionToTransform, ISheetDrawingService, SheetDrawingAnchorType, UniverSheetsDrawingPlugin } from '@univerjs/sheets-drawing'
+import { convertPositionCellToSheetOverGrid, SetRowHeightCommand, SetWorksheetRowAutoHeightMutation, SheetSkeletonService, UniverSheetsPlugin } from '@univerjs/sheets'
+import { drawingPositionToTransform, ISheetDrawingService, SheetDrawingAnchorType, transformToDrawingPosition, UniverSheetsDrawingPlugin } from '@univerjs/sheets-drawing'
 import { afterEach, describe, expect, it } from 'vitest'
 import { editorIdentityOverride } from '../identity/editor-authz-io.service.ts'
 import { SHEET_ZH_CN } from '../profile/locale.ts'
+import { prepareImageInsertion } from './image-input-insert.ts'
 import { injectorOf } from './injector.ts'
 
 const cleanup: (() => void)[] = []
@@ -126,5 +128,58 @@ describe('UR-009：默认 Position 自动行高后的尺寸与锚点一起保留
     expect(await h.commands.executeCommand(RedoCommand.id)).toBe(true)
     await new Promise(resolve => setTimeout(resolve, 0))
     check(4)
+  })
+})
+
+// 插入（convertPositionCellToSheetOverGrid）与移动、拖拽缩放、翻转、图片复制粘贴（transformToDrawingPosition）
+// 传入的都是工作表绝对坐标；视口滚动或缩放只改变显示，不能进入存下的锚点（M5-P8 S6 的 N4 实测）。
+describe('DEF-081：滚动或缩放之后，浮图锚点仍按工作表绝对坐标换算', () => {
+  const views = [
+    ['纵向滚动', { scrollX: 0, scrollY: 100, scale: 1 }],
+    ['横向滚动', { scrollX: 130, scrollY: 0, scale: 1 }],
+    ['放大到 200%', { scrollX: 0, scrollY: 0, scale: 2 }],
+    ['滚动并缩小到 50%', { scrollX: 75, scrollY: 45, scale: 0.5 }],
+  ] as const
+
+  function skeletonOf(univer: Univer) {
+    const param = injectorOf(univer).get(SheetSkeletonService).getSkeletonParam('anchor-book', 'sheet')
+    if (!param)
+      throw new Error('缺少真实工作表布局')
+    return param.skeleton
+  }
+
+  it.each(views)('%s：插入与移动换算出的锚点与原视口相同', (_name, view) => {
+    const h = setup()
+    const skeleton = skeletonOf(h.univer)
+    const transform = h.drawing.transform
+    if (!transform)
+      throw new Error('缺少浮图位置')
+    const inserted = convertPositionCellToSheetOverGrid('anchor-book', 'sheet', originalAnchor.from, 120, 80, skeleton)
+    const moved = transformToDrawingPosition(transform, skeleton)
+    expect(inserted.sheetTransform).toEqual(originalAnchor)
+    expect(moved).toMatchObject(originalAnchor)
+    skeleton.setScroll(view.scrollX, view.scrollY)
+    skeleton.setScale(view.scale)
+    expect(convertPositionCellToSheetOverGrid('anchor-book', 'sheet', originalAnchor.from, 120, 80, skeleton)).toEqual(inserted)
+    expect(transformToDrawingPosition(transform, skeleton)).toEqual(moved)
+  })
+
+  it.each(views)('%s：产品插入路径存下的两份锚点与原视口相同', (_name, view) => {
+    const h = setup()
+    // 产品经 ensureSkeleton 取布局；必须与这里设置滚动的是同一个实例，否则用例会空过。
+    expect(injectorOf(h.univer).get(SheetSkeletonService).ensureSkeleton('anchor-book', 'sheet')).toBe(skeletonOf(h.univer))
+    const target = { unitId: 'anchor-book', subUnitId: 'sheet', row: 2, column: 2, isCurrent: () => true, subscribe: () => () => {} } satisfies CapturedImageTarget
+    const image = { source: '/api/assets/22222222-2222-4222-8222-222222222222', width: 120, height: 80 }
+    const anchors = () => {
+      const prepared = prepareImageInsertion(h.univer, target, image, 'float', 'http://127.0.0.1')
+      const [drawing] = (prepared?.params as { drawings: ISheetImage[] } | undefined)?.drawings ?? []
+      return { transform: drawing?.transform, sheetTransform: drawing?.sheetTransform, axisAlignSheetTransform: drawing?.axisAlignSheetTransform }
+    }
+    const before = anchors()
+    expect(before).toMatchObject({ transform: { width: 120, height: 80 }, sheetTransform: originalAnchor, axisAlignSheetTransform: originalAnchor })
+    const skeleton = skeletonOf(h.univer)
+    skeleton.setScroll(view.scrollX, view.scrollY)
+    skeleton.setScale(view.scale)
+    expect(anchors()).toEqual(before)
   })
 })

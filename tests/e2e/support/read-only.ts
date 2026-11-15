@@ -122,11 +122,15 @@ export async function closePermissionAlert(page: Page, text: string | RegExp): P
 
 /**
  * 只看一次、不重试：web 优先的断言给最短的时限，第一次检查不满足就失败（Playwright 的 timeout: 0 是不限时，不能用）。
- * 用在"等到确定的时刻之后，这时应该已经如此"的地方：能编辑时的对照同样只看一次，只读时的否定才有校准
+ * 用在"等到确定的信号之后，这时应该已经如此"的否定上（例如操作已被只读守卫取消、SDK 没有挂上右键菜单之后看一眼页面上没有它）。
+ * 不用于"几帧之内一定已经出现"的肯定：React 渲染的时刻没有保证，能编辑时的对照等到真的出现（托管 Mac 第 5 轮之后，需求方 2026-11-11 决定）
  */
 export const LOOK_ONCE = { timeout: 1 } as const
 
-/** 等两个动画帧：SDK 在动画帧里结算的状态（标签的拖动位置、右键菜单的弹出、对话框的渲染）这时已经处理完 */
+/**
+ * 等两个动画帧：在动画帧里结算的状态（标签的拖动位置、画布按新的缩放与滚动重画）这时已经处理完——SDK 在输入或模型变化时登记的动画帧回调
+ * 排在这里的前面执行。React 在动画帧之后另排的渲染（右键菜单、对话框）不在此列，不能用它判断"已经弹出"
+ */
 export async function nextFrames(page: Page): Promise<void> {
   await page.evaluate(async () => new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))

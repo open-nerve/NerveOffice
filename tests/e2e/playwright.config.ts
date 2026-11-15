@@ -68,7 +68,9 @@ export default defineConfig({
   retries: CI ? 1 : 0,
   failOnFlakyTests: CI,
   reporter: [
-    ['list'],
+    // 每次失败（含之后重试的那一次）当时就打印报错，收尾的汇总不再重复列出（Playwright 列表报告器的公开选项）：托管 Mac 第 5 轮的
+    // WebKit 片在中途被受管运行器停下，没有走到汇总，日志里只有失败的标记、没有报错（需求方 2026-11-11 决定）
+    ['list', { printFailuresInline: true }],
     ['html', { open: 'never', outputFolder: join(dirname(output), 'playwright-report') }],
     ['json', { outputFile: join(output, 'results.json') }],
     // CI 上把失败与不稳定的用例写成 GitHub 注解，不登录也能从运行结果里看到

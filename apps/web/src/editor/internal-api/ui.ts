@@ -1,3 +1,4 @@
+export { contextMenuHosts } from './context-menu.ts'
 export { prepareLegacyImageRemoval } from './image-cleanup.ts'
 export type { ImageCleanupScope, LegacyImageRemoval } from './image-cleanup.ts'
 export { createImageCommandPreview, IMAGE_COMMAND_PROTOCOL, imageCellValueIsSingle } from './image-commands.ts'

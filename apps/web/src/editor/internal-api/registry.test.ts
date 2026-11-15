@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import arrayFormulaAnchorsSource from './array-formula-anchors.ts?raw'
 import cellLinksSource from './cell-links.ts?raw'
+import contextMenuSource from './context-menu.ts?raw'
 import csvArrayCellsSource from './csv-array-cells.ts?raw'
 import csvSheetCommandSource from './csv-sheet-command.ts?raw'
 import domMarkersSource from './dom-markers.ts?raw'
@@ -72,6 +73,7 @@ const SOURCES: Readonly<Record<string, string>> = {
   'ui.ts': uiSource,
   'array-formula-anchors.ts': arrayFormulaAnchorsSource,
   'cell-links.ts': cellLinksSource,
+  'context-menu.ts': contextMenuSource,
   'csv-array-cells.ts': csvArrayCellsSource,
   'csv-sheet-command.ts': csvSheetCommandSource,
   'dom-markers.ts': domMarkersSource,

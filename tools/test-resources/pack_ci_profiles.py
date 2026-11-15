@@ -14,6 +14,7 @@ import tarfile
 import time
 
 import check_ci_resources
+from child_group import signal_child_group
 import hosted
 from lifecycle import Store, Run, locked, open_paths, read_run_manifest
 import stable_reports
@@ -235,16 +236,12 @@ def _expected(run):
 
 def _stop(children):
     for child in children:
-        if child.poll() is None:
-            try:
-                os.killpg(child.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+        signal_child_group(child, signal.SIGTERM)
     for child in children:
         try:
             child.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGKILL)
+            signal_child_group(child, signal.SIGKILL)
             child.wait(timeout=2)
         for stream in (child.stdin, child.stdout, child.stderr):
             if stream is not None:

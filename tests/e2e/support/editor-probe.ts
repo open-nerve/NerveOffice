@@ -15,6 +15,7 @@ import type { LoggedCommand } from '../../../apps/web/src/editor/testing/content
 import type { EntryApi, EntryImage, EntryRange, EntryScope, EntrySheet, EntryWorkbook } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
 import type { SelftestFormulaMode } from '../../../apps/web/src/editor/testing/selftest-report.ts'
 import type { Workbook } from './sheet.ts'
+import { contextMenusIn } from '../../../apps/web/src/editor/testing/read-only-entries.ts'
 import { expect } from './fixtures.ts'
 import { cellOf, sheetCanvas } from './sheet.ts'
 
@@ -157,6 +158,8 @@ interface EditorProbe {
   /** 公式收齐了没有（与保存、自动保存等的是同一个判断） */
   readonly formulasSettled: () => boolean
   readonly formulaProgress: () => ProbeFormulaProgress
+  /** SDK 现在挂着的右键菜单（右键菜单宿主服务里登记的 hostId；只读档案不挂，右键不会弹出菜单） */
+  readonly contextMenus: () => readonly string[]
 }
 
 declare global {
@@ -203,6 +206,21 @@ export async function formulaBarText(page: Page): Promise<string> {
       throw new Error('页面里没有编辑器的探针')
     return probe.formulaBarText()
   })
+}
+
+/**
+ * SDK 挂没挂上单元格与工作表标签的右键菜单（经探针读右键菜单宿主服务的登记，internal-api 的 contextMenuHosts；判定与页面自检共用，
+ * read-only-entries.ts 的 contextMenusIn）：只读档案两个都不挂，右键不会弹出菜单。这是结构上的判定：只读时"右键不弹出菜单"以它为准，
+ * 不靠等几帧之后看一眼；能编辑时两个都在，是它的对照（M5-P8 托管 Mac 第 5 轮之后）
+ */
+export async function contextMenusMounted(page: Page): Promise<ReturnType<typeof contextMenusIn>> {
+  await probeIn(page)
+  return contextMenusIn(await page.evaluate(() => {
+    const probe = window.__nerveEditorProbe
+    if (probe === undefined)
+      throw new Error('页面里没有编辑器的探针')
+    return probe.contextMenus()
+  }))
 }
 
 /**

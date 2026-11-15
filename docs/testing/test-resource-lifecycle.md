@@ -16,15 +16,28 @@ pnpm store 固定查询 runner 用户目录下 `setup-pnpm/node_modules/.bin/sto
 
 诊断不创建临时环境或独立 artifact，只向原 job 日志输出固定字段；不输出环境对象、子项名称、文件内容或原异常文本。日志沿六项 CI 原件的 14 天/5 GiB 报告规则保留，必要最终证据通过原独审/pin 流程留档。成功诊断只说明观察完成，`diagnosticOnly=true`、`cleanupAuthorized=false`，不代替测试通过或资源清理。KiB 回归入口为 `python3 -B tools/test-resources/run.py unit -- python3 -B -m unittest discover -s tools/test-resources -p 'test_ci_disk_diagnostic.py'`。
 
-## 固定 Chrome 用例的关闭阶段诊断
+## 固定 Chrome、Edge 用例的关闭阶段诊断
 
-`tests/e2e/support/context-close-diagnostic.ts` 仅在 `E2E_CONTEXT_CLOSE_DIAGNOSTIC=1` 且原 `catalog-boundaries.spec.ts` 的指定换人故事、`chrome`、retry 0/1 时安装；workflow 只给 Chrome 分片开关。正式 `fixtures.ts` 在交出默认 context 前安装，不在外层 `provide` 返回时撤掉，让默认底层关闭也能被记录。
+`tests/e2e/support/context-close-diagnostic.ts` 仅在 `E2E_CONTEXT_CLOSE_DIAGNOSTIC=1` 且原 `catalog-boundaries.spec.ts` 的指定换人故事、`chrome` 或 `msedge`、retry 0/1 时安装；workflow 只给 Chrome、Edge 两个分片开关（M5-P8，需求方 2026-11-12 批准扩到 Edge）。正式 `fixtures.ts` 在交出默认 context 前安装，不在外层 `provide` 返回时撤掉，让默认底层关闭也能被记录。
 
-每 attempt 独占创建 `testInfo.outputPath('context-close-diagnostic.json')`（0600），立即登记 attachment 与受管 UUID/固定 GitHub run、attempt、SHA 和项目归属，再包装三个公开方法。开始事件同步写入，非阻塞重开后、写入前核对父目录和原普通文件 dev/inode/nlink/大小，每次写入即关闭描述符；已有文件、链接、FIFO 等身份替换、写入/注册失败均留下固定不完整注解，不覆盖原产品异常。仅保存阶段、序号、单调时间、调用关联和结果，不保存参数、错误正文、认证信息或环境对象。
+每 attempt 独占创建 `testInfo.outputPath('context-close-diagnostic.json')`（0600），立即登记 attachment 与受管 UUID/固定 GitHub run、attempt、SHA 和项目归属，再包装三个公开方法。开始事件同步写入，非阻塞重开后、写入前核对父目录和原普通文件 dev/inode/nlink/大小，每次写入即关闭描述符（`exclusive-report.ts`，两份报告共用）；已有文件、链接、FIFO 等身份替换、写入/注册失败均留下固定不完整注解，不覆盖原产品异常。仅保存阶段、序号、单调时间、调用关联和结果，不保存参数、错误正文、认证信息或环境对象。
 
-每份最多 32 KiB/64 条；原 retry 0/1 合计至多 64 KiB，沿现有报告 14 天/5 GiB、稳定导出与必要证据独审/pin 策略，不增加 profile、VM 或数据库。原 Promise、this、参数和同步异常保持；不增加关闭、等待、重试或私有协议调用。`incomplete` 初始为真，只有原 close 完成、close 事件到达且已观察调用无挂起/失败时才能结束观察；超限/写入失败/缺文件/不完整状态不接受。产品与诊断结果分别核对，观察完整不等于旧根因已修复，也不覆盖原 flaky 判失败。
+每份最多 32 KiB/64 条；原 retry 0/1 合计至多 64 KiB，沿现有报告 14 天/5 GiB、稳定导出与必要证据独审/pin 策略，不增加 profile、VM 或数据库。原 Promise、this、参数和同步异常保持；不增加关闭、等待、重试或协议调用。`incomplete` 初始为真，只有原 close 完成、close 事件到达且已观察调用无挂起/失败时才能结束观察；超限/写入失败/缺文件/不完整状态不接受。产品与诊断结果分别核对，观察完整不等于旧根因已修复，也不覆盖原 flaky 判失败。
 
-小型验证：`python3 -B tools/test-resources/run.py unit -- pnpm exec vitest run --project unit tests/e2e/support/context-close-diagnostic.test.ts`。其中真实 Playwright Node 夹具调度只替换 browser 边界，不启动浏览器，分别保留 passed 与预期 teardown timedOut；退出不明时保留本轮根交父运行器核对，不将模型结果冒充 Chrome 实测。
+**协议记录**（`context-close-protocol.ts`，同一开关、同一 attempt、同一归属）：另独占创建 `context-close-protocol.json`（0600，最多 192 KiB），在这条用例所在的工作进程里、只在这条用例期间，把 Playwright 与浏览器之间的协议消息接到内存里的过滤器。
+
+- 接法：从 Node 的模块缓存里取这个进程已经加载的、恰好一份 playwright-core，版本须为 1.63.0（它旁边的 `package.json`），取它从 `lib/coreBundle` 导出的内部日志对象 `utils.debugLogger`，只替换 `isEnabled`/`log` 对 `protocol` 的处理，其余名字原样交还。协议日志已在别处开启、版本或形状不符、接法出错（`tap-failed`）都不安装：写一份 `state: stopped` 的文件写明原因，并登记 `context-close-protocol-incomplete` 注解，不影响用例。不设 `DEBUG`、`DEBUG_FILE` 等环境变量，不经管道或文件，不发任何协议命令。
+- 只留与关闭页面、关闭 context 有关的命令、回复与事件（含 `Page.captureScreenshot`、`Page.stopScreencast` 与 `Target.disposeBrowserContext`）：
+  - 方法名、编号、时刻、类别（发出、回复、事件）、会话与目标的类型、截短到 8 位的标识（目标、会话、context、打开者）与等待时长；
+  - 少量布尔与枚举值：是否已附着、是否等待调试器、关闭是否成功、截图格式与是否超出视口、新建目标是否新窗口与是否后台、对话框的类型与是否由浏览器处理、对话框是否接受与结果、崩溃的状态与错误码、`Inspector.detached` 的原因；
+  - 错误只留错误码与截短的 ASCII 文字；
+  - Playwright 平稳关浏览器的 `Browser.close` 直接写进管道、不经日志，只有回复（编号 -9999）进日志：记作 `Browser.close` 的回复（没有等待时长），看得到浏览器还回不回应平稳关闭。
+
+  另有各方法名的计数（最多 300 个）；关闭开始之前 100 条与之后 600 条的序列，每条是方法名、类别、时刻、编号、会话与目标类型、错误码与回复用时；仍在等待回复的命令。参数值、结果、地址、标题、Cookie、请求与回复内容不保存，原始消息不落盘、不输出；要保存的方法名、会话号与枚举值先复制成独立的字符串，不连带留住整条原文。关闭相关的记录超过 300 条时留最近的；需要裁剪才放得进 192 KiB 时，关闭后的序列留开头，关闭前的序列与关闭相关的记录留离关闭最近的结尾。
+- 关闭开始时（由本文件对 `context.close` 的包装通知）与之后 2、10、30、90、200 秒整份重写；context 关闭、浏览器断连或安装满 330 秒即撤掉接法并写下最终状态（`closed`／`disconnected`／`stopped`）。
+- 完整的判定：只有以 context 的 close 事件结束，且关闭开始之后发出的 `Target.disposeBrowserContext` 都得到回复（没有错误），才算完整；否则原因记为 `close-not-started`、`dispose-not-sent`、`dispose-unanswered` 或 `dispose-error`。关闭卡住之后浏览器被关掉时，Playwright 先派发 context 的 close、再派发断连（`Browser.didClose`），所以这种情形是 `closed` 加原因 `dispose-unanswered`；判读以 `contexts[].disposeSentT`、`disposeDoneT` 与 `pending` 为准。
+
+小型验证：`python3 -B tools/test-resources/run.py unit -- pnpm exec vitest run --project unit tests/e2e/support/context-close-diagnostic.test.ts tests/e2e/support/context-close-protocol.test.ts`。其中真实 Playwright Node 夹具调度只替换 browser 边界，不启动浏览器，分别保留 passed 与预期 teardown timedOut，并核对协议记录在真实工作进程里接上运行中的 playwright-core、随 context 的 close 撤掉（假浏览器收尾时按 Playwright 的顺序先发 close、再断连；没有协议消息，记 `dispose-not-sent`）；合成的协议日志行核对输出不含任何参数值，并按真实顺序核对关闭卡住之后的 `dispose-unanswered`。退出不明时保留本轮根交父运行器核对，不将模型结果冒充 Chrome、Edge 实测。
 
 ## 正式入口
 
@@ -66,13 +79,13 @@ P6 的三条批准取证入口（真实 Node 协议成功、桌面屏障 kill-go
 
 `tools/test-resources/desktop_session.py` 对 `e2e/container/measure/template/native/vm` 启用；外层本地门禁使用 `SessionGuard('gate')`。非 macOS 及非浏览器类型只记 `not-applicable`，没有桌面监测通过的含义，不得通过改变资源类型绕过检查。
 
-探针只用固定 `/bin/ps -ww -axo pid=,uid=,lstart=,comm=` 和 `/dev/console`，不读取进程参数/环境、不提权、不截图。核对当前 console UID、唯一系统 WindowServer 与当前用户唯一 loginwindow 的 PID/UID/启动时间/固定路径，并核对读取前后 console 用户一致。查询超时 2 秒，取得完整输出后仅接受 1 MiB 以内的无错误结果；这是接受上限，不是采集峰值内存的硬上限。多义、缺失、格式损坏或查询失败均停止，记录固定原因而不写原始进程表或 stderr。固定基线不能在运行中自动重建。
+探针只用固定 `/bin/ps -ww -axo pid=,uid=,lstart=,comm=` 和 `/dev/console`，不读取进程参数/环境、不提权、不截图。核对当前 console UID、唯一系统 WindowServer 与当前用户唯一 loginwindow 的 PID/启动时间/固定路径，并核对读取前后 console 用户一致。ps 的 UID 是有效用户号，只记录、不参与同一进程的判定：WindowServer 与 loginwindow 都以 root 启动（真实、保存用户号为 0）、平时降为普通用户号运行，可以临时切回 root；M5-P8 托管 Mac 第 5 轮曾因 WindowServer 同一进程的有效用户号 88→0 被误判为会话变化而停下整片（需求方 2026-11-11 决定按 PID、启动时间与固定路径判定）。只有一个 loginwindow 时，它的有效用户号须是当前用户或临时切回的 0，才认作控制台用户的，属于别的用户即失败关闭；有多个登录会话时按有效用户号认出当前用户的那个，认不出即失败关闭。被容忍的有效用户号切换不另记录，台账只在基线与停下时记读到的值。查询超时 10 秒（`PS_TIMEOUT`；原为 2 秒，M5-P8 托管 Mac 负载下这条 ps 超过 2 秒，需求方批准放宽，超时仍按失败关闭），取得完整输出后仅接受 1 MiB 以内的无错误结果；这是接受上限，不是采集峰值内存的硬上限。多义、缺失、格式损坏或查询失败均停止，记录固定原因而不写原始进程表或 stderr。固定基线不能在运行中自动重建。
 
-内层在创建本轮临时资源后建立基线，实际测试命令仍受既有登记启动屏障约束；登记子进程后、释放命令前再次核对。运行中每 2 秒采样，命令结束后强制再读一次，避免返回 0 与桌面退出同时发生时被接受。只有仍存活的本轮子进程首进程允许发送组信号；沿原 SIGTERM、10 秒等待和 SIGKILL 处理，再核对整组/句柄/资源。所有正常及 finally 发送路径容忍组恰好消失，并在升级前重新核对首进程。首进程退出后存在其他引用时继续保留，不能凭旧组号补杀。记录 `desktopSession`、`stopReason=desktop-session`、原命令退出码和中断结果；等待清理时收到的晚到中断也会纳入最终结果。即使进入 `cleanup-pending` 仍保留已知退出/中断事实；清理是否完成仍按实际证据独立判断。
+内层在创建本轮临时资源后建立基线，实际测试命令仍受既有登记启动屏障约束；登记子进程后、释放命令前再次核对。运行中两次读取间隔 2 秒（从上一次读完算起，负载下读取要几秒时 ps 不会首尾相接；M5-P8 实现时没有单独请示，S7 独立审查 M-3 指出后需求方 2026-11-10 追认），命令结束后强制再读一次，避免返回 0 与桌面退出同时发生时被接受。只有仍存活的本轮子进程首进程允许发送组信号；沿原 SIGTERM、10 秒等待和 SIGKILL 处理，再核对整组/句柄/资源。所有正常及 finally 发送路径容忍组恰好消失，并在升级前重新核对首进程。首进程退出后存在其他引用时继续保留，不能凭旧组号补杀。记录 `desktopSession`、`stopReason=desktop-session`、原命令退出码和中断结果；等待清理时收到的晚到中断也会纳入最终结果。即使进入 `cleanup-pending` 仍保留已知退出/中断事实；清理是否完成仍按实际证据独立判断。
 
 P5 外层 `s6/gate_helpers.py` 复用该探针和原有信号升级；会话失效时固定记录 `needs-attention`，后续 `run-gate.py` 拒绝直接开始下一轮。首次拒绝发生在命令启动前时，原命令退出码为 `null`；不得伪造一次已执行测试。内外层各自监测自己的进程，并不以外层还活着为内层前提。正式后续输入须重新绑定修改后的包装摘要，不复用旧门禁证明。
 
-2 秒是采样间隔，不是硬实时停止保证；查询、调度和原有退出等待会影响延迟。普通锁屏、空闲与真实 Safari 前置检查继续由原规则处理。本保护只能减少桌面失效后的连锁测试，不预防首次 IOSurface 耗尽，也不能在监测器被强制终止后继续运行；异常残留沿下一次启动的归属检查恢复。磁盘/RSS 正常或本保护的模拟通过均不能证明长测安全。
+2 秒是采样间隔，不是硬实时停止保证；查询（最长 10 秒）、调度和原有退出等待会影响延迟。`desktopSession` 记读取次数 `readCount` 与最慢一次的耗时 `maxReadSeconds`（失败的那次也算），用来核对负载下离时限还有多远。普通锁屏、空闲与真实 Safari 前置检查继续由原规则处理。本保护只能减少桌面失效后的连锁测试，不预防首次 IOSurface 耗尽，也不能在监测器被强制终止后继续运行；异常残留沿下一次启动的归属检查恢复。磁盘/RSS 正常或本保护的模拟通过均不能证明长测安全。
 
 小型回归：`python3 tools/test-resources/run.py unit -- python3 -m unittest discover -s tools/test-resources -p 'test_desktop_session*.py'`；完整资源机制仍用 `pnpm test:cleanup:check`。只创建 KiB 级样本与短命 Python 子进程，不启动真实浏览器、数据库或 VM。
 
@@ -108,7 +121,7 @@ Playwright 的 webServer 默认继承父进程环境。不要把 `process.env` �
 
 相同 worktree 的报告发布口持锁，第二轮不会覆盖第一轮。不同 worktree 分别拥有管理根。测试程序继承独立 `TMPDIR/TMP/TEMP`；非 VM 子运行不继承父 VM 的短根授权；不改宿主机全局设置。开始前及运行中检查可用磁盘，低于 12 GiB 时停止本轮，不继续写满磁盘。控制台日志上限 32 MiB。
 
-SIGINT/SIGTERM 只转交本轮仍存活的子进程组，等待后才回收。根进程已退出却仍有子进程、打开句柄或查询失败时，标记 `cleanup-pending` 并保留；不凭可能重用的进程组号码继续杀进程。强制终止、崩溃之后，下一次运行或 `test:cleanup` 通过文件锁、原进程组与句柄复核接续回收。资源归属或父目录链接不合法时失败关闭。未解决的同类待清理运行会阻止继续堆积新环境。
+SIGINT/SIGTERM 只转交本轮仍存活的子进程组，等待后才回收。向本轮子进程组发信号统一经 `child_group.signal_child_group`（`run.py`、`pack_ci_profiles.py`、`service_scope.py` 共用，M5-P8）：子进程已退出就不发；ESRCH 视为无需再发；EPERM 时最多等 1 秒确认子进程已退出（macOS 对只剩已退出、尚未回收进程的组报 EPERM，Linux 照常成功），仍在运行照旧报错，失败关闭。根进程已退出却仍有子进程、打开句柄或查询失败时，标记 `cleanup-pending` 并保留；不凭可能重用的进程组号码继续杀进程。强制终止、崩溃之后，下一次运行或 `test:cleanup` 通过文件锁、原进程组与句柄复核接续回收。资源归属或父目录链接不合法时失败关闭。未解决的同类待清理运行会阻止继续堆积新环境。
 
 数据库有独立生命周期：E2E/集成测试以主机标识、PID、随机后缀登记隔离库；正常退出按原夹具回收。下一次启动只挑本主机已失活 PID 的库，再确认数据库没有连接，以不带 FORCE 的 DROP 清理；连接竞争或占锁时跳过。仍有依赖的测试角色保留。业务库、其他主机的测试库与活跃库不动。容器按下一节的创建前 UUID 台账及实际归属清理；Docker 不可用时保留其数据，不直接删除 Docker 磁盘。
 
@@ -171,7 +184,7 @@ CI 的 verify job 只跑覆盖率（`pnpm verify --ci` 的 tests 一步是 `pnpm
 - 管理根路径（仓库或 worktree 的路径）含非 ASCII、控制字符或反斜杠时，`Store` 初始化即失败关闭（M5R-M-17）：lsof 在 C locale 下把这些字节写成转义序列，按前缀比较会把仍被打开的文件当成不在管理根里。同一校验也在每次句柄查询（`open_paths`）里做，所以不经过 `Store` 的根（handoff 归档 `Archives`、嵌套夹具）同样按核对不完整处理；
 - 运行期间 scratch 被外部删除时，running/prepared 按中断收尾（`stopReason=scratch-missing`，清理阶段 complete），短根随之退役；运行器不再以子进程的退出码冒充本轮成功（M5R-M-19）。运行器本身被强杀、之后 scratch 又被删时，`run.py cleanup`（`sweep`）也接手停在 running 的运行；仍在活动的运行持有运行锁或进程组存活，不会被误收；
 - 收尾 GC 的单个候选出错只跳过它：统计大小出错记 `collection-failed`，核验没有通过（句柄查询不完整等）记 `verification-failed` 并原样保留，已决定删除之后的删除或记账出错记 `removal-failed`（下一轮重新核验后接着删），其余候选照常回收。`finish` 与运行器结束时的收尾 GC 共用 `prune_isolated`：出错只告警，不改变本轮结论与退出码、不挡住发布；`sweep` 的报告里列出跳过的候选（M5R-M-20）；
-- lsof 全量列举的退出码 1 且 stderr 为空时仍按现行规则接受，有警告即不完整（Q-10 单测钉住）。CI 资源核对之后，另按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解；整段采样最多 20 秒，超时只记下，不让核对步骤超时。收集到分布后再定是否收紧。
+- lsof 全量列举只接受退出码 0 且 stderr 为空；退出码 1（即便 stderr 为空）或有警告都判不完整、保留资源（Q-10，2026-11-06 需求方决定收紧：三轮 CI 51 次与本机采样都没出现过“退出码 1 且 stderr 为空”，M5-P8 S2 实施，单测钉住）。CI 资源核对之后照旧按运行器同款固定命令采样 3 次，只记退出码与 stderr 字节数，写成 notice 注解，作为新环境的观测；整段采样最多 20 秒，超时只记下，不让核对步骤超时。托管 Mac 不经 CI 资源核对，由 `ci_mac_probe.py` 在 job 开始与结束时按同一条命令采样（见下文“GitHub 托管 Mac”）。
 
 Python 小型回归覆盖成功释放、失败限额与过期、SIGTERM、遗留恢复、打开句柄/活动锁、父目录链接、重复执行、失败重试归属、转移中断续作、发布锁、容器重复发布和 handoff 源码/最终证据保护。TypeScript 回归覆盖受管目录、VM 越界、纯函数导入兼容与数据库连接竞争。
 
@@ -229,6 +242,22 @@ E2E 的 `pack_ci_profiles.py` 只对原清单中的便携 profile 建立独立 `
 活动目录的容量采样通过父目录 FD 核验子项。列举后 stat、子目录打开前、已打开子目录结束复核这三处，只有确认子项 ENOENT 时才继续扫描；已累计字节保留，稳定兄弟和累计超限仍照常核验。本次计量已确认存在的根固定身份，不能在重试时把根消失当成尚未创建的零用量，或认领同名替换目录。权限、未知错误、祖先/根及子目录身份替换仍失败；无法完成的扫描最多三次尝试，并以固定操作名、errno 和尝试次数记录有界诊断，不输出私有路径。该采样规则不授权任何删除，也不适用于稳定报告内容校验。
 
 `check_ci_resources.py` 在当前 job 上持 publication/run 锁，核验唯一预检和该 job 主测试的身份、退出、实际稳定报告哈希、历史及当前预算，写入 `cleanup-receipt.json` 的 `ciResources`。产品失败的合格诊断报告可以上传，原产品步骤仍失败；checker 拒绝则不上传。E2E 额外要求原监督器退出、JSON/HTML 合格及便携 profile 归档成功，归档失败不会回退上传 raw。预检收据只读收集有界摘要，明确 diagnostic-only，不能替代这一完整核验。三个 job 的既有报告 artifact 同时携带精确 `.test-resources/runs/*/reports/portable/test-results/` 路径下的预检原件，启用隐藏目录，不上传 scratch；因此远端可重新核对预检与主测试两份清单，而非只相信合同声明。最终远端接受还须绑定实际同 SHA 六项 CI 及下载后的便携证据，旧本地 v2 关闭证明继续只接受实际 cleanup complete。
+
+## GitHub 托管 Mac（M5-P8）
+
+`.github/workflows/mac.yml` 在 GitHub 托管的 Apple 芯片 Mac（`macos-26`）上补验 Mac 原完整门禁（DEF-074），照开发机的方式运行，不属于上一节方案 B 的托管 VM 例外。只管 Apple 芯片，Intel 版不在范围内（需求方 2026-11-07 决定；原生图片也只核对了 darwin-arm64）：
+
+- **配置**：不设 `NERVE_TEST_RESOURCE_POLICY`，`CI` 置空。
+  - 资源工具用默认的严格本机模式：删除前核验、真实删除与回收核对照常执行，不登记 `host-disposal-pending`，`hosted.py` 不参与。
+  - lsof 用默认的普通权限命令；Q-10 收紧后，任何退出码 1 都判为不完整。
+  - darwin 的桌面会话保护照常生效，会话变化即停。
+- **数据库**：Apple 芯片的托管 Mac 不支持嵌套虚拟化，起不了 Docker。每个 job 在门禁之前用 Homebrew 装同一版本的 PostgreSQL，按 `deploy/dev/compose.yaml` 的账号、库名、初始化参数与端口（127.0.0.1:54318）起库；认证照开发库的镜像（本机套接字免密、TCP 要密码），版本与开发库不同就在这一步失败。测试连库的地址与开发机相同，不另设连接串；`pnpm verify` 带 `--external-db`，不再执行 `pnpm db:up`。数据目录在 `RUNNER_TEMP`，不在仓库里，不属于本轮受管资源，随托管机回收。
+- **Python**：每个 job 在用到 `python3` 之前把它换成 macOS 自带的 `/usr/bin/python3`，与开发机相同。托管镜像默认的是 3.15，测试资源工具的回归在那里与开发机分叉（第 3 轮：深层嵌套的 JSON 在 3.14 起不再触发 RecursionError，台账读取因此加了与解释器无关的层数上限 `MAX_DEPTH`）。
+- **生产容器 E2E**：没有 Docker，不在托管 Mac 上跑。Linux CI 照旧覆盖。需求方 2026-11-10 裁决：接受 Mac 上不跑这部分，写进 DEF-074 的结论。
+- **观测**：每个 job 开始与结束时由 `ci_mac_probe.py` 记环境事实（写成 notice 注解）：磁盘、内存、工具链版本（Node、pnpm、Homebrew 与它装的 PostgreSQL）、会话保护那条 ps 的耗时，以及按运行器直接模式同一条命令的 lsof 退出码与 stderr 字节数。只作观测，不作验收证据。会话保护自身在台账里记读取次数与最慢一次的耗时。
+  - 探测只有 `system`、`final` 两段，只在 `GITHUB_ACTIONS=true`、`RUNNER_ENVIRONMENT=github-hosted`、`RUNNER_OS=macOS` 同时成立时执行，在开发机或其他环境上手动运行时一段也不执行、退出码 3（`system` 段会执行 `sudo -n`；S3 用过的 Docker 等探测段已删，S7 独立审查 M-1）。
+- **分片**：本机模式的 `pnpm verify --scope=no-e2e|e2e --external-db` 按浏览器并行，合起来恰好是托管 Mac 上的本机完整门禁，即开发机的完整门禁去掉 `pnpm db:up`（`plan.test.ts`）。工作流本身的接线（分片参数、浏览器矩阵、`CI` 置空、不设资源策略、没有条件跳过或失败放行、数据库与开发库一致、不起 Docker）由 `mac-workflow.test.ts` 核对。
+- **上传**：每个 job 上传 E2E 的 JSON/HTML 与结果目录（不含持久资料目录）、覆盖率报告和本轮台账 `run.json`，供原件核对。
 
 ## P6 Linux 固定校准与自检
 

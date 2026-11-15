@@ -1,7 +1,7 @@
 // 真正独立的受控故障进程；jitless 下执行 JS，不依赖 Node 的 TS/Wasm 剥离器。
 import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import process from 'node:process'
 
@@ -10,7 +10,10 @@ writeFileSync(join(trace, `started-${process.pid}`), '')
 process.on('disconnect', () => process.exit(0))
 process.on('message', (message) => {
   const task = JSON.parse(Buffer.from(message.input.data).toString())
-  writeFileSync(join(trace, `task-${process.pid}.json`), JSON.stringify({ pid: process.pid, environment: process.env, execArgv: process.execArgv }))
+  // 先写别的名字再改名：测试每 10 毫秒轮询并解析 task-*.json，直接写会被读到刚创建、还没写完的文件
+  const partial = join(trace, `partial-task-${process.pid}.json`)
+  writeFileSync(partial, JSON.stringify({ pid: process.pid, environment: process.env, execArgv: process.execArgv }))
+  renameSync(partial, join(trace, `task-${process.pid}.json`))
   switch (task.kind) {
     case 'hang': return
     case 'disconnect':
