@@ -518,6 +518,35 @@ class LifecycleTests(unittest.TestCase):
         finally:
             self.store = original
 
+    def test_sweep_skips_only_the_run_record_whose_fields_used_by_retirement_are_damaged(self):
+        # M5-P9 独立审查复验 M-1：回收删除前要用到的字段（version、childGroup、retired）先在收集时校验，对齐 Codex 的建议
+        # “验证必需字段及有限数值时间”。缺 version、进程组不是正整数（字符串、超出范围）、回收记录不是列表时，这一条记
+        # collection-failed、原样保留；修复前在删除阶段抛 KeyError、TypeError、OverflowError，retired 不是列表时更是先删了文件才抛错
+        import lifecycle
+        original = self.store
+        damages = {
+            "missing-version": lambda data: data.pop("version"),
+            "group-text": lambda data: data.update(childGroup="12"),
+            "group-overflow": lambda data: data.update(childGroup=10 ** 400),
+            "group-negative": lambda data: data.update(childGroup=-1),
+            "retired-number": lambda data: data.update(retired=5),
+        }
+        try:
+            for name, damage in damages.items():
+                with self.subTest(damage=name), tempfile.TemporaryDirectory(prefix="nerve-residue-test-") as temp:
+                    self.store = Store(Path(temp).resolve(), failure_bytes=4096, failure_run_bytes=2048, report_bytes=16384)
+                    runs = self.expired_reports(2)
+                    data = json.loads((runs[0].directory / "run.json").read_text())
+                    damage(data)
+                    lifecycle.atomic_json(runs[0].directory / "run.json", data)
+                    report = self.store.sweep()
+                    self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "ValueError"}])
+                    self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+                    self.assertTrue((runs[0].directory / "reports").exists())
+                    self.assertFalse((runs[1].directory / "reports").exists())
+        finally:
+            self.store = original
+
     def test_sweep_leaves_a_published_report_whose_marker_is_not_a_json_object(self):
         # M5-P9 独立审查 M-2 的同类：发布目录的归属标记是合法 JSON、顶层却不是对象时，按“不属于这一轮”跳过这个发布目录、原样保留，
         # 与标记缺失或属于别的运行相同；sweep 不抛出，这一轮自己的报告与其余候选照常回收

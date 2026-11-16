@@ -70,6 +70,11 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
    * SDK 再次显示它们时（revisit）补读一次（M5-P9 CX3）。暂停、刷新与结束时清空，刷新时按当时的文档重新记下
    */
   const unread = new Set<string>()
+  /**
+   * 进行中的静默补读（来源 → 那一次读取）。SDK 在读取期间再次显示时（revisit）转为在用：失败照常报告。
+   * 失败不改元素的来源，SDK 不会因此重画那一格，等不到下一次命中（M5-P9 独立审查复验）。读取结束、刷新、暂停与结束时移除
+   */
+  const quietReads = new Map<string, { quiet: boolean }>()
 
   function canonical(source: string): string | undefined {
     if (!isPlatformAssetAddress(source, options.origin))
@@ -190,6 +195,12 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       return entry.task
     }
     const attempt = { quiet }
+    if (quiet)
+      quietReads.set(path, attempt)
+    const settled = (): void => {
+      if (quietReads.get(path) === attempt)
+        quietReads.delete(path)
+    }
     const recordFailure = (error: unknown): void => {
       if (attempt.quiet || disposed || failures() !== issuedFailures || issuedFailures.has(path))
         return
@@ -204,6 +215,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
         recordFailure(error)
       }
     }).then(({ decoded }) => {
+      settled()
       if (signal.aborted) {
         decoded.dispose()
         throw signal.reason
@@ -214,6 +226,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       options.changed()
       return decoded.url
     }).catch((error: unknown) => {
+      settled()
       if (signal.aborted)
         throw signal.reason
       if (failures() !== issuedFailures)
@@ -225,11 +238,8 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
         if (entry.task === task) {
           entry.task = undefined
           entry.attempt = undefined
-          if (held(entry)) {
+          if (held(entry))
             unread.add(path)
-            // 读取期间的命中已经落空（那时还不在 unread 里）：通知重绘，正在显示这一格的话，下一次绘制命中即补读；不显示的不读（独立审查）
-            options.changed()
-          }
         }
         return options.placeholder
       }
@@ -267,10 +277,19 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
     },
     revisit: (source) => {
       // 绝大多数命中走这里就返回：每次绘制命中缓存都会调用
-      if (unread.size === 0 || disposed || !active)
+      if ((unread.size === 0 && quietReads.size === 0) || disposed || !active)
         return
       const path = canonical(source)
-      if (path === undefined || !unread.delete(path))
+      if (path === undefined)
+        return
+      const quietRead = quietReads.get(path)
+      if (quietRead !== undefined) {
+        // 静默补读进行中又被显示：转为在用，失败照常报告（与浮图经 load 合并时相同）；读取照旧，不另读
+        quietRead.quiet = false
+        quietReads.delete(path)
+        return
+      }
+      if (!unread.delete(path))
         return
       const entry = entries.get(path)
       // 已有像素或读取进行中：load 也会合并或复用那一次读取，这里先返回，不多调用一次
@@ -314,6 +333,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       const selected: [string, Entry][] = []
       const dormant: string[] = []
       unread.clear()
+      quietReads.clear()
       for (const [source, entry] of entries) {
         if (live === undefined || live.has(source)) {
           selected.push([source, entry])
@@ -346,6 +366,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       for (const entry of entries.values())
         entry.restore ||= entry.decoded !== undefined
       unread.clear()
+      quietReads.clear()
       clearDecoded()
     },
     dispose: () => {
@@ -355,6 +376,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       active = false
       generation.abort(new DOMException('图片实例已结束', 'AbortError'))
       unread.clear()
+      quietReads.clear()
       clearDecoded()
       for (const entry of entries.values()) {
         forEachImage(entry, (image) => {

@@ -312,8 +312,9 @@ describe('SDK 缓存命中时补读刷新跳过的来源（M5-P9 CX3）', () => 
     expect(h.failed).toHaveBeenCalledOnce()
   })
 
-  it('恢复时的静默补读进行中撤销（这次命中落在读取期间）、补读随后失败：通知重绘，再次绘制这一格时补读一次', async () => {
-    // 独立审查第 5 部分第 3 条：命中发生在静默补读期间，来源要到失败之后才记进待补读；不通知重绘，这一格会一直是占位
+  it('恢复时的静默补读进行中撤销（这次命中落在读取期间）：这次读取转为在用，随后失败照常报告，不另读', async () => {
+    // 独立审查与复验：命中发生在静默补读期间，来源那时还不在待补读里。失败不改元素的来源，SDK 不会因此重画这一格，
+    // 等不到下一次命中；所以在命中当时把这次读取转为在用，失败照常报告、页头给出重试（与浮图经 load 合并时相同）
     let live: ReadonlySet<string> = new Set([SOURCE])
     const h = setup('edit', session(), undefined, undefined, () => live)
     const cache = new ImageCacheMap(h.injector)
@@ -331,14 +332,14 @@ describe('SDK 缓存命中时补读刷新跳过的来源（M5-P9 CX3）', () => 
     await vi.waitFor(() => expect(readAsset).toHaveBeenCalledTimes(2))
     live = new Set([SOURCE])
     expect(cache.getImage(ImageSourceType.URL, SOURCE)).toBe(image)
-    // 页面的重绘：engine-render 每次绘制单元格图片都向 ImageCacheMap 取元素，这里在通知之后的下一个任务里照样取一次
-    h.changed.mockImplementation(() => {
-      setTimeout(() => cache.getImage(ImageSourceType.URL, SOURCE), 0)
-    })
-    quiet.reject(new NetworkError('静默补读断网'))
-    await vi.waitFor(() => expect(image.src).toBe('blob:https://app.test/first'))
-    expect(readAsset).toHaveBeenCalledTimes(3)
-    expect(h.failed).not.toHaveBeenCalled()
+    const error = new NetworkError('静默补读断网')
+    quiet.reject(error)
+    await vi.waitFor(() => expect(h.failed).toHaveBeenCalledOnce())
+    expect(h.failed).toHaveBeenCalledWith(error)
+    expect(image.src).not.toBe('blob:https://app.test/first')
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await settle()
+    expect(readAsset).toHaveBeenCalledTimes(2)
   })
 })
 

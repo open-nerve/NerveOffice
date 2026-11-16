@@ -81,6 +81,21 @@ def published_names(value):
     return names
 
 
+def retirement_time(value):
+    """回收候选的台账先整体校验删除前要用到的字段，返回它的时刻（M5-P9 CX6 及其独立审查复验，对齐 Codex 的建议
+    “验证必需字段及有限数值时间”）：version 存在（删除前按它认领运行）；进程组是空或正整数（查询进程组存活）；
+    回收记录是列表（删除之后记账）；发布列表另由 published_names 校验。不合格抛 ValueError，时刻不合格抛 TypeError，
+    由调用方只跳过这一条——删除阶段因此不会在删了文件之后才因记账抛错"""
+    if "version" not in value:
+        raise ValueError("台账缺少 version")
+    group = value.get("childGroup")
+    if group is not None and (type(group) is not int or not 0 < group < 2 ** 31):
+        raise ValueError("台账的进程组不是正整数")
+    if type(value.get("retired", [])) is not list:
+        raise ValueError("台账的回收记录不是列表")
+    return record_time(value.get("endedAt", value["startedAt"]))
+
+
 def read_run_manifest(path):
     # Check the opened object, without following links or blocking on a FIFO.
     # This does not grant a lease; callers still hold run.lock for authorization.
@@ -851,10 +866,10 @@ class Store:
                 for path, published in paths:
                     try:
                         if path.exists() and not path.is_symlink():
-                            # 时刻先校验：不是有限数字的只跳过这一条，不让排序或相减抛错挡住其余候选（M5-P9 CX6）
-                            ended = record_time(value.get("endedAt", value["startedAt"]))
+                            # 时刻与删除前要用到的字段先校验：不合格的只跳过这一条，不让排序、相减或删除阶段抛错挡住其余候选（M5-P9 CX6）
+                            ended = retirement_time(value)
                             candidates.append((ended, directory, path, byte_size(path), published))
-                    except (OSError, KeyError, TypeError) as error:
+                    except (OSError, KeyError, TypeError, ValueError) as error:
                         note(category, directory.name, "collection-failed", error)
             total = sum(item[3] for item in candidates)
             for ended, directory, path, size, published in sorted(candidates):
