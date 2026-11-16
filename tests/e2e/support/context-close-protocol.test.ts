@@ -162,12 +162,22 @@ describe('协议过滤器', () => {
     truncated.feed(`◀ RECV {"id":7,"error":{"code":-32000${TRUNCATED}`, 2)
     expect(truncated.disposeOutcome()).toBe('dispose-error')
     expect(truncated.snapshot(3).unparsedBodies).toBe(1)
+    expect(truncated.snapshot(3).contexts).toMatchObject([{ disposeError: 'error-without-text' }])
 
     const bare = new CloseProtocolFilter(0)
     bare.closeStarted(0)
     bare.feed(send({ id: 8, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }), 1)
     bare.feed(recv({ id: 8, error: { code: -32000 } }), 2)
     expect(bare.disposeOutcome()).toBe('dispose-error')
+    expect(bare.snapshot(3).contexts).toMatchObject([{ disposeError: 'error-without-text' }])
+
+    // message 是空字符串同样没有可保存的文字（独立审查）
+    const empty = new CloseProtocolFilter(0)
+    empty.closeStarted(0)
+    empty.feed(send({ id: 9, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }), 1)
+    empty.feed(recv({ id: 9, error: { code: -32000, message: '' } }), 2)
+    expect(empty.disposeOutcome()).toBe('dispose-error')
+    expect(empty.snapshot(3).contexts).toMatchObject([{ disposeError: 'error-without-text' }])
   })
 
   it('各列表都有上限，超出只计数', () => {

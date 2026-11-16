@@ -41,6 +41,7 @@ function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = 
   const listeners = new Set<() => void>()
   const failed = vi.fn()
   const invalidated = vi.fn()
+  const changed = vi.fn()
   const adapter = createPlatformImageIo({
     access,
     identity: identity ?? {
@@ -52,7 +53,7 @@ function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = 
       },
     },
     origin: 'https://app.test',
-    changed: vi.fn(),
+    changed,
     failed,
     invalidated,
     ...(liveSources === undefined ? {} : { liveSources }),
@@ -70,6 +71,7 @@ function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = 
     original: initial,
     image: injector.get(IImageIoService),
     url: injector.get(IURLImageService),
+    changed,
     failed,
     invalidated,
     listeners,
@@ -261,7 +263,7 @@ describe('SDK 缓存命中时补读刷新跳过的来源（M5-P9 CX3）', () => 
     expect(readAsset).toHaveBeenCalledTimes(3)
   })
 
-  it('暂停时命中不读取；恢复之后已有像素与仍在读取的来源命中也不另读', async () => {
+  it('暂停时命中不读取；恢复后来源回到文档里、刷新照常重读，读取进行中与读完之后的命中都不另读', async () => {
     const { h, cache, image, restore } = await failedThenRemoved()
     h.change(undefined)
     cache.getImage(ImageSourceType.URL, SOURCE)
@@ -279,6 +281,64 @@ describe('SDK 缓存命中时补读刷新跳过的来源（M5-P9 CX3）', () => 
     cache.getImage(ImageSourceType.URL, SOURCE)
     await settle()
     expect(readAsset).toHaveBeenCalledTimes(2)
+  })
+
+  // 独立审查 M-3：来源已记进待补读，又经 IURLImageService（浮图的同一地址）读取；撤销时的命中只合并或复用那一次读取
+  it('待补读的来源正经别的路径读取：撤销时的命中合并那一次读取，不另读', async () => {
+    const { h, cache, image, restore } = await failedThenRemoved()
+    const pending = deferred<typeof BYTES>()
+    vi.mocked(readAsset).mockReturnValueOnce(pending.promise)
+    const floating = h.url.getImage(SOURCE)
+    await vi.waitFor(() => expect(readAsset).toHaveBeenCalledTimes(2))
+    restore()
+    expect(cache.getImage(ImageSourceType.URL, SOURCE)).toBe(image)
+    await settle()
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    pending.resolve(BYTES)
+    await expect(floating).resolves.toBe('blob:https://app.test/first')
+    await vi.waitFor(() => expect(image.src).toBe('blob:https://app.test/first'))
+    expect(readAsset).toHaveBeenCalledTimes(2)
+  })
+
+  it('待补读的来源已经别的路径读到像素：撤销时的命中直接复用，不另读', async () => {
+    const { h, cache, image, restore } = await failedThenRemoved()
+    await expect(h.url.getImage(SOURCE)).resolves.toBe('blob:https://app.test/first')
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    expect(image.src).toBe('blob:https://app.test/first')
+    restore()
+    expect(cache.getImage(ImageSourceType.URL, SOURCE)).toBe(image)
+    await settle()
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    expect(h.failed).toHaveBeenCalledOnce()
+  })
+
+  it('恢复时的静默补读进行中撤销（这次命中落在读取期间）、补读随后失败：通知重绘，再次绘制这一格时补读一次', async () => {
+    // 独立审查第 5 部分第 3 条：命中发生在静默补读期间，来源要到失败之后才记进待补读；不通知重绘，这一格会一直是占位
+    let live: ReadonlySet<string> = new Set([SOURCE])
+    const h = setup('edit', session(), undefined, undefined, () => live)
+    const cache = new ImageCacheMap(h.injector)
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await settle()
+    const image = cache.getImage(ImageSourceType.URL, SOURCE)
+    if (image === null)
+      throw new Error('SDK 缓存里没有登记的元素')
+    expect(image.src).toBe('blob:https://app.test/first')
+    live = new Set()
+    h.change(undefined)
+    const quiet = deferred<typeof BYTES>()
+    vi.mocked(readAsset).mockReturnValueOnce(quiet.promise)
+    h.change(session())
+    await vi.waitFor(() => expect(readAsset).toHaveBeenCalledTimes(2))
+    live = new Set([SOURCE])
+    expect(cache.getImage(ImageSourceType.URL, SOURCE)).toBe(image)
+    // 页面的重绘：engine-render 每次绘制单元格图片都向 ImageCacheMap 取元素，这里在通知之后的下一个任务里照样取一次
+    h.changed.mockImplementation(() => {
+      setTimeout(() => cache.getImage(ImageSourceType.URL, SOURCE), 0)
+    })
+    quiet.reject(new NetworkError('静默补读断网'))
+    await vi.waitFor(() => expect(image.src).toBe('blob:https://app.test/first'))
+    expect(readAsset).toHaveBeenCalledTimes(3)
+    expect(h.failed).not.toHaveBeenCalled()
   })
 })
 

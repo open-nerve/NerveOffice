@@ -637,11 +637,11 @@ M5 整体独立审查（[报告](../v0.1/M5-表格能力与资源/reviews/P6-M5�
 **编辑器适配层**（[ADR-022](../adr/ADR-022-图片实例与SDK修复.md) 的 M5-P9 补充）
 
 - **IMAGE 首参两侧的空白**（CX2）：写入规范 `normalizeImageFormula` 跳过首参两侧、透明括号内外的空白时，改用与固定 SDK 的 `trim` 相同的集合（`/^\s$/u`），不再只认 4 个 ASCII 空白。U+00A0、全角空格 U+3000、U+FEFF 等夹在这些位置时，本站绝对地址照样改写为相对地址，服务端照常登记引用。回归用真实解释器逐个码位核对两边一致。
-- **SDK 缓存命中时补读**（CX3）：core 的 `ImageCacheMap` 命中时直接返回旧元素，只有未命中才读取。既有 core 补丁在命中时先调用实例 `IImageIoService` 的 `revisitImageSource`（每个缓存对象只取一次服务）；平台记下刷新时跳过的、SDK 仍持有却没有像素的来源，以及静默补读失败的来源，命中这些来源时补一次正常读取，失败照常报告、页头出现重试入口。其余命中只做一次集合判断；暂停、刷新与结束时清空记录。补丁只改 ES 入口，摘要登记在 `patches/univer-images.json`。
+- **SDK 缓存命中时补读**（CX3）：core 的 `ImageCacheMap` 命中时直接返回旧元素，只有未命中才读取。既有 core 补丁在命中时先调用实例 `IImageIoService` 的 `revisitImageSource`（每个缓存对象只取一次服务）；平台记下刷新时跳过的、SDK 仍持有却没有像素的来源，以及静默补读失败的来源，命中这些来源时补一次正常读取，失败照常报告、页头出现重试入口。其余命中只做一次集合判断；暂停、刷新与结束时清空记录。静默补读失败、记进待补读时通知重绘，补读期间落空的命中由下一次绘制补上。补丁只改 ES 入口，摘要登记在 `patches/univer-images.json`。
 
 **测试与门禁**
 
-- **测试资源工具**（CX1、CX6，[测试资源生命周期](../testing/test-resource-lifecycle.md)）：已启动运行的 scratch 被外部删除、第一次收尾核验没通过而停在 cleanup-pending 的，之后的清扫在组与句柄核验通过后按中断收尾、退役短根，`requestedStatus` 保留第一次请求的结论；台账与归档的时刻不是有限数字时，这一条记 `collection-failed` 原样保留，其余候选照常回收（`lifecycle.record_time`，`archive.py` 同改）。
+- **测试资源工具**（CX1、CX6，[测试资源生命周期](../testing/test-resource-lifecycle.md)）：已启动运行的 scratch 被外部删除、第一次收尾核验没通过而停在 cleanup-pending 的，之后的清扫在组与句柄核验通过后按中断收尾、退役短根，`requestedStatus` 保留第一次请求的结论；回收候选的台账字段先校验：时刻须是有限数字（`lifecycle.record_time`，含超出浮点范围的整数）、发布列表须是字符串列表，不合格的这一条记 `collection-failed` 原样保留，其余候选照常回收；台账、发布标记与归档记录的顶层须是 JSON 对象，否则与读不出的同样处理（`archive.py` 同改）。
 - **托管例外**：workflow_dispatch 的精确分支改为 `refs/heads/m5-p9-codex-fixes`（[ADR-026](../adr/ADR-026-M5阶段接续与集中验收.md) 的 P9 附录）；托管 Mac 本 Phase 不跑。
 - **E2E 支撑与用例**：关闭阶段的协议过滤器以回复头的错误为准，错误回复的正文截断或缺 `message` 时记 `error-without-text`、诊断判为不完整（CX7）；`handover-same-browser.spec.ts` 的“回包乱序”用例从点击“编辑”起每一步都与“被扣住的申请被放弃”竞速，转发失败即写明原因失败（CX5）；`images.spec.ts` 新增单元格图片首读失败、清空、联网刷新之后撤销重新显示的故事（CX3）。原断言与时限不变。
 

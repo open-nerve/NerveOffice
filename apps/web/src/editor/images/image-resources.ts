@@ -225,8 +225,11 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
         if (entry.task === task) {
           entry.task = undefined
           entry.attempt = undefined
-          if (held(entry))
+          if (held(entry)) {
             unread.add(path)
+            // 读取期间的命中已经落空（那时还不在 unread 里）：通知重绘，正在显示这一格的话，下一次绘制命中即补读；不显示的不读（独立审查）
+            options.changed()
+          }
         }
         return options.placeholder
       }
@@ -270,6 +273,7 @@ export function createImageResources(options: ImageResourcesOptions): ImageResou
       if (path === undefined || !unread.delete(path))
         return
       const entry = entries.get(path)
+      // 已有像素或读取进行中：load 也会合并或复用那一次读取，这里先返回，不多调用一次
       if (entry === undefined || entry.decoded !== undefined || entry.task !== undefined)
         return
       // 在用的正常读取：失败照常报告（页头据此给出重试），本轮失败过的来源由 load 挡住，不反复读取

@@ -35,6 +35,9 @@ class Archives:
         if marker.is_symlink():
             raise ValueError('归档记录不得是链接')
         value = read_json(marker)
+        # 顶层不是对象的与读不出的同样按 ValueError 处理：回收只跳过这一份（M5-P9 独立审查 M-2 的同类）
+        if type(value) is not dict:
+            raise ValueError('归档记录必须是 JSON 对象')
         if value.get('owner') != self.owner or value.get('bundle') != bundle.name:
             raise ValueError('归档归属不符')
         return value

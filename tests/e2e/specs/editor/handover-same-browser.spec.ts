@@ -120,6 +120,8 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
       catch (error) {
         // 真实事务没有拿到回包：前提不成立，写明原因立即失败，不空等用例总时限（M5-P9 CX5）
         forwardFailed(new Error(`A 的申请转发到服务端失败（${error instanceof Error ? error.message : String(error)}，已扣住 ${timer.note()} 毫秒）：回包迟到的前提不成立`))
+        // 这次请求也了结掉，不让页面挂到自己的时限（页面正在关闭时 abort 本身会失败，忽略）
+        await route.abort().catch(() => {})
         return
       }
       committed(response)

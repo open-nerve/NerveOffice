@@ -60,10 +60,25 @@ def read_json(path):
 
 def record_time(value):
     """台账里记的时刻（秒）：只认有限的整数或浮点数。布尔、字符串、null、NaN 与无穷一律拒绝（M5-P9 CX6）：
-    台账只按 JSON 解析、不校验字段类型，回收候选按时刻排序和相减之前先经过这里"""
-    if type(value) not in (int, float) or not math.isfinite(value):
+    台账只按 JSON 解析、不校验字段类型，回收候选按时刻排序和相减之前先经过这里。
+    超出浮点范围的整数（JSON 里的超长整数）在 isfinite 里抛 OverflowError，同样按不合格拒绝（独立审查 M-1）"""
+    if type(value) not in (int, float):
+        raise TypeError("台账时间不是有限数字")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
         raise TypeError("台账时间不是有限数字")
     return value
+
+
+def published_names(value):
+    """台账里的发布列表：只认字符串列表（M5-P9 独立审查 M-2）。不合格时抛 ValueError，由调用方只跳过这一条"""
+    names = value.get("published", [])
+    if type(names) is not list or any(type(name) is not str for name in names):
+        raise ValueError("台账的发布列表不是字符串列表")
+    return names
 
 
 def read_run_manifest(path):
@@ -76,7 +91,11 @@ def read_run_manifest(path):
     with os.fdopen(descriptor, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("运行台账必须是普通文件")
-        return json.load(stream)
+        value = json.load(stream)
+    # 顶层不是对象的与读不出的同样处理（ValueError）：sweep 记 unknown、回收跳过，不在按字段读取时抛 TypeError（M5-P9 独立审查 M-2）
+    if type(value) is not dict:
+        raise ValueError("运行台账必须是 JSON 对象")
+    return value
 
 
 def require_portable_root(path):
@@ -809,7 +828,13 @@ class Store:
                     continue
                 paths = [(self.root / "failures" / directory.name, False)] if category == "failures" else [(directory / "reports", False)]
                 if category == "reports":
-                    for name in value.get("published", []):
+                    try:
+                        names = published_names(value)
+                    except ValueError as error:
+                        # 发布列表的类型不对：分不清哪些发布目录归它，这一条的报告候选整条跳过、原样保留（M5-P9 独立审查 M-2）
+                        note(category, directory.name, "collection-failed", error)
+                        continue
+                    for name in names:
                         allowed = {base + "/" + leaf for base in ("tests/e2e", "tests/e2e/measure", "tests/e2e/safari-results")
                                    for leaf in ("test-results", "playwright-report")}
                         if name not in allowed:
@@ -817,7 +842,8 @@ class Store:
                         try:
                             published = contained(self.repo / name, self.repo)
                             marker = published / "resource-run.json"
-                            if published.is_symlink() or marker.is_symlink() or read_json(marker).get("runId") != directory.name:
+                            # 标记按台账同样的方式读：顶层不是对象时 ValueError，按“不属于这一轮”跳过（M5-P9 独立审查 M-2）
+                            if published.is_symlink() or marker.is_symlink() or read_run_manifest(marker).get("runId") != directory.name:
                                 continue
                             paths.append((published, True))
                         except (OSError, ValueError):
@@ -841,8 +867,8 @@ class Store:
                         if published:
                             locks.enter_context(locked(self.root / "publication.lock", blocking=False))
                         value = owner.data
-                        if published and (path.is_symlink() or read_json(path / "resource-run.json").get("runId") != owner.id
-                                          or str(path.relative_to(self.repo)) not in value.get("published", [])):
+                        if published and (path.is_symlink() or read_run_manifest(path / "resource-run.json").get("runId") != owner.id
+                                          or str(path.relative_to(self.repo)) not in published_names(value)):
                             continue
                         if value.get("status") not in ("passed", "failed", "interrupted") or group_alive(value.get("childGroup")) or open_paths(path, owner=owner):
                             continue
