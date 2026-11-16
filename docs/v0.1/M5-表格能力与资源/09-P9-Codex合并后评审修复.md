@@ -117,10 +117,10 @@ scratch 不存在时，`Run.finish` 只处理三种情况：
   - 补读失败时照常报告；
   - 没有记录的来源命中时不读取；
   - 暂停时命中不读取。
-- **E2E**（`images-lifecycle.spec.ts` 新增一条，Chromium、Chrome、WebKit）：
-  - 单元格图片用一张单独的图片，首次读取返回 503；
-  - 清空该格，断网再联网，然后撤销；
-  - 这一格重新显示图片，之后再走一遍故障哨兵。
+- **E2E**（`images.spec.ts` 新增一条，Chromium、Chrome、WebKit）：
+  - 单元格图片用一张只有它引用的图片，阅读与编辑两个实例的读取都返回 503；
+  - 清空该格，断网再联网（失败提示随刷新消失、这张图不读取），图片服务恢复之后撤销；
+  - 这一格重新显示图片、只多读一次，之后再走一遍故障哨兵。
 
 ### 3.5 CX7：关闭诊断以回复头的错误为准（S5）
 
@@ -164,7 +164,7 @@ scratch 不存在时，`Run.finish` 只处理三种情况：
 | 单元（Python） | 坏时间与健康候选并存；缺目录待清理运行的重试收尾 | CX6、CX1 |
 | 单元（TS，真实 SDK） | IMAGE 空白的两边一致；`ImageCacheMap` 命中补读；关闭诊断的错误回复 | CX2、CX3、CX7 |
 | 回归 | 测试资源工具的完整 Python 回归；图片与内部 API 相关单元；类型与 lint | 全部 |
-| E2E | `images-lifecycle.spec.ts` 新增的撤销恢复；`handover-same-browser.spec.ts` 改过的那条；本机三个浏览器各一次，分支 CI 原六项 | CX3、CX5 |
+| E2E | `images.spec.ts` 新增的撤销恢复；`handover-same-browser.spec.ts` 改过的那条；本机三个浏览器各一次，分支 CI 原六项 | CX3、CX5 |
 
 产品与工具的修复都先写在旧代码上失败的测试。CX5 只改测试本身，以三个浏览器通过和审查核对竞速覆盖为准。
 

@@ -41,6 +41,14 @@ export interface PlatformImageIo {
   readonly dispose: () => void
 }
 
+/**
+ * core 补丁的扩展点（ADR-022 的 M5-P9 补充）：ImageCacheMap 命中时调用，表示 SDK 要再次显示缓存里这个来源的元素。
+ * 平台据此给刷新时跳过的、没有像素的来源补读一次（M5-P9 CX3）。补丁只在实例的 IImageIoService 带这个方法时调用
+ */
+interface CacheHitImageIoService extends IImageIoService {
+  readonly revisitImageSource: (source: string, type: ImageSourceType) => void
+}
+
 export function createPlatformImageIo(options: PlatformImageIoOptions): PlatformImageIo {
   const owner = options.identity.owner ?? options.identity.current()?.user.id
   const progress = new Subject<number>()
@@ -123,7 +131,7 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     previousSession = current
   })
 
-  const images: IImageIoService = {
+  const images: CacheHitImageIoService = {
     change$: progress.asObservable(),
     setWaitCount: (count) => {
       if (!disposed)
@@ -134,6 +142,10 @@ export function createPlatformImageIo(options: PlatformImageIoOptions): Platform
     addImageSourceCache: (source, type, image) => {
       if (image !== null && image !== undefined)
         resources.track(type === ImageSourceType.BASE64 ? '' : source, image)
+    },
+    revisitImageSource: (source, type) => {
+      if (type !== ImageSourceType.BASE64)
+        resources.revisit(source)
     },
     saveImage: async (file) => {
       const controller = uploads

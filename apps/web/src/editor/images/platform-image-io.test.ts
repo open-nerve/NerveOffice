@@ -36,7 +36,7 @@ function session(token = 'original'): SessionResponse {
   return { user: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', username: 'alice', displayName: '甲', systemRole: 'member' }, personalSpace: { id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', name: '甲' }, csrfToken: token, features: { localDraftsEnabled: true } }
 }
 
-function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = session(), owner?: string, identity?: EditorImageAccess) {
+function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = session(), owner?: string, identity?: EditorImageAccess, liveSources?: () => ReadonlySet<string>) {
   let current: SessionResponse | undefined = initial ?? undefined
   const listeners = new Set<() => void>()
   const failed = vi.fn()
@@ -55,6 +55,7 @@ function setup(access: EditorAccess = 'edit', initial: SessionResponse | null = 
     changed: vi.fn(),
     failed,
     invalidated,
+    ...(liveSources === undefined ? {} : { liveSources }),
   })
   const univer = new Univer()
   univer.registerPlugin(UniverDrawingPlugin, { override: adapter.override })
@@ -176,6 +177,108 @@ describe('SDK 单元格缓存属于当前图片实例', () => {
     // decode 替身创建原件时没有回调；最后一次赋值才是 SDK 的富文本元素。
     expect(observed.at(-1)).toBe(true)
     expect(loaded).toHaveBeenCalledOnce()
+  })
+})
+
+/** 等一个宏任务：替身读取与解码都是立即完成的 Promise，一轮足够落定 */
+async function settle(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 0))
+}
+
+// M5-P9 CX3（Codex 合并后评审）：清除与撤销复用同一个工作表骨架，core 的 ImageCacheMap 命中直接返回缓存里的元素，
+// 只有未命中才登记并读取。刷新跳过已删除、没有像素的来源之后，撤销时的绘制必须经命中通知补读一次，否则一直是占位、也没有失败提示
+describe('SDK 缓存命中时补读刷新跳过的来源（M5-P9 CX3）', () => {
+  /** 单元格图片第一次读取失败、清空该格、恢复联网刷新：返回 SDK 缓存里的占位元素与文档引用的切换 */
+  async function failedThenRemoved() {
+    let live: ReadonlySet<string> = new Set([SOURCE])
+    const h = setup('edit', session(), undefined, undefined, () => live)
+    vi.mocked(readAsset).mockRejectedValueOnce(new NetworkError('首次读取断网'))
+    const cache = new ImageCacheMap(h.injector)
+    expect(cache.getImage(ImageSourceType.URL, SOURCE)).toBeNull()
+    await vi.waitFor(() => expect(h.failed).toHaveBeenCalledOnce())
+    const image = cache.getImage(ImageSourceType.URL, SOURCE)
+    if (image === null)
+      throw new Error('SDK 缓存里没有登记的元素')
+    expect(image.src).not.toBe('blob:https://app.test/first')
+    live = new Set()
+    // 恢复联网：页面经图片许可通知刷新；已删除、没有像素的来源不读取（M5R-M-11）
+    h.change(session())
+    await settle()
+    expect(readAsset).toHaveBeenCalledOnce()
+    const restore = (): void => {
+      live = new Set([SOURCE])
+    }
+    return { h, cache, image, restore }
+  }
+
+  it('撤销之后 SDK 命中缓存：补读一次，同一元素换上像素，之后的命中不再读取', async () => {
+    const { h, cache, image, restore } = await failedThenRemoved()
+    restore()
+    expect(cache.getImage(ImageSourceType.URL, SOURCE)).toBe(image)
+    await vi.waitFor(() => expect(image.src).toBe('blob:https://app.test/first'))
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await settle()
+    expect(readAsset).toHaveBeenCalledTimes(2)
+    expect(h.failed).toHaveBeenCalledOnce()
+  })
+
+  it('补读仍失败照常报告（页头据此给出重试），同一轮不反复读取', async () => {
+    const { h, cache, image, restore } = await failedThenRemoved()
+    restore()
+    const error = new NetworkError('补读也断网')
+    vi.mocked(readAsset).mockRejectedValueOnce(error)
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await vi.waitFor(() => expect(h.failed).toHaveBeenCalledTimes(2))
+    expect(h.failed).toHaveBeenLastCalledWith(error)
+    expect(image.src).not.toBe('blob:https://app.test/first')
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await settle()
+    expect(readAsset).toHaveBeenCalledTimes(2)
+  })
+
+  it('已显示的图片删除、暂停清掉像素、恢复时静默补读失败：撤销之后的命中照常读取', async () => {
+    let live: ReadonlySet<string> = new Set([SOURCE])
+    const h = setup('edit', session(), undefined, undefined, () => live)
+    const cache = new ImageCacheMap(h.injector)
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await settle()
+    const image = cache.getImage(ImageSourceType.URL, SOURCE)
+    if (image === null)
+      throw new Error('SDK 缓存里没有登记的元素')
+    expect(image.src).toBe('blob:https://app.test/first')
+    live = new Set()
+    h.change(undefined)
+    expect(image.src).not.toBe('blob:https://app.test/first')
+    vi.mocked(readAsset).mockRejectedValueOnce(new NetworkError('静默补读断网'))
+    h.change(session())
+    await vi.waitFor(() => expect(readAsset).toHaveBeenCalledTimes(2))
+    await settle()
+    expect(h.failed).not.toHaveBeenCalled()
+    live = new Set([SOURCE])
+    expect(cache.getImage(ImageSourceType.URL, SOURCE)).toBe(image)
+    await vi.waitFor(() => expect(image.src).toBe('blob:https://app.test/first'))
+    expect(readAsset).toHaveBeenCalledTimes(3)
+  })
+
+  it('暂停时命中不读取；恢复之后已有像素与仍在读取的来源命中也不另读', async () => {
+    const { h, cache, image, restore } = await failedThenRemoved()
+    h.change(undefined)
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await settle()
+    expect(readAsset).toHaveBeenCalledOnce()
+    const pending = deferred<typeof BYTES>()
+    vi.mocked(readAsset).mockReturnValueOnce(pending.promise)
+    restore()
+    // 本人回来：来源已回到文档里，刷新照常重读它；这次读取进行中的命中不另读
+    h.change(session())
+    await vi.waitFor(() => expect(readAsset).toHaveBeenCalledTimes(2))
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    pending.resolve(BYTES)
+    await vi.waitFor(() => expect(image.src).toBe('blob:https://app.test/first'))
+    cache.getImage(ImageSourceType.URL, SOURCE)
+    await settle()
+    expect(readAsset).toHaveBeenCalledTimes(2)
   })
 })
 
