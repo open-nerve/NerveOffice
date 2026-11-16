@@ -550,7 +550,8 @@ export class CloseProtocolFilter {
         if (state.disposeId === ident && state.disposeDone === undefined) {
           state.disposeDone = now
           state.disposeLatencyMs = latency
-          const error = text(extra, 'error')
+          // 以回复头认出的错误为准：正文截断、解析不出或没有可保存的文字时记固定原因，不能把错误回复当成成功（M5-P9 CX7）
+          const error = text(extra, 'error') ?? (isError ? 'error-without-text' : undefined)
           if (error !== undefined)
             state.disposeError = error
           break

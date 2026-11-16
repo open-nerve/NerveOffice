@@ -82,9 +82,12 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
       deliver = resolve
     })
     let committed: (response: APIResponse) => void = () => {}
-    const acquisition = new Promise<APIResponse>((resolve) => {
+    let forwardFailed: (error: Error) => void = () => {}
+    const acquisition = new Promise<APIResponse>((resolve, reject) => {
       committed = resolve
+      forwardFailed = reject
     })
+    void acquisition.catch(() => {})
     // 扣住的申请被 A 放弃（多半是到了时限），回包迟到的前提就不成立：一发生就失败、写明原因，不等 B 走完，也不空等那一次核对。
     // 两种迹象：被扣住的请求在回包送达之前被页面取消（requestfailed）；A 在它之后又发了一次申请（取消之后重新申请，或回包到时已超时）。
     // 扣住的时长（到放行或到被放弃）记进注解，各轮看得到离时限还有多远
@@ -110,15 +113,25 @@ test.describe('US-M3-08 同一个浏览器里的标签页：编辑权随本机�
       intercepted = true
       held = route.request()
       timer.start()
-      const response = await route.fetch()
+      let response: APIResponse
+      try {
+        response = await route.fetch()
+      }
+      catch (error) {
+        // 真实事务没有拿到回包：前提不成立，写明原因立即失败，不空等用例总时限（M5-P9 CX5）
+        forwardFailed(new Error(`A 的申请转发到服务端失败（${error instanceof Error ? error.message : String(error)}，已扣住 ${timer.note()} 毫秒）：回包迟到的前提不成立`))
+        return
+      }
       committed(response)
       await delivered
       await route.fulfill({ response })
     })
+    // 从点击“编辑”到放行，每一步都与“被扣住的申请被放弃”竞速：A 在服务端第一次回包之前就放弃时也立即失败、写明原因（M5-P9 CX5）
+    const guarded = async <T>(work: Promise<T>): Promise<T> => Promise.race([work, heldCancelled])
     try {
-      await enterEditButton(page).click()
-      expect((await acquisition).status()).toBe(201)
-      expect(await editLeaseEpoch(documentId)).toBe(1)
+      await guarded(enterEditButton(page).click())
+      expect((await guarded(acquisition)).status()).toBe(201)
+      expect(await guarded(editLeaseEpoch(documentId))).toBe(1)
 
       // B（回到前台，与新开时一样）：A 还没拿到回包、没拿锁，B 读到的是自己在别处编辑；"在此编辑"以本人接管取得第 2 代、拿锁（锁空着）、进入编辑。
       // 这一整段都在扣住期间，与"A 放弃了被扣住的申请"竞速（B 没走完的步骤在页面关闭时自行失败，不另报）

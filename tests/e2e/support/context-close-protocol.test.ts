@@ -154,6 +154,22 @@ describe('协议过滤器', () => {
     expect(failed.disposeOutcome()).toBe('dispose-error')
   })
 
+  it('dispose 的回复头是错误，正文截断或没有可保存的文字，仍算错误（M5-P9 CX7）', () => {
+    // Playwright 只在设置了 MAX_LOG_LENGTH 时截断协议日志；浏览器的错误回复通常带 message。两者都不成立时也不能把错误当成功
+    const truncated = new CloseProtocolFilter(0)
+    truncated.closeStarted(0)
+    truncated.feed(send({ id: 7, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }), 1)
+    truncated.feed(`◀ RECV {"id":7,"error":{"code":-32000${TRUNCATED}`, 2)
+    expect(truncated.disposeOutcome()).toBe('dispose-error')
+    expect(truncated.snapshot(3).unparsedBodies).toBe(1)
+
+    const bare = new CloseProtocolFilter(0)
+    bare.closeStarted(0)
+    bare.feed(send({ id: 8, method: 'Target.disposeBrowserContext', params: { browserContextId: CTX } }), 1)
+    bare.feed(recv({ id: 8, error: { code: -32000 } }), 2)
+    expect(bare.disposeOutcome()).toBe('dispose-error')
+  })
+
   it('各列表都有上限，超出只计数', () => {
     const letters = (value: number) => [...value.toString(26)].map(digit => String.fromCharCode(97 + Number.parseInt(digit, 26))).join('')
     const filter = new CloseProtocolFilter(0)
