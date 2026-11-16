@@ -82,10 +82,10 @@ def published_names(value):
 
 
 def retirement_time(value):
-    """回收候选的台账先整体校验删除前要用到的字段，返回它的时刻（M5-P9 CX6 及其独立审查复验，对齐 Codex 的建议
+    """回收候选的台账先校验删除前要用到的这些字段，返回它的时刻（M5-P9 CX6 及其独立审查复验，对齐 Codex 的建议
     “验证必需字段及有限数值时间”）：version 存在（删除前按它认领运行）；进程组是空或正整数（查询进程组存活）；
-    回收记录是列表（删除之后记账）；发布列表另由 published_names 校验。不合格抛 ValueError，时刻不合格抛 TypeError，
-    由调用方只跳过这一条——删除阶段因此不会在删了文件之后才因记账抛错"""
+    回收记录是列表（删除之后记账）。发布列表另由 published_names 校验，服务 scope 证明由 Run.service_proof 在句柄核对时校验。
+    不合格抛 ValueError，时刻不合格抛 TypeError，由调用方只跳过这一条——删除阶段因此不会在删了文件之后才因记账抛错"""
     if "version" not in value:
         raise ValueError("台账缺少 version")
     group = value.get("childGroup")
@@ -1110,6 +1110,10 @@ class Run:
         proof = self.data.get("serviceScope")
         if proof is None:
             return None
+        # 证明与路径登记不是对象时按证明不符处理（ValueError：句柄核对记不完整、保留资源），
+        # 不让 AttributeError 穿出逐候选的回收与收尾（M5-P9 第二轮复验 M-1）
+        if type(proof) is not dict or type(self.data.get("scopePaths", {})) is not dict:
+            raise ValueError("服务 scope 证明或路径登记不是对象")
         if (proof.get("version") != 1 or proof.get("runId") != self.id or proof.get("repo") != str(self.store.repo)
                 or proof.get("roots") != self.scope_roots()):
             raise ValueError("服务 scope 运行归属或创建证明不符")
@@ -1122,7 +1126,7 @@ class Run:
             if relative not in self.data.get("published", []):
                 return None
             marker = root / "resource-run.json"
-            if marker.is_symlink() or read_json(marker).get("runId") != self.id:
+            if marker.is_symlink() or read_run_manifest(marker).get("runId") != self.id:
                 raise ValueError("服务 scope 报告标记不符")
             moves = [m for m in self.data.get("scopeMoves", []) if m["destination"] == str(root)]
             if not moves:

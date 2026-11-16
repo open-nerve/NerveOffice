@@ -547,6 +547,27 @@ class LifecycleTests(unittest.TestCase):
         finally:
             self.store = original
 
+    def test_sweep_keeps_the_run_record_whose_service_scope_is_not_an_object(self):
+        # M5-P9 第二轮复验 M-1：删除前的句柄核对经 service_proof 读服务 scope 证明。证明不是对象（字符串、0、空列表、false）时
+        # 按证明不符处理：句柄核对不完整、这一条记 verification-failed 原样保留；修复前在 proof.get 抛 AttributeError、穿出 sweep
+        import lifecycle
+        original = self.store
+        try:
+            for bad in ("x", 0, [], False):
+                with self.subTest(serviceScope=bad), tempfile.TemporaryDirectory(prefix="nerve-residue-test-") as temp:
+                    self.store = Store(Path(temp).resolve(), failure_bytes=4096, failure_run_bytes=2048, report_bytes=16384)
+                    runs = self.expired_reports(2)
+                    data = json.loads((runs[0].directory / "run.json").read_text())
+                    data["serviceScope"] = bad
+                    lifecycle.atomic_json(runs[0].directory / "run.json", data)
+                    report = self.store.sweep()
+                    self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "verification-failed", "error": "RuntimeError"}])
+                    self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+                    self.assertTrue((runs[0].directory / "reports").exists())
+                    self.assertFalse((runs[1].directory / "reports").exists())
+        finally:
+            self.store = original
+
     def test_sweep_leaves_a_published_report_whose_marker_is_not_a_json_object(self):
         # M5-P9 独立审查 M-2 的同类：发布目录的归属标记是合法 JSON、顶层却不是对象时，按“不属于这一轮”跳过这个发布目录、原样保留，
         # 与标记缺失或属于别的运行相同；sweep 不抛出，这一轮自己的报告与其余候选照常回收

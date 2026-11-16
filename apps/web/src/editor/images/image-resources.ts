@@ -29,7 +29,8 @@ export interface ImageResources {
   readonly track: (source: string, image: HTMLImageElement) => void
   /**
    * SDK 要再次显示缓存里这个来源的元素（core 补丁在 ImageCacheMap 命中时通知，M5-P9 CX3）：刷新时跳过的已删除来源、静默补读失败的来源，
-   * 元素一直是占位；再次显示时补一次正常读取（失败照常报告）。其余来源只做一次集合判断
+   * 元素一直是占位；再次显示时补一次正常读取（失败照常报告）。静默补读进行中被再次显示的，那一次读取转为在用（失败照常报告），不另读。
+   * 其余来源只做两次集合判断
    */
   readonly revisit: (source: string) => void
   readonly download: (source: string) => Promise<Blob>

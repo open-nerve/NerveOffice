@@ -641,7 +641,7 @@ M5 整体独立审查（[报告](../v0.1/M5-表格能力与资源/reviews/P6-M5�
 
 **测试与门禁**
 
-- **测试资源工具**（CX1、CX6，[测试资源生命周期](../testing/test-resource-lifecycle.md)）：已启动运行的 scratch 被外部删除、第一次收尾核验没通过而停在 cleanup-pending 的，之后的清扫在组与句柄核验通过后按中断收尾、退役短根，`requestedStatus` 保留第一次请求的结论；回收候选先校验删除前要用到的台账字段（`lifecycle.retirement_time`：时刻是有限数字、`version` 存在、进程组是空或正整数、回收记录是列表；发布列表另由 `published_names` 校验），不合格的这一条记 `collection-failed` 原样保留，其余候选照常回收；台账与归档记录的顶层须是 JSON 对象，否则与读不出的同样处理（`archive.py` 同改）。
+- **测试资源工具**（CX1、CX6，[测试资源生命周期](../testing/test-resource-lifecycle.md)）：已启动运行的 scratch 被外部删除、第一次收尾核验没通过而停在 cleanup-pending 的，之后的清扫在组与句柄核验通过后按中断收尾、退役短根，`requestedStatus` 保留第一次请求的结论；回收候选先校验删除前要用到的台账字段（`lifecycle.retirement_time`：时刻是有限数字、`version` 存在、进程组是空或正整数、回收记录是列表；发布列表另由 `published_names` 校验），不合格的这一条记 `collection-failed` 原样保留，其余候选照常回收；服务 scope 证明不是对象时，句柄核对按证明不符记不完整；台账与归档记录的顶层须是 JSON 对象，否则与读不出的同样处理（`archive.py` 同改）。
 - **托管例外**：workflow_dispatch 的精确分支改为 `refs/heads/m5-p9-codex-fixes`（[ADR-026](../adr/ADR-026-M5阶段接续与集中验收.md) 的 P9 附录）；托管 Mac 本 Phase 不跑。
 - **E2E 支撑与用例**：关闭阶段的协议过滤器以回复头的错误为准，错误回复的正文截断或缺 `message` 时记 `error-without-text`、诊断判为不完整（CX7）；`handover-same-browser.spec.ts` 的“回包乱序”用例从点击“编辑”起每一步都与“被扣住的申请被放弃”竞速，转发失败即写明原因失败（CX5）；`images.spec.ts` 新增单元格图片首读失败、清空、联网刷新之后撤销重新显示的故事（CX3）。原断言与时限不变。
 
