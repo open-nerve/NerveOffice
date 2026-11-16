@@ -1,5 +1,11 @@
 # NerveOffice 协作约定
 
+**2026-11-16 当前批准（M5-P9 Codex 合并后评审修复）**：M5 已完成并打 `v0.1-m5`（main `8cbe1ab5`，main CI #105 原六项成功）。需求方 11-16 批准开始 M6 总设计讨论（`m6-design` 分支，总设计审批前不实施 M6），同时补做 P7、P8 的 Codex 合并后评审；确认的问题以唯一 M5-P9 修复，修完再开始 M6-P1。
+- **范围**：worktree `.claude/worktrees/m5-p9-codex-fixes`，按 [P9 设计](docs/v0.1/M5-表格能力与资源/09-P9-Codex合并后评审修复.md)修复 CX1、CX2、CX3、CX5、CX6、CX7。CX4 登记已知限制：对齐 P2-S2、P4-S3 与 ADR 的口径，登记 DEF-088；M6 的共用编辑会话层再加不下载图片字节的权限复核。
+- **验证**：沿用 P7、P8 的做法。本机跑单元测试与测试资源工具的完整 Python 回归；改动或新增的浏览器用例用 Chromium、Chrome、WebKit 各串行跑一次，经 `run.py` 按 e2e 登记。
+- **CI 与合并**：独立审查后推送本唯一分支，手动触发原六项 CI；托管 VM 的 workflow_dispatch 例外改为本分支；托管 Mac 不跑。通过后 `--no-ff` 合入 main、推送，并取得 main 同 SHA CI。
+- **保持不变**：原断言、时限、资源门槛与“未知异常即停止”。`conflict.spec.ts:49` 隐含的 5 秒不改，补记到 DEF-086。
+
 **2026-11-06 当前批准（M5-P8 完整收官）**：P7 已合入 main（`4801f235`，CI99 `42217619993` 原六项成功），worktree 与分支已退役。需求方要求“一步一步接着做，直到 M5 完整收官”，并批准新建唯一 M5-P8：worktree `.claude/worktrees/m5-p8-final-closeout`，按 [P8 设计](docs/v0.1/M5-表格能力与资源/08-P8-M5完整收官.md)推进。
 - **Q-10**：lsof 全量列举“退出码 1 且 stderr 为空”判为不完整（失败关闭）。
 - **DEF-074**：改在 GitHub 托管的 Mac 上跑，先探测 Apple 芯片版与 Intel 版；可行再改造 CI、数据库与资源工具，不可行停下汇报。当前开发机的浏览器长测照旧暂停。
