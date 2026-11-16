@@ -22,6 +22,28 @@ class ArchiveTests(unittest.TestCase):
             self.assertTrue((bundle / 'retirement.json').exists())
             self.assertTrue((bundle / 'run.json').exists())
 
+    def test_bundle_whose_time_is_not_a_finite_number_is_kept_and_others_retire(self):
+        # M5-P9 CX6 的同类排查：归档记录的时间不是有限数字时只保留这一份，不让排序或相减抛错挡住其余归档的回收
+        import archive
+        for bad in ('damaged', True, None, float('nan'), float('inf')):
+            with self.subTest(endedAt=bad), tempfile.TemporaryDirectory() as temp:
+                store = Archives(Path(temp).resolve(), cap=0)
+                bundles = []
+                for name in ('broken', 'healthy'):
+                    bundle, lease = store.create(name)
+                    try:
+                        (bundle / 'output').mkdir(); (bundle / 'output/data').write_text(name)
+                        store.seal(bundle)
+                    finally: lease.__exit__(None, None, None)
+                    bundles.append(bundle)
+                record = bundles[0] / '.test-archive.json'
+                value = json.loads(record.read_text()); value['endedAt'] = bad
+                archive.atomic_json(record, value)
+                receipts = store.prune()
+                self.assertEqual([receipt['bundle'] for receipt in receipts], [bundles[1].name])
+                self.assertTrue((bundles[0] / 'output/data').exists())
+                self.assertFalse((bundles[1] / 'output').exists())
+
     def test_active_pinned_and_unknown_bundles_are_preserved(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp).resolve(); store = Archives(root, cap=0)

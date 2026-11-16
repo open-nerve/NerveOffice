@@ -3,6 +3,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -55,6 +56,14 @@ def atomic_json(path, value):
 
 def read_json(path):
     return json.loads(path.read_text())
+
+
+def record_time(value):
+    """台账里记的时刻（秒）：只认有限的整数或浮点数。布尔、字符串、null、NaN 与无穷一律拒绝（M5-P9 CX6）：
+    台账只按 JSON 解析、不校验字段类型，回收候选按时刻排序和相减之前先经过这里"""
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise TypeError("台账时间不是有限数字")
+    return value
 
 
 def read_run_manifest(path):
@@ -816,8 +825,10 @@ class Store:
                 for path, published in paths:
                     try:
                         if path.exists() and not path.is_symlink():
-                            candidates.append((value.get("endedAt", value["startedAt"]), directory, path, byte_size(path), published))
-                    except (OSError, KeyError) as error:
+                            # 时刻先校验：不是有限数字的只跳过这一条，不让排序或相减抛错挡住其余候选（M5-P9 CX6）
+                            ended = record_time(value.get("endedAt", value["startedAt"]))
+                            candidates.append((ended, directory, path, byte_size(path), published))
+                    except (OSError, KeyError, TypeError) as error:
                         note(category, directory.name, "collection-failed", error)
             total = sum(item[3] for item in candidates)
             for ended, directory, path, size, published in sorted(candidates):
@@ -1246,12 +1257,14 @@ class Run:
                 elif self.data.get("status") in ("prepared", "cleanup-pending") and self.data.get("childGroup") is None:
                     self.retire_short_root()
                     self.update(status="interrupted", endedAt=time.time(), cleanupStage="never-started")
-                elif self.data.get("status") in ("prepared", "running"):
+                elif self.data.get("status") in ("prepared", "running", "cleanup-pending"):
                     # 运行期间 scratch 被外部删除（M5R-M-19）：报告随之没了，不能按请求的结论收尾；上面已确认组内进程与句柄都已退出。
-                    # 清理阶段沿用 complete（确实已无残留，下游按它判定终态），原因记在 stopReason
+                    # 清理阶段沿用 complete（确实已无残留，下游按它判定终态），原因记在 stopReason。
+                    # 已启动、第一次收尾核验没通过而停在 cleanup-pending 的，核验恢复之后同样在这里收尾（M5-P9 CX1）；
+                    # requestedStatus 保留第一次收尾时请求的结论（sweep 接手时传入的是 interrupted）
                     self.retire_short_root()
                     self.update(status="interrupted", endedAt=time.time(), cleanupStage="complete",
-                                requestedStatus=status, stopReason="scratch-missing",
+                                requestedStatus=self.data.get("requestedStatus", status), stopReason="scratch-missing",
                                 cleanupError="运行期间临时目录被外部删除，本轮按中断收尾")
                 return self.data
             if self.data.get("cleanupStage") == "reports-collected":

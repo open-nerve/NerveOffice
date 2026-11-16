@@ -325,6 +325,31 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual((value["status"], value["cleanupStage"], value["stopReason"]), ("interrupted", "complete", "scratch-missing"))
             self.assertFalse(root.exists())
 
+    def test_started_run_without_scratch_finishes_once_the_retried_check_passes(self):
+        # M5-P9 CX1（Codex 合并后评审）：已启动的运行 scratch 被外部删除，第一次收尾核验又没通过（句柄查询不完整）而停在 cleanup-pending；
+        # 核验恢复之后 sweep 要按中断收尾、退役短根，不能一直记为 active、挡住同类运行。requestedStatus 保留第一次收尾时请求的结论。
+        # 短根用临时目录里的模型（不建 /tmp 下的真实短根），组与句柄用替身：失败时不留下要人工处理的资源
+        import lifecycle
+        short = self.repo / "model-short-root"
+        short.mkdir()
+        run = self.store.create("e2e")
+        with patch.object(lifecycle.Run, "short_root", return_value=short), patch("lifecycle.group_alive", return_value=False):
+            with patch("lifecycle.open_paths", side_effect=RuntimeError("模拟句柄查询不完整")):
+                run.update(status="running", childGroup=2 ** 30, commandExitCode=0, exitCode=0, interrupted=False)
+                shutil.rmtree(run.scratch)
+                first = run.finish("passed")
+            self.assertEqual((first["status"], first["requestedStatus"]), ("cleanup-pending", "passed"))
+            self.assertTrue(short.exists())
+            with patch("lifecycle.open_paths", return_value=[]):
+                report = self.store.sweep()
+        self.assertIn(run.id, report["recovered"])
+        self.assertNotIn(run.id, report["active"])
+        value = json.loads((run.directory / "run.json").read_text())
+        self.assertEqual((value["status"], value["cleanupStage"], value["stopReason"], value["requestedStatus"]),
+                         ("interrupted", "complete", "scratch-missing", "passed"))
+        self.assertEqual((value["commandExitCode"], value["exitCode"]), (0, 0))
+        self.assertFalse(short.exists())
+
     def test_unverifiable_gc_candidate_is_skipped_and_kept_without_failing_finish(self):
         # M5R-M-20：句柄查询不完整的候选只跳过、原样保留；本轮照常收尾，其余候选照常回收
         import lifecycle
@@ -435,6 +460,27 @@ class LifecycleTests(unittest.TestCase):
         # endedAt 不是数字时排序或相减抛 TypeError：隔离边界同样吸收
         with patch.object(Store, "prune", side_effect=TypeError("endedAt")):
             self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "TypeError"}])
+
+    def test_sweep_skips_only_the_run_record_whose_time_is_not_a_finite_number(self):
+        # M5-P9 CX6（Codex 合并后评审）：启动前的 sweep 直接调用 prune，不经收尾的隔离入口。台账时间是字符串、布尔、null、NaN 或无穷时，
+        # 只跳过这一条（collection-failed，原样保留），sweep 不抛出，其余过期候选照常回收
+        import lifecycle
+        original = self.store
+        try:
+            for bad in ("damaged", True, None, float("nan"), float("inf")):
+                with self.subTest(endedAt=bad), tempfile.TemporaryDirectory(prefix="nerve-residue-test-") as temp:
+                    self.store = Store(Path(temp).resolve(), failure_bytes=4096, failure_run_bytes=2048, report_bytes=16384)
+                    runs = self.expired_reports(2)
+                    data = json.loads((runs[0].directory / "run.json").read_text())
+                    data["endedAt"] = bad
+                    lifecycle.atomic_json(runs[0].directory / "run.json", data)
+                    report = self.store.sweep()
+                    self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "TypeError"}])
+                    self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+                    self.assertTrue((runs[0].directory / "reports").exists())
+                    self.assertFalse((runs[1].directory / "reports").exists())
+        finally:
+            self.store = original
 
     def test_isolated_final_prune_never_raises_and_sweep_reports_skipped(self):
         # S14 审查 T4：运行器结束时的收尾 GC 与 finish 共用隔离入口；sweep 也把跳过的候选报出来

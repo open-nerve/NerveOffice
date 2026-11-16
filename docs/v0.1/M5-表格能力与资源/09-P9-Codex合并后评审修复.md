@@ -52,6 +52,8 @@ Codex 另记了一条未计入问题的观察：`conflict.spec.ts:49` 的 `expec
 
 修复：候选加入列表之前，先核对时间是有限的整数或浮点数，排除布尔、字符串、null、NaN 与无穷。不合格的按 `collection-failed` 记进 skipped，这一条原样保留，其余候选照常回收。`prune_isolated` 的隔离边界、期限与总量规则都不变。
 
+同类排查：`archive.py` 的归档回收（`Archives.prune`）有同样的写法，一并改为先校验，不合格的那一份保留。
+
 ### 3.2 CX1：缺目录的已启动运行，核验恢复后收尾（S2）
 
 scratch 不存在时，`Run.finish` 只处理三种情况：
