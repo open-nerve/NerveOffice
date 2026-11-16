@@ -38,6 +38,20 @@ describe('IMAGE() 首参的本站绝对地址写入时规范为相对地址（M5
     expect(normalizeImageFormula(formula, ORIGIN)).toBe(expected)
   })
 
+  // 首参两侧与括号组内的空白：SDK 的首参来源证明用 trim（全部 Unicode 空白），这里也要跳过，只改写字面量、空白原样保留（M5-P9 CX2；
+  // 逐个码位与真实解释器的对照见 image-formula-address-sdk.test.ts）
+  it.each([
+    [`=IMAGE(\u00A0"${ABSOLUTE}")`, `=IMAGE(\u00A0"${RELATIVE}")`],
+    [`=IMAGE(\u3000"${ABSOLUTE}")`, `=IMAGE(\u3000"${RELATIVE}")`],
+    [`=IMAGE(\u2003"${ABSOLUTE}")`, `=IMAGE(\u2003"${RELATIVE}")`],
+    [`=IMAGE(\uFEFF"${ABSOLUTE}")`, `=IMAGE(\uFEFF"${RELATIVE}")`],
+    [`=IMAGE("${ABSOLUTE}"\u00A0)`, `=IMAGE("${RELATIVE}"\u00A0)`],
+    [`=IMAGE("${ABSOLUTE}"\u3000,"说明")`, `=IMAGE("${RELATIVE}"\u3000,"说明")`],
+    [`=IMAGE((\u00A0"${ABSOLUTE}"\u00A0))`, `=IMAGE((\u00A0"${RELATIVE}"\u00A0))`],
+  ])('首参两侧的 Unicode 空白同样改写：%j', (formula, expected) => {
+    expect(normalizeImageFormula(formula, ORIGIN)).toBe(expected)
+  })
+
   it.each([
     `=IMAGE("${RELATIVE}")`,
     `=IMAGE("https://outside.example/api/assets/${ID}")`,

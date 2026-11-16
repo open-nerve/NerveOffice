@@ -1,9 +1,11 @@
 import { isPlatformAssetAddress } from '@nerve-office/contracts'
 
 const PREFIX = '/api/assets/'
-const SPACE = new Set([' ', '\t', '\n', '\r'])
 const NAME = /^[\p{L}\p{N}_.]$/u
-/** 函数名与括号之间：SDK 对函数名 token 用 String.prototype.trim，去掉的就是这一类空白 */
+/**
+ * SDK 去掉的空白：函数名 token、首参来源证明（engine-formula 补丁）与 imageLiteralSource 都用 String.prototype.trim，
+ * 与 JS 的 \s 是同一组码位（含 U+00A0、全角空格 U+3000、U+FEFF 等）。函数名与括号之间、首参两侧与括号组内都按它跳过（M5-P9 CX2）
+ */
 const TRIMMED = /^\s$/u
 /** SDK 去掉的函数名前缀（engine-formula 的 normalizeFunctionToken，大写比较、只去掉一个） */
 const FUNCTION_PREFIXES = ['_XLFN.', '_XLWS.', '_XLETA.'] as const
@@ -62,7 +64,7 @@ function closingBracket(formula: string, index: number): number | undefined {
 
 function skipSpaces(formula: string, index: number): number {
   let at = index
-  while (at < formula.length && SPACE.has(formula.charAt(at)))
+  while (at < formula.length && TRIMMED.test(formula.charAt(at)))
     at += 1
   return at
 }
