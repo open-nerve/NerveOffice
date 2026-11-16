@@ -1,13 +1,27 @@
 diff --git a/lib/es/index.js b/lib/es/index.js
-index a36fe6257770c8aac96083b80c2f445b337c7fc0..d73c3539f9852d6efd3acf04232fe90288a1c633 100644
+index a36fe6257770c8aac96083b80c2f445b337c7fc0..4d5dc173494563bd4fde527a20ed905da281e4ef 100644
 --- a/lib/es/index.js
 +++ b/lib/es/index.js
 @@ -1,3 +1,4 @@
-+// Modified by NerveOffice: instance-owned images, rendering lifecycle and floating-image anchor fixes (ADR-022).
++// Modified by NerveOffice: instance-owned images, rendering lifecycle, floating-image anchor and cache-hit revisit fixes (ADR-022).
  import { BehaviorSubject, Observable, ReplaySubject, Subject, Subscription, combineLatest, debounceTime, distinctUntilChanged, filter, firstValueFrom, map, merge as merge$1, of, skip, take, takeWhile, tap, timer } from "rxjs";
  import { ObjectScope, UnitAction, UnitObject, UnitRole, UniverType as UniverInstanceType } from "@univerjs/protocol";
  import { debounceTime as debounceTime$1, filter as filter$1, first, map as map$1 } from "rxjs/operators";
-@@ -26853,17 +26854,6 @@ var ImageCacheMap = class {
+@@ -26847,23 +26848,19 @@ var ImageCacheMap = class {
+ 	getImage(imageSourceType, source, onLoad, onError) {
+ 		const imageCacheKey = this._getImageCacheKey(imageSourceType, source);
+ 		const imageElement = this._imageCacheMap.get(imageCacheKey);
+-		if (imageElement) return imageElement;
++		if (imageElement) {
++			// NerveOffice (M5-P9 CX3): a hit can be the first display after the platform withheld a read for this source
++			// (removed while it had no pixels, then restored by undo); let the instance IO service read it once more.
++			if (this._nerveImageIo === void 0) this._nerveImageIo = this._injector.has(IImageIoService) ? this._injector.get(IImageIoService) : null;
++			const revisit = this._nerveImageIo === null ? void 0 : this._nerveImageIo.revisitImageSource;
++			if (typeof revisit === "function") revisit.call(this._nerveImageIo, source, imageSourceType);
++			return imageElement;
++		}
+ 		else {
+ 			(async () => {
  				const newImageElement = new Image();
  				const imageIoService = this._injector.has(IImageIoService) ? this._injector.get(IImageIoService) : null;
  				const urlImageService = this._injector.has(IURLImageService) ? this._injector.get(IURLImageService) : null;
@@ -25,7 +39,7 @@ index a36fe6257770c8aac96083b80c2f445b337c7fc0..d73c3539f9852d6efd3acf04232fe902
  				newImageElement.onload = () => {
  					newImageElement.removeAttribute("data-error");
  					onLoad === null || onLoad === void 0 || onLoad();
-@@ -26872,7 +26862,19 @@ var ImageCacheMap = class {
+@@ -26872,7 +26869,19 @@ var ImageCacheMap = class {
  					newImageElement.setAttribute("data-error", "true");
  					onError === null || onError === void 0 || onError();
  				};
@@ -45,7 +59,7 @@ index a36fe6257770c8aac96083b80c2f445b337c7fc0..d73c3539f9852d6efd3acf04232fe902
  			})();
  			return null;
  		}
-@@ -28021,12 +28023,14 @@ let SheetSkeleton = class SheetSkeleton extends Skeleton {
+@@ -28021,12 +28030,14 @@ let SheetSkeleton = class SheetSkeleton extends Skeleton {
  		};
  	}
  	/**

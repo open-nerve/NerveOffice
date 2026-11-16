@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import time
 import uuid
-from lifecycle import GIB, atomic_bytes, atomic_json, byte_size, contained, group_alive, locked, open_paths, read_json, remove
+from lifecycle import GIB, atomic_bytes, atomic_json, byte_size, contained, group_alive, locked, open_paths, read_json, record_time, remove
 
 BULK = ('output', 'prior-output', 'command.log')
 
@@ -35,6 +35,9 @@ class Archives:
         if marker.is_symlink():
             raise ValueError('归档记录不得是链接')
         value = read_json(marker)
+        # 顶层不是对象的与读不出的同样按 ValueError 处理：回收只跳过这一份（M5-P9 独立审查 M-2 的同类）
+        if type(value) is not dict:
+            raise ValueError('归档记录必须是 JSON 对象')
         if value.get('owner') != self.owner or value.get('bundle') != bundle.name:
             raise ValueError('归档归属不符')
         return value
@@ -74,8 +77,9 @@ class Archives:
                     if value['status'] == 'pinned' or (bundle / 'retirement.json').exists():
                         continue
                     size = sum(byte_size(bundle / name) for name in BULK)
-                    candidates.append((value.get('endedAt', value['startedAt']), bundle, size))
-                except (OSError, ValueError, KeyError):
+                    # 时刻不是有限数字的只保留这一份（M5-P9 CX6 的同类排查）
+                    candidates.append((record_time(value.get('endedAt', value['startedAt'])), bundle, size))
+                except (OSError, ValueError, KeyError, TypeError):
                     continue
             total = sum(item[2] for item in candidates)
             for ended, bundle, size in sorted(candidates):

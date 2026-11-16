@@ -1,9 +1,12 @@
-import { expectAssetHeaders, uploadAsset } from '../../support/asset-protocol.ts'
+import { expectAssetHeaders, saveAssetSnapshot, uploadAsset } from '../../support/asset-protocol.ts'
 import { browserReturns, countBrowserReturns } from '../../support/browser-online.ts'
+import { createUser } from '../../support/database.ts'
 import { probeSnapshot, setCellValue } from '../../support/editor-probe.ts'
 import { expect, test } from '../../support/fixtures.ts'
 import { drawingsIn, expectImagePixels, imageFailureSentinel, imagePixels, prepareImageDocument as prepare } from '../../support/image-editor.ts'
-import { EDITOR_TEST_TIMEOUT, exitEditing, openAndEnterEditing, reloadAndEnterEditing, saveAndWait, savedContent, sheetCanvas, sheetTab } from '../../support/sheet.ts'
+import { imageSample } from '../../support/image-sample.ts'
+import { loginThroughApi } from '../../support/session.ts'
+import { createSheetThroughApi, EDITOR_TEST_TIMEOUT, exitEditing, openAndEnterEditing, reloadAndEnterEditing, saveAndWait, savedContent, selectCell, sheetCanvas, sheetTab } from '../../support/sheet.ts'
 
 test.describe.configure({ timeout: EDITOR_TEST_TIMEOUT })
 
@@ -253,4 +256,80 @@ test.describe('平台图片实例的实际 SDK 路径', { tag: '@test-build' }, 
     expect(reads, '这一代之后编辑、绘制与保存不再请求这张图').toBe(before + 1)
     expect(await browserReturns(page)).toBe(1)
   })
+
+  test('US-M5-07 单元格图片第一次读取失败、清空这一格之后恢复联网，撤销时重新显示图片（M5-P9 CX3）', async ({ page, context }) => {
+    // 清除与撤销复用同一个工作表骨架，core 的 ImageCacheMap 命中直接返回缓存里的占位元素；回到在线的刷新时这张图已不在文档里、
+    // 不读取（M5R-M-11），页头的失败提示也随刷新清掉。撤销之后的绘制必须经命中通知补读，否则一直是占位、也没有重试入口。
+    // A8 的单元格图片用一张只有它引用的图片，浮图与 D8 的 IMAGE 照常用另一张
+    const owner = await createUser('sdk-images')
+    await loginThroughApi(page, owner)
+    const shared = await uploadAsset(page)
+    const cell = await uploadAsset(page)
+    expect(cell.url).not.toBe(shared.url)
+    const documentId = await createSheetThroughApi(page, '图片撤销补读复核')
+    await saveAssetSnapshot(page, documentId, separateCellImage((await savedContent(page, documentId)).snapshot.id, shared.url, cell.url))
+    // 阅读与编辑各是一个实例（进入编辑重建），两次读取都失败；图片服务在撤销之前才恢复
+    let failing = true
+    let reads = 0
+    const path = `**${cell.url}`
+    await page.route(path, async (route) => {
+      reads += 1
+      if (failing) {
+        await route.fulfill({ status: 200, headers: { 'Content-Type': 'image/png', 'X-Asset-Status': '503' }, body: 'unavailable' })
+        return
+      }
+      await route.continue()
+    })
+    try {
+      await openAndEnterEditing(page, documentId, 'steady')
+      const notice = page.getByText('部分图片暂时无法显示', { exact: true })
+      await expect(notice).toBeVisible()
+      await expectImagePixels(page, 'A8', false)
+      await expectImagePixels(page, 'D8')
+      const opened = reads
+      expect(opened).toBeGreaterThan(0)
+      // 清空 A8（与 Delete 键同一个 SDK 命令）：这张图不再被文档引用
+      await selectCell(page, 'A8')
+      expect(await page.evaluate(async () => window.__nerveEditorProbe?.univerAPI.executeCommand('sheet.command.clear-selection-content'))).toBe(true)
+      await expect.poll(async () => (await probeSnapshot(page)).includes(cell.url), { message: 'A8 清空之后快照不再引用这张图' }).toBe(false)
+      const connectionNotice = page.getByText('此操作需要联网，连接恢复后可继续。', { exact: true })
+      await context.setOffline(true)
+      try {
+        await expect(connectionNotice).toBeVisible()
+      }
+      finally {
+        await context.setOffline(false)
+      }
+      await expect(connectionNotice).toBeHidden()
+      // 回到在线的刷新清掉了失败提示；已删除、没有像素的这张图不读取
+      await expect(notice).toBeHidden()
+      expect(reads, '刷新不读取已不在文档里的图').toBe(opened)
+      failing = false
+      expect(await page.evaluate(async () => window.__nerveEditorProbe?.univerAPI.executeCommand('univer.command.undo'))).toBe(true)
+      await expect.poll(async () => (await probeSnapshot(page)).includes(cell.url), { message: '撤销之后快照重新引用这张图' }).toBe(true)
+      await expectImagePixels(page, 'A8')
+      expect(reads, '撤销之后的显示补读一次').toBe(opened + 1)
+      await expect(notice).toBeHidden()
+      await imageFailureSentinel(page, documentId, '撤销补读之后编辑绘制与保存')
+    }
+    finally {
+      await page.unroute(path)
+    }
+  })
 })
+
+/** 真实 SDK 样本里 A8 单元格图片的形状（image-sample.ts 的 imageSample） */
+interface SampleWithCellImage {
+  readonly sheets: { readonly images?: { readonly cellData: Record<string, Record<string, { readonly p: { readonly drawings: Record<string, { source: string }> } }>> } }
+}
+
+/** 图片样本，但 A8 的单元格图片换成只有它引用的另一张图（M5-P9 CX3） */
+function separateCellImage(unitId: string, shared: string, cell: string): string {
+  const sample = JSON.parse(imageSample(unitId, shared)) as SampleWithCellImage
+  const a8 = sample.sheets.images?.cellData['7']?.['0']
+  if (a8 === undefined)
+    throw new Error('样本缺少 A8 的单元格图片')
+  for (const drawing of Object.values(a8.p.drawings))
+    drawing.source = cell
+  return JSON.stringify(sample)
+}
