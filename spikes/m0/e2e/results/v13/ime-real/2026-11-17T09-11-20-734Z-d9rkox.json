@@ -1,0 +1,3517 @@
+{
+  "session": "2026-11-17T09-11-20-734Z-d9rkox",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.0.1 Safari/605.1.15",
+  "url": "http://127.0.0.1:4790/doc.html?sample=minimal&imelog=1&docpolicy=platform",
+  "startedAt": "2026-11-17T09:11:20.734Z",
+  "events": [
+    {
+      "t": 8209,
+      "type": "compositionstart",
+      "target": "__editor_m0-doc-minimal",
+      "data": "",
+      "trusted": true
+    },
+    {
+      "t": 8209,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "n",
+      "trusted": true
+    },
+    {
+      "t": 8217,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "n",
+      "trusted": true
+    },
+    {
+      "t": 8217,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "n",
+      "trusted": true
+    },
+    {
+      "t": 8218,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8255,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ni",
+      "trusted": true
+    },
+    {
+      "t": 8261,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni",
+      "trusted": true
+    },
+    {
+      "t": 8261,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni",
+      "trusted": true
+    },
+    {
+      "t": 8262,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8265,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 78,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8332,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 73,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8425,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ni'h",
+      "trusted": true
+    },
+    {
+      "t": 8436,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni'h",
+      "trusted": true
+    },
+    {
+      "t": 8437,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni'h",
+      "trusted": true
+    },
+    {
+      "t": 8438,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8515,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8527,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ni'ho",
+      "trusted": true
+    },
+    {
+      "t": 8531,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni'ho",
+      "trusted": true
+    },
+    {
+      "t": 8531,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni'ho",
+      "trusted": true
+    },
+    {
+      "t": 8532,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "o",
+      "code": "KeyO",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8550,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ni'hoa",
+      "trusted": true
+    },
+    {
+      "t": 8554,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni'hoa",
+      "trusted": true
+    },
+    {
+      "t": 8555,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ni'hoa",
+      "trusted": true
+    },
+    {
+      "t": 8555,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "a",
+      "code": "KeyA",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8676,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "o",
+      "code": "KeyO",
+      "keyCode": 79,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8682,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "a",
+      "code": "KeyA",
+      "keyCode": 65,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8810,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 8810,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 8810,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "你好",
+      "trusted": true
+    },
+    {
+      "t": 8810,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "你好",
+      "trusted": true
+    },
+    {
+      "t": 8811,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "你好",
+      "trusted": false
+    },
+    {
+      "t": 8815,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "你好",
+      "trusted": true
+    },
+    {
+      "t": 8816,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "你好",
+      "trusted": false
+    },
+    {
+      "t": 8819,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 8898,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 15837,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Meta",
+      "code": "MetaLeft",
+      "keyCode": 91,
+      "isComposing": false,
+      "trusted": true,
+      "meta": true,
+      "shift": false
+    },
+    {
+      "t": 15998,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "z",
+      "code": "KeyZ",
+      "keyCode": 90,
+      "isComposing": false,
+      "trusted": true,
+      "meta": true,
+      "shift": false
+    },
+    {
+      "t": 16046,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Meta",
+      "code": "MetaLeft",
+      "keyCode": 91,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 16145,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "z",
+      "code": "KeyZ",
+      "keyCode": 90,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 16937,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": true
+    },
+    {
+      "t": 16983,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Meta",
+      "code": "MetaLeft",
+      "keyCode": 91,
+      "isComposing": false,
+      "trusted": true,
+      "meta": true,
+      "shift": true
+    },
+    {
+      "t": 17217,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "z",
+      "code": "KeyZ",
+      "keyCode": 90,
+      "isComposing": false,
+      "trusted": true,
+      "meta": true,
+      "shift": true
+    },
+    {
+      "t": 17286,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Meta",
+      "code": "MetaLeft",
+      "keyCode": 91,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": true
+    },
+    {
+      "t": 17310,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 17372,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "z",
+      "code": "KeyZ",
+      "keyCode": 90,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 21688,
+      "type": "compositionstart",
+      "target": "__editor_m0-doc-minimal",
+      "data": "",
+      "trusted": true
+    },
+    {
+      "t": 21688,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "z",
+      "trusted": true
+    },
+    {
+      "t": 21698,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "z",
+      "trusted": true
+    },
+    {
+      "t": 21699,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "z",
+      "trusted": true
+    },
+    {
+      "t": 21699,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "z",
+      "code": "KeyZ",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 21755,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zh",
+      "trusted": true
+    },
+    {
+      "t": 21766,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zh",
+      "trusted": true
+    },
+    {
+      "t": 21766,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zh",
+      "trusted": true
+    },
+    {
+      "t": 21767,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 21777,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "z",
+      "code": "KeyZ",
+      "keyCode": 90,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 21806,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "z'ho",
+      "trusted": true
+    },
+    {
+      "t": 21812,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "z'ho",
+      "trusted": true
+    },
+    {
+      "t": 21812,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "z'ho",
+      "trusted": true
+    },
+    {
+      "t": 21813,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "o",
+      "code": "KeyO",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 21813,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 21966,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "o",
+      "code": "KeyO",
+      "keyCode": 79,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 21995,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhon",
+      "trusted": true
+    },
+    {
+      "t": 22005,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhon",
+      "trusted": true
+    },
+    {
+      "t": 22006,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhon",
+      "trusted": true
+    },
+    {
+      "t": 22007,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22008,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong",
+      "trusted": true
+    },
+    {
+      "t": 22012,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong",
+      "trusted": true
+    },
+    {
+      "t": 22012,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong",
+      "trusted": true
+    },
+    {
+      "t": 22012,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "g",
+      "code": "KeyG",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22064,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 78,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22069,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "g",
+      "code": "KeyG",
+      "keyCode": 71,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22298,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'w",
+      "trusted": true
+    },
+    {
+      "t": 22309,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'w",
+      "trusted": true
+    },
+    {
+      "t": 22310,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'w",
+      "trusted": true
+    },
+    {
+      "t": 22310,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "w",
+      "code": "KeyW",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22322,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'we",
+      "trusted": true
+    },
+    {
+      "t": 22327,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'we",
+      "trusted": true
+    },
+    {
+      "t": 22327,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'we",
+      "trusted": true
+    },
+    {
+      "t": 22328,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22329,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "w",
+      "code": "KeyW",
+      "keyCode": 87,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22392,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'wen",
+      "trusted": true
+    },
+    {
+      "t": 22407,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen",
+      "trusted": true
+    },
+    {
+      "t": 22407,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen",
+      "trusted": true
+    },
+    {
+      "t": 22408,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22419,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 69,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22447,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 78,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22721,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'wen's",
+      "trusted": true
+    },
+    {
+      "t": 22731,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen's",
+      "trusted": true
+    },
+    {
+      "t": 22731,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen's",
+      "trusted": true
+    },
+    {
+      "t": 22732,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22810,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'wen'sh",
+      "trusted": true
+    },
+    {
+      "t": 22819,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'sh",
+      "trusted": true
+    },
+    {
+      "t": 22819,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'sh",
+      "trusted": true
+    },
+    {
+      "t": 22820,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22837,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22843,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 83,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 22955,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'wen'shu",
+      "trusted": true
+    },
+    {
+      "t": 22964,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'shu",
+      "trusted": true
+    },
+    {
+      "t": 22965,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'shu",
+      "trusted": true
+    },
+    {
+      "t": 22966,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "u",
+      "code": "KeyU",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 23019,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "u",
+      "code": "KeyU",
+      "keyCode": 85,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 23093,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'wen'shu'r",
+      "trusted": true
+    },
+    {
+      "t": 23104,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'shu'r",
+      "trusted": true
+    },
+    {
+      "t": 23104,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'shu'r",
+      "trusted": true
+    },
+    {
+      "t": 23105,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "r",
+      "code": "KeyR",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 23161,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "zhong'wen'shu'ru",
+      "trusted": true
+    },
+    {
+      "t": 23167,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'shu'ru",
+      "trusted": true
+    },
+    {
+      "t": 23167,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "zhong'wen'shu'ru",
+      "trusted": true
+    },
+    {
+      "t": 23168,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "u",
+      "code": "KeyU",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 23188,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "r",
+      "code": "KeyR",
+      "keyCode": 82,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 23236,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "u",
+      "code": "KeyU",
+      "keyCode": 85,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 23569,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 23570,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 23571,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "中文输入",
+      "trusted": true
+    },
+    {
+      "t": 23571,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "中文输入",
+      "trusted": true
+    },
+    {
+      "t": 23572,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "中文输入",
+      "trusted": false
+    },
+    {
+      "t": 23579,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "中文输入",
+      "trusted": true
+    },
+    {
+      "t": 23580,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "中文输入",
+      "trusted": false
+    },
+    {
+      "t": 23584,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 23680,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 27532,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": true
+    },
+    {
+      "t": 28303,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 29894,
+      "type": "compositionstart",
+      "target": "__editor_m0-doc-minimal",
+      "data": "",
+      "trusted": true
+    },
+    {
+      "t": 29894,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "t",
+      "trusted": true
+    },
+    {
+      "t": 29906,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "t",
+      "trusted": true
+    },
+    {
+      "t": 29907,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "t",
+      "trusted": true
+    },
+    {
+      "t": 29907,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "t",
+      "code": "KeyT",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 29940,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ti",
+      "trusted": true
+    },
+    {
+      "t": 29944,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti",
+      "trusted": true
+    },
+    {
+      "t": 29944,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti",
+      "trusted": true
+    },
+    {
+      "t": 29945,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 29990,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 73,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30015,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "t",
+      "code": "KeyT",
+      "keyCode": 84,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30056,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ti'h",
+      "trusted": true
+    },
+    {
+      "t": 30067,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'h",
+      "trusted": true
+    },
+    {
+      "t": 30067,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'h",
+      "trusted": true
+    },
+    {
+      "t": 30068,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30091,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30211,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ti'hu",
+      "trusted": true
+    },
+    {
+      "t": 30222,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'hu",
+      "trusted": true
+    },
+    {
+      "t": 30222,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'hu",
+      "trusted": true
+    },
+    {
+      "t": 30223,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "u",
+      "code": "KeyU",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30274,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ti'hua",
+      "trusted": true
+    },
+    {
+      "t": 30285,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'hua",
+      "trusted": true
+    },
+    {
+      "t": 30285,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'hua",
+      "trusted": true
+    },
+    {
+      "t": 30285,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "a",
+      "code": "KeyA",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30288,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "u",
+      "code": "KeyU",
+      "keyCode": 85,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30402,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ti'huan",
+      "trusted": true
+    },
+    {
+      "t": 30412,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'huan",
+      "trusted": true
+    },
+    {
+      "t": 30412,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ti'huan",
+      "trusted": true
+    },
+    {
+      "t": 30413,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30414,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "a",
+      "code": "KeyA",
+      "keyCode": 65,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30473,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "n",
+      "code": "KeyN",
+      "keyCode": 78,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30608,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 30609,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 30610,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "替换",
+      "trusted": true
+    },
+    {
+      "t": 30611,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "替换",
+      "trusted": true
+    },
+    {
+      "t": 30611,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "替换",
+      "trusted": false
+    },
+    {
+      "t": 30619,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "替换",
+      "trusted": true
+    },
+    {
+      "t": 30619,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "替换",
+      "trusted": false
+    },
+    {
+      "t": 30623,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 30677,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 35702,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "，",
+      "trusted": true
+    },
+    {
+      "t": 35703,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "，",
+      "trusted": true
+    },
+    {
+      "t": 35713,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": ",",
+      "code": "Comma",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 35804,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": ",",
+      "code": "Comma",
+      "keyCode": 188,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 36136,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "。",
+      "trusted": true
+    },
+    {
+      "t": 36137,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "。",
+      "trusted": true
+    },
+    {
+      "t": 36148,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": ".",
+      "code": "Period",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 36240,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": ".",
+      "code": "Period",
+      "keyCode": 190,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 41345,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "/",
+      "trusted": true
+    },
+    {
+      "t": 41348,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "/",
+      "code": "Slash",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 41496,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "/",
+      "code": "Slash",
+      "keyCode": 191,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 48072,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 48152,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 48477,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 48562,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 49649,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "/",
+      "trusted": true
+    },
+    {
+      "t": 49653,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "/",
+      "code": "Slash",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 49760,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "/",
+      "code": "Slash",
+      "keyCode": 191,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 55711,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 55713,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": " ",
+      "trusted": true
+    },
+    {
+      "t": 55713,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": " ",
+      "trusted": true
+    },
+    {
+      "t": 55800,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 56032,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": true
+    },
+    {
+      "t": 56172,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 57475,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "/",
+      "code": "Slash",
+      "keyCode": 191,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 57608,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "/",
+      "code": "Slash",
+      "keyCode": 191,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 63196,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 63197,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": " ",
+      "trusted": true
+    },
+    {
+      "t": 63197,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": " ",
+      "trusted": true
+    },
+    {
+      "t": 63345,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65177,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 67,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65178,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 65178,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 65253,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 67,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65354,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 69,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65354,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "e",
+      "trusted": true
+    },
+    {
+      "t": 65354,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "e",
+      "trusted": true
+    },
+    {
+      "t": 65430,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 69,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65516,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 83,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65517,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "s",
+      "trusted": true
+    },
+    {
+      "t": 65517,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "s",
+      "trusted": true
+    },
+    {
+      "t": 65589,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65590,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "h",
+      "trusted": true
+    },
+    {
+      "t": 65590,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "h",
+      "trusted": true
+    },
+    {
+      "t": 65646,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 73,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65647,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "i",
+      "trusted": true
+    },
+    {
+      "t": 65647,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "i",
+      "trusted": true
+    },
+    {
+      "t": 65655,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 83,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65699,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 65767,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 73,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 70057,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Escape",
+      "code": "Escape",
+      "keyCode": 27,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 70132,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Escape",
+      "code": "Escape",
+      "keyCode": 27,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 71059,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Escape",
+      "code": "Escape",
+      "keyCode": 27,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 71203,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Escape",
+      "code": "Escape",
+      "keyCode": 27,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78199,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78236,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78349,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78423,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78525,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78571,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78654,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78722,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78809,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 78853,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Backspace",
+      "code": "Backspace",
+      "keyCode": 8,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79023,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": true
+    },
+    {
+      "t": 79143,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79427,
+      "type": "compositionstart",
+      "target": "__editor_m0-doc-minimal",
+      "data": "",
+      "trusted": true
+    },
+    {
+      "t": 79427,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 79436,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 79436,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 79437,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79498,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 67,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79603,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 79612,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 79612,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 79613,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79657,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 69,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79779,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce's",
+      "trusted": true
+    },
+    {
+      "t": 79789,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce's",
+      "trusted": true
+    },
+    {
+      "t": 79789,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce's",
+      "trusted": true
+    },
+    {
+      "t": 79790,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79836,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce'sh",
+      "trusted": true
+    },
+    {
+      "t": 79841,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'sh",
+      "trusted": true
+    },
+    {
+      "t": 79841,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'sh",
+      "trusted": true
+    },
+    {
+      "t": 79842,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79844,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 83,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79888,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce'shi",
+      "trusted": true
+    },
+    {
+      "t": 79892,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'shi",
+      "trusted": true
+    },
+    {
+      "t": 79892,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'shi",
+      "trusted": true
+    },
+    {
+      "t": 79893,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79907,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 79957,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 73,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 80281,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 80281,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 80281,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "",
+      "trusted": true
+    },
+    {
+      "t": 80289,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Escape",
+      "code": "Escape",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 80395,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Escape",
+      "code": "Escape",
+      "keyCode": 27,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85161,
+      "type": "compositionstart",
+      "target": "__editor_m0-doc-minimal",
+      "data": "",
+      "trusted": true
+    },
+    {
+      "t": 85161,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 85171,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 85171,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 85172,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85185,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 67,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85311,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 85321,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 85321,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 85322,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85347,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 69,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85428,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce's",
+      "trusted": true
+    },
+    {
+      "t": 85438,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce's",
+      "trusted": true
+    },
+    {
+      "t": 85438,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce's",
+      "trusted": true
+    },
+    {
+      "t": 85438,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85545,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce'sh",
+      "trusted": true
+    },
+    {
+      "t": 85554,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'sh",
+      "trusted": true
+    },
+    {
+      "t": 85555,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'sh",
+      "trusted": true
+    },
+    {
+      "t": 85555,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85557,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 83,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85588,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce'shi",
+      "trusted": true
+    },
+    {
+      "t": 85593,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'shi",
+      "trusted": true
+    },
+    {
+      "t": 85593,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce'shi",
+      "trusted": true
+    },
+    {
+      "t": 85593,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85607,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 85655,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 73,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 86292,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": true
+    },
+    {
+      "t": 86440,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 86440,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 86441,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 86442,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 86442,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ceshi",
+      "trusted": false
+    },
+    {
+      "t": 86450,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 86451,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ceshi",
+      "trusted": false
+    },
+    {
+      "t": 86473,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 92571,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": true
+    },
+    {
+      "t": 92788,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Shift",
+      "code": "ShiftLeft",
+      "keyCode": 16,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 93826,
+      "type": "compositionstart",
+      "target": "__editor_m0-doc-minimal",
+      "data": "",
+      "trusted": true
+    },
+    {
+      "t": 93826,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 93837,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 93837,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "c",
+      "trusted": true
+    },
+    {
+      "t": 93838,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 93899,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "c",
+      "code": "KeyC",
+      "keyCode": 67,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94034,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 94044,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 94044,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ce",
+      "trusted": true
+    },
+    {
+      "t": 94045,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94077,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "e",
+      "code": "KeyE",
+      "keyCode": 69,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94472,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ces",
+      "trusted": true
+    },
+    {
+      "t": 94483,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ces",
+      "trusted": true
+    },
+    {
+      "t": 94483,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ces",
+      "trusted": true
+    },
+    {
+      "t": 94484,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94587,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "cesh",
+      "trusted": true
+    },
+    {
+      "t": 94597,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "cesh",
+      "trusted": true
+    },
+    {
+      "t": 94597,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "cesh",
+      "trusted": true
+    },
+    {
+      "t": 94598,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94600,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "s",
+      "code": "KeyS",
+      "keyCode": 83,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94638,
+      "type": "compositionupdate",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 94643,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 94643,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertCompositionText",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 94644,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 229,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94655,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "h",
+      "code": "KeyH",
+      "keyCode": 72,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 94703,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "i",
+      "code": "KeyI",
+      "keyCode": 73,
+      "isComposing": true,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 96403,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 96404,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "deleteCompositionText",
+      "data": null,
+      "trusted": true
+    },
+    {
+      "t": 96404,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 96404,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": true,
+      "inputType": "insertFromComposition",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 96404,
+      "type": "compositionend",
+      "target": "__editor_m0-doc-minimal",
+      "data": "ceshi",
+      "trusted": true
+    },
+    {
+      "t": 155681,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Enter",
+      "code": "Enter",
+      "keyCode": 13,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 155733,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Enter",
+      "code": "Enter",
+      "keyCode": 13,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 156591,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "/",
+      "trusted": true
+    },
+    {
+      "t": 156592,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": "/",
+      "trusted": true
+    },
+    {
+      "t": 156610,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": "/",
+      "code": "Slash",
+      "keyCode": 229,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 158896,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": "Escape",
+      "code": "Escape",
+      "keyCode": 27,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 160030,
+      "type": "keydown",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    },
+    {
+      "t": 160032,
+      "type": "beforeinput",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": " ",
+      "trusted": true
+    },
+    {
+      "t": 160032,
+      "type": "input",
+      "target": "__editor_m0-doc-minimal",
+      "isComposing": false,
+      "inputType": "insertText",
+      "data": " ",
+      "trusted": true
+    },
+    {
+      "t": 160149,
+      "type": "keyup",
+      "target": "__editor_m0-doc-minimal",
+      "key": " ",
+      "code": "Space",
+      "keyCode": 32,
+      "isComposing": false,
+      "trusted": true,
+      "meta": false,
+      "shift": false
+    }
+  ],
+  "checkpoints": [
+    {
+      "t": 400,
+      "reason": "start",
+      "text": "M0 文字文档样本",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 0,
+        "redos": 0
+      }
+    },
+    {
+      "t": 9216,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 1,
+        "redos": 0
+      }
+    },
+    {
+      "t": 9216,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 1,
+        "redos": 0
+      }
+    },
+    {
+      "t": 16399,
+      "reason": "undo",
+      "text": "M0 文字文档样本",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 0,
+        "redos": 1
+      }
+    },
+    {
+      "t": 17618,
+      "reason": "redo",
+      "text": "M0 文字文档样本你好",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 1,
+        "redos": 0
+      }
+    },
+    {
+      "t": 23979,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文输入",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 2,
+        "redos": 0
+      }
+    },
+    {
+      "t": 23980,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文输入",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 2,
+        "redos": 0
+      }
+    },
+    {
+      "t": 31019,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文替换",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 3,
+        "redos": 0
+      }
+    },
+    {
+      "t": 31020,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文替换",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 3,
+        "redos": 0
+      }
+    },
+    {
+      "t": 80682,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文替换，。// / ",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 14,
+        "redos": 0
+      }
+    },
+    {
+      "t": 86851,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文替换，。// / ceshi",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 15,
+        "redos": 0
+      }
+    },
+    {
+      "t": 86851,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文替换，。// / ceshi",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 15,
+        "redos": 0
+      }
+    },
+    {
+      "t": 96805,
+      "reason": "compositionend",
+      "text": "M0 文字文档样本你好中文替换，。// / ceshiceshi",
+      "paragraphs": 1,
+      "undo": {
+        "undos": 16,
+        "redos": 0
+      }
+    }
+  ]
+}
