@@ -3,6 +3,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -57,6 +58,44 @@ def read_json(path):
     return json.loads(path.read_text())
 
 
+def record_time(value):
+    """台账里记的时刻（秒）：只认有限的整数或浮点数。布尔、字符串、null、NaN 与无穷一律拒绝（M5-P9 CX6）：
+    台账只按 JSON 解析、不校验字段类型，回收候选按时刻排序和相减之前先经过这里。
+    超出浮点范围的整数（JSON 里的超长整数）在 isfinite 里抛 OverflowError，同样按不合格拒绝（独立审查 M-1）"""
+    if type(value) not in (int, float):
+        raise TypeError("台账时间不是有限数字")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        finite = False
+    if not finite:
+        raise TypeError("台账时间不是有限数字")
+    return value
+
+
+def published_names(value):
+    """台账里的发布列表：只认字符串列表（M5-P9 独立审查 M-2）。不合格时抛 ValueError，由调用方只跳过这一条"""
+    names = value.get("published", [])
+    if type(names) is not list or any(type(name) is not str for name in names):
+        raise ValueError("台账的发布列表不是字符串列表")
+    return names
+
+
+def retirement_time(value):
+    """回收候选的台账先校验删除前要用到的这些字段，返回它的时刻（M5-P9 CX6 及其独立审查复验，对齐 Codex 的建议
+    “验证必需字段及有限数值时间”）：version 存在（删除前按它认领运行）；进程组是空或正整数（查询进程组存活）；
+    回收记录是列表（删除之后记账）。发布列表另由 published_names 校验，服务 scope 证明由 Run.service_proof 在句柄核对时校验。
+    不合格抛 ValueError，时刻不合格抛 TypeError，由调用方只跳过这一条——删除阶段因此不会在删了文件之后才因记账抛错"""
+    if "version" not in value:
+        raise ValueError("台账缺少 version")
+    group = value.get("childGroup")
+    if group is not None and (type(group) is not int or not 0 < group < 2 ** 31):
+        raise ValueError("台账的进程组不是正整数")
+    if type(value.get("retired", [])) is not list:
+        raise ValueError("台账的回收记录不是列表")
+    return record_time(value.get("endedAt", value["startedAt"]))
+
+
 def read_run_manifest(path):
     # Check the opened object, without following links or blocking on a FIFO.
     # This does not grant a lease; callers still hold run.lock for authorization.
@@ -67,7 +106,11 @@ def read_run_manifest(path):
     with os.fdopen(descriptor, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("运行台账必须是普通文件")
-        return json.load(stream)
+        value = json.load(stream)
+    # 顶层不是对象的与读不出的同样处理（ValueError）：sweep 记 unknown、回收跳过，不在按字段读取时抛 TypeError（M5-P9 独立审查 M-2）
+    if type(value) is not dict:
+        raise ValueError("运行台账必须是 JSON 对象")
+    return value
 
 
 def require_portable_root(path):
@@ -800,7 +843,13 @@ class Store:
                     continue
                 paths = [(self.root / "failures" / directory.name, False)] if category == "failures" else [(directory / "reports", False)]
                 if category == "reports":
-                    for name in value.get("published", []):
+                    try:
+                        names = published_names(value)
+                    except ValueError as error:
+                        # 发布列表的类型不对：分不清哪些发布目录归它，这一条的报告候选整条跳过、原样保留（M5-P9 独立审查 M-2）
+                        note(category, directory.name, "collection-failed", error)
+                        continue
+                    for name in names:
                         allowed = {base + "/" + leaf for base in ("tests/e2e", "tests/e2e/measure", "tests/e2e/safari-results")
                                    for leaf in ("test-results", "playwright-report")}
                         if name not in allowed:
@@ -808,7 +857,8 @@ class Store:
                         try:
                             published = contained(self.repo / name, self.repo)
                             marker = published / "resource-run.json"
-                            if published.is_symlink() or marker.is_symlink() or read_json(marker).get("runId") != directory.name:
+                            # 标记按台账同样的方式读：顶层不是对象时 ValueError，按“不属于这一轮”跳过（M5-P9 独立审查 M-2）
+                            if published.is_symlink() or marker.is_symlink() or read_run_manifest(marker).get("runId") != directory.name:
                                 continue
                             paths.append((published, True))
                         except (OSError, ValueError):
@@ -816,8 +866,10 @@ class Store:
                 for path, published in paths:
                     try:
                         if path.exists() and not path.is_symlink():
-                            candidates.append((value.get("endedAt", value["startedAt"]), directory, path, byte_size(path), published))
-                    except (OSError, KeyError) as error:
+                            # 时刻与删除前要用到的字段先校验：不合格的只跳过这一条，不让排序、相减或删除阶段抛错挡住其余候选（M5-P9 CX6）
+                            ended = retirement_time(value)
+                            candidates.append((ended, directory, path, byte_size(path), published))
+                    except (OSError, KeyError, TypeError, ValueError) as error:
                         note(category, directory.name, "collection-failed", error)
             total = sum(item[3] for item in candidates)
             for ended, directory, path, size, published in sorted(candidates):
@@ -830,8 +882,8 @@ class Store:
                         if published:
                             locks.enter_context(locked(self.root / "publication.lock", blocking=False))
                         value = owner.data
-                        if published and (path.is_symlink() or read_json(path / "resource-run.json").get("runId") != owner.id
-                                          or str(path.relative_to(self.repo)) not in value.get("published", [])):
+                        if published and (path.is_symlink() or read_run_manifest(path / "resource-run.json").get("runId") != owner.id
+                                          or str(path.relative_to(self.repo)) not in published_names(value)):
                             continue
                         if value.get("status") not in ("passed", "failed", "interrupted") or group_alive(value.get("childGroup")) or open_paths(path, owner=owner):
                             continue
@@ -1058,6 +1110,10 @@ class Run:
         proof = self.data.get("serviceScope")
         if proof is None:
             return None
+        # 证明与路径登记不是对象时按证明不符处理（ValueError：句柄核对记不完整、保留资源），
+        # 不让 AttributeError 穿出逐候选的回收与收尾（M5-P9 第二轮复验 M-1）
+        if type(proof) is not dict or type(self.data.get("scopePaths", {})) is not dict:
+            raise ValueError("服务 scope 证明或路径登记不是对象")
         if (proof.get("version") != 1 or proof.get("runId") != self.id or proof.get("repo") != str(self.store.repo)
                 or proof.get("roots") != self.scope_roots()):
             raise ValueError("服务 scope 运行归属或创建证明不符")
@@ -1070,7 +1126,7 @@ class Run:
             if relative not in self.data.get("published", []):
                 return None
             marker = root / "resource-run.json"
-            if marker.is_symlink() or read_json(marker).get("runId") != self.id:
+            if marker.is_symlink() or read_run_manifest(marker).get("runId") != self.id:
                 raise ValueError("服务 scope 报告标记不符")
             moves = [m for m in self.data.get("scopeMoves", []) if m["destination"] == str(root)]
             if not moves:
@@ -1246,12 +1302,14 @@ class Run:
                 elif self.data.get("status") in ("prepared", "cleanup-pending") and self.data.get("childGroup") is None:
                     self.retire_short_root()
                     self.update(status="interrupted", endedAt=time.time(), cleanupStage="never-started")
-                elif self.data.get("status") in ("prepared", "running"):
+                elif self.data.get("status") in ("prepared", "running", "cleanup-pending"):
                     # 运行期间 scratch 被外部删除（M5R-M-19）：报告随之没了，不能按请求的结论收尾；上面已确认组内进程与句柄都已退出。
-                    # 清理阶段沿用 complete（确实已无残留，下游按它判定终态），原因记在 stopReason
+                    # 清理阶段沿用 complete（确实已无残留，下游按它判定终态），原因记在 stopReason。
+                    # 已启动、第一次收尾核验没通过而停在 cleanup-pending 的，核验恢复之后同样在这里收尾（M5-P9 CX1）；
+                    # requestedStatus 保留第一次收尾时请求的结论（sweep 接手时传入的是 interrupted）
                     self.retire_short_root()
                     self.update(status="interrupted", endedAt=time.time(), cleanupStage="complete",
-                                requestedStatus=status, stopReason="scratch-missing",
+                                requestedStatus=self.data.get("requestedStatus", status), stopReason="scratch-missing",
                                 cleanupError="运行期间临时目录被外部删除，本轮按中断收尾")
                 return self.data
             if self.data.get("cleanupStage") == "reports-collected":

@@ -325,6 +325,31 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual((value["status"], value["cleanupStage"], value["stopReason"]), ("interrupted", "complete", "scratch-missing"))
             self.assertFalse(root.exists())
 
+    def test_started_run_without_scratch_finishes_once_the_retried_check_passes(self):
+        # M5-P9 CX1（Codex 合并后评审）：已启动的运行 scratch 被外部删除，第一次收尾核验又没通过（句柄查询不完整）而停在 cleanup-pending；
+        # 核验恢复之后 sweep 要按中断收尾、退役短根，不能一直记为 active、挡住同类运行。requestedStatus 保留第一次收尾时请求的结论。
+        # 短根用临时目录里的模型（不建 /tmp 下的真实短根），组与句柄用替身：失败时不留下要人工处理的资源
+        import lifecycle
+        short = self.repo / "model-short-root"
+        short.mkdir()
+        run = self.store.create("e2e")
+        with patch.object(lifecycle.Run, "short_root", return_value=short), patch("lifecycle.group_alive", return_value=False):
+            with patch("lifecycle.open_paths", side_effect=RuntimeError("模拟句柄查询不完整")):
+                run.update(status="running", childGroup=2 ** 30, commandExitCode=0, exitCode=0, interrupted=False)
+                shutil.rmtree(run.scratch)
+                first = run.finish("passed")
+            self.assertEqual((first["status"], first["requestedStatus"]), ("cleanup-pending", "passed"))
+            self.assertTrue(short.exists())
+            with patch("lifecycle.open_paths", return_value=[]):
+                report = self.store.sweep()
+        self.assertIn(run.id, report["recovered"])
+        self.assertNotIn(run.id, report["active"])
+        value = json.loads((run.directory / "run.json").read_text())
+        self.assertEqual((value["status"], value["cleanupStage"], value["stopReason"], value["requestedStatus"]),
+                         ("interrupted", "complete", "scratch-missing", "passed"))
+        self.assertEqual((value["commandExitCode"], value["exitCode"]), (0, 0))
+        self.assertFalse(short.exists())
+
     def test_unverifiable_gc_candidate_is_skipped_and_kept_without_failing_finish(self):
         # M5R-M-20：句柄查询不完整的候选只跳过、原样保留；本轮照常收尾，其余候选照常回收
         import lifecycle
@@ -435,6 +460,129 @@ class LifecycleTests(unittest.TestCase):
         # endedAt 不是数字时排序或相减抛 TypeError：隔离边界同样吸收
         with patch.object(Store, "prune", side_effect=TypeError("endedAt")):
             self.assertEqual(self.store.prune_isolated(time.time()), [{"reason": "prune-failed", "error": "TypeError"}])
+
+    def test_sweep_skips_only_the_run_record_whose_time_is_not_a_finite_number(self):
+        # M5-P9 CX6（Codex 合并后评审）：启动前的 sweep 直接调用 prune，不经收尾的隔离入口。台账时间是字符串、布尔、null、NaN 或无穷时，
+        # 只跳过这一条（collection-failed，原样保留），sweep 不抛出，其余过期候选照常回收。
+        # 超出浮点范围的整数（独立审查 M-1：JSON 里写成 400 位的整数）同样跳过，不让 OverflowError 漏过逐候选的处理
+        import lifecycle
+        original = self.store
+        try:
+            for bad in ("damaged", True, None, float("nan"), float("inf"), 10 ** 400):
+                with self.subTest(endedAt=bad), tempfile.TemporaryDirectory(prefix="nerve-residue-test-") as temp:
+                    self.store = Store(Path(temp).resolve(), failure_bytes=4096, failure_run_bytes=2048, report_bytes=16384)
+                    runs = self.expired_reports(2)
+                    data = json.loads((runs[0].directory / "run.json").read_text())
+                    data["endedAt"] = bad
+                    lifecycle.atomic_json(runs[0].directory / "run.json", data)
+                    report = self.store.sweep()
+                    self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "TypeError"}])
+                    self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+                    self.assertTrue((runs[0].directory / "reports").exists())
+                    self.assertFalse((runs[1].directory / "reports").exists())
+        finally:
+            self.store = original
+
+    def test_sweep_keeps_a_run_record_that_is_not_a_json_object_as_unknown(self):
+        # M5-P9 独立审查 M-2：台账是合法 JSON、顶层却不是对象时，与读不出的台账一样记 unknown、原样保留，sweep 不抛出 TypeError；
+        # 其余过期候选照常回收
+        import lifecycle
+        runs = self.expired_reports(2)
+        damaged = runs[0].directory / "run.json"
+        lifecycle.atomic_json(damaged, [1, 2])
+        report = self.store.sweep()
+        self.assertIn(runs[0].id, report["unknown"])
+        self.assertEqual(json.loads(damaged.read_text()), [1, 2])
+        self.assertTrue((runs[0].directory / "reports").exists())
+        self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+        self.assertFalse((runs[1].directory / "reports").exists())
+
+    def test_sweep_skips_only_the_run_record_whose_published_list_is_not_a_list_of_strings(self):
+        # M5-P9 独立审查 M-2：发布列表不是字符串列表（数字、嵌套列表、对象、非字符串元素）时，这一条的报告候选整条跳过
+        # （collection-failed，原样保留），sweep 不抛出，其余过期候选照常回收
+        import lifecycle
+        original = self.store
+        try:
+            for bad in (5, [["tests/e2e/test-results"]], {"tests/e2e/test-results": 1}, [5]):
+                with self.subTest(published=bad), tempfile.TemporaryDirectory(prefix="nerve-residue-test-") as temp:
+                    self.store = Store(Path(temp).resolve(), failure_bytes=4096, failure_run_bytes=2048, report_bytes=16384)
+                    runs = self.expired_reports(2)
+                    data = json.loads((runs[0].directory / "run.json").read_text())
+                    data["published"] = bad
+                    lifecycle.atomic_json(runs[0].directory / "run.json", data)
+                    report = self.store.sweep()
+                    self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "ValueError"}])
+                    self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+                    self.assertTrue((runs[0].directory / "reports").exists())
+                    self.assertFalse((runs[1].directory / "reports").exists())
+        finally:
+            self.store = original
+
+    def test_sweep_skips_only_the_run_record_whose_fields_used_by_retirement_are_damaged(self):
+        # M5-P9 独立审查复验 M-1：回收删除前要用到的字段（version、childGroup、retired）先在收集时校验，对齐 Codex 的建议
+        # “验证必需字段及有限数值时间”。缺 version、进程组不是正整数（字符串、超出范围）、回收记录不是列表时，这一条记
+        # collection-failed、原样保留；修复前在删除阶段抛 KeyError、TypeError、OverflowError，retired 不是列表时更是先删了文件才抛错
+        import lifecycle
+        original = self.store
+        damages = {
+            "missing-version": lambda data: data.pop("version"),
+            "group-text": lambda data: data.update(childGroup="12"),
+            "group-overflow": lambda data: data.update(childGroup=10 ** 400),
+            "group-negative": lambda data: data.update(childGroup=-1),
+            "retired-number": lambda data: data.update(retired=5),
+        }
+        try:
+            for name, damage in damages.items():
+                with self.subTest(damage=name), tempfile.TemporaryDirectory(prefix="nerve-residue-test-") as temp:
+                    self.store = Store(Path(temp).resolve(), failure_bytes=4096, failure_run_bytes=2048, report_bytes=16384)
+                    runs = self.expired_reports(2)
+                    data = json.loads((runs[0].directory / "run.json").read_text())
+                    damage(data)
+                    lifecycle.atomic_json(runs[0].directory / "run.json", data)
+                    report = self.store.sweep()
+                    self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "collection-failed", "error": "ValueError"}])
+                    self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+                    self.assertTrue((runs[0].directory / "reports").exists())
+                    self.assertFalse((runs[1].directory / "reports").exists())
+        finally:
+            self.store = original
+
+    def test_sweep_keeps_the_run_record_whose_service_scope_is_not_an_object(self):
+        # M5-P9 第二轮复验 M-1：删除前的句柄核对经 service_proof 读服务 scope 证明。证明不是对象（字符串、0、空列表、false）时
+        # 按证明不符处理：句柄核对不完整、这一条记 verification-failed 原样保留；修复前在 proof.get 抛 AttributeError、穿出 sweep
+        import lifecycle
+        original = self.store
+        try:
+            for bad in ("x", 0, [], False):
+                with self.subTest(serviceScope=bad), tempfile.TemporaryDirectory(prefix="nerve-residue-test-") as temp:
+                    self.store = Store(Path(temp).resolve(), failure_bytes=4096, failure_run_bytes=2048, report_bytes=16384)
+                    runs = self.expired_reports(2)
+                    data = json.loads((runs[0].directory / "run.json").read_text())
+                    data["serviceScope"] = bad
+                    lifecycle.atomic_json(runs[0].directory / "run.json", data)
+                    report = self.store.sweep()
+                    self.assertEqual(report["skipped"], [{"category": "reports", "runId": runs[0].id, "reason": "verification-failed", "error": "RuntimeError"}])
+                    self.assertEqual([event["runId"] for event in report["pruned"]], [runs[1].id])
+                    self.assertTrue((runs[0].directory / "reports").exists())
+                    self.assertFalse((runs[1].directory / "reports").exists())
+        finally:
+            self.store = original
+
+    def test_sweep_leaves_a_published_report_whose_marker_is_not_a_json_object(self):
+        # M5-P9 独立审查 M-2 的同类：发布目录的归属标记是合法 JSON、顶层却不是对象时，按“不属于这一轮”跳过这个发布目录、原样保留，
+        # 与标记缺失或属于别的运行相同；sweep 不抛出，这一轮自己的报告与其余候选照常回收
+        import lifecycle
+        runs = self.expired_reports(2)
+        published = self.repo / "tests/e2e/test-results"
+        published.mkdir(parents=True)
+        (published / "resource-run.json").write_text("[1]")
+        data = json.loads((runs[0].directory / "run.json").read_text())
+        data["published"] = ["tests/e2e/test-results"]
+        lifecycle.atomic_json(runs[0].directory / "run.json", data)
+        report = self.store.sweep()
+        self.assertEqual(report["skipped"], [])
+        self.assertEqual(sorted(event["runId"] for event in report["pruned"]), sorted(run.id for run in runs))
+        self.assertEqual((published / "resource-run.json").read_text(), "[1]")
 
     def test_isolated_final_prune_never_raises_and_sweep_reports_skipped(self):
         # S14 审查 T4：运行器结束时的收尾 GC 与 finish 共用隔离入口；sweep 也把跳过的候选报出来

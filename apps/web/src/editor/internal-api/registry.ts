@@ -163,9 +163,9 @@ export const INTERNAL_API_REGISTRY: readonly InternalApiEntry[] = [
   ...['IImageIoService', 'IURLImageService', 'IImageIoServiceParam', 'ImageSourceType', 'ImageUploadStatusType'].map(name => ({
     name,
     origin: '@univerjs/core 的图片 IO 标识、契约及枚举；仅从主线程出口使用',
-    purpose: '平台替换 drawing 插件的两个图片服务；规范相对 source、独立 drawing ID、上传状态和元素缓存对齐 SDK 契约',
-    evidence: '1.0.1 core 的 image-io.service / url-image.service；drawing/lib/es/index.js:1177 在插件 onStarting 合并 override；P2-S2 规格 §2、§4',
-    regression: 'images/platform-image-io.test.ts：真实 drawing 注入、两路读取、文件校验/迟到结果/进度；tests/e2e/specs/editor/images.spec.ts（S2 Task4 待验）',
+    purpose: '平台替换 drawing 插件的两个图片服务；规范相对 source、独立 drawing ID、上传状态和元素缓存对齐 SDK 契约。M5-P9（CX3）起实现另带 revisitImageSource：core 补丁让 ImageCacheMap 命中时先调用它，平台补读刷新时跳过、静默补读失败的无像素来源',
+    evidence: '1.0.1 core 的 image-io.service / url-image.service；drawing/lib/es/index.js:1177 在插件 onStarting 合并 override；P2-S2 规格 §2、§4；core 补丁 ImageCacheMap.getImage 的命中分支（ADR-022 的 M5-P9 补充）',
+    regression: 'images/platform-image-io.test.ts：真实 drawing 注入、两路读取、文件校验/迟到结果/进度，以及真实 ImageCacheMap 命中补读（M5-P9 CX3）；tests/e2e/specs/editor/images.spec.ts（含单元格图片首读失败、清空、刷新之后撤销重新显示）',
   })),
   ...['closeImagePreview', 'imageServiceOverride', 'invalidateImageRendering'].map(name => ({
     name,

@@ -320,7 +320,8 @@ describe('图片资源的代次与退役', () => {
     h.read.mockImplementation(async source => source === OTHER ? pending.promise : BYTES)
     h.resources.refresh()
     await vi.waitFor(() => expect(h.read).toHaveBeenCalledWith(OTHER, expect.any(AbortSignal), expect.any(Function)))
-    // 撤销删除：这张图又在用了，SDK 来读
+    // 撤销删除：这张图又在用了，SDK 来读。浮图重建图元时确实经 getImage 来读；单元格图片命中 SDK 缓存时不会来 load，
+    // 那条路径经 revisit 补读，见 platform-image-io.test.ts 的“SDK 缓存命中时补读”（真实 ImageCacheMap，M5-P9 CX3）
     live = new Set([SOURCE, OTHER])
     const joined = h.resources.load(OTHER)
     pending.reject(new AssetReadError(404, undefined))
