@@ -139,7 +139,7 @@ export class SnapshotInspector implements OnApplicationShutdown {
   }
 
   /**
-   * 检查解压之后的快照（profile 是文档的档案，requester 是发起的账户）：通过时给出 unitId、内容哈希、资源名与字节数，不通过时给出规则。
+   * 检查解压之后的快照（profile 是页面上报、已通过格式核对的档案，DEF-055；requester 是发起的账户）：通过时给出 unitId、内容哈希、资源名与字节数，不通过时给出规则。
    * 没有得到结果（这个账户的份数已满、繁忙、子进程崩溃或超时、正在退出）时抛出 503 的 AppError
    */
   async inspect(raw: Uint8Array, profile: DocumentProfile, requester: string): Promise<InspectionOutcome> {

@@ -148,10 +148,10 @@ class HostedPolicyTests(unittest.TestCase):
     def phase_dispatch(self):
         return {
             "GITHUB_EVENT_NAME": "workflow_dispatch",
-            "GITHUB_REF": "refs/heads/m5-p9-codex-fixes",
+            "GITHUB_REF": "refs/heads/m6-p1-doc-foundation",
             "GITHUB_WORKFLOW_REF": (
                 "open-nerve/NerveOffice/.github/workflows/ci.yml"
-                "@refs/heads/m5-p9-codex-fixes"),
+                "@refs/heads/m6-p1-doc-foundation"),
         }
 
     def test_approved_phase_dispatch_registers_original_identity_for_all_jobs(self):
@@ -161,7 +161,7 @@ class HostedPolicyTests(unittest.TestCase):
                 try:
                     identity = self.module.context(self.repo)
                 except ValueError as error:
-                    self.fail(f"已批准的 P9 手动运行应能登记资源：{error}")
+                    self.fail(f"已批准的 M6-P1 手动运行应能登记资源：{error}")
                 proof = self.module.register(identity, RUN, self.roots())
                 self.assertIsNone(self.module.validate(proof, identity, RUN, self.roots()))
                 self.assertEqual(identity["job"], job)
@@ -176,17 +176,18 @@ class HostedPolicyTests(unittest.TestCase):
             for value in (None, "push", "schedule", "pull_request", "workflow_call")
         ] + [
             {"GITHUB_REF": value}
-            for value in (None, "refs/heads/main", "refs/heads/m5-p9-codex-fixes-extra",
-                          "refs/tags/m5-p9-codex-fixes", "refs/heads/codex/m5-p6-closeout",
-                          "refs/heads/m5-p7-review-fixes", "refs/heads/m5-p8-final-closeout")
+            for value in (None, "refs/heads/main", "refs/heads/m6-p1-doc-foundation-extra",
+                          "refs/tags/m6-p1-doc-foundation", "refs/heads/codex/m5-p6-closeout",
+                          "refs/heads/m5-p7-review-fixes", "refs/heads/m5-p8-final-closeout",
+                          "refs/heads/m5-p9-codex-fixes")
         ] + [
             {"GITHUB_WORKFLOW_REF": "open-nerve/NerveOffice/.github/workflows/other.yml"
-                                    "@refs/heads/m5-p9-codex-fixes"},
+                                    "@refs/heads/m6-p1-doc-foundation"},
             {"GITHUB_WORKFLOW_REF": "open-nerve/NerveOffice/.github/workflows/ci.yml"
-                                    "@refs/heads/m5-p9-codex-fixes-extra"},
+                                    "@refs/heads/m6-p1-doc-foundation-extra"},
             {"GITHUB_REPOSITORY": "other/NerveOffice",
              "GITHUB_WORKFLOW_REF": "other/NerveOffice/.github/workflows/ci.yml"
-                                    "@refs/heads/m5-p9-codex-fixes"},
+                                    "@refs/heads/m6-p1-doc-foundation"},
             # 已退役的 P7 分支整组一致也不再接受（例外随 P7 退役失效，P8 另行批准）
             {"GITHUB_REF": "refs/heads/m5-p7-review-fixes",
              "GITHUB_WORKFLOW_REF": "open-nerve/NerveOffice/.github/workflows/ci.yml"
@@ -195,6 +196,10 @@ class HostedPolicyTests(unittest.TestCase):
             {"GITHUB_REF": "refs/heads/m5-p8-final-closeout",
              "GITHUB_WORKFLOW_REF": "open-nerve/NerveOffice/.github/workflows/ci.yml"
                                     "@refs/heads/m5-p8-final-closeout"},
+            # 已退役的 P9 分支整组一致也不再接受（例外随 P9 退役失效，M6 各 Phase 按总设计 §2.1 第 6 条改指当期分支）
+            {"GITHUB_REF": "refs/heads/m5-p9-codex-fixes",
+             "GITHUB_WORKFLOW_REF": "open-nerve/NerveOffice/.github/workflows/ci.yml"
+                                    "@refs/heads/m5-p9-codex-fixes"},
             {"RUNNER_ENVIRONMENT": "self-hosted"},
             {"RUNNER_ARCH": "ARM64"}, {"GITHUB_JOB": "other-job"},
             {"GITHUB_SHA": "invalid"}, {"GITHUB_RUN_ID": "0"},

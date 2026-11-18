@@ -17,7 +17,7 @@ import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { SpacesService } from '../spaces/index.ts'
 import { AssetReferenceBases } from './asset-reference-bases.ts'
-import { ClientFormatGate } from './client-format-gate.ts'
+import { ClientFormatGate, requireReportedProfile } from './client-format-gate.ts'
 import { creatableSpace, documentAccessIn, DocumentAccessPolicy, requireAccess, requireSpaceContent } from './document-access-policy.ts'
 import { DocumentAssetReferences, unlinkedAssetIds } from './document-asset-references.ts'
 import { DocumentCheckpointService } from './document-checkpoint.service.ts'
@@ -98,7 +98,7 @@ export class DocumentConflictCopyService {
       return replayed
     // 与文档无关的两步在事务之前（与保存相同）：别人的与不存在的文档得到相同的结果
     const client = this.clients.require(command)
-    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id, userId)
+    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id, userId, client.profile)
     const contentHash = Buffer.from(snapshot.contentHash)
     return this.transactions.run(async (transaction) => {
       // 同一个 requestId 的写入排队执行：后到的一方在下面就能看到前一方的修订记录，按重放处理（与新建、复制相同，锁排在最前，RequestLedger）；
@@ -109,9 +109,12 @@ export class DocumentConflictCopyService {
 
       // 先判断（不加锁）：读不到原文档的请求不取任何锁，与不存在的文档执行同样的语句
       const checked = await requireAccess(this.policy, userId, await this.documents.findById(id, transaction), transaction)
+      // 上报的档案对照这类文档在服务端的档案（DEF-055；类型终身不变，不必等锁），不比文档行里存的：回滚之后照样能存副本（审查 A7）
+      const profile = DOCUMENT_PROFILE_OF[checked.document.type]
+      requireReportedProfile(this.#logger, id, client.profile, profile)
       // unitId 终身不变，不必等锁：内容不属于这份文档的请求同样不取锁
       if (snapshot.unitId !== checked.document.unitId)
-        throw rejectedSnapshot(this.#logger, 'unit-id', id, DOCUMENT_PROFILE_OF[checked.document.type])
+        throw rejectedSnapshot(this.#logger, 'unit-id', id, profile)
       const sourceSpaceId = checked.document.spaceId
       const personalSpaceId = await this.personalSpaceIdOf(userId, transaction)
       const intoSource = await creatableSpace(this.policy, actor, sourceSpaceId, transaction) !== undefined
@@ -143,13 +146,14 @@ export class DocumentConflictCopyService {
         ? []
         : await this.assetReferences.authorize(heldReferences, transaction, await this.referenceBases.resolve(source.document.id, source.document.revision, command.baseRevision, transaction))
 
-      // 类型与 unitId 照原文档（锁下确认过是正常状态），信封是这次上传的、核对过的页面的；建不出来是数据不一致，按意外错误处理
+      // 类型与 unitId 照原文档（锁下确认过是正常状态），信封是这次上传的、核对过的页面的，档案记服务端对这类文档的（与核对过的上报相同，
+      // DEF-055）；建不出来是数据不一致，按意外错误处理
       const copy = await this.documents.copyFrom(id, {
         spaceId: placement.target.space.id,
         folderId: placement.folderId,
         title: command.title,
         createdBy: userId,
-        envelope: { profile: client.profile, formatVersion: client.formatVersion, sdkVersion: client.univerVersion, clientBuild: client.clientBuild, formulasPending },
+        envelope: { profile, formatVersion: client.formatVersion, sdkVersion: client.univerVersion, clientBuild: client.clientBuild, formulasPending },
       }, transaction)
       if (copy === undefined)
         throw new Error(`锁住的原文档建不出副本：${id}`)

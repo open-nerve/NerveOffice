@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { RELEASE_FILE, STARTED_PREFIX } from '../../shared/process-pool-fakes.test-support.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
+import { docSnapshot } from './doc-snapshot.test-support.ts'
 import { SNAPSHOT_MAX_ENTRIES } from './snapshot-checks.ts'
 import { inspectSnapshot } from './snapshot-inspection.ts'
 import { inspectionChildEntry, INSPECTIONS_PER_ACCOUNT, SnapshotInspector, snapshotInvalid } from './snapshot-inspector.ts'
@@ -79,7 +80,7 @@ describe('SnapshotInspector：在子进程里检查（源码运行：入口是 .
     const raw = Buffer.from(JSON.stringify({ ...JSON.parse(sheetSnapshotFor(UNIT_ID)) as object, sheets: { 'sheet-1': { cellData: { 2: { 1: cell } } } } }))
     const linkLocations = [{ kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 }]
     expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'link-address', linkLocations })
-    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY))
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY, 'sheet@1'))
     expect(error.details).toEqual({ rule: 'link-address', linkLocations })
     expect(JSON.stringify(error)).not.toMatch(/private|dataStream/)
     expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'link-address', profile: 'sheet@1', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
@@ -91,10 +92,24 @@ describe('SnapshotInspector：在子进程里检查（源码运行：入口是 .
     const raw = Buffer.from(JSON.stringify({ ...JSON.parse(sheetSnapshotFor(UNIT_ID)) as object, sheets: { 'sheet-1': { cellData: { 2: { 1: { p: { source: secret } } } } } } }))
     const imageLocations = [{ kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 }]
     expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'image-source', imageLocations })
-    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY))
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY, 'sheet@1'))
     expect(error.details).toEqual({ rule: 'image-source', imageLocations })
     expect(JSON.stringify(error)).not.toContain(secret)
     expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'image-source', profile: 'sheet@1', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
+  })
+
+  it('文字文档按上报的 doc@1 经真实 IPC 检查（DEF-055）：链接位置是段落；同一份快照按 sheet@1 在结构一步拒绝；日志记 doc@1', async () => {
+    const { inspector, logger, warn } = setup()
+    const secret = 'javascript:alert(document.cookie)'
+    const link = { startIndex: 4, endIndex: 5, rangeId: 'r1', rangeType: 0, properties: { url: secret } }
+    const raw = Buffer.from(JSON.stringify(docSnapshot(UNIT_ID, {}, { customRanges: [link] })))
+    const linkLocations = [{ kind: 'paragraph', paragraph: 1 }]
+    expect(await inspector.inspect(raw, 'doc@1', AMY)).toEqual({ ok: false, rule: 'link-address', linkLocations })
+    expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'structure' })
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY, 'doc@1'))
+    expect([error.details, error.message]).toEqual([{ rule: 'link-address', linkLocations }, '文字文档里有不能保存的链接'])
+    expect(JSON.stringify(error)).not.toContain(secret)
+    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'link-address', profile: 'doc@1', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
   })
 
   it('接近5MiB且十万个不同图片地址：真实子进程完整提取并通过IPC返回，不受SQL参数数量限制', async () => {

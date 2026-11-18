@@ -9,6 +9,7 @@ import zlib from 'node:zlib'
 import { canonicalContentText, contentHashInput, EDIT_LEASE_TTL_SECONDS, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
+import { docSnapshot, savedDocResources } from './doc-snapshot.test-support.ts'
 import { DocumentContentService, SAVE_TRANSACTION_START_WITHIN_MS, SAVE_TRANSACTION_TIMEOUT_MS } from './document-content.service.ts'
 import { ALICE, BOB, BOB_SPACE, clientFormatGate, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, NO_HANDOVER, TEAM_SPACE, TRANSACTION } from './documents.test-support.ts'
 import { editLeaseTokenDigest } from './edit-lease-token.ts'
@@ -853,5 +854,59 @@ describe('DocumentContentService.save："公式待更新"（M3-P3 设计 §3.8�
     const plain = query({ baseRevision: 2 })
     await service.save(saver(ALICE), document.id, plain, upload(document.unitId, ',"a":1'), HTTP_ORIGIN)
     expect(await service.save(saver(ALICE), document.id, { ...plain, formulasPending: false }, upload(document.unitId, ',"a":1'), HTTP_ORIGIN)).toMatchObject({ revision: 3 })
+  })
+})
+
+describe('DocumentContentService.save：上报的档案与文档的档案（DEF-055，M6-P1 S5 设计 §3.4）', () => {
+  /** 一份文字文档（P1 还不能新建，直接摆进假仓储），艾米持有它的租约 */
+  function docDocument(store: FakeStore) {
+    const document = store.addDocument({ type: 'doc', profile: 'doc@1', revision: 1 })
+    store.contents.set(document.id, legacyContent('{}'))
+    holding(store, document.id, ALICE)
+    return document
+  }
+
+  function docUpload(unitId: string, overrides: Record<string, unknown> = {}): GzipBody {
+    return bodyOf(JSON.stringify(docSnapshot(unitId, overrides)))
+  }
+
+  it('快照检查按上报的档案（已通过格式核对）选规则；上报的与文档的不同：CLIENT_OUTDATED（format），在 DOCUMENT_TOO_NEW 之后、租约之前，什么也不写，日志记文档 id 与两边的档案', async () => {
+    const { store, service, document } = setup()
+    const error = await rejection(service.save(saver(ALICE), document.id, query({ profile: 'doc@1' }), docUpload(document.unitId), HTTP_ORIGIN))
+    expect([error.code, error.status, error.details]).toEqual(['CLIENT_OUTDATED', 409, { reason: 'format' }])
+    expect(store.inspector.inspect).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'doc@1', ALICE)
+    expect(store.leases.findByDocument).not.toHaveBeenCalled()
+    expect(store.documents.get(document.id)?.revision).toBe(1)
+    expect(store.revisions).toHaveLength(1)
+    expect(store.logs().find(entry => entry.reportedProfile !== undefined)).toMatchObject({ level: 'warn', documentId: document.id, reportedProfile: 'doc@1', documentProfile: 'sheet@1' })
+    // 看不到的照样 NOT_FOUND：不透露文档的类型
+    expect((await rejection(service.save(saver(BOB), document.id, query({ profile: 'doc@1' }), docUpload(document.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+    // 比服务端新的文档先回 DOCUMENT_TOO_NEW（刷新也没用，与过旧分开）
+    store.documents.set(document.id, { ...document, sdkVersion: '99.0.0' })
+    expect((await rejection(service.save(saver(ALICE), document.id, query({ profile: 'doc@1' }), docUpload(document.unitId), HTTP_ORIGIN))).code).toBe('DOCUMENT_TOO_NEW')
+  })
+
+  it('表格的页面存进文字文档：按 sheet@1 检查通过，事务里 CLIENT_OUTDATED（format）', async () => {
+    const { store, service } = setup()
+    const document = docDocument(store)
+    const error = await rejection(service.save(saver(ALICE), document.id, query(), upload(document.unitId), HTTP_ORIGIN))
+    expect([error.code, error.details]).toEqual(['CLIENT_OUTDATED', { reason: 'format' }])
+    expect(store.inspector.inspect).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'sheet@1', ALICE)
+    expect(store.documents.get(document.id)?.revision).toBe(1)
+  })
+
+  it('文字文档按 doc@1 检查与保存；不缩水按文档的档案：上一版非空的图片资源这一版不在了，resource-missing', async () => {
+    const { store, service } = setup()
+    const document = docDocument(store)
+    const drawings = { img: { drawingId: 'img', docTransform: { size: { width: 120, height: 80 } } } }
+    const drawn = docUpload(document.unitId, { drawings, drawingsOrder: ['img'], resources: savedDocResources(JSON.stringify({ data: drawings, order: ['img'] })) })
+    expect(await service.save(saver(ALICE), document.id, query({ profile: 'doc@1' }), drawn, HTTP_ORIGIN)).toMatchObject({ revision: 2, unchanged: false })
+    expect(store.inspector.inspect).toHaveBeenLastCalledWith(expect.anything(), 'doc@1', ALICE)
+    expect(store.contents.get(document.id)?.resourceNames).toEqual(['DOC_DRAWING_PLUGIN'])
+    const dropped = docUpload(document.unitId, { resources: savedDocResources().filter(resource => resource.name !== 'DOC_DRAWING_PLUGIN') })
+    const error = await rejection(service.save(saver(ALICE), document.id, query({ profile: 'doc@1', baseRevision: 2 }), dropped, HTTP_ORIGIN))
+    expect([error.code, error.details]).toEqual(['SNAPSHOT_INVALID', { rule: 'resource-missing' }])
+    expect(store.logs().find(entry => entry.rule === 'resource-missing')).toMatchObject({ level: 'warn', documentId: document.id, profile: 'doc@1', missing: ['DOC_DRAWING_PLUGIN'] })
+    expect(store.documents.get(document.id)?.revision).toBe(2)
   })
 })
