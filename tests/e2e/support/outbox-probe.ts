@@ -1,4 +1,4 @@
-// 发件箱的浏览器层探针（M4-P1 设计 §3.1、§4；apps/web/src/features/sheet-editor/outbox/testing/outbox-probe.ts）：只在测试构建里，
+// 发件箱的浏览器层探针（M4-P1 设计 §3.1、§4；apps/web/src/features/document-editor/outbox/testing/outbox-probe.ts）：只在测试构建里，
 // 编辑器页的地址带 outboxProbe 时挂在 window.__nerveOutboxProbe 上。E2E 这边看不到 web 的类型，这里声明用到的部分（与探针的写法相同）。
 // 打开不带文档身份的入口，不建编辑器或触发恢复发现；需要密钥的探针自行确认会话并取 CSRF 令牌。
 // 用到探针的用例打上 @test-build：外部模式测生产镜像，里面没有探针，按标签排除（playwright.config.ts）
@@ -129,7 +129,7 @@ export interface ProbeStoreOptions {
   readonly factory?: 'browser' | 'missing' | 'throws'
 }
 
-// ---- 写入管道（探针的 pipeline，apps/web/src/features/sheet-editor/outbox/testing/pipeline-probe.ts）----
+// ---- 写入管道（探针的 pipeline，apps/web/src/features/document-editor/outbox/testing/pipeline-probe.ts）----
 
 /** 管道的宿主：进程内（createDraftWriter）或发件箱 Worker（客户端） */
 export type ProbeHost = 'in-process' | 'worker'

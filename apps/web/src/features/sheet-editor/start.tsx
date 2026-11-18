@@ -1,5 +1,5 @@
+import type { HandoverTrace, PageVisibility, SameBrowserApis } from '../document-editor/index.ts'
 import type { AutosaveControlHooks, EditIntent, EditorPage, PageActivity, PageNetwork } from './editor-page.ts'
-import type { HandoverTrace } from './handover-trace.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
 // 浏览器的实现都在这里给出（M3-P5）：本页的键盘、鼠标操作（窗口的捕获阶段）、同一个浏览器里的锁与交接频道（navigator.locks、
 // BroadcastChannel；浏览器没有时退化，same-browser.ts）、刷新时在途的保存的记号（localStorage 与墙上时间）、这一页发出过的请求编辑的记号
@@ -8,8 +8,6 @@ import type { HandoverTrace } from './handover-trace.ts'
 // （editor/testing/handover-log.ts，M3-P5 设计 §3.13 的观察钩子）再组装：第一个调度建起来、第一次申请之前它们就在（?edit=new 直接进入编辑也一样）；
 // 两个各自引入，一个没引入成不影响另一个；地址带 outboxProbe 时另引入发件箱的浏览器层探针、带 crashProbe 时另引入崩溃用例的探针（M4-P1）。
 // 生产构建里这个分支与它们的分块都被去掉（门禁 artifacts 核对）。
-import type { PageVisibility } from './reading-checks.ts'
-import type { SameBrowserApis } from './same-browser.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -23,17 +21,11 @@ import { startDraftMaintenance } from '../../shared/lib/draft-maintenance.ts'
 import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
+import { browserLeaseClock, clearInheritedReloadMarkers, editorApi, installPageGuards, isApplePlatform, issuedRequestMarker, pendingSaveMarker, sameBrowserFor, trackActivity } from '../document-editor/index.ts'
 import { LocalDataNotice } from '../local-data/notice.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
-import { browserLeaseClock, trackActivity } from './edit-lease.ts'
-import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, replayContent, reportOpenCheckFailures, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 import { createEditorPage } from './editor-page.ts'
-import { issuedRequestMarker } from './issued-request.ts'
-import { installPageGuards, isApplePlatform } from './page-guards.ts'
-import { pendingSaveMarker } from './pending-save-marker.ts'
-import { clearInheritedReloadMarkers } from './recovery/reload-marker.ts'
-import { sameBrowserFor } from './same-browser.ts'
 
 export interface SheetEditorPageElements {
   /** 页头与提示（React） */
@@ -152,10 +144,10 @@ export async function startSheetEditorPage(elements: SheetEditorPageElements): P
 async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, stopped: () => boolean, onLoadStarted: () => void): Promise<SheetEditorPageMount | undefined> {
   if (import.meta.env.MODE === 'e2e') {
     const parameters = new URLSearchParams(window.location.search)
-    // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
+    // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，document-editor/outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
     // 与组装各走各的；引入失败同样不上报（理由见下），用到它的 E2E 等不到探针、自己会失败
     if (parameters.has('outboxProbe')) {
-      void Promise.allSettled([import('./outbox/testing/outbox-probe.ts')]).then(([probe]) => {
+      void Promise.allSettled([import('../document-editor/outbox/testing/outbox-probe.ts')]).then(([probe]) => {
         if (probe.status === 'fulfilled') {
           probe.value.installOutboxProbe(window, {
             request: requestSession,
@@ -167,9 +159,9 @@ async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (er
         }
       })
     }
-    // 地址带 crashProbe 时：写入中途结束整棵浏览器进程的原子性用例的探针（M4-P1 设计 §3.7，outbox/testing/crash-probe.ts），同上
+    // 地址带 crashProbe 时：写入中途结束整棵浏览器进程的原子性用例的探针（M4-P1 设计 §3.7，document-editor/outbox/testing/crash-probe.ts），同上
     if (parameters.has('crashProbe')) {
-      void Promise.allSettled([import('./outbox/testing/crash-probe.ts')]).then(([probe]) => {
+      void Promise.allSettled([import('../document-editor/outbox/testing/crash-probe.ts')]).then(([probe]) => {
         if (probe.status === 'fulfilled')
           probe.value.installCrashProbe(window)
       })
@@ -182,7 +174,7 @@ async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (er
     // 脚本还没执行、还没开始听 beforeunload 时就已开始，随后取消它们（WebKit 报"Importing a module script failed."），分不清是不是跳转取消的
     // （M3-P5 收尾 E1：page-errors.spec.ts 在 WebKit 上本机四十次失败两次）
     const crash = parameters.get('selftest') === 'crash-recovery'
-    const [control, log, diagnostics] = await Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('./recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)])
+    const [control, log, diagnostics] = await Promise.allSettled([import('../../editor/testing/autosave-control.ts'), import('../../editor/testing/handover-log.ts'), crash ? import('../document-editor/recovery/testing/reload-diagnostics.ts') : Promise.resolve(undefined)])
     if (stopped())
       return
     const observed = diagnostics.status === 'fulfilled' ? diagnostics.value?.observeReloadStart(() => window.sessionStorage) : undefined
@@ -210,25 +202,25 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
     documentType: 'sheet',
     api: {
       session: async () => requestSession(),
-      document: async documentId => fetchDocument(documentId),
-      content: async documentId => fetchContent(documentId),
-      contentIfChanged: async (documentId, revision) => fetchContentIfChanged(documentId, revision),
-      editStatus: async documentId => fetchEditStatus(documentId),
-      save: async (documentId, request, body, lease) => saveContent(documentId, request, body, lease),
-      replay: async (documentId, request, body) => replayContent(documentId, request.request, body, request.writeEpoch),
-      conflictCopy: async (documentId, query, body) => saveConflictCopy(documentId, query, body),
-      reportOpenCheck: async (documentId, report) => reportOpenCheckFailures(documentId, report),
+      document: async documentId => editorApi.fetchDocument(documentId),
+      content: async documentId => editorApi.fetchContent(documentId),
+      contentIfChanged: async (documentId, revision) => editorApi.fetchContentIfChanged(documentId, revision),
+      editStatus: async documentId => editorApi.fetchEditStatus(documentId),
+      save: async (documentId, request, body, lease) => editorApi.saveContent(documentId, request, body, lease),
+      replay: async (documentId, request, body) => editorApi.replayContent(documentId, request.request, body, request.writeEpoch),
+      conflictCopy: async (documentId, query, body) => editorApi.saveConflictCopy(documentId, query, body),
+      reportOpenCheck: async (documentId, report) => editorApi.reportOpenCheckFailures(documentId, report),
       editLease: {
-        acquire: async (documentId, clientInstanceId, options) => acquireEditLease(documentId, clientInstanceId, options),
-        renew: async (documentId, token, idleSeconds) => renewEditLease(documentId, token, idleSeconds),
-        release: async (documentId, token) => releaseEditLease(documentId, token),
-        handOver: async (documentId, token, requestId) => handOverEditLease(documentId, token, requestId),
-        decline: async (documentId, token, requestId) => declineEditRequest(documentId, token, requestId),
+        acquire: async (documentId, clientInstanceId, options) => editorApi.acquireEditLease(documentId, clientInstanceId, options),
+        renew: async (documentId, token, idleSeconds) => editorApi.renewEditLease(documentId, token, idleSeconds),
+        release: async (documentId, token) => editorApi.releaseEditLease(documentId, token),
+        handOver: async (documentId, token, requestId) => editorApi.handOverEditLease(documentId, token, requestId),
+        decline: async (documentId, token, requestId) => editorApi.declineEditRequest(documentId, token, requestId),
       },
       editRequest: {
-        send: async documentId => sendEditRequest(documentId),
-        renew: async documentId => renewEditRequest(documentId),
-        cancel: async documentId => cancelEditRequest(documentId),
+        send: async documentId => editorApi.sendEditRequest(documentId),
+        renew: async documentId => editorApi.renewEditRequest(documentId),
+        cancel: async documentId => editorApi.cancelEditRequest(documentId),
       },
     },
     createEditor: createSheetEditor,

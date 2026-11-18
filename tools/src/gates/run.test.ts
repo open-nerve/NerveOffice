@@ -215,7 +215,7 @@ describe('US-M1-11 产物门禁的装配', () => {
     // 测试构建（dist-e2e）里探针的写法（节选）
     const probe = 'const e="__nerveOutboxProbe";function t(n){const r={names:{}};return n[e]=r,r}export{t as installOutboxProbe};'
     const index = { name: 'index', modules: ['index.html', 'src/entries/platform/main.ts'] }
-    const outbox = { name: 'outbox-probe', modules: ['src/features/sheet-editor/outbox/testing/outbox-probe.ts', 'src/shared/outbox/draft-store.ts'] }
+    const outbox = { name: 'outbox-probe', modules: ['src/features/document-editor/outbox/testing/outbox-probe.ts', 'src/shared/outbox/draft-store.ts'] }
     const chunk = artifactsGate(writeDist({ ...clean, 'assets/outbox-probe-Q1w2E3r4.js': probe, [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': index, 'assets/outbox-probe-Q1w2E3r4.js': outbox }) }))
     expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([
       ['artifacts/keyword', '__nerveOutboxProbe'],
@@ -230,7 +230,7 @@ describe('US-M1-11 产物门禁的装配', () => {
     // 测试构建（dist-e2e）里探针的写法（节选）
     const probe = 'const e="__nerveCrashProbe";function t(n){const r={last:()=>{}};return n[e]=r,r}export{t as installCrashProbe};'
     const index = { name: 'index', modules: ['index.html', 'src/entries/platform/main.ts'] }
-    const crash = { name: 'crash-probe', modules: ['src/features/sheet-editor/outbox/testing/crash-probe.ts'] }
+    const crash = { name: 'crash-probe', modules: ['src/features/document-editor/outbox/testing/crash-probe.ts'] }
     const chunk = artifactsGate(writeDist({ ...clean, 'assets/crash-probe-Q1w2E3r4.js': probe, [MODULE_SOURCES]: JSON.stringify({ 'assets/index.js': index, 'assets/crash-probe-Q1w2E3r4.js': crash }) }))
     expect(chunk.violations.map(v => [v.rule, v.subject]).sort()).toEqual([
       ['artifacts/keyword', '__nerveCrashProbe'],

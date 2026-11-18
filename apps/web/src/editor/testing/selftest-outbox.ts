@@ -1,5 +1,5 @@
 // 真实浏览器复核里生产发件箱的两项（M4-P1 设计 §3.6 第 9 项的生产部分、第 11 项；主会话把 S8 的第二轮并进这一轮），都在阅读时跑。
-// 生产的代码经挂接交进来（SelftestHost.outboxReview → features/sheet-editor/outbox/testing/outbox-review-probe.ts）：
+// 生产的代码经挂接交进来（SelftestHost.outboxReview → features/document-editor/outbox/testing/outbox-review-probe.ts）：
 // - outbox-stall（第 9 项的生产部分，DEF-011 的定论）：生产的发件箱 Worker（带 100 ms 的空定时器），Worker 空闲 T（≥ 1 秒的三档，
 //   ./selftest-stall.ts 的 productionStallSchedule）之后写一份约 5 MiB 的类表格 JSON（字节转移过去、不去重：Worker 里 SHA-256 → gzip → 加密 →
 //   写入 strict → OPFS 的镜像），记下页面这一侧的往返与镜像写成了没有。生产的协议不交回 Worker 里各段的计时，往返就是 Worker 段加上来回的消息

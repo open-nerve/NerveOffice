@@ -1,4 +1,4 @@
-// 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
+// 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor 与共用编辑会话层 features/document-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
 import type { DocumentType, ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'

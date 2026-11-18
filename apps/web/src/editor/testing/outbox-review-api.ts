@@ -1,5 +1,5 @@
 // 真实浏览器复核调用生产发件箱的那一部分（M4-P1 设计 §3.6 第 9 项的生产 Worker、第 11 项）交给页面自检的形状：editor/testing 不能引用
-// features，生产的发件箱在 features/sheet-editor/outbox；页面自检的挂接（features/sheet-editor/selftest-hook.ts）动态引入那一侧的实现
+// features，生产的发件箱在 features/document-editor/outbox；页面自检的挂接（features/sheet-editor/selftest-hook.ts）动态引入那一侧的实现
 // （outbox/testing/outbox-review-probe.ts）、按这里的形状交进 SelftestHost（类型在两边各写一份、结构一致，挂接那里由类型检查核对）。
 // 只有类型，不引用任何模块
 

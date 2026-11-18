@@ -15,7 +15,8 @@ vi.mock('./editor-chrome.tsx', () => ({ EditorChrome: () => <p>正式页头</p> 
 vi.mock('../local-data/notice.ts', () => ({ LocalDataNotice: () => null }))
 vi.mock('../../shared/lib/draft-maintenance.ts', () => ({ startDraftMaintenance: () => h.stopMaintenance }))
 vi.mock('../../shared/lib/browser-connection.ts', () => ({ watchBrowserConnection: () => h.stopConnection }))
-vi.mock('./page-guards.ts', () => ({ installPageGuards: () => h.stopGuards, isApplePlatform: () => false }))
+// 页面的守卫来自共用编辑会话层的公开入口（M6-P1 S6）：mock 编辑器页实际引用的入口，其余名字取原实现
+vi.mock(import('../document-editor/index.ts'), async importOriginal => ({ ...await importOriginal(), installPageGuards: () => h.stopGuards, isApplePlatform: () => false }))
 vi.mock('../../shared/lib/session-channel.ts', () => ({ openSessionChannel: () => ({}) }))
 vi.mock('../../editor/testing/autosave-control.ts', () => ({ installAutosaveControl: () => undefined }))
 vi.mock('../../editor/testing/handover-log.ts', () => ({ installHandoverLog: () => ({ observe: undefined }) }))

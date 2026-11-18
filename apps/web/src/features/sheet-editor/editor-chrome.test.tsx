@@ -1,7 +1,7 @@
 import type { EditInterruption } from '@nerve-office/contracts'
 import type { RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
+import type { LeaseLoss } from '../document-editor/index.ts'
 import type { AutosaveView } from './autosave.ts'
-import type { LeaseLoss } from './edit-lease.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
 import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'

@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError, RequestTimeoutError, ResponseFormatError } from '../../shared/api/index.ts'
 import { fakeWorkingDraft, requestWithSnapshot } from '../../shared/local-drafts/working-draft.test-support.ts'
 import { json } from '../../shared/testing/fake-api.test-support.ts'
-import { gzipText, saveContent } from './editor-api.ts'
+import { editorApi } from '../document-editor/index.ts'
 import { classifySaveError, createSaveCoordinator } from './save-coordinator.ts'
 import { explicitCaptureSource } from './snapshot-capture.test-support.ts'
 
@@ -1137,7 +1137,7 @@ describe('停止保存与离开', () => {
 describe('失去编辑权时核对结果未知的保存（M3-P2 设计 §3.4）', () => {
   it('真实请求层：保存已提交但正文超过 60 秒；原请求与 gzip 重放，迟到回包不再确认第二次', async () => {
     const snapshot = '{"content":"甲"}'
-    const compressed = await gzipText(snapshot)
+    const compressed = await editorApi.gzipText(snapshot)
     vi.useFakeTimers()
     const { editor, control } = fakeEditor()
     const requests: { path: string, body: BodyInit | null | undefined }[] = []
@@ -1156,7 +1156,7 @@ describe('失去编辑权时核对结果未知的保存（M3-P2 设计 §3.4）'
     const coordinator = createSaveCoordinator({
       editor,
       draft,
-      send: async (request, body) => saveContent('document-1', request, body, { token: 'T'.repeat(43), writeEpoch: 2 }),
+      send: async (request, body) => editorApi.saveContent('document-1', request, body, { token: 'T'.repeat(43), writeEpoch: 2 }),
       baseRevision: 4,
       clientInstanceId: ME,
       newRequestId: newId,

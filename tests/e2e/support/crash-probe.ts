@@ -1,5 +1,5 @@
 // 写入中途结束整棵浏览器进程时的原子性（M4-P1 设计 §3.7、§3.8，S7 与 S9 第 5 项）接到生产代码：编辑器页测试构建里的崩溃用例探针
-// （apps/web/src/features/sheet-editor/outbox/testing/crash-probe.ts，地址带 crashProbe 时挂在 window.__nerveCrashProbe 上）。
+// （apps/web/src/features/document-editor/outbox/testing/crash-probe.ts，地址带 crashProbe 时挂在 window.__nerveCrashProbe 上）。
 // 探针用生产的写入管道写约 5 MiB 的内容，两种放置：进程内（createDraftWriter 配 IndexedDB 的存储，没有镜像）与发件箱 Worker（生产的客户端配
 // 崩溃用例的测试 Worker，带 OPFS 的镜像）；按要求在"写入之前"或"写镜像之前"经这里挂上的绑定函数发信号；读回时经管道解开（Worker 时在库与
 // 两个槽位里取最新的）、解压，按序号逐字节比较，另读写入者的高水位；取走比对镜像留在库里的提示（读出之后清除）。

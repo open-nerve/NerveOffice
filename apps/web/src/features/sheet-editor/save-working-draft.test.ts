@@ -9,8 +9,7 @@ import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { CLIENT_INSTANCE_ID } from '../../shared/outbox/draft-record.test-support.ts'
 import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { deferred } from '../../shared/outbox/outbox-lock.test-support.ts'
-import { DRAFT_KEY, DRAFT_OPTIONS, persistentHarness } from './outbox/persistent-working-draft.test-support.ts'
-import { createPersistentWorkingDraft } from './outbox/persistent-working-draft.ts'
+import { createPersistentWorkingDraft, DRAFT_KEY, DRAFT_OPTIONS, persistentHarness } from '../document-editor/index.test-support.ts'
 import { createSaveCoordinator } from './save-coordinator.ts'
 
 const EXPLICIT = { dedupe: false }

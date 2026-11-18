@@ -3,7 +3,7 @@
 // 页面开始载入时就挂上页面错误与可见性的收集，订阅页面的状态；到 steady（或载入失败、等不到就绪）之后，才动态引入编辑器的自检模块
 // （editor/testing/selftest.ts，模块边界只给这个文件开了这一个口子），由它跑完检查、把结果带到地址里的 next。
 import type { SelftestHost, SelftestPageView } from '../../editor/testing/selftest.ts'
-import type { LeaseLoss } from './edit-lease.ts'
+import type { LeaseLoss } from '../document-editor/index.ts'
 import type { EditModeState } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad } from './editor-page.ts'
 import type { SheetEditorPageElements } from './start.tsx'
@@ -367,8 +367,8 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
       reloadSaves,
       localPause,
       localSave,
-      // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（outbox/testing/ 只在测试构建里、只能动态引入）
-      outboxReview: async () => (await import('./outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
+      // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（document-editor/outbox/testing/ 只在测试构建里、只能动态引入）
+      outboxReview: async () => (await import('../document-editor/outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
     }
     void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => {
       if (!lifetime.stopped())

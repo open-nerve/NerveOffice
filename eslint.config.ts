@@ -313,13 +313,18 @@ const EDITOR_PROBE_MODULES = {
 }
 
 // ---- 编辑器页的测试构建探针同样只能动态引入（M4-P1 设计 §3.1）----
-// features/sheet-editor 里 testing/ 下的文件（发件箱的浏览器层探针）只在测试构建里，由 start.tsx 在 e2e 分支、地址带 outboxProbe 时
-// 动态 import()；editor/testing/ 同样只在测试构建里。静态导入（含 import type）与再导出都会让生产代码依赖它们（副作用可能留在生产构建里），
-// 所以 sheet-editor 里测试代码之外的文件对路径里有 testing 这一段的模块只能动态引入。testing/ 里的文件之间照常静态引用；
-// 页面自检的挂接（selftest-hook.ts）本身只在测试构建里（start.tsx 动态引入它），对 editor/testing/ 的类型引用不在此列
-const SHEET_EDITOR_PROBE_MODULES = {
+/**
+ * 编辑器页的功能（M6-P1 设计 §3.1）：表格编辑器与共用编辑会话层。它们与编辑器适配层一起组成编辑器页的包（不进平台页面），
+ * 带着本机发件箱与测试构建的探针；按路径写的规则用它（minimatch 的花括号）
+ */
+const EDITOR_PAGE_FEATURES = '{sheet-editor,document-editor}'
+// 编辑器页功能里 testing/ 下的文件（发件箱的浏览器层探针与崩溃探针、刷新诊断，M6-P1 起在 document-editor 里）只在测试构建里，由表格编辑器的
+// start.tsx 在 e2e 分支、地址带 outboxProbe 等时动态 import()；editor/testing/ 同样只在测试构建里。静态导入（含 import type）与再导出都会让
+// 生产代码依赖它们（副作用可能留在生产构建里），所以两个功能里测试代码之外的文件对路径里有 testing 这一段的模块只能动态引入。
+// testing/ 里的文件之间照常静态引用；页面自检的挂接（selftest-hook.ts）本身只在测试构建里（start.tsx 动态引入它），对 editor/testing/ 的类型引用不在此列
+const EDITOR_PAGE_PROBE_MODULES = {
   regex: String.raw`(?:^|/)testing(?:/|$)`,
-  message: '编辑器页的测试构建探针（features/sheet-editor/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入（start.tsx 的 e2e 分支）：静态导入（含 import type）与再导出会让生产代码依赖它们（M4-P1 设计 §3.1）',
+  message: '编辑器页的测试构建探针（features/{sheet-editor,document-editor}/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入（start.tsx 的 e2e 分支）：静态导入（含 import type）与再导出会让生产代码依赖它们（M4-P1 设计 §3.1）',
 }
 
 // 测试与测试辅助只被测试静态引用：nerve/test-code-only-in-tests 按路径拦下的是静态导入，动态导入在这里拦（复验 R3）
@@ -833,7 +838,7 @@ const LAZY_TEXTS: readonly { readonly file: string, readonly feature: string }[]
   { file: 'shared-with-me.ts', feature: 'shared-with-me' },
   { file: 'local-drafts.ts', feature: 'local-drafts' },
   { file: 'local-data.ts', feature: 'local-data' },
-  { file: 'editor.ts', feature: 'sheet-editor' },
+  { file: 'editor.ts', feature: EDITOR_PAGE_FEATURES },
   { file: 'history.ts', feature: '{document-history,history-preview}' },
 ]
 
@@ -917,7 +922,7 @@ const OUTBOX_DYNAMIC_FROM_PLATFORM = {
   message: '平台页面对本机发件箱（shared/outbox/）只许按需 import() 列表的标记 draft-index.ts：别的文件（存储、编解码、本机密钥……）只给编辑器页与按需加载的本机草稿页（P4 另行放行）用（M4-P1 设计 §3.1）',
 }
 
-// 本机发件箱的共享文件（shared/outbox/ 里除本机密钥 local-key.ts 之外的）与测试构建的探针（features/sheet-editor/**/testing/**）：
+// 本机发件箱的共享文件（shared/outbox/ 里除本机密钥 local-key.ts 之外的）与测试构建的探针（编辑器页功能的 **/testing/**，M6-P1 起在 document-editor 里）：
 // 不引用 zod、带 zod 的契约模块与请求层（shared/api/）。
 // - Worker：门禁按全部产物数 zod 的 JIT 探测（上限 1 次），Worker 里再打进一份就超限；Worker 里也没有关掉 zod 的 JIT 的入口。
 //   Worker 一侧的文件另有更严的区域限制（下一节），这里的限制对它们只剩契约的那一条。
@@ -950,8 +955,8 @@ const OUTBOX_ZOD_FREE_PATTERNS = [
 // 按引用路径的文字认：只认这几种写法（同一目录的文件、别的发件箱目录的文件、契约），别的写法一律算区域之外
 const OUTBOX_DIRS = {
   shared: 'apps/web/src/shared/outbox',
-  feature: 'apps/web/src/features/sheet-editor/outbox',
-  testing: 'apps/web/src/features/sheet-editor/outbox/testing',
+  feature: 'apps/web/src/features/document-editor/outbox',
+  testing: 'apps/web/src/features/document-editor/outbox/testing',
 } as const
 type OutboxDir = keyof typeof OUTBOX_DIRS
 /**
@@ -1000,7 +1005,7 @@ function outboxNamesRegex(names: readonly string[]): string {
 
 /**
  * from 目录里 Worker 一侧的文件引用的限制：测试代码；只在主线程用的模块（类型照常）；区域之外的一切（发件箱各目录里没列出的文件、
- * 别的目录、别的包、带查询的写法）；契约只许不带 zod 的常量。编辑器页 outbox/ 的生产文件另带 sheet-editor 那一块的限制
+ * 别的目录、别的包、带查询的写法）；契约只许不带 zod 的常量。编辑器页 outbox/ 的生产文件另带编辑器页那一块的限制
  * （testing/ 只许动态引入，连 import type 也不许）：同名规则后者整体覆盖前者
  */
 function outboxWorkerImports(from: OutboxDir): Linter.RuleEntry {
@@ -1012,7 +1017,7 @@ function outboxWorkerImports(from: OutboxDir): Linter.RuleEntry {
     paths: [OUTBOX_ZOD_FREE_CONTRACTS],
     patterns: [
       TEST_MODULES,
-      ...(from === 'feature' ? [SHEET_EDITOR_PROBE_MODULES] : []),
+      ...(from === 'feature' ? [EDITOR_PAGE_PROBE_MODULES] : []),
       // 只认这几个模块的确切写法放行类型：allowTypeImports 的模式一旦匹配，这条 import type 的别的限制也都不查了
       { regex: `^(?:${mainThread.join('|')})$`, allowTypeImports: true, message: OUTBOX_MAIN_THREAD_MESSAGE },
       { regex: `^(?!(?:${known.join('|')})$|@nerve-office/contracts$)`, message: OUTBOX_WORKER_AREA_MESSAGE },
@@ -1232,21 +1237,21 @@ export default antfu(
     },
   },
   {
-    // 编辑器页的测试构建探针只能动态引入（M4-P1 设计 §3.1）：sheet-editor 里测试代码、testing/ 与页面自检的挂接之外的文件，
-    // 在 nerve/test-code-only-in-tests 的基础上加这条限制。同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上
-    name: 'nerve/sheet-editor-probe-dynamic-only',
-    files: ['apps/web/src/features/sheet-editor/**'],
-    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**/testing/**', 'apps/web/src/features/sheet-editor/selftest-hook.ts'],
+    // 编辑器页的测试构建探针只能动态引入（M4-P1 设计 §3.1）：编辑器页的功能（表格编辑器与共用编辑会话层，M6-P1）里测试代码、testing/
+    // 与页面自检的挂接之外的文件，在 nerve/test-code-only-in-tests 的基础上加这条限制。同名规则后者整体覆盖前者：测试与测试辅助的限制一并带上
+    name: 'nerve/editor-page-probe-dynamic-only',
+    files: [`apps/web/src/features/${EDITOR_PAGE_FEATURES}/**`],
+    ignores: [...TEST_CODE, `apps/web/src/features/${EDITOR_PAGE_FEATURES}/**/testing/**`, 'apps/web/src/features/sheet-editor/selftest-hook.ts'],
     rules: {
-      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, SHEET_EDITOR_PROBE_MODULES] }],
+      'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, EDITOR_PAGE_PROBE_MODULES] }],
     },
   },
   {
-    // 平台页面对本机发件箱只许按需引用列表的标记（M4-P1 设计 §3.1）：静态的引用一律不许。编辑器页（入口、sheet-editor 与编辑器）不受限，
+    // 平台页面对本机发件箱只许按需引用列表的标记（M4-P1 设计 §3.1）：静态的引用一律不许。编辑器页（入口、编辑器页的功能与编辑器）不受限，
     // 发件箱与共享恢复内部不受限；测试代码不受限。P4 共享恢复同样只按需加载。同名规则后者整体覆盖前者：测试限制一并带上
     name: 'nerve/web-outbox-platform-static',
     files: ['apps/web/src/**/*.{ts,tsx}'],
-    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/features/local-drafts/**', 'apps/web/src/features/local-data/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**'],
+    ignores: [...TEST_CODE, `apps/web/src/features/${EDITOR_PAGE_FEATURES}/**`, 'apps/web/src/features/local-drafts/**', 'apps/web/src/features/local-data/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**'],
     rules: {
       'ts/no-restricted-imports': ['error', { patterns: [TEST_MODULES, OUTBOX_FROM_PLATFORM, LOCAL_DRAFTS_FROM_PLATFORM] }],
     },
@@ -1256,7 +1261,7 @@ export default antfu(
     // 弹窗的文件与应用的入口另有自己的整组（入口只写副作用导入，本来就没有动态 import()），不在这一块里
     name: 'nerve/web-outbox-platform-dynamic',
     files: ['apps/web/src/**/*.{ts,tsx}'],
-    ignores: [...TEST_CODE, 'apps/web/src/features/sheet-editor/**', 'apps/web/src/features/local-drafts/**', 'apps/web/src/features/local-data/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**', 'apps/web/src/shared/ui/dialog.tsx', 'apps/web/src/entries/*/main.{ts,tsx}'],
+    ignores: [...TEST_CODE, `apps/web/src/features/${EDITOR_PAGE_FEATURES}/**`, 'apps/web/src/features/local-drafts/**', 'apps/web/src/features/local-data/**', 'apps/web/src/editor/**', 'apps/web/src/entries/editor/**', 'apps/web/src/shared/outbox/**', 'apps/web/src/shared/local-drafts/**', 'apps/web/src/shared/ui/dialog.tsx', 'apps/web/src/entries/*/main.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': ['error', ...WEB_RESTRICTED_SYNTAX, OUTBOX_DYNAMIC_FROM_PLATFORM],
     },
@@ -1280,7 +1285,7 @@ export default antfu(
   },
   {
     // 编辑器页 outbox/ 里新增的 Worker 入口仍自动受限；既有协议、处理器和入口已在 P4 移入 shared/outbox。
-    // 上面 sheet-editor 那一块的限制（testing/ 只许动态引入）一并带上
+    // 上面编辑器页那一块的限制（testing/ 只许动态引入）一并带上
     name: 'nerve/web-outbox-worker-feature',
     files: OUTBOX_WORKER_FILES.feature,
     ignores: [...TEST_CODE],
@@ -1290,7 +1295,7 @@ export default antfu(
     // 测试构建的探针（编辑器页的 testing/）：同样不引用 zod、带 zod 的契约模块与请求层（M4-P1 S6 的分块问题）。
     // 其中探针 Worker 用的文件由下一块整体覆盖（Worker 一侧的区域限制）
     name: 'nerve/web-outbox-probes',
-    files: ['apps/web/src/features/sheet-editor/**/testing/**'],
+    files: [`apps/web/src/features/${EDITOR_PAGE_FEATURES}/**/testing/**`],
     ignores: [...TEST_CODE],
     rules: {
       'ts/no-restricted-imports': ['error', { paths: OUTBOX_ZOD_FREE_PATHS, patterns: [TEST_MODULES, ...OUTBOX_ZOD_FREE_PATTERNS] }],
@@ -1518,7 +1523,7 @@ export default antfu(
           // 编辑器页的挂接（sheet-editor 的 selftest-hook.ts，start.tsx 只在测试构建里动态引入它）动态引入自检模块
           { from: { element: { type: 'e2e-tests' } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: SELFTEST_SHARED_FILES } } } },
           // 清理前只读观测只引用零依赖的诊断格式，不把编辑器页实现带进 Node 驱动。
-          { from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'recovery/testing/reload-diagnostics.ts' } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest-reload-diagnostics.ts' } } } },
+          { from: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: 'recovery/testing/reload-diagnostics.ts' } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest-reload-diagnostics.ts' } } } },
           { from: { element: { type: 'web-entry', captured: { entry: 'selftest' } } }, allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest-report.ts' } } } },
           {
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['selftest-hook.ts', 'selftest-hook.test.ts'] } },
@@ -1613,6 +1618,38 @@ export default antfu(
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } } },
             message: '编辑器页（features/sheet-editor）只由编辑器页的入口引用：它带着 Univer，平台页面的包里不能有它（P4 设计 §3.1）',
+          },
+          // 共用编辑会话层（M6-P1 设计 §3.1，S6 spec §3）：依赖方向是 sheet-editor → document-editor。它只由编辑器页引用（编辑器页的入口与表格编辑器，
+          // P2 的文字文档编辑器到时加进来），平台的应用层、其他入口与其他功能都不引用它：它带着本机发件箱与编辑权的协议，不进平台页面的包。
+          // 同样放在允许的策略之后覆盖"功能模块之间经公开入口"；同一个功能内部的引用不经过这条检查
+          {
+            from: [
+              { element: { type: 'web-app' } },
+              { element: { type: 'web-entry', captured: { entry: '!editor' } } },
+              { element: { type: 'web-feature', captured: { feature: '!sheet-editor' } } },
+            ],
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'document-editor' } } } },
+            message: '共用编辑会话层（features/document-editor）只由编辑器页引用（编辑器页的入口与 features/sheet-editor）：它带着本机发件箱与编辑权的协议，平台页面的包里不能有它（M6-P1 设计 §3.1）',
+          },
+          // 会话层不引用表格编辑器：上一条"编辑器页只由编辑器页的入口引用"本来就拦着，这一条放在它后面，报出依赖方向的说明（后者覆盖前者）
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'document-editor' } } },
+            disallow: { to: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' } } } },
+            message: '共用编辑会话层（features/document-editor）不引用表格编辑器（features/sheet-editor）：依赖方向是 sheet-editor → document-editor，表格的部分经扩展点挂接（M6-P1 设计 §3.1、§3.5）',
+          },
+          // 表格编辑器的测试经会话层的测试入口（index.test-support.ts）取假件与测试用的内部常量；生产代码只经公开入口（M6-P1 S6 spec §2）
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: WEB_TEST_CODE } },
+            allow: { to: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: 'index.test-support.ts' } } },
+          },
+          // 测试构建的探针在会话层的 testing/ 下（发件箱与崩溃探针、刷新诊断）：编辑器页的组装处（start.tsx）与页面自检的挂接（selftest-hook.ts）
+          // 只在测试构建里动态 import() 它们（M4-P1 设计 §3.1；M6-P1 S6 spec §3）
+          {
+            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['start.tsx', 'selftest-hook.ts'] } },
+            allow: {
+              to: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: '**/testing/**' } },
+              dependency: { nodeKind: 'dynamic-import' },
+            },
           },
           // 管理界面按需加载，不进平台页面的首屏（M2-P1 设计 §3.8，审查 B2）：只有路由表 app/routes.ts 经它的公开入口动态 import()，
           // 任何静态引用（含 import type 与再导出）都会把它带回首屏。页头的入口只引用 shared/lib/admin-paths.ts。

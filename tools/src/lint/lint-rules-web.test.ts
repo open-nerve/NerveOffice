@@ -425,7 +425,7 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
 
   describe('只给按需加载的页面与编辑器页用的文案（shared/i18n/zh-cn/<功能>.ts）只由对应的功能引用；测试不受限（M2-P6 复核第二批）', () => {
     const importTexts = (path: string, name: string): string => `import { ${name} } from '${path}'\n\nexport const texts = ${name}\n`
-    const TEXTS_MESSAGE = /这份文案（shared\/i18n\/zh-cn\/[\w-]+\.ts）只由按需加载的 features\/[\w-]+ 引用/
+    const TEXTS_MESSAGE = /这份文案（shared\/i18n\/zh-cn\/[\w-]+\.ts）只由按需加载的 features\/[\w{},-]+ 引用/
 
     it('对应的功能照常引用', async () => {
       const allowed: [string, string][] = [
@@ -437,6 +437,8 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/sharing/share-dialog.tsx'],
         [importTexts('../../shared/i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), 'apps/web/src/features/shared-with-me/shared-page.tsx'],
         [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
+        // 编辑器页的文案也由共用编辑会话层引用（M6-P1 S6：恢复的提示）
+        [importTexts('../../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/document-editor/recovery/recovery-notice.tsx'],
       ]
       for (const [code, file] of allowed)
         expect(await rulesFor(code, file), `${file}：${code}`).not.toContain('boundaries/dependencies')
@@ -666,22 +668,28 @@ describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"�
   })
 }, LINT_TIMEOUT)
 
-describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（features/sheet-editor/**/testing/**）只能动态引入（M4-P1 设计 §3.1）', () => {
-  const PROBE_MESSAGE = '编辑器页的测试构建探针（features/sheet-editor/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入'
+describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（features/{sheet-editor,document-editor}/**/testing/**）只能动态引入（M4-P1 设计 §3.1；M6-P1 S6）', () => {
+  const PROBE_MESSAGE = '编辑器页的测试构建探针（features/{sheet-editor,document-editor}/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入'
   const RULE = 'ts/no-restricted-imports'
   const START = 'apps/web/src/features/sheet-editor/start.tsx'
   const PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
+  /** 共用编辑会话层的生产文件：同样只能动态引入探针（M6-P1 S6） */
+  const SESSION = 'apps/web/src/features/document-editor/edit-lease.ts'
+  const OUTBOX_PROBE = '../document-editor/outbox/testing/outbox-probe.ts'
 
-  it('静态导入、import type、副作用导入、再导出与 export * 都报错：发件箱的探针与编辑器的 testing/ 都一样', async () => {
+  it('静态导入、import type、副作用导入、再导出与 export * 都报错：发件箱的探针与编辑器的 testing/ 都一样，表格编辑器与会话层都一样', async () => {
     const cases: (readonly [string, string])[] = [
-      [START, 'import { installOutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n\nexport const install = installOutboxProbe\n'],
-      [PAGE, 'import type { OutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n\nexport type P = OutboxProbe\n'],
-      [PAGE, 'import \'./outbox/testing/outbox-probe.ts\'\n\nexport const a = 1\n'],
-      [PAGE, 'export { installOutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n'],
-      [PAGE, 'export * from \'./outbox/testing/outbox-probe.ts\'\n'],
+      [START, `import { installOutboxProbe } from '${OUTBOX_PROBE}'\n\nexport const install = installOutboxProbe\n`],
+      [PAGE, `import type { OutboxProbe } from '${OUTBOX_PROBE}'\n\nexport type P = OutboxProbe\n`],
+      [PAGE, `import '${OUTBOX_PROBE}'\n\nexport const a = 1\n`],
+      [PAGE, `export { installOutboxProbe } from '${OUTBOX_PROBE}'\n`],
+      [PAGE, `export * from '${OUTBOX_PROBE}'\n`],
       [PAGE, 'import { installHandoverLog } from \'../../editor/testing/handover-log.ts\'\n\nexport const install = installHandoverLog\n'],
       // 大小写不同（不区分大小写的文件系统上照样找得到）
-      [PAGE, 'import \'./outbox/Testing/outbox-probe.ts\'\n\nexport const a = 1\n'],
+      [PAGE, 'import \'../document-editor/outbox/Testing/outbox-probe.ts\'\n\nexport const a = 1\n'],
+      // 会话层自己的生产文件引用自己目录里的探针、编辑器的 testing/
+      [SESSION, 'import { installOutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n\nexport const install = installOutboxProbe\n'],
+      [SESSION, 'import type { ReloadDiagnostics } from \'../../editor/testing/selftest-reload-diagnostics.ts\'\n\nexport type D = ReloadDiagnostics\n'],
     ]
     for (const [file, code] of cases) {
       const report = await lint(code, file)
@@ -691,16 +699,99 @@ describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（fe
   })
 
   it('动态 import() 通过；testing/ 里的文件之间照常静态引用；页面自检的挂接与测试代码不受限；同一份限制里仍拦着测试与测试辅助', async () => {
-    expect(await rulesFor(dynamicImport('./outbox/testing/outbox-probe.ts'), START)).not.toContain(RULE)
-    expect(await rulesFor('import { OUTBOX_PROBE_NAME } from \'../testing/outbox-probe.ts\'\n\nexport const name = OUTBOX_PROBE_NAME\n', 'apps/web/src/features/sheet-editor/outbox/testing/outbox-probe.ts')).not.toContain(RULE)
+    expect(await rulesFor(dynamicImport(OUTBOX_PROBE), START)).not.toContain(RULE)
+    expect(await rulesFor(dynamicImport('./outbox/testing/outbox-probe.ts'), SESSION)).not.toContain(RULE)
+    expect(await rulesFor('import { OUTBOX_PROBE_NAME } from \'../testing/outbox-probe.ts\'\n\nexport const name = OUTBOX_PROBE_NAME\n', 'apps/web/src/features/document-editor/outbox/testing/outbox-probe.ts')).not.toContain(RULE)
     expect(await rulesFor('import type { SelftestHost } from \'../../editor/testing/selftest.ts\'\n\nexport type H = SelftestHost\n', 'apps/web/src/features/sheet-editor/selftest-hook.ts')).not.toContain(RULE)
-    expect(await rulesFor('import { installOutboxProbe } from \'./outbox/testing/outbox-probe.ts\'\n\nexport const install = installOutboxProbe\n', 'apps/web/src/features/sheet-editor/editor-page.test.ts')).not.toContain(RULE)
-    // 这一块覆盖了 nerve/test-code-only-in-tests 的同名规则：测试辅助照样拦下
-    const report = await lint('import { leaseServer } from \'./lease-server.test-support.ts\'\n\nexport const server = leaseServer\n', PAGE)
-    expect(report.rules).toContain(RULE)
-    expect(report.messages.join('\n')).toContain('测试与测试辅助')
+    expect(await rulesFor(`import { installOutboxProbe } from '${OUTBOX_PROBE}'\n\nexport const install = installOutboxProbe\n`, 'apps/web/src/features/sheet-editor/editor-page.test.ts')).not.toContain(RULE)
+    // 这一块覆盖了 nerve/test-code-only-in-tests 的同名规则：测试辅助照样拦下（两个功能都是）
+    for (const [file, code] of [
+      [PAGE, 'import { leaseServer } from \'./lease-server.test-support.ts\'\n\nexport const server = leaseServer\n'],
+      [SESSION, 'import { fakeBrowser } from \'./same-browser.test-support.ts\'\n\nexport const browser = fakeBrowser\n'],
+    ] as const) {
+      const report = await lint(code, file)
+      expect(report.rules, file).toContain(RULE)
+      expect(report.messages.join('\n'), file).toContain('测试与测试辅助')
+    }
     // 别的目录里叫 testing 的包名不算（只认路径里的 testing 这一段）
     expect(await rulesFor('import { render } from \'@testing-library/react\'\n\nexport const r = render\n', PAGE)).not.toContain(RULE)
+  })
+}, LINT_TIMEOUT)
+
+describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/document-editor）的依赖方向与入口（M6-P1 设计 §3.1，S6）', () => {
+  const RULE = 'boundaries/dependencies'
+  const SESSION_MESSAGE = '共用编辑会话层（features/document-editor）只由编辑器页引用'
+  const DIRECTION_MESSAGE = '共用编辑会话层（features/document-editor）不引用表格编辑器'
+  const SHEET_PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
+  const SHEET_TEST = 'apps/web/src/features/sheet-editor/editor-page.test.ts'
+  const SHEET_START = 'apps/web/src/features/sheet-editor/start.tsx'
+  const SESSION = 'apps/web/src/features/document-editor/edit-lease.ts'
+  const viaIndex = (path: string): string => `import { blockInteractions } from '${path}'\n\nexport const block = blockInteractions\n`
+
+  it('平台的应用层、其他入口与其他功能引用会话层都报错，经公开入口也不行；编辑器页的入口与表格编辑器经公开入口照常', async () => {
+    for (const [file, path] of [
+      [WEB_FILE, '../features/document-editor/index.ts'],
+      [WEB_FEATURE_FILE, '../document-editor/index.ts'],
+      ['apps/web/src/entries/platform/mount.tsx', '../../features/document-editor/index.ts'],
+      ['apps/web/src/features/history-preview/start.tsx', '../document-editor/index.ts'],
+    ] as const) {
+      const report = await lint(viaIndex(path), file)
+      expect(report.rules, file).toContain(RULE)
+      expect(report.messages.join('\n'), file).toContain(SESSION_MESSAGE)
+    }
+    expect((await lintAtProbe(viaIndex('../../features/document-editor/index.ts'), PROBE_FILES.editorEntry)).rules).not.toContain(RULE)
+    expect(await rulesFor(viaIndex('../document-editor/index.ts'), SHEET_PAGE)).not.toContain(RULE)
+  })
+
+  it('表格编辑器的生产代码只经公开入口：引用内部文件与测试入口都报错', async () => {
+    for (const code of [
+      viaIndex('../document-editor/interaction-barrier.ts'),
+      'import type { EditLease } from \'../document-editor/edit-lease.ts\'\n\nexport type L = EditLease\n',
+      'import { fakeBrowser } from \'../document-editor/index.test-support.ts\'\n\nexport const browser = fakeBrowser\n',
+    ])
+      expect(await rulesFor(code, SHEET_PAGE), code).toContain(RULE)
+  })
+
+  it('表格编辑器的测试经公开入口或测试入口照常；会话层别的文件（测试辅助与生产文件）报错', async () => {
+    for (const code of [
+      viaIndex('../document-editor/index.ts'),
+      'import { fakeBrowser } from \'../document-editor/index.test-support.ts\'\n\nexport const browser = fakeBrowser\n',
+    ])
+      expect(await rulesFor(code, SHEET_TEST), code).not.toContain(RULE)
+    for (const code of [
+      'import { fakeBrowser } from \'../document-editor/same-browser.test-support.ts\'\n\nexport const browser = fakeBrowser\n',
+      'import { lockNameOf } from \'../document-editor/same-browser.ts\'\n\nexport const name = lockNameOf\n',
+    ])
+      expect(await rulesFor(code, SHEET_TEST), code).toContain(RULE)
+  })
+
+  it('编辑器页的组装处与页面自检的挂接只许动态 import() 会话层的探针：静态引用、别的文件动态引用都报错', async () => {
+    expect(await rulesFor(dynamicImport('../document-editor/outbox/testing/outbox-probe.ts'), SHEET_START)).not.toContain(RULE)
+    expect(await rulesFor(dynamicImport('../document-editor/recovery/testing/reload-diagnostics.ts'), SHEET_START)).not.toContain(RULE)
+    expect(await rulesFor(dynamicImport('../document-editor/outbox/testing/outbox-review-probe.ts'), 'apps/web/src/features/sheet-editor/selftest-hook.ts')).not.toContain(RULE)
+    expect(await rulesFor('import { installOutboxProbe } from \'../document-editor/outbox/testing/outbox-probe.ts\'\n\nexport const install = installOutboxProbe\n', SHEET_START)).toContain(RULE)
+    expect(await rulesFor(dynamicImport('../document-editor/outbox/testing/outbox-probe.ts'), SHEET_PAGE)).toContain(RULE)
+    // 只开 testing/：会话层别的内部文件动态引入也不行
+    expect(await rulesFor(dynamicImport('../document-editor/edit-lease.ts'), SHEET_START)).toContain(RULE)
+  })
+
+  it('会话层不引用表格编辑器（报出依赖方向的说明），也不引用编辑器适配层；自己内部的引用不受限', async () => {
+    for (const [code, file] of [
+      ['import { startSheetEditorPage } from \'../sheet-editor/index.ts\'\n\nexport const start = startSheetEditorPage\n', SESSION],
+      [`import { probe } from '../sheet-editor/${PROBE}-part.ts'\n\nexport const p = probe\n`, SESSION],
+    ] as const) {
+      const report = await lint(code, file)
+      expect(report.rules, code).toContain(RULE)
+      expect(report.messages.join('\n'), code).toContain(DIRECTION_MESSAGE)
+    }
+    expect(await rulesFor('import { createSheetEditor } from \'../../editor/index.ts\'\n\nexport const create = createSheetEditor\n', SESSION)).toContain(RULE)
+    expect((await lintAtProbe(`import { probe } from './${PROBE}-part.ts'\n\nexport const p = probe\n`, PROBE_FILES.documentEditor)).rules).not.toContain(RULE)
+  })
+
+  it('刷新诊断（recovery/testing/reload-diagnostics.ts）照旧只引用零依赖的诊断格式；会话层别的文件不行', async () => {
+    const code = 'import type { ReloadDiagnostics } from \'../../../../editor/testing/selftest-reload-diagnostics.ts\'\n\nexport type D = ReloadDiagnostics\n'
+    expect(await rulesFor(code, 'apps/web/src/features/document-editor/recovery/testing/reload-diagnostics.ts')).not.toContain(RULE)
+    expect(await rulesFor('import type { ReloadDiagnostics } from \'../../../editor/testing/selftest-reload-diagnostics.ts\'\n\nexport type D = ReloadDiagnostics\n', 'apps/web/src/features/document-editor/recovery/reload-marker.ts')).toContain(RULE)
   })
 }, LINT_TIMEOUT)
 
@@ -719,7 +810,7 @@ describe('US-M4-07 共享草稿能力的边界', () => {
   })
 
   it('共享恢复不能反向引用编辑器功能或 SDK 适配层', async () => {
-    for (const path of [`../../features/sheet-editor/${PROBE}-part.ts`, `../../editor/${PROBE}/editor-part.ts`]) {
+    for (const path of [`../../features/sheet-editor/${PROBE}-part.ts`, `../../features/document-editor/${PROBE}-part.ts`, `../../editor/${PROBE}/editor-part.ts`]) {
       const report = await lintAtProbe(`import { probe } from '${path}'\n\nexport const value = probe\n`, PROBE_FILES.localDrafts)
       expect(report.rules).toContain('boundaries/dependencies')
     }
@@ -740,7 +831,7 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
   const DYNAMIC_IMPORT_MESSAGE = '发件箱 Worker 一侧的文件不用动态 import()'
   const EDITOR_PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
   const OUTBOX_SHARED = 'apps/web/src/shared/outbox'
-  const OUTBOX_FEATURE = 'apps/web/src/features/sheet-editor/outbox'
+  const OUTBOX_FEATURE = 'apps/web/src/features/document-editor/outbox'
   const WORKER_SHARED = `${OUTBOX_SHARED}/writer-fence.ts`
   const WORKER_IMPLEMENTATION = [`${OUTBOX_SHARED}/outbox-protocol.ts`, `${OUTBOX_SHARED}/outbox-worker-handler.ts`, `${OUTBOX_SHARED}/outbox.worker.ts`]
   const WORKER_TESTING = [`${OUTBOX_FEATURE}/testing/transaction-recorder.ts`, `${OUTBOX_FEATURE}/testing/mirror-review.ts`, `${OUTBOX_FEATURE}/testing/outbox-probe.worker.ts`]
@@ -795,8 +886,10 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
     expect(selectors.length).toBe(restrictedSyntaxSelectors(await configFor(EDITOR_PAGE)).length + 1)
   })
 
-  it('编辑器页与发件箱自己不受平台页面那一条限制', async () => {
+  it('编辑器页（表格编辑器与共用编辑会话层）与发件箱自己不受平台页面那一条限制', async () => {
     await expectAllowed('import { createDraftStore } from \'../../shared/outbox/draft-store.ts\'\n\nexport const create = createDraftStore\n', EDITOR_PAGE, PLATFORM_MESSAGE)
+    await expectAllowed('import { createDraftStore } from \'../../shared/outbox/draft-store.ts\'\n\nexport const create = createDraftStore\n', 'apps/web/src/features/document-editor/editing-draft.ts', PLATFORM_MESSAGE)
+    await expectAllowed(dynamicImport('../../../shared/outbox/local-key.ts'), `${OUTBOX_FEATURE}/outbox-session.ts`, PLATFORM_MESSAGE)
     await expectAllowed(dynamicImport('../../shared/outbox/local-key.ts'), EDITOR_PAGE, PLATFORM_MESSAGE)
     await expectAllowed('import { openOutboxDatabase } from \'./database.ts\'\n\nexport const open = openOutboxDatabase\n', `${OUTBOX_SHARED}/draft-index.ts`, PLATFORM_MESSAGE)
   })
@@ -820,13 +913,13 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
     }
   })
 
-  it('本机密钥与 Worker 的客户端不受不引用 zod 那一条与 Worker 一侧的限制；Worker 一侧的同一份限制里仍拦着测试辅助与 sheet-editor 的 testing/', async () => {
+  it('本机密钥与 Worker 的客户端不受不引用 zod 那一条与 Worker 一侧的限制；Worker 一侧的同一份限制里仍拦着测试辅助与会话层的 testing/', async () => {
     for (const file of [`${OUTBOX_SHARED}/local-key.ts`, `${OUTBOX_SHARED}/outbox-worker-client.ts`])
       await expectAllowed(`import { localKeySchema } from '@nerve-office/contracts'\nimport { apiRequest } from '${apiClient(file)}'\n\nexport const schema = [localKeySchema, apiRequest]\n`, file, ZOD_FREE_MESSAGE, WORKER_AREA_MESSAGE, MAIN_THREAD_MESSAGE)
     await expectBlocked('import { sampleMeta } from \'./draft-record.test-support.ts\'\n\nexport const meta = sampleMeta\n', WORKER_SHARED, RULE, '测试与测试辅助')
     await expectBlocked('import { sample } from \'./pipeline.test-support.ts\'\n\nexport const s = sample\n', WORKER_TESTING[0] ?? '', RULE, '测试与测试辅助')
-    await expectBlocked('import \'../../features/sheet-editor/outbox/testing/outbox-probe.ts\'\n\nexport const a = 1\n', WORKER_IMPLEMENTATION[0] ?? '', RULE, WORKER_AREA_MESSAGE)
-    await expectBlocked('import type { ProbePipeline } from \'../../features/sheet-editor/outbox/testing/pipeline-probe.ts\'\n\nexport type P = ProbePipeline\n', WORKER_IMPLEMENTATION[1] ?? '', RULE, WORKER_AREA_MESSAGE)
+    await expectBlocked('import \'../../features/document-editor/outbox/testing/outbox-probe.ts\'\n\nexport const a = 1\n', WORKER_IMPLEMENTATION[0] ?? '', RULE, WORKER_AREA_MESSAGE)
+    await expectBlocked('import type { ProbePipeline } from \'../../features/document-editor/outbox/testing/pipeline-probe.ts\'\n\nexport type P = ProbePipeline\n', WORKER_IMPLEMENTATION[1] ?? '', RULE, WORKER_AREA_MESSAGE)
   })
 
   it('Worker 一侧（直接）：引用只在主线程用的模块报错——三个目录、值、副作用导入与再导出都算，每处只报这一条；类型照常', async () => {
@@ -852,8 +945,8 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
   it('Worker 一侧（间接）：区域之外的一律报错——没列进 Worker 一侧的文件、编辑器页与 shared 的别的模块、别的包、换了写法或带查询的路径、区域之外的类型、动态 import()；中转的文件只能在 Worker 一侧，它自己同样受约束', async () => {
     const outside: (readonly [string, string])[] = [
       // 页面一侧的模块经中转进 Worker：Worker 的客户端引用的编辑权、同一目录里没列进 Worker 一侧的文件（可能是页面一侧的）
-      [WORKER_IMPLEMENTATION[1] ?? '', 'import { a } from \'../../features/sheet-editor/edit-lease.ts\'\n\nexport const b = a\n'],
-      [WORKER_IMPLEMENTATION[1] ?? '', 'import { a } from \'../../features/sheet-editor/outbox/outbox-session.ts\'\n\nexport const b = a\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import { a } from \'../../features/document-editor/edit-lease.ts\'\n\nexport const b = a\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import { a } from \'../../features/document-editor/outbox/outbox-session.ts\'\n\nexport const b = a\n'],
       [WORKER_TESTING[0] ?? '', 'import { a } from \'./probe-helper.ts\'\n\nexport const b = a\n'],
       [WORKER_TESTING[0] ?? '', 'import { a } from \'../outbox-session.ts\'\n\nexport const b = a\n'],
       [WORKER_TESTING[0] ?? '', 'import { a } from \'../../edit-lease.ts\'\n\nexport const b = a\n'],
@@ -866,7 +959,7 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
       [WORKER_SHARED, 'import { a } from \'./draft-record\'\n\nexport const b = a\n'],
       [WORKER_IMPLEMENTATION[1] ?? '', 'import OutboxWorker from \'./outbox.worker.ts?worker\'\n\nexport const W = OutboxWorker\n'],
       // 区域之外的类型也不放行（放行类型的只有只在主线程用的那几个模块的确切写法）
-      [WORKER_IMPLEMENTATION[1] ?? '', 'import type { EditLease } from \'../../features/sheet-editor/edit-lease.ts\'\n\nexport type L = EditLease\n'],
+      [WORKER_IMPLEMENTATION[1] ?? '', 'import type { EditLease } from \'../../features/document-editor/edit-lease.ts\'\n\nexport type L = EditLease\n'],
     ]
     for (const [file, code] of outside)
       await expectBlocked(code, file, RULE, WORKER_AREA_MESSAGE)

@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { blockInteractions } from '../document-editor/index.ts'
 import { csvFile, csvFixture, pending } from './csv-controller.test-support.ts'
 import { CsvEntry } from './csv-entry.tsx'
-import { blockInteractions } from './interaction-barrier.ts'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
