@@ -1,4 +1,4 @@
-import type { CreatedDocument, DocumentType } from '@nerve-office/contracts'
+import type { CreatableDocumentType, CreatedDocument } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { Actor } from './document-access-policy.ts'
@@ -27,7 +27,7 @@ import { SpaceTreeRepository } from './space-tree.repository.ts'
 
 /** 新建请求（已经过 contracts 的校验）。 */
 export interface CreateDocumentCommand {
-  readonly type: DocumentType
+  readonly type: CreatableDocumentType
   readonly title?: string | undefined
   readonly requestId: string
   /** 建在哪个空间；没有时是本人的个人空间（M1 兼容） */
@@ -36,8 +36,8 @@ export interface CreateDocumentCommand {
   readonly folderId?: string | undefined
 }
 
-/** 各类型的模板快照：换上文档的 unitId 之后的 JSON 文本（P4 设计 §3.4）。 */
-const TEMPLATES: Readonly<Record<DocumentType, (unitId: string) => string>> = { sheet: sheetSnapshotFor }
+/** 各可新建类型的模板快照：换上文档的 unitId 之后的 JSON 文本（P4 设计 §3.4）。文字文档的模板在 M6-P2 随编辑器生成 */
+const TEMPLATES: Readonly<Record<CreatableDocumentType, (unitId: string) => string>> = { sheet: sheetSnapshotFor }
 
 /** 新文档的内容：模板换上 unitId 之后 gzip 压缩的字节，连同它的规范化哈希与非空的资源名（M3-P3 设计 §3.1） */
 interface TemplateContent {
@@ -56,7 +56,7 @@ interface TemplateContent {
  * 哈希按每份文档单独算：模板的顶层 id 换成了这份文档的 unitId，unitId 不同哈希就不同。在主线程里调快照的检查（不经子进程）：
  * 模板约 1 KiB，检查与规范化不到一毫秒；模板过不了检查是平台自己的数据错了（模板的更新工具与 E2E 会先发现），按意外错误处理
  */
-function templateContent(type: DocumentType, unitId: string): TemplateContent {
+function templateContent(type: CreatableDocumentType, unitId: string): TemplateContent {
   const raw = Buffer.from(TEMPLATES[type](unitId), 'utf8')
   const inspected = inspectSnapshot(raw, DOCUMENT_PROFILE_OF[type])
   if (!inspected.ok)

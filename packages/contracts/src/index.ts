@@ -138,6 +138,7 @@ export {
   conflictCopyTitle,
   COPIED_TITLE_SUFFIX,
   copiedDocumentTitle,
+  CREATABLE_DOCUMENT_TYPES,
   createdDocumentSchema,
   DEFAULT_DOCUMENT_TITLES,
   DOCUMENT_ACCESS_VIA,
@@ -159,8 +160,11 @@ export {
   documentTitleSchema,
   PLATFORM_FORMAT_VERSION,
   PLATFORM_FORMAT_VERSIONS,
+  responseDocumentTypeSchema,
+  UNKNOWN_DOCUMENT_TYPE,
 } from './documents/documents.ts'
 export type {
+  CreatableDocumentType,
   CreatedDocument,
   DocumentAccessVia,
   DocumentDetail,
@@ -173,6 +177,7 @@ export type {
   DocumentSummary,
   DocumentType,
   PlatformFormatVersion,
+  ResponseDocumentType,
 } from './documents/documents.ts'
 export { documentDraftFactSchema, documentDraftFactsQuerySchema, documentDraftFactsResponseSchema, DRAFT_FACTS_MAX_IDS } from './documents/draft-facts.ts'
 export type { DocumentDraftFact, DocumentDraftFactsQuery, DocumentDraftFactsResponse } from './documents/draft-facts.ts'

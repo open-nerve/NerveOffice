@@ -281,6 +281,13 @@
       "when": 1793879164699,
       "tag": "0039_m5_revision_asset_ids",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1795001716661,
+      "tag": "0040_m6_doc_type",
+      "breakpoints": true
     }
   ]
 }

@@ -975,6 +975,7 @@ function setup(options: Setup = {}) {
     surface,
     chrome,
     api,
+    documentType: 'sheet',
     createEditor,
     page,
     sessionChannel: channel,
@@ -1858,7 +1859,11 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   it.each([
     ['档案', { profile: 'sheet@2' }],
     ['格式版本', { formatVersion: 2 }],
-  ])('%s不认识：不进入编辑，不改写', async (_case, change) => {
+    // M6-P1 设计 §3.4：按类型装配编辑器。本页装配的是表格；文字文档的编辑器在 M6-P2，之前打开文字文档不能交给表格编辑器
+    ['类型（文字文档，本页没有装配它的编辑器）', { type: 'doc', profile: 'doc@1' }],
+    ['类型（响应里没见过的）', { type: 'unknown', profile: 'slides@1' }],
+    ['类型与档案不配（表格带着文字文档的档案）', { profile: 'doc@1' }],
+  ] as const)('%s不认识：不进入编辑，不改写', async (_case, change) => {
     const { editorPage, createEditor } = setup({ api: { document: async () => ({ ...DETAIL, ...change }) } })
     await editorPage.load()
     expect(editorPage.view().load).toEqual({ kind: 'unsupported' })

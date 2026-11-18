@@ -84,7 +84,16 @@ function workbookStructure(snapshot: unknown): CheckedStructure | undefined {
   return { unitId: id, snapshot }
 }
 
+/**
+ * 文字文档在 M6-P1 的 S4 补上结构与链接的规则；在那之前结构一律不通过，服务端整体拒收 doc@1 的快照（规则 structure）。
+ * 结构不通过就不会检查链接
+ */
+function docStructurePending(): CheckedStructure | undefined {
+  return undefined
+}
+
 /** 各档案的结构与链接的规则 */
 export const PROFILE_SNAPSHOT_RULES: Readonly<Record<DocumentProfile, ProfileSnapshotRules>> = {
   'sheet@1': { structure: workbookStructure, links: checked => checkWorkbookLinks(checked.snapshot) },
+  'doc@1': { structure: docStructurePending, links: () => ({ ok: true }) },
 }

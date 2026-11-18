@@ -240,3 +240,12 @@ describe('工作簿里的链接（sheet@1）', () => {
     expect(links(workbook({ s: { cellData: 1 } }))).toBe('ok')
   })
 })
+
+describe('doc@1 在规则补齐之前整体拒收（M6-P1 S2；S4 补上文字文档的结构与链接规则）', () => {
+  it('任何快照的结构都不通过：包括 M0 的文字文档样本的形状与表格的模板', () => {
+    const doc = PROFILE_SNAPSHOT_RULES['doc@1']
+    const docShaped = { id: UNIT_ID, body: { dataStream: '正文\r\n', paragraphs: [{ startIndex: 2 }], sectionBreaks: [{ startIndex: 3 }] }, documentStyle: {} }
+    for (const snapshot of [docShaped, JSON.parse(sheetSnapshotFor(UNIT_ID)) as unknown, {}, null])
+      expect(doc.structure(snapshot)).toBeUndefined()
+  })
+})

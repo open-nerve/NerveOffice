@@ -44,6 +44,8 @@ export const PROFILE_RESOURCES = {
     SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN: { entries: 'array', mustBeEmpty: true },
     SHEET_RANGE_THEME_MODEL_PLUGIN: { entries: 'object', mustBeEmpty: true },
   },
+  // doc@1 的五项资源（插件档案 v1 §3）在 M6-P1 的 S3、S4 随资源规则模型的扩展补上；在那之前白名单为空，服务端整体拒收文字文档的快照
+  'doc@1': {},
 } as const satisfies Readonly<Record<DocumentProfile, Readonly<Record<string, ResourceRule>>>>
 
 /** 档案 P 的资源名（白名单里的一项）：web 的档案按它声明各组的资源，写错名字类型检查就不通过 */

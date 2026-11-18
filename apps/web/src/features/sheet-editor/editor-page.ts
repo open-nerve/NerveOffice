@@ -15,7 +15,7 @@
 // 取自载入时确认的会话。请求编辑（设计 §3.6）："请求编辑""取消请求"与持有者提示里的"交出""继续编辑"都是写的操作，与"编辑"一样先确认会话；
 // 能不能强制接管取自载入时的详情（之后随编辑状态更新）。"强制接管"（设计 §3.8）是写的操作：页头先确认（确认框关掉之后才交到这里），这里与"编辑"
 // 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
-import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { DocumentAccessVia, DocumentDetail, DocumentSpace, DocumentType, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
 import type { EditorImageAccess, ImageInputState } from '../../editor/index.ts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { CsvTable } from '../../shared/csv/index.ts'
@@ -41,7 +41,7 @@ import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility } from './reading-checks.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveView } from './save-coordinator.ts'
-import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
+import { DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { documentIsNewer, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 import { disabledSessionUserId, isAuthenticationError, isCsrfTokenError, isMissingResource, setApiSession, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
@@ -173,6 +173,8 @@ export interface EditorPageOptions {
   /** 页头：交互屏障挂着时只有它可以交互（interaction-barrier.ts） */
   readonly chrome: HTMLElement
   readonly api: EditorPageApi
+  /** 本页装配的编辑器能打开的文档类型（M6-P1 设计 §3.4）：别的类型进入“格式不受支持”，不创建编辑器 */
+  readonly documentType: DocumentType
   /**
    * 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定；页面自己的界面（页头）也交过去——组合输入与面板防抖的输入目标在页头里的
    * 不算文档的输入（M3-P4 设计 §3.6）
@@ -279,9 +281,13 @@ export interface CreatedCsvIntent {
 
 export type EditorSurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
 
-/** 本页认识的档案与格式版本；别的一律不进入编辑，也不改写（计划书 §8.7） */
-function isKnownFormat(document: DocumentDetail): boolean {
-  return (DOCUMENT_PROFILES as readonly string[]).includes(document.profile)
+/**
+ * 本页能打开的类型、档案与格式版本；别的一律不进入编辑，也不改写（计划书 §8.7）。按类型装配编辑器（M6-P1 设计 §3.4）：
+ * 只打开本页装配的类型，档案必须是这类文档的档案——别的类型（包括响应里没见过的）不交给这里的编辑器
+ */
+function isKnownFormat(document: DocumentDetail, documentType: DocumentType): boolean {
+  return document.type === documentType
+    && document.profile === DOCUMENT_PROFILE_OF[documentType]
     && (PLATFORM_FORMAT_VERSIONS as readonly number[]).includes(document.formatVersion)
 }
 
@@ -1082,7 +1088,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
       if (disposed)
         return
-      if (!isKnownFormat(document)) {
+      if (!isKnownFormat(document, options.documentType)) {
         finish({ kind: 'unsupported' })
         return
       }

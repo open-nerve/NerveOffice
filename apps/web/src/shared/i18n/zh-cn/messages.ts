@@ -2,7 +2,7 @@
 // 这个文件是平台页面首屏用到的部分（经 shared/i18n/index.ts 给出）：页框、登录与账户、空间页与整理、错误与按错误码的提示、人名。
 // 只给按需加载的页面用的文案按功能各放一个文件（同目录的 admin.ts、members.ts、colleagues.ts、trash.ts、search.ts），
 // 编辑器页的在 editor.ts：各功能按路径引用自己那份，不进平台页面的首屏（M2-P6 复核第二批；lint 的模块边界限定谁能引用）
-import type { DocumentType, ErrorCode, LinkInvalidReason, OneTimeLinkPurpose, SpaceRole, SpaceType, UserStatus } from '@nerve-office/contracts'
+import type { ErrorCode, LinkInvalidReason, OneTimeLinkPurpose, ResponseDocumentType, SpaceRole, SpaceType, UserStatus } from '@nerve-office/contracts'
 import { FOLDER_MAX_DEPTH } from '@nerve-office/contracts'
 
 /**
@@ -97,8 +97,11 @@ const LINK_MISSING_MESSAGES: Record<OneTimeLinkPurpose, string> = {
   password_reset: '请重新打开发给你的重置链接。为了安全，链接打开之后会从地址栏里去掉，所以刷新页面后要重新打开它。',
 }
 
-const DOCUMENT_TYPE_NAMES: Record<DocumentType, string> = {
+/** 文档类型的名称；unknown 是响应里没见过的类型（以后的版本加的，M6 总设计 §2.2 第 5 条） */
+const DOCUMENT_TYPE_NAMES: Record<ResponseDocumentType, string> = {
   sheet: '表格',
+  doc: '文字文档',
+  unknown: '未知类型',
 }
 
 const SPACE_TYPE_NAMES: Record<SpaceType, string> = { personal: '个人空间', team: '团队空间' }
@@ -322,7 +325,7 @@ export const messages = {
     loadFailed: '文档列表加载失败',
     loadMore: '加载更多',
     loadingMore: '正在加载…',
-    typeName: (type: DocumentType) => DOCUMENT_TYPE_NAMES[type],
+    typeName: (type: ResponseDocumentType) => DOCUMENT_TYPE_NAMES[type],
     updatedAt: (time: string) => `更新于 ${time}`,
     create: '新建表格',
     createCsv: '从 CSV 新建',

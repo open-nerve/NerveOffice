@@ -206,6 +206,8 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
     documentId: documentIdFromPagePath(window.location.pathname),
     surface: elements.surface,
     chrome: elements.chrome,
+    // 本页装配表格编辑器（M6-P1 设计 §3.4）：文字文档的编辑器在 M6-P2
+    documentType: 'sheet',
     api: {
       session: async () => requestSession(),
       document: async documentId => fetchDocument(documentId),

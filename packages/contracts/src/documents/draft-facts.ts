@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { revisionSourceSchema } from './content.ts'
-import { DOCUMENT_TYPES, documentIdSchema } from './documents.ts'
+import { documentIdSchema, responseDocumentTypeSchema } from './documents.ts'
 
 export const DRAFT_FACTS_MAX_IDS = 100
 
@@ -17,7 +17,7 @@ export const documentDraftFactSchema = z.discriminatedUnion('status', [
     status: z.literal('accessible'),
     id: documentIdSchema,
     title: z.string(),
-    type: z.enum(DOCUMENT_TYPES),
+    type: responseDocumentTypeSchema,
     canEdit: z.boolean(),
     revision: z.number().int().min(1),
     revisionSource: revisionSourceSchema.nullable(),

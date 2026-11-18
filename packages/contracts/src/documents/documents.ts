@@ -3,8 +3,28 @@ import { uuidSchema } from '../ids/ids.ts'
 import { codePointLength, titleTextSchema } from '../text/text.ts'
 
 /** 文档类型：M1 只有表格，M6 加上文字文档（doc）。新增取值时，同时用迁移更新 documents.type 的 CHECK 约束。 */
-export const DOCUMENT_TYPES = ['sheet'] as const
+export const DOCUMENT_TYPES = ['sheet', 'doc'] as const
 export type DocumentType = (typeof DOCUMENT_TYPES)[number]
+
+/**
+ * 可以新建的类型（M6-P1 设计 §3.2）：新建要用经编辑器页生成的模板，文字文档的模板在 M6-P2 随编辑器一起生成，
+ * 在那之前新建请求只收表格。已有的文字文档（测试夹具）照常读取、保存
+ */
+export const CREATABLE_DOCUMENT_TYPES = ['sheet'] as const satisfies readonly DocumentType[]
+export type CreatableDocumentType = (typeof CREATABLE_DOCUMENT_TYPES)[number]
+
+/**
+ * 响应里没见过的文档类型（M6 总设计 §2.2 第 5 条）：以后的版本会加类型，打开着的旧页面遇到新类型时，这一项解析成 unknown，
+ * 不让整个响应作废（列表、搜索、历史、草稿事实、管理端照常显示其余条目），页面对它只给出“未知类型”。
+ * 只宽容没见过的非空字符串：缺少、空串与非字符串仍是格式错误，不猜测（M4-P4 草稿事实“缺失不能猜测为默认事实”）。
+ * 服务端由数据库的行产出类型（受 CHECK 约束），不会产出 unknown；写入接口（新建）仍按已知的取值严格校验
+ */
+export const UNKNOWN_DOCUMENT_TYPE = 'unknown'
+export type ResponseDocumentType = DocumentType | typeof UNKNOWN_DOCUMENT_TYPE
+export const responseDocumentTypeSchema = z.union([
+  z.enum(DOCUMENT_TYPES),
+  z.string().min(1).transform((): typeof UNKNOWN_DOCUMENT_TYPE => UNKNOWN_DOCUMENT_TYPE),
+])
 
 /**
  * 文档状态：正常；在回收站里（M2-P4：随删除单元一起进回收站，30 天后永久删除）。
@@ -17,11 +37,11 @@ export type DocumentStatus = (typeof DOCUMENT_STATUSES)[number]
  * 插件档案（00 号计划书 §8.2）：一种文档类型固定使用的插件、注册顺序与影响数据的配置，标识带版本。
  * 新增取值时，同时用迁移更新 documents.profile 的 CHECK 约束；已有的档案不改内容，变更就发新版本。
  */
-export const DOCUMENT_PROFILES = ['sheet@1'] as const
+export const DOCUMENT_PROFILES = ['sheet@1', 'doc@1'] as const
 export type DocumentProfile = (typeof DOCUMENT_PROFILES)[number]
 
-/** 新建各类型的文档时使用的档案。 */
-export const DOCUMENT_PROFILE_OF: Readonly<Record<DocumentType, DocumentProfile>> = { sheet: 'sheet@1' }
+/** 各类型的文档使用的档案（新建时写入；另存为副本按它记信封，M6-P1 设计 §3.4）。 */
+export const DOCUMENT_PROFILE_OF: Readonly<Record<DocumentType, DocumentProfile>> = { sheet: 'sheet@1', doc: 'doc@1' }
 
 /**
  * 平台格式版本（00 号计划书 §8.1）：本平台快照信封的格式，与 SDK 版本独立。
@@ -37,7 +57,7 @@ export const PLATFORM_FORMAT_VERSION: PlatformFormatVersion = 1
 export const DOCUMENT_TITLE_MAX_LENGTH = 200
 
 /** 新建时没有给标题，用这个。 */
-export const DEFAULT_DOCUMENT_TITLES: Readonly<Record<DocumentType, string>> = { sheet: '未命名表格' }
+export const DEFAULT_DOCUMENT_TITLES: Readonly<Record<DocumentType, string>> = { sheet: '未命名表格', doc: '未命名文字文档' }
 
 /** 复制出来的文档，标题在源标题后面加这一段（M2-P4 设计 §3.4 第 4 条）。 */
 export const COPIED_TITLE_SUFFIX = ' 的副本'
@@ -101,7 +121,7 @@ export type DocumentListQuery = z.infer<typeof documentListQuerySchema>
 export const documentSummarySchema = z.object({
   id: z.uuid(),
   title: z.string(),
-  type: z.enum(DOCUMENT_TYPES),
+  type: responseDocumentTypeSchema,
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 })
