@@ -11,7 +11,7 @@ import type { EditingActor } from './edit-lease.service.ts'
 import type { RevisionNoneMatch } from './if-none-match.ts'
 import type { PassedSnapshot } from './upload-inspection.ts'
 import { Buffer } from 'node:buffer'
-import { shrunkResources } from '@nerve-office/contracts'
+import { DOCUMENT_PROFILE_OF, shrunkResources } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
@@ -205,7 +205,7 @@ export class DocumentContentService {
       if (query.baseRevision !== document.revision)
         throw await this.conflict(saver.userId, document, transaction)
       if (snapshot.unitId !== document.unitId)
-        throw rejectedSnapshot(this.#logger, 'unit-id', id)
+        throw rejectedSnapshot(this.#logger, 'unit-id', id, DOCUMENT_PROFILE_OF[document.type])
 
       const current = await this.contents.findEnvelope(id, transaction)
       if (current === undefined)
@@ -253,7 +253,7 @@ export class DocumentContentService {
       return
     const missing = shrunkResources(previous, snapshot.presentResources, INSPECTED_PROFILE)
     if (missing.length > 0)
-      throw rejectedSnapshot(this.#logger, 'resource-missing', id, { missing })
+      throw rejectedSnapshot(this.#logger, 'resource-missing', id, INSPECTED_PROFILE, { missing })
   }
 
   /** 上一版非空的资源名：存下的；存量（为空）时解析上一版，解析不了时记一条警告、为 undefined（没有可核对的上一版） */

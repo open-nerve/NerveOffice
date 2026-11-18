@@ -1,12 +1,12 @@
 // 插件档案的资源规则（00 号计划书 §8.2、§11.2，插件档案 v1 §3，M3-P3 设计 §3.2）：前后端共用的纯数据与纯函数，不依赖 Univer。
 // - 白名单：档案注册的插件声明的资源。web 的档案（editor/profile/sheet-profile.ts）按这里的名称声明各组的资源，单元测试核对两边一致；
 // - 必须为空：保护类（保护规则不是安全边界，界面也隐藏了解除入口）与区域主题（界面在没有注册的 sheets-table 里）；
-// - 已知资源只核对最小的结构：data 是空串或 JSON、顶层是对象、每个键下的值是这类资源该有的种类（数组或对象）。种类出自各插件的
+// - 已知资源只核对最小的结构（规则分三种 kind，见 ResourceRule）：表格的是 data 为空串或 JSON、顶层是对象、每个键下的值是这类资源该有的种类（数组或对象）。种类出自各插件的
 //   toJson 与 onLoad（refer/univer 1.0）：种类不对时 SDK 加载就出错（例如条件格式展开每个键下的规则表，筛选按对象反序列化）。
 //   逐字段的结构不做：没有证据支撑时误拒的风险高（M0-P2 报告 §3，M3 总设计 §7）。
 // "空"按深层为空判断：null、空串、空对象、空数组，或者每一层都为空——规则删光之后的区域保护是 { 工作表 id: [] }，不能误拒（M0 的 resource-guard）。
 // 页面的打开自检（M3-P4 设计 §3.11）用同一个口径比较加载前后的资源（lostResources）：与服务端的"不缩水"同一份白名单与"空"的定义。
-// 按档案组织：以后的 doc@1（M6）在 PROFILE_RESOURCES 里加一项
+// 按档案组织：sheet@1 与 doc@1（M6-P1，文字文档的资源与正文是否一致由服务端的交叉核对管）各一项
 import type { DocumentProfile } from './documents.ts'
 import type { SnapshotRule } from './snapshot-rules.ts'
 import { compareCodeUnits, isEmptyLeaf, isJsonObject } from './json-values.ts'
@@ -14,15 +14,28 @@ import { compareCodeUnits, isEmptyLeaf, isJsonObject } from './json-values.ts'
 /** 资源 data 解析后，顶层每个键下的值的种类 */
 export type ResourceEntryKind = 'array' | 'object'
 
-/** 一项资源的规则 */
-export interface ResourceRule {
-  /**
-   * 顶层每个键下的值的种类。键多是工作表 id；定义名称的键是名称的 id，工作表保护与保护点的键是 unitId，
-   * 区域主题的键是它的两张表（rangeThemeStyleRuleMap、rangeThemeStyleMapJson）
-   */
-  readonly entries: ResourceEntryKind
-  /** 必须为空（深层为空） */
-  readonly mustBeEmpty: boolean
+/**
+ * 一项资源的规则（M6-P1 S3 spec §2）：
+ * - entries：顶层是对象，每个键下的值都是 entries 那一种（sheet@1 的十项，M3 起的语义不变）。键多是工作表 id；定义名称的键是名称的 id，
+ *   工作表保护与保护点的键是 unitId，区域主题的键是它的两张表（rangeThemeStyleRuleMap、rangeThemeStyleMapJson）；mustBeEmpty 是必须深层为空；
+ * - empty：必须深层为空，data 是空串或任何 JSON，不要求顶层是对象（文字文档的权限资源 SDK 写的是 []）；
+ * - shaped：空串，或者通过 shape 的判定（文字文档的图片与链接：只核对读得出这一项要的几个字段，多出的键不看）
+ */
+export type ResourceRule
+  = | { readonly kind: 'entries', readonly entries: ResourceEntryKind, readonly mustBeEmpty: boolean }
+    | { readonly kind: 'empty' }
+    | { readonly kind: 'shaped', readonly shape: (value: unknown) => boolean }
+
+/** 文字文档的图片资源：{ data: { 图片 id: 图片 }, order: 图片 id[] }（docs-drawing 的 toJson 就是快照的 drawings 与 drawingsOrder） */
+function isDocDrawings(value: unknown): boolean {
+  return isJsonObject(value) && isJsonObject(value.data) && Object.values(value.data).every(isJsonObject)
+    && Array.isArray(value.order) && (value.order as readonly unknown[]).every(id => typeof id === 'string')
+}
+
+/** 文字文档的链接资源：{ links: { id, payload }[] }（docs-hyper-link 的 toJson：正文 HYPERLINK 区间的 rangeId 与地址） */
+function isDocLinks(value: unknown): boolean {
+  return isJsonObject(value) && Array.isArray(value.links)
+    && (value.links as readonly unknown[]).every(link => isJsonObject(link) && typeof link.id === 'string' && typeof link.payload === 'string')
 }
 
 /**
@@ -33,19 +46,26 @@ export interface ResourceRule {
  */
 export const PROFILE_RESOURCES = {
   'sheet@1': {
-    SHEET_CONDITIONAL_FORMATTING_PLUGIN: { entries: 'array', mustBeEmpty: false },
-    SHEET_DATA_VALIDATION_PLUGIN: { entries: 'array', mustBeEmpty: false },
-    SHEET_DEFINED_NAME_PLUGIN: { entries: 'object', mustBeEmpty: false },
-    SHEET_DRAWING_PLUGIN: { entries: 'object', mustBeEmpty: false },
-    SHEET_FILTER_PLUGIN: { entries: 'object', mustBeEmpty: false },
-    SHEET_NOTE_PLUGIN: { entries: 'object', mustBeEmpty: false },
-    SHEET_RANGE_PROTECTION_PLUGIN: { entries: 'array', mustBeEmpty: true },
-    SHEET_WORKSHEET_PROTECTION_PLUGIN: { entries: 'array', mustBeEmpty: true },
-    SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN: { entries: 'array', mustBeEmpty: true },
-    SHEET_RANGE_THEME_MODEL_PLUGIN: { entries: 'object', mustBeEmpty: true },
+    SHEET_CONDITIONAL_FORMATTING_PLUGIN: { kind: 'entries', entries: 'array', mustBeEmpty: false },
+    SHEET_DATA_VALIDATION_PLUGIN: { kind: 'entries', entries: 'array', mustBeEmpty: false },
+    SHEET_DEFINED_NAME_PLUGIN: { kind: 'entries', entries: 'object', mustBeEmpty: false },
+    SHEET_DRAWING_PLUGIN: { kind: 'entries', entries: 'object', mustBeEmpty: false },
+    SHEET_FILTER_PLUGIN: { kind: 'entries', entries: 'object', mustBeEmpty: false },
+    SHEET_NOTE_PLUGIN: { kind: 'entries', entries: 'object', mustBeEmpty: false },
+    SHEET_RANGE_PROTECTION_PLUGIN: { kind: 'entries', entries: 'array', mustBeEmpty: true },
+    SHEET_WORKSHEET_PROTECTION_PLUGIN: { kind: 'entries', entries: 'array', mustBeEmpty: true },
+    SHEET_WORKSHEET_PROTECTION_POINT_PLUGIN: { kind: 'entries', entries: 'array', mustBeEmpty: true },
+    SHEET_RANGE_THEME_MODEL_PLUGIN: { kind: 'entries', entries: 'object', mustBeEmpty: true },
   },
-  // doc@1 的五项资源（插件档案 v1 §3）在 M6-P1 的 S3、S4 随资源规则模型的扩展补上；在那之前白名单为空，服务端整体拒收文字文档的快照
-  'doc@1': {},
+  // 文字文档（插件档案 v1 §3）：图片与链接做结构校验，与正文是否一致由服务端的交叉核对管（resource-mismatch）；
+  // 权限只来自权限规则、Word 样式与脚注只来自 Word 导入（本期都不支持），必须为空
+  'doc@1': {
+    DOC_DRAWING_PLUGIN: { kind: 'shaped', shape: isDocDrawings },
+    DOC_HYPER_LINK_PLUGIN: { kind: 'shaped', shape: isDocLinks },
+    DOC_OBJECT_PERMISSION_PLUGIN: { kind: 'empty' },
+    DOC_WORD_STYLES_PLUGIN: { kind: 'empty' },
+    DOC_NOTE_PLUGIN: { kind: 'empty' },
+  },
 } as const satisfies Readonly<Record<DocumentProfile, Readonly<Record<string, ResourceRule>>>>
 
 /** 档案 P 的资源名（白名单里的一项）：web 的档案按它声明各组的资源，写错名字类型检查就不通过 */
@@ -97,7 +117,7 @@ function parseData(data: string): { readonly value: unknown } | undefined {
   }
 }
 
-/** 已知资源的最小结构：空串，或者顶层是对象、每个键下的值是该有的种类 */
+/** 已知资源的最小结构（kind 为 entries）：空串，或者顶层是对象、每个键下的值是该有的种类 */
 function hasResourceShape(value: unknown, kind: ResourceEntryKind): boolean {
   if (value === '')
     return true
@@ -106,14 +126,26 @@ function hasResourceShape(value: unknown, kind: ResourceEntryKind): boolean {
   return Object.values(value).every(item => kind === 'array' ? Array.isArray(item) : isJsonObject(item))
 }
 
+/** 按规则的 kind 核对最小结构：empty 不看形状（是否为空另判）；shaped 是空串或通过它的判定 */
+function hasRuleShape(value: unknown, rule: ResourceRule): boolean {
+  switch (rule.kind) {
+    case 'entries':
+      return hasResourceShape(value, rule.entries)
+    case 'empty':
+      return true
+    case 'shaped':
+      return value === '' || rule.shape(value)
+  }
+}
+
 /**
  * 按档案检查快照的 resources（00 号计划书 §11.2 的资源一条）：输入是解析之后的值（没有 resources 时传 undefined，按没有资源处理），
  * 任何输入都不抛出。按下面的先后，第一条不满足的就是结果：
  * 1. resources：是数组，每一项是对象、name 与 data 都是字符串（SDK 的 toJson 只写这两个；多出的键不看）；
  * 2. resource-duplicate：名称不重复（SDK 加载同名资源时只取第一条，重复的条目能让伪造的数据生效）；
  * 3. resource-unknown：名称在档案的白名单里；
- * 4. resource-data：data 是空串或 JSON，顶层是对象，每个键下的值是这类资源该有的种类；
- * 5. resource-not-empty：必须为空的资源深层为空。
+ * 4. resource-data：data 是空串或 JSON，并且合这一项规则的最小结构（ResourceRule 的三种 kind）；
+ * 5. resource-not-empty：必须为空的资源（empty，以及 mustBeEmpty 的 entries）深层为空。
  * 不缩水（上一版非空的资源这一版都在）要上一版，见 shrunkResources
  */
 export function checkResources(resources: unknown, profile: DocumentProfile): ResourceCheck {
@@ -144,9 +176,9 @@ export function checkResources(resources: unknown, profile: DocumentProfile): Re
   const parsed: { readonly name: string, readonly empty: boolean, readonly mustBeEmpty: boolean }[] = []
   for (const { name, data, rule } of known) {
     const value = parseData(data)
-    if (value === undefined || !hasResourceShape(value.value, rule.entries))
+    if (value === undefined || !hasRuleShape(value.value, rule))
       return { ok: false, rule: 'resource-data', resource: name }
-    parsed.push({ name, empty: isDeepEmpty(value.value), mustBeEmpty: rule.mustBeEmpty })
+    parsed.push({ name, empty: isDeepEmpty(value.value), mustBeEmpty: rule.kind === 'empty' || (rule.kind === 'entries' && rule.mustBeEmpty) })
   }
   for (const { name, empty, mustBeEmpty } of parsed) {
     if (mustBeEmpty && !empty)

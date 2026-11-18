@@ -11,7 +11,7 @@ import { z } from 'zod'
 import { readJson, REPO_ROOT } from '../shared/repo.ts'
 import { parseRegistry } from '../stories/stories.ts'
 import { readFixture } from './fixtures.ts'
-import { ARTIFACT_POLICY } from './policy.ts'
+import { ARTIFACT_POLICY, AUDIT_EXCEPTIONS } from './policy.ts'
 import { artifactsGate, auditGate, budgetsGate, GATE_NAMES, runGate, storiesGate } from './run.ts'
 
 /** runGate 的样例输入：没有注入的命令一执行就失败（装配用了真实的命令时立即发现），产物目录不存在，日期写定 */
@@ -379,15 +379,26 @@ describe('US-M1-11 体积预算门禁的装配', () => {
 })
 
 describe('US-M1-11 漏洞门禁的装配', () => {
+  it('仓库登记的漏洞例外都写明 GHSA 编号、原因与到期日（YYYY-MM-DD），编号不重复', () => {
+    for (const exception of AUDIT_EXCEPTIONS) {
+      expect(exception.id).toMatch(/^GHSA(?:-[2-9cfghjmpqrvwx]{4}){3}$/)
+      expect(exception.reason.trim().length, exception.id).toBeGreaterThan(20)
+      expect(exception.expires).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      expect(Number.isNaN(Date.parse(exception.expires)), exception.id).toBe(false)
+    }
+    expect(new Set(AUDIT_EXCEPTIONS.map(exception => exception.id)).size).toBe(AUDIT_EXCEPTIONS.length)
+  })
+
+  // 装配用例不带仓库登记的例外：例外清单会随漏洞公告变化（2026-11-18 登记了第一条），这里只测装配
   it('生产依赖的漏洞失败，全部依赖的计数写进说明（真实输出）', () => {
     const report = readFixture('pnpm-12/audit-with-advisories.json')
-    const outcome = auditGate(() => report, '2026-09-26')
+    const outcome = auditGate(() => report, '2026-09-26', [])
     expect(outcome.violations.map(v => v.rule)).toEqual(['audit/advisory', 'audit/advisory', 'audit/advisory'])
     expect(outcome.notes[0]).toContain('critical 1')
   })
 
   it('pnpm 的输出结构不对时直接报错，不当作没有漏洞', () => {
-    expect(() => auditGate(() => ({ advisories: {} }), '2026-09-26')).toThrow()
+    expect(() => auditGate(() => ({ advisories: {} }), '2026-09-26', [])).toThrow()
   })
 
   // 2026-10-03 合并 M2-P5 之后的 CI：开发依赖里出现一条还没有修复版本的高危公告（braces，经 eslint-plugin-boundaries），
@@ -395,7 +406,7 @@ describe('US-M1-11 漏洞门禁的装配', () => {
   it('全部依赖里有还没有修复版本的公告（真实输出：patched_versions 为 null）：照常解析；只在开发依赖里时不失败，计数写进说明', () => {
     const unpatched = readFixture('pnpm-12/audit-unpatched-advisory.json')
     const empty = { advisories: {}, metadata: { vulnerabilities: { info: 0, low: 0, moderate: 0, high: 0, critical: 0 } } }
-    const outcome = auditGate((_command, args) => (args.includes('--prod') ? empty : unpatched), '2026-10-03')
+    const outcome = auditGate((_command, args) => (args.includes('--prod') ? empty : unpatched), '2026-10-03', [])
     expect(outcome.violations).toEqual([])
     expect(outcome.notes[0]).toContain('high 1')
   })
@@ -407,6 +418,6 @@ describe('US-M1-11 runGate 的门禁表按注入的输入装配（M2-P6 第 6 �
     expect(runGate('artifacts', sampleInputs({ webDist: dist }))).toEqual(artifactsGate(dist))
     expect(runGate('budgets', sampleInputs({ webDist: dist }))).toEqual(budgetsGate(dist))
     const report = readFixture('pnpm-12/audit-with-advisories.json')
-    expect(runGate('audit', sampleInputs({ run: () => report }))).toEqual(auditGate(() => report, '2026-09-26'))
+    expect(runGate('audit', sampleInputs({ run: () => report }))).toEqual(auditGate(() => report, '2026-09-26', AUDIT_EXCEPTIONS))
   })
 })

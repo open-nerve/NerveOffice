@@ -124,7 +124,7 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown, sheetName
   }
   // 快照被服务端拒绝（M3-P3）：按违反的规则说（链接、图片、资源、过于复杂……），不认识的规则照"格式不正确"说
   if (problem.error instanceof ApiError && problem.error.code === 'SNAPSHOT_INVALID')
-    return { text: editorMessages.saveFailed(snapshotProblem(problem.error.details, sheetName)), requestId: problem.error.requestId, destructive: true }
+    return { text: editorMessages.saveFailed(snapshotProblem(problem.error.details, 'sheet', sheetName)), requestId: problem.error.requestId, destructive: true }
   // 400（请求不合法）是这次请求本身的问题，按错误码说明（M2-P6 复核第二批 G-5）
   const error = describeError(problem.error)
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
@@ -642,7 +642,7 @@ function CopiedNote({ title, documentId }: { title: string, documentId: string }
 function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>, sheetName: SheetName): string {
   if (refused.refusal === 'outdated')
     return editorMessages.lost.copyOutdated
-  const problem = refused.error.code === 'PAYLOAD_TOO_LARGE' ? editorMessages.capacityExceeded : snapshotProblem(refused.error.details, sheetName)
+  const problem = refused.error.code === 'PAYLOAD_TOO_LARGE' ? editorMessages.capacityExceeded : snapshotProblem(refused.error.details, 'sheet', sheetName)
   return editorMessages.lost.copyRefused(problem)
 }
 

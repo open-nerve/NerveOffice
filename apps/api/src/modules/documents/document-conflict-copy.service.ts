@@ -8,6 +8,7 @@ import type { HeldAssetReferences } from './document-asset-references.ts'
 import type { RevisionRow } from './document-revisions.repository.ts'
 import type { DocumentRow } from './documents.repository.ts'
 import { Buffer } from 'node:buffer'
+import { DOCUMENT_PROFILE_OF } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { inIdOrder } from '../../shared/id-order.ts'
@@ -110,7 +111,7 @@ export class DocumentConflictCopyService {
       const checked = await requireAccess(this.policy, userId, await this.documents.findById(id, transaction), transaction)
       // unitId 终身不变，不必等锁：内容不属于这份文档的请求同样不取锁
       if (snapshot.unitId !== checked.document.unitId)
-        throw rejectedSnapshot(this.#logger, 'unit-id', id)
+        throw rejectedSnapshot(this.#logger, 'unit-id', id, DOCUMENT_PROFILE_OF[checked.document.type])
       const sourceSpaceId = checked.document.spaceId
       const personalSpaceId = await this.personalSpaceIdOf(userId, transaction)
       const intoSource = await creatableSpace(this.policy, actor, sourceSpaceId, transaction) !== undefined

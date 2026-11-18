@@ -64,36 +64,47 @@ export function inspectionChildEntry(moduleUrl: string = import.meta.url): Inspe
   }
 }
 
-const LINK_MESSAGE = '表格里有不能保存的链接'
+/** 说法里的名词与“不支持的功能”的例子：按快照的档案给出（M6-P1 S3 spec §4） */
+const PROFILE_WORDING: Readonly<Record<DocumentProfile, { readonly noun: string, readonly unsupportedExample: string }>> = {
+  'sheet@1': { noun: '表格', unsupportedExample: '保护' },
+  'doc@1': { noun: '文字文档', unsupportedExample: '权限规则' },
+}
+
+const linkMessage = (noun: string): string => `${noun}里有不能保存的链接`
 
 /** 每条规则的默认说法（错误响应的 message）：页面按 details.rule 给出自己的说法，这里给接口的其他调用方与日志 */
-const SNAPSHOT_INVALID_MESSAGES: Readonly<Record<SnapshotRule, string>> = {
-  'encoding': '表格内容不是 UTF-8 编码的文本',
-  'json': '表格内容不是合法的 JSON',
-  'depth': `表格内容的嵌套超过 ${SNAPSHOT_MAX_DEPTH} 层`,
-  'entries': `表格内容的元素超过 ${SNAPSHOT_MAX_ENTRIES} 个`,
-  'too-complex': '表格内容过于复杂，检查时用的内存超过上限',
-  'structure': '表格内容的结构不正确',
-  'resources': '表格的插件数据的结构不正确',
-  'resource-duplicate': '表格的插件数据有重复的项',
-  'resource-unknown': '表格里有不支持的插件数据',
-  'resource-data': '表格的插件数据的内容不正确',
-  'resource-not-empty': '表格里有不支持的功能的数据（例如保护）',
-  'image-source': '表格里有不能保存的图片',
-  'link-structure': LINK_MESSAGE,
-  'link-address': LINK_MESSAGE,
-  'link-range-id': LINK_MESSAGE,
-  'unit-id': '表格内容不属于这份文档',
-  'resource-missing': '表格缺少上一版里有内容的插件数据',
+const SNAPSHOT_INVALID_MESSAGES: Readonly<Record<SnapshotRule, (wording: typeof PROFILE_WORDING[DocumentProfile]) => string>> = {
+  'encoding': ({ noun }) => `${noun}内容不是 UTF-8 编码的文本`,
+  'json': ({ noun }) => `${noun}内容不是合法的 JSON`,
+  'depth': ({ noun }) => `${noun}内容的嵌套超过 ${SNAPSHOT_MAX_DEPTH} 层`,
+  'entries': ({ noun }) => `${noun}内容的元素超过 ${SNAPSHOT_MAX_ENTRIES} 个`,
+  'too-complex': ({ noun }) => `${noun}内容过于复杂，检查时用的内存超过上限`,
+  'structure': ({ noun }) => `${noun}内容的结构不正确`,
+  'doc-flavor': ({ noun }) => `${noun}的版式不受支持，只支持无分页的版式`,
+  'doc-header-footer': ({ noun }) => `${noun}里有不支持的页眉或页脚`,
+  'doc-section-break': ({ noun }) => `${noun}里有不支持的分节`,
+  'doc-toc': ({ noun }) => `${noun}里有不支持的目录块`,
+  'resources': ({ noun }) => `${noun}的插件数据的结构不正确`,
+  'resource-duplicate': ({ noun }) => `${noun}的插件数据有重复的项`,
+  'resource-unknown': ({ noun }) => `${noun}里有不支持的插件数据`,
+  'resource-data': ({ noun }) => `${noun}的插件数据的内容不正确`,
+  'resource-not-empty': ({ noun, unsupportedExample }) => `${noun}里有不支持的功能的数据（例如${unsupportedExample}）`,
+  'image-source': ({ noun }) => `${noun}里有不能保存的图片`,
+  'link-structure': ({ noun }) => linkMessage(noun),
+  'link-address': ({ noun }) => linkMessage(noun),
+  'link-range-id': ({ noun }) => linkMessage(noun),
+  'resource-mismatch': ({ noun }) => `${noun}的插件数据与正文不一致`,
+  'unit-id': ({ noun }) => `${noun}内容不属于这份文档`,
+  'resource-missing': ({ noun }) => `${noun}缺少上一版里有内容的插件数据`,
 }
 
 /**
- * SNAPSHOT_INVALID 的错误：details.rule 是规则的标识（contracts 的 snapshotInvalidDetailsSchema），说明是这条规则的默认说法。
+ * SNAPSHOT_INVALID 的错误：details.rule 是规则的标识（contracts 的 snapshotInvalidDetailsSchema），说明是这条规则按档案的默认说法。
  * 不回显快照的内容（M3-P3 设计 §3.12）；页面按规则给出自己的说法
  */
-export function snapshotInvalid(rule: SnapshotRule, locations: SnapshotIssueLocations = {}): AppError {
+export function snapshotInvalid(rule: SnapshotRule, profile: DocumentProfile, locations: SnapshotIssueLocations = {}): AppError {
   const details = snapshotInvalidDetailsSchema.parse({ ...locations, rule })
-  return new AppError('SNAPSHOT_INVALID', SNAPSHOT_INVALID_MESSAGES[rule], { details })
+  return new AppError('SNAPSHOT_INVALID', SNAPSHOT_INVALID_MESSAGES[rule](PROFILE_WORDING[profile]), { details })
 }
 
 /** 快照的检查：在子进程池里执行（见文件开头）。由 DocumentsModule 按配置建（工厂），退出时关闭 */

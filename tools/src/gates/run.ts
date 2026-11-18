@@ -3,6 +3,7 @@
 // 读取外部输入的方式（执行命令、产物目录、当天日期）可以注入（GateInputs），门禁表按注入的输入装配：
 // 单元测试经 runGate 走一遍装配，确认每个名字接的就是对应的门禁（M2-P6 第 6 片复核第二批 M-1）。
 import type { CollectedGraph } from './dependency-graph.ts'
+import type { AuditException } from './policy.ts'
 import type { Violation } from './types.ts'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
@@ -285,12 +286,12 @@ export function budgetsGate(distDir: string): GateOutcome {
   }
 }
 
-/** today 是当天的日期（YYYY-MM-DD）。 */
-export function auditGate(run: CommandRunner, today: string): GateOutcome {
+/** today 是当天的日期（YYYY-MM-DD）；exceptions 是登记的漏洞例外（仓库的是 policy.ts 的 AUDIT_EXCEPTIONS，由门禁表传入）。 */
+export function auditGate(run: CommandRunner, today: string, exceptions: readonly AuditException[]): GateOutcome {
   const production = auditReportSchema.parse(run('pnpm', ['audit', '--prod', '--json']))
   const all = auditReportSchema.parse(run('pnpm', ['audit', '--json']))
   const counts = Object.entries(all.metadata.vulnerabilities).filter(([, n]) => n > 0).map(([level, n]) => `${level} ${n}`).join('、') || '无'
-  return { name: 'audit', title: '依赖漏洞', violations: checkAudit(production, AUDIT_EXCEPTIONS, today), notes: [`全部依赖（含开发依赖）的漏洞：${counts}`] }
+  return { name: 'audit', title: '依赖漏洞', violations: checkAudit(production, exceptions, today), notes: [`全部依赖（含开发依赖）的漏洞：${counts}`] }
 }
 
 /** 真实的输入：执行命令、仓库里的 web 构建产物、本机当天的日期 */
@@ -312,7 +313,7 @@ function gates(inputs: GateInputs): Readonly<Record<GateName, () => GateOutcome>
     licenses: () => licenses(inputs.run),
     artifacts: () => artifactsGate(inputs.webDist),
     budgets: () => budgetsGate(inputs.webDist),
-    audit: () => auditGate(inputs.run, inputs.today()),
+    audit: () => auditGate(inputs.run, inputs.today(), AUDIT_EXCEPTIONS),
   }
 }
 
