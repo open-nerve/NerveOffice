@@ -81,7 +81,7 @@ function bytesOf(workbook: Workbook | string): Buffer {
 
 /** 规范化的内容哈希（contracts 的口径；服务端用 SHA-256） */
 function hashOf(raw: Buffer): Buffer {
-  return createHash('sha256').update(contentHashInput(canonicalContentText(raw.toString('utf8')))).digest()
+  return createHash('sha256').update(contentHashInput(canonicalContentText(raw.toString('utf8'), 'sheet@1'))).digest()
 }
 
 /** 资源换成给出的（名称与 data），其余照模板 */

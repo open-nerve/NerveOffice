@@ -39,7 +39,7 @@ describe('DocumentCreationService.create', () => {
     expect(raw).toBe(sheetSnapshotFor(row?.unitId ?? ''))
     expect(stored?.rawBytes).toBe(Buffer.byteLength(raw))
     // 内容哈希与非空的资源名（M3-P3）：按这份文档的模板算（unitId 不同，哈希就不同）；模板的资源都是空的
-    const contentHash = createHash('sha256').update(contentHashInput(canonicalContentText(raw))).digest()
+    const contentHash = createHash('sha256').update(contentHashInput(canonicalContentText(raw, 'sheet@1'))).digest()
     expect(stored).toMatchObject({ contentHash, resourceNames: [] })
 
     expect(store.revisions).toEqual([expect.objectContaining({ documentId: detail.id, revision: 1, kind: 'created', requestId: REQUEST_ID, source: null, savedBy: ALICE, contentHash, clientBuild: null })])

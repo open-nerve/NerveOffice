@@ -65,6 +65,7 @@ const SNAPSHOT_RULE_PHRASES: Readonly<Record<SnapshotRule, (wording: SnapshotWor
   'structure': ({ noun }) => `${noun}内容的格式不正确`,
   'doc-flavor': ({ noun }) => `${noun}的版式不受支持（只支持无分页的版式）`,
   'doc-header-footer': ({ noun }) => `${noun}里有不支持的页眉或页脚`,
+  'doc-notes': ({ noun }) => `${noun}里有不支持的脚注或尾注`,
   'doc-section-break': ({ noun }) => `${noun}里有不支持的分节`,
   'doc-toc': ({ noun }) => `${noun}里有不支持的目录块`,
   'depth': ({ noun }) => `${noun}的内容过于复杂（嵌套太深）`,

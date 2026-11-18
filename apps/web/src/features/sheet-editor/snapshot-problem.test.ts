@@ -78,7 +78,7 @@ describe('文字文档的错误说明（M6-P1 S3 spec §4：说法按文档类�
     expect(snapshotProblem({}, 'doc')).toBe('文字文档内容的格式不正确')
     expect(snapshotProblem({ rule: 'link-address' }, 'doc')).toBe('文字文档里有不能保存的链接')
     expect(snapshotProblem({ rule: 'resource-missing' }, 'doc')).toBe('文字文档里缺少上一版有的内容（例如图片、链接），为免丢失没有保存')
-    for (const [rule, word] of [['doc-flavor', '版式'], ['doc-header-footer', '页眉'], ['doc-section-break', '分节'], ['doc-toc', '目录'], ['resource-mismatch', '不一致']] as const)
+    for (const [rule, word] of [['doc-flavor', '版式'], ['doc-header-footer', '页眉'], ['doc-notes', '脚注'], ['doc-section-break', '分节'], ['doc-toc', '目录'], ['resource-mismatch', '不一致']] as const)
       expect(snapshotProblem({ rule }, 'doc'), rule).toContain(word)
   })
 

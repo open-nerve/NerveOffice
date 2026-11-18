@@ -87,7 +87,7 @@ function storedContent(text: string): StoredContent {
   return {
     snapshot: zlib.gzipSync(raw),
     rawBytes: raw.length,
-    contentHash: resources.ok ? createHash('sha256').update(contentHashInput(canonicalContentText(text))).digest() : null,
+    contentHash: resources.ok ? createHash('sha256').update(contentHashInput(canonicalContentText(text, DOCUMENT_PROFILE_OF.sheet))).digest() : null,
     resourceNames: resources.ok ? resources.nonEmpty : null,
   }
 }

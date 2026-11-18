@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { LINK_ADDRESS_CASES, LINK_RANDOM_PIECES, LINK_SCAN_INPUTS, randomLinkAddresses } from './link-address.test-support.ts'
-import { canonicalLink, checkCellLinks, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './link-address.ts'
+import { canonicalLink, checkCellLinks, checkLinkRange, HYPERLINK_RANGE_TYPE, LINK_ADDRESS_INVALID_REASONS, LINK_ADDRESS_MAX_LENGTH, normalizeCellLinks } from './link-address.ts'
 
 /** 规范写法里不能有的字符：复制单元格时 SDK 把地址原样拼进 href="…"，它们能改写剪贴板 HTML 的结构（00 号计划书 §11.3） */
 const CLIPBOARD_UNSAFE = /[\s"<>`]/
@@ -230,5 +230,25 @@ describe('服务端的核对（checkCellLinks）：只判定、不改写', () =>
   it('逐个区间，第一条不满足的就是结果', () => {
     expect(checkCellLinks(cell('abcd', [link('https://ok.example/'), link('https://bad.example'), null]))).toEqual({ ok: false, rule: 'link-address' })
     expect(checkCellLinks(cell('abcd', [link('https://bad.example', { rangeId: '!' })]))).toEqual({ ok: false, rule: 'link-address' })
+  })
+})
+
+describe('单个区间的核对（checkLinkRange）：checkCellLinks 逐项用的同一个判定（M6-P1 S4：文字文档按区间给出段落位置）', () => {
+  it('与只含这一项的 checkCellLinks 结果相同：合法、地址不规范、rangeId 不合写法、不是对象、没有地址、别的种类', () => {
+    const ranges: readonly unknown[] = [
+      link('https://example.com/'),
+      link('https://example.com'),
+      link('javascript:alert(1)'),
+      link('https://example.com/', { rangeId: '!' }),
+      link('https://example.com', { rangeId: '!' }),
+      null,
+      'x',
+      [],
+      { ...link(''), properties: undefined },
+      link(1),
+      { startIndex: 0, endIndex: 0, rangeId: '!!', rangeType: 2, properties: { url: 'javascript:x' } },
+    ]
+    for (const range of ranges)
+      expect(checkLinkRange(range), JSON.stringify(range)).toEqual(checkCellLinks(cell('abcd', [range])))
   })
 })

@@ -11,8 +11,8 @@ import { z } from 'zod'
  * - json：不是合法的 JSON；too-complex：检查用的内存超过上限（检查进行到哪一步都可能）；
  * - structure：文档的结构。表格是工作簿的结构（顶层是对象、id 是非空字符串、sheetOrder 是字符串数组且每一项都是 sheets 的键、sheets 的值是对象）；
  *   文字文档是顶层对象、id、body 与 dataStream，以及几个列表与对象的种类（M6-P1 S3 spec §3）；
- * - doc-flavor：文字文档的版式不是 MODERN；doc-header-footer：有页眉或页脚；doc-section-break：表格之外的分节符多于一个，或者唯一的一个
- *   不在文末；doc-toc：有目录块的区间（只适用于 doc@1）；
+ * - doc-flavor：文字文档的版式不是 MODERN；doc-header-footer：有页眉或页脚；doc-notes：有脚注或尾注；doc-section-break：表格之外的分节符
+ *   多于一个，或者唯一的一个不在文末；doc-toc：有目录块的区间（只适用于 doc@1）；
  * - resources：resources 不是数组，或者某一项不是 { name, data }（两个都是字符串）；resource-duplicate：资源名重复；
  *   resource-unknown：资源名不在插件档案的白名单里；resource-data：已知资源的最小结构（data 是空串或 JSON、顶层是对象、
  *   每个键下的值是这类资源该有的种类）；resource-not-empty：必须为空的资源不为空；
@@ -31,6 +31,7 @@ export const SNAPSHOT_RULES = [
   'structure',
   'doc-flavor',
   'doc-header-footer',
+  'doc-notes',
   'doc-section-break',
   'doc-toc',
   'resources',

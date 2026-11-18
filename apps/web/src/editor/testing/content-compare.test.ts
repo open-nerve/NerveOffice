@@ -3,11 +3,11 @@
 // content-compare.ts 不引用任何模块（E2E 也引用它，lint 规则 nerve/editor-testing-shared），用不了 contracts 的规范化内容
 // （documents/content-canonical.ts，服务端"内容相同不递增"的口径）：这里核对两边对"内容相同"的判断一致
 import type { LoggedCommand } from './content-compare.ts'
-import { canonicalContentText } from '@nerve-office/contracts'
+import { canonicalContentText, DOCUMENT_PROFILES } from '@nerve-office/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { EXCLUDED_EXECUTION_OPTIONS } from '../change-tracking/change-classifier.ts'
 import { CHANGE_DETECTION_EXCLUDED_MUTATIONS } from '../profile/sheet-profile.ts'
-import { canonicalJson, contentOf, documentChangeAttemptsIn, documentChangesIn, NOT_CHANGE_MUTATIONS, NOT_USER_CHANGE_FLAGS, sameContent } from './content-compare.ts'
+import { canonicalJson, CONTENT_PROFILES, contentOf, documentChangeAttemptsIn, documentChangesIn, NOT_CHANGE_MUTATIONS, NOT_USER_CHANGE_FLAGS, sameContent } from './content-compare.ts'
 
 vi.hoisted(() => {
   // jsdom 没有 Path2D：档案引用的数据验证的界面包在模块求值时就创建它。这里只读档案的排除名单，不运行 Univer
@@ -86,7 +86,61 @@ describe('快照的内容（比较的口径）', () => {
     ]
     for (const a of variants) {
       for (const b of variants)
-        expect(sameContent(a, b), `${a}\n${b}`).toBe(canonicalContentText(a) === canonicalContentText(b))
+        expect(sameContent(a, b), `${a}\n${b}`).toBe(canonicalContentText(a, 'sheet@1') === canonicalContentText(b, 'sheet@1'))
+    }
+  })
+})
+
+describe('文字文档的内容（doc@1，M6-P1 S4 spec §5）', () => {
+  /** 一份最小的文字文档：每个用例在它上面改一处 */
+  function doc(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({
+      id: UNIT,
+      body: { dataStream: '正文\r\n', paragraphs: [{ startIndex: 2 }] },
+      documentStyle: { documentFlavor: 2 },
+      drawings: { img: { drawingId: 'img', source: '/api/assets/0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d' } },
+      drawingsOrder: ['img'],
+      settings: {},
+      resources: [
+        { name: 'DOC_OBJECT_PERMISSION_PLUGIN', data: '[]' },
+        { name: 'DOC_DRAWING_PLUGIN', data: '{"data":{"img":{"drawingId":"img"}},"order":["img"]}' },
+        { name: 'DOC_HYPER_LINK_PLUGIN', data: '{"links":[]}' },
+      ],
+      ...overrides,
+    })
+  }
+
+  it('比较口径的档案与 contracts 的 DOCUMENT_PROFILES 相同（这个文件不能引用 contracts，这里核对）', () => {
+    expect([...CONTENT_PROFILES]).toEqual([...DOCUMENT_PROFILES])
+  })
+
+  it('文字文档去掉 settings.zoomRatio；不传档案时按表格（现有的自检与 E2E 都是表格），缩放的差别算内容', () => {
+    expect(sameContent(doc({ settings: { zoomRatio: 2 } }), doc(), 'doc@1')).toBe(true)
+    expect((contentOf(doc({ settings: { zoomRatio: 2, other: 1 } }), 'doc@1') as { settings: unknown }).settings).toEqual({ other: 1 })
+    expect(sameContent(doc({ settings: { zoomRatio: 2 } }), doc())).toBe(false)
+  })
+
+  it('与服务端的规范化内容（contracts 的 canonicalContentText，doc@1）判断一致', () => {
+    const variants = [
+      doc(),
+      doc({ settings: { zoomRatio: 1.5 } }),
+      doc({ settings: { zoomRatio: 1.5, other: 1 } }),
+      doc({ settings: 'x' }),
+      doc({ body: { dataStream: '正文改了\r\n', paragraphs: [{ startIndex: 4 }] } }),
+      doc({ drawingsOrder: [] }),
+      doc({ sheets: { s1: { zoomRatio: 1 } } }),
+      doc({ sheets: { s1: { zoomRatio: 2 } } }),
+      // 空资源与“不在”等价
+      doc({ resources: [{ name: 'DOC_DRAWING_PLUGIN', data: '{"data":{"img":{"drawingId":"img"}},"order":["img"]}' }, { name: 'DOC_NOTE_PLUGIN', data: '' }] }),
+      // 图片资源的 order 为空：第一层去掉
+      doc({ resources: [{ name: 'DOC_DRAWING_PLUGIN', data: '{"data":{"img":{"drawingId":"img"}},"order":[]}' }] }),
+      doc({ resources: [{ name: 'DOC_DRAWING_PLUGIN', data: '{"data":{"img":{"drawingId":"img"}}}' }] }),
+      doc({ resources: [{ name: 'DOC_HYPER_LINK_PLUGIN', data: '{"links":[{"id":"r1","payload":"https://example.com/"}]}' }] }),
+      doc({ resources: [] }),
+    ]
+    for (const a of variants) {
+      for (const b of variants)
+        expect(sameContent(a, b, 'doc@1'), `${a}\n${b}`).toBe(canonicalContentText(a, 'doc@1') === canonicalContentText(b, 'doc@1'))
     }
   })
 })

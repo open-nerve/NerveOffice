@@ -6,24 +6,45 @@
 // 所以服务端"内容相同不递增"的规范化内容（contracts 的 documents/content-canonical.ts，M3-P3）它也引用不了：
 // 口径相同（视图状态、空资源与"不在"等价、资源 data 只在第一层去掉空键、不看键序），单元测试核对两边对"内容相同"的判断一致。
 // 两边一起收窄（M3-P3 审查 A5）：原来每一层都去空，把更深处语义不同的空值（例如筛选的"为空"条件 {val:""}）判成相同；
-// 现在 E2E 的"改动被拦住"与服务端用同一个口径，SDK 在更深的层级上不改内容地来回变化，E2E 先失败
+// 现在 E2E 的"改动被拦住"与服务端用同一个口径，SDK 在更深的层级上不改内容地来回变化，E2E 先失败。
+// 口径按档案（M6-P1 S4）：与服务端一样，各档案只去掉自己的视图状态。不传档案时按表格——现有的自检与 E2E 都是表格；
+// 文字文档的自检与 E2E（P2 起）显式传 doc@1。漏传时用表格的口径比较文字文档，缩放的差别被当成内容变化，判断偏向“不同”，用例失败而不会误放行
+
+/** 比较口径的档案：与 contracts 的 DOCUMENT_PROFILES 相同（这个文件不能引用 contracts，单元测试核对） */
+export const CONTENT_PROFILES = ['sheet@1', 'doc@1'] as const
+export type ContentProfile = (typeof CONTENT_PROFILES)[number]
+
+type Snapshot = Record<string, unknown> & { sheets?: Record<string, Record<string, unknown>>, resources?: readonly { name: string, data: string }[] }
+
+/** 各档案去掉自己的视图状态（与 contracts 的 content-canonical.ts 第 1 步相同）：就地改写刚解析出的快照 */
+const WITHOUT_VIEW_STATE: Readonly<Record<ContentProfile, (snapshot: Snapshot) => void>> = {
+  'sheet@1': (snapshot) => {
+    for (const sheet of Object.values(snapshot.sheets ?? {})) {
+      delete sheet.zoomRatio
+      delete sheet.scrollTop
+      delete sheet.scrollLeft
+    }
+  },
+  'doc@1': (snapshot) => {
+    const settings = snapshot.settings
+    if (settings !== null && typeof settings === 'object' && !Array.isArray(settings))
+      delete (settings as Record<string, unknown>).zoomRatio
+  },
+}
 
 /**
  * 快照的内容（比较用，M0-P3 报告 §3.4 的口径，spikes/m0/src/harness/content-compare.ts；去空收窄到资源 data 的第一层，审查 A5）：
  * - 资源的 data 解析成对象，整项为空的资源去掉；data 是对象时只在第一层（每张表一个键）去掉取值为空的键（空数组、空对象、null、空串）：
  *   SDK 的读取会给模型补上空的规则表（{ "<表>": [] }，观察者效应，M0-P3 报告 §2.3 第 4 条），复制单元格、删除工作表的命令即使被取消
  *   也会读一次数据验证的规则表，这类差别不是改动；更深的层级原样比较（那里的空值是内容）；
- * - 去掉工作表的视图状态 zoomRatio、scrollTop、scrollLeft：缩放与滚动不产生 mutation，只读时照常可用（M0-P3 报告 §2.3 第 6 条）；
+ * - 去掉视图状态：表格是工作表的 zoomRatio、scrollTop、scrollLeft，文字文档是 settings 的 zoomRatio；缩放与滚动不产生 mutation，
+ *   只读时照常可用（M0-P3 报告 §2.3 第 6 条）；
  * - 资源按名称排序；对象键的顺序不影响比较（sameContent 按排好键的写法比较，E2E 的 toEqual 本来就不看键的顺序）。
  * 单元格、样式、工作表的结构与顺序原样比较
  */
-export function contentOf(snapshotText: string): unknown {
-  const snapshot = JSON.parse(snapshotText) as { sheets?: Record<string, Record<string, unknown>>, resources?: readonly { name: string, data: string }[] }
-  for (const sheet of Object.values(snapshot.sheets ?? {})) {
-    delete sheet.zoomRatio
-    delete sheet.scrollTop
-    delete sheet.scrollLeft
-  }
+export function contentOf(snapshotText: string, profile: ContentProfile = 'sheet@1'): unknown {
+  const snapshot = JSON.parse(snapshotText) as Snapshot
+  WITHOUT_VIEW_STATE[profile](snapshot)
   const resources = [...snapshot.resources ?? []]
     .map(resource => ({ name: resource.name, data: resource.data === '' ? null : JSON.parse(resource.data) as unknown }))
     .filter(resource => !isEmptyValue(resource.data))
@@ -59,9 +80,9 @@ export function canonicalJson(value: unknown): string {
   })
 }
 
-/** 两份快照的内容相同（contentOf 的口径） */
-export function sameContent(snapshotText: string, otherText: string): boolean {
-  return canonicalJson(contentOf(snapshotText)) === canonicalJson(contentOf(otherText))
+/** 两份快照的内容相同（contentOf 的口径，profile 见文件开头） */
+export function sameContent(snapshotText: string, otherText: string, profile: ContentProfile = 'sheet@1'): boolean {
+  return canonicalJson(contentOf(snapshotText, profile)) === canonicalJson(contentOf(otherText, profile))
 }
 
 /** 命令日志里的一条（与 testing/e2e-probe.ts 的 ProbeCommand 同样的字段，这里只声明判断用到的） */

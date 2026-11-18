@@ -2,7 +2,7 @@ import type { SnapshotImageLocation } from '@nerve-office/contracts'
 import type { EmbeddedJson } from './snapshot-checks.ts'
 import { isPlatformAssetAddress, isSnapshotImageIdentifier, SNAPSHOT_IMAGE_LOCATION_LIMIT, SNAPSHOT_IMAGE_POSITION_MAX } from '@nerve-office/contracts'
 
-type Route = 'workbook' | 'sheets' | 'sheet' | 'cells' | 'row' | 'resources' | 'drawing-resource' | 'drawing-sheet' | 'drawing-data' | 'nested'
+type Route = 'workbook' | 'sheets' | 'sheet' | 'cells' | 'row' | 'resources' | 'drawing-resource' | 'drawing-sheet' | 'drawing-data' | 'document' | 'doc-drawings' | 'nested'
 interface Context {
   readonly route: Route
   readonly location: SnapshotImageLocation
@@ -17,6 +17,7 @@ interface Level extends Context {
   index: number
 }
 const WORKBOOK: SnapshotImageLocation = { kind: 'workbook' }
+const DOCUMENT: SnapshotImageLocation = { kind: 'document' }
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -43,6 +44,15 @@ function childContext(parent: Context, key: string, child: object, snapshot: Rea
     if (key === 'resources' && Array.isArray(child))
       return { ...fallback, route: 'resources' }
   }
+  // 文字文档（M6-P1 S4）：顶层 drawings 里 drawingId 等于键的一张图片，有自己的位置；别处都是“文档里别的位置”
+  if (route === 'document') {
+    if (key === 'drawings' && record(child))
+      return { ...fallback, route: 'doc-drawings' }
+    if (key === 'resources' && Array.isArray(child))
+      return { ...fallback, route: 'resources' }
+  }
+  if (route === 'doc-drawings' && isSnapshotImageIdentifier(key) && record(child) && child.drawingId === key)
+    return { route: 'nested', location: { kind: 'doc-drawing', drawingId: key } }
   if (route === 'resources') {
     const index = coordinate(key)
     if (index !== undefined)
@@ -126,6 +136,16 @@ export function snapshotImageLocations(snapshot: Readonly<Record<string, unknown
       const resource: unknown = Array.isArray(snapshot.resources) ? snapshot.resources[resourceIndex] : undefined
       yield { value, route: record(resource) && resource.name === 'SHEET_DRAWING_PLUGIN' ? 'drawing-resource' : 'nested', location: { kind: 'resource', resourceIndex } }
     }
+  }
+  return collect(roots(), snapshot, SNAPSHOT_IMAGE_LOCATION_LIMIT)
+}
+
+/** 文字文档（doc@1）：先扫快照本身（顶层 drawings 里的图片有自己的位置），再扫各项资源已解析的值（位置是第几项资源） */
+export function docImageLocations(snapshot: Readonly<Record<string, unknown>>, embedded: readonly EmbeddedJson[]): readonly SnapshotImageLocation[] {
+  function* roots(): Generator<Root> {
+    yield { value: snapshot, route: 'document', location: DOCUMENT }
+    for (const { resourceIndex, value } of embedded)
+      yield { value, route: 'nested', location: { kind: 'resource', resourceIndex } }
   }
   return collect(roots(), snapshot, SNAPSHOT_IMAGE_LOCATION_LIMIT)
 }

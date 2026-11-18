@@ -98,7 +98,7 @@ it.each(manifest.samples)('$name：168 个小时与 30 个运维事件，逐字�
     const resources = checkResources(parsed.resources, 'sheet@1')
     if (!resources.ok)
       throw new Error('Capacity sample resources are invalid')
-    const contentHash = createHash('sha256').update(contentHashInput(canonicalContentText(raw.toString('utf8')))).digest()
+    const contentHash = createHash('sha256').update(contentHashInput(canonicalContentText(raw.toString('utf8'), 'sheet@1'))).digest()
     await database.query(async (client) => {
       await client.query(`WITH changed AS (UPDATE document_contents SET snapshot=$2,raw_bytes=$3,stored_bytes=$4,
         resource_names=$5,content_hash=$6 WHERE document_id=$1 RETURNING document_id)

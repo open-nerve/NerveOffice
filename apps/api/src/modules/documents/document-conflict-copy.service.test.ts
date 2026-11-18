@@ -53,7 +53,7 @@ function teamSource(store: FakeStore, options: { folderId?: string } = {}) {
 
 /** 规范化的内容哈希（contracts 的口径） */
 function hashOf(body: GzipBody): Buffer {
-  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8')))).digest()
+  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8'), 'sheet@1'))).digest()
 }
 
 /** 本页捕获的快照（顶层 id 默认是原文档的 unitId），上传的是它的 gzip */

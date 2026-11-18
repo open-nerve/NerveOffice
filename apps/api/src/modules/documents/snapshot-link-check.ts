@@ -1,7 +1,8 @@
 import type { CellLinkRule, SnapshotLinkLocation } from '@nerve-office/contracts'
 import { checkCellLinks, isSnapshotLocationIdentifier, SNAPSHOT_LINK_LOCATION_LIMIT, SNAPSHOT_POSITION_MAX } from '@nerve-office/contracts'
 
-export type WorkbookLinkCheck = { readonly ok: true } | {
+/** 链接的检查结果（两种档案共用）：不通过时是第一条不满足的规则，与同一规则的至多五个位置 */
+export type SnapshotLinkCheck = { readonly ok: true } | {
   readonly ok: false
   readonly rule: CellLinkRule
   readonly linkLocations: readonly SnapshotLinkLocation[]
@@ -39,7 +40,7 @@ function locationOf(sheetId: string, rowKey: string, columnKey: string): Snapsho
  * 只检查真实 sheets/cellData 路径，不限 sheetOrder。首个失败仍由原 checkCellLinks 决定；
  * 额外收集同一规则的至多五个位置，不能把更晚的规则或任意嵌套路径变成错误位置。
  */
-export function checkWorkbookLinks(snapshot: Readonly<Record<string, unknown>>): WorkbookLinkCheck {
+export function checkWorkbookLinks(snapshot: Readonly<Record<string, unknown>>): SnapshotLinkCheck {
   let rule: CellLinkRule | undefined
   const linkLocations: SnapshotLinkLocation[] = []
   const seen = new Set<string>()

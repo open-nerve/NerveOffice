@@ -104,8 +104,9 @@ describe('链接拒绝位置的有界、兼容契约', () => {
 describe('文字文档的规则与位置（M6-P1 S3 spec §4）', () => {
   const at = (rule: string): number => (SNAPSHOT_RULES as readonly string[]).indexOf(rule)
 
-  it('新规则按检查的先后排好：文字文档的四条在结构之后、资源之前；交叉核对在链接之后、unitId 之前', () => {
-    for (const rule of ['doc-flavor', 'doc-header-footer', 'doc-section-break', 'doc-toc']) {
+  it('新规则按检查的先后排好：文字文档的五条在结构之后、资源之前；交叉核对在链接之后、unitId 之前', () => {
+    expect(SNAPSHOT_RULES.slice(at('structure'), at('resources'))).toEqual(['structure', 'doc-flavor', 'doc-header-footer', 'doc-notes', 'doc-section-break', 'doc-toc'])
+    for (const rule of ['doc-flavor', 'doc-header-footer', 'doc-notes', 'doc-section-break', 'doc-toc']) {
       expect(at(rule), rule).toBeGreaterThan(at('structure'))
       expect(at(rule), rule).toBeLessThan(at('resources'))
     }
@@ -114,7 +115,7 @@ describe('文字文档的规则与位置（M6-P1 S3 spec §4）', () => {
   })
 
   it('新规则的详情原样给出，不带位置', () => {
-    for (const rule of ['doc-flavor', 'doc-header-footer', 'doc-section-break', 'doc-toc', 'resource-mismatch'])
+    for (const rule of ['doc-flavor', 'doc-header-footer', 'doc-notes', 'doc-section-break', 'doc-toc', 'resource-mismatch'])
       expect(snapshotInvalidDetailsSchema.parse({ rule, linkLocations: [{ kind: 'document' }], imageLocations: [{ kind: 'document' }] }), rule).toEqual({ rule })
   })
 

@@ -105,7 +105,7 @@ function withResources(unitId: string, resources: readonly { name: string, data:
 
 /** 规范化的内容哈希（contracts 的口径，服务端用 SHA-256） */
 function hashOf(body: GzipBody): Buffer {
-  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8')))).digest()
+  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8'), 'sheet@1'))).digest()
 }
 
 /** 保存的查询参数：页面上报的是现在的构建与数据格式（M3-P3） */

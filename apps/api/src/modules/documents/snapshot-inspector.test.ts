@@ -349,6 +349,7 @@ describe('SNAPSHOT_INVALID 的错误（snapshotInvalid）', () => {
     expect(snapshotInvalid('link-address', 'doc@1').message).toBe('文字文档里有不能保存的链接')
     expect(snapshotInvalid('doc-flavor', 'doc@1').message).toContain('版式')
     expect(snapshotInvalid('doc-header-footer', 'doc@1').message).toContain('页眉')
+    expect(snapshotInvalid('doc-notes', 'doc@1').message).toContain('脚注')
     expect(snapshotInvalid('doc-section-break', 'doc@1').message).toContain('分节')
     expect(snapshotInvalid('doc-toc', 'doc@1').message).toContain('目录')
     expect(snapshotInvalid('resource-mismatch', 'doc@1').message).toContain('不一致')
