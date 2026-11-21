@@ -1,5 +1,11 @@
 # 架构总览
 
+> **2026-11-22 M6-P1**：文字文档底座。分支 CI、合并与 main 同 SHA CI 以 [P1 交接单](../v0.1/M6-文字文档/handoffs/P1-交接单.md) 为准。
+> - 契约与数据加上 `doc` 类型与 doc@1 档案，响应里的类型字段对没见过的取值宽容。
+> - 服务端按档案检查快照、按档案规范化，保存与另存为副本交叉核对上报的档案（DEF-055 关闭，[ADR-011](../adr/ADR-011-文档内容与保存协议.md) 的 M6-P1 补充）。
+> - 编辑器页的编排抽成共用编辑会话层 `features/document-editor`，表格编辑器改为它的扩展，表格的行为不变（[ADR-027](../adr/ADR-027-共用编辑会话层与编辑器接口.md)）。
+> - P1 的新建仍只收表格。见文末“M6-P1 文字文档底座”一节。
+
 > **2026-11-18 M6**：M6 文字文档总设计审批通过（[总设计](../v0.1/M6-文字文档/00-M6-总设计.md)，00 号计划书 r31），从 M6-P1 开始实施。共用编辑会话层、按类型加载编辑器与 doc@1 档案，随各 Phase 写进本文与 ADR-027、ADR-028。
 
 > **2026-11-16 M5-P9**：`v0.1-m5` 之后补做 P7、P8 的 Codex 合并后评审，确认的问题由唯一 M5-P9 分支修复（CX1、CX2、CX3、CX5、CX6、CX7）；CX4 登记为已知限制（DEF-088，M6 的共用编辑会话层补图片权限复核）。见文末“M5-P9 Codex 合并后评审修复”一节；分支 CI、合并与 main 同 SHA CI 以 [P9 交接单](../v0.1/M5-表格能力与资源/handoffs/P9-交接单.md)为准。M6 总设计审批前不实施 M6。
@@ -268,7 +274,14 @@ apps/web/src/
                       一行文档与它的行内操作（DocumentRow、useOrganizePanels、OrganizeNoticeBar）由空间列表与"与我共享"共用（Codex 评审 CX3）
   features/sharing/   分享对话框（M2-P5）：授权列表、同事选择加人、调整与取消；平台的入口按需加载、编辑器页静态引用（按需加载会让平台首屏多拆出一个文件）
   features/shared-with-me/ "与我共享"页（M2-P5）：路由级按需加载；个人空间按所有者的人名呈现，不显示所在位置
-  features/sheet-editor/ 编辑器页：载入、保存的状态机、页头与提示、快捷键与离开提示、会话；页头的分享入口，只凭授权打开时返回链接回"与我共享"（M2-P5）；
+  features/document-editor/ 共用编辑会话层（M6-P1，ADR-027）：与文档类型无关的编辑器页编排——编辑权、交接与请求编辑，保存与自动保存，
+                      本机发件箱、草稿与恢复，编辑模式的通用核心（`edit-mode.ts`），按类型装配的编辑器页（`editor-page.ts`），页头的通用骨架
+                      （`editor-chrome.tsx`，一类文档专有的 7 处由插槽给出），启动（`start.tsx` 的 `startEditorPage(elements, kit)`，只由编辑器页的入口
+                      直接引用）；不引用表格编辑器与编辑器适配层，类型也不行。公开入口 `index.ts` 只放表格编辑器生产代码用到的名字，测试入口
+                      `index.test-support.ts`
+  features/sheet-editor/ 表格编辑器。M6-P1 起，下面写到的与类型无关的模块都搬进了 `features/document-editor/`；这里留表格的扩展：编辑模式的
+                      门面 `sheet-edit-mode.ts`、编辑器页的装配 `sheet-editor-page.ts`、页头的插槽 `sheet-chrome.tsx`、启动的 kit `start.tsx`，以及 CSV、
+                      公式恢复、工作表名、页面自检的挂接。以下是 M1～M5 的记录——编辑器页：载入、保存的状态机、页头与提示、快捷键与离开提示、会话；页头的分享入口，只凭授权打开时返回链接回"与我共享"（M2-P5）；
                       编辑租约的管理（`edit-lease.ts`，M3-P1：申请、心跳、失效、续上与释放，不依赖 Univer 与界面）；
                       阅读与编辑的状态机（`edit-mode.ts`，M3-P2：持有租约与保存的状态机，模式切换一律重建，不依赖 Univer 与界面；当前的编辑器在
                       `editor-slot.ts`（单飞重建）、阅读时的检查在 `reading-checks.ts`、失去编辑权之后的那一份在 `lost-copy.ts`）；
@@ -358,6 +371,7 @@ S1–S5 已验收；S6 独立审查的唯一 Important（连续两轮组字竞�
   - 入口（`src/entries/*`）→ 应用（`src/app`）→ 功能（`src/features/*`）→ 共享（`src/shared`）；
   - 编辑器适配层（`src/editor`）只依赖共享与 contracts；只有编辑器页的入口与 `features/sheet-editor` 能引用它（经 `index.ts`）；
   - `features/sheet-editor` 只由编辑器页的入口引用：平台的应用层、其他入口与其他功能都不引用它（Univer 不进平台页面的包）；
+  - `features/document-editor`（M6-P1，ADR-027）只由编辑器页引用：编辑器页的入口与 `features/sheet-editor`，P2 起另有文字文档编辑器。依赖方向是 sheet-editor → document-editor；document-editor 不引用 sheet-editor 与编辑器适配层，类型也不行。sheet-editor 的生产代码只经它的 `index.ts`，测试另经 `index.test-support.ts`；它的 `start.tsx` 只由编辑器页的入口直接引用（组合处专用的窄入口）。两个功能里只属于测试构建的模块只能在 e2e 分支里动态引入；
   - `features/admin` 与 `features/members` 只由 `app/routes.ts` 动态引用它们的公开入口；在平台页面里，`features/confirmation`、`features/colleagues` 只由这两个功能引用，弹窗文件 `shared/ui/dialog.tsx` 只由这两个功能与 `features/confirmation` 引用（编辑器页是另一个包，不受这几条限制）；弹窗类的 Radix 原语只在 `shared/ui/dialog.tsx` 里引入，对 web 的全部文件生效（M2-P1、M2-P2）；
   - Univer 的内部符号与 `Univer.__getInjector()` 只能在 `src/editor/internal-api/` 引用，逐项登记（M2-P6 起：internal-api 之外只经它的两个出口引用，`@univerjs/*` 的值引用只许公开符号的白名单，登记表扫描 internal-api 的全部文件，清单与目录由 tools 的测试核对）；`@univerjs/*` 只引用包入口、`/facade`、`/locale/<语言>` 与样式（ADR-010）。internal-api 有两个出口：数据的包在 `index.ts`，界面的包（docs-ui、engine-render、sheets-ui 等）只在 `ui.ts`，只由主线程引用——公式 Worker 也引用 `index.ts`，界面的包从那里再导出会整包打进 Worker（门禁 `budgets` 兜底）。
 - **api**：
@@ -505,6 +519,7 @@ M5-P7 新增迁移 `0039_m5_revision_asset_ids`：`document_revisions.unlinked_a
 | 2026-10-20 | M5-P2 S6 | 同步正式图片实例/输入、九份 SDK 固定修复和部署补丁目录；本机 full03 与 container02 完整验证按精确输入范围复用，full04 系统启动失败保留，最终发布/CI/清理以操作后回执为准 |
 | 2026-11-05 | M5-P7 | M5 整体独立审查问题修复：引用只为新出现的图片标识授权（D-01，迁移 0039）、地址提取线性化、上传与回收观测；写入预算按片段计、IMAGE 本站绝对地址规范化、数组锚点缓存值、暂停占位与刷新范围、sheets-ui 两处补丁；CSV 导出与新建终态、历史预览只核验不打断与创建失败页入口；请求观察器与测试资源工具加固、Python 回归纳入本机完整 verify（CI 不跑，DEF-080）。见文末一节 |
 | 2026-11-16 | M5-P9 | Codex 合并后评审修复：IMAGE 首参两侧的空白与 SDK 的 trim 一致、SDK 缓存命中时补读（core 补丁 `revisitImageSource`）、测试资源工具的缺目录待清理运行收尾与台账时间校验、关闭诊断以回复头的错误为准、交接用例取消守卫覆盖整段扣住期；CX4 登记 DEF-088。见文末一节 |
+| 2026-11-22 | M6-P1 | 文字文档底座：`doc` 类型与 doc@1 档案（迁移 0040）、响应宽容；资源规则的判别联合与 doc@1 的快照规则、按档案的规范化；DEF-055 上报的档案与文档的档案交叉核对；共用编辑会话层 `features/document-editor`（编辑模式的核心与扩展、按类型装配的编辑器页与页档案注入、页头骨架与插槽、启动与 kit），表格行为不变；#106 自检前提（方案 A）。见文末一节 |
 
 P4 S6 修复补充（2026-10-14，整阶段验收中）：成功会话响应的取消覆盖到最终采纳；普通失效暂停记录仅供同一原代次确证停用使用的 suspendedFrom，重登/成功复核切断关系；同一清理被后台完成后前台仍退出原服务端会话；OPFS 根读取失败保留原件与墓碑，不当作 unsupported 或已清空。同 Document 会话通知共享原生端点，避免本页广播回声触发额外网络复核；新增草稿入口后页头在 md 以下为账户保留独立行。首轮完整门禁失败已保存，修复后默认定向 179 通过/1 既有跳过、running 84 通过，完整验收仍待重跑。详见 ADR-007/020 与 P4 审查报告。
 
@@ -650,3 +665,47 @@ M5 整体独立审查（[报告](../v0.1/M5-表格能力与资源/reviews/P6-M5�
 **已知限制**（CX4，DEF-088）：读取授权按文档求并集。一张只经其他文档授权的图片，在那份文档撤权、而本文档权限不变时，服务端拒绝新的读取，已解码的像素在已打开的表格页与历史预览里保留到下一次重读图片或重新打开，与计划书 §6.4 一致。P2-S2 §5、P4-S3 的 P7 修订与 [ADR-023](../adr/ADR-023-资源回收与备份水位.md) 已对齐口径；M6 的共用编辑会话层加不下载图片字节的权限复核，三处一并覆盖。`conflict.spec.ts:49` 隐含的 5 秒上限补记到 DEF-086。
 
 分支 CI、合并、main 同 SHA CI 与清理以 [P9 交接单](../v0.1/M5-表格能力与资源/handoffs/P9-交接单.md)为准。
+
+## M6-P1 文字文档底座（2026-11-18～22）
+
+依据 [P1 设计](../v0.1/M6-文字文档/01-P1-文字文档底座.md)；逐步的失败用例、变异核对与验证见 [P1 实施记录](../v0.1/M6-文字文档/reviews/P1-实施记录.md)。正文格式、`sheet@1` 与 SDK 1.0.1 不变；P1 的新建接口仍只收表格，文字文档的编辑器在 P2。
+
+**契约与数据**
+- `DOCUMENT_TYPES` 加 `doc`，`DOCUMENT_PROFILES` 加 `doc@1`，默认标题“未命名文字文档”。`CREATABLE_DOCUMENT_TYPES` 是可新建的类型，P1 只有表格。
+- 响应里的类型字段对没见过的非空字符串宽容，解析为 `unknown`，不让整个响应作废；缺少、空串与非字符串仍是格式错误。服务端只产出严格的类型。
+- 迁移 0040 按常量重建 `documents.type`、`documents.profile` 与 `document_checkpoints.document_type` 三条 CHECK，只做加法。
+
+**服务端**（[ADR-011](../adr/ADR-011-文档内容与保存协议.md) 的 M6-P1 补充）
+- 资源规则改为按资源声明的判别联合（`entries`、`empty`、`shaped`），sheet@1 的语义不变。
+- doc@1 的快照规则：
+  - 版式；
+  - 页眉页脚与脚注尾注为空；
+  - 表格之外的分节符至多一个、在末尾，表格以正文里的表格控制符为准；
+  - 没有目录；
+  - 链接资源、图片资源与正文交叉核对（`resource-mismatch`）。
+- 图片地址与链接的规则作用于文字文档的正文；新的位置形状是段落与图片。
+- 规范化与内容哈希按档案。表格的规范文字逐字节不变；doc@1 去掉 `settings.zoomRatio`。
+- DEF-055 关闭：
+  - 上传检查按上报的档案；
+  - 保存在事务里核对上报的档案等于文档的档案，否则回 `CLIENT_OUTDATED`；
+  - 另存为副本对照服务端的档案。
+
+**前端：共用编辑会话层**（[ADR-027](../adr/ADR-027-共用编辑会话层与编辑器接口.md)）
+- `features/document-editor` 是与类型无关的编辑器页编排，由表格编辑器原样搬来（`git mv`）。协议、日志、存储的字符串与 `#sheet-editor`、`data-editor-*` 选择器都不变。依赖方向见 §5。
+- 按类型装配有四个层次：
+  - 编辑模式：通用核心加一类文档的扩展对象；
+  - 编辑器页：装配表，载入详情之后按类型、档案与格式版本选装配，选中时建页面扩展；
+  - 页头：通用骨架加 7 个插槽，插槽由装配为每页建一次、在用到的那一刻读成员对象；
+  - 启动：`startEditorPage(elements, kit)`。
+
+  表格的实现在 `features/sheet-editor`。两类文档的成员放进同一张装配表、同一个页面不用 `as`，有类型回归用例核对；图片操作的状态是例外，P4 定。
+- 页面上报的档案按类型注入（`clientFormatOf`）：申请编辑权、续租、请求编辑、草稿、打开自检与公式 Worker 的上报都用选中装配的档案。本机恢复的可读判定按档案的集合。
+- 会话层的公开入口只放表格编辑器生产代码用到的名字，只有测试用到的在测试入口。
+- 编辑器接口沿用表格原来的方法名（`settleFormulas` 等），改不改在 P2 有了两个实现之后定（ADR-027）。
+
+**测试与门禁**
+- #106 的 WebKit 自检前提按方案 A 只改测试：自检里“超过上限”一项不受间隔推迟影响，原断言与时限不变（[P9 调查](../v0.1/M5-表格能力与资源/reviews/P9-定时CI自检时序调查.md) §6）。
+- 依赖漏洞例外：picomatch 的 GHSA-fc5q-39xc-vjpf，到期 2026-12-18。
+- 托管例外与托管 Mac 改指本 Phase 的分支（[ADR-026](../adr/ADR-026-M5阶段接续与集中验收.md) 的 M6 附录）。
+
+**审查**：两份同模型独立审查共 1 项重要、5 项一般，修复与处置见 [P1 审查报告](../v0.1/M6-文字文档/reviews/P1-审查报告.md)。分支 CI、合并与 main 同 SHA CI 以 [P1 交接单](../v0.1/M6-文字文档/handoffs/P1-交接单.md) 为准。
