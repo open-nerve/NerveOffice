@@ -14,7 +14,8 @@ import { parseWorkflow, PLAYWRIGHT_CONFIG, playwrightBrowsers, runsChecks, stepL
 
 const WORKFLOW = '.github/workflows/mac.yml'
 const RUNNER = 'macos-26'
-const PHASE_BRANCH = 'm5-p8-final-closeout'
+/** 推送触发的分支：当期 Phase 的唯一分支（ADR-026 的 M6 附录：M6 各 Phase 要跑托管 Mac 时改为当期分支） */
+const PHASE_BRANCH = 'm6-p1-doc-foundation'
 /** 开发库的编排：开发机的 pnpm db:up 用它起数据库，托管 Mac 照它的版本与设置提供同一个库 */
 const DEV_COMPOSE = 'deploy/dev/compose.yaml'
 // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文，不是模板字符串

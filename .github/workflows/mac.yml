@@ -13,7 +13,8 @@ name: Mac
 
 on:
   push:
-    branches: [m5-p8-final-closeout]
+    # 当期 Phase 的唯一分支（ADR-026 的 M6 附录：M6 各 Phase 要跑托管 Mac 时改为当期分支，M6-P1 起）
+    branches: [m6-p1-doc-foundation]
   workflow_dispatch:
 
 permissions:
