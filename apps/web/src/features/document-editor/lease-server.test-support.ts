@@ -8,7 +8,7 @@
 // 申请、续租都在调用的那一刻"提交"，回包是不是迟到由用例决定（先拿到回答、等用例放行再交回）：E2E 里 route.fetch() 先执行真实的服务端事务、
 // 延后送达回包的样子。
 import type { AcquiredEditLease, RenewedEditLease, UserSummary } from '@nerve-office/contracts'
-import type { EditLeaseApi } from '../document-editor/index.ts'
+import type { EditLeaseApi } from './edit-lease.ts'
 import { ApiError } from '../../shared/api/index.ts'
 
 /** 服务端现在的一代 */

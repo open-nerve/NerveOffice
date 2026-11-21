@@ -1,6 +1,6 @@
-import type { EditLease, LeaseVerdict } from '../document-editor/index.ts'
 // 编辑会话的单元与连接交错共用装配；每个测试文件在 afterEach 调用 disposeSessions。
 import type { Autosave } from './autosave.ts'
+import type { EditLease, LeaseVerdict } from './edit-lease.ts'
 import type { EditingSessionEditor, EditingSessionOptions } from './editing-session.ts'
 import { vi } from 'vitest'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
@@ -8,10 +8,11 @@ import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { fakeLeaseClock } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
-import { fakeBrowser, newKey } from '../document-editor/index.test-support.ts'
-import { sameBrowserFor } from '../document-editor/index.ts'
 import { createEditingSession } from './editing-session.ts'
 import { fakeLeaseServer } from './lease-server.test-support.ts'
+import { newKey } from './outbox/persistent-working-draft.test-support.ts'
+import { fakeBrowser } from './same-browser.test-support.ts'
+import { sameBrowserFor } from './same-browser.ts'
 
 export const USER = { id: '0199b0c4-7d3e-7a3b-9c4e-00000000000a', username: 'amy', displayName: '艾米' }
 export const DOCUMENT = 'document-1'

@@ -1,6 +1,6 @@
 import { act } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deferred } from './editing-session.test-support.ts'
+import { deferred } from '../document-editor/index.test-support.ts'
 import { startSheetEditorPage } from './start.tsx'
 
 const h = vi.hoisted(() => {

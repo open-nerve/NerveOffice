@@ -1,5 +1,4 @@
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
-import type { HandoverFailure, HandoverMessage, HandoverTrace, PendingSaveMarker, SameBrowser } from '../document-editor/index.ts'
 // 同一个浏览器里的交接（M3-P5 设计 §3.7，US-M3-08）的两头：正在编辑的标签页怎样回应交接请求，与新标签页"在此编辑"的编排。不依赖 Univer 与界面；
 // 锁与频道（same-browser.ts）、时钟、读编辑状态与刷新时在途的保存的记号都注入，用假的做单元测试（tab-handover.test.ts）。阅读与编辑的状态机
 // （edit-mode.ts）持有它们：离开编辑（先保存再交出）、开始一件事与它的作废、申请并进入编辑都在状态机里，这里经回调调用。
@@ -16,8 +15,12 @@ import type { HandoverFailure, HandoverMessage, HandoverTrace, PendingSaveMarker
 //   那边得知被抢、核对之后转为失去编辑权），不看记号（那边还活着）；它没能保存（failed）就把原因交给阅读的进展，让人选"仍在此编辑"（anyway：
 //   同样申请、拿锁，不再请它交出）或"取消"。进入了就清掉刷新时在途的保存的记号（它只用来挡住过早的接手）。
 import type { FlushResult } from './autosave.ts'
+import type { HandoverTrace } from './handover-trace.ts'
+import type { PendingSaveMarker } from './pending-save-marker.ts'
+import type { HandoverFailure, HandoverMessage, SameBrowser } from './same-browser.ts'
 import type { SaveStatus } from './save-coordinator.ts'
-import { askTabToHandOver, awaitPendingSave, onRequest } from '../document-editor/index.ts'
+import { onRequest } from './same-browser.ts'
+import { askTabToHandOver, awaitPendingSave } from './self-takeover.ts'
 
 /**
  * "在此编辑"的进展（M3-P5 设计 §3.7）：preparing 刚开始（看锁在不在本浏览器）；asking 正在请本浏览器的另一个标签页先保存再交出；

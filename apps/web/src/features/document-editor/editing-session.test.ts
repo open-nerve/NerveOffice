@@ -1,4 +1,4 @@
-import type { LeaseVerdict } from '../document-editor/index.ts'
+import type { LeaseVerdict } from './edit-lease.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deferred, disposeSessions } from './editing-session.test-support.ts'
+import { deferred, disposeSessions } from '../document-editor/index.test-support.ts'
 import { recoveryFixture } from './formula-recovery.test-support.ts'
 
 vi.hoisted(() => {

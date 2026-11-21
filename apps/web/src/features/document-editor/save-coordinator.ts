@@ -16,7 +16,6 @@
 // Codex 评审 CX4（M3-P6 设计 §3.13）：用户的输入还没写进模型（适配层合成的一个状态：单元格编辑器里的、面板防抖中的）算进未保存——页头
 // 不说"已保存到云端"、离开提示拦下，期间到来的旧的保存确认也不把它说成已保存；写进模型之后由修改序号接着算，到点却没有改动时随之清除。
 import type { RevisionConflictDetails, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
-import type { UncommittedInput } from '../../editor/index.ts'
 import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
 import type { DraftCaptureRef, DraftMutation, PreparedDraft, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
@@ -24,7 +23,17 @@ import { revisionConflictDetailsSchema, SNAPSHOT_MAX_RAW_BYTES } from '@nerve-of
 import { incompatibilityOf } from '../../shared/api/client-format.ts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isNotFoundError } from '../../shared/api/index.ts'
 
-/** 保存用到的编辑器能力（SheetEditor 的子集）：只用来说"有没有服务端还没确认的内容"，捕获由来源给出 */
+/**
+ * 用户的输入还没写进模型（会话层自己的定义，M6-P1 S7 spec §5.3）：
+ * - pending：有还没写进模型的输入，算有未保存的修改，离开提示拦下；
+ * - open：没有这样的输入，但输入的编辑器开着，只让离开提示拦下；
+ * - none：都没有。
+ * 表格编辑器适配层的同名类型（editor/uncommitted-input.ts）与它同形：表格编辑器把 SheetEditor 交给会话层时由类型检查核对，
+ * 适配层多出一种取值时组装处编译不过
+ */
+export type UncommittedInput = 'none' | 'open' | 'pending'
+
+/** 保存用到的编辑器能力（表格编辑器 SheetEditor 是它的超集）：只用来说"有没有服务端还没确认的内容"，捕获由来源给出 */
 export interface SaveEditor {
   readonly changeSeq: () => number
   readonly onChange: (listener: () => void) => () => void

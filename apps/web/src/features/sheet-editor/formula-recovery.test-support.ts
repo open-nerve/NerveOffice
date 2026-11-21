@@ -1,12 +1,12 @@
 import type { EditorAccess, FormulaMode, FormulaWorkerFailure, SheetEditor } from '../../editor/index.ts'
-import type { CreateModeEditor } from './editor-slot.ts'
 import type { FormulaRecovery, FormulaRecoveryContext } from './formula-recovery.ts'
+import type { CreateModeEditor } from './sheet-editor-slot.ts'
 import { vi } from 'vitest'
+import { deferred, INITIAL, leaseFixture, prepare, fixture as sessionFixture } from '../document-editor/index.test-support.ts'
 import { unusedCsv } from './csv.test-support.ts'
-import { deferred, INITIAL, leaseFixture, prepare, fixture as sessionFixture } from './editing-session.test-support.ts'
-import { createEditorSlot } from './editor-slot.ts'
 import { createFormulaFallback } from './formula-fallback.ts'
 import { createFormulaRecovery } from './formula-recovery.ts'
+import { createSheetEditorSlot } from './sheet-editor-slot.ts'
 
 function signal<T extends unknown[] = []>() {
   const listeners = new Set<(...args: T) => void>()
@@ -140,7 +140,7 @@ export async function recoveryFixture(access: EditorAccess, failedBeforeAttach =
     return next.editor
   })
   const fallback = createFormulaFallback({ createEditor, onChange: () => recovering?.sync() })
-  const slot = createEditorSlot({ createEditor: fallback.createEditor, onChange: () => recovering?.sync(), reportError: base.options.reportError })
+  const slot = createSheetEditorSlot({ createEditor: fallback.createEditor, onChange: () => recovering?.sync(), reportError: base.options.reportError })
   const changed = vi.fn()
   recovering = createFormulaRecovery({
     fallback,

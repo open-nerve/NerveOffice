@@ -1,5 +1,5 @@
 import type { FormulaMode, FormulaWorkerFailure } from '../../editor/index.ts'
-import type { CreateModeEditor } from './editor-slot.ts'
+import type { CreateModeEditor } from './sheet-editor-slot.ts'
 import { FormulaWorkerError } from '../../editor/index.ts'
 
 export interface FormulaFallback {
@@ -19,7 +19,7 @@ export function createFormulaFallback(options: { readonly createEditor: CreateMo
   }
   return {
     createEditor: async (input) => {
-      const selected = failure === undefined ? input : { ...input, formulaMode: 'main-thread' as const, recalculate: true }
+      const selected = failure === undefined ? input : { ...input, formulaMode: 'main-thread' as const, recalculate: true as const }
       try {
         return await options.createEditor(selected)
       }

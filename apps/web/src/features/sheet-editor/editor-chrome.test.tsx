@@ -1,21 +1,18 @@
 import type { EditInterruption } from '@nerve-office/contracts'
 import type { RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
-import type { LeaseLoss } from '../document-editor/index.ts'
-import type { AutosaveView } from './autosave.ts'
+import type { AutosaveView, LeaseLoss, LocalSaveView, SaveView } from '../document-editor/index.ts'
 import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
-import type { LocalSaveView } from './editing-session.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
-import type { SaveView } from './save-coordinator.ts'
 import { historyPagePath } from '@nerve-office/contracts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
+import { ANNOUNCEMENT_MS } from '../document-editor/index.ts'
 import { csvFixture } from './csv-controller.test-support.ts'
 import { unusedCsvController } from './csv.test-support.ts'
 import { EditorChrome } from './editor-chrome.tsx'
-import { ANNOUNCEMENT_MS } from './save-indicator.ts'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D

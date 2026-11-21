@@ -706,7 +706,7 @@ describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（fe
     expect(await rulesFor(`import { installOutboxProbe } from '${OUTBOX_PROBE}'\n\nexport const install = installOutboxProbe\n`, 'apps/web/src/features/sheet-editor/editor-page.test.ts')).not.toContain(RULE)
     // 这一块覆盖了 nerve/test-code-only-in-tests 的同名规则：测试辅助照样拦下（两个功能都是）
     for (const [file, code] of [
-      [PAGE, 'import { leaseServer } from \'./lease-server.test-support.ts\'\n\nexport const server = leaseServer\n'],
+      [PAGE, 'import { unusedCsv } from \'./csv.test-support.ts\'\n\nexport const csv = unusedCsv\n'],
       [SESSION, 'import { fakeBrowser } from \'./same-browser.test-support.ts\'\n\nexport const browser = fakeBrowser\n'],
     ] as const) {
       const report = await lint(code, file)
@@ -786,6 +786,19 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
     }
     expect(await rulesFor('import { createSheetEditor } from \'../../editor/index.ts\'\n\nexport const create = createSheetEditor\n', SESSION)).toContain(RULE)
     expect((await lintAtProbe(`import { probe } from './${PROBE}-part.ts'\n\nexport const p = probe\n`, PROBE_FILES.documentEditor)).rules).not.toContain(RULE)
+  })
+
+  it('保存层与编辑器槽位搬进会话层之后（S7 spec §5.3、§5.5）：在真实路径上连类型也不引用编辑器适配层；表格编辑器经公开入口取槽位，引用会话层的 editor-slot.ts 报错；会话层的测试辅助不引用表格编辑器的测试辅助', async () => {
+    for (const [code, file] of [
+      ['import type { UncommittedInput } from \'../../editor/index.ts\'\n\nexport type U = UncommittedInput\n', 'apps/web/src/features/document-editor/save-coordinator.ts'],
+      ['import type { SheetEditor } from \'../../editor/index.ts\'\n\nexport type E = SheetEditor\n', 'apps/web/src/features/document-editor/editor-slot.ts'],
+    ] as const)
+      expect(await rulesFor(code, file), file).toContain(RULE)
+    expect(await rulesFor('import { createEditorSlot } from \'../document-editor/index.ts\'\n\nexport const create = createEditorSlot\n', SHEET_PAGE)).not.toContain(RULE)
+    expect(await rulesFor('import { createEditorSlot } from \'../document-editor/editor-slot.ts\'\n\nexport const create = createEditorSlot\n', SHEET_PAGE)).toContain(RULE)
+    const report = await lint('import { unusedCsv } from \'../sheet-editor/csv.test-support.ts\'\n\nexport const csv = unusedCsv\n', 'apps/web/src/features/document-editor/editing-session.test-support.ts')
+    expect(report.rules).toContain(RULE)
+    expect(report.messages.join('\n')).toContain(DIRECTION_MESSAGE)
   })
 
   it('刷新诊断（recovery/testing/reload-diagnostics.ts）照旧只引用零依赖的诊断格式；会话层别的文件不行', async () => {

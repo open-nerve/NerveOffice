@@ -130,28 +130,21 @@ import type { RecoveryInitializer } from '../../shared/local-drafts/recovery-ini
 import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
 import type { DraftCaptureRef, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
-import type { AcquireIntent, AcquireTrigger, EditingDraftReady, EditingNotice, EditLease, EditLeaseApi, EditRequestApi, EditRequestEnd, EditRequestProgress, FetchedEditStatus, HandoverFailure, HandoverTrace, HandoverTraceEvent, IdleWatch, IncomingRequest, IssuedRequestMarker, LeaseAcquisition, LeaseCredentials, LeaseHolder, LeaseLoss, LoadedContent, PageVisibility, PendingSaveMarker, ReadingCheckResult, SameBrowser } from '../document-editor/index.ts'
-import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
+import type { AcquireIntent, AcquireTrigger, Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, EditingDraftReady, EditingNotice, EditingSessionOptions, EditLease, EditLeaseApi, EditRequestApi, EditRequestEnd, EditRequestProgress, FetchedEditStatus, FlushResult, HandoverFailure, HandoverTrace, HandoverTraceEvent, IdleWatch, IncomingRequest, IssuedRequestMarker, LeaseAcquisition, LeaseCredentials, LeaseHolder, LeaseLoss, LoadedContent, LocalSaveView, PageVisibility, PendingSaveMarker, ReadingCheckResult, SameBrowser, SaveCoordinator, SaveStatus, SaveView, TabAnswerPhase, TakeoverProgress } from '../document-editor/index.ts'
 import type { CsvTarget } from './csv-controller.ts'
-import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
-import type { CreateModeEditor, EditorSurface, ReplaceOptions } from './editor-slot.ts'
 import type { FormulaRecovery, FormulaRecoveryView } from './formula-recovery.ts'
 import type { OpenCheckContext } from './open-check-report.ts'
-import type { SaveCoordinator, SaveStatus, SaveView } from './save-coordinator.ts'
-import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
+import type { CreateModeEditor, ReplaceOptions, SheetEditorSurface } from './sheet-editor-slot.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema, sheetSnapshotFor } from '@nerve-office/contracts'
 import { incompatibilityOf } from '../../shared/api/client-format.ts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { createLostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
-import { CONTENT_UNCHANGED, createEditRequests, createHolderRequests, createIdleWatch, createReadingChecks, HEARTBEAT_MS, leaseHolderOf, resolveTakeoverLoss, within } from '../document-editor/index.ts'
-import { createEditingSession } from './editing-session.ts'
-import { createEditorSlot } from './editor-slot.ts'
+import { answerTabs, captureLostContent, CONTENT_UNCHANGED, createEditingSession, createEditRequests, createHolderRequests, createIdleWatch, createReadingChecks, handoverFailureOf, HEARTBEAT_MS, leaseHolderOf, resolveTakeoverLoss, takeOverHere, within } from '../document-editor/index.ts'
 import { createFormulaFallback } from './formula-fallback.ts'
 import { createFormulaRecovery } from './formula-recovery.ts'
 import { formulaWorkerReportOf } from './formula-worker-report.ts'
-import { captureLostContent } from './lost-copy-flow.ts'
 import { openCheckReportOf } from './open-check-report.ts'
-import { answerTabs, handoverFailureOf, takeOverHere } from './tab-handover.ts'
+import { createSheetEditorSlot } from './sheet-editor-slot.ts'
 
 export type { CopyRefusal, CopyState } from '../../shared/local-drafts/copy-flow.ts'
 
@@ -397,7 +390,7 @@ export interface EditModeView {
   readonly save: SaveView | undefined
   /** 同上：自动保存这一侧的状态（联网、会话、会不会自动重试），页头连同 save 给出保存状态的全集（save-indicator.ts） */
   readonly autosave: AutosaveView | undefined
-  readonly surface: EditorSurface
+  readonly surface: SheetEditorSurface
 }
 
 export interface EditModeApi {
@@ -684,7 +677,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   let hidden = false
   let formulaReported = false
   const formulaFallback = createFormulaFallback({ createEditor: options.createEditor, onChange: () => notify() })
-  const slot = createEditorSlot({ createEditor: formulaFallback.createEditor, onChange: () => notify(), reportError: options.reportError })
+  const slot = createSheetEditorSlot({ createEditor: formulaFallback.createEditor, onChange: () => notify(), reportError: options.reportError })
   /** 测试构建的观察钩子（M3-P5 设计 §3.13）：没有时什么也不记；观察者出错不影响交接（上报） */
   const observer = options.trace
   const traced: HandoverTrace | undefined = observer === undefined
@@ -1550,7 +1543,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         const initialized = await prepare(context, { access: 'editable', online: options.autosave.page.online(), current: { revision: content.revision, source: content.revision === acquired.revision ? acquired.source : undefined, occupied: false } }, async (snapshot, pending) => {
           if (!recoveryCurrent())
             return { kind: 'blocked', reason: 'cancelled' }
-          const created = await replaceEditor(snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, { recalculate: pending })
+          const created = await replaceEditor(snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, pending ? { recalculate: true } : {})
           if (!recoveryCurrent())
             return { kind: 'blocked', reason: 'cancelled' }
           if (created === undefined || openCheckOf(created, { access: 'edit', trigger: 'enter', revision: content.revision }) !== undefined)
@@ -1623,7 +1616,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
     // 申请时服务端说这份文档"公式待更新"（选定的内容就是申请时的那一版）：强制全量重算，收齐之后由自动保存补存（服务端随之清掉标记）
     const restored = prepared.restored === true
-    const created = restored ? restoredEditor : await replaceEditor(content.snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, { recalculate: formulasPending })
+    const created = restored ? restoredEditor : await replaceEditor(content.snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, formulasPending ? { recalculate: true } : {})
     if (!still(token))
       return 'not-entered'
     const formulasShown = formulasPendingOf(content.revision)

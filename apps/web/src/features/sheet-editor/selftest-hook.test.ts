@@ -5,7 +5,7 @@ import type { EditModeState } from './edit-mode.ts'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import { EDIT_LEASE_HEADER } from '@nerve-office/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { deferred } from './editing-session.test-support.ts'
+import { deferred } from '../document-editor/index.test-support.ts'
 import { deafenHandoverChannel, handoverViewOf, watchForSelftest } from './selftest-hook.ts'
 
 const run = vi.hoisted(() => vi.fn(async (_host: SelftestHost) => undefined))

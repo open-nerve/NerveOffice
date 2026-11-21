@@ -1,5 +1,5 @@
 import type { RenewedEditLease } from '@nerve-office/contracts'
-import type { LeaseVerdict } from '../document-editor/index.ts'
+import type { LeaseVerdict } from './edit-lease.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createConnectionState } from '../../shared/lib/connection-state.ts'
