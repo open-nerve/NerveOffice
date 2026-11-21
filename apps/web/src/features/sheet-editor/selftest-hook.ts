@@ -3,8 +3,8 @@
 // 页面开始载入时就挂上页面错误与可见性的收集，订阅页面的状态；到 steady（或载入失败、等不到就绪）之后，才动态引入编辑器的自检模块
 // （editor/testing/selftest.ts，模块边界只给这个文件开了这一个口子），由它跑完检查、把结果带到地址里的 next。
 import type { SelftestHost, SelftestPageView } from '../../editor/testing/selftest.ts'
-import type { EditModeState, LeaseLoss } from '../document-editor/index.ts'
-import type { EditorPage, EditorPageLoad } from './editor-page.ts'
+import type { EditModeState, EditorPageLoad, LeaseLoss } from '../document-editor/index.ts'
+import type { SheetEditorPage } from './sheet-editor-page.ts'
 import type { SheetEditorPageElements } from './start.tsx'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 
@@ -269,7 +269,7 @@ function watchReloadSaves(documentId: string, lifetime: SelftestLifetime): NonNu
 }
 
 /** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
-export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements, reloadDiagnostics?: () => unknown, signal?: AbortSignal): void | Promise<void> {
+export function watchForSelftest(page: SheetEditorPage, elements: SheetEditorPageElements, reloadDiagnostics?: () => unknown, signal?: AbortSignal): void | Promise<void> {
   const lifetime = selftestLifetime(signal)
   if (lifetime.stopped())
     return
@@ -323,7 +323,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
   watch()
 }
 
-function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setup: {
+function watchScenario(page: SheetEditorPage, elements: SheetEditorPageElements, setup: {
   readonly startedAt: string
   readonly documentId: string | undefined
   readonly log: ReturnType<typeof watchPage>

@@ -47,8 +47,8 @@ import type { ReactNode, RefObject } from 'react'
 import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
-import type { CopyState, EditingNotice, EditRequestProgress, IncomingRequest, LeaseHolder, LeaseLoss, LeaveCause, LocalSaveIndicator, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, SaveIndicator, SaveProblem, SaveView, TakeoverProgress } from '../document-editor/index.ts'
-import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
+import type { CopyState, EditingNotice, EditorPageLoad, EditorPageReady, EditorPageSession, EditRequestProgress, IncomingRequest, LeaseHolder, LeaseLoss, LeaveCause, LocalSaveIndicator, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, SaveIndicator, SaveProblem, SaveView, TakeoverProgress } from '../document-editor/index.ts'
+import type { SheetEditorPage, SheetEditorPageView } from './sheet-editor-page.ts'
 import type { SheetName } from './snapshot-problem.ts'
 import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, historyPagePath, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -124,7 +124,7 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown, sheetName
 }
 
 /** 编辑时页头的保存状态（设计 §3.9）：保存的状态机连同自动保存这一侧的状态 */
-function indicatorOf(view: EditorPageView, save: SaveView): SaveIndicator {
+function indicatorOf(view: SheetEditorPageView, save: SaveView): SaveIndicator {
   return saveIndicator(save, view.autosave)
 }
 
@@ -134,14 +134,14 @@ function indicatorOf(view: EditorPageView, save: SaveView): SaveIndicator {
  */
 type PausedReason = 'session' | 'checking' | 'unconfirmed'
 
-function pausedReasonOf(view: EditorPageView): PausedReason {
+function pausedReasonOf(view: SheetEditorPageView): PausedReason {
   if (view.session !== 'active')
     return 'session'
   return view.sessionProblem === undefined ? 'checking' : 'unconfirmed'
 }
 
 /** 编辑时页头的保存状态的说法：暂停按原因说 */
-function saveStateText(view: EditorPageView, save: SaveView): string {
+function saveStateText(view: SheetEditorPageView, save: SaveView): string {
   const indicator = indicatorOf(view, save)
   if (view.connection?.problem === 'unresponsive' && (indicator === 'unsaved' || indicator === 'saving' || indicator === 'retrying' || indicator === 'formulas-pending'))
     return editorMessages.localSave.network
@@ -174,7 +174,7 @@ function leavingText(cause: LeaveCause): string {
  * 页头看得见的状态：模式（打开中、只能查看、进入与退出编辑、编辑权已失效……）与编辑时的保存状态。它本身不是读屏的播报区：
  * 读屏播的是 SaveAnnouncer 的那一句（只播有意义的变化）
  */
-function headerStatus(view: EditorPageView): string {
+function headerStatus(view: SheetEditorPageView): string {
   const { load, mode, save } = view
   if (load.kind === 'loading' || mode === undefined)
     return editorMessages.loading
@@ -218,7 +218,7 @@ interface Announcement {
  * （save-indicator.ts：只播有意义的变化，例行的"有未保存的修改""保存中…"不改播报区）。暂停按原因分开播（审查 A6）：
  * 不是用户按了保存的那种确认（例如别的标签页的消息触发的）不播，确认失败了才播
  */
-function announcementOf(view: EditorPageView): Announcement {
+function announcementOf(view: SheetEditorPageView): Announcement {
   const text = headerStatus(view)
   if (view.mode?.kind === 'editing' && !view.confirmingSession && view.save !== undefined) {
     const indicator = indicatorOf(view, view.save)
@@ -237,7 +237,7 @@ function announcementOf(view: EditorPageView): Announcement {
  * 显式写 aria-live（语义不变：role="status" 本来就是 polite，M2-P5 复验第二轮 G1）：保存在后台进行，分享对话框（模态）开着时也会完成或失败；
  * Radix 的模态弹窗打开时把弹窗之外的内容都标为 aria-hidden，只跳过那一刻已经在的、显式写了 aria-live 的元素（aria-hidden 库的 hideOthers）
  */
-function SaveAnnouncer({ view, local, formula }: { view: EditorPageView, local: LocalSaveIndicator | undefined, formula: string | undefined }) {
+function SaveAnnouncer({ view, local, formula }: { view: SheetEditorPageView, local: LocalSaveIndicator | undefined, formula: string | undefined }) {
   const terminal = view.save?.status === 'conflict' || view.save?.status === 'outdated' || view.save?.status === 'too-new'
   const base = announcementOf(view)
   const announceLocal = local !== undefined && view.session === 'active' && !view.confirmingSession && !terminal
@@ -268,7 +268,7 @@ function SaveAnnouncer({ view, local, formula }: { view: EditorPageView, local: 
 }
 
 /** 只有持续异常的 90 秒边界需要计时，不为每次捕获开计时器。 */
-function useLocalSaveIndicator(view: EditorPageView): LocalSaveIndicator | undefined {
+function useLocalSaveIndicator(view: SheetEditorPageView): LocalSaveIndicator | undefined {
   const [now, setNow] = useState(Date.now)
   const since = view.connection?.since
   useEffect(() => {
@@ -303,7 +303,7 @@ function LocalSaveStatus({ indicator }: { indicator: LocalSaveIndicator }) {
  * 没有离开成功（保存失败、公式没收齐）时焦点还在原来的按钮上（审查 A2）。leaving 是离开的原因（不在离开时为 undefined）：
  * 只有"退出编辑"的那一种由它说正在退出、标为进行中（空闲释放、交出不是按了它，页头的状态说明在做什么，M3-P5 设计 §3.11）
  */
-function SaveControls({ available, page, save, confirming, leaving, apple }: { available: boolean, page: EditorPage, save: SaveView, confirming: boolean, leaving: LeaveCause | undefined, apple: boolean }) {
+function SaveControls({ available, page, save, confirming, leaving, apple }: { available: boolean, page: SheetEditorPage, save: SaveView, confirming: boolean, leaving: LeaveCause | undefined, apple: boolean }) {
   const exiting = leaving === 'exit'
   return (
     <>
@@ -388,7 +388,7 @@ function offersForceTakeOver(reading: ReadingMode): boolean {
  * 强制接管（M3-P5 设计 §3.8）："请求编辑"旁边的"强制接管"（outline）：点了交给 onForce（先确认）；forcing 是强制接管的进入编辑中——这时只留它，
  * 说正在接管（不可用、进行中），没成功时焦点还在它上面
  */
-function ReadingControls({ available, recovering, page, reading, session, confirming, forcing, forceRef, onForce }: { available: boolean, recovering: boolean, page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
+function ReadingControls({ available, recovering, page, reading, session, confirming, forcing, forceRef, onForce }: { available: boolean, recovering: boolean, page: SheetEditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
   // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面。打开自检失败（M3-P4）时同样不给：数据不完整的不能编辑
@@ -547,7 +547,7 @@ function capacityNote(save: SaveView | undefined): string | undefined {
   return editorMessages.nearCapacity(Math.floor((bytes / SNAPSHOT_MAX_RAW_BYTES) * 100))
 }
 
-function SaveNotices({ view, save, onReload, sheetName }: { view: EditorPageView, save: SaveView, onReload: () => void, sheetName: SheetName }) {
+function SaveNotices({ view, save, onReload, sheetName }: { view: SheetEditorPageView, save: SaveView, onReload: () => void, sheetName: SheetName }) {
   const { session } = view
   const notices: ReactNode[] = []
   const block = editingBlock(save)
@@ -652,7 +652,7 @@ function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>, sh
  *   它销毁之后没有新的编辑器接过焦点、落到了 body：交给说明里的第一个按钮（另存为副本、重新加载），没有按钮时（正在核对那次保存）
  *   交给返回链接；焦点在别处时不抢（复验 C2，规范 §2.4）
  */
-function LostNotice({ available, page, lost, personal, onDiscard, fallbackFocus }: { available: boolean, page: EditorPage, lost: LostMode, personal: boolean, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
+function LostNotice({ available, page, lost, personal, onDiscard, fallbackFocus }: { available: boolean, page: SheetEditorPage, lost: LostMode, personal: boolean, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
   const { loss, unsaved, readable, checking, captureFailed, inputLeft, reopenFailed, copy, reload } = lost
   const copied = copy.kind === 'done' ? copy.document : undefined
   const refused = copy.kind === 'refused' ? copy : undefined
@@ -678,7 +678,7 @@ function LostNotice({ available, page, lost, personal, onDiscard, fallbackFocus 
         {reopenFailed && <p>{editorMessages.lost.reopenFailed(copyable)}</p>}
         {checking && <p>{editorMessages.lost.checking}</p>}
         {copy.kind === 'failed' && <p>{editorMessages.lost.copyFailed(describeError(copy.error).message)}</p>}
-        {refused !== undefined && <p>{copyRefusalMessage(refused, page.sheetName)}</p>}
+        {refused !== undefined && <p>{copyRefusalMessage(refused, sheetId => page.extension()?.sheetName(sheetId))}</p>}
         {copied !== undefined && <p><CopiedNote title={copied.title} documentId={copied.id} /></p>}
         {reload.kind === 'loading' && <p>{editorMessages.lost.reloading}</p>}
         {reload.kind === 'failed' && <p>{editorMessages.lost.reloadFailed(describeError(reload.error).message)}</p>}
@@ -920,7 +920,7 @@ function readingInfo(reading: ReadingMode | undefined, personal: boolean): React
  * 离开编辑的过程中（leaving：交出、退出、空闲释放）、正在谢绝、正在确认会话时按钮留着、不可用（aria-disabled：焦点不丢），交出时"交出"说正在交出、
  * 谢绝时"继续编辑"标为进行中；上一次交出、谢绝没成时说明原因（没存上的由保存的状态说明）
  */
-function RequestPrompt({ available, page, request, leaving, handingOver, confirming }: { available: boolean, page: EditorPage, request: IncomingRequest, leaving: boolean, handingOver: boolean, confirming: boolean }) {
+function RequestPrompt({ available, page, request, leaving, handingOver, confirming }: { available: boolean, page: SheetEditorPage, request: IncomingRequest, leaving: boolean, handingOver: boolean, confirming: boolean }) {
   const titleId = useId()
   const busy = !available || leaving || request.declining || confirming
   const failure = request.failure
@@ -974,7 +974,7 @@ function SessionCheckProblem({ problem }: { problem: unknown }) {
  * 会话不是本人时的提示：编辑时本页的修改还在、登录回来之后照常保存（编辑权随即自动续上，M3-P1）；
  * 别的时候（阅读、失去编辑权）没有要保存的，不提修改与保存（M3-P1 审查 B10）
  */
-function SessionNotice({ view, editing }: { view: EditorPageView, editing: boolean }) {
+function SessionNotice({ view, editing }: { view: SheetEditorPageView, editing: boolean }) {
   if (view.session === 'signed-out') {
     return (
       <Alert variant="destructive">
@@ -1038,7 +1038,7 @@ function LoadFailure({ load, backRef }: { load: Exclude<EditorPageLoad, { kind: 
 }
 
 /** apple：苹果的平台，保存的快捷键是 Cmd+S，其他平台是 Ctrl+S */
-export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean }) {
+export function EditorChrome({ page, apple }: { page: SheetEditorPage, apple: boolean }) {
   const view = useSyncExternalStore(page.subscribe, page.view)
   const local = useLocalSaveIndicator(view)
   const formula = formulaRecoveryNotice(view)
@@ -1049,6 +1049,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
   const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean, readonly requiresRecovery?: boolean, readonly requiresFormula?: boolean }>()
   const { load, mode, save } = view
   const ready = load.kind === 'ready' ? load : undefined
+  // 表格的页面扩展（S8b）：选中装配时建，载入完成（ready）时一定已经有了；CSV 入口原来取 page.csv
+  const csv = page.extension()?.csv
   const title = ready?.title
   const back = backLinkOf(ready)
   const backRef = useRef<HTMLAnchorElement>(null)
@@ -1199,7 +1201,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               {editing !== undefined && <SaveControls available={available && !formulaBlocked} page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
             </div>
           </div>
-          {ready !== undefined && <CsvEntry controller={page.csv} fallbackFocus={() => backRef.current?.focus()} />}
+          {ready !== undefined && csv !== undefined && <CsvEntry controller={csv} fallbackFocus={() => backRef.current?.focus()} />}
           {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
           {local !== undefined && <LocalSaveStatus indicator={local} />}
           {view.imageOperation !== undefined && <p role="status" data-slot="image-operation" className="px-3 pb-2 text-sm text-muted-foreground">{imageInputNotice(view.imageOperation)}</p>}
@@ -1220,7 +1222,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
             <div data-slot="formula-recovery" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-sm text-muted-foreground">
               <p>{formula.text}</p>
               {view.formulaRecovery?.phase === 'failed' && (
-                <Button size="sm" variant="outline" aria-disabled={!formula.canRetry} onClick={() => formulaRecoveryNotice(page.view())?.canRetry && page.retryFormulaRecovery()}>
+                <Button size="sm" variant="outline" aria-disabled={!formula.canRetry} onClick={() => formulaRecoveryNotice(page.view())?.canRetry && page.extension()?.retryFormulaRecovery()}>
                   {editorMessages.formulaRecovery.retry}
                 </Button>
               )}
@@ -1257,7 +1259,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
               读不到了（404）之后没有要做的事，不提登录 */}
           {editing?.conflict === undefined && !(lost !== undefined && !lost.readable) && <SessionNotice view={view} editing={editing !== undefined} />}
-          {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} sheetName={page.sheetName} />}
+          {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} sheetName={sheetId => page.extension()?.sheetName(sheetId)} />}
         </div>
       </div>
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} unavailable={confirmationUnavailable} />

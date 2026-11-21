@@ -1,5 +1,5 @@
 import type { CsvTable } from '../../shared/csv/index.ts'
-import type { CreatedCsvIntent } from './editor-page.ts'
+import type { CreatedCsvIntent } from './sheet-editor-page.ts'
 import { csvCreatePagePath } from '@nerve-office/contracts'
 import { act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -29,7 +29,7 @@ vi.mock('./start.tsx', () => ({ startSheetEditorPage: h.mount }))
 vi.mock('../../shared/lib/browser-connection.ts', () => ({ watchBrowserConnection: () => h.stopConnection }))
 vi.mock('../../shared/lib/session-channel.ts', () => ({ openSessionChannel: () => ({ subscribe: h.subscribeChannel, close: h.closeChannel }) }))
 
-const mounted = () => ({ page: { importCreatedCsv: h.apply, save: h.save, view: () => ({ load: { kind: 'ready' }, surface: 'ready' }) }, loaded: Promise.resolve(), dispose: h.dispose })
+const mounted = () => ({ page: { extension: () => ({ importCreatedCsv: h.apply }), save: h.save, view: () => ({ load: { kind: 'ready' }, surface: 'ready' }) }, loaded: Promise.resolve(), dispose: h.dispose })
 const cleanups: (() => void)[] = []
 
 beforeEach(() => {

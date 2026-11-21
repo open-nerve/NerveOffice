@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 各编辑请求的应用时限：真实请求层与 Response 流，只暂停传输，不替换时限模块。
-import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { isDefiniteRejection, isTransientError, isUnknownOutcome, RequestTimeoutError } from '../../shared/api/index.ts'
 import { acquireEditLease, cancelEditRequest, declineEditRequest, fetchContent, fetchContentIfChanged, fetchDocument, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, replayContent, saveConflictCopy, saveContent, sendEditRequest } from './editor-api.ts'
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const TOKEN = 'T'.repeat(43)
-const QUERY = { requestId: 'request-1', title: '周报', format: PAGE_CLIENT_FORMAT }
-const SAVE = { requestId: 'request-1', clientInstanceId: PAGE_ID, localSeq: 2, baseRevision: 4, format: PAGE_CLIENT_FORMAT, formulasPending: false }
+const SHEET_FORMAT = clientFormatOf('sheet')
+const QUERY = { requestId: 'request-1', title: '周报', format: SHEET_FORMAT }
+const SAVE = { requestId: 'request-1', clientInstanceId: PAGE_ID, localSeq: 2, baseRevision: 4, format: SHEET_FORMAT, formulasPending: false }
 const GZIP = new Uint8Array([31, 139, 8])
 const cleanup: (() => void)[] = []
 
@@ -61,12 +62,12 @@ const cases = [
   { name: '保存', limit: 60_000, body: true, run: async () => saveContent(DOCUMENT_ID, SAVE, GZIP, { token: TOKEN, writeEpoch: 2 }) },
   { name: '恢复时核对旧回执', limit: 60_000, body: true, run: async () => replayContent(DOCUMENT_ID, SAVE, GZIP, 2) },
   { name: '另存副本', limit: 60_000, body: true, run: async () => saveConflictCopy(DOCUMENT_ID, QUERY, GZIP) },
-  { name: '申请租约', limit: 10_000, body: true, run: async () => acquireEditLease(DOCUMENT_ID, PAGE_ID) },
-  { name: '续上租约', limit: 10_000, body: true, run: async () => acquireEditLease(DOCUMENT_ID, PAGE_ID, { idleSeconds: 5 }) },
+  { name: '申请租约', limit: 10_000, body: true, run: async () => acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT) },
+  { name: '续上租约', limit: 10_000, body: true, run: async () => acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT, { idleSeconds: 5 }) },
   { name: '核对租约', limit: 10_000, body: true, run: async () => fetchEditStatus(DOCUMENT_ID) },
-  { name: '心跳续租', limit: 10_000, body: true, run: async () => renewEditLease(DOCUMENT_ID, TOKEN, 5) },
+  { name: '心跳续租', limit: 10_000, body: true, run: async () => renewEditLease(DOCUMENT_ID, TOKEN, 5, SHEET_FORMAT) },
   { name: '释放租约', limit: 10_000, body: false, run: async () => releaseEditLease(DOCUMENT_ID, TOKEN) },
-  { name: '请求编辑', limit: 10_000, body: true, run: async () => sendEditRequest(DOCUMENT_ID) },
+  { name: '请求编辑', limit: 10_000, body: true, run: async () => sendEditRequest(DOCUMENT_ID, SHEET_FORMAT) },
   { name: '续期请求', limit: 10_000, body: true, run: async () => renewEditRequest(DOCUMENT_ID) },
   { name: '取消请求', limit: 10_000, body: false, run: async () => cancelEditRequest(DOCUMENT_ID) },
   { name: '谢绝请求', limit: 10_000, body: false, run: async () => declineEditRequest(DOCUMENT_ID, TOKEN, QUERY.requestId) },

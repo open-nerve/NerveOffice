@@ -8,7 +8,7 @@ import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
 import type { SlotCreateInput } from './editor-slot.ts'
 import type { OpenCheck, OpenCheckContext } from './open-check-report.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { ApiError } from '../../shared/api/index.ts'
 import { gunzipBytes } from '../../shared/outbox/draft-codec.ts'
 import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
@@ -263,6 +263,7 @@ function setup(options: Setup = {}) {
     documentId: DOCUMENT_ID,
     clientInstanceId: PAGE_ID,
     userId: USER_ID,
+    format: clientFormatOf('sheet'),
     api,
     createEditor: factory.createEditor,
     defaultOptions: {},
@@ -352,7 +353,7 @@ describe('编辑模式的通用核心：不带表格成员的编辑器与空扩�
     context.factory.checkWith({ ok: false, failures })
     expect(await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })).toEqual({ kind: 'opened', entered: false, damaged: true })
     expect(modeOf(context)).toMatchObject({ kind: 'reading', damaged: failures })
-    expect(context.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { revision: 3, access: 'read', trigger: 'open', failures, ...PAGE_CLIENT_FORMAT })
+    expect(context.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { revision: 3, access: 'read', trigger: 'open', failures, ...clientFormatOf('sheet') })
     await context.mode.enter()
     expect(context.editLease.acquire).not.toHaveBeenCalled()
   })

@@ -1,7 +1,7 @@
 import type { LeaseClock } from '../outbox/clock.ts'
 import type { DraftSessionPermit } from '../outbox/session-fence.ts'
 import type { DraftCatalog } from './draft-catalog.ts'
-import { PAGE_CLIENT_FORMAT } from '../api/client-format.ts'
+import { READABLE_CLIENT_FORMATS } from '../api/client-format.ts'
 import { readDraftSessionPermit } from '../outbox/session-fence.ts'
 import { replayContent, saveConflictCopy } from './content-api.ts'
 import { createDocumentRecovery } from './document-recovery.ts'
@@ -60,7 +60,8 @@ export function createBrowserDraftCatalog(options: BrowserDraftCatalogOptions): 
     makeRecovery: ({ documentId, facts, title }) => createDocumentRecovery({
       key: { userId: permit?.userId ?? '', documentId },
       permit: () => permit,
-      pageFormat: PAGE_CLIENT_FORMAT,
+      // 草稿页与后台维护不知道草稿是哪一类文档的：本构建能打开的类型的档案，任意一个可读即为可读（M6-P1 S8 spec §2.6）
+      pageFormats: READABLE_CLIENT_FORMATS,
       writtenBy: pageId,
       clock,
       now: Date.now,

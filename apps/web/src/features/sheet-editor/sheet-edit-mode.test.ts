@@ -9,7 +9,7 @@ import type { SheetEditMode, SheetEditModeOptions } from './sheet-edit-mode.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FormulaWorkerError } from '../../editor/index.ts'
-import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createConnectionState } from '../../shared/lib/connection-state.ts'
 import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
@@ -56,6 +56,8 @@ vi.mock('../../shared/outbox/draft-codec.ts', async (importOriginal) => {
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-7a3b-8c4d-00000000aaaa'
+/** 本页（表格）的档案 */
+const SHEET_FORMAT = clientFormatOf('sheet')
 const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }
 /** 请求编辑的人（M3-P5） */
 const BEN = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e2', username: 'ben', displayName: '本' }
@@ -435,6 +437,7 @@ function setup(options: Setup = {}) {
     documentId: DOCUMENT_ID,
     clientInstanceId: options.clientInstanceId ?? PAGE_ID,
     userId: options.userId ?? AMY.id,
+    format: SHEET_FORMAT,
     localDrafts: options.localDrafts,
     recovery: options.recovery,
     connection: options.connection,
@@ -675,7 +678,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     const h = setup()
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create', { cause: new Error('机密正文') }))
     await opened(h)
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'create', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'create', revision: 3, access: 'read', trigger: 'open', ...SHEET_FORMAT })
     await h.mode.enter()
     await h.mode.exit()
     expect(h.api.reportOpenCheck).toHaveBeenCalledOnce()
@@ -687,7 +690,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     await opened(h)
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('ready-timeout'))
     await h.mode.refresh(true)
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'ready-timeout', revision: 8, access: 'read', trigger: 'refresh', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'ready-timeout', revision: 8, access: 'read', trigger: 'refresh', ...SHEET_FORMAT })
     expect(readingOf(h.mode).damaged).toBeUndefined()
   })
 
@@ -696,7 +699,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     await opened(h)
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('error-before-ready'))
     await h.mode.enter()
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-before-ready', revision: 5, access: 'edit', trigger: 'enter', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-before-ready', revision: 5, access: 'edit', trigger: 'enter', ...SHEET_FORMAT })
     expect(modeOf(h.mode).kind).toBe('editing')
   })
 
@@ -705,7 +708,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('image-policy')).mockRejectedValueOnce(new Error('主线程失败'))
     await opened(h)
     expect(modeOf(h.mode).kind).toBe('failed')
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'image-policy', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'image-policy', revision: 3, access: 'read', trigger: 'open', ...SHEET_FORMAT })
     const ordinary = setup()
     ordinary.factory.failNext()
     await opened(ordinary)
@@ -724,7 +727,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     old.compose(true)
     old.failWorker()
     await h.time.advance(0)
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access, trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access, trigger: 'formula-recovery', ...SHEET_FORMAT })
     old.failWorker()
     old.compose(false)
     await h.time.advance(0)
@@ -741,8 +744,8 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     h.factory.last().failWorker()
     await h.time.advance(0)
     expect(h.api.reportOpenCheck.mock.calls.map(([, report]) => report)).toEqual([
-      { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
-      { failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }], revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
+      { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access: 'edit', trigger: 'formula-recovery', ...SHEET_FORMAT },
+      { failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }], revision: 3, access: 'edit', trigger: 'formula-recovery', ...SHEET_FORMAT },
     ])
     expect(h.mode.view().formulaRecovery?.problem).toBe('open-check')
     expect(h.factory.last().disposed).toBe(true)
@@ -1116,13 +1119,13 @@ async function localDrafts() {
 async function recoverySetup(options: Setup = {}, pending = false) {
   const key = { userId: AMY.id, documentId: DOCUMENT_ID }
   const snapshot = snapshotOf('待恢复的')
-  const meta = sampleMeta({ ...key, baseRevision: 3, draftSeq: 37, writeEpoch: 6, updatedAt: Date.now(), rawBytes: new TextEncoder().encode(snapshot).byteLength, inFlight: null, format: PAGE_CLIENT_FORMAT, formulasPending: pending })
+  const meta = sampleMeta({ ...key, baseRevision: 3, draftSeq: 37, writeEpoch: 6, updatedAt: Date.now(), rawBytes: new TextEncoder().encode(snapshot).byteLength, inFlight: null, format: SHEET_FORMAT, formulasPending: pending })
   const gzip = await gzipBytes(new TextEncoder().encode(snapshot))
   const observe = vi.fn<RecoveryReader['observe']>().mockResolvedValue({ kind: 'observed', observation: { key, id: 'before-register' }, record: { kind: 'draft', meta, gzip }, writer: undefined })
   const remove = vi.fn<RecoveryReader['remove']>().mockResolvedValue({ kind: 'removed', mirror: { kind: 'removed' } })
   const reader: RecoveryReader = { observe, remove, refreshKey: async () => observe(), notices: async () => ({ kind: 'notices', notices: [] }), clearNotice: async () => ({ kind: 'absent' }), dispose: vi.fn() }
   const replay = vi.fn(async () => SAVED)
-  const recovery = createDocumentRecovery({ key, pageFormat: PAGE_CLIENT_FORMAT, writtenBy: PAGE_ID, clock: fakeLeaseClock().clock, now: Date.now, still: () => true, facts: async () => ({ access: 'editable', online: true, current: { revision: 3, source: null, occupied: false } }), reader: () => reader, replay, refreshCloud: async () => {}, conflictCopy: async () => ({ ...COPY, replayed: false }), title: () => COPY.title, newId: () => 'copy-id', onSessionProblem: vi.fn(), reportError: vi.fn() })
+  const recovery = createDocumentRecovery({ key, pageFormats: [SHEET_FORMAT], writtenBy: PAGE_ID, clock: fakeLeaseClock().clock, now: Date.now, still: () => true, facts: async () => ({ access: 'editable', online: true, current: { revision: 3, source: null, occupied: false } }), reader: () => reader, replay, refreshCloud: async () => {}, conflictCopy: async () => ({ ...COPY, replayed: false }), title: () => COPY.title, newId: () => 'copy-id', onSessionProblem: vi.fn(), reportError: vi.fn() })
   recoveries.push(recovery)
   const h = setup({ ...options, recovery })
   return { ...h, recovery, observe, remove, replay, meta, gzip, key, snapshot }
@@ -1783,7 +1786,7 @@ describe('失效副本接收真实来源（M4-P2 S4）', () => {
       await h.mode.saveCopy()
       expect(h.api.conflictCopy).toHaveBeenCalledOnce()
       const [, query, bytes] = h.api.conflictCopy.mock.calls[0]!
-      expect(query).toMatchObject({ format: PAGE_CLIENT_FORMAT, formulasPending: false })
+      expect(query).toMatchObject({ format: SHEET_FORMAT, formulasPending: false })
       expect(new TextDecoder().decode(await gunzipBytes(bytes))).toBe(snapshotOf('失效捕获 B'))
       expect(encode.mock.calls.filter(([text]) => text === snapshotOf('失效捕获 B'))).toHaveLength(1)
       expect(lostOf(h.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reload: { kind: 'failed' } })
@@ -2666,7 +2669,7 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     expect(new TextDecoder().decode(await gunzipBytes(context.api.conflictCopy.mock.calls.at(-1)![2]))).toBe(snapshotOf('本页的'))
     // 捕获时公式已经收齐（假的编辑器）：副本不带"公式待更新"（M3-P3）
     // 草稿所基于的修订（本页打开时的修订 3）随副本请求带上，作服务端的图片授权基准（M5-P7，D-01）
-    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: PAGE_CLIENT_FORMAT }, expect.anything())
+    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: SHEET_FORMAT }, expect.anything())
     expect(context.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的') })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: false, notice: { kind: 'copied', document: { ...COPY, replayed: false } } })
@@ -3753,7 +3756,7 @@ describe('打开自检（M3-P4 设计 §3.11–§3.13，US-M3-15）', () => {
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })
     expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: true })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: true, damaged: FILTER_FAILURES, notice: undefined })
-    expect(context.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { revision: 3, access: 'read', trigger: 'open', failures: FILTER_FAILURES, ...PAGE_CLIENT_FORMAT })
+    expect(context.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { revision: 3, access: 'read', trigger: 'open', failures: FILTER_FAILURES, ...SHEET_FORMAT })
   })
 
   it('打开时通过：没有 damaged，不上报', async () => {

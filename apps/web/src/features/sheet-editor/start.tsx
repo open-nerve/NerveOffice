@@ -1,5 +1,6 @@
-import type { HandoverTrace, PageVisibility, SameBrowserApis } from '../document-editor/index.ts'
-import type { AutosaveControlHooks, EditIntent, EditorPage, PageActivity, PageNetwork } from './editor-page.ts'
+import type { OpenableDocumentType } from '../../shared/api/client-format.ts'
+import type { AutosaveControlHooks, EditIntent, HandoverTrace, PageActivity, PageNetwork, PageVisibility, SameBrowserApis } from '../document-editor/index.ts'
+import type { SheetEditorAssembly, SheetEditorPage } from './sheet-editor-page.ts'
 // 编辑器页的组装：真实的接口、编辑器、整页跳转与标签页之间的会话消息；挂上页头、快捷键与离开提示，然后载入。
 // 浏览器的实现都在这里给出（M3-P5）：本页的键盘、鼠标操作（窗口的捕获阶段）、同一个浏览器里的锁与交接频道（navigator.locks、
 // BroadcastChannel；浏览器没有时退化，same-browser.ts）、刷新时在途的保存的记号（localStorage 与墙上时间）、这一页发出过的请求编辑的记号
@@ -8,6 +9,8 @@ import type { AutosaveControlHooks, EditIntent, EditorPage, PageActivity, PageNe
 // （editor/testing/handover-log.ts，M3-P5 设计 §3.13 的观察钩子）再组装：第一个调度建起来、第一次申请之前它们就在（?edit=new 直接进入编辑也一样）；
 // 两个各自引入，一个没引入成不影响另一个；地址带 outboxProbe 时另引入发件箱的浏览器层探针、带 crashProbe 时另引入崩溃用例的探针（M4-P1）。
 // 生产构建里这个分支与它们的分块都被去掉（门禁 artifacts 核对）。
+// M6-P1 S8b（S8 spec §2.8）：编辑器页是共用编辑会话层的通用页面，这里给它装配表（本构建能打开的类型各一项，P1 只有表格）与按档案取的
+// 编辑权、请求编辑的请求；装配表写成 satisfies Record<OpenableDocumentType, …>，与本构建能打开的类型多一项或少一项都编译不过。
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -21,10 +24,10 @@ import { startDraftMaintenance } from '../../shared/lib/draft-maintenance.ts'
 import { hasEditIntent, withoutEditIntent } from '../../shared/lib/edit-intent.ts'
 import { browserPageLocation } from '../../shared/lib/page-location.ts'
 import { openSessionChannel } from '../../shared/lib/session-channel.ts'
-import { browserLeaseClock, clearInheritedReloadMarkers, DEFAULT_AUTOSAVE_LIMITS, editorApi, installPageGuards, isApplePlatform, issuedRequestMarker, pendingSaveMarker, sameBrowserFor, trackActivity } from '../document-editor/index.ts'
+import { browserLeaseClock, clearInheritedReloadMarkers, createEditorPage, DEFAULT_AUTOSAVE_LIMITS, editorApi, installPageGuards, isApplePlatform, issuedRequestMarker, pendingSaveMarker, sameBrowserFor, trackActivity } from '../document-editor/index.ts'
 import { LocalDataNotice } from '../local-data/notice.ts'
 import { EditorChrome } from './editor-chrome.tsx'
-import { createEditorPage } from './editor-page.ts'
+import { sheetEditorAssembly } from './sheet-editor-page.ts'
 
 export interface SheetEditorPageElements {
   /** 页头与提示（React） */
@@ -36,7 +39,7 @@ export interface SheetEditorPageElements {
 }
 
 export interface SheetEditorPageMount {
-  readonly page: EditorPage
+  readonly page: SheetEditorPage
   readonly loaded: Promise<void>
   readonly dispose: () => void
 }
@@ -192,13 +195,13 @@ async function prepare(elements: SheetEditorPageElements, reportLoadFailure: (er
 function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics: (() => unknown) | undefined, onLoadStarted: () => void): SheetEditorPageMount {
   const stopMaintenance = startDraftMaintenance()
   clearInheritedReloadMarkers(() => window.sessionStorage)
-  const page = createEditorPage({
+  const page: SheetEditorPage = createEditorPage({
     // 托管只把编辑器页的地址交给这个页面；万一不是，页面显示内容不存在
     documentId: documentIdFromPagePath(window.location.pathname),
     surface: elements.surface,
     chrome: elements.chrome,
-    // 本页装配表格编辑器（M6-P1 设计 §3.4）：文字文档的编辑器在 M6-P2
-    documentType: 'sheet',
+    // 本页的装配表（M6-P1 设计 §3.4，S8 spec §2.3）：表格的装配带适配层的编辑器工厂；文字文档的装配在 M6-P2
+    assemblies: { sheet: sheetEditorAssembly(createSheetEditor) } satisfies Record<OpenableDocumentType, SheetEditorAssembly>,
     api: {
       session: async () => requestSession(),
       document: async documentId => editorApi.fetchDocument(documentId),
@@ -209,20 +212,20 @@ function assemble(elements: SheetEditorPageElements, reportLoadFailure: (error: 
       replay: async (documentId, request, body) => editorApi.replayContent(documentId, request.request, body, request.writeEpoch),
       conflictCopy: async (documentId, query, body) => editorApi.saveConflictCopy(documentId, query, body),
       reportOpenCheck: async (documentId, report) => editorApi.reportOpenCheckFailures(documentId, report),
-      editLease: {
-        acquire: async (documentId, clientInstanceId, options) => editorApi.acquireEditLease(documentId, clientInstanceId, options),
-        renew: async (documentId, token, idleSeconds) => editorApi.renewEditLease(documentId, token, idleSeconds),
+      // 编辑权与请求编辑按页面上报的档案取（S8 spec §2.6）：页面以选中的装配的档案取用，申请、续租与发出请求编辑的请求体带它
+      editLease: format => ({
+        acquire: async (documentId, clientInstanceId, options) => editorApi.acquireEditLease(documentId, clientInstanceId, format, options),
+        renew: async (documentId, token, idleSeconds) => editorApi.renewEditLease(documentId, token, idleSeconds, format),
         release: async (documentId, token) => editorApi.releaseEditLease(documentId, token),
         handOver: async (documentId, token, requestId) => editorApi.handOverEditLease(documentId, token, requestId),
         decline: async (documentId, token, requestId) => editorApi.declineEditRequest(documentId, token, requestId),
-      },
-      editRequest: {
-        send: async documentId => editorApi.sendEditRequest(documentId),
+      }),
+      editRequest: format => ({
+        send: async documentId => editorApi.sendEditRequest(documentId, format),
         renew: async documentId => editorApi.renewEditRequest(documentId),
         cancel: async documentId => editorApi.cancelEditRequest(documentId),
-      },
+      }),
     },
-    createEditor: createSheetEditor,
     page: browserPageLocation,
     sessionChannel: openSessionChannel(),
     clock: browserLeaseClock,

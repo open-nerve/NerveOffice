@@ -3,6 +3,7 @@ import type { Autosave } from './autosave.ts'
 import type { EditLease, LeaseVerdict } from './edit-lease.ts'
 import type { EditingSessionEditor, EditingSessionOptions } from './editing-session.ts'
 import { vi } from 'vitest'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { fakeDraftStore } from '../../shared/outbox/draft-store.test-support.ts'
 import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { fakeLeaseClock } from '../../shared/outbox/fake-lease-clock.test-support.ts'
@@ -109,6 +110,7 @@ export function fixture(overrides: Partial<EditingSessionOptions> = {}) {
     userId: USER.id,
     documentId: DOCUMENT,
     clientInstanceId: 'page-1',
+    format: clientFormatOf('sheet'),
     api: {
       editLease: { ...server.api, handOver: async () => { throw new Error('本用例不交出') }, decline: async () => {} },
       save: vi.fn(async () => SAVED),

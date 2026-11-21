@@ -1,16 +1,22 @@
+import { PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError, ResponseFormatError, setCsrfToken } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json, networkFailure } from '../../shared/testing/fake-api.test-support.ts'
 import { acquireEditLease, cancelEditRequest, CONTENT_UNCHANGED, declineEditRequest, fetchContent, fetchContentIfChanged, fetchEditStatus, handOverEditLease, releaseEditLease, renewEditLease, renewEditRequest, saveConflictCopy, saveContent, sendEditRequest, snapshotDigest } from './editor-api.ts'
+
+/** 构建时注入的构建版本（vite.config.ts 的 define，单元测试经同一份配置） */
+declare const __NERVE_CLIENT_BUILD__: string
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-4a3b-8c4d-00000000aaaa'
 const LEASE = `/api/documents/${DOCUMENT_ID}/edit-lease`
 const TOKEN = 'T'.repeat(43)
 const ACQUIRED = { token: TOKEN, writeEpoch: 2, revision: 4, source: null, expiresAt: '2026-10-04T03:01:30.000Z', interruption: null, formulasPending: false }
+/** 本页（表格）的档案 */
+const SHEET_FORMAT = clientFormatOf('sheet')
 /** 本页的构建与数据格式写成查询串（M3-P3）：保存与另存为副本都带 */
-const FORMAT_QUERY = `clientBuild=${encodeURIComponent(PAGE_CLIENT_FORMAT.clientBuild)}&univerVersion=${PAGE_CLIENT_FORMAT.univerVersion}&profile=${encodeURIComponent(PAGE_CLIENT_FORMAT.profile)}&formatVersion=${PAGE_CLIENT_FORMAT.formatVersion}`
+const FORMAT_QUERY = `clientBuild=${encodeURIComponent(SHEET_FORMAT.clientBuild)}&univerVersion=${SHEET_FORMAT.univerVersion}&profile=${encodeURIComponent(SHEET_FORMAT.profile)}&formatVersion=${SHEET_FORMAT.formatVersion}`
 
 afterEach(() => {
   setCsrfToken(undefined)
@@ -20,33 +26,57 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
   it('申请：POST 本页这次加载的标识与本页的构建与数据格式（带 CSRF 令牌，M3-P3），按契约读出令牌、代次与修订号；被占用时抛出 EDIT_LEASE_HELD', async () => {
     const api = installFakeApi({ [`POST ${LEASE}`]: () => json(201, ACQUIRED) })
     setCsrfToken('csrf-1')
-    await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID)).resolves.toEqual(ACQUIRED)
-    expect(api.requests[0]).toMatchObject({ body: { clientInstanceId: PAGE_ID, ...PAGE_CLIENT_FORMAT }, headers: { 'x-csrf-token': 'csrf-1' } })
+    await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT)).resolves.toEqual(ACQUIRED)
+    expect(api.requests[0]).toMatchObject({ body: { clientInstanceId: PAGE_ID, ...SHEET_FORMAT }, headers: { 'x-csrf-token': 'csrf-1' } })
     api.on(`POST ${LEASE}`, () => apiError(409, 'EDIT_LEASE_HELD'))
-    await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID)).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD' })
+    await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT)).rejects.toMatchObject({ code: 'EDIT_LEASE_HELD' })
   })
 
   it('申请：续上时另带本页的空闲秒数（M3-P5 设计 §3.5）；用户发起的申请不带', async () => {
     const api = installFakeApi({ [`POST ${LEASE}`]: () => json(201, ACQUIRED) })
     setCsrfToken('csrf-1')
-    await acquireEditLease(DOCUMENT_ID, PAGE_ID, { idleSeconds: 37 })
-    expect(api.requests[0]?.body).toEqual({ clientInstanceId: PAGE_ID, idleSeconds: 37, ...PAGE_CLIENT_FORMAT })
-    await acquireEditLease(DOCUMENT_ID, PAGE_ID)
-    expect(api.requests[1]?.body).toEqual({ clientInstanceId: PAGE_ID, ...PAGE_CLIENT_FORMAT })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT, { idleSeconds: 37 })
+    expect(api.requests[0]?.body).toEqual({ clientInstanceId: PAGE_ID, idleSeconds: 37, ...SHEET_FORMAT })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT)
+    expect(api.requests[1]?.body).toEqual({ clientInstanceId: PAGE_ID, ...SHEET_FORMAT })
   })
 
   it('申请："在此编辑"另带接管方式（takeover: self，M3-P5 设计 §3.7）', async () => {
     const api = installFakeApi({ [`POST ${LEASE}`]: () => json(201, ACQUIRED) })
     setCsrfToken('csrf-1')
-    await acquireEditLease(DOCUMENT_ID, PAGE_ID, { takeover: 'self' })
-    expect(api.requests[0]?.body).toEqual({ clientInstanceId: PAGE_ID, takeover: 'self', ...PAGE_CLIENT_FORMAT })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT, { takeover: 'self' })
+    expect(api.requests[0]?.body).toEqual({ clientInstanceId: PAGE_ID, takeover: 'self', ...SHEET_FORMAT })
+  })
+
+  it('申请的请求体序列化之后与原来的字节相同：本页的标识在前，表格的档案按构建、Univer 版本、档案、格式版本（M6-P1 S8 spec §2.6）', async () => {
+    let sent: unknown
+    installFakeApi({ [`POST ${LEASE}`]: (init) => {
+      sent = init?.body
+      return json(201, ACQUIRED)
+    } })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, clientFormatOf('sheet'))
+    expect(sent).toBe(`{"clientInstanceId":"${PAGE_ID}","clientBuild":${JSON.stringify(__NERVE_CLIENT_BUILD__)},"univerVersion":${JSON.stringify(UNIVER_SDK_VERSION)},"profile":"sheet@1","formatVersion":${PLATFORM_FORMAT_VERSION}}`)
+  })
+
+  it('申请、续租与发出请求编辑的请求体带调用方给的档案（M6-P1 S8 spec §2.6）：文字文档的页面报文字文档的档案', async () => {
+    const format = clientFormatOf('doc')
+    const api = installFakeApi({
+      [`POST ${LEASE}`]: () => json(201, ACQUIRED),
+      [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null }),
+      [`POST ${LEASE}/request`]: () => json(200, { kind: 'free' }),
+    })
+    await acquireEditLease(DOCUMENT_ID, PAGE_ID, format, { takeover: 'self' })
+    await renewEditLease(DOCUMENT_ID, TOKEN, 9, format)
+    await sendEditRequest(DOCUMENT_ID, format)
+    expect(api.requests.map(request => request.body)).toEqual([{ clientInstanceId: PAGE_ID, takeover: 'self', ...format }, { idleSeconds: 9, ...format }, format])
+    expect(format.profile).toBe('doc@1')
   })
 
   it('续租：PUT 空闲的秒数与本页的构建与数据格式（M3-P3），令牌只在请求头里（不进地址）', async () => {
     const api = installFakeApi({ [`PUT ${LEASE}`]: () => json(200, { expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null }) })
     setCsrfToken('csrf-1')
-    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null })
-    expect(api.requests[0]).toMatchObject({ key: `PUT ${LEASE}`, body: { idleSeconds: 12, ...PAGE_CLIENT_FORMAT }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-1' } })
+    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 12, SHEET_FORMAT)).resolves.toEqual({ expiresAt: '2026-10-04T03:01:40.000Z', request: null, localKeyVersion: null })
+    expect(api.requests[0]).toMatchObject({ key: `PUT ${LEASE}`, body: { idleSeconds: 12, ...SHEET_FORMAT }, headers: { 'x-edit-lease': TOKEN, 'x-csrf-token': 'csrf-1' } })
   })
 
   it('释放：DELETE，keepalive，带令牌与 CSRF 两个请求头；204 时兑现，失败时抛出请求层的错误（续上要知道放掉了没有，审查 B9）', async () => {
@@ -74,13 +104,13 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
   it('保存：查询参数带上代次、"公式待更新"与本页的构建与数据格式（M3-P3），请求头带上令牌；内容相同（unchanged）照样读出', async () => {
     const api = installFakeApi()
     api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-1&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2&formulasPending=true&${FORMAT_QUERY}`, () => json(200, { revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: true }))
-    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, format: PAGE_CLIENT_FORMAT, formulasPending: true }
+    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, format: SHEET_FORMAT, formulasPending: true }
     await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).resolves.toEqual({ revision: 4, savedAt: '2026-10-04T03:00:00.000Z', unchanged: true })
     expect(api.requests[0]?.headers).toMatchObject({ 'x-edit-lease': TOKEN, 'content-type': 'application/gzip' })
   })
 
   it('保存使用固定上传的格式，不拿页面当前格式替换旧请求', async () => {
-    const format = { ...PAGE_CLIENT_FORMAT, clientBuild: 'frozen-build', formatVersion: 2 }
+    const format = { ...SHEET_FORMAT, clientBuild: 'frozen-build', formatVersion: 2 }
     const formatQuery = new URLSearchParams(Object.entries(format).map(([name, value]) => [name, String(value)])).toString()
     const api = installFakeApi()
     api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-frozen&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2&formulasPending=false&${formatQuery}`, () => json(200, { revision: 5, savedAt: '2026-10-04T03:00:00.000Z', unchanged: false }))
@@ -92,10 +122,10 @@ describe('编辑租约的请求（M3-P1 设计 §3.2）', () => {
   it('本页过旧、文档比服务端新（M3-P3）：保存、申请、续租照常抛出 CLIENT_OUTDATED、DOCUMENT_TOO_NEW（ApiError，带原因）', async () => {
     const outdated = (reason: string): Response => json(409, { error: { code: 'CLIENT_OUTDATED', message: '页面的版本过旧', requestId: 'req-outdated', details: { reason } } })
     const api = installFakeApi({ [`POST ${LEASE}`]: () => apiError(409, 'DOCUMENT_TOO_NEW'), [`PUT ${LEASE}`]: () => outdated('build') })
-    await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID)).rejects.toMatchObject({ status: 409, code: 'DOCUMENT_TOO_NEW' })
-    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 0)).rejects.toMatchObject({ status: 409, code: 'CLIENT_OUTDATED', details: { reason: 'build' } })
+    await expect(acquireEditLease(DOCUMENT_ID, PAGE_ID, SHEET_FORMAT)).rejects.toMatchObject({ status: 409, code: 'DOCUMENT_TOO_NEW' })
+    await expect(renewEditLease(DOCUMENT_ID, TOKEN, 0, SHEET_FORMAT)).rejects.toMatchObject({ status: 409, code: 'CLIENT_OUTDATED', details: { reason: 'build' } })
     api.on(`PUT /api/documents/${DOCUMENT_ID}/content?baseRevision=4&requestId=req-1&clientInstanceId=${PAGE_ID}&localSeq=3&writeEpoch=2&formulasPending=false&${FORMAT_QUERY}`, () => outdated('format'))
-    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, format: PAGE_CLIENT_FORMAT, formulasPending: false }
+    const request = { baseRevision: 4, requestId: 'req-1', clientInstanceId: PAGE_ID, localSeq: 3, format: SHEET_FORMAT, formulasPending: false }
     await expect(saveContent(DOCUMENT_ID, request, new Uint8Array([1]), { token: TOKEN, writeEpoch: 2 })).rejects.toMatchObject({ code: 'CLIENT_OUTDATED', details: { reason: 'format' } })
   })
 })
@@ -109,10 +139,10 @@ describe('请求编辑与交出（M3-P5 设计 §3.4、§3.6）', () => {
   it('发出：POST request，带本页的构建与数据格式（过旧的页面先拦下）与 CSRF 令牌，按契约读出请求编辑的结果；版本过旧时抛出 CLIENT_OUTDATED', async () => {
     const api = installFakeApi({ [`POST ${REQUEST}`]: () => json(200, PENDING) })
     setCsrfToken('csrf-5')
-    await expect(sendEditRequest(DOCUMENT_ID)).resolves.toEqual(PENDING)
-    expect(api.requests[0]).toMatchObject({ body: PAGE_CLIENT_FORMAT, headers: { 'x-csrf-token': 'csrf-5' } })
+    await expect(sendEditRequest(DOCUMENT_ID, SHEET_FORMAT)).resolves.toEqual(PENDING)
+    expect(api.requests[0]).toMatchObject({ body: SHEET_FORMAT, headers: { 'x-csrf-token': 'csrf-5' } })
     api.on(`POST ${REQUEST}`, () => apiError(409, 'CLIENT_OUTDATED'))
-    await expect(sendEditRequest(DOCUMENT_ID)).rejects.toMatchObject({ code: 'CLIENT_OUTDATED' })
+    await expect(sendEditRequest(DOCUMENT_ID, SHEET_FORMAT)).rejects.toMatchObject({ code: 'CLIENT_OUTDATED' })
   })
 
   it('续期：PUT request，没有请求体（带 CSRF 令牌）；认不出的结果（kind 不认识）按契约不一致', async () => {
@@ -232,7 +262,7 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
       permissions: { canEdit: true, canViewHistory: true, canClearHistory: true, canRename: true, canMoveWithinSpace: true, canMoveAcrossSpaces: true, canCopy: true, canDelete: true, canShare: true, canTakeOver: true },
       replayed: false,
     }
-    const format = { ...PAGE_CLIENT_FORMAT, formatVersion: 2, univerVersion: '0.24.1' }
+    const format = { ...SHEET_FORMAT, formatVersion: 2, univerVersion: '0.24.1' }
     const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: created.title, formulasPending: true, format }
     const compressed = new Uint8Array([31, 139, 8])
     let url: URL | undefined
@@ -255,7 +285,7 @@ describe('编辑状态与另存为副本（M3-P2 设计 §3.2）', () => {
   it('另存为副本被拒绝：照常抛出（404 读不到、409 同一个 requestId 换了内容），由页面决定能不能再试', async () => {
     const path = `POST /api/documents/${DOCUMENT_ID}/conflict-copies?requestId=0199a2c4-1f2e-4a3b-8c4d-0000000000d1&title=%E5%91%A8%E6%8A%A5&formulasPending=false&${FORMAT_QUERY}`
     const api = installFakeApi({ [path]: () => apiError(404, 'NOT_FOUND') })
-    const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: '周报', format: PAGE_CLIENT_FORMAT }
+    const query = { requestId: '0199a2c4-1f2e-4a3b-8c4d-0000000000d1', title: '周报', format: SHEET_FORMAT }
     await expect(saveConflictCopy(DOCUMENT_ID, query, new Uint8Array([1]))).rejects.toMatchObject({ status: 404, code: 'NOT_FOUND' })
     api.on(path, () => apiError(409, 'REQUEST_ID_CONFLICT'))
     await expect(saveConflictCopy(DOCUMENT_ID, query, new Uint8Array([1]))).rejects.toMatchObject({ status: 409, code: 'REQUEST_ID_CONFLICT' })

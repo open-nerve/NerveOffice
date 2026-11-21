@@ -108,7 +108,7 @@ describe('US-M1-11 lint 规则的自测：平台页面的模块边界与入口',
       expect(report.messages.join('\n'), source).toContain('页面自检的入口页不用动态 import()')
     }
     // web 的整组限制：编辑器页的文件只有这一组（平台页面的文件另加了本机发件箱那一条，M4-P1）
-    const webSyntax = restrictedSyntaxSelectors(await configFor('apps/web/src/features/sheet-editor/editor-page.ts'))
+    const webSyntax = restrictedSyntaxSelectors(await configFor('apps/web/src/features/sheet-editor/sheet-editor-page.ts'))
     for (const entry of [signIn, 'apps/web/src/entries/selftest/main.ts'])
       expect(restrictedSyntaxSelectors(await configFor(entry)), entry).toEqual([...webSyntax, 'ImportExpression'])
   })
@@ -511,7 +511,7 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
       'import { ColleaguePicker } from \'../colleagues/index.ts\'\n\nexport const picker = ColleaguePicker\n',
     ]
     for (const code of imports)
-      expect(await rulesFor(code, 'apps/web/src/features/sheet-editor/editor-page.ts'), code).not.toContain('boundaries/dependencies')
+      expect(await rulesFor(code, 'apps/web/src/features/sheet-editor/sheet-editor-page.ts'), code).not.toContain('boundaries/dependencies')
     expect((await lintAtProbe(imports[0] ?? '', PROBE_FILES.editorEntry)).rules).not.toContain('boundaries/dependencies')
   })
 }, LINT_TIMEOUT)
@@ -672,7 +672,7 @@ describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（fe
   const PROBE_MESSAGE = '编辑器页的测试构建探针（features/{sheet-editor,document-editor}/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入'
   const RULE = 'ts/no-restricted-imports'
   const START = 'apps/web/src/features/sheet-editor/start.tsx'
-  const PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
+  const PAGE = 'apps/web/src/features/sheet-editor/sheet-editor-page.ts'
   /** 共用编辑会话层的生产文件：同样只能动态引入探针（M6-P1 S6） */
   const SESSION = 'apps/web/src/features/document-editor/edit-lease.ts'
   const OUTBOX_PROBE = '../document-editor/outbox/testing/outbox-probe.ts'
@@ -703,7 +703,7 @@ describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（fe
     expect(await rulesFor(dynamicImport('./outbox/testing/outbox-probe.ts'), SESSION)).not.toContain(RULE)
     expect(await rulesFor('import { OUTBOX_PROBE_NAME } from \'../testing/outbox-probe.ts\'\n\nexport const name = OUTBOX_PROBE_NAME\n', 'apps/web/src/features/document-editor/outbox/testing/outbox-probe.ts')).not.toContain(RULE)
     expect(await rulesFor('import type { SelftestHost } from \'../../editor/testing/selftest.ts\'\n\nexport type H = SelftestHost\n', 'apps/web/src/features/sheet-editor/selftest-hook.ts')).not.toContain(RULE)
-    expect(await rulesFor(`import { installOutboxProbe } from '${OUTBOX_PROBE}'\n\nexport const install = installOutboxProbe\n`, 'apps/web/src/features/sheet-editor/editor-page.test.ts')).not.toContain(RULE)
+    expect(await rulesFor(`import { installOutboxProbe } from '${OUTBOX_PROBE}'\n\nexport const install = installOutboxProbe\n`, 'apps/web/src/features/sheet-editor/sheet-editor-page.test.ts')).not.toContain(RULE)
     // 这一块覆盖了 nerve/test-code-only-in-tests 的同名规则：测试辅助照样拦下（两个功能都是）
     for (const [file, code] of [
       [PAGE, 'import { unusedCsv } from \'./csv.test-support.ts\'\n\nexport const csv = unusedCsv\n'],
@@ -722,8 +722,8 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
   const RULE = 'boundaries/dependencies'
   const SESSION_MESSAGE = '共用编辑会话层（features/document-editor）只由编辑器页引用'
   const DIRECTION_MESSAGE = '共用编辑会话层（features/document-editor）不引用表格编辑器'
-  const SHEET_PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
-  const SHEET_TEST = 'apps/web/src/features/sheet-editor/editor-page.test.ts'
+  const SHEET_PAGE = 'apps/web/src/features/sheet-editor/sheet-editor-page.ts'
+  const SHEET_TEST = 'apps/web/src/features/sheet-editor/sheet-editor-page.test.ts'
   const SHEET_START = 'apps/web/src/features/sheet-editor/start.tsx'
   const SESSION = 'apps/web/src/features/document-editor/edit-lease.ts'
   const viaIndex = (path: string): string => `import { blockInteractions } from '${path}'\n\nexport const block = blockInteractions\n`
@@ -815,6 +815,28 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
     expect(await rulesFor('import { createEditMode } from \'../document-editor/edit-mode.ts\'\n\nexport const create = createEditMode\n', SHEET_EDIT_MODE)).toContain(RULE)
   })
 
+  it('编辑器页搬进会话层之后（S8 spec §2.8、§2.10）：在真实路径上连类型也不引用编辑器适配层与表格编辑器（报出依赖方向的说明）', async () => {
+    const PAGE = 'apps/web/src/features/document-editor/editor-page.ts'
+    expect(await rulesFor('import type { ImageInputState } from \'../../editor/index.ts\'\n\nexport type S = ImageInputState\n', PAGE)).toContain(RULE)
+    for (const code of [
+      'import type { SheetEditorPageElements } from \'../sheet-editor/index.ts\'\n\nexport type E = SheetEditorPageElements\n',
+      'import type { SheetEditMode } from \'../sheet-editor/sheet-edit-mode.ts\'\n\nexport type M = SheetEditMode\n',
+    ]) {
+      const report = await lint(code, PAGE)
+      expect(report.rules, code).toContain(RULE)
+      expect(report.messages.join('\n'), code).toContain(DIRECTION_MESSAGE)
+    }
+  })
+
+  it('表格的装配（sheet-editor-page.ts）经公开入口取 createEditorPage；引用会话层的 editor-page.ts 报错（S8 spec §2.8）', async () => {
+    const SHEET_ASSEMBLY = 'apps/web/src/features/sheet-editor/sheet-editor-page.ts'
+    // 只看边界规则（同 sheet-edit-mode.ts 那条）：上一条在 document-editor/editor-page.ts 的路径上检查过别的代码，同一个类型程序里那个文件
+    // 之后就是那段代码，这里经公开入口取到的 createEditorPage 成了 any，类型感知的规则（no-unsafe-assignment）随之报出，与边界无关。
+    // 文件还不在时解析失败，下一句的边界规则报不出来，照样不通过
+    expect(await rulesFor('import { createEditorPage } from \'../document-editor/index.ts\'\n\nexport const create = createEditorPage\n', SHEET_ASSEMBLY)).not.toContain(RULE)
+    expect(await rulesFor('import { createEditorPage } from \'../document-editor/editor-page.ts\'\n\nexport const create = createEditorPage\n', SHEET_ASSEMBLY)).toContain(RULE)
+  })
+
   it('刷新诊断（recovery/testing/reload-diagnostics.ts）照旧只引用零依赖的诊断格式；会话层别的文件不行', async () => {
     const code = 'import type { ReloadDiagnostics } from \'../../../../editor/testing/selftest-reload-diagnostics.ts\'\n\nexport type D = ReloadDiagnostics\n'
     expect(await rulesFor(code, 'apps/web/src/features/document-editor/recovery/testing/reload-diagnostics.ts')).not.toContain(RULE)
@@ -856,7 +878,7 @@ describe('US-M1-11 lint 规则的自测：本机发件箱的区域规则（M4-P1
   const PAGE_ONLY_MESSAGE = '发件箱 Worker 一侧的文件不用只在页面里有的全局'
   const PERSIST_MESSAGE = 'StorageManager.persist() 只在页面里有'
   const DYNAMIC_IMPORT_MESSAGE = '发件箱 Worker 一侧的文件不用动态 import()'
-  const EDITOR_PAGE = 'apps/web/src/features/sheet-editor/editor-page.ts'
+  const EDITOR_PAGE = 'apps/web/src/features/sheet-editor/sheet-editor-page.ts'
   const OUTBOX_SHARED = 'apps/web/src/shared/outbox'
   const OUTBOX_FEATURE = 'apps/web/src/features/document-editor/outbox'
   const WORKER_SHARED = `${OUTBOX_SHARED}/writer-fence.ts`

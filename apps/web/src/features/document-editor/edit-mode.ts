@@ -5,7 +5,7 @@
 // - 编辑器槽位（editor-slot.ts）：当前的编辑器、surface 与在途的那一次创建，单飞的重建——同一个容器里至多一个编辑器（审查 A1）；
 // - 阅读时的检查（reading-checks.ts）：计时、暂停与恢复，只认最新发出的那一次检查（审查 A9）；
 // - 失去编辑权之后的那一份（lost-copy-flow.ts）：捕获、保存副本和结果归类，每失去一次编辑权一个；页面管理重建和迟到结果。
-// 载入、会话与页头的编排在编辑器页（表格的是 sheet-editor/editor-page.ts）。
+// 载入、会话与页头的编排在编辑器页（editor-page.ts，S8b 起也在会话层，按类型装配）。
 //
 // 通用核心与扩展（M6-P1 S8a，S8 spec §1）：从表格编辑器搬进共用编辑会话层，与文档类型无关。编辑器的类型是类型参数，只要求会话层的窄接口
 // （ModeEditor：保存的 EditingSessionEditor、槽位的 SlotEditor 与打开自检）。表格专有的部分（公式的回退与恢复、Worker 故障的上报、CSV 的目标、
@@ -130,7 +130,7 @@
 // 先看打开自检、再建保存的状态机与调度——失败时释放编辑权、以只读重建、以 damaged 回到阅读（?edit=new 与"编辑"只能先取得编辑权再按它
 // 选内容，所以是"先取后放"）。失去编辑权之后的重建失败只上报，不改失去编辑权之后的选项（副本是本页的内容，服务端照常检查）。
 import type { CreatedDocument, DocumentDetail, EditInterruption, EditorDiagnosticReport, PendingEditRequest, SaveContentResponse, UserSummary } from '@nerve-office/contracts'
-import type { Incompatibility } from '../../shared/api/client-format.ts'
+import type { Incompatibility, PageClientFormat } from '../../shared/api/client-format.ts'
 import type { CopyState, LostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
 import type { DocumentRecovery, RecoveryPreparation } from '../../shared/local-drafts/document-recovery.ts'
 import type { ConflictCopyRequest } from '../../shared/local-drafts/lost-copy.ts'
@@ -446,7 +446,7 @@ export interface EditModeApi {
   readonly editRequest: EditRequestApi
 }
 
-/** 会话类的问题交给页面确认现在是谁（editor-page.ts）：不同的来源确认的方式不同 */
+/** 会话类的问题交给页面确认现在是谁（编辑器页 editor-page.ts）：不同的来源确认的方式不同 */
 export interface EditModeSessionHooks {
   /** 保存得到未登录或登录已过期 */
   readonly saveUnauthenticated: (error: ApiError) => void
@@ -468,6 +468,11 @@ export interface EditModeOptions<Editor, View, Options> {
   readonly clientInstanceId: string
   /** 本页的用户（载入时确认的）：交接频道的请求带上它，回应时只理会同一个人的（M3-P5 设计 §3.7） */
   readonly userId: string
+  /**
+   * 页面上报的档案（M6-P1 S8 spec §2.6，编辑器页按选中的装配注入）：转给编辑会话（草稿、保存与另存为副本），打开自检的上报也用它；
+   * 扩展的上报（表格是公式 Worker 的故障）取同一个
+   */
+  readonly format: PageClientFormat
   readonly connection?: EditingSessionOptions['connection']
   readonly localDrafts?: EditingSessionOptions['localDrafts']
   readonly recovery?: DocumentRecovery | undefined
@@ -837,6 +842,7 @@ export function createEditMode<Editor extends ModeEditor<View, Stage>, View, Sta
   const editing = createEditingSession({
     documentId,
     userId: options.userId,
+    format: options.format,
     localDrafts: options.localDrafts,
     connection: options.connection,
     sessionActive: () => session === 'active',
@@ -1078,7 +1084,7 @@ export function createEditMode<Editor extends ModeEditor<View, Stage>, View, Sta
     const check = created.openCheck
     if (check.ok)
       return undefined
-    const report = session === 'active' ? openCheckReportOf(check, context) : undefined
+    const report = session === 'active' ? openCheckReportOf(check, context, options.format) : undefined
     if (report !== undefined)
       api.reportOpenCheck(documentId, report).catch(() => undefined)
     return check.failures

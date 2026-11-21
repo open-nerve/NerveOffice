@@ -63,7 +63,7 @@ export function createSheetEditMode(options: SheetEditModeOptions): SheetEditMod
       const failure = formulaFallback.failure()
       if (formulaReported || failure === undefined || given.session() !== 'active' || given.disposed() || given.hidden())
         return
-      const report = formulaWorkerReportOf(failure, context)
+      const report = formulaWorkerReportOf(failure, context, options.format)
       if (report === undefined)
         return
       formulaReported = true

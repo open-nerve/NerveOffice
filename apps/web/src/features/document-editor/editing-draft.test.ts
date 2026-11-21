@@ -507,7 +507,7 @@ describe('恢复入口准备来源', () => {
     const facts = { access: 'editable', online: true, current: { revision: 7, source: null, occupied: false } } as const
     const recovery = createDocumentRecovery({
       key: KEY,
-      pageFormat: h.options.format,
+      pageFormats: [h.options.format],
       writtenBy: CLIENT_INSTANCE_ID,
       clock: h.time.clock,
       now: h.time.now,

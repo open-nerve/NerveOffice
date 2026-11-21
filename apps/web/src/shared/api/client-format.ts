@@ -3,8 +3,10 @@
 // 本页停下来、说明需要刷新；文档由比服务端新的版本写过时回答 DOCUMENT_TOO_NEW，本页只能阅读（incompatibilityOf）。
 // 构建版本由 Vite 在构建时注入（vite.config.ts 的 define：根 package.json 的 version，镜像构建附上提交号）；
 // Univer 版本与平台格式版本取打进本页的 contracts 常量（与本页实际用的 SDK 一致，后端的单元测试核对 Univer 版本等于 pnpm 目录里的）；
-// 插件档案取 contracts 的 sheet 档案（编辑器的 SHEET_PROFILE_ID 由它的单元测试核对与之相同）
-import type { ClientFormat, DocumentDetail } from '@nerve-office/contracts'
+// 插件档案按文档的类型取 contracts 的档案（编辑器的 SHEET_PROFILE_ID 由它的单元测试核对与表格的相同）。
+// M6-P1 S8b（S8 spec §2.6）：去掉写死表格档案的页面常量，改为按类型取（clientFormatOf）——编辑器页按选中的装配注入，留着一个隐含的表格默认值
+// 漏改的地方就编译不过；草稿页与后台维护的可读判定用本构建能打开的类型的档案（READABLE_CLIENT_FORMATS）
+import type { ClientFormat, DocumentDetail, DocumentType } from '@nerve-office/contracts'
 import { compareVersions, DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { ApiError } from './api-errors.ts'
 
@@ -19,15 +21,37 @@ export interface PageClientFormat extends ClientFormat {
   readonly formatVersion: number
 }
 
-export const PAGE_CLIENT_FORMAT: PageClientFormat = {
-  clientBuild: __NERVE_CLIENT_BUILD__,
-  univerVersion: UNIVER_SDK_VERSION,
-  profile: DOCUMENT_PROFILE_OF.sheet,
-  formatVersion: PLATFORM_FORMAT_VERSION,
+/**
+ * 这一类文档的页面上报的四项（S8 spec §2.6）：键序固定为构建、Univer 版本、档案、格式版本——申请编辑权、续租与请求编辑的请求体是
+ * JSON.stringify 出来的，键序就是字节。表格的就是原来的页面常量
+ */
+export function clientFormatOf(type: DocumentType): PageClientFormat {
+  return {
+    clientBuild: __NERVE_CLIENT_BUILD__,
+    univerVersion: UNIVER_SDK_VERSION,
+    profile: DOCUMENT_PROFILE_OF[type],
+    formatVersion: PLATFORM_FORMAT_VERSION,
+  }
 }
 
-/** 同样的四项写成查询参数（保存、另存为副本） */
-export function clientFormatParams(format: PageClientFormat = PAGE_CLIENT_FORMAT): Record<string, string> {
+/** 本构建能打开的文档类型（S8 spec §2.6）：编辑器页的装配表与它一致（start.tsx 的 satisfies）。P1 只有表格，P2 给文字文档装配时一并加上 */
+export const OPENABLE_DOCUMENT_TYPES = ['sheet'] as const satisfies readonly [DocumentType, ...DocumentType[]]
+export type OpenableDocumentType = (typeof OPENABLE_DOCUMENT_TYPES)[number]
+
+/** 不空的一组档案：恢复的可读判定与其中任意一个可读即为可读 */
+export type ReadableFormats = readonly [PageClientFormat, ...PageClientFormat[]]
+
+/** 一组类型（不空）的档案，次序相同 */
+function formatsOf(types: readonly [DocumentType, ...DocumentType[]]): ReadableFormats {
+  const [first, ...rest] = types
+  return [clientFormatOf(first), ...rest.map(type => clientFormatOf(type))]
+}
+
+/** 本构建能打开的类型的档案：草稿页与后台维护的可读判定（它们不知道草稿是哪一类文档的，草稿记录里有档案、没有类型） */
+export const READABLE_CLIENT_FORMATS: ReadableFormats = formatsOf(OPENABLE_DOCUMENT_TYPES)
+
+/** 同样的四项写成查询参数（保存、另存为副本）：用的是这一份草稿记下的档案 */
+export function clientFormatParams(format: PageClientFormat): Record<string, string> {
   return {
     clientBuild: format.clientBuild,
     univerVersion: format.univerVersion,

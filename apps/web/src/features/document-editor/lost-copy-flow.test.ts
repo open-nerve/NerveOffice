@@ -1,7 +1,7 @@
 import type { ConflictCopyQuery, CreatedDocument } from '@nerve-office/contracts'
 import type { CaptureEditor } from './snapshot-capture.ts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createLostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
 import { fakeWorkingDraft } from '../../shared/local-drafts/working-draft.test-support.ts'
@@ -138,7 +138,7 @@ describe('失效副本的保存结果', () => {
       throw new Error('未返回副本文档')
     expect(result.document).toBe(CREATED)
     expect(compress).toHaveBeenCalledExactlyOnceWith(SNAPSHOT)
-    expect(conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT, { requestId: 'copy-1', title: CREATED.title, formulasPending: true, baseRevision: 1, format: PAGE_CLIENT_FORMAT }, new TextEncoder().encode(SNAPSHOT))
+    expect(conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT, { requestId: 'copy-1', title: CREATED.title, formulasPending: true, baseRevision: 1, format: clientFormatOf('sheet') }, new TextEncoder().encode(SNAPSHOT))
     expect(onSessionProblem).not.toHaveBeenCalled()
   })
 

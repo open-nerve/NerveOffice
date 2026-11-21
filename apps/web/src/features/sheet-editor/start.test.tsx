@@ -7,16 +7,16 @@ const h = vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
   return { load: vi.fn(async () => {}), dispose: vi.fn(), stopConnection: vi.fn(), stopGuards: vi.fn(), stopMaintenance: vi.fn(), create: vi.fn() }
 })
-vi.mock('./editor-page.ts', () => ({ createEditorPage: (options: unknown) => {
-  h.create(options)
-  return { load: h.load, dispose: h.dispose }
-} }))
 vi.mock('./editor-chrome.tsx', () => ({ EditorChrome: () => <p>正式页头</p> }))
 vi.mock('../local-data/notice.ts', () => ({ LocalDataNotice: () => null }))
 vi.mock('../../shared/lib/draft-maintenance.ts', () => ({ startDraftMaintenance: () => h.stopMaintenance }))
 vi.mock('../../shared/lib/browser-connection.ts', () => ({ watchBrowserConnection: () => h.stopConnection }))
-// 页面的守卫来自共用编辑会话层的公开入口（M6-P1 S6）：mock 编辑器页实际引用的入口，其余名字取原实现
-vi.mock(import('../document-editor/index.ts'), async importOriginal => ({ ...await importOriginal(), installPageGuards: () => h.stopGuards, isApplePlatform: () => false }))
+// 页面的守卫（M6-P1 S6）与通用页面（S8b）来自共用编辑会话层的公开入口：mock 编辑器页实际引用的入口，其余名字取原实现。
+// 通用页面的假件只有 load 与 dispose（同原来 mock 表格编辑器里的 editor-page.ts），所以按路径 mock，不按模块的类型核对返回值
+vi.mock('../document-editor/index.ts', async importOriginal => ({ ...await importOriginal<typeof import('../document-editor/index.ts')>(), installPageGuards: () => h.stopGuards, isApplePlatform: () => false, createEditorPage: (options: unknown) => {
+  h.create(options)
+  return { load: h.load, dispose: h.dispose }
+} }))
 vi.mock('../../shared/lib/session-channel.ts', () => ({ openSessionChannel: () => ({}) }))
 vi.mock('../../editor/testing/autosave-control.ts', () => ({ installAutosaveControl: () => undefined }))
 vi.mock('../../editor/testing/handover-log.ts', () => ({ installHandoverLog: () => ({ observe: undefined }) }))

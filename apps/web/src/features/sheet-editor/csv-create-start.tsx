@@ -87,7 +87,8 @@ export function startCsvCreatePage(elements: SheetEditorPageElements): CsvCreati
     heading.hidden = false
     surface.style.visibility = ''
     return {
-      apply: async (table, current) => ready.page.importCreatedCsv(table, { documentId: document.id, ...owner, current }),
+      // 表格的页面扩展（S8b）在正式页载入完成时已经有了（上面核对过 ready）
+      apply: async (table, current) => ready.page.extension()?.importCreatedCsv(table, { documentId: document.id, ...owner, current }) ?? false,
       dispose: () => {
         // 真实离开由正式页原有 pagehide 收尾；不能用普通卸载抢先释放仍有保存的租约。
         if (!pageHidden)

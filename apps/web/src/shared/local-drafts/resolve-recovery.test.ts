@@ -11,7 +11,7 @@ const KEY = { userId: META.userId, documentId: META.documentId }
 const OBSERVATION = { key: KEY, id: 'original-observation' }
 const GZIP = new Uint8Array([31, 139, 8, 7])
 const OBSERVED: Extract<ObserveResult, { kind: 'observed' }> = { kind: 'observed', observation: OBSERVATION, record: { kind: 'draft', meta: META, gzip: GZIP }, writer: undefined }
-const FACTS: Omit<RecoveryFacts, 'record' | 'replay'> = { key: KEY, access: 'editable', online: true, current: { revision: 7, source: null, occupied: false }, pageFormat: META.format, now: NOW }
+const FACTS: Omit<RecoveryFacts, 'record' | 'replay'> = { key: KEY, access: 'editable', online: true, current: { revision: 7, source: null, occupied: false }, pageFormats: [META.format], now: NOW }
 const RECEIPT = { revision: 8, savedAt: new Date(NOW).toISOString(), unchanged: false }
 
 describe('一次原观察的恢复核对', () => {
