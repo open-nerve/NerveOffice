@@ -386,7 +386,7 @@ describe('7 个插槽的位置、先后与作用', () => {
     expect(within(dialog).queryByText('假的扩展正挡着这个操作')).toBeNull()
   })
 
-  it('快照被拒的说明（snapshotProblem）：保存被拒与副本被拒都交给插槽（详情；插槽在说明的那一刻读成员）；副本超过容量照旧按容量说', () => {
+  it('快照被拒的说明（snapshotProblem）：保存被拒与副本被拒都交给插槽（详情）；副本超过容量照旧按容量说', () => {
     const invalid = new ApiError(422, 'SNAPSHOT_INVALID', '快照不合规则', { details: { rule: 'link-address' } })
     const fake = renderChrome({ save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error: invalid } } })
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败：假的快照说明（{"rule":"link-address"}，ready）')

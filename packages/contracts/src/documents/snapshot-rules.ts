@@ -18,7 +18,7 @@ import { z } from 'zod'
  *   每个键下的值是这类资源该有的种类，文字文档的按资源声明的种类核对，见 profile-resources.ts 的 ResourceRule）；resource-not-empty：
  *   必须为空的资源不为空；
  * - image-source：任何深度上名为 source 的字段不是平台的图片地址；
- * - link-structure：单元格的链接区间看不懂（不是数组、某一项不是对象、链接没有字符串的地址）；link-address：链接地址不合法，
+ * - link-structure：单元格或文字文档正文的链接区间看不懂（不是数组、某一项不是对象、链接没有字符串的地址）；link-address：链接地址不合法，
  *   或者不是它的规范写法；link-range-id：链接区间的 rangeId 不合写法；
  * - resource-mismatch：资源与正文不一致（文字文档的链接、图片资源，加载时它们会覆盖正文）；
  * - unit-id：快照的 unitId 不是这份文档的；resource-missing：上一版非空的资源这一版不在了（不缩水）。这两条与文档有关，在事务里判断

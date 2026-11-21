@@ -79,8 +79,10 @@ export function docStructure(snapshot: unknown): CheckedStructure | undefined {
 }
 
 /**
- * 表格占据的区间（含两端）：写法对、而且落在 dataStream 的表格控制符上的表格（起点是表格开始，终点的前一位是表格结束），按起点排序之后
- * 合并成不相交、递增的区间。只看 tables 的话，伪造一个区间就能把任意分节符算成表格里的（P1 审查 A 的 M-1）
+ * 表格占据的区间（含两端）：写法对、而且两端落在 dataStream 的表格控制符上的表格（起点是表格开始，终点的前一位是表格结束），按起点排序之后
+ * 合并成不相交、递增的区间（嵌套的表格取外层的终点）。只看 tables 的话，伪造一个区间就能把任意分节符算成表格里的（P1 审查 A 的 M-1）。
+ * 这里只核对两端：两端都落在控制符上但不是一对的区间、正文里自造的一对控制符，以及 dataStream 里没有记录的分节符，P2 定稿 doc@1 时按控制符的
+ * 完整结构判定（DEF-089）
  */
 function tableIntervals(tables: readonly unknown[], dataStream: string): readonly (readonly [number, number])[] {
   const intervals: [number, number][] = []
@@ -156,7 +158,7 @@ function hasTableOfContents(body: Readonly<Record<string, unknown>>): boolean {
  * - doc-flavor：documentStyle.documentFlavor 是 MODERN（缺少也拒绝）；
  * - doc-header-footer：headers、footers 不在或深层为空（documentStyle 里页眉页脚的 id 不单独判：样本里是空串）；
  * - doc-notes：notes、footnotes、endnotes 不在或深层为空。noteSettings 不判：它除了编号的设置，还能带分隔符等几段正文（Univer 的
- *   INoteSettings），这些正文只在有脚注尾注时排版，而脚注尾注已要求为空；P2 定稿 doc@1 时核实它们会不会显示（P1 审查 A 的 M-2）；
+ *   INoteSettings），这些正文只在有脚注尾注时排版，而脚注尾注已要求为空；P2 定稿 doc@1 时核实它们会不会显示（P1 审查 A 的 M-2，DEF-090）；
  * - doc-section-break：见 sectionBreaksAllowed；doc-toc：见 hasTableOfContents
  */
 export function checkDocContent(checked: CheckedStructure): RuleCheck<ProfileContentRule> {

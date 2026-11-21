@@ -136,8 +136,8 @@ describe('文字文档的版式、页眉页脚、脚注尾注、分节符与目�
     })
 
     // 表格在 dataStream 里的写法同 SDK（docs-ui 的 buildDocTableInsertBody，M0 的 doc-table 样本）：区间的起点是表格开始 \x1A，终点是表格结束 \x0F
-    // 之后的那个 \r；单元格是 \x1C\r\n\x1D，其中的 \n 是单元格的分节符。TABLE 是一个最小的表格：下标 0 a、1 b、2 \x1A、3 \n、4 \x0F、5 \r、6 c、
-    // 7 d、8 \n（文末）
+    // 之后的那个 \r；单元格是 \x1C\r\n\x1D，其中的 \n 是单元格的分节符。这里的输入只带表格开始与结束两个控制符、没有行与单元格的控制符，
+    // 够这条规则用：它只核对区间的两端（按控制符的完整结构判定见 DEF-089）。TABLE：下标 0 a、1 b、2 \x1A、3 \n、4 \x0F、5 \r、6 c、7 d、8 \n（文末）
     const TABLE = 'ab\x1A\n\x0F\rcd\n'
 
     it('表格里每个单元格各有一个（含区间的两端）：不算；表格之外照常数', () => {
@@ -155,6 +155,16 @@ describe('文字文档的版式、页眉页脚、脚注尾注、分节符与目�
       expect(content(doc({}, { dataStream, tables, sectionBreaks: [{ startIndex: 7 }] }))).toBe('doc-section-break')
     })
 
+    it('嵌套的表格：内表格在外表格的单元格里，外表格里排在内表格之后的分节符照样算表格里的（合并取两个终点之大），表格的先后不影响', () => {
+      // 下标：0 \x1A、1 \n、2 \x1A、3 \n、4 \x0F、5 \r、6 \n、7 \x0F、8 \r、9 x、10 \n（文末）。外表格 [0, 8] 包住内表格 [2, 5]（P1 复验的 Minor-2）
+      const dataStream = '\x1A\n\x1A\n\x0F\r\n\x0F\rx\n'
+      const tables = [{ startIndex: 0, endIndex: 8 }, { startIndex: 2, endIndex: 5 }]
+      for (const order of [tables, tables.toReversed()]) {
+        expect(content(doc({}, { dataStream, tables: order, sectionBreaks: [{ startIndex: 1 }, { startIndex: 3 }, { startIndex: 6 }, { startIndex: 10 }] }))).toBe('ok')
+        expect(content(doc({}, { dataStream, tables: order, sectionBreaks: [{ startIndex: 9 }] }))).toBe('doc-section-break')
+      }
+    })
+
     it('写法不对的表格不算表格；写法不对的分节符按表格之外算', () => {
       expect(content(doc({}, { dataStream: TABLE, tables: [{ startIndex: '2', endIndex: 5 }, null, { startIndex: 5, endIndex: 2 }], sectionBreaks: [{ startIndex: 4 }] }))).toBe('doc-section-break')
       expect(content(doc({}, { sectionBreaks: [{}] }))).toBe('doc-section-break')
@@ -162,7 +172,7 @@ describe('文字文档的版式、页眉页脚、脚注尾注、分节符与目�
       expect(content(doc({}, { sectionBreaks: [{ startIndex: 8.5 }] }))).toBe('doc-section-break')
     })
 
-    it('表格以 dataStream 里的控制符为准：起点不是表格开始（\\x1A）或终点的前一位不是表格结束（\\x0F）的区间不算表格，伪造的区间藏不住分节符', () => {
+    it('表格以 dataStream 里的控制符为准：起点不是表格开始（\\x1A）或终点的前一位不是表格结束（\\x0F）的区间不算表格，两端不落在控制符上的伪造区间藏不住分节符', () => {
       // 正文里没有表格，tables 却声称有一个盖住第一段的表格（P1 审查 A 的 M-1）
       expect(content(doc({}, { tables: [{ startIndex: 0, endIndex: 7, tableId: 't1' }], sectionBreaks: [{ startIndex: 3 }, { startIndex: 8 }] }))).toBe('doc-section-break')
       // 只有一端是控制符
