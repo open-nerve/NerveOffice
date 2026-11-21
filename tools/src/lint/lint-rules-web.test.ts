@@ -801,6 +801,20 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
     expect(report.messages.join('\n')).toContain(DIRECTION_MESSAGE)
   })
 
+  it('编辑模式与打开自检的上报搬进会话层之后（S8 spec §1.3、§1.7）：在真实路径上连类型也不引用编辑器适配层', async () => {
+    for (const [code, file] of [
+      ['import type { SheetEditor } from \'../../editor/index.ts\'\n\nexport type E = SheetEditor\n', 'apps/web/src/features/document-editor/edit-mode.ts'],
+      ['import type { OpenCheck } from \'../../editor/index.ts\'\n\nexport type C = OpenCheck\n', 'apps/web/src/features/document-editor/open-check-report.ts'],
+    ] as const)
+      expect(await rulesFor(code, file), file).toContain(RULE)
+  })
+
+  it('表格的编辑模式（sheet-edit-mode.ts）经公开入口取 createEditMode；引用会话层的 edit-mode.ts 报错（S8 spec §1.7）', async () => {
+    const SHEET_EDIT_MODE = 'apps/web/src/features/sheet-editor/sheet-edit-mode.ts'
+    expect(await rulesFor('import { createEditMode } from \'../document-editor/index.ts\'\n\nexport const create = createEditMode\n', SHEET_EDIT_MODE)).not.toContain(RULE)
+    expect(await rulesFor('import { createEditMode } from \'../document-editor/edit-mode.ts\'\n\nexport const create = createEditMode\n', SHEET_EDIT_MODE)).toContain(RULE)
+  })
+
   it('刷新诊断（recovery/testing/reload-diagnostics.ts）照旧只引用零依赖的诊断格式；会话层别的文件不行', async () => {
     const code = 'import type { ReloadDiagnostics } from \'../../../../editor/testing/selftest-reload-diagnostics.ts\'\n\nexport type D = ReloadDiagnostics\n'
     expect(await rulesFor(code, 'apps/web/src/features/document-editor/recovery/testing/reload-diagnostics.ts')).not.toContain(RULE)

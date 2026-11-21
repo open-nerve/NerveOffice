@@ -4,8 +4,8 @@ import type { DocumentRecovery } from '../../shared/local-drafts/document-recove
 import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
 import type { OutboxHost } from '../../shared/outbox/outbox-host.ts'
 import type { AutosaveLimits, FakeBrowser, FakeLeaseServer, HeldLock } from '../document-editor/index.test-support.ts'
-import type { Autosave, AutosavePage, AutosaveTuning, EditLeaseApi, FetchedEditStatus, HandoverTrace, HandoverTraceEvent, LoadedContent, PendingSaveMarker, SameBrowser } from '../document-editor/index.ts'
-import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
+import type { Autosave, AutosavePage, AutosaveTuning, EditLeaseApi, EditModeApi, EditModeState, FetchedEditStatus, HandoverTrace, HandoverTraceEvent, LoadedContent, LostMode, PendingSaveMarker, ReadingMode, SameBrowser } from '../document-editor/index.ts'
+import type { SheetEditMode, SheetEditModeOptions } from './sheet-edit-mode.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FormulaWorkerError } from '../../editor/index.ts'
@@ -21,10 +21,10 @@ import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
-import { channelNameOf, fakeBrowser, fakeLeaseServer, issuedRequestLockNameOf, lockNameOf, memoryIssuedRequest, newKey, PENDING_SAVE_POLL_MS, READING_CHECK_INTERVAL_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, servedToken, TAB_HANDOVER_BUSY_RETRY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from '../document-editor/index.test-support.ts'
+import { channelNameOf, EXIT_RELEASE_WAIT_MS, fakeBrowser, fakeLeaseServer, issuedRequestLockNameOf, lockNameOf, memoryIssuedRequest, newKey, PENDING_SAVE_POLL_MS, READING_CHECK_INTERVAL_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, servedToken, TAB_HANDOVER_BUSY_RETRY_MS, TAKEOVER_STEAL_WAIT_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from '../document-editor/index.test-support.ts'
 import { CONTENT_UNCHANGED, DEFAULT_AUTOSAVE_LIMITS, HEARTBEAT_MS, sameBrowserFor } from '../document-editor/index.ts'
 import { unusedCsv } from './csv.test-support.ts'
-import { createEditMode, EXIT_RELEASE_WAIT_MS, TAKEOVER_STEAL_WAIT_MS } from './edit-mode.ts'
+import { createSheetEditMode } from './sheet-edit-mode.ts'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
@@ -367,8 +367,8 @@ function fakeAutosave(held: boolean) {
 
 interface Setup {
   readonly recovery?: DocumentRecovery
-  readonly localDrafts?: EditModeOptions['localDrafts']
-  readonly connection?: EditModeOptions['connection']
+  readonly localDrafts?: SheetEditModeOptions['localDrafts']
+  readonly connection?: SheetEditModeOptions['connection']
   readonly api?: Partial<Omit<EditModeApi, 'editLease'>>
   readonly editLease?: Partial<EditLeaseApi>
   readonly now?: () => Date
@@ -393,7 +393,7 @@ interface Setup {
   readonly trace?: HandoverTrace
 }
 
-const modes: EditMode[] = []
+const modes: SheetEditMode[] = []
 const recoveries: DocumentRecovery[] = []
 
 function setup(options: Setup = {}) {
@@ -431,7 +431,7 @@ function setup(options: Setup = {}) {
   /** 这一页发出过的请求编辑的记号（审查 B2）：每个"标签页"一份 */
   const issued = memoryIssuedRequest(DOCUMENT_ID)
   let lastActive = time.now()
-  const modeOptions: EditModeOptions = {
+  const modeOptions: SheetEditModeOptions = {
     documentId: DOCUMENT_ID,
     clientInstanceId: options.clientInstanceId ?? PAGE_ID,
     userId: options.userId ?? AMY.id,
@@ -454,7 +454,7 @@ function setup(options: Setup = {}) {
     reportError,
     ...(options.trace === undefined ? {} : { trace: options.trace }),
   }
-  const mode = createEditMode(modeOptions)
+  const mode = createSheetEditMode(modeOptions)
   modes.push(mode)
   return {
     mode,
@@ -489,18 +489,18 @@ afterEach(() => {
     recovery.dispose()
 })
 
-function modeOf(mode: EditMode): EditModeState {
+function modeOf(mode: SheetEditMode): EditModeState {
   return mode.view().mode
 }
 
-function readingOf(mode: EditMode): ReadingMode {
+function readingOf(mode: SheetEditMode): ReadingMode {
   const current = modeOf(mode)
   if (current.kind !== 'reading')
     throw new Error(`现在不是阅读：${current.kind}`)
   return current
 }
 
-function lostOf(mode: EditMode): LostMode {
+function lostOf(mode: SheetEditMode): LostMode {
   const current = modeOf(mode)
   if (current.kind !== 'lost')
     throw new Error(`现在不是失去编辑权：${current.kind}`)
@@ -6642,7 +6642,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
   }
 
   /** 编辑时的状态（不是编辑时抛错） */
-  function editingOf(mode: EditMode): Extract<EditModeState, { kind: 'editing' }> {
+  function editingOf(mode: SheetEditMode): Extract<EditModeState, { kind: 'editing' }> {
     const current = modeOf(mode)
     if (current.kind !== 'editing')
       throw new Error(`现在不是编辑：${current.kind}`)
@@ -8132,7 +8132,7 @@ describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', ()
   /** 自己（艾米）在别的标签页或设备上的那一代异常中断 */
   const OWN: AcquiredEditInterruption = { holder: AMY, endedAt: '2026-10-04T02:55:00.000Z', sameUser: true, samePage: false }
 
-  function editingInterruption(mode: EditMode): EditInterruption | undefined {
+  function editingInterruption(mode: SheetEditMode): EditInterruption | undefined {
     const current = modeOf(mode)
     if (current.kind !== 'editing' && current.kind !== 'exiting')
       throw new Error(`现在不是编辑：${current.kind}`)

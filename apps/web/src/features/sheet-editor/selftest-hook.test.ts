@@ -1,7 +1,7 @@
 // 页面自检的挂接（selftest-hook.ts）：页面到 steady 才引入自检、只跑一次；载入失败、等不到就绪时同样交给自检（它把原因带回去）；
 // 页面错误、console.error 与可见性从挂上起就收集，浏览器的 ResizeObserver 通知另记。M3-P2 起打开即阅读：要在编辑时跑的场景先进入编辑。
 import type { SelftestHost } from '../../editor/testing/selftest.ts'
-import type { EditModeState } from './edit-mode.ts'
+import type { EditModeState } from '../document-editor/index.ts'
 import type { EditorPage, EditorPageLoad, EditorPageView } from './editor-page.ts'
 import { EDIT_LEASE_HEADER } from '@nerve-office/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'

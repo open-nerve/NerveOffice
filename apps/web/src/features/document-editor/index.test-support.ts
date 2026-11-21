@@ -3,6 +3,7 @@
 // 模块边界只给表格编辑器的测试代码开这一个文件。写法照 api 的 app/integration.test-support.ts（只给集成测试的入口）
 export type { AutosaveLimits } from './autosave.ts'
 export { SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
+export { EXIT_RELEASE_WAIT_MS, TAKEOVER_STEAL_WAIT_MS } from './edit-mode.ts'
 export { deferred, disposeSessions, editorFixture, fixture, INITIAL, leaseFixture, prepare } from './editing-session.test-support.ts'
 export { memoryIssuedRequest } from './issued-request.test-support.ts'
 export { fakeLeaseServer, servedToken } from './lease-server.test-support.ts'

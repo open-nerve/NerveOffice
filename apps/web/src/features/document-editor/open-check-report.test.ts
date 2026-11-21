@@ -1,7 +1,7 @@
 // 打开自检失败的上报的请求体（M3-P4 设计 §3.13）：与服务端的严格解析同一份写法——这里给出的请求体都过得了 contracts 的
 // openCheckReportSchema（服务端用它解析）；不合写法的项先筛掉，免得整份被拒
 import type { OpenCheckFailure } from '@nerve-office/contracts'
-import type { OpenCheck } from '../../editor/index.ts'
+import type { OpenCheck } from './open-check-report.ts'
 import { OPEN_CHECK_FAILURES_MAX, openCheckReportSchema } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'

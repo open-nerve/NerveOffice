@@ -1,7 +1,6 @@
 import type { EditInterruption } from '@nerve-office/contracts'
 import type { RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
-import type { AutosaveView, LeaseLoss, LocalSaveView, SaveView } from '../document-editor/index.ts'
-import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
+import type { AutosaveView, EditModeState, IncomingRequest, LeaseLoss, LocalSaveView, LostMode, OpenCheckFailures, ReadingMode, SaveView } from '../document-editor/index.ts'
 import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
 import { historyPagePath } from '@nerve-office/contracts'

@@ -1,6 +1,6 @@
 // 可恢复诊断只挑选有限事实；不引用带 Zod 的 schema，保持编辑器分块的 CSP 初始化顺序。
 import type { FormulaWorkerFailure, FormulaWorkerReport } from '@nerve-office/contracts'
-import type { OpenCheckContext } from './open-check-report.ts'
+import type { OpenCheckContext } from '../document-editor/index.ts'
 import { FORMULA_WORKER_FAILURE_KINDS, OPEN_CHECK_ACCESS, OPEN_CHECK_TRIGGERS } from '@nerve-office/contracts'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
 

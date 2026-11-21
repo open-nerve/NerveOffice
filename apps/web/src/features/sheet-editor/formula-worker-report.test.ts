@@ -1,5 +1,5 @@
 import type { FormulaWorkerFailure } from '@nerve-office/contracts'
-import type { OpenCheckContext } from './open-check-report.ts'
+import type { OpenCheckContext } from '../document-editor/index.ts'
 import { FORMULA_WORKER_FAILURE_KINDS, formulaWorkerReportSchema } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
 import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'

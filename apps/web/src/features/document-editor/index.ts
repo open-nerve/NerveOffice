@@ -1,5 +1,6 @@
 // 共用编辑会话层的公开入口（M6-P1 设计 §3.1、§3.5）：与文档类型无关的编辑会话——编辑权、交接与请求编辑、本机锁、草稿与发件箱、恢复、
-// 页面的小件；S7 起另有保存与自动保存、捕获、同一浏览器的交接、页头的保存状态与编辑器槽位。依赖方向是 sheet-editor → document-editor：只由编辑器页引用（编辑器页的入口与表格编辑器，eslint.config.ts 的模块边界），
+// 页面的小件；S7 起另有保存与自动保存、捕获、同一浏览器的交接、页头的保存状态与编辑器槽位；S8a 起另有编辑模式的通用核心与打开自检的上报
+// （表格的扩展与门面在 sheet-editor/sheet-edit-mode.ts）。依赖方向是 sheet-editor → document-editor：只由编辑器页引用（编辑器页的入口与表格编辑器，eslint.config.ts 的模块边界），
 // 这里只放它们的生产代码用到的名字。测试另经 index.test-support.ts 取假件与测试用的内部常量。
 // 请求层 editor-api 以命名空间 editorApi 转出：它的 acquireEditLease（申请编辑权的请求）与 edit-lease 的 acquireEditLease（带重试的申请流程）
 // 同名（M6-P1 S6 spec §2）
@@ -7,6 +8,8 @@ export { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
 export type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
 export { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseHolderOf, leaseLossOf, trackActivity, within } from './edit-lease.ts'
 export type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseHolder, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
+export { createEditMode } from './edit-mode.ts'
+export type { CopyState, EditMode, EditModeApi, EditModeAutosave, EditModeExtension, EditModeHost, EditModeOptions, EditModeState, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice } from './edit-mode.ts'
 export { createEditRequests } from './edit-request.ts'
 export type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit-request.ts'
 export { prepareEditingDraft } from './editing-draft.ts'
@@ -33,6 +36,7 @@ export type { LocalLock, LockClaim } from './local-lock.ts'
 export { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
 export type { LocalSaveIndicator } from './local-save-indicator.ts'
 export { captureLostContent } from './lost-copy-flow.ts'
+export type { OpenCheckContext } from './open-check-report.ts'
 export { installPageGuards, isApplePlatform } from './page-guards.ts'
 export { pendingSaveMarker } from './pending-save-marker.ts'
 export type { PendingSaveMarker } from './pending-save-marker.ts'

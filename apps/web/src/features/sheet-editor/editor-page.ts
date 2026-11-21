@@ -27,10 +27,10 @@ import type { DraftReplayRequest } from '../../shared/local-drafts/recovery-deci
 import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { DraftSessionPermit } from '../../shared/outbox/session-fence.ts'
-import type { AutosavePage, AutosaveView, EditingSessionOptions, EditorImageAccessController, HandoverTrace, IssuedRequestMarker, LoadedContent, LocalSaveView, PageVisibility, PendingSaveMarker, SameBrowser, SaveView } from '../document-editor/index.ts'
+import type { AutosavePage, AutosaveView, EditingSessionOptions, EditModeApi, EditModeAutosave, EditModeState, EditorImageAccessController, HandoverTrace, IssuedRequestMarker, LoadedContent, LocalSaveView, PageVisibility, PendingSaveMarker, SameBrowser, SaveView } from '../document-editor/index.ts'
 import type { CsvController, CsvTarget } from './csv-controller.ts'
-import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
+import type { SheetEditMode } from './sheet-edit-mode.ts'
 import type { CreateModeEditor } from './sheet-editor-slot.ts'
 import { DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
 import { documentIsNewer, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
@@ -43,7 +43,7 @@ import { subscribeLocalSession } from '../../shared/local-drafts/session-events.
 import { blockInteractions, createEditorImageAccess, DEFAULT_AUTOSAVE_LIMITS, retryDelay } from '../document-editor/index.ts'
 import { createCsvController } from './csv-controller.ts'
 import { downloadCsv } from './csv-download.ts'
-import { createEditMode } from './edit-mode.ts'
+import { createSheetEditMode } from './sheet-edit-mode.ts'
 
 /**
  * 就绪时页头要的东西：标题与所在的空间（返回链接）、看得到它的途径（只凭授权时返回"与我共享"，M2-P5）、能不能分享（分享的入口）、
@@ -202,7 +202,7 @@ export interface EditorPageOptions {
 export interface EditorPage {
   readonly csv: CsvController
   readonly importCreatedCsv: (table: CsvTable, intent: CreatedCsvIntent) => Promise<boolean>
-  readonly sheetName: EditMode['sheetName']
+  readonly sheetName: SheetEditMode['sheetName']
   readonly retryFormulaRecovery: () => void
   readonly retryRecovery: () => Promise<void>
   readonly copyRecovery: () => Promise<void>
@@ -318,7 +318,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
   /** 阅读与编辑（载入之后才有） */
-  let mode: EditMode | undefined
+  let mode: SheetEditMode | undefined
   let recovery: DocumentRecovery | undefined
   let earlyUnreadableRound: number | undefined
   /** 本页最后一次键盘、鼠标操作的时刻（单调的时钟）：心跳上报"多久没有操作" */
@@ -872,10 +872,10 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     await work(owned)
   }
 
-  function createMode(id: string, user: string): EditMode {
+  function createMode(id: string, user: string): SheetEditMode {
     const sameBrowser = options.sameBrowser(id)
     cleanups.push(() => sameBrowser.close())
-    const created = createEditMode({
+    const created = createSheetEditMode({
       documentId: id,
       clientInstanceId,
       userId: user,
