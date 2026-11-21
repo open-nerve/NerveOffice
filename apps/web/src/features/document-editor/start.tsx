@@ -150,7 +150,7 @@ function loadFailureReporter(target: Window) {
 }
 
 /** 启动编辑器页（S8 spec §3.3）：kit 是这一类文档在启动时交给页面的；Extension 带页头的插槽（EditorChromeMembers） */
-export async function startEditorPage<Extension extends EditorChromeMembers<Extension, Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>(elements: EditorPageElements, kit: EditorPageKit<Extension, Extra, ImageState>): Promise<EditorPageMount<Extension, Extra, ImageState> | undefined> {
+export async function startEditorPage<Extension extends EditorChromeMembers<Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>(elements: EditorPageElements, kit: EditorPageKit<Extension, Extra, ImageState>): Promise<EditorPageMount<Extension, Extra, ImageState> | undefined> {
   const stopConnection = watchBrowserConnection({ state: connectionState, probe: requestSession })
   const reporter = loadFailureReporter(window)
   let stopped = false
@@ -182,7 +182,7 @@ export async function startEditorPage<Extension extends EditorChromeMembers<Exte
   }
 }
 
-async function prepare<Extension extends EditorChromeMembers<Extension, Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>(elements: EditorPageElements, kit: EditorPageKit<Extension, Extra, ImageState>, reportLoadFailure: (error: unknown) => void, stopped: () => boolean, onLoadStarted: () => void): Promise<EditorPageMount<Extension, Extra, ImageState> | undefined> {
+async function prepare<Extension extends EditorChromeMembers<Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>(elements: EditorPageElements, kit: EditorPageKit<Extension, Extra, ImageState>, reportLoadFailure: (error: unknown) => void, stopped: () => boolean, onLoadStarted: () => void): Promise<EditorPageMount<Extension, Extra, ImageState> | undefined> {
   if (import.meta.env.MODE === 'e2e') {
     const parameters = new URLSearchParams(window.location.search)
     // 地址带 outboxProbe 时：发件箱的浏览器层探针（M4-P1 设计 §3.1，outbox/testing/outbox-probe.ts），挂在 window 上。它不依赖编辑器页，
@@ -227,7 +227,7 @@ async function prepare<Extension extends EditorChromeMembers<Extension, Extra, I
   return assemble(elements, kit, reportLoadFailure, undefined, undefined, undefined, onLoadStarted)
 }
 
-function assemble<Extension extends EditorChromeMembers<Extension, Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>(elements: EditorPageElements, kit: EditorPageKit<Extension, Extra, ImageState>, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics: (() => unknown) | undefined, onLoadStarted: () => void): EditorPageMount<Extension, Extra, ImageState> {
+function assemble<Extension extends EditorChromeMembers<Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>(elements: EditorPageElements, kit: EditorPageKit<Extension, Extra, ImageState>, reportLoadFailure: (error: unknown) => void, autosaveControl: AutosaveControlHooks | undefined, handoverTrace: HandoverTrace | undefined, reloadDiagnostics: (() => unknown) | undefined, onLoadStarted: () => void): EditorPageMount<Extension, Extra, ImageState> {
   const stopMaintenance = startDraftMaintenance()
   clearInheritedReloadMarkers(() => window.sessionStorage)
   const page = createEditorPage<Extension, Extra, ImageState>({

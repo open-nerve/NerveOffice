@@ -1,62 +1,21 @@
 // 共用编辑会话层的公开入口（M6-P1 设计 §3.1、§3.5）：与文档类型无关的编辑会话——编辑权、交接与请求编辑、本机锁、草稿与发件箱、恢复、
 // 页面的小件；S7 起另有保存与自动保存、捕获、同一浏览器的交接、页头的保存状态与编辑器槽位；S8a 起另有编辑模式的通用核心与打开自检的上报
-// （表格的扩展与门面在 sheet-editor/sheet-edit-mode.ts）；S8b 起另有按类型装配的编辑器页（表格的装配在 sheet-editor/sheet-editor-page.ts）。依赖方向是 sheet-editor → document-editor：只由编辑器页引用（编辑器页的入口与表格编辑器，eslint.config.ts 的模块边界），
-// 这里只放它们的生产代码用到的名字。测试另经 index.test-support.ts 取假件与测试用的内部常量。
+// （表格的扩展与门面在 sheet-editor/sheet-edit-mode.ts）；S8b 起另有按类型装配的编辑器页（表格的装配在 sheet-editor/sheet-editor-page.ts）；
 // S8c 起另有页头的骨架（插槽的类型 EditorChromeSlots，表格的插槽在 sheet-editor/sheet-chrome.tsx）与编辑器页的启动（kit 等类型，表格的 kit 在
-// sheet-editor/start.tsx）：这里只转出它们的类型。启动是组合处专用的窄入口，值 startEditorPage 由编辑器页的入口直接引用 start.tsx（从这里转出的话，
-// 表格编辑器的生产代码与测试的模块图里都会多出 React DOM、分享对话框、弹窗等页面外壳）；页头的骨架给表格编辑器的测试经 index.test-support.ts。
-// 请求层 editor-api 以命名空间 editorApi 转出：它的 acquireEditLease（申请编辑权的请求）与 edit-lease 的 acquireEditLease（带重试的申请流程）
-// 同名（M6-P1 S6 spec §2）
-export { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
-export type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
-export { acquireEditLease, browserLeaseClock, HEARTBEAT_MS, leaseHolderOf, leaseLossOf, trackActivity, within } from './edit-lease.ts'
-export type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseHolder, LeaseLoss, LeaseVerdict } from './edit-lease.ts'
+// sheet-editor/start.tsx）。依赖方向是 sheet-editor → document-editor：只由编辑器页引用（编辑器页的入口与表格编辑器，eslint.config.ts 的模块边界）。
+// 这里只放表格编辑器（P2 起还有文字文档编辑器）的生产代码实际引用的名字，逐个列出（S6 spec §2）：入口转出什么，它们的生产代码就能直接用什么，
+// 多转出的内部部件（例如本机锁、编辑会话的工厂）会让它们绕开编辑模式与页面的协调，lint 也拦不住。S10 按引用方重新核对过：没有引用方的删去，
+// 只有测试用到的移进 index.test-support.ts（测试另经它取）。请求层 editor-api 不再以命名空间 editorApi 转出：组装处 S8c 起在会话层的 start.tsx 里，
+// 直接引用 editor-api.ts，命名空间的理由（两个 acquireEditLease 并到一个入口里同名）随之不在了。
+// 启动是组合处专用的窄入口：这里只转出它的类型，值 startEditorPage 由编辑器页的入口直接引用 start.tsx（从这里转出的话，表格编辑器的生产代码与
+// 测试的模块图里都会多出 React DOM、分享对话框、弹窗等页面外壳）；页头的骨架给表格编辑器的测试经 index.test-support.ts
+export { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+export type { LeaseLoss } from './edit-lease.ts'
 export { createEditMode } from './edit-mode.ts'
-export type { CopyState, EditMode, EditModeApi, EditModeAutosave, EditModeExtension, EditModeHost, EditModeOptions, EditModeState, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice } from './edit-mode.ts'
-export { createEditRequests } from './edit-request.ts'
-export type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit-request.ts'
-export { prepareEditingDraft } from './editing-draft.ts'
-export type { DraftStorageView, EditingDraft, EditingDraftOptions, EditingDraftPreparation, EditingDraftReady } from './editing-draft.ts'
-export { createEditingSession } from './editing-session.ts'
-export type { EditingSession, EditingSessionOptions, LocalSaveView } from './editing-session.ts'
-export * as editorApi from './editor-api.ts'
-export { CONTENT_UNCHANGED } from './editor-api.ts'
-export type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
+export type { EditMode, EditModeExtension, EditModeHost, EditModeOptions, EditModeState } from './edit-mode.ts'
+export type { EditingSession } from './editing-session.ts'
 export type { EditorChromeSlots } from './editor-chrome.tsx'
-export { createEditorPage } from './editor-page.ts'
-export type { AutosaveControlHooks, EditIntent, EditorPage, EditorPageApi, EditorPageAssembly, EditorPageBindings, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView, PageActivity, PageNetwork } from './editor-page.ts'
-export { createEditorSlot } from './editor-slot.ts'
-export type { CreateSlotEditor, EditorSlot, EditorSlotOptions, EditorSurface } from './editor-slot.ts'
-export type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
-export { createHolderRequests } from './holder-requests.ts'
-export type { EditingNotice, IncomingRequest } from './holder-requests.ts'
-export { createIdleWatch } from './idle-watch.ts'
-export type { IdleWatch } from './idle-watch.ts'
-export { createEditorImageAccess } from './image-access.ts'
-export type { EditorImageAccessController } from './image-access.ts'
-export { blockInteractions } from './interaction-barrier.ts'
-export { issuedRequestMarker } from './issued-request.ts'
-export type { IssuedRequestMarker } from './issued-request.ts'
-export { holdLocalLock } from './local-lock.ts'
-export type { LocalLock, LockClaim } from './local-lock.ts'
-export { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
-export type { LocalSaveIndicator } from './local-save-indicator.ts'
-export { captureLostContent } from './lost-copy-flow.ts'
+export type { EditorPage, EditorPageAssembly, EditorPageBindings, EditorPageExtension, EditorPageLoad, EditorPageView } from './editor-page.ts'
+export type { CreateSlotEditor, EditorSlot, EditorSurface } from './editor-slot.ts'
 export type { OpenCheckContext } from './open-check-report.ts'
-export { installPageGuards, isApplePlatform } from './page-guards.ts'
-export { pendingSaveMarker } from './pending-save-marker.ts'
-export type { PendingSaveMarker } from './pending-save-marker.ts'
-export { createReadingChecks } from './reading-checks.ts'
-export type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
-export { RecoveryNotice } from './recovery/recovery-notice.tsx'
-export { clearInheritedReloadMarkers } from './recovery/reload-marker.ts'
-export { onRequest, sameBrowserFor } from './same-browser.ts'
-export type { HandoverFailure, HandoverMessage, SameBrowser, SameBrowserApis } from './same-browser.ts'
-export type { SaveCoordinator, SaveProblem, SaveStatus, SaveView } from './save-coordinator.ts'
-export { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
-export type { SaveIndicator } from './save-indicator.ts'
-export { askTabToHandOver, awaitPendingSave } from './self-takeover.ts'
 export type { EditorPageElements, EditorPageKit, EditorPageMount } from './start.tsx'
-export { answerTabs, handoverFailureOf, takeOverHere } from './tab-handover.ts'
-export type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
-export { resolveTakeoverLoss } from './takeover-location.ts'

@@ -7,19 +7,20 @@
 // - 公式恢复挡住动作（原来页面的 formulaBusy）：7 个入口的第一句；挡住输入时挂屏障；
 // - 新建表格之后的导入（importCreatedCsv）：先核对意图（文档、用户与令牌），再取 CSV 的目标，再导入；
 // - 工作表名（sheetName）：先过页面的门槛（没有卸载、会话是本人），再问编辑模式；公式恢复没成之后再试（retryFormulaRecovery）；
-// - 页头的插槽（chrome，M6-P1 S8c，S8 spec §3.2）：sheet-chrome.tsx 的模块级常量，页头的骨架经 page.extension()?.chrome 取（选中之后才有）。
+// - 页头的插槽（chrome，M6-P1 S8c，S8 spec §3.2）：建好页面扩展之后按扩展对象建一次（sheet-chrome.tsx 的 sheetChromeOf，S10），插槽在用到的那一刻
+//   读这个对象上的成员；页头的骨架经 page.extension()?.chrome 取（选中之后才有）。
 // 编辑模式的工厂是表格的门面（createSheetEditMode）：与页面扩展共用这里的闭包，扩展经它拿到有类型的 SheetEditMode，页面只看到通用的 EditMode。
 // 编辑器的工厂由组装处给出（适配层的 createSheetEditor），页面以 bindEditor 包上自己的绑定；它的入参与会话层的绑定同形由这里的类型检查核对。
 import type { ImageInputState } from '../../editor/index.ts'
 import type { CsvTable } from '../../shared/csv/index.ts'
-import type { EditorChromeSlots, EditorPage, EditorPageAssembly, EditorPageBindings, EditorPageMount, EditorPageView } from '../document-editor/index.ts'
+import type { EditorChromeSlots, EditorPage, EditorPageAssembly, EditorPageBindings, EditorPageExtension, EditorPageMount, EditorPageView } from '../document-editor/index.ts'
 import type { CsvController, CsvTarget } from './csv-controller.ts'
 import type { SheetEditMode, SheetEditModeExtra } from './sheet-edit-mode.ts'
 import type { CreateModeEditor } from './sheet-editor-slot.ts'
 import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { createCsvController } from './csv-controller.ts'
 import { downloadCsv } from './csv-download.ts'
-import { sheetChrome } from './sheet-chrome.tsx'
+import { sheetChromeOf } from './sheet-chrome.tsx'
 import { createSheetEditMode } from './sheet-edit-mode.ts'
 
 /** 新建表格之后的导入的意图（csv-create-start.tsx）：创建它的文档、用户与令牌，以及创建流程还算数 */
@@ -36,15 +37,15 @@ export interface SheetEditorPageMembers {
   readonly importCreatedCsv: (table: CsvTable, intent: CreatedCsvIntent) => Promise<boolean>
   readonly sheetName: SheetEditMode['sheetName']
   readonly retryFormulaRecovery: () => void
-  /** 页头的插槽（S8c）：sheet-chrome.tsx 的模块级常量 */
+  /** 页头的插槽（S8c）：按这一页的页面扩展建一次（sheet-chrome.tsx 的 sheetChromeOf，S10） */
   readonly chrome: SheetChromeSlots
 }
 
 /** 表格编辑器页：通用页面，选中的扩展是表格的，视图里扩展的部分是 formulaRecovery，图片操作的状态是适配层的 */
 export type SheetEditorPage = EditorPage<SheetEditorPageMembers, SheetEditModeExtra, ImageInputState>
 export type SheetEditorPageView = EditorPageView<SheetEditModeExtra, ImageInputState>
-/** 表格的页头插槽（S8c）：页面是表格编辑器页 */
-export type SheetChromeSlots = EditorChromeSlots<SheetEditorPageMembers, SheetEditModeExtra, ImageInputState>
+/** 表格的页头插槽（S8c）：视图是表格编辑器页的；插槽不收页面（S10），表格的成员经建插槽时交给它的扩展对象取 */
+export type SheetChromeSlots = EditorChromeSlots<SheetEditModeExtra, ImageInputState>
 /** 表格编辑器页的挂载（新建表格之后的导入经它取表格的成员） */
 export type SheetEditorPageMount = EditorPageMount<SheetEditorPageMembers, SheetEditModeExtra, ImageInputState>
 
@@ -87,31 +88,33 @@ export function sheetEditorAssembly(createEditor: CreateSheetPageEditor): SheetE
         download: downloadCsv,
       })
 
-      return {
-        extension: {
-          environmentChanged: () => csv.environmentChanged(),
-          blocksActions: () => mode?.view().formulaRecovery?.blocksActions === true,
-          blocksInput: () => mode?.view().formulaRecovery?.blocksInput === true,
-          hide: () => csv.dispose(),
-          dispose: () => csv.dispose(),
-          csv,
-          async importCreatedCsv(table, intent) {
-            const matches = (): boolean => {
-              const signedIn = host.pageSession()
-              return intent.current() && host.documentId === intent.documentId
-                && signedIn?.user.id === intent.userId && signedIn.csrfToken === intent.csrfToken
-            }
-            if (!matches())
-              return false
-            const target = csvTarget(true)
-            if (!target)
-              return false
-            return csv.importPrepared(table, { ...target, current: () => matches() && target.current(), writable: () => matches() && target.writable() })
-          },
-          sheetName: sheetId => host.sessionActive() ? mode?.sheetName(sheetId) : undefined,
-          retryFormulaRecovery: () => mode?.retryFormulaRecovery(),
-          chrome: sheetChrome,
+      /** 页面扩展：挂点与交给使用方的成员。页头的插槽按这个对象建（S10）：插槽读的正是页面扩展交出的那一份，不另建副本 */
+      const extension: EditorPageExtension & Omit<SheetEditorPageMembers, 'chrome'> = {
+        environmentChanged: () => csv.environmentChanged(),
+        blocksActions: () => mode?.view().formulaRecovery?.blocksActions === true,
+        blocksInput: () => mode?.view().formulaRecovery?.blocksInput === true,
+        hide: () => csv.dispose(),
+        dispose: () => csv.dispose(),
+        csv,
+        async importCreatedCsv(table, intent) {
+          const matches = (): boolean => {
+            const signedIn = host.pageSession()
+            return intent.current() && host.documentId === intent.documentId
+              && signedIn?.user.id === intent.userId && signedIn.csrfToken === intent.csrfToken
+          }
+          if (!matches())
+            return false
+          const target = csvTarget(true)
+          if (!target)
+            return false
+          return csv.importPrepared(table, { ...target, current: () => matches() && target.current(), writable: () => matches() && target.writable() })
         },
+        sheetName: sheetId => host.sessionActive() ? mode?.sheetName(sheetId) : undefined,
+        retryFormulaRecovery: () => mode?.retryFormulaRecovery(),
+      }
+
+      return {
+        extension: Object.assign(extension, { chrome: sheetChromeOf(extension) }),
         createMode: ({ bindEditor, ...options }) => {
           mode = createSheetEditMode({ ...options, createEditor: bindEditor(createEditor) })
           return mode

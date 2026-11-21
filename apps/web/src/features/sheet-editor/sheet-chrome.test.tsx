@@ -1,6 +1,7 @@
 import type { EditInterruption } from '@nerve-office/contracts'
 import type { RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
-import type { AutosaveView, EditModeState, EditorPageReady, IncomingRequest, LeaseLoss, LocalSaveView, LostMode, OpenCheckFailures, ReadingMode, SaveView } from '../document-editor/index.ts'
+import type { AutosaveView, EditorPageReady, IncomingRequest, LocalSaveView, LostMode, OpenCheckFailures, ReadingMode, SaveView } from '../document-editor/index.test-support.ts'
+import type { EditModeState, LeaseLoss } from '../document-editor/index.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
 import type { SheetEditorPage, SheetEditorPageMembers, SheetEditorPageView } from './sheet-editor-page.ts'
 import { historyPagePath } from '@nerve-office/contracts'
@@ -8,11 +9,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
-import { EditorChrome } from '../document-editor/index.test-support.ts'
-import { ANNOUNCEMENT_MS } from '../document-editor/index.ts'
+import { ANNOUNCEMENT_MS, EditorChrome } from '../document-editor/index.test-support.ts'
 import { csvFixture } from './csv-controller.test-support.ts'
 import { unusedCsvController } from './csv.test-support.ts'
-import { sheetChrome } from './sheet-chrome.tsx'
+import { sheetChromeOf } from './sheet-chrome.tsx'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
@@ -77,14 +77,15 @@ function lost(loss: LeaseLoss, changes: Partial<LostMode> = {}): LostMode {
 function fakePage(initial: Partial<SheetEditorPageView> = {}) {
   let view: SheetEditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
-  // 表格的页面扩展交给使用方的成员（S8b 起经 page.extension() 取；S8c 起另有页头的插槽 chrome，骨架经它取表格的部分）
-  const members: SheetEditorPageMembers = {
+  // 表格的页面扩展交给使用方的成员（S8b 起经 page.extension() 取；S8c 起另有页头的插槽 chrome，骨架经它取表格的部分）。插槽按这个成员对象建
+  // （同表格的装配，S10）：插槽在用到的那一刻读它，改掉它上面的一项之后，渲染与点击用的是改后的
+  const sources: Omit<SheetEditorPageMembers, 'chrome'> = {
     csv: unusedCsvController(),
     importCreatedCsv: vi.fn(async () => false),
     sheetName: vi.fn(() => undefined),
     retryFormulaRecovery: vi.fn(),
-    chrome: sheetChrome,
   }
+  const members: SheetEditorPageMembers = Object.assign(sources, { chrome: sheetChromeOf(sources) })
   const page: SheetEditorPage = {
     extension: () => members,
     retryRecovery: vi.fn(async () => {}),
@@ -2451,39 +2452,38 @@ describe('页头联网操作与已开确认框', () => {
   })
 })
 
-// M6-P1 S8c 新增：表格的插槽（sheet-chrome.tsx）在渲染、点击的那一刻经 page.extension() 取成员，不把成员抓进闭包（S8 spec §3.2 第 5 条）
-describe('表格的页头插槽在用到时才读页面扩展（S8 spec §3.2）', () => {
-  /** 页面扩展换成另一份成员（插槽不变）：之后的渲染与点击读到的应是它 */
-  function swapMembers(page: SheetEditorPage, changes: Partial<SheetEditorPageMembers>): SheetEditorPageMembers {
+// M6-P1 S8c 新增、S10 改写：表格的插槽（sheet-chrome.tsx 的 sheetChromeOf）在渲染、点击的那一刻读建它时交给它的成员对象（页面扩展交出的
+// 那一份），不在建插槽时取值（S8 spec §3.2 第 5 条）：改掉成员对象上的那一项之后，渲染与点击用的是改后的
+describe('表格的页头插槽在用到时才读建它时交给它的成员对象（S8 spec §3.2）', () => {
+  /** 改掉页面扩展交出的成员对象上的几项（插槽不变）：之后的渲染与点击读到的应是改后的 */
+  function changeMembers(page: SheetEditorPage, changes: Partial<Omit<SheetEditorPageMembers, 'chrome'>>): SheetEditorPageMembers {
     const current = page.extension()
     if (current === undefined)
       throw new Error('假页面应有表格的成员')
-    const next: SheetEditorPageMembers = { ...current, ...changes }
-    vi.spyOn(page, 'extension').mockReturnValue(next)
-    return next
+    return Object.assign(current, changes)
   }
 
-  it('CSV 的入口用渲染那一刻页面扩展的控制器', () => {
+  it('CSV 的入口用渲染那一刻成员对象上的控制器', () => {
     const fake = renderChrome()
     expect(screen.queryByRole('button', { name: '导出 CSV' })).toBeNull()
-    swapMembers(fake.page, { csv: csvFixture().controller })
+    changeMembers(fake.page, { csv: csvFixture().controller })
     fake.set({})
     expect(screen.getByRole('button', { name: '导出 CSV' })).toBeInTheDocument()
   })
 
-  it('“重试公式恢复”用点击那一刻页面扩展的成员', () => {
+  it('“重试公式恢复”用点击那一刻成员对象上的那一项', () => {
     const fake = renderChrome({ formulaRecovery: FORMULA_FAILURE, save: DIRTY })
-    const first = fake.page.extension()
-    const next = swapMembers(fake.page, { retryFormulaRecovery: vi.fn() })
+    const first = fake.page.extension()?.retryFormulaRecovery
+    const next = changeMembers(fake.page, { retryFormulaRecovery: vi.fn() })
     fireEvent.click(screen.getByRole('button', { name: '重试公式恢复' }))
     expect(next.retryFormulaRecovery).toHaveBeenCalledOnce()
-    expect(first?.retryFormulaRecovery).not.toHaveBeenCalled()
+    expect(first).not.toHaveBeenCalled()
   })
 
-  it('保存被拒的说明用说明那一刻页面扩展的工作表名', () => {
+  it('保存被拒的说明用说明那一刻成员对象上的工作表名', () => {
     const error = new ApiError(422, 'SNAPSHOT_INVALID', 'x', { details: { rule: 'link-address', linkLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1, url: 'private' }] } })
     const fake = renderChrome({ save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } })
-    const next = swapMembers(fake.page, { sheetName: vi.fn(() => '新的名字') })
+    const next = changeMembers(fake.page, { sheetName: vi.fn(() => '新的名字') })
     fake.set({})
     expect(screen.getByRole('alert')).toHaveTextContent('工作表「新的名字」的 B3')
     expect(next.sheetName).toHaveBeenCalledWith('s')

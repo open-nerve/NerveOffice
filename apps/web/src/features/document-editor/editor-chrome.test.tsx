@@ -5,16 +5,19 @@
 // - 7 个插槽各在原来的位置、按原来的先后起作用；相邻的条件变化时插槽的位置不动，有焦点的元素不重建；
 // - 挡住动作在骨架里按渲染时的视图算（不读页面扩展的 blocksActions()：它读编辑模式此刻的视图，与页头的快照可能差一拍），
 //   确认框与“放弃本机修改”按 page.view() 的当前值调用插槽。
+// 假插槽按成员建（S10，同表格的写法）：插槽不收页面，在用到的那一刻读建它时交给它的成员对象；末尾另有类型上的回归——两类文档的成员
+// 放进同一张装配表、同一个页面不用 as。
 // 表格的全部页头行为（骨架加表格的插槽）由 sheet-editor/sheet-chrome.test.tsx 覆盖
 import type { RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
 import type { LeaseLoss } from './edit-lease.ts'
 import type { CopyState, LostMode, ReadingMode } from './edit-mode.ts'
 import type { EditorChromeMembers, EditorChromeSlots } from './editor-chrome.tsx'
-import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
+import type { EditorPage, EditorPageAssemblies, EditorPageAssembly, EditorPageReady, EditorPageView } from './editor-page.ts'
 import type { IncomingRequest } from './holder-requests.ts'
 import type { SaveView } from './save-coordinator.ts'
+import type { EditorPageKit, startEditorPage } from './start.tsx'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { ApiError, describeError } from '../../shared/api/index.ts'
 import { EditorChrome } from './editor-chrome.tsx'
 
@@ -31,12 +34,13 @@ interface Image {
 }
 
 /**
- * 假装配交给使用方的成员：插槽、工具行开不开、说明里的按钮做什么；另带页面扩展的挂点 blocksActions——运行时 page.extension() 交回的是整个扩展
- * （挂点并上成员），这里给它一个与插槽相反的答案，核对骨架不读它
+ * 假装配交给使用方的成员：插槽、工具行开不开、说明里的按钮做什么（收到点击那一刻视图里的说明）、快照说明里带上的阶段；另带页面扩展的挂点
+ * blocksActions——运行时 page.extension() 交回的是整个扩展（挂点并上成员），这里给它一个与插槽相反的答案，核对骨架不读它
  */
-interface Members extends EditorChromeMembers<Members, Extra, Image> {
+interface Members extends EditorChromeMembers<Extra, Image> {
   readonly toolbar: boolean
-  readonly act: () => void
+  readonly act: (note: string | undefined) => void
+  readonly stage: () => string
   readonly blocksActions: () => boolean
 }
 
@@ -51,29 +55,36 @@ function FakeToolbar({ fallbackFocus }: { fallbackFocus: () => void }) {
   )
 }
 
-/** 假插槽（模块级常量，同表格的写法）：都在用到的那一刻经 page.extension() 取成员 */
-const SLOTS: EditorChromeSlots<Members, Extra, Image> = {
-  blocksActions: view => view.fake?.blocked === true,
-  actionBlocked: '假的扩展正挡着这个操作',
-  announcement: view => view.fake?.spoken,
-  toolbar: (page, fallbackFocus) => page.extension()?.toolbar === true ? <FakeToolbar fallbackFocus={fallbackFocus} /> : undefined,
-  imageOperation: state => `假的图片操作：${state.label}`,
-  notice: (view, page) => {
-    const note = view.fake?.note
-    if (note === undefined)
-      return undefined
-    return (
-      <div data-slot="fake-notice">
-        <p>{note}</p>
-        <button type="button" onClick={() => page.extension()?.act()}>处理假的说明</button>
-      </div>
-    )
-  },
-  snapshotProblem: (details, page) => `假的快照说明（${JSON.stringify(details)}，${page.view().load.kind}）`,
+/**
+ * 假插槽（同表格的写法，S10）：按成员建一次，都在用到的那一刻读建它时交给它的成员对象（不在建插槽时取值）；说明里的按钮另按页面视图的
+ * 当前值（骨架给的 current）
+ */
+function slotsOf(sources: Omit<Members, 'chrome'>): EditorChromeSlots<Extra, Image> {
+  return {
+    blocksActions: view => view.fake?.blocked === true,
+    actionBlocked: '假的扩展正挡着这个操作',
+    announcement: view => view.fake?.spoken,
+    toolbar: fallbackFocus => sources.toolbar ? <FakeToolbar fallbackFocus={fallbackFocus} /> : undefined,
+    imageOperation: state => `假的图片操作：${state.label}`,
+    notice: (view, current) => {
+      const note = view.fake?.note
+      if (note === undefined)
+        return undefined
+      return (
+        <div data-slot="fake-notice">
+          <p>{note}</p>
+          <button type="button" onClick={() => sources.act(current().fake?.note)}>处理假的说明</button>
+        </div>
+      )
+    },
+    snapshotProblem: details => `假的快照说明（${JSON.stringify(details)}，${sources.stage()}）`,
+  }
 }
 
-function membersOf(changes: Partial<Members> = {}): Members {
-  return { chrome: SLOTS, toolbar: false, act: vi.fn(), blocksActions: vi.fn(() => false), ...changes }
+/** 假装配交给使用方的成员：插槽按这个成员对象建（同表格的装配，插槽读的正是页面扩展交出的那一份） */
+function membersOf(changes: Partial<Omit<Members, 'chrome'>> = {}): Members {
+  const sources: Omit<Members, 'chrome'> = { toolbar: false, act: vi.fn(), stage: () => 'ready', blocksActions: vi.fn(() => false), ...changes }
+  return Object.assign(sources, { chrome: slotsOf(sources) })
 }
 
 const READY: EditorPageReady = {
@@ -286,18 +297,22 @@ describe('7 个插槽的位置、先后与作用', () => {
     expect(screen.getByRole('link', { name: '我的空间' })).toHaveFocus()
   })
 
-  it('说明（notice）在图片状态之后、阅读的静态说明之前；它的按钮在点击的那一刻读页面扩展', () => {
-    const first = membersOf()
-    const fake = renderChrome({ mode: READING, save: undefined, imageProblem: true, fake: { blocked: false, note: '插槽的说明' } }, first)
+  it('说明（notice）在图片状态之后、阅读的静态说明之前；它的按钮在点击的那一刻读建插槽时交给它的成员对象，并拿到页面视图的当前值', () => {
+    const members = membersOf()
+    const fake = renderChrome({ mode: READING, save: undefined, imageProblem: true, fake: { blocked: false, note: '插槽的说明' } }, members)
     const header = screen.getByRole('banner')
     const notice = slotIn(header, 'fake-notice')
     expect(slotIn(header, 'image-status').nextElementSibling).toBe(notice)
     expect(notice.nextElementSibling).toBe(slotIn(header, 'reading-note'))
-    const second = membersOf()
-    fake.select(second)
+    // 点击之前改掉成员对象上的那一项、只改视图的当前值（不通知，页头留着渲染时的快照）：点击时用的是改后的成员与当前值
+    const first = members.act
+    const second = vi.fn()
+    Object.assign(members, { act: second })
+    fake.quietly({ fake: { blocked: false, note: '点击时的说明' } })
     fireEvent.click(within(notice).getByRole('button', { name: '处理假的说明' }))
-    expect(second.act).toHaveBeenCalledOnce()
-    expect(first.act).not.toHaveBeenCalled()
+    expect(second).toHaveBeenCalledOnce()
+    expect(second).toHaveBeenCalledWith('点击时的说明')
+    expect(first).not.toHaveBeenCalled()
   })
 
   it('图片操作（imageOperation）：骨架留着原来的读屏状态，只向插槽要文字', () => {
@@ -371,7 +386,7 @@ describe('7 个插槽的位置、先后与作用', () => {
     expect(within(dialog).queryByText('假的扩展正挡着这个操作')).toBeNull()
   })
 
-  it('快照被拒的说明（snapshotProblem）：保存被拒与副本被拒都交给插槽（详情与页面）；副本超过容量照旧按容量说', () => {
+  it('快照被拒的说明（snapshotProblem）：保存被拒与副本被拒都交给插槽（详情；插槽在说明的那一刻读成员）；副本超过容量照旧按容量说', () => {
     const invalid = new ApiError(422, 'SNAPSHOT_INVALID', '快照不合规则', { details: { rule: 'link-address' } })
     const fake = renderChrome({ save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error: invalid } } })
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败：假的快照说明（{"rule":"link-address"}，ready）')
@@ -422,5 +437,27 @@ describe('挡住动作读哪一份视图', () => {
     await act(async () => fireEvent.click(within(dialog).getByRole('button', { name: '确认放弃' })))
     expect(fake.page.discardRecovery).not.toHaveBeenCalled()
     expect(dialog).toBeInTheDocument()
+  })
+})
+
+// M6-P1 S10（独立审查 B 的问题 1）类型上的回归：P2 把两类文档的装配放进同一张装配表、同一个页面（Extension 是两类成员的并集），
+// 不用 as 就能交给骨架与启动（S8 spec §3.2：同一页按类型拿到各自的插槽，通用页面不用改）。只在类型检查时生效：插槽的参数里带着页面
+// （对 Extension 逆变）、骨架与启动的约束是 F 界时，这里编译不过
+describe('两类文档的成员放进同一张装配表、同一个页面（类型上的回归）', () => {
+  /** 第二类文档：Extra 与成员都与上面的假成员不同；图片操作的状态相同（插槽对它仍是逆变，见 EditorChromeSlots 的说明） */
+  interface OtherExtra {
+    readonly other: { readonly label: string } | undefined
+  }
+  interface OtherMembers extends EditorChromeMembers<OtherExtra, Image> {
+    readonly lookup: (id: string) => string | undefined
+  }
+  type Both = Members | OtherMembers
+  type BothExtra = Extra | OtherExtra
+
+  it('并集满足插槽的约束；两项装配放进同一张装配表，页面交给骨架、kit 交给启动', () => {
+    expectTypeOf<Both>().toExtend<EditorChromeMembers<BothExtra, Image>>()
+    expectTypeOf<{ readonly sheet: EditorPageAssembly<Members, Extra, Image>, readonly doc: EditorPageAssembly<OtherMembers, OtherExtra, Image> }>().toExtend<EditorPageAssemblies<Both, BothExtra, Image>>()
+    expectTypeOf<EditorPage<Both, BothExtra, Image>>().toExtend<Parameters<typeof EditorChrome<Both, BothExtra, Image>>[0]['page']>()
+    expectTypeOf<EditorPageKit<Both, BothExtra, Image>>().toExtend<Parameters<typeof startEditorPage<Both, BothExtra, Image>>[1]>()
   })
 })

@@ -40,7 +40,7 @@ vi.mock('./outbox/testing/crash-probe.ts', () => ({ installCrashProbe: h.install
 
 /** 页面扩展交给使用方的成员：只有页头的插槽（页头在这里是假件，用不到它） */
 interface Members {
-  readonly chrome: EditorChromeSlots<Members, object, ImageOperationState>
+  readonly chrome: EditorChromeSlots<object, ImageOperationState>
 }
 
 /** 假的 kit：装配表是空的（通用页面整个换成了假件），加载失败一律不算；测试构建的加载器按用例给 */

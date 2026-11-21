@@ -2,7 +2,12 @@
 // 两个测试构建的加载器只在测试构建里（MODE 是 e2e）引入、交回东西，别的构建里交回 undefined、不引入；
 // 测试钩子装的先后是自动保存的控制、交接日志，两个各自引入，一个没引入成不影响另一个。
 // 组装处怎样用 kit（先后、停止、上报）由 document-editor/start.test.tsx 核对
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ImageInputState } from '../../editor/index.ts'
+import type { EditorChromeMembers, startEditorPage } from '../document-editor/index.test-support.ts'
+import type { EditorPageAssembly, EditorPageKit } from '../document-editor/index.ts'
+import type { SheetEditModeExtra } from './sheet-edit-mode.ts'
+import type { SheetEditorPageMembers } from './sheet-editor-page.ts'
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import { SheetEditorLoadError } from '../../editor/index.ts'
 import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { DEFAULT_AUTOSAVE_LIMITS } from '../document-editor/index.ts'
@@ -112,5 +117,32 @@ describe('表格的启动装配（kit）', () => {
     await expect(sheetEditorPageKit.selftest?.()).resolves.toBe(h.watch)
     expect(h.imported).toEqual(['selftest-hook'])
     expect(h.watch).not.toHaveBeenCalled()
+  })
+})
+
+// M6-P1 S10（独立审查 B 的问题 1）类型上的回归：P2 把表格与文字文档的装配放进同一个 kit（Extension 是两类成员的并集）。用真实的表格成员
+// 与一个假的第二类成员核对：并集满足页头插槽的约束，含两项装配的 kit 不用 as 就能交给 startEditorPage。类型的部分只在类型检查时生效
+describe('表格的成员与另一类文档的成员放进同一个 kit（类型上的回归）', () => {
+  /** 第二类文档：Extra 与成员都与表格的不同；图片操作的状态与表格相同（插槽对它仍是逆变，见会话层 EditorChromeSlots 的说明） */
+  interface OtherExtra {
+    readonly other: string | undefined
+  }
+  interface OtherMembers extends EditorChromeMembers<OtherExtra, ImageInputState> {
+    readonly lookup: (id: string) => string | undefined
+  }
+  type Both = SheetEditorPageMembers | OtherMembers
+  type BothExtra = SheetEditModeExtra | OtherExtra
+
+  it('并集满足插槽的约束；表格的装配与另一类的装配放进同一个 kit，交给 startEditorPage', () => {
+    expectTypeOf<Both>().toExtend<EditorChromeMembers<BothExtra, ImageInputState>>()
+    const other: EditorPageAssembly<OtherMembers, OtherExtra, ImageInputState> = {
+      format: clientFormatOf('doc'),
+      assemble: () => {
+        throw new Error('只核对类型，不选中这一项')
+      },
+    }
+    const kit: EditorPageKit<Both, BothExtra, ImageInputState> = { ...sheetEditorPageKit, assemblies: { ...sheetEditorPageKit.assemblies, doc: other } }
+    expectTypeOf(kit).toExtend<Parameters<typeof startEditorPage<Both, BothExtra, ImageInputState>>[1]>()
+    expect(Object.keys(kit.assemblies)).toEqual(['sheet', 'doc'])
   })
 })

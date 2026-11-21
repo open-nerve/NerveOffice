@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { blockInteractions } from '../document-editor/index.ts'
+import { blockInteractions } from '../document-editor/index.test-support.ts'
 import { csvFile, csvFixture, pending } from './csv-controller.test-support.ts'
 import { CsvEntry } from './csv-entry.tsx'
 

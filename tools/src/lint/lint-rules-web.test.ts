@@ -729,7 +729,8 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
   const SHEET_TEST = 'apps/web/src/features/sheet-editor/sheet-editor-page.test.ts'
   const SHEET_START = 'apps/web/src/features/sheet-editor/start.tsx'
   const SESSION = 'apps/web/src/features/document-editor/edit-lease.ts'
-  const viaIndex = (path: string): string => `import { blockInteractions } from '${path}'\n\nexport const block = blockInteractions\n`
+  // 取公开入口里仍有的名字（S10：blockInteractions 只有测试用到，移进了测试入口；经内部文件引用时取定义它的 autosave.ts）
+  const viaIndex = (path: string): string => `import { DEFAULT_AUTOSAVE_LIMITS } from '${path}'\n\nexport const limits = DEFAULT_AUTOSAVE_LIMITS\n`
 
   it('平台的应用层、其他入口与其他功能引用会话层都报错，经公开入口也不行；编辑器页的入口与表格编辑器经公开入口照常', async () => {
     for (const [file, path] of [
@@ -748,7 +749,7 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
 
   it('表格编辑器的生产代码只经公开入口：引用内部文件与测试入口都报错', async () => {
     for (const code of [
-      viaIndex('../document-editor/interaction-barrier.ts'),
+      viaIndex('../document-editor/autosave.ts'),
       'import type { EditLease } from \'../document-editor/edit-lease.ts\'\n\nexport type L = EditLease\n',
       'import { fakeBrowser } from \'../document-editor/index.test-support.ts\'\n\nexport const browser = fakeBrowser\n',
     ])
@@ -797,7 +798,8 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
       ['import type { SheetEditor } from \'../../editor/index.ts\'\n\nexport type E = SheetEditor\n', 'apps/web/src/features/document-editor/editor-slot.ts'],
     ] as const)
       expect(await rulesFor(code, file), file).toContain(RULE)
-    expect(await rulesFor('import { createEditorSlot } from \'../document-editor/index.ts\'\n\nexport const create = createEditorSlot\n', SHEET_PAGE)).not.toContain(RULE)
+    // 公开入口里槽位只转出类型（S10：createEditorSlot 只有测试用到，移进了测试入口）
+    expect(await rulesFor('import type { EditorSlot } from \'../document-editor/index.ts\'\n\nexport type S = EditorSlot<unknown, string, object>\n', SHEET_PAGE)).not.toContain(RULE)
     expect(await rulesFor('import { createEditorSlot } from \'../document-editor/editor-slot.ts\'\n\nexport const create = createEditorSlot\n', SHEET_PAGE)).toContain(RULE)
     const report = await lint('import { unusedCsv } from \'../sheet-editor/csv.test-support.ts\'\n\nexport const csv = unusedCsv\n', 'apps/web/src/features/document-editor/editing-session.test-support.ts')
     expect(report.rules).toContain(RULE)
@@ -831,12 +833,12 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
     }
   })
 
-  it('表格的装配（sheet-editor-page.ts）经公开入口取 createEditorPage；引用会话层的 editor-page.ts 报错（S8 spec §2.8）', async () => {
+  it('表格的装配（sheet-editor-page.ts）经公开入口取通用页面的部件；引用会话层的 editor-page.ts 报错（S8 spec §2.8）', async () => {
     const SHEET_ASSEMBLY = 'apps/web/src/features/sheet-editor/sheet-editor-page.ts'
     // 只看边界规则（同 sheet-edit-mode.ts 那条）：上一条在 document-editor/editor-page.ts 的路径上检查过别的代码，同一个类型程序里那个文件
-    // 之后就是那段代码，这里经公开入口取到的 createEditorPage 成了 any，类型感知的规则（no-unsafe-assignment）随之报出，与边界无关。
-    // 文件还不在时解析失败，下一句的边界规则报不出来，照样不通过
-    expect(await rulesFor('import { createEditorPage } from \'../document-editor/index.ts\'\n\nexport const create = createEditorPage\n', SHEET_ASSEMBLY)).not.toContain(RULE)
+    // 之后就是那段代码，这里经公开入口取到的名字解析不出来，类型感知的规则可能随之报出，与边界无关。
+    // 文件还不在时解析失败，下一句的边界规则报不出来，照样不通过。公开入口取装配实现的 EditorPageExtension（S10：createEditorPage 只有测试用到，移进了测试入口）
+    expect(await rulesFor('import type { EditorPageExtension } from \'../document-editor/index.ts\'\n\nexport type E = EditorPageExtension\n', SHEET_ASSEMBLY)).not.toContain(RULE)
     expect(await rulesFor('import { createEditorPage } from \'../document-editor/editor-page.ts\'\n\nexport const create = createEditorPage\n', SHEET_ASSEMBLY)).toContain(RULE)
   })
 

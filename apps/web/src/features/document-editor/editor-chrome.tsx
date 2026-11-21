@@ -43,7 +43,8 @@
 // 失去编辑权之后（显示的是本页的内容）都没有。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
 // M6-P1 S8c（S8 spec §3.2）：从表格编辑器搬进共用编辑会话层，成为与文档类型无关的骨架。一类文档专有的 7 处由插槽给出（EditorChromeSlots；
-// 表格的实现是 sheet-editor/sheet-chrome.tsx 的模块级常量），经页面扩展交给使用方的成员 chrome 取（page.extension()?.chrome，选中装配之后才有）。
+// 表格的插槽在 sheet-editor/sheet-chrome.tsx，装配时按页面扩展建一次），经页面扩展交给使用方的成员 chrome 取（page.extension()?.chrome，选中装配之后才有）。
+// 插槽不收页面（S10）：骨架与启动的约束不是 F 界，两类文档的成员放进同一个页面（P2）不用 as，见 EditorChromeSlots 的说明。
 // 没有插槽时（选中之前）与原来选中之前相同：挡住按假算，工具行与说明两个位置不渲染，播报区的第三件事实为 undefined，快照被拒的说明用 describeError
 // （实际走不到：能保存时一定已经选中装配）。插槽各占原来那一个位置、只交回 undefined 或单个元素；挡住动作在这里按渲染时的视图算一次（原来的 5 处），
 // 确认框与"放弃本机修改"按 page.view() 的当前值调用插槽——不读页面扩展的 blocksActions()：它读编辑模式此刻的视图，与页头的快照可能差一拍。
@@ -85,12 +86,18 @@ import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicato
 import { EditorShareEntry } from './share-entry.tsx'
 
 /**
- * 页头的插槽（M6-P1 S8c，S8 spec §3.2）：一类文档在通用骨架里专有的 7 处。实现是模块级常量（不在取值时现定义组件：每次渲染都是新的组件类型，
- * 里面的状态会丢），经页面扩展交给使用方的成员 chrome 给出。插槽是纯函数或交回元素的函数：不在骨架的渲染里直接调 hook（选中前后 hook 的个数会变，
- * 元素内部有 hook 没关系）；两个元素的插槽各占原来那一个位置，只交回 undefined 或单个元素；在渲染、点击的那一刻读 page.extension()，
- * 不在建插槽时把成员抓进闭包
+ * 页头的插槽（M6-P1 S8c，S8 spec §3.2）：一类文档在通用骨架里专有的 7 处，经页面扩展交给使用方的成员 chrome 给出。
+ * - 插槽不收页面（S10，独立审查 B 的问题 1）：要用到这一类自己的成员时（表格的 CSV 控制器、工作表名、公式恢复的重试），装配建好页面扩展之后
+ *   把扩展对象交给插槽的工厂，插槽在用到的那一刻读这个对象（不在建插槽时取值），读的正是页面扩展交出的那一份。参数里带着页面的话，插槽对
+ *   Extension 逆变，骨架与启动的约束又是 F 界，两类文档的成员（Extension 取并集）放不进同一个页面。
+ * - 插槽对象每页建一次（选中装配时），不在渲染时现建；交回的元素用模块级组件（每次渲染都是新的组件类型的话，里面的状态会丢）。
+ * - 插槽是纯函数或交回元素的函数：不在骨架的渲染里直接调 hook（选中前后 hook 的个数会变，元素内部有 hook 没关系）；两个元素的插槽各占原来
+ *   那一个位置，只交回 undefined 或单个元素。
+ * - 余下的逆变：imageOperation 的 state 与几个 view 参数对 ImageState 仍是逆变，两类文档的图片操作状态不同时，并集放不进同一个页面。
+ *   文字文档的图片输入在 P4，它的状态与表格的相同时没有问题，这次不改，P4 再定。Extra 也在 view 参数里，但页面视图里扩展的部分都是可选的，
+ *   两类的 Extra 取并集照样通过（editor-chrome.test.tsx 的类型回归核对）
  */
-export interface EditorChromeSlots<Extension extends object, Extra extends object, ImageState extends ImageOperationState> {
+export interface EditorChromeSlots<Extra extends object, ImageState extends ImageOperationState> {
   /**
    * 挡住动作（表格：公式恢复期间）：骨架按渲染时的视图算一次，用在原来的 5 处（本机恢复的两个入口、阅读时的进入与刷新、保存与退出编辑、
    * 交出与继续编辑）；确认框与"放弃本机修改"按 page.view() 的当前值调用
@@ -100,22 +107,28 @@ export interface EditorChromeSlots<Extension extends object, Extra extends objec
   readonly actionBlocked: string
   /** 读屏播报区的第三件事实（表格：公式恢复的说明），与保存、本机保存的事实各自独立记忆 */
   readonly announcement: (view: EditorPageView<Extra, ImageState>) => string | undefined
-  /** 页头行之后、"需要联网"之前的那一行（表格：CSV 的入口）；fallbackFocus 是焦点的去处（返回链接） */
-  readonly toolbar: (page: EditorPage<Extension, Extra, ImageState>, fallbackFocus: () => void) => ReactElement | undefined
+  /** 页头行之后、"需要联网"之前的那一行（表格：CSV 的入口）；fallbackFocus：焦点的去处（返回链接） */
+  readonly toolbar: (fallbackFocus: () => void) => ReactElement | undefined
   /** 图片操作的提示文字：骨架保留原来的读屏状态（data-slot="image-operation"），只向插槽要文字 */
   readonly imageOperation: (state: ImageState) => string
-  /** 图片状态之后、阅读的静态说明之前的那一块（表格：公式恢复的说明与重试） */
-  readonly notice: (view: EditorPageView<Extra, ImageState>, page: EditorPage<Extension, Extra, ImageState>) => ReactElement | undefined
-  /** 保存被拒与副本被拒（SNAPSHOT_INVALID）的说明：按违反的规则与位置说（表格：工作表名经页面扩展取） */
-  readonly snapshotProblem: (details: unknown, page: EditorPage<Extension, Extra, ImageState>) => string
+  /**
+   * 图片状态之后、阅读的静态说明之前的那一块（表格：公式恢复的说明与重试）；view 是渲染时的视图，current：页面视图的当前值（点击的那一刻读，
+   * 同原来的 page.view()）
+   */
+  readonly notice: (view: EditorPageView<Extra, ImageState>, current: () => EditorPageView<Extra, ImageState>) => ReactElement | undefined
+  /** 保存被拒与副本被拒（SNAPSHOT_INVALID）的说明：按违反的规则与位置说（表格：工作表名在说明的那一刻经建插槽时交给它的成员取） */
+  readonly snapshotProblem: (details: unknown) => string
 }
 
-/** 页面扩展交给使用方的成员里页头要的那一项：插槽 */
-export interface EditorChromeMembers<Extension extends object, Extra extends object, ImageState extends ImageOperationState> {
-  readonly chrome: EditorChromeSlots<Extension, Extra, ImageState>
+/**
+ * 页面扩展交给使用方的成员里页头要的那一项：插槽。骨架与启动的约束是 Extension extends EditorChromeMembers<Extra, ImageState>，不是 F 界：
+ * 两类文档的成员取并集照样满足
+ */
+export interface EditorChromeMembers<Extra extends object, ImageState extends ImageOperationState> {
+  readonly chrome: EditorChromeSlots<Extra, ImageState>
 }
 
-/** 快照被拒的说明（插槽的 snapshotProblem 绑上页面）；没有插槽时为 undefined，说明用 describeError */
+/** 快照被拒的说明（插槽的 snapshotProblem）；没有插槽时为 undefined，说明用 describeError */
 type SnapshotProblem = (details: unknown) => string
 
 /**
@@ -1086,7 +1099,7 @@ function LoadFailure({ load, backRef }: { load: Exclude<EditorPageLoad, { kind: 
  * 页头的骨架（S8c）：一类文档专有的部分由页面扩展交出的插槽给出（Extension 带 chrome）。
  * apple：苹果的平台，保存的快捷键是 Cmd+S，其他平台是 Ctrl+S
  */
-export function EditorChrome<Extension extends EditorChromeMembers<Extension, Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>({ page, apple }: { page: EditorPage<Extension, Extra, ImageState>, apple: boolean }) {
+export function EditorChrome<Extension extends EditorChromeMembers<Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>({ page, apple }: { page: EditorPage<Extension, Extra, ImageState>, apple: boolean }) {
   const view = useSyncExternalStore(page.subscribe, page.view)
   const local = useLocalSaveIndicator(view)
   // 页头的插槽（S8c）：页面扩展在选中装配时建，载入完成（ready）时一定已经有了；之前没有插槽。每次渲染时经 page.extension() 取
@@ -1099,8 +1112,8 @@ export function EditorChrome<Extension extends EditorChromeMembers<Extension, Ex
   const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean, readonly requiresRecovery?: boolean, readonly requiresUnblocked?: boolean }>()
   const { load, mode, save } = view
   const ready = load.kind === 'ready' ? load : undefined
-  // 快照被拒的说明（S8c）：插槽绑上页面（插槽在被调用的那一刻读页面扩展）；没有插槽时为 undefined，说明用 describeError
-  const snapshot: SnapshotProblem | undefined = chrome === undefined ? undefined : details => chrome.snapshotProblem(details, page)
+  // 快照被拒的说明（S8c）：插槽的 snapshotProblem（它在被调用的那一刻读建插槽时交给它的成员）；没有插槽时为 undefined，说明用 describeError
+  const snapshot: SnapshotProblem | undefined = chrome?.snapshotProblem
   const title = ready?.title
   const back = backLinkOf(ready)
   const backRef = useRef<HTMLAnchorElement>(null)
@@ -1255,7 +1268,7 @@ export function EditorChrome<Extension extends EditorChromeMembers<Extension, Ex
             </div>
           </div>
           {/* 插槽（S8c）：页头行之后、"需要联网"之前的那一行（表格是 CSV 的入口），占原来那一个位置 */}
-          {ready !== undefined && chrome?.toolbar(page, () => backRef.current?.focus())}
+          {ready !== undefined && chrome?.toolbar(() => backRef.current?.focus())}
           {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
           {local !== undefined && <LocalSaveStatus indicator={local} />}
           {view.imageOperation !== undefined && <p role="status" data-slot="image-operation" className="px-3 pb-2 text-sm text-muted-foreground">{chrome?.imageOperation(view.imageOperation)}</p>}
@@ -1272,8 +1285,8 @@ export function EditorChrome<Extension extends EditorChromeMembers<Extension, Ex
               </Button>
             </div>
           )}
-          {/* 插槽（S8c）：图片状态之后、阅读的静态说明之前的那一块（表格是公式恢复的说明与重试），占原来那一个位置 */}
-          {chrome?.notice(view, page)}
+          {/* 插槽（S8c）：图片状态之后、阅读的静态说明之前的那一块（表格是公式恢复的说明与重试），占原来那一个位置；page.view 是视图的当前值 */}
+          {chrome?.notice(view, page.view)}
           {/* 阅读时的一行静态说明（A14，见文件头） */}
           {reading !== undefined && <p data-slot="reading-note" className="px-3 pb-2 text-xs text-muted-foreground">{editorMessages.mode.readingNote}</p>}
         </header>
