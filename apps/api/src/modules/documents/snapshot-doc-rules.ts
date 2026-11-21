@@ -22,6 +22,12 @@ const TOC_FIELD_TYPES: ReadonlySet<unknown> = new Set(['TOC', 'PAGEREF'])
 const BODY_LISTS = ['paragraphs', 'sectionBreaks', 'tables', 'customRanges', 'customBlocks'] as const
 /** 顶层在时必须是对象的几项 */
 const DOCUMENT_OBJECTS = ['documentStyle', 'headers', 'footers', 'drawings'] as const
+/**
+ * Univer 的 DataStreamTreeTokenType 里表格开始与表格结束的控制符。SDK 写表格时（docs-ui 的 buildDocTableInsertBody），区间的起点是表格开始，
+ * 终点是表格结束之后的那个段落结尾 \r
+ */
+const TABLE_START = '\x1A'
+const TABLE_END = '\x0F'
 /** 链接资源与图片资源的名称（插件档案 v1 §3） */
 const LINKS_RESOURCE = 'DOC_HYPER_LINK_PLUGIN'
 const DRAWINGS_RESOURCE = 'DOC_DRAWING_PLUGIN'
@@ -72,12 +78,17 @@ export function docStructure(snapshot: unknown): CheckedStructure | undefined {
   return { unitId: id, snapshot }
 }
 
-/** 表格占据的区间（含两端）：写法对的表格按起点排序之后合并成不相交、递增的区间 */
-function tableIntervals(tables: readonly unknown[]): readonly (readonly [number, number])[] {
+/**
+ * 表格占据的区间（含两端）：写法对、而且落在 dataStream 的表格控制符上的表格（起点是表格开始，终点的前一位是表格结束），按起点排序之后
+ * 合并成不相交、递增的区间。只看 tables 的话，伪造一个区间就能把任意分节符算成表格里的（P1 审查 A 的 M-1）
+ */
+function tableIntervals(tables: readonly unknown[], dataStream: string): readonly (readonly [number, number])[] {
   const intervals: [number, number][] = []
   for (const table of tables) {
-    if (record(table) && isIndex(table.startIndex) && isIndex(table.endIndex) && table.startIndex <= table.endIndex)
+    if (record(table) && isIndex(table.startIndex) && isIndex(table.endIndex) && table.startIndex <= table.endIndex
+      && dataStream[table.startIndex] === TABLE_START && dataStream[table.endIndex - 1] === TABLE_END) {
       intervals.push([table.startIndex, table.endIndex])
+    }
   }
   intervals.sort((a, b) => a[0] - b[0])
   const merged: [number, number][] = []
@@ -114,11 +125,12 @@ function insideTable(intervals: readonly (readonly [number, number])[], index: n
 
 /**
  * 表格之外的分节符至多一个，有的话在文末（startIndex 是 dataStream 的最后一个下标）。表格里每个单元格各有一个分节符，是正常结构。
- * 写法不对的表格不算；写法不对的分节符按表格之外算（它的位置不可能是文末）
+ * 写法不对、不落在表格控制符上的表格不算；写法不对的分节符按表格之外算（它的位置不可能是文末）
  */
 function sectionBreaksAllowed(body: Readonly<Record<string, unknown>>): boolean {
-  const end = typeof body.dataStream === 'string' ? body.dataStream.length - 1 : -1
-  const intervals = tableIntervals(listOf(body, 'tables'))
+  const dataStream = typeof body.dataStream === 'string' ? body.dataStream : ''
+  const end = dataStream.length - 1
+  const intervals = tableIntervals(listOf(body, 'tables'), dataStream)
   let outside = 0
   let position: unknown
   for (const sectionBreak of listOf(body, 'sectionBreaks')) {
@@ -143,7 +155,8 @@ function hasTableOfContents(body: Readonly<Record<string, unknown>>): boolean {
  * 结构之后、资源之前的五条（SNAPSHOT_RULES 的先后）：
  * - doc-flavor：documentStyle.documentFlavor 是 MODERN（缺少也拒绝）；
  * - doc-header-footer：headers、footers 不在或深层为空（documentStyle 里页眉页脚的 id 不单独判：样本里是空串）；
- * - doc-notes：notes、footnotes、endnotes 不在或深层为空（noteSettings 只是编号的设置，不判）；
+ * - doc-notes：notes、footnotes、endnotes 不在或深层为空。noteSettings 不判：它除了编号的设置，还能带分隔符等几段正文（Univer 的
+ *   INoteSettings），这些正文只在有脚注尾注时排版，而脚注尾注已要求为空；P2 定稿 doc@1 时核实它们会不会显示（P1 审查 A 的 M-2）；
  * - doc-section-break：见 sectionBreaksAllowed；doc-toc：见 hasTableOfContents
  */
 export function checkDocContent(checked: CheckedStructure): RuleCheck<ProfileContentRule> {

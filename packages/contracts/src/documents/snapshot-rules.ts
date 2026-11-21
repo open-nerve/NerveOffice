@@ -14,8 +14,9 @@ import { z } from 'zod'
  * - doc-flavor：文字文档的版式不是 MODERN；doc-header-footer：有页眉或页脚；doc-notes：有脚注或尾注；doc-section-break：表格之外的分节符
  *   多于一个，或者唯一的一个不在文末；doc-toc：有目录块的区间（只适用于 doc@1）；
  * - resources：resources 不是数组，或者某一项不是 { name, data }（两个都是字符串）；resource-duplicate：资源名重复；
- *   resource-unknown：资源名不在插件档案的白名单里；resource-data：已知资源的最小结构（data 是空串或 JSON、顶层是对象、
- *   每个键下的值是这类资源该有的种类）；resource-not-empty：必须为空的资源不为空；
+ *   resource-unknown：资源名不在插件档案的白名单里；resource-data：已知资源的最小结构（data 是空串或 JSON；表格的十项顶层是对象、
+ *   每个键下的值是这类资源该有的种类，文字文档的按资源声明的种类核对，见 profile-resources.ts 的 ResourceRule）；resource-not-empty：
+ *   必须为空的资源不为空；
  * - image-source：任何深度上名为 source 的字段不是平台的图片地址；
  * - link-structure：单元格的链接区间看不懂（不是数组、某一项不是对象、链接没有字符串的地址）；link-address：链接地址不合法，
  *   或者不是它的规范写法；link-range-id：链接区间的 rangeId 不合写法；

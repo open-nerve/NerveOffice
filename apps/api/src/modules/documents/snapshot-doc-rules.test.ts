@@ -135,35 +135,53 @@ describe('文字文档的版式、页眉页脚、脚注尾注、分节符与目�
       expect(content(doc({}, { sectionBreaks: [{ startIndex: 8 }, { startIndex: 8 }] }))).toBe('doc-section-break')
     })
 
+    // 表格在 dataStream 里的写法同 SDK（docs-ui 的 buildDocTableInsertBody，M0 的 doc-table 样本）：区间的起点是表格开始 \x1A，终点是表格结束 \x0F
+    // 之后的那个 \r；单元格是 \x1C\r\n\x1D，其中的 \n 是单元格的分节符。TABLE 是一个最小的表格：下标 0 a、1 b、2 \x1A、3 \n、4 \x0F、5 \r、6 c、
+    // 7 d、8 \n（文末）
+    const TABLE = 'ab\x1A\n\x0F\rcd\n'
+
     it('表格里每个单元格各有一个（含区间的两端）：不算；表格之外照常数', () => {
       const tables = [{ startIndex: 2, endIndex: 5, tableId: 't1' }]
-      expect(content(doc({}, { tables, sectionBreaks: [{ startIndex: 2 }, { startIndex: 4 }, { startIndex: 5 }] }))).toBe('ok')
-      expect(content(doc({}, { tables, sectionBreaks: [{ startIndex: 4 }, { startIndex: 8 }] }))).toBe('ok')
-      expect(content(doc({}, { tables, sectionBreaks: [{ startIndex: 4 }, { startIndex: 6 }] }))).toBe('doc-section-break')
+      expect(content(doc({}, { dataStream: TABLE, tables, sectionBreaks: [{ startIndex: 2 }, { startIndex: 4 }, { startIndex: 5 }] }))).toBe('ok')
+      expect(content(doc({}, { dataStream: TABLE, tables, sectionBreaks: [{ startIndex: 4 }, { startIndex: 8 }] }))).toBe('ok')
+      expect(content(doc({}, { dataStream: TABLE, tables, sectionBreaks: [{ startIndex: 4 }, { startIndex: 6 }] }))).toBe('doc-section-break')
     })
 
     it('表格的先后与重叠不影响判断（区间排序合并）', () => {
-      const tables = [{ startIndex: 6, endIndex: 7 }, { startIndex: 0, endIndex: 2 }, { startIndex: 1, endIndex: 4 }]
-      expect(content(doc({}, { tables, sectionBreaks: [{ startIndex: 0 }, { startIndex: 3 }, { startIndex: 4 }, { startIndex: 6 }, { startIndex: 7 }, { startIndex: 8 }] }))).toBe('ok')
-      expect(content(doc({}, { tables, sectionBreaks: [{ startIndex: 5 }] }))).toBe('doc-section-break')
+      // 下标：0 \x1A、1 \n、2 \x1A、3 \x0F、4 \n、5 \x0F、6 \r、7 x、8 \x1A、9 \x0F、10 \r、11 y、12 \n（文末）。[0, 4] 与 [2, 6] 交叠，合并成 [0, 6]
+      const dataStream = '\x1A\n\x1A\x0F\n\x0F\rx\x1A\x0F\ry\n'
+      const tables = [{ startIndex: 8, endIndex: 10 }, { startIndex: 0, endIndex: 4 }, { startIndex: 2, endIndex: 6 }]
+      expect(content(doc({}, { dataStream, tables, sectionBreaks: [{ startIndex: 0 }, { startIndex: 3 }, { startIndex: 4 }, { startIndex: 6 }, { startIndex: 8 }, { startIndex: 10 }, { startIndex: 12 }] }))).toBe('ok')
+      expect(content(doc({}, { dataStream, tables, sectionBreaks: [{ startIndex: 7 }] }))).toBe('doc-section-break')
     })
 
     it('写法不对的表格不算表格；写法不对的分节符按表格之外算', () => {
-      expect(content(doc({}, { tables: [{ startIndex: '2', endIndex: 5 }, null, { startIndex: 5, endIndex: 2 }], sectionBreaks: [{ startIndex: 4 }] }))).toBe('doc-section-break')
+      expect(content(doc({}, { dataStream: TABLE, tables: [{ startIndex: '2', endIndex: 5 }, null, { startIndex: 5, endIndex: 2 }], sectionBreaks: [{ startIndex: 4 }] }))).toBe('doc-section-break')
       expect(content(doc({}, { sectionBreaks: [{}] }))).toBe('doc-section-break')
       expect(content(doc({}, { sectionBreaks: ['x'] }))).toBe('doc-section-break')
       expect(content(doc({}, { sectionBreaks: [{ startIndex: 8.5 }] }))).toBe('doc-section-break')
     })
 
+    it('表格以 dataStream 里的控制符为准：起点不是表格开始（\\x1A）或终点的前一位不是表格结束（\\x0F）的区间不算表格，伪造的区间藏不住分节符', () => {
+      // 正文里没有表格，tables 却声称有一个盖住第一段的表格（P1 审查 A 的 M-1）
+      expect(content(doc({}, { tables: [{ startIndex: 0, endIndex: 7, tableId: 't1' }], sectionBreaks: [{ startIndex: 3 }, { startIndex: 8 }] }))).toBe('doc-section-break')
+      // 只有一端是控制符
+      expect(content(doc({}, { dataStream: 'ab\x1A\nx\rcd\n', tables: [{ startIndex: 2, endIndex: 5 }], sectionBreaks: [{ startIndex: 3 }, { startIndex: 8 }] }))).toBe('doc-section-break')
+      expect(content(doc({}, { dataStream: 'abx\n\x0F\rcd\n', tables: [{ startIndex: 2, endIndex: 5 }], sectionBreaks: [{ startIndex: 3 }, { startIndex: 8 }] }))).toBe('doc-section-break')
+      // 两端都对：照常是表格
+      expect(content(doc({}, { dataStream: TABLE, tables: [{ startIndex: 2, endIndex: 5 }], sectionBreaks: [{ startIndex: 3 }, { startIndex: 8 }] }))).toBe('ok')
+    })
+
     it('规模：十万个表格、每个表格里一个分节符，按排序二分判断（不随两者的乘积增长）', () => {
       const count = 100_000
-      const tables = Array.from({ length: count }, (_, index) => ({ startIndex: index * 3, endIndex: index * 3 + 1 }))
-      const sectionBreaks = Array.from({ length: count }, (_, index) => ({ startIndex: index * 3 + 1 }))
-      const dataStream = `${'x'.repeat(count * 3)}\n`
+      // 每个表格四个字符：\x1A、单元格的分节符 \n、\x0F、表格之后的 \r；区间是 [index * 4, index * 4 + 3]
+      const tables = Array.from({ length: count }, (_, index) => ({ startIndex: index * 4, endIndex: index * 4 + 3 }))
+      const sectionBreaks = Array.from({ length: count }, (_, index) => ({ startIndex: index * 4 + 1 }))
+      const dataStream = `${'\x1A\n\x0F\r'.repeat(count)}x\n`
       // 逐对比较要一百亿次，远超默认时限；排序二分是几十毫秒
-      expect(content(doc({}, { dataStream, paragraphs: [], tables: tables.toReversed(), sectionBreaks: [...sectionBreaks, { startIndex: count * 3 }] }))).toBe('ok')
-      // 最后一个表格（count * 3 - 3 到 count * 3 - 2）之后、文末之前
-      expect(content(doc({}, { dataStream, paragraphs: [], tables, sectionBreaks: [...sectionBreaks, { startIndex: count * 3 - 1 }] }))).toBe('doc-section-break')
+      expect(content(doc({}, { dataStream, paragraphs: [], tables: tables.toReversed(), sectionBreaks: [...sectionBreaks, { startIndex: count * 4 + 1 }] }))).toBe('ok')
+      // 最后一个表格（count * 4 - 4 到 count * 4 - 1）之后、文末之前
+      expect(content(doc({}, { dataStream, paragraphs: [], tables, sectionBreaks: [...sectionBreaks, { startIndex: count * 4 }] }))).toBe('doc-section-break')
     })
   })
 
