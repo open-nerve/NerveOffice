@@ -1,187 +1,116 @@
-import { act } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deferred } from '../document-editor/index.test-support.ts'
-import { startSheetEditorPage } from './start.tsx'
+// 表格的启动装配（kit，M6-P1 S8c，S8 spec §3.3、§3.6）：装配表只有表格；编辑器的加载失败只认适配层的 SheetEditorLoadError；
+// 两个测试构建的加载器只在测试构建里（MODE 是 e2e）引入、交回东西，别的构建里交回 undefined、不引入；
+// 测试钩子装的先后是自动保存的控制、交接日志，两个各自引入，一个没引入成不影响另一个。
+// 组装处怎样用 kit（先后、停止、上报）由 document-editor/start.test.tsx 核对
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { SheetEditorLoadError } from '../../editor/index.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
+import { DEFAULT_AUTOSAVE_LIMITS } from '../document-editor/index.ts'
+import { sheetEditorPageKit } from './start.tsx'
+
+// jsdom 没有 Path2D：表格的界面包在模块求值时就创建它（kit 引用适配层的公开入口）。这里不渲染
+vi.hoisted(() => vi.stubGlobal('Path2D', class {}))
 
 const h = vi.hoisted(() => {
-  globalThis.Path2D ??= class {} as unknown as typeof Path2D
-  return { load: vi.fn(async () => {}), dispose: vi.fn(), stopConnection: vi.fn(), stopGuards: vi.fn(), stopMaintenance: vi.fn(), create: vi.fn() }
+  /** 测试构建的模块被引入（求值）的记录，与装上的先后 */
+  const imported: string[] = []
+  const installed: string[] = []
+  const control = { tuning: undefined, observe: undefined, attach: undefined }
+  const observe = (): void => {}
+  return {
+    imported,
+    installed,
+    control,
+    observe,
+    failControl: false,
+    installControl: vi.fn((_target: Window, _limits: unknown) => {
+      installed.push('autosave-control')
+      return control
+    }),
+    installLog: vi.fn((_target: Window) => {
+      installed.push('handover-log')
+      return { observe }
+    }),
+    watch: vi.fn(),
+  }
 })
-vi.mock('./editor-chrome.tsx', () => ({ EditorChrome: () => <p>正式页头</p> }))
-vi.mock('../local-data/notice.ts', () => ({ LocalDataNotice: () => null }))
-vi.mock('../../shared/lib/draft-maintenance.ts', () => ({ startDraftMaintenance: () => h.stopMaintenance }))
-vi.mock('../../shared/lib/browser-connection.ts', () => ({ watchBrowserConnection: () => h.stopConnection }))
-// 页面的守卫（M6-P1 S6）与通用页面（S8b）来自共用编辑会话层的公开入口：mock 编辑器页实际引用的入口，其余名字取原实现。
-// 通用页面的假件只有 load 与 dispose（同原来 mock 表格编辑器里的 editor-page.ts），所以按路径 mock，不按模块的类型核对返回值
-vi.mock('../document-editor/index.ts', async importOriginal => ({ ...await importOriginal<typeof import('../document-editor/index.ts')>(), installPageGuards: () => h.stopGuards, isApplePlatform: () => false, createEditorPage: (options: unknown) => {
-  h.create(options)
-  return { load: h.load, dispose: h.dispose }
-} }))
-vi.mock('../../shared/lib/session-channel.ts', () => ({ openSessionChannel: () => ({}) }))
-vi.mock('../../editor/testing/autosave-control.ts', () => ({ installAutosaveControl: () => undefined }))
-vi.mock('../../editor/testing/handover-log.ts', () => ({ installHandoverLog: () => ({ observe: undefined }) }))
+
+// 每条用例重新登记测试构建的三个模块（vi.doMock 让下一次动态引入重新求值，vi.resetModules 不重置 mock 的模块）：
+// 引入了没有，按 mock 的工厂有没有被调用看；自动保存的控制没引入成，是它的工厂抛出
+beforeEach(() => {
+  vi.doMock('../../editor/testing/autosave-control.ts', () => {
+    h.imported.push('autosave-control')
+    if (h.failControl)
+      throw new Error('自动保存的控制没能引入')
+    return { installAutosaveControl: h.installControl }
+  })
+  vi.doMock('../../editor/testing/handover-log.ts', () => {
+    h.imported.push('handover-log')
+    return { installHandoverLog: h.installLog }
+  })
+  vi.doMock('./selftest-hook.ts', () => {
+    h.imported.push('selftest-hook')
+    return { watchForSelftest: h.watch }
+  })
+})
 
 afterEach(() => {
-  vi.clearAllMocks()
   vi.unstubAllEnvs()
-  vi.unstubAllGlobals()
-  vi.doUnmock('./selftest-hook.ts')
-  window.history.replaceState(null, '', '/')
+  vi.clearAllMocks()
+  h.imported.splice(0)
+  h.installed.splice(0)
+  h.failControl = false
 })
 
-describe('正式编辑器页的可释放挂载', () => {
-  it('页头可放子容器，交互屏障仍拿完整 chrome；卸载只清本挂载', async () => {
-    const chrome = document.createElement('header')
-    const flow = document.createElement('div')
-    flow.textContent = '创建状态'
-    const heading = document.createElement('div')
-    chrome.append(flow, heading)
-    const surface = document.createElement('div')
-    const mounted = await act(async () => startSheetEditorPage({ chrome, surface, heading }))
-    expect(mounted).toBeDefined()
-    await mounted?.loaded
-    expect(chrome.textContent).toBe('创建状态正式页头')
-    expect(h.create.mock.calls[0]?.[0]).toMatchObject({ chrome, surface })
-    expect(h.load).toHaveBeenCalledOnce()
-    act(() => mounted?.dispose())
-    act(() => mounted?.dispose())
-    expect(h.dispose).toHaveBeenCalledOnce()
-    expect(h.stopGuards).toHaveBeenCalledOnce()
-    expect(h.stopConnection).toHaveBeenCalledOnce()
-    expect(h.stopMaintenance).toHaveBeenCalledOnce()
-    expect(chrome.textContent).toBe('创建状态')
+describe('表格的启动装配（kit）', () => {
+  it('装配表只有表格一项，档案是表格的', () => {
+    expect(Object.keys(sheetEditorPageKit.assemblies)).toEqual(['sheet'])
+    expect(sheetEditorPageKit.assemblies.sheet?.format).toEqual(clientFormatOf('sheet'))
   })
 
-  it('pagehide 保留正式页自己的在途保存处理，不能抢先普通 dispose', async () => {
-    const chrome = document.createElement('header')
-    const surface = document.createElement('div')
-    const onHide = vi.fn()
-    h.load.mockImplementationOnce(async () => {
-      window.addEventListener('pagehide', onHide)
-    })
-    h.dispose.mockImplementationOnce(() => window.removeEventListener('pagehide', onHide))
-    const mounted = await act(async () => startSheetEditorPage({ chrome, surface }))
-    await mounted?.loaded
-    try {
-      act(() => {
-        window.dispatchEvent(new Event('pagehide'))
-      })
-      expect(onHide).toHaveBeenCalledOnce()
-      expect(h.dispose).not.toHaveBeenCalled()
-    }
-    finally {
-      window.removeEventListener('pagehide', onHide)
-      act(() => mounted?.dispose())
-    }
+  it('编辑器的加载失败只认适配层的 SheetEditorLoadError（交给“页面开始离开之后不报”的上报）；别的错误不算', () => {
+    expect(sheetEditorPageKit.isLoadFailure(new SheetEditorLoadError('worker-failed', '公式 Worker 没能启动'))).toBe(true)
+    expect(sheetEditorPageKit.isLoadFailure(new TypeError('Importing a module script failed.'))).toBe(false)
+    expect(sheetEditorPageKit.isLoadFailure(new Error('别的错误'))).toBe(false)
+    expect(sheetEditorPageKit.isLoadFailure(undefined)).toBe(false)
   })
 
-  it('普通入口沿用完整 chrome 并保留同一加载结果', async () => {
-    const chrome = document.createElement('header')
-    const surface = document.createElement('div')
-    const mounted = await act(async () => startSheetEditorPage({ chrome, surface }))
-    await mounted?.loaded
-    expect(chrome.textContent).toBe('正式页头')
-    expect(h.load).toHaveBeenCalledOnce()
-    act(() => mounted?.dispose())
+  it('加载器只在测试构建里有：别的构建里交回 undefined，测试构建的模块一个也不引入', async () => {
+    expect(import.meta.env.MODE).not.toBe('e2e')
+    await expect(sheetEditorPageKit.testHooks?.()).resolves.toBeUndefined()
+    await expect(sheetEditorPageKit.selftest?.()).resolves.toBeUndefined()
+    expect(h.imported).toEqual([])
+    expect(h.installControl).not.toHaveBeenCalled()
+    expect(h.installLog).not.toHaveBeenCalled()
   })
 
-  it.each(['dispose', 'pagehide'] as const)('selftest 模块晚到：先 %s 后不安装 hook、不载入旧页', async (leave) => {
+  it('测试构建里：测试钩子引入之后不立即装，install(window) 时先装自动保存的控制、再装交接日志，交回两者', async () => {
     vi.stubEnv('MODE', 'e2e')
-    window.history.replaceState(null, '', '/documents/01a0fb60-a504-7c95-8bdf-8aeaec893aaf?selftest=read-only')
-    const module = deferred<{ watchForSelftest: () => void }>()
-    const watchForSelftest = vi.fn()
-    vi.doMock('./selftest-hook.ts', async () => module.promise)
-    const chrome = document.createElement('header')
-    const mounted = await act(async () => startSheetEditorPage({ chrome, surface: document.createElement('div') }))
-    try {
-      expect(mounted).toBeDefined()
-      expect(h.load).not.toHaveBeenCalled()
-      act(() => {
-        if (leave === 'dispose')
-          mounted?.dispose()
-        else
-          window.dispatchEvent(new Event('pagehide'))
-      })
-      await act(async () => {
-        module.resolve({ watchForSelftest })
-        await mounted?.loaded
-      })
-      expect(watchForSelftest).not.toHaveBeenCalled()
-      expect(h.load).not.toHaveBeenCalled()
-      expect(h.dispose).toHaveBeenCalledOnce()
-      expect(h.stopConnection).toHaveBeenCalledOnce()
-      expect(chrome.textContent).toBe('')
-    }
-    finally {
-      module.resolve({ watchForSelftest })
-      await mounted?.loaded
-      act(() => mounted?.dispose())
-    }
+    const install = await sheetEditorPageKit.testHooks?.()
+    expect(h.imported).toEqual(expect.arrayContaining(['autosave-control', 'handover-log']))
+    expect(h.installed).toEqual([])
+    const installed = install?.(window)
+    expect(h.installed).toEqual(['autosave-control', 'handover-log'])
+    expect(h.installControl).toHaveBeenCalledExactlyOnceWith(window, DEFAULT_AUTOSAVE_LIMITS)
+    expect(h.installLog).toHaveBeenCalledExactlyOnceWith(window)
+    expect(installed).toEqual({ autosaveControl: h.control, handoverTrace: h.observe })
+    expect(h.imported).not.toContain('selftest-hook')
   })
 
-  it('hook 的异步准备尚未完成时 pagehide 取消本挂载，晚到完成不触发 load', async () => {
+  it('测试构建里：两个钩子各自引入，自动保存的控制没引入成时交接日志照常装上', async () => {
     vi.stubEnv('MODE', 'e2e')
-    window.history.replaceState(null, '', '/documents/01a0fb60-a504-7c95-8bdf-8aeaec893aaf?selftest=read-only')
-    const preparation = deferred<void>()
-    const entered = deferred<void>()
-    let signal: AbortSignal | undefined
-    vi.doMock('./selftest-hook.ts', () => ({ watchForSelftest: async (_page: unknown, _elements: unknown, _diagnostics: unknown, lifetime?: AbortSignal) => {
-      signal = lifetime
-      entered.resolve()
-      return preparation.promise
-    } }))
-    const mounted = await act(async () => startSheetEditorPage({ chrome: document.createElement('header'), surface: document.createElement('div') }))
-    await entered.promise
-    try {
-      act(() => {
-        window.dispatchEvent(new Event('pagehide'))
-      })
-      await act(async () => {
-        preparation.resolve()
-        await mounted?.loaded
-      })
-      expect(signal?.aborted).toBe(true)
-      expect(h.dispose).toHaveBeenCalledOnce()
-      expect(h.load).not.toHaveBeenCalled()
-    }
-    finally {
-      preparation.resolve()
-      await mounted?.loaded
-      act(() => mounted?.dispose())
-    }
+    h.failControl = true
+    const install = await sheetEditorPageKit.testHooks?.()
+    const installed = install?.(window)
+    expect(h.installControl).not.toHaveBeenCalled()
+    expect(h.installed).toEqual(['handover-log'])
+    expect(installed).toEqual({ autosaveControl: undefined, handoverTrace: h.observe })
   })
 
-  it.each(['success', 'import-failure'] as const)('selftest %s 后实际 load 接管 pagehide，原在途保存处理仍优先', async (outcome) => {
+  it('测试构建里：自检的加载器交回页面自检的挂接', async () => {
     vi.stubEnv('MODE', 'e2e')
-    vi.stubGlobal('reportError', vi.fn())
-    window.history.replaceState(null, '', '/documents/01a0fb60-a504-7c95-8bdf-8aeaec893aaf?selftest=read-only')
-    const module = deferred<{ watchForSelftest: () => void }>()
-    vi.doMock('./selftest-hook.ts', async () => {
-      const ready = await module.promise
-      if (outcome === 'import-failure')
-        throw new Error('controlled module failure')
-      return ready
-    })
-    const onHide = vi.fn()
-    h.load.mockImplementationOnce(async () => window.addEventListener('pagehide', onHide))
-    const mounted = await act(async () => startSheetEditorPage({ chrome: document.createElement('header'), surface: document.createElement('div') }))
-    try {
-      await act(async () => {
-        module.resolve({ watchForSelftest: () => {} })
-        await mounted?.loaded
-      })
-      expect(h.load).toHaveBeenCalledOnce()
-      if (outcome === 'import-failure')
-        expect(reportError).toHaveBeenCalledOnce()
-      act(() => {
-        window.dispatchEvent(new Event('pagehide'))
-      })
-      expect(onHide).toHaveBeenCalledOnce()
-      expect(h.dispose).not.toHaveBeenCalled()
-    }
-    finally {
-      window.removeEventListener('pagehide', onHide)
-      act(() => mounted?.dispose())
-    }
+    await expect(sheetEditorPageKit.selftest?.()).resolves.toBe(h.watch)
+    expect(h.imported).toEqual(['selftest-hook'])
+    expect(h.watch).not.toHaveBeenCalled()
   })
 })

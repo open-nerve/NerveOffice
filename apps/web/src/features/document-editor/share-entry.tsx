@@ -8,8 +8,7 @@
 // 文档的行操作里（features/documents/share-entry.tsx）。
 //
 // 编辑器页没有平台页面的请求缓存：分享对话框用页头在最外层提供的那个（editor-query-client.ts）。
-import type { EditorPageReady } from '../document-editor/index.ts'
-import type { SheetEditorPage } from './sheet-editor-page.ts'
+import type { EditorPage, EditorPageReady } from './editor-page.ts'
 import { useRef, useState } from 'react'
 import { messages } from '../../shared/i18n/index.ts'
 import { Button } from '../../shared/ui/index.ts'
@@ -17,7 +16,7 @@ import { ShareDialog } from '../sharing/index.ts'
 
 interface EditorShareEntryProps {
   readonly available: boolean
-  readonly page: SheetEditorPage
+  readonly page: EditorPage
   readonly ready: EditorPageReady
   /** 关闭对话框之后入口已经不在了（随新的权限消失）时焦点交给谁：页头的返回链接 */
   readonly fallbackFocus: () => void

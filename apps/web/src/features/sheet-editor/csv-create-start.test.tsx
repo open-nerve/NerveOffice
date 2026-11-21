@@ -25,7 +25,6 @@ const h = vi.hoisted(() => {
     subscribeChannel: vi.fn((_listener: () => void) => () => {}),
   }
 })
-vi.mock('./start.tsx', () => ({ startSheetEditorPage: h.mount }))
 vi.mock('../../shared/lib/browser-connection.ts', () => ({ watchBrowserConnection: () => h.stopConnection }))
 vi.mock('../../shared/lib/session-channel.ts', () => ({ openSessionChannel: () => ({ subscribe: h.subscribeChannel, close: h.closeChannel }) }))
 
@@ -60,7 +59,8 @@ afterEach(() => {
 async function start() {
   const chrome = document.createElement('header')
   const surface = document.createElement('div')
-  const runtime = await act(async () => startCsvCreatePage({ chrome, surface }))
+  // 正式编辑器页的启动（M6-P1 S8c 起由编辑器页的入口给出）：传入假的启动函数
+  const runtime = await act(async () => startCsvCreatePage({ chrome, surface }, h.mount))
   if (!runtime)
     throw new Error('应挂载创建页面')
   cleanups.push(runtime.dispose)
@@ -191,7 +191,7 @@ describe('CSV 创建与同页正式宿主的交接', () => {
     history.replaceState(null, '', '/documents/new/csv?spaceId=bad')
     const chrome = document.createElement('header')
     const surface = document.createElement('div')
-    expect(startCsvCreatePage({ chrome, surface })).toBeUndefined()
+    expect(startCsvCreatePage({ chrome, surface }, h.mount)).toBeUndefined()
     expect(chrome.textContent).toContain('创建位置不正确')
     expect(h.mount).not.toHaveBeenCalled()
   })

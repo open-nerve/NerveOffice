@@ -2,6 +2,9 @@
 // 页面的小件；S7 起另有保存与自动保存、捕获、同一浏览器的交接、页头的保存状态与编辑器槽位；S8a 起另有编辑模式的通用核心与打开自检的上报
 // （表格的扩展与门面在 sheet-editor/sheet-edit-mode.ts）；S8b 起另有按类型装配的编辑器页（表格的装配在 sheet-editor/sheet-editor-page.ts）。依赖方向是 sheet-editor → document-editor：只由编辑器页引用（编辑器页的入口与表格编辑器，eslint.config.ts 的模块边界），
 // 这里只放它们的生产代码用到的名字。测试另经 index.test-support.ts 取假件与测试用的内部常量。
+// S8c 起另有页头的骨架（插槽的类型 EditorChromeSlots，表格的插槽在 sheet-editor/sheet-chrome.tsx）与编辑器页的启动（kit 等类型，表格的 kit 在
+// sheet-editor/start.tsx）：这里只转出它们的类型。启动是组合处专用的窄入口，值 startEditorPage 由编辑器页的入口直接引用 start.tsx（从这里转出的话，
+// 表格编辑器的生产代码与测试的模块图里都会多出 React DOM、分享对话框、弹窗等页面外壳）；页头的骨架给表格编辑器的测试经 index.test-support.ts。
 // 请求层 editor-api 以命名空间 editorApi 转出：它的 acquireEditLease（申请编辑权的请求）与 edit-lease 的 acquireEditLease（带重试的申请流程）
 // 同名（M6-P1 S6 spec §2）
 export { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
@@ -19,6 +22,7 @@ export type { EditingSession, EditingSessionOptions, LocalSaveView } from './edi
 export * as editorApi from './editor-api.ts'
 export { CONTENT_UNCHANGED } from './editor-api.ts'
 export type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
+export type { EditorChromeSlots } from './editor-chrome.tsx'
 export { createEditorPage } from './editor-page.ts'
 export type { AutosaveControlHooks, EditIntent, EditorPage, EditorPageApi, EditorPageAssembly, EditorPageBindings, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView, PageActivity, PageNetwork } from './editor-page.ts'
 export { createEditorSlot } from './editor-slot.ts'
@@ -52,6 +56,7 @@ export type { SaveCoordinator, SaveProblem, SaveStatus, SaveView } from './save-
 export { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 export type { SaveIndicator } from './save-indicator.ts'
 export { askTabToHandOver, awaitPendingSave } from './self-takeover.ts'
+export type { EditorPageElements, EditorPageKit, EditorPageMount } from './start.tsx'
 export { answerTabs, handoverFailureOf, takeOverHere } from './tab-handover.ts'
 export type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
 export { resolveTakeoverLoss } from './takeover-location.ts'

@@ -318,10 +318,11 @@ const EDITOR_PROBE_MODULES = {
  * 带着本机发件箱与测试构建的探针；按路径写的规则用它（minimatch 的花括号）
  */
 const EDITOR_PAGE_FEATURES = '{sheet-editor,document-editor}'
-// 编辑器页功能里 testing/ 下的文件（发件箱的浏览器层探针与崩溃探针、刷新诊断，M6-P1 起在 document-editor 里）只在测试构建里，由表格编辑器的
-// start.tsx 在 e2e 分支、地址带 outboxProbe 等时动态 import()；editor/testing/ 同样只在测试构建里。静态导入（含 import type）与再导出都会让
+// 编辑器页功能里 testing/ 下的文件（发件箱的浏览器层探针与崩溃探针、刷新诊断，M6-P1 起在 document-editor 里）只在测试构建里，由会话层的
+// start.tsx（M6-P1 S8c 起；之前是表格编辑器的 start.tsx）在 e2e 分支、地址带 outboxProbe 等时动态 import()；editor/testing/ 同样只在测试构建里
+// （表格的启动装配 sheet-editor/start.tsx 在 e2e 分支动态引入其中的自动保存控制与交接日志）。静态导入（含 import type）与再导出都会让
 // 生产代码依赖它们（副作用可能留在生产构建里），所以两个功能里测试代码之外的文件对路径里有 testing 这一段的模块只能动态引入。
-// testing/ 里的文件之间照常静态引用；页面自检的挂接（selftest-hook.ts）本身只在测试构建里（start.tsx 动态引入它），对 editor/testing/ 的类型引用不在此列
+// testing/ 里的文件之间照常静态引用；页面自检的挂接（selftest-hook.ts）本身只在测试构建里（表格的 start.tsx 动态引入它），对 editor/testing/ 的类型引用不在此列
 const EDITOR_PAGE_PROBE_MODULES = {
   regex: String.raw`(?:^|/)testing(?:/|$)`,
   message: '编辑器页的测试构建探针（features/{sheet-editor,document-editor}/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入（start.tsx 的 e2e 分支）：静态导入（含 import type）与再导出会让生产代码依赖它们（M4-P1 设计 §3.1）',
@@ -1529,7 +1530,8 @@ export default antfu(
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['selftest-hook.ts', 'selftest-hook.test.ts'] } },
             allow: { to: { element: { type: 'web-editor', fileInternalPath: 'testing/selftest.ts' } } },
           },
-          // 测试构建的自动保存控制（M3-P4 设计 §3.14）与交接日志（M3-P5 设计 §3.13）：编辑器页的组装处（start.tsx）只在测试构建里动态引入它们
+          // 测试构建的自动保存控制（M3-P4 设计 §3.14）与交接日志（M3-P5 设计 §3.13）：表格的启动装配（sheet-editor 的 start.tsx，M6-P1 S8c 起是 kit 的
+          // testHooks 加载器）只在测试构建里动态引入它们
           {
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'start.tsx' } },
             allow: { to: { element: { type: 'web-editor', fileInternalPath: ['testing/autosave-control.ts', 'testing/handover-log.ts'] } } },
@@ -1642,14 +1644,21 @@ export default antfu(
             from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: WEB_TEST_CODE } },
             allow: { to: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: 'index.test-support.ts' } } },
           },
-          // 测试构建的探针在会话层的 testing/ 下（发件箱与崩溃探针、刷新诊断）：编辑器页的组装处（start.tsx）与页面自检的挂接（selftest-hook.ts）
-          // 只在测试构建里动态 import() 它们（M4-P1 设计 §3.1；M6-P1 S6 spec §3）
+          // 测试构建的探针在会话层的 testing/ 下（发件箱与崩溃探针、刷新诊断）：表格编辑器里只有页面自检的挂接（selftest-hook.ts）在测试构建里
+          // 动态 import() 它们（M4-P1 设计 §3.1；M6-P1 S6 spec §3）。M6-P1 S8c 起探针由会话层的 start.tsx 自己引入（同一个功能内部，不经这条），
+          // 表格的 start.tsx（启动装配）不再需要这个口子，按最小权限去掉（S8 spec §3.4）
           {
-            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: ['start.tsx', 'selftest-hook.ts'] } },
+            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'selftest-hook.ts' } },
             allow: {
               to: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: '**/testing/**' } },
               dependency: { nodeKind: 'dynamic-import' },
             },
+          },
+          // 会话层的启动（start.tsx 的 startEditorPage，M6-P1 S8c，S8 spec §3.3）是组合处专用的窄入口：只有编辑器页的入口直接引用它，
+          // 会话层的公开入口只转出它的类型。表格编辑器（P2 起还有文字文档编辑器）照旧只经公开入口取会话层的部件，模块图里不多出页面外壳
+          {
+            from: { element: { type: 'web-entry', captured: { entry: 'editor' } } },
+            allow: { to: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: 'start.tsx' } } },
           },
           // 管理界面按需加载，不进平台页面的首屏（M2-P1 设计 §3.8，审查 B2）：只有路由表 app/routes.ts 经它的公开入口动态 import()，
           // 任何静态引用（含 import type 与再导出）都会把它带回首屏。页头的入口只引用 shared/lib/admin-paths.ts。
@@ -1724,7 +1733,7 @@ export default antfu(
           // 分享对话框（M2-P5 设计 §3.5）：它带着弹窗、同事选择与确认的弹窗。入口在两处，只有这两个文件可以引用它的公开入口：
           // - 平台页面文档的行操作（features/documents/share-entry.tsx）：只能动态 import()（组件级的按需加载，shared/lib/use-lazy-chunk.ts），
           //   静态引用会把它带进平台页面的首屏；
-          // - 编辑器页的页头（features/sheet-editor/share-entry.tsx）：静态引用。它用到平台页面首屏里的模块，编辑器页也按需加载的话，
+          // - 编辑器页的页头（features/document-editor/share-entry.tsx，M6-P1 S8c 随页头搬进会话层）：静态引用。它用到平台页面首屏里的模块，编辑器页也按需加载的话，
           //   打包会为"平台页面首屏 + 分享对话框"另拆出一块，平台页面的首屏多一个文件（门禁 budgets 的文件数上限）；理由见那个文件的开头
           {
             from: [
@@ -1733,7 +1742,7 @@ export default antfu(
               { element: { type: 'web-feature' } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'sharing' } } } },
-            message: '分享对话框（features/sharing）只由入口所在的两个文件引用：平台页面文档的行操作（features/documents/share-entry.tsx，只能动态 import()，静态引用会把它带进平台页面的首屏）与编辑器页的页头（features/sheet-editor/share-entry.tsx）（M2-P5 设计 §3.5）',
+            message: '分享对话框（features/sharing）只由入口所在的两个文件引用：平台页面文档的行操作（features/documents/share-entry.tsx，只能动态 import()，静态引用会把它带进平台页面的首屏）与编辑器页的页头（features/document-editor/share-entry.tsx）（M2-P5 设计 §3.5）',
           },
           {
             from: { element: { type: 'web-feature', captured: { feature: 'documents' }, fileInternalPath: 'share-entry.tsx' } },
@@ -1743,7 +1752,7 @@ export default antfu(
             },
           },
           {
-            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'share-entry.tsx' } },
+            from: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: 'share-entry.tsx' } },
             allow: { to: { element: { type: 'web-feature', captured: { feature: 'sharing' }, fileInternalPath: PUBLIC_ENTRY } } },
           },
           // 历史列表按路由加载；独立预览仅由自己的入口组装，不能带入平台运行时。
@@ -1830,18 +1839,20 @@ export default antfu(
             from: { element: { type: 'web-app', fileInternalPath: 'local-data-notice.tsx' } },
             allow: { to: { element: { type: 'web-feature', captured: { feature: 'local-data' }, fileInternalPath: 'notice.ts' } } },
           },
+          // 编辑器页的组装点（M6-P1 S8c 起是会话层的 start.tsx）显示本机数据的提示
           {
-            from: { element: { type: 'web-feature', captured: { feature: 'sheet-editor' }, fileInternalPath: 'start.tsx' } },
+            from: { element: { type: 'web-feature', captured: { feature: 'document-editor' }, fileInternalPath: 'start.tsx' } },
             allow: { to: { element: { type: 'web-feature', captured: { feature: 'local-data' }, fileInternalPath: 'notice.ts' } } },
           },
           // 确认的弹窗带着 Radix Dialog（约 12 KiB gzip）：只由按需加载的功能（管理界面、成员页）引用，
           // 首屏的页面、应用层与入口引用它会把弹窗带进平台页面的首屏（ADR-008，M2-P2 设计 §3.10）。
-          // 下面三条都只管平台页面：编辑器页（它的入口与 sheet-editor）是另一个包，有自己的预算（M2-P2 复验）
+          // 下面三条都只管平台页面：编辑器页（它的入口与 sheet-editor；M6-P1 S8c 起页头在 document-editor，确认的弹窗一条随之豁免）是另一个包，
+          // 有自己的预算（M2-P2 复验）
           {
             from: [
               { element: { type: 'web-app' } },
               { element: { type: 'web-entry', captured: { entry: '!editor' } } },
-              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor,local-drafts,document-history}' } } },
+              { element: { type: 'web-feature', captured: { feature: '!{admin,members,trash,sharing,sheet-editor,document-editor,local-drafts,document-history}' } } },
             ],
             disallow: { to: { element: { type: 'web-feature', captured: { feature: 'confirmation' } } } },
             message: '确认的弹窗（features/confirmation，带 Radix Dialog）只由按需加载的功能（features/admin、features/members、features/trash、features/sharing、features/document-history）引用，不进平台页面的首屏（ADR-008）',

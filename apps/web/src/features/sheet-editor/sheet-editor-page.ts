@@ -6,18 +6,20 @@
 //   最后查编辑模式的目标；可写在现行判断之后依次查编辑模式的可写与页面的写的门槛（writeReady）；
 // - 公式恢复挡住动作（原来页面的 formulaBusy）：7 个入口的第一句；挡住输入时挂屏障；
 // - 新建表格之后的导入（importCreatedCsv）：先核对意图（文档、用户与令牌），再取 CSV 的目标，再导入；
-// - 工作表名（sheetName）：先过页面的门槛（没有卸载、会话是本人），再问编辑模式；公式恢复没成之后再试（retryFormulaRecovery）。
+// - 工作表名（sheetName）：先过页面的门槛（没有卸载、会话是本人），再问编辑模式；公式恢复没成之后再试（retryFormulaRecovery）；
+// - 页头的插槽（chrome，M6-P1 S8c，S8 spec §3.2）：sheet-chrome.tsx 的模块级常量，页头的骨架经 page.extension()?.chrome 取（选中之后才有）。
 // 编辑模式的工厂是表格的门面（createSheetEditMode）：与页面扩展共用这里的闭包，扩展经它拿到有类型的 SheetEditMode，页面只看到通用的 EditMode。
 // 编辑器的工厂由组装处给出（适配层的 createSheetEditor），页面以 bindEditor 包上自己的绑定；它的入参与会话层的绑定同形由这里的类型检查核对。
 import type { ImageInputState } from '../../editor/index.ts'
 import type { CsvTable } from '../../shared/csv/index.ts'
-import type { EditorPage, EditorPageAssembly, EditorPageBindings, EditorPageView } from '../document-editor/index.ts'
+import type { EditorChromeSlots, EditorPage, EditorPageAssembly, EditorPageBindings, EditorPageMount, EditorPageView } from '../document-editor/index.ts'
 import type { CsvController, CsvTarget } from './csv-controller.ts'
 import type { SheetEditMode, SheetEditModeExtra } from './sheet-edit-mode.ts'
 import type { CreateModeEditor } from './sheet-editor-slot.ts'
 import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { createCsvController } from './csv-controller.ts'
 import { downloadCsv } from './csv-download.ts'
+import { sheetChrome } from './sheet-chrome.tsx'
 import { createSheetEditMode } from './sheet-edit-mode.ts'
 
 /** 新建表格之后的导入的意图（csv-create-start.tsx）：创建它的文档、用户与令牌，以及创建流程还算数 */
@@ -34,11 +36,17 @@ export interface SheetEditorPageMembers {
   readonly importCreatedCsv: (table: CsvTable, intent: CreatedCsvIntent) => Promise<boolean>
   readonly sheetName: SheetEditMode['sheetName']
   readonly retryFormulaRecovery: () => void
+  /** 页头的插槽（S8c）：sheet-chrome.tsx 的模块级常量 */
+  readonly chrome: SheetChromeSlots
 }
 
 /** 表格编辑器页：通用页面，选中的扩展是表格的，视图里扩展的部分是 formulaRecovery，图片操作的状态是适配层的 */
 export type SheetEditorPage = EditorPage<SheetEditorPageMembers, SheetEditModeExtra, ImageInputState>
 export type SheetEditorPageView = EditorPageView<SheetEditModeExtra, ImageInputState>
+/** 表格的页头插槽（S8c）：页面是表格编辑器页 */
+export type SheetChromeSlots = EditorChromeSlots<SheetEditorPageMembers, SheetEditModeExtra, ImageInputState>
+/** 表格编辑器页的挂载（新建表格之后的导入经它取表格的成员） */
+export type SheetEditorPageMount = EditorPageMount<SheetEditorPageMembers, SheetEditModeExtra, ImageInputState>
 
 /** 表格编辑器的工厂（适配层的 createSheetEditor）收到的：槽位给的快照、访问方式、视图状态与创建的选项（编辑模式的工厂的入参），加上页面的绑定 */
 export type CreateSheetPageEditor = (options: Parameters<CreateModeEditor>[0] & EditorPageBindings<ImageInputState>) => ReturnType<CreateModeEditor>
@@ -102,6 +110,7 @@ export function sheetEditorAssembly(createEditor: CreateSheetPageEditor): SheetE
           },
           sheetName: sheetId => host.sessionActive() ? mode?.sheetName(sheetId) : undefined,
           retryFormulaRecovery: () => mode?.retryFormulaRecovery(),
+          chrome: sheetChrome,
         },
         createMode: ({ bindEditor, ...options }) => {
           mode = createSheetEditMode({ ...options, createEditor: bindEditor(createEditor) })

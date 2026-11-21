@@ -8,10 +8,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
+import { EditorChrome } from '../document-editor/index.test-support.ts'
 import { ANNOUNCEMENT_MS } from '../document-editor/index.ts'
 import { csvFixture } from './csv-controller.test-support.ts'
 import { unusedCsvController } from './csv.test-support.ts'
-import { EditorChrome } from './editor-chrome.tsx'
+import { sheetChrome } from './sheet-chrome.tsx'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
@@ -76,12 +77,13 @@ function lost(loss: LeaseLoss, changes: Partial<LostMode> = {}): LostMode {
 function fakePage(initial: Partial<SheetEditorPageView> = {}) {
   let view: SheetEditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
-  // 表格的页面扩展交给使用方的成员（S8b 起经 page.extension() 取）
+  // 表格的页面扩展交给使用方的成员（S8b 起经 page.extension() 取；S8c 起另有页头的插槽 chrome，骨架经它取表格的部分）
   const members: SheetEditorPageMembers = {
     csv: unusedCsvController(),
     importCreatedCsv: vi.fn(async () => false),
     sheetName: vi.fn(() => undefined),
     retryFormulaRecovery: vi.fn(),
+    chrome: sheetChrome,
   }
   const page: SheetEditorPage = {
     extension: () => members,
@@ -2446,5 +2448,44 @@ describe('页头联网操作与已开确认框', () => {
     expect(within(dialog).getByRole('button', { name: '取消' })).not.toHaveAttribute('aria-disabled', 'true')
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
     await waitFor(() => expect(dialog).not.toBeInTheDocument())
+  })
+})
+
+// M6-P1 S8c 新增：表格的插槽（sheet-chrome.tsx）在渲染、点击的那一刻经 page.extension() 取成员，不把成员抓进闭包（S8 spec §3.2 第 5 条）
+describe('表格的页头插槽在用到时才读页面扩展（S8 spec §3.2）', () => {
+  /** 页面扩展换成另一份成员（插槽不变）：之后的渲染与点击读到的应是它 */
+  function swapMembers(page: SheetEditorPage, changes: Partial<SheetEditorPageMembers>): SheetEditorPageMembers {
+    const current = page.extension()
+    if (current === undefined)
+      throw new Error('假页面应有表格的成员')
+    const next: SheetEditorPageMembers = { ...current, ...changes }
+    vi.spyOn(page, 'extension').mockReturnValue(next)
+    return next
+  }
+
+  it('CSV 的入口用渲染那一刻页面扩展的控制器', () => {
+    const fake = renderChrome()
+    expect(screen.queryByRole('button', { name: '导出 CSV' })).toBeNull()
+    swapMembers(fake.page, { csv: csvFixture().controller })
+    fake.set({})
+    expect(screen.getByRole('button', { name: '导出 CSV' })).toBeInTheDocument()
+  })
+
+  it('“重试公式恢复”用点击那一刻页面扩展的成员', () => {
+    const fake = renderChrome({ formulaRecovery: FORMULA_FAILURE, save: DIRTY })
+    const first = fake.page.extension()
+    const next = swapMembers(fake.page, { retryFormulaRecovery: vi.fn() })
+    fireEvent.click(screen.getByRole('button', { name: '重试公式恢复' }))
+    expect(next.retryFormulaRecovery).toHaveBeenCalledOnce()
+    expect(first?.retryFormulaRecovery).not.toHaveBeenCalled()
+  })
+
+  it('保存被拒的说明用说明那一刻页面扩展的工作表名', () => {
+    const error = new ApiError(422, 'SNAPSHOT_INVALID', 'x', { details: { rule: 'link-address', linkLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1, url: 'private' }] } })
+    const fake = renderChrome({ save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } })
+    const next = swapMembers(fake.page, { sheetName: vi.fn(() => '新的名字') })
+    fake.set({})
+    expect(screen.getByRole('alert')).toHaveTextContent('工作表「新的名字」的 B3')
+    expect(next.sheetName).toHaveBeenCalledWith('s')
   })
 })

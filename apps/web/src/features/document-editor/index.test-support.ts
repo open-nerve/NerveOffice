@@ -5,6 +5,8 @@ export type { AutosaveLimits } from './autosave.ts'
 export { SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
 export { EXIT_RELEASE_WAIT_MS, TAKEOVER_STEAL_WAIT_MS } from './edit-mode.ts'
 export { deferred, disposeSessions, editorFixture, fixture, INITIAL, leaseFixture, prepare } from './editing-session.test-support.ts'
+// 页头的骨架（M6-P1 S8c）：表格编辑器的测试（sheet-chrome.test.tsx）渲染它加表格的插槽
+export { EditorChrome } from './editor-chrome.tsx'
 export { memoryIssuedRequest } from './issued-request.test-support.ts'
 export { fakeLeaseServer, servedToken } from './lease-server.test-support.ts'
 export type { FakeLeaseServer } from './lease-server.test-support.ts'

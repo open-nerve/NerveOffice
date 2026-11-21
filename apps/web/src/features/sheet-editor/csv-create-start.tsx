@@ -1,6 +1,7 @@
 import type { CreatedDocument, SessionResponse } from '@nerve-office/contracts'
+import type { EditorPageElements } from '../document-editor/index.ts'
 import type { CsvCreatedHost, CsvCreation, CsvCreationOwner } from './csv-create-controller.ts'
-import type { SheetEditorPageElements, SheetEditorPageMount } from './start.tsx'
+import type { SheetEditorPageMount } from './sheet-editor-page.ts'
 import { csvCreateLocation } from '@nerve-office/contracts'
 import { createRoot } from 'react-dom/client'
 import { createDocument } from '../../shared/api/create-document.ts'
@@ -18,15 +19,17 @@ import { subscribeLocalSession } from '../../shared/local-drafts/session-events.
 import { fetchCsvDestination } from './csv-create-api.ts'
 import { createCsvCreation } from './csv-create-controller.ts'
 import { CsvCreateEntry } from './csv-create-entry.tsx'
-import { startSheetEditorPage } from './start.tsx'
 
 export interface CsvCreationPage {
   readonly controller: CsvCreation
   readonly dispose: () => void
 }
 
-/** CSV 只在创建控制器的内存中；创建后换地址并在同一 Document 接入正常编辑/保存。 */
-export function startCsvCreatePage(elements: SheetEditorPageElements): CsvCreationPage | undefined {
+/** 启动正式的编辑器页（M6-P1 S8c）：编辑器页的入口给出——共用编辑会话层的 startEditorPage 带上表格的 kit */
+export type StartSheetEditorPage = (elements: EditorPageElements) => Promise<SheetEditorPageMount | undefined>
+
+/** CSV 只在创建控制器的内存中；创建后换地址并在同一 Document 接入正常编辑/保存。start 是正式编辑器页的启动 */
+export function startCsvCreatePage(elements: EditorPageElements, start: StartSheetEditorPage): CsvCreationPage | undefined {
   const location = csvCreateLocation(window.location.pathname, new URLSearchParams(window.location.search))
   const { chrome, surface } = elements
   surface.hidden = true
@@ -68,7 +71,7 @@ export function startCsvCreatePage(elements: SheetEditorPageElements): CsvCreati
     surface.style.visibility = 'hidden'
     let opened: SheetEditorPageMount | undefined
     try {
-      opened = await startSheetEditorPage({ chrome, surface, heading })
+      opened = await start({ chrome, surface, heading })
       if (opened === undefined)
         throw new Error('正式编辑器未挂载')
       await opened.loaded

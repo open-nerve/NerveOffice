@@ -1,5 +1,5 @@
 // 请求缓存（TanStack Query）的默认选项：平台页面的请求缓存（app/query-client.ts）与编辑器页给分享对话框用的请求缓存
-// （features/sheet-editor/share-entry.tsx，M2-P5）共用，两处的请求按同样的规则重试、断网时同样照常发出。
+// （features/document-editor/share-entry.tsx，M2-P5；M6-P1 S8c 随页头搬进共用编辑会话层）共用，两处的请求按同样的规则重试、断网时同样照常发出。
 // 不经 shared/api/index.ts 转出：用到的地方按路径引用。
 import type { DefaultOptions } from '@tanstack/react-query'
 import { isTransientError } from './client.ts'

@@ -148,13 +148,13 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
   it('退出与维护能力只从指定入口引入，普通平台不能静态引用', async () => {
     expect(await rulesFor(dynamicImport('../features/local-data/index.ts'), ROUTES_FILE)).not.toContain('boundaries/dependencies')
     expect(await rulesFor(dynamicImport('../features/local-data/notice.ts'), 'apps/web/src/app/local-data-notice.tsx')).not.toContain('boundaries/dependencies')
-    expect(await rulesFor('import { LocalDataNotice } from \'../local-data/notice.ts\'\nexport const notice = LocalDataNotice\n', 'apps/web/src/features/sheet-editor/start.tsx')).not.toContain('boundaries/dependencies')
+    expect(await rulesFor('import { LocalDataNotice } from \'../local-data/notice.ts\'\nexport const notice = LocalDataNotice\n', 'apps/web/src/features/document-editor/start.tsx')).not.toContain('boundaries/dependencies')
     for (const [code, file] of [
       ['import { LogoutPage } from \'../features/local-data/index.ts\'\nexport const page = LogoutPage\n', ROUTES_FILE],
       [dynamicImport('../features/local-data/logout-page.tsx'), ROUTES_FILE],
       [dynamicImport('../features/local-data/index.ts'), WEB_FILE],
       [dynamicImport('../local-data/index.ts'), WEB_FEATURE_FILE],
-      [dynamicImport('../local-data/index.ts'), 'apps/web/src/features/sheet-editor/start.tsx'],
+      [dynamicImport('../local-data/index.ts'), 'apps/web/src/features/document-editor/start.tsx'],
     ] as const)
       expect(await rulesFor(code, file)).toContain('boundaries/dependencies')
   }, LINT_TIMEOUT)
@@ -366,7 +366,7 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
 
   describe('分享对话框与"与我共享"页（M2-P5 设计 §3.5）', () => {
     const SHARE_ENTRY = 'apps/web/src/features/documents/share-entry.tsx'
-    const EDITOR_SHARE_ENTRY = 'apps/web/src/features/sheet-editor/share-entry.tsx'
+    const EDITOR_SHARE_ENTRY = 'apps/web/src/features/document-editor/share-entry.tsx'
     const importShare = (path: string): string => `import { ShareDialog } from '${path}'\n\nexport const dialog = ShareDialog\n`
 
     it('分享对话框：平台页面只有文档行操作的入口文件能动态 import() 它的公开入口；编辑器页的页头文件静态引用（另一个包）；别处一律不行', async () => {
@@ -381,7 +381,7 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [importShare('../sharing/share-dialog.tsx'), EDITOR_SHARE_ENTRY],
         // 行操作、编辑器页头的其他文件、别的功能、应用层、入口
         [dynamicImport('../sharing/index.ts'), 'apps/web/src/features/documents/item-actions.tsx'],
-        [dynamicImport('../sharing/index.ts'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
+        [dynamicImport('../sharing/index.ts'), 'apps/web/src/features/document-editor/editor-chrome.tsx'],
         [dynamicImport('../sharing/index.ts'), WEB_FEATURE_FILE],
         [dynamicImport('../features/sharing/index.ts'), ROUTES_FILE],
         [`export { ShareDialog } from '../../features/sharing/index.ts'\n`, PLATFORM_ENTRY],
@@ -436,7 +436,9 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [importTexts('../../shared/i18n/zh-cn/search.ts', 'searchMessages'), 'apps/web/src/features/search/search-page.tsx'],
         [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/sharing/share-dialog.tsx'],
         [importTexts('../../shared/i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), 'apps/web/src/features/shared-with-me/shared-page.tsx'],
-        [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/sheet-editor/editor-chrome.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/document-editor/editor-chrome.tsx'],
+        // 页头的骨架搬进会话层之后（M6-P1 S8c），表格编辑器里表格的插槽同样引用
+        [importTexts('../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/sheet-editor/sheet-chrome.tsx'],
         // 编辑器页的文案也由共用编辑会话层引用（M6-P1 S6：恢复的提示）
         [importTexts('../../../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/features/document-editor/recovery/recovery-notice.tsx'],
       ]
@@ -465,7 +467,7 @@ describe('US-M1-11 lint 规则的自测：按需加载的页面不进平台页�
         [importTexts('../shared/i18n/zh-cn/editor.ts', 'editorMessages'), 'apps/web/src/editor/sheet-editor.ts'],
         // 分享对话框的文案：入口所在的文件（平台页面的首屏、编辑器页的页头）与"与我共享"页都不行
         [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/documents/share-entry.tsx'],
-        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/sheet-editor/share-entry.tsx'],
+        [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/document-editor/share-entry.tsx'],
         [importTexts('../../shared/i18n/zh-cn/sharing.ts', 'sharingMessages'), 'apps/web/src/features/shared-with-me/shared-page.tsx'],
         [importTexts('../shared/i18n/zh-cn/shared-with-me.ts', 'sharedWithMeMessages'), WEB_FILE],
       ]
@@ -671,7 +673,8 @@ describe('US-M1-11 lint 规则的自测：读屏用的状态区（role="status"�
 describe('US-M1-11 lint 规则的自测：编辑器页的测试构建探针（features/{sheet-editor,document-editor}/**/testing/**）只能动态引入（M4-P1 设计 §3.1；M6-P1 S6）', () => {
   const PROBE_MESSAGE = '编辑器页的测试构建探针（features/{sheet-editor,document-editor}/**/testing/**）与编辑器的 testing/ 只在测试构建里，只能经动态 import() 引入'
   const RULE = 'ts/no-restricted-imports'
-  const START = 'apps/web/src/features/sheet-editor/start.tsx'
+  /** 编辑器页的组装处（M6-P1 S8c 起是会话层的 start.tsx） */
+  const START = 'apps/web/src/features/document-editor/start.tsx'
   const PAGE = 'apps/web/src/features/sheet-editor/sheet-editor-page.ts'
   /** 共用编辑会话层的生产文件：同样只能动态引入探针（M6-P1 S6） */
   const SESSION = 'apps/web/src/features/document-editor/edit-lease.ts'
@@ -765,9 +768,9 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
       expect(await rulesFor(code, SHEET_TEST), code).toContain(RULE)
   })
 
-  it('编辑器页的组装处与页面自检的挂接只许动态 import() 会话层的探针：静态引用、别的文件动态引用都报错', async () => {
-    expect(await rulesFor(dynamicImport('../document-editor/outbox/testing/outbox-probe.ts'), SHEET_START)).not.toContain(RULE)
-    expect(await rulesFor(dynamicImport('../document-editor/recovery/testing/reload-diagnostics.ts'), SHEET_START)).not.toContain(RULE)
+  it('表格编辑器里只有页面自检的挂接能动态 import() 会话层的探针：表格的启动装配（sheet-editor 的 start.tsx）不再引入它们（S8 spec §3.4 收紧：探针改由会话层的 start.tsx 自己引入）；静态引用、别的文件动态引用都报错', async () => {
+    expect(await rulesFor(dynamicImport('../document-editor/outbox/testing/outbox-probe.ts'), SHEET_START)).toContain(RULE)
+    expect(await rulesFor(dynamicImport('../document-editor/recovery/testing/reload-diagnostics.ts'), SHEET_START)).toContain(RULE)
     expect(await rulesFor(dynamicImport('../document-editor/outbox/testing/outbox-review-probe.ts'), 'apps/web/src/features/sheet-editor/selftest-hook.ts')).not.toContain(RULE)
     expect(await rulesFor('import { installOutboxProbe } from \'../document-editor/outbox/testing/outbox-probe.ts\'\n\nexport const install = installOutboxProbe\n', SHEET_START)).toContain(RULE)
     expect(await rulesFor(dynamicImport('../document-editor/outbox/testing/outbox-probe.ts'), SHEET_PAGE)).toContain(RULE)
@@ -777,7 +780,7 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
 
   it('会话层不引用表格编辑器（报出依赖方向的说明），也不引用编辑器适配层；自己内部的引用不受限', async () => {
     for (const [code, file] of [
-      ['import { startSheetEditorPage } from \'../sheet-editor/index.ts\'\n\nexport const start = startSheetEditorPage\n', SESSION],
+      ['import { sheetEditorPageKit } from \'../sheet-editor/index.ts\'\n\nexport const kit = sheetEditorPageKit\n', SESSION],
       [`import { probe } from '../sheet-editor/${PROBE}-part.ts'\n\nexport const p = probe\n`, SESSION],
     ] as const) {
       const report = await lint(code, file)
@@ -819,7 +822,7 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
     const PAGE = 'apps/web/src/features/document-editor/editor-page.ts'
     expect(await rulesFor('import type { ImageInputState } from \'../../editor/index.ts\'\n\nexport type S = ImageInputState\n', PAGE)).toContain(RULE)
     for (const code of [
-      'import type { SheetEditorPageElements } from \'../sheet-editor/index.ts\'\n\nexport type E = SheetEditorPageElements\n',
+      'import type { sheetEditorPageKit } from \'../sheet-editor/index.ts\'\n\nexport type K = typeof sheetEditorPageKit\n',
       'import type { SheetEditMode } from \'../sheet-editor/sheet-edit-mode.ts\'\n\nexport type M = SheetEditMode\n',
     ]) {
       const report = await lint(code, PAGE)
@@ -835,6 +838,49 @@ describe('US-M1-11 lint 规则的自测：共用编辑会话层（features/docum
     // 文件还不在时解析失败，下一句的边界规则报不出来，照样不通过
     expect(await rulesFor('import { createEditorPage } from \'../document-editor/index.ts\'\n\nexport const create = createEditorPage\n', SHEET_ASSEMBLY)).not.toContain(RULE)
     expect(await rulesFor('import { createEditorPage } from \'../document-editor/editor-page.ts\'\n\nexport const create = createEditorPage\n', SHEET_ASSEMBLY)).toContain(RULE)
+  })
+
+  it('页头与启动搬进会话层之后（S8 spec §3.2、§3.3）：会话层的 editor-chrome.tsx、start.tsx 在真实路径上连类型也不引用编辑器适配层与表格编辑器（报出依赖方向的说明）；会话层的 start.tsx 在测试构建里自己动态引入探针', async () => {
+    for (const file of ['apps/web/src/features/document-editor/editor-chrome.tsx', 'apps/web/src/features/document-editor/start.tsx']) {
+      expect(await rulesFor('import type { ImageInputState } from \'../../editor/index.ts\'\n\nexport type S = ImageInputState\n', file), file).toContain(RULE)
+      for (const code of [
+        'import type { SheetEditorPageMembers } from \'../sheet-editor/sheet-editor-page.ts\'\n\nexport type M = SheetEditorPageMembers\n',
+        'import type { sheetEditorPageKit } from \'../sheet-editor/index.ts\'\n\nexport type K = typeof sheetEditorPageKit\n',
+      ]) {
+        const report = await lint(code, file)
+        expect(report.rules, `${file}：${code}`).toContain(RULE)
+        expect(report.messages.join('\n'), `${file}：${code}`).toContain(DIRECTION_MESSAGE)
+      }
+    }
+    // 只看边界规则（同 sheet-editor-page.ts 那条）：上面在这两个文件的路径上检查过别的代码
+    expect(await rulesFor(dynamicImport('./outbox/testing/outbox-probe.ts'), 'apps/web/src/features/document-editor/start.tsx')).not.toContain(RULE)
+  })
+
+  it('编辑器页的入口直接引用会话层的 start.tsx（组合处专用的窄入口，S8 spec §3.3、§3.4）；功能模块、别的入口、应用层都不行，入口引用会话层别的内部文件也不行', async () => {
+    const importStart = (path: string): string => `import { startEditorPage } from '${path}'\n\nexport const start = startEditorPage\n`
+    // 只看边界规则：上一条在会话层 start.tsx 的路径上检查过别的代码，同一个类型程序里取到的 startEditorPage 成了 any
+    expect(await rulesFor(importStart('../../features/document-editor/start.tsx'), 'apps/web/src/entries/editor/mount.tsx')).not.toContain(RULE)
+    for (const [code, file] of [
+      [importStart('../document-editor/start.tsx'), SHEET_PAGE],
+      [importStart('../document-editor/start.tsx'), SHEET_START],
+      [importStart('../../features/document-editor/start.tsx'), 'apps/web/src/entries/history-preview/mount.tsx'],
+      [importStart('../features/document-editor/start.tsx'), WEB_FILE],
+      ['import { EditorChrome } from \'../../features/document-editor/editor-chrome.tsx\'\n\nexport const chrome = EditorChrome\n', 'apps/web/src/entries/editor/mount.tsx'],
+    ] as const)
+      expect(await rulesFor(code, file), `${file}：${code}`).toContain(RULE)
+  })
+
+  it('会话层的页头引用确认的弹窗照常（S8 spec §3.4）；弹窗的文件（shared/ui/dialog.tsx）与同事选择对会话层仍报错', async () => {
+    const CHROME = 'apps/web/src/features/document-editor/editor-chrome.tsx'
+    expect(await rulesFor('import { ConfirmDialog } from \'../confirmation/index.ts\'\n\nexport const dialog = ConfirmDialog\n', CHROME)).not.toContain(RULE)
+    for (const [code, message] of [
+      ['import { DialogContent } from \'../../shared/ui/dialog.tsx\'\n\nexport const content = DialogContent\n', '弹窗（shared/ui/dialog.tsx，带 Radix Dialog）只由按需加载的功能'],
+      ['import { ColleaguePicker } from \'../colleagues/index.ts\'\n\nexport const picker = ColleaguePicker\n', '按关键词选一项（features/colleagues）只由按需加载的功能'],
+    ] as const) {
+      const report = await lint(code, CHROME)
+      expect(report.rules, code).toContain(RULE)
+      expect(report.messages.join('\n'), code).toContain(message)
+    }
   })
 
   it('刷新诊断（recovery/testing/reload-diagnostics.ts）照旧只引用零依赖的诊断格式；会话层别的文件不行', async () => {

@@ -453,7 +453,7 @@ function ShareDialogContent({ documentId, documentTitle, currentUserId, refreshD
  * 分享对话框（M2-P5 设计 §3.5，US-M2-10）：这份文档的授权列表（人名组件）、按名字选同事加人（排除自己与已有授权的人）、选角色、
  * 调整、取消（确认的弹窗）。只有能分享的人看得到入口（canShare：空间管理员或个人空间的所有者，归档的空间里没有）；
  * 服务端逐请求检查，被拒绝时说明原因、按共用的做法刷新。打开时焦点进对话框，关闭之后回到入口（入口不在了交给 fallbackFocus）。
- * 入口在平台页面文档的行操作（按需加载，不进平台页面的首屏）与编辑器页的页头（静态引用，理由见 features/sheet-editor/share-entry.tsx）：
+ * 入口在平台页面文档的行操作（按需加载，不进平台页面的首屏）与编辑器页的页头（静态引用，理由见 features/document-editor/share-entry.tsx）：
  * 带着 Radix Dialog、同事选择与确认的弹窗
  */
 export function ShareDialog({ open, onOpenChange, ...content }: ShareDialogProps) {
