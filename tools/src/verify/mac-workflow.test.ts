@@ -166,7 +166,7 @@ describe('M5-P8 托管 Mac 的接线：照开发机的方式跑本机完整门�
   })
 
   /**
-   * 开发机经 pnpm db:up 用 deploy/dev/compose.yaml 起 postgres:18.6 的容器。Apple 芯片的托管 Mac 不能起 Docker，改由工作流用 Homebrew 的
+   * 开发机经 pnpm db:up 用 deploy/dev/compose.yaml 起 PostgreSQL 的容器（版本见编排）。Apple 芯片的托管 Mac 不能起 Docker，改由工作流用 Homebrew 的
    * 同一版本、同样的账号、库名、初始化参数与端口提供（测试连库的地址与开发机相同，不另设连接串）。认证照开发库：本机套接字免密、TCP 要密码；
    * 装出来的版本与开发库不同时在这一步失败，不带着别的版本往下跑
    */

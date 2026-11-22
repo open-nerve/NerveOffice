@@ -17,7 +17,7 @@ export function linuxSuite(args: readonly string[]): LinuxSuite {
 export const GIB = 1024 ** 3
 export const PLAYWRIGHT_IMAGE = 'mcr.microsoft.com/playwright@sha256:a0f4498920a5dbac63196d9140ed738ef00470f27e2e74029abd8850b7bd5717'
 export const NODE_IMAGE = 'node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6'
-export const DATABASE_IMAGE = 'postgres:18.6-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873'
+export const DATABASE_IMAGE = 'postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71'
 
 export const linuxEnvironmentFile = (scratch: string) => `${scratch}/tmp/linux-browser/runtime.env`
 
