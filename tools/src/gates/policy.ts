@@ -150,16 +150,7 @@ export interface AuditException {
   expires: string
 }
 
-export const AUDIT_EXCEPTIONS: readonly AuditException[] = [
-  {
-    // 2026-11-18 main CI #109（run 44269592484）的 audit 首次报出（M6-P1 实施记录）
-    id: 'GHSA-fc5q-39xc-vjpf',
-    reason: 'picomatch <=4.0.7 的 ReDoS（单分支重复的 extglob），上游还没有修复的版本。它只经 tools 的 vite（tinyglobby → fdir）进入生产依赖图：'
-      + 'tools 是构建与门禁工具，运行时镜像只装 api 的生产依赖（deploy/Dockerfile 的 prod-deps），不含 vite 与 picomatch；构建时交给它的匹配模式'
-      + '都来自本仓库的配置，不接收外部输入。修复版本发布满 3 天（供应链冷却期）即升级并删掉这条例外',
-    expires: '2026-12-18',
-  },
-]
+export const AUDIT_EXCEPTIONS: readonly AuditException[] = []
 
 /**
  * 各入口首屏 JS（gzip）的预算（规范 §11）：在建立入口的 Phase 里定下，调整要在 Phase 设计里写明原因。

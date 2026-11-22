@@ -389,7 +389,7 @@ describe('US-M1-11 漏洞门禁的装配', () => {
     expect(new Set(AUDIT_EXCEPTIONS.map(exception => exception.id)).size).toBe(AUDIT_EXCEPTIONS.length)
   })
 
-  // 装配用例不带仓库登记的例外：例外清单会随漏洞公告变化（2026-11-18 登记了第一条），这里只测装配
+  // 装配用例不带仓库登记的例外：例外清单会随漏洞公告变化（2026-11-18 登记过第一条，通告撤回之后 11-23 删除），这里只测装配
   it('生产依赖的漏洞失败，全部依赖的计数写进说明（真实输出）', () => {
     const report = readFixture('pnpm-12/audit-with-advisories.json')
     const outcome = auditGate(() => report, '2026-09-26', [])
