@@ -17,7 +17,7 @@ function facts(overrides: Partial<RecoveryFacts> = {}): RecoveryFacts {
     access: 'editable',
     online: true,
     current: { revision: 12, source: null, occupied: false },
-    pageFormat: FORMAT,
+    pageFormats: [FORMAT],
     replay: { kind: 'unchecked' },
     now: NOW,
     ...overrides,
@@ -83,6 +83,17 @@ describe('可读格式、保留期与无副作用', () => {
 
   it.each<Partial<ContentFormat>>([{ clientBuild: '99.0.0+newer' }, { univerVersion: '0.9.0' }])('可读的数据格式不因构建号较新或 SDK 较旧而阻止恢复：%j', (format) => {
     expect(decideDraftRecovery(facts({ record: { kind: 'draft', meta: meta({ format: { ...FORMAT, ...format } }) } }))).toEqual(restore)
+  })
+
+  it('页面有多个档案时（M6-P1 S8 spec §2.6）：与其中任意一个可读即可读，排在第几个都一样；一个都读不了才按较新格式保留', () => {
+    const doc: ContentFormat = { ...FORMAT, profile: 'doc@1' }
+    const sheetDraft = { kind: 'draft' as const, meta: meta() }
+    const docDraft = { kind: 'draft' as const, meta: meta({ format: doc }) }
+    expect(decideDraftRecovery(facts({ record: sheetDraft, pageFormats: [doc, FORMAT] }))).toEqual(restore)
+    expect(decideDraftRecovery(facts({ record: docDraft, pageFormats: [FORMAT, doc] }))).toEqual(restore)
+    expect(decideDraftRecovery(facts({ record: docDraft, pageFormats: [FORMAT] }))).toEqual({ kind: 'preserve', reason: 'newer-format' })
+    const newer = { kind: 'draft' as const, meta: meta({ format: { ...FORMAT, formatVersion: 2 } }) }
+    expect(decideDraftRecovery(facts({ record: newer, pageFormats: [FORMAT, doc] }))).toEqual({ kind: 'preserve', reason: 'newer-format' })
   })
 
   it.each([

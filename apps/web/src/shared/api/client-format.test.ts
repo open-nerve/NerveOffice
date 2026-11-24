@@ -1,6 +1,6 @@
 import { DOCUMENT_PROFILE_OF, parseVersion, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
-import { clientFormatParams, documentIsNewer, incompatibilityOf, PAGE_CLIENT_FORMAT } from './client-format.ts'
+import { clientFormatOf, clientFormatParams, documentIsNewer, incompatibilityOf, OPENABLE_DOCUMENT_TYPES, READABLE_CLIENT_FORMATS } from './client-format.ts'
 import { ApiError, NetworkError } from './index.ts'
 
 /** 构建时注入的构建版本（vite.config.ts 的 define，单元测试经同一份配置；取值的规则由 build/client-build.test.ts 核对） */
@@ -8,12 +8,28 @@ declare const __NERVE_CLIENT_BUILD__: string
 
 describe('本页的构建与数据格式（M3-P3 设计 §3.5）', () => {
   it('构建版本是构建时注入的值（服务端认得出的 x.y.z 写法）；数据格式取打进本页的 contracts 常量', () => {
-    expect(PAGE_CLIENT_FORMAT).toEqual({ clientBuild: __NERVE_CLIENT_BUILD__, univerVersion: UNIVER_SDK_VERSION, profile: DOCUMENT_PROFILE_OF.sheet, formatVersion: PLATFORM_FORMAT_VERSION })
-    expect(parseVersion(PAGE_CLIENT_FORMAT.clientBuild)).toBeDefined()
+    expect(clientFormatOf('sheet')).toEqual({ clientBuild: __NERVE_CLIENT_BUILD__, univerVersion: UNIVER_SDK_VERSION, profile: DOCUMENT_PROFILE_OF.sheet, formatVersion: PLATFORM_FORMAT_VERSION })
+    expect(parseVersion(clientFormatOf('sheet').clientBuild)).toBeDefined()
   })
 
   it('查询参数的写法：四项都是字符串（格式版本是十进制）', () => {
-    expect(clientFormatParams()).toEqual({ clientBuild: __NERVE_CLIENT_BUILD__, univerVersion: UNIVER_SDK_VERSION, profile: 'sheet@1', formatVersion: String(PLATFORM_FORMAT_VERSION) })
+    expect(clientFormatParams(clientFormatOf('sheet'))).toEqual({ clientBuild: __NERVE_CLIENT_BUILD__, univerVersion: UNIVER_SDK_VERSION, profile: 'sheet@1', formatVersion: String(PLATFORM_FORMAT_VERSION) })
+  })
+
+  it('clientFormatOf：表格的值与键序就是原来的常量（构建、Univer 版本、档案、格式版本，M6-P1 S8 spec §2.6）；请求体是 JSON.stringify 出来的，序列化之后的字节也相同', () => {
+    const format = clientFormatOf('sheet')
+    expect(Object.keys(format)).toEqual(['clientBuild', 'univerVersion', 'profile', 'formatVersion'])
+    expect(JSON.stringify(format)).toBe(`{"clientBuild":${JSON.stringify(__NERVE_CLIENT_BUILD__)},"univerVersion":${JSON.stringify(UNIVER_SDK_VERSION)},"profile":"sheet@1","formatVersion":${PLATFORM_FORMAT_VERSION}}`)
+  })
+
+  it('clientFormatOf：别的类型只换档案一项，键序相同', () => {
+    expect(clientFormatOf('doc')).toEqual({ ...clientFormatOf('sheet'), profile: DOCUMENT_PROFILE_OF.doc })
+    expect(Object.keys(clientFormatOf('doc'))).toEqual(Object.keys(clientFormatOf('sheet')))
+  })
+
+  it('本构建能打开的类型（P1 只有表格）与它们的档案一一对应：草稿页与后台维护的可读判定用它们', () => {
+    expect(OPENABLE_DOCUMENT_TYPES).toEqual(['sheet'])
+    expect(READABLE_CLIENT_FORMATS).toEqual(OPENABLE_DOCUMENT_TYPES.map(type => clientFormatOf(type)))
   })
 
   it('incompatibilityOf：CLIENT_OUTDATED 是本页过旧、DOCUMENT_TOO_NEW 是文档比服务端新；别的失败不是', () => {

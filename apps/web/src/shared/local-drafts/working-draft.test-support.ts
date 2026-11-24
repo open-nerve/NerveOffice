@@ -2,7 +2,7 @@
 import type { SaveRequest } from './save-request.ts'
 import type { DraftCaptureRef, WorkingDraft } from './working-draft.ts'
 import { vi } from 'vitest'
-import { PAGE_CLIENT_FORMAT } from '../api/client-format.ts'
+import { clientFormatOf } from '../api/client-format.ts'
 import { createWorkingDraftSource } from './working-draft-source.ts'
 
 export interface TestCapture {
@@ -25,7 +25,7 @@ export function fakeWorkingDraft(options: {
   const supplied = new Map<string, TestCapture>()
   const snapshots = new WeakMap<DraftCaptureRef, string>()
   const local = { kind: 'memory' as const, reason: 'disabled' as const }
-  const inner = createWorkingDraftSource({ sessionId: 'test-draft', initialDraftSeq: 0, baseRevision: options.baseRevision ?? 1, format: PAGE_CLIENT_FORMAT, writtenBy: 'test-client', reportError }, {
+  const inner = createWorkingDraftSource({ sessionId: 'test-draft', initialDraftSeq: 0, baseRevision: options.baseRevision ?? 1, format: clientFormatOf('sheet'), writtenBy: 'test-client', reportError }, {
     write: async ({ ref, bytes }) => {
       const snapshot = new TextDecoder().decode(bytes)
       const given = supplied.get(snapshot)

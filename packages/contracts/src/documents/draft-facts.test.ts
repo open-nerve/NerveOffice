@@ -54,8 +54,13 @@ describe('本机草稿的批量文档事实响应', () => {
     expect(documentDraftFactSchema.safeParse({ ...accessible, revision }).success).toBe(false)
   })
 
+  it('未知的文档类型解析为 unknown，不让整批事实作废（M6 总设计 §2.2 第 5 条）', () => {
+    expect(documentDraftFactSchema.parse({ ...accessible, type: 'slide' })).toMatchObject({ status: 'accessible', type: 'unknown' })
+    expect(documentDraftFactSchema.parse({ ...accessible, type: 'doc' })).toMatchObject({ status: 'accessible', type: 'doc' })
+  })
+
   it('未知状态、非法布尔值/类型/id、空列表与超额列表均是格式错误', () => {
-    for (const changes of [{ status: 'future' }, { canEdit: 'true' }, { occupied: 0 }, { type: 'slide' }, { id: 'unknown' }])
+    for (const changes of [{ status: 'future' }, { canEdit: 'true' }, { occupied: 0 }, { type: 42 }, { type: '' }, { id: 'unknown' }])
       expect(documentDraftFactSchema.safeParse({ ...accessible, ...changes }).success).toBe(false)
     expect(documentDraftFactsResponseSchema.safeParse({ items: [] }).success).toBe(false)
     const items = ids.map(id => ({ status: 'unavailable', id }))

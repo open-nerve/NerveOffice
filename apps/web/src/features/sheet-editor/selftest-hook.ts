@@ -1,12 +1,10 @@
-// 测试构建的页面自检的挂接（M3-P2 设计 §3.5，真实 Safari 的复核）：start.tsx 只在测试构建、地址带 selftest 时动态引入这里
-// （生产构建里 MODE 是 production，那个分支与这个分块都被去掉，门禁 artifacts 核对）。
+// 测试构建的页面自检的挂接（M3-P2 设计 §3.5，真实 Safari 的复核）：表格的启动装配（start.tsx 的 kit，M6-P1 S8c）只在测试构建里动态引入这里，
+// 会话层的组装处在地址带 selftest 时、载入之前挂上它（生产构建里 MODE 是 production，那个分支与这个分块都被去掉，门禁 artifacts 核对）。
+// 它只用页面的通用部分（视图、订阅、进入编辑），类型取会话层通用的（S8 spec §3.3）。
 // 页面开始载入时就挂上页面错误与可见性的收集，订阅页面的状态；到 steady（或载入失败、等不到就绪）之后，才动态引入编辑器的自检模块
 // （editor/testing/selftest.ts，模块边界只给这个文件开了这一个口子），由它跑完检查、把结果带到地址里的 next。
 import type { SelftestHost, SelftestPageView } from '../../editor/testing/selftest.ts'
-import type { LeaseLoss } from './edit-lease.ts'
-import type { EditModeState } from './edit-mode.ts'
-import type { EditorPage, EditorPageLoad } from './editor-page.ts'
-import type { SheetEditorPageElements } from './start.tsx'
+import type { EditModeState, EditorPage, EditorPageElements, EditorPageLoad, LeaseLoss } from '../document-editor/index.ts'
 import { documentIdFromPagePath } from '@nerve-office/contracts'
 
 /** 等页面到 steady 最多等多久（编辑器的就绪时限是 20 秒，steady 在渲染完成之后 3 秒；留出余量） */
@@ -269,8 +267,8 @@ function watchReloadSaves(documentId: string, lifetime: SelftestLifetime): NonNu
   return () => marks
 }
 
-/** 地址带 selftest 时（start.tsx 判断）：等页面到 steady，然后跑自检 */
-export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElements, reloadDiagnostics?: () => unknown, signal?: AbortSignal): void | Promise<void> {
+/** 地址带 selftest 时（会话层的 start.tsx 判断）：等页面到 steady，然后跑自检 */
+export function watchForSelftest(page: EditorPage, elements: EditorPageElements, reloadDiagnostics?: () => unknown, signal?: AbortSignal): void | Promise<void> {
   const lifetime = selftestLifetime(signal)
   if (lifetime.stopped())
     return
@@ -324,7 +322,7 @@ export function watchForSelftest(page: EditorPage, elements: SheetEditorPageElem
   watch()
 }
 
-function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setup: {
+function watchScenario(page: EditorPage, elements: EditorPageElements, setup: {
   readonly startedAt: string
   readonly documentId: string | undefined
   readonly log: ReturnType<typeof watchPage>
@@ -367,8 +365,8 @@ function watchScenario(page: EditorPage, elements: SheetEditorPageElements, setu
       reloadSaves,
       localPause,
       localSave,
-      // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（outbox/testing/ 只在测试构建里、只能动态引入）
-      outboxReview: async () => (await import('./outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
+      // 生产的发件箱（M4-P1 的复核）：用到的场景才引入（document-editor/outbox/testing/ 只在测试构建里、只能动态引入）
+      outboxReview: async () => (await import('../document-editor/outbox/testing/outbox-review-probe.ts')).createOutboxReview(),
     }
     void import('../../editor/testing/selftest.ts').then(async ({ runSelftestAndReport }) => {
       if (!lifetime.stopped())

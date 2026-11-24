@@ -1,4 +1,4 @@
-import type { EditorPageView } from './editor-page.ts'
+import type { SheetEditorPageView } from './sheet-editor-page.ts'
 import { editorMessages } from '../../shared/i18n/zh-cn/editor.ts'
 
 export interface FormulaRecoveryNotice {
@@ -7,7 +7,7 @@ export interface FormulaRecoveryNotice {
 }
 
 /** 公式恢复与云端/本机保存是独立事实；失权等出口继续由原页面说明负责。 */
-export function formulaRecoveryNotice(view: EditorPageView): FormulaRecoveryNotice | undefined {
+export function formulaRecoveryNotice(view: SheetEditorPageView): FormulaRecoveryNotice | undefined {
   const recovery = view.formulaRecovery
   const mode = view.mode
   if (view.load.kind !== 'ready' || recovery === undefined || (mode?.kind !== 'reading' && mode?.kind !== 'editing') || (mode.kind === 'reading' && mode.gone))

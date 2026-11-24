@@ -1,4 +1,4 @@
-// 页面的构建版本（M3-P3 设计 §3.5）：vite.config.ts 经 define 注入为 __NERVE_CLIENT_BUILD__，编辑器页经 features/sheet-editor/client-format.ts
+// 页面的构建版本（M3-P3 设计 §3.5）：vite.config.ts 经 define 注入为 __NERVE_CLIENT_BUILD__，编辑器页经 shared/api/client-format.ts
 // 读它，保存、另存为副本、申请编辑权与心跳都上报；服务端按运维开关 NERVE_MIN_CLIENT_BUILD 比较（数据格式另外比较）。
 // 取仓库根目录 package.json 的 version（x.y.z，发布时递增）。生产构建、测试构建与 vite dev 都注入同一个值：两份构建的入口块照样相同
 // （不按构建的时刻取值）。镜像构建由 deploy/Dockerfile 经环境变量 CLIENT_BUILD_REVISION 传进提交号，附在 + 之后作诊断信息

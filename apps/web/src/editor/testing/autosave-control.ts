@@ -7,7 +7,7 @@
 // - log / clearLog：每次捕获与上传的原因、序号、时刻（调度的时钟，performance.now）与结果（requestId）；
 // - subscribe：每记下一条就同步告诉订阅者（M3-P4 S7 的页面自检用：捕获的那一刻在同一个同步段里取一份内存快照，与调度捕获的那一份相同）。
 // 整页共用一份：编辑模式每建一个调度就交给这里（attach），去掉时交回 undefined；节奏与暂停对之后建的调度同样有效。
-// 只在测试构建里：编辑器页的组装处（features/sheet-editor/start.tsx）在 import.meta.env.MODE === 'e2e' 的分支里动态引入它；
+// 只在测试构建里：表格的启动装配（features/sheet-editor/start.tsx 的 kit，M6-P1 S8c）在 import.meta.env.MODE === 'e2e' 的分支里动态引入它；
 // 生产构建里没有它（门禁 artifacts 按来源认出 editor/testing/，挂在 window 上的名字另由禁用关键字核对）。
 // 这个文件不引用任何模块（nerve/editor-testing-shared）：E2E 也引用它（挂在 window 上的名字、sessionStorage 的键、日志的写法），
 // 默认的节奏由组装处传进来（contracts 的 AUTOSAVE_*）。

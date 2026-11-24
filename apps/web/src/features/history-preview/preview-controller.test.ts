@@ -51,7 +51,8 @@ describe('US-M5-10 独立历史预览生命周期', () => {
       expect(w.deps.session).toHaveBeenNthCalledWith(call, expect.any(AbortSignal), 'background')
   })
 
-  it.each([{ compatibility: 'unsupported' as const }, { sdkVersion: '999.0.0' }, { profile: 'sheet@999' }, { formatVersion: 999 }])('本页不支持格式 %j 时不读取正文或挂载 SDK', async (patch) => {
+  // 文字文档的历史预览在 M6-P5；之前文字文档与响应里没见过的类型都按不支持处理（M6-P1 设计 §3.2）
+  it.each([{ compatibility: 'unsupported' as const }, { sdkVersion: '999.0.0' }, { profile: 'sheet@999' }, { formatVersion: 999 }, { type: 'doc' as const, profile: 'doc@1' }, { type: 'unknown' as const }])('本页不支持格式 %j 时不读取正文或挂载 SDK', async (patch) => {
     const w = setup({ detail: vi.fn(async () => historyItem(patch)) })
     await w.preview.refresh()
     expect(w.preview.view()).toEqual({ kind: 'unsupported' })

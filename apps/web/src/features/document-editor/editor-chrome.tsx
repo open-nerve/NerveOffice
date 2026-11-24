@@ -42,19 +42,25 @@
 // 只在阅读时有（与读屏状态区里阅读时的说明一样）：进入编辑一开始就收起（交互屏障之下，可编辑的编辑器按收起之后的高度建出）；编辑时、
 // 失去编辑权之后（显示的是本页的内容）都没有。
 // 编辑器本身挂在页头之外的容器里（editor.html 的 #sheet-editor），不归 React 管。
+// M6-P1 S8c（S8 spec §3.2）：从表格编辑器搬进共用编辑会话层，成为与文档类型无关的骨架。一类文档专有的 7 处由插槽给出（EditorChromeSlots；
+// 表格的插槽在 sheet-editor/sheet-chrome.tsx，装配时按页面扩展建一次），经页面扩展交给使用方的成员 chrome 取（page.extension()?.chrome，选中装配之后才有）。
+// 插槽不收页面（S10）：骨架与启动的约束不是 F 界，两类文档的成员放进同一个页面（P2）不用 as，见 EditorChromeSlots 的说明。
+// 没有插槽时（选中之前）与原来选中之前相同：挡住按假算，工具行与说明两个位置不渲染，播报区的第三件事实为 undefined，快照被拒的说明用 describeError
+// （实际走不到：能保存时一定已经选中装配）。插槽各占原来那一个位置、只交回 undefined 或单个元素；挡住动作在这里按渲染时的视图算一次（原来的 5 处），
+// 确认框与"放弃本机修改"按 page.view() 的当前值调用插槽——不读页面扩展的 blocksActions()：它读编辑模式此刻的视图，与页头的快照可能差一拍。
+// 骨架里写死"表格""单元格"的文案 S8c 不动（载入中、格式不受支持、载入失败三条出现时还不知道类型，P2 再定）。
 import type { EditInterruption } from '@nerve-office/contracts'
-import type { ReactNode, RefObject } from 'react'
+import type { ReactElement, ReactNode, RefObject } from 'react'
 import type { Incompatibility } from '../../shared/api/client-format.ts'
 import type { Phrase as PhraseParts } from '../../shared/i18n/index.ts'
 import type { PendingConfirmation } from '../confirmation/index.ts'
 import type { LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { CopyState, EditingNotice, IncomingRequest, LeaveCause, LostMode, OpenCheckFailures, ReadingMode, ReadingNotice, TakeoverProgress } from './edit-mode.ts'
 import type { EditRequestProgress } from './edit-request.ts'
-import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView } from './editor-page.ts'
+import type { EditorPage, EditorPageLoad, EditorPageReady, EditorPageSession, EditorPageView, ImageOperationState } from './editor-page.ts'
 import type { LocalSaveIndicator } from './local-save-indicator.ts'
 import type { SaveProblem, SaveView } from './save-coordinator.ts'
 import type { SaveIndicator } from './save-indicator.ts'
-import type { SheetName } from './snapshot-problem.ts'
 import { documentPagePath, EDIT_INTERRUPTION_NOTICE_SECONDS, historyPagePath, isProfileFailure, SNAPSHOT_MAX_RAW_BYTES, SNAPSHOT_WARN_RAW_BYTES } from '@nerve-office/contracts'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { ArrowLeft } from 'lucide-react'
@@ -73,15 +79,57 @@ import { Alert, AlertDescription, Button, buttonVariants, PersonName, Phrase } f
 import { DetailRefreshProblem } from '../../shared/ui/refresh-problem.tsx'
 import { StatusRegion } from '../../shared/ui/status-region.tsx'
 import { ConfirmDialog } from '../confirmation/index.ts'
-import { CsvEntry } from './csv-entry.tsx'
 import { editorQueryClient } from './editor-query-client.ts'
-import { formulaRecoveryNotice } from './formula-recovery-ui.ts'
-import { imageInputNotice } from './image-input-notice.ts'
 import { CONNECTION_WARNING_MS, localSaveIndicator } from './local-save-indicator.ts'
 import { RecoveryNotice } from './recovery/recovery-notice.tsx'
 import { ANNOUNCEMENT_MS, announcementKey, saveIndicator } from './save-indicator.ts'
 import { EditorShareEntry } from './share-entry.tsx'
-import { snapshotProblem } from './snapshot-problem.ts'
+
+/**
+ * 页头的插槽（M6-P1 S8c，S8 spec §3.2）：一类文档在通用骨架里专有的 7 处，经页面扩展交给使用方的成员 chrome 给出。
+ * - 插槽不收页面（S10，独立审查 B 的问题 1）：要用到这一类自己的成员时（表格的 CSV 控制器、工作表名、公式恢复的重试），装配建好页面扩展之后
+ *   把扩展对象交给插槽的工厂，插槽在用到的那一刻读这个对象（不在建插槽时取值），读的正是页面扩展交出的那一份。参数里带着页面的话，插槽对
+ *   Extension 逆变，骨架与启动的约束又是 F 界，两类文档的成员（Extension 取并集）放不进同一个页面。
+ * - 插槽对象每页建一次（选中装配时），不在渲染时现建；交回的元素用模块级组件（每次渲染都是新的组件类型的话，里面的状态会丢）。
+ * - 插槽是纯函数或交回元素的函数：不在骨架的渲染里直接调 hook（选中前后 hook 的个数会变，元素内部有 hook 没关系）；两个元素的插槽各占原来
+ *   那一个位置，只交回 undefined 或单个元素。
+ * - 余下的逆变：imageOperation 的 state 与几个 view 参数对 ImageState 仍是逆变，两类文档的图片操作状态不同时，并集放不进同一个页面。
+ *   文字文档的图片输入在 P4，它的状态与表格的相同时没有问题，这次不改，P4 再定。Extra 也在 view 参数里，但页面视图里扩展的部分都是可选的，
+ *   两类的 Extra 取并集照样通过（editor-chrome.test.tsx 的类型回归核对）
+ */
+export interface EditorChromeSlots<Extra extends object, ImageState extends ImageOperationState> {
+  /**
+   * 挡住动作（表格：公式恢复期间）：骨架按渲染时的视图算一次，用在原来的 5 处（本机恢复的两个入口、阅读时的进入与刷新、保存与退出编辑、
+   * 交出与继续编辑）；确认框与"放弃本机修改"按 page.view() 的当前值调用
+   */
+  readonly blocksActions: (view: EditorPageView<Extra, ImageState>) => boolean
+  /** 挡住时确认框的说明：确认框不可用原因的第一条，排在需要联网、本机恢复之前 */
+  readonly actionBlocked: string
+  /** 读屏播报区的第三件事实（表格：公式恢复的说明），与保存、本机保存的事实各自独立记忆 */
+  readonly announcement: (view: EditorPageView<Extra, ImageState>) => string | undefined
+  /** 页头行之后、"需要联网"之前的那一行（表格：CSV 的入口）；fallbackFocus：焦点的去处（返回链接） */
+  readonly toolbar: (fallbackFocus: () => void) => ReactElement | undefined
+  /** 图片操作的提示文字：骨架保留原来的读屏状态（data-slot="image-operation"），只向插槽要文字 */
+  readonly imageOperation: (state: ImageState) => string
+  /**
+   * 图片状态之后、阅读的静态说明之前的那一块（表格：公式恢复的说明与重试）；view 是渲染时的视图，current：页面视图的当前值（点击的那一刻读，
+   * 同原来的 page.view()）
+   */
+  readonly notice: (view: EditorPageView<Extra, ImageState>, current: () => EditorPageView<Extra, ImageState>) => ReactElement | undefined
+  /** 保存被拒与副本被拒（SNAPSHOT_INVALID）的说明：按违反的规则与位置说（表格：工作表名在说明的那一刻经建插槽时交给它的成员取） */
+  readonly snapshotProblem: (details: unknown) => string
+}
+
+/**
+ * 页面扩展交给使用方的成员里页头要的那一项：插槽。骨架与启动的约束是 Extension extends EditorChromeMembers<Extra, ImageState>，不是 F 界：
+ * 两类文档的成员取并集照样满足
+ */
+export interface EditorChromeMembers<Extra extends object, ImageState extends ImageOperationState> {
+  readonly chrome: EditorChromeSlots<Extra, ImageState>
+}
+
+/** 快照被拒的说明（插槽的 snapshotProblem）；没有插槽时为 undefined，说明用 describeError */
+type SnapshotProblem = (details: unknown) => string
 
 /**
  * 返回的去处（M2-P2 设计 §3.10，M2-P5 设计 §3.5）：
@@ -108,8 +156,8 @@ function isSessionProblem(problem: SaveProblem): boolean {
   return problem.kind === 'request' && (isAuthenticationError(problem.error) || isCsrfTokenError(problem.error))
 }
 
-/** sessionProblem：最近一次确认会话失败的原因 */
-function problemMessage(problem: SaveProblem, sessionProblem: unknown, sheetName: SheetName): { text: string, requestId?: string, destructive: boolean } {
+/** sessionProblem：最近一次确认会话失败的原因；snapshot：快照被拒的说明（插槽给出，没有插槽时为 undefined） */
+function problemMessage(problem: SaveProblem, sessionProblem: unknown, snapshot: SnapshotProblem | undefined): { text: string, requestId?: string, destructive: boolean } {
   if (problem.kind === 'cell-editing')
     return { text: editorMessages.finishCellEditing, destructive: false }
   if (problem.kind === 'too-large' || (problem.error instanceof ApiError && problem.error.code === 'PAYLOAD_TOO_LARGE'))
@@ -122,9 +170,10 @@ function problemMessage(problem: SaveProblem, sessionProblem: unknown, sheetName
     const reason = describeError(sessionProblem)
     return { text: editorMessages.saveFailed(editorMessages.sessionCheckFailed(reason.message)), requestId: reason.requestId, destructive: true }
   }
-  // 快照被服务端拒绝（M3-P3）：按违反的规则说（链接、图片、资源、过于复杂……），不认识的规则照"格式不正确"说
-  if (problem.error instanceof ApiError && problem.error.code === 'SNAPSHOT_INVALID')
-    return { text: editorMessages.saveFailed(snapshotProblem(problem.error.details, sheetName)), requestId: problem.error.requestId, destructive: true }
+  // 快照被服务端拒绝（M3-P3）：按违反的规则说（链接、图片、资源、过于复杂……），不认识的规则照"格式不正确"说。说法由插槽给出（S8c）；
+  // 没有插槽时照下面按错误码说明（实际走不到：能保存时一定已经选中装配）
+  if (snapshot !== undefined && problem.error instanceof ApiError && problem.error.code === 'SNAPSHOT_INVALID')
+    return { text: editorMessages.saveFailed(snapshot(problem.error.details)), requestId: problem.error.requestId, destructive: true }
   // 400（请求不合法）是这次请求本身的问题，按错误码说明（M2-P6 复核第二批 G-5）
   const error = describeError(problem.error)
   return { text: editorMessages.saveFailed(error.message), requestId: error.requestId, destructive: true }
@@ -241,25 +290,26 @@ function announcementOf(view: EditorPageView): Announcement {
 
 /**
  * 读屏的播报区（role="status"，一直在、只做视觉隐藏）：announcementOf 的 key 变了才换上新的一句，ANNOUNCEMENT_MS 之后清空。
+ * 第三件事实（extra）由插槽给出（S8c，表格是公式恢复的说明），没有插槽时为 undefined。
  * 显式写 aria-live（语义不变：role="status" 本来就是 polite，M2-P5 复验第二轮 G1）：保存在后台进行，分享对话框（模态）开着时也会完成或失败；
  * Radix 的模态弹窗打开时把弹窗之外的内容都标为 aria-hidden，只跳过那一刻已经在的、显式写了 aria-live 的元素（aria-hidden 库的 hideOthers）
  */
-function SaveAnnouncer({ view, local, formula }: { view: EditorPageView, local: LocalSaveIndicator | undefined, formula: string | undefined }) {
+function SaveAnnouncer({ view, local, extra }: { view: EditorPageView, local: LocalSaveIndicator | undefined, extra: string | undefined }) {
   const terminal = view.save?.status === 'conflict' || view.save?.status === 'outdated' || view.save?.status === 'too-new'
   const base = announcementOf(view)
   const announceLocal = local !== undefined && view.session === 'active' && !view.confirmingSession && !terminal
   const localKey = announceLocal ? local.announcementKey : undefined
-  const [seen, setSeen] = useState({ base: base.key, local: localKey, formula })
-  const [spoken, setSpoken] = useState(() => [base.key === undefined ? '' : base.text, localKey === undefined ? '' : local?.announcement, formula].filter(Boolean).join(' '))
+  const [seen, setSeen] = useState({ base: base.key, local: localKey, extra })
+  const [spoken, setSpoken] = useState(() => [base.key === undefined ? '' : base.text, localKey === undefined ? '' : local?.announcement, extra].filter(Boolean).join(' '))
   const [cleared, setCleared] = useState(false)
-  // 三条事实独立记忆：本机降级与公式退路不能遮住新的云端失败/恢复；例行输入不重播旧状态。
+  // 三条事实独立记忆：本机降级与插槽给的第三件事实（表格是公式退路）不能遮住新的云端失败/恢复；例行输入不重播旧状态。
   const baseChanged = base.key !== undefined && base.key !== seen.base
   const localChanged = localKey !== seen.local
-  const formulaChanged = formula !== seen.formula
+  const extraChanged = extra !== seen.extra
   // 渲染中按这一次的结果调整（React 的写法：随即重新渲染，不经 effect 多渲染一轮）
-  if (baseChanged || localChanged || formulaChanged) {
-    setSeen({ base: base.key ?? seen.base, local: localKey, formula })
-    const updates = [baseChanged ? base.text : '', localChanged && announceLocal ? localKey === undefined ? editorMessages.localSave.recovered : local.announcement : '', formulaChanged ? formula : ''].filter(Boolean)
+  if (baseChanged || localChanged || extraChanged) {
+    setSeen({ base: base.key ?? seen.base, local: localKey, extra })
+    const updates = [baseChanged ? base.text : '', localChanged && announceLocal ? localKey === undefined ? editorMessages.localSave.recovered : local.announcement : '', extraChanged ? extra : ''].filter(Boolean)
     if (updates.length > 0) {
       setSpoken(updates.join(' '))
       setCleared(false)
@@ -393,9 +443,10 @@ function offersForceTakeOver(reading: ReadingMode): boolean {
  * 持有者是自己（M3-P5 设计 §3.7）：同一个按钮换成"在此编辑"；接手进行中说"正在接手…"（不可用、进行中，"有更新"也不可用）；那边没能交出时
  * 换成"仍在此编辑"，旁边加"取消"。
  * 强制接管（M3-P5 设计 §3.8）："请求编辑"旁边的"强制接管"（outline）：点了交给 onForce（先确认）；forcing 是强制接管的进入编辑中——这时只留它，
- * 说正在接管（不可用、进行中），没成功时焦点还在它上面
+ * 说正在接管（不可用、进行中），没成功时焦点还在它上面。
+ * blocked：插槽挡住了动作（S8c，表格是公式恢复期间）：进入、刷新与强制接管都不可用，取消请求照常
  */
-function ReadingControls({ available, recovering, page, reading, session, confirming, forcing, forceRef, onForce }: { available: boolean, recovering: boolean, page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
+function ReadingControls({ available, blocked, page, reading, session, confirming, forcing, forceRef, onForce }: { available: boolean, blocked: boolean, page: EditorPage, reading: ReadingMode | undefined, session: EditorPageSession, confirming: boolean, forcing: boolean, forceRef: RefObject<HTMLButtonElement | null>, onForce: (holder: LeaseHolder) => void }) {
   const entering = reading === undefined
   const update = reading?.update ?? 'none'
   // 与服务端不兼容（M3-P3）时不给"编辑"：申请也会被拒，重新加载才是新的页面。打开自检失败（M3-P4）时同样不给：数据不完整的不能编辑
@@ -406,12 +457,12 @@ function ReadingControls({ available, recovering, page, reading, session, confir
   const requestBusy = reading?.request?.kind === 'sending' || reading?.request?.kind === 'cancelling'
   const action = enterActionOf(reading)
   // 取消请求不受"正在载入最新的版本"影响（与重建无关）
-  const blockedByUpdate = (update === 'loading' || recovering) && action !== 'cancel-request'
+  const blockedByUpdate = (update === 'loading' || blocked) && action !== 'cancel-request'
   // 强制接管：阅读时按条件出现，进入编辑的过程中（forcing）留着；载入最新的版本、确认会话、会话不是本人时不可用
   const forceHolder = reading !== undefined && offersForceTakeOver(reading) ? reading.holder : undefined
-  const forceUnavailable = !available || recovering || forcing || confirming || update === 'loading' || session !== 'active'
+  const forceUnavailable = !available || blocked || forcing || confirming || update === 'loading' || session !== 'active'
   const run = (): void => {
-    if (!available || (recovering && action !== 'cancel-request'))
+    if (!available || (blocked && action !== 'cancel-request'))
       return
     switch (action) {
       case 'enter':
@@ -433,7 +484,7 @@ function ReadingControls({ available, recovering, page, reading, session, confir
   return (
     <>
       {update !== 'none' && (
-        <Button size="sm" variant="outline" aria-disabled={update === 'loading' || taking || recovering} onClick={() => !recovering && void page.refreshUpdate()}>
+        <Button size="sm" variant="outline" aria-disabled={update === 'loading' || taking || blocked} onClick={() => !blocked && void page.refreshUpdate()}>
           {update === 'loading' ? editorMessages.mode.updating : editorMessages.mode.update}
         </Button>
       )}
@@ -554,7 +605,7 @@ function capacityNote(save: SaveView | undefined): string | undefined {
   return editorMessages.nearCapacity(Math.floor((bytes / SNAPSHOT_MAX_RAW_BYTES) * 100))
 }
 
-function SaveNotices({ view, save, onReload, sheetName }: { view: EditorPageView, save: SaveView, onReload: () => void, sheetName: SheetName }) {
+function SaveNotices({ view, save, onReload, snapshot }: { view: EditorPageView, save: SaveView, onReload: () => void, snapshot: SnapshotProblem | undefined }) {
   const { session } = view
   const notices: ReactNode[] = []
   const block = editingBlock(save)
@@ -573,7 +624,7 @@ function SaveNotices({ view, save, onReload, sheetName }: { view: EditorPageView
     )
   }
   if (save.problem !== undefined && !(isSessionProblem(save.problem) && (session !== 'active' || view.confirmingSession))) {
-    const problem = problemMessage(save.problem, view.sessionProblem, sheetName)
+    const problem = problemMessage(save.problem, view.sessionProblem, snapshot)
     notices.push(
       <Alert key="problem" variant={problem.destructive ? 'destructive' : 'default'}>
         <AlertDescription>
@@ -637,12 +688,12 @@ function CopiedNote({ title, documentId }: { title: string, documentId: string }
 
 /**
  * 副本被拒、再试也一样时的说明（M3-P3 审查 B3）：本页过旧时说先把内容复制出来、再重新加载页面；内容不能保存时按违反的规则
- * （或超过容量）说，与编辑时保存被拒同一套说法，不说"可以再试"
+ * （或超过容量）说，与编辑时保存被拒同一套说法，不说"可以再试"。按规则的说法由插槽给出（S8c）；没有插槽时用 describeError
  */
-function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>, sheetName: SheetName): string {
+function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>, snapshot: SnapshotProblem | undefined): string {
   if (refused.refusal === 'outdated')
     return editorMessages.lost.copyOutdated
-  const problem = refused.error.code === 'PAYLOAD_TOO_LARGE' ? editorMessages.capacityExceeded : snapshotProblem(refused.error.details, sheetName)
+  const problem = refused.error.code === 'PAYLOAD_TOO_LARGE' ? editorMessages.capacityExceeded : snapshot === undefined ? describeError(refused.error).message : snapshot(refused.error.details)
   return editorMessages.lost.copyRefused(problem)
 }
 
@@ -659,7 +710,7 @@ function copyRefusalMessage(refused: Extract<CopyState, { kind: 'refused' }>, sh
  *   它销毁之后没有新的编辑器接过焦点、落到了 body：交给说明里的第一个按钮（另存为副本、重新加载），没有按钮时（正在核对那次保存）
  *   交给返回链接；焦点在别处时不抢（复验 C2，规范 §2.4）
  */
-function LostNotice({ available, page, lost, personal, onDiscard, fallbackFocus }: { available: boolean, page: EditorPage, lost: LostMode, personal: boolean, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
+function LostNotice({ available, page, lost, personal, snapshot, onDiscard, fallbackFocus }: { available: boolean, page: EditorPage, lost: LostMode, personal: boolean, snapshot: SnapshotProblem | undefined, onDiscard: () => void, fallbackFocus: RefObject<HTMLElement | null> }) {
   const { loss, unsaved, readable, checking, captureFailed, inputLeft, reopenFailed, copy, reload } = lost
   const copied = copy.kind === 'done' ? copy.document : undefined
   const refused = copy.kind === 'refused' ? copy : undefined
@@ -685,7 +736,7 @@ function LostNotice({ available, page, lost, personal, onDiscard, fallbackFocus 
         {reopenFailed && <p>{editorMessages.lost.reopenFailed(copyable)}</p>}
         {checking && <p>{editorMessages.lost.checking}</p>}
         {copy.kind === 'failed' && <p>{editorMessages.lost.copyFailed(describeError(copy.error).message)}</p>}
-        {refused !== undefined && <p>{copyRefusalMessage(refused, page.sheetName)}</p>}
+        {refused !== undefined && <p>{copyRefusalMessage(refused, snapshot)}</p>}
         {copied !== undefined && <p><CopiedNote title={copied.title} documentId={copied.id} /></p>}
         {reload.kind === 'loading' && <p>{editorMessages.lost.reloading}</p>}
         {reload.kind === 'failed' && <p>{editorMessages.lost.reloadFailed(describeError(reload.error).message)}</p>}
@@ -1044,18 +1095,25 @@ function LoadFailure({ load, backRef }: { load: Exclude<EditorPageLoad, { kind: 
   )
 }
 
-/** apple：苹果的平台，保存的快捷键是 Cmd+S，其他平台是 Ctrl+S */
-export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean }) {
+/**
+ * 页头的骨架（S8c）：一类文档专有的部分由页面扩展交出的插槽给出（Extension 带 chrome）。
+ * apple：苹果的平台，保存的快捷键是 Cmd+S，其他平台是 Ctrl+S
+ */
+export function EditorChrome<Extension extends EditorChromeMembers<Extra, ImageState>, Extra extends object, ImageState extends ImageOperationState>({ page, apple }: { page: EditorPage<Extension, Extra, ImageState>, apple: boolean }) {
   const view = useSyncExternalStore(page.subscribe, page.view)
   const local = useLocalSaveIndicator(view)
-  const formula = formulaRecoveryNotice(view)
-  const formulaBlocked = view.formulaRecovery?.blocksActions === true
+  // 页头的插槽（S8c）：页面扩展在选中装配时建，载入完成（ready）时一定已经有了；之前没有插槽。每次渲染时经 page.extension() 取
+  const chrome = page.extension()?.chrome
+  // 挡住动作（表格是公式恢复期间）：按渲染时的视图算一次，用在原来的 5 处；不读页面扩展的 blocksActions()（它读编辑模式此刻的视图，与这份快照可能差一拍）
+  const blocked = chrome?.blocksActions(view) === true
   const available = view.connection?.available !== false
   const [queryClient] = useState(() => editorQueryClient(page))
-  /** 确认框（放弃本页的修改、强制接管）：同一时刻至多一个 */
-  const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean, readonly requiresRecovery?: boolean, readonly requiresFormula?: boolean }>()
+  /** 确认框（放弃本页的修改、强制接管）：同一时刻至多一个。requiresUnblocked：插槽挡住动作时不可用 */
+  const [pending, setPending] = useState<PendingConfirmation & { readonly requiresConnection?: boolean, readonly requiresRecovery?: boolean, readonly requiresUnblocked?: boolean }>()
   const { load, mode, save } = view
   const ready = load.kind === 'ready' ? load : undefined
+  // 快照被拒的说明（S8c）：插槽的 snapshotProblem（它在被调用的那一刻读建插槽时交给它的成员）；没有插槽时为 undefined，说明用 describeError
+  const snapshot: SnapshotProblem | undefined = chrome?.snapshotProblem
   const title = ready?.title
   const back = backLinkOf(ready)
   const backRef = useRef<HTMLAnchorElement>(null)
@@ -1093,7 +1151,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     const lastActive = holder.lastActiveMinutes === undefined ? undefined : editorMessages.editing.lastActive(holder.lastActiveMinutes)
     setPending({
       requiresConnection: true,
-      requiresFormula: true,
+      requiresUnblocked: true,
       title: editorMessages.mode.forceTitle,
       description: editorMessages.mode.forceDescription(messages.people.text(holder.holder), lastActive),
       confirmLabel: editorMessages.mode.forceConfirm,
@@ -1105,10 +1163,12 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     })
   }
 
+  /** 确认框此刻能不能确认：按 page.view() 的当前值；插槽在这一刻经 page.extension() 取，挡住时的说明排在最前 */
   function confirmationUnavailable(): string | undefined {
     const current = page.view()
-    if (pending?.requiresFormula === true && current.formulaRecovery?.blocksActions === true)
-      return editorMessages.formulaRecovery.actionBlocked
+    const slots = page.extension()?.chrome
+    if (pending?.requiresUnblocked === true && slots?.blocksActions(current) === true)
+      return slots.actionBlocked
     if (pending?.requiresConnection === true && current.connection?.available === false)
       return messages.common.connectionRequired
     if (pending?.requiresRecovery === true && (current.session !== 'active' || current.confirmingSession || current.sessionProblem !== undefined || (current.mode !== undefined && current.mode.kind !== 'reading')))
@@ -1116,8 +1176,9 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     return undefined
   }
 
+  /** "放弃本机修改"：插槽挡住动作时（按 page.view() 的当前值）不开始 */
   function confirmDiscardRecovery(): void {
-    if (page.view().formulaRecovery?.blocksActions === true)
+    if (page.extension()?.chrome.blocksActions(page.view()) === true)
       return
     const intent = page.beginDiscardRecovery()
     if (intent === undefined)
@@ -1125,7 +1186,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     setPending({
       requiresConnection: true,
       requiresRecovery: true,
-      requiresFormula: true,
+      requiresUnblocked: true,
       title: editorMessages.recovery.discardTitle,
       description: editorMessages.recovery.discardDescription,
       confirmLabel: editorMessages.recovery.discardConfirm,
@@ -1156,10 +1217,10 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
     <RecoveryNotice
       view={view.recovery}
       available={available}
-      active={view.session === 'active' && !view.confirmingSession && view.sessionProblem === undefined && !formulaBlocked}
+      active={view.session === 'active' && !view.confirmingSession && view.sessionProblem === undefined && !blocked}
       reading={reading !== undefined || mode === undefined}
       entering={entering}
-      canRestore={!formulaBlocked && reading?.canEdit === true && !reading.gone && reading.blocked === undefined && reading.damaged === undefined && reading.holder === undefined && reading.request === undefined && reading.takeover === undefined}
+      canRestore={!blocked && reading?.canEdit === true && !reading.gone && reading.blocked === undefined && reading.damaged === undefined && reading.holder === undefined && reading.request === undefined && reading.takeover === undefined}
       onRestore={() => void page.enterEditing()}
       onCopy={() => void page.copyRecovery()}
       onRetry={() => void page.retryRecovery()}
@@ -1201,15 +1262,16 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               {ready !== undefined && <EditorShareEntry available={available} page={page} ready={ready} fallbackFocus={() => backRef.current?.focus()} />}
               {/* 看得见的状态（不是播报区：例行的变化只改文字）与读屏的播报区（只播有意义的变化） */}
               <p data-slot="header-status" className="text-sm whitespace-nowrap text-muted-foreground">{headerStatus(view)}</p>
-              <SaveAnnouncer view={view} local={local} formula={formula?.text} />
-              {(reading !== undefined || entering) && <ReadingControls available={available} recovering={formulaBlocked} page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
-              {editing !== undefined && <SaveControls available={available && !formulaBlocked} page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
+              <SaveAnnouncer view={view} local={local} extra={chrome?.announcement(view)} />
+              {(reading !== undefined || entering) && <ReadingControls available={available} blocked={blocked} page={page} reading={reading} session={view.session} confirming={view.confirmingSession} forcing={forcing} forceRef={forceRef} onForce={confirmForceTakeOver} />}
+              {editing !== undefined && <SaveControls available={available && !blocked} page={page} save={editing} confirming={view.confirmingSession} leaving={mode?.kind === 'exiting' ? mode.cause : undefined} apple={apple} />}
             </div>
           </div>
-          {ready !== undefined && <CsvEntry controller={page.csv} fallbackFocus={() => backRef.current?.focus()} />}
+          {/* 插槽（S8c）：页头行之后、"需要联网"之前的那一行（表格是 CSV 的入口），占原来那一个位置 */}
+          {ready !== undefined && chrome?.toolbar(() => backRef.current?.focus())}
           {!available && <p className="px-3 pb-2 text-xs text-muted-foreground">{messages.common.connectionRequired}</p>}
           {local !== undefined && <LocalSaveStatus indicator={local} />}
-          {view.imageOperation !== undefined && <p role="status" data-slot="image-operation" className="px-3 pb-2 text-sm text-muted-foreground">{imageInputNotice(view.imageOperation)}</p>}
+          {view.imageOperation !== undefined && <p role="status" data-slot="image-operation" className="px-3 pb-2 text-sm text-muted-foreground">{chrome?.imageOperation(view.imageOperation)}</p>}
           {view.imageProblem === true && (
             <div data-slot="image-status" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-sm text-muted-foreground">
               <p role="status">{editorMessages.images.failed}</p>
@@ -1223,16 +1285,8 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
               </Button>
             </div>
           )}
-          {formula !== undefined && (
-            <div data-slot="formula-recovery" className="flex flex-wrap items-center gap-2 px-3 pb-2 text-sm text-muted-foreground">
-              <p>{formula.text}</p>
-              {view.formulaRecovery?.phase === 'failed' && (
-                <Button size="sm" variant="outline" aria-disabled={!formula.canRetry} onClick={() => formulaRecoveryNotice(page.view())?.canRetry && page.retryFormulaRecovery()}>
-                  {editorMessages.formulaRecovery.retry}
-                </Button>
-              )}
-            </div>
-          )}
+          {/* 插槽（S8c）：图片状态之后、阅读的静态说明之前的那一块（表格是公式恢复的说明与重试），占原来那一个位置；page.view 是视图的当前值 */}
+          {chrome?.notice(view, page.view)}
           {/* 阅读时的一行静态说明（A14，见文件头） */}
           {reading !== undefined && <p data-slot="reading-note" className="px-3 pb-2 text-xs text-muted-foreground">{editorMessages.mode.readingNote}</p>}
         </header>
@@ -1244,7 +1298,7 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {/* 上一位编辑者异常中断（M3-P5）：进入编辑之后页头下面一条不打断的说明，"知道了"之后、离开编辑时消失 */}
           {interruption !== undefined && <InterruptionNotice interruption={interruption} onDismiss={page.dismissInterruption} />}
           {/* 有人请求编辑（M3-P5）：页头下面的提示，不移动焦点、不挂屏障 */}
-          {incoming !== undefined && <RequestPrompt available={available && !formulaBlocked} page={page} request={incoming} leaving={leaving !== undefined} handingOver={leaving?.cause === 'handover-request'} confirming={view.confirmingSession} />}
+          {incoming !== undefined && <RequestPrompt available={available && !blocked} page={page} request={incoming} leaving={leaving !== undefined} handingOver={leaving?.cause === 'handover-request'} confirming={view.confirmingSession} />}
           {/* 一直渲染（没有问题时什么也不画）：重试成功、说明连同"重试"一起消失时它才能把焦点交给返回链接（DEF-040） */}
           <DetailRefreshProblem
             query={{ isRefetchError: view.detailProblem !== undefined, isRefetching: view.detailRefreshing, error: view.detailProblem, refetch: page.refreshDetail }}
@@ -1260,11 +1314,11 @@ export function EditorChrome({ page, apple }: { page: EditorPage, apple: boolean
           {reading?.damaged !== undefined && <DamagedNotice failures={reading.damaged} canEdit={reading.canEdit} onReload={page.reload} />}
           {/* 阅读时与服务端不兼容（M3-P3）：打开时就看得出、申请编辑权时得知，或者编辑时得知之后退出了编辑 */}
           {reading?.blocked !== undefined && <IncompatibleNotice kind={reading.blocked} editing={undefined} onReload={page.reload} />}
-          {lost !== undefined && <LostNotice available={available} page={page} lost={lost} personal={personal} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
+          {lost !== undefined && <LostNotice available={available} page={page} lost={lost} personal={personal} snapshot={snapshot} onDiscard={confirmDiscard} fallbackFocus={backRef} />}
           {/* 版本冲突之后本页不能再保存：会话的提示（"登录之后回到这里保存"）不成立，只显示冲突的说明（复验 SB9；换了人时那条说明里另有一句，复验 TB8）；
               读不到了（404）之后没有要做的事，不提登录 */}
           {editing?.conflict === undefined && !(lost !== undefined && !lost.readable) && <SessionNotice view={view} editing={editing !== undefined} />}
-          {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} sheetName={page.sheetName} />}
+          {editing !== undefined && <SaveNotices view={view} save={editing} onReload={page.reload} snapshot={snapshot} />}
         </div>
       </div>
       <ConfirmDialog pending={pending} onClose={() => setPending(undefined)} unavailable={confirmationUnavailable} />

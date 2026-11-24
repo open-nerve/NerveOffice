@@ -2,8 +2,10 @@
 // 规范化的内容哈希。纯函数、同步、不抛出；在子进程里执行（snapshot-inspection.child.ts，主进程经 SnapshotInspector 交来），
 // 仅把校验元数据与去重后的图片标识经 IPC 回给主进程，不回传正文。
 // 规则按 contracts 的 SNAPSHOT_RULES 的先后检查，第一条不满足的就是结果：encoding → depth、entries（外层的文字）→ json →
-// depth、entries（资源 data 的文字，与外层累加）→ structure → 资源（resources、resource-duplicate、resource-unknown、resource-data、
-// resource-not-empty）→ image-source → 链接（link-structure、link-address、link-range-id）。
+// depth、entries（资源 data 的文字，与外层累加）→ structure → 档案自己的规则（doc@1 的 doc-flavor、doc-header-footer、doc-notes、
+// doc-section-break、doc-toc）→ 资源（resources、resource-duplicate、resource-unknown、resource-data、resource-not-empty）→
+// image-source → 链接（link-structure、link-address、link-range-id）→ 资源与正文的交叉核对（resource-mismatch，doc@1）。
+// 按档案的部分在 PROFILE_SNAPSHOT_RULES（snapshot-checks.ts）。
 // 嵌套与数量在每次解析之前按文字数，没超出才交给 JSON.parse；全部通过之后才规范化（规范化与资源的规则会再解析资源的 data，
 // 那时已经数过）。与文档有关的两条（unit-id、resource-missing）在保存的事务里；too-complex（子进程的堆超过上限）由 SnapshotInspector 给出
 import type { DocumentProfile, SnapshotIssueLocations, SnapshotRule } from '@nerve-office/contracts'
@@ -12,7 +14,6 @@ import { createHash } from 'node:crypto'
 import { canonicalContentTextOf, checkResources, contentHashInput } from '@nerve-office/contracts'
 import { snapshotAssetIds } from './snapshot-assets.ts'
 import { embeddedJson, measureJsonText, PROFILE_SNAPSHOT_RULES } from './snapshot-checks.ts'
-import { snapshotImageLocations } from './snapshot-image-locations.ts'
 
 /** 只看快照本身就能判断的规则：不含要读文档的 unit-id、resource-missing，与子进程池给出的 too-complex */
 export type SnapshotContentRule = Exclude<SnapshotRule, 'unit-id' | 'resource-missing' | 'too-complex'>
@@ -84,16 +85,22 @@ export function inspectSnapshot(raw: Uint8Array, profile: DocumentProfile): Snap
   const structure = rules.structure(snapshot)
   if (structure === undefined)
     return violated('structure')
+  const content = rules.content(structure)
+  if (!content.ok)
+    return violated(content.rule)
   const resources = checkResources(structure.snapshot.resources, profile)
   if (!resources.ok)
     return violated(resources.rule)
-  const imageLocations = snapshotImageLocations(structure.snapshot, embedded)
+  const imageLocations = rules.imageLocations(structure, embedded)
   if (imageLocations.length !== 0)
     return { ok: false, rule: 'image-source', imageLocations }
   const links = rules.links(structure)
   if (!links.ok)
     return links
-  const digest = createHash('sha256').update(contentHashInput(canonicalContentTextOf(snapshot))).digest()
+  const consistency = rules.consistency(structure, embedded)
+  if (!consistency.ok)
+    return violated(consistency.rule)
+  const digest = createHash('sha256').update(contentHashInput(canonicalContentTextOf(snapshot, profile))).digest()
   return {
     ok: true,
     unitId: structure.unitId,

@@ -1,29 +1,45 @@
 // 编辑器槽位：同一个容器里至多一个编辑器、至多一次创建在途（审查 A1）；视图状态交给下一个；接上之后随编辑器的生命周期。
-// 销毁可能要等（M3-P4 设计 §3.14：主线程模式下先停下正在算的一轮）：旧的销毁完才新建，同一个容器里不同时有两个实例。
-import type { EditorAccess, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
+// 销毁可能要等（例如表格在主线程公式模式下先停下正在算的一轮，M3-P4 设计 §3.14）：旧的销毁完才新建，同一个容器里不同时有两个实例。
+// M6-P1 S7：槽位按编辑器的类型泛型化，假件只实现槽位要求的四样（SlotEditor）；创建的选项用中性的一组，核对槽位原样交给工厂
+// （表格的选项与"重算只在为真时带上"在 sheet-editor/sheet-editor-slot.ts，由 edit-mode 的用例核对）。
+import type { EditorAccess, SlotEditor } from './editor-slot.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
-import { unusedCsv } from './csv.test-support.ts'
 import { createEditorSlot } from './editor-slot.ts'
 
+/** 假件的视图状态：第几个编辑器给出的（销毁之后取不到） */
+interface TestView { readonly index: number }
+
+/** 假件的生命周期阶段（与表格编辑器的两段同名，槽位不认具体的取值） */
+type TestStage = 'rendered' | 'steady'
+
+/** 只实现槽位要求的四样 */
+type TestEditor = SlotEditor<TestView | undefined, TestStage>
+
+/** 创建的选项：中性的两项 */
+interface TestOptions {
+  readonly mode?: 'primary' | 'fallback'
+  readonly fresh?: true
+}
+
 interface FakeEditor {
-  readonly editor: SheetEditor
+  readonly editor: TestEditor
   readonly access: EditorAccess
   readonly snapshot: string
-  readonly viewState: SheetViewState | undefined
+  readonly viewState: TestView | undefined
   /** dispose 被调用了 */
   disposed: boolean
   /** 真正销毁完了（holdDispose 时要等 finishDispose） */
   gone: boolean
-  enter: (stage: SheetEditorLifecycle) => void
+  enter: (stage: TestStage) => void
   /** 之后的 dispose 要等 finishDispose 才销毁完（主线程模式下等正在算的一轮停下） */
   holdDispose: () => void
   finishDispose: () => void
 }
 
 /** 第 n 个编辑器给出的视图状态 */
-function viewStateOf(index: number): SheetViewState {
-  return { sheetId: `sheet-${index}`, topLeft: { row: index, column: index }, selection: undefined }
+function viewStateOf(index: number): TestView {
+  return { index }
 }
 
 /**
@@ -38,7 +54,7 @@ function fakeFactory() {
   const aliveAtCreate: number[] = []
   /** 第几次创建出的编辑器一开始就让销毁要等 */
   const heldFromStart = new Set<number>()
-  const createEditor = vi.fn(async (options: { snapshot: string, access: EditorAccess, viewState?: SheetViewState | undefined }): Promise<SheetEditor> => {
+  const createEditor = vi.fn(async (options: { readonly snapshot: string, readonly access: EditorAccess, readonly viewState?: TestView | undefined } & TestOptions): Promise<TestEditor> => {
     aliveAtCreate.push(created.filter(fake => fake.disposed && !fake.gone).length)
     building += 1
     mostBuilding = Math.max(mostBuilding, building)
@@ -51,8 +67,8 @@ function fakeFactory() {
       building -= 1
     }
     const index = created.length
-    let stage: SheetEditorLifecycle = 'rendered'
-    const listeners = new Set<(stage: SheetEditorLifecycle) => void>()
+    let stage: TestStage = 'rendered'
+    const listeners = new Set<(stage: TestStage) => void>()
     let held = heldFromStart.has(index)
     let finish: () => void = () => {}
     const fake: FakeEditor = {
@@ -70,32 +86,12 @@ function fakeFactory() {
       },
       finishDispose: () => finish(),
       editor: {
-        csv: unusedCsv(),
-        unitId: 'unit-1',
-        sheetName: () => undefined,
-        formulaMode: 'worker',
-        workerFailure: () => undefined,
-        onWorkerFailure: () => () => {},
-        changeSeq: () => 0,
-        onChange: () => () => {},
         lifecycle: () => stage,
         onLifecycle: (listener) => {
           listeners.add(listener)
           return () => listeners.delete(listener)
         },
-        isCellEditing: () => false,
-        uncommittedInput: () => 'none',
-        onUncommittedInputChange: () => () => {},
-        commitCellEditing: async () => true,
-        settleFormulas: async () => 'settled',
-        formulasSettled: () => true,
-        onFormulaProgress: () => () => {},
-        composing: () => false,
-        onCompositionChange: () => () => {},
-        settlePanels: async () => {},
-        capture: () => options.snapshot,
         viewState: () => fake.disposed ? undefined : viewStateOf(index),
-        openCheck: { ok: true },
         dispose: async () => {
           fake.disposed = true
           if (held) {
@@ -135,7 +131,7 @@ function setup() {
   const factory = fakeFactory()
   const onChange = vi.fn()
   const reportError = vi.fn()
-  const slot = createEditorSlot({ createEditor: factory.createEditor, onChange, reportError })
+  const slot = createEditorSlot<TestEditor, TestView | undefined, TestStage, TestOptions>({ createEditor: factory.createEditor, defaultOptions: {}, onChange, reportError })
   return { slot, factory, onChange, reportError }
 }
 
@@ -155,13 +151,13 @@ async function replaced(context: ReturnType<typeof setup>, access: EditorAccess,
 }
 
 describe('编辑器槽位（审查 A1）', () => {
-  it('显式公式模式和强制重算一起交给原工厂', async () => {
+  it('创建的选项几项一起原样交给工厂（表格的公式模式与强制重算就是这样交出去的）', async () => {
     const context = setup()
-    const replacing = context.slot.replace('edit', 'A', { formulaMode: 'main-thread', recalculate: true })
+    const replacing = context.slot.replace('edit', 'A', { mode: 'fallback', fresh: true })
     await settle()
     context.factory.gate(0).release()
     const created = await replacing
-    expect(context.factory.createEditor).toHaveBeenCalledExactlyOnceWith({ snapshot: 'A', access: 'edit', viewState: undefined, formulaMode: 'main-thread', recalculate: true })
+    expect(context.factory.createEditor).toHaveBeenCalledExactlyOnceWith({ snapshot: 'A', access: 'edit', viewState: undefined, mode: 'fallback', fresh: true })
     context.slot.discard(created!)
   })
 
@@ -225,7 +221,7 @@ describe('编辑器槽位（审查 A1）', () => {
     const created = await replacing
     // 交回了、还没接上：仍是 creating（页面的屏障挂着），调用方先建好要的东西再接上
     expect([context.slot.surface(), context.slot.editor()]).toEqual(['creating', undefined])
-    context.slot.attach(created as SheetEditor)
+    context.slot.attach(created as TestEditor)
     expect([context.slot.surface(), context.slot.editor()]).toEqual(['rendered', created])
     const first = context.factory.created[0] as FakeEditor
     first.enter('steady')
@@ -242,18 +238,18 @@ describe('编辑器槽位（审查 A1）', () => {
     expect(context.onChange).toHaveBeenCalled()
   })
 
-  it('强制全量重算（M3-P4 设计 §3.5）：replace 的 recalculate 交给工厂；不给时不带这一项', async () => {
+  it('创建的选项（例如表格的强制全量重算，M3-P4 设计 §3.5）：replace 给的交给工厂；不给时不多任何一项', async () => {
     const context = setup()
     await replaced(context, 'read', 'A')
-    const recalculating = context.slot.replace('edit', 'B', { recalculate: true })
+    const recalculating = context.slot.replace('edit', 'B', { fresh: true })
     await settle()
     context.factory.gate(1).release()
     await recalculating
     expect(context.factory.createEditor.mock.calls.map(call => call[0])).toEqual([
       { snapshot: 'A', access: 'read', viewState: undefined },
-      { snapshot: 'B', access: 'edit', viewState: viewStateOf(0), recalculate: true },
+      { snapshot: 'B', access: 'edit', viewState: viewStateOf(0), fresh: true },
     ])
-    expect(context.factory.createEditor.mock.calls[0]?.[0]).not.toHaveProperty('recalculate')
+    expect(Object.keys(context.factory.createEditor.mock.calls[0]?.[0] ?? {}).sort()).toEqual(['access', 'snapshot', 'viewState'])
   })
 
   it('单飞：上一次创建还在途时再换，先等它结束、销毁它的结果（它交回 undefined），再建新的——同一时刻至多一次创建、至多一个编辑器', async () => {
@@ -272,7 +268,7 @@ describe('编辑器槽位（审查 A1）', () => {
     context.factory.gate(2).release()
     const writer = await entering
     expect(writer).toBeDefined()
-    context.slot.attach(writer as SheetEditor)
+    context.slot.attach(writer as TestEditor)
     expect(context.factory.mostBuilding()).toBe(1)
     expect(context.factory.created.map(fake => [fake.access, fake.disposed])).toEqual([['read', true], ['read', true], ['edit', false]])
     // 被取代的那次没有接上过：视图状态照旧是最初那个编辑器的
@@ -302,14 +298,14 @@ describe('编辑器槽位（审查 A1）', () => {
     const replacing = context.slot.replace('read', 'A')
     await settle()
     context.factory.gate(0).release()
-    const stale = await replacing as SheetEditor
+    const stale = await replacing as TestEditor
     const next = context.slot.replace('read', 'B')
     await settle()
     expect(context.factory.created[0]?.disposed).toBe(true)
     context.slot.attach(stale)
     expect([context.slot.surface(), context.slot.editor()]).toEqual(['creating', undefined])
     context.factory.gate(1).release()
-    context.slot.attach(await next as SheetEditor)
+    context.slot.attach(await next as TestEditor)
     expect(context.slot.surface()).toBe('rendered')
   })
 

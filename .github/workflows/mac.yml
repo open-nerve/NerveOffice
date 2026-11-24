@@ -13,7 +13,8 @@ name: Mac
 
 on:
   push:
-    branches: [m5-p8-final-closeout]
+    # 当期 Phase 的唯一分支（ADR-026 的 M6 附录：M6 各 Phase 要跑托管 Mac 时改为当期分支，M6-P1 起）
+    branches: [m6-p1-doc-foundation]
   workflow_dispatch:
 
 permissions:
@@ -74,7 +75,7 @@ jobs:
       - name: 启动 PostgreSQL（Homebrew，设置同开发库）
         timeout-minutes: 15
         env:
-          POSTGRES_VERSION: '18.6'
+          POSTGRES_VERSION: '18.7'
           POSTGRES_USER: nerve
           POSTGRES_PASSWORD: nerve_dev_only
           POSTGRES_DB: nerve_office
@@ -169,7 +170,7 @@ jobs:
       - name: 启动 PostgreSQL（Homebrew，设置同开发库）
         timeout-minutes: 15
         env:
-          POSTGRES_VERSION: '18.6'
+          POSTGRES_VERSION: '18.7'
           POSTGRES_USER: nerve
           POSTGRES_PASSWORD: nerve_dev_only
           POSTGRES_DB: nerve_office

@@ -14,7 +14,8 @@ import { parseWorkflow, PLAYWRIGHT_CONFIG, playwrightBrowsers, runsChecks, stepL
 
 const WORKFLOW = '.github/workflows/mac.yml'
 const RUNNER = 'macos-26'
-const PHASE_BRANCH = 'm5-p8-final-closeout'
+/** 推送触发的分支：当期 Phase 的唯一分支（ADR-026 的 M6 附录：M6 各 Phase 要跑托管 Mac 时改为当期分支） */
+const PHASE_BRANCH = 'm6-p1-doc-foundation'
 /** 开发库的编排：开发机的 pnpm db:up 用它起数据库，托管 Mac 照它的版本与设置提供同一个库 */
 const DEV_COMPOSE = 'deploy/dev/compose.yaml'
 // eslint-disable-next-line no-template-curly-in-string -- GitHub Actions 的表达式原文，不是模板字符串
@@ -165,7 +166,7 @@ describe('M5-P8 托管 Mac 的接线：照开发机的方式跑本机完整门�
   })
 
   /**
-   * 开发机经 pnpm db:up 用 deploy/dev/compose.yaml 起 postgres:18.6 的容器。Apple 芯片的托管 Mac 不能起 Docker，改由工作流用 Homebrew 的
+   * 开发机经 pnpm db:up 用 deploy/dev/compose.yaml 起 PostgreSQL 的容器（版本见编排）。Apple 芯片的托管 Mac 不能起 Docker，改由工作流用 Homebrew 的
    * 同一版本、同样的账号、库名、初始化参数与端口提供（测试连库的地址与开发机相同，不另设连接串）。认证照开发库：本机套接字免密、TCP 要密码；
    * 装出来的版本与开发库不同时在这一步失败，不带着别的版本往下跑
    */

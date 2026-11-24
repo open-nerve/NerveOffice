@@ -1,5 +1,5 @@
 // 带 requestId 的新建（新建表格、新建文件夹、复制，M2-P6 复核 M1）：同一件事在有结论之前沿用同一个 requestId，服务端按它只做一次。
-// 规则只写在这里，各处共用；保存的状态机（features/sheet-editor/save-coordinator.ts）是同一类问题的另一处实现。
+// 规则只写在这里，各处共用；保存的状态机（features/document-editor/save-coordinator.ts）是同一类问题的另一处实现。
 import { ApiError, isAuthenticationError, isCsrfTokenError, isDefiniteRejection, isUnknownOutcome } from './client.ts'
 
 /**

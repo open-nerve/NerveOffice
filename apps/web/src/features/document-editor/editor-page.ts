@@ -15,10 +15,19 @@
 // 取自载入时确认的会话。请求编辑（设计 §3.6）："请求编辑""取消请求"与持有者提示里的"交出""继续编辑"都是写的操作，与"编辑"一样先确认会话；
 // 能不能强制接管取自载入时的详情（之后随编辑状态更新）。"强制接管"（设计 §3.8）是写的操作：页头先确认（确认框关掉之后才交到这里），这里与"编辑"
 // 一样先确认会话。异常中断的说明里的"知道了"只改本页。测试构建的观察钩子（设计 §3.13）由组装处给出、交给编辑模式（生产不给）。
-import type { DocumentAccessVia, DocumentDetail, DocumentSpace, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
-import type { EditorImageAccess, ImageInputState } from '../../editor/index.ts'
+//
+// 按类型装配（M6-P1 S8b，S8 spec §2）：从表格编辑器搬进共用编辑会话层，与文档类型无关。页面收一张装配表（类型 → EditorPageAssembly），
+// 载入详情之后按详情里的类型选：类型有装配、档案等于装配的档案、格式版本在平台的列表里，三条都成立才选中，否则照旧“格式不受支持”。
+// 选中时调用装配的 assemble：交回页面扩展与编辑模式的工厂（两者共用装配的闭包，扩展经它拿到有类型的编辑模式，这里只看到通用的 EditMode）。
+// 页面扩展的挂点都在原来调用表格代码的位置，先后不变（spec §2.4、§2.9）：环境变了（写资格变了、update 里算视图之前、四个会话钩子里身份代次
+// 加一之后）、7 个入口的第一句（挡住动作）、屏障的条件、pagehide 与卸载的第一件；选中之前（以及格式不受支持时）都不调，挡住按假算。
+// 页面交给扩展的一面（EditorPageHost）是动作目标里页面的那一半与写的门槛（表格的 CSV 用它）。视图照抄编辑模式视图里扩展的部分（表格是
+// formulaRecovery），编辑模式还没建时没有这一项。编辑器的工厂由装配给出，页面以 bindEditor 包上自己的绑定（容器、页面的界面、图片的读取许可
+// 与三个回调，键与原来相同）。页面上报的档案（clientFormatOf）取选中的装配的：编辑权与请求编辑的请求按它取，编辑模式（草稿、打开自检的上报）
+// 收到它；恢复的可读判定载入之后只用它，404 之后用装配表里全部的（草稿记录里有档案、没有类型）。
+import type { DocumentAccessVia, DocumentDetail, DocumentSpace, DocumentType, SaveContentResponse, SessionResponse } from '@nerve-office/contracts'
+import type { PageClientFormat, ReadableFormats } from '../../shared/api/client-format.ts'
 import type { ApiError } from '../../shared/api/index.ts'
-import type { CsvTable } from '../../shared/csv/index.ts'
 import type { ConnectionView } from '../../shared/lib/connection-state.ts'
 import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
@@ -28,12 +37,11 @@ import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.t
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { DraftSessionPermit } from '../../shared/outbox/session-fence.ts'
 import type { AutosavePage, AutosaveView } from './autosave.ts'
-import type { CsvController, CsvTarget } from './csv-controller.ts'
-import type { EditMode, EditModeApi, EditModeAutosave, EditModeState } from './edit-mode.ts'
+import type { EditLeaseApi } from './edit-lease.ts'
+import type { EditMode, EditModeApi, EditModeAutosave, EditModeBaseView, EditModeOptions, EditModeState, EditModeView } from './edit-mode.ts'
+import type { EditRequestApi } from './edit-request.ts'
 import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { LoadedContent } from './editor-api.ts'
-import type { CreateModeEditor } from './editor-slot.ts'
-import type { FormulaRecoveryView } from './formula-recovery.ts'
 import type { HandoverTrace } from './handover-trace.ts'
 import type { EditorImageAccessController } from './image-access.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
@@ -41,8 +49,8 @@ import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility } from './reading-checks.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveView } from './save-coordinator.ts'
-import { DOCUMENT_PROFILES, PLATFORM_FORMAT_VERSIONS } from '@nerve-office/contracts'
-import { documentIsNewer, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { PLATFORM_FORMAT_VERSIONS, UNKNOWN_DOCUMENT_TYPE } from '@nerve-office/contracts'
+import { documentIsNewer } from '../../shared/api/client-format.ts'
 import { disabledSessionUserId, isAuthenticationError, isCsrfTokenError, isMissingResource, setApiSession, setCsrfToken } from '../../shared/api/index.ts'
 import { loginPath } from '../../shared/lib/login-path.ts'
 import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
@@ -50,9 +58,6 @@ import { createRecoveryReader } from '../../shared/local-drafts/recovery-reader.
 import { draftSessionPermitOf } from '../../shared/local-drafts/session-activation.ts'
 import { subscribeLocalSession } from '../../shared/local-drafts/session-events.ts'
 import { DEFAULT_AUTOSAVE_LIMITS, retryDelay } from './autosave.ts'
-import { createCsvController } from './csv-controller.ts'
-import { downloadCsv } from './csv-download.ts'
-import { createEditMode } from './edit-mode.ts'
 import { createEditorImageAccess } from './image-access.ts'
 import { blockInteractions } from './interaction-barrier.ts'
 
@@ -91,10 +96,22 @@ export type EditorPageLoad
  */
 export type EditorPageSession = 'active' | 'signed-out' | 'other-user'
 
-export interface EditorPageView {
+/**
+ * 编辑器的图片输入操作的状态（会话层的约束，S8 spec §2.5）：状态的类型由装配给出（表格是适配层的 ImageInputState，表格装配处的类型检查核对），
+ * 页面只看“失败，而且原因是没有权限”
+ */
+export interface ImageOperationState {
+  readonly kind: string
+  readonly reason?: string
+}
+
+/** 编辑模式视图里扩展的部分（去掉通用的五项；表格是 formulaRecovery） */
+export type EditModeExtraView<Extra extends object> = Omit<EditModeView<string, Extra>, keyof EditModeBaseView<string>>
+
+/** 页面视图里与类型无关的各项；ImageState 是装配给出的图片输入操作的状态 */
+export interface EditorPageBaseView<ImageState extends ImageOperationState> {
   readonly imageProblem?: boolean
-  readonly imageOperation?: ImageInputState | undefined
-  readonly formulaRecovery?: FormulaRecoveryView | undefined
+  readonly imageOperation?: ImageState | undefined
   readonly recovery?: RecoveryView | undefined
   readonly localSave?: LocalSaveView | undefined
   readonly connection?: ConnectionView | undefined
@@ -129,11 +146,24 @@ export interface EditorPageView {
   readonly surface: EditorSurfaceState
 }
 
-export interface EditorPageApi extends EditModeApi {
+/**
+ * 页面的视图（S8 spec §2.5）：通用的各项，并上编辑模式视图里扩展的部分（Extra 是扩展并进编辑模式视图的；编辑模式还没建时没有这一项，
+ * 按键比较时与原来的 undefined 等价）
+ */
+export type EditorPageView<Extra extends object = object, ImageState extends ImageOperationState = ImageOperationState> = EditorPageBaseView<ImageState> & Partial<EditModeExtraView<Extra>>
+
+export interface EditorPageApi extends Omit<EditModeApi, 'editLease' | 'editRequest'> {
   /** 原 gzip 与原请求的无租约核对；缺少此能力时保留未知，不能改走 save。 */
   readonly replay?: ((documentId: string, request: DraftReplayRequest, gzip: Uint8Array<ArrayBuffer>) => Promise<SaveContentResponse>) | undefined
   readonly session: () => Promise<SessionResponse>
   readonly document: (documentId: string) => Promise<DocumentDetail>
+  /**
+   * 编辑权的请求（申请、续租、释放、交出、谢绝），按页面上报的档案取（S8 spec §2.6）：申请与续租的请求体带它。页面在选中装配、建编辑模式时
+   * 以装配的档案取一次，编辑模式收到的接口不变
+   */
+  readonly editLease: (format: PageClientFormat) => EditLeaseApi
+  /** 请求编辑的请求（发出、续期、取消），同上：发出的请求体带档案 */
+  readonly editRequest: (format: PageClientFormat) => EditRequestApi
 }
 
 /** 同一连接状态提供浏览器信号与请求事实；online 只唤醒调度，编辑会话独立核对上传许可。 */
@@ -161,7 +191,88 @@ export interface EditIntent {
   readonly clear: () => void
 }
 
-export interface EditorPageOptions {
+/**
+ * 页面绑定给编辑器工厂的（P12，键与原来相同）：容器、页面自己的界面（页头：组合输入与面板防抖的输入目标在页头里的不算文档的输入，
+ * M3-P4 设计 §3.6）、图片的读取许可与三个回调。类型由会话层自己定义，表格装配处的类型检查核对与适配层的创建参数同形
+ */
+export interface EditorPageBindings<ImageState extends ImageOperationState> {
+  readonly container: HTMLElement
+  readonly pageUi: Node
+  readonly imageAccess?: EditorImageAccessController
+  readonly onImageFailure: (error: unknown) => void
+  readonly onImageOperation: (state: ImageState) => void
+  readonly onImageOperationFailure: (error: unknown) => void
+}
+
+/** 给这一类文档的编辑器工厂包上页面的绑定（每次创建时绑定一次）：装配把自己的工厂交给它，得到编辑模式要的工厂 */
+export type EditorBinder<ImageState extends ImageOperationState> = <Input extends object, Editor>(create: (input: Input & EditorPageBindings<ImageState>) => Promise<Editor>) => (input: Input) => Promise<Editor>
+
+/**
+ * 页面交给扩展的一面（S8 spec §2.4）：动作目标里页面的那一半（表格的 CSV 目标）、写的门槛、导入之前的会话确认与导入要的事实。
+ * 都在调用时取
+ */
+export interface EditorPageHost {
+  /** 地址里的文档 id（新建表格之后的导入核对意图） */
+  readonly documentId: string | undefined
+  /**
+   * 动作目标里页面的那一半：未登录、会话确认在途或上一次确认失败时交回 undefined；否则交回一个谓词——记下此刻的身份代次与会话，
+   * 依次查没有卸载、不在离开、没有隐藏，载入完成、会话是本人，没有待确认的未登录、令牌不是已知失效，身份代次没变、会话的用户与令牌没变
+   */
+  readonly actionGate: () => (() => boolean) | undefined
+  /** 写的门槛：能连上服务端，而且不必先确认就能写（会话是本人、没有确认在途、上一次确认没有失败、令牌不是已知失效） */
+  readonly writeReady: () => boolean
+  /** 导入之前：能连上服务端时先确认一次会话 */
+  readonly confirmBeforeWrite: () => Promise<void>
+  /** 页头的标题（导出的文件名等） */
+  readonly title: () => string
+  /** 本页确认过的会话（新建表格之后的导入核对意图） */
+  readonly pageSession: () => SessionResponse | undefined
+  /** 没有卸载，而且会话是本人 */
+  readonly sessionActive: () => boolean
+}
+
+/**
+ * 页面扩展的挂点（S8 spec §2.4）：页面在原来调用表格代码的位置调用它。没有扩展时（载入之前、格式不受支持）都不调，挡住按假算——
+ * 与编辑模式还没建时相同
+ */
+export interface EditorPageExtension {
+  /** 页面的环境变了：写资格变了（在通知自动保存之后）、update 里算视图之前、四个会话钩子里身份代次加一之后 */
+  readonly environmentChanged: () => void
+  /** 挡住动作：7 个入口（进入编辑、在此编辑、强制接管、请求编辑、交出、继续编辑、退出编辑）的第一句，在页面自己的判断之前 */
+  readonly blocksActions: () => boolean
+  /** 挂上交互屏障（与切换中、正在新建同在一处判断） */
+  readonly blocksInput: () => boolean
+  /** 页面隐藏：pagehide 的第一件（记下已隐藏之后）；选中时页面已经隐藏也调 */
+  readonly hide: () => void
+  /** 卸载的第一件（记下已卸载之后） */
+  readonly dispose: () => void
+}
+
+/** 页面交给编辑模式的工厂的选项：编辑模式与类型无关的选项（不含编辑器的工厂），另加包上页面绑定的 bindEditor */
+export type EditorPageModeOptions<ImageState extends ImageOperationState> = Omit<EditModeOptions<unknown, unknown, unknown>, 'createEditor'> & {
+  readonly bindEditor: EditorBinder<ImageState>
+}
+
+/** 选中装配时交回的：页面扩展（挂点并上交给使用方的成员 Extension）与编辑模式的工厂，两者共用装配的闭包 */
+export interface AssembledEditorPage<Extension extends object, Extra extends object, ImageState extends ImageOperationState> {
+  readonly extension: EditorPageExtension & Extension
+  readonly createMode: (options: EditorPageModeOptions<ImageState>) => EditMode<string, Extra>
+}
+
+/**
+ * 一类文档的装配（S8 spec §2.3）：这类文档的页面档案（clientFormatOf）与选中时的组装。编辑器的工厂在装配之内（表格的由组装处给出），
+ * 编辑器、视图状态与创建选项的类型都不出装配：页面看到的类型参数只有交给使用方的成员、编辑模式视图里扩展的部分与图片操作的状态
+ */
+export interface EditorPageAssembly<Extension extends object, Extra extends object, ImageState extends ImageOperationState> {
+  readonly format: PageClientFormat
+  /** 选中时调用（只调一次）：交回页面扩展与编辑模式的工厂 */
+  readonly assemble: (host: EditorPageHost) => AssembledEditorPage<Extension, Extra, ImageState>
+}
+
+/** 装配表：本页能打开的类型各一项（组装处写成 satisfies Record<OpenableDocumentType, …>） */
+export type EditorPageAssemblies<Extension extends object, Extra extends object, ImageState extends ImageOperationState> = Partial<Record<DocumentType, EditorPageAssembly<Extension, Extra, ImageState>>>
+
+export interface EditorPageOptions<Extension extends object, Extra extends object, ImageState extends ImageOperationState> {
   /** 独立 Reader 的测试接缝，不共享编辑会话的密钥所有权。 */
   readonly recoveryReader?: (() => RecoveryReader) | undefined
   /** 持久宿主/密钥的测试接缝；生产不传。部署开关始终来自实际会话响应。 */
@@ -174,10 +285,9 @@ export interface EditorPageOptions {
   readonly chrome: HTMLElement
   readonly api: EditorPageApi
   /**
-   * 新建编辑器（适配层的 createSheetEditor）：容器由这里绑定；页面自己的界面（页头）也交过去——组合输入与面板防抖的输入目标在页头里的
-   * 不算文档的输入（M3-P4 设计 §3.6）
+   * 装配表（M6-P1 设计 §3.4，S8 spec §2.3）：载入详情之后按类型选；没有这一类的装配、档案或格式版本不对的进入“格式不受支持”，不创建编辑器
    */
-  readonly createEditor: (options: Parameters<CreateModeEditor>[0] & { readonly container: HTMLElement, readonly pageUi: Node, readonly imageAccess?: EditorImageAccess, readonly onImageFailure?: (error: unknown) => void, readonly onImageOperation?: (state: ImageInputState) => void, readonly onImageOperationFailure?: (error: unknown) => void }) => ReturnType<CreateModeEditor>
+  readonly assemblies: EditorPageAssemblies<Extension, Extra, ImageState>
   readonly page: PageLocation
   readonly sessionChannel: SessionChannel
   /** 单调的"现在"与计时器：编辑租约的心跳、阅读时的检查 */
@@ -208,18 +318,16 @@ export interface EditorPageOptions {
   readonly reportError: (error: unknown) => void
 }
 
-export interface EditorPage {
-  readonly csv: CsvController
-  readonly importCreatedCsv: (table: CsvTable, intent: CreatedCsvIntent) => Promise<boolean>
-  readonly sheetName: EditMode['sheetName']
-  readonly retryFormulaRecovery: () => void
+export interface EditorPage<Extension extends object = object, Extra extends object = object, ImageState extends ImageOperationState = ImageOperationState> {
+  /** 选中的装配交给使用方的成员（表格是 CSV、新建表格之后的导入、工作表名与公式恢复的重试）：选中之前为 undefined */
+  readonly extension: () => Extension | undefined
   readonly retryRecovery: () => Promise<void>
   readonly copyRecovery: () => Promise<void>
   readonly beginDiscardRecovery: () => RecoveryDiscard | undefined
   readonly discardRecovery: (intent: RecoveryDiscard) => Promise<void>
   readonly retryRecoveryCleanup: () => Promise<void>
   readonly acknowledgeRecovery: (at: number) => Promise<void>
-  readonly view: () => EditorPageView
+  readonly view: () => EditorPageView<Extra, ImageState>
   readonly subscribe: (listener: () => void) => () => void
   readonly load: () => Promise<void>
   readonly save: () => Promise<void>
@@ -270,19 +378,43 @@ export interface EditorPage {
   readonly dispose: () => void
 }
 
-export interface CreatedCsvIntent {
-  readonly documentId: string
-  readonly userId: string
-  readonly csrfToken: string
-  readonly current: () => boolean
-}
-
 export type EditorSurfaceState = 'loading' | 'ready' | 'steady' | 'failed'
 
-/** 本页认识的档案与格式版本；别的一律不进入编辑，也不改写（计划书 §8.7） */
-function isKnownFormat(document: DocumentDetail): boolean {
-  return (DOCUMENT_PROFILES as readonly string[]).includes(document.profile)
-    && (PLATFORM_FORMAT_VERSIONS as readonly number[]).includes(document.formatVersion)
+/** 平台的格式版本（按数组包含判断，不是等于单值） */
+const KNOWN_FORMAT_VERSIONS: readonly number[] = PLATFORM_FORMAT_VERSIONS
+
+/**
+ * 这份文档交给哪一项装配（S8 spec §2.3）：本页能打开的类型、档案与格式版本；别的一律不进入编辑，也不改写（计划书 §8.7）。
+ * 三条都成立才选中——详情的类型有装配（响应里没见过的类型没有）、档案等于装配的档案、格式版本在平台的列表里
+ */
+function assemblyFor<Assembly extends { readonly format: PageClientFormat }>(document: DocumentDetail, assemblies: Partial<Record<DocumentType, Assembly>>): Assembly | undefined {
+  const assembly = document.type === UNKNOWN_DOCUMENT_TYPE ? undefined : assemblies[document.type]
+  if (assembly === undefined || document.profile !== assembly.format.profile || !KNOWN_FORMAT_VERSIONS.includes(document.formatVersion))
+    return undefined
+  return assembly
+}
+
+/** 装配表里全部的档案（404 之后的可读判定，S8 spec §2.7）：表是空的时为 undefined */
+function formatsOf(assemblies: Partial<Record<DocumentType, { readonly format: PageClientFormat }>>): ReadableFormats | undefined {
+  const [first, ...rest] = Object.values(assemblies).flatMap(assembly => assembly === undefined ? [] : [assembly.format])
+  return first === undefined ? undefined : [first, ...rest]
+}
+
+/** 编辑模式视图里扩展的部分（S8 spec §2.5）：去掉通用的五项；编辑模式还没建时没有 */
+function extraViewOf<Extra extends object>(view: EditModeView<string, Extra> | undefined): Partial<EditModeExtraView<Extra>> {
+  if (view === undefined)
+    return {}
+  const { localSave, mode, save, autosave, surface, ...extra } = view
+  return extra
+}
+
+/** 视图按键比较（next 的自有键）：有一项不同就算变了 */
+function viewChanged<View extends object>(next: View, current: View): boolean {
+  for (const key in next) {
+    if (next[key] !== current[key])
+      return true
+  }
+  return false
 }
 
 /** 页头的信息里随文档详情更新的部分 */
@@ -297,7 +429,7 @@ function switching(mode: EditModeState): boolean {
   return mode.kind === 'opening' || mode.kind === 'entering' || mode.kind === 'exiting' || mode.kind === 'losing'
 }
 
-export function createEditorPage(options: EditorPageOptions): EditorPage {
+export function createEditorPage<Extension extends object, Extra extends object, ImageState extends ImageOperationState>(options: EditorPageOptions<Extension, Extra, ImageState>): EditorPage<Extension, Extra, ImageState> {
   const { documentId, surface, api, page, sessionChannel, clock } = options
   const listeners = new Set<() => void>()
   let load: EditorPageLoad = { kind: 'loading' }
@@ -309,7 +441,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let unconfirmedLocalSource: DraftSessionPermit | undefined
   let imageAccess: EditorImageAccessController | undefined
   let pageSession: SessionResponse | undefined
-  let csvIdentityEpoch = 0
+  /**
+   * 身份代次（原来 CSV 的 csvIdentityEpoch，S8 spec §2.4）：会话的用户或令牌变了、会话的状态变了、四个会话钩子里加一；
+   * 动作目标（actionGate 交回的谓词）记下它，变了就作废
+   */
+  let identityEpoch = 0
   let confirmedImageSession: SessionResponse | undefined
   let imageReadable = false
   let imageCanEdit: boolean | undefined
@@ -318,12 +454,14 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   let imagePermissionEpoch = 0
   let imageInstance = 0
   let imageProblem = false
-  let imageOperation: ImageInputState | undefined
+  let imageOperation: ImageState | undefined
   let pageHidden = false
   /** 本页这次加载的标识（P1 设计 §3.2）：编辑租约绑定它，保存也带着它（认出"自己追自己"），两处是同一个 */
   const clientInstanceId = options.newId()
-  /** 阅读与编辑（载入之后才有） */
-  let mode: EditMode | undefined
+  /** 阅读与编辑（载入之后才有）：选中的装配建的，这里只看到通用的编辑模式 */
+  let mode: EditMode<string, Extra> | undefined
+  /** 选中的装配的页面扩展（选中时建，S8 spec §2.2）：选中之前与格式不受支持时没有，挂点都不调 */
+  let extension: (EditorPageExtension & Extension) | undefined
   let recovery: DocumentRecovery | undefined
   let earlyUnreadableRound: number | undefined
   /** 本页最后一次键盘、鼠标操作的时刻（单调的时钟）：心跳上报"多久没有操作" */
@@ -351,7 +489,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
    */
   let staleAfter: number | undefined
   let sessionProblem: unknown
-  let sessionEndedReason: EditorPageView['sessionEndedReason']
+  let sessionEndedReason: EditorPageBaseView<ImageState>['sessionEndedReason']
   /**
    * 确认会话失败（sessionProblem，网络等）之后的再确认（审查 A6）：确认有结果之前自动保存暂停，人其实多半一直在登录中——恢复联网、
    * 回到前台时立即再确认，另按自动保存的退避（2、4……秒，至多 60 秒）定时再确认。确认有了结果（成功、未登录、换了人）就停
@@ -391,45 +529,45 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   /** 编辑器容器的状态（写在容器的 data-editor-state 上） */
   let surfaceState: EditorSurfaceState = 'loading'
   let current = computeView()
-  const csv = createCsvController({
-    current: csvTarget,
-    prepareImport: async () => {
+  /** 页面交给扩展的一面（S8 spec §2.4）：选中装配时交给它 */
+  const host: EditorPageHost = {
+    documentId,
+    actionGate,
+    writeReady: () => serverAvailable() && confirmedForWrite(),
+    // 导入之前（原来 CSV 的 prepareImport）：能连上服务端时先确认一次会话
+    confirmBeforeWrite: async () => {
       if (serverAvailable())
         await confirmForSave(false)
     },
     title: () => heading?.title ?? '',
-    download: downloadCsv,
-  })
+    pageSession: () => pageSession,
+    sessionActive: () => !disposed && session === 'active',
+  }
 
   function acceptPageSession(next: SessionResponse | undefined): void {
     if (pageSession?.user.id !== next?.user.id || pageSession?.csrfToken !== next?.csrfToken)
-      csvIdentityEpoch += 1
+      identityEpoch += 1
     pageSession = next
   }
 
-  function csvTarget(newDocument = false): CsvTarget | undefined {
-    const target = mode?.csvTarget(newDocument)
+  /**
+   * 动作目标里页面的那一半（S8 spec §2.4，原来 CSV 目标的页面一侧）：未登录、会话确认在途或上一次确认失败时没有；否则记下此刻的身份代次与会话，
+   * 交回“这个目标还算数”的页面一侧的判断
+   */
+  function actionGate(): (() => boolean) | undefined {
     const signedIn = pageSession
-    if (!target || !signedIn || checkInFlight !== undefined || sessionProblem !== undefined)
+    if (signedIn === undefined || checkInFlight !== undefined || sessionProblem !== undefined)
       return undefined
-    const epoch = csvIdentityEpoch
-    const currentTarget = (): boolean => !disposed && !leaving && !pageHidden && load.kind === 'ready'
+    const epoch = identityEpoch
+    return (): boolean => !disposed && !leaving && !pageHidden && load.kind === 'ready'
       && session === 'active' && !unauthenticatedPending && staleAfter === undefined
-      && epoch === csvIdentityEpoch && pageSession?.user.id === signedIn.user.id && pageSession.csrfToken === signedIn.csrfToken
-      && target.current()
-    if (!currentTarget())
-      return undefined
-    return {
-      editor: target.editor,
-      current: currentTarget,
-      writable: () => currentTarget() && target.writable() && serverAvailable() && confirmedForWrite(),
-      formulasPending: target.formulasPending,
-    }
+      && epoch === identityEpoch && pageSession?.user.id === signedIn.user.id && pageSession.csrfToken === signedIn.csrfToken
   }
 
-  function computeView(): EditorPageView {
+  /** 视图：通用的各项，并上编辑模式视图里扩展的部分（S8 spec §2.5） */
+  function computeView(): EditorPageView<Extra, ImageState> {
     const modeView = mode?.view()
-    return { load, imageProblem, imageOperation, recovery: recovery?.view(), formulaRecovery: modeView?.formulaRecovery, localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
+    return { ...extraViewOf(modeView), load, imageProblem, imageOperation, recovery: recovery?.view(), localSave: modeView?.localSave, connection: options.network.connection?.view(), mode: modeView?.mode, save: modeView?.save, autosave: modeView?.autosave, session, sessionEndedReason, sessionProblem, confirmingSession, detailProblem, detailRefreshing: detailRefreshes > 0, surface: surfaceState }
   }
 
   function confirmImages(): void {
@@ -472,10 +610,6 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
   }
 
-  function formulaBusy(): boolean {
-    return mode?.view().formulaRecovery?.blocksActions === true
-  }
-
   /** 页面信号变了：在调用者的同步段里通知（可见性在 visibilitychange 里，切到后台的上传不靠计时器） */
   function signalPage(): void {
     for (const listener of [...pageSignalListeners]) {
@@ -497,15 +631,15 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     if (!next)
       recovery?.suspend()
     signalPage()
-    csv.environmentChanged()
+    extension?.environmentChanged()
   }
 
+  /** 写资格 → 扩展的环境（表格的 CSV 的监听者先收到） → 算视图 → 比较 → 通知页面的监听者（S8 spec §2.9 的 P2） */
   function update(): void {
     syncWritable()
-    csv.environmentChanged()
+    extension?.environmentChanged()
     const next = computeView()
-    const changed = (Object.keys(next) as (keyof EditorPageView)[]).some(key => next[key] !== current[key])
-    if (!changed)
+    if (!viewChanged(next, current))
       return
     current = next
     for (const listener of [...listeners])
@@ -563,7 +697,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         finish({ kind: 'not-found' })
       return
     }
-    if (switching(view.mode) || view.surface === 'creating' || view.formulaRecovery?.blocksInput === true)
+    // 扩展挂屏障（表格：公式恢复挡住输入）：与切换中、正在新建同在一处判断，读的是编辑模式此刻的视图（S8 spec §2.4、§2.9 的 P5）
+    if (switching(view.mode) || view.surface === 'creating' || extension?.blocksInput() === true)
       setSurface('loading')
     else if (view.surface === 'none')
       setSurface('failed')
@@ -597,7 +732,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       sessionEndedReason = undefined
     if (session !== next) {
       imagePermissionEpoch += 1
-      csvIdentityEpoch += 1
+      identityEpoch += 1
     }
     session = next
     if (next !== 'active') {
@@ -616,8 +751,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
 
   /** 编辑权与另存为副本的请求得到未登录或令牌失效：向服务端确认现在是谁（不显示"正在确认"：不是用户按了保存） */
   function writeProblem(error: ApiError): void {
-    csvIdentityEpoch += 1
-    csv.environmentChanged()
+    identityEpoch += 1
+    extension?.environmentChanged()
     if (userId !== undefined && disabledSessionUserId(error) === userId)
       sessionEndedReason = 'account_disabled'
     if (isAuthenticationError(error))
@@ -806,7 +941,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
   }
 
-  function prepareRecovery(id: string, user: string): void {
+  /** formats：恢复的可读判定用的档案（载入之后是选中的装配的那一个，404 之后是装配表里全部的，S8 spec §2.6、§2.7） */
+  function prepareRecovery(id: string, user: string, formats: ReadableFormats): void {
     const key = { documentId: id, userId: user }
     const still = (): boolean => !disposed && !leaving && userId === user && confirmedForWrite()
     const sessionFailure = (error: unknown): void => {
@@ -845,7 +981,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     }
     recovery = createDocumentRecovery({
       key,
-      pageFormat: PAGE_CLIENT_FORMAT,
+      pageFormats: formats,
       writtenBy: clientInstanceId,
       clock,
       now: () => options.now().getTime(),
@@ -877,64 +1013,75 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     await work(owned)
   }
 
-  function createMode(id: string, user: string): EditMode {
+  /**
+   * 给装配的编辑器工厂包上页面的绑定（S8 spec §2.5、§2.9 的 P12；原来是这里交给编辑模式的 createEditor）：每次创建换一个图片实例、清掉上一次的
+   * 图片操作提示；容器、页面的界面、图片的读取许可与三个回调由这里给出，回调只认这一个实例
+   */
+  function bindEditor<Input extends object, Editor>(create: (input: Input & EditorPageBindings<ImageState>) => Promise<Editor>): (input: Input) => Promise<Editor> {
+    return async (editorOptions) => {
+      const instance = ++imageInstance
+      imageOperation = undefined
+      const currentImageInstance = (): boolean => !disposed && !pageHidden && instance === imageInstance
+      const confirmImageOperationSession = async (): Promise<void> => {
+        await recheckSession()
+        if (!currentImageInstance())
+          return
+        // 合并确认要看最后一轮；前轮成功不能掩盖接续轮断网。
+        if (sessionProblem !== undefined) {
+          acceptPageSession(undefined)
+          imagePermissionEpoch += 1
+          imageAccess?.suspend()
+        }
+      }
+      return create({
+        ...editorOptions,
+        container: surface,
+        pageUi: options.chrome,
+        ...(imageAccess === undefined ? {} : { imageAccess }),
+        onImageFailure: (error) => {
+          if (disposed || pageHidden || instance !== imageInstance)
+            return
+          imageProblem = true
+          update()
+          if (isAuthenticationError(error) && checkInFlight === undefined)
+            void recheckSession()
+        },
+        onImageOperation: (state) => {
+          if (!currentImageInstance())
+            return
+          imageOperation = state
+          update()
+          // 用户动作仍可合并正在进行的停写补核；确认不会自动重放剪贴板。
+          if (state.kind === 'failed' && state.reason === 'permission' && pageSession === undefined)
+            void confirmImageOperationSession()
+        },
+        onImageOperationFailure: (error) => {
+          if (!currentImageInstance())
+            return
+          if ((isAuthenticationError(error) || isCsrfTokenError(error)) && checkInFlight === undefined)
+            void confirmImageOperationSession()
+        },
+      })
+    }
+  }
+
+  /** 以选中的装配建编辑模式：format 是装配的档案（编辑权与请求编辑的请求按它取，编辑模式收到它） */
+  function createMode(id: string, user: string, assembled: AssembledEditorPage<Extension, Extra, ImageState>, format: PageClientFormat): EditMode<string, Extra> {
     const sameBrowser = options.sameBrowser(id)
     cleanups.push(() => sameBrowser.close())
-    const created = createEditMode({
+    const created = assembled.createMode({
       documentId: id,
       clientInstanceId,
       userId: user,
+      format,
       localDrafts: { ...options.localDrafts, enabled: () => localDraftsEnabled, permit: () => localPermit },
       recovery,
       connection: options.network.connection,
-      api,
+      // 编辑权与请求编辑的请求按装配的档案取（S8 spec §2.6）；编辑模式收到的接口不变
+      api: { ...api, editLease: api.editLease(format), editRequest: api.editRequest(format) },
       onImagePermissions: imagePermissions,
       imagePermissionEpoch: () => imagePermissionEpoch,
-      createEditor: async (editorOptions) => {
-        const instance = ++imageInstance
-        imageOperation = undefined
-        const currentImageInstance = (): boolean => !disposed && !pageHidden && instance === imageInstance
-        const confirmImageOperationSession = async (): Promise<void> => {
-          await recheckSession()
-          if (!currentImageInstance())
-            return
-          // 合并确认要看最后一轮；前轮成功不能掩盖接续轮断网。
-          if (sessionProblem !== undefined) {
-            acceptPageSession(undefined)
-            imagePermissionEpoch += 1
-            imageAccess?.suspend()
-          }
-        }
-        return options.createEditor({
-          ...editorOptions,
-          container: surface,
-          pageUi: options.chrome,
-          ...(imageAccess === undefined ? {} : { imageAccess }),
-          onImageFailure: (error) => {
-            if (disposed || pageHidden || instance !== imageInstance)
-              return
-            imageProblem = true
-            update()
-            if (isAuthenticationError(error) && checkInFlight === undefined)
-              void recheckSession()
-          },
-          onImageOperation: (state) => {
-            if (!currentImageInstance())
-              return
-            imageOperation = state
-            update()
-            // 用户动作仍可合并正在进行的停写补核；确认不会自动重放剪贴板。
-            if (state.kind === 'failed' && state.reason === 'permission' && pageSession === undefined)
-              void confirmImageOperationSession()
-          },
-          onImageOperationFailure: (error) => {
-            if (!currentImageInstance())
-              return
-            if ((isAuthenticationError(error) || isCsrfTokenError(error)) && checkInFlight === undefined)
-              void confirmImageOperationSession()
-          },
-        })
-      },
+      bindEditor,
       clock,
       visibility: options.visibility,
       lastActivity: () => lastActivity,
@@ -944,24 +1091,24 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       session: {
         // 保存得到未登录：先向服务端确认（回包可能是本人在别处重新登录之前发出的那次保存的，不能据此清掉新的令牌，复验 RB7）
         saveUnauthenticated: (error) => {
-          csvIdentityEpoch += 1
-          csv.environmentChanged()
+          identityEpoch += 1
+          extension?.environmentChanged()
           if (userId !== undefined && disabledSessionUserId(error) === userId)
             sessionEndedReason = 'account_disabled'
           unauthenticatedPending = true
           void confirmForSave(true)
         },
         saveStale: () => {
-          csvIdentityEpoch += 1
-          csv.environmentChanged()
+          identityEpoch += 1
+          extension?.environmentChanged()
           staleAfter = checksStarted
           syncWritable()
           void confirmForSave(true)
         },
         writeProblem,
         readProblem: (error) => {
-          csvIdentityEpoch += 1
-          csv.environmentChanged()
+          identityEpoch += 1
+          extension?.environmentChanged()
           if (userId !== undefined && disabledSessionUserId(error) === userId)
             sessionEndedReason = 'account_disabled'
           void recheckSession()
@@ -979,19 +1126,8 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
   }
 
   return {
-    csv,
-    async importCreatedCsv(table, intent) {
-      const matches = (): boolean => intent.current() && documentId === intent.documentId
-        && pageSession?.user.id === intent.userId && pageSession.csrfToken === intent.csrfToken
-      if (!matches())
-        return false
-      const target = csvTarget(true)
-      if (!target)
-        return false
-      return csv.importPrepared(table, { ...target, current: () => matches() && target.current(), writable: () => matches() && target.writable() })
-    },
+    extension: () => extension,
     retryRecovery: async () => recoveryAction(async current => current.discover()),
-    sheetName: sheetId => disposed || session !== 'active' ? undefined : mode?.sheetName(sheetId),
     copyRecovery: async () => recoveryAction(async current => current.copy()),
     beginDiscardRecovery: () => confirmedForWrite() && (mode === undefined || mode.view().mode.kind === 'reading') ? recovery?.beginDiscard() : undefined,
     discardRecovery: async intent => recoveryAction(async current => current.discard(intent)),
@@ -1017,7 +1153,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       // 关闭时有保存在途不释放（edit-mode.ts 的 releaseOnHide，M3-P4 设计 §3.4）
       const onPageHide = (): void => {
         pageHidden = true
-        csv.dispose()
+        extension?.hide()
         imageAccess?.suspend()
         recovery?.suspend()
         mode?.releaseOnHide()
@@ -1065,8 +1201,11 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
       catch (error) {
         if (!disposed) {
-          if (isMissingResource(error) && userId !== undefined && readRound === checksStarted && confirmedForWrite()) {
-            prepareRecovery(documentId, userId)
+          // 404 之后的可读判定用装配表里全部的档案（S8 spec §2.7：草稿记录里有档案、没有类型）。第一次判定与档案无关（读不到就删），
+          // 清理失败之后的重试改问编辑状态，才走格式判断
+          const formats = formatsOf(options.assemblies)
+          if (isMissingResource(error) && userId !== undefined && readRound === checksStarted && confirmedForWrite() && formats !== undefined) {
+            prepareRecovery(documentId, userId, formats)
             earlyUnreadableRound = readRound
             try {
               await recovery?.discover()
@@ -1082,17 +1221,24 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       }
       if (disposed)
         return
-      if (!isKnownFormat(document)) {
+      const assembly = assemblyFor(document, options.assemblies)
+      if (assembly === undefined) {
         finish({ kind: 'unsupported' })
         return
       }
+      // 选中装配，建页面扩展（S8 spec §2.2）。载入期间页面已经隐藏（那时还没有扩展）：建好之后立即 hide，与原来 pagehide 时就销毁的结果相同
+      const assembled = assembly.assemble(host)
+      extension = assembled.extension
+      if (pageHidden)
+        extension.hide()
       heading = headingOf(document, signedIn.user.id)
       imagePermissions(true, document.permissions.canEdit, document.permissions.canTakeOver)
       const canEdit = document.permissions.canEdit
       // 新于本页的内容只能阅读。
       const blocked = documentIsNewer(document) ? 'document-too-new' : undefined
-      prepareRecovery(documentId, signedIn.user.id)
-      const opened = createMode(documentId, signedIn.user.id)
+      // 载入之后的可读判定只用选中的装配的档案：用全集的话，文字文档页会把同一文档 id 下表格档案的草稿当成可读（S8 spec §2.6）
+      prepareRecovery(documentId, signedIn.user.id, [assembly.format])
+      const opened = createMode(documentId, signedIn.user.id, assembled, assembly.format)
       mode = opened
       // 载入期间别的标签页换了人或者退出了：按确认的结果开始（不是本人时不续租、不检查）
       opened.setSession(session)
@@ -1116,7 +1262,6 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       if (mode.view().mode.kind === 'reading')
         void recovery?.discover()
     },
-    retryFormulaRecovery: () => mode?.retryFormulaRecovery(),
     save: async () => {
       const view = mode?.view()
       if (view?.mode.kind !== 'editing' || view.save === undefined)
@@ -1128,7 +1273,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode?.save(readyToWrite)
     },
     enterEditing: async () => {
-      if (formulaBusy())
+      if (extension?.blocksActions() === true)
         return
       if (!serverAvailable())
         return
@@ -1142,7 +1287,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.enter(prepare)
     },
     takeOverHere: async () => {
-      if (formulaBusy())
+      if (extension?.blocksActions() === true)
         return
       if (!serverAvailable())
         return
@@ -1156,7 +1301,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     cancelTakeOver: () => mode?.cancelTakeOver(),
     forceTakeOver: async () => {
-      if (formulaBusy())
+      if (extension?.blocksActions() === true)
         return
       if (!serverAvailable())
         return
@@ -1170,7 +1315,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     },
     dismissInterruption: () => mode?.dismissInterruption(),
     requestEditing: async () => {
-      if (formulaBusy())
+      if (extension?.blocksActions() === true)
         return
       if (!serverAvailable())
         return
@@ -1191,7 +1336,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
       await mode.cancelRequest()
     },
     handOver: async () => {
-      if (formulaBusy())
+      if (extension?.blocksActions() === true)
         return
       if (!serverAvailable())
         return
@@ -1202,7 +1347,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         await mode.handOver()
     },
     keepEditing: async () => {
-      if (formulaBusy())
+      if (extension?.blocksActions() === true)
         return
       if (!serverAvailable())
         return
@@ -1212,7 +1357,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
         await mode.decline()
     },
     exitEditing: async () => {
-      if (formulaBusy())
+      if (extension?.blocksActions() === true)
         return
       if (!serverAvailable())
         return
@@ -1308,7 +1453,7 @@ export function createEditorPage(options: EditorPageOptions): EditorPage {
     recheckSession,
     dispose: () => {
       disposed = true
-      csv.dispose()
+      extension?.dispose()
       imageAccess?.dispose()
       recovery?.dispose()
       cancelRecheck?.()

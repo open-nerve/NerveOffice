@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { canonicalContentText, contentHashInput, HYPERLINK_RANGE_TYPE, profileResourceNames, sheetSnapshotFor, SNAPSHOT_MAX_DEPTH } from '@nerve-office/contracts'
 import { describe, expect, it } from 'vitest'
+import { docSnapshot, savedDocResources } from './doc-snapshot.test-support.ts'
 import { SNAPSHOT_MAX_ENTRIES } from './snapshot-checks.ts'
 import { inspectSnapshot } from './snapshot-inspection.ts'
 
@@ -37,7 +38,7 @@ function passed(result: SnapshotInspection): PassedSnapshot {
 }
 
 function sha256(text: string): string {
-  return createHash('sha256').update(contentHashInput(canonicalContentText(text))).digest('hex')
+  return createHash('sha256').update(contentHashInput(canonicalContentText(text, 'sheet@1'))).digest('hex')
 }
 
 function withResource(workbook: Workbook, name: string, data: string): Workbook {
@@ -269,5 +270,96 @@ describe('不误拒：M0 的样本、模板与只读样本（结构与规则用�
     const sample = JSON.parse(readFileSync(new URL('tests/e2e/support/read-only-sample.json', REPOSITORY), 'utf8')) as Workbook
     expect(outcome(sample)).toBe('image-source')
     expect(outcome(adjusted(sample))).toBe('ok')
+  })
+})
+
+describe('文字文档（doc@1）的整条检查（M6-P1 S4 spec §3）', () => {
+  function docOutcome(value: unknown): string {
+    const result = inspectSnapshot(bytes(value), 'doc@1')
+    return result.ok ? 'ok' : result.rule
+  }
+
+  /** M0 的样本按生产的条件调整：图片换成平台地址（顶层 drawings 与资源里转义的那一份同样换，两边保持一致）。先写成紧凑的 JSON（样本文件带缩进） */
+  function adjustedText(text: string): string {
+    return JSON.stringify(JSON.parse(text)).replace(/"source":"[^"]*"/g, `"source":"${ASSET}"`).replace(/\\"source\\":\\"[^"\\]*\\"/g, `\\"source\\":\\"${ASSET}\\"`)
+  }
+
+  function samplesIn(directory: string, pattern: RegExp): { readonly name: string, readonly text: string }[] {
+    const url = new URL(directory, REPOSITORY)
+    return readdirSync(url).filter(name => pattern.test(name)).map(name => ({ name: `${directory}${name}`, text: readFileSync(new URL(name, url), 'utf8') }))
+  }
+
+  const samples = [
+    ...samplesIn('spikes/m0/fixtures/doc/', /\.json$/),
+    ...samplesIn('spikes/m0/e2e/results/v03/s1/', /-doc-.*\.json$/),
+  ]
+
+  function sample(name: string): string {
+    const found = samples.find(item => item.name.endsWith(name))
+    if (found === undefined)
+      throw new Error(`没有样本：${name}`)
+    return found.text
+  }
+
+  it('M0 的文字文档样本（9 份原文：6 份经 SDK 保存、3 份手写的种子；7 个样本在三个浏览器里保存的结果 21 份；共 30 份）：图片换成平台地址之后都通过', () => {
+    expect(samples).toHaveLength(30)
+    for (const { name, text } of samples)
+      expect(docOutcome(adjustedText(text)), name).toBe('ok')
+  })
+
+  it('M0 的样本原样：图片是 /fixtures-assets/ 下的地址（image-source），位置是顶层的两张图片与图片资源', () => {
+    const result = inspectSnapshot(bytes(sample('fixtures/doc/doc-all.json')), 'doc@1')
+    expect(result).toEqual({ ok: false, rule: 'image-source', imageLocations: [{ kind: 'doc-drawing', drawingId: 'H2Qtn4' }, { kind: 'doc-drawing', drawingId: 'psivdm' }, { kind: 'resource', resourceIndex: 3 }] })
+  })
+
+  it('通过的结果：unitId、资源（五项都在，图片与链接两项非空）、图片标识与按 doc@1 规范化的内容哈希', () => {
+    const text = adjustedText(sample('fixtures/doc/doc-all.json'))
+    const result = passed(inspectSnapshot(bytes(text), 'doc@1'))
+    expect(result.unitId).toBe('m0-doc-all')
+    expect(result.presentResources).toEqual(['DOC_DRAWING_PLUGIN', 'DOC_HYPER_LINK_PLUGIN', 'DOC_NOTE_PLUGIN', 'DOC_OBJECT_PERMISSION_PLUGIN', 'DOC_WORD_STYLES_PLUGIN'])
+    expect(result.nonEmptyResources).toEqual(['DOC_DRAWING_PLUGIN', 'DOC_HYPER_LINK_PLUGIN'])
+    expect(result.assetIds).toEqual([ASSET.slice('/api/assets/'.length)])
+    expect(Buffer.from(result.contentHash).toString('hex')).toBe(createHash('sha256').update(contentHashInput(canonicalContentText(text, 'doc@1'))).digest('hex'))
+    // 缩放（settings.zoomRatio）不算内容
+    const zoomed = JSON.stringify({ ...JSON.parse(text) as object, settings: { zoomRatio: 1.5 } })
+    expect(passed(inspectSnapshot(bytes(zoomed), 'doc@1')).contentHash).toEqual(result.contentHash)
+  })
+
+  it('档案不对：表格的模板按 doc@1、文字文档按 sheet@1 都在结构一步拒绝', () => {
+    expect(docOutcome(template())).toBe('structure')
+    expect(outcome(adjustedText(sample('fixtures/doc/doc-text.json')))).toBe('structure')
+  })
+
+  it('每条规则经整条检查报出；链接与图片带位置', () => {
+    const doc = (overrides: Record<string, unknown> = {}, body: Record<string, unknown> = {}): Record<string, unknown> => docSnapshot(UNIT_ID, overrides, body)
+    expect(docOutcome(doc())).toBe('ok')
+    expect(docOutcome(doc({ documentStyle: { documentFlavor: 1 } }))).toBe('doc-flavor')
+    expect(docOutcome(doc({ headers: { h: { headerId: 'h', body: { dataStream: '页眉\r\n' } } } }))).toBe('doc-header-footer')
+    expect(docOutcome(doc({ notes: { n: { noteId: 'n', body: { dataStream: '注\r\n' } } } }))).toBe('doc-notes')
+    expect(docOutcome(doc({}, { sectionBreaks: [{ startIndex: 3 }, { startIndex: 8 }] }))).toBe('doc-section-break')
+    expect(docOutcome(doc({}, { customRanges: [{ startIndex: 0, endIndex: 1, rangeId: 'f', rangeType: 1, properties: { fieldType: 'TOC', instruction: 'TOC \\o' } }] }))).toBe('doc-toc')
+    expect(docOutcome(doc({ resources: [...savedDocResources(), { name: 'SHEET_NOTE_PLUGIN', data: '' }] }))).toBe('resource-unknown')
+    expect(docOutcome(doc({ resources: [{ name: 'DOC_NOTE_PLUGIN', data: '{"n":{"x":1}}' }] }))).toBe('resource-not-empty')
+    const link = { startIndex: 4, endIndex: 5, rangeId: 'r1', rangeType: HYPERLINK_RANGE_TYPE, properties: { url: 'javascript:alert(1)' } }
+    expect(inspectSnapshot(bytes(doc({}, { customRanges: [link] })), 'doc@1')).toEqual({ ok: false, rule: 'link-address', linkLocations: [{ kind: 'paragraph', paragraph: 1 }] })
+    const drawings = { img: { drawingId: 'img', source: 'https://evil.example/a.png' } }
+    expect(inspectSnapshot(bytes(doc({ drawings, drawingsOrder: ['img'], resources: savedDocResources(JSON.stringify({ data: drawings, order: ['img'] })) })), 'doc@1'))
+      .toEqual({ ok: false, rule: 'image-source', imageLocations: [{ kind: 'doc-drawing', drawingId: 'img' }, { kind: 'resource', resourceIndex: 3 }] })
+    const good = { ...link, properties: { url: 'https://example.com/' } }
+    expect(docOutcome(doc({ resources: savedDocResources(undefined, JSON.stringify({ links: [{ id: 'r1', payload: 'https://evil.example/' }] })) }, { customRanges: [good] }))).toBe('resource-mismatch')
+    expect(docOutcome(doc({ resources: savedDocResources(undefined, JSON.stringify({ links: [{ id: 'r1', payload: 'https://example.com/' }] })) }, { customRanges: [good] }))).toBe('ok')
+  })
+
+  it('先后：结构 → 文字文档的五条 → 资源 → 图片 → 链接 → 交叉核对', () => {
+    const doc = (overrides: Record<string, unknown> = {}, body: Record<string, unknown> = {}): Record<string, unknown> => docSnapshot(UNIT_ID, overrides, body)
+    const badLink = { startIndex: 0, endIndex: 1, rangeId: 'r1', rangeType: HYPERLINK_RANGE_TYPE, properties: { url: 'https://example.com' } }
+    const mismatch = savedDocResources(undefined, JSON.stringify({ links: [{ id: 'other', payload: 'https://example.com' }] }))
+    const foreign = { img: { drawingId: 'img', source: 'x' } }
+    expect(docOutcome(doc({ id: '', documentStyle: {} }))).toBe('structure')
+    expect(docOutcome(doc({ documentStyle: {}, resources: [{ name: 'SHEET_NOTE_PLUGIN', data: '' }] }))).toBe('doc-flavor')
+    expect(docOutcome(doc({ resources: [{ name: 'SHEET_NOTE_PLUGIN', data: '' }], drawings: foreign }))).toBe('resource-unknown')
+    expect(docOutcome(doc({ drawings: foreign, resources: mismatch }, { customRanges: [badLink] }))).toBe('image-source')
+    expect(docOutcome(doc({ resources: mismatch }, { customRanges: [badLink] }))).toBe('link-address')
+    expect(docOutcome(doc({ resources: mismatch }, { customRanges: [{ ...badLink, properties: { url: 'https://example.com/' } }] }))).toBe('resource-mismatch')
   })
 })

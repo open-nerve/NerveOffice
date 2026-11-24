@@ -278,7 +278,9 @@ describe('US-M2-07 新建到指定的文件夹（M2-P4）', () => {
 
 describe('新建的校验与防护', () => {
   it.each([
-    ['类型不合法', { type: 'doc', requestId: randomUUID() }],
+    ['类型不合法', { type: 'slides', requestId: randomUUID() }],
+    // M6-P1 设计 §3.2：文字文档的新建模板在 M6-P2 随编辑器生成，之前新建只收表格
+    ['文字文档暂不能新建', { type: 'doc', requestId: randomUUID() }],
     ['没有类型', { requestId: randomUUID() }],
     ['没有 requestId', { type: 'sheet' }],
     ['requestId 不是 UUID', { type: 'sheet', requestId: 'abc' }],

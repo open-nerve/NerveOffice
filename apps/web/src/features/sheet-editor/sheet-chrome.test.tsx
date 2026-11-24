@@ -1,21 +1,18 @@
 import type { EditInterruption } from '@nerve-office/contracts'
 import type { RecoveryView } from '../../shared/local-drafts/document-recovery.ts'
-import type { AutosaveView } from './autosave.ts'
-import type { LeaseLoss } from './edit-lease.ts'
-import type { EditModeState, IncomingRequest, LostMode, OpenCheckFailures, ReadingMode } from './edit-mode.ts'
-import type { LocalSaveView } from './editing-session.ts'
-import type { EditorPage, EditorPageReady, EditorPageView } from './editor-page.ts'
+import type { AutosaveView, EditorPageReady, IncomingRequest, LocalSaveView, LostMode, OpenCheckFailures, ReadingMode, SaveView } from '../document-editor/index.test-support.ts'
+import type { EditModeState, LeaseLoss } from '../document-editor/index.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
-import type { SaveView } from './save-coordinator.ts'
+import type { SheetEditorPage, SheetEditorPageMembers, SheetEditorPageView } from './sheet-editor-page.ts'
 import { historyPagePath } from '@nerve-office/contracts'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { apiError, installFakeApi, json } from '../../shared/testing/fake-api.test-support.ts'
+import { ANNOUNCEMENT_MS, EditorChrome } from '../document-editor/index.test-support.ts'
 import { csvFixture } from './csv-controller.test-support.ts'
 import { unusedCsvController } from './csv.test-support.ts'
-import { EditorChrome } from './editor-chrome.tsx'
-import { ANNOUNCEMENT_MS } from './save-indicator.ts'
+import { sheetChromeOf } from './sheet-chrome.tsx'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
@@ -24,7 +21,7 @@ vi.hoisted(() => {
 it('有 CSV 能力的正式页头开放导入与导出，按钮接入同一控制器', () => {
   const h = fakePage()
   const csv = csvFixture()
-  Object.assign(h.page, { csv: csv.controller })
+  Object.assign(h.page.extension()!, { csv: csv.controller })
   render(<EditorChrome page={h.page} apple />)
   fireEvent.click(screen.getByRole('button', { name: '导出 CSV' }))
   expect(screen.getByRole('dialog', { name: '导出 CSV' })).toBeInTheDocument()
@@ -77,14 +74,20 @@ function lost(loss: LeaseLoss, changes: Partial<LostMode> = {}): LostMode {
 }
 
 /** 假的编辑器页：视图由测试设定 */
-function fakePage(initial: Partial<EditorPageView> = {}) {
-  let view: EditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
+function fakePage(initial: Partial<SheetEditorPageView> = {}) {
+  let view: SheetEditorPageView = { load: READY, mode: EDITING, save: CLEAN, autosave: undefined, session: 'active', sessionProblem: undefined, confirmingSession: false, detailProblem: undefined, detailRefreshing: false, surface: 'ready', ...initial }
   const listeners = new Set<() => void>()
-  const page: EditorPage = {
+  // 表格的页面扩展交给使用方的成员（S8b 起经 page.extension() 取；S8c 起另有页头的插槽 chrome，骨架经它取表格的部分）。插槽按这个成员对象建
+  // （同表格的装配，S10）：插槽在用到的那一刻读它，改掉它上面的一项之后，渲染与点击用的是改后的
+  const sources: Omit<SheetEditorPageMembers, 'chrome'> = {
     csv: unusedCsvController(),
     importCreatedCsv: vi.fn(async () => false),
     sheetName: vi.fn(() => undefined),
     retryFormulaRecovery: vi.fn(),
+  }
+  const members: SheetEditorPageMembers = Object.assign(sources, { chrome: sheetChromeOf(sources) })
+  const page: SheetEditorPage = {
+    extension: () => members,
     retryRecovery: vi.fn(async () => {}),
     copyRecovery: vi.fn(async () => {}),
     beginDiscardRecovery: vi.fn(() => ({ updatedAt: 123 })),
@@ -119,7 +122,7 @@ function fakePage(initial: Partial<EditorPageView> = {}) {
   }
   return {
     page,
-    set(next: Partial<EditorPageView>): void {
+    set(next: Partial<SheetEditorPageView>): void {
       view = { ...view, ...next }
       act(() => listeners.forEach(listener => listener()))
     },
@@ -132,13 +135,13 @@ describe('图片的可见失败状态', () => {
     const h = fakePage(action === 'save'
       ? { save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } }
       : { mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'content', error } }), save: undefined })
-    vi.mocked(h.page.sheetName).mockReturnValue('<img src=x>预算')
+    vi.mocked(h.page.extension()!.sheetName).mockReturnValue('<img src=x>预算')
     render(<EditorChrome page={h.page} apple={false} />)
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('表格里有不能保存的链接。请检查：工作表「<img src=x>预算」的 B3')
     expect(alert.querySelector('img')).toBeNull()
     expect(alert).not.toHaveTextContent('private')
-    expect(h.page.sheetName).toHaveBeenCalledWith('s')
+    expect(h.page.extension()!.sheetName).toHaveBeenCalledWith('s')
     expect(h.page.discard).not.toHaveBeenCalled()
     if (action === 'save')
       expect(screen.getByRole('button', { name: '保存' })).not.toBeDisabled()
@@ -151,13 +154,13 @@ describe('图片的可见失败状态', () => {
     const h = fakePage(action === 'save'
       ? { save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } }
       : { mode: lost({ kind: 'newer' }, { copy: { kind: 'refused', refusal: 'content', error } }), save: undefined })
-    vi.mocked(h.page.sheetName).mockReturnValue('<img src=x>预算')
+    vi.mocked(h.page.extension()!.sheetName).mockReturnValue('<img src=x>预算')
     render(<EditorChrome page={h.page} apple={false} />)
     const alert = screen.getByRole('alert')
     expect(alert).toHaveTextContent('表格里有不能保存的图片。请检查：工作表「<img src=x>预算」的 B3')
     expect(alert.querySelector('img')).toBeNull()
     expect(alert).not.toHaveTextContent('private')
-    expect(h.page.sheetName).toHaveBeenCalledWith('s')
+    expect(h.page.extension()!.sheetName).toHaveBeenCalledWith('s')
   })
 
   it('显示不含来源的说明，通过既有详情复核重试；不影响正文保存按钮', () => {
@@ -223,7 +226,7 @@ function infoRegion(): HTMLElement {
   return region
 }
 
-function renderChrome(initial: Partial<EditorPageView> = {}, apple = false) {
+function renderChrome(initial: Partial<SheetEditorPageView> = {}, apple = false) {
   const fake = fakePage(initial)
   render(<EditorChrome page={fake.page} apple={apple} />)
   return fake
@@ -321,7 +324,7 @@ describe('US-M4-13 页头公式恢复说明与动作', () => {
     const retry = screen.getByRole('button', { name: '重试公式恢复' })
     retry.focus()
     fireEvent.click(retry)
-    expect(f.page.retryFormulaRecovery).toHaveBeenCalledOnce()
+    expect(f.page.extension()!.retryFormulaRecovery).toHaveBeenCalledOnce()
     f.set({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'rebuilding', problem: undefined } })
     await waitFor(() => expect(screen.getByRole('link', { name: '我的空间' })).toHaveFocus())
     f.set({ formulaRecovery: { ...FORMULA_FAILURE, phase: 'ready', blocksActions: false, blocksInput: false, problem: undefined } })
@@ -338,7 +341,7 @@ describe('US-M4-13 页头公式恢复说明与动作', () => {
       expect(retry).toHaveAttribute('aria-disabled', 'true')
       fireEvent.click(retry)
     }
-    expect(f.page.retryFormulaRecovery).not.toHaveBeenCalled()
+    expect(f.page.extension()!.retryFormulaRecovery).not.toHaveBeenCalled()
   })
 
   it('成功提示不会遮住新的云端失败/恢复，例行保存也不重播公式提示', () => {
@@ -916,7 +919,7 @@ describe('阅读（M3-P2 设计 §3.4：打开即阅读）', () => {
     expect(screen.getByText(NOTE)).toBe(note)
     expect(infoRegion().textContent).toBe('@amy 艾米 正在编辑这份文档（最后活动 1 分钟前）')
 
-    const notReading: [Partial<EditorPageView>, string][] = [
+    const notReading: [Partial<SheetEditorPageView>, string][] = [
       [{ mode: { kind: 'entering' }, save: undefined }, '进入编辑中'],
       [{ mode: EDITING, save: CLEAN }, '编辑'],
       [{ mode: { kind: 'exiting', cause: 'exit' }, save: CLEAN }, '退出编辑中'],
@@ -1568,7 +1571,7 @@ describe('与服务端不兼容与容量（M3-P3 设计 §3.10）', () => {
 })
 
 describe('编辑时页头的保存状态（M3-P4 设计 §3.9）', () => {
-  it.each<[string, SaveView, AutosaveView, string, Partial<EditorPageView>]>([
+  it.each<[string, SaveView, AutosaveView, string, Partial<SheetEditorPageView>]>([
     ['已保存到云端', CLEAN, ONLINE, '已保存到云端', {}],
     ['有未保存的修改', DIRTY, ONLINE, '有未保存的修改', {}],
     ['保存中', { ...DIRTY, status: 'saving' }, ONLINE, '保存中…', {}],
@@ -2446,5 +2449,43 @@ describe('页头联网操作与已开确认框', () => {
     expect(within(dialog).getByRole('button', { name: '取消' })).not.toHaveAttribute('aria-disabled', 'true')
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
     await waitFor(() => expect(dialog).not.toBeInTheDocument())
+  })
+})
+
+// M6-P1 S8c 新增、S10 改写：表格的插槽（sheet-chrome.tsx 的 sheetChromeOf）在渲染、点击的那一刻读建它时交给它的成员对象（页面扩展交出的
+// 那一份），不在建插槽时取值（S8 spec §3.2 第 5 条）：改掉成员对象上的那一项之后，渲染与点击用的是改后的
+describe('表格的页头插槽在用到时才读建它时交给它的成员对象（S8 spec §3.2）', () => {
+  /** 改掉页面扩展交出的成员对象上的几项（插槽不变）：之后的渲染与点击读到的应是改后的 */
+  function changeMembers(page: SheetEditorPage, changes: Partial<Omit<SheetEditorPageMembers, 'chrome'>>): SheetEditorPageMembers {
+    const current = page.extension()
+    if (current === undefined)
+      throw new Error('假页面应有表格的成员')
+    return Object.assign(current, changes)
+  }
+
+  it('CSV 的入口用渲染那一刻成员对象上的控制器', () => {
+    const fake = renderChrome()
+    expect(screen.queryByRole('button', { name: '导出 CSV' })).toBeNull()
+    changeMembers(fake.page, { csv: csvFixture().controller })
+    fake.set({})
+    expect(screen.getByRole('button', { name: '导出 CSV' })).toBeInTheDocument()
+  })
+
+  it('“重试公式恢复”用点击那一刻成员对象上的那一项', () => {
+    const fake = renderChrome({ formulaRecovery: FORMULA_FAILURE, save: DIRTY })
+    const first = fake.page.extension()?.retryFormulaRecovery
+    const next = changeMembers(fake.page, { retryFormulaRecovery: vi.fn() })
+    fireEvent.click(screen.getByRole('button', { name: '重试公式恢复' }))
+    expect(next.retryFormulaRecovery).toHaveBeenCalledOnce()
+    expect(first).not.toHaveBeenCalled()
+  })
+
+  it('保存被拒的说明用说明那一刻成员对象上的工作表名', () => {
+    const error = new ApiError(422, 'SNAPSHOT_INVALID', 'x', { details: { rule: 'link-address', linkLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1, url: 'private' }] } })
+    const fake = renderChrome({ save: { ...DIRTY, status: 'failed', problem: { kind: 'request', error } } })
+    const next = changeMembers(fake.page, { sheetName: vi.fn(() => '新的名字') })
+    fake.set({})
+    expect(screen.getByRole('alert')).toHaveTextContent('工作表「新的名字」的 B3')
+    expect(next.sheetName).toHaveBeenCalledWith('s')
   })
 })

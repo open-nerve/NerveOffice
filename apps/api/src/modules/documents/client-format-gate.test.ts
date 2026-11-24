@@ -12,12 +12,17 @@ describe('checkClient：与文档无关的一半（M3-P3 设计 §3.5）', () =>
     expect(checkClient(CURRENT, undefined)).toEqual({ ok: true, client: CURRENT })
   })
 
+  it('文字文档的档案（doc@1，M6）也是服务端现在写的：与文档无关的一半通过；是否与文档的类型一致在事务里核对（DEF-055，M6-P1 设计 §3.4）', () => {
+    const doc: ClientFormat = { ...CURRENT, profile: DOCUMENT_PROFILE_OF.doc }
+    expect(checkClient(doc, undefined)).toEqual({ ok: true, client: doc })
+  })
+
   it('数据格式不同或没上报：format（先看数据格式，再看构建）', () => {
     const cases: ClientFormat[] = [
       { ...CURRENT, univerVersion: '1.0.0' },
       { ...CURRENT, univerVersion: '1.0.1+build' },
       { ...CURRENT, profile: 'sheet@2' },
-      { ...CURRENT, profile: 'doc@1' },
+      { ...CURRENT, profile: 'doc@2' },
       { ...CURRENT, formatVersion: 2 },
       { ...CURRENT, univerVersion: undefined },
       { ...CURRENT, profile: undefined },

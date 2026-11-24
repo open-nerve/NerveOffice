@@ -1,9 +1,9 @@
 import type { FormulaWorkerFailure, SheetEditor } from '../../editor/index.ts'
-import type { CreateModeEditor } from './editor-slot.ts'
+import type { CreateModeEditor } from './sheet-editor-slot.ts'
 import { describe, expect, it, vi } from 'vitest'
 import { FormulaWorkerError, SheetEditorLoadError } from '../../editor/index.ts'
+import { deferred, editorFixture } from '../document-editor/index.test-support.ts'
 import { unusedCsv } from './csv.test-support.ts'
-import { deferred, editorFixture } from './editing-session.test-support.ts'
 import { createFormulaFallback } from './formula-fallback.ts'
 
 vi.hoisted(() => {
@@ -87,7 +87,7 @@ describe('本页公式执行模式的退路', () => {
     expect(createEditor).toHaveBeenCalledOnce()
     expect(fallback.mode()).toBeUndefined()
     fallback.failed('error-after-ready')
-    await fallback.createEditor({ ...INPUT, formulaMode: 'worker', recalculate: false })
+    await fallback.createEditor({ ...INPUT, formulaMode: 'worker' })
     expect(createEditor).toHaveBeenLastCalledWith({ ...INPUT, formulaMode: 'main-thread', recalculate: true })
   })
 

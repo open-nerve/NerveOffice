@@ -1,9 +1,9 @@
-import type { EditorPageView } from './editor-page.ts'
 import type { FormulaRecoveryView } from './formula-recovery.ts'
+import type { SheetEditorPageView } from './sheet-editor-page.ts'
 import { describe, expect, it } from 'vitest'
 import { formulaRecoveryNotice } from './formula-recovery-ui.ts'
 
-const BASE: EditorPageView = {
+const BASE: SheetEditorPageView = {
   load: { kind: 'ready', documentId: 'doc', title: '表格', space: { type: 'personal', id: 'space' }, accessVia: 'space', canShare: false, canViewHistory: true, userId: 'user' },
   mode: { kind: 'editing' },
   save: { status: 'dirty', formulasPending: true, problem: undefined, conflict: undefined, canSave: true, unsaved: true, unsavedEdits: false, checking: false, snapshotBytes: undefined },

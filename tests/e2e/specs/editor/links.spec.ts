@@ -203,7 +203,7 @@ async function expectReopenedKeepsCanonical(page: Page, documentId: string): Pro
       expect(reopened.sheets[sheetId]?.cellData, `${access}：${sheetId}`).toEqual(sheet.cellData)
   }
   await saveAndWait(page)
-  expect(canonicalContentText((await savedContent(page, documentId)).text)).toBe(canonicalContentText(saved.text))
+  expect(canonicalContentText((await savedContent(page, documentId)).text, 'sheet@1')).toBe(canonicalContentText(saved.text, 'sheet@1'))
 }
 
 test.describe('US-M3-14 US-M5-14 写入之前把自动识别的链接改成规范写法（DEF-021）', { tag: '@test-build' }, () => {
@@ -379,7 +379,7 @@ test.describe('US-M3-14 US-M5-14 写入之前把自动识别的链接改成规�
     await saveAndWait(page)
     const reopened = await savedContent(page, documentId)
     expect(formulaCells(reopened.snapshot)).toEqual(formulaCells(first.snapshot))
-    expect(canonicalContentText(reopened.text)).toBe(canonicalContentText(first.text))
+    expect(canonicalContentText(reopened.text, 'sheet@1')).toBe(canonicalContentText(first.text, 'sheet@1'))
   })
 
   test('US-M3-14 链接地址的判定在每个浏览器里与 Node 相同：页面里打包的 canonicalLink 给出跨引擎用例表的结果，规范写法是不动点', async ({ page }) => {

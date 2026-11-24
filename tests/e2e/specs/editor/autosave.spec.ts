@@ -36,7 +36,7 @@ async function openNewSheet(page: Page, prefix: string, stage: 'ready' | 'steady
 
 /** 快照里一项资源按内容的口径（contracts 的规范化：深层为空的去掉、第一层取值为空的键去掉）解析出的值；没有时为 undefined */
 function canonicalResource(snapshotText: string, name: string): unknown {
-  const canonical = JSON.parse(canonicalContentText(snapshotText)) as { resources: { name: string, data: unknown }[] }
+  const canonical = JSON.parse(canonicalContentText(snapshotText, 'sheet@1')) as { resources: { name: string, data: unknown }[] }
   return canonical.resources.find(resource => resource.name === name)?.data
 }
 
@@ -322,11 +322,11 @@ test.describe('US-M3-02 修改自动保存，保存状态如实显示', { tag: '
     // 重开：编辑器里的内容按内容的口径与服务器上的相同，打开不算修改
     await reloadAndEnterEditing(page, 'steady')
     await expect(saveStatus(page)).toHaveText('已保存到云端')
-    expect(canonicalContentText(await probeSnapshot(page))).toBe(canonicalContentText(saved.text))
+    expect(canonicalContentText(await probeSnapshot(page), 'sheet@1')).toBe(canonicalContentText(saved.text, 'sheet@1'))
     // 再保存一次：内容相同，修订号不增加
     const again = await saveAndCapture(page)
     expect(again.answer).toMatchObject({ revision: 2, unchanged: true })
-    expect(canonicalContentText(again.uploaded)).toBe(canonicalContentText(saved.text))
+    expect(canonicalContentText(again.uploaded, 'sheet@1')).toBe(canonicalContentText(saved.text, 'sheet@1'))
     expect(await revisionOf(documentId)).toBe(2)
   })
 

@@ -1,4 +1,4 @@
-// 写入管道（M4-P1 设计 §3.1、§3.2、§3.4.3–§3.4.7）：与放置无关——三个浏览器都在发件箱 Worker 里跑它（features/sheet-editor/outbox/，
+// 写入管道（M4-P1 设计 §3.1、§3.2、§3.4.3–§3.4.7）：与放置无关——三个浏览器都在发件箱 Worker 里跑它（features/document-editor/outbox/，
 // DEF-011 的定论，ADR-020）；进程内放置（没有镜像）只作 Worker 起不来时的退路。编辑器页（P2）只依赖 DraftWriter 这个接口，
 // Worker 的客户端实现同一个接口。
 // - 写入：去重（内容的 SHA-256 连同"公式待更新"与上次写入的相同、并且允许去重 → unchanged）→ gzip → 加密 → 交给存储。

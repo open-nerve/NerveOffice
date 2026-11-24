@@ -5,7 +5,15 @@
 // - 编辑器槽位（editor-slot.ts）：当前的编辑器、surface 与在途的那一次创建，单飞的重建——同一个容器里至多一个编辑器（审查 A1）；
 // - 阅读时的检查（reading-checks.ts）：计时、暂停与恢复，只认最新发出的那一次检查（审查 A9）；
 // - 失去编辑权之后的那一份（lost-copy-flow.ts）：捕获、保存副本和结果归类，每失去一次编辑权一个；页面管理重建和迟到结果。
-// 载入、会话与页头的编排在 editor-page.ts。
+// 载入、会话与页头的编排在编辑器页（editor-page.ts，S8b 起也在会话层，按类型装配）。
+//
+// 通用核心与扩展（M6-P1 S8a，S8 spec §1）：从表格编辑器搬进共用编辑会话层，与文档类型无关。编辑器的类型是类型参数，只要求会话层的窄接口
+// （ModeEditor：保存的 EditingSessionEditor、槽位的 SlotEditor 与打开自检）。表格专有的部分（公式的回退与恢复、Worker 故障的上报、CSV 的目标、
+// 工作表名）在表格的装配 sheet-editor/sheet-edit-mode.ts 里，经扩展（EditModeExtension）挂在原来调用表格代码的位置，先后不变（spec §1.6）：
+// 通知的开头、每次创建之后、各个入口第一句的"挡住动作"（busy）、会话变了与页面隐藏时的撤销、卸载，以及进入编辑与本机恢复时创建的选项、
+// 保存的状态机的"公式待更新"初值。核心在原来建公式恢复的位置（建好交接频道的回应之后、算出第一个视图之前）调用扩展的工厂，交给它
+// EditModeHost。服务端的"公式待更新"标记（latestFlag、阅读的 formulasPending）是协议里的字段，"派生内容收齐"（settleFormulas）是窄接口里的，
+// 照旧在这里（S6 spec §5.2）；文字文档在 P2 恒为假、恒为已收齐。
 //
 // 模式切换一律重建（§3.1，需求方 2026-10-04 决定）：进入编辑、退出编辑、失去编辑权、"有更新，点击刷新"、放弃本页的修改，都先取出
 // 视图状态、销毁当前的编辑器（Univer 实例与公式 Worker），再以目标的 access 与选定的快照新建一个，就绪之后恢复视图状态。
@@ -35,8 +43,9 @@
 // 自动保存（M3-P4 设计 §3.1–§3.10）：调度（autosave.ts）跟保存的状态机同生命周期——进入编辑时先建保存的状态机、再建调度、再接上编辑器；
 // 去掉保存的状态机时一并去掉；失去编辑权开始时立即去掉（在途的那一次由保存的状态机收尾）；终态之后它自己停。退出编辑：先挂起调度，
 // 有没存的就立即上传一次（flush('exit')：先等面板的防抖、提交单元格、等公式），等在途的都有结果，仍有没存的就恢复调度、留在编辑。
-// 保存按钮与快捷键是立即上传（flush('save-button')：不去重，在途时排一次）。进入编辑时申请编辑权的响应带"公式待更新"：以强制全量重算
-// 重建（slot.replace 的 recalculate），保存的状态机与调度都以它起步，收齐之后补存、服务端清掉标记。阅读时说明"公式待更新"（ReadingMode 的
+// 保存按钮与快捷键是立即上传（flush('save-button')：不去重，在途时排一次）。进入编辑时申请编辑权的响应带"公式待更新"：以扩展给的创建选项
+// 重建（enterOptions；表格是强制全量重算，slot.replace 的 recalculate），保存的状态机与调度都以它起步（初值经扩展的 savingPending），
+// 收齐之后补存、服务端清掉标记。阅读时说明"公式待更新"（ReadingMode 的
 // formulasPending：载入时详情的、之后每 30 秒的编辑状态里的，只认本页显示的那一版的）。页面关闭（pagehide）时有保存在途就不释放编辑权，
 // 让它到期——否则释放多半先提交、那次保存被拒（releaseOnHide）。
 //
@@ -121,8 +130,7 @@
 // 先看打开自检、再建保存的状态机与调度——失败时释放编辑权、以只读重建、以 damaged 回到阅读（?edit=new 与"编辑"只能先取得编辑权再按它
 // 选内容，所以是"先取后放"）。失去编辑权之后的重建失败只上报，不改失去编辑权之后的选项（副本是本页的内容，服务端照常检查）。
 import type { CreatedDocument, DocumentDetail, EditInterruption, EditorDiagnosticReport, PendingEditRequest, SaveContentResponse, UserSummary } from '@nerve-office/contracts'
-import type { OpenCheck, SheetEditor } from '../../editor/index.ts'
-import type { Incompatibility } from '../../shared/api/client-format.ts'
+import type { Incompatibility, PageClientFormat } from '../../shared/api/client-format.ts'
 import type { CopyState, LostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
 import type { DocumentRecovery, RecoveryPreparation } from '../../shared/local-drafts/document-recovery.ts'
 import type { ConflictCopyRequest } from '../../shared/local-drafts/lost-copy.ts'
@@ -131,25 +139,23 @@ import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
 import type { DraftCaptureRef, WorkingDraft } from '../../shared/local-drafts/working-draft.ts'
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
 import type { Autosave, AutosaveEvent, AutosavePage, AutosaveTuning, AutosaveView, FlushResult } from './autosave.ts'
-import type { CsvTarget } from './csv-controller.ts'
 import type { AcquireIntent, EditLease, EditLeaseApi, LeaseAcquisition, LeaseHolder, LeaseLoss } from './edit-lease.ts'
 import type { EditRequestApi, EditRequestEnd, EditRequestProgress } from './edit-request.ts'
 import type { EditingDraftReady } from './editing-draft.ts'
-import type { EditingSessionOptions, LocalSaveView } from './editing-session.ts'
+import type { EditingSession, EditingSessionEditor, EditingSessionOptions, LocalSaveView } from './editing-session.ts'
 import type { FetchedEditStatus, LeaseCredentials, LoadedContent } from './editor-api.ts'
-import type { CreateModeEditor, EditorSurface, ReplaceOptions } from './editor-slot.ts'
-import type { FormulaRecovery, FormulaRecoveryView } from './formula-recovery.ts'
+import type { CreateSlotEditor, EditorAccess, EditorSlot, EditorSurface, SlotEditor } from './editor-slot.ts'
 import type { AcquireTrigger, HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
 import type { EditingNotice, IncomingRequest } from './holder-requests.ts'
 import type { IdleWatch } from './idle-watch.ts'
 import type { IssuedRequestMarker } from './issued-request.ts'
-import type { OpenCheckContext } from './open-check-report.ts'
+import type { OpenCheck, OpenCheckContext } from './open-check-report.ts'
 import type { PendingSaveMarker } from './pending-save-marker.ts'
 import type { PageVisibility, ReadingCheckResult } from './reading-checks.ts'
 import type { HandoverFailure, SameBrowser } from './same-browser.ts'
 import type { SaveCoordinator, SaveStatus, SaveView } from './save-coordinator.ts'
 import type { TabAnswerPhase, TakeoverProgress } from './tab-handover.ts'
-import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema, sheetSnapshotFor } from '@nerve-office/contracts'
+import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, editLeaseReservedDetailsSchema } from '@nerve-office/contracts'
 import { incompatibilityOf } from '../../shared/api/client-format.ts'
 import { ApiError, isAuthenticationError, isCsrfTokenError, isNotFoundError, isPermissionDeniedError } from '../../shared/api/index.ts'
 import { createLostCopyFlow } from '../../shared/local-drafts/copy-flow.ts'
@@ -158,9 +164,6 @@ import { createEditRequests } from './edit-request.ts'
 import { createEditingSession } from './editing-session.ts'
 import { CONTENT_UNCHANGED } from './editor-api.ts'
 import { createEditorSlot } from './editor-slot.ts'
-import { createFormulaFallback } from './formula-fallback.ts'
-import { createFormulaRecovery } from './formula-recovery.ts'
-import { formulaWorkerReportOf } from './formula-worker-report.ts'
 import { createHolderRequests } from './holder-requests.ts'
 import { createIdleWatch } from './idle-watch.ts'
 import { captureLostContent } from './lost-copy-flow.ts'
@@ -240,9 +243,15 @@ interface CheckedStatus {
 
 /**
  * 打开自检的失败清单（不空，按种类与资源名排好）：编辑器没有完整载入这份文档的数据，或者编辑器自己没有完整载入（档案不全，
- * contracts 的 isProfileFailure）。M3-P4 设计 §3.11、§3.12
+ * contracts 的 isProfileFailure）。M3-P4 设计 §3.11、§3.12。OpenCheck 是会话层自己的定义（open-check-report.ts，S8 spec §1.1）
  */
 export type OpenCheckFailures = Extract<OpenCheck, { readonly ok: false }>['failures']
+
+/**
+ * 编辑模式对编辑器的要求（M6-P1 S8 spec §1.3）：会话层的窄接口的并集——保存（EditingSessionEditor）、槽位（SlotEditor：视图状态、销毁与
+ * 生命周期）与新建之后的打开自检。编辑器（例如表格编辑器 SheetEditor）是它的超集，各类型的装配把编辑器的类型交给 createEditMode 时由类型检查核对
+ */
+export type ModeEditor<View, Stage extends string> = EditingSessionEditor & SlotEditor<View, Stage> & { readonly openCheck: OpenCheck }
 
 /** 阅读时上一次操作留下的说明 */
 export type ReadingNotice
@@ -405,16 +414,19 @@ export type EditModeState
     | { readonly kind: 'failed', readonly error: unknown }
     | { readonly kind: 'unavailable' }
 
-export interface EditModeView {
-  readonly formulaRecovery: FormulaRecoveryView | undefined
+/** 编辑模式的视图里与类型无关的五项（M6-P1 S8 spec §1.3）；Stage 是编辑器的生命周期的阶段 */
+export interface EditModeBaseView<Stage extends string> {
   readonly localSave: LocalSaveView | undefined
   readonly mode: EditModeState
   /** 编辑时（与退出编辑的过程中）才有：保存的状态 */
   readonly save: SaveView | undefined
   /** 同上：自动保存这一侧的状态（联网、会话、会不会自动重试），页头连同 save 给出保存状态的全集（save-indicator.ts） */
   readonly autosave: AutosaveView | undefined
-  readonly surface: EditorSurface
+  readonly surface: EditorSurface<Stage>
 }
+
+/** 编辑模式的视图：通用的五项，并上扩展的视图 Extra（表格的是 formulaRecovery，sheet-editor/sheet-edit-mode.ts） */
+export type EditModeView<Stage extends string, Extra extends object> = EditModeBaseView<Stage> & Extra
 
 export interface EditModeApi {
   /** 内容的全文（放弃本页的修改时：本页的内容不是服务端的哪一版，不能用条件读取） */
@@ -434,7 +446,7 @@ export interface EditModeApi {
   readonly editRequest: EditRequestApi
 }
 
-/** 会话类的问题交给页面确认现在是谁（editor-page.ts）：不同的来源确认的方式不同 */
+/** 会话类的问题交给页面确认现在是谁（编辑器页 editor-page.ts）：不同的来源确认的方式不同 */
 export interface EditModeSessionHooks {
   /** 保存得到未登录或登录已过期 */
   readonly saveUnauthenticated: (error: ApiError) => void
@@ -446,17 +458,27 @@ export interface EditModeSessionHooks {
   readonly readProblem: (error: ApiError) => void
 }
 
-export interface EditModeOptions {
+/**
+ * 编辑模式的选项（与类型无关的部分）：编辑器的工厂按编辑器、视图状态与创建的选项的类型（M6-P1 S8 spec §1.3）。表格的选项就是它
+ * （sheet-editor/sheet-edit-mode.ts 的 SheetEditModeOptions，工厂是表格的 CreateModeEditor）
+ */
+export interface EditModeOptions<Editor, View, Options> {
   readonly documentId: string
   /** 本页这次加载的标识：编辑租约绑定它，保存也带着它；交接频道的消息里是本页的标识 */
   readonly clientInstanceId: string
   /** 本页的用户（载入时确认的）：交接频道的请求带上它，回应时只理会同一个人的（M3-P5 设计 §3.7） */
   readonly userId: string
+  /**
+   * 页面上报的档案（M6-P1 S8 spec §2.6，编辑器页按选中的装配注入）：转给编辑会话（草稿、保存与另存为副本），打开自检的上报也用它；
+   * 扩展的上报（表格是公式 Worker 的故障）取同一个
+   */
+  readonly format: PageClientFormat
   readonly connection?: EditingSessionOptions['connection']
   readonly localDrafts?: EditingSessionOptions['localDrafts']
   readonly recovery?: DocumentRecovery | undefined
   readonly api: EditModeApi
-  readonly createEditor: CreateModeEditor
+  /** 新建编辑器的工厂：容器由页面绑定；收到快照、访问方式、视图状态与创建的选项（不给时是装配的 defaultOptions） */
+  readonly createEditor: CreateSlotEditor<Editor, View, Options>
   /** 新的状态查询所得图片权限事实；不以旧视图或图片请求失败推断重新授权。 */
   readonly onImagePermissions?: (readable: boolean, canEdit?: boolean, canTakeOver?: boolean, issuedEpoch?: number) => void
   /** 请求开始时的页面图片许可代次，防止旧状态越过详情撤权。 */
@@ -510,12 +532,112 @@ export type OpenOutcome
     | { readonly kind: 'editor-failed', readonly error: unknown }
     | { readonly kind: 'load-failed', readonly error: unknown }
 
-export interface EditMode {
-  readonly view: () => EditModeView
-  readonly csvTarget: (newDocument?: boolean) => CsvTarget | undefined
-  readonly sheetName: SheetEditor['sheetName']
+/** 页面的会话（setSession）：本人、没有人登录、别的标签页登录了另一个人 */
+type PageSession = 'active' | 'signed-out' | 'other-user'
+
+/**
+ * 扩展判断"这件事还能不能接着做"用的事实（M6-P1 S8 spec §1.4；取法与原来公式恢复的 context 逐字相同）：这件事的代次；打开方式（编辑时 edit，
+ * 稳定的阅读——不在按新的版本重建、不在接手——时 read，别的时候没有）；会话是不是本人；允许（没有卸载、没有隐藏，编辑时保存的状态机还在、
+ * 不在终态，阅读时还读得到）；修订号（编辑时是保存的基准，阅读时是显示的那一版）
+ */
+export interface EditModeContext {
+  readonly generation: number
+  readonly access: EditorAccess | undefined
+  readonly active: boolean
+  readonly allowed: boolean
+  readonly revision: number
+}
+
+/**
+ * 稳定状态（编辑，或者阅读而且不在按新的版本重建、不在接手、还读得到）时本页的打开方式与修订号（编辑时是保存的基准，阅读时是显示的那一版）：
+ * 通知的开头交给扩展（onNotify），扩展按它上报运行期的问题（表格是公式 Worker 的故障，起因由扩展给出）。过渡状态时为 undefined
+ */
+export type StableContext = Pick<OpenCheckContext, 'access' | 'revision'>
+
+/**
+ * 动作目标（M6-P1 S8 spec §1.3）：页面另行发起、作用于当前编辑器的动作（表格的 CSV 导入导出）里与类型无关的部分。取的时候在阅读或编辑、
+ * 有接上的编辑器才有；类型自己的条件（表格：打开自检、Worker 故障、恢复、新文档的模板）由扩展的一侧加上
+ */
+export interface ActionTarget<Editor> {
+  /** 取的时候接上的编辑器 */
+  readonly editor: Editor
+  /** 取的时候的模式 */
+  readonly mode: 'reading' | 'editing'
+  /**
+   * 这个目标还算数：代次、会话代次、会话、隐藏、接上的实例、模式、编辑时的租约与写入代次、本机锁、待处理的失权与阻断、保存的状态机，任何一项变了
+   * 就为假；阅读时另要求还读得到、打开自检没有失败、没有不兼容、不在按新的版本重建、不在接手
+   */
+  readonly current: () => boolean
+  /** 不由用户发起的写的门槛（扩展不挡动作、会话可写、联网；与空闲释放同一个口径）：调用时取 */
+  readonly writable: () => boolean
+  /** 新文档的判断要用的事实（调用时取）：保存的基准修订号 */
+  readonly revision: () => number
+  /** 同上：取的时候的保存的状态机说本页有没有没保存的（没有保存的状态机时为 undefined） */
+  readonly unsaved: () => boolean | undefined
+  /** 同上：取的时候本页显示的快照 */
+  readonly snapshot: string
+  /** 阅读时服务端说本页显示的这一版"公式待更新"（阅读不重算，要尊重它；编辑时为假）：调用时取 */
+  readonly formulasPending: () => boolean
+}
+
+/**
+ * 核心交给扩展的一面（M6-P1 S8 spec §1.4）：核心在原来建公式恢复的位置调用扩展的工厂时给出。编辑会话与槽位是扩展换编辑器的端口
+ * （冻结、带标记捕获、接上新的实例，S6 spec §5.2 的最后一类）；会话、隐藏与卸载供扩展判断要不要上报
+ */
+export interface EditModeHost<Editor, Stage extends string, Options> {
+  readonly editing: EditingSession
+  readonly slot: EditorSlot<Editor, Stage, Options>
+  readonly clock: LeaseClock
+  /** 意外的错误：上报 */
+  readonly reportError: (error: unknown) => void
+  readonly context: () => EditModeContext
+  /** 核心的打开自检：交回失败清单（通过时 undefined），失败的上报服务端（每次创建至多一次，会话不是本人时不发） */
+  readonly openCheck: (created: Editor, context: OpenCheckContext) => OpenCheckFailures | undefined
+  /** 核心的通知：扩展的视图可能变了 */
+  readonly notify: () => void
+  /** 请求编辑得到"交给本页"时这一刻进入不了（扩展挡着动作）的，现在再试 */
+  readonly retryRequests: () => void
+  readonly session: () => PageSession
+  readonly hidden: () => boolean
+  readonly disposed: () => boolean
+  readonly actionTarget: () => ActionTarget<Editor> | undefined
+}
+
+/**
+ * 核心调用扩展的地方（M6-P1 S8 spec §1.4）：每一个都在原来调用表格代码的位置，先后不变（spec §1.6）。文字文档给空实现（P2）。
+ * Options 是创建的选项，Extra 是并进视图的部分
+ */
+export interface EditModeExtension<Options, Extra extends object> {
+  /**
+   * 通知函数的开头（D1）：之后核心才算视图、比较、通知监听者。stable 调用时才取（扩展先做自己的同步，其间嵌套的通知可能已经换了状态，D2）：
+   * 稳定状态时本页的打开方式与修订号，过渡状态时为 undefined
+   */
+  readonly onNotify: (stable: () => StableContext | undefined) => void
+  /** 每次创建之后（槽位交回之后），开始创建时的那件事还在时（D8）：这一次创建的打开方式、起因与修订号 */
+  readonly afterCreate: (context: OpenCheckContext) => void
+  /** 扩展挡住动作（编辑时、阅读而且不在按新的版本重建时，各个入口第一句不做事，交接请求回"正在恢复"） */
+  readonly blocksActions: () => boolean
+  /** 并进视图的部分：没有变化时交出同一个对象（核心按引用比较） */
+  readonly view: () => Extra
+  /** 会话变了（或者本机草稿的代次变了）、页面隐藏时：撤销进行中的事 */
+  readonly cancel: () => void
+  /** 卸载：在清空槽位之前 */
+  readonly dispose: () => void
+  /** 进入编辑、本机恢复两处创建的选项：pending 是"公式待更新"（进入编辑时是申请编辑权时服务端说的，本机恢复时是要装上的那一份的） */
+  readonly enterOptions: (pending: boolean) => Options
+  /** 保存的状态机的"公式待更新"初值（不是本机恢复时）：flag 是申请编辑权时服务端说的 */
+  readonly savingPending: (flag: boolean) => boolean
+}
+
+/** 各类型的装配交给核心的（M6-P1 S8 spec §1.2）：槽位不给选项时的创建选项（通常是空对象）、扩展的工厂 */
+export interface EditModeAssembly<Editor, Stage extends string, Options, Extra extends object> {
+  readonly defaultOptions: Options
+  readonly extension: (host: EditModeHost<Editor, Stage, Options>) => EditModeExtension<Options, Extra>
+}
+
+export interface EditMode<Stage extends string, Extra extends object> {
+  readonly view: () => EditModeView<Stage, Extra>
   readonly subscribe: (listener: () => void) => () => void
-  readonly retryFormulaRecovery: () => void
   /**
    * 打开（载入之后）：以只读创建，进入阅读。enterEdit（地址带 ?edit=new、而且能编辑）时直接申请编辑权、以可编辑创建
    * （新建的表格不必先阅读，M3 总设计 §2.1 的细化）；被占用、不能编辑了或请求失败就照常阅读、说明原因（与"编辑"相同，审查 A11），
@@ -653,7 +775,11 @@ function storedForRelease(saver: SaveCoordinator, flushed: FlushResult | undefin
 
 const UTF8 = new TextEncoder()
 
-export function createEditMode(options: EditModeOptions): EditMode {
+/**
+ * 建一个编辑模式。类型参数（M6-P1 S8 spec §1.3）：编辑器（要求会话层的窄接口 ModeEditor）、它的视图状态与生命周期的阶段、创建的选项、
+ * 扩展并进视图的部分——由各类型的装配写明（例如 sheet-editor/sheet-edit-mode.ts），编辑器的类型不合窄接口时编译不过
+ */
+export function createEditMode<Editor extends ModeEditor<View, Stage>, View, Stage extends string, Options extends object, Extra extends object>(options: EditModeOptions<Editor, View, Options> & EditModeAssembly<Editor, Stage, Options, Extra>): EditMode<Stage, Extra> {
   const { documentId, api, clock, session: hooks } = options
   const listeners = new Set<() => void>()
   let mode: EditModeState = { kind: 'opening' }
@@ -692,15 +818,15 @@ export function createEditMode(options: EditModeOptions): EditMode {
   /** 进入编辑的时刻（clock.now 的时间轴上）：空闲释放与自动交出都从它与最后一次操作中较晚的那个算起 */
   let editingSince = 0
   let generation = 0
-  let csvSessionGeneration = 0
-  let session: 'active' | 'signed-out' | 'other-user' = 'active'
+  /** 会话的代次：会话（或者本机草稿的代次）变了就加一，在撤销扩展之前（动作目标据此作废，原来 CSV 目标的 csvSessionGeneration） */
+  let sessionGeneration = 0
+  let session: PageSession = 'active'
   let localGeneration = options.localDrafts?.permit?.()?.generation
   let markerStopped = false
   let disposed = false
   let hidden = false
-  let formulaReported = false
-  const formulaFallback = createFormulaFallback({ createEditor: options.createEditor, onChange: () => notify() })
-  const slot = createEditorSlot({ createEditor: formulaFallback.createEditor, onChange: () => notify(), reportError: options.reportError })
+  // 公式的回退（表格）包住工厂，由装配在建核心之前建好（D11）：这里收到的工厂已经包好了
+  const slot = createEditorSlot<Editor, View, Stage, Options>({ createEditor: options.createEditor, defaultOptions: options.defaultOptions, onChange: () => notify(), reportError: options.reportError })
   /** 测试构建的观察钩子（M3-P5 设计 §3.13）：没有时什么也不记；观察者出错不影响交接（上报） */
   const observer = options.trace
   const traced: HandoverTrace | undefined = observer === undefined
@@ -716,6 +842,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   const editing = createEditingSession({
     documentId,
     userId: options.userId,
+    format: options.format,
     localDrafts: options.localDrafts,
     connection: options.connection,
     sessionActive: () => session === 'active',
@@ -802,15 +929,20 @@ export function createEditMode(options: EditModeOptions): EditMode {
     userId: options.userId,
     clock,
     holdsLock: editing.holdsLock,
-    phase: () => recoveryBusy() ? 'recovering' : tabPhaseOf(mode),
+    phase: () => busy() ? 'recovering' : tabPhaseOf(mode),
     leave: () => void leaveEditing('handover-tab'),
     trace: traced,
   })
-  const formulaRecovery: FormulaRecovery = createFormulaRecovery({
-    fallback: formulaFallback,
-    slot,
+  /**
+   * 扩展（M6-P1 S8 spec §1.2、§1.4）：在原来建公式恢复的位置调用装配给的工厂（D11：回退 → 槽位 → 会话 → …… → 扩展 → 视图）。
+   * 之后核心在原来调用表格代码的位置调用它
+   */
+  const extension = options.extension({
     editing,
+    slot,
     clock,
+    reportError: options.reportError,
+    // 取法与原来公式恢复的 context 逐字相同
     context: () => ({
       generation,
       access: mode.kind === 'editing' ? 'edit' : mode.kind === 'reading' && mode.update !== 'loading' && mode.takeover === undefined ? 'read' : undefined,
@@ -818,37 +950,55 @@ export function createEditMode(options: EditModeOptions): EditMode {
       allowed: !disposed && !hidden && (mode.kind === 'editing' ? editing.coordinator !== undefined && !saveEnded(editing.coordinator.view().status) : mode.kind === 'reading' && !mode.gone),
       revision: mode.kind === 'editing' ? editing.baseRevision() : shown.revision,
     }),
-    check: (created, access, revision) => openCheckOf(created, { access, revision, trigger: 'formula-recovery' }) === undefined,
-    onChange: () => {
-      notify()
-      if (formulaRecovery?.view()?.phase === 'ready')
-        requests.retry()
-    },
-    reportError: options.reportError,
+    openCheck: openCheckOf,
+    notify,
+    retryRequests: () => requests.retry(),
+    session: () => session,
+    hidden: () => hidden,
+    disposed: () => disposed,
+    actionTarget,
   })
-  let current = computeView()
+  /** 扩展上一次交出的视图（按引用比较是否变化，D1：扩展保证没有变化时交出同一个对象） */
+  let extensionView = extension.view()
+  let current = computeView(extensionView)
 
-  function recoveryBusy(): boolean {
+  /**
+   * 扩展挡住动作（S8 spec §1.4 的 busy；原来是公式恢复）：编辑时、阅读而且不在按新的版本重建时。约 14 个入口第一句判断它（D5），
+   * 交接请求这时回"正在恢复"
+   */
+  function busy(): boolean {
     return (mode.kind === 'editing' || (mode.kind === 'reading' && mode.update !== 'loading'))
-      && formulaRecovery?.view()?.blocksActions === true
+      && extension.blocksActions()
   }
 
   /** 保存的状态只在编辑与退出编辑的过程中给出：失去编辑权之后保存的状态机还留着（核对结果未知的保存），但它的说明不再成立 */
-  function computeView(): EditModeView {
+  function computeView(extra: Extra): EditModeView<Stage, Extra> {
     const saving = mode.kind === 'editing' || mode.kind === 'exiting'
-    return { mode, localSave: saving ? editing.localSave() : undefined, save: saving ? editing.coordinator?.view() : undefined, autosave: saving ? editing.autosave?.view() : undefined, surface: slot.surface(), formulaRecovery: formulaRecovery?.view() }
+    return { ...extra, mode, localSave: saving ? editing.localSave() : undefined, save: saving ? editing.coordinator?.view() : undefined, autosave: saving ? editing.autosave?.view() : undefined, surface: slot.surface() }
   }
 
-  function notify(): void {
-    formulaRecovery?.sync()
-    // 过渡流程仍由实际创建入口报告；稳定模式下的运行期故障才能用本页当前修订。
+  /**
+   * 稳定状态时本页的打开方式与修订号（交给扩展的 onNotify）：过渡流程由实际创建入口报告（afterCreate），稳定状态下的运行期问题才能用本页当前的修订
+   */
+  function stableContext(): StableContext | undefined {
     if (mode.kind === 'editing')
-      reportFormulaFault({ access: 'edit', trigger: 'formula-recovery', revision: editing.baseRevision() })
-    else if (mode.kind === 'reading' && mode.update !== 'loading' && mode.takeover === undefined && !mode.gone)
-      reportFormulaFault({ access: 'read', trigger: 'formula-recovery', revision: shown.revision })
-    const next = computeView()
-    if (next.mode === current.mode && next.localSave === current.localSave && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface && next.formulaRecovery === current.formulaRecovery)
+      return { access: 'edit', revision: editing.baseRevision() }
+    if (mode.kind === 'reading' && mode.update !== 'loading' && mode.takeover === undefined && !mode.gone)
+      return { access: 'read', revision: shown.revision }
+    return undefined
+  }
+
+  /**
+   * 通知（D1）：先交给扩展（表格先同步公式恢复，其间可能经它的 onChange 嵌套通知，嵌套的同步直接返回，D2；再按稳定状态上报），再算视图、
+   * 与上一次的比较（扩展的视图按引用），变了才通知监听者（页面在同一个栈里反应，D10）
+   */
+  function notify(): void {
+    extension.onNotify(stableContext)
+    const extra = extension.view()
+    const next = computeView(extra)
+    if (next.mode === current.mode && next.localSave === current.localSave && next.save === current.save && next.autosave === current.autosave && next.surface === current.surface && extra === extensionView)
       return
+    extensionView = extra
     current = next
     for (const listener of [...listeners])
       listener()
@@ -877,33 +1027,23 @@ export function createEditMode(options: EditModeOptions): EditMode {
     return !disposed && token === generation
   }
 
-  function csvTarget(newDocument = false): CsvTarget | undefined {
+  /**
+   * 动作目标（S8 spec §1.3；原来 CSV 目标里与类型无关的部分）：阅读或编辑、有接上的编辑器时交出它与取的时候的模式；取的时候记下这件事、会话、
+   * 编辑时的租约与写入代次和保存的状态机，之后任何一项变了 current 就为假。类型自己的条件由扩展的一侧加上（表格的 sheet-edit-mode.ts 的 csvTarget）
+   */
+  function actionTarget(): ActionTarget<Editor> | undefined {
     const editor = slot.editor()
     const kind = mode.kind
-    if (!editor || (kind !== 'reading' && kind !== 'editing'))
+    if (editor === undefined || (kind !== 'reading' && kind !== 'editing'))
       return undefined
     const token = generation
-    const sessionToken = csvSessionGeneration
+    const sessionToken = sessionGeneration
     const held = editing.lease
     const epoch = held?.credentials().writeEpoch
     const saver = editing.coordinator
-    const pristine = (): boolean => !newDocument || (kind === 'editing' && editing.baseRevision() === 1
-      && editor.changeSeq() === 0 && saver?.view().unsaved === false
-      && !editor.composing() && editor.uncommittedInput() === 'none')
-    if (newDocument) {
-      try {
-        // 文档 id 与正文 unitId 独立；同时证明服务器原件是该 unit 的空白模板、当前实例未改它。
-        if (!pristine() || shown.snapshot !== sheetSnapshotFor(editor.unitId) || editor.capture() !== shown.snapshot)
-          return undefined
-      }
-      catch {
-        return undefined
-      }
-    }
-    const currentTarget = (): boolean => {
-      if (!still(token) || sessionToken !== csvSessionGeneration || session !== 'active' || hidden
-        || slot.editor() !== editor || mode.kind !== kind || !editor.openCheck.ok
-        || editor.workerFailure() !== undefined || recoveryBusy() || !pristine()) {
+    const current = (): boolean => {
+      if (!still(token) || sessionToken !== sessionGeneration || session !== 'active' || hidden
+        || slot.editor() !== editor || mode.kind !== kind) {
         return false
       }
       if (mode.kind === 'reading')
@@ -913,14 +1053,14 @@ export function createEditMode(options: EditModeOptions): EditMode {
         && pendingLoss === undefined && pendingBlock === undefined
         && saver !== undefined && editing.coordinator === saver && !saveEnded(saver.view().status)
     }
-    if (!currentTarget())
-      return undefined
     return {
       editor,
-      current: currentTarget,
-      writable: () => kind === 'editing' && currentTarget() && writableUnprompted(),
-      // 阅读不重算，必须尊重服务器的旧缓存标记。编辑态已按该标记强制重算，完成与否由 SDK 的实时 tracker 判断；
-      // 保存协调器的标记还可能只是“算完但尚未上传”，不能让导出依赖一次新的正文保存。
+      mode: kind,
+      current,
+      writable: writableUnprompted,
+      revision: () => editing.baseRevision(),
+      unsaved: () => saver?.view().unsaved,
+      snapshot: shown.snapshot,
       formulasPending: () => mode.kind === 'reading' && mode.formulasPending,
     }
   }
@@ -940,39 +1080,30 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 新建的编辑器的打开自检（M3-P4 设计 §3.11–§3.13）：交回失败清单，通过时 undefined。每一次新建都在新建它的那条路径上调这里一次，
    * 所以每次创建的结果至多上报一次。会话不是本人时不发（这一次就不报了）；不看结果、不重试（上报只作诊断，不改任何状态）
    */
-  function openCheckOf(created: SheetEditor, context: OpenCheckContext): OpenCheckFailures | undefined {
+  function openCheckOf(created: Editor, context: OpenCheckContext): OpenCheckFailures | undefined {
     const check = created.openCheck
     if (check.ok)
       return undefined
-    const report = session === 'active' ? openCheckReportOf(check, context) : undefined
+    const report = session === 'active' ? openCheckReportOf(check, context, options.format) : undefined
     if (report !== undefined)
       api.reportOpenCheck(documentId, report).catch(() => undefined)
     return check.failures
   }
 
-  /** 本页首错最多一次；后台诊断失败不影响恢复，不携带异常对象，也不重试。 */
-  function reportFormulaFault(context: OpenCheckContext): void {
-    const failure = formulaFallback.failure()
-    if (formulaReported || failure === undefined || session !== 'active' || disposed || hidden)
-      return
-    const report = formulaWorkerReportOf(failure, context)
-    if (report === undefined)
-      return
-    formulaReported = true
-    api.reportOpenCheck(documentId, report).catch(() => undefined)
-  }
-
-  /** 修订和起因取本次创建输入，不能从尚未更新的 shown 或中途模式猜测。 */
-  async function replaceEditor(snapshot: string, context: OpenCheckContext, options?: ReplaceOptions): Promise<SheetEditor | undefined> {
+  /**
+   * 修订和起因取本次创建输入，不能从尚未更新的 shown 或中途模式猜测：交给扩展的 afterCreate（D8：开始创建时的那件事还在时）。
+   * options 不给时是装配的 defaultOptions
+   */
+  async function replaceEditor(snapshot: string, context: OpenCheckContext, options?: Options): Promise<Editor | undefined> {
     const token = generation
     const created = await slot.replace(context.access, snapshot, options)
     if (still(token))
-      reportFormulaFault(context)
+      extension.afterCreate(context)
     return created
   }
 
   /** 接上只读的编辑器（撤掉屏障），进入阅读（随即检查一次） */
-  function enterReading(created: SheetEditor, content: ShownContent, reading: ReadingMode): number {
+  function enterReading(created: Editor, content: ShownContent, reading: ReadingMode): number {
     shown = content
     slot.attach(created)
     return begin(reading)
@@ -1063,7 +1194,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /** 不由用户发起的写的门槛（空闲释放）：会话可写（confirmedForWrite 的口径，不主动向服务端确认）、联网 */
   function writableUnprompted(): boolean {
-    return !recoveryBusy() && options.autosave.page.sessionWritable() && options.autosave.page.online()
+    return !busy() && options.autosave.page.sessionWritable() && options.autosave.page.online()
   }
 
   /** 开始空闲释放的计时（进入编辑的那一刻起算） */
@@ -1141,7 +1272,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 尽力取消（清掉留给本页的保留，别人不必等它过期）
    */
   function enterGranted(): boolean {
-    if (recoveryBusy())
+    if (busy())
       return false
     if (disposed || mode.kind !== 'reading' || session !== 'active' || mode.update === 'loading' || mode.takeover !== undefined || slot.editor() === undefined)
       return false
@@ -1221,7 +1352,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * 过一个心跳周期再看（再也存不上的不再试），别的照截止时刻
    */
   async function leaveEditing(cause: LeaveCause, auto = false): Promise<void> {
-    if (recoveryBusy())
+    if (busy())
       return
     const saver = editing.coordinator
     const scheduler = editing.autosave
@@ -1555,7 +1686,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
     const epoch = held.credentials().writeEpoch
     const recoveryCurrent = (): boolean => still(token) && session === 'active' && options.autosave.page.sessionWritable() && editing.holdsLock() && editing.lease === held && held.credentials().writeEpoch === epoch && pendingLoss === undefined && pendingBlock === undefined
-    let restoredEditor: SheetEditor | undefined
+    let restoredEditor: Editor | undefined
     let restoredBase: number | undefined
     const recovery = options.recovery
     const recover: RecoveryInitializer | undefined = prepare === undefined
@@ -1566,7 +1697,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
         const initialized = await prepare(context, { access: 'editable', online: options.autosave.page.online(), current: { revision: content.revision, source: content.revision === acquired.revision ? acquired.source : undefined, occupied: false } }, async (snapshot, pending) => {
           if (!recoveryCurrent())
             return { kind: 'blocked', reason: 'cancelled' }
-          const created = await replaceEditor(snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, { recalculate: pending })
+          const created = await replaceEditor(snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, extension.enterOptions(pending))
           if (!recoveryCurrent())
             return { kind: 'blocked', reason: 'cancelled' }
           if (created === undefined || openCheckOf(created, { access: 'edit', trigger: 'enter', revision: content.revision }) !== undefined)
@@ -1637,9 +1768,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
       return backToReading(token, content, damaged => ({ ...readingBefore, damaged }), prepared.reason === 'changed')
     if (session !== 'active' || !editing.holdsLock())
       return backToReading(token, content, damaged => ({ ...readingBefore, damaged }))
-    // 申请时服务端说这份文档"公式待更新"（选定的内容就是申请时的那一版）：强制全量重算，收齐之后由自动保存补存（服务端随之清掉标记）
+    // 申请时服务端说这份文档"公式待更新"（选定的内容就是申请时的那一版）：以扩展给的创建选项重建（表格是强制全量重算），收齐之后由自动保存补存
+    // （服务端随之清掉标记）
     const restored = prepared.restored === true
-    const created = restored ? restoredEditor : await replaceEditor(content.snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, { recalculate: formulasPending })
+    const created = restored ? restoredEditor : await replaceEditor(content.snapshot, { access: 'edit', trigger: 'enter', revision: content.revision }, extension.enterOptions(formulasPending))
     if (!still(token))
       return 'not-entered'
     const formulasShown = formulasPendingOf(content.revision)
@@ -1661,7 +1793,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     editing.startSaving(created, {
       revision: restoredBase ?? content.revision,
       snapshotBytes: source.kind === 'working' ? source.ref.bytes : UTF8.encode(content.snapshot).byteLength,
-      formulasPending: restored ? false : formulasPending || formulaFallback.failure() !== undefined,
+      formulasPending: restored ? false : extension.savingPending(formulasPending),
       initialUnsaved: restored,
       blocked: pendingBlock,
     })
@@ -1871,7 +2003,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
    * （anyway：本人接管、拿锁时抢，不再请它交出）。这里开始这一件事（阅读里带上进展、作废之前的），编排交给 tab-handover.ts 的 takeOverHere
    */
   async function startTakeover(prepare?: RecoveryPreparation): Promise<void> {
-    if (recoveryBusy())
+    if (busy())
       return
     if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading' || mode.request !== undefined || slot.editor() === undefined || disposed)
       return
@@ -1926,7 +2058,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
   }
 
   /** 文本只存在于重建这次调用，不跟随 lose 等待旧 HTTP 或核对结果。 */
-  async function reopenLostDraft(draft: WorkingDraft, ref: DraftCaptureRef, token: number): Promise<SheetEditor | undefined> {
+  async function reopenLostDraft(draft: WorkingDraft, ref: DraftCaptureRef, token: number): Promise<Editor | undefined> {
     const content = await draft.readLatest()
     if (!still(token))
       return undefined
@@ -2120,7 +2252,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   /** "有更新，点击刷新"：按条件读取取最新的内容，重建为阅读（保留视图） */
   async function refreshUpdate(latest = false): Promise<void> {
-    if (recoveryBusy())
+    if (busy())
       return
     // "在此编辑"进行中不刷新：开始新的一件事会让接手的那一次作废，进展却留在阅读里（等人选"仍在此编辑"或"取消"时可以）
     if (mode.kind !== 'reading' || mode.update === 'loading' || (!latest && mode.update !== 'available') || (mode.takeover !== undefined && mode.takeover.kind !== 'failed') || disposed)
@@ -2167,9 +2299,6 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
   return {
     view: () => current,
-    csvTarget,
-    sheetName: sheetId => disposed ? undefined : slot.editor()?.sheetName(sheetId),
-    retryFormulaRecovery: () => formulaRecovery?.retry(),
     subscribe: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -2201,7 +2330,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     enter: async (prepare) => {
-      if (recoveryBusy())
+      if (busy())
         return
       // 正在按新的版本取内容、重建（update 为 loading）时不进入：两次重建会叠在一起，而回到阅读时也说不清显示的是哪一版（审查 A1）。
       // 阅读时一定有接上的编辑器，没有就是还在换。打开自检失败的阅读不进入（M3-P4 设计 §3.12）；"在此编辑"进行中（或者等人选）、请求编辑进行中
@@ -2217,7 +2346,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     takeOver: startTakeover,
 
     requestEdit: async () => {
-      if (recoveryBusy())
+      if (busy())
         return
       // 与"编辑"同样的前提；"在此编辑"进行中、已经有请求时不再发出
       if (mode.kind !== 'reading' || !mode.canEdit || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading' || mode.takeover !== undefined || mode.request !== undefined || slot.editor() === undefined || disposed)
@@ -2236,7 +2365,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     decline: async () => {
-      if (recoveryBusy())
+      if (busy())
         return
       const held = editing.lease
       if (mode.kind === 'editing' && held !== undefined)
@@ -2252,7 +2381,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
     },
 
     forceTakeOver: async (prepare) => {
-      if (recoveryBusy())
+      if (busy())
         return
       // 与"编辑"同样的前提，另要能强制接管；与请求编辑、"在此编辑"互斥；正在编辑的是自己时走"在此编辑"（同一个浏览器里先请那边交出），这里不做
       if (mode.kind !== 'reading' || !mode.canEdit || !mode.canTakeOver || mode.gone || mode.blocked !== undefined || mode.damaged !== undefined || mode.update === 'loading'
@@ -2276,10 +2405,10 @@ export function createEditMode(options: EditModeOptions): EditMode {
     exit: async () => leaveEditing('exit'),
 
     save: async (ready) => {
-      if (recoveryBusy() || mode.kind !== 'editing' || editing.autosave === undefined)
+      if (busy() || mode.kind !== 'editing' || editing.autosave === undefined)
         return
       // 等会话确认的期间开始了退出、失去了编辑权：不再上传（退出自己存；失去编辑权时调度已经去掉）
-      const stillEditing = (): boolean => mode.kind === 'editing' && !recoveryBusy()
+      const stillEditing = (): boolean => mode.kind === 'editing' && !busy()
       await editing.autosave.flush('save-button', { ready: async () => (ready === undefined || await ready()) && stillEditing() })
     },
 
@@ -2345,8 +2474,8 @@ export function createEditMode(options: EditModeOptions): EditMode {
       const previous = session
       session = next
       if (previous !== next || localChanged) {
-        csvSessionGeneration += 1
-        formulaRecovery?.cancel()
+        sessionGeneration += 1
+        extension.cancel()
       }
       syncSaving()
       notify()
@@ -2385,7 +2514,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
 
     releaseOnHide: () => {
       hidden = true
-      formulaRecovery?.cancel()
+      extension.cancel()
       options.recovery?.suspend()
       // 离开页面一律放下本机锁（M3-P5 设计 §3.1）：进往返缓存时浏览器不替页面放（编辑器页恢复时反正整页重新加载）。之后也不再拿——拿锁时正在核对、
       // 被抢之后在核对或等心跳的，结论回来时都不算（M3-P6 设计 §3.13）
@@ -2425,7 +2554,7 @@ export function createEditMode(options: EditModeOptions): EditMode {
       if (disposed)
         return
       disposed = true
-      formulaRecovery?.dispose()
+      extension.dispose()
       options.recovery?.suspend()
       generation += 1
       checks.dispose()

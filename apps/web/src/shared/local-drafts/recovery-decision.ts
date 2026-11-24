@@ -27,7 +27,11 @@ export interface RecoveryFacts {
   /** 已结合实际请求结果的连接事实，不能只传 navigator.onLine。 */
   readonly online: boolean
   readonly current: RecoveryServer | undefined
-  readonly pageFormat: ContentFormat
+  /**
+   * 页面能读的档案（不空，M6-P1 S8 spec §2.6）：草稿的数据格式与其中任意一个可读即为可读。编辑器页载入之后只有选中的装配的那一个
+   * （否则文字文档页会把同一文档 id 下表格档案的草稿当成可读），404 之后是装配表里全部的；草稿页与后台维护是本构建能打开的类型的
+   */
+  readonly pageFormats: readonly [ContentFormat, ...ContentFormat[]]
   readonly replay: ReplayFact
   readonly now: number
 }
@@ -101,7 +105,7 @@ export function decideDraftRecovery(facts: RecoveryFacts): RecoveryDecision {
   if (facts.record.kind !== 'draft')
     return { kind: 'preserve', reason: 'storage' }
   const { meta } = facts.record
-  if (!readableFormat(meta.format, facts.pageFormat))
+  if (!facts.pageFormats.some(format => readableFormat(meta.format, format)))
     return { kind: 'preserve', reason: 'newer-format' }
   if (isExpired(meta, facts.now))
     return { kind: 'remove', reason: 'expired' }

@@ -5,9 +5,11 @@
 //   在判断访问之前做：看不到与不存在的文档得到同样的回答；
 // - 与文档有关的一半（documentTooNew、requireWritableDocument）：文档记录的 SDK 版本比服务端的新（回滚之后），或者档案、平台格式版本
 //   不是服务端对这类文档写的——DOCUMENT_TOO_NEW。刷新拿到的还是同一个版本，提示"刷新"会死循环，所以与 CLIENT_OUTDATED 分开；
-//   页面按详情的 sdkVersion 一开始就只能阅读。
+//   页面按详情的 sdkVersion 一开始就只能阅读；
+// - 上报的档案与文档的档案（requireReportedProfile，DEF-055，M6-P1 S5）：不同时 CLIENT_OUTDATED。
 import type { ClientFormat, ClientOutdatedReason, DocumentProfile, DocumentType, PlatformFormatVersion } from '@nerve-office/contracts'
 import type { AppConfig } from '../config/index.ts'
+import type { AppLogger } from '../logging/index.ts'
 import { compareVersions, DOCUMENT_PROFILE_OF, PLATFORM_FORMAT_VERSION, UNIVER_SDK_VERSION } from '@nerve-office/contracts'
 import { Inject, Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
@@ -69,6 +71,20 @@ export function documentTooNew(document: DocumentFormat): boolean {
 export function requireWritableDocument(document: DocumentFormat): void {
   if (documentTooNew(document))
     throw new AppError('DOCUMENT_TOO_NEW')
+}
+
+/**
+ * 上报的档案对不上这份文档（DEF-055，M6-P1 S5 设计 §3.4）：页面按上报的档案捕获与检查快照，事务里再对照文档。不同时 CLIENT_OUTDATED
+ * （format）——回答与“客户端太旧”同类，页面刷新之后按文档的类型载入对应的编辑器（M6 总设计 §2.2 第 8 条）。
+ * 调用方把它排在访问判断与 DOCUMENT_TOO_NEW 之后：看不到的文档得不到这个回答，不泄露类型。expected 是要对照的档案：保存对照文档的档案；
+ * 另存为副本对照这类文档在服务端的档案，不比文档行里存的（审查 A7：回滚之后文档比服务端新，失去编辑权的人照样能存副本）。
+ * 拒绝时记一条 warn：文档 id 与两边的档案
+ */
+export function requireReportedProfile(logger: AppLogger, documentId: string, reported: DocumentProfile, expected: string): void {
+  if (reported === expected)
+    return
+  logger.warn('上报的档案与文档的不同，拒绝写入', { documentId, reportedProfile: reported, documentProfile: expected })
+  throw new AppError('CLIENT_OUTDATED', undefined, { details: { reason: 'format' } })
 }
 
 /** 与文档无关的一半：按配置的运维开关核对页面上报的构建与数据格式（见文件开头） */

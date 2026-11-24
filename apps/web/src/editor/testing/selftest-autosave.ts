@@ -1,5 +1,5 @@
 // 页面自检观察真实的自动保存（M3-P4 S7，设计 §3.15"实现之后再跑一次"：自动保存端到端——改完 → 服务器上的公式值 → 隐藏之后存下）。
-// S1 在自动保存实现之前用捕获规则的参考实现另做捕获；S7 起各场景看编辑器页里真实的自动保存（features/sheet-editor/autosave.ts，
+// S1 在自动保存实现之前用捕获规则的参考实现另做捕获；S7 起各场景看编辑器页里真实的自动保存（features/document-editor/autosave.ts，
 // 模块边界不让 editor/testing 引用它）经测试构建的控制（./autosave-control.ts，window.__nerveAutosaveControl）露出来的：
 // - 准备（prepareAutosave）：场景开始时核对调度接上了、进入编辑到现在没有捕获与上传（打开不算修改），按场景定下照常（running，
 //   与生产相同）还是暂停定时的上传（held：捕获照常，立即上传——切到后台、flush——照常）与节奏；装上保存请求的记录；

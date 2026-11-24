@@ -1,8 +1,9 @@
 // 规范化的内容（00 号计划书 §7.4 末与 §8.1，M3-P3 设计 §3.2；规格写进 ADR-011）：内容哈希与"内容相同不递增"的口径。
 // 前后端共用，客户端在 M4 要逐字节复现，所以下面每一步都写死：
 // 0. 以 JSON 文本为准：取值按 JSON.parse 的语义（数字按它解析、重复的键取后一个、__proto__ 是普通的键）；
-// 1. 去掉每张工作表（sheets 的每个值）的视图状态 zoomRatio、scrollTop、scrollLeft：缩放与滚动不产生 mutation，随下一次真实的修改保存
-//    （§7.3）；文字文档的 settings.zoomRatio 留给 M6；
+// 1. 各档案去掉自己的视图状态（缩放与滚动不产生 mutation，随下一次真实的修改保存，§7.3）：sheet@1 去掉每张工作表（sheets 的每个值）的
+//    zoomRatio、scrollTop、scrollLeft；doc@1 去掉 settings 的 zoomRatio（M6-P1 S4，Univer 的 IDocumentSettings 只有这一项）。
+//    别的档案的这几项不动：sheet@1 的结果与 M6 之前逐字节相同；
 // 2. 资源（resources；没有或为 null 时按空数组）：每项的 data 解析一次（只解析这一层，里面的字符串不再当 JSON；空串是空，解析不了的
 //    原样当字符串）；深层为空的资源去掉——"在而为空"与"不在"等价（与 editor/testing/content-compare.ts 一致），"不在"的风险由不缩水兜住；
 //    非空的、data 是对象时，**只在第一层**（每张表一个键的那一层）去掉取值深层为空的键：SDK 打开再保存时给每张表补上空的规则表
@@ -15,10 +16,14 @@
 //    的字典序"——M0 原型（Object.keys 排序之后经 Object.fromEntries 重建）实际得到的就是 JS 属性的这个顺序；字符串、数字与键按
 //    JSON.stringify 写（-0 写成 0，孤立的代理项写成 \u 转义）。
 // 内容哈希是这段文字的 UTF-8 字节（contentHashInput）的 SHA-256，各端用自己的实现（服务端 node:crypto，页面 crypto.subtle）
+import type { DocumentProfile } from './documents.ts'
 import { compareCodeUnits, isEmptyLeaf, isJsonObject } from './json-values.ts'
 
 /** 工作表上的视图状态：不产生 mutation，不算内容（00 号计划书 §7.3） */
 export const SHEET_VIEW_STATE_FIELDS: readonly string[] = ['zoomRatio', 'scrollTop', 'scrollLeft']
+
+/** 文字文档 settings 上的视图状态（M6-P1 S4 spec §5）：缩放比例 */
+export const DOC_VIEW_STATE_FIELDS: readonly string[] = ['zoomRatio']
 
 /** 规范的数组下标形式的键：0 到 4294967294（2³² − 2）的十进制写法，不带前导零 */
 function isArrayIndex(key: string): boolean {
@@ -141,17 +146,26 @@ function without(object: Record<string, unknown>, keys: readonly string[]): Reco
   return Object.fromEntries(Object.keys(object).filter(key => !keys.includes(key)).map(key => [key, object[key]]))
 }
 
-/** 第 1、2 步：只浅拷贝顶层、sheets 与每张工作表，其余（单元格等）原样引用，不改传入的值 */
-function normalized(snapshot: unknown): unknown {
+/**
+ * 第 1 步，各档案去掉自己的视图状态：给出顶层一个键规范化之后的值（不是视图状态所在的键时原样返回）。按档案穷举，加档案时类型检查强制补上
+ */
+const VIEW_STATE_FREE: Readonly<Record<DocumentProfile, (key: string, value: unknown) => unknown>> = {
+  'sheet@1': (key, value) => key === 'sheets' && isJsonObject(value)
+    ? Object.fromEntries(Object.keys(value).map(id => [id, isJsonObject(value[id]) ? without(value[id], SHEET_VIEW_STATE_FIELDS) : value[id]]))
+    : value,
+  'doc@1': (key, value) => key === 'settings' && isJsonObject(value) ? without(value, DOC_VIEW_STATE_FIELDS) : value,
+}
+
+/** 第 1、2 步：只浅拷贝顶层与视图状态所在的那几层，其余（单元格、正文等）原样引用，不改传入的值 */
+function normalized(snapshot: unknown, profile: DocumentProfile): unknown {
   if (!isJsonObject(snapshot))
     return snapshot
+  const viewStateFree = VIEW_STATE_FREE[profile]
   const entries = Object.keys(snapshot).map((key): [string, unknown] => {
     const value = snapshot[key]
-    if (key === 'sheets' && isJsonObject(value))
-      return [key, Object.fromEntries(Object.keys(value).map(id => [id, isJsonObject(value[id]) ? without(value[id], SHEET_VIEW_STATE_FIELDS) : value[id]]))]
     if (key === 'resources')
       return [key, canonicalResources(value)]
-    return [key, value]
+    return [key, viewStateFree(key, value)]
   })
   if (!Object.hasOwn(snapshot, 'resources'))
     entries.push(['resources', []])
@@ -205,16 +219,17 @@ function write(root: unknown): string {
 
 /**
  * 规范化的内容（文件开头的第 1–3 步），输入是对快照的 JSON 文本 JSON.parse 的结果——服务端在检查时已经解析过，不必再解析一次。
+ * profile 是文档的档案（必填：同一份快照按不同档案得到的结果可能不同）。
  * 不要传内存里的模型（Univer 的 save() 的结果里有 Infinity、undefined，与写成 JSON 之后不同）。不改传入的值；
  * 任何 JSON 的值都不抛出（不是对象时原样写出）
  */
-export function canonicalContentTextOf(snapshot: unknown): string {
-  return write(normalized(snapshot))
+export function canonicalContentTextOf(snapshot: unknown, profile: DocumentProfile): string {
+  return write(normalized(snapshot, profile))
 }
 
 /** 规范化的内容，输入是快照的 JSON 文本（不是合法的 JSON 时抛出 JSON.parse 的 SyntaxError：服务端先拒绝它，页面的快照来自 SDK） */
-export function canonicalContentText(snapshotText: string): string {
-  return canonicalContentTextOf(JSON.parse(snapshotText) as unknown)
+export function canonicalContentText(snapshotText: string, profile: DocumentProfile): string {
+  return canonicalContentTextOf(JSON.parse(snapshotText) as unknown, profile)
 }
 
 /** 内容哈希的输入：规范文字的 UTF-8 字节（规范文字里没有孤立的代理项，编码是确定的）。哈希本身各端用自己的 SHA-256 */

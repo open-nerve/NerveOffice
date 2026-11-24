@@ -159,7 +159,7 @@ describe('申请（M3-P1 设计 §3.4.7）', () => {
     if (acquired.kind !== 'acquired')
       throw new Error('需要已取得的编辑权')
     const meta = sampleMeta({ baseRevision: 4, draftSeq: 12, inFlight: { requestId: 'old-save', clientInstanceId: 'original-page', localSeq: 11, sentAt: 1_000 }, updatedAt: 1_000 })
-    expect(decideDraftRecovery({ key: { userId: meta.userId, documentId: meta.documentId }, record: { kind: 'draft', meta }, access: 'editable', online: true, current: { revision: acquired.revision, source: acquired.source, occupied: false }, pageFormat: meta.format, replay: { kind: 'unchecked' }, now: 1_001 })).toMatchObject({ kind: decision })
+    expect(decideDraftRecovery({ key: { userId: meta.userId, documentId: meta.documentId }, record: { kind: 'draft', meta }, access: 'editable', online: true, current: { revision: acquired.revision, source: acquired.source, occupied: false }, pageFormats: [meta.format], replay: { kind: 'unchecked' }, now: 1_001 })).toMatchObject({ kind: decision })
     acquired.lease.abandon()
   })
 

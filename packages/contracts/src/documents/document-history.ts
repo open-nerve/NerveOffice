@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { uuidSchema } from '../ids/ids.ts'
 import { userSummarySchema } from '../users/users.ts'
-import { DOCUMENT_TYPES, documentTitleSchema } from './documents.ts'
+import { documentTitleSchema, responseDocumentTypeSchema } from './documents.ts'
 
 /** 用户历史固定每页条数；运维检查点不使用这个公开接口。 */
 export const HISTORY_PAGE_SIZE = 30
@@ -18,7 +18,7 @@ export const documentHistorySummarySchema = z.object({
   expiresAt: z.iso.datetime(),
   savedBy: userSummarySchema.nullable(),
   title: z.string(),
-  type: z.enum(DOCUMENT_TYPES),
+  type: responseDocumentTypeSchema,
   profile: z.string(),
   formatVersion: z.number().int(),
   sdkVersion: z.string(),

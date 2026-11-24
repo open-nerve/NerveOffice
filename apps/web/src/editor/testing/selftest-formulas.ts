@@ -62,11 +62,20 @@ const { chain: CHAIN, aggregate: AGGREGATE, volatile: VOLATILE } = FORMULA_SAMPL
 /** "静默窗口内再改一次"的两次修改之间隔多久（M0-P3 V07 的做法） */
 const QUIET_WINDOW_GAP_MS = 300
 
+/** "超过上限"：捕获的上限 */
+const CAP_MS = 50
+
 /**
  * "超过上限"：捕获的上限调到 50 毫秒（M0 的做法，设计 §3.14 的 setLimits），上传的静默也调到 50 毫秒——带"公式待更新"的那一份随即上传
- * （否则按生产的 2 秒静默，补捕获早已取代了它），服务器上先记下标记、补存之后清掉
+ * （否则按生产的 2 秒静默，补捕获早已取代了它），服务器上先记下标记、补存之后清掉。
+ * 捕获的间隔系数调到 0（M6-P1 S9，main 定时 CI #106 的方案 A）：上一项最后捕获的是含 811 个公式的文档，按生产的系数 10，它的耗时会把
+ * 这一项的上限推后约 1 秒，推到这一轮算完、静默到点之后，捕获就成了不带标记的静默捕获（#106 的 WebKit 片，M5 P9 调查 §6 的取证）。
+ * 间隔规则本身由 capture-policy.test.ts 覆盖，不是这一项的测试对象
  */
-const CAP_LIMITS: Partial<AutosaveControlLimits> = { captureMaxMs: 50, uploadQuietMs: 50 }
+const CAP_LIMITS: Partial<AutosaveControlLimits> = { captureMaxMs: CAP_MS, captureSpacingFactor: 0, uploadQuietMs: 50 }
+
+/** "超过上限"：上限到点之后多久核对强制重算的一轮还在算（与"静默到点时还在算"一样留 50 毫秒） */
+const CAP_CHECK_MS = CAP_MS + 50
 
 /**
  * "静默到点时还在算"：静默到点之前多久强制重算一轮。811 个公式（其中 600 个 1 万行的 SUMPRODUCT）的一轮在各浏览器里都长过 1 秒
@@ -139,12 +148,19 @@ const FORMULA_CASES: readonly FormulaCase[] = [
     },
   },
   {
+    // M6-P1 S9（#106 的方案 A）：原来只靠聚合!B1 引起的那一轮（#106 的 WebKit 片上约 0.8 秒），要它比上限的判定拖得更久；
+    // 改完立即强制重算一轮（811 个公式，各浏览器都长过 1 秒，分段让出），上限到点时一定还在算。强制重算可能让 SDK 停掉聚合!B1 那一轮、
+    // 改算全量：这一项只看上限到点时还在算，最后存上的值照样按定义核对
     id: 'cap',
-    title: `超过上限（捕获的上限与上传的静默调到 ${CAP_LIMITS.captureMaxMs} 毫秒）：改聚合!B1，带"公式待更新"捕获并上传，收齐之后补捕获、补存`,
+    title: `超过上限（捕获的上限与上传的静默调到 ${CAP_MS} 毫秒、间隔系数调到 0）：改聚合!B1 并立即强制重算一轮（811 个公式），带"公式待更新"捕获并上传，收齐之后补捕获、补存`,
     limits: CAP_LIMITS,
-    edit: async ({ set }) => {
+    edit: async ({ set, at, forceRound, settled }) => {
       set([AGGREGATE.name, 'B1', 400])
-      return {}
+      await forceRound()
+      await at(CAP_CHECK_MS)
+      if (settled())
+        fail(`上限到点（+${CAP_MS} ms）之后的 +${CAP_CHECK_MS} ms，强制重算的一轮已经算完：这一项检验不到"带标记捕获"，样本要加大`)
+      return { note: `上限到点（+${CAP_MS} ms）之后的 +${CAP_CHECK_MS} ms，强制重算的一轮还在算` }
     },
   },
 ]
@@ -348,7 +364,7 @@ export async function formulaTimingScenario(session: Session): Promise<void> {
         let flaggedText: string | undefined
         if (formulaCase.limits === CAP_LIMITS) {
           if (flagged === undefined)
-            fail(`上限（${CAP_LIMITS.captureMaxMs} 毫秒）到的时候公式已经收齐，没有走到"带标记捕获、收齐之后补捕获"：样本要加大；${autosaveTimeline(log, start)}`)
+            fail(`上限（${CAP_MS} 毫秒）到的时候公式已经收齐，没有走到"带标记捕获、收齐之后补捕获"：样本要加大；${autosaveTimeline(log, start)}`)
           const flaggedUpload = uploadsIn(log).find(item => item.seq === flagged.entry.seq && uploadFlagged(item))
           if (flaggedUpload === undefined || flaggedUpload.outcome.kind !== 'saved')
             fail(`带"公式待更新"的那一份没有上传、存上：${autosaveTimeline(log, start)}`)

@@ -334,7 +334,7 @@ async function tearDown(cleanup: CleanupStack, retirement: FormulaRoundRef): Pro
 
 /**
  * 引入测试构建的模块（档案故障、公式模式、探针）：没引入成（分块没下载下来，多半是整页跳转取消了还在路上的加载）按编辑器建不起来处理，
- * 页面据此认出它是加载失败、页面开始离开之后不上报（M3-P5 收尾 E1，features/sheet-editor/start.tsx 的 loadFailureReporter）。
+ * 页面据此认出它是加载失败、页面开始离开之后不上报（M3-P5 收尾 E1，features/document-editor/start.tsx 的 loadFailureReporter；M6-P1 S8c 起表格的 kit 以 isLoadFailure 认出它）。
  * 只在测试构建的分支里用到，生产构建里随那些分支一起去掉
  */
 async function importTesting<T>(load: () => Promise<T>): Promise<T> {

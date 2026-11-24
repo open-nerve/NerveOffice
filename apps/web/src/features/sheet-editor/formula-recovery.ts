@@ -1,8 +1,8 @@
 import type { EditorAccess, FormulaWorkerFailure, SheetEditor } from '../../editor/index.ts'
 import type { LeaseClock } from '../../shared/outbox/clock.ts'
-import type { EditingSession } from './editing-session.ts'
-import type { EditorSlot } from './editor-slot.ts'
+import type { EditingSession } from '../document-editor/index.ts'
 import type { FormulaFallback } from './formula-fallback.ts'
+import type { SheetEditorSlot } from './sheet-editor-slot.ts'
 
 export type FormulaRecoveryPhase = 'waiting-input' | 'preparing' | 'rebuilding' | 'paused' | 'failed' | 'ready'
 export type FormulaRecoveryProblem = 'input' | 'capture' | 'create' | 'open-check'
@@ -25,7 +25,7 @@ export interface FormulaRecoveryContext {
 
 export interface FormulaRecoveryOptions {
   readonly fallback: FormulaFallback
-  readonly slot: EditorSlot
+  readonly slot: SheetEditorSlot
   readonly editing: EditingSession
   readonly clock: LeaseClock
   readonly context: () => FormulaRecoveryContext

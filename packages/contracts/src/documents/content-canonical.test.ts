@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { canonicalContentText, canonicalContentTextOf, contentHashInput, SHEET_VIEW_STATE_FIELDS } from './content-canonical.ts'
 import { sheetSnapshotFor } from './sheet-template.ts'
+import M0_DOC_ALL from './testdata/m0-doc-all.json' with { type: 'json' }
 import M0_SHEET_ALL_S0 from './testdata/m0-sheet-all.s0.json' with { type: 'json' }
 import M0_SHEET_ALL_S1 from './testdata/m0-sheet-all.s1.json' with { type: 'json' }
 
@@ -53,6 +54,15 @@ function m0Canonical(text: string): string {
   })
 }
 
+/** 表格（sheet@1）的规范文字：M3 起的用例与向量都是表格，结果逐字节不变（M6-P1 S4 加档案参数） */
+function sheetText(text: string): string {
+  return canonicalContentText(text, 'sheet@1')
+}
+
+function sheetTextOf(snapshot: unknown): string {
+  return canonicalContentTextOf(snapshot, 'sheet@1')
+}
+
 const S0 = JSON.stringify(M0_SHEET_ALL_S0)
 const S1 = JSON.stringify(M0_SHEET_ALL_S1)
 const UNIT = '0199a2c4-1f2e-4a3b-8c4d-5e6f7a8b9c0d'
@@ -66,16 +76,16 @@ describe('键序（写死，客户端在 M4 逐字节复现）', () => {
   const KEYS = '{"resources":[],"styles":{"b":1,"10":1,"9":1,"a":1,"B":1,"_":1,"01":1,"4294967295":1,"4294967294":1,"":1,"\\uFFFF":1,"😀":1,"é":1,"-1":1,"1.0":1,"__proto__":1}}'
 
   it('规范的数组下标形式的键（0–4294967294）按数值升序在前，其余按 UTF-16 码元的字典序（不是码点的顺序：😀 在 U+FFFF 之前）', () => {
-    expect(canonicalContentText(KEYS)).toBe('{"resources":[],"styles":{"9":1,"10":1,"4294967294":1,"":1,"-1":1,"01":1,"1.0":1,"4294967295":1,"B":1,"_":1,"__proto__":1,"a":1,"b":1,"é":1,"😀":1,"￿":1}}')
+    expect(sheetText(KEYS)).toBe('{"resources":[],"styles":{"9":1,"10":1,"4294967294":1,"":1,"-1":1,"01":1,"1.0":1,"4294967295":1,"B":1,"_":1,"__proto__":1,"a":1,"b":1,"é":1,"😀":1,"￿":1}}')
   })
 
   it('与 M0 原型的写法逐字节相同：样本、模板与键序的边界', () => {
     for (const text of [S0, S1, KEYS, sheetSnapshotFor(UNIT), workbook({ zoomRatio: 2, sheets: { s1: { zoomRatio: 3, scrollTop: 1, cellData: { 10: { 2: { v: 'x' } }, 9: {} } } } })])
-      expect(canonicalContentText(text)).toBe(m0Canonical(text))
+      expect(sheetText(text)).toBe(m0Canonical(text))
   })
 
   it('每一层的对象都排序，数组的顺序不变', () => {
-    expect(canonicalContentText('{"z":[{"b":1,"a":2},[3,1]],"resources":[],"a":{"d":{"f":1,"e":2}}}')).toBe('{"a":{"d":{"e":2,"f":1}},"resources":[],"z":[{"a":2,"b":1},[3,1]]}')
+    expect(sheetText('{"z":[{"b":1,"a":2},[3,1]],"resources":[],"a":{"d":{"f":1,"e":2}}}')).toBe('{"a":{"d":{"e":2,"f":1}},"resources":[],"z":[{"a":2,"b":1},[3,1]]}')
   })
 })
 
@@ -83,16 +93,16 @@ describe('视图状态', () => {
   it('去掉每张工作表的 zoomRatio、scrollTop、scrollLeft', () => {
     expect(SHEET_VIEW_STATE_FIELDS).toEqual(['zoomRatio', 'scrollTop', 'scrollLeft'])
     const text = workbook({ sheets: { s1: { name: '数据', zoomRatio: 1.5, scrollTop: 300, scrollLeft: 20 }, s2: { name: '汇总', zoomRatio: 1 } } })
-    expect(canonicalContentText(text)).toBe('{"id":"u","resources":[],"sheetOrder":["s1"],"sheets":{"s1":{"name":"数据"},"s2":{"name":"汇总"}}}')
+    expect(sheetText(text)).toBe('{"id":"u","resources":[],"sheetOrder":["s1"],"sheets":{"s1":{"name":"数据"},"s2":{"name":"汇总"}}}')
   })
 
   it('只改了缩放与滚动：内容相同（00 号计划书 §7.3）', () => {
-    expect(canonicalContentText(workbook({ sheets: { s1: { zoomRatio: 2, scrollTop: 900, scrollLeft: 30, cellData: {} } } })))
-      .toBe(canonicalContentText(workbook({ sheets: { s1: { cellData: {}, zoomRatio: 1, scrollTop: 0, scrollLeft: 0 } } })))
+    expect(sheetText(workbook({ sheets: { s1: { zoomRatio: 2, scrollTop: 900, scrollLeft: 30, cellData: {} } } })))
+      .toBe(sheetText(workbook({ sheets: { s1: { cellData: {}, zoomRatio: 1, scrollTop: 0, scrollLeft: 0 } } })))
   })
 
   it('别处的同名键不动：顶层、单元格里与不是对象的工作表', () => {
-    expect(canonicalContentText(workbook({ zoomRatio: 2, sheets: { s1: { cellData: { 0: { 0: { scrollTop: 1 } } } }, s2: 'x' } })))
+    expect(sheetText(workbook({ zoomRatio: 2, sheets: { s1: { cellData: { 0: { 0: { scrollTop: 1 } } } }, s2: 'x' } })))
       .toBe('{"id":"u","resources":[],"sheetOrder":["s1"],"sheets":{"s1":{"cellData":{"0":{"0":{"scrollTop":1}}}},"s2":"x"},"zoomRatio":2}')
   })
 })
@@ -107,15 +117,15 @@ describe('资源', () => {
       { name: 'SHEET_DRAWING_PLUGIN', data: '[]' },
       { name: 'SHEET_DEFINED_NAME_PLUGIN', data: '{"a":{"b":[{},[null,""]]}}' },
     ]
-    const bare = canonicalContentText(workbook())
-    expect(canonicalContentText(workbook({ resources: empties }))).toBe(bare)
+    const bare = sheetText(workbook())
+    expect(sheetText(workbook({ resources: empties }))).toBe(bare)
     expect(bare).toContain('"resources":[]')
   })
 
   it('没有 resources、null 与空数组等价', () => {
     const { resources: _resources, ...rest } = JSON.parse(workbook()) as Record<string, unknown>
-    expect(canonicalContentText(JSON.stringify(rest))).toBe(canonicalContentText(workbook()))
-    expect(canonicalContentText(workbook({ resources: null }))).toBe(canonicalContentText(workbook()))
+    expect(sheetText(JSON.stringify(rest))).toBe(sheetText(workbook()))
+    expect(sheetText(workbook({ resources: null }))).toBe(sheetText(workbook()))
   })
 
   it('非空的：data 解析一次（里面的字符串不再解析），只在第一层（每张表一个键）去掉取值深层为空的键，更深的层级原样保留；写成 { data, name }，按名称排序', () => {
@@ -123,7 +133,7 @@ describe('资源', () => {
       { name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0},"cachedFilteredOut":[],"filterColumns":[{"colId":1,"extra":{}}]},"s2":{}}' },
       { name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s2":[],"s1":[{"uid":"r1","formula1":"[]","ranges":[{},{"startRow":1}]}],"s3":[{},[null,""]]}' },
     ]
-    expect(canonicalContentText(workbook({ resources }))).toBe(
+    expect(sheetText(workbook({ resources }))).toBe(
       '{"id":"u","resources":[{"data":{"s1":[{"formula1":"[]","ranges":[{},{"startRow":1}],"uid":"r1"}]},"name":"SHEET_DATA_VALIDATION_PLUGIN"},'
       + '{"data":{"s1":{"cachedFilteredOut":[],"filterColumns":[{"colId":1,"extra":{}}],"ref":{"startRow":0}}},"name":"SHEET_FILTER_PLUGIN"}],'
       + '"sheetOrder":["s1"],"sheets":{"s1":{"cellData":{"0":{"0":{"v":1}}},"id":"s1"}}}',
@@ -137,34 +147,34 @@ describe('资源', () => {
       filtered({ colId: 0, filters: {} }),
       filtered({ colId: 0 }),
     ]
-    const hashes = await Promise.all(states.map(async state => sha256(contentHashInput(canonicalContentText(state)))))
+    const hashes = await Promise.all(states.map(async state => sha256(contentHashInput(sheetText(state)))))
     expect(new Set(hashes).size).toBe(3)
-    expect(canonicalContentText(states[0] ?? '')).toContain('"filterColumns":[{"colId":0,"customFilters":{"customFilters":[{"val":""}]}}]')
-    expect(canonicalContentText(states[1] ?? '')).toContain('"filterColumns":[{"colId":0,"filters":{}}]')
+    expect(sheetText(states[0] ?? '')).toContain('"filterColumns":[{"colId":0,"customFilters":{"customFilters":[{"val":""}]}}]')
+    expect(sheetText(states[1] ?? '')).toContain('"filterColumns":[{"colId":0,"filters":{}}]')
   })
 
   it('data 不是对象（数组、字符串、数字）时原样保留：数组里的空项与空值都在', () => {
     const resources = [{ name: 'SHEET_DRAWING_PLUGIN', data: '[{},{"a":""},null,{"b":1}]' }, { name: 'n', data: '"x"' }]
-    expect(canonicalContentText(workbook({ resources }))).toContain('"resources":[{"data":[{},{"a":""},null,{"b":1}],"name":"SHEET_DRAWING_PLUGIN"},{"data":"x","name":"n"}]')
+    expect(sheetText(workbook({ resources }))).toContain('"resources":[{"data":[{},{"a":""},null,{"b":1}],"name":"SHEET_DRAWING_PLUGIN"},{"data":"x","name":"n"}]')
   })
 
   it('与递归去空的写法（M0 原型）只在资源 data 的更深层不同：第一层的空规则表两边都去掉，更深的空值只有规格保留', () => {
     const shallow = workbook({ resources: [{ name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s2":[],"s1":[{"uid":"r1"}]}' }] })
-    expect(canonicalContentText(shallow)).toBe(m0Canonical(shallow))
+    expect(sheetText(shallow)).toBe(m0Canonical(shallow))
     const deep = workbook({ resources: [{ name: 'SHEET_DATA_VALIDATION_PLUGIN', data: '{"s1":[{"uid":"r1","formula1":""}]}' }] })
-    expect(canonicalContentText(deep)).not.toBe(m0Canonical(deep))
-    expect(canonicalContentText(deep)).toContain('"formula1":""')
+    expect(sheetText(deep)).not.toBe(m0Canonical(deep))
+    expect(sheetText(deep)).toContain('"formula1":""')
   })
 
   it('名称按 UTF-16 码元排序（不按语言环境）；名称相同的保持原来的先后', () => {
     const resources = [{ name: 'b', data: '1' }, { name: 'B_2', data: '2' }, { name: 'B', data: '3' }, { name: 'b', data: '4' }]
-    expect(canonicalContentText(workbook({ resources }))).toContain('"resources":[{"data":3,"name":"B"},{"data":2,"name":"B_2"},{"data":1,"name":"b"},{"data":4,"name":"b"}]')
+    expect(sheetText(workbook({ resources }))).toContain('"resources":[{"data":3,"name":"B"},{"data":2,"name":"B_2"},{"data":1,"name":"b"},{"data":4,"name":"b"}]')
   })
 
   it('不是 { name: 字符串, data: 字符串 } 的项原样排在后面；解析不了的 data 当字符串（服务端的检查先拒绝它们，只为结果确定）', () => {
     const resources = [{ name: 'z', data: 1 }, 'x', { name: 'b', data: 'not json' }, { name: 'a', data: '{"k":1}', id: 'extra' }]
-    expect(canonicalContentText(workbook({ resources }))).toContain('"resources":[{"data":{"k":1},"name":"a"},{"data":"not json","name":"b"},{"data":1,"name":"z"},"x"]')
-    expect(canonicalContentText(workbook({ resources: { name: 'a' } }))).toContain('"resources":{"name":"a"}')
+    expect(sheetText(workbook({ resources }))).toContain('"resources":[{"data":{"k":1},"name":"a"},{"data":"not json","name":"b"},{"data":1,"name":"z"},"x"]')
+    expect(sheetText(workbook({ resources: { name: 'a' } }))).toContain('"resources":{"name":"a"}')
   })
 })
 
@@ -176,55 +186,55 @@ describe('以 JSON 文本为准', () => {
       '{"id":"x","resources":[],"sheets":{"s1":{"cellData":{"0":{"0":{"v":10e-1,"m":"é"}}}}},"id":"u"}',
     ]
     for (const variant of variants)
-      expect(canonicalContentText(variant)).toBe(canonicalContentText(plain))
-    expect(canonicalContentText('{"resources":[],"a":-0,"b":1e21,"c":0.1}')).toBe('{"a":0,"b":1e+21,"c":0.1,"resources":[]}')
+      expect(sheetText(variant)).toBe(sheetText(plain))
+    expect(sheetText('{"resources":[],"a":-0,"b":1e21,"c":0.1}')).toBe('{"a":0,"b":1e+21,"c":0.1,"resources":[]}')
   })
 
   it('__proto__ 是普通的键，不改原型', () => {
-    expect(canonicalContentText('{"resources":[],"__proto__":{"x":1},"cell":{"__proto__":2}}')).toBe('{"__proto__":{"x":1},"cell":{"__proto__":2},"resources":[]}')
+    expect(sheetText('{"resources":[],"__proto__":{"x":1},"cell":{"__proto__":2}}')).toBe('{"__proto__":{"x":1},"cell":{"__proto__":2},"resources":[]}')
   })
 
   it('孤立的代理项写成 \\u 转义（规范文字是合法的 UTF-16，UTF-8 编码是确定的）；控制字符按 JSON.stringify 转义', () => {
-    expect(canonicalContentText('{"resources":[],"s":"\\ud800x","t":"\\u0001\\n"}')).toBe('{"resources":[],"s":"\\ud800x","t":"\\u0001\\n"}')
+    expect(sheetText('{"resources":[],"s":"\\ud800x","t":"\\u0001\\n"}')).toBe('{"resources":[],"s":"\\ud800x","t":"\\u0001\\n"}')
   })
 
   it('不是合法的 JSON：抛出 JSON.parse 的 SyntaxError', () => {
-    expect(() => canonicalContentText('{"id":')).toThrow(SyntaxError)
+    expect(() => sheetText('{"id":')).toThrow(SyntaxError)
   })
 
   it('canonicalContentText 与对解析结果的 canonicalContentTextOf 相同；不改传入的值', () => {
     for (const text of [S0, S1, sheetSnapshotFor(UNIT), workbook({ sheets: { s1: { zoomRatio: 2 } }, resources: [{ name: 'a', data: '{"k":{"e":[]}}' }] })]) {
       const parsed = JSON.parse(text) as unknown
-      expect(canonicalContentTextOf(parsed)).toBe(canonicalContentText(text))
+      expect(sheetTextOf(parsed)).toBe(sheetText(text))
       expect(JSON.stringify(parsed)).toBe(text)
     }
   })
 
   it('不是对象的快照原样写出（键照样排序）：任何 JSON 的值都不抛出', () => {
-    expect(canonicalContentTextOf([{ b: 1, a: 2 }, null, 'x', 1.5, true])).toBe('[{"a":2,"b":1},null,"x",1.5,true]')
-    expect(canonicalContentTextOf(null)).toBe('null')
+    expect(sheetTextOf([{ b: 1, a: 2 }, null, 'x', 1.5, true])).toBe('[{"a":2,"b":1},null,"x",1.5,true]')
+    expect(sheetTextOf(null)).toBe('null')
   })
 
   it('很深的嵌套不爆栈（迭代地写；JSON.stringify 在几千层就抛 RangeError）：单元格里与资源的 data 里各 20 万层', () => {
     const depth = 200_000
     const deep = `${'['.repeat(depth)}1${']'.repeat(depth)}`
     const text = `{"resources":[{"name":"n","data":${JSON.stringify(deep)}}],"sheets":{"s1":{"cellData":${deep}}}}`
-    expect(canonicalContentText(text)).toBe(`{"resources":[{"data":${deep},"name":"n"}],"sheets":{"s1":{"cellData":${deep}}}}`)
+    expect(sheetText(text)).toBe(`{"resources":[{"data":${deep},"name":"n"}],"sheets":{"s1":{"cellData":${deep}}}}`)
   })
 })
 
 describe('内容相同与不同', () => {
   it('M0 的 S0 与 S1（sheet-all）：打开再保存之后的差别全是空值等价与资源 data 里的键序，规范文字相同', () => {
     expect(S0).not.toBe(S1)
-    expect(canonicalContentText(S0)).toBe(canonicalContentText(S1))
+    expect(sheetText(S0)).toBe(sheetText(S1))
   })
 
   it('真实的修改：单元格的值、单元格里的空串（只有资源去掉空键）、工作表的顺序、资源里的规则', () => {
-    const base = canonicalContentText(workbook())
-    expect(canonicalContentText(workbook({ sheets: { s1: { id: 's1', cellData: { 0: { 0: { v: 2 } } } } } }))).not.toBe(base)
-    expect(canonicalContentText(workbook({ sheets: { s1: { id: 's1', cellData: { 0: { 0: { v: 1, m: '' } } } } } }))).not.toBe(base)
-    expect(canonicalContentText(workbook({ sheetOrder: ['s1', 's2'] }))).not.toBe(base)
-    expect(canonicalContentText(workbook({ resources: [{ name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0}}}' }] }))).not.toBe(base)
+    const base = sheetText(workbook())
+    expect(sheetText(workbook({ sheets: { s1: { id: 's1', cellData: { 0: { 0: { v: 2 } } } } } }))).not.toBe(base)
+    expect(sheetText(workbook({ sheets: { s1: { id: 's1', cellData: { 0: { 0: { v: 1, m: '' } } } } } }))).not.toBe(base)
+    expect(sheetText(workbook({ sheetOrder: ['s1', 's2'] }))).not.toBe(base)
+    expect(sheetText(workbook({ resources: [{ name: 'SHEET_FILTER_PLUGIN', data: '{"s1":{"ref":{"startRow":0}}}' }] }))).not.toBe(base)
   })
 })
 
@@ -234,13 +244,61 @@ describe('测试向量：规范文字的 UTF-8 字节的 SHA-256（服务端与�
   })
 
   it('M0 的 sheet-all（S0 与 S1 同一个）', async () => {
-    expect(await sha256(contentHashInput(canonicalContentText(S0)))).toBe('42418b745c57e5b0098bb9428fd5798270aa5468590bd6fe2769a7a86c0535d8')
-    expect(await sha256(contentHashInput(canonicalContentText(S1)))).toBe('42418b745c57e5b0098bb9428fd5798270aa5468590bd6fe2769a7a86c0535d8')
+    expect(await sha256(contentHashInput(sheetText(S0)))).toBe('42418b745c57e5b0098bb9428fd5798270aa5468590bd6fe2769a7a86c0535d8')
+    expect(await sha256(contentHashInput(sheetText(S1)))).toBe('42418b745c57e5b0098bb9428fd5798270aa5468590bd6fe2769a7a86c0535d8')
   })
 
   it('新表格的模板（资源全是空的）', async () => {
-    const canonical = canonicalContentText(sheetSnapshotFor(UNIT))
+    const canonical = sheetText(sheetSnapshotFor(UNIT))
     expect(canonical).toBe(`{"appVersion":"1.0.1","id":"${UNIT}","locale":"zhCN","name":"","resources":[],"sheetOrder":["sheet-1"],"sheets":{"sheet-1":{"cellData":{},"columnCount":20,"columnData":{},"columnHeader":{"height":20,"hidden":0},"defaultColumnWidth":88,"defaultRowHeight":24,"freeze":{"startColumn":-1,"startRow":-1,"xSplit":0,"ySplit":0},"hidden":0,"id":"sheet-1","mergeData":[],"name":"工作表1","rightToLeft":0,"rowCount":1000,"rowData":{},"rowHeader":{"hidden":0,"width":46},"showGridlines":1,"tabColor":""}},"styles":{}}`)
     expect(await sha256(contentHashInput(canonical))).toBe('464561bca9771e3a2581ff288818c99d7d6701af932ce1abff8194c2af61a2ef')
+  })
+})
+
+describe('按档案规范化（M6-P1 S4 spec §5）', () => {
+  /** 一份最小的文字文档：每个用例在它上面改一处 */
+  function doc(overrides: Record<string, unknown> = {}): string {
+    return JSON.stringify({ id: 'd', body: { dataStream: '正文\r\n', paragraphs: [{ startIndex: 2 }] }, documentStyle: { documentFlavor: 2 }, settings: {}, resources: [], ...overrides })
+  }
+
+  it('文字文档去掉 settings.zoomRatio：缩放不同的两份内容相同；settings 里别的键原样保留', () => {
+    expect(canonicalContentText(doc({ settings: { zoomRatio: 1.5 } }), 'doc@1')).toBe(canonicalContentText(doc(), 'doc@1'))
+    expect(canonicalContentText(doc({ settings: { zoomRatio: 2 } }), 'doc@1')).toContain('"settings":{}')
+    expect(canonicalContentText(doc({ settings: { zoomRatio: 2, other: 1 } }), 'doc@1')).toContain('"settings":{"other":1}')
+  })
+
+  it('各档案只去自己的视图状态：表格不看 settings（sheet@1 的结果逐字节不变），文字文档不看 sheets', () => {
+    expect(canonicalContentText(workbook({ settings: { zoomRatio: 2 } }), 'sheet@1')).toContain('"settings":{"zoomRatio":2}')
+    expect(canonicalContentText(doc({ sheets: { s1: { zoomRatio: 2, scrollTop: 1 } } }), 'doc@1')).toContain('"sheets":{"s1":{"scrollTop":1,"zoomRatio":2}}')
+  })
+
+  it('settings 不是对象时原样写出（服务端的检查不判它，只为结果确定）', () => {
+    expect(canonicalContentText(doc({ settings: 'x' }), 'doc@1')).toContain('"settings":"x"')
+    expect(canonicalContentText(doc({ settings: null }), 'doc@1')).toContain('"settings":null')
+    expect(canonicalContentText(doc({ settings: [1] }), 'doc@1')).toContain('"settings":[1]')
+  })
+
+  it('文字文档的资源与表格同一个口径：权限、Word 样式与脚注的空资源去掉；图片资源的 order 为空时在第一层去掉，图片的先后由顶层的 drawingsOrder 体现', () => {
+    const empties = [{ name: 'DOC_OBJECT_PERMISSION_PLUGIN', data: '[]' }, { name: 'DOC_WORD_STYLES_PLUGIN', data: '' }, { name: 'DOC_NOTE_PLUGIN', data: '' }, { name: 'DOC_HYPER_LINK_PLUGIN', data: '{"links":[]}' }]
+    expect(canonicalContentText(doc({ resources: empties }), 'doc@1')).toBe(canonicalContentText(doc(), 'doc@1'))
+    const drawings = { a: { drawingId: 'a' }, b: { drawingId: 'b' } }
+    const drawn = (order: readonly string[]): string => doc({ drawings, drawingsOrder: order, resources: [{ name: 'DOC_DRAWING_PLUGIN', data: JSON.stringify({ data: drawings, order }) }] })
+    expect(canonicalContentText(drawn(['a', 'b']), 'doc@1')).not.toBe(canonicalContentText(drawn(['b', 'a']), 'doc@1'))
+    expect(canonicalContentText(drawn([]), 'doc@1')).toContain('"resources":[{"data":{"data":{"a":{"drawingId":"a"},"b":{"drawingId":"b"}}},"name":"DOC_DRAWING_PLUGIN"}]')
+  })
+
+  it('canonicalContentText 与对解析结果的 canonicalContentTextOf 相同；不改传入的值', () => {
+    const text = doc({ settings: { zoomRatio: 3 } })
+    const parsed = JSON.parse(text) as unknown
+    expect(canonicalContentTextOf(parsed, 'doc@1')).toBe(canonicalContentText(text, 'doc@1'))
+    expect(JSON.stringify(parsed)).toBe(text)
+  })
+
+  it('测试向量：M0 的 doc-all（经 SDK 保存的形状，三个浏览器保存的结果与原文逐字节相同）；缩放之后不变', async () => {
+    const text = JSON.stringify(M0_DOC_ALL)
+    const canonical = canonicalContentText(text, 'doc@1')
+    // 与按 ADR-011 与 S4 spec 的文字另写的 Python 实现算出的相同（M6-P1 实施记录 S4）
+    expect(await sha256(contentHashInput(canonical))).toBe('727f21ccdb14f260e5377435850b4354fd030b81a617e396666fb7b873467347')
+    expect(canonicalContentText(JSON.stringify({ ...M0_DOC_ALL, settings: { zoomRatio: 1.25 } }), 'doc@1')).toBe(canonical)
   })
 })

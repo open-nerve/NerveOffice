@@ -1,10 +1,9 @@
-import type { EditorAccess, FormulaMode, FormulaWorkerFailure, SheetEditor } from '../../editor/index.ts'
-import type { CreateModeEditor } from './editor-slot.ts'
+import type { EditorAccess, FormulaMode, FormulaWorkerFailure, SheetEditor, SheetEditorLifecycle, SheetViewState } from '../../editor/index.ts'
 import type { FormulaRecovery, FormulaRecoveryContext } from './formula-recovery.ts'
+import type { CreateModeEditor, ReplaceOptions } from './sheet-editor-slot.ts'
 import { vi } from 'vitest'
+import { createEditorSlot, deferred, INITIAL, leaseFixture, prepare, fixture as sessionFixture } from '../document-editor/index.test-support.ts'
 import { unusedCsv } from './csv.test-support.ts'
-import { deferred, INITIAL, leaseFixture, prepare, fixture as sessionFixture } from './editing-session.test-support.ts'
-import { createEditorSlot } from './editor-slot.ts'
 import { createFormulaFallback } from './formula-fallback.ts'
 import { createFormulaRecovery } from './formula-recovery.ts'
 
@@ -140,7 +139,8 @@ export async function recoveryFixture(access: EditorAccess, failedBeforeAttach =
     return next.editor
   })
   const fallback = createFormulaFallback({ createEditor, onChange: () => recovering?.sync() })
-  const slot = createEditorSlot({ createEditor: fallback.createEditor, onChange: () => recovering?.sync(), reportError: base.options.reportError })
+  // 与表格的编辑模式建槽位的写法相同（sheet-edit-mode.ts 交给会话层的编辑模式：表格的类型参数、空对象作默认选项）
+  const slot = createEditorSlot<SheetEditor, SheetViewState | undefined, SheetEditorLifecycle, ReplaceOptions>({ createEditor: fallback.createEditor, defaultOptions: {}, onChange: () => recovering?.sync(), reportError: base.options.reportError })
   const changed = vi.fn()
   recovering = createFormulaRecovery({
     fallback,

@@ -6,17 +6,12 @@ import type { PageLocation } from '../../shared/lib/page-location.ts'
 import type { SessionChannel } from '../../shared/lib/session-channel.ts'
 import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
 import type { SaveRequest } from '../../shared/local-drafts/save-request.ts'
-import type { Autosave, AutosaveTuning } from './autosave.ts'
-import type { EditLeaseApi } from './edit-lease.ts'
-import type { EditModeState } from './edit-mode.ts'
-import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
-import type { EditorPage, EditorPageApi } from './editor-page.ts'
-import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
-import type { MarkerStorage } from './pending-save-marker.ts'
-import type { SameBrowser } from './same-browser.ts'
+import type { Autosave, AutosaveTuning, EditLeaseApi, EditorPageApi, FetchedEditStatus, HandoverTrace, HandoverTraceEvent, LoadedContent, MarkerStorage, SameBrowser } from '../document-editor/index.test-support.ts'
+import type { EditModeState } from '../document-editor/index.ts'
+import type { SheetEditorPage } from './sheet-editor-page.ts'
 import { EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError, requestSession, setCsrfToken } from '../../shared/api/index.ts'
 import { associatedSessionPermit, rememberSessionPermit } from '../../shared/api/session-association.ts'
 import { connectionState, createConnectionState } from '../../shared/lib/connection-state.ts'
@@ -28,18 +23,12 @@ import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
-import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+import { CONTENT_UNCHANGED, createEditorPage, fakeBrowser, installPageGuards, keyOf, lockNameOf, memoryIssuedRequest, newKey, pendingSaveMarker, sameBrowserFor } from '../document-editor/index.test-support.ts'
+import { DEFAULT_AUTOSAVE_LIMITS } from '../document-editor/index.ts'
 import { csvFile } from './csv-controller.test-support.ts'
 import * as csvDownloads from './csv-download.ts'
 import { unusedCsv } from './csv.test-support.ts'
-import { CONTENT_UNCHANGED } from './editor-api.ts'
-import { createEditorPage } from './editor-page.ts'
-import { memoryIssuedRequest } from './issued-request.test-support.ts'
-import { newKey } from './outbox/persistent-working-draft.test-support.ts'
-import { installPageGuards } from './page-guards.ts'
-import { keyOf, pendingSaveMarker } from './pending-save-marker.ts'
-import { fakeBrowser } from './same-browser.test-support.ts'
-import { lockNameOf, sameBrowserFor } from './same-browser.ts'
+import { sheetEditorAssembly } from './sheet-editor-page.ts'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
@@ -901,7 +890,7 @@ interface Setup {
   readonly documentId?: string | undefined
   /** 本页这次加载的标识与 requestId 的生成：默认 id-1、id-2……；冲突的详情要按契约解析时换成 UUID 的写法 */
   readonly newId?: () => string
-  readonly api?: Partial<Omit<EditorPageApi, 'editLease'>>
+  readonly api?: Partial<Omit<EditorPageApi, 'editLease' | 'editRequest'>> & { readonly editRequest?: ReturnType<EditorPageApi['editRequest']> }
   readonly editLease?: Partial<EditLeaseApi>
   readonly createEditor?: (options: CreateOptions) => Promise<SheetEditor>
   /**
@@ -949,7 +938,9 @@ function setup(options: Setup = {}) {
       renew: vi.fn(overrides.editRequest?.renew ?? (async (): Promise<EditRequestOutcome> => REQUEST_PENDING)),
       cancel: vi.fn(overrides.editRequest?.cancel ?? (async (): Promise<void> => {})),
     },
-  } satisfies EditorPageApi
+  }
+  // 编辑权与请求编辑的请求按档案取（S8 spec §2.6）：表格页取到的就是上面这两组假件
+  const pageApi = { ...api, editLease: () => api.editLease, editRequest: () => api.editRequest } satisfies EditorPageApi
   const createEditor = vi.fn(options.createEditor ?? (async (input: CreateOptions) => {
     const next = fakes.length === 0 ? fake : fakeEditor()
     Object.assign(next.editor, { formulaMode: input.formulaMode ?? 'worker' })
@@ -974,8 +965,8 @@ function setup(options: Setup = {}) {
     documentId: 'documentId' in options ? options.documentId : DOCUMENT_ID,
     surface,
     chrome,
-    api,
-    createEditor,
+    api: pageApi,
+    assemblies: { sheet: sheetEditorAssembly(createEditor) },
     page,
     sessionChannel: channel,
     clock: time.clock,
@@ -1022,10 +1013,10 @@ describe('CSV 正式页面接线', () => {
 
   async function preview(h: ReturnType<typeof csvSetup>) {
     await h.editorPage.load()
-    expect(h.editorPage.csv).toBeDefined()
-    h.editorPage.csv.openImport()
-    await h.editorPage.csv.chooseFile(csvFile('001,甲'))
-    expect(h.editorPage.csv.view().dialog).toMatchObject({ kind: 'import', stage: 'preview' })
+    expect(h.editorPage.extension()?.csv).toBeDefined()
+    h.editorPage.extension()!.csv.openImport()
+    await h.editorPage.extension()!.csv.chooseFile(csvFile('001,甲'))
+    expect(h.editorPage.extension()!.csv.view().dialog).toMatchObject({ kind: 'import', stage: 'preview' })
   }
 
   async function createdCsvPage() {
@@ -1051,17 +1042,17 @@ describe('CSV 正式页面接线', () => {
 
   it('创建见证交接到原新空白页，准备/插表沿原控制器，重复交接不能再次写入', async () => {
     const h = await createdCsvPage()
-    expect(await h.editorPage.importCreatedCsv(h.table, h.intent)).toBe(true)
+    expect(await h.editorPage.extension()!.importCreatedCsv(h.table, h.intent)).toBe(true)
     expect(h.inserted).toEqual([h.table])
     expect(h.editLease.renew).toHaveBeenCalledOnce()
     expect(h.api.save).not.toHaveBeenCalled()
-    expect(await h.editorPage.importCreatedCsv(h.table, h.intent)).toBe(false)
+    expect(await h.editorPage.extension()!.importCreatedCsv(h.table, h.intent)).toBe(false)
     expect(h.inserted).toHaveLength(1)
   })
 
   it.each(['documentId', 'userId', 'csrfToken'] as const)('创建见证 %s 不匹配时不写入', async (field) => {
     const h = await createdCsvPage()
-    expect(await h.editorPage.importCreatedCsv(h.table, { ...h.intent, [field]: 'different' })).toBe(false)
+    expect(await h.editorPage.extension()!.importCreatedCsv(h.table, { ...h.intent, [field]: 'different' })).toBe(false)
     expect(h.inserted).toEqual([])
     expect(h.api.session).toHaveBeenCalledOnce()
   })
@@ -1071,7 +1062,7 @@ describe('CSV 正式页面接线', () => {
     const response = deferred<SessionResponse>()
     h.api.session.mockReturnValueOnce(response.promise)
     let current = true
-    const applying = h.editorPage.importCreatedCsv(h.table, { ...h.intent, current: () => current })
+    const applying = h.editorPage.extension()!.importCreatedCsv(h.table, { ...h.intent, current: () => current })
     current = false
     response.resolve(ALICE)
     expect(await applying).toBe(false)
@@ -1083,7 +1074,7 @@ describe('CSV 正式页面接线', () => {
     const h = await createdCsvPage()
     const commit = vi.fn(async () => true)
     Object.assign(h.fake.editor, { uncommittedInput: () => 'pending', commitCellEditing: commit })
-    expect(await h.editorPage.importCreatedCsv(h.table, h.intent)).toBe(false)
+    expect(await h.editorPage.extension()!.importCreatedCsv(h.table, h.intent)).toBe(false)
     expect(commit).not.toHaveBeenCalled()
     expect(h.inserted).toEqual([])
   })
@@ -1093,14 +1084,14 @@ describe('CSV 正式页面接线', () => {
     await preview(h)
     const check = deferred<SessionResponse>()
     h.api.session.mockReturnValueOnce(check.promise)
-    const importing = h.editorPage.csv.confirmImport()
+    const importing = h.editorPage.extension()!.csv.confirmImport()
     expect(h.editorPage.view().confirmingSession).toBe(true)
-    expect(h.editorPage.csv.view().dialog).toMatchObject({ kind: 'import', stage: 'applying' })
+    expect(h.editorPage.extension()!.csv.view().dialog).toMatchObject({ kind: 'import', stage: 'applying' })
     expect(h.inserted).toEqual([])
     check.resolve({ ...ALICE })
     await importing
     expect(h.inserted[0]?.rows).toEqual([['001', '甲']])
-    expect(h.editorPage.csv.view()).toMatchObject({ dialog: { kind: 'closed' }, notice: 'imported' })
+    expect(h.editorPage.extension()!.csv.view()).toMatchObject({ dialog: { kind: 'closed' }, notice: 'imported' })
     expect(h.api.session).toHaveBeenCalledTimes(2)
     expect(h.editLease.renew).toHaveBeenCalledOnce()
     expect(h.api.save).not.toHaveBeenCalled()
@@ -1111,7 +1102,7 @@ describe('CSV 正式页面接线', () => {
     await preview(h)
     const check = deferred<SessionResponse>()
     h.api.session.mockReturnValueOnce(check.promise)
-    const importing = h.editorPage.csv.confirmImport()
+    const importing = h.editorPage.extension()!.csv.confirmImport()
     if (kind === 'offline')
       h.online.set(false)
     if (kind === 'dispose')
@@ -1132,17 +1123,17 @@ describe('CSV 正式页面接线', () => {
     await importing
     expect(h.inserted).toEqual([])
     expect(h.api.save).not.toHaveBeenCalled()
-    expect(h.editorPage.csv.view().notice).toBeUndefined()
+    expect(h.editorPage.extension()!.csv.view().notice).toBeUndefined()
     if (kind !== 'network' && kind !== 'offline')
-      expect(h.editorPage.csv.view().dialog.kind).toBe('closed')
+      expect(h.editorPage.extension()!.csv.view().dialog.kind).toBe('closed')
   })
 
   it('未结束预览遇到切换实例，立即清除而不让新实例继承', async () => {
     const h = csvSetup()
     await preview(h)
     await h.editorPage.exitEditing()
-    expect(h.editorPage.csv.view()).toMatchObject({ dialog: { kind: 'closed' }, problem: 'unavailable' })
-    await h.editorPage.csv.confirmImport()
+    expect(h.editorPage.extension()!.csv.view()).toMatchObject({ dialog: { kind: 'closed' }, problem: 'unavailable' })
+    await h.editorPage.extension()!.csv.confirmImport()
     expect(h.inserted).toEqual([])
   })
 
@@ -1153,12 +1144,12 @@ describe('CSV 正式页面接线', () => {
     })
     const h = csvSetup({ editIntent: false })
     await h.editorPage.load()
-    expect(h.editorPage.csv).toBeDefined()
+    expect(h.editorPage.extension()?.csv).toBeDefined()
     h.online.set(false)
-    expect(h.editorPage.csv.view()).toMatchObject({ canImport: false, canExport: true })
-    h.editorPage.csv.openExport()
-    await h.editorPage.csv.exportSelected()
-    expect(h.editorPage.csv.view()).toMatchObject({ problem: undefined, notice: 'exported' })
+    expect(h.editorPage.extension()!.csv.view()).toMatchObject({ canImport: false, canExport: true })
+    h.editorPage.extension()!.csv.openExport()
+    await h.editorPage.extension()!.csv.exportSelected()
+    expect(h.editorPage.extension()!.csv.view()).toMatchObject({ problem: undefined, notice: 'exported' })
     expect(downloaded[0]?.name).toBe('周报-工作表1.csv')
     expect(new TextDecoder().decode(downloaded[0]?.bytes)).toBe('"原显示值"\r\n')
     expect(h.api.session).toHaveBeenCalledOnce()
@@ -1283,7 +1274,7 @@ describe('公式恢复的真实页面交互屏障', () => {
     expect(blocked(h.surface)).toBe(true)
     await h.editorPage.exitEditing()
     expect(h.editLease.release).not.toHaveBeenCalled()
-    h.editorPage.retryFormulaRecovery()
+    h.editorPage.extension()!.retryFormulaRecovery()
     await h.time.advance(0)
     expect(h.editorPage.view()).toMatchObject({ formulaRecovery: { phase: 'ready' }, surface: 'ready' })
     expect(blocked(h.surface)).toBe(false)
@@ -1296,14 +1287,14 @@ async function VIEWER_STATUS(): Promise<FetchedEditStatus> {
 }
 
 /** 阅读与编辑的状态 */
-function modeOf(editorPage: EditorPage): EditModeState | undefined {
+function modeOf(editorPage: SheetEditorPage): EditModeState | undefined {
   return editorPage.view().mode
 }
 
 async function recoveryReader() {
   const key = { userId: ALICE.user.id, documentId: DOCUMENT_ID }
   const snapshot = '{"id":"unit-1","restored":"本机修改"}'
-  const meta = sampleMeta({ ...key, format: PAGE_CLIENT_FORMAT, baseRevision: 3, writeEpoch: 6, draftSeq: 37, inFlight: null, updatedAt: new Date(2026, 9, 4, 15, 0).getTime(), rawBytes: new TextEncoder().encode(snapshot).byteLength })
+  const meta = sampleMeta({ ...key, format: clientFormatOf('sheet'), baseRevision: 3, writeEpoch: 6, draftSeq: 37, inFlight: null, updatedAt: new Date(2026, 9, 4, 15, 0).getTime(), rawBytes: new TextEncoder().encode(snapshot).byteLength })
   const gzip = await gzipBytes(new TextEncoder().encode(snapshot))
   const original = { kind: 'observed' as const, observation: { key, id: 'original' }, record: { kind: 'draft' as const, meta, gzip }, writer: undefined }
   const observe = vi.fn<RecoveryReader['observe']>().mockResolvedValue(original)
@@ -1616,15 +1607,15 @@ const UNAUTHENTICATED = new ApiError(401, 'UNAUTHENTICATED', '请先登录')
 describe('页面、模式与编辑会话共用连接事实', () => {
   it('页面只读当前实例名称，载入前与卸载后无名称，不触发捕获', async () => {
     const h = setup()
-    expect(h.editorPage.sheetName('s')).toBeUndefined()
+    expect(h.editorPage.extension()?.sheetName('s')).toBeUndefined()
     await h.editorPage.load()
     vi.mocked(h.fake.editor.sheetName).mockReturnValue('预算')
     const capture = vi.spyOn(h.fake.editor, 'capture')
-    expect(h.editorPage.sheetName('s')).toBe('预算')
+    expect(h.editorPage.extension()?.sheetName('s')).toBe('预算')
     expect(capture).not.toHaveBeenCalled()
     h.editorPage.dispose()
     vi.mocked(h.fake.editor.sheetName).mockClear()
-    expect(h.editorPage.sheetName('s')).toBeUndefined()
+    expect(h.editorPage.extension()?.sheetName('s')).toBeUndefined()
     expect(h.fake.editor.sheetName).not.toHaveBeenCalled()
   })
 
@@ -1858,7 +1849,11 @@ describe('编辑器页的载入（P4 设计 §3.7.1）', () => {
   it.each([
     ['档案', { profile: 'sheet@2' }],
     ['格式版本', { formatVersion: 2 }],
-  ])('%s不认识：不进入编辑，不改写', async (_case, change) => {
+    // M6-P1 设计 §3.4：按类型装配编辑器。本页装配的是表格；文字文档的编辑器在 M6-P2，之前打开文字文档不能交给表格编辑器
+    ['类型（文字文档，本页没有装配它的编辑器）', { type: 'doc', profile: 'doc@1' }],
+    ['类型（响应里没见过的）', { type: 'unknown', profile: 'slides@1' }],
+    ['类型与档案不配（表格带着文字文档的档案）', { profile: 'doc@1' }],
+  ] as const)('%s不认识：不进入编辑，不改写', async (_case, change) => {
     const { editorPage, createEditor } = setup({ api: { document: async () => ({ ...DETAIL, ...change }) } })
     await editorPage.load()
     expect(editorPage.view().load).toEqual({ kind: 'unsupported' })
@@ -3592,7 +3587,7 @@ describe('阅读与编辑的切换（M3-P2 设计 §3.1、§3.4）', () => {
     await settle()
     expect(modeOf(editorPage)).toMatchObject({ kind: 'lost', unsaved: true, readable: true })
     await editorPage.saveCopy()
-    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: PAGE_CLIENT_FORMAT }, expect.anything())
+    expect(api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^id-\d+$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: clientFormatOf('sheet') }, expect.anything())
     expect(modeOf(editorPage)).toMatchObject({ kind: 'reading', notice: { kind: 'copied', document: { id: COPY_ID } } })
   })
 

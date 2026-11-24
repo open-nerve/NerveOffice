@@ -12,6 +12,7 @@ import { canonicalContentText, contentHashInput, UNIVER_SDK_VERSION } from '@ner
 import { describe, expect, it } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { documentTooNew } from './client-format-gate.ts'
+import { docSnapshot } from './doc-snapshot.test-support.ts'
 import { DocumentConflictCopyService } from './document-conflict-copy.service.ts'
 import { ALICE, ALICE_SPACE, BOB, BOB_SPACE, CURRENT_CLIENT, FakeStore, HTTP_ORIGIN, member, TEAM_SPACE } from './documents.test-support.ts'
 import { conflictCopyPayloadDigest } from './payload-digest.ts'
@@ -53,7 +54,7 @@ function teamSource(store: FakeStore, options: { folderId?: string } = {}) {
 
 /** 规范化的内容哈希（contracts 的口径） */
 function hashOf(body: GzipBody): Buffer {
-  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8')))).digest()
+  return createHash('sha256').update(contentHashInput(canonicalContentText(body.decompressed.toString('utf8'), 'sheet@1'))).digest()
 }
 
 /** 本页捕获的快照（顶层 id 默认是原文档的 unitId），上传的是它的 gzip */
@@ -461,5 +462,54 @@ describe('DocumentConflictCopyService.copy：requestId 幂等（与新建、复�
     const first = await service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN)
     store.documentEntries.set(first.id, 'trash-entry')
     expect((await errorOf(service.copy(member(ALICE), source.id, command, upload(source.unitId), HTTP_ORIGIN))).code).toBe('REQUEST_ID_CONFLICT')
+  })
+})
+
+describe('DocumentConflictCopyService.copy：上报的档案（DEF-055，M6-P1 S5 设计 §3.4）', () => {
+  function docUpload(unitId: string): GzipBody {
+    const decompressed = Buffer.from(JSON.stringify(docSnapshot(unitId)), 'utf8')
+    return { compressed: zlib.gzipSync(decompressed), decompressed }
+  }
+
+  /** 艾米个人空间里的一份文字文档（P1 还不能新建，直接摆进假仓储） */
+  function docSource(store: FakeStore, overrides: Parameters<FakeStore['addDocument']>[0] = {}) {
+    const document = store.addDocument({ spaceId: ALICE_SPACE, type: 'doc', profile: 'doc@1', ...overrides })
+    store.contents.set(document.id, { snapshot: zlib.gzipSync('{}'), rawBytes: 2, contentHash: null, resourceNames: null })
+    return document
+  }
+
+  it('上报的档案不是这类文档在服务端的档案：CLIENT_OUTDATED（format），不建副本，日志记文档 id 与两边的档案；看不到的照样 NOT_FOUND', async () => {
+    const { store, service } = setup()
+    const source = store.addDocument({ spaceId: ALICE_SPACE })
+    const error = await errorOf(service.copy(member(ALICE), source.id, copyCommand({ profile: 'doc@1' }), docUpload(source.unitId), HTTP_ORIGIN))
+    expect([error.code, error.details]).toEqual(['CLIENT_OUTDATED', { reason: 'format' }])
+    expect(store.inspector.inspect).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'doc@1', ALICE)
+    expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
+    expect(store.logs().find(entry => entry.reportedProfile !== undefined)).toMatchObject({ level: 'warn', documentId: source.id, reportedProfile: 'doc@1', documentProfile: 'sheet@1' })
+    expect((await errorOf(service.copy(member(BOB), source.id, copyCommand({ profile: 'doc@1' }), docUpload(source.unitId), HTTP_ORIGIN))).code).toBe('NOT_FOUND')
+  })
+
+  it('表格的页面另存文字文档：CLIENT_OUTDATED（format）', async () => {
+    const { store, service } = setup()
+    const source = docSource(store)
+    const error = await errorOf(service.copy(member(ALICE), source.id, copyCommand(), upload(source.unitId), HTTP_ORIGIN))
+    expect([error.code, error.details]).toEqual(['CLIENT_OUTDATED', { reason: 'format' }])
+    expect(store.repositories.documents.copyFrom).not.toHaveBeenCalled()
+  })
+
+  it('文字文档另存为副本：按 doc@1 检查，类型照原文档，信封记服务端的档案', async () => {
+    const { store, service } = setup()
+    const source = docSource(store)
+    const copy = await service.copy(member(ALICE), source.id, copyCommand({ profile: 'doc@1' }), docUpload(source.unitId), HTTP_ORIGIN)
+    expect(copy).toMatchObject({ type: 'doc', profile: 'doc@1', formatVersion: 1 })
+    expect(store.inspector.inspect).toHaveBeenCalledExactlyOnceWith(expect.anything(), 'doc@1', ALICE)
+    expect(store.repositories.documents.copyFrom.mock.calls.map(([id, command]) => [id, command.envelope?.profile])).toEqual([[source.id, 'doc@1']])
+  })
+
+  it('审查 A7 照旧：原文档的档案比服务端新（回滚之后），对照的是服务端对这类文档的档案，失去编辑权的人照样存副本', async () => {
+    const { store, service } = setup()
+    const source = docSource(store, { profile: 'doc@2' as 'doc@1', sdkVersion: '99.0.0' })
+    const copy = await service.copy(member(ALICE), source.id, copyCommand({ profile: 'doc@1' }), docUpload(source.unitId), HTTP_ORIGIN)
+    expect(store.documents.get(copy.id)).toMatchObject({ type: 'doc', profile: 'doc@1', sdkVersion: UNIVER_SDK_VERSION })
   })
 })

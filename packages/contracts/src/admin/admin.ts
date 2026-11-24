@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { DOCUMENT_TYPES } from '../documents/documents.ts'
+import { responseDocumentTypeSchema } from '../documents/documents.ts'
 import { uuidSchema } from '../ids/ids.ts'
 import { localKeySummarySchema, localKeyVersionSchema } from '../local-keys/local-keys.ts'
 import { SPACE_NAME_MAX_LENGTH, SPACE_ROLES, SPACE_STATUSES, spaceNameSchema } from '../spaces/spaces.ts'
@@ -189,7 +189,7 @@ export type ChangeSpaceVisibilityRequest = z.infer<typeof changeSpaceVisibilityR
 export const adminUserDocumentSchema = z.object({
   id: z.uuid(),
   title: z.string(),
-  type: z.enum(DOCUMENT_TYPES),
+  type: responseDocumentTypeSchema,
   updatedAt: z.iso.datetime(),
 })
 

@@ -3,19 +3,13 @@ import type { EditorAccess, FormulaMode, FormulaWorkerFailure, OpenCheck, SheetE
 import type { DocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
 import type { RecoveryReader } from '../../shared/local-drafts/recovery-reader.ts'
 import type { OutboxHost } from '../../shared/outbox/outbox-host.ts'
-import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning } from './autosave.ts'
-import type { EditLeaseApi } from './edit-lease.ts'
-import type { EditMode, EditModeApi, EditModeOptions, EditModeState, LostMode, ReadingMode } from './edit-mode.ts'
-import type { FetchedEditStatus, LoadedContent } from './editor-api.ts'
-import type { HandoverTrace, HandoverTraceEvent } from './handover-trace.ts'
-import type { FakeLeaseServer } from './lease-server.test-support.ts'
-import type { PendingSaveMarker } from './pending-save-marker.ts'
-import type { FakeBrowser } from './same-browser.test-support.ts'
-import type { HeldLock, SameBrowser } from './same-browser.ts'
+import type { Autosave, AutosaveLimits, AutosavePage, AutosaveTuning, EditLeaseApi, EditModeApi, FakeBrowser, FakeLeaseServer, FetchedEditStatus, HandoverTrace, HandoverTraceEvent, HeldLock, LoadedContent, LostMode, PendingSaveMarker, ReadingMode, SameBrowser } from '../document-editor/index.test-support.ts'
+import type { EditModeState } from '../document-editor/index.ts'
+import type { SheetEditMode, SheetEditModeOptions } from './sheet-edit-mode.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_IDLE_RECLAIM_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS, EDIT_REQUEST_RENEW_SECONDS, EDIT_TAB_HANDOVER_ACK_MS, EDIT_TAB_HANDOVER_DONE_MS, sheetSnapshotFor } from '@nerve-office/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FormulaWorkerError } from '../../editor/index.ts'
-import { PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { clientFormatOf } from '../../shared/api/client-format.ts'
 import { ApiError, NetworkError } from '../../shared/api/index.ts'
 import { createConnectionState } from '../../shared/lib/connection-state.ts'
 import { createDocumentRecovery } from '../../shared/local-drafts/document-recovery.ts'
@@ -27,18 +21,10 @@ import { createDraftWriter } from '../../shared/outbox/draft-writer.ts'
 import { fakeLeaseClock, settle } from '../../shared/outbox/fake-lease-clock.test-support.ts'
 import { createLocalKeyKeeper } from '../../shared/outbox/local-key.ts'
 import { testSessionPermit } from '../../shared/outbox/session-fence.test-support.ts'
-import { DEFAULT_AUTOSAVE_LIMITS } from './autosave.ts'
+import { channelNameOf, CONTENT_UNCHANGED, EXIT_RELEASE_WAIT_MS, fakeBrowser, fakeLeaseServer, HEARTBEAT_MS, issuedRequestLockNameOf, lockNameOf, memoryIssuedRequest, newKey, PENDING_SAVE_POLL_MS, READING_CHECK_INTERVAL_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, sameBrowserFor, servedToken, TAB_HANDOVER_BUSY_RETRY_MS, TAKEOVER_STEAL_WAIT_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from '../document-editor/index.test-support.ts'
+import { DEFAULT_AUTOSAVE_LIMITS } from '../document-editor/index.ts'
 import { unusedCsv } from './csv.test-support.ts'
-import { HEARTBEAT_MS, SAME_USER_RETRIES, SAME_USER_RETRY_DELAY_MS, UNKNOWN_OUTCOME_RETRY_DELAY_MS } from './edit-lease.ts'
-import { createEditMode, EXIT_RELEASE_WAIT_MS, TAKEOVER_STEAL_WAIT_MS } from './edit-mode.ts'
-import { CONTENT_UNCHANGED } from './editor-api.ts'
-import { memoryIssuedRequest } from './issued-request.test-support.ts'
-import { fakeLeaseServer, servedToken } from './lease-server.test-support.ts'
-import { newKey } from './outbox/persistent-working-draft.test-support.ts'
-import { READING_CHECK_INTERVAL_MS } from './reading-checks.ts'
-import { fakeBrowser } from './same-browser.test-support.ts'
-import { channelNameOf, issuedRequestLockNameOf, lockNameOf, sameBrowserFor } from './same-browser.ts'
-import { PENDING_SAVE_POLL_MS, TAB_HANDOVER_BUSY_RETRY_MS } from './self-takeover.ts'
+import { createSheetEditMode } from './sheet-edit-mode.ts'
 
 vi.hoisted(() => {
   globalThis.Path2D ??= class {} as unknown as typeof Path2D
@@ -70,6 +56,8 @@ vi.mock('../../shared/outbox/draft-codec.ts', async (importOriginal) => {
 
 const DOCUMENT_ID = '0199a2c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d'
 const PAGE_ID = '0199a2c4-1f2e-7a3b-8c4d-00000000aaaa'
+/** 本页（表格）的档案 */
+const SHEET_FORMAT = clientFormatOf('sheet')
 const AMY = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e1', username: 'amy', displayName: '艾米' }
 /** 请求编辑的人（M3-P5） */
 const BEN = { id: '0199a2c4-1f2e-7a3b-8c4d-0000000000e2', username: 'ben', displayName: '本' }
@@ -381,8 +369,8 @@ function fakeAutosave(held: boolean) {
 
 interface Setup {
   readonly recovery?: DocumentRecovery
-  readonly localDrafts?: EditModeOptions['localDrafts']
-  readonly connection?: EditModeOptions['connection']
+  readonly localDrafts?: SheetEditModeOptions['localDrafts']
+  readonly connection?: SheetEditModeOptions['connection']
   readonly api?: Partial<Omit<EditModeApi, 'editLease'>>
   readonly editLease?: Partial<EditLeaseApi>
   readonly now?: () => Date
@@ -407,7 +395,7 @@ interface Setup {
   readonly trace?: HandoverTrace
 }
 
-const modes: EditMode[] = []
+const modes: SheetEditMode[] = []
 const recoveries: DocumentRecovery[] = []
 
 function setup(options: Setup = {}) {
@@ -445,10 +433,11 @@ function setup(options: Setup = {}) {
   /** 这一页发出过的请求编辑的记号（审查 B2）：每个"标签页"一份 */
   const issued = memoryIssuedRequest(DOCUMENT_ID)
   let lastActive = time.now()
-  const modeOptions: EditModeOptions = {
+  const modeOptions: SheetEditModeOptions = {
     documentId: DOCUMENT_ID,
     clientInstanceId: options.clientInstanceId ?? PAGE_ID,
     userId: options.userId ?? AMY.id,
+    format: SHEET_FORMAT,
     localDrafts: options.localDrafts,
     recovery: options.recovery,
     connection: options.connection,
@@ -468,7 +457,7 @@ function setup(options: Setup = {}) {
     reportError,
     ...(options.trace === undefined ? {} : { trace: options.trace }),
   }
-  const mode = createEditMode(modeOptions)
+  const mode = createSheetEditMode(modeOptions)
   modes.push(mode)
   return {
     mode,
@@ -503,18 +492,18 @@ afterEach(() => {
     recovery.dispose()
 })
 
-function modeOf(mode: EditMode): EditModeState {
+function modeOf(mode: SheetEditMode): EditModeState {
   return mode.view().mode
 }
 
-function readingOf(mode: EditMode): ReadingMode {
+function readingOf(mode: SheetEditMode): ReadingMode {
   const current = modeOf(mode)
   if (current.kind !== 'reading')
     throw new Error(`现在不是阅读：${current.kind}`)
   return current
 }
 
-function lostOf(mode: EditMode): LostMode {
+function lostOf(mode: SheetEditMode): LostMode {
   const current = modeOf(mode)
   if (current.kind !== 'lost')
     throw new Error(`现在不是失去编辑权：${current.kind}`)
@@ -689,7 +678,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     const h = setup()
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('create', { cause: new Error('机密正文') }))
     await opened(h)
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'create', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'create', revision: 3, access: 'read', trigger: 'open', ...SHEET_FORMAT })
     await h.mode.enter()
     await h.mode.exit()
     expect(h.api.reportOpenCheck).toHaveBeenCalledOnce()
@@ -701,7 +690,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     await opened(h)
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('ready-timeout'))
     await h.mode.refresh(true)
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'ready-timeout', revision: 8, access: 'read', trigger: 'refresh', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'ready-timeout', revision: 8, access: 'read', trigger: 'refresh', ...SHEET_FORMAT })
     expect(readingOf(h.mode).damaged).toBeUndefined()
   })
 
@@ -710,7 +699,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     await opened(h)
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('error-before-ready'))
     await h.mode.enter()
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-before-ready', revision: 5, access: 'edit', trigger: 'enter', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-before-ready', revision: 5, access: 'edit', trigger: 'enter', ...SHEET_FORMAT })
     expect(modeOf(h.mode).kind).toBe('editing')
   })
 
@@ -719,7 +708,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     h.factory.createEditor.mockRejectedValueOnce(new FormulaWorkerError('image-policy')).mockRejectedValueOnce(new Error('主线程失败'))
     await opened(h)
     expect(modeOf(h.mode).kind).toBe('failed')
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'image-policy', revision: 3, access: 'read', trigger: 'open', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'image-policy', revision: 3, access: 'read', trigger: 'open', ...SHEET_FORMAT })
     const ordinary = setup()
     ordinary.factory.failNext()
     await opened(ordinary)
@@ -738,7 +727,7 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     old.compose(true)
     old.failWorker()
     await h.time.advance(0)
-    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access, trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT })
+    expect(h.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access, trigger: 'formula-recovery', ...SHEET_FORMAT })
     old.failWorker()
     old.compose(false)
     await h.time.advance(0)
@@ -755,8 +744,8 @@ describe('US-M4-13 Worker 诊断的真实页面上下文', () => {
     h.factory.last().failWorker()
     await h.time.advance(0)
     expect(h.api.reportOpenCheck.mock.calls.map(([, report]) => report)).toEqual([
-      { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
-      { failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }], revision: 3, access: 'edit', trigger: 'formula-recovery', ...PAGE_CLIENT_FORMAT },
+      { kind: 'formula-worker', failure: 'error-after-ready', revision: 3, access: 'edit', trigger: 'formula-recovery', ...SHEET_FORMAT },
+      { failures: [{ kind: 'resource-missing', resource: 'SHEET_NOTE_PLUGIN' }], revision: 3, access: 'edit', trigger: 'formula-recovery', ...SHEET_FORMAT },
     ])
     expect(h.mode.view().formulaRecovery?.problem).toBe('open-check')
     expect(h.factory.last().disposed).toBe(true)
@@ -1130,13 +1119,13 @@ async function localDrafts() {
 async function recoverySetup(options: Setup = {}, pending = false) {
   const key = { userId: AMY.id, documentId: DOCUMENT_ID }
   const snapshot = snapshotOf('待恢复的')
-  const meta = sampleMeta({ ...key, baseRevision: 3, draftSeq: 37, writeEpoch: 6, updatedAt: Date.now(), rawBytes: new TextEncoder().encode(snapshot).byteLength, inFlight: null, format: PAGE_CLIENT_FORMAT, formulasPending: pending })
+  const meta = sampleMeta({ ...key, baseRevision: 3, draftSeq: 37, writeEpoch: 6, updatedAt: Date.now(), rawBytes: new TextEncoder().encode(snapshot).byteLength, inFlight: null, format: SHEET_FORMAT, formulasPending: pending })
   const gzip = await gzipBytes(new TextEncoder().encode(snapshot))
   const observe = vi.fn<RecoveryReader['observe']>().mockResolvedValue({ kind: 'observed', observation: { key, id: 'before-register' }, record: { kind: 'draft', meta, gzip }, writer: undefined })
   const remove = vi.fn<RecoveryReader['remove']>().mockResolvedValue({ kind: 'removed', mirror: { kind: 'removed' } })
   const reader: RecoveryReader = { observe, remove, refreshKey: async () => observe(), notices: async () => ({ kind: 'notices', notices: [] }), clearNotice: async () => ({ kind: 'absent' }), dispose: vi.fn() }
   const replay = vi.fn(async () => SAVED)
-  const recovery = createDocumentRecovery({ key, pageFormat: PAGE_CLIENT_FORMAT, writtenBy: PAGE_ID, clock: fakeLeaseClock().clock, now: Date.now, still: () => true, facts: async () => ({ access: 'editable', online: true, current: { revision: 3, source: null, occupied: false } }), reader: () => reader, replay, refreshCloud: async () => {}, conflictCopy: async () => ({ ...COPY, replayed: false }), title: () => COPY.title, newId: () => 'copy-id', onSessionProblem: vi.fn(), reportError: vi.fn() })
+  const recovery = createDocumentRecovery({ key, pageFormats: [SHEET_FORMAT], writtenBy: PAGE_ID, clock: fakeLeaseClock().clock, now: Date.now, still: () => true, facts: async () => ({ access: 'editable', online: true, current: { revision: 3, source: null, occupied: false } }), reader: () => reader, replay, refreshCloud: async () => {}, conflictCopy: async () => ({ ...COPY, replayed: false }), title: () => COPY.title, newId: () => 'copy-id', onSessionProblem: vi.fn(), reportError: vi.fn() })
   recoveries.push(recovery)
   const h = setup({ ...options, recovery })
   return { ...h, recovery, observe, remove, replay, meta, gzip, key, snapshot }
@@ -1797,7 +1786,7 @@ describe('失效副本接收真实来源（M4-P2 S4）', () => {
       await h.mode.saveCopy()
       expect(h.api.conflictCopy).toHaveBeenCalledOnce()
       const [, query, bytes] = h.api.conflictCopy.mock.calls[0]!
-      expect(query).toMatchObject({ format: PAGE_CLIENT_FORMAT, formulasPending: false })
+      expect(query).toMatchObject({ format: SHEET_FORMAT, formulasPending: false })
       expect(new TextDecoder().decode(await gunzipBytes(bytes))).toBe(snapshotOf('失效捕获 B'))
       expect(encode.mock.calls.filter(([text]) => text === snapshotOf('失效捕获 B'))).toHaveLength(1)
       expect(lostOf(h.mode)).toMatchObject({ copy: { kind: 'done', document: { id: COPY.id } }, reload: { kind: 'failed' } })
@@ -2680,7 +2669,7 @@ describe('另存为副本与放弃（M3-P2 设计 §3.2、§3.4）', () => {
     expect(new TextDecoder().decode(await gunzipBytes(context.api.conflictCopy.mock.calls.at(-1)![2]))).toBe(snapshotOf('本页的'))
     // 捕获时公式已经收齐（假的编辑器）：副本不带"公式待更新"（M3-P3）
     // 草稿所基于的修订（本页打开时的修订 3）随副本请求带上，作服务端的图片授权基准（M5-P7，D-01）
-    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: PAGE_CLIENT_FORMAT }, expect.anything())
+    expect(context.api.conflictCopy).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { requestId: expect.stringMatching(/^[\da-f-]{36}$/) as unknown, title: '周报（冲突副本 2026-10-04 15:30）', formulasPending: false, baseRevision: 3, format: SHEET_FORMAT }, expect.anything())
     expect(context.api.content).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID)
     expect(context.factory.last()).toMatchObject({ access: 'read', snapshot: snapshotOf('最新的') })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: false, notice: { kind: 'copied', document: { ...COPY, replayed: false } } })
@@ -3767,7 +3756,7 @@ describe('打开自检（M3-P4 设计 §3.11–§3.13，US-M3-15）', () => {
     const outcome = await context.mode.open({ ...LOADED, canEdit: true }, { enterEdit: false })
     expect(outcome).toEqual({ kind: 'opened', entered: false, damaged: true })
     expect(readingOf(context.mode)).toMatchObject({ canEdit: true, damaged: FILTER_FAILURES, notice: undefined })
-    expect(context.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { revision: 3, access: 'read', trigger: 'open', failures: FILTER_FAILURES, ...PAGE_CLIENT_FORMAT })
+    expect(context.api.reportOpenCheck).toHaveBeenCalledExactlyOnceWith(DOCUMENT_ID, { revision: 3, access: 'read', trigger: 'open', failures: FILTER_FAILURES, ...SHEET_FORMAT })
   })
 
   it('打开时通过：没有 damaged，不上报', async () => {
@@ -6656,7 +6645,7 @@ describe('请求编辑与交出（M3-P5 设计 §3.6，US-M3-06）', () => {
   }
 
   /** 编辑时的状态（不是编辑时抛错） */
-  function editingOf(mode: EditMode): Extract<EditModeState, { kind: 'editing' }> {
+  function editingOf(mode: SheetEditMode): Extract<EditModeState, { kind: 'editing' }> {
     const current = modeOf(mode)
     if (current.kind !== 'editing')
       throw new Error(`现在不是编辑：${current.kind}`)
@@ -8146,7 +8135,7 @@ describe('异常中断的提醒（M3-P5 设计 §3.5、§3.11，US-M3-10）', ()
   /** 自己（艾米）在别的标签页或设备上的那一代异常中断 */
   const OWN: AcquiredEditInterruption = { holder: AMY, endedAt: '2026-10-04T02:55:00.000Z', sameUser: true, samePage: false }
 
-  function editingInterruption(mode: EditMode): EditInterruption | undefined {
+  function editingInterruption(mode: SheetEditMode): EditInterruption | undefined {
     const current = modeOf(mode)
     if (current.kind !== 'editing' && current.kind !== 'exiting')
       throw new Error(`现在不是编辑：${current.kind}`)

@@ -2,7 +2,7 @@
 // 页面管理模式和编辑器槽位，这里管理资源的建立与释放。停捕获不等于销毁保存协调：失去编辑权时，
 // 在途保存与结果未知的重放仍要由协调器收尾。已交出/失效时 detachLease，不再次发释放请求。
 import type { PendingEditRequest, SaveContentResponse } from '@nerve-office/contracts'
-import type { Incompatibility } from '../../shared/api/client-format.ts'
+import type { Incompatibility, PageClientFormat } from '../../shared/api/client-format.ts'
 import type { ApiError } from '../../shared/api/index.ts'
 import type { ConnectionState } from '../../shared/lib/connection-state.ts'
 import type { RecoveryInitializer } from '../../shared/local-drafts/recovery-initializer.ts'
@@ -18,7 +18,7 @@ import type { LocalLock, LockClaim } from './local-lock.ts'
 import type { SameBrowser } from './same-browser.ts'
 import type { SaveCoordinator, SaveEditor, SaveSendIntent, SaveSendResult } from './save-coordinator.ts'
 import type { SavingEditorBinding } from './saving-editor.ts'
-import { incompatibilityOf, PAGE_CLIENT_FORMAT } from '../../shared/api/client-format.ts'
+import { incompatibilityOf } from '../../shared/api/client-format.ts'
 import { ApiError as RequestError } from '../../shared/api/index.ts'
 import { createAutosave } from './autosave.ts'
 import { acquireEditLease, leaseLossOf } from './edit-lease.ts'
@@ -39,6 +39,10 @@ export interface EditingSessionOptions {
   readonly connection?: Pick<ConnectionState, 'view' | 'subscribe'> | undefined
   readonly documentId: string
   readonly clientInstanceId: string
+  /**
+   * 页面上报的档案（M6-P1 S8 spec §2.6，编辑器页按选中的装配注入）：草稿记下它，保存与另存为副本的查询参数、草稿记录与附加认证数据都用它
+   */
+  readonly format: PageClientFormat
   readonly api: {
     readonly editLease: EditLeaseApi
     readonly save: (documentId: string, request: SaveRequest, body: Uint8Array<ArrayBuffer>, lease: LeaseCredentials) => Promise<SaveContentResponse>
@@ -547,7 +551,7 @@ export function createEditingSession(options: EditingSessionOptions): EditingSes
         sessionId: `${options.clientInstanceId}:${held.credentials().writeEpoch}:${++sourceSerial}`,
         baseRevision: initial.revision,
         recover: initial.recover,
-        format: PAGE_CLIENT_FORMAT,
+        format: options.format,
         writtenBy: options.clientInstanceId,
         clock,
         writeEpoch: () => held.credentials().writeEpoch,

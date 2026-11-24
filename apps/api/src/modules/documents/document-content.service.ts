@@ -1,4 +1,4 @@
-import type { RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from '@nerve-office/contracts'
+import type { DocumentProfile, RevisionConflictDetails, SaveContentQuery, SaveContentResponse } from '@nerve-office/contracts'
 import type { AuditOrigin } from '../audit/index.ts'
 import type { Transaction } from '../database/index.ts'
 import type { GzipBody } from '../security/index.ts'
@@ -11,7 +11,7 @@ import type { EditingActor } from './edit-lease.service.ts'
 import type { RevisionNoneMatch } from './if-none-match.ts'
 import type { PassedSnapshot } from './upload-inspection.ts'
 import { Buffer } from 'node:buffer'
-import { shrunkResources } from '@nerve-office/contracts'
+import { DOCUMENT_PROFILE_OF, shrunkResources } from '@nerve-office/contracts'
 import { Injectable } from '@nestjs/common'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { AuditService } from '../audit/index.ts'
@@ -19,7 +19,7 @@ import { SessionService } from '../auth/index.ts'
 import { TransactionRunner } from '../database/index.ts'
 import { AppLogger } from '../logging/index.ts'
 import { AssetReferenceBases } from './asset-reference-bases.ts'
-import { ClientFormatGate, requireWritableDocument } from './client-format-gate.ts'
+import { ClientFormatGate, requireReportedProfile, requireWritableDocument } from './client-format-gate.ts'
 import { DocumentAccessPolicy, requireAccess, requireDocumentContent, requireDocumentOperations } from './document-access-policy.ts'
 import { DocumentAssetReferences, unlinkedAssetIds } from './document-asset-references.ts'
 import { DocumentCheckpointService } from './document-checkpoint.service.ts'
@@ -37,7 +37,7 @@ import { isRecorded, RequestLedger } from './request-ledger.ts'
 import { revisionSourceFor } from './revision-source.ts'
 import { replayedSave, savedOutcome } from './save-outcomes.ts'
 import { SnapshotInspector } from './snapshot-inspector.ts'
-import { INSPECTED_PROFILE, rejectedSnapshot, requirePassingSnapshot } from './upload-inspection.ts'
+import { rejectedSnapshot, requirePassingSnapshot } from './upload-inspection.ts'
 
 /**
  * 保存的事务的时限（M3-P5 复验 C1，再复核 D1、D2）：BEGIN 到提交至多 SAVE_TRANSACTION_START_WITHIN_MS + SAVE_TRANSACTION_TIMEOUT_MS
@@ -159,7 +159,8 @@ export class DocumentContentService {
    * 3. 快照的检查（与文档无关，子进程）：不合格时 SNAPSHOT_INVALID（details.rule），通过时得到 unitId、内容哈希、资源名与图片标识；
    * 4. 一个事务（BEGIN 到提交至多 70 秒，由数据库与事务运行器保证，见 SAVE_TRANSACTION_TIMEOUT_MS；M3-P5 复验 C1）：requestId 的锁（RequestLedger：事务的第一把锁，同一个 requestId 的写入排队，审查 A3）→ 能否访问 → 能编辑时锁文档行（有图片则先固定来源、按空间与文档顺序取全锁）、
    *    锁下再判断 → 再查一次重放（并发的同一次请求；查修订记录与回执两张表）→ 这次登录仍然有效 → 文档的格式
-   *    （比服务端新：DOCUMENT_TOO_NEW）→ 能编辑 → 编辑租约 → 基准修订号 → unitId → 不缩水 → 内容哈希与当前相同：写回执、"公式待更新"
+   *    （比服务端新：DOCUMENT_TOO_NEW）→ 上报的档案与文档的（不同：CLIENT_OUTDATED，DEF-055）→ 能编辑 → 编辑租约 → 基准修订号 → unitId →
+   *    不缩水（按文档的档案）→ 内容哈希与当前相同：写回执、"公式待更新"
    *    只清不设（两边都为真才留着），修订号不变（unchanged）→ 否则写内容（连同哈希与非空的资源名）、修订号加一、修订记录（哈希与客户端构建）、
    *    文档的信封（"公式待更新"设成请求里的值）、审计、当前图片引用及小时历史。小时历史失败则整个保存事务回滚，不改变上述时限。图片授权在实际写入之前按锁下关系与权限复核并持资源行。
    * 先判断再加锁：看不到的请求不在文档上取锁，响应的时序与不存在的文档相同（审查 A2）；只能查看的请求同样不锁文档行，
@@ -181,7 +182,7 @@ export class DocumentContentService {
     if (replayed !== undefined)
       return replayed
     const client = this.clients.require(query)
-    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id, saver.userId)
+    const snapshot = await requirePassingSnapshot(this.inspector, this.#logger, upload, id, saver.userId, client.profile)
     const attempt: SaveAttempt = { saver, query, upload, digest, formulasPending, client, snapshot, origin }
     return this.transactions.run(async (transaction) => {
       // 第一把锁：看不到与不存在的请求同样取它（与文档无关，语句序列照旧一致）
@@ -199,18 +200,19 @@ export class DocumentContentService {
       }
       await requireActiveLogin(this.sessions, saver, transaction)
       requireWritableDocument(document)
+      requireReportedProfile(this.#logger, id, client.profile, document.profile)
       // 不是重放才要求能编辑：能编辑时这是锁下的判断，只能查看时就是上面那次（没有取锁）
       requireDocumentOperations(accessible, ['edit'])
       await this.requireLease(saver, document, query, transaction)
       if (query.baseRevision !== document.revision)
         throw await this.conflict(saver.userId, document, transaction)
       if (snapshot.unitId !== document.unitId)
-        throw rejectedSnapshot(this.#logger, 'unit-id', id)
+        throw rejectedSnapshot(this.#logger, 'unit-id', id, DOCUMENT_PROFILE_OF[document.type])
 
       const current = await this.contents.findEnvelope(id, transaction)
       if (current === undefined)
         throw new Error(`文档有记录却没有内容：${id}`)
-      this.requireNoShrink(id, current, snapshot)
+      this.requireNoShrink(id, current, snapshot, DOCUMENT_PROFILE_OF[document.type])
       const contentHash = Buffer.from(snapshot.contentHash)
       // 存量的哈希为空：按"不同"处理，这一次写入补上（第一次保存多一个修订，§3.7）
       if (current.contentHash?.equals(contentHash) === true)
@@ -247,13 +249,13 @@ export class DocumentContentService {
    * 上一版的非空资源名存在 document_contents 里；存量为空时解析上一版得到（legacy-resources.ts，写明了不经子进程的理由），
    * 解析不了的存量没有可核对的上一版，记一条警告、照常往下走
    */
-  private requireNoShrink(id: string, current: ContentEnvelope, snapshot: PassedSnapshot): void {
+  private requireNoShrink(id: string, current: ContentEnvelope, snapshot: PassedSnapshot, profile: DocumentProfile): void {
     const previous = this.previousNonEmptyResources(id, current)
     if (previous === undefined)
       return
-    const missing = shrunkResources(previous, snapshot.presentResources, INSPECTED_PROFILE)
+    const missing = shrunkResources(previous, snapshot.presentResources, profile)
     if (missing.length > 0)
-      throw rejectedSnapshot(this.#logger, 'resource-missing', id, { missing })
+      throw rejectedSnapshot(this.#logger, 'resource-missing', id, profile, { missing })
   }
 
   /** 上一版非空的资源名：存下的；存量（为空）时解析上一版，解析不了时记一条警告、为 undefined（没有可核对的上一版） */

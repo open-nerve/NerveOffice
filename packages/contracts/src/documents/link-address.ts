@@ -301,10 +301,31 @@ export type CellLinkRule = Extract<SnapshotRule, 'link-structure' | 'link-addres
 const PASS: RuleCheck<CellLinkRule> = { ok: true }
 
 /**
- * 服务端核对一个单元格富文本（cell.p）里的链接，只判定、不改写（M3-P3 设计 §3.3 的链接一条）。逐个区间，第一条不满足的就是结果：
- * - link-structure：customRanges 不是数组（null 与没有一样：没有链接）、某一项不是对象、链接没有字符串的地址（properties.url）；
+ * 核对 customRanges 里的一项（checkCellLinks 逐项用它；文字文档的正文逐项用它，好按区间给出段落位置，M6-P1 S4）：
+ * - link-structure：这一项不是对象，或者是链接却没有字符串的地址（properties.url）；
  * - link-address：地址不合法，或者不等于它的规范写法（canonicalLink）；
  * - link-range-id：rangeId 不合写法。
+ * 别的种类的区间不看，通过。任何输入都不抛出
+ */
+export function checkLinkRange(range: unknown): RuleCheck<CellLinkRule> {
+  if (!isJsonObject(range))
+    return { ok: false, rule: 'link-structure' }
+  if (range.rangeType !== HYPERLINK_RANGE_TYPE)
+    return PASS
+  const url = urlOf(range)
+  if (url === undefined)
+    return { ok: false, rule: 'link-structure' }
+  const link = canonicalLink(url)
+  if (!link.ok || link.href !== url)
+    return { ok: false, rule: 'link-address' }
+  if (!isRangeId(range.rangeId))
+    return { ok: false, rule: 'link-range-id' }
+  return PASS
+}
+
+/**
+ * 服务端核对一个单元格富文本（cell.p）里的链接，只判定、不改写（M3-P3 设计 §3.3 的链接一条）。customRanges 不是数组时是 link-structure
+ * （null 与没有一样：没有链接）；否则逐个区间按 checkLinkRange，第一条不满足的就是结果。
  * p 不是对象、没有正文时没有链接，通过。任何输入都不抛出
  */
 export function checkCellLinks(p: unknown): RuleCheck<CellLinkRule> {
@@ -314,18 +335,9 @@ export function checkCellLinks(p: unknown): RuleCheck<CellLinkRule> {
   if (!Array.isArray(ranges))
     return { ok: false, rule: 'link-structure' }
   for (const range of ranges as readonly unknown[]) {
-    if (!isJsonObject(range))
-      return { ok: false, rule: 'link-structure' }
-    if (range.rangeType !== HYPERLINK_RANGE_TYPE)
-      continue
-    const url = urlOf(range)
-    if (url === undefined)
-      return { ok: false, rule: 'link-structure' }
-    const link = canonicalLink(url)
-    if (!link.ok || link.href !== url)
-      return { ok: false, rule: 'link-address' }
-    if (!isRangeId(range.rangeId))
-      return { ok: false, rule: 'link-range-id' }
+    const check = checkLinkRange(range)
+    if (!check.ok)
+      return check
   }
   return PASS
 }

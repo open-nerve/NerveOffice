@@ -1,6 +1,6 @@
-// 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
+// 表格编辑器页的文案（P4）：只由编辑器页（features/sheet-editor 与共用编辑会话层 features/document-editor）引用，随编辑器页的入口加载，不进平台页面的首屏（lint 的模块边界限定）。
 // 两个入口共用的（通用的说明、错误与登录状态）在 messages.ts
-import type { ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
+import type { DocumentType, ProfileResourceName, SnapshotRule } from '@nerve-office/contracts'
 import type { Phrase } from './messages.ts'
 import { EDIT_HANDOVER_IDLE_SECONDS, EDIT_IDLE_RELEASE_SECONDS, EDIT_LEASE_TTL_SECONDS, EDIT_PENDING_SAVE_WAIT_MS } from '@nerve-office/contracts'
 
@@ -51,24 +51,38 @@ const KEEP_EDITING = '继续编辑'
  * 快照被服务端拒绝时按违反的规则给的说法（SNAPSHOT_INVALID 的 details.rule，M3-P3 设计 §3.10）：链接、图片、资源各一类，
  * 嵌套与数量、检查用的内存超限合成"过于复杂"；不认识的规则（以后的 Phase 加的）照"格式不正确"说
  */
-const SNAPSHOT_RULE_PHRASES: Readonly<Record<SnapshotRule, string>> = {
-  'encoding': '表格内容的格式不正确',
-  'json': '表格内容的格式不正确',
-  'structure': '表格内容的格式不正确',
-  'depth': '表格的内容过于复杂（嵌套太深）',
-  'entries': '表格的内容过于复杂（元素太多）',
-  'too-complex': '表格的内容过于复杂',
-  'resources': '表格的插件数据不正确',
-  'resource-duplicate': '表格的插件数据不正确',
-  'resource-unknown': '表格里有不支持的插件数据',
-  'resource-data': '表格的插件数据不正确',
-  'resource-not-empty': '表格里有不支持的功能的数据（例如保护）',
-  'resource-missing': '表格里缺少上一版有的内容（例如批注、筛选、条件格式），为免丢失没有保存',
-  'image-source': '表格里有不能保存的图片',
-  'link-structure': '表格里有不能保存的链接',
-  'link-address': '表格里有不能保存的链接',
-  'link-range-id': '表格里有不能保存的链接',
-  'unit-id': '表格内容不属于这份文档',
+/** 说法里的名词与例子按文档类型给出（M6-P1 S3 spec §4）：表格的说法逐字不变 */
+const SNAPSHOT_WORDING: Readonly<Record<DocumentType, { readonly noun: string, readonly unsupportedExample: string, readonly missingExamples: string }>> = {
+  sheet: { noun: '表格', unsupportedExample: '保护', missingExamples: '批注、筛选、条件格式' },
+  doc: { noun: '文字文档', unsupportedExample: '权限规则', missingExamples: '图片、链接' },
+}
+
+type SnapshotWording = (typeof SNAPSHOT_WORDING)[DocumentType]
+
+const SNAPSHOT_RULE_PHRASES: Readonly<Record<SnapshotRule, (wording: SnapshotWording) => string>> = {
+  'encoding': ({ noun }) => `${noun}内容的格式不正确`,
+  'json': ({ noun }) => `${noun}内容的格式不正确`,
+  'structure': ({ noun }) => `${noun}内容的格式不正确`,
+  'doc-flavor': ({ noun }) => `${noun}的版式不受支持（只支持无分页的版式）`,
+  'doc-header-footer': ({ noun }) => `${noun}里有不支持的页眉或页脚`,
+  'doc-notes': ({ noun }) => `${noun}里有不支持的脚注或尾注`,
+  'doc-section-break': ({ noun }) => `${noun}里有不支持的分节`,
+  'doc-toc': ({ noun }) => `${noun}里有不支持的目录块`,
+  'depth': ({ noun }) => `${noun}的内容过于复杂（嵌套太深）`,
+  'entries': ({ noun }) => `${noun}的内容过于复杂（元素太多）`,
+  'too-complex': ({ noun }) => `${noun}的内容过于复杂`,
+  'resources': ({ noun }) => `${noun}的插件数据不正确`,
+  'resource-duplicate': ({ noun }) => `${noun}的插件数据不正确`,
+  'resource-unknown': ({ noun }) => `${noun}里有不支持的插件数据`,
+  'resource-data': ({ noun }) => `${noun}的插件数据不正确`,
+  'resource-not-empty': ({ noun, unsupportedExample }) => `${noun}里有不支持的功能的数据（例如${unsupportedExample}）`,
+  'resource-missing': ({ noun, missingExamples }) => `${noun}里缺少上一版有的内容（例如${missingExamples}），为免丢失没有保存`,
+  'resource-mismatch': ({ noun }) => `${noun}的插件数据与正文不一致`,
+  'image-source': ({ noun }) => `${noun}里有不能保存的图片`,
+  'link-structure': ({ noun }) => `${noun}里有不能保存的链接`,
+  'link-address': ({ noun }) => `${noun}里有不能保存的链接`,
+  'link-range-id': ({ noun }) => `${noun}里有不能保存的链接`,
+  'unit-id': ({ noun }) => `${noun}内容不属于这份文档`,
 }
 
 /**
@@ -424,14 +438,18 @@ export const editorMessages = {
    */
   nearCapacity: (percent: number) => `这份表格已用去容量上限（5 MiB）的 ${percent}%，再加内容可能就保存不了了`,
   /** 快照被服务端拒绝（SNAPSHOT_INVALID）：按违反的规则说（不认识的规则照"格式不正确"说） */
-  snapshotInvalid: (rule: SnapshotRule | undefined) => rule === undefined ? '表格内容的格式不正确' : SNAPSHOT_RULE_PHRASES[rule],
+  snapshotInvalid: (rule: SnapshotRule | undefined, type: DocumentType) => SNAPSHOT_RULE_PHRASES[rule ?? 'structure'](SNAPSHOT_WORDING[type]),
   snapshotLocations: (reason: string, positions: string) => `${reason}。请检查：${positions}`,
   snapshotLocation: {
     sheet: (name: string | undefined) => name === undefined ? '某个工作表' : `工作表「${name}」`,
     cell: (sheet: string, address: string) => `${sheet}的 ${address}`,
     drawing: (sheet: string, address: string | undefined) => address === undefined ? `${sheet}的浮动图片` : `${sheet}的 ${address} 附近的浮动图片`,
-    resource: '表格附加内容',
+    resource: (type: DocumentType) => `${SNAPSHOT_WORDING[type].noun}附加内容`,
     workbook: '工作簿中的其他位置',
+    /** 文字文档：段落从 0 起，说的时候从 1 起 */
+    paragraph: (paragraph: number) => `第 ${paragraph + 1} 段`,
+    docDrawing: '一张图片',
+    document: '文档中的其他位置',
   },
   /**
    * 编辑权（M3-P1 设计 §3.4.7、M3-P2 设计 §3.4）：别处正在编辑时说明是谁；失效时说明原因，读得到时给另存为副本、放弃或重新加载。

@@ -91,7 +91,7 @@ export type ReadDraft
     | { readonly kind: 'newer-format', readonly recordVersion: number }
     | { readonly kind: 'malformed' }
 
-// 下面几个守卫也给发件箱 Worker 的协议用（features/sheet-editor/outbox/outbox-protocol.ts）：同一组形状，跨 Worker 的消息照样逐项核对
+// 下面几个守卫也给发件箱 Worker 的协议用（同一目录的 outbox-protocol.ts）：同一组形状，跨 Worker 的消息照样逐项核对
 
 export type Fields = Readonly<Record<string, unknown>>
 

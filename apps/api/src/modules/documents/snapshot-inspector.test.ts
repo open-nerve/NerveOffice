@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AppError } from '../../shared/errors/app-error.ts'
 import { RELEASE_FILE, STARTED_PREFIX } from '../../shared/process-pool-fakes.test-support.ts'
 import { AppLogger, createRootLogger, RequestContextStore } from '../logging/index.ts'
+import { docSnapshot } from './doc-snapshot.test-support.ts'
 import { SNAPSHOT_MAX_ENTRIES } from './snapshot-checks.ts'
 import { inspectSnapshot } from './snapshot-inspection.ts'
 import { inspectionChildEntry, INSPECTIONS_PER_ACCOUNT, SnapshotInspector, snapshotInvalid } from './snapshot-inspector.ts'
@@ -79,22 +80,36 @@ describe('SnapshotInspector：在子进程里检查（源码运行：入口是 .
     const raw = Buffer.from(JSON.stringify({ ...JSON.parse(sheetSnapshotFor(UNIT_ID)) as object, sheets: { 'sheet-1': { cellData: { 2: { 1: cell } } } } }))
     const linkLocations = [{ kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 }]
     expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'link-address', linkLocations })
-    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY))
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY, 'sheet@1'))
     expect(error.details).toEqual({ rule: 'link-address', linkLocations })
     expect(JSON.stringify(error)).not.toMatch(/private|dataStream/)
-    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'link-address', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
+    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'link-address', profile: 'sheet@1', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
   })
 
-  it('图片位置经真实 IPC 与上传拒绝回传，日志只记规则、文档 id 和字节数', async () => {
+  it('图片位置经真实 IPC 与上传拒绝回传，日志只记规则、档案、文档 id 和字节数', async () => {
     const { inspector, logger, warn } = setup()
     const secret = 'https://private.example/private-file.png'
     const raw = Buffer.from(JSON.stringify({ ...JSON.parse(sheetSnapshotFor(UNIT_ID)) as object, sheets: { 'sheet-1': { cellData: { 2: { 1: { p: { source: secret } } } } } } }))
     const imageLocations = [{ kind: 'cell', sheetId: 'sheet-1', row: 2, column: 1 }]
     expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'image-source', imageLocations })
-    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY))
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY, 'sheet@1'))
     expect(error.details).toEqual({ rule: 'image-source', imageLocations })
     expect(JSON.stringify(error)).not.toContain(secret)
-    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'image-source', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
+    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'image-source', profile: 'sheet@1', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
+  })
+
+  it('文字文档按上报的 doc@1 经真实 IPC 检查（DEF-055）：链接位置是段落；同一份快照按 sheet@1 在结构一步拒绝；日志记 doc@1', async () => {
+    const { inspector, logger, warn } = setup()
+    const secret = 'javascript:alert(document.cookie)'
+    const link = { startIndex: 4, endIndex: 5, rangeId: 'r1', rangeType: 0, properties: { url: secret } }
+    const raw = Buffer.from(JSON.stringify(docSnapshot(UNIT_ID, {}, { customRanges: [link] })))
+    const linkLocations = [{ kind: 'paragraph', paragraph: 1 }]
+    expect(await inspector.inspect(raw, 'doc@1', AMY)).toEqual({ ok: false, rule: 'link-address', linkLocations })
+    expect(await inspector.inspect(raw, 'sheet@1', AMY)).toEqual({ ok: false, rule: 'structure' })
+    const error = await rejection(requirePassingSnapshot(inspector, logger, { compressed: Buffer.alloc(0), decompressed: raw }, UNIT_ID, AMY, 'doc@1'))
+    expect([error.details, error.message]).toEqual([{ rule: 'link-address', linkLocations }, '文字文档里有不能保存的链接'])
+    expect(JSON.stringify(error)).not.toContain(secret)
+    expect(warn.mock.calls).toEqual([['快照不合格，拒绝写入', { rule: 'link-address', profile: 'doc@1', documentId: UNIT_ID, rawBytes: raw.byteLength }]])
   })
 
   it('接近5MiB且十万个不同图片地址：真实子进程完整提取并通过IPC返回，不受SQL参数数量限制', async () => {
@@ -294,22 +309,22 @@ describe('同一个账户在检查池里的份数（审查 A2）', SPAWNING, () 
 describe('SNAPSHOT_INVALID 的错误（snapshotInvalid）', () => {
   it('只为图片规则附带有限位置，额外内容丢弃，畸形位置回退', () => {
     const locations = [{ kind: 'workbook', source: 'private' }] as const
-    expect(snapshotInvalid('image-source', { imageLocations: locations }).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'workbook' }] })
-    expect(snapshotInvalid('link-address', { imageLocations: locations }).details).toEqual({ rule: 'link-address' })
-    expect(snapshotInvalid('image-source', { imageLocations: Array.from({ length: 6 }, () => ({ kind: 'workbook' as const })) }).details).toEqual({ rule: 'image-source' })
+    expect(snapshotInvalid('image-source', 'sheet@1', { imageLocations: locations }).details).toEqual({ rule: 'image-source', imageLocations: [{ kind: 'workbook' }] })
+    expect(snapshotInvalid('link-address', 'sheet@1', { imageLocations: locations }).details).toEqual({ rule: 'link-address' })
+    expect(snapshotInvalid('image-source', 'sheet@1', { imageLocations: Array.from({ length: 6 }, () => ({ kind: 'workbook' as const })) }).details).toEqual({ rule: 'image-source' })
   })
 
   it('链接位置按自身规则组装，不接收图片位置或额外字段', () => {
     const linkLocations = [{ kind: 'cell', sheetId: 's', row: 2, column: 1, url: 'private' }] as const
-    expect(snapshotInvalid('link-address', { linkLocations, imageLocations: [{ kind: 'workbook' }] }).details).toEqual({
+    expect(snapshotInvalid('link-address', 'sheet@1', { linkLocations, imageLocations: [{ kind: 'workbook' }] }).details).toEqual({
       rule: 'link-address',
       linkLocations: [{ kind: 'cell', sheetId: 's', row: 2, column: 1 }],
     })
-    expect(snapshotInvalid('json', { linkLocations }).details).toEqual({ rule: 'json' })
+    expect(snapshotInvalid('json', 'sheet@1', { linkLocations }).details).toEqual({ rule: 'json' })
   })
 
   it.each(SNAPSHOT_RULES)('%s：422，details 是规则（契约能解析），说明不空', (rule) => {
-    const error = snapshotInvalid(rule)
+    const error = snapshotInvalid(rule, 'sheet@1')
     expect(error.code).toBe('SNAPSHOT_INVALID')
     expect(error.status).toBe(422)
     expect(error.details).toEqual({ rule })
@@ -317,7 +332,45 @@ describe('SNAPSHOT_INVALID 的错误（snapshotInvalid）', () => {
     expect(error.message.length).toBeGreaterThan(0)
   })
 
+  it('表格的说法逐字不变（M6-P1 S3：说法按档案给出）', () => {
+    const SHEET_MESSAGES: Record<string, string> = {
+      'encoding': '表格内容不是 UTF-8 编码的文本',
+      'json': '表格内容不是合法的 JSON',
+      'too-complex': '表格内容过于复杂，检查时用的内存超过上限',
+      'structure': '表格内容的结构不正确',
+      'resources': '表格的插件数据的结构不正确',
+      'resource-duplicate': '表格的插件数据有重复的项',
+      'resource-unknown': '表格里有不支持的插件数据',
+      'resource-data': '表格的插件数据的内容不正确',
+      'resource-not-empty': '表格里有不支持的功能的数据（例如保护）',
+      'image-source': '表格里有不能保存的图片',
+      'link-structure': '表格里有不能保存的链接',
+      'link-address': '表格里有不能保存的链接',
+      'link-range-id': '表格里有不能保存的链接',
+      'unit-id': '表格内容不属于这份文档',
+      'resource-missing': '表格缺少上一版里有内容的插件数据',
+    }
+    for (const [rule, message] of Object.entries(SHEET_MESSAGES))
+      expect(snapshotInvalid(rule as 'json', 'sheet@1').message, rule).toBe(message)
+  })
+
+  it('文字文档的说法说“文字文档”，不提表格；文字文档专有的规则各有说法', () => {
+    for (const rule of SNAPSHOT_RULES) {
+      const message = snapshotInvalid(rule, 'doc@1').message
+      expect(message, rule).toContain('文字文档')
+      expect(message, rule).not.toContain('表格')
+    }
+    expect(snapshotInvalid('structure', 'doc@1').message).toBe('文字文档内容的结构不正确')
+    expect(snapshotInvalid('link-address', 'doc@1').message).toBe('文字文档里有不能保存的链接')
+    expect(snapshotInvalid('doc-flavor', 'doc@1').message).toContain('版式')
+    expect(snapshotInvalid('doc-header-footer', 'doc@1').message).toContain('页眉')
+    expect(snapshotInvalid('doc-notes', 'doc@1').message).toContain('脚注')
+    expect(snapshotInvalid('doc-section-break', 'doc@1').message).toContain('分节')
+    expect(snapshotInvalid('doc-toc', 'doc@1').message).toContain('目录')
+    expect(snapshotInvalid('resource-mismatch', 'doc@1').message).toContain('不一致')
+  })
+
   it('三条链接的规则说法相同（页面按规则给出自己的说法）', () => {
-    expect(new Set(['link-structure', 'link-address', 'link-range-id'].map(rule => snapshotInvalid(rule as 'link-address').message)).size).toBe(1)
+    expect(new Set(['link-structure', 'link-address', 'link-range-id'].map(rule => snapshotInvalid(rule as 'link-address', 'sheet@1').message)).size).toBe(1)
   })
 })

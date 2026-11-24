@@ -100,3 +100,36 @@ describe('链接拒绝位置的有界、兼容契约', () => {
     }
   })
 })
+
+describe('文字文档的规则与位置（M6-P1 S3 spec §4）', () => {
+  const at = (rule: string): number => (SNAPSHOT_RULES as readonly string[]).indexOf(rule)
+
+  it('新规则按检查的先后排好：文字文档的五条在结构之后、资源之前；交叉核对在链接之后、unitId 之前', () => {
+    expect(SNAPSHOT_RULES.slice(at('structure'), at('resources'))).toEqual(['structure', 'doc-flavor', 'doc-header-footer', 'doc-notes', 'doc-section-break', 'doc-toc'])
+    for (const rule of ['doc-flavor', 'doc-header-footer', 'doc-notes', 'doc-section-break', 'doc-toc']) {
+      expect(at(rule), rule).toBeGreaterThan(at('structure'))
+      expect(at(rule), rule).toBeLessThan(at('resources'))
+    }
+    expect(at('resource-mismatch')).toBeGreaterThan(at('link-range-id'))
+    expect(at('resource-mismatch')).toBeLessThan(at('unit-id'))
+  })
+
+  it('新规则的详情原样给出，不带位置', () => {
+    for (const rule of ['doc-flavor', 'doc-header-footer', 'doc-notes', 'doc-section-break', 'doc-toc', 'resource-mismatch'])
+      expect(snapshotInvalidDetailsSchema.parse({ rule, linkLocations: [{ kind: 'document' }], imageLocations: [{ kind: 'document' }] }), rule).toEqual({ rule })
+  })
+
+  it('图片位置加上文字文档里的一张图片与“文档里别的位置”', () => {
+    const imageLocations = [{ kind: 'doc-drawing', drawingId: 'H2Qtn4' }, { kind: 'document' }, { kind: 'resource', resourceIndex: 3 }]
+    expect(snapshotInvalidDetailsSchema.parse({ rule: 'image-source', imageLocations })).toEqual({ rule: 'image-source', imageLocations })
+    for (const drawingId of ['', '__proto__', 'private/path', 'x'.repeat(129)])
+      expect(snapshotInvalidDetailsSchema.parse({ rule: 'image-source', imageLocations: [{ kind: 'doc-drawing', drawingId }] }), drawingId).toEqual({ rule: 'image-source', imageLocations: undefined })
+  })
+
+  it('链接位置加上段落（从 0 起的非负整数）与“文档里别的位置”；畸形的退回固定的链接错误', () => {
+    const linkLocations = [{ kind: 'paragraph', paragraph: 0 }, { kind: 'paragraph', paragraph: 12 }, { kind: 'document' }]
+    expect(snapshotInvalidDetailsSchema.parse({ rule: 'link-address', linkLocations })).toEqual({ rule: 'link-address', linkLocations })
+    for (const bad of [{ kind: 'paragraph', paragraph: -1 }, { kind: 'paragraph', paragraph: 0.5 }, { kind: 'paragraph', paragraph: 2_147_483_648 }, { kind: 'paragraph' }, { kind: 'doc-drawing', drawingId: 'x' }])
+      expect(snapshotInvalidDetailsSchema.parse({ rule: 'link-address', linkLocations: [bad] }), JSON.stringify(bad)).toEqual({ rule: 'link-address', linkLocations: undefined })
+  })
+})

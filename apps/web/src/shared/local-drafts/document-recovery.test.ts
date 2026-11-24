@@ -39,7 +39,7 @@ async function fixture() {
   let alive = true
   let ids = 0
   const onSessionProblem = vi.fn()
-  const recovery = createDocumentRecovery({ key: KEY, pageFormat: meta.format, writtenBy: 'new-page', clock: fakeLeaseClock(NOW).clock, now: () => NOW, still: () => alive, facts, reader: makeReader, replay, refreshCloud, conflictCopy, title: () => '原文档', newId: () => `copy-${++ids}`, onSessionProblem, reportError: vi.fn() })
+  const recovery = createDocumentRecovery({ key: KEY, pageFormats: [meta.format], writtenBy: 'new-page', clock: fakeLeaseClock(NOW).clock, now: () => NOW, still: () => alive, facts, reader: makeReader, replay, refreshCloud, conflictCopy, title: () => '原文档', newId: () => `copy-${++ids}`, onSessionProblem, reportError: vi.fn() })
   cleanups.push(recovery.dispose)
   return {
     recovery,

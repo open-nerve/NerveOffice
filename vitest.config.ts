@@ -90,7 +90,7 @@ export default defineConfig({
         'apps/web/src/shared/outbox/draft-store.ts',
         'apps/web/src/shared/outbox/draft-index.ts',
         // 编辑器页测试构建里的探针：只在测试构建里，浏览器层用例经它调用生产代码
-        'apps/web/src/features/sheet-editor/outbox/testing/**',
+        'apps/web/src/features/document-editor/outbox/testing/**',
         // 命令行入口只做参数解析与输出，规则本身在各自的模块里测试
         'tools/src/**/cli.ts',
         'tools/src/**/*-cli.ts',

@@ -49,7 +49,7 @@ async function setup() {
   const conflictCopy = vi.fn<LostCopyOptions['conflictCopy']>().mockResolvedValue({ id: 'copied', title: '副本', revision: 1 } as CreatedDocument)
   const make: DraftRecoveryFactory = ({ documentId, facts: currentFacts, title }) => createDocumentRecovery({
     key: { userId: USER_ID, documentId },
-    pageFormat: sampleMeta().format,
+    pageFormats: [sampleMeta().format],
     writtenBy: 'catalog-page',
     clock: fakeLeaseClock(NOW).clock,
     now: () => NOW,

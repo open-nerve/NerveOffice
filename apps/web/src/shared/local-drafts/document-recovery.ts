@@ -1,7 +1,7 @@
 // 文档恢复只保留视图事实与条件操作资格；正文只在一次判定/安装期间借用，副本接收唯一 WorkingDraft。
 import type { DocumentDetail, RevisionSource, SaveContentResponse } from '@nerve-office/contracts'
 import type { LeaseClock } from '../outbox/clock.ts'
-import type { ContentFormat, DraftKey, DraftMeta } from '../outbox/draft-record.ts'
+import type { DraftKey, DraftMeta } from '../outbox/draft-record.ts'
 import type { ObservedRemoveResult, ObserveResult } from '../outbox/draft-writer.ts'
 import type { RecoveryNotice } from '../outbox/recovery-notice.ts'
 import type { DraftSessionPermit } from '../outbox/session-fence.ts'
@@ -71,7 +71,8 @@ export interface DocumentRecovery {
 
 export interface DocumentRecoveryOptions {
   readonly key: DraftKey
-  readonly pageFormat: ContentFormat
+  /** 页面能读的档案（不空）：与其中任意一个可读即为可读（recovery-decision.ts 的 RecoveryFacts.pageFormats） */
+  readonly pageFormats: RecoveryFacts['pageFormats']
   readonly writtenBy: string
   readonly clock: LeaseClock
   readonly now: () => number
@@ -334,7 +335,7 @@ export function createDocumentRecovery(options: DocumentRecoveryOptions): Docume
       else if (knownSource !== undefined)
         server = { ...server, source: knownSource.source }
     }
-    const inputs = { ...facts, current: server, key, pageFormat: options.pageFormat, now: options.now() }
+    const inputs = { ...facts, current: server, key, pageFormats: options.pageFormats, now: options.now() }
     let resolved = await resolveRecovery({ observed, facts: inputs, replay: options.replay })
     if (!current(started))
       return undefined

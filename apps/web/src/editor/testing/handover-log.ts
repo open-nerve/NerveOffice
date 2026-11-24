@@ -1,11 +1,11 @@
-// 测试构建的交接日志（M3-P5 设计 §3.13 的观察钩子）：编辑器页把交接的各步（features/sheet-editor/handover-trace.ts 的事件：发出交接请求、收到
+// 测试构建的交接日志（M3-P5 设计 §3.13 的观察钩子）：编辑器页把交接的各步（features/document-editor/handover-trace.ts 的事件：发出交接请求、收到
 // ack/busy/done/failed、锁空了、没有回应，开始申请与结果、进入编辑、离开编辑、锁被抢，请求编辑的发出、续期的结果、交给了本页与开始进入）报给这里，
 // 按先后记下，另记报出时的墙上时间（Date.now：两个标签页的单调时钟起点不同，跨标签页比先后用它）。挂在 window 上：
 // - log()：到现在的记录（拷贝），每条是事件本身（kind、at 与各自的字段）加上 wall；
 // - clear()：清空；
 // - subscribe(listener)：每记下一条就同步交给 listener（拷贝），返回退订的函数；listener 出错不影响记录（交给编辑器页上报）。
 // 真实 Safari 的复核（§3.14）读两个标签页各自的日志：有没有回应、多久进入编辑、旧标签页什么时候得知被抢。
-// 只在测试构建里：编辑器页的组装处（features/sheet-editor/start.tsx）在 import.meta.env.MODE === 'e2e' 的分支里动态引入它；生产构建里没有它
+// 只在测试构建里：表格的启动装配（features/sheet-editor/start.tsx 的 kit，M6-P1 S8c）在 import.meta.env.MODE === 'e2e' 的分支里动态引入它；生产构建里没有它
 // （门禁 artifacts 按来源认出 editor/testing/，挂在 window 上的名字另由禁用关键字核对）。
 // 这个文件不引用任何模块（nerve/editor-testing-shared）：E2E 与页面自检也引用它（挂在 window 上的名字、记录的写法）。
 

@@ -9,13 +9,18 @@ import { z } from 'zod'
  * - encoding：不是 UTF-8 的文本；
  * - depth：嵌套超过上限；entries：元素数量超过上限。两条都在解析之前按文字数（外层与资源 data 里的 JSON 累加），超出的不解析；
  * - json：不是合法的 JSON；too-complex：检查用的内存超过上限（检查进行到哪一步都可能）；
- * - structure：工作簿的结构（顶层是对象、id 是非空字符串、sheetOrder 是字符串数组且每一项都是 sheets 的键、sheets 的值是对象）；
+ * - structure：文档的结构。表格是工作簿的结构（顶层是对象、id 是非空字符串、sheetOrder 是字符串数组且每一项都是 sheets 的键、sheets 的值是对象）；
+ *   文字文档是顶层对象、id、body 与 dataStream，以及几个列表与对象的种类（M6-P1 S3 spec §3）；
+ * - doc-flavor：文字文档的版式不是 MODERN；doc-header-footer：有页眉或页脚；doc-notes：有脚注或尾注；doc-section-break：表格之外的分节符
+ *   多于一个，或者唯一的一个不在文末；doc-toc：有目录块的区间（只适用于 doc@1）；
  * - resources：resources 不是数组，或者某一项不是 { name, data }（两个都是字符串）；resource-duplicate：资源名重复；
- *   resource-unknown：资源名不在插件档案的白名单里；resource-data：已知资源的最小结构（data 是空串或 JSON、顶层是对象、
- *   每个键下的值是这类资源该有的种类）；resource-not-empty：必须为空的资源不为空；
+ *   resource-unknown：资源名不在插件档案的白名单里；resource-data：已知资源的最小结构（data 是空串或 JSON；表格的十项顶层是对象、
+ *   每个键下的值是这类资源该有的种类，文字文档的按资源声明的种类核对，见 profile-resources.ts 的 ResourceRule）；resource-not-empty：
+ *   必须为空的资源不为空；
  * - image-source：任何深度上名为 source 的字段不是平台的图片地址；
- * - link-structure：单元格的链接区间看不懂（不是数组、某一项不是对象、链接没有字符串的地址）；link-address：链接地址不合法，
+ * - link-structure：单元格或文字文档正文的链接区间看不懂（不是数组、某一项不是对象、链接没有字符串的地址）；link-address：链接地址不合法，
  *   或者不是它的规范写法；link-range-id：链接区间的 rangeId 不合写法；
+ * - resource-mismatch：资源与正文不一致（文字文档的链接、图片资源，加载时它们会覆盖正文）；
  * - unit-id：快照的 unitId 不是这份文档的；resource-missing：上一版非空的资源这一版不在了（不缩水）。这两条与文档有关，在事务里判断
  */
 export const SNAPSHOT_RULES = [
@@ -25,6 +30,11 @@ export const SNAPSHOT_RULES = [
   'json',
   'too-complex',
   'structure',
+  'doc-flavor',
+  'doc-header-footer',
+  'doc-notes',
+  'doc-section-break',
+  'doc-toc',
   'resources',
   'resource-duplicate',
   'resource-unknown',
@@ -34,6 +44,7 @@ export const SNAPSHOT_RULES = [
   'link-structure',
   'link-address',
   'link-range-id',
+  'resource-mismatch',
   'unit-id',
   'resource-missing',
 ] as const
@@ -56,6 +67,10 @@ const imagePosition = z.number().int().min(0).max(SNAPSHOT_POSITION_MAX)
 const cellLocation = z.object({ kind: z.literal('cell'), sheetId: imageIdentifier, row: imagePosition, column: imagePosition })
 const sheetLocation = z.object({ kind: z.literal('sheet'), sheetId: imageIdentifier })
 const workbookLocation = z.object({ kind: z.literal('workbook') })
+/** 文字文档（M6-P1 S3 spec §4）：一个段落（从 0 起）、顶层 drawings 里的一张图片、文档里别的位置 */
+const paragraphLocation = z.object({ kind: z.literal('paragraph'), paragraph: imagePosition })
+const docDrawingLocation = z.object({ kind: z.literal('doc-drawing'), drawingId: imageIdentifier })
+const documentLocation = z.object({ kind: z.literal('document') })
 export const snapshotImageLocationSchema = z.discriminatedUnion('kind', [
   cellLocation,
   z.object({ kind: z.literal('drawing'), sheetId: imageIdentifier, drawingId: imageIdentifier, row: imagePosition.optional(), column: imagePosition.optional() })
@@ -63,9 +78,11 @@ export const snapshotImageLocationSchema = z.discriminatedUnion('kind', [
   sheetLocation,
   z.object({ kind: z.literal('resource'), resourceIndex: imagePosition }),
   workbookLocation,
+  docDrawingLocation,
+  documentLocation,
 ])
 export type SnapshotImageLocation = z.infer<typeof snapshotImageLocationSchema>
-export const snapshotLinkLocationSchema = z.discriminatedUnion('kind', [cellLocation, sheetLocation, workbookLocation])
+export const snapshotLinkLocationSchema = z.discriminatedUnion('kind', [cellLocation, sheetLocation, workbookLocation, paragraphLocation, documentLocation])
 export type SnapshotLinkLocation = z.infer<typeof snapshotLinkLocationSchema>
 
 /** 检查子进程与错误组装共用；响应仍由下面的 schema 按规则裁剪。 */
